@@ -1,0 +1,27 @@
+{
+  "files.exclude": {
+    "{.claude,.codex,.gemini}": true
+  },
+  "files.watcherExclude": {
+    "{.claude,.codex,.gemini}": true
+  },
+  "search.exclude": {
+    "{.claude,.codex,.gemini}": true
+  },
+  "[go]": {
+    "editor.defaultFormatter": "golang.go",
+    "editor.formatOnSave": true,
+    "editor.codeActionsOnSave": {
+      "source.organizeImports": "always",
+      "source.fixAll": "always"
+    }
+  },
+  "gopls": {
+    "staticcheck": true,
+    "analyses": {
+      "unusedparams": true,
+      "shadow": true,
+      "unusedvariable": true
+    }
+  }
+}
