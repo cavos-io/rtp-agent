@@ -15,14 +15,6 @@ Add the adapter to your Go project:
 go get github.com/cavos-io/rtp-agent/adapter/turndetector
 ```
 
-## Authentication
-
-Set the required environment variables in your `.env` file. Refer to the Turn Detector developer documentation for acquiring the necessary API keys and tokens.
-
-```env
-TURNDETECTOR_API_KEY=your_api_key_here
-```
-
 ## Usage
 
 Below is a basic conceptual example demonstrating how to initialize the Turn Detector Other adapter within an RTP Agent session:
@@ -33,7 +25,6 @@ package main
 import (
 	"context"
 	"log"
-	"os"
 
 	"github.com/cavos-io/rtp-agent/adapter/turndetector"
 	"github.com/cavos-io/rtp-agent/core/agent"
@@ -42,17 +33,12 @@ import (
 func main() {
 	ctx := context.Background()
 
-	// Initialize the Turn Detector Other adapter
-	pluginProvider, err := turndetector.NewProvider(
-		os.Getenv("TURNDETECTOR_API_KEY"),
-	)
-	if err != nil {
-		log.Fatalf("failed to initialize turndetector adapter: %v", err)
-	}
+	// Initialize the adapter
+	turnDetector := turndetector.NewEOUPredictor("default_model")
 
 	// Create and configure the RTP agent session
 	session := agent.NewSession(
-		agent.WithPlugin(pluginProvider),
+		agent.WithTurnDetector(turnDetector),
 	)
 
 	// Start the session
