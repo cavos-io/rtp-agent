@@ -15,14 +15,6 @@ Add the adapter to your Go project:
 go get github.com/cavos-io/rtp-agent/adapter/durable
 ```
 
-## Authentication
-
-Set the required environment variables in your `.env` file. Refer to the Durable developer documentation for acquiring the necessary API keys and tokens.
-
-```env
-DURABLE_API_KEY=your_api_key_here
-```
-
 ## Usage
 
 Below is a basic conceptual example demonstrating how to initialize the Durable Other adapter within an RTP Agent session:
@@ -33,7 +25,6 @@ package main
 import (
 	"context"
 	"log"
-	"os"
 
 	"github.com/cavos-io/rtp-agent/adapter/durable"
 	"github.com/cavos-io/rtp-agent/core/agent"
@@ -42,17 +33,12 @@ import (
 func main() {
 	ctx := context.Background()
 
-	// Initialize the Durable Other adapter
-	pluginProvider, err := durable.NewProvider(
-		os.Getenv("DURABLE_API_KEY"),
-	)
-	if err != nil {
-		log.Fatalf("failed to initialize durable adapter: %v", err)
-	}
+	// Initialize the adapter
+	workflowManager := durable.NewDurableManager()
 
 	// Create and configure the RTP agent session
 	session := agent.NewSession(
-		agent.WithPlugin(pluginProvider),
+		agent.WithWorkflow(workflowManager),
 	)
 
 	// Start the session

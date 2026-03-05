@@ -15,14 +15,6 @@ Add the adapter to your Go project:
 go get github.com/cavos-io/rtp-agent/adapter/silero
 ```
 
-## Authentication
-
-Set the required environment variables in your `.env` file. Refer to the Silero developer documentation for acquiring the necessary API keys and tokens.
-
-```env
-SILERO_API_KEY=your_api_key_here
-```
-
 ## Usage
 
 Below is a basic conceptual example demonstrating how to initialize the Silero Other adapter within an RTP Agent session:
@@ -33,7 +25,6 @@ package main
 import (
 	"context"
 	"log"
-	"os"
 
 	"github.com/cavos-io/rtp-agent/adapter/silero"
 	"github.com/cavos-io/rtp-agent/core/agent"
@@ -42,17 +33,12 @@ import (
 func main() {
 	ctx := context.Background()
 
-	// Initialize the Silero Other adapter
-	pluginProvider, err := silero.NewProvider(
-		os.Getenv("SILERO_API_KEY"),
-	)
-	if err != nil {
-		log.Fatalf("failed to initialize silero adapter: %v", err)
-	}
+	// Initialize the adapter
+	vadProvider := silero.NewSileroVAD(silero.VADOption{})
 
 	// Create and configure the RTP agent session
 	session := agent.NewSession(
-		agent.WithPlugin(pluginProvider),
+		agent.WithVAD(vadProvider),
 	)
 
 	// Start the session
