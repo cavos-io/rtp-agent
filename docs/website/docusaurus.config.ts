@@ -13,8 +13,8 @@ const config: Config = {
     v4: true,
   },
 
-  url: 'https://cavos.io',
-  baseUrl: '/',
+  url: 'https://cavos-io.github.io',
+  baseUrl: '/rtp-agent/',
 
   organizationName: 'cavos-io',
   projectName: 'rtp-agent',
