@@ -4,9 +4,13 @@
   "private": true,
   "scripts": {
     "docusaurus": "docusaurus",
+    "sync-readme": "node ./scripts/sync-readme.mjs",
+    "prestart": "npm run sync-readme",
     "start": "docusaurus start",
+    "prebuild": "npm run sync-readme",
     "build": "docusaurus build",
     "swizzle": "docusaurus swizzle",
+    "predeploy": "npm run sync-readme",
     "deploy": "docusaurus deploy",
     "clear": "docusaurus clear",
     "serve": "docusaurus serve",

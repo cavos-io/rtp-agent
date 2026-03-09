@@ -31,6 +31,7 @@ const config: Config = {
       'classic',
       {
         docs: {
+          routeBasePath: '/',
           sidebarPath: './sidebars.ts',
           editUrl:
             'https://github.com/cavos-io/rtp-agent/tree/main/docs/website/',
@@ -77,7 +78,7 @@ const config: Config = {
           items: [
             {
               label: 'Introduction',
-              to: '/docs/adapters/llm/openai',
+              to: '/adapters/llm/openai',
             },
           ],
         },

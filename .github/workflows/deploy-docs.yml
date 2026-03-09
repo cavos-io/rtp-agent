@@ -6,6 +6,7 @@ on:
       - main
     # Only trigger when files in the docs/website directory change
     paths:
+      - "README.md"
       - "docs/website/**"
       - ".github/workflows/deploy-docs.yml"
 

@@ -1,0 +1,191 @@
+import {execSync} from 'node:child_process';
+import fs from 'node:fs/promises';
+import path from 'node:path';
+import {fileURLToPath} from 'node:url';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
+const repoRoot = path.resolve(__dirname, '../../..');
+const readmePath = path.join(repoRoot, 'README.md');
+const outputPath = path.resolve(__dirname, '../docs/index.md');
+
+function runGit(command) {
+  try {
+    return execSync(command, {
+      cwd: repoRoot,
+      stdio: ['ignore', 'pipe', 'ignore'],
+      encoding: 'utf8',
+    }).trim();
+  } catch {
+    return '';
+  }
+}
+
+function parseGitHubRepoSlug(remoteURL) {
+  if (!remoteURL) return '';
+
+  const ssh = remoteURL.match(/^git@github\.com:(.+?)(?:\.git)?$/);
+  if (ssh) return ssh[1];
+
+  const https = remoteURL.match(/^https?:\/\/github\.com\/(.+?)(?:\.git)?$/);
+  if (https) return https[1];
+
+  return '';
+}
+
+function detectRepoSlug() {
+  if (process.env.GITHUB_REPOSITORY) {
+    return process.env.GITHUB_REPOSITORY;
+  }
+  const remote = runGit('git config --get remote.origin.url');
+  return parseGitHubRepoSlug(remote) || 'cavos-io/rtp-agent';
+}
+
+function detectRepoRef() {
+  if (process.env.GITHUB_REF_NAME) {
+    return process.env.GITHUB_REF_NAME;
+  }
+  if (process.env.GITHUB_SHA) {
+    return process.env.GITHUB_SHA;
+  }
+  const branch = runGit('git rev-parse --abbrev-ref HEAD');
+  if (branch && branch !== 'HEAD') {
+    return branch;
+  }
+  return 'main';
+}
+
+const repoSlug = detectRepoSlug();
+const repoRef = detectRepoRef();
+const repoReadmeURL = `https://github.com/${repoSlug}/blob/${repoRef}/README.md`;
+const repoBlobBaseURL = `https://github.com/${repoSlug}/blob/${repoRef}/`;
+
+function removeTopLevelTitle(markdown) {
+  return markdown.replace(/^#\s+.*\n+/u, '');
+}
+
+function isExternalOrAnchor(target) {
+  const t = target.trim();
+  if (!t) return true;
+  if (t.startsWith('#')) return true;
+  if (t.startsWith('/')) return true;
+  if (t.startsWith('//')) return true;
+  return /^[a-zA-Z][a-zA-Z\d+.-]*:/.test(t);
+}
+
+function splitPathAndSuffix(target) {
+  const hashIdx = target.indexOf('#');
+  const queryIdx = target.indexOf('?');
+  const suffixStartCandidates = [hashIdx, queryIdx].filter((idx) => idx >= 0);
+  if (suffixStartCandidates.length === 0) {
+    return {pathPart: target, suffix: ''};
+  }
+  const suffixStart = Math.min(...suffixStartCandidates);
+  return {
+    pathPart: target.slice(0, suffixStart),
+    suffix: target.slice(suffixStart),
+  };
+}
+
+function toRepoBlobURL(target) {
+  if (isExternalOrAnchor(target)) {
+    return target;
+  }
+
+  const {pathPart, suffix} = splitPathAndSuffix(target.trim());
+  let normalized = pathPart.replace(/\\/g, '/');
+  normalized = path.posix.normalize(normalized);
+
+  while (normalized.startsWith('../')) {
+    normalized = normalized.slice(3);
+  }
+  if (normalized.startsWith('./')) {
+    normalized = normalized.slice(2);
+  }
+  normalized = normalized.replace(/^\/+/, '');
+
+  if (!normalized || normalized === '.') {
+    return suffix || target;
+  }
+
+  return `${repoBlobBaseURL}${normalized}${suffix}`;
+}
+
+function rewriteTargetExpression(rawTargetExpr) {
+  const targetExpr = rawTargetExpr.trim();
+
+  const angleWrapped = targetExpr.match(/^<([^>]+)>(.*)$/);
+  if (angleWrapped) {
+    const [, innerTarget, rest] = angleWrapped;
+    const rewritten = toRepoBlobURL(innerTarget);
+    return `<${rewritten}>${rest}`;
+  }
+
+  const basic = targetExpr.match(/^(\S+)(.*)$/);
+  if (!basic) {
+    return rawTargetExpr;
+  }
+
+  const [, rawTarget, rest] = basic;
+  const rewritten = toRepoBlobURL(rawTarget);
+  return `${rewritten}${rest}`;
+}
+
+function rewriteNestedImageLinks(markdown) {
+  return markdown.replace(/\[(!\[[^\]]*?\]\([^)]+\))\]\(([^)]+)\)/g, (_match, imageExpr, rawTargetExpr) => {
+    return `[${imageExpr}](${rewriteTargetExpression(rawTargetExpr)})`;
+  });
+}
+
+function rewriteInlineMarkdownLinks(markdown) {
+  return markdown.replace(/(!?\[[^\]]*?\])\(([^)]+)\)/g, (_match, label, rawTargetExpr) => {
+    return `${label}(${rewriteTargetExpression(rawTargetExpr)})`;
+  });
+}
+
+function rewriteReferenceStyleLinks(markdown) {
+  return markdown.replace(/^(\s*\[[^\]]+\]:\s*)(\S+)(.*)$/gm, (_match, prefix, rawTarget, suffix) => {
+    return `${prefix}${toRepoBlobURL(rawTarget)}${suffix}`;
+  });
+}
+
+function rewriteHtmlHrefAndSrc(markdown) {
+  return markdown.replace(
+    /(<(?:a|img)\b[^>]*\b(?:href|src)=["'])([^"']+)(["'][^>]*>)/gi,
+    (_match, start, rawTarget, end) => `${start}${toRepoBlobURL(rawTarget)}${end}`,
+  );
+}
+
+function rewriteRelativeLinks(markdown) {
+  return rewriteHtmlHrefAndSrc(
+    rewriteReferenceStyleLinks(rewriteInlineMarkdownLinks(rewriteNestedImageLinks(markdown))),
+  );
+}
+
+function buildDocContent(markdown) {
+  const body = rewriteRelativeLinks(removeTopLevelTitle(markdown).trim());
+  return `---
+title: RTP Agent
+slug: /
+---
+
+> This page is auto-generated from [README.md](${repoReadmeURL}). Do not edit this file directly.
+
+${body}
+`;
+}
+
+async function main() {
+  const readme = await fs.readFile(readmePath, 'utf8');
+  const generated = buildDocContent(readme);
+  await fs.mkdir(path.dirname(outputPath), {recursive: true});
+  await fs.writeFile(outputPath, generated, 'utf8');
+  console.log(`Synced ${readmePath} -> ${outputPath}`);
+}
+
+main().catch((err) => {
+  console.error('Failed to sync README into Docusaurus docs homepage.');
+  console.error(err);
+  process.exit(1);
+});
