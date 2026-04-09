@@ -125,11 +125,6 @@ func (s *AgentSession) Start(ctx context.Context) error {
 
 	if s.Assistant == nil {
 		s.Assistant = NewPipelineAgent(s.VAD, s.STT, s.LLM, s.TTS, s.ChatCtx)
-	} else if s.Assistant.vad == nil {
-		// Pre-created without VAD (e.g. by RoomIO before Start); rebuild preserving callbacks.
-		publishAudio := s.Assistant.PublishAudio
-		s.Assistant = NewPipelineAgent(s.VAD, s.STT, s.LLM, s.TTS, s.ChatCtx)
-		s.Assistant.PublishAudio = publishAudio
 	}
 
 	if err := s.Assistant.Start(ctx, s); err != nil {

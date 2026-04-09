@@ -197,11 +197,17 @@ func (rio *RoomIO) Start(ctx context.Context) error {
 }
 
 func (rio *RoomIO) onTrackSubscribed(track *webrtc.TrackRemote, publication *lksdk.RemoteTrackPublication, rp *lksdk.RemoteParticipant) {
-	fmt.Printf("📡 [RoomIO] onTrackSubscribed called: kind=%s codec=%s\n", track.Kind().String(), track.Codec().MimeType)
-	if track.Kind() == webrtc.RTPCodecTypeAudio {
-		fmt.Println("🎤 [RoomIO] Starting audio track handler...")
-		go rio.handleAudioTrack(track)
+	fmt.Printf("📡 [RoomIO] onTrackSubscribed called: kind=%s codec=%s participant=%s\n", track.Kind().String(), track.Codec().MimeType, rp.Identity())
+	if track.Kind() != webrtc.RTPCodecTypeAudio {
+		return
 	}
+	// Only process audio from human (Standard) participants — skip other agents
+	if rp.Kind() != lksdk.ParticipantStandard {
+		fmt.Printf("   ↩️  Skipping audio from non-human participant (kind=%v)\n", rp.Kind())
+		return
+	}
+	fmt.Println("🎤 [RoomIO] Starting audio track handler...")
+	go rio.handleAudioTrack(track)
 }
 
 func (rio *RoomIO) handleAudioTrack(track *webrtc.TrackRemote) {

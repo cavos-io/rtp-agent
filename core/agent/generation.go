@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/cavos-io/conversation-worker/core/llm"
@@ -36,6 +37,7 @@ func PerformLLMInference(ctx context.Context, l llm.LLM, chatCtx *llm.ChatContex
 		defer close(data.TextCh)
 		defer close(data.FunctionCh)
 		defer stream.Close()
+		var buffer string
 
 		for {
 			chunk, err := stream.Next()
@@ -45,7 +47,16 @@ func PerformLLMInference(ctx context.Context, l llm.LLM, chatCtx *llm.ChatContex
 
 			if chunk.Delta != nil {
 				if chunk.Delta.Content != "" {
-					data.TextCh <- chunk.Delta.Content
+					buffer += chunk.Delta.Content
+					// Send complete sentences when period is found
+					for {
+						idx := strings.Index(buffer, ".")
+						if idx == -1 {
+							break
+						}
+						data.TextCh <- buffer[:idx+1]
+						buffer = buffer[idx+1:]
+					}
 				}
 				for _, tc := range chunk.Delta.ToolCalls {
 					data.FunctionCh <- &tc
@@ -54,6 +65,9 @@ func PerformLLMInference(ctx context.Context, l llm.LLM, chatCtx *llm.ChatContex
 			if chunk.Usage != nil {
 				data.Usage = chunk.Usage
 			}
+		}
+		if buffer != "" {
+			data.TextCh <- buffer
 		}
 	}()
 
