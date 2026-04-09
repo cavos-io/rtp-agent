@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/signal"
@@ -73,7 +74,7 @@ func runWorker(server *worker.AgentServer, devMode bool) {
 	defer stop()
 
 	logger.Logger.Infow("Starting worker", "devMode", devMode)
-	if err := server.Run(ctx); err != nil {
+	if err := server.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
 		logger.Logger.Errorw("Worker error", err)
 		os.Exit(1)
 	}
@@ -147,4 +148,3 @@ func runConsole(server *worker.AgentServer) {
 
 	<-ctx.Done()
 }
-

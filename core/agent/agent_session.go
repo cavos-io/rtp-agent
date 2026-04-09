@@ -113,33 +113,42 @@ func NewAgentSession(agent AgentInterface, room *lksdk.Room, opts AgentSessionOp
 
 func (s *AgentSession) Start(ctx context.Context) error {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 
 	if s.started {
+		s.mu.Unlock()
 		return nil
 	}
 
 	if s.VAD == nil {
-		s.VAD = vad.NewSimpleVAD(0.05)
+		s.VAD = vad.NewSimpleVAD(0.002)
 	}
 
 	if s.Assistant == nil {
 		s.Assistant = NewPipelineAgent(s.VAD, s.STT, s.LLM, s.TTS, s.ChatCtx)
+	} else if s.Assistant.vad == nil {
+		// Pre-created without VAD (e.g. by RoomIO before Start); rebuild preserving callbacks.
+		publishAudio := s.Assistant.PublishAudio
+		s.Assistant = NewPipelineAgent(s.VAD, s.STT, s.LLM, s.TTS, s.ChatCtx)
+		s.Assistant.PublishAudio = publishAudio
 	}
 
 	if err := s.Assistant.Start(ctx, s); err != nil {
+		s.mu.Unlock()
 		return err
 	}
 
 	s.activity = NewAgentActivity(s.Agent, s)
 	s.activity.Start()
-	
+
 	// Trigger periodic usage metrics reporting
 	if s.MetricsCollector != nil {
 		go s.reportUsageLoop(ctx)
 	}
 
 	s.started = true
+	s.mu.Unlock()
+
+	// UpdateAgentState acquires s.mu, so call AFTER releasing
 	s.UpdateAgentState(AgentStateListening)
 
 	return nil
@@ -166,10 +175,21 @@ func (s *AgentSession) UpdateAgentState(state AgentState) {
 	s.mu.Lock()
 	oldState := s.AgentState
 	s.AgentState = state
+	room := s.Room
 	s.mu.Unlock()
 
 	if oldState != state {
 		logger.Logger.Debugw("Agent state changed", "old", oldState, "new", state)
+
+		// Publish state to Playground via LiveKit participant attributes.
+		// The Playground reads "lk.agent.state" to display agent status and
+		// resolve "Waiting for agent audio track…".
+		if room != nil && room.LocalParticipant != nil {
+			room.LocalParticipant.SetAttributes(map[string]string{
+				"lk.agent.state": string(state),
+			})
+		}
+
 		select {
 		case s.AgentStateChangedCh <- AgentStateChangedEvent{
 			OldState: oldState,
@@ -214,7 +234,7 @@ func (s *AgentSession) GenerateReply(ctx context.Context, userInput string) erro
 
 	// Create a speech handle
 	handle := NewSpeechHandle(s.Options.AllowInterruptions, DefaultInputDetails())
-	
+
 	// Add user message to ChatContext if provided
 	if userInput != "" {
 		s.ChatCtx.Append(&llm.ChatMessage{

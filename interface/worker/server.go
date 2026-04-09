@@ -81,7 +81,6 @@ func (s *AgentServer) GetConsoleSession() any {
 	return s.consoleSession
 }
 
-
 func (s *AgentServer) Run(ctx context.Context) error {
 	if s.Options.WSRL == "" || s.Options.APIKey == "" || s.Options.APISecret == "" {
 		return fmt.Errorf("missing LiveKit credentials")
@@ -110,25 +109,50 @@ func (s *AgentServer) Run(ctx context.Context) error {
 
 	// Connect WS
 	// A robust implementation should include retries and proxy handling
+	fmt.Printf("   Dialing WebSocket: %s\n", wsURL.String())
 	conn, res, err := websocket.DefaultDialer.DialContext(ctx, wsURL.String(), map[string][]string{
 		"Authorization": {fmt.Sprintf("Bearer %s", token)},
 	})
 	if err != nil {
+		fmt.Printf("   ❌ WebSocket connection failed: %v\n", err)
 		return fmt.Errorf("failed to connect to LiveKit %s: %w", wsURL.String(), err)
 	}
 	_ = res
 	s.conn = conn
 	defer conn.Close()
 
+	// When ctx is cancelled (e.g. Ctrl+C), close the WebSocket so the
+	// blocking conn.ReadMessage() call below returns immediately.
+	go func() {
+		<-ctx.Done()
+		fmt.Println("   🛑 Shutting down worker...")
+		conn.Close()
+	}()
+
+	fmt.Println("   ✅ Connected to LiveKit Server!")
+	fmt.Println("   Registering worker...")
 	logger.Logger.Infow("Connected to LiveKit Server", "url", s.Options.WSRL)
 
-	// Send Register request
+	// Send Register request.
+	// PingInterval tells the server how often (in seconds) we will send
+	// application-level WorkerPing messages. Without this the server considers
+	// the worker unhealthy and never dispatches jobs.
+	pingIntervalSec := uint32(5)
+	ns := "" // empty = default namespace
 	req := &livekit.WorkerMessage{
 		Message: &livekit.WorkerMessage_Register{
 			Register: &livekit.RegisterWorkerRequest{
-				Type:      livekit.JobType_JT_ROOM, // Hardcoded for room type for now
-				AgentName: s.Options.AgentName,
-				Version:   "1.0.0",
+				Type:         livekit.JobType_JT_ROOM,
+				AgentName:    s.Options.AgentName,
+				Version:      "1.0.0",
+				PingInterval: pingIntervalSec,
+				Namespace:    &ns,
+				AllowedPermissions: &livekit.ParticipantPermission{
+					CanPublish:     true,
+					CanSubscribe:   true,
+					CanPublishData: true,
+					Agent:          true,
+				},
 			},
 		},
 	}
@@ -142,6 +166,42 @@ func (s *AgentServer) Run(ctx context.Context) error {
 		return err
 	}
 
+	// Application-level ping loop.
+	// LiveKit agent protocol uses protobuf WorkerPing messages (NOT WebSocket
+	// control-frame pings). The server echoes back a WorkerPong. Without these
+	// pings the server marks the worker as dead and stops sending jobs.
+	go func() {
+		ticker := time.NewTicker(time.Duration(pingIntervalSec) * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				ping := &livekit.WorkerMessage{
+					Message: &livekit.WorkerMessage_Ping{
+						Ping: &livekit.WorkerPing{
+							Timestamp: time.Now().UnixMilli(),
+						},
+					},
+				}
+				pb, err := proto.Marshal(ping)
+				if err != nil {
+					fmt.Printf("   ❌ Ping marshal error: %v\n", err)
+					return
+				}
+				s.mu.Lock()
+				err = conn.WriteMessage(websocket.BinaryMessage, pb)
+				s.mu.Unlock()
+				if err != nil {
+					fmt.Printf("   ❌ Ping send error: %v\n", err)
+					return
+				}
+				fmt.Printf("   🏓 WorkerPing sent (ts=%d)\n", time.Now().UnixMilli())
+			}
+		}
+	}()
+
 	// Message Loop
 	for {
 		select {
@@ -150,8 +210,11 @@ func (s *AgentServer) Run(ctx context.Context) error {
 		default:
 			msgType, data, err := conn.ReadMessage()
 			if err != nil {
+				fmt.Printf("   ❌ WebSocket read error: %v\n", err)
 				return err
 			}
+
+			fmt.Printf("   📨 WS message received: type=%d len=%d\n", msgType, len(data))
 
 			if msgType != websocket.BinaryMessage {
 				continue
@@ -163,27 +226,65 @@ func (s *AgentServer) Run(ctx context.Context) error {
 				continue
 			}
 
+			fmt.Printf("   📬 Parsed message type: %T\n", msg.Message)
 			s.handleMessage(ctx, msg)
 		}
 	}
 }
 
+// sendAvailable broadcasts UpdateWorkerStatus(WS_AVAILABLE) so the LiveKit
+// server knows this worker is ready to receive job dispatches.
+func (s *AgentServer) sendAvailable() error {
+	status := livekit.WorkerStatus_WS_AVAILABLE
+	update := &livekit.WorkerMessage{
+		Message: &livekit.WorkerMessage_UpdateWorker{
+			UpdateWorker: &livekit.UpdateWorkerStatus{
+				Status:   &status,
+				Load:     0.0,
+				JobCount: 0,
+			},
+		},
+	}
+	b, err := proto.Marshal(update)
+	if err != nil {
+		return err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.conn.WriteMessage(websocket.BinaryMessage, b)
+}
+
 func (s *AgentServer) handleMessage(ctx context.Context, msg *livekit.ServerMessage) {
 	switch m := msg.Message.(type) {
 	case *livekit.ServerMessage_Register:
+		fmt.Printf("   ✅ Worker Registered! ID: %s\n", m.Register.WorkerId)
 		logger.Logger.Infow("Worker Registered", "workerId", m.Register.WorkerId, "serverInfo", m.Register.ServerInfo)
+		// Signal to the server that this worker is ready to accept jobs.
+		// Without this UpdateWorkerStatus the server keeps the worker in an
+		// "initializing" state and will never assign dispatches to it.
+		if err := s.sendAvailable(); err != nil {
+			fmt.Printf("   ❌ Failed to send available status: %v\n", err)
+		} else {
+			fmt.Println("   ✅ Worker status set to AVAILABLE — waiting for jobs...")
+		}
 	case *livekit.ServerMessage_Availability:
 		s.handleAvailability(ctx, m.Availability)
 	case *livekit.ServerMessage_Assignment:
 		s.handleAssignment(ctx, m.Assignment)
 	case *livekit.ServerMessage_Termination:
 		s.handleTermination(m.Termination)
+	case *livekit.ServerMessage_Pong:
+		// Application-level keepalive response — worker is confirmed alive
+		fmt.Printf("   🏓 WorkerPong received (lastTs=%d serverTs=%d)\n",
+			m.Pong.LastTimestamp, m.Pong.Timestamp)
 	default:
-		logger.Logger.Warnw("Unhandled message type received", nil)
+		fmt.Printf("   ⚠️ Unhandled server message type: %T\n", msg.Message)
+		logger.Logger.Warnw("Unhandled message type received", nil, "type", fmt.Sprintf("%T", msg.Message))
 	}
 }
 
 func (s *AgentServer) handleAvailability(ctx context.Context, req *livekit.AvailabilityRequest) {
+	fmt.Printf("   📥 Received availability request: job=%s\n", req.Job.Id)
 	logger.Logger.Infow("Received availability request", "jobId", req.Job.Id)
 
 	// Default to accept
@@ -213,6 +314,7 @@ func (s *AgentServer) handleAvailability(ctx context.Context, req *livekit.Avail
 }
 
 func (s *AgentServer) handleAssignment(ctx context.Context, req *livekit.JobAssignment) {
+	fmt.Printf("   🚀 Received job assignment: job=%s room=%s\n", req.Job.Id, req.Job.Room.Name)
 	logger.Logger.Infow("Received job assignment", "jobId", req.Job.Id)
 
 	// Spin up a job context here
@@ -226,6 +328,10 @@ func (s *AgentServer) handleAssignment(ctx context.Context, req *livekit.JobAssi
 		go func() {
 			if err := s.entrypointFnc(jobCtx); err != nil {
 				logger.Logger.Errorw("Job entrypoint failed", err, "jobId", req.Job.Id)
+			}
+			// Job done — signal back to AVAILABLE so the next dispatch can be received
+			if err := s.sendAvailable(); err != nil {
+				logger.Logger.Warnw("Failed to send available after job", err)
 			}
 		}()
 	}
@@ -275,7 +381,7 @@ func (s *AgentServer) ExecuteLocalJob(ctx context.Context, roomName string, part
 	}
 
 	jobCtx := NewJobContext(job, s.Options.WSRL, s.Options.APIKey, s.Options.APISecret)
-	
+
 	// For local execution, we want to connect immediately
 	// For basic parity, we just trigger the entrypoint directly.
 
@@ -290,7 +396,7 @@ func (s *AgentServer) ExecuteLocalJob(ctx context.Context, roomName string, part
 			}
 		}()
 	}
-	
+
 	// Block until context is done for local execution
 	<-ctx.Done()
 	return nil
