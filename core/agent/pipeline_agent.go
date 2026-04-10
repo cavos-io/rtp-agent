@@ -6,6 +6,7 @@ import (
 	"io"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/cavos-io/rtp-agent/core/llm"
 	"github.com/cavos-io/rtp-agent/core/stt"
@@ -87,6 +88,21 @@ func (va *PipelineAgent) run(ctx context.Context) {
 
 	go va.vadLoop(vadStream)
 	go va.sttLoop(sttStream)
+
+	// Send initial greeting so the agent introduces itself immediately.
+	// This also lets us verify the LLM→TTS→transcript pipeline end-to-end
+	// without waiting for the user to speak.
+	go func() {
+		time.Sleep(2 * time.Second)
+		fmt.Println("👋 [Pipeline] Sending initial greeting...")
+		va.chatCtx.Append(&llm.ChatMessage{
+			Role: llm.ChatRoleUser,
+			Content: []llm.ChatContent{
+				{Text: "Halo, perkenalkan dirimu secara singkat."},
+			},
+		})
+		va.generateReply()
+	}()
 
 	fmt.Println("🎧 [Pipeline] Audio processing loop running...")
 	var frameCount atomic.Int64
