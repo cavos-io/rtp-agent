@@ -8,7 +8,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/cavos-io/conversation-worker/library/logger"
+	"github.com/cavos-io/rtp-agent/library/logger"
 	lksdk "github.com/livekit/server-sdk-go/v2"
 )
 

@@ -3,7 +3,7 @@ package nltk
 import (
 	"strings"
 
-	"github.com/cavos-io/conversation-worker/library/tokenize"
+	"github.com/cavos-io/rtp-agent/library/tokenize"
 )
 
 type SentenceTokenizer struct {

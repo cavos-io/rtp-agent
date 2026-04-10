@@ -3,10 +3,10 @@ package agent
 import (
 	"context"
 
-	"github.com/cavos-io/conversation-worker/core/llm"
-	"github.com/cavos-io/conversation-worker/core/stt"
-	"github.com/cavos-io/conversation-worker/core/tts"
-	"github.com/cavos-io/conversation-worker/core/vad"
+	"github.com/cavos-io/rtp-agent/core/llm"
+	"github.com/cavos-io/rtp-agent/core/stt"
+	"github.com/cavos-io/rtp-agent/core/tts"
+	"github.com/cavos-io/rtp-agent/core/vad"
 )
 
 type TurnDetectionMode string

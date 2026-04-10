@@ -6,8 +6,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/cavos-io/conversation-worker/library/logger"
-	"github.com/cavos-io/conversation-worker/library/tokenize"
+	"github.com/cavos-io/rtp-agent/library/logger"
+	"github.com/cavos-io/rtp-agent/library/tokenize"
 )
 
 // SentenceStreamPacer buffers text from the LLM, groups it into sentences,

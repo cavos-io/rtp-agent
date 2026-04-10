@@ -3,7 +3,7 @@ package vad
 import (
 	"context"
 
-	"github.com/cavos-io/conversation-worker/model"
+	"github.com/cavos-io/rtp-agent/model"
 )
 
 type VADEventType string

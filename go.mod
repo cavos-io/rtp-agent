@@ -1,4 +1,4 @@
-module github.com/cavos-io/conversation-worker
+module github.com/cavos-io/rtp-agent
 
 go 1.25.0
 

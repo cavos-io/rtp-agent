@@ -6,9 +6,9 @@ import (
 	"io"
 	"sync"
 
-	"github.com/cavos-io/conversation-worker/core/vad"
-	"github.com/cavos-io/conversation-worker/library/logger"
-	"github.com/cavos-io/conversation-worker/model"
+	"github.com/cavos-io/rtp-agent/core/vad"
+	"github.com/cavos-io/rtp-agent/library/logger"
+	"github.com/cavos-io/rtp-agent/model"
 )
 
 // StreamAdapter converts a non-streaming STT into a streaming STT by coupling it with a VAD.

@@ -6,7 +6,7 @@ import (
 	"errors"
 	"io"
 
-	"github.com/cavos-io/conversation-worker/core/llm"
+	"github.com/cavos-io/rtp-agent/core/llm"
 	"github.com/sashabaranov/go-openai"
 )
 

@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/cavos-io/conversation-worker/core/tts"
+	"github.com/cavos-io/rtp-agent/core/tts"
 )
 
 type SpeechmaticsTTS struct {

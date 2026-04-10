@@ -3,7 +3,7 @@ package tavus
 import (
 	"context"
 	"fmt"
-	"github.com/cavos-io/conversation-worker/core/agent"
+	"github.com/cavos-io/rtp-agent/core/agent"
 )
 
 type TavusAvatar struct {

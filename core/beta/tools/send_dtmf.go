@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/cavos-io/conversation-worker/core/beta"
+	"github.com/cavos-io/rtp-agent/core/beta"
 )
 
 type DtmfPublisher interface {
