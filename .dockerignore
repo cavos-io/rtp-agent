@@ -1,0 +1,30 @@
+# Build artifacts
+agent.exe
+agent.exe~
+agent2.exe
+agent2.exe~
+dispatch.exe
+
+# Debug files
+tts_debug.wav
+*.wav
+
+# Git
+.git
+.gitignore
+
+# IDE
+.vscode
+.idea
+
+# Docs (not needed in image)
+docs/
+*.md
+gap_analysis.md
+progress_report.md
+
+# Env file (pass secrets via env vars at runtime)
+.env
+
+# Test files
+*_test.go

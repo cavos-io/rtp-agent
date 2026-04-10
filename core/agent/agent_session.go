@@ -6,13 +6,13 @@ import (
 	"sync"
 	"time"
 
-	"github.com/cavos-io/rtp-agent/core/llm"
-	"github.com/cavos-io/rtp-agent/core/stt"
-	"github.com/cavos-io/rtp-agent/core/tts"
-	"github.com/cavos-io/rtp-agent/core/vad"
-	"github.com/cavos-io/rtp-agent/library/logger"
-	"github.com/cavos-io/rtp-agent/library/telemetry"
-	"github.com/cavos-io/rtp-agent/model"
+	"github.com/cavos-io/conversation-worker/core/llm"
+	"github.com/cavos-io/conversation-worker/core/stt"
+	"github.com/cavos-io/conversation-worker/core/tts"
+	"github.com/cavos-io/conversation-worker/core/vad"
+	"github.com/cavos-io/conversation-worker/library/logger"
+	"github.com/cavos-io/conversation-worker/library/telemetry"
+	"github.com/cavos-io/conversation-worker/model"
 	"github.com/livekit/protocol/livekit"
 	lksdk "github.com/livekit/server-sdk-go/v2"
 )
@@ -64,7 +64,7 @@ type AgentSession struct {
 
 	MetricsCollector *telemetry.UsageCollector
 
-	UserState UserState
+	UserState  UserState
 	AgentState AgentState
 
 	// Transcript attribution — set by RoomIO when tracks are established.
@@ -91,7 +91,6 @@ func (p *transcriptionPacket) ToProto() *livekit.DataPacket {
 		Value: &livekit.DataPacket_Transcription{Transcription: p.t},
 	}
 }
-
 
 func (s *AgentSession) OnAudioFrame(ctx context.Context, frame *model.AudioFrame) {
 	s.mu.Lock()
