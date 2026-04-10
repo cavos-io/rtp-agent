@@ -18,6 +18,9 @@ bin/
 *.wav
 tts_debug.wav
 
+# Claude Code local settings
+.claude/
+
 # IDE
 .idea/
 .vscode/
