@@ -14,6 +14,7 @@ import (
 type LLMGenerationData struct {
 	TextCh     chan string
 	FunctionCh chan *llm.FunctionToolCall
+	FullTextCh chan string // receives the complete assembled text when streaming is done
 	Usage      *llm.CompletionUsage
 }
 
@@ -31,14 +32,15 @@ func PerformLLMInference(ctx context.Context, l llm.LLM, chatCtx *llm.ChatContex
 	data := &LLMGenerationData{
 		TextCh:     make(chan string, 100),
 		FunctionCh: make(chan *llm.FunctionToolCall, 10),
+		FullTextCh: make(chan string, 1),
 	}
 
 	go func() {
 		defer close(data.TextCh)
 		defer close(data.FunctionCh)
 		defer stream.Close()
-		var buffer string
 
+		var sb strings.Builder
 		for {
 			chunk, err := stream.Next()
 			if err != nil {
@@ -47,16 +49,8 @@ func PerformLLMInference(ctx context.Context, l llm.LLM, chatCtx *llm.ChatContex
 
 			if chunk.Delta != nil {
 				if chunk.Delta.Content != "" {
-					buffer += chunk.Delta.Content
-					// Send complete sentences when period is found
-					for {
-						idx := strings.Index(buffer, ".")
-						if idx == -1 {
-							break
-						}
-						data.TextCh <- buffer[:idx+1]
-						buffer = buffer[idx+1:]
-					}
+					sb.WriteString(chunk.Delta.Content)
+					data.TextCh <- chunk.Delta.Content
 				}
 				for _, tc := range chunk.Delta.ToolCalls {
 					data.FunctionCh <- &tc
@@ -66,9 +60,8 @@ func PerformLLMInference(ctx context.Context, l llm.LLM, chatCtx *llm.ChatContex
 				data.Usage = chunk.Usage
 			}
 		}
-		if buffer != "" {
-			data.TextCh <- buffer
-		}
+		// Non-blocking: buffered channel holds the result for the consumer.
+		data.FullTextCh <- sb.String()
 	}()
 
 	return data, nil

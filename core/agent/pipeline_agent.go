@@ -152,6 +152,14 @@ func (va *PipelineAgent) sttLoop(stream stt.RecognizeStream) {
 			fmt.Printf("📝 [STT] Transcript: %s\n", transcript)
 			logger.Logger.Infow("Final transcript", "text", transcript)
 
+			// Publish user transcript to Playground
+			va.mu.Lock()
+			sess := va.session
+			va.mu.Unlock()
+			if sess != nil {
+				go sess.PublishUserTranscript(transcript)
+			}
+
 			va.chatCtx.Append(&llm.ChatMessage{
 				Role: llm.ChatRoleUser,
 				Content: []llm.ChatContent{
@@ -198,21 +206,33 @@ func (va *PipelineAgent) generateReply() {
 
 		toolOutCh := PerformToolExecutions(ctx, genData.FunctionCh, toolCtx)
 
-		// Start TTS in parallel with LLM text
+		// Start TTS with the original text channel — no tee, no extra goroutines.
 		fmt.Println("🔊 [TTS] Starting TTS inference...")
 		ttsGen, err := PerformTTSInference(ctx, va.tts, genData.TextCh)
 		if err != nil {
 			fmt.Printf("❌ [TTS] Inference failed: %v\n", err)
 			logger.Logger.Errorw("TTS inference failed", err)
+			// Drain TextCh so the LLM goroutine can finish and close FunctionCh.
+			// Without this, LLM goroutine blocks on TextCh → FunctionCh never closes
+			// → toolOutCh never closes → this goroutine deadlocks below.
+			go func() { for range genData.TextCh {} }()
 		} else {
 			fmt.Println("✅ [TTS] TTS started, publishing audio...")
 			session.UpdateAgentState(AgentStateSpeaking)
 			frameCount := 0
+			interrupted := false
+		playoutLoop:
 			for frame := range ttsGen.AudioCh {
 				select {
 				case <-ctx.Done():
 					fmt.Println("⚠️ [TTS] Context cancelled during playout")
-					return
+					interrupted = true
+					// Drain remaining audio so the TTS goroutine can exit and
+					// close the ElevenLabs WebSocket stream. Without draining,
+					// the goroutine blocks on AudioCh → stream never closes →
+					// ElevenLabs keeps the connection open → next call may fail.
+					go func() { for range ttsGen.AudioCh {} }()
+					break playoutLoop
 				default:
 					if va.PublishAudio != nil {
 						_ = va.PublishAudio(frame)
@@ -221,18 +241,43 @@ func (va *PipelineAgent) generateReply() {
 				}
 			}
 			fmt.Printf("✅ [TTS] Published %d audio frames\n", frameCount)
+
+			if interrupted {
+				// Also drain FullTextCh so LLM goroutine is not left blocked.
+				go func() { for range genData.FullTextCh {} }()
+				return
+			}
+
+			// Normal completion: LLM goroutine is done → FullTextCh is ready.
+			select {
+			case agentText := <-genData.FullTextCh:
+				if agentText != "" {
+					go session.PublishAgentTranscript(agentText)
+				}
+			case <-ctx.Done():
+				return
+			}
 		}
 
-		// Wait for tool executions to complete and collect results
+		// Wait for tool executions to complete and collect results.
+		// Use select so a VAD interruption can cancel this wait.
 		var executedTools bool
-		for toolOut := range toolOutCh {
-			executedTools = true
-			fmt.Printf("🔧 [Tool] Executed: %s\n", toolOut.FncCall.Name)
-			logger.Logger.Infow("Tool executed", "name", toolOut.FncCall.Name)
-
-			va.chatCtx.Append(&toolOut.FncCall)
-			if toolOut.FncCallOut != nil {
-				va.chatCtx.Append(toolOut.FncCallOut)
+	toolLoop:
+		for {
+			select {
+			case toolOut, ok := <-toolOutCh:
+				if !ok {
+					break toolLoop
+				}
+				executedTools = true
+				fmt.Printf("🔧 [Tool] Executed: %s\n", toolOut.FncCall.Name)
+				logger.Logger.Infow("Tool executed", "name", toolOut.FncCall.Name)
+				va.chatCtx.Append(&toolOut.FncCall)
+				if toolOut.FncCallOut != nil {
+					va.chatCtx.Append(toolOut.FncCallOut)
+				}
+			case <-ctx.Done():
+				return
 			}
 		}
 

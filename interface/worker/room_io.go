@@ -134,10 +134,10 @@ type RoomIO struct {
 	preConnectAudio *PreConnectAudioHandler
 
 	// Debug: collect PCM from TTS for WAV file verification
-	publishCount    int
-	pcmDebugBuf     []byte
-	pcmDebugSaved   bool
-	pcmDebugSRate   uint32
+	publishCount  int
+	pcmDebugBuf   []byte
+	pcmDebugSaved bool
+	pcmDebugSRate uint32
 }
 
 func NewRoomIO(room *lksdk.Room, session *agent.AgentSession, opts RoomOptions) *RoomIO {
@@ -184,12 +184,18 @@ func (rio *RoomIO) Start(ctx context.Context) error {
 		return err
 	}
 
-	_, err = rio.Room.LocalParticipant.PublishTrack(track, &lksdk.TrackPublicationOptions{
+	pub, err := rio.Room.LocalParticipant.PublishTrack(track, &lksdk.TrackPublicationOptions{
 		Name:   "agent-audio",
 		Source: livekit.TrackSource_MICROPHONE,
 	})
 	if err != nil {
 		return err
+	}
+
+	// Store agent track SID for transcript attribution.
+	if pub != nil {
+		rio.AgentSession.SetAgentTrackSID(pub.SID())
+		fmt.Printf("🎙️ [RoomIO] Agent audio track SID: %s\n", pub.SID())
 	}
 
 	rio.audioTrack = track
@@ -206,6 +212,10 @@ func (rio *RoomIO) onTrackSubscribed(track *webrtc.TrackRemote, publication *lks
 		fmt.Printf("   ↩️  Skipping audio from non-human participant (kind=%v)\n", rp.Kind())
 		return
 	}
+	// Store human participant info for transcript attribution.
+	rio.AgentSession.SetRemoteUserIdentity(rp.Identity())
+	rio.AgentSession.SetRemoteTrackSID(publication.SID())
+	fmt.Printf("🎤 [RoomIO] Human participant: identity=%s trackSID=%s\n", rp.Identity(), publication.SID())
 	fmt.Println("🎤 [RoomIO] Starting audio track handler...")
 	go rio.handleAudioTrack(track)
 }
@@ -366,7 +376,7 @@ func (rio *RoomIO) PublishAudio(frame *model.AudioFrame) error {
 	for i := 0; i < len(pcmData)/2; i++ {
 		lo := pcmData[i*2]
 		hi := pcmData[i*2+1]
-		stereo[i*4] = lo   // L
+		stereo[i*4] = lo // L
 		stereo[i*4+1] = hi
 		stereo[i*4+2] = lo // R (duplicate)
 		stereo[i*4+3] = hi
@@ -442,13 +452,13 @@ func writePCMToWAV(filename string, pcm []byte, sampleRate uint32, channels uint
 	binary.Write(f, binary.LittleEndian, uint32(36+dataSize)) //nolint
 	f.Write([]byte("WAVE"))
 	f.Write([]byte("fmt "))
-	binary.Write(f, binary.LittleEndian, uint32(16))         //nolint
-	binary.Write(f, binary.LittleEndian, uint16(1))          // PCM //nolint
-	binary.Write(f, binary.LittleEndian, uint16(channels))   //nolint
-	binary.Write(f, binary.LittleEndian, sampleRate)         //nolint
-	binary.Write(f, binary.LittleEndian, byteRate)           //nolint
-	binary.Write(f, binary.LittleEndian, blockAlign)         //nolint
-	binary.Write(f, binary.LittleEndian, uint16(16))         // bits per sample //nolint
+	binary.Write(f, binary.LittleEndian, uint32(16))       //nolint
+	binary.Write(f, binary.LittleEndian, uint16(1))        // PCM //nolint
+	binary.Write(f, binary.LittleEndian, uint16(channels)) //nolint
+	binary.Write(f, binary.LittleEndian, sampleRate)       //nolint
+	binary.Write(f, binary.LittleEndian, byteRate)         //nolint
+	binary.Write(f, binary.LittleEndian, blockAlign)       //nolint
+	binary.Write(f, binary.LittleEndian, uint16(16))       // bits per sample //nolint
 	f.Write([]byte("data"))
 	binary.Write(f, binary.LittleEndian, dataSize) //nolint
 	f.Write(pcm)
