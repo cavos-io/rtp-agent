@@ -63,6 +63,8 @@ func (c *JobContext) Connect(ctx context.Context, cb *lksdk.RoomCallback) error 
 		APISecret:           c.apiSecret,
 		RoomName:            c.Job.Room.Name,
 		ParticipantIdentity: "agent-" + c.Job.Id[:8],
+		ParticipantName:     "Cavos Agent",
+		ParticipantKind:     lksdk.ParticipantAgent,
 	}, cb)
 	if err != nil {
 		return err

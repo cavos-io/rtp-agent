@@ -2,8 +2,10 @@ package agent
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"sync"
+	"sync/atomic"
 
 	"github.com/cavos-io/conversation-worker/core/llm"
 	"github.com/cavos-io/conversation-worker/core/stt"
@@ -64,28 +66,39 @@ func (va *PipelineAgent) Start(ctx context.Context, s *AgentSession) error {
 }
 
 func (va *PipelineAgent) run(ctx context.Context) {
+	fmt.Println("🔧 [Pipeline] PipelineAgent.run() started")
 	logger.Logger.Infow("PipelineAgent started")
 
 	vadStream, err := va.vad.Stream(ctx)
 	if err != nil {
+		fmt.Printf("❌ [Pipeline] Failed to start VAD stream: %v\n", err)
 		logger.Logger.Errorw("failed to start VAD stream", err)
 		return
 	}
+	fmt.Println("✅ [Pipeline] VAD stream started")
 
 	sttStream, err := va.stt.Stream(ctx, "")
 	if err != nil {
+		fmt.Printf("❌ [Pipeline] Failed to start STT stream: %v\n", err)
 		logger.Logger.Errorw("failed to start STT stream", err)
 		return
 	}
+	fmt.Println("✅ [Pipeline] STT stream started")
 
 	go va.vadLoop(vadStream)
 	go va.sttLoop(sttStream)
 
+	fmt.Println("🎧 [Pipeline] Audio processing loop running...")
+	var frameCount atomic.Int64
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case frame := <-va.audioInCh:
+			c := frameCount.Add(1)
+			if c == 1 || c%500 == 0 {
+				fmt.Printf("🔊 [Pipeline] Audio frames received: %d (latest: %d bytes)\n", c, len(frame.Data))
+			}
 			_ = vadStream.PushFrame(frame)
 			_ = sttStream.PushFrame(frame)
 		}
@@ -103,9 +116,10 @@ func (va *PipelineAgent) vadLoop(stream vad.VADStream) {
 		}
 
 		if ev.Type == vad.VADEventStartOfSpeech {
+			fmt.Println("🗣️  [VAD] User started speaking")
 			logger.Logger.Infow("User started speaking")
 			va.session.UpdateUserState(UserStateSpeaking)
-			
+
 			// Interrupt ongoing agent speech/generation
 			va.mu.Lock()
 			if va.cancel != nil {
@@ -116,6 +130,7 @@ func (va *PipelineAgent) vadLoop(stream vad.VADStream) {
 			}
 			va.mu.Unlock()
 		} else if ev.Type == vad.VADEventEndOfSpeech {
+			fmt.Println("🔇 [VAD] User stopped speaking")
 			logger.Logger.Infow("User stopped speaking")
 			va.session.UpdateUserState(UserStateListening)
 		}
@@ -134,7 +149,16 @@ func (va *PipelineAgent) sttLoop(stream stt.RecognizeStream) {
 
 		if ev.Type == stt.SpeechEventFinalTranscript {
 			transcript := ev.Alternatives[0].Text
+			fmt.Printf("📝 [STT] Transcript: %s\n", transcript)
 			logger.Logger.Infow("Final transcript", "text", transcript)
+
+			// Publish user transcript to Playground
+			va.mu.Lock()
+			sess := va.session
+			va.mu.Unlock()
+			if sess != nil {
+				go sess.PublishUserTranscript(transcript)
+			}
 
 			va.chatCtx.Append(&llm.ChatMessage{
 				Role: llm.ChatRoleUser,
@@ -158,6 +182,7 @@ func (va *PipelineAgent) generateReply() {
 		return
 	}
 
+	fmt.Println("🤖 [LLM] Generating reply...")
 	logger.Logger.Infow("Generating reply")
 	session.UpdateAgentState(AgentStateThinking)
 
@@ -169,47 +194,96 @@ func (va *PipelineAgent) generateReply() {
 
 	// In Python parity, we loop for tool calls
 	for {
+		fmt.Println("📤 [LLM] Calling PerformLLMInference...")
 		genData, err := PerformLLMInference(ctx, va.LLM, va.chatCtx, session.Tools)
 		if err != nil {
+			fmt.Printf("❌ [LLM] Inference failed: %v\n", err)
 			logger.Logger.Errorw("LLM inference failed", err)
 			session.UpdateAgentState(AgentStateIdle)
 			return
 		}
+		fmt.Println("✅ [LLM] Inference started, waiting for text...")
 
 		toolOutCh := PerformToolExecutions(ctx, genData.FunctionCh, toolCtx)
 
-		// Start TTS in parallel with LLM text
+		// Start TTS with the original text channel — no tee, no extra goroutines.
+		fmt.Println("🔊 [TTS] Starting TTS inference...")
 		ttsGen, err := PerformTTSInference(ctx, va.tts, genData.TextCh)
 		if err != nil {
+			fmt.Printf("❌ [TTS] Inference failed: %v\n", err)
 			logger.Logger.Errorw("TTS inference failed", err)
+			// Drain TextCh so the LLM goroutine can finish and close FunctionCh.
+			// Without this, LLM goroutine blocks on TextCh → FunctionCh never closes
+			// → toolOutCh never closes → this goroutine deadlocks below.
+			go func() { for range genData.TextCh {} }()
 		} else {
+			fmt.Println("✅ [TTS] TTS started, publishing audio...")
 			session.UpdateAgentState(AgentStateSpeaking)
+			frameCount := 0
+			interrupted := false
+		playoutLoop:
 			for frame := range ttsGen.AudioCh {
 				select {
 				case <-ctx.Done():
-					return
+					fmt.Println("⚠️ [TTS] Context cancelled during playout")
+					interrupted = true
+					// Drain remaining audio so the TTS goroutine can exit and
+					// close the ElevenLabs WebSocket stream. Without draining,
+					// the goroutine blocks on AudioCh → stream never closes →
+					// ElevenLabs keeps the connection open → next call may fail.
+					go func() { for range ttsGen.AudioCh {} }()
+					break playoutLoop
 				default:
 					if va.PublishAudio != nil {
 						_ = va.PublishAudio(frame)
+						frameCount++
 					}
 				}
 			}
+			fmt.Printf("✅ [TTS] Published %d audio frames\n", frameCount)
+
+			if interrupted {
+				// Also drain FullTextCh so LLM goroutine is not left blocked.
+				go func() { for range genData.FullTextCh {} }()
+				return
+			}
+
+			// Normal completion: LLM goroutine is done → FullTextCh is ready.
+			select {
+			case agentText := <-genData.FullTextCh:
+				if agentText != "" {
+					go session.PublishAgentTranscript(agentText)
+				}
+			case <-ctx.Done():
+				return
+			}
 		}
 
-		// Wait for tool executions to complete and collect results
+		// Wait for tool executions to complete and collect results.
+		// Use select so a VAD interruption can cancel this wait.
 		var executedTools bool
-		for toolOut := range toolOutCh {
-			executedTools = true
-			logger.Logger.Infow("Tool executed", "name", toolOut.FncCall.Name)
-			
-			va.chatCtx.Append(&toolOut.FncCall)
-			if toolOut.FncCallOut != nil {
-				va.chatCtx.Append(toolOut.FncCallOut)
+	toolLoop:
+		for {
+			select {
+			case toolOut, ok := <-toolOutCh:
+				if !ok {
+					break toolLoop
+				}
+				executedTools = true
+				fmt.Printf("🔧 [Tool] Executed: %s\n", toolOut.FncCall.Name)
+				logger.Logger.Infow("Tool executed", "name", toolOut.FncCall.Name)
+				va.chatCtx.Append(&toolOut.FncCall)
+				if toolOut.FncCallOut != nil {
+					va.chatCtx.Append(toolOut.FncCallOut)
+				}
+			case <-ctx.Done():
+				return
 			}
 		}
 
 		// If no tool calls, we're done
 		if !executedTools {
+			fmt.Println("✅ [LLM] Reply complete, returning to idle")
 			session.UpdateAgentState(AgentStateIdle)
 			break
 		}

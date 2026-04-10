@@ -2,8 +2,10 @@ package vad
 
 import (
 	"context"
+	"fmt"
 	"math"
 	"sync"
+	"sync/atomic"
 
 	"github.com/cavos-io/conversation-worker/model"
 )
@@ -14,25 +16,32 @@ type SimpleVAD struct {
 
 func NewSimpleVAD(threshold float64) *SimpleVAD {
 	if threshold == 0 {
-		threshold = 0.05
+		threshold = 0.0005
 	}
 	return &SimpleVAD{Threshold: threshold}
 }
 
 func (v *SimpleVAD) Stream(ctx context.Context) (VADStream, error) {
 	return &simpleVADStream{
-		ctx:       ctx,
-		threshold: v.Threshold,
-		events:    make(chan *VADEvent, 10),
+		ctx:         ctx,
+		threshold:   v.Threshold,
+		events:      make(chan *VADEvent, 10),
+		startFrames: 3,  // require 3 consecutive frames above threshold (~60ms at 20ms/frame)
+		stopFrames:  50, // require 50 consecutive frames below threshold (~1s silence to stop)
 	}, nil
 }
 
 type simpleVADStream struct {
-	ctx       context.Context
-	threshold float64
-	events    chan *VADEvent
-	speaking  bool
-	mu        sync.Mutex
+	ctx         context.Context
+	threshold   float64
+	events      chan *VADEvent
+	speaking    bool
+	mu          sync.Mutex
+	count       atomic.Int64
+	aboveCount  int // consecutive frames above threshold
+	belowCount  int // consecutive frames below threshold
+	startFrames int // frames needed to start speaking (debounce)
+	stopFrames  int // frames needed to stop speaking (debounce)
 }
 
 func (s *simpleVADStream) PushFrame(frame *model.AudioFrame) error {
@@ -52,14 +61,25 @@ func (s *simpleVADStream) PushFrame(frame *model.AudioFrame) error {
 	}
 	rms := math.Sqrt(sum / float64(len(frame.Data)/2))
 
+	c := s.count.Add(1)
+	if c <= 3 || c%500 == 0 {
+		fmt.Printf("🎚️  [VAD] Frame #%d: rms=%.6f threshold=%.4f speaking=%v above=%d below=%d\n", c, rms, s.threshold, s.speaking, s.aboveCount, s.belowCount)
+	}
+
 	if rms > s.threshold {
-		if !s.speaking {
+		s.aboveCount++
+		s.belowCount = 0
+		if !s.speaking && s.aboveCount >= s.startFrames {
 			s.speaking = true
+			fmt.Printf("🗣️  [VAD] Speech START at frame #%d (rms=%.6f, %d consecutive frames)\n", c, rms, s.aboveCount)
 			s.events <- &VADEvent{Type: VADEventStartOfSpeech, Speaking: true}
 		}
 	} else {
-		if s.speaking {
+		s.belowCount++
+		s.aboveCount = 0
+		if s.speaking && s.belowCount >= s.stopFrames {
 			s.speaking = false
+			fmt.Printf("🔇 [VAD] Speech END at frame #%d (rms=%.6f, %d consecutive silent frames)\n", c, rms, s.belowCount)
 			s.events <- &VADEvent{Type: VADEventEndOfSpeech, Speaking: false}
 		}
 	}

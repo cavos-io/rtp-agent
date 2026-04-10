@@ -18,9 +18,9 @@ var (
 	// links: keep text part [text](url) -> text
 	linkPattern = regexp.MustCompile(`\[([^\]]*)\]\([^)]*\)`)
 	// bold: remove asterisks from **text**
-	boldPattern = regexp.MustCompile(`(?<!\S)\*\*([^*]+?)\*\*(?!\S)`)
+	boldPattern = regexp.MustCompile(`\*\*([^*]+?)\*\*`)
 	// italic: remove asterisks from *text*
-	italicPattern = regexp.MustCompile(`(?<!\S)\*([^*]+?)\*(?!\S)`)
+	italicPattern = regexp.MustCompile(`\*([^*]+?)\*`)
 	// bold with underscores: remove underscores from __text__
 	boldUnderPattern = regexp.MustCompile(`\b__([^_]+?)__\b`)
 	// italic with underscores: remove underscores from _text_
