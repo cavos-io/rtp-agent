@@ -66,6 +66,7 @@ type noopHooks struct{}
 
 func (noopHooks) OnStartOfSpeech(ev *vad.VADEvent)      {}
 func (noopHooks) OnEndOfSpeech(ev *vad.VADEvent)        {}
+func (noopHooks) OnInterimTranscript(ev *stt.SpeechEvent) {}
 func (noopHooks) OnFinalTranscript(ev *stt.SpeechEvent) {}
 
 type failingVAD struct{}

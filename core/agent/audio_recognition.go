@@ -29,6 +29,7 @@ type AudioRecognition struct {
 type RecognitionHooks interface {
 	OnStartOfSpeech(ev *vad.VADEvent)
 	OnEndOfSpeech(ev *vad.VADEvent)
+	OnInterimTranscript(ev *stt.SpeechEvent)
 	OnFinalTranscript(ev *stt.SpeechEvent)
 }
 
@@ -140,6 +141,8 @@ func (ar *AudioRecognition) sttLoop(ctx context.Context, stream stt.RecognizeStr
 				ar.speaking = false
 				ar.mu.Unlock()
 				ar.hooks.OnEndOfSpeech(nil)
+			case stt.SpeechEventInterimTranscript, stt.SpeechEventPreflightTranscript:
+				ar.hooks.OnInterimTranscript(ev)
 			case stt.SpeechEventFinalTranscript:
 				ar.hooks.OnFinalTranscript(ev)
 			}

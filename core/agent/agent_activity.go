@@ -52,6 +52,11 @@ type AgentActivity struct {
 	falseInterruptionTm *time.Timer
 	userAwayMu          sync.Mutex
 	userAwayTm          *time.Timer
+
+	audioTranscript        string
+	audioInterimTranscript string
+	transcriptMu           sync.Mutex
+	finalTranscriptCond    *sync.Cond
 }
 
 func NewAgentActivity(agentIntf AgentInterface, session *AgentSession) *AgentActivity {
@@ -65,6 +70,7 @@ func NewAgentActivity(agentIntf AgentInterface, session *AgentSession) *AgentAct
 		ctx:            ctx,
 		cancel:         cancel,
 	}
+	act.finalTranscriptCond = sync.NewCond(&act.transcriptMu)
 
 	// Keep the base Agent pointer in sync even when the session is started
 	// with a custom AgentInterface implementation.
@@ -278,6 +284,12 @@ func (a *AgentActivity) OnStartOfSpeech(ev *vad.VADEvent) {
 	a.speaking = true
 	a.sttEOSReceived = false
 	a.discardUserTurn = false
+
+	a.transcriptMu.Lock()
+	a.audioTranscript = ""
+	a.audioInterimTranscript = ""
+	a.transcriptMu.Unlock()
+
 	logger.Logger.Infow("Start of speech detected")
 	a.cancelFalseInterruptionTimer()
 	a.cancelUserAwayTimer()
@@ -355,16 +367,36 @@ func (a *AgentActivity) OnEndOfSpeech(ev *vad.VADEvent) {
 	}
 }
 
+func (a *AgentActivity) OnInterimTranscript(ev *stt.SpeechEvent) {
+	if len(ev.Alternatives) > 0 {
+		transcript := ev.Alternatives[0].Text
+		if transcript != "" {
+			a.transcriptMu.Lock()
+			a.audioInterimTranscript = transcript
+			a.transcriptMu.Unlock()
+		}
+	}
+}
+
 func (a *AgentActivity) OnFinalTranscript(ev *stt.SpeechEvent) {
 	a.sttEOSReceived = true
-	if a.Agent.TurnDetection == TurnDetectionModeSTT {
-		transcript := ""
-		confidence := 0.0
-		if len(ev.Alternatives) > 0 {
-			transcript = ev.Alternatives[0].Text
-			confidence = ev.Alternatives[0].Confidence
-		}
+	
+	transcript := ""
+	confidence := 0.0
+	if len(ev.Alternatives) > 0 {
+		transcript = ev.Alternatives[0].Text
+		confidence = ev.Alternatives[0].Confidence
+	}
 
+	a.transcriptMu.Lock()
+	if transcript != "" {
+		a.audioTranscript = strings.TrimSpace(a.audioTranscript + " " + transcript)
+	}
+	a.audioInterimTranscript = ""
+	a.finalTranscriptCond.Broadcast()
+	a.transcriptMu.Unlock()
+
+	if a.Agent.TurnDetection == TurnDetectionModeSTT {
 		if a.discardUserTurn {
 			a.discardUserTurn = false
 			a.cancelSpeechPause(false)
@@ -576,15 +608,57 @@ func (a *AgentActivity) runEOUDetection(info EndOfTurnInfo) {
 		case <-timer.C:
 			// EOU detected
 			logger.Logger.Infow("EOU detected, completing user turn")
+			
+			transcript := info.NewTranscript
+			if transcript == "" {
+				a.transcriptMu.Lock()
+				if !a.sttEOSReceived {
+					waitCh := make(chan struct{})
+					go func() {
+						a.transcriptMu.Lock()
+						defer a.transcriptMu.Unlock()
+						for !a.sttEOSReceived {
+							a.finalTranscriptCond.Wait()
+						}
+						close(waitCh)
+					}()
+					a.transcriptMu.Unlock()
+
+					select {
+					case <-waitCh:
+					case <-time.After(2 * time.Second): // transcript timeout
+						logger.Logger.Warnw("final transcript not received after timeout", nil, "timeout", 2*time.Second)
+					case <-ctx.Done():
+						return
+					}
+					a.transcriptMu.Lock()
+				}
+				
+				if a.audioTranscript != "" {
+					transcript = a.audioTranscript
+				}
+				if transcript == "" && a.audioInterimTranscript != "" {
+					transcript = a.audioInterimTranscript
+					a.audioTranscript = transcript
+				}
+				a.audioInterimTranscript = ""
+				a.transcriptMu.Unlock()
+			}
+
+			if transcript == "" {
+				logger.Logger.Infow("EOU detected but transcript is empty, ignoring user turn")
+				return
+			}
+
 			if a.Session.Timeline != nil {
 				a.Session.Timeline.Add("user_turn_completed", map[string]any{
-					"transcript": info.NewTranscript,
+					"transcript": transcript,
 					"confidence": info.TranscriptConfidence,
 				})
 			}
 			newMsg := &llm.ChatMessage{
 				Role:      llm.ChatRoleUser,
-				Content:   []llm.ChatContent{{Text: info.NewTranscript}},
+				Content:   []llm.ChatContent{{Text: transcript}},
 				CreatedAt: time.Now(),
 			}
 			chatCtx := a.Session.ChatCtx
