@@ -375,7 +375,7 @@ func (s *AgentSession) UpdateUserState(state UserState) {
 	}
 }
 
-func (s *AgentSession) GenerateReply(ctx context.Context, userInput string) (*RunResult[any], error) {
+func GenerateTypedReply[T any](ctx context.Context, s *AgentSession, userInput string) (*RunResult[T], error) {
 	s.mu.Lock()
 	activity := s.Activity
 	s.mu.Unlock()
@@ -406,7 +406,7 @@ func (s *AgentSession) GenerateReply(ctx context.Context, userInput string) (*Ru
 	}
 	
 	// Create run result and watch the new handle
-	runResult := NewRunResult[any](s.ChatCtx)
+	runResult := NewRunResult[T](s.ChatCtx)
 	runResult.WatchHandle(ctx, handle)
 	handle.RunResult = runResult
 
@@ -428,6 +428,10 @@ func (s *AgentSession) GenerateReply(ctx context.Context, userInput string) (*Ru
 	}
 
 	return runResult, nil
+}
+
+func (s *AgentSession) GenerateReply(ctx context.Context, userInput string) (*RunResult[any], error) {
+	return GenerateTypedReply[any](ctx, s, userInput)
 }
 
 func (s *AgentSession) TimelineSnapshot() []TimelineEvent {
