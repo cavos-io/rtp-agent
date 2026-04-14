@@ -406,6 +406,9 @@ func (d *ClientEventsDispatcher) registerHandlers() {
 	d.room.RegisterRpcMethod("lk-agent-get-chat-history", d.handleGetChatHistory)
 	d.room.RegisterRpcMethod("lk-agent-get-info", d.handleGetAgentInfo)
 	d.room.RegisterRpcMethod("lk-agent-send-message", d.handleSendMessage)
+	d.room.RegisterRpcMethod("lk-agent-interrupt", d.handleInterrupt)
+	d.room.RegisterRpcMethod("lk-agent-clear-user-turn", d.handleClearUserTurn)
+	d.room.RegisterRpcMethod("lk-agent-commit-user-turn", d.handleCommitUserTurn)
 
 	_ = d.room.RegisterTextStreamHandler(TopicAgentRequest, d.handleStreamRequest)
 	_ = d.room.RegisterTextStreamHandler(TopicChat, d.handleUserTextInput)
@@ -487,6 +490,27 @@ func (d *ClientEventsDispatcher) handleStreamRequest(reader *lksdk.TextStreamRea
 			}
 		case "send_message":
 			resp, err := d.handleSendMessage(lksdk.RpcInvocationData{Payload: req.Payload})
+			if err != nil {
+				errStr = err.Error()
+			} else {
+				responsePayload = resp
+			}
+		case "interrupt":
+			resp, err := d.handleInterrupt(lksdk.RpcInvocationData{Payload: req.Payload})
+			if err != nil {
+				errStr = err.Error()
+			} else {
+				responsePayload = resp
+			}
+		case "clear_user_turn":
+			resp, err := d.handleClearUserTurn(lksdk.RpcInvocationData{Payload: req.Payload})
+			if err != nil {
+				errStr = err.Error()
+			} else {
+				responsePayload = resp
+			}
+		case "commit_user_turn":
+			resp, err := d.handleCommitUserTurn(lksdk.RpcInvocationData{Payload: req.Payload})
 			if err != nil {
 				errStr = err.Error()
 			} else {
@@ -592,6 +616,37 @@ func (d *ClientEventsDispatcher) handleGetAgentInfo(data lksdk.RpcInvocationData
 
 	b, _ := json.Marshal(resp)
 	return string(b), nil
+}
+
+func (d *ClientEventsDispatcher) handleInterrupt(data lksdk.RpcInvocationData) (string, error) {
+	if d.session == nil {
+		return "", fmt.Errorf("session not ready")
+	}
+	err := d.session.Interrupt(context.Background())
+	if err != nil {
+		return "", err
+	}
+	return "ok", nil
+}
+
+func (d *ClientEventsDispatcher) handleClearUserTurn(data lksdk.RpcInvocationData) (string, error) {
+	if d.session == nil {
+		return "", fmt.Errorf("session not ready")
+	}
+	d.session.ClearUserTurn()
+	return "ok", nil
+}
+
+func (d *ClientEventsDispatcher) handleCommitUserTurn(data lksdk.RpcInvocationData) (string, error) {
+	if d.session == nil {
+		return "", fmt.Errorf("session not ready")
+	}
+	var opts CommitUserTurnOpts
+	if data.Payload != "" {
+		_ = json.Unmarshal([]byte(data.Payload), &opts)
+	}
+	d.session.CommitUserTurn(&opts)
+	return "ok", nil
 }
 
 func (d *ClientEventsDispatcher) handleSendMessage(data lksdk.RpcInvocationData) (string, error) {
