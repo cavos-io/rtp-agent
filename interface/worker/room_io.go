@@ -122,10 +122,11 @@ type AudioInputOptions struct {
 }
 
 type AudioOutputOptions struct {
-	Enabled     bool
-	SampleRate  int
-	NumChannels int
-	TrackName   string
+	Enabled              bool
+	SampleRate           int
+	NumChannels          int
+	TrackName            string
+	TrackPublishOptions  *lksdk.TrackPublicationOptions
 }
 
 type TextInputOptions struct {
@@ -188,6 +189,8 @@ type RoomIO struct {
 	trackContextsMu sync.Mutex
 
 	sync *agent.TranscriptSynchronizer
+
+	targetPlayoutTime time.Time
 }
 
 // --- agent.TextOutput Implementation ---
@@ -410,6 +413,7 @@ func (rio *RoomIO) playoutLoop(ctx context.Context) {
 
 			rio.mu.Lock()
 			rio.closeFlushWaitersLocked()
+			rio.targetPlayoutTime = time.Time{}
 			if rio.playbackStarted {
 				if rio.onPlaybackFinished != nil {
 					go rio.onPlaybackFinished(agent.PlaybackFinishedEvent{
@@ -426,6 +430,16 @@ func (rio *RoomIO) playoutLoop(ctx context.Context) {
 			switch v := item.(type) {
 			case flushMarker:
 				rio.mu.Lock()
+				// Wait for real playout completion
+				if !rio.targetPlayoutTime.IsZero() {
+					delay := time.Until(rio.targetPlayoutTime)
+					if delay > 0 {
+						rio.mu.Unlock()
+						time.Sleep(delay)
+						rio.mu.Lock()
+					}
+				}
+
 				if rio.playbackStarted {
 					if rio.onPlaybackFinished != nil {
 						go rio.onPlaybackFinished(agent.PlaybackFinishedEvent{
@@ -436,6 +450,7 @@ func (rio *RoomIO) playoutLoop(ctx context.Context) {
 					rio.playbackStarted = false
 					rio.pushedDuration = 0
 				}
+				rio.targetPlayoutTime = time.Time{}
 
 				// Remove from flushWaiters array and close it
 				for i, ch := range rio.flushWaiters {
@@ -474,6 +489,18 @@ func (rio *RoomIO) playoutLoop(ctx context.Context) {
 					continue
 				}
 
+				now := time.Now()
+				rio.mu.Lock()
+				if rio.targetPlayoutTime.IsZero() {
+					rio.targetPlayoutTime = now
+				}
+				delay := time.Until(rio.targetPlayoutTime)
+				rio.mu.Unlock()
+
+				if delay > 0 {
+					time.Sleep(delay)
+				}
+
 				if encoder == nil || encoder.SampleRate() != int(frame.SampleRate) || encoder.Channels() != int(frame.NumChannels) {
 					enc, err := newOpusEncoder(int(frame.SampleRate), int(frame.NumChannels))
 					if err == nil {
@@ -496,6 +523,7 @@ func (rio *RoomIO) playoutLoop(ctx context.Context) {
 
 				rio.mu.Lock()
 				rio.pushedDuration += duration
+				rio.targetPlayoutTime = rio.targetPlayoutTime.Add(duration)
 				rio.mu.Unlock()
 
 				_ = track.WriteSample(media.Sample{
@@ -611,13 +639,23 @@ func (rio *RoomIO) Start(ctx context.Context) error {
 	}
 
 	trackName := "agent-audio"
-	if rio.Options.AudioOutput != nil && rio.Options.AudioOutput.TrackName != "" {
-		trackName = rio.Options.AudioOutput.TrackName
+	var pubOpts *lksdk.TrackPublicationOptions
+	if rio.Options.AudioOutput != nil {
+		if rio.Options.AudioOutput.TrackName != "" {
+			trackName = rio.Options.AudioOutput.TrackName
+		}
+		pubOpts = rio.Options.AudioOutput.TrackPublishOptions
 	}
 
-	_, err = rio.Room.LocalParticipant.PublishTrack(track, &lksdk.TrackPublicationOptions{
-		Name: trackName,
-	})
+	if pubOpts == nil {
+		pubOpts = &lksdk.TrackPublicationOptions{
+			Name: trackName,
+		}
+	} else if pubOpts.Name == "" {
+		pubOpts.Name = trackName
+	}
+
+	_, err = rio.Room.LocalParticipant.PublishTrack(track, pubOpts)
 	if err != nil {
 		return err
 	}
