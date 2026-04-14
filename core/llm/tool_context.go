@@ -364,6 +364,41 @@ func (c *ToolContext) Equal(other *ToolContext) bool {
 	return true
 }
 
+func (c *ToolContext) Merge(other *ToolContext) {
+	if other == nil {
+		return
+	}
+	for name, t := range other.functionTools {
+		if _, exists := c.functionTools[name]; !exists {
+			c.functionTools[name] = t
+		}
+	}
+	for _, pt := range other.providerTools {
+		found := false
+		for _, existing := range c.providerTools {
+			if existing.Name() == pt.Name() {
+				found = true
+				break
+			}
+		}
+		if !found {
+			c.providerTools = append(c.providerTools, pt)
+		}
+	}
+	for _, ts := range other.toolsets {
+		found := false
+		for _, existing := range c.toolsets {
+			if existing.ID() == ts.ID() {
+				found = true
+				break
+			}
+		}
+		if !found {
+			c.toolsets = append(c.toolsets, ts)
+		}
+	}
+}
+
 func (c *ToolContext) UpdateTools(tools []interface{}) error {
 	c.tools = tools
 	c.functionTools = make(map[string]Tool)
