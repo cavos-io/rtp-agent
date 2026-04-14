@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/cavos-io/conversation-worker/core/agent"
 )
 
 type AnamAvatar struct {
@@ -22,7 +21,3 @@ func (a *AnamAvatar) Start(ctx context.Context) error {
 	return nil
 }
 
-func (a *AnamAvatar) UpdateState(state agent.AvatarState) error {
-	fmt.Printf("AnamAvatar state updated to: %s\n", state)
-	return nil
-}

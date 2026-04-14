@@ -3,7 +3,6 @@ package keyframe
 import (
 	"context"
 	"fmt"
-	"github.com/cavos-io/conversation-worker/core/agent"
 )
 
 type KeyframeAgent struct {
@@ -17,11 +16,6 @@ func NewKeyframeAgent(apiKey string) *KeyframeAgent {
 }
 
 func (a *KeyframeAgent) Start(ctx context.Context) error {
-	fmt.Println("KeyframeAgent started.")
+	fmt.Println("KeyframeAvatar started.")
 	return nil
-}
-
-func (a *KeyframeAgent) UpdateState(state agent.AvatarState) error {
-	fmt.Printf("KeyframeAgent state updated to: %s\n", state)
-	return nil
-}
+	}

@@ -3,7 +3,6 @@ package liveavatar
 import (
 	"context"
 	"fmt"
-	"github.com/cavos-io/conversation-worker/core/agent"
 )
 
 type LiveAvatar struct {
@@ -21,7 +20,3 @@ func (a *LiveAvatar) Start(ctx context.Context) error {
 	return nil
 }
 
-func (a *LiveAvatar) UpdateState(state agent.AvatarState) error {
-	fmt.Printf("LiveAvatar state updated to: %s\n", state)
-	return nil
-}
