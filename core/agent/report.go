@@ -98,6 +98,12 @@ func (r *SessionReport) ToDict() map[string]any {
 	}
 
 	dict := map[string]any{
+		"recording_options": map[string]any{
+			"audio":      r.RecordingOptions.Audio,
+			"traces":     r.RecordingOptions.Traces,
+			"logs":       r.RecordingOptions.Logs,
+			"transcript": r.RecordingOptions.Transcript,
+		},
 		"job_id":                     r.JobID,
 		"room_id":                    r.RoomID,
 		"room":                       r.Room,
