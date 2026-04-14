@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"fmt"
+	"reflect"
 	"sync"
 	"time"
 
@@ -69,6 +70,7 @@ type AgentSession struct {
 	closing  bool
 
 	transitionMu sync.Mutex
+	transitionCancel context.CancelFunc
 
 	// Event channels
 	AgentStateChangedCh chan AgentStateChangedEvent
@@ -76,6 +78,9 @@ type AgentSession struct {
 
 	clientEvents *ClientEventsDispatcher
 	ivrActivity  *ivr.IVRActivity
+
+	ctx    context.Context
+	cancel context.CancelFunc
 }
 
 func (s *AgentSession) GetDataPublisher() ivr.DataPublisher {
@@ -106,6 +111,8 @@ func NewAgentSession(agent AgentInterface, room *lksdk.Room, opts AgentSessionOp
 		opts.TranscriptRefreshRate = 50 * time.Millisecond
 	}
 
+	ctx, cancel := context.WithCancel(context.Background())
+
 	s := &AgentSession{
 		Agent:               agent,
 		Room:                room,
@@ -119,6 +126,8 @@ func NewAgentSession(agent AgentInterface, room *lksdk.Room, opts AgentSessionOp
 		Timeline:            timeline,
 		AgentStateChangedCh: make(chan AgentStateChangedEvent, 10),
 		UserStateChangedCh:  make(chan UserStateChangedEvent, 10),
+		ctx:                 ctx,
+		cancel:              cancel,
 	}
 
 	if chatCtx != nil {
@@ -160,6 +169,12 @@ func (s *AgentSession) SetAudioOutput(out AudioOutput) {
 			}
 		})
 	}
+}
+
+func (s *AgentSession) SetVideoOutput(out VideoOutput) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.Output.Video = out
 }
 
 func (s *AgentSession) Start(ctx context.Context) error {
@@ -230,6 +245,8 @@ func (s *AgentSession) Close() error {
 	assistant := s.Assistant
 	s.mu.Unlock()
 
+	s.cancel()
+
 	if activity != nil {
 		activity.Stop()
 	}
@@ -272,7 +289,21 @@ func (s *AgentSession) UpdateAgent(agent AgentInterface, opts *UpdateAgentOpts) 
 	}
 
 	s.transitionMu.Lock()
-	defer s.transitionMu.Unlock()
+	if s.transitionCancel != nil {
+		s.transitionCancel()
+	}
+	ctx, cancel := context.WithCancel(s.ctx)
+	s.transitionCancel = cancel
+	s.transitionMu.Unlock()
+
+	// Ensure we release the transition lock when done
+	defer func() {
+		s.transitionMu.Lock()
+		if reflect.ValueOf(s.transitionCancel).Pointer() == reflect.ValueOf(cancel).Pointer() {
+			s.transitionCancel = nil
+		}
+		s.transitionMu.Unlock()
+	}()
 
 	s.mu.Lock()
 	if !s.started || s.closing {
@@ -302,10 +333,20 @@ func (s *AgentSession) UpdateAgent(agent AgentInterface, opts *UpdateAgentOpts) 
 
 	if oldActivity != nil && oldActivity != newActivity {
 		if opts.PreviousActivity == TransitionActivityClose {
-			oldActivity.Stop()
+			// Drain with the transition context to allow cancellation
+			if err := oldActivity.Drain(ctx); err != nil {
+				return err
+			}
+			oldActivity.AClose()
 		} else if opts.PreviousActivity == TransitionActivityPause {
 			_ = oldActivity.Pause()
 		}
+	}
+
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	default:
 	}
 
 	if opts.NewActivity == TransitionActivityStart {
