@@ -61,7 +61,7 @@ type VideoInput interface {
 // VideoOutput represents a destination for video frames (e.g., screen or remote track)
 type VideoOutput interface {
 	Label() string
-	CaptureFrame(frame *model.VideoFrame) error
+	CaptureVideoFrame(frame *model.VideoFrame) error
 	Flush()
 	OnAttached()
 	OnDetached()

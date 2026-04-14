@@ -171,7 +171,8 @@ type RoomIO struct {
 	mu     sync.Mutex
 	closed bool
 
-	audioTrack *lksdk.LocalTrack
+	audioTrack *lksdk.LocalSampleTrack
+	videoTrack *lksdk.LocalSampleTrack
 	decoder    AudioDecoder
 	encoder    AudioEncoder
 
@@ -352,6 +353,15 @@ func NewRoomIO(room *lksdk.Room, session *agent.AgentSession, opts RoomOptions) 
 	} else if opts.TextOutput != nil && opts.TextOutput.Enabled {
 		session.Output.Transcription = NewRoomTextOutput(room)
 	}
+
+	videoOutputEnabled := false
+	if opts.VideoOutput != nil && opts.VideoOutput.Enabled {
+		videoOutputEnabled = true
+	}
+	if videoOutputEnabled {
+		session.Output.Video = rio
+	}
+
 	return rio
 }
 
@@ -385,6 +395,24 @@ func (rvi *RoomVideoInput) Stream() <-chan *model.VideoFrame {
 
 func (rvi *RoomVideoInput) OnAttached() {}
 func (rvi *RoomVideoInput) OnDetached() {}
+
+// --- agent.VideoOutput Implementation ---
+func (rio *RoomIO) CaptureVideoFrame(frame *model.VideoFrame) error {
+	rio.mu.Lock()
+	track := rio.videoTrack
+	rio.mu.Unlock()
+
+	if track == nil {
+		return nil
+	}
+
+	// Use 1/30s as default duration if not specified
+	dur := time.Second / 30
+	return track.WriteSample(media.Sample{
+		Data:     frame.Data,
+		Duration: dur,
+	}, nil)
+}
 
 func (rio *RoomIO) OnPlaybackStarted(f func(ev agent.PlaybackStartedEvent)) {
 	rio.onPlaybackStarted = f
@@ -672,6 +700,30 @@ func (rio *RoomIO) Start(ctx context.Context) error {
 	}
 
 	rio.audioTrack = track
+
+	videoOutputEnabled := false
+	if rio.Options.VideoOutput != nil && rio.Options.VideoOutput.Enabled {
+		videoOutputEnabled = true
+	}
+
+	if videoOutputEnabled {
+		vtrack, err := lksdk.NewLocalSampleTrack(webrtc.RTPCodecCapability{
+			MimeType:  webrtc.MimeTypeVP8,
+			ClockRate: 90000,
+		})
+		if err != nil {
+			return err
+		}
+
+		_, err = rio.Room.LocalParticipant.PublishTrack(vtrack, &lksdk.TrackPublicationOptions{
+			Name: "agent-video",
+		})
+		if err != nil {
+			return err
+		}
+		rio.videoTrack = vtrack
+	}
+
 	return nil
 }
 
