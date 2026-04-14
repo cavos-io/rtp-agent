@@ -307,6 +307,9 @@ Jangan bertele-tele, maksimal 2-3 kalimat per respons.`},
 
 		// Block until room disconnects
 		<-disconnectCh
+		fmt.Println("🔌 Room disconnected — shutting down session...")
+		session.Stop(context.Background())
+		roomIO.Close()
 		fmt.Printf("✅ Agent session ended for room: %s\n", jobCtx.Job.Room.Name)
 		return nil
 

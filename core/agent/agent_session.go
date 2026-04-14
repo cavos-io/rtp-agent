@@ -398,6 +398,11 @@ func (s *AgentSession) Stop(ctx context.Context) error {
 
 	s.activity.Stop()
 	s.activity = nil
+
+	if s.Assistant != nil {
+		s.Assistant.cancel()
+	}
+
 	s.started = false
 	return nil
 }

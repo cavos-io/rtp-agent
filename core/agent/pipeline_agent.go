@@ -76,6 +76,7 @@ func (va *PipelineAgent) run(ctx context.Context) {
 		logger.Logger.Errorw("failed to start VAD stream", err)
 		return
 	}
+	defer vadStream.Close()
 	fmt.Println("✅ [Pipeline] VAD stream started")
 
 	sttStream, err := va.stt.Stream(ctx, "")
@@ -84,6 +85,7 @@ func (va *PipelineAgent) run(ctx context.Context) {
 		logger.Logger.Errorw("failed to start STT stream", err)
 		return
 	}
+	defer sttStream.Close()
 	fmt.Println("✅ [Pipeline] STT stream started")
 
 	go va.vadLoop(vadStream)

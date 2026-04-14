@@ -119,7 +119,11 @@ func (a *AgentActivity) processQueue() {
 
 	// Wait for completion then trigger next item in queue
 	go func() {
-		<-speech.doneCh
+		// Wait for generation to finish, be interrupted, or session to stop
+		select {
+		case <-speech.doneCh:
+		case <-a.ctx.Done():
+		}
 
 		a.queueMu.Lock()
 		a.currentSpeech = nil
