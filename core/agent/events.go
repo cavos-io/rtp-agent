@@ -96,10 +96,12 @@ type FunctionToolsExecutedEvent struct {
 func (e *FunctionToolsExecutedEvent) GetType() string { return "function_tools_executed" }
 
 type AgentHandoffEvent struct {
-	OldAgent  AgentInterface `json:"-"`
-	NewAgent  AgentInterface `json:"-"`
-	Handoff   *llm.AgentHandoff `json:"handoff"`
-	CreatedAt time.Time      `json:"created_at"`
+	OldAgent   AgentInterface    `json:"-"`
+	NewAgent   AgentInterface    `json:"-"`
+	OldAgentID string            `json:"old_agent_id"`
+	NewAgentID string            `json:"new_agent_id"`
+	Handoff    *llm.AgentHandoff `json:"handoff"`
+	CreatedAt  time.Time         `json:"created_at"`
 }
 
 func (e *AgentHandoffEvent) GetType() string { return "agent_handoff" }
@@ -108,6 +110,7 @@ type SpeechCreatedEvent struct {
 	UserInitiated bool          `json:"user_initiated"`
 	Source        string        `json:"source"`
 	SpeechHandle  *SpeechHandle `json:"-"`
+	ParticipantID string        `json:"participant_id,omitempty"`
 	CreatedAt     time.Time     `json:"created_at"`
 }
 
@@ -140,11 +143,31 @@ type CloseEvent struct {
 func (e *CloseEvent) GetType() string { return "close" }
 
 type TimelineEvent struct {
-	Event     Event          `json:"event"`
-	Timestamp float64        `json:"timestamp"`
-	// Deprecated: use Event instead. Kept for temporary backward compatibility
-	Payload map[string]any `json:"payload,omitempty"`
-	Type    string         `json:"type,omitempty"`
+	Event     Event   `json:"-"`
+	Timestamp float64 `json:"timestamp"`
+}
+
+func (e TimelineEvent) MarshalJSON() ([]byte, error) {
+	if e.Event == nil {
+		return []byte(`{"timestamp": ` + fmt.Sprintf("%f", e.Timestamp) + `}`), nil
+	}
+
+	// Marshal the inner event to a map
+	b, err := json.Marshal(e.Event)
+	if err != nil {
+		return nil, err
+	}
+
+	var m map[string]interface{}
+	if err := json.Unmarshal(b, &m); err != nil {
+		return nil, err
+	}
+
+	// Inject discriminator and wrapper fields
+	m["type"] = e.Event.GetType()
+	m["timestamp"] = e.Timestamp
+
+	return json.Marshal(m)
 }
 
 type EventTimeline struct {
@@ -159,20 +182,6 @@ func NewEventTimeline() *EventTimeline {
 	}
 }
 
-func (t *EventTimeline) Add(eventType string, payload map[string]any) {
-	if t == nil || eventType == "" {
-		return
-	}
-
-	t.mu.Lock()
-	t.events = append(t.events, TimelineEvent{
-		Type:      eventType,
-		Timestamp: float64(time.Now().UnixNano()) / 1e9,
-		Payload:   payload,
-	})
-	t.mu.Unlock()
-}
-
 func (t *EventTimeline) AddEvent(ev Event) {
 	if t == nil || ev == nil {
 		return
@@ -181,10 +190,7 @@ func (t *EventTimeline) AddEvent(ev Event) {
 	t.mu.Lock()
 	t.events = append(t.events, TimelineEvent{
 		Event:     ev,
-		Type:      ev.GetType(),
 		Timestamp: float64(time.Now().UnixNano()) / 1e9,
-		// For backward compatibility, also populate Payload
-		Payload: eventPayload(ev),
 	})
 	onEvent := t.OnEvent
 	t.mu.Unlock()
@@ -193,7 +199,6 @@ func (t *EventTimeline) AddEvent(ev Event) {
 		onEvent(ev)
 	}
 }
-
 func (t *EventTimeline) Snapshot() []TimelineEvent {
 	if t == nil {
 		return nil
@@ -205,20 +210,6 @@ func (t *EventTimeline) Snapshot() []TimelineEvent {
 	out := make([]TimelineEvent, len(t.events))
 	copy(out, t.events)
 	return out
-}
-
-func eventPayload(ev Event) map[string]any {
-	b, err := json.Marshal(ev)
-	if err != nil {
-		return nil
-	}
-
-	payload := make(map[string]any)
-	if err := json.Unmarshal(b, &payload); err != nil {
-		return nil
-	}
-
-	return payload
 }
 
 type RunContext struct {
@@ -344,6 +335,7 @@ func (d *ClientEventsDispatcher) streamClientEvent(ev Event) {
 const (
 	TopicAgentRequest  = "lk.agent.request"
 	TopicAgentResponse = "lk.agent.response"
+	TopicChat          = "lk.chat"
 )
 
 func (d *ClientEventsDispatcher) registerHandlers() {
@@ -357,6 +349,23 @@ func (d *ClientEventsDispatcher) registerHandlers() {
 	d.room.RegisterRpcMethod("lk-agent-send-message", d.handleSendMessage)
 
 	_ = d.room.RegisterTextStreamHandler(TopicAgentRequest, d.handleStreamRequest)
+	_ = d.room.RegisterTextStreamHandler(TopicChat, d.handleUserTextInput)
+}
+
+func (d *ClientEventsDispatcher) handleUserTextInput(reader *lksdk.TextStreamReader, participantIdentity string) {
+	if d.session == nil {
+		return
+	}
+
+	text := reader.ReadAll()
+	if text == "" {
+		return
+	}
+
+	logger.Logger.Infow("received user text input", "text", text, "participant", participantIdentity)
+	
+	// Triggers async generation
+	_, _ = d.session.GenerateReply(context.Background(), text)
 }
 
 func (d *ClientEventsDispatcher) handleStreamRequest(reader *lksdk.TextStreamReader, participantIdentity string) {
@@ -479,7 +488,11 @@ func (d *ClientEventsDispatcher) handleGetAgentInfo(data lksdk.RpcInvocationData
 
 	toolNames := make([]string, 0)
 	for _, t := range a.Tools {
-		toolNames = append(toolNames, t.Name())
+		if ft, ok := t.(llm.Tool); ok {
+			toolNames = append(toolNames, ft.Name())
+		} else if pt, ok := t.(llm.ProviderTool); ok {
+			toolNames = append(toolNames, pt.Name())
+		}
 	}
 
 	chatCtxItems := []llm.ChatItem{}
@@ -508,14 +521,27 @@ func (d *ClientEventsDispatcher) handleSendMessage(data lksdk.RpcInvocationData)
 		return "", err
 	}
 
-	// Note: RunResult isn't fully implemented in parity yet, so we kick off generation 
-	// async like the standard GenerateReply and just return the current history.
-	// True parity blocks here, but the Go implementation's `GenerateReply` is async.
-	_, _ = d.session.GenerateReply(context.Background(), req.Text)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	runResult, err := d.session.GenerateReply(ctx, req.Text)
+	if err != nil {
+		return "", fmt.Errorf("failed to generate reply: %w", err)
+	}
+	
+	if runResult != nil {
+		if err := runResult.Wait(ctx); err != nil {
+			return "", fmt.Errorf("run failed: %w", err)
+		}
+	}
 
 	items := []llm.ChatItem{}
-	if d.session.ChatCtx != nil {
-		items = d.session.ChatCtx.Items
+	if runResult != nil {
+		for _, ev := range runResult.Events {
+			if item := ev.GetItem(); item != nil {
+				items = append(items, item)
+			}
+		}
 	}
 
 	resp := SendMessageResponse{Items: items}
