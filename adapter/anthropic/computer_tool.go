@@ -3,7 +3,6 @@ package anthropic
 import (
 	"context"
 	"encoding/base64"
-	"encoding/json"
 	"fmt"
 	"time"
 
@@ -95,13 +94,13 @@ func requireCoordinate(args map[string]interface{}, key string) (int, int, error
 	if !ok || len(coords) < 2 {
 		return 0, 0, fmt.Errorf("invalid coordinate format")
 	}
-	
+
 	x, okX := coords[0].(float64)
 	y, okY := coords[1].(float64)
 	if !okX || !okY {
 		return 0, 0, fmt.Errorf("coordinates must be numbers")
 	}
-	
+
 	return int(x), int(y), nil
 }
 
@@ -144,19 +143,16 @@ func (t *computerUseTool) Parameters() map[string]any {
 	return map[string]any{
 		"type": "object",
 		"properties": map[string]any{
-			"action": map[string]any{"type": "string"},
+			"action":     map[string]any{"type": "string"},
 			"coordinate": map[string]any{"type": "array", "items": map[string]any{"type": "integer"}},
-			"text": map[string]any{"type": "string"},
+			"text":       map[string]any{"type": "string"},
 		},
 		"required": []string{"action"},
 	}
 }
 
-func (t *computerUseTool) Execute(ctx context.Context, args string) (string, error) {
-	var parsedArgs map[string]interface{}
-	json.Unmarshal([]byte(args), &parsedArgs)
-	
-	// The computer tool relies on the external dispatch handler for actual execution, 
+func (t *computerUseTool) Execute(ctx context.Context, args map[string]any) (any, error) {
+	// The computer tool relies on the external dispatch handler for actual execution,
 	// typically intercepting the command before it reaches this basic Execute call,
 	// or calling Execute on the Toolset directly.
 	return "Action dispatched", nil

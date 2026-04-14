@@ -163,13 +163,17 @@ func (t *outOfScopeTool) Parameters() map[string]any {
 	}
 }
 
-func (t *outOfScopeTool) Execute(ctx context.Context, args string) (string, error) {
-	var params struct {
-		TaskIDs []string `json:"task_ids"`
+func (t *outOfScopeTool) Execute(ctx context.Context, args map[string]any) (any, error) {
+	taskIDsRaw, ok := args["task_ids"].([]interface{})
+	if !ok {
+		return "", fmt.Errorf("invalid or missing task_ids array")
 	}
-	if err := json.Unmarshal([]byte(args), &params); err != nil {
-		return "", err
+	var taskIDs []string
+	for _, raw := range taskIDsRaw {
+		if id, isStr := raw.(string); isStr {
+			taskIDs = append(taskIDs, id)
+		}
 	}
 
-	return "", &OutOfScopeError{TargetTaskIDs: params.TaskIDs}
+	return "", &OutOfScopeError{TargetTaskIDs: taskIDs}
 }

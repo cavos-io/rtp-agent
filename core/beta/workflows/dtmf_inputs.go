@@ -2,7 +2,6 @@ package workflows
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"sync"
 	"time"
@@ -63,7 +62,7 @@ func (t *GetDtmfTask) OnEnter() {
 	if agentObj == nil {
 		return
 	}
-	
+
 	// Assuming session is available via some mechanism in real Start
 	// For parity, we should register for SIP DTMF
 }
@@ -154,16 +153,20 @@ func (t *confirmInputsTool) Parameters() map[string]any {
 	}
 }
 
-func (t *confirmInputsTool) Execute(ctx context.Context, args string) (string, error) {
-	var params struct {
-		Inputs []string `json:"inputs"`
+func (t *confirmInputsTool) Execute(ctx context.Context, args map[string]any) (any, error) {
+	inputsRaw, ok := args["inputs"].([]interface{})
+	if !ok {
+		return "", fmt.Errorf("invalid or missing inputs array")
 	}
-	if err := json.Unmarshal([]byte(args), &params); err != nil {
-		return "", err
+	var inputs []string
+	for _, raw := range inputsRaw {
+		if s, isStr := raw.(string); isStr {
+			inputs = append(inputs, s)
+		}
 	}
 
-	dtmfEvents := make([]beta.DtmfEvent, len(params.Inputs))
-	for i, v := range params.Inputs {
+	dtmfEvents := make([]beta.DtmfEvent, len(inputs))
+	for i, v := range inputs {
 		dtmfEvents[i] = beta.DtmfEvent(v)
 	}
 
@@ -193,16 +196,20 @@ func (t *recordInputsTool) Parameters() map[string]any {
 	}
 }
 
-func (t *recordInputsTool) Execute(ctx context.Context, args string) (string, error) {
-	var params struct {
-		Inputs []string `json:"inputs"`
+func (t *recordInputsTool) Execute(ctx context.Context, args map[string]any) (any, error) {
+	inputsRaw, ok := args["inputs"].([]interface{})
+	if !ok {
+		return "", fmt.Errorf("invalid or missing inputs array")
 	}
-	if err := json.Unmarshal([]byte(args), &params); err != nil {
-		return "", err
+	var inputs []string
+	for _, raw := range inputsRaw {
+		if s, isStr := raw.(string); isStr {
+			inputs = append(inputs, s)
+		}
 	}
 
-	dtmfEvents := make([]beta.DtmfEvent, len(params.Inputs))
-	for i, v := range params.Inputs {
+	dtmfEvents := make([]beta.DtmfEvent, len(inputs))
+	for i, v := range inputs {
 		dtmfEvents[i] = beta.DtmfEvent(v)
 	}
 

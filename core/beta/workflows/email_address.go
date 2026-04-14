@@ -2,7 +2,6 @@ package workflows
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"regexp"
 
@@ -71,7 +70,7 @@ type updateEmailTool struct {
 	task *GetEmailTask
 }
 
-func (t *updateEmailTool) ID() string { return "update_email_address" }
+func (t *updateEmailTool) ID() string   { return "update_email_address" }
 func (t *updateEmailTool) Name() string { return "update_email_address" }
 func (t *updateEmailTool) Description() string {
 	return "Update the email address provided by the user."
@@ -86,15 +85,9 @@ func (t *updateEmailTool) Parameters() map[string]any {
 	}
 }
 
-func (t *updateEmailTool) Execute(ctx context.Context, args string) (string, error) {
-	var params struct {
-		Email string `json:"email"`
-	}
-	if err := json.Unmarshal([]byte(args), &params); err != nil {
-		return "", err
-	}
+func (t *updateEmailTool) Execute(ctx context.Context, args map[string]any) (any, error) {
+	email, _ := args["email"].(string)
 
-	email := params.Email
 	if !emailRegex.MatchString(email) {
 		return "", fmt.Errorf("invalid email address provided: %s", email)
 	}
@@ -113,7 +106,7 @@ type confirmEmailTool struct {
 	task *GetEmailTask
 }
 
-func (t *confirmEmailTool) ID() string { return "confirm_email_address" }
+func (t *confirmEmailTool) ID() string   { return "confirm_email_address" }
 func (t *confirmEmailTool) Name() string { return "confirm_email_address" }
 func (t *confirmEmailTool) Description() string {
 	return "Validates/confirms the email address provided by the user."
@@ -125,7 +118,7 @@ func (t *confirmEmailTool) Parameters() map[string]any {
 	}
 }
 
-func (t *confirmEmailTool) Execute(ctx context.Context, args string) (string, error) {
+func (t *confirmEmailTool) Execute(ctx context.Context, args map[string]any) (any, error) {
 	if t.task.currentEmail == "" {
 		return "", fmt.Errorf("error: no email address was provided, update_email_address must be called before")
 	}
@@ -139,7 +132,7 @@ type declineEmailCaptureTool struct {
 	task *GetEmailTask
 }
 
-func (t *declineEmailCaptureTool) ID() string { return "decline_email_capture" }
+func (t *declineEmailCaptureTool) ID() string   { return "decline_email_capture" }
 func (t *declineEmailCaptureTool) Name() string { return "decline_email_capture" }
 func (t *declineEmailCaptureTool) Description() string {
 	return "Handles the case when the user explicitly declines to provide an email address."
@@ -154,14 +147,9 @@ func (t *declineEmailCaptureTool) Parameters() map[string]any {
 	}
 }
 
-func (t *declineEmailCaptureTool) Execute(ctx context.Context, args string) (string, error) {
-	var params struct {
-		Reason string `json:"reason"`
-	}
-	if err := json.Unmarshal([]byte(args), &params); err != nil {
-		return "", err
-	}
+func (t *declineEmailCaptureTool) Execute(ctx context.Context, args map[string]any) (any, error) {
+	reason, _ := args["reason"].(string)
 
-	t.task.Fail(fmt.Errorf("couldn't get the email address: %s", params.Reason))
+	t.task.Fail(fmt.Errorf("couldn't get the email address: %s", reason))
 	return "Task failed.", nil
 }

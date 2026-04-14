@@ -2,7 +2,6 @@ package tools
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"time"
 
@@ -58,17 +57,24 @@ type sendDTMFArgs struct {
 	Events []beta.DtmfEvent `json:"events"`
 }
 
-func (t *SendDTMFTool) Execute(ctx context.Context, args string) (string, error) {
-	var a sendDTMFArgs
-	if err := json.Unmarshal([]byte(args), &a); err != nil {
-		return "", err
+func (t *SendDTMFTool) Execute(ctx context.Context, args map[string]any) (any, error) {
+	eventsRaw, ok := args["events"].([]interface{})
+	if !ok {
+		return "", fmt.Errorf("invalid or missing events array")
+	}
+
+	var events []beta.DtmfEvent
+	for _, raw := range eventsRaw {
+		if evStr, isStr := raw.(string); isStr {
+			events = append(events, beta.DtmfEvent(evStr))
+		}
 	}
 
 	if t.publisher == nil {
 		return "", fmt.Errorf("DTMF publisher not available")
 	}
 
-	for _, event := range a.Events {
+	for _, event := range events {
 		code, err := beta.DtmfEventToCode(event)
 		if err != nil {
 			return "", err
@@ -87,5 +93,5 @@ func (t *SendDTMFTool) Execute(ctx context.Context, args string) (string, error)
 		}
 	}
 
-	return fmt.Sprintf("Successfully sent DTMF events: %s", beta.FormatDtmf(a.Events)), nil
+	return fmt.Sprintf("Successfully sent DTMF events: %s", beta.FormatDtmf(events)), nil
 }

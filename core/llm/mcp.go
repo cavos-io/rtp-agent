@@ -254,15 +254,10 @@ func (t *mcpProxyTool) Parameters() map[string]any {
 	return t.parameters
 }
 
-func (t *mcpProxyTool) Execute(ctx context.Context, args string) (string, error) {
-	var parsedArgs map[string]interface{}
-	if err := json.Unmarshal([]byte(args), &parsedArgs); err != nil {
-		return "", err
-	}
-
+func (t *mcpProxyTool) Execute(ctx context.Context, args map[string]any) (any, error) {
 	resp, err := t.server.sendRequest(ctx, "tools/call", map[string]interface{}{
 		"name":      t.name,
-		"arguments": parsedArgs,
+		"arguments": args,
 	})
 	if err != nil {
 		return "", err

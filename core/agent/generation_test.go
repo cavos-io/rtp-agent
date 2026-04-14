@@ -103,7 +103,7 @@ func (executingTool) Description() string { return "echo tool" }
 func (executingTool) Parameters() map[string]any {
 	return map[string]any{"type": "object"}
 }
-func (executingTool) Execute(ctx context.Context, args string) (string, error) { return args, nil }
+func (executingTool) Execute(ctx context.Context, args map[string]any) (any, error) { return args, nil }
 
 func TestPerformToolExecutionsValidatesJSONArguments(t *testing.T) {
 	toolCtx := llm.NewToolContext([]interface{}{executingTool{}})

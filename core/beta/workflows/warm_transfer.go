@@ -2,7 +2,6 @@ package workflows
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"os"
 	"sync"
@@ -51,13 +50,13 @@ type WarmTransferTask struct {
 	SipHeaders        map[string]string
 	HoldAudio         interface{}
 
-	callerRoom        *lksdk.Room
-	humanAgentSess    *agent.AgentSession
+	callerRoom         *lksdk.Room
+	humanAgentSess     *agent.AgentSession
 	humanAgentIdentity string
-	
-	backgroundAudio   *agent.BackgroundAudioPlayer
-	holdAudioHandle   *agent.PlayHandle
-	
+
+	backgroundAudio *agent.BackgroundAudioPlayer
+	holdAudioHandle *agent.PlayHandle
+
 	mu sync.Mutex
 }
 
@@ -105,16 +104,16 @@ func (t *WarmTransferTask) OnEnter() {
 	defer t.mu.Unlock()
 
 	logger.Logger.Infow("Entering warm transfer task, dialing human agent", "target", t.TargetPhoneNumber)
-	
+
 	// In a full implementation, we would start background audio and dial SIP
 	// self.background_audio = BackgroundAudioPlayer()
 	// self.hold_audio = AudioConfig(BuiltinAudioClip.HOLD_MUSIC, volume=0.8)
-	
+
 	t.backgroundAudio = agent.NewBackgroundAudioPlayer(agent.AudioConfig{
 		Source: agent.HoldMusic,
 		Volume: 0.8,
 	}, nil)
-	
+
 	// We'll need the room from the session to start background audio
 	// This part is tricky without a fully linked session/activity
 }
@@ -136,7 +135,7 @@ func (t *WarmTransferTask) ConnectToCaller() error {
 	defer t.mu.Unlock()
 
 	logger.Logger.Debugw("Connecting human agent to caller")
-	
+
 	// In Python:
 	// await job_ctx.api.room.move_participant(
 	//    api.MoveParticipantRequest(
@@ -145,7 +144,7 @@ func (t *WarmTransferTask) ConnectToCaller() error {
 	//        destination_room=self._caller_room.name,
 	//    )
 	// )
-	
+
 	t.Complete(&WarmTransferResult{HumanAgentIdentity: t.humanAgentIdentity})
 	return nil
 }
@@ -163,7 +162,7 @@ func (t *connectToCallerTool) Parameters() map[string]any {
 	return map[string]any{"type": "object", "properties": map[string]any{}}
 }
 
-func (t *connectToCallerTool) Execute(ctx context.Context, args string) (string, error) {
+func (t *connectToCallerTool) Execute(ctx context.Context, args map[string]any) (any, error) {
 	err := t.task.ConnectToCaller()
 	if err != nil {
 		return "", err
@@ -190,15 +189,10 @@ func (t *declineTransferTool) Parameters() map[string]any {
 	}
 }
 
-func (t *declineTransferTool) Execute(ctx context.Context, args string) (string, error) {
-	var params struct {
-		Reason string `json:"reason"`
-	}
-	if err := json.Unmarshal([]byte(args), &params); err != nil {
-		return "", err
-	}
+func (t *declineTransferTool) Execute(ctx context.Context, args map[string]any) (any, error) {
+	reason, _ := args["reason"].(string)
 
-	t.task.Fail(fmt.Errorf("human agent declined to connect: %s", params.Reason))
+	t.task.Fail(fmt.Errorf("human agent declined to connect: %s", reason))
 	return "Transfer declined.", nil
 }
 
@@ -215,7 +209,7 @@ func (t *voicemailDetectedTool) Parameters() map[string]any {
 	return map[string]any{"type": "object", "properties": map[string]any{}}
 }
 
-func (t *voicemailDetectedTool) Execute(ctx context.Context, args string) (string, error) {
+func (t *voicemailDetectedTool) Execute(ctx context.Context, args map[string]any) (any, error) {
 	t.task.Fail(fmt.Errorf("voicemail detected"))
 	return "Voicemail detected.", nil
 }

@@ -70,7 +70,7 @@ func (testTool) Parameters() map[string]any {
 		},
 	}
 }
-func (testTool) Execute(ctx context.Context, args string) (string, error) { return "ok", nil }
+func (testTool) Execute(ctx context.Context, args map[string]any) (any, error) { return "ok", nil }
 
 func newChatContext() *llm.ChatContext {
 	chatCtx := llm.NewChatContext()

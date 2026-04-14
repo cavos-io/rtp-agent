@@ -353,16 +353,30 @@ func PerformToolExecutions(
 					execCtx = ctx
 				}
 
-				result, err := tool.Execute(execCtx, args)
+				var argsMap map[string]any
+				if err := json.Unmarshal([]byte(args), &argsMap); err != nil {
+					outCh <- buildToolErrorOutput(call, fmt.Errorf("failed to parse tool arguments: %w", err))
+					return
+				}
+
+				result, err := tool.Execute(execCtx, argsMap)
 				
 				var fncCallOut *llm.FunctionCallOutput
 				if err == llm.ErrStopResponse {
 					fncCallOut = nil
 				} else {
 					isError := err != nil
-					outputStr := result
+					var outputStr string
 					if err != nil {
 						outputStr = err.Error()
+					} else if result != nil {
+						// Best effort formatting for the chat context
+						if str, ok := result.(string); ok {
+							outputStr = str
+						} else {
+							outBytes, _ := json.Marshal(result)
+							outputStr = string(outBytes)
+						}
 					}
 					fncCallOut = &llm.FunctionCallOutput{
 						CallID:    call.CallID,
