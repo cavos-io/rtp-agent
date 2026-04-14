@@ -281,10 +281,11 @@ func PerformTTSInference(ctx context.Context, t tts.TTS, textCh <-chan string) (
 }
 
 type ToolExecutionOutput struct {
-	FncCall    llm.FunctionCall
-	FncCallOut *llm.FunctionCallOutput
-	RawOutput  any
-	RawError   error
+	FncCall       llm.FunctionCall
+	FncCallOut    *llm.FunctionCallOutput
+	RawOutput     any
+	RawError      error
+	ReplyRequired bool
 }
 
 func PerformToolExecutions(
@@ -364,11 +365,29 @@ func PerformToolExecutions(
 					return
 				}
 
+				// Support typed binding if the tool provides a struct
+				if ta, ok := tool.(llm.ToolWithArgs); ok {
+					typedArgs := ta.Args()
+					if typedArgs != nil {
+						if err := json.Unmarshal([]byte(args), typedArgs); err == nil {
+							// Successfully unmarshaled into typed struct, 
+							// replace argsMap with the generic map representation of the struct 
+							// or just use it if Execute was updated (it isn't yet, keeping map for now)
+						}
+					}
+				}
+
 				result, err := tool.Execute(execCtx, argsMap)
 				
+				replyRequired := true
+				if tr, ok := tool.(llm.ToolWithReply); ok {
+					replyRequired = tr.IsReplyRequired()
+				}
+
 				var fncCallOut *llm.FunctionCallOutput
 				if err == llm.ErrStopResponse {
 					fncCallOut = nil
+					replyRequired = false
 				} else {
 					isError := err != nil
 					var outputStr string
@@ -393,10 +412,11 @@ func PerformToolExecutions(
 				}
 
 				outCh <- ToolExecutionOutput{
-					FncCall:    call,
-					FncCallOut: fncCallOut,
-					RawOutput:  result,
-					RawError:   err,
+					FncCall:       call,
+					FncCallOut:    fncCallOut,
+					RawOutput:     result,
+					RawError:      err,
+					ReplyRequired: replyRequired,
 				}
 			}(fncCall)
 		}

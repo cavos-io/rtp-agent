@@ -97,6 +97,17 @@ func NewAgentSession(agent AgentInterface, room *lksdk.Room, opts AgentSessionOp
 		UserStateChangedCh:  make(chan UserStateChangedEvent, 10),
 	}
 
+	if chatCtx != nil {
+		chatCtx.OnItemAdded = func(item llm.ChatItem) {
+			if s.Timeline != nil {
+				s.Timeline.AddEvent(&ConversationItemAddedEvent{
+					Item:      item,
+					CreatedAt: time.Now(),
+				})
+			}
+		}
+	}
+
 	if room != nil {
 		s.clientEvents = NewClientEventsDispatcher(room, s)
 	}

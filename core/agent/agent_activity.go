@@ -478,6 +478,12 @@ func (a *AgentActivity) startFalseInterruptionTimer(timeout float64) {
 			if a.Session.Output.Audio != nil {
 				a.Session.Output.Audio.Resume()
 			}
+			if a.Session.Timeline != nil {
+				a.Session.Timeline.AddEvent(&AgentFalseInterruptionEvent{
+					Resumed:   true,
+					CreatedAt: time.Now(),
+				})
+			}
 			a.Session.UpdateAgentState(AgentStateSpeaking)
 			return
 		}

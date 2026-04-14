@@ -295,6 +295,7 @@ func (va *PipelineAgent) GenerateReply(speech *SpeechHandle) {
 		// Wait for tool executions to complete and collect results
 		var executedTools bool
 		var stopResponse bool
+		var replyRequired bool
 		
 		var toolCalls []llm.FunctionCall
 		var toolOutputs []*llm.FunctionCallOutput
@@ -303,6 +304,9 @@ func (va *PipelineAgent) GenerateReply(speech *SpeechHandle) {
 			executedTools = true
 			if toolOut.RawError == llm.ErrStopResponse {
 				stopResponse = true
+			}
+			if toolOut.ReplyRequired {
+				replyRequired = true
 			}
 			logger.Logger.Infow("Tool executed", "name", toolOut.FncCall.Name)
 			
@@ -321,14 +325,14 @@ func (va *PipelineAgent) GenerateReply(speech *SpeechHandle) {
 					FunctionCalls:       toolCalls,
 					FunctionCallOutputs: toolOutputs,
 					CreatedAt:           time.Now(),
-					HasToolReply:        false,
+					HasToolReply:        replyRequired,
 					HasAgentHandoff:     stopResponse, // StopResponse usually implies handoff or explicit silence
 				})
 			}
 		}
 
 		// If no tool calls or StopResponse, we're done
-		if !executedTools || stopResponse {
+		if !executedTools || stopResponse || !replyRequired {
 			if stopResponse {
 				speech.FinalOutput = "stop_response"
 			}

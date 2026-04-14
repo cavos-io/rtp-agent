@@ -126,7 +126,8 @@ func (m *MetricsReport) GetType() string             { return "metrics_report" }
 func (m *MetricsReport) GetCreatedAt() time.Time     { return m.CreatedAt }
 
 type ChatContext struct {
-	Items []ChatItem
+	Items       []ChatItem
+	OnItemAdded func(item ChatItem)
 }
 
 func NewChatContext() *ChatContext {
@@ -137,6 +138,10 @@ func NewChatContext() *ChatContext {
 
 func (c *ChatContext) Append(item ChatItem) {
 	c.Items = append(c.Items, item)
+
+	if c.OnItemAdded != nil {
+		c.OnItemAdded(item)
+	}
 
 	// Emit OTLP log event
 	attrs := map[string]interface{}{
@@ -194,6 +199,18 @@ type Tool interface {
 	Description() string
 	Parameters() map[string]any
 	Execute(ctx context.Context, args map[string]any) (any, error)
+}
+
+// ToolWithArgs indicates that a tool has a specific struct for its arguments.
+type ToolWithArgs interface {
+	Tool
+	Args() any
+}
+
+// ToolWithReply indicates that a tool specifically requires or does not require an LLM reply.
+type ToolWithReply interface {
+	Tool
+	IsReplyRequired() bool
 }
 
 type Toolset interface {
