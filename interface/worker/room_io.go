@@ -129,23 +129,30 @@ type AudioOutputOptions struct {
 	TrackPublishOptions  *lksdk.TrackPublicationOptions
 }
 
-type TextInputOptions struct {
+type VideoInputOptions struct {
 	Enabled bool
+}
+
+type VideoOutputOptions struct {
+	Enabled bool
+}
+
+type TextInputOptions struct {
+	Enabled      bool
+	InputHandler func(s *agent.AgentSession, text string) error
 }
 
 type TextOutputOptions struct {
-	Enabled           bool
-	SyncTranscription bool
-}
-
-type VideoInputOptions struct {
-	Enabled bool
+	Enabled                  bool
+	SyncTranscription        bool
+	TranscriptionSpeedFactor float64
 }
 
 type RoomOptions struct {
 	AudioInput          *AudioInputOptions
 	AudioOutput         *AudioOutputOptions
 	VideoInput          *VideoInputOptions
+	VideoOutput         *VideoOutputOptions
 	TextInput           *TextInputOptions
 	TextOutput          *TextOutputOptions
 	ParticipantKinds    []lksdk.ParticipantKind
@@ -324,7 +331,11 @@ func NewRoomIO(room *lksdk.Room, session *agent.AgentSession, opts RoomOptions) 
 	if audioOutputEnabled {
 		if syncTranscription {
 			textOut := NewRoomTextOutput(room)
-			sync := agent.NewTranscriptSynchronizer(session.Options.SpeakingRate, session.Options.TranscriptRefreshRate)
+			speedFactor := 1.0
+			if opts.TextOutput != nil && opts.TextOutput.TranscriptionSpeedFactor > 0 {
+				speedFactor = opts.TextOutput.TranscriptionSpeedFactor
+			}
+			sync := agent.NewTranscriptSynchronizer(session.Options.SpeakingRate*speedFactor, session.Options.TranscriptRefreshRate)
 			rio.sync = sync
 
 			syncedAudio := agent.NewSyncedAudioOutput(sync, rio)

@@ -37,6 +37,7 @@ type TranscriptSynchronizer struct {
 	mu             sync.Mutex
 	textBuffer     string
 	yieldedText    string
+	lastYieldedText string
 	segmentID      string
 	playedAudioDur time.Duration
 	yieldedTextDur time.Duration
@@ -108,6 +109,7 @@ func (s *TranscriptSynchronizer) RotateSegment() {
 	defer s.mu.Unlock()
 	s.playedAudioDur = 0
 	s.yieldedTextDur = 0
+	s.lastYieldedText = s.yieldedText
 	s.yieldedText = ""
 }
 
@@ -200,7 +202,11 @@ func (s *SyncedAudioOutput) OnPlaybackFinished(f func(ev PlaybackFinishedEvent))
 	if s.next != nil {
 		s.next.OnPlaybackFinished(func(ev PlaybackFinishedEvent) {
 			s.sync.mu.Lock()
-			ev.SynchronizedTranscript = s.sync.yieldedText
+			transcript := s.sync.yieldedText
+			if transcript == "" {
+				transcript = s.sync.lastYieldedText
+			}
+			ev.SynchronizedTranscript = transcript
 			s.sync.mu.Unlock()
 			f(ev)
 		})
