@@ -25,6 +25,8 @@ type AudioDecoder interface {
 
 type AudioEncoder interface {
 	Encode(pcm []byte) ([]byte, error)
+	SampleRate() int
+	Channels() int
 	Close() error
 }
 
@@ -65,8 +67,10 @@ func (d *opusDecoder) Close() error {
 }
 
 type opusEncoder struct {
-	encoder *opus.Encoder
-	buf     []byte
+	encoder    *opus.Encoder
+	sampleRate int
+	channels   int
+	buf        []byte
 }
 
 func newOpusEncoder(sampleRate int, channels int) (*opusEncoder, error) {
@@ -75,10 +79,15 @@ func newOpusEncoder(sampleRate int, channels int) (*opusEncoder, error) {
 		return nil, err
 	}
 	return &opusEncoder{
-		encoder: enc,
-		buf:     make([]byte, 4000), // Max packet size
+		encoder:    enc,
+		sampleRate: sampleRate,
+		channels:   channels,
+		buf:        make([]byte, 4000), // Max packet size
 	}, nil
 }
+
+func (e *opusEncoder) SampleRate() int { return e.sampleRate }
+func (e *opusEncoder) Channels() int   { return e.channels }
 
 func (e *opusEncoder) Encode(pcm []byte) ([]byte, error) {
 	// Convert byte slice back to int16 slice for Opus encoder
@@ -174,6 +183,21 @@ func (rio *RoomIO) CaptureFrame(frame *model.AudioFrame) error {
 
 	if track == nil {
 		return fmt.Errorf("no audio track")
+	}
+
+	if encoder == nil || encoder.SampleRate() != int(frame.SampleRate) || encoder.Channels() != int(frame.NumChannels) {
+		enc, err := newOpusEncoder(int(frame.SampleRate), int(frame.NumChannels))
+		if err != nil {
+			return fmt.Errorf("failed to create opus encoder for %d Hz, %d ch: %w", frame.SampleRate, frame.NumChannels, err)
+		}
+		
+		rio.mu.Lock()
+		if rio.encoder != nil {
+			rio.encoder.Close()
+		}
+		rio.encoder = enc
+		encoder = enc
+		rio.mu.Unlock()
 	}
 
 	data := frame.Data

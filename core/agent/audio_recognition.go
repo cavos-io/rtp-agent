@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"sync"
 
@@ -44,22 +45,37 @@ func (ar *AudioRecognition) Start(ctx context.Context) error {
 	ar.mu.Lock()
 	defer ar.mu.Unlock()
 
+	var started bool
+	var startErr error
+
 	if ar.vad != nil {
 		stream, err := ar.vad.Stream(ctx)
 		if err != nil {
-			return err
+			startErr = fmt.Errorf("failed to start VAD stream: %w", err)
+		} else {
+			ar.vadStream = stream
+			started = true
+			go ar.vadLoop(ctx, stream)
 		}
-		ar.vadStream = stream
-		go ar.vadLoop(ctx, stream)
 	}
 
 	if ar.stt != nil {
 		stream, err := ar.stt.Stream(ctx, "")
 		if err != nil {
-			return err
+			if startErr != nil {
+				startErr = fmt.Errorf("%v; failed to start STT stream: %w", startErr, err)
+			} else {
+				startErr = fmt.Errorf("failed to start STT stream: %w", err)
+			}
+		} else {
+			ar.sttStream = stream
+			started = true
+			go ar.sttLoop(ctx, stream)
 		}
-		ar.sttStream = stream
-		go ar.sttLoop(ctx, stream)
+	}
+
+	if !started && startErr != nil {
+		return startErr
 	}
 
 	return nil
@@ -109,8 +125,22 @@ func (ar *AudioRecognition) sttLoop(ctx context.Context, stream stt.RecognizeStr
 				}
 				return
 			}
+			if ev == nil {
+				continue
+			}
 
-			if ev.Type == stt.SpeechEventFinalTranscript {
+			switch ev.Type {
+			case stt.SpeechEventStartOfSpeech:
+				ar.mu.Lock()
+				ar.speaking = true
+				ar.mu.Unlock()
+				ar.hooks.OnStartOfSpeech(nil)
+			case stt.SpeechEventEndOfSpeech:
+				ar.mu.Lock()
+				ar.speaking = false
+				ar.mu.Unlock()
+				ar.hooks.OnEndOfSpeech(nil)
+			case stt.SpeechEventFinalTranscript:
 				ar.hooks.OnFinalTranscript(ev)
 			}
 		}
@@ -130,4 +160,3 @@ func (ar *AudioRecognition) PushAudio(frame *model.AudioFrame) error {
 
 	return nil
 }
-

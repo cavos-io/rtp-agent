@@ -131,6 +131,17 @@ func (s *AgentSession) Start(ctx context.Context) error {
 		s.VAD = vad.NewSimpleVAD(0.01)
 	}
 
+	// AudioRecognition consumes session.STT directly. Ensure it is stream-capable.
+	if s.STT != nil && !s.STT.Capabilities().Streaming {
+		s.STT = stt.NewStreamAdapter(s.STT, s.VAD)
+	}
+
+	// Keep base agent fields aligned with effective session components.
+	if base := s.Agent.GetAgent(); base != nil {
+		base.VAD = s.VAD
+		base.STT = s.STT
+	}
+
 	s.Activity = NewAgentActivity(s.Agent, s)
 	s.Activity.Start()
 
