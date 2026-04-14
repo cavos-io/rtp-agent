@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"sync"
 	"time"
 
@@ -42,6 +43,7 @@ type UserStateChangedEvent struct {
 	NewState  UserState `json:"new_state"`
 	CreatedAt time.Time `json:"created_at"`
 }
+
 func (e *UserStateChangedEvent) GetType() string { return "user_state_changed" }
 
 type AgentStateChangedEvent struct {
@@ -49,6 +51,7 @@ type AgentStateChangedEvent struct {
 	NewState  AgentState `json:"new_state"`
 	CreatedAt time.Time  `json:"created_at"`
 }
+
 func (e *AgentStateChangedEvent) GetType() string { return "agent_state_changed" }
 
 type UserInputTranscribedEvent struct {
@@ -58,33 +61,38 @@ type UserInputTranscribedEvent struct {
 	Language   string    `json:"language,omitempty"`
 	CreatedAt  time.Time `json:"created_at"`
 }
+
 func (e *UserInputTranscribedEvent) GetType() string { return "user_input_transcribed" }
 
 type AgentFalseInterruptionEvent struct {
 	Resumed   bool      `json:"resumed"`
 	CreatedAt time.Time `json:"created_at"`
 }
+
 func (e *AgentFalseInterruptionEvent) GetType() string { return "agent_false_interruption" }
 
 type MetricsCollectedEvent struct {
 	Metrics   telemetry.AgentMetrics `json:"metrics"`
 	CreatedAt time.Time              `json:"created_at"`
 }
+
 func (e *MetricsCollectedEvent) GetType() string { return "metrics_collected" }
 
 type ConversationItemAddedEvent struct {
 	Item      llm.ChatItem `json:"item"`
 	CreatedAt time.Time    `json:"created_at"`
 }
+
 func (e *ConversationItemAddedEvent) GetType() string { return "conversation_item_added" }
 
 type FunctionToolsExecutedEvent struct {
-	FunctionCalls       []llm.FunctionCall         `json:"function_calls"`
-	FunctionCallOutputs []*llm.FunctionCallOutput  `json:"function_call_outputs"`
-	CreatedAt           time.Time                  `json:"created_at"`
-	HasToolReply        bool                       `json:"has_tool_reply"`
-	HasAgentHandoff     bool                       `json:"has_agent_handoff"`
+	FunctionCalls       []llm.FunctionCall        `json:"function_calls"`
+	FunctionCallOutputs []*llm.FunctionCallOutput `json:"function_call_outputs"`
+	CreatedAt           time.Time                 `json:"created_at"`
+	HasToolReply        bool                      `json:"has_tool_reply"`
+	HasAgentHandoff     bool                      `json:"has_agent_handoff"`
 }
+
 func (e *FunctionToolsExecutedEvent) GetType() string { return "function_tools_executed" }
 
 type SpeechCreatedEvent struct {
@@ -93,6 +101,7 @@ type SpeechCreatedEvent struct {
 	SpeechHandle  *SpeechHandle `json:"-"`
 	CreatedAt     time.Time     `json:"created_at"`
 }
+
 func (e *SpeechCreatedEvent) GetType() string { return "speech_created" }
 
 type ErrorEvent struct {
@@ -100,6 +109,7 @@ type ErrorEvent struct {
 	Source    any       `json:"source,omitempty"`
 	CreatedAt time.Time `json:"created_at"`
 }
+
 func (e *ErrorEvent) GetType() string { return "error" }
 
 type CloseReason string
@@ -117,8 +127,8 @@ type CloseEvent struct {
 	Error     error       `json:"error,omitempty"`
 	CreatedAt time.Time   `json:"created_at"`
 }
-func (e *CloseEvent) GetType() string { return "close" }
 
+func (e *CloseEvent) GetType() string { return "close" }
 
 type TimelineEvent struct {
 	Type      string         `json:"type"`
@@ -155,7 +165,7 @@ func (t *EventTimeline) AddEvent(ev Event) {
 	if t == nil || ev == nil {
 		return
 	}
-	
+
 	// Convert specific Event structs into the generic map timeline format
 	// This preserves the old string map format for the Timeline while allowing
 	// the core execution logic to use strongly typed Event structs.
@@ -219,18 +229,166 @@ func GetRunContext(ctx context.Context) *RunContext {
 	return nil
 }
 
+type GetSessionStateResponse struct {
+	AgentState string         `json:"agent_state"`
+	UserState  string         `json:"user_state"`
+	AgentID    string         `json:"agent_id"`
+	Options    map[string]any `json:"options"`
+	CreatedAt  float64        `json:"created_at"`
+}
+
+type GetChatHistoryResponse struct {
+	Items []llm.ChatItem `json:"items"`
+}
+
+type GetAgentInfoResponse struct {
+	ID           string         `json:"id"`
+	Instructions string         `json:"instructions,omitempty"`
+	Tools        []string       `json:"tools"`
+	ChatCtx      []llm.ChatItem `json:"chat_ctx"`
+}
+
+type SendMessageRequest struct {
+	Text string `json:"text"`
+}
+
+type SendMessageResponse struct {
+	Items []llm.ChatItem `json:"items"`
+}
+
 // ClientEventsDispatcher manages sending Agent states to the LiveKit Room DataChannel
+// and handling inbound RPC and DataChannel requests.
 type ClientEventsDispatcher struct {
-	room *lksdk.Room
-	mu   sync.Mutex
+	room    *lksdk.Room
+	session *AgentSession
+	mu      sync.Mutex
 }
 
-func NewClientEventsDispatcher(room *lksdk.Room) *ClientEventsDispatcher {
-	return &ClientEventsDispatcher{
-		room: room,
+func NewClientEventsDispatcher(room *lksdk.Room, session *AgentSession) *ClientEventsDispatcher {
+	d := &ClientEventsDispatcher{
+		room:    room,
+		session: session,
 	}
+	d.registerHandlers()
+	return d
 }
 
+func (d *ClientEventsDispatcher) registerHandlers() {
+	if d.room == nil || d.room.LocalParticipant == nil {
+		return
+	}
+
+	d.room.RegisterRpcMethod("lk-agent-get-session-state", d.handleGetSessionState)
+	d.room.RegisterRpcMethod("lk-agent-get-chat-history", d.handleGetChatHistory)
+	d.room.RegisterRpcMethod("lk-agent-get-info", d.handleGetAgentInfo)
+	d.room.RegisterRpcMethod("lk-agent-send-message", d.handleSendMessage)
+
+	// Note: In a complete implementation, stream requests over DataChannels (TOPIC_AGENT_REQUEST)
+	// would also be bound here using a custom data handler on the Room/Participant, 
+	// but LiveKit's go-sdk typically favors RPC for direct request/response unless sizes are massive.
+}
+
+func (d *ClientEventsDispatcher) handleGetSessionState(data lksdk.RpcInvocationData) (string, error) {
+	if d.session == nil {
+		return "", fmt.Errorf("no active session")
+	}
+
+	d.session.mu.Lock()
+	agentState := d.session.AgentState
+	userState := d.session.UserState
+
+	// Convert options to map for JSON serialization
+	optsBytes, _ := json.Marshal(d.session.Options)
+	var optsMap map[string]any
+	_ = json.Unmarshal(optsBytes, &optsMap)
+
+	agentID := ""
+	if d.session.Agent != nil {
+		if a := d.session.Agent.GetAgent(); a != nil {
+			agentID = a.ID
+		}
+	}
+	d.session.mu.Unlock()
+
+	resp := GetSessionStateResponse{
+		AgentState: string(agentState),
+		UserState:  string(userState),
+		AgentID:    agentID,
+		Options:    optsMap,
+		CreatedAt:  float64(time.Now().UnixMilli()) / 1000.0, // Best effort since we don't track start time explicitly yet
+	}
+
+	b, _ := json.Marshal(resp)
+	return string(b), nil
+}
+
+func (d *ClientEventsDispatcher) handleGetChatHistory(data lksdk.RpcInvocationData) (string, error) {
+	if d.session == nil || d.session.ChatCtx == nil {
+		b, _ := json.Marshal(GetChatHistoryResponse{Items: []llm.ChatItem{}})
+		return string(b), nil
+	}
+
+	items := d.session.ChatCtx.Items
+	resp := GetChatHistoryResponse{Items: items}
+	b, _ := json.Marshal(resp)
+	return string(b), nil
+}
+
+func (d *ClientEventsDispatcher) handleGetAgentInfo(data lksdk.RpcInvocationData) (string, error) {
+	if d.session == nil || d.session.Agent == nil {
+		return "", fmt.Errorf("no agent found")
+	}
+
+	a := d.session.Agent.GetAgent()
+	if a == nil {
+		return "", fmt.Errorf("no agent implementation found")
+	}
+
+	toolNames := make([]string, 0)
+	for _, t := range a.Tools {
+		toolNames = append(toolNames, t.Name())
+	}
+
+	chatCtxItems := []llm.ChatItem{}
+	if a.ChatCtx != nil {
+		chatCtxItems = a.ChatCtx.Items
+	}
+
+	resp := GetAgentInfoResponse{
+		ID:           a.ID,
+		Instructions: a.Instructions,
+		Tools:        toolNames,
+		ChatCtx:      chatCtxItems,
+	}
+
+	b, _ := json.Marshal(resp)
+	return string(b), nil
+}
+
+func (d *ClientEventsDispatcher) handleSendMessage(data lksdk.RpcInvocationData) (string, error) {
+	if d.session == nil {
+		return "", fmt.Errorf("no active session")
+	}
+
+	var req SendMessageRequest
+	if err := json.Unmarshal([]byte(data.Payload), &req); err != nil {
+		return "", err
+	}
+
+	// Note: RunResult isn't fully implemented in parity yet, so we kick off generation 
+	// async like the standard GenerateReply and just return the current history.
+	// True parity blocks here, but the Go implementation's `GenerateReply` is async.
+	_ = d.session.GenerateReply(context.Background(), req.Text)
+
+	items := []llm.ChatItem{}
+	if d.session.ChatCtx != nil {
+		items = d.session.ChatCtx.Items
+	}
+
+	resp := SendMessageResponse{Items: items}
+	b, _ := json.Marshal(resp)
+	return string(b), nil
+}
 type ClientEventPayload struct {
 	Type  string `json:"type"`
 	State string `json:"state,omitempty"`

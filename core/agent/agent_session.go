@@ -62,6 +62,8 @@ type AgentSession struct {
 	// Event channels
 	AgentStateChangedCh chan AgentStateChangedEvent
 	UserStateChangedCh  chan UserStateChangedEvent
+
+	clientEvents *ClientEventsDispatcher
 }
 
 func NewAgentSession(agent AgentInterface, room *lksdk.Room, opts AgentSessionOptions) *AgentSession {
@@ -80,7 +82,7 @@ func NewAgentSession(agent AgentInterface, room *lksdk.Room, opts AgentSessionOp
 		"has_room": room != nil,
 	})
 
-	return &AgentSession{
+	s := &AgentSession{
 		Agent:               agent,
 		Room:                room,
 		STT:                 baseAgent.STT,
@@ -94,6 +96,12 @@ func NewAgentSession(agent AgentInterface, room *lksdk.Room, opts AgentSessionOp
 		AgentStateChangedCh: make(chan AgentStateChangedEvent, 10),
 		UserStateChangedCh:  make(chan UserStateChangedEvent, 10),
 	}
+
+	if room != nil {
+		s.clientEvents = NewClientEventsDispatcher(room, s)
+	}
+
+	return s
 }
 
 func (s *AgentSession) SetAudioOutput(out AudioOutput) {
@@ -307,6 +315,11 @@ func (s *AgentSession) UpdateAgentState(state AgentState) {
 				CreatedAt: time.Now(),
 			})
 		}
+		
+		if s.clientEvents != nil {
+			s.clientEvents.DispatchAgentState(state)
+		}
+
 		select {
 		case s.AgentStateChangedCh <- AgentStateChangedEvent{
 			OldState:  oldState,
@@ -334,6 +347,11 @@ func (s *AgentSession) UpdateUserState(state UserState) {
 				CreatedAt: time.Now(),
 			})
 		}
+		
+		if s.clientEvents != nil {
+			s.clientEvents.DispatchUserState(state)
+		}
+
 		select {
 		case s.UserStateChangedCh <- UserStateChangedEvent{
 			OldState:  oldState,
