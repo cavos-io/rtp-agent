@@ -11,22 +11,51 @@ import (
 	"github.com/cavos-io/conversation-worker/core/llm"
 )
 
+type RunEvent interface {
+	RunEventType() string
+}
+
+type ChatMessageRunEvent struct {
+	Item *llm.ChatMessage
+}
+func (e *ChatMessageRunEvent) RunEventType() string { return "message" }
+
+type FunctionCallRunEvent struct {
+	Item *llm.FunctionCall
+}
+func (e *FunctionCallRunEvent) RunEventType() string { return "function_call" }
+
+type FunctionCallOutputRunEvent struct {
+	Item *llm.FunctionCallOutput
+}
+func (e *FunctionCallOutputRunEvent) RunEventType() string { return "function_call_output" }
+
+type AgentHandoffRunEvent struct {
+	Item     *llm.AgentHandoff
+	OldAgent AgentInterface
+	NewAgent AgentInterface
+}
+func (e *AgentHandoffRunEvent) RunEventType() string { return "agent_handoff" }
+
 type RunResult struct {
 	ChatCtx   *llm.ChatContext
 	Timeline  []TimelineEvent
 	Timestamp float64
 	Expect    *RunAssert
 
-	mu          sync.Mutex
-	handles     []*SpeechHandle
-	waitCh      chan struct{}
-	done        bool
-	FinalOutput any
-	finalError  error
+	mu           sync.Mutex
+	handles      []*SpeechHandle
+	waitCh       chan struct{}
+	done         bool
+	FinalOutput  any
+	finalError   error
+
+	Events []RunEvent
 }
 
 func NewRunResult(chatCtx *llm.ChatContext) *RunResult {
 	timeline := make([]TimelineEvent, 0)
+	events := make([]RunEvent, 0)
 	if chatCtx != nil {
 		for _, item := range chatCtx.Items {
 			timeline = append(timeline, TimelineEvent{
@@ -36,6 +65,16 @@ func NewRunResult(chatCtx *llm.ChatContext) *RunResult {
 					"id": item.GetID(),
 				},
 			})
+
+			// Capture initial context as events
+			switch v := item.(type) {
+			case *llm.ChatMessage:
+				events = append(events, &ChatMessageRunEvent{Item: v})
+			case *llm.FunctionCall:
+				events = append(events, &FunctionCallRunEvent{Item: v})
+			case *llm.FunctionCallOutput:
+				events = append(events, &FunctionCallOutputRunEvent{Item: v})
+			}
 		}
 	}
 
@@ -46,7 +85,17 @@ func NewRunResult(chatCtx *llm.ChatContext) *RunResult {
 		Expect:    &RunAssert{ChatCtx: chatCtx},
 		handles:   make([]*SpeechHandle, 0),
 		waitCh:    make(chan struct{}),
+		Events:    events,
 	}
+}
+
+func (r *RunResult) AddEvent(ev RunEvent) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.done {
+		return
+	}
+	r.Events = append(r.Events, ev)
 }
 
 func (r *RunResult) WatchHandle(handle *SpeechHandle) {

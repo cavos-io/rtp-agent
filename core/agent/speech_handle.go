@@ -41,6 +41,8 @@ type SpeechHandle struct {
 	FinalOutput any
 	
 	mu sync.Mutex
+	
+	RunResult *RunResult
 }
 
 func NewSpeechHandle(allowInterruptions bool, inputDetails InputDetails) *SpeechHandle {

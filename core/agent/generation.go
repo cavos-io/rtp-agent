@@ -61,6 +61,18 @@ func PerformLLMInference(ctx context.Context, l llm.LLM, chatCtx *llm.ChatContex
 				}
 			}
 		}
+		
+		if data.GeneratedText != "" {
+			if rc := GetRunContext(ctx); rc != nil && rc.SpeechHandle != nil && rc.SpeechHandle.RunResult != nil {
+				rc.SpeechHandle.RunResult.AddEvent(&ChatMessageRunEvent{
+					Item: &llm.ChatMessage{
+						Role:      llm.ChatRoleAssistant,
+						Content:   []llm.ChatContent{{Text: data.GeneratedText}},
+						CreatedAt: time.Now(),
+					},
+				})
+			}
+		}
 
 		for idx, fc := range toolCalls {
 			finalized := finalizeToolCall(fc, idx)
@@ -68,6 +80,19 @@ func PerformLLMInference(ctx context.Context, l llm.LLM, chatCtx *llm.ChatContex
 				continue
 			}
 			data.FunctionCh <- finalized
+			
+			// Capture event in RunResult if attached to SpeechHandle
+			if rc := GetRunContext(ctx); rc != nil && rc.SpeechHandle != nil && rc.SpeechHandle.RunResult != nil {
+				rc.SpeechHandle.RunResult.AddEvent(&FunctionCallRunEvent{
+					Item: &llm.FunctionCall{
+						CallID:    finalized.CallID,
+						Name:      finalized.Name,
+						Arguments: finalized.Arguments,
+						Extra:     finalized.Extra,
+						CreatedAt: time.Now(),
+					},
+				})
+			}
 		}
 	}()
 
@@ -409,6 +434,12 @@ func PerformToolExecutions(
 						IsError:   isError,
 						CreatedAt: time.Now(),
 					}
+				}
+
+				if fncCallOut != nil && rc != nil && rc.SpeechHandle != nil && rc.SpeechHandle.RunResult != nil {
+					rc.SpeechHandle.RunResult.AddEvent(&FunctionCallOutputRunEvent{
+						Item: fncCallOut,
+					})
 				}
 
 				outCh <- ToolExecutionOutput{

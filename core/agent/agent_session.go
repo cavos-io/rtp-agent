@@ -398,6 +398,7 @@ func (s *AgentSession) GenerateReply(ctx context.Context, userInput string) (*Ru
 	// Create run result and watch the new handle
 	runResult := NewRunResult(s.ChatCtx)
 	runResult.WatchHandle(handle)
+	handle.RunResult = runResult
 
 	// Add user message to ChatContext if provided
 	if userInput != "" {
