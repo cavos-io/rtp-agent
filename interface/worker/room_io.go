@@ -655,14 +655,34 @@ func (rio *RoomIO) GetCallback() *lksdk.RoomCallback {
 
 func (rio *RoomIO) SetParticipant(identity string) {
 	rio.mu.Lock()
-	defer rio.mu.Unlock()
+	prevIdentity := rio.participantIdentity
 	rio.participantIdentity = identity
+	rio.mu.Unlock()
+
+	if prevIdentity != "" && prevIdentity != identity {
+		rio.trackContextsMu.Lock()
+		for id, cancel := range rio.trackContexts {
+			cancel()
+			delete(rio.trackContexts, id)
+		}
+		rio.trackContextsMu.Unlock()
+	}
 }
 
 func (rio *RoomIO) UnsetParticipant() {
 	rio.mu.Lock()
-	defer rio.mu.Unlock()
+	prevIdentity := rio.participantIdentity
 	rio.participantIdentity = ""
+	rio.mu.Unlock()
+
+	if prevIdentity != "" {
+		rio.trackContextsMu.Lock()
+		for id, cancel := range rio.trackContexts {
+			cancel()
+			delete(rio.trackContexts, id)
+		}
+		rio.trackContextsMu.Unlock()
+	}
 }
 
 func (rio *RoomIO) onParticipantDisconnected(participant *lksdk.RemoteParticipant) {
