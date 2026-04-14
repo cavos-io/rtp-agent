@@ -230,6 +230,13 @@ func (r *RunResult[T]) Done() <-chan struct{} {
 	return r.waitCh
 }
 
+func (r *RunResult[T]) Eval(ctx context.Context, evaluator evals.Evaluator, llmInstance llm.LLM) (*evals.JudgmentResult, error) {
+	if err := r.Wait(ctx); err != nil {
+		return nil, err
+	}
+	return evaluator.Evaluate(ctx, r.ChatCtx, nil, llmInstance)
+}
+
 type RunAssert struct {
 	ChatCtx *llm.ChatContext
 	errors  []error
