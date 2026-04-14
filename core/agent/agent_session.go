@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"sync"
 	"time"
@@ -16,6 +17,28 @@ import (
 	"github.com/livekit/protocol/livekit"
 	lksdk "github.com/livekit/server-sdk-go/v2"
 )
+
+// sendChatToPlayground tries multiple approaches to get a message
+// into the Playground chat panel. We send all three approaches
+// simultaneously to find out which one the Playground accepts.
+func sendChatToPlayground(room *lksdk.Room, msgID string, text string) {
+	topic := "lk.chat"
+
+	// Approach A: text stream (SendText) — required by @livekit/components-react >= 2.x
+	room.LocalParticipant.SendText(text, lksdk.StreamTextOptions{
+		Topic:    topic,
+		StreamId: &msgID,
+	})
+
+	// Approach B: UserDataPacket + topic "lk.chat" + LiveKit JSON format
+	payload, _ := json.Marshal(map[string]interface{}{
+		"id":        msgID,
+		"message":   text,
+		"timestamp": time.Now().UnixMilli(),
+	})
+	pkt := &lksdk.UserDataPacket{Payload: payload, Topic: topic}
+	_ = room.LocalParticipant.PublishDataPacket(pkt, lksdk.WithDataPublishReliable(true))
+}
 
 type UserState string
 type AgentState string
@@ -304,14 +327,7 @@ func (s *AgentSession) PublishUserTranscript(text string) {
 	}
 
 	now := time.Now()
-	// Chat panel: send as a text stream on topic "lk.chat".
-	// @livekit/components-react >= 2.x uses room.registerTextStreamHandler("lk.chat").
-	// Content must be the plain message text; id/timestamp come from the stream header.
-	usrMsgID := fmt.Sprintf("usr-%d", now.UnixNano())
-	room.LocalParticipant.SendText(text, lksdk.StreamTextOptions{
-		Topic:    "lk.chat",
-		StreamId: &usrMsgID,
-	})
+	sendChatToPlayground(room, fmt.Sprintf("usr-%d", now.UnixNano()), text)
 
 	// Transcription packet — displayed as real-time subtitle overlay.
 	nowMs := uint64(now.UnixMilli())
@@ -350,13 +366,7 @@ func (s *AgentSession) PublishAgentTranscript(text string) {
 
 	agentIdentity := room.LocalParticipant.Identity()
 	now := time.Now()
-
-	// Chat panel: send as a text stream on topic "lk.chat".
-	agtMsgID := fmt.Sprintf("agt-%d", now.UnixNano())
-	room.LocalParticipant.SendText(text, lksdk.StreamTextOptions{
-		Topic:    "lk.chat",
-		StreamId: &agtMsgID,
-	})
+	sendChatToPlayground(room, fmt.Sprintf("agt-%d", now.UnixNano()), text)
 
 	// Transcription packet — displayed as real-time subtitle overlay.
 	nowMs := uint64(now.UnixMilli())
