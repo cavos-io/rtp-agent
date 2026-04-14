@@ -39,7 +39,7 @@ type UserInputTranscribedEvent struct {
 
 // IVRSession interface defines the methods needed by IVRActivity from AgentSession
 type IVRSession interface {
-	GenerateReply(ctx context.Context, userInput string) (any, error)
+	GenerateReply(ctx context.Context, userInput string, allowInterruptions bool) (any, error)
 	GetDataPublisher() DataPublisher
 }
 
@@ -147,6 +147,7 @@ type IVRActivity struct {
 	currentAgentState AgentState
 
 	silenceTimer *time.Timer
+	lastShouldScheduleCheck bool
 	mu           sync.Mutex
 }
 
@@ -183,7 +184,7 @@ func (i *IVRActivity) OnUserInputTranscribed(ev *UserInputTranscribedEvent) {
 
 	if i.loopDetector.CheckLoopDetection() {
 		logger.Logger.Debugw("IVRActivity: speech loop detected; sending notification")
-		_, _ = i.session.GenerateReply(context.Background(), "")
+		_, _ = i.session.GenerateReply(context.Background(), "", false)
 		i.loopDetector.Reset()
 	}
 }
@@ -202,21 +203,22 @@ func (i *IVRActivity) OnAgentStateChanged(oldState, newState AgentState) {
 	i.scheduleSilenceCheck()
 }
 
-func (i *IVRActivity) shouldScheduleCheck() bool {
-	i.mu.Lock()
-	defer i.mu.Unlock()
+func (i *IVRActivity) shouldScheduleCheckLocked() bool {
 	isUserSilent := i.currentUserState == UserStateListening || i.currentUserState == UserStateAway
 	isAgentSilent := i.currentAgentState == AgentStateIdle || i.currentAgentState == AgentStateListening
 	return isUserSilent && isAgentSilent
 }
 
 func (i *IVRActivity) scheduleSilenceCheck() {
-	shouldSchedule := i.shouldScheduleCheck()
-
 	i.mu.Lock()
 	defer i.mu.Unlock()
 
+	shouldSchedule := i.shouldScheduleCheckLocked()
+
 	if shouldSchedule {
+		if i.lastShouldScheduleCheck {
+			return
+		}
 		if i.silenceTimer == nil {
 			i.silenceTimer = time.AfterFunc(i.maxSilenceDuration, i.onSilenceDetected)
 		} else {
@@ -228,11 +230,12 @@ func (i *IVRActivity) scheduleSilenceCheck() {
 			i.silenceTimer = nil
 		}
 	}
+	i.lastShouldScheduleCheck = shouldSchedule
 }
 
 func (i *IVRActivity) onSilenceDetected() {
 	logger.Logger.Debugw("IVRActivity: silence detected; sending notification")
-	_, _ = i.session.GenerateReply(context.Background(), "")
+	_, _ = i.session.GenerateReply(context.Background(), "", true)
 }
 
 // SendDTMFTool implementation (mirrored from beta tools to avoid cycle)
