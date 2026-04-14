@@ -146,91 +146,74 @@ type AgentEvent struct {
 	Type      string  `json:"type"`
 	Timestamp float64 `json:"timestamp"`
 
-	EventData Event `json:"-"`
+	UserStateChanged       *UserStateChangedEvent       `json:"user_state_changed,omitempty"`
+	AgentStateChanged       *AgentStateChangedEvent       `json:"agent_state_changed,omitempty"`
+	UserInputTranscribed    *UserInputTranscribedEvent    `json:"user_input_transcribed,omitempty"`
+	AgentFalseInterruption   *AgentFalseInterruptionEvent   `json:"agent_false_interruption,omitempty"`
+	MetricsCollected        *MetricsCollectedEvent        `json:"metrics_collected,omitempty"`
+	ConversationItemAdded    *ConversationItemAddedEvent    `json:"conversation_item_added,omitempty"`
+	FunctionToolsExecuted    *FunctionToolsExecutedEvent    `json:"function_tools_executed,omitempty"`
+	AgentHandoff            *AgentHandoffEvent            `json:"agent_handoff,omitempty"`
+	SpeechCreated           *SpeechCreatedEvent           `json:"speech_created,omitempty"`
+	Error                   *ErrorEvent                   `json:"error,omitempty"`
+	Close                   *CloseEvent                   `json:"close,omitempty"`
 }
 
 func (ae *AgentEvent) MarshalJSON() ([]byte, error) {
-	// First, marshal the inner event data
-	var innerBytes []byte
-	var err error
-	if ae.EventData != nil {
-		innerBytes, err = json.Marshal(ae.EventData)
-		if err != nil {
-			return nil, err
-		}
-	} else {
-		innerBytes = []byte("{}")
-	}
-
-	// Parse into a map
-	var m map[string]any
-	if err := json.Unmarshal(innerBytes, &m); err != nil {
-		return nil, err
-	}
-
-	// Inject the base fields
-	m["type"] = ae.Type
-	m["timestamp"] = ae.Timestamp
-
-	return json.Marshal(m)
+	type Alias AgentEvent
+	return json.Marshal(&struct {
+		*Alias
+	}{
+		Alias: (*Alias)(ae),
+	})
 }
 
 func (ae *AgentEvent) UnmarshalJSON(data []byte) error {
-	var m map[string]any
-	if err := json.Unmarshal(data, &m); err != nil {
+	type Alias AgentEvent
+	aux := &struct {
+		*Alias
+	}{
+		Alias: (*Alias)(ae),
+	}
+	if err := json.Unmarshal(data, &aux); err != nil {
 		return err
 	}
 
-	typ, ok := m["type"].(string)
-	if !ok {
-		return fmt.Errorf("missing or invalid type field in AgentEvent")
-	}
-	ae.Type = typ
-
-	ts, _ := m["timestamp"].(float64)
-	ae.Timestamp = ts
-
-	var ev Event
-	switch typ {
-	case "user_state_changed":
-		ev = &UserStateChangedEvent{}
-	case "agent_state_changed":
-		ev = &AgentStateChangedEvent{}
-	case "user_input_transcribed":
-		ev = &UserInputTranscribedEvent{}
-	case "agent_false_interruption":
-		ev = &AgentFalseInterruptionEvent{}
-	case "metrics_collected":
-		ev = &MetricsCollectedEvent{}
-	case "conversation_item_added":
-		ev = &ConversationItemAddedEvent{}
-	case "function_tools_executed":
-		ev = &FunctionToolsExecutedEvent{}
-	case "agent_handoff":
-		ev = &AgentHandoffEvent{}
-	case "speech_created":
-		ev = &SpeechCreatedEvent{}
-	case "error":
-		ev = &ErrorEvent{}
-	case "close":
-		ev = &CloseEvent{}
-	default:
-		return fmt.Errorf("unknown event type: %s", typ)
-	}
-
-	if err := json.Unmarshal(data, ev); err != nil {
-		return err
-	}
-	ae.EventData = ev
+	// Also populate EventData for internal use if needed, or just rely on the pointers.
+	// For parity, the pointers are enough and more Go-idiomatic for sum types.
 	return nil
 }
 
 func NewAgentEvent(ev Event) *AgentEvent {
-	return &AgentEvent{
+	ae := &AgentEvent{
 		Type:      ev.GetType(),
 		Timestamp: float64(time.Now().UnixNano()) / 1e9,
-		EventData: ev,
 	}
+	switch v := ev.(type) {
+	case *UserStateChangedEvent:
+		ae.UserStateChanged = v
+	case *AgentStateChangedEvent:
+		ae.AgentStateChanged = v
+	case *UserInputTranscribedEvent:
+		ae.UserInputTranscribed = v
+	case *AgentFalseInterruptionEvent:
+		ae.AgentFalseInterruption = v
+	case *MetricsCollectedEvent:
+		ae.MetricsCollected = v
+	case *ConversationItemAddedEvent:
+		ae.ConversationItemAdded = v
+	case *FunctionToolsExecutedEvent:
+		ae.FunctionToolsExecuted = v
+	case *AgentHandoffEvent:
+		ae.AgentHandoff = v
+	case *SpeechCreatedEvent:
+		ae.SpeechCreated = v
+	case *ErrorEvent:
+		ae.Error = v
+	case *CloseEvent:
+		ae.Close = v
+	}
+	return ae
 }
 
 type EventTimeline struct {
