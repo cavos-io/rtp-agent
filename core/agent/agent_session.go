@@ -11,7 +11,6 @@ import (
 	"github.com/cavos-io/conversation-worker/core/vad"
 	"github.com/cavos-io/conversation-worker/library/logger"
 	"github.com/cavos-io/conversation-worker/library/telemetry"
-	"github.com/cavos-io/conversation-worker/model"
 	lksdk "github.com/livekit/server-sdk-go/v2"
 )
 
@@ -60,6 +59,9 @@ type AgentSession struct {
 	Assistant *PipelineAgent
 	Room      *lksdk.Room
 
+	Input  AgentInput
+	Output AgentOutput
+
 	MetricsCollector *telemetry.UsageCollector
 
 	UserState  UserState
@@ -72,16 +74,6 @@ type AgentSession struct {
 	// Event channels
 	AgentStateChangedCh chan AgentStateChangedEvent
 	UserStateChangedCh  chan UserStateChangedEvent
-}
-
-func (s *AgentSession) OnAudioFrame(ctx context.Context, frame *model.AudioFrame) {
-	s.mu.Lock()
-	assistant := s.Assistant
-	s.mu.Unlock()
-
-	if assistant != nil {
-		assistant.OnAudioFrame(ctx, frame)
-	}
 }
 
 type AgentStateChangedEvent struct {
@@ -133,7 +125,7 @@ func (s *AgentSession) Start(ctx context.Context) error {
 
 	s.activity = NewAgentActivity(s.Agent, s)
 	s.activity.Start()
-	
+
 	// Trigger periodic usage metrics reporting
 	if s.MetricsCollector != nil {
 		go s.reportUsageLoop(ctx)
@@ -214,7 +206,7 @@ func (s *AgentSession) GenerateReply(ctx context.Context, userInput string) erro
 
 	// Create a speech handle
 	handle := NewSpeechHandle(s.Options.AllowInterruptions, DefaultInputDetails())
-	
+
 	// Add user message to ChatContext if provided
 	if userInput != "" {
 		s.ChatCtx.Append(&llm.ChatMessage{

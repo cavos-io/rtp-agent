@@ -165,6 +165,35 @@ func (a *AudioIO) receiveLoop() {
 	}
 }
 
+// --- agent.AudioInput Implementation ---
+func (a *AudioIO) Label() string {
+	return "ConsoleAudioIO"
+}
+
+func (a *AudioIO) Stream() <-chan *model.AudioFrame {
+	return a.audioOutCh
+}
+
+func (a *AudioIO) OnAttached() {}
+func (a *AudioIO) OnDetached() {}
+
+// --- agent.AudioOutput Implementation ---
+func (a *AudioIO) CaptureFrame(frame *model.AudioFrame) error {
+	a.PushFrame(frame)
+	return nil
+}
+
+func (a *AudioIO) Flush() {}
+
+func (a *AudioIO) ClearBuffer() {
+	a.mu.Lock()
+	a.speakerBuffer = a.speakerBuffer[:0]
+	a.mu.Unlock()
+}
+
+func (a *AudioIO) Pause() {}
+func (a *AudioIO) Resume() {}
+
 // Write for pipe integration
 func (a *AudioIO) Write(frame *model.AudioFrame) error {
 	select {

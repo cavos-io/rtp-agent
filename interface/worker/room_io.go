@@ -3,6 +3,7 @@ package worker
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"sync"
 	"time"
@@ -49,7 +50,7 @@ func (d *opusDecoder) Decode(data []byte) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	
+
 	// Convert int16 slice to byte slice
 	out := make([]byte, n*2) // Assuming 1 channel for now, multiply by channels if needed
 	for i := 0; i < n; i++ {
@@ -90,7 +91,7 @@ func (e *opusEncoder) Encode(pcm []byte) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	
+
 	out := make([]byte, n)
 	copy(out, e.buf[:n])
 	return out, nil
@@ -117,6 +118,7 @@ type RoomIO struct {
 	encoder    AudioEncoder
 
 	preConnectAudio *PreConnectAudioHandler
+	audioInCh       chan *model.AudioFrame
 }
 
 func NewRoomIO(room *lksdk.Room, session *agent.AgentSession, opts RoomOptions) *RoomIO {
@@ -134,15 +136,66 @@ func NewRoomIO(room *lksdk.Room, session *agent.AgentSession, opts RoomOptions) 
 		encoder:         enc,
 		Recorder:        NewRecorderIO(session),
 		preConnectAudio: preConnectAudio,
+		audioInCh:       make(chan *model.AudioFrame, 100),
 	}
 
 	if session.Assistant == nil {
 		session.Assistant = agent.NewPipelineAgent(session.VAD, session.STT, session.LLM, session.TTS, session.ChatCtx)
 	}
-	session.Assistant.PublishAudio = rio.PublishAudio
+
+	session.Input.Audio = rio
+	session.Output.Audio = rio
 
 	return rio
 }
+
+// --- agent.AudioInput Implementation ---
+func (rio *RoomIO) Label() string {
+	return "RoomAudioIO"
+}
+
+func (rio *RoomIO) Stream() <-chan *model.AudioFrame {
+	return rio.audioInCh
+}
+
+func (rio *RoomIO) OnAttached() {}
+func (rio *RoomIO) OnDetached() {}
+
+// --- agent.AudioOutput Implementation ---
+func (rio *RoomIO) CaptureFrame(frame *model.AudioFrame) error {
+	if rio.Recorder != nil {
+		rio.Recorder.RecordOutput(frame)
+	}
+
+	rio.mu.Lock()
+	track := rio.audioTrack
+	encoder := rio.encoder
+	rio.mu.Unlock()
+
+	if track == nil {
+		return fmt.Errorf("no audio track")
+	}
+
+	data := frame.Data
+	if encoder != nil {
+		if encoded, err := encoder.Encode(frame.Data); err == nil {
+			data = encoded
+		}
+	}
+
+	// Calculate duration based on sample rate and samples
+	duration := time.Duration(frame.SamplesPerChannel) * time.Second / time.Duration(frame.SampleRate)
+
+	return track.WriteSample(media.Sample{
+		Data:     data,
+		Duration: duration,
+	}, nil)
+}
+
+func (rio *RoomIO) Flush()       {}
+func (rio *RoomIO) ClearBuffer() {}
+func (rio *RoomIO) Pause()       {}
+func (rio *RoomIO) Resume()      {}
 
 func (rio *RoomIO) GetCallback() *lksdk.RoomCallback {
 	cb := lksdk.NewRoomCallback()
@@ -181,13 +234,13 @@ func (rio *RoomIO) handleAudioTrack(track *webrtc.TrackRemote) {
 	// First, check for and flush any pre-connect audio buffered
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
-	
+
 	if frames := rio.preConnectAudio.WaitForData(ctx, track.ID()); len(frames) > 0 {
 		for _, frame := range frames {
 			if rio.Recorder != nil {
 				rio.Recorder.RecordInput(frame)
 			}
-			rio.AgentSession.OnAudioFrame(context.Background(), frame)
+			rio.audioInCh <- frame
 		}
 	}
 
@@ -229,43 +282,13 @@ func (rio *RoomIO) handleAudioTrack(track *webrtc.TrackRemote) {
 				NumChannels:       1, // We decode to mono for simplicity
 				SamplesPerChannel: uint32(len(pcm) / 2),
 			}
-			
+
 			if rio.Recorder != nil {
 				rio.Recorder.RecordInput(frame)
 			}
-			rio.AgentSession.OnAudioFrame(context.Background(), frame)
+			rio.audioInCh <- frame
 		}
 	}
-}
-
-func (rio *RoomIO) PublishAudio(frame *model.AudioFrame) error {
-	if rio.Recorder != nil {
-		rio.Recorder.RecordOutput(frame)
-	}
-
-	rio.mu.Lock()
-	track := rio.audioTrack
-	encoder := rio.encoder
-	rio.mu.Unlock()
-
-	if track == nil {
-		return nil
-	}
-
-	data := frame.Data
-	if encoder != nil {
-		if encoded, err := encoder.Encode(frame.Data); err == nil {
-			data = encoded
-		}
-	}
-
-	// Calculate duration based on sample rate and samples
-	duration := time.Duration(frame.SamplesPerChannel) * time.Second / time.Duration(frame.SampleRate)
-
-	return track.WriteSample(media.Sample{
-		Data:     data,
-		Duration: duration,
-	}, nil)
 }
 
 func (rio *RoomIO) Close() error {

@@ -21,14 +21,11 @@ type PipelineAgent struct {
 	tts     tts.TTS
 	chatCtx *llm.ChatContext
 
-	audioInCh chan *model.AudioFrame
 	mu        sync.Mutex
 	session   *AgentSession
 
 	ctx    context.Context
 	cancel context.CancelFunc
-
-	PublishAudio func(frame *model.AudioFrame) error
 }
 
 func NewPipelineAgent(
@@ -48,7 +45,6 @@ func NewPipelineAgent(
 		LLM:       llmObj,
 		tts:       tts,
 		chatCtx:   chatCtx,
-		audioInCh: make(chan *model.AudioFrame, 100),
 		ctx:       ctx,
 		cancel:    cancel,
 	}
@@ -81,13 +77,27 @@ func (va *PipelineAgent) run(ctx context.Context) {
 	go va.vadLoop(vadStream)
 	go va.sttLoop(sttStream)
 
+	var audioStream <-chan *model.AudioFrame
+	if va.session != nil && va.session.Input.Audio != nil {
+		audioStream = va.session.Input.Audio.Stream()
+	} else {
+		logger.Logger.Warnw("AgentInput Audio not configured for pipeline agent", nil)
+	}
+
 	for {
 		select {
 		case <-ctx.Done():
 			return
-		case frame := <-va.audioInCh:
-			_ = vadStream.PushFrame(frame)
-			_ = sttStream.PushFrame(frame)
+		case frame, ok := <-audioStream:
+			if !ok {
+				return
+			}
+			if vadStream != nil {
+				_ = vadStream.PushFrame(frame)
+			}
+			if sttStream != nil {
+				_ = sttStream.PushFrame(frame)
+			}
 		}
 	}
 }
@@ -189,8 +199,8 @@ func (va *PipelineAgent) generateReply() {
 				case <-ctx.Done():
 					return
 				default:
-					if va.PublishAudio != nil {
-						_ = va.PublishAudio(frame)
+					if session.Output.Audio != nil {
+						_ = session.Output.Audio.CaptureFrame(frame)
 					}
 				}
 			}
@@ -214,12 +224,5 @@ func (va *PipelineAgent) generateReply() {
 			break
 		}
 		// Loop back to LLM with tool outputs
-	}
-}
-
-func (va *PipelineAgent) OnAudioFrame(ctx context.Context, frame *model.AudioFrame) {
-	select {
-	case va.audioInCh <- frame:
-	default:
 	}
 }

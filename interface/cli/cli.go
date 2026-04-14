@@ -6,8 +6,12 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
+
+	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/cavos-io/conversation-worker/core/agent"
+	"github.com/cavos-io/conversation-worker/interface/cli/console"
 	"github.com/cavos-io/conversation-worker/interface/worker"
 	"github.com/cavos-io/conversation-worker/library/logger"
 )
@@ -103,10 +107,30 @@ func runConnect(server *worker.AgentServer) {
 
 func runConsole(server *worker.AgentServer) {
 	fmt.Println("Starting console mode 🚀")
-	fmt.Println("Type your message and press Enter to talk to the agent. Press Ctrl+C to exit.")
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+
+	audioIO := console.NewAudioIO()
+	if err := audioIO.Start(ctx); err != nil {
+		logger.Logger.Errorw("Failed to start local audio", err)
+		return
+	}
+	defer audioIO.Stop()
+
+	go func() {
+		// Wait for session to be registered
+		for i := 0; i < 50; i++ {
+			if s := server.GetConsoleSession(); s != nil {
+				if agentSession, ok := s.(*agent.AgentSession); ok {
+					agentSession.Input.Audio = audioIO
+					agentSession.Output.Audio = audioIO
+					break
+				}
+			}
+			time.Sleep(100 * time.Millisecond)
+		}
+	}()
 
 	go func() {
 		if err := server.ExecuteLocalJob(ctx, "console-room", "console-user"); err != nil {
@@ -115,36 +139,11 @@ func runConsole(server *worker.AgentServer) {
 		}
 	}()
 
-	// Console read loop
-	go func() {
-		var input string
-		for {
-			fmt.Print("❯ ")
-			_, err := fmt.Scanln(&input)
-			if err != nil {
-				break
-			}
-			if input != "" {
-				logger.Logger.Infow("User input received", "input", input)
-				if session := server.GetConsoleSession(); session != nil {
-					// We use type assertion via a local interface to avoid tight coupling if preferred,
-					// or we can just rely on the entrypoint to handle console input if we set a callback.
-					// Since Go's type system requires knowing the type, we define an interface here.
-					type ReplyGenerator interface {
-						GenerateReply(ctx context.Context, userInput string) error
-					}
-					if rg, ok := session.(ReplyGenerator); ok {
-						if err := rg.GenerateReply(context.Background(), input); err != nil {
-							logger.Logger.Errorw("Failed to generate reply", err)
-						}
-					} else {
-						logger.Logger.Warnw("Active session does not support text input", nil)
-					}
-				}
-			}
-		}
-	}()
+	m := console.NewConsoleModel(ctx, audioIO)
+	p := tea.NewProgram(m, tea.WithAltScreen())
 
-	<-ctx.Done()
+	if _, err := p.Run(); err != nil {
+		fmt.Printf("Alas, there's been an error: %v", err)
+		os.Exit(1)
+	}
 }
-
