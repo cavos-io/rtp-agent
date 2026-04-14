@@ -2,132 +2,155 @@ package tts
 
 import (
 	"context"
-	"fmt"
-
-	"github.com/cavos-io/conversation-worker/library/tokenize"
+	"strings"
+	"sync"
 )
 
 type StreamAdapter struct {
 	tts TTS
 }
 
-func NewStreamAdapter(t TTS) *StreamAdapter {
-	return &StreamAdapter{
-		tts: t,
+func NewStreamAdapter(tts TTS) *StreamAdapter {
+	return &StreamAdapter{tts: tts}
+}
+
+func (s *StreamAdapter) Label() string {
+	return "stream_adapter(" + s.tts.Label() + ")"
+}
+
+func (s *StreamAdapter) Capabilities() TTSCapabilities {
+	return TTSCapabilities{
+		Streaming:         true,
+		AlignedTranscript: false,
 	}
 }
 
-func (a *StreamAdapter) Label() string {
-	return fmt.Sprintf("StreamAdapter(%s)", a.tts.Label())
+func (s *StreamAdapter) SampleRate() int {
+	return s.tts.SampleRate()
 }
 
-func (a *StreamAdapter) Capabilities() TTSCapabilities {
-	return TTSCapabilities{Streaming: true, AlignedTranscript: true}
+func (s *StreamAdapter) NumChannels() int {
+	return s.tts.NumChannels()
 }
 
-func (a *StreamAdapter) SampleRate() int {
-	return a.tts.SampleRate()
+func (s *StreamAdapter) Synthesize(ctx context.Context, text string) (ChunkedStream, error) {
+	return s.tts.Synthesize(ctx, text)
 }
 
-func (a *StreamAdapter) NumChannels() int {
-	return a.tts.NumChannels()
-}
-
-func (a *StreamAdapter) Synthesize(ctx context.Context, text string) (ChunkedStream, error) {
-	return a.tts.Synthesize(ctx, text)
+func (s *StreamAdapter) Stream(ctx context.Context) (SynthesizeStream, error) {
+	wrapper := &streamAdapterWrapper{
+		adapter: s,
+		ctx:     ctx,
+		events:  make(chan *SynthesizedAudio, 100),
+	}
+	return wrapper, nil
 }
 
 type streamAdapterWrapper struct {
 	adapter *StreamAdapter
 	ctx     context.Context
-	cancel  context.CancelFunc
-	eventCh chan *SynthesizedAudio
-	textCh  chan string
-}
 
-func (a *StreamAdapter) Stream(ctx context.Context) (SynthesizeStream, error) {
-	ctx, cancel := context.WithCancel(ctx)
-	w := &streamAdapterWrapper{
-		adapter: a,
-		ctx:     ctx,
-		cancel:  cancel,
-		eventCh: make(chan *SynthesizedAudio, 100),
-		textCh:  make(chan string, 100),
-	}
+	textBuffer string
+	mu         sync.Mutex
 
-	go w.run()
-	return w, nil
-}
-
-func (w *streamAdapterWrapper) run() {
-	defer close(w.eventCh)
-
-	tokenizer := tokenize.NewBasicSentenceTokenizer().Stream("en")
-
-	// Stream text to tokenizer
-	go func() {
-		for {
-			select {
-			case <-w.ctx.Done():
-				return
-			case text, ok := <-w.textCh:
-				if !ok {
-					tokenizer.Flush()
-					tokenizer.Close()
-					return
-				}
-				tokenizer.PushText(text)
-			}
-		}
-	}()
-
-	// Read sentences and synthesize
-	for {
-		tok, err := tokenizer.Next()
-		if err != nil {
-			break
-		}
-		if tok.Token != "" {
-			w.synthesize(tok.Token)
-		}
-	}
-}
-
-func (w *streamAdapterWrapper) synthesize(text string) {
-	stream, err := w.adapter.tts.Synthesize(w.ctx, text)
-	if err != nil {
-		return
-	}
-	defer stream.Close()
-
-	for {
-		audio, err := stream.Next()
-		if err != nil {
-			break
-		}
-		w.eventCh <- audio
-	}
+	events chan *SynthesizedAudio
+	closed bool
 }
 
 func (w *streamAdapterWrapper) PushText(text string) error {
-	w.textCh <- text
+	w.mu.Lock()
+	defer w.mu.Unlock()
+
+	w.textBuffer += text
+
+	if strings.ContainsAny(text, ".!?\n") {
+		sentences := splitSentences(w.textBuffer)
+		if len(sentences) > 0 {
+			lastChar := w.textBuffer[len(w.textBuffer)-1]
+			hasPunctuation := lastChar == '.' || lastChar == '!' || lastChar == '?' || lastChar == '\n'
+
+			if !hasPunctuation {
+				w.textBuffer = sentences[len(sentences)-1]
+				sentences = sentences[:len(sentences)-1]
+			} else {
+				w.textBuffer = ""
+			}
+
+			for _, sentence := range sentences {
+				sentence = strings.TrimSpace(sentence)
+				if sentence != "" {
+					go w.synthesize(sentence)
+				}
+			}
+		}
+	}
 	return nil
 }
 
+func (w *streamAdapterWrapper) synthesize(text string) {
+	chunked, err := w.adapter.tts.Synthesize(w.ctx, text)
+	if err != nil {
+		return
+	}
+	defer chunked.Close()
+
+	for {
+		audio, err := chunked.Next()
+		if err != nil || audio == nil {
+			break
+		}
+		w.events <- audio
+	}
+}
+
 func (w *streamAdapterWrapper) Flush() error {
+	w.mu.Lock()
+	text := strings.TrimSpace(w.textBuffer)
+	w.textBuffer = ""
+	w.mu.Unlock()
+
+	if text != "" {
+		w.synthesize(text)
+	}
 	return nil
 }
 
 func (w *streamAdapterWrapper) Close() error {
-	w.cancel()
-	close(w.textCh)
+	w.mu.Lock()
+	if w.closed {
+		w.mu.Unlock()
+		return nil
+	}
+	w.closed = true
+	w.mu.Unlock()
+	close(w.events)
 	return nil
 }
 
 func (w *streamAdapterWrapper) Next() (*SynthesizedAudio, error) {
-	ev, ok := <-w.eventCh
-	if !ok {
-		return nil, context.Canceled
+	select {
+	case <-w.ctx.Done():
+		return nil, w.ctx.Err()
+	case ev, ok := <-w.events:
+		if !ok {
+			return nil, context.Canceled
+		}
+		return ev, nil
 	}
-	return ev, nil
+}
+
+func splitSentences(text string) []string {
+	var sentences []string
+	var current strings.Builder
+	for _, char := range text {
+		current.WriteRune(char)
+		if char == '.' || char == '!' || char == '?' || char == '\n' {
+			sentences = append(sentences, current.String())
+			current.Reset()
+		}
+	}
+	if current.Len() > 0 {
+		sentences = append(sentences, current.String())
+	}
+	return sentences
 }

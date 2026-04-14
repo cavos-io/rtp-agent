@@ -28,11 +28,13 @@ func (v *SimpleVAD) Stream(ctx context.Context) (VADStream, error) {
 }
 
 type simpleVADStream struct {
-	ctx       context.Context
-	threshold float64
-	events    chan *VADEvent
-	speaking  bool
-	mu        sync.Mutex
+	ctx           context.Context
+	threshold     float64
+	events        chan *VADEvent
+	speaking      bool
+	silenceFrames int
+	buffered      []*model.AudioFrame
+	mu            sync.Mutex
 }
 
 func (s *simpleVADStream) PushFrame(frame *model.AudioFrame) error {
@@ -52,15 +54,34 @@ func (s *simpleVADStream) PushFrame(frame *model.AudioFrame) error {
 	}
 	rms := math.Sqrt(sum / float64(len(frame.Data)/2))
 
+	if s.speaking {
+		s.buffered = append(s.buffered, frame)
+	}
+
 	if rms > s.threshold {
+		s.silenceFrames = 0
 		if !s.speaking {
 			s.speaking = true
+			s.buffered = append(s.buffered, frame)
 			s.events <- &VADEvent{Type: VADEventStartOfSpeech, Speaking: true}
 		}
 	} else {
 		if s.speaking {
-			s.speaking = false
-			s.events <- &VADEvent{Type: VADEventEndOfSpeech, Speaking: false}
+			s.silenceFrames++
+			if s.silenceFrames > 25 { // ~500ms at 20ms per frame
+				s.speaking = false
+				s.silenceFrames = 0
+
+				frames := make([]*model.AudioFrame, len(s.buffered))
+				copy(frames, s.buffered)
+				s.buffered = nil
+
+				s.events <- &VADEvent{
+					Type:     VADEventEndOfSpeech,
+					Speaking: false,
+					Frames:   frames,
+				}
+			}
 		}
 	}
 

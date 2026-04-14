@@ -30,20 +30,29 @@ type PipelineAgent struct {
 
 func NewPipelineAgent(
 	vad vad.VAD,
-	stt stt.STT,
+	sttInstance stt.STT,
 	llmObj llm.LLM,
-	tts tts.TTS,
+	ttsInstance tts.TTS,
 	chatCtx *llm.ChatContext,
 ) *PipelineAgent {
 	if chatCtx == nil {
 		chatCtx = llm.NewChatContext()
 	}
+
+	if sttInstance != nil && !sttInstance.Capabilities().Streaming {
+		sttInstance = stt.NewStreamAdapter(sttInstance, vad)
+	}
+
+	if ttsInstance != nil && !ttsInstance.Capabilities().Streaming {
+		ttsInstance = tts.NewStreamAdapter(ttsInstance)
+	}
+
 	ctx, cancel := context.WithCancel(context.Background())
 	return &PipelineAgent{
 		vad:       vad,
-		stt:       stt,
+		stt:       sttInstance,
 		LLM:       llmObj,
-		tts:       tts,
+		tts:       ttsInstance,
 		chatCtx:   chatCtx,
 		ctx:       ctx,
 		cancel:    cancel,
