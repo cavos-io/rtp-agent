@@ -16,6 +16,8 @@ import (
 
 type EndOfTurnInfo struct {
 	SkipReply            bool
+	TranscriptTimeout    time.Duration
+	STTFlushDuration     time.Duration
 	NewTranscript        string
 	TranscriptConfidence float64
 	StartedSpeakingAt    *float64
@@ -41,8 +43,10 @@ type AgentActivity struct {
 	speaking          bool
 	pausedSpeech      *SpeechHandle
 	discardUserTurn   bool
+	userTurnCommitted bool
+	endOfTurnActive   bool
 	lastSpeechEndedAt time.Time
-
+	
 	ctx    context.Context
 	cancel context.CancelFunc
 
@@ -58,6 +62,11 @@ type AgentActivity struct {
 	audioInterimTranscript string
 	transcriptMu           sync.Mutex
 	finalTranscriptCond    *sync.Cond
+
+	speechWg sync.WaitGroup
+	loopWg   sync.WaitGroup
+
+	videoNodeCh chan *model.VideoFrame
 }
 
 func NewAgentActivity(agentIntf AgentInterface, session *AgentSession) *AgentActivity {
@@ -70,6 +79,7 @@ func NewAgentActivity(agentIntf AgentInterface, session *AgentSession) *AgentAct
 		queueUpdatedCh: make(chan struct{}, 1),
 		ctx:            ctx,
 		cancel:         cancel,
+		videoNodeCh:    make(chan *model.VideoFrame, 100),
 	}
 	act.finalTranscriptCond = sync.NewCond(&act.transcriptMu)
 
@@ -93,15 +103,52 @@ func (a *AgentActivity) Start() {
 	}
 	a.Session.UpdateUserState(UserStateListening)
 	a.startUserAwayTimer(a.Session.Options.UserAwayTimeout)
-	go a.schedulingTask()
+	
+	a.loopWg.Add(1)
+	go func() {
+		defer a.loopWg.Done()
+		a.schedulingTask()
+	}()
+
+	if a.Agent != nil && a.Agent.VideoNode != nil {
+		a.loopWg.Add(1)
+		go func() {
+			defer a.loopWg.Done()
+			if err := a.Agent.VideoNode(a.ctx, a.videoNodeCh); err != nil {
+				logger.Logger.Errorw("failed to run VideoNode", err)
+			}
+		}()
+	}
 }
 
 func (a *AgentActivity) Stop() {
-	a.PauseScheduling()
+	_ = a.Drain(context.Background())
+	a.AClose()
+}
+
+func (a *AgentActivity) Drain(ctx context.Context) error {
 	a.AgentIntf.OnExit()
+	a.PauseScheduling()
+
+	done := make(chan struct{})
+	go func() {
+		a.speechWg.Wait()
+		close(done)
+	}()
+
+	select {
+	case <-done:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+func (a *AgentActivity) AClose() {
+	a.cancel()
 	a.cancelFalseInterruptionTimer()
 	a.cancelUserAwayTimer()
-	a.cancel()
+	a.loopWg.Wait()
 }
 
 func (a *AgentActivity) PauseScheduling() {
@@ -124,33 +171,20 @@ func (a *AgentActivity) ResumeScheduling() {
 	}
 }
 
-func (a *AgentActivity) Drain(ctx context.Context) error {
-	ticker := time.NewTicker(20 * time.Millisecond)
-	defer ticker.Stop()
-
-	for {
-		a.queueMu.Lock()
-		pending := a.currentSpeech != nil || len(a.speechQueue) > 0 || a.pausedSpeech != nil
-		a.queueMu.Unlock()
-		if !pending {
-			return nil
-		}
-
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-a.ctx.Done():
-			return a.ctx.Err()
-		case <-ticker.C:
-		}
-	}
-}
-
 func (a *AgentActivity) PushAudio(frame *model.AudioFrame) error {
 	if a.recog == nil {
 		return nil
 	}
 	return a.recog.PushAudio(frame)
+}
+
+func (a *AgentActivity) PushVideo(frame *model.VideoFrame) error {
+	select {
+	case a.videoNodeCh <- frame:
+	default:
+		// channel full, drop frame
+	}
+	return nil
 }
 
 func (a *AgentActivity) ScheduleSpeech(speech *SpeechHandle, priority int, force bool) error {
@@ -230,7 +264,10 @@ func (a *AgentActivity) processQueue() {
 	a.currentSpeech = speech
 
 	// Run speech completion asynchronously
+	a.speechWg.Add(1)
 	go func() {
+		defer a.speechWg.Done()
+		
 		// Trigger the pipeline agent to process the speech request
 		if a.Session.Assistant != nil {
 			a.Session.Assistant.GenerateReply(speech)
@@ -368,7 +405,23 @@ func (a *AgentActivity) OnEndOfSpeech(ev *vad.VADEvent) {
 	}
 }
 
+func (a *AgentActivity) shouldIgnoreSTTEvent(isInterim bool) bool {
+	a.transcriptMu.Lock()
+	defer a.transcriptMu.Unlock()
+	
+	if a.Agent.TurnDetection == TurnDetectionModeManual && a.userTurnCommitted {
+		if !a.endOfTurnActive || isInterim {
+			return true
+		}
+	}
+	return false
+}
+
 func (a *AgentActivity) OnInterimTranscript(ev *stt.SpeechEvent) {
+	if a.shouldIgnoreSTTEvent(true) {
+		return
+	}
+
 	if len(ev.Alternatives) > 0 {
 		transcript := ev.Alternatives[0].Text
 		if transcript != "" {
@@ -380,6 +433,10 @@ func (a *AgentActivity) OnInterimTranscript(ev *stt.SpeechEvent) {
 }
 
 func (a *AgentActivity) OnFinalTranscript(ev *stt.SpeechEvent) {
+	if a.shouldIgnoreSTTEvent(false) {
+		return
+	}
+
 	a.sttEOSReceived = true
 	
 	transcript := ""
@@ -558,8 +615,17 @@ func (a *AgentActivity) runEOUDetection(info EndOfTurnInfo) {
 	a.eouCancel = cancel
 	a.eouMu.Unlock()
 
+	a.transcriptMu.Lock()
+	a.endOfTurnActive = true
+	a.transcriptMu.Unlock()
+
 	go func() {
 		defer cancel()
+		defer func() {
+			a.transcriptMu.Lock()
+			a.endOfTurnActive = false
+			a.transcriptMu.Unlock()
+		}()
 
 		endpointingDelay := a.Session.Options.MinEndpointingDelay
 		if endpointingDelay <= 0 {
@@ -631,22 +697,38 @@ func (a *AgentActivity) runEOUDetection(info EndOfTurnInfo) {
 					}()
 					a.transcriptMu.Unlock()
 
+					timeout := info.TranscriptTimeout
+					if timeout <= 0 {
+						timeout = 2 * time.Second
+					}
 					select {
 					case <-waitCh:
-					case <-time.After(2 * time.Second): // transcript timeout
-						logger.Logger.Warnw("final transcript not received after timeout", nil, "timeout", 2*time.Second)
+					case <-time.After(timeout): // transcript timeout
+						logger.Logger.Warnw("final transcript not received after timeout", nil, "timeout", timeout)
 					case <-ctx.Done():
 						return
 					}
 					a.transcriptMu.Lock()
 				}
 				
+				if a.audioInterimTranscript != "" {
+					// emit interim transcript as final
+					if a.Session.Timeline != nil {
+						a.Session.Timeline.AddEvent(&UserInputTranscribedEvent{
+							Transcript: a.audioInterimTranscript,
+							IsFinal:    true,
+							CreatedAt:  time.Now(),
+						})
+					}
+					
+					if a.audioTranscript != "" {
+						a.audioTranscript = strings.TrimSpace(a.audioTranscript + " " + a.audioInterimTranscript)
+					} else {
+						a.audioTranscript = a.audioInterimTranscript
+					}
+				}
 				if a.audioTranscript != "" {
 					transcript = a.audioTranscript
-				}
-				if transcript == "" && a.audioInterimTranscript != "" {
-					transcript = a.audioInterimTranscript
-					a.audioTranscript = transcript
 				}
 				a.audioInterimTranscript = ""
 				a.transcriptMu.Unlock()
@@ -687,6 +769,11 @@ func (a *AgentActivity) runEOUDetection(info EndOfTurnInfo) {
 				a.Agent.ChatCtx = chatCtx
 			}
 
+			if info.SkipReply {
+				logger.Logger.Infow("user turn completed, skipping reply generation")
+				return
+			}
+
 			if err := a.AgentIntf.OnUserTurnCompleted(a.ctx, chatCtx, newMsg); err != nil {
 				if err == llm.ErrStopResponse {
 					logger.Logger.Infow("user turn completed returned StopResponse, dropping turn")
@@ -703,15 +790,64 @@ func (a *AgentActivity) ClearUserTurn() {
 	a.transcriptMu.Lock()
 	a.audioTranscript = ""
 	a.audioInterimTranscript = ""
+	a.userTurnCommitted = false
 	a.transcriptMu.Unlock()
 }
 
-func (a *AgentActivity) CommitUserTurn() {
+type CommitUserTurnOpts struct {
+	AudioDetached     bool
+	TranscriptTimeout time.Duration
+	STTFlushDuration  time.Duration
+	SkipReply         bool
+}
+
+func (a *AgentActivity) CommitUserTurn(opts *CommitUserTurnOpts) {
+	if opts == nil {
+		opts = &CommitUserTurnOpts{}
+	}
+
+	a.transcriptMu.Lock()
+	a.userTurnCommitted = true
+	a.transcriptMu.Unlock()
+
 	if a.recog != nil {
+		if opts.AudioDetached {
+			duration := opts.STTFlushDuration
+			if duration <= 0 {
+				duration = 2 * time.Second
+			}
+			
+			// push silence frames
+			sampleRate := 16000 // default
+			
+			// 0.2s chunk size
+			numSamples := int(float64(sampleRate) * 0.2)
+			frameSize := numSamples * 2 // 16-bit
+			frameData := make([]byte, frameSize)
+			
+			numFrames := int(duration.Seconds() / 0.2)
+			if numFrames < 1 {
+				numFrames = 1
+			}
+			
+			for i := 0; i < numFrames; i++ {
+				_ = a.recog.PushAudio(&model.AudioFrame{
+					Data:              frameData,
+					SampleRate:        uint32(sampleRate),
+					NumChannels:       1,
+					SamplesPerChannel: uint32(numSamples),
+				})
+			}
+		}
+
 		// Explicitly flush the STT stream to force final transcript generation
 		_ = a.recog.Flush()
 	}
-	a.runEOUDetection(EndOfTurnInfo{})
+	a.runEOUDetection(EndOfTurnInfo{
+		TranscriptTimeout: opts.TranscriptTimeout,
+		STTFlushDuration:  opts.STTFlushDuration,
+		SkipReply:         opts.SkipReply,
+	})
 }
 
 func (a *AgentActivity) Pause() error {
