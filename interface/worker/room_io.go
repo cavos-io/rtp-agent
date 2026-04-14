@@ -110,6 +110,10 @@ func (e *opusEncoder) Close() error {
 }
 
 type RoomOptions struct {
+	ParticipantKinds    []lksdk.ParticipantKind
+	ParticipantIdentity string
+	CloseOnDisconnect   bool
+	DeleteRoomOnClose   bool
 }
 
 type RoomIO struct {
@@ -137,6 +141,8 @@ type RoomIO struct {
 
 	preConnectAudio *PreConnectAudioHandler
 	audioInCh       chan *model.AudioFrame
+	
+	participantIdentity string
 }
 
 func NewRoomIO(room *lksdk.Room, session *agent.AgentSession, opts RoomOptions) *RoomIO {
@@ -147,17 +153,18 @@ func NewRoomIO(room *lksdk.Room, session *agent.AgentSession, opts RoomOptions) 
 	preConnectAudio.Register()
 
 	rio := &RoomIO{
-		Room:            room,
-		AgentSession:    session,
-		Options:         opts,
-		decoder:         dec,
-		encoder:         enc,
-		Recorder:        NewRecorderIO(session),
-		preConnectAudio: preConnectAudio,
-		audioInCh:       make(chan *model.AudioFrame, 100),
-		playoutCh:       make(chan *model.AudioFrame, 100),
-		flushCh:         make(chan chan struct{}),
-		clearBufferCh:   make(chan struct{}),
+		Room:                room,
+		AgentSession:        session,
+		Options:             opts,
+		decoder:             dec,
+		encoder:             enc,
+		Recorder:            NewRecorderIO(session),
+		preConnectAudio:     preConnectAudio,
+		audioInCh:           make(chan *model.AudioFrame, 100),
+		playoutCh:           make(chan *model.AudioFrame, 100),
+		flushCh:             make(chan chan struct{}),
+		clearBufferCh:       make(chan struct{}),
+		participantIdentity: opts.ParticipantIdentity,
 	}
 
 	go rio.playoutLoop(context.Background())
@@ -322,7 +329,32 @@ func (rio *RoomIO) WaitForPlayout(ctx context.Context) error {
 func (rio *RoomIO) GetCallback() *lksdk.RoomCallback {
 	cb := lksdk.NewRoomCallback()
 	cb.OnTrackSubscribed = rio.onTrackSubscribed
+	cb.OnParticipantDisconnected = rio.onParticipantDisconnected
 	return cb
+}
+
+func (rio *RoomIO) SetParticipant(identity string) {
+	rio.mu.Lock()
+	defer rio.mu.Unlock()
+	rio.participantIdentity = identity
+}
+
+func (rio *RoomIO) UnsetParticipant() {
+	rio.mu.Lock()
+	defer rio.mu.Unlock()
+	rio.participantIdentity = ""
+}
+
+func (rio *RoomIO) onParticipantDisconnected(participant *lksdk.RemoteParticipant) {
+	rio.mu.Lock()
+	linkedIdentity := rio.participantIdentity
+	rio.mu.Unlock()
+
+	if linkedIdentity == participant.Identity() {
+		if rio.Options.CloseOnDisconnect && rio.AgentSession != nil {
+			_ = rio.AgentSession.Close()
+		}
+	}
 }
 
 func (rio *RoomIO) Start(ctx context.Context) error {
@@ -347,6 +379,29 @@ func (rio *RoomIO) Start(ctx context.Context) error {
 }
 
 func (rio *RoomIO) onTrackSubscribed(track *webrtc.TrackRemote, publication *lksdk.RemoteTrackPublication, rp *lksdk.RemoteParticipant) {
+	rio.mu.Lock()
+	identity := rio.participantIdentity
+	rio.mu.Unlock()
+
+	if identity != "" && identity != rp.Identity() {
+		// Ignore tracks from non-linked participants if a specific identity is targeted
+		return
+	}
+
+	if identity == "" && len(rio.Options.ParticipantKinds) > 0 {
+		// If no specific identity is targeted, check if the participant kind is accepted
+		kindAccepted := false
+		for _, kind := range rio.Options.ParticipantKinds {
+			if rp.Kind() == kind {
+				kindAccepted = true
+				break
+			}
+		}
+		if !kindAccepted {
+			return
+		}
+	}
+
 	if track.Kind() == webrtc.RTPCodecTypeAudio {
 		go rio.handleAudioTrack(track)
 	}
