@@ -32,15 +32,19 @@ type TranscriptSynchronizer struct {
 	textBuffer     string
 	playedAudioDur time.Duration
 	yieldedTextDur time.Duration
-	speakingRate   float64 // syllables per second
+	speakingRate   float64       // syllables per second
+	refreshRate    time.Duration // ticker interval
 	
 	closed bool
 }
 
 // NewTranscriptSynchronizer initializes the synchronizer. Default speaking rate is usually ~3.83 syllables/sec.
-func NewTranscriptSynchronizer(speakingRate float64) *TranscriptSynchronizer {
+func NewTranscriptSynchronizer(speakingRate float64, refreshRate time.Duration) *TranscriptSynchronizer {
 	if speakingRate <= 0 {
 		speakingRate = 3.83
+	}
+	if refreshRate <= 0 {
+		refreshRate = 50 * time.Millisecond
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	s := &TranscriptSynchronizer{
@@ -50,6 +54,7 @@ func NewTranscriptSynchronizer(speakingRate float64) *TranscriptSynchronizer {
 		audioCh:      make(chan *model.AudioFrame, 100),
 		eventCh:      make(chan string, 100),
 		speakingRate: speakingRate,
+		refreshRate:  refreshRate,
 	}
 
 	go s.run()
@@ -239,7 +244,7 @@ func countSyllables(text string) int {
 func (s *TranscriptSynchronizer) run() {
 	defer close(s.eventCh)
 	
-	ticker := time.NewTicker(50 * time.Millisecond)
+	ticker := time.NewTicker(s.refreshRate)
 	defer ticker.Stop()
 
 	for {

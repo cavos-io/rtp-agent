@@ -31,6 +31,7 @@ type AgentSessionOptions struct {
 	PreemptiveGeneration          bool
 	AECWarmupDuration             float64
 	SpeakingRate                  float64
+	TranscriptRefreshRate         time.Duration
 	LinkedParticipant             lksdk.Participant
 }
 
@@ -83,6 +84,10 @@ func NewAgentSession(agent AgentInterface, room *lksdk.Room, opts AgentSessionOp
 
 	if opts.SpeakingRate <= 0 {
 		opts.SpeakingRate = 3.83
+	}
+
+	if opts.TranscriptRefreshRate <= 0 {
+		opts.TranscriptRefreshRate = 50 * time.Millisecond
 	}
 
 	s := &AgentSession{

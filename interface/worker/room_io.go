@@ -238,7 +238,7 @@ func NewRoomIO(room *lksdk.Room, session *agent.AgentSession, opts RoomOptions) 
 
 	if session.Options.UseTTSAlignedTranscript {
 		textOut := NewRoomTextOutput(room)
-		sync := agent.NewTranscriptSynchronizer(session.Options.SpeakingRate)
+		sync := agent.NewTranscriptSynchronizer(session.Options.SpeakingRate, session.Options.TranscriptRefreshRate)
 		rio.sync = sync
 
 		syncedAudio := agent.NewSyncedAudioOutput(sync, rio)
