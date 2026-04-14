@@ -131,17 +131,28 @@ func (l *AWSLLM) Chat(ctx context.Context, chatCtx *llm.ChatContext, opts ...llm
 
 	if len(options.Tools) > 0 {
 		toolSpecs := make([]types.Tool, 0)
-		for _, t := range options.Tools {
-			doc := document.NewLazyDocument(t.Parameters())
-			toolSpecs = append(toolSpecs, &types.ToolMemberToolSpec{
-				Value: types.ToolSpecification{
-					Name:        aws.String(t.Name()),
-					Description: aws.String(t.Description()),
-					InputSchema: &types.ToolInputSchemaMemberJson{
-						Value: doc,
+		for _, toolInterface := range options.Tools {
+			if t, ok := toolInterface.(llm.Tool); ok {
+				doc := document.NewLazyDocument(t.Parameters())
+				toolSpecs = append(toolSpecs, &types.ToolMemberToolSpec{
+					Value: types.ToolSpecification{
+						Name:        aws.String(t.Name()),
+						Description: aws.String(t.Description()),
+						InputSchema: &types.ToolInputSchemaMemberJson{
+							Value: doc,
+						},
 					},
-				},
-			})
+				})
+			} else if pt, ok := toolInterface.(llm.ProviderTool); ok {
+				schema := pt.ProviderSchema("aws")
+				if schema != nil {
+					b, _ := json.Marshal(schema)
+					var ts types.Tool
+					if err := json.Unmarshal(b, &ts); err == nil {
+						toolSpecs = append(toolSpecs, ts)
+					}
+				}
+			}
 		}
 		req.ToolConfig = &types.ToolConfiguration{
 			Tools: toolSpecs,

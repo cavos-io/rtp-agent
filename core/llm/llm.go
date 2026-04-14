@@ -215,13 +215,13 @@ type ToolWithReply interface {
 
 type Toolset interface {
 	ID() string
-	Tools() []Tool
+	Tools() []interface{}
 }
 
 type ToolChoice any
 
 type ChatOptions struct {
-	Tools             []Tool
+	Tools             []interface{}
 	ToolChoice        ToolChoice
 	ParallelToolCalls bool
 }
@@ -237,7 +237,7 @@ type LLMStream interface {
 
 type ChatOption func(*ChatOptions)
 
-func WithTools(tools []Tool) ChatOption {
+func WithTools(tools []interface{}) ChatOption {
 	return func(o *ChatOptions) {
 		o.Tools = tools
 	}

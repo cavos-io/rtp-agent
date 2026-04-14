@@ -28,8 +28,8 @@ func NewComputerTool(actions *browser.PageActions, width int, height int) *Compu
 	}
 }
 
-func (c *ComputerTool) Tools() []llm.Tool {
-	return []llm.Tool{c.tool}
+func (c *ComputerTool) Tools() []interface{} {
+	return []interface{}{c.tool}
 }
 
 func (c *ComputerTool) Execute(ctx context.Context, action string, args map[string]interface{}) ([]map[string]interface{}, error) {
@@ -156,4 +156,19 @@ func (t *computerUseTool) Execute(ctx context.Context, args any) (any, error) {
 	// typically intercepting the command before it reaches this basic Execute call,
 	// or calling Execute on the Toolset directly.
 	return "Action dispatched", nil
+}
+
+func (t *computerUseTool) IsProviderTool() bool { return true }
+
+func (t *computerUseTool) ProviderSchema(format string) map[string]any {
+	if format == "anthropic" {
+		return map[string]any{
+			"type":              "computer_20241022",
+			"name":              "computer",
+			"display_width_px":  t.width,
+			"display_height_px": t.height,
+			"display_number":    1,
+		}
+	}
+	return nil
 }

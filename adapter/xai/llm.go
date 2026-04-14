@@ -98,28 +98,35 @@ func (l *XaiLLM) Chat(ctx context.Context, chatCtx *llm.ChatContext, opts ...llm
 
 	if len(options.Tools) > 0 {
 		tools := make([]map[string]interface{}, 0)
-		for _, tool := range options.Tools {
-			if tool.Name() == "xai_web_search" {
-				tools = append(tools, map[string]interface{}{
-					"type": "web_search",
-				})
-			} else if tool.Name() == "xai_x_search" {
-				tools = append(tools, map[string]interface{}{
-					"type": "x_search",
-				}) // Expand allowed_x_handles if needed via parameters later
-			} else if tool.Name() == "xai_file_search" {
-				tools = append(tools, map[string]interface{}{
-					"type": "file_search",
-				}) // Expand vector_store_ids if needed
-			} else {
-				tools = append(tools, map[string]interface{}{
-					"type": "function",
-					"function": map[string]interface{}{
-						"name":        tool.Name(),
-						"description": tool.Description(),
-						"parameters":  tool.Parameters(),
-					},
-				})
+		for _, toolInterface := range options.Tools {
+			if tool, ok := toolInterface.(llm.Tool); ok {
+				if tool.Name() == "xai_web_search" {
+					tools = append(tools, map[string]interface{}{
+						"type": "web_search",
+					})
+				} else if tool.Name() == "xai_x_search" {
+					tools = append(tools, map[string]interface{}{
+						"type": "x_search",
+					}) // Expand allowed_x_handles if needed via parameters later
+				} else if tool.Name() == "xai_file_search" {
+					tools = append(tools, map[string]interface{}{
+						"type": "file_search",
+					}) // Expand vector_store_ids if needed
+				} else {
+					tools = append(tools, map[string]interface{}{
+						"type": "function",
+						"function": map[string]interface{}{
+							"name":        tool.Name(),
+							"description": tool.Description(),
+							"parameters":  tool.Parameters(),
+						},
+					})
+				}
+			} else if pt, ok := toolInterface.(llm.ProviderTool); ok {
+				schema := pt.ProviderSchema("openai")
+				if schema != nil {
+					tools = append(tools, schema)
+				}
 			}
 		}
 		body["tools"] = tools
@@ -215,6 +222,13 @@ func (t *WebSearchTool) Name() string { return "xai_web_search" }
 func (t *WebSearchTool) Description() string { return "Enable web search tool for real-time internet searches." }
 func (t *WebSearchTool) Parameters() map[string]any { return nil }
 func (t *WebSearchTool) Execute(ctx context.Context, args any) (any, error) { return "dispatched", nil }
+func (t *WebSearchTool) IsProviderTool() bool { return true }
+func (t *WebSearchTool) ProviderSchema(format string) map[string]any {
+	if format == "openai" {
+		return map[string]any{"type": "web_search"}
+	}
+	return nil
+}
 
 type XSearchTool struct{ AllowedHandles []string }
 func (t *XSearchTool) ID() string { return "xai_x_search" }
@@ -222,6 +236,13 @@ func (t *XSearchTool) Name() string { return "xai_x_search" }
 func (t *XSearchTool) Description() string { return "Enable X (Twitter) search tool for searching posts." }
 func (t *XSearchTool) Parameters() map[string]any { return nil }
 func (t *XSearchTool) Execute(ctx context.Context, args any) (any, error) { return "dispatched", nil }
+func (t *XSearchTool) IsProviderTool() bool { return true }
+func (t *XSearchTool) ProviderSchema(format string) map[string]any {
+	if format == "openai" {
+		return map[string]any{"type": "x_search"}
+	}
+	return nil
+}
 
 type FileSearchTool struct{ VectorStoreIDs []string; MaxNumResults int }
 func (t *FileSearchTool) ID() string { return "xai_file_search" }
@@ -229,3 +250,10 @@ func (t *FileSearchTool) Name() string { return "xai_file_search" }
 func (t *FileSearchTool) Description() string { return "Enable file search tool for searching uploaded document collections." }
 func (t *FileSearchTool) Parameters() map[string]any { return nil }
 func (t *FileSearchTool) Execute(ctx context.Context, args any) (any, error) { return "dispatched", nil }
+func (t *FileSearchTool) IsProviderTool() bool { return true }
+func (t *FileSearchTool) ProviderSchema(format string) map[string]any {
+	if format == "openai" {
+		return map[string]any{"type": "file_search"}
+	}
+	return nil
+}

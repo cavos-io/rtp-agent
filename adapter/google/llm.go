@@ -85,45 +85,56 @@ func (l *GoogleLLM) Chat(ctx context.Context, chatCtx *llm.ChatContext, opts ...
 
 	if len(options.Tools) > 0 {
 		declarations := make([]*genai.FunctionDeclaration, 0)
-		for _, t := range options.Tools {
-			
-			// Map parameters
-			schemaMap := t.Parameters()
-			var properties map[string]*genai.Schema
-			
-			if props, ok := schemaMap["properties"].(map[string]any); ok {
-				properties = make(map[string]*genai.Schema)
-				for k, v := range props {
-					if typeMap, ok := v.(map[string]any); ok {
-						typeStr, _ := typeMap["type"].(string)
-						descStr, _ := typeMap["description"].(string)
-						// Simplification for the example
-						properties[k] = &genai.Schema{
-							Type:        genai.Type(typeStr),
-							Description: descStr,
+		for _, toolInterface := range options.Tools {
+			if t, ok := toolInterface.(llm.Tool); ok {
+				// Map parameters
+				schemaMap := t.Parameters()
+				var properties map[string]*genai.Schema
+				
+				if props, ok := schemaMap["properties"].(map[string]any); ok {
+					properties = make(map[string]*genai.Schema)
+					for k, v := range props {
+						if typeMap, ok := v.(map[string]any); ok {
+							typeStr, _ := typeMap["type"].(string)
+							descStr, _ := typeMap["description"].(string)
+							// Simplification for the example
+							properties[k] = &genai.Schema{
+								Type:        genai.Type(typeStr),
+								Description: descStr,
+							}
 						}
 					}
 				}
-			}
 
-			var required []string
-			if reqs, ok := schemaMap["required"].([]any); ok {
-				for _, r := range reqs {
-					if reqStr, ok := r.(string); ok {
-						required = append(required, reqStr)
+				var required []string
+				if reqs, ok := schemaMap["required"].([]any); ok {
+					for _, r := range reqs {
+						if reqStr, ok := r.(string); ok {
+							required = append(required, reqStr)
+						}
+					}
+				}
+
+				declarations = append(declarations, &genai.FunctionDeclaration{
+					Name:        t.Name(),
+					Description: t.Description(),
+					Parameters: &genai.Schema{
+						Type:       genai.TypeObject,
+						Properties: properties,
+						Required:   required,
+					},
+				})
+			} else if pt, ok := toolInterface.(llm.ProviderTool); ok {
+				schema := pt.ProviderSchema("google")
+				if schema != nil {
+					// Google schema is usually a FunctionDeclaration map
+					b, _ := json.Marshal(schema)
+					var fd genai.FunctionDeclaration
+					if err := json.Unmarshal(b, &fd); err == nil {
+						declarations = append(declarations, &fd)
 					}
 				}
 			}
-
-			declarations = append(declarations, &genai.FunctionDeclaration{
-				Name:        t.Name(),
-				Description: t.Description(),
-				Parameters: &genai.Schema{
-					Type:       genai.TypeObject,
-					Properties: properties,
-					Required:   required,
-				},
-			})
 		}
 		
 		config.Tools = []*genai.Tool{

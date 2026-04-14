@@ -19,6 +19,8 @@ type ToolContext struct {
 // ProviderTool represents a tool that is evaluated or passed raw to a provider.
 type ProviderTool interface {
 	IsProviderTool() bool
+	Name() string
+	ProviderSchema(format string) map[string]any
 }
 
 // RawFunctionTool represents a tool defined by a raw JSON Schema.
@@ -92,6 +94,13 @@ func (c *ToolContext) ParseFunctionTools(format string) []map[string]any {
 			})
 		}
 	}
+
+	for _, pt := range c.providerTools {
+		if schema := pt.ProviderSchema(format); schema != nil {
+			out = append(out, schema)
+		}
+	}
+
 	return out
 }
 
@@ -119,12 +128,14 @@ func (c *ToolContext) Toolsets() []Toolset {
 	return arr
 }
 
-func (c *ToolContext) Flatten() []Tool {
-	tools := make([]Tool, 0)
+func (c *ToolContext) Flatten() []interface{} {
+	tools := make([]interface{}, 0)
 	for _, t := range c.functionTools {
 		tools = append(tools, t)
 	}
-	// Provider tools are handled separately when passed to specific LLMs
+	for _, t := range c.providerTools {
+		tools = append(tools, t)
+	}
 	return tools
 }
 
@@ -182,4 +193,32 @@ func (c *ToolContext) Copy() *ToolContext {
 	toolsCopy := make([]interface{}, len(c.tools))
 	copy(toolsCopy, c.tools)
 	return NewToolContext(toolsCopy)
+}
+
+// FlattenTools recursively unwraps Toolsets and returns a slice of Tool and ProviderTool.
+func FlattenTools(tools []interface{}) []interface{} {
+	out := make([]interface{}, 0)
+	var add func(t interface{})
+	add = func(t interface{}) {
+		if ts, ok := t.(Toolset); ok {
+			for _, child := range ts.Tools() {
+				add(child)
+			}
+			return
+		}
+		if _, ok := t.(Tool); ok {
+			out = append(out, t)
+			return
+		}
+		if _, ok := t.(ProviderTool); ok {
+			out = append(out, t)
+			return
+		}
+		// If it's something else, append it anyway to let adapters deal with it or ignore
+		out = append(out, t)
+	}
+	for _, t := range tools {
+		add(t)
+	}
+	return out
 }

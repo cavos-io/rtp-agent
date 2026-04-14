@@ -73,25 +73,32 @@ func (l *AnthropicLLM) Chat(ctx context.Context, chatCtx *llm.ChatContext, opts 
 	// Tool support
 	if len(options.Tools) > 0 {
 		tools := make([]map[string]interface{}, 0)
-		for _, tool := range options.Tools {
-			if tool.Name() == "computer_use" {
-				tools = append(tools, map[string]interface{}{
-					"type": "computer_20241022",
-					"name": "computer",
-					"display_width_px": 1280,
-					"display_height_px": 720,
-					"display_number": 1,
-				})
-			} else {
-				tools = append(tools, map[string]interface{}{
-					"name":        tool.Name(),
-					"description": tool.Description(),
-					"input_schema": map[string]interface{}{
-						"type":       "object",
-						"properties": tool.Parameters()["properties"],
-						"required":   tool.Parameters()["required"],
-					},
-				})
+		for _, toolInterface := range options.Tools {
+			if tool, ok := toolInterface.(llm.Tool); ok {
+				if tool.Name() == "computer_use" {
+					tools = append(tools, map[string]interface{}{
+						"type": "computer_20241022",
+						"name": "computer",
+						"display_width_px": 1280,
+						"display_height_px": 720,
+						"display_number": 1,
+					})
+				} else {
+					tools = append(tools, map[string]interface{}{
+						"name":        tool.Name(),
+						"description": tool.Description(),
+						"input_schema": map[string]interface{}{
+							"type":       "object",
+							"properties": tool.Parameters()["properties"],
+							"required":   tool.Parameters()["required"],
+						},
+					})
+				}
+			} else if pt, ok := toolInterface.(llm.ProviderTool); ok {
+				schema := pt.ProviderSchema("anthropic")
+				if schema != nil {
+					tools = append(tools, schema)
+				}
 			}
 		}
 		body["tools"] = tools
