@@ -44,6 +44,7 @@ type AudioOutput interface {
 type TextOutput interface {
 	Label() string
 	CaptureText(text string) error
+	SetSegmentID(id string)
 	Flush()
 	OnAttached()
 	OnDetached()
@@ -66,8 +67,16 @@ type VideoOutput interface {
 	OnDetached()
 }
 
+// TextInput represents a source of text (e.g., chat messages or remote text tracks)
+type TextInput interface {
+	Label() string
+	OnAttached()
+	OnDetached()
+}
+
 type AgentInput struct {
 	Audio AudioInput
+	Text  TextInput
 	Video VideoInput
 }
 

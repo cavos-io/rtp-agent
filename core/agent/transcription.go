@@ -20,8 +20,9 @@ func NewTranscriptionFilter() *TranscriptionFilter {
 }
 
 type SyncEvent struct {
-	Text  string
-	Flush bool
+	Text      string
+	Flush     bool
+	SegmentID string
 }
 
 // TranscriptSynchronizer drip-feeds text to match the playout speed of audio.
@@ -36,12 +37,19 @@ type TranscriptSynchronizer struct {
 	mu             sync.Mutex
 	textBuffer     string
 	yieldedText    string
+	segmentID      string
 	playedAudioDur time.Duration
 	yieldedTextDur time.Duration
 	speakingRate   float64       // syllables per second
 	refreshRate    time.Duration // ticker interval
 	
 	closed bool
+}
+
+func (s *TranscriptSynchronizer) SetSegmentID(id string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.segmentID = id
 }
 
 // NewTranscriptSynchronizer initializes the synchronizer. Default speaking rate is usually ~3.83 syllables/sec.
@@ -94,7 +102,7 @@ func (s *TranscriptSynchronizer) EventCh() <-chan SyncEvent {
 // RotateSegment flushes the remaining text buffer and resets the time accumulators for a new audio segment.
 func (s *TranscriptSynchronizer) RotateSegment() {
 	s.Interrupt() // Flushes remaining text
-	s.eventCh <- SyncEvent{Flush: true}
+	s.eventCh <- SyncEvent{Flush: true, SegmentID: s.segmentID}
 	
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -109,7 +117,7 @@ func (s *TranscriptSynchronizer) Interrupt() {
 	
 	if s.textBuffer != "" {
 		s.yieldedText += s.textBuffer
-		s.eventCh <- SyncEvent{Text: s.textBuffer}
+		s.eventCh <- SyncEvent{Text: s.textBuffer, SegmentID: s.segmentID}
 		s.textBuffer = ""
 	}
 }
@@ -210,6 +218,9 @@ func NewSyncedTextOutput(sync *TranscriptSynchronizer, next TextOutput) *SyncedT
 	if next != nil {
 		go func() {
 			for ev := range sync.EventCh() {
+				if ev.SegmentID != "" {
+					next.SetSegmentID(ev.SegmentID)
+				}
 				if ev.Flush {
 					next.Flush()
 				} else if ev.Text != "" {
@@ -222,6 +233,9 @@ func NewSyncedTextOutput(sync *TranscriptSynchronizer, next TextOutput) *SyncedT
 }
 
 func (s *SyncedTextOutput) Label() string { return "TranscriptSynchronizerText" }
+func (s *SyncedTextOutput) SetSegmentID(id string) {
+	s.sync.SetSegmentID(id)
+}
 func (s *SyncedTextOutput) CaptureText(text string) error {
 	s.sync.PushText(text)
 	return nil // Actual text emission happens from the synchronizer loop
@@ -352,7 +366,7 @@ func (s *TranscriptSynchronizer) run() {
 				s.textBuffer = remaining
 				s.mu.Unlock()
 
-				s.eventCh <- SyncEvent{Text: toEmit}
+				s.eventCh <- SyncEvent{Text: toEmit, SegmentID: s.segmentID}
 			} else {
 				s.mu.Unlock()
 			}

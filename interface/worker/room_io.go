@@ -207,6 +207,12 @@ func (t *RoomTextOutput) Label() string {
 	return "RoomTextOutput"
 }
 
+func (t *RoomTextOutput) SetSegmentID(id string) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.segmentID = id
+}
+
 func (t *RoomTextOutput) CaptureText(text string) error {
 	t.mu.Lock()
 	defer t.mu.Unlock()
@@ -216,7 +222,9 @@ func (t *RoomTextOutput) CaptureText(text string) error {
 	}
 
 	if t.writer == nil {
-		t.segmentID = "SG_" + uuid.NewString()[:8]
+		if t.segmentID == "" {
+			t.segmentID = "SG_" + uuid.NewString()[:8]
+		}
 		opts := lksdk.StreamTextOptions{
 			Topic: "lk-agent-transcription",
 			Attributes: map[string]string{
