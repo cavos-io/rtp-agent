@@ -256,6 +256,18 @@ type SendMessageResponse struct {
 	Items []llm.ChatItem `json:"items"`
 }
 
+type StreamRequest struct {
+	ID      string `json:"id"`
+	Method  string `json:"method"`
+	Payload string `json:"payload"`
+}
+
+type StreamResponse struct {
+	ID      string `json:"id"`
+	Payload string `json:"payload,omitempty"`
+	Error   string `json:"error,omitempty"`
+}
+
 // ClientEventsDispatcher manages sending Agent states to the LiveKit Room DataChannel
 // and handling inbound RPC and DataChannel requests.
 type ClientEventsDispatcher struct {
@@ -273,6 +285,11 @@ func NewClientEventsDispatcher(room *lksdk.Room, session *AgentSession) *ClientE
 	return d
 }
 
+const (
+	TopicAgentRequest  = "lk.agent.request"
+	TopicAgentResponse = "lk.agent.response"
+)
+
 func (d *ClientEventsDispatcher) registerHandlers() {
 	if d.room == nil || d.room.LocalParticipant == nil {
 		return
@@ -283,9 +300,69 @@ func (d *ClientEventsDispatcher) registerHandlers() {
 	d.room.RegisterRpcMethod("lk-agent-get-info", d.handleGetAgentInfo)
 	d.room.RegisterRpcMethod("lk-agent-send-message", d.handleSendMessage)
 
-	// Note: In a complete implementation, stream requests over DataChannels (TOPIC_AGENT_REQUEST)
-	// would also be bound here using a custom data handler on the Room/Participant, 
-	// but LiveKit's go-sdk typically favors RPC for direct request/response unless sizes are massive.
+	_ = d.room.RegisterTextStreamHandler(TopicAgentRequest, d.handleStreamRequest)
+}
+
+func (d *ClientEventsDispatcher) handleStreamRequest(reader *lksdk.TextStreamReader, participantIdentity string) {
+	data := reader.ReadAll()
+	var req StreamRequest
+	if err := json.Unmarshal([]byte(data), &req); err != nil {
+		logger.Logger.Warnw("failed to unmarshal stream request", err)
+		return
+	}
+
+	go func() {
+		var responsePayload string
+		var errStr string
+
+		switch req.Method {
+		case "get_session_state":
+			resp, err := d.handleGetSessionState(lksdk.RpcInvocationData{Payload: req.Payload})
+			if err != nil {
+				errStr = err.Error()
+			} else {
+				responsePayload = resp
+			}
+		case "get_chat_history":
+			resp, err := d.handleGetChatHistory(lksdk.RpcInvocationData{Payload: req.Payload})
+			if err != nil {
+				errStr = err.Error()
+			} else {
+				responsePayload = resp
+			}
+		case "get_agent_info":
+			resp, err := d.handleGetAgentInfo(lksdk.RpcInvocationData{Payload: req.Payload})
+			if err != nil {
+				errStr = err.Error()
+			} else {
+				responsePayload = resp
+			}
+		case "send_message":
+			resp, err := d.handleSendMessage(lksdk.RpcInvocationData{Payload: req.Payload})
+			if err != nil {
+				errStr = err.Error()
+			} else {
+				responsePayload = resp
+			}
+		default:
+			errStr = "unknown method: " + req.Method
+		}
+
+		response := StreamResponse{
+			ID:      req.ID,
+			Payload: responsePayload,
+			Error:   errStr,
+		}
+
+		b, _ := json.Marshal(response)
+		_ = d.room.LocalParticipant.PublishDataPacket(
+			&lksdk.UserDataPacket{
+				Topic:   TopicAgentResponse,
+				Payload: b,
+			},
+			lksdk.WithDataPublishDestination([]string{participantIdentity}),
+		)
+	}()
 }
 
 func (d *ClientEventsDispatcher) handleGetSessionState(data lksdk.RpcInvocationData) (string, error) {
