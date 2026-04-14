@@ -80,6 +80,7 @@ func (r *SessionReport) ToDict() map[string]any {
 		if event.Type == "metrics_collected" {
 			continue // metrics are too noisy, Cloud is using the chat_history as the source of truth
 		}
+		// In a real impl, we might want a way to model_dump the event struct
 		eventsDict = append(eventsDict, event)
 	}
 
@@ -104,8 +105,11 @@ func (r *SessionReport) ToDict() map[string]any {
 		"audio_recording_path":       r.AudioRecordingPath,
 		"audio_recording_started_at": r.AudioRecordingStartedAt,
 		"options":                    optionsDict,
-		"chat_history":               r.ChatHistory, // Note: In a complete impl, we might want a ChatHistory.ToDict()
 		"timestamp":                  r.Timestamp,
+	}
+
+	if r.ChatHistory != nil {
+		dict["chat_history"] = r.ChatHistory.ToDict(false)
 	}
 
 	return dict

@@ -84,6 +84,57 @@ func (c *ChatContext) FindInsertionIndex(createdAt time.Time) int {
 	return 0
 }
 
+func (c *ChatContext) ToDict(excludeTimestamp bool) map[string]any {
+	items := make([]map[string]any, 0)
+	for _, item := range c.Items {
+		var itemDict map[string]any
+		switch it := item.(type) {
+		case *ChatMessage:
+			content := make([]map[string]any, 0)
+			for _, c := range it.Content {
+				content = append(content, map[string]any{
+					"text": c.Text,
+				})
+			}
+			itemDict = map[string]any{
+				"type":    "message",
+				"role":    string(it.Role),
+				"content": content,
+			}
+		case *FunctionCall:
+			itemDict = map[string]any{
+				"type":      "function_call",
+				"call_id":   it.CallID,
+				"name":      it.Name,
+				"arguments": it.Arguments,
+			}
+		case *FunctionCallOutput:
+			itemDict = map[string]any{
+				"type":    "function_call_output",
+				"call_id": it.CallID,
+				"name":    it.Name,
+				"output":  it.Output,
+				"error":   it.IsError,
+			}
+		case *AgentHandoff:
+			itemDict = map[string]any{
+				"type":         "agent_handoff",
+				"old_agent_id": it.OldAgentID,
+				"new_agent_id": it.NewAgentID,
+			}
+		}
+		if itemDict != nil {
+			if !excludeTimestamp {
+				itemDict["created_at"] = float64(item.GetCreatedAt().UnixNano()) / 1e9
+			}
+			items = append(items, itemDict)
+		}
+	}
+	return map[string]any{
+		"items": items,
+	}
+}
+
 func (c *ChatContext) ToProviderFormat(format string) ([]map[string]any, any) {
 	if format == "openai" {
 		messages := make([]map[string]any, 0)
