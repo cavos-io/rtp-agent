@@ -38,6 +38,8 @@ type SpeechHandle struct {
 	doneCh      chan struct{}
 	scheduledCh chan struct{}
 
+	FinalOutput any
+	
 	mu sync.Mutex
 }
 

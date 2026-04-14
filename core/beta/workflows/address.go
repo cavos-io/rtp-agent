@@ -64,7 +64,7 @@ func NewGetAddressTask(requireConfirmation bool) *GetAddressTask {
 func (t *GetAddressTask) OnEnter() {
 	if activity := t.Agent.GetActivity(); activity != nil {
 		if session := activity.Session; session != nil {
-			_ = session.GenerateReply(context.Background(), "Please tell me your address.")
+			_, _ = session.GenerateReply(context.Background(), "Please tell me your address.")
 		}
 	}
 }

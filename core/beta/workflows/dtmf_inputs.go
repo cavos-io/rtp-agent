@@ -126,7 +126,7 @@ func (t *GetDtmfTask) generateDtmfReply() {
 
 	if activity := t.Agent.GetActivity(); activity != nil {
 		if session := activity.Session; session != nil {
-			_ = session.GenerateReply(context.Background(), fmt.Sprintf("You entered %s. Please confirm if this is correct.", dtmfStr))
+			_, _ = session.GenerateReply(context.Background(), fmt.Sprintf("You entered %s. Please confirm if this is correct.", dtmfStr))
 		}
 	}
 }

@@ -61,7 +61,7 @@ func NewGetEmailTask(requireConfirmation bool) *GetEmailTask {
 func (t *GetEmailTask) OnEnter() {
 	if activity := t.Agent.GetActivity(); activity != nil {
 		if session := activity.Session; session != nil {
-			_ = session.GenerateReply(context.Background(), "Please tell me your email address.")
+			_, _ = session.GenerateReply(context.Background(), "Please tell me your email address.")
 		}
 	}
 }

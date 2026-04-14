@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/cavos-io/conversation-worker/core/evals"
@@ -15,6 +16,13 @@ type RunResult struct {
 	Timeline  []TimelineEvent
 	Timestamp float64
 	Expect    *RunAssert
+
+	mu          sync.Mutex
+	handles     []*SpeechHandle
+	waitCh      chan struct{}
+	done        bool
+	FinalOutput any
+	finalError  error
 }
 
 func NewRunResult(chatCtx *llm.ChatContext) *RunResult {
@@ -36,7 +44,65 @@ func NewRunResult(chatCtx *llm.ChatContext) *RunResult {
 		Timeline:  timeline,
 		Timestamp: float64(time.Now().UnixNano()) / 1e9,
 		Expect:    &RunAssert{ChatCtx: chatCtx},
+		handles:   make([]*SpeechHandle, 0),
+		waitCh:    make(chan struct{}),
 	}
+}
+
+func (r *RunResult) WatchHandle(handle *SpeechHandle) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.done {
+		return
+	}
+	r.handles = append(r.handles, handle)
+
+	go func() {
+		_ = handle.Wait(context.Background())
+		r.checkDone()
+	}()
+}
+
+func (r *RunResult) checkDone() {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	if r.done {
+		return
+	}
+
+	allDone := true
+	for _, h := range r.handles {
+		if !h.IsDone() {
+			allDone = false
+			break
+		}
+	}
+
+	if allDone {
+		r.done = true
+
+		// Grab final output from the last handle if available
+		if len(r.handles) > 0 {
+			lastHandle := r.handles[len(r.handles)-1]
+			r.FinalOutput = lastHandle.FinalOutput
+		}
+
+		close(r.waitCh)
+	}
+}
+
+func (r *RunResult) Wait(ctx context.Context) error {
+	select {
+	case <-r.waitCh:
+		return r.finalError
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+func (r *RunResult) Done() <-chan struct{} {
+	return r.waitCh
 }
 
 func (r *RunResult) AddTimelineEvent(eventType string, payload map[string]any) {

@@ -378,7 +378,7 @@ func (d *ClientEventsDispatcher) handleSendMessage(data lksdk.RpcInvocationData)
 	// Note: RunResult isn't fully implemented in parity yet, so we kick off generation 
 	// async like the standard GenerateReply and just return the current history.
 	// True parity blocks here, but the Go implementation's `GenerateReply` is async.
-	_ = d.session.GenerateReply(context.Background(), req.Text)
+	_, _ = d.session.GenerateReply(context.Background(), req.Text)
 
 	items := []llm.ChatItem{}
 	if d.session.ChatCtx != nil {

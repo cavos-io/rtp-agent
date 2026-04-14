@@ -364,13 +364,13 @@ func (s *AgentSession) UpdateUserState(state UserState) {
 	}
 }
 
-func (s *AgentSession) GenerateReply(ctx context.Context, userInput string) error {
+func (s *AgentSession) GenerateReply(ctx context.Context, userInput string) (*RunResult, error) {
 	s.mu.Lock()
 	activity := s.Activity
 	s.mu.Unlock()
 
 	if activity == nil {
-		return nil
+		return nil, fmt.Errorf("agent activity not started")
 	}
 
 	// Trigger the pipeline
@@ -383,6 +383,10 @@ func (s *AgentSession) GenerateReply(ctx context.Context, userInput string) erro
 
 	// Create a speech handle
 	handle := NewSpeechHandle(s.Options.AllowInterruptions, DefaultInputDetails())
+	
+	// Create run result and watch the new handle
+	runResult := NewRunResult(s.ChatCtx)
+	runResult.WatchHandle(handle)
 
 	// Add user message to ChatContext if provided
 	if userInput != "" {
@@ -396,7 +400,12 @@ func (s *AgentSession) GenerateReply(ctx context.Context, userInput string) erro
 	}
 
 	// Schedule the speech
-	return activity.ScheduleSpeech(handle, SpeechPriorityNormal, false)
+	err := activity.ScheduleSpeech(handle, SpeechPriorityNormal, false)
+	if err != nil {
+		return nil, err
+	}
+
+	return runResult, nil
 }
 
 func (s *AgentSession) TimelineSnapshot() []TimelineEvent {

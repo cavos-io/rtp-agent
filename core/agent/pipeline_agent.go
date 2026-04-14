@@ -292,6 +292,9 @@ func (va *PipelineAgent) GenerateReply(speech *SpeechHandle) {
 
 		// If no tool calls or StopResponse, we're done
 		if !executedTools || stopResponse {
+			if stopResponse {
+				speech.FinalOutput = "stop_response"
+			}
 			if session.Timeline != nil {
 				session.Timeline.Add("reply_generation_completed", nil)
 			}
