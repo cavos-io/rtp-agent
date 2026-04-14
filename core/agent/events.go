@@ -281,18 +281,34 @@ type StreamResponse struct {
 	Error   string `json:"error,omitempty"`
 }
 
+type TextInputEvent struct {
+	Text        string             `json:"text"`
+	Participant lksdk.Participant  `json:"-"`
+}
+
+type TextInputCallback func(s *AgentSession, ev TextInputEvent) error
+
+func DefaultTextInputCallback(s *AgentSession, ev TextInputEvent) error {
+	_ = s.Interrupt(context.Background())
+	_, err := s.GenerateReply(context.Background(), ev.Text)
+	return err
+}
+
 // ClientEventsDispatcher manages sending Agent states to the LiveKit Room DataChannel
 // and handling inbound RPC and DataChannel requests.
 type ClientEventsDispatcher struct {
-	room    *lksdk.Room
-	session *AgentSession
-	mu      sync.Mutex
+	room        *lksdk.Room
+	session     *AgentSession
+	textInputCb TextInputCallback
+	mu          sync.Mutex
+	tasks       sync.WaitGroup
 }
 
 func NewClientEventsDispatcher(room *lksdk.Room, session *AgentSession) *ClientEventsDispatcher {
 	d := &ClientEventsDispatcher{
-		room:    room,
-		session: session,
+		room:        room,
+		session:     session,
+		textInputCb: DefaultTextInputCallback,
 	}
 	d.registerHandlers()
 	
@@ -301,6 +317,12 @@ func NewClientEventsDispatcher(room *lksdk.Room, session *AgentSession) *ClientE
 	}
 	
 	return d
+}
+
+func (d *ClientEventsDispatcher) RegisterTextInput(cb TextInputCallback) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.textInputCb = cb
 }
 
 const TopicClientEvents = "lk-agent-client-events"
@@ -353,7 +375,18 @@ func (d *ClientEventsDispatcher) registerHandlers() {
 }
 
 func (d *ClientEventsDispatcher) handleUserTextInput(reader *lksdk.TextStreamReader, participantIdentity string) {
-	if d.session == nil {
+	if d.session == nil || d.room == nil {
+		return
+	}
+
+	// Python parity: check linked participant
+	if d.session.Options.LinkedParticipant != nil && participantIdentity != d.session.Options.LinkedParticipant.Identity() {
+		return
+	}
+
+	participant := d.room.GetParticipantByIdentity(participantIdentity)
+	if participant == nil {
+		logger.Logger.Warnw("participant not found, ignoring text input", nil, "participant_identity", participantIdentity)
 		return
 	}
 
@@ -362,10 +395,23 @@ func (d *ClientEventsDispatcher) handleUserTextInput(reader *lksdk.TextStreamRea
 		return
 	}
 
-	logger.Logger.Infow("received user text input", "text", text, "participant", participantIdentity)
-	
-	// Triggers async generation
-	_, _ = d.session.GenerateReply(context.Background(), text)
+	d.mu.Lock()
+	cb := d.textInputCb
+	d.mu.Unlock()
+
+	if cb == nil {
+		return
+	}
+
+	d.tasks.Add(1)
+	go func() {
+		defer d.tasks.Done()
+		logger.Logger.Infow("received user text input", "text", text, "participant", participantIdentity)
+		_ = cb(d.session, TextInputEvent{
+			Text:        text,
+			Participant: participant,
+		})
+	}()
 }
 
 func (d *ClientEventsDispatcher) handleStreamRequest(reader *lksdk.TextStreamReader, participantIdentity string) {

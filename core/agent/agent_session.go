@@ -31,6 +31,7 @@ type AgentSessionOptions struct {
 	PreemptiveGeneration          bool
 	AECWarmupDuration             float64
 	SpeakingRate                  float64
+	LinkedParticipant             lksdk.Participant
 }
 
 type AgentSession struct {
@@ -434,6 +435,17 @@ func (s *AgentSession) TimelineSnapshot() []TimelineEvent {
 		return nil
 	}
 	return s.Timeline.Snapshot()
+}
+
+func (s *AgentSession) Interrupt(ctx context.Context) error {
+	s.mu.Lock()
+	activity := s.Activity
+	s.mu.Unlock()
+
+	if activity != nil {
+		return activity.Interrupt(true)
+	}
+	return nil
 }
 
 func (s *AgentSession) Stop(ctx context.Context) error {

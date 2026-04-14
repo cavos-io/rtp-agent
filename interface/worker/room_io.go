@@ -206,6 +206,10 @@ func NewRoomIO(room *lksdk.Room, session *agent.AgentSession, opts RoomOptions) 
 	dec, _ := newOpusDecoder(48000, 1)
 	enc, _ := newOpusEncoder(48000, 1)
 
+	if opts.ParticipantIdentity != "" {
+		session.Options.LinkedParticipant = room.GetParticipantByIdentity(opts.ParticipantIdentity)
+	}
+
 	preConnectAudio := NewPreConnectAudioHandler(room, 5*time.Second)
 	preConnectAudio.Register()
 
