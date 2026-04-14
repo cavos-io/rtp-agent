@@ -198,6 +198,17 @@ func (a *AgentActivity) PushVideo(frame *model.VideoFrame) error {
 	return nil
 }
 
+func (a *AgentActivity) CaptureVideoFrame(frame *model.VideoFrame) error {
+	a.Session.mu.Lock()
+	videoOut := a.Session.Output.Video
+	a.Session.mu.Unlock()
+	
+	if videoOut != nil {
+		return videoOut.CaptureVideoFrame(frame)
+	}
+	return nil
+}
+
 func (a *AgentActivity) ScheduleSpeech(speech *SpeechHandle, priority int, force bool) error {
 	a.queueMu.Lock()
 	defer a.queueMu.Unlock()
