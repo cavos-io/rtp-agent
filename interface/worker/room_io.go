@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/cavos-io/conversation-worker/core/agent"
+	"github.com/cavos-io/conversation-worker/library/logger"
 	"github.com/cavos-io/conversation-worker/model"
 	"github.com/hraban/opus"
 	lksdk "github.com/livekit/server-sdk-go/v2"
@@ -114,6 +115,7 @@ type RoomOptions struct {
 	ParticipantIdentity string
 	CloseOnDisconnect   bool
 	DeleteRoomOnClose   bool
+	JobContext          *JobContext // Used for room deletion if DeleteRoomOnClose is true
 }
 
 type RoomIO struct {
@@ -132,16 +134,17 @@ type RoomIO struct {
 	onPlaybackStarted  func(ev agent.PlaybackStartedEvent)
 	onPlaybackFinished func(ev agent.PlaybackFinishedEvent)
 
-	playoutCh     chan *model.AudioFrame
-	flushCh       chan chan struct{}
+	playoutCh     chan interface{}
 	clearBufferCh chan struct{}
 
 	playbackStarted bool
 	pushedDuration  time.Duration
+	paused          bool
+	flushWaiters    []chan struct{}
 
 	preConnectAudio *PreConnectAudioHandler
 	audioInCh       chan *model.AudioFrame
-	
+
 	participantIdentity string
 }
 
@@ -161,9 +164,9 @@ func NewRoomIO(room *lksdk.Room, session *agent.AgentSession, opts RoomOptions) 
 		Recorder:            NewRecorderIO(session),
 		preConnectAudio:     preConnectAudio,
 		audioInCh:           make(chan *model.AudioFrame, 100),
-		playoutCh:           make(chan *model.AudioFrame, 100),
-		flushCh:             make(chan chan struct{}),
+		playoutCh:           make(chan interface{}, 100),
 		clearBufferCh:       make(chan struct{}),
+		flushWaiters:        make([]chan struct{}, 0),
 		participantIdentity: opts.ParticipantIdentity,
 	}
 
@@ -174,7 +177,7 @@ func NewRoomIO(room *lksdk.Room, session *agent.AgentSession, opts RoomOptions) 
 	}
 
 	session.Input.Audio = rio
-	session.Output.Audio = rio
+	session.SetAudioOutput(rio)
 
 	return rio
 }
@@ -200,6 +203,9 @@ func (rio *RoomIO) OnPlaybackFinished(f func(ev agent.PlaybackFinishedEvent)) {
 }
 
 // --- agent.AudioOutput Implementation ---
+
+type flushMarker chan struct{}
+
 func (rio *RoomIO) CaptureFrame(frame *model.AudioFrame) error {
 	if rio.Recorder != nil {
 		rio.Recorder.RecordOutput(frame)
@@ -219,13 +225,17 @@ func (rio *RoomIO) playoutLoop(ctx context.Context) {
 		drain:
 			for {
 				select {
-				case <-rio.playoutCh:
+				case item := <-rio.playoutCh:
+					if fm, ok := item.(flushMarker); ok {
+						close(fm)
+					}
 				default:
 					break drain
 				}
 			}
 
 			rio.mu.Lock()
+			rio.closeFlushWaitersLocked()
 			if rio.playbackStarted {
 				if rio.onPlaybackFinished != nil {
 					go rio.onPlaybackFinished(agent.PlaybackFinishedEvent{
@@ -238,91 +248,140 @@ func (rio *RoomIO) playoutLoop(ctx context.Context) {
 			}
 			rio.mu.Unlock()
 
-		case frame := <-rio.playoutCh:
-			rio.mu.Lock()
-			track := rio.audioTrack
-			encoder := rio.encoder
-
-			if !rio.playbackStarted {
-				rio.playbackStarted = true
-				if rio.onPlaybackStarted != nil {
-					go rio.onPlaybackStarted(agent.PlaybackStartedEvent{CreatedAt: time.Now()})
-				}
-			}
-			rio.mu.Unlock()
-
-			if track == nil {
-				continue
-			}
-
-			if encoder == nil || encoder.SampleRate() != int(frame.SampleRate) || encoder.Channels() != int(frame.NumChannels) {
-				enc, err := newOpusEncoder(int(frame.SampleRate), int(frame.NumChannels))
-				if err == nil {
-					rio.mu.Lock()
-					if rio.encoder != nil {
-						rio.encoder.Close()
+		case item := <-rio.playoutCh:
+			switch v := item.(type) {
+			case flushMarker:
+				rio.mu.Lock()
+				if rio.playbackStarted {
+					if rio.onPlaybackFinished != nil {
+						go rio.onPlaybackFinished(agent.PlaybackFinishedEvent{
+							PlaybackPosition: rio.pushedDuration,
+							Interrupted:      false,
+						})
 					}
-					rio.encoder = enc
-					encoder = enc
-					rio.mu.Unlock()
+					rio.playbackStarted = false
+					rio.pushedDuration = 0
 				}
-			}
 
-			data := frame.Data
-			if encoder != nil {
-				if encoded, err := encoder.Encode(frame.Data); err == nil {
-					data = encoded
+				// Remove from flushWaiters array and close it
+				for i, ch := range rio.flushWaiters {
+					if ch == (chan struct{})(v) {
+						rio.flushWaiters = append(rio.flushWaiters[:i], rio.flushWaiters[i+1:]...)
+						break
+					}
 				}
-			}
+				rio.mu.Unlock()
+				close(v)
 
-			duration := time.Duration(frame.SamplesPerChannel) * time.Second / time.Duration(frame.SampleRate)
+			case *model.AudioFrame:
+				frame := v
+				rio.mu.Lock()
+				paused := rio.paused
+				track := rio.audioTrack
+				encoder := rio.encoder
 
-			rio.mu.Lock()
-			rio.pushedDuration += duration
-			rio.mu.Unlock()
-
-			_ = track.WriteSample(media.Sample{
-				Data:     data,
-				Duration: duration,
-			}, nil)
-
-		case done := <-rio.flushCh:
-			rio.mu.Lock()
-			if rio.playbackStarted {
-				if rio.onPlaybackFinished != nil {
-					go rio.onPlaybackFinished(agent.PlaybackFinishedEvent{
-						PlaybackPosition: rio.pushedDuration,
-						Interrupted:      false,
-					})
+				if !paused && !rio.playbackStarted {
+					rio.playbackStarted = true
+					if rio.onPlaybackStarted != nil {
+						go rio.onPlaybackStarted(agent.PlaybackStartedEvent{CreatedAt: time.Now()})
+					}
 				}
-				rio.playbackStarted = false
-				rio.pushedDuration = 0
+				rio.mu.Unlock()
+
+				if track == nil {
+					continue
+				}
+
+				duration := time.Duration(frame.SamplesPerChannel) * time.Second / time.Duration(frame.SampleRate)
+
+				if paused {
+					// If paused, just sleep to simulate playout pacing and drop frame
+					time.Sleep(duration)
+					continue
+				}
+
+				if encoder == nil || encoder.SampleRate() != int(frame.SampleRate) || encoder.Channels() != int(frame.NumChannels) {
+					enc, err := newOpusEncoder(int(frame.SampleRate), int(frame.NumChannels))
+					if err == nil {
+						rio.mu.Lock()
+						if rio.encoder != nil {
+							rio.encoder.Close()
+						}
+						rio.encoder = enc
+						encoder = enc
+						rio.mu.Unlock()
+					}
+				}
+
+				data := frame.Data
+				if encoder != nil {
+					if encoded, err := encoder.Encode(frame.Data); err == nil {
+						data = encoded
+					}
+				}
+
+				rio.mu.Lock()
+				rio.pushedDuration += duration
+				rio.mu.Unlock()
+
+				_ = track.WriteSample(media.Sample{
+					Data:     data,
+					Duration: duration,
+				}, nil)
 			}
-			rio.mu.Unlock()
-			close(done)
 		}
 	}
 }
 
+func (rio *RoomIO) closeFlushWaitersLocked() {
+	for _, ch := range rio.flushWaiters {
+		close(ch)
+	}
+	rio.flushWaiters = rio.flushWaiters[:0]
+}
+
 func (rio *RoomIO) Flush() {
+	rio.mu.Lock()
 	done := make(chan struct{})
-	rio.flushCh <- done
-	<-done
+	rio.flushWaiters = append(rio.flushWaiters, done)
+	rio.mu.Unlock()
+
+	rio.playoutCh <- flushMarker(done)
 }
 
 func (rio *RoomIO) ClearBuffer() {
 	rio.clearBufferCh <- struct{}{}
 }
 
-func (rio *RoomIO) Pause()  {}
-func (rio *RoomIO) Resume() {}
+func (rio *RoomIO) Pause() {
+	rio.mu.Lock()
+	rio.paused = true
+	rio.mu.Unlock()
+}
+
+func (rio *RoomIO) Resume() {
+	rio.mu.Lock()
+	rio.paused = false
+	rio.mu.Unlock()
+}
+
 func (rio *RoomIO) WaitForPlayout(ctx context.Context) error {
-	// Wait is now implicit in Flush. Return immediately if called.
+	rio.mu.Lock()
+	var done chan struct{}
+	if len(rio.flushWaiters) > 0 {
+		done = rio.flushWaiters[len(rio.flushWaiters)-1]
+	} else {
+		// If no waiters, flush is already done
+		rio.mu.Unlock()
+		return nil
+	}
+	rio.mu.Unlock()
+
 	select {
+	case <-done:
+		return nil
 	case <-ctx.Done():
 		return ctx.Err()
-	default:
-		return nil
 	}
 }
 
@@ -478,5 +537,19 @@ func (rio *RoomIO) Close() error {
 	if rio.encoder != nil {
 		rio.encoder.Close()
 	}
+
+	if rio.Options.DeleteRoomOnClose {
+		if rio.Options.JobContext != nil && rio.Room != nil {
+			logger.Logger.Infow("deleting room on agent session close", "room", rio.Room.Name())
+			_, err := rio.Options.JobContext.DeleteRoom(context.Background(), rio.Room.Name())
+			if err != nil {
+				logger.Logger.Errorw("failed to delete room", err)
+			}
+		} else if rio.Room != nil && rio.Room.LocalParticipant != nil {
+			logger.Logger.Warnw("DeleteRoomOnClose is true but no JobContext provided, disconnecting instead", nil)
+			rio.Room.Disconnect()
+		}
+	}
+
 	return nil
 }

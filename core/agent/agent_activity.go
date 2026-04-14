@@ -687,6 +687,10 @@ func (a *AgentActivity) ClearUserTurn() {
 }
 
 func (a *AgentActivity) CommitUserTurn() {
+	if a.recog != nil {
+		// Explicitly flush the STT stream to force final transcript generation
+		_ = a.recog.Flush()
+	}
 	a.runEOUDetection(EndOfTurnInfo{})
 }
 

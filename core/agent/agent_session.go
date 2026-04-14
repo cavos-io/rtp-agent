@@ -121,6 +121,23 @@ func NewAgentSession(agent AgentInterface, room *lksdk.Room, opts AgentSessionOp
 	}
 }
 
+func (s *AgentSession) SetAudioOutput(out AudioOutput) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	s.Output.Audio = out
+	if out != nil {
+		out.OnPlaybackStarted(func(ev PlaybackStartedEvent) {
+			s.UpdateAgentState(AgentStateSpeaking)
+		})
+		out.OnPlaybackFinished(func(ev PlaybackFinishedEvent) {
+			if !ev.Interrupted {
+				s.UpdateAgentState(AgentStateListening)
+			}
+		})
+	}
+}
+
 func (s *AgentSession) Start(ctx context.Context) error {
 	s.mu.Lock()
 
@@ -149,17 +166,6 @@ func (s *AgentSession) Start(ctx context.Context) error {
 
 	if s.Assistant == nil {
 		s.Assistant = NewPipelineAgent(s.VAD, s.STT, s.LLM, s.TTS, s.ChatCtx)
-	}
-
-	if s.Output.Audio != nil {
-		s.Output.Audio.OnPlaybackStarted(func(ev PlaybackStartedEvent) {
-			s.UpdateAgentState(AgentStateSpeaking)
-		})
-		s.Output.Audio.OnPlaybackFinished(func(ev PlaybackFinishedEvent) {
-			if !ev.Interrupted {
-				s.UpdateAgentState(AgentStateListening)
-			}
-		})
 	}
 
 	if err := s.Assistant.Start(ctx, s); err != nil {
@@ -194,10 +200,15 @@ func (s *AgentSession) Close() error {
 	s.closing = true
 	s.started = false
 	activity := s.Activity
+	assistant := s.Assistant
 	s.mu.Unlock()
 
 	if activity != nil {
 		activity.Stop()
+	}
+
+	if assistant != nil {
+		assistant.Stop()
 	}
 
 	if s.Timeline != nil {

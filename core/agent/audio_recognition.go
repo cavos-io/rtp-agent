@@ -157,9 +157,20 @@ func (ar *AudioRecognition) PushAudio(frame *model.AudioFrame) error {
 	if ar.vadStream != nil {
 		_ = ar.vadStream.PushFrame(frame)
 	}
+
 	if ar.sttStream != nil {
 		_ = ar.sttStream.PushFrame(frame)
 	}
 
+	return nil
+}
+
+func (ar *AudioRecognition) Flush() error {
+	ar.mu.Lock()
+	defer ar.mu.Unlock()
+
+	if ar.sttStream != nil {
+		return ar.sttStream.Flush()
+	}
 	return nil
 }

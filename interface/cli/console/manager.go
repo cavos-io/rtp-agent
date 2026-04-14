@@ -69,7 +69,7 @@ func (cm *ConsoleManager) updateSessionIO(session *agent.AgentSession) {
 	}
 
 	session.Input.Audio = cm.audioInput
-	session.Output.Audio = cm.audioInput
+	session.SetAudioOutput(cm.audioInput)
 
 	fmt.Println("[ConsoleManager] Audio I/O attached to session")
 }

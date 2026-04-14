@@ -265,7 +265,7 @@ func (a *AudioIO) WaitForPlayout(ctx context.Context) error {
 		a.emitPlaybackFinished(false)
 		return nil
 	case <-ctx.Done():
-		a.emitPlaybackFinished(false)
+		a.emitPlaybackFinished(true)
 		return ctx.Err()
 	}
 }
