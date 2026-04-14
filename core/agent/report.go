@@ -70,3 +70,43 @@ func (r *SessionReport) SetChatHistory(chatCtx *llm.ChatContext) {
 	r.ChatHistory = chatCtx.Copy()
 	r.mu.Unlock()
 }
+
+func (r *SessionReport) ToDict() map[string]any {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	var eventsDict []any
+	for _, event := range r.Timeline {
+		if event.Type == "metrics_collected" {
+			continue // metrics are too noisy, Cloud is using the chat_history as the source of truth
+		}
+		eventsDict = append(eventsDict, event)
+	}
+
+	optionsDict := map[string]any{
+		"allow_interruptions":              r.Options.AllowInterruptions,
+		"discard_audio_if_uninterruptible": r.Options.DiscardAudioIfUninterruptible,
+		"min_interruption_duration":        r.Options.MinInterruptionDuration,
+		"min_interruption_words":           r.Options.MinInterruptionWords,
+		"min_endpointing_delay":            r.Options.MinEndpointingDelay,
+		"max_endpointing_delay":            r.Options.MaxEndpointingDelay,
+		"max_tool_steps":                   r.Options.MaxToolSteps,
+		"user_away_timeout":                r.Options.UserAwayTimeout,
+		"min_consecutive_speech_delay":     r.Options.MinConsecutiveSpeechDelay,
+		"preemptive_generation":            r.Options.PreemptiveGeneration,
+	}
+
+	dict := map[string]any{
+		"job_id":                     r.JobID,
+		"room_id":                    r.RoomID,
+		"room":                       r.Room,
+		"events":                     eventsDict,
+		"audio_recording_path":       r.AudioRecordingPath,
+		"audio_recording_started_at": r.AudioRecordingStartedAt,
+		"options":                    optionsDict,
+		"chat_history":               r.ChatHistory, // Note: In a complete impl, we might want a ChatHistory.ToDict()
+		"timestamp":                  r.Timestamp,
+	}
+
+	return dict
+}
