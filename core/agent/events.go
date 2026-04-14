@@ -140,9 +140,11 @@ type CloseEvent struct {
 func (e *CloseEvent) GetType() string { return "close" }
 
 type TimelineEvent struct {
-	Type      string         `json:"type"`
+	Event     Event          `json:"event"`
 	Timestamp float64        `json:"timestamp"`
-	Payload   map[string]any `json:"payload,omitempty"`
+	// Deprecated: use Event instead. Kept for temporary backward compatibility
+	Payload map[string]any `json:"payload,omitempty"`
+	Type    string         `json:"type,omitempty"`
 }
 
 type EventTimeline struct {
@@ -175,12 +177,16 @@ func (t *EventTimeline) AddEvent(ev Event) {
 		return
 	}
 
-	// Convert specific Event structs into the generic map timeline format
-	// This preserves the old string map format for the Timeline while allowing
-	// the core execution logic to use strongly typed Event structs.
-	t.Add(ev.GetType(), eventPayload(ev))
+	t.mu.Lock()
+	t.events = append(t.events, TimelineEvent{
+		Event:     ev,
+		Type:      ev.GetType(),
+		Timestamp: float64(time.Now().UnixNano()) / 1e9,
+		// For backward compatibility, also populate Payload
+		Payload: eventPayload(ev),
+	})
+	t.mu.Unlock()
 }
-
 func (t *EventTimeline) Snapshot() []TimelineEvent {
 	if t == nil {
 		return nil
