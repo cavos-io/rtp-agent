@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"time"
 
 	"github.com/cavos-io/conversation-worker/model"
 )
@@ -12,6 +13,16 @@ type AudioInput interface {
 	Stream() <-chan *model.AudioFrame
 	OnAttached()
 	OnDetached()
+}
+
+type PlaybackStartedEvent struct {
+	CreatedAt time.Time
+}
+
+type PlaybackFinishedEvent struct {
+	PlaybackPosition      time.Duration
+	Interrupted           bool
+	SynchronizedTranscript string
 }
 
 // AudioOutput represents a destination for audio frames (e.g., speakers or remote track)
@@ -25,6 +36,8 @@ type AudioOutput interface {
 	OnDetached()
 	Pause()
 	Resume()
+	OnPlaybackStarted(func(ev PlaybackStartedEvent))
+	OnPlaybackFinished(func(ev PlaybackFinishedEvent))
 }
 
 // TextOutput represents a destination for text (e.g., transcriptions)

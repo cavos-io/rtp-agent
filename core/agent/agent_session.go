@@ -149,6 +149,17 @@ func (s *AgentSession) Start(ctx context.Context) error {
 		s.Assistant = NewPipelineAgent(s.VAD, s.STT, s.LLM, s.TTS, s.ChatCtx)
 	}
 
+	if s.Output.Audio != nil {
+		s.Output.Audio.OnPlaybackStarted(func(ev PlaybackStartedEvent) {
+			s.UpdateAgentState(AgentStateSpeaking)
+		})
+		s.Output.Audio.OnPlaybackFinished(func(ev PlaybackFinishedEvent) {
+			if !ev.Interrupted {
+				s.UpdateAgentState(AgentStateListening)
+			}
+		})
+	}
+
 	if err := s.Assistant.Start(ctx, s); err != nil {
 		s.Activity.Stop()
 		s.Activity = nil

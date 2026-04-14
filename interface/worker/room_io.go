@@ -3,7 +3,6 @@ package worker
 import (
 	"context"
 	"errors"
-	"fmt"
 	"io"
 	"sync"
 	"time"
@@ -126,6 +125,16 @@ type RoomIO struct {
 	decoder    AudioDecoder
 	encoder    AudioEncoder
 
+	onPlaybackStarted  func(ev agent.PlaybackStartedEvent)
+	onPlaybackFinished func(ev agent.PlaybackFinishedEvent)
+
+	playoutCh     chan *model.AudioFrame
+	flushCh       chan chan struct{}
+	clearBufferCh chan struct{}
+
+	playbackStarted bool
+	pushedDuration  time.Duration
+
 	preConnectAudio *PreConnectAudioHandler
 	audioInCh       chan *model.AudioFrame
 }
@@ -146,7 +155,12 @@ func NewRoomIO(room *lksdk.Room, session *agent.AgentSession, opts RoomOptions) 
 		Recorder:        NewRecorderIO(session),
 		preConnectAudio: preConnectAudio,
 		audioInCh:       make(chan *model.AudioFrame, 100),
+		playoutCh:       make(chan *model.AudioFrame, 100),
+		flushCh:         make(chan chan struct{}),
+		clearBufferCh:   make(chan struct{}),
 	}
+
+	go rio.playoutLoop(context.Background())
 
 	if session.Assistant == nil {
 		session.Assistant = agent.NewPipelineAgent(session.VAD, session.STT, session.LLM, session.TTS, session.ChatCtx)
@@ -170,57 +184,133 @@ func (rio *RoomIO) Stream() <-chan *model.AudioFrame {
 func (rio *RoomIO) OnAttached() {}
 func (rio *RoomIO) OnDetached() {}
 
+func (rio *RoomIO) OnPlaybackStarted(f func(ev agent.PlaybackStartedEvent)) {
+	rio.onPlaybackStarted = f
+}
+
+func (rio *RoomIO) OnPlaybackFinished(f func(ev agent.PlaybackFinishedEvent)) {
+	rio.onPlaybackFinished = f
+}
+
 // --- agent.AudioOutput Implementation ---
 func (rio *RoomIO) CaptureFrame(frame *model.AudioFrame) error {
 	if rio.Recorder != nil {
 		rio.Recorder.RecordOutput(frame)
 	}
 
-	rio.mu.Lock()
-	track := rio.audioTrack
-	encoder := rio.encoder
-	rio.mu.Unlock()
-
-	if track == nil {
-		return fmt.Errorf("no audio track")
-	}
-
-	if encoder == nil || encoder.SampleRate() != int(frame.SampleRate) || encoder.Channels() != int(frame.NumChannels) {
-		enc, err := newOpusEncoder(int(frame.SampleRate), int(frame.NumChannels))
-		if err != nil {
-			return fmt.Errorf("failed to create opus encoder for %d Hz, %d ch: %w", frame.SampleRate, frame.NumChannels, err)
-		}
-		
-		rio.mu.Lock()
-		if rio.encoder != nil {
-			rio.encoder.Close()
-		}
-		rio.encoder = enc
-		encoder = enc
-		rio.mu.Unlock()
-	}
-
-	data := frame.Data
-	if encoder != nil {
-		if encoded, err := encoder.Encode(frame.Data); err == nil {
-			data = encoded
-		}
-	}
-
-	// Calculate duration based on sample rate and samples
-	duration := time.Duration(frame.SamplesPerChannel) * time.Second / time.Duration(frame.SampleRate)
-
-	return track.WriteSample(media.Sample{
-		Data:     data,
-		Duration: duration,
-	}, nil)
+	rio.playoutCh <- frame
+	return nil
 }
 
-func (rio *RoomIO) Flush()       {}
-func (rio *RoomIO) ClearBuffer() {}
-func (rio *RoomIO) Pause()       {}
-func (rio *RoomIO) Resume()      {}
+func (rio *RoomIO) playoutLoop(ctx context.Context) {
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-rio.clearBufferCh:
+			// Drain playout channel
+		drain:
+			for {
+				select {
+				case <-rio.playoutCh:
+				default:
+					break drain
+				}
+			}
+
+			rio.mu.Lock()
+			if rio.playbackStarted {
+				if rio.onPlaybackFinished != nil {
+					go rio.onPlaybackFinished(agent.PlaybackFinishedEvent{
+						PlaybackPosition: rio.pushedDuration,
+						Interrupted:      true,
+					})
+				}
+				rio.playbackStarted = false
+				rio.pushedDuration = 0
+			}
+			rio.mu.Unlock()
+
+		case frame := <-rio.playoutCh:
+			rio.mu.Lock()
+			track := rio.audioTrack
+			encoder := rio.encoder
+
+			if !rio.playbackStarted {
+				rio.playbackStarted = true
+				if rio.onPlaybackStarted != nil {
+					go rio.onPlaybackStarted(agent.PlaybackStartedEvent{CreatedAt: time.Now()})
+				}
+			}
+			rio.mu.Unlock()
+
+			if track == nil {
+				continue
+			}
+
+			if encoder == nil || encoder.SampleRate() != int(frame.SampleRate) || encoder.Channels() != int(frame.NumChannels) {
+				enc, err := newOpusEncoder(int(frame.SampleRate), int(frame.NumChannels))
+				if err == nil {
+					rio.mu.Lock()
+					if rio.encoder != nil {
+						rio.encoder.Close()
+					}
+					rio.encoder = enc
+					encoder = enc
+					rio.mu.Unlock()
+				}
+			}
+
+			data := frame.Data
+			if encoder != nil {
+				if encoded, err := encoder.Encode(frame.Data); err == nil {
+					data = encoded
+				}
+			}
+
+			duration := time.Duration(frame.SamplesPerChannel) * time.Second / time.Duration(frame.SampleRate)
+
+			rio.mu.Lock()
+			rio.pushedDuration += duration
+			rio.mu.Unlock()
+
+			_ = track.WriteSample(media.Sample{
+				Data:     data,
+				Duration: duration,
+			}, nil)
+
+		case done := <-rio.flushCh:
+			rio.mu.Lock()
+			if rio.playbackStarted {
+				if rio.onPlaybackFinished != nil {
+					go rio.onPlaybackFinished(agent.PlaybackFinishedEvent{
+						PlaybackPosition: rio.pushedDuration,
+						Interrupted:      false,
+					})
+				}
+				rio.playbackStarted = false
+				rio.pushedDuration = 0
+			}
+			rio.mu.Unlock()
+			close(done)
+		}
+	}
+}
+
+func (rio *RoomIO) Flush() {
+	done := make(chan struct{})
+	rio.flushCh <- done
+	<-done
+}
+
+func (rio *RoomIO) ClearBuffer() {
+	rio.clearBufferCh <- struct{}{}
+}
+
+func (rio *RoomIO) Pause()  {}
+func (rio *RoomIO) Resume() {}
 func (rio *RoomIO) WaitForPlayout(ctx context.Context) error {
+	// Wait is now implicit in Flush. Return immediately if called.
 	select {
 	case <-ctx.Done():
 		return ctx.Err()

@@ -6,6 +6,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/cavos-io/conversation-worker/core/agent"
 	"github.com/cavos-io/conversation-worker/model"
 	"github.com/gordonklaus/portaudio"
 )
@@ -33,6 +34,13 @@ type AudioIO struct {
 	speakerBuffer []int16
 	paused        bool
 
+	onPlaybackStarted  func(ev agent.PlaybackStartedEvent)
+	onPlaybackFinished func(ev agent.PlaybackFinishedEvent)
+	
+	playbackStarted bool
+	pushedDuration  time.Duration
+	playedSamples   int
+
 	flushWaiters  []chan struct{}
 	lastFlushWait chan struct{}
 }
@@ -47,6 +55,14 @@ func NewAudioIO() *AudioIO {
 		framesPerBuffer: 480, // 20ms at 24kHz
 		flushWaiters:    make([]chan struct{}, 0),
 	}
+}
+
+func (a *AudioIO) OnPlaybackStarted(f func(ev agent.PlaybackStartedEvent)) {
+	a.onPlaybackStarted = f
+}
+
+func (a *AudioIO) OnPlaybackFinished(f func(ev agent.PlaybackFinishedEvent)) {
+	a.onPlaybackFinished = f
 }
 
 func (a *AudioIO) Start(ctx context.Context) error {
@@ -96,17 +112,31 @@ func (a *AudioIO) Start(ctx context.Context) error {
 				return
 			}
 
+			if len(a.speakerBuffer) > 0 {
+				if !a.playbackStarted {
+					a.playbackStarted = true
+					if a.onPlaybackStarted != nil {
+						go a.onPlaybackStarted(agent.PlaybackStartedEvent{CreatedAt: time.Now()})
+					}
+				}
+			}
+
+			copied := 0
 			if len(a.speakerBuffer) >= len(out) {
 				copy(out, a.speakerBuffer[:len(out)])
 				a.speakerBuffer = a.speakerBuffer[len(out):]
+				copied = len(out)
 			} else {
 				// Play what we have, zero out the rest
 				copy(out[:len(a.speakerBuffer)], a.speakerBuffer)
+				copied = len(a.speakerBuffer)
 				for i := len(a.speakerBuffer); i < len(out); i++ {
 					out[i] = 0
 				}
 				a.speakerBuffer = a.speakerBuffer[:0]
 			}
+			a.playedSamples += copied
+			
 			if len(a.speakerBuffer) == 0 {
 				a.closeFlushWaitersLocked()
 			}
@@ -232,9 +262,31 @@ func (a *AudioIO) WaitForPlayout(ctx context.Context) error {
 
 	select {
 	case <-done:
+		a.emitPlaybackFinished(false)
 		return nil
 	case <-ctx.Done():
+		a.emitPlaybackFinished(false)
 		return ctx.Err()
+	}
+}
+
+func (a *AudioIO) emitPlaybackFinished(interrupted bool) {
+	a.mu.Lock()
+	if !a.playbackStarted {
+		a.mu.Unlock()
+		return
+	}
+	duration := time.Duration(a.playedSamples) * time.Second / time.Duration(a.sampleRate)
+	a.playbackStarted = false
+	a.playedSamples = 0
+	cb := a.onPlaybackFinished
+	a.mu.Unlock()
+
+	if cb != nil {
+		go cb(agent.PlaybackFinishedEvent{
+			PlaybackPosition: duration,
+			Interrupted:      interrupted,
+		})
 	}
 }
 
@@ -243,6 +295,7 @@ func (a *AudioIO) ClearBuffer() {
 	a.speakerBuffer = a.speakerBuffer[:0]
 	a.closeFlushWaitersLocked()
 	a.mu.Unlock()
+	a.emitPlaybackFinished(true)
 }
 
 func (a *AudioIO) Pause() {

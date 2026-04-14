@@ -171,7 +171,9 @@ func (va *PipelineAgent) GenerateReply(speech *SpeechHandle) {
 			if session.Timeline != nil {
 				session.Timeline.Add("reply_generation_interrupted", nil)
 			}
-			session.UpdateAgentState(AgentStateIdle)
+			if session.Output.Audio == nil {
+				session.UpdateAgentState(AgentStateIdle)
+			}
 			return
 		}
 
@@ -183,7 +185,9 @@ func (va *PipelineAgent) GenerateReply(speech *SpeechHandle) {
 					"error": err.Error(),
 				})
 			}
-			session.UpdateAgentState(AgentStateIdle)
+			if session.Output.Audio == nil {
+				session.UpdateAgentState(AgentStateIdle)
+			}
 			return
 		}
 
@@ -217,7 +221,9 @@ func (va *PipelineAgent) GenerateReply(speech *SpeechHandle) {
 				}()
 			}
 
-			session.UpdateAgentState(AgentStateSpeaking)
+			if session.Output.Audio == nil {
+				session.UpdateAgentState(AgentStateSpeaking)
+			}
 			for frame := range ttsGen.AudioCh {
 				if speech.IsInterrupted() {
 					break
@@ -268,7 +274,9 @@ func (va *PipelineAgent) GenerateReply(speech *SpeechHandle) {
 			if session.Timeline != nil {
 				session.Timeline.Add("reply_generation_completed", nil)
 			}
-			session.UpdateAgentState(AgentStateIdle)
+			if session.Output.Audio == nil {
+				session.UpdateAgentState(AgentStateIdle)
+			}
 			break
 		}
 
@@ -280,7 +288,9 @@ func (va *PipelineAgent) GenerateReply(speech *SpeechHandle) {
 					"max_tool_steps": session.Options.MaxToolSteps,
 				})
 			}
-			session.UpdateAgentState(AgentStateIdle)
+			if session.Output.Audio == nil {
+				session.UpdateAgentState(AgentStateIdle)
+			}
 			break
 		}
 
