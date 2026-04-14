@@ -148,8 +148,9 @@ type TimelineEvent struct {
 }
 
 type EventTimeline struct {
-	mu     sync.RWMutex
-	events []TimelineEvent
+	mu      sync.RWMutex
+	events  []TimelineEvent
+	OnEvent func(ev Event)
 }
 
 func NewEventTimeline() *EventTimeline {
@@ -185,8 +186,14 @@ func (t *EventTimeline) AddEvent(ev Event) {
 		// For backward compatibility, also populate Payload
 		Payload: eventPayload(ev),
 	})
+	onEvent := t.OnEvent
 	t.mu.Unlock()
+
+	if onEvent != nil {
+		onEvent(ev)
+	}
 }
+
 func (t *EventTimeline) Snapshot() []TimelineEvent {
 	if t == nil {
 		return nil
@@ -297,7 +304,41 @@ func NewClientEventsDispatcher(room *lksdk.Room, session *AgentSession) *ClientE
 		session: session,
 	}
 	d.registerHandlers()
+	
+	if session != nil && session.Timeline != nil {
+		session.Timeline.OnEvent = d.streamClientEvent
+	}
+	
 	return d
+}
+
+const TopicClientEvents = "lk-agent-client-events"
+
+func (d *ClientEventsDispatcher) streamClientEvent(ev Event) {
+	if d.room == nil || d.room.LocalParticipant == nil {
+		return
+	}
+
+	b, err := json.Marshal(ev)
+	if err != nil {
+		return
+	}
+
+	// Wrap in ClientEventPayload for the client
+	payload := map[string]any{
+		"type":       ev.GetType(),
+		"event":      json.RawMessage(b),
+		"created_at": float64(time.Now().UnixNano()) / 1e9,
+	}
+	
+	b, _ = json.Marshal(payload)
+	
+	_ = d.room.LocalParticipant.PublishDataPacket(
+		&lksdk.UserDataPacket{
+			Topic:   TopicClientEvents,
+			Payload: b,
+		},
+	)
 }
 
 const (
