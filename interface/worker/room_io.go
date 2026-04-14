@@ -184,6 +184,9 @@ type RoomIO struct {
 
 	participantIdentity string
 
+	trackContexts   map[string]context.CancelFunc
+	trackContextsMu sync.Mutex
+
 	sync *agent.TranscriptSynchronizer
 }
 
@@ -270,6 +273,7 @@ func NewRoomIO(room *lksdk.Room, session *agent.AgentSession, opts RoomOptions) 
 		clearBufferCh:       make(chan struct{}),
 		flushWaiters:        make([]chan struct{}, 0),
 		participantIdentity: opts.ParticipantIdentity,
+		trackContexts:       make(map[string]context.CancelFunc),
 	}
 
 	go rio.playoutLoop(context.Background())
@@ -550,6 +554,7 @@ func (rio *RoomIO) WaitForPlayout(ctx context.Context) error {
 func (rio *RoomIO) GetCallback() *lksdk.RoomCallback {
 	cb := lksdk.NewRoomCallback()
 	cb.OnTrackSubscribed = rio.onTrackSubscribed
+	cb.OnTrackUnsubscribed = rio.onTrackUnsubscribed
 	cb.OnParticipantDisconnected = rio.onParticipantDisconnected
 	return cb
 }
@@ -637,13 +642,22 @@ func (rio *RoomIO) onTrackSubscribed(track *webrtc.TrackRemote, publication *lks
 		}
 	}
 
+	rio.trackContextsMu.Lock()
+	if _, ok := rio.trackContexts[track.ID()]; ok {
+		rio.trackContextsMu.Unlock()
+		return
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	rio.trackContexts[track.ID()] = cancel
+	rio.trackContextsMu.Unlock()
+
 	if track.Kind() == webrtc.RTPCodecTypeAudio {
 		audioInputEnabled := true
 		if rio.Options.AudioInput != nil && !rio.Options.AudioInput.Enabled {
 			audioInputEnabled = false
 		}
 		if audioInputEnabled {
-			go rio.handleAudioTrack(track)
+			go rio.handleAudioTrack(ctx, track)
 		}
 	} else if track.Kind() == webrtc.RTPCodecTypeVideo {
 		videoInputEnabled := false
@@ -651,13 +665,28 @@ func (rio *RoomIO) onTrackSubscribed(track *webrtc.TrackRemote, publication *lks
 			videoInputEnabled = true
 		}
 		if videoInputEnabled {
-			go rio.handleVideoTrack(track)
+			go rio.handleVideoTrack(ctx, track)
 		}
 	}
 }
 
-func (rio *RoomIO) handleVideoTrack(track *webrtc.TrackRemote) {
+func (rio *RoomIO) onTrackUnsubscribed(track *webrtc.TrackRemote, publication *lksdk.RemoteTrackPublication, rp *lksdk.RemoteParticipant) {
+	rio.trackContextsMu.Lock()
+	if cancel, ok := rio.trackContexts[track.ID()]; ok {
+		cancel()
+		delete(rio.trackContexts, track.ID())
+	}
+	rio.trackContextsMu.Unlock()
+}
+
+func (rio *RoomIO) handleVideoTrack(ctx context.Context, track *webrtc.TrackRemote) {
 	for {
+		select {
+		case <-ctx.Done():
+			return
+		default:
+		}
+
 		rio.mu.Lock()
 		if rio.closed {
 			rio.mu.Unlock()
@@ -686,12 +715,12 @@ func (rio *RoomIO) handleVideoTrack(track *webrtc.TrackRemote) {
 	}
 }
 
-func (rio *RoomIO) handleAudioTrack(track *webrtc.TrackRemote) {
+func (rio *RoomIO) handleAudioTrack(ctx context.Context, track *webrtc.TrackRemote) {
 	// First, check for and flush any pre-connect audio buffered
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
+	preCtx, preCancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer preCancel()
 
-	if frames := rio.preConnectAudio.WaitForData(ctx, track.ID()); len(frames) > 0 {
+	if frames := rio.preConnectAudio.WaitForData(preCtx, track.ID()); len(frames) > 0 {
 		for _, frame := range frames {
 			rio.audioInCh <- frame
 		}
@@ -700,6 +729,12 @@ func (rio *RoomIO) handleAudioTrack(track *webrtc.TrackRemote) {
 	sb := samplebuilder.New(20, &codecs.OpusPacket{}, track.Codec().ClockRate)
 
 	for {
+		select {
+		case <-ctx.Done():
+			return
+		default:
+		}
+
 		rio.mu.Lock()
 		if rio.closed {
 			rio.mu.Unlock()
@@ -743,15 +778,26 @@ func (rio *RoomIO) handleAudioTrack(track *webrtc.TrackRemote) {
 
 func (rio *RoomIO) Close() error {
 	rio.mu.Lock()
-	defer rio.mu.Unlock()
+	if rio.closed {
+		rio.mu.Unlock()
+		return nil
+	}
 	rio.closed = true
+	rio.mu.Unlock()
+
+	rio.trackContextsMu.Lock()
+	for _, cancel := range rio.trackContexts {
+		cancel()
+	}
+	rio.trackContexts = make(map[string]context.CancelFunc)
+	rio.trackContextsMu.Unlock()
+
 	if rio.decoder != nil {
 		rio.decoder.Close()
 	}
 	if rio.encoder != nil {
 		rio.encoder.Close()
 	}
-
 	if rio.sync != nil {
 		rio.sync.Close()
 	}
