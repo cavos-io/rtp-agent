@@ -108,15 +108,15 @@ func (t *submitVerdictTool) Parameters() map[string]any {
 	}
 }
 
-func (t *submitVerdictTool) Execute(ctx context.Context, args map[string]any) (any, error) {
-	v, _ := args["verdict"].(string)
-	r, _ := args["reasoning"].(string)
+func (t *submitVerdictTool) Execute(ctx context.Context, args any) (any, error) {
+	m, _ := args.(map[string]any)
+	v, _ := m["verdict"].(string)
+	r, _ := m["reasoning"].(string)
 
 	t.verdict = Verdict(v)
 	t.reasoning = r
 	return "submitted", nil
 }
-
 func evaluateWithLLM(ctx context.Context, evaluatorLLM llm.LLM, prompt string) (*JudgmentResult, error) {
 	evalCtx := llm.NewChatContext()
 	evalCtx.Append(&llm.ChatMessage{

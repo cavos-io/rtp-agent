@@ -254,10 +254,11 @@ func (t *mcpProxyTool) Parameters() map[string]any {
 	return t.parameters
 }
 
-func (t *mcpProxyTool) Execute(ctx context.Context, args map[string]any) (any, error) {
+func (t *mcpProxyTool) Execute(ctx context.Context, args any) (any, error) {
+	m, _ := args.(map[string]any)
 	resp, err := t.server.sendRequest(ctx, "tools/call", map[string]interface{}{
 		"name":      t.name,
-		"arguments": args,
+		"arguments": m,
 	})
 	if err != nil {
 		return "", err

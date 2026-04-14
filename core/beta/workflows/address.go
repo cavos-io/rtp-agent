@@ -91,11 +91,35 @@ func (t *updateAddressTool) Parameters() map[string]any {
 	}
 }
 
-func (t *updateAddressTool) Execute(ctx context.Context, args map[string]any) (any, error) {
-	streetAddress, _ := args["street_address"].(string)
-	unitNumber, _ := args["unit_number"].(string)
-	locality, _ := args["locality"].(string)
-	country, _ := args["country"].(string)
+type updateAddressArgs struct {
+	StreetAddress string `json:"street_address"`
+	UnitNumber    string `json:"unit_number"`
+	Locality      string `json:"locality"`
+	Country       string `json:"country"`
+}
+
+func (t *updateAddressTool) Args() any {
+	return &updateAddressArgs{}
+}
+
+func (t *updateAddressTool) Execute(ctx context.Context, args any) (any, error) {
+	var params *updateAddressArgs
+	if typed, ok := args.(*updateAddressArgs); ok {
+		params = typed
+	} else {
+		m, _ := args.(map[string]any)
+		params = &updateAddressArgs{
+			StreetAddress: getString(m, "street_address"),
+			UnitNumber:    getString(m, "unit_number"),
+			Locality:      getString(m, "locality"),
+			Country:       getString(m, "country"),
+		}
+	}
+
+	streetAddress := params.StreetAddress
+	unitNumber := params.UnitNumber
+	locality := params.Locality
+	country := params.Country
 
 	address := streetAddress
 	if unitNumber != "" {
@@ -113,11 +137,19 @@ func (t *updateAddressTool) Execute(ctx context.Context, args map[string]any) (a
 	return fmt.Sprintf("The address has been updated to %s\nPrompt the user for confirmation, do not call `confirm_address` directly", address), nil
 }
 
+func getString(m map[string]any, key string) string {
+	if v, ok := m[key]; ok {
+		if s, ok := v.(string); ok {
+			return s
+		}
+	}
+	return ""
+}
 type confirmAddressTool struct {
 	task *GetAddressTask
 }
 
-func (t *confirmAddressTool) ID() string   { return "confirm_address" }
+func (t *confirmAddressTool) ID() string { return "confirm_address" }
 func (t *confirmAddressTool) Name() string { return "confirm_address" }
 func (t *confirmAddressTool) Description() string {
 	return "Call this tool when the user confirms that the address is correct."
@@ -129,7 +161,7 @@ func (t *confirmAddressTool) Parameters() map[string]any {
 	}
 }
 
-func (t *confirmAddressTool) Execute(ctx context.Context, args map[string]any) (any, error) {
+func (t *confirmAddressTool) Execute(ctx context.Context, args any) (any, error) {
 	if t.task.currentAddress == "" {
 		return "", fmt.Errorf("error: no address was provided, update_address must be called before")
 	}
@@ -143,7 +175,7 @@ type declineAddressCaptureTool struct {
 	task *GetAddressTask
 }
 
-func (t *declineAddressCaptureTool) ID() string   { return "decline_address_capture" }
+func (t *declineAddressCaptureTool) ID() string { return "decline_address_capture" }
 func (t *declineAddressCaptureTool) Name() string { return "decline_address_capture" }
 func (t *declineAddressCaptureTool) Description() string {
 	return "Handles the case when the user explicitly declines to provide an address."
@@ -158,8 +190,9 @@ func (t *declineAddressCaptureTool) Parameters() map[string]any {
 	}
 }
 
-func (t *declineAddressCaptureTool) Execute(ctx context.Context, args map[string]any) (any, error) {
-	reason, _ := args["reason"].(string)
+func (t *declineAddressCaptureTool) Execute(ctx context.Context, args any) (any, error) {
+	m, _ := args.(map[string]any)
+	reason, _ := m["reason"].(string)
 
 	t.task.Fail(fmt.Errorf("couldn't get the address: %s", reason))
 	return "Task failed.", nil

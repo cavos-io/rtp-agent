@@ -151,8 +151,8 @@ func (t *computerUseTool) Parameters() map[string]any {
 	}
 }
 
-func (t *computerUseTool) Execute(ctx context.Context, args map[string]any) (any, error) {
-	// The computer tool relies on the external dispatch handler for actual execution,
+func (t *computerUseTool) Execute(ctx context.Context, args any) (any, error) {
+	// The computer tool relies on the external dispatch handler for actual execution, 
 	// typically intercepting the command before it reaches this basic Execute call,
 	// or calling Execute on the Toolset directly.
 	return "Action dispatched", nil

@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"fmt"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -13,29 +14,38 @@ import (
 
 type RunEvent interface {
 	RunEventType() string
+	GetCreatedAt() time.Time
 }
 
 type ChatMessageRunEvent struct {
 	Item *llm.ChatMessage
 }
-func (e *ChatMessageRunEvent) RunEventType() string { return "message" }
+
+func (e *ChatMessageRunEvent) RunEventType() string    { return "message" }
+func (e *ChatMessageRunEvent) GetCreatedAt() time.Time { return e.Item.CreatedAt }
 
 type FunctionCallRunEvent struct {
 	Item *llm.FunctionCall
 }
-func (e *FunctionCallRunEvent) RunEventType() string { return "function_call" }
+
+func (e *FunctionCallRunEvent) RunEventType() string    { return "function_call" }
+func (e *FunctionCallRunEvent) GetCreatedAt() time.Time { return e.Item.CreatedAt }
 
 type FunctionCallOutputRunEvent struct {
 	Item *llm.FunctionCallOutput
 }
-func (e *FunctionCallOutputRunEvent) RunEventType() string { return "function_call_output" }
+
+func (e *FunctionCallOutputRunEvent) RunEventType() string    { return "function_call_output" }
+func (e *FunctionCallOutputRunEvent) GetCreatedAt() time.Time { return e.Item.CreatedAt }
 
 type AgentHandoffRunEvent struct {
 	Item     *llm.AgentHandoff
 	OldAgent AgentInterface
 	NewAgent AgentInterface
 }
-func (e *AgentHandoffRunEvent) RunEventType() string { return "agent_handoff" }
+
+func (e *AgentHandoffRunEvent) RunEventType() string    { return "agent_handoff" }
+func (e *AgentHandoffRunEvent) GetCreatedAt() time.Time { return e.Item.CreatedAt }
 
 type RunResult struct {
 	ChatCtx   *llm.ChatContext
@@ -43,12 +53,12 @@ type RunResult struct {
 	Timestamp float64
 	Expect    *RunAssert
 
-	mu           sync.Mutex
-	handles      []*SpeechHandle
-	waitCh       chan struct{}
-	done         bool
-	FinalOutput  any
-	finalError   error
+	mu          sync.Mutex
+	handles     []*SpeechHandle
+	waitCh      chan struct{}
+	done        bool
+	FinalOutput any
+	finalError  error
 
 	Events []RunEvent
 }
@@ -95,9 +105,16 @@ func (r *RunResult) AddEvent(ev RunEvent) {
 	if r.done {
 		return
 	}
-	r.Events = append(r.Events, ev)
-}
 
+	// Binary search for insertion point to maintain order by CreatedAt
+	idx := sort.Search(len(r.Events), func(i int) bool {
+		return r.Events[i].GetCreatedAt().After(ev.GetCreatedAt())
+	})
+
+	r.Events = append(r.Events, nil)
+	copy(r.Events[idx+1:], r.Events[idx:])
+	r.Events[idx] = ev
+}
 func (r *RunResult) WatchHandle(handle *SpeechHandle) {
 	r.mu.Lock()
 	defer r.mu.Unlock()

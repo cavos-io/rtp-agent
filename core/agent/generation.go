@@ -248,7 +248,8 @@ func buildToolErrorOutput(call llm.FunctionCall, err error) ToolExecutionOutput 
 			IsError:   true,
 			CreatedAt: time.Now(),
 		},
-		RawError: err,
+		RawError:      err,
+		ReplyRequired: true,
 	}
 }
 
@@ -311,6 +312,7 @@ type ToolExecutionOutput struct {
 	RawOutput     any
 	RawError      error
 	ReplyRequired bool
+	AgentTask     AgentInterface
 }
 
 func PerformToolExecutions(
@@ -390,23 +392,28 @@ func PerformToolExecutions(
 					return
 				}
 
-				// Support typed binding if the tool provides a struct
+				// Support typed binding if the tool provides a struct (prepare_function_arguments equivalent)
+				var finalArgs any = argsMap
 				if ta, ok := tool.(llm.ToolWithArgs); ok {
 					typedArgs := ta.Args()
 					if typedArgs != nil {
 						if err := json.Unmarshal([]byte(args), typedArgs); err == nil {
-							// Successfully unmarshaled into typed struct, 
-							// replace argsMap with the generic map representation of the struct 
-							// or just use it if Execute was updated (it isn't yet, keeping map for now)
+							finalArgs = typedArgs
 						}
 					}
 				}
 
-				result, err := tool.Execute(execCtx, argsMap)
+				result, err := tool.Execute(execCtx, finalArgs)
 				
 				replyRequired := true
 				if tr, ok := tool.(llm.ToolWithReply); ok {
 					replyRequired = tr.IsReplyRequired()
+				}
+
+				var agentTask AgentInterface
+				if task, ok := result.(AgentInterface); ok {
+					agentTask = task
+					result = "handoff triggered"
 				}
 
 				var fncCallOut *llm.FunctionCallOutput
@@ -448,6 +455,7 @@ func PerformToolExecutions(
 					RawOutput:     result,
 					RawError:      err,
 					ReplyRequired: replyRequired,
+					AgentTask:     agentTask,
 				}
 			}(fncCall)
 		}

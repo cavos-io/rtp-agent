@@ -11,6 +11,7 @@ import (
 	"github.com/cavos-io/conversation-worker/core/vad"
 	"github.com/cavos-io/conversation-worker/library/logger"
 	"github.com/cavos-io/conversation-worker/model"
+	"github.com/google/uuid"
 )
 
 type PipelineAgent struct {
@@ -252,7 +253,7 @@ func (va *PipelineAgent) GenerateReply(speech *SpeechHandle) {
 			if session.Output.Audio == nil {
 				session.UpdateAgentState(AgentStateSpeaking)
 			}
-			
+
 			var audioCh <-chan *model.AudioFrame = ttsGen.AudioCh
 			if baseAgent := session.Agent.GetAgent(); baseAgent != nil && baseAgent.RealtimeAudioOutputNode != nil {
 				var nodeErr error
@@ -277,7 +278,7 @@ func (va *PipelineAgent) GenerateReply(speech *SpeechHandle) {
 					}
 				}
 			}
-			
+
 			if session.Output.Audio != nil {
 				session.Output.Audio.Flush()
 				if speech.IsInterrupted() {
@@ -296,10 +297,11 @@ func (va *PipelineAgent) GenerateReply(speech *SpeechHandle) {
 		var executedTools bool
 		var stopResponse bool
 		var replyRequired bool
-		
+		var agentTask AgentInterface
+
 		var toolCalls []llm.FunctionCall
 		var toolOutputs []*llm.FunctionCallOutput
-		
+
 		for toolOut := range toolOutCh {
 			executedTools = true
 			if toolOut.RawError == llm.ErrStopResponse {
@@ -308,8 +310,12 @@ func (va *PipelineAgent) GenerateReply(speech *SpeechHandle) {
 			if toolOut.ReplyRequired {
 				replyRequired = true
 			}
+			if toolOut.AgentTask != nil {
+				agentTask = toolOut.AgentTask
+				stopResponse = true // Handoff implies stopping the current generation
+			}
 			logger.Logger.Infow("Tool executed", "name", toolOut.FncCall.Name)
-			
+
 			toolCalls = append(toolCalls, toolOut.FncCall)
 			toolOutputs = append(toolOutputs, toolOut.FncCallOut)
 
@@ -317,6 +323,37 @@ func (va *PipelineAgent) GenerateReply(speech *SpeechHandle) {
 			if toolOut.FncCallOut != nil {
 				va.chatCtx.Append(toolOut.FncCallOut)
 			}
+		}
+
+		if agentTask != nil {
+			logger.Logger.Infow("Agent handoff triggered by tool", "new_agent", agentTask.GetAgent().ID)
+			handoff := &llm.AgentHandoff{
+				ID:         "handoff_" + uuid.NewString()[:8],
+				NewAgentID: agentTask.GetAgent().ID,
+				CreatedAt:  time.Now(),
+			}
+
+			if session.Timeline != nil {
+				session.Timeline.AddEvent(&AgentHandoffEvent{
+					Handoff:   handoff,
+					OldAgent:  session.Agent,
+					NewAgent:  agentTask,
+					CreatedAt: time.Now(),
+				})
+			}
+
+			if speech.RunResult != nil {
+				speech.RunResult.AddEvent(&AgentHandoffRunEvent{
+					Item:     handoff,
+					OldAgent: session.Agent,
+					NewAgent: agentTask,
+				})
+			}
+
+			// Trigger the session update
+			go func() {
+				_ = session.UpdateAgent(agentTask)
+			}()
 		}
 
 		if executedTools {

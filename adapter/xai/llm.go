@@ -214,18 +214,18 @@ func (t *WebSearchTool) ID() string { return "xai_web_search" }
 func (t *WebSearchTool) Name() string { return "xai_web_search" }
 func (t *WebSearchTool) Description() string { return "Enable web search tool for real-time internet searches." }
 func (t *WebSearchTool) Parameters() map[string]any { return nil }
-func (t *WebSearchTool) Execute(ctx context.Context, args map[string]any) (any, error) { return "dispatched", nil }
+func (t *WebSearchTool) Execute(ctx context.Context, args any) (any, error) { return "dispatched", nil }
 
 type XSearchTool struct{ AllowedHandles []string }
 func (t *XSearchTool) ID() string { return "xai_x_search" }
 func (t *XSearchTool) Name() string { return "xai_x_search" }
 func (t *XSearchTool) Description() string { return "Enable X (Twitter) search tool for searching posts." }
 func (t *XSearchTool) Parameters() map[string]any { return nil }
-func (t *XSearchTool) Execute(ctx context.Context, args map[string]any) (any, error) { return "dispatched", nil }
+func (t *XSearchTool) Execute(ctx context.Context, args any) (any, error) { return "dispatched", nil }
 
 type FileSearchTool struct{ VectorStoreIDs []string; MaxNumResults int }
 func (t *FileSearchTool) ID() string { return "xai_file_search" }
 func (t *FileSearchTool) Name() string { return "xai_file_search" }
 func (t *FileSearchTool) Description() string { return "Enable file search tool for searching uploaded document collections." }
 func (t *FileSearchTool) Parameters() map[string]any { return nil }
-func (t *FileSearchTool) Execute(ctx context.Context, args map[string]any) (any, error) { return "dispatched", nil }
+func (t *FileSearchTool) Execute(ctx context.Context, args any) (any, error) { return "dispatched", nil }

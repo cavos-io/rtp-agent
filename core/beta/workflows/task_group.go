@@ -163,8 +163,9 @@ func (t *outOfScopeTool) Parameters() map[string]any {
 	}
 }
 
-func (t *outOfScopeTool) Execute(ctx context.Context, args map[string]any) (any, error) {
-	taskIDsRaw, ok := args["task_ids"].([]interface{})
+func (t *outOfScopeTool) Execute(ctx context.Context, args any) (any, error) {
+	m, _ := args.(map[string]any)
+	taskIDsRaw, ok := m["task_ids"].([]interface{})
 	if !ok {
 		return "", fmt.Errorf("invalid or missing task_ids array")
 	}

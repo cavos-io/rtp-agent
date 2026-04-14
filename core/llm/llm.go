@@ -198,7 +198,7 @@ type Tool interface {
 	Name() string
 	Description() string
 	Parameters() map[string]any
-	Execute(ctx context.Context, args map[string]any) (any, error)
+	Execute(ctx context.Context, args any) (any, error)
 }
 
 // ToolWithArgs indicates that a tool has a specific struct for its arguments.

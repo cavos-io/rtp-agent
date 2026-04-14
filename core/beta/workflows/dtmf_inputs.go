@@ -153,8 +153,9 @@ func (t *confirmInputsTool) Parameters() map[string]any {
 	}
 }
 
-func (t *confirmInputsTool) Execute(ctx context.Context, args map[string]any) (any, error) {
-	inputsRaw, ok := args["inputs"].([]interface{})
+func (t *confirmInputsTool) Execute(ctx context.Context, args any) (any, error) {
+	m, _ := args.(map[string]any)
+	inputsRaw, ok := m["inputs"].([]interface{})
 	if !ok {
 		return "", fmt.Errorf("invalid or missing inputs array")
 	}
@@ -196,8 +197,9 @@ func (t *recordInputsTool) Parameters() map[string]any {
 	}
 }
 
-func (t *recordInputsTool) Execute(ctx context.Context, args map[string]any) (any, error) {
-	inputsRaw, ok := args["inputs"].([]interface{})
+func (t *recordInputsTool) Execute(ctx context.Context, args any) (any, error) {
+	m, _ := args.(map[string]any)
+	inputsRaw, ok := m["inputs"].([]interface{})
 	if !ok {
 		return "", fmt.Errorf("invalid or missing inputs array")
 	}

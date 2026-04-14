@@ -30,12 +30,13 @@ type RawFunctionTool struct {
 }
 
 func (t *RawFunctionTool) ID() string                 { return t.ToolName }
-func (t *RawFunctionTool) Name() string               { return t.ToolName }
-func (t *RawFunctionTool) Description() string        { return t.ToolDescription }
+func (t *RawFunctionTool) Name() string           { return t.ToolName }
+func (t *RawFunctionTool) Description() string    { return t.ToolDescription }
 func (t *RawFunctionTool) Parameters() map[string]any { return t.ToolParameters }
-func (t *RawFunctionTool) Execute(ctx context.Context, args map[string]any) (any, error) {
+func (t *RawFunctionTool) Execute(ctx context.Context, args any) (any, error) {
 	if t.ExecuteFunc != nil {
-		return t.ExecuteFunc(ctx, args)
+		m, _ := args.(map[string]any)
+		return t.ExecuteFunc(ctx, m)
 	}
 	return nil, nil
 }

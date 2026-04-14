@@ -95,6 +95,15 @@ type FunctionToolsExecutedEvent struct {
 
 func (e *FunctionToolsExecutedEvent) GetType() string { return "function_tools_executed" }
 
+type AgentHandoffEvent struct {
+	OldAgent  AgentInterface `json:"-"`
+	NewAgent  AgentInterface `json:"-"`
+	Handoff   *llm.AgentHandoff `json:"handoff"`
+	CreatedAt time.Time      `json:"created_at"`
+}
+
+func (e *AgentHandoffEvent) GetType() string { return "agent_handoff" }
+
 type SpeechCreatedEvent struct {
 	UserInitiated bool          `json:"user_initiated"`
 	Source        string        `json:"source"`

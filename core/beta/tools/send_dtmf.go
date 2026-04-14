@@ -57,16 +57,23 @@ type sendDTMFArgs struct {
 	Events []beta.DtmfEvent `json:"events"`
 }
 
-func (t *SendDTMFTool) Execute(ctx context.Context, args map[string]any) (any, error) {
-	eventsRaw, ok := args["events"].([]interface{})
-	if !ok {
-		return "", fmt.Errorf("invalid or missing events array")
-	}
+func (t *SendDTMFTool) Args() any {
+	return &sendDTMFArgs{}
+}
 
-	var events []beta.DtmfEvent
-	for _, raw := range eventsRaw {
-		if evStr, isStr := raw.(string); isStr {
-			events = append(events, beta.DtmfEvent(evStr))
+func (t *SendDTMFTool) Execute(ctx context.Context, args any) (any, error) {
+	var a *sendDTMFArgs
+	if typed, ok := args.(*sendDTMFArgs); ok {
+		a = typed
+	} else {
+		// Fallback to manual binding if needed (though PerformToolExecutions handles it)
+		m, _ := args.(map[string]any)
+		eventsRaw, _ := m["events"].([]interface{})
+		a = &sendDTMFArgs{}
+		for _, raw := range eventsRaw {
+			if evStr, ok := raw.(string); ok {
+				a.Events = append(a.Events, beta.DtmfEvent(evStr))
+			}
 		}
 	}
 
@@ -74,7 +81,7 @@ func (t *SendDTMFTool) Execute(ctx context.Context, args map[string]any) (any, e
 		return "", fmt.Errorf("DTMF publisher not available")
 	}
 
-	for _, event := range events {
+	for _, event := range a.Events {
 		code, err := beta.DtmfEventToCode(event)
 		if err != nil {
 			return "", err
@@ -93,5 +100,5 @@ func (t *SendDTMFTool) Execute(ctx context.Context, args map[string]any) (any, e
 		}
 	}
 
-	return fmt.Sprintf("Successfully sent DTMF events: %s", beta.FormatDtmf(events)), nil
+	return fmt.Sprintf("Successfully sent DTMF events: %s", beta.FormatDtmf(a.Events)), nil
 }

@@ -162,7 +162,7 @@ func (t *connectToCallerTool) Parameters() map[string]any {
 	return map[string]any{"type": "object", "properties": map[string]any{}}
 }
 
-func (t *connectToCallerTool) Execute(ctx context.Context, args map[string]any) (any, error) {
+func (t *connectToCallerTool) Execute(ctx context.Context, args any) (any, error) {
 	err := t.task.ConnectToCaller()
 	if err != nil {
 		return "", err
@@ -189,8 +189,9 @@ func (t *declineTransferTool) Parameters() map[string]any {
 	}
 }
 
-func (t *declineTransferTool) Execute(ctx context.Context, args map[string]any) (any, error) {
-	reason, _ := args["reason"].(string)
+func (t *declineTransferTool) Execute(ctx context.Context, args any) (any, error) {
+	m, _ := args.(map[string]any)
+	reason, _ := m["reason"].(string)
 
 	t.task.Fail(fmt.Errorf("human agent declined to connect: %s", reason))
 	return "Transfer declined.", nil
@@ -209,7 +210,7 @@ func (t *voicemailDetectedTool) Parameters() map[string]any {
 	return map[string]any{"type": "object", "properties": map[string]any{}}
 }
 
-func (t *voicemailDetectedTool) Execute(ctx context.Context, args map[string]any) (any, error) {
+func (t *voicemailDetectedTool) Execute(ctx context.Context, args any) (any, error) {
 	t.task.Fail(fmt.Errorf("voicemail detected"))
 	return "Voicemail detected.", nil
 }
