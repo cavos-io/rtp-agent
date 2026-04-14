@@ -677,3 +677,32 @@ func (a *AgentActivity) runEOUDetection(info EndOfTurnInfo) {
 		}
 	}()
 }
+
+func (a *AgentActivity) ClearUserTurn() {
+	a.discardUserTurn = true
+	a.transcriptMu.Lock()
+	a.audioTranscript = ""
+	a.audioInterimTranscript = ""
+	a.transcriptMu.Unlock()
+}
+
+func (a *AgentActivity) CommitUserTurn() {
+	a.runEOUDetection(EndOfTurnInfo{})
+}
+
+func (a *AgentActivity) Pause() error {
+	a.PauseScheduling()
+	return a.Interrupt(false)
+}
+
+func (a *AgentActivity) Resume() error {
+	a.ResumeScheduling()
+	return nil
+}
+
+func (a *AgentActivity) UpdateOptions(opts AgentSessionOptions) {
+	// For now just copy them
+	a.Session.Options = opts
+}
+
+

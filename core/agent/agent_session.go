@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"fmt"
 	"sync"
 	"time"
 
@@ -71,6 +72,7 @@ type AgentSession struct {
 	mu       sync.Mutex
 	Activity *AgentActivity
 	started  bool
+	closing  bool
 
 	// Event channels
 	AgentStateChangedCh chan AgentStateChangedEvent
@@ -182,6 +184,100 @@ func (s *AgentSession) Start(ctx context.Context) error {
 
 	return nil
 }
+
+func (s *AgentSession) Close() error {
+	s.mu.Lock()
+	if !s.started || s.closing {
+		s.mu.Unlock()
+		return nil
+	}
+	s.closing = true
+	s.started = false
+	activity := s.Activity
+	s.mu.Unlock()
+
+	if activity != nil {
+		activity.Stop()
+	}
+
+	if s.Timeline != nil {
+		s.Timeline.Add("session_ended", nil)
+	}
+	s.UpdateAgentState(AgentStateIdle)
+
+	return nil
+}
+
+func (s *AgentSession) UpdateAgent(agent AgentInterface) error {
+	s.mu.Lock()
+	if !s.started || s.closing {
+		s.mu.Unlock()
+		return fmt.Errorf("session not started or closing")
+	}
+	oldActivity := s.Activity
+	
+	// Create and start new activity
+	s.Agent = agent
+	newActivity := NewAgentActivity(s.Agent, s)
+	s.Activity = newActivity
+	s.mu.Unlock()
+
+	if oldActivity != nil {
+		oldActivity.Stop()
+	}
+	newActivity.Start()
+
+	return nil
+}
+
+func (s *AgentSession) ClearUserTurn() {
+	s.mu.Lock()
+	activity := s.Activity
+	s.mu.Unlock()
+	if activity != nil {
+		activity.ClearUserTurn()
+	}
+}
+
+func (s *AgentSession) CommitUserTurn() {
+	s.mu.Lock()
+	activity := s.Activity
+	s.mu.Unlock()
+	if activity != nil {
+		activity.CommitUserTurn()
+	}
+}
+
+func (s *AgentSession) Pause() error {
+	s.mu.Lock()
+	activity := s.Activity
+	s.mu.Unlock()
+	if activity != nil {
+		return activity.Pause()
+	}
+	return nil
+}
+
+func (s *AgentSession) Resume() error {
+	s.mu.Lock()
+	activity := s.Activity
+	s.mu.Unlock()
+	if activity != nil {
+		return activity.Resume()
+	}
+	return nil
+}
+
+func (s *AgentSession) UpdateOptions(opts AgentSessionOptions) {
+	s.mu.Lock()
+	s.Options = opts
+	activity := s.Activity
+	s.mu.Unlock()
+	if activity != nil {
+		activity.UpdateOptions(opts)
+	}
+}
+
 
 func (s *AgentSession) reportUsageLoop(ctx context.Context) {
 	ticker := time.NewTicker(30 * time.Second)
