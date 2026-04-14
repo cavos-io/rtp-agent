@@ -1,6 +1,7 @@
 package llm
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"reflect"
@@ -9,10 +10,10 @@ import (
 var ErrStopResponse = errors.New("stop response")
 
 type ToolContext struct {
-	tools          []interface{} // Tool | Toolset
-	functionTools  map[string]Tool
-	providerTools  []ProviderTool
-	toolsets       []Toolset
+	tools         []interface{} // Tool | Toolset
+	functionTools map[string]Tool
+	providerTools []ProviderTool
+	toolsets      []Toolset
 }
 
 // ProviderTool represents a tool that is evaluated or passed raw to a provider.
@@ -20,10 +21,59 @@ type ProviderTool interface {
 	IsProviderTool() bool
 }
 
+// RawFunctionTool represents a tool defined by a raw JSON Schema.
+type RawFunctionTool struct {
+	ToolName        string
+	ToolDescription string
+	ToolParameters  map[string]any
+	ExecuteFunc     func(ctx context.Context, args map[string]any) (any, error)
+}
+
+func (t *RawFunctionTool) ID() string                 { return t.ToolName }
+func (t *RawFunctionTool) Name() string               { return t.ToolName }
+func (t *RawFunctionTool) Description() string        { return t.ToolDescription }
+func (t *RawFunctionTool) Parameters() map[string]any { return t.ToolParameters }
+func (t *RawFunctionTool) Execute(ctx context.Context, args map[string]any) (any, error) {
+	if t.ExecuteFunc != nil {
+		return t.ExecuteFunc(ctx, args)
+	}
+	return nil, nil
+}
+
 func NewToolContext(tools []interface{}) *ToolContext {
 	ctx := &ToolContext{}
-	ctx.UpdateTools(tools)
+	_ = ctx.UpdateTools(tools)
 	return ctx
+}
+
+func (c *ToolContext) ParseFunctionTools(format string) []map[string]any {
+	out := make([]map[string]any, 0)
+	for _, t := range c.functionTools {
+		switch format {
+		case "openai":
+			out = append(out, map[string]any{
+				"type": "function",
+				"function": map[string]any{
+					"name":        t.Name(),
+					"description": t.Description(),
+					"parameters":  t.Parameters(),
+				},
+			})
+		case "anthropic":
+			out = append(out, map[string]any{
+				"name":         t.Name(),
+				"description":  t.Description(),
+				"input_schema": t.Parameters(),
+			})
+		default:
+			out = append(out, map[string]any{
+				"name":        t.Name(),
+				"description": t.Description(),
+				"parameters":  t.Parameters(),
+			})
+		}
+	}
+	return out
 }
 
 func EmptyToolContext() *ToolContext {
