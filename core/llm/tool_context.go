@@ -2,9 +2,11 @@ package llm
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"reflect"
+	"strings"
 )
 
 var ErrStopResponse = errors.New("stop response")
@@ -23,31 +25,34 @@ type ProviderTool interface {
 	ProviderSchema(format string) map[string]any
 }
 
-// BuildFunctionTool uses reflection to build a Tool from a Go function, extracting its signature into a JSON schema.
-func BuildFunctionTool(fn any, name, description string) (Tool, error) {
-	fnVal := reflect.ValueOf(fn)
-	if fnVal.Kind() != reflect.Func {
-		return nil, fmt.Errorf("expected func, got %v", fnVal.Kind())
+func BuildJSONSchema(t reflect.Type) map[string]any {
+	if t.Kind() == reflect.Ptr {
+		t = t.Elem()
 	}
-	fnType := fnVal.Type()
+	if t.Kind() != reflect.Struct {
+		return map[string]any{"type": "object"}
+	}
 
 	properties := make(map[string]any)
 	required := make([]string, 0)
 
-	// Build a simple JSON schema from function parameters. 
-	// In a full implementation, we'd use struct tags or a builder.
-	// Here we just map basic Go types for parity.
-	for i := 0; i < fnType.NumIn(); i++ {
-		inType := fnType.In(i)
-		// Skip context.Context if it's the first argument
-		if i == 0 && inType.String() == "context.Context" {
+	for i := 0; i < t.NumField(); i++ {
+		field := t.Field(i)
+		if field.PkgPath != "" { // Skip unexported fields
 			continue
 		}
-		
-		argName := fmt.Sprintf("arg%d", i)
+
+		name := field.Tag.Get("json")
+		if name == "" || name == "-" {
+			name = field.Name
+		}
+		// handle omitempty
+		if idx := strings.Index(name, ","); idx != -1 {
+			name = name[:idx]
+		}
+
 		prop := map[string]any{}
-		
-		switch inType.Kind() {
+		switch field.Type.Kind() {
 		case reflect.String:
 			prop["type"] = "string"
 		case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
@@ -56,18 +61,98 @@ func BuildFunctionTool(fn any, name, description string) (Tool, error) {
 			prop["type"] = "number"
 		case reflect.Bool:
 			prop["type"] = "boolean"
+		case reflect.Struct:
+			prop = BuildJSONSchema(field.Type)
+		case reflect.Slice:
+			prop["type"] = "array"
+			prop["items"] = map[string]any{"type": "string"} // simplistic
 		default:
 			prop["type"] = "object"
 		}
-		
-		properties[argName] = prop
-		required = append(required, argName)
+
+		desc := field.Tag.Get("description")
+		if desc != "" {
+			prop["description"] = desc
+		}
+
+		properties[name] = prop
+		required = append(required, name)
 	}
 
-	parameters := map[string]any{
+	return map[string]any{
 		"type":       "object",
 		"properties": properties,
 		"required":   required,
+	}
+}
+
+// BuildFunctionTool uses reflection to build a Tool from a Go function, extracting its signature into a JSON schema.
+func BuildFunctionTool(fn any, name, description string) (Tool, error) {
+	fnVal := reflect.ValueOf(fn)
+	if fnVal.Kind() != reflect.Func {
+		return nil, fmt.Errorf("expected func, got %v", fnVal.Kind())
+	}
+	fnType := fnVal.Type()
+
+	var parameters map[string]any
+
+	// Check if the last argument (excluding error) is a struct
+	argIdx := -1
+	for i := 0; i < fnType.NumIn(); i++ {
+		inType := fnType.In(i)
+		if inType.String() == "context.Context" {
+			continue
+		}
+		argIdx = i
+		break
+	}
+
+	if argIdx != -1 {
+		inType := fnType.In(argIdx)
+		if inType.Kind() == reflect.Ptr {
+			inType = inType.Elem()
+		}
+		if inType.Kind() == reflect.Struct {
+			parameters = BuildJSONSchema(inType)
+		}
+	}
+
+	if parameters == nil {
+		// Fallback to simple positional arguments
+		properties := make(map[string]any)
+		required := make([]string, 0)
+
+		for i := 0; i < fnType.NumIn(); i++ {
+			inType := fnType.In(i)
+			if i == 0 && inType.String() == "context.Context" {
+				continue
+			}
+
+			argName := fmt.Sprintf("arg%d", i)
+			prop := map[string]any{}
+
+			switch inType.Kind() {
+			case reflect.String:
+				prop["type"] = "string"
+			case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
+				prop["type"] = "integer"
+			case reflect.Float32, reflect.Float64:
+				prop["type"] = "number"
+			case reflect.Bool:
+				prop["type"] = "boolean"
+			default:
+				prop["type"] = "object"
+			}
+
+			properties[argName] = prop
+			required = append(required, argName)
+		}
+
+		parameters = map[string]any{
+			"type":       "object",
+			"properties": properties,
+			"required":   required,
+		}
 	}
 
 	return &RawFunctionTool{
@@ -78,13 +163,34 @@ func BuildFunctionTool(fn any, name, description string) (Tool, error) {
 			in := make([]reflect.Value, fnType.NumIn())
 			for i := 0; i < fnType.NumIn(); i++ {
 				inType := fnType.In(i)
-				if i == 0 && inType.String() == "context.Context" {
+				if inType.String() == "context.Context" {
 					in[i] = reflect.ValueOf(ctx)
 					continue
 				}
+
+				// If it's a struct arg
+				if inType.Kind() == reflect.Struct || (inType.Kind() == reflect.Ptr && inType.Elem().Kind() == reflect.Struct) {
+					isPtr := inType.Kind() == reflect.Ptr
+					structType := inType
+					if isPtr {
+						structType = inType.Elem()
+					}
+					structVal := reflect.New(structType).Elem()
+
+					// simplistic unmarshal from map
+					data, _ := json.Marshal(args)
+					_ = json.Unmarshal(data, structVal.Addr().Interface())
+
+					if isPtr {
+						in[i] = structVal.Addr()
+					} else {
+						in[i] = structVal
+					}
+					continue
+				}
+
 				argName := fmt.Sprintf("arg%d", i)
 				if val, ok := args[argName]; ok {
-					// We would need robust type conversion here in a real impl
 					in[i] = reflect.ValueOf(val).Convert(inType)
 				} else {
 					in[i] = reflect.Zero(inType)
