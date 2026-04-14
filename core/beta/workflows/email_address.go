@@ -6,7 +6,6 @@ import (
 	"regexp"
 
 	"github.com/cavos-io/conversation-worker/core/agent"
-	"github.com/cavos-io/conversation-worker/core/llm"
 )
 
 var emailRegex = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._%+\-]*@(?:[A-Za-z0-9](?:[A-Za-z0-9\-]*[A-Za-z0-9])?\.)+[A-Za-z]{2,}$`)
@@ -48,8 +47,7 @@ func NewGetEmailTask(requireConfirmation bool) *GetEmailTask {
 		AgentTask:           *agent.NewAgentTask[*GetEmailResult](EmailInstructions),
 		RequireConfirmation: requireConfirmation,
 	}
-
-	t.Agent.Tools = []llm.Tool{
+	t.Agent.Tools = []interface{}{
 		&updateEmailTool{task: t},
 		&confirmEmailTool{task: t},
 		&declineEmailCaptureTool{task: t},
@@ -122,7 +120,7 @@ type confirmEmailTool struct {
 	task *GetEmailTask
 }
 
-func (t *confirmEmailTool) ID() string { return "confirm_email_address" }
+func (t *confirmEmailTool) ID() string   { return "confirm_email_address" }
 func (t *confirmEmailTool) Name() string { return "confirm_email_address" }
 func (t *confirmEmailTool) Description() string {
 	return "Validates/confirms the email address provided by the user."
@@ -148,7 +146,7 @@ type declineEmailCaptureTool struct {
 	task *GetEmailTask
 }
 
-func (t *declineEmailCaptureTool) ID() string { return "decline_email_capture" }
+func (t *declineEmailCaptureTool) ID() string   { return "decline_email_capture" }
 func (t *declineEmailCaptureTool) Name() string { return "decline_email_capture" }
 func (t *declineEmailCaptureTool) Description() string {
 	return "Handles the case when the user explicitly declines to provide an email address."

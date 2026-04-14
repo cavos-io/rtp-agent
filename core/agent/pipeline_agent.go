@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"fmt"
 	"sync"
 	"time"
 
@@ -154,9 +155,6 @@ func (va *PipelineAgent) GenerateReply(speech *SpeechHandle) {
 	}
 
 	logger.Logger.Infow("Generating reply")
-	if session.Timeline != nil {
-		session.Timeline.Add("reply_generation_started", nil)
-	}
 	session.UpdateAgentState(AgentStateThinking)
 
 	toolsInterface := make([]interface{}, len(session.Tools))
@@ -169,9 +167,6 @@ func (va *PipelineAgent) GenerateReply(speech *SpeechHandle) {
 	steps := 1
 	for {
 		if speech.IsInterrupted() {
-			if session.Timeline != nil {
-				session.Timeline.Add("reply_generation_interrupted", nil)
-			}
 			if session.Output.Audio == nil {
 				session.UpdateAgentState(AgentStateIdle)
 			}
@@ -221,9 +216,6 @@ func (va *PipelineAgent) GenerateReply(speech *SpeechHandle) {
 				})
 			}
 		} else {
-			if session.Timeline != nil {
-				session.Timeline.Add("tts_playout_started", nil)
-			}
 			var alignedWG sync.WaitGroup
 			if session.Options.UseTTSAlignedTranscript && session.Output.Transcription != nil {
 				var textCh <-chan string = ttsGen.AlignedTextCh
@@ -287,9 +279,6 @@ func (va *PipelineAgent) GenerateReply(speech *SpeechHandle) {
 					_ = session.Output.Audio.WaitForPlayout(ctx)
 				}
 			}
-			if session.Timeline != nil {
-				session.Timeline.Add("tts_playout_finished", nil)
-			}
 			alignedWG.Wait()
 		}
 
@@ -335,10 +324,12 @@ func (va *PipelineAgent) GenerateReply(speech *SpeechHandle) {
 
 			if session.Timeline != nil {
 				session.Timeline.AddEvent(&AgentHandoffEvent{
-					Handoff:   handoff,
-					OldAgent:  session.Agent,
-					NewAgent:  agentTask,
-					CreatedAt: time.Now(),
+					Handoff:    handoff,
+					OldAgent:   session.Agent,
+					NewAgent:   agentTask,
+					OldAgentID: session.Agent.GetAgent().ID,
+					NewAgentID: agentTask.GetAgent().ID,
+					CreatedAt:  time.Now(),
 				})
 			}
 
@@ -363,7 +354,7 @@ func (va *PipelineAgent) GenerateReply(speech *SpeechHandle) {
 					FunctionCallOutputs: toolOutputs,
 					CreatedAt:           time.Now(),
 					HasToolReply:        replyRequired,
-					HasAgentHandoff:     stopResponse, // StopResponse usually implies handoff or explicit silence
+					HasAgentHandoff:     agentTask != nil,
 				})
 			}
 		}
@@ -372,10 +363,12 @@ func (va *PipelineAgent) GenerateReply(speech *SpeechHandle) {
 		if !executedTools || stopResponse || !replyRequired {
 			if stopResponse {
 				speech.FinalOutput = "stop_response"
+			} else if genData.GeneratedText != "" {
+				speech.FinalOutput = genData.GeneratedText
+			} else if len(toolCalls) > 0 {
+				speech.FinalOutput = toolCalls
 			}
-			if session.Timeline != nil {
-				session.Timeline.Add("reply_generation_completed", nil)
-			}
+
 			if session.Output.Audio == nil {
 				session.UpdateAgentState(AgentStateIdle)
 			}
@@ -386,8 +379,10 @@ func (va *PipelineAgent) GenerateReply(speech *SpeechHandle) {
 		if session.Options.MaxToolSteps > 0 && steps > session.Options.MaxToolSteps+1 {
 			logger.Logger.Infow("maximum number of tool steps reached", "maxToolSteps", session.Options.MaxToolSteps)
 			if session.Timeline != nil {
-				session.Timeline.Add("tool_step_limit_reached", map[string]any{
-					"max_tool_steps": session.Options.MaxToolSteps,
+				session.Timeline.AddEvent(&ErrorEvent{
+					Error:     fmt.Errorf("maximum number of tool steps reached: %d", session.Options.MaxToolSteps),
+					Source:    "pipeline_agent",
+					CreatedAt: time.Now(),
 				})
 			}
 			if session.Output.Audio == nil {

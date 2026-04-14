@@ -72,7 +72,7 @@ func (t *EndCallTool) Parameters() map[string]any {
 	}
 }
 
-func (t *EndCallTool) Execute(ctx context.Context, args map[string]any) (any, error) {
+func (t *EndCallTool) Execute(ctx context.Context, args any) (any, error) {
 	if t.shutter == nil {
 		return "", fmt.Errorf("shutter not available")
 	}

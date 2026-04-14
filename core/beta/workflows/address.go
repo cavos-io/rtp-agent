@@ -5,7 +5,6 @@ import (
 	"fmt"
 
 	"github.com/cavos-io/conversation-worker/core/agent"
-	"github.com/cavos-io/conversation-worker/core/llm"
 )
 
 type GetAddressResult struct {
@@ -51,8 +50,7 @@ func NewGetAddressTask(requireConfirmation bool) *GetAddressTask {
 		AgentTask:           *agent.NewAgentTask[*GetAddressResult](AddressInstructions),
 		RequireConfirmation: requireConfirmation,
 	}
-
-	t.Agent.Tools = []llm.Tool{
+	t.Agent.Tools = []interface{}{
 		&updateAddressTool{task: t},
 		&confirmAddressTool{task: t},
 		&declineAddressCaptureTool{task: t},
@@ -145,11 +143,12 @@ func getString(m map[string]any, key string) string {
 	}
 	return ""
 }
+
 type confirmAddressTool struct {
 	task *GetAddressTask
 }
 
-func (t *confirmAddressTool) ID() string { return "confirm_address" }
+func (t *confirmAddressTool) ID() string   { return "confirm_address" }
 func (t *confirmAddressTool) Name() string { return "confirm_address" }
 func (t *confirmAddressTool) Description() string {
 	return "Call this tool when the user confirms that the address is correct."
@@ -175,7 +174,7 @@ type declineAddressCaptureTool struct {
 	task *GetAddressTask
 }
 
-func (t *declineAddressCaptureTool) ID() string { return "decline_address_capture" }
+func (t *declineAddressCaptureTool) ID() string   { return "decline_address_capture" }
 func (t *declineAddressCaptureTool) Name() string { return "decline_address_capture" }
 func (t *declineAddressCaptureTool) Description() string {
 	return "Handles the case when the user explicitly declines to provide an address."

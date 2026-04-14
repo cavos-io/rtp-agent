@@ -32,7 +32,7 @@ type AgentInterface interface {
 	GetActivity() *AgentActivity
 }
 
-type LLMNodeFunc func(ctx context.Context, l llm.LLM, chatCtx *llm.ChatContext, tools []llm.Tool) (*LLMGenerationData, error)
+type LLMNodeFunc func(ctx context.Context, l llm.LLM, chatCtx *llm.ChatContext, tools []interface{}) (*LLMGenerationData, error)
 type TTSNodeFunc func(ctx context.Context, t tts.TTS, textCh <-chan string) (*TTSGenerationData, error)
 type STTNodeFunc func(ctx context.Context, s stt.STT, audio <-chan *model.AudioFrame) (<-chan *stt.SpeechEvent, error)
 type TranscriptionNodeFunc func(ctx context.Context, textCh <-chan string) (<-chan string, error)
@@ -42,7 +42,7 @@ type Agent struct {
 	ID           string
 	Instructions string
 	ChatCtx      *llm.ChatContext
-	Tools        []llm.Tool
+	Tools        []interface{}
 
 	TurnDetection TurnDetectionMode
 	TurnDetector  TurnDetector
@@ -70,7 +70,7 @@ func NewAgent(instructions string) *Agent {
 	return &Agent{
 		Instructions: instructions,
 		ChatCtx:      llm.NewChatContext(),
-		Tools:        make([]llm.Tool, 0),
+		Tools:        make([]interface{}, 0),
 	}
 }
 
@@ -90,7 +90,7 @@ func (a *Agent) UpdateInstructions(ctx context.Context, instructions string) err
 	return nil
 }
 
-func (a *Agent) UpdateTools(ctx context.Context, tools []llm.Tool) error {
+func (a *Agent) UpdateTools(ctx context.Context, tools []interface{}) error {
 	a.Tools = tools
 	return nil
 }
@@ -125,7 +125,24 @@ func (a *Agent) OnUserTurnCompleted(ctx context.Context, chatCtx *llm.ChatContex
 		return nil
 	}
 
-	handle := NewSpeechHandle(a.activity.Session.Options.AllowInterruptions, DefaultInputDetails())
+	session := a.activity.Session
+	handle := NewSpeechHandle(session.Options.AllowInterruptions, DefaultInputDetails())
+
+	participantID := ""
+	if session.Room != nil && session.Room.LocalParticipant != nil {
+		participantID = session.Room.LocalParticipant.Identity()
+	}
+
+	if session.Timeline != nil {
+		session.Timeline.AddEvent(&SpeechCreatedEvent{
+			UserInitiated: true,
+			Source:        "on_user_turn_completed",
+			SpeechHandle:  handle,
+			ParticipantID: participantID,
+			CreatedAt:     time.Now(),
+		})
+	}
+
 	if err := a.activity.ScheduleSpeech(handle, SpeechPriorityNormal, false); err != nil {
 		return err
 	}

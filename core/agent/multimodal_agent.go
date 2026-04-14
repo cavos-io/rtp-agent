@@ -55,7 +55,14 @@ func (ma *MultimodalAgent) Start(ctx context.Context, s *AgentSession) error {
 	}
 	ma.rtSession = rtSession
 
-	if err := ma.rtSession.UpdateTools(s.Tools); err != nil {
+	var llmTools []llm.Tool
+	for _, t := range s.Tools {
+		if ft, ok := t.(llm.Tool); ok {
+			llmTools = append(llmTools, ft)
+		}
+	}
+
+	if err := ma.rtSession.UpdateTools(llmTools); err != nil {
 		logger.Logger.Errorw("failed to update tools on realtime session", err)
 	}
 
@@ -120,10 +127,12 @@ func (ma *MultimodalAgent) handleRealtimeEvent(ev llm.RealtimeEvent) {
 
 		// Find and execute tool
 		var foundTool llm.Tool
-		for _, t := range ma.session.Tools {
-			if t.Name() == ev.Function.Name {
-				foundTool = t
-				break
+		for _, tInterface := range ma.session.Tools {
+			if t, ok := tInterface.(llm.Tool); ok {
+				if t.Name() == ev.Function.Name {
+					foundTool = t
+					break
+				}
 			}
 		}
 

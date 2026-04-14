@@ -42,7 +42,7 @@ type AgentSession struct {
 	VAD       vad.VAD
 	LLM       llm.LLM
 	TTS       tts.TTS
-	Tools     []llm.Tool
+	Tools     []interface{}
 	Assistant *PipelineAgent
 	Room      *lksdk.Room
 
@@ -75,13 +75,10 @@ func NewAgentSession(agent AgentInterface, room *lksdk.Room, opts AgentSessionOp
 		baseAgent.ChatCtx = chatCtx
 	}
 
-	tools := make([]llm.Tool, len(baseAgent.Tools))
+	tools := make([]interface{}, len(baseAgent.Tools))
 	copy(tools, baseAgent.Tools)
 
 	timeline := NewEventTimeline()
-	timeline.Add("session_created", map[string]any{
-		"has_room": room != nil,
-	})
 
 	if opts.SpeakingRate <= 0 {
 		opts.SpeakingRate = 3.83
@@ -182,9 +179,6 @@ func (s *AgentSession) Start(ctx context.Context) error {
 	s.started = true
 	s.mu.Unlock()
 
-	if s.Timeline != nil {
-		s.Timeline.Add("session_started", nil)
-	}
 	s.UpdateAgentState(AgentStateListening)
 
 	return nil
@@ -380,7 +374,7 @@ func (s *AgentSession) UpdateUserState(state UserState) {
 	}
 }
 
-func (s *AgentSession) GenerateReply(ctx context.Context, userInput string) (*RunResult, error) {
+func (s *AgentSession) GenerateReply(ctx context.Context, userInput string) (*RunResult[any], error) {
 	s.mu.Lock()
 	activity := s.Activity
 	s.mu.Unlock()
@@ -391,18 +385,28 @@ func (s *AgentSession) GenerateReply(ctx context.Context, userInput string) (*Ru
 
 	// Trigger the pipeline
 	logger.Logger.Infow("Generating reply", "userInput", userInput)
-	if s.Timeline != nil {
-		s.Timeline.Add("reply_requested", map[string]any{
-			"has_user_input": userInput != "",
-		})
-	}
 
 	// Create a speech handle
 	handle := NewSpeechHandle(s.Options.AllowInterruptions, DefaultInputDetails())
 	
+	participantID := ""
+	if s.Room != nil && s.Room.LocalParticipant != nil {
+		participantID = s.Room.LocalParticipant.Identity()
+	}
+
+	if s.Timeline != nil {
+		s.Timeline.AddEvent(&SpeechCreatedEvent{
+			UserInitiated: true,
+			Source:        "generate_reply",
+			SpeechHandle:  handle,
+			ParticipantID: participantID,
+			CreatedAt:     time.Now(),
+		})
+	}
+	
 	// Create run result and watch the new handle
-	runResult := NewRunResult(s.ChatCtx)
-	runResult.WatchHandle(handle)
+	runResult := NewRunResult[any](s.ChatCtx)
+	runResult.WatchHandle(ctx, handle)
 	handle.RunResult = runResult
 
 	// Add user message to ChatContext if provided

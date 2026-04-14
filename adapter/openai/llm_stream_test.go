@@ -107,7 +107,7 @@ func TestChatSendsParallelToolCallsWithTools(t *testing.T) {
 	defer server.Close()
 
 	model := NewOpenAILLMWithBaseURL("test-key", "gpt-4o-mini", server.URL+"/v1")
-	stream, err := model.Chat(context.Background(), newChatContext(), llm.WithTools([]llm.Tool{testTool{}}))
+	stream, err := model.Chat(context.Background(), newChatContext(), llm.WithTools([]interface{}{testTool{}}))
 	if err != nil {
 		t.Fatalf("chat failed: %v", err)
 	}

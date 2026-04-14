@@ -134,7 +134,7 @@ func evaluateWithLLM(ctx context.Context, evaluatorLLM llm.LLM, prompt string) (
 
 	verdictTool := &submitVerdictTool{}
 
-	stream, err := evaluatorLLM.Chat(ctx, evalCtx, llm.WithTools([]llm.Tool{verdictTool}), llm.WithToolChoice("submit_verdict"))
+	stream, err := evaluatorLLM.Chat(ctx, evalCtx, llm.WithTools([]interface{}{verdictTool}), llm.WithToolChoice("submit_verdict"))
 	if err != nil {
 		return nil, fmt.Errorf("evaluation failed to start: %w", err)
 	}

@@ -8,7 +8,6 @@ import (
 
 	"github.com/cavos-io/conversation-worker/core/agent"
 	"github.com/cavos-io/conversation-worker/core/beta"
-	"github.com/cavos-io/conversation-worker/core/llm"
 	"github.com/cavos-io/conversation-worker/library/logger"
 )
 
@@ -49,9 +48,9 @@ user will directly say the digits to you. You should be able to handle both case
 	}
 
 	if askConfirmation {
-		t.Agent.Tools = []llm.Tool{&confirmInputsTool{task: t}}
+		t.Agent.Tools = []interface{}{&confirmInputsTool{task: t}}
 	} else {
-		t.Agent.Tools = []llm.Tool{&recordInputsTool{task: t}}
+		t.Agent.Tools = []interface{}{&recordInputsTool{task: t}}
 	}
 
 	return t

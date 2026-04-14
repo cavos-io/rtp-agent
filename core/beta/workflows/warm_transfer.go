@@ -90,7 +90,7 @@ func NewWarmTransferTask(targetPhone string, trunkId string, chatCtx *llm.ChatCo
 		t.SipTrunkID = os.Getenv("LIVEKIT_SIP_OUTBOUND_TRUNK")
 	}
 
-	t.Agent.Tools = []llm.Tool{
+	t.Agent.Tools = []interface{}{
 		&connectToCallerTool{task: t},
 		&declineTransferTool{task: t},
 		&voicemailDetectedTool{task: t},
