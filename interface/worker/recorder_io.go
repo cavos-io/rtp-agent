@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/cavos-io/conversation-worker/core/agent"
+	"github.com/cavos-io/conversation-worker/core/audio"
 	"github.com/cavos-io/conversation-worker/library/logger"
 	"github.com/cavos-io/conversation-worker/model"
 	"github.com/hraban/opus"
@@ -17,7 +18,7 @@ import (
 )
 
 func createSilenceFrame(duration time.Duration, sampleRate uint32, numChannels uint32) *model.AudioFrame {
-	samples := int(duration.Seconds() * float64(sampleRate))
+	samples := int(duration.Nanoseconds() * int64(sampleRate) / 1e9)
 	data := make([]byte, samples*int(numChannels)*2) // 16-bit PCM
 	return &model.AudioFrame{
 		Data:              data,
@@ -259,7 +260,7 @@ func (r *RecorderAudioOutput) resetPauseState() {
 
 func splitFrame(frame *model.AudioFrame, dur time.Duration) (*model.AudioFrame, *model.AudioFrame) {
 	// Simple split by duration
-	samples := int(dur.Seconds() * float64(frame.SampleRate))
+	samples := int(dur.Nanoseconds() * int64(frame.SampleRate) / 1e9)
 	if samples <= 0 {
 		return nil, frame
 	}
@@ -359,16 +360,37 @@ func (r *RecorderAudioOutput) onPlaybackFinished(ev agent.PlaybackFinishedEvent)
 
 	shouldBreak := false
 	for _, frame := range r.accFrames {
-		frameDur := time.Duration(float64(frame.SamplesPerChannel)/float64(frame.SampleRate)*1000) * time.Millisecond
+		if frame == nil {
+			continue
+		}
+		frameDur := time.Duration(float64(frame.SamplesPerChannel)/float64(frame.SampleRate)*float64(time.Second))
+
+		for len(pauseEvents) > 0 && pauseEvents[0].position < accDur+frameDur {
+			p := pauseEvents[0]
+			pauseEvents = pauseEvents[1:]
+
+			f1, f2 := splitFrame(frame, p.position-accDur)
+			if f1 != nil {
+				buf = append(buf, f1)
+			}
+			buf = append(buf, createSilenceFrame(p.duration, sampleRate, numChannels))
+			frame = f2
+			if frame == nil {
+				accDur = p.position
+				frameDur = 0
+				break
+			}
+			accDur = p.position
+			frameDur = time.Duration(float64(frame.SamplesPerChannel)/float64(frame.SampleRate)*float64(time.Second))
+		}
+
+		if frame == nil {
+			continue
+		}
+
 		if accDur+frameDur > playbackPos {
 			frame, _ = splitFrame(frame, playbackPos-accDur)
 			shouldBreak = true
-		}
-
-		for len(pauseEvents) > 0 && pauseEvents[0].position <= accDur {
-			p := pauseEvents[0]
-			pauseEvents = pauseEvents[1:]
-			buf = append(buf, createSilenceFrame(p.duration, sampleRate, numChannels))
 		}
 
 		if frame != nil {
@@ -547,18 +569,35 @@ func (r *RecorderIO) encodeThread(sampleRate int) {
 			continue
 		}
 
-		// Calculate total samples
-		var inSamples, outSamples int
+		// Decode, sum to mono, and resample input
+		var inPcm []int16
+		inRate := sampleRate
+		if len(inFrames) > 0 {
+			inRate = int(inFrames[0].SampleRate)
+		}
 		for _, f := range inFrames {
-			inSamples += int(f.SamplesPerChannel)
+			pcm := audio.BytesToInt16(f.Data)
+			mono := audio.SumToMono(pcm, int(f.NumChannels))
+			inPcm = append(inPcm, mono...)
+		}
+		inPcm = audio.ResampleLinear(inPcm, inRate, sampleRate)
+
+		// Decode, sum to mono, and resample output
+		var outPcm []int16
+		outRate := sampleRate
+		if len(outFrames) > 0 {
+			outRate = int(outFrames[0].SampleRate)
 		}
 		for _, f := range outFrames {
-			outSamples += int(f.SamplesPerChannel)
+			pcm := audio.BytesToInt16(f.Data)
+			mono := audio.SumToMono(pcm, int(f.NumChannels))
+			outPcm = append(outPcm, mono...)
 		}
+		outPcm = audio.ResampleLinear(outPcm, outRate, sampleRate)
 
-		maxSamples := inSamples
-		if outSamples > maxSamples {
-			maxSamples = outSamples
+		maxSamples := len(inPcm)
+		if len(outPcm) > maxSamples {
+			maxSamples = len(outPcm)
 		}
 
 		if maxSamples == 0 {
@@ -569,32 +608,16 @@ func (r *RecorderIO) encodeThread(sampleRate int) {
 		stereoBuf := make([]int16, maxSamples*2)
 
 		// Mix input to left channel (0, 2, 4...)
-		inPos := 0
-		for _, f := range inFrames {
-			for i := 0; i < int(f.SamplesPerChannel); i++ {
-				if inPos < maxSamples {
-					idx := i * 2
-					if idx+1 < len(f.Data) {
-						sample := int16(f.Data[idx]) | (int16(f.Data[idx+1]) << 8)
-						stereoBuf[inPos*2] = sample
-						inPos++
-					}
-				}
+		for i, sample := range inPcm {
+			if i < maxSamples {
+				stereoBuf[i*2] = sample
 			}
 		}
 
 		// Mix output to right channel (1, 3, 5...)
-		outPos := 0
-		for _, f := range outFrames {
-			for i := 0; i < int(f.SamplesPerChannel); i++ {
-				if outPos < maxSamples {
-					idx := i * 2
-					if idx+1 < len(f.Data) {
-						sample := int16(f.Data[idx]) | (int16(f.Data[idx+1]) << 8)
-						stereoBuf[outPos*2+1] = sample
-						outPos++
-					}
-				}
+		for i, sample := range outPcm {
+			if i < maxSamples {
+				stereoBuf[i*2+1] = sample
 			}
 		}
 

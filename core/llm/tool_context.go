@@ -23,7 +23,89 @@ type ProviderTool interface {
 	ProviderSchema(format string) map[string]any
 }
 
-// RawFunctionTool represents a tool defined by a raw JSON Schema.
+// BuildFunctionTool uses reflection to build a Tool from a Go function, extracting its signature into a JSON schema.
+func BuildFunctionTool(fn any, name, description string) (Tool, error) {
+	fnVal := reflect.ValueOf(fn)
+	if fnVal.Kind() != reflect.Func {
+		return nil, fmt.Errorf("expected func, got %v", fnVal.Kind())
+	}
+	fnType := fnVal.Type()
+
+	properties := make(map[string]any)
+	required := make([]string, 0)
+
+	// Build a simple JSON schema from function parameters. 
+	// In a full implementation, we'd use struct tags or a builder.
+	// Here we just map basic Go types for parity.
+	for i := 0; i < fnType.NumIn(); i++ {
+		inType := fnType.In(i)
+		// Skip context.Context if it's the first argument
+		if i == 0 && inType.String() == "context.Context" {
+			continue
+		}
+		
+		argName := fmt.Sprintf("arg%d", i)
+		prop := map[string]any{}
+		
+		switch inType.Kind() {
+		case reflect.String:
+			prop["type"] = "string"
+		case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
+			prop["type"] = "integer"
+		case reflect.Float32, reflect.Float64:
+			prop["type"] = "number"
+		case reflect.Bool:
+			prop["type"] = "boolean"
+		default:
+			prop["type"] = "object"
+		}
+		
+		properties[argName] = prop
+		required = append(required, argName)
+	}
+
+	parameters := map[string]any{
+		"type":       "object",
+		"properties": properties,
+		"required":   required,
+	}
+
+	return &RawFunctionTool{
+		ToolName:        name,
+		ToolDescription: description,
+		ToolParameters:  parameters,
+		ExecuteFunc: func(ctx context.Context, args map[string]any) (any, error) {
+			in := make([]reflect.Value, fnType.NumIn())
+			for i := 0; i < fnType.NumIn(); i++ {
+				inType := fnType.In(i)
+				if i == 0 && inType.String() == "context.Context" {
+					in[i] = reflect.ValueOf(ctx)
+					continue
+				}
+				argName := fmt.Sprintf("arg%d", i)
+				if val, ok := args[argName]; ok {
+					// We would need robust type conversion here in a real impl
+					in[i] = reflect.ValueOf(val).Convert(inType)
+				} else {
+					in[i] = reflect.Zero(inType)
+				}
+			}
+			out := fnVal.Call(in)
+			if len(out) > 0 {
+				errIdx := len(out) - 1
+				if !out[errIdx].IsNil() {
+					if err, ok := out[errIdx].Interface().(error); ok {
+						return nil, err
+					}
+				}
+				if len(out) > 1 {
+					return out[0].Interface(), nil
+				}
+			}
+			return nil, nil
+		},
+	}, nil
+}
 type RawFunctionTool struct {
 	ToolName        string
 	ToolDescription string
@@ -151,6 +233,29 @@ func (c *ToolContext) GetFunctionTool(name string) Tool {
 		return t
 	}
 	return nil
+}
+
+func (c *ToolContext) Equal(other *ToolContext) bool {
+	if other == nil {
+		return false
+	}
+	if len(c.functionTools) != len(other.functionTools) {
+		return false
+	}
+	for name, t := range c.functionTools {
+		if otherT, ok := other.functionTools[name]; !ok || t != otherT {
+			return false
+		}
+	}
+	if len(c.providerTools) != len(other.providerTools) {
+		return false
+	}
+	for i, t := range c.providerTools {
+		if other.providerTools[i] != t {
+			return false
+		}
+	}
+	return true
 }
 
 func (c *ToolContext) UpdateTools(tools []interface{}) error {

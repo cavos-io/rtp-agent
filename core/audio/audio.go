@@ -107,3 +107,18 @@ func Int16ToBytes(data []int16) []byte {
 	}
 	return out
 }
+
+func SumToMono(data []int16, channels int) []int16 {
+	if channels == 1 {
+		return data
+	}
+	out := make([]int16, len(data)/channels)
+	for i := 0; i < len(out); i++ {
+		var sum int32
+		for c := 0; c < channels; c++ {
+			sum += int32(data[i*channels+c])
+		}
+		out[i] = int16(sum / int32(channels))
+	}
+	return out
+}
