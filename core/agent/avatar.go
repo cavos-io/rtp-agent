@@ -218,6 +218,16 @@ func (r *AvatarRunner) publishTracks(ctx context.Context) error {
 	return nil
 }
 
+func (r *AvatarRunner) SendLipSyncEvent(ctx context.Context, data []byte) error {
+	if r.room == nil || r.room.LocalParticipant == nil {
+		return fmt.Errorf("room or local participant is nil")
+	}
+
+	topic := "lk-agent-lipsync"
+	err := r.room.LocalParticipant.PublishData(data, lksdk.WithDataPublishReliable(true), lksdk.WithDataPublishTopic(topic))
+	return err
+}
+
 func (r *AvatarRunner) readAudioLoop() {
 	stream := r.audioRecv.Stream()
 	for {
