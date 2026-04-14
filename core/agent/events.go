@@ -16,6 +16,110 @@ type Event interface {
 	GetType() string
 }
 
+// Discriminator types
+type UserState string
+
+const (
+	UserStateSpeaking  UserState = "speaking"
+	UserStateListening UserState = "listening"
+	UserStateAway      UserState = "away"
+)
+
+type AgentState string
+
+const (
+	AgentStateInitializing AgentState = "initializing"
+	AgentStateIdle         AgentState = "idle"
+	AgentStateListening    AgentState = "listening"
+	AgentStateThinking     AgentState = "thinking"
+	AgentStateSpeaking     AgentState = "speaking"
+)
+
+// -- Strongly Typed Events --
+
+type UserStateChangedEvent struct {
+	OldState  UserState `json:"old_state"`
+	NewState  UserState `json:"new_state"`
+	CreatedAt time.Time `json:"created_at"`
+}
+func (e *UserStateChangedEvent) GetType() string { return "user_state_changed" }
+
+type AgentStateChangedEvent struct {
+	OldState  AgentState `json:"old_state"`
+	NewState  AgentState `json:"new_state"`
+	CreatedAt time.Time  `json:"created_at"`
+}
+func (e *AgentStateChangedEvent) GetType() string { return "agent_state_changed" }
+
+type UserInputTranscribedEvent struct {
+	Transcript string    `json:"transcript"`
+	IsFinal    bool      `json:"is_final"`
+	SpeakerID  string    `json:"speaker_id,omitempty"`
+	Language   string    `json:"language,omitempty"`
+	CreatedAt  time.Time `json:"created_at"`
+}
+func (e *UserInputTranscribedEvent) GetType() string { return "user_input_transcribed" }
+
+type AgentFalseInterruptionEvent struct {
+	Resumed   bool      `json:"resumed"`
+	CreatedAt time.Time `json:"created_at"`
+}
+func (e *AgentFalseInterruptionEvent) GetType() string { return "agent_false_interruption" }
+
+type MetricsCollectedEvent struct {
+	Metrics   telemetry.AgentMetrics `json:"metrics"`
+	CreatedAt time.Time              `json:"created_at"`
+}
+func (e *MetricsCollectedEvent) GetType() string { return "metrics_collected" }
+
+type ConversationItemAddedEvent struct {
+	Item      llm.ChatItem `json:"item"`
+	CreatedAt time.Time    `json:"created_at"`
+}
+func (e *ConversationItemAddedEvent) GetType() string { return "conversation_item_added" }
+
+type FunctionToolsExecutedEvent struct {
+	FunctionCalls       []llm.FunctionCall         `json:"function_calls"`
+	FunctionCallOutputs []*llm.FunctionCallOutput  `json:"function_call_outputs"`
+	CreatedAt           time.Time                  `json:"created_at"`
+	HasToolReply        bool                       `json:"has_tool_reply"`
+	HasAgentHandoff     bool                       `json:"has_agent_handoff"`
+}
+func (e *FunctionToolsExecutedEvent) GetType() string { return "function_tools_executed" }
+
+type SpeechCreatedEvent struct {
+	UserInitiated bool          `json:"user_initiated"`
+	Source        string        `json:"source"`
+	SpeechHandle  *SpeechHandle `json:"-"`
+	CreatedAt     time.Time     `json:"created_at"`
+}
+func (e *SpeechCreatedEvent) GetType() string { return "speech_created" }
+
+type ErrorEvent struct {
+	Error     error     `json:"error"`
+	Source    any       `json:"source,omitempty"`
+	CreatedAt time.Time `json:"created_at"`
+}
+func (e *ErrorEvent) GetType() string { return "error" }
+
+type CloseReason string
+
+const (
+	CloseReasonError                   CloseReason = "error"
+	CloseReasonJobShutdown             CloseReason = "job_shutdown"
+	CloseReasonParticipantDisconnected CloseReason = "participant_disconnected"
+	CloseReasonUserInitiated           CloseReason = "user_initiated"
+	CloseReasonTaskCompleted           CloseReason = "task_completed"
+)
+
+type CloseEvent struct {
+	Reason    CloseReason `json:"reason"`
+	Error     error       `json:"error,omitempty"`
+	CreatedAt time.Time   `json:"created_at"`
+}
+func (e *CloseEvent) GetType() string { return "close" }
+
+
 type TimelineEvent struct {
 	Type      string         `json:"type"`
 	Timestamp float64        `json:"timestamp"`
@@ -51,6 +155,10 @@ func (t *EventTimeline) AddEvent(ev Event) {
 	if t == nil || ev == nil {
 		return
 	}
+	
+	// Convert specific Event structs into the generic map timeline format
+	// This preserves the old string map format for the Timeline while allowing
+	// the core execution logic to use strongly typed Event structs.
 	t.Add(ev.GetType(), eventPayload(ev))
 }
 
@@ -80,56 +188,6 @@ func eventPayload(ev Event) map[string]any {
 
 	return payload
 }
-
-type UserInputTranscribedEvent struct {
-	Language   string
-	Transcript string
-	IsFinal    bool
-	SpeakerID  string
-	CreatedAt  time.Time
-}
-
-func (e *UserInputTranscribedEvent) GetType() string { return "user_input_transcribed" }
-
-type ConversationItemAddedEvent struct {
-	Item      llm.ChatItem
-	CreatedAt time.Time
-}
-
-func (e *ConversationItemAddedEvent) GetType() string { return "conversation_item_added" }
-
-type MetricsCollectedEvent struct {
-	Metrics   telemetry.AgentMetrics
-	CreatedAt time.Time
-}
-
-func (e *MetricsCollectedEvent) GetType() string { return "metrics_collected" }
-
-type SpeechCreatedEvent struct {
-	UserInitiated bool
-	Source        string // "say" or "generate_reply"
-	SpeechHandle  *SpeechHandle
-	CreatedAt     time.Time
-}
-
-func (e *SpeechCreatedEvent) GetType() string { return "speech_created" }
-
-type CloseReason string
-
-const (
-	CloseReasonError                   CloseReason = "error"
-	CloseReasonJobShutdown             CloseReason = "job_shutdown"
-	CloseReasonParticipantDisconnected CloseReason = "participant_disconnected"
-	CloseReasonUserInitiated           CloseReason = "user_initiated"
-)
-
-type CloseEvent struct {
-	Reason    CloseReason
-	Error     error
-	CreatedAt time.Time
-}
-
-func (e *CloseEvent) GetType() string { return "close" }
 
 type RunContext struct {
 	Session      *AgentSession

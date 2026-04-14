@@ -181,8 +181,10 @@ func (va *PipelineAgent) GenerateReply(speech *SpeechHandle) {
 		if err != nil {
 			logger.Logger.Errorw("LLM inference failed", err)
 			if session.Timeline != nil {
-				session.Timeline.Add("llm_inference_failed", map[string]any{
-					"error": err.Error(),
+				session.Timeline.AddEvent(&ErrorEvent{
+					Error:     err,
+					Source:    va.LLM,
+					CreatedAt: time.Now(),
 				})
 			}
 			if session.Output.Audio == nil {
@@ -198,8 +200,10 @@ func (va *PipelineAgent) GenerateReply(speech *SpeechHandle) {
 		if err != nil {
 			logger.Logger.Errorw("TTS inference failed", err)
 			if session.Timeline != nil {
-				session.Timeline.Add("tts_inference_failed", map[string]any{
-					"error": err.Error(),
+				session.Timeline.AddEvent(&ErrorEvent{
+					Error:     err,
+					Source:    va.tts,
+					CreatedAt: time.Now(),
 				})
 			}
 		} else {
@@ -254,22 +258,35 @@ func (va *PipelineAgent) GenerateReply(speech *SpeechHandle) {
 		// Wait for tool executions to complete and collect results
 		var executedTools bool
 		var stopResponse bool
+		
+		var toolCalls []llm.FunctionCall
+		var toolOutputs []*llm.FunctionCallOutput
+		
 		for toolOut := range toolOutCh {
 			executedTools = true
 			if toolOut.RawError == llm.ErrStopResponse {
 				stopResponse = true
 			}
 			logger.Logger.Infow("Tool executed", "name", toolOut.FncCall.Name)
-			if session.Timeline != nil {
-				session.Timeline.Add("tool_executed", map[string]any{
-					"name":     toolOut.FncCall.Name,
-					"is_error": toolOut.RawError != nil && toolOut.RawError != llm.ErrStopResponse,
-				})
-			}
+			
+			toolCalls = append(toolCalls, toolOut.FncCall)
+			toolOutputs = append(toolOutputs, toolOut.FncCallOut)
 
 			va.chatCtx.Append(&toolOut.FncCall)
 			if toolOut.FncCallOut != nil {
 				va.chatCtx.Append(toolOut.FncCallOut)
+			}
+		}
+
+		if executedTools {
+			if session.Timeline != nil {
+				session.Timeline.AddEvent(&FunctionToolsExecutedEvent{
+					FunctionCalls:       toolCalls,
+					FunctionCallOutputs: toolOutputs,
+					CreatedAt:           time.Now(),
+					HasToolReply:        false,
+					HasAgentHandoff:     stopResponse, // StopResponse usually implies handoff or explicit silence
+				})
 			}
 		}
 

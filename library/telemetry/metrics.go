@@ -140,6 +140,8 @@ type UsageSummary struct {
 	STTAudioDuration          float64
 }
 
+func (m *UsageSummary) GetType() string { return "usage_summary" }
+
 type UsageCollector struct {
 	summary UsageSummary
 	mu      sync.Mutex

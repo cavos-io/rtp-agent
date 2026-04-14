@@ -15,21 +15,6 @@ import (
 	lksdk "github.com/livekit/server-sdk-go/v2"
 )
 
-type UserState string
-type AgentState string
-
-const (
-	UserStateSpeaking  UserState = "speaking"
-	UserStateListening UserState = "listening"
-	UserStateAway      UserState = "away"
-
-	AgentStateInitializing AgentState = "initializing"
-	AgentStateIdle         AgentState = "idle"
-	AgentStateListening    AgentState = "listening"
-	AgentStateThinking     AgentState = "thinking"
-	AgentStateSpeaking     AgentState = "speaking"
-)
-
 type AgentSessionOptions struct {
 	AllowInterruptions            bool
 	DiscardAudioIfUninterruptible bool
@@ -77,16 +62,6 @@ type AgentSession struct {
 	// Event channels
 	AgentStateChangedCh chan AgentStateChangedEvent
 	UserStateChangedCh  chan UserStateChangedEvent
-}
-
-type AgentStateChangedEvent struct {
-	OldState AgentState
-	NewState AgentState
-}
-
-type UserStateChangedEvent struct {
-	OldState UserState
-	NewState UserState
 }
 
 func NewAgentSession(agent AgentInterface, room *lksdk.Room, opts AgentSessionOptions) *AgentSession {
@@ -212,7 +187,10 @@ func (s *AgentSession) Close() error {
 	}
 
 	if s.Timeline != nil {
-		s.Timeline.Add("session_ended", nil)
+		s.Timeline.AddEvent(&CloseEvent{
+			Reason:    CloseReasonUserInitiated,
+			CreatedAt: time.Now(),
+		})
 	}
 	s.UpdateAgentState(AgentStateIdle)
 
@@ -302,6 +280,13 @@ func (s *AgentSession) reportUsageLoop(ctx context.Context) {
 			if s.MetricsCollector != nil && s.ChatCtx != nil {
 				summary := s.MetricsCollector.GetSummary()
 				s.ChatCtx.Append(&llm.MetricsReport{Usage: summary})
+				
+				if s.Timeline != nil {
+					s.Timeline.AddEvent(&MetricsCollectedEvent{
+						Metrics:   &summary,
+						CreatedAt: time.Now(),
+					})
+				}
 			}
 		}
 	}
@@ -316,15 +301,17 @@ func (s *AgentSession) UpdateAgentState(state AgentState) {
 	if oldState != state {
 		logger.Logger.Debugw("Agent state changed", "old", oldState, "new", state)
 		if s.Timeline != nil {
-			s.Timeline.Add("agent_state_changed", map[string]any{
-				"old": string(oldState),
-				"new": string(state),
+			s.Timeline.AddEvent(&AgentStateChangedEvent{
+				OldState:  oldState,
+				NewState:  state,
+				CreatedAt: time.Now(),
 			})
 		}
 		select {
 		case s.AgentStateChangedCh <- AgentStateChangedEvent{
-			OldState: oldState,
-			NewState: state,
+			OldState:  oldState,
+			NewState:  state,
+			CreatedAt: time.Now(),
 		}:
 		default:
 			// Channel full, ignore
@@ -341,15 +328,17 @@ func (s *AgentSession) UpdateUserState(state UserState) {
 	if oldState != state {
 		logger.Logger.Debugw("User state changed", "old", oldState, "new", state)
 		if s.Timeline != nil {
-			s.Timeline.Add("user_state_changed", map[string]any{
-				"old": string(oldState),
-				"new": string(state),
+			s.Timeline.AddEvent(&UserStateChangedEvent{
+				OldState:  oldState,
+				NewState:  state,
+				CreatedAt: time.Now(),
 			})
 		}
 		select {
 		case s.UserStateChangedCh <- UserStateChangedEvent{
-			OldState: oldState,
-			NewState: state,
+			OldState:  oldState,
+			NewState:  state,
+			CreatedAt: time.Now(),
 		}:
 		default:
 			// Channel full, ignore
@@ -423,7 +412,10 @@ func (s *AgentSession) Stop(ctx context.Context) error {
 	}
 
 	if s.Timeline != nil {
-		s.Timeline.Add("session_stopped", nil)
+		s.Timeline.AddEvent(&CloseEvent{
+			Reason:    CloseReasonJobShutdown,
+			CreatedAt: time.Now(),
+		})
 	}
 
 	s.mu.Lock()

@@ -651,9 +651,10 @@ func (a *AgentActivity) runEOUDetection(info EndOfTurnInfo) {
 			}
 
 			if a.Session.Timeline != nil {
-				a.Session.Timeline.Add("user_turn_completed", map[string]any{
-					"transcript": transcript,
-					"confidence": info.TranscriptConfidence,
+				a.Session.Timeline.AddEvent(&UserInputTranscribedEvent{
+					Transcript: transcript,
+					IsFinal:    true,
+					CreatedAt:  time.Now(),
 				})
 			}
 			newMsg := &llm.ChatMessage{
