@@ -2,7 +2,9 @@ package agent
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -35,6 +37,10 @@ func PerformLLMInference(ctx context.Context, l llm.LLM, chatCtx *llm.ChatContex
 		defer stream.Close()
 
 		startTime := time.Now()
+		toolCalls := make([]*llm.FunctionToolCall, 0)
+		toolCallsByID := make(map[string]*llm.FunctionToolCall)
+		toolCallsByIndex := make(map[int]*llm.FunctionToolCall)
+
 		for {
 			chunk, err := stream.Next()
 			if err != nil {
@@ -51,24 +57,186 @@ func PerformLLMInference(ctx context.Context, l llm.LLM, chatCtx *llm.ChatContex
 					data.TextCh <- chunk.Delta.Content
 				}
 				for _, fc := range chunk.Delta.ToolCalls {
-					f := fc
-					data.FunctionCh <- &f
+					mergeToolCallDelta(&toolCalls, toolCallsByID, toolCallsByIndex, fc)
 				}
 			}
+		}
+
+		for idx, fc := range toolCalls {
+			finalized := finalizeToolCall(fc, idx)
+			if finalized == nil {
+				continue
+			}
+			data.FunctionCh <- finalized
 		}
 	}()
 
 	return data, nil
 }
 
+func mergeToolCallDelta(
+	ordered *[]*llm.FunctionToolCall,
+	byID map[string]*llm.FunctionToolCall,
+	byIndex map[int]*llm.FunctionToolCall,
+	delta llm.FunctionToolCall,
+) {
+	idx, hasIndex := extractToolCallIndex(delta.Extra)
+
+	var call *llm.FunctionToolCall
+	if delta.CallID != "" {
+		call = byID[delta.CallID]
+	}
+	if call == nil && hasIndex {
+		call = byIndex[idx]
+	}
+	if call == nil {
+		call = &llm.FunctionToolCall{}
+		*ordered = append(*ordered, call)
+	}
+
+	if delta.CallID != "" {
+		byID[delta.CallID] = call
+	}
+	if hasIndex {
+		byIndex[idx] = call
+	}
+
+	if call.Type == "" && delta.Type != "" {
+		call.Type = delta.Type
+	}
+	if call.Name == "" && delta.Name != "" {
+		call.Name = delta.Name
+	}
+	if delta.Arguments != "" {
+		call.Arguments += delta.Arguments
+	}
+	if call.CallID == "" && delta.CallID != "" {
+		call.CallID = delta.CallID
+	}
+	if call.Extra == nil {
+		call.Extra = make(map[string]any)
+	}
+	for k, v := range delta.Extra {
+		if _, exists := call.Extra[k]; !exists || call.Extra[k] == nil {
+			call.Extra[k] = v
+		}
+	}
+}
+
+func finalizeToolCall(call *llm.FunctionToolCall, fallbackIndex int) *llm.FunctionToolCall {
+	if call == nil {
+		return nil
+	}
+
+	out := *call
+	out.Name = strings.TrimSpace(out.Name)
+	out.Arguments = strings.TrimSpace(out.Arguments)
+
+	if out.Name == "" {
+		return nil
+	}
+	if out.Arguments == "" {
+		out.Arguments = "{}"
+	}
+	if out.CallID == "" {
+		out.CallID = fmt.Sprintf("%s_%d", out.Name, fallbackIndex)
+	}
+	if out.Extra == nil {
+		out.Extra = make(map[string]any)
+	}
+	if _, ok := out.Extra["index"]; !ok {
+		out.Extra["index"] = fallbackIndex
+	}
+
+	return &out
+}
+
+func extractToolCallIndex(extra map[string]any) (int, bool) {
+	if extra == nil {
+		return 0, false
+	}
+
+	value, ok := extra["index"]
+	if !ok || value == nil {
+		return 0, false
+	}
+
+	switch v := value.(type) {
+	case int:
+		return v, true
+	case int32:
+		return int(v), true
+	case int64:
+		return int(v), true
+	case float32:
+		return int(v), true
+	case float64:
+		return int(v), true
+	case json.Number:
+		n, err := v.Int64()
+		if err != nil {
+			return 0, false
+		}
+		return int(n), true
+	default:
+		return 0, false
+	}
+}
+
+func validateToolArguments(args string) (string, error) {
+	trimmed := strings.TrimSpace(args)
+	if trimmed == "" {
+		return "{}", nil
+	}
+
+	if !json.Valid([]byte(trimmed)) {
+		return "", fmt.Errorf("invalid tool arguments: not valid JSON")
+	}
+
+	var payload any
+	if err := json.Unmarshal([]byte(trimmed), &payload); err != nil {
+		return "", fmt.Errorf("invalid tool arguments: %w", err)
+	}
+
+	if _, ok := payload.(map[string]any); !ok {
+		return "", fmt.Errorf("invalid tool arguments: expected JSON object")
+	}
+
+	return trimmed, nil
+}
+
+func buildToolCallID(name string) string {
+	trimmedName := strings.TrimSpace(name)
+	if trimmedName == "" {
+		trimmedName = "tool"
+	}
+	return fmt.Sprintf("%s_%d", trimmedName, time.Now().UnixNano())
+}
+
+func buildToolErrorOutput(call llm.FunctionCall, err error) ToolExecutionOutput {
+	return ToolExecutionOutput{
+		FncCall: call,
+		FncCallOut: &llm.FunctionCallOutput{
+			CallID:    call.CallID,
+			Name:      call.Name,
+			Output:    err.Error(),
+			IsError:   true,
+			CreatedAt: time.Now(),
+		},
+		RawError: err,
+	}
+}
+
 type TTSGenerationData struct {
-	AudioCh chan *model.AudioFrame
-	TTFB    time.Duration
+	AudioCh       chan *model.AudioFrame
+	AlignedTextCh chan string
+	TTFB          time.Duration
 }
 
 func PerformTTSInference(ctx context.Context, t tts.TTS, textCh <-chan string) (*TTSGenerationData, error) {
 	data := &TTSGenerationData{
-		AudioCh: make(chan *model.AudioFrame, 100),
+		AudioCh:       make(chan *model.AudioFrame, 100),
+		AlignedTextCh: make(chan string, 100),
 	}
 
 	stream, err := t.Stream(ctx)
@@ -78,10 +246,11 @@ func PerformTTSInference(ctx context.Context, t tts.TTS, textCh <-chan string) (
 
 	go func() {
 		defer close(data.AudioCh)
+		defer close(data.AlignedTextCh)
 		defer stream.Close()
 
 		startTime := time.Now()
-		
+
 		for text := range textCh {
 			filteredText := tts.ApplyTextTransforms(text)
 			if filteredText != "" {
@@ -99,6 +268,12 @@ func PerformTTSInference(ctx context.Context, t tts.TTS, textCh <-chan string) (
 				data.TTFB = time.Since(startTime)
 			}
 			data.AudioCh <- audio.Frame
+			if audio.DeltaText != "" {
+				select {
+				case data.AlignedTextCh <- audio.DeltaText:
+				default:
+				}
+			}
 		}
 	}()
 
@@ -127,32 +302,44 @@ func PerformToolExecutions(
 			wg.Add(1)
 			go func(fc *llm.FunctionToolCall) {
 				defer wg.Done()
-				
+
+				if fc == nil {
+					return
+				}
+
+				callID := strings.TrimSpace(fc.CallID)
+				if callID == "" {
+					callID = buildToolCallID(fc.Name)
+				}
+				name := strings.TrimSpace(fc.Name)
+				args, argsErr := validateToolArguments(fc.Arguments)
+
 				call := llm.FunctionCall{
-					CallID:    fc.CallID,
-					Name:      fc.Name,
-					Arguments: fc.Arguments,
+					CallID:    callID,
+					Name:      name,
+					Arguments: args,
 					Extra:     fc.Extra,
 					CreatedAt: time.Now(),
 				}
 
-				tool := toolCtx.GetFunctionTool(fc.Name)
-				if tool == nil {
-					outCh <- ToolExecutionOutput{
-						FncCall: call,
-						FncCallOut: &llm.FunctionCallOutput{
-							CallID:    fc.CallID,
-							Name:      fc.Name,
-							Output:    fmt.Sprintf("Unknown function: %s", fc.Name),
-							IsError:   true,
-							CreatedAt: time.Now(),
-						},
-						RawError: fmt.Errorf("unknown function: %s", fc.Name),
-					}
+				if name == "" {
+					outCh <- buildToolErrorOutput(call, fmt.Errorf("empty function name"))
 					return
 				}
 
-				result, err := tool.Execute(ctx, fc.Arguments)
+				if argsErr != nil {
+					call.Arguments = fc.Arguments
+					outCh <- buildToolErrorOutput(call, argsErr)
+					return
+				}
+
+				tool := toolCtx.GetFunctionTool(name)
+				if tool == nil {
+					outCh <- buildToolErrorOutput(call, fmt.Errorf("unknown function: %s", name))
+					return
+				}
+
+				result, err := tool.Execute(ctx, args)
 				isError := err != nil
 				outputStr := result
 				if err != nil {
@@ -162,8 +349,8 @@ func PerformToolExecutions(
 				outCh <- ToolExecutionOutput{
 					FncCall: call,
 					FncCallOut: &llm.FunctionCallOutput{
-						CallID:    fc.CallID,
-						Name:      fc.Name,
+						CallID:    call.CallID,
+						Name:      call.Name,
 						Output:    outputStr,
 						IsError:   isError,
 						CreatedAt: time.Now(),
@@ -173,10 +360,9 @@ func PerformToolExecutions(
 				}
 			}(fncCall)
 		}
-		
+
 		wg.Wait()
 	}()
 
 	return outCh
 }
-

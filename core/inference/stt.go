@@ -86,7 +86,7 @@ func (s *STT) Stream(ctx context.Context, language string) (stt.RecognizeStream,
 
 	// Send session.create
 	settings := map[string]interface{}{
-		"sample_rate": "16000",
+		"sample_rate": "24000",
 		"encoding":    "pcm_s16le",
 	}
 	if language != "" {
@@ -106,12 +106,12 @@ func (s *STT) Stream(ctx context.Context, language string) (stt.RecognizeStream,
 
 	ctx, cancel := context.WithCancel(ctx)
 	stream := &inferenceSTTStream{
-		stt:       s,
-		conn:      conn,
-		ctx:       ctx,
-		cancel:    cancel,
-		audioCh:   make(chan *model.AudioFrame, 100),
-		eventCh:   make(chan *stt.SpeechEvent, 100),
+		stt:     s,
+		conn:    conn,
+		ctx:     ctx,
+		cancel:  cancel,
+		audioCh: make(chan *model.AudioFrame, 100),
+		eventCh: make(chan *stt.SpeechEvent, 100),
 	}
 
 	go stream.run()
@@ -127,6 +127,7 @@ type inferenceSTTStream struct {
 	audioCh       chan *model.AudioFrame
 	eventCh       chan *stt.SpeechEvent
 	mu            sync.Mutex
+	closeOnce     sync.Once
 	closed        bool
 	speaking      bool
 	audioDuration float64
@@ -134,13 +135,19 @@ type inferenceSTTStream struct {
 
 func (s *inferenceSTTStream) PushFrame(frame *model.AudioFrame) error {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	if s.closed {
+		s.mu.Unlock()
 		return fmt.Errorf("stream closed")
 	}
 	s.audioDuration += float64(frame.SamplesPerChannel) / float64(frame.SampleRate)
-	s.audioCh <- frame
-	return nil
+	s.mu.Unlock()
+
+	select {
+	case <-s.ctx.Done():
+		return s.ctx.Err()
+	case s.audioCh <- frame:
+		return nil
+	}
 }
 
 func (s *inferenceSTTStream) Flush() error {
@@ -158,15 +165,19 @@ func (s *inferenceSTTStream) Flush() error {
 
 func (s *inferenceSTTStream) Close() error {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	if s.closed {
+		s.mu.Unlock()
 		return nil
 	}
 	s.closed = true
-	s.cancel()
-	s.conn.Close()
-	close(s.audioCh)
-	close(s.eventCh)
+	s.mu.Unlock()
+
+	s.closeOnce.Do(func() {
+		s.cancel()
+		_ = s.conn.Close()
+		close(s.audioCh)
+	})
+
 	return nil
 }
 
@@ -179,7 +190,10 @@ func (s *inferenceSTTStream) Next() (*stt.SpeechEvent, error) {
 }
 
 func (s *inferenceSTTStream) run() {
-	defer s.Close()
+	defer func() {
+		_ = s.Close()
+		close(s.eventCh)
+	}()
 
 	// Send loop
 	go func() {
@@ -191,7 +205,7 @@ func (s *inferenceSTTStream) run() {
 				if !ok {
 					return
 				}
-				
+
 				base64Audio := base64.StdEncoding.EncodeToString(frame.Data)
 				audioMsg := map[string]interface{}{
 					"type":  "input_audio",
@@ -246,14 +260,14 @@ func (s *inferenceSTTStream) run() {
 func (s *inferenceSTTStream) processTranscript(data map[string]interface{}, isFinal bool) {
 	text, _ := data["transcript"].(string)
 	requestID, _ := data["request_id"].(string)
-	
+
 	if text == "" && !isFinal {
 		return
 	}
 
 	if !s.speaking {
 		s.speaking = true
-		s.eventCh <- &stt.SpeechEvent{Type: stt.SpeechEventStartOfSpeech, RequestID: requestID}
+		s.emitEvent(&stt.SpeechEvent{Type: stt.SpeechEventStartOfSpeech, RequestID: requestID})
 	}
 
 	speechData := stt.SpeechData{
@@ -278,7 +292,7 @@ func (s *inferenceSTTStream) processTranscript(data map[string]interface{}, isFi
 		s.audioDuration = 0
 		s.mu.Unlock()
 
-		s.eventCh <- &stt.SpeechEvent{
+		s.emitEvent(&stt.SpeechEvent{
 			Type:      stt.SpeechEventRecognitionUsage,
 			RequestID: requestID,
 			Alternatives: []stt.SpeechData{
@@ -288,23 +302,35 @@ func (s *inferenceSTTStream) processTranscript(data map[string]interface{}, isFi
 					EndTime:   duration,
 				},
 			},
-		}
-		
-		s.eventCh <- &stt.SpeechEvent{
+		})
+
+		s.emitEvent(&stt.SpeechEvent{
 			Type:         stt.SpeechEventFinalTranscript,
 			RequestID:    requestID,
 			Alternatives: []stt.SpeechData{speechData},
-		}
+		})
 
 		if s.speaking {
 			s.speaking = false
-			s.eventCh <- &stt.SpeechEvent{Type: stt.SpeechEventEndOfSpeech, RequestID: requestID}
+			s.emitEvent(&stt.SpeechEvent{Type: stt.SpeechEventEndOfSpeech, RequestID: requestID})
 		}
 	} else {
-		s.eventCh <- &stt.SpeechEvent{
+		s.emitEvent(&stt.SpeechEvent{
 			Type:         stt.SpeechEventInterimTranscript,
 			RequestID:    requestID,
 			Alternatives: []stt.SpeechData{speechData},
-		}
+		})
+	}
+}
+
+func (s *inferenceSTTStream) emitEvent(ev *stt.SpeechEvent) {
+	if ev == nil {
+		return
+	}
+
+	select {
+	case <-s.ctx.Done():
+		return
+	case s.eventCh <- ev:
 	}
 }

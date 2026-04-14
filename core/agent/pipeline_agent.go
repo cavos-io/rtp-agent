@@ -2,8 +2,8 @@ package agent
 
 import (
 	"context"
-	"io"
 	"sync"
+	"time"
 
 	"github.com/cavos-io/conversation-worker/core/llm"
 	"github.com/cavos-io/conversation-worker/core/stt"
@@ -21,11 +21,13 @@ type PipelineAgent struct {
 	tts     tts.TTS
 	chatCtx *llm.ChatContext
 
-	mu        sync.Mutex
-	session   *AgentSession
+	mu      sync.Mutex
+	session *AgentSession
 
-	ctx    context.Context
-	cancel context.CancelFunc
+	ctx       context.Context
+	cancel    context.CancelFunc
+	runCancel context.CancelFunc
+	runWG     sync.WaitGroup
 }
 
 func NewPipelineAgent(
@@ -49,122 +51,90 @@ func NewPipelineAgent(
 
 	ctx, cancel := context.WithCancel(context.Background())
 	return &PipelineAgent{
-		vad:       vad,
-		stt:       sttInstance,
-		LLM:       llmObj,
-		tts:       ttsInstance,
-		chatCtx:   chatCtx,
-		ctx:       ctx,
-		cancel:    cancel,
+		vad:     vad,
+		stt:     sttInstance,
+		LLM:     llmObj,
+		tts:     ttsInstance,
+		chatCtx: chatCtx,
+		ctx:     ctx,
+		cancel:  cancel,
 	}
 }
 
 func (va *PipelineAgent) Start(ctx context.Context, s *AgentSession) error {
+	runCtx, runCancel := context.WithCancel(ctx)
+
 	va.mu.Lock()
 	va.session = s
+	va.runCancel = runCancel
 	va.mu.Unlock()
 
-	go va.run(ctx)
+	va.runWG.Add(1)
+	go func() {
+		defer va.runWG.Done()
+		va.run(runCtx)
+	}()
 	return nil
+}
+
+func (va *PipelineAgent) Stop() {
+	va.mu.Lock()
+	runCancel := va.runCancel
+	va.runCancel = nil
+	generateCancel := va.cancel
+	va.mu.Unlock()
+
+	if runCancel != nil {
+		runCancel()
+	}
+	if generateCancel != nil {
+		generateCancel()
+	}
+
+	va.runWG.Wait()
 }
 
 func (va *PipelineAgent) run(ctx context.Context) {
 	logger.Logger.Infow("PipelineAgent started")
 
-	vadStream, err := va.vad.Stream(ctx)
-	if err != nil {
-		logger.Logger.Errorw("failed to start VAD stream", err)
-		return
-	}
-
-	sttStream, err := va.stt.Stream(ctx, "")
-	if err != nil {
-		logger.Logger.Errorw("failed to start STT stream", err)
-		return
-	}
-
-	go va.vadLoop(vadStream)
-	go va.sttLoop(sttStream)
-
+	// Start with nil audioStream; we'll check for Input.Audio dynamically
 	var audioStream <-chan *model.AudioFrame
-	if va.session != nil && va.session.Input.Audio != nil {
-		audioStream = va.session.Input.Audio.Stream()
-	} else {
-		logger.Logger.Warnw("AgentInput Audio not configured for pipeline agent", nil)
-	}
+	var warmupUntil time.Time
+
+	logger.Logger.Infow("PipelineAgent started, waiting for audio input...")
 
 	for {
+		// Check if Input.Audio has been set (it might be attached after pipeline starts)
+		if va.session != nil && va.session.Input.Audio != nil && audioStream == nil {
+			audioStream = va.session.Input.Audio.Stream()
+			if va.session.Options.AECWarmupDuration > 0 {
+				warmupUntil = time.Now().Add(time.Duration(va.session.Options.AECWarmupDuration * float64(time.Second)))
+			}
+			logger.Logger.Infow("✅ Audio stream connected to pipeline!")
+		}
+
 		select {
 		case <-ctx.Done():
 			return
 		case frame, ok := <-audioStream:
 			if !ok {
+				logger.Logger.Infow("Audio stream closed")
 				return
 			}
-			if vadStream != nil {
-				_ = vadStream.PushFrame(frame)
+			if !warmupUntil.IsZero() && time.Now().Before(warmupUntil) {
+				continue
 			}
-			if sttStream != nil {
-				_ = sttStream.PushFrame(frame)
+			if va.session != nil && va.session.Activity != nil {
+				_ = va.session.Activity.PushAudio(frame)
 			}
-		}
-	}
-}
-
-func (va *PipelineAgent) vadLoop(stream vad.VADStream) {
-	for {
-		ev, err := stream.Next()
-		if err != nil {
-			if err != io.EOF {
-				logger.Logger.Errorw("VAD stream error", err)
-			}
-			return
-		}
-
-		if ev.Type == vad.VADEventStartOfSpeech {
-			logger.Logger.Infow("User started speaking")
-			va.session.UpdateUserState(UserStateSpeaking)
-			
-			if va.session.Activity != nil {
-				va.session.Activity.OnStartOfSpeech(ev)
-			}
-			
-			// Interrupt ongoing agent speech/generation
-			va.mu.Lock()
-			if va.cancel != nil {
-				va.cancel()
-				ctx, cancel := context.WithCancel(context.Background())
-				va.ctx = ctx
-				va.cancel = cancel
-			}
-			va.mu.Unlock()
-		} else if ev.Type == vad.VADEventEndOfSpeech {
-			logger.Logger.Infow("User stopped speaking")
-			va.session.UpdateUserState(UserStateListening)
-			
-			if va.session.Activity != nil {
-				va.session.Activity.OnEndOfSpeech(ev)
-			}
-		}
-	}
-}
-
-func (va *PipelineAgent) sttLoop(stream stt.RecognizeStream) {
-	for {
-		ev, err := stream.Next()
-		if err != nil {
-			if err != io.EOF {
-				logger.Logger.Errorw("STT stream error", err)
-			}
-			return
-		}
-
-		if ev.Type == stt.SpeechEventFinalTranscript {
-			transcript := ev.Alternatives[0].Text
-			logger.Logger.Infow("Final transcript", "text", transcript)
-
-			if va.session.Activity != nil {
-				va.session.Activity.OnFinalTranscript(ev)
+		case <-time.After(100 * time.Millisecond):
+			// Check periodically if audio has been attached
+			if va.session != nil && va.session.Input.Audio != nil && audioStream == nil {
+				audioStream = va.session.Input.Audio.Stream()
+				if va.session.Options.AECWarmupDuration > 0 {
+					warmupUntil = time.Now().Add(time.Duration(va.session.Options.AECWarmupDuration * float64(time.Second)))
+				}
+				logger.Logger.Infow("✅ Audio stream NOW connected to pipeline!")
 			}
 		}
 	}
@@ -183,6 +153,9 @@ func (va *PipelineAgent) GenerateReply(speech *SpeechHandle) {
 	}
 
 	logger.Logger.Infow("Generating reply")
+	if session.Timeline != nil {
+		session.Timeline.Add("reply_generation_started", nil)
+	}
 	session.UpdateAgentState(AgentStateThinking)
 
 	toolsInterface := make([]interface{}, len(session.Tools))
@@ -192,8 +165,12 @@ func (va *PipelineAgent) GenerateReply(speech *SpeechHandle) {
 	toolCtx := llm.NewToolContext(toolsInterface)
 
 	// In Python parity, we loop for tool calls
+	steps := 1
 	for {
 		if speech.IsInterrupted() {
+			if session.Timeline != nil {
+				session.Timeline.Add("reply_generation_interrupted", nil)
+			}
 			session.UpdateAgentState(AgentStateIdle)
 			return
 		}
@@ -201,6 +178,11 @@ func (va *PipelineAgent) GenerateReply(speech *SpeechHandle) {
 		genData, err := PerformLLMInference(ctx, va.LLM, va.chatCtx, session.Tools)
 		if err != nil {
 			logger.Logger.Errorw("LLM inference failed", err)
+			if session.Timeline != nil {
+				session.Timeline.Add("llm_inference_failed", map[string]any{
+					"error": err.Error(),
+				})
+			}
 			session.UpdateAgentState(AgentStateIdle)
 			return
 		}
@@ -211,7 +193,30 @@ func (va *PipelineAgent) GenerateReply(speech *SpeechHandle) {
 		ttsGen, err := PerformTTSInference(ctx, va.tts, genData.TextCh)
 		if err != nil {
 			logger.Logger.Errorw("TTS inference failed", err)
+			if session.Timeline != nil {
+				session.Timeline.Add("tts_inference_failed", map[string]any{
+					"error": err.Error(),
+				})
+			}
 		} else {
+			if session.Timeline != nil {
+				session.Timeline.Add("tts_playout_started", nil)
+			}
+			var alignedWG sync.WaitGroup
+			if session.Options.UseTTSAlignedTranscript && session.Output.Transcription != nil {
+				alignedWG.Add(1)
+				go func() {
+					defer alignedWG.Done()
+					for deltaText := range ttsGen.AlignedTextCh {
+						if deltaText == "" {
+							continue
+						}
+						_ = session.Output.Transcription.CaptureText(deltaText)
+					}
+					session.Output.Transcription.Flush()
+				}()
+			}
+
 			session.UpdateAgentState(AgentStateSpeaking)
 			for frame := range ttsGen.AudioCh {
 				if speech.IsInterrupted() {
@@ -226,6 +231,18 @@ func (va *PipelineAgent) GenerateReply(speech *SpeechHandle) {
 					}
 				}
 			}
+			if session.Output.Audio != nil {
+				session.Output.Audio.Flush()
+				if speech.IsInterrupted() {
+					session.Output.Audio.ClearBuffer()
+				} else {
+					_ = session.Output.Audio.WaitForPlayout(ctx)
+				}
+			}
+			if session.Timeline != nil {
+				session.Timeline.Add("tts_playout_finished", nil)
+			}
+			alignedWG.Wait()
 		}
 
 		// Wait for tool executions to complete and collect results
@@ -233,7 +250,13 @@ func (va *PipelineAgent) GenerateReply(speech *SpeechHandle) {
 		for toolOut := range toolOutCh {
 			executedTools = true
 			logger.Logger.Infow("Tool executed", "name", toolOut.FncCall.Name)
-			
+			if session.Timeline != nil {
+				session.Timeline.Add("tool_executed", map[string]any{
+					"name":     toolOut.FncCall.Name,
+					"is_error": toolOut.RawError != nil,
+				})
+			}
+
 			va.chatCtx.Append(&toolOut.FncCall)
 			if toolOut.FncCallOut != nil {
 				va.chatCtx.Append(toolOut.FncCallOut)
@@ -242,9 +265,25 @@ func (va *PipelineAgent) GenerateReply(speech *SpeechHandle) {
 
 		// If no tool calls, we're done
 		if !executedTools {
+			if session.Timeline != nil {
+				session.Timeline.Add("reply_generation_completed", nil)
+			}
 			session.UpdateAgentState(AgentStateIdle)
 			break
 		}
+
+		steps++
+		if session.Options.MaxToolSteps > 0 && steps > session.Options.MaxToolSteps+1 {
+			logger.Logger.Infow("maximum number of tool steps reached", "maxToolSteps", session.Options.MaxToolSteps)
+			if session.Timeline != nil {
+				session.Timeline.Add("tool_step_limit_reached", map[string]any{
+					"max_tool_steps": session.Options.MaxToolSteps,
+				})
+			}
+			session.UpdateAgentState(AgentStateIdle)
+			break
+		}
+
 		// Loop back to LLM with tool outputs
 	}
 }

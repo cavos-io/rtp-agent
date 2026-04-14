@@ -2,6 +2,7 @@ package tts
 
 import (
 	"context"
+	"io"
 	"strings"
 	"sync"
 )
@@ -39,10 +40,13 @@ func (s *StreamAdapter) Synthesize(ctx context.Context, text string) (ChunkedStr
 
 func (s *StreamAdapter) Stream(ctx context.Context) (SynthesizeStream, error) {
 	wrapper := &streamAdapterWrapper{
-		adapter: s,
-		ctx:     ctx,
-		events:  make(chan *SynthesizedAudio, 100),
+		adapter:    s,
+		ctx:        ctx,
+		events:     make(chan *SynthesizedAudio, 100),
+		synthesize: make(chan string, 32),
+		done:       make(chan struct{}),
 	}
+	go wrapper.run()
 	return wrapper, nil
 }
 
@@ -53,65 +57,59 @@ type streamAdapterWrapper struct {
 	textBuffer string
 	mu         sync.Mutex
 
-	events chan *SynthesizedAudio
-	closed bool
+	events     chan *SynthesizedAudio
+	synthesize chan string
+	done       chan struct{}
+	closeOnce  sync.Once
+	closed     bool
+	flushed    bool
 }
 
 func (w *streamAdapterWrapper) PushText(text string) error {
 	w.mu.Lock()
-	defer w.mu.Unlock()
+	if w.closed {
+		w.mu.Unlock()
+		return context.Canceled
+	}
+	if w.flushed {
+		w.mu.Unlock()
+		return io.ErrClosedPipe
+	}
 
 	w.textBuffer += text
+	ready := w.collectReadySentencesLocked(false)
+	w.mu.Unlock()
 
-	if strings.ContainsAny(text, ".!?\n") {
-		sentences := splitSentences(w.textBuffer)
-		if len(sentences) > 0 {
-			lastChar := w.textBuffer[len(w.textBuffer)-1]
-			hasPunctuation := lastChar == '.' || lastChar == '!' || lastChar == '?' || lastChar == '\n'
-
-			if !hasPunctuation {
-				w.textBuffer = sentences[len(sentences)-1]
-				sentences = sentences[:len(sentences)-1]
-			} else {
-				w.textBuffer = ""
-			}
-
-			for _, sentence := range sentences {
-				sentence = strings.TrimSpace(sentence)
-				if sentence != "" {
-					go w.synthesize(sentence)
-				}
-			}
+	for _, sentence := range ready {
+		if err := w.enqueue(sentence); err != nil {
+			return err
 		}
 	}
 	return nil
 }
 
-func (w *streamAdapterWrapper) synthesize(text string) {
-	chunked, err := w.adapter.tts.Synthesize(w.ctx, text)
-	if err != nil {
-		return
-	}
-	defer chunked.Close()
-
-	for {
-		audio, err := chunked.Next()
-		if err != nil || audio == nil {
-			break
-		}
-		w.events <- audio
-	}
-}
-
 func (w *streamAdapterWrapper) Flush() error {
 	w.mu.Lock()
-	text := strings.TrimSpace(w.textBuffer)
-	w.textBuffer = ""
+	if w.closed {
+		w.mu.Unlock()
+		return context.Canceled
+	}
+	if w.flushed {
+		w.mu.Unlock()
+		return nil
+	}
+
+	ready := w.collectReadySentencesLocked(true)
+	w.flushed = true
 	w.mu.Unlock()
 
-	if text != "" {
-		w.synthesize(text)
+	for _, sentence := range ready {
+		if err := w.enqueue(sentence); err != nil {
+			return err
+		}
 	}
+
+	w.closeSynthesisChannel()
 	return nil
 }
 
@@ -123,7 +121,7 @@ func (w *streamAdapterWrapper) Close() error {
 	}
 	w.closed = true
 	w.mu.Unlock()
-	close(w.events)
+	w.closeSynthesisChannel()
 	return nil
 }
 
@@ -133,10 +131,109 @@ func (w *streamAdapterWrapper) Next() (*SynthesizedAudio, error) {
 		return nil, w.ctx.Err()
 	case ev, ok := <-w.events:
 		if !ok {
-			return nil, context.Canceled
+			return nil, io.EOF
 		}
 		return ev, nil
 	}
+}
+
+func (w *streamAdapterWrapper) run() {
+	defer close(w.done)
+	defer close(w.events)
+
+	for {
+		select {
+		case <-w.ctx.Done():
+			return
+		case text, ok := <-w.synthesize:
+			if !ok {
+				return
+			}
+			if strings.TrimSpace(text) == "" {
+				continue
+			}
+			w.synthesizeOne(text)
+		}
+	}
+}
+
+func (w *streamAdapterWrapper) synthesizeOne(text string) {
+	chunked, err := w.adapter.tts.Synthesize(w.ctx, text)
+	if err != nil {
+		return
+	}
+	defer chunked.Close()
+
+	for {
+		audio, err := chunked.Next()
+		if err != nil || audio == nil {
+			return
+		}
+
+		select {
+		case <-w.ctx.Done():
+			return
+		case w.events <- audio:
+		}
+	}
+}
+
+func (w *streamAdapterWrapper) enqueue(sentence string) error {
+	trimmed := strings.TrimSpace(sentence)
+	if trimmed == "" {
+		return nil
+	}
+
+	select {
+	case <-w.ctx.Done():
+		return w.ctx.Err()
+	case w.synthesize <- trimmed:
+		return nil
+	}
+}
+
+func (w *streamAdapterWrapper) closeSynthesisChannel() {
+	w.closeOnce.Do(func() {
+		close(w.synthesize)
+	})
+}
+
+func (w *streamAdapterWrapper) collectReadySentencesLocked(flush bool) []string {
+	if w.textBuffer == "" {
+		return nil
+	}
+
+	sentences := splitSentences(w.textBuffer)
+	if len(sentences) == 0 {
+		return nil
+	}
+
+	if flush {
+		w.textBuffer = ""
+		return trimNonEmpty(sentences)
+	}
+
+	lastChar := w.textBuffer[len(w.textBuffer)-1]
+	hasPunctuation := lastChar == '.' || lastChar == '!' || lastChar == '?' || lastChar == '\n'
+	if !hasPunctuation {
+		w.textBuffer = sentences[len(sentences)-1]
+		sentences = sentences[:len(sentences)-1]
+	} else {
+		w.textBuffer = ""
+	}
+
+	return trimNonEmpty(sentences)
+}
+
+func trimNonEmpty(sentences []string) []string {
+	out := make([]string, 0, len(sentences))
+	for _, sentence := range sentences {
+		trimmed := strings.TrimSpace(sentence)
+		if trimmed != "" {
+			out = append(out, trimmed)
+		}
+	}
+	return out
 }
 
 func splitSentences(text string) []string {

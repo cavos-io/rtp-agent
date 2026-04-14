@@ -9,9 +9,9 @@ import (
 	"net/http"
 	"net/textproto"
 	"net/url"
-	"time"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/cavos-io/conversation-worker/library/logger"
 	"github.com/livekit/protocol/auth"
@@ -47,7 +47,7 @@ func UploadSessionReport(
 	at := auth.NewAccessToken(apiKey, apiSecret).
 		AddGrant(&auth.VideoGrant{}).
 		SetValidFor(6 * 3600 * time.Second)
-	
+
 	// Add observability grants
 	// Note: go auth package might not have Observability grants struct yet or it's handled differently,
 	// let's just use standard grants if Observability isn't available
@@ -68,7 +68,7 @@ func UploadSessionReport(
 	if report.AudioRecordingStartedAt != nil {
 		headerMsg.StartTime = timestamppb.New(time.UnixMilli(int64(*report.AudioRecordingStartedAt * 1000)))
 	}
-	
+
 	headerBytes, err := proto.Marshal(headerMsg)
 	if err != nil {
 		return fmt.Errorf("failed to marshal header msg: %w", err)
@@ -95,6 +95,38 @@ func UploadSessionReport(
 			part, err := w.CreatePart(h)
 			if err == nil {
 				part.Write(chatJSON)
+			}
+		}
+	}
+
+	// 2b. Timeline (JSON)
+	if len(report.Timeline) > 0 {
+		timelineJSON, err := json.Marshal(report.Timeline)
+		if err != nil {
+			logger.Logger.Errorw("failed to marshal timeline", err)
+		} else {
+			h := make(textproto.MIMEHeader)
+			h.Set("Content-Disposition", `form-data; name="timeline"; filename="timeline.json"`)
+			h.Set("Content-Type", "application/json")
+			part, err := w.CreatePart(h)
+			if err == nil {
+				_, _ = part.Write(timelineJSON)
+			}
+		}
+	}
+
+	// 2c. Raw events (JSON)
+	if len(report.Events) > 0 {
+		eventsJSON, err := json.Marshal(report.Events)
+		if err != nil {
+			logger.Logger.Errorw("failed to marshal events", err)
+		} else {
+			h := make(textproto.MIMEHeader)
+			h.Set("Content-Disposition", `form-data; name="events"; filename="events.json"`)
+			h.Set("Content-Type", "application/json")
+			part, err := w.CreatePart(h)
+			if err == nil {
+				_, _ = part.Write(eventsJSON)
 			}
 		}
 	}

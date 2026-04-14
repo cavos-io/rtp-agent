@@ -4,21 +4,51 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/cavos-io/conversation-worker/core/evals"
 	"github.com/cavos-io/conversation-worker/core/llm"
 )
 
 type RunResult struct {
-	ChatCtx *llm.ChatContext
-	Expect  *RunAssert
+	ChatCtx   *llm.ChatContext
+	Timeline  []TimelineEvent
+	Timestamp float64
+	Expect    *RunAssert
 }
 
 func NewRunResult(chatCtx *llm.ChatContext) *RunResult {
-	return &RunResult{
-		ChatCtx: chatCtx,
-		Expect:  &RunAssert{ChatCtx: chatCtx},
+	timeline := make([]TimelineEvent, 0)
+	if chatCtx != nil {
+		for _, item := range chatCtx.Items {
+			timeline = append(timeline, TimelineEvent{
+				Type:      "chat_item:" + item.GetType(),
+				Timestamp: float64(item.GetCreatedAt().UnixNano()) / 1e9,
+				Payload: map[string]any{
+					"id": item.GetID(),
+				},
+			})
+		}
 	}
+
+	return &RunResult{
+		ChatCtx:   chatCtx,
+		Timeline:  timeline,
+		Timestamp: float64(time.Now().UnixNano()) / 1e9,
+		Expect:    &RunAssert{ChatCtx: chatCtx},
+	}
+}
+
+func (r *RunResult) AddTimelineEvent(eventType string, payload map[string]any) {
+	if r == nil || eventType == "" {
+		return
+	}
+
+	r.Timeline = append(r.Timeline, TimelineEvent{
+		Type:      eventType,
+		Timestamp: float64(time.Now().UnixNano()) / 1e9,
+		Payload:   payload,
+	})
 }
 
 type RunAssert struct {

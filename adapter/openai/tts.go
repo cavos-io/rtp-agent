@@ -33,15 +33,16 @@ func (t *OpenAITTS) Label() string { return "openai.TTS" }
 func (t *OpenAITTS) Capabilities() tts.TTSCapabilities {
 	return tts.TTSCapabilities{Streaming: false, AlignedTranscript: false}
 }
-func (t *OpenAITTS) SampleRate() int { return 24000 }
+func (t *OpenAITTS) SampleRate() int  { return 24000 }
 func (t *OpenAITTS) NumChannels() int { return 1 }
 
 func (t *OpenAITTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStream, error) {
 	req := openai.CreateSpeechRequest{
-		Model:          t.model,
-		Input:          text,
-		Voice:          t.voice,
-		ResponseFormat: openai.SpeechResponseFormatMp3,
+		Model: t.model,
+		Input: text,
+		Voice: t.voice,
+		// Console audio output expects raw 16-bit PCM bytes.
+		ResponseFormat: openai.SpeechResponseFormatPcm,
 	}
 
 	resp, err := t.client.CreateSpeech(ctx, req)
@@ -60,25 +61,45 @@ func (t *OpenAITTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
 }
 
 type openaiTTSChunkedStream struct {
-	resp io.ReadCloser
+	resp    io.ReadCloser
+	pending []byte
 }
 
 func (s *openaiTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 	buf := make([]byte, 4096)
 	n, err := s.resp.Read(buf)
-	if err != nil {
+	if n == 0 {
+		if err != nil {
+			if err == io.EOF {
+				return nil, io.EOF
+			}
+			return nil, err
+		}
+		return nil, io.ErrNoProgress
+	}
+
+	data := append(s.pending, buf[:n]...)
+	s.pending = nil
+
+	// Keep byte alignment for int16 PCM samples.
+	if len(data)%2 != 0 {
+		s.pending = []byte{data[len(data)-1]}
+		data = data[:len(data)-1]
+	}
+
+	if len(data) == 0 {
 		if err == io.EOF {
 			return nil, io.EOF
 		}
-		return nil, err
+		return s.Next()
 	}
 
 	return &tts.SynthesizedAudio{
 		Frame: &model.AudioFrame{
-			Data:              buf[:n],
-			SampleRate:        24000, // Common for TTS, though MP3 needs decoding
+			Data:              data,
+			SampleRate:        24000,
 			NumChannels:       1,
-			SamplesPerChannel: uint32(n / 2),
+			SamplesPerChannel: uint32(len(data) / 2),
 		},
 	}, nil
 }

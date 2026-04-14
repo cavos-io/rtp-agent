@@ -1,6 +1,8 @@
 package agent
 
 import (
+	"context"
+
 	"github.com/cavos-io/conversation-worker/model"
 )
 
@@ -17,6 +19,7 @@ type AudioOutput interface {
 	Label() string
 	CaptureFrame(frame *model.AudioFrame) error
 	Flush()
+	WaitForPlayout(ctx context.Context) error
 	ClearBuffer()
 	OnAttached()
 	OnDetached()

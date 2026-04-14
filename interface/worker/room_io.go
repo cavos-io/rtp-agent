@@ -196,6 +196,14 @@ func (rio *RoomIO) Flush()       {}
 func (rio *RoomIO) ClearBuffer() {}
 func (rio *RoomIO) Pause()       {}
 func (rio *RoomIO) Resume()      {}
+func (rio *RoomIO) WaitForPlayout(ctx context.Context) error {
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	default:
+		return nil
+	}
+}
 
 func (rio *RoomIO) GetCallback() *lksdk.RoomCallback {
 	cb := lksdk.NewRoomCallback()

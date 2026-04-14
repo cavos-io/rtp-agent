@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"time"
 
 	"github.com/cavos-io/conversation-worker/core/llm"
 	"github.com/cavos-io/conversation-worker/core/stt"
@@ -88,6 +89,34 @@ func (a *Agent) Start(session *AgentSession, agentIntf AgentInterface) *AgentAct
 }
 
 func (a *Agent) OnUserTurnCompleted(ctx context.Context, chatCtx *llm.ChatContext, newMsg *llm.ChatMessage) error {
+	if newMsg == nil {
+		return nil
+	}
+
+	if newMsg.CreatedAt.IsZero() {
+		newMsg.CreatedAt = time.Now()
+	}
+
+	targetCtx := chatCtx
+	if targetCtx == nil {
+		targetCtx = a.ChatCtx
+	}
+	if targetCtx == nil {
+		targetCtx = llm.NewChatContext()
+		a.ChatCtx = targetCtx
+	}
+
+	targetCtx.Append(newMsg)
+
+	if a.activity == nil || a.activity.Session == nil {
+		return nil
+	}
+
+	handle := NewSpeechHandle(a.activity.Session.Options.AllowInterruptions, DefaultInputDetails())
+	if err := a.activity.ScheduleSpeech(handle, SpeechPriorityNormal, false); err != nil {
+		return err
+	}
+
 	return nil
 }
 

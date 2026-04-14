@@ -16,6 +16,71 @@ type Event interface {
 	GetType() string
 }
 
+type TimelineEvent struct {
+	Type      string         `json:"type"`
+	Timestamp float64        `json:"timestamp"`
+	Payload   map[string]any `json:"payload,omitempty"`
+}
+
+type EventTimeline struct {
+	mu     sync.RWMutex
+	events []TimelineEvent
+}
+
+func NewEventTimeline() *EventTimeline {
+	return &EventTimeline{
+		events: make([]TimelineEvent, 0),
+	}
+}
+
+func (t *EventTimeline) Add(eventType string, payload map[string]any) {
+	if t == nil || eventType == "" {
+		return
+	}
+
+	t.mu.Lock()
+	t.events = append(t.events, TimelineEvent{
+		Type:      eventType,
+		Timestamp: float64(time.Now().UnixNano()) / 1e9,
+		Payload:   payload,
+	})
+	t.mu.Unlock()
+}
+
+func (t *EventTimeline) AddEvent(ev Event) {
+	if t == nil || ev == nil {
+		return
+	}
+	t.Add(ev.GetType(), eventPayload(ev))
+}
+
+func (t *EventTimeline) Snapshot() []TimelineEvent {
+	if t == nil {
+		return nil
+	}
+
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+
+	out := make([]TimelineEvent, len(t.events))
+	copy(out, t.events)
+	return out
+}
+
+func eventPayload(ev Event) map[string]any {
+	b, err := json.Marshal(ev)
+	if err != nil {
+		return nil
+	}
+
+	payload := make(map[string]any)
+	if err := json.Unmarshal(b, &payload); err != nil {
+		return nil
+	}
+
+	return payload
+}
+
 type UserInputTranscribedEvent struct {
 	Language   string
 	Transcript string
@@ -171,4 +236,3 @@ func (d *ClientEventsDispatcher) DispatchUserState(state UserState) {
 		State: stateStr,
 	})
 }
-

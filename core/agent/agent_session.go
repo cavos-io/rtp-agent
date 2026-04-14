@@ -63,6 +63,7 @@ type AgentSession struct {
 	Output AgentOutput
 
 	MetricsCollector *telemetry.UsageCollector
+	Timeline         *EventTimeline
 
 	UserState  UserState
 	AgentState AgentState
@@ -88,6 +89,20 @@ type UserStateChangedEvent struct {
 
 func NewAgentSession(agent AgentInterface, room *lksdk.Room, opts AgentSessionOptions) *AgentSession {
 	baseAgent := agent.GetAgent()
+	chatCtx := baseAgent.ChatCtx
+	if chatCtx == nil {
+		chatCtx = llm.NewChatContext()
+		baseAgent.ChatCtx = chatCtx
+	}
+
+	tools := make([]llm.Tool, len(baseAgent.Tools))
+	copy(tools, baseAgent.Tools)
+
+	timeline := NewEventTimeline()
+	timeline.Add("session_created", map[string]any{
+		"has_room": room != nil,
+	})
+
 	return &AgentSession{
 		Agent:               agent,
 		Room:                room,
@@ -96,8 +111,9 @@ func NewAgentSession(agent AgentInterface, room *lksdk.Room, opts AgentSessionOp
 		LLM:                 baseAgent.LLM,
 		TTS:                 baseAgent.TTS,
 		Options:             opts,
-		ChatCtx:             llm.NewChatContext(),
-		Tools:               make([]llm.Tool, 0),
+		ChatCtx:             chatCtx,
+		Tools:               tools,
+		Timeline:            timeline,
 		AgentStateChangedCh: make(chan AgentStateChangedEvent, 10),
 		UserStateChangedCh:  make(chan UserStateChangedEvent, 10),
 	}
@@ -105,9 +121,9 @@ func NewAgentSession(agent AgentInterface, room *lksdk.Room, opts AgentSessionOp
 
 func (s *AgentSession) Start(ctx context.Context) error {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 
 	if s.started {
+		s.mu.Unlock()
 		return nil
 	}
 
@@ -115,16 +131,19 @@ func (s *AgentSession) Start(ctx context.Context) error {
 		s.VAD = vad.NewSimpleVAD(0.01)
 	}
 
+	s.Activity = NewAgentActivity(s.Agent, s)
+	s.Activity.Start()
+
 	if s.Assistant == nil {
 		s.Assistant = NewPipelineAgent(s.VAD, s.STT, s.LLM, s.TTS, s.ChatCtx)
 	}
 
 	if err := s.Assistant.Start(ctx, s); err != nil {
+		s.Activity.Stop()
+		s.Activity = nil
+		s.mu.Unlock()
 		return err
 	}
-
-	s.Activity = NewAgentActivity(s.Agent, s)
-	s.Activity.Start()
 
 	// Trigger periodic usage metrics reporting
 	if s.MetricsCollector != nil {
@@ -132,6 +151,11 @@ func (s *AgentSession) Start(ctx context.Context) error {
 	}
 
 	s.started = true
+	s.mu.Unlock()
+
+	if s.Timeline != nil {
+		s.Timeline.Add("session_started", nil)
+	}
 	s.UpdateAgentState(AgentStateListening)
 
 	return nil
@@ -162,6 +186,12 @@ func (s *AgentSession) UpdateAgentState(state AgentState) {
 
 	if oldState != state {
 		logger.Logger.Debugw("Agent state changed", "old", oldState, "new", state)
+		if s.Timeline != nil {
+			s.Timeline.Add("agent_state_changed", map[string]any{
+				"old": string(oldState),
+				"new": string(state),
+			})
+		}
 		select {
 		case s.AgentStateChangedCh <- AgentStateChangedEvent{
 			OldState: oldState,
@@ -181,6 +211,12 @@ func (s *AgentSession) UpdateUserState(state UserState) {
 
 	if oldState != state {
 		logger.Logger.Debugw("User state changed", "old", oldState, "new", state)
+		if s.Timeline != nil {
+			s.Timeline.Add("user_state_changed", map[string]any{
+				"old": string(oldState),
+				"new": string(state),
+			})
+		}
 		select {
 		case s.UserStateChangedCh <- UserStateChangedEvent{
 			OldState: oldState,
@@ -203,6 +239,11 @@ func (s *AgentSession) GenerateReply(ctx context.Context, userInput string) erro
 
 	// Trigger the pipeline
 	logger.Logger.Infow("Generating reply", "userInput", userInput)
+	if s.Timeline != nil {
+		s.Timeline.Add("reply_requested", map[string]any{
+			"has_user_input": userInput != "",
+		})
+	}
 
 	// Create a speech handle
 	handle := NewSpeechHandle(s.Options.AllowInterruptions, DefaultInputDetails())
@@ -222,16 +263,45 @@ func (s *AgentSession) GenerateReply(ctx context.Context, userInput string) erro
 	return activity.ScheduleSpeech(handle, SpeechPriorityNormal, false)
 }
 
-func (s *AgentSession) Stop(ctx context.Context) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	if !s.started {
+func (s *AgentSession) TimelineSnapshot() []TimelineEvent {
+	if s == nil || s.Timeline == nil {
 		return nil
 	}
+	return s.Timeline.Snapshot()
+}
 
-	s.Activity.Stop()
-	s.Activity = nil
+func (s *AgentSession) Stop(ctx context.Context) error {
+	s.mu.Lock()
+	if !s.started {
+		s.mu.Unlock()
+		return nil
+	}
 	s.started = false
+	activity := s.Activity
+	assistant := s.Assistant
+	s.mu.Unlock()
+
+	if activity != nil {
+		activity.PauseScheduling()
+		if err := activity.Drain(ctx); err != nil && err != context.Canceled && err != context.DeadlineExceeded {
+			logger.Logger.Errorw("failed draining agent activity", err)
+		}
+		activity.Stop()
+	}
+
+	if assistant != nil {
+		assistant.Stop()
+	}
+
+	if s.Timeline != nil {
+		s.Timeline.Add("session_stopped", nil)
+	}
+
+	s.mu.Lock()
+	if s.Activity == activity {
+		s.Activity = nil
+	}
+	s.mu.Unlock()
+
 	return nil
 }

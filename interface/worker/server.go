@@ -81,6 +81,13 @@ func (s *AgentServer) GetConsoleSession() any {
 	return s.consoleSession
 }
 
+// GetEntrypointFunc retrieves the registered entrypoint function (for console mode)
+func (s *AgentServer) GetEntrypointFunc() func(*JobContext) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.entrypointFnc
+}
+
 
 func (s *AgentServer) Run(ctx context.Context) error {
 	if s.Options.WSRL == "" || s.Options.APIKey == "" || s.Options.APISecret == "" {

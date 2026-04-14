@@ -120,11 +120,13 @@ func (l *OpenAILLM) Chat(ctx context.Context, chatCtx *llm.ChatContext, opts ...
 	}
 
 	req := openai.ChatCompletionRequest{
-		Model:             l.model,
-		Messages:          messages,
-		Tools:             tools,
-		ParallelToolCalls: &options.ParallelToolCalls,
-		Stream:            true,
+		Model:    l.model,
+		Messages: messages,
+		Tools:    tools,
+		Stream:   true,
+	}
+	if len(tools) > 0 {
+		req.ParallelToolCalls = &options.ParallelToolCalls
 	}
 
 	if options.ToolChoice != nil {
@@ -174,11 +176,15 @@ func (s *openaiStream) Next() (*llm.ChatChunk, error) {
 	if len(choice.Delta.ToolCalls) > 0 {
 		chunk.Delta.ToolCalls = make([]llm.FunctionToolCall, 0, len(choice.Delta.ToolCalls))
 		for _, tc := range choice.Delta.ToolCalls {
+			extra := map[string]any{
+				"index": tc.Index,
+			}
 			chunk.Delta.ToolCalls = append(chunk.Delta.ToolCalls, llm.FunctionToolCall{
 				Type:      string(tc.Type),
 				Name:      tc.Function.Name,
 				Arguments: tc.Function.Arguments,
 				CallID:    tc.ID,
+				Extra:     extra,
 			})
 		}
 	}

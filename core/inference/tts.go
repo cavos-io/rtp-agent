@@ -114,6 +114,7 @@ func (t *TTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
 	ctx, cancel := context.WithCancel(ctx)
 	stream := &inferenceTTSStream{
 		tts:       t,
+		model:     modelName,
 		conn:      conn,
 		ctx:       ctx,
 		cancel:    cancel,
@@ -128,12 +129,14 @@ func (t *TTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
 
 type inferenceTTSStream struct {
 	tts       *TTS
+	model     string
 	conn      *websocket.Conn
 	ctx       context.Context
 	cancel    context.CancelFunc
 	tokenizer tokenize.SentenceStream
 	eventCh   chan *tts.SynthesizedAudio
 	mu        sync.Mutex
+	closeOnce sync.Once
 	closed    bool
 }
 
@@ -162,15 +165,19 @@ func (s *inferenceTTSStream) Flush() error {
 
 func (s *inferenceTTSStream) Close() error {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	if s.closed {
+		s.mu.Unlock()
 		return nil
 	}
 	s.closed = true
-	s.cancel()
-	s.tokenizer.Close()
-	s.conn.Close()
-	close(s.eventCh)
+	s.mu.Unlock()
+
+	s.closeOnce.Do(func() {
+		s.cancel()
+		s.tokenizer.Close()
+		_ = s.conn.Close()
+	})
+
 	return nil
 }
 
@@ -183,7 +190,10 @@ func (s *inferenceTTSStream) Next() (*tts.SynthesizedAudio, error) {
 }
 
 func (s *inferenceTTSStream) run() {
-	defer s.Close()
+	defer func() {
+		_ = s.Close()
+		close(s.eventCh)
+	}()
 
 	// Tokenizer loop
 	go func() {
@@ -192,12 +202,12 @@ func (s *inferenceTTSStream) run() {
 			if err != nil {
 				return
 			}
-			
+
 			tokenPkt := map[string]interface{}{
 				"type":       "input_transcript",
 				"transcript": tok.Token + " ",
 				"generation_config": map[string]interface{}{
-					"model": s.tts.model,
+					"model": s.model,
 				},
 			}
 
@@ -236,19 +246,31 @@ func (s *inferenceTTSStream) run() {
 				if evType == "output_audio" {
 					if audioB64, ok := ev["audio"].(string); ok {
 						data, _ := base64.StdEncoding.DecodeString(audioB64)
-						s.eventCh <- &tts.SynthesizedAudio{
+						s.emitEvent(&tts.SynthesizedAudio{
 							Frame: &model.AudioFrame{
 								Data:              data,
 								SampleRate:        24000,
 								NumChannels:       1,
 								SamplesPerChannel: uint32(len(data) / 2),
 							},
-						}
+						})
 					}
 				} else if evType == "error" {
 					logger.Logger.Errorw("LiveKit Inference TTS error", nil, "msg", string(msg))
 				}
 			}
 		}
+	}
+}
+
+func (s *inferenceTTSStream) emitEvent(ev *tts.SynthesizedAudio) {
+	if ev == nil {
+		return
+	}
+
+	select {
+	case <-s.ctx.Done():
+		return
+	case s.eventCh <- ev:
 	}
 }
