@@ -15,6 +15,7 @@ import (
 type RunEvent interface {
 	RunEventType() string
 	GetCreatedAt() time.Time
+	GetItem() llm.ChatItem
 }
 
 type ChatMessageRunEvent struct {
@@ -23,6 +24,7 @@ type ChatMessageRunEvent struct {
 
 func (e *ChatMessageRunEvent) RunEventType() string    { return "message" }
 func (e *ChatMessageRunEvent) GetCreatedAt() time.Time { return e.Item.CreatedAt }
+func (e *ChatMessageRunEvent) GetItem() llm.ChatItem   { return e.Item }
 
 type FunctionCallRunEvent struct {
 	Item *llm.FunctionCall
@@ -30,6 +32,7 @@ type FunctionCallRunEvent struct {
 
 func (e *FunctionCallRunEvent) RunEventType() string    { return "function_call" }
 func (e *FunctionCallRunEvent) GetCreatedAt() time.Time { return e.Item.CreatedAt }
+func (e *FunctionCallRunEvent) GetItem() llm.ChatItem   { return e.Item }
 
 type FunctionCallOutputRunEvent struct {
 	Item *llm.FunctionCallOutput
@@ -37,6 +40,7 @@ type FunctionCallOutputRunEvent struct {
 
 func (e *FunctionCallOutputRunEvent) RunEventType() string    { return "function_call_output" }
 func (e *FunctionCallOutputRunEvent) GetCreatedAt() time.Time { return e.Item.CreatedAt }
+func (e *FunctionCallOutputRunEvent) GetItem() llm.ChatItem   { return e.Item }
 
 type AgentHandoffRunEvent struct {
 	Item     *llm.AgentHandoff
@@ -46,10 +50,10 @@ type AgentHandoffRunEvent struct {
 
 func (e *AgentHandoffRunEvent) RunEventType() string    { return "agent_handoff" }
 func (e *AgentHandoffRunEvent) GetCreatedAt() time.Time { return e.Item.CreatedAt }
+func (e *AgentHandoffRunEvent) GetItem() llm.ChatItem   { return e.Item }
 
-type RunResult struct {
+type RunResult[T any] struct {
 	ChatCtx   *llm.ChatContext
-	Timeline  []TimelineEvent
 	Timestamp float64
 	Expect    *RunAssert
 
@@ -57,49 +61,32 @@ type RunResult struct {
 	handles     []*SpeechHandle
 	waitCh      chan struct{}
 	done        bool
-	FinalOutput any
+	FinalOutput T
 	finalError  error
 
 	Events []RunEvent
 }
 
-func NewRunResult(chatCtx *llm.ChatContext) *RunResult {
-	timeline := make([]TimelineEvent, 0)
-	events := make([]RunEvent, 0)
-	if chatCtx != nil {
-		for _, item := range chatCtx.Items {
-			timeline = append(timeline, TimelineEvent{
-				Type:      "chat_item:" + item.GetType(),
-				Timestamp: float64(item.GetCreatedAt().UnixNano()) / 1e9,
-				Payload: map[string]any{
-					"id": item.GetID(),
-				},
-			})
-
-			// Capture initial context as events
-			switch v := item.(type) {
-			case *llm.ChatMessage:
-				events = append(events, &ChatMessageRunEvent{Item: v})
-			case *llm.FunctionCall:
-				events = append(events, &FunctionCallRunEvent{Item: v})
-			case *llm.FunctionCallOutput:
-				events = append(events, &FunctionCallOutputRunEvent{Item: v})
-			}
-		}
-	}
-
-	return &RunResult{
+func NewRunResult[T any](chatCtx *llm.ChatContext) *RunResult[T] {
+	return &RunResult[T]{
 		ChatCtx:   chatCtx,
-		Timeline:  timeline,
 		Timestamp: float64(time.Now().UnixNano()) / 1e9,
 		Expect:    &RunAssert{ChatCtx: chatCtx},
 		handles:   make([]*SpeechHandle, 0),
 		waitCh:    make(chan struct{}),
-		Events:    events,
+		Events:    make([]RunEvent, 0),
 	}
 }
 
-func (r *RunResult) AddEvent(ev RunEvent) {
+func (r *RunResult[T]) WaitAny(ctx context.Context) (T, error) {
+	if err := r.Wait(ctx); err != nil {
+		var zero T
+		return zero, err
+	}
+	return r.FinalOutput, nil
+}
+
+func (r *RunResult[T]) AddEvent(ev RunEvent) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.done {
@@ -115,7 +102,8 @@ func (r *RunResult) AddEvent(ev RunEvent) {
 	copy(r.Events[idx+1:], r.Events[idx:])
 	r.Events[idx] = ev
 }
-func (r *RunResult) WatchHandle(handle *SpeechHandle) {
+
+func (r *RunResult[T]) WatchHandle(ctx context.Context, handle *SpeechHandle) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.done {
@@ -123,13 +111,26 @@ func (r *RunResult) WatchHandle(handle *SpeechHandle) {
 	}
 	r.handles = append(r.handles, handle)
 
+	handle.OnItemAdded = func(item llm.ChatItem) {
+		switch v := item.(type) {
+		case *llm.ChatMessage:
+			r.AddEvent(&ChatMessageRunEvent{Item: v})
+		case *llm.FunctionCall:
+			r.AddEvent(&FunctionCallRunEvent{Item: v})
+		case *llm.FunctionCallOutput:
+			r.AddEvent(&FunctionCallOutputRunEvent{Item: v})
+		case *llm.AgentHandoff:
+			r.AddEvent(&AgentHandoffRunEvent{Item: v})
+		}
+	}
+
 	go func() {
-		_ = handle.Wait(context.Background())
+		_ = handle.Wait(ctx)
 		r.checkDone()
 	}()
 }
 
-func (r *RunResult) checkDone() {
+func (r *RunResult[T]) checkDone() {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
@@ -148,17 +149,29 @@ func (r *RunResult) checkDone() {
 	if allDone {
 		r.done = true
 
-		// Grab final output from the last handle if available
+		// Grab final output and error from the last handle if available
 		if len(r.handles) > 0 {
 			lastHandle := r.handles[len(r.handles)-1]
-			r.FinalOutput = lastHandle.FinalOutput
+			
+			if lastHandle.FinalOutput != nil {
+				if val, ok := lastHandle.FinalOutput.(T); ok {
+					r.FinalOutput = val
+				} else {
+					var zero T
+					r.finalError = fmt.Errorf("expected output of type %T, got %T", zero, lastHandle.FinalOutput)
+				}
+			}
+			
+			if r.finalError == nil {
+				r.finalError = lastHandle.Error()
+			}
 		}
 
 		close(r.waitCh)
 	}
 }
 
-func (r *RunResult) Wait(ctx context.Context) error {
+func (r *RunResult[T]) Wait(ctx context.Context) error {
 	select {
 	case <-r.waitCh:
 		return r.finalError
@@ -167,20 +180,13 @@ func (r *RunResult) Wait(ctx context.Context) error {
 	}
 }
 
-func (r *RunResult) Done() <-chan struct{} {
-	return r.waitCh
+// GetOutput returns the strictly typed final output of the run, blocking until completion.
+func GetOutput[T any](ctx context.Context, r *RunResult[T]) (T, error) {
+	return r.WaitAny(ctx)
 }
 
-func (r *RunResult) AddTimelineEvent(eventType string, payload map[string]any) {
-	if r == nil || eventType == "" {
-		return
-	}
-
-	r.Timeline = append(r.Timeline, TimelineEvent{
-		Type:      eventType,
-		Timestamp: float64(time.Now().UnixNano()) / 1e9,
-		Payload:   payload,
-	})
+func (r *RunResult[T]) Done() <-chan struct{} {
+	return r.waitCh
 }
 
 type RunAssert struct {
