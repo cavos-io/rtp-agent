@@ -56,12 +56,13 @@ func NewGetEmailTask(requireConfirmation bool) *GetEmailTask {
 	return t
 }
 
-func (t *GetEmailTask) OnEnter() {
+func (t *GetEmailTask) OnEnter(ctx context.Context) error {
 	if activity := t.Agent.GetActivity(); activity != nil {
 		if session := activity.Session; session != nil {
-			_, _ = session.GenerateReply(context.Background(), "Please tell me your email address.")
+			_, _ = session.GenerateReply(context.Background(), "Please tell me your email address.", true)
 		}
 	}
+	return nil
 }
 
 type updateEmailTool struct {

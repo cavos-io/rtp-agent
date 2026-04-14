@@ -25,8 +25,8 @@ type TurnDetector interface {
 }
 
 type AgentInterface interface {
-	OnEnter()
-	OnExit()
+	OnEnter(ctx context.Context) error
+	OnExit(ctx context.Context) error
 	OnUserTurnCompleted(ctx context.Context, chatCtx *llm.ChatContext, newMsg *llm.ChatMessage) error
 	GetAgent() *Agent
 	GetActivity() *AgentActivity
@@ -35,6 +35,7 @@ type AgentInterface interface {
 type LLMNodeFunc func(ctx context.Context, l llm.LLM, chatCtx *llm.ChatContext, tools []interface{}) (*LLMGenerationData, error)
 type TTSNodeFunc func(ctx context.Context, t tts.TTS, textCh <-chan string) (*TTSGenerationData, error)
 type STTNodeFunc func(ctx context.Context, s stt.STT, audio <-chan *model.AudioFrame) (<-chan *stt.SpeechEvent, error)
+type VideoNodeFunc func(ctx context.Context, video <-chan *model.VideoFrame) error
 type TranscriptionNodeFunc func(ctx context.Context, textCh <-chan string) (<-chan string, error)
 type RealtimeAudioOutputNodeFunc func(ctx context.Context, audio <-chan *model.AudioFrame) (<-chan *model.AudioFrame, error)
 
@@ -54,6 +55,7 @@ type Agent struct {
 	LLMNode                 LLMNodeFunc
 	TTSNode                 TTSNodeFunc
 	STTNode                 STTNodeFunc
+	VideoNode               VideoNodeFunc
 	TranscriptionNode       TranscriptionNodeFunc
 	RealtimeAudioOutputNode RealtimeAudioOutputNodeFunc
 
@@ -82,8 +84,8 @@ func (a *Agent) GetActivity() *AgentActivity {
 	return a.activity
 }
 
-func (a *Agent) OnEnter() {}
-func (a *Agent) OnExit()  {}
+func (a *Agent) OnEnter(ctx context.Context) error { return nil }
+func (a *Agent) OnExit(ctx context.Context) error  { return nil }
 
 func (a *Agent) UpdateInstructions(ctx context.Context, instructions string) error {
 	a.Instructions = instructions

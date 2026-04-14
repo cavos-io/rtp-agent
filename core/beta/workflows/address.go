@@ -59,12 +59,13 @@ func NewGetAddressTask(requireConfirmation bool) *GetAddressTask {
 	return t
 }
 
-func (t *GetAddressTask) OnEnter() {
+func (t *GetAddressTask) OnEnter(ctx context.Context) error {
 	if activity := t.Agent.GetActivity(); activity != nil {
 		if session := activity.Session; session != nil {
-			_, _ = session.GenerateReply(context.Background(), "Please tell me your address.")
+			_, _ = session.GenerateReply(context.Background(), "Please tell me your address.", true)
 		}
 	}
+	return nil
 }
 
 type updateAddressTool struct {

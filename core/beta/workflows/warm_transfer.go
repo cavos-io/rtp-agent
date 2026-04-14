@@ -99,7 +99,7 @@ func NewWarmTransferTask(targetPhone string, trunkId string, chatCtx *llm.ChatCo
 	return t
 }
 
-func (t *WarmTransferTask) OnEnter() {
+func (t *WarmTransferTask) OnEnter(ctx context.Context) error {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
@@ -116,9 +116,10 @@ func (t *WarmTransferTask) OnEnter() {
 
 	// We'll need the room from the session to start background audio
 	// This part is tricky without a fully linked session/activity
+	return nil
 }
 
-func (t *WarmTransferTask) OnExit() {
+func (t *WarmTransferTask) OnExit(ctx context.Context) error {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
@@ -128,6 +129,7 @@ func (t *WarmTransferTask) OnExit() {
 	if t.backgroundAudio != nil {
 		t.backgroundAudio.Close()
 	}
+	return nil
 }
 
 func (t *WarmTransferTask) ConnectToCaller() error {

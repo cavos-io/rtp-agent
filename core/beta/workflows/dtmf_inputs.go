@@ -56,22 +56,24 @@ user will directly say the digits to you. You should be able to handle both case
 	return t
 }
 
-func (t *GetDtmfTask) OnEnter() {
+func (t *GetDtmfTask) OnEnter(ctx context.Context) error {
 	agentObj := t.Agent.GetAgent()
 	if agentObj == nil {
-		return
+		return nil
 	}
 
 	// Assuming session is available via some mechanism in real Start
 	// For parity, we should register for SIP DTMF
+	return nil
 }
 
-func (t *GetDtmfTask) OnExit() {
+func (t *GetDtmfTask) OnExit(ctx context.Context) error {
 	t.mu.Lock()
 	if t.timer != nil {
 		t.timer.Stop()
 	}
 	t.mu.Unlock()
+	return nil
 }
 
 func (t *GetDtmfTask) onSipDTMFReceived(digit string) {
@@ -125,7 +127,7 @@ func (t *GetDtmfTask) generateDtmfReply() {
 
 	if activity := t.Agent.GetActivity(); activity != nil {
 		if session := activity.Session; session != nil {
-			_, _ = session.GenerateReply(context.Background(), fmt.Sprintf("You entered %s. Please confirm if this is correct.", dtmfStr))
+			_, _ = session.GenerateReply(context.Background(), fmt.Sprintf("You entered %s. Please confirm if this is correct.", dtmfStr), true)
 		}
 	}
 }

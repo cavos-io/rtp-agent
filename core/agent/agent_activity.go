@@ -94,7 +94,11 @@ func NewAgentActivity(agentIntf AgentInterface, session *AgentSession) *AgentAct
 }
 
 func (a *AgentActivity) Start() {
-	a.AgentIntf.OnEnter()
+	go func() {
+		if err := a.AgentIntf.OnEnter(a.ctx); err != nil {
+			logger.Logger.Errorw("Agent OnEnter failed", err)
+		}
+	}()
 	if a.recog == nil {
 		a.recog = NewAudioRecognition(a.Session, a, a.Session.STT, a.Session.VAD)
 		if err := a.recog.Start(a.ctx); err != nil {
@@ -127,7 +131,14 @@ func (a *AgentActivity) Stop() {
 }
 
 func (a *AgentActivity) Drain(ctx context.Context) error {
-	a.AgentIntf.OnExit()
+	a.loopWg.Add(1)
+	go func() {
+		defer a.loopWg.Done()
+		if err := a.AgentIntf.OnExit(context.Background()); err != nil {
+			logger.Logger.Errorw("Agent OnExit failed", err)
+		}
+	}()
+
 	a.PauseScheduling()
 
 	done := make(chan struct{})

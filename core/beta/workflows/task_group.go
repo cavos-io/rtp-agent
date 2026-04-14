@@ -60,8 +60,9 @@ func (g *TaskGroup) Add(id, description string, factory func() agent.AgentInterf
 	return g
 }
 
-func (g *TaskGroup) OnEnter() {
+func (g *TaskGroup) OnEnter(ctx context.Context) error {
 	go g.runTasks()
+	return nil
 }
 
 func (g *TaskGroup) runTasks() {
