@@ -177,7 +177,14 @@ func (va *PipelineAgent) GenerateReply(speech *SpeechHandle) {
 			return
 		}
 
-		genData, err := PerformLLMInference(ctx, va.LLM, va.chatCtx, session.Tools)
+		var genData *LLMGenerationData
+		var err error
+		if baseAgent := session.Agent.GetAgent(); baseAgent != nil && baseAgent.LLMNode != nil {
+			genData, err = baseAgent.LLMNode(ctx, va.LLM, va.chatCtx, session.Tools)
+		} else {
+			genData, err = PerformLLMInference(ctx, va.LLM, va.chatCtx, session.Tools)
+		}
+
 		if err != nil {
 			logger.Logger.Errorw("LLM inference failed", err)
 			if session.Timeline != nil {
@@ -196,7 +203,13 @@ func (va *PipelineAgent) GenerateReply(speech *SpeechHandle) {
 		toolOutCh := PerformToolExecutions(ctx, genData.FunctionCh, toolCtx)
 
 		// Start TTS in parallel with LLM text
-		ttsGen, err := PerformTTSInference(ctx, va.tts, genData.TextCh)
+		var ttsGen *TTSGenerationData
+		if baseAgent := session.Agent.GetAgent(); baseAgent != nil && baseAgent.TTSNode != nil {
+			ttsGen, err = baseAgent.TTSNode(ctx, va.tts, genData.TextCh)
+		} else {
+			ttsGen, err = PerformTTSInference(ctx, va.tts, genData.TextCh)
+		}
+
 		if err != nil {
 			logger.Logger.Errorw("TTS inference failed", err)
 			if session.Timeline != nil {
@@ -212,35 +225,59 @@ func (va *PipelineAgent) GenerateReply(speech *SpeechHandle) {
 			}
 			var alignedWG sync.WaitGroup
 			if session.Options.UseTTSAlignedTranscript && session.Output.Transcription != nil {
-				alignedWG.Add(1)
-				go func() {
-					defer alignedWG.Done()
-					for deltaText := range ttsGen.AlignedTextCh {
-						if deltaText == "" {
-							continue
-						}
-						_ = session.Output.Transcription.CaptureText(deltaText)
+				var textCh <-chan string = ttsGen.AlignedTextCh
+				if baseAgent := session.Agent.GetAgent(); baseAgent != nil && baseAgent.TranscriptionNode != nil {
+					var nodeErr error
+					textCh, nodeErr = baseAgent.TranscriptionNode(ctx, textCh)
+					if nodeErr != nil {
+						logger.Logger.Errorw("Transcription node failed", nodeErr)
 					}
-					session.Output.Transcription.Flush()
-				}()
+				}
+
+				if textCh != nil {
+					alignedWG.Add(1)
+					go func() {
+						defer alignedWG.Done()
+						for deltaText := range textCh {
+							if deltaText == "" {
+								continue
+							}
+							_ = session.Output.Transcription.CaptureText(deltaText)
+						}
+						session.Output.Transcription.Flush()
+					}()
+				}
 			}
 
 			if session.Output.Audio == nil {
 				session.UpdateAgentState(AgentStateSpeaking)
 			}
-			for frame := range ttsGen.AudioCh {
-				if speech.IsInterrupted() {
-					break
+			
+			var audioCh <-chan *model.AudioFrame = ttsGen.AudioCh
+			if baseAgent := session.Agent.GetAgent(); baseAgent != nil && baseAgent.RealtimeAudioOutputNode != nil {
+				var nodeErr error
+				audioCh, nodeErr = baseAgent.RealtimeAudioOutputNode(ctx, audioCh)
+				if nodeErr != nil {
+					logger.Logger.Errorw("Realtime audio output node failed", nodeErr)
 				}
-				select {
-				case <-ctx.Done():
-					return
-				default:
-					if session.Output.Audio != nil {
-						_ = session.Output.Audio.CaptureFrame(frame)
+			}
+
+			if audioCh != nil {
+				for frame := range audioCh {
+					if speech.IsInterrupted() {
+						break
+					}
+					select {
+					case <-ctx.Done():
+						return
+					default:
+						if session.Output.Audio != nil {
+							_ = session.Output.Audio.CaptureFrame(frame)
+						}
 					}
 				}
 			}
+			
 			if session.Output.Audio != nil {
 				session.Output.Audio.Flush()
 				if speech.IsInterrupted() {

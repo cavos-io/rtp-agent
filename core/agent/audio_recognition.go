@@ -21,6 +21,10 @@ type AudioRecognition struct {
 
 	vadStream vad.VADStream
 	sttStream stt.RecognizeStream
+	
+	// For STTNode override
+	sttNodeAudioCh chan *model.AudioFrame
+	sttNodeOutCh   <-chan *stt.SpeechEvent
 
 	mu       sync.Mutex
 	speaking bool
@@ -35,10 +39,11 @@ type RecognitionHooks interface {
 
 func NewAudioRecognition(session *AgentSession, hooks RecognitionHooks, s stt.STT, v vad.VAD) *AudioRecognition {
 	return &AudioRecognition{
-		session: session,
-		hooks:   hooks,
-		stt:     s,
-		vad:     v,
+		session:        session,
+		hooks:          hooks,
+		stt:            s,
+		vad:            v,
+		sttNodeAudioCh: make(chan *model.AudioFrame, 100),
 	}
 }
 
@@ -60,7 +65,22 @@ func (ar *AudioRecognition) Start(ctx context.Context) error {
 		}
 	}
 
-	if ar.stt != nil {
+	var hasSTTNode bool
+	if ar.session != nil && ar.session.Agent != nil {
+		if baseAgent := ar.session.Agent.GetAgent(); baseAgent != nil && baseAgent.STTNode != nil {
+			hasSTTNode = true
+			outCh, err := baseAgent.STTNode(ctx, ar.stt, ar.sttNodeAudioCh)
+			if err != nil {
+				startErr = fmt.Errorf("failed to start STT node override: %w", err)
+			} else {
+				ar.sttNodeOutCh = outCh
+				started = true
+				go ar.sttNodeLoop(ctx)
+			}
+		}
+	}
+
+	if !hasSTTNode && ar.stt != nil {
 		stream, err := ar.stt.Stream(ctx, "")
 		if err != nil {
 			if startErr != nil {
@@ -150,6 +170,39 @@ func (ar *AudioRecognition) sttLoop(ctx context.Context, stream stt.RecognizeStr
 	}
 }
 
+func (ar *AudioRecognition) sttNodeLoop(ctx context.Context) {
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case ev, ok := <-ar.sttNodeOutCh:
+			if !ok {
+				return
+			}
+			if ev == nil {
+				continue
+			}
+
+			switch ev.Type {
+			case stt.SpeechEventStartOfSpeech:
+				ar.mu.Lock()
+				ar.speaking = true
+				ar.mu.Unlock()
+				ar.hooks.OnStartOfSpeech(nil)
+			case stt.SpeechEventEndOfSpeech:
+				ar.mu.Lock()
+				ar.speaking = false
+				ar.mu.Unlock()
+				ar.hooks.OnEndOfSpeech(nil)
+			case stt.SpeechEventInterimTranscript, stt.SpeechEventPreflightTranscript:
+				ar.hooks.OnInterimTranscript(ev)
+			case stt.SpeechEventFinalTranscript:
+				ar.hooks.OnFinalTranscript(ev)
+			}
+		}
+	}
+}
+
 func (ar *AudioRecognition) PushAudio(frame *model.AudioFrame) error {
 	ar.mu.Lock()
 	defer ar.mu.Unlock()
@@ -162,6 +215,14 @@ func (ar *AudioRecognition) PushAudio(frame *model.AudioFrame) error {
 		_ = ar.sttStream.PushFrame(frame)
 	}
 
+	if ar.sttNodeAudioCh != nil {
+		select {
+		case ar.sttNodeAudioCh <- frame:
+		default:
+			// channel full, drop frame to avoid blocking audio thread
+		}
+	}
+
 	return nil
 }
 
@@ -172,5 +233,8 @@ func (ar *AudioRecognition) Flush() error {
 	if ar.sttStream != nil {
 		return ar.sttStream.Flush()
 	}
+	
+	// STTNode doesn't have an explicit flush method since it's channel based,
+	// but we could define a marker frame if needed.
 	return nil
 }

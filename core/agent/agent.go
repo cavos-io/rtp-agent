@@ -8,6 +8,7 @@ import (
 	"github.com/cavos-io/conversation-worker/core/stt"
 	"github.com/cavos-io/conversation-worker/core/tts"
 	"github.com/cavos-io/conversation-worker/core/vad"
+	"github.com/cavos-io/conversation-worker/model"
 )
 
 type TurnDetectionMode string
@@ -31,6 +32,12 @@ type AgentInterface interface {
 	GetActivity() *AgentActivity
 }
 
+type LLMNodeFunc func(ctx context.Context, l llm.LLM, chatCtx *llm.ChatContext, tools []llm.Tool) (*LLMGenerationData, error)
+type TTSNodeFunc func(ctx context.Context, t tts.TTS, textCh <-chan string) (*TTSGenerationData, error)
+type STTNodeFunc func(ctx context.Context, s stt.STT, audio <-chan *model.AudioFrame) (<-chan *stt.SpeechEvent, error)
+type TranscriptionNodeFunc func(ctx context.Context, textCh <-chan string) (<-chan string, error)
+type RealtimeAudioOutputNodeFunc func(ctx context.Context, audio <-chan *model.AudioFrame) (<-chan *model.AudioFrame, error)
+
 type Agent struct {
 	ID           string
 	Instructions string
@@ -43,6 +50,12 @@ type Agent struct {
 	VAD           vad.VAD
 	LLM           llm.LLM
 	TTS           tts.TTS
+
+	LLMNode                 LLMNodeFunc
+	TTSNode                 TTSNodeFunc
+	STTNode                 STTNodeFunc
+	TranscriptionNode       TranscriptionNodeFunc
+	RealtimeAudioOutputNode RealtimeAudioOutputNodeFunc
 
 	AllowInterruptions        bool
 	MinConsecutiveSpeechDelay float64
