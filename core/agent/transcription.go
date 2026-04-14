@@ -105,6 +105,111 @@ func (s *TranscriptSynchronizer) Close() {
 	close(s.audioCh)
 }
 
+// SyncedAudioOutput wraps an AudioOutput and pushes frames to the synchronizer
+type SyncedAudioOutput struct {
+	sync *TranscriptSynchronizer
+	next AudioOutput
+}
+
+func NewSyncedAudioOutput(sync *TranscriptSynchronizer, next AudioOutput) *SyncedAudioOutput {
+	return &SyncedAudioOutput{sync: sync, next: next}
+}
+
+func (s *SyncedAudioOutput) Label() string { return "TranscriptSynchronizerAudio" }
+func (s *SyncedAudioOutput) CaptureFrame(frame *model.AudioFrame) error {
+	s.sync.PushAudio(frame)
+	if s.next != nil {
+		return s.next.CaptureFrame(frame)
+	}
+	return nil
+}
+func (s *SyncedAudioOutput) Flush() {
+	if s.next != nil {
+		s.next.Flush()
+	}
+}
+func (s *SyncedAudioOutput) WaitForPlayout(ctx context.Context) error {
+	if s.next != nil {
+		return s.next.WaitForPlayout(ctx)
+	}
+	return nil
+}
+func (s *SyncedAudioOutput) ClearBuffer() {
+	if s.next != nil {
+		s.next.ClearBuffer()
+	}
+}
+func (s *SyncedAudioOutput) OnAttached() {
+	if s.next != nil {
+		s.next.OnAttached()
+	}
+}
+func (s *SyncedAudioOutput) OnDetached() {
+	if s.next != nil {
+		s.next.OnDetached()
+	}
+}
+func (s *SyncedAudioOutput) Pause() {
+	if s.next != nil {
+		s.next.Pause()
+	}
+}
+func (s *SyncedAudioOutput) Resume() {
+	if s.next != nil {
+		s.next.Resume()
+	}
+}
+func (s *SyncedAudioOutput) OnPlaybackStarted(f func(ev PlaybackStartedEvent)) {
+	if s.next != nil {
+		s.next.OnPlaybackStarted(f)
+	}
+}
+func (s *SyncedAudioOutput) OnPlaybackFinished(f func(ev PlaybackFinishedEvent)) {
+	if s.next != nil {
+		s.next.OnPlaybackFinished(f)
+	}
+}
+
+// SyncedTextOutput wraps a TextOutput and pushes text to the synchronizer
+type SyncedTextOutput struct {
+	sync *TranscriptSynchronizer
+	next TextOutput
+}
+
+func NewSyncedTextOutput(sync *TranscriptSynchronizer, next TextOutput) *SyncedTextOutput {
+	sto := &SyncedTextOutput{sync: sync, next: next}
+	if next != nil {
+		go func() {
+			for text := range sync.EventCh() {
+				_ = next.CaptureText(text)
+			}
+		}()
+	}
+	return sto
+}
+
+func (s *SyncedTextOutput) Label() string { return "TranscriptSynchronizerText" }
+func (s *SyncedTextOutput) CaptureText(text string) error {
+	s.sync.PushText(text)
+	return nil // Actual text emission happens from the synchronizer loop
+}
+func (s *SyncedTextOutput) Flush() {
+	s.sync.Interrupt()
+	if s.next != nil {
+		s.next.Flush()
+	}
+}
+func (s *SyncedTextOutput) OnAttached() {
+	if s.next != nil {
+		s.next.OnAttached()
+	}
+}
+func (s *SyncedTextOutput) OnDetached() {
+	if s.next != nil {
+		s.next.OnDetached()
+	}
+}
+
 func countSyllables(text string) int {
 	// A fast heuristic syllable counter using vowel groups
 	text = strings.ToLower(text)

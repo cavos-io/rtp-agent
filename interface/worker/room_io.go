@@ -3,6 +3,7 @@ package worker
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"sync"
 	"time"
@@ -146,7 +147,60 @@ type RoomIO struct {
 	audioInCh       chan *model.AudioFrame
 
 	participantIdentity string
+
+	sync *agent.TranscriptSynchronizer
 }
+
+// --- agent.TextOutput Implementation ---
+
+type RoomTextOutput struct {
+	room   *lksdk.Room
+	writer *lksdk.TextStreamWriter
+	mu     sync.Mutex
+}
+
+func NewRoomTextOutput(room *lksdk.Room) *RoomTextOutput {
+	return &RoomTextOutput{room: room}
+}
+
+func (t *RoomTextOutput) Label() string {
+	return "RoomTextOutput"
+}
+
+func (t *RoomTextOutput) CaptureText(text string) error {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	if t.room == nil || t.room.LocalParticipant == nil {
+		return fmt.Errorf("room or local participant not ready")
+	}
+
+	if t.writer == nil {
+		opts := lksdk.StreamTextOptions{
+			Topic: "lk-agent-transcription",
+		}
+		t.writer = t.room.LocalParticipant.StreamText(opts)
+	}
+
+	if t.writer != nil {
+		t.writer.Write(text, nil)
+		return nil
+	}
+
+	return nil
+}
+
+func (t *RoomTextOutput) Flush() {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.writer != nil {
+		t.writer.Close()
+		t.writer = nil
+	}
+}
+
+func (t *RoomTextOutput) OnAttached() {}
+func (t *RoomTextOutput) OnDetached() {}
 
 func NewRoomIO(room *lksdk.Room, session *agent.AgentSession, opts RoomOptions) *RoomIO {
 	dec, _ := newOpusDecoder(48000, 1)
@@ -177,7 +231,20 @@ func NewRoomIO(room *lksdk.Room, session *agent.AgentSession, opts RoomOptions) 
 	}
 
 	session.Input.Audio = rio
-	session.SetAudioOutput(rio)
+
+	if session.Options.UseTTSAlignedTranscript {
+		textOut := NewRoomTextOutput(room)
+		sync := agent.NewTranscriptSynchronizer(3.83) // default speaking rate
+		rio.sync = sync
+
+		syncedAudio := agent.NewSyncedAudioOutput(sync, rio)
+		syncedText := agent.NewSyncedTextOutput(sync, textOut)
+
+		session.SetAudioOutput(syncedAudio)
+		session.Output.Transcription = syncedText
+	} else {
+		session.SetAudioOutput(rio)
+	}
 
 	return rio
 }
@@ -536,6 +603,10 @@ func (rio *RoomIO) Close() error {
 	}
 	if rio.encoder != nil {
 		rio.encoder.Close()
+	}
+
+	if rio.sync != nil {
+		rio.sync.Close()
 	}
 
 	if rio.Options.DeleteRoomOnClose {
