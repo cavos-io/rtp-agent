@@ -234,7 +234,7 @@ func NewRoomIO(room *lksdk.Room, session *agent.AgentSession, opts RoomOptions) 
 		session.Assistant = agent.NewPipelineAgent(session.VAD, session.STT, session.LLM, session.TTS, session.ChatCtx)
 	}
 
-	session.Input.Audio = rio
+	session.Input.Audio = rio.Recorder.RecordInput(rio)
 
 	if session.Options.UseTTSAlignedTranscript {
 		textOut := NewRoomTextOutput(room)
@@ -244,10 +244,10 @@ func NewRoomIO(room *lksdk.Room, session *agent.AgentSession, opts RoomOptions) 
 		syncedAudio := agent.NewSyncedAudioOutput(sync, rio)
 		syncedText := agent.NewSyncedTextOutput(sync, textOut)
 
-		session.SetAudioOutput(syncedAudio)
+		session.SetAudioOutput(rio.Recorder.RecordOutput(syncedAudio))
 		session.Output.Transcription = syncedText
 	} else {
-		session.SetAudioOutput(rio)
+		session.SetAudioOutput(rio.Recorder.RecordOutput(rio))
 	}
 	return rio
 }
@@ -277,10 +277,6 @@ func (rio *RoomIO) OnPlaybackFinished(f func(ev agent.PlaybackFinishedEvent)) {
 type flushMarker chan struct{}
 
 func (rio *RoomIO) CaptureFrame(frame *model.AudioFrame) error {
-	if rio.Recorder != nil {
-		rio.Recorder.RecordOutput(frame)
-	}
-
 	rio.playoutCh <- frame
 	return nil
 }
@@ -543,9 +539,6 @@ func (rio *RoomIO) handleAudioTrack(track *webrtc.TrackRemote) {
 
 	if frames := rio.preConnectAudio.WaitForData(ctx, track.ID()); len(frames) > 0 {
 		for _, frame := range frames {
-			if rio.Recorder != nil {
-				rio.Recorder.RecordInput(frame)
-			}
 			rio.audioInCh <- frame
 		}
 	}
@@ -589,9 +582,6 @@ func (rio *RoomIO) handleAudioTrack(track *webrtc.TrackRemote) {
 				SamplesPerChannel: uint32(len(pcm) / 2),
 			}
 
-			if rio.Recorder != nil {
-				rio.Recorder.RecordInput(frame)
-			}
 			rio.audioInCh <- frame
 		}
 	}
