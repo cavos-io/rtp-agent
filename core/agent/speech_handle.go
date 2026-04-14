@@ -26,6 +26,7 @@ func DefaultInputDetails() InputDetails {
 
 type RunResultInterface interface {
 	AddEvent(ev RunEvent)
+	WatchTask(done <-chan struct{})
 }
 
 type SpeechHandle struct {

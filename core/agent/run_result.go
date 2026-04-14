@@ -64,6 +64,7 @@ type RunResult[T any] struct {
 
 	mu          sync.Mutex
 	handles     []*SpeechHandle
+	tasks       []<-chan struct{}
 	waitCh      chan struct{}
 	done        bool
 	FinalOutput T
@@ -87,9 +88,24 @@ func NewRunResult[T any](chatCtx *llm.ChatContext) *RunResult[T] {
 		Timestamp: float64(time.Now().UnixNano()) / 1e9,
 		Expect:    &RunAssert{ChatCtx: chatCtx},
 		handles:   make([]*SpeechHandle, 0),
+		tasks:     make([]<-chan struct{}, 0),
 		waitCh:    make(chan struct{}),
 		Events:    make([]RunEvent, 0),
 	}
+}
+
+func (r *RunResult[T]) WatchTask(done <-chan struct{}) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.done {
+		return
+	}
+	r.tasks = append(r.tasks, done)
+	
+	go func() {
+		<-done
+		r.checkDone()
+	}()
 }
 
 func (r *RunResult[T]) WaitAny(ctx context.Context) (T, error) {
@@ -157,6 +173,17 @@ func (r *RunResult[T]) checkDone() {
 		if !h.IsDone() {
 			allDone = false
 			break
+		}
+	}
+
+	if allDone {
+		for _, t := range r.tasks {
+			select {
+			case <-t:
+			default:
+				allDone = false
+				break
+			}
 		}
 	}
 
