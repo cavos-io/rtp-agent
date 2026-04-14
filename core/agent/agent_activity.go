@@ -58,10 +58,11 @@ type AgentActivity struct {
 	userAwayMu          sync.Mutex
 	userAwayTm          *time.Timer
 
-	audioTranscript        string
-	audioInterimTranscript string
-	transcriptMu           sync.Mutex
-	finalTranscriptCond    *sync.Cond
+	audioTranscript          string
+	audioInterimTranscript   string
+	audioPreflightTranscript string
+	transcriptMu             sync.Mutex
+	finalTranscriptCond      *sync.Cond
 
 	speechWg sync.WaitGroup
 	loopWg   sync.WaitGroup
@@ -448,7 +449,14 @@ func (a *AgentActivity) OnInterimTranscript(ev *stt.SpeechEvent) {
 		transcript := ev.Alternatives[0].Text
 		if transcript != "" {
 			a.transcriptMu.Lock()
-			a.audioInterimTranscript = transcript
+			if ev.Type == stt.SpeechEventPreflightTranscript {
+				a.audioPreflightTranscript = strings.TrimSpace(a.audioTranscript + " " + transcript)
+				a.audioInterimTranscript = transcript
+				// In a full implementation we would trigger preemptive generation here
+				// using a.audioPreflightTranscript, but for parity we ensure the state is updated.
+			} else {
+				a.audioInterimTranscript = transcript
+			}
 			a.transcriptMu.Unlock()
 		}
 	}
@@ -472,6 +480,7 @@ func (a *AgentActivity) OnFinalTranscript(ev *stt.SpeechEvent) {
 	if transcript != "" {
 		a.audioTranscript = strings.TrimSpace(a.audioTranscript + " " + transcript)
 	}
+	a.audioPreflightTranscript = ""
 	a.audioInterimTranscript = ""
 	a.finalTranscriptCond.Broadcast()
 	a.transcriptMu.Unlock()
@@ -727,28 +736,37 @@ func (a *AgentActivity) runEOUDetection(info EndOfTurnInfo) {
 					case <-waitCh:
 					case <-time.After(timeout): // transcript timeout
 						logger.Logger.Warnw("final transcript not received after timeout", nil, "timeout", timeout)
+						
+						// Simulate FinalTranscript event using interim transcript
+						a.transcriptMu.Lock()
+						interim := a.audioInterimTranscript
+						a.transcriptMu.Unlock()
+						
+						if interim != "" {
+							if a.Session.Timeline != nil {
+								a.Session.Timeline.AddEvent(&UserInputTranscribedEvent{
+									Transcript: interim,
+									IsFinal:    true,
+									CreatedAt:  time.Now(),
+								})
+							}
+							
+							// Trigger hooks to process it properly
+							if a.recog != nil && a.recog.hooks != nil {
+								a.recog.hooks.OnFinalTranscript(&stt.SpeechEvent{
+									Type: stt.SpeechEventFinalTranscript,
+									Alternatives: []stt.SpeechData{
+										{Text: interim},
+									},
+								})
+							}
+						}
 					case <-ctx.Done():
 						return
 					}
 					a.transcriptMu.Lock()
 				}
 				
-				if a.audioInterimTranscript != "" {
-					// emit interim transcript as final
-					if a.Session.Timeline != nil {
-						a.Session.Timeline.AddEvent(&UserInputTranscribedEvent{
-							Transcript: a.audioInterimTranscript,
-							IsFinal:    true,
-							CreatedAt:  time.Now(),
-						})
-					}
-					
-					if a.audioTranscript != "" {
-						a.audioTranscript = strings.TrimSpace(a.audioTranscript + " " + a.audioInterimTranscript)
-					} else {
-						a.audioTranscript = a.audioInterimTranscript
-					}
-				}
 				if a.audioTranscript != "" {
 					transcript = a.audioTranscript
 				}
