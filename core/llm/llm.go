@@ -273,7 +273,7 @@ type RealtimeModel interface {
 type RealtimeSession interface {
 	UpdateInstructions(instructions string) error
 	UpdateChatContext(chatCtx *ChatContext) error
-	UpdateTools(tools []Tool) error
+	UpdateTools(tools []interface{}) error
 	Interrupt() error
 	Close() error
 	EventCh() <-chan RealtimeEvent

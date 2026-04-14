@@ -97,39 +97,8 @@ func (l *XaiLLM) Chat(ctx context.Context, chatCtx *llm.ChatContext, opts ...llm
 	}
 
 	if len(options.Tools) > 0 {
-		tools := make([]map[string]interface{}, 0)
-		for _, toolInterface := range options.Tools {
-			if tool, ok := toolInterface.(llm.Tool); ok {
-				if tool.Name() == "xai_web_search" {
-					tools = append(tools, map[string]interface{}{
-						"type": "web_search",
-					})
-				} else if tool.Name() == "xai_x_search" {
-					tools = append(tools, map[string]interface{}{
-						"type": "x_search",
-					}) // Expand allowed_x_handles if needed via parameters later
-				} else if tool.Name() == "xai_file_search" {
-					tools = append(tools, map[string]interface{}{
-						"type": "file_search",
-					}) // Expand vector_store_ids if needed
-				} else {
-					tools = append(tools, map[string]interface{}{
-						"type": "function",
-						"function": map[string]interface{}{
-							"name":        tool.Name(),
-							"description": tool.Description(),
-							"parameters":  tool.Parameters(),
-						},
-					})
-				}
-			} else if pt, ok := toolInterface.(llm.ProviderTool); ok {
-				schema := pt.ProviderSchema("openai")
-				if schema != nil {
-					tools = append(tools, schema)
-				}
-			}
-		}
-		body["tools"] = tools
+		tc := llm.NewToolContext(options.Tools)
+		body["tools"] = tc.ParseFunctionTools("openai")
 	}
 
 	jsonBody, _ := json.Marshal(body)

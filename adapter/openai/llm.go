@@ -106,30 +106,13 @@ func (l *OpenAILLM) Chat(ctx context.Context, chatCtx *llm.ChatContext, opts ...
 		}
 	}
 
-	tools := make([]openai.Tool, 0, len(options.Tools))
-	for _, tool := range options.Tools {
-		if t, ok := tool.(llm.Tool); ok {
-			params, _ := json.Marshal(t.Parameters())
-			tools = append(tools, openai.Tool{
-				Type: openai.ToolTypeFunction,
-				Function: &openai.FunctionDefinition{
-					Name:        t.Name(),
-					Description: t.Description(),
-					Parameters:  json.RawMessage(params),
-				},
-			})
-		} else if pt, ok := tool.(llm.ProviderTool); ok {
-			schema := pt.ProviderSchema("openai")
-			if schema != nil {
-				// ProviderSchema usually returns the full tool object for OpenAI
-				// but let's be careful and try to unmarshal it if it's a map
-				b, _ := json.Marshal(schema)
-				var ot openai.Tool
-				if err := json.Unmarshal(b, &ot); err == nil {
-					tools = append(tools, ot)
-				}
-			}
-		}
+	tc := llm.NewToolContext(options.Tools)
+	schemas := tc.ParseFunctionTools("openai")
+
+	tools := make([]openai.Tool, 0, len(schemas))
+	if len(schemas) > 0 {
+		b, _ := json.Marshal(schemas)
+		_ = json.Unmarshal(b, &tools)
 	}
 
 	req := openai.ChatCompletionRequest{

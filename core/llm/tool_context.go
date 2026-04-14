@@ -62,6 +62,13 @@ func (c *ToolContext) ParseFunctionTools(format string) []map[string]any {
 					"parameters":  t.Parameters(),
 				},
 			})
+		case "openai.responses":
+			out = append(out, map[string]any{
+				"type":        "function",
+				"name":        t.Name(),
+				"description": t.Description(),
+				"parameters":  t.Parameters(),
+			})
 		case "anthropic":
 			out = append(out, map[string]any{
 				"name":         t.Name(),

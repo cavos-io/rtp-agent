@@ -83,16 +83,9 @@ func (s *realtimeSession) UpdateChatContext(chatCtx *llm.ChatContext) error {
 	return nil
 }
 
-func (s *realtimeSession) UpdateTools(tools []llm.Tool) error {
-	var oaTools []map[string]any
-	for _, t := range tools {
-		oaTools = append(oaTools, map[string]any{
-			"type": "function",
-			"name": t.Name(),
-			"description": t.Description(),
-			"parameters": t.Parameters(),
-		})
-	}
+func (s *realtimeSession) UpdateTools(tools []interface{}) error {
+	tc := llm.NewToolContext(tools)
+	oaTools := tc.ParseFunctionTools("openai.responses")
 
 	msg := map[string]any{
 		"type": "session.update",
