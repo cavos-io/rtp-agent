@@ -672,6 +672,10 @@ func (a *AgentActivity) runEOUDetection(info EndOfTurnInfo) {
 			}
 
 			if err := a.AgentIntf.OnUserTurnCompleted(a.ctx, chatCtx, newMsg); err != nil {
+				if err == llm.ErrStopResponse {
+					logger.Logger.Infow("user turn completed returned StopResponse, dropping turn")
+					return
+				}
 				logger.Logger.Errorw("on user turn completed failed", err)
 			}
 		}

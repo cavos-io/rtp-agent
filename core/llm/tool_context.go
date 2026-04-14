@@ -1,9 +1,12 @@
 package llm
 
 import (
+	"errors"
 	"fmt"
 	"reflect"
 )
+
+var ErrStopResponse = errors.New("stop response")
 
 type ToolContext struct {
 	tools          []interface{} // Tool | Toolset

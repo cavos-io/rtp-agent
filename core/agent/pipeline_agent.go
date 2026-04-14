@@ -253,13 +253,17 @@ func (va *PipelineAgent) GenerateReply(speech *SpeechHandle) {
 
 		// Wait for tool executions to complete and collect results
 		var executedTools bool
+		var stopResponse bool
 		for toolOut := range toolOutCh {
 			executedTools = true
+			if toolOut.RawError == llm.ErrStopResponse {
+				stopResponse = true
+			}
 			logger.Logger.Infow("Tool executed", "name", toolOut.FncCall.Name)
 			if session.Timeline != nil {
 				session.Timeline.Add("tool_executed", map[string]any{
 					"name":     toolOut.FncCall.Name,
-					"is_error": toolOut.RawError != nil,
+					"is_error": toolOut.RawError != nil && toolOut.RawError != llm.ErrStopResponse,
 				})
 			}
 
@@ -269,8 +273,8 @@ func (va *PipelineAgent) GenerateReply(speech *SpeechHandle) {
 			}
 		}
 
-		// If no tool calls, we're done
-		if !executedTools {
+		// If no tool calls or StopResponse, we're done
+		if !executedTools || stopResponse {
 			if session.Timeline != nil {
 				session.Timeline.Add("reply_generation_completed", nil)
 			}

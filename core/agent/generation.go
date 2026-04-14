@@ -339,24 +339,45 @@ func PerformToolExecutions(
 					return
 				}
 
-				result, err := tool.Execute(ctx, args)
-				isError := err != nil
-				outputStr := result
-				if err != nil {
-					outputStr = err.Error()
+				// Inject RunContext if available in the parent context
+				rc := GetRunContext(ctx)
+				var execCtx context.Context
+				if rc != nil {
+					callRC := &RunContext{
+						Session:      rc.Session,
+						SpeechHandle: rc.SpeechHandle,
+						FunctionCall: &call,
+					}
+					execCtx = WithRunContext(ctx, callRC)
+				} else {
+					execCtx = ctx
 				}
 
-				outCh <- ToolExecutionOutput{
-					FncCall: call,
-					FncCallOut: &llm.FunctionCallOutput{
+				result, err := tool.Execute(execCtx, args)
+				
+				var fncCallOut *llm.FunctionCallOutput
+				if err == llm.ErrStopResponse {
+					fncCallOut = nil
+				} else {
+					isError := err != nil
+					outputStr := result
+					if err != nil {
+						outputStr = err.Error()
+					}
+					fncCallOut = &llm.FunctionCallOutput{
 						CallID:    call.CallID,
 						Name:      call.Name,
 						Output:    outputStr,
 						IsError:   isError,
 						CreatedAt: time.Now(),
-					},
-					RawOutput: result,
-					RawError:  err,
+					}
+				}
+
+				outCh <- ToolExecutionOutput{
+					FncCall:    call,
+					FncCallOut: fncCallOut,
+					RawOutput:  result,
+					RawError:   err,
 				}
 			}(fncCall)
 		}
