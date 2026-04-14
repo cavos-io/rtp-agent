@@ -138,6 +138,17 @@ func (w *streamAdapterWrapper) run() {
 						}
 					}
 				}
+			} else if vEvent.Type == vad.VADEventInferenceDone {
+				// If VAD says we are still speaking, we can use the frames for interim recognition
+				if vEvent.Speaking && len(vEvent.Frames) > 0 {
+					tEvent, err := w.adapter.stt.Recognize(w.ctx, vEvent.Frames, w.language)
+					if err == nil && tEvent != nil && len(tEvent.Alternatives) > 0 && tEvent.Alternatives[0].Text != "" {
+						w.events <- &SpeechEvent{
+							Type:         SpeechEventInterimTranscript,
+							Alternatives: []SpeechData{tEvent.Alternatives[0]},
+						}
+					}
+				}
 			}
 		}
 	}

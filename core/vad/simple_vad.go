@@ -56,6 +56,20 @@ func (s *simpleVADStream) PushFrame(frame *model.AudioFrame) error {
 
 	if s.speaking {
 		s.buffered = append(s.buffered, frame)
+		// Emit interim update every ~1 second (assuming 20ms frames)
+		if len(s.buffered)%50 == 0 {
+			frames := make([]*model.AudioFrame, len(s.buffered))
+			copy(frames, s.buffered)
+			select {
+			case s.events <- &VADEvent{
+				Type:     VADEventInferenceDone,
+				Speaking: true,
+				Frames:   frames,
+			}:
+			default:
+				// channel full, skip interim update
+			}
+		}
 	}
 
 	if rms > s.threshold {
