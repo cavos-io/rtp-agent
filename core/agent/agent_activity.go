@@ -116,6 +116,13 @@ func (a *AgentActivity) processQueue() {
 
 	// Run speech completion asynchronously
 	go func() {
+		// Trigger the pipeline agent to process the speech request
+		if a.Session.Assistant != nil {
+			a.Session.Assistant.GenerateReply(speech)
+		} else {
+			speech.MarkDone()
+		}
+
 		// Wait for generation to finish or be interrupted
 		<-speech.doneCh
 

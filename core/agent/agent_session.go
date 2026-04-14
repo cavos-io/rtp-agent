@@ -68,7 +68,7 @@ type AgentSession struct {
 	AgentState AgentState
 
 	mu       sync.Mutex
-	activity *AgentActivity
+	Activity *AgentActivity
 	started  bool
 
 	// Event channels
@@ -112,7 +112,7 @@ func (s *AgentSession) Start(ctx context.Context) error {
 	}
 
 	if s.VAD == nil {
-		s.VAD = vad.NewSimpleVAD(0.05)
+		s.VAD = vad.NewSimpleVAD(0.01)
 	}
 
 	if s.Assistant == nil {
@@ -123,8 +123,8 @@ func (s *AgentSession) Start(ctx context.Context) error {
 		return err
 	}
 
-	s.activity = NewAgentActivity(s.Agent, s)
-	s.activity.Start()
+	s.Activity = NewAgentActivity(s.Agent, s)
+	s.Activity.Start()
 
 	// Trigger periodic usage metrics reporting
 	if s.MetricsCollector != nil {
@@ -194,7 +194,7 @@ func (s *AgentSession) UpdateUserState(state UserState) {
 
 func (s *AgentSession) GenerateReply(ctx context.Context, userInput string) error {
 	s.mu.Lock()
-	activity := s.activity
+	activity := s.Activity
 	s.mu.Unlock()
 
 	if activity == nil {
@@ -230,8 +230,8 @@ func (s *AgentSession) Stop(ctx context.Context) error {
 		return nil
 	}
 
-	s.activity.Stop()
-	s.activity = nil
+	s.Activity.Stop()
+	s.Activity = nil
 	s.started = false
 	return nil
 }

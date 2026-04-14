@@ -125,6 +125,10 @@ func (va *PipelineAgent) vadLoop(stream vad.VADStream) {
 			logger.Logger.Infow("User started speaking")
 			va.session.UpdateUserState(UserStateSpeaking)
 			
+			if va.session.Activity != nil {
+				va.session.Activity.OnStartOfSpeech(ev)
+			}
+			
 			// Interrupt ongoing agent speech/generation
 			va.mu.Lock()
 			if va.cancel != nil {
@@ -137,6 +141,10 @@ func (va *PipelineAgent) vadLoop(stream vad.VADStream) {
 		} else if ev.Type == vad.VADEventEndOfSpeech {
 			logger.Logger.Infow("User stopped speaking")
 			va.session.UpdateUserState(UserStateListening)
+			
+			if va.session.Activity != nil {
+				va.session.Activity.OnEndOfSpeech(ev)
+			}
 		}
 	}
 }
@@ -155,19 +163,16 @@ func (va *PipelineAgent) sttLoop(stream stt.RecognizeStream) {
 			transcript := ev.Alternatives[0].Text
 			logger.Logger.Infow("Final transcript", "text", transcript)
 
-			va.chatCtx.Append(&llm.ChatMessage{
-				Role: llm.ChatRoleUser,
-				Content: []llm.ChatContent{
-					{Text: transcript},
-				},
-			})
-
-			go va.generateReply()
+			if va.session.Activity != nil {
+				va.session.Activity.OnFinalTranscript(ev)
+			}
 		}
 	}
 }
 
-func (va *PipelineAgent) generateReply() {
+func (va *PipelineAgent) GenerateReply(speech *SpeechHandle) {
+	defer speech.MarkDone()
+
 	va.mu.Lock()
 	session := va.session
 	ctx := va.ctx
@@ -188,6 +193,11 @@ func (va *PipelineAgent) generateReply() {
 
 	// In Python parity, we loop for tool calls
 	for {
+		if speech.IsInterrupted() {
+			session.UpdateAgentState(AgentStateIdle)
+			return
+		}
+
 		genData, err := PerformLLMInference(ctx, va.LLM, va.chatCtx, session.Tools)
 		if err != nil {
 			logger.Logger.Errorw("LLM inference failed", err)
@@ -204,6 +214,9 @@ func (va *PipelineAgent) generateReply() {
 		} else {
 			session.UpdateAgentState(AgentStateSpeaking)
 			for frame := range ttsGen.AudioCh {
+				if speech.IsInterrupted() {
+					break
+				}
 				select {
 				case <-ctx.Done():
 					return
