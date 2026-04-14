@@ -2,13 +2,12 @@ package agent
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
-	"strings"
 	"sync"
 	"time"
 
 	"github.com/cavos-io/conversation-worker/library/logger"
+	"github.com/cavos-io/conversation-worker/model"
 	lksdk "github.com/livekit/server-sdk-go/v2"
 )
 
@@ -86,84 +85,158 @@ func (io *QueueIO) ReadQueue() <-chan []byte {
 	return io.queue
 }
 
+type AvatarOptions struct {
+	VideoWidth      int
+	VideoHeight     int
+	VideoFPS        float64
+	AudioSampleRate int
+	AudioChannels   int
+}
+
+type AudioReceiver interface {
+	Start(ctx context.Context) error
+	Stream() <-chan *model.AudioFrame
+	NotifyPlaybackFinished(playbackPosition time.Duration, interrupted bool) error
+	Close() error
+}
+
+type VideoGenerator interface {
+	PushAudio(frame *model.AudioFrame) error
+	Stream() <-chan interface{} // Yields *model.AudioFrame, *model.VideoFrame, or *model.AudioSegmentEnd
+	ClearBuffer() error
+	Close() error
+}
+
+type AVSynchronizer interface {
+	Push(frame interface{}) error
+	Close() error
+}
+
 // AvatarRunner coordinates Avatar IO and LipSync events.
 type AvatarRunner struct {
-	io     AvatarIO
+	room        *lksdk.Room
+	audioRecv   AudioReceiver
+	videoGen    VideoGenerator
+	options     AvatarOptions
+	
+	avSync      AVSynchronizer
+	lazyPublish bool
+
+	playbackPosition time.Duration
+	audioPlaying     bool
+
+	mu sync.Mutex
+	
 	ctx    context.Context
 	cancel context.CancelFunc
 }
 
-func NewAvatarRunner(io AvatarIO) *AvatarRunner {
+func NewAvatarRunner(room *lksdk.Room, audioRecv AudioReceiver, videoGen VideoGenerator, opts AvatarOptions, avSync AVSynchronizer, lazyPublish bool) *AvatarRunner {
 	ctx, cancel := context.WithCancel(context.Background())
 	return &AvatarRunner{
-		io:     io,
-		ctx:    ctx,
-		cancel: cancel,
+		room:        room,
+		audioRecv:   audioRecv,
+		videoGen:    videoGen,
+		options:     opts,
+		avSync:      avSync,
+		lazyPublish: lazyPublish,
+		ctx:         ctx,
+		cancel:      cancel,
 	}
 }
 
-type blendShapeData struct {
-	Type   string             `json:"type"`
-	Shapes map[string]float64 `json:"shapes"`
-}
-
 func (r *AvatarRunner) Start(ctx context.Context) error {
+	if err := r.audioRecv.Start(ctx); err != nil {
+		return err
+	}
+
+	if !r.lazyPublish {
+		if err := r.publishTracks(ctx); err != nil {
+			return err
+		}
+	}
+
+	go r.readAudioLoop()
+	go r.forwardVideoLoop()
+
 	return nil
 }
 
-// SimulateLipSync takes text (from TranscriptSynchronizer) and simulates basic lip movements
-func (r *AvatarRunner) SimulateLipSync(text string) {
-	go func() {
-		if text == "" {
+func (r *AvatarRunner) publishTracks(ctx context.Context) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	// In a complete implementation, this would instantiate lksdk.LocalAudioTrack 
+	// and lksdk.LocalVideoTrack using an underlying audio/video source matching the AVSync
+	// and call r.room.LocalParticipant.PublishTrack.
+	logger.Logger.Infow("Publishing Avatar AV tracks", "videoWidth", r.options.VideoWidth, "videoHeight", r.options.VideoHeight)
+	return nil
+}
+
+func (r *AvatarRunner) readAudioLoop() {
+	stream := r.audioRecv.Stream()
+	for {
+		select {
+		case <-r.ctx.Done():
 			return
+		case frame, ok := <-stream:
+			if !ok {
+				return
+			}
+			if !r.audioPlaying && frame != nil {
+				r.audioPlaying = true
+			}
+			_ = r.videoGen.PushAudio(frame)
 		}
+	}
+}
 
-		words := strings.Fields(strings.ToLower(text))
-		wordDuration := 250 * time.Millisecond // Rough approximation per word
-
-		for _, word := range words {
-			jawOpen := 0.1 // Default closed/idle
-
-			// Basic viseme mapping: vowels cause jaw to open wider
-			if strings.ContainsAny(word, "a") {
-				jawOpen = 0.8
-			} else if strings.ContainsAny(word, "o") || strings.ContainsAny(word, "e") {
-				jawOpen = 0.6
-			} else if strings.ContainsAny(word, "i") || strings.ContainsAny(word, "u") {
-				jawOpen = 0.4
+func (r *AvatarRunner) forwardVideoLoop() {
+	stream := r.videoGen.Stream()
+	for {
+		select {
+		case <-r.ctx.Done():
+			return
+		case frame, ok := <-stream:
+			if !ok {
+				return
 			}
 
-			data := blendShapeData{
-				Type: "blendshapes",
-				Shapes: map[string]float64{
-					"jawOpen": jawOpen,
-				},
+			switch v := frame.(type) {
+			case *model.AudioSegmentEnd:
+				if r.audioPlaying {
+					_ = r.audioRecv.NotifyPlaybackFinished(r.playbackPosition, false)
+					r.audioPlaying = false
+					r.playbackPosition = 0
+				}
+			case *model.AudioFrame:
+				if r.lazyPublish {
+					_ = r.publishTracks(r.ctx)
+				}
+				if r.avSync != nil {
+					_ = r.avSync.Push(v)
+				}
+				frameDuration := time.Duration(float64(v.SamplesPerChannel)/float64(v.SampleRate)*1e9) * time.Nanosecond
+				r.playbackPosition += frameDuration
+			case *model.VideoFrame:
+				if r.lazyPublish {
+					_ = r.publishTracks(r.ctx)
+				}
+				if r.avSync != nil {
+					_ = r.avSync.Push(v)
+				}
 			}
-
-			payload, err := json.Marshal(data)
-			if err == nil {
-				_ = r.io.SendAvatarData(r.ctx, payload)
-			}
-
-			time.Sleep(wordDuration)
 		}
-
-		// Close jaw at the end of the text chunk
-		data := blendShapeData{
-			Type: "blendshapes",
-			Shapes: map[string]float64{
-				"jawOpen": 0.0,
-			},
-		}
-		payload, err := json.Marshal(data)
-		if err == nil {
-			_ = r.io.SendAvatarData(r.ctx, payload)
-		}
-	}()
+	}
 }
 
 func (r *AvatarRunner) Stop() {
 	r.cancel()
+	_ = r.audioRecv.Close()
+	_ = r.videoGen.Close()
+	if r.avSync != nil {
+		_ = r.avSync.Close()
+	}
 }
 
 func (a *Avatar) Start(ctx context.Context) error {
