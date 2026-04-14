@@ -11,8 +11,13 @@ var ErrStopResponse = errors.New("stop response")
 type ToolContext struct {
 	tools          []interface{} // Tool | Toolset
 	functionTools  map[string]Tool
-	providerTools  []Tool
+	providerTools  []ProviderTool
 	toolsets       []Toolset
+}
+
+// ProviderTool represents a tool that is evaluated or passed raw to a provider.
+type ProviderTool interface {
+	IsProviderTool() bool
 }
 
 func NewToolContext(tools []interface{}) *ToolContext {
@@ -33,8 +38,8 @@ func (c *ToolContext) FunctionTools() map[string]Tool {
 	return m
 }
 
-func (c *ToolContext) ProviderTools() []Tool {
-	arr := make([]Tool, len(c.providerTools))
+func (c *ToolContext) ProviderTools() []ProviderTool {
+	arr := make([]ProviderTool, len(c.providerTools))
 	copy(arr, c.providerTools)
 	return arr
 }
@@ -50,7 +55,7 @@ func (c *ToolContext) Flatten() []Tool {
 	for _, t := range c.functionTools {
 		tools = append(tools, t)
 	}
-	tools = append(tools, c.providerTools...)
+	// Provider tools are handled separately when passed to specific LLMs
 	return tools
 }
 
@@ -64,7 +69,7 @@ func (c *ToolContext) GetFunctionTool(name string) Tool {
 func (c *ToolContext) UpdateTools(tools []interface{}) error {
 	c.tools = tools
 	c.functionTools = make(map[string]Tool)
-	c.providerTools = make([]Tool, 0)
+	c.providerTools = make([]ProviderTool, 0)
 	c.toolsets = make([]Toolset, 0)
 
 	var addTool func(tool interface{}) error
@@ -79,13 +84,12 @@ func (c *ToolContext) UpdateTools(tools []interface{}) error {
 			return nil
 		}
 
+		if pt, ok := tool.(ProviderTool); ok {
+			c.providerTools = append(c.providerTools, pt)
+			return nil
+		}
+
 		if t, ok := tool.(Tool); ok {
-			// In Go parity, we don't differentiate ProviderTool and FunctionTool
-			// by base class as easily, we can assume all non-Toolset interfaces 
-			// are function tools if they satisfy Tool interface.
-			// The original python distinguishes ProviderTool.
-			
-			// For now, treat all standalone tools as function tools.
 			name := t.Name()
 			if _, exists := c.functionTools[name]; exists {
 				return fmt.Errorf("duplicate function name: %s", name)

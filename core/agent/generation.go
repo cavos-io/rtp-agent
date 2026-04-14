@@ -339,6 +339,11 @@ func PerformToolExecutions(
 					return
 				}
 
+				if _, isProvider := tool.(llm.ProviderTool); isProvider {
+					outCh <- buildToolErrorOutput(call, fmt.Errorf("provider tool executed directly by llm wrapper: %s", name))
+					return
+				}
+
 				// Inject RunContext if available in the parent context
 				rc := GetRunContext(ctx)
 				var execCtx context.Context
