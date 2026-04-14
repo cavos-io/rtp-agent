@@ -268,8 +268,27 @@ func (t *RoomTextOutput) OnAttached() {}
 func (t *RoomTextOutput) OnDetached() {}
 
 func NewRoomIO(room *lksdk.Room, session *agent.AgentSession, opts RoomOptions) *RoomIO {
-	dec, _ := newOpusDecoder(48000, 1)
-	enc, _ := newOpusEncoder(48000, 1)
+	inRate, inChannels := 48000, 1
+	if opts.AudioInput != nil {
+		if opts.AudioInput.SampleRate > 0 {
+			inRate = opts.AudioInput.SampleRate
+		}
+		if opts.AudioInput.NumChannels > 0 {
+			inChannels = opts.AudioInput.NumChannels
+		}
+	}
+	dec, _ := newOpusDecoder(inRate, inChannels)
+
+	outRate, outChannels := 48000, 1
+	if opts.AudioOutput != nil {
+		if opts.AudioOutput.SampleRate > 0 {
+			outRate = opts.AudioOutput.SampleRate
+		}
+		if opts.AudioOutput.NumChannels > 0 {
+			outChannels = opts.AudioOutput.NumChannels
+		}
+	}
+	enc, _ := newOpusEncoder(outRate, outChannels)
 
 	if opts.ParticipantIdentity != "" {
 		session.Options.LinkedParticipant = room.GetParticipantByIdentity(opts.ParticipantIdentity)
@@ -668,10 +687,21 @@ func (rio *RoomIO) Start(ctx context.Context) error {
 		return nil
 	}
 
+	sampleRate := 48000
+	channels := uint16(1)
+	if rio.Options.AudioOutput != nil {
+		if rio.Options.AudioOutput.SampleRate > 0 {
+			sampleRate = rio.Options.AudioOutput.SampleRate
+		}
+		if rio.Options.AudioOutput.NumChannels > 0 {
+			channels = uint16(rio.Options.AudioOutput.NumChannels)
+		}
+	}
+
 	track, err := lksdk.NewLocalSampleTrack(webrtc.RTPCodecCapability{
 		MimeType:  webrtc.MimeTypeOpus,
-		ClockRate: 48000,
-		Channels:  1, // Match encoder
+		ClockRate: uint32(sampleRate),
+		Channels:  channels,
 	})
 	if err != nil {
 		return err
