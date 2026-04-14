@@ -1,0 +1,1 @@
+typedef int OggOpusFile; #define OPUS_OK 0

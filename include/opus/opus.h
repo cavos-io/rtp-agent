@@ -1,0 +1,1 @@
+typedef int OpusEncoder; typedef int OpusDecoder; #define OPUS_OK 0

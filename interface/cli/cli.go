@@ -31,6 +31,7 @@ func RunApp(server *worker.AgentServer) {
 		runWorker(server, false)
 	case "dev":
 		if err := RunWithDevMode(os.Args); err != nil {
+			fmt.Printf("❌ Dev mode execution failed: %v\n", err)
 			logger.Logger.Errorw("Dev mode error", err)
 			os.Exit(1)
 		}
@@ -74,6 +75,7 @@ func runWorker(server *worker.AgentServer, devMode bool) {
 
 	logger.Logger.Infow("Starting worker", "devMode", devMode)
 	if err := server.Run(ctx); err != nil {
+		fmt.Printf("❌ Worker startup failed: %v\n", err)
 		logger.Logger.Errorw("Worker error", err)
 		os.Exit(1)
 	}

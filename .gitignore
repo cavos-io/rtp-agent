@@ -1,0 +1,18 @@
+# Environment Variables
+.env
+*.env
+
+# Binaries
+bin/
+*.exe
+*.dll
+rtp-agent
+vad_test
+
+# Go related
+vendor/
+go.sum
+
+# OS related
+.DS_Store
+Thumbs.db
