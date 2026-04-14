@@ -16,6 +16,10 @@ import (
 	lksdk "github.com/livekit/server-sdk-go/v2"
 )
 
+type GenerateReplyOpts struct {
+	AllowInterruptions bool
+}
+
 type AgentSessionOptions struct {
 	AllowInterruptions            bool
 	DiscardAudioIfUninterruptible bool
@@ -63,6 +67,8 @@ type AgentSession struct {
 	Activity *AgentActivity
 	started  bool
 	closing  bool
+
+	transitionMu sync.Mutex
 
 	// Event channels
 	AgentStateChangedCh chan AgentStateChangedEvent
@@ -201,12 +207,18 @@ func (s *AgentSession) Start(ctx context.Context) error {
 	s.started = true
 	s.mu.Unlock()
 
+	go s.forwardAudioLoop(ctx)
+	go s.forwardVideoLoop(ctx)
+
 	s.UpdateAgentState(AgentStateListening)
 
 	return nil
 }
 
 func (s *AgentSession) Close() error {
+	s.transitionMu.Lock()
+	defer s.transitionMu.Unlock()
+
 	s.mu.Lock()
 	if !s.started || s.closing {
 		s.mu.Unlock()
@@ -237,24 +249,70 @@ func (s *AgentSession) Close() error {
 	return nil
 }
 
-func (s *AgentSession) UpdateAgent(agent AgentInterface) error {
+type TransitionActivityAction string
+
+const (
+	TransitionActivityClose  TransitionActivityAction = "close"
+	TransitionActivityPause  TransitionActivityAction = "pause"
+	TransitionActivityStart  TransitionActivityAction = "start"
+	TransitionActivityResume TransitionActivityAction = "resume"
+)
+
+type UpdateAgentOpts struct {
+	PreviousActivity TransitionActivityAction
+	NewActivity      TransitionActivityAction
+}
+
+func (s *AgentSession) UpdateAgent(agent AgentInterface, opts *UpdateAgentOpts) error {
+	if opts == nil {
+		opts = &UpdateAgentOpts{
+			PreviousActivity: TransitionActivityClose,
+			NewActivity:      TransitionActivityStart,
+		}
+	}
+
+	s.transitionMu.Lock()
+	defer s.transitionMu.Unlock()
+
 	s.mu.Lock()
 	if !s.started || s.closing {
 		s.mu.Unlock()
 		return fmt.Errorf("session not started or closing")
 	}
 	oldActivity := s.Activity
-	
-	// Create and start new activity
+
+	var newActivity *AgentActivity
+	if opts.NewActivity == TransitionActivityStart {
+		if agent.GetActivity() != nil && (agent.GetActivity() != oldActivity || opts.PreviousActivity != TransitionActivityClose) {
+			s.mu.Unlock()
+			return fmt.Errorf("cannot start agent: an activity is already running")
+		}
+		newActivity = NewAgentActivity(agent, s)
+	} else if opts.NewActivity == TransitionActivityResume {
+		if agent.GetActivity() == nil {
+			s.mu.Unlock()
+			return fmt.Errorf("cannot resume agent: no existing active activity to resume")
+		}
+		newActivity = agent.GetActivity()
+	}
+
 	s.Agent = agent
-	newActivity := NewAgentActivity(s.Agent, s)
 	s.Activity = newActivity
 	s.mu.Unlock()
 
-	if oldActivity != nil {
-		oldActivity.Stop()
+	if oldActivity != nil && oldActivity != newActivity {
+		if opts.PreviousActivity == TransitionActivityClose {
+			oldActivity.Stop()
+		} else if opts.PreviousActivity == TransitionActivityPause {
+			_ = oldActivity.Pause()
+		}
 	}
-	newActivity.Start()
+
+	if opts.NewActivity == TransitionActivityStart {
+		newActivity.Start()
+	} else if opts.NewActivity == TransitionActivityResume {
+		_ = newActivity.Resume()
+	}
 
 	return nil
 }
@@ -268,12 +326,12 @@ func (s *AgentSession) ClearUserTurn() {
 	}
 }
 
-func (s *AgentSession) CommitUserTurn() {
+func (s *AgentSession) CommitUserTurn(opts *CommitUserTurnOpts) {
 	s.mu.Lock()
 	activity := s.Activity
 	s.mu.Unlock()
 	if activity != nil {
-		activity.CommitUserTurn()
+		activity.CommitUserTurn(opts)
 	}
 }
 
@@ -404,7 +462,7 @@ func (s *AgentSession) UpdateUserState(state UserState) {
 	}
 }
 
-func GenerateTypedReply[T any](ctx context.Context, s *AgentSession, userInput string) (*RunResult[T], error) {
+func GenerateTypedReply[T any](ctx context.Context, s *AgentSession, userInput string, opts *GenerateReplyOpts) (*RunResult[T], error) {
 	s.mu.Lock()
 	activity := s.Activity
 	s.mu.Unlock()
@@ -416,8 +474,13 @@ func GenerateTypedReply[T any](ctx context.Context, s *AgentSession, userInput s
 	// Trigger the pipeline
 	logger.Logger.Infow("Generating reply", "userInput", userInput)
 
+	allowInterruptions := s.Options.AllowInterruptions
+	if opts != nil {
+		allowInterruptions = opts.AllowInterruptions
+	}
+
 	// Create a speech handle
-	handle := NewSpeechHandle(s.Options.AllowInterruptions, DefaultInputDetails())
+	handle := NewSpeechHandle(allowInterruptions, DefaultInputDetails())
 	
 	participantID := ""
 	if s.Room != nil && s.Room.LocalParticipant != nil {
@@ -459,8 +522,63 @@ func GenerateTypedReply[T any](ctx context.Context, s *AgentSession, userInput s
 	return runResult, nil
 }
 
-func (s *AgentSession) GenerateReply(ctx context.Context, userInput string) (any, error) {
-	return GenerateTypedReply[any](ctx, s, userInput)
+func (s *AgentSession) GenerateReply(ctx context.Context, userInput string, allowInterruptions bool) (any, error) {
+	return GenerateTypedReply[any](ctx, s, userInput, &GenerateReplyOpts{AllowInterruptions: allowInterruptions})
+}
+
+func (s *AgentSession) forwardAudioLoop(ctx context.Context) {
+	if s.Input.Audio == nil {
+		return
+	}
+	stream := s.Input.Audio.Stream()
+	
+	var warmupUntil time.Time
+	if s.Options.AECWarmupDuration > 0 {
+		warmupUntil = time.Now().Add(time.Duration(s.Options.AECWarmupDuration * float64(time.Second)))
+	}
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case frame, ok := <-stream:
+			if !ok {
+				return
+			}
+			if !warmupUntil.IsZero() && time.Now().Before(warmupUntil) {
+				continue
+			}
+			s.mu.Lock()
+			activity := s.Activity
+			s.mu.Unlock()
+			if activity != nil {
+				_ = activity.PushAudio(frame)
+			}
+		}
+	}
+}
+
+func (s *AgentSession) forwardVideoLoop(ctx context.Context) {
+	if s.Input.Video == nil {
+		return
+	}
+	stream := s.Input.Video.Stream()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case frame, ok := <-stream:
+			if !ok {
+				return
+			}
+			s.mu.Lock()
+			activity := s.Activity
+			s.mu.Unlock()
+			if activity != nil {
+				_ = activity.PushVideo(frame)
+			}
+		}
+	}
 }
 
 func (s *AgentSession) TimelineSnapshot() []*AgentEvent {

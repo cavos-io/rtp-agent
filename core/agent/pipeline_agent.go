@@ -98,48 +98,8 @@ func (va *PipelineAgent) Stop() {
 
 func (va *PipelineAgent) run(ctx context.Context) {
 	logger.Logger.Infow("PipelineAgent started")
-
-	// Start with nil audioStream; we'll check for Input.Audio dynamically
-	var audioStream <-chan *model.AudioFrame
-	var warmupUntil time.Time
-
-	logger.Logger.Infow("PipelineAgent started, waiting for audio input...")
-
-	for {
-		// Check if Input.Audio has been set (it might be attached after pipeline starts)
-		if va.session != nil && va.session.Input.Audio != nil && audioStream == nil {
-			audioStream = va.session.Input.Audio.Stream()
-			if va.session.Options.AECWarmupDuration > 0 {
-				warmupUntil = time.Now().Add(time.Duration(va.session.Options.AECWarmupDuration * float64(time.Second)))
-			}
-			logger.Logger.Infow("✅ Audio stream connected to pipeline!")
-		}
-
-		select {
-		case <-ctx.Done():
-			return
-		case frame, ok := <-audioStream:
-			if !ok {
-				logger.Logger.Infow("Audio stream closed")
-				return
-			}
-			if !warmupUntil.IsZero() && time.Now().Before(warmupUntil) {
-				continue
-			}
-			if va.session != nil && va.session.Activity != nil {
-				_ = va.session.Activity.PushAudio(frame)
-			}
-		case <-time.After(100 * time.Millisecond):
-			// Check periodically if audio has been attached
-			if va.session != nil && va.session.Input.Audio != nil && audioStream == nil {
-				audioStream = va.session.Input.Audio.Stream()
-				if va.session.Options.AECWarmupDuration > 0 {
-					warmupUntil = time.Now().Add(time.Duration(va.session.Options.AECWarmupDuration * float64(time.Second)))
-				}
-				logger.Logger.Infow("✅ Audio stream NOW connected to pipeline!")
-			}
-		}
-	}
+	// Audio forwarding is now handled by AgentSession
+	<-ctx.Done()
 }
 
 func (va *PipelineAgent) GenerateReply(speech *SpeechHandle) {
@@ -342,8 +302,13 @@ func (va *PipelineAgent) GenerateReply(speech *SpeechHandle) {
 			}
 
 			// Trigger the session update
+			taskDone := make(chan struct{})
+			if speech.RunResult != nil {
+				speech.RunResult.WatchTask(taskDone)
+			}
 			go func() {
-				_ = session.UpdateAgent(agentTask)
+				defer close(taskDone)
+				_ = session.UpdateAgent(agentTask, nil)
 			}()
 		}
 
