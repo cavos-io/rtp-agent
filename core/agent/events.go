@@ -146,49 +146,91 @@ type AgentEvent struct {
 	Type      string  `json:"type"`
 	Timestamp float64 `json:"timestamp"`
 
-	*UserStateChangedEvent
-	*AgentStateChangedEvent
-	*UserInputTranscribedEvent
-	*AgentFalseInterruptionEvent
-	*MetricsCollectedEvent
-	*ConversationItemAddedEvent
-	*FunctionToolsExecutedEvent
-	*AgentHandoffEvent
-	*SpeechCreatedEvent
-	*ErrorEvent
-	*CloseEvent
+	EventData Event `json:"-"`
+}
+
+func (ae *AgentEvent) MarshalJSON() ([]byte, error) {
+	// First, marshal the inner event data
+	var innerBytes []byte
+	var err error
+	if ae.EventData != nil {
+		innerBytes, err = json.Marshal(ae.EventData)
+		if err != nil {
+			return nil, err
+		}
+	} else {
+		innerBytes = []byte("{}")
+	}
+
+	// Parse into a map
+	var m map[string]any
+	if err := json.Unmarshal(innerBytes, &m); err != nil {
+		return nil, err
+	}
+
+	// Inject the base fields
+	m["type"] = ae.Type
+	m["timestamp"] = ae.Timestamp
+
+	return json.Marshal(m)
+}
+
+func (ae *AgentEvent) UnmarshalJSON(data []byte) error {
+	var m map[string]any
+	if err := json.Unmarshal(data, &m); err != nil {
+		return err
+	}
+
+	typ, ok := m["type"].(string)
+	if !ok {
+		return fmt.Errorf("missing or invalid type field in AgentEvent")
+	}
+	ae.Type = typ
+
+	ts, _ := m["timestamp"].(float64)
+	ae.Timestamp = ts
+
+	var ev Event
+	switch typ {
+	case "user_state_changed":
+		ev = &UserStateChangedEvent{}
+	case "agent_state_changed":
+		ev = &AgentStateChangedEvent{}
+	case "user_input_transcribed":
+		ev = &UserInputTranscribedEvent{}
+	case "agent_false_interruption":
+		ev = &AgentFalseInterruptionEvent{}
+	case "metrics_collected":
+		ev = &MetricsCollectedEvent{}
+	case "conversation_item_added":
+		ev = &ConversationItemAddedEvent{}
+	case "function_tools_executed":
+		ev = &FunctionToolsExecutedEvent{}
+	case "agent_handoff":
+		ev = &AgentHandoffEvent{}
+	case "speech_created":
+		ev = &SpeechCreatedEvent{}
+	case "error":
+		ev = &ErrorEvent{}
+	case "close":
+		ev = &CloseEvent{}
+	default:
+		return fmt.Errorf("unknown event type: %s", typ)
+	}
+
+	if err := json.Unmarshal(data, ev); err != nil {
+		return err
+	}
+	ae.EventData = ev
+	return nil
 }
 
 func NewAgentEvent(ev Event) *AgentEvent {
-	ae := &AgentEvent{
+	return &AgentEvent{
 		Type:      ev.GetType(),
 		Timestamp: float64(time.Now().UnixNano()) / 1e9,
+		EventData: ev,
 	}
-	switch v := ev.(type) {
-	case *UserStateChangedEvent:
-		ae.UserStateChangedEvent = v
-	case *AgentStateChangedEvent:
-		ae.AgentStateChangedEvent = v
-	case *UserInputTranscribedEvent:
-		ae.UserInputTranscribedEvent = v
-	case *AgentFalseInterruptionEvent:
-		ae.AgentFalseInterruptionEvent = v
-	case *MetricsCollectedEvent:
-		ae.MetricsCollectedEvent = v
-	case *ConversationItemAddedEvent:
-		ae.ConversationItemAddedEvent = v
-	case *FunctionToolsExecutedEvent:
-		ae.FunctionToolsExecutedEvent = v
-	case *AgentHandoffEvent:
-		ae.AgentHandoffEvent = v
-	case *SpeechCreatedEvent:
-		ae.SpeechCreatedEvent = v
-	case *ErrorEvent:
-		ae.ErrorEvent = v
-	case *CloseEvent:
-		ae.CloseEvent = v
-	}
-	return ae
 }
 
 type EventTimeline struct {
@@ -311,7 +353,7 @@ type TextInputCallback func(s *AgentSession, ev TextInputEvent) error
 
 func DefaultTextInputCallback(s *AgentSession, ev TextInputEvent) error {
 	_ = s.Interrupt(context.Background())
-	_, err := s.GenerateReply(context.Background(), ev.Text)
+	_, err := s.GenerateReply(context.Background(), ev.Text, true)
 	return err
 }
 
@@ -582,7 +624,7 @@ func (d *ClientEventsDispatcher) handleSendMessage(data lksdk.RpcInvocationData)
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	res, err := d.session.GenerateReply(ctx, req.Text)
+	res, err := d.session.GenerateReply(ctx, req.Text, true)
 	if err != nil {
 		return "", fmt.Errorf("failed to generate reply: %w", err)
 	}
