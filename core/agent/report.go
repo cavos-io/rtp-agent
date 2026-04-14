@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"encoding/json"
 	"sync"
 	"time"
 
@@ -75,13 +76,20 @@ func (r *SessionReport) ToDict() map[string]any {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	var eventsDict []any
+	var eventsDict []map[string]any
 	for _, event := range r.Timeline {
 		if event.Type == "metrics_collected" {
 			continue // metrics are too noisy, Cloud is using the chat_history as the source of truth
 		}
-		// In a real impl, we might want a way to model_dump the event struct
-		eventsDict = append(eventsDict, event)
+		
+		// Simulate model_dump by marshaling and unmarshaling into a map
+		b, err := json.Marshal(event)
+		if err == nil {
+			var m map[string]any
+			if err := json.Unmarshal(b, &m); err == nil {
+				eventsDict = append(eventsDict, m)
+			}
+		}
 	}
 
 	optionsDict := map[string]any{
