@@ -66,6 +66,24 @@ func (c *ToolContext) ParseFunctionTools(format string) []map[string]any {
 				"description":  t.Description(),
 				"input_schema": t.Parameters(),
 			})
+		case "google":
+			// Google Gemini format
+			out = append(out, map[string]any{
+				"name":        t.Name(),
+				"description": t.Description(),
+				"parameters":  t.Parameters(),
+			})
+		case "aws":
+			// AWS Bedrock toolSpec format
+			out = append(out, map[string]any{
+				"toolSpec": map[string]any{
+					"name":        t.Name(),
+					"description": t.Description(),
+					"inputSchema": map[string]any{
+						"json": t.Parameters(),
+					},
+				},
+			})
 		default:
 			out = append(out, map[string]any{
 				"name":        t.Name(),
