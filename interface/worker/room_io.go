@@ -11,6 +11,7 @@ import (
 	"github.com/cavos-io/conversation-worker/core/agent"
 	"github.com/cavos-io/conversation-worker/library/logger"
 	"github.com/cavos-io/conversation-worker/model"
+	"github.com/google/uuid"
 	"github.com/hraban/opus"
 	lksdk "github.com/livekit/server-sdk-go/v2"
 	"github.com/livekit/server-sdk-go/v2/pkg/samplebuilder"
@@ -111,7 +112,41 @@ func (e *opusEncoder) Close() error {
 	return nil
 }
 
+type AudioInputOptions struct {
+	Enabled                bool
+	SampleRate             int
+	NumChannels            int
+	FrameSizeMs            int
+	PreConnectAudio        bool
+	PreConnectAudioTimeout time.Duration
+}
+
+type AudioOutputOptions struct {
+	Enabled     bool
+	SampleRate  int
+	NumChannels int
+	TrackName   string
+}
+
+type TextInputOptions struct {
+	Enabled bool
+}
+
+type TextOutputOptions struct {
+	Enabled           bool
+	SyncTranscription bool
+}
+
+type VideoInputOptions struct {
+	Enabled bool
+}
+
 type RoomOptions struct {
+	AudioInput          *AudioInputOptions
+	AudioOutput         *AudioOutputOptions
+	VideoInput          *VideoInputOptions
+	TextInput           *TextInputOptions
+	TextOutput          *TextOutputOptions
 	ParticipantKinds    []lksdk.ParticipantKind
 	ParticipantIdentity string
 	CloseOnDisconnect   bool
@@ -145,6 +180,7 @@ type RoomIO struct {
 
 	preConnectAudio *PreConnectAudioHandler
 	audioInCh       chan *model.AudioFrame
+	videoInCh       chan *model.VideoFrame
 
 	participantIdentity string
 
@@ -154,9 +190,10 @@ type RoomIO struct {
 // --- agent.TextOutput Implementation ---
 
 type RoomTextOutput struct {
-	room   *lksdk.Room
-	writer *lksdk.TextStreamWriter
-	mu     sync.Mutex
+	room      *lksdk.Room
+	writer    *lksdk.TextStreamWriter
+	segmentID string
+	mu        sync.Mutex
 }
 
 func NewRoomTextOutput(room *lksdk.Room) *RoomTextOutput {
@@ -176,8 +213,13 @@ func (t *RoomTextOutput) CaptureText(text string) error {
 	}
 
 	if t.writer == nil {
+		t.segmentID = "SG_" + uuid.NewString()[:8]
 		opts := lksdk.StreamTextOptions{
 			Topic: "lk-agent-transcription",
+			Attributes: map[string]string{
+				"segment_id": t.segmentID,
+				"final":      "false",
+			},
 		}
 		t.writer = t.room.LocalParticipant.StreamText(opts)
 	}
@@ -194,6 +236,7 @@ func (t *RoomTextOutput) Flush() {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	if t.writer != nil {
+		// Close the current segment
 		t.writer.Close()
 		t.writer = nil
 	}
@@ -222,6 +265,7 @@ func NewRoomIO(room *lksdk.Room, session *agent.AgentSession, opts RoomOptions) 
 		Recorder:            NewRecorderIO(session),
 		preConnectAudio:     preConnectAudio,
 		audioInCh:           make(chan *model.AudioFrame, 100),
+		videoInCh:           make(chan *model.VideoFrame, 100),
 		playoutCh:           make(chan interface{}, 100),
 		clearBufferCh:       make(chan struct{}),
 		flushWaiters:        make([]chan struct{}, 0),
@@ -234,20 +278,53 @@ func NewRoomIO(room *lksdk.Room, session *agent.AgentSession, opts RoomOptions) 
 		session.Assistant = agent.NewPipelineAgent(session.VAD, session.STT, session.LLM, session.TTS, session.ChatCtx)
 	}
 
-	session.Input.Audio = rio.Recorder.RecordInput(rio)
+	// Setup Input
+	audioInputEnabled := true
+	if opts.AudioInput != nil && !opts.AudioInput.Enabled {
+		audioInputEnabled = false
+	}
+	if audioInputEnabled {
+		session.Input.Audio = rio.Recorder.RecordInput(rio)
+	}
 
-	if session.Options.UseTTSAlignedTranscript {
-		textOut := NewRoomTextOutput(room)
-		sync := agent.NewTranscriptSynchronizer(session.Options.SpeakingRate, session.Options.TranscriptRefreshRate)
-		rio.sync = sync
+	videoInputEnabled := false
+	if opts.VideoInput != nil && opts.VideoInput.Enabled {
+		videoInputEnabled = true
+	}
+	if videoInputEnabled {
+		session.Input.Video = NewRoomVideoInput(rio)
+	}
 
-		syncedAudio := agent.NewSyncedAudioOutput(sync, rio)
-		syncedText := agent.NewSyncedTextOutput(sync, textOut)
+	// Setup Output
+	audioOutputEnabled := true
+	if opts.AudioOutput != nil && !opts.AudioOutput.Enabled {
+		audioOutputEnabled = false
+	}
 
-		session.SetAudioOutput(rio.Recorder.RecordOutput(syncedAudio))
-		session.Output.Transcription = syncedText
-	} else {
-		session.SetAudioOutput(rio.Recorder.RecordOutput(rio))
+	syncTranscription := session.Options.UseTTSAlignedTranscript
+	if opts.TextOutput != nil {
+		syncTranscription = opts.TextOutput.SyncTranscription
+	}
+
+	if audioOutputEnabled {
+		if syncTranscription {
+			textOut := NewRoomTextOutput(room)
+			sync := agent.NewTranscriptSynchronizer(session.Options.SpeakingRate, session.Options.TranscriptRefreshRate)
+			rio.sync = sync
+
+			syncedAudio := agent.NewSyncedAudioOutput(sync, rio)
+			syncedText := agent.NewSyncedTextOutput(sync, textOut)
+
+			session.SetAudioOutput(rio.Recorder.RecordOutput(syncedAudio))
+			session.Output.Transcription = syncedText
+		} else {
+			session.SetAudioOutput(rio.Recorder.RecordOutput(rio))
+			if opts.TextOutput != nil && opts.TextOutput.Enabled {
+				session.Output.Transcription = NewRoomTextOutput(room)
+			}
+		}
+	} else if opts.TextOutput != nil && opts.TextOutput.Enabled {
+		session.Output.Transcription = NewRoomTextOutput(room)
 	}
 	return rio
 }
@@ -263,6 +340,25 @@ func (rio *RoomIO) Stream() <-chan *model.AudioFrame {
 
 func (rio *RoomIO) OnAttached() {}
 func (rio *RoomIO) OnDetached() {}
+
+type RoomVideoInput struct {
+	rio *RoomIO
+}
+
+func NewRoomVideoInput(rio *RoomIO) *RoomVideoInput {
+	return &RoomVideoInput{rio: rio}
+}
+
+func (rvi *RoomVideoInput) Label() string {
+	return "RoomVideoIO"
+}
+
+func (rvi *RoomVideoInput) Stream() <-chan *model.VideoFrame {
+	return rvi.rio.videoInCh
+}
+
+func (rvi *RoomVideoInput) OnAttached() {}
+func (rvi *RoomVideoInput) OnDetached() {}
 
 func (rio *RoomIO) OnPlaybackStarted(f func(ev agent.PlaybackStartedEvent)) {
 	rio.onPlaybackStarted = f
@@ -483,6 +579,15 @@ func (rio *RoomIO) onParticipantDisconnected(participant *lksdk.RemoteParticipan
 }
 
 func (rio *RoomIO) Start(ctx context.Context) error {
+	audioOutputEnabled := true
+	if rio.Options.AudioOutput != nil && !rio.Options.AudioOutput.Enabled {
+		audioOutputEnabled = false
+	}
+
+	if !audioOutputEnabled {
+		return nil
+	}
+
 	track, err := lksdk.NewLocalSampleTrack(webrtc.RTPCodecCapability{
 		MimeType:  webrtc.MimeTypeOpus,
 		ClockRate: 48000,
@@ -492,8 +597,13 @@ func (rio *RoomIO) Start(ctx context.Context) error {
 		return err
 	}
 
+	trackName := "agent-audio"
+	if rio.Options.AudioOutput != nil && rio.Options.AudioOutput.TrackName != "" {
+		trackName = rio.Options.AudioOutput.TrackName
+	}
+
 	_, err = rio.Room.LocalParticipant.PublishTrack(track, &lksdk.TrackPublicationOptions{
-		Name: "agent-audio",
+		Name: trackName,
 	})
 	if err != nil {
 		return err
@@ -528,7 +638,51 @@ func (rio *RoomIO) onTrackSubscribed(track *webrtc.TrackRemote, publication *lks
 	}
 
 	if track.Kind() == webrtc.RTPCodecTypeAudio {
-		go rio.handleAudioTrack(track)
+		audioInputEnabled := true
+		if rio.Options.AudioInput != nil && !rio.Options.AudioInput.Enabled {
+			audioInputEnabled = false
+		}
+		if audioInputEnabled {
+			go rio.handleAudioTrack(track)
+		}
+	} else if track.Kind() == webrtc.RTPCodecTypeVideo {
+		videoInputEnabled := false
+		if rio.Options.VideoInput != nil && rio.Options.VideoInput.Enabled {
+			videoInputEnabled = true
+		}
+		if videoInputEnabled {
+			go rio.handleVideoTrack(track)
+		}
+	}
+}
+
+func (rio *RoomIO) handleVideoTrack(track *webrtc.TrackRemote) {
+	for {
+		rio.mu.Lock()
+		if rio.closed {
+			rio.mu.Unlock()
+			return
+		}
+		rio.mu.Unlock()
+
+		pkt, _, err := track.ReadRTP()
+		if err != nil {
+			return
+		}
+
+		// This is a minimal video ingestion, just pushing RTP packets or raw frames.
+		// A full implementation would decode the video, but for now we just wrap it
+		// to fulfill the interface and pass it through the system.
+		frame := &model.VideoFrame{
+			Data:      pkt.Payload,
+			Timestamp: time.Duration(pkt.Timestamp),
+		}
+
+		select {
+		case rio.videoInCh <- frame:
+		default:
+			// drop frame if queue is full
+		}
 	}
 }
 
