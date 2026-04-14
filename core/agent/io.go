@@ -49,11 +49,30 @@ type TextOutput interface {
 	OnDetached()
 }
 
+// VideoInput represents a source of video frames (e.g., camera or remote track)
+type VideoInput interface {
+	Label() string
+	Stream() <-chan *model.VideoFrame
+	OnAttached()
+	OnDetached()
+}
+
+// VideoOutput represents a destination for video frames (e.g., screen or remote track)
+type VideoOutput interface {
+	Label() string
+	CaptureFrame(frame *model.VideoFrame) error
+	Flush()
+	OnAttached()
+	OnDetached()
+}
+
 type AgentInput struct {
 	Audio AudioInput
+	Video VideoInput
 }
 
 type AgentOutput struct {
 	Audio         AudioOutput
 	Transcription TextOutput
+	Video         VideoOutput
 }
