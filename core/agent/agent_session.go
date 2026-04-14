@@ -30,6 +30,7 @@ type AgentSessionOptions struct {
 	UseTTSAlignedTranscript       bool
 	PreemptiveGeneration          bool
 	AECWarmupDuration             float64
+	SpeakingRate                  float64
 }
 
 type AgentSession struct {
@@ -81,6 +82,10 @@ func NewAgentSession(agent AgentInterface, room *lksdk.Room, opts AgentSessionOp
 	timeline.Add("session_created", map[string]any{
 		"has_room": room != nil,
 	})
+
+	if opts.SpeakingRate <= 0 {
+		opts.SpeakingRate = 3.83
+	}
 
 	s := &AgentSession{
 		Agent:               agent,
