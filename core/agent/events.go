@@ -142,43 +142,64 @@ type CloseEvent struct {
 
 func (e *CloseEvent) GetType() string { return "close" }
 
-type TimelineEvent struct {
-	Event     Event   `json:"-"`
+type AgentEvent struct {
+	Type      string  `json:"type"`
 	Timestamp float64 `json:"timestamp"`
+
+	*UserStateChangedEvent
+	*AgentStateChangedEvent
+	*UserInputTranscribedEvent
+	*AgentFalseInterruptionEvent
+	*MetricsCollectedEvent
+	*ConversationItemAddedEvent
+	*FunctionToolsExecutedEvent
+	*AgentHandoffEvent
+	*SpeechCreatedEvent
+	*ErrorEvent
+	*CloseEvent
 }
 
-func (e TimelineEvent) MarshalJSON() ([]byte, error) {
-	if e.Event == nil {
-		return []byte(`{"timestamp": ` + fmt.Sprintf("%f", e.Timestamp) + `}`), nil
+func NewAgentEvent(ev Event) *AgentEvent {
+	ae := &AgentEvent{
+		Type:      ev.GetType(),
+		Timestamp: float64(time.Now().UnixNano()) / 1e9,
 	}
-
-	// Marshal the inner event to a map
-	b, err := json.Marshal(e.Event)
-	if err != nil {
-		return nil, err
+	switch v := ev.(type) {
+	case *UserStateChangedEvent:
+		ae.UserStateChangedEvent = v
+	case *AgentStateChangedEvent:
+		ae.AgentStateChangedEvent = v
+	case *UserInputTranscribedEvent:
+		ae.UserInputTranscribedEvent = v
+	case *AgentFalseInterruptionEvent:
+		ae.AgentFalseInterruptionEvent = v
+	case *MetricsCollectedEvent:
+		ae.MetricsCollectedEvent = v
+	case *ConversationItemAddedEvent:
+		ae.ConversationItemAddedEvent = v
+	case *FunctionToolsExecutedEvent:
+		ae.FunctionToolsExecutedEvent = v
+	case *AgentHandoffEvent:
+		ae.AgentHandoffEvent = v
+	case *SpeechCreatedEvent:
+		ae.SpeechCreatedEvent = v
+	case *ErrorEvent:
+		ae.ErrorEvent = v
+	case *CloseEvent:
+		ae.CloseEvent = v
 	}
-
-	var m map[string]interface{}
-	if err := json.Unmarshal(b, &m); err != nil {
-		return nil, err
-	}
-
-	// Inject discriminator and wrapper fields
-	m["type"] = e.Event.GetType()
-	m["timestamp"] = e.Timestamp
-
-	return json.Marshal(m)
+	return ae
 }
 
 type EventTimeline struct {
 	mu      sync.RWMutex
-	events  []TimelineEvent
-	OnEvent func(ev Event)
+	events  []*AgentEvent
+	OnEvent func(ev *AgentEvent)
 }
 
 func NewEventTimeline() *EventTimeline {
 	return &EventTimeline{
-		events: make([]TimelineEvent, 0),
+		events: make([]*AgentEvent, 0),
 	}
 }
 
@@ -187,19 +208,19 @@ func (t *EventTimeline) AddEvent(ev Event) {
 		return
 	}
 
+	ae := NewAgentEvent(ev)
+
 	t.mu.Lock()
-	t.events = append(t.events, TimelineEvent{
-		Event:     ev,
-		Timestamp: float64(time.Now().UnixNano()) / 1e9,
-	})
+	t.events = append(t.events, ae)
 	onEvent := t.OnEvent
 	t.mu.Unlock()
 
 	if onEvent != nil {
-		onEvent(ev)
+		onEvent(ae)
 	}
 }
-func (t *EventTimeline) Snapshot() []TimelineEvent {
+
+func (t *EventTimeline) Snapshot() []*AgentEvent {
 	if t == nil {
 		return nil
 	}
@@ -207,7 +228,7 @@ func (t *EventTimeline) Snapshot() []TimelineEvent {
 	t.mu.RLock()
 	defer t.mu.RUnlock()
 
-	out := make([]TimelineEvent, len(t.events))
+	out := make([]*AgentEvent, len(t.events))
 	copy(out, t.events)
 	return out
 }
@@ -327,7 +348,7 @@ func (d *ClientEventsDispatcher) RegisterTextInput(cb TextInputCallback) {
 
 const TopicClientEvents = "lk-agent-client-events"
 
-func (d *ClientEventsDispatcher) streamClientEvent(ev Event) {
+func (d *ClientEventsDispatcher) streamClientEvent(ev *AgentEvent) {
 	if d.room == nil || d.room.LocalParticipant == nil {
 		return
 	}
@@ -337,15 +358,6 @@ func (d *ClientEventsDispatcher) streamClientEvent(ev Event) {
 		return
 	}
 
-	// Wrap in ClientEventPayload for the client
-	payload := map[string]any{
-		"type":       ev.GetType(),
-		"event":      json.RawMessage(b),
-		"created_at": float64(time.Now().UnixNano()) / 1e9,
-	}
-	
-	b, _ = json.Marshal(payload)
-	
 	_ = d.room.LocalParticipant.PublishDataPacket(
 		&lksdk.UserDataPacket{
 			Topic:   TopicClientEvents,

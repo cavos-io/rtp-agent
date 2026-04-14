@@ -434,7 +434,7 @@ func (s *AgentSession) GenerateReply(ctx context.Context, userInput string) (*Ru
 	return GenerateTypedReply[any](ctx, s, userInput)
 }
 
-func (s *AgentSession) TimelineSnapshot() []TimelineEvent {
+func (s *AgentSession) TimelineSnapshot() []*AgentEvent {
 	if s == nil || s.Timeline == nil {
 		return nil
 	}

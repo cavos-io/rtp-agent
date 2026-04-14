@@ -22,7 +22,7 @@ type SessionReport struct {
 	Room                    string              `json:"room"`
 	Options                 AgentSessionOptions `json:"options"`
 	Events                  []any               `json:"events"`
-	Timeline                []TimelineEvent     `json:"timeline,omitempty"`
+	Timeline                []*AgentEvent       `json:"timeline,omitempty"`
 	ChatHistory             *llm.ChatContext    `json:"chat_history"`
 	AudioRecordingPath      *string             `json:"audio_recording_path,omitempty"`
 	AudioRecordingStartedAt *float64            `json:"audio_recording_started_at,omitempty"`
@@ -34,7 +34,7 @@ type SessionReport struct {
 func NewSessionReport() *SessionReport {
 	return &SessionReport{
 		Events:      make([]any, 0),
-		Timeline:    make([]TimelineEvent, 0),
+		Timeline:    make([]*AgentEvent, 0),
 		ChatHistory: llm.NewChatContext(),
 		Timestamp:   float64(time.Now().UnixNano()) / 1e9,
 	}
@@ -50,13 +50,13 @@ func (r *SessionReport) AddEvent(event any) {
 	r.mu.Unlock()
 }
 
-func (r *SessionReport) SetTimeline(events []TimelineEvent) {
+func (r *SessionReport) SetTimeline(events []*AgentEvent) {
 	if r == nil {
 		return
 	}
 
 	r.mu.Lock()
-	r.Timeline = make([]TimelineEvent, len(events))
+	r.Timeline = make([]*AgentEvent, len(events))
 	copy(r.Timeline, events)
 	r.mu.Unlock()
 }
