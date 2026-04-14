@@ -582,11 +582,13 @@ func (d *ClientEventsDispatcher) handleSendMessage(data lksdk.RpcInvocationData)
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	runResult, err := d.session.GenerateReply(ctx, req.Text)
+	res, err := d.session.GenerateReply(ctx, req.Text)
 	if err != nil {
 		return "", fmt.Errorf("failed to generate reply: %w", err)
 	}
 	
+	runResult, _ := res.(JobResult)
+
 	if runResult != nil {
 		if err := runResult.Wait(ctx); err != nil {
 			return "", fmt.Errorf("run failed: %w", err)
@@ -595,7 +597,7 @@ func (d *ClientEventsDispatcher) handleSendMessage(data lksdk.RpcInvocationData)
 
 	items := []llm.ChatItem{}
 	if runResult != nil {
-		for _, ev := range runResult.Events {
+		for _, ev := range runResult.GetEvents() {
 			if item := ev.GetItem(); item != nil {
 				items = append(items, item)
 			}

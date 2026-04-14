@@ -6,6 +6,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/cavos-io/conversation-worker/core/agent/ivr"
 	"github.com/cavos-io/conversation-worker/core/llm"
 	"github.com/cavos-io/conversation-worker/core/stt"
 	"github.com/cavos-io/conversation-worker/core/vad"
@@ -662,12 +663,20 @@ func (a *AgentActivity) runEOUDetection(info EndOfTurnInfo) {
 					IsFinal:    true,
 					CreatedAt:  time.Now(),
 				})
-			}
-			newMsg := &llm.ChatMessage{
-				Role:      llm.ChatRoleUser,
-				Content:   []llm.ChatContent{{Text: transcript}},
-				CreatedAt: time.Now(),
-			}
+				}
+
+				if a.Session != nil && a.Session.ivrActivity != nil {
+			a.Session.ivrActivity.OnUserInputTranscribed(&ivr.UserInputTranscribedEvent{
+				Transcript: transcript,
+				IsFinal:    true,
+			})
+		}
+
+				newMsg := &llm.ChatMessage{
+					Role:      llm.ChatRoleUser,
+					Content:   []llm.ChatContent{{Text: transcript}},
+					CreatedAt: time.Now(),
+				}
 			chatCtx := a.Session.ChatCtx
 			if chatCtx == nil {
 				chatCtx = a.Agent.ChatCtx

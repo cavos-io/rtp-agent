@@ -52,6 +52,11 @@ func (e *AgentHandoffRunEvent) RunEventType() string    { return "agent_handoff"
 func (e *AgentHandoffRunEvent) GetCreatedAt() time.Time { return e.Item.CreatedAt }
 func (e *AgentHandoffRunEvent) GetItem() llm.ChatItem   { return e.Item }
 
+type JobResult interface {
+	Wait(ctx context.Context) error
+	GetEvents() []RunEvent
+}
+
 type RunResult[T any] struct {
 	ChatCtx   *llm.ChatContext
 	Timestamp float64
@@ -65,6 +70,15 @@ type RunResult[T any] struct {
 	finalError  error
 
 	Events []RunEvent
+}
+
+func (r *RunResult[T]) GetEvents() []RunEvent {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	
+	out := make([]RunEvent, len(r.Events))
+	copy(out, r.Events)
+	return out
 }
 
 func NewRunResult[T any](chatCtx *llm.ChatContext) *RunResult[T] {

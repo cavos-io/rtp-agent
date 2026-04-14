@@ -6,6 +6,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/cavos-io/conversation-worker/core/agent/ivr"
 	"github.com/cavos-io/conversation-worker/core/llm"
 	"github.com/cavos-io/conversation-worker/core/stt"
 	"github.com/cavos-io/conversation-worker/core/tts"
@@ -33,6 +34,7 @@ type AgentSessionOptions struct {
 	SpeakingRate                  float64
 	TranscriptRefreshRate         time.Duration
 	LinkedParticipant             lksdk.Participant
+	IVRDetection                  bool
 }
 
 type AgentSession struct {
@@ -67,6 +69,14 @@ type AgentSession struct {
 	UserStateChangedCh  chan UserStateChangedEvent
 
 	clientEvents *ClientEventsDispatcher
+	ivrActivity  *ivr.IVRActivity
+}
+
+func (s *AgentSession) GetDataPublisher() ivr.DataPublisher {
+	if s.Room == nil {
+		return nil
+	}
+	return s.Room.LocalParticipant
 }
 
 func NewAgentSession(agent AgentInterface, room *lksdk.Room, opts AgentSessionOptions) *AgentSession {
@@ -118,6 +128,12 @@ func NewAgentSession(agent AgentInterface, room *lksdk.Room, opts AgentSessionOp
 
 	if room != nil {
 		s.clientEvents = NewClientEventsDispatcher(room, s)
+	}
+
+	if opts.IVRDetection {
+		s.ivrActivity = ivr.NewIVRActivity(s)
+		s.Tools = append(s.Tools, s.ivrActivity.Tools()...)
+		s.ivrActivity.Start()
 	}
 
 	return s
@@ -336,6 +352,10 @@ func (s *AgentSession) UpdateAgentState(state AgentState) {
 			s.clientEvents.DispatchAgentState(state)
 		}
 
+		if s.ivrActivity != nil {
+			s.ivrActivity.OnAgentStateChanged(ivr.AgentState(oldState), ivr.AgentState(state))
+		}
+
 		select {
 		case s.AgentStateChangedCh <- AgentStateChangedEvent{
 			OldState:  oldState,
@@ -366,6 +386,10 @@ func (s *AgentSession) UpdateUserState(state UserState) {
 		
 		if s.clientEvents != nil {
 			s.clientEvents.DispatchUserState(state)
+		}
+
+		if s.ivrActivity != nil {
+			s.ivrActivity.OnUserStateChanged(ivr.UserState(oldState), ivr.UserState(state))
 		}
 
 		select {
@@ -435,7 +459,7 @@ func GenerateTypedReply[T any](ctx context.Context, s *AgentSession, userInput s
 	return runResult, nil
 }
 
-func (s *AgentSession) GenerateReply(ctx context.Context, userInput string) (*RunResult[any], error) {
+func (s *AgentSession) GenerateReply(ctx context.Context, userInput string) (any, error) {
 	return GenerateTypedReply[any](ctx, s, userInput)
 }
 
