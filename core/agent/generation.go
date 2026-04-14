@@ -10,6 +10,7 @@ import (
 
 	"github.com/cavos-io/conversation-worker/core/llm"
 	"github.com/cavos-io/conversation-worker/core/tts"
+	"github.com/cavos-io/conversation-worker/library/logger"
 	"github.com/cavos-io/conversation-worker/model"
 )
 
@@ -20,13 +21,71 @@ type LLMGenerationData struct {
 	TTFT          time.Duration
 }
 
-func PerformLLMInference(ctx context.Context, l llm.LLM, chatCtx *llm.ChatContext, tools []llm.Tool) (*LLMGenerationData, error) {
+// prepareFunctionArguments mimics LiveKit Python's strict argument binding
+func prepareFunctionArguments(tool llm.Tool, argsJSON string) (any, error) {
+	var argsMap map[string]any
+	if argsJSON == "" {
+		argsJSON = "{}"
+	}
+	if err := json.Unmarshal([]byte(argsJSON), &argsMap); err != nil {
+		return nil, fmt.Errorf("failed to parse JSON: %w", err)
+	}
+
+	params := tool.Parameters()
+	if params != nil {
+		if reqs, ok := params["required"].([]any); ok {
+			for _, r := range reqs {
+				if reqStr, ok := r.(string); ok {
+					if _, exists := argsMap[reqStr]; !exists {
+						return nil, fmt.Errorf("missing required argument: %s", reqStr)
+					}
+				}
+			}
+		} else if reqsStr, ok := params["required"].([]string); ok {
+			for _, reqStr := range reqsStr {
+				if _, exists := argsMap[reqStr]; !exists {
+					return nil, fmt.Errorf("missing required argument: %s", reqStr)
+				}
+			}
+		}
+
+		if props, ok := params["properties"].(map[string]any); ok {
+			for k, v := range props {
+				if propDef, ok := v.(map[string]any); ok {
+					if defVal, hasDef := propDef["default"]; hasDef {
+						if val, exists := argsMap[k]; !exists || val == nil {
+							argsMap[k] = defVal
+						}
+					}
+				}
+			}
+		}
+	}
+
+	if ta, ok := tool.(llm.ToolWithArgs); ok {
+		typedArgs := ta.Args()
+		if typedArgs != nil {
+			patchedBytes, err := json.Marshal(argsMap)
+			if err != nil {
+				return nil, fmt.Errorf("failed to re-marshal patched args: %w", err)
+			}
+			if err := json.Unmarshal(patchedBytes, typedArgs); err != nil {
+				return nil, fmt.Errorf("failed to bind tool arguments to %T: %w", typedArgs, err)
+			}
+			return typedArgs, nil
+		}
+	}
+
+	return argsMap, nil
+}
+
+func PerformLLMInference(ctx context.Context, l llm.LLM, chatCtx *llm.ChatContext, tools []interface{}) (*LLMGenerationData, error) {
 	data := &LLMGenerationData{
 		TextCh:     make(chan string, 100),
 		FunctionCh: make(chan *llm.FunctionToolCall, 10),
 	}
 
-	stream, err := l.Chat(ctx, chatCtx, llm.WithTools(tools))
+	stream, err := l.Chat(ctx, chatCtx, llm.WithTools(llm.FlattenTools(tools)))
 	if err != nil {
 		return nil, err
 	}
@@ -61,7 +120,7 @@ func PerformLLMInference(ctx context.Context, l llm.LLM, chatCtx *llm.ChatContex
 				}
 			}
 		}
-		
+
 		if data.GeneratedText != "" {
 			if rc := GetRunContext(ctx); rc != nil && rc.SpeechHandle != nil && rc.SpeechHandle.RunResult != nil {
 				rc.SpeechHandle.RunResult.AddEvent(&ChatMessageRunEvent{
@@ -80,7 +139,7 @@ func PerformLLMInference(ctx context.Context, l llm.LLM, chatCtx *llm.ChatContex
 				continue
 			}
 			data.FunctionCh <- finalized
-			
+
 			// Capture event in RunResult if attached to SpeechHandle
 			if rc := GetRunContext(ctx); rc != nil && rc.SpeechHandle != nil && rc.SpeechHandle.RunResult != nil {
 				rc.SpeechHandle.RunResult.AddEvent(&FunctionCallRunEvent{
@@ -386,34 +445,69 @@ func PerformToolExecutions(
 					execCtx = ctx
 				}
 
-				var argsMap map[string]any
-				if err := json.Unmarshal([]byte(args), &argsMap); err != nil {
-					outCh <- buildToolErrorOutput(call, fmt.Errorf("failed to parse tool arguments: %w", err))
+				// Support strict typed binding and validation (prepare_function_arguments equivalent)
+				finalArgs, err := prepareFunctionArguments(tool, args)
+				if err != nil {
+					outCh <- buildToolErrorOutput(call, fmt.Errorf("failed to bind tool arguments: %w", err))
 					return
 				}
 
-				// Support typed binding if the tool provides a struct (prepare_function_arguments equivalent)
-				var finalArgs any = argsMap
-				if ta, ok := tool.(llm.ToolWithArgs); ok {
-					typedArgs := ta.Args()
-					if typedArgs != nil {
-						if err := json.Unmarshal([]byte(args), typedArgs); err == nil {
-							finalArgs = typedArgs
+				result, err := tool.Execute(execCtx, finalArgs)
+
+				var agentTask AgentInterface
+				var fncOut any = result
+
+				// LiveKit Python parity: split out AgentTask from other outputs if list
+				if list, ok := result.([]any); ok {
+					var agentTasks []AgentInterface
+					var otherOutputs []any
+
+					for _, item := range list {
+						if t, isAgent := item.(AgentInterface); isAgent {
+							agentTasks = append(agentTasks, t)
+						} else if pt, isProvider := item.(llm.ProviderTool); isProvider {
+							if t, isAgent := pt.(AgentInterface); isAgent {
+								agentTasks = append(agentTasks, t)
+							} else {
+								otherOutputs = append(otherOutputs, item)
+							}
+						} else {
+							otherOutputs = append(otherOutputs, item)
 						}
+					}
+
+					if len(agentTasks) > 1 {
+						logger.Logger.Errorw(fmt.Sprintf("AI function `%s` returned multiple AgentTask instances, ignoring the output", call.Name), nil, "call_id", call.CallID)
+						outCh <- buildToolErrorOutput(call, fmt.Errorf("multiple AgentTask instances returned"))
+						return
+					}
+
+					if len(agentTasks) > 0 {
+						agentTask = agentTasks[0]
+					}
+
+					if agentTask == nil {
+						fncOut = otherOutputs
+					} else if len(otherOutputs) == 0 {
+						fncOut = nil
+					} else if len(otherOutputs) == 1 {
+						fncOut = otherOutputs[0]
+					} else {
+						fncOut = otherOutputs
+					}
+				} else if task, ok := result.(AgentInterface); ok {
+					agentTask = task
+					fncOut = nil
+				} else if pt, ok := result.(llm.ProviderTool); ok {
+					if task, ok := pt.(AgentInterface); ok {
+						agentTask = task
+						fncOut = nil
 					}
 				}
 
-				result, err := tool.Execute(execCtx, finalArgs)
-				
-				replyRequired := true
+				replyRequired := fncOut != nil
 				if tr, ok := tool.(llm.ToolWithReply); ok {
 					replyRequired = tr.IsReplyRequired()
-				}
-
-				var agentTask AgentInterface
-				if task, ok := result.(AgentInterface); ok {
-					agentTask = task
-					result = "handoff triggered"
 				}
 
 				var fncCallOut *llm.FunctionCallOutput
@@ -425,13 +519,18 @@ func PerformToolExecutions(
 					var outputStr string
 					if err != nil {
 						outputStr = err.Error()
-					} else if result != nil {
-						// Best effort formatting for the chat context
-						if str, ok := result.(string); ok {
+					} else if fncOut != nil {
+						if str, ok := fncOut.(string); ok {
 							outputStr = str
 						} else {
-							outBytes, _ := json.Marshal(result)
+							outBytes, _ := json.Marshal(fncOut)
 							outputStr = string(outBytes)
+						}
+					} else {
+						// Parity with llm_utils.make_function_call_output for nil output
+						outputStr = "User has been transferred to a new agent."
+						if agentTask == nil {
+							outputStr = "Function executed successfully."
 						}
 					}
 					fncCallOut = &llm.FunctionCallOutput{
