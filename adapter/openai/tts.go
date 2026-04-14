@@ -4,28 +4,41 @@ import (
 	"context"
 	"io"
 
+	"github.com/cavos-io/conversation-worker/core/audio"
 	"github.com/cavos-io/conversation-worker/core/tts"
 	"github.com/cavos-io/conversation-worker/model"
 	"github.com/sashabaranov/go-openai"
 )
 
 type OpenAITTS struct {
-	client *openai.Client
-	model  openai.SpeechModel
-	voice  openai.SpeechVoice
+	client     *openai.Client
+	model      openai.SpeechModel
+	voice      openai.SpeechVoice
+	sampleRate int
 }
 
-func NewOpenAITTS(apiKey string, model openai.SpeechModel, voice openai.SpeechVoice) *OpenAITTS {
+type OpenAITTSOptions struct {
+	SampleRate int
+}
+
+func NewOpenAITTS(apiKey string, model openai.SpeechModel, voice openai.SpeechVoice, opts ...OpenAITTSOptions) *OpenAITTS {
 	if model == "" {
 		model = openai.TTSModel1
 	}
 	if voice == "" {
 		voice = openai.VoiceAlloy
 	}
+	
+	sampleRate := 24000
+	if len(opts) > 0 && opts[0].SampleRate > 0 {
+		sampleRate = opts[0].SampleRate
+	}
+
 	return &OpenAITTS{
-		client: openai.NewClient(apiKey),
-		model:  model,
-		voice:  voice,
+		client:     openai.NewClient(apiKey),
+		model:      model,
+		voice:      voice,
+		sampleRate: sampleRate,
 	}
 }
 
@@ -33,7 +46,7 @@ func (t *OpenAITTS) Label() string { return "openai.TTS" }
 func (t *OpenAITTS) Capabilities() tts.TTSCapabilities {
 	return tts.TTSCapabilities{Streaming: false, AlignedTranscript: false}
 }
-func (t *OpenAITTS) SampleRate() int  { return 24000 }
+func (t *OpenAITTS) SampleRate() int  { return t.sampleRate }
 func (t *OpenAITTS) NumChannels() int { return 1 }
 
 func (t *OpenAITTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStream, error) {
@@ -51,7 +64,8 @@ func (t *OpenAITTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStr
 	}
 
 	return &openaiTTSChunkedStream{
-		resp: resp,
+		resp:       resp,
+		sampleRate: t.sampleRate,
 	}, nil
 }
 
@@ -61,8 +75,9 @@ func (t *OpenAITTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
 }
 
 type openaiTTSChunkedStream struct {
-	resp    io.ReadCloser
-	pending []byte
+	resp       io.ReadCloser
+	pending    []byte
+	sampleRate int
 }
 
 func (s *openaiTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
@@ -94,10 +109,16 @@ func (s *openaiTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 		return s.Next()
 	}
 
+	if s.sampleRate != 24000 {
+		pcm16 := audio.BytesToInt16(data)
+		resampled := audio.ResampleLinear(pcm16, 24000, s.sampleRate)
+		data = audio.Int16ToBytes(resampled)
+	}
+
 	return &tts.SynthesizedAudio{
 		Frame: &model.AudioFrame{
 			Data:              data,
-			SampleRate:        24000,
+			SampleRate:        uint32(s.sampleRate),
 			NumChannels:       1,
 			SamplesPerChannel: uint32(len(data) / 2),
 		},
