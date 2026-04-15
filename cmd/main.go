@@ -81,7 +81,7 @@ func main() {
 
 		// STT: OpenAI Whisper (non-streaming) wrapped with StreamAdapter + SimpleVAD
 		openaiSTT := oaiadapter.NewOpenAISTT(openaiAPIKey, "")
-		simpleVAD := vad.NewSimpleVAD(0.0005) // Very low threshold for Playground's quiet audio
+		simpleVAD := vad.NewSimpleVAD(0.005) // Threshold: ignore silence/noise, detect actual speech
 		sttProvider := stt.NewStreamAdapter(openaiSTT, simpleVAD)
 
 		// TTS: ElevenLabs (streaming via WebSocket)
@@ -154,7 +154,12 @@ Jangan bertele-tele, maksimal 2-3 kalimat per respons.`},
 			close(disconnectCh)
 		}
 
-		if err := jobCtx.Connect(context.Background(), cb); err != nil {
+		// Create a cancellable context for the entire session lifecycle.
+		// Cancelling this propagates to all goroutines (VAD, STT, TTS, pipeline).
+		sessionCtx, sessionCancel := context.WithCancel(context.Background())
+		defer sessionCancel()
+
+		if err := jobCtx.Connect(sessionCtx, cb); err != nil {
 			fmt.Printf("❌ Failed to connect to room: %v\n", err)
 			return err
 		}
@@ -184,13 +189,13 @@ Jangan bertele-tele, maksimal 2-3 kalimat per respons.`},
 		}
 
 		fmt.Println("🎤 Starting audio I/O...")
-		if err := roomIO.Start(context.Background()); err != nil {
+		if err := roomIO.Start(sessionCtx); err != nil {
 			fmt.Printf("❌ Failed to start RoomIO: %v\n", err)
 			return err
 		}
 
 		fmt.Println("🧠 Starting agent pipeline...")
-		if err := session.Start(context.Background()); err != nil {
+		if err := session.Start(sessionCtx); err != nil {
 			fmt.Printf("❌ Failed to start AgentSession: %v\n", err)
 			return err
 		}
@@ -204,7 +209,8 @@ Jangan bertele-tele, maksimal 2-3 kalimat per respons.`},
 
 		// Block until room disconnects
 		<-disconnectCh
-		fmt.Println("🔌 Room disconnected — shutting down session...")
+		fmt.Println("🔌 Room disconnected — cancelling all goroutines...")
+		sessionCancel() // cascade cancel to ALL goroutines
 		session.Stop(context.Background())
 		roomIO.Close()
 		if roomIO.Recorder != nil && roomIO.Recorder.OutPath != "" {

@@ -126,6 +126,7 @@ type RoomIO struct {
 
 	mu     sync.Mutex
 	closed bool
+	ctx    context.Context // session lifecycle context — cancelled on disconnect
 
 	audioTrack *lksdk.LocalTrack
 	decoder    AudioDecoder
@@ -172,6 +173,7 @@ func (rio *RoomIO) GetCallback() *lksdk.RoomCallback {
 }
 
 func (rio *RoomIO) Start(ctx context.Context) error {
+	rio.ctx = ctx
 	// WebRTC Opus standard requires Channels=2 and specific fmtp even for mono
 	// content. Channels=1 causes "codec not supported by remote" SDP rejection.
 	track, err := lksdk.NewLocalSampleTrack(webrtc.RTPCodecCapability{
@@ -203,7 +205,7 @@ func (rio *RoomIO) Start(ctx context.Context) error {
 	// Start recorder: stereo OGG, left=user input, right=agent output
 	if rio.Recorder != nil {
 		roomName := rio.Room.Name()
-		recPath := fmt.Sprintf("recordings/%s_%d.ogg", roomName, time.Now().Unix())
+		recPath := fmt.Sprintf("recordings/%s_%d.wav", roomName, time.Now().Unix())
 		if err := rio.Recorder.Start(recPath, 48000); err != nil {
 			fmt.Printf("⚠️ [RoomIO] Recorder start failed: %v\n", err)
 		} else {
@@ -260,12 +262,19 @@ func (rio *RoomIO) handleAudioTrack(track *webrtc.TrackRemote) {
 	var rtpCount int
 	var sampleCount int
 	for {
+		// Check both closed flag and context cancellation
 		rio.mu.Lock()
-		if rio.closed {
-			rio.mu.Unlock()
+		closed := rio.closed
+		rio.mu.Unlock()
+		if closed {
 			return
 		}
-		rio.mu.Unlock()
+		select {
+		case <-rio.ctx.Done():
+			fmt.Println("🔌 [RoomIO] handleAudioTrack: context cancelled, exiting")
+			return
+		default:
+		}
 
 		pkt, _, err := track.ReadRTP()
 		if err != nil {
@@ -339,6 +348,7 @@ func (rio *RoomIO) PublishAudio(frame *model.AudioFrame) error {
 				fmt.Printf("⚠️ [Debug] Failed to save tts_debug.wav: %v\n", err)
 			}
 			rio.pcmDebugSaved = true
+			rio.pcmDebugBuf = nil // free memory
 		}
 	}
 
@@ -446,6 +456,10 @@ func (rio *RoomIO) Close() error {
 	rio.closed = true
 	decoder := rio.decoder
 	encoder := rio.encoder
+	rio.decoder = nil
+	rio.encoder = nil
+	rio.audioTrack = nil
+	rio.pcmDebugBuf = nil
 	rio.mu.Unlock()
 
 	if decoder != nil {
@@ -461,6 +475,7 @@ func (rio *RoomIO) Close() error {
 			fmt.Printf("💾 [RoomIO] Recording saved: %s\n", rio.Recorder.OutPath)
 		}
 	}
+	fmt.Println("🧹 [RoomIO] Resources cleaned up")
 	return nil
 }
 
