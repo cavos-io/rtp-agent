@@ -2,6 +2,7 @@ package stt
 
 import (
 	"context"
+	"sync"
 
 	"github.com/cavos-io/conversation-worker/core/vad"
 	"github.com/cavos-io/conversation-worker/model"
@@ -62,9 +63,25 @@ type streamAdapterWrapper struct {
 	vadStream vad.VADStream
 	events    chan *SpeechEvent
 	closed    bool
+
+	mu            sync.Mutex
+	speechFrames  []*model.AudioFrame // accumulated frames while speaking
+	isSpeaking    bool
 }
 
 func (w *streamAdapterWrapper) PushFrame(frame *model.AudioFrame) error {
+	w.mu.Lock()
+	if w.isSpeaking {
+		// deep copy the data so the frame buffer can be reused by the caller
+		cp := &model.AudioFrame{
+			Data:              append([]byte(nil), frame.Data...),
+			SampleRate:        frame.SampleRate,
+			NumChannels:       frame.NumChannels,
+			SamplesPerChannel: frame.SamplesPerChannel,
+		}
+		w.speechFrames = append(w.speechFrames, cp)
+	}
+	w.mu.Unlock()
 	return w.vadStream.PushFrame(frame)
 }
 
@@ -121,30 +138,25 @@ func (w *streamAdapterWrapper) run() {
 			return
 		case vEvent := <-eventCh:
 			if vEvent.Type == vad.VADEventStartOfSpeech {
-				w.events <- &SpeechEvent{
-					Type: SpeechEventStartOfSpeech,
-				}
+				w.mu.Lock()
+				w.isSpeaking = true
+				w.speechFrames = w.speechFrames[:0]
+				w.mu.Unlock()
+				w.events <- &SpeechEvent{Type: SpeechEventStartOfSpeech}
 			} else if vEvent.Type == vad.VADEventEndOfSpeech {
-				w.events <- &SpeechEvent{
-					Type: SpeechEventEndOfSpeech,
-				}
+				w.mu.Lock()
+				w.isSpeaking = false
+				frames := w.speechFrames
+				w.speechFrames = nil
+				w.mu.Unlock()
 
-				if len(vEvent.Frames) > 0 {
-					tEvent, err := w.adapter.stt.Recognize(w.ctx, vEvent.Frames, w.language)
+				w.events <- &SpeechEvent{Type: SpeechEventEndOfSpeech}
+
+				if len(frames) > 0 {
+					tEvent, err := w.adapter.stt.Recognize(w.ctx, frames, w.language)
 					if err == nil && tEvent != nil && len(tEvent.Alternatives) > 0 && tEvent.Alternatives[0].Text != "" {
 						w.events <- &SpeechEvent{
 							Type:         SpeechEventFinalTranscript,
-							Alternatives: []SpeechData{tEvent.Alternatives[0]},
-						}
-					}
-				}
-			} else if vEvent.Type == vad.VADEventInferenceDone {
-				// If VAD says we are still speaking, we can use the frames for interim recognition
-				if vEvent.Speaking && len(vEvent.Frames) > 0 {
-					tEvent, err := w.adapter.stt.Recognize(w.ctx, vEvent.Frames, w.language)
-					if err == nil && tEvent != nil && len(tEvent.Alternatives) > 0 && tEvent.Alternatives[0].Text != "" {
-						w.events <- &SpeechEvent{
-							Type:         SpeechEventInterimTranscript,
 							Alternatives: []SpeechData{tEvent.Alternatives[0]},
 						}
 					}

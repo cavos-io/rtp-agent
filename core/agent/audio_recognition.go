@@ -21,13 +21,17 @@ type AudioRecognition struct {
 
 	vadStream vad.VADStream
 	sttStream stt.RecognizeStream
-	
+
 	// For STTNode override
 	sttNodeAudioCh chan *model.AudioFrame
 	sttNodeOutCh   <-chan *stt.SpeechEvent
 
-	mu       sync.Mutex
-	speaking bool
+	mu         sync.Mutex
+	speaking   bool
+	frameCount int
+
+	ctx    context.Context
+	cancel context.CancelFunc
 }
 
 type RecognitionHooks interface {
@@ -81,14 +85,17 @@ func (ar *AudioRecognition) Start(ctx context.Context) error {
 	}
 
 	if !hasSTTNode && ar.stt != nil {
+		logger.Logger.Infow("[STT-PIPE] starting STT stream")
 		stream, err := ar.stt.Stream(ctx, "")
 		if err != nil {
+			logger.Logger.Errorw("[STT-PIPE] failed to create STT stream", err)
 			if startErr != nil {
 				startErr = fmt.Errorf("%v; failed to start STT stream: %w", startErr, err)
 			} else {
 				startErr = fmt.Errorf("failed to start STT stream: %w", err)
 			}
 		} else {
+			logger.Logger.Infow("[STT-PIPE] STT stream created successfully")
 			ar.sttStream = stream
 			started = true
 			go ar.sttLoop(ctx, stream)
@@ -103,46 +110,53 @@ func (ar *AudioRecognition) Start(ctx context.Context) error {
 }
 
 func (ar *AudioRecognition) vadLoop(ctx context.Context, stream vad.VADStream) {
+	logger.Logger.Infow("[STT-PIPE] vadLoop started — waiting for speech events")
 	for {
-		select {
-		case <-ctx.Done():
+		ev, err := stream.Next()
+		if err != nil {
+			if err != io.EOF {
+				logger.Logger.Errorw("VAD stream error", err)
+			}
 			return
-		default:
-			ev, err := stream.Next()
-			if err != nil {
-				if err != io.EOF && err != context.Canceled {
-					logger.Logger.Errorw("VAD stream error", err)
-				}
-				return
-			}
+		}
 
-			switch ev.Type {
-			case vad.VADEventStartOfSpeech:
-				ar.mu.Lock()
-				ar.speaking = true
-				ar.mu.Unlock()
-				ar.hooks.OnStartOfSpeech(ev)
+		if ev.Type == vad.VADEventStartOfSpeech {
+			fmt.Println("🗣️  [VAD] User started speaking")
+			logger.Logger.Infow("User started speaking")
+			ar.session.UpdateUserState(UserStateSpeaking)
 
-			case vad.VADEventEndOfSpeech:
-				ar.mu.Lock()
-				ar.speaking = false
-				ar.mu.Unlock()
-				ar.hooks.OnEndOfSpeech(ev)
+			// Interrupt ongoing agent speech/generation
+			ar.mu.Lock()
+			if ar.cancel != nil {
+				ar.cancel()
+				ctx, cancel := context.WithCancel(context.Background())
+				ar.ctx = ctx
+				ar.cancel = cancel
 			}
+			ar.mu.Unlock()
+		} else if ev.Type == vad.VADEventEndOfSpeech {
+			fmt.Println("🔇 [VAD] User stopped speaking")
+			logger.Logger.Infow("User stopped speaking")
+			ar.session.UpdateUserState(UserStateListening)
 		}
 	}
 }
 
 func (ar *AudioRecognition) sttLoop(ctx context.Context, stream stt.RecognizeStream) {
+	logger.Logger.Infow("[STT-PIPE] sttLoop started — waiting for transcripts")
+	var eventCount int
 	for {
 		select {
 		case <-ctx.Done():
+			logger.Logger.Infow("[STT-PIPE] sttLoop context cancelled")
 			return
 		default:
 			ev, err := stream.Next()
 			if err != nil {
 				if err != io.EOF && err != context.Canceled {
-					logger.Logger.Errorw("STT stream error", err)
+					logger.Logger.Errorw("[STT-PIPE] STT stream error", err)
+				} else {
+					logger.Logger.Infow("[STT-PIPE] STT stream closed", "totalEventsReceived", eventCount)
 				}
 				return
 			}
@@ -150,21 +164,41 @@ func (ar *AudioRecognition) sttLoop(ctx context.Context, stream stt.RecognizeStr
 				continue
 			}
 
+			eventCount++
 			switch ev.Type {
 			case stt.SpeechEventStartOfSpeech:
+				logger.Logger.Infow("[STT-PIPE] STT event: StartOfSpeech")
 				ar.mu.Lock()
 				ar.speaking = true
 				ar.mu.Unlock()
 				ar.hooks.OnStartOfSpeech(nil)
 			case stt.SpeechEventEndOfSpeech:
+				logger.Logger.Infow("[STT-PIPE] STT event: EndOfSpeech")
 				ar.mu.Lock()
 				ar.speaking = false
 				ar.mu.Unlock()
 				ar.hooks.OnEndOfSpeech(nil)
-			case stt.SpeechEventInterimTranscript, stt.SpeechEventPreflightTranscript:
+			case stt.SpeechEventInterimTranscript:
+				text := ""
+				if len(ev.Alternatives) > 0 {
+					text = ev.Alternatives[0].Text
+				}
+				if text != "" {
+					logger.Logger.Infow("[STT-PIPE] STT interim transcript", "text", text, "confidence", ev.Alternatives[0].Confidence)
+				}
+				ar.hooks.OnInterimTranscript(ev)
+			case stt.SpeechEventPreflightTranscript:
+				logger.Logger.Infow("[STT-PIPE] STT preflight transcript")
 				ar.hooks.OnInterimTranscript(ev)
 			case stt.SpeechEventFinalTranscript:
+				text := ""
+				if len(ev.Alternatives) > 0 {
+					text = ev.Alternatives[0].Text
+				}
+				logger.Logger.Infow("[STT-PIPE] STT final transcript", "text", text)
 				ar.hooks.OnFinalTranscript(ev)
+			default:
+				logger.Logger.Infow("[STT-PIPE] STT unknown event type", "type", ev.Type)
 			}
 		}
 	}
@@ -207,12 +241,27 @@ func (ar *AudioRecognition) PushAudio(frame *model.AudioFrame) error {
 	ar.mu.Lock()
 	defer ar.mu.Unlock()
 
+	ar.frameCount++
+	if ar.frameCount%100 == 1 {
+		logger.Logger.Infow("[STT-PIPE] AudioRecognition.PushAudio receiving frames",
+			"frameCount", ar.frameCount,
+			"vadStreamActive", ar.vadStream != nil,
+			"sttStreamActive", ar.sttStream != nil,
+		)
+	}
+
 	if ar.vadStream != nil {
 		_ = ar.vadStream.PushFrame(frame)
 	}
 
 	if ar.sttStream != nil {
-		_ = ar.sttStream.PushFrame(frame)
+		if err := ar.sttStream.PushFrame(frame); err != nil {
+			logger.Logger.Errorw("[STT-PIPE] failed to push frame to STT stream", err, "frameCount", ar.frameCount)
+		}
+	} else {
+		if ar.frameCount == 1 {
+			logger.Logger.Warnw("[STT-PIPE] STT stream is nil, frames not being sent to STT", nil)
+		}
 	}
 
 	if ar.sttNodeAudioCh != nil {
@@ -233,7 +282,7 @@ func (ar *AudioRecognition) Flush() error {
 	if ar.sttStream != nil {
 		return ar.sttStream.Flush()
 	}
-	
+
 	// STTNode doesn't have an explicit flush method since it's channel based,
 	// but we could define a marker frame if needed.
 	return nil

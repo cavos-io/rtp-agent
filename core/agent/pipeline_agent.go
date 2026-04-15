@@ -111,10 +111,17 @@ func (va *PipelineAgent) GenerateReply(speech *SpeechHandle) {
 	va.mu.Unlock()
 
 	if session == nil {
+		logger.Logger.Infow("GenerateReply called but session is nil, skipping")
 		return
 	}
 
-	logger.Logger.Infow("Generating reply")
+	logger.Logger.Infow("Generating reply",
+		"tools_count", len(session.Tools),
+		"has_audio_output", session.Output.Audio != nil,
+		"has_transcription", session.Output.Transcription != nil,
+		"use_tts_aligned_transcript", session.Options.UseTTSAlignedTranscript,
+		"max_tool_steps", session.Options.MaxToolSteps,
+	)
 	session.UpdateAgentState(AgentStateThinking)
 
 	toolsInterface := make([]interface{}, len(session.Tools))
@@ -126,7 +133,10 @@ func (va *PipelineAgent) GenerateReply(speech *SpeechHandle) {
 	// In Python parity, we loop for tool calls
 	steps := 1
 	for {
+		logger.Logger.Debugw("GenerateReply loop iteration", "step", steps)
+
 		if speech.IsInterrupted() {
+			logger.Logger.Infow("Speech interrupted before LLM inference", "step", steps)
 			if session.Output.Audio == nil {
 				session.UpdateAgentState(AgentStateIdle)
 			}
@@ -135,14 +145,17 @@ func (va *PipelineAgent) GenerateReply(speech *SpeechHandle) {
 
 		var genData *LLMGenerationData
 		var err error
-		if baseAgent := session.Agent.GetAgent(); baseAgent != nil && baseAgent.LLMNode != nil {
+		baseAgent := session.Agent.GetAgent()
+		if baseAgent != nil && baseAgent.LLMNode != nil {
+			logger.Logger.Debugw("Using custom LLM node", "step", steps)
 			genData, err = baseAgent.LLMNode(ctx, va.LLM, va.chatCtx, session.Tools)
 		} else {
+			logger.Logger.Debugw("Using default LLM inference", "step", steps)
 			genData, err = PerformLLMInference(ctx, va.LLM, va.chatCtx, session.Tools)
 		}
 
 		if err != nil {
-			logger.Logger.Errorw("LLM inference failed", err)
+			logger.Logger.Errorw("LLM inference failed", err, "step", steps)
 			if session.Timeline != nil {
 				session.Timeline.AddEvent(&ErrorEvent{
 					Error:     err,
@@ -155,19 +168,23 @@ func (va *PipelineAgent) GenerateReply(speech *SpeechHandle) {
 			}
 			return
 		}
+		logger.Logger.Debugw("LLM inference succeeded", "step", steps)
 
 		toolOutCh := PerformToolExecutions(ctx, genData.FunctionCh, toolCtx)
 
 		// Start TTS in parallel with LLM text
+		logger.Logger.Debugw("Starting TTS inference", "step", steps)
 		var ttsGen *TTSGenerationData
-		if baseAgent := session.Agent.GetAgent(); baseAgent != nil && baseAgent.TTSNode != nil {
+		if baseAgent != nil && baseAgent.TTSNode != nil {
+			logger.Logger.Debugw("Using custom TTS node", "step", steps)
 			ttsGen, err = baseAgent.TTSNode(ctx, va.tts, genData.TextCh)
 		} else {
+			logger.Logger.Debugw("Using default TTS inference", "step", steps)
 			ttsGen, err = PerformTTSInference(ctx, va.tts, genData.TextCh)
 		}
 
 		if err != nil {
-			logger.Logger.Errorw("TTS inference failed", err)
+			logger.Logger.Errorw("TTS inference failed", err, "step", steps)
 			if session.Timeline != nil {
 				session.Timeline.AddEvent(&ErrorEvent{
 					Error:     err,
@@ -176,14 +193,17 @@ func (va *PipelineAgent) GenerateReply(speech *SpeechHandle) {
 				})
 			}
 		} else {
+			logger.Logger.Debugw("TTS inference succeeded, starting audio playback", "step", steps)
 			var alignedWG sync.WaitGroup
 			if session.Options.UseTTSAlignedTranscript && session.Output.Transcription != nil {
+				logger.Logger.Debugw("TTS aligned transcript enabled, starting transcription goroutine", "step", steps)
 				var textCh <-chan string = ttsGen.AlignedTextCh
-				if baseAgent := session.Agent.GetAgent(); baseAgent != nil && baseAgent.TranscriptionNode != nil {
+				if baseAgent != nil && baseAgent.TranscriptionNode != nil {
+					logger.Logger.Debugw("Using custom transcription node", "step", steps)
 					var nodeErr error
 					textCh, nodeErr = baseAgent.TranscriptionNode(ctx, textCh)
 					if nodeErr != nil {
-						logger.Logger.Errorw("Transcription node failed", nodeErr)
+						logger.Logger.Errorw("Transcription node failed", nodeErr, "step", steps)
 					}
 				}
 
@@ -191,13 +211,16 @@ func (va *PipelineAgent) GenerateReply(speech *SpeechHandle) {
 					alignedWG.Add(1)
 					go func() {
 						defer alignedWG.Done()
+						var capturedChunks int
 						for deltaText := range textCh {
 							if deltaText == "" {
 								continue
 							}
 							_ = session.Output.Transcription.CaptureText(deltaText)
+							capturedChunks++
 						}
 						session.Output.Transcription.Flush()
+						logger.Logger.Debugw("Transcription goroutine finished", "chunks_captured", capturedChunks, "step", steps)
 					}()
 				}
 			}
@@ -207,36 +230,45 @@ func (va *PipelineAgent) GenerateReply(speech *SpeechHandle) {
 			}
 
 			var audioCh <-chan *model.AudioFrame = ttsGen.AudioCh
-			if baseAgent := session.Agent.GetAgent(); baseAgent != nil && baseAgent.RealtimeAudioOutputNode != nil {
+			if baseAgent != nil && baseAgent.RealtimeAudioOutputNode != nil {
+				logger.Logger.Debugw("Using custom realtime audio output node", "step", steps)
 				var nodeErr error
 				audioCh, nodeErr = baseAgent.RealtimeAudioOutputNode(ctx, audioCh)
 				if nodeErr != nil {
-					logger.Logger.Errorw("Realtime audio output node failed", nodeErr)
+					logger.Logger.Errorw("Realtime audio output node failed", nodeErr, "step", steps)
 				}
 			}
 
 			if audioCh != nil {
+				var frameCount int
 				for frame := range audioCh {
 					if speech.IsInterrupted() {
+						logger.Logger.Infow("Speech interrupted during audio playback", "frames_sent", frameCount, "step", steps)
 						break
 					}
 					select {
 					case <-ctx.Done():
+						logger.Logger.Infow("Context cancelled during audio playback", "frames_sent", frameCount, "step", steps)
 						return
 					default:
 						if session.Output.Audio != nil {
 							_ = session.Output.Audio.CaptureFrame(frame)
+							frameCount++
 						}
 					}
 				}
+				logger.Logger.Debugw("Audio channel drained", "frames_sent", frameCount, "step", steps)
 			}
 
 			if session.Output.Audio != nil {
 				session.Output.Audio.Flush()
 				if speech.IsInterrupted() {
+					logger.Logger.Infow("Speech interrupted after audio flush, clearing buffer", "step", steps)
 					session.Output.Audio.ClearBuffer()
 				} else {
+					logger.Logger.Debugw("Waiting for audio playout", "step", steps)
 					_ = session.Output.Audio.WaitForPlayout(ctx)
+					logger.Logger.Debugw("Audio playout complete", "step", steps)
 				}
 			}
 			alignedWG.Wait()
@@ -255,6 +287,7 @@ func (va *PipelineAgent) GenerateReply(speech *SpeechHandle) {
 			executedTools = true
 			if toolOut.RawError == llm.ErrStopResponse {
 				stopResponse = true
+				logger.Logger.Infow("Tool returned stop response", "name", toolOut.FncCall.Name, "step", steps)
 			}
 			if toolOut.ReplyRequired {
 				replyRequired = true
@@ -263,7 +296,13 @@ func (va *PipelineAgent) GenerateReply(speech *SpeechHandle) {
 				agentTask = toolOut.AgentTask
 				stopResponse = true // Handoff implies stopping the current generation
 			}
-			logger.Logger.Infow("Tool executed", "name", toolOut.FncCall.Name)
+			logger.Logger.Infow("Tool executed",
+				"name", toolOut.FncCall.Name,
+				"reply_required", toolOut.ReplyRequired,
+				"has_agent_task", toolOut.AgentTask != nil,
+				"has_error", toolOut.RawError != nil,
+				"step", steps,
+			)
 
 			toolCalls = append(toolCalls, toolOut.FncCall)
 			toolOutputs = append(toolOutputs, toolOut.FncCallOut)
@@ -274,8 +313,21 @@ func (va *PipelineAgent) GenerateReply(speech *SpeechHandle) {
 			}
 		}
 
+		logger.Logger.Debugw("Tool executions complete",
+			"executed_tools", executedTools,
+			"tool_count", len(toolCalls),
+			"stop_response", stopResponse,
+			"reply_required", replyRequired,
+			"has_agent_task", agentTask != nil,
+			"step", steps,
+		)
+
 		if agentTask != nil {
-			logger.Logger.Infow("Agent handoff triggered by tool", "new_agent", agentTask.GetAgent().ID)
+			logger.Logger.Infow("Agent handoff triggered by tool",
+				"old_agent", session.Agent.GetAgent().ID,
+				"new_agent", agentTask.GetAgent().ID,
+				"step", steps,
+			)
 			handoff := &llm.AgentHandoff{
 				ID:         "handoff_" + uuid.NewString()[:8],
 				NewAgentID: agentTask.GetAgent().ID,
@@ -308,7 +360,9 @@ func (va *PipelineAgent) GenerateReply(speech *SpeechHandle) {
 			}
 			go func() {
 				defer close(taskDone)
+				logger.Logger.Debugw("Executing agent update for handoff", "new_agent", agentTask.GetAgent().ID)
 				_ = session.UpdateAgent(agentTask, nil)
+				logger.Logger.Debugw("Agent update for handoff complete", "new_agent", agentTask.GetAgent().ID)
 			}()
 		}
 
@@ -334,6 +388,15 @@ func (va *PipelineAgent) GenerateReply(speech *SpeechHandle) {
 				speech.FinalOutput = toolCalls
 			}
 
+			logger.Logger.Infow("GenerateReply complete",
+				"stop_response", stopResponse,
+				"executed_tools", executedTools,
+				"reply_required", replyRequired,
+				"total_steps", steps,
+				"final_output", fmt.Sprintf("%v", speech.FinalOutput),
+				"final_output_type", fmt.Sprintf("%T", speech.FinalOutput),
+			)
+
 			if session.Output.Audio == nil {
 				session.UpdateAgentState(AgentStateIdle)
 			}
@@ -342,7 +405,10 @@ func (va *PipelineAgent) GenerateReply(speech *SpeechHandle) {
 
 		steps++
 		if session.Options.MaxToolSteps > 0 && steps > session.Options.MaxToolSteps+1 {
-			logger.Logger.Infow("maximum number of tool steps reached", "maxToolSteps", session.Options.MaxToolSteps)
+			logger.Logger.Infow("Maximum number of tool steps reached",
+				"max_tool_steps", session.Options.MaxToolSteps,
+				"steps_taken", steps,
+			)
 			if session.Timeline != nil {
 				session.Timeline.AddEvent(&ErrorEvent{
 					Error:     fmt.Errorf("maximum number of tool steps reached: %d", session.Options.MaxToolSteps),
@@ -356,6 +422,7 @@ func (va *PipelineAgent) GenerateReply(speech *SpeechHandle) {
 			break
 		}
 
+		logger.Logger.Debugw("Looping back to LLM with tool outputs", "step", steps, "tool_count", len(toolCalls))
 		// Loop back to LLM with tool outputs
 	}
 }

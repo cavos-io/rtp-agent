@@ -201,14 +201,17 @@ func (s *AgentSession) Start(ctx context.Context) error {
 	}
 
 	s.Activity = NewAgentActivity(s.Agent, s)
-	s.Activity.Start()
+	// Sync the activity onto the base *Agent so Agent.OnUserTurnCompleted
+	// can reach it via a.activity (it guards on a.activity == nil).
+	if base := s.Agent.GetAgent(); base != nil {
+		base.activity = s.Activity
+	}
 
 	if s.Assistant == nil {
 		s.Assistant = NewPipelineAgent(s.VAD, s.STT, s.LLM, s.TTS, s.ChatCtx)
 	}
 
 	if err := s.Assistant.Start(ctx, s); err != nil {
-		s.Activity.Stop()
 		s.Activity = nil
 		s.mu.Unlock()
 		return err
@@ -221,6 +224,10 @@ func (s *AgentSession) Start(ctx context.Context) error {
 
 	s.started = true
 	s.mu.Unlock()
+
+	// Activity.Start() must be called AFTER releasing s.mu because it
+	// synchronously calls UpdateUserState which also acquires s.mu.
+	s.Activity.Start()
 
 	go s.forwardAudioLoop(ctx)
 	go s.forwardVideoLoop(ctx)
@@ -569,21 +576,25 @@ func (s *AgentSession) GenerateReply(ctx context.Context, userInput string, allo
 
 func (s *AgentSession) forwardAudioLoop(ctx context.Context) {
 	if s.Input.Audio == nil {
+		logger.Logger.Infow("[STT-PIPE] forwardAudioLoop: Input.Audio is nil — no audio will be forwarded")
 		return
 	}
+	logger.Logger.Infow("[STT-PIPE] forwardAudioLoop started", "audioInput", s.Input.Audio.Label())
 	stream := s.Input.Audio.Stream()
-	
+
 	var warmupUntil time.Time
 	if s.Options.AECWarmupDuration > 0 {
 		warmupUntil = time.Now().Add(time.Duration(s.Options.AECWarmupDuration * float64(time.Second)))
 	}
 
+	var frameCount int
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case frame, ok := <-stream:
 			if !ok {
+				logger.Logger.Infow("[STT-PIPE] forwardAudioLoop: audio stream closed")
 				return
 			}
 			if !warmupUntil.IsZero() && time.Now().Before(warmupUntil) {
@@ -592,9 +603,14 @@ func (s *AgentSession) forwardAudioLoop(ctx context.Context) {
 			s.mu.Lock()
 			activity := s.Activity
 			s.mu.Unlock()
-			if activity != nil {
-				_ = activity.PushAudio(frame)
+			if activity == nil {
+				continue
 			}
+			frameCount++
+			if frameCount%100 == 1 {
+				logger.Logger.Infow("[STT-PIPE] forwardAudioLoop forwarding frames to activity", "frameCount", frameCount)
+			}
+			_ = activity.PushAudio(frame)
 		}
 	}
 }

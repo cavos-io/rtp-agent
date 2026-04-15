@@ -122,11 +122,11 @@ type AudioInputOptions struct {
 }
 
 type AudioOutputOptions struct {
-	Enabled              bool
-	SampleRate           int
-	NumChannels          int
-	TrackName            string
-	TrackPublishOptions  *lksdk.TrackPublicationOptions
+	Enabled             bool
+	SampleRate          int
+	NumChannels         int
+	TrackName           string
+	TrackPublishOptions *lksdk.TrackPublicationOptions
 }
 
 type VideoInputOptions struct {
@@ -460,10 +460,10 @@ func (rio *RoomIO) playoutLoop(ctx context.Context) {
 		drain:
 			for {
 				select {
-				case item := <-rio.playoutCh:
-					if fm, ok := item.(flushMarker); ok {
-						close(fm)
-					}
+				case <-rio.playoutCh:
+					// flushMarkers found here are still in flushWaiters;
+					// closeFlushWaitersLocked() below will close them.
+					// Do NOT close them here to avoid "close of closed channel".
 				default:
 					break drain
 				}
@@ -539,26 +539,15 @@ func (rio *RoomIO) playoutLoop(ctx context.Context) {
 					continue
 				}
 
-				duration := time.Duration(frame.SamplesPerChannel) * time.Second / time.Duration(frame.SampleRate)
+				totalDuration := time.Duration(frame.SamplesPerChannel) * time.Second / time.Duration(frame.SampleRate)
 
 				if paused {
 					// If paused, just sleep to simulate playout pacing and drop frame
-					time.Sleep(duration)
+					time.Sleep(totalDuration)
 					continue
 				}
 
-				now := time.Now()
-				rio.mu.Lock()
-				if rio.targetPlayoutTime.IsZero() {
-					rio.targetPlayoutTime = now
-				}
-				delay := time.Until(rio.targetPlayoutTime)
-				rio.mu.Unlock()
-
-				if delay > 0 {
-					time.Sleep(delay)
-				}
-
+				// Ensure encoder matches frame properties.
 				if encoder == nil || encoder.SampleRate() != int(frame.SampleRate) || encoder.Channels() != int(frame.NumChannels) {
 					enc, err := newOpusEncoder(int(frame.SampleRate), int(frame.NumChannels))
 					if err == nil {
@@ -572,22 +561,64 @@ func (rio *RoomIO) playoutLoop(ctx context.Context) {
 					}
 				}
 
-				data := frame.Data
-				if encoder != nil {
-					if encoded, err := encoder.Encode(frame.Data); err == nil {
-						data = encoded
+				// Opus requires specific frame sizes (up to 60 ms). TTS providers such as
+				// ElevenLabs return large PCM chunks (~880 ms). Feeding an oversized buffer
+				// to opus_encode returns OPUS_BAD_ARG and the wrapper silently falls back to
+				// raw PCM, which the remote decoder cannot parse → silence. Split the frame
+				// into 20 ms sub-frames so every Encode call uses a valid frame size.
+				const opusFrameMs = 20
+				opusSamplesPerFrame := int(frame.SampleRate) * opusFrameMs / 1000
+				opusBytesPerFrame := opusSamplesPerFrame * int(frame.NumChannels) * 2
+
+				pcmData := frame.Data
+				for len(pcmData) > 0 {
+					end := opusBytesPerFrame
+					if end > len(pcmData) {
+						end = len(pcmData)
 					}
+					chunkPCM := pcmData[:end]
+					pcmData = pcmData[end:]
+
+					chunkSamples := len(chunkPCM) / (int(frame.NumChannels) * 2)
+					subDuration := time.Duration(chunkSamples) * time.Second / time.Duration(frame.SampleRate)
+
+					now := time.Now()
+					rio.mu.Lock()
+					if rio.targetPlayoutTime.IsZero() {
+						rio.targetPlayoutTime = now
+					}
+					delay := time.Until(rio.targetPlayoutTime)
+					rio.mu.Unlock()
+
+					if delay > 0 {
+						time.Sleep(delay)
+					}
+
+					// Pad an incomplete trailing chunk to a valid Opus frame size so the
+					// encoder never receives fewer than opusSamplesPerFrame samples.
+					encodePCM := chunkPCM
+					if chunkSamples < opusSamplesPerFrame {
+						padding := make([]byte, (opusSamplesPerFrame-chunkSamples)*int(frame.NumChannels)*2)
+						encodePCM = append(append([]byte(nil), chunkPCM...), padding...)
+					}
+
+					data := chunkPCM
+					if encoder != nil {
+						if encoded, err := encoder.Encode(encodePCM); err == nil {
+							data = encoded
+						}
+					}
+
+					rio.mu.Lock()
+					rio.pushedDuration += subDuration
+					rio.targetPlayoutTime = rio.targetPlayoutTime.Add(subDuration)
+					rio.mu.Unlock()
+
+					_ = track.WriteSample(media.Sample{
+						Data:     data,
+						Duration: subDuration,
+					}, nil)
 				}
-
-				rio.mu.Lock()
-				rio.pushedDuration += duration
-				rio.targetPlayoutTime = rio.targetPlayoutTime.Add(duration)
-				rio.mu.Unlock()
-
-				_ = track.WriteSample(media.Sample{
-					Data:     data,
-					Duration: duration,
-				}, nil)
 			}
 		}
 	}
@@ -707,21 +738,10 @@ func (rio *RoomIO) Start(ctx context.Context) error {
 		return nil
 	}
 
-	sampleRate := 48000
-	channels := uint16(1)
-	if rio.Options.AudioOutput != nil {
-		if rio.Options.AudioOutput.SampleRate > 0 {
-			sampleRate = rio.Options.AudioOutput.SampleRate
-		}
-		if rio.Options.AudioOutput.NumChannels > 0 {
-			channels = uint16(rio.Options.AudioOutput.NumChannels)
-		}
-	}
-
 	track, err := lksdk.NewLocalSampleTrack(webrtc.RTPCodecCapability{
 		MimeType:  webrtc.MimeTypeOpus,
-		ClockRate: uint32(sampleRate),
-		Channels:  channels,
+		ClockRate: 48000, // Opus RTP clock rate is always 48000 per WebRTC spec
+		Channels:  2,     // Opus SDP always advertises 2 channels, even for mono audio
 	})
 	if err != nil {
 		return err
@@ -875,17 +895,20 @@ func (rio *RoomIO) handleVideoTrack(ctx context.Context, track *webrtc.TrackRemo
 }
 
 func (rio *RoomIO) handleAudioTrack(ctx context.Context, track *webrtc.TrackRemote) {
+	logger.Logger.Infow("[STT-PIPE] handleAudioTrack started", "trackID", track.ID(), "codec", track.Codec().MimeType, "clockRate", track.Codec().ClockRate)
 	// First, check for and flush any pre-connect audio buffered
 	preCtx, preCancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer preCancel()
 
 	if frames := rio.preConnectAudio.WaitForData(preCtx, track.ID()); len(frames) > 0 {
+		logger.Logger.Infow("[STT-PIPE] flushing pre-connect audio", "frames", len(frames))
 		for _, frame := range frames {
 			rio.audioInCh <- frame
 		}
 	}
 
 	sb := samplebuilder.New(20, &codecs.OpusPacket{}, track.Codec().ClockRate)
+	var frameCount int
 
 	for {
 		select {
@@ -904,7 +927,7 @@ func (rio *RoomIO) handleAudioTrack(ctx context.Context, track *webrtc.TrackRemo
 		pkt, _, err := track.ReadRTP()
 		if err != nil {
 			if !errors.Is(err, io.EOF) {
-				// log error
+				logger.Logger.Errorw("[STT-PIPE] handleAudioTrack ReadRTP error", err)
 			}
 			return
 		}
@@ -930,6 +953,10 @@ func (rio *RoomIO) handleAudioTrack(ctx context.Context, track *webrtc.TrackRemo
 				SamplesPerChannel: uint32(len(pcm) / 2),
 			}
 
+			frameCount++
+			if frameCount%100 == 1 {
+				logger.Logger.Infow("[STT-PIPE] handleAudioTrack sending frames", "frameCount", frameCount, "dataLen", len(pcm))
+			}
 			rio.audioInCh <- frame
 		}
 	}

@@ -80,6 +80,8 @@ func prepareFunctionArguments(tool llm.Tool, argsJSON string) (any, error) {
 }
 
 func PerformLLMInference(ctx context.Context, l llm.LLM, chatCtx *llm.ChatContext, tools []interface{}) (*LLMGenerationData, error) {
+	logger.Logger.Debugw("LLM inference starting", "tools_count", len(tools))
+
 	data := &LLMGenerationData{
 		TextCh:     make(chan string, 100),
 		FunctionCh: make(chan *llm.FunctionToolCall, 10),
@@ -87,27 +89,39 @@ func PerformLLMInference(ctx context.Context, l llm.LLM, chatCtx *llm.ChatContex
 
 	stream, err := l.Chat(ctx, chatCtx, llm.WithTools(llm.FlattenTools(tools)))
 	if err != nil {
+		logger.Logger.Errorw("LLM chat stream creation failed", err)
 		return nil, err
 	}
+	logger.Logger.Debugw("LLM chat stream created, starting goroutine")
 
 	go func() {
 		defer close(data.TextCh)
 		defer close(data.FunctionCh)
 		defer stream.Close()
+		defer logger.Logger.Debugw("LLM inference goroutine exited")
 
 		startTime := time.Now()
 		toolCalls := make([]*llm.FunctionToolCall, 0)
 		toolCallsByID := make(map[string]*llm.FunctionToolCall)
 		toolCallsByIndex := make(map[int]*llm.FunctionToolCall)
 
+		var chunkCount int
 		for {
 			chunk, err := stream.Next()
 			if err != nil {
+				logger.Logger.Debugw("LLM stream ended",
+					"chunks_received", chunkCount,
+					"text_length", len(data.GeneratedText),
+					"tool_calls_accumulated", len(toolCalls),
+					"reason", err.Error(),
+				)
 				break
 			}
+			chunkCount++
 
 			if data.TTFT == 0 {
 				data.TTFT = time.Since(startTime)
+				logger.Logger.Debugw("LLM first token received", "ttft_ms", data.TTFT.Milliseconds())
 			}
 
 			if chunk.Delta != nil {
@@ -115,13 +129,28 @@ func PerformLLMInference(ctx context.Context, l llm.LLM, chatCtx *llm.ChatContex
 					data.GeneratedText += chunk.Delta.Content
 					data.TextCh <- chunk.Delta.Content
 				}
-				for _, fc := range chunk.Delta.ToolCalls {
-					mergeToolCallDelta(&toolCalls, toolCallsByID, toolCallsByIndex, fc)
+				if len(chunk.Delta.ToolCalls) > 0 {
+					logger.Logger.Debugw("LLM tool call delta received",
+						"tool_calls_in_delta", len(chunk.Delta.ToolCalls),
+						"accumulated_so_far", len(toolCalls),
+					)
+					for _, fc := range chunk.Delta.ToolCalls {
+						mergeToolCallDelta(&toolCalls, toolCallsByID, toolCallsByIndex, fc)
+					}
 				}
 			}
 		}
 
+		logger.Logger.Infow("LLM stream complete",
+			"total_text_length", len(data.GeneratedText),
+			"total_tool_calls", len(toolCalls),
+			"total_chunks", chunkCount,
+			"ttft_ms", data.TTFT.Milliseconds(),
+			"elapsed_ms", time.Since(startTime).Milliseconds(),
+		)
+
 		if data.GeneratedText != "" {
+			logger.Logger.Debugw("Emitting chat message run event", "text_length", len(data.GeneratedText))
 			if rc := GetRunContext(ctx); rc != nil && rc.SpeechHandle != nil && rc.SpeechHandle.RunResult != nil {
 				rc.SpeechHandle.RunResult.AddEvent(&ChatMessageRunEvent{
 					Item: &llm.ChatMessage{
@@ -136,12 +165,19 @@ func PerformLLMInference(ctx context.Context, l llm.LLM, chatCtx *llm.ChatContex
 		for idx, fc := range toolCalls {
 			finalized := finalizeToolCall(fc, idx)
 			if finalized == nil {
+				logger.Logger.Debugw("Tool call skipped after finalization", "index", idx)
 				continue
 			}
+			logger.Logger.Debugw("Emitting finalized tool call",
+				"name", finalized.Name,
+				"call_id", finalized.CallID,
+				"arguments_length", len(finalized.Arguments),
+			)
 			data.FunctionCh <- finalized
 
 			// Capture event in RunResult if attached to SpeechHandle
 			if rc := GetRunContext(ctx); rc != nil && rc.SpeechHandle != nil && rc.SpeechHandle.RunResult != nil {
+				logger.Logger.Debugw("Emitting function call run event", "name", finalized.Name, "call_id", finalized.CallID)
 				rc.SpeechHandle.RunResult.AddEvent(&FunctionCallRunEvent{
 					Item: &llm.FunctionCall{
 						CallID:    finalized.CallID,
@@ -333,6 +369,7 @@ func PerformTTSInference(ctx context.Context, t tts.TTS, textCh <-chan string) (
 		defer close(data.AudioCh)
 		defer close(data.AlignedTextCh)
 		defer stream.Close()
+		defer logger.Logger.Debugw("TTS inference goroutine exited")
 
 		startTime := time.Now()
 
@@ -344,15 +381,26 @@ func PerformTTSInference(ctx context.Context, t tts.TTS, textCh <-chan string) (
 		}
 		_ = stream.Flush()
 
+		var audioFrames int
 		for {
 			audio, err := stream.Next()
 			if err != nil {
+				logger.Logger.Debugw("TTS audio stream ended",
+					"audio_frames", audioFrames,
+					"ttfb_ms", data.TTFB.Milliseconds(),
+					"elapsed_ms", time.Since(startTime).Milliseconds(),
+					"reason", err.Error(),
+				)
 				break
 			}
 			if data.TTFB == 0 {
 				data.TTFB = time.Since(startTime)
+				logger.Logger.Debugw("TTS first audio frame received", "ttfb_ms", data.TTFB.Milliseconds())
 			}
-			data.AudioCh <- audio.Frame
+			audioFrames++
+			if audio.Frame != nil {
+				data.AudioCh <- audio.Frame
+			}
 			if audio.DeltaText != "" {
 				select {
 				case data.AlignedTextCh <- audio.DeltaText:

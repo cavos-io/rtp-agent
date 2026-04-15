@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"log"
 	"strings"
 	"sync"
 	"time"
@@ -46,7 +47,7 @@ type AgentActivity struct {
 	userTurnCommitted bool
 	endOfTurnActive   bool
 	lastSpeechEndedAt time.Time
-	
+
 	ctx    context.Context
 	cancel context.CancelFunc
 
@@ -108,7 +109,7 @@ func (a *AgentActivity) Start() {
 	}
 	a.Session.UpdateUserState(UserStateListening)
 	a.startUserAwayTimer(a.Session.Options.UserAwayTimeout)
-	
+
 	a.loopWg.Add(1)
 	go func() {
 		defer a.loopWg.Done()
@@ -203,7 +204,7 @@ func (a *AgentActivity) CaptureVideoFrame(frame *model.VideoFrame) error {
 	a.Session.mu.Lock()
 	videoOut := a.Session.Output.Video
 	a.Session.mu.Unlock()
-	
+
 	if videoOut != nil {
 		return videoOut.CaptureVideoFrame(frame)
 	}
@@ -290,7 +291,7 @@ func (a *AgentActivity) processQueue() {
 	a.speechWg.Add(1)
 	go func() {
 		defer a.speechWg.Done()
-		
+
 		// Trigger the pipeline agent to process the speech request
 		if a.Session.Assistant != nil {
 			a.Session.Assistant.GenerateReply(speech)
@@ -351,7 +352,7 @@ func (a *AgentActivity) OnStartOfSpeech(ev *vad.VADEvent) {
 	a.audioInterimTranscript = ""
 	a.transcriptMu.Unlock()
 
-	logger.Logger.Infow("Start of speech detected")
+	logger.Logger.Infow("🎤 User started speaking")
 	a.cancelFalseInterruptionTimer()
 	a.cancelUserAwayTimer()
 	a.Session.UpdateUserState(UserStateSpeaking)
@@ -406,7 +407,11 @@ func (a *AgentActivity) OnStartOfSpeech(ev *vad.VADEvent) {
 
 func (a *AgentActivity) OnEndOfSpeech(ev *vad.VADEvent) {
 	a.speaking = false
-	logger.Logger.Infow("End of speech detected")
+	var speechDuration float64
+	if ev != nil {
+		speechDuration = ev.SpeechDuration
+	}
+	logger.Logger.Infow("🔇 User stopped speaking", "speechDuration", speechDuration)
 	a.Session.UpdateUserState(UserStateListening)
 	a.startUserAwayTimer(a.Session.Options.UserAwayTimeout)
 
@@ -431,7 +436,7 @@ func (a *AgentActivity) OnEndOfSpeech(ev *vad.VADEvent) {
 func (a *AgentActivity) shouldIgnoreSTTEvent(isInterim bool) bool {
 	a.transcriptMu.Lock()
 	defer a.transcriptMu.Unlock()
-	
+
 	if a.Agent.TurnDetection == TurnDetectionModeManual && a.userTurnCommitted {
 		if !a.endOfTurnActive || isInterim {
 			return true
@@ -452,6 +457,7 @@ func (a *AgentActivity) OnInterimTranscript(ev *stt.SpeechEvent) {
 			if ev.Type == stt.SpeechEventPreflightTranscript {
 				a.audioPreflightTranscript = strings.TrimSpace(a.audioTranscript + " " + transcript)
 				a.audioInterimTranscript = transcript
+				log.Println("Transcript preflight:", a.audioPreflightTranscript)
 				// In a full implementation we would trigger preemptive generation here
 				// using a.audioPreflightTranscript, but for parity we ensure the state is updated.
 			} else {
@@ -468,7 +474,7 @@ func (a *AgentActivity) OnFinalTranscript(ev *stt.SpeechEvent) {
 	}
 
 	a.sttEOSReceived = true
-	
+
 	transcript := ""
 	confidence := 0.0
 	if len(ev.Alternatives) > 0 {
@@ -712,7 +718,7 @@ func (a *AgentActivity) runEOUDetection(info EndOfTurnInfo) {
 		case <-timer.C:
 			// EOU detected
 			logger.Logger.Infow("EOU detected, completing user turn")
-			
+
 			transcript := info.NewTranscript
 			if transcript == "" {
 				a.transcriptMu.Lock()
@@ -736,12 +742,12 @@ func (a *AgentActivity) runEOUDetection(info EndOfTurnInfo) {
 					case <-waitCh:
 					case <-time.After(timeout): // transcript timeout
 						logger.Logger.Warnw("final transcript not received after timeout", nil, "timeout", timeout)
-						
+
 						// Simulate FinalTranscript event using interim transcript
 						a.transcriptMu.Lock()
 						interim := a.audioInterimTranscript
 						a.transcriptMu.Unlock()
-						
+
 						if interim != "" {
 							if a.Session.Timeline != nil {
 								a.Session.Timeline.AddEvent(&UserInputTranscribedEvent{
@@ -750,7 +756,7 @@ func (a *AgentActivity) runEOUDetection(info EndOfTurnInfo) {
 									CreatedAt:  time.Now(),
 								})
 							}
-							
+
 							// Trigger hooks to process it properly
 							if a.recog != nil && a.recog.hooks != nil {
 								a.recog.hooks.OnFinalTranscript(&stt.SpeechEvent{
@@ -766,7 +772,7 @@ func (a *AgentActivity) runEOUDetection(info EndOfTurnInfo) {
 					}
 					a.transcriptMu.Lock()
 				}
-				
+
 				if a.audioTranscript != "" {
 					transcript = a.audioTranscript
 				}
@@ -785,20 +791,20 @@ func (a *AgentActivity) runEOUDetection(info EndOfTurnInfo) {
 					IsFinal:    true,
 					CreatedAt:  time.Now(),
 				})
-				}
+			}
 
-				if a.Session != nil && a.Session.ivrActivity != nil {
-			a.Session.ivrActivity.OnUserInputTranscribed(&ivr.UserInputTranscribedEvent{
-				Transcript: transcript,
-				IsFinal:    true,
-			})
-		}
+			if a.Session != nil && a.Session.ivrActivity != nil {
+				a.Session.ivrActivity.OnUserInputTranscribed(&ivr.UserInputTranscribedEvent{
+					Transcript: transcript,
+					IsFinal:    true,
+				})
+			}
 
-				newMsg := &llm.ChatMessage{
-					Role:      llm.ChatRoleUser,
-					Content:   []llm.ChatContent{{Text: transcript}},
-					CreatedAt: time.Now(),
-				}
+			newMsg := &llm.ChatMessage{
+				Role:      llm.ChatRoleUser,
+				Content:   []llm.ChatContent{{Text: transcript}},
+				CreatedAt: time.Now(),
+			}
 			chatCtx := a.Session.ChatCtx
 			if chatCtx == nil {
 				chatCtx = a.Agent.ChatCtx
@@ -856,20 +862,20 @@ func (a *AgentActivity) CommitUserTurn(opts *CommitUserTurnOpts) {
 			if duration <= 0 {
 				duration = 2 * time.Second
 			}
-			
+
 			// push silence frames
 			sampleRate := 16000 // default
-			
+
 			// 0.2s chunk size
 			numSamples := int(float64(sampleRate) * 0.2)
 			frameSize := numSamples * 2 // 16-bit
 			frameData := make([]byte, frameSize)
-			
+
 			numFrames := int(duration.Seconds() / 0.2)
 			if numFrames < 1 {
 				numFrames = 1
 			}
-			
+
 			for i := 0; i < numFrames; i++ {
 				_ = a.recog.PushAudio(&model.AudioFrame{
 					Data:              frameData,
@@ -904,5 +910,3 @@ func (a *AgentActivity) UpdateOptions(opts AgentSessionOptions) {
 	// For now just copy them
 	a.Session.Options = opts
 }
-
-

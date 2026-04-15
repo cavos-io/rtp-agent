@@ -43,7 +43,7 @@ func (t *ElevenLabsTTS) Label() string { return "elevenlabs.TTS" }
 func (t *ElevenLabsTTS) Capabilities() tts.TTSCapabilities {
 	return tts.TTSCapabilities{Streaming: true, AlignedTranscript: true}
 }
-func (t *ElevenLabsTTS) SampleRate() int { return 24000 }
+func (t *ElevenLabsTTS) SampleRate() int  { return 24000 }
 func (t *ElevenLabsTTS) NumChannels() int { return 1 }
 
 // Synthesize performs a full HTTP POST for non-streaming scenarios.
@@ -121,19 +121,36 @@ func (s *elevenLabsChunkedStream) Close() error {
 }
 
 // Stream establishes a high-performance WebSocket connection to ElevenLabs for low-latency streaming TTS.
+// The connection is lazily initialized on the first PushText call to avoid input_timeout_exceeded errors
+// when the LLM takes time to produce output.
 func (t *ElevenLabsTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
-	u := url.URL{Scheme: "wss", Host: "api.elevenlabs.io", Path: fmt.Sprintf("/v1/text-to-speech/%s/stream-input", t.voiceID)}
+	ctx, cancel := context.WithCancel(ctx)
+	stream := &elevenLabsStream{
+		audio:  make(chan *tts.SynthesizedAudio, 100),
+		errCh:  make(chan error, 1),
+		ctx:    ctx,
+		cancel: cancel,
+		tts:    t,
+	}
+
+	return stream, nil
+}
+
+// connect dials the ElevenLabs WebSocket and sends the initial configuration.
+// It must be called with s.mu held.
+func (s *elevenLabsStream) connect() error {
+	u := url.URL{Scheme: "wss", Host: "api.elevenlabs.io", Path: fmt.Sprintf("/v1/text-to-speech/%s/stream-input", s.tts.voiceID)}
 	q := u.Query()
-	q.Set("model_id", t.modelID)
+	q.Set("model_id", s.tts.modelID)
 	q.Set("output_format", "pcm_24000")
 	u.RawQuery = q.Encode()
 
 	header := make(http.Header)
-	header.Set("xi-api-key", t.apiKey)
+	header.Set("xi-api-key", s.tts.apiKey)
 
-	conn, _, err := websocket.DefaultDialer.DialContext(ctx, u.String(), header)
+	conn, _, err := websocket.DefaultDialer.DialContext(s.ctx, u.String(), header)
 	if err != nil {
-		return nil, fmt.Errorf("failed to dial elevenlabs websocket: %w", err)
+		return fmt.Errorf("failed to dial elevenlabs websocket: %w", err)
 	}
 
 	// Send initial configuration
@@ -149,30 +166,26 @@ func (t *ElevenLabsTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error
 	}
 	if err := conn.WriteJSON(initMsg); err != nil {
 		conn.Close()
-		return nil, fmt.Errorf("failed to write initial config to elevenlabs: %w", err)
+		return fmt.Errorf("failed to write initial config to elevenlabs: %w", err)
 	}
 
-	ctx, cancel := context.WithCancel(ctx)
-	stream := &elevenLabsStream{
-		conn:   conn,
-		audio:  make(chan *tts.SynthesizedAudio, 100),
-		errCh:  make(chan error, 1),
-		ctx:    ctx,
-		cancel: cancel,
-	}
+	s.conn = conn
+	s.connected = true
 
-	go stream.readLoop()
-	go stream.pingLoop()
+	go s.readLoop()
+	go s.pingLoop()
 
-	return stream, nil
+	return nil
 }
 
 type elevenLabsStream struct {
-	conn   *websocket.Conn
-	audio  chan *tts.SynthesizedAudio
-	errCh  chan error
-	mu     sync.Mutex
-	closed bool
+	conn      *websocket.Conn
+	audio     chan *tts.SynthesizedAudio
+	errCh     chan error
+	mu        sync.Mutex
+	closed    bool
+	connected bool
+	tts       *ElevenLabsTTS
 
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -264,7 +277,7 @@ func (s *elevenLabsStream) readLoop() {
 			}:
 			}
 		}
-		
+
 		if resp.IsFinal {
 			return
 		}
@@ -302,6 +315,13 @@ func (s *elevenLabsStream) PushText(text string) error {
 	if s.closed {
 		return io.ErrClosedPipe
 	}
+	// Lazy connect: only dial WebSocket when first text is ready,
+	// avoiding input_timeout_exceeded from idle connections.
+	if !s.connected {
+		if err := s.connect(); err != nil {
+			return err
+		}
+	}
 	msg := map[string]interface{}{
 		"text":                   text,
 		"try_trigger_generation": true,
@@ -318,11 +338,17 @@ func (s *elevenLabsStream) Flush() error {
 	if s.closed {
 		return io.ErrClosedPipe
 	}
-	msg := map[string]interface{}{
-		"text":  "",
-		"flush": true,
+	if !s.connected {
+		// No text was ever pushed; cancel context so Next() returns io.EOF cleanly.
+		s.closed = true
+		s.cancel()
+		return nil
 	}
-	return s.conn.WriteJSON(msg)
+	// Empty string is ElevenLabs' end-of-input signal.
+	// Do NOT include flush:true — that is a mid-stream directive and causes
+	// ElevenLabs to treat the message as a no-op flush rather than closing
+	// the stream, which leads to input_timeout_exceeded after 20 seconds.
+	return s.conn.WriteJSON(map[string]interface{}{"text": ""})
 }
 
 func (s *elevenLabsStream) Close() error {
@@ -333,17 +359,18 @@ func (s *elevenLabsStream) Close() error {
 	}
 	s.closed = true
 	s.cancel()
-	// Clean close via empty text
-	_ = s.conn.WriteJSON(map[string]interface{}{"text": ""})
-	// Wait a moment for final chunks
-	time.Sleep(50 * time.Millisecond)
-	return s.conn.Close()
+	if s.connected {
+		// Clean close via empty text
+		_ = s.conn.WriteJSON(map[string]interface{}{"text": ""})
+		// Wait a moment for final chunks
+		time.Sleep(50 * time.Millisecond)
+		return s.conn.Close()
+	}
+	return nil
 }
 
 func (s *elevenLabsStream) Next() (*tts.SynthesizedAudio, error) {
 	select {
-	case <-s.ctx.Done():
-		return nil, io.EOF
 	case err := <-s.errCh:
 		return nil, err
 	case audio, ok := <-s.audio:
@@ -356,5 +383,17 @@ func (s *elevenLabsStream) Next() (*tts.SynthesizedAudio, error) {
 			}
 		}
 		return audio, nil
+	case <-s.ctx.Done():
+		// Drain any buffered audio before returning EOF. Without this, frames
+		// that readLoop already pushed to s.audio can be lost when ctx is
+		// cancelled concurrently with s.audio being closed (LIFO defer race).
+		select {
+		case audio, ok := <-s.audio:
+			if ok {
+				return audio, nil
+			}
+		default:
+		}
+		return nil, io.EOF
 	}
 }
