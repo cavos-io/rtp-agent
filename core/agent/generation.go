@@ -77,8 +77,27 @@ func PerformTTSInference(ctx context.Context, t tts.TTS, textCh <-chan string) (
 		AudioCh: make(chan *model.AudioFrame, 100),
 	}
 
+	// ── Wait for the first non-empty text token before opening the WebSocket ──
+	// Opening ElevenLabs before text is ready causes an idle gap that triggers
+	// input_timeout_exceeded (ElevenLabs closes the connection after ~3s with
+	// no text input).
+	var firstText string
+	for raw := range textCh {
+		filtered := tts.ApplyTextTransforms(raw)
+		if filtered != "" {
+			firstText = filtered
+			break
+		}
+	}
+	if firstText == "" {
+		// LLM produced nothing (cancelled / all filtered out) — nothing to say.
+		close(data.AudioCh)
+		return data, nil
+	}
+
 	stream, err := t.Stream(ctx)
 	if err != nil {
+		close(data.AudioCh)
 		return nil, err
 	}
 
@@ -88,19 +107,32 @@ func PerformTTSInference(ctx context.Context, t tts.TTS, textCh <-chan string) (
 
 		startTime := time.Now()
 
-		// Push text concurrently while reading audio
+		// Push text concurrently while reading audio.
+		// First token is already available — push it immediately, then drain
+		// the rest of textCh.
 		go func() {
-			textCount := 0
-			for text := range textCh {
-				filteredText := tts.ApplyTextTransforms(text)
-				if filteredText != "" {
-					textCount++
-					fmt.Printf("📝 [TTS] Text #%d: '%s'\n", textCount, filteredText)
-					_ = stream.PushText(filteredText)
+			textCount := 1
+			fmt.Printf("📝 [TTS] Text #1: '%s'\n", firstText)
+			_ = stream.PushText(firstText)
+
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case raw, ok := <-textCh:
+					if !ok {
+						fmt.Printf("📝 [TTS] All text pushed (%d chunks), flushing...\n", textCount)
+						_ = stream.Flush()
+						return
+					}
+					filtered := tts.ApplyTextTransforms(raw)
+					if filtered != "" {
+						textCount++
+						fmt.Printf("📝 [TTS] Text #%d: '%s'\n", textCount, filtered)
+						_ = stream.PushText(filtered)
+					}
 				}
 			}
-			fmt.Printf("📝 [TTS] All text pushed (%d chunks), flushing...\n", textCount)
-			_ = stream.Flush()
 		}()
 
 		// Read audio chunks concurrently

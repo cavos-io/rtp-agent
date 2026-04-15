@@ -207,6 +207,9 @@ Jangan bertele-tele, maksimal 2-3 kalimat per respons.`},
 		fmt.Println("🔌 Room disconnected — shutting down session...")
 		session.Stop(context.Background())
 		roomIO.Close()
+		if roomIO.Recorder != nil && roomIO.Recorder.OutPath != "" {
+			fmt.Printf("🎙️ Recording: %s\n", roomIO.Recorder.OutPath)
+		}
 		fmt.Printf("✅ Agent session ended for room: %s\n", jobCtx.Job.Room.Name)
 		return nil
 

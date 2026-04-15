@@ -19,6 +19,7 @@ type RecorderIO struct {
 	Session *agent.AgentSession
 
 	mu      sync.Mutex
+	wg      sync.WaitGroup
 	started bool
 	closed  bool
 
@@ -30,7 +31,7 @@ type RecorderIO struct {
 
 	done chan struct{}
 
-	outPath string
+	OutPath string
 
 	InputStartTime  *time.Time
 	OutputStartTime *time.Time
@@ -71,24 +72,30 @@ func (r *RecorderIO) Start(outputPath string, sampleRate int) error {
 
 	r.oggWriter = writer
 	r.encoder = encoder
-	r.outPath = outputPath
+	r.OutPath = outputPath
 	r.started = true
 
-	go r.recordLoop(sampleRate)
+	r.wg.Add(1)
+	go func() {
+		defer r.wg.Done()
+		r.recordLoop(sampleRate)
+	}()
 
 	return nil
 }
 
+// Stop signals the record loop to flush and close, then waits for it to finish.
 func (r *RecorderIO) Stop() error {
 	r.mu.Lock()
-	defer r.mu.Unlock()
-
 	if !r.started || r.closed {
+		r.mu.Unlock()
 		return nil
 	}
-
 	r.closed = true
 	close(r.done)
+	r.mu.Unlock() // release lock BEFORE wg.Wait so recordLoop can acquire it in flush
+
+	r.wg.Wait() // block until recordLoop has flushed and closed the file
 	return nil
 }
 
@@ -131,6 +138,7 @@ func (r *RecorderIO) recordLoop(sampleRate int) {
 		case <-r.done:
 			r.flush(sampleRate)
 			r.oggWriter.Close()
+			fmt.Printf("🎙️ [Recorder] Loop finished, OGG closed: %s\n", r.OutPath)
 			return
 		case <-ticker.C:
 			r.flush(sampleRate)
@@ -168,50 +176,43 @@ func (r *RecorderIO) flush(sampleRate int) {
 		return
 	}
 
-	// Create stereo buffer (interleaved: left, right, left, right...)
+	fmt.Printf("🎙️ [Recorder] Flush: inFrames=%d (%d samples) outFrames=%d (%d samples)\n",
+		len(inFrames), inSamples, len(outFrames), outSamples)
+
+	// Create stereo buffer (interleaved: left=input, right=output)
 	stereoBuf := make([]int16, maxSamples*2)
 
-	// Mix input to left channel (0, 2, 4...)
+	// Mix input to left channel (indices 0, 2, 4...)
 	inPos := 0
 	for _, f := range inFrames {
-		// Assuming 16-bit PCM Mono
 		for i := 0; i < int(f.SamplesPerChannel); i++ {
-			if inPos < maxSamples {
-				idx := i * 2
-				if idx+1 < len(f.Data) {
-					sample := int16(f.Data[idx]) | (int16(f.Data[idx+1]) << 8)
-					stereoBuf[inPos*2] = sample
-					inPos++
-				}
+			idx := i * 2
+			if inPos < maxSamples && idx+1 < len(f.Data) {
+				stereoBuf[inPos*2] = int16(f.Data[idx]) | (int16(f.Data[idx+1]) << 8)
+				inPos++
 			}
 		}
 	}
 
-	// Mix output to right channel (1, 3, 5...)
+	// Mix output to right channel (indices 1, 3, 5...)
 	outPos := 0
 	for _, f := range outFrames {
 		for i := 0; i < int(f.SamplesPerChannel); i++ {
-			if outPos < maxSamples {
-				idx := i * 2
-				if idx+1 < len(f.Data) {
-					sample := int16(f.Data[idx]) | (int16(f.Data[idx+1]) << 8)
-					stereoBuf[outPos*2+1] = sample
-					outPos++
-				}
+			idx := i * 2
+			if outPos < maxSamples && idx+1 < len(f.Data) {
+				stereoBuf[outPos*2+1] = int16(f.Data[idx]) | (int16(f.Data[idx+1]) << 8)
+				outPos++
 			}
 		}
 	}
 
-	// Encode to Opus in chunks of 20ms (e.g. 960 samples per channel at 48kHz)
-	chunkSamples := sampleRate / 50
+	// Encode to Opus in 20ms chunks (960 samples/ch at 48kHz)
+	chunkSamples := sampleRate / 50 // 960
 	opusBuf := make([]byte, 4000)
+	chunksWritten := 0
 
-	for i := 0; i < maxSamples; i += chunkSamples {
+	for i := 0; i+chunkSamples <= maxSamples; i += chunkSamples {
 		end := i + chunkSamples
-		if end > maxSamples {
-			break // pad with silence or ignore tail for simplicity
-		}
-
 		chunk := stereoBuf[i*2 : end*2]
 		n, err := r.encoder.Encode(chunk, opusBuf)
 		if err != nil {
@@ -219,22 +220,25 @@ func (r *RecorderIO) flush(sampleRate int) {
 			continue
 		}
 
-		// Write to ogg
 		pkt := &rtp.Packet{
 			Header: rtp.Header{
 				Version:        2,
 				PayloadType:    111,
 				SequenceNumber: r.sequenceNumber,
 				Timestamp:      r.timestamp,
+				SSRC:           1,
 			},
 			Payload: opusBuf[:n],
 		}
-		
 		r.sequenceNumber++
 		r.timestamp += uint32(chunkSamples)
 
 		if err := r.oggWriter.WriteRTP(pkt); err != nil {
 			logger.Logger.Errorw("Failed to write to ogg", err)
+		} else {
+			chunksWritten++
 		}
 	}
+
+	fmt.Printf("🎙️ [Recorder] Wrote %d Opus chunks to OGG\n", chunksWritten)
 }

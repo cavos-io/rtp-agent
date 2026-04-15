@@ -199,6 +199,18 @@ func (rio *RoomIO) Start(ctx context.Context) error {
 	}
 
 	rio.audioTrack = track
+
+	// Start recorder: stereo OGG, left=user input, right=agent output
+	if rio.Recorder != nil {
+		roomName := rio.Room.Name()
+		recPath := fmt.Sprintf("recordings/%s_%d.ogg", roomName, time.Now().Unix())
+		if err := rio.Recorder.Start(recPath, 48000); err != nil {
+			fmt.Printf("⚠️ [RoomIO] Recorder start failed: %v\n", err)
+		} else {
+			fmt.Printf("🔴 [RoomIO] Recording started: %s\n", recPath)
+		}
+	}
+
 	return nil
 }
 
@@ -305,10 +317,6 @@ func (rio *RoomIO) handleAudioTrack(track *webrtc.TrackRemote) {
 }
 
 func (rio *RoomIO) PublishAudio(frame *model.AudioFrame) error {
-	if rio.Recorder != nil {
-		rio.Recorder.RecordOutput(frame)
-	}
-
 	rio.mu.Lock()
 	track := rio.audioTrack
 	encoder := rio.encoder
@@ -370,6 +378,16 @@ func (rio *RoomIO) PublishAudio(frame *model.AudioFrame) error {
 		sampleRate = 48000
 	}
 
+	// Record output at 48kHz mono (after resampling, before stereo conversion)
+	if rio.Recorder != nil {
+		rio.Recorder.RecordOutput(&model.AudioFrame{
+			Data:              pcmData,
+			SampleRate:        sampleRate,
+			NumChannels:       1,
+			SamplesPerChannel: samplesPerChannel,
+		})
+	}
+
 	// Convert mono PCM → stereo (interleave L+R) to match Channels:2 in SDP.
 	// Opus encoder is created with 2ch so it expects stereo input.
 	stereo := make([]byte, len(pcmData)*2)
@@ -425,13 +443,23 @@ func (rio *RoomIO) PublishAudio(frame *model.AudioFrame) error {
 
 func (rio *RoomIO) Close() error {
 	rio.mu.Lock()
-	defer rio.mu.Unlock()
 	rio.closed = true
-	if rio.decoder != nil {
-		rio.decoder.Close()
+	decoder := rio.decoder
+	encoder := rio.encoder
+	rio.mu.Unlock()
+
+	if decoder != nil {
+		decoder.Close()
 	}
-	if rio.encoder != nil {
-		rio.encoder.Close()
+	if encoder != nil {
+		encoder.Close()
+	}
+	if rio.Recorder != nil {
+		if err := rio.Recorder.Stop(); err != nil {
+			fmt.Printf("⚠️ [RoomIO] Recorder stop error: %v\n", err)
+		} else {
+			fmt.Printf("💾 [RoomIO] Recording saved: %s\n", rio.Recorder.OutPath)
+		}
 	}
 	return nil
 }

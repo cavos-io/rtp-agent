@@ -136,9 +136,10 @@ func (t *ElevenLabsTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error
 		return nil, fmt.Errorf("failed to dial elevenlabs websocket: %w", err)
 	}
 
-	// Send initial configuration
+	// Send configuration only — empty text so ElevenLabs initialises the
+	// session without generating audio yet. Real text arrives via PushText.
 	initMsg := map[string]interface{}{
-		"text": " ", // Start with a space to initialize
+		"text": "",
 		"voice_settings": map[string]interface{}{
 			"stability":        0.5,
 			"similarity_boost": 0.8,
