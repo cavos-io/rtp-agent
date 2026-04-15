@@ -329,7 +329,13 @@ func (s *AgentServer) handleAssignment(ctx context.Context, req *livekit.JobAssi
 			if err := s.entrypointFnc(jobCtx); err != nil {
 				logger.Logger.Errorw("Job entrypoint failed", err, "jobId", req.Job.Id)
 			}
-			// Job done — signal back to AVAILABLE so the next dispatch can be received
+			// Job done — clean up activeJobs to free memory
+			s.mu.Lock()
+			delete(s.activeJobs, req.Job.Id)
+			s.mu.Unlock()
+			fmt.Printf("   🧹 Job cleaned up: %s\n", req.Job.Id)
+
+			// Signal back to AVAILABLE so the next dispatch can be received
 			if err := s.sendAvailable(); err != nil {
 				logger.Logger.Warnw("Failed to send available after job", err)
 			}

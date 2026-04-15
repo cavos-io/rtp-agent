@@ -23,11 +23,12 @@ func NewSimpleVAD(threshold float64) *SimpleVAD {
 
 func (v *SimpleVAD) Stream(ctx context.Context) (VADStream, error) {
 	return &simpleVADStream{
-		ctx:         ctx,
-		threshold:   v.Threshold,
-		events:      make(chan *VADEvent, 10),
-		startFrames: 3,  // require 3 consecutive frames above threshold (~60ms at 20ms/frame)
-		stopFrames:  50, // require 50 consecutive frames below threshold (~1s silence to stop)
+		ctx:             ctx,
+		threshold:       v.Threshold,
+		events:          make(chan *VADEvent, 10),
+		startFrames:     3,   // require 3 consecutive frames above threshold (~60ms at 20ms/frame)
+		stopFrames:      50,  // require 50 consecutive frames below threshold (~1s silence to stop)
+		maxSpeechFrames: 500, // force EndOfSpeech after 10s of continuous speech (500 × 20ms)
 	}, nil
 }
 
@@ -42,6 +43,12 @@ type simpleVADStream struct {
 	belowCount  int // consecutive frames below threshold
 	startFrames int // frames needed to start speaking (debounce)
 	stopFrames  int // frames needed to stop speaking (debounce)
+
+	// Max speech duration: force EndOfSpeech after this many frames of
+	// continuous speech (prevents indefinite buffering from continuous audio).
+	// At 20ms/frame: 500 frames = 10 seconds.
+	speechFrames    int
+	maxSpeechFrames int
 }
 
 func (s *simpleVADStream) PushFrame(frame *model.AudioFrame) error {
@@ -71,14 +78,29 @@ func (s *simpleVADStream) PushFrame(frame *model.AudioFrame) error {
 		s.belowCount = 0
 		if !s.speaking && s.aboveCount >= s.startFrames {
 			s.speaking = true
+			s.speechFrames = 0
 			fmt.Printf("🗣️  [VAD] Speech START at frame #%d (rms=%.6f, %d consecutive frames)\n", c, rms, s.aboveCount)
 			s.events <- &VADEvent{Type: VADEventStartOfSpeech, Speaking: true}
+		}
+		if s.speaking {
+			s.speechFrames++
+			// Force EndOfSpeech after max duration to prevent indefinite buffering
+			if s.maxSpeechFrames > 0 && s.speechFrames >= s.maxSpeechFrames {
+				s.speaking = false
+				s.speechFrames = 0
+				fmt.Printf("🔇 [VAD] Speech END (max duration %ds) at frame #%d\n", s.maxSpeechFrames/50, c)
+				s.events <- &VADEvent{Type: VADEventEndOfSpeech, Speaking: false}
+			}
 		}
 	} else {
 		s.belowCount++
 		s.aboveCount = 0
+		if s.speaking {
+			s.speechFrames++
+		}
 		if s.speaking && s.belowCount >= s.stopFrames {
 			s.speaking = false
+			s.speechFrames = 0
 			fmt.Printf("🔇 [VAD] Speech END at frame #%d (rms=%.6f, %d consecutive silent frames)\n", c, rms, s.belowCount)
 			s.events <- &VADEvent{Type: VADEventEndOfSpeech, Speaking: false}
 		}

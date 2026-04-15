@@ -32,6 +32,8 @@ type PipelineAgent struct {
 	cancel context.CancelFunc
 
 	PublishAudio func(frame *model.AudioFrame) error
+
+	greetingInProgress bool // suppress VAD interruptions during initial greeting
 }
 
 func NewPipelineAgent(
@@ -91,12 +93,23 @@ func (va *PipelineAgent) run(ctx context.Context) {
 	go va.vadLoop(vadStream)
 	go va.sttLoop(sttStream)
 
-	// Send initial greeting so the agent introduces itself immediately.
-	// This also lets us verify the LLM→TTS→transcript pipeline end-to-end
-	// without waiting for the user to speak.
+	// Send initial greeting — runs synchronously in a goroutine so the
+	// audio processing loop can start immediately. During the greeting,
+	// VAD interruptions are suppressed to prevent silence/noise from
+	// cancelling the greeting before audio is published.
 	go func() {
-		time.Sleep(2 * time.Second)
-		fmt.Println("👋 [Pipeline] Sending initial greeting...")
+		select {
+		case <-time.After(2 * time.Second):
+		case <-ctx.Done():
+			return // session ended before greeting
+		}
+		fmt.Println("👋 [Pipeline] Sending initial greeting (interruptions suppressed)...")
+
+		// Suppress VAD interruptions during greeting
+		va.mu.Lock()
+		va.greetingInProgress = true
+		va.mu.Unlock()
+
 		va.chatCtx.Append(&llm.ChatMessage{
 			Role: llm.ChatRoleUser,
 			Content: []llm.ChatContent{
@@ -104,6 +117,11 @@ func (va *PipelineAgent) run(ctx context.Context) {
 			},
 		})
 		va.generateReply()
+
+		va.mu.Lock()
+		va.greetingInProgress = false
+		va.mu.Unlock()
+		fmt.Println("👋 [Pipeline] Greeting complete, interruptions enabled")
 	}()
 
 	fmt.Println("🎧 [Pipeline] Audio processing loop running...")
@@ -138,15 +156,20 @@ func (va *PipelineAgent) vadLoop(stream vad.VADStream) {
 			logger.Logger.Infow("User started speaking")
 			va.session.UpdateUserState(UserStateSpeaking)
 
-			// Interrupt ongoing agent speech/generation
+			// Interrupt ongoing agent speech/generation — but NOT during greeting
 			va.mu.Lock()
-			if va.cancel != nil {
+			if va.greetingInProgress {
+				fmt.Println("🛡️ [VAD] Interrupt suppressed — greeting in progress")
+				va.mu.Unlock()
+			} else if va.cancel != nil {
 				va.cancel()
 				ctx, cancel := context.WithCancel(context.Background())
 				va.ctx = ctx
 				va.cancel = cancel
+				va.mu.Unlock()
+			} else {
+				va.mu.Unlock()
 			}
-			va.mu.Unlock()
 		} else if ev.Type == vad.VADEventEndOfSpeech {
 			fmt.Println("🔇 [VAD] User stopped speaking")
 			logger.Logger.Infow("User stopped speaking")
