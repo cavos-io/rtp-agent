@@ -401,7 +401,16 @@ func (s *AgentSession) Stop(ctx context.Context) error {
 
 	if s.Assistant != nil {
 		s.Assistant.cancel()
+		s.Assistant = nil
 	}
+
+	// Nil out all references to allow GC
+	s.STT = nil
+	s.VAD = nil
+	s.LLM = nil
+	s.TTS = nil
+	s.Tools = nil
+	s.MetricsCollector = nil
 
 	s.started = false
 	return nil

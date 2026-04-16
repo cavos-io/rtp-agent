@@ -474,7 +474,13 @@ func (rio *RoomIO) Close() error {
 		} else {
 			fmt.Printf("💾 [RoomIO] Recording saved: %s\n", rio.Recorder.OutPath)
 		}
+		rio.Recorder = nil
 	}
+
+	// Nil out all references to allow GC
+	rio.Room = nil
+	rio.AgentSession = nil
+	rio.preConnectAudio = nil
 	fmt.Println("🧹 [RoomIO] Resources cleaned up")
 	return nil
 }

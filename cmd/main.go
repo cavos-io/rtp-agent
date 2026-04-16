@@ -8,7 +8,10 @@ import (
 	"net/http"
 	_ "net/http/pprof"
 	"os"
+	"runtime"
+	"runtime/debug"
 	"strings"
+	"time"
 
 	"github.com/cavos-io/rtp-agent/adapter/elevenlabs"
 	oaiadapter "github.com/cavos-io/rtp-agent/adapter/openai"
@@ -216,7 +219,36 @@ Jangan bertele-tele, maksimal 2-3 kalimat per respons.`},
 		if roomIO.Recorder != nil && roomIO.Recorder.OutPath != "" {
 			fmt.Printf("🎙️ Recording: %s\n", roomIO.Recorder.OutPath)
 		}
-		fmt.Printf("✅ Agent session ended for room: %s\n", jobCtx.Job.Room.Name)
+
+		// Explicitly disconnect Room to free all pion resources
+		// (TURN client, DataChannel, ICE agent, SCTP).
+		jobCtx.Shutdown("session ended")
+		fmt.Println("🔌 Room.Disconnect() called")
+
+		// Save room name before nilling references
+		roomName := jobCtx.Job.Room.Name
+
+		// Nil out references so GC can collect everything
+		session.Room = nil
+		session.ChatCtx = nil
+		session.Agent = nil
+		session.Assistant = nil
+		roomIO = nil
+		session = nil
+		jobCtx = nil
+
+		// Wait for pion async cleanup to finish.
+		// engine.Close() runs PeerConnection teardown in a goroutine —
+		// TURN, ICE, DTLS, SCTP, DataChannel all need time to close.
+		fmt.Println("⏳ Waiting for pion cleanup...")
+		time.Sleep(3 * time.Second)
+
+		// Force GC to reclaim memory after pion cleanup is done
+		runtime.GC()
+		debug.FreeOSMemory()
+		fmt.Println("🧹 GC + FreeOSMemory done")
+
+		fmt.Printf("✅ Agent session ended for room: %s\n", roomName)
 		return nil
 
 	}, nil, nil)
