@@ -38,6 +38,7 @@ func PerformLLMInference(ctx context.Context, l llm.LLM, chatCtx *llm.ChatContex
 	go func() {
 		defer close(data.TextCh)
 		defer close(data.FunctionCh)
+		defer close(data.FullTextCh) // must close so drain goroutines can exit
 		defer stream.Close()
 
 		var sb strings.Builder
