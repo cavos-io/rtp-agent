@@ -80,9 +80,21 @@ type AgentInput struct {
 	Video VideoInput
 }
 
+type ParticipantReference interface {
+	Identity() string
+	SID() string
+}
+
+type MediaPublisher interface {
+	Identity() string
+	PublishData(data []byte, topic string, destinationSIDs []string) error
+	SetAttributes(attrs map[string]string) error
+}
+
 type AgentOutput struct {
 	Audio         AudioOutput
 	Transcription TextOutput
 	Video         VideoOutput
+	Publisher     MediaPublisher
 }
 

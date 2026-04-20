@@ -2,7 +2,6 @@ package silero_vad
 
 import (
 	"context"
-	"fmt"
 
 	"github.com/cavos-io/rtp-agent/core/vad"
 )
@@ -25,6 +24,11 @@ func NewSileroVAD(opts SileroVADOptions) *SileroVAD {
 }
 
 func (v *SileroVAD) Stream(ctx context.Context) (vad.VADStream, error) {
-	return nil, fmt.Errorf("native silero onnx vad is unsupported in this go port; use simple_vad")
+	backend := vad.NewEnhancedVAD(vad.EnhancedVADOptions{
+		ActivationThreshold: v.Options.ActivationThreshold,
+		MinSpeechDuration:   v.Options.MinSpeechDuration,
+		MinSilenceDuration:  v.Options.MinSilenceDuration,
+	})
+	return backend.Stream(ctx)
 }
 

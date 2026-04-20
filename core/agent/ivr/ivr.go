@@ -10,7 +10,7 @@ import (
 	"github.com/cavos-io/rtp-agent/core/beta"
 	"github.com/cavos-io/rtp-agent/library/logger"
 	"github.com/livekit/protocol/livekit"
-	lksdk "github.com/livekit/server-sdk-go/v2"
+	"google.golang.org/protobuf/proto"
 )
 
 // UserState represents the user's state in the session (mirrored from agent package)
@@ -40,11 +40,10 @@ type UserInputTranscribedEvent struct {
 // IVRSession interface defines the methods needed by IVRActivity from AgentSession
 type IVRSession interface {
 	GenerateReply(ctx context.Context, userInput string, allowInterruptions bool) (any, error)
-	GetDataPublisher() DataPublisher
-}
-
-type DataPublisher interface {
-	PublishDataPacket(pck lksdk.DataPacket, opts ...lksdk.DataPublishOption) error
+	GetPublisher() interface {
+		Identity() string
+		PublishData(data []byte, topic string, destinationSIDs []string) error
+	}
 }
 
 type LoopDetector struct {
@@ -160,7 +159,7 @@ func NewIVRActivity(session IVRSession) *IVRActivity {
 }
 
 func (i *IVRActivity) Tools() []interface{} {
-	return []interface{}{NewSendDTMFTool(i.session.GetDataPublisher())}
+	return []interface{}{NewSendDTMFTool(i.session.GetPublisher())}
 }
 
 func (i *IVRActivity) Start() {
@@ -240,10 +239,14 @@ func (i *IVRActivity) onSilenceDetected() {
 
 // SendDTMFTool implementation (mirrored from beta tools to avoid cycle)
 type SendDTMFTool struct {
-	publisher DataPublisher
+	publisher interface {
+		PublishData(data []byte, topic string, destinationSIDs []string) error
+	}
 }
 
-func NewSendDTMFTool(publisher DataPublisher) *SendDTMFTool {
+func NewSendDTMFTool(publisher interface {
+	PublishData(data []byte, topic string, destinationSIDs []string) error
+}) *SendDTMFTool {
 	return &SendDTMFTool{
 		publisher: publisher,
 	}
@@ -301,10 +304,13 @@ func (t *SendDTMFTool) Execute(ctx context.Context, args any) (any, error) {
 			return "", err
 		}
 
-		err = t.publisher.PublishDataPacket(&livekit.SipDTMF{
+		dtmf := &livekit.SipDTMF{
 			Code:  uint32(code),
 			Digit: string(event),
-		}, lksdk.WithDataPublishReliable(true))
+		}
+		
+		data, _ := proto.Marshal(dtmf)
+		err = t.publisher.PublishData(data, "", nil)
 		if err != nil {
 			return fmt.Sprintf("Failed to send DTMF event: %s. Error: %v", event, err), nil
 		}

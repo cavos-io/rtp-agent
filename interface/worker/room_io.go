@@ -479,7 +479,49 @@ func NewRoomIO(room *lksdk.Room, session *agent.AgentSession, opts RoomOptions) 
 		session.Output.Video = rio
 	}
 
+	// 	// GAP-008: Register the RoomIO as a MediaPublisher to decouple AgentSession from Room
+	session.Output.Publisher = rio
+
 	return rio
+}
+
+// --- agent.MediaPublisher Implementation ---
+func (rio *RoomIO) Identity() string {
+	rio.mu.Lock()
+	defer rio.mu.Unlock()
+	if rio.Room == nil || rio.Room.LocalParticipant == nil {
+		return ""
+	}
+	return rio.Room.LocalParticipant.Identity()
+}
+
+func (rio *RoomIO) PublishData(data []byte, topic string, destinationSIDs []string) error {
+	rio.mu.Lock()
+	defer rio.mu.Unlock()
+	if rio.Room == nil || rio.Room.LocalParticipant == nil {
+		return fmt.Errorf("room not connected")
+	}
+	pkt := &lksdk.UserDataPacket{
+		Payload: data,
+		Topic:   topic,
+	}
+	opts := []lksdk.DataPublishOption{
+		lksdk.WithDataPublishReliable(true),
+	}
+	if len(destinationSIDs) > 0 {
+		opts = append(opts, lksdk.WithDataPublishDestination(destinationSIDs))
+	}
+	return rio.Room.LocalParticipant.PublishDataPacket(pkt, opts...)
+}
+
+func (rio *RoomIO) SetAttributes(attrs map[string]string) error {
+	rio.mu.Lock()
+	defer rio.mu.Unlock()
+	if rio.Room == nil || rio.Room.LocalParticipant == nil {
+		return fmt.Errorf("room not connected")
+	}
+	rio.Room.LocalParticipant.SetAttributes(attrs)
+	return nil
 }
 
 // --- agent.AudioInput Implementation ---
