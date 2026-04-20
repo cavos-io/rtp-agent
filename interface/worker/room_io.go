@@ -19,6 +19,7 @@ import (
 	"github.com/pion/rtp/codecs"
 	"github.com/pion/webrtc/v4"
 	"github.com/pion/webrtc/v4/pkg/media"
+	"github.com/livekit/protocol/livekit"
 )
 
 type AudioDecoder interface {
@@ -156,6 +157,9 @@ type RoomOptions struct {
 	VideoOutput         *VideoOutputOptions
 	TextInput           *TextInputOptions
 	TextOutput          *TextOutputOptions
+	APIKey              string
+	APISecret           string
+	URL                 string
 	ParticipantKinds    []lksdk.ParticipantKind
 	ParticipantIdentity string
 	CloseOnDisconnect   bool
@@ -215,9 +219,10 @@ type RoomTextOutput struct {
 	textCh              chan string
 	ctx                 context.Context
 	cancel              context.CancelFunc
+	roomService         *lksdk.RoomServiceClient
 }
 
-func NewRoomTextOutput(room *lksdk.Room, participantIdentity string) *RoomTextOutput {
+func NewRoomTextOutput(room *lksdk.Room, participantIdentity string, roomService *lksdk.RoomServiceClient) *RoomTextOutput {
 	ctx, cancel := context.WithCancel(context.Background())
 	t := &RoomTextOutput{
 		room:                room,
@@ -225,6 +230,7 @@ func NewRoomTextOutput(room *lksdk.Room, participantIdentity string) *RoomTextOu
 		textCh:              make(chan string, 100),
 		ctx:                 ctx,
 		cancel:              cancel,
+		roomService:         roomService,
 	}
 	go t.worker()
 	return t
@@ -279,20 +285,38 @@ func (t *RoomTextOutput) worker() {
 				opts := lksdk.StreamTextOptions{
 					Topic: "lk-transcription",
 					Attributes: map[string]string{
-						"lk.segment_id": t.segmentID,
-						"lk.final":      "false",
+						"lk.segment_id":            t.segmentID,
+						"lk.transcription_final":  "false",
 					},
 				}
 
 				if t.trackID != "" {
-					opts.Attributes["lk.track_id"] = t.trackID
+					opts.Attributes["lk.transcribed_track_id"] = t.trackID
 				}
+				
+				// GAP-003: Add participant identity to attributes
+				opts.Attributes["lk.participant_identity"] = t.participantIdentity
 
 				t.writer = t.room.LocalParticipant.StreamText(opts)
+				if t.writer == nil && t.roomService != nil {
+					logger.Logger.Warnw("StreamText failed, falling back to server-side SendData for transcripts", errors.New("StreamText returned nil writer"))
+				}
 			}
 
 			if t.writer != nil {
 				t.writer.Write(text, nil)
+			} else if t.roomService != nil {
+				// Fallback: Send via server API
+				go func(content string) {
+					_, err := t.roomService.SendData(t.ctx, &livekit.SendDataRequest{
+						Room: t.room.Name(),
+						Data: []byte(content), // Should be formatted as JSON if payload is expected
+						Kind: livekit.DataPacket_RELIABLE,
+					})
+					if err != nil {
+						logger.Logger.Errorw("failed to send transcript fallback via server", err)
+					}
+				}(text)
 			}
 			t.mu.Unlock()
 			<-ticker.C
@@ -365,6 +389,7 @@ func NewRoomIO(room *lksdk.Room, session *agent.AgentSession, opts RoomOptions) 
 	}
 
 	rio.registerRoomCallbacks()
+	session.SetInfo(rio)
 
 	go rio.playoutLoop(context.Background())
 
@@ -400,9 +425,14 @@ func NewRoomIO(room *lksdk.Room, session *agent.AgentSession, opts RoomOptions) 
 		syncTranscription = opts.TextOutput.SyncTranscription
 	}
 
+	var roomService *lksdk.RoomServiceClient
+	if opts.APIKey != "" && opts.APISecret != "" && opts.URL != "" {
+		roomService = lksdk.NewRoomServiceClient(opts.URL, opts.APIKey, opts.APISecret)
+	}
+
 	if audioOutputEnabled {
 		if syncTranscription {
-			textOut := NewRoomTextOutput(room, rio.participantIdentity)
+			textOut := NewRoomTextOutput(room, rio.participantIdentity, roomService)
 			speedFactor := 1.0
 			if opts.TextOutput != nil && opts.TextOutput.TranscriptionSpeedFactor > 0 {
 				speedFactor = opts.TextOutput.TranscriptionSpeedFactor
@@ -416,13 +446,12 @@ func NewRoomIO(room *lksdk.Room, session *agent.AgentSession, opts RoomOptions) 
 			session.SetAudioOutput(rio.Recorder.RecordOutput(syncedAudio))
 			session.Output.Transcription = syncedText
 		} else {
-			session.SetAudioOutput(rio.Recorder.RecordOutput(rio))
 			if opts.TextOutput != nil && opts.TextOutput.Enabled {
-				session.Output.Transcription = NewRoomTextOutput(room, rio.participantIdentity)
+				session.Output.Transcription = NewRoomTextOutput(room, rio.participantIdentity, roomService)
 			}
 		}
 	} else if opts.TextOutput != nil && opts.TextOutput.Enabled {
-		session.Output.Transcription = NewRoomTextOutput(room, rio.participantIdentity)
+		session.Output.Transcription = NewRoomTextOutput(room, rio.participantIdentity, roomService)
 	}
 
 	videoOutputEnabled := false
@@ -447,6 +476,12 @@ func (rio *RoomIO) Stream() <-chan *model.AudioFrame {
 
 func (rio *RoomIO) OnAttached() {}
 func (rio *RoomIO) OnDetached() {}
+func (rio *RoomIO) LocalParticipantID() string {
+	if rio.Room != nil && rio.Room.LocalParticipant != nil {
+		return rio.Room.LocalParticipant.Identity()
+	}
+	return rio.participantIdentity
+}
 
 type RoomVideoInput struct {
 	rio *RoomIO
@@ -1062,7 +1097,7 @@ func (rio *RoomIO) Close() error {
 				logger.Logger.Errorw("failed to delete room", err)
 			}
 		} else if rio.Room != nil && rio.Room.LocalParticipant != nil {
-			logger.Logger.Warnw("DeleteRoomOnClose is true but no JobContext provided, disconnecting instead", nil)
+			logger.Logger.Warnw("DeleteRoomOnClose is true but no JobContext provided, disconnecting instead", errors.New("missing JobContext"))
 			rio.Room.Disconnect()
 		}
 	}
@@ -1101,6 +1136,17 @@ func (rio *RoomIO) registerRoomCallbacks() {
 				ParticipantID: participant.SID(),
 				Identity:      participant.Identity(),
 				Active:        true,
+				CreatedAt:     time.Now(),
+			})
+		}
+	}
+
+	rio.roomCallback.OnParticipantDisconnected = func(participant *lksdk.RemoteParticipant) {
+		if rio.AgentSession != nil && rio.AgentSession.Timeline != nil {
+			rio.AgentSession.Timeline.AddEvent(&agent.ParticipantActiveEvent{
+				ParticipantID: participant.SID(),
+				Identity:      participant.Identity(),
+				Active:        false,
 				CreatedAt:     time.Now(),
 			})
 		}

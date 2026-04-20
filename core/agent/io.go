@@ -86,3 +86,7 @@ type AgentOutput struct {
 	Video         VideoOutput
 }
 
+type SessionInfo interface {
+	LocalParticipantID() string
+}
+

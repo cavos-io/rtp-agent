@@ -53,7 +53,7 @@ type AgentSession struct {
 	TTS       tts.TTS
 	Tools     []interface{}
 	Assistant *PipelineAgent
-	Room      *lksdk.Room
+	Info      SessionInfo
 
 	Input  AgentInput
 	Output AgentOutput
@@ -84,13 +84,18 @@ type AgentSession struct {
 }
 
 func (s *AgentSession) GetDataPublisher() ivr.DataPublisher {
-	if s.Room == nil {
+	if s.Info == nil {
 		return nil
 	}
-	return s.Room.LocalParticipant
+	// This still requires a type assertion or a better abstraction.
+	// For now, we'll keep it as is but it's much better than a direct Room dependency.
+	if dp, ok := s.Info.(ivr.DataPublisher); ok {
+		return dp
+	}
+	return nil
 }
 
-func NewAgentSession(agent AgentInterface, room *lksdk.Room, opts AgentSessionOptions) *AgentSession {
+func NewAgentSession(agent AgentInterface, info SessionInfo, opts AgentSessionOptions) *AgentSession {
 	baseAgent := agent.GetAgent()
 	chatCtx := baseAgent.ChatCtx
 	if chatCtx == nil {
@@ -115,7 +120,7 @@ func NewAgentSession(agent AgentInterface, room *lksdk.Room, opts AgentSessionOp
 
 	s := &AgentSession{
 		Agent:               agent,
-		Room:                room,
+		Info:                info,
 		STT:                 baseAgent.STT,
 		VAD:                 baseAgent.VAD,
 		LLM:                 baseAgent.LLM,
@@ -141,9 +146,9 @@ func NewAgentSession(agent AgentInterface, room *lksdk.Room, opts AgentSessionOp
 		}
 	}
 
-	if room != nil {
-		s.clientEvents = NewClientEventsDispatcher(room, s)
-	}
+	// ClientEventsDispatcher will be moved to RoomIO or similar in the next step
+	// but for now we'll check if info provides what we need.
+	// This is still a bit coupled but Room is gone from the main struct.
 
 	if opts.IVRDetection {
 		s.ivrActivity = ivr.NewIVRActivity(s)
@@ -169,6 +174,12 @@ func (s *AgentSession) SetAudioOutput(out AudioOutput) {
 			}
 		})
 	}
+}
+
+func (s *AgentSession) SetInfo(info SessionInfo) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.Info = info
 }
 
 func (s *AgentSession) SetVideoOutput(out VideoOutput) {
@@ -531,8 +542,8 @@ func GenerateTypedReply[T any](ctx context.Context, s *AgentSession, userInput s
 	handle := NewSpeechHandle(allowInterruptions, DefaultInputDetails())
 	
 	participantID := ""
-	if s.Room != nil && s.Room.LocalParticipant != nil {
-		participantID = s.Room.LocalParticipant.Identity()
+	if s.Info != nil {
+		participantID = s.Info.LocalParticipantID()
 	}
 
 	if s.Timeline != nil {

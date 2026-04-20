@@ -5,9 +5,9 @@ import (
 	"context"
 	"encoding/binary"
 	"fmt"
-	"log"
 
 	"github.com/cavos-io/rtp-agent/core/stt"
+	"github.com/cavos-io/rtp-agent/library/logger"
 	"github.com/cavos-io/rtp-agent/model"
 	"github.com/sashabaranov/go-openai"
 )
@@ -39,7 +39,7 @@ func (s *OpenAISTT) Stream(ctx context.Context, language string) (stt.RecognizeS
 }
 
 func (s *OpenAISTT) Recognize(ctx context.Context, frames []*model.AudioFrame, language string) (*stt.SpeechEvent, error) {
-	log.Println("📤 [OpenAI-STT] Recognizing speech from audio frames...")
+	logger.Logger.Debugw("Recognizing speech from audio frames", "adapter", "openai-stt")
 	if len(frames) == 0 {
 		return nil, fmt.Errorf("no audio frames")
 	}
@@ -80,7 +80,7 @@ func (s *OpenAISTT) Recognize(ctx context.Context, frames []*model.AudioFrame, l
 	binary.Write(&wav, binary.LittleEndian, dataSize)
 	wav.Write(pcmData)
 
-	fmt.Printf("📤 [OpenAI-STT] Sending WAV: %d bytes (%d frames, %dHz, %dch)\n", wav.Len(), len(frames), sampleRate, numChannels)
+	logger.Logger.Debugw("Sending WAV to OpenAI", "size", wav.Len(), "frames", len(frames), "sampleRate", sampleRate, "channels", numChannels)
 
 	req := openai.AudioRequest{
 		Model:    s.model,
@@ -181,4 +181,3 @@ func encodePCMAsWAV(frames []*model.AudioFrame) ([]byte, error) {
 
 	return out.Bytes(), nil
 }
-

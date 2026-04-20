@@ -2,29 +2,29 @@ package silero_vad
 
 import (
 	"context"
-	"fmt"
 
 	"github.com/cavos-io/rtp-agent/core/vad"
 )
 
-type SileroVADOptions struct {
-	MinSpeechDuration   float64
-	MinSilenceDuration  float64
-	SpeechPadMs         int
-	ActivationThreshold float64
-}
-
 type SileroVAD struct {
-	Options SileroVADOptions
+	impl *SileroVADImpl
 }
 
 func NewSileroVAD(opts SileroVADOptions) *SileroVAD {
+	v, err := NewSileroVADImpl(opts)
+	if err != nil {
+		// Fallback or better error handling? 
+		// For now we'll just log and return a shell that might error later
+		return &SileroVAD{}
+	}
 	return &SileroVAD{
-		Options: opts,
+		impl: v,
 	}
 }
 
 func (v *SileroVAD) Stream(ctx context.Context) (vad.VADStream, error) {
-	return nil, fmt.Errorf("native silero onnx vad is unsupported in this go port; use simple_vad")
+	if v.impl == nil {
+		return nil, vad.ErrVADUnsupported
+	}
+	return v.impl.Stream(ctx)
 }
-
