@@ -104,24 +104,63 @@ func PerformLLMInference(ctx context.Context, l llm.LLM, chatCtx *llm.ChatContex
 		toolCalls := make([]*llm.FunctionToolCall, 0)
 		toolCallsByID := make(map[string]*llm.FunctionToolCall)
 		toolCallsByIndex := make(map[int]*llm.FunctionToolCall)
+		emittedByIndex := make(map[int]bool)
+
+		// Settle delay logic
+		const settleDelay = 50 * time.Millisecond
+		settleTimers := make(map[int]*time.Timer)
+		var timersMu sync.Mutex
+
+		finalizeAndEmit := func(idx int) {
+			timersMu.Lock()
+			if timer, ok := settleTimers[idx]; ok {
+				timer.Stop()
+				delete(settleTimers, idx)
+			}
+			if emittedByIndex[idx] {
+				timersMu.Unlock()
+				return
+			}
+			emittedByIndex[idx] = true
+			timersMu.Unlock()
+
+			fc := toolCallsByIndex[idx]
+			finalized := finalizeToolCall(fc, idx)
+			if finalized == nil {
+				return
+			}
+
+			logger.Logger.Debugw("Emitting finalized tool call (pipelined)",
+				"name", finalized.Name,
+				"call_id", finalized.CallID,
+				"index", idx,
+			)
+			data.FunctionCh <- finalized
+
+			// Capture event in RunResult
+			if rc := GetRunContext(ctx); rc != nil && rc.SpeechHandle != nil && rc.SpeechHandle.RunResult != nil {
+				rc.SpeechHandle.RunResult.AddEvent(&FunctionCallRunEvent{
+					Item: &llm.FunctionCall{
+						CallID:    finalized.CallID,
+						Name:      finalized.Name,
+						Arguments: finalized.Arguments,
+						Extra:     finalized.Extra,
+						CreatedAt: time.Now(),
+					},
+				})
+			}
+		}
 
 		var chunkCount int
 		for {
 			chunk, err := stream.Next()
 			if err != nil {
-				logger.Logger.Debugw("LLM stream ended",
-					"chunks_received", chunkCount,
-					"text_length", len(data.GeneratedText),
-					"tool_calls_accumulated", len(toolCalls),
-					"reason", err.Error(),
-				)
 				break
 			}
 			chunkCount++
 
 			if data.TTFT == 0 {
 				data.TTFT = time.Since(startTime)
-				logger.Logger.Debugw("LLM first token received", "ttft_ms", data.TTFT.Milliseconds())
 			}
 
 			if chunk.Delta != nil {
@@ -130,60 +169,53 @@ func PerformLLMInference(ctx context.Context, l llm.LLM, chatCtx *llm.ChatContex
 					data.TextCh <- chunk.Delta.Content
 				}
 				if len(chunk.Delta.ToolCalls) > 0 {
-					logger.Logger.Debugw("LLM tool call delta received",
-						"tool_calls_in_delta", len(chunk.Delta.ToolCalls),
-						"accumulated_so_far", len(toolCalls),
-					)
 					for _, fc := range chunk.Delta.ToolCalls {
 						mergeToolCallDelta(&toolCalls, toolCallsByID, toolCallsByIndex, fc)
+						
+						idx, hasIndex := extractToolCallIndex(fc.Extra)
+						if hasIndex {
+							timersMu.Lock()
+							if timer, ok := settleTimers[idx]; ok {
+								timer.Stop()
+							}
+							
+							// Reset/Start settle timer for this index
+							idxVal := idx
+							settleTimers[idx] = time.AfterFunc(settleDelay, func() {
+								finalizeAndEmit(idxVal)
+							})
+							timersMu.Unlock()
+						}
 					}
 				}
 			}
 		}
 
-		logger.Logger.Infow("LLM stream complete",
-			"total_text_length", len(data.GeneratedText),
-			"total_tool_calls", len(toolCalls),
-			"total_chunks", chunkCount,
-			"ttft_ms", data.TTFT.Milliseconds(),
-			"elapsed_ms", time.Since(startTime).Milliseconds(),
-		)
+		// Flush remaining timers and emit any pending tools
+		timersMu.Lock()
+		activeIndices := make([]int, 0, len(settleTimers))
+		for idx := range settleTimers {
+			activeIndices = append(activeIndices, idx)
+		}
+		timersMu.Unlock()
+
+		for _, idx := range activeIndices {
+			finalizeAndEmit(idx)
+		}
+
+		// Ensure all tools are emitted if any were missed by the stream logic/timers
+		for idx := range toolCallsByIndex {
+			if !emittedByIndex[idx] {
+				finalizeAndEmit(idx)
+			}
+		}
 
 		if data.GeneratedText != "" {
-			logger.Logger.Debugw("Emitting chat message run event", "text_length", len(data.GeneratedText))
 			if rc := GetRunContext(ctx); rc != nil && rc.SpeechHandle != nil && rc.SpeechHandle.RunResult != nil {
 				rc.SpeechHandle.RunResult.AddEvent(&ChatMessageRunEvent{
 					Item: &llm.ChatMessage{
 						Role:      llm.ChatRoleAssistant,
 						Content:   []llm.ChatContent{{Text: data.GeneratedText}},
-						CreatedAt: time.Now(),
-					},
-				})
-			}
-		}
-
-		for idx, fc := range toolCalls {
-			finalized := finalizeToolCall(fc, idx)
-			if finalized == nil {
-				logger.Logger.Debugw("Tool call skipped after finalization", "index", idx)
-				continue
-			}
-			logger.Logger.Debugw("Emitting finalized tool call",
-				"name", finalized.Name,
-				"call_id", finalized.CallID,
-				"arguments_length", len(finalized.Arguments),
-			)
-			data.FunctionCh <- finalized
-
-			// Capture event in RunResult if attached to SpeechHandle
-			if rc := GetRunContext(ctx); rc != nil && rc.SpeechHandle != nil && rc.SpeechHandle.RunResult != nil {
-				logger.Logger.Debugw("Emitting function call run event", "name", finalized.Name, "call_id", finalized.CallID)
-				rc.SpeechHandle.RunResult.AddEvent(&FunctionCallRunEvent{
-					Item: &llm.FunctionCall{
-						CallID:    finalized.CallID,
-						Name:      finalized.Name,
-						Arguments: finalized.Arguments,
-						Extra:     finalized.Extra,
 						CreatedAt: time.Now(),
 					},
 				})
