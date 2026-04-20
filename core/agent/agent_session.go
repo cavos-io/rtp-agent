@@ -18,6 +18,7 @@ import (
 	"github.com/cavos-io/rtp-agent/model"
 	"github.com/livekit/protocol/livekit"
 	lksdk "github.com/livekit/server-sdk-go/v2"
+	"google.golang.org/protobuf/proto"
 )
 
 type GenerateReplyOpts struct {
@@ -27,14 +28,8 @@ type GenerateReplyOpts struct {
 // sendChatToPlayground tries multiple approaches to get a message
 // into the Playground chat panel. We send all three approaches
 // simultaneously to find out which one the Playground accepts.
-func sendChatToPlayground(room *lksdk.Room, msgID string, text string) {
+func sendChatToPlayground(publisher MediaPublisher, msgID string, text string) {
 	topic := "lk.chat"
-
-	// Approach A: text stream (SendText) — required by @livekit/components-react >= 2.x
-	room.LocalParticipant.SendText(text, lksdk.StreamTextOptions{
-		Topic:    topic,
-		StreamId: &msgID,
-	})
 
 	// Approach B: UserDataPacket + topic "lk.chat" + LiveKit JSON format
 	payload, _ := json.Marshal(map[string]interface{}{
@@ -42,8 +37,7 @@ func sendChatToPlayground(room *lksdk.Room, msgID string, text string) {
 		"message":   text,
 		"timestamp": time.Now().UnixMilli(),
 	})
-	pkt := &lksdk.UserDataPacket{Payload: payload, Topic: topic}
-	_ = room.LocalParticipant.PublishDataPacket(pkt, lksdk.WithDataPublishReliable(true))
+	_ = publisher.PublishData(payload, topic, nil)
 }
 
 type AgentSessionOptions struct {
@@ -113,11 +107,11 @@ type AgentSession struct {
 	cancel context.CancelFunc
 }
 
-func (s *AgentSession) GetDataPublisher() ivr.DataPublisher {
-	if s.Room == nil {
-		return nil
-	}
-	return s.Room.LocalParticipant
+func (s *AgentSession) GetPublisher() interface {
+	Identity() string
+	PublishData(data []byte, topic string, destinationSIDs []string) error
+} {
+	return s.Output.Publisher
 }
 
 // transcriptionPacket wraps livekit.Transcription to implement the DataPacket interface.
@@ -493,7 +487,6 @@ func (s *AgentSession) UpdateAgentState(state AgentState) {
 	s.mu.Lock()
 	oldState := s.AgentState
 	s.AgentState = state
-	room := s.Room
 	s.mu.Unlock()
 
 	if oldState != state {
@@ -514,11 +507,9 @@ func (s *AgentSession) UpdateAgentState(state AgentState) {
 			s.ivrActivity.OnAgentStateChanged(ivr.AgentState(oldState), ivr.AgentState(state))
 		}
 
-		// Publish state to Playground via LiveKit participant attributes.
-		// The Playground reads "lk.agent.state" to display agent status and
-		// resolve "Waiting for agent audio track...".
-		if room != nil && room.LocalParticipant != nil {
-			room.LocalParticipant.SetAttributes(map[string]string{
+		// GAP-008: Use abstracted Publisher to update attributes
+		if s.Output.Publisher != nil {
+			_ = s.Output.Publisher.SetAttributes(map[string]string{
 				"lk.agent.state": string(state),
 			})
 		}
@@ -777,21 +768,20 @@ func (s *AgentSession) PublishUserTranscript(text string) {
 		return
 	}
 	s.mu.Lock()
-	room := s.Room
 	userIdentity := s.RemoteUserIdentity
 	userTrackSID := s.RemoteTrackSID
 	s.mu.Unlock()
 
-	if room == nil || room.LocalParticipant == nil {
+	if s.Output.Publisher == nil {
 		return
 	}
 
 	now := time.Now()
-	sendChatToPlayground(room, fmt.Sprintf("usr-%d", now.UnixNano()), text)
+	sendChatToPlayground(s.Output.Publisher, fmt.Sprintf("usr-%d", now.UnixNano()), text)
 
 	// Transcription packet — displayed as real-time subtitle overlay.
 	nowMs := uint64(now.UnixMilli())
-	tpkt := &transcriptionPacket{t: &livekit.Transcription{
+	tpkt := &livekit.Transcription{
 		TranscribedParticipantIdentity: userIdentity,
 		TrackId:                        userTrackSID,
 		Segments: []*livekit.TranscriptionSegment{{
@@ -801,8 +791,11 @@ func (s *AgentSession) PublishUserTranscript(text string) {
 			EndTime:   nowMs,
 			Final:     true,
 		}},
-	}}
-	if err := room.LocalParticipant.PublishDataPacket(tpkt, lksdk.WithDataPublishReliable(true)); err != nil {
+	}
+	
+	// GAP-008: Use abstracted Publisher to publish transcription packet
+	data, _ := proto.Marshal(tpkt)
+	if err := s.Output.Publisher.PublishData(data, "lk.transcription", nil); err != nil {
 		logger.Logger.Warnw("Failed to publish user transcription", err)
 	} else {
 		fmt.Printf("💬 [Transcript] User %q: %q\n", userIdentity, text)
@@ -816,21 +809,20 @@ func (s *AgentSession) PublishAgentTranscript(text string) {
 		return
 	}
 	s.mu.Lock()
-	room := s.Room
 	agentTrackSID := s.AgentTrackSID
 	s.mu.Unlock()
 
-	if room == nil || room.LocalParticipant == nil {
+	if s.Output.Publisher == nil {
 		return
 	}
 
-	agentIdentity := room.LocalParticipant.Identity()
+	agentIdentity := s.Output.Publisher.Identity()
 	now := time.Now()
-	sendChatToPlayground(room, fmt.Sprintf("agt-%d", now.UnixNano()), text)
+	sendChatToPlayground(s.Output.Publisher, fmt.Sprintf("agt-%d", now.UnixNano()), text)
 
 	// Transcription packet — displayed as real-time subtitle overlay.
 	nowMs := uint64(now.UnixMilli())
-	tpkt := &transcriptionPacket{t: &livekit.Transcription{
+	tpkt := &livekit.Transcription{
 		TranscribedParticipantIdentity: agentIdentity,
 		TrackId:                        agentTrackSID,
 		Segments: []*livekit.TranscriptionSegment{{
@@ -840,8 +832,10 @@ func (s *AgentSession) PublishAgentTranscript(text string) {
 			EndTime:   nowMs,
 			Final:     true,
 		}},
-	}}
-	if err := room.LocalParticipant.PublishDataPacket(tpkt, lksdk.WithDataPublishReliable(true)); err != nil {
+	}
+	
+	data, _ := proto.Marshal(tpkt)
+	if err := s.Output.Publisher.PublishData(data, "lk.transcription", nil); err != nil {
 		logger.Logger.Warnw("Failed to publish agent transcription", err)
 	} else {
 		fmt.Printf("💬 [Transcript] Agent: %q\n", text)
