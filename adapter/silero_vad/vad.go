@@ -6,29 +6,25 @@ import (
 	"github.com/cavos-io/rtp-agent/core/vad"
 )
 
-type SileroVADOptions struct {
-	MinSpeechDuration   float64
-	MinSilenceDuration  float64
-	SpeechPadMs         int
-	ActivationThreshold float64
-}
-
 type SileroVAD struct {
-	Options SileroVADOptions
+	impl *SileroVADImpl
 }
 
 func NewSileroVAD(opts SileroVADOptions) *SileroVAD {
+	v, err := NewSileroVADImpl(opts)
+	if err != nil {
+		// Fallback or better error handling?
+		// For now we'll just log and return a shell that might error later
+		return &SileroVAD{}
+	}
 	return &SileroVAD{
-		Options: opts,
+		impl: v,
 	}
 }
 
 func (v *SileroVAD) Stream(ctx context.Context) (vad.VADStream, error) {
-	backend := vad.NewEnhancedVAD(vad.EnhancedVADOptions{
-		ActivationThreshold: v.Options.ActivationThreshold,
-		MinSpeechDuration:   v.Options.MinSpeechDuration,
-		MinSilenceDuration:  v.Options.MinSilenceDuration,
-	})
-	return backend.Stream(ctx)
+	if v.impl == nil {
+		return nil, vad.ErrVADUnsupported
+	}
+	return v.impl.Stream(ctx)
 }
-

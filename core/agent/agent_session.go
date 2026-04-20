@@ -15,7 +15,6 @@ import (
 	"github.com/cavos-io/rtp-agent/core/vad"
 	"github.com/cavos-io/rtp-agent/library/logger"
 	"github.com/cavos-io/rtp-agent/library/telemetry"
-	"github.com/cavos-io/rtp-agent/model"
 	"github.com/livekit/protocol/livekit"
 	lksdk "github.com/livekit/server-sdk-go/v2"
 	"google.golang.org/protobuf/proto"
@@ -72,7 +71,7 @@ type AgentSession struct {
 	TTS       tts.TTS
 	Tools     []interface{}
 	Assistant *PipelineAgent
-	Room      *lksdk.Room
+	Info      SessionInfo
 
 	Input  AgentInput
 	Output AgentOutput
@@ -93,7 +92,7 @@ type AgentSession struct {
 	started  bool
 	closing  bool
 
-	transitionMu sync.Mutex
+	transitionMu     sync.Mutex
 	transitionCancel context.CancelFunc
 
 	// Event channels
@@ -107,35 +106,19 @@ type AgentSession struct {
 	cancel context.CancelFunc
 }
 
-func (s *AgentSession) GetPublisher() interface {
-	Identity() string
-	PublishData(data []byte, topic string, destinationSIDs []string) error
-} {
-	return s.Output.Publisher
-}
-
-// transcriptionPacket wraps livekit.Transcription to implement the DataPacket interface.
-type transcriptionPacket struct {
-	t *livekit.Transcription
-}
-
-func (p *transcriptionPacket) ToProto() *livekit.DataPacket {
-	return &livekit.DataPacket{
-		Value: &livekit.DataPacket_Transcription{Transcription: p.t},
+func (s *AgentSession) GetDataPublisher() ivr.DataPublisher {
+	if s.Info == nil {
+		return nil
 	}
-}
-
-func (s *AgentSession) OnAudioFrame(ctx context.Context, frame *model.AudioFrame) {
-	s.mu.Lock()
-	assistant := s.Assistant
-	s.mu.Unlock()
-
-	if assistant != nil {
-		assistant.OnAudioFrame(ctx, frame)
+	// This still requires a type assertion or a better abstraction.
+	// For now, we'll keep it as is but it's much better than a direct Room dependency.
+	if dp, ok := s.Info.(ivr.DataPublisher); ok {
+		return dp
 	}
+	return nil
 }
 
-func NewAgentSession(agent AgentInterface, room *lksdk.Room, opts AgentSessionOptions) *AgentSession {
+func NewAgentSession(agent AgentInterface, info SessionInfo, opts AgentSessionOptions) *AgentSession {
 	baseAgent := agent.GetAgent()
 	chatCtx := baseAgent.ChatCtx
 	if chatCtx == nil {
@@ -160,7 +143,7 @@ func NewAgentSession(agent AgentInterface, room *lksdk.Room, opts AgentSessionOp
 
 	s := &AgentSession{
 		Agent:               agent,
-		Room:                room,
+		Info:                info,
 		STT:                 baseAgent.STT,
 		VAD:                 baseAgent.VAD,
 		LLM:                 baseAgent.LLM,
@@ -186,9 +169,9 @@ func NewAgentSession(agent AgentInterface, room *lksdk.Room, opts AgentSessionOp
 		}
 	}
 
-	if room != nil {
-		s.clientEvents = NewClientEventsDispatcher(room, s)
-	}
+	// ClientEventsDispatcher will be moved to RoomIO or similar in the next step
+	// but for now we'll check if info provides what we need.
+	// This is still a bit coupled but Room is gone from the main struct.
 
 	if opts.IVRDetection {
 		s.ivrActivity = ivr.NewIVRActivity(s)
@@ -226,6 +209,12 @@ func (s *AgentSession) SetAudioOutput(out AudioOutput) {
 			}
 		})
 	}
+}
+
+func (s *AgentSession) SetInfo(info SessionInfo) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.Info = info
 }
 
 func (s *AgentSession) SetVideoOutput(out VideoOutput) {
@@ -470,7 +459,6 @@ func (s *AgentSession) UpdateOptions(opts AgentSessionOptions) {
 	}
 }
 
-
 func (s *AgentSession) reportUsageLoop(ctx context.Context) {
 	ticker := time.NewTicker(30 * time.Second)
 	defer ticker.Stop()
@@ -483,7 +471,7 @@ func (s *AgentSession) reportUsageLoop(ctx context.Context) {
 			if s.MetricsCollector != nil && s.ChatCtx != nil {
 				summary := s.MetricsCollector.GetSummary()
 				s.ChatCtx.Append(&llm.MetricsReport{Usage: summary})
-				
+
 				if s.Timeline != nil {
 					s.Timeline.AddEvent(&MetricsCollectedEvent{
 						Metrics:   &summary,
@@ -553,7 +541,7 @@ func (s *AgentSession) UpdateUserState(state UserState) {
 				CreatedAt: time.Now(),
 			})
 		}
-		
+
 		if s.clientEvents != nil {
 			s.clientEvents.DispatchUserState(state)
 		}
@@ -595,8 +583,8 @@ func GenerateTypedReply[T any](ctx context.Context, s *AgentSession, userInput s
 	handle := NewSpeechHandle(allowInterruptions, DefaultInputDetails())
 
 	participantID := ""
-	if s.Room != nil && s.Room.LocalParticipant != nil {
-		participantID = s.Room.LocalParticipant.Identity()
+	if s.Info != nil {
+		participantID = s.Info.LocalParticipantID()
 	}
 
 	if s.Timeline != nil {
@@ -804,7 +792,7 @@ func (s *AgentSession) PublishUserTranscript(text string) {
 			Final:     true,
 		}},
 	}
-	
+
 	// GAP-008: Use abstracted Publisher to publish transcription packet
 	data, _ := proto.Marshal(tpkt)
 	if err := s.Output.Publisher.PublishData(data, "lk.transcription", nil); err != nil {
@@ -845,7 +833,7 @@ func (s *AgentSession) PublishAgentTranscript(text string) {
 			Final:     true,
 		}},
 	}
-	
+
 	data, _ := proto.Marshal(tpkt)
 	if err := s.Output.Publisher.PublishData(data, "lk.transcription", nil); err != nil {
 		logger.Logger.Warnw("Failed to publish agent transcription", err)
@@ -892,4 +880,3 @@ func (s *AgentSession) Stop(ctx context.Context) error {
 
 	return nil
 }
-

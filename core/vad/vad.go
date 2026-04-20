@@ -2,6 +2,7 @@ package vad
 
 import (
 	"context"
+	"errors"
 
 	"github.com/cavos-io/rtp-agent/model"
 )
@@ -12,6 +13,10 @@ const (
 	VADEventStartOfSpeech VADEventType = "start_of_speech"
 	VADEventInferenceDone VADEventType = "inference_done"
 	VADEventEndOfSpeech   VADEventType = "end_of_speech"
+)
+
+var (
+	ErrVADUnsupported = errors.New("VAD unsupported")
 )
 
 type VADEvent struct {
