@@ -130,6 +130,26 @@ func (va *PipelineAgent) GenerateReply(speech *SpeechHandle) {
 	}
 	toolCtx := llm.NewToolContext(toolsInterface)
 
+	// Check for manual speech injection (GAP-004)
+	if speech.ManualText != "" {
+		logger.Logger.Infow("Processing manual speech injection", "text", speech.ManualText)
+		
+		textCh := make(chan string, 1)
+		textCh <- speech.ManualText
+		close(textCh)
+
+		// Start TTS directly
+		ttsGen, err := PerformTTSInference(ctx, va.tts, textCh)
+		if err != nil {
+			logger.Logger.Errorw("Manual TTS inference failed", err)
+			return
+		}
+
+		// Handle Playback and Transcription (Same as default loop but simplified)
+		va.handlePlaybackAndTranscription(ctx, speech, ttsGen)
+		return
+	}
+
 	// In Python parity, we loop for tool calls
 	steps := 1
 	for {
@@ -171,17 +191,7 @@ func (va *PipelineAgent) GenerateReply(speech *SpeechHandle) {
 		logger.Logger.Debugw("LLM inference succeeded", "step", steps)
 
 		toolOutCh := PerformToolExecutions(ctx, genData.FunctionCh, toolCtx)
-
-		// Start TTS in parallel with LLM text
-		logger.Logger.Debugw("Starting TTS inference", "step", steps)
-		var ttsGen *TTSGenerationData
-		if baseAgent != nil && baseAgent.TTSNode != nil {
-			logger.Logger.Debugw("Using custom TTS node", "step", steps)
-			ttsGen, err = baseAgent.TTSNode(ctx, va.tts, genData.TextCh)
-		} else {
-			logger.Logger.Debugw("Using default TTS inference", "step", steps)
-			ttsGen, err = PerformTTSInference(ctx, va.tts, genData.TextCh)
-		}
+		ttsGen, err := PerformTTSInference(ctx, va.tts, genData.TextCh)
 
 		if err != nil {
 			logger.Logger.Errorw("TTS inference failed", err, "step", steps)
@@ -193,85 +203,7 @@ func (va *PipelineAgent) GenerateReply(speech *SpeechHandle) {
 				})
 			}
 		} else {
-			logger.Logger.Debugw("TTS inference succeeded, starting audio playback", "step", steps)
-			var alignedWG sync.WaitGroup
-			if session.Options.UseTTSAlignedTranscript && session.Output.Transcription != nil {
-				logger.Logger.Debugw("TTS aligned transcript enabled, starting transcription goroutine", "step", steps)
-				var textCh <-chan string = ttsGen.AlignedTextCh
-				if baseAgent != nil && baseAgent.TranscriptionNode != nil {
-					logger.Logger.Debugw("Using custom transcription node", "step", steps)
-					var nodeErr error
-					textCh, nodeErr = baseAgent.TranscriptionNode(ctx, textCh)
-					if nodeErr != nil {
-						logger.Logger.Errorw("Transcription node failed", nodeErr, "step", steps)
-					}
-				}
-
-				if textCh != nil {
-					alignedWG.Add(1)
-					go func() {
-						defer alignedWG.Done()
-						var capturedChunks int
-						for deltaText := range textCh {
-							if deltaText == "" {
-								continue
-							}
-							_ = session.Output.Transcription.CaptureText(deltaText)
-							capturedChunks++
-						}
-						session.Output.Transcription.Flush()
-						logger.Logger.Debugw("Transcription goroutine finished", "chunks_captured", capturedChunks, "step", steps)
-					}()
-				}
-			}
-
-			if session.Output.Audio == nil {
-				session.UpdateAgentState(AgentStateSpeaking)
-			}
-
-			var audioCh <-chan *model.AudioFrame = ttsGen.AudioCh
-			if baseAgent != nil && baseAgent.RealtimeAudioOutputNode != nil {
-				logger.Logger.Debugw("Using custom realtime audio output node", "step", steps)
-				var nodeErr error
-				audioCh, nodeErr = baseAgent.RealtimeAudioOutputNode(ctx, audioCh)
-				if nodeErr != nil {
-					logger.Logger.Errorw("Realtime audio output node failed", nodeErr, "step", steps)
-				}
-			}
-
-			if audioCh != nil {
-				var frameCount int
-				for frame := range audioCh {
-					if speech.IsInterrupted() {
-						logger.Logger.Infow("Speech interrupted during audio playback", "frames_sent", frameCount, "step", steps)
-						break
-					}
-					select {
-					case <-ctx.Done():
-						logger.Logger.Infow("Context cancelled during audio playback", "frames_sent", frameCount, "step", steps)
-						return
-					default:
-						if session.Output.Audio != nil {
-							_ = session.Output.Audio.CaptureFrame(frame)
-							frameCount++
-						}
-					}
-				}
-				logger.Logger.Debugw("Audio channel drained", "frames_sent", frameCount, "step", steps)
-			}
-
-			if session.Output.Audio != nil {
-				session.Output.Audio.Flush()
-				if speech.IsInterrupted() {
-					logger.Logger.Infow("Speech interrupted after audio flush, clearing buffer", "step", steps)
-					session.Output.Audio.ClearBuffer()
-				} else {
-					logger.Logger.Debugw("Waiting for audio playout", "step", steps)
-					_ = session.Output.Audio.WaitForPlayout(ctx)
-					logger.Logger.Debugw("Audio playout complete", "step", steps)
-				}
-			}
-			alignedWG.Wait()
+			va.handlePlaybackAndTranscription(ctx, speech, ttsGen)
 		}
 
 		// Wait for tool executions to complete and collect results
@@ -425,4 +357,96 @@ func (va *PipelineAgent) GenerateReply(speech *SpeechHandle) {
 		logger.Logger.Debugw("Looping back to LLM with tool outputs", "step", steps, "tool_count", len(toolCalls))
 		// Loop back to LLM with tool outputs
 	}
+}
+
+func (va *PipelineAgent) handlePlaybackAndTranscription(ctx context.Context, speech *SpeechHandle, ttsGen *TTSGenerationData) {
+	va.mu.Lock()
+	session := va.session
+	va.mu.Unlock()
+
+	if session == nil {
+		return
+	}
+
+	baseAgent := session.Agent.GetAgent()
+
+	logger.Logger.Debugw("Starting audio playback and transcription")
+	var alignedWG sync.WaitGroup
+	if session.Options.UseTTSAlignedTranscript && session.Output.Transcription != nil {
+		logger.Logger.Debugw("TTS aligned transcript enabled, starting transcription goroutine")
+		var textCh <-chan string = ttsGen.AlignedTextCh
+		if baseAgent != nil && baseAgent.TranscriptionNode != nil {
+			logger.Logger.Debugw("Using custom transcription node")
+			var nodeErr error
+			textCh, nodeErr = baseAgent.TranscriptionNode(ctx, textCh)
+			if nodeErr != nil {
+				logger.Logger.Errorw("Transcription node failed", nodeErr)
+			}
+		}
+
+		if textCh != nil {
+			alignedWG.Add(1)
+			go func() {
+				defer alignedWG.Done()
+				var capturedChunks int
+				for deltaText := range textCh {
+					if deltaText == "" {
+						continue
+					}
+					_ = session.Output.Transcription.CaptureText(deltaText)
+					capturedChunks++
+				}
+				session.Output.Transcription.Flush()
+				logger.Logger.Debugw("Transcription goroutine finished", "chunks_captured", capturedChunks)
+			}()
+		}
+	}
+
+	if session.Output.Audio == nil {
+		session.UpdateAgentState(AgentStateSpeaking)
+	}
+
+	var audioCh <-chan *model.AudioFrame = ttsGen.AudioCh
+	if baseAgent != nil && baseAgent.RealtimeAudioOutputNode != nil {
+		logger.Logger.Debugw("Using custom realtime audio output node")
+		var nodeErr error
+		audioCh, nodeErr = baseAgent.RealtimeAudioOutputNode(ctx, audioCh)
+		if nodeErr != nil {
+			logger.Logger.Errorw("Realtime audio output node failed", nodeErr)
+		}
+	}
+
+	if audioCh != nil {
+		var frameCount int
+		for frame := range audioCh {
+			if speech.IsInterrupted() {
+				logger.Logger.Infow("Speech interrupted during audio playback", "frames_sent", frameCount)
+				break
+			}
+			select {
+			case <-ctx.Done():
+				logger.Logger.Infow("Context cancelled during audio playback", "frames_sent", frameCount)
+				return
+			default:
+				if session.Output.Audio != nil {
+					_ = session.Output.Audio.CaptureFrame(frame)
+					frameCount++
+				}
+			}
+		}
+		logger.Logger.Debugw("Audio channel drained", "frames_sent", frameCount)
+	}
+
+	if session.Output.Audio != nil {
+		session.Output.Audio.Flush()
+		if speech.IsInterrupted() {
+			logger.Logger.Infow("Speech interrupted after audio flush, clearing buffer")
+			session.Output.Audio.ClearBuffer()
+		} else {
+			logger.Logger.Debugw("Waiting for audio playout")
+			_ = session.Output.Audio.WaitForPlayout(ctx)
+			logger.Logger.Debugw("Audio playout complete")
+		}
+	}
+	alignedWG.Wait()
 }
