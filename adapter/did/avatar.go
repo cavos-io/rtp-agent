@@ -1,7 +1,6 @@
 package did
 
 import (
-	"context"
 	"fmt"
 	"sync"
 
