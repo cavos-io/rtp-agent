@@ -280,15 +280,15 @@ func (t *RoomTextOutput) worker() {
 					t.segmentID = "SG_" + uuid.NewString()[:8]
 				}
 				opts := lksdk.StreamTextOptions{
-					Topic: "lk-transcription",
+					Topic: "lk.transcription",
 					Attributes: map[string]string{
-						"lk.segment_id": t.segmentID,
-						"lk.final":      "false",
+						"lk.segment_id":          t.segmentID,
+						"lk.transcription_final": "false",
 					},
 				}
 
 				if t.trackID != "" {
-					opts.Attributes["lk.track_id"] = t.trackID
+					opts.Attributes["lk.transcribed_track_id"] = t.trackID
 				}
 
 				t.writer = t.room.LocalParticipant.StreamText(opts)
@@ -307,6 +307,10 @@ func (t *RoomTextOutput) Flush() {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	if t.writer != nil {
+		// Signal finality for the segment to align with official protocol
+		t.writer.UpdateAttributes(map[string]string{
+			"lk.transcription_final": "true",
+		})
 		// Close the current segment
 		t.writer.Close()
 		t.writer = nil
