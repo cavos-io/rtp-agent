@@ -20,6 +20,7 @@ import (
 	"github.com/pion/rtp/codecs"
 	"github.com/pion/webrtc/v4"
 	"github.com/pion/webrtc/v4/pkg/media"
+	"google.golang.org/protobuf/proto"
 )
 
 type AudioDecoder interface {
@@ -218,9 +219,14 @@ type RoomTextOutput struct {
 	textCh              chan string
 	ctx                 context.Context
 	cancel              context.CancelFunc
+
+	apiKey    string
+	apiSecret string
+	url       string
+	client    *lksdk.RoomServiceClient
 }
 
-func NewRoomTextOutput(room *lksdk.Room, participantIdentity string) *RoomTextOutput {
+func NewRoomTextOutput(room *lksdk.Room, participantIdentity string, url, apiKey, apiSecret string) *RoomTextOutput {
 	ctx, cancel := context.WithCancel(context.Background())
 	t := &RoomTextOutput{
 		room:                room,
@@ -228,6 +234,10 @@ func NewRoomTextOutput(room *lksdk.Room, participantIdentity string) *RoomTextOu
 		textCh:              make(chan string, 100),
 		ctx:                 ctx,
 		cancel:              cancel,
+		url:                 url,
+		apiKey:              apiKey,
+		apiSecret:           apiSecret,
+		client:              lksdk.NewRoomServiceClient(url, apiKey, apiSecret),
 	}
 	go t.worker()
 	return t
@@ -297,6 +307,36 @@ func (t *RoomTextOutput) worker() {
 			if t.writer != nil {
 				t.writer.Write(text, nil)
 			}
+
+			// GAP-001 Fallback: Send dual mechanism via RoomServiceClient.SendData
+			// Official SDK recommendation for high-reliability transcript delivery
+			if t.client != nil && t.room != nil && t.room.LocalParticipant != nil {
+				tp := &livekit.Transcription{
+					TranscribedParticipantIdentity: t.participantIdentity,
+					TrackId:                        t.trackID,
+					Segments: []*livekit.TranscriptionSegment{
+						{
+							Id:    t.segmentID,
+							Text:  text,
+							Final: false,
+						},
+					},
+				}
+				packet := &livekit.DataPacket{
+					Kind: livekit.DataPacket_RELIABLE,
+					Value: &livekit.DataPacket_Transcription{
+						Transcription: tp,
+					},
+				}
+				
+				if buf, err := proto.Marshal(packet); err == nil {
+					go t.client.SendData(context.Background(), &livekit.SendDataRequest{
+						Room: t.room.Name(),
+						Data: buf,
+					})
+				}
+			}
+
 			t.mu.Unlock()
 			<-ticker.C
 		}
@@ -404,8 +444,9 @@ func NewRoomIO(room *lksdk.Room, session *agent.AgentSession, opts RoomOptions) 
 	}
 
 	if audioOutputEnabled {
+		jc := rio.Options.JobContext
 		if syncTranscription {
-			textOut := NewRoomTextOutput(room, rio.participantIdentity)
+			textOut := NewRoomTextOutput(room, rio.participantIdentity, jc.URL, jc.APIKey, jc.APISecret)
 			speedFactor := 1.0
 			if opts.TextOutput != nil && opts.TextOutput.TranscriptionSpeedFactor > 0 {
 				speedFactor = opts.TextOutput.TranscriptionSpeedFactor
@@ -421,11 +462,13 @@ func NewRoomIO(room *lksdk.Room, session *agent.AgentSession, opts RoomOptions) 
 		} else {
 			session.SetAudioOutput(rio.Recorder.RecordOutput(rio))
 			if opts.TextOutput != nil && opts.TextOutput.Enabled {
-				session.Output.Transcription = NewRoomTextOutput(room, rio.participantIdentity)
+				textOut := NewRoomTextOutput(room, rio.participantIdentity, jc.URL, jc.APIKey, jc.APISecret)
+				session.Output.Transcription = textOut
 			}
 		}
 	} else if opts.TextOutput != nil && opts.TextOutput.Enabled {
-		session.Output.Transcription = NewRoomTextOutput(room, rio.participantIdentity)
+		jc := rio.Options.JobContext
+		session.Output.Transcription = NewRoomTextOutput(room, rio.participantIdentity, jc.URL, jc.APIKey, jc.APISecret)
 	}
 
 	videoOutputEnabled := false
