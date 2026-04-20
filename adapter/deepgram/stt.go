@@ -310,3 +310,4 @@ func (s *deepgramStream) Next() (*stt.SpeechEvent, error) {
 		return event, nil
 	}
 }
+

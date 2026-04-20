@@ -91,3 +91,4 @@ func (m *MovingAverage) Size() int {
 	}
 	return len(m.hist)
 }
+

@@ -23,3 +23,4 @@ func NewMinimaxLLM(apiKey string, model string) *MinimaxLLM {
 func (l *MinimaxLLM) Chat(ctx context.Context, chatCtx *llm.ChatContext, opts ...llm.ChatOption) (llm.LLMStream, error) {
 	return l.inner.Chat(ctx, chatCtx, opts...)
 }
+

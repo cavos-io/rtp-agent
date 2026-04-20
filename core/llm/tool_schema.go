@@ -131,3 +131,4 @@ func goKindToJSONType(k reflect.Kind) string {
 		return "string" // Fallback
 	}
 }
+

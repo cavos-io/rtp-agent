@@ -4,7 +4,10 @@ import (
 	"context"
 	"fmt"
 
+<<<<<<< HEAD
+=======
 	"github.com/cavos-io/rtp-agent/core/agent"
+>>>>>>> origin/main
 )
 
 type AvatarioAvatar struct {
@@ -22,7 +25,4 @@ func (a *AvatarioAvatar) Start(ctx context.Context) error {
 	return nil
 }
 
-func (a *AvatarioAvatar) UpdateState(state agent.AvatarState) error {
-	fmt.Printf("AvatarioAvatar state updated to: %s\n", state)
-	return nil
-}
+

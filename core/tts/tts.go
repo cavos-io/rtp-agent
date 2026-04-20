@@ -39,3 +39,4 @@ type SynthesizeStream interface {
 	Close() error
 	Next() (*SynthesizedAudio, error)
 }
+

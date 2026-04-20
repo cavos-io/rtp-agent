@@ -128,3 +128,4 @@ func (g *JudgeGroup) Evaluate(ctx context.Context, chatCtx *llm.ChatContext, ref
 
 	return result, nil
 }
+

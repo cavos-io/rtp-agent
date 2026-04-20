@@ -2,17 +2,16 @@ package stt
 
 import (
 	"context"
-	"fmt"
-	"io"
 	"sync"
 
 	"github.com/cavos-io/rtp-agent/core/vad"
+<<<<<<< HEAD
+=======
 	"github.com/cavos-io/rtp-agent/library/logger"
+>>>>>>> origin/main
 	"github.com/cavos-io/rtp-agent/model"
 )
 
-// StreamAdapter converts a non-streaming STT into a streaming STT by coupling it with a VAD.
-// It buffers audio frames and sends them to the underlying STT Recognize method when the VAD detects speech.
 type StreamAdapter struct {
 	stt STT
 	vad vad.VAD
@@ -25,24 +24,60 @@ func NewStreamAdapter(stt STT, vad vad.VAD) *StreamAdapter {
 	}
 }
 
+<<<<<<< HEAD
+func (s *StreamAdapter) Label() string {
+	return "stream_adapter(" + s.stt.Label() + ")"
+=======
 func (a *StreamAdapter) Label() string {
 	return fmt.Sprintf("StreamAdapter(%s)", a.stt.Label())
+>>>>>>> origin/main
 }
 
-func (a *StreamAdapter) Capabilities() STTCapabilities {
-	return STTCapabilities{Streaming: true}
+func (s *StreamAdapter) Capabilities() STTCapabilities {
+	return STTCapabilities{
+		Streaming:        true,
+		InterimResults:   false,
+		Diarization:      false,
+		OfflineRecognize: true,
+	}
 }
 
-func (a *StreamAdapter) Recognize(ctx context.Context, frames []*model.AudioFrame, language string) (*SpeechEvent, error) {
-	return a.stt.Recognize(ctx, frames, language)
+func (s *StreamAdapter) Recognize(ctx context.Context, frames []*model.AudioFrame, language string) (*SpeechEvent, error) {
+	return s.stt.Recognize(ctx, frames, language)
+}
+
+func (s *StreamAdapter) Stream(ctx context.Context, language string) (RecognizeStream, error) {
+	vadStream, err := s.vad.Stream(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	wrapper := &streamAdapterWrapper{
+		adapter:   s,
+		ctx:       ctx,
+		language:  language,
+		vadStream: vadStream,
+		events:    make(chan *SpeechEvent, 10),
+	}
+
+	go wrapper.run()
+
+	return wrapper, nil
 }
 
 type streamAdapterWrapper struct {
-	adapter  *StreamAdapter
-	ctx      context.Context
-	cancel   context.CancelFunc
-	language string
+	adapter   *StreamAdapter
+	ctx       context.Context
+	language  string
+	vadStream vad.VADStream
+	events    chan *SpeechEvent
+	closed    bool
 
+<<<<<<< HEAD
+	mu            sync.Mutex
+	speechFrames  []*model.AudioFrame // accumulated frames while speaking
+	isSpeaking    bool
+=======
 	eventCh chan *SpeechEvent
 	audioCh chan *model.AudioFrame
 
@@ -165,42 +200,103 @@ func (w *streamAdapterWrapper) run() {
 			}
 		}
 	}
+>>>>>>> origin/main
 }
 
 func (w *streamAdapterWrapper) PushFrame(frame *model.AudioFrame) error {
 	w.mu.Lock()
-	if w.closed {
-		w.mu.Unlock()
-		return fmt.Errorf("stream closed")
+	if w.isSpeaking {
+		// deep copy the data so the frame buffer can be reused by the caller
+		cp := &model.AudioFrame{
+			Data:              append([]byte(nil), frame.Data...),
+			SampleRate:        frame.SampleRate,
+			NumChannels:       frame.NumChannels,
+			SamplesPerChannel: frame.SamplesPerChannel,
+		}
+		w.speechFrames = append(w.speechFrames, cp)
 	}
 	w.mu.Unlock()
-
-	w.audioCh <- frame
-	return nil
+	return w.vadStream.PushFrame(frame)
 }
 
 func (w *streamAdapterWrapper) Flush() error {
-	return nil
+	return w.vadStream.Flush()
 }
 
 func (w *streamAdapterWrapper) Close() error {
-	w.mu.Lock()
 	if w.closed {
-		w.mu.Unlock()
 		return nil
 	}
 	w.closed = true
-	w.mu.Unlock()
-
-	w.cancel()
-	close(w.audioCh)
+	w.vadStream.Close()
+	close(w.events)
 	return nil
 }
 
 func (w *streamAdapterWrapper) Next() (*SpeechEvent, error) {
-	ev, ok := <-w.eventCh
-	if !ok {
-		return nil, context.Canceled
+	select {
+	case <-w.ctx.Done():
+		return nil, w.ctx.Err()
+	case ev, ok := <-w.events:
+		if !ok {
+			return nil, context.Canceled
+		}
+		return ev, nil
 	}
-	return ev, nil
 }
+
+func (w *streamAdapterWrapper) run() {
+	defer close(w.events)
+
+	eventCh := make(chan *vad.VADEvent)
+	errCh := make(chan error, 1)
+
+	go func() {
+		for {
+			vEvent, err := w.vadStream.Next()
+			if err != nil {
+				errCh <- err
+				return
+			}
+			eventCh <- vEvent
+		}
+	}()
+
+	for {
+		select {
+		case <-w.ctx.Done():
+			return
+		case err := <-errCh:
+			// Handle error if needed
+			_ = err
+			return
+		case vEvent := <-eventCh:
+			if vEvent.Type == vad.VADEventStartOfSpeech {
+				w.mu.Lock()
+				w.isSpeaking = true
+				w.speechFrames = w.speechFrames[:0]
+				w.mu.Unlock()
+				w.events <- &SpeechEvent{Type: SpeechEventStartOfSpeech}
+			} else if vEvent.Type == vad.VADEventEndOfSpeech {
+				w.mu.Lock()
+				w.isSpeaking = false
+				frames := w.speechFrames
+				w.speechFrames = nil
+				w.mu.Unlock()
+
+				w.events <- &SpeechEvent{Type: SpeechEventEndOfSpeech}
+
+				if len(frames) > 0 {
+					tEvent, err := w.adapter.stt.Recognize(w.ctx, frames, w.language)
+					if err == nil && tEvent != nil && len(tEvent.Alternatives) > 0 && tEvent.Alternatives[0].Text != "" {
+						w.events <- &SpeechEvent{
+							Type:         SpeechEventFinalTranscript,
+							Alternatives: []SpeechData{tEvent.Alternatives[0]},
+						}
+					}
+				}
+			}
+		}
+	}
+}
+

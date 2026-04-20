@@ -82,3 +82,4 @@ func (s *SimplismartSTT) Recognize(ctx context.Context, frames []*model.AudioFra
 		},
 	}, nil
 }
+

@@ -48,3 +48,4 @@ func (s *HttpServer) Stop(ctx context.Context) error {
 	}
 	return nil
 }
+

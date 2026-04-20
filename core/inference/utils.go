@@ -17,3 +17,4 @@ func CreateAccessToken(apiKey, apiSecret string, ttl time.Duration) (string, err
 
 	return at.ToJWT()
 }
+

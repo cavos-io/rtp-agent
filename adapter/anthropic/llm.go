@@ -34,31 +34,7 @@ func (l *AnthropicLLM) Chat(ctx context.Context, chatCtx *llm.ChatContext, opts 
 		opt(options)
 	}
 
-	type anthropicMessage struct {
-		Role    string `json:"role"`
-		Content string `json:"content"`
-	}
-
-	messages := make([]anthropicMessage, 0)
-	var system string
-
-	for _, item := range chatCtx.Items {
-		if msg, ok := item.(*llm.ChatMessage); ok {
-			if msg.Role == llm.ChatRoleSystem {
-				system = msg.TextContent()
-				continue
-			}
-			role := string(msg.Role)
-			if role == "developer" {
-				system = msg.TextContent()
-				continue
-			}
-			messages = append(messages, anthropicMessage{
-				Role:    role,
-				Content: msg.TextContent(),
-			})
-		}
-	}
+	messages, system := chatCtx.ToProviderFormat("anthropic")
 
 	body := map[string]interface{}{
 		"model":      l.model,
@@ -66,35 +42,14 @@ func (l *AnthropicLLM) Chat(ctx context.Context, chatCtx *llm.ChatContext, opts 
 		"max_tokens": 1024,
 		"stream":     true,
 	}
-	if system != "" {
+	if system != "" && system != nil {
 		body["system"] = system
 	}
 
 	// Tool support
 	if len(options.Tools) > 0 {
-		tools := make([]map[string]interface{}, 0)
-		for _, tool := range options.Tools {
-			if tool.Name() == "computer_use" {
-				tools = append(tools, map[string]interface{}{
-					"type": "computer_20241022",
-					"name": "computer",
-					"display_width_px": 1280,
-					"display_height_px": 720,
-					"display_number": 1,
-				})
-			} else {
-				tools = append(tools, map[string]interface{}{
-					"name":        tool.Name(),
-					"description": tool.Description(),
-					"input_schema": map[string]interface{}{
-						"type":       "object",
-						"properties": tool.Parameters()["properties"],
-						"required":   tool.Parameters()["required"],
-					},
-				})
-			}
-		}
-		body["tools"] = tools
+		tc := llm.NewToolContext(options.Tools)
+		body["tools"] = tc.ParseFunctionTools("anthropic")
 	}
 
 	jsonBody, _ := json.Marshal(body)
@@ -127,7 +82,7 @@ func (l *AnthropicLLM) Chat(ctx context.Context, chatCtx *llm.ChatContext, opts 
 type anthropicStream struct {
 	resp   *http.Response
 	reader *bufio.Reader
-	
+
 	// internal states for tracking tool calls over multiple chunks
 	toolCallID string
 	toolName   string
@@ -150,15 +105,15 @@ func (s *anthropicStream) Next() (*llm.ChatChunk, error) {
 		}
 
 		data := strings.TrimPrefix(line, "data: ")
-		
+
 		var event struct {
 			Type string `json:"type"`
-			
+
 			// message_start fields
 			Message struct {
 				ID    string `json:"id"`
 				Usage struct {
-					InputTokens int `json:"input_tokens"`
+					InputTokens  int `json:"input_tokens"`
 					OutputTokens int `json:"output_tokens"`
 				} `json:"usage"`
 			} `json:"message"`
@@ -177,9 +132,9 @@ func (s *anthropicStream) Next() (*llm.ChatChunk, error) {
 
 			// content_block_delta fields
 			Delta struct {
-				Type         string `json:"type"`
-				Text         string `json:"text"`
-				PartialJson  string `json:"partial_json"`
+				Type        string `json:"type"`
+				Text        string `json:"text"`
+				PartialJson string `json:"partial_json"`
 			} `json:"delta"`
 		}
 
@@ -195,14 +150,14 @@ func (s *anthropicStream) Next() (*llm.ChatChunk, error) {
 					PromptTokens: event.Message.Usage.InputTokens,
 				},
 			}, nil
-			
+
 		case "content_block_start":
 			if event.ContentBlock.Type == "tool_use" {
 				s.toolCallID = event.ContentBlock.ID
 				s.toolName = event.ContentBlock.Name
 				s.toolArgs = ""
 			}
-			
+
 		case "content_block_delta":
 			if event.Delta.Type == "text_delta" {
 				return &llm.ChatChunk{
@@ -214,7 +169,7 @@ func (s *anthropicStream) Next() (*llm.ChatChunk, error) {
 			} else if event.Delta.Type == "input_json_delta" {
 				s.toolArgs += event.Delta.PartialJson
 			}
-			
+
 		case "content_block_stop":
 			if s.toolCallID != "" {
 				chunk := &llm.ChatChunk{
@@ -235,17 +190,17 @@ func (s *anthropicStream) Next() (*llm.ChatChunk, error) {
 				s.toolArgs = ""
 				return chunk, nil
 			}
-			
+
 		case "message_delta":
 			return &llm.ChatChunk{
 				Usage: &llm.CompletionUsage{
 					CompletionTokens: event.Usage.OutputTokens,
 				},
 			}, nil
-			
+
 		case "message_stop":
 			return nil, io.EOF
-			
+
 		case "error":
 			return nil, fmt.Errorf("anthropic stream error: %s", data)
 		}
@@ -255,3 +210,4 @@ func (s *anthropicStream) Next() (*llm.ChatChunk, error) {
 func (s *anthropicStream) Close() error {
 	return s.resp.Body.Close()
 }
+

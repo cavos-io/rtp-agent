@@ -2,11 +2,13 @@ package workflows
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 
 	"github.com/cavos-io/rtp-agent/core/agent"
+<<<<<<< HEAD
+=======
 	"github.com/cavos-io/rtp-agent/core/llm"
+>>>>>>> origin/main
 )
 
 type GetAddressResult struct {
@@ -52,8 +54,7 @@ func NewGetAddressTask(requireConfirmation bool) *GetAddressTask {
 		AgentTask:           *agent.NewAgentTask[*GetAddressResult](AddressInstructions),
 		RequireConfirmation: requireConfirmation,
 	}
-
-	t.Agent.Tools = []llm.Tool{
+	t.Agent.Tools = []interface{}{
 		&updateAddressTool{task: t},
 		&confirmAddressTool{task: t},
 		&declineAddressCaptureTool{task: t},
@@ -62,19 +63,20 @@ func NewGetAddressTask(requireConfirmation bool) *GetAddressTask {
 	return t
 }
 
-func (t *GetAddressTask) OnEnter() {
+func (t *GetAddressTask) OnEnter(ctx context.Context) error {
 	if activity := t.Agent.GetActivity(); activity != nil {
 		if session := activity.Session; session != nil {
-			_ = session.GenerateReply(context.Background(), "Please tell me your address.")
+			_, _ = session.GenerateReply(context.Background(), "Please tell me your address.", true)
 		}
 	}
+	return nil
 }
 
 type updateAddressTool struct {
 	task *GetAddressTask
 }
 
-func (t *updateAddressTool) ID() string { return "update_address" }
+func (t *updateAddressTool) ID() string   { return "update_address" }
 func (t *updateAddressTool) Name() string { return "update_address" }
 func (t *updateAddressTool) Description() string {
 	return "Update the address provided by the user."
@@ -92,22 +94,41 @@ func (t *updateAddressTool) Parameters() map[string]any {
 	}
 }
 
-func (t *updateAddressTool) Execute(ctx context.Context, args string) (string, error) {
-	var params struct {
-		StreetAddress string `json:"street_address"`
-		UnitNumber    string `json:"unit_number"`
-		Locality      string `json:"locality"`
-		Country       string `json:"country"`
-	}
-	if err := json.Unmarshal([]byte(args), &params); err != nil {
-		return "", err
+type updateAddressArgs struct {
+	StreetAddress string `json:"street_address"`
+	UnitNumber    string `json:"unit_number"`
+	Locality      string `json:"locality"`
+	Country       string `json:"country"`
+}
+
+func (t *updateAddressTool) Args() any {
+	return &updateAddressArgs{}
+}
+
+func (t *updateAddressTool) Execute(ctx context.Context, args any) (any, error) {
+	var params *updateAddressArgs
+	if typed, ok := args.(*updateAddressArgs); ok {
+		params = typed
+	} else {
+		m, _ := args.(map[string]any)
+		params = &updateAddressArgs{
+			StreetAddress: getString(m, "street_address"),
+			UnitNumber:    getString(m, "unit_number"),
+			Locality:      getString(m, "locality"),
+			Country:       getString(m, "country"),
+		}
 	}
 
-	address := params.StreetAddress
-	if params.UnitNumber != "" {
-		address += " " + params.UnitNumber
+	streetAddress := params.StreetAddress
+	unitNumber := params.UnitNumber
+	locality := params.Locality
+	country := params.Country
+
+	address := streetAddress
+	if unitNumber != "" {
+		address += " " + unitNumber
 	}
-	address += " " + params.Locality + " " + params.Country
+	address += " " + locality + " " + country
 
 	t.task.currentAddress = address
 
@@ -119,11 +140,20 @@ func (t *updateAddressTool) Execute(ctx context.Context, args string) (string, e
 	return fmt.Sprintf("The address has been updated to %s\nPrompt the user for confirmation, do not call `confirm_address` directly", address), nil
 }
 
+func getString(m map[string]any, key string) string {
+	if v, ok := m[key]; ok {
+		if s, ok := v.(string); ok {
+			return s
+		}
+	}
+	return ""
+}
+
 type confirmAddressTool struct {
 	task *GetAddressTask
 }
 
-func (t *confirmAddressTool) ID() string { return "confirm_address" }
+func (t *confirmAddressTool) ID() string   { return "confirm_address" }
 func (t *confirmAddressTool) Name() string { return "confirm_address" }
 func (t *confirmAddressTool) Description() string {
 	return "Call this tool when the user confirms that the address is correct."
@@ -135,7 +165,7 @@ func (t *confirmAddressTool) Parameters() map[string]any {
 	}
 }
 
-func (t *confirmAddressTool) Execute(ctx context.Context, args string) (string, error) {
+func (t *confirmAddressTool) Execute(ctx context.Context, args any) (any, error) {
 	if t.task.currentAddress == "" {
 		return "", fmt.Errorf("error: no address was provided, update_address must be called before")
 	}
@@ -149,7 +179,7 @@ type declineAddressCaptureTool struct {
 	task *GetAddressTask
 }
 
-func (t *declineAddressCaptureTool) ID() string { return "decline_address_capture" }
+func (t *declineAddressCaptureTool) ID() string   { return "decline_address_capture" }
 func (t *declineAddressCaptureTool) Name() string { return "decline_address_capture" }
 func (t *declineAddressCaptureTool) Description() string {
 	return "Handles the case when the user explicitly declines to provide an address."
@@ -164,14 +194,11 @@ func (t *declineAddressCaptureTool) Parameters() map[string]any {
 	}
 }
 
-func (t *declineAddressCaptureTool) Execute(ctx context.Context, args string) (string, error) {
-	var params struct {
-		Reason string `json:"reason"`
-	}
-	if err := json.Unmarshal([]byte(args), &params); err != nil {
-		return "", err
-	}
+func (t *declineAddressCaptureTool) Execute(ctx context.Context, args any) (any, error) {
+	m, _ := args.(map[string]any)
+	reason, _ := m["reason"].(string)
 
-	t.task.Fail(fmt.Errorf("couldn't get the address: %s", params.Reason))
+	t.task.Fail(fmt.Errorf("couldn't get the address: %s", reason))
 	return "Task failed.", nil
 }
+

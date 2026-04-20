@@ -23,3 +23,4 @@ func NewLemonSliceLLM(apiKey string, model string) *LemonSliceLLM {
 func (l *LemonSliceLLM) Chat(ctx context.Context, chatCtx *llm.ChatContext, opts ...llm.ChatOption) (llm.LLMStream, error) {
 	return l.inner.Chat(ctx, chatCtx, opts...)
 }
+

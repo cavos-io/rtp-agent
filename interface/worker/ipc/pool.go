@@ -87,3 +87,4 @@ func (p *ProcPool) Close() error {
 	p.executors = make(map[string]JobExecutor)
 	return nil
 }
+

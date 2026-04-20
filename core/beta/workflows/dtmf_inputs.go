@@ -2,14 +2,16 @@ package workflows
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"sync"
 	"time"
 
 	"github.com/cavos-io/rtp-agent/core/agent"
 	"github.com/cavos-io/rtp-agent/core/beta"
+<<<<<<< HEAD
+=======
 	"github.com/cavos-io/rtp-agent/core/llm"
+>>>>>>> origin/main
 	"github.com/cavos-io/rtp-agent/library/logger"
 )
 
@@ -50,30 +52,32 @@ user will directly say the digits to you. You should be able to handle both case
 	}
 
 	if askConfirmation {
-		t.Agent.Tools = []llm.Tool{&confirmInputsTool{task: t}}
+		t.Agent.Tools = []interface{}{&confirmInputsTool{task: t}}
 	} else {
-		t.Agent.Tools = []llm.Tool{&recordInputsTool{task: t}}
+		t.Agent.Tools = []interface{}{&recordInputsTool{task: t}}
 	}
 
 	return t
 }
 
-func (t *GetDtmfTask) OnEnter() {
+func (t *GetDtmfTask) OnEnter(ctx context.Context) error {
 	agentObj := t.Agent.GetAgent()
 	if agentObj == nil {
-		return
+		return nil
 	}
-	
+
 	// Assuming session is available via some mechanism in real Start
 	// For parity, we should register for SIP DTMF
+	return nil
 }
 
-func (t *GetDtmfTask) OnExit() {
+func (t *GetDtmfTask) OnExit(ctx context.Context) error {
 	t.mu.Lock()
 	if t.timer != nil {
 		t.timer.Stop()
 	}
 	t.mu.Unlock()
+	return nil
 }
 
 func (t *GetDtmfTask) onSipDTMFReceived(digit string) {
@@ -127,7 +131,7 @@ func (t *GetDtmfTask) generateDtmfReply() {
 
 	if activity := t.Agent.GetActivity(); activity != nil {
 		if session := activity.Session; session != nil {
-			_ = session.GenerateReply(context.Background(), fmt.Sprintf("You entered %s. Please confirm if this is correct.", dtmfStr))
+			_, _ = session.GenerateReply(context.Background(), fmt.Sprintf("You entered %s. Please confirm if this is correct.", dtmfStr), true)
 		}
 	}
 }
@@ -154,16 +158,21 @@ func (t *confirmInputsTool) Parameters() map[string]any {
 	}
 }
 
-func (t *confirmInputsTool) Execute(ctx context.Context, args string) (string, error) {
-	var params struct {
-		Inputs []string `json:"inputs"`
+func (t *confirmInputsTool) Execute(ctx context.Context, args any) (any, error) {
+	m, _ := args.(map[string]any)
+	inputsRaw, ok := m["inputs"].([]interface{})
+	if !ok {
+		return "", fmt.Errorf("invalid or missing inputs array")
 	}
-	if err := json.Unmarshal([]byte(args), &params); err != nil {
-		return "", err
+	var inputs []string
+	for _, raw := range inputsRaw {
+		if s, isStr := raw.(string); isStr {
+			inputs = append(inputs, s)
+		}
 	}
 
-	dtmfEvents := make([]beta.DtmfEvent, len(params.Inputs))
-	for i, v := range params.Inputs {
+	dtmfEvents := make([]beta.DtmfEvent, len(inputs))
+	for i, v := range inputs {
 		dtmfEvents[i] = beta.DtmfEvent(v)
 	}
 
@@ -193,19 +202,25 @@ func (t *recordInputsTool) Parameters() map[string]any {
 	}
 }
 
-func (t *recordInputsTool) Execute(ctx context.Context, args string) (string, error) {
-	var params struct {
-		Inputs []string `json:"inputs"`
+func (t *recordInputsTool) Execute(ctx context.Context, args any) (any, error) {
+	m, _ := args.(map[string]any)
+	inputsRaw, ok := m["inputs"].([]interface{})
+	if !ok {
+		return "", fmt.Errorf("invalid or missing inputs array")
 	}
-	if err := json.Unmarshal([]byte(args), &params); err != nil {
-		return "", err
+	var inputs []string
+	for _, raw := range inputsRaw {
+		if s, isStr := raw.(string); isStr {
+			inputs = append(inputs, s)
+		}
 	}
 
-	dtmfEvents := make([]beta.DtmfEvent, len(params.Inputs))
-	for i, v := range params.Inputs {
+	dtmfEvents := make([]beta.DtmfEvent, len(inputs))
+	for i, v := range inputs {
 		dtmfEvents[i] = beta.DtmfEvent(v)
 	}
 
 	t.task.Complete(&GetDtmfResult{UserInput: beta.FormatDtmf(dtmfEvents)})
 	return "Inputs recorded.", nil
 }
+

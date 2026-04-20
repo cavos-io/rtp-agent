@@ -60,3 +60,4 @@ type RecognizeStream interface {
 	Close() error
 	Next() (*SpeechEvent, error)
 }
+

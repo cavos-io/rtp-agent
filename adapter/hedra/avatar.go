@@ -4,7 +4,10 @@ import (
 	"context"
 	"fmt"
 
+<<<<<<< HEAD
+=======
 	"github.com/cavos-io/rtp-agent/core/agent"
+>>>>>>> origin/main
 )
 
 type HedraAvatar struct {
@@ -22,7 +25,4 @@ func (a *HedraAvatar) Start(ctx context.Context) error {
 	return nil
 }
 
-func (a *HedraAvatar) UpdateState(state agent.AvatarState) error {
-	fmt.Printf("HedraAvatar state updated to: %s\n", state)
-	return nil
-}
+

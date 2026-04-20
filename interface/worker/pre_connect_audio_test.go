@@ -14,3 +14,4 @@ func TestInfo(t *testing.T) {
 		t.Logf("Embedded Field %d: %s", i, typ.Field(i).Name)
 	}
 }
+

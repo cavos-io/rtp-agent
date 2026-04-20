@@ -102,3 +102,4 @@ func (s *speechifyTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 func (s *speechifyTTSChunkedStream) Close() error {
 	return s.resp.Body.Close()
 }
+

@@ -3,7 +3,10 @@ package tavus
 import (
 	"context"
 	"fmt"
+<<<<<<< HEAD
+=======
 	"github.com/cavos-io/rtp-agent/core/agent"
+>>>>>>> origin/main
 )
 
 type TavusAvatar struct {
@@ -21,7 +24,4 @@ func (a *TavusAvatar) Start(ctx context.Context) error {
 	return nil
 }
 
-func (a *TavusAvatar) UpdateState(state agent.AvatarState) error {
-	fmt.Printf("TavusAvatar state updated to: %s\n", state)
-	return nil
-}
+

@@ -131,17 +131,34 @@ func (l *AWSLLM) Chat(ctx context.Context, chatCtx *llm.ChatContext, opts ...llm
 
 	if len(options.Tools) > 0 {
 		toolSpecs := make([]types.Tool, 0)
-		for _, t := range options.Tools {
-			doc := document.NewLazyDocument(t.Parameters())
-			toolSpecs = append(toolSpecs, &types.ToolMemberToolSpec{
-				Value: types.ToolSpecification{
-					Name:        aws.String(t.Name()),
-					Description: aws.String(t.Description()),
-					InputSchema: &types.ToolInputSchemaMemberJson{
-						Value: doc,
-					},
-				},
-			})
+		tc := llm.NewToolContext(options.Tools)
+		schemas := tc.ParseFunctionTools("aws")
+
+		for _, schema := range schemas {
+			if specAny, ok := schema["toolSpec"]; ok {
+				if spec, ok := specAny.(map[string]any); ok {
+					name, _ := spec["name"].(string)
+					desc, _ := spec["description"].(string)
+					
+					var jsonSchema any
+					if inSchemaAny, ok := spec["inputSchema"]; ok {
+						if inSchema, ok := inSchemaAny.(map[string]any); ok {
+							jsonSchema = inSchema["json"]
+						}
+					}
+					
+					doc := document.NewLazyDocument(jsonSchema)
+					toolSpecs = append(toolSpecs, &types.ToolMemberToolSpec{
+						Value: types.ToolSpecification{
+							Name:        aws.String(name),
+							Description: aws.String(desc),
+							InputSchema: &types.ToolInputSchemaMemberJson{
+								Value: doc,
+							},
+						},
+					})
+				}
+			}
 		}
 		req.ToolConfig = &types.ToolConfiguration{
 			Tools: toolSpecs,
@@ -228,3 +245,4 @@ func (s *awsLLMStream) Close() error {
 	s.closed = true
 	return nil
 }
+

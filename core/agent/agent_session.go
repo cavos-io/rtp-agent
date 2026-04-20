@@ -2,17 +2,34 @@ package agent
 
 import (
 	"context"
+<<<<<<< HEAD
+	"fmt"
+	"reflect"
+	"sync"
+	"time"
+
+	"github.com/cavos-io/rtp-agent/core/agent/ivr"
+=======
 	"encoding/json"
 	"fmt"
 	"sync"
 	"time"
 
+>>>>>>> origin/main
 	"github.com/cavos-io/rtp-agent/core/llm"
 	"github.com/cavos-io/rtp-agent/core/stt"
 	"github.com/cavos-io/rtp-agent/core/tts"
 	"github.com/cavos-io/rtp-agent/core/vad"
 	"github.com/cavos-io/rtp-agent/library/logger"
 	"github.com/cavos-io/rtp-agent/library/telemetry"
+<<<<<<< HEAD
+	lksdk "github.com/livekit/server-sdk-go/v2"
+)
+
+type GenerateReplyOpts struct {
+	AllowInterruptions bool
+}
+=======
 	"github.com/cavos-io/rtp-agent/model"
 	"github.com/livekit/protocol/livekit"
 	lksdk "github.com/livekit/server-sdk-go/v2"
@@ -54,6 +71,7 @@ const (
 	AgentStateThinking     AgentState = "thinking"
 	AgentStateSpeaking     AgentState = "speaking"
 )
+>>>>>>> origin/main
 
 type AgentSessionOptions struct {
 	AllowInterruptions            bool
@@ -70,6 +88,10 @@ type AgentSessionOptions struct {
 	UseTTSAlignedTranscript       bool
 	PreemptiveGeneration          bool
 	AECWarmupDuration             float64
+	SpeakingRate                  float64
+	TranscriptRefreshRate         time.Duration
+	LinkedParticipant             lksdk.Participant
+	IVRDetection                  bool
 }
 
 type AgentSession struct {
@@ -81,11 +103,15 @@ type AgentSession struct {
 	VAD       vad.VAD
 	LLM       llm.LLM
 	TTS       tts.TTS
-	Tools     []llm.Tool
+	Tools     []interface{}
 	Assistant *PipelineAgent
 	Room      *lksdk.Room
 
+	Input  AgentInput
+	Output AgentOutput
+
 	MetricsCollector *telemetry.UsageCollector
+	Timeline         *EventTimeline
 
 	UserState  UserState
 	AgentState AgentState
@@ -96,14 +122,29 @@ type AgentSession struct {
 	AgentTrackSID      string
 
 	mu       sync.Mutex
-	activity *AgentActivity
+	Activity *AgentActivity
 	started  bool
+	closing  bool
+
+	transitionMu sync.Mutex
+	transitionCancel context.CancelFunc
 
 	// Event channels
 	AgentStateChangedCh chan AgentStateChangedEvent
 	UserStateChangedCh  chan UserStateChangedEvent
+
+	clientEvents *ClientEventsDispatcher
+	ivrActivity  *ivr.IVRActivity
+
+	ctx    context.Context
+	cancel context.CancelFunc
 }
 
+<<<<<<< HEAD
+func (s *AgentSession) GetDataPublisher() ivr.DataPublisher {
+	if s.Room == nil {
+		return nil
+=======
 // transcriptionPacket wraps livekit.Transcription to implement the DataPacket interface.
 type transcriptionPacket struct {
 	t *livekit.Transcription
@@ -122,22 +163,35 @@ func (s *AgentSession) OnAudioFrame(ctx context.Context, frame *model.AudioFrame
 
 	if assistant != nil {
 		assistant.OnAudioFrame(ctx, frame)
+>>>>>>> origin/main
 	}
-}
-
-type AgentStateChangedEvent struct {
-	OldState AgentState
-	NewState AgentState
-}
-
-type UserStateChangedEvent struct {
-	OldState UserState
-	NewState UserState
+	return s.Room.LocalParticipant
 }
 
 func NewAgentSession(agent AgentInterface, room *lksdk.Room, opts AgentSessionOptions) *AgentSession {
 	baseAgent := agent.GetAgent()
-	return &AgentSession{
+	chatCtx := baseAgent.ChatCtx
+	if chatCtx == nil {
+		chatCtx = llm.NewChatContext()
+		baseAgent.ChatCtx = chatCtx
+	}
+
+	tools := make([]interface{}, len(baseAgent.Tools))
+	copy(tools, baseAgent.Tools)
+
+	timeline := NewEventTimeline()
+
+	if opts.SpeakingRate <= 0 {
+		opts.SpeakingRate = 3.83
+	}
+
+	if opts.TranscriptRefreshRate <= 0 {
+		opts.TranscriptRefreshRate = 50 * time.Millisecond
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+
+	s := &AgentSession{
 		Agent:               agent,
 		Room:                room,
 		STT:                 baseAgent.STT,
@@ -145,11 +199,60 @@ func NewAgentSession(agent AgentInterface, room *lksdk.Room, opts AgentSessionOp
 		LLM:                 baseAgent.LLM,
 		TTS:                 baseAgent.TTS,
 		Options:             opts,
-		ChatCtx:             llm.NewChatContext(),
-		Tools:               make([]llm.Tool, 0),
+		ChatCtx:             chatCtx,
+		Tools:               tools,
+		Timeline:            timeline,
 		AgentStateChangedCh: make(chan AgentStateChangedEvent, 10),
 		UserStateChangedCh:  make(chan UserStateChangedEvent, 10),
+		ctx:                 ctx,
+		cancel:              cancel,
 	}
+
+	if chatCtx != nil {
+		chatCtx.OnItemAdded = func(item llm.ChatItem) {
+			if s.Timeline != nil {
+				s.Timeline.AddEvent(&ConversationItemAddedEvent{
+					Item:      item,
+					CreatedAt: time.Now(),
+				})
+			}
+		}
+	}
+
+	if room != nil {
+		s.clientEvents = NewClientEventsDispatcher(room, s)
+	}
+
+	if opts.IVRDetection {
+		s.ivrActivity = ivr.NewIVRActivity(s)
+		s.Tools = append(s.Tools, s.ivrActivity.Tools()...)
+		s.ivrActivity.Start()
+	}
+
+	return s
+}
+
+func (s *AgentSession) SetAudioOutput(out AudioOutput) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	s.Output.Audio = out
+	if out != nil {
+		out.OnPlaybackStarted(func(ev PlaybackStartedEvent) {
+			s.UpdateAgentState(AgentStateSpeaking)
+		})
+		out.OnPlaybackFinished(func(ev PlaybackFinishedEvent) {
+			if !ev.Interrupted {
+				s.UpdateAgentState(AgentStateListening)
+			}
+		})
+	}
+}
+
+func (s *AgentSession) SetVideoOutput(out VideoOutput) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.Output.Video = out
 }
 
 func (s *AgentSession) Start(ctx context.Context) error {
@@ -161,7 +264,29 @@ func (s *AgentSession) Start(ctx context.Context) error {
 	}
 
 	if s.VAD == nil {
+<<<<<<< HEAD
+		s.VAD = vad.NewSimpleVAD(0.01)
+	}
+
+	// AudioRecognition consumes session.STT directly. Ensure it is stream-capable.
+	if s.STT != nil && !s.STT.Capabilities().Streaming {
+		s.STT = stt.NewStreamAdapter(s.STT, s.VAD)
+	}
+
+	// Keep base agent fields aligned with effective session components.
+	if base := s.Agent.GetAgent(); base != nil {
+		base.VAD = s.VAD
+		base.STT = s.STT
+	}
+
+	s.Activity = NewAgentActivity(s.Agent, s)
+	// Sync the activity onto the base *Agent so Agent.OnUserTurnCompleted
+	// can reach it via a.activity (it guards on a.activity == nil).
+	if base := s.Agent.GetAgent(); base != nil {
+		base.activity = s.Activity
+=======
 		s.VAD = vad.NewSimpleVAD(0.002)
+>>>>>>> origin/main
 	}
 
 	if s.Assistant == nil {
@@ -169,13 +294,20 @@ func (s *AgentSession) Start(ctx context.Context) error {
 	}
 
 	if err := s.Assistant.Start(ctx, s); err != nil {
+<<<<<<< HEAD
+		s.Activity = nil
+=======
+>>>>>>> origin/main
 		s.mu.Unlock()
 		return err
 	}
 
+<<<<<<< HEAD
+=======
 	s.activity = NewAgentActivity(s.Agent, s)
 	s.activity.Start()
 
+>>>>>>> origin/main
 	// Trigger periodic usage metrics reporting
 	if s.MetricsCollector != nil {
 		go s.reportUsageLoop(ctx)
@@ -184,11 +316,198 @@ func (s *AgentSession) Start(ctx context.Context) error {
 	s.started = true
 	s.mu.Unlock()
 
+<<<<<<< HEAD
+	// Activity.Start() must be called AFTER releasing s.mu because it
+	// synchronously calls UpdateUserState which also acquires s.mu.
+	s.Activity.Start()
+
+	go s.forwardAudioLoop(ctx)
+	go s.forwardVideoLoop(ctx)
+
+=======
 	// UpdateAgentState acquires s.mu, so call AFTER releasing
+>>>>>>> origin/main
 	s.UpdateAgentState(AgentStateListening)
 
 	return nil
 }
+
+func (s *AgentSession) Close() error {
+	s.transitionMu.Lock()
+	defer s.transitionMu.Unlock()
+
+	s.mu.Lock()
+	if !s.started || s.closing {
+		s.mu.Unlock()
+		return nil
+	}
+	s.closing = true
+	s.started = false
+	activity := s.Activity
+	assistant := s.Assistant
+	s.mu.Unlock()
+
+	s.cancel()
+
+	if activity != nil {
+		activity.Stop()
+	}
+
+	if assistant != nil {
+		assistant.Stop()
+	}
+
+	if s.Timeline != nil {
+		s.Timeline.AddEvent(&CloseEvent{
+			Reason:    CloseReasonUserInitiated,
+			CreatedAt: time.Now(),
+		})
+	}
+	s.UpdateAgentState(AgentStateIdle)
+
+	return nil
+}
+
+type TransitionActivityAction string
+
+const (
+	TransitionActivityClose  TransitionActivityAction = "close"
+	TransitionActivityPause  TransitionActivityAction = "pause"
+	TransitionActivityStart  TransitionActivityAction = "start"
+	TransitionActivityResume TransitionActivityAction = "resume"
+)
+
+type UpdateAgentOpts struct {
+	PreviousActivity TransitionActivityAction
+	NewActivity      TransitionActivityAction
+}
+
+func (s *AgentSession) UpdateAgent(agent AgentInterface, opts *UpdateAgentOpts) error {
+	if opts == nil {
+		opts = &UpdateAgentOpts{
+			PreviousActivity: TransitionActivityClose,
+			NewActivity:      TransitionActivityStart,
+		}
+	}
+
+	s.transitionMu.Lock()
+	if s.transitionCancel != nil {
+		s.transitionCancel()
+	}
+	ctx, cancel := context.WithCancel(s.ctx)
+	s.transitionCancel = cancel
+	s.transitionMu.Unlock()
+
+	// Ensure we release the transition lock when done
+	defer func() {
+		s.transitionMu.Lock()
+		if reflect.ValueOf(s.transitionCancel).Pointer() == reflect.ValueOf(cancel).Pointer() {
+			s.transitionCancel = nil
+		}
+		s.transitionMu.Unlock()
+	}()
+
+	s.mu.Lock()
+	if !s.started || s.closing {
+		s.mu.Unlock()
+		return fmt.Errorf("session not started or closing")
+	}
+	oldActivity := s.Activity
+
+	var newActivity *AgentActivity
+	if opts.NewActivity == TransitionActivityStart {
+		if agent.GetActivity() != nil && (agent.GetActivity() != oldActivity || opts.PreviousActivity != TransitionActivityClose) {
+			s.mu.Unlock()
+			return fmt.Errorf("cannot start agent: an activity is already running")
+		}
+		newActivity = NewAgentActivity(agent, s)
+	} else if opts.NewActivity == TransitionActivityResume {
+		if agent.GetActivity() == nil {
+			s.mu.Unlock()
+			return fmt.Errorf("cannot resume agent: no existing active activity to resume")
+		}
+		newActivity = agent.GetActivity()
+	}
+
+	s.Agent = agent
+	s.Activity = newActivity
+	s.mu.Unlock()
+
+	if oldActivity != nil && oldActivity != newActivity {
+		if opts.PreviousActivity == TransitionActivityClose {
+			// Drain with the transition context to allow cancellation
+			if err := oldActivity.Drain(ctx); err != nil {
+				return err
+			}
+			oldActivity.AClose()
+		} else if opts.PreviousActivity == TransitionActivityPause {
+			_ = oldActivity.Pause()
+		}
+	}
+
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	default:
+	}
+
+	if opts.NewActivity == TransitionActivityStart {
+		newActivity.Start()
+	} else if opts.NewActivity == TransitionActivityResume {
+		_ = newActivity.Resume()
+	}
+
+	return nil
+}
+
+func (s *AgentSession) ClearUserTurn() {
+	s.mu.Lock()
+	activity := s.Activity
+	s.mu.Unlock()
+	if activity != nil {
+		activity.ClearUserTurn()
+	}
+}
+
+func (s *AgentSession) CommitUserTurn(opts *CommitUserTurnOpts) {
+	s.mu.Lock()
+	activity := s.Activity
+	s.mu.Unlock()
+	if activity != nil {
+		activity.CommitUserTurn(opts)
+	}
+}
+
+func (s *AgentSession) Pause() error {
+	s.mu.Lock()
+	activity := s.Activity
+	s.mu.Unlock()
+	if activity != nil {
+		return activity.Pause()
+	}
+	return nil
+}
+
+func (s *AgentSession) Resume() error {
+	s.mu.Lock()
+	activity := s.Activity
+	s.mu.Unlock()
+	if activity != nil {
+		return activity.Resume()
+	}
+	return nil
+}
+
+func (s *AgentSession) UpdateOptions(opts AgentSessionOptions) {
+	s.mu.Lock()
+	s.Options = opts
+	activity := s.Activity
+	s.mu.Unlock()
+	if activity != nil {
+		activity.UpdateOptions(opts)
+	}
+}
+
 
 func (s *AgentSession) reportUsageLoop(ctx context.Context) {
 	ticker := time.NewTicker(30 * time.Second)
@@ -202,6 +521,13 @@ func (s *AgentSession) reportUsageLoop(ctx context.Context) {
 			if s.MetricsCollector != nil && s.ChatCtx != nil {
 				summary := s.MetricsCollector.GetSummary()
 				s.ChatCtx.Append(&llm.MetricsReport{Usage: summary})
+				
+				if s.Timeline != nil {
+					s.Timeline.AddEvent(&MetricsCollectedEvent{
+						Metrics:   &summary,
+						CreatedAt: time.Now(),
+					})
+				}
 			}
 		}
 	}
@@ -216,6 +542,23 @@ func (s *AgentSession) UpdateAgentState(state AgentState) {
 
 	if oldState != state {
 		logger.Logger.Debugw("Agent state changed", "old", oldState, "new", state)
+<<<<<<< HEAD
+		if s.Timeline != nil {
+			s.Timeline.AddEvent(&AgentStateChangedEvent{
+				OldState:  oldState,
+				NewState:  state,
+				CreatedAt: time.Now(),
+			})
+		}
+		
+		if s.clientEvents != nil {
+			s.clientEvents.DispatchAgentState(state)
+		}
+
+		if s.ivrActivity != nil {
+			s.ivrActivity.OnAgentStateChanged(ivr.AgentState(oldState), ivr.AgentState(state))
+		}
+=======
 
 		// Publish state to Playground via LiveKit participant attributes.
 		// The Playground reads "lk.agent.state" to display agent status and
@@ -225,11 +568,13 @@ func (s *AgentSession) UpdateAgentState(state AgentState) {
 				"lk.agent.state": string(state),
 			})
 		}
+>>>>>>> origin/main
 
 		select {
 		case s.AgentStateChangedCh <- AgentStateChangedEvent{
-			OldState: oldState,
-			NewState: state,
+			OldState:  oldState,
+			NewState:  state,
+			CreatedAt: time.Now(),
 		}:
 		default:
 			// Channel full, ignore
@@ -245,10 +590,27 @@ func (s *AgentSession) UpdateUserState(state UserState) {
 
 	if oldState != state {
 		logger.Logger.Debugw("User state changed", "old", oldState, "new", state)
+		if s.Timeline != nil {
+			s.Timeline.AddEvent(&UserStateChangedEvent{
+				OldState:  oldState,
+				NewState:  state,
+				CreatedAt: time.Now(),
+			})
+		}
+		
+		if s.clientEvents != nil {
+			s.clientEvents.DispatchUserState(state)
+		}
+
+		if s.ivrActivity != nil {
+			s.ivrActivity.OnUserStateChanged(ivr.UserState(oldState), ivr.UserState(state))
+		}
+
 		select {
 		case s.UserStateChangedCh <- UserStateChangedEvent{
-			OldState: oldState,
-			NewState: state,
+			OldState:  oldState,
+			NewState:  state,
+			CreatedAt: time.Now(),
 		}:
 		default:
 			// Channel full, ignore
@@ -256,20 +618,49 @@ func (s *AgentSession) UpdateUserState(state UserState) {
 	}
 }
 
-func (s *AgentSession) GenerateReply(ctx context.Context, userInput string) error {
+func GenerateTypedReply[T any](ctx context.Context, s *AgentSession, userInput string, opts *GenerateReplyOpts) (*RunResult[T], error) {
 	s.mu.Lock()
-	activity := s.activity
+	activity := s.Activity
 	s.mu.Unlock()
 
 	if activity == nil {
-		return nil
+		return nil, fmt.Errorf("agent activity not started")
 	}
 
 	// Trigger the pipeline
 	logger.Logger.Infow("Generating reply", "userInput", userInput)
 
+	allowInterruptions := s.Options.AllowInterruptions
+	if opts != nil {
+		allowInterruptions = opts.AllowInterruptions
+	}
+
 	// Create a speech handle
+<<<<<<< HEAD
+	handle := NewSpeechHandle(allowInterruptions, DefaultInputDetails())
+	
+	participantID := ""
+	if s.Room != nil && s.Room.LocalParticipant != nil {
+		participantID = s.Room.LocalParticipant.Identity()
+	}
+
+	if s.Timeline != nil {
+		s.Timeline.AddEvent(&SpeechCreatedEvent{
+			UserInitiated: true,
+			Source:        "generate_reply",
+			SpeechHandle:  handle,
+			ParticipantID: participantID,
+			CreatedAt:     time.Now(),
+		})
+	}
+	
+	// Create run result and watch the new handle
+	runResult := NewRunResult[T](s.ChatCtx)
+	runResult.WatchHandle(ctx, handle)
+	handle.RunResult = runResult
+=======
 	handle := NewSpeechHandle(s.Options.AllowInterruptions, DefaultInputDetails())
+>>>>>>> origin/main
 
 	// Add user message to ChatContext if provided
 	if userInput != "" {
@@ -283,7 +674,127 @@ func (s *AgentSession) GenerateReply(ctx context.Context, userInput string) erro
 	}
 
 	// Schedule the speech
-	return activity.ScheduleSpeech(handle, SpeechPriorityNormal, false)
+	err := activity.ScheduleSpeech(handle, SpeechPriorityNormal, false)
+	if err != nil {
+		return nil, err
+	}
+
+	return runResult, nil
+}
+
+func (s *AgentSession) GenerateReply(ctx context.Context, userInput string, allowInterruptions bool) (any, error) {
+	return GenerateTypedReply[any](ctx, s, userInput, &GenerateReplyOpts{AllowInterruptions: allowInterruptions})
+}
+
+func (s *AgentSession) Say(text string, allowInterruptions bool) (*SpeechHandle, error) {
+	s.mu.Lock()
+	activity := s.Activity
+	s.mu.Unlock()
+
+	if activity == nil {
+		return nil, fmt.Errorf("session activity not started")
+	}
+
+	handle := NewSpeechHandle(allowInterruptions, InputDetails{Modality: "text"})
+	handle.ManualText = text
+
+	// Add the manual speech to the chat context so the LLM remains aware of its own output
+	s.ChatCtx.Append(&llm.ChatMessage{
+		Role: llm.ChatRoleAssistant,
+		Content: []llm.ChatContent{
+			{Text: text},
+		},
+		CreatedAt: time.Now(),
+	})
+
+	err := activity.ScheduleSpeech(handle, SpeechPriorityNormal, false)
+	if err != nil {
+		return nil, err
+	}
+
+	return handle, nil
+}
+
+func (s *AgentSession) forwardAudioLoop(ctx context.Context) {
+	if s.Input.Audio == nil {
+		logger.Logger.Infow("[STT-PIPE] forwardAudioLoop: Input.Audio is nil — no audio will be forwarded")
+		return
+	}
+	logger.Logger.Infow("[STT-PIPE] forwardAudioLoop started", "audioInput", s.Input.Audio.Label())
+	stream := s.Input.Audio.Stream()
+
+	var warmupUntil time.Time
+	if s.Options.AECWarmupDuration > 0 {
+		warmupUntil = time.Now().Add(time.Duration(s.Options.AECWarmupDuration * float64(time.Second)))
+	}
+
+	var frameCount int
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case frame, ok := <-stream:
+			if !ok {
+				logger.Logger.Infow("[STT-PIPE] forwardAudioLoop: audio stream closed")
+				return
+			}
+			if !warmupUntil.IsZero() && time.Now().Before(warmupUntil) {
+				continue
+			}
+			s.mu.Lock()
+			activity := s.Activity
+			s.mu.Unlock()
+			if activity == nil {
+				continue
+			}
+			frameCount++
+			if frameCount%100 == 1 {
+				logger.Logger.Infow("[STT-PIPE] forwardAudioLoop forwarding frames to activity", "frameCount", frameCount)
+			}
+			_ = activity.PushAudio(frame)
+		}
+	}
+}
+
+func (s *AgentSession) forwardVideoLoop(ctx context.Context) {
+	if s.Input.Video == nil {
+		return
+	}
+	stream := s.Input.Video.Stream()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case frame, ok := <-stream:
+			if !ok {
+				return
+			}
+			s.mu.Lock()
+			activity := s.Activity
+			s.mu.Unlock()
+			if activity != nil {
+				_ = activity.PushVideo(frame)
+			}
+		}
+	}
+}
+
+func (s *AgentSession) TimelineSnapshot() []*AgentEvent {
+	if s == nil || s.Timeline == nil {
+		return nil
+	}
+	return s.Timeline.Snapshot()
+}
+
+func (s *AgentSession) Interrupt(ctx context.Context) error {
+	s.mu.Lock()
+	activity := s.Activity
+	s.mu.Unlock()
+
+	if activity != nil {
+		return activity.Interrupt(true)
+	}
+	return nil
 }
 
 func (s *AgentSession) SetRemoteUserIdentity(identity string) {
@@ -390,11 +901,12 @@ func (s *AgentSession) PublishAgentTranscript(text string) {
 
 func (s *AgentSession) Stop(ctx context.Context) error {
 	s.mu.Lock()
-	defer s.mu.Unlock()
-
 	if !s.started {
+		s.mu.Unlock()
 		return nil
 	}
+<<<<<<< HEAD
+=======
 
 	s.activity.Stop()
 	s.activity = nil
@@ -412,6 +924,37 @@ func (s *AgentSession) Stop(ctx context.Context) error {
 	s.Tools = nil
 	s.MetricsCollector = nil
 
+>>>>>>> origin/main
 	s.started = false
+	activity := s.Activity
+	assistant := s.Assistant
+	s.mu.Unlock()
+
+	if activity != nil {
+		activity.PauseScheduling()
+		if err := activity.Drain(ctx); err != nil && err != context.Canceled && err != context.DeadlineExceeded {
+			logger.Logger.Errorw("failed draining agent activity", err)
+		}
+		activity.Stop()
+	}
+
+	if assistant != nil {
+		assistant.Stop()
+	}
+
+	if s.Timeline != nil {
+		s.Timeline.AddEvent(&CloseEvent{
+			Reason:    CloseReasonJobShutdown,
+			CreatedAt: time.Now(),
+		})
+	}
+
+	s.mu.Lock()
+	if s.Activity == activity {
+		s.Activity = nil
+	}
+	s.mu.Unlock()
+
 	return nil
 }
+

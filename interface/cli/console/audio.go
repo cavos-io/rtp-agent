@@ -6,6 +6,10 @@ import (
 	"sync"
 	"time"
 
+<<<<<<< HEAD
+	"github.com/cavos-io/rtp-agent/core/agent"
+=======
+>>>>>>> origin/main
 	"github.com/cavos-io/rtp-agent/model"
 	"github.com/gordonklaus/portaudio"
 )
@@ -18,28 +22,50 @@ type AudioIO struct {
 
 	// Mic to Worker
 	audioOutCh chan *model.AudioFrame
-	
+	micTapCh   chan *model.AudioFrame
+
 	// Worker to Speakers
 	audioInCh chan *model.AudioFrame
-	
-	mu       sync.Mutex
-	started  bool
-	
-	sampleRate  int
-	channels    int
+
+	mu      sync.Mutex
+	started bool
+
+	sampleRate      int
+	channels        int
 	framesPerBuffer int
-	
+
 	speakerBuffer []int16
+	paused        bool
+
+	onPlaybackStarted  func(ev agent.PlaybackStartedEvent)
+	onPlaybackFinished func(ev agent.PlaybackFinishedEvent)
+	
+	playbackStarted bool
+	pushedDuration  time.Duration
+	playedSamples   int
+
+	flushWaiters  []chan struct{}
+	lastFlushWait chan struct{}
 }
 
 func NewAudioIO() *AudioIO {
 	return &AudioIO{
-		audioOutCh: make(chan *model.AudioFrame, 100),
-		audioInCh:  make(chan *model.AudioFrame, 100),
-		sampleRate: 24000,
-		channels:   1,
+		audioOutCh:      make(chan *model.AudioFrame, 100),
+		micTapCh:        make(chan *model.AudioFrame, 100),
+		audioInCh:       make(chan *model.AudioFrame, 100),
+		sampleRate:      24000,
+		channels:        1,
 		framesPerBuffer: 480, // 20ms at 24kHz
+		flushWaiters:    make([]chan struct{}, 0),
 	}
+}
+
+func (a *AudioIO) OnPlaybackStarted(f func(ev agent.PlaybackStartedEvent)) {
+	a.onPlaybackStarted = f
+}
+
+func (a *AudioIO) OnPlaybackFinished(f func(ev agent.PlaybackFinishedEvent)) {
+	a.onPlaybackFinished = f
 }
 
 func (a *AudioIO) Start(ctx context.Context) error {
@@ -59,41 +85,63 @@ func (a *AudioIO) Start(ctx context.Context) error {
 
 	inBuf := make([]int16, a.framesPerBuffer)
 
-	stream, err := portaudio.OpenDefaultStream(a.channels, a.channels, float64(a.sampleRate), a.framesPerBuffer, 
+	stream, err := portaudio.OpenDefaultStream(a.channels, a.channels, float64(a.sampleRate), a.framesPerBuffer,
 		func(in, out []int16) {
 			// Read from Mic
 			copy(inBuf, in)
-			
+
 			// Send Mic data to Agent
 			data := make([]byte, len(inBuf)*2)
 			for i, v := range inBuf {
 				data[i*2] = byte(v)
 				data[i*2+1] = byte(v >> 8)
 			}
-			
-			select {
-			case a.audioOutCh <- &model.AudioFrame{
+
+			frame := &model.AudioFrame{
 				Data:              data,
 				SampleRate:        uint32(a.sampleRate),
 				NumChannels:       uint32(a.channels),
 				SamplesPerChannel: uint32(len(inBuf)),
-			}:
-			default:
-				// Drop frame if channel full
 			}
+			a.fanoutMicFrame(frame)
 
 			// Write to Speakers from buffer
 			a.mu.Lock()
+			if a.paused {
+				for i := range out {
+					out[i] = 0
+				}
+				a.mu.Unlock()
+				return
+			}
+
+			if len(a.speakerBuffer) > 0 {
+				if !a.playbackStarted {
+					a.playbackStarted = true
+					if a.onPlaybackStarted != nil {
+						go a.onPlaybackStarted(agent.PlaybackStartedEvent{CreatedAt: time.Now()})
+					}
+				}
+			}
+
+			copied := 0
 			if len(a.speakerBuffer) >= len(out) {
 				copy(out, a.speakerBuffer[:len(out)])
 				a.speakerBuffer = a.speakerBuffer[len(out):]
+				copied = len(out)
 			} else {
 				// Play what we have, zero out the rest
 				copy(out[:len(a.speakerBuffer)], a.speakerBuffer)
+				copied = len(a.speakerBuffer)
 				for i := len(a.speakerBuffer); i < len(out); i++ {
 					out[i] = 0
 				}
 				a.speakerBuffer = a.speakerBuffer[:0]
+			}
+			a.playedSamples += copied
+			
+			if len(a.speakerBuffer) == 0 {
+				a.closeFlushWaitersLocked()
 			}
 			a.mu.Unlock()
 		})
@@ -129,6 +177,7 @@ func (a *AudioIO) Stop() error {
 	a.stream.Stop()
 	a.stream.Close()
 	portaudio.Terminate()
+	a.closeFlushWaitersLocked()
 	a.started = false
 	return nil
 }
@@ -154,6 +203,10 @@ func (a *AudioIO) MicFrames() <-chan *model.AudioFrame {
 	return a.audioOutCh
 }
 
+func (a *AudioIO) MicTapFrames() <-chan *model.AudioFrame {
+	return a.micTapCh
+}
+
 func (a *AudioIO) receiveLoop() {
 	for {
 		select {
@@ -163,6 +216,101 @@ func (a *AudioIO) receiveLoop() {
 			a.PushFrame(frame)
 		}
 	}
+}
+
+// --- agent.AudioInput Implementation ---
+func (a *AudioIO) Label() string {
+	return "ConsoleAudioIO"
+}
+
+func (a *AudioIO) Stream() <-chan *model.AudioFrame {
+	return a.audioOutCh
+}
+
+func (a *AudioIO) OnAttached() {}
+func (a *AudioIO) OnDetached() {}
+
+// --- agent.AudioOutput Implementation ---
+func (a *AudioIO) CaptureFrame(frame *model.AudioFrame) error {
+	a.PushFrame(frame)
+	return nil
+}
+
+func (a *AudioIO) Flush() {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	done := make(chan struct{})
+	if len(a.speakerBuffer) == 0 {
+		close(done)
+	} else {
+		a.flushWaiters = append(a.flushWaiters, done)
+	}
+	a.lastFlushWait = done
+}
+
+func (a *AudioIO) WaitForPlayout(ctx context.Context) error {
+	a.mu.Lock()
+	done := a.lastFlushWait
+	if done == nil {
+		done = make(chan struct{})
+		if len(a.speakerBuffer) == 0 {
+			close(done)
+		} else {
+			a.flushWaiters = append(a.flushWaiters, done)
+		}
+		a.lastFlushWait = done
+	}
+	a.mu.Unlock()
+
+	select {
+	case <-done:
+		a.emitPlaybackFinished(false)
+		return nil
+	case <-ctx.Done():
+		a.emitPlaybackFinished(true)
+		return ctx.Err()
+	}
+}
+
+func (a *AudioIO) emitPlaybackFinished(interrupted bool) {
+	a.mu.Lock()
+	if !a.playbackStarted {
+		a.mu.Unlock()
+		return
+	}
+	duration := time.Duration(a.playedSamples) * time.Second / time.Duration(a.sampleRate)
+	a.playbackStarted = false
+	a.playedSamples = 0
+	cb := a.onPlaybackFinished
+	a.mu.Unlock()
+
+	if cb != nil {
+		go cb(agent.PlaybackFinishedEvent{
+			PlaybackPosition: duration,
+			Interrupted:      interrupted,
+		})
+	}
+}
+
+func (a *AudioIO) ClearBuffer() {
+	a.mu.Lock()
+	a.speakerBuffer = a.speakerBuffer[:0]
+	a.closeFlushWaitersLocked()
+	a.mu.Unlock()
+	a.emitPlaybackFinished(true)
+}
+
+func (a *AudioIO) Pause() {
+	a.mu.Lock()
+	a.paused = true
+	a.mu.Unlock()
+}
+
+func (a *AudioIO) Resume() {
+	a.mu.Lock()
+	a.paused = false
+	a.mu.Unlock()
 }
 
 // Write for pipe integration
@@ -184,3 +332,47 @@ func (a *AudioIO) Write(frame *model.AudioFrame) error {
 		}
 	}
 }
+
+func (a *AudioIO) closeFlushWaitersLocked() {
+	for _, ch := range a.flushWaiters {
+		close(ch)
+	}
+	a.flushWaiters = a.flushWaiters[:0]
+}
+
+func cloneAudioFrame(frame *model.AudioFrame) *model.AudioFrame {
+	if frame == nil {
+		return nil
+	}
+
+	data := make([]byte, len(frame.Data))
+	copy(data, frame.Data)
+
+	return &model.AudioFrame{
+		Data:              data,
+		SampleRate:        frame.SampleRate,
+		NumChannels:       frame.NumChannels,
+		SamplesPerChannel: frame.SamplesPerChannel,
+	}
+}
+
+func (a *AudioIO) fanoutMicFrame(frame *model.AudioFrame) {
+	if frame == nil {
+		return
+	}
+
+	// Primary mic stream for STT/pipeline.
+	select {
+	case a.audioOutCh <- frame:
+	default:
+		// Drop frame if channel full.
+	}
+
+	// UI-only tap stream. Must never block or compete with primary stream.
+	select {
+	case a.micTapCh <- cloneAudioFrame(frame):
+	default:
+		// Drop frame if tap channel is full.
+	}
+}
+

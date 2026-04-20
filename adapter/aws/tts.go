@@ -94,3 +94,4 @@ func (s *awsTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 func (s *awsTTSChunkedStream) Close() error {
 	return s.stream.Close()
 }
+

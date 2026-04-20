@@ -3,7 +3,10 @@ package liveavatar
 import (
 	"context"
 	"fmt"
+<<<<<<< HEAD
+=======
 	"github.com/cavos-io/rtp-agent/core/agent"
+>>>>>>> origin/main
 )
 
 type LiveAvatar struct {
@@ -21,7 +24,4 @@ func (a *LiveAvatar) Start(ctx context.Context) error {
 	return nil
 }
 
-func (a *LiveAvatar) UpdateState(state agent.AvatarState) error {
-	fmt.Printf("LiveAvatar state updated to: %s\n", state)
-	return nil
-}
+

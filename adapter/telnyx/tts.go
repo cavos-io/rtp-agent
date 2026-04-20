@@ -99,3 +99,4 @@ func (s *telnyxTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 func (s *telnyxTTSChunkedStream) Close() error {
 	return s.resp.Body.Close()
 }
+

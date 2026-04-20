@@ -23,3 +23,4 @@ func NewMinimalLLM(apiKey string, model string) *MinimalLLM {
 func (l *MinimalLLM) Chat(ctx context.Context, chatCtx *llm.ChatContext, opts ...llm.ChatOption) (llm.LLMStream, error) {
 	return l.inner.Chat(ctx, chatCtx, opts...)
 }
+

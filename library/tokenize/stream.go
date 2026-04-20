@@ -131,3 +131,4 @@ func (s *BufferedTokenStream) Next() (*TokenData, error) {
 	}
 	return tok, nil
 }
+

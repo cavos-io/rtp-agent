@@ -83,3 +83,4 @@ func (s *TelnyxSTT) Recognize(ctx context.Context, frames []*model.AudioFrame, l
 		},
 	}, nil
 }
+

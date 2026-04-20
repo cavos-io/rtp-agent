@@ -174,3 +174,4 @@ func (s *gladiaSTTStream) Next() (*stt.SpeechEvent, error) {
 		return nil, err
 	}
 }
+

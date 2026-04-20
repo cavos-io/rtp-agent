@@ -46,6 +46,7 @@ type AgentServer struct {
 	activeJobs map[string]*JobContext
 	mu         sync.Mutex
 	conn       *websocket.Conn
+	isDraining bool
 
 	consoleSession any // Store local session for CLI console
 }
@@ -81,6 +82,16 @@ func (s *AgentServer) GetConsoleSession() any {
 	return s.consoleSession
 }
 
+<<<<<<< HEAD
+// GetEntrypointFunc retrieves the registered entrypoint function (for console mode)
+func (s *AgentServer) GetEntrypointFunc() func(*JobContext) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.entrypointFnc
+}
+
+=======
+>>>>>>> origin/main
 func (s *AgentServer) Run(ctx context.Context) error {
 	if s.Options.WSRL == "" || s.Options.APIKey == "" || s.Options.APISecret == "" {
 		return fmt.Errorf("missing LiveKit credentials")
@@ -156,7 +167,6 @@ func (s *AgentServer) Run(ctx context.Context) error {
 			},
 		},
 	}
-
 	b, err := proto.Marshal(req)
 	if err != nil {
 		return err
@@ -187,21 +197,63 @@ func (s *AgentServer) Run(ctx context.Context) error {
 				}
 				pb, err := proto.Marshal(ping)
 				if err != nil {
+<<<<<<< HEAD
+					logger.Logger.Errorw("Ping marshal error", err)
+=======
 					fmt.Printf("   ❌ Ping marshal error: %v\n", err)
 					return
+>>>>>>> origin/main
 				}
 				s.mu.Lock()
 				err = conn.WriteMessage(websocket.BinaryMessage, pb)
 				s.mu.Unlock()
 				if err != nil {
-					fmt.Printf("   ❌ Ping send error: %v\n", err)
-					return
+<<<<<<< HEAD
+					logger.Logger.Errorw("Ping send error", err)
 				}
-				fmt.Printf("   🏓 WorkerPing sent (ts=%d)\n", time.Now().UnixMilli())
+				logger.Logger.Debugw("WorkerPing sent", "ts", time.Now().UnixMilli())
 			}
 		}
 	}()
 
+	// Message Loop — read in a separate goroutine so ctx cancellation is respected
+	type wsMsg struct {
+		msgType int
+		data    []byte
+		err     error
+	}
+	msgCh := make(chan wsMsg, 1)
+
+	go func() {
+		for {
+			mt, data, err := conn.ReadMessage()
+			msgCh <- wsMsg{mt, data, err}
+			if err != nil {
+				return
+=======
+					fmt.Printf("   ❌ Ping send error: %v\n", err)
+					return
+				}
+				fmt.Printf("   🏓 WorkerPing sent (ts=%d)\n", time.Now().UnixMilli())
+>>>>>>> origin/main
+			}
+		}
+	}()
+
+<<<<<<< HEAD
+	for {
+		select {
+		case <-ctx.Done():
+			if s.conn != nil {
+				s.conn.Close()
+			}
+			return ctx.Err()
+		case result := <-msgCh:
+			if result.err != nil {
+				return result.err
+			}
+			if result.msgType != websocket.BinaryMessage {
+=======
 	// Message Loop
 	for {
 		select {
@@ -217,21 +269,102 @@ func (s *AgentServer) Run(ctx context.Context) error {
 			fmt.Printf("   📨 WS message received: type=%d len=%d\n", msgType, len(data))
 
 			if msgType != websocket.BinaryMessage {
+>>>>>>> origin/main
 				continue
 			}
-
 			msg := &livekit.ServerMessage{}
-			if err := proto.Unmarshal(data, msg); err != nil {
+			if err := proto.Unmarshal(result.data, msg); err != nil {
 				logger.Logger.Errorw("Failed to unmarshal server message", err)
 				continue
 			}
+<<<<<<< HEAD
+=======
 
 			fmt.Printf("   📬 Parsed message type: %T\n", msg.Message)
+>>>>>>> origin/main
 			s.handleMessage(ctx, msg)
 		}
 	}
 }
 
+<<<<<<< HEAD
+// Drain stops the worker from accepting new jobs and waits for existing ones to finish.
+func (s *AgentServer) Drain(ctx context.Context) error {
+	s.mu.Lock()
+	if s.isDraining {
+		s.mu.Unlock()
+		return nil
+	}
+	s.isDraining = true
+	activeCount := len(s.activeJobs)
+	s.mu.Unlock()
+
+	logger.Logger.Infow("Draining agent server", "active_jobs", activeCount)
+
+	// Notify LiveKit that we are draining
+	s.sendLoadUpdate(1.0, true)
+
+	if activeCount == 0 {
+		return nil
+	}
+
+	ticker := time.NewTicker(1 * time.Second)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-ticker.C:
+			s.mu.Lock()
+			count := len(s.activeJobs)
+			s.mu.Unlock()
+
+			if count == 0 {
+				logger.Logger.Infow("All jobs finished, drain complete")
+				return nil
+			}
+			logger.Logger.Infow("Waiting for jobs to finish", "pending_jobs", count)
+		}
+	}
+}
+
+func (s *AgentServer) sendLoadUpdate(load float32, draining bool) error {
+	status := livekit.WorkerStatus_WS_AVAILABLE
+	// Note: WS_DRAINING is not supported in the current protocol version.
+	// We handle draining internally by rejecting new jobs.
+
+	s.mu.Lock()
+	jobCount := uint32(len(s.activeJobs))
+	conn := s.conn
+	s.mu.Unlock()
+
+	if conn == nil {
+		return nil
+	}
+
+	update := &livekit.WorkerMessage{
+		Message: &livekit.WorkerMessage_UpdateWorker{
+			UpdateWorker: &livekit.UpdateWorkerStatus{
+				Status:   &status,
+				Load:     load,
+				JobCount: jobCount,
+			},
+		},
+	}
+
+	b, err := proto.Marshal(update)
+	if err != nil {
+		return err
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return conn.WriteMessage(websocket.BinaryMessage, b)
+}
+
+=======
+>>>>>>> origin/main
 // sendAvailable broadcasts UpdateWorkerStatus(WS_AVAILABLE) so the LiveKit
 // server knows this worker is ready to receive job dispatches.
 func (s *AgentServer) sendAvailable() error {
@@ -255,10 +388,18 @@ func (s *AgentServer) sendAvailable() error {
 }
 
 func (s *AgentServer) handleMessage(ctx context.Context, msg *livekit.ServerMessage) {
+	logger.Logger.Infow("Received server message", "type", fmt.Sprintf("%T", msg.Message))
+
 	switch m := msg.Message.(type) {
 	case *livekit.ServerMessage_Register:
 		fmt.Printf("   ✅ Worker Registered! ID: %s\n", m.Register.WorkerId)
 		logger.Logger.Infow("Worker Registered", "workerId", m.Register.WorkerId, "serverInfo", m.Register.ServerInfo)
+<<<<<<< HEAD
+		if err := s.sendAvailable(); err != nil {
+			logger.Logger.Errorw("Failed to send available status", err)
+		} else {
+			logger.Logger.Infow("Worker status set to AVAILABLE — waiting for jobs...")
+=======
 		// Signal to the server that this worker is ready to accept jobs.
 		// Without this UpdateWorkerStatus the server keeps the worker in an
 		// "initializing" state and will never assign dispatches to it.
@@ -266,17 +407,25 @@ func (s *AgentServer) handleMessage(ctx context.Context, msg *livekit.ServerMess
 			fmt.Printf("   ❌ Failed to send available status: %v\n", err)
 		} else {
 			fmt.Println("   ✅ Worker status set to AVAILABLE — waiting for jobs...")
+>>>>>>> origin/main
 		}
 	case *livekit.ServerMessage_Availability:
+		logger.Logger.Infow("Received availability request", "jobId", m.Availability.Job.Id)
 		s.handleAvailability(ctx, m.Availability)
 	case *livekit.ServerMessage_Assignment:
+		logger.Logger.Infow("Received job assignment", "jobId", m.Assignment.Job.Id)
 		s.handleAssignment(ctx, m.Assignment)
 	case *livekit.ServerMessage_Termination:
+		logger.Logger.Infow("Received job termination", "jobId", m.Termination.JobId)
 		s.handleTermination(m.Termination)
 	case *livekit.ServerMessage_Pong:
+<<<<<<< HEAD
+		logger.Logger.Infow("Received WorkerPong", "timestamp", m.Pong.Timestamp)
+=======
 		// Application-level keepalive response — worker is confirmed alive
 		fmt.Printf("   🏓 WorkerPong received (lastTs=%d serverTs=%d)\n",
 			m.Pong.LastTimestamp, m.Pong.Timestamp)
+>>>>>>> origin/main
 	default:
 		fmt.Printf("   ⚠️ Unhandled server message type: %T\n", msg.Message)
 		logger.Logger.Warnw("Unhandled message type received", nil, "type", fmt.Sprintf("%T", msg.Message))
@@ -287,12 +436,16 @@ func (s *AgentServer) handleAvailability(ctx context.Context, req *livekit.Avail
 	fmt.Printf("   📥 Received availability request: job=%s\n", req.Job.Id)
 	logger.Logger.Infow("Received availability request", "jobId", req.Job.Id)
 
-	// Default to accept
+	s.mu.Lock()
+	draining := s.isDraining
+	s.mu.Unlock()
+
+	// Default to accept unless draining
 	ans := &livekit.WorkerMessage{
 		Message: &livekit.WorkerMessage_Availability{
 			Availability: &livekit.AvailabilityResponse{
 				JobId:               req.Job.Id,
-				Available:           true,
+				Available:           !draining,
 				ParticipantIdentity: "agent-" + req.Job.Id[:8],
 				ParticipantName:     s.Options.AgentName,
 			},
@@ -407,3 +560,4 @@ func (s *AgentServer) ExecuteLocalJob(ctx context.Context, roomName string, part
 	<-ctx.Done()
 	return nil
 }
+

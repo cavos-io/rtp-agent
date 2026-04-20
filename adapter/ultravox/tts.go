@@ -98,3 +98,4 @@ func (s *ultravoxTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 func (s *ultravoxTTSChunkedStream) Close() error {
 	return s.resp.Body.Close()
 }
+

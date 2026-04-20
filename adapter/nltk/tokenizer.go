@@ -56,3 +56,4 @@ func (t *SentenceTokenizer) Stream(language string) tokenize.SentenceStream {
 		return t.Tokenize(s, language)
 	}, t.MinSentenceLen, t.StreamContextLen)
 }
+

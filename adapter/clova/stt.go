@@ -79,3 +79,4 @@ func (s *ClovaSTT) Recognize(ctx context.Context, frames []*model.AudioFrame, la
 		},
 	}, nil
 }
+

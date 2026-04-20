@@ -75,3 +75,4 @@ func (l *LLM) Chat(ctx context.Context, chatCtx *llm.ChatContext, opts ...llm.Ch
 	inner := openai.NewOpenAILLMWithBaseURL(token, l.model, l.baseURL)
 	return inner.Chat(ctx, chatCtx, opts...)
 }
+

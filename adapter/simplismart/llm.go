@@ -23,3 +23,4 @@ func NewSimplismartLLM(apiKey string, model string) *SimplismartLLM {
 func (l *SimplismartLLM) Chat(ctx context.Context, chatCtx *llm.ChatContext, opts ...llm.ChatOption) (llm.LLMStream, error) {
 	return l.inner.Chat(ctx, chatCtx, opts...)
 }
+

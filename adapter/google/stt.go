@@ -196,3 +196,4 @@ func (s *googleSTTStream) Next() (*stt.SpeechEvent, error) {
 		return nil, err
 	}
 }
+

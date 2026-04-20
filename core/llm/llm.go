@@ -126,7 +126,8 @@ func (m *MetricsReport) GetType() string             { return "metrics_report" }
 func (m *MetricsReport) GetCreatedAt() time.Time     { return m.CreatedAt }
 
 type ChatContext struct {
-	Items []ChatItem
+	Items       []ChatItem          `json:"items"`
+	OnItemAdded func(item ChatItem) `json:"-"`
 }
 
 func NewChatContext() *ChatContext {
@@ -137,6 +138,10 @@ func NewChatContext() *ChatContext {
 
 func (c *ChatContext) Append(item ChatItem) {
 	c.Items = append(c.Items, item)
+
+	if c.OnItemAdded != nil {
+		c.OnItemAdded(item)
+	}
 
 	// Emit OTLP log event
 	attrs := map[string]interface{}{
@@ -193,18 +198,30 @@ type Tool interface {
 	Name() string
 	Description() string
 	Parameters() map[string]any
-	Execute(ctx context.Context, args string) (string, error)
+	Execute(ctx context.Context, args any) (any, error)
+}
+
+// ToolWithArgs indicates that a tool has a specific struct for its arguments.
+type ToolWithArgs interface {
+	Tool
+	Args() any
+}
+
+// ToolWithReply indicates that a tool specifically requires or does not require an LLM reply.
+type ToolWithReply interface {
+	Tool
+	IsReplyRequired() bool
 }
 
 type Toolset interface {
 	ID() string
-	Tools() []Tool
+	Tools() []interface{}
 }
 
 type ToolChoice any
 
 type ChatOptions struct {
-	Tools             []Tool
+	Tools             []interface{}
 	ToolChoice        ToolChoice
 	ParallelToolCalls bool
 }
@@ -220,7 +237,7 @@ type LLMStream interface {
 
 type ChatOption func(*ChatOptions)
 
-func WithTools(tools []Tool) ChatOption {
+func WithTools(tools []interface{}) ChatOption {
 	return func(o *ChatOptions) {
 		o.Tools = tools
 	}
@@ -256,7 +273,7 @@ type RealtimeModel interface {
 type RealtimeSession interface {
 	UpdateInstructions(instructions string) error
 	UpdateChatContext(chatCtx *ChatContext) error
-	UpdateTools(tools []Tool) error
+	UpdateTools(tools []interface{}) error
 	Interrupt() error
 	Close() error
 	EventCh() <-chan RealtimeEvent
@@ -304,3 +321,4 @@ func (f *FallbackAdapter) Chat(ctx context.Context, chatCtx *ChatContext, opts .
 	}
 	return nil, lastErr
 }
+

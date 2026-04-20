@@ -45,3 +45,4 @@ func (p *PageActions) HoldKey(key string, duration float64) {}
 func (p *PageActions) Wait() {}
 func (p *PageActions) LastFrame() []byte { return nil }
 func (p *PageActions) Close() {}
+

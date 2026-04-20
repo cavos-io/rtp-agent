@@ -23,3 +23,4 @@ func NewBasetenLLM(apiKey string, model string) *BasetenLLM {
 func (l *BasetenLLM) Chat(ctx context.Context, chatCtx *llm.ChatContext, opts ...llm.ChatOption) (llm.LLMStream, error) {
 	return l.inner.Chat(ctx, chatCtx, opts...)
 }
+

@@ -84,8 +84,60 @@ func (c *ChatContext) FindInsertionIndex(createdAt time.Time) int {
 	return 0
 }
 
-func (c *ChatContext) ToProviderFormat(format string) ([]map[string]any, any) {
-	if format == "openai" {
+func (c *ChatContext) ToDict(excludeTimestamp bool) map[string]any {
+	items := make([]map[string]any, 0)
+	for _, item := range c.Items {
+		var itemDict map[string]any
+		switch it := item.(type) {
+		case *ChatMessage:
+			content := make([]map[string]any, 0)
+			for _, c := range it.Content {
+				content = append(content, map[string]any{
+					"text": c.Text,
+				})
+			}
+			itemDict = map[string]any{
+				"type":    "message",
+				"role":    string(it.Role),
+				"content": content,
+			}
+		case *FunctionCall:
+			itemDict = map[string]any{
+				"type":      "function_call",
+				"call_id":   it.CallID,
+				"name":      it.Name,
+				"arguments": it.Arguments,
+			}
+		case *FunctionCallOutput:
+			itemDict = map[string]any{
+				"type":    "function_call_output",
+				"call_id": it.CallID,
+				"name":    it.Name,
+				"output":  it.Output,
+				"error":   it.IsError,
+			}
+		case *AgentHandoff:
+			itemDict = map[string]any{
+				"type":         "agent_handoff",
+				"old_agent_id": it.OldAgentID,
+				"new_agent_id": it.NewAgentID,
+			}
+		}
+		if itemDict != nil {
+			if !excludeTimestamp {
+				itemDict["created_at"] = float64(item.GetCreatedAt().UnixNano()) / 1e9
+			}
+			items = append(items, itemDict)
+		}
+	}
+	return map[string]any{
+		"items": items,
+	}
+}
+
+func (c *ChatContext) ToProviderFormat(format string) (any, any) {
+	switch format {
+	case "openai", "groq":
 		messages := make([]map[string]any, 0)
 		for _, item := range c.Items {
 			switch it := item.(type) {
@@ -93,6 +145,9 @@ func (c *ChatContext) ToProviderFormat(format string) ([]map[string]any, any) {
 				msg := map[string]any{
 					"role":    string(it.Role),
 					"content": it.TextContent(),
+				}
+				if it.Role == ChatRoleDeveloper {
+					msg["role"] = "system"
 				}
 				messages = append(messages, msg)
 			case *FunctionCall:
@@ -120,6 +175,94 @@ func (c *ChatContext) ToProviderFormat(format string) ([]map[string]any, any) {
 			}
 		}
 		return messages, nil
+
+	case "anthropic":
+		messages := make([]map[string]any, 0)
+		var systemPrompt string
+		for _, item := range c.Items {
+			switch it := item.(type) {
+			case *ChatMessage:
+				if it.Role == ChatRoleSystem || it.Role == ChatRoleDeveloper {
+					systemPrompt += it.TextContent() + "\n"
+					continue
+				}
+				messages = append(messages, map[string]any{
+					"role":    it.Role,
+					"content": it.TextContent(),
+				})
+			case *FunctionCall:
+				messages = append(messages, map[string]any{
+					"role": "assistant",
+					"content": []map[string]any{
+						{
+							"type": "tool_use",
+							"id":   it.CallID,
+							"name": it.Name,
+							"input": it.Extra, // Expecting parsed map in Extra if possible
+						},
+					},
+				})
+			case *FunctionCallOutput:
+				messages = append(messages, map[string]any{
+					"role": "user",
+					"content": []map[string]any{
+						{
+							"type":    "tool_result",
+							"tool_use_id": it.CallID,
+							"content": it.Output,
+							"is_error": it.IsError,
+						},
+					},
+				})
+			}
+		}
+		return messages, systemPrompt
+
+	case "google":
+		contents := make([]map[string]any, 0)
+		for _, item := range c.Items {
+			switch it := item.(type) {
+			case *ChatMessage:
+				role := "user"
+				if it.Role == ChatRoleAssistant {
+					role = "model"
+				}
+				contents = append(contents, map[string]any{
+					"role": role,
+					"parts": []map[string]any{
+						{"text": it.TextContent()},
+					},
+				})
+			case *FunctionCall:
+				contents = append(contents, map[string]any{
+					"role": "model",
+					"parts": []map[string]any{
+						{
+							"functionCall": map[string]any{
+								"name": it.Name,
+								"args": it.Extra,
+							},
+						},
+					},
+				})
+			case *FunctionCallOutput:
+				contents = append(contents, map[string]any{
+					"role": "user",
+					"parts": []map[string]any{
+						{
+							"functionResponse": map[string]any{
+								"name": it.Name,
+								"response": map[string]any{
+									"content": it.Output,
+								},
+							},
+						},
+					},
+				})
+			}
+		}
+		return contents, nil
 	}
 	return nil, nil
 }
+

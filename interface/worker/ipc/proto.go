@@ -54,3 +54,4 @@ type ShutdownRequest struct {
 type Exiting struct {
 	Reason string `json:"reason"`
 }
+
