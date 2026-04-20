@@ -274,3 +274,4 @@ func (s *speechmaticsSTTStream) Next() (*stt.SpeechEvent, error) {
 		return nil, err
 	}
 }
+

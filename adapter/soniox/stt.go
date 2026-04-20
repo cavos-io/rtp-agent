@@ -72,3 +72,4 @@ func (s *SonioxSTT) Recognize(ctx context.Context, frames []*model.AudioFrame, l
 		},
 	}, nil
 }
+

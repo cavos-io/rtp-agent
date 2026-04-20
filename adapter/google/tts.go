@@ -120,3 +120,4 @@ func (s *googleTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 func (s *googleTTSChunkedStream) Close() error {
 	return nil
 }
+

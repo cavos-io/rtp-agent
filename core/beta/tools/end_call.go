@@ -72,7 +72,7 @@ func (t *EndCallTool) Parameters() map[string]any {
 	}
 }
 
-func (t *EndCallTool) Execute(ctx context.Context, args string) (string, error) {
+func (t *EndCallTool) Execute(ctx context.Context, args any) (any, error) {
 	if t.shutter == nil {
 		return "", fmt.Errorf("shutter not available")
 	}
@@ -99,8 +99,9 @@ func (t *EndCallTool) Execute(ctx context.Context, args string) (string, error) 
 	}()
 
 	if t.opts.OnToolCompleted != nil {
-		t.opts.OnToolCompleted(rc, t.opts.EndInstructions)
+		t.opts.OnToolCompleted(rc, "ended call")
 	}
 
-	return t.opts.EndInstructions, nil
+	return "Ending call...", nil
 }
+

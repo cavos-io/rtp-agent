@@ -24,6 +24,11 @@ func DefaultInputDetails() InputDetails {
 	return InputDetails{Modality: "audio"}
 }
 
+type RunResultInterface interface {
+	AddEvent(ev RunEvent)
+	WatchTask(done <-chan struct{})
+}
+
 type SpeechHandle struct {
 	ID                 string
 	AllowInterruptions bool
@@ -38,7 +43,20 @@ type SpeechHandle struct {
 	doneCh      chan struct{}
 	scheduledCh chan struct{}
 
+	FinalOutput any
+	ManualText  string
+
 	mu sync.Mutex
+	err error
+	
+	OnItemAdded func(item llm.ChatItem)
+	RunResult   RunResultInterface
+}
+
+func (s *SpeechHandle) Error() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.err
 }
 
 func NewSpeechHandle(allowInterruptions bool, inputDetails InputDetails) *SpeechHandle {
@@ -105,10 +123,15 @@ func (s *SpeechHandle) Interrupt(force bool) error {
 }
 
 func (s *SpeechHandle) MarkDone() {
+	s.MarkDoneWithError(nil)
+}
+
+func (s *SpeechHandle) MarkDoneWithError(err error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	if !s.IsDone() {
+		s.err = err
 		close(s.doneCh)
 	}
 }
@@ -125,8 +148,9 @@ func (s *SpeechHandle) MarkScheduled() {
 func (s *SpeechHandle) Wait(ctx context.Context) error {
 	select {
 	case <-s.doneCh:
-		return nil
+		return s.Error()
 	case <-ctx.Done():
 		return ctx.Err()
 	}
 }
+

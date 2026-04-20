@@ -201,3 +201,4 @@ func (s *fallbackRecognizeStream) Next() (*SpeechEvent, error) {
 		return nil, context.Canceled
 	}
 }
+

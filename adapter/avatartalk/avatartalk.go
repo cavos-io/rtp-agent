@@ -3,8 +3,6 @@ package avatartalk
 import (
 	"context"
 	"fmt"
-
-	"github.com/cavos-io/rtp-agent/core/agent"
 )
 
 type AvatartalkAvatar struct {
@@ -22,7 +20,4 @@ func (a *AvatartalkAvatar) Start(ctx context.Context) error {
 	return nil
 }
 
-func (a *AvatartalkAvatar) UpdateState(state agent.AvatarState) error {
-	fmt.Printf("AvatartalkAvatar state updated to: %s\n", state)
-	return nil
-}
+

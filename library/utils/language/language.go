@@ -94,3 +94,4 @@ func NormalizeLanguage(code string) string {
 
 	return lowered
 }
+

@@ -38,3 +38,4 @@ type VADStream interface {
 	Close() error
 	Next() (*VADEvent, error)
 }
+

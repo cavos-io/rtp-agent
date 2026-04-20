@@ -98,3 +98,4 @@ func (s *gradiumTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 func (s *gradiumTTSChunkedStream) Close() error {
 	return s.resp.Body.Close()
 }
+

@@ -17,3 +17,4 @@ func ShortUUID(prefix string) string {
 func TimeMS() int64 {
 	return time.Now().UnixNano() / int64(time.Millisecond)
 }
+

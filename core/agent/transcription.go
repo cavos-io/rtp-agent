@@ -19,6 +19,12 @@ func NewTranscriptionFilter() *TranscriptionFilter {
 	return &TranscriptionFilter{}
 }
 
+type SyncEvent struct {
+	Text      string
+	Flush     bool
+	SegmentID string
+}
+
 // TranscriptSynchronizer drip-feeds text to match the playout speed of audio.
 type TranscriptSynchronizer struct {
 	ctx      context.Context
@@ -26,21 +32,34 @@ type TranscriptSynchronizer struct {
 	
 	textCh   chan string
 	audioCh  chan *model.AudioFrame
-	eventCh  chan string
+	eventCh  chan SyncEvent
 	
 	mu             sync.Mutex
 	textBuffer     string
+	yieldedText    string
+	lastYieldedText string
+	segmentID      string
 	playedAudioDur time.Duration
 	yieldedTextDur time.Duration
-	speakingRate   float64 // syllables per second
+	speakingRate   float64       // syllables per second
+	refreshRate    time.Duration // ticker interval
 	
 	closed bool
 }
 
+func (s *TranscriptSynchronizer) SetSegmentID(id string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.segmentID = id
+}
+
 // NewTranscriptSynchronizer initializes the synchronizer. Default speaking rate is usually ~3.83 syllables/sec.
-func NewTranscriptSynchronizer(speakingRate float64) *TranscriptSynchronizer {
+func NewTranscriptSynchronizer(speakingRate float64, refreshRate time.Duration) *TranscriptSynchronizer {
 	if speakingRate <= 0 {
 		speakingRate = 3.83
+	}
+	if refreshRate <= 0 {
+		refreshRate = 50 * time.Millisecond
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	s := &TranscriptSynchronizer{
@@ -48,8 +67,9 @@ func NewTranscriptSynchronizer(speakingRate float64) *TranscriptSynchronizer {
 		cancel:       cancel,
 		textCh:       make(chan string, 100),
 		audioCh:      make(chan *model.AudioFrame, 100),
-		eventCh:      make(chan string, 100),
+		eventCh:      make(chan SyncEvent, 100),
 		speakingRate: speakingRate,
+		refreshRate:  refreshRate,
 	}
 
 	go s.run()
@@ -76,17 +96,30 @@ func (s *TranscriptSynchronizer) PushAudio(frame *model.AudioFrame) {
 	s.audioCh <- frame
 }
 
-func (s *TranscriptSynchronizer) EventCh() <-chan string {
+func (s *TranscriptSynchronizer) EventCh() <-chan SyncEvent {
 	return s.eventCh
 }
 
-// Interrupt immediately flushes the remaining text buffer to the event channel and stops syncing.
+// RotateSegment flushes the remaining text buffer and resets the time accumulators for a new audio segment.
+func (s *TranscriptSynchronizer) RotateSegment() {
+	s.Interrupt() // Flushes remaining text
+	s.eventCh <- SyncEvent{Flush: true, SegmentID: s.segmentID}
+	
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.playedAudioDur = 0
+	s.yieldedTextDur = 0
+	s.lastYieldedText = s.yieldedText
+	s.yieldedText = ""
+}
+
 func (s *TranscriptSynchronizer) Interrupt() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	
 	if s.textBuffer != "" {
-		s.eventCh <- s.textBuffer
+		s.yieldedText += s.textBuffer
+		s.eventCh <- SyncEvent{Text: s.textBuffer, SegmentID: s.segmentID}
 		s.textBuffer = ""
 	}
 }
@@ -103,6 +136,129 @@ func (s *TranscriptSynchronizer) Close() {
 	s.cancel()
 	close(s.textCh)
 	close(s.audioCh)
+}
+
+// SyncedAudioOutput wraps an AudioOutput and pushes frames to the synchronizer
+type SyncedAudioOutput struct {
+	sync *TranscriptSynchronizer
+	next AudioOutput
+}
+
+func NewSyncedAudioOutput(sync *TranscriptSynchronizer, next AudioOutput) *SyncedAudioOutput {
+	return &SyncedAudioOutput{sync: sync, next: next}
+}
+
+func (s *SyncedAudioOutput) Label() string { return "TranscriptSynchronizerAudio" }
+func (s *SyncedAudioOutput) CaptureFrame(frame *model.AudioFrame) error {
+	s.sync.PushAudio(frame)
+	if s.next != nil {
+		return s.next.CaptureFrame(frame)
+	}
+	return nil
+}
+func (s *SyncedAudioOutput) Flush() {
+	s.sync.RotateSegment()
+	if s.next != nil {
+		s.next.Flush()
+	}
+}
+func (s *SyncedAudioOutput) WaitForPlayout(ctx context.Context) error {
+	if s.next != nil {
+		return s.next.WaitForPlayout(ctx)
+	}
+	return nil
+}
+func (s *SyncedAudioOutput) ClearBuffer() {
+	if s.next != nil {
+		s.next.ClearBuffer()
+	}
+}
+func (s *SyncedAudioOutput) OnAttached() {
+	if s.next != nil {
+		s.next.OnAttached()
+	}
+}
+func (s *SyncedAudioOutput) OnDetached() {
+	if s.next != nil {
+		s.next.OnDetached()
+	}
+}
+func (s *SyncedAudioOutput) Pause() {
+	if s.next != nil {
+		s.next.Pause()
+	}
+}
+func (s *SyncedAudioOutput) Resume() {
+	if s.next != nil {
+		s.next.Resume()
+	}
+}
+func (s *SyncedAudioOutput) OnPlaybackStarted(f func(ev PlaybackStartedEvent)) {
+	if s.next != nil {
+		s.next.OnPlaybackStarted(f)
+	}
+}
+func (s *SyncedAudioOutput) OnPlaybackFinished(f func(ev PlaybackFinishedEvent)) {
+	if s.next != nil {
+		s.next.OnPlaybackFinished(func(ev PlaybackFinishedEvent) {
+			s.sync.mu.Lock()
+			transcript := s.sync.yieldedText
+			if transcript == "" {
+				transcript = s.sync.lastYieldedText
+			}
+			ev.SynchronizedTranscript = transcript
+			s.sync.mu.Unlock()
+			f(ev)
+		})
+	}
+}
+
+// SyncedTextOutput wraps a TextOutput and pushes text to the synchronizer
+type SyncedTextOutput struct {
+	sync *TranscriptSynchronizer
+	next TextOutput
+}
+
+func NewSyncedTextOutput(sync *TranscriptSynchronizer, next TextOutput) *SyncedTextOutput {
+	sto := &SyncedTextOutput{sync: sync, next: next}
+	if next != nil {
+		go func() {
+			for ev := range sync.EventCh() {
+				if ev.SegmentID != "" {
+					next.SetSegmentID(ev.SegmentID)
+				}
+				if ev.Flush {
+					next.Flush()
+				} else if ev.Text != "" {
+					_ = next.CaptureText(ev.Text)
+				}
+			}
+		}()
+	}
+	return sto
+}
+
+func (s *SyncedTextOutput) Label() string { return "TranscriptSynchronizerText" }
+func (s *SyncedTextOutput) SetSegmentID(id string) {
+	s.sync.SetSegmentID(id)
+}
+func (s *SyncedTextOutput) CaptureText(text string) error {
+	s.sync.PushText(text)
+	return nil // Actual text emission happens from the synchronizer loop
+}
+func (s *SyncedTextOutput) Flush() {
+	// Let the audio sync chain flush the text (RotateSegment triggers SyncEvent.Flush).
+	// Calling Flush here would prematurely end the stream before RotateSegment is called.
+}
+func (s *SyncedTextOutput) OnAttached() {
+	if s.next != nil {
+		s.next.OnAttached()
+	}
+}
+func (s *SyncedTextOutput) OnDetached() {
+	if s.next != nil {
+		s.next.OnDetached()
+	}
 }
 
 func countSyllables(text string) int {
@@ -134,7 +290,7 @@ func countSyllables(text string) int {
 func (s *TranscriptSynchronizer) run() {
 	defer close(s.eventCh)
 	
-	ticker := time.NewTicker(50 * time.Millisecond)
+	ticker := time.NewTicker(s.refreshRate)
 	defer ticker.Stop()
 
 	for {
@@ -212,13 +368,15 @@ func (s *TranscriptSynchronizer) run() {
 				// Calculate estimated duration of what we just emitted
 				estDur := time.Duration(float64(emittedSyllables)/s.speakingRate*1000.0) * time.Millisecond
 				s.yieldedTextDur += estDur
+				s.yieldedText += toEmit
 				s.textBuffer = remaining
 				s.mu.Unlock()
-				
-				s.eventCh <- toEmit
+
+				s.eventCh <- SyncEvent{Text: toEmit, SegmentID: s.segmentID}
 			} else {
 				s.mu.Unlock()
 			}
 		}
 	}
 }
+

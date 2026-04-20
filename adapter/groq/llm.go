@@ -20,3 +20,4 @@ func NewGroqLLM(apiKey string, model string) *GroqLLM {
 func (l *GroqLLM) Chat(ctx context.Context, chatCtx *llm.ChatContext, opts ...llm.ChatOption) (llm.LLMStream, error) {
 	return l.inner.Chat(ctx, chatCtx, opts...)
 }
+

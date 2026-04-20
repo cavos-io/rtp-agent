@@ -46,3 +46,4 @@ func (t *AdvancedSentenceTokenizer) Stream(language string) SentenceStream {
 
 // Ensure the new tokenizer fits the interface
 var _ SentenceTokenizer = (*AdvancedSentenceTokenizer)(nil)
+

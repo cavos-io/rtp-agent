@@ -23,3 +23,4 @@ func NewMistralLLM(apiKey string, model string) *MistralLLM {
 func (l *MistralLLM) Chat(ctx context.Context, chatCtx *llm.ChatContext, opts ...llm.ChatOption) (llm.LLMStream, error) {
 	return l.inner.Chat(ctx, chatCtx, opts...)
 }
+

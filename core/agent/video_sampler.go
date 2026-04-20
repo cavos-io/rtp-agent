@@ -59,3 +59,4 @@ func (s *VoiceActivityVideoSampler) OnVideoFrame(ctx context.Context, frame *ima
 
 	return false
 }
+

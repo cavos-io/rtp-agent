@@ -2,7 +2,6 @@ package tools
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"time"
 
@@ -58,10 +57,24 @@ type sendDTMFArgs struct {
 	Events []beta.DtmfEvent `json:"events"`
 }
 
-func (t *SendDTMFTool) Execute(ctx context.Context, args string) (string, error) {
-	var a sendDTMFArgs
-	if err := json.Unmarshal([]byte(args), &a); err != nil {
-		return "", err
+func (t *SendDTMFTool) Args() any {
+	return &sendDTMFArgs{}
+}
+
+func (t *SendDTMFTool) Execute(ctx context.Context, args any) (any, error) {
+	var a *sendDTMFArgs
+	if typed, ok := args.(*sendDTMFArgs); ok {
+		a = typed
+	} else {
+		// Fallback to manual binding if needed (though PerformToolExecutions handles it)
+		m, _ := args.(map[string]any)
+		eventsRaw, _ := m["events"].([]interface{})
+		a = &sendDTMFArgs{}
+		for _, raw := range eventsRaw {
+			if evStr, ok := raw.(string); ok {
+				a.Events = append(a.Events, beta.DtmfEvent(evStr))
+			}
+		}
 	}
 
 	if t.publisher == nil {
@@ -89,3 +102,4 @@ func (t *SendDTMFTool) Execute(ctx context.Context, args string) (string, error)
 
 	return fmt.Sprintf("Successfully sent DTMF events: %s", beta.FormatDtmf(a.Events)), nil
 }
+

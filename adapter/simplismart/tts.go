@@ -98,3 +98,4 @@ func (s *simplismartTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 func (s *simplismartTTSChunkedStream) Close() error {
 	return s.resp.Body.Close()
 }
+

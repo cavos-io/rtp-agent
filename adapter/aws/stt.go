@@ -155,3 +155,4 @@ func (s *awsSTTStream) Next() (*stt.SpeechEvent, error) {
 		return nil, err
 	}
 }
+

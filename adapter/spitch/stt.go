@@ -82,3 +82,4 @@ func (s *SpitchSTT) Recognize(ctx context.Context, frames []*model.AudioFrame, l
 		},
 	}, nil
 }
+

@@ -83,3 +83,4 @@ func (s *FireworksSTT) Recognize(ctx context.Context, frames []*model.AudioFrame
 		},
 	}, nil
 }
+

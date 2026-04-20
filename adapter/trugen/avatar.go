@@ -3,8 +3,6 @@ package trugen
 import (
 	"context"
 	"fmt"
-
-	"github.com/cavos-io/rtp-agent/core/agent"
 )
 
 type TrugenAvatar struct {
@@ -22,7 +20,4 @@ func (a *TrugenAvatar) Start(ctx context.Context) error {
 	return nil
 }
 
-func (a *TrugenAvatar) UpdateState(state agent.AvatarState) error {
-	fmt.Printf("TrugenAvatar state updated to: %s\n", state)
-	return nil
-}
+

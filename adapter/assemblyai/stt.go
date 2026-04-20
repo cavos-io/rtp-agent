@@ -228,3 +228,4 @@ func (s *assemblyAISTTStream) Next() (*stt.SpeechEvent, error) {
 		return nil, err
 	}
 }
+

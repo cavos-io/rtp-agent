@@ -109,3 +109,4 @@ func (s *humeLLMStream) Next() (*llm.ChatChunk, error) {
 func (s *humeLLMStream) Close() error {
 	return s.resp.Body.Close()
 }
+

@@ -72,3 +72,4 @@ func NewSileroVAD(opts ...VADOption) *SileroVAD {
 func (v *SileroVAD) Stream(ctx context.Context) (vad.VADStream, error) {
 	return v.inner.Stream(ctx)
 }
+

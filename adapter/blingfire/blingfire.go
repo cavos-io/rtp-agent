@@ -84,3 +84,4 @@ func TextToWordsWithOffsets(text string) ([]string, []Offset) {
 	
 	return words, offsets
 }
+

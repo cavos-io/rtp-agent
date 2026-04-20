@@ -23,3 +23,4 @@ func NewCambaiLLM(apiKey string, model string) *CambaiLLM {
 func (l *CambaiLLM) Chat(ctx context.Context, chatCtx *llm.ChatContext, opts ...llm.ChatOption) (llm.LLMStream, error) {
 	return l.inner.Chat(ctx, chatCtx, opts...)
 }
+

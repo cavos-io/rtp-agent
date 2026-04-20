@@ -3,8 +3,6 @@ package bithuman
 import (
 	"context"
 	"fmt"
-
-	"github.com/cavos-io/rtp-agent/core/agent"
 )
 
 type BithumanAvatar struct {
@@ -22,7 +20,4 @@ func (a *BithumanAvatar) Start(ctx context.Context) error {
 	return nil
 }
 
-func (a *BithumanAvatar) UpdateState(state agent.AvatarState) error {
-	fmt.Printf("BithumanAvatar state updated to: %s\n", state)
-	return nil
-}
+

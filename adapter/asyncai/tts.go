@@ -98,3 +98,4 @@ func (s *asyncaiTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 func (s *asyncaiTTSChunkedStream) Close() error {
 	return s.resp.Body.Close()
 }
+

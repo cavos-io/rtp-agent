@@ -214,3 +214,4 @@ func Encode(frame *VideoFrame, opts EncodeOptions) ([]byte, error) {
 
 	return buf.Bytes(), nil
 }
+

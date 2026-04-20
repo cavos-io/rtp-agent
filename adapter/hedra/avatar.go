@@ -3,8 +3,6 @@ package hedra
 import (
 	"context"
 	"fmt"
-
-	"github.com/cavos-io/rtp-agent/core/agent"
 )
 
 type HedraAvatar struct {
@@ -22,7 +20,4 @@ func (a *HedraAvatar) Start(ctx context.Context) error {
 	return nil
 }
 
-func (a *HedraAvatar) UpdateState(state agent.AvatarState) error {
-	fmt.Printf("HedraAvatar state updated to: %s\n", state)
-	return nil
-}
+

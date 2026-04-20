@@ -85,7 +85,7 @@ type submitVerdictTool struct {
 	reasoning string
 }
 
-func (t *submitVerdictTool) ID() string { return "submit_verdict" }
+func (t *submitVerdictTool) ID() string   { return "submit_verdict" }
 func (t *submitVerdictTool) Name() string { return "submit_verdict" }
 func (t *submitVerdictTool) Description() string {
 	return "Submit your evaluation verdict."
@@ -95,12 +95,12 @@ func (t *submitVerdictTool) Parameters() map[string]any {
 		"type": "object",
 		"properties": map[string]any{
 			"verdict": map[string]any{
-				"type": "string",
-				"enum": []string{"pass", "fail", "maybe"},
+				"type":        "string",
+				"enum":        []string{"pass", "fail", "maybe"},
 				"description": "Your judgment - 'pass' if criteria met, 'fail' if not, 'maybe' if uncertain.",
 			},
 			"reasoning": map[string]any{
-				"type": "string",
+				"type":        "string",
 				"description": "Brief explanation of your reasoning.",
 			},
 		},
@@ -108,19 +108,15 @@ func (t *submitVerdictTool) Parameters() map[string]any {
 	}
 }
 
-func (t *submitVerdictTool) Execute(ctx context.Context, args string) (string, error) {
-	var params struct {
-		Verdict   string `json:"verdict"`
-		Reasoning string `json:"reasoning"`
-	}
-	if err := json.Unmarshal([]byte(args), &params); err != nil {
-		return "", err
-	}
-	t.verdict = Verdict(params.Verdict)
-	t.reasoning = params.Reasoning
+func (t *submitVerdictTool) Execute(ctx context.Context, args any) (any, error) {
+	m, _ := args.(map[string]any)
+	v, _ := m["verdict"].(string)
+	r, _ := m["reasoning"].(string)
+
+	t.verdict = Verdict(v)
+	t.reasoning = r
 	return "submitted", nil
 }
-
 func evaluateWithLLM(ctx context.Context, evaluatorLLM llm.LLM, prompt string) (*JudgmentResult, error) {
 	evalCtx := llm.NewChatContext()
 	evalCtx.Append(&llm.ChatMessage{
@@ -138,7 +134,7 @@ func evaluateWithLLM(ctx context.Context, evaluatorLLM llm.LLM, prompt string) (
 
 	verdictTool := &submitVerdictTool{}
 
-	stream, err := evaluatorLLM.Chat(ctx, evalCtx, llm.WithTools([]llm.Tool{verdictTool}), llm.WithToolChoice("submit_verdict"))
+	stream, err := evaluatorLLM.Chat(ctx, evalCtx, llm.WithTools([]interface{}{verdictTool}), llm.WithToolChoice("submit_verdict"))
 	if err != nil {
 		return nil, fmt.Errorf("evaluation failed to start: %w", err)
 	}
@@ -163,9 +159,14 @@ func evaluateWithLLM(ctx context.Context, evaluatorLLM llm.LLM, prompt string) (
 		return nil, fmt.Errorf("LLM did not return verdict arguments")
 	}
 
-	_, err = verdictTool.Execute(ctx, arguments)
+	var argsMap map[string]any
+	if err := json.Unmarshal([]byte(arguments), &argsMap); err != nil {
+		return nil, fmt.Errorf("failed to parse verdict json: %w", err)
+	}
+
+	_, err = verdictTool.Execute(ctx, argsMap)
 	if err != nil {
-		return nil, fmt.Errorf("failed to parse verdict: %w", err)
+		return nil, fmt.Errorf("failed to process verdict: %w", err)
 	}
 
 	return &JudgmentResult{
@@ -269,3 +270,4 @@ func ToolUseJudge(llmInstance llm.LLM) Evaluator {
 		llmInstance,
 	)
 }
+

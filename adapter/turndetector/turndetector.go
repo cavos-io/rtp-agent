@@ -24,3 +24,4 @@ func NewEOUPredictor(model string) *EOUPredictor {
 func (e *EOUPredictor) Detect(ctx context.Context, text string) (bool, error) {
 	return false, fmt.Errorf("local turn detector onnx models not natively supported in go port yet")
 }
+

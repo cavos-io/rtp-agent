@@ -82,3 +82,4 @@ func (s *RtzrSTT) Recognize(ctx context.Context, frames []*model.AudioFrame, lan
 		},
 	}, nil
 }
+

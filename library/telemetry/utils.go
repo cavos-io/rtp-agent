@@ -96,3 +96,4 @@ func LogMetrics(metrics AgentMetrics) {
 		)
 	}
 }
+

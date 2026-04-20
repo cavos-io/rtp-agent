@@ -166,3 +166,4 @@ func (s *azureTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 func (s *azureTTSChunkedStream) Close() error {
 	return s.resp.Body.Close()
 }
+

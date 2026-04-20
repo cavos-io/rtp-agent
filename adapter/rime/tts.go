@@ -105,3 +105,4 @@ func (s *rimeTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 func (s *rimeTTSChunkedStream) Close() error {
 	return s.resp.Body.Close()
 }
+

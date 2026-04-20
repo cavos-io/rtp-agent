@@ -23,3 +23,4 @@ func NewTelnyxLLM(apiKey string, model string) *TelnyxLLM {
 func (l *TelnyxLLM) Chat(ctx context.Context, chatCtx *llm.ChatContext, opts ...llm.ChatOption) (llm.LLMStream, error) {
 	return l.inner.Chat(ctx, chatCtx, opts...)
 }
+

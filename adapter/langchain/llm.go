@@ -23,3 +23,4 @@ func NewLangchainLLM(apiKey string, model string) *LangchainLLM {
 func (l *LangchainLLM) Chat(ctx context.Context, chatCtx *llm.ChatContext, opts ...llm.ChatOption) (llm.LLMStream, error) {
 	return l.inner.Chat(ctx, chatCtx, opts...)
 }
+

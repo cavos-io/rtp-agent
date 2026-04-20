@@ -11,3 +11,4 @@ var ErrNotSupported = errors.New("durable execution (frame serialization) is not
 func Init() error {
 	return ErrNotSupported
 }
+

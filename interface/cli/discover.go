@@ -12,3 +12,4 @@ func DiscoverPlugins() {
 	logger.Logger.Debugw("Discovering plugins (compile-time in Go)")
 	// Implement plugin registry checking here if a dynamic plugin system is added later.
 }
+

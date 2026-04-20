@@ -32,3 +32,4 @@ func RegisteredPlugins() []Plugin {
 	copy(cp, plugins)
 	return cp
 }
+

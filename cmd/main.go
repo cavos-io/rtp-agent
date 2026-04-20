@@ -1,294 +1,185 @@
 package main
 
 import (
-	"bufio"
 	"context"
 	"fmt"
-	"log/slog"
-	"net/http"
-	_ "net/http/pprof"
+	"log"
 	"os"
-	"runtime"
-	"runtime/debug"
-	"strings"
 	"time"
 
-	"github.com/cavos-io/rtp-agent/adapter/elevenlabs"
-	oaiadapter "github.com/cavos-io/rtp-agent/adapter/openai"
+	elevenlabsAdapter "github.com/cavos-io/rtp-agent/adapter/elevenlabs"
+	openaiAdapter "github.com/cavos-io/rtp-agent/adapter/openai"
+	sileroAdapter "github.com/cavos-io/rtp-agent/adapter/silero"
 	"github.com/cavos-io/rtp-agent/core/agent"
-	"github.com/cavos-io/rtp-agent/core/llm"
-	"github.com/cavos-io/rtp-agent/core/stt"
-	"github.com/cavos-io/rtp-agent/core/vad"
 	"github.com/cavos-io/rtp-agent/interface/cli"
 	"github.com/cavos-io/rtp-agent/interface/worker"
 	"github.com/cavos-io/rtp-agent/library/logger"
+	"github.com/joho/godotenv"
 	lksdk "github.com/livekit/server-sdk-go/v2"
 	"github.com/pion/webrtc/v4"
+	"os/signal"
+	"syscall"
 )
 
 func main() {
-	// Load .env file if present
-	loadDotEnv(".env")
+	godotenv.Load()
 
-	// Start pprof HTTP server for resource monitoring
-	pprofAddr := envOrDefault("PPROF_ADDR", ":6060")
-	go func() {
-		slog.Info("pprof server listening", "addr", pprofAddr)
-		if err := http.ListenAndServe(pprofAddr, nil); err != nil {
-			slog.Error("pprof server failed", "err", err)
-		}
-	}()
-
-	// ============================================================
-	// CREDENTIALS
-	// ============================================================
-	livekitURL := envOrDefault("LIVEKIT_URL", "")
-	livekitAPIKey := envOrDefault("LIVEKIT_API_KEY", "")
-	livekitAPISecret := envOrDefault("LIVEKIT_API_SECRET", "")
-	openaiAPIKey := envOrDefault("OPENAI_API_KEY", "")
-	elevenLabsAPIKey := envOrDefault("ELEVENLABS_API_KEY", "")
-
-	// ============================================================
-	// 1. Setup Worker Options
-	// ============================================================
 	opts := worker.WorkerOptions{
-		AgentName:  "cavos-voice-agent",
+		AgentName:  os.Getenv("AGENT_NAME"),
 		WorkerType: worker.WorkerTypeRoom,
-		WSRL:       livekitURL,
-		APIKey:     livekitAPIKey,
-		APISecret:  livekitAPISecret,
+		WSRL:       os.Getenv("LIVEKIT_URL"),
+		APIKey:     os.Getenv("LIVEKIT_API_KEY"),
+		APISecret:  os.Getenv("LIVEKIT_API_SECRET"),
 	}
 
 	server := worker.NewAgentServer(opts)
 
-	fmt.Println("✅ Agent server created")
-	fmt.Printf("   LiveKit URL: %s\n", livekitURL)
-	fmt.Printf("   Agent Name:  %s\n", opts.AgentName)
-	fmt.Println("   Connecting to LiveKit...")
+	// Setup signal handling for graceful shutdown
+	sigCtx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
 
-	// ============================================================
-	// 2. Register RTC Session Entrypoint
-	// ============================================================
-	server.RTCSession(func(jobCtx *worker.JobContext) error {
-		logger.Logger.Infow("🚀 Agent entrypoint started",
-			"jobId", jobCtx.Job.Id,
-			"room", jobCtx.Job.Room.Name,
-		)
+	go func() {
+		cli.RunApp(server)
+	}()
 
-		// ----------------------------------------------------------
-		// 2a. Initialize AI providers
-		// ----------------------------------------------------------
+	// Wait for context cancellation (signal or server exit)
+	<-sigCtx.Done()
+	logger.Logger.Infow("Shutdown signal received, draining...")
 
-		// LLM: OpenAI GPT-4o
-		llmProvider := oaiadapter.NewOpenAILLM(openaiAPIKey, "gpt-4o")
+	drainCtx, drainCancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer drainCancel()
 
-		// STT: OpenAI Whisper (non-streaming) wrapped with StreamAdapter + SimpleVAD
-		openaiSTT := oaiadapter.NewOpenAISTT(openaiAPIKey, "")
-		simpleVAD := vad.NewSimpleVAD(0.005) // Threshold: ignore silence/noise, detect actual speech
-		sttProvider := stt.NewStreamAdapter(openaiSTT, simpleVAD)
-
-		// TTS: ElevenLabs (streaming via WebSocket)
-		ttsProvider, err := elevenlabs.NewElevenLabsTTS(
-			elevenLabsAPIKey,
-			"21m00Tcm4TlvDq8ikWAM", // Rachel voice
-			"eleven_turbo_v2_5",    // Turbo model for low latency
-		)
-		if err != nil {
-			logger.Logger.Errorw("Failed to create ElevenLabs TTS", err)
-			return err
-		}
-
-		// ----------------------------------------------------------
-		// 2b. Create Chat Context (system prompt)
-		// ----------------------------------------------------------
-		chatCtx := llm.NewChatContext()
-		chatCtx.Append(&llm.ChatMessage{
-			Role: llm.ChatRoleSystem,
-			Content: []llm.ChatContent{
-				{Text: `Kamu adalah asisten AI bernama "Cavos Agent". 
-Kamu ramah, membantu, dan berbicara dalam Bahasa Indonesia. 
-Jawab dengan ringkas dan natural seperti percakapan sehari-hari.
-Jangan bertele-tele, maksimal 2-3 kalimat per respons.`},
-			},
-		})
-
-		// ----------------------------------------------------------
-		// 2c. Create Agent + Session properly
-		// ----------------------------------------------------------
-		agentDef := agent.NewAgent("Kamu adalah asisten AI percakapan suara yang ramah.")
-		agentDef.STT = sttProvider
-		agentDef.VAD = simpleVAD
-		agentDef.LLM = llmProvider
-		agentDef.TTS = ttsProvider
-		agentDef.ChatCtx = chatCtx
-		agentDef.TurnDetection = agent.TurnDetectionModeVAD
-		agentDef.AllowInterruptions = true
-		agentDef.MinEndpointingDelay = 0.5
-		agentDef.MaxEndpointingDelay = 3.0
-
-		// ----------------------------------------------------------
-		// 2d. Connect to Room FIRST
-		// ----------------------------------------------------------
-		fmt.Println("🔌 Connecting to room...")
-
-		// Buffer early track subscriptions (before RoomIO exists)
-		type earlyTrack struct {
-			track *webrtc.TrackRemote
-			pub   *lksdk.RemoteTrackPublication
-			rp    *lksdk.RemoteParticipant
-		}
-		var earlyTracks []earlyTrack
-		var roomIO *worker.RoomIO
-
-		disconnectCh := make(chan struct{})
-
-		cb := lksdk.NewRoomCallback()
-		cb.OnTrackSubscribed = func(track *webrtc.TrackRemote, pub *lksdk.RemoteTrackPublication, rp *lksdk.RemoteParticipant) {
-			fmt.Printf("📡 Track subscribed: participant=%s kind=%s\n", rp.Identity(), track.Kind().String())
-			if roomIO != nil {
-				roomIO.GetCallback().OnTrackSubscribed(track, pub, rp)
-			} else {
-				fmt.Println("   ⏳ Buffering track (RoomIO not ready yet)")
-				earlyTracks = append(earlyTracks, earlyTrack{track, pub, rp})
-			}
-		}
-		cb.OnDisconnected = func() {
-			fmt.Println("🔌 Room disconnected — shutting down agent session")
-			close(disconnectCh)
-		}
-
-		// Create a cancellable context for the entire session lifecycle.
-		// Cancelling this propagates to all goroutines (VAD, STT, TTS, pipeline).
-		sessionCtx, sessionCancel := context.WithCancel(context.Background())
-		defer sessionCancel()
-
-		if err := jobCtx.Connect(sessionCtx, cb); err != nil {
-			fmt.Printf("❌ Failed to connect to room: %v\n", err)
-			return err
-		}
-		fmt.Printf("✅ Connected to room: %s\n", jobCtx.Job.Room.Name)
-
-		// ----------------------------------------------------------
-		// 2e. Create Session with NewAgentSession
-		// ----------------------------------------------------------
-		session := agent.NewAgentSession(agentDef, jobCtx.Room, agent.AgentSessionOptions{
-			AllowInterruptions:  true,
-			MinEndpointingDelay: 0.5,
-			MaxEndpointingDelay: 3.0,
-		})
-		session.ChatCtx = chatCtx
-
-		// ----------------------------------------------------------
-		// 2f. Create RoomIO + replay buffered tracks
-		// ----------------------------------------------------------
-		roomIO = worker.NewRoomIO(jobCtx.Room, session, worker.RoomOptions{})
-
-		// Replay any tracks that were subscribed during Connect
-		if len(earlyTracks) > 0 {
-			fmt.Printf("🔄 Replaying %d buffered track(s)...\n", len(earlyTracks))
-			for _, et := range earlyTracks {
-				roomIO.GetCallback().OnTrackSubscribed(et.track, et.pub, et.rp)
-			}
-		}
-
-		fmt.Println("🎤 Starting audio I/O...")
-		if err := roomIO.Start(sessionCtx); err != nil {
-			fmt.Printf("❌ Failed to start RoomIO: %v\n", err)
-			return err
-		}
-
-		fmt.Println("🧠 Starting agent pipeline...")
-		if err := session.Start(sessionCtx); err != nil {
-			fmt.Printf("❌ Failed to start AgentSession: %v\n", err)
-			return err
-		}
-
-		fmt.Println("✅ Voice agent pipeline started!")
-		fmt.Println("   LLM: openai/gpt-4o")
-		fmt.Println("   STT: openai/whisper+vad")
-		fmt.Println("   TTS: elevenlabs/turbo_v2_5")
-		fmt.Printf("   Room: %s\n", jobCtx.Job.Room.Name)
-		fmt.Println("   🎧 Listening for speech...")
-
-		// Block until room disconnects
-		<-disconnectCh
-		fmt.Println("🔌 Room disconnected — cancelling all goroutines...")
-		sessionCancel() // cascade cancel to ALL goroutines
-		session.Stop(context.Background())
-		roomIO.Close()
-		if roomIO.Recorder != nil && roomIO.Recorder.OutPath != "" {
-			fmt.Printf("🎙️ Recording: %s\n", roomIO.Recorder.OutPath)
-		}
-
-		// Explicitly disconnect Room to free all pion resources
-		// (TURN client, DataChannel, ICE agent, SCTP).
-		jobCtx.Shutdown("session ended")
-		fmt.Println("🔌 Room.Disconnect() called")
-
-		// Save room name before nilling references
-		roomName := jobCtx.Job.Room.Name
-
-		// Nil out references so GC can collect everything
-		session.Room = nil
-		session.ChatCtx = nil
-		session.Agent = nil
-		session.Assistant = nil
-		roomIO = nil
-		session = nil
-		jobCtx = nil
-
-		// Wait for pion async cleanup to finish.
-		// engine.Close() runs PeerConnection teardown in a goroutine —
-		// TURN, ICE, DTLS, SCTP, DataChannel all need time to close.
-		fmt.Println("⏳ Waiting for pion cleanup...")
-		time.Sleep(3 * time.Second)
-
-		// Force GC to reclaim memory after pion cleanup is done
-		runtime.GC()
-		debug.FreeOSMemory()
-		fmt.Println("🧹 GC + FreeOSMemory done")
-
-		fmt.Printf("✅ Agent session ended for room: %s\n", roomName)
-		return nil
-
-	}, nil, nil)
-
-	// ============================================================
-	// 3. Run CLI
-	// ============================================================
-	cli.RunApp(server)
-}
-
-func envOrDefault(key, defaultVal string) string {
-	if val := os.Getenv(key); val != "" {
-		return val
+	if err := server.Drain(drainCtx); err != nil {
+		logger.Logger.Errorw("Drain failed", err)
 	}
-	return defaultVal
 }
 
-// loadDotEnv reads a .env file and sets env vars (skips already-set vars).
-func loadDotEnv(path string) {
-	f, err := os.Open(path)
+func handleAgent(server *worker.AgentServer, jobCtx *worker.JobContext) error {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	fmt.Println("\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+	fmt.Println("🤖 [Agent] Initializing...")
+	fmt.Println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+
+	// Get OpenAI API key from env
+	apiKey := os.Getenv("OPENAI_API_KEY")
+	if apiKey == "" {
+		fmt.Println("❌ [Agent] OPENAI_API_KEY not set")
+		return fmt.Errorf("OPENAI_API_KEY env var is required")
+	}
+	fmt.Println("✅ [Agent] OpenAI API key loaded")
+
+	// Create agent with instructions
+	ag := agent.NewAgent("You are a helpful AI assistant. Respond concisely and naturally.")
+	fmt.Println("✅ [Agent] Agent created")
+
+	// Set up LLM provider (OpenAI)
+	ag.LLM = openaiAdapter.NewOpenAILLM(apiKey, "gpt-4o")
+	fmt.Println("✅ [Agent] LLM (GPT-4o-mini) configured")
+
+	// Set up STT provider (OpenAI Whisper)
+	ag.STT = openaiAdapter.NewOpenAISTT(apiKey, "")
+	fmt.Println("✅ [Agent] STT (Whisper) configured")
+
+	// Set up VAD (required for speech start/end detection and STT segmentation)
+	ag.VAD = sileroAdapter.NewSileroVAD()
+	fmt.Println("✅ [Agent] VAD configured")
+
+	// Set up TTS provider (ElevenLabs)
+	elevenlabsAPIKey := os.Getenv("ELEVENLABS_API_KEY")
+	elevenlabsTTS, err := elevenlabsAdapter.NewElevenLabsTTS(elevenlabsAPIKey, "21m00Tcm4TlvDq8ikWAM", "eleven_turbo_v2_5")
 	if err != nil {
-		return // file not found is fine
+		log.Println("❌ [Agent] Failed to create ElevenLabs TTS:", err.Error())
+		return fmt.Errorf("failed to create ElevenLabs TTS: %w", err)
 	}
-	defer f.Close()
+	ag.TTS = elevenlabsTTS
+	// ag.TTS = openaiAdapter.NewOpenAITTS(apiKey, openai.TTSModel1, openai.VoiceAlloy)
+	fmt.Println("✅ [Agent] TTS (Alloy) configured")
 
-	scanner := bufio.NewScanner(f)
-	for scanner.Scan() {
-		line := strings.TrimSpace(scanner.Text())
-		if line == "" || strings.HasPrefix(line, "#") {
-			continue
-		}
-		parts := strings.SplitN(line, "=", 2)
-		if len(parts) != 2 {
-			continue
-		}
-		key := strings.TrimSpace(parts[0])
-		val := strings.TrimSpace(parts[1])
-		// Only set if not already in environment
-		if os.Getenv(key) == "" {
-			os.Setenv(key, val)
-		}
+	ag.TurnDetection = agent.TurnDetectionModeSTT
+	fmt.Println("✅ [Agent] Turn detection: STT-based")
+
+	// Create agent session options
+	sessionOpts := agent.AgentSessionOptions{
+		AllowInterruptions:        true,
+		MinEndpointingDelay:       0.4,
+		MaxEndpointingDelay:       1.0,
+		MinConsecutiveSpeechDelay: 0.1,
 	}
+
+	// Create session (do not start yet — RoomIO must be wired first)
+	session := agent.NewAgentSession(ag, nil, sessionOpts)
+	fmt.Println("✅ [Agent] Session created")
+
+	// Register session with server for console UI to access
+	server.SetConsoleSession(session)
+	fmt.Println("✅ [Agent] Session registered with server")
+
+	// Connect to LiveKit room.
+	// The LiveKit SDK snapshots (Merges) the callback fields at ConnectToRoom time,
+	// so we MUST set non-nil callbacks BEFORE calling Connect. RoomIO is created
+	// after Connect (it needs jobCtx.Room), so the callbacks delegate through a
+	// closure that reads the eventual *RoomIO via a shared pointer.
+	var rio *worker.RoomIO
+	cb := lksdk.NewRoomCallback()
+	cb.OnDisconnected = func() { cancel() }
+	cb.OnTrackSubscribed = func(track *webrtc.TrackRemote, pub *lksdk.RemoteTrackPublication, rp *lksdk.RemoteParticipant) {
+		if rio == nil {
+			return
+		}
+		rio.GetCallback().OnTrackSubscribed(track, pub, rp)
+	}
+	cb.OnTrackUnsubscribed = func(track *webrtc.TrackRemote, pub *lksdk.RemoteTrackPublication, rp *lksdk.RemoteParticipant) {
+		if rio == nil {
+			return
+		}
+		rio.GetCallback().OnTrackUnsubscribed(track, pub, rp)
+	}
+	cb.OnParticipantDisconnected = func(rp *lksdk.RemoteParticipant) {
+		if rio == nil {
+			return
+		}
+		rio.GetCallback().OnParticipantDisconnected(rp)
+	}
+
+	fmt.Println("⏳ [Agent] Connecting to LiveKit room...")
+	if err := jobCtx.Connect(ctx, cb); err != nil {
+		fmt.Printf("❌ [Agent] Failed to connect to room: %v\n", err)
+		return fmt.Errorf("failed to connect to room: %w", err)
+	}
+	fmt.Println("✅ [Agent] Connected to LiveKit room")
+
+	// Create RoomIO — this wires session.Input.Audio and session.Output.Audio automatically.
+	rio = worker.NewRoomIO(jobCtx.Room, session, worker.RoomOptions{})
+	defer rio.Close()
+
+	// Publish agent's audio output track to the room.
+	fmt.Println("⏳ [Agent] Starting RoomIO (publishing audio track)...")
+	if err := rio.Start(ctx); err != nil {
+		fmt.Printf("❌ [Agent] Failed to start RoomIO: %v\n", err)
+		return fmt.Errorf("failed to start RoomIO: %w", err)
+	}
+	fmt.Println("✅ [Agent] RoomIO started")
+
+	// Start the session pipeline — session.Input.Audio is now set by RoomIO.
+	fmt.Println("⏳ [Agent] Starting session and pipeline...")
+	if err := session.Start(ctx); err != nil {
+		fmt.Printf("❌ [Agent] Failed to start session: %v\n", err)
+		logger.Logger.Errorw("Failed to start agent session", err)
+		return err
+	}
+	fmt.Println("✅ [Agent] Session started successfully")
+
+	fmt.Println()
+	fmt.Println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+	fmt.Println("✅ Agent session initialized and ready!")
+	fmt.Println("Waiting for room disconnect...")
+	fmt.Println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+	fmt.Println()
+
+	// Block until room disconnects (cb.OnDisconnected cancels ctx).
+	<-ctx.Done()
+
+	return nil
 }

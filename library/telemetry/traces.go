@@ -94,3 +94,4 @@ func NewSTTStreamSpan(ctx context.Context, model, provider string) (context.Cont
 		attribute.String(AttrGenAIProviderName, provider),
 	))
 }
+

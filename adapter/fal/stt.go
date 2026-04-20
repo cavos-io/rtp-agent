@@ -88,3 +88,4 @@ func (s *FalSTT) Recognize(ctx context.Context, frames []*model.AudioFrame, lang
 		},
 	}, nil
 }
+

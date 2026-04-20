@@ -1,6 +1,7 @@
 package worker
 
 import (
+	"context"
 	"encoding/binary"
 	"fmt"
 	"os"
@@ -9,13 +10,410 @@ import (
 	"time"
 
 	"github.com/cavos-io/rtp-agent/core/agent"
+	"github.com/cavos-io/rtp-agent/core/audio"
 	"github.com/cavos-io/rtp-agent/library/logger"
 	"github.com/cavos-io/rtp-agent/model"
 )
 
+func createSilenceFrame(duration time.Duration, sampleRate uint32, numChannels uint32) *model.AudioFrame {
+	samples := int(duration.Nanoseconds() * int64(sampleRate) / 1e9)
+	data := make([]byte, samples*int(numChannels)*2) // 16-bit PCM
+	return &model.AudioFrame{
+		Data:              data,
+		SampleRate:        sampleRate,
+		NumChannels:       numChannels,
+		SamplesPerChannel: uint32(samples),
+	}
+}
+
+type RecorderAudioInput struct {
+	source      agent.AudioInput
+	recordingIO *RecorderIO
+	accFrames   []*model.AudioFrame
+	startedTime *time.Time
+	padded      bool
+	mu          sync.Mutex
+	frameCh     chan *model.AudioFrame
+	closed      bool
+}
+
+func NewRecorderAudioInput(recordingIO *RecorderIO, source agent.AudioInput) *RecorderAudioInput {
+	rai := &RecorderAudioInput{
+		source:      source,
+		recordingIO: recordingIO,
+		frameCh:     make(chan *model.AudioFrame, 100),
+	}
+	go rai.loop()
+	return rai
+}
+
+func (r *RecorderAudioInput) loop() {
+	stream := r.source.Stream()
+	for {
+		frame, ok := <-stream
+		if !ok {
+			r.mu.Lock()
+			r.closed = true
+			close(r.frameCh)
+			r.mu.Unlock()
+			return
+		}
+
+		r.recordingIO.mu.Lock()
+		recording := r.recordingIO.started
+		r.recordingIO.mu.Unlock()
+
+		if recording {
+			r.mu.Lock()
+			if r.startedTime == nil {
+				now := time.Now()
+				r.startedTime = &now
+			}
+			r.accFrames = append(r.accFrames, frame)
+			r.mu.Unlock()
+		}
+		r.frameCh <- frame
+	}
+}
+
+func (r *RecorderAudioInput) Label() string {
+	return "RecorderIO-" + r.source.Label()
+}
+
+func (r *RecorderAudioInput) Stream() <-chan *model.AudioFrame {
+	return r.frameCh
+}
+
+func (r *RecorderAudioInput) OnAttached() { r.source.OnAttached() }
+func (r *RecorderAudioInput) OnDetached() { r.source.OnDetached() }
+
+func (r *RecorderAudioInput) takeBuf(padSince *time.Time) []*model.AudioFrame {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	frames := r.accFrames
+	r.accFrames = nil
+
+	if padSince != nil && r.startedTime != nil && len(frames) > 0 && !r.padded {
+		padding := r.startedTime.Sub(*padSince)
+		if padding > 0 {
+			logger.Logger.Warnw("input speech started after last agent speech ended", nil, "last_agent_speech_time", *padSince, "input_started_time", *r.startedTime)
+			r.padded = true
+			silence := createSilenceFrame(padding, frames[0].SampleRate, frames[0].NumChannels)
+			frames = append([]*model.AudioFrame{silence}, frames...)
+		}
+	} else if padSince != nil && r.startedTime == nil && !r.padded && len(frames) == 0 {
+		logger.Logger.Warnw("input speech hasn't started yet, skipping silence padding", nil)
+	}
+	return frames
+}
+
+type RecorderAudioOutput struct {
+	nextInChain         agent.AudioOutput
+	recordingIO         *RecorderIO
+	writeCb             func([]*model.AudioFrame)
+	accFrames           []*model.AudioFrame
+	startedTime         *time.Time
+	lastSpeechEndTime   *time.Time
+	lastSpeechStartTime *time.Time
+	currentPauseStart   *time.Time
+	pauseWallTimes      []struct{ start, end time.Time }
+	mu                  sync.Mutex
+}
+
+func NewRecorderAudioOutput(recordingIO *RecorderIO, nextInChain agent.AudioOutput, writeCb func([]*model.AudioFrame)) *RecorderAudioOutput {
+	rao := &RecorderAudioOutput{
+		recordingIO: recordingIO,
+		nextInChain: nextInChain,
+		writeCb:     writeCb,
+	}
+
+	if nextInChain != nil {
+		nextInChain.OnPlaybackFinished(rao.onPlaybackFinished)
+	}
+
+	return rao
+}
+
+func (r *RecorderAudioOutput) Label() string {
+	if r.nextInChain != nil {
+		return "RecorderIO-" + r.nextInChain.Label()
+	}
+	return "RecorderIO"
+}
+
+func (r *RecorderAudioOutput) CaptureFrame(frame *model.AudioFrame) error {
+	r.mu.Lock()
+	r.recordingIO.mu.Lock()
+	recording := r.recordingIO.started
+	r.recordingIO.mu.Unlock()
+
+	if recording {
+		if r.startedTime == nil {
+			now := time.Now()
+			r.startedTime = &now
+		}
+		if r.lastSpeechStartTime == nil {
+			now := time.Now()
+			r.lastSpeechStartTime = &now
+		}
+		r.accFrames = append(r.accFrames, frame)
+	}
+	r.mu.Unlock()
+
+	if r.nextInChain != nil {
+		return r.nextInChain.CaptureFrame(frame)
+	}
+	return nil
+}
+
+func (r *RecorderAudioOutput) Flush() {
+	if r.nextInChain != nil {
+		r.nextInChain.Flush()
+	}
+}
+
+func (r *RecorderAudioOutput) WaitForPlayout(ctx context.Context) error {
+	if r.nextInChain != nil {
+		return r.nextInChain.WaitForPlayout(ctx)
+	}
+	return nil
+}
+
+func (r *RecorderAudioOutput) ClearBuffer() {
+	if r.nextInChain != nil {
+		r.nextInChain.ClearBuffer()
+	}
+}
+
+func (r *RecorderAudioOutput) OnAttached() {
+	if r.nextInChain != nil {
+		r.nextInChain.OnAttached()
+	}
+}
+
+func (r *RecorderAudioOutput) OnDetached() {
+	if r.nextInChain != nil {
+		r.nextInChain.OnDetached()
+	}
+}
+
+func (r *RecorderAudioOutput) Pause() {
+	r.mu.Lock()
+	r.recordingIO.mu.Lock()
+	recording := r.recordingIO.started
+	r.recordingIO.mu.Unlock()
+
+	if r.currentPauseStart == nil && recording {
+		now := time.Now()
+		r.currentPauseStart = &now
+	}
+	r.mu.Unlock()
+
+	if r.nextInChain != nil {
+		r.nextInChain.Pause()
+	}
+}
+
+func (r *RecorderAudioOutput) Resume() {
+	r.mu.Lock()
+	r.recordingIO.mu.Lock()
+	recording := r.recordingIO.started
+	r.recordingIO.mu.Unlock()
+
+	if r.currentPauseStart != nil && recording {
+		r.pauseWallTimes = append(r.pauseWallTimes, struct{ start, end time.Time }{*r.currentPauseStart, time.Now()})
+		r.currentPauseStart = nil
+	}
+	r.mu.Unlock()
+
+	if r.nextInChain != nil {
+		r.nextInChain.Resume()
+	}
+}
+
+func (r *RecorderAudioOutput) OnPlaybackStarted(cb func(ev agent.PlaybackStartedEvent)) {
+	if r.nextInChain != nil {
+		r.nextInChain.OnPlaybackStarted(cb)
+	}
+}
+
+func (r *RecorderAudioOutput) OnPlaybackFinished(cb func(ev agent.PlaybackFinishedEvent)) {
+	// The original callback is intercepted by NewRecorderAudioOutput;
+	// here we would ideally multiplex, but the worker doesn't strictly need multiplexing
+	// beyond the internal interception if the chain is well-formed.
+	if r.nextInChain != nil {
+		// Wrap to ensure both run, though typically only Session sets this.
+		r.nextInChain.OnPlaybackFinished(func(ev agent.PlaybackFinishedEvent) {
+			r.onPlaybackFinished(ev)
+			cb(ev)
+		})
+	}
+}
+
+func (r *RecorderAudioOutput) resetPauseState() {
+	r.currentPauseStart = nil
+	r.pauseWallTimes = nil
+}
+
+func splitFrame(frame *model.AudioFrame, dur time.Duration) (*model.AudioFrame, *model.AudioFrame) {
+	// Simple split by duration
+	samples := int(dur.Nanoseconds() * int64(frame.SampleRate) / 1e9)
+	if samples <= 0 {
+		return nil, frame
+	}
+	if uint32(samples) >= frame.SamplesPerChannel {
+		return frame, nil
+	}
+	byteSplit := samples * int(frame.NumChannels) * 2 // 16-bit
+	f1 := &model.AudioFrame{
+		Data:              frame.Data[:byteSplit],
+		SampleRate:        frame.SampleRate,
+		NumChannels:       frame.NumChannels,
+		SamplesPerChannel: uint32(samples),
+	}
+	f2 := &model.AudioFrame{
+		Data:              frame.Data[byteSplit:],
+		SampleRate:        frame.SampleRate,
+		NumChannels:       frame.NumChannels,
+		SamplesPerChannel: frame.SamplesPerChannel - uint32(samples),
+	}
+	return f1, f2
+}
+
+func (r *RecorderAudioOutput) onPlaybackFinished(ev agent.PlaybackFinishedEvent) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	finishTime := time.Now()
+	if r.currentPauseStart != nil {
+		finishTime = *r.currentPauseStart
+	}
+
+	playbackPos := ev.PlaybackPosition
+	if r.lastSpeechStartTime == nil {
+		logger.Logger.Warnw("playback finished before speech started", nil, "finish_time", finishTime, "playback_position", playbackPos)
+		playbackPos = 0
+	} else {
+		maxDur := finishTime.Sub(*r.lastSpeechStartTime)
+		if playbackPos > maxDur {
+			playbackPos = maxDur
+		}
+	}
+
+	r.recordingIO.mu.Lock()
+	recording := r.recordingIO.started
+	r.recordingIO.mu.Unlock()
+
+	if !recording {
+		return
+	}
+
+	if r.currentPauseStart != nil {
+		r.pauseWallTimes = append(r.pauseWallTimes, struct{ start, end time.Time }{*r.currentPauseStart, finishTime})
+		r.currentPauseStart = nil
+	}
+
+	if len(r.accFrames) == 0 {
+		r.resetPauseState()
+		now := time.Now()
+		r.lastSpeechEndTime = &now
+		r.lastSpeechStartTime = nil
+		return
+	}
+
+	type pauseEvent struct {
+		position time.Duration
+		duration time.Duration
+	}
+	var pauseEvents []pauseEvent
+
+	playbackStartTime := finishTime.Add(-playbackPos)
+	if len(r.pauseWallTimes) > 0 {
+		var totalPauseDur time.Duration
+		for _, p := range r.pauseWallTimes {
+			totalPauseDur += p.end.Sub(p.start)
+		}
+		playbackStartTime = finishTime.Add(-playbackPos).Add(-totalPauseDur)
+
+		var accPause time.Duration
+		for _, p := range r.pauseWallTimes {
+			pos := p.start.Sub(playbackStartTime) - accPause
+			dur := p.end.Sub(p.start)
+			if pos < 0 {
+				pos = 0
+			}
+			if pos > playbackPos {
+				pos = playbackPos
+			}
+			pauseEvents = append(pauseEvents, pauseEvent{position: pos, duration: dur})
+			accPause += dur
+		}
+	}
+
+	var buf []*model.AudioFrame
+	var accDur time.Duration
+	sampleRate := r.accFrames[0].SampleRate
+	numChannels := r.accFrames[0].NumChannels
+
+	shouldBreak := false
+	for _, frame := range r.accFrames {
+		if frame == nil {
+			continue
+		}
+		frameDur := time.Duration(float64(frame.SamplesPerChannel) / float64(frame.SampleRate) * float64(time.Second))
+
+		for len(pauseEvents) > 0 && pauseEvents[0].position < accDur+frameDur {
+			p := pauseEvents[0]
+			pauseEvents = pauseEvents[1:]
+
+			f1, f2 := splitFrame(frame, p.position-accDur)
+			if f1 != nil {
+				buf = append(buf, f1)
+			}
+			buf = append(buf, createSilenceFrame(p.duration, sampleRate, numChannels))
+			frame = f2
+			if frame == nil {
+				accDur = p.position
+				frameDur = 0
+				break
+			}
+			accDur = p.position
+			frameDur = time.Duration(float64(frame.SamplesPerChannel) / float64(frame.SampleRate) * float64(time.Second))
+		}
+
+		if frame == nil {
+			continue
+		}
+
+		if accDur+frameDur > playbackPos {
+			frame, _ = splitFrame(frame, playbackPos-accDur)
+			shouldBreak = true
+		}
+
+		if frame != nil {
+			buf = append(buf, frame)
+		}
+		accDur += frameDur
+
+		if shouldBreak {
+			break
+		}
+	}
+
+	r.accFrames = nil
+	r.resetPauseState()
+	now := time.Now()
+	r.lastSpeechEndTime = &now
+	r.lastSpeechStartTime = nil
+
+	if r.writeCb != nil {
+		r.writeCb(buf)
+	}
+}
+
 // RecorderIO records a conversation as a stereo WAV file.
 // Left channel = user (input), Right channel = agent (output).
-// Both channels must be fed at the same sample rate (48kHz).
 type RecorderIO struct {
 	Session *agent.AgentSession
 
@@ -24,8 +422,11 @@ type RecorderIO struct {
 	started bool
 	closed  bool
 
-	inFrames  []*model.AudioFrame
-	outFrames []*model.AudioFrame
+	inRecord  *RecorderAudioInput
+	outRecord *RecorderAudioOutput
+
+	inQ  chan []*model.AudioFrame
+	outQ chan []*model.AudioFrame
 
 	wavFile    *os.File
 	sampleRate int
@@ -40,8 +441,34 @@ type RecorderIO struct {
 func NewRecorderIO(session *agent.AgentSession) *RecorderIO {
 	return &RecorderIO{
 		Session: session,
+		inQ:     make(chan []*model.AudioFrame, 100),
+		outQ:    make(chan []*model.AudioFrame, 100),
 		done:    make(chan struct{}),
 	}
+}
+
+func (r *RecorderIO) RecordInput(source agent.AudioInput) *RecorderAudioInput {
+	r.inRecord = NewRecorderAudioInput(r, source)
+	return r.inRecord
+}
+
+func (r *RecorderIO) RecordOutput(next agent.AudioOutput) *RecorderAudioOutput {
+	r.outRecord = NewRecorderAudioOutput(r, next, r.writeCb)
+	return r.outRecord
+}
+
+func (r *RecorderIO) writeCb(buf []*model.AudioFrame) {
+	var padSince *time.Time
+	if r.outRecord != nil {
+		padSince = r.outRecord.lastSpeechEndTime
+	}
+
+	inputBuf := make([]*model.AudioFrame, 0)
+	if r.inRecord != nil {
+		inputBuf = r.inRecord.takeBuf(padSince)
+	}
+	r.inQ <- inputBuf
+	r.outQ <- buf
 }
 
 // Start begins recording to a stereo WAV file at the given sample rate.
@@ -73,13 +500,42 @@ func (r *RecorderIO) Start(outputPath string, sampleRate int) error {
 	r.OutPath = outputPath
 	r.started = true
 
-	r.wg.Add(1)
-	go func() {
-		defer r.wg.Done()
-		r.recordLoop()
-	}()
+	go r.forwardTask()
+	go r.encodeThread(sampleRate)
 
 	return nil
+}
+
+func (r *RecorderIO) forwardTask() {
+	ticker := time.NewTicker(2500 * time.Millisecond)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-r.done:
+			return
+		case <-ticker.C:
+			r.mu.Lock()
+			outHasPending := r.outRecord != nil && len(r.outRecord.accFrames) > 0
+			r.mu.Unlock()
+
+			if outHasPending {
+				continue
+			}
+
+			var padSince *time.Time
+			if r.outRecord != nil {
+				padSince = r.outRecord.lastSpeechEndTime
+			}
+
+			inputBuf := make([]*model.AudioFrame, 0)
+			if r.inRecord != nil {
+				inputBuf = r.inRecord.takeBuf(padSince)
+			}
+			r.inQ <- inputBuf
+			r.outQ <- []*model.AudioFrame{}
+		}
+	}
 }
 
 // Stop signals the record loop to flush and close, then waits for it to finish.
@@ -91,165 +547,104 @@ func (r *RecorderIO) Stop() error {
 	}
 	r.closed = true
 	close(r.done)
+	close(r.inQ)
+	close(r.outQ)
 	r.mu.Unlock()
 
 	r.wg.Wait()
 	return nil
 }
 
-func (r *RecorderIO) RecordInput(frame *model.AudioFrame) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-
-	if !r.started || r.closed {
-		return
-	}
-	r.inFrames = append(r.inFrames, frame)
-}
-
-func (r *RecorderIO) RecordOutput(frame *model.AudioFrame) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-
-	if !r.started || r.closed {
-		return
-	}
-	r.outFrames = append(r.outFrames, frame)
-}
-
-func (r *RecorderIO) recordLoop() {
-	ticker := time.NewTicker(1000 * time.Millisecond)
-	defer ticker.Stop()
+func (r *RecorderIO) encodeThread(sampleRate int) {
+	r.wg.Add(1)
+	defer r.wg.Done()
 
 	for {
-		select {
-		case <-r.done:
-			r.flush()
+		inFrames, ok1 := <-r.inQ
+		outFrames, ok2 := <-r.outQ
+
+		if !ok1 || !ok2 {
 			r.finalizeWAV()
 			return
-		case <-ticker.C:
-			r.flush()
 		}
-	}
-}
 
-func (r *RecorderIO) flush() {
-	r.mu.Lock()
-	inFrames := r.inFrames
-	outFrames := r.outFrames
-	r.inFrames = nil
-	r.outFrames = nil
-	wavFile := r.wavFile
-	r.mu.Unlock()
+		if len(inFrames) == 0 && len(outFrames) == 0 {
+			continue
+		}
 
-	if len(inFrames) == 0 && len(outFrames) == 0 {
-		return
-	}
-	if wavFile == nil {
-		return
-	}
+		// Decode, sum to mono, and resample input
+		var inPcm []int16
+		inRate := sampleRate
+		if len(inFrames) > 0 {
+			inRate = int(inFrames[0].SampleRate)
+		}
+		for _, f := range inFrames {
+			pcm := audio.BytesToInt16(f.Data)
+			mono := audio.SumToMono(pcm, int(f.NumChannels))
+			inPcm = append(inPcm, mono...)
+		}
+		inPcm = audio.ResampleLinear(inPcm, inRate, sampleRate)
 
-	// Count total samples from each side
-	var inSamples, outSamples int
-	for _, f := range inFrames {
-		inSamples += int(f.SamplesPerChannel)
-	}
-	for _, f := range outFrames {
-		outSamples += int(f.SamplesPerChannel)
-	}
+		// Decode, sum to mono, and resample output
+		var outPcm []int16
+		outRate := sampleRate
+		if len(outFrames) > 0 {
+			outRate = int(outFrames[0].SampleRate)
+		}
+		for _, f := range outFrames {
+			pcm := audio.BytesToInt16(f.Data)
+			mono := audio.SumToMono(pcm, int(f.NumChannels))
+			outPcm = append(outPcm, mono...)
+		}
+		outPcm = audio.ResampleLinear(outPcm, outRate, sampleRate)
 
-	maxSamples := inSamples
-	if outSamples > maxSamples {
-		maxSamples = outSamples
-	}
-	if maxSamples == 0 {
-		return
-	}
+		maxSamples := len(inPcm)
+		if len(outPcm) > maxSamples {
+			maxSamples = len(outPcm)
+		}
 
-	// Debug: check first frame data details
-	if len(inFrames) > 0 {
-		f := inFrames[0]
-		fmt.Printf("🎙️ [Recorder] IN frame[0]: DataLen=%d SamplesPerCh=%d SampleRate=%d NumCh=%d\n",
-			len(f.Data), f.SamplesPerChannel, f.SampleRate, f.NumChannels)
-	}
-	if len(outFrames) > 0 {
-		f := outFrames[0]
-		fmt.Printf("🎙️ [Recorder] OUT frame[0]: DataLen=%d SamplesPerCh=%d SampleRate=%d NumCh=%d\n",
-			len(f.Data), f.SamplesPerChannel, f.SampleRate, f.NumChannels)
-	}
+		if maxSamples == 0 {
+			continue
+		}
 
-	fmt.Printf("🎙️ [Recorder] Flush: in=%d frames (%d samples) out=%d frames (%d samples)\n",
-		len(inFrames), inSamples, len(outFrames), outSamples)
-
-	// Extract all input samples into a flat slice
-	inPCM := make([]int16, 0, inSamples)
-	for _, f := range inFrames {
-		for i := 0; i < int(f.SamplesPerChannel); i++ {
-			idx := i * 2
-			if idx+1 < len(f.Data) {
-				inPCM = append(inPCM, int16(f.Data[idx])|(int16(f.Data[idx+1])<<8))
+		// Interleave into stereo WAV: [L0, R0, L1, R1, ...]
+		// Left = user input, Right = agent output
+		stereoBuf := make([]byte, maxSamples*4) // 2 channels * 2 bytes per sample
+		for i := 0; i < maxSamples; i++ {
+			var left, right int16
+			if i < len(inPcm) {
+				left = inPcm[i]
 			}
-		}
-	}
-
-	// Extract all output samples into a flat slice
-	outPCM := make([]int16, 0, outSamples)
-	for _, f := range outFrames {
-		for i := 0; i < int(f.SamplesPerChannel); i++ {
-			idx := i * 2
-			if idx+1 < len(f.Data) {
-				outPCM = append(outPCM, int16(f.Data[idx])|(int16(f.Data[idx+1])<<8))
+			if i < len(outPcm) {
+				right = outPcm[i]
 			}
+			binary.LittleEndian.PutUint16(stereoBuf[i*4:], uint16(left))
+			binary.LittleEndian.PutUint16(stereoBuf[i*4+2:], uint16(right))
 		}
-	}
 
-	// Debug: check max amplitude of extracted samples
-	var inMax, outMax int16
-	for _, s := range inPCM {
-		if s > inMax {
-			inMax = s
-		} else if -s > inMax {
-			inMax = -s
+		// Write raw PCM to WAV file
+		r.mu.Lock()
+		wavFile := r.wavFile
+		r.mu.Unlock()
+
+		if wavFile == nil {
+			continue
 		}
-	}
-	for _, s := range outPCM {
-		if s > outMax {
-			outMax = s
-		} else if -s > outMax {
-			outMax = -s
+
+		n, err := wavFile.Write(stereoBuf)
+		if err != nil {
+			logger.Logger.Errorw("Failed to write to WAV", err)
+			continue
 		}
+
+		r.mu.Lock()
+		r.totalSamplesWritten += int64(maxSamples)
+		total := r.totalSamplesWritten
+		r.mu.Unlock()
+
+		fmt.Printf("[Recorder] Wrote %d bytes (%.1fs total recorded)\n",
+			n, float64(total)/float64(r.sampleRate))
 	}
-	fmt.Printf("🎙️ [Recorder] Amplitude: inMax=%d outMax=%d (0=silence, 32767=max)\n", inMax, outMax)
-
-	// Interleave into stereo: [L0, R0, L1, R1, ...]
-	// Left = user input, Right = agent output
-	stereoBuf := make([]byte, maxSamples*4) // 2 channels * 2 bytes per sample
-	for i := 0; i < maxSamples; i++ {
-		var left, right int16
-		if i < len(inPCM) {
-			left = inPCM[i]
-		}
-		if i < len(outPCM) {
-			right = outPCM[i]
-		}
-		binary.LittleEndian.PutUint16(stereoBuf[i*4:], uint16(left))
-		binary.LittleEndian.PutUint16(stereoBuf[i*4+2:], uint16(right))
-	}
-
-	// Write raw PCM to WAV file
-	n, err := wavFile.Write(stereoBuf)
-	if err != nil {
-		logger.Logger.Errorw("Failed to write to WAV", err)
-		return
-	}
-
-	r.mu.Lock()
-	r.totalSamplesWritten += int64(maxSamples)
-	total := r.totalSamplesWritten
-	r.mu.Unlock()
-
-	fmt.Printf("🎙️ [Recorder] Wrote %d bytes (%.1fs total recorded)\n",
-		n, float64(total)/float64(r.sampleRate))
 }
 
 func (r *RecorderIO) finalizeWAV() {
@@ -271,7 +666,7 @@ func (r *RecorderIO) finalizeWAV() {
 
 	wavFile.Close()
 	duration := float64(total) / float64(sampleRate)
-	fmt.Printf("🎙️ [Recorder] WAV finalized: %s (%.1fs, %d samples)\n", r.OutPath, duration, total)
+	fmt.Printf("[Recorder] WAV finalized: %s (%.1fs, %d samples)\n", r.OutPath, duration, total)
 }
 
 // writeWAVHeader writes (or re-writes) a standard 44-byte WAV header.

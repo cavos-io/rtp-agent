@@ -3,8 +3,6 @@ package anam
 import (
 	"context"
 	"fmt"
-
-	"github.com/cavos-io/rtp-agent/core/agent"
 )
 
 type AnamAvatar struct {
@@ -19,10 +17,5 @@ func NewAnamAvatar(apiKey string) *AnamAvatar {
 
 func (a *AnamAvatar) Start(ctx context.Context) error {
 	fmt.Println("AnamAvatar started.")
-	return nil
-}
-
-func (a *AnamAvatar) UpdateState(state agent.AvatarState) error {
-	fmt.Printf("AnamAvatar state updated to: %s\n", state)
 	return nil
 }
