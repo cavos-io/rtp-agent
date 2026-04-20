@@ -6,6 +6,10 @@ import (
 	"regexp"
 
 	"github.com/cavos-io/rtp-agent/core/agent"
+<<<<<<< HEAD
+=======
+	"github.com/cavos-io/rtp-agent/core/llm"
+>>>>>>> origin/main
 )
 
 var emailRegex = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._%+\-]*@(?:[A-Za-z0-9](?:[A-Za-z0-9\-]*[A-Za-z0-9])?\.)+[A-Za-z]{2,}$`)

@@ -9,7 +9,10 @@ import (
 
 	"github.com/cavos-io/rtp-agent/core/agent"
 	"github.com/cavos-io/rtp-agent/library/telemetry"
+<<<<<<< HEAD
 	"github.com/cavos-io/rtp-agent/model"
+=======
+>>>>>>> origin/main
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 )

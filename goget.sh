@@ -34,7 +34,7 @@ rm -f go.mod go.sum
 # Initialize a new Go module if go.mod does not exist
 if [ ! -f go.mod ]; then
     echo "Initializing a new Go module"
-    go mod init github.com/cavos-io/conversation-worker
+    go mod init github.com/cavos-io/rtp-agent
 fi
 
 # Fetch dependencies

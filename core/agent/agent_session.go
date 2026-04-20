@@ -2,24 +2,76 @@ package agent
 
 import (
 	"context"
+<<<<<<< HEAD
 	"fmt"
 	"reflect"
 	"sync"
 	"time"
 
 	"github.com/cavos-io/rtp-agent/core/agent/ivr"
+=======
+	"encoding/json"
+	"fmt"
+	"sync"
+	"time"
+
+>>>>>>> origin/main
 	"github.com/cavos-io/rtp-agent/core/llm"
 	"github.com/cavos-io/rtp-agent/core/stt"
 	"github.com/cavos-io/rtp-agent/core/tts"
 	"github.com/cavos-io/rtp-agent/core/vad"
 	"github.com/cavos-io/rtp-agent/library/logger"
 	"github.com/cavos-io/rtp-agent/library/telemetry"
+<<<<<<< HEAD
 	lksdk "github.com/livekit/server-sdk-go/v2"
 )
 
 type GenerateReplyOpts struct {
 	AllowInterruptions bool
 }
+=======
+	"github.com/cavos-io/rtp-agent/model"
+	"github.com/livekit/protocol/livekit"
+	lksdk "github.com/livekit/server-sdk-go/v2"
+)
+
+// sendChatToPlayground tries multiple approaches to get a message
+// into the Playground chat panel. We send all three approaches
+// simultaneously to find out which one the Playground accepts.
+func sendChatToPlayground(room *lksdk.Room, msgID string, text string) {
+	topic := "lk.chat"
+
+	// Approach A: text stream (SendText) — required by @livekit/components-react >= 2.x
+	room.LocalParticipant.SendText(text, lksdk.StreamTextOptions{
+		Topic:    topic,
+		StreamId: &msgID,
+	})
+
+	// Approach B: UserDataPacket + topic "lk.chat" + LiveKit JSON format
+	payload, _ := json.Marshal(map[string]interface{}{
+		"id":        msgID,
+		"message":   text,
+		"timestamp": time.Now().UnixMilli(),
+	})
+	pkt := &lksdk.UserDataPacket{Payload: payload, Topic: topic}
+	_ = room.LocalParticipant.PublishDataPacket(pkt, lksdk.WithDataPublishReliable(true))
+}
+
+type UserState string
+type AgentState string
+
+const (
+	UserStateSpeaking  UserState = "speaking"
+	UserStateListening UserState = "listening"
+	UserStateAway      UserState = "away"
+
+	AgentStateInitializing AgentState = "initializing"
+	AgentStateIdle         AgentState = "idle"
+	AgentStateListening    AgentState = "listening"
+	AgentStateThinking     AgentState = "thinking"
+	AgentStateSpeaking     AgentState = "speaking"
+)
+>>>>>>> origin/main
 
 type AgentSessionOptions struct {
 	AllowInterruptions            bool
@@ -64,6 +116,11 @@ type AgentSession struct {
 	UserState  UserState
 	AgentState AgentState
 
+	// Transcript attribution — set by RoomIO when tracks are established.
+	RemoteUserIdentity string
+	RemoteTrackSID     string
+	AgentTrackSID      string
+
 	mu       sync.Mutex
 	Activity *AgentActivity
 	started  bool
@@ -83,9 +140,30 @@ type AgentSession struct {
 	cancel context.CancelFunc
 }
 
+<<<<<<< HEAD
 func (s *AgentSession) GetDataPublisher() ivr.DataPublisher {
 	if s.Room == nil {
 		return nil
+=======
+// transcriptionPacket wraps livekit.Transcription to implement the DataPacket interface.
+type transcriptionPacket struct {
+	t *livekit.Transcription
+}
+
+func (p *transcriptionPacket) ToProto() *livekit.DataPacket {
+	return &livekit.DataPacket{
+		Value: &livekit.DataPacket_Transcription{Transcription: p.t},
+	}
+}
+
+func (s *AgentSession) OnAudioFrame(ctx context.Context, frame *model.AudioFrame) {
+	s.mu.Lock()
+	assistant := s.Assistant
+	s.mu.Unlock()
+
+	if assistant != nil {
+		assistant.OnAudioFrame(ctx, frame)
+>>>>>>> origin/main
 	}
 	return s.Room.LocalParticipant
 }
@@ -186,6 +264,7 @@ func (s *AgentSession) Start(ctx context.Context) error {
 	}
 
 	if s.VAD == nil {
+<<<<<<< HEAD
 		s.VAD = vad.NewSimpleVAD(0.01)
 	}
 
@@ -205,6 +284,9 @@ func (s *AgentSession) Start(ctx context.Context) error {
 	// can reach it via a.activity (it guards on a.activity == nil).
 	if base := s.Agent.GetAgent(); base != nil {
 		base.activity = s.Activity
+=======
+		s.VAD = vad.NewSimpleVAD(0.002)
+>>>>>>> origin/main
 	}
 
 	if s.Assistant == nil {
@@ -212,11 +294,20 @@ func (s *AgentSession) Start(ctx context.Context) error {
 	}
 
 	if err := s.Assistant.Start(ctx, s); err != nil {
+<<<<<<< HEAD
 		s.Activity = nil
+=======
+>>>>>>> origin/main
 		s.mu.Unlock()
 		return err
 	}
 
+<<<<<<< HEAD
+=======
+	s.activity = NewAgentActivity(s.Agent, s)
+	s.activity.Start()
+
+>>>>>>> origin/main
 	// Trigger periodic usage metrics reporting
 	if s.MetricsCollector != nil {
 		go s.reportUsageLoop(ctx)
@@ -225,6 +316,7 @@ func (s *AgentSession) Start(ctx context.Context) error {
 	s.started = true
 	s.mu.Unlock()
 
+<<<<<<< HEAD
 	// Activity.Start() must be called AFTER releasing s.mu because it
 	// synchronously calls UpdateUserState which also acquires s.mu.
 	s.Activity.Start()
@@ -232,6 +324,9 @@ func (s *AgentSession) Start(ctx context.Context) error {
 	go s.forwardAudioLoop(ctx)
 	go s.forwardVideoLoop(ctx)
 
+=======
+	// UpdateAgentState acquires s.mu, so call AFTER releasing
+>>>>>>> origin/main
 	s.UpdateAgentState(AgentStateListening)
 
 	return nil
@@ -442,10 +537,12 @@ func (s *AgentSession) UpdateAgentState(state AgentState) {
 	s.mu.Lock()
 	oldState := s.AgentState
 	s.AgentState = state
+	room := s.Room
 	s.mu.Unlock()
 
 	if oldState != state {
 		logger.Logger.Debugw("Agent state changed", "old", oldState, "new", state)
+<<<<<<< HEAD
 		if s.Timeline != nil {
 			s.Timeline.AddEvent(&AgentStateChangedEvent{
 				OldState:  oldState,
@@ -461,6 +558,17 @@ func (s *AgentSession) UpdateAgentState(state AgentState) {
 		if s.ivrActivity != nil {
 			s.ivrActivity.OnAgentStateChanged(ivr.AgentState(oldState), ivr.AgentState(state))
 		}
+=======
+
+		// Publish state to Playground via LiveKit participant attributes.
+		// The Playground reads "lk.agent.state" to display agent status and
+		// resolve "Waiting for agent audio track…".
+		if room != nil && room.LocalParticipant != nil {
+			room.LocalParticipant.SetAttributes(map[string]string{
+				"lk.agent.state": string(state),
+			})
+		}
+>>>>>>> origin/main
 
 		select {
 		case s.AgentStateChangedCh <- AgentStateChangedEvent{
@@ -528,6 +636,7 @@ func GenerateTypedReply[T any](ctx context.Context, s *AgentSession, userInput s
 	}
 
 	// Create a speech handle
+<<<<<<< HEAD
 	handle := NewSpeechHandle(allowInterruptions, DefaultInputDetails())
 	
 	participantID := ""
@@ -549,6 +658,9 @@ func GenerateTypedReply[T any](ctx context.Context, s *AgentSession, userInput s
 	runResult := NewRunResult[T](s.ChatCtx)
 	runResult.WatchHandle(ctx, handle)
 	handle.RunResult = runResult
+=======
+	handle := NewSpeechHandle(s.Options.AllowInterruptions, DefaultInputDetails())
+>>>>>>> origin/main
 
 	// Add user message to ChatContext if provided
 	if userInput != "" {
@@ -685,12 +797,134 @@ func (s *AgentSession) Interrupt(ctx context.Context) error {
 	return nil
 }
 
+func (s *AgentSession) SetRemoteUserIdentity(identity string) {
+	s.mu.Lock()
+	s.RemoteUserIdentity = identity
+	s.mu.Unlock()
+}
+
+func (s *AgentSession) SetRemoteTrackSID(sid string) {
+	s.mu.Lock()
+	s.RemoteTrackSID = sid
+	s.mu.Unlock()
+}
+
+func (s *AgentSession) SetAgentTrackSID(sid string) {
+	s.mu.Lock()
+	s.AgentTrackSID = sid
+	s.mu.Unlock()
+}
+
+func (s *AgentSession) GetAgentTrackSID() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.AgentTrackSID
+}
+
+// PublishUserTranscript publishes the user's STT transcript to the Playground.
+// Sends both a ChatMessage (chat panel) and a Transcription packet (transcript overlay).
+func (s *AgentSession) PublishUserTranscript(text string) {
+	if text == "" {
+		return
+	}
+	s.mu.Lock()
+	room := s.Room
+	userIdentity := s.RemoteUserIdentity
+	userTrackSID := s.RemoteTrackSID
+	s.mu.Unlock()
+
+	if room == nil || room.LocalParticipant == nil {
+		return
+	}
+
+	now := time.Now()
+	sendChatToPlayground(room, fmt.Sprintf("usr-%d", now.UnixNano()), text)
+
+	// Transcription packet — displayed as real-time subtitle overlay.
+	nowMs := uint64(now.UnixMilli())
+	tpkt := &transcriptionPacket{t: &livekit.Transcription{
+		TranscribedParticipantIdentity: userIdentity,
+		TrackId:                        userTrackSID,
+		Segments: []*livekit.TranscriptionSegment{{
+			Id:        fmt.Sprintf("seg-usr-%d", now.UnixNano()),
+			Text:      text,
+			StartTime: nowMs,
+			EndTime:   nowMs,
+			Final:     true,
+		}},
+	}}
+	if err := room.LocalParticipant.PublishDataPacket(tpkt, lksdk.WithDataPublishReliable(true)); err != nil {
+		logger.Logger.Warnw("Failed to publish user transcription", err)
+	} else {
+		fmt.Printf("💬 [Transcript] User %q: %q\n", userIdentity, text)
+	}
+}
+
+// PublishAgentTranscript publishes the agent's LLM response to the Playground.
+// Sends both a ChatMessage (chat panel) and a Transcription packet (transcript overlay).
+func (s *AgentSession) PublishAgentTranscript(text string) {
+	if text == "" {
+		return
+	}
+	s.mu.Lock()
+	room := s.Room
+	agentTrackSID := s.AgentTrackSID
+	s.mu.Unlock()
+
+	if room == nil || room.LocalParticipant == nil {
+		return
+	}
+
+	agentIdentity := room.LocalParticipant.Identity()
+	now := time.Now()
+	sendChatToPlayground(room, fmt.Sprintf("agt-%d", now.UnixNano()), text)
+
+	// Transcription packet — displayed as real-time subtitle overlay.
+	nowMs := uint64(now.UnixMilli())
+	tpkt := &transcriptionPacket{t: &livekit.Transcription{
+		TranscribedParticipantIdentity: agentIdentity,
+		TrackId:                        agentTrackSID,
+		Segments: []*livekit.TranscriptionSegment{{
+			Id:        fmt.Sprintf("seg-agt-%d", now.UnixNano()),
+			Text:      text,
+			StartTime: nowMs,
+			EndTime:   nowMs,
+			Final:     true,
+		}},
+	}}
+	if err := room.LocalParticipant.PublishDataPacket(tpkt, lksdk.WithDataPublishReliable(true)); err != nil {
+		logger.Logger.Warnw("Failed to publish agent transcription", err)
+	} else {
+		fmt.Printf("💬 [Transcript] Agent: %q\n", text)
+	}
+}
+
 func (s *AgentSession) Stop(ctx context.Context) error {
 	s.mu.Lock()
 	if !s.started {
 		s.mu.Unlock()
 		return nil
 	}
+<<<<<<< HEAD
+=======
+
+	s.activity.Stop()
+	s.activity = nil
+
+	if s.Assistant != nil {
+		s.Assistant.cancel()
+		s.Assistant = nil
+	}
+
+	// Nil out all references to allow GC
+	s.STT = nil
+	s.VAD = nil
+	s.LLM = nil
+	s.TTS = nil
+	s.Tools = nil
+	s.MetricsCollector = nil
+
+>>>>>>> origin/main
 	s.started = false
 	activity := s.Activity
 	assistant := s.Assistant

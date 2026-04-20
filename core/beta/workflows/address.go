@@ -5,6 +5,10 @@ import (
 	"fmt"
 
 	"github.com/cavos-io/rtp-agent/core/agent"
+<<<<<<< HEAD
+=======
+	"github.com/cavos-io/rtp-agent/core/llm"
+>>>>>>> origin/main
 )
 
 type GetAddressResult struct {

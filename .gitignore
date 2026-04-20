@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 # ============================================================================
 # Environment Variables - NEVER COMMIT THESE
 # ============================================================================
@@ -11,11 +12,14 @@
 # ============================================================================
 # Go Build Artifacts
 # ============================================================================
+=======
+>>>>>>> origin/main
 # Binaries
 *.exe
 *.exe~
 *.dll
 *.so
+<<<<<<< HEAD
 *.so.*
 *.dylib
 
@@ -102,3 +106,28 @@ trace.out
 *.db
 *.sqlite
 *.sqlite3
+=======
+*.dylib
+
+# Build output
+dist/
+bin/
+
+# Environment files (contain secrets)
+.env
+.env.*
+!.env.example
+
+# Debug files
+*.wav
+tts_debug.wav
+
+# Claude Code local settings
+.claude/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+>>>>>>> origin/main
