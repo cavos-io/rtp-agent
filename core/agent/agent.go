@@ -8,10 +8,7 @@ import (
 	"github.com/cavos-io/rtp-agent/core/stt"
 	"github.com/cavos-io/rtp-agent/core/tts"
 	"github.com/cavos-io/rtp-agent/core/vad"
-<<<<<<< HEAD
 	"github.com/cavos-io/rtp-agent/model"
-=======
->>>>>>> origin/main
 )
 
 type TurnDetectionMode string

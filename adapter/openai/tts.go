@@ -4,10 +4,7 @@ import (
 	"context"
 	"io"
 
-<<<<<<< HEAD
 	"github.com/cavos-io/rtp-agent/core/audio"
-=======
->>>>>>> origin/main
 	"github.com/cavos-io/rtp-agent/core/tts"
 	"github.com/cavos-io/rtp-agent/model"
 	"github.com/sashabaranov/go-openai"

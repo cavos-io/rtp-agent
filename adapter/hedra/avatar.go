@@ -3,11 +3,6 @@ package hedra
 import (
 	"context"
 	"fmt"
-
-<<<<<<< HEAD
-=======
-	"github.com/cavos-io/rtp-agent/core/agent"
->>>>>>> origin/main
 )
 
 type HedraAvatar struct {

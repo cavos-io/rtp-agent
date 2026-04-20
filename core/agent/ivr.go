@@ -49,13 +49,13 @@ func (i *IVRActivity) SetDigitCallback(timeout time.Duration, cb func(buffer str
 }
 
 func (i *IVRActivity) Start() {
-	i.AgentIntf.OnEnter()
+	_ = i.AgentIntf.OnEnter(i.ctx)
 	go i.run()
 }
 
 func (i *IVRActivity) Stop() {
 	i.cancel()
-	i.AgentIntf.OnExit()
+	_ = i.AgentIntf.OnExit(context.Background())
 }
 
 func (i *IVRActivity) OnDtmf(digit string) {

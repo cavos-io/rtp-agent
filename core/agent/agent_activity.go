@@ -7,18 +7,12 @@ import (
 	"sync"
 	"time"
 
-<<<<<<< HEAD
 	"github.com/cavos-io/rtp-agent/core/agent/ivr"
-=======
->>>>>>> origin/main
 	"github.com/cavos-io/rtp-agent/core/llm"
 	"github.com/cavos-io/rtp-agent/core/stt"
 	"github.com/cavos-io/rtp-agent/core/vad"
 	"github.com/cavos-io/rtp-agent/library/logger"
-<<<<<<< HEAD
 	"github.com/cavos-io/rtp-agent/model"
-=======
->>>>>>> origin/main
 )
 
 type EndOfTurnInfo struct {
@@ -293,7 +287,6 @@ func (a *AgentActivity) processQueue() {
 
 	a.currentSpeech = speech
 
-<<<<<<< HEAD
 	// Run speech completion asynchronously
 	a.speechWg.Add(1)
 	go func() {
@@ -307,19 +300,10 @@ func (a *AgentActivity) processQueue() {
 		}
 
 		// Wait for generation to finish or be interrupted
-		<-speech.doneCh
-=======
-	// Execute LLM+TTS pipeline for this speech
-	go a.executeSpeech(speech)
-
-	// Wait for completion then trigger next item in queue
-	go func() {
-		// Wait for generation to finish, be interrupted, or session to stop
 		select {
 		case <-speech.doneCh:
 		case <-a.ctx.Done():
 		}
->>>>>>> origin/main
 
 		a.queueMu.Lock()
 		if a.pausedSpeech == speech {
@@ -337,7 +321,6 @@ func (a *AgentActivity) processQueue() {
 	}()
 }
 
-<<<<<<< HEAD
 func (a *AgentActivity) notifyQueueAfter(delay time.Duration) {
 	if delay <= 0 {
 		select {
@@ -359,82 +342,6 @@ func (a *AgentActivity) notifyQueueAfter(delay time.Duration) {
 		default:
 		}
 	}
-=======
-func (a *AgentActivity) executeSpeech(speech *SpeechHandle) {
-	defer speech.MarkDone()
-
-	// Create a context that cancels on interrupt or activity shutdown
-	ctx, cancel := context.WithCancel(a.ctx)
-	defer cancel()
-	go func() {
-		select {
-		case <-speech.interruptCh:
-			cancel()
-		case <-ctx.Done():
-		}
-	}()
-
-	session := a.Session
-	if session == nil || session.LLM == nil || session.TTS == nil {
-		return
-	}
-
-	toolsInterface := make([]interface{}, len(session.Tools))
-	for i, t := range session.Tools {
-		toolsInterface[i] = t
-	}
-	toolCtx := llm.NewToolContext(toolsInterface)
-
-	// Loop to handle tool calls, same pattern as PipelineAgent.generateReply
-	for {
-		session.UpdateAgentState(AgentStateThinking)
-
-		genData, err := PerformLLMInference(ctx, session.LLM, session.ChatCtx, session.Tools)
-		if err != nil {
-			logger.Logger.Errorw("LLM inference failed in executeSpeech", err)
-			session.UpdateAgentState(AgentStateIdle)
-			return
-		}
-
-		toolOutCh := PerformToolExecutions(ctx, genData.FunctionCh, toolCtx)
-
-		// Run TTS in parallel with LLM text stream
-		ttsGen, err := PerformTTSInference(ctx, session.TTS, genData.TextCh)
-		if err != nil {
-			logger.Logger.Errorw("TTS inference failed in executeSpeech", err)
-		} else {
-			session.UpdateAgentState(AgentStateSpeaking)
-		audioLoop:
-			for frame := range ttsGen.AudioCh {
-				select {
-				case <-ctx.Done():
-					break audioLoop
-				default:
-					if session.Assistant != nil && session.Assistant.PublishAudio != nil {
-						_ = session.Assistant.PublishAudio(frame)
-					}
-				}
-			}
-		}
-
-		// Collect tool execution results
-		var executedTools bool
-		for toolOut := range toolOutCh {
-			executedTools = true
-			session.ChatCtx.Append(&toolOut.FncCall)
-			if toolOut.FncCallOut != nil {
-				session.ChatCtx.Append(toolOut.FncCallOut)
-			}
-		}
-
-		if !executedTools {
-			break
-		}
-		// Tool calls were made — loop back to LLM with results
-	}
-
-	session.UpdateAgentState(AgentStateIdle)
->>>>>>> origin/main
 }
 
 // Event callbacks from RecognitionHooks

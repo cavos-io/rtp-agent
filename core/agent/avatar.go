@@ -7,10 +7,7 @@ import (
 	"time"
 
 	"github.com/cavos-io/rtp-agent/library/logger"
-<<<<<<< HEAD
 	"github.com/cavos-io/rtp-agent/model"
-=======
->>>>>>> origin/main
 	lksdk "github.com/livekit/server-sdk-go/v2"
 	"github.com/pion/webrtc/v4"
 	"github.com/pion/webrtc/v4/pkg/media"

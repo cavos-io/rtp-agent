@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/binary"
 	"fmt"
-	"log"
 
 	"github.com/cavos-io/rtp-agent/core/stt"
 	"github.com/cavos-io/rtp-agent/model"
@@ -39,10 +38,6 @@ func (s *OpenAISTT) Stream(ctx context.Context, language string) (stt.RecognizeS
 }
 
 func (s *OpenAISTT) Recognize(ctx context.Context, frames []*model.AudioFrame, language string) (*stt.SpeechEvent, error) {
-<<<<<<< HEAD
-	log.Println("📤 [OpenAI-STT] Recognizing speech from audio frames...")
-=======
->>>>>>> origin/main
 	if len(frames) == 0 {
 		return nil, fmt.Errorf("no audio frames")
 	}

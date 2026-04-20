@@ -8,10 +8,6 @@ import (
 
 	"github.com/cavos-io/rtp-agent/core/agent"
 	"github.com/cavos-io/rtp-agent/core/beta"
-<<<<<<< HEAD
-=======
-	"github.com/cavos-io/rtp-agent/core/llm"
->>>>>>> origin/main
 	"github.com/cavos-io/rtp-agent/library/logger"
 )
 

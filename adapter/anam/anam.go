@@ -3,11 +3,6 @@ package anam
 import (
 	"context"
 	"fmt"
-<<<<<<< HEAD
-=======
-
-	"github.com/cavos-io/rtp-agent/core/agent"
->>>>>>> origin/main
 )
 
 type AnamAvatar struct {

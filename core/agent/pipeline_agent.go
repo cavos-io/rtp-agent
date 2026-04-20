@@ -3,13 +3,7 @@ package agent
 import (
 	"context"
 	"fmt"
-<<<<<<< HEAD
 	"sync"
-=======
-	"io"
-	"sync"
-	"sync/atomic"
->>>>>>> origin/main
 	"time"
 
 	"github.com/cavos-io/rtp-agent/core/llm"
@@ -18,10 +12,7 @@ import (
 	"github.com/cavos-io/rtp-agent/core/vad"
 	"github.com/cavos-io/rtp-agent/library/logger"
 	"github.com/cavos-io/rtp-agent/model"
-<<<<<<< HEAD
 	"github.com/google/uuid"
-=======
->>>>>>> origin/main
 )
 
 type PipelineAgent struct {
@@ -35,19 +26,10 @@ type PipelineAgent struct {
 	mu      sync.Mutex
 	session *AgentSession
 
-<<<<<<< HEAD
 	ctx       context.Context
 	cancel    context.CancelFunc
 	runCancel context.CancelFunc
 	runWG     sync.WaitGroup
-=======
-	ctx    context.Context
-	cancel context.CancelFunc
-
-	PublishAudio func(frame *model.AudioFrame) error
-
-	greetingInProgress bool // suppress VAD interruptions during initial greeting
->>>>>>> origin/main
 }
 
 func NewPipelineAgent(
@@ -114,153 +96,21 @@ func (va *PipelineAgent) Stop() {
 	va.runWG.Wait()
 }
 
+func (va *PipelineAgent) OnAudioFrame(ctx context.Context, frame *model.AudioFrame) {
+	// Audio forwarding is handled by AgentSession's forwardAudioLoop.
+	// This is a no-op for PipelineAgent.
+}
+
 func (va *PipelineAgent) run(ctx context.Context) {
 	fmt.Println("🔧 [Pipeline] PipelineAgent.run() started")
 	logger.Logger.Infow("PipelineAgent started")
-<<<<<<< HEAD
 	// Audio forwarding is now handled by AgentSession
 	<-ctx.Done()
-=======
-
-	vadStream, err := va.vad.Stream(ctx)
-	if err != nil {
-		fmt.Printf("❌ [Pipeline] Failed to start VAD stream: %v\n", err)
-		logger.Logger.Errorw("failed to start VAD stream", err)
-		return
-	}
-	defer vadStream.Close()
-	fmt.Println("✅ [Pipeline] VAD stream started")
-
-	sttStream, err := va.stt.Stream(ctx, "")
-	if err != nil {
-		fmt.Printf("❌ [Pipeline] Failed to start STT stream: %v\n", err)
-		logger.Logger.Errorw("failed to start STT stream", err)
-		return
-	}
-	defer sttStream.Close()
-	fmt.Println("✅ [Pipeline] STT stream started")
-
-	go va.vadLoop(vadStream)
-	go va.sttLoop(sttStream)
-
-	// Send initial greeting — runs synchronously in a goroutine so the
-	// audio processing loop can start immediately. During the greeting,
-	// VAD interruptions are suppressed to prevent silence/noise from
-	// cancelling the greeting before audio is published.
-	go func() {
-		select {
-		case <-time.After(2 * time.Second):
-		case <-ctx.Done():
-			return // session ended before greeting
-		}
-		fmt.Println("👋 [Pipeline] Sending initial greeting (interruptions suppressed)...")
-
-		// Suppress VAD interruptions during greeting
-		va.mu.Lock()
-		va.greetingInProgress = true
-		va.mu.Unlock()
-
-		va.chatCtx.Append(&llm.ChatMessage{
-			Role: llm.ChatRoleUser,
-			Content: []llm.ChatContent{
-				{Text: "Halo, perkenalkan dirimu secara singkat."},
-			},
-		})
-		va.generateReply()
-
-		va.mu.Lock()
-		va.greetingInProgress = false
-		va.mu.Unlock()
-		fmt.Println("👋 [Pipeline] Greeting complete, interruptions enabled")
-	}()
-
-	fmt.Println("🎧 [Pipeline] Audio processing loop running...")
-	var frameCount atomic.Int64
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case frame := <-va.audioInCh:
-			c := frameCount.Add(1)
-			if c == 1 || c%500 == 0 {
-				fmt.Printf("🔊 [Pipeline] Audio frames received: %d (latest: %d bytes)\n", c, len(frame.Data))
-			}
-			_ = vadStream.PushFrame(frame)
-			_ = sttStream.PushFrame(frame)
-		}
-	}
->>>>>>> origin/main
 }
 
 func (va *PipelineAgent) GenerateReply(speech *SpeechHandle) {
 	defer speech.MarkDone()
 
-<<<<<<< HEAD
-=======
-		if ev.Type == vad.VADEventStartOfSpeech {
-			fmt.Println("🗣️  [VAD] User started speaking")
-			logger.Logger.Infow("User started speaking")
-			va.session.UpdateUserState(UserStateSpeaking)
-
-			// Interrupt ongoing agent speech/generation — but NOT during greeting
-			va.mu.Lock()
-			if va.greetingInProgress {
-				fmt.Println("🛡️ [VAD] Interrupt suppressed — greeting in progress")
-				va.mu.Unlock()
-			} else if va.cancel != nil {
-				va.cancel()
-				ctx, cancel := context.WithCancel(context.Background())
-				va.ctx = ctx
-				va.cancel = cancel
-				va.mu.Unlock()
-			} else {
-				va.mu.Unlock()
-			}
-		} else if ev.Type == vad.VADEventEndOfSpeech {
-			fmt.Println("🔇 [VAD] User stopped speaking")
-			logger.Logger.Infow("User stopped speaking")
-			va.session.UpdateUserState(UserStateListening)
-		}
-	}
-}
-
-func (va *PipelineAgent) sttLoop(stream stt.RecognizeStream) {
-	for {
-		ev, err := stream.Next()
-		if err != nil {
-			if err != io.EOF {
-				logger.Logger.Errorw("STT stream error", err)
-			}
-			return
-		}
-
-		if ev.Type == stt.SpeechEventFinalTranscript {
-			transcript := ev.Alternatives[0].Text
-			fmt.Printf("📝 [STT] Transcript: %s\n", transcript)
-			logger.Logger.Infow("Final transcript", "text", transcript)
-
-			// Publish user transcript to Playground
-			va.mu.Lock()
-			sess := va.session
-			va.mu.Unlock()
-			if sess != nil {
-				go sess.PublishUserTranscript(transcript)
-			}
-
-			va.chatCtx.Append(&llm.ChatMessage{
-				Role: llm.ChatRoleUser,
-				Content: []llm.ChatContent{
-					{Text: transcript},
-				},
-			})
-
-			go va.generateReply()
-		}
-	}
-}
-
-func (va *PipelineAgent) generateReply() {
->>>>>>> origin/main
 	va.mu.Lock()
 	session := va.session
 	ctx := va.ctx
@@ -271,7 +121,6 @@ func (va *PipelineAgent) generateReply() {
 		return
 	}
 
-<<<<<<< HEAD
 	logger.Logger.Infow("Generating reply",
 		"tools_count", len(session.Tools),
 		"has_audio_output", session.Output.Audio != nil,
@@ -279,10 +128,6 @@ func (va *PipelineAgent) generateReply() {
 		"use_tts_aligned_transcript", session.Options.UseTTSAlignedTranscript,
 		"max_tool_steps", session.Options.MaxToolSteps,
 	)
-=======
-	fmt.Println("🤖 [LLM] Generating reply...")
-	logger.Logger.Infow("Generating reply")
->>>>>>> origin/main
 	session.UpdateAgentState(AgentStateThinking)
 
 	toolsInterface := make([]interface{}, len(session.Tools))
@@ -291,11 +136,10 @@ func (va *PipelineAgent) generateReply() {
 	}
 	toolCtx := llm.NewToolContext(toolsInterface)
 
-<<<<<<< HEAD
 	// Check for manual speech injection (GAP-004)
 	if speech.ManualText != "" {
 		logger.Logger.Infow("Processing manual speech injection", "text", speech.ManualText)
-		
+
 		textCh := make(chan string, 1)
 		textCh <- speech.ManualText
 		close(textCh)
@@ -304,26 +148,14 @@ func (va *PipelineAgent) generateReply() {
 		ttsGen, err := PerformTTSInference(ctx, va.tts, textCh)
 		if err != nil {
 			logger.Logger.Errorw("Manual TTS inference failed", err)
-=======
-	// In Python parity, we loop for tool calls
-	for {
-		fmt.Println("📤 [LLM] Calling PerformLLMInference...")
-		genData, err := PerformLLMInference(ctx, va.LLM, va.chatCtx, session.Tools)
-		if err != nil {
-			fmt.Printf("❌ [LLM] Inference failed: %v\n", err)
-			logger.Logger.Errorw("LLM inference failed", err)
-			session.UpdateAgentState(AgentStateIdle)
->>>>>>> origin/main
 			return
 		}
-		fmt.Println("✅ [LLM] Inference started, waiting for text...")
 
 		// Handle Playback and Transcription (Same as default loop but simplified)
 		va.handlePlaybackAndTranscription(ctx, speech, ttsGen)
 		return
 	}
 
-<<<<<<< HEAD
 	// In Python parity, we loop for tool calls
 	steps := 1
 	for {
@@ -378,65 +210,11 @@ func (va *PipelineAgent) generateReply() {
 			}
 		} else {
 			va.handlePlaybackAndTranscription(ctx, speech, ttsGen)
-=======
-		// Start TTS with the original text channel — no tee, no extra goroutines.
-		fmt.Println("🔊 [TTS] Starting TTS inference...")
-		ttsGen, err := PerformTTSInference(ctx, va.tts, genData.TextCh)
-		if err != nil {
-			fmt.Printf("❌ [TTS] Inference failed: %v\n", err)
-			logger.Logger.Errorw("TTS inference failed", err)
-			// Drain TextCh so the LLM goroutine can finish and close FunctionCh.
-			// Without this, LLM goroutine blocks on TextCh → FunctionCh never closes
-			// → toolOutCh never closes → this goroutine deadlocks below.
-			go func() { for range genData.TextCh {} }()
-		} else {
-			fmt.Println("✅ [TTS] TTS started, publishing audio...")
-			session.UpdateAgentState(AgentStateSpeaking)
-			frameCount := 0
-			interrupted := false
-		playoutLoop:
-			for frame := range ttsGen.AudioCh {
-				select {
-				case <-ctx.Done():
-					fmt.Println("⚠️ [TTS] Context cancelled during playout")
-					interrupted = true
-					// Drain remaining audio so the TTS goroutine can exit and
-					// close the ElevenLabs WebSocket stream. Without draining,
-					// the goroutine blocks on AudioCh → stream never closes →
-					// ElevenLabs keeps the connection open → next call may fail.
-					go func() { for range ttsGen.AudioCh {} }()
-					break playoutLoop
-				default:
-					if va.PublishAudio != nil {
-						_ = va.PublishAudio(frame)
-						frameCount++
-					}
-				}
-			}
-			fmt.Printf("✅ [TTS] Published %d audio frames\n", frameCount)
-
-			if interrupted {
-				// Also drain FullTextCh so LLM goroutine is not left blocked.
-				go func() { for range genData.FullTextCh {} }()
-				return
-			}
-
-			// Normal completion: LLM goroutine is done → FullTextCh is ready.
-			select {
-			case agentText := <-genData.FullTextCh:
-				if agentText != "" {
-					go session.PublishAgentTranscript(agentText)
-				}
-			case <-ctx.Done():
-				return
-			}
->>>>>>> origin/main
 		}
 
 		// Wait for tool executions to complete and collect results.
 		// Use select so a VAD interruption can cancel this wait.
 		var executedTools bool
-<<<<<<< HEAD
 		var stopResponse bool
 		var replyRequired bool
 		var agentTask AgentInterface
@@ -561,31 +339,6 @@ func (va *PipelineAgent) generateReply() {
 			if session.Output.Audio == nil {
 				session.UpdateAgentState(AgentStateIdle)
 			}
-=======
-	toolLoop:
-		for {
-			select {
-			case toolOut, ok := <-toolOutCh:
-				if !ok {
-					break toolLoop
-				}
-				executedTools = true
-				fmt.Printf("🔧 [Tool] Executed: %s\n", toolOut.FncCall.Name)
-				logger.Logger.Infow("Tool executed", "name", toolOut.FncCall.Name)
-				va.chatCtx.Append(&toolOut.FncCall)
-				if toolOut.FncCallOut != nil {
-					va.chatCtx.Append(toolOut.FncCallOut)
-				}
-			case <-ctx.Done():
-				return
-			}
-		}
-
-		// If no tool calls, we're done
-		if !executedTools {
-			fmt.Println("✅ [LLM] Reply complete, returning to idle")
-			session.UpdateAgentState(AgentStateIdle)
->>>>>>> origin/main
 			break
 		}
 

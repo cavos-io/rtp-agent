@@ -82,7 +82,6 @@ func (s *AgentServer) GetConsoleSession() any {
 	return s.consoleSession
 }
 
-<<<<<<< HEAD
 // GetEntrypointFunc retrieves the registered entrypoint function (for console mode)
 func (s *AgentServer) GetEntrypointFunc() func(*JobContext) error {
 	s.mu.Lock()
@@ -90,8 +89,7 @@ func (s *AgentServer) GetEntrypointFunc() func(*JobContext) error {
 	return s.entrypointFnc
 }
 
-=======
->>>>>>> origin/main
+
 func (s *AgentServer) Run(ctx context.Context) error {
 	if s.Options.WSRL == "" || s.Options.APIKey == "" || s.Options.APISecret == "" {
 		return fmt.Errorf("missing LiveKit credentials")
@@ -197,19 +195,15 @@ func (s *AgentServer) Run(ctx context.Context) error {
 				}
 				pb, err := proto.Marshal(ping)
 				if err != nil {
-<<<<<<< HEAD
 					logger.Logger.Errorw("Ping marshal error", err)
-=======
-					fmt.Printf("   ❌ Ping marshal error: %v\n", err)
 					return
->>>>>>> origin/main
 				}
 				s.mu.Lock()
 				err = conn.WriteMessage(websocket.BinaryMessage, pb)
 				s.mu.Unlock()
 				if err != nil {
-<<<<<<< HEAD
 					logger.Logger.Errorw("Ping send error", err)
+					return
 				}
 				logger.Logger.Debugw("WorkerPing sent", "ts", time.Now().UnixMilli())
 			}
@@ -230,17 +224,10 @@ func (s *AgentServer) Run(ctx context.Context) error {
 			msgCh <- wsMsg{mt, data, err}
 			if err != nil {
 				return
-=======
-					fmt.Printf("   ❌ Ping send error: %v\n", err)
-					return
-				}
-				fmt.Printf("   🏓 WorkerPing sent (ts=%d)\n", time.Now().UnixMilli())
->>>>>>> origin/main
 			}
 		}
 	}()
 
-<<<<<<< HEAD
 	for {
 		select {
 		case <-ctx.Done():
@@ -253,23 +240,6 @@ func (s *AgentServer) Run(ctx context.Context) error {
 				return result.err
 			}
 			if result.msgType != websocket.BinaryMessage {
-=======
-	// Message Loop
-	for {
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		default:
-			msgType, data, err := conn.ReadMessage()
-			if err != nil {
-				fmt.Printf("   ❌ WebSocket read error: %v\n", err)
-				return err
-			}
-
-			fmt.Printf("   📨 WS message received: type=%d len=%d\n", msgType, len(data))
-
-			if msgType != websocket.BinaryMessage {
->>>>>>> origin/main
 				continue
 			}
 			msg := &livekit.ServerMessage{}
@@ -277,17 +247,11 @@ func (s *AgentServer) Run(ctx context.Context) error {
 				logger.Logger.Errorw("Failed to unmarshal server message", err)
 				continue
 			}
-<<<<<<< HEAD
-=======
-
-			fmt.Printf("   📬 Parsed message type: %T\n", msg.Message)
->>>>>>> origin/main
 			s.handleMessage(ctx, msg)
 		}
 	}
 }
 
-<<<<<<< HEAD
 // Drain stops the worker from accepting new jobs and waits for existing ones to finish.
 func (s *AgentServer) Drain(ctx context.Context) error {
 	s.mu.Lock()
@@ -363,8 +327,7 @@ func (s *AgentServer) sendLoadUpdate(load float32, draining bool) error {
 	return conn.WriteMessage(websocket.BinaryMessage, b)
 }
 
-=======
->>>>>>> origin/main
+
 // sendAvailable broadcasts UpdateWorkerStatus(WS_AVAILABLE) so the LiveKit
 // server knows this worker is ready to receive job dispatches.
 func (s *AgentServer) sendAvailable() error {
@@ -394,20 +357,10 @@ func (s *AgentServer) handleMessage(ctx context.Context, msg *livekit.ServerMess
 	case *livekit.ServerMessage_Register:
 		fmt.Printf("   ✅ Worker Registered! ID: %s\n", m.Register.WorkerId)
 		logger.Logger.Infow("Worker Registered", "workerId", m.Register.WorkerId, "serverInfo", m.Register.ServerInfo)
-<<<<<<< HEAD
 		if err := s.sendAvailable(); err != nil {
 			logger.Logger.Errorw("Failed to send available status", err)
 		} else {
 			logger.Logger.Infow("Worker status set to AVAILABLE — waiting for jobs...")
-=======
-		// Signal to the server that this worker is ready to accept jobs.
-		// Without this UpdateWorkerStatus the server keeps the worker in an
-		// "initializing" state and will never assign dispatches to it.
-		if err := s.sendAvailable(); err != nil {
-			fmt.Printf("   ❌ Failed to send available status: %v\n", err)
-		} else {
-			fmt.Println("   ✅ Worker status set to AVAILABLE — waiting for jobs...")
->>>>>>> origin/main
 		}
 	case *livekit.ServerMessage_Availability:
 		logger.Logger.Infow("Received availability request", "jobId", m.Availability.Job.Id)
@@ -419,13 +372,7 @@ func (s *AgentServer) handleMessage(ctx context.Context, msg *livekit.ServerMess
 		logger.Logger.Infow("Received job termination", "jobId", m.Termination.JobId)
 		s.handleTermination(m.Termination)
 	case *livekit.ServerMessage_Pong:
-<<<<<<< HEAD
 		logger.Logger.Infow("Received WorkerPong", "timestamp", m.Pong.Timestamp)
-=======
-		// Application-level keepalive response — worker is confirmed alive
-		fmt.Printf("   🏓 WorkerPong received (lastTs=%d serverTs=%d)\n",
-			m.Pong.LastTimestamp, m.Pong.Timestamp)
->>>>>>> origin/main
 	default:
 		fmt.Printf("   ⚠️ Unhandled server message type: %T\n", msg.Message)
 		logger.Logger.Warnw("Unhandled message type received", nil, "type", fmt.Sprintf("%T", msg.Message))

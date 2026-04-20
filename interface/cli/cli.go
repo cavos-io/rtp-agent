@@ -8,14 +8,10 @@ import (
 	"syscall"
 	"time"
 
-<<<<<<< HEAD
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/cavos-io/rtp-agent/core/agent"
 	"github.com/cavos-io/rtp-agent/interface/cli/console"
-=======
-	"github.com/cavos-io/rtp-agent/core/agent"
->>>>>>> origin/main
 	"github.com/cavos-io/rtp-agent/interface/worker"
 	"github.com/cavos-io/rtp-agent/library/logger"
 )
