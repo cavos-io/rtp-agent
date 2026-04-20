@@ -142,6 +142,15 @@ type CloseEvent struct {
 
 func (e *CloseEvent) GetType() string { return "close" }
 
+type ParticipantActiveEvent struct {
+	ParticipantID string    `json:"participant_id"`
+	Identity      string    `json:"identity"`
+	Active        bool      `json:"active"`
+	CreatedAt     time.Time `json:"created_at"`
+}
+
+func (e *ParticipantActiveEvent) GetType() string { return "participant_active" }
+
 type AgentEvent struct {
 	Type      string  `json:"type"`
 	Timestamp float64 `json:"timestamp"`
@@ -157,6 +166,7 @@ type AgentEvent struct {
 	SpeechCreated           *SpeechCreatedEvent           `json:"speech_created,omitempty"`
 	Error                   *ErrorEvent                   `json:"error,omitempty"`
 	Close                   *CloseEvent                   `json:"close,omitempty"`
+	ParticipantActive       *ParticipantActiveEvent       `json:"participant_active,omitempty"`
 }
 
 func (ae *AgentEvent) MarshalJSON() ([]byte, error) {
@@ -212,6 +222,8 @@ func NewAgentEvent(ev Event) *AgentEvent {
 		ae.Error = v
 	case *CloseEvent:
 		ae.Close = v
+	case *ParticipantActiveEvent:
+		ae.ParticipantActive = v
 	}
 	return ae
 }

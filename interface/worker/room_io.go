@@ -2,6 +2,7 @@ package worker
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -197,21 +198,36 @@ type RoomIO struct {
 	trackContextsMu sync.Mutex
 
 	sync *agent.TranscriptSynchronizer
-
 	targetPlayoutTime time.Time
+
+	roomCallback *lksdk.RoomCallback
 }
 
 // --- agent.TextOutput Implementation ---
 
 type RoomTextOutput struct {
-	room      *lksdk.Room
-	writer    *lksdk.TextStreamWriter
-	segmentID string
-	mu        sync.Mutex
+	room                *lksdk.Room
+	participantIdentity string
+	trackID             string
+	writer              *lksdk.TextStreamWriter
+	segmentID           string
+	mu                  sync.Mutex
+	textCh              chan string
+	ctx                 context.Context
+	cancel              context.CancelFunc
 }
 
-func NewRoomTextOutput(room *lksdk.Room) *RoomTextOutput {
-	return &RoomTextOutput{room: room}
+func NewRoomTextOutput(room *lksdk.Room, participantIdentity string) *RoomTextOutput {
+	ctx, cancel := context.WithCancel(context.Background())
+	t := &RoomTextOutput{
+		room:                room,
+		participantIdentity: participantIdentity,
+		textCh:              make(chan string, 100),
+		ctx:                 ctx,
+		cancel:              cancel,
+	}
+	go t.worker()
+	return t
 }
 
 func (t *RoomTextOutput) Label() string {
@@ -224,34 +240,64 @@ func (t *RoomTextOutput) SetSegmentID(id string) {
 	t.segmentID = id
 }
 
-func (t *RoomTextOutput) CaptureText(text string) error {
+func (t *RoomTextOutput) SetTrackID(id string) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
+	t.trackID = id
+}
 
-	if t.room == nil || t.room.LocalParticipant == nil {
-		return fmt.Errorf("room or local participant not ready")
-	}
-
-	if t.writer == nil {
-		if t.segmentID == "" {
-			t.segmentID = "SG_" + uuid.NewString()[:8]
-		}
-		opts := lksdk.StreamTextOptions{
-			Topic: "lk-agent-transcription",
-			Attributes: map[string]string{
-				"segment_id": t.segmentID,
-				"final":      "false",
-			},
-		}
-		t.writer = t.room.LocalParticipant.StreamText(opts)
-	}
-
-	if t.writer != nil {
-		t.writer.Write(text, nil)
+func (t *RoomTextOutput) CaptureText(text string) error {
+	select {
+	case t.textCh <- text:
 		return nil
+	case <-t.ctx.Done():
+		return t.ctx.Err()
+	default:
+		return fmt.Errorf("text output buffer full")
 	}
+}
 
-	return nil
+func (t *RoomTextOutput) worker() {
+	ticker := time.NewTicker(50 * time.Millisecond) // Throttling bit
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-t.ctx.Done():
+			return
+		case text := <-t.textCh:
+			t.mu.Lock()
+			if t.room == nil || t.room.LocalParticipant == nil {
+				t.mu.Unlock()
+				continue
+			}
+
+			if t.writer == nil {
+				if t.segmentID == "" {
+					t.segmentID = "SG_" + uuid.NewString()[:8]
+				}
+				opts := lksdk.StreamTextOptions{
+					Topic: "lk-transcription",
+					Attributes: map[string]string{
+						"lk.segment_id": t.segmentID,
+						"lk.final":      "false",
+					},
+				}
+
+				if t.trackID != "" {
+					opts.Attributes["lk.track_id"] = t.trackID
+				}
+
+				t.writer = t.room.LocalParticipant.StreamText(opts)
+			}
+
+			if t.writer != nil {
+				t.writer.Write(text, nil)
+			}
+			t.mu.Unlock()
+			<-ticker.C
+		}
+	}
 }
 
 func (t *RoomTextOutput) Flush() {
@@ -262,6 +308,10 @@ func (t *RoomTextOutput) Flush() {
 		t.writer.Close()
 		t.writer = nil
 	}
+}
+
+func (t *RoomTextOutput) Close() {
+	t.cancel()
 }
 
 func (t *RoomTextOutput) OnAttached() {}
@@ -314,6 +364,8 @@ func NewRoomIO(room *lksdk.Room, session *agent.AgentSession, opts RoomOptions) 
 		trackContexts:       make(map[string]context.CancelFunc),
 	}
 
+	rio.registerRoomCallbacks()
+
 	go rio.playoutLoop(context.Background())
 
 	if session.Assistant == nil {
@@ -350,7 +402,7 @@ func NewRoomIO(room *lksdk.Room, session *agent.AgentSession, opts RoomOptions) 
 
 	if audioOutputEnabled {
 		if syncTranscription {
-			textOut := NewRoomTextOutput(room)
+			textOut := NewRoomTextOutput(room, rio.participantIdentity)
 			speedFactor := 1.0
 			if opts.TextOutput != nil && opts.TextOutput.TranscriptionSpeedFactor > 0 {
 				speedFactor = opts.TextOutput.TranscriptionSpeedFactor
@@ -366,11 +418,11 @@ func NewRoomIO(room *lksdk.Room, session *agent.AgentSession, opts RoomOptions) 
 		} else {
 			session.SetAudioOutput(rio.Recorder.RecordOutput(rio))
 			if opts.TextOutput != nil && opts.TextOutput.Enabled {
-				session.Output.Transcription = NewRoomTextOutput(room)
+				session.Output.Transcription = NewRoomTextOutput(room, rio.participantIdentity)
 			}
 		}
 	} else if opts.TextOutput != nil && opts.TextOutput.Enabled {
-		session.Output.Transcription = NewRoomTextOutput(room)
+		session.Output.Transcription = NewRoomTextOutput(room, rio.participantIdentity)
 	}
 
 	videoOutputEnabled := false
@@ -681,6 +733,7 @@ func (rio *RoomIO) GetCallback() *lksdk.RoomCallback {
 	cb.OnTrackSubscribed = rio.onTrackSubscribed
 	cb.OnTrackUnsubscribed = rio.onTrackUnsubscribed
 	cb.OnParticipantDisconnected = rio.onParticipantDisconnected
+	rio.roomCallback = cb
 	return cb
 }
 
@@ -764,12 +817,19 @@ func (rio *RoomIO) Start(ctx context.Context) error {
 		pubOpts.Name = trackName
 	}
 
-	_, err = rio.Room.LocalParticipant.PublishTrack(track, pubOpts)
+	pub, err := rio.Room.LocalParticipant.PublishTrack(track, pubOpts)
 	if err != nil {
 		return err
 	}
 
 	rio.audioTrack = track
+
+	// Update transcription output with track ID for protocol alignment
+	if rio.AgentSession != nil && rio.AgentSession.Output.Transcription != nil {
+		if textOut, ok := rio.AgentSession.Output.Transcription.(interface{ SetTrackID(string) }); ok {
+			textOut.SetTrackID(pub.SID())
+		}
+	}
 
 	videoOutputEnabled := false
 	if rio.Options.VideoOutput != nil && rio.Options.VideoOutput.Enabled {
@@ -988,6 +1048,12 @@ func (rio *RoomIO) Close() error {
 		rio.sync.Close()
 	}
 
+	if rio.AgentSession != nil && rio.AgentSession.Output.Transcription != nil {
+		if closer, ok := rio.AgentSession.Output.Transcription.(io.Closer); ok {
+			closer.Close()
+		}
+	}
+
 	if rio.Options.DeleteRoomOnClose {
 		if rio.Options.JobContext != nil && rio.Room != nil {
 			logger.Logger.Infow("deleting room on agent session close", "room", rio.Room.Name())
@@ -1002,4 +1068,41 @@ func (rio *RoomIO) Close() error {
 	}
 
 	return nil
+}
+
+func (rio *RoomIO) registerRoomCallbacks() {
+	if rio.roomCallback == nil {
+		return
+	}
+
+	rio.roomCallback.OnMetadataChanged = func(_ string, participant lksdk.Participant) {
+		// Check for "lk.active" or "active" in metadata JSON
+		var m map[string]interface{}
+		if err := json.Unmarshal([]byte(participant.Metadata()), &m); err == nil {
+			active, _ := m["lk.active"].(bool)
+			if !active {
+				active, _ = m["active"].(bool)
+			}
+
+			if rio.AgentSession != nil && rio.AgentSession.Timeline != nil {
+				rio.AgentSession.Timeline.AddEvent(&agent.ParticipantActiveEvent{
+					ParticipantID: participant.SID(),
+					Identity:      participant.Identity(),
+					Active:        active,
+					CreatedAt:     time.Now(),
+				})
+			}
+		}
+	}
+
+	rio.roomCallback.OnParticipantConnected = func(participant *lksdk.RemoteParticipant) {
+		if rio.AgentSession != nil && rio.AgentSession.Timeline != nil {
+			rio.AgentSession.Timeline.AddEvent(&agent.ParticipantActiveEvent{
+				ParticipantID: participant.SID(),
+				Identity:      participant.Identity(),
+				Active:        true,
+				CreatedAt:     time.Now(),
+			})
+		}
+	}
 }
