@@ -5,6 +5,8 @@ import (
 	"io"
 	"strings"
 	"sync"
+
+	"github.com/cavos-io/conversation-worker/library/audio"
 )
 
 type StreamAdapter struct {
@@ -164,16 +166,29 @@ func (w *streamAdapterWrapper) synthesizeOne(text string) {
 	}
 	defer chunked.Close()
 
+	sourceRate := w.adapter.tts.SampleRate()
+	// Target rate is usually 48000 for LiveKit agents, but we can potentially
+	// pull this from the output transport if needed. For now default to 48k parity.
+	targetRate := 48000 
+
 	for {
-		audio, err := chunked.Next()
-		if err != nil || audio == nil {
+		audioFrame, err := chunked.Next()
+		if err != nil || audioFrame == nil {
 			return
+		}
+
+		if audioFrame.Frame != nil && sourceRate != targetRate {
+			// Resample data
+			resampled := audio.Resample(audioFrame.Frame.Data, sourceRate, targetRate)
+			audioFrame.Frame.Data = resampled
+			audioFrame.Frame.SampleRate = uint32(targetRate)
+			audioFrame.Frame.SamplesPerChannel = uint32(len(resampled) / 2)
 		}
 
 		select {
 		case <-w.ctx.Done():
 			return
-		case w.events <- audio:
+		case w.events <- audioFrame:
 		}
 	}
 }
