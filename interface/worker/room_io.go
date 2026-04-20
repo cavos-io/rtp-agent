@@ -917,7 +917,7 @@ func (rio *RoomIO) Start(ctx context.Context) error {
 	// Store agent track SID for transcript attribution.
 	if pub != nil {
 		rio.AgentSession.SetAgentTrackSID(pub.SID())
-		fmt.Printf("🎙️ [RoomIO] Agent audio track SID: %s\n", pub.SID())
+		logger.Logger.Infow("🎙️ [RoomIO] Agent audio track SID", "sid", pub.SID())
 	}
 
 	rio.audioTrack = track
@@ -1069,18 +1069,18 @@ func (rio *RoomIO) handleAudioTrack(ctx context.Context, track *webrtc.TrackRemo
 		}
 	}
 
-	fmt.Printf("[RoomIO] handleAudioTrack started: trackID=%s codec=%s sampleRate=%d\n", track.ID(), track.Codec().MimeType, track.Codec().ClockRate)
+	logger.Logger.Infow("handleAudioTrack started", "trackID", track.ID(), "codec", track.Codec().MimeType, "sampleRate", track.Codec().ClockRate)
 
 	// Create Opus decoder for this track
 	decoder, err := newOpusDecoder(int(track.Codec().ClockRate), 1)
 	if err != nil {
-		fmt.Printf("❌ [RoomIO] Failed to create Opus decoder: %v\n", err)
+		logger.Logger.Errorw("Failed to create Opus decoder", err)
 		return
 	}
 	defer decoder.Close()
-	fmt.Println("✅ [RoomIO] Opus decoder created")
+	logger.Logger.Debugw("Opus decoder created")
 
-	fmt.Println("[RoomIO] Starting RTP read loop...")
+	logger.Logger.Debugw("Starting RTP read loop")
 
 	sb := samplebuilder.New(20, &codecs.OpusPacket{}, track.Codec().ClockRate)
 	var frameCount int
@@ -1103,16 +1103,15 @@ func (rio *RoomIO) handleAudioTrack(ctx context.Context, track *webrtc.TrackRemo
 
 		pkt, _, err := track.ReadRTP()
 		if err != nil {
-			fmt.Printf("❌ [RoomIO] ReadRTP error: %v\n", err)
 			if !errors.Is(err, io.EOF) {
-				logger.Logger.Errorw("[STT-PIPE] handleAudioTrack ReadRTP error", err)
+				logger.Logger.Errorw("ReadRTP error", err)
 			}
 			return
 		}
 
 		rtpCount++
-		if rtpCount == 1 || rtpCount%500 == 0 {
-			fmt.Printf("📦 [RoomIO] RTP packets read: %d (payload: %d bytes)\n", rtpCount, len(pkt.Payload))
+		if rtpCount == 1 || rtpCount%1000 == 0 {
+			logger.Logger.Debugw("RTP packets read", "count", rtpCount, "payload_len", len(pkt.Payload))
 		}
 
 		sb.Push(pkt)
@@ -1128,11 +1127,11 @@ func (rio *RoomIO) handleAudioTrack(ctx context.Context, track *webrtc.TrackRemo
 			if decoded, err := decoder.Decode(sample.Data); err == nil {
 				pcm = decoded
 			} else if sampleCount <= 3 {
-				fmt.Printf("⚠️ [RoomIO] Opus decode error: %v\n", err)
+				logger.Logger.Warnw("Opus decode error", err)
 			}
 
-			if sampleCount <= 5 || sampleCount%500 == 0 {
-				fmt.Printf("🔊 [RoomIO] Sample #%d: raw=%d bytes → decoded=%d bytes, sampleRate=%d\n", sampleCount, rawSize, len(pcm), track.Codec().ClockRate)
+			if sampleCount <= 5 || sampleCount%1000 == 0 {
+				logger.Logger.Debugw("Audio sample processed", "count", sampleCount, "raw_len", rawSize, "pcm_len", len(pcm))
 			}
 
 			frame := &model.AudioFrame{
