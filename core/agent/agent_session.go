@@ -28,14 +28,14 @@ type GenerateReplyOpts struct {
 // sendChatToPlayground tries multiple approaches to get a message
 // into the Playground chat panel. We send all three approaches
 // simultaneously to find out which one the Playground accepts.
-func sendChatToPlayground(publisher MediaPublisher, msgID string, text string) {
+func sendChatToPlayground(publisher MediaPublisher, msgID string, text string, senderIdentity string) {
 	topic := "lk.chat"
 
-	// Approach B: UserDataPacket + topic "lk.chat" + LiveKit JSON format
 	payload, _ := json.Marshal(map[string]interface{}{
-		"id":        msgID,
-		"message":   text,
-		"timestamp": time.Now().UnixMilli(),
+		"id":           msgID,
+		"message":      text,
+		"timestamp":    time.Now().UnixMilli(),
+		"generated_by": senderIdentity,
 	})
 	_ = publisher.PublishData(payload, topic, nil)
 }
@@ -777,7 +777,7 @@ func (s *AgentSession) PublishUserTranscript(text string) {
 	}
 
 	now := time.Now()
-	sendChatToPlayground(s.Output.Publisher, fmt.Sprintf("usr-%d", now.UnixNano()), text)
+	sendChatToPlayground(s.Output.Publisher, fmt.Sprintf("usr-%d", now.UnixNano()), text, userIdentity)
 
 	// Transcription packet — displayed as real-time subtitle overlay.
 	nowMs := uint64(now.UnixMilli())
@@ -798,7 +798,7 @@ func (s *AgentSession) PublishUserTranscript(text string) {
 	if err := s.Output.Publisher.PublishData(data, "lk.transcription", nil); err != nil {
 		logger.Logger.Warnw("Failed to publish user transcription", err)
 	} else {
-		fmt.Printf("💬 [Transcript] User %q: %q\n", userIdentity, text)
+		logger.Logger.Debugw("User transcription published", "identity", userIdentity, "text", text)
 	}
 }
 
@@ -818,7 +818,7 @@ func (s *AgentSession) PublishAgentTranscript(text string) {
 
 	agentIdentity := s.Output.Publisher.Identity()
 	now := time.Now()
-	sendChatToPlayground(s.Output.Publisher, fmt.Sprintf("agt-%d", now.UnixNano()), text)
+	sendChatToPlayground(s.Output.Publisher, fmt.Sprintf("agt-%d", now.UnixNano()), text, agentIdentity)
 
 	// Transcription packet — displayed as real-time subtitle overlay.
 	nowMs := uint64(now.UnixMilli())
@@ -838,7 +838,7 @@ func (s *AgentSession) PublishAgentTranscript(text string) {
 	if err := s.Output.Publisher.PublishData(data, "lk.transcription", nil); err != nil {
 		logger.Logger.Warnw("Failed to publish agent transcription", err)
 	} else {
-		fmt.Printf("💬 [Transcript] Agent: %q\n", text)
+		logger.Logger.Debugw("Agent transcription published", "text", text)
 	}
 }
 

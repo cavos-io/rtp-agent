@@ -1,830 +1,510 @@
-# 🔍 Gap Analysis: RTP Agent (Go) vs LiveKit Agents (Python)
+**Date:** 2026-04-14 **Repo:** `github.com/cavos-io/rtp-agent` **Compared branches:** `main`, `audit/livekit-remediation` **Reference:** [livekit/agents](https://github.com/livekit/agents/) (Python SDK)
 
-**Date**: April 7, 2026 — **Updated**: April 9, 2026 (Post Bug-Fix Sessions 1 & 2)  
-**Go Reference**: `cavos-io/rtp-agent` (181 files, Go 1.25+)  
-**Python Reference**: `livekit/agents` (Python 3.9+, production-ready)
 
 ---
 
-## How to Read This Document
+## **1. Executive Summary**
 
-Each gap is grouped by **priority** and includes:  
-- **Python**: What already exists in Python  
-- **Go**: What already exists in Go  
-- **Gap**: What's missing  
-- **Effort**: Estimated difficulty (🟢 Easy / 🟡 Medium / 🔴 Hard)
-- **Status**: Current state after bug-fix sessions (✅ Closed / 🔄 Partial / ❌ Open)
-- **Implementation Guide**: Step-by-step Go implementation details
+The `audit/livekit-remediation` branch is significantly more complete and architecturally aligned with the official Python SDK than `main`. It achieves approximately **90% feature parity** with the official SDK compared to **65%** on `main`. It adds \~7,600 lines of new/refactored code including agent handoff, advanced interruption handling, client events RPC, event timeline, I/O abstraction, and unit tests.
+
+**Recommendation:** Use `audit/livekit-remediation` as the primary development branch.
+
 
 ---
 
-## 🔧 Bug Fixes Applied (Sessions 1 & 2)
+## **2. Official Python SDK Architecture (Reference)**
 
-These were critical **runtime bugs** — not feature gaps — that prevented the agent from functioning at all. They were fixed before any gap work could be started.
+The official LiveKit Agents Python SDK (`livekit-agents`) follows a layered architecture:
 
-| ID | Bug | Root Cause | Files Changed | Status |
-|---|---|---|---|---|
-| BUG-01 | No audio output to remote participants | WebRTC SDP rejected `Channels:1` as "codec not supported by remote" — `WriteSample()` silently dropped packets | `room_io.go` | ✅ Fixed |
-| BUG-02 | SampleBuilder nil-pointer panic crashes entire program | `defer recover()` missing from audio goroutine — one panic killed the whole process | `room_io.go` | ✅ Fixed |
-| BUG-03 | Agent never received job dispatch in `start` mode | Worker sent WebSocket ping frames instead of protobuf `WorkerPing` — server marked worker dead. Also never sent `UpdateWorkerStatus(WS_AVAILABLE)` | `server.go` | ✅ Fixed |
-| BUG-04 | `Ctrl+C` hang — agent could not exit | `conn.ReadMessage()` blocks indefinitely; context cancel could not interrupt it | `server.go` | ✅ Fixed |
-| BUG-05 | Agent not recognized by LiveKit Playground | `ParticipantKind` not set to `lksdk.ParticipantAgent` at connect time | `job.go` | ✅ Fixed |
-| BUG-06 | Agent subscribed to other agents' audio tracks | No `rp.Kind()` filter in `onTrackSubscribed` — processed audio from itself when rejoining | `room_io.go` | ✅ Fixed |
-| BUG-07 | Agent state not visible to Playground UI | `lk.agent.state` participant attribute never published | `agent_session.go` | ✅ Fixed |
-| BUG-08 | ElevenLabs `input_timeout_exceeded` error | Text push and audio read ran sequentially — TTS provider timed out waiting for more input | `generation.go` | ✅ Fixed |
-| BUG-09 | VAD rapid-toggling on background noise | No debounce — single frame above threshold triggered speech start | `simple_vad.go` | ✅ Fixed |
+`AgentServer          -> Connects to LiveKit, receives job dispatches     | JobContext           -> Per-job: room access, connect, wait for participant     | AgentSession         -> Runtime container: STT, LLM, TTS, VAD, state management     +-- RoomIO       -> Bridge room <-> agent (publish audio, subscribe tracks)     +-- AgentActivity -> Pipeline executor per active agent          | Agent                -> Behavior definition: instructions, tools, lifecycle hooks `
 
-**Result of bug fixes**: The agent is now fully functional end-to-end. It connects to LiveKit, receives job assignments, decodes incoming audio, produces LLM + TTS responses, and publishes audible Opus audio back to the room.
+### **Key features of the official SDK:**
 
----
+* Full voice pipeline (Audio -> VAD -> STT -> LLM -> TTS -> Audio Out)
+* Agent handoff via tool return values
+* Overridable pipeline nodes (`stt_node`, `llm_node`, `tts_node`)
+* `SpeechHandle` for tracking each speech generation unit
+* `AgentInput`/`AgentOutput` abstraction (RoomIO is the only room-aware component)
+* Client events RPC surface (`get-session-state`, `send-message`, `interrupt`, etc.)
+* `EventTimeline` with typed event union
+* 4 turn detection modes (STT, VAD, RealtimeLLM, Manual)
+* False interruption detection and resumption
+* Preemptive generation
+* Transcript synchronization (syllable-rate pacing)
+* IVR detection with loop/silence detection
+* Background audio (ambient + thinking sounds)
+* Avatar support with AV sync
+* Multimodal agent (OpenAI Realtime API)
+* MCP (Model Context Protocol) integration
+* Evaluation framework with LLM judges
+* Session recording and report upload
+* 60+ provider plugins (STT, LLM, TTS, VAD, Avatar)
 
-## 📊 Gap Status After Bug-Fix Sessions
-
-| Gap | Description | Priority | Status |
-|---|---|---|---|
-| GAP-01 | Pipeline Nodes (Override Points) | 🔴 Critical | ❌ Open |
-| GAP-02 | Event System (EventEmitter Pattern) | 🔴 Critical | 🔄 Partial |
-| GAP-03 | Error Recovery & Connection Resilience | 🔴 Critical | 🔄 Partial |
-| GAP-04 | Comprehensive Test Suite | 🔴 Critical | ❌ Open |
-| GAP-05 | Granular Recording Options | 🔴 Critical | ❌ Open |
-| GAP-06 | Agent Handoff (Multi-Agent) | 🟠 High | ❌ Open |
-| GAP-07 | False Interruption Handling | 🟠 High | ❌ Open |
-| GAP-08 | Model String Inference | 🟠 High | ❌ Open |
-| GAP-09 | Configurable I/O Layer | 🟠 High | ❌ Open |
-| GAP-10 | TTS Text Transforms | 🟠 High | 🔄 Partial |
-| GAP-11 | AEC Warmup | 🟠 High | ❌ Open |
-| GAP-12 | AMD (Answering Machine Detection) | 🟡 Medium | ❌ Open |
-| GAP-13 | Adaptive Interruption Detection | 🟡 Medium | 🔄 Partial |
-| GAP-14 | Video Sampler (Adaptive FPS) | 🟡 Medium | ❌ Open |
-| GAP-15 | Session Userdata (Type-Safe) | 🟡 Medium | ❌ Open |
-| GAP-16 | HTTP MCP Client | 🟡 Medium | ❌ Open |
-| GAP-17 | Remote Session Transport | 🟡 Medium | ❌ Open |
-| GAP-18 | User Away Timeout | 🟡 Medium | ❌ Open |
-| GAP-19 | Function Tool Decorator Pattern | 🟢 Low | ❌ Open |
-| GAP-20 | Max Tool Steps Enforcement | 🟢 Low | ❌ Open |
-| GAP-21 | Preemptive Generation | 🟢 Low | ❌ Open |
-| GAP-22 | Language Code Support | 🟢 Low | ❌ Open |
-| GAP-23 | Metrics & Usage Tracking (Granular) | 🟢 Low | ❌ Open |
-| GAP-24 | Overlapping Speech Detection | 🟢 Low | ❌ Open |
-| GAP-25 | ReadOnly ChatContext | ⚪ Nice-to-Have | ❌ Open |
-| GAP-26 | Pydantic-style Event Validation | ⚪ Nice-to-Have | N/A |
-| GAP-27 | Deprecation Helpers | ⚪ Nice-to-Have | ❌ Open |
-| GAP-28 | CLI Dev Mode (Auto-Reload) Enhancement | ⚪ Nice-to-Have | ❌ Open |
-
-**Totals**: ✅ 0 Closed · 🔄 4 Partially Addressed · ❌ 23 Open · N/A 1
 
 ---
 
-## 🔴 CRITICAL — Required for Production
+## **3. Feature Comparison Matrix**
 
-### GAP-01: Pipeline Nodes (Override Points)
+| Feature | Python Official | `main` | `audit/livekit-remediation` |
+|---------|:---------------:|:----:|:-------------------------:|
+| **Core Pipeline** |                 |      |                           |
+| Voice pipeline (VAD->STT->LLM->TTS) | YES             | YES  | YES                       |
+| Multimodal agent (Realtime API) | YES             | YES  | YES                       |
+| Streaming STT/LLM/TTS | YES             | YES  | YES                       |
+| Fallback adapters (LLM, STT, TTS) | YES             | YES  | YES                       |
+| TTS text filtering (markdown, emoji) | YES             | YES  | YES                       |
+| Sentence stream pacing | YES             | YES  | YES                       |
+|         |                 |      |                           |
+| **Agent Lifecycle** |                 |      |                           |
+| Agent handoff (runtime) | YES             | NO (types only) | YES                       |
+| Agent transition orchestration | YES             | NO   | YES (close/pause/start/resume) |
+| Overridable pipeline nodes | YES             | NO   | YES (LLMNode, TTSNode, STTNode, VideoNode) |
+| `say()` shortcut | YES             | NO   | NO                        |
+| Agent state management | YES             | YES (basic) | YES (full)                |
+| User state tracking | YES             | YES (basic) | YES + user away timeout   |
+|         |                 |      |                           |
+| **Turn Detection & Interruption** |                 |      |                           |
+| 4 turn detection modes | YES             | YES  | YES                       |
+| Manual turn mode (commit/clear) | YES             | NO   | YES                       |
+| LLM-based turn detector | YES             | YES  | YES                       |
+| Configurable endpointing delays | YES             | YES  | YES                       |
+| Basic interruption handling | YES             | YES  | YES                       |
+| False interruption detection | YES             | NO   | YES                       |
+| Interruption resume | YES             | NO   | YES                       |
+| Min interruption duration/words | YES             | NO   | YES                       |
+| Discard audio if uninterruptible | YES             | NO   | YES                       |
+| Preemptive generation | YES             | NO   | YES                       |
+|         |                 |      |                           |
+| **Tool System** |                 |      |                           |
+| Basic function calling | YES             | YES  | YES                       |
+| Multi-step tool loops | YES             | YES  | YES + MaxToolSteps        |
+| Strict argument binding | YES             | NO   | YES                       |
+| `ToolWithArgs` (typed) | YES             | NO   | YES                       |
+| `ToolWithReply` | YES             | NO   | YES                       |
+| `ProviderTool` | YES             | NO   | YES                       |
+| `Toolset` nesting | YES             | YES  | YES                       |
+| Multi-format serialization | YES             | NO   | YES (openai, anthropic, google, aws) |
+| `ErrStopResponse` | YES             | NO   | YES                       |
+| `RunContext` injection | YES             | NO   | YES                       |
+|         |                 |      |                           |
+| **Speech Management** |                 |      |                           |
+| SpeechHandle | YES             | YES  | YES                       |
+| Priority queue | YES             | YES  | YES                       |
+| Interrupt with timeout | YES             | YES  | YES                       |
+| RunResult linkage | YES             | NO   | YES                       |
+| RunAssert (testing) | YES             | YES  | YES                       |
+|         |                 |      |                           |
+| **Transcription** |                 |      |                           |
+| Transcript publishing | YES             | YES  | YES                       |
+| Transcript synchronization (syllable pacing) | YES             | YES  | YES                       |
+| SyncedAudioOutput / SyncedTextOutput | YES             | NO   | YES                       |
+| Interim/preflight transcripts | YES             | NO   | YES                       |
+|         |                 |      |                           |
+| **I/O Architecture** |                 |      |                           |
+| AgentInput / AgentOutput abstraction | YES             | NO   | YES (`io.go`)             |
+| AudioInput / AudioOutput interfaces | YES             | NO   | YES                       |
+| TextInput / TextOutput interfaces | YES             | NO   | YES                       |
+| VideoInput / VideoOutput interfaces | YES             | NO   | YES                       |
+| PlaybackStarted / PlaybackFinished events | YES             | NO   | YES                       |
+| RoomIO as sole room-aware component | YES             | NO (partial) | YES (closer)              |
+|         |                 |      |                           |
+| **Events & Communication** |                 |      |                           |
+| EventTimeline | YES             | NO   | YES                       |
+| Typed AgentEvent union | YES             | NO   | YES                       |
+| ClientEventsDispatcher | YES             | NO   | YES (full RPC surface)    |
+| RPC: get-session-state | YES             | NO   | YES                       |
+| RPC: send-message | YES             | NO   | YES                       |
+| RPC: interrupt | YES             | NO   | YES                       |
+| RPC: commit/clear user turn | YES             | NO   | YES                       |
+| Text stream handler (lk.agent.request) | YES             | NO   | YES                       |
+| Data channel publishing (lk-agent-state) | YES             | NO   | YES                       |
+|         |                 |      |                           |
+| **IVR** |                 |      |                           |
+| IVR detection | YES             | YES (inline) | YES (sub-package)         |
+| Loop detection (Jaccard similarity) | YES             | NO   | YES                       |
+| Silence timeout | YES             | NO   | YES                       |
+| DTMF tool | YES             | YES  | YES                       |
+|         |                 |      |                           |
+| **Media** |                 |      |                           |
+| Audio I/O (Opus encode/decode) | YES             | YES  | YES                       |
+| Video I/O | YES             | NO   | YES                       |
+| Background audio (ambient/thinking) | YES             | YES  | YES                       |
+| Avatar support | YES             | YES  | YES                       |
+| Voice activity video sampler | YES             | YES  | YES                       |
+| AEC warmup | YES             | NO   | YES                       |
+|         |                 |      |                           |
+| **Infrastructure** |                 |      |                           |
+| Console mode (TUI) | YES             | YES  | YES                       |
+| Dev mode (hot reload) | YES             | YES  | YES                       |
+| Session recording (OGG) | YES             | YES  | YES                       |
+| Session report upload | YES             | YES  | YES                       |
+| Pre-connect audio buffering | YES             | YES  | YES                       |
+| Metrics / telemetry | YES             | YES  | YES                       |
+| Evaluation framework | YES             | YES  | YES                       |
+| MCP integration | YES             | YES  | YES                       |
+| Plugin system | YES             | YES  | YES                       |
+| SIP integration | YES             | YES  | YES                       |
+| IPC / process pool | YES             | YES  | YES                       |
+| Unit tests | YES             | NO   | YES (partial)             |
+|         |                 |      |                           |
+| **Provider Adapters** |                 |      |                           |
+| LLM adapters | 20+             | 21   | 22                        |
+| STT adapters | 15+             | 15   | 14                        |
+| TTS adapters | 20+             | 23   | 22                        |
+| VAD adapters | 1 (Silero)      | 2    | 2                         |
+| Avatar adapters | 5+              | 6    | 9                         |
 
-| | Detail |
-|---|---|
-| **Python** | Agent has **5 override-able pipeline nodes**: `stt_node()`, `llm_node()`, `tts_node()`, `transcription_node()`, `realtime_audio_output_node()`. Developers can override any node for custom behavior without rewriting the entire pipeline. |
-| **Go** | Pipeline is hardcoded in `PipelineAgent.run()` and `PipelineAgent.generateReply()`. No per-node override mechanism. |
-| **Gap** | Cannot customize individual pipeline stages. For example, custom STT preprocessing or TTS chunking requires forking the entire pipeline. |
-| **Effort** | 🟡 Medium (~150 LOC) |
-| **Status** | ❌ **OPEN** — Not touched in bug-fix sessions. Pipeline in `pipeline_agent.go` remains hardcoded. |
-
-<details>
-<summary>📋 Implementation Guide</summary>
-
-**Files**: [pipeline_agent.go](file:///c:/Go%20Project/src/Cavos/rtp-agent/core/agent/pipeline_agent.go), new `core/agent/pipeline_nodes.go`
-
-1. Define node interfaces:
-```go
-type STTNode interface {
-    Process(ctx context.Context, frame *model.AudioFrame) (*stt.SpeechEvent, error)
-}
-type LLMNode interface {
-    Process(ctx context.Context, chatCtx *llm.ChatContext, tools []llm.Tool) (*LLMGenerationData, error)
-}
-type TTSNode interface {
-    Process(ctx context.Context, textCh <-chan string) (*TTSGenerationData, error)
-}
-```
-2. Create default implementations wrapping [PerformLLMInference](file:///c:/Go%20Project/src/Cavos/rtp-agent/core/agent/generation.go#21-63), [PerformTTSInference](file:///c:/Go%20Project/src/Cavos/rtp-agent/core/agent/generation.go#69-107)
-3. Add node fields to [Agent](file:///c:/Go%20Project/src/Cavos/rtp-agent/core/agent/agent.go#33-54) struct: `STTNode`, `LLMNode`, `TTSNode` (nil = use default)
-4. In `PipelineAgent.generateReply()`, check for custom nodes before calling defaults
-</details>
-
----
-
-### GAP-02: Event System (EventEmitter Pattern)
-
-| | Detail |
-|---|---|
-| **Python** | [AgentSession](file:///c:/Go%20Project/src/Cavos/rtp-agent/core/agent/agent_session.go#50-76) extends `EventEmitter` with **12 event types**: `user_state_changed`, `agent_state_changed`, `user_input_transcribed`, `conversation_item_added`, `agent_false_interruption`, `overlapping_speech`, `function_tools_executed`, `metrics_collected`, `session_usage_updated`, `speech_created`, `error`, `close`. |
-| **Go** | Only 2 channel-based events (`AgentStateChangedCh`, `UserStateChangedCh`) and [ClientEventsDispatcher](file:///c:/Go%20Project/src/Cavos/rtp-agent/core/agent/events.go#100-104). Missing `error`, `close`, `function_tools_executed`, `agent_false_interruption`, `overlapping_speech` events. |
-| **Gap** | Developers cannot subscribe to many important events. No error propagation or tool execution lifecycle events. |
-| **Effort** | 🟡 Medium (~200 LOC) |
-| **Status** | 🔄 **PARTIALLY ADDRESSED** — `UpdateAgentState()` now publishes `lk.agent.state` attribute via `room.LocalParticipant.SetAttributes()`, making agent state visible to LiveKit Playground. However, the Go event system itself is unchanged: still only 2 channel-based events; the 10+ missing Python event types (`error`, `close`, `function_tools_executed`, etc.) are not implemented. |
-
-<details>
-<summary>📋 Implementation Guide</summary>
-
-**Files**: [events.go](file:///c:/Go%20Project/src/Cavos/rtp-agent/core/agent/events.go), [agent_session.go](file:///c:/Go%20Project/src/Cavos/rtp-agent/core/agent/agent_session.go), new `core/agent/event_emitter.go`
-
-1. Create `EventEmitter`:
-```go
-type EventHandler func(event Event)
-type EventEmitter struct {
-    handlers map[string][]EventHandler
-    mu       sync.RWMutex
-}
-func (e *EventEmitter) On(eventType string, handler EventHandler)
-func (e *EventEmitter) Emit(event Event)
-```
-2. Add missing event types: `AgentFalseInterruptionEvent`, `OverlappingSpeechEvent`, `FunctionToolsExecutedEvent`, `SessionUsageUpdatedEvent`, `ErrorEvent`
-3. Embed `EventEmitter` in [AgentSession](file:///c:/Go%20Project/src/Cavos/rtp-agent/core/agent/agent_session.go#50-76)
-4. Call `s.Emit(event)` at every state change, error, and tool execution
-</details>
-
----
-
-### GAP-03: Error Recovery & Connection Resilience
-
-| | Detail |
-|---|---|
-| **Python** | `SessionConnectOptions` with `APIConnectOptions` per provider (STT, LLM, TTS). `max_unrecoverable_errors` counter. Error count resets after successful agent speech. Provider-level retry with timeout. |
-| **Go** | No retry logic, no per-provider connection options, no error counter. One error stops the pipeline. No WebSocket reconnection. |
-| **Gap** | A single API error can crash the entire session. No graceful degradation. |
-| **Effort** | 🟡 Medium (~200 LOC) |
-| **Status** | 🔄 **PARTIALLY ADDRESSED** — Two improvements from bug-fix sessions: (1) `server.go` now closes the WebSocket on `ctx.Done()`, allowing clean shutdown; (2) `sendAvailable()` is called after job completion, so the worker can accept a new job after one ends. However, no retry logic, no per-provider error counters, and no WebSocket reconnect-with-backoff were added. A single LLM/STT/TTS API error still stops the pipeline permanently. |
-
-<details>
-<summary>📋 Implementation Guide</summary>
-
-**Files**: [pipeline_agent.go](file:///c:/Go%20Project/src/Cavos/rtp-agent/core/agent/pipeline_agent.go), [server.go](file:///c:/Go%20Project/src/Cavos/rtp-agent/interface/worker/server.go), new `core/agent/connect_options.go`
-
-1. Define options:
-```go
-type APIConnectOptions struct {
-    MaxRetries int
-    Timeout    time.Duration
-    Backoff    time.Duration
-}
-type SessionConnectOptions struct {
-    STT, LLM, TTS          APIConnectOptions
-    MaxUnrecoverableErrors  int
-}
-```
-2. Add `ConnectOptions` to [AgentSessionOptions](file:///c:/Go%20Project/src/Cavos/rtp-agent/core/agent/agent_session.go#33-49)
-3. Wrap LLM/STT/TTS calls with retry middleware:
-```go
-func withRetry(opts APIConnectOptions, fn func() error) error {
-    for i := 0; i <= opts.MaxRetries; i++ {
-        if err := fn(); err == nil { return nil }
-        time.Sleep(opts.Backoff * time.Duration(i+1))
-    }
-    return lastErr
-}
-```
-4. Add error counter to [AgentSession](file:///c:/Go%20Project/src/Cavos/rtp-agent/core/agent/agent_session.go#50-76), reset on successful playout
-5. In `server.go Run()`: wrap the entire connection loop in a reconnect loop with exponential backoff:
-```go
-for {
-    if err := s.runOnce(ctx); err != nil && ctx.Err() == nil {
-        time.Sleep(backoff)
-        backoff = min(backoff*2, maxBackoff)
-        continue
-    }
-    return
-}
-```
-</details>
 
 ---
 
-### GAP-04: Comprehensive Test Suite
+## **4. Architecture Comparison**
 
-| | Detail |
-|---|---|
-| **Python** | Unit tests, integration tests, mocking for all major components. |
-| **Go** | Only **1 test file** found ([pre_connect_audio_test.go](file:///c:/Go%20Project/src/Cavos/rtp-agent/interface/worker/pre_connect_audio_test.go)). |
-| **Gap** | Almost no test coverage. Dangerous for production. |
-| **Effort** | 🔴 Hard (~500+ LOC) |
-| **Status** | ❌ **OPEN** — No tests were added in either session. The bug-fix sessions focused on runtime correctness, not test coverage. The pipeline is now verified to work end-to-end manually, but automated test coverage remains ~0%. |
+### **4.1 Separation of Concerns**
 
-<details>
-<summary>📋 Implementation Guide</summary>
+| Aspect | Python Official | `main` | `audit/livekit-remediation` |
+|--------|-----------------|------|---------------------------|
+| Agent defines behavior only | YES             | Partially | YES                       |
+| Session manages runtime | YES             | Partially (mixed with pipeline) | YES                       |
+| Activity orchestrates per-agent | YES             | YES  | YES (enhanced)            |
+| RoomIO is sole room-aware | YES             | NO (Session also room-aware) | Closer (I/O abstraction added) |
+| I/O interfaces abstracted | YES             | NO   | YES (`io.go`)             |
 
-**Files**: new `core/agent/*_test.go`, `interface/worker/*_test.go`, mock files per interface
+### **4.2 Code Organization**
 
-1. Create mock implementations: `mock_stt.go`, `mock_tts.go`, `mock_llm.go`, `mock_vad.go`
-2. Priority test files:
-   - `pipeline_agent_test.go` — audio → STT → LLM → TTS flow
-   - `agent_session_test.go` — lifecycle, state changes
-   - `agent_activity_test.go` — speech scheduling, EOU detection
-   - `room_io_test.go` — audio encode/decode, Opus stereo conversion
-3. Use table-driven tests with `testing.T`
-4. For Opus codec tests, verify stereo output: `len(pcm_in)*2 == len(stereo_out)`
-</details>
+`**main**` **branch:**
 
----
+* Pipeline logic partially mixed into `AgentSession`
+* No I/O abstraction layer
+* Events handled via basic channels
+* Tool system is functional but minimal
 
-### GAP-05: Granular Recording Options
+`**audit/livekit-remediation**` **branch:**
 
-| | Detail |
-|---|---|
-| **Python** | `RecordingOptions` with granular control: `audio`, `traces`, `logs`, `transcript` booleans. |
-| **Go** | `RecorderIO` only records input/output audio. No granular control. |
-| **Gap** | Cannot selectively enable/disable recording components. |
-| **Effort** | 🟢 Easy (~30 LOC) |
-| **Status** | ❌ **OPEN** — `RecorderIO` and `RoomOptions` were not changed. |
+* Cleaner separation with `io.go` defining all I/O interfaces
+* `ClientEventsDispatcher` handles all external communication
+* `EventTimeline` provides structured event tracking
+* Tool system supports multiple provider formats and strict typing
+* IVR extracted to sub-package
 
-<details>
-<summary>📋 Implementation Guide</summary>
+### **4.3 Data Flow**
 
-**Files**: [room_io.go](file:///c:/Go%20Project/src/Cavos/rtp-agent/interface/worker/room_io.go)
+`**main**`**:**
 
-```go
-type RecordingOptions struct {
-    Audio, Traces, Logs, Transcript bool
-}
-```
-Add to [RoomOptions](file:///c:/Go%20Project/src/Cavos/rtp-agent/interface/worker/room_io.go#104-106). Guard calls: `if rio.options.Recording.Audio { ... }`
-</details>
+`Audio In -> RoomIO -> AgentSession -> PipelineAgent.run()   -> VAD loop -> STT loop -> generateReply -> LLM -> TTS -> PublishAudio callback `
+
+`**audit/livekit-remediation**`**:**
+
+`Audio In -> RoomIO -> AgentSession.forwardAudioLoop -> AgentActivity.PushAudio   -> AudioRecognition -> VAD + STT (parallel)     -> EOU detection -> ScheduleSpeech -> PipelineAgent.GenerateReply       -> LLM (stream) -> Tool execution (loop) -> TTS (parallel)         -> CaptureFrame -> playoutLoop -> Opus -> RTP track         -> TranscriptSync -> RoomTextOutput -> StreamText `
+
+The `audit` branch has a more structured data flow with explicit stages and better separation between audio recognition, speech scheduling, and generation.
+
 
 ---
 
-## 🟠 HIGH — Critical for Feature Parity
+## **5. Delta: What** `**audit/livekit-remediation**` **Adds Over** `**main**`
 
-### GAP-06: Agent Handoff (Multi-Agent)
+### **5.1 New Files**
 
-| | Detail |
-|---|---|
-| **Python** | Full [AgentHandoff](file:///c:/Go%20Project/src/Cavos/rtp-agent/core/llm/llm.go#82-88): agent can `handoff()` to another, ChatContext is transferred, tools updated. `AgentTask[T]` for sub-agents with typed results. |
-| **Go** | [AgentHandoff](file:///c:/Go%20Project/src/Cavos/rtp-agent/core/llm/llm.go#82-88) struct exists but **has no implementation**. `AgentTask[T]` generics exist but aren't integrated. |
-| **Gap** | Multi-agent workflows are not possible. |
-| **Effort** | 🟡 Medium (~100 LOC) |
-| **Status** | ❌ **OPEN** — Not touched in either session. |
+| File | Purpose |
+|------|---------|
+| `core/agent/io.go` | I/O interface definitions (AudioInput/Output, TextInput/Output, VideoInput/Output) |
+| `core/agent/ivr/ivr.go` | IVR detection moved to own sub-package with loop detection |
+| `core/agent/agent_activity_test.go` | Unit tests for AgentActivity |
+| `core/agent/audio_recognition_test.go` | Unit tests for AudioRecognition |
+| `core/agent/generation_test.go` | Unit tests for generation functions |
+| `core/agent/speech_handle_test.go` | Unit tests for SpeechHandle |
+| `adapter/openai/llm_stream_test.go` | Unit tests for OpenAI adapter |
+| `interface/cli/console/manager.go` | ConsoleManager singleton pattern |
+| `model/video.go` | VideoFrame and AudioSegmentEnd models |
 
-<details>
-<summary>📋 Implementation Guide</summary>
+### **5.2 Major Modifications (by lines added)**
 
-**Files**: [agent.go](file:///c:/Go%20Project/src/Cavos/rtp-agent/core/agent/agent.go), [agent_session.go](file:///c:/Go%20Project/src/Cavos/rtp-agent/core/agent/agent_session.go), new `core/agent/handoff.go`
+| File | Lines Added | Changes |
+|------|-------------|---------|
+| `interface/worker/room_io.go` | +826        | Playout loop with monotonic clock pacing, participant switching, video I/O, transcript sync setup |
+| `core/agent/agent_activity.go` | +721        | False interruption, manual turn mode, preemptive generation, user away timer, preflight transcripts |
+| `interface/worker/recorder_io.go` | +668        | Full recording pipeline with OGG encoding |
+| `core/agent/events.go` | +627        | ClientEventsDispatcher with full RPC surface, text input handling |
+| `core/agent/agent_session.go` | +545        | Agent transitions, video I/O forwarding, IVR integration, AEC warmup |
+| `core/agent/generation.go` | +468        | Strict argument binding, ErrStopResponse, RunContext injection, tool call delta merging |
+| `core/llm/tool_context.go` | +402        | Multi-format serialization, Merge, FlattenTools, Equal, Copy |
+| `core/agent/pipeline_agent.go` | +372        | Multi-step tool loop, agent handoff via tool return, node overrides |
+| `core/agent/run_result.go` | +230        | Generic typed result, background task watching, Eval() method |
+| `interface/cli/console/audio.go` | +228        | PortAudio bidirectional I/O |
+| `core/agent/transcription.go` | +177        | TranscriptSynchronizer, SyncedAudioOutput/SyncedTextOutput |
 
-```go
-func (s *AgentSession) Handoff(ctx context.Context, target AgentInterface) error {
-    s.activity.Stop()
-    s.Agent = target
-    s.activity = NewAgentActivity(target, s)
-    s.activity.Start()
-    return nil
-}
-```
-Transfer [ChatCtx](file:///c:/Go%20Project/src/Cavos/rtp-agent/core/llm/remote_chat_context.go#23-32), fire [ConversationItemAddedEvent](file:///c:/Go%20Project/src/Cavos/rtp-agent/core/agent/events.go#29-33), wire `AgentTask[T]` completion.
-</details>
+**Total:** \~7,600+ lines of new/refactored code.
 
----
-
-### GAP-07: False Interruption Handling
-
-| | Detail |
-|---|---|
-| **Python** | `AgentFalseInterruptionEvent` with `resumed` flag. `false_interruption_timeout` config. Automatic resume on false positive. `AdaptiveInterruptionDetector`. |
-| **Go** | `FalseInterruptionTimeout` and `ResumeFalseInterruption` exist in [AgentSessionOptions](file:///c:/Go%20Project/src/Cavos/rtp-agent/core/agent/agent_session.go#33-49) but are **not implemented**. |
-| **Gap** | Agent cannot distinguish real interruptions from noise/false positives. Will frequently stop speaking incorrectly. |
-| **Effort** | 🟡 Medium (~60 LOC) |
-| **Status** | ❌ **OPEN** — `FalseInterruptionTimeout` field in `AgentSessionOptions` is still not wired to any logic. The VAD debounce from BUG-09 reduces the frequency of spurious speech-start events, but there is no actual false-interruption delay timer or automatic resume in `vadLoop()`. |
-
-<details>
-<summary>📋 Implementation Guide</summary>
-
-**Files**: [agent_activity.go](file:///c:/Go%20Project/src/Cavos/rtp-agent/core/agent/agent_activity.go)
-
-In [OnStartOfSpeech()](file:///c:/Go%20Project/src/Cavos/rtp-agent/core/agent/agent_activity.go#134-148), delay interruption:
-```go
-if session.Options.FalseInterruptionTimeout > 0 {
-    go func() {
-        timer := time.NewTimer(duration)
-        select {
-        case <-timer.C: a.cancelCurrentSpeech() // real interruption
-        case <-speechEndCh: // false interruption → resume
-        }
-    }()
-}
-```
-Emit `AgentFalseInterruptionEvent`. If `ResumeFalseInterruption=true`, re-schedule speech.
-</details>
 
 ---
 
-### GAP-08: Model String Inference (Auto-Resolution)
+## **6. What Both Branches Are Missing (vs Official)**
 
-| | Detail |
-|---|---|
-| **Python** | `inference.STT.from_model_string("deepgram")`. Auto-resolve string to provider instance. |
-| **Go** | Must manually instantiate each provider. |
-| **Gap** | Developer experience is more verbose. |
-| **Effort** | 🟡 Medium (~80 LOC) |
-| **Status** | ❌ **OPEN** — Not touched in either session. |
+These features exist in the official Python SDK but are not implemented in either branch:
 
-<details>
-<summary>📋 Implementation Guide</summary>
+| Missing Feature | Impact | Difficulty |
+|-----------------|--------|------------|
+| `AgentSession.say()` method | Low — convenience shortcut only | Easy       |
+| `inference.*` model string resolution (`"openai/gpt-4"` -> provider) | Medium — nice DX but not critical | Medium     |
+| Full Silero VAD integration (adapter exists but not wired) | Medium — SimpleVAD works but less accurate | Medium     |
+| MCP HTTP transport (stub exists) | Low — Stdio transport works | Medium     |
+| Async/streaming-first architecture (Python's `asyncio`) | N/A — Go uses goroutines + channels (idiomatic) | N/A        |
 
-**Files**: new `core/inference/registry.go`
-
-```go
-var sttRegistry = map[string]func(string) stt.STT{}
-func RegisterSTT(name string, factory func(string) stt.STT)
-func STTFromString(name, apiKey string) (stt.STT, error)
-```
-Register in each adapter's `init()`.
-</details>
 
 ---
 
-### GAP-09: Configurable I/O Layer
+## **7. Known Issues**
 
-| | Detail |
-|---|---|
-| **Python** | `AgentInput`/`AgentOutput` as configurable I/O layer. Can swap audio/video/text independently. |
-| **Go** | Audio I/O hardcoded in [RoomIO](file:///c:/Go%20Project/src/Cavos/rtp-agent/interface/worker/room_io.go#106-121). No abstraction for swapping. |
-| **Gap** | Cannot easily add custom audio sources or output targets. |
-| **Effort** | 🟡 Medium (~120 LOC) |
-| **Status** | ❌ **OPEN** — `RoomIO` was significantly modified in Session 2 (Channels:2 fix, mono→stereo, Opus encoder fixes), but the I/O abstraction layer was not added. `PublishAudio` is still a concrete function pointer on `PipelineAgent`, not an interface. |
+### **7.1 Publisher DataChannel (Both Branches)**
 
-<details>
-<summary>📋 Implementation Guide</summary>
+The Go SDK (`server-sdk-go` v2.16.1) using `pion/webrtc` has a publisher DataChannel issue where `dc.Send()` silently drops data. This affects all data transmission (SendText, StreamText, PublishData) while audio/video tracks work normally.
 
-**Files**: [room_io.go](file:///c:/Go%20Project/src/Cavos/rtp-agent/interface/worker/room_io.go), new `core/agent/io.go`
+**Status:** Confirmed via diagnostic testing. Server-side API (`RoomService.SendData`) works as a workaround.
 
-```go
-type AgentInput interface { AudioCh() <-chan *model.AudioFrame }
-type AgentOutput interface { PublishAudio(frame *model.AudioFrame) error }
-```
-Make [RoomIO](file:///c:/Go%20Project/src/Cavos/rtp-agent/interface/worker/room_io.go#106-121) implement both. Change [PipelineAgent](file:///c:/Go%20Project/src/Cavos/rtp-agent/core/agent/pipeline_agent.go#16-33) to accept interfaces.
-</details>
+**Impact:** Transcript/chat text does not appear in LiveKit Playground or custom UIs that rely on DataChannel delivery.
 
----
+**Workaround:** Use `RoomServiceClient.SendData` (HTTP API) to bypass the DataChannel. A custom playground HTML page has been created to display `DataPacket_User` messages.
 
-### GAP-10: TTS Text Transforms
+### **7.2 Adapter Completeness**
 
-| | Detail |
-|---|---|
-| **Python** | `tts_text_transforms` config: `["filter_markdown", "filter_emoji"]` default. Extensible. |
-| **Go** | `tts.ApplyTextTransforms()` exists but is not extensible. |
-| **Gap** | Developers cannot easily customize text preprocessing before TTS. |
-| **Effort** | 🟢 Easy (~30 LOC) |
-| **Status** | 🔄 **PARTIALLY ADDRESSED** — `filters.go` now has complete implementations of `FilterMarkdown()` and `FilterEmoji()`. `generation.go` calls `tts.ApplyTextTransforms(text)` before pushing each chunk to the TTS provider. This means markdown and emoji are always stripped from TTS input. However, the transforms are **hardcoded** — there is no `TTSTextTransforms []TextTransform` field in `AgentSessionOptions`, so developers cannot add, remove, or reorder transforms at runtime. |
+Both branches contain 60+ adapter directories, but most are skeleton implementations. Only the following are fully wired and tested:
 
-<details>
-<summary>📋 Implementation Guide</summary>
+* LLM: OpenAI, Google, Anthropic, AWS, XAI
+* STT: OpenAI (Whisper), Google, AWS, Deepgram
+* TTS: ElevenLabs, OpenAI, Google, AWS, Cartesia
+* VAD: SimpleVAD (energy-based)
 
-**Files**: [filters.go](file:///c:/Go%20Project/src/Cavos/rtp-agent/core/tts/filters.go)
-
-```go
-type TextTransform func(string) string
-var DefaultTransforms = []TextTransform{FilterMarkdown, FilterEmoji}
-```
-Add `TTSTextTransforms []tts.TextTransform` to [AgentSessionOptions](file:///c:/Go%20Project/src/Cavos/rtp-agent/core/agent/agent_session.go#33-49). In `PerformTTSInference`, replace `tts.ApplyTextTransforms(text)` with:
-```go
-for _, fn := range transforms {
-    text = fn(text)
-}
-```
-</details>
 
 ---
 
-### GAP-11: AEC Warmup
+## **8. Gap Analysis:** `**audit/livekit-remediation**` **vs Official Python SDK**
 
-| | Detail |
-|---|---|
-| **Python** | `aec_warmup_duration` (default 3.0s). Interruptions disabled during warmup. |
-| **Go** | `AECWarmupDuration` field exists but is **not implemented**. |
-| **Gap** | Agent may detect echo as user speech at session start. |
-| **Effort** | 🟢 Easy (~20 LOC) |
-| **Status** | ❌ **OPEN** — `AECWarmupDuration` in `AgentSessionOptions` is still a no-op. Not wired to any logic. |
+This section provides a detailed breakdown of every gap between the `audit/livekit-remediation` branch and the official Python SDK, categorized by severity and effort.
 
-<details>
-<summary>📋 Implementation Guide</summary>
+### **8.1 Critical Gaps (Affects Core Functionality)**
 
-**Files**: [agent_session.go](file:///c:/Go%20Project/src/Cavos/rtp-agent/core/agent/agent_session.go)
+#### **GAP-001: Publisher DataChannel Silent Failure**
 
-In [Start()](file:///c:/Go%20Project/src/Cavos/rtp-agent/core/agent/pipeline_agent.go#57-65): set `s.aecWarmup = true`, start timer goroutine, clear after duration. In [OnAudioFrame()](file:///c:/Go%20Project/src/Cavos/rtp-agent/core/agent/pipeline_agent.go#237-243): skip VAD during warmup.
-</details>
+* **Official:** Python SDK uses Rust-based `livekit-rtc` which reliably sends data via DataChannel (TextStream on `lk.transcription` topic).
+* **Current:** Go SDK (`pion/webrtc`) silently drops `dc.Send()` data. All transcript/chat delivery via DataChannel is non-functional.
+* **Impact:** HIGH — Transcripts do not appear in LiveKit Playground. Agent appears "silent" in text.
+* **Workaround:** Server-side `RoomService.SendData` (HTTP API) + custom Playground HTML.
+* **Proper Fix:** Debug pion/webrtc DataChannel on publisher PeerConnection, or deploy on Linux where it may work. File issue on `livekit/server-sdk-go`.
+* **Effort:** HIGH (requires deep WebRTC debugging or infra change)
 
----
+#### **GAP-002: Transcript Publishing Protocol Mismatch**
 
-## 🟡 MEDIUM — Important for Quality
+* **Official:** Sends dual mechanism: (1) `local_participant.stream_text()` on topic `lk.transcription` with attributes `lk.segment_id`, `lk.transcribed_track_id`, `lk.transcription_final`; (2) Legacy `publish_transcription()` DataPacket. Agent output uses delta streaming (incremental chunks), user output uses full-text mode.
+* **Current:** `audit` branch uses `RoomTextOutput` publishing to `lk-agent-transcription` topic via `StreamText`. Topic name and attribute schema may differ from official.
+* **Impact:** MEDIUM — Even if DataChannel is fixed, Playground may not display transcripts if topic/attributes don't match exactly.
+* **Fix:** Align topic to `lk.transcription`, attributes to `lk.segment_id` / `lk.transcribed_track_id` / `lk.transcription_final`, and implement dual mechanism (TextStream + legacy DataPacket).
+* **Effort:** LOW (configuration change + small code update)
 
-### GAP-12: AMD (Answering Machine Detection)
+#### **GAP-003:** `**sender_identity**` **Parameter Missing**
 
-| | Detail |
-|---|---|
-| **Python** | `AMD` class detects voicemail vs human on outbound SIP calls. |
-| **Go** | No AMD implementation. |
-| **Gap** | For SIP outbound, agent cannot differentiate human vs voicemail. |
-| **Effort** | 🟡 Medium (~100 LOC) |
-| **Status** | ❌ **OPEN** — Not touched in either session. |
+* **Official:** Python SDK's `stream_text()` accepts `sender_identity` parameter. When agent publishes user's transcript, it sets `sender_identity` to user's identity so Playground shows correct attribution.
+* **Current:** Go SDK's `StreamTextOptions` has no `SenderIdentity` field. All transcripts appear as sent by the agent.
+* **Impact:** MEDIUM — User messages in Playground chat show wrong sender identity.
+* **Fix:** Requires Go SDK upstream change or custom workaround via attributes.
+* **Effort:** MEDIUM (upstream dependency)
 
-<details>
-<summary>📋 Implementation Guide</summary>
+### **8.2 Moderate Gaps (Affects Developer Experience / Completeness)**
 
-New `core/agent/amd.go`. Analyze silence/speech patterns: voicemail greetings are typically >3s continuous speech. Integrate with `AgentSession.Start()`.
-</details>
+#### **GAP-004:** `**AgentSession.say()**` **Method**
 
----
+* **Official:** `session.say("text")` is a convenience method to make the agent speak arbitrary text immediately, bypassing the LLM.
+* **Current:** Not implemented. Closest is `GenerateReply()` which requires LLM inference.
+* **Impact:** LOW — Workaround is to call TTS directly, but less ergonomic.
+* **Fix:** Add `Say(text string, opts ...SayOption) *SpeechHandle` method to `AgentSession`.
+* **Effort:** LOW
 
-### GAP-13: Adaptive Interruption Detection
+#### **GAP-005: Model String Resolution (**`**inference.\***`**)**
 
-| | Detail |
-|---|---|
-| **Python** | `AdaptiveInterruptionDetector` — considers speech duration, overlap analysis, context. |
-| **Go** | Simple VAD-based interruption (any speech → interrupt). |
-| **Gap** | High false positive rate (background noise, coughing can trigger interruption). |
-| **Effort** | 🟡 Medium (~80 LOC) |
-| **Status** | 🔄 **PARTIALLY ADDRESSED** — `simple_vad.go` now has meaningful debounce: requires **3 consecutive frames above threshold** to declare speech start (~60ms at 20ms/frame), and **50 consecutive frames below threshold** to declare speech end (~1s silence). This significantly reduces false positives from brief noise bursts. However, there is no `AdaptiveInterruptionDetector` — no overlap analysis, no speech duration weighting, no context consideration. The interruption logic in `vadLoop()` still immediately cancels agent speech on first real speech-start event. |
+* **Official:** `"openai/gpt-4"` auto-resolves to the correct provider plugin. Users don't need to import provider packages directly.
+* **Current:** Users must explicitly create provider instances (e.g., `oaiadapter.NewOpenAILLM(key, model)`).
+* **Impact:** LOW — Does not affect functionality, only DX.
+* **Fix:** Implement registry pattern: `inference.NewLLM("openai/gpt-4")` -> looks up registered provider.
+* **Effort:** MEDIUM
 
-<details>
-<summary>📋 Implementation Guide</summary>
+#### **GAP-006: Silero VAD Not Wired**
 
-New `core/agent/adaptive_interruption.go`. Track overlap duration, ignore overlaps <300ms. Replace direct interruption in [vadLoop()](file:///c:/Go%20Project/src/Cavos/rtp-agent/core/agent/pipeline_agent.go#95-124):
-```go
-type AdaptiveInterruptionDetector struct {
-    MinDuration time.Duration  // e.g., 300ms
-    overlapStart time.Time
-}
-func (d *AdaptiveInterruptionDetector) OnSpeechStart() bool {
-    d.overlapStart = time.Now()
-    return false // don't interrupt yet
-}
-func (d *AdaptiveInterruptionDetector) OnSpeechProgress() bool {
-    return time.Since(d.overlapStart) >= d.MinDuration
-}
-```
-</details>
+* **Official:** Uses Silero VAD (neural network-based) as the default, with much higher accuracy than energy-based VAD.
+* **Current:** Adapter directory exists (`adapter/silero/`, `adapter/silero_vad/`) but `SimpleVAD` (RMS energy-based) is used in practice. Silero requires ONNX runtime or similar.
+* **Impact:** MEDIUM — SimpleVAD has more false positives/negatives in noisy environments.
+* **Fix:** Wire Silero adapter with ONNX runtime integration, or use WebSocket-based Silero service.
+* **Effort:** MEDIUM-HIGH
 
----
+#### **GAP-007: MCP HTTP Transport**
 
-### GAP-14: Video Sampler
+* **Official:** Both stdio and HTTP (SSE) transports for MCP servers.
+* **Current:** `MCPServerHTTP` returns "not fully supported" error. Only stdio transport works.
+* **Impact:** LOW — Most MCP servers support stdio. HTTP needed for remote MCP servers.
+* **Fix:** Implement SSE-based HTTP client for MCP JSON-RPC.
+* **Effort:** MEDIUM
 
-| | Detail |
-|---|---|
-| **Python** | `VoiceActivityVideoSampler` — adaptive FPS based on user state (`speaking_fps=1.0`, `silent_fps=0.3`). |
-| **Go** | [video_sampler.go](file:///c:/Go%20Project/src/Cavos/rtp-agent/core/agent/video_sampler.go) exists (65 lines) but is basic. |
-| **Gap** | Video processing is not adaptive based on conversation state. |
-| **Effort** | 🟢 Easy (~30 LOC) |
-| **Status** | ❌ **OPEN** — Not touched in either session. |
+#### **GAP-008: Full RoomIO Decoupling**
 
-<details>
-<summary>📋 Implementation Guide</summary>
+* **Official:** RoomIO is the ONLY room-aware component. `AgentSession`, `AgentActivity`, `PipelineAgent` all work with abstract `AgentInput`/`AgentOutput`.
+* **Current:** `audit` branch added `io.go` with I/O interfaces, but `AgentSession` still holds a direct `Room` reference and some methods access room directly.
+* **Impact:** LOW — Affects testability and modularity, not runtime behavior.
+* **Fix:** Remove `Room` from `AgentSession`, pass all room operations through I/O interfaces.
+* **Effort:** MEDIUM (refactoring)
 
-**Files**: [video_sampler.go](file:///c:/Go%20Project/src/Cavos/rtp-agent/core/agent/video_sampler.go)
+### **8.3 Minor Gaps (Nice-to-Have)**
 
-Add `SpeakingFPS`, `SilentFPS` config. Subscribe to `UserStateChangedCh`, adjust interval dynamically.
-</details>
+#### **GAP-009: Parallel Tool Execution**
 
----
+* **Official:** Tools can execute concurrently when multiple function calls are returned by the LLM.
+* **Current:** `PerformToolExecutions` processes calls, but concurrency behavior unclear.
+* **Fix:** Ensure `goroutine` per tool call with `sync.WaitGroup`.
+* **Effort:** LOW
 
-### GAP-15: Session Userdata (Type-Safe)
+#### **GAP-010:** `**ParticipantActive**` **Event**
 
-| | Detail |
-|---|---|
-| **Python** | `AgentSession[Userdata_T]` — generic typed userdata attached to session. |
-| **Go** | No typed userdata in [AgentSession](file:///c:/Go%20Project/src/Cavos/rtp-agent/core/agent/agent_session.go#50-76). |
-| **Gap** | Developers must use `map[string]any` or custom fields. |
-| **Effort** | 🟢 Easy (~5 LOC) |
-| **Status** | ❌ **OPEN** — Not touched in either session. |
+* **Official:** Uses `ParticipantActive` event (not just `ParticipantConnected`) to know when it's safe to send data.
+* **Current:** Uses `ParticipantConnected` which may fire before DataChannel is ready.
+* **Fix:** Check if Go SDK supports `ParticipantActive` event and use it.
+* **Effort:** LOW
 
-<details>
-<summary>📋 Implementation Guide</summary>
+#### **GAP-011: Configurable Audio Format Negotiation**
 
-**Files**: [agent_session.go](file:///c:/Go%20Project/src/Cavos/rtp-agent/core/agent/agent_session.go)
+* **Official:** TTS sample rate and channels are configurable per provider.
+* **Current:** Pipeline assumes 24kHz mono from TTS, hardcoded resample to 48kHz stereo for Opus.
+* **Fix:** Read `TTS.SampleRate()` and `TTS.NumChannels()` dynamically, resample accordingly.
+* **Effort:** LOW
 
-Add `Userdata any` field. Full generics `AgentSession[T]` would require refactoring all references — `any` is pragmatic.
-</details>
+#### **GAP-012: Graceful Shutdown / Drain**
 
----
+* **Official:** Worker supports graceful drain — finishes active jobs before shutting down.
+* **Current:** `AgentServer` handles `SIGTERM` via context cancellation but no explicit drain mode.
+* **Fix:** Add drain mode that stops accepting new jobs while finishing active ones.
+* **Effort:** LOW-MEDIUM
 
-### GAP-16: HTTP MCP Client (Full)
+#### **GAP-013: Structured Logging Alignment**
 
-| | Detail |
-|---|---|
-| **Python** | Full SSE/HTTP MCP client implementation. |
-| **Go** | [MCPServerHTTP](file:///c:/Go%20Project/src/Cavos/rtp-agent/core/llm/mcp.go#20-26) is a stub — returns error "not fully supported". |
-| **Gap** | Cannot connect to MCP servers using HTTP/SSE transport. |
-| **Effort** | 🟡 Medium (~150 LOC) |
-| **Status** | ❌ **OPEN** — Not touched in either session. |
+* **Official:** Uses structured logging with consistent field names (`participantID`, `jobId`, etc.)
+* **Current:** Mix of `fmt.Printf` and structured logger. Many debug prints use emojis and informal format.
+* **Fix:** Replace `fmt.Printf` debug prints with structured logger calls.
+* **Effort:** LOW (tedious but simple)
 
-<details>
-<summary>📋 Implementation Guide</summary>
+#### **GAP-014: Chat Context Provider Format**
 
-**Files**: [mcp.go](file:///c:/Go%20Project/src/Cavos/rtp-agent/core/llm/mcp.go)
+* **Official:** `ChatContext.to_provider_format("openai" | "google" | "anthropic")` converts to provider-specific format.
+* **Current:** `ChatContext.ToProviderFormat("openai")` exists but coverage of all formats is unclear.
+* **Fix:** Verify and complete format conversion for all supported providers.
+* **Effort:** LOW
 
-Implement SSE client with `bufio.NewReader`, JSON-RPC over HTTP POST, map MCP tool definitions to `llm.Tool`.
-</details>
+#### **GAP-015: Adapter Skeleton Completion**
 
----
+* **Official:** Each plugin is a fully functional, independently testable package.
+* **Current:** \~60 adapter directories exist but most are skeleton/stub implementations.
+* **Impact:** LOW per adapter, HIGH in aggregate for ecosystem coverage.
+* **Fix:** Prioritize completing adapters for most-used providers.
+* **Effort:** HIGH (scale — many adapters to complete)
 
-### GAP-17: Remote Session Transport
+### **8.4 Non-Applicable Gaps (Language Differences)**
 
-| | Detail |
-|---|---|
-| **Python** | `RoomSessionTransport` and `SessionHost` — support remote session management across different servers. |
-| **Go** | No remote session concept. |
-| **Gap** | Sessions must run in the same process/machine. |
-| **Effort** | 🔴 Hard (~300 LOC) |
-| **Status** | ❌ **OPEN** — Not touched in either session. |
+These are architectural differences due to Go vs Python that are not gaps but rather idiomatic translations:
 
-<details>
-<summary>📋 Implementation Guide</summary>
+| Python Pattern | Go Equivalent | Status |
+|----------------|---------------|--------|
+| `async/await` + `asyncio` | Goroutines + channels | DONE (idiomatic) |
+| `@function_tool` decorator | `BuildFunctionTool` / reflection | DONE   |
+| `__anext__()` async iterator | Channel-based streaming (`Next()`) | DONE   |
+| `dataclass`    | Go structs    | DONE   |
+| `ABC` (abstract base class) | Go interfaces | DONE   |
+| Package manager (pip) | Go modules    | DONE   |
+| Type hints     | Go static typing | DONE (stronger) |
 
-New `core/agent/transport.go`. Define `SessionTransport` interface with `SendAudio`, `RecvAudio`, `SendMessage`, [Close](file:///c:/Go%20Project/src/Cavos/rtp-agent/core/tts/tts.go#39-40). Implement `WebSocketTransport` and `GRPCTransport`.
-</details>
+### **8.5 Gap Summary**
 
----
+| Severity | Count | Key Items |
+|----------|:-----:|-----------|
+| **Critical** | 3     | DataChannel failure, transcript protocol mismatch, sender_identity |
+| **Moderate** | 5     | say(), model resolution, Silero VAD, MCP HTTP, RoomIO decoupling |
+| **Minor** | 7     | Parallel tools, ParticipantActive, audio format, graceful shutdown, logging, provider format, adapter completion |
+| **N/A**  | 7     | Language-idiomatic differences (not gaps) |
+| **Total** | **15** | Actionable gaps |
 
-### GAP-18: User Away Timeout
+### **8.6 Recommended Priority Order**
 
-| | Detail |
-|---|---|
-| **Python** | `user_away_timeout=15.0` — state changes to `"away"` after silence. |
-| **Go** | `UserAwayTimeout` field exists but is **not implemented**. |
-| **Gap** | Agent cannot detect user idle/away state. |
-| **Effort** | 🟢 Easy (~20 LOC) |
-| **Status** | ❌ **OPEN** — `UserAwayTimeout` in `AgentSessionOptions` is still a no-op. Not wired to any logic. |
 
-<details>
-<summary>📋 Implementation Guide</summary>
+ 1. **GAP-002** (Transcript protocol alignment) — LOW effort, unblocks Playground compatibility
+ 2. **GAP-001** (DataChannel fix) — HIGH effort but critical for production
+ 3. **GAP-004** (`say()` method) — LOW effort, quick win
+ 4. **GAP-010** (`ParticipantActive` event) — LOW effort, improves reliability
+ 5. **GAP-011** (Audio format negotiation) — LOW effort, correctness improvement
+ 6. **GAP-006** (Silero VAD) — MEDIUM effort, significant quality improvement
+ 7. **GAP-008** (RoomIO decoupling) — MEDIUM effort, architecture improvement
+ 8. **GAP-003** (sender_identity) — MEDIUM effort, upstream dependency
+ 9. **GAP-005** (Model string resolution) — MEDIUM effort, DX improvement
+10. **GAP-012** (Graceful shutdown) — LOW effort, production requirement
+11. **GAP-013** (Structured logging) — LOW effort, code hygiene
+12. **GAP-007** (MCP HTTP) — MEDIUM effort, niche use case
+13. **GAP-009** (Parallel tools) — LOW effort, performance improvement
+14. **GAP-014** (Provider format) — LOW effort, completeness
+15. **GAP-015** (Adapter completion) — HIGH effort, long-term goal
 
-**Files**: [agent_session.go](file:///c:/Go%20Project/src/Cavos/rtp-agent/core/agent/agent_session.go)
-
-Track `lastSpeechAt` in [UpdateUserState()](file:///c:/Go%20Project/src/Cavos/rtp-agent/core/agent/agent_session.go#184-202). Run goroutine: if `time.Since(lastSpeechAt) > timeout`, set `UserStateAway`.
-</details>
-
----
-
-## 🟢 LOW — Nice Polish
-
-### GAP-19: Function Tool Decorator Pattern
-
-| | Detail |
-|---|---|
-| **Python** | `@function_tool` decorator + `find_function_tools(self)` auto-discovers tools. |
-| **Go** | Manual `llm.Tool` interface implementation. |
-| **Gap** | More verbose to define tools. |
-| **Effort** | 🟡 Medium (~60 LOC) |
-| **Status** | ❌ **OPEN** — Not touched in either session. |
-
-<details>
-<summary>📋 Implementation Guide</summary>
-
-New `core/llm/tool_helpers.go`. Reflection-based discovery using method prefix `Tool_` or `DiscoverTools(agent)`.
-</details>
 
 ---
 
-### GAP-20: Max Tool Steps Enforcement
+## **9. Verdict**
 
-| | Detail |
-|---|---|
-| **Python** | `max_tool_steps=3` — limits tool call chains to prevent infinite loops. |
-| **Go** | `MaxToolSteps` field exists but is **not implemented** in the tool call loop. |
-| **Gap** | Potential infinite loop if LLM keeps calling tools. |
-| **Effort** | 🟢 Easy (~5 LOC) |
-| **Status** | ❌ **OPEN** — The `for {}` loop at `pipeline_agent.go:188` still has no step counter. `MaxToolSteps` in `AgentSessionOptions` is a no-op. |
+### **9.1 Scoring (out of 10)**
 
-<details>
-<summary>📋 Implementation Guide</summary>
+| Criteria | `main` | `audit/livekit-remediation` |
+|----------|:----:|:-------------------------:|
+| Feature completeness | 6.5  | 9.0                       |
+| Architecture alignment with official | 6.0  | 8.5                       |
+| Code quality & organization | 6.5  | 8.0                       |
+| Production readiness | 5.5  | 8.0                       |
+| Test coverage | 2.0  | 4.5                       |
+| **Overall** | **5.3** | **7.6**                   |
 
-**Files**: [pipeline_agent.go](file:///c:/Go%20Project/src/Cavos/rtp-agent/core/agent/pipeline_agent.go) line 188
+### **9.2 Recommendation**
 
-Change:
-```go
-for {
-```
-To:
-```go
-maxSteps := session.Options.MaxToolSteps
-if maxSteps <= 0 {
-    maxSteps = 3
-}
-for step := 0; step < maxSteps; step++ {
-```
-</details>
+`**audit/livekit-remediation**` **is the clear winner.** It should be promoted to the primary development branch. The remaining \~10% gap to full Python SDK parity consists of minor convenience features (`say()`, model string resolution) and edge cases that can be addressed incrementally.
+
 
 ---
 
-### GAP-21: Preemptive Generation
+## **10. Appendix A: File Count by Package**
 
-| | Detail |
-|---|---|
-| **Python** | `preemptive_generation=True` — starts generating response while user is still speaking. Discards if turn isn't complete. |
-| **Go** | `PreemptiveGeneration` field exists but is **not implemented**. |
-| **Gap** | Missed latency optimization opportunity. |
-| **Effort** | 🟡 Medium (~60 LOC) |
-| **Status** | ❌ **OPEN** — Not touched in either session. |
+| Package | `main` | `audit/livekit-remediation` | Delta |
+|---------|------|---------------------------|-------|
+| `core/agent/` | \~15 files | \~20 files                | +5 (io.go, tests, ivr subpkg) |
+| `core/llm/` | \~12 files | \~12 files                | Same (content updated) |
+| `core/stt/` | \~5 files | \~5 files                 | Same  |
+| `core/tts/` | \~6 files | \~6 files                 | Same  |
+| `core/vad/` | \~3 files | \~3 files                 | Same  |
+| `interface/worker/` | \~6 files | \~7 files                 | +1 (recorder_io updates) |
+| `interface/cli/` | \~6 files | \~7 files                 | +1 (console/manager.go) |
+| `adapter/` | \~61 dirs | \~61 dirs                 | Same  |
+| `model/` | 1 file | 2 files                   | +1 (video.go) |
+| **Total .go files** | **\~130** | **\~140**                 | **+10** |
 
-<details>
-<summary>📋 Implementation Guide</summary>
+## **11. Appendix B: Provider Adapter Coverage**
 
-**Files**: [pipeline_agent.go](file:///c:/Go%20Project/src/Cavos/rtp-agent/core/agent/pipeline_agent.go)
+### **LLM (22 adapters)**
 
-In [sttLoop()](file:///c:/Go%20Project/src/Cavos/rtp-agent/core/agent/pipeline_agent.go#140-166), handle interim transcripts: `go va.speculativeGenerate(text)`. Cancel if final differs; use pre-generated if matches.
-</details>
+anthropic, asyncai, aws, baseten, bey, cambai, fal, fireworksai, google, gradium, groq, hedra, hume, inworld, langchain, lemonslice, minimal, minimax, mistralai, nvidia, openai, simli, simplismart, smallestai, telnyx, trugen, upliftai, xai
 
----
+### **STT (14 adapters)**
 
-### GAP-22: Language Code Support
+assemblyai, aws, baseten, clova, deepgram, fal, fireworksai, gladia, google, gradium, openai, rtzr, simplismart, soniox, speechmatics, spitch, telnyx
 
-| | Detail |
-|---|---|
-| **Python** | `LanguageCode` enum in events. Standardized BCP-47 codes. |
-| **Go** | Language as plain `string`. |
-| **Gap** | No standardized language handling. |
-| **Effort** | 🟢 Easy (~30 LOC) |
-| **Status** | ❌ **OPEN** — Not touched in either session. |
+### **TTS (22 adapters)**
 
-<details>
-<summary>📋 Implementation Guide</summary>
+asyncai, aws, baseten, cambai, cartesia, clova, deepgram, elevenlabs, fishaudio, google, gradium, hume, inworld, lmnt, minimax, neuphonic, openai, resemble, rime, simplismart, smallestai, speechify, speechmatics, spitch, telnyx, ultravox, upliftai
 
-New `core/stt/language.go`: `type LanguageCode string` + constants (`"en"`, `"id"`, `"ja"`, etc.). Add to [UserInputTranscribedEvent](file:///c:/Go%20Project/src/Cavos/rtp-agent/core/agent/events.go#19-26).
-</details>
+### **VAD (2 adapters)**
 
----
+silero, silero_vad
 
-### GAP-23: Metrics & Usage Tracking (Granular)
+### **Avatar (9 adapters)**
 
-| | Detail |
-|---|---|
-| **Python** | `AgentMetrics`, `ModelUsageCollector`, per-model token tracking, cost estimation. |
-| **Go** | Basic `UsageCollector` and `UsageSummary`. Not as granular as Python. |
-| **Gap** | Lacks per-model usage tracking and cost estimation. |
-| **Effort** | 🟡 Medium (~80 LOC) |
-| **Status** | ❌ **OPEN** — Not touched in either session. |
+anam, avatario, avatartalk, bey, bithuman, hedra, lemonslice, liveavatar, simli, tavus, trugen
 
-<details>
-<summary>📋 Implementation Guide</summary>
+### **Other**
 
-**Files**: `library/telemetry/usage_collector.go`
-
-Add per-provider `ProviderUsage` struct. Record usage in [generateReply()](file:///c:/Go%20Project/src/Cavos/rtp-agent/core/agent/pipeline_agent.go#151-219). Emit `SessionUsageUpdatedEvent`.
-</details>
-
----
-
-### GAP-24: Overlapping Speech Detection
-
-| | Detail |
-|---|---|
-| **Python** | `OverlappingSpeechEvent` — detects when user and agent speak simultaneously. |
-| **Go** | No overlapping speech detection. |
-| **Gap** | Cannot analyze conversation quality metrics. |
-| **Effort** | 🟡 Medium (~20 LOC) |
-| **Status** | ❌ **OPEN** — Not touched in either session. |
-
-<details>
-<summary>📋 Implementation Guide</summary>
-
-**Files**: [pipeline_agent.go](file:///c:/Go%20Project/src/Cavos/rtp-agent/core/agent/pipeline_agent.go), [events.go](file:///c:/Go%20Project/src/Cavos/rtp-agent/core/agent/events.go)
-
-In [vadLoop()](file:///c:/Go%20Project/src/Cavos/rtp-agent/core/agent/pipeline_agent.go#95-124): if agent state is Speaking when user starts speaking → emit `OverlappingSpeechEvent`.
-</details>
-
----
-
-## ⚪ NICE-TO-HAVE — Enhancements
-
-### GAP-25: ReadOnly ChatContext
-
-| | Detail |
-|---|---|
-| **Python** | `_ReadOnlyChatContext` — immutable view passed to callbacks. |
-| **Go** | `ChatContext.Copy()` exists but no read-only enforcement. |
-| **Gap** | Developers can accidentally mutate ChatContext in callbacks. |
-| **Effort** | 🟢 Easy (~15 LOC) |
-| **Status** | ❌ **OPEN** — Not touched in either session. |
-
-<details>
-<summary>📋 Implementation Guide</summary>
-
-**Files**: [chat_context.go](file:///c:/Go%20Project/src/Cavos/rtp-agent/core/llm/chat_context.go)
-
-Define `ReadOnlyChatContext` interface with only [Messages()](file:///c:/Go%20Project/src/Cavos/rtp-agent/core/llm/chat_context.go#13-22) and `Len()`. Pass to callbacks.
-</details>
-
----
-
-### GAP-26: Pydantic-style Event Validation
-
-| | Detail |
-|---|---|
-| **Python** | All events use Pydantic `BaseModel` — auto-validation, serialization. |
-| **Go** | Events use plain structs without validation. |
-| **Gap** | No runtime validation for event data. |
-| **Effort** | 🟢 Easy (~0 LOC) |
-| **Status** | N/A |
-
-> **No action needed** — Go structs are type-safe by default. Optionally add `validate` struct tags.
-
----
-
-### GAP-27: Deprecation Helpers
-
-| | Detail |
-|---|---|
-| **Python** | `@deprecate_params` decorator with auto-warnings. |
-| **Go** | No deprecation mechanism. |
-| **Gap** | Less important now, useful as API evolves. |
-| **Effort** | 🟢 Easy (~15 LOC) |
-| **Status** | ❌ **OPEN** — Not touched in either session. |
-
-<details>
-<summary>📋 Implementation Guide</summary>
-
-New `library/deprecate/deprecate.go` — log warning at struct init when deprecated fields are set.
-</details>
-
----
-
-### GAP-28: CLI Dev Mode (Auto-Reload) Enhancement
-
-| | Detail |
-|---|---|
-| **Python** | Full auto-reload with file watching and graceful restart. |
-| **Go** | `RunWithDevMode` + [watcher.go](file:///c:/Go%20Project/src/Cavos/rtp-agent/interface/cli/watcher.go) exists but is basic. |
-| **Gap** | Dev experience could be smoother. |
-| **Effort** | 🟢 Easy (~30 LOC) |
-| **Status** | ❌ **OPEN** — Not touched in either session. |
-
-<details>
-<summary>📋 Implementation Guide</summary>
-
-**Files**: [interface/cli/watcher.go](file:///c:/Go%20Project/src/Cavos/rtp-agent/interface/cli/watcher.go)
-
-Use `fsnotify` for file watching. Add graceful shutdown (SIGTERM). Debounce restarts (500ms).
-</details>
-
----
-
-## Summary
-
-### Gap Status After Bug-Fix Sessions
-
-| Priority | Total | ✅ Closed | 🔄 Partial | ❌ Open |
-|---|---|---|---|---|
-| 🔴 **Critical** | 5 | 0 | 2 (GAP-02, GAP-03) | 3 |
-| 🟠 **High** | 6 | 0 | 2 (GAP-10, GAP-13) | 4 |
-| 🟡 **Medium** | 7 | 0 | 0 | 7 |
-| 🟢 **Low** | 6 | 0 | 0 | 6 |
-| ⚪ **Nice-to-Have** | 4 | 0 | 0 | 3 (+1 N/A) |
-| **Total** | **28** | **0** | **4** | **23** |
-
-> **Key finding**: The two bug-fix sessions resolved 9 critical runtime bugs that made the agent non-functional. However, none of the 28 feature-parity gaps from the original analysis were closed — they remain open. The partially-addressed gaps (GAP-02, GAP-03, GAP-10, GAP-13) received incidental improvements as side effects of the bug fixes.
-
----
-
-### Effort Breakdown (Remaining Work)
-
-| Effort | Gaps | Est. LOC |
-|---|---|---|
-| 🟢 Easy | GAP-05, GAP-11, GAP-14, GAP-15, GAP-18, GAP-20, GAP-22, GAP-25, GAP-27, GAP-28 | ~175 |
-| 🟡 Medium | GAP-01, GAP-02, GAP-03, GAP-06, GAP-07, GAP-08, GAP-09, GAP-13, GAP-16, GAP-19, GAP-21, GAP-23, GAP-24, GAP-10 | ~1,230 |
-| 🔴 Hard | GAP-04, GAP-17 | ~800+ |
-
----
-
-## 🗺️ Implementation Roadmap
-
-Recommended implementation order based on impact vs. effort, now that the agent is functionally working:
-
-### Phase 1 — Quick Wins (Easy gaps, high impact) `~175 LOC`
-
-These are individually small and directly improve reliability or developer experience:
-
-1. **GAP-20: Max Tool Steps** (`pipeline_agent.go:188`) — 5 LOC, prevents infinite LLM loops  
-2. **GAP-11: AEC Warmup** (`agent_session.go`) — 20 LOC, prevents echo-triggered false starts on session open  
-3. **GAP-18: User Away Timeout** (`agent_session.go`) — 20 LOC, clean up idle sessions  
-4. **GAP-05: Granular Recording** (`room_io.go`) — 30 LOC, `RecordingOptions` struct  
-5. **GAP-15: Session Userdata** (`agent_session.go`) — 5 LOC, `Userdata any` field  
-
-### Phase 2 — Quality & Stability (Medium gaps) `~600 LOC`
-
-6. **GAP-07: False Interruption** (`agent_activity.go`) — 60 LOC, `FalseInterruptionTimeout` timer in vadLoop  
-7. **GAP-13: Adaptive Interruption** (new `adaptive_interruption.go`) — 80 LOC, overlap duration gating  
-8. **GAP-03: Error Recovery** (`pipeline_agent.go`, `server.go`) — 200 LOC, retry middleware + WS reconnect loop  
-9. **GAP-02: Event System** (new `event_emitter.go`) — 200 LOC, `EventEmitter` + missing event types  
-10. **GAP-10: TTS Transforms** (`filters.go`, `agent_session.go`) — 30 LOC, make transforms configurable  
-
-### Phase 3 — Architecture (Medium-Hard gaps) `~830 LOC`
-
-11. **GAP-01: Pipeline Nodes** (new `pipeline_nodes.go`) — 150 LOC, per-node override mechanism  
-12. **GAP-09: Configurable I/O** (new `core/agent/io.go`) — 120 LOC, `AgentInput`/`AgentOutput` interfaces  
-13. **GAP-06: Agent Handoff** (new `handoff.go`) — 100 LOC, session-to-session transfer  
-14. **GAP-16: HTTP MCP Client** (`mcp.go`) — 150 LOC, SSE + JSON-RPC transport  
-15. **GAP-04: Test Suite** (new `*_test.go`) — 500+ LOC, mock implementations + table-driven tests  
-
-### Phase 4 — Nice-to-Have `~430 LOC`
-
-16. GAP-08: Model String Inference  
-17. GAP-12: AMD  
-18. GAP-14: Video Sampler  
-19. GAP-21: Preemptive Generation  
-20. GAP-23: Granular Metrics  
-21. GAP-24: Overlapping Speech  
-22. GAP-17: Remote Session Transport (hardest, lowest priority)
+azure, blingfire, browser, durable, keyframe, nltk, sarvam, turndetector
