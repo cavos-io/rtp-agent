@@ -96,7 +96,13 @@ func (va *PipelineAgent) Stop() {
 	va.runWG.Wait()
 }
 
+func (va *PipelineAgent) OnAudioFrame(ctx context.Context, frame *model.AudioFrame) {
+	// Audio forwarding is handled by AgentSession's forwardAudioLoop.
+	// This is a no-op for PipelineAgent.
+}
+
 func (va *PipelineAgent) run(ctx context.Context) {
+	fmt.Println("🔧 [Pipeline] PipelineAgent.run() started")
 	logger.Logger.Infow("PipelineAgent started")
 	// Audio forwarding is now handled by AgentSession
 	<-ctx.Done()
@@ -133,7 +139,7 @@ func (va *PipelineAgent) GenerateReply(speech *SpeechHandle) {
 	// Check for manual speech injection (GAP-004)
 	if speech.ManualText != "" {
 		logger.Logger.Infow("Processing manual speech injection", "text", speech.ManualText)
-		
+
 		textCh := make(chan string, 1)
 		textCh <- speech.ManualText
 		close(textCh)
@@ -206,7 +212,8 @@ func (va *PipelineAgent) GenerateReply(speech *SpeechHandle) {
 			va.handlePlaybackAndTranscription(ctx, speech, ttsGen)
 		}
 
-		// Wait for tool executions to complete and collect results
+		// Wait for tool executions to complete and collect results.
+		// Use select so a VAD interruption can cancel this wait.
 		var executedTools bool
 		var stopResponse bool
 		var replyRequired bool

@@ -14,6 +14,7 @@ import (
 	"github.com/cavos-io/rtp-agent/model"
 	"github.com/google/uuid"
 	"github.com/hraban/opus"
+	"github.com/livekit/protocol/livekit"
 	lksdk "github.com/livekit/server-sdk-go/v2"
 	"github.com/livekit/server-sdk-go/v2/pkg/samplebuilder"
 	"github.com/pion/rtp/codecs"
@@ -34,8 +35,9 @@ type AudioEncoder interface {
 }
 
 type opusDecoder struct {
-	decoder *opus.Decoder
-	buf     []int16
+	decoder   *opus.Decoder
+	buf       []int16
+	callCount int
 }
 
 func newOpusDecoder(sampleRate int, channels int) (*opusDecoder, error) {
@@ -77,7 +79,7 @@ type opusEncoder struct {
 }
 
 func newOpusEncoder(sampleRate int, channels int) (*opusEncoder, error) {
-	enc, err := opus.NewEncoder(sampleRate, channels, opus.AppVoIP)
+	enc, err := opus.NewEncoder(sampleRate, channels, opus.AppAudio)
 	if err != nil {
 		return nil, err
 	}
@@ -171,6 +173,7 @@ type RoomIO struct {
 
 	mu     sync.Mutex
 	closed bool
+	ctx    context.Context // session lifecycle context — cancelled on disconnect
 
 	audioTrack *lksdk.LocalSampleTrack
 	videoTrack *lksdk.LocalSampleTrack
@@ -197,7 +200,7 @@ type RoomIO struct {
 	trackContexts   map[string]context.CancelFunc
 	trackContextsMu sync.Mutex
 
-	sync *agent.TranscriptSynchronizer
+	sync              *agent.TranscriptSynchronizer
 	targetPlayoutTime time.Time
 
 	roomCallback *lksdk.RoomCallback
@@ -782,6 +785,8 @@ func (rio *RoomIO) onParticipantDisconnected(participant *lksdk.RemoteParticipan
 }
 
 func (rio *RoomIO) Start(ctx context.Context) error {
+	rio.ctx = ctx
+
 	audioOutputEnabled := true
 	if rio.Options.AudioOutput != nil && !rio.Options.AudioOutput.Enabled {
 		audioOutputEnabled = false
@@ -792,9 +797,10 @@ func (rio *RoomIO) Start(ctx context.Context) error {
 	}
 
 	track, err := lksdk.NewLocalSampleTrack(webrtc.RTPCodecCapability{
-		MimeType:  webrtc.MimeTypeOpus,
-		ClockRate: 48000, // Opus RTP clock rate is always 48000 per WebRTC spec
-		Channels:  2,     // Opus SDP always advertises 2 channels, even for mono audio
+		MimeType:    webrtc.MimeTypeOpus,
+		ClockRate:   48000, // Opus RTP clock rate is always 48000 per WebRTC spec
+		Channels:    2,     // Opus SDP always advertises 2 channels, even for mono audio
+		SDPFmtpLine: "minptime=10;useinbandfec=1",
 	})
 	if err != nil {
 		return err
@@ -811,7 +817,8 @@ func (rio *RoomIO) Start(ctx context.Context) error {
 
 	if pubOpts == nil {
 		pubOpts = &lksdk.TrackPublicationOptions{
-			Name: trackName,
+			Name:   trackName,
+			Source: livekit.TrackSource_MICROPHONE,
 		}
 	} else if pubOpts.Name == "" {
 		pubOpts.Name = trackName
@@ -820,6 +827,12 @@ func (rio *RoomIO) Start(ctx context.Context) error {
 	pub, err := rio.Room.LocalParticipant.PublishTrack(track, pubOpts)
 	if err != nil {
 		return err
+	}
+
+	// Store agent track SID for transcript attribution.
+	if pub != nil {
+		rio.AgentSession.SetAgentTrackSID(pub.SID())
+		fmt.Printf("🎙️ [RoomIO] Agent audio track SID: %s\n", pub.SID())
 	}
 
 	rio.audioTrack = track
@@ -889,6 +902,10 @@ func (rio *RoomIO) onTrackSubscribed(track *webrtc.TrackRemote, publication *lks
 	ctx, cancel := context.WithCancel(context.Background())
 	rio.trackContexts[track.ID()] = cancel
 	rio.trackContextsMu.Unlock()
+
+	// Store human participant info for transcript attribution.
+	rio.AgentSession.SetRemoteUserIdentity(rp.Identity())
+	rio.AgentSession.SetRemoteTrackSID(publication.SID())
 
 	if track.Kind() == webrtc.RTPCodecTypeAudio {
 		audioInputEnabled := true
@@ -967,9 +984,24 @@ func (rio *RoomIO) handleAudioTrack(ctx context.Context, track *webrtc.TrackRemo
 		}
 	}
 
+	fmt.Printf("[RoomIO] handleAudioTrack started: trackID=%s codec=%s sampleRate=%d\n", track.ID(), track.Codec().MimeType, track.Codec().ClockRate)
+
+	// Create Opus decoder for this track
+	decoder, err := newOpusDecoder(int(track.Codec().ClockRate), 1)
+	if err != nil {
+		fmt.Printf("❌ [RoomIO] Failed to create Opus decoder: %v\n", err)
+		return
+	}
+	defer decoder.Close()
+	fmt.Println("✅ [RoomIO] Opus decoder created")
+
+	fmt.Println("[RoomIO] Starting RTP read loop...")
+
 	sb := samplebuilder.New(20, &codecs.OpusPacket{}, track.Codec().ClockRate)
 	var frameCount int
 
+	var rtpCount int
+	var sampleCount int
 	for {
 		select {
 		case <-ctx.Done():
@@ -978,18 +1010,24 @@ func (rio *RoomIO) handleAudioTrack(ctx context.Context, track *webrtc.TrackRemo
 		}
 
 		rio.mu.Lock()
-		if rio.closed {
-			rio.mu.Unlock()
+		closed := rio.closed
+		rio.mu.Unlock()
+		if closed {
 			return
 		}
-		rio.mu.Unlock()
 
 		pkt, _, err := track.ReadRTP()
 		if err != nil {
+			fmt.Printf("❌ [RoomIO] ReadRTP error: %v\n", err)
 			if !errors.Is(err, io.EOF) {
 				logger.Logger.Errorw("[STT-PIPE] handleAudioTrack ReadRTP error", err)
 			}
 			return
+		}
+
+		rtpCount++
+		if rtpCount == 1 || rtpCount%500 == 0 {
+			fmt.Printf("📦 [RoomIO] RTP packets read: %d (payload: %d bytes)\n", rtpCount, len(pkt.Payload))
 		}
 
 		sb.Push(pkt)
@@ -999,17 +1037,23 @@ func (rio *RoomIO) handleAudioTrack(ctx context.Context, track *webrtc.TrackRemo
 				break
 			}
 
+			sampleCount++
+			rawSize := len(sample.Data)
 			pcm := sample.Data
-			if rio.decoder != nil {
-				if decoded, err := rio.decoder.Decode(sample.Data); err == nil {
-					pcm = decoded
-				}
+			if decoded, err := decoder.Decode(sample.Data); err == nil {
+				pcm = decoded
+			} else if sampleCount <= 3 {
+				fmt.Printf("⚠️ [RoomIO] Opus decode error: %v\n", err)
+			}
+
+			if sampleCount <= 5 || sampleCount%500 == 0 {
+				fmt.Printf("🔊 [RoomIO] Sample #%d: raw=%d bytes → decoded=%d bytes, sampleRate=%d\n", sampleCount, rawSize, len(pcm), track.Codec().ClockRate)
 			}
 
 			frame := &model.AudioFrame{
 				Data:              pcm,
 				SampleRate:        track.Codec().ClockRate,
-				NumChannels:       1, // We decode to mono for simplicity
+				NumChannels:       1,
 				SamplesPerChannel: uint32(len(pcm) / 2),
 			}
 

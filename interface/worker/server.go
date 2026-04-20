@@ -89,6 +89,7 @@ func (s *AgentServer) GetEntrypointFunc() func(*JobContext) error {
 	return s.entrypointFnc
 }
 
+
 func (s *AgentServer) Run(ctx context.Context) error {
 	if s.Options.WSRL == "" || s.Options.APIKey == "" || s.Options.APISecret == "" {
 		return fmt.Errorf("missing LiveKit credentials")
@@ -117,16 +118,28 @@ func (s *AgentServer) Run(ctx context.Context) error {
 
 	// Connect WS
 	// A robust implementation should include retries and proxy handling
+	fmt.Printf("   Dialing WebSocket: %s\n", wsURL.String())
 	conn, res, err := websocket.DefaultDialer.DialContext(ctx, wsURL.String(), map[string][]string{
 		"Authorization": {fmt.Sprintf("Bearer %s", token)},
 	})
 	if err != nil {
+		fmt.Printf("   ❌ WebSocket connection failed: %v\n", err)
 		return fmt.Errorf("failed to connect to LiveKit %s: %w", wsURL.String(), err)
 	}
 	_ = res
 	s.conn = conn
 	defer conn.Close()
 
+	// When ctx is cancelled (e.g. Ctrl+C), close the WebSocket so the
+	// blocking conn.ReadMessage() call below returns immediately.
+	go func() {
+		<-ctx.Done()
+		fmt.Println("   🛑 Shutting down worker...")
+		conn.Close()
+	}()
+
+	fmt.Println("   ✅ Connected to LiveKit Server!")
+	fmt.Println("   Registering worker...")
 	logger.Logger.Infow("Connected to LiveKit Server", "url", s.Options.WSRL)
 
 	// Send Register request.
@@ -183,12 +196,14 @@ func (s *AgentServer) Run(ctx context.Context) error {
 				pb, err := proto.Marshal(ping)
 				if err != nil {
 					logger.Logger.Errorw("Ping marshal error", err)
+					return
 				}
 				s.mu.Lock()
 				err = conn.WriteMessage(websocket.BinaryMessage, pb)
 				s.mu.Unlock()
 				if err != nil {
 					logger.Logger.Errorw("Ping send error", err)
+					return
 				}
 				logger.Logger.Debugw("WorkerPing sent", "ts", time.Now().UnixMilli())
 			}
@@ -312,6 +327,7 @@ func (s *AgentServer) sendLoadUpdate(load float32, draining bool) error {
 	return conn.WriteMessage(websocket.BinaryMessage, b)
 }
 
+
 // sendAvailable broadcasts UpdateWorkerStatus(WS_AVAILABLE) so the LiveKit
 // server knows this worker is ready to receive job dispatches.
 func (s *AgentServer) sendAvailable() error {
@@ -339,6 +355,7 @@ func (s *AgentServer) handleMessage(ctx context.Context, msg *livekit.ServerMess
 
 	switch m := msg.Message.(type) {
 	case *livekit.ServerMessage_Register:
+		fmt.Printf("   ✅ Worker Registered! ID: %s\n", m.Register.WorkerId)
 		logger.Logger.Infow("Worker Registered", "workerId", m.Register.WorkerId, "serverInfo", m.Register.ServerInfo)
 		if err := s.sendAvailable(); err != nil {
 			logger.Logger.Errorw("Failed to send available status", err)
@@ -357,11 +374,13 @@ func (s *AgentServer) handleMessage(ctx context.Context, msg *livekit.ServerMess
 	case *livekit.ServerMessage_Pong:
 		logger.Logger.Infow("Received WorkerPong", "timestamp", m.Pong.Timestamp)
 	default:
-		logger.Logger.Warnw("Unhandled message type received", nil)
+		fmt.Printf("   ⚠️ Unhandled server message type: %T\n", msg.Message)
+		logger.Logger.Warnw("Unhandled message type received", nil, "type", fmt.Sprintf("%T", msg.Message))
 	}
 }
 
 func (s *AgentServer) handleAvailability(ctx context.Context, req *livekit.AvailabilityRequest) {
+	fmt.Printf("   📥 Received availability request: job=%s\n", req.Job.Id)
 	logger.Logger.Infow("Received availability request", "jobId", req.Job.Id)
 
 	s.mu.Lock()
@@ -395,6 +414,7 @@ func (s *AgentServer) handleAvailability(ctx context.Context, req *livekit.Avail
 }
 
 func (s *AgentServer) handleAssignment(ctx context.Context, req *livekit.JobAssignment) {
+	fmt.Printf("   🚀 Received job assignment: job=%s room=%s\n", req.Job.Id, req.Job.Room.Name)
 	logger.Logger.Infow("Received job assignment", "jobId", req.Job.Id)
 
 	// Spin up a job context here
@@ -408,6 +428,16 @@ func (s *AgentServer) handleAssignment(ctx context.Context, req *livekit.JobAssi
 		go func() {
 			if err := s.entrypointFnc(jobCtx); err != nil {
 				logger.Logger.Errorw("Job entrypoint failed", err, "jobId", req.Job.Id)
+			}
+			// Job done — clean up activeJobs to free memory
+			s.mu.Lock()
+			delete(s.activeJobs, req.Job.Id)
+			s.mu.Unlock()
+			fmt.Printf("   🧹 Job cleaned up: %s\n", req.Job.Id)
+
+			// Signal back to AVAILABLE so the next dispatch can be received
+			if err := s.sendAvailable(); err != nil {
+				logger.Logger.Warnw("Failed to send available after job", err)
 			}
 		}()
 	}

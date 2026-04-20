@@ -3,7 +3,6 @@ package bithuman
 import (
 	"context"
 	"fmt"
-
 )
 
 type BithumanAvatar struct {

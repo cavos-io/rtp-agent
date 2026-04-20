@@ -153,9 +153,10 @@ func (s *elevenLabsStream) connect() error {
 		return fmt.Errorf("failed to dial elevenlabs websocket: %w", err)
 	}
 
-	// Send initial configuration
+	// Send initial config with a space to initialize the session.
+	// ElevenLabs requires non-empty text in the first message.
 	initMsg := map[string]interface{}{
-		"text": " ", // Start with a space to initialize
+		"text": " ",
 		"voice_settings": map[string]interface{}{
 			"stability":        0.5,
 			"similarity_boost": 0.8,

@@ -3,7 +3,6 @@ package bey
 import (
 	"context"
 	"fmt"
-
 )
 
 type BeyAvatar struct {

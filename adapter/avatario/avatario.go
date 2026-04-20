@@ -3,7 +3,6 @@ package avatario
 import (
 	"context"
 	"fmt"
-
 )
 
 type AvatarioAvatar struct {

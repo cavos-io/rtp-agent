@@ -300,7 +300,10 @@ func (a *AgentActivity) processQueue() {
 		}
 
 		// Wait for generation to finish or be interrupted
-		<-speech.doneCh
+		select {
+		case <-speech.doneCh:
+		case <-a.ctx.Done():
+		}
 
 		a.queueMu.Lock()
 		if a.pausedSpeech == speech {

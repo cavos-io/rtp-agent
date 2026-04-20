@@ -45,10 +45,10 @@ func main() {
 	// Wait for context cancellation (signal or server exit)
 	<-sigCtx.Done()
 	logger.Logger.Infow("Shutdown signal received, draining...")
-	
+
 	drainCtx, drainCancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer drainCancel()
-	
+
 	if err := server.Drain(drainCtx); err != nil {
 		logger.Logger.Errorw("Drain failed", err)
 	}
@@ -183,4 +183,3 @@ func handleAgent(server *worker.AgentServer, jobCtx *worker.JobContext) error {
 
 	return nil
 }
-

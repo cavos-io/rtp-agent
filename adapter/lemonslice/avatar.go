@@ -3,7 +3,6 @@ package lemonslice
 import (
 	"context"
 	"fmt"
-
 )
 
 type LemonsliceAvatar struct {

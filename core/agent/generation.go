@@ -17,8 +17,9 @@ import (
 type LLMGenerationData struct {
 	TextCh        chan string
 	FunctionCh    chan *llm.FunctionToolCall
+	FullTextCh    chan string // receives the complete assembled text when streaming is done
 	GeneratedText string
-	TTFT          time.Duration
+	Usage         *llm.CompletionUsage
 }
 
 // prepareFunctionArguments mimics LiveKit Python's strict argument binding
@@ -85,6 +86,7 @@ func PerformLLMInference(ctx context.Context, l llm.LLM, chatCtx *llm.ChatContex
 	data := &LLMGenerationData{
 		TextCh:     make(chan string, 100),
 		FunctionCh: make(chan *llm.FunctionToolCall, 10),
+		FullTextCh: make(chan string, 1),
 	}
 
 	stream, err := l.Chat(ctx, chatCtx, llm.WithTools(llm.FlattenTools(tools)))
@@ -97,10 +99,12 @@ func PerformLLMInference(ctx context.Context, l llm.LLM, chatCtx *llm.ChatContex
 	go func() {
 		defer close(data.TextCh)
 		defer close(data.FunctionCh)
+		defer close(data.FullTextCh) // must close so drain goroutines can exit
 		defer stream.Close()
 		defer logger.Logger.Debugw("LLM inference goroutine exited")
 
 		startTime := time.Now()
+		_ = startTime
 		toolCalls := make([]*llm.FunctionToolCall, 0)
 		toolCallsByID := make(map[string]*llm.FunctionToolCall)
 		toolCallsByIndex := make(map[int]*llm.FunctionToolCall)
@@ -152,6 +156,7 @@ func PerformLLMInference(ctx context.Context, l llm.LLM, chatCtx *llm.ChatContex
 		}
 
 		var chunkCount int
+		var sb strings.Builder
 		for {
 			chunk, err := stream.Next()
 			if err != nil {
@@ -159,26 +164,22 @@ func PerformLLMInference(ctx context.Context, l llm.LLM, chatCtx *llm.ChatContex
 			}
 			chunkCount++
 
-			if data.TTFT == 0 {
-				data.TTFT = time.Since(startTime)
-			}
-
 			if chunk.Delta != nil {
 				if chunk.Delta.Content != "" {
-					data.GeneratedText += chunk.Delta.Content
+					sb.WriteString(chunk.Delta.Content)
 					data.TextCh <- chunk.Delta.Content
 				}
 				if len(chunk.Delta.ToolCalls) > 0 {
 					for _, fc := range chunk.Delta.ToolCalls {
 						mergeToolCallDelta(&toolCalls, toolCallsByID, toolCallsByIndex, fc)
-						
+
 						idx, hasIndex := extractToolCallIndex(fc.Extra)
 						if hasIndex {
 							timersMu.Lock()
 							if timer, ok := settleTimers[idx]; ok {
 								timer.Stop()
 							}
-							
+
 							// Reset/Start settle timer for this index
 							idxVal := idx
 							settleTimers[idx] = time.AfterFunc(settleDelay, func() {
@@ -188,6 +189,9 @@ func PerformLLMInference(ctx context.Context, l llm.LLM, chatCtx *llm.ChatContex
 						}
 					}
 				}
+			}
+			if chunk.Usage != nil {
+				data.Usage = chunk.Usage
 			}
 		}
 
@@ -210,6 +214,8 @@ func PerformLLMInference(ctx context.Context, l llm.LLM, chatCtx *llm.ChatContex
 			}
 		}
 
+		data.GeneratedText = sb.String()
+
 		if data.GeneratedText != "" {
 			if rc := GetRunContext(ctx); rc != nil && rc.SpeechHandle != nil && rc.SpeechHandle.RunResult != nil {
 				rc.SpeechHandle.RunResult.AddEvent(&ChatMessageRunEvent{
@@ -221,6 +227,9 @@ func PerformLLMInference(ctx context.Context, l llm.LLM, chatCtx *llm.ChatContex
 				})
 			}
 		}
+
+		// Non-blocking: buffered channel holds the result for the consumer.
+		data.FullTextCh <- data.GeneratedText
 	}()
 
 	return data, nil
@@ -392,8 +401,27 @@ func PerformTTSInference(ctx context.Context, t tts.TTS, textCh <-chan string) (
 		AlignedTextCh: make(chan string, 100),
 	}
 
+	// ── Wait for the first non-empty text token before opening the WebSocket ──
+	// Opening ElevenLabs before text is ready causes an idle gap that triggers
+	// input_timeout_exceeded (ElevenLabs closes the connection after ~3s with
+	// no text input).
+	var firstText string
+	for raw := range textCh {
+		filtered := tts.ApplyTextTransforms(raw)
+		if filtered != "" {
+			firstText = filtered
+			break
+		}
+	}
+	if firstText == "" {
+		// LLM produced nothing (cancelled / all filtered out) — nothing to say.
+		close(data.AudioCh)
+		return data, nil
+	}
+
 	stream, err := t.Stream(ctx)
 	if err != nil {
+		close(data.AudioCh)
 		return nil, err
 	}
 
@@ -404,6 +432,9 @@ func PerformTTSInference(ctx context.Context, t tts.TTS, textCh <-chan string) (
 		defer logger.Logger.Debugw("TTS inference goroutine exited")
 
 		startTime := time.Now()
+
+		// Push firstText (already consumed from textCh before stream was opened)
+		_ = stream.PushText(firstText)
 
 		for text := range textCh {
 			filteredText := tts.ApplyTextTransforms(text)
@@ -424,6 +455,9 @@ func PerformTTSInference(ctx context.Context, t tts.TTS, textCh <-chan string) (
 					"reason", err.Error(),
 				)
 				break
+			}
+			if audio.Frame == nil || len(audio.Frame.Data) == 0 {
+				continue
 			}
 			if data.TTFB == 0 {
 				data.TTFB = time.Since(startTime)
@@ -641,7 +675,5 @@ func PerformToolExecutions(
 
 		wg.Wait()
 	}()
-
 	return outCh
 }
-

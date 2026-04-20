@@ -102,3 +102,26 @@ trace.out
 *.db
 *.sqlite
 *.sqlite3
+*.dylib
+
+# Build output
+dist/
+bin/
+
+# Environment files (contain secrets)
+.env
+.env.*
+!.env.example
+
+# Debug files
+*.wav
+tts_debug.wav
+
+# Claude Code local settings
+.claude/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo

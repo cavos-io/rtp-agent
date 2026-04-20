@@ -3,7 +3,6 @@ package hedra
 import (
 	"context"
 	"fmt"
-
 )
 
 type HedraAvatar struct {

@@ -3,7 +3,6 @@ package avatartalk
 import (
 	"context"
 	"fmt"
-
 )
 
 type AvatartalkAvatar struct {

@@ -93,10 +93,12 @@ func (l *OpenAILLM) Chat(ctx context.Context, chatCtx *llm.ChatContext, opts ...
 	req := openai.ChatCompletionRequest{
 		Model:    l.model,
 		Messages: oaMessages,
-		Tools:    tools,
 		Stream:   true,
 	}
+
+	// Only set tools params when tools are defined (OpenAI rejects parallel_tool_calls without tools)
 	if len(tools) > 0 {
+		req.Tools = tools
 		req.ParallelToolCalls = &options.ParallelToolCalls
 	}
 

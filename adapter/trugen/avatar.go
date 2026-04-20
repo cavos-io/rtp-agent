@@ -3,7 +3,6 @@ package trugen
 import (
 	"context"
 	"fmt"
-
 )
 
 type TrugenAvatar struct {

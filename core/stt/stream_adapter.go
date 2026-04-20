@@ -5,6 +5,7 @@ import (
 	"sync"
 
 	"github.com/cavos-io/rtp-agent/core/vad"
+	"github.com/cavos-io/rtp-agent/library/logger"
 	"github.com/cavos-io/rtp-agent/model"
 )
 
@@ -64,9 +65,9 @@ type streamAdapterWrapper struct {
 	events    chan *SpeechEvent
 	closed    bool
 
-	mu            sync.Mutex
-	speechFrames  []*model.AudioFrame // accumulated frames while speaking
-	isSpeaking    bool
+	mu           sync.Mutex
+	speechFrames []*model.AudioFrame // accumulated frames while speaking
+	isSpeaking   bool
 }
 
 func (w *streamAdapterWrapper) PushFrame(frame *model.AudioFrame) error {
@@ -133,8 +134,7 @@ func (w *streamAdapterWrapper) run() {
 		case <-w.ctx.Done():
 			return
 		case err := <-errCh:
-			// Handle error if needed
-			_ = err
+			logger.Logger.Errorw("VAD stream error in StreamAdapter", err)
 			return
 		case vEvent := <-eventCh:
 			if vEvent.Type == vad.VADEventStartOfSpeech {

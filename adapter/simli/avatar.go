@@ -3,7 +3,6 @@ package simli
 import (
 	"context"
 	"fmt"
-
 )
 
 type SimliAvatar struct {

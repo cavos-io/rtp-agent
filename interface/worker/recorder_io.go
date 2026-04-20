@@ -2,6 +2,7 @@ package worker
 
 import (
 	"context"
+	"encoding/binary"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -12,9 +13,6 @@ import (
 	"github.com/cavos-io/rtp-agent/core/audio"
 	"github.com/cavos-io/rtp-agent/library/logger"
 	"github.com/cavos-io/rtp-agent/model"
-	"github.com/hraban/opus"
-	"github.com/pion/rtp"
-	"github.com/pion/webrtc/v4/pkg/media/oggwriter"
 )
 
 func createSilenceFrame(duration time.Duration, sampleRate uint32, numChannels uint32) *model.AudioFrame {
@@ -29,14 +27,14 @@ func createSilenceFrame(duration time.Duration, sampleRate uint32, numChannels u
 }
 
 type RecorderAudioInput struct {
-	source       agent.AudioInput
-	recordingIO  *RecorderIO
-	accFrames    []*model.AudioFrame
-	startedTime  *time.Time
-	padded       bool
-	mu           sync.Mutex
-	frameCh      chan *model.AudioFrame
-	closed       bool
+	source      agent.AudioInput
+	recordingIO *RecorderIO
+	accFrames   []*model.AudioFrame
+	startedTime *time.Time
+	padded      bool
+	mu          sync.Mutex
+	frameCh     chan *model.AudioFrame
+	closed      bool
 }
 
 func NewRecorderAudioInput(recordingIO *RecorderIO, source agent.AudioInput) *RecorderAudioInput {
@@ -60,7 +58,7 @@ func (r *RecorderAudioInput) loop() {
 			r.mu.Unlock()
 			return
 		}
-		
+
 		r.recordingIO.mu.Lock()
 		recording := r.recordingIO.started
 		r.recordingIO.mu.Unlock()
@@ -111,16 +109,16 @@ func (r *RecorderAudioInput) takeBuf(padSince *time.Time) []*model.AudioFrame {
 }
 
 type RecorderAudioOutput struct {
-	nextInChain          agent.AudioOutput
-	recordingIO          *RecorderIO
-	writeCb              func([]*model.AudioFrame)
-	accFrames            []*model.AudioFrame
-	startedTime          *time.Time
-	lastSpeechEndTime    *time.Time
-	lastSpeechStartTime  *time.Time
-	currentPauseStart    *time.Time
-	pauseWallTimes       []struct{ start, end time.Time }
-	mu                   sync.Mutex
+	nextInChain         agent.AudioOutput
+	recordingIO         *RecorderIO
+	writeCb             func([]*model.AudioFrame)
+	accFrames           []*model.AudioFrame
+	startedTime         *time.Time
+	lastSpeechEndTime   *time.Time
+	lastSpeechStartTime *time.Time
+	currentPauseStart   *time.Time
+	pauseWallTimes      []struct{ start, end time.Time }
+	mu                  sync.Mutex
 }
 
 func NewRecorderAudioOutput(recordingIO *RecorderIO, nextInChain agent.AudioOutput, writeCb func([]*model.AudioFrame)) *RecorderAudioOutput {
@@ -241,7 +239,7 @@ func (r *RecorderAudioOutput) OnPlaybackStarted(cb func(ev agent.PlaybackStarted
 }
 
 func (r *RecorderAudioOutput) OnPlaybackFinished(cb func(ev agent.PlaybackFinishedEvent)) {
-	// The original callback is intercepted by NewRecorderAudioOutput; 
+	// The original callback is intercepted by NewRecorderAudioOutput;
 	// here we would ideally multiplex, but the worker doesn't strictly need multiplexing
 	// beyond the internal interception if the chain is well-formed.
 	if r.nextInChain != nil {
@@ -363,7 +361,7 @@ func (r *RecorderAudioOutput) onPlaybackFinished(ev agent.PlaybackFinishedEvent)
 		if frame == nil {
 			continue
 		}
-		frameDur := time.Duration(float64(frame.SamplesPerChannel)/float64(frame.SampleRate)*float64(time.Second))
+		frameDur := time.Duration(float64(frame.SamplesPerChannel) / float64(frame.SampleRate) * float64(time.Second))
 
 		for len(pauseEvents) > 0 && pauseEvents[0].position < accDur+frameDur {
 			p := pauseEvents[0]
@@ -381,7 +379,7 @@ func (r *RecorderAudioOutput) onPlaybackFinished(ev agent.PlaybackFinishedEvent)
 				break
 			}
 			accDur = p.position
-			frameDur = time.Duration(float64(frame.SamplesPerChannel)/float64(frame.SampleRate)*float64(time.Second))
+			frameDur = time.Duration(float64(frame.SamplesPerChannel) / float64(frame.SampleRate) * float64(time.Second))
 		}
 
 		if frame == nil {
@@ -414,10 +412,13 @@ func (r *RecorderAudioOutput) onPlaybackFinished(ev agent.PlaybackFinishedEvent)
 	}
 }
 
+// RecorderIO records a conversation as a stereo WAV file.
+// Left channel = user (input), Right channel = agent (output).
 type RecorderIO struct {
 	Session *agent.AgentSession
 
 	mu      sync.Mutex
+	wg      sync.WaitGroup
 	started bool
 	closed  bool
 
@@ -427,18 +428,14 @@ type RecorderIO struct {
 	inQ  chan []*model.AudioFrame
 	outQ chan []*model.AudioFrame
 
-	oggWriter *oggwriter.OggWriter
-	encoder   *opus.Encoder
+	wavFile    *os.File
+	sampleRate int
 
 	done chan struct{}
 
-	outPath string
+	OutPath string
 
-	InputStartTime  *time.Time
-	OutputStartTime *time.Time
-
-	sequenceNumber uint16
-	timestamp      uint32
+	totalSamplesWritten int64
 }
 
 func NewRecorderIO(session *agent.AgentSession) *RecorderIO {
@@ -465,7 +462,7 @@ func (r *RecorderIO) writeCb(buf []*model.AudioFrame) {
 	if r.outRecord != nil {
 		padSince = r.outRecord.lastSpeechEndTime
 	}
-	
+
 	inputBuf := make([]*model.AudioFrame, 0)
 	if r.inRecord != nil {
 		inputBuf = r.inRecord.takeBuf(padSince)
@@ -474,6 +471,7 @@ func (r *RecorderIO) writeCb(buf []*model.AudioFrame) {
 	r.outQ <- buf
 }
 
+// Start begins recording to a stereo WAV file at the given sample rate.
 func (r *RecorderIO) Start(outputPath string, sampleRate int) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -486,20 +484,20 @@ func (r *RecorderIO) Start(outputPath string, sampleRate int) error {
 		return fmt.Errorf("failed to create directory for recording: %w", err)
 	}
 
-	writer, err := oggwriter.New(outputPath, uint32(sampleRate), 2)
+	f, err := os.Create(outputPath)
 	if err != nil {
-		return fmt.Errorf("failed to create ogg writer: %w", err)
+		return fmt.Errorf("failed to create wav file: %w", err)
 	}
 
-	encoder, err := opus.NewEncoder(sampleRate, 2, opus.AppAudio)
-	if err != nil {
-		writer.Close()
-		return fmt.Errorf("failed to create opus encoder: %w", err)
+	// Write a placeholder WAV header (will be updated on close)
+	if err := writeWAVHeader(f, sampleRate, 2, 0); err != nil {
+		f.Close()
+		return fmt.Errorf("failed to write wav header: %w", err)
 	}
 
-	r.oggWriter = writer
-	r.encoder = encoder
-	r.outPath = outputPath
+	r.wavFile = f
+	r.sampleRate = sampleRate
+	r.OutPath = outputPath
 	r.started = true
 
 	go r.forwardTask()
@@ -529,7 +527,7 @@ func (r *RecorderIO) forwardTask() {
 			if r.outRecord != nil {
 				padSince = r.outRecord.lastSpeechEndTime
 			}
-			
+
 			inputBuf := make([]*model.AudioFrame, 0)
 			if r.inRecord != nil {
 				inputBuf = r.inRecord.takeBuf(padSince)
@@ -540,28 +538,33 @@ func (r *RecorderIO) forwardTask() {
 	}
 }
 
+// Stop signals the record loop to flush and close, then waits for it to finish.
 func (r *RecorderIO) Stop() error {
 	r.mu.Lock()
-	defer r.mu.Unlock()
-
 	if !r.started || r.closed {
+		r.mu.Unlock()
 		return nil
 	}
-
 	r.closed = true
 	close(r.done)
 	close(r.inQ)
 	close(r.outQ)
+	r.mu.Unlock()
+
+	r.wg.Wait()
 	return nil
 }
 
 func (r *RecorderIO) encodeThread(sampleRate int) {
+	r.wg.Add(1)
+	defer r.wg.Done()
+
 	for {
 		inFrames, ok1 := <-r.inQ
 		outFrames, ok2 := <-r.outQ
 
 		if !ok1 || !ok2 {
-			r.oggWriter.Close()
+			r.finalizeWAV()
 			return
 		}
 
@@ -604,56 +607,93 @@ func (r *RecorderIO) encodeThread(sampleRate int) {
 			continue
 		}
 
-		// Create stereo buffer (interleaved: left, right, left, right...)
-		stereoBuf := make([]int16, maxSamples*2)
-
-		// Mix input to left channel (0, 2, 4...)
-		for i, sample := range inPcm {
-			if i < maxSamples {
-				stereoBuf[i*2] = sample
+		// Interleave into stereo WAV: [L0, R0, L1, R1, ...]
+		// Left = user input, Right = agent output
+		stereoBuf := make([]byte, maxSamples*4) // 2 channels * 2 bytes per sample
+		for i := 0; i < maxSamples; i++ {
+			var left, right int16
+			if i < len(inPcm) {
+				left = inPcm[i]
 			}
+			if i < len(outPcm) {
+				right = outPcm[i]
+			}
+			binary.LittleEndian.PutUint16(stereoBuf[i*4:], uint16(left))
+			binary.LittleEndian.PutUint16(stereoBuf[i*4+2:], uint16(right))
 		}
 
-		// Mix output to right channel (1, 3, 5...)
-		for i, sample := range outPcm {
-			if i < maxSamples {
-				stereoBuf[i*2+1] = sample
-			}
+		// Write raw PCM to WAV file
+		r.mu.Lock()
+		wavFile := r.wavFile
+		r.mu.Unlock()
+
+		if wavFile == nil {
+			continue
 		}
 
-		chunkSamples := sampleRate / 50
-		opusBuf := make([]byte, 4000)
-
-		for i := 0; i < maxSamples; i += chunkSamples {
-			end := i + chunkSamples
-			if end > maxSamples {
-				break
-			}
-
-			chunk := stereoBuf[i*2 : end*2]
-			n, err := r.encoder.Encode(chunk, opusBuf)
-			if err != nil {
-				logger.Logger.Errorw("Failed to encode opus", err)
-				continue
-			}
-
-			pkt := &rtp.Packet{
-				Header: rtp.Header{
-					Version:        2,
-					PayloadType:    111,
-					SequenceNumber: r.sequenceNumber,
-					Timestamp:      r.timestamp,
-				},
-				Payload: opusBuf[:n],
-			}
-			
-			r.sequenceNumber++
-			r.timestamp += uint32(chunkSamples)
-
-			if err := r.oggWriter.WriteRTP(pkt); err != nil {
-				logger.Logger.Errorw("Failed to write to ogg", err)
-			}
+		n, err := wavFile.Write(stereoBuf)
+		if err != nil {
+			logger.Logger.Errorw("Failed to write to WAV", err)
+			continue
 		}
+
+		r.mu.Lock()
+		r.totalSamplesWritten += int64(maxSamples)
+		total := r.totalSamplesWritten
+		r.mu.Unlock()
+
+		fmt.Printf("[Recorder] Wrote %d bytes (%.1fs total recorded)\n",
+			n, float64(total)/float64(r.sampleRate))
 	}
 }
 
+func (r *RecorderIO) finalizeWAV() {
+	r.mu.Lock()
+	wavFile := r.wavFile
+	total := r.totalSamplesWritten
+	sampleRate := r.sampleRate
+	r.mu.Unlock()
+
+	if wavFile == nil {
+		return
+	}
+
+	// Update WAV header with final data size
+	dataSize := total * 4 // stereo * 2 bytes per sample
+	if err := writeWAVHeader(wavFile, sampleRate, 2, int(dataSize)); err != nil {
+		logger.Logger.Errorw("Failed to finalize WAV header", err)
+	}
+
+	wavFile.Close()
+	duration := float64(total) / float64(sampleRate)
+	fmt.Printf("[Recorder] WAV finalized: %s (%.1fs, %d samples)\n", r.OutPath, duration, total)
+}
+
+// writeWAVHeader writes (or re-writes) a standard 44-byte WAV header.
+func writeWAVHeader(f *os.File, sampleRate int, channels int, dataSize int) error {
+	if _, err := f.Seek(0, 0); err != nil {
+		return err
+	}
+
+	bitsPerSample := 16
+	byteRate := sampleRate * channels * bitsPerSample / 8
+	blockAlign := channels * bitsPerSample / 8
+
+	header := make([]byte, 44)
+	copy(header[0:4], "RIFF")
+	binary.LittleEndian.PutUint32(header[4:8], uint32(36+dataSize))
+	copy(header[8:12], "WAVE")
+	copy(header[12:16], "fmt ")
+	binary.LittleEndian.PutUint32(header[16:20], 16) // PCM chunk size
+	binary.LittleEndian.PutUint16(header[20:22], 1)  // PCM format
+	binary.LittleEndian.PutUint16(header[22:24], uint16(channels))
+	binary.LittleEndian.PutUint32(header[24:28], uint32(sampleRate))
+	binary.LittleEndian.PutUint32(header[28:32], uint32(byteRate))
+	binary.LittleEndian.PutUint16(header[32:34], uint16(blockAlign))
+	binary.LittleEndian.PutUint16(header[34:36], uint16(bitsPerSample))
+	copy(header[36:40], "data")
+	binary.LittleEndian.PutUint32(header[40:44], uint32(dataSize))
+
+	_, err := f.Write(header)
+	return err
+}
