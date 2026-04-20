@@ -120,9 +120,9 @@ func (ar *AudioRecognition) vadLoop(ctx context.Context, stream vad.VADStream) {
 			return
 		}
 
-		if ev.Type == vad.VADEventStartOfSpeech {
-			fmt.Println("🗣️  [VAD] User started speaking")
-			logger.Logger.Infow("User started speaking")
+		switch ev.Type {
+		case vad.VADEventStartOfSpeech:
+			logger.Logger.Debugw("User started speaking")
 			ar.session.UpdateUserState(UserStateSpeaking)
 
 			// Interrupt ongoing agent speech/generation
@@ -134,9 +134,8 @@ func (ar *AudioRecognition) vadLoop(ctx context.Context, stream vad.VADStream) {
 				ar.cancel = cancel
 			}
 			ar.mu.Unlock()
-		} else if ev.Type == vad.VADEventEndOfSpeech {
-			fmt.Println("🔇 [VAD] User stopped speaking")
-			logger.Logger.Infow("User stopped speaking")
+		case vad.VADEventEndOfSpeech:
+			logger.Logger.Debugw("User stopped speaking")
 			ar.session.UpdateUserState(UserStateListening)
 		}
 	}
