@@ -46,6 +46,7 @@ type AgentServer struct {
 	activeJobs map[string]*JobContext
 	mu         sync.Mutex
 	conn       *websocket.Conn
+	isDraining bool
 
 	consoleSession any // Store local session for CLI console
 }
@@ -181,17 +182,15 @@ func (s *AgentServer) Run(ctx context.Context) error {
 				}
 				pb, err := proto.Marshal(ping)
 				if err != nil {
-					fmt.Printf("   ❌ Ping marshal error: %v\n", err)
-					return
+					logger.Logger.Errorw("Ping marshal error", err)
 				}
 				s.mu.Lock()
 				err = conn.WriteMessage(websocket.BinaryMessage, pb)
 				s.mu.Unlock()
 				if err != nil {
-					fmt.Printf("   ❌ Ping send error: %v\n", err)
-					return
+					logger.Logger.Errorw("Ping send error", err)
 				}
-				fmt.Printf("   🏓 WorkerPing sent (ts=%d)\n", time.Now().UnixMilli())
+				logger.Logger.Debugw("WorkerPing sent", "ts", time.Now().UnixMilli())
 			}
 		}
 	}()
@@ -217,7 +216,9 @@ func (s *AgentServer) Run(ctx context.Context) error {
 	for {
 		select {
 		case <-ctx.Done():
-			conn.Close()
+			if s.conn != nil {
+				s.conn.Close()
+			}
 			return ctx.Err()
 		case result := <-msgCh:
 			if result.err != nil {
@@ -234,6 +235,81 @@ func (s *AgentServer) Run(ctx context.Context) error {
 			s.handleMessage(ctx, msg)
 		}
 	}
+}
+
+// Drain stops the worker from accepting new jobs and waits for existing ones to finish.
+func (s *AgentServer) Drain(ctx context.Context) error {
+	s.mu.Lock()
+	if s.isDraining {
+		s.mu.Unlock()
+		return nil
+	}
+	s.isDraining = true
+	activeCount := len(s.activeJobs)
+	s.mu.Unlock()
+
+	logger.Logger.Infow("Draining agent server", "active_jobs", activeCount)
+
+	// Notify LiveKit that we are draining
+	s.sendLoadUpdate(1.0, true)
+
+	if activeCount == 0 {
+		return nil
+	}
+
+	ticker := time.NewTicker(1 * time.Second)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-ticker.C:
+			s.mu.Lock()
+			count := len(s.activeJobs)
+			s.mu.Unlock()
+
+			if count == 0 {
+				logger.Logger.Infow("All jobs finished, drain complete")
+				return nil
+			}
+			logger.Logger.Infow("Waiting for jobs to finish", "pending_jobs", count)
+		}
+	}
+}
+
+func (s *AgentServer) sendLoadUpdate(load float32, draining bool) error {
+	status := livekit.WorkerStatus_WS_AVAILABLE
+	// Note: WS_DRAINING is not supported in the current protocol version.
+	// We handle draining internally by rejecting new jobs.
+
+	s.mu.Lock()
+	jobCount := uint32(len(s.activeJobs))
+	conn := s.conn
+	s.mu.Unlock()
+
+	if conn == nil {
+		return nil
+	}
+
+	update := &livekit.WorkerMessage{
+		Message: &livekit.WorkerMessage_UpdateWorker{
+			UpdateWorker: &livekit.UpdateWorkerStatus{
+				Status:   &status,
+				Load:     load,
+				JobCount: jobCount,
+			},
+		},
+	}
+
+	b, err := proto.Marshal(update)
+	if err != nil {
+		return err
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return conn.WriteMessage(websocket.BinaryMessage, b)
 }
 
 // sendAvailable broadcasts UpdateWorkerStatus(WS_AVAILABLE) so the LiveKit
@@ -265,9 +341,9 @@ func (s *AgentServer) handleMessage(ctx context.Context, msg *livekit.ServerMess
 	case *livekit.ServerMessage_Register:
 		logger.Logger.Infow("Worker Registered", "workerId", m.Register.WorkerId, "serverInfo", m.Register.ServerInfo)
 		if err := s.sendAvailable(); err != nil {
-			fmt.Printf("   ❌ Failed to send available status: %v\n", err)
+			logger.Logger.Errorw("Failed to send available status", err)
 		} else {
-			fmt.Println("   ✅ Worker status set to AVAILABLE — waiting for jobs...")
+			logger.Logger.Infow("Worker status set to AVAILABLE — waiting for jobs...")
 		}
 	case *livekit.ServerMessage_Availability:
 		logger.Logger.Infow("Received availability request", "jobId", m.Availability.Job.Id)
@@ -288,12 +364,16 @@ func (s *AgentServer) handleMessage(ctx context.Context, msg *livekit.ServerMess
 func (s *AgentServer) handleAvailability(ctx context.Context, req *livekit.AvailabilityRequest) {
 	logger.Logger.Infow("Received availability request", "jobId", req.Job.Id)
 
-	// Default to accept
+	s.mu.Lock()
+	draining := s.isDraining
+	s.mu.Unlock()
+
+	// Default to accept unless draining
 	ans := &livekit.WorkerMessage{
 		Message: &livekit.WorkerMessage_Availability{
 			Availability: &livekit.AvailabilityResponse{
 				JobId:               req.Job.Id,
-				Available:           true,
+				Available:           !draining,
 				ParticipantIdentity: "agent-" + req.Job.Id[:8],
 				ParticipantName:     s.Options.AgentName,
 			},
