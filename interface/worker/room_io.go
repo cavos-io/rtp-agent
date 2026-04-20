@@ -307,10 +307,6 @@ func (t *RoomTextOutput) Flush() {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	if t.writer != nil {
-		// Signal finality for the segment to align with official protocol
-		t.writer.UpdateAttributes(map[string]string{
-			"lk.transcription_final": "true",
-		})
 		// Close the current segment
 		t.writer.Close()
 		t.writer = nil
