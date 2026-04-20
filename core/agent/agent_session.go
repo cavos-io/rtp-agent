@@ -574,6 +574,35 @@ func (s *AgentSession) GenerateReply(ctx context.Context, userInput string, allo
 	return GenerateTypedReply[any](ctx, s, userInput, &GenerateReplyOpts{AllowInterruptions: allowInterruptions})
 }
 
+func (s *AgentSession) Say(text string, allowInterruptions bool) (*SpeechHandle, error) {
+	s.mu.Lock()
+	activity := s.Activity
+	s.mu.Unlock()
+
+	if activity == nil {
+		return nil, fmt.Errorf("session activity not started")
+	}
+
+	handle := NewSpeechHandle(allowInterruptions, InputDetails{Modality: "text"})
+	handle.ManualText = text
+
+	// Add the manual speech to the chat context so the LLM remains aware of its own output
+	s.ChatCtx.Append(&llm.ChatMessage{
+		Role: llm.ChatRoleAssistant,
+		Content: []llm.ChatContent{
+			{Text: text},
+		},
+		CreatedAt: time.Now(),
+	})
+
+	err := activity.ScheduleSpeech(handle, SpeechPriorityNormal, false)
+	if err != nil {
+		return nil, err
+	}
+
+	return handle, nil
+}
+
 func (s *AgentSession) forwardAudioLoop(ctx context.Context) {
 	if s.Input.Audio == nil {
 		logger.Logger.Infow("[STT-PIPE] forwardAudioLoop: Input.Audio is nil — no audio will be forwarded")

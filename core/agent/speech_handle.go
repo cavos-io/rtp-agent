@@ -44,7 +44,8 @@ type SpeechHandle struct {
 	scheduledCh chan struct{}
 
 	FinalOutput any
-	
+	ManualText  string
+
 	mu sync.Mutex
 	err error
 	
