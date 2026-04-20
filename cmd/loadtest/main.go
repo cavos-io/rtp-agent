@@ -18,6 +18,7 @@ import (
 
 	"github.com/livekit/protocol/livekit"
 	lksdk "github.com/livekit/server-sdk-go/v2"
+	"github.com/pion/webrtc/v4"
 )
 
 // ─── Configuration ──────────────────────────────────────────────────────────
@@ -71,7 +72,7 @@ type RoomTest struct {
 	roomName  string
 	metrics   RoomMetrics
 	room      *lksdk.Room
-	dispatch  *lksdk.AgentDispatchServiceClient
+	dispatch  *lksdk.AgentDispatchClient
 	svc       *lksdk.RoomServiceClient
 	mu        sync.Mutex
 }
@@ -105,7 +106,7 @@ func (rt *RoomTest) Run(ctx context.Context) RoomMetrics {
 	audioTrackCh := make(chan struct{}, 1)
 
 	cb.OnParticipantConnected = func(p *lksdk.RemoteParticipant) {
-		if p.Kind() == lksdk.ParticipantKindAgent {
+		if p.Kind() == lksdk.ParticipantAgent {
 			rt.mu.Lock()
 			rt.metrics.AgentJoinTime = time.Now()
 			rt.metrics.DispatchLatency = time.Since(dispatchStart)
@@ -120,9 +121,9 @@ func (rt *RoomTest) Run(ctx context.Context) RoomMetrics {
 		}
 	}
 
-	cb.OnTrackSubscribed = func(track *lksdk.TrackRemote, pub *lksdk.RemoteTrackPublication, rp *lksdk.RemoteParticipant) {
+	cb.OnTrackSubscribed = func(track *webrtc.TrackRemote, pub *lksdk.RemoteTrackPublication, rp *lksdk.RemoteParticipant) {
 		atomic.AddInt32(&rt.metrics.TracksReceived, 1)
-		if track.Kind().String() == "audio" && rp.Kind() == lksdk.ParticipantKindAgent {
+		if track.Kind() == webrtc.RTPCodecTypeAudio && rp.Kind() == lksdk.ParticipantAgent {
 			rt.mu.Lock()
 			if rt.metrics.FirstAudioTime.IsZero() {
 				rt.metrics.FirstAudioTime = time.Now()
@@ -165,7 +166,7 @@ func (rt *RoomTest) Run(ctx context.Context) RoomMetrics {
 	}
 
 	// Step 2: Dispatch agent
-	_, err = rt.dispatch.CreateDispatch(ctx, &livekit.CreateAgentDispatchRequest{
+	dispatch, err := rt.dispatch.CreateDispatch(ctx, &livekit.CreateAgentDispatchRequest{
 		AgentName: rt.config.AgentName,
 		Room:      rt.roomName,
 	})
@@ -173,6 +174,7 @@ func (rt *RoomTest) Run(ctx context.Context) RoomMetrics {
 		rt.metrics.Error = fmt.Sprintf("dispatch failed: %v", err)
 		return rt.metrics
 	}
+	_ = dispatch // Ensure dispatch is used to avoid 'declared and not used' error
 
 	// Step 3: Wait for agent to join (with timeout)
 	joinTimeout := 30 * time.Second
