@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/cavos-io/conversation-worker/core/llm"
+	"github.com/cavos-io/rtp-agent/core/llm"
 )
 
 type requestRecorder struct {
@@ -127,3 +127,4 @@ func TestChatSendsParallelToolCallsWithTools(t *testing.T) {
 		t.Fatalf("expected tools payload")
 	}
 }
+

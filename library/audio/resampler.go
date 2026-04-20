@@ -46,3 +46,4 @@ func setSample(data []byte, index int, val int16) {
 	data[index*2] = byte(uint16(val) & 0xFF)
 	data[index*2+1] = byte(uint16(val) >> 8)
 }
+

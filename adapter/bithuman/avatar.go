@@ -21,3 +21,4 @@ func (a *BithumanAvatar) Start(ctx context.Context) error {
 	return nil
 }
 
+

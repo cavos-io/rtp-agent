@@ -3,8 +3,8 @@ package minimax
 import (
 	"context"
 
-	"github.com/cavos-io/conversation-worker/adapter/openai"
-	"github.com/cavos-io/conversation-worker/core/llm"
+	"github.com/cavos-io/rtp-agent/adapter/openai"
+	"github.com/cavos-io/rtp-agent/core/llm"
 )
 
 type MinimaxLLM struct {
@@ -23,3 +23,4 @@ func NewMinimaxLLM(apiKey string, model string) *MinimaxLLM {
 func (l *MinimaxLLM) Chat(ctx context.Context, chatCtx *llm.ChatContext, opts ...llm.ChatOption) (llm.LLMStream, error) {
 	return l.inner.Chat(ctx, chatCtx, opts...)
 }
+

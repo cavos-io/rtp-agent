@@ -8,8 +8,8 @@ import (
 	"io"
 	"net/http"
 
-	"github.com/cavos-io/conversation-worker/core/stt"
-	"github.com/cavos-io/conversation-worker/model"
+	"github.com/cavos-io/rtp-agent/core/stt"
+	"github.com/cavos-io/rtp-agent/model"
 )
 
 type SonioxSTT struct {
@@ -72,3 +72,4 @@ func (s *SonioxSTT) Recognize(ctx context.Context, frames []*model.AudioFrame, l
 		},
 	}, nil
 }
+

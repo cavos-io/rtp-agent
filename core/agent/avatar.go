@@ -6,8 +6,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/cavos-io/conversation-worker/library/logger"
-	"github.com/cavos-io/conversation-worker/model"
+	"github.com/cavos-io/rtp-agent/library/logger"
+	"github.com/cavos-io/rtp-agent/model"
 	lksdk "github.com/livekit/server-sdk-go/v2"
 	"github.com/pion/webrtc/v4"
 	"github.com/pion/webrtc/v4/pkg/media"
@@ -322,3 +322,4 @@ func (r *AvatarRunner) Stop() {
 		_ = r.avSync.Close()
 	}
 }
+

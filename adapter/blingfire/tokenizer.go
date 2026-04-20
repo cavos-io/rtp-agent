@@ -3,7 +3,7 @@ package blingfire
 import (
 	"strings"
 
-	"github.com/cavos-io/conversation-worker/library/tokenize"
+	"github.com/cavos-io/rtp-agent/library/tokenize"
 )
 
 type SentenceTokenizer struct {
@@ -78,3 +78,4 @@ func (t *WordTokenizer) Stream(language string) tokenize.WordStream {
 		return t.Tokenize(s, language)
 	}, 1, 1)
 }
+

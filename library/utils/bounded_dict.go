@@ -65,3 +65,4 @@ func (c *BoundedDict[K, V]) removeOldest() {
 		delete(c.items, kv.key)
 	}
 }
+

@@ -3,8 +3,8 @@ package simplismart
 import (
 	"context"
 
-	"github.com/cavos-io/conversation-worker/adapter/openai"
-	"github.com/cavos-io/conversation-worker/core/llm"
+	"github.com/cavos-io/rtp-agent/adapter/openai"
+	"github.com/cavos-io/rtp-agent/core/llm"
 )
 
 type SimplismartLLM struct {
@@ -23,3 +23,4 @@ func NewSimplismartLLM(apiKey string, model string) *SimplismartLLM {
 func (l *SimplismartLLM) Chat(ctx context.Context, chatCtx *llm.ChatContext, opts ...llm.ChatOption) (llm.LLMStream, error) {
 	return l.inner.Chat(ctx, chatCtx, opts...)
 }
+

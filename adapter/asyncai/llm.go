@@ -3,8 +3,8 @@ package asyncai
 import (
 	"context"
 
-	"github.com/cavos-io/conversation-worker/adapter/openai"
-	"github.com/cavos-io/conversation-worker/core/llm"
+	"github.com/cavos-io/rtp-agent/adapter/openai"
+	"github.com/cavos-io/rtp-agent/core/llm"
 )
 
 type AsyncAILLM struct {
@@ -23,3 +23,4 @@ func NewAsyncAILLM(apiKey string, model string) *AsyncAILLM {
 func (l *AsyncAILLM) Chat(ctx context.Context, chatCtx *llm.ChatContext, opts ...llm.ChatOption) (llm.LLMStream, error) {
 	return l.inner.Chat(ctx, chatCtx, opts...)
 }
+

@@ -40,3 +40,4 @@ func TestSpeechHandleScheduleAndWait(t *testing.T) {
 		t.Fatalf("wait should succeed for done handle, got: %v", err)
 	}
 }
+

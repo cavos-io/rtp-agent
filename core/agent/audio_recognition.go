@@ -6,10 +6,10 @@ import (
 	"io"
 	"sync"
 
-	"github.com/cavos-io/conversation-worker/core/stt"
-	"github.com/cavos-io/conversation-worker/core/vad"
-	"github.com/cavos-io/conversation-worker/library/logger"
-	"github.com/cavos-io/conversation-worker/model"
+	"github.com/cavos-io/rtp-agent/core/stt"
+	"github.com/cavos-io/rtp-agent/core/vad"
+	"github.com/cavos-io/rtp-agent/library/logger"
+	"github.com/cavos-io/rtp-agent/model"
 )
 
 type AudioRecognition struct {
@@ -287,3 +287,4 @@ func (ar *AudioRecognition) Flush() error {
 	// but we could define a marker frame if needed.
 	return nil
 }
+

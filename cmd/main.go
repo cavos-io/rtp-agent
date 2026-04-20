@@ -7,13 +7,13 @@ import (
 	"os"
 	"time"
 
-	elevenlabsAdapter "github.com/cavos-io/conversation-worker/adapter/elevenlabs"
-	openaiAdapter "github.com/cavos-io/conversation-worker/adapter/openai"
-	sileroAdapter "github.com/cavos-io/conversation-worker/adapter/silero"
-	"github.com/cavos-io/conversation-worker/core/agent"
-	"github.com/cavos-io/conversation-worker/interface/cli"
-	"github.com/cavos-io/conversation-worker/interface/worker"
-	"github.com/cavos-io/conversation-worker/library/logger"
+	elevenlabsAdapter "github.com/cavos-io/rtp-agent/adapter/elevenlabs"
+	openaiAdapter "github.com/cavos-io/rtp-agent/adapter/openai"
+	sileroAdapter "github.com/cavos-io/rtp-agent/adapter/silero"
+	"github.com/cavos-io/rtp-agent/core/agent"
+	"github.com/cavos-io/rtp-agent/interface/cli"
+	"github.com/cavos-io/rtp-agent/interface/worker"
+	"github.com/cavos-io/rtp-agent/library/logger"
 	"github.com/joho/godotenv"
 	lksdk "github.com/livekit/server-sdk-go/v2"
 	"github.com/pion/webrtc/v4"
@@ -183,3 +183,4 @@ func handleAgent(server *worker.AgentServer, jobCtx *worker.JobContext) error {
 
 	return nil
 }
+

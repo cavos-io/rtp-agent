@@ -72,3 +72,4 @@ func RecordChatEvent(ctx context.Context, eventType string, body string, attribu
 
 	ChatLogger.Emit(ctx, record)
 }
+

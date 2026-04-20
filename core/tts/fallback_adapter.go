@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"sync"
 
-	"github.com/cavos-io/conversation-worker/library/logger"
+	"github.com/cavos-io/rtp-agent/library/logger"
 )
 
 type FallbackAdapter struct {
@@ -282,3 +282,4 @@ func (s *fallbackSynthesizeStream) Next() (*SynthesizedAudio, error) {
 		return nil, context.Canceled
 	}
 }
+

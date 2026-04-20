@@ -9,8 +9,8 @@ import (
 	"io"
 	"net/http"
 
-	"github.com/cavos-io/conversation-worker/core/stt"
-	"github.com/cavos-io/conversation-worker/model"
+	"github.com/cavos-io/rtp-agent/core/stt"
+	"github.com/cavos-io/rtp-agent/model"
 )
 
 type FalSTT struct {
@@ -88,3 +88,4 @@ func (s *FalSTT) Recognize(ctx context.Context, frames []*model.AudioFrame, lang
 		},
 	}, nil
 }
+

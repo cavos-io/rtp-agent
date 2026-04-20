@@ -8,8 +8,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/cavos-io/conversation-worker/library/logger"
-	"github.com/cavos-io/conversation-worker/model"
+	"github.com/cavos-io/rtp-agent/library/logger"
+	"github.com/cavos-io/rtp-agent/model"
 	lksdk "github.com/livekit/server-sdk-go/v2"
 )
 
@@ -193,3 +193,4 @@ func (h *PreConnectAudioHandler) WaitForData(ctx context.Context, trackID string
 		return buf.Frames
 	}
 }
+

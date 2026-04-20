@@ -29,3 +29,4 @@ func FromModelString(s string) (LLM, error) {
 
 	return factory(model)
 }
+

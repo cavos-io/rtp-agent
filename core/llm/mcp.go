@@ -477,3 +477,4 @@ func (t *mcpProxyTool) Execute(ctx context.Context, args any) (any, error) {
 func (t *mcpProxyTool) ParseFunctionTools(format string) (map[string]interface{}, error) {
 	return t.parameters, nil
 }
+

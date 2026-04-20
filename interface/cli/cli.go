@@ -10,10 +10,10 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
-	"github.com/cavos-io/conversation-worker/core/agent"
-	"github.com/cavos-io/conversation-worker/interface/cli/console"
-	"github.com/cavos-io/conversation-worker/interface/worker"
-	"github.com/cavos-io/conversation-worker/library/logger"
+	"github.com/cavos-io/rtp-agent/core/agent"
+	"github.com/cavos-io/rtp-agent/interface/cli/console"
+	"github.com/cavos-io/rtp-agent/interface/worker"
+	"github.com/cavos-io/rtp-agent/library/logger"
 )
 
 type CliArgs struct {
@@ -185,3 +185,4 @@ func runConsole(server *worker.AgentServer) {
 		os.Exit(1)
 	}
 }
+

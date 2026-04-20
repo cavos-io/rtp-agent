@@ -10,8 +10,8 @@ import (
 	"net/url"
 	"sync"
 
-	"github.com/cavos-io/conversation-worker/core/tts"
-	"github.com/cavos-io/conversation-worker/model"
+	"github.com/cavos-io/rtp-agent/core/tts"
+	"github.com/cavos-io/rtp-agent/model"
 	"github.com/gorilla/websocket"
 )
 
@@ -216,3 +216,4 @@ func (s *deepgramTTSStream) Next() (*tts.SynthesizedAudio, error) {
 		return nil, err
 	}
 }
+

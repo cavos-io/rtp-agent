@@ -8,8 +8,8 @@ import (
 	"mime/multipart"
 	"net/http"
 
-	"github.com/cavos-io/conversation-worker/core/tts"
-	"github.com/cavos-io/conversation-worker/model"
+	"github.com/cavos-io/rtp-agent/core/tts"
+	"github.com/cavos-io/rtp-agent/model"
 )
 
 type LMNTTTS struct {
@@ -100,3 +100,4 @@ func (s *lmntTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 func (s *lmntTTSChunkedStream) Close() error {
 	return s.resp.Body.Close()
 }
+

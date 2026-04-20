@@ -111,3 +111,4 @@ func (c *RemoteChatContext) Delete(itemID string) error {
 	delete(c.idToItem, itemID)
 	return nil
 }
+

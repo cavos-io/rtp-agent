@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/cavos-io/conversation-worker/core/agent"
+	"github.com/cavos-io/rtp-agent/core/agent"
 )
 
 type Shutter interface {
@@ -104,3 +104,4 @@ func (t *EndCallTool) Execute(ctx context.Context, args any) (any, error) {
 
 	return "Ending call...", nil
 }
+

@@ -4,9 +4,9 @@ import (
 	"context"
 	"io"
 
-	"github.com/cavos-io/conversation-worker/core/audio"
-	"github.com/cavos-io/conversation-worker/core/tts"
-	"github.com/cavos-io/conversation-worker/model"
+	"github.com/cavos-io/rtp-agent/core/audio"
+	"github.com/cavos-io/rtp-agent/core/tts"
+	"github.com/cavos-io/rtp-agent/model"
 	"github.com/sashabaranov/go-openai"
 )
 
@@ -128,3 +128,4 @@ func (s *openaiTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 func (s *openaiTTSChunkedStream) Close() error {
 	return s.resp.Close()
 }
+

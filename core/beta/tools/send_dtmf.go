@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/cavos-io/conversation-worker/core/beta"
+	"github.com/cavos-io/rtp-agent/core/beta"
 )
 
 type DtmfPublisher interface {
@@ -102,3 +102,4 @@ func (t *SendDTMFTool) Execute(ctx context.Context, args any) (any, error) {
 
 	return fmt.Sprintf("Successfully sent DTMF events: %s", beta.FormatDtmf(a.Events)), nil
 }
+

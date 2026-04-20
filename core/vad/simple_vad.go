@@ -6,8 +6,8 @@ import (
 	"sync"
 	"sync/atomic"
 
-	"github.com/cavos-io/conversation-worker/library/logger"
-	"github.com/cavos-io/conversation-worker/model"
+	"github.com/cavos-io/rtp-agent/library/logger"
+	"github.com/cavos-io/rtp-agent/model"
 )
 
 type SimpleVAD struct {
@@ -102,3 +102,4 @@ func (s *simpleVADStream) Next() (*VADEvent, error) {
 		return ev, nil
 	}
 }
+

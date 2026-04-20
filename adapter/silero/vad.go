@@ -3,7 +3,7 @@ package silero
 import (
 	"context"
 
-	"github.com/cavos-io/conversation-worker/core/vad"
+	"github.com/cavos-io/rtp-agent/core/vad"
 )
 
 type VADOptions struct {
@@ -72,3 +72,4 @@ func NewSileroVAD(opts ...VADOption) *SileroVAD {
 func (v *SileroVAD) Stream(ctx context.Context) (vad.VADStream, error) {
 	return v.inner.Stream(ctx)
 }
+

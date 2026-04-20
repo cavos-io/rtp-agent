@@ -75,3 +75,4 @@ func TestScheduleSpeechRespectsPausedAndForce(t *testing.T) {
 		t.Fatalf("expected forced speech in queue")
 	}
 }
+

@@ -5,7 +5,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/cavos-io/conversation-worker/core/llm"
+	"github.com/cavos-io/rtp-agent/core/llm"
 )
 
 type RecordingOptions struct {
@@ -128,3 +128,4 @@ func (r *SessionReport) ToDict() map[string]any {
 
 	return dict
 }
+

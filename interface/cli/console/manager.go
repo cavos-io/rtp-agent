@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"sync"
 
-	"github.com/cavos-io/conversation-worker/core/agent"
+	"github.com/cavos-io/rtp-agent/core/agent"
 )
 
 // ConsoleManager is a singleton that manages console I/O for agent sessions
@@ -107,3 +107,4 @@ func (cm *ConsoleManager) Stop() error {
 	cm.ioAcquired = false
 	return nil
 }
+

@@ -7,8 +7,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/cavos-io/conversation-worker/core/beta"
-	"github.com/cavos-io/conversation-worker/library/logger"
+	"github.com/cavos-io/rtp-agent/core/beta"
+	"github.com/cavos-io/rtp-agent/library/logger"
 	"github.com/livekit/protocol/livekit"
 	lksdk "github.com/livekit/server-sdk-go/v2"
 )
@@ -319,3 +319,4 @@ func (t *SendDTMFTool) Execute(ctx context.Context, args any) (any, error) {
 
 	return fmt.Sprintf("Successfully sent DTMF events: %s", beta.FormatDtmf(a.Events)), nil
 }
+

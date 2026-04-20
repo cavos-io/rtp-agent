@@ -5,9 +5,9 @@ import (
 	"io"
 	"testing"
 
-	"github.com/cavos-io/conversation-worker/core/stt"
-	"github.com/cavos-io/conversation-worker/core/vad"
-	"github.com/cavos-io/conversation-worker/model"
+	"github.com/cavos-io/rtp-agent/core/stt"
+	"github.com/cavos-io/rtp-agent/core/vad"
+	"github.com/cavos-io/rtp-agent/model"
 )
 
 type mockVADStream struct {
@@ -93,3 +93,4 @@ func TestAudioRecognitionStartErrorPropagation(t *testing.T) {
 		t.Fatalf("expected start to propagate stream initialization error")
 	}
 }
+

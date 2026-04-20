@@ -21,3 +21,4 @@ func (a *BeyAvatar) Start(ctx context.Context) error {
 	return nil
 }
 
+

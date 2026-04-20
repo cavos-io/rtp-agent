@@ -6,8 +6,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/cavos-io/conversation-worker/core/agent"
-	"github.com/cavos-io/conversation-worker/model"
+	"github.com/cavos-io/rtp-agent/core/agent"
+	"github.com/cavos-io/rtp-agent/model"
 	"github.com/gordonklaus/portaudio"
 )
 
@@ -372,3 +372,4 @@ func (a *AudioIO) fanoutMicFrame(frame *model.AudioFrame) {
 		// Drop frame if tap channel is full.
 	}
 }
+

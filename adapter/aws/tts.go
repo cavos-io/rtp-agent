@@ -9,8 +9,8 @@ import (
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/polly"
 	"github.com/aws/aws-sdk-go-v2/service/polly/types"
-	"github.com/cavos-io/conversation-worker/core/tts"
-	"github.com/cavos-io/conversation-worker/model"
+	"github.com/cavos-io/rtp-agent/core/tts"
+	"github.com/cavos-io/rtp-agent/model"
 )
 
 type AWSTTS struct {
@@ -94,3 +94,4 @@ func (s *awsTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 func (s *awsTTSChunkedStream) Close() error {
 	return s.stream.Close()
 }
+

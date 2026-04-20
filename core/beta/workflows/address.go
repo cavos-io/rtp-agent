@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/cavos-io/conversation-worker/core/agent"
+	"github.com/cavos-io/rtp-agent/core/agent"
 )
 
 type GetAddressResult struct {
@@ -197,3 +197,4 @@ func (t *declineAddressCaptureTool) Execute(ctx context.Context, args any) (any,
 	t.task.Fail(fmt.Errorf("couldn't get the address: %s", reason))
 	return "Task failed.", nil
 }
+

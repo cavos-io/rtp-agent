@@ -77,3 +77,4 @@ func ApplyTextTransforms(text string) string {
 	text = FilterEmoji(text)
 	return text
 }
+

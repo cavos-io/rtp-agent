@@ -5,7 +5,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/cavos-io/conversation-worker/core/llm"
+	"github.com/cavos-io/rtp-agent/core/llm"
 	"github.com/google/uuid"
 )
 
@@ -153,3 +153,4 @@ func (s *SpeechHandle) Wait(ctx context.Context) error {
 		return ctx.Err()
 	}
 }
+

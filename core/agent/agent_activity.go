@@ -7,12 +7,12 @@ import (
 	"sync"
 	"time"
 
-	"github.com/cavos-io/conversation-worker/core/agent/ivr"
-	"github.com/cavos-io/conversation-worker/core/llm"
-	"github.com/cavos-io/conversation-worker/core/stt"
-	"github.com/cavos-io/conversation-worker/core/vad"
-	"github.com/cavos-io/conversation-worker/library/logger"
-	"github.com/cavos-io/conversation-worker/model"
+	"github.com/cavos-io/rtp-agent/core/agent/ivr"
+	"github.com/cavos-io/rtp-agent/core/llm"
+	"github.com/cavos-io/rtp-agent/core/stt"
+	"github.com/cavos-io/rtp-agent/core/vad"
+	"github.com/cavos-io/rtp-agent/library/logger"
+	"github.com/cavos-io/rtp-agent/model"
 )
 
 type EndOfTurnInfo struct {
@@ -910,3 +910,4 @@ func (a *AgentActivity) UpdateOptions(opts AgentSessionOptions) {
 	// For now just copy them
 	a.Session.Options = opts
 }
+

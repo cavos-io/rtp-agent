@@ -8,8 +8,8 @@ import (
 	"io"
 	"net/http"
 
-	"github.com/cavos-io/conversation-worker/core/tts"
-	"github.com/cavos-io/conversation-worker/model"
+	"github.com/cavos-io/rtp-agent/core/tts"
+	"github.com/cavos-io/rtp-agent/model"
 )
 
 type ResembleTTS struct {
@@ -98,3 +98,4 @@ func (s *resembleTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 func (s *resembleTTSChunkedStream) Close() error {
 	return s.resp.Body.Close()
 }
+

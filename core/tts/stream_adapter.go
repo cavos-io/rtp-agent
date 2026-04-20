@@ -6,7 +6,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/cavos-io/conversation-worker/library/audio"
+	"github.com/cavos-io/rtp-agent/library/audio"
 )
 
 type StreamAdapter struct {
@@ -266,3 +266,4 @@ func splitSentences(text string) []string {
 	}
 	return sentences
 }
+

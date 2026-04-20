@@ -8,7 +8,7 @@ import (
 	"io"
 	"net/http"
 
-	"github.com/cavos-io/conversation-worker/core/llm"
+	"github.com/cavos-io/rtp-agent/core/llm"
 )
 
 type HumeLLM struct {
@@ -109,3 +109,4 @@ func (s *humeLLMStream) Next() (*llm.ChatChunk, error) {
 func (s *humeLLMStream) Close() error {
 	return s.resp.Body.Close()
 }
+

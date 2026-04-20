@@ -3,7 +3,7 @@ package agent
 import (
 	"sync"
 
-	"github.com/cavos-io/conversation-worker/library/logger"
+	"github.com/cavos-io/rtp-agent/library/logger"
 )
 
 type Plugin interface {
@@ -32,3 +32,4 @@ func RegisteredPlugins() []Plugin {
 	copy(cp, plugins)
 	return cp
 }
+

@@ -226,3 +226,4 @@ func (r *MetricRegistry) GetUsageCollector(labels MetricLabels) *UsageCollector 
 	r.usageCollectors[key] = c
 	return c
 }
+

@@ -7,8 +7,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/cavos-io/conversation-worker/core/agent"
-	"github.com/cavos-io/conversation-worker/library/logger"
+	"github.com/cavos-io/rtp-agent/core/agent"
+	"github.com/cavos-io/rtp-agent/library/logger"
 	"github.com/gorilla/websocket"
 	"github.com/livekit/protocol/auth"
 	"github.com/livekit/protocol/livekit"
@@ -477,3 +477,4 @@ func (s *AgentServer) ExecuteLocalJob(ctx context.Context, roomName string, part
 	<-ctx.Done()
 	return nil
 }
+

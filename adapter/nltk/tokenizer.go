@@ -3,7 +3,7 @@ package nltk
 import (
 	"strings"
 
-	"github.com/cavos-io/conversation-worker/library/tokenize"
+	"github.com/cavos-io/rtp-agent/library/tokenize"
 )
 
 type SentenceTokenizer struct {
@@ -56,3 +56,4 @@ func (t *SentenceTokenizer) Stream(language string) tokenize.SentenceStream {
 		return t.Tokenize(s, language)
 	}, t.MinSentenceLen, t.StreamContextLen)
 }
+

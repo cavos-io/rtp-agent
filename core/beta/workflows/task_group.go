@@ -6,8 +6,8 @@ import (
 	"fmt"
 	"sync"
 
-	"github.com/cavos-io/conversation-worker/core/agent"
-	"github.com/cavos-io/conversation-worker/library/logger"
+	"github.com/cavos-io/rtp-agent/core/agent"
+	"github.com/cavos-io/rtp-agent/library/logger"
 )
 
 type TaskGroupResult struct {
@@ -179,3 +179,4 @@ func (t *outOfScopeTool) Execute(ctx context.Context, args any) (any, error) {
 
 	return "", &OutOfScopeError{TargetTaskIDs: taskIDs}
 }
+

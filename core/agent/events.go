@@ -7,9 +7,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/cavos-io/conversation-worker/core/llm"
-	"github.com/cavos-io/conversation-worker/library/logger"
-	"github.com/cavos-io/conversation-worker/library/telemetry"
+	"github.com/cavos-io/rtp-agent/core/llm"
+	"github.com/cavos-io/rtp-agent/library/logger"
+	"github.com/cavos-io/rtp-agent/library/telemetry"
 	lksdk "github.com/livekit/server-sdk-go/v2"
 )
 
@@ -763,3 +763,4 @@ func (d *ClientEventsDispatcher) DispatchUserState(state UserState) {
 		State: stateStr,
 	})
 }
+

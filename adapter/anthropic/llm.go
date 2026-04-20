@@ -10,7 +10,7 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/cavos-io/conversation-worker/core/llm"
+	"github.com/cavos-io/rtp-agent/core/llm"
 )
 
 type AnthropicLLM struct {
@@ -82,7 +82,7 @@ func (l *AnthropicLLM) Chat(ctx context.Context, chatCtx *llm.ChatContext, opts 
 type anthropicStream struct {
 	resp   *http.Response
 	reader *bufio.Reader
-	
+
 	// internal states for tracking tool calls over multiple chunks
 	toolCallID string
 	toolName   string
@@ -105,15 +105,15 @@ func (s *anthropicStream) Next() (*llm.ChatChunk, error) {
 		}
 
 		data := strings.TrimPrefix(line, "data: ")
-		
+
 		var event struct {
 			Type string `json:"type"`
-			
+
 			// message_start fields
 			Message struct {
 				ID    string `json:"id"`
 				Usage struct {
-					InputTokens int `json:"input_tokens"`
+					InputTokens  int `json:"input_tokens"`
 					OutputTokens int `json:"output_tokens"`
 				} `json:"usage"`
 			} `json:"message"`
@@ -132,9 +132,9 @@ func (s *anthropicStream) Next() (*llm.ChatChunk, error) {
 
 			// content_block_delta fields
 			Delta struct {
-				Type         string `json:"type"`
-				Text         string `json:"text"`
-				PartialJson  string `json:"partial_json"`
+				Type        string `json:"type"`
+				Text        string `json:"text"`
+				PartialJson string `json:"partial_json"`
 			} `json:"delta"`
 		}
 
@@ -150,14 +150,14 @@ func (s *anthropicStream) Next() (*llm.ChatChunk, error) {
 					PromptTokens: event.Message.Usage.InputTokens,
 				},
 			}, nil
-			
+
 		case "content_block_start":
 			if event.ContentBlock.Type == "tool_use" {
 				s.toolCallID = event.ContentBlock.ID
 				s.toolName = event.ContentBlock.Name
 				s.toolArgs = ""
 			}
-			
+
 		case "content_block_delta":
 			if event.Delta.Type == "text_delta" {
 				return &llm.ChatChunk{
@@ -169,7 +169,7 @@ func (s *anthropicStream) Next() (*llm.ChatChunk, error) {
 			} else if event.Delta.Type == "input_json_delta" {
 				s.toolArgs += event.Delta.PartialJson
 			}
-			
+
 		case "content_block_stop":
 			if s.toolCallID != "" {
 				chunk := &llm.ChatChunk{
@@ -190,17 +190,17 @@ func (s *anthropicStream) Next() (*llm.ChatChunk, error) {
 				s.toolArgs = ""
 				return chunk, nil
 			}
-			
+
 		case "message_delta":
 			return &llm.ChatChunk{
 				Usage: &llm.CompletionUsage{
 					CompletionTokens: event.Usage.OutputTokens,
 				},
 			}, nil
-			
+
 		case "message_stop":
 			return nil, io.EOF
-			
+
 		case "error":
 			return nil, fmt.Errorf("anthropic stream error: %s", data)
 		}
@@ -210,3 +210,4 @@ func (s *anthropicStream) Next() (*llm.ChatChunk, error) {
 func (s *anthropicStream) Close() error {
 	return s.resp.Body.Close()
 }
+

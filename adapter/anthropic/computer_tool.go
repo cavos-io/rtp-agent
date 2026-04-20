@@ -6,8 +6,8 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/cavos-io/conversation-worker/adapter/browser"
-	"github.com/cavos-io/conversation-worker/core/llm"
+	"github.com/cavos-io/rtp-agent/adapter/browser"
+	"github.com/cavos-io/rtp-agent/core/llm"
 )
 
 const postActionDelay = 300 * time.Millisecond
@@ -172,3 +172,4 @@ func (t *computerUseTool) ProviderSchema(format string) map[string]any {
 	}
 	return nil
 }
+

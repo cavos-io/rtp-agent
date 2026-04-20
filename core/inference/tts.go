@@ -11,10 +11,10 @@ import (
 	"sync"
 	"time"
 
-	"github.com/cavos-io/conversation-worker/core/tts"
-	"github.com/cavos-io/conversation-worker/library/logger"
-	"github.com/cavos-io/conversation-worker/library/tokenize"
-	"github.com/cavos-io/conversation-worker/model"
+	"github.com/cavos-io/rtp-agent/core/tts"
+	"github.com/cavos-io/rtp-agent/library/logger"
+	"github.com/cavos-io/rtp-agent/library/tokenize"
+	"github.com/cavos-io/rtp-agent/model"
 	"github.com/gorilla/websocket"
 )
 
@@ -274,3 +274,4 @@ func (s *inferenceTTSStream) emitEvent(ev *tts.SynthesizedAudio) {
 	case s.eventCh <- ev:
 	}
 }
+

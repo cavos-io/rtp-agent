@@ -8,8 +8,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/cavos-io/conversation-worker/core/evals"
-	"github.com/cavos-io/conversation-worker/core/llm"
+	"github.com/cavos-io/rtp-agent/core/evals"
+	"github.com/cavos-io/rtp-agent/core/llm"
 )
 
 type RunEvent interface {
@@ -300,3 +300,4 @@ func (a *RunAssert) Judge(ctx context.Context, evaluator evals.Evaluator, llmIns
 
 	return a, nil
 }
+

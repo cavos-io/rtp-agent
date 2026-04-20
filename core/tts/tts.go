@@ -3,7 +3,7 @@ package tts
 import (
 	"context"
 
-	"github.com/cavos-io/conversation-worker/model"
+	"github.com/cavos-io/rtp-agent/model"
 )
 
 type SynthesizedAudio struct {
@@ -39,3 +39,4 @@ type SynthesizeStream interface {
 	Close() error
 	Next() (*SynthesizedAudio, error)
 }
+

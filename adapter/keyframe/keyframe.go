@@ -19,3 +19,4 @@ func (a *KeyframeAgent) Start(ctx context.Context) error {
 	fmt.Println("KeyframeAvatar started.")
 	return nil
 	}
+

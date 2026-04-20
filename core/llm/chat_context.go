@@ -265,3 +265,4 @@ func (c *ChatContext) ToProviderFormat(format string) (any, any) {
 	}
 	return nil, nil
 }
+

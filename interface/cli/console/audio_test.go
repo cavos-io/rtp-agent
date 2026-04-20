@@ -3,7 +3,7 @@ package console
 import (
 	"testing"
 
-	"github.com/cavos-io/conversation-worker/model"
+	"github.com/cavos-io/rtp-agent/model"
 )
 
 func TestAudioIOMicFanoutDoesNotStealPrimaryStream(t *testing.T) {
@@ -39,3 +39,4 @@ func TestAudioIOMicFanoutDoesNotStealPrimaryStream(t *testing.T) {
 		t.Fatalf("expected tap frame data to be cloned")
 	}
 }
+

@@ -6,9 +6,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/cavos-io/conversation-worker/core/agent"
-	"github.com/cavos-io/conversation-worker/core/beta"
-	"github.com/cavos-io/conversation-worker/library/logger"
+	"github.com/cavos-io/rtp-agent/core/agent"
+	"github.com/cavos-io/rtp-agent/core/beta"
+	"github.com/cavos-io/rtp-agent/library/logger"
 )
 
 type GetDtmfResult struct {
@@ -219,3 +219,4 @@ func (t *recordInputsTool) Execute(ctx context.Context, args any) (any, error) {
 	t.task.Complete(&GetDtmfResult{UserInput: beta.FormatDtmf(dtmfEvents)})
 	return "Inputs recorded.", nil
 }
+

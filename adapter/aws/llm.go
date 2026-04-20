@@ -10,7 +10,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime"
 	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime/document"
 	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime/types"
-	"github.com/cavos-io/conversation-worker/core/llm"
+	"github.com/cavos-io/rtp-agent/core/llm"
 )
 
 type AWSLLM struct {
@@ -245,3 +245,4 @@ func (s *awsLLMStream) Close() error {
 	s.closed = true
 	return nil
 }
+

@@ -9,8 +9,8 @@ import (
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/transcribestreaming"
 	"github.com/aws/aws-sdk-go-v2/service/transcribestreaming/types"
-	"github.com/cavos-io/conversation-worker/core/stt"
-	"github.com/cavos-io/conversation-worker/model"
+	"github.com/cavos-io/rtp-agent/core/stt"
+	"github.com/cavos-io/rtp-agent/model"
 )
 
 type AWSSTT struct {
@@ -155,3 +155,4 @@ func (s *awsSTTStream) Next() (*stt.SpeechEvent, error) {
 		return nil, err
 	}
 }
+

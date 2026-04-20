@@ -5,7 +5,7 @@ import (
 	"io"
 	"testing"
 
-	"github.com/cavos-io/conversation-worker/core/llm"
+	"github.com/cavos-io/rtp-agent/core/llm"
 )
 
 type mockLLM struct {
@@ -128,3 +128,4 @@ func TestPerformToolExecutionsValidatesJSONArguments(t *testing.T) {
 		t.Fatalf("expected errored function call output")
 	}
 }
+

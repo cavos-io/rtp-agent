@@ -77,3 +77,4 @@ func (t *Tagger) Evaluation(result *EvaluationResult) {
 		})
 	}
 }
+

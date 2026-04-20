@@ -1,7 +1,7 @@
 package audio
 
 import (
-	"github.com/cavos-io/conversation-worker/model"
+	"github.com/cavos-io/rtp-agent/model"
 )
 
 // AudioByteStream groups small audio frames into larger ones for processing
@@ -122,3 +122,4 @@ func SumToMono(data []int16, channels int) []int16 {
 	}
 	return out
 }
+

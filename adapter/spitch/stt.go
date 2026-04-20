@@ -9,8 +9,8 @@ import (
 	"mime/multipart"
 	"net/http"
 
-	"github.com/cavos-io/conversation-worker/core/stt"
-	"github.com/cavos-io/conversation-worker/model"
+	"github.com/cavos-io/rtp-agent/core/stt"
+	"github.com/cavos-io/rtp-agent/model"
 )
 
 type SpitchSTT struct {
@@ -82,3 +82,4 @@ func (s *SpitchSTT) Recognize(ctx context.Context, frames []*model.AudioFrame, l
 		},
 	}, nil
 }
+

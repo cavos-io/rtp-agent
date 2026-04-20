@@ -5,8 +5,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/cavos-io/conversation-worker/adapter/openai"
-	"github.com/cavos-io/conversation-worker/core/llm"
+	"github.com/cavos-io/rtp-agent/adapter/openai"
+	"github.com/cavos-io/rtp-agent/core/llm"
 )
 
 var reasoningUnsupportedParams = map[string]bool{
@@ -75,3 +75,4 @@ func (l *LLM) Chat(ctx context.Context, chatCtx *llm.ChatContext, opts ...llm.Ch
 	inner := openai.NewOpenAILLMWithBaseURL(token, l.model, l.baseURL)
 	return inner.Chat(ctx, chatCtx, opts...)
 }
+

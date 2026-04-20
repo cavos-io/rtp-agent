@@ -8,7 +8,7 @@ import (
 	"io"
 	"net/http"
 
-	"github.com/cavos-io/conversation-worker/core/llm"
+	"github.com/cavos-io/rtp-agent/core/llm"
 )
 
 type FalLLM struct {
@@ -113,3 +113,4 @@ func (s *falLLMStream) Next() (*llm.ChatChunk, error) {
 func (s *falLLMStream) Close() error {
 	return s.resp.Body.Close()
 }
+

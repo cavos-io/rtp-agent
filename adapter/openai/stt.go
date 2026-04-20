@@ -7,8 +7,8 @@ import (
 	"fmt"
 	"log"
 
-	"github.com/cavos-io/conversation-worker/core/stt"
-	"github.com/cavos-io/conversation-worker/model"
+	"github.com/cavos-io/rtp-agent/core/stt"
+	"github.com/cavos-io/rtp-agent/model"
 	"github.com/sashabaranov/go-openai"
 )
 
@@ -181,3 +181,4 @@ func encodePCMAsWAV(frames []*model.AudioFrame) ([]byte, error) {
 
 	return out.Bytes(), nil
 }
+

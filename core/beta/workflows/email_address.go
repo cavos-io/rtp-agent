@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"regexp"
 
-	"github.com/cavos-io/conversation-worker/core/agent"
+	"github.com/cavos-io/rtp-agent/core/agent"
 )
 
 var emailRegex = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._%+\-]*@(?:[A-Za-z0-9](?:[A-Za-z0-9\-]*[A-Za-z0-9])?\.)+[A-Za-z]{2,}$`)
@@ -169,3 +169,4 @@ func (t *declineEmailCaptureTool) Execute(ctx context.Context, args any) (any, e
 	t.task.Fail(fmt.Errorf("couldn't get the email address: %s", reason))
 	return "Task failed.", nil
 }
+

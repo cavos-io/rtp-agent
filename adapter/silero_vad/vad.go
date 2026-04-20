@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/cavos-io/conversation-worker/core/vad"
+	"github.com/cavos-io/rtp-agent/core/vad"
 )
 
 type SileroVADOptions struct {
@@ -27,3 +27,4 @@ func NewSileroVAD(opts SileroVADOptions) *SileroVAD {
 func (v *SileroVAD) Stream(ctx context.Context) (vad.VADStream, error) {
 	return nil, fmt.Errorf("native silero onnx vad is unsupported in this go port; use simple_vad")
 }
+

@@ -10,7 +10,7 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/cavos-io/conversation-worker/core/llm"
+	"github.com/cavos-io/rtp-agent/core/llm"
 )
 
 type XaiLLM struct {
@@ -226,3 +226,4 @@ func (t *FileSearchTool) ProviderSchema(format string) map[string]any {
 	}
 	return nil
 }
+

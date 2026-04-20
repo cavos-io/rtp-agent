@@ -7,13 +7,13 @@ import (
 	"sync"
 	"time"
 
-	"github.com/cavos-io/conversation-worker/core/agent/ivr"
-	"github.com/cavos-io/conversation-worker/core/llm"
-	"github.com/cavos-io/conversation-worker/core/stt"
-	"github.com/cavos-io/conversation-worker/core/tts"
-	"github.com/cavos-io/conversation-worker/core/vad"
-	"github.com/cavos-io/conversation-worker/library/logger"
-	"github.com/cavos-io/conversation-worker/library/telemetry"
+	"github.com/cavos-io/rtp-agent/core/agent/ivr"
+	"github.com/cavos-io/rtp-agent/core/llm"
+	"github.com/cavos-io/rtp-agent/core/stt"
+	"github.com/cavos-io/rtp-agent/core/tts"
+	"github.com/cavos-io/rtp-agent/core/vad"
+	"github.com/cavos-io/rtp-agent/library/logger"
+	"github.com/cavos-io/rtp-agent/library/telemetry"
 	lksdk "github.com/livekit/server-sdk-go/v2"
 )
 
@@ -723,3 +723,4 @@ func (s *AgentSession) Stop(ctx context.Context) error {
 
 	return nil
 }
+

@@ -14,3 +14,4 @@ func init() {
 func SetLogger(l logger.Logger) {
 	Logger = l
 }
+
