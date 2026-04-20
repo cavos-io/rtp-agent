@@ -47,63 +47,38 @@ func (l *OpenAILLM) Chat(ctx context.Context, chatCtx *llm.ChatContext, opts ...
 		opt(options)
 	}
 
-	messages := make([]openai.ChatCompletionMessage, 0, len(chatCtx.Items))
-	for _, item := range chatCtx.Items {
-		switch msg := item.(type) {
-		case *llm.ChatMessage:
-			oaMsg := openai.ChatCompletionMessage{
-				Role: string(msg.Role),
-			}
-			if len(msg.Content) == 1 && msg.Content[0].Text != "" {
-				oaMsg.Content = msg.Content[0].Text
-			} else {
-				parts := make([]openai.ChatMessagePart, 0, len(msg.Content))
-				for _, c := range msg.Content {
-					if c.Text != "" {
-						parts = append(parts, openai.ChatMessagePart{
-							Type: openai.ChatMessagePartTypeText,
-							Text: c.Text,
-						})
-					} else if c.Image != nil {
-						imageURL := ""
-						if str, ok := c.Image.Image.(string); ok {
-							imageURL = str
-						}
-						if imageURL != "" {
-							parts = append(parts, openai.ChatMessagePart{
-								Type: openai.ChatMessagePartTypeImageURL,
-								ImageURL: &openai.ChatMessageImageURL{
-									URL:    imageURL,
-									Detail: openai.ImageURLDetail(c.Image.InferenceDetail),
-								},
-							})
-						}
-					}
-				}
-				oaMsg.MultiContent = parts
-			}
-			messages = append(messages, oaMsg)
-		case *llm.FunctionCall:
-			messages = append(messages, openai.ChatCompletionMessage{
-				Role: openai.ChatMessageRoleAssistant,
-				ToolCalls: []openai.ToolCall{
-					{
-						ID:   msg.CallID,
-						Type: openai.ToolTypeFunction,
-						Function: openai.FunctionCall{
-							Name:      msg.Name,
-							Arguments: msg.Arguments,
-						},
-					},
-				},
-			})
-		case *llm.FunctionCallOutput:
-			messages = append(messages, openai.ChatCompletionMessage{
-				Role:       openai.ChatMessageRoleTool,
-				Content:    msg.Output,
-				ToolCallID: msg.CallID,
-			})
+	messagesRaw, _ := chatCtx.ToProviderFormat("openai")
+	messages, _ := messagesRaw.([]map[string]any)
+
+	oaMessages := make([]openai.ChatCompletionMessage, 0, len(messages))
+	for _, m := range messages {
+		role := m["role"].(string)
+		content, _ := m["content"].(string)
+		
+		msg := openai.ChatCompletionMessage{
+			Role:    role,
+			Content: content,
 		}
+
+		if toolCalls, ok := m["tool_calls"].([]map[string]any); ok {
+			for _, tc := range toolCalls {
+				fn := tc["function"].(map[string]any)
+				msg.ToolCalls = append(msg.ToolCalls, openai.ToolCall{
+					ID:   tc["id"].(string),
+					Type: openai.ToolTypeFunction,
+					Function: openai.FunctionCall{
+						Name:      fn["name"].(string),
+						Arguments: fn["arguments"].(string),
+					},
+				})
+			}
+		}
+
+		if toolCallID, ok := m["tool_call_id"].(string); ok {
+			msg.ToolCallID = toolCallID
+		}
+
+		oaMessages = append(oaMessages, msg)
 	}
 
 	tc := llm.NewToolContext(options.Tools)
@@ -117,7 +92,7 @@ func (l *OpenAILLM) Chat(ctx context.Context, chatCtx *llm.ChatContext, opts ...
 
 	req := openai.ChatCompletionRequest{
 		Model:    l.model,
-		Messages: messages,
+		Messages: oaMessages,
 		Tools:    tools,
 		Stream:   true,
 	}

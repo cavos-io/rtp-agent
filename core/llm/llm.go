@@ -126,8 +126,8 @@ func (m *MetricsReport) GetType() string             { return "metrics_report" }
 func (m *MetricsReport) GetCreatedAt() time.Time     { return m.CreatedAt }
 
 type ChatContext struct {
-	Items       []ChatItem
-	OnItemAdded func(item ChatItem)
+	Items       []ChatItem          `json:"items"`
+	OnItemAdded func(item ChatItem) `json:"-"`
 }
 
 func NewChatContext() *ChatContext {

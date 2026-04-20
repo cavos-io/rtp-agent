@@ -34,31 +34,7 @@ func (l *AnthropicLLM) Chat(ctx context.Context, chatCtx *llm.ChatContext, opts 
 		opt(options)
 	}
 
-	type anthropicMessage struct {
-		Role    string `json:"role"`
-		Content string `json:"content"`
-	}
-
-	messages := make([]anthropicMessage, 0)
-	var system string
-
-	for _, item := range chatCtx.Items {
-		if msg, ok := item.(*llm.ChatMessage); ok {
-			if msg.Role == llm.ChatRoleSystem {
-				system = msg.TextContent()
-				continue
-			}
-			role := string(msg.Role)
-			if role == "developer" {
-				system = msg.TextContent()
-				continue
-			}
-			messages = append(messages, anthropicMessage{
-				Role:    role,
-				Content: msg.TextContent(),
-			})
-		}
-	}
+	messages, system := chatCtx.ToProviderFormat("anthropic")
 
 	body := map[string]interface{}{
 		"model":      l.model,
@@ -66,7 +42,7 @@ func (l *AnthropicLLM) Chat(ctx context.Context, chatCtx *llm.ChatContext, opts 
 		"max_tokens": 1024,
 		"stream":     true,
 	}
-	if system != "" {
+	if system != "" && system != nil {
 		body["system"] = system
 	}
 
