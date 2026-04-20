@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"time"
 
 	elevenlabsAdapter "github.com/cavos-io/conversation-worker/adapter/elevenlabs"
 	openaiAdapter "github.com/cavos-io/conversation-worker/adapter/openai"
@@ -16,6 +17,8 @@ import (
 	"github.com/joho/godotenv"
 	lksdk "github.com/livekit/server-sdk-go/v2"
 	"github.com/pion/webrtc/v4"
+	"os/signal"
+	"syscall"
 )
 
 func main() {
@@ -31,11 +34,24 @@ func main() {
 
 	server := worker.NewAgentServer(opts)
 
-	server.RTCSession(func(ctx *worker.JobContext) error {
-		return handleAgent(server, ctx)
-	}, nil, nil)
+	// Setup signal handling for graceful shutdown
+	sigCtx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
 
-	cli.RunApp(server)
+	go func() {
+		cli.RunApp(server)
+	}()
+
+	// Wait for context cancellation (signal or server exit)
+	<-sigCtx.Done()
+	logger.Logger.Infow("Shutdown signal received, draining...")
+	
+	drainCtx, drainCancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer drainCancel()
+	
+	if err := server.Drain(drainCtx); err != nil {
+		logger.Logger.Errorw("Drain failed", err)
+	}
 }
 
 func handleAgent(server *worker.AgentServer, jobCtx *worker.JobContext) error {

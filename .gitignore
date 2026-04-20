@@ -6,6 +6,7 @@
 .env.*.local
 !.env.template
 !.env.local.example
+/docs/parity/
 
 # ============================================================================
 # Go Build Artifacts
@@ -32,6 +33,8 @@
 # IDE / Editor Settings
 # ============================================================================
 .vscode/
+.gemini/
+.codex/
 .idea/
 *.swp
 *.swo

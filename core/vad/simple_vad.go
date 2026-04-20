@@ -2,11 +2,11 @@ package vad
 
 import (
 	"context"
-	"fmt"
 	"math"
 	"sync"
 	"sync/atomic"
 
+	"github.com/cavos-io/conversation-worker/library/logger"
 	"github.com/cavos-io/conversation-worker/model"
 )
 
@@ -62,16 +62,14 @@ func (s *simpleVADStream) PushFrame(frame *model.AudioFrame) error {
 	rms := math.Sqrt(sum / float64(len(frame.Data)/2))
 
 	c := s.count.Add(1)
-	if c <= 3 || c%500 == 0 {
-		fmt.Printf("🎚️  [VAD] Frame #%d: rms=%.6f threshold=%.4f speaking=%v above=%d below=%d\n", c, rms, s.threshold, s.speaking, s.aboveCount, s.belowCount)
-	}
+	logger.Logger.Debugw("VAD Process", "frame", c, "rms", rms, "threshold", s.threshold, "speaking", s.speaking)
 
 	if rms > s.threshold {
 		s.aboveCount++
 		s.belowCount = 0
 		if !s.speaking && s.aboveCount >= s.startFrames {
 			s.speaking = true
-			fmt.Printf("🗣️  [VAD] Speech START at frame #%d (rms=%.6f, %d consecutive frames)\n", c, rms, s.aboveCount)
+			logger.Logger.Infow("VAD Speech START", "frame", c, "rms", rms, "aboveCount", s.aboveCount)
 			s.events <- &VADEvent{Type: VADEventStartOfSpeech, Speaking: true}
 		}
 	} else {
@@ -79,7 +77,7 @@ func (s *simpleVADStream) PushFrame(frame *model.AudioFrame) error {
 		s.aboveCount = 0
 		if s.speaking && s.belowCount >= s.stopFrames {
 			s.speaking = false
-			fmt.Printf("🔇 [VAD] Speech END at frame #%d (rms=%.6f, %d consecutive silent frames)\n", c, rms, s.belowCount)
+			logger.Logger.Infow("VAD Speech END", "frame", c, "rms", rms, "belowCount", s.belowCount)
 			s.events <- &VADEvent{Type: VADEventEndOfSpeech, Speaking: false}
 		}
 	}
