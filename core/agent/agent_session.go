@@ -327,6 +327,23 @@ func (s *AgentSession) Close() error {
 	}
 	s.UpdateAgentState(AgentStateIdle)
 
+	// Release large references so GC can collect them.
+	if s.Timeline != nil {
+		s.Timeline.Clear()
+	}
+
+	s.mu.Lock()
+	s.ChatCtx = nil
+	s.Timeline = nil
+	s.Activity = nil
+	s.Assistant = nil
+	s.Agent = nil
+	s.clientEvents = nil
+	s.ivrActivity = nil
+	s.Input = AgentInput{}
+	s.Output = AgentOutput{}
+	s.mu.Unlock()
+
 	return nil
 }
 

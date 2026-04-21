@@ -257,6 +257,18 @@ func (t *EventTimeline) AddEvent(ev Event) {
 	}
 }
 
+// Clear releases all stored events and the OnEvent callback so the
+// timeline (and everything it references) can be garbage-collected.
+func (t *EventTimeline) Clear() {
+	if t == nil {
+		return
+	}
+	t.mu.Lock()
+	t.events = nil
+	t.OnEvent = nil
+	t.mu.Unlock()
+}
+
 func (t *EventTimeline) Snapshot() []*AgentEvent {
 	if t == nil {
 		return nil

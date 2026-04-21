@@ -330,7 +330,7 @@ func (t *RoomTextOutput) worker() {
 				}
 				
 				if buf, err := proto.Marshal(packet); err == nil {
-					go t.client.SendData(context.Background(), &livekit.SendDataRequest{
+					go t.client.SendData(t.ctx, &livekit.SendDataRequest{
 						Room: t.room.Name(),
 						Data: buf,
 					})

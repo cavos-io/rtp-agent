@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"runtime"
+	"runtime/debug"
 	"time"
 
 	elevenlabsAdapter "github.com/cavos-io/rtp-agent/adapter/elevenlabs"
@@ -160,7 +162,6 @@ func handleAgent(server *worker.AgentServer, jobCtx *worker.JobContext) error {
 
 	// Create RoomIO — this wires session.Input.Audio and session.Output.Audio automatically.
 	rio = worker.NewRoomIO(jobCtx.Room, session, worker.RoomOptions{})
-	defer rio.Close()
 
 	// Publish agent's audio output track to the room.
 	fmt.Printf("⏳ [Agent] Starting RoomIO (publishing audio track)... (t=%s)\n", time.Since(startTime).Round(time.Millisecond))
@@ -186,6 +187,16 @@ func handleAgent(server *worker.AgentServer, jobCtx *worker.JobContext) error {
 	// Block until room disconnects (cb.OnDisconnected cancels ctx).
 	<-ctx.Done()
 	fmt.Printf("⚠️  [PANEL] handleAgent ctx.Done — agent function returning (jobId=%s, uptime=%s)\n", jobCtx.Job.Id, time.Since(startTime).Round(time.Millisecond))
+
+	// Explicit cleanup: close session to release all internal references,
+	// then force GC and return freed memory to the OS.
+	session.Close()
+	rio.Close()
+	rio = nil
+
+	runtime.GC()
+	debug.FreeOSMemory()
+	logger.Logger.Infow("Post-session memory released", "jobId", jobCtx.Job.Id)
 
 	return nil
 }
