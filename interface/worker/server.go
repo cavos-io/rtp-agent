@@ -26,6 +26,7 @@ type WorkerOptions struct {
 	AgentName           string
 	WorkerType          WorkerType
 	MaxRetry            int
+	LoadFn              func(*AgentServer) float64
 	WSRL                string
 	APIKey              string
 	APISecret           string
@@ -89,6 +90,30 @@ func (s *AgentServer) GetEntrypointFunc() func(*JobContext) error {
 	return s.entrypointFnc
 }
 
+func (s *AgentServer) NumActiveJobs() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return len(s.activeJobs)
+}
+
+func (s *AgentServer) currentLoad() float32 {
+	if s.Options.LoadFn == nil {
+		return 0.0
+	}
+
+	load := s.Options.LoadFn(s)
+	if load < 0 {
+		return 0.0
+	}
+	if load > 1.0 {
+		return 1.0
+	}
+	return float32(load)
+}
+
+func (s *AgentServer) sendAvailabilityUpdate() error {
+	return s.sendLoadUpdate(s.currentLoad(), false)
+}
 
 func (s *AgentServer) Run(ctx context.Context) error {
 	if s.Options.WSRL == "" || s.Options.APIKey == "" || s.Options.APISecret == "" {
@@ -371,7 +396,6 @@ func (s *AgentServer) sendLoadUpdate(load float32, draining bool) error {
 	return conn.WriteMessage(websocket.BinaryMessage, b)
 }
 
-
 // sendAvailable broadcasts UpdateWorkerStatus(WS_AVAILABLE) so the LiveKit
 // server knows this worker is ready to receive job dispatches.
 func (s *AgentServer) sendAvailable() error {
@@ -401,7 +425,7 @@ func (s *AgentServer) handleMessage(ctx context.Context, msg *livekit.ServerMess
 	case *livekit.ServerMessage_Register:
 		logger.Logger.Infow("Worker Registered", "workerId", m.Register.WorkerId)
 		logger.Logger.Infow("Worker Registered", "workerId", m.Register.WorkerId, "serverInfo", m.Register.ServerInfo)
-		if err := s.sendAvailable(); err != nil {
+		if err := s.sendAvailabilityUpdate(); err != nil {
 			logger.Logger.Errorw("Failed to send available status", err)
 		} else {
 			logger.Logger.Infow("Worker status set to AVAILABLE — waiting for jobs...")
@@ -430,7 +454,7 @@ func (s *AgentServer) handleAvailability(ctx context.Context, req *livekit.Avail
 	draining := s.isDraining
 	s.mu.Unlock()
 
-	// Default to accept unless draining
+	// Default to accept unless draining.
 	ans := &livekit.WorkerMessage{
 		Message: &livekit.WorkerMessage_Availability{
 			Availability: &livekit.AvailabilityResponse{
@@ -487,6 +511,9 @@ func (s *AgentServer) handleAssignment(ctx context.Context, req *livekit.JobAssi
 	s.mu.Lock()
 	s.activeJobs[req.Job.Id] = jobCtx
 	s.mu.Unlock()
+	if err := s.sendAvailabilityUpdate(); err != nil {
+		logger.Logger.Warnw("Failed to send load update after job assignment", err)
+	}
 
 	// Tell LiveKit the job is running — keeps agent visible in the panel
 	if err := s.sendJobStatus(req.Job.Id, livekit.JobStatus_JS_RUNNING, ""); err != nil {
@@ -513,7 +540,7 @@ func (s *AgentServer) handleAssignment(ctx context.Context, req *livekit.JobAssi
 			fmt.Printf("   🧹 [PANEL] Job cleaned up: %s\n", req.Job.Id)
 
 			// Signal back to AVAILABLE so the next dispatch can be received
-			if err := s.sendAvailable(); err != nil {
+			if err := s.sendAvailabilityUpdate(); err != nil {
 				logger.Logger.Warnw("Failed to send available after job", err)
 			}
 		}()
@@ -534,6 +561,10 @@ func (s *AgentServer) handleTermination(req *livekit.JobTermination) {
 	if exists {
 		if s.sessionEndFnc != nil {
 			s.sessionEndFnc(jobCtx)
+		}
+
+		if err := s.sendAvailabilityUpdate(); err != nil {
+			logger.Logger.Warnw("Failed to send load update after termination", err)
 		}
 
 		if jobCtx.Report != nil {
@@ -572,12 +603,17 @@ func (s *AgentServer) ExecuteLocalJob(ctx context.Context, roomName string, part
 	s.mu.Lock()
 	s.activeJobs[job.Id] = jobCtx
 	s.mu.Unlock()
+	_ = s.sendAvailabilityUpdate()
 
 	if s.entrypointFnc != nil {
 		go func() {
 			if err := s.entrypointFnc(jobCtx); err != nil {
 				logger.Logger.Errorw("Local job entrypoint failed", err, "jobId", job.Id)
 			}
+			s.mu.Lock()
+			delete(s.activeJobs, job.Id)
+			s.mu.Unlock()
+			_ = s.sendAvailabilityUpdate()
 		}()
 	}
 
@@ -585,4 +621,3 @@ func (s *AgentServer) ExecuteLocalJob(ctx context.Context, roomName string, part
 	<-ctx.Done()
 	return nil
 }
-
