@@ -13,24 +13,44 @@ import (
 )
 
 type GoogleSTT struct {
-	client *speech.Client
+	client      *speech.Client
+	phraseHints []*speechpb.SpeechContext
+}
+
+// GoogleOption is a functional option for configuring GoogleSTT.
+type GoogleOption func(*GoogleSTT)
+
+// WithPhraseHints returns a GoogleOption that configures phrase hints (speech contexts)
+// for improving recognition accuracy on domain-specific vocabulary.
+func WithPhraseHints(phraseHints []*speechpb.SpeechContext) GoogleOption {
+	return func(g *GoogleSTT) {
+		g.phraseHints = phraseHints
+	}
 }
 
 // NewGoogleSTT creates a new STT client using Application Default Credentials,
 // or by providing a path to a credentials JSON file.
-func NewGoogleSTT(credentialsFile string) (*GoogleSTT, error) {
+// Optional GoogleOptions can be passed to configure features like phrase hints.
+func NewGoogleSTT(credentialsFile string, opts ...GoogleOption) (*GoogleSTT, error) {
 	ctx := context.Background()
-	var opts []option.ClientOption
+	var clientOpts []option.ClientOption
 	if credentialsFile != "" {
-		opts = append(opts, option.WithCredentialsFile(credentialsFile))
+		clientOpts = append(clientOpts, option.WithCredentialsFile(credentialsFile))
 	}
 
-	client, err := speech.NewClient(ctx, opts...)
+	client, err := speech.NewClient(ctx, clientOpts...)
 	if err != nil {
 		return nil, err
 	}
 
-	return &GoogleSTT{client: client}, nil
+	g := &GoogleSTT{client: client}
+	
+	// Apply any provided options
+	for _, opt := range opts {
+		opt(g)
+	}
+	
+	return g, nil
 }
 
 func (s *GoogleSTT) Label() string { return "google.STT" }
@@ -48,14 +68,18 @@ func (s *GoogleSTT) Stream(ctx context.Context, language string) (stt.RecognizeS
 		return nil, err
 	}
 
+	// Build the recognition config with optional phrase hints
+	recognitionConfig := &speechpb.RecognitionConfig{
+		Encoding:        speechpb.RecognitionConfig_LINEAR16,
+		SampleRateHertz: 16000,
+		LanguageCode:    language,
+		SpeechContexts:  s.phraseHints, // Apply phrase hints if configured
+	}
+
 	err = stream.Send(&speechpb.StreamingRecognizeRequest{
 		StreamingRequest: &speechpb.StreamingRecognizeRequest_StreamingConfig{
 			StreamingConfig: &speechpb.StreamingRecognitionConfig{
-				Config: &speechpb.RecognitionConfig{
-					Encoding:        speechpb.RecognitionConfig_LINEAR16,
-					SampleRateHertz: 16000,
-					LanguageCode:    language,
-				},
+				Config:         recognitionConfig,
 				InterimResults: true,
 			},
 		},
@@ -90,6 +114,7 @@ func (s *GoogleSTT) Recognize(ctx context.Context, frames []*model.AudioFrame, l
 			Encoding:        speechpb.RecognitionConfig_LINEAR16,
 			SampleRateHertz: 16000,
 			LanguageCode:    language,
+			SpeechContexts:  s.phraseHints, // Apply phrase hints if configured
 		},
 		Audio: &speechpb.RecognitionAudio{
 			AudioSource: &speechpb.RecognitionAudio_Content{
