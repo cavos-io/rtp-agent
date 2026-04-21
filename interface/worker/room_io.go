@@ -177,6 +177,7 @@ type RoomIO struct {
 	ctx    context.Context // session lifecycle context — cancelled on disconnect
 
 	audioTrack *lksdk.LocalSampleTrack
+	audioPub   *lksdk.LocalTrackPublication
 	videoTrack *lksdk.LocalSampleTrack
 	decoder    AudioDecoder
 	encoder    AudioEncoder
@@ -595,15 +596,28 @@ func (rio *RoomIO) CaptureFrame(frame *model.AudioFrame) error {
 }
 
 func (rio *RoomIO) playoutLoop(ctx context.Context) {
-	// Keep-alive: send silence when idle so the RTP stream stays active and
-	// the LiveKit server / Playground don't mark the track as muted.
+	// Keep-alive: send comfort noise when idle so the RTP stream stays
+	// active and the LiveKit server doesn't auto-mute the track.
 	const silenceFrameMs = 20
 	silenceDuration := time.Duration(silenceFrameMs) * time.Millisecond
 	silenceSamples := 48000 * silenceFrameMs / 1000 // 960 samples at 48kHz
-	silencePCM := make([]byte, silenceSamples*1*2)   // mono 16-bit zeros
-	var cachedSilenceOpus []byte
+	// Comfort noise: very low amplitude random-ish values instead of pure
+	// zeros.  Pure silence can trigger server-side mute detection.
+	comfortPCM := make([]byte, silenceSamples*1*2) // mono 16-bit
+	for i := 0; i < len(comfortPCM); i += 2 {
+		// ~-90 dBFS square wiggle: alternating +1/-1 samples
+		if (i/2)%2 == 0 {
+			comfortPCM[i] = 1
+		} else {
+			comfortPCM[i] = 0xFF // -1 in int16 LE = 0xFFFF
+			comfortPCM[i+1] = 0xFF
+		}
+	}
+	var cachedComfortOpus []byte
 
-	silenceTicker := time.NewTicker(silenceDuration)
+	// Send keep-alive every 200ms (not every 20ms) — enough to prevent
+	// server-side mute detection without wasting CPU/bandwidth.
+	silenceTicker := time.NewTicker(200 * time.Millisecond)
 	defer silenceTicker.Stop()
 
 	for {
@@ -613,6 +627,7 @@ func (rio *RoomIO) playoutLoop(ctx context.Context) {
 		case <-silenceTicker.C:
 			rio.mu.Lock()
 			track := rio.audioTrack
+			pub := rio.audioPub
 			playing := rio.playbackStarted
 			paused := rio.paused
 			encoder := rio.encoder
@@ -622,18 +637,24 @@ func (rio *RoomIO) playoutLoop(ctx context.Context) {
 				continue
 			}
 
-			// Lazily encode and cache the silence Opus frame.
-			if cachedSilenceOpus == nil && encoder != nil {
-				if encoded, err := encoder.Encode(silencePCM); err == nil {
-					cachedSilenceOpus = make([]byte, len(encoded))
-					copy(cachedSilenceOpus, encoded)
+			// Lazily encode and cache the comfort-noise Opus frame.
+			if cachedComfortOpus == nil && encoder != nil {
+				if encoded, err := encoder.Encode(comfortPCM); err == nil {
+					cachedComfortOpus = make([]byte, len(encoded))
+					copy(cachedComfortOpus, encoded)
 				}
 			}
-			if cachedSilenceOpus != nil {
+			if cachedComfortOpus != nil {
 				_ = track.WriteSample(media.Sample{
-					Data:     cachedSilenceOpus,
+					Data:     cachedComfortOpus,
 					Duration: silenceDuration,
 				}, nil)
+			}
+
+			// Explicitly tell the server the track is NOT muted so the
+			// Playground keeps showing the agent audio panel.
+			if pub != nil {
+				pub.SetMuted(false)
 			}
 		case <-rio.clearBufferCh:
 			// Drain playout channel
@@ -662,7 +683,12 @@ func (rio *RoomIO) playoutLoop(ctx context.Context) {
 				rio.playbackStarted = false
 				rio.pushedDuration = 0
 			}
+			pub := rio.audioPub
 			rio.mu.Unlock()
+
+			if pub != nil {
+				pub.SetMuted(false)
+			}
 
 		case item := <-rio.playoutCh:
 			switch v := item.(type) {
@@ -697,8 +723,15 @@ func (rio *RoomIO) playoutLoop(ctx context.Context) {
 						break
 					}
 				}
+				pub := rio.audioPub
 				rio.mu.Unlock()
 				close(v)
+
+				// Immediately tell server track is still active after
+				// playback ends so Playground doesn't show "Waiting...".
+				if pub != nil {
+					pub.SetMuted(false)
+				}
 
 			case *model.AudioFrame:
 				frame := v
@@ -960,7 +993,10 @@ func (rio *RoomIO) Start(ctx context.Context) error {
 		logger.Logger.Infow("🎙️ [RoomIO] Agent audio track SID", "sid", pub.SID())
 	}
 
+	rio.mu.Lock()
 	rio.audioTrack = track
+	rio.audioPub = pub
+	rio.mu.Unlock()
 
 	// Update transcription output with track ID for protocol alignment
 	if rio.AgentSession != nil && rio.AgentSession.Output.Transcription != nil {
