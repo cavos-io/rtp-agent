@@ -15,16 +15,31 @@ import (
 type OpenAISTT struct {
 	client *openai.Client
 	model  string
+	prompt string
 }
 
 func NewOpenAISTT(apiKey string, model string) *OpenAISTT {
+	return NewOpenAISTTWithBaseURL(apiKey, model, "")
+}
+
+func NewOpenAISTTWithBaseURL(apiKey string, model string, baseURL string) *OpenAISTT {
 	if model == "" {
 		model = openai.Whisper1
 	}
+	cfg := openai.DefaultConfig(apiKey)
+	if baseURL != "" {
+		cfg.BaseURL = baseURL
+	}
 	return &OpenAISTT{
-		client: openai.NewClient(apiKey),
+		client: openai.NewClientWithConfig(cfg),
 		model:  model,
 	}
+}
+
+func NewOpenAISTTWithPrompt(apiKey string, model string, baseURL string, prompt string) *OpenAISTT {
+	s := NewOpenAISTTWithBaseURL(apiKey, model, baseURL)
+	s.prompt = prompt
+	return s
 }
 
 func (s *OpenAISTT) Label() string { return "openai.STT" }
@@ -87,6 +102,7 @@ func (s *OpenAISTT) Recognize(ctx context.Context, frames []*model.AudioFrame, l
 		FilePath: "audio.wav",
 		Reader:   bytes.NewReader(wav.Bytes()),
 		Language: language,
+		Prompt:   s.prompt,
 	}
 
 	resp, err := s.client.CreateTranscription(ctx, req)

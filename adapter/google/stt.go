@@ -44,12 +44,12 @@ func NewGoogleSTT(credentialsFile string, opts ...GoogleOption) (*GoogleSTT, err
 	}
 
 	g := &GoogleSTT{client: client}
-	
+
 	// Apply any provided options
 	for _, opt := range opts {
 		opt(g)
 	}
-	
+
 	return g, nil
 }
 
@@ -221,4 +221,3 @@ func (s *googleSTTStream) Next() (*stt.SpeechEvent, error) {
 		return nil, err
 	}
 }
-
