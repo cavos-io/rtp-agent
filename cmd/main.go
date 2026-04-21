@@ -2,8 +2,8 @@ package main
 
 import (
 	"context"
-	"errors"
 	"fmt"
+	"log"
 	"os"
 	"time"
 
@@ -66,43 +66,47 @@ func handleAgent(server *worker.AgentServer, jobCtx *worker.JobContext) error {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	logger.Logger.Infow("Agent Initializing...")
+	fmt.Println("\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+	fmt.Println("🤖 [Agent] Initializing...")
+	fmt.Println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
 
 	// Get OpenAI API key from env
 	apiKey := os.Getenv("OPENAI_API_KEY")
 	if apiKey == "" {
-		logger.Logger.Errorw("OPENAI_API_KEY not set", errors.New("missing environment variable"))
+		fmt.Println("❌ [Agent] OPENAI_API_KEY not set")
 		return fmt.Errorf("OPENAI_API_KEY env var is required")
 	}
-	logger.Logger.Infow("OpenAI API key loaded")
+	fmt.Println("✅ [Agent] OpenAI API key loaded")
 
 	// Create agent with instructions
 	ag := agent.NewAgent("You are a helpful AI assistant. Respond concisely and naturally.")
+	fmt.Println("✅ [Agent] Agent created")
 
 	// Set up LLM provider (OpenAI)
 	ag.LLM = openaiAdapter.NewOpenAILLM(apiKey, "gpt-4o")
-	logger.Logger.Infow("LLM (GPT-4o) configured")
+	fmt.Println("✅ [Agent] LLM (GPT-4o-mini) configured")
 
 	// Set up STT provider (OpenAI Whisper)
 	ag.STT = openaiAdapter.NewOpenAISTT(apiKey, "")
-	logger.Logger.Infow("STT (Whisper) configured")
+	fmt.Println("✅ [Agent] STT (Whisper) configured")
 
 	// Set up VAD (required for speech start/end detection and STT segmentation)
-	ag.VAD = sileroAdapter.NewSileroVAD(sileroAdapter.SileroVADOptions{})
-	logger.Logger.Infow("VAD configured")
+	ag.VAD = sileroAdapter.NewSileroVAD()
+	fmt.Println("✅ [Agent] VAD configured")
 
 	// Set up TTS provider (ElevenLabs)
 	elevenlabsAPIKey := os.Getenv("ELEVENLABS_API_KEY")
 	elevenlabsTTS, err := elevenlabsAdapter.NewElevenLabsTTS(elevenlabsAPIKey, "21m00Tcm4TlvDq8ikWAM", "eleven_turbo_v2_5")
 	if err != nil {
-		logger.Logger.Errorw("Failed to create ElevenLabs TTS", err)
+		log.Println("❌ [Agent] Failed to create ElevenLabs TTS:", err.Error())
 		return fmt.Errorf("failed to create ElevenLabs TTS: %w", err)
 	}
 	ag.TTS = elevenlabsTTS
-	logger.Logger.Infow("TTS (ElevenLabs) configured")
+	// ag.TTS = openaiAdapter.NewOpenAITTS(apiKey, openai.TTSModel1, openai.VoiceAlloy)
+	fmt.Println("✅ [Agent] TTS (Alloy) configured")
 
 	ag.TurnDetection = agent.TurnDetectionModeSTT
-	logger.Logger.Infow("Turn detection: STT-based")
+	fmt.Println("✅ [Agent] Turn detection: STT-based")
 
 	// Create agent session options
 	sessionOpts := agent.AgentSessionOptions{
@@ -114,11 +118,11 @@ func handleAgent(server *worker.AgentServer, jobCtx *worker.JobContext) error {
 
 	// Create session (do not start yet — RoomIO must be wired first)
 	session := agent.NewAgentSession(ag, nil, sessionOpts)
-	logger.Logger.Infow("Session created")
+	fmt.Println("✅ [Agent] Session created")
 
 	// Register session with server for console UI to access
 	server.SetConsoleSession(session)
-	logger.Logger.Infow("Session registered with server")
+	fmt.Println("✅ [Agent] Session registered with server")
 
 	// Connect to LiveKit room.
 	// The LiveKit SDK snapshots (Merges) the callback fields at ConnectToRoom time,
@@ -147,36 +151,33 @@ func handleAgent(server *worker.AgentServer, jobCtx *worker.JobContext) error {
 		rio.GetCallback().OnParticipantDisconnected(rp)
 	}
 
-	logger.Logger.Infow("Connecting to LiveKit room...")
+	fmt.Println("⏳ [Agent] Connecting to LiveKit room...")
 	if err := jobCtx.Connect(ctx, cb); err != nil {
-		logger.Logger.Errorw("Failed to connect to room", err)
+		fmt.Printf("❌ [Agent] Failed to connect to room: %v\n", err)
 		return fmt.Errorf("failed to connect to room: %w", err)
 	}
-	logger.Logger.Infow("Connected to LiveKit room")
+	fmt.Println("✅ [Agent] Connected to LiveKit room")
 
 	// Create RoomIO — this wires session.Input.Audio and session.Output.Audio automatically.
-	rio = worker.NewRoomIO(jobCtx.Room, session, worker.RoomOptions{
-		APIKey:    os.Getenv("LIVEKIT_API_KEY"),
-		APISecret: os.Getenv("LIVEKIT_API_SECRET"),
-		URL:       os.Getenv("LIVEKIT_URL"),
-	})
+	rio = worker.NewRoomIO(jobCtx.Room, session, worker.RoomOptions{})
 	defer rio.Close()
 
 	// Publish agent's audio output track to the room.
-	logger.Logger.Infow("Starting RoomIO (publishing audio track)...")
+	fmt.Println("⏳ [Agent] Starting RoomIO (publishing audio track)...")
 	if err := rio.Start(ctx); err != nil {
-		logger.Logger.Errorw("Failed to start RoomIO", err)
+		fmt.Printf("❌ [Agent] Failed to start RoomIO: %v\n", err)
 		return fmt.Errorf("failed to start RoomIO: %w", err)
 	}
-	logger.Logger.Infow("RoomIO started")
+	fmt.Println("✅ [Agent] RoomIO started")
 
 	// Start the session pipeline — session.Input.Audio is now set by RoomIO.
-	logger.Logger.Infow("Starting session and pipeline...")
+	fmt.Println("⏳ [Agent] Starting session and pipeline...")
 	if err := session.Start(ctx); err != nil {
+		fmt.Printf("❌ [Agent] Failed to start session: %v\n", err)
 		logger.Logger.Errorw("Failed to start agent session", err)
 		return err
 	}
-	logger.Logger.Infow("Session started successfully")
+	fmt.Println("✅ [Agent] Session started successfully")
 
 	fmt.Println()
 	fmt.Println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")

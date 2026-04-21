@@ -131,8 +131,8 @@ func (a *Agent) OnUserTurnCompleted(ctx context.Context, chatCtx *llm.ChatContex
 	handle := NewSpeechHandle(session.Options.AllowInterruptions, DefaultInputDetails())
 
 	participantID := ""
-	if session.Info != nil {
-		participantID = session.Info.LocalParticipantID()
+	if session.Room != nil && session.Room.LocalParticipant != nil {
+		participantID = session.Room.LocalParticipant.Identity()
 	}
 
 	if session.Timeline != nil {
@@ -190,4 +190,3 @@ func (t *AgentTask[T]) WaitAny(ctx context.Context) (any, error) {
 		return nil, ctx.Err()
 	}
 }
-

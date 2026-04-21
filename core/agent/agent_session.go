@@ -15,6 +15,7 @@ import (
 	"github.com/cavos-io/rtp-agent/core/vad"
 	"github.com/cavos-io/rtp-agent/library/logger"
 	"github.com/cavos-io/rtp-agent/library/telemetry"
+	"github.com/cavos-io/rtp-agent/model"
 	"github.com/livekit/protocol/livekit"
 	lksdk "github.com/livekit/server-sdk-go/v2"
 	"google.golang.org/protobuf/proto"
@@ -71,7 +72,7 @@ type AgentSession struct {
 	TTS       tts.TTS
 	Tools     []interface{}
 	Assistant *PipelineAgent
-	Info      SessionInfo
+	Room      *lksdk.Room
 
 	Input  AgentInput
 	Output AgentOutput
@@ -106,19 +107,35 @@ type AgentSession struct {
 	cancel context.CancelFunc
 }
 
-func (s *AgentSession) GetDataPublisher() ivr.DataPublisher {
-	if s.Info == nil {
-		return nil
-	}
-	// This still requires a type assertion or a better abstraction.
-	// For now, we'll keep it as is but it's much better than a direct Room dependency.
-	if dp, ok := s.Info.(ivr.DataPublisher); ok {
-		return dp
-	}
-	return nil
+func (s *AgentSession) GetPublisher() interface {
+	Identity() string
+	PublishData(data []byte, topic string, destinationSIDs []string) error
+} {
+	return s.Output.Publisher
 }
 
-func NewAgentSession(agent AgentInterface, info SessionInfo, opts AgentSessionOptions) *AgentSession {
+// transcriptionPacket wraps livekit.Transcription to implement the DataPacket interface.
+type transcriptionPacket struct {
+	t *livekit.Transcription
+}
+
+func (p *transcriptionPacket) ToProto() *livekit.DataPacket {
+	return &livekit.DataPacket{
+		Value: &livekit.DataPacket_Transcription{Transcription: p.t},
+	}
+}
+
+func (s *AgentSession) OnAudioFrame(ctx context.Context, frame *model.AudioFrame) {
+	s.mu.Lock()
+	assistant := s.Assistant
+	s.mu.Unlock()
+
+	if assistant != nil {
+		assistant.OnAudioFrame(ctx, frame)
+	}
+}
+
+func NewAgentSession(agent AgentInterface, room *lksdk.Room, opts AgentSessionOptions) *AgentSession {
 	baseAgent := agent.GetAgent()
 	chatCtx := baseAgent.ChatCtx
 	if chatCtx == nil {
@@ -143,7 +160,7 @@ func NewAgentSession(agent AgentInterface, info SessionInfo, opts AgentSessionOp
 
 	s := &AgentSession{
 		Agent:               agent,
-		Info:                info,
+		Room:                room,
 		STT:                 baseAgent.STT,
 		VAD:                 baseAgent.VAD,
 		LLM:                 baseAgent.LLM,
@@ -169,9 +186,9 @@ func NewAgentSession(agent AgentInterface, info SessionInfo, opts AgentSessionOp
 		}
 	}
 
-	// ClientEventsDispatcher will be moved to RoomIO or similar in the next step
-	// but for now we'll check if info provides what we need.
-	// This is still a bit coupled but Room is gone from the main struct.
+	if room != nil {
+		s.clientEvents = NewClientEventsDispatcher(room, s)
+	}
 
 	if opts.IVRDetection {
 		s.ivrActivity = ivr.NewIVRActivity(s)
@@ -209,12 +226,6 @@ func (s *AgentSession) SetAudioOutput(out AudioOutput) {
 			}
 		})
 	}
-}
-
-func (s *AgentSession) SetInfo(info SessionInfo) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.Info = info
 }
 
 func (s *AgentSession) SetVideoOutput(out VideoOutput) {
@@ -583,8 +594,8 @@ func GenerateTypedReply[T any](ctx context.Context, s *AgentSession, userInput s
 	handle := NewSpeechHandle(allowInterruptions, DefaultInputDetails())
 
 	participantID := ""
-	if s.Info != nil {
-		participantID = s.Info.LocalParticipantID()
+	if s.Room != nil && s.Room.LocalParticipant != nil {
+		participantID = s.Room.LocalParticipant.Identity()
 	}
 
 	if s.Timeline != nil {
