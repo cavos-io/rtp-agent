@@ -118,12 +118,12 @@ func (s *AgentServer) Run(ctx context.Context) error {
 
 	// Connect WS
 	// A robust implementation should include retries and proxy handling
-	fmt.Printf("   Dialing WebSocket: %s\n", wsURL.String())
+	logger.Logger.Infow("Dialing WebSocket", "url", wsURL.String())
 	conn, res, err := websocket.DefaultDialer.DialContext(ctx, wsURL.String(), map[string][]string{
 		"Authorization": {fmt.Sprintf("Bearer %s", token)},
 	})
 	if err != nil {
-		fmt.Printf("   ❌ WebSocket connection failed: %v\n", err)
+		logger.Logger.Errorw("WebSocket connection failed", err)
 		return fmt.Errorf("failed to connect to LiveKit %s: %w", wsURL.String(), err)
 	}
 	_ = res
@@ -134,12 +134,12 @@ func (s *AgentServer) Run(ctx context.Context) error {
 	// blocking conn.ReadMessage() call below returns immediately.
 	go func() {
 		<-ctx.Done()
-		fmt.Println("   🛑 Shutting down worker...")
+		logger.Logger.Infow("Shutting down worker...")
 		conn.Close()
 	}()
 
-	fmt.Println("   ✅ Connected to LiveKit Server!")
-	fmt.Println("   Registering worker...")
+	logger.Logger.Infow("Connected to LiveKit Server!")
+	logger.Logger.Infow("Registering worker...")
 	logger.Logger.Infow("Connected to LiveKit Server", "url", s.Options.WSRL)
 
 	// Send Register request.
@@ -355,7 +355,7 @@ func (s *AgentServer) handleMessage(ctx context.Context, msg *livekit.ServerMess
 
 	switch m := msg.Message.(type) {
 	case *livekit.ServerMessage_Register:
-		fmt.Printf("   ✅ Worker Registered! ID: %s\n", m.Register.WorkerId)
+		logger.Logger.Infow("Worker Registered", "workerId", m.Register.WorkerId)
 		logger.Logger.Infow("Worker Registered", "workerId", m.Register.WorkerId, "serverInfo", m.Register.ServerInfo)
 		if err := s.sendAvailable(); err != nil {
 			logger.Logger.Errorw("Failed to send available status", err)
@@ -374,13 +374,12 @@ func (s *AgentServer) handleMessage(ctx context.Context, msg *livekit.ServerMess
 	case *livekit.ServerMessage_Pong:
 		logger.Logger.Infow("Received WorkerPong", "timestamp", m.Pong.Timestamp)
 	default:
-		fmt.Printf("   ⚠️ Unhandled server message type: %T\n", msg.Message)
 		logger.Logger.Warnw("Unhandled message type received", nil, "type", fmt.Sprintf("%T", msg.Message))
 	}
 }
 
 func (s *AgentServer) handleAvailability(ctx context.Context, req *livekit.AvailabilityRequest) {
-	fmt.Printf("   📥 Received availability request: job=%s\n", req.Job.Id)
+	logger.Logger.Infow("Received availability request", "jobId", req.Job.Id)
 	logger.Logger.Infow("Received availability request", "jobId", req.Job.Id)
 
 	s.mu.Lock()
@@ -414,7 +413,7 @@ func (s *AgentServer) handleAvailability(ctx context.Context, req *livekit.Avail
 }
 
 func (s *AgentServer) handleAssignment(ctx context.Context, req *livekit.JobAssignment) {
-	fmt.Printf("   🚀 Received job assignment: job=%s room=%s\n", req.Job.Id, req.Job.Room.Name)
+	logger.Logger.Infow("Received job assignment", "jobId", req.Job.Id, "room", req.Job.Room.Name)
 	logger.Logger.Infow("Received job assignment", "jobId", req.Job.Id)
 
 	// Spin up a job context here

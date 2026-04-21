@@ -42,25 +42,25 @@ type JobContext struct {
 	Room   *lksdk.Room
 	Report *agent.SessionReport
 
-	apiKey    string
-	apiSecret string
-	url       string
+	APIKey    string
+	APISecret string
+	URL       string
 }
 
 func NewJobContext(job *livekit.Job, url string, apiKey string, apiSecret string) *JobContext {
 	return &JobContext{
 		Job:       job,
-		url:       url,
-		apiKey:    apiKey,
-		apiSecret: apiSecret,
+		URL:       url,
+		APIKey:    apiKey,
+		APISecret: apiSecret,
 		Report:    agent.NewSessionReport(),
 	}
 }
 
 func (c *JobContext) Connect(ctx context.Context, cb *lksdk.RoomCallback) error {
-	room, err := lksdk.ConnectToRoom(c.url, lksdk.ConnectInfo{
-		APIKey:              c.apiKey,
-		APISecret:           c.apiSecret,
+	room, err := lksdk.ConnectToRoom(c.URL, lksdk.ConnectInfo{
+		APIKey:              c.APIKey,
+		APISecret:           c.APISecret,
 		RoomName:            c.Job.Room.Name,
 		ParticipantIdentity: "agent-" + c.Job.Id[:8],
 		ParticipantName:     "Cavos Agent",
@@ -85,7 +85,7 @@ func (c *JobContext) DeleteRoom(ctx context.Context, roomName string) (*livekit.
 	if roomName == "" {
 		roomName = c.Job.Room.Name
 	}
-	client := lksdk.NewRoomServiceClient(c.url, c.apiKey, c.apiSecret)
+	client := lksdk.NewRoomServiceClient(c.URL, c.APIKey, c.APISecret)
 	return client.DeleteRoom(ctx, &livekit.DeleteRoomRequest{
 		Room: roomName,
 	})
@@ -93,7 +93,7 @@ func (c *JobContext) DeleteRoom(ctx context.Context, roomName string) (*livekit.
 
 // AddSIPParticipant adds a SIP participant to the room.
 func (c *JobContext) AddSIPParticipant(ctx context.Context, callTo string, trunkID string, identity string, name string) (*livekit.SIPParticipantInfo, error) {
-	client := lksdk.NewSIPClient(c.url, c.apiKey, c.apiSecret)
+	client := lksdk.NewSIPClient(c.URL, c.APIKey, c.APISecret)
 	return client.CreateSIPParticipant(ctx, &livekit.CreateSIPParticipantRequest{
 		RoomName:            c.Job.Room.Name,
 		ParticipantIdentity: identity,
@@ -105,7 +105,7 @@ func (c *JobContext) AddSIPParticipant(ctx context.Context, callTo string, trunk
 
 // TransferSIPParticipant transfers a SIP participant to another number.
 func (c *JobContext) TransferSIPParticipant(ctx context.Context, identity string, transferTo string, playDialtone bool) error {
-	client := lksdk.NewSIPClient(c.url, c.apiKey, c.apiSecret)
+	client := lksdk.NewSIPClient(c.URL, c.APIKey, c.APISecret)
 	_, err := client.TransferSIPParticipant(ctx, &livekit.TransferSIPParticipantRequest{
 		ParticipantIdentity: identity,
 		RoomName:            c.Job.Room.Name,

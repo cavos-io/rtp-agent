@@ -20,6 +20,7 @@ import (
 	"github.com/pion/rtp/codecs"
 	"github.com/pion/webrtc/v4"
 	"github.com/pion/webrtc/v4/pkg/media"
+	"google.golang.org/protobuf/proto"
 )
 
 type AudioDecoder interface {
@@ -218,9 +219,14 @@ type RoomTextOutput struct {
 	textCh              chan string
 	ctx                 context.Context
 	cancel              context.CancelFunc
+
+	apiKey    string
+	apiSecret string
+	url       string
+	client    *lksdk.RoomServiceClient
 }
 
-func NewRoomTextOutput(room *lksdk.Room, participantIdentity string) *RoomTextOutput {
+func NewRoomTextOutput(room *lksdk.Room, participantIdentity string, url, apiKey, apiSecret string) *RoomTextOutput {
 	ctx, cancel := context.WithCancel(context.Background())
 	t := &RoomTextOutput{
 		room:                room,
@@ -228,6 +234,10 @@ func NewRoomTextOutput(room *lksdk.Room, participantIdentity string) *RoomTextOu
 		textCh:              make(chan string, 100),
 		ctx:                 ctx,
 		cancel:              cancel,
+		url:                 url,
+		apiKey:              apiKey,
+		apiSecret:           apiSecret,
+		client:              lksdk.NewRoomServiceClient(url, apiKey, apiSecret),
 	}
 	go t.worker()
 	return t
@@ -280,15 +290,15 @@ func (t *RoomTextOutput) worker() {
 					t.segmentID = "SG_" + uuid.NewString()[:8]
 				}
 				opts := lksdk.StreamTextOptions{
-					Topic: "lk-transcription",
+					Topic: "lk.transcription",
 					Attributes: map[string]string{
-						"lk.segment_id": t.segmentID,
-						"lk.final":      "false",
+						"lk.segment_id":          t.segmentID,
+						"lk.transcription_final": "false",
 					},
 				}
 
 				if t.trackID != "" {
-					opts.Attributes["lk.track_id"] = t.trackID
+					opts.Attributes["lk.transcribed_track_id"] = t.trackID
 				}
 
 				t.writer = t.room.LocalParticipant.StreamText(opts)
@@ -297,6 +307,36 @@ func (t *RoomTextOutput) worker() {
 			if t.writer != nil {
 				t.writer.Write(text, nil)
 			}
+
+			// GAP-001 Fallback: Send dual mechanism via RoomServiceClient.SendData
+			// Official SDK recommendation for high-reliability transcript delivery
+			if t.client != nil && t.room != nil && t.room.LocalParticipant != nil {
+				tp := &livekit.Transcription{
+					TranscribedParticipantIdentity: t.participantIdentity,
+					TrackId:                        t.trackID,
+					Segments: []*livekit.TranscriptionSegment{
+						{
+							Id:    t.segmentID,
+							Text:  text,
+							Final: false,
+						},
+					},
+				}
+				packet := &livekit.DataPacket{
+					Kind: livekit.DataPacket_RELIABLE,
+					Value: &livekit.DataPacket_Transcription{
+						Transcription: tp,
+					},
+				}
+				
+				if buf, err := proto.Marshal(packet); err == nil {
+					go t.client.SendData(context.Background(), &livekit.SendDataRequest{
+						Room: t.room.Name(),
+						Data: buf,
+					})
+				}
+			}
+
 			t.mu.Unlock()
 			<-ticker.C
 		}
@@ -404,8 +444,9 @@ func NewRoomIO(room *lksdk.Room, session *agent.AgentSession, opts RoomOptions) 
 	}
 
 	if audioOutputEnabled {
+		jc := rio.Options.JobContext
 		if syncTranscription {
-			textOut := NewRoomTextOutput(room, rio.participantIdentity)
+			textOut := NewRoomTextOutput(room, rio.participantIdentity, jc.URL, jc.APIKey, jc.APISecret)
 			speedFactor := 1.0
 			if opts.TextOutput != nil && opts.TextOutput.TranscriptionSpeedFactor > 0 {
 				speedFactor = opts.TextOutput.TranscriptionSpeedFactor
@@ -421,11 +462,13 @@ func NewRoomIO(room *lksdk.Room, session *agent.AgentSession, opts RoomOptions) 
 		} else {
 			session.SetAudioOutput(rio.Recorder.RecordOutput(rio))
 			if opts.TextOutput != nil && opts.TextOutput.Enabled {
-				session.Output.Transcription = NewRoomTextOutput(room, rio.participantIdentity)
+				textOut := NewRoomTextOutput(room, rio.participantIdentity, jc.URL, jc.APIKey, jc.APISecret)
+				session.Output.Transcription = textOut
 			}
 		}
 	} else if opts.TextOutput != nil && opts.TextOutput.Enabled {
-		session.Output.Transcription = NewRoomTextOutput(room, rio.participantIdentity)
+		jc := rio.Options.JobContext
+		session.Output.Transcription = NewRoomTextOutput(room, rio.participantIdentity, jc.URL, jc.APIKey, jc.APISecret)
 	}
 
 	videoOutputEnabled := false
@@ -436,7 +479,49 @@ func NewRoomIO(room *lksdk.Room, session *agent.AgentSession, opts RoomOptions) 
 		session.Output.Video = rio
 	}
 
+	// 	// GAP-008: Register the RoomIO as a MediaPublisher to decouple AgentSession from Room
+	session.Output.Publisher = rio
+
 	return rio
+}
+
+// --- agent.MediaPublisher Implementation ---
+func (rio *RoomIO) Identity() string {
+	rio.mu.Lock()
+	defer rio.mu.Unlock()
+	if rio.Room == nil || rio.Room.LocalParticipant == nil {
+		return ""
+	}
+	return rio.Room.LocalParticipant.Identity()
+}
+
+func (rio *RoomIO) PublishData(data []byte, topic string, destinationSIDs []string) error {
+	rio.mu.Lock()
+	defer rio.mu.Unlock()
+	if rio.Room == nil || rio.Room.LocalParticipant == nil {
+		return fmt.Errorf("room not connected")
+	}
+	pkt := &lksdk.UserDataPacket{
+		Payload: data,
+		Topic:   topic,
+	}
+	opts := []lksdk.DataPublishOption{
+		lksdk.WithDataPublishReliable(true),
+	}
+	if len(destinationSIDs) > 0 {
+		opts = append(opts, lksdk.WithDataPublishDestination(destinationSIDs))
+	}
+	return rio.Room.LocalParticipant.PublishDataPacket(pkt, opts...)
+}
+
+func (rio *RoomIO) SetAttributes(attrs map[string]string) error {
+	rio.mu.Lock()
+	defer rio.mu.Unlock()
+	if rio.Room == nil || rio.Room.LocalParticipant == nil {
+		return fmt.Errorf("room not connected")
+	}
+	rio.Room.LocalParticipant.SetAttributes(attrs)
+	return nil
 }
 
 // --- agent.AudioInput Implementation ---
@@ -832,7 +917,7 @@ func (rio *RoomIO) Start(ctx context.Context) error {
 	// Store agent track SID for transcript attribution.
 	if pub != nil {
 		rio.AgentSession.SetAgentTrackSID(pub.SID())
-		fmt.Printf("🎙️ [RoomIO] Agent audio track SID: %s\n", pub.SID())
+		logger.Logger.Infow("🎙️ [RoomIO] Agent audio track SID", "sid", pub.SID())
 	}
 
 	rio.audioTrack = track
@@ -984,18 +1069,18 @@ func (rio *RoomIO) handleAudioTrack(ctx context.Context, track *webrtc.TrackRemo
 		}
 	}
 
-	fmt.Printf("[RoomIO] handleAudioTrack started: trackID=%s codec=%s sampleRate=%d\n", track.ID(), track.Codec().MimeType, track.Codec().ClockRate)
+	logger.Logger.Infow("handleAudioTrack started", "trackID", track.ID(), "codec", track.Codec().MimeType, "sampleRate", track.Codec().ClockRate)
 
 	// Create Opus decoder for this track
 	decoder, err := newOpusDecoder(int(track.Codec().ClockRate), 1)
 	if err != nil {
-		fmt.Printf("❌ [RoomIO] Failed to create Opus decoder: %v\n", err)
+		logger.Logger.Errorw("Failed to create Opus decoder", err)
 		return
 	}
 	defer decoder.Close()
-	fmt.Println("✅ [RoomIO] Opus decoder created")
+	logger.Logger.Debugw("Opus decoder created")
 
-	fmt.Println("[RoomIO] Starting RTP read loop...")
+	logger.Logger.Debugw("Starting RTP read loop")
 
 	sb := samplebuilder.New(20, &codecs.OpusPacket{}, track.Codec().ClockRate)
 	var frameCount int
@@ -1018,16 +1103,15 @@ func (rio *RoomIO) handleAudioTrack(ctx context.Context, track *webrtc.TrackRemo
 
 		pkt, _, err := track.ReadRTP()
 		if err != nil {
-			fmt.Printf("❌ [RoomIO] ReadRTP error: %v\n", err)
 			if !errors.Is(err, io.EOF) {
-				logger.Logger.Errorw("[STT-PIPE] handleAudioTrack ReadRTP error", err)
+				logger.Logger.Errorw("ReadRTP error", err)
 			}
 			return
 		}
 
 		rtpCount++
-		if rtpCount == 1 || rtpCount%500 == 0 {
-			fmt.Printf("📦 [RoomIO] RTP packets read: %d (payload: %d bytes)\n", rtpCount, len(pkt.Payload))
+		if rtpCount == 1 || rtpCount%1000 == 0 {
+			logger.Logger.Debugw("RTP packets read", "count", rtpCount, "payload_len", len(pkt.Payload))
 		}
 
 		sb.Push(pkt)
@@ -1043,11 +1127,11 @@ func (rio *RoomIO) handleAudioTrack(ctx context.Context, track *webrtc.TrackRemo
 			if decoded, err := decoder.Decode(sample.Data); err == nil {
 				pcm = decoded
 			} else if sampleCount <= 3 {
-				fmt.Printf("⚠️ [RoomIO] Opus decode error: %v\n", err)
+				logger.Logger.Warnw("Opus decode error", err)
 			}
 
-			if sampleCount <= 5 || sampleCount%500 == 0 {
-				fmt.Printf("🔊 [RoomIO] Sample #%d: raw=%d bytes → decoded=%d bytes, sampleRate=%d\n", sampleCount, rawSize, len(pcm), track.Codec().ClockRate)
+			if sampleCount <= 5 || sampleCount%1000 == 0 {
+				logger.Logger.Debugw("Audio sample processed", "count", sampleCount, "raw_len", rawSize, "pcm_len", len(pcm))
 			}
 
 			frame := &model.AudioFrame{

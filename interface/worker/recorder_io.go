@@ -642,8 +642,7 @@ func (r *RecorderIO) encodeThread(sampleRate int) {
 		total := r.totalSamplesWritten
 		r.mu.Unlock()
 
-		fmt.Printf("[Recorder] Wrote %d bytes (%.1fs total recorded)\n",
-			n, float64(total)/float64(r.sampleRate))
+		logger.Logger.Infow("Recorder progress", "bytes_written", n, "total_seconds", float64(total)/float64(r.sampleRate))
 	}
 }
 
@@ -666,7 +665,7 @@ func (r *RecorderIO) finalizeWAV() {
 
 	wavFile.Close()
 	duration := float64(total) / float64(sampleRate)
-	fmt.Printf("[Recorder] WAV finalized: %s (%.1fs, %d samples)\n", r.OutPath, duration, total)
+	logger.Logger.Infow("WAV finalized", "path", r.OutPath, "duration", duration, "samples", total)
 }
 
 // writeWAVHeader writes (or re-writes) a standard 44-byte WAV header.

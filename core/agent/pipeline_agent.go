@@ -102,7 +102,7 @@ func (va *PipelineAgent) OnAudioFrame(ctx context.Context, frame *model.AudioFra
 }
 
 func (va *PipelineAgent) run(ctx context.Context) {
-	fmt.Println("🔧 [Pipeline] PipelineAgent.run() started")
+	logger.Logger.Debugw("PipelineAgent.run() started")
 	logger.Logger.Infow("PipelineAgent started")
 	// Audio forwarding is now handled by AgentSession
 	<-ctx.Done()
