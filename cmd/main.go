@@ -33,6 +33,13 @@ func main() {
 	}
 
 	server := worker.NewAgentServer(opts)
+	server.RTCSession(
+		func(jobCtx *worker.JobContext) error {
+			return handleAgent(server, jobCtx)
+		},
+		nil,
+		nil,
+	)
 
 	// Setup signal handling for graceful shutdown
 	sigCtx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)

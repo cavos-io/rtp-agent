@@ -199,6 +199,18 @@ func NewAgentSession(agent AgentInterface, room *lksdk.Room, opts AgentSessionOp
 	return s
 }
 
+// SetRoom wires the LiveKit room to the session after connection.
+// This initialises the ClientEventsDispatcher (RPC handlers, state broadcasting)
+// so the Playground can discover the agent's audio track and state.
+func (s *AgentSession) SetRoom(room *lksdk.Room) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.Room = room
+	if room != nil && s.clientEvents == nil {
+		s.clientEvents = NewClientEventsDispatcher(room, s)
+	}
+}
+
 func (s *AgentSession) SetAudioOutput(out AudioOutput) {
 	s.mu.Lock()
 	defer s.mu.Unlock()

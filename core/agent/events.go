@@ -732,6 +732,8 @@ func (d *ClientEventsDispatcher) DispatchAgentState(state AgentState) {
 	switch state {
 	case AgentStateIdle:
 		stateStr = "idle"
+	case AgentStateListening:
+		stateStr = "listening"
 	case AgentStateThinking:
 		stateStr = "thinking"
 	case AgentStateSpeaking:
