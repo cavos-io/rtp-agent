@@ -62,12 +62,13 @@ func main() {
 }
 
 func handleAgent(server *worker.AgentServer, jobCtx *worker.JobContext) error {
+	startTime := time.Now()
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	fmt.Println("\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
-	fmt.Println("🤖 [Agent] Initializing...")
-	fmt.Println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+	fmt.Printf("\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n")
+	fmt.Printf("🤖 [Agent] Initializing... (jobId=%s, t=0s)\n", jobCtx.Job.Id)
+	fmt.Printf("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n")
 
 	// Get OpenAI API key from env
 	apiKey := os.Getenv("OPENAI_API_KEY")
@@ -150,43 +151,41 @@ func handleAgent(server *worker.AgentServer, jobCtx *worker.JobContext) error {
 		rio.GetCallback().OnParticipantDisconnected(rp)
 	}
 
-	fmt.Println("⏳ [Agent] Connecting to LiveKit room...")
+	fmt.Printf("⏳ [Agent] Connecting to LiveKit room... (t=%s)\n", time.Since(startTime).Round(time.Millisecond))
 	if err := jobCtx.Connect(ctx, cb); err != nil {
 		fmt.Printf("❌ [Agent] Failed to connect to room: %v\n", err)
 		return fmt.Errorf("failed to connect to room: %w", err)
 	}
-	fmt.Println("✅ [Agent] Connected to LiveKit room")
+	fmt.Printf("✅ [Agent] Connected to LiveKit room (t=%s)\n", time.Since(startTime).Round(time.Millisecond))
 
 	// Create RoomIO — this wires session.Input.Audio and session.Output.Audio automatically.
 	rio = worker.NewRoomIO(jobCtx.Room, session, worker.RoomOptions{})
 	defer rio.Close()
 
 	// Publish agent's audio output track to the room.
-	fmt.Println("⏳ [Agent] Starting RoomIO (publishing audio track)...")
+	fmt.Printf("⏳ [Agent] Starting RoomIO (publishing audio track)... (t=%s)\n", time.Since(startTime).Round(time.Millisecond))
 	if err := rio.Start(ctx); err != nil {
 		fmt.Printf("❌ [Agent] Failed to start RoomIO: %v\n", err)
 		return fmt.Errorf("failed to start RoomIO: %w", err)
 	}
-	fmt.Println("✅ [Agent] RoomIO started")
+	fmt.Printf("✅ [Agent] RoomIO started (t=%s)\n", time.Since(startTime).Round(time.Millisecond))
 
 	// Start the session pipeline — session.Input.Audio is now set by RoomIO.
-	fmt.Println("⏳ [Agent] Starting session and pipeline...")
+	fmt.Printf("⏳ [Agent] Starting session and pipeline... (t=%s)\n", time.Since(startTime).Round(time.Millisecond))
 	if err := session.Start(ctx); err != nil {
 		fmt.Printf("❌ [Agent] Failed to start session: %v\n", err)
 		logger.Logger.Errorw("Failed to start agent session", err)
 		return err
 	}
-	fmt.Println("✅ [Agent] Session started successfully")
+	fmt.Printf("✅ [Agent] Session started (t=%s)\n", time.Since(startTime).Round(time.Millisecond))
 
-	fmt.Println()
-	fmt.Println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
-	fmt.Println("✅ Agent session initialized and ready!")
-	fmt.Println("Waiting for room disconnect...")
-	fmt.Println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
-	fmt.Println()
+	fmt.Printf("\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n")
+	fmt.Printf("✅ Agent ready! (total setup: %s)\n", time.Since(startTime).Round(time.Millisecond))
+	fmt.Printf("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n")
 
 	// Block until room disconnects (cb.OnDisconnected cancels ctx).
 	<-ctx.Done()
+	fmt.Printf("⚠️  [PANEL] handleAgent ctx.Done — agent function returning (jobId=%s, uptime=%s)\n", jobCtx.Job.Id, time.Since(startTime).Round(time.Millisecond))
 
 	return nil
 }
