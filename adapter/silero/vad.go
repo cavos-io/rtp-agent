@@ -62,7 +62,7 @@ func NewSileroVAD(opts ...VADOption) *SileroVAD {
 	// Fallback to simple VAD for now to provide out-of-the-box working plugin
 	// without requiring CGO/ONNX dependencies in the base install.
 	inner := vad.NewSimpleVAD(options.ActivationThreshold / 10.0) // Scale threshold for RMS vs Probability
-	
+
 	return &SileroVAD{
 		options: options,
 		inner:   inner,
@@ -72,4 +72,3 @@ func NewSileroVAD(opts ...VADOption) *SileroVAD {
 func (v *SileroVAD) Stream(ctx context.Context) (vad.VADStream, error) {
 	return v.inner.Stream(ctx)
 }
-

@@ -328,7 +328,7 @@ func (t *RoomTextOutput) worker() {
 						Transcription: tp,
 					},
 				}
-				
+
 				if buf, err := proto.Marshal(packet); err == nil {
 					go t.client.SendData(context.Background(), &livekit.SendDataRequest{
 						Room: t.room.Name(),
@@ -600,7 +600,7 @@ func (rio *RoomIO) playoutLoop(ctx context.Context) {
 	const silenceFrameMs = 20
 	silenceDuration := time.Duration(silenceFrameMs) * time.Millisecond
 	silenceSamples := 48000 * silenceFrameMs / 1000 // 960 samples at 48kHz
-	silencePCM := make([]byte, silenceSamples*1*2)   // mono 16-bit zeros
+	silencePCM := make([]byte, silenceSamples*1*2)  // mono 16-bit zeros
 	var cachedSilenceOpus []byte
 
 	silenceTicker := time.NewTicker(silenceDuration)
@@ -1274,4 +1274,3 @@ func (rio *RoomIO) registerRoomCallbacks() {
 		}
 	}
 }
-

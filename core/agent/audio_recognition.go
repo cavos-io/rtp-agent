@@ -121,7 +121,6 @@ func (ar *AudioRecognition) vadLoop(ctx context.Context, stream vad.VADStream) {
 		}
 
 		if ev.Type == vad.VADEventStartOfSpeech {
-			fmt.Println("🗣️  [VAD] User started speaking")
 			logger.Logger.Infow("User started speaking")
 			ar.session.UpdateUserState(UserStateSpeaking)
 
@@ -135,7 +134,6 @@ func (ar *AudioRecognition) vadLoop(ctx context.Context, stream vad.VADStream) {
 			}
 			ar.mu.Unlock()
 		} else if ev.Type == vad.VADEventEndOfSpeech {
-			fmt.Println("🔇 [VAD] User stopped speaking")
 			logger.Logger.Infow("User stopped speaking")
 			ar.session.UpdateUserState(UserStateListening)
 		}
