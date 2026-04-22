@@ -11,20 +11,27 @@ import (
 	"google.golang.org/genai"
 )
 
-type GoogleLLM struct {
-	client *genai.Client
-	model  string
+type Option func(*genai.ClientConfig)
+
+func WithBaseURL(url string) Option {
+	return func(c *genai.ClientConfig) {
+		c.BaseURL = url
+	}
 }
 
-func NewGoogleLLM(apiKey string, model string) (*GoogleLLM, error) {
+func NewGoogleLLM(apiKey string, model string, opts ...Option) (*GoogleLLM, error) {
 	if model == "" {
 		model = "gemini-2.5-flash"
 	}
 	ctx := context.Background()
-	client, err := genai.NewClient(ctx, &genai.ClientConfig{
+	config := &genai.ClientConfig{
 		APIKey:  apiKey,
 		Backend: genai.BackendGeminiAPI,
-	})
+	}
+	for _, opt := range opts {
+		opt(config)
+	}
+	client, err := genai.NewClient(ctx, config)
 	if err != nil {
 		return nil, err
 	}
