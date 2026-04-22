@@ -20,14 +20,15 @@ type GoogleTTS struct {
 
 // NewGoogleTTS creates a new TTS client using Application Default Credentials,
 // or by providing a path to a credentials JSON file.
-func NewGoogleTTS(credentialsFile string) (*GoogleTTS, error) {
+func NewGoogleTTS(credentialsFile string, opts ...option.ClientOption) (*GoogleTTS, error) {
 	ctx := context.Background()
-	var opts []option.ClientOption
+	var finalOpts []option.ClientOption
 	if credentialsFile != "" {
-		opts = append(opts, option.WithCredentialsFile(credentialsFile))
+		finalOpts = append(finalOpts, option.WithCredentialsFile(credentialsFile))
 	}
+	finalOpts = append(finalOpts, opts...)
 
-	client, err := texttospeech.NewClient(ctx, opts...)
+	client, err := texttospeech.NewClient(ctx, finalOpts...)
 	if err != nil {
 		return nil, err
 	}

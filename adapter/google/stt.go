@@ -30,15 +30,15 @@ func WithPhraseHints(phraseHints []*speechpb.SpeechContext) GoogleOption {
 
 // NewGoogleSTT creates a new STT client using Application Default Credentials,
 // or by providing a path to a credentials JSON file.
-// Optional GoogleOptions can be passed to configure features like phrase hints.
-func NewGoogleSTT(credentialsFile string, opts ...GoogleOption) (*GoogleSTT, error) {
+func NewGoogleSTT(credentialsFile string, opts ...option.ClientOption) (*GoogleSTT, error) {
 	ctx := context.Background()
-	var clientOpts []option.ClientOption
+	var finalOpts []option.ClientOption
 	if credentialsFile != "" {
-		clientOpts = append(clientOpts, option.WithCredentialsFile(credentialsFile))
+		finalOpts = append(finalOpts, option.WithCredentialsFile(credentialsFile))
 	}
+	finalOpts = append(finalOpts, opts...)
 
-	client, err := speech.NewClient(ctx, clientOpts...)
+	client, err := speech.NewClient(ctx, finalOpts...)
 	if err != nil {
 		return nil, err
 	}
