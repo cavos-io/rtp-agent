@@ -28,7 +28,7 @@ func WithTTSBaseURL(url string) TTSOption {
 	}
 }
 
-func WithHTTPClient(client *http.Client) TTSOption {
+func WithTTSHTTPClient(client *http.Client) TTSOption {
 	return func(t *ClovaTTS) {
 		t.httpClient = client
 	}
@@ -103,10 +103,7 @@ type clovaTTSChunkedStream struct {
 func (s *clovaTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 	buf := make([]byte, 4096)
 	n, err := s.resp.Body.Read(buf)
-	if err != nil {
-		if err == io.EOF {
-			return nil, io.EOF
-		}
+	if n == 0 && err != nil {
 		return nil, err
 	}
 

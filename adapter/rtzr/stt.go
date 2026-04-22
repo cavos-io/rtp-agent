@@ -55,8 +55,6 @@ func (s *RtzrSTT) Stream(ctx context.Context, language string) (stt.RecognizeStr
 }
 
 func (s *RtzrSTT) Recognize(ctx context.Context, frames []*model.AudioFrame, language string) (*stt.SpeechEvent, error) {
-	url := "https://api.rtzr.ai/v1/stt"
-
 	var buf bytes.Buffer
 	for _, f := range frames {
 		buf.Write(f.Data)

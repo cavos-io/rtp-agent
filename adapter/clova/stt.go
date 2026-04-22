@@ -27,7 +27,7 @@ func WithSTTBaseURL(url string) STTOption {
 	}
 }
 
-func WithHTTPClient(client *http.Client) STTOption {
+func WithSTTHTTPClient(client *http.Client) STTOption {
 	return func(s *ClovaSTT) {
 		s.httpClient = client
 	}
