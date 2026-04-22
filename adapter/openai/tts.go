@@ -17,11 +17,15 @@ type OpenAITTS struct {
 	sampleRate int
 }
 
-type OpenAITTSOptions struct {
-	SampleRate int
+type TTSOption func(*OpenAITTS)
+
+func WithSampleRate(rate int) TTSOption {
+	return func(t *OpenAITTS) {
+		t.sampleRate = rate
+	}
 }
 
-func NewOpenAITTS(apiKey string, model openai.SpeechModel, voice openai.SpeechVoice, opts ...OpenAITTSOptions) *OpenAITTS {
+func NewOpenAITTS(apiKey string, model openai.SpeechModel, voice openai.SpeechVoice, opts ...any) *OpenAITTS {
 	if model == "" {
 		model = openai.TTSModel1
 	}
@@ -30,16 +34,24 @@ func NewOpenAITTS(apiKey string, model openai.SpeechModel, voice openai.SpeechVo
 	}
 	
 	sampleRate := 24000
-	if len(opts) > 0 && opts[0].SampleRate > 0 {
-		sampleRate = opts[0].SampleRate
-	}
-
-	return &OpenAITTS{
-		client:     openai.NewClient(apiKey),
+	config := openai.DefaultConfig(apiKey)
+	
+	t := &OpenAITTS{
 		model:      model,
 		voice:      voice,
 		sampleRate: sampleRate,
 	}
+
+	for _, opt := range opts {
+		if o, ok := opt.(Option); ok {
+			o(&config)
+		} else if o, ok := opt.(TTSOption); ok {
+			o(t)
+		}
+	}
+
+	t.client = openai.NewClientWithConfig(config)
+	return t
 }
 
 func (t *OpenAITTS) Label() string { return "openai.TTS" }
