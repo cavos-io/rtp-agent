@@ -7,7 +7,10 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 
+	oa "github.com/sashabaranov/go-openai"
+	"github.com/cavos-io/rtp-agent/adapter/openai"
 	"github.com/cavos-io/rtp-agent/core/stt"
 	"github.com/cavos-io/rtp-agent/core/tts"
 	"github.com/cavos-io/rtp-agent/library/utils/language"
@@ -15,15 +18,28 @@ import (
 )
 
 type AzureSTT struct {
-	apiKey string
-	region string
+	apiKey  string
+	region  string
+	baseURL string
 }
 
-func NewAzureSTT(apiKey string, region string) *AzureSTT {
-	return &AzureSTT{
+type STTOption func(*AzureSTT)
+
+func WithSTTBaseURL(url string) STTOption {
+	return func(s *AzureSTT) {
+		s.baseURL = url
+	}
+}
+
+func NewAzureSTT(apiKey string, region string, opts ...STTOption) *AzureSTT {
+	s := &AzureSTT{
 		apiKey: apiKey,
 		region: region,
 	}
+	for _, opt := range opts {
+		opt(s)
+	}
+	return s
 }
 
 func (s *AzureSTT) Label() string { return "azure.STT" }
@@ -40,7 +56,11 @@ func (s *AzureSTT) Recognize(ctx context.Context, frames []*model.AudioFrame, la
 	if languageStr == "" {
 		languageStr = "en-US"
 	}
-	url := fmt.Sprintf("https://%s.stt.speech.microsoft.com/speech/recognition/conversation/cognitiveservices/v1?language=%s", s.region, languageStr)
+	url := s.baseURL
+	if url == "" {
+		url = fmt.Sprintf("https://%s.stt.speech.microsoft.com/speech/recognition/conversation/cognitiveservices/v1", s.region)
+	}
+	url = fmt.Sprintf("%s?language=%s", strings.TrimSuffix(url, "/"), languageStr)
 
 	var buf bytes.Buffer
 	for _, f := range frames {
@@ -83,20 +103,33 @@ func (s *AzureSTT) Recognize(ctx context.Context, frames []*model.AudioFrame, la
 }
 
 type AzureTTS struct {
-	apiKey string
-	region string
-	voice  string
+	apiKey  string
+	region  string
+	voice   string
+	baseURL string
 }
 
-func NewAzureTTS(apiKey string, region string, voice string) *AzureTTS {
+type TTSOption func(*AzureTTS)
+
+func WithTTSBaseURL(url string) TTSOption {
+	return func(t *AzureTTS) {
+		t.baseURL = url
+	}
+}
+
+func NewAzureTTS(apiKey string, region string, voice string, opts ...TTSOption) *AzureTTS {
 	if voice == "" {
 		voice = "en-US-AvaMultilingualNeural"
 	}
-	return &AzureTTS{
+	t := &AzureTTS{
 		apiKey: apiKey,
 		region: region,
 		voice:  voice,
 	}
+	for _, opt := range opts {
+		opt(t)
+	}
+	return t
 }
 
 func (t *AzureTTS) Label() string { return "azure.TTS" }
@@ -107,10 +140,13 @@ func (t *AzureTTS) SampleRate() int { return 16000 }
 func (t *AzureTTS) NumChannels() int { return 1 }
 
 func (t *AzureTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStream, error) {
-	url := fmt.Sprintf("https://%s.tts.speech.microsoft.com/cognitiveservices/v1", t.region)
+	apiURL := t.baseURL
+	if apiURL == "" {
+		apiURL = fmt.Sprintf("https://%s.tts.speech.microsoft.com/cognitiveservices/v1", t.region)
+	}
 	ssml := fmt.Sprintf(`<speak version='1.0' xml:lang='en-US'><voice name='%s'>%s</voice></speak>`, t.voice, text)
 
-	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewBufferString(ssml))
+	req, err := http.NewRequestWithContext(ctx, "POST", apiURL, bytes.NewBufferString(ssml))
 	if err != nil {
 		return nil, err
 	}
@@ -146,10 +182,7 @@ type azureTTSChunkedStream struct {
 func (s *azureTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 	buf := make([]byte, 4096)
 	n, err := s.resp.Body.Read(buf)
-	if err != nil {
-		if err == io.EOF {
-			return nil, io.EOF
-		}
+	if n == 0 && err != nil {
 		return nil, err
 	}
 
@@ -165,5 +198,16 @@ func (s *azureTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 
 func (s *azureTTSChunkedStream) Close() error {
 	return s.resp.Body.Close()
+}
+
+// AzureLLM is a thin wrapper around OpenAILLM configured for Azure.
+// It is recommended to use the openai adapter directly with Azure configuration
+// if more advanced options are needed.
+func NewAzureLLM(apiKey string, endpoint string, deployment string, opts ...openai.Option) *openai.OpenAILLM {
+	config := oa.DefaultAzureConfig(apiKey, endpoint)
+	// We use the deployment name as the model for Azure OpenAI
+	return openai.NewOpenAILLM(apiKey, deployment, append(opts, func(c *oa.ClientConfig) {
+		*c = config
+	})...)
 }
 
