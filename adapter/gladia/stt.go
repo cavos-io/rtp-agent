@@ -16,12 +16,26 @@ import (
 
 type GladiaSTT struct {
 	apiKey string
+	apiURL string
 }
 
-func NewGladiaSTT(apiKey string) *GladiaSTT {
-	return &GladiaSTT{
-		apiKey: apiKey,
+type STTOption func(*GladiaSTT)
+
+func WithSTTBaseURL(url string) STTOption {
+	return func(s *GladiaSTT) {
+		s.apiURL = url
 	}
+}
+
+func NewGladiaSTT(apiKey string, opts ...STTOption) *GladiaSTT {
+	s := &GladiaSTT{
+		apiKey: apiKey,
+		apiURL: "wss://api.gladia.io/audio/text/audio-transcription",
+	}
+	for _, opt := range opts {
+		opt(s)
+	}
+	return s
 }
 
 func (s *GladiaSTT) Label() string { return "gladia.STT" }
@@ -33,11 +47,8 @@ func (s *GladiaSTT) Stream(ctx context.Context, language string) (stt.RecognizeS
 	if language == "" {
 		language = "en"
 	}
-	
-	// Gladia API websocket URL
-	u := url.URL{Scheme: "wss", Host: "api.gladia.io", Path: "/audio/text/audio-transcription"}
 
-	conn, _, err := websocket.DefaultDialer.DialContext(ctx, u.String(), nil)
+	conn, _, err := websocket.DefaultDialer.DialContext(ctx, s.apiURL, nil)
 	if err != nil {
 		return nil, err
 	}

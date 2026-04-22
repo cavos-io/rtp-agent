@@ -17,13 +17,43 @@ import (
 )
 
 type AssemblyAISTT struct {
-	apiKey string
+	apiKey     string
+	apiURL     string
+	wsURL      string
+	httpClient *http.Client
 }
 
-func NewAssemblyAISTT(apiKey string) *AssemblyAISTT {
-	return &AssemblyAISTT{
-		apiKey: apiKey,
+type STTOption func(*AssemblyAISTT)
+
+func WithSTTBaseURL(url string) STTOption {
+	return func(s *AssemblyAISTT) {
+		s.apiURL = url
 	}
+}
+
+func WithWSURL(url string) STTOption {
+	return func(s *AssemblyAISTT) {
+		s.wsURL = url
+	}
+}
+
+func WithHTTPClient(client *http.Client) STTOption {
+	return func(s *AssemblyAISTT) {
+		s.httpClient = client
+	}
+}
+
+func NewAssemblyAISTT(apiKey string, opts ...STTOption) *AssemblyAISTT {
+	s := &AssemblyAISTT{
+		apiKey:     apiKey,
+		apiURL:     "https://api.assemblyai.com/v2",
+		wsURL:      "wss://api.assemblyai.com/v2/realtime/ws",
+		httpClient: http.DefaultClient,
+	}
+	for _, opt := range opts {
+		opt(s)
+	}
+	return s
 }
 
 func (s *AssemblyAISTT) Label() string { return "assemblyai.STT" }
@@ -35,7 +65,10 @@ func (s *AssemblyAISTT) Stream(ctx context.Context, language string) (stt.Recogn
 	// AssemblyAI requires fetching a temporary token or passing the API key in the header
 	// Standard websocket connection to wss://api.assemblyai.com/v2/realtime/ws
 
-	u := url.URL{Scheme: "wss", Host: "api.assemblyai.com", Path: "/v2/realtime/ws"}
+	u, err := url.Parse(s.wsURL)
+	if err != nil {
+		return nil, err
+	}
 	q := u.Query()
 	q.Set("sample_rate", "16000")
 	u.RawQuery = q.Encode()
@@ -67,10 +100,10 @@ func (s *AssemblyAISTT) Recognize(ctx context.Context, frames []*model.AudioFram
 		buf.Write(f.Data)
 	}
 
-	uploadReq, _ := http.NewRequestWithContext(ctx, "POST", "https://api.assemblyai.com/v2/upload", bytes.NewReader(buf.Bytes()))
+	uploadReq, _ := http.NewRequestWithContext(ctx, "POST", s.apiURL+"/upload", bytes.NewReader(buf.Bytes()))
 	uploadReq.Header.Set("Authorization", s.apiKey)
-	
-	uploadResp, err := http.DefaultClient.Do(uploadReq)
+
+	uploadResp, err := s.httpClient.Do(uploadReq)
 	if err != nil {
 		return nil, err
 	}
@@ -89,11 +122,11 @@ func (s *AssemblyAISTT) Recognize(ctx context.Context, frames []*model.AudioFram
 	}
 
 	jsonBody, _ := json.Marshal(reqBody)
-	req, _ := http.NewRequestWithContext(ctx, "POST", "https://api.assemblyai.com/v2/transcript", bytes.NewBuffer(jsonBody))
+	req, _ := http.NewRequestWithContext(ctx, "POST", s.apiURL+"/transcript", bytes.NewBuffer(jsonBody))
 	req.Header.Set("Authorization", s.apiKey)
 	req.Header.Set("Content-Type", "application/json")
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := s.httpClient.Do(req)
 	if err != nil {
 		return nil, err
 	}
