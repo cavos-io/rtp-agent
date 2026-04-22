@@ -55,3 +55,10 @@ func TestAzureTTS_Synthesize(t *testing.T) {
 		t.Errorf("expected 4 bytes, got %d", len(chunk.Frame.Data))
 	}
 }
+
+func TestAzureLLM_Constructor(t *testing.T) {
+	l := NewAzureLLM("test-key", "https://test.openai.azure.com", "gpt-4")
+	if l == nil {
+		t.Fatal("expected non-nil LLM")
+	}
+}
