@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"net/url"
 	"sync"
 
 	"github.com/cavos-io/rtp-agent/core/stt"
