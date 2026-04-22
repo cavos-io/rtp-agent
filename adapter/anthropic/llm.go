@@ -14,18 +14,32 @@ import (
 )
 
 type AnthropicLLM struct {
-	apiKey string
-	model  string
+	apiKey  string
+	model   string
+	baseURL string
 }
 
-func NewAnthropicLLM(apiKey string, model string) (*AnthropicLLM, error) {
+type Option func(*AnthropicLLM)
+
+func WithBaseURL(url string) Option {
+	return func(l *AnthropicLLM) {
+		l.baseURL = url
+	}
+}
+
+func NewAnthropicLLM(apiKey string, model string, opts ...Option) (*AnthropicLLM, error) {
 	if model == "" {
 		model = "claude-3-5-sonnet-20241022" // Parity with python defaults
 	}
-	return &AnthropicLLM{
-		apiKey: apiKey,
-		model:  model,
-	}, nil
+	l := &AnthropicLLM{
+		apiKey:  apiKey,
+		model:   model,
+		baseURL: "https://api.anthropic.com",
+	}
+	for _, opt := range opts {
+		opt(l)
+	}
+	return l, nil
 }
 
 func (l *AnthropicLLM) Chat(ctx context.Context, chatCtx *llm.ChatContext, opts ...llm.ChatOption) (llm.LLMStream, error) {
@@ -53,7 +67,8 @@ func (l *AnthropicLLM) Chat(ctx context.Context, chatCtx *llm.ChatContext, opts 
 	}
 
 	jsonBody, _ := json.Marshal(body)
-	req, err := http.NewRequestWithContext(ctx, "POST", "https://api.anthropic.com/v1/messages", bytes.NewBuffer(jsonBody))
+	apiURL := fmt.Sprintf("%s/v1/messages", strings.TrimSuffix(l.baseURL, "/"))
+	req, err := http.NewRequestWithContext(ctx, "POST", apiURL, bytes.NewBuffer(jsonBody))
 	if err != nil {
 		return nil, err
 	}
