@@ -23,20 +23,42 @@ type ElevenLabsTTS struct {
 	apiKey  string
 	voiceID string
 	modelID string
+	baseURL string
+	wsURL   string
 }
 
-func NewElevenLabsTTS(apiKey string, voiceID string, modelID string) (*ElevenLabsTTS, error) {
+type Option func(*ElevenLabsTTS)
+
+func WithBaseURL(url string) Option {
+	return func(t *ElevenLabsTTS) {
+		t.baseURL = url
+	}
+}
+
+func WithWSURL(url string) Option {
+	return func(t *ElevenLabsTTS) {
+		t.wsURL = url
+	}
+}
+
+func NewElevenLabsTTS(apiKey string, voiceID string, modelID string, opts ...Option) (*ElevenLabsTTS, error) {
 	if voiceID == "" {
 		voiceID = "21m00Tcm4TlvDq8ikWAM" // Rachel
 	}
 	if modelID == "" {
 		modelID = "eleven_monolingual_v1"
 	}
-	return &ElevenLabsTTS{
+	t := &ElevenLabsTTS{
 		apiKey:  apiKey,
 		voiceID: voiceID,
 		modelID: modelID,
-	}, nil
+		baseURL: "https://api.elevenlabs.io",
+		wsURL:   "wss://api.elevenlabs.io",
+	}
+	for _, opt := range opts {
+		opt(t)
+	}
+	return t, nil
 }
 
 func (t *ElevenLabsTTS) Label() string { return "elevenlabs.TTS" }
@@ -48,7 +70,7 @@ func (t *ElevenLabsTTS) NumChannels() int { return 1 }
 
 // Synthesize performs a full HTTP POST for non-streaming scenarios.
 func (t *ElevenLabsTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStream, error) {
-	apiURL := fmt.Sprintf("https://api.elevenlabs.io/v1/text-to-speech/%s?output_format=pcm_24000", t.voiceID)
+	apiURL := fmt.Sprintf("%s/v1/text-to-speech/%s?output_format=pcm_24000", strings.TrimSuffix(t.baseURL, "/"), t.voiceID)
 	body := map[string]interface{}{
 		"text":     text,
 		"model_id": t.modelID,
@@ -139,7 +161,11 @@ func (t *ElevenLabsTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error
 // connect dials the ElevenLabs WebSocket and sends the initial configuration.
 // It must be called with s.mu held.
 func (s *elevenLabsStream) connect() error {
-	u := url.URL{Scheme: "wss", Host: "api.elevenlabs.io", Path: fmt.Sprintf("/v1/text-to-speech/%s/stream-input", s.tts.voiceID)}
+	apiURL := fmt.Sprintf("%s/v1/text-to-speech/%s/stream-input", strings.TrimSuffix(s.tts.wsURL, "/"), s.tts.voiceID)
+	u, err := url.Parse(apiURL)
+	if err != nil {
+		return err
+	}
 	q := u.Query()
 	q.Set("model_id", s.tts.modelID)
 	q.Set("output_format", "pcm_24000")
