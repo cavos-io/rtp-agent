@@ -10,25 +10,28 @@ import (
 	"github.com/sashabaranov/go-openai"
 )
 
-type Option func(*OpenAILLM)
+type OpenAILLM struct {
+	client *openai.Client
+	model  string
+}
+
+type Option func(*openai.ClientConfig)
 
 func WithBaseURL(url string) Option {
-	return func(l *OpenAILLM) {
-		config := l.client.Config()
-		config.BaseURL = url
-		l.client = openai.NewClientWithConfig(config)
+	return func(c *openai.ClientConfig) {
+		c.BaseURL = url
 	}
 }
 
 func NewOpenAILLM(apiKey string, model string, opts ...Option) *OpenAILLM {
-	l := &OpenAILLM{
-		client: openai.NewClient(apiKey),
+	config := openai.DefaultConfig(apiKey)
+	for _, opt := range opts {
+		opt(&config)
+	}
+	return &OpenAILLM{
+		client: openai.NewClientWithConfig(config),
 		model:  model,
 	}
-	for _, opt := range opts {
-		opt(l)
-	}
-	return l
 }
 
 func NewOpenAILLMWithConfig(config openai.ClientConfig) *OpenAILLM {
@@ -173,10 +176,12 @@ func (s *openaiStream) Next() (*llm.ChatChunk, error) {
 
 	if resp.Usage != nil {
 		chunk.Usage = &llm.CompletionUsage{
-			CompletionTokens:   resp.Usage.CompletionTokens,
-			PromptTokens:       resp.Usage.PromptTokens,
-			PromptCachedTokens: resp.Usage.PromptTokensDetails.CachedTokens,
-			TotalTokens:        resp.Usage.TotalTokens,
+			CompletionTokens: resp.Usage.CompletionTokens,
+			PromptTokens:     resp.Usage.PromptTokens,
+			TotalTokens:      resp.Usage.TotalTokens,
+		}
+		if resp.Usage.PromptTokensDetails != nil {
+			chunk.Usage.PromptCachedTokens = resp.Usage.PromptTokensDetails.CachedTokens
 		}
 	}
 
