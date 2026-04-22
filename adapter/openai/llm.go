@@ -10,16 +10,25 @@ import (
 	"github.com/sashabaranov/go-openai"
 )
 
-type OpenAILLM struct {
-	client *openai.Client
-	model  string
+type Option func(*OpenAILLM)
+
+func WithBaseURL(url string) Option {
+	return func(l *OpenAILLM) {
+		config := l.client.Config()
+		config.BaseURL = url
+		l.client = openai.NewClientWithConfig(config)
+	}
 }
 
-func NewOpenAILLM(apiKey string, model string) *OpenAILLM {
-	return &OpenAILLM{
+func NewOpenAILLM(apiKey string, model string, opts ...Option) *OpenAILLM {
+	l := &OpenAILLM{
 		client: openai.NewClient(apiKey),
 		model:  model,
 	}
+	for _, opt := range opts {
+		opt(l)
+	}
+	return l
 }
 
 func NewOpenAILLMWithConfig(config openai.ClientConfig) *OpenAILLM {
