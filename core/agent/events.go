@@ -389,6 +389,15 @@ func NewClientEventsDispatcher(room *lksdk.Room, session *AgentSession) *ClientE
 	return d
 }
 
+func (d *ClientEventsDispatcher) Close() {
+	d.tasks.Wait()
+	d.mu.Lock()
+	d.session = nil
+	d.room = nil
+	d.textInputCb = nil
+	d.mu.Unlock()
+}
+
 func (d *ClientEventsDispatcher) RegisterTextInput(cb TextInputCallback) {
 	d.mu.Lock()
 	defer d.mu.Unlock()

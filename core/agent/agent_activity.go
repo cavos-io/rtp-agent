@@ -71,8 +71,8 @@ type AgentActivity struct {
 	videoNodeCh chan *model.VideoFrame
 }
 
-func NewAgentActivity(agentIntf AgentInterface, session *AgentSession) *AgentActivity {
-	ctx, cancel := context.WithCancel(context.Background())
+func NewAgentActivity(agentIntf AgentInterface, session *AgentSession, parentCtx context.Context) *AgentActivity {
+	ctx, cancel := context.WithCancel(parentCtx)
 	act := &AgentActivity{
 		AgentIntf:      agentIntf,
 		Agent:          agentIntf.GetAgent(),
@@ -162,6 +162,15 @@ func (a *AgentActivity) AClose() {
 	a.cancelFalseInterruptionTimer()
 	a.cancelUserAwayTimer()
 	a.loopWg.Wait()
+
+	if a.recog != nil {
+		a.recog.Close()
+		a.recog = nil
+	}
+
+	a.Session = nil
+	a.Agent = nil
+	a.AgentIntf = nil
 }
 
 func (a *AgentActivity) PauseScheduling() {

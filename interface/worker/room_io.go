@@ -69,6 +69,8 @@ func (d *opusDecoder) Decode(data []byte) ([]byte, error) {
 }
 
 func (d *opusDecoder) Close() error {
+	d.decoder = nil
+	d.buf = nil
 	return nil
 }
 
@@ -113,6 +115,8 @@ func (e *opusEncoder) Encode(pcm []byte) ([]byte, error) {
 }
 
 func (e *opusEncoder) Close() error {
+	e.encoder = nil
+	e.buf = nil
 	return nil
 }
 
@@ -175,6 +179,7 @@ type RoomIO struct {
 	mu     sync.Mutex
 	closed bool
 	ctx    context.Context // session lifecycle context — cancelled on disconnect
+	cancel context.CancelFunc
 
 	audioTrack *lksdk.LocalSampleTrack
 	audioPub   *lksdk.LocalTrackPublication
@@ -391,6 +396,8 @@ func NewRoomIO(room *lksdk.Room, session *agent.AgentSession, opts RoomOptions) 
 	preConnectAudio := NewPreConnectAudioHandler(room, 5*time.Second)
 	preConnectAudio.Register()
 
+	rioCtx, rioCancel := context.WithCancel(context.Background())
+
 	rio := &RoomIO{
 		Room:                room,
 		AgentSession:        session,
@@ -406,6 +413,7 @@ func NewRoomIO(room *lksdk.Room, session *agent.AgentSession, opts RoomOptions) 
 		flushWaiters:        make([]chan struct{}, 0),
 		participantIdentity: opts.ParticipantIdentity,
 		trackContexts:       make(map[string]context.CancelFunc),
+		cancel:              rioCancel,
 	}
 
 	// Wire the room to the session so that state attributes (lk.agent.state)
@@ -414,7 +422,7 @@ func NewRoomIO(room *lksdk.Room, session *agent.AgentSession, opts RoomOptions) 
 
 	rio.registerRoomCallbacks()
 
-	go rio.playoutLoop(context.Background())
+	go rio.playoutLoop(rioCtx)
 
 	if session.Assistant == nil {
 		session.Assistant = agent.NewPipelineAgent(session.VAD, session.STT, session.LLM, session.TTS, session.ChatCtx)
@@ -591,6 +599,12 @@ func (rio *RoomIO) OnPlaybackFinished(f func(ev agent.PlaybackFinishedEvent)) {
 type flushMarker chan struct{}
 
 func (rio *RoomIO) CaptureFrame(frame *model.AudioFrame) error {
+	rio.mu.Lock()
+	if rio.closed {
+		rio.mu.Unlock()
+		return nil
+	}
+	rio.mu.Unlock()
 	rio.playoutCh <- frame
 	return nil
 }
@@ -1235,12 +1249,22 @@ func (rio *RoomIO) Close() error {
 	rio.closed = true
 	rio.mu.Unlock()
 
+	// Cancel the RoomIO-level context so playoutLoop and other goroutines exit.
+	if rio.cancel != nil {
+		rio.cancel()
+	}
+
 	rio.trackContextsMu.Lock()
 	for _, cancel := range rio.trackContexts {
 		cancel()
 	}
 	rio.trackContexts = make(map[string]context.CancelFunc)
 	rio.trackContextsMu.Unlock()
+
+	// Close the audio input channel so RecorderAudioInput.loop() can exit.
+	// Track contexts are already cancelled above, so senders (handleAudioTrack)
+	// have stopped before we close the channel.
+	close(rio.audioInCh)
 
 	if rio.decoder != nil {
 		rio.decoder.Close()
@@ -1252,11 +1276,24 @@ func (rio *RoomIO) Close() error {
 		rio.sync.Close()
 	}
 
+	if rio.Recorder != nil {
+		rio.Recorder.Stop()
+	}
+
+	if rio.preConnectAudio != nil {
+		rio.preConnectAudio.Close()
+	}
+
 	if rio.AgentSession != nil && rio.AgentSession.Output.Transcription != nil {
 		if closer, ok := rio.AgentSession.Output.Transcription.(io.Closer); ok {
 			closer.Close()
 		}
 	}
+
+	// Release references to help GC.
+	rio.AgentSession = nil
+	rio.onPlaybackStarted = nil
+	rio.onPlaybackFinished = nil
 
 	if rio.Options.DeleteRoomOnClose {
 		if rio.Options.JobContext != nil && rio.Room != nil {

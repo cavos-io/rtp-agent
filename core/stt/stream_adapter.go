@@ -96,7 +96,9 @@ func (w *streamAdapterWrapper) Close() error {
 	}
 	w.closed = true
 	w.vadStream.Close()
-	close(w.events)
+	w.mu.Lock()
+	w.speechFrames = nil
+	w.mu.Unlock()
 	return nil
 }
 
@@ -122,10 +124,17 @@ func (w *streamAdapterWrapper) run() {
 		for {
 			vEvent, err := w.vadStream.Next()
 			if err != nil {
-				errCh <- err
+				select {
+				case errCh <- err:
+				case <-w.ctx.Done():
+				}
 				return
 			}
-			eventCh <- vEvent
+			select {
+			case eventCh <- vEvent:
+			case <-w.ctx.Done():
+				return
+			}
 		}
 	}()
 

@@ -158,6 +158,19 @@ func (h *PreConnectAudioHandler) readAudioTask(reader *lksdk.ByteStreamReader, p
 	close(bufCh)
 }
 
+func (h *PreConnectAudioHandler) Close() {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	for trackID, ch := range h.buffers {
+		select {
+		case <-ch:
+		default:
+		}
+		delete(h.buffers, trackID)
+	}
+	h.buffers = nil
+}
+
 func (h *PreConnectAudioHandler) WaitForData(ctx context.Context, trackID string) []*model.AudioFrame {
 	if h.afterConnect {
 		logger.Logger.Warnw("pre-connect audio handler registered after room connection", nil, "track_id", trackID)

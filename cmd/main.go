@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"net/http"
+	_ "net/http/pprof"
 	"os"
 	"runtime"
 	"runtime/debug"
@@ -25,6 +27,18 @@ import (
 
 func main() {
 	godotenv.Load()
+
+	// Start pprof HTTP server for memory profiling.
+	pprofAddr := os.Getenv("PPROF_ADDR")
+	if pprofAddr == "" {
+		pprofAddr = ":6060"
+	}
+	go func() {
+		log.Println("pprof server listening on", pprofAddr)
+		if err := http.ListenAndServe(pprofAddr, nil); err != nil {
+			log.Println("pprof server error:", err)
+		}
+	}()
 
 	opts := worker.WorkerOptions{
 		AgentName:  os.Getenv("AGENT_NAME"),
@@ -68,8 +82,12 @@ func handleAgent(server *worker.AgentServer, jobCtx *worker.JobContext) error {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
+	var memBefore runtime.MemStats
+	runtime.ReadMemStats(&memBefore)
 	fmt.Printf("\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n")
 	fmt.Printf("🤖 [Agent] Initializing... (jobId=%s, t=0s)\n", jobCtx.Job.Id)
+	fmt.Printf("📊 [MEM] Before session: HeapInuse=%dMB Goroutines=%d\n",
+		memBefore.HeapInuse/1024/1024, runtime.NumGoroutine())
 	fmt.Printf("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n")
 
 	// Get OpenAI API key from env
@@ -188,14 +206,42 @@ func handleAgent(server *worker.AgentServer, jobCtx *worker.JobContext) error {
 	<-ctx.Done()
 	fmt.Printf("⚠️  [PANEL] handleAgent ctx.Done — agent function returning (jobId=%s, uptime=%s)\n", jobCtx.Job.Id, time.Since(startTime).Round(time.Millisecond))
 
-	// Explicit cleanup: close session to release all internal references,
-	// then force GC and return freed memory to the OS.
+	// Explicit cleanup: close session, RoomIO, disconnect room, nil all
+	// large references so GC can reclaim everything.
 	session.Close()
 	rio.Close()
+
+	// Clear the console session reference held by the server.
+	server.SetConsoleSession(nil)
+
+	// Disconnect the LiveKit room to release WebSocket and WebRTC resources.
+	if jobCtx.Room != nil {
+		jobCtx.Room.Disconnect()
+	}
+
+	// Allow Pion WebRTC resources (TURN/ICE/DTLS/SCTP) to clean up.
+	time.Sleep(3 * time.Second)
+
+	// Nil all local references so nothing in this frame keeps objects alive.
 	rio = nil
+	session = nil
+	ag = nil
+
+	// Close idle HTTP connections cached by the default transport (OpenAI SDK
+	// and other adapters use http.DefaultTransport).
+	http.DefaultClient.CloseIdleConnections()
 
 	runtime.GC()
 	debug.FreeOSMemory()
+
+	var memStats runtime.MemStats
+	runtime.ReadMemStats(&memStats)
+	fmt.Printf("🧹 [MEM] Post-cleanup: HeapInuse=%dMB HeapIdle=%dMB HeapSys=%dMB Goroutines=%d\n",
+		memStats.HeapInuse/1024/1024,
+		memStats.HeapIdle/1024/1024,
+		memStats.HeapSys/1024/1024,
+		runtime.NumGoroutine(),
+	)
 	logger.Logger.Infow("Post-session memory released", "jobId", jobCtx.Job.Id)
 
 	return nil
