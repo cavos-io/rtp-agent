@@ -23,5 +23,6 @@
       "shadow": true,
       "unusedvariable": true
     }
-  }
+  },
+  "makefile.configureOnOpen": true
 }

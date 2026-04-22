@@ -18,20 +18,16 @@ type OpenAISTT struct {
 	prompt string
 }
 
-func NewOpenAISTT(apiKey string, model string) *OpenAISTT {
-	return NewOpenAISTTWithBaseURL(apiKey, model, "")
-}
-
-func NewOpenAISTTWithBaseURL(apiKey string, model string, baseURL string) *OpenAISTT {
+func NewOpenAISTT(apiKey string, model string, opts ...Option) *OpenAISTT {
 	if model == "" {
 		model = openai.Whisper1
 	}
-	cfg := openai.DefaultConfig(apiKey)
-	if baseURL != "" {
-		cfg.BaseURL = baseURL
+	config := openai.DefaultConfig(apiKey)
+	for _, opt := range opts {
+		opt(&config)
 	}
 	return &OpenAISTT{
-		client: openai.NewClientWithConfig(cfg),
+		client: openai.NewClientWithConfig(config),
 		model:  model,
 	}
 }
