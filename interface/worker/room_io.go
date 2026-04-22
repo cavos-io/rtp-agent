@@ -334,7 +334,7 @@ func (t *RoomTextOutput) worker() {
 						Transcription: tp,
 					},
 				}
-				
+
 				if buf, err := proto.Marshal(packet); err == nil {
 					go t.client.SendData(t.ctx, &livekit.SendDataRequest{
 						Room: t.room.Name(),
@@ -1347,4 +1347,3 @@ func (rio *RoomIO) registerRoomCallbacks() {
 		}
 	}
 }
-

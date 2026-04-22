@@ -11,6 +11,9 @@ import (
 	"runtime/debug"
 	"time"
 
+	"os/signal"
+	"syscall"
+
 	elevenlabsAdapter "github.com/cavos-io/rtp-agent/adapter/elevenlabs"
 	openaiAdapter "github.com/cavos-io/rtp-agent/adapter/openai"
 	sileroAdapter "github.com/cavos-io/rtp-agent/adapter/silero"
@@ -21,8 +24,6 @@ import (
 	"github.com/joho/godotenv"
 	lksdk "github.com/livekit/server-sdk-go/v2"
 	"github.com/pion/webrtc/v4"
-	"os/signal"
-	"syscall"
 )
 
 func main() {

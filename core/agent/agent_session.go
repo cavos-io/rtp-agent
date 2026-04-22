@@ -93,7 +93,7 @@ type AgentSession struct {
 	started  bool
 	closing  bool
 
-	transitionMu sync.Mutex
+	transitionMu     sync.Mutex
 	transitionCancel context.CancelFunc
 
 	// Event channels
@@ -496,7 +496,6 @@ func (s *AgentSession) UpdateOptions(opts AgentSessionOptions) {
 	}
 }
 
-
 func (s *AgentSession) reportUsageLoop(ctx context.Context) {
 	ticker := time.NewTicker(30 * time.Second)
 	defer ticker.Stop()
@@ -509,7 +508,7 @@ func (s *AgentSession) reportUsageLoop(ctx context.Context) {
 			if s.MetricsCollector != nil && s.ChatCtx != nil {
 				summary := s.MetricsCollector.GetSummary()
 				s.ChatCtx.Append(&llm.MetricsReport{Usage: summary})
-				
+
 				if s.Timeline != nil {
 					s.Timeline.AddEvent(&MetricsCollectedEvent{
 						Metrics:   &summary,
@@ -579,7 +578,7 @@ func (s *AgentSession) UpdateUserState(state UserState) {
 				CreatedAt: time.Now(),
 			})
 		}
-		
+
 		if s.clientEvents != nil {
 			s.clientEvents.DispatchUserState(state)
 		}
@@ -830,7 +829,7 @@ func (s *AgentSession) PublishUserTranscript(text string) {
 			Final:     true,
 		}},
 	}
-	
+
 	// GAP-008: Use abstracted Publisher to publish transcription packet
 	data, _ := proto.Marshal(tpkt)
 	if err := s.Output.Publisher.PublishData(data, "lk.transcription", nil); err != nil {
@@ -871,7 +870,7 @@ func (s *AgentSession) PublishAgentTranscript(text string) {
 			Final:     true,
 		}},
 	}
-	
+
 	data, _ := proto.Marshal(tpkt)
 	if err := s.Output.Publisher.PublishData(data, "lk.transcription", nil); err != nil {
 		logger.Logger.Warnw("Failed to publish agent transcription", err)
@@ -918,4 +917,3 @@ func (s *AgentSession) Stop(ctx context.Context) error {
 
 	return nil
 }
-

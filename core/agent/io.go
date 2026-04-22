@@ -98,3 +98,7 @@ type AgentOutput struct {
 	Publisher     MediaPublisher
 }
 
+type SessionInfo interface {
+	LocalParticipantID() string
+}
+

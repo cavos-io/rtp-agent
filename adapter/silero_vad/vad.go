@@ -31,4 +31,3 @@ func (v *SileroVAD) Stream(ctx context.Context) (vad.VADStream, error) {
 	})
 	return backend.Stream(ctx)
 }
-
