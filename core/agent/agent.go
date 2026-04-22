@@ -98,7 +98,7 @@ func (a *Agent) UpdateTools(ctx context.Context, tools []interface{}) error {
 }
 
 func (a *Agent) Start(session *AgentSession, agentIntf AgentInterface) *AgentActivity {
-	a.activity = NewAgentActivity(agentIntf, session)
+	a.activity = NewAgentActivity(agentIntf, session, session.ctx)
 	a.activity.Start()
 	return a.activity
 }

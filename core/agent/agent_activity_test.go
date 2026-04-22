@@ -10,7 +10,7 @@ func newTestActivity(t *testing.T) *AgentActivity {
 	t.Helper()
 	base := NewAgent("test")
 	session := NewAgentSession(base, nil, AgentSessionOptions{})
-	return NewAgentActivity(base, session)
+	return NewAgentActivity(base, session, context.Background())
 }
 
 func TestScheduleSpeechPriorityOrder(t *testing.T) {

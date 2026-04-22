@@ -107,7 +107,45 @@ func (s *AgentServer) Run(ctx context.Context) error {
 	}
 	wsURL.Path = "/agent"
 
-	// Create JWT token
+	// Reconnect loop — if the worker WS drops mid-session, reconnect
+	// so the agent stays visible in the LiveKit panel.
+	maxRetries := 10
+	retryDelay := 2 * time.Second
+
+	for attempt := 0; ; attempt++ {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+
+		err := s.runOnce(ctx, wsURL.String())
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+
+		if attempt >= maxRetries {
+			return fmt.Errorf("worker WS reconnect failed after %d attempts: %w", maxRetries, err)
+		}
+
+		logger.Logger.Warnw("Worker WS disconnected, reconnecting...", err,
+			"attempt", attempt+1,
+			"retry_in", retryDelay.String(),
+		)
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(retryDelay):
+		}
+
+		// Exponential backoff capped at 30s
+		retryDelay = retryDelay * 2
+		if retryDelay > 30*time.Second {
+			retryDelay = 30 * time.Second
+		}
+	}
+}
+
+func (s *AgentServer) runOnce(ctx context.Context, wsURL string) error {
+	// Create JWT token (fresh on each connect/reconnect)
 	at := auth.NewAccessToken(s.Options.APIKey, s.Options.APISecret)
 	grant := &auth.VideoGrant{Agent: true}
 	at.AddGrant(grant).SetValidFor(time.Hour)
@@ -116,36 +154,36 @@ func (s *AgentServer) Run(ctx context.Context) error {
 		return err
 	}
 
-	// Connect WS
-	// A robust implementation should include retries and proxy handling
-	logger.Logger.Infow("Dialing WebSocket", "url", wsURL.String())
-	conn, res, err := websocket.DefaultDialer.DialContext(ctx, wsURL.String(), map[string][]string{
+	logger.Logger.Infow("Dialing WebSocket", "url", wsURL)
+	conn, _, err := websocket.DefaultDialer.DialContext(ctx, wsURL, map[string][]string{
 		"Authorization": {fmt.Sprintf("Bearer %s", token)},
 	})
 	if err != nil {
 		logger.Logger.Errorw("WebSocket connection failed", err)
-		return fmt.Errorf("failed to connect to LiveKit %s: %w", wsURL.String(), err)
+		return fmt.Errorf("failed to connect to LiveKit %s: %w", wsURL, err)
 	}
-	_ = res
+
+	s.mu.Lock()
 	s.conn = conn
-	defer conn.Close()
+	s.mu.Unlock()
+
+	defer func() {
+		conn.Close()
+		s.mu.Lock()
+		s.conn = nil
+		s.mu.Unlock()
+	}()
 
 	// When ctx is cancelled (e.g. Ctrl+C), close the WebSocket so the
 	// blocking conn.ReadMessage() call below returns immediately.
 	go func() {
 		<-ctx.Done()
-		logger.Logger.Infow("Shutting down worker...")
 		conn.Close()
 	}()
 
-	logger.Logger.Infow("Connected to LiveKit Server!")
-	logger.Logger.Infow("Registering worker...")
-	logger.Logger.Infow("Connected to LiveKit Server", "url", s.Options.WSRL)
+	logger.Logger.Infow("Connected to LiveKit Server", "url", wsURL)
 
 	// Send Register request.
-	// PingInterval tells the server how often (in seconds) we will send
-	// application-level WorkerPing messages. Without this the server considers
-	// the worker unhealthy and never dispatches jobs.
 	pingIntervalSec := uint32(5)
 	ns := "" // empty = default namespace
 	req := &livekit.WorkerMessage{
@@ -175,9 +213,6 @@ func (s *AgentServer) Run(ctx context.Context) error {
 	}
 
 	// Application-level ping loop.
-	// LiveKit agent protocol uses protobuf WorkerPing messages (NOT WebSocket
-	// control-frame pings). The server echoes back a WorkerPong. Without these
-	// pings the server marks the worker as dead and stops sending jobs.
 	go func() {
 		ticker := time.NewTicker(time.Duration(pingIntervalSec) * time.Second)
 		defer ticker.Stop()
@@ -199,18 +234,17 @@ func (s *AgentServer) Run(ctx context.Context) error {
 					return
 				}
 				s.mu.Lock()
-				err = conn.WriteMessage(websocket.BinaryMessage, pb)
+				writeErr := conn.WriteMessage(websocket.BinaryMessage, pb)
 				s.mu.Unlock()
-				if err != nil {
-					logger.Logger.Errorw("Ping send error", err)
+				if writeErr != nil {
+					// Don't log as error — reconnect loop will handle it
 					return
 				}
-				logger.Logger.Debugw("WorkerPing sent", "ts", time.Now().UnixMilli())
 			}
 		}
 	}()
 
-	// Message Loop — read in a separate goroutine so ctx cancellation is respected
+	// Message loop
 	type wsMsg struct {
 		msgType int
 		data    []byte
@@ -228,16 +262,26 @@ func (s *AgentServer) Run(ctx context.Context) error {
 		}
 	}()
 
+	// Re-send JS_RUNNING for any active jobs so LiveKit knows they're still alive
+	s.mu.Lock()
+	activeJobIDs := make([]string, 0, len(s.activeJobs))
+	for id := range s.activeJobs {
+		activeJobIDs = append(activeJobIDs, id)
+	}
+	s.mu.Unlock()
+	for _, jobID := range activeJobIDs {
+		if err := s.sendJobStatus(jobID, livekit.JobStatus_JS_RUNNING, ""); err != nil {
+			logger.Logger.Warnw("Failed to re-send JS_RUNNING on reconnect", err, "jobId", jobID)
+		}
+	}
+
 	for {
 		select {
 		case <-ctx.Done():
-			if s.conn != nil {
-				s.conn.Close()
-			}
 			return ctx.Err()
 		case result := <-msgCh:
 			if result.err != nil {
-				return result.err
+				return result.err // triggers reconnect
 			}
 			if result.msgType != websocket.BinaryMessage {
 				continue
@@ -412,9 +456,30 @@ func (s *AgentServer) handleAvailability(ctx context.Context, req *livekit.Avail
 	}
 }
 
+func (s *AgentServer) sendJobStatus(jobID string, status livekit.JobStatus, errMsg string) error {
+	update := &livekit.WorkerMessage{
+		Message: &livekit.WorkerMessage_UpdateJob{
+			UpdateJob: &livekit.UpdateJobStatus{
+				JobId:  jobID,
+				Status: status,
+				Error:  errMsg,
+			},
+		},
+	}
+	b, err := proto.Marshal(update)
+	if err != nil {
+		return err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.conn == nil {
+		return nil
+	}
+	return s.conn.WriteMessage(websocket.BinaryMessage, b)
+}
+
 func (s *AgentServer) handleAssignment(ctx context.Context, req *livekit.JobAssignment) {
 	logger.Logger.Infow("Received job assignment", "jobId", req.Job.Id, "room", req.Job.Room.Name)
-	logger.Logger.Infow("Received job assignment", "jobId", req.Job.Id)
 
 	// Spin up a job context here
 	jobCtx := NewJobContext(req.Job, s.Options.WSRL, s.Options.APIKey, s.Options.APISecret)
@@ -423,16 +488,29 @@ func (s *AgentServer) handleAssignment(ctx context.Context, req *livekit.JobAssi
 	s.activeJobs[req.Job.Id] = jobCtx
 	s.mu.Unlock()
 
+	// Tell LiveKit the job is running — keeps agent visible in the panel
+	if err := s.sendJobStatus(req.Job.Id, livekit.JobStatus_JS_RUNNING, ""); err != nil {
+		fmt.Printf("❌ [PANEL] Failed to send JS_RUNNING: %v (jobId=%s)\n", err, req.Job.Id)
+	} else {
+		fmt.Printf("✅ [PANEL] Sent JS_RUNNING — agent should appear in panel (jobId=%s)\n", req.Job.Id)
+	}
+
 	if s.entrypointFnc != nil {
 		go func() {
-			if err := s.entrypointFnc(jobCtx); err != nil {
-				logger.Logger.Errorw("Job entrypoint failed", err, "jobId", req.Job.Id)
+			err := s.entrypointFnc(jobCtx)
+			if err != nil {
+				fmt.Printf("❌ [PANEL] Job failed — sending JS_FAILED — agent will disappear (jobId=%s, err=%v)\n", req.Job.Id, err)
+				_ = s.sendJobStatus(req.Job.Id, livekit.JobStatus_JS_FAILED, err.Error())
+			} else {
+				fmt.Printf("⚠️  [PANEL] Job returned nil — sending JS_SUCCESS — agent will disappear (jobId=%s)\n", req.Job.Id)
+				_ = s.sendJobStatus(req.Job.Id, livekit.JobStatus_JS_SUCCESS, "")
 			}
+
 			// Job done — clean up activeJobs to free memory
 			s.mu.Lock()
 			delete(s.activeJobs, req.Job.Id)
 			s.mu.Unlock()
-			fmt.Printf("   🧹 Job cleaned up: %s\n", req.Job.Id)
+			fmt.Printf("   🧹 [PANEL] Job cleaned up: %s\n", req.Job.Id)
 
 			// Signal back to AVAILABLE so the next dispatch can be received
 			if err := s.sendAvailable(); err != nil {
@@ -443,7 +521,8 @@ func (s *AgentServer) handleAssignment(ctx context.Context, req *livekit.JobAssi
 }
 
 func (s *AgentServer) handleTermination(req *livekit.JobTermination) {
-	logger.Logger.Infow("Received job termination", "jobId", req.JobId)
+	fmt.Printf("⚠️  [PANEL] Server sent TERMINATION — agent will disappear (jobId=%s, raw=%+v)\n", req.JobId, req)
+	logger.Logger.Infow("Received job termination", "jobId", req.JobId, "raw", fmt.Sprintf("%+v", req))
 
 	s.mu.Lock()
 	jobCtx, exists := s.activeJobs[req.JobId]

@@ -257,6 +257,18 @@ func (t *EventTimeline) AddEvent(ev Event) {
 	}
 }
 
+// Clear releases all stored events and the OnEvent callback so the
+// timeline (and everything it references) can be garbage-collected.
+func (t *EventTimeline) Clear() {
+	if t == nil {
+		return
+	}
+	t.mu.Lock()
+	t.events = nil
+	t.OnEvent = nil
+	t.mu.Unlock()
+}
+
 func (t *EventTimeline) Snapshot() []*AgentEvent {
 	if t == nil {
 		return nil
@@ -375,6 +387,15 @@ func NewClientEventsDispatcher(room *lksdk.Room, session *AgentSession) *ClientE
 	}
 	
 	return d
+}
+
+func (d *ClientEventsDispatcher) Close() {
+	d.tasks.Wait()
+	d.mu.Lock()
+	d.session = nil
+	d.room = nil
+	d.textInputCb = nil
+	d.mu.Unlock()
 }
 
 func (d *ClientEventsDispatcher) RegisterTextInput(cb TextInputCallback) {

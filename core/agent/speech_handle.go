@@ -46,9 +46,10 @@ type SpeechHandle struct {
 	FinalOutput any
 	ManualText  string
 
-	mu sync.Mutex
-	err error
-	
+	mu             sync.Mutex
+	err            error
+	interruptTimer *time.Timer
+
 	OnItemAdded func(item llm.ChatItem)
 	RunResult   RunResultInterface
 }
@@ -110,13 +111,13 @@ func (s *SpeechHandle) Interrupt(force bool) error {
 	if !s.IsInterrupted() && !s.IsDone() {
 		close(s.interruptCh)
 
-		// Start a timeout to force-close doneCh if it doesn't resolve naturally
-		go func() {
-			time.Sleep(InterruptionTimeout)
+		// Start a cancellable timeout to force-close doneCh if it doesn't resolve naturally.
+		// Using time.AfterFunc avoids spawning a sleeping goroutine per interruption.
+		s.interruptTimer = time.AfterFunc(InterruptionTimeout, func() {
 			if !s.IsDone() {
 				s.MarkDone()
 			}
-		}()
+		})
 	}
 
 	return nil
@@ -131,6 +132,10 @@ func (s *SpeechHandle) MarkDoneWithError(err error) {
 	defer s.mu.Unlock()
 
 	if !s.IsDone() {
+		if s.interruptTimer != nil {
+			s.interruptTimer.Stop()
+			s.interruptTimer = nil
+		}
 		s.err = err
 		close(s.doneCh)
 	}

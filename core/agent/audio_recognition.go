@@ -273,6 +273,28 @@ func (ar *AudioRecognition) PushAudio(frame *model.AudioFrame) error {
 	return nil
 }
 
+func (ar *AudioRecognition) Close() {
+	if ar.cancel != nil {
+		ar.cancel()
+	}
+	ar.mu.Lock()
+	if ar.sttStream != nil {
+		ar.sttStream.Close()
+		ar.sttStream = nil
+	}
+	if ar.vadStream != nil {
+		ar.vadStream.Close()
+		ar.vadStream = nil
+	}
+	if ar.sttNodeAudioCh != nil {
+		close(ar.sttNodeAudioCh)
+		ar.sttNodeAudioCh = nil
+	}
+	ar.hooks = nil
+	ar.session = nil
+	ar.mu.Unlock()
+}
+
 func (ar *AudioRecognition) Flush() error {
 	ar.mu.Lock()
 	defer ar.mu.Unlock()

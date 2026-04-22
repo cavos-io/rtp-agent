@@ -69,6 +69,8 @@ func (d *opusDecoder) Decode(data []byte) ([]byte, error) {
 }
 
 func (d *opusDecoder) Close() error {
+	d.decoder = nil
+	d.buf = nil
 	return nil
 }
 
@@ -113,6 +115,8 @@ func (e *opusEncoder) Encode(pcm []byte) ([]byte, error) {
 }
 
 func (e *opusEncoder) Close() error {
+	e.encoder = nil
+	e.buf = nil
 	return nil
 }
 
@@ -175,8 +179,10 @@ type RoomIO struct {
 	mu     sync.Mutex
 	closed bool
 	ctx    context.Context // session lifecycle context — cancelled on disconnect
+	cancel context.CancelFunc
 
 	audioTrack *lksdk.LocalSampleTrack
+	audioPub   *lksdk.LocalTrackPublication
 	videoTrack *lksdk.LocalSampleTrack
 	decoder    AudioDecoder
 	encoder    AudioEncoder
@@ -330,7 +336,7 @@ func (t *RoomTextOutput) worker() {
 				}
 
 				if buf, err := proto.Marshal(packet); err == nil {
-					go t.client.SendData(context.Background(), &livekit.SendDataRequest{
+					go t.client.SendData(t.ctx, &livekit.SendDataRequest{
 						Room: t.room.Name(),
 						Data: buf,
 					})
@@ -390,6 +396,8 @@ func NewRoomIO(room *lksdk.Room, session *agent.AgentSession, opts RoomOptions) 
 	preConnectAudio := NewPreConnectAudioHandler(room, 5*time.Second)
 	preConnectAudio.Register()
 
+	rioCtx, rioCancel := context.WithCancel(context.Background())
+
 	rio := &RoomIO{
 		Room:                room,
 		AgentSession:        session,
@@ -405,6 +413,7 @@ func NewRoomIO(room *lksdk.Room, session *agent.AgentSession, opts RoomOptions) 
 		flushWaiters:        make([]chan struct{}, 0),
 		participantIdentity: opts.ParticipantIdentity,
 		trackContexts:       make(map[string]context.CancelFunc),
+		cancel:              rioCancel,
 	}
 
 	// Wire the room to the session so that state attributes (lk.agent.state)
@@ -413,7 +422,7 @@ func NewRoomIO(room *lksdk.Room, session *agent.AgentSession, opts RoomOptions) 
 
 	rio.registerRoomCallbacks()
 
-	go rio.playoutLoop(context.Background())
+	go rio.playoutLoop(rioCtx)
 
 	if session.Assistant == nil {
 		session.Assistant = agent.NewPipelineAgent(session.VAD, session.STT, session.LLM, session.TTS, session.ChatCtx)
@@ -590,20 +599,39 @@ func (rio *RoomIO) OnPlaybackFinished(f func(ev agent.PlaybackFinishedEvent)) {
 type flushMarker chan struct{}
 
 func (rio *RoomIO) CaptureFrame(frame *model.AudioFrame) error {
+	rio.mu.Lock()
+	if rio.closed {
+		rio.mu.Unlock()
+		return nil
+	}
+	rio.mu.Unlock()
 	rio.playoutCh <- frame
 	return nil
 }
 
 func (rio *RoomIO) playoutLoop(ctx context.Context) {
-	// Keep-alive: send silence when idle so the RTP stream stays active and
-	// the LiveKit server / Playground don't mark the track as muted.
+	// Keep-alive: send comfort noise when idle so the RTP stream stays
+	// active and the LiveKit server doesn't auto-mute the track.
 	const silenceFrameMs = 20
 	silenceDuration := time.Duration(silenceFrameMs) * time.Millisecond
 	silenceSamples := 48000 * silenceFrameMs / 1000 // 960 samples at 48kHz
-	silencePCM := make([]byte, silenceSamples*1*2)  // mono 16-bit zeros
-	var cachedSilenceOpus []byte
+	// Comfort noise: very low amplitude random-ish values instead of pure
+	// zeros.  Pure silence can trigger server-side mute detection.
+	comfortPCM := make([]byte, silenceSamples*1*2) // mono 16-bit
+	for i := 0; i < len(comfortPCM); i += 2 {
+		// ~-90 dBFS square wiggle: alternating +1/-1 samples
+		if (i/2)%2 == 0 {
+			comfortPCM[i] = 1
+		} else {
+			comfortPCM[i] = 0xFF // -1 in int16 LE = 0xFFFF
+			comfortPCM[i+1] = 0xFF
+		}
+	}
+	var cachedComfortOpus []byte
 
-	silenceTicker := time.NewTicker(silenceDuration)
+	// Send keep-alive every 200ms (not every 20ms) — enough to prevent
+	// server-side mute detection without wasting CPU/bandwidth.
+	silenceTicker := time.NewTicker(200 * time.Millisecond)
 	defer silenceTicker.Stop()
 
 	for {
@@ -613,6 +641,7 @@ func (rio *RoomIO) playoutLoop(ctx context.Context) {
 		case <-silenceTicker.C:
 			rio.mu.Lock()
 			track := rio.audioTrack
+			pub := rio.audioPub
 			playing := rio.playbackStarted
 			paused := rio.paused
 			encoder := rio.encoder
@@ -622,18 +651,24 @@ func (rio *RoomIO) playoutLoop(ctx context.Context) {
 				continue
 			}
 
-			// Lazily encode and cache the silence Opus frame.
-			if cachedSilenceOpus == nil && encoder != nil {
-				if encoded, err := encoder.Encode(silencePCM); err == nil {
-					cachedSilenceOpus = make([]byte, len(encoded))
-					copy(cachedSilenceOpus, encoded)
+			// Lazily encode and cache the comfort-noise Opus frame.
+			if cachedComfortOpus == nil && encoder != nil {
+				if encoded, err := encoder.Encode(comfortPCM); err == nil {
+					cachedComfortOpus = make([]byte, len(encoded))
+					copy(cachedComfortOpus, encoded)
 				}
 			}
-			if cachedSilenceOpus != nil {
+			if cachedComfortOpus != nil {
 				_ = track.WriteSample(media.Sample{
-					Data:     cachedSilenceOpus,
+					Data:     cachedComfortOpus,
 					Duration: silenceDuration,
 				}, nil)
+			}
+
+			// Explicitly tell the server the track is NOT muted so the
+			// Playground keeps showing the agent audio panel.
+			if pub != nil {
+				pub.SetMuted(false)
 			}
 		case <-rio.clearBufferCh:
 			// Drain playout channel
@@ -662,7 +697,12 @@ func (rio *RoomIO) playoutLoop(ctx context.Context) {
 				rio.playbackStarted = false
 				rio.pushedDuration = 0
 			}
+			pub := rio.audioPub
 			rio.mu.Unlock()
+
+			if pub != nil {
+				pub.SetMuted(false)
+			}
 
 		case item := <-rio.playoutCh:
 			switch v := item.(type) {
@@ -697,8 +737,15 @@ func (rio *RoomIO) playoutLoop(ctx context.Context) {
 						break
 					}
 				}
+				pub := rio.audioPub
 				rio.mu.Unlock()
 				close(v)
+
+				// Immediately tell server track is still active after
+				// playback ends so Playground doesn't show "Waiting...".
+				if pub != nil {
+					pub.SetMuted(false)
+				}
 
 			case *model.AudioFrame:
 				frame := v
@@ -960,7 +1007,10 @@ func (rio *RoomIO) Start(ctx context.Context) error {
 		logger.Logger.Infow("🎙️ [RoomIO] Agent audio track SID", "sid", pub.SID())
 	}
 
+	rio.mu.Lock()
 	rio.audioTrack = track
+	rio.audioPub = pub
+	rio.mu.Unlock()
 
 	// Update transcription output with track ID for protocol alignment
 	if rio.AgentSession != nil && rio.AgentSession.Output.Transcription != nil {
@@ -1199,12 +1249,22 @@ func (rio *RoomIO) Close() error {
 	rio.closed = true
 	rio.mu.Unlock()
 
+	// Cancel the RoomIO-level context so playoutLoop and other goroutines exit.
+	if rio.cancel != nil {
+		rio.cancel()
+	}
+
 	rio.trackContextsMu.Lock()
 	for _, cancel := range rio.trackContexts {
 		cancel()
 	}
 	rio.trackContexts = make(map[string]context.CancelFunc)
 	rio.trackContextsMu.Unlock()
+
+	// Close the audio input channel so RecorderAudioInput.loop() can exit.
+	// Track contexts are already cancelled above, so senders (handleAudioTrack)
+	// have stopped before we close the channel.
+	close(rio.audioInCh)
 
 	if rio.decoder != nil {
 		rio.decoder.Close()
@@ -1216,11 +1276,24 @@ func (rio *RoomIO) Close() error {
 		rio.sync.Close()
 	}
 
+	if rio.Recorder != nil {
+		rio.Recorder.Stop()
+	}
+
+	if rio.preConnectAudio != nil {
+		rio.preConnectAudio.Close()
+	}
+
 	if rio.AgentSession != nil && rio.AgentSession.Output.Transcription != nil {
 		if closer, ok := rio.AgentSession.Output.Transcription.(io.Closer); ok {
 			closer.Close()
 		}
 	}
+
+	// Release references to help GC.
+	rio.AgentSession = nil
+	rio.onPlaybackStarted = nil
+	rio.onPlaybackFinished = nil
 
 	if rio.Options.DeleteRoomOnClose {
 		if rio.Options.JobContext != nil && rio.Room != nil {

@@ -257,7 +257,7 @@ func (s *AgentSession) Start(ctx context.Context) error {
 		base.STT = s.STT
 	}
 
-	s.Activity = NewAgentActivity(s.Agent, s)
+	s.Activity = NewAgentActivity(s.Agent, s, ctx)
 	// Sync the activity onto the base *Agent so Agent.OnUserTurnCompleted
 	// can reach it via a.activity (it guards on a.activity == nil).
 	if base := s.Agent.GetAgent(); base != nil {
@@ -327,6 +327,32 @@ func (s *AgentSession) Close() error {
 	}
 	s.UpdateAgentState(AgentStateIdle)
 
+	// Release large references so GC can collect them.
+	if s.Timeline != nil {
+		s.Timeline.Clear()
+	}
+
+	// Clear the closure that captures this session to break the reference cycle.
+	if s.ChatCtx != nil {
+		s.ChatCtx.OnItemAdded = nil
+	}
+
+	if s.clientEvents != nil {
+		s.clientEvents.Close()
+	}
+
+	s.mu.Lock()
+	s.ChatCtx = nil
+	s.Timeline = nil
+	s.Activity = nil
+	s.Assistant = nil
+	s.Agent = nil
+	s.clientEvents = nil
+	s.ivrActivity = nil
+	s.Input = AgentInput{}
+	s.Output = AgentOutput{}
+	s.mu.Unlock()
+
 	return nil
 }
 
@@ -382,7 +408,7 @@ func (s *AgentSession) UpdateAgent(agent AgentInterface, opts *UpdateAgentOpts) 
 			s.mu.Unlock()
 			return fmt.Errorf("cannot start agent: an activity is already running")
 		}
-		newActivity = NewAgentActivity(agent, s)
+		newActivity = NewAgentActivity(agent, s, s.ctx)
 	} else if opts.NewActivity == TransitionActivityResume {
 		if agent.GetActivity() == nil {
 			s.mu.Unlock()

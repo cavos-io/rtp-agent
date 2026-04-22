@@ -198,6 +198,12 @@ func (s *inferenceTTSStream) run() {
 	// Tokenizer loop
 	go func() {
 		for {
+			select {
+			case <-s.ctx.Done():
+				return
+			default:
+			}
+
 			tok, err := s.tokenizer.Next()
 			if err != nil {
 				return
