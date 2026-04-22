@@ -1,0 +1,35 @@
+name: Go Tests
+
+on:
+  push:
+    branches: [ main, master, fix/parity-gap ]
+  pull_request:
+    branches: [ main, master ]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Set up Go
+      uses: actions/setup-go@v5
+      with:
+        go-version: '1.22'
+
+    - name: Install dependencies
+      run: go mod download
+
+    - name: Run Unit Tests with Coverage
+      run: go test ./... -v -coverprofile=coverage.txt -covermode=atomic
+
+    - name: Check Coverage
+      run: go tool cover -func=coverage.txt
+
+    - name: Upload coverage reports to Codecov
+      uses: codecov/codecov-action@v4
+      with:
+        file: ./coverage.txt
+        fail_ci_if_error: false
+      env:
+        CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}

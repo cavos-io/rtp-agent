@@ -18,9 +18,10 @@ import (
 )
 
 type AzureSTT struct {
-	apiKey  string
-	region  string
-	baseURL string
+	apiKey     string
+	region     string
+	baseURL    string
+	httpClient *http.Client
 }
 
 type STTOption func(*AzureSTT)
@@ -31,10 +32,17 @@ func WithSTTBaseURL(url string) STTOption {
 	}
 }
 
+func WithSTTHTTPClient(client *http.Client) STTOption {
+	return func(s *AzureSTT) {
+		s.httpClient = client
+	}
+}
+
 func NewAzureSTT(apiKey string, region string, opts ...STTOption) *AzureSTT {
 	s := &AzureSTT{
-		apiKey: apiKey,
-		region: region,
+		apiKey:     apiKey,
+		region:     region,
+		httpClient: http.DefaultClient,
 	}
 	for _, opt := range opts {
 		opt(s)
@@ -75,7 +83,7 @@ func (s *AzureSTT) Recognize(ctx context.Context, frames []*model.AudioFrame, la
 	req.Header.Set("Content-Type", "audio/wav; codecs=audio/pcm; samplerate=16000")
 	req.Header.Set("Ocp-Apim-Subscription-Key", s.apiKey)
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := s.httpClient.Do(req)
 	if err != nil {
 		return nil, err
 	}
@@ -103,10 +111,11 @@ func (s *AzureSTT) Recognize(ctx context.Context, frames []*model.AudioFrame, la
 }
 
 type AzureTTS struct {
-	apiKey  string
-	region  string
-	voice   string
-	baseURL string
+	apiKey     string
+	region     string
+	voice      string
+	baseURL    string
+	httpClient *http.Client
 }
 
 type TTSOption func(*AzureTTS)
@@ -117,14 +126,21 @@ func WithTTSBaseURL(url string) TTSOption {
 	}
 }
 
+func WithTTSHTTPClient(client *http.Client) TTSOption {
+	return func(t *AzureTTS) {
+		t.httpClient = client
+	}
+}
+
 func NewAzureTTS(apiKey string, region string, voice string, opts ...TTSOption) *AzureTTS {
 	if voice == "" {
 		voice = "en-US-AvaMultilingualNeural"
 	}
 	t := &AzureTTS{
-		apiKey: apiKey,
-		region: region,
-		voice:  voice,
+		apiKey:     apiKey,
+		region:     region,
+		voice:      voice,
+		httpClient: http.DefaultClient,
 	}
 	for _, opt := range opts {
 		opt(t)
@@ -155,7 +171,7 @@ func (t *AzureTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStre
 	req.Header.Set("X-Microsoft-OutputFormat", "raw-16khz-16bit-mono-pcm")
 	req.Header.Set("Ocp-Apim-Subscription-Key", t.apiKey)
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := t.httpClient.Do(req)
 	if err != nil {
 		return nil, err
 	}

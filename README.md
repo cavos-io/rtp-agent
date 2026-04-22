@@ -95,7 +95,26 @@ Connect mode for local room testing:
 go run ./cmd/main.go connect <room_name> [participant_identity]
 ```
 
-## Roadmap
+## Testing
+
+The project uses a comprehensive unit testing suite for all adapters (LLM, STT, TTS).
+
+### Running Tests
+You can run all tests using the provided `Makefile`:
+
+```bash
+# Run all unit tests
+make test
+
+# Run tests and open HTML coverage report
+make cover
+```
+
+### CI/CD
+Tests are automatically executed on every push and pull request via GitHub Actions. Coverage reports are uploaded to Codecov for visibility.
+
+### Adding New Tests
+When adding or modifying adapters, ensure they are testable by following the **Functional Options** pattern for dependency injection (e.g., injecting base URLs or HTTP clients). Refer to `library/utils/testutils` for helpers to mock REST and WebSocket servers.
 
 - [ ] End-to-end latency profiling and optimization pass.
 - [ ] Lower-memory execution mode for constrained environments.
