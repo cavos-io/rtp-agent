@@ -15,13 +15,35 @@ import (
 type ClovaSTT struct {
 	clientID     string
 	clientSecret string
+	apiURL       string
+	httpClient   *http.Client
 }
 
-func NewClovaSTT(clientID, clientSecret string) *ClovaSTT {
-	return &ClovaSTT{
+type STTOption func(*ClovaSTT)
+
+func WithSTTBaseURL(url string) STTOption {
+	return func(s *ClovaSTT) {
+		s.apiURL = url
+	}
+}
+
+func WithHTTPClient(client *http.Client) STTOption {
+	return func(s *ClovaSTT) {
+		s.httpClient = client
+	}
+}
+
+func NewClovaSTT(clientID, clientSecret string, opts ...STTOption) *ClovaSTT {
+	s := &ClovaSTT{
 		clientID:     clientID,
 		clientSecret: clientSecret,
+		apiURL:       "https://naveropenapi.apigw.ntruss.com/recog/v1/stt",
+		httpClient:   http.DefaultClient,
 	}
+	for _, opt := range opts {
+		opt(s)
+	}
+	return s
 }
 
 func (s *ClovaSTT) Label() string { return "clova.STT" }
@@ -38,14 +60,14 @@ func (s *ClovaSTT) Recognize(ctx context.Context, frames []*model.AudioFrame, la
 		language = "Kor" // Defaulting to Korean as Clova is primarily Korean
 	}
 
-	apiURL := fmt.Sprintf("https://naveropenapi.apigw.ntruss.com/recog/v1/stt?lang=%s", language)
-
+	fullURL := fmt.Sprintf("%s?lang=%s", s.apiURL, language)
+	
 	var buf bytes.Buffer
 	for _, f := range frames {
 		buf.Write(f.Data)
 	}
 
-	req, err := http.NewRequestWithContext(ctx, "POST", apiURL, bytes.NewReader(buf.Bytes()))
+	req, err := http.NewRequestWithContext(ctx, "POST", fullURL, bytes.NewReader(buf.Bytes()))
 	if err != nil {
 		return nil, err
 	}
@@ -54,7 +76,7 @@ func (s *ClovaSTT) Recognize(ctx context.Context, frames []*model.AudioFrame, la
 	req.Header.Set("X-NCP-APIGW-API-KEY-ID", s.clientID)
 	req.Header.Set("X-NCP-APIGW-API-KEY", s.clientSecret)
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := s.httpClient.Do(req)
 	if err != nil {
 		return nil, err
 	}

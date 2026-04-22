@@ -16,17 +16,39 @@ type ClovaTTS struct {
 	clientID     string
 	clientSecret string
 	voice        string
+	apiURL       string
+	httpClient   *http.Client
 }
 
-func NewClovaTTS(clientID, clientSecret, voice string) *ClovaTTS {
+type TTSOption func(*ClovaTTS)
+
+func WithTTSBaseURL(url string) TTSOption {
+	return func(t *ClovaTTS) {
+		t.apiURL = url
+	}
+}
+
+func WithHTTPClient(client *http.Client) TTSOption {
+	return func(t *ClovaTTS) {
+		t.httpClient = client
+	}
+}
+
+func NewClovaTTS(clientID, clientSecret, voice string, opts ...TTSOption) *ClovaTTS {
 	if voice == "" {
 		voice = "nara"
 	}
-	return &ClovaTTS{
+	t := &ClovaTTS{
 		clientID:     clientID,
 		clientSecret: clientSecret,
 		voice:        voice,
+		apiURL:       "https://naveropenapi.apigw.ntruss.com/tts-premium/v1/tts",
+		httpClient:   http.DefaultClient,
 	}
+	for _, opt := range opts {
+		opt(t)
+	}
+	return t
 }
 
 func (t *ClovaTTS) Label() string { return "clova.TTS" }
@@ -37,8 +59,6 @@ func (t *ClovaTTS) SampleRate() int { return 24000 }
 func (t *ClovaTTS) NumChannels() int { return 1 }
 
 func (t *ClovaTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStream, error) {
-	apiURL := "https://naveropenapi.apigw.ntruss.com/tts-premium/v1/tts"
-
 	data := url.Values{}
 	data.Set("speaker", t.voice)
 	data.Set("volume", "0")
@@ -47,7 +67,7 @@ func (t *ClovaTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStre
 	data.Set("text", text)
 	data.Set("format", "mp3")
 
-	req, err := http.NewRequestWithContext(ctx, "POST", apiURL, bytes.NewBufferString(data.Encode()))
+	req, err := http.NewRequestWithContext(ctx, "POST", t.apiURL, bytes.NewBufferString(data.Encode()))
 	if err != nil {
 		return nil, err
 	}
@@ -56,7 +76,7 @@ func (t *ClovaTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStre
 	req.Header.Set("X-NCP-APIGW-API-KEY-ID", t.clientID)
 	req.Header.Set("X-NCP-APIGW-API-KEY", t.clientSecret)
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := t.httpClient.Do(req)
 	if err != nil {
 		return nil, err
 	}

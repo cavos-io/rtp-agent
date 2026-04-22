@@ -14,13 +14,35 @@ import (
 )
 
 type RtzrSTT struct {
-	apiKey string
+	apiKey     string
+	apiURL     string
+	httpClient *http.Client
 }
 
-func NewRtzrSTT(apiKey string) *RtzrSTT {
-	return &RtzrSTT{
-		apiKey: apiKey,
+type STTOption func(*RtzrSTT)
+
+func WithSTTBaseURL(url string) STTOption {
+	return func(s *RtzrSTT) {
+		s.apiURL = url
 	}
+}
+
+func WithHTTPClient(client *http.Client) STTOption {
+	return func(s *RtzrSTT) {
+		s.httpClient = client
+	}
+}
+
+func NewRtzrSTT(apiKey string, opts ...STTOption) *RtzrSTT {
+	s := &RtzrSTT{
+		apiKey:     apiKey,
+		apiURL:     "https://api.rtzr.ai/v1/stt",
+		httpClient: http.DefaultClient,
+	}
+	for _, opt := range opts {
+		opt(s)
+	}
+	return s
 }
 
 func (s *RtzrSTT) Label() string { return "rtzr.STT" }
@@ -49,7 +71,7 @@ func (s *RtzrSTT) Recognize(ctx context.Context, frames []*model.AudioFrame, lan
 	}
 	writer.Close()
 
-	req, err := http.NewRequestWithContext(ctx, "POST", url, body)
+	req, err := http.NewRequestWithContext(ctx, "POST", s.apiURL, body)
 	if err != nil {
 		return nil, err
 	}
@@ -57,7 +79,7 @@ func (s *RtzrSTT) Recognize(ctx context.Context, frames []*model.AudioFrame, lan
 	req.Header.Set("Content-Type", writer.FormDataContentType())
 	req.Header.Set("Authorization", "Bearer "+s.apiKey)
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := s.httpClient.Do(req)
 	if err != nil {
 		return nil, err
 	}
