@@ -54,19 +54,35 @@ func IsNova3Model(model string) bool {
 }
 
 type DeepgramSTT struct {
-	apiKey   string
-	model    string
-	keywords []Keyword
-	keyterms []string
+	apiKey  string
+	model   string
+	baseURL string
+	wsURL   string
 }
 
-func NewDeepgramSTT(apiKey string, model string, opts ...DeepgramOption) *DeepgramSTT {
+type Option func(*DeepgramSTT)
+
+func WithBaseURL(url string) Option {
+	return func(s *DeepgramSTT) {
+		s.baseURL = url
+	}
+}
+
+func WithWSURL(url string) Option {
+	return func(s *DeepgramSTT) {
+		s.wsURL = url
+	}
+}
+
+func NewDeepgramSTT(apiKey string, model string, opts ...Option) *DeepgramSTT {
 	if model == "" {
 		model = "nova-2"
 	}
 	s := &DeepgramSTT{
-		apiKey: apiKey,
-		model:  model,
+		apiKey:  apiKey,
+		model:   model,
+		baseURL: "https://api.deepgram.com",
+		wsURL:   "wss://api.deepgram.com",
 	}
 	for _, opt := range opts {
 		opt(s)
@@ -82,7 +98,10 @@ func (s *DeepgramSTT) Capabilities() stt.STTCapabilities {
 func (s *DeepgramSTT) Stream(ctx context.Context, languageStr string) (stt.RecognizeStream, error) {
 	languageStr = language.NormalizeLanguage(languageStr)
 
-	u := url.URL{Scheme: "wss", Host: "api.deepgram.com", Path: "/v1/listen"}
+	u, err := url.Parse(s.wsURL + "/v1/listen")
+	if err != nil {
+		return nil, err
+	}
 	q := u.Query()
 	q.Set("model", s.model)
 	if languageStr != "" {
@@ -140,11 +159,7 @@ func (s *DeepgramSTT) Stream(ctx context.Context, languageStr string) (stt.Recog
 func (s *DeepgramSTT) Recognize(ctx context.Context, frames []*model.AudioFrame, languageStr string) (*stt.SpeechEvent, error) {
 	languageStr = language.NormalizeLanguage(languageStr)
 
-	// Build URL with keywords/keyterms parameters
-	u := url.URL{Scheme: "https", Host: "api.deepgram.com", Path: "/v1/listen"}
-	q := u.Query()
-	q.Set("model", s.model)
-	q.Set("smart_format", "true")
+	apiURL := fmt.Sprintf("%s/v1/listen?model=%s&smart_format=true", strings.TrimSuffix(s.baseURL, "/"), s.model)
 	if languageStr != "" {
 		q.Set("language", languageStr)
 	}
