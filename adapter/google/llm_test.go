@@ -1,4 +1,4 @@
-package anthropic
+package google
 
 import (
 	"context"
@@ -9,21 +9,18 @@ import (
 	"github.com/cavos-io/rtp-agent/library/utils/testutils"
 )
 
-func TestAnthropicLLM_ChatStreaming(t *testing.T) {
-	// 1. Setup mock SSE chunks for Anthropic
+func TestGoogleLLM_ChatStreaming(t *testing.T) {
+	// Google Gemini response format is a JSON array of responses or SSE
+	// For simplicity in this mock, we'll try to match what genai library expects if it's using REST
 	chunks := []string{
-		`{"type": "message_start", "message": {"id": "msg_123", "usage": {"input_tokens": 10}}}`,
-		`{"type": "content_block_start", "content_block": {"type": "text"}}`,
-		`{"type": "content_block_delta", "delta": {"type": "text_delta", "text": "Hello"}}`,
-		`{"type": "content_block_delta", "delta": {"type": "text_delta", "text": " world"}}`,
-		`{"type": "message_delta", "usage": {"output_tokens": 5}}`,
-		`{"type": "message_stop"}`,
+		`{"candidates": [{"content": {"parts": [{"text": "Hello"}]}}], "usageMetadata": {"promptTokenCount": 10}}`,
+		`{"candidates": [{"content": {"parts": [{"text": " world"}]}}], "usageMetadata": {"candidatesTokenCount": 5}}`,
 	}
-	server := testutils.NewSSEMockServer(chunks, true)
+	server := testutils.NewSSEMockServer(chunks, false)
 	defer server.Close()
 
-	// 2. Initialize adapter with mock URL
-	l, _ := NewAnthropicLLM("test-key", "claude-3-5-sonnet", WithBaseURL(server.URL))
+	// 2. Initialize adapter with mock Client
+	l, _ := NewGoogleLLM("test-key", "gemini-2.0-flash", WithHTTPClient(testutils.NewRewritingClient(server.URL)))
 
 	// 3. Run chat
 	chatCtx := llm.NewChatContext()

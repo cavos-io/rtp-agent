@@ -6,16 +6,22 @@ import (
 	"errors"
 	"io"
 	"iter"
+	"net/http"
 
 	"github.com/cavos-io/rtp-agent/core/llm"
 	"google.golang.org/genai"
 )
 
+type GoogleLLM struct {
+	client *genai.Client
+	model  string
+}
+
 type Option func(*genai.ClientConfig)
 
-func WithBaseURL(url string) Option {
+func WithHTTPClient(client *http.Client) Option {
 	return func(c *genai.ClientConfig) {
-		c.BaseURL = url
+		c.HTTPClient = client
 	}
 }
 

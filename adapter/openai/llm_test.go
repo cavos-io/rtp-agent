@@ -15,7 +15,7 @@ func TestOpenAILLM_ChatStreaming(t *testing.T) {
 		`{"id":"chat-123","choices":[{"delta":{"role":"assistant","content":"Hello"}}],"usage":{"prompt_tokens":10,"completion_tokens":5,"total_tokens":15}}`,
 		`{"id":"chat-123","choices":[{"delta":{"content":" world"}}]}`,
 	}
-	server := testutils.NewSSEMockServer(chunks)
+	server := testutils.NewSSEMockServer(chunks, true)
 	defer server.Close()
 
 	// 2. Initialize adapter with mock URL
