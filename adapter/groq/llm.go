@@ -11,9 +11,11 @@ type GroqLLM struct {
 	inner *openai.OpenAILLM
 }
 
-func NewGroqLLM(apiKey string, model string) *GroqLLM {
+func NewGroqLLM(apiKey string, model string, opts ...openai.Option) *GroqLLM {
+	defaultOpts := []openai.Option{openai.WithBaseURL("https://api.groq.com/openai/v1")}
+	finalOpts := append(defaultOpts, opts...)
 	return &GroqLLM{
-		inner: openai.NewOpenAILLMWithBaseURL(apiKey, model, "https://api.groq.com/openai/v1"),
+		inner: openai.NewOpenAILLM(apiKey, model, finalOpts...),
 	}
 }
 

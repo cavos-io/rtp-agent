@@ -11,12 +11,14 @@ type MistralLLM struct {
 	inner *openai.OpenAILLM
 }
 
-func NewMistralLLM(apiKey string, model string) *MistralLLM {
+func NewMistralLLM(apiKey string, model string, opts ...openai.Option) *MistralLLM {
 	if model == "" {
 		model = "mistral-large-latest"
 	}
+	defaultOpts := []openai.Option{openai.WithBaseURL("https://api.mistral.ai/v1")}
+	finalOpts := append(defaultOpts, opts...)
 	return &MistralLLM{
-		inner: openai.NewOpenAILLMWithBaseURL(apiKey, model, "https://api.mistral.ai/v1"),
+		inner: openai.NewOpenAILLM(apiKey, model, finalOpts...),
 	}
 }
 
