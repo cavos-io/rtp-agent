@@ -132,3 +132,18 @@ func (s *turnDetectorMockLLMStream) Next() (*llm.ChatChunk, error) {
 	return &llm.ChatChunk{Delta: &llm.ChoiceDelta{Content: s.response}}, nil
 }
 func (s *turnDetectorMockLLMStream) Close() error { return nil }
+
+type testMockAgent struct {
+	agent *Agent
+}
+
+func (m *testMockAgent) GetAgent() *Agent                             { return m.agent }
+func (m *testMockAgent) OnEnter(ctx context.Context) error           { return nil }
+func (m *testMockAgent) OnExit(ctx context.Context) error            { return nil }
+func (m *testMockAgent) GetActivity() *AgentActivity                 { return nil }
+func (m *testMockAgent) OnUserTurnCompleted(ctx context.Context, chatCtx *llm.ChatContext, newMsg *llm.ChatMessage) error {
+	return nil
+}
+func (m *testMockAgent) GenerateReply(ctx context.Context, input any, commit bool) (any, error) {
+	return nil, nil
+}
