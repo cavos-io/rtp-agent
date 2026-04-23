@@ -127,7 +127,7 @@ func (p *BackgroundAudioPlayer) normalizeSoundSource(source interface{}) (AudioS
 	case AudioConfig:
 		src, _ := p.normalizeSoundSource(s.Source)
 		return src, s.Volume
-	case string, <-chan *model.AudioFrame:
+	case string, <-chan *model.AudioFrame, chan *model.AudioFrame:
 		return s, 1.0
 	}
 	return nil, 0
