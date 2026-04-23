@@ -173,6 +173,10 @@ func (r *AvatarRunner) publishTracks(ctx context.Context) error {
 		return nil
 	}
 
+	if r.room == nil {
+		return nil
+	}
+
 	select {
 	case <-r.roomConnectedCh:
 	case <-ctx.Done():
