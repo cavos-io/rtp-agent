@@ -13,18 +13,32 @@ import (
 )
 
 type SpitchTTS struct {
-	apiKey string
-	voice  string
+	apiKey     string
+	voice      string
+	httpClient *http.Client
 }
 
-func NewSpitchTTS(apiKey string, voice string) *SpitchTTS {
+type TTSOption func(*SpitchTTS)
+
+func WithTTSHttpClient(client *http.Client) TTSOption {
+	return func(t *SpitchTTS) {
+		t.httpClient = client
+	}
+}
+
+func NewSpitchTTS(apiKey string, voice string, opts ...TTSOption) *SpitchTTS {
 	if voice == "" {
 		voice = "default_voice"
 	}
-	return &SpitchTTS{
-		apiKey: apiKey,
-		voice:  voice,
+	t := &SpitchTTS{
+		apiKey:     apiKey,
+		voice:      voice,
+		httpClient: http.DefaultClient,
 	}
+	for _, opt := range opts {
+		opt(t)
+	}
+	return t
 }
 
 func (t *SpitchTTS) Label() string { return "spitch.TTS" }
@@ -51,7 +65,7 @@ func (t *SpitchTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStr
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+t.apiKey)
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := t.httpClient.Do(req)
 	if err != nil {
 		return nil, err
 	}
