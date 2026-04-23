@@ -16,18 +16,56 @@ import (
 )
 
 type DeepgramTTS struct {
-	apiKey string
-	model  string
+	apiKey     string
+	model      string
+	baseURL    string
+	wsURL      string
+	httpClient *http.Client
+	dialer     *websocket.Dialer
 }
 
-func NewDeepgramTTS(apiKey string, model string) *DeepgramTTS {
+type TTSOption func(*DeepgramTTS)
+
+func WithTTSBaseURL(url string) TTSOption {
+	return func(t *DeepgramTTS) {
+		t.baseURL = url
+	}
+}
+
+func WithTTSWSURL(url string) TTSOption {
+	return func(t *DeepgramTTS) {
+		t.wsURL = url
+	}
+}
+
+func WithTTSHttpClient(client *http.Client) TTSOption {
+	return func(t *DeepgramTTS) {
+		t.httpClient = client
+	}
+}
+
+func WithTTSDialer(dialer *websocket.Dialer) TTSOption {
+	return func(t *DeepgramTTS) {
+		t.dialer = dialer
+	}
+}
+
+func NewDeepgramTTS(apiKey string, model string, opts ...TTSOption) *DeepgramTTS {
 	if model == "" {
 		model = "aura-asteria-en"
 	}
-	return &DeepgramTTS{
-		apiKey: apiKey,
-		model:  model,
+	t := &DeepgramTTS{
+		apiKey:     apiKey,
+		model:      model,
+		baseURL:    "https://api.deepgram.com/v1/speak",
+		wsURL:      "wss://api.deepgram.com/v1/speak",
+		httpClient: http.DefaultClient,
+		dialer:     websocket.DefaultDialer,
 	}
+	for _, opt := range opts {
+		opt(t)
+	}
+	return t
 }
 
 func (t *DeepgramTTS) Label() string { return "deepgram.TTS" }
@@ -38,7 +76,7 @@ func (t *DeepgramTTS) SampleRate() int { return 48000 }
 func (t *DeepgramTTS) NumChannels() int { return 1 }
 
 func (t *DeepgramTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStream, error) {
-	u := fmt.Sprintf("https://api.deepgram.com/v1/speak?model=%s&encoding=linear16&sample_rate=48000", t.model)
+	u := fmt.Sprintf("%s?model=%s&encoding=linear16&sample_rate=48000", t.baseURL, t.model)
 	body := map[string]interface{}{
 		"text": text,
 	}
@@ -52,7 +90,7 @@ func (t *DeepgramTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedS
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Token "+t.apiKey)
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := t.httpClient.Do(req)
 	if err != nil {
 		return nil, err
 	}
@@ -69,7 +107,10 @@ func (t *DeepgramTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedS
 }
 
 func (t *DeepgramTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
-	u := url.URL{Scheme: "wss", Host: "api.deepgram.com", Path: "/v1/speak"}
+	u, err := url.Parse(t.wsURL)
+	if err != nil {
+		return nil, err
+	}
 	q := u.Query()
 	q.Set("model", t.model)
 	q.Set("encoding", "linear16")
@@ -79,7 +120,7 @@ func (t *DeepgramTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) 
 	header := make(map[string][]string)
 	header["Authorization"] = []string{"Token " + t.apiKey}
 
-	conn, _, err := websocket.DefaultDialer.DialContext(ctx, u.String(), header)
+	conn, _, err := t.dialer.DialContext(ctx, u.String(), header)
 	if err != nil {
 		return nil, err
 	}
