@@ -4,6 +4,7 @@ import (
 	"context"
 	"io"
 
+	"github.com/cavos-io/rtp-agent/core/llm"
 	"github.com/cavos-io/rtp-agent/core/stt"
 	"github.com/cavos-io/rtp-agent/core/vad"
 	"github.com/cavos-io/rtp-agent/model"
@@ -59,3 +60,21 @@ func (s *testMockRecognizeStream) PushFrame(frame *model.AudioFrame) error {
 func (s *testMockRecognizeStream) Flush() error                         { return nil }
 func (s *testMockRecognizeStream) Close() error                         { return nil }
 func (s *testMockRecognizeStream) Next() (*stt.SpeechEvent, error)        { return nil, io.EOF }
+type mockRealtimeModel struct {
+	session llm.RealtimeSession
+}
+
+func (m *mockRealtimeModel) Session() (llm.RealtimeSession, error) { return m.session, nil }
+func (m *mockRealtimeModel) Close() error                         { return nil }
+
+type mockRealtimeSession struct {
+	eventCh chan llm.RealtimeEvent
+}
+
+func (s *mockRealtimeSession) UpdateInstructions(instructions string) error { return nil }
+func (s *mockRealtimeSession) UpdateChatContext(chatCtx *llm.ChatContext) error { return nil }
+func (s *mockRealtimeSession) UpdateTools(tools []interface{}) error        { return nil }
+func (s *mockRealtimeSession) Interrupt() error                             { return nil }
+func (s *mockRealtimeSession) Close() error                                 { return nil }
+func (s *mockRealtimeSession) EventCh() <-chan llm.RealtimeEvent            { return s.eventCh }
+func (s *mockRealtimeSession) PushAudio(frame *model.AudioFrame) error      { return nil }
