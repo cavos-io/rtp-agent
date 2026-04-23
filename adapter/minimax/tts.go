@@ -13,18 +13,32 @@ import (
 )
 
 type MinimaxTTS struct {
-	apiKey string
-	voice  string
+	apiKey     string
+	voice      string
+	httpClient *http.Client
 }
 
-func NewMinimaxTTS(apiKey string, voice string) *MinimaxTTS {
+type TTSOption func(*MinimaxTTS)
+
+func WithTTSHttpClient(client *http.Client) TTSOption {
+	return func(t *MinimaxTTS) {
+		t.httpClient = client
+	}
+}
+
+func NewMinimaxTTS(apiKey string, voice string, opts ...TTSOption) *MinimaxTTS {
 	if voice == "" {
 		voice = "default_voice"
 	}
-	return &MinimaxTTS{
-		apiKey: apiKey,
-		voice:  voice,
+	t := &MinimaxTTS{
+		apiKey:     apiKey,
+		voice:      voice,
+		httpClient: http.DefaultClient,
 	}
+	for _, opt := range opts {
+		opt(t)
+	}
+	return t
 }
 
 func (t *MinimaxTTS) Label() string { return "minimax.TTS" }
@@ -51,7 +65,7 @@ func (t *MinimaxTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedSt
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+t.apiKey)
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := t.httpClient.Do(req)
 	if err != nil {
 		return nil, err
 	}
