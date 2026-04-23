@@ -13,18 +13,40 @@ import (
 )
 
 type SpeechifyTTS struct {
-	apiKey string
-	voice  string
+	apiKey     string
+	voice      string
+	baseURL    string
+	httpClient *http.Client
 }
 
-func NewSpeechifyTTS(apiKey string, voice string) *SpeechifyTTS {
+type Option func(*SpeechifyTTS)
+
+func WithBaseURL(url string) Option {
+	return func(t *SpeechifyTTS) {
+		t.baseURL = url
+	}
+}
+
+func WithHTTPClient(client *http.Client) Option {
+	return func(t *SpeechifyTTS) {
+		t.httpClient = client
+	}
+}
+
+func NewSpeechifyTTS(apiKey string, voice string, opts ...Option) *SpeechifyTTS {
 	if voice == "" {
 		voice = "snoop"
 	}
-	return &SpeechifyTTS{
-		apiKey: apiKey,
-		voice:  voice,
+	t := &SpeechifyTTS{
+		apiKey:     apiKey,
+		voice:      voice,
+		baseURL:    "https://api.speechify.com/v1/tts/synthesize",
+		httpClient: http.DefaultClient,
 	}
+	for _, opt := range opts {
+		opt(t)
+	}
+	return t
 }
 
 func (t *SpeechifyTTS) Label() string { return "speechify.TTS" }
@@ -35,7 +57,6 @@ func (t *SpeechifyTTS) SampleRate() int { return 24000 }
 func (t *SpeechifyTTS) NumChannels() int { return 1 }
 
 func (t *SpeechifyTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStream, error) {
-	url := "https://api.speechify.com/v1/tts/synthesize"
 
 	reqBody := map[string]interface{}{
 		"text":    text,
@@ -47,7 +68,7 @@ func (t *SpeechifyTTS) Synthesize(ctx context.Context, text string) (tts.Chunked
 		return nil, err
 	}
 
-	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewBuffer(jsonBody))
+	req, err := http.NewRequestWithContext(ctx, "POST", t.baseURL, bytes.NewBuffer(jsonBody))
 	if err != nil {
 		return nil, err
 	}
@@ -55,7 +76,7 @@ func (t *SpeechifyTTS) Synthesize(ctx context.Context, text string) (tts.Chunked
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+t.apiKey)
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := t.httpClient.Do(req)
 	if err != nil {
 		return nil, err
 	}
@@ -82,10 +103,7 @@ type speechifyTTSChunkedStream struct {
 func (s *speechifyTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 	buf := make([]byte, 4096)
 	n, err := s.resp.Body.Read(buf)
-	if err != nil {
-		if err == io.EOF {
-			return nil, io.EOF
-		}
+	if n == 0 && err != nil {
 		return nil, err
 	}
 

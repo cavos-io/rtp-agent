@@ -12,22 +12,42 @@ import (
 )
 
 type FalLLM struct {
-	apiKey string
-	model  string
+	apiKey     string
+	model      string
+	baseURL    string
+	httpClient *http.Client
 }
 
-func NewFalLLM(apiKey string, model string) *FalLLM {
-	return &FalLLM{
-		apiKey: apiKey,
-		model:  model,
+type Option func(*FalLLM)
+
+func WithBaseURL(url string) Option {
+	return func(l *FalLLM) {
+		l.baseURL = url
 	}
+}
+
+func WithHTTPClient(client *http.Client) Option {
+	return func(l *FalLLM) {
+		l.httpClient = client
+	}
+}
+
+func NewFalLLM(apiKey string, model string, opts ...Option) *FalLLM {
+	l := &FalLLM{
+		apiKey:     apiKey,
+		model:      model,
+		baseURL:    fmt.Sprintf("https://fal.run/%s", model),
+		httpClient: http.DefaultClient,
+	}
+	for _, opt := range opts {
+		opt(l)
+	}
+	return l
 }
 
 func (l *FalLLM) Chat(ctx context.Context, chatCtx *llm.ChatContext, opts ...llm.ChatOption) (llm.LLMStream, error) {
 	// Fal generally acts as a proxy for various open-source LLMs.
 	// This is a basic implementation for a typical chat completions endpoint.
-	url := fmt.Sprintf("https://fal.run/%s", l.model)
-
 	options := &llm.ChatOptions{}
 	for _, opt := range opts {
 		opt(options)
@@ -48,7 +68,7 @@ func (l *FalLLM) Chat(ctx context.Context, chatCtx *llm.ChatContext, opts ...llm
 	}
 
 	jsonBody, _ := json.Marshal(body)
-	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewBuffer(jsonBody))
+	req, err := http.NewRequestWithContext(ctx, "POST", l.baseURL, bytes.NewBuffer(jsonBody))
 	if err != nil {
 		return nil, err
 	}
@@ -56,7 +76,7 @@ func (l *FalLLM) Chat(ctx context.Context, chatCtx *llm.ChatContext, opts ...llm
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Key "+l.apiKey)
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := l.httpClient.Do(req)
 	if err != nil {
 		return nil, err
 	}

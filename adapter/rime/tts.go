@@ -13,18 +13,40 @@ import (
 )
 
 type RimeTTS struct {
-	apiKey string
-	voice  string
+	apiKey     string
+	voice      string
+	baseURL    string
+	httpClient *http.Client
 }
 
-func NewRimeTTS(apiKey string, voice string) *RimeTTS {
+type Option func(*RimeTTS)
+
+func WithBaseURL(url string) Option {
+	return func(t *RimeTTS) {
+		t.baseURL = url
+	}
+}
+
+func WithHTTPClient(client *http.Client) Option {
+	return func(t *RimeTTS) {
+		t.httpClient = client
+	}
+}
+
+func NewRimeTTS(apiKey string, voice string, opts ...Option) *RimeTTS {
 	if voice == "" {
 		voice = "default_voice"
 	}
-	return &RimeTTS{
-		apiKey: apiKey,
-		voice:  voice,
+	t := &RimeTTS{
+		apiKey:     apiKey,
+		voice:      voice,
+		baseURL:    "https://api.rime.ai/v1/tts",
+		httpClient: http.DefaultClient,
 	}
+	for _, opt := range opts {
+		opt(t)
+	}
+	return t
 }
 
 func (t *RimeTTS) Label() string { return "rime.TTS" }
@@ -35,7 +57,6 @@ func (t *RimeTTS) SampleRate() int { return 22050 }
 func (t *RimeTTS) NumChannels() int { return 1 }
 
 func (t *RimeTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStream, error) {
-	url := "https://api.rime.ai/v1/tts"
 
 	reqBody := map[string]interface{}{
 		"text":    text,
@@ -50,7 +71,7 @@ func (t *RimeTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStrea
 		return nil, err
 	}
 
-	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewBuffer(jsonBody))
+	req, err := http.NewRequestWithContext(ctx, "POST", t.baseURL, bytes.NewBuffer(jsonBody))
 	if err != nil {
 		return nil, err
 	}
@@ -58,7 +79,7 @@ func (t *RimeTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStrea
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+t.apiKey)
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := t.httpClient.Do(req)
 	if err != nil {
 		return nil, err
 	}
@@ -85,10 +106,7 @@ type rimeTTSChunkedStream struct {
 func (s *rimeTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 	buf := make([]byte, 4096)
 	n, err := s.resp.Body.Read(buf)
-	if err != nil {
-		if err == io.EOF {
-			return nil, io.EOF
-		}
+	if n == 0 && err != nil {
 		return nil, err
 	}
 

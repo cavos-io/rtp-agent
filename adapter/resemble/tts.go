@@ -13,18 +13,40 @@ import (
 )
 
 type ResembleTTS struct {
-	apiKey string
-	voice  string
+	apiKey     string
+	voice      string
+	baseURL    string
+	httpClient *http.Client
 }
 
-func NewResembleTTS(apiKey string, voice string) *ResembleTTS {
+type Option func(*ResembleTTS)
+
+func WithBaseURL(url string) Option {
+	return func(t *ResembleTTS) {
+		t.baseURL = url
+	}
+}
+
+func WithHTTPClient(client *http.Client) Option {
+	return func(t *ResembleTTS) {
+		t.httpClient = client
+	}
+}
+
+func NewResembleTTS(apiKey string, voice string, opts ...Option) *ResembleTTS {
 	if voice == "" {
 		voice = "default_voice"
 	}
-	return &ResembleTTS{
-		apiKey: apiKey,
-		voice:  voice,
+	t := &ResembleTTS{
+		apiKey:     apiKey,
+		voice:      voice,
+		baseURL:    "https://f.cluster.resemble.ai/synthesize",
+		httpClient: http.DefaultClient,
 	}
+	for _, opt := range opts {
+		opt(t)
+	}
+	return t
 }
 
 func (t *ResembleTTS) Label() string { return "resemble.TTS" }
@@ -35,7 +57,6 @@ func (t *ResembleTTS) SampleRate() int { return 44100 }
 func (t *ResembleTTS) NumChannels() int { return 1 }
 
 func (t *ResembleTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStream, error) {
-	url := "https://f.cluster.resemble.ai/synthesize"
 
 	reqBody := map[string]interface{}{
 		"data":  text,
@@ -43,7 +64,7 @@ func (t *ResembleTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedS
 	}
 
 	jsonBody, _ := json.Marshal(reqBody)
-	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewBuffer(jsonBody))
+	req, err := http.NewRequestWithContext(ctx, "POST", t.baseURL, bytes.NewBuffer(jsonBody))
 	if err != nil {
 		return nil, err
 	}
@@ -51,7 +72,7 @@ func (t *ResembleTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedS
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+t.apiKey)
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := t.httpClient.Do(req)
 	if err != nil {
 		return nil, err
 	}
@@ -78,10 +99,7 @@ type resembleTTSChunkedStream struct {
 func (s *resembleTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 	buf := make([]byte, 4096)
 	n, err := s.resp.Body.Read(buf)
-	if err != nil {
-		if err == io.EOF {
-			return nil, io.EOF
-		}
+	if n == 0 && err != nil {
 		return nil, err
 	}
 

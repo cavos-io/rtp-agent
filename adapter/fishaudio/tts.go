@@ -13,18 +13,40 @@ import (
 )
 
 type FishAudioTTS struct {
-	apiKey string
-	voice  string
+	apiKey     string
+	voice      string
+	baseURL    string
+	httpClient *http.Client
 }
 
-func NewFishAudioTTS(apiKey string, voice string) *FishAudioTTS {
+type Option func(*FishAudioTTS)
+
+func WithBaseURL(url string) Option {
+	return func(t *FishAudioTTS) {
+		t.baseURL = url
+	}
+}
+
+func WithHTTPClient(client *http.Client) Option {
+	return func(t *FishAudioTTS) {
+		t.httpClient = client
+	}
+}
+
+func NewFishAudioTTS(apiKey string, voice string, opts ...Option) *FishAudioTTS {
 	if voice == "" {
 		voice = "default_voice"
 	}
-	return &FishAudioTTS{
-		apiKey: apiKey,
-		voice:  voice,
+	t := &FishAudioTTS{
+		apiKey:     apiKey,
+		voice:      voice,
+		baseURL:    "https://api.fish.audio/v1/tts",
+		httpClient: http.DefaultClient,
 	}
+	for _, opt := range opts {
+		opt(t)
+	}
+	return t
 }
 
 func (t *FishAudioTTS) Label() string { return "fishaudio.TTS" }
@@ -35,7 +57,6 @@ func (t *FishAudioTTS) SampleRate() int { return 44100 }
 func (t *FishAudioTTS) NumChannels() int { return 1 }
 
 func (t *FishAudioTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStream, error) {
-	url := "https://api.fish.audio/v1/tts"
 
 	reqBody := map[string]interface{}{
 		"text":       text,
@@ -43,7 +64,7 @@ func (t *FishAudioTTS) Synthesize(ctx context.Context, text string) (tts.Chunked
 	}
 
 	jsonBody, _ := json.Marshal(reqBody)
-	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewBuffer(jsonBody))
+	req, err := http.NewRequestWithContext(ctx, "POST", t.baseURL, bytes.NewBuffer(jsonBody))
 	if err != nil {
 		return nil, err
 	}
@@ -51,7 +72,7 @@ func (t *FishAudioTTS) Synthesize(ctx context.Context, text string) (tts.Chunked
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+t.apiKey)
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := t.httpClient.Do(req)
 	if err != nil {
 		return nil, err
 	}
@@ -78,10 +99,7 @@ type fishaudioTTSChunkedStream struct {
 func (s *fishaudioTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 	buf := make([]byte, 4096)
 	n, err := s.resp.Body.Read(buf)
-	if err != nil {
-		if err == io.EOF {
-			return nil, io.EOF
-		}
+	if n == 0 && err != nil {
 		return nil, err
 	}
 

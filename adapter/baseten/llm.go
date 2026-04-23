@@ -11,12 +11,20 @@ type BasetenLLM struct {
 	inner *openai.OpenAILLM
 }
 
-func NewBasetenLLM(apiKey string, model string) *BasetenLLM {
+type Option = openai.Option
+
+func WithBaseURL(url string) Option {
+	return openai.WithBaseURL(url)
+}
+
+func NewBasetenLLM(apiKey string, model string, opts ...Option) *BasetenLLM {
 	if model == "" {
 		model = "baseten-llama-3"
 	}
+	defaultOpts := []Option{WithBaseURL("https://bridge.baseten.co/v1")}
+	defaultOpts = append(defaultOpts, opts...)
 	return &BasetenLLM{
-		inner: openai.NewOpenAILLMWithBaseURL(apiKey, model, "https://bridge.baseten.co/v1"),
+		inner: openai.NewOpenAILLM(apiKey, model, defaultOpts...),
 	}
 }
 
