@@ -51,8 +51,12 @@ func TestSpeechmaticsSTT_Stream(t *testing.T) {
 		for _, resp := range mockResponses {
 			_ = conn.WriteMessage(websocket.TextMessage, []byte(resp))
 		}
-		// Wait for client to close or time out to avoid premature close
-		_, _, _ = conn.ReadMessage()
+		// Wait for client to close or send a message to avoid premature close
+		for {
+			if _, _, err := conn.ReadMessage(); err != nil {
+				break
+			}
+		}
 	})
 	defer server.Close()
 
