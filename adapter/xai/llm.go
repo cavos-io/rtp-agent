@@ -14,18 +14,40 @@ import (
 )
 
 type XaiLLM struct {
-	apiKey string
-	model  string
+	apiKey     string
+	model      string
+	baseURL    string
+	httpClient *http.Client
 }
 
-func NewXaiLLM(apiKey string, model string) *XaiLLM {
+type Option func(*XaiLLM)
+
+func WithBaseURL(url string) Option {
+	return func(l *XaiLLM) {
+		l.baseURL = url
+	}
+}
+
+func WithHTTPClient(client *http.Client) Option {
+	return func(l *XaiLLM) {
+		l.httpClient = client
+	}
+}
+
+func NewXaiLLM(apiKey string, model string, opts ...Option) *XaiLLM {
 	if model == "" {
 		model = "grok-2-latest"
 	}
-	return &XaiLLM{
-		apiKey: apiKey,
-		model:  model,
+	l := &XaiLLM{
+		apiKey:     apiKey,
+		model:      model,
+		baseURL:    "https://api.x.ai/v1/chat/completions",
+		httpClient: http.DefaultClient,
 	}
+	for _, opt := range opts {
+		opt(l)
+	}
+	return l
 }
 
 type xaiMessage struct {
@@ -102,7 +124,7 @@ func (l *XaiLLM) Chat(ctx context.Context, chatCtx *llm.ChatContext, opts ...llm
 	}
 
 	jsonBody, _ := json.Marshal(body)
-	req, err := http.NewRequestWithContext(ctx, "POST", "https://api.x.ai/v1/chat/completions", bytes.NewBuffer(jsonBody))
+	req, err := http.NewRequestWithContext(ctx, "POST", l.baseURL, bytes.NewBuffer(jsonBody))
 	if err != nil {
 		return nil, err
 	}
@@ -110,7 +132,7 @@ func (l *XaiLLM) Chat(ctx context.Context, chatCtx *llm.ChatContext, opts ...llm
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+l.apiKey)
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := l.httpClient.Do(req)
 	if err != nil {
 		return nil, err
 	}
