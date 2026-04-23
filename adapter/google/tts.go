@@ -9,11 +9,17 @@ import (
 	"cloud.google.com/go/texttospeech/apiv1/texttospeechpb"
 	"github.com/cavos-io/rtp-agent/core/tts"
 	"github.com/cavos-io/rtp-agent/model"
+	"github.com/googleapis/gax-go/v2"
 	"google.golang.org/api/option"
 )
 
+type ttsClient interface {
+	SynthesizeSpeech(ctx context.Context, req *texttospeechpb.SynthesizeSpeechRequest, opts ...gax.CallOption) (*texttospeechpb.SynthesizeSpeechResponse, error)
+	Close() error
+}
+
 type GoogleTTS struct {
-	client *texttospeech.Client
+	client ttsClient
 	voice  *texttospeechpb.VoiceSelectionParams
 	audio  *texttospeechpb.AudioConfig
 }

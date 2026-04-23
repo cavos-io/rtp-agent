@@ -9,23 +9,18 @@ import (
 	"cloud.google.com/go/speech/apiv1/speechpb"
 	"github.com/cavos-io/rtp-agent/core/stt"
 	"github.com/cavos-io/rtp-agent/model"
+	"github.com/googleapis/gax-go/v2"
 	"google.golang.org/api/option"
 )
 
-type GoogleSTT struct {
-	client      *speech.Client
-	phraseHints []*speechpb.SpeechContext
+type speechClient interface {
+	StreamingRecognize(ctx context.Context, opts ...gax.CallOption) (speechpb.Speech_StreamingRecognizeClient, error)
+	Recognize(ctx context.Context, req *speechpb.RecognizeRequest, opts ...gax.CallOption) (*speechpb.RecognizeResponse, error)
+	Close() error
 }
 
-// GoogleOption is a functional option for configuring GoogleSTT.
-type GoogleOption func(*GoogleSTT)
-
-// WithPhraseHints returns a GoogleOption that configures phrase hints (speech contexts)
-// for improving recognition accuracy on domain-specific vocabulary.
-func WithPhraseHints(phraseHints []*speechpb.SpeechContext) GoogleOption {
-	return func(g *GoogleSTT) {
-		g.phraseHints = phraseHints
-	}
+type GoogleSTT struct {
+	client speechClient
 }
 
 // NewGoogleSTT creates a new STT client using Application Default Credentials,
