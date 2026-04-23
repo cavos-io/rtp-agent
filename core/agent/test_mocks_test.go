@@ -78,3 +78,30 @@ func (s *mockRealtimeSession) Interrupt() error                             { re
 func (s *mockRealtimeSession) Close() error                                 { return nil }
 func (s *mockRealtimeSession) EventCh() <-chan llm.RealtimeEvent            { return s.eventCh }
 func (s *mockRealtimeSession) PushAudio(frame *model.AudioFrame) error      { return nil }
+
+type mockAudioOutput struct {
+	captured []*model.AudioFrame
+}
+
+func (m *mockAudioOutput) Label() string                             { return "mock" }
+func (m *mockAudioOutput) CaptureFrame(frame *model.AudioFrame) error { m.captured = append(m.captured, frame); return nil }
+func (m *mockAudioOutput) Flush()                                    {}
+func (m *mockAudioOutput) WaitForPlayout(ctx context.Context) error  { return nil }
+func (m *mockAudioOutput) ClearBuffer()                              {}
+func (m *mockAudioOutput) OnAttached()                               {}
+func (m *mockAudioOutput) OnDetached()                               {}
+func (m *mockAudioOutput) Pause()                                    {}
+func (m *mockAudioOutput) Resume()                                   {}
+func (m *mockAudioOutput) OnPlaybackStarted(f func(ev PlaybackStartedEvent)) {}
+func (m *mockAudioOutput) OnPlaybackFinished(f func(ev PlaybackFinishedEvent)) {}
+
+type mockTextOutput struct {
+	text string
+}
+
+func (m *mockTextOutput) Label() string            { return "mock" }
+func (m *mockTextOutput) CaptureText(text string) error { m.text += text; return nil }
+func (m *mockTextOutput) SetSegmentID(id string)   {}
+func (m *mockTextOutput) Flush()                   {}
+func (m *mockTextOutput) OnAttached()              {}
+func (m *mockTextOutput) OnDetached()              {}
