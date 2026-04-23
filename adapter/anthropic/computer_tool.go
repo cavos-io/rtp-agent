@@ -6,20 +6,29 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/cavos-io/rtp-agent/adapter/browser"
 	"github.com/cavos-io/rtp-agent/core/llm"
 )
 
 const postActionDelay = 300 * time.Millisecond
 
+type IPageActions interface {
+	LeftClick(x, y int, modifiers string)
+	RightClick(x, y int)
+	DoubleClick(x, y int)
+	TypeText(text string)
+	Key(key string)
+	Wait()
+	LastFrame() []byte
+}
+
 type ComputerTool struct {
-	actions *browser.PageActions
+	actions IPageActions
 	width   int
 	height  int
 	tool    llm.Tool
 }
 
-func NewComputerTool(actions *browser.PageActions, width int, height int) *ComputerTool {
+func NewComputerTool(actions IPageActions, width int, height int) *ComputerTool {
 	return &ComputerTool{
 		actions: actions,
 		width:   width,
