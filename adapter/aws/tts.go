@@ -13,30 +13,50 @@ import (
 	"github.com/cavos-io/rtp-agent/model"
 )
 
+type PollyAPI interface {
+	SynthesizeSpeech(ctx context.Context, params *polly.SynthesizeSpeechInput, optFns ...func(*polly.Options)) (*polly.SynthesizeSpeechOutput, error)
+}
+
 type AWSTTS struct {
-	client *polly.Client
+	client PollyAPI
 	voice  types.VoiceId
 }
 
-func NewAWSTTS(ctx context.Context, region string, voice string) (*AWSTTS, error) {
+type TTSOption func(*AWSTTS)
+
+func WithPollyClient(client PollyAPI) TTSOption {
+	return func(t *AWSTTS) {
+		t.client = client
+	}
+}
+
+func NewAWSTTS(ctx context.Context, region string, voice string, opts ...TTSOption) (*AWSTTS, error) {
 	if voice == "" {
 		voice = "Matthew"
 	}
 
-	opts := []func(*config.LoadOptions) error{}
-	if region != "" {
-		opts = append(opts, config.WithRegion(region))
+	t := &AWSTTS{
+		voice: types.VoiceId(voice),
 	}
 
-	cfg, err := config.LoadDefaultConfig(ctx, opts...)
-	if err != nil {
-		return nil, err
+	for _, opt := range opts {
+		opt(t)
 	}
 
-	return &AWSTTS{
-		client: polly.NewFromConfig(cfg),
-		voice:  types.VoiceId(voice),
-	}, nil
+	if t.client == nil {
+		cfgOpts := []func(*config.LoadOptions) error{}
+		if region != "" {
+			cfgOpts = append(cfgOpts, config.WithRegion(region))
+		}
+
+		cfg, err := config.LoadDefaultConfig(ctx, cfgOpts...)
+		if err != nil {
+			return nil, err
+		}
+		t.client = polly.NewFromConfig(cfg)
+	}
+
+	return t, nil
 }
 
 func (t *AWSTTS) Label() string { return "aws.TTS" }

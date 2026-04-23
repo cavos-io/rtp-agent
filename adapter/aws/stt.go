@@ -13,24 +13,43 @@ import (
 	"github.com/cavos-io/rtp-agent/model"
 )
 
-type AWSSTT struct {
-	client *transcribestreaming.Client
+type TranscribeAPI interface {
+	StartStreamTranscription(ctx context.Context, params *transcribestreaming.StartStreamTranscriptionInput, optFns ...func(*transcribestreaming.Options)) (*transcribestreaming.StartStreamTranscriptionOutput, error)
 }
 
-func NewAWSSTT(ctx context.Context, region string) (*AWSSTT, error) {
-	opts := []func(*config.LoadOptions) error{}
-	if region != "" {
-		opts = append(opts, config.WithRegion(region))
+type AWSSTT struct {
+	client TranscribeAPI
+}
+
+type STTOption func(*AWSSTT)
+
+func WithTranscribeClient(client TranscribeAPI) STTOption {
+	return func(s *AWSSTT) {
+		s.client = client
+	}
+}
+
+func NewAWSSTT(ctx context.Context, region string, opts ...STTOption) (*AWSSTT, error) {
+	s := &AWSSTT{}
+
+	for _, opt := range opts {
+		opt(s)
 	}
 
-	cfg, err := config.LoadDefaultConfig(ctx, opts...)
-	if err != nil {
-		return nil, err
+	if s.client == nil {
+		cfgOpts := []func(*config.LoadOptions) error{}
+		if region != "" {
+			cfgOpts = append(cfgOpts, config.WithRegion(region))
+		}
+
+		cfg, err := config.LoadDefaultConfig(ctx, cfgOpts...)
+		if err != nil {
+			return nil, err
+		}
+		s.client = transcribestreaming.NewFromConfig(cfg)
 	}
 
-	return &AWSSTT{
-		client: transcribestreaming.NewFromConfig(cfg),
-	}, nil
+	return s, nil
 }
 
 func (s *AWSSTT) Label() string { return "aws.STT" }

@@ -13,30 +13,50 @@ import (
 	"github.com/cavos-io/rtp-agent/core/llm"
 )
 
+type BedrockAPI interface {
+	ConverseStream(ctx context.Context, params *bedrockruntime.ConverseStreamInput, optFns ...func(*bedrockruntime.Options)) (*bedrockruntime.ConverseStreamOutput, error)
+}
+
 type AWSLLM struct {
-	client *bedrockruntime.Client
+	client BedrockAPI
 	model  string
 }
 
-func NewAWSLLM(ctx context.Context, region string, model string) (*AWSLLM, error) {
+type LLMOption func(*AWSLLM)
+
+func WithBedrockClient(client BedrockAPI) LLMOption {
+	return func(l *AWSLLM) {
+		l.client = client
+	}
+}
+
+func NewAWSLLM(ctx context.Context, region string, model string, opts ...LLMOption) (*AWSLLM, error) {
 	if model == "" {
 		model = "anthropic.claude-3-haiku-20240307-v1:0"
 	}
-	
-	opts := []func(*config.LoadOptions) error{}
-	if region != "" {
-		opts = append(opts, config.WithRegion(region))
+
+	l := &AWSLLM{
+		model: model,
 	}
 
-	cfg, err := config.LoadDefaultConfig(ctx, opts...)
-	if err != nil {
-		return nil, err
+	for _, opt := range opts {
+		opt(l)
 	}
 
-	return &AWSLLM{
-		client: bedrockruntime.NewFromConfig(cfg),
-		model:  model,
-	}, nil
+	if l.client == nil {
+		cfgOpts := []func(*config.LoadOptions) error{}
+		if region != "" {
+			cfgOpts = append(cfgOpts, config.WithRegion(region))
+		}
+
+		cfg, err := config.LoadDefaultConfig(ctx, cfgOpts...)
+		if err != nil {
+			return nil, err
+		}
+		l.client = bedrockruntime.NewFromConfig(cfg)
+	}
+
+	return l, nil
 }
 
 func (l *AWSLLM) Chat(ctx context.Context, chatCtx *llm.ChatContext, opts ...llm.ChatOption) (llm.LLMStream, error) {
