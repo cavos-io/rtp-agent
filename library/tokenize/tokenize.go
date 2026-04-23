@@ -122,9 +122,15 @@ func SplitSentences(text string, minSentenceLen int, retainFormat bool) []TokenD
 	// Han, Hiragana, Katakana, Thai punctuation
 	text = regexp.MustCompile(`([。！？])`).ReplaceAllString(text, "${1}<stop>")
 	
-	// Common English punctuation
+	// Common English punctuation - handle quotes separately to avoid lookahead
 	text = regexp.MustCompile(`([.!?])(["”])`).ReplaceAllString(text, "${1}${2}<stop>")
-	text = regexp.MustCompile(`([.!?])(?![”"])`).ReplaceAllString(text, "${1}<stop>")
+	// Use a two-step process to mark remaining sentence ends
+	text = regexp.MustCompile(`([.!?])`).ReplaceAllString(text, "${1}<stop>")
+	// Remove <stop> if it was followed by a quote (which was already handled)
+	text = strings.ReplaceAll(text, "<stop>\"", "\"<stop>")
+	text = strings.ReplaceAll(text, "<stop>”", "”<stop>")
+	// Fix potential double stops
+	text = strings.ReplaceAll(text, "<stop><stop>", "<stop>")
 
 	text = strings.ReplaceAll(text, "<prd>", ".")
 
