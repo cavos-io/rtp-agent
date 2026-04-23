@@ -26,16 +26,28 @@ type TTS struct {
 	baseURL   string
 }
 
-func NewTTS(model string, apiKey, apiSecret string) *TTS {
+type TTSOption func(*TTS)
+
+func WithTTSBaseURL(url string) TTSOption {
+	return func(t *TTS) {
+		t.baseURL = url
+	}
+}
+
+func NewTTS(model string, apiKey, apiSecret string, opts ...TTSOption) *TTS {
 	if model == "" {
 		model = "cartesia/sonic-3"
 	}
-	return &TTS{
+	t := &TTS{
 		model:     model,
 		apiKey:    apiKey,
 		apiSecret: apiSecret,
 		baseURL:   "wss://agent-gateway.livekit.cloud/v1",
 	}
+	for _, opt := range opts {
+		opt(t)
+	}
+	return t
 }
 
 type FallbackModel struct {

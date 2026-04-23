@@ -24,16 +24,28 @@ type STT struct {
 	baseURL   string
 }
 
-func NewSTT(model string, apiKey, apiSecret string) *STT {
+type STTOption func(*STT)
+
+func WithSTTBaseURL(url string) STTOption {
+	return func(s *STT) {
+		s.baseURL = url
+	}
+}
+
+func NewSTT(model string, apiKey, apiSecret string, opts ...STTOption) *STT {
 	if model == "" {
 		model = "deepgram/nova-3"
 	}
-	return &STT{
+	s := &STT{
 		model:     model,
 		apiKey:    apiKey,
 		apiSecret: apiSecret,
 		baseURL:   "wss://agent-gateway.livekit.cloud/v1",
 	}
+	for _, opt := range opts {
+		opt(s)
+	}
+	return s
 }
 
 func (s *STT) Label() string {

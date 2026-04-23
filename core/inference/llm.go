@@ -54,13 +54,25 @@ type LLM struct {
 	baseURL   string
 }
 
-func NewLLM(model string, apiKey, apiSecret string) *LLM {
-	return &LLM{
+type LLMOption func(*LLM)
+
+func WithLLMBaseURL(url string) LLMOption {
+	return func(l *LLM) {
+		l.baseURL = url
+	}
+}
+
+func NewLLM(model string, apiKey, apiSecret string, opts ...LLMOption) *LLM {
+	l := &LLM{
 		model:     model,
 		apiKey:    apiKey,
 		apiSecret: apiSecret,
 		baseURL:   "https://agent-gateway.livekit.cloud/v1",
 	}
+	for _, opt := range opts {
+		opt(l)
+	}
+	return l
 }
 
 func (l *LLM) Chat(ctx context.Context, chatCtx *llm.ChatContext, opts ...llm.ChatOption) (llm.LLMStream, error) {
