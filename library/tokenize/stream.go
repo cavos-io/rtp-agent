@@ -80,7 +80,10 @@ func (s *BufferedTokenStream) PushText(text string) error {
 func (s *BufferedTokenStream) Flush() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	return s.flushLocked()
+}
 
+func (s *BufferedTokenStream) flushLocked() error {
 	if s.closed {
 		return fmt.Errorf("stream closed")
 	}
@@ -117,7 +120,7 @@ func (s *BufferedTokenStream) Close() error {
 	}
 	
 	// Ensure we flush on close if not already done manually
-	_ = s.Flush()
+	_ = s.flushLocked()
 
 	s.closed = true
 	close(s.eventCh)
