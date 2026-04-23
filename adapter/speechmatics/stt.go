@@ -9,6 +9,7 @@ import (
 	"mime/multipart"
 	"net/http"
 	"net/url"
+	"strings"
 	"sync"
 
 	"github.com/cavos-io/rtp-agent/core/stt"
@@ -17,13 +18,43 @@ import (
 )
 
 type SpeechmaticsSTT struct {
-	apiKey string
+	apiKey     string
+	baseURL    string
+	wsURL      string
+	httpClient *http.Client
 }
 
-func NewSpeechmaticsSTT(apiKey string) *SpeechmaticsSTT {
-	return &SpeechmaticsSTT{
-		apiKey: apiKey,
+type Option func(*SpeechmaticsSTT)
+
+func WithBaseURL(url string) Option {
+	return func(s *SpeechmaticsSTT) {
+		s.baseURL = url
 	}
+}
+
+func WithWSURL(url string) Option {
+	return func(s *SpeechmaticsSTT) {
+		s.wsURL = url
+	}
+}
+
+func WithHTTPClient(client *http.Client) Option {
+	return func(s *SpeechmaticsSTT) {
+		s.httpClient = client
+	}
+}
+
+func NewSpeechmaticsSTT(apiKey string, opts ...Option) *SpeechmaticsSTT {
+	s := &SpeechmaticsSTT{
+		apiKey:     apiKey,
+		baseURL:    "https://asr.api.speechmatics.com/v2/jobs",
+		wsURL:      "wss://en.rt.speechmatics.com/v2",
+		httpClient: http.DefaultClient,
+	}
+	for _, opt := range opts {
+		opt(s)
+	}
+	return s
 }
 
 func (s *SpeechmaticsSTT) Label() string { return "speechmatics.STT" }
@@ -36,8 +67,17 @@ func (s *SpeechmaticsSTT) Stream(ctx context.Context, language string) (stt.Reco
 		language = "en"
 	}
 	
-	// Speechmatics API websocket URL
-	u := url.URL{Scheme: "wss", Host: "en.rt.speechmatics.com", Path: "/v2"}
+	wsURL := s.wsURL
+	if strings.HasPrefix(wsURL, "https://") {
+		wsURL = "wss://" + strings.TrimPrefix(wsURL, "https://")
+	} else if strings.HasPrefix(wsURL, "http://") {
+		wsURL = "ws://" + strings.TrimPrefix(wsURL, "http://")
+	}
+
+	u, err := url.Parse(wsURL)
+	if err != nil {
+		return nil, err
+	}
 
 	header := make(map[string][]string)
 	header["Authorization"] = []string{"Bearer " + s.apiKey}
@@ -78,7 +118,6 @@ func (s *SpeechmaticsSTT) Stream(ctx context.Context, language string) (stt.Reco
 }
 
 func (s *SpeechmaticsSTT) Recognize(ctx context.Context, frames []*model.AudioFrame, language string) (*stt.SpeechEvent, error) {
-	url := "https://asr.api.speechmatics.com/v2/jobs"
 
 	var buf bytes.Buffer
 	for _, f := range frames {
@@ -103,11 +142,11 @@ func (s *SpeechmaticsSTT) Recognize(ctx context.Context, frames []*model.AudioFr
 	writer.WriteField("config", string(configBytes))
 	writer.Close()
 
-	req, _ := http.NewRequestWithContext(ctx, "POST", url, body)
+	req, _ := http.NewRequestWithContext(ctx, "POST", s.baseURL, body)
 	req.Header.Set("Authorization", "Bearer "+s.apiKey)
 	req.Header.Set("Content-Type", writer.FormDataContentType())
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := s.httpClient.Do(req)
 	if err != nil {
 		return nil, err
 	}

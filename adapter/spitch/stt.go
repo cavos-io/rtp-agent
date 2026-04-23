@@ -14,13 +14,35 @@ import (
 )
 
 type SpitchSTT struct {
-	apiKey string
+	apiKey     string
+	baseURL    string
+	httpClient *http.Client
 }
 
-func NewSpitchSTT(apiKey string) *SpitchSTT {
-	return &SpitchSTT{
-		apiKey: apiKey,
+type Option func(*SpitchSTT)
+
+func WithBaseURL(url string) Option {
+	return func(s *SpitchSTT) {
+		s.baseURL = url
 	}
+}
+
+func WithHTTPClient(client *http.Client) Option {
+	return func(s *SpitchSTT) {
+		s.httpClient = client
+	}
+}
+
+func NewSpitchSTT(apiKey string, opts ...Option) *SpitchSTT {
+	s := &SpitchSTT{
+		apiKey:     apiKey,
+		baseURL:    "https://api.spitch.ai/stt/v1/recognize",
+		httpClient: http.DefaultClient,
+	}
+	for _, opt := range opts {
+		opt(s)
+	}
+	return s
 }
 
 func (s *SpitchSTT) Label() string { return "spitch.STT" }
@@ -33,7 +55,6 @@ func (s *SpitchSTT) Stream(ctx context.Context, language string) (stt.RecognizeS
 }
 
 func (s *SpitchSTT) Recognize(ctx context.Context, frames []*model.AudioFrame, language string) (*stt.SpeechEvent, error) {
-	url := "https://api.spitch.ai/stt/v1/recognize"
 
 	var buf bytes.Buffer
 	for _, f := range frames {
@@ -49,7 +70,7 @@ func (s *SpitchSTT) Recognize(ctx context.Context, frames []*model.AudioFrame, l
 	}
 	writer.Close()
 
-	req, err := http.NewRequestWithContext(ctx, "POST", url, body)
+	req, err := http.NewRequestWithContext(ctx, "POST", s.baseURL, body)
 	if err != nil {
 		return nil, err
 	}
@@ -57,7 +78,7 @@ func (s *SpitchSTT) Recognize(ctx context.Context, frames []*model.AudioFrame, l
 	req.Header.Set("Content-Type", writer.FormDataContentType())
 	req.Header.Set("Authorization", "Bearer "+s.apiKey)
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := s.httpClient.Do(req)
 	if err != nil {
 		return nil, err
 	}

@@ -13,13 +13,35 @@ import (
 )
 
 type SonioxSTT struct {
-	apiKey string
+	apiKey     string
+	baseURL    string
+	httpClient *http.Client
 }
 
-func NewSonioxSTT(apiKey string) *SonioxSTT {
-	return &SonioxSTT{
-		apiKey: apiKey,
+type Option func(*SonioxSTT)
+
+func WithBaseURL(url string) Option {
+	return func(s *SonioxSTT) {
+		s.baseURL = url
 	}
+}
+
+func WithHTTPClient(client *http.Client) Option {
+	return func(s *SonioxSTT) {
+		s.httpClient = client
+	}
+}
+
+func NewSonioxSTT(apiKey string, opts ...Option) *SonioxSTT {
+	s := &SonioxSTT{
+		apiKey:     apiKey,
+		baseURL:    "https://api.soniox.com/transcribe",
+		httpClient: http.DefaultClient,
+	}
+	for _, opt := range opts {
+		opt(s)
+	}
+	return s
 }
 
 func (s *SonioxSTT) Label() string { return "soniox.STT" }
@@ -32,14 +54,13 @@ func (s *SonioxSTT) Stream(ctx context.Context, language string) (stt.RecognizeS
 }
 
 func (s *SonioxSTT) Recognize(ctx context.Context, frames []*model.AudioFrame, language string) (*stt.SpeechEvent, error) {
-	url := "https://api.soniox.com/transcribe"
 
 	var buf bytes.Buffer
 	for _, f := range frames {
 		buf.Write(f.Data)
 	}
 
-	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(buf.Bytes()))
+	req, err := http.NewRequestWithContext(ctx, "POST", s.baseURL, bytes.NewReader(buf.Bytes()))
 	if err != nil {
 		return nil, err
 	}
@@ -47,7 +68,7 @@ func (s *SonioxSTT) Recognize(ctx context.Context, frames []*model.AudioFrame, l
 	req.Header.Set("Content-Type", "audio/wav")
 	req.Header.Set("Authorization", "Bearer "+s.apiKey)
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := s.httpClient.Do(req)
 	if err != nil {
 		return nil, err
 	}
