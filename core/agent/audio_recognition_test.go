@@ -10,35 +10,9 @@ import (
 	"github.com/cavos-io/rtp-agent/model"
 )
 
-type mockVADStream struct {
-	pushed int
-}
-
-func (m *mockVADStream) PushFrame(frame *model.AudioFrame) error {
-	m.pushed++
-	return nil
-}
-
-func (m *mockVADStream) Flush() error                 { return nil }
-func (m *mockVADStream) Close() error                 { return nil }
-func (m *mockVADStream) Next() (*vad.VADEvent, error) { return nil, io.EOF }
-
-type mockSTTStream struct {
-	pushed int
-}
-
-func (m *mockSTTStream) PushFrame(frame *model.AudioFrame) error {
-	m.pushed++
-	return nil
-}
-
-func (m *mockSTTStream) Flush() error                    { return nil }
-func (m *mockSTTStream) Close() error                    { return nil }
-func (m *mockSTTStream) Next() (*stt.SpeechEvent, error) { return nil, io.EOF }
-
 func TestAudioRecognitionPushAudioFansOutToStreams(t *testing.T) {
-	vadStream := &mockVADStream{}
-	sttStream := &mockSTTStream{}
+	vadStream := &testMockVADStream{}
+	sttStream := &testMockRecognizeStream{}
 	recog := &AudioRecognition{
 		vadStream: vadStream,
 		sttStream: sttStream,
