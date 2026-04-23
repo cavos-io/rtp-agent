@@ -14,13 +14,27 @@ import (
 )
 
 type FalSTT struct {
-	apiKey string
+	apiKey     string
+	httpClient *http.Client
 }
 
-func NewFalSTT(apiKey string) *FalSTT {
-	return &FalSTT{
-		apiKey: apiKey,
+type STTOption func(*FalSTT)
+
+func WithSTTHttpClient(client *http.Client) STTOption {
+	return func(s *FalSTT) {
+		s.httpClient = client
 	}
+}
+
+func NewFalSTT(apiKey string, opts ...STTOption) *FalSTT {
+	s := &FalSTT{
+		apiKey:     apiKey,
+		httpClient: http.DefaultClient,
+	}
+	for _, opt := range opts {
+		opt(s)
+	}
+	return s
 }
 
 func (s *FalSTT) Label() string { return "fal.STT" }
@@ -63,7 +77,7 @@ func (s *FalSTT) Recognize(ctx context.Context, frames []*model.AudioFrame, lang
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Key "+s.apiKey)
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := s.httpClient.Do(req)
 	if err != nil {
 		return nil, err
 	}
