@@ -6,8 +6,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"net/url"
+	"strings"
 	"sync"
 	"time"
 
@@ -18,19 +20,58 @@ import (
 	"github.com/gorilla/websocket"
 )
 
-type DeepgramSTT struct {
-	apiKey string
-	model  string
+// Keyword represents a keyword with a boost weight for Deepgram STT recognition.
+// This is the canonical definition shared between rtp-agent and agent-worker layer.
+type Keyword struct {
+	Keyword string  `json:"keyword"`
+	Boost   float64 `json:"boost"`
 }
 
-func NewDeepgramSTT(apiKey string, model string) *DeepgramSTT {
+// DeepgramOption is a functional option for configuring DeepgramSTT.
+type DeepgramOption func(*DeepgramSTT)
+
+// WithKeywords sets the keywords with boost weights (for nova-2 and older models).
+// Keywords are passed as "keyword:boostInt" format in the Deepgram API.
+func WithKeywords(keywords []Keyword) DeepgramOption {
+	return func(s *DeepgramSTT) {
+		s.keywords = keywords
+	}
+}
+
+// WithKeyterms sets the keyterms (for nova-3 and newer models).
+// Keyterms are passed as keyword strings only (no boost weight) in the Deepgram API.
+func WithKeyterms(keyterms []string) DeepgramOption {
+	return func(s *DeepgramSTT) {
+		s.keyterms = keyterms
+	}
+}
+
+// IsNova3Model returns true if the model string indicates a nova-3 or newer model.
+// This is exported for use by application-layer logic to determine keyword parameters.
+func IsNova3Model(model string) bool {
+	lower := strings.ToLower(model)
+	return strings.Contains(lower, "nova-3") || strings.Contains(lower, "nova3")
+}
+
+type DeepgramSTT struct {
+	apiKey   string
+	model    string
+	keywords []Keyword
+	keyterms []string
+}
+
+func NewDeepgramSTT(apiKey string, model string, opts ...DeepgramOption) *DeepgramSTT {
 	if model == "" {
 		model = "nova-2"
 	}
-	return &DeepgramSTT{
+	s := &DeepgramSTT{
 		apiKey: apiKey,
 		model:  model,
 	}
+	for _, opt := range opts {
+		opt(s)
+	}
+	return s
 }
 
 func (s *DeepgramSTT) Label() string { return "deepgram.STT" }
@@ -54,6 +95,23 @@ func (s *DeepgramSTT) Stream(ctx context.Context, languageStr string) (stt.Recog
 	// Enable Deepgram's native Voice Activity Detection / Endpointing
 	q.Set("endpointing", "300")
 	q.Set("vad_events", "true")
+
+	// Add keyword/keyterm parameters
+	// The application layer (adapter/provider) is responsible for choosing
+	// which parameters to use based on model version.
+	// rtp-agent just passes them through unconditionally.
+	for _, kt := range s.keyterms {
+		q.Add("keyterms", kt)
+	}
+	for _, kw := range s.keywords {
+		// Boost weight must be an integer; round float to nearest int
+		boost := int(math.Round(kw.Boost))
+		if boost < 1 {
+			boost = 1
+		}
+		q.Add("keywords", fmt.Sprintf("%s:%d", kw.Keyword, boost))
+	}
+
 	u.RawQuery = q.Encode()
 
 	header := make(http.Header)
@@ -82,10 +140,30 @@ func (s *DeepgramSTT) Stream(ctx context.Context, languageStr string) (stt.Recog
 func (s *DeepgramSTT) Recognize(ctx context.Context, frames []*model.AudioFrame, languageStr string) (*stt.SpeechEvent, error) {
 	languageStr = language.NormalizeLanguage(languageStr)
 
-	apiURL := "https://api.deepgram.com/v1/listen?model=" + s.model + "&smart_format=true"
+	// Build URL with keywords/keyterms parameters
+	u := url.URL{Scheme: "https", Host: "api.deepgram.com", Path: "/v1/listen"}
+	q := u.Query()
+	q.Set("model", s.model)
+	q.Set("smart_format", "true")
 	if languageStr != "" {
-		apiURL += "&language=" + languageStr
+		q.Set("language", languageStr)
 	}
+
+	// Add keyword/keyterm parameters
+	// The application layer is responsible for choosing which parameters to use.
+	for _, kt := range s.keyterms {
+		q.Add("keyterms", kt)
+	}
+	for _, kw := range s.keywords {
+		boost := int(math.Round(kw.Boost))
+		if boost < 1 {
+			boost = 1
+		}
+		q.Add("keywords", fmt.Sprintf("%s:%d", kw.Keyword, boost))
+	}
+
+	u.RawQuery = q.Encode()
+	apiURL := u.String()
 
 	var buf bytes.Buffer
 	for _, f := range frames {
@@ -115,7 +193,7 @@ func (s *DeepgramSTT) Recognize(ctx context.Context, frames []*model.AudioFrame,
 		Results struct {
 			Channels []struct {
 				Alternatives []struct {
-					Transcript string `json:"transcript"`
+					Transcript string  `json:"transcript"`
 					Confidence float64 `json:"confidence"`
 				} `json:"alternatives"`
 			} `json:"channels"`
@@ -191,10 +269,10 @@ func (s *deepgramStream) readLoop() {
 		switch resp.Type {
 		case "SpeechStarted":
 			s.sendEvent(&stt.SpeechEvent{Type: stt.SpeechEventStartOfSpeech})
-			
+
 		case "UtteranceEnd":
 			s.sendEvent(&stt.SpeechEvent{Type: stt.SpeechEventEndOfSpeech})
-			
+
 		case "Results":
 			if len(resp.Channel.Alternatives) > 0 {
 				event := &stt.SpeechEvent{
@@ -310,4 +388,3 @@ func (s *deepgramStream) Next() (*stt.SpeechEvent, error) {
 		return event, nil
 	}
 }
-

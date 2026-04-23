@@ -3,8 +3,10 @@ package worker
 import (
 	"context"
 	"fmt"
+	"math"
 	"net/url"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/cavos-io/rtp-agent/core/agent"
@@ -12,6 +14,7 @@ import (
 	"github.com/gorilla/websocket"
 	"github.com/livekit/protocol/auth"
 	"github.com/livekit/protocol/livekit"
+	"github.com/shirou/gopsutil/v3/cpu"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -26,6 +29,7 @@ type WorkerOptions struct {
 	AgentName           string
 	WorkerType          WorkerType
 	MaxRetry            int
+	LoadFn              func(*AgentServer) float64
 	WSRL                string
 	APIKey              string
 	APISecret           string
@@ -49,13 +53,41 @@ type AgentServer struct {
 	isDraining bool
 
 	consoleSession any // Store local session for CLI console
+
+	// cpuLoad holds the last sampled CPU fraction (0.0–1.0), stored as float64 bits.
+	// NaN means no sample has been taken yet.
+	cpuLoad atomic.Uint64
 }
 
 func NewAgentServer(opts WorkerOptions) *AgentServer {
-	return &AgentServer{
+	s := &AgentServer{
 		Options:    opts,
 		activeJobs: make(map[string]*JobContext),
 	}
+	s.cpuLoad.Store(math.Float64bits(math.NaN()))
+	go s.sampleCPULoop()
+	return s
+}
+
+// sampleCPULoop samples CPU usage every 5 s and stores the result in cpuLoad.
+// The first call to cpu.Percent establishes a baseline and is discarded.
+func (s *AgentServer) sampleCPULoop() {
+	cpu.Percent(0, false) // warm-up — discarded
+	ticker := time.NewTicker(5 * time.Second)
+	defer ticker.Stop()
+	for range ticker.C {
+		percents, err := cpu.Percent(0, false)
+		if err != nil || len(percents) == 0 {
+			continue
+		}
+		s.cpuLoad.Store(math.Float64bits(percents[0] / 100.0))
+	}
+}
+
+// CurrentCPULoad returns the most recent CPU usage as a fraction in [0.0, 1.0].
+// Returns math.NaN() until the first sample is available (~5 s after startup).
+func (s *AgentServer) CurrentCPULoad() float64 {
+	return math.Float64frombits(s.cpuLoad.Load())
 }
 
 func (s *AgentServer) RTCSession(
@@ -89,6 +121,30 @@ func (s *AgentServer) GetEntrypointFunc() func(*JobContext) error {
 	return s.entrypointFnc
 }
 
+func (s *AgentServer) NumActiveJobs() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return len(s.activeJobs)
+}
+
+func (s *AgentServer) currentLoad() float32 {
+	if s.Options.LoadFn == nil {
+		return 0.0
+	}
+
+	load := s.Options.LoadFn(s)
+	if load < 0 {
+		return 0.0
+	}
+	if load > 1.0 {
+		return 1.0
+	}
+	return float32(load)
+}
+
+func (s *AgentServer) sendAvailabilityUpdate() error {
+	return s.sendLoadUpdate(s.currentLoad(), false)
+}
 
 func (s *AgentServer) Run(ctx context.Context) error {
 	if s.Options.WSRL == "" || s.Options.APIKey == "" || s.Options.APISecret == "" {
@@ -371,7 +427,6 @@ func (s *AgentServer) sendLoadUpdate(load float32, draining bool) error {
 	return conn.WriteMessage(websocket.BinaryMessage, b)
 }
 
-
 // sendAvailable broadcasts UpdateWorkerStatus(WS_AVAILABLE) so the LiveKit
 // server knows this worker is ready to receive job dispatches.
 func (s *AgentServer) sendAvailable() error {
@@ -401,7 +456,7 @@ func (s *AgentServer) handleMessage(ctx context.Context, msg *livekit.ServerMess
 	case *livekit.ServerMessage_Register:
 		logger.Logger.Infow("Worker Registered", "workerId", m.Register.WorkerId)
 		logger.Logger.Infow("Worker Registered", "workerId", m.Register.WorkerId, "serverInfo", m.Register.ServerInfo)
-		if err := s.sendAvailable(); err != nil {
+		if err := s.sendAvailabilityUpdate(); err != nil {
 			logger.Logger.Errorw("Failed to send available status", err)
 		} else {
 			logger.Logger.Infow("Worker status set to AVAILABLE — waiting for jobs...")
@@ -430,7 +485,7 @@ func (s *AgentServer) handleAvailability(ctx context.Context, req *livekit.Avail
 	draining := s.isDraining
 	s.mu.Unlock()
 
-	// Default to accept unless draining
+	// Default to accept unless draining.
 	ans := &livekit.WorkerMessage{
 		Message: &livekit.WorkerMessage_Availability{
 			Availability: &livekit.AvailabilityResponse{
@@ -487,6 +542,9 @@ func (s *AgentServer) handleAssignment(ctx context.Context, req *livekit.JobAssi
 	s.mu.Lock()
 	s.activeJobs[req.Job.Id] = jobCtx
 	s.mu.Unlock()
+	if err := s.sendAvailabilityUpdate(); err != nil {
+		logger.Logger.Warnw("Failed to send load update after job assignment", err)
+	}
 
 	// Tell LiveKit the job is running — keeps agent visible in the panel
 	if err := s.sendJobStatus(req.Job.Id, livekit.JobStatus_JS_RUNNING, ""); err != nil {
@@ -513,7 +571,7 @@ func (s *AgentServer) handleAssignment(ctx context.Context, req *livekit.JobAssi
 			fmt.Printf("   🧹 [PANEL] Job cleaned up: %s\n", req.Job.Id)
 
 			// Signal back to AVAILABLE so the next dispatch can be received
-			if err := s.sendAvailable(); err != nil {
+			if err := s.sendAvailabilityUpdate(); err != nil {
 				logger.Logger.Warnw("Failed to send available after job", err)
 			}
 		}()
@@ -534,6 +592,10 @@ func (s *AgentServer) handleTermination(req *livekit.JobTermination) {
 	if exists {
 		if s.sessionEndFnc != nil {
 			s.sessionEndFnc(jobCtx)
+		}
+
+		if err := s.sendAvailabilityUpdate(); err != nil {
+			logger.Logger.Warnw("Failed to send load update after termination", err)
 		}
 
 		if jobCtx.Report != nil {
@@ -572,12 +634,17 @@ func (s *AgentServer) ExecuteLocalJob(ctx context.Context, roomName string, part
 	s.mu.Lock()
 	s.activeJobs[job.Id] = jobCtx
 	s.mu.Unlock()
+	_ = s.sendAvailabilityUpdate()
 
 	if s.entrypointFnc != nil {
 		go func() {
 			if err := s.entrypointFnc(jobCtx); err != nil {
 				logger.Logger.Errorw("Local job entrypoint failed", err, "jobId", job.Id)
 			}
+			s.mu.Lock()
+			delete(s.activeJobs, job.Id)
+			s.mu.Unlock()
+			_ = s.sendAvailabilityUpdate()
 		}()
 	}
 
@@ -585,4 +652,3 @@ func (s *AgentServer) ExecuteLocalJob(ctx context.Context, roomName string, part
 	<-ctx.Done()
 	return nil
 }
-
