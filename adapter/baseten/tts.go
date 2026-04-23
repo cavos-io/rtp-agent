@@ -14,18 +14,32 @@ import (
 )
 
 type BasetenTTS struct {
-	apiKey string
-	model  string
+	apiKey     string
+	model      string
+	httpClient *http.Client
 }
 
-func NewBasetenTTS(apiKey string, model string) *BasetenTTS {
+type TTSOption func(*BasetenTTS)
+
+func WithTTSHttpClient(client *http.Client) TTSOption {
+	return func(t *BasetenTTS) {
+		t.httpClient = client
+	}
+}
+
+func NewBasetenTTS(apiKey string, model string, opts ...TTSOption) *BasetenTTS {
 	if model == "" {
 		model = "xtts-v2"
 	}
-	return &BasetenTTS{
-		apiKey: apiKey,
-		model:  model,
+	t := &BasetenTTS{
+		apiKey:     apiKey,
+		model:      model,
+		httpClient: http.DefaultClient,
 	}
+	for _, opt := range opts {
+		opt(t)
+	}
+	return t
 }
 
 func (t *BasetenTTS) Label() string { return "baseten.TTS" }
@@ -52,7 +66,7 @@ func (t *BasetenTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedSt
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Api-Key "+t.apiKey)
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := t.httpClient.Do(req)
 	if err != nil {
 		return nil, err
 	}

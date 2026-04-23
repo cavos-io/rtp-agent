@@ -14,18 +14,32 @@ import (
 )
 
 type BasetenSTT struct {
-	apiKey string
-	model  string
+	apiKey     string
+	model      string
+	httpClient *http.Client
 }
 
-func NewBasetenSTT(apiKey string, model string) *BasetenSTT {
+type STTOption func(*BasetenSTT)
+
+func WithSTTHttpClient(client *http.Client) STTOption {
+	return func(s *BasetenSTT) {
+		s.httpClient = client
+	}
+}
+
+func NewBasetenSTT(apiKey string, model string, opts ...STTOption) *BasetenSTT {
 	if model == "" {
 		model = "whisper-v3"
 	}
-	return &BasetenSTT{
-		apiKey: apiKey,
-		model:  model,
+	s := &BasetenSTT{
+		apiKey:     apiKey,
+		model:      model,
+		httpClient: http.DefaultClient,
 	}
+	for _, opt := range opts {
+		opt(s)
+	}
+	return s
 }
 
 func (s *BasetenSTT) Label() string { return "baseten.STT" }
@@ -63,7 +77,7 @@ func (s *BasetenSTT) Recognize(ctx context.Context, frames []*model.AudioFrame, 
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Api-Key "+s.apiKey)
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := s.httpClient.Do(req)
 	if err != nil {
 		return nil, err
 	}
