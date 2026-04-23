@@ -58,31 +58,19 @@ func NewJobContext(job *livekit.Job, url string, apiKey string, apiSecret string
 }
 
 func (c *JobContext) Connect(ctx context.Context, cb *lksdk.RoomCallback) error {
-	type result struct {
-		room *lksdk.Room
-		err  error
+	room, err := lksdk.ConnectToRoom(c.url, lksdk.ConnectInfo{
+		APIKey:              c.apiKey,
+		APISecret:           c.apiSecret,
+		RoomName:            c.Job.Room.Name,
+		ParticipantIdentity: "agent-" + c.Job.Id[:8],
+		ParticipantKind:     lksdk.ParticipantAgent, // Playground identifies agent by this kind
+	}, cb)
+	if err != nil {
+		return err
 	}
-	ch := make(chan result, 1)
-	go func() {
-		room, err := lksdk.ConnectToRoom(c.url, lksdk.ConnectInfo{
-			APIKey:              c.apiKey,
-			APISecret:           c.apiSecret,
-			RoomName:            c.Job.Room.Name,
-			ParticipantIdentity: "agent-" + c.Job.Id[:8],
-		}, cb)
-		ch <- result{room, err}
-	}()
-	select {
-	case <-ctx.Done():
-		return ctx.Err()
-	case r := <-ch:
-		if r.err != nil {
-			return r.err
-		}
-		c.Room = r.room
-		logger.Logger.Infow("Connected to room", "room", c.Job.Room.Name)
-		return nil
-	}
+	c.Room = room
+	logger.Logger.Infow("Connected to room", "room", c.Job.Room.Name)
+	return nil
 }
 
 func (c *JobContext) Shutdown(reason string) {

@@ -158,7 +158,7 @@ func NewRoomIO(room *lksdk.Room, session *agent.AgentSession, opts RoomOptions) 
 	}
 
 	if session.Assistant == nil {
-		session.Assistant = agent.NewPipelineAgent(session.VAD, session.STT, session.LLM, session.TTS, session.ChatCtx)
+		session.Assistant = agent.NewPipelineAgent(session.VAD, session.STT, session.LLM, session.TTS, session.ChatCtx, session.Agent.GetAgent().NoiseFilter)
 	}
 	session.Assistant.PublishAudio = rio.PublishAudio
 

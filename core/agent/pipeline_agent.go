@@ -7,6 +7,7 @@ import (
 	"sync"
 	"sync/atomic"
 
+	"github.com/cavos-io/conversation-worker/core/audio"
 	"github.com/cavos-io/conversation-worker/core/llm"
 	"github.com/cavos-io/conversation-worker/core/stt"
 	"github.com/cavos-io/conversation-worker/core/tts"
@@ -16,12 +17,13 @@ import (
 )
 
 type PipelineAgent struct {
-	agent   *Agent
-	vad     vad.VAD
-	stt     stt.STT
-	LLM     llm.LLM
-	tts     tts.TTS
-	chatCtx *llm.ChatContext
+	agent       *Agent
+	vad         vad.VAD
+	stt         stt.STT
+	LLM         llm.LLM
+	tts         tts.TTS
+	chatCtx     *llm.ChatContext
+	noiseFilter audio.NoiseFilter // optional
 
 	audioInCh chan *model.AudioFrame
 	mu        sync.Mutex
@@ -39,20 +41,22 @@ func NewPipelineAgent(
 	llmObj llm.LLM,
 	tts tts.TTS,
 	chatCtx *llm.ChatContext,
+	noiseFilter audio.NoiseFilter,
 ) *PipelineAgent {
 	if chatCtx == nil {
 		chatCtx = llm.NewChatContext()
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	return &PipelineAgent{
-		vad:       vad,
-		stt:       stt,
-		LLM:       llmObj,
-		tts:       tts,
-		chatCtx:   chatCtx,
-		audioInCh: make(chan *model.AudioFrame, 100),
-		ctx:       ctx,
-		cancel:    cancel,
+		vad:         vad,
+		stt:         stt,
+		LLM:         llmObj,
+		tts:         tts,
+		chatCtx:     chatCtx,
+		noiseFilter: noiseFilter,
+		audioInCh:   make(chan *model.AudioFrame, 100),
+		ctx:         ctx,
+		cancel:      cancel,
 	}
 }
 
@@ -98,6 +102,11 @@ func (va *PipelineAgent) run(ctx context.Context) {
 			c := frameCount.Add(1)
 			if c == 1 || c%500 == 0 {
 				fmt.Printf("🔊 [Pipeline] Audio frames received: %d (latest: %d bytes)\n", c, len(frame.Data))
+			}
+			if va.noiseFilter != nil {
+				if filtered, err := va.noiseFilter.Process(frame); err == nil {
+					frame = filtered
+				}
 			}
 			_ = vadStream.PushFrame(frame)
 			_ = sttStream.PushFrame(frame)

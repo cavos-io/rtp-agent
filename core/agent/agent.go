@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 
+	"github.com/cavos-io/conversation-worker/core/audio"
 	"github.com/cavos-io/conversation-worker/core/llm"
 	"github.com/cavos-io/conversation-worker/core/stt"
 	"github.com/cavos-io/conversation-worker/core/tts"
@@ -42,6 +43,7 @@ type Agent struct {
 	VAD           vad.VAD
 	LLM           llm.LLM
 	TTS           tts.TTS
+	NoiseFilter   audio.NoiseFilter // optional; nil = no filtering
 
 	AllowInterruptions        bool
 	MinConsecutiveSpeechDelay float64

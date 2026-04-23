@@ -124,7 +124,7 @@ func (s *AgentSession) Start(ctx context.Context) error {
 	}
 
 	if s.Assistant == nil {
-		s.Assistant = NewPipelineAgent(s.VAD, s.STT, s.LLM, s.TTS, s.ChatCtx)
+		s.Assistant = NewPipelineAgent(s.VAD, s.STT, s.LLM, s.TTS, s.ChatCtx, s.Agent.GetAgent().NoiseFilter)
 	}
 
 	if err := s.Assistant.Start(ctx, s); err != nil {
