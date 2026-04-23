@@ -3,8 +3,10 @@ package worker
 import (
 	"context"
 	"fmt"
+	"math"
 	"net/url"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/cavos-io/rtp-agent/core/agent"
@@ -12,6 +14,7 @@ import (
 	"github.com/gorilla/websocket"
 	"github.com/livekit/protocol/auth"
 	"github.com/livekit/protocol/livekit"
+	"github.com/shirou/gopsutil/v3/cpu"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -50,13 +53,41 @@ type AgentServer struct {
 	isDraining bool
 
 	consoleSession any // Store local session for CLI console
+
+	// cpuLoad holds the last sampled CPU fraction (0.0–1.0), stored as float64 bits.
+	// NaN means no sample has been taken yet.
+	cpuLoad atomic.Uint64
 }
 
 func NewAgentServer(opts WorkerOptions) *AgentServer {
-	return &AgentServer{
+	s := &AgentServer{
 		Options:    opts,
 		activeJobs: make(map[string]*JobContext),
 	}
+	s.cpuLoad.Store(math.Float64bits(math.NaN()))
+	go s.sampleCPULoop()
+	return s
+}
+
+// sampleCPULoop samples CPU usage every 5 s and stores the result in cpuLoad.
+// The first call to cpu.Percent establishes a baseline and is discarded.
+func (s *AgentServer) sampleCPULoop() {
+	cpu.Percent(0, false) // warm-up — discarded
+	ticker := time.NewTicker(5 * time.Second)
+	defer ticker.Stop()
+	for range ticker.C {
+		percents, err := cpu.Percent(0, false)
+		if err != nil || len(percents) == 0 {
+			continue
+		}
+		s.cpuLoad.Store(math.Float64bits(percents[0] / 100.0))
+	}
+}
+
+// CurrentCPULoad returns the most recent CPU usage as a fraction in [0.0, 1.0].
+// Returns math.NaN() until the first sample is available (~5 s after startup).
+func (s *AgentServer) CurrentCPULoad() float64 {
+	return math.Float64frombits(s.cpuLoad.Load())
 }
 
 func (s *AgentServer) RTCSession(
