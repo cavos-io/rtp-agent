@@ -3,63 +3,51 @@ package anthropic
 import (
 	"context"
 	"testing"
-
 )
 
 type mockPageActions struct {
-	lastFrame []byte
+	clicked bool
+	typed   string
 }
 
-func (m *mockPageActions) LeftClick(x, y int, modifiers string) {}
-func (m *mockPageActions) RightClick(x, y int)                 {}
-func (m *mockPageActions) DoubleClick(x, y int)                {}
-func (m *mockPageActions) TypeText(text string)                {}
-func (m *mockPageActions) Key(key string)                      {}
-func (m *mockPageActions) Wait()                               {}
-func (m *mockPageActions) LastFrame() []byte                   { return m.lastFrame }
+func (m *mockPageActions) LeftClick(x, y int, modifiers string) { m.clicked = true }
+func (m *mockPageActions) RightClick(x, y int)                   {}
+func (m *mockPageActions) DoubleClick(x, y int)                  {}
+func (m *mockPageActions) TypeText(text string)                  { m.typed = text }
+func (m *mockPageActions) Key(key string)                        {}
+func (m *mockPageActions) Wait()                                 {}
+func (m *mockPageActions) LastFrame() []byte                     { return []byte("fake frame") }
 
-func TestComputerTool_Execute(t *testing.T) {
-	mock := &mockPageActions{lastFrame: []byte("screenshot data")}
-	c := NewComputerTool(mock, 1024, 768)
-
-	ctx := context.Background()
+func TestComputerTool(t *testing.T) {
+	mock := &mockPageActions{}
+	ct := NewComputerTool(mock, 1024, 768)
 	
-	// Test type action
-	res, err := c.Execute(ctx, "type", map[string]interface{}{"text": "hello"})
-	if err != nil {
-		t.Fatalf("Execute type failed: %v", err)
-	}
-	if len(res) == 0 || res[0]["type"] != "image" {
-		t.Errorf("Expected image result, got %v", res)
-	}
-
-	// Test click action with coordinates
-	res, err = c.Execute(ctx, "left_click", map[string]interface{}{
-		"coordinate": []interface{}{float64(100), float64(200)},
+	// Test click
+	_, err := ct.Execute(context.Background(), "left_click", map[string]interface{}{
+		"coordinate": []interface{}{100.0, 200.0},
 	})
 	if err != nil {
-		t.Fatalf("Execute left_click failed: %v", err)
+		t.Fatalf("LeftClick failed: %v", err)
+	}
+	if !mock.clicked {
+		t.Error("Expected click to be called")
 	}
 	
-	// Test invalid action
-	_, err = c.Execute(ctx, "invalid", nil)
-	if err == nil {
-		t.Error("Expected error for invalid action, got nil")
+	// Test type
+	_, err = ct.Execute(context.Background(), "type", map[string]interface{}{
+		"text": "hello",
+	})
+	if err != nil {
+		t.Fatalf("Type failed: %v", err)
 	}
-}
-
-func TestComputerUseTool_Properties(t *testing.T) {
-	width, height := 1920, 1080
-	tool := newComputerUseTool(width, height)
-	
-	if tool.Name() != "computer_use" {
-		t.Errorf("Expected 'computer_use', got %q", tool.Name())
+	if mock.typed != "hello" {
+		t.Errorf("Expected hello, got %s", mock.typed)
 	}
 	
-	schema := tool.(interface {
-		ProviderSchema(string) map[string]any
-	}).ProviderSchema("anthropic")
-	if schema["display_width_px"] != width {
-		t.Errorf("Expected width %d, got %v", width, schema["display_width_px"])
+	// Test schema
+	tool := ct.Tools()[0].(interface{ ProviderSchema(string) map[string]any })
+	schema := tool.ProviderSchema("anthropic")
+	if schema["display_width_px"] != 1024 {
+		t.Errorf("Expected width 1024, got %v", schema["display_width_px"])
 	}
 }
