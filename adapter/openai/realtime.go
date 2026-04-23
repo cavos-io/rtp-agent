@@ -18,17 +18,37 @@ type RealtimeModel struct {
 	apiKey  string
 	model   string
 	baseURL string
+	dialer  *websocket.Dialer
 }
 
-func NewRealtimeModel(apiKey, model string) *RealtimeModel {
+type RealtimeOption func(*RealtimeModel)
+
+func WithRealtimeDialer(dialer *websocket.Dialer) RealtimeOption {
+	return func(m *RealtimeModel) {
+		m.dialer = dialer
+	}
+}
+
+func WithRealtimeBaseURL(url string) RealtimeOption {
+	return func(m *RealtimeModel) {
+		m.baseURL = url
+	}
+}
+
+func NewRealtimeModel(apiKey, model string, opts ...RealtimeOption) *RealtimeModel {
 	if model == "" {
 		model = "gpt-4o-realtime-preview"
 	}
-	return &RealtimeModel{
+	m := &RealtimeModel{
 		apiKey:  apiKey,
 		model:   model,
 		baseURL: "wss://api.openai.com/v1/realtime",
+		dialer:  websocket.DefaultDialer,
 	}
+	for _, opt := range opts {
+		opt(m)
+	}
+	return m
 }
 
 type realtimeSession struct {
@@ -46,7 +66,7 @@ func (m *RealtimeModel) Session() (llm.RealtimeSession, error) {
 	header.Add("Authorization", "Bearer "+m.apiKey)
 	header.Add("OpenAI-Beta", "realtime=v1")
 
-	conn, _, err := websocket.DefaultDialer.Dial(wsURL, header)
+	conn, _, err := m.dialer.Dial(wsURL, header)
 	if err != nil {
 		return nil, fmt.Errorf("failed to connect to OpenAI realtime: %w", err)
 	}
