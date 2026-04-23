@@ -105,3 +105,30 @@ func (m *mockTextOutput) SetSegmentID(id string)   {}
 func (m *mockTextOutput) Flush()                   {}
 func (m *mockTextOutput) OnAttached()              {}
 func (m *mockTextOutput) OnDetached()              {}
+
+type turnDetectorMockLLM struct {
+	responses []string
+}
+
+func (m *turnDetectorMockLLM) Chat(ctx context.Context, chatCtx *llm.ChatContext, opts ...llm.ChatOption) (llm.LLMStream, error) {
+	resp := "{\"probability\": 0.9}"
+	if len(m.responses) > 0 {
+		resp = m.responses[0]
+		m.responses = m.responses[1:]
+	}
+	return &turnDetectorMockLLMStream{response: resp}, nil
+}
+
+type turnDetectorMockLLMStream struct {
+	response string
+	sent     bool
+}
+
+func (s *turnDetectorMockLLMStream) Next() (*llm.ChatChunk, error) {
+	if s.sent {
+		return nil, io.EOF
+	}
+	s.sent = true
+	return &llm.ChatChunk{Delta: &llm.ChoiceDelta{Content: s.response}}, nil
+}
+func (s *turnDetectorMockLLMStream) Close() error { return nil }
