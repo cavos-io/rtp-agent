@@ -13,18 +13,40 @@ import (
 )
 
 type LMNTTTS struct {
-	apiKey string
-	voice  string
+	apiKey     string
+	voice      string
+	baseURL    string
+	httpClient *http.Client
 }
 
-func NewLMNTTTS(apiKey string, voice string) *LMNTTTS {
+type Option func(*LMNTTTS)
+
+func WithBaseURL(url string) Option {
+	return func(t *LMNTTTS) {
+		t.baseURL = url
+	}
+}
+
+func WithHTTPClient(client *http.Client) Option {
+	return func(t *LMNTTTS) {
+		t.httpClient = client
+	}
+}
+
+func NewLMNTTTS(apiKey string, voice string, opts ...Option) *LMNTTTS {
 	if voice == "" {
 		voice = "lily"
 	}
-	return &LMNTTTS{
-		apiKey: apiKey,
-		voice:  voice,
+	t := &LMNTTTS{
+		apiKey:     apiKey,
+		voice:      voice,
+		baseURL:    "https://api.lmnt.com/v1/ai/speech",
+		httpClient: http.DefaultClient,
 	}
+	for _, opt := range opts {
+		opt(t)
+	}
+	return t
 }
 
 func (t *LMNTTTS) Label() string { return "lmnt.TTS" }
@@ -35,7 +57,6 @@ func (t *LMNTTTS) SampleRate() int { return 24000 }
 func (t *LMNTTTS) NumChannels() int { return 1 }
 
 func (t *LMNTTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStream, error) {
-	url := "https://api.lmnt.com/v1/ai/speech"
 
 	body := &bytes.Buffer{}
 	writer := multipart.NewWriter(body)
@@ -45,7 +66,7 @@ func (t *LMNTTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStrea
 	writer.WriteField("sample_rate", "24000")
 	writer.Close()
 
-	req, err := http.NewRequestWithContext(ctx, "POST", url, body)
+	req, err := http.NewRequestWithContext(ctx, "POST", t.baseURL, body)
 	if err != nil {
 		return nil, err
 	}
@@ -53,7 +74,7 @@ func (t *LMNTTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStrea
 	req.Header.Set("Content-Type", writer.FormDataContentType())
 	req.Header.Set("X-API-Key", t.apiKey)
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := t.httpClient.Do(req)
 	if err != nil {
 		return nil, err
 	}
@@ -80,10 +101,7 @@ type lmntTTSChunkedStream struct {
 func (s *lmntTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 	buf := make([]byte, 4096)
 	n, err := s.resp.Body.Read(buf)
-	if err != nil {
-		if err == io.EOF {
-			return nil, io.EOF
-		}
+	if n == 0 && err != nil {
 		return nil, err
 	}
 

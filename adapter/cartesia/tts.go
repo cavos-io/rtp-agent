@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strings"
 	"sync"
 
 	"github.com/cavos-io/rtp-agent/core/tts"
@@ -17,23 +18,53 @@ import (
 )
 
 type CartesiaTTS struct {
-	apiKey  string
-	voiceID string
-	model   string
+	apiKey     string
+	voiceID    string
+	model      string
+	baseURL    string
+	wsURL      string
+	httpClient *http.Client
 }
 
-func NewCartesiaTTS(apiKey string, voiceID string, model string) *CartesiaTTS {
+type Option func(*CartesiaTTS)
+
+func WithBaseURL(url string) Option {
+	return func(t *CartesiaTTS) {
+		t.baseURL = url
+	}
+}
+
+func WithWSURL(url string) Option {
+	return func(t *CartesiaTTS) {
+		t.wsURL = url
+	}
+}
+
+func WithHTTPClient(client *http.Client) Option {
+	return func(t *CartesiaTTS) {
+		t.httpClient = client
+	}
+}
+
+func NewCartesiaTTS(apiKey string, voiceID string, model string, opts ...Option) *CartesiaTTS {
 	if voiceID == "" {
-		voiceID = "79a125e8-cd45-4c13-8a67-188112f4dd22" // A default voice
+		voiceID = "79a125e8-cd45-4c13-8a67-188112f4dd22"
 	}
 	if model == "" {
 		model = "sonic-english"
 	}
-	return &CartesiaTTS{
-		apiKey:  apiKey,
-		voiceID: voiceID,
-		model:   model,
+	t := &CartesiaTTS{
+		apiKey:     apiKey,
+		voiceID:    voiceID,
+		model:      model,
+		baseURL:    "https://api.cartesia.ai/tts/bytes",
+		wsURL:      "wss://api.cartesia.ai/tts/websocket",
+		httpClient: http.DefaultClient,
 	}
+	for _, opt := range opts {
+		opt(t)
+	}
+	return t
 }
 
 func (t *CartesiaTTS) Label() string { return "cartesia.TTS" }
@@ -44,7 +75,6 @@ func (t *CartesiaTTS) SampleRate() int { return 24000 }
 func (t *CartesiaTTS) NumChannels() int { return 1 }
 
 func (t *CartesiaTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStream, error) {
-	apiURL := "https://api.cartesia.ai/tts/bytes"
 
 	reqBody := map[string]interface{}{
 		"model_id": t.model,
@@ -65,7 +95,7 @@ func (t *CartesiaTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedS
 		return nil, err
 	}
 
-	req, err := http.NewRequestWithContext(ctx, "POST", apiURL, bytes.NewBuffer(jsonBody))
+	req, err := http.NewRequestWithContext(ctx, "POST", t.baseURL, bytes.NewBuffer(jsonBody))
 	if err != nil {
 		return nil, err
 	}
@@ -74,7 +104,7 @@ func (t *CartesiaTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedS
 	req.Header.Set("X-API-Key", t.apiKey)
 	req.Header.Set("Cartesia-Version", "2024-06-10")
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := t.httpClient.Do(req)
 	if err != nil {
 		return nil, err
 	}
@@ -97,10 +127,7 @@ type cartesiaTTSChunkedStream struct {
 func (s *cartesiaTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 	buf := make([]byte, 4096)
 	n, err := s.resp.Body.Read(buf)
-	if err != nil {
-		if err == io.EOF {
-			return nil, io.EOF
-		}
+	if n == 0 && err != nil {
 		return nil, err
 	}
 
@@ -119,7 +146,17 @@ func (s *cartesiaTTSChunkedStream) Close() error {
 }
 
 func (t *CartesiaTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
-	u := url.URL{Scheme: "wss", Host: "api.cartesia.ai", Path: "/tts/websocket"}
+	wsURL := t.wsURL
+	if strings.HasPrefix(wsURL, "https://") {
+		wsURL = "wss://" + strings.TrimPrefix(wsURL, "https://")
+	} else if strings.HasPrefix(wsURL, "http://") {
+		wsURL = "ws://" + strings.TrimPrefix(wsURL, "http://")
+	}
+
+	u, err := url.Parse(wsURL)
+	if err != nil {
+		return nil, err
+	}
 	q := u.Query()
 	q.Set("api_key", t.apiKey)
 	q.Set("cartesia_version", "2024-06-10")

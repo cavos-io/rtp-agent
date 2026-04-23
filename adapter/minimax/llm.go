@@ -11,12 +11,20 @@ type MinimaxLLM struct {
 	inner *openai.OpenAILLM
 }
 
-func NewMinimaxLLM(apiKey string, model string) *MinimaxLLM {
+type Option = openai.Option
+
+func WithBaseURL(url string) Option {
+	return openai.WithBaseURL(url)
+}
+
+func NewMinimaxLLM(apiKey string, model string, opts ...Option) *MinimaxLLM {
 	if model == "" {
 		model = "abab6.5-chat"
 	}
+	defaultOpts := []Option{WithBaseURL("https://api.minimax.chat/v1")}
+	defaultOpts = append(defaultOpts, opts...)
 	return &MinimaxLLM{
-		inner: openai.NewOpenAILLMWithBaseURL(apiKey, model, "https://api.minimax.chat/v1"),
+		inner: openai.NewOpenAILLM(apiKey, model, defaultOpts...),
 	}
 }
 

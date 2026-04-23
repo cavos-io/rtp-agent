@@ -11,12 +11,20 @@ type NvidiaLLM struct {
 	inner *openai.OpenAILLM
 }
 
-func NewNvidiaLLM(apiKey string, model string) *NvidiaLLM {
+type Option = openai.Option
+
+func WithBaseURL(url string) Option {
+	return openai.WithBaseURL(url)
+}
+
+func NewNvidiaLLM(apiKey string, model string, opts ...Option) *NvidiaLLM {
 	if model == "" {
 		model = "meta/llama3-70b-instruct"
 	}
+	defaultOpts := []Option{WithBaseURL("https://integrate.api.nvidia.com/v1")}
+	defaultOpts = append(defaultOpts, opts...)
 	return &NvidiaLLM{
-		inner: openai.NewOpenAILLMWithBaseURL(apiKey, model, "https://integrate.api.nvidia.com/v1"),
+		inner: openai.NewOpenAILLM(apiKey, model, defaultOpts...),
 	}
 }
 
