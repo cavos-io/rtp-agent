@@ -12,22 +12,46 @@ import (
 )
 
 type HumeLLM struct {
-	apiKey string
-	model  string
+	apiKey     string
+	model      string
+	baseURL    string
+	httpClient *http.Client
 }
 
-func NewHumeLLM(apiKey string, model string) *HumeLLM {
+type LLMOption func(*HumeLLM)
+
+func WithLLMURL(url string) LLMOption {
+	return func(l *HumeLLM) {
+		l.baseURL = url
+	}
+}
+
+func WithLLMHttpClient(client *http.Client) LLMOption {
+	return func(l *HumeLLM) {
+		l.httpClient = client
+	}
+}
+
+func NewHumeLLM(apiKey string, model string, opts ...LLMOption) *HumeLLM {
 	if model == "" {
 		model = "hume-evi-2"
 	}
-	return &HumeLLM{
-		apiKey: apiKey,
-		model:  model,
+	l := &HumeLLM{
+		apiKey:     apiKey,
+		model:      model,
+		baseURL:    "https://api.hume.ai/v0/evi/chat/completions",
+		httpClient: http.DefaultClient,
 	}
+
+	for _, opt := range opts {
+		opt(l)
+	}
+
+	return l
 }
 
 func (l *HumeLLM) Chat(ctx context.Context, chatCtx *llm.ChatContext, opts ...llm.ChatOption) (llm.LLMStream, error) {
-	url := "https://api.hume.ai/v0/evi/chat/completions"
+	url := l.baseURL
 
 	messages := make([]map[string]string, 0)
 	for _, item := range chatCtx.Items {
@@ -53,7 +77,7 @@ func (l *HumeLLM) Chat(ctx context.Context, chatCtx *llm.ChatContext, opts ...ll
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("X-Hume-Api-Key", l.apiKey)
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := l.httpClient.Do(req)
 	if err != nil {
 		return nil, err
 	}

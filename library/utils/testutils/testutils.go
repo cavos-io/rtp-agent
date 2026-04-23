@@ -8,6 +8,11 @@ import (
 
 	"github.com/gorilla/websocket"
 )
+ 
+// NewMockServer creates an httptest.Server with a custom handler.
+func NewMockServer(handler http.HandlerFunc) *httptest.Server {
+	return httptest.NewServer(handler)
+}
 
 // NewJSONMockServer creates an httptest.Server that returns a fixed JSON response for any request.
 func NewJSONMockServer(jsonResponse string, statusCode int) *httptest.Server {
