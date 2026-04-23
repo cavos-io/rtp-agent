@@ -13,18 +13,40 @@ import (
 )
 
 type TelnyxTTS struct {
-	apiKey string
-	voice  string
+	apiKey     string
+	voice      string
+	baseURL    string
+	httpClient *http.Client
 }
 
-func NewTelnyxTTS(apiKey string, voice string) *TelnyxTTS {
+type TTSOption func(*TelnyxTTS)
+
+func WithTTSBaseURL(url string) TTSOption {
+	return func(t *TelnyxTTS) {
+		t.baseURL = url
+	}
+}
+
+func WithTTSHTTPClient(client *http.Client) TTSOption {
+	return func(t *TelnyxTTS) {
+		t.httpClient = client
+	}
+}
+
+func NewTelnyxTTS(apiKey string, voice string, opts ...TTSOption) *TelnyxTTS {
 	if voice == "" {
 		voice = "female-1"
 	}
-	return &TelnyxTTS{
-		apiKey: apiKey,
-		voice:  voice,
+	t := &TelnyxTTS{
+		apiKey:     apiKey,
+		voice:      voice,
+		baseURL:    "https://api.telnyx.com/v2/ai/audio/speech",
+		httpClient: http.DefaultClient,
 	}
+	for _, opt := range opts {
+		opt(t)
+	}
+	return t
 }
 
 func (t *TelnyxTTS) Label() string { return "telnyx.TTS" }
@@ -35,7 +57,6 @@ func (t *TelnyxTTS) SampleRate() int { return 24000 }
 func (t *TelnyxTTS) NumChannels() int { return 1 }
 
 func (t *TelnyxTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStream, error) {
-	url := "https://api.telnyx.com/v2/ai/audio/speech"
 
 	reqBody := map[string]interface{}{
 		"input": text,
@@ -44,7 +65,7 @@ func (t *TelnyxTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStr
 	}
 
 	jsonBody, _ := json.Marshal(reqBody)
-	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewBuffer(jsonBody))
+	req, err := http.NewRequestWithContext(ctx, "POST", t.baseURL, bytes.NewBuffer(jsonBody))
 	if err != nil {
 		return nil, err
 	}
@@ -52,7 +73,7 @@ func (t *TelnyxTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStr
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+t.apiKey)
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := t.httpClient.Do(req)
 	if err != nil {
 		return nil, err
 	}
@@ -79,10 +100,7 @@ type telnyxTTSChunkedStream struct {
 func (s *telnyxTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 	buf := make([]byte, 4096)
 	n, err := s.resp.Body.Read(buf)
-	if err != nil {
-		if err == io.EOF {
-			return nil, io.EOF
-		}
+	if n == 0 && err != nil {
 		return nil, err
 	}
 

@@ -11,12 +11,20 @@ type TelnyxLLM struct {
 	inner *openai.OpenAILLM
 }
 
-func NewTelnyxLLM(apiKey string, model string) *TelnyxLLM {
+type LLMOption = openai.Option
+
+func WithLLMBaseURL(url string) LLMOption {
+	return openai.WithBaseURL(url)
+}
+
+func NewTelnyxLLM(apiKey string, model string, opts ...LLMOption) *TelnyxLLM {
 	if model == "" {
 		model = "telnyx-default"
 	}
+	defaultOpts := []LLMOption{WithLLMBaseURL("https://api.telnyx.com/v2/ai/v1")}
+	defaultOpts = append(defaultOpts, opts...)
 	return &TelnyxLLM{
-		inner: openai.NewOpenAILLMWithBaseURL(apiKey, model, "https://api.telnyx.com/v2/ai/v1"),
+		inner: openai.NewOpenAILLM(apiKey, model, defaultOpts...),
 	}
 }
 

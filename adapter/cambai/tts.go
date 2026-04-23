@@ -13,18 +13,40 @@ import (
 )
 
 type CambaiTTS struct {
-	apiKey string
-	voice  string
+	apiKey     string
+	voice      string
+	baseURL    string
+	httpClient *http.Client
 }
 
-func NewCambaiTTS(apiKey string, voice string) *CambaiTTS {
+type TTSOption func(*CambaiTTS)
+
+func WithTTSBaseURL(url string) TTSOption {
+	return func(t *CambaiTTS) {
+		t.baseURL = url
+	}
+}
+
+func WithHTTPClient(client *http.Client) TTSOption {
+	return func(t *CambaiTTS) {
+		t.httpClient = client
+	}
+}
+
+func NewCambaiTTS(apiKey string, voice string, opts ...TTSOption) *CambaiTTS {
 	if voice == "" {
 		voice = "default_voice"
 	}
-	return &CambaiTTS{
-		apiKey: apiKey,
-		voice:  voice,
+	t := &CambaiTTS{
+		apiKey:     apiKey,
+		voice:      voice,
+		baseURL:    "https://api.cambai.com/v1/tts",
+		httpClient: http.DefaultClient,
 	}
+	for _, opt := range opts {
+		opt(t)
+	}
+	return t
 }
 
 func (t *CambaiTTS) Label() string { return "cambai.TTS" }
@@ -35,7 +57,6 @@ func (t *CambaiTTS) SampleRate() int { return 24000 }
 func (t *CambaiTTS) NumChannels() int { return 1 }
 
 func (t *CambaiTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStream, error) {
-	url := "https://api.cambai.com/v1/tts"
 
 	reqBody := map[string]interface{}{
 		"text":  text,
@@ -43,7 +64,7 @@ func (t *CambaiTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStr
 	}
 
 	jsonBody, _ := json.Marshal(reqBody)
-	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewBuffer(jsonBody))
+	req, err := http.NewRequestWithContext(ctx, "POST", t.baseURL, bytes.NewBuffer(jsonBody))
 	if err != nil {
 		return nil, err
 	}
@@ -51,7 +72,7 @@ func (t *CambaiTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStr
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+t.apiKey)
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := t.httpClient.Do(req)
 	if err != nil {
 		return nil, err
 	}
@@ -78,10 +99,7 @@ type cambaiTTSChunkedStream struct {
 func (s *cambaiTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 	buf := make([]byte, 4096)
 	n, err := s.resp.Body.Read(buf)
-	if err != nil {
-		if err == io.EOF {
-			return nil, io.EOF
-		}
+	if n == 0 && err != nil {
 		return nil, err
 	}
 

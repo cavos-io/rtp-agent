@@ -11,12 +11,20 @@ type BeyLLM struct {
 	inner *openai.OpenAILLM
 }
 
-func NewBeyLLM(apiKey string, model string) *BeyLLM {
+type Option = openai.Option
+
+func WithBaseURL(url string) Option {
+	return openai.WithBaseURL(url)
+}
+
+func NewBeyLLM(apiKey string, model string, opts ...Option) *BeyLLM {
 	if model == "" {
 		model = "bey-default"
 	}
+	defaultOpts := []Option{WithBaseURL("https://api.bey.com/v1")}
+	defaultOpts = append(defaultOpts, opts...)
 	return &BeyLLM{
-		inner: openai.NewOpenAILLMWithBaseURL(apiKey, model, "https://api.bey.com/v1"),
+		inner: openai.NewOpenAILLM(apiKey, model, defaultOpts...),
 	}
 }
 

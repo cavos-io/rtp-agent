@@ -14,13 +14,35 @@ import (
 )
 
 type TelnyxSTT struct {
-	apiKey string
+	apiKey     string
+	baseURL    string
+	httpClient *http.Client
 }
 
-func NewTelnyxSTT(apiKey string) *TelnyxSTT {
-	return &TelnyxSTT{
-		apiKey: apiKey,
+type STTOption func(*TelnyxSTT)
+
+func WithSTTBaseURL(url string) STTOption {
+	return func(s *TelnyxSTT) {
+		s.baseURL = url
 	}
+}
+
+func WithSTTHTTPClient(client *http.Client) STTOption {
+	return func(s *TelnyxSTT) {
+		s.httpClient = client
+	}
+}
+
+func NewTelnyxSTT(apiKey string, opts ...STTOption) *TelnyxSTT {
+	s := &TelnyxSTT{
+		apiKey:     apiKey,
+		baseURL:    "https://api.telnyx.com/v2/ai/audio/transcriptions",
+		httpClient: http.DefaultClient,
+	}
+	for _, opt := range opts {
+		opt(s)
+	}
+	return s
 }
 
 func (s *TelnyxSTT) Label() string { return "telnyx.STT" }
@@ -33,7 +55,6 @@ func (s *TelnyxSTT) Stream(ctx context.Context, language string) (stt.RecognizeS
 }
 
 func (s *TelnyxSTT) Recognize(ctx context.Context, frames []*model.AudioFrame, language string) (*stt.SpeechEvent, error) {
-	url := "https://api.telnyx.com/v2/ai/audio/transcriptions"
 
 	var buf bytes.Buffer
 	for _, f := range frames {
@@ -50,7 +71,7 @@ func (s *TelnyxSTT) Recognize(ctx context.Context, frames []*model.AudioFrame, l
 	}
 	writer.Close()
 
-	req, err := http.NewRequestWithContext(ctx, "POST", url, body)
+	req, err := http.NewRequestWithContext(ctx, "POST", s.baseURL, body)
 	if err != nil {
 		return nil, err
 	}
@@ -58,7 +79,7 @@ func (s *TelnyxSTT) Recognize(ctx context.Context, frames []*model.AudioFrame, l
 	req.Header.Set("Content-Type", writer.FormDataContentType())
 	req.Header.Set("Authorization", "Bearer "+s.apiKey)
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := s.httpClient.Do(req)
 	if err != nil {
 		return nil, err
 	}

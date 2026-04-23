@@ -11,12 +11,20 @@ type CambaiLLM struct {
 	inner *openai.OpenAILLM
 }
 
-func NewCambaiLLM(apiKey string, model string) *CambaiLLM {
+type LLMOption = openai.Option
+
+func WithLLMBaseURL(url string) LLMOption {
+	return openai.WithBaseURL(url)
+}
+
+func NewCambaiLLM(apiKey string, model string, opts ...LLMOption) *CambaiLLM {
 	if model == "" {
 		model = "cambai-default"
 	}
+	defaultOpts := []LLMOption{WithLLMBaseURL("https://api.cambai.com/v1")}
+	defaultOpts = append(defaultOpts, opts...)
 	return &CambaiLLM{
-		inner: openai.NewOpenAILLMWithBaseURL(apiKey, model, "https://api.cambai.com/v1"),
+		inner: openai.NewOpenAILLM(apiKey, model, defaultOpts...),
 	}
 }
 

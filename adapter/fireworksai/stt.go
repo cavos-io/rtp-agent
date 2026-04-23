@@ -14,13 +14,35 @@ import (
 )
 
 type FireworksSTT struct {
-	apiKey string
+	apiKey     string
+	baseURL    string
+	httpClient *http.Client
 }
 
-func NewFireworksSTT(apiKey string) *FireworksSTT {
-	return &FireworksSTT{
-		apiKey: apiKey,
+type STTOption func(*FireworksSTT)
+
+func WithSTTBaseURL(url string) STTOption {
+	return func(s *FireworksSTT) {
+		s.baseURL = url
 	}
+}
+
+func WithHTTPClient(client *http.Client) STTOption {
+	return func(s *FireworksSTT) {
+		s.httpClient = client
+	}
+}
+
+func NewFireworksSTT(apiKey string, opts ...STTOption) *FireworksSTT {
+	s := &FireworksSTT{
+		apiKey:     apiKey,
+		baseURL:    "https://audio.fireworks.ai/v1/transcriptions",
+		httpClient: http.DefaultClient,
+	}
+	for _, opt := range opts {
+		opt(s)
+	}
+	return s
 }
 
 func (s *FireworksSTT) Label() string { return "fireworks.STT" }
@@ -33,7 +55,6 @@ func (s *FireworksSTT) Stream(ctx context.Context, language string) (stt.Recogni
 }
 
 func (s *FireworksSTT) Recognize(ctx context.Context, frames []*model.AudioFrame, language string) (*stt.SpeechEvent, error) {
-	url := "https://audio.fireworks.ai/v1/transcriptions"
 
 	var buf bytes.Buffer
 	for _, f := range frames {
@@ -50,7 +71,7 @@ func (s *FireworksSTT) Recognize(ctx context.Context, frames []*model.AudioFrame
 	}
 	writer.Close()
 
-	req, err := http.NewRequestWithContext(ctx, "POST", url, body)
+	req, err := http.NewRequestWithContext(ctx, "POST", s.baseURL, body)
 	if err != nil {
 		return nil, err
 	}
@@ -58,7 +79,7 @@ func (s *FireworksSTT) Recognize(ctx context.Context, frames []*model.AudioFrame
 	req.Header.Set("Content-Type", writer.FormDataContentType())
 	req.Header.Set("Authorization", "Bearer "+s.apiKey)
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := s.httpClient.Do(req)
 	if err != nil {
 		return nil, err
 	}
