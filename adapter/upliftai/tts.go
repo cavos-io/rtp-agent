@@ -13,18 +13,32 @@ import (
 )
 
 type UpliftAITTS struct {
-	apiKey string
-	voice  string
+	apiKey     string
+	voice      string
+	httpClient *http.Client
 }
 
-func NewUpliftAITTS(apiKey string, voice string) *UpliftAITTS {
+type TTSOption func(*UpliftAITTS)
+
+func WithTTSHttpClient(client *http.Client) TTSOption {
+	return func(t *UpliftAITTS) {
+		t.httpClient = client
+	}
+}
+
+func NewUpliftAITTS(apiKey string, voice string, opts ...TTSOption) *UpliftAITTS {
 	if voice == "" {
 		voice = "default_voice"
 	}
-	return &UpliftAITTS{
-		apiKey: apiKey,
-		voice:  voice,
+	t := &UpliftAITTS{
+		apiKey:     apiKey,
+		voice:      voice,
+		httpClient: http.DefaultClient,
 	}
+	for _, opt := range opts {
+		opt(t)
+	}
+	return t
 }
 
 func (t *UpliftAITTS) Label() string { return "upliftai.TTS" }
@@ -51,7 +65,7 @@ func (t *UpliftAITTS) Synthesize(ctx context.Context, text string) (tts.ChunkedS
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+t.apiKey)
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := t.httpClient.Do(req)
 	if err != nil {
 		return nil, err
 	}
