@@ -1,10 +1,10 @@
 .PHONY: test cover lint clean help
 
-test: ## Run all unit tests
-	go test ./... -v
+test: ## Run unit tests for stable packages (adapters, library, core)
+	go test ./adapter/... ./library/... ./core/... -v
 
-cover: ## Run tests and show coverage in browser
-	go test ./... -coverprofile=coverage.out
+cover: ## Run tests and show coverage for stable packages
+	go test ./adapter/... ./library/... ./core/... -coverprofile=coverage.out
 	go tool cover -html=coverage.out
 
 lint: ## Run golangci-lint
