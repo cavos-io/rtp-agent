@@ -14,13 +14,35 @@ import (
 )
 
 type GradiumSTT struct {
-	apiKey string
+	apiKey     string
+	baseURL    string
+	httpClient *http.Client
 }
 
-func NewGradiumSTT(apiKey string) *GradiumSTT {
-	return &GradiumSTT{
-		apiKey: apiKey,
+type STTOption func(*GradiumSTT)
+
+func WithSTTURL(url string) STTOption {
+	return func(s *GradiumSTT) {
+		s.baseURL = url
 	}
+}
+
+func WithSTTHttpClient(client *http.Client) STTOption {
+	return func(s *GradiumSTT) {
+		s.httpClient = client
+	}
+}
+
+func NewGradiumSTT(apiKey string, opts ...STTOption) *GradiumSTT {
+	s := &GradiumSTT{
+		apiKey:     apiKey,
+		baseURL:    "https://api.gradium.ai/v1/stt",
+		httpClient: http.DefaultClient,
+	}
+	for _, opt := range opts {
+		opt(s)
+	}
+	return s
 }
 
 func (s *GradiumSTT) Label() string { return "gradium.STT" }
@@ -33,7 +55,7 @@ func (s *GradiumSTT) Stream(ctx context.Context, language string) (stt.Recognize
 }
 
 func (s *GradiumSTT) Recognize(ctx context.Context, frames []*model.AudioFrame, language string) (*stt.SpeechEvent, error) {
-	url := "https://api.gradium.ai/v1/stt"
+	url := s.baseURL
 
 	var buf bytes.Buffer
 	for _, f := range frames {
@@ -56,8 +78,7 @@ func (s *GradiumSTT) Recognize(ctx context.Context, frames []*model.AudioFrame, 
 
 	req.Header.Set("Content-Type", writer.FormDataContentType())
 	req.Header.Set("Authorization", "Bearer "+s.apiKey)
-
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := s.httpClient.Do(req)
 	if err != nil {
 		return nil, err
 	}

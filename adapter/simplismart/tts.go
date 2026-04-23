@@ -13,18 +13,40 @@ import (
 )
 
 type SimplismartTTS struct {
-	apiKey string
-	voice  string
+	apiKey     string
+	voice      string
+	baseURL    string
+	httpClient *http.Client
 }
 
-func NewSimplismartTTS(apiKey string, voice string) *SimplismartTTS {
+type TTSOption func(*SimplismartTTS)
+
+func WithTTSURL(url string) TTSOption {
+	return func(t *SimplismartTTS) {
+		t.baseURL = url
+	}
+}
+
+func WithTTSHttpClient(client *http.Client) TTSOption {
+	return func(t *SimplismartTTS) {
+		t.httpClient = client
+	}
+}
+
+func NewSimplismartTTS(apiKey string, voice string, opts ...TTSOption) *SimplismartTTS {
 	if voice == "" {
 		voice = "default_voice"
 	}
-	return &SimplismartTTS{
-		apiKey: apiKey,
-		voice:  voice,
+	t := &SimplismartTTS{
+		apiKey:     apiKey,
+		voice:      voice,
+		baseURL:    "https://api.simplismart.live/tts",
+		httpClient: http.DefaultClient,
 	}
+	for _, opt := range opts {
+		opt(t)
+	}
+	return t
 }
 
 func (t *SimplismartTTS) Label() string { return "simplismart.TTS" }
@@ -35,7 +57,7 @@ func (t *SimplismartTTS) SampleRate() int { return 24000 }
 func (t *SimplismartTTS) NumChannels() int { return 1 }
 
 func (t *SimplismartTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStream, error) {
-	url := "https://api.simplismart.live/tts"
+	url := t.baseURL
 
 	reqBody := map[string]interface{}{
 		"text":  text,
@@ -51,7 +73,7 @@ func (t *SimplismartTTS) Synthesize(ctx context.Context, text string) (tts.Chunk
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+t.apiKey)
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := t.httpClient.Do(req)
 	if err != nil {
 		return nil, err
 	}
@@ -78,21 +100,20 @@ type simplismartTTSChunkedStream struct {
 func (s *simplismartTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 	buf := make([]byte, 4096)
 	n, err := s.resp.Body.Read(buf)
+	if n > 0 {
+		return &tts.SynthesizedAudio{
+			Frame: &model.AudioFrame{
+				Data:              buf[:n],
+				SampleRate:        24000,
+				NumChannels:       1,
+				SamplesPerChannel: uint32(n / 2),
+			},
+		}, nil
+	}
 	if err != nil {
-		if err == io.EOF {
-			return nil, io.EOF
-		}
 		return nil, err
 	}
-
-	return &tts.SynthesizedAudio{
-		Frame: &model.AudioFrame{
-			Data:              buf[:n],
-			SampleRate:        24000,
-			NumChannels:       1,
-			SamplesPerChannel: uint32(n / 2),
-		},
-	}, nil
+	return nil, nil
 }
 
 func (s *simplismartTTSChunkedStream) Close() error {

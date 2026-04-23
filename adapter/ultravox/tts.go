@@ -13,18 +13,40 @@ import (
 )
 
 type UltravoxTTS struct {
-	apiKey string
-	voice  string
+	apiKey     string
+	voice      string
+	baseURL    string
+	httpClient *http.Client
 }
 
-func NewUltravoxTTS(apiKey string, voice string) *UltravoxTTS {
+type TTSOption func(*UltravoxTTS)
+
+func WithTTSURL(url string) TTSOption {
+	return func(t *UltravoxTTS) {
+		t.baseURL = url
+	}
+}
+
+func WithTTSHttpClient(client *http.Client) TTSOption {
+	return func(t *UltravoxTTS) {
+		t.httpClient = client
+	}
+}
+
+func NewUltravoxTTS(apiKey string, voice string, opts ...TTSOption) *UltravoxTTS {
 	if voice == "" {
 		voice = "default"
 	}
-	return &UltravoxTTS{
-		apiKey: apiKey,
-		voice:  voice,
+	t := &UltravoxTTS{
+		apiKey:     apiKey,
+		voice:      voice,
+		baseURL:    "https://api.ultravox.ai/api/tts",
+		httpClient: http.DefaultClient,
 	}
+	for _, opt := range opts {
+		opt(t)
+	}
+	return t
 }
 
 func (t *UltravoxTTS) Label() string { return "ultravox.TTS" }
@@ -35,7 +57,7 @@ func (t *UltravoxTTS) SampleRate() int { return 24000 }
 func (t *UltravoxTTS) NumChannels() int { return 1 }
 
 func (t *UltravoxTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStream, error) {
-	url := "https://api.ultravox.ai/api/tts"
+	url := t.baseURL
 
 	reqBody := map[string]interface{}{
 		"text":  text,
@@ -50,8 +72,7 @@ func (t *UltravoxTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedS
 
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+t.apiKey)
-
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := t.httpClient.Do(req)
 	if err != nil {
 		return nil, err
 	}
@@ -78,21 +99,20 @@ type ultravoxTTSChunkedStream struct {
 func (s *ultravoxTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 	buf := make([]byte, 4096)
 	n, err := s.resp.Body.Read(buf)
+	if n > 0 {
+		return &tts.SynthesizedAudio{
+			Frame: &model.AudioFrame{
+				Data:              buf[:n],
+				SampleRate:        24000,
+				NumChannels:       1,
+				SamplesPerChannel: uint32(n / 2),
+			},
+		}, nil
+	}
 	if err != nil {
-		if err == io.EOF {
-			return nil, io.EOF
-		}
 		return nil, err
 	}
-
-	return &tts.SynthesizedAudio{
-		Frame: &model.AudioFrame{
-			Data:              buf[:n],
-			SampleRate:        24000,
-			NumChannels:       1,
-			SamplesPerChannel: uint32(n / 2),
-		},
-	}, nil
+	return nil, nil
 }
 
 func (s *ultravoxTTSChunkedStream) Close() error {

@@ -14,13 +14,35 @@ import (
 )
 
 type SimplismartSTT struct {
-	apiKey string
+	apiKey     string
+	baseURL    string
+	httpClient *http.Client
 }
 
-func NewSimplismartSTT(apiKey string) *SimplismartSTT {
-	return &SimplismartSTT{
-		apiKey: apiKey,
+type STTOption func(*SimplismartSTT)
+
+func WithSTTURL(url string) STTOption {
+	return func(s *SimplismartSTT) {
+		s.baseURL = url
 	}
+}
+
+func WithSTTHttpClient(client *http.Client) STTOption {
+	return func(s *SimplismartSTT) {
+		s.httpClient = client
+	}
+}
+
+func NewSimplismartSTT(apiKey string, opts ...STTOption) *SimplismartSTT {
+	s := &SimplismartSTT{
+		apiKey:     apiKey,
+		baseURL:    "https://api.simplismart.live/stt",
+		httpClient: http.DefaultClient,
+	}
+	for _, opt := range opts {
+		opt(s)
+	}
+	return s
 }
 
 func (s *SimplismartSTT) Label() string { return "simplismart.STT" }
@@ -33,7 +55,7 @@ func (s *SimplismartSTT) Stream(ctx context.Context, language string) (stt.Recog
 }
 
 func (s *SimplismartSTT) Recognize(ctx context.Context, frames []*model.AudioFrame, language string) (*stt.SpeechEvent, error) {
-	url := "https://api.simplismart.live/stt"
+	url := s.baseURL
 
 	var buf bytes.Buffer
 	for _, f := range frames {
@@ -56,8 +78,7 @@ func (s *SimplismartSTT) Recognize(ctx context.Context, frames []*model.AudioFra
 
 	req.Header.Set("Content-Type", writer.FormDataContentType())
 	req.Header.Set("Authorization", "Bearer "+s.apiKey)
-
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := s.httpClient.Do(req)
 	if err != nil {
 		return nil, err
 	}

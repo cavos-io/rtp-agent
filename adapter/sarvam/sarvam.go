@@ -16,13 +16,35 @@ import (
 )
 
 type SarvamSTT struct {
-	apiKey string
+	apiKey     string
+	baseURL    string
+	httpClient *http.Client
 }
 
-func NewSarvamSTT(apiKey string) *SarvamSTT {
-	return &SarvamSTT{
-		apiKey: apiKey,
+type STTOption func(*SarvamSTT)
+
+func WithSTTURL(url string) STTOption {
+	return func(s *SarvamSTT) {
+		s.baseURL = url
 	}
+}
+
+func WithSTTHttpClient(client *http.Client) STTOption {
+	return func(s *SarvamSTT) {
+		s.httpClient = client
+	}
+}
+
+func NewSarvamSTT(apiKey string, opts ...STTOption) *SarvamSTT {
+	s := &SarvamSTT{
+		apiKey:     apiKey,
+		baseURL:    "https://api.sarvam.ai/speech-to-text",
+		httpClient: http.DefaultClient,
+	}
+	for _, opt := range opts {
+		opt(s)
+	}
+	return s
 }
 
 func (s *SarvamSTT) Label() string { return "sarvam.STT" }
@@ -39,7 +61,7 @@ func (s *SarvamSTT) Recognize(ctx context.Context, frames []*model.AudioFrame, l
 		language = "hi-IN" // Defaulting to Hindi
 	}
 
-	url := "https://api.sarvam.ai/speech-to-text"
+	url := s.baseURL
 
 	var buf bytes.Buffer
 	for _, f := range frames {
@@ -61,8 +83,7 @@ func (s *SarvamSTT) Recognize(ctx context.Context, frames []*model.AudioFrame, l
 
 	req.Header.Set("Content-Type", writer.FormDataContentType())
 	req.Header.Set("API-Subscription-Key", s.apiKey)
-
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := s.httpClient.Do(req)
 	if err != nil {
 		return nil, err
 	}
@@ -89,18 +110,40 @@ func (s *SarvamSTT) Recognize(ctx context.Context, frames []*model.AudioFrame, l
 }
 
 type SarvamTTS struct {
-	apiKey string
-	voice  string
+	apiKey     string
+	voice      string
+	baseURL    string
+	httpClient *http.Client
 }
 
-func NewSarvamTTS(apiKey string, voice string) *SarvamTTS {
+type TTSOption func(*SarvamTTS)
+
+func WithTTSURL(url string) TTSOption {
+	return func(t *SarvamTTS) {
+		t.baseURL = url
+	}
+}
+
+func WithTTSHttpClient(client *http.Client) TTSOption {
+	return func(t *SarvamTTS) {
+		t.httpClient = client
+	}
+}
+
+func NewSarvamTTS(apiKey string, voice string, opts ...TTSOption) *SarvamTTS {
 	if voice == "" {
 		voice = "meera"
 	}
-	return &SarvamTTS{
-		apiKey: apiKey,
-		voice:  voice,
+	t := &SarvamTTS{
+		apiKey:     apiKey,
+		voice:      voice,
+		baseURL:    "https://api.sarvam.ai/text-to-speech",
+		httpClient: http.DefaultClient,
 	}
+	for _, opt := range opts {
+		opt(t)
+	}
+	return t
 }
 
 func (t *SarvamTTS) Label() string { return "sarvam.TTS" }
@@ -111,7 +154,7 @@ func (t *SarvamTTS) SampleRate() int { return 8000 }
 func (t *SarvamTTS) NumChannels() int { return 1 }
 
 func (t *SarvamTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStream, error) {
-	url := "https://api.sarvam.ai/text-to-speech"
+	url := t.baseURL
 
 	reqBody := map[string]interface{}{
 		"inputs": []string{text},
@@ -133,8 +176,7 @@ func (t *SarvamTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStr
 
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("API-Subscription-Key", t.apiKey)
-
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := t.httpClient.Do(req)
 	if err != nil {
 		return nil, err
 	}

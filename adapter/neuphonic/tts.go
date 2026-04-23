@@ -13,18 +13,40 @@ import (
 )
 
 type NeuphonicTTS struct {
-	apiKey string
-	voice  string
+	apiKey     string
+	voice      string
+	baseURL    string
+	httpClient *http.Client
 }
 
-func NewNeuphonicTTS(apiKey string, voice string) *NeuphonicTTS {
+type TTSOption func(*NeuphonicTTS)
+
+func WithTTSURL(url string) TTSOption {
+	return func(t *NeuphonicTTS) {
+		t.baseURL = url
+	}
+}
+
+func WithTTSHttpClient(client *http.Client) TTSOption {
+	return func(t *NeuphonicTTS) {
+		t.httpClient = client
+	}
+}
+
+func NewNeuphonicTTS(apiKey string, voice string, opts ...TTSOption) *NeuphonicTTS {
 	if voice == "" {
 		voice = "default_voice"
 	}
-	return &NeuphonicTTS{
-		apiKey: apiKey,
-		voice:  voice,
+	t := &NeuphonicTTS{
+		apiKey:     apiKey,
+		voice:      voice,
+		baseURL:    "https://api.neuphonic.com/v1/tts",
+		httpClient: http.DefaultClient,
 	}
+	for _, opt := range opts {
+		opt(t)
+	}
+	return t
 }
 
 func (t *NeuphonicTTS) Label() string { return "neuphonic.TTS" }
@@ -35,7 +57,7 @@ func (t *NeuphonicTTS) SampleRate() int { return 24000 }
 func (t *NeuphonicTTS) NumChannels() int { return 1 }
 
 func (t *NeuphonicTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStream, error) {
-	url := "https://api.neuphonic.com/v1/tts"
+	url := t.baseURL
 
 	reqBody := map[string]interface{}{
 		"text":  text,
@@ -50,8 +72,7 @@ func (t *NeuphonicTTS) Synthesize(ctx context.Context, text string) (tts.Chunked
 
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+t.apiKey)
-
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := t.httpClient.Do(req)
 	if err != nil {
 		return nil, err
 	}
@@ -78,21 +99,20 @@ type neuphonicTTSChunkedStream struct {
 func (s *neuphonicTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 	buf := make([]byte, 4096)
 	n, err := s.resp.Body.Read(buf)
+	if n > 0 {
+		return &tts.SynthesizedAudio{
+			Frame: &model.AudioFrame{
+				Data:              buf[:n],
+				SampleRate:        24000,
+				NumChannels:       1,
+				SamplesPerChannel: uint32(n / 2),
+			},
+		}, nil
+	}
 	if err != nil {
-		if err == io.EOF {
-			return nil, io.EOF
-		}
 		return nil, err
 	}
-
-	return &tts.SynthesizedAudio{
-		Frame: &model.AudioFrame{
-			Data:              buf[:n],
-			SampleRate:        24000,
-			NumChannels:       1,
-			SamplesPerChannel: uint32(n / 2),
-		},
-	}, nil
+	return nil, nil
 }
 
 func (s *neuphonicTTSChunkedStream) Close() error {
