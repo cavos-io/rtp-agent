@@ -6,6 +6,7 @@ import (
 	"io"
 	"sync"
 
+	"github.com/cavos-io/rtp-agent/core/noise"
 	"github.com/cavos-io/rtp-agent/core/stt"
 	"github.com/cavos-io/rtp-agent/core/vad"
 	"github.com/cavos-io/rtp-agent/library/logger"
@@ -21,6 +22,7 @@ type AudioRecognition struct {
 
 	vadStream vad.VADStream
 	sttStream stt.RecognizeStream
+	noise     noise.NoiseSuppressor
 
 	// For STTNode override
 	sttNodeAudioCh chan *model.AudioFrame
@@ -41,12 +43,13 @@ type RecognitionHooks interface {
 	OnFinalTranscript(ev *stt.SpeechEvent)
 }
 
-func NewAudioRecognition(session *AgentSession, hooks RecognitionHooks, s stt.STT, v vad.VAD) *AudioRecognition {
+func NewAudioRecognition(session *AgentSession, hooks RecognitionHooks, s stt.STT, v vad.VAD, n noise.NoiseSuppressor) *AudioRecognition {
 	return &AudioRecognition{
 		session:        session,
 		hooks:          hooks,
 		stt:            s,
 		vad:            v,
+		noise:          n,
 		sttNodeAudioCh: make(chan *model.AudioFrame, 100),
 	}
 }
@@ -248,12 +251,23 @@ func (ar *AudioRecognition) PushAudio(frame *model.AudioFrame) error {
 		)
 	}
 
+	// Apply noise suppression if enabled (only for internal processing)
+	processFrame := frame
+	if ar.noise != nil {
+		cleanFrame, err := ar.noise.Process(frame)
+		if err != nil {
+			logger.Logger.Errorw("[STT-PIPE] noise suppression error", err)
+		} else if cleanFrame != nil && len(cleanFrame.Data) > 0 {
+			processFrame = cleanFrame
+		}
+	}
+
 	if ar.vadStream != nil {
-		_ = ar.vadStream.PushFrame(frame)
+		_ = ar.vadStream.PushFrame(processFrame)
 	}
 
 	if ar.sttStream != nil {
-		if err := ar.sttStream.PushFrame(frame); err != nil {
+		if err := ar.sttStream.PushFrame(processFrame); err != nil {
 			logger.Logger.Errorw("[STT-PIPE] failed to push frame to STT stream", err, "frameCount", ar.frameCount)
 		}
 	} else {
@@ -264,7 +278,7 @@ func (ar *AudioRecognition) PushAudio(frame *model.AudioFrame) error {
 
 	if ar.sttNodeAudioCh != nil {
 		select {
-		case ar.sttNodeAudioCh <- frame:
+		case ar.sttNodeAudioCh <- processFrame:
 		default:
 			// channel full, drop frame to avoid blocking audio thread
 		}
@@ -285,6 +299,10 @@ func (ar *AudioRecognition) Close() {
 	if ar.vadStream != nil {
 		ar.vadStream.Close()
 		ar.vadStream = nil
+	}
+	if ar.noise != nil {
+		ar.noise.Close()
+		ar.noise = nil
 	}
 	if ar.sttNodeAudioCh != nil {
 		close(ar.sttNodeAudioCh)
