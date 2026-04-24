@@ -94,6 +94,10 @@ trace.out
 /audio_temp/
 /video_temp/
 
+# ONNX Models (mounted as Docker volume)
+/models/
+*.onnx
+
 # Recording/session files
 *.rec
 *.session
