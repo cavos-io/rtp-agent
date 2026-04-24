@@ -112,8 +112,19 @@ func handleAgent(server *worker.AgentServer, jobCtx *worker.JobContext) error {
 	fmt.Println("✅ [Agent] STT (Whisper) configured")
 
 	// Set up VAD (required for speech start/end detection and STT segmentation)
-	ag.VAD = sileroAdapter.NewSileroVAD()
-	fmt.Println("✅ [Agent] VAD configured")
+	modelPath := os.Getenv("SILERO_VAD_MODEL_PATH")
+	if modelPath == "" {
+		modelPath = "/models/silero_vad.onnx"
+	}
+	vadAdapter, err := sileroAdapter.NewSileroVAD(
+		sileroAdapter.WithModelPath(modelPath),
+	)
+	if err != nil {
+		return fmt.Errorf("failed to initialize Silero VAD: %w", err)
+	}
+	ag.VAD = vadAdapter
+	fmt.Println("✅ [Agent] VAD (Silero ONNX) configured")
+
 
 	// Set up TTS provider (ElevenLabs)
 	elevenlabsAPIKey := os.Getenv("ELEVENLABS_API_KEY")
