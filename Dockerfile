@@ -6,14 +6,26 @@ FROM golang:1.24-bookworm AS builder
 # Install CGO dependencies:
 #   libopus-dev  → hraban/opus (Opus audio codec)
 #   pkg-config   → CGO pkg-config detection
-RUN apt-get update && apt-get install -y --no-install-recommends \
     libopus-dev \
     libopusfile-dev \
     portaudio19-dev \
-    librnnoise-dev \
     pkg-config \
     wget \
+    git \
+    autoconf \
+    automake \
+    libtool \
+    make \
     && rm -rf /var/lib/apt/lists/*
+
+# Build RNNoise from source (not available in bookworm apt)
+RUN git clone https://github.com/xiph/rnnoise.git /tmp/rnnoise \
+    && cd /tmp/rnnoise \
+    && ./autogen.sh \
+    && ./configure --prefix=/usr/local \
+    && make -j$(nproc) \
+    && make install \
+    && rm -rf /tmp/rnnoise
 
 # Install ONNX Runtime v1.18.1 (required for Silero VAD)
 ARG ONNXRUNTIME_VERSION=1.18.1
@@ -49,16 +61,15 @@ RUN CGO_ENABLED=1 GOOS=linux go build -o agent ./cmd/main.go
 FROM debian:bookworm-slim AS runtime
 
 # Install only runtime C libraries (libopus, not dev headers)
-RUN apt-get update && apt-get install -y --no-install-recommends \
     libopus0 \
     libopusfile0 \
     libportaudio2 \
-    librnnoise0 \
     ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy ONNX Runtime shared libraries from builder
+# Copy ONNX Runtime and RNNoise shared libraries from builder
 COPY --from=builder /usr/local/lib/libonnxruntime* /usr/local/lib/
+COPY --from=builder /usr/local/lib/librnnoise* /usr/local/lib/
 RUN ldconfig
 
 WORKDIR /app
