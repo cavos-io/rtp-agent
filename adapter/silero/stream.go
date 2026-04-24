@@ -10,9 +10,11 @@ import (
 	speech "github.com/streamer45/silero-vad-go/speech"
 )
 
-// sileroChunkSize is the number of float32 samples per Silero inference call.
-// Silero VAD v5 requires exactly 512 samples at 16kHz (32ms window).
-const sileroChunkSize = 512
+// sileroChunkSize is the number of float32 samples to accumulate before
+// calling Silero Detect(). The internal loop processes in 512-sample windows
+// using `i < len(pcm)-windowSize`, so we need more than 512 samples.
+// 1536 = 3 × 512, giving 2 full inference windows per Detect() call (96ms at 16kHz).
+const sileroChunkSize = 1536
 
 type sileroVADStream struct {
 	ctx        context.Context
