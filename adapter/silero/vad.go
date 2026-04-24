@@ -99,5 +99,5 @@ func (v *SileroVAD) Stream(ctx context.Context) (vad.VADStream, error) {
 		return nil, fmt.Errorf("failed to create Silero VAD detector: %w", err)
 	}
 
-	return newSileroVADStream(ctx, sd), nil
+	return newSileroVADStream(ctx, sd, v.options.SampleRate), nil
 }

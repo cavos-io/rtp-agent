@@ -11,20 +11,40 @@ import (
 )
 
 type sileroVADStream struct {
-	ctx      context.Context
-	detector *speech.Detector
-	events   chan *vad.VADEvent
-	mu       sync.Mutex
-	closed   bool
-	speaking bool
+	ctx        context.Context
+	detector   *speech.Detector
+	events     chan *vad.VADEvent
+	mu         sync.Mutex
+	closed     bool
+	speaking   bool
+	sampleRate int // Target sample rate for Silero (16000)
 }
 
-func newSileroVADStream(ctx context.Context, detector *speech.Detector) *sileroVADStream {
+func newSileroVADStream(ctx context.Context, detector *speech.Detector, sampleRate int) *sileroVADStream {
 	return &sileroVADStream{
-		ctx:      ctx,
-		detector: detector,
-		events:   make(chan *vad.VADEvent, 20),
+		ctx:        ctx,
+		detector:   detector,
+		events:     make(chan *vad.VADEvent, 20),
+		sampleRate: sampleRate,
 	}
+}
+
+// downsampleInt16 performs simple decimation from srcRate to dstRate.
+// For 48kHz → 16kHz this means taking every 3rd sample (factor of 3).
+func downsampleInt16(data []byte, srcRate, dstRate int) []byte {
+	if srcRate <= dstRate {
+		return data
+	}
+	factor := srcRate / dstRate
+	numSamples := len(data) / 2
+	outSamples := numSamples / factor
+	out := make([]byte, outSamples*2)
+	for i := 0; i < outSamples; i++ {
+		srcIdx := i * factor * 2
+		out[i*2] = data[srcIdx]
+		out[i*2+1] = data[srcIdx+1]
+	}
+	return out
 }
 
 func (s *sileroVADStream) PushFrame(frame *model.AudioFrame) error {
@@ -35,15 +55,22 @@ func (s *sileroVADStream) PushFrame(frame *model.AudioFrame) error {
 		return nil
 	}
 
+	// Downsample if needed (e.g., 48kHz → 16kHz)
+	audioData := frame.Data
+	srcRate := int(frame.SampleRate)
+	if srcRate > s.sampleRate && srcRate%s.sampleRate == 0 {
+		audioData = downsampleInt16(audioData, srcRate, s.sampleRate)
+	}
+
 	// Convert int16 PCM bytes to float32 samples (Silero expects float32)
-	numSamples := len(frame.Data) / 2
+	numSamples := len(audioData) / 2
 	if numSamples == 0 {
 		return nil
 	}
 
 	pcm := make([]float32, numSamples)
 	for i := 0; i < numSamples; i++ {
-		sample := int16(uint16(frame.Data[i*2]) | uint16(frame.Data[i*2+1])<<8)
+		sample := int16(uint16(audioData[i*2]) | uint16(audioData[i*2+1])<<8)
 		pcm[i] = float32(sample) / 32768.0
 	}
 
@@ -55,12 +82,10 @@ func (s *sileroVADStream) PushFrame(frame *model.AudioFrame) error {
 	}
 
 	// Interpret segments: if any speech segments are returned, speech is active.
-	// The Silero detector internally tracks state transitions and returns
-	// segments with SpeechStartAt and SpeechEndAt timestamps.
 	for _, seg := range segments {
 		if seg.SpeechStartAt > 0 && !s.speaking {
 			s.speaking = true
-			logger.Logger.Debugw("Silero VAD: Speech START",
+			logger.Logger.Infow("Silero VAD: Speech START",
 				"startAt", seg.SpeechStartAt,
 			)
 			s.sendEvent(&vad.VADEvent{
@@ -70,7 +95,7 @@ func (s *sileroVADStream) PushFrame(frame *model.AudioFrame) error {
 		}
 		if seg.SpeechEndAt > 0 && s.speaking {
 			s.speaking = false
-			logger.Logger.Debugw("Silero VAD: Speech END",
+			logger.Logger.Infow("Silero VAD: Speech END",
 				"endAt", seg.SpeechEndAt,
 			)
 			s.sendEvent(&vad.VADEvent{
