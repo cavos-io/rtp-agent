@@ -86,6 +86,31 @@ func NewSileroVAD(opts ...VADOption) (*SileroVAD, error) {
 	}, nil
 }
 
+func (v *SileroVAD) PreWarm() error {
+	// Create a temporary detector to warm up the ONNX runtime
+	sd, err := speech.NewDetector(speech.DetectorConfig{
+		ModelPath:            v.options.ModelPath,
+		SampleRate:           v.options.SampleRate,
+		Threshold:            float32(v.options.ActivationThreshold),
+		MinSilenceDurationMs: int(v.options.MinSilenceDuration * 1000),
+		SpeechPadMs:          v.options.SpeechPadMs,
+	})
+	if err != nil {
+		return fmt.Errorf("pre-warm: failed to create detector: %w", err)
+	}
+	defer sd.Destroy()
+
+	// Run a dummy inference with silence
+	// 1536 is sileroChunkSize from stream.go
+	dummyPCM := make([]float32, 1536)
+	_, err = sd.Detect(dummyPCM)
+	if err != nil {
+		return fmt.Errorf("pre-warm: failed to run dummy inference: %w", err)
+	}
+
+	return nil
+}
+
 func (v *SileroVAD) Stream(ctx context.Context) (vad.VADStream, error) {
 	// Create a new ONNX-backed Silero detector per stream
 	sd, err := speech.NewDetector(speech.DetectorConfig{

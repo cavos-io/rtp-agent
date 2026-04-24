@@ -125,6 +125,13 @@ func handleAgent(server *worker.AgentServer, jobCtx *worker.JobContext) error {
 	ag.VAD = vadAdapter
 	fmt.Println("✅ [Agent] VAD (Silero ONNX) configured")
 
+	// Pre-warm Silero VAD
+	start := time.Now()
+	if err := vadAdapter.PreWarm(); err != nil {
+		return fmt.Errorf("failed to pre-warm Silero VAD: %w", err)
+	}
+	fmt.Printf("✅ [Agent] VAD (Silero ONNX) pre-warmed in %s\n", time.Since(start))
+
 
 	// Set up TTS provider (ElevenLabs)
 	elevenlabsAPIKey := os.Getenv("ELEVENLABS_API_KEY")
