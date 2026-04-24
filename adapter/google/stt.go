@@ -13,18 +13,19 @@ import (
 )
 
 type GoogleSTT struct {
-	client      *speech.Client
+	client      speechClient
 	phraseHints []*speechpb.SpeechContext
 }
 
-// GoogleOption is a functional option for configuring GoogleSTT.
-type GoogleOption func(*GoogleSTT)
+// STTOption is a functional option for configuring GoogleSTT.
+type STTOption func(*GoogleSTT)
 
-// WithPhraseHints returns a GoogleOption that configures phrase hints (speech contexts)
-// for improving recognition accuracy on domain-specific vocabulary.
-func WithPhraseHints(phraseHints []*speechpb.SpeechContext) GoogleOption {
-	return func(g *GoogleSTT) {
-		g.phraseHints = phraseHints
+// WithPhraseHints sets the phrase hints for Google STT recognition.
+func WithPhraseHints(hints []string) STTOption {
+	return func(s *GoogleSTT) {
+		s.phraseHints = []*speechpb.SpeechContext{
+			{Phrases: hints},
+		}
 	}
 }
 
@@ -43,14 +44,21 @@ func NewGoogleSTT(credentialsFile string, opts ...GoogleOption) (*GoogleSTT, err
 		return nil, err
 	}
 
-	g := &GoogleSTT{client: client}
+	return &GoogleSTT{client: client}, nil
+}
 
-	// Apply any provided options
-	for _, opt := range opts {
-		opt(g)
+// NewGoogleSTTWithOptions creates a new STT client with additional custom options.
+func NewGoogleSTTWithOptions(credentialsFile string, gOpts []STTOption, opts ...option.ClientOption) (*GoogleSTT, error) {
+	s, err := NewGoogleSTT(credentialsFile, opts...)
+	if err != nil {
+		return nil, err
 	}
 
-	return g, nil
+	for _, opt := range gOpts {
+		opt(s)
+	}
+
+	return s, nil
 }
 
 func (s *GoogleSTT) Label() string { return "google.STT" }

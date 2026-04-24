@@ -41,6 +41,29 @@ func main() {
 		}
 	}()
 
+	// Global pre-warm of Silero VAD to catch errors early and warm up library
+	fmt.Println("🚀 [Main] Pre-warming Silero VAD...")
+	modelPath := os.Getenv("SILERO_VAD_MODEL_PATH")
+	if modelPath == "" {
+		modelPath = "/models/silero_vad.onnx"
+	}
+	preWarmVAD, err := sileroAdapter.NewSileroVAD(
+		sileroAdapter.WithModelPath(modelPath),
+		sileroAdapter.WithMinSpeechDuration(0.05),
+		sileroAdapter.WithMinSilenceDuration(0.3),
+		sileroAdapter.WithSampleRate(16000),
+	)
+	if err != nil {
+		log.Printf("⚠️ [Main] Failed to initialize pre-warm VAD: %v\n", err)
+	} else {
+		start := time.Now()
+		if err := preWarmVAD.PreWarm(); err != nil {
+			log.Printf("⚠️ [Main] Failed to pre-warm Silero VAD: %v\n", err)
+		} else {
+			fmt.Printf("✅ [Main] Silero VAD pre-warmed in %s\n", time.Since(start))
+		}
+	}
+
 	opts := worker.WorkerOptions{
 		AgentName:  os.Getenv("AGENT_NAME"),
 		WorkerType: worker.WorkerTypeRoom,
@@ -112,8 +135,29 @@ func handleAgent(server *worker.AgentServer, jobCtx *worker.JobContext) error {
 	fmt.Println("✅ [Agent] STT (Whisper) configured")
 
 	// Set up VAD (required for speech start/end detection and STT segmentation)
-	ag.VAD = sileroAdapter.NewSileroVAD()
-	fmt.Println("✅ [Agent] VAD configured")
+	modelPath := os.Getenv("SILERO_VAD_MODEL_PATH")
+	if modelPath == "" {
+		modelPath = "/models/silero_vad.onnx"
+	}
+	vadAdapter, err := sileroAdapter.NewSileroVAD(
+		sileroAdapter.WithModelPath(modelPath),
+		sileroAdapter.WithMinSpeechDuration(0.05),
+		sileroAdapter.WithMinSilenceDuration(0.3),
+		sileroAdapter.WithSampleRate(16000),
+	)
+	if err != nil {
+		return fmt.Errorf("failed to initialize Silero VAD: %w", err)
+	}
+	ag.VAD = vadAdapter
+	fmt.Println("✅ [Agent] VAD (Silero ONNX) configured")
+
+	// Pre-warm Silero VAD
+	start := time.Now()
+	if err := vadAdapter.PreWarm(); err != nil {
+		return fmt.Errorf("failed to pre-warm Silero VAD: %w", err)
+	}
+	fmt.Printf("✅ [Agent] VAD (Silero ONNX) pre-warmed in %s\n", time.Since(start))
+
 
 	// Set up TTS provider (ElevenLabs)
 	elevenlabsAPIKey := os.Getenv("ELEVENLABS_API_KEY")

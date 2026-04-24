@@ -35,6 +35,7 @@ type VADEvent struct {
 
 type VAD interface {
 	Stream(ctx context.Context) (VADStream, error)
+	PreWarm() error
 }
 
 type VADStream interface {
