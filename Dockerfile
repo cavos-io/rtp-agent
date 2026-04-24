@@ -6,6 +6,7 @@ FROM golang:1.24-bookworm AS builder
 # Install CGO dependencies:
 #   libopus-dev  → hraban/opus (Opus audio codec)
 #   pkg-config   → CGO pkg-config detection
+RUN apt-get update && apt-get install -y --no-install-recommends \
     libopus-dev \
     libopusfile-dev \
     portaudio19-dev \
@@ -61,6 +62,7 @@ RUN CGO_ENABLED=1 GOOS=linux go build -o agent ./cmd/main.go
 FROM debian:bookworm-slim AS runtime
 
 # Install only runtime C libraries (libopus, not dev headers)
+RUN apt-get update && apt-get install -y --no-install-recommends \
     libopus0 \
     libopusfile0 \
     libportaudio2 \
