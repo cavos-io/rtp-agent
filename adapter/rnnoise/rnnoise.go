@@ -8,6 +8,7 @@ import "C"
 import (
 	"fmt"
 	"sync"
+	"unsafe"
 
 	"github.com/cavos-io/rtp-agent/model"
 )
@@ -22,7 +23,7 @@ type RNNoiseOptions struct {
 }
 
 type RNNoiseSuppressor struct {
-	state  *C.DenoiseState
+	state  unsafe.Pointer
 	mu     sync.Mutex
 	closed bool
 	opts   RNNoiseOptions
@@ -38,7 +39,7 @@ func NewRNNoiseSuppressor(opts RNNoiseOptions) (*RNNoiseSuppressor, error) {
 	}
 
 	return &RNNoiseSuppressor{
-		state: state,
+		state: unsafe.Pointer(state),
 		opts:  opts,
 	}, nil
 }
@@ -68,7 +69,7 @@ func (r *RNNoiseSuppressor) Process(frame *model.AudioFrame) (*model.AudioFrame,
 		chunk := r.pcmBuf[:rnnoiseSamples]
 		outChunk := make([]float32, rnnoiseSamples)
 		
-		C.rnnoise_process_frame(r.state, (*C.float)(&outChunk[0]), (*C.float)(&chunk[0]))
+		C.rnnoise_process_frame((*C.DenoiseState)(r.state), (*C.float)(&outChunk[0]), (*C.float)(&chunk[0]))
 		
 		processedSamples = append(processedSamples, outChunk...)
 		r.pcmBuf = r.pcmBuf[rnnoiseSamples:]
@@ -93,7 +94,7 @@ func (r *RNNoiseSuppressor) Close() error {
 		return nil
 	}
 	r.closed = true
-	C.rnnoise_destroy(r.state)
+	C.rnnoise_destroy((*C.DenoiseState)(r.state))
 	return nil
 }
 
