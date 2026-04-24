@@ -10,6 +10,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libopus-dev \
     libopusfile-dev \
     portaudio19-dev \
+    librnnoise-dev \
     pkg-config \
     wget \
     && rm -rf /var/lib/apt/lists/*
@@ -52,6 +53,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libopus0 \
     libopusfile0 \
     libportaudio2 \
+    librnnoise0 \
     ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
