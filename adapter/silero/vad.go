@@ -20,7 +20,7 @@ type VADOptions struct {
 func DefaultVADOptions() VADOptions {
 	return VADOptions{
 		MinSpeechDuration:   0.05,
-		MinSilenceDuration:  0.25,
+		MinSilenceDuration:  0.3, // Updated from 0.25
 		ActivationThreshold: 0.5,
 		SampleRate:          16000,
 		ModelPath:           "/models/silero_vad.onnx",
