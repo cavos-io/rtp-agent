@@ -89,7 +89,7 @@ func (s *sileroVADStream) sendEvent(ev *vad.VADEvent) {
 	case s.events <- ev:
 	default:
 		// Drop event if channel is full to prevent blocking
-		logger.Logger.Warnw("Silero VAD event dropped (channel full)")
+		logger.Logger.Warnw("Silero VAD event dropped (channel full)", nil)
 	}
 }
 

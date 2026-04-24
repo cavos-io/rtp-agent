@@ -9,6 +9,7 @@ FROM golang:1.24-bookworm AS builder
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libopus-dev \
     libopusfile-dev \
+    libportaudio-dev \
     pkg-config \
     wget \
     && rm -rf /var/lib/apt/lists/*
