@@ -87,21 +87,33 @@ func (s *sileroVADStream) PushFrame(frame *model.AudioFrame) error {
 	samples := int16BytesToFloat32(audioData)
 	s.pcmBuf = append(s.pcmBuf, samples...)
 
-	// Process in chunks of sileroChunkSize (512 samples = 32ms at 16kHz)
+	// Process in chunks of sileroChunkSize
 	for len(s.pcmBuf) >= sileroChunkSize {
 		chunk := s.pcmBuf[:sileroChunkSize]
 
 		segments, err := s.detector.Detect(chunk)
 		if err != nil {
-			logger.Logger.Errorw("Silero VAD detection error", err)
-			// Discard this chunk and continue
+			// "unexpected speech end" means speech ended in this chunk but started
+			// in a previous chunk. The detector's internal state has already been
+			// reset (triggered=false), so we treat this as an implicit end-of-speech.
+			if err.Error() == "unexpected speech end" && s.speaking {
+				s.speaking = false
+				logger.Logger.Infow("Silero VAD: Speech END (cross-chunk)")
+				s.sendEvent(&vad.VADEvent{
+					Type:     vad.VADEventEndOfSpeech,
+					Speaking: false,
+				})
+			} else if err.Error() != "unexpected speech end" {
+				logger.Logger.Errorw("Silero VAD detection error", err)
+			}
 			s.pcmBuf = s.pcmBuf[sileroChunkSize:]
 			continue
 		}
 
 		// Process speech segments
 		for _, seg := range segments {
-			if seg.SpeechStartAt > 0 && !s.speaking {
+			// A segment with SpeechStartAt set (and no SpeechEndAt) = speech started
+			if seg.SpeechStartAt >= 0 && seg.SpeechEndAt == 0 && !s.speaking {
 				s.speaking = true
 				logger.Logger.Infow("Silero VAD: Speech START",
 					"startAt", seg.SpeechStartAt,
@@ -111,7 +123,15 @@ func (s *sileroVADStream) PushFrame(frame *model.AudioFrame) error {
 					Speaking: true,
 				})
 			}
-			if seg.SpeechEndAt > 0 && s.speaking {
+			// A segment with both SpeechStartAt and SpeechEndAt = complete segment
+			if seg.SpeechEndAt > 0 {
+				if !s.speaking {
+					// Speech started and ended in the same chunk
+					s.sendEvent(&vad.VADEvent{
+						Type:     vad.VADEventStartOfSpeech,
+						Speaking: true,
+					})
+				}
 				s.speaking = false
 				logger.Logger.Infow("Silero VAD: Speech END",
 					"endAt", seg.SpeechEndAt,
