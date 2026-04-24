@@ -75,6 +75,10 @@ func (f failingVAD) Stream(ctx context.Context) (vad.VADStream, error) {
 	return nil, io.EOF
 }
 
+func (f failingVAD) PreWarm() error {
+	return nil
+}
+
 type failingSTT struct{}
 
 func (f failingSTT) Label() string                     { return "failing" }
