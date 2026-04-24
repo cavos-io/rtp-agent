@@ -21,6 +21,10 @@ func NewSimpleVAD(threshold float64) *SimpleVAD {
 	return &SimpleVAD{Threshold: threshold}
 }
 
+func (v *SimpleVAD) PreWarm() error {
+	return nil // No warming needed for simple energy-based VAD
+}
+
 func (v *SimpleVAD) Stream(ctx context.Context) (VADStream, error) {
 	return &simpleVADStream{
 		ctx:             ctx,
