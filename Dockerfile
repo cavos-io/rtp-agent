@@ -51,6 +51,7 @@ FROM debian:bookworm-slim AS runtime
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libopus0 \
     libopusfile0 \
+    libportaudio2 \
     ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
