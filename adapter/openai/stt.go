@@ -36,17 +36,6 @@ func NewOpenAISTTWithBaseURL(apiKey string, model string, baseURL string) *OpenA
 	}
 }
 
-func NewOpenAISTTWithBaseURL(apiKey string, model string, baseURL string) *OpenAISTT {
-	config := openai.DefaultConfig(apiKey)
-	if baseURL != "" {
-		config.BaseURL = baseURL
-	}
-	return &OpenAISTT{
-		client: openai.NewClientWithConfig(config),
-		model:  model,
-	}
-}
-
 func NewOpenAISTTWithPrompt(apiKey string, model string, baseURL string, prompt string) *OpenAISTT {
 	s := NewOpenAISTTWithBaseURL(apiKey, model, baseURL)
 	s.prompt = prompt

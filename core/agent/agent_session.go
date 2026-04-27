@@ -10,6 +10,7 @@ import (
 
 	"github.com/cavos-io/rtp-agent/core/agent/ivr"
 	"github.com/cavos-io/rtp-agent/core/llm"
+	"github.com/cavos-io/rtp-agent/core/noise"
 	"github.com/cavos-io/rtp-agent/core/stt"
 	"github.com/cavos-io/rtp-agent/core/tts"
 	"github.com/cavos-io/rtp-agent/core/vad"
@@ -70,6 +71,7 @@ type AgentSession struct {
 	VAD       vad.VAD
 	LLM       llm.LLM
 	TTS       tts.TTS
+	Noise     noise.NoiseSuppressor
 	Tools     []interface{}
 	Assistant *PipelineAgent
 	Room      *lksdk.Room

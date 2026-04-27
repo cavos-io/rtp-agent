@@ -62,15 +62,14 @@ type DeepgramSTT struct {
 	keyterms []string
 }
 
-type Option func(*DeepgramSTT)
 
-func WithBaseURL(url string) Option {
+func WithBaseURL(url string) DeepgramOption {
 	return func(s *DeepgramSTT) {
 		s.baseURL = url
 	}
 }
 
-func WithWSURL(url string) Option {
+func WithWSURL(url string) DeepgramOption {
 	return func(s *DeepgramSTT) {
 		s.wsURL = url
 	}

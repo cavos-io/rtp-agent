@@ -13,7 +13,7 @@ import (
 )
 
 type GoogleSTT struct {
-	client      speechClient
+	client      *speech.Client
 	phraseHints []*speechpb.SpeechContext
 }
 
@@ -32,7 +32,7 @@ func WithPhraseHints(hints []string) STTOption {
 // NewGoogleSTT creates a new STT client using Application Default Credentials,
 // or by providing a path to a credentials JSON file.
 // Optional GoogleOptions can be passed to configure features like phrase hints.
-func NewGoogleSTT(credentialsFile string, opts ...GoogleOption) (*GoogleSTT, error) {
+func NewGoogleSTT(credentialsFile string, opts ...option.ClientOption) (*GoogleSTT, error) {
 	ctx := context.Background()
 	var clientOpts []option.ClientOption
 	if credentialsFile != "" {

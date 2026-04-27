@@ -82,7 +82,7 @@ type opusEncoder struct {
 }
 
 func newOpusEncoder(sampleRate int, channels int) (*opusEncoder, error) {
-	enc, err := opus.NewEncoder(sampleRate, channels, opus.AppAudio)
+	enc, err := opus.NewEncoder(sampleRate, channels, opus.Application(2048))
 	if err != nil {
 		return nil, err
 	}

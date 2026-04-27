@@ -16,6 +16,7 @@ import (
 
 	elevenlabsAdapter "github.com/cavos-io/rtp-agent/adapter/elevenlabs"
 	openaiAdapter "github.com/cavos-io/rtp-agent/adapter/openai"
+	rnnoiseAdapter "github.com/cavos-io/rtp-agent/adapter/rnnoise"
 	sileroAdapter "github.com/cavos-io/rtp-agent/adapter/silero"
 	"github.com/cavos-io/rtp-agent/core/agent"
 	"github.com/cavos-io/rtp-agent/interface/cli"
@@ -158,6 +159,24 @@ func handleAgent(server *worker.AgentServer, jobCtx *worker.JobContext) error {
 	}
 	fmt.Printf("✅ [Agent] VAD (Silero ONNX) pre-warmed in %s\n", time.Since(start))
 
+	// Set up Noise Cancellation (RNNoise)
+	if os.Getenv("NOISE_CANCELLATION_ENABLED") == "true" {
+		sampleRate := 48000
+		if sr := os.Getenv("NOISE_CANCELLATION_SAMPLE_RATE"); sr != "" {
+			fmt.Sscanf(sr, "%d", &sampleRate)
+		}
+
+		noiseSuppressor, err := rnnoiseAdapter.NewRNNoiseSuppressor(rnnoiseAdapter.RNNoiseOptions{
+			SampleRate: uint32(sampleRate),
+		})
+		if err != nil {
+			fmt.Printf("⚠️ [Agent] Failed to initialize RNNoise: %v\n", err)
+		} else {
+			ag.Noise = noiseSuppressor
+			fmt.Printf("✅ [Agent] Noise Cancellation (RNNoise) configured at %dHz\n", sampleRate)
+		}
+	}
+
 
 	// Set up TTS provider (ElevenLabs)
 	elevenlabsAPIKey := os.Getenv("ELEVENLABS_API_KEY")
@@ -183,6 +202,7 @@ func handleAgent(server *worker.AgentServer, jobCtx *worker.JobContext) error {
 
 	// Create session (do not start yet — RoomIO must be wired first)
 	session := agent.NewAgentSession(ag, nil, sessionOpts)
+	session.Noise = ag.Noise
 	fmt.Println("✅ [Agent] Session created")
 
 	// Register session with server for console UI to access

@@ -102,7 +102,7 @@ func (a *AgentActivity) Start() {
 		}
 	}()
 	if a.recog == nil {
-		a.recog = NewAudioRecognition(a.Session, a, a.Session.STT, a.Session.VAD)
+		a.recog = NewAudioRecognition(a.Session, a, a.Session.STT, a.Session.VAD, a.Session.Noise)
 		if err := a.recog.Start(a.ctx); err != nil {
 			logger.Logger.Errorw("failed to start audio recognition", err)
 		}

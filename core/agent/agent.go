@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/cavos-io/rtp-agent/core/llm"
+	"github.com/cavos-io/rtp-agent/core/noise"
 	"github.com/cavos-io/rtp-agent/core/stt"
 	"github.com/cavos-io/rtp-agent/core/tts"
 	"github.com/cavos-io/rtp-agent/core/vad"
@@ -51,6 +52,7 @@ type Agent struct {
 	VAD           vad.VAD
 	LLM           llm.LLM
 	TTS           tts.TTS
+	Noise         noise.NoiseSuppressor
 
 	LLMNode                 LLMNodeFunc
 	TTSNode                 TTSNodeFunc

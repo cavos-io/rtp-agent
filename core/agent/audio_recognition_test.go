@@ -75,6 +75,10 @@ func (f failingVAD) Stream(ctx context.Context) (vad.VADStream, error) {
 	return nil, io.EOF
 }
 
+func (f failingVAD) PreWarm() error {
+	return nil
+}
+
 type failingSTT struct{}
 
 func (f failingSTT) Label() string                     { return "failing" }
@@ -88,7 +92,7 @@ func (f failingSTT) Recognize(ctx context.Context, frames []*model.AudioFrame, l
 
 func TestAudioRecognitionStartErrorPropagation(t *testing.T) {
 	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
-	recog := NewAudioRecognition(session, noopHooks{}, failingSTT{}, failingVAD{})
+	recog := NewAudioRecognition(session, noopHooks{}, failingSTT{}, failingVAD{}, nil)
 	if err := recog.Start(context.Background()); err == nil {
 		t.Fatalf("expected start to propagate stream initialization error")
 	}

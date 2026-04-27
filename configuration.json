@@ -1,0 +1,56 @@
+{
+    "instruct": "You are a helpful assistant. Respond naturally and conversationally.",
+    "greeting": "Hi there! How can I help you today?",
+    "language": "id-ID",
+    "context": {},
+    "vad": {
+        "provider": "simple",
+        "min_speech_duration": 0.05,
+        "min_silence_duration": 0.3,
+        "activation_threshold": 0.5,
+        "sample_rate": 16000
+    },
+    "stt": {
+        "provider": "openai",
+        "model": "whisper-1",
+        "language": "id-ID",
+        "detect_language": false
+    },
+    "llm": {
+        "provider": "openai",
+        "model": "gpt-4o",
+        "temperature": 0.7,
+        "max_tokens": 1024
+    },
+    "tts": {
+        "provider": "elevenlabs",
+        "voice_name": "21m00Tcm4TlvDq8ikWAM",
+        "model": "eleven_turbo_v2_5",
+        "sample_rate": 24000
+    },
+    "turn_detection": {
+        "use": "vad"
+    },
+    "call_policy": {
+        "max_duration_sec": 300,
+        "idle": {
+            "reminder_enabled": true,
+            "reminder_after_sec": 20,
+            "termination_after_sec": 45,
+            "reminder_message": "Are you still there?"
+        }
+    },
+    "noise_cancellation": {
+        "provider": "",
+        "record": true,
+        "record_dir": "./recordings"
+    },
+    "censorship": {
+        "patterns": [
+            "badword1",
+            "badword2"
+        ],
+        "replacement": "[redacted]",
+        "match_whole_words": false
+    }
+}
