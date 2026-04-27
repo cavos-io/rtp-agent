@@ -226,7 +226,7 @@ func handleAgent(server *worker.AgentServer, jobCtx *worker.JobContext) error {
 		ag.TTS = tts
 	case "openai":
 		// Map platform voice names to OpenAI constants if necessary, or pass through
-		ag.TTS = openaiAdapter.NewOpenAITTS(apiKey, "tts-1", voiceID)
+		ag.TTS = openaiAdapter.NewOpenAITTS(apiKey, openaiAdapter.SpeechModel("tts-1"), openaiAdapter.SpeechVoice(voiceID))
 	default:
 		// Fallback to ElevenLabs default
 		elevenlabsAPIKey := os.Getenv("ELEVENLABS_API_KEY")
