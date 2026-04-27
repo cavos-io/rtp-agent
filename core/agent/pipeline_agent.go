@@ -212,6 +212,23 @@ func (va *PipelineAgent) GenerateReply(speech *SpeechHandle) {
 			va.handlePlaybackAndTranscription(ctx, speech, ttsGen)
 		}
 
+		// Publish agent transcript from LLM full text as a fallback for
+		// TTS providers that don't emit DeltaText (non-ElevenLabs).
+		// Also append the assistant response to chat context so the LLM
+		// sees its own previous replies in subsequent turns.
+		if genData.FullTextCh != nil {
+			if fullText, ok := <-genData.FullTextCh; ok && fullText != "" {
+				if session.Output.Transcription == nil {
+					session.PublishAgentTranscript(fullText)
+				}
+				va.chatCtx.Append(&llm.ChatMessage{
+					Role:      llm.ChatRoleAssistant,
+					Content:   []llm.ChatContent{{Text: fullText}},
+					CreatedAt: time.Now(),
+				})
+			}
+		}
+
 		// Wait for tool executions to complete and collect results.
 		// Use select so a VAD interruption can cancel this wait.
 		var executedTools bool

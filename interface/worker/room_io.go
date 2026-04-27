@@ -17,6 +17,7 @@ import (
 	"github.com/hraban/opus"
 	"github.com/livekit/protocol/livekit"
 	lksdk "github.com/livekit/server-sdk-go/v2"
+	"google.golang.org/protobuf/proto"
 	"github.com/livekit/server-sdk-go/v2/pkg/samplebuilder"
 	"github.com/pion/rtp/codecs"
 	"github.com/pion/webrtc/v4"
@@ -350,14 +351,17 @@ func (t *RoomTextOutput) worker() {
 			// Send DataPacket_Transcription FROM the agent participant so the client
 			// SDK can correctly attribute it (sender = remote agent → left bubble).
 			// Matches Python: local_participant.publish_transcription(participant_identity=agent).
+			// Use the accumulated text so the UI shows the full response so far
+			// (each update replaces the previous segment with the same ID).
 			if t.room != nil && t.room.LocalParticipant != nil {
+				accText := t.accumulated.String()
 				tp := &livekit.Transcription{
 					TranscribedParticipantIdentity: t.participantIdentity,
 					TrackId:                        t.trackID,
 					Segments: []*livekit.TranscriptionSegment{
 						{
 							Id:    t.segmentID,
-							Text:  text,
+							Text:  accText,
 							Final: false,
 						},
 					},
@@ -402,6 +406,7 @@ func (t *RoomTextOutput) Flush() {
 
 	// Send the complete agent turn as a lk.chat bubble.
 	fullText := t.accumulated.String()
+	segID := t.segmentID
 	t.accumulated.Reset()
 	t.segmentID = ""
 
@@ -412,6 +417,28 @@ func (t *RoomTextOutput) Flush() {
 	if t.room == nil || t.room.LocalParticipant == nil {
 		logger.Logger.Warnw("[Transcript] Flush: room or LocalParticipant is nil, cannot send lk.chat", nil, "fullText", fullText)
 		return
+	}
+
+	// Send a final DataPacket_Transcription with the complete text so the UI
+	// replaces partial segments with the full response.
+	if segID != "" {
+		tp := &livekit.Transcription{
+			TranscribedParticipantIdentity: t.participantIdentity,
+			TrackId:                        t.trackID,
+			Segments: []*livekit.TranscriptionSegment{
+				{
+					Id:    segID,
+					Text:  fullText,
+					Final: true,
+				},
+			},
+		}
+		if err := t.room.LocalParticipant.PublishDataPacket(
+			&transcriptionDataPacket{tp},
+			lksdk.WithDataPublishReliable(true),
+		); err != nil {
+			logger.Logger.Warnw("[Transcript] Failed to publish final DataPacket_Transcription", err)
+		}
 	}
 
 	payload, _ := json.Marshal(map[string]interface{}{
@@ -611,15 +638,25 @@ func (rio *RoomIO) PublishData(data []byte, topic string, destinationSIDs []stri
 	if rio.Room == nil || rio.Room.LocalParticipant == nil {
 		return fmt.Errorf("room not connected")
 	}
-	pkt := &lksdk.UserDataPacket{
-		Payload: data,
-		Topic:   topic,
-	}
+
 	opts := []lksdk.DataPublishOption{
 		lksdk.WithDataPublishReliable(true),
 	}
 	if len(destinationSIDs) > 0 {
 		opts = append(opts, lksdk.WithDataPublishDestination(destinationSIDs))
+	}
+
+	if topic == "lk.transcription" {
+		var tp livekit.Transcription
+		if err := proto.Unmarshal(data, &tp); err == nil {
+			return rio.Room.LocalParticipant.PublishDataPacket(
+				&transcriptionDataPacket{&tp}, opts...)
+		}
+	}
+
+	pkt := &lksdk.UserDataPacket{
+		Payload: data,
+		Topic:   topic,
 	}
 	return rio.Room.LocalParticipant.PublishDataPacket(pkt, opts...)
 }

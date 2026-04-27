@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"sync"
+	"time"
 
 	"github.com/cavos-io/rtp-agent/core/noise"
 	"github.com/cavos-io/rtp-agent/core/stt"
@@ -28,9 +29,11 @@ type AudioRecognition struct {
 	sttNodeAudioCh chan *model.AudioFrame
 	sttNodeOutCh   <-chan *stt.SpeechEvent
 
-	mu         sync.Mutex
-	speaking   bool
-	frameCount int
+	mu              sync.Mutex
+	speaking        bool
+	frameCount      int
+	sttReconnects   int
+	sttBackoffUntil time.Time
 
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -57,6 +60,8 @@ func NewAudioRecognition(session *AgentSession, hooks RecognitionHooks, s stt.ST
 func (ar *AudioRecognition) Start(ctx context.Context) error {
 	ar.mu.Lock()
 	defer ar.mu.Unlock()
+
+	ar.ctx = ctx
 
 	var started bool
 	var startErr error
@@ -268,7 +273,13 @@ func (ar *AudioRecognition) PushAudio(frame *model.AudioFrame) error {
 
 	if ar.sttStream != nil {
 		if err := ar.sttStream.PushFrame(processFrame); err != nil {
-			logger.Logger.Errorw("[STT-PIPE] failed to push frame to STT stream", err, "frameCount", ar.frameCount)
+			if err == io.EOF {
+				logger.Logger.Warnw("[STT-PIPE] STT stream closed (EOF), reconnecting", nil, "frameCount", ar.frameCount)
+				ar.sttStream = nil
+				ar.reconnectSTT()
+			} else {
+				logger.Logger.Errorw("[STT-PIPE] failed to push frame to STT stream", err, "frameCount", ar.frameCount)
+			}
 		}
 	} else {
 		if ar.frameCount == 1 {
@@ -285,6 +296,61 @@ func (ar *AudioRecognition) PushAudio(frame *model.AudioFrame) error {
 	}
 
 	return nil
+}
+
+const maxSTTReconnects = 5
+
+// reconnectSTT creates a new STT stream after the previous one closed.
+// Uses exponential backoff and gives up after maxSTTReconnects consecutive failures.
+// Must be called with ar.mu held.
+func (ar *AudioRecognition) reconnectSTT() {
+	if ar.stt == nil {
+		return
+	}
+
+	if !ar.sttBackoffUntil.IsZero() && time.Now().Before(ar.sttBackoffUntil) {
+		return
+	}
+
+	ar.sttReconnects++
+	if ar.sttReconnects > maxSTTReconnects {
+		logger.Logger.Errorw("[STT-PIPE] STT reconnect limit reached, giving up", nil,
+			"attempts", ar.sttReconnects-1)
+		return
+	}
+
+	backoff := time.Duration(1<<uint(ar.sttReconnects-1)) * time.Second
+	if backoff > 30*time.Second {
+		backoff = 30 * time.Second
+	}
+	ar.sttBackoffUntil = time.Now().Add(backoff)
+	logger.Logger.Warnw("[STT-PIPE] scheduling STT reconnect", nil,
+		"attempt", ar.sttReconnects, "backoff", backoff)
+
+	ctx := ar.ctx
+	sttProvider := ar.stt
+	go func() {
+		time.Sleep(backoff)
+
+		ar.mu.Lock()
+		defer ar.mu.Unlock()
+
+		if ar.sttStream != nil {
+			return
+		}
+
+		stream, err := sttProvider.Stream(ctx, "")
+		if err != nil {
+			logger.Logger.Errorw("[STT-PIPE] failed to reconnect STT stream", err,
+				"attempt", ar.sttReconnects)
+			return
+		}
+		ar.sttStream = stream
+		ar.sttReconnects = 0
+		ar.sttBackoffUntil = time.Time{}
+		go ar.sttLoop(ctx, stream)
+		logger.Logger.Infow("[STT-PIPE] STT stream reconnected successfully")
+	}()
 }
 
 func (ar *AudioRecognition) Close() {

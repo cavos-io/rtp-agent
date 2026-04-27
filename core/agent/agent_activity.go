@@ -788,6 +788,7 @@ func (a *AgentActivity) runEOUDetection(info EndOfTurnInfo) {
 				if a.audioTranscript != "" {
 					transcript = a.audioTranscript
 				}
+				a.audioTranscript = ""
 				a.audioInterimTranscript = ""
 				a.transcriptMu.Unlock()
 			}

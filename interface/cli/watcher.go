@@ -121,7 +121,7 @@ func RunWithDevMode(args []string) error {
 		logger.Logger.Infow("Starting process via go run")
 
 		// Build the args for `go run`
-		goArgs := []string{"run", "cmd/main.go", "start"} // Assuming standard layout
+		goArgs := []string{"run", "./cmd/", "start"}
 
 		cmd = exec.Command("go", goArgs...)
 		cmd.Stdout = os.Stdout
