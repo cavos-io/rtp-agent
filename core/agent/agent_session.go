@@ -804,6 +804,7 @@ func (s *AgentSession) GetAgentTrackSID() string {
 // Sends both a ChatMessage (chat panel) and a Transcription packet (transcript overlay).
 func (s *AgentSession) PublishUserTranscript(text string) {
 	if text == "" {
+		logger.Logger.Warnw("[Transcript] PublishUserTranscript called with empty text, skipping", nil)
 		return
 	}
 	s.mu.Lock()
@@ -811,7 +812,15 @@ func (s *AgentSession) PublishUserTranscript(text string) {
 	userTrackSID := s.RemoteTrackSID
 	s.mu.Unlock()
 
+	logger.Logger.Infow("[Transcript] PublishUserTranscript",
+		"text", text,
+		"userIdentity", userIdentity,
+		"userTrackSID", userTrackSID,
+		"hasPublisher", s.Output.Publisher != nil,
+	)
+
 	if s.Output.Publisher == nil {
+		logger.Logger.Warnw("[Transcript] PublishUserTranscript: Output.Publisher is nil, dropping", nil)
 		return
 	}
 
@@ -834,10 +843,11 @@ func (s *AgentSession) PublishUserTranscript(text string) {
 
 	// GAP-008: Use abstracted Publisher to publish transcription packet
 	data, _ := proto.Marshal(tpkt)
+	logger.Logger.Infow("[Transcript] Sending lk.transcription (user)", "bytes", len(data), "identity", userIdentity)
 	if err := s.Output.Publisher.PublishData(data, "lk.transcription", nil); err != nil {
-		logger.Logger.Warnw("Failed to publish user transcription", err)
+		logger.Logger.Warnw("[Transcript] Failed to publish user lk.transcription", err)
 	} else {
-		logger.Logger.Debugw("User transcription published", "identity", userIdentity, "text", text)
+		logger.Logger.Infow("[Transcript] User lk.transcription published OK", "identity", userIdentity, "text", text)
 	}
 }
 

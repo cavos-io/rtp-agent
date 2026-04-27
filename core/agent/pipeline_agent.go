@@ -379,8 +379,8 @@ func (va *PipelineAgent) handlePlaybackAndTranscription(ctx context.Context, spe
 
 	logger.Logger.Debugw("Starting audio playback and transcription")
 	var alignedWG sync.WaitGroup
-	if session.Options.UseTTSAlignedTranscript && session.Output.Transcription != nil {
-		logger.Logger.Debugw("TTS aligned transcript enabled, starting transcription goroutine")
+	if session.Output.Transcription != nil {
+		logger.Logger.Debugw("Transcription output available, starting transcription goroutine", "use_tts_aligned", session.Options.UseTTSAlignedTranscript)
 		var textCh <-chan string = ttsGen.AlignedTextCh
 		if baseAgent != nil && baseAgent.TranscriptionNode != nil {
 			logger.Logger.Debugw("Using custom transcription node")
@@ -457,4 +457,3 @@ func (va *PipelineAgent) handlePlaybackAndTranscription(ctx context.Context, spe
 	}
 	alignedWG.Wait()
 }
-

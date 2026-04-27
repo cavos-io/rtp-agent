@@ -177,7 +177,6 @@ func handleAgent(server *worker.AgentServer, jobCtx *worker.JobContext) error {
 		}
 	}
 
-
 	// Set up TTS provider (ElevenLabs)
 	elevenlabsAPIKey := os.Getenv("ELEVENLABS_API_KEY")
 	elevenlabsTTS, err := elevenlabsAdapter.NewElevenLabsTTS(elevenlabsAPIKey, "21m00Tcm4TlvDq8ikWAM", "eleven_turbo_v2_5")
@@ -244,7 +243,12 @@ func handleAgent(server *worker.AgentServer, jobCtx *worker.JobContext) error {
 	fmt.Printf("✅ [Agent] Connected to LiveKit room (t=%s)\n", time.Since(startTime).Round(time.Millisecond))
 
 	// Create RoomIO — this wires session.Input.Audio and session.Output.Audio automatically.
-	rio = worker.NewRoomIO(jobCtx.Room, session, worker.RoomOptions{})
+	rio = worker.NewRoomIO(jobCtx.Room, session, worker.RoomOptions{
+		TextOutput: &worker.TextOutputOptions{
+			Enabled: true,
+		},
+		JobContext: jobCtx,
+	})
 
 	// Publish agent's audio output track to the room.
 	fmt.Printf("⏳ [Agent] Starting RoomIO (publishing audio track)... (t=%s)\n", time.Since(startTime).Round(time.Millisecond))
