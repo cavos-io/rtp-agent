@@ -805,6 +805,9 @@ func (a *AgentActivity) runEOUDetection(info EndOfTurnInfo) {
 				})
 			}
 
+			// Publish user transcript as chat bubble to Playground.
+			a.Session.PublishUserTranscript(transcript)
+
 			if a.Session != nil && a.Session.ivrActivity != nil {
 				a.Session.ivrActivity.OnUserInputTranscribed(&ivr.UserInputTranscribedEvent{
 					Transcript: transcript,
@@ -922,4 +925,3 @@ func (a *AgentActivity) UpdateOptions(opts AgentSessionOptions) {
 	// For now just copy them
 	a.Session.Options = opts
 }
-
