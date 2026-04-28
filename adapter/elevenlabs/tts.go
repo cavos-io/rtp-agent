@@ -19,36 +19,59 @@ import (
 	"github.com/gorilla/websocket"
 )
 
-type ElevenLabsTTS struct {
-	apiKey  string
-	voiceID string
-	modelID string
+type ElevenLabsOption func(*ElevenLabsTTS)
+
+func WithSampleRate(rate int) ElevenLabsOption {
+	return func(t *ElevenLabsTTS) {
+		t.sampleRate = rate
+	}
 }
 
-func NewElevenLabsTTS(apiKey string, voiceID string, modelID string) (*ElevenLabsTTS, error) {
+type ElevenLabsTTS struct {
+	apiKey     string
+	voiceID    string
+	modelID    string
+	sampleRate int
+}
+
+func NewElevenLabsTTS(apiKey string, voiceID string, modelID string, opts ...ElevenLabsOption) (*ElevenLabsTTS, error) {
 	if voiceID == "" {
 		voiceID = "21m00Tcm4TlvDq8ikWAM" // Rachel
 	}
 	if modelID == "" {
 		modelID = "eleven_monolingual_v1"
 	}
-	return &ElevenLabsTTS{
-		apiKey:  apiKey,
-		voiceID: voiceID,
-		modelID: modelID,
-	}, nil
+	t := &ElevenLabsTTS{
+		apiKey:     apiKey,
+		voiceID:    voiceID,
+		modelID:    modelID,
+		sampleRate: 24000, // Default
+	}
+	for _, opt := range opts {
+		opt(t)
+	}
+	return t, nil
 }
 
 func (t *ElevenLabsTTS) Label() string { return "elevenlabs.TTS" }
 func (t *ElevenLabsTTS) Capabilities() tts.TTSCapabilities {
 	return tts.TTSCapabilities{Streaming: true, AlignedTranscript: true}
 }
-func (t *ElevenLabsTTS) SampleRate() int  { return 24000 }
+func (t *ElevenLabsTTS) SampleRate() int  { return t.sampleRate }
 func (t *ElevenLabsTTS) NumChannels() int { return 1 }
 
 // Synthesize performs a full HTTP POST for non-streaming scenarios.
 func (t *ElevenLabsTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStream, error) {
-	apiURL := fmt.Sprintf("https://api.elevenlabs.io/v1/text-to-speech/%s?output_format=pcm_24000", t.voiceID)
+	outputFormat := "pcm_24000"
+	if t.sampleRate == 16000 {
+		outputFormat = "pcm_16000"
+	} else if t.sampleRate == 22050 {
+		outputFormat = "pcm_22050"
+	} else if t.sampleRate == 44100 {
+		outputFormat = "pcm_44100"
+	}
+	apiURL := fmt.Sprintf("https://api.elevenlabs.io/v1/text-to-speech/%s?output_format=%s", t.voiceID, outputFormat)
+
 	body := map[string]interface{}{
 		"text":     text,
 		"model_id": t.modelID,
@@ -142,7 +165,15 @@ func (s *elevenLabsStream) connect() error {
 	u := url.URL{Scheme: "wss", Host: "api.elevenlabs.io", Path: fmt.Sprintf("/v1/text-to-speech/%s/stream-input", s.tts.voiceID)}
 	q := u.Query()
 	q.Set("model_id", s.tts.modelID)
-	q.Set("output_format", "pcm_24000")
+	outputFormat := "pcm_24000"
+	if s.tts.sampleRate == 16000 {
+		outputFormat = "pcm_16000"
+	} else if s.tts.sampleRate == 22050 {
+		outputFormat = "pcm_22050"
+	} else if s.tts.sampleRate == 44100 {
+		outputFormat = "pcm_44100"
+	}
+	q.Set("output_format", outputFormat)
 	u.RawQuery = q.Encode()
 
 	header := make(http.Header)
@@ -259,7 +290,7 @@ func (s *elevenLabsStream) readLoop() {
 			case s.audio <- &tts.SynthesizedAudio{
 				Frame: &model.AudioFrame{
 					Data:              data,
-					SampleRate:        24000,
+					SampleRate:        uint32(s.tts.sampleRate),
 					NumChannels:       1,
 					SamplesPerChannel: uint32(len(data) / 2),
 				},
