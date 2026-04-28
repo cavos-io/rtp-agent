@@ -4,10 +4,10 @@
     "language": "id-ID",
     "context": {},
     "vad": {
-        "provider": "simple",
+        "provider": "silero",
         "min_speech_duration": 0.05,
         "min_silence_duration": 0.3,
-        "activation_threshold": 0.5,
+        "activation_threshold": 0.9,
         "sample_rate": 16000
     },
     "stt": {
