@@ -3,6 +3,7 @@ package silero
 import (
 	"context"
 	"sync"
+	"time"
 
 	"github.com/cavos-io/rtp-agent/core/vad"
 	"github.com/cavos-io/rtp-agent/library/logger"
@@ -25,17 +26,31 @@ type sileroVADStream struct {
 	speaking   bool
 	sampleRate int // Target sample rate for Silero (16000)
 
+	// MinSpeechDuration filtering: hold back speech-start until speech
+	// has been ongoing for at least this duration. Prevents false triggers
+	// from brief noise spikes. Mirrors Python Silero VAD behavior.
+	minSpeechDuration time.Duration
+	pendingSpeech     bool      // Silero detected speech but hasn't reached min duration yet
+	pendingSpeechAt   time.Time // When Silero first detected speech in this pending window
+
+	speechStartTime time.Time
+
 	// Accumulation buffer for PCM float32 samples
 	pcmBuf []float32
+
+	// Audio frames buffer: accumulates frames during speech for END_OF_SPEECH event
+	speechFrames []*model.AudioFrame
 }
 
-func newSileroVADStream(ctx context.Context, detector *speech.Detector, sampleRate int) *sileroVADStream {
+func newSileroVADStream(ctx context.Context, detector *speech.Detector, sampleRate int, minSpeechDurationSec float64) *sileroVADStream {
+	minDur := time.Duration(minSpeechDurationSec * float64(time.Second))
 	return &sileroVADStream{
-		ctx:        ctx,
-		detector:   detector,
-		events:     make(chan *vad.VADEvent, 20),
-		sampleRate: sampleRate,
-		pcmBuf:     make([]float32, 0, sileroChunkSize*2),
+		ctx:               ctx,
+		detector:          detector,
+		events:            make(chan *vad.VADEvent, 20),
+		sampleRate:        sampleRate,
+		minSpeechDuration: minDur,
+		pcmBuf:            make([]float32, 0, sileroChunkSize*2),
 	}
 }
 
@@ -68,12 +83,75 @@ func int16BytesToFloat32(data []byte) []float32 {
 	return pcm
 }
 
+func (s *sileroVADStream) speechDuration() float64 {
+	if s.speechStartTime.IsZero() {
+		return 0
+	}
+	return time.Since(s.speechStartTime).Seconds()
+}
+
+// tryConfirmSpeechStart checks if pending speech has exceeded MinSpeechDuration.
+// If so, emits the speech-start event and transitions to speaking state.
+func (s *sileroVADStream) tryConfirmSpeechStart() {
+	if !s.pendingSpeech || s.speaking {
+		return
+	}
+	if s.minSpeechDuration > 0 && time.Since(s.pendingSpeechAt) < s.minSpeechDuration {
+		return
+	}
+	s.speaking = true
+	s.pendingSpeech = false
+	s.speechStartTime = s.pendingSpeechAt
+	dur := time.Since(s.pendingSpeechAt).Seconds()
+	logger.Logger.Infow("Silero VAD: Speech START (confirmed)",
+		"pendingSince", s.pendingSpeechAt.Format("15:04:05.000"),
+		"accumulatedDuration", dur,
+	)
+	s.sendEvent(&vad.VADEvent{
+		Type:           vad.VADEventStartOfSpeech,
+		Speaking:       true,
+		SpeechDuration: dur,
+	})
+}
+
+func (s *sileroVADStream) cancelPendingSpeech() {
+	if s.pendingSpeech {
+		logger.Logger.Debugw("Silero VAD: pending speech cancelled (too short)")
+		s.pendingSpeech = false
+		s.pendingSpeechAt = time.Time{}
+		s.speechFrames = nil
+	}
+}
+
+func (s *sileroVADStream) emitSpeechEnd() {
+	duration := s.speechDuration()
+	frames := s.speechFrames
+	s.speaking = false
+	s.speechStartTime = time.Time{}
+	s.speechFrames = nil
+	logger.Logger.Infow("Silero VAD: Speech END",
+		"duration", duration,
+		"frames", len(frames),
+	)
+	s.sendEvent(&vad.VADEvent{
+		Type:           vad.VADEventEndOfSpeech,
+		Speaking:       false,
+		SpeechDuration: duration,
+		Frames:         frames,
+	})
+}
+
 func (s *sileroVADStream) PushFrame(frame *model.AudioFrame) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	if s.closed {
 		return nil
+	}
+
+	// Buffer frame for END_OF_SPEECH if currently speaking or pending
+	if s.speaking || s.pendingSpeech {
+		s.speechFrames = append(s.speechFrames, frame)
 	}
 
 	// Downsample if needed (e.g., 48kHz → 16kHz)
@@ -91,61 +169,75 @@ func (s *sileroVADStream) PushFrame(frame *model.AudioFrame) error {
 	for len(s.pcmBuf) >= sileroChunkSize {
 		chunk := s.pcmBuf[:sileroChunkSize]
 
+		inferStart := time.Now()
 		segments, err := s.detector.Detect(chunk)
+		inferDur := time.Since(inferStart).Seconds()
+
 		if err != nil {
-			// "unexpected speech end" means speech ended in this chunk but started
-			// in a previous chunk. The detector's internal state has already been
-			// reset (triggered=false), so we treat this as an implicit end-of-speech.
-			if err.Error() == "unexpected speech end" && s.speaking {
-				s.speaking = false
-				logger.Logger.Infow("Silero VAD: Speech END (cross-chunk)")
-				s.sendEvent(&vad.VADEvent{
-					Type:     vad.VADEventEndOfSpeech,
-					Speaking: false,
-				})
-			} else if err.Error() != "unexpected speech end" {
+			if err.Error() == "unexpected speech end" {
+				if s.speaking {
+					s.emitSpeechEnd()
+				} else {
+					s.cancelPendingSpeech()
+				}
+			} else {
 				logger.Logger.Errorw("Silero VAD detection error", err)
 			}
 			s.pcmBuf = s.pcmBuf[sileroChunkSize:]
 			continue
 		}
 
-		// Process speech segments
+		speechDetected := false
 		for _, seg := range segments {
-			// A segment with SpeechStartAt set (and no SpeechEndAt) = speech started
-			if seg.SpeechStartAt >= 0 && seg.SpeechEndAt == 0 && !s.speaking {
-				s.speaking = true
-				logger.Logger.Infow("Silero VAD: Speech START",
-					"startAt", seg.SpeechStartAt,
-				)
-				s.sendEvent(&vad.VADEvent{
-					Type:     vad.VADEventStartOfSpeech,
-					Speaking: true,
-				})
-			}
-			// A segment with both SpeechStartAt and SpeechEndAt = complete segment
-			if seg.SpeechEndAt > 0 {
-				if !s.speaking {
-					// Speech started and ended in the same chunk
-					s.sendEvent(&vad.VADEvent{
-						Type:     vad.VADEventStartOfSpeech,
-						Speaking: true,
-					})
+			hasEnd := seg.SpeechEndAt > 0
+
+			if hasEnd {
+				if s.speaking {
+					s.emitSpeechEnd()
+				} else if s.pendingSpeech {
+					s.cancelPendingSpeech()
 				}
-				s.speaking = false
-				logger.Logger.Infow("Silero VAD: Speech END",
-					"endAt", seg.SpeechEndAt,
-				)
-				s.sendEvent(&vad.VADEvent{
-					Type:     vad.VADEventEndOfSpeech,
-					Speaking: false,
-				})
+			} else {
+				speechDetected = true
+				if !s.speaking && !s.pendingSpeech {
+					if s.minSpeechDuration > 0 {
+						s.pendingSpeech = true
+						s.pendingSpeechAt = time.Now()
+						logger.Logger.Debugw("Silero VAD: speech pending (awaiting min duration)")
+					} else {
+						s.speaking = true
+						s.speechStartTime = time.Now()
+						s.sendEvent(&vad.VADEvent{
+							Type:     vad.VADEventStartOfSpeech,
+							Speaking: true,
+						})
+					}
+				}
 			}
 		}
 
-		// Advance buffer
+		// Check if pending speech has reached min duration
+		s.tryConfirmSpeechStart()
+
+		// Emit INFERENCE_DONE after each Detect() call
+		// silero-vad-go doesn't expose raw probability, so we use binary approximation
+		prob := 0.0
+		if s.speaking || s.pendingSpeech || speechDetected {
+			prob = 1.0
+		}
+		s.sendEvent(&vad.VADEvent{
+			Type:              vad.VADEventInferenceDone,
+			Speaking:          s.speaking,
+			Probability:       prob,
+			InferenceDuration: inferDur,
+			SpeechDuration:    s.speechDuration(),
+		})
+
 		s.pcmBuf = s.pcmBuf[sileroChunkSize:]
 	}
+
+	// Also check pending speech between chunks (in case no segments)
+	s.tryConfirmSpeechStart()
 
 	return nil
 }
@@ -155,12 +247,24 @@ func (s *sileroVADStream) sendEvent(ev *vad.VADEvent) {
 	case <-s.ctx.Done():
 	case s.events <- ev:
 	default:
-		// Drop event if channel is full to prevent blocking
 		logger.Logger.Warnw("Silero VAD event dropped (channel full)", nil)
 	}
 }
 
 func (s *sileroVADStream) Flush() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.closed {
+		return nil
+	}
+
+	if s.speaking {
+		s.emitSpeechEnd()
+	}
+	s.cancelPendingSpeech()
+	s.pcmBuf = s.pcmBuf[:0]
+	s.speechFrames = nil
 	return nil
 }
 
@@ -171,6 +275,12 @@ func (s *sileroVADStream) Close() error {
 	if s.closed {
 		return nil
 	}
+
+	if s.speaking {
+		s.emitSpeechEnd()
+	}
+	s.cancelPendingSpeech()
+
 	s.closed = true
 	close(s.events)
 
