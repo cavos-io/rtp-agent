@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
@@ -102,6 +103,13 @@ func main() {
 	}
 }
 
+type JobMetadata struct {
+	Instructions string `json:"instructions"`
+	VoiceID      string `json:"voice_id"`
+	TTSProvider  string `json:"tts_provider"`
+	TTSModel     string `json:"tts_model"`
+}
+
 func handleAgent(server *worker.AgentServer, jobCtx *worker.JobContext) error {
 	startTime := time.Now()
 	ctx, cancel := context.WithCancel(context.Background())
@@ -121,15 +129,28 @@ func handleAgent(server *worker.AgentServer, jobCtx *worker.JobContext) error {
 		fmt.Println("❌ [Agent] OPENAI_API_KEY not set")
 		return fmt.Errorf("OPENAI_API_KEY env var is required")
 	}
-	fmt.Println("✅ [Agent] OpenAI API key loaded")
+	// Parse metadata for dynamic configuration
+	var metadata JobMetadata
+	if jobCtx.Job.Metadata != "" {
+		if err := json.Unmarshal([]byte(jobCtx.Job.Metadata), &metadata); err != nil {
+			fmt.Printf("⚠️ [Agent] Failed to parse metadata: %v\n", err)
+		}
+	}
+
+	// Dynamic Instructions
+	instructions := "You are a helpful AI assistant. Respond concisely and naturally."
+	if metadata.Instructions != "" {
+		instructions = metadata.Instructions
+		fmt.Println("✅ [Agent] Using dynamic instructions from platform")
+	}
 
 	// Create agent with instructions
-	ag := agent.NewAgent("You are a helpful AI assistant. Respond concisely and naturally.")
+	ag := agent.NewAgent(instructions)
 	fmt.Println("✅ [Agent] Agent created")
 
 	// Set up LLM provider (OpenAI)
 	ag.LLM = openaiAdapter.NewOpenAILLM(apiKey, "gpt-4o")
-	fmt.Println("✅ [Agent] LLM (GPT-4o-mini) configured")
+	fmt.Println("✅ [Agent] LLM (GPT-4o) configured")
 
 	// Set up STT provider (OpenAI Whisper)
 	ag.STT = openaiAdapter.NewOpenAISTT(apiKey, "")
@@ -144,6 +165,7 @@ func handleAgent(server *worker.AgentServer, jobCtx *worker.JobContext) error {
 		sileroAdapter.WithModelPath(modelPath),
 		sileroAdapter.WithMinSpeechDuration(0.05),
 		sileroAdapter.WithMinSilenceDuration(0.3),
+		sileroAdapter.WithActivationThreshold(0.9),
 		sileroAdapter.WithSampleRate(16000),
 	)
 	if err != nil {
@@ -177,16 +199,43 @@ func handleAgent(server *worker.AgentServer, jobCtx *worker.JobContext) error {
 		}
 	}
 
-	// Set up TTS provider (ElevenLabs)
-	elevenlabsAPIKey := os.Getenv("ELEVENLABS_API_KEY")
-	elevenlabsTTS, err := elevenlabsAdapter.NewElevenLabsTTS(elevenlabsAPIKey, "21m00Tcm4TlvDq8ikWAM", "eleven_turbo_v2_5")
-	if err != nil {
-		log.Println("❌ [Agent] Failed to create ElevenLabs TTS:", err.Error())
-		return fmt.Errorf("failed to create ElevenLabs TTS: %w", err)
+	// Set up TTS provider dynamically
+	voiceID := metadata.VoiceID
+	if voiceID == "" {
+		voiceID = "21m00Tcm4TlvDq8ikWAM" // Default: Rachel (English-centric)
 	}
-	ag.TTS = elevenlabsTTS
-	// ag.TTS = openaiAdapter.NewOpenAITTS(apiKey, openai.TTSModel1, openai.VoiceAlloy)
-	fmt.Println("✅ [Agent] TTS (Alloy) configured")
+
+	ttsModel := metadata.TTSModel
+	if ttsModel == "" {
+		ttsModel = "eleven_turbo_v2_5"
+	}
+
+	provider := metadata.TTSProvider
+	if provider == "" {
+		provider = "elevenlabs"
+	}
+
+	fmt.Printf("🎭 [Agent] Loading voice: %s (Provider: %s, Model: %s)\n", voiceID, provider, ttsModel)
+
+	switch provider {
+	case "elevenlabs":
+		elevenlabsAPIKey := os.Getenv("ELEVENLABS_API_KEY")
+		tts, err := elevenlabsAdapter.NewElevenLabsTTS(elevenlabsAPIKey, voiceID, ttsModel)
+		if err != nil {
+			return fmt.Errorf("failed to create ElevenLabs TTS: %w", err)
+		}
+		ag.TTS = tts
+	case "openai":
+		// Map platform voice names to OpenAI constants if necessary, or pass through
+		ag.TTS = openaiAdapter.NewOpenAITTS(apiKey, openaiAdapter.SpeechModel("tts-1"), openaiAdapter.SpeechVoice(voiceID))
+	default:
+		// Fallback to ElevenLabs default
+		elevenlabsAPIKey := os.Getenv("ELEVENLABS_API_KEY")
+		tts, _ := elevenlabsAdapter.NewElevenLabsTTS(elevenlabsAPIKey, "21m00Tcm4TlvDq8ikWAM", "eleven_turbo_v2_5")
+		ag.TTS = tts
+	}
+
+	fmt.Printf("✅ [Agent] TTS (%s) configured with voice %s\n", provider, voiceID)
 
 	ag.TurnDetection = agent.TurnDetectionModeSTT
 	fmt.Println("✅ [Agent] Turn detection: STT-based")

@@ -10,6 +10,9 @@ import (
 	"github.com/sashabaranov/go-openai"
 )
 
+type SpeechModel = openai.SpeechModel
+type SpeechVoice = openai.SpeechVoice
+
 type OpenAITTS struct {
 	client     *openai.Client
 	model      openai.SpeechModel

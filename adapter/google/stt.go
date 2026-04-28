@@ -17,22 +17,20 @@ type GoogleSTT struct {
 	phraseHints []*speechpb.SpeechContext
 }
 
-// STTOption is a functional option for configuring GoogleSTT.
-type STTOption func(*GoogleSTT)
+// GoogleOption is a functional option for configuring GoogleSTT.
+type GoogleOption func(*GoogleSTT)
 
 // WithPhraseHints sets the phrase hints for Google STT recognition.
-func WithPhraseHints(hints []string) STTOption {
+func WithPhraseHints(hints []*speechpb.SpeechContext) GoogleOption {
 	return func(s *GoogleSTT) {
-		s.phraseHints = []*speechpb.SpeechContext{
-			{Phrases: hints},
-		}
+		s.phraseHints = hints
 	}
 }
 
 // NewGoogleSTT creates a new STT client using Application Default Credentials,
 // or by providing a path to a credentials JSON file.
 // Optional GoogleOptions can be passed to configure features like phrase hints.
-func NewGoogleSTT(credentialsFile string, opts ...option.ClientOption) (*GoogleSTT, error) {
+func NewGoogleSTT(credentialsFile string, opts ...GoogleOption) (*GoogleSTT, error) {
 	ctx := context.Background()
 	var clientOpts []option.ClientOption
 	if credentialsFile != "" {
@@ -44,15 +42,30 @@ func NewGoogleSTT(credentialsFile string, opts ...option.ClientOption) (*GoogleS
 		return nil, err
 	}
 
-	return &GoogleSTT{client: client}, nil
+	s := &GoogleSTT{client: client}
+
+	for _, opt := range opts {
+		opt(s)
+	}
+
+	return s, nil
 }
 
-// NewGoogleSTTWithOptions creates a new STT client with additional custom options.
-func NewGoogleSTTWithOptions(credentialsFile string, gOpts []STTOption, opts ...option.ClientOption) (*GoogleSTT, error) {
-	s, err := NewGoogleSTT(credentialsFile, opts...)
+// NewGoogleSTTWithOptions creates a new STT client with additional custom options and Google client options.
+func NewGoogleSTTWithOptions(credentialsFile string, gOpts []GoogleOption, opts ...option.ClientOption) (*GoogleSTT, error) {
+	ctx := context.Background()
+	var clientOpts []option.ClientOption
+	if credentialsFile != "" {
+		clientOpts = append(clientOpts, option.WithCredentialsFile(credentialsFile))
+	}
+	clientOpts = append(clientOpts, opts...)
+
+	client, err := speech.NewClient(ctx, clientOpts...)
 	if err != nil {
 		return nil, err
 	}
+
+	s := &GoogleSTT{client: client}
 
 	for _, opt := range gOpts {
 		opt(s)
