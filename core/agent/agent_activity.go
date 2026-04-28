@@ -355,19 +355,33 @@ func (a *AgentActivity) notifyQueueAfter(delay time.Duration) {
 
 // Event callbacks from RecognitionHooks
 func (a *AgentActivity) OnStartOfSpeech(ev *vad.VADEvent) {
+	fromVAD := ev != nil
+	hasVAD := a.Session != nil && a.Session.VAD != nil
+
 	a.speaking = true
-	a.sttEOSReceived = false
 	a.discardUserTurn = false
 
+	// Reset transcript state for the new speech turn, but guard against
+	// noise-triggered STT SpeechStarted clearing a real transcript while
+	// EOU is actively processing it.
 	a.transcriptMu.Lock()
-	a.audioTranscript = ""
-	a.audioInterimTranscript = ""
+	if !a.endOfTurnActive {
+		a.sttEOSReceived = false
+		a.audioTranscript = ""
+		a.audioInterimTranscript = ""
+	}
 	a.transcriptMu.Unlock()
 
-	logger.Logger.Infow("🎤 User started speaking")
+	logger.Logger.Infow("🎤 User started speaking", "fromVAD", fromVAD)
 	a.cancelFalseInterruptionTimer()
 	a.cancelUserAwayTimer()
 	a.Session.UpdateUserState(UserStateSpeaking)
+
+	// When VAD is active, only VAD events should cancel EOU and interrupt
+	// the agent. STT SpeechStarted from ambient noise must not interfere.
+	if hasVAD && !fromVAD {
+		return
+	}
 
 	// Cancel pending EOU detection
 	a.eouMu.Lock()
@@ -504,6 +518,10 @@ func (a *AgentActivity) OnFinalTranscript(ev *stt.SpeechEvent) {
 	a.transcriptMu.Unlock()
 
 	if a.Agent.TurnDetection == TurnDetectionModeSTT {
+		if transcript == "" {
+			return
+		}
+
 		if a.discardUserTurn {
 			a.discardUserTurn = false
 			a.cancelSpeechPause(false)
@@ -520,8 +538,7 @@ func (a *AgentActivity) OnFinalTranscript(ev *stt.SpeechEvent) {
 				a.cancelSpeechPause(false)
 				return
 			}
-		} else if transcript != "" {
-			// User did actually speak; treat this as a real interruption.
+		} else {
 			a.cancelSpeechPause(true)
 		}
 
@@ -790,6 +807,7 @@ func (a *AgentActivity) runEOUDetection(info EndOfTurnInfo) {
 				}
 				a.audioTranscript = ""
 				a.audioInterimTranscript = ""
+				a.sttEOSReceived = false
 				a.transcriptMu.Unlock()
 			}
 

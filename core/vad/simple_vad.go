@@ -10,15 +10,31 @@ import (
 	"github.com/cavos-io/rtp-agent/model"
 )
 
-type SimpleVAD struct {
-	Threshold float64
+type SimpleVADOption func(*SimpleVAD)
+
+func WithMinSilenceDuration(d float64) SimpleVADOption {
+	return func(v *SimpleVAD) { v.minSilenceDuration = d }
 }
 
-func NewSimpleVAD(threshold float64) *SimpleVAD {
+func WithMinSpeechDuration(d float64) SimpleVADOption {
+	return func(v *SimpleVAD) { v.minSpeechDuration = d }
+}
+
+type SimpleVAD struct {
+	Threshold          float64
+	minSilenceDuration float64
+	minSpeechDuration  float64
+}
+
+func NewSimpleVAD(threshold float64, opts ...SimpleVADOption) *SimpleVAD {
 	if threshold == 0 {
 		threshold = 0.0005
 	}
-	return &SimpleVAD{Threshold: threshold}
+	v := &SimpleVAD{Threshold: threshold}
+	for _, opt := range opts {
+		opt(v)
+	}
+	return v
 }
 
 func (v *SimpleVAD) PreWarm() error {
@@ -26,12 +42,30 @@ func (v *SimpleVAD) PreWarm() error {
 }
 
 func (v *SimpleVAD) Stream(ctx context.Context) (VADStream, error) {
+	const frameDur = 0.02 // 20ms per frame
+
+	stopFrames := 50 // default ~1s
+	if v.minSilenceDuration > 0 {
+		stopFrames = int(v.minSilenceDuration / frameDur)
+		if stopFrames < 5 {
+			stopFrames = 5
+		}
+	}
+
+	startFrames := 3 // default ~60ms
+	if v.minSpeechDuration > 0 {
+		startFrames = int(v.minSpeechDuration / frameDur)
+		if startFrames < 1 {
+			startFrames = 1
+		}
+	}
+
 	return &simpleVADStream{
 		ctx:             ctx,
 		threshold:       v.Threshold,
 		events:          make(chan *VADEvent, 10),
-		startFrames:     3,   // require 3 consecutive frames above threshold (~60ms at 20ms/frame)
-		stopFrames:      50,  // require 50 consecutive frames below threshold (~1s silence to stop)
+		startFrames:     startFrames,
+		stopFrames:      stopFrames,
 		maxSpeechFrames: 500, // force EndOfSpeech after 10s of continuous speech (500 × 20ms)
 	}, nil
 }
