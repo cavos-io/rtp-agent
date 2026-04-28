@@ -58,8 +58,15 @@ type DeepgramSTT struct {
 	model    string
 	baseURL  string
 	wsURL    string
+	language string
 	keywords []Keyword
 	keyterms []string
+}
+
+func WithLanguage(lang string) DeepgramOption {
+	return func(s *DeepgramSTT) {
+		s.language = lang
+	}
 }
 
 
@@ -96,6 +103,9 @@ func (s *DeepgramSTT) Capabilities() stt.STTCapabilities {
 
 func (s *DeepgramSTT) Stream(ctx context.Context, languageStr string) (stt.RecognizeStream, error) {
 	languageStr = language.NormalizeLanguage(languageStr)
+	if languageStr == "" {
+		languageStr = s.language
+	}
 
 	u := url.URL{Scheme: "wss", Host: "api.deepgram.com", Path: "/v1/listen"}
 	q := u.Query()
@@ -106,7 +116,7 @@ func (s *DeepgramSTT) Stream(ctx context.Context, languageStr string) (stt.Recog
 	q.Set("smart_format", "true")
 	q.Set("interim_results", "true")
 	q.Set("encoding", "linear16")
-	q.Set("sample_rate", "24000")
+	q.Set("sample_rate", "48000")
 	// Enable Deepgram's native Voice Activity Detection / Endpointing
 	q.Set("endpointing", "300")
 	q.Set("vad_events", "true")
@@ -154,6 +164,9 @@ func (s *DeepgramSTT) Stream(ctx context.Context, languageStr string) (stt.Recog
 
 func (s *DeepgramSTT) Recognize(ctx context.Context, frames []*model.AudioFrame, languageStr string) (*stt.SpeechEvent, error) {
 	languageStr = language.NormalizeLanguage(languageStr)
+	if languageStr == "" {
+		languageStr = s.language
+	}
 
 	u, err := url.Parse(fmt.Sprintf("%s/v1/listen", strings.TrimSuffix(s.baseURL, "/")))
 	if err != nil {

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"strings"
 	"sync"
 	"time"
 
@@ -16,11 +17,11 @@ import (
 	"github.com/hraban/opus"
 	"github.com/livekit/protocol/livekit"
 	lksdk "github.com/livekit/server-sdk-go/v2"
+	"google.golang.org/protobuf/proto"
 	"github.com/livekit/server-sdk-go/v2/pkg/samplebuilder"
 	"github.com/pion/rtp/codecs"
 	"github.com/pion/webrtc/v4"
 	"github.com/pion/webrtc/v4/pkg/media"
-	"google.golang.org/protobuf/proto"
 )
 
 type AudioDecoder interface {
@@ -98,19 +99,26 @@ func (e *opusEncoder) SampleRate() int { return e.sampleRate }
 func (e *opusEncoder) Channels() int   { return e.channels }
 
 func (e *opusEncoder) Encode(pcm []byte) ([]byte, error) {
+	// Capture fields locally to guard against concurrent Close().
+	enc := e.encoder
+	buf := e.buf
+	if enc == nil || buf == nil {
+		return nil, errors.New("encoder closed")
+	}
+
 	// Convert byte slice back to int16 slice for Opus encoder
 	in := make([]int16, len(pcm)/2)
 	for i := 0; i < len(in); i++ {
 		in[i] = int16(pcm[i*2]) | (int16(pcm[i*2+1]) << 8)
 	}
 
-	n, err := e.encoder.Encode(in, e.buf)
+	n, err := enc.Encode(in, buf)
 	if err != nil {
 		return nil, err
 	}
 
 	out := make([]byte, n)
-	copy(out, e.buf[:n])
+	copy(out, buf[:n])
 	return out, nil
 }
 
@@ -215,6 +223,20 @@ type RoomIO struct {
 
 // --- agent.TextOutput Implementation ---
 
+// transcriptionDataPacket implements lksdk.DataPacket so a *livekit.Transcription
+// can be sent as DataPacket_Transcription via LocalParticipant.PublishDataPacket.
+// This matches Python livekit.agents: local_participant.publish_transcription() —
+// the packet is sent FROM the agent participant (not the server API), so the
+// LiveKit client SDK can correctly attribute the bubble to the remote agent (left side).
+type transcriptionDataPacket struct{ t *livekit.Transcription }
+
+func (p *transcriptionDataPacket) ToProto() *livekit.DataPacket {
+	return &livekit.DataPacket{
+		Kind:  livekit.DataPacket_RELIABLE,
+		Value: &livekit.DataPacket_Transcription{Transcription: p.t},
+	}
+}
+
 type RoomTextOutput struct {
 	room                *lksdk.Room
 	participantIdentity string
@@ -225,6 +247,7 @@ type RoomTextOutput struct {
 	textCh              chan string
 	ctx                 context.Context
 	cancel              context.CancelFunc
+	accumulated         strings.Builder
 
 	apiKey    string
 	apiSecret string
@@ -266,12 +289,19 @@ func (t *RoomTextOutput) SetTrackID(id string) {
 }
 
 func (t *RoomTextOutput) CaptureText(text string) error {
+	t.mu.Lock()
+	t.accumulated.WriteString(text)
+	t.mu.Unlock()
+
+	logger.Logger.Debugw("[Transcript] RoomTextOutput.CaptureText", "chunk", text)
 	select {
 	case t.textCh <- text:
 		return nil
 	case <-t.ctx.Done():
+		logger.Logger.Warnw("[Transcript] CaptureText: context done", nil, "chunk", text)
 		return t.ctx.Err()
 	default:
+		logger.Logger.Warnw("[Transcript] CaptureText: buffer full, dropping chunk", nil, "chunk", text)
 		return fmt.Errorf("text output buffer full")
 	}
 }
@@ -279,14 +309,17 @@ func (t *RoomTextOutput) CaptureText(text string) error {
 func (t *RoomTextOutput) worker() {
 	ticker := time.NewTicker(50 * time.Millisecond) // Throttling bit
 	defer ticker.Stop()
+	logger.Logger.Infow("[Transcript] RoomTextOutput worker started", "participantIdentity", t.participantIdentity)
 
 	for {
 		select {
 		case <-t.ctx.Done():
+			logger.Logger.Infow("[Transcript] RoomTextOutput worker stopped")
 			return
 		case text := <-t.textCh:
 			t.mu.Lock()
 			if t.room == nil || t.room.LocalParticipant == nil {
+				logger.Logger.Warnw("[Transcript] worker: room or LocalParticipant is nil, skipping", nil, "chunk", text)
 				t.mu.Unlock()
 				continue
 			}
@@ -312,34 +345,39 @@ func (t *RoomTextOutput) worker() {
 
 			if t.writer != nil {
 				t.writer.Write(text, nil)
+				logger.Logger.Debugw("[Transcript] TextStream chunk written", "segmentID", t.segmentID, "chunk", text)
 			}
 
-			// GAP-001 Fallback: Send dual mechanism via RoomServiceClient.SendData
-			// Official SDK recommendation for high-reliability transcript delivery
-			if t.client != nil && t.room != nil && t.room.LocalParticipant != nil {
+			// Send DataPacket_Transcription FROM the agent participant so the client
+			// SDK can correctly attribute it (sender = remote agent → left bubble).
+			// Matches Python: local_participant.publish_transcription(participant_identity=agent).
+			// Use the accumulated text so the UI shows the full response so far
+			// (each update replaces the previous segment with the same ID).
+			if t.room != nil && t.room.LocalParticipant != nil {
+				accText := t.accumulated.String()
 				tp := &livekit.Transcription{
 					TranscribedParticipantIdentity: t.participantIdentity,
 					TrackId:                        t.trackID,
 					Segments: []*livekit.TranscriptionSegment{
 						{
 							Id:    t.segmentID,
-							Text:  text,
+							Text:  accText,
 							Final: false,
 						},
 					},
 				}
-				packet := &livekit.DataPacket{
-					Kind: livekit.DataPacket_RELIABLE,
-					Value: &livekit.DataPacket_Transcription{
-						Transcription: tp,
-					},
-				}
-
-				if buf, err := proto.Marshal(packet); err == nil {
-					go t.client.SendData(t.ctx, &livekit.SendDataRequest{
-						Room: t.room.Name(),
-						Data: buf,
-					})
+				if err := t.room.LocalParticipant.PublishDataPacket(
+					&transcriptionDataPacket{tp},
+					lksdk.WithDataPublishReliable(true),
+				); err != nil {
+					logger.Logger.Warnw("[Transcript] Failed to publish DataPacket_Transcription", err, "chunk", text)
+				} else {
+					logger.Logger.Debugw("[Transcript] DataPacket_Transcription sent",
+						"participantIdentity", t.participantIdentity,
+						"trackID", t.trackID,
+						"segmentID", t.segmentID,
+						"chunk", text,
+					)
 				}
 			}
 
@@ -352,10 +390,77 @@ func (t *RoomTextOutput) worker() {
 func (t *RoomTextOutput) Flush() {
 	t.mu.Lock()
 	defer t.mu.Unlock()
+
+	logger.Logger.Infow("[Transcript] RoomTextOutput.Flush called",
+		"hasWriter", t.writer != nil,
+		"accumulatedLen", t.accumulated.Len(),
+		"participantIdentity", t.participantIdentity,
+		"roomConnected", t.room != nil && t.room.LocalParticipant != nil,
+	)
+
 	if t.writer != nil {
 		// Close the current segment
 		t.writer.Close()
 		t.writer = nil
+	}
+
+	// Send the complete agent turn as a lk.chat bubble.
+	fullText := t.accumulated.String()
+	segID := t.segmentID
+	t.accumulated.Reset()
+	t.segmentID = ""
+
+	if fullText == "" {
+		logger.Logger.Warnw("[Transcript] Flush: accumulated text is empty, skipping lk.chat", nil)
+		return
+	}
+	if t.room == nil || t.room.LocalParticipant == nil {
+		logger.Logger.Warnw("[Transcript] Flush: room or LocalParticipant is nil, cannot send lk.chat", nil, "fullText", fullText)
+		return
+	}
+
+	// Send a final DataPacket_Transcription with the complete text so the UI
+	// replaces partial segments with the full response.
+	if segID != "" {
+		tp := &livekit.Transcription{
+			TranscribedParticipantIdentity: t.participantIdentity,
+			TrackId:                        t.trackID,
+			Segments: []*livekit.TranscriptionSegment{
+				{
+					Id:    segID,
+					Text:  fullText,
+					Final: true,
+				},
+			},
+		}
+		if err := t.room.LocalParticipant.PublishDataPacket(
+			&transcriptionDataPacket{tp},
+			lksdk.WithDataPublishReliable(true),
+		); err != nil {
+			logger.Logger.Warnw("[Transcript] Failed to publish final DataPacket_Transcription", err)
+		}
+	}
+
+	payload, _ := json.Marshal(map[string]interface{}{
+		"id":           fmt.Sprintf("agt-%d", time.Now().UnixNano()),
+		"message":      fullText,
+		"timestamp":    time.Now().UnixMilli(),
+		"generated_by": t.participantIdentity,
+	})
+	logger.Logger.Infow("[Transcript] Sending lk.chat (agent turn)",
+		"fullText", fullText,
+		"participantIdentity", t.participantIdentity,
+	)
+	if err := t.room.LocalParticipant.PublishDataPacket(
+		&lksdk.UserDataPacket{
+			Payload: payload,
+			Topic:   "lk.chat",
+		},
+		lksdk.WithDataPublishReliable(true),
+	); err != nil {
+		logger.Logger.Warnw("[Transcript] Failed to publish lk.chat (agent turn)", err)
+	} else {
+		logger.Logger.Infow("[Transcript] lk.chat (agent turn) published OK", "text", fullText)
 	}
 }
 
@@ -456,10 +561,22 @@ func NewRoomIO(room *lksdk.Room, session *agent.AgentSession, opts RoomOptions) 
 		syncTranscription = opts.TextOutput.SyncTranscription
 	}
 
+	agentIdentity := ""
+	if room.LocalParticipant != nil {
+		agentIdentity = room.LocalParticipant.Identity()
+	}
+
+	logger.Logger.Infow("[Transcript] NewRoomIO output setup",
+		"audioOutputEnabled", audioOutputEnabled,
+		"syncTranscription", syncTranscription,
+		"textOutputEnabled", opts.TextOutput != nil && opts.TextOutput.Enabled,
+		"agentIdentity", agentIdentity,
+	)
+
 	if audioOutputEnabled {
 		jc := rio.Options.JobContext
 		if syncTranscription {
-			textOut := NewRoomTextOutput(room, rio.participantIdentity, jc.URL, jc.APIKey, jc.APISecret)
+			textOut := NewRoomTextOutput(room, agentIdentity, jc.URL, jc.APIKey, jc.APISecret)
 			speedFactor := 1.0
 			if opts.TextOutput != nil && opts.TextOutput.TranscriptionSpeedFactor > 0 {
 				speedFactor = opts.TextOutput.TranscriptionSpeedFactor
@@ -472,16 +589,23 @@ func NewRoomIO(room *lksdk.Room, session *agent.AgentSession, opts RoomOptions) 
 
 			session.SetAudioOutput(rio.Recorder.RecordOutput(syncedAudio))
 			session.Output.Transcription = syncedText
+			logger.Logger.Infow("[Transcript] Using SyncedTextOutput (TTS-aligned)", "agentIdentity", agentIdentity)
 		} else {
 			session.SetAudioOutput(rio.Recorder.RecordOutput(rio))
 			if opts.TextOutput != nil && opts.TextOutput.Enabled {
-				textOut := NewRoomTextOutput(room, rio.participantIdentity, jc.URL, jc.APIKey, jc.APISecret)
+				textOut := NewRoomTextOutput(room, agentIdentity, jc.URL, jc.APIKey, jc.APISecret)
 				session.Output.Transcription = textOut
+				logger.Logger.Infow("[Transcript] Using RoomTextOutput (non-synced)", "agentIdentity", agentIdentity)
+			} else {
+				logger.Logger.Warnw("[Transcript] TextOutput disabled or nil, session.Output.Transcription will be nil", nil)
 			}
 		}
 	} else if opts.TextOutput != nil && opts.TextOutput.Enabled {
 		jc := rio.Options.JobContext
-		session.Output.Transcription = NewRoomTextOutput(room, rio.participantIdentity, jc.URL, jc.APIKey, jc.APISecret)
+		session.Output.Transcription = NewRoomTextOutput(room, agentIdentity, jc.URL, jc.APIKey, jc.APISecret)
+		logger.Logger.Infow("[Transcript] Using RoomTextOutput (audio output disabled)", "agentIdentity", agentIdentity)
+	} else {
+		logger.Logger.Warnw("[Transcript] No transcription output configured, chat bubbles will not appear", nil)
 	}
 
 	videoOutputEnabled := false
@@ -514,15 +638,25 @@ func (rio *RoomIO) PublishData(data []byte, topic string, destinationSIDs []stri
 	if rio.Room == nil || rio.Room.LocalParticipant == nil {
 		return fmt.Errorf("room not connected")
 	}
-	pkt := &lksdk.UserDataPacket{
-		Payload: data,
-		Topic:   topic,
-	}
+
 	opts := []lksdk.DataPublishOption{
 		lksdk.WithDataPublishReliable(true),
 	}
 	if len(destinationSIDs) > 0 {
 		opts = append(opts, lksdk.WithDataPublishDestination(destinationSIDs))
+	}
+
+	if topic == "lk.transcription" {
+		var tp livekit.Transcription
+		if err := proto.Unmarshal(data, &tp); err == nil {
+			return rio.Room.LocalParticipant.PublishDataPacket(
+				&transcriptionDataPacket{&tp}, opts...)
+		}
+	}
+
+	pkt := &lksdk.UserDataPacket{
+		Payload: data,
+		Topic:   topic,
 	}
 	return rio.Room.LocalParticipant.PublishDataPacket(pkt, opts...)
 }
