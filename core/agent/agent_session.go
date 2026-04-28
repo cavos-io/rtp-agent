@@ -24,6 +24,8 @@ import (
 
 type GenerateReplyOpts struct {
 	AllowInterruptions bool
+	IncludeContext     bool   // Include recent chat context in the instruction
+	Instructions       string // One-shot instruction string, uses copy of ChatCtx (no history pollution)
 }
 
 // sendChatToPlayground tries multiple approaches to get a message
@@ -618,6 +620,13 @@ func GenerateTypedReply[T any](ctx context.Context, s *AgentSession, userInput s
 		allowInterruptions = opts.AllowInterruptions
 	}
 
+	// Prepend recent context to userInput if requested
+	if opts != nil && opts.IncludeContext {
+		if contextStr := s.GetRecentContext(3); contextStr != "" {
+			userInput = fmt.Sprintf("Recent context:\n%s\nNew instruction: %s", contextStr, userInput)
+		}
+	}
+
 	// Create a speech handle
 	handle := NewSpeechHandle(allowInterruptions, DefaultInputDetails())
 
@@ -641,8 +650,20 @@ func GenerateTypedReply[T any](ctx context.Context, s *AgentSession, userInput s
 	runResult.WatchHandle(ctx, handle)
 	handle.RunResult = runResult
 
-	// Add user message to ChatContext if provided
-	if userInput != "" {
+	// If Instructions is set, create a temporary copy of ChatCtx with instructions appended,
+	// without mutating the session's ChatCtx. This allows per-call instructions without polluting history.
+	if opts != nil && opts.Instructions != "" {
+		tempCtx := s.ChatCtx.Copy()
+		tempCtx.Append(&llm.ChatMessage{
+			Role: llm.ChatRoleUser,
+			Content: []llm.ChatContent{
+				{Text: opts.Instructions},
+			},
+			CreatedAt: time.Now(),
+		})
+		handle.OverrideChatCtx = tempCtx
+	} else if userInput != "" {
+		// Normal flow: append user input to session ChatCtx
 		s.ChatCtx.Append(&llm.ChatMessage{
 			Role: llm.ChatRoleUser,
 			Content: []llm.ChatContent{
@@ -663,6 +684,51 @@ func GenerateTypedReply[T any](ctx context.Context, s *AgentSession, userInput s
 
 func (s *AgentSession) GenerateReply(ctx context.Context, userInput string, allowInterruptions bool) (any, error) {
 	return GenerateTypedReply[any](ctx, s, userInput, &GenerateReplyOpts{AllowInterruptions: allowInterruptions})
+}
+
+// GenerateReplyWithInstructions generates a reply with one-shot instructions that don't pollute chat history.
+// The instructions use a temporary copy of the chat context, matching Python's pattern of
+// generate_reply(instructions=..., chat_ctx=session.history).
+func (s *AgentSession) GenerateReplyWithInstructions(ctx context.Context, instructions string, allowInterruptions bool) (any, error) {
+	return GenerateTypedReply[any](ctx, s, "", &GenerateReplyOpts{
+		AllowInterruptions: allowInterruptions,
+		Instructions:       instructions,
+	})
+}
+
+// GetRecentContext returns recent chat messages (last N messages) for context-aware replies.
+// Limit controls how many recent messages to include (0 = all, 3 = last 3 messages).
+func (s *AgentSession) GetRecentContext(limit int) string {
+	if s.ChatCtx == nil {
+		return ""
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	messages := s.ChatCtx.Messages()
+	if len(messages) == 0 {
+		return ""
+	}
+
+	// Get last N messages
+	start := len(messages)
+	if limit > 0 && len(messages) > limit {
+		start = len(messages) - limit
+	}
+
+	var contextStr string
+	for i := start; i < len(messages); i++ {
+		msg := messages[i]
+		role := string(msg.Role)
+		content := ""
+		if len(msg.Content) > 0 && msg.Content[0].Text != "" {
+			content = msg.Content[0].Text
+		}
+		if content != "" {
+			contextStr += fmt.Sprintf("%s: %s\n", role, content)
+		}
+	}
+	return contextStr
 }
 
 func (s *AgentSession) Say(text string, allowInterruptions bool) (*SpeechHandle, error) {

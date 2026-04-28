@@ -45,6 +45,7 @@ type SpeechHandle struct {
 
 	FinalOutput any
 	ManualText  string
+	OverrideChatCtx *llm.ChatContext
 
 	mu             sync.Mutex
 	err            error

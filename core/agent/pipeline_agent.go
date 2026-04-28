@@ -171,13 +171,20 @@ func (va *PipelineAgent) GenerateReply(speech *SpeechHandle) {
 
 		var genData *LLMGenerationData
 		var err error
+
+		// Use OverrideChatCtx if provided (for one-shot instructions without polluting history)
+		chatCtx := va.chatCtx
+		if speech.OverrideChatCtx != nil {
+			chatCtx = speech.OverrideChatCtx
+		}
+
 		baseAgent := session.Agent.GetAgent()
 		if baseAgent != nil && baseAgent.LLMNode != nil {
 			logger.Logger.Debugw("Using custom LLM node", "step", steps)
-			genData, err = baseAgent.LLMNode(ctx, va.LLM, va.chatCtx, session.Tools)
+			genData, err = baseAgent.LLMNode(ctx, va.LLM, chatCtx, session.Tools)
 		} else {
 			logger.Logger.Debugw("Using default LLM inference", "step", steps)
-			genData, err = PerformLLMInference(ctx, va.LLM, va.chatCtx, session.Tools)
+			genData, err = PerformLLMInference(ctx, va.LLM, chatCtx, session.Tools)
 		}
 
 		if err != nil {

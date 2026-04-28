@@ -23,6 +23,8 @@ func NewSileroVAD(opts SileroVADOptions) *SileroVAD {
 	}
 }
 
+func (v *SileroVAD) PreWarm() error { return nil }
+
 func (v *SileroVAD) Stream(ctx context.Context) (vad.VADStream, error) {
 	backend := vad.NewEnhancedVAD(vad.EnhancedVADOptions{
 		ActivationThreshold: v.Options.ActivationThreshold,
