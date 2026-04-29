@@ -8,54 +8,48 @@ import (
 	"github.com/cavos-io/rtp-agent/core/vad"
 	"github.com/cavos-io/rtp-agent/library/logger"
 	"github.com/cavos-io/rtp-agent/model"
-	speech "github.com/streamer45/silero-vad-go/speech"
 )
 
-// sileroChunkSize is the number of float32 samples to accumulate before
-// calling Silero Detect(). The internal loop processes in 512-sample windows
-// using `i < len(pcm)-windowSize`, so we need more than 512 samples.
-// 1536 = 3 × 512, giving 2 full inference windows per Detect() call (96ms at 16kHz).
-const sileroChunkSize = 1536
-
 type sileroVADStream struct {
-	ctx        context.Context
-	detector   *speech.Detector
-	events     chan *vad.VADEvent
-	mu         sync.Mutex
-	closed     bool
+	ctx    context.Context
+	inf    *inferencer
+	events chan *vad.VADEvent
+	mu     sync.Mutex
+	closed bool
+
 	speaking   bool
-	sampleRate int // Target sample rate for Silero (16000)
+	sampleRate int
 
-	// MinSpeechDuration filtering: hold back speech-start until speech
-	// has been ongoing for at least this duration. Prevents false triggers
-	// from brief noise spikes. Mirrors Python Silero VAD behavior.
-	minSpeechDuration time.Duration
-	pendingSpeech     bool      // Silero detected speech but hasn't reached min duration yet
-	pendingSpeechAt   time.Time // When Silero first detected speech in this pending window
+	threshold    float64
+	negThreshold float64 // threshold - hysteresis, for speech-end detection
 
+	minSpeechDuration  time.Duration
+	minSilenceDuration float64 // seconds
+	silenceSamples     int     // accumulated silence samples while triggered
+
+	pendingSpeech   bool
+	pendingSpeechAt time.Time
 	speechStartTime time.Time
 
-	// Accumulation buffer for PCM float32 samples
-	pcmBuf []float32
-
-	// Audio frames buffer: accumulates frames during speech for END_OF_SPEECH event
+	pcmBuf       []float32
 	speechFrames []*model.AudioFrame
 }
 
-func newSileroVADStream(ctx context.Context, detector *speech.Detector, sampleRate int, minSpeechDurationSec float64) *sileroVADStream {
-	minDur := time.Duration(minSpeechDurationSec * float64(time.Second))
+func newSileroVADStream(ctx context.Context, inf *inferencer, opts VADOptions) *sileroVADStream {
+	minDur := time.Duration(opts.MinSpeechDuration * float64(time.Second))
 	return &sileroVADStream{
-		ctx:               ctx,
-		detector:          detector,
-		events:            make(chan *vad.VADEvent, 20),
-		sampleRate:        sampleRate,
-		minSpeechDuration: minDur,
-		pcmBuf:            make([]float32, 0, sileroChunkSize*2),
+		ctx:                ctx,
+		inf:                inf,
+		events:             make(chan *vad.VADEvent, 20),
+		sampleRate:         opts.SampleRate,
+		threshold:          opts.ActivationThreshold,
+		negThreshold:       opts.ActivationThreshold - hysteresis,
+		minSpeechDuration:  minDur,
+		minSilenceDuration: opts.MinSilenceDuration,
+		pcmBuf:             make([]float32, 0, windowSize*4),
 	}
 }
 
-// downsampleInt16 performs simple decimation from srcRate to dstRate.
-// For 48kHz → 16kHz this means taking every 3rd sample (factor of 3).
 func downsampleInt16(data []byte, srcRate, dstRate int) []byte {
 	if srcRate <= dstRate {
 		return data
@@ -72,7 +66,6 @@ func downsampleInt16(data []byte, srcRate, dstRate int) []byte {
 	return out
 }
 
-// int16BytesToFloat32 converts little-endian int16 PCM bytes to float32 in [-1, 1].
 func int16BytesToFloat32(data []byte) []float32 {
 	numSamples := len(data) / 2
 	pcm := make([]float32, numSamples)
@@ -90,8 +83,6 @@ func (s *sileroVADStream) speechDuration() float64 {
 	return time.Since(s.speechStartTime).Seconds()
 }
 
-// tryConfirmSpeechStart checks if pending speech has exceeded MinSpeechDuration.
-// If so, emits the speech-start event and transitions to speaking state.
 func (s *sileroVADStream) tryConfirmSpeechStart() {
 	if !s.pendingSpeech || s.speaking {
 		return
@@ -149,94 +140,80 @@ func (s *sileroVADStream) PushFrame(frame *model.AudioFrame) error {
 		return nil
 	}
 
-	// Buffer frame for END_OF_SPEECH if currently speaking or pending
 	if s.speaking || s.pendingSpeech {
 		s.speechFrames = append(s.speechFrames, frame)
 	}
 
-	// Downsample if needed (e.g., 48kHz → 16kHz)
 	audioData := frame.Data
 	srcRate := int(frame.SampleRate)
 	if srcRate > s.sampleRate && srcRate%s.sampleRate == 0 {
 		audioData = downsampleInt16(audioData, srcRate, s.sampleRate)
 	}
 
-	// Convert to float32 and accumulate
 	samples := int16BytesToFloat32(audioData)
 	s.pcmBuf = append(s.pcmBuf, samples...)
 
-	// Process in chunks of sileroChunkSize
-	for len(s.pcmBuf) >= sileroChunkSize {
-		chunk := s.pcmBuf[:sileroChunkSize]
+	for len(s.pcmBuf) >= windowSize {
+		chunk := s.pcmBuf[:windowSize]
 
 		inferStart := time.Now()
-		segments, err := s.detector.Detect(chunk)
+		prob, err := s.inf.infer(chunk)
 		inferDur := time.Since(inferStart).Seconds()
 
 		if err != nil {
-			if err.Error() == "unexpected speech end" {
-				if s.speaking {
-					s.emitSpeechEnd()
-				} else {
-					s.cancelPendingSpeech()
-				}
-			} else {
-				logger.Logger.Errorw("Silero VAD detection error", err)
-			}
-			s.pcmBuf = s.pcmBuf[sileroChunkSize:]
+			logger.Logger.Errorw("Silero VAD inference error", err)
+			s.pcmBuf = s.pcmBuf[windowSize:]
 			continue
 		}
 
-		speechDetected := false
-		for _, seg := range segments {
-			hasEnd := seg.SpeechEndAt > 0
+		speechProb := float64(prob)
+		triggered := s.speaking || s.pendingSpeech
 
-			if hasEnd {
-				if s.speaking {
-					s.emitSpeechEnd()
-				} else if s.pendingSpeech {
-					s.cancelPendingSpeech()
-				}
+		if triggered {
+			if speechProb >= s.negThreshold {
+				s.silenceSamples = 0
 			} else {
-				speechDetected = true
-				if !s.speaking && !s.pendingSpeech {
-					if s.minSpeechDuration > 0 {
-						s.pendingSpeech = true
-						s.pendingSpeechAt = time.Now()
-						logger.Logger.Debugw("Silero VAD: speech pending (awaiting min duration)")
+				s.silenceSamples += windowSize
+				silenceDur := float64(s.silenceSamples) / float64(s.sampleRate)
+				if silenceDur >= s.minSilenceDuration {
+					if s.speaking {
+						s.emitSpeechEnd()
 					} else {
-						s.speaking = true
-						s.speechStartTime = time.Now()
-						s.sendEvent(&vad.VADEvent{
-							Type:     vad.VADEventStartOfSpeech,
-							Speaking: true,
-						})
+						s.cancelPendingSpeech()
 					}
+					s.silenceSamples = 0
+				}
+			}
+		} else {
+			if speechProb >= s.threshold {
+				if s.minSpeechDuration > 0 {
+					s.pendingSpeech = true
+					s.pendingSpeechAt = time.Now()
+					logger.Logger.Debugw("Silero VAD: speech pending (awaiting min duration)")
+				} else {
+					s.speaking = true
+					s.speechStartTime = time.Now()
+					s.sendEvent(&vad.VADEvent{
+						Type:     vad.VADEventStartOfSpeech,
+						Speaking: true,
+					})
 				}
 			}
 		}
 
-		// Check if pending speech has reached min duration
 		s.tryConfirmSpeechStart()
 
-		// Emit INFERENCE_DONE after each Detect() call
-		// silero-vad-go doesn't expose raw probability, so we use binary approximation
-		prob := 0.0
-		if s.speaking || s.pendingSpeech || speechDetected {
-			prob = 1.0
-		}
 		s.sendEvent(&vad.VADEvent{
 			Type:              vad.VADEventInferenceDone,
 			Speaking:          s.speaking,
-			Probability:       prob,
+			Probability:       speechProb,
 			InferenceDuration: inferDur,
 			SpeechDuration:    s.speechDuration(),
 		})
 
-		s.pcmBuf = s.pcmBuf[sileroChunkSize:]
+		s.pcmBuf = s.pcmBuf[windowSize:]
 	}
 
-	// Also check pending speech between chunks (in case no segments)
 	s.tryConfirmSpeechStart()
 
 	return nil
@@ -284,8 +261,8 @@ func (s *sileroVADStream) Close() error {
 	s.closed = true
 	close(s.events)
 
-	if s.detector != nil {
-		return s.detector.Destroy()
+	if s.inf != nil {
+		s.inf.destroy()
 	}
 	return nil
 }
