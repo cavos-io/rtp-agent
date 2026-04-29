@@ -13,9 +13,14 @@ import (
 )
 
 type OpenAISTT struct {
-	client *openai.Client
-	model  string
-	prompt string
+	client   *openai.Client
+	model    string
+	prompt   string
+	language string
+}
+
+func (s *OpenAISTT) SetLanguage(lang string) {
+	s.language = lang
 }
 
 func NewOpenAISTT(apiKey string, model string) *OpenAISTT {
@@ -54,7 +59,10 @@ func (s *OpenAISTT) Stream(ctx context.Context, language string) (stt.RecognizeS
 }
 
 func (s *OpenAISTT) Recognize(ctx context.Context, frames []*model.AudioFrame, language string) (*stt.SpeechEvent, error) {
-	logger.Logger.Debugw("Recognizing speech from audio frames", "adapter", "openai-stt")
+	if language == "" {
+		language = s.language
+	}
+	logger.Logger.Debugw("Recognizing speech from audio frames", "adapter", "openai-stt", "language", language)
 	if len(frames) == 0 {
 		return nil, fmt.Errorf("no audio frames")
 	}

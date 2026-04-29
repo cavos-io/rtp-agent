@@ -122,6 +122,13 @@ func (r *SessionReport) ToDict() map[string]any {
 		"timestamp":                  r.Timestamp,
 	}
 
+	if r.Duration != nil {
+		dict["duration"] = *r.Duration
+	}
+	if r.StartedAt != nil {
+		dict["started_at"] = *r.StartedAt
+	}
+
 	if r.ChatHistory != nil {
 		dict["chat_history"] = r.ChatHistory.ToDict(false)
 	}

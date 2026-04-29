@@ -2,12 +2,37 @@ package stt
 
 import (
 	"context"
+	"strings"
 	"sync"
 
 	"github.com/cavos-io/rtp-agent/core/vad"
 	"github.com/cavos-io/rtp-agent/library/logger"
 	"github.com/cavos-io/rtp-agent/model"
 )
+
+var whisperHallucinationPhrases = []string{
+	"terima kasih telah menonton",
+	"jangan lupa like",
+	"jangan lupa subscribe",
+	"like share and subscribe",
+	"like, share, dan subscribe",
+	"sampai jumpa di video",
+	"subtitle by",
+	"subtitles by",
+	"thank you for watching",
+	"thanks for watching",
+	"please subscribe",
+}
+
+func isHallucination(text string) bool {
+	lower := strings.ToLower(strings.TrimSpace(text))
+	for _, phrase := range whisperHallucinationPhrases {
+		if strings.Contains(lower, phrase) {
+			return true
+		}
+	}
+	return false
+}
 
 type StreamAdapter struct {
 	stt STT
@@ -161,14 +186,24 @@ func (w *streamAdapterWrapper) run() {
 
 				w.events <- &SpeechEvent{Type: SpeechEventEndOfSpeech}
 
-				if len(frames) > 0 {
+				const minFramesForRecognition = 50
+				if len(frames) >= minFramesForRecognition {
 					tEvent, err := w.adapter.stt.Recognize(w.ctx, frames, w.language)
-					if err == nil && tEvent != nil && len(tEvent.Alternatives) > 0 && tEvent.Alternatives[0].Text != "" {
-						w.events <- &SpeechEvent{
-							Type:         SpeechEventFinalTranscript,
-							Alternatives: []SpeechData{tEvent.Alternatives[0]},
+					if err != nil {
+						logger.Logger.Errorw("StreamAdapter: STT Recognize failed", err, "frames", len(frames), "language", w.language)
+					} else if tEvent != nil && len(tEvent.Alternatives) > 0 && tEvent.Alternatives[0].Text != "" {
+						text := tEvent.Alternatives[0].Text
+						if isHallucination(text) {
+							logger.Logger.Warnw("StreamAdapter: filtered Whisper hallucination", nil, "text", text, "frames", len(frames))
+						} else {
+							w.events <- &SpeechEvent{
+								Type:         SpeechEventFinalTranscript,
+								Alternatives: []SpeechData{tEvent.Alternatives[0]},
+							}
 						}
 					}
+				} else if len(frames) > 0 {
+					logger.Logger.Infow("StreamAdapter: skipping recognition, audio too short", "frames", len(frames), "minRequired", minFramesForRecognition)
 				}
 			}
 		}
