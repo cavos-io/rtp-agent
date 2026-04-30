@@ -184,12 +184,19 @@ func (va *PipelineAgent) GenerateReply(speech *SpeechHandle) {
 		}
 
 		baseAgent := session.Agent.GetAgent()
+
+		// Inject RunContext so that LLM inference can emit events (e.g. TTFT)
+		llmCtx := WithRunContext(ctx, &RunContext{
+			Session:      session,
+			SpeechHandle: speech,
+		})
+
 		if baseAgent != nil && baseAgent.LLMNode != nil {
 			logger.Logger.Debugw("Using custom LLM node", "step", steps)
-			genData, err = baseAgent.LLMNode(ctx, va.LLM, chatCtx, session.Tools)
+			genData, err = baseAgent.LLMNode(llmCtx, va.LLM, va.chatCtx, session.Tools)
 		} else {
 			logger.Logger.Debugw("Using default LLM inference", "step", steps)
-			genData, err = PerformLLMInference(ctx, va.LLM, chatCtx, session.Tools)
+			genData, err = PerformLLMInference(llmCtx, va.LLM, va.chatCtx, session.Tools)
 		}
 
 		if err != nil {
