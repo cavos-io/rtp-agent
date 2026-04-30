@@ -115,6 +115,21 @@ type SpeechCreatedEvent struct {
 }
 
 func (e *SpeechCreatedEvent) GetType() string { return "speech_created" }
+ 
+type LLMStartedEvent struct {
+	CreatedAt time.Time `json:"created_at"`
+}
+
+func (e *LLMStartedEvent) GetType() string { return "llm_started" }
+
+type LLMFirstTokenEvent struct {
+	TTFT      float64   `json:"ttft"`
+	Duration  float64   `json:"duration"`
+	Model     string    `json:"model"`
+	CreatedAt time.Time `json:"created_at"`
+}
+
+func (e *LLMFirstTokenEvent) GetType() string { return "llm_first_token" }
 
 type ErrorEvent struct {
 	Error     error     `json:"error"`
@@ -167,6 +182,8 @@ type AgentEvent struct {
 	Error                   *ErrorEvent                   `json:"error,omitempty"`
 	Close                   *CloseEvent                   `json:"close,omitempty"`
 	ParticipantActive       *ParticipantActiveEvent       `json:"participant_active,omitempty"`
+	LLMStarted              *LLMStartedEvent              `json:"llm_started,omitempty"`
+	LLMFirstToken           *LLMFirstTokenEvent           `json:"llm_first_token,omitempty"`
 }
 
 func (ae *AgentEvent) MarshalJSON() ([]byte, error) {
@@ -224,6 +241,10 @@ func NewAgentEvent(ev Event) *AgentEvent {
 		ae.Close = v
 	case *ParticipantActiveEvent:
 		ae.ParticipantActive = v
+	case *LLMStartedEvent:
+		ae.LLMStarted = v
+	case *LLMFirstTokenEvent:
+		ae.LLMFirstToken = v
 	}
 	return ae
 }
