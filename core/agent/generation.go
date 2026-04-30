@@ -157,12 +157,38 @@ func PerformLLMInference(ctx context.Context, l llm.LLM, chatCtx *llm.ChatContex
 
 		var chunkCount int
 		var sb strings.Builder
+		
+		// Emit LLMStartedEvent
+		if rc := GetRunContext(ctx); rc != nil && rc.Session != nil && rc.Session.Timeline != nil {
+			rc.Session.Timeline.AddEvent(&LLMStartedEvent{
+				CreatedAt: startTime,
+			})
+		}
+
 		for {
 			chunk, err := stream.Next()
 			if err != nil {
 				break
 			}
 			chunkCount++
+
+			if chunkCount == 1 {
+				// First token received - emit LLMFirstTokenEvent
+				ttft := time.Since(startTime).Seconds()
+				if rc := GetRunContext(ctx); rc != nil && rc.Session != nil && rc.Session.Timeline != nil {
+					modelName := ""
+					if rc.Session.LLM != nil {
+						// Attempt to get model name from LLM provider
+						// (This is a bit hacky as the interface doesn't expose it,
+						// but it's enough for this POC bridge).
+					}
+					rc.Session.Timeline.AddEvent(&LLMFirstTokenEvent{
+						TTFT:      ttft,
+						CreatedAt: time.Now(),
+						Model:     modelName,
+					})
+				}
+			}
 
 			if chunk.Delta != nil {
 				if chunk.Delta.Content != "" {
@@ -215,6 +241,16 @@ func PerformLLMInference(ctx context.Context, l llm.LLM, chatCtx *llm.ChatContex
 		}
 
 		data.GeneratedText = sb.String()
+		duration := time.Since(startTime).Seconds()
+
+		if rc := GetRunContext(ctx); rc != nil && rc.Session != nil && rc.Session.Timeline != nil {
+			// Update the metrics with the final duration
+			rc.Session.Timeline.AddEvent(&LLMFirstTokenEvent{
+				TTFT:      -1, // Signal that this is the final update for duration
+				Duration:  duration,
+				CreatedAt: time.Now(),
+			})
+		}
 
 		if data.GeneratedText != "" {
 			if rc := GetRunContext(ctx); rc != nil && rc.SpeechHandle != nil && rc.SpeechHandle.RunResult != nil {
