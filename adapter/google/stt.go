@@ -9,6 +9,7 @@ import (
 	speech "cloud.google.com/go/speech/apiv1"
 	"cloud.google.com/go/speech/apiv1/speechpb"
 	"github.com/cavos-io/rtp-agent/core/stt"
+	"github.com/cavos-io/rtp-agent/library/logger"
 	"github.com/cavos-io/rtp-agent/model"
 	"google.golang.org/api/option"
 )
@@ -92,31 +93,12 @@ func (s *GoogleSTT) Stream(ctx context.Context, language string) (stt.RecognizeS
 		return nil, err
 	}
 
-	// Build the recognition config with optional phrase hints
-	recognitionConfig := &speechpb.RecognitionConfig{
-		Encoding:        speechpb.RecognitionConfig_LINEAR16,
-		SampleRateHertz: 16000,
-		LanguageCode:    language,
-		SpeechContexts:  s.phraseHints, // Apply phrase hints if configured
-	}
-
-	err = stream.Send(&speechpb.StreamingRecognizeRequest{
-		StreamingRequest: &speechpb.StreamingRecognizeRequest_StreamingConfig{
-			StreamingConfig: &speechpb.StreamingRecognitionConfig{
-				Config:         recognitionConfig,
-				InterimResults: true,
-			},
-		},
-	})
-
-	if err != nil {
-		return nil, err
-	}
-
 	gs := &googleSTTStream{
-		stream: stream,
-		events: make(chan *stt.SpeechEvent, 10),
-		errCh:  make(chan error, 1),
+		stream:      stream,
+		language:    language,
+		phraseHints: s.phraseHints,
+		events:      make(chan *stt.SpeechEvent, 10),
+		errCh:       make(chan error, 1),
 	}
 	go gs.readLoop()
 
@@ -166,11 +148,13 @@ func (s *GoogleSTT) Recognize(ctx context.Context, frames []*model.AudioFrame, l
 }
 
 type googleSTTStream struct {
-	stream     speechpb.Speech_StreamingRecognizeClient
-	events     chan *stt.SpeechEvent
-	errCh      chan error
-	closed     bool
-	frameCount int
+	stream      speechpb.Speech_StreamingRecognizeClient
+	language    string
+	phraseHints []*speechpb.SpeechContext
+	events      chan *stt.SpeechEvent
+	errCh       chan error
+	closed      bool
+	configSent  bool
 }
 
 func (s *googleSTTStream) readLoop() {
@@ -190,6 +174,7 @@ func (s *googleSTTStream) readLoop() {
 			}
 
 			alt := result.Alternatives[0]
+			logger.Logger.Debugw("Google STT event received", "transcript", alt.Transcript, "is_final", result.IsFinal)
 			eventType := stt.SpeechEventInterimTranscript
 			if result.IsFinal {
 				eventType = stt.SpeechEventFinalTranscript
@@ -212,7 +197,30 @@ func (s *googleSTTStream) PushFrame(frame *model.AudioFrame) error {
 	if s.closed {
 		return io.ErrClosedPipe
 	}
-	s.frameCount++
+
+	if !s.configSent {
+		s.configSent = true
+		recognitionConfig := &speechpb.RecognitionConfig{
+			Encoding:        speechpb.RecognitionConfig_LINEAR16,
+			SampleRateHertz: int32(frame.SampleRate),
+			LanguageCode:    s.language,
+			SpeechContexts:  s.phraseHints,
+		}
+
+		err := s.stream.Send(&speechpb.StreamingRecognizeRequest{
+			StreamingRequest: &speechpb.StreamingRecognizeRequest_StreamingConfig{
+				StreamingConfig: &speechpb.StreamingRecognitionConfig{
+					Config:         recognitionConfig,
+					InterimResults: true,
+				},
+			},
+		})
+		if err != nil {
+			return err
+		}
+		logger.Logger.Debugw("Google STT config sent", "sample_rate", frame.SampleRate, "language", s.language)
+	}
+
 	return s.stream.Send(&speechpb.StreamingRecognizeRequest{
 		StreamingRequest: &speechpb.StreamingRecognizeRequest_AudioContent{
 			AudioContent: frame.Data,

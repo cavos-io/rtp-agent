@@ -8,19 +8,21 @@ import (
 	texttospeech "cloud.google.com/go/texttospeech/apiv1"
 	"cloud.google.com/go/texttospeech/apiv1/texttospeechpb"
 	"github.com/cavos-io/rtp-agent/core/tts"
+	"github.com/cavos-io/rtp-agent/library/logger"
 	"github.com/cavos-io/rtp-agent/model"
 	"google.golang.org/api/option"
 )
 
 type GoogleTTS struct {
-	client *texttospeech.Client
-	voice  *texttospeechpb.VoiceSelectionParams
-	audio  *texttospeechpb.AudioConfig
+	client   *texttospeech.Client
+	voice    *texttospeechpb.VoiceSelectionParams
+	audio    *texttospeechpb.AudioConfig
+	language string
 }
 
 // NewGoogleTTS creates a new TTS client using Application Default Credentials,
 // or by providing a path to a credentials JSON file.
-func NewGoogleTTS(credentialsFile string) (*GoogleTTS, error) {
+func NewGoogleTTS(credentialsFile string, voiceName string, language string) (*GoogleTTS, error) {
 	ctx := context.Background()
 	var opts []option.ClientOption
 	if credentialsFile != "" {
@@ -32,16 +34,28 @@ func NewGoogleTTS(credentialsFile string) (*GoogleTTS, error) {
 		return nil, err
 	}
 
+	if language == "" {
+		language = "en-US"
+	}
+	if voiceName == "" {
+		if language == "id-ID" {
+			voiceName = "id-ID-Standard-A"
+		} else {
+			voiceName = "en-US-Journey-F"
+		}
+	}
+
 	return &GoogleTTS{
 		client: client,
 		voice: &texttospeechpb.VoiceSelectionParams{
-			LanguageCode: "en-US",
-			Name:         "en-US-Journey-F",
+			LanguageCode: language,
+			Name:         voiceName,
 		},
 		audio: &texttospeechpb.AudioConfig{
 			AudioEncoding:   texttospeechpb.AudioEncoding_LINEAR16,
 			SampleRateHertz: 24000,
 		},
+		language: language,
 	}, nil
 }
 
@@ -61,8 +75,10 @@ func (t *GoogleTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStr
 		AudioConfig: t.audio,
 	}
 
+	logger.Logger.Debugw("Google TTS Synthesize calling", "language", t.voice.LanguageCode, "voice", t.voice.Name, "text", text)
 	resp, err := t.client.SynthesizeSpeech(ctx, req)
 	if err != nil {
+		logger.Logger.Errorw("Google TTS API error", err, "text", text)
 		return nil, err
 	}
 
