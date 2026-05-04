@@ -156,9 +156,13 @@ func (s *sileroVADStream) PushFrame(frame *model.AudioFrame) error {
 	for len(s.pcmBuf) >= windowSize {
 		chunk := s.pcmBuf[:windowSize]
 
-		inferStart := time.Now()
-		prob, err := s.inf.infer(chunk)
-		inferDur := time.Since(inferStart).Seconds()
+		segments, err := s.detector.Detect(chunk)
+		// For debugging, we can log the probability if we had access to it,
+		// but the detector.Detect only returns segments.
+		// However, we can log when it's processing.
+		if len(segments) > 0 {
+			logger.Logger.Debugw("Silero VAD: speech detected", "segmentsCount", len(segments))
+		}
 
 		if err != nil {
 			logger.Logger.Errorw("Silero VAD inference error", err)
