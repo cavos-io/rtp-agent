@@ -17,14 +17,16 @@ import (
 )
 
 type AzureSTT struct {
-	apiKey string
-	region string
+	apiKey   string
+	region   string
+	language string
 }
 
-func NewAzureSTT(apiKey string, region string) *AzureSTT {
+func NewAzureSTT(apiKey string, region string, language string) *AzureSTT {
 	return &AzureSTT{
-		apiKey: apiKey,
-		region: region,
+		apiKey:   apiKey,
+		region:   region,
+		language: language,
 	}
 }
 
@@ -41,10 +43,11 @@ func (s *AzureSTT) Stream(ctx context.Context, language string) (stt.RecognizeSt
 func (s *AzureSTT) Recognize(ctx context.Context, frames []*model.AudioFrame, languageStr string) (*stt.SpeechEvent, error) {
 	languageStr = language.NormalizeLanguage(languageStr)
 	if languageStr == "" {
-		languageStr = "en-US"
+		languageStr = s.language
 	}
 
-	url := fmt.Sprintf("https://%s.stt.speech.microsoft.com/speech/recognition/conversation/cognitiveservices/v1?language=%s", s.region, "id-ID")
+	url := fmt.Sprintf("https://%s.stt.speech.microsoft.com/speech/recognition/conversation/cognitiveservices/v1?language=%s", s.region, languageStr)
+	slog.Debug("azure stt recognize request", "url", url)
 
 	buf := audio.FramesToWAV(frames)
 	slog.Info("[STT] azure: sending WAV", "total_bytes", buf.Len(), "frames", len(frames))

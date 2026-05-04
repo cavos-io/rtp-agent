@@ -15,8 +15,9 @@ import (
 )
 
 type AudioRecognition struct {
-	session *AgentSession
-	hooks   RecognitionHooks
+	session  *AgentSession
+	hooks    RecognitionHooks
+	language string
 
 	stt stt.STT
 	vad vad.VAD
@@ -46,10 +47,11 @@ type RecognitionHooks interface {
 	OnFinalTranscript(ev *stt.SpeechEvent)
 }
 
-func NewAudioRecognition(session *AgentSession, hooks RecognitionHooks, s stt.STT, v vad.VAD, n noise.NoiseSuppressor) *AudioRecognition {
+func NewAudioRecognition(session *AgentSession, hooks RecognitionHooks, s stt.STT, v vad.VAD, n noise.NoiseSuppressor, language string) *AudioRecognition {
 	return &AudioRecognition{
 		session:        session,
 		hooks:          hooks,
+		language:       language,
 		stt:            s,
 		vad:            v,
 		noise:          n,
@@ -94,7 +96,7 @@ func (ar *AudioRecognition) Start(ctx context.Context) error {
 
 	if !hasSTTNode && ar.stt != nil {
 		logger.Logger.Infow("[STT-PIPE] starting STT stream")
-		stream, err := ar.stt.Stream(ctx, "")
+		stream, err := ar.stt.Stream(ctx, ar.language)
 		if err != nil {
 			logger.Logger.Errorw("[STT-PIPE] failed to create STT stream", err)
 			if startErr != nil {
@@ -341,7 +343,7 @@ func (ar *AudioRecognition) reconnectSTT() {
 			return
 		}
 
-		stream, err := sttProvider.Stream(ctx, "")
+		stream, err := sttProvider.Stream(ctx, ar.language)
 		if err != nil {
 			logger.Logger.Errorw("[STT-PIPE] failed to reconnect STT stream", err,
 				"attempt", ar.sttReconnects)
