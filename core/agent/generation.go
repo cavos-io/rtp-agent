@@ -164,7 +164,7 @@ func PerformLLMInference(ctx context.Context, l llm.LLM, chatCtx *llm.ChatContex
 
 		var chunkCount int
 		var sb strings.Builder
-		
+
 		// Emit LLMStartedEvent
 		if rc := GetRunContext(ctx); rc != nil && rc.Session != nil && rc.Session.Timeline != nil {
 			rc.Session.Timeline.AddEvent(&LLMStartedEvent{
@@ -175,6 +175,7 @@ func PerformLLMInference(ctx context.Context, l llm.LLM, chatCtx *llm.ChatContex
 		for {
 			chunk, err := stream.Next()
 			if err != nil {
+				logger.Logger.Debugw("LLM stream ended", "chunks_received", chunkCount, "error", err.Error())
 				break
 			}
 			chunkCount++
@@ -258,6 +259,12 @@ func PerformLLMInference(ctx context.Context, l llm.LLM, chatCtx *llm.ChatContex
 				CreatedAt: time.Now(),
 			})
 		}
+		logger.Logger.Debugw("LLM generation complete",
+			"chunks_received", chunkCount,
+			"text_length", len(data.GeneratedText),
+			"tool_calls_found", len(toolCallsByIndex),
+			"generated_text", data.GeneratedText,
+		)
 
 		if data.GeneratedText != "" {
 			if rc := GetRunContext(ctx); rc != nil && rc.SpeechHandle != nil && rc.SpeechHandle.RunResult != nil {
@@ -459,6 +466,7 @@ func PerformTTSInference(ctx context.Context, t tts.TTS, textCh <-chan string) (
 	if firstText == "" {
 		// LLM produced nothing (cancelled / all filtered out) — nothing to say.
 		close(data.AudioCh)
+		close(data.AlignedTextCh)
 		return data, nil
 	}
 

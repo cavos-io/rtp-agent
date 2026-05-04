@@ -90,6 +90,7 @@ func (l *OpenAILLM) Chat(ctx context.Context, chatCtx *llm.ChatContext, opts ...
 		b, _ := json.Marshal(schemas)
 		_ = json.Unmarshal(b, &tools)
 	}
+	logger.Logger.Debugw("OpenAI LLM tools prepared", "schemas_count", len(schemas), "tools_count", len(tools))
 
 	req := openai.ChatCompletionRequest{
 		Model:    l.model,

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"sync"
 	"time"
+	"unicode"
 
 	"github.com/cavos-io/rtp-agent/core/llm"
 	"github.com/cavos-io/rtp-agent/core/stt"
@@ -429,11 +430,17 @@ func (va *PipelineAgent) handlePlaybackAndTranscription(ctx context.Context, spe
 			go func() {
 				defer alignedWG.Done()
 				var capturedChunks int
+				var lastRune rune
 				for deltaText := range textCh {
 					if deltaText == "" {
 						continue
 					}
+					firstRune := rune(deltaText[0])
+					if capturedChunks > 0 && !unicode.IsSpace(lastRune) && !unicode.IsSpace(firstRune) && !unicode.IsPunct(firstRune) {
+						_ = session.Output.Transcription.CaptureText(" ")
+					}
 					_ = session.Output.Transcription.CaptureText(deltaText)
+					lastRune = rune(deltaText[len(deltaText)-1])
 					capturedChunks++
 				}
 				session.Output.Transcription.Flush()
