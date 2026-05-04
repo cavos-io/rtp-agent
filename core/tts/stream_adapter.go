@@ -22,7 +22,7 @@ func (s *StreamAdapter) Label() string {
 func (s *StreamAdapter) Capabilities() TTSCapabilities {
 	return TTSCapabilities{
 		Streaming:         true,
-		AlignedTranscript: false,
+		AlignedTranscript: true,
 	}
 }
 
@@ -228,7 +228,19 @@ func (w *streamAdapterWrapper) collectReadySentencesLocked(flush bool) []string 
 	}
 
 	lastChar := w.textBuffer[len(w.textBuffer)-1]
-	hasPunctuation := lastChar == '.' || lastChar == '!' || lastChar == '?' || lastChar == '\n'
+	hasPunctuation := strings.ContainsRune(".,!?:;\n", rune(lastChar))
+
+	// If the buffer is getting too long (e.g. > 100 chars), force a split at the last space
+	// to prevent long silence while waiting for punctuation.
+	if !hasPunctuation && len(w.textBuffer) > 100 {
+		lastSpace := strings.LastIndex(w.textBuffer, " ")
+		if lastSpace > 20 { // Ensure we have a decent chunk
+			forced := w.textBuffer[:lastSpace]
+			w.textBuffer = w.textBuffer[lastSpace+1:]
+			return append(trimNonEmpty(sentences[:len(sentences)-1]), forced)
+		}
+	}
+
 	if !hasPunctuation {
 		w.textBuffer = sentences[len(sentences)-1]
 		sentences = sentences[:len(sentences)-1]
@@ -258,7 +270,7 @@ func splitSentences(text string) []string {
 	var current strings.Builder
 	for _, char := range text {
 		current.WriteRune(char)
-		if char == '.' || char == '!' || char == '?' || char == '\n' {
+		if strings.ContainsRune(".,!?:;\n", char) {
 			sentences = append(sentences, current.String())
 			current.Reset()
 		}
