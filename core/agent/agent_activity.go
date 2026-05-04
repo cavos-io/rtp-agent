@@ -765,7 +765,7 @@ func (a *AgentActivity) runEOUDetection(info EndOfTurnInfo) {
 
 					timeout := info.TranscriptTimeout
 					if timeout <= 0 {
-						timeout = 2 * time.Second
+						timeout = 5 * time.Second
 					}
 					select {
 					case <-waitCh:

@@ -12,8 +12,8 @@ func TestDefaultVADOptions(t *testing.T) {
 	if opts.ActivationThreshold != 0.5 {
 		t.Errorf("Expected threshold 0.5, got %f", opts.ActivationThreshold)
 	}
-	if opts.ModelPath != "/models/silero_vad.onnx" {
-		t.Errorf("Expected default model path, got %s", opts.ModelPath)
+	if opts.ModelPath != "" {
+		t.Errorf("Expected empty default model path (auto-download), got %s", opts.ModelPath)
 	}
 }
 
@@ -52,9 +52,12 @@ func TestVADOptions(t *testing.T) {
 }
 
 func TestNewSileroVAD_EmptyModelPath(t *testing.T) {
-	_, err := NewSileroVAD(WithModelPath(""))
-	if err == nil {
-		t.Error("Expected error for empty model path")
+	vad, err := NewSileroVAD(WithModelPath(""))
+	if err != nil {
+		t.Fatalf("Unexpected error: %v", err)
+	}
+	if vad == nil {
+		t.Fatal("Expected non-nil VAD")
 	}
 }
 
