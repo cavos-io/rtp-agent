@@ -7,6 +7,7 @@ import (
 	"io"
 
 	"github.com/cavos-io/rtp-agent/core/llm"
+	"github.com/cavos-io/rtp-agent/library/logger"
 	"github.com/sashabaranov/go-openai"
 )
 
@@ -54,7 +55,7 @@ func (l *OpenAILLM) Chat(ctx context.Context, chatCtx *llm.ChatContext, opts ...
 	for _, m := range messages {
 		role := m["role"].(string)
 		content, _ := m["content"].(string)
-		
+
 		msg := openai.ChatCompletionMessage{
 			Role:    role,
 			Content: content,
@@ -110,8 +111,10 @@ func (l *OpenAILLM) Chat(ctx context.Context, chatCtx *llm.ChatContext, opts ...
 		}
 	}
 
+	logger.Logger.Debugw("OpenAI CreateChatCompletionStream calling", "model", req.Model, "messages_count", len(req.Messages))
 	stream, err := l.client.CreateChatCompletionStream(ctx, req)
 	if err != nil {
+		logger.Logger.Errorw("OpenAI stream creation failed", err)
 		return nil, err
 	}
 
@@ -125,9 +128,11 @@ type openaiStream struct {
 }
 
 func (s *openaiStream) Next() (*llm.ChatChunk, error) {
+	logger.Logger.Debugw("OpenAI stream.Recv calling")
 	resp, err := s.stream.Recv()
 	if err != nil {
 		if errors.Is(err, io.EOF) {
+			logger.Logger.Debugw("OpenAI stream EOF")
 			return nil, io.EOF
 		}
 		return nil, err
@@ -164,10 +169,12 @@ func (s *openaiStream) Next() (*llm.ChatChunk, error) {
 
 	if resp.Usage != nil {
 		chunk.Usage = &llm.CompletionUsage{
-			CompletionTokens:   resp.Usage.CompletionTokens,
-			PromptTokens:       resp.Usage.PromptTokens,
-			PromptCachedTokens: resp.Usage.PromptTokensDetails.CachedTokens,
-			TotalTokens:        resp.Usage.TotalTokens,
+			CompletionTokens: resp.Usage.CompletionTokens,
+			PromptTokens:     resp.Usage.PromptTokens,
+			TotalTokens:      resp.Usage.TotalTokens,
+		}
+		if resp.Usage.PromptTokensDetails != nil {
+			chunk.Usage.PromptCachedTokens = resp.Usage.PromptTokensDetails.CachedTokens
 		}
 	}
 
@@ -182,4 +189,3 @@ func (s *openaiStream) Close() error {
 func (l *OpenAILLM) RawClient() *openai.Client {
 	return l.client
 }
-
