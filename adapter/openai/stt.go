@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/binary"
 	"fmt"
+	"strings"
 
 	"github.com/cavos-io/rtp-agent/core/stt"
 	"github.com/cavos-io/rtp-agent/library/logger"
@@ -105,11 +106,17 @@ func (s *OpenAISTT) Recognize(ctx context.Context, frames []*model.AudioFrame, l
 
 	logger.Logger.Debugw("Sending WAV to OpenAI", "size", wav.Len(), "frames", len(frames), "sampleRate", sampleRate, "channels", numChannels)
 
+	// OpenAI Whisper expects ISO-639-1 language codes (e.g. "id" instead of "id-ID").
+	whisperLanguage := language
+	if parts := strings.Split(language, "-"); len(parts) > 0 {
+		whisperLanguage = parts[0]
+	}
+
 	req := openai.AudioRequest{
 		Model:    s.model,
 		FilePath: "audio.wav",
 		Reader:   bytes.NewReader(wav.Bytes()),
-		Language: language,
+		Language: whisperLanguage,
 		Prompt:   s.prompt,
 	}
 
