@@ -665,6 +665,34 @@ func (s *AgentSession) GenerateReply(ctx context.Context, userInput string, allo
 	return GenerateTypedReply[any](ctx, s, userInput, &GenerateReplyOpts{AllowInterruptions: allowInterruptions})
 }
 
+// GenerateReplyWithInstructions generates a reply driven by one-shot system instructions
+// without polluting the permanent chat history. It uses a temporary copy of the chat
+// context with the extra instructions appended, leaving the original context unchanged.
+func (s *AgentSession) GenerateReplyWithInstructions(ctx context.Context, instructions string, allowInterruptions bool) (any, error) {
+	// Swap in a temporary chat context with the extra instructions appended.
+	s.mu.Lock()
+	origChatCtx := s.ChatCtx
+	if origChatCtx != nil {
+		tmpCtx := origChatCtx.Copy()
+		tmpCtx.Append(&llm.ChatMessage{
+			Role:      llm.ChatRoleSystem,
+			Content:   []llm.ChatContent{{Text: instructions}},
+			CreatedAt: time.Now(),
+		})
+		s.ChatCtx = tmpCtx
+	}
+	s.mu.Unlock()
+
+	result, err := GenerateTypedReply[any](ctx, s, "", &GenerateReplyOpts{AllowInterruptions: allowInterruptions})
+
+	// Restore original chat context.
+	s.mu.Lock()
+	s.ChatCtx = origChatCtx
+	s.mu.Unlock()
+
+	return result, err
+}
+
 func (s *AgentSession) Say(text string, allowInterruptions bool) (*SpeechHandle, error) {
 	s.mu.Lock()
 	activity := s.Activity
