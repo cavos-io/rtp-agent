@@ -232,9 +232,11 @@ func (va *PipelineAgent) GenerateReply(speech *SpeechHandle) {
 		// sees its own previous replies in subsequent turns.
 		if genData.FullTextCh != nil {
 			if fullText, ok := <-genData.FullTextCh; ok && fullText != "" {
-				if session.Output.Transcription == nil {
-					session.PublishAgentTranscript(fullText)
+				if session.Output.Transcription != nil {
+					_ = session.Output.Transcription.CaptureText(fullText)
+					session.Output.Transcription.Flush()
 				}
+				session.PublishAgentTranscript(fullText)
 				va.chatCtx.Append(&llm.ChatMessage{
 					Role:      llm.ChatRoleAssistant,
 					Content:   []llm.ChatContent{{Text: fullText}},

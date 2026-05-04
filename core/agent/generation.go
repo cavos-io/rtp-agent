@@ -89,6 +89,13 @@ func PerformLLMInference(ctx context.Context, l llm.LLM, chatCtx *llm.ChatContex
 		FullTextCh: make(chan string, 1),
 	}
 
+	logger.Logger.Debugw("PerformLLMInference calling Chat", "messages_count", len(chatCtx.Items))
+	for i, item := range chatCtx.Items {
+		if msg, ok := item.(*llm.ChatMessage); ok {
+			logger.Logger.Debugw("LLM Message", "index", i, "role", msg.Role, "content_len", len(msg.Content))
+		}
+	}
+
 	stream, err := l.Chat(ctx, chatCtx, llm.WithTools(llm.FlattenTools(tools)))
 	if err != nil {
 		logger.Logger.Errorw("LLM chat stream creation failed", err)
