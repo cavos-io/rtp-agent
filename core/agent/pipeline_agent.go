@@ -251,6 +251,7 @@ func (va *PipelineAgent) GenerateReply(speech *SpeechHandle) {
 				} else {
 					session.PublishAgentTranscript(fullText)
 				}
+				session.PublishAgentTranscript(fullText)
 				va.chatCtx.Append(&llm.ChatMessage{
 					Role:      llm.ChatRoleAssistant,
 					Content:   []llm.ChatContent{{Text: fullText}},

@@ -186,27 +186,22 @@ func (w *streamAdapterWrapper) run() {
 
 				w.events <- &SpeechEvent{Type: SpeechEventEndOfSpeech}
 
-				const minFramesForRecognition = 50
-				if len(frames) >= minFramesForRecognition {
+				if len(frames) > 0 {
+					logger.Logger.Debugw("[StreamAdapter] calling Recognize", "frames", len(frames), "language", w.language)
 					tEvent, err := w.adapter.stt.Recognize(w.ctx, frames, w.language)
 					if err != nil {
-						logger.Logger.Errorw("StreamAdapter: STT Recognize failed", err, "frames", len(frames), "language", w.language)
+						logger.Logger.Errorw("[StreamAdapter] Recognize error", err)
 					} else if tEvent != nil && len(tEvent.Alternatives) > 0 && tEvent.Alternatives[0].Text != "" {
-						text := tEvent.Alternatives[0].Text
-						if isHallucination(text) {
-							logger.Logger.Warnw("StreamAdapter: filtered Whisper hallucination", nil, "text", text, "frames", len(frames))
-						} else {
-							w.events <- &SpeechEvent{
-								Type:         SpeechEventFinalTranscript,
-								Alternatives: []SpeechData{tEvent.Alternatives[0]},
-							}
+						logger.Logger.Debugw("[StreamAdapter] Recognize success", "text", tEvent.Alternatives[0].Text)
+						w.events <- &SpeechEvent{
+							Type:         SpeechEventFinalTranscript,
+							Alternatives: []SpeechData{tEvent.Alternatives[0]},
 						}
+					} else {
+						logger.Logger.Debugw("[StreamAdapter] Recognize returned empty result")
 					}
-				} else if len(frames) > 0 {
-					logger.Logger.Infow("StreamAdapter: skipping recognition, audio too short", "frames", len(frames), "minRequired", minFramesForRecognition)
 				}
 			}
 		}
 	}
 }
-
