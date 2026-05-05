@@ -10,6 +10,8 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/cavos-io/rtp-agent/library/logger"
+
 	"github.com/cavos-io/rtp-agent/core/llm"
 )
 
@@ -55,6 +57,7 @@ func (l *AnthropicLLM) Chat(ctx context.Context, chatCtx *llm.ChatContext, opts 
 	jsonBody, _ := json.Marshal(body)
 	req, err := http.NewRequestWithContext(ctx, "POST", "https://api.anthropic.com/v1/messages", bytes.NewBuffer(jsonBody))
 	if err != nil {
+		logger.Logger.Errorw("[anthropic.Chat] http.NewRequestWithContext failed", err)
 		return nil, err
 	}
 
@@ -64,12 +67,14 @@ func (l *AnthropicLLM) Chat(ctx context.Context, chatCtx *llm.ChatContext, opts 
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
+		logger.Logger.Errorw("[anthropic.Chat] http.DefaultClient.Do failed", err)
 		return nil, err
 	}
 
 	if resp.StatusCode != http.StatusOK {
 		respBody, _ := io.ReadAll(resp.Body)
 		resp.Body.Close()
+		logger.Logger.Warnw("[anthropic.Chat] HTTP response non-OK status", nil)
 		return nil, fmt.Errorf("anthropic error: %s", string(respBody))
 	}
 
@@ -93,6 +98,7 @@ func (s *anthropicStream) Next() (*llm.ChatChunk, error) {
 	for {
 		line, err := s.reader.ReadString('\n')
 		if err != nil {
+			logger.Logger.Errorw("[anthropicStream.Next] reader.ReadString failed", err)
 			if err == io.EOF {
 				return nil, io.EOF
 			}
@@ -199,9 +205,11 @@ func (s *anthropicStream) Next() (*llm.ChatChunk, error) {
 			}, nil
 
 		case "message_stop":
+			logger.Logger.Infow("[anthropicStream.Next] message_stop received, closing stream")
 			return nil, io.EOF
 
 		case "error":
+			logger.Logger.Errorw("[anthropicStream.Next] error event received from stream", nil)
 			return nil, fmt.Errorf("anthropic stream error: %s", data)
 		}
 	}
@@ -210,4 +218,3 @@ func (s *anthropicStream) Next() (*llm.ChatChunk, error) {
 func (s *anthropicStream) Close() error {
 	return s.resp.Body.Close()
 }
-

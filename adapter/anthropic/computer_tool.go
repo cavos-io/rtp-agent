@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/cavos-io/rtp-agent/library/logger"
+
 	"github.com/cavos-io/rtp-agent/adapter/browser"
 	"github.com/cavos-io/rtp-agent/core/llm"
 )
@@ -39,6 +41,7 @@ func (c *ComputerTool) Execute(ctx context.Context, action string, args map[stri
 	case "left_click":
 		x, y, err := requireCoordinate(args, "coordinate")
 		if err != nil {
+			logger.Logger.Errorw("[anthropic.Execute] requireCoordinate failed", err)
 			return nil, err
 		}
 		modifiers, _ := args["text"].(string)
@@ -46,30 +49,35 @@ func (c *ComputerTool) Execute(ctx context.Context, action string, args map[stri
 	case "right_click":
 		x, y, err := requireCoordinate(args, "coordinate")
 		if err != nil {
+			logger.Logger.Errorw("[anthropic.Execute] requireCoordinate failed", err)
 			return nil, err
 		}
 		c.actions.RightClick(x, y)
 	case "double_click":
 		x, y, err := requireCoordinate(args, "coordinate")
 		if err != nil {
+			logger.Logger.Errorw("[anthropic.Execute] requireCoordinate failed", err)
 			return nil, err
 		}
 		c.actions.DoubleClick(x, y)
 	case "type":
 		text, ok := args["text"].(string)
 		if !ok {
+			logger.Logger.Warnw("[anthropic.Execute] type assertion failed for 'text'", nil)
 			return nil, fmt.Errorf("missing required argument: 'text'")
 		}
 		c.actions.TypeText(text)
 	case "key":
 		text, ok := args["text"].(string)
 		if !ok {
+			logger.Logger.Warnw("[anthropic.Execute] type assertion failed for 'text'", nil)
 			return nil, fmt.Errorf("missing required argument: 'text'")
 		}
 		c.actions.Key(text)
 	case "wait":
 		c.actions.Wait()
 	default:
+		logger.Logger.Infow("[anthropic.Execute] unknown computer_use action", "action", action)
 		return nil, fmt.Errorf("unknown computer_use action: %s", action)
 	}
 
@@ -88,16 +96,19 @@ func (c *ComputerTool) Execute(ctx context.Context, action string, args map[stri
 func requireCoordinate(args map[string]interface{}, key string) (int, int, error) {
 	val, ok := args[key]
 	if !ok {
+		logger.Logger.Infow("[anthropic.requireCoordinate] type assertion failed for 'val'", "key", key)
 		return 0, 0, fmt.Errorf("missing required argument: %q", key)
 	}
 	coords, ok := val.([]interface{})
 	if !ok || len(coords) < 2 {
+		logger.Logger.Infow("[anthropic.requireCoordinate] type assertion failed for 'coords'", "coords", coords)
 		return 0, 0, fmt.Errorf("invalid coordinate format")
 	}
 
 	x, okX := coords[0].(float64)
 	y, okY := coords[1].(float64)
 	if !okX || !okY {
+		logger.Logger.Infow("[anthropic.requireCoordinate] type assertion or map lookup failed", "x", coords[0], "y", coords[1])
 		return 0, 0, fmt.Errorf("coordinates must be numbers")
 	}
 
@@ -152,7 +163,7 @@ func (t *computerUseTool) Parameters() map[string]any {
 }
 
 func (t *computerUseTool) Execute(ctx context.Context, args any) (any, error) {
-	// The computer tool relies on the external dispatch handler for actual execution, 
+	// The computer tool relies on the external dispatch handler for actual execution,
 	// typically intercepting the command before it reaches this basic Execute call,
 	// or calling Execute on the Toolset directly.
 	return "Action dispatched", nil
@@ -172,4 +183,3 @@ func (t *computerUseTool) ProviderSchema(format string) map[string]any {
 	}
 	return nil
 }
-
