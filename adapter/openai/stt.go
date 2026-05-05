@@ -64,6 +64,7 @@ func (s *OpenAISTT) Recognize(ctx context.Context, frames []*model.AudioFrame, l
 	}
 	logger.Logger.Debugw("Recognizing speech from audio frames", "adapter", "openai-stt", "language", language)
 	if len(frames) == 0 {
+		logger.Logger.Warnw("[openai.Recognize] empty data", nil)
 		return nil, fmt.Errorf("no audio frames")
 	}
 
@@ -115,9 +116,17 @@ func (s *OpenAISTT) Recognize(ctx context.Context, frames []*model.AudioFrame, l
 
 	resp, err := s.client.CreateTranscription(ctx, req)
 	if err != nil {
+		logger.Logger.Errorw("[STT] openai: CreateTranscription API call failed", err,
+			"model", s.model,
+			"language", language,
+		)
 		return nil, err
 	}
 
+	logger.Logger.Debugw("[STT] openai: transcription result",
+		"text", resp.Text,
+		"model", s.model,
+	)
 	return &stt.SpeechEvent{
 		Type: stt.SpeechEventFinalTranscript,
 		Alternatives: []stt.SpeechData{
@@ -130,6 +139,7 @@ func (s *OpenAISTT) Recognize(ctx context.Context, frames []*model.AudioFrame, l
 
 func encodePCMAsWAV(frames []*model.AudioFrame) ([]byte, error) {
 	if len(frames) == 0 {
+		logger.Logger.Warnw("[openai.encodePCMAsWAV] empty data", nil)
 		return nil, fmt.Errorf("no audio frames to encode")
 	}
 
@@ -149,6 +159,7 @@ func encodePCMAsWAV(frames []*model.AudioFrame) ([]byte, error) {
 			continue
 		}
 		if _, err := pcm.Write(f.Data); err != nil {
+			logger.Logger.Warnw("[openai.encodePCMAsWAV] operation failed", nil)
 			return nil, err
 		}
 	}
@@ -161,45 +172,58 @@ func encodePCMAsWAV(frames []*model.AudioFrame) ([]byte, error) {
 
 	var out bytes.Buffer
 	if _, err := out.WriteString("RIFF"); err != nil {
+		logger.Logger.Warnw("[openai.encodePCMAsWAV] operation failed", nil)
 		return nil, err
 	}
 	if err := binary.Write(&out, binary.LittleEndian, uint32(36)+dataLen); err != nil {
+		logger.Logger.Warnw("[openai.encodePCMAsWAV] operation failed", nil)
 		return nil, err
 	}
 	if _, err := out.WriteString("WAVE"); err != nil {
+		logger.Logger.Warnw("[openai.encodePCMAsWAV] operation failed", nil)
 		return nil, err
 	}
 	if _, err := out.WriteString("fmt "); err != nil {
+		logger.Logger.Warnw("[openai.encodePCMAsWAV] operation failed", nil)
 		return nil, err
 	}
 	if err := binary.Write(&out, binary.LittleEndian, uint32(16)); err != nil {
+		logger.Logger.Warnw("[openai.encodePCMAsWAV] operation failed", nil)
 		return nil, err
 	}
 	if err := binary.Write(&out, binary.LittleEndian, uint16(1)); err != nil { // PCM
 		return nil, err
 	}
 	if err := binary.Write(&out, binary.LittleEndian, numChannels); err != nil {
+		logger.Logger.Warnw("[openai.encodePCMAsWAV] operation failed", nil)
 		return nil, err
 	}
 	if err := binary.Write(&out, binary.LittleEndian, sampleRate); err != nil {
+		logger.Logger.Warnw("[openai.encodePCMAsWAV] operation failed", nil)
 		return nil, err
 	}
 	if err := binary.Write(&out, binary.LittleEndian, byteRate); err != nil {
+		logger.Logger.Warnw("[openai.encodePCMAsWAV] operation failed", nil)
 		return nil, err
 	}
 	if err := binary.Write(&out, binary.LittleEndian, blockAlign); err != nil {
+		logger.Logger.Warnw("[openai.encodePCMAsWAV] operation failed", nil)
 		return nil, err
 	}
 	if err := binary.Write(&out, binary.LittleEndian, bitsPerSample); err != nil {
+		logger.Logger.Warnw("[openai.encodePCMAsWAV] operation failed", nil)
 		return nil, err
 	}
 	if _, err := out.WriteString("data"); err != nil {
+		logger.Logger.Warnw("[openai.encodePCMAsWAV] operation failed", nil)
 		return nil, err
 	}
 	if err := binary.Write(&out, binary.LittleEndian, dataLen); err != nil {
+		logger.Logger.Warnw("[openai.encodePCMAsWAV] operation failed", nil)
 		return nil, err
 	}
 	if _, err := out.Write(pcmData); err != nil {
+		logger.Logger.Warnw("[openai.encodePCMAsWAV] operation failed", nil)
 		return nil, err
 	}
 

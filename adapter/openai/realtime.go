@@ -41,13 +41,14 @@ type realtimeSession struct {
 
 func (m *RealtimeModel) Session() (llm.RealtimeSession, error) {
 	wsURL := fmt.Sprintf("%s?model=%s", m.baseURL, m.model)
-	
+
 	header := http.Header{}
 	header.Add("Authorization", "Bearer "+m.apiKey)
 	header.Add("OpenAI-Beta", "realtime=v1")
 
 	conn, _, err := websocket.DefaultDialer.Dial(wsURL, header)
 	if err != nil {
+		logger.Logger.Errorw("[openai.Session] websocket.DefaultDialer.Dial failed", err)
 		return nil, fmt.Errorf("failed to connect to OpenAI realtime: %w", err)
 	}
 
@@ -110,7 +111,7 @@ func (s *realtimeSession) PushAudio(frame *model.AudioFrame) error {
 
 	b64Audio := base64.StdEncoding.EncodeToString(frame.Data)
 	msg := map[string]any{
-		"type": "input_audio_buffer.append",
+		"type":  "input_audio_buffer.append",
 		"audio": b64Audio,
 	}
 	return s.sendMsg(msg)
@@ -128,6 +129,7 @@ func (s *realtimeSession) sendMsg(msg any) error {
 	defer s.mu.Unlock()
 	b, err := json.Marshal(msg)
 	if err != nil {
+		logger.Logger.Errorw("[openai.sendMsg] json.Marshal failed", err)
 		return err
 	}
 	return s.conn.WriteMessage(websocket.TextMessage, b)
@@ -149,6 +151,7 @@ func (s *realtimeSession) eventLoop() {
 
 			var ev map[string]any
 			if err := json.Unmarshal(msg, &ev); err != nil {
+				logger.Logger.Errorw("[openai.eventLoop] json.Unmarshal failed", err, "raw_message", string(msg))
 				continue
 			}
 
@@ -196,4 +199,3 @@ func (s *realtimeSession) eventLoop() {
 		}
 	}
 }
-

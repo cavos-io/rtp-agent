@@ -6,6 +6,7 @@ import (
 
 	"github.com/cavos-io/rtp-agent/core/audio"
 	"github.com/cavos-io/rtp-agent/core/tts"
+	"github.com/cavos-io/rtp-agent/library/logger"
 	"github.com/cavos-io/rtp-agent/model"
 	"github.com/sashabaranov/go-openai"
 )
@@ -31,7 +32,7 @@ func NewOpenAITTS(apiKey string, model openai.SpeechModel, voice openai.SpeechVo
 	if voice == "" {
 		voice = openai.VoiceAlloy
 	}
-	
+
 	sampleRate := 24000
 	if len(opts) > 0 && opts[0].SampleRate > 0 {
 		sampleRate = opts[0].SampleRate
@@ -53,6 +54,12 @@ func (t *OpenAITTS) SampleRate() int  { return t.sampleRate }
 func (t *OpenAITTS) NumChannels() int { return 1 }
 
 func (t *OpenAITTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStream, error) {
+	logger.Logger.Debugw("[TTS] openai: synthesize request",
+		"model", t.model,
+		"voice", t.voice,
+		"text_length", len(text),
+	)
+
 	req := openai.CreateSpeechRequest{
 		Model: t.model,
 		Input: text,
@@ -63,9 +70,17 @@ func (t *OpenAITTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStr
 
 	resp, err := t.client.CreateSpeech(ctx, req)
 	if err != nil {
+		logger.Logger.Errorw("[TTS] openai: CreateSpeech API call failed", err,
+			"model", t.model,
+			"voice", t.voice,
+		)
 		return nil, err
 	}
 
+	logger.Logger.Debugw("[TTS] openai: synthesis successful",
+		"model", t.model,
+		"voice", t.voice,
+	)
 	return &openaiTTSChunkedStream{
 		resp:       resp,
 		sampleRate: t.sampleRate,
@@ -88,6 +103,7 @@ func (s *openaiTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 	n, err := s.resp.Read(buf)
 	if n == 0 {
 		if err != nil {
+			logger.Logger.Errorw("[openaiTTSChunkedStream.Next] s.resp.Read failed", err)
 			if err == io.EOF {
 				return nil, io.EOF
 			}
@@ -131,4 +147,3 @@ func (s *openaiTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 func (s *openaiTTSChunkedStream) Close() error {
 	return s.resp.Close()
 }
-

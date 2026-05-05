@@ -6,6 +6,8 @@ import (
 	"errors"
 	"io"
 
+	"github.com/cavos-io/rtp-agent/library/logger"
+
 	"github.com/cavos-io/rtp-agent/core/llm"
 	"github.com/sashabaranov/go-openai"
 )
@@ -54,7 +56,7 @@ func (l *OpenAILLM) Chat(ctx context.Context, chatCtx *llm.ChatContext, opts ...
 	for _, m := range messages {
 		role := m["role"].(string)
 		content, _ := m["content"].(string)
-		
+
 		msg := openai.ChatCompletionMessage{
 			Role:    role,
 			Content: content,
@@ -87,7 +89,9 @@ func (l *OpenAILLM) Chat(ctx context.Context, chatCtx *llm.ChatContext, opts ...
 	tools := make([]openai.Tool, 0, len(schemas))
 	if len(schemas) > 0 {
 		b, _ := json.Marshal(schemas)
-		_ = json.Unmarshal(b, &tools)
+		if err := json.Unmarshal(b, &tools); err != nil {
+			logger.Logger.Errorw("[openai.Chat] failed to marshal/unmarshal tool schemas", err)
+		}
 	}
 
 	req := openai.ChatCompletionRequest{
@@ -112,6 +116,7 @@ func (l *OpenAILLM) Chat(ctx context.Context, chatCtx *llm.ChatContext, opts ...
 
 	stream, err := l.client.CreateChatCompletionStream(ctx, req)
 	if err != nil {
+		logger.Logger.Errorw("[openai.Chat] l.client.CreateChatCompletionStream failed", err)
 		return nil, err
 	}
 
@@ -127,6 +132,7 @@ type openaiStream struct {
 func (s *openaiStream) Next() (*llm.ChatChunk, error) {
 	resp, err := s.stream.Recv()
 	if err != nil {
+		logger.Logger.Errorw("[openaiStream.Next] s.stream.Recv failed", err)
 		if errors.Is(err, io.EOF) {
 			return nil, io.EOF
 		}
@@ -182,4 +188,3 @@ func (s *openaiStream) Close() error {
 func (l *OpenAILLM) RawClient() *openai.Client {
 	return l.client
 }
-
