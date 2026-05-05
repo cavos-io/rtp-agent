@@ -80,6 +80,7 @@ func (t *ElevenLabsTTS) Synthesize(ctx context.Context, text string) (tts.Chunke
 
 	req, err := http.NewRequestWithContext(ctx, "POST", apiURL, bytes.NewBuffer(jsonBody))
 	if err != nil {
+		logger.Logger.Errorw("[elevenlabs.Synthesize] http.NewRequestWithContext failed", err)
 		return nil, err
 	}
 
@@ -88,12 +89,14 @@ func (t *ElevenLabsTTS) Synthesize(ctx context.Context, text string) (tts.Chunke
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
+		logger.Logger.Errorw("[elevenlabs.Synthesize] http.DefaultClient.Do failed", err)
 		return nil, err
 	}
 
 	if resp.StatusCode != http.StatusOK {
 		respBody, _ := io.ReadAll(resp.Body)
 		resp.Body.Close()
+		logger.Logger.Warnw("[elevenlabs.Synthesize] HTTP response non-OK status", nil)
 		return nil, fmt.Errorf("elevenlabs error: %s", string(respBody))
 	}
 
@@ -111,6 +114,7 @@ func (s *elevenLabsChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 	buf := make([]byte, 8192)
 	n, err := s.resp.Body.Read(buf)
 	if err != nil {
+		logger.Logger.Errorw("[elevenLabsChunkedStream.Next] error reading response body", err)
 		if err == io.EOF && n > 0 {
 			// Return final chunk
 			return &tts.SynthesizedAudio{
@@ -181,6 +185,7 @@ func (s *elevenLabsStream) connect() error {
 
 	conn, _, err := websocket.DefaultDialer.DialContext(s.ctx, u.String(), header)
 	if err != nil {
+		logger.Logger.Errorw("[elevenlabs.connect] websocket.DefaultDialer.DialContext failed", err)
 		return fmt.Errorf("failed to dial elevenlabs websocket: %w", err)
 	}
 
@@ -198,6 +203,7 @@ func (s *elevenLabsStream) connect() error {
 	}
 	if err := conn.WriteJSON(initMsg); err != nil {
 		conn.Close()
+		logger.Logger.Warnw("[elevenlabs.connect] operation failed", nil)
 		return fmt.Errorf("failed to write initial config to elevenlabs: %w", err)
 	}
 
@@ -351,6 +357,7 @@ func (s *elevenLabsStream) PushText(text string) error {
 	// avoiding input_timeout_exceeded from idle connections.
 	if !s.connected {
 		if err := s.connect(); err != nil {
+			logger.Logger.Warnw("[elevenlabs.PushText] condition check failed", nil)
 			return err
 		}
 	}
@@ -359,6 +366,7 @@ func (s *elevenLabsStream) PushText(text string) error {
 		"try_trigger_generation": true,
 	}
 	if err := s.conn.WriteJSON(msg); err != nil {
+		logger.Logger.Warnw("[elevenlabs.PushText] operation failed", nil)
 		return fmt.Errorf("failed to write text to elevenlabs: %w", err)
 	}
 	return nil
@@ -404,11 +412,13 @@ func (s *elevenLabsStream) Close() error {
 func (s *elevenLabsStream) Next() (*tts.SynthesizedAudio, error) {
 	select {
 	case err := <-s.errCh:
+		logger.Logger.Errorw("[elevenLabsStream.Next] stream error", err)
 		return nil, err
 	case audio, ok := <-s.audio:
 		if !ok {
 			select {
 			case err := <-s.errCh:
+				logger.Logger.Errorw("[elevenLabsStream.Next] stream closed with error", err)
 				return nil, err
 			default:
 				return nil, io.EOF
@@ -429,4 +439,3 @@ func (s *elevenLabsStream) Next() (*tts.SynthesizedAudio, error) {
 		return nil, io.EOF
 	}
 }
-
