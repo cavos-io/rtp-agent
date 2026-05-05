@@ -11,6 +11,8 @@ import (
 	"net/url"
 	"sync"
 
+	"github.com/cavos-io/rtp-agent/library/logger"
+
 	"github.com/cavos-io/rtp-agent/core/tts"
 	"github.com/cavos-io/rtp-agent/model"
 	"github.com/gorilla/websocket"
@@ -40,33 +42,35 @@ func (t *CartesiaTTS) Label() string { return "cartesia.TTS" }
 func (t *CartesiaTTS) Capabilities() tts.TTSCapabilities {
 	return tts.TTSCapabilities{Streaming: true, AlignedTranscript: false}
 }
-func (t *CartesiaTTS) SampleRate() int { return 24000 }
+func (t *CartesiaTTS) SampleRate() int  { return 24000 }
 func (t *CartesiaTTS) NumChannels() int { return 1 }
 
 func (t *CartesiaTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStream, error) {
 	apiURL := "https://api.cartesia.ai/tts/bytes"
 
 	reqBody := map[string]interface{}{
-		"model_id": t.model,
+		"model_id":   t.model,
 		"transcript": text,
 		"voice": map[string]interface{}{
 			"mode": "id",
 			"id":   t.voiceID,
 		},
 		"output_format": map[string]interface{}{
-			"container": "raw",
-			"encoding":  "pcm_s16le",
+			"container":   "raw",
+			"encoding":    "pcm_s16le",
 			"sample_rate": 24000,
 		},
 	}
 
 	jsonBody, err := json.Marshal(reqBody)
 	if err != nil {
+		logger.Logger.Errorw("[cartesia.Synthesize] json.Marshal failed", err)
 		return nil, err
 	}
 
 	req, err := http.NewRequestWithContext(ctx, "POST", apiURL, bytes.NewBuffer(jsonBody))
 	if err != nil {
+		logger.Logger.Errorw("[cartesia.Synthesize] http.NewRequestWithContext failed", err)
 		return nil, err
 	}
 
@@ -76,12 +80,14 @@ func (t *CartesiaTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedS
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
+		logger.Logger.Errorw("[cartesia.Synthesize] http.DefaultClient.Do failed", err)
 		return nil, err
 	}
 
 	if resp.StatusCode != http.StatusOK {
 		respBody, _ := io.ReadAll(resp.Body)
 		resp.Body.Close()
+		logger.Logger.Warnw("[cartesia.Synthesize] HTTP response non-OK status", nil)
 		return nil, fmt.Errorf("cartesia tts error: %s", string(respBody))
 	}
 
@@ -98,6 +104,7 @@ func (s *cartesiaTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 	buf := make([]byte, 4096)
 	n, err := s.resp.Body.Read(buf)
 	if err != nil {
+		logger.Logger.Errorw("[cartesiaTTSChunkedStream.Next] error reading response body", err)
 		if err == io.EOF {
 			return nil, io.EOF
 		}
@@ -127,6 +134,7 @@ func (t *CartesiaTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) 
 
 	conn, _, err := websocket.DefaultDialer.DialContext(ctx, u.String(), nil)
 	if err != nil {
+		logger.Logger.Errorw("[cartesia.Stream] websocket.DefaultDialer.DialContext failed", err)
 		return nil, err
 	}
 
@@ -147,13 +155,14 @@ func (t *CartesiaTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) 
 	}
 	if err := conn.WriteJSON(initMsg); err != nil {
 		conn.Close()
+		logger.Logger.Warnw("[cartesia.Stream] operation failed", nil)
 		return nil, err
 	}
 
 	stream := &cartesiaTTSStream{
-		conn:   conn,
-		audio:  make(chan *tts.SynthesizedAudio, 10),
-		errCh:  make(chan error, 1),
+		conn:  conn,
+		audio: make(chan *tts.SynthesizedAudio, 10),
+		errCh: make(chan error, 1),
 	}
 
 	go stream.readLoop()
@@ -170,10 +179,10 @@ type cartesiaTTSStream struct {
 }
 
 type cartesiaWSResponse struct {
-	Type     string `json:"type"`
-	Error    string `json:"error"`
-	Data     string `json:"data"` // base64 encoded audio
-	Done     bool   `json:"done"`
+	Type  string `json:"type"`
+	Error string `json:"error"`
+	Data  string `json:"data"` // base64 encoded audio
+	Done  bool   `json:"done"`
 }
 
 func (s *cartesiaTTSStream) readLoop() {
@@ -181,6 +190,7 @@ func (s *cartesiaTTSStream) readLoop() {
 	for {
 		_, message, err := s.conn.ReadMessage()
 		if err != nil {
+			logger.Logger.Errorw("[cartesia.readLoop] s.conn.ReadMessage failed", err)
 			if !websocket.IsCloseError(err, websocket.CloseNormalClosure) {
 				s.errCh <- err
 			}
@@ -189,10 +199,12 @@ func (s *cartesiaTTSStream) readLoop() {
 
 		var resp cartesiaWSResponse
 		if err := json.Unmarshal(message, &resp); err != nil {
+			logger.Logger.Errorw("[cartesia.readLoop] json.Unmarshal failed", err)
 			continue
 		}
 
 		if resp.Type == "error" {
+			logger.Logger.Warnw("[cartesia.readLoop] received error message", nil)
 			s.errCh <- fmt.Errorf("cartesia error: %s", resp.Error)
 			return
 		}
@@ -262,6 +274,7 @@ func (s *cartesiaTTSStream) Next() (*tts.SynthesizedAudio, error) {
 		if !ok {
 			select {
 			case err := <-s.errCh:
+				logger.Logger.Errorw("[cartesiaTTSStream.Next] stream closed with error", err)
 				return nil, err
 			default:
 				return nil, io.EOF
@@ -269,7 +282,7 @@ func (s *cartesiaTTSStream) Next() (*tts.SynthesizedAudio, error) {
 		}
 		return audio, nil
 	case err := <-s.errCh:
+		logger.Logger.Errorw("[cartesiaTTSStream.Next] stream error", err)
 		return nil, err
 	}
 }
-
