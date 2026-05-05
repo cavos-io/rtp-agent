@@ -11,6 +11,8 @@ import (
 	"net/url"
 	"sync"
 
+	"github.com/cavos-io/rtp-agent/library/logger"
+
 	"github.com/cavos-io/rtp-agent/core/stt"
 	"github.com/cavos-io/rtp-agent/model"
 	"github.com/gorilla/websocket"
@@ -45,6 +47,7 @@ func (s *AssemblyAISTT) Stream(ctx context.Context, language string) (stt.Recogn
 
 	conn, _, err := websocket.DefaultDialer.DialContext(ctx, u.String(), header)
 	if err != nil {
+		logger.Logger.Errorw("[assemblyai.Stream] websocket.DefaultDialer.DialContext failed", err)
 		return nil, err
 	}
 
@@ -69,9 +72,10 @@ func (s *AssemblyAISTT) Recognize(ctx context.Context, frames []*model.AudioFram
 
 	uploadReq, _ := http.NewRequestWithContext(ctx, "POST", "https://api.assemblyai.com/v2/upload", bytes.NewReader(buf.Bytes()))
 	uploadReq.Header.Set("Authorization", s.apiKey)
-	
+
 	uploadResp, err := http.DefaultClient.Do(uploadReq)
 	if err != nil {
+		logger.Logger.Errorw("[assemblyai.Recognize] http.DefaultClient.Do failed", err)
 		return nil, err
 	}
 	defer uploadResp.Body.Close()
@@ -79,7 +83,10 @@ func (s *AssemblyAISTT) Recognize(ctx context.Context, frames []*model.AudioFram
 	var uploadResult struct {
 		UploadURL string `json:"upload_url"`
 	}
-	json.NewDecoder(uploadResp.Body).Decode(&uploadResult)
+	if err := json.NewDecoder(uploadResp.Body).Decode(&uploadResult); err != nil {
+		logger.Logger.Errorw("[assemblyai.Recognize] json.NewDecoder.Decode failed", err)
+		return nil, err
+	}
 
 	reqBody := map[string]interface{}{
 		"audio_url": uploadResult.UploadURL,
@@ -88,13 +95,23 @@ func (s *AssemblyAISTT) Recognize(ctx context.Context, frames []*model.AudioFram
 		reqBody["language_code"] = language
 	}
 
-	jsonBody, _ := json.Marshal(reqBody)
-	req, _ := http.NewRequestWithContext(ctx, "POST", "https://api.assemblyai.com/v2/transcript", bytes.NewBuffer(jsonBody))
+	jsonBody, err := json.Marshal(reqBody)
+	if err != nil {
+		logger.Logger.Errorw("[assemblyai.Recognize] json.Marshal failed", err)
+		return nil, err
+	}
+
+	req, err := http.NewRequestWithContext(ctx, "POST", "https://api.assemblyai.com/v2/transcript", bytes.NewBuffer(jsonBody))
+	if err != nil {
+		logger.Logger.Errorw("[assemblyai.Recognize] http.NewRequestWithContext failed", err)
+		return nil, err
+	}
 	req.Header.Set("Authorization", s.apiKey)
 	req.Header.Set("Content-Type", "application/json")
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
+		logger.Logger.Errorw("[assemblyai.Recognize] http.DefaultClient.Do failed", err)
 		return nil, err
 	}
 	defer resp.Body.Close()
@@ -102,7 +119,10 @@ func (s *AssemblyAISTT) Recognize(ctx context.Context, frames []*model.AudioFram
 	var result struct {
 		ID string `json:"id"`
 	}
-	json.NewDecoder(resp.Body).Decode(&result)
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		logger.Logger.Errorw("[assemblyai.Recognize] json.NewDecoder.Decode failed", err)
+		return nil, err
+	}
 
 	return &stt.SpeechEvent{
 		Type: stt.SpeechEventFinalTranscript,
@@ -139,11 +159,13 @@ func (s *assemblyAISTTStream) readLoop() {
 			if !websocket.IsCloseError(err, websocket.CloseNormalClosure) {
 				s.errCh <- err
 			}
+			logger.Logger.Errorw("[assemblyai.readLoop] s.conn.ReadMessage failed", err)
 			return
 		}
 
 		var resp aaiResponse
 		if err := json.Unmarshal(message, &resp); err != nil {
+			logger.Logger.Errorw("[assemblyai.readLoop] json.Unmarshal failed", err)
 			continue
 		}
 
@@ -156,6 +178,7 @@ func (s *assemblyAISTTStream) readLoop() {
 		}
 
 		if resp.Error != "" {
+			logger.Logger.Errorw("[assemblyai.readLoop] error message received from AssemblyAI", nil, "error", resp.Error)
 			s.errCh <- fmt.Errorf("assemblyai error: %s", resp.Error)
 			return
 		}
@@ -218,8 +241,10 @@ func (s *assemblyAISTTStream) Next() (*stt.SpeechEvent, error) {
 		if !ok {
 			select {
 			case err := <-s.errCh:
+				logger.Logger.Errorw("[assemblyai.Next] stream closed with error", err)
 				return nil, err
 			default:
+				logger.Logger.Infow("[assemblyai.Next] stream closed", nil)
 				return nil, io.EOF
 			}
 		}
@@ -228,4 +253,3 @@ func (s *assemblyAISTTStream) Next() (*stt.SpeechEvent, error) {
 		return nil, err
 	}
 }
-
