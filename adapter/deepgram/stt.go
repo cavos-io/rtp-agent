@@ -143,6 +143,7 @@ func (s *DeepgramSTT) Stream(ctx context.Context, languageStr string) (stt.Recog
 
 	conn, _, err := websocket.DefaultDialer.DialContext(ctx, u.String(), header)
 	if err != nil {
+		logger.Logger.Errorw("[deepgram.Stream] websocket.DefaultDialer.DialContext failed", err)
 		return nil, fmt.Errorf("failed to dial deepgram websocket: %w", err)
 	}
 
@@ -170,6 +171,7 @@ func (s *DeepgramSTT) Recognize(ctx context.Context, frames []*model.AudioFrame,
 
 	u, err := url.Parse(fmt.Sprintf("%s/v1/listen", strings.TrimSuffix(s.baseURL, "/")))
 	if err != nil {
+		logger.Logger.Errorw("[deepgram.Recognize] url.Parse failed", err)
 		return nil, err
 	}
 	q := u.Query()
@@ -203,6 +205,7 @@ func (s *DeepgramSTT) Recognize(ctx context.Context, frames []*model.AudioFrame,
 
 	req, err := http.NewRequestWithContext(ctx, "POST", apiURL, bytes.NewReader(buf.Bytes()))
 	if err != nil {
+		logger.Logger.Errorw("[deepgram.Recognize] http.NewRequestWithContext failed", err)
 		return nil, err
 	}
 
@@ -211,12 +214,14 @@ func (s *DeepgramSTT) Recognize(ctx context.Context, frames []*model.AudioFrame,
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
+		logger.Logger.Errorw("[deepgram.Recognize] http.DefaultClient.Do failed", err)
 		return nil, err
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
 		respBody, _ := io.ReadAll(resp.Body)
+		logger.Logger.Warnw("[deepgram.Recognize] HTTP response non-OK status", nil)
 		return nil, fmt.Errorf("deepgram recognize error: %s", string(respBody))
 	}
 
@@ -231,6 +236,7 @@ func (s *DeepgramSTT) Recognize(ctx context.Context, frames []*model.AudioFrame,
 		} `json:"results"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		logger.Logger.Warnw("[deepgram.Recognize] operation failed", nil)
 		return nil, err
 	}
 
@@ -295,6 +301,7 @@ func (s *deepgramStream) readLoop() {
 
 		var resp dgResponse
 		if err := json.Unmarshal(message, &resp); err != nil {
+			logger.Logger.Errorw("[deepgramStream.readLoop] json.Unmarshal failed", err)
 			continue
 		}
 
@@ -409,11 +416,13 @@ func (s *deepgramStream) Next() (*stt.SpeechEvent, error) {
 	case <-s.ctx.Done():
 		return nil, io.EOF
 	case err := <-s.errCh:
+		logger.Logger.Errorw("[deepgramStream.Next] stream error", err)
 		return nil, err
 	case event, ok := <-s.events:
 		if !ok {
 			select {
 			case err := <-s.errCh:
+				logger.Logger.Errorw("[deepgramStream.Next] stream closed with error", err)
 				return nil, err
 			default:
 				return nil, io.EOF

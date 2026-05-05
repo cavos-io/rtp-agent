@@ -10,6 +10,8 @@ import (
 	"net/url"
 	"sync"
 
+	"github.com/cavos-io/rtp-agent/library/logger"
+
 	"github.com/cavos-io/rtp-agent/core/tts"
 	"github.com/cavos-io/rtp-agent/model"
 	"github.com/gorilla/websocket"
@@ -34,7 +36,7 @@ func (t *DeepgramTTS) Label() string { return "deepgram.TTS" }
 func (t *DeepgramTTS) Capabilities() tts.TTSCapabilities {
 	return tts.TTSCapabilities{Streaming: true, AlignedTranscript: false}
 }
-func (t *DeepgramTTS) SampleRate() int { return 48000 }
+func (t *DeepgramTTS) SampleRate() int  { return 48000 }
 func (t *DeepgramTTS) NumChannels() int { return 1 }
 
 func (t *DeepgramTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStream, error) {
@@ -46,6 +48,7 @@ func (t *DeepgramTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedS
 
 	req, err := http.NewRequestWithContext(ctx, "POST", u, bytes.NewBuffer(jsonBody))
 	if err != nil {
+		logger.Logger.Errorw("[deepgram.Synthesize] http.NewRequestWithContext failed", err)
 		return nil, err
 	}
 
@@ -54,12 +57,14 @@ func (t *DeepgramTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedS
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
+		logger.Logger.Errorw("[deepgram.Synthesize] http.DefaultClient.Do failed", err)
 		return nil, err
 	}
 
 	if resp.StatusCode != http.StatusOK {
 		respBody, _ := io.ReadAll(resp.Body)
 		resp.Body.Close()
+		logger.Logger.Warnw("[deepgram.Synthesize] HTTP response non-OK status", nil)
 		return nil, fmt.Errorf("deepgram tts error: %s", string(respBody))
 	}
 
@@ -81,13 +86,14 @@ func (t *DeepgramTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) 
 
 	conn, _, err := websocket.DefaultDialer.DialContext(ctx, u.String(), header)
 	if err != nil {
+		logger.Logger.Errorw("[deepgram.Stream] websocket.DefaultDialer.DialContext failed", err)
 		return nil, err
 	}
 
 	stream := &deepgramTTSStream{
-		conn:   conn,
-		audio:  make(chan *tts.SynthesizedAudio, 10),
-		errCh:  make(chan error, 1),
+		conn:  conn,
+		audio: make(chan *tts.SynthesizedAudio, 10),
+		errCh: make(chan error, 1),
 	}
 
 	go stream.readLoop()
@@ -103,6 +109,7 @@ func (s *deepgramTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 	buf := make([]byte, 4096)
 	n, err := s.resp.Body.Read(buf)
 	if err != nil {
+		logger.Logger.Errorw("[deepgramTTSChunkedStream.Next] error reading response body", err)
 		if err == io.EOF {
 			return nil, io.EOF
 		}
@@ -135,6 +142,7 @@ func (s *deepgramTTSStream) readLoop() {
 	defer close(s.audio)
 	for {
 		msgType, message, err := s.conn.ReadMessage()
+		logger.Logger.Errorw("[deepgram.readLoop] s.conn.ReadMessage failed", err)
 		if err != nil {
 			if !websocket.IsCloseError(err, websocket.CloseNormalClosure) {
 				s.errCh <- err
@@ -206,6 +214,7 @@ func (s *deepgramTTSStream) Next() (*tts.SynthesizedAudio, error) {
 		if !ok {
 			select {
 			case err := <-s.errCh:
+				logger.Logger.Errorw("[deepgramTTSStream.Next] stream closed with error", err)
 				return nil, err
 			default:
 				return nil, io.EOF
@@ -213,7 +222,7 @@ func (s *deepgramTTSStream) Next() (*tts.SynthesizedAudio, error) {
 		}
 		return audio, nil
 	case err := <-s.errCh:
+		logger.Logger.Errorw("[deepgramTTSStream.Next] stream error", err)
 		return nil, err
 	}
 }
-
