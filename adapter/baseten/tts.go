@@ -9,6 +9,8 @@ import (
 	"io"
 	"net/http"
 
+	"github.com/cavos-io/rtp-agent/library/logger"
+
 	"github.com/cavos-io/rtp-agent/core/tts"
 	"github.com/cavos-io/rtp-agent/model"
 )
@@ -32,7 +34,7 @@ func (t *BasetenTTS) Label() string { return "baseten.TTS" }
 func (t *BasetenTTS) Capabilities() tts.TTSCapabilities {
 	return tts.TTSCapabilities{Streaming: false, AlignedTranscript: false}
 }
-func (t *BasetenTTS) SampleRate() int { return 24000 }
+func (t *BasetenTTS) SampleRate() int  { return 24000 }
 func (t *BasetenTTS) NumChannels() int { return 1 }
 
 func (t *BasetenTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStream, error) {
@@ -46,6 +48,7 @@ func (t *BasetenTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedSt
 	jsonBody, _ := json.Marshal(reqBody)
 	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewBuffer(jsonBody))
 	if err != nil {
+		logger.Logger.Errorw("[baseten.Synthesize] http.NewRequestWithContext failed", err)
 		return nil, err
 	}
 
@@ -54,12 +57,14 @@ func (t *BasetenTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedSt
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
+		logger.Logger.Errorw("[baseten.Synthesize] http.DefaultClient.Do failed", err)
 		return nil, err
 	}
 
 	if resp.StatusCode != http.StatusOK {
 		respBody, _ := io.ReadAll(resp.Body)
 		resp.Body.Close()
+		logger.Logger.Warnw("[baseten.Synthesize] HTTP response non-OK status", nil)
 		return nil, fmt.Errorf("baseten tts error: %s", string(respBody))
 	}
 
@@ -69,6 +74,7 @@ func (t *BasetenTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedSt
 }
 
 func (t *BasetenTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
+	logger.Logger.Warnw("[baseten.TTS.Stream] streaming input is not supported natively via REST API", nil)
 	return nil, fmt.Errorf("baseten streaming tts not natively supported by basic rest api")
 }
 
@@ -82,6 +88,7 @@ func (s *basetenTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 	}
 
 	if err := json.NewDecoder(s.resp.Body).Decode(&result); err != nil {
+		logger.Logger.Errorw("[baseten.Next] json.NewDecoder.Decode failed", err)
 		if err == io.EOF {
 			return nil, io.EOF
 		}
@@ -94,6 +101,7 @@ func (s *basetenTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 
 	data, err := base64.StdEncoding.DecodeString(result.Audio)
 	if err != nil {
+		logger.Logger.Errorw("[baseten.Next] base64.StdEncoding.DecodeString failed", err)
 		return nil, err
 	}
 
@@ -110,4 +118,3 @@ func (s *basetenTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 func (s *basetenTTSChunkedStream) Close() error {
 	return s.resp.Body.Close()
 }
-

@@ -9,6 +9,8 @@ import (
 	"io"
 	"net/http"
 
+	"github.com/cavos-io/rtp-agent/library/logger"
+
 	"github.com/cavos-io/rtp-agent/core/stt"
 	"github.com/cavos-io/rtp-agent/model"
 )
@@ -34,6 +36,7 @@ func (s *BasetenSTT) Capabilities() stt.STTCapabilities {
 }
 
 func (s *BasetenSTT) Stream(ctx context.Context, language string) (stt.RecognizeStream, error) {
+	logger.Logger.Errorw("[baseten.Stream] operation not supported", nil)
 	return nil, fmt.Errorf("baseten streaming stt not natively supported by basic rest api")
 }
 
@@ -57,6 +60,7 @@ func (s *BasetenSTT) Recognize(ctx context.Context, frames []*model.AudioFrame, 
 	jsonBody, _ := json.Marshal(reqBody)
 	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewBuffer(jsonBody))
 	if err != nil {
+		logger.Logger.Errorw("[baseten.Recognize] http.NewRequestWithContext failed", err)
 		return nil, err
 	}
 
@@ -65,12 +69,14 @@ func (s *BasetenSTT) Recognize(ctx context.Context, frames []*model.AudioFrame, 
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
+		logger.Logger.Errorw("[baseten.Recognize] http.DefaultClient.Do failed", err)
 		return nil, err
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
 		respBody, _ := io.ReadAll(resp.Body)
+		logger.Logger.Warnw("[baseten.Recognize] HTTP response non-OK status", nil)
 		return nil, fmt.Errorf("baseten stt error: %s", string(respBody))
 	}
 
@@ -78,6 +84,7 @@ func (s *BasetenSTT) Recognize(ctx context.Context, frames []*model.AudioFrame, 
 		Text string `json:"text"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		logger.Logger.Warnw("[baseten.Recognize] operation failed", nil)
 		return nil, err
 	}
 
@@ -88,4 +95,3 @@ func (s *BasetenSTT) Recognize(ctx context.Context, frames []*model.AudioFrame, 
 		},
 	}, nil
 }
-
