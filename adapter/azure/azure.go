@@ -6,12 +6,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"log/slog"
 	"net/http"
 
 	"github.com/cavos-io/rtp-agent/core/stt"
 	"github.com/cavos-io/rtp-agent/core/tts"
 	"github.com/cavos-io/rtp-agent/library/audio"
+	"github.com/cavos-io/rtp-agent/library/logger"
 	"github.com/cavos-io/rtp-agent/library/utils/language"
 	"github.com/cavos-io/rtp-agent/model"
 )
@@ -36,7 +36,7 @@ func (s *AzureSTT) Capabilities() stt.STTCapabilities {
 }
 
 func (s *AzureSTT) Stream(ctx context.Context, language string) (stt.RecognizeStream, error) {
-	slog.Error("[STT] azure: streaming not supported — Stream() called but Azure STT only supports Recognize()")
+	logger.Logger.Errorw("[STT] azure: streaming not supported — Stream() called but Azure STT only supports Recognize()", nil)
 	return nil, fmt.Errorf("streaming azure stt not yet implemented via rest")
 }
 
@@ -47,14 +47,18 @@ func (s *AzureSTT) Recognize(ctx context.Context, frames []*model.AudioFrame, la
 	}
 
 	url := fmt.Sprintf("https://%s.stt.speech.microsoft.com/speech/recognition/conversation/cognitiveservices/v1?language=%s", s.region, languageStr)
-	slog.Debug("azure stt recognize request", "url", url)
+	logger.Logger.Debugw("[STT] azure: recognize request",
+		"url", url,
+		"language", languageStr,
+		"frames", len(frames),
+	)
 
 	buf := audio.FramesToWAV(frames)
-	slog.Info("[STT] azure: sending WAV", "total_bytes", buf.Len(), "frames", len(frames))
+	logger.Logger.Debugw("[STT] azure: sending WAV", "total_bytes", buf.Len(), "frames", len(frames))
 
 	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(buf.Bytes()))
 	if err != nil {
-		slog.Error("[STT] azure: failed to create request", "err", err)
+		logger.Logger.Errorw("[STT] azure: failed to create HTTP request", err)
 		return nil, err
 	}
 
@@ -63,16 +67,22 @@ func (s *AzureSTT) Recognize(ctx context.Context, frames []*model.AudioFrame, la
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		slog.Error("[STT] azure: request failed", "err", err)
+		logger.Logger.Errorw("[STT] azure: HTTP request failed", err)
 		return nil, err
 	}
 	defer resp.Body.Close()
 
 	respBody, _ := io.ReadAll(resp.Body)
-	slog.Info("[STT] azure: response body", "status", resp.StatusCode, "body", string(respBody))
+	logger.Logger.Debugw("[STT] azure: HTTP response received",
+		"status", resp.StatusCode,
+		"body", string(respBody),
+	)
 
 	if resp.StatusCode != http.StatusOK {
-		slog.Error("[STT] azure: request failed", "status", resp.StatusCode, "body", string(respBody))
+		logger.Logger.Errorw("[STT] azure: non-200 response",
+			fmt.Errorf("azure stt status %d: %s", resp.StatusCode, string(respBody)),
+			"status", resp.StatusCode,
+		)
 		return nil, fmt.Errorf("azure stt error: %s", string(respBody))
 	}
 
@@ -81,10 +91,14 @@ func (s *AzureSTT) Recognize(ctx context.Context, frames []*model.AudioFrame, la
 		RecognitionStatus string `json:"RecognitionStatus"`
 	}
 	if err := json.Unmarshal(respBody, &result); err != nil {
+		logger.Logger.Errorw("[STT] azure: failed to parse response JSON", err)
 		return nil, err
 	}
 
-	slog.Info("[STT] azure: Recognize result", "status", result.RecognitionStatus, "text", result.DisplayText)
+	logger.Logger.Infow("[STT] azure: recognize result",
+		"recognition_status", result.RecognitionStatus,
+		"text", result.DisplayText,
+	)
 	return &stt.SpeechEvent{
 		Type: stt.SpeechEventFinalTranscript,
 		Alternatives: []stt.SpeechData{
@@ -121,8 +135,15 @@ func (t *AzureTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStre
 	url := fmt.Sprintf("https://%s.tts.speech.microsoft.com/cognitiveservices/v1", t.region)
 	ssml := fmt.Sprintf(`<speak version='1.0' xml:lang='en-US'><voice name='%s'>%s</voice></speak>`, t.voice, text)
 
+	logger.Logger.Debugw("[TTS] azure: synthesize request",
+		"url", url,
+		"voice", t.voice,
+		"text_length", len(text),
+	)
+
 	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewBufferString(ssml))
 	if err != nil {
+		logger.Logger.Errorw("[TTS] azure: failed to create HTTP request", err)
 		return nil, err
 	}
 
@@ -132,21 +153,28 @@ func (t *AzureTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStre
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
+		logger.Logger.Errorw("[TTS] azure: HTTP request failed", err)
 		return nil, err
 	}
 
 	if resp.StatusCode != http.StatusOK {
 		respBody, _ := io.ReadAll(resp.Body)
 		resp.Body.Close()
+		logger.Logger.Errorw("[TTS] azure: non-200 response",
+			fmt.Errorf("azure tts status %d: %s", resp.StatusCode, string(respBody)),
+			"status", resp.StatusCode,
+		)
 		return nil, fmt.Errorf("azure tts error: %s", string(respBody))
 	}
 
+	logger.Logger.Debugw("[TTS] azure: synthesis HTTP response OK", "status", resp.StatusCode)
 	return &azureTTSChunkedStream{
 		resp: resp,
 	}, nil
 }
 
 func (t *AzureTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
+	logger.Logger.Errorw("[TTS] azure: streaming not supported — Stream() called but Azure TTS only supports Synthesize()", nil)
 	return nil, fmt.Errorf("streaming azure tts not yet implemented")
 }
 
@@ -158,6 +186,7 @@ func (s *azureTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 	buf := make([]byte, 4096)
 	n, err := s.resp.Body.Read(buf)
 	if err != nil {
+		logger.Logger.Errorw("[TTS] azure: error reading response body", err)
 		if err == io.EOF {
 			return nil, io.EOF
 		}
