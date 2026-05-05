@@ -8,6 +8,8 @@ import (
 	"io"
 	"net/http"
 
+	"github.com/cavos-io/rtp-agent/library/logger"
+
 	"github.com/cavos-io/rtp-agent/core/tts"
 	"github.com/cavos-io/rtp-agent/model"
 )
@@ -31,7 +33,7 @@ func (t *CambaiTTS) Label() string { return "cambai.TTS" }
 func (t *CambaiTTS) Capabilities() tts.TTSCapabilities {
 	return tts.TTSCapabilities{Streaming: false, AlignedTranscript: false}
 }
-func (t *CambaiTTS) SampleRate() int { return 24000 }
+func (t *CambaiTTS) SampleRate() int  { return 24000 }
 func (t *CambaiTTS) NumChannels() int { return 1 }
 
 func (t *CambaiTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStream, error) {
@@ -45,6 +47,7 @@ func (t *CambaiTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStr
 	jsonBody, _ := json.Marshal(reqBody)
 	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewBuffer(jsonBody))
 	if err != nil {
+		logger.Logger.Errorw("[cambai.Synthesize] http.NewRequestWithContext failed", err)
 		return nil, err
 	}
 
@@ -53,12 +56,14 @@ func (t *CambaiTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStr
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
+		logger.Logger.Errorw("[cambai.Synthesize] http.DefaultClient.Do failed", err)
 		return nil, err
 	}
 
 	if resp.StatusCode != http.StatusOK {
 		respBody, _ := io.ReadAll(resp.Body)
 		resp.Body.Close()
+		logger.Logger.Warnw("[cambai.Synthesize] HTTP response non-OK status", nil)
 		return nil, fmt.Errorf("cambai tts error: %s", string(respBody))
 	}
 
@@ -68,6 +73,7 @@ func (t *CambaiTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStr
 }
 
 func (t *CambaiTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
+	logger.Logger.Warnw("[cambai.TTS.Stream] streaming input is not supported natively via REST API", nil)
 	return nil, fmt.Errorf("cambai streaming tts not natively supported by basic rest api")
 }
 
@@ -79,6 +85,7 @@ func (s *cambaiTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 	buf := make([]byte, 4096)
 	n, err := s.resp.Body.Read(buf)
 	if err != nil {
+		logger.Logger.Errorw("[cambaiTTSChunkedStream.Next] error reading response body", err)
 		if err == io.EOF {
 			return nil, io.EOF
 		}
@@ -98,4 +105,3 @@ func (s *cambaiTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 func (s *cambaiTTSChunkedStream) Close() error {
 	return s.resp.Body.Close()
 }
-
