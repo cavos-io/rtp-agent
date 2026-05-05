@@ -1,6 +1,7 @@
 package clova
 
 import (
+	"github.com/cavos-io/rtp-agent/library/logger"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -47,6 +48,7 @@ func (s *ClovaSTT) Recognize(ctx context.Context, frames []*model.AudioFrame, la
 
 	req, err := http.NewRequestWithContext(ctx, "POST", apiURL, bytes.NewReader(buf.Bytes()))
 	if err != nil {
+		logger.Logger.Errorw("[clova.Recognize] http.NewRequestWithContext failed", err)
 		return nil, err
 	}
 
@@ -56,12 +58,14 @@ func (s *ClovaSTT) Recognize(ctx context.Context, frames []*model.AudioFrame, la
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
+		logger.Logger.Errorw("[clova.Recognize] http.DefaultClient.Do failed", err)
 		return nil, err
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
 		respBody, _ := io.ReadAll(resp.Body)
+		logger.Logger.Warnw("[clova.Recognize] HTTP response non-OK status", nil)
 		return nil, fmt.Errorf("clova stt error: %s", string(respBody))
 	}
 
@@ -69,6 +73,7 @@ func (s *ClovaSTT) Recognize(ctx context.Context, frames []*model.AudioFrame, la
 		Text string `json:"text"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		logger.Logger.Warnw("[clova.Recognize] operation failed", nil)
 		return nil, err
 	}
 

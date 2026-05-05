@@ -1,6 +1,7 @@
 package clova
 
 import (
+	"github.com/cavos-io/rtp-agent/library/logger"
 	"bytes"
 	"context"
 	"fmt"
@@ -49,6 +50,7 @@ func (t *ClovaTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStre
 
 	req, err := http.NewRequestWithContext(ctx, "POST", apiURL, bytes.NewBufferString(data.Encode()))
 	if err != nil {
+		logger.Logger.Errorw("[clova.Synthesize] http.NewRequestWithContext failed", err)
 		return nil, err
 	}
 
@@ -58,12 +60,14 @@ func (t *ClovaTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStre
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
+		logger.Logger.Errorw("[clova.Synthesize] http.DefaultClient.Do failed", err)
 		return nil, err
 	}
 
 	if resp.StatusCode != http.StatusOK {
 		respBody, _ := io.ReadAll(resp.Body)
 		resp.Body.Close()
+		logger.Logger.Warnw("[clova.Synthesize] HTTP response non-OK status", nil)
 		return nil, fmt.Errorf("clova tts error: %s", string(respBody))
 	}
 
