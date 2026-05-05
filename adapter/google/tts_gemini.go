@@ -6,6 +6,8 @@ import (
 	"io"
 	"strings"
 
+	"github.com/cavos-io/rtp-agent/library/logger"
+
 	"github.com/cavos-io/rtp-agent/core/tts"
 	"github.com/cavos-io/rtp-agent/model"
 	"google.golang.org/genai"
@@ -27,6 +29,7 @@ type GeminiTTS struct {
 
 func NewGeminiTTS(apiKey, model, voiceName, instructions string) (*GeminiTTS, error) {
 	if strings.TrimSpace(apiKey) == "" {
+		logger.Logger.Warnw("[google.NewGeminiTTS] condition check failed", nil)
 		return nil, fmt.Errorf("gemini tts: api key is required")
 	}
 	if strings.TrimSpace(model) == "" {
@@ -42,6 +45,7 @@ func NewGeminiTTS(apiKey, model, voiceName, instructions string) (*GeminiTTS, er
 		Backend: genai.BackendGeminiAPI,
 	})
 	if err != nil {
+		logger.Logger.Errorw("[google.NewGeminiTTS] operation failed", err)
 		return nil, err
 	}
 
@@ -78,11 +82,13 @@ func (t *GeminiTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStr
 
 	resp, err := t.client.Models.GenerateContent(ctx, t.model, genai.Text(text), config)
 	if err != nil {
+		logger.Logger.Errorw("[google.Synthesize] t.client.Models.GenerateContent failed", err)
 		return nil, err
 	}
 
 	audio, mimeType, err := extractGeminiAudio(resp)
 	if err != nil {
+		logger.Logger.Errorw("[google.Synthesize] extractGeminiAudio failed", err)
 		return nil, err
 	}
 
@@ -134,6 +140,7 @@ func (s *geminiTTSChunkedStream) Close() error { return nil }
 
 func extractGeminiAudio(resp *genai.GenerateContentResponse) ([]byte, string, error) {
 	if resp == nil {
+		logger.Logger.Warnw("[google.extractGeminiAudio] resp is nil", nil)
 		return nil, "", fmt.Errorf("gemini tts: nil response")
 	}
 	for _, candidate := range resp.Candidates {
@@ -150,5 +157,7 @@ func extractGeminiAudio(resp *genai.GenerateContentResponse) ([]byte, string, er
 			}
 		}
 	}
+
+	logger.Logger.Warnw("[google.extractGeminiAudio] response contained no audio data", nil)
 	return nil, "", fmt.Errorf("gemini tts: response contained no audio data")
 }

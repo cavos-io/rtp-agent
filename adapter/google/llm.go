@@ -7,6 +7,8 @@ import (
 	"io"
 	"iter"
 
+	"github.com/cavos-io/rtp-agent/library/logger"
+
 	"github.com/cavos-io/rtp-agent/core/llm"
 	"google.golang.org/genai"
 )
@@ -26,6 +28,7 @@ func NewGoogleLLM(apiKey string, model string) (*GoogleLLM, error) {
 		Backend: genai.BackendGeminiAPI,
 	})
 	if err != nil {
+		logger.Logger.Errorw("[google.NewGoogleLLM] operation failed", err)
 		return nil, err
 	}
 	return &GoogleLLM{
@@ -69,7 +72,9 @@ func (l *GoogleLLM) Chat(ctx context.Context, chatCtx *llm.ChatContext, opts ...
 		} else if fc, ok := item.(*llm.FunctionCall); ok {
 			// Convert function call to model part
 			args := make(map[string]any)
-			json.Unmarshal([]byte(fc.Arguments), &args)
+			if err := json.Unmarshal([]byte(fc.Arguments), &args); err != nil {
+				logger.Logger.Errorw("[google.Chat] failed to unmarshal function call arguments", err)
+			}
 			contents = append(contents, genai.NewContentFromFunctionCall(fc.Name, args, "model"))
 		} else if fco, ok := item.(*llm.FunctionCallOutput); ok {
 			// Convert function response to user part
@@ -101,7 +106,7 @@ func (l *GoogleLLM) Chat(ctx context.Context, chatCtx *llm.ChatContext, opts ...
 		}
 	}
 	stream := l.client.Models.GenerateContentStream(ctx, l.model, contents, config)
-	
+
 	next, stop := iter.Pull2(stream)
 
 	return &googleLLMStream{
@@ -121,6 +126,7 @@ func (s *googleLLMStream) Next() (*llm.ChatChunk, error) {
 		return nil, io.EOF
 	}
 	if err != nil {
+		logger.Logger.Errorw("[googleLLMStream.Next] error fetching next content chunk", err)
 		if errors.Is(err, genai.ErrPageDone) || errors.Is(err, io.EOF) {
 			return nil, io.EOF
 		}
@@ -169,4 +175,3 @@ func (s *googleLLMStream) Close() error {
 	}
 	return nil
 }
-

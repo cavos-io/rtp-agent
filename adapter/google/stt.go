@@ -6,6 +6,8 @@ import (
 	"io"
 	"log/slog"
 
+	"github.com/cavos-io/rtp-agent/library/logger"
+
 	speech "cloud.google.com/go/speech/apiv1"
 	"cloud.google.com/go/speech/apiv1/speechpb"
 	"github.com/cavos-io/rtp-agent/core/stt"
@@ -40,6 +42,7 @@ func NewGoogleSTT(credentialsFile string, opts ...GoogleOption) (*GoogleSTT, err
 
 	client, err := speech.NewClient(ctx, clientOpts...)
 	if err != nil {
+		logger.Logger.Errorw("[google.NewGoogleSTT] speech.NewClient failed", err)
 		return nil, err
 	}
 
@@ -63,6 +66,7 @@ func NewGoogleSTTWithOptions(credentialsFile string, gOpts []GoogleOption, opts 
 
 	client, err := speech.NewClient(ctx, clientOpts...)
 	if err != nil {
+		logger.Logger.Errorw("[google.NewGoogleSTTWithOptions] speech.NewClient failed", err)
 		return nil, err
 	}
 
@@ -88,7 +92,7 @@ func (s *GoogleSTT) Stream(ctx context.Context, language string) (stt.RecognizeS
 	slog.Info("[STT] google: opening stream", "language", language)
 	stream, err := s.client.StreamingRecognize(ctx)
 	if err != nil {
-		slog.Error("[STT] google: stream open failed", "err", err)
+		logger.Logger.Errorw("[google.Stream] s.client.StreamingRecognize failed", err)
 		return nil, err
 	}
 
@@ -110,6 +114,7 @@ func (s *GoogleSTT) Stream(ctx context.Context, language string) (stt.RecognizeS
 	})
 
 	if err != nil {
+		logger.Logger.Errorw("[google.Stream] operation failed", err)
 		return nil, err
 	}
 
@@ -120,7 +125,7 @@ func (s *GoogleSTT) Stream(ctx context.Context, language string) (stt.RecognizeS
 	}
 	go gs.readLoop()
 
-	slog.Info("[STT] google: stream opened successfully", "language", language)
+	logger.Logger.Infow("[STT] google: stream opened successfully", "language", language)
 	return gs, nil
 }
 
@@ -149,6 +154,7 @@ func (s *GoogleSTT) Recognize(ctx context.Context, frames []*model.AudioFrame, l
 	})
 
 	if err != nil {
+		logger.Logger.Errorw("[google.Recognize] operation failed", err)
 		return nil, err
 	}
 
@@ -181,6 +187,7 @@ func (s *googleSTTStream) readLoop() {
 			if err != io.EOF {
 				s.errCh <- err
 			}
+			logger.Logger.Errorw("[google.readLoop] s.stream.Recv failed", err)
 			return
 		}
 
@@ -228,7 +235,7 @@ func (s *googleSTTStream) Close() error {
 	if s.closed {
 		return nil
 	}
-	slog.Info("[STT] google: stream closed", "total_frames_sent", s.frameCount)
+	logger.Logger.Infow("[STT] google: stream closed", "total_frames_sent", s.frameCount)
 	s.closed = true
 	return s.stream.CloseSend()
 }
@@ -242,14 +249,15 @@ func (s *googleSTTStream) Next() (*stt.SpeechEvent, error) {
 				if len(event.Alternatives) > 0 {
 					text = event.Alternatives[0].Text
 				}
-				slog.Info("[STT] google: transcript", "type", event.Type, "text", text)
+				logger.Logger.Infow("[STT] google: transcript", "type", event.Type, "text", text)
 			} else {
-				slog.Debug("[STT] google: event", "type", event.Type)
+				logger.Logger.Debugw("[STT] google: event", "type", event.Type)
 			}
 		}
 		if !ok {
 			select {
 			case err := <-s.errCh:
+				logger.Logger.Errorw("[google.Next] stream error", err)
 				return nil, err
 			default:
 				return nil, io.EOF
@@ -257,6 +265,7 @@ func (s *googleSTTStream) Next() (*stt.SpeechEvent, error) {
 		}
 		return event, nil
 	case err := <-s.errCh:
+		logger.Logger.Errorw("[google.Next] stream error", err)
 		return nil, err
 	}
 }

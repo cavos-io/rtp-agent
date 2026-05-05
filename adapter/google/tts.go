@@ -1,6 +1,7 @@
 package google
 
 import (
+	"github.com/cavos-io/rtp-agent/library/logger"
 	"context"
 	"fmt"
 	"io"
@@ -29,6 +30,7 @@ func NewGoogleTTS(credentialsFile string) (*GoogleTTS, error) {
 
 	client, err := texttospeech.NewClient(ctx, opts...)
 	if err != nil {
+		logger.Logger.Errorw("[google.NewGoogleTTS] texttospeech.NewClient failed", err)
 		return nil, err
 	}
 
@@ -63,6 +65,7 @@ func (t *GoogleTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStr
 
 	resp, err := t.client.SynthesizeSpeech(ctx, req)
 	if err != nil {
+		logger.Logger.Errorw("[google.Synthesize] t.client.SynthesizeSpeech failed", err)
 		return nil, err
 	}
 
