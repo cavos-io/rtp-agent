@@ -8,6 +8,8 @@ import (
 	"io"
 	"net/http"
 
+	"github.com/cavos-io/rtp-agent/library/logger"
+
 	"github.com/cavos-io/rtp-agent/core/tts"
 	"github.com/cavos-io/rtp-agent/model"
 )
@@ -31,7 +33,7 @@ func (t *AsyncAITTS) Label() string { return "asyncai.TTS" }
 func (t *AsyncAITTS) Capabilities() tts.TTSCapabilities {
 	return tts.TTSCapabilities{Streaming: false, AlignedTranscript: false}
 }
-func (t *AsyncAITTS) SampleRate() int { return 24000 }
+func (t *AsyncAITTS) SampleRate() int  { return 24000 }
 func (t *AsyncAITTS) NumChannels() int { return 1 }
 
 func (t *AsyncAITTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStream, error) {
@@ -42,9 +44,17 @@ func (t *AsyncAITTS) Synthesize(ctx context.Context, text string) (tts.ChunkedSt
 		"voice": t.voice,
 	}
 
-	jsonBody, _ := json.Marshal(reqBody)
+	var jsonBody []byte
+	if data, err := json.Marshal(reqBody); err != nil {
+		logger.Logger.Errorw("[asyncai.Synthesize] json.Marshal failed", err)
+		return nil, err
+	} else {
+		jsonBody = data
+	}
+
 	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewBuffer(jsonBody))
 	if err != nil {
+		logger.Logger.Errorw("[asyncai.Synthesize] http.NewRequestWithContext failed", err)
 		return nil, err
 	}
 
@@ -53,12 +63,14 @@ func (t *AsyncAITTS) Synthesize(ctx context.Context, text string) (tts.ChunkedSt
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
+		logger.Logger.Errorw("[asyncai.Synthesize] http.DefaultClient.Do failed", err)
 		return nil, err
 	}
 
 	if resp.StatusCode != http.StatusOK {
 		respBody, _ := io.ReadAll(resp.Body)
 		resp.Body.Close()
+		logger.Logger.Warnw("[asyncai.Synthesize] HTTP response non-OK status", nil)
 		return nil, fmt.Errorf("asyncai tts error: %s", string(respBody))
 	}
 
@@ -68,6 +80,7 @@ func (t *AsyncAITTS) Synthesize(ctx context.Context, text string) (tts.ChunkedSt
 }
 
 func (t *AsyncAITTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
+	logger.Logger.Warnw("[asyncai.TTS.Stream] streaming tts not natively supported by basic rest api, falling back to non-streaming Synthesize method", nil)
 	return nil, fmt.Errorf("asyncai streaming tts not natively supported by basic rest api")
 }
 
@@ -79,6 +92,7 @@ func (s *asyncaiTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 	buf := make([]byte, 4096)
 	n, err := s.resp.Body.Read(buf)
 	if err != nil {
+		logger.Logger.Errorw("[asyncaiTTSChunkedStream.Next] resp.Body.Read failed", err)
 		if err == io.EOF {
 			return nil, io.EOF
 		}
@@ -98,4 +112,3 @@ func (s *asyncaiTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 func (s *asyncaiTTSChunkedStream) Close() error {
 	return s.resp.Body.Close()
 }
-
