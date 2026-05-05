@@ -5,8 +5,6 @@ import (
 	"io"
 	"strings"
 	"sync"
-
-	"github.com/cavos-io/rtp-agent/library/audio"
 )
 
 type StreamAdapter struct {
@@ -166,10 +164,11 @@ func (w *streamAdapterWrapper) synthesizeOne(text string) {
 	}
 	defer chunked.Close()
 
-	sourceRate := w.adapter.tts.SampleRate()
-	// Target rate is usually 48000 for LiveKit agents, but we can potentially
-	// pull this from the output transport if needed. For now default to 48k parity.
-	targetRate := 48000 
+	// For non-streaming TTS providers (e.g. Azure) that never set DeltaText on
+	// audio chunks, inject the source sentence text on the first audio frame so
+	// that the transcription output (AlignedTextCh) receives it and live
+	// transcription appears in the LiveKit room.
+	deltaTextPending := text
 
 	for {
 		audioFrame, err := chunked.Next()
@@ -177,12 +176,9 @@ func (w *streamAdapterWrapper) synthesizeOne(text string) {
 			return
 		}
 
-		if audioFrame.Frame != nil && sourceRate != targetRate {
-			// Resample data
-			resampled := audio.Resample(audioFrame.Frame.Data, sourceRate, targetRate)
-			audioFrame.Frame.Data = resampled
-			audioFrame.Frame.SampleRate = uint32(targetRate)
-			audioFrame.Frame.SamplesPerChannel = uint32(len(resampled) / 2)
+		if deltaTextPending != "" && audioFrame.DeltaText == "" {
+			audioFrame.DeltaText = deltaTextPending
+			deltaTextPending = ""
 		}
 
 		select {
@@ -266,4 +262,3 @@ func splitSentences(text string) []string {
 	}
 	return sentences
 }
-
