@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"io"
 
+	"github.com/cavos-io/rtp-agent/library/logger"
+
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/transcribestreaming"
@@ -25,6 +27,7 @@ func NewAWSSTT(ctx context.Context, region string) (*AWSSTT, error) {
 
 	cfg, err := config.LoadDefaultConfig(ctx, opts...)
 	if err != nil {
+		logger.Logger.Errorw("[aws.NewAWSSTT] config.LoadDefaultConfig failed", err)
 		return nil, err
 	}
 
@@ -50,6 +53,7 @@ func (s *AWSSTT) Stream(ctx context.Context, language string) (stt.RecognizeStre
 		MediaSampleRateHertz: aws.Int32(16000),
 	})
 	if err != nil {
+		logger.Logger.Errorw("[aws.Stream] operation failed", err)
 		return nil, err
 	}
 
@@ -64,6 +68,7 @@ func (s *AWSSTT) Stream(ctx context.Context, language string) (stt.RecognizeStre
 }
 
 func (s *AWSSTT) Recognize(ctx context.Context, frames []*model.AudioFrame, language string) (*stt.SpeechEvent, error) {
+	logger.Logger.Warnw("[aws.Recognize] offline recognize is not natively supported by AWSSTT via simple upload (S3 required). Use Stream instead", nil)
 	// AWS Transcribe (non-streaming) uses jobs on S3. Since we don't have S3 upload configured,
 	// offline recognize is unsupported natively via simple buffer upload.
 	return nil, fmt.Errorf("offline recognize is not natively supported by AWSSTT via simple upload (S3 required). Use Stream instead")
@@ -82,6 +87,7 @@ func (s *awsSTTStream) readLoop() {
 		event := <-s.stream.Events()
 		if event == nil {
 			if err := s.stream.Err(); err != nil {
+				logger.Logger.Errorw("[awsSTTStream.readLoop] stream error", err)
 				if err != io.EOF {
 					s.errCh <- err
 				}
@@ -145,6 +151,7 @@ func (s *awsSTTStream) Next() (*stt.SpeechEvent, error) {
 		if !ok {
 			select {
 			case err := <-s.errCh:
+				logger.Logger.Errorw("[awsSTTStream.Next] stream closed with error", err)
 				return nil, err
 			default:
 				return nil, io.EOF
@@ -152,7 +159,7 @@ func (s *awsSTTStream) Next() (*stt.SpeechEvent, error) {
 		}
 		return event, nil
 	case err := <-s.errCh:
+		logger.Logger.Errorw("[awsSTTStream.Next] stream error", err)
 		return nil, err
 	}
 }
-

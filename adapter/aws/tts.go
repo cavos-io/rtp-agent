@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"io"
 
+	"github.com/cavos-io/rtp-agent/library/logger"
+
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/polly"
@@ -30,6 +32,7 @@ func NewAWSTTS(ctx context.Context, region string, voice string) (*AWSTTS, error
 
 	cfg, err := config.LoadDefaultConfig(ctx, opts...)
 	if err != nil {
+		logger.Logger.Errorw("[aws.NewAWSTTS] config.LoadDefaultConfig failed", err)
 		return nil, err
 	}
 
@@ -43,7 +46,7 @@ func (t *AWSTTS) Label() string { return "aws.TTS" }
 func (t *AWSTTS) Capabilities() tts.TTSCapabilities {
 	return tts.TTSCapabilities{Streaming: false, AlignedTranscript: false}
 }
-func (t *AWSTTS) SampleRate() int { return 16000 }
+func (t *AWSTTS) SampleRate() int  { return 16000 }
 func (t *AWSTTS) NumChannels() int { return 1 }
 
 func (t *AWSTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStream, error) {
@@ -55,6 +58,7 @@ func (t *AWSTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStream
 		Engine:       types.EngineNeural,
 	})
 	if err != nil {
+		logger.Logger.Errorw("[aws.Synthesize] operation failed", err)
 		return nil, err
 	}
 
@@ -64,6 +68,7 @@ func (t *AWSTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStream
 }
 
 func (t *AWSTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
+	logger.Logger.Warnw("[aws.TTS.Stream] streaming input is not supported natively via REST API", nil)
 	return nil, fmt.Errorf("streaming input for polly tts is not supported natively via rest")
 }
 
@@ -75,6 +80,7 @@ func (s *awsTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 	buf := make([]byte, 4096)
 	n, err := s.stream.Read(buf)
 	if err != nil {
+		logger.Logger.Errorw("[awsTTSChunkedStream.Next] read error", err)
 		if err == io.EOF {
 			return nil, io.EOF
 		}
@@ -94,4 +100,3 @@ func (s *awsTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 func (s *awsTTSChunkedStream) Close() error {
 	return s.stream.Close()
 }
-

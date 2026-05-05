@@ -1,6 +1,7 @@
 package aws
 
 import (
+	"github.com/cavos-io/rtp-agent/library/logger"
 	"context"
 	"encoding/json"
 	"io"
@@ -30,6 +31,7 @@ func NewAWSLLM(ctx context.Context, region string, model string) (*AWSLLM, error
 
 	cfg, err := config.LoadDefaultConfig(ctx, opts...)
 	if err != nil {
+		logger.Logger.Errorw("[aws.NewAWSLLM] config.LoadDefaultConfig failed", err)
 		return nil, err
 	}
 
@@ -167,6 +169,7 @@ func (l *AWSLLM) Chat(ctx context.Context, chatCtx *llm.ChatContext, opts ...llm
 
 	out, err := l.client.ConverseStream(ctx, req)
 	if err != nil {
+		logger.Logger.Errorw("[aws.Chat] l.client.ConverseStream failed", err)
 		return nil, err
 	}
 
@@ -189,6 +192,7 @@ func (s *awsLLMStream) Next() (*llm.ChatChunk, error) {
 		event := <-s.stream.Events()
 		if event == nil {
 			if err := s.stream.Err(); err != nil {
+				logger.Logger.Warnw("[aws.Next] operation failed", nil)
 				return nil, err
 			}
 			return nil, io.EOF
