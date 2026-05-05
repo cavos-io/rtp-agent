@@ -496,6 +496,7 @@ func (a *AgentActivity) OnInterimTranscript(ev *stt.SpeechEvent) {
 
 func (a *AgentActivity) OnFinalTranscript(ev *stt.SpeechEvent) {
 	if a.shouldIgnoreSTTEvent(false) {
+		logger.Logger.Debugw("Ignoring STT final transcript (shouldIgnoreSTTEvent=true)")
 		return
 	}
 
@@ -507,6 +508,7 @@ func (a *AgentActivity) OnFinalTranscript(ev *stt.SpeechEvent) {
 		transcript = ev.Alternatives[0].Text
 		confidence = ev.Alternatives[0].Confidence
 	}
+	logger.Logger.Infow("AgentActivity.OnFinalTranscript received", "text", transcript, "confidence", confidence)
 
 	a.transcriptMu.Lock()
 	if transcript != "" {
@@ -746,7 +748,7 @@ func (a *AgentActivity) runEOUDetection(info EndOfTurnInfo) {
 			return
 		case <-timer.C:
 			// EOU detected
-			logger.Logger.Infow("EOU detected, completing user turn")
+			logger.Logger.Infow("EOU detected, completing user turn", "currentTranscript", a.audioTranscript)
 
 			transcript := info.NewTranscript
 			if transcript == "" {

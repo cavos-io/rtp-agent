@@ -62,9 +62,7 @@ type AgentSessionOptions struct {
 	TranscriptRefreshRate         time.Duration
 	LinkedParticipant             lksdk.Participant
 	IVRDetection                  bool
-	// STTLanguage is the BCP-47 language tag passed to the STT stream
-	// (e.g. "id-ID", "en-US"). Leave empty to use the provider default.
-	STTLanguage string
+	Language                      string
 }
 
 type AgentSession struct {
@@ -256,6 +254,11 @@ func (s *AgentSession) Start(ctx context.Context) error {
 	// AudioRecognition consumes session.STT directly. Ensure it is stream-capable.
 	if s.STT != nil && !s.STT.Capabilities().Streaming {
 		s.STT = stt.NewStreamAdapter(s.STT, s.VAD)
+	}
+
+	// Ensure TTS is stream-capable.
+	if s.TTS != nil && !s.TTS.Capabilities().Streaming {
+		s.TTS = tts.NewStreamAdapter(s.TTS)
 	}
 
 	// Keep base agent fields aligned with effective session components.

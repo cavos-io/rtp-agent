@@ -7,6 +7,7 @@ import (
 	"sync"
 
 	"github.com/cavos-io/rtp-agent/library/audio"
+	"github.com/cavos-io/rtp-agent/library/logger"
 )
 
 type StreamAdapter struct {
@@ -24,7 +25,7 @@ func (s *StreamAdapter) Label() string {
 func (s *StreamAdapter) Capabilities() TTSCapabilities {
 	return TTSCapabilities{
 		Streaming:         true,
-		AlignedTranscript: false,
+		AlignedTranscript: true,
 	}
 }
 
@@ -162,23 +163,28 @@ func (w *streamAdapterWrapper) run() {
 func (w *streamAdapterWrapper) synthesizeOne(text string) {
 	chunked, err := w.adapter.tts.Synthesize(w.ctx, text)
 	if err != nil {
+		logger.Logger.Errorw("TTS StreamAdapter: Synthesize error", err, "text", text)
 		return
 	}
 	defer chunked.Close()
 
 	sourceRate := w.adapter.tts.SampleRate()
-	// Target rate is usually 48000 for LiveKit agents, but we can potentially
-	// pull this from the output transport if needed. For now default to 48k parity.
 	targetRate := 48000 
 
+	firstFrame := true
 	for {
 		audioFrame, err := chunked.Next()
 		if err != nil || audioFrame == nil {
 			return
 		}
 
+		// Attach the sentence text to the first frame so the UI can display it
+		if firstFrame {
+			audioFrame.DeltaText = text
+			firstFrame = false
+		}
+
 		if audioFrame.Frame != nil && sourceRate != targetRate {
-			// Resample data
 			resampled := audio.Resample(audioFrame.Frame.Data, sourceRate, targetRate)
 			audioFrame.Frame.Data = resampled
 			audioFrame.Frame.SampleRate = uint32(targetRate)
@@ -229,7 +235,19 @@ func (w *streamAdapterWrapper) collectReadySentencesLocked(flush bool) []string 
 	}
 
 	lastChar := w.textBuffer[len(w.textBuffer)-1]
-	hasPunctuation := lastChar == '.' || lastChar == '!' || lastChar == '?' || lastChar == '\n'
+	hasPunctuation := strings.ContainsRune(".,!?:;\n", rune(lastChar))
+
+	// If the buffer is getting too long (e.g. > 100 chars), force a split at the last space
+	// to prevent long silence while waiting for punctuation.
+	if !hasPunctuation && len(w.textBuffer) > 100 {
+		lastSpace := strings.LastIndex(w.textBuffer, " ")
+		if lastSpace > 20 { // Ensure we have a decent chunk
+			forced := w.textBuffer[:lastSpace]
+			w.textBuffer = w.textBuffer[lastSpace+1:]
+			return append(trimNonEmpty(sentences[:len(sentences)-1]), forced)
+		}
+	}
+
 	if !hasPunctuation {
 		w.textBuffer = sentences[len(sentences)-1]
 		sentences = sentences[:len(sentences)-1]
@@ -256,7 +274,7 @@ func splitSentences(text string) []string {
 	var current strings.Builder
 	for _, char := range text {
 		current.WriteRune(char)
-		if char == '.' || char == '!' || char == '?' || char == '\n' {
+		if strings.ContainsRune(".,!?:;\n", char) {
 			sentences = append(sentences, current.String())
 			current.Reset()
 		}
