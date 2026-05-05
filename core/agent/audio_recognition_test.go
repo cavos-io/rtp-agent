@@ -64,10 +64,10 @@ func TestAudioRecognitionPushAudioFansOutToStreams(t *testing.T) {
 
 type noopHooks struct{}
 
-func (noopHooks) OnStartOfSpeech(ev *vad.VADEvent)      {}
-func (noopHooks) OnEndOfSpeech(ev *vad.VADEvent)        {}
+func (noopHooks) OnStartOfSpeech(ev *vad.VADEvent)        {}
+func (noopHooks) OnEndOfSpeech(ev *vad.VADEvent)          {}
 func (noopHooks) OnInterimTranscript(ev *stt.SpeechEvent) {}
-func (noopHooks) OnFinalTranscript(ev *stt.SpeechEvent) {}
+func (noopHooks) OnFinalTranscript(ev *stt.SpeechEvent)   {}
 
 type failingVAD struct{}
 
@@ -92,9 +92,8 @@ func (f failingSTT) Recognize(ctx context.Context, frames []*model.AudioFrame, l
 
 func TestAudioRecognitionStartErrorPropagation(t *testing.T) {
 	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
-	recog := NewAudioRecognition(session, noopHooks{}, failingSTT{}, failingVAD{}, nil)
+	recog := NewAudioRecognition(session, noopHooks{}, failingSTT{}, failingVAD{}, nil, "en-EN")
 	if err := recog.Start(context.Background()); err == nil {
 		t.Fatalf("expected start to propagate stream initialization error")
 	}
 }
-

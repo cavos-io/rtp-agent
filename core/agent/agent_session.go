@@ -60,6 +60,9 @@ type AgentSessionOptions struct {
 	TranscriptRefreshRate         time.Duration
 	LinkedParticipant             lksdk.Participant
 	IVRDetection                  bool
+	// STTLanguage is the BCP-47 language tag passed to the STT stream
+	// (e.g. "id-ID", "en-US"). Leave empty to use the provider default.
+	STTLanguage string
 }
 
 type AgentSession struct {

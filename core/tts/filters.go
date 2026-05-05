@@ -65,7 +65,10 @@ func FilterMarkdown(text string) string {
 	text = strings.ReplaceAll(text, "~~", "")
 	text = strings.ReplaceAll(text, "`", "")
 
-	return strings.TrimSpace(text)
+	// Trim only vertical whitespace (newlines/tabs left by markdown removal),
+	// but preserve leading/trailing spaces so that BPE word-boundary tokens
+	// (e.g. " selamat") keep their inter-word space when sent to TTS.
+	return strings.Trim(text, "\r\n\t")
 }
 
 func FilterEmoji(text string) string {
@@ -77,4 +80,3 @@ func ApplyTextTransforms(text string) string {
 	text = FilterEmoji(text)
 	return text
 }
-

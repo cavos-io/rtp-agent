@@ -40,7 +40,7 @@ func newSileroVADStream(ctx context.Context, inf *inferencer, opts VADOptions) *
 	return &sileroVADStream{
 		ctx:                ctx,
 		inf:                inf,
-		events:             make(chan *vad.VADEvent, 20),
+		events:             make(chan *vad.VADEvent, 200),
 		sampleRate:         opts.SampleRate,
 		threshold:          opts.ActivationThreshold,
 		negThreshold:       opts.ActivationThreshold - hysteresis,

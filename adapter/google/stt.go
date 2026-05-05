@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"io"
+	"log/slog"
 
 	speech "cloud.google.com/go/speech/apiv1"
 	"cloud.google.com/go/speech/apiv1/speechpb"
@@ -84,8 +85,10 @@ func (s *GoogleSTT) Stream(ctx context.Context, language string) (stt.RecognizeS
 		language = "en-US"
 	}
 
+	slog.Info("[STT] google: opening stream", "language", language)
 	stream, err := s.client.StreamingRecognize(ctx)
 	if err != nil {
+		slog.Error("[STT] google: stream open failed", "err", err)
 		return nil, err
 	}
 
@@ -117,6 +120,7 @@ func (s *GoogleSTT) Stream(ctx context.Context, language string) (stt.RecognizeS
 	}
 	go gs.readLoop()
 
+	slog.Info("[STT] google: stream opened successfully", "language", language)
 	return gs, nil
 }
 
@@ -162,10 +166,11 @@ func (s *GoogleSTT) Recognize(ctx context.Context, frames []*model.AudioFrame, l
 }
 
 type googleSTTStream struct {
-	stream speechpb.Speech_StreamingRecognizeClient
-	events chan *stt.SpeechEvent
-	errCh  chan error
-	closed bool
+	stream     speechpb.Speech_StreamingRecognizeClient
+	events     chan *stt.SpeechEvent
+	errCh      chan error
+	closed     bool
+	frameCount int
 }
 
 func (s *googleSTTStream) readLoop() {
@@ -207,6 +212,7 @@ func (s *googleSTTStream) PushFrame(frame *model.AudioFrame) error {
 	if s.closed {
 		return io.ErrClosedPipe
 	}
+	s.frameCount++
 	return s.stream.Send(&speechpb.StreamingRecognizeRequest{
 		StreamingRequest: &speechpb.StreamingRecognizeRequest_AudioContent{
 			AudioContent: frame.Data,
@@ -222,6 +228,7 @@ func (s *googleSTTStream) Close() error {
 	if s.closed {
 		return nil
 	}
+	slog.Info("[STT] google: stream closed", "total_frames_sent", s.frameCount)
 	s.closed = true
 	return s.stream.CloseSend()
 }
@@ -229,6 +236,17 @@ func (s *googleSTTStream) Close() error {
 func (s *googleSTTStream) Next() (*stt.SpeechEvent, error) {
 	select {
 	case event, ok := <-s.events:
+		if ok && event != nil {
+			if event.Type == stt.SpeechEventFinalTranscript || event.Type == stt.SpeechEventInterimTranscript {
+				text := ""
+				if len(event.Alternatives) > 0 {
+					text = event.Alternatives[0].Text
+				}
+				slog.Info("[STT] google: transcript", "type", event.Type, "text", text)
+			} else {
+				slog.Debug("[STT] google: event", "type", event.Type)
+			}
+		}
 		if !ok {
 			select {
 			case err := <-s.errCh:

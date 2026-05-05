@@ -69,7 +69,6 @@ func WithLanguage(lang string) DeepgramOption {
 	}
 }
 
-
 func WithBaseURL(url string) DeepgramOption {
 	return func(s *DeepgramSTT) {
 		s.baseURL = url
@@ -159,6 +158,7 @@ func (s *DeepgramSTT) Stream(ctx context.Context, languageStr string) (stt.Recog
 	go stream.readLoop()
 	go stream.keepAliveLoop()
 
+	logger.Logger.Infow("[STT] deepgram: stream opened", "model", s.model, "language", languageStr)
 	return stream, nil
 }
 
@@ -251,11 +251,12 @@ func (s *DeepgramSTT) Recognize(ctx context.Context, frames []*model.AudioFrame,
 }
 
 type deepgramStream struct {
-	conn   *websocket.Conn
-	events chan *stt.SpeechEvent
-	errCh  chan error
-	mu     sync.Mutex
-	closed bool
+	conn       *websocket.Conn
+	events     chan *stt.SpeechEvent
+	errCh      chan error
+	mu         sync.Mutex
+	closed     bool
+	frameCount int
 
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -378,6 +379,7 @@ func (s *deepgramStream) PushFrame(frame *model.AudioFrame) error {
 	if s.closed {
 		return io.ErrClosedPipe
 	}
+	s.frameCount++
 	return s.conn.WriteMessage(websocket.BinaryMessage, frame.Data)
 }
 
@@ -393,6 +395,7 @@ func (s *deepgramStream) Close() error {
 	if s.closed {
 		return nil
 	}
+	logger.Logger.Infow("[STT] deepgram: stream closed", "total_frames_sent", s.frameCount)
 	s.closed = true
 	s.cancel()
 	_ = s.conn.WriteJSON(map[string]string{"type": "CloseStream"})
@@ -415,6 +418,13 @@ func (s *deepgramStream) Next() (*stt.SpeechEvent, error) {
 			default:
 				return nil, io.EOF
 			}
+		}
+		if event != nil && (event.Type == stt.SpeechEventFinalTranscript || event.Type == stt.SpeechEventInterimTranscript) {
+			text := ""
+			if len(event.Alternatives) > 0 {
+				text = event.Alternatives[0].Text
+			}
+			logger.Logger.Infow("[STT] deepgram: transcript", "type", event.Type, "text", text)
 		}
 		return event, nil
 	}
