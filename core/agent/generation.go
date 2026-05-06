@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"strings"
 	"sync"
 	"time"
@@ -167,6 +168,7 @@ func PerformLLMInference(ctx context.Context, l llm.LLM, chatCtx *llm.ChatContex
 			if chunk.Delta != nil {
 				if chunk.Delta.Content != "" {
 					sb.WriteString(chunk.Delta.Content)
+					log.Println("Delta Content:", chunk.Delta.Content) // Debug log for delta content
 					data.TextCh <- chunk.Delta.Content
 				}
 				if len(chunk.Delta.ToolCalls) > 0 {
@@ -216,6 +218,13 @@ func PerformLLMInference(ctx context.Context, l llm.LLM, chatCtx *llm.ChatContex
 
 		data.GeneratedText = sb.String()
 
+		logger.Logger.Infow("LLM inference completed",
+			"chunk_count", chunkCount,
+			"generated_text", data.GeneratedText,
+			"generated_text_length", len(data.GeneratedText),
+			"tools_emitted", len(toolCallsByIndex),
+			"elapsed_ms", time.Since(startTime).Milliseconds(),
+		)
 		if data.GeneratedText != "" {
 			if rc := GetRunContext(ctx); rc != nil && rc.SpeechHandle != nil && rc.SpeechHandle.RunResult != nil {
 				rc.SpeechHandle.RunResult.AddEvent(&ChatMessageRunEvent{

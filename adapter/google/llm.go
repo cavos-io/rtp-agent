@@ -6,6 +6,7 @@ import (
 	"errors"
 	"io"
 	"iter"
+	"log"
 
 	"github.com/cavos-io/rtp-agent/library/logger"
 
@@ -19,6 +20,7 @@ type GoogleLLM struct {
 }
 
 func NewGoogleLLM(apiKey string, model string) (*GoogleLLM, error) {
+	log.Println("Initializing GoogleLLM with model:", model, "and API key:", apiKey)
 	if model == "" {
 		model = "gemini-2.5-flash"
 	}
@@ -38,6 +40,7 @@ func NewGoogleLLM(apiKey string, model string) (*GoogleLLM, error) {
 }
 
 func (l *GoogleLLM) Chat(ctx context.Context, chatCtx *llm.ChatContext, opts ...llm.ChatOption) (llm.LLMStream, error) {
+	log.Println("Starting GoogleLLM Chat with model:", l.model)
 	options := &llm.ChatOptions{}
 	for _, opt := range opts {
 		opt(options)
@@ -106,7 +109,6 @@ func (l *GoogleLLM) Chat(ctx context.Context, chatCtx *llm.ChatContext, opts ...
 		}
 	}
 	stream := l.client.Models.GenerateContentStream(ctx, l.model, contents, config)
-
 	next, stop := iter.Pull2(stream)
 
 	return &googleLLMStream{
@@ -130,6 +132,7 @@ func (s *googleLLMStream) Next() (*llm.ChatChunk, error) {
 		if errors.Is(err, genai.ErrPageDone) || errors.Is(err, io.EOF) {
 			return nil, io.EOF
 		}
+		log.Printf("[GoogleLLM] Stream error: %v", err)
 		return nil, err
 	}
 
