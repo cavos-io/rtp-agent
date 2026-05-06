@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"github.com/cavos-io/rtp-agent/core/agent"
+	"github.com/cavos-io/rtp-agent/library/logger"
 )
 
 type Shutter interface {
@@ -14,7 +15,10 @@ type Shutter interface {
 
 type EndCallToolOptions struct {
 	ExtraDescription string
-	DeleteRoom       bool
+	// DeleteRoom controls whether the room is deleted when the call ends.
+	// Defaults to true when nil, matching Python's delete_room=True default.
+	// Set to pointer-to-false to disable room deletion.
+	DeleteRoom       *bool
 	EndInstructions  string
 	OnToolCalled     func(ctx *agent.RunContext)
 	OnToolCompleted  func(ctx *agent.RunContext, output string)
@@ -28,6 +32,11 @@ type EndCallTool struct {
 func NewEndCallTool(shutter Shutter, opts EndCallToolOptions) *EndCallTool {
 	if opts.EndInstructions == "" {
 		opts.EndInstructions = "say goodbye to the user"
+	}
+	// Default DeleteRoom to true (matches Python's delete_room=True default)
+	if opts.DeleteRoom == nil {
+		t := true
+		opts.DeleteRoom = &t
 	}
 	return &EndCallTool{
 		shutter: shutter,
@@ -73,7 +82,13 @@ func (t *EndCallTool) Parameters() map[string]any {
 }
 
 func (t *EndCallTool) Execute(ctx context.Context, args any) (any, error) {
+	logger.Logger.Debugw("end_call tool invoked",
+		"delete_room", t.opts.DeleteRoom != nil && *t.opts.DeleteRoom,
+		"end_instructions", t.opts.EndInstructions,
+	)
+
 	if t.shutter == nil {
+		logger.Logger.Errorw("end_call: shutter not available", fmt.Errorf("shutter not available"))
 		return "", fmt.Errorf("shutter not available")
 	}
 
@@ -88,20 +103,32 @@ func (t *EndCallTool) Execute(ctx context.Context, args any) (any, error) {
 	go func() {
 		// Wait for playout if possible
 		if rc != nil {
+			logger.Logger.Debugw("end_call: waiting for playout to finish")
 			_ = rc.WaitForPlayout(context.Background())
+			logger.Logger.Debugw("end_call: playout finished")
 		}
 
-		if t.opts.DeleteRoom {
-			_ = t.shutter.DeleteRoom(context.Background())
+		if t.opts.DeleteRoom != nil && *t.opts.DeleteRoom {
+			logger.Logger.Infow("end_call: deleting room")
+			if err := t.shutter.DeleteRoom(context.Background()); err != nil {
+				logger.Logger.Errorw("end_call: failed to delete room", err)
+			} else {
+				logger.Logger.Infow("end_call: room deleted successfully")
+			}
 		}
 
+		logger.Logger.Infow("end_call: shutting down session", "reason", "user_initiated")
 		t.shutter.Shutdown("user_initiated")
 	}()
 
 	if t.opts.OnToolCompleted != nil {
-		t.opts.OnToolCompleted(rc, "ended call")
+		t.opts.OnToolCompleted(rc, t.opts.EndInstructions)
 	}
 
-	return "Ending call...", nil
+	logger.Logger.Debugw("end_call: returning end instructions to LLM", "output", t.opts.EndInstructions)
+
+	// Return EndInstructions so the LLM receives it as the tool result and generates
+	// the final reply accordingly (e.g. "say goodbye to the user").
+	return t.opts.EndInstructions, nil
 }
 
