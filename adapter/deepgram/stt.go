@@ -327,8 +327,9 @@ func (s *deepgramStream) readLoop() {
 					})
 				}
 
-				// Only send if there is actual text or if it's explicitly marked final
-				if transcriptBuilder != "" || resp.IsFinal {
+				// Only send if there is actual text — skip empty finals to prevent
+				// interim buffers from being cleared before EOU can use them as fallback.
+				if transcriptBuilder != "" {
 					s.sendEvent(event)
 				}
 

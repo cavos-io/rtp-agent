@@ -101,7 +101,7 @@ func (l *GoogleLLM) Chat(ctx context.Context, chatCtx *llm.ChatContext, opts ...
 		}
 	}
 	stream := l.client.Models.GenerateContentStream(ctx, l.model, contents, config)
-	
+
 	next, stop := iter.Pull2(stream)
 
 	return &googleLLMStream{
@@ -169,4 +169,3 @@ func (s *googleLLMStream) Close() error {
 	}
 	return nil
 }
-

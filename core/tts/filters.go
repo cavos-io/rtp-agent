@@ -6,6 +6,9 @@ import (
 )
 
 var (
+	// toolCallMarkerPattern removes LLM tool-call leakage like (end_call), [end_call], {endcall}.
+	toolCallMarkerPattern = regexp.MustCompile(`(?i)[\(\[\{]\s*end_?call\s*[\)\]\}]`)
+
 	// header: remove # and following spaces
 	headerPattern = regexp.MustCompile(`(?m)^#{1,6}\s+`)
 	// list markers: remove -, +, * and following spaces
@@ -75,8 +78,13 @@ func FilterEmoji(text string) string {
 	return emojiPattern.ReplaceAllString(text, "")
 }
 
+func FilterToolCallMarkers(text string) string {
+	return toolCallMarkerPattern.ReplaceAllString(text, "")
+}
+
 func ApplyTextTransforms(text string) string {
 	text = FilterMarkdown(text)
 	text = FilterEmoji(text)
+	text = FilterToolCallMarkers(text)
 	return text
 }
