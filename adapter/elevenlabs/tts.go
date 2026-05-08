@@ -383,6 +383,30 @@ func (s *elevenLabsStream) Flush() error {
 	return s.conn.WriteJSON(map[string]interface{}{"text": ""})
 }
 
+// PushTextFinal sends text WITHOUT try_trigger_generation and immediately
+// follows it with the end-of-stream signal. This forces ElevenLabs to
+// synthesise the entire buffered text as one continuous segment instead of
+// splitting at sentence boundaries (e.g. "!" mid-text), which would create
+// an audible gap mid-word in greetings and other pre-formed utterances.
+func (s *elevenLabsStream) PushTextFinal(text string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return io.ErrClosedPipe
+	}
+	if !s.connected {
+		if err := s.connect(); err != nil {
+			return err
+		}
+	}
+	// Send without try_trigger_generation so ElevenLabs buffers until the
+	// end-of-stream signal below, producing a single synthesis job.
+	if err := s.conn.WriteJSON(map[string]interface{}{"text": text}); err != nil {
+		return fmt.Errorf("failed to write final text to elevenlabs: %w", err)
+	}
+	return s.conn.WriteJSON(map[string]interface{}{"text": ""})
+}
+
 func (s *elevenLabsStream) Close() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -429,4 +453,3 @@ func (s *elevenLabsStream) Next() (*tts.SynthesizedAudio, error) {
 		return nil, io.EOF
 	}
 }
-
