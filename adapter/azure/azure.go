@@ -114,7 +114,7 @@ func (t *AzureTTS) Label() string { return "azure.TTS" }
 func (t *AzureTTS) Capabilities() tts.TTSCapabilities {
 	return tts.TTSCapabilities{Streaming: false, AlignedTranscript: false}
 }
-func (t *AzureTTS) SampleRate() int  { return 16000 }
+func (t *AzureTTS) SampleRate() int  { return 48000 }
 func (t *AzureTTS) NumChannels() int { return 1 }
 
 func (t *AzureTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStream, error) {
@@ -127,23 +127,41 @@ func (t *AzureTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStre
 	}
 
 	req.Header.Set("Content-Type", "application/ssml+xml")
-	req.Header.Set("X-Microsoft-OutputFormat", "raw-16khz-16bit-mono-pcm")
+	// Request 48kHz PCM — native WebRTC/Opus sample rate. Avoids resampling
+	// artifacts and eliminates Opus frame-boundary silence padding that occurs
+	// when chunk sizes are not exact multiples of the Opus frame size.
+	req.Header.Set("X-Microsoft-OutputFormat", "raw-48khz-16bit-mono-pcm")
 	req.Header.Set("Ocp-Apim-Subscription-Key", t.apiKey)
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		return nil, err
 	}
+	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
 		respBody, _ := io.ReadAll(resp.Body)
-		resp.Body.Close()
 		return nil, fmt.Errorf("azure tts error: %s", string(respBody))
 	}
 
-	return &azureTTSChunkedStream{
-		resp: resp,
-	}, nil
+	// Read the full response body upfront. Azure TTS is non-streaming; reading
+	// the HTTP body incrementally risks io.Read returning (n>0, io.EOF) on the
+	// last call, which would silently drop the final audio chunk and cause an
+	// audible click/pop at the end of every synthesized sentence.
+	data, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("azure tts: failed to read response body: %w", err)
+	}
+
+	// Trim to an even number of bytes to guarantee 16-bit PCM sample alignment.
+	if len(data)%2 != 0 {
+		data = data[:len(data)-1]
+	}
+
+	// Deliver the entire PCM buffer as a single frame so the playout loop can
+	// split it into exact 20ms Opus sub-frames (1920 bytes at 48kHz) with no
+	// inter-chunk silence padding that would otherwise cause crackling.
+	return &azureTTSChunkedStream{data: data}, nil
 }
 
 func (t *AzureTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
@@ -151,29 +169,27 @@ func (t *AzureTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
 }
 
 type azureTTSChunkedStream struct {
-	resp *http.Response
+	data []byte
+	done bool
 }
 
 func (s *azureTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
-	buf := make([]byte, 4096)
-	n, err := s.resp.Body.Read(buf)
-	if err != nil {
-		if err == io.EOF {
-			return nil, io.EOF
-		}
-		return nil, err
+	if s.done {
+		return nil, io.EOF
 	}
-
+	s.done = true
+	n := len(s.data)
 	return &tts.SynthesizedAudio{
 		Frame: &model.AudioFrame{
-			Data:              buf[:n],
-			SampleRate:        16000,
+			Data:              s.data,
+			SampleRate:        48000,
 			NumChannels:       1,
 			SamplesPerChannel: uint32(n / 2),
 		},
+		IsFinal: true,
 	}, nil
 }
 
 func (s *azureTTSChunkedStream) Close() error {
-	return s.resp.Body.Close()
+	return nil
 }
