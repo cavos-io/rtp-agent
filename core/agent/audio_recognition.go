@@ -124,7 +124,7 @@ func (ar *AudioRecognition) vadLoop(ctx context.Context, stream vad.VADStream) {
 	for {
 		ev, err := stream.Next()
 		if err != nil {
-			if err != io.EOF {
+			if err != io.EOF && err != context.Canceled {
 				logger.Logger.Errorw("VAD stream error", err)
 			}
 			return
