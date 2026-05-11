@@ -324,6 +324,18 @@ func (t *RoomTextOutput) worker() {
 				continue
 			}
 
+			// Race guard: for non-streaming TTS (e.g. Azure) that produces a single
+			// large audio frame, Flush() can run before the worker processes textCh.
+			// When that happens, accumulated is already reset and writer is nil — the
+			// text was already captured in the Flush output. Creating a new segment
+			// here would publish an empty DataPacket_Transcription bubble.
+			if t.writer == nil && t.accumulated.Len() == 0 {
+				logger.Logger.Debugw("[Transcript] worker: flush already ran, skipping stale chunk", "chunk", text)
+				t.mu.Unlock()
+				<-ticker.C
+				continue
+			}
+
 			if t.writer == nil {
 				if t.segmentID == "" {
 					t.segmentID = "SG_" + uuid.NewString()[:8]
