@@ -730,7 +730,7 @@ func (d *ClientEventsDispatcher) dispatchData(payload ClientEventPayload) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 
-	if d.room == nil || d.room.LocalParticipant == nil {
+	if d.room == nil || d.room.LocalParticipant == nil || d.room.ConnectionState() != lksdk.ConnectionStateConnected {
 		return
 	}
 
