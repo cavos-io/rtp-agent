@@ -14,6 +14,7 @@ import (
 	"github.com/gorilla/websocket"
 	"github.com/livekit/protocol/auth"
 	"github.com/livekit/protocol/livekit"
+	"github.com/livekit/protocol/utils/events"
 	"github.com/shirou/gopsutil/v3/cpu"
 	"google.golang.org/protobuf/proto"
 )
@@ -41,6 +42,8 @@ type WorkerOptions struct {
 }
 
 type AgentServer struct {
+	*events.Emitter[string, *livekit.RegisterWorkerResponse]
+
 	Options WorkerOptions
 
 	entrypointFnc func(*JobContext) error
@@ -66,6 +69,7 @@ func NewAgentServer(opts WorkerOptions) *AgentServer {
 	}
 	s.cpuLoad.Store(math.Float64bits(math.NaN()))
 	go s.sampleCPULoop()
+	s.Emitter = events.NewEmitter[string, *livekit.RegisterWorkerResponse]()
 	return s
 }
 
@@ -450,7 +454,7 @@ func (s *AgentServer) sendAvailable() error {
 }
 
 func (s *AgentServer) handleMessage(ctx context.Context, msg *livekit.ServerMessage) {
-	logger.Logger.Infow("Received server message", "type", fmt.Sprintf("%T", msg.Message))
+	logger.Logger.Debugw("Received server message", "type", fmt.Sprintf("%T", msg.Message))
 
 	switch m := msg.Message.(type) {
 	case *livekit.ServerMessage_Register:
@@ -461,6 +465,7 @@ func (s *AgentServer) handleMessage(ctx context.Context, msg *livekit.ServerMess
 		} else {
 			logger.Logger.Infow("Worker status set to AVAILABLE — waiting for jobs...")
 		}
+		s.Emit("worker_registered", m.Register)
 	case *livekit.ServerMessage_Availability:
 		logger.Logger.Infow("Received availability request", "jobId", m.Availability.Job.Id)
 		s.handleAvailability(ctx, m.Availability)
@@ -471,7 +476,7 @@ func (s *AgentServer) handleMessage(ctx context.Context, msg *livekit.ServerMess
 		logger.Logger.Infow("Received job termination", "jobId", m.Termination.JobId)
 		s.handleTermination(m.Termination)
 	case *livekit.ServerMessage_Pong:
-		logger.Logger.Infow("Received WorkerPong", "timestamp", m.Pong.Timestamp)
+		logger.Logger.Debugw("Received WorkerPong", "timestamp", m.Pong.Timestamp)
 	default:
 		logger.Logger.Warnw("Unhandled message type received", nil, "type", fmt.Sprintf("%T", msg.Message))
 	}
