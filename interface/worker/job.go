@@ -2,6 +2,7 @@ package worker
 
 import (
 	"context"
+	"path/filepath"
 
 	"github.com/cavos-io/rtp-agent/core/agent"
 	"github.com/cavos-io/rtp-agent/library/logger"
@@ -42,18 +43,20 @@ type JobContext struct {
 	Room   *lksdk.Room
 	Report *agent.SessionReport
 
-	APIKey    string
-	APISecret string
-	URL       string
+	APIKey           string
+	APISecret        string
+	URL              string
+	SessionDirectory string
 }
 
 func NewJobContext(job *livekit.Job, url string, apiKey string, apiSecret string) *JobContext {
 	return &JobContext{
-		Job:       job,
-		URL:       url,
-		APIKey:    apiKey,
-		APISecret: apiSecret,
-		Report:    agent.NewSessionReport(),
+		Job:              job,
+		URL:              url,
+		APIKey:           apiKey,
+		APISecret:        apiSecret,
+		Report:           agent.NewSessionReport(),
+		SessionDirectory: filepath.Join("recordings", job.Id),
 	}
 }
 
