@@ -667,7 +667,7 @@ func NewRoomIO(room *lksdk.Room, session *agent.AgentSession, opts RoomOptions) 
 	// Start recorder if audio recording is enabled (mirrors Python's recorder_io.start()).
 	// Both input and output must be enabled for a meaningful stereo recording.
 	if recorder != nil && opts.JobContext != nil && audioInputEnabled && audioOutputEnabled {
-		outPath := filepath.Join(opts.JobContext.SessionDirectory, "audio.mp3")
+		outPath := filepath.Join(opts.JobContext.SessionDirectory, "audio.mp4")
 		if err := recorder.Start(outPath, outRate); err != nil {
 			logger.Logger.Errorw("Failed to start recorder", err)
 		} else {
