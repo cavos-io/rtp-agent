@@ -672,6 +672,11 @@ func NewRoomIO(room *lksdk.Room, session *agent.AgentSession, opts RoomOptions) 
 			logger.Logger.Errorw("Failed to start recorder", err)
 		} else {
 			logger.Logger.Infow("Recorder started", "path", outPath)
+			if report := opts.JobContext.Report; report != nil {
+				startedAt := float64(recorder.RecordingStartedAt.UnixNano()) / 1e9
+				report.AudioRecordingPath = &recorder.OutputPath
+				report.AudioRecordingStartedAt = &startedAt
+			}
 		}
 	}
 
@@ -1468,6 +1473,12 @@ func (rio *RoomIO) Close() error {
 
 	if rio.Recorder != nil {
 		rio.Recorder.Stop()
+		jc := rio.Options.JobContext
+		if jc != nil && jc.Report != nil && jc.Report.AudioRecordingStartedAt != nil {
+			now := float64(time.Now().UnixNano()) / 1e9
+			duration := now - *jc.Report.AudioRecordingStartedAt
+			jc.Report.Duration = &duration
+		}
 	}
 
 	if rio.preConnectAudio != nil {

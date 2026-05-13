@@ -433,7 +433,8 @@ type RecorderIO struct {
 
 	done chan struct{}
 
-	OutPath string
+	OutputPath         string
+	RecordingStartedAt time.Time
 
 	totalSamplesWritten int64
 }
@@ -497,7 +498,8 @@ func (r *RecorderIO) Start(outputPath string, sampleRate int) error {
 
 	r.wavFile = f
 	r.sampleRate = sampleRate
-	r.OutPath = outputPath
+	r.OutputPath = outputPath
+	r.RecordingStartedAt = time.Now()
 	r.started = true
 
 	go r.forwardTask()
@@ -665,7 +667,7 @@ func (r *RecorderIO) finalizeWAV() {
 
 	wavFile.Close()
 	duration := float64(total) / float64(sampleRate)
-	logger.Logger.Infow("WAV finalized", "path", r.OutPath, "duration", duration, "samples", total)
+	logger.Logger.Infow("WAV finalized", "path", r.OutputPath, "duration", duration, "samples", total)
 }
 
 // writeWAVHeader writes (or re-writes) a standard 44-byte WAV header.
