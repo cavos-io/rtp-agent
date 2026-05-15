@@ -235,16 +235,24 @@ func mp4BuildDfLa(streamInfoBlock []byte) []byte {
 	return mp4BuildFullBox("dfLa", 0, 0, streamInfoBlock)
 }
 
-func mp4BuildFLACSampleEntry(streamInfoBlock []byte) []byte {
+func mp4BuildFLACSampleEntry(streamInfoBlock []byte, sampleRate int) []byte {
 	var c []byte
-	c = append(c, make([]byte, 6)...) // reserved
+	// SampleEntry base
+	c = append(c, make([]byte, 6)...) // reserved[6]
 	c = append(c, mp4u16(1)...)       // data_reference_index
+	// AudioSampleEntry fields (ISO 14496-12 §12.2)
+	c = append(c, make([]byte, 8)...)                    // reserved[2]
+	c = append(c, mp4u16(2)...)                          // channelcount = 2 (stereo)
+	c = append(c, mp4u16(16)...)                         // samplesize = 16-bit
+	c = append(c, mp4u16(0)...)                          // pre_defined
+	c = append(c, mp4u16(0)...)                          // reserved
+	c = append(c, mp4u32(uint32(sampleRate)<<16)...)     // samplerate (16.16 fixed-point)
 	c = append(c, mp4BuildDfLa(streamInfoBlock)...)
 	return mp4BuildBox("fLaC", c)
 }
 
-func mp4BuildStbl(streamInfoBlock []byte, totalSamples int64, flacDataLen int, chunkOffset int64) []byte {
-	stsdContent := append(mp4u32(1), mp4BuildFLACSampleEntry(streamInfoBlock)...)
+func mp4BuildStbl(streamInfoBlock []byte, sampleRate int, totalSamples int64, flacDataLen int, chunkOffset int64) []byte {
+	stsdContent := append(mp4u32(1), mp4BuildFLACSampleEntry(streamInfoBlock, sampleRate)...)
 	stsd := mp4BuildFullBox("stsd", 0, 0, stsdContent)
 
 	sttsContent := append(mp4u32(1), append(mp4u32(1), mp4u32(uint32(totalSamples))...)...)
@@ -269,7 +277,7 @@ func mp4BuildStbl(streamInfoBlock []byte, totalSamples int64, flacDataLen int, c
 func mp4BuildMoov(streamInfoBlock []byte, sampleRate int, totalSamples int64, flacDataLen int, chunkOffset int64) []byte {
 	smhd := mp4BuildSmhd()
 	dinf := mp4BuildDinf()
-	stbl := mp4BuildStbl(streamInfoBlock, totalSamples, flacDataLen, chunkOffset)
+	stbl := mp4BuildStbl(streamInfoBlock, sampleRate, totalSamples, flacDataLen, chunkOffset)
 
 	var minfContent []byte
 	for _, b := range [][]byte{smhd, dinf, stbl} {
