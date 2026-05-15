@@ -41,6 +41,7 @@ require (
 )
 
 require (
+	github.com/gen2brain/aac-go v0.0.0-20230119102159-ef1e76509d21 // indirect
 	github.com/icza/bitio v1.1.0 // indirect
 	github.com/mewkiz/flac v1.0.13 // indirect
 	github.com/mewkiz/pkg v0.0.0-20250417130911-3f050ff8c56d // indirect

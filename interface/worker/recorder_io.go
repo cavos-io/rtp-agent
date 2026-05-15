@@ -9,11 +9,19 @@ import (
 	"sync"
 	"time"
 
+	aac "github.com/gen2brain/aac-go"
+
 	"github.com/cavos-io/rtp-agent/core/agent"
 	"github.com/cavos-io/rtp-agent/core/audio"
 	"github.com/cavos-io/rtp-agent/library/logger"
 	"github.com/cavos-io/rtp-agent/model"
 )
+
+// aacGlobalMu serializes all AAC encoder operations.
+// gen2brain/aac-go uses a global C encoder handle, so concurrent encode calls
+// from multiple sessions would corrupt each other's state.
+// Each batch acquires this mutex, runs Init→Encode→Close, then releases.
+var aacGlobalMu sync.Mutex
 
 func createSilenceFrame(duration time.Duration, sampleRate uint32, numChannels uint32) *model.AudioFrame {
 	samples := int(duration.Nanoseconds() * int64(sampleRate) / 1e9)
@@ -417,7 +425,7 @@ type RecordingCodec int
 
 const (
 	CodecFLAC RecordingCodec = iota // lossless, no external tools required (default)
-	CodecAAC                         // lossy 192 kbps, requires ffmpeg on PATH
+	CodecAAC                         // lossy 192 kbps, streaming fMP4, no external tools required
 )
 
 // RecorderIO records a conversation as a stereo MP4 file.
@@ -436,18 +444,19 @@ type RecorderIO struct {
 	inQ  chan []*model.AudioFrame
 	outQ chan []*model.AudioFrame
 
-	// stereoPCM buffers interleaved stereo 16-bit PCM (L, R, L, R, ...) for
-	// the entire session, encoded to FLAC-in-MP4 on Stop().
-	stereoPCM  []int16
-	sampleRate int
+	// stereoPCM is used only for CodecFLAC — buffers the entire session, encoded on Stop().
+	stereoPCM           []int16
+	totalSamplesWritten int64
 
-	done chan struct{}
+	// fmp4 is used only for CodecAAC — receives fragments incrementally.
+	fmp4 *fMP4Writer
+
+	sampleRate int
+	done       chan struct{}
 
 	OutputPath         string
 	RecordingStartedAt time.Time
 	Codec              RecordingCodec
-
-	totalSamplesWritten int64
 }
 
 func NewRecorderIO(session *agent.AgentSession) *RecorderIO {
@@ -483,7 +492,10 @@ func (r *RecorderIO) writeCb(buf []*model.AudioFrame) {
 	r.outQ <- buf
 }
 
-// Start begins recording to a stereo FLAC-in-MP4 file at the given sample rate.
+// Start begins recording to an MP4 file at the given sample rate.
+// When Codec == CodecAAC the fMP4 container header is written immediately;
+// audio fragments are flushed per batch so memory usage stays O(batch size).
+// When Codec == CodecFLAC the entire session is buffered and encoded on Stop().
 func (r *RecorderIO) Start(outputPath string, sampleRate int) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -494,6 +506,14 @@ func (r *RecorderIO) Start(outputPath string, sampleRate int) error {
 
 	if err := os.MkdirAll(filepath.Dir(outputPath), 0755); err != nil {
 		return fmt.Errorf("failed to create directory for recording: %w", err)
+	}
+
+	if r.Codec == CodecAAC {
+		fmp4, err := newFMP4Writer(outputPath, sampleRate, 2)
+		if err != nil {
+			return fmt.Errorf("failed to create fMP4 writer: %w", err)
+		}
+		r.fmp4 = fmp4
 	}
 
 	r.sampleRate = sampleRate
@@ -608,25 +628,90 @@ func (r *RecorderIO) encodeThread(sampleRate int) {
 			continue
 		}
 
-		// Interleave into stereo buffer: [L0, R0, L1, R1, ...]
+		// Interleave into stereo: [L0, R0, L1, R1, ...]
 		// Left = user input, Right = agent output
-		r.mu.Lock()
+		stereo := make([]int16, maxSamples*2)
 		for i := 0; i < maxSamples; i++ {
-			var left, right int16
 			if i < len(inPcm) {
-				left = inPcm[i]
+				stereo[i*2] = inPcm[i]
 			}
 			if i < len(outPcm) {
-				right = outPcm[i]
+				stereo[i*2+1] = outPcm[i]
 			}
-			r.stereoPCM = append(r.stereoPCM, left, right)
 		}
+
+		switch r.Codec {
+		case CodecAAC:
+			if err := r.encodeAACFragment(stereo, sampleRate); err != nil {
+				logger.Logger.Errorw("Recorder AAC fragment error", err)
+			}
+		default: // CodecFLAC — buffer everything, write on Stop
+			r.mu.Lock()
+			r.stereoPCM = append(r.stereoPCM, stereo...)
+			r.totalSamplesWritten += int64(maxSamples)
+			total := r.totalSamplesWritten
+			r.mu.Unlock()
+			logger.Logger.Infow("Recorder progress", "total_seconds", float64(total)/float64(r.sampleRate))
+			continue
+		}
+
+		r.mu.Lock()
 		r.totalSamplesWritten += int64(maxSamples)
 		total := r.totalSamplesWritten
 		r.mu.Unlock()
-
 		logger.Logger.Infow("Recorder progress", "total_seconds", float64(total)/float64(r.sampleRate))
 	}
+}
+
+// encodeAACFragment encodes one batch of stereo 16-bit PCM as an AAC fMP4 fragment.
+// Uses a global mutex because gen2brain/aac-go has a global C encoder handle.
+func (r *RecorderIO) encodeAACFragment(stereo []int16, sampleRate int) error {
+	// Convert []int16 → []byte (little-endian)
+	pcmBytes := make([]byte, len(stereo)*2)
+	for i, s := range stereo {
+		pcmBytes[i*2] = byte(s)
+		pcmBytes[i*2+1] = byte(uint16(s) >> 8)
+	}
+
+	var adtsBuf bytes.Buffer
+
+	aacGlobalMu.Lock()
+	enc, err := aac.NewEncoder(&adtsBuf, &aac.Options{
+		SampleRate:  sampleRate,
+		NumChannels: 2,
+		BitRate:     192000,
+	})
+	if err != nil {
+		aacGlobalMu.Unlock()
+		return fmt.Errorf("aac encoder init: %w", err)
+	}
+	err = enc.Encode(bytes.NewReader(pcmBytes))
+	closeErr := enc.Close()
+	aacGlobalMu.Unlock()
+
+	if err != nil {
+		return fmt.Errorf("aac encode: %w", err)
+	}
+	if closeErr != nil {
+		return fmt.Errorf("aac close: %w", closeErr)
+	}
+
+	frames, err := stripADTSFrames(adtsBuf.Bytes())
+	if err != nil {
+		return fmt.Errorf("strip ADTS: %w", err)
+	}
+	if len(frames) == 0 {
+		return nil
+	}
+
+	r.mu.Lock()
+	fmp4 := r.fmp4
+	r.mu.Unlock()
+
+	if fmp4 == nil {
+		return fmt.Errorf("fMP4 writer not initialized")
+	}
+	return fmp4.WriteFragment(frames)
 }
 
 func (r *RecorderIO) finalizeMP4() {
@@ -635,21 +720,29 @@ func (r *RecorderIO) finalizeMP4() {
 	total := r.totalSamplesWritten
 	sampleRate := r.sampleRate
 	outputPath := r.OutputPath
+	fmp4 := r.fmp4
 	r.stereoPCM = nil
+	r.fmp4 = nil
 	r.mu.Unlock()
-
-	if total == 0 || len(pcm) == 0 {
-		logger.Logger.Warnw("No audio recorded, skipping MP4 finalization", nil)
-		return
-	}
 
 	switch r.Codec {
 	case CodecAAC:
-		if err := writeMP4WithAAC(outputPath, pcm, sampleRate); err != nil {
-			logger.Logger.Errorw("Failed to encode AAC", err)
+		if fmp4 == nil {
+			logger.Logger.Warnw("No fMP4 writer, skipping AAC finalization", nil)
 			return
 		}
+		if err := fmp4.Close(); err != nil {
+			logger.Logger.Errorw("Failed to close fMP4 writer", err)
+			return
+		}
+		duration := float64(total) / float64(sampleRate)
+		logger.Logger.Infow("MP4 finalized", "path", outputPath, "duration_s", duration, "total_samples", total, "codec", r.Codec)
+
 	default: // CodecFLAC
+		if total == 0 || len(pcm) == 0 {
+			logger.Logger.Warnw("No audio recorded, skipping MP4 finalization", nil)
+			return
+		}
 		var flacBuf bytes.Buffer
 		frameSizes, err := encodeStereoFLAC(&flacBuf, pcm, sampleRate)
 		if err != nil {
@@ -660,8 +753,8 @@ func (r *RecorderIO) finalizeMP4() {
 			logger.Logger.Errorw("Failed to write MP4", err)
 			return
 		}
+		duration := float64(total) / float64(sampleRate)
+		logger.Logger.Infow("MP4 finalized", "path", outputPath, "duration_s", duration, "total_samples", total, "codec", r.Codec)
 	}
-
-	duration := float64(total) / float64(sampleRate)
-	logger.Logger.Infow("MP4 finalized", "path", outputPath, "duration_s", duration, "total_samples", total, "codec", r.Codec)
 }
+
