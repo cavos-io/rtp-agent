@@ -169,6 +169,7 @@ type TextOutputOptions struct {
 // Mirrors Python's RecordingOptions TypedDict.
 type RecordingOptions struct {
 	Audio bool
+	Codec RecordingCodec // CodecFLAC (default) or CodecAAC (requires ffmpeg)
 }
 
 type RoomOptions struct {
@@ -532,6 +533,9 @@ func NewRoomIO(room *lksdk.Room, session *agent.AgentSession, opts RoomOptions) 
 	var recorder *RecorderIO
 	if recordAudio {
 		recorder = NewRecorderIO(session)
+		if opts.Recording != nil {
+			recorder.Codec = opts.Recording.Codec
+		}
 	}
 
 	rioCtx, rioCancel := context.WithCancel(context.Background())

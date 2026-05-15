@@ -412,7 +412,15 @@ func (r *RecorderAudioOutput) onPlaybackFinished(ev agent.PlaybackFinishedEvent)
 	}
 }
 
-// RecorderIO records a conversation as a stereo MP4 (FLAC audio) file.
+// RecordingCodec selects the audio codec used when finalizing an MP4 recording.
+type RecordingCodec int
+
+const (
+	CodecFLAC RecordingCodec = iota // lossless, no external tools required (default)
+	CodecAAC                         // lossy 192 kbps, requires ffmpeg on PATH
+)
+
+// RecorderIO records a conversation as a stereo MP4 file.
 // Left channel = user (input), Right channel = agent (output).
 type RecorderIO struct {
 	Session *agent.AgentSession
@@ -437,6 +445,7 @@ type RecorderIO struct {
 
 	OutputPath         string
 	RecordingStartedAt time.Time
+	Codec              RecordingCodec
 
 	totalSamplesWritten int64
 }
@@ -634,17 +643,25 @@ func (r *RecorderIO) finalizeMP4() {
 		return
 	}
 
-	var flacBuf bytes.Buffer
-	if err := encodeStereoFLAC(&flacBuf, pcm, sampleRate); err != nil {
-		logger.Logger.Errorw("Failed to encode FLAC", err)
-		return
-	}
-
-	if err := writeMP4WithFLAC(outputPath, flacBuf.Bytes(), sampleRate, total); err != nil {
-		logger.Logger.Errorw("Failed to write MP4", err)
-		return
+	switch r.Codec {
+	case CodecAAC:
+		if err := writeMP4WithAAC(outputPath, pcm, sampleRate); err != nil {
+			logger.Logger.Errorw("Failed to encode AAC", err)
+			return
+		}
+	default: // CodecFLAC
+		var flacBuf bytes.Buffer
+		frameSizes, err := encodeStereoFLAC(&flacBuf, pcm, sampleRate)
+		if err != nil {
+			logger.Logger.Errorw("Failed to encode FLAC", err)
+			return
+		}
+		if err := writeMP4WithFLAC(outputPath, flacBuf.Bytes(), frameSizes, sampleRate, total); err != nil {
+			logger.Logger.Errorw("Failed to write MP4", err)
+			return
+		}
 	}
 
 	duration := float64(total) / float64(sampleRate)
-	logger.Logger.Infow("MP4 finalized", "path", outputPath, "duration_s", duration, "total_samples", total)
+	logger.Logger.Infow("MP4 finalized", "path", outputPath, "duration_s", duration, "total_samples", total, "codec", r.Codec)
 }
