@@ -11,12 +11,31 @@ import (
 	flacmeta "github.com/mewkiz/flac/meta"
 )
 
+// flacHeaderSize is the byte length of the FLAC file header written by the
+// encoder: "fLaC" magic (4) + METADATA_BLOCK_HEADER (4) + STREAMINFO (34).
+const flacHeaderSize = 42
+
+// countWriter wraps an io.Writer and tracks total bytes written, used to
+// measure individual FLAC frame sizes without buffering the entire output.
+type countWriter struct {
+	w io.Writer
+	n int
+}
+
+func (c *countWriter) Write(p []byte) (int, error) {
+	n, err := c.w.Write(p)
+	c.n += n
+	return n, err
+}
+
 // encodeStereoFLAC encodes interleaved stereo 16-bit PCM to a FLAC stream.
-func encodeStereoFLAC(w io.Writer, stereopcm []int16, sampleRate int) error {
+// Returns per-frame byte sizes so the MP4 container can store each frame as a
+// separate sample, enabling accurate currentTime reporting during browser playback.
+func encodeStereoFLAC(w io.Writer, stereopcm []int16, sampleRate int) ([]int, error) {
 	const channels = 2
 	nSamples := len(stereopcm) / channels
 	if nSamples == 0 {
-		return fmt.Errorf("no samples to encode")
+		return nil, fmt.Errorf("no samples to encode")
 	}
 
 	const blockSize = 4096
@@ -30,11 +49,13 @@ func encodeStereoFLAC(w io.Writer, stereopcm []int16, sampleRate int) error {
 		NSamples:      uint64(nSamples),
 	}
 
-	enc, err := flac.NewEncoder(w, info)
+	cw := &countWriter{w: w}
+	enc, err := flac.NewEncoder(cw, info)
 	if err != nil {
-		return fmt.Errorf("creating FLAC encoder: %w", err)
+		return nil, fmt.Errorf("creating FLAC encoder: %w", err)
 	}
 
+	var frameSizes []int
 	var frameNum uint64
 	for offset := 0; offset < nSamples; offset += blockSize {
 		end := offset + blockSize
@@ -73,19 +94,24 @@ func encodeStereoFLAC(w io.Writer, stereopcm []int16, sampleRate int) error {
 			},
 		}
 
+		before := cw.n
 		if err := enc.WriteFrame(f); err != nil {
-			return fmt.Errorf("writing FLAC frame %d: %w", frameNum, err)
+			return nil, fmt.Errorf("writing FLAC frame %d: %w", frameNum, err)
 		}
+		frameSizes = append(frameSizes, cw.n-before)
 		frameNum++
 	}
 
-	return enc.Close()
+	return frameSizes, enc.Close()
 }
 
 // writeMP4WithFLAC writes a FLAC-in-MP4 (M4A) container file.
-// Structure: ftyp → mdat (FLAC data) → moov (metadata).
-func writeMP4WithFLAC(outputPath string, flacData []byte, sampleRate int, totalSamples int64) error {
-	if len(flacData) < 42 {
+// Structure: ftyp → moov → mdat (faststart: moov before mdat so browsers can
+// read duration and seek without downloading the full file first).
+// Each FLAC audio frame is stored as a separate MP4 sample so browsers can
+// update currentTime accurately during playback.
+func writeMP4WithFLAC(outputPath string, flacData []byte, frameSizes []int, sampleRate int, totalSamples int64) error {
+	if len(flacData) < flacHeaderSize {
 		return fmt.Errorf("FLAC data too short (%d bytes)", len(flacData))
 	}
 
@@ -95,14 +121,28 @@ func writeMP4WithFLAC(outputPath string, flacData []byte, sampleRate int, totalS
 	copy(streamInfoBlock, flacData[4:42])
 	streamInfoBlock[0] |= 0x80 // mark as last metadata block for dfLa box
 
-	// ftyp: 28 bytes. mdat header: 8 bytes. Content starts at byte 36.
-	const ftypSize = 28
-	const mdatHeaderSize = 8
-	mdatContentOffset := int64(ftypSize + mdatHeaderSize)
+	// mdat contains only the raw FLAC frames (no file header); STREAMINFO is
+	// already embedded in the dfLa box inside moov.
+	totalFrameBytes := 0
+	for _, sz := range frameSizes {
+		totalFrameBytes += sz
+	}
+	end := flacHeaderSize + totalFrameBytes
+	if end > len(flacData) {
+		end = len(flacData)
+	}
+	rawFrames := flacData[flacHeaderSize:end]
 
 	ftyp := mp4BuildFtyp()
-	mdat := mp4BuildBox("mdat", flacData)
-	moov := mp4BuildMoov(streamInfoBlock, sampleRate, totalSamples, len(flacData), mdatContentOffset)
+
+	// Two-pass moov build: first pass determines moov size, second pass sets the
+	// correct mdat chunk offset (ftyp + moov + mdat_header).
+	const mdatHeaderSize = 8
+	dummyMoov := mp4BuildMoov(streamInfoBlock, sampleRate, totalSamples, frameSizes, 0)
+	mdatContentOffset := int64(len(ftyp)) + int64(len(dummyMoov)) + mdatHeaderSize
+	moov := mp4BuildMoov(streamInfoBlock, sampleRate, totalSamples, frameSizes, mdatContentOffset)
+
+	mdat := mp4BuildBox("mdat", rawFrames)
 
 	f, err := os.Create(outputPath)
 	if err != nil {
@@ -110,7 +150,7 @@ func writeMP4WithFLAC(outputPath string, flacData []byte, sampleRate int, totalS
 	}
 	defer f.Close()
 
-	for _, box := range [][]byte{ftyp, mdat, moov} {
+	for _, box := range [][]byte{ftyp, moov, mdat} {
 		if _, err := f.Write(box); err != nil {
 			return fmt.Errorf("writing mp4 box: %w", err)
 		}
@@ -251,18 +291,69 @@ func mp4BuildFLACSampleEntry(streamInfoBlock []byte, sampleRate int) []byte {
 	return mp4BuildBox("fLaC", c)
 }
 
-func mp4BuildStbl(streamInfoBlock []byte, sampleRate int, totalSamples int64, flacDataLen int, chunkOffset int64) []byte {
+// mp4BuildStts builds the time-to-sample (stts) box.
+// All FLAC frames except possibly the last use blockSize audio samples; the
+// last frame may have fewer. Consecutive equal-delta runs are grouped into a
+// single stts entry to keep the box compact.
+func mp4BuildStts(frameSizes []int, totalSamples int64) []byte {
+	const blockSize = 4096
+	numFrames := len(frameSizes)
+
+	var entries []byte
+	var entryCount uint32
+
+	switch {
+	case numFrames == 0:
+		entryCount = 0
+	case numFrames == 1:
+		entryCount = 1
+		entries = append(entries, mp4u32(1)...)
+		entries = append(entries, mp4u32(uint32(totalSamples))...)
+	default:
+		lastFrameSamples := int(totalSamples) - (numFrames-1)*blockSize
+		if lastFrameSamples == blockSize {
+			// All frames have identical sample count.
+			entryCount = 1
+			entries = append(entries, mp4u32(uint32(numFrames))...)
+			entries = append(entries, mp4u32(blockSize)...)
+		} else {
+			// Last frame is shorter.
+			entryCount = 2
+			entries = append(entries, mp4u32(uint32(numFrames-1))...)
+			entries = append(entries, mp4u32(blockSize)...)
+			entries = append(entries, mp4u32(1)...)
+			entries = append(entries, mp4u32(uint32(lastFrameSamples))...)
+		}
+	}
+
+	return mp4BuildFullBox("stts", 0, 0, append(mp4u32(entryCount), entries...))
+}
+
+// mp4BuildStsz builds the sample-size (stsz) box with a variable-size entry
+// per FLAC frame.
+func mp4BuildStsz(frameSizes []int) []byte {
+	content := mp4u32(0) // sample_size=0 means variable; individual sizes follow
+	content = append(content, mp4u32(uint32(len(frameSizes)))...)
+	for _, sz := range frameSizes {
+		content = append(content, mp4u32(uint32(sz))...)
+	}
+	return mp4BuildFullBox("stsz", 0, 0, content)
+}
+
+func mp4BuildStbl(streamInfoBlock []byte, sampleRate int, totalSamples int64, frameSizes []int, chunkOffset int64) []byte {
 	stsdContent := append(mp4u32(1), mp4BuildFLACSampleEntry(streamInfoBlock, sampleRate)...)
 	stsd := mp4BuildFullBox("stsd", 0, 0, stsdContent)
 
-	sttsContent := append(mp4u32(1), append(mp4u32(1), mp4u32(uint32(totalSamples))...)...)
-	stts := mp4BuildFullBox("stts", 0, 0, sttsContent)
+	stts := mp4BuildStts(frameSizes, totalSamples)
 
-	stscEntry := append(mp4u32(1), append(mp4u32(1), mp4u32(1)...)...)
+	// All frames belong to a single chunk.
+	var stscEntry []byte
+	stscEntry = append(stscEntry, mp4u32(1)...)                        // first_chunk
+	stscEntry = append(stscEntry, mp4u32(uint32(len(frameSizes)))...)  // samples_per_chunk
+	stscEntry = append(stscEntry, mp4u32(1)...)                        // sample_description_index
 	stsc := mp4BuildFullBox("stsc", 0, 0, append(mp4u32(1), stscEntry...))
 
-	stszContent := append(mp4u32(0), append(mp4u32(1), mp4u32(uint32(flacDataLen))...)...)
-	stsz := mp4BuildFullBox("stsz", 0, 0, stszContent)
+	stsz := mp4BuildStsz(frameSizes)
 
 	stcoContent := append(mp4u32(1), mp4u32(uint32(chunkOffset))...)
 	stco := mp4BuildFullBox("stco", 0, 0, stcoContent)
@@ -274,10 +365,10 @@ func mp4BuildStbl(streamInfoBlock []byte, sampleRate int, totalSamples int64, fl
 	return mp4BuildBox("stbl", c)
 }
 
-func mp4BuildMoov(streamInfoBlock []byte, sampleRate int, totalSamples int64, flacDataLen int, chunkOffset int64) []byte {
+func mp4BuildMoov(streamInfoBlock []byte, sampleRate int, totalSamples int64, frameSizes []int, chunkOffset int64) []byte {
 	smhd := mp4BuildSmhd()
 	dinf := mp4BuildDinf()
-	stbl := mp4BuildStbl(streamInfoBlock, sampleRate, totalSamples, flacDataLen, chunkOffset)
+	stbl := mp4BuildStbl(streamInfoBlock, sampleRate, totalSamples, frameSizes, chunkOffset)
 
 	var minfContent []byte
 	for _, b := range [][]byte{smhd, dinf, stbl} {
