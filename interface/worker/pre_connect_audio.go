@@ -174,6 +174,10 @@ func (h *PreConnectAudioHandler) Close() {
 func (h *PreConnectAudioHandler) WaitForData(ctx context.Context, trackID string) []*model.AudioFrame {
 	if h.afterConnect {
 		logger.Logger.Warnw("pre-connect audio handler registered after room connection", nil, "track_id", trackID)
+		// No pre-connect audio will arrive for this track — skip the wait entirely.
+		// Previously this fell through and blocked for the full timeout (2 s), causing
+		// a silent gap at the start of every inbound call.
+		return nil
 	}
 
 	h.mu.Lock()

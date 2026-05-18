@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -164,6 +165,12 @@ type TextOutputOptions struct {
 	TranscriptionSpeedFactor float64
 }
 
+// RecordingOptions controls which recording features are active for a session.
+// Mirrors Python's RecordingOptions TypedDict.
+type RecordingOptions struct {
+	Audio bool
+}
+
 type RoomOptions struct {
 	AudioInput          *AudioInputOptions
 	AudioOutput         *AudioOutputOptions
@@ -171,6 +178,7 @@ type RoomOptions struct {
 	VideoOutput         *VideoOutputOptions
 	TextInput           *TextInputOptions
 	TextOutput          *TextOutputOptions
+	Recording           *RecordingOptions // nil = defer to job.EnableRecording
 	ParticipantKinds    []lksdk.ParticipantKind
 	ParticipantIdentity string
 	CloseOnDisconnect   bool
@@ -513,6 +521,19 @@ func NewRoomIO(room *lksdk.Room, session *agent.AgentSession, opts RoomOptions) 
 	preConnectAudio := NewPreConnectAudioHandler(room, 5*time.Second)
 	preConnectAudio.Register()
 
+	// Resolve recording: explicit opts.Recording takes priority,
+	// otherwise defer to job.EnableRecording (mirrors Python's _recording_options).
+	recordAudio := false
+	if opts.Recording != nil {
+		recordAudio = opts.Recording.Audio
+	} else if opts.JobContext != nil && opts.JobContext.Job != nil {
+		recordAudio = opts.JobContext.Job.GetEnableRecording()
+	}
+	var recorder *RecorderIO
+	if recordAudio {
+		recorder = NewRecorderIO(session)
+	}
+
 	rioCtx, rioCancel := context.WithCancel(context.Background())
 
 	rio := &RoomIO{
@@ -521,7 +542,7 @@ func NewRoomIO(room *lksdk.Room, session *agent.AgentSession, opts RoomOptions) 
 		Options:             opts,
 		decoder:             dec,
 		encoder:             enc,
-		Recorder:            NewRecorderIO(session),
+		Recorder:            recorder,
 		preConnectAudio:     preConnectAudio,
 		audioInCh:           make(chan *model.AudioFrame, 100),
 		videoInCh:           make(chan *model.VideoFrame, 100),
@@ -551,7 +572,11 @@ func NewRoomIO(room *lksdk.Room, session *agent.AgentSession, opts RoomOptions) 
 		audioInputEnabled = false
 	}
 	if audioInputEnabled {
-		session.Input.Audio = rio.Recorder.RecordInput(rio)
+		if recorder != nil {
+			session.Input.Audio = recorder.RecordInput(rio)
+		} else {
+			session.Input.Audio = rio
+		}
 	}
 
 	videoInputEnabled := false
@@ -599,11 +624,19 @@ func NewRoomIO(room *lksdk.Room, session *agent.AgentSession, opts RoomOptions) 
 			syncedAudio := agent.NewSyncedAudioOutput(sync, rio)
 			syncedText := agent.NewSyncedTextOutput(sync, textOut)
 
-			session.SetAudioOutput(rio.Recorder.RecordOutput(syncedAudio))
+			if recorder != nil {
+				session.SetAudioOutput(recorder.RecordOutput(syncedAudio))
+			} else {
+				session.SetAudioOutput(syncedAudio)
+			}
 			session.Output.Transcription = syncedText
 			logger.Logger.Infow("[Transcript] Using SyncedTextOutput (TTS-aligned)", "agentIdentity", agentIdentity)
 		} else {
-			session.SetAudioOutput(rio.Recorder.RecordOutput(rio))
+			if recorder != nil {
+				session.SetAudioOutput(recorder.RecordOutput(rio))
+			} else {
+				session.SetAudioOutput(rio)
+			}
 			if opts.TextOutput != nil && opts.TextOutput.Enabled {
 				textOut := NewRoomTextOutput(room, agentIdentity, jc.URL, jc.APIKey, jc.APISecret)
 				session.Output.Transcription = textOut
@@ -630,6 +663,22 @@ func NewRoomIO(room *lksdk.Room, session *agent.AgentSession, opts RoomOptions) 
 
 	// 	// GAP-008: Register the RoomIO as a MediaPublisher to decouple AgentSession from Room
 	session.Output.Publisher = rio
+
+	// Start recorder if audio recording is enabled (mirrors Python's recorder_io.start()).
+	// Both input and output must be enabled for a meaningful stereo recording.
+	if recorder != nil && opts.JobContext != nil && audioInputEnabled && audioOutputEnabled {
+		outPath := filepath.Join(opts.JobContext.SessionDirectory, "audio.mp3")
+		if err := recorder.Start(outPath, outRate); err != nil {
+			logger.Logger.Errorw("Failed to start recorder", err)
+		} else {
+			logger.Logger.Infow("Recorder started", "path", outPath)
+			if report := opts.JobContext.Report; report != nil {
+				startedAt := float64(recorder.RecordingStartedAt.UnixNano()) / 1e9
+				report.AudioRecordingPath = &recorder.OutputPath
+				report.AudioRecordingStartedAt = &startedAt
+			}
+		}
+	}
 
 	return rio
 }
@@ -1424,6 +1473,12 @@ func (rio *RoomIO) Close() error {
 
 	if rio.Recorder != nil {
 		rio.Recorder.Stop()
+		jc := rio.Options.JobContext
+		if jc != nil && jc.Report != nil && jc.Report.AudioRecordingStartedAt != nil {
+			now := float64(time.Now().UnixNano()) / 1e9
+			duration := now - *jc.Report.AudioRecordingStartedAt
+			jc.Report.Duration = &duration
+		}
 	}
 
 	if rio.preConnectAudio != nil {

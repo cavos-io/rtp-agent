@@ -2,13 +2,13 @@ package worker
 
 import (
 	"context"
-	"encoding/binary"
 	"fmt"
 	"os"
 	"path/filepath"
 	"sync"
 	"time"
 
+	mp3enc "github.com/braheezy/shine-mp3/pkg/mp3"
 	"github.com/cavos-io/rtp-agent/core/agent"
 	"github.com/cavos-io/rtp-agent/core/audio"
 	"github.com/cavos-io/rtp-agent/library/logger"
@@ -412,7 +412,7 @@ func (r *RecorderAudioOutput) onPlaybackFinished(ev agent.PlaybackFinishedEvent)
 	}
 }
 
-// RecorderIO records a conversation as a stereo WAV file.
+// RecorderIO records a conversation as a stereo MP3 file.
 // Left channel = user (input), Right channel = agent (output).
 type RecorderIO struct {
 	Session *agent.AgentSession
@@ -428,12 +428,15 @@ type RecorderIO struct {
 	inQ  chan []*model.AudioFrame
 	outQ chan []*model.AudioFrame
 
-	wavFile    *os.File
-	sampleRate int
+	outputFile  *os.File
+	mp3Encoder  *mp3enc.Encoder
+	mp3Leftover []int16 // partial frame buffer — accessed only from encodeThread
+	sampleRate  int
 
 	done chan struct{}
 
-	OutPath string
+	OutputPath         string
+	RecordingStartedAt time.Time
 
 	totalSamplesWritten int64
 }
@@ -471,7 +474,7 @@ func (r *RecorderIO) writeCb(buf []*model.AudioFrame) {
 	r.outQ <- buf
 }
 
-// Start begins recording to a stereo WAV file at the given sample rate.
+// Start begins recording to a stereo MP3 file at the given sample rate.
 func (r *RecorderIO) Start(outputPath string, sampleRate int) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -486,18 +489,14 @@ func (r *RecorderIO) Start(outputPath string, sampleRate int) error {
 
 	f, err := os.Create(outputPath)
 	if err != nil {
-		return fmt.Errorf("failed to create wav file: %w", err)
+		return fmt.Errorf("failed to create mp3 file: %w", err)
 	}
 
-	// Write a placeholder WAV header (will be updated on close)
-	if err := writeWAVHeader(f, sampleRate, 2, 0); err != nil {
-		f.Close()
-		return fmt.Errorf("failed to write wav header: %w", err)
-	}
-
-	r.wavFile = f
+	r.outputFile = f
+	r.mp3Encoder = mp3enc.NewEncoder(sampleRate, 2)
 	r.sampleRate = sampleRate
-	r.OutPath = outputPath
+	r.OutputPath = outputPath
+	r.RecordingStartedAt = time.Now()
 	r.started = true
 
 	go r.forwardTask()
@@ -564,7 +563,7 @@ func (r *RecorderIO) encodeThread(sampleRate int) {
 		outFrames, ok2 := <-r.outQ
 
 		if !ok1 || !ok2 {
-			r.finalizeWAV()
+			r.finalize()
 			return
 		}
 
@@ -607,9 +606,9 @@ func (r *RecorderIO) encodeThread(sampleRate int) {
 			continue
 		}
 
-		// Interleave into stereo WAV: [L0, R0, L1, R1, ...]
+		// Interleave into stereo int16: [L0, R0, L1, R1, ...]
 		// Left = user input, Right = agent output
-		stereoBuf := make([]byte, maxSamples*4) // 2 channels * 2 bytes per sample
+		stereoInt16 := make([]int16, maxSamples*2)
 		for i := 0; i < maxSamples; i++ {
 			var left, right int16
 			if i < len(inPcm) {
@@ -618,22 +617,38 @@ func (r *RecorderIO) encodeThread(sampleRate int) {
 			if i < len(outPcm) {
 				right = outPcm[i]
 			}
-			binary.LittleEndian.PutUint16(stereoBuf[i*4:], uint16(left))
-			binary.LittleEndian.PutUint16(stereoBuf[i*4+2:], uint16(right))
+			stereoInt16[i*2] = left
+			stereoInt16[i*2+1] = right
 		}
 
-		// Write raw PCM to WAV file
 		r.mu.Lock()
-		wavFile := r.wavFile
+		enc := r.mp3Encoder
+		outputFile := r.outputFile
 		r.mu.Unlock()
 
-		if wavFile == nil {
+		if enc == nil || outputFile == nil {
 			continue
 		}
 
-		n, err := wavFile.Write(stereoBuf)
-		if err != nil {
-			logger.Logger.Errorw("Failed to write to WAV", err)
+		// shine-mp3 panics if the slice is not a multiple of 1152 samples/channel.
+		// Buffer leftover samples across calls to ensure we only pass complete frames.
+		const shineFrameSize = 1152 * 2 // stereo interleaved, MPEG1
+		stereoInt16 = append(r.mp3Leftover, stereoInt16...)
+		r.mp3Leftover = nil
+
+		complete := (len(stereoInt16) / shineFrameSize) * shineFrameSize
+		if complete == 0 {
+			r.mp3Leftover = stereoInt16
+			continue
+		}
+		if complete < len(stereoInt16) {
+			r.mp3Leftover = make([]int16, len(stereoInt16)-complete)
+			copy(r.mp3Leftover, stereoInt16[complete:])
+			stereoInt16 = stereoInt16[:complete]
+		}
+
+		if err := enc.Write(outputFile, stereoInt16); err != nil {
+			logger.Logger.Errorw("Failed to write MP3 frames", err)
 			continue
 		}
 
@@ -642,57 +657,36 @@ func (r *RecorderIO) encodeThread(sampleRate int) {
 		total := r.totalSamplesWritten
 		r.mu.Unlock()
 
-		logger.Logger.Infow("Recorder progress", "bytes_written", n, "total_seconds", float64(total)/float64(r.sampleRate))
+		logger.Logger.Infow("Recorder progress", "total_seconds", float64(total)/float64(r.sampleRate))
 	}
 }
 
-func (r *RecorderIO) finalizeWAV() {
+func (r *RecorderIO) finalize() {
 	r.mu.Lock()
-	wavFile := r.wavFile
+	enc := r.mp3Encoder
+	outputFile := r.outputFile
 	total := r.totalSamplesWritten
 	sampleRate := r.sampleRate
 	r.mu.Unlock()
 
-	if wavFile == nil {
+	if outputFile == nil {
 		return
 	}
 
-	// Update WAV header with final data size
-	dataSize := total * 4 // stereo * 2 bytes per sample
-	if err := writeWAVHeader(wavFile, sampleRate, 2, int(dataSize)); err != nil {
-		logger.Logger.Errorw("Failed to finalize WAV header", err)
+	// Flush any remaining samples by padding to a complete frame with silence.
+	const shineFrameSize = 1152 * 2
+	if enc != nil && len(r.mp3Leftover) > 0 {
+		rem := len(r.mp3Leftover) % shineFrameSize
+		padded := r.mp3Leftover
+		if rem != 0 {
+			padded = append(r.mp3Leftover, make([]int16, shineFrameSize-rem)...)
+		}
+		if err := enc.Write(outputFile, padded); err != nil {
+			logger.Logger.Errorw("Failed to flush remaining MP3 frames", err)
+		}
 	}
 
-	wavFile.Close()
+	outputFile.Close()
 	duration := float64(total) / float64(sampleRate)
-	logger.Logger.Infow("WAV finalized", "path", r.OutPath, "duration", duration, "samples", total)
-}
-
-// writeWAVHeader writes (or re-writes) a standard 44-byte WAV header.
-func writeWAVHeader(f *os.File, sampleRate int, channels int, dataSize int) error {
-	if _, err := f.Seek(0, 0); err != nil {
-		return err
-	}
-
-	bitsPerSample := 16
-	byteRate := sampleRate * channels * bitsPerSample / 8
-	blockAlign := channels * bitsPerSample / 8
-
-	header := make([]byte, 44)
-	copy(header[0:4], "RIFF")
-	binary.LittleEndian.PutUint32(header[4:8], uint32(36+dataSize))
-	copy(header[8:12], "WAVE")
-	copy(header[12:16], "fmt ")
-	binary.LittleEndian.PutUint32(header[16:20], 16) // PCM chunk size
-	binary.LittleEndian.PutUint16(header[20:22], 1)  // PCM format
-	binary.LittleEndian.PutUint16(header[22:24], uint16(channels))
-	binary.LittleEndian.PutUint32(header[24:28], uint32(sampleRate))
-	binary.LittleEndian.PutUint32(header[28:32], uint32(byteRate))
-	binary.LittleEndian.PutUint16(header[32:34], uint16(blockAlign))
-	binary.LittleEndian.PutUint16(header[34:36], uint16(bitsPerSample))
-	copy(header[36:40], "data")
-	binary.LittleEndian.PutUint32(header[40:44], uint32(dataSize))
-
-	_, err := f.Write(header)
-	return err
+	logger.Logger.Infow("MP3 recording finalized", "path", r.OutputPath, "duration", duration, "samples", total)
 }
