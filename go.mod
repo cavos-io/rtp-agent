@@ -41,9 +41,10 @@ require (
 )
 
 require (
-	github.com/gen2brain/aac-go v0.0.0-20230119102159-ef1e76509d21 // indirect
+	github.com/asticode/go-astiav v0.40.0
+	github.com/asticode/go-astikit v0.42.0 // indirect
 	github.com/icza/bitio v1.1.0 // indirect
-	github.com/mewkiz/flac v1.0.13 // indirect
+	github.com/mewkiz/flac v1.0.13
 	github.com/mewkiz/pkg v0.0.0-20250417130911-3f050ff8c56d // indirect
 	github.com/mewpkg/term v0.0.0-20241026122259-37a80af23985 // indirect
 )
@@ -177,3 +178,4 @@ require (
 	google.golang.org/grpc v1.79.1 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
+

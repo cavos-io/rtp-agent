@@ -449,15 +449,16 @@ func (va *PipelineAgent) handlePlaybackAndTranscription(ctx context.Context, spe
 
 	if audioCh != nil {
 		var frameCount int
+	outerLoop:
 		for frame := range audioCh {
 			if speech.IsInterrupted() {
 				logger.Logger.Infow("Speech interrupted during audio playback", "frames_sent", frameCount)
-				break
+				break outerLoop
 			}
 			select {
 			case <-ctx.Done():
 				logger.Logger.Infow("Context cancelled during audio playback", "frames_sent", frameCount)
-				return
+				break outerLoop
 			default:
 				if session.Output.Audio != nil {
 					_ = session.Output.Audio.CaptureFrame(frame)
@@ -470,8 +471,11 @@ func (va *PipelineAgent) handlePlaybackAndTranscription(ctx context.Context, spe
 
 	if session.Output.Audio != nil {
 		session.Output.Audio.Flush()
-		if speech.IsInterrupted() {
-			logger.Logger.Infow("Speech interrupted after audio flush, clearing buffer")
+		if speech.IsInterrupted() || ctx.Err() != nil {
+			logger.Logger.Infow("Speech interrupted or ctx cancelled after audio flush, clearing buffer",
+				"interrupted", speech.IsInterrupted(),
+				"ctx_err", ctx.Err(),
+			)
 			session.Output.Audio.ClearBuffer()
 		} else {
 			logger.Logger.Debugw("Waiting for audio playout")

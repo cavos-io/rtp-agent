@@ -9,19 +9,11 @@ import (
 	"sync"
 	"time"
 
-	aac "github.com/gen2brain/aac-go"
-
 	"github.com/cavos-io/rtp-agent/core/agent"
 	"github.com/cavos-io/rtp-agent/core/audio"
 	"github.com/cavos-io/rtp-agent/library/logger"
 	"github.com/cavos-io/rtp-agent/model"
 )
-
-// aacGlobalMu serializes all AAC encoder operations.
-// gen2brain/aac-go uses a global C encoder handle, so concurrent encode calls
-// from multiple sessions would corrupt each other's state.
-// Each batch acquires this mutex, runs Init→Encode→Close, then releases.
-var aacGlobalMu sync.Mutex
 
 func createSilenceFrame(duration time.Duration, sampleRate uint32, numChannels uint32) *model.AudioFrame {
 	samples := int(duration.Nanoseconds() * int64(sampleRate) / 1e9)
@@ -166,6 +158,14 @@ func (r *RecorderAudioOutput) CaptureFrame(frame *model.AudioFrame) error {
 			r.lastSpeechStartTime = &now
 		}
 		r.accFrames = append(r.accFrames, frame)
+		if len(r.accFrames) == 1 {
+			logger.Logger.Debugw("[REC] RecorderAudioOutput: first frame captured",
+				"sample_rate", frame.SampleRate,
+				"samples_per_ch", frame.SamplesPerChannel,
+			)
+		}
+	} else {
+		logger.Logger.Warnw("[REC] RecorderAudioOutput: frame DROPPED (recording=false)", nil)
 	}
 	r.mu.Unlock()
 
@@ -189,6 +189,11 @@ func (r *RecorderAudioOutput) WaitForPlayout(ctx context.Context) error {
 }
 
 func (r *RecorderAudioOutput) ClearBuffer() {
+	r.mu.Lock()
+	r.lastSpeechStartTime = nil
+	r.resetPauseState()
+	r.mu.Unlock()
+
 	if r.nextInChain != nil {
 		r.nextInChain.ClearBuffer()
 	}
@@ -298,6 +303,13 @@ func (r *RecorderAudioOutput) onPlaybackFinished(ev agent.PlaybackFinishedEvent)
 		finishTime = *r.currentPauseStart
 	}
 
+	logger.Logger.Debugw("[REC] onPlaybackFinished called",
+		"playback_pos_ms", ev.PlaybackPosition.Milliseconds(),
+		"interrupted", ev.Interrupted,
+		"acc_frames_count", len(r.accFrames),
+		"last_speech_start_set", r.lastSpeechStartTime != nil,
+	)
+
 	playbackPos := ev.PlaybackPosition
 	if r.lastSpeechStartTime == nil {
 		logger.Logger.Warnw("playback finished before speech started", nil, "finish_time", finishTime, "playback_position", playbackPos)
@@ -309,11 +321,31 @@ func (r *RecorderAudioOutput) onPlaybackFinished(ev agent.PlaybackFinishedEvent)
 		}
 	}
 
+	if playbackPos == 0 && len(r.accFrames) > 0 {
+		var totalDur time.Duration
+		for _, f := range r.accFrames {
+			if f != nil && f.SampleRate > 0 {
+				totalDur += time.Duration(float64(f.SamplesPerChannel) / float64(f.SampleRate) * float64(time.Second))
+			}
+		}
+		if totalDur > 0 {
+			logger.Logger.Warnw("playbackPos=0 with captured frames; falling back to frame-based duration",
+				nil,
+				"fallback_dur_ms", totalDur.Milliseconds(),
+				"acc_frames_count", len(r.accFrames),
+			)
+			playbackPos = totalDur
+		}
+	}
+
 	r.recordingIO.mu.Lock()
 	recording := r.recordingIO.started
 	r.recordingIO.mu.Unlock()
 
 	if !recording {
+		r.accFrames = nil
+		r.lastSpeechStartTime = nil
+		r.resetPauseState()
 		return
 	}
 
@@ -415,6 +447,7 @@ func (r *RecorderAudioOutput) onPlaybackFinished(ev agent.PlaybackFinishedEvent)
 	r.lastSpeechEndTime = &now
 	r.lastSpeechStartTime = nil
 
+	logger.Logger.Debugw("[REC] writeCb dispatching buf", "buf_frames", len(buf))
 	if r.writeCb != nil {
 		r.writeCb(buf)
 	}
@@ -425,7 +458,7 @@ type RecordingCodec int
 
 const (
 	CodecFLAC RecordingCodec = iota // lossless, no external tools required (default)
-	CodecAAC                         // lossy 192 kbps, streaming fMP4, no external tools required
+	CodecAAC                        // lossy 192 kbps, streaming fMP4, no external tools required
 )
 
 // RecorderIO records a conversation as a stereo MP4 file.
@@ -448,8 +481,8 @@ type RecorderIO struct {
 	stereoPCM           []int16
 	totalSamplesWritten int64
 
-	// fmp4 is used only for CodecAAC — receives fragments incrementally.
-	fmp4 *fMP4Writer
+	// aac is used only for CodecAAC — per-instance encoder, receives PCM incrementally.
+	aac *astiavAAC
 
 	sampleRate int
 	done       chan struct{}
@@ -509,11 +542,11 @@ func (r *RecorderIO) Start(outputPath string, sampleRate int) error {
 	}
 
 	if r.Codec == CodecAAC {
-		fmp4, err := newFMP4Writer(outputPath, sampleRate, 2)
+		aacEnc, err := newAstiavAAC(outputPath, sampleRate)
 		if err != nil {
-			return fmt.Errorf("failed to create fMP4 writer: %w", err)
+			return fmt.Errorf("failed to create AAC encoder: %w", err)
 		}
-		r.fmp4 = fmp4
+		r.aac = aacEnc
 	}
 
 	r.sampleRate = sampleRate
@@ -537,16 +570,20 @@ func (r *RecorderIO) forwardTask() {
 			return
 		case <-ticker.C:
 			r.mu.Lock()
-			outHasPending := r.outRecord != nil && len(r.outRecord.accFrames) > 0
+			outRecord := r.outRecord
 			r.mu.Unlock()
+
+			var outHasPending bool
+			var padSince *time.Time
+			if outRecord != nil {
+				outRecord.mu.Lock()
+				outHasPending = len(outRecord.accFrames) > 0
+				padSince = outRecord.lastSpeechEndTime
+				outRecord.mu.Unlock()
+			}
 
 			if outHasPending {
 				continue
-			}
-
-			var padSince *time.Time
-			if r.outRecord != nil {
-				padSince = r.outRecord.lastSpeechEndTime
 			}
 
 			inputBuf := make([]*model.AudioFrame, 0)
@@ -576,9 +613,24 @@ func (r *RecorderIO) Stop() error {
 	return nil
 }
 
+func peakAmplitude(pcm []int16) int16 {
+	var peak int16
+	for _, s := range pcm {
+		if s < 0 {
+			s = -s
+		}
+		if s > peak {
+			peak = s
+		}
+	}
+	return peak
+}
+
 func (r *RecorderIO) encodeThread(sampleRate int) {
 	r.wg.Add(1)
 	defer r.wg.Done()
+
+	batchIdx := 0
 
 	for {
 		inFrames, ok1 := <-r.inQ
@@ -618,6 +670,24 @@ func (r *RecorderIO) encodeThread(sampleRate int) {
 			outPcm = append(outPcm, mono...)
 		}
 		outPcm = audio.ResampleLinear(outPcm, outRate, sampleRate)
+
+		if batchIdx == 0 {
+			inDurMs := float64(len(inPcm)) / float64(sampleRate) * 1000
+			outDurMs := float64(len(outPcm)) / float64(sampleRate) * 1000
+			logger.Logger.Debugw("Recorder first batch",
+				"in_frames", len(inFrames),
+				"out_frames", len(outFrames),
+				"in_rate_src", inRate,
+				"out_rate_src", outRate,
+				"in_samples", len(inPcm),
+				"out_samples", len(outPcm),
+				"in_dur_ms", inDurMs,
+				"out_dur_ms", outDurMs,
+				"in_peak", peakAmplitude(inPcm),
+				"out_peak", peakAmplitude(outPcm),
+			)
+		}
+		batchIdx++
 
 		maxSamples := len(inPcm)
 		if len(outPcm) > maxSamples {
@@ -663,55 +733,15 @@ func (r *RecorderIO) encodeThread(sampleRate int) {
 	}
 }
 
-// encodeAACFragment encodes one batch of stereo 16-bit PCM as an AAC fMP4 fragment.
-// Uses a global mutex because gen2brain/aac-go has a global C encoder handle.
-func (r *RecorderIO) encodeAACFragment(stereo []int16, sampleRate int) error {
-	// Convert []int16 → []byte (little-endian)
-	pcmBytes := make([]byte, len(stereo)*2)
-	for i, s := range stereo {
-		pcmBytes[i*2] = byte(s)
-		pcmBytes[i*2+1] = byte(uint16(s) >> 8)
-	}
-
-	var adtsBuf bytes.Buffer
-
-	aacGlobalMu.Lock()
-	enc, err := aac.NewEncoder(&adtsBuf, &aac.Options{
-		SampleRate:  sampleRate,
-		NumChannels: 2,
-		BitRate:     192000,
-	})
-	if err != nil {
-		aacGlobalMu.Unlock()
-		return fmt.Errorf("aac encoder init: %w", err)
-	}
-	err = enc.Encode(bytes.NewReader(pcmBytes))
-	closeErr := enc.Close()
-	aacGlobalMu.Unlock()
-
-	if err != nil {
-		return fmt.Errorf("aac encode: %w", err)
-	}
-	if closeErr != nil {
-		return fmt.Errorf("aac close: %w", closeErr)
-	}
-
-	frames, err := stripADTSFrames(adtsBuf.Bytes())
-	if err != nil {
-		return fmt.Errorf("strip ADTS: %w", err)
-	}
-	if len(frames) == 0 {
-		return nil
-	}
-
+func (r *RecorderIO) encodeAACFragment(stereo []int16, _ int) error {
 	r.mu.Lock()
-	fmp4 := r.fmp4
+	enc := r.aac
 	r.mu.Unlock()
 
-	if fmp4 == nil {
-		return fmt.Errorf("fMP4 writer not initialized")
+	if enc == nil {
+		return fmt.Errorf("AAC encoder not initialized")
 	}
-	return fmp4.WriteFragment(frames)
+	return enc.WritePCM(stereo)
 }
 
 func (r *RecorderIO) finalizeMP4() {
@@ -720,19 +750,19 @@ func (r *RecorderIO) finalizeMP4() {
 	total := r.totalSamplesWritten
 	sampleRate := r.sampleRate
 	outputPath := r.OutputPath
-	fmp4 := r.fmp4
+	aacEnc := r.aac
 	r.stereoPCM = nil
-	r.fmp4 = nil
+	r.aac = nil
 	r.mu.Unlock()
 
 	switch r.Codec {
 	case CodecAAC:
-		if fmp4 == nil {
-			logger.Logger.Warnw("No fMP4 writer, skipping AAC finalization", nil)
+		if aacEnc == nil {
+			logger.Logger.Warnw("No AAC encoder, skipping AAC finalization", nil)
 			return
 		}
-		if err := fmp4.Close(); err != nil {
-			logger.Logger.Errorw("Failed to close fMP4 writer", err)
+		if err := aacEnc.Close(); err != nil {
+			logger.Logger.Errorw("Failed to close AAC encoder", err)
 			return
 		}
 		duration := float64(total) / float64(sampleRate)
@@ -757,4 +787,3 @@ func (r *RecorderIO) finalizeMP4() {
 		logger.Logger.Infow("MP4 finalized", "path", outputPath, "duration_s", duration, "total_samples", total, "codec", r.Codec)
 	}
 }
-

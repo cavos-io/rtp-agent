@@ -886,16 +886,18 @@ func (rio *RoomIO) playoutLoop(ctx context.Context) {
 			rio.mu.Lock()
 			rio.closeFlushWaitersLocked()
 			rio.targetPlayoutTime = time.Time{}
-			if rio.playbackStarted {
-				if rio.onPlaybackFinished != nil {
-					go rio.onPlaybackFinished(agent.PlaybackFinishedEvent{
-						PlaybackPosition: rio.pushedDuration,
-						Interrupted:      true,
-					})
-				}
-				rio.playbackStarted = false
-				rio.pushedDuration = 0
+			logger.Logger.Debugw("[REC] clearBufferCh: calling onPlaybackFinished",
+				"pushed_duration_ms", rio.pushedDuration.Milliseconds(),
+				"has_callback", rio.onPlaybackFinished != nil,
+			)
+			if rio.onPlaybackFinished != nil {
+				go rio.onPlaybackFinished(agent.PlaybackFinishedEvent{
+					PlaybackPosition: rio.pushedDuration,
+					Interrupted:      true,
+				})
 			}
+			rio.playbackStarted = false
+			rio.pushedDuration = 0
 			pub := rio.audioPub
 			rio.mu.Unlock()
 
@@ -917,16 +919,18 @@ func (rio *RoomIO) playoutLoop(ctx context.Context) {
 					}
 				}
 
-				if rio.playbackStarted {
-					if rio.onPlaybackFinished != nil {
-						go rio.onPlaybackFinished(agent.PlaybackFinishedEvent{
-							PlaybackPosition: rio.pushedDuration,
-							Interrupted:      false,
-						})
-					}
-					rio.playbackStarted = false
-					rio.pushedDuration = 0
+				logger.Logger.Debugw("[REC] flushMarker: calling onPlaybackFinished",
+					"pushed_duration_ms", rio.pushedDuration.Milliseconds(),
+					"has_callback", rio.onPlaybackFinished != nil,
+				)
+				if rio.onPlaybackFinished != nil {
+					go rio.onPlaybackFinished(agent.PlaybackFinishedEvent{
+						PlaybackPosition: rio.pushedDuration,
+						Interrupted:      false,
+					})
 				}
+				rio.playbackStarted = false
+				rio.pushedDuration = 0
 				rio.targetPlayoutTime = time.Time{}
 
 				// Remove from flushWaiters array and close it
