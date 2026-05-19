@@ -8,7 +8,6 @@ import (
 	"sync"
 	"time"
 
-	mp3enc "github.com/braheezy/shine-mp3/pkg/mp3"
 	"github.com/cavos-io/rtp-agent/core/agent"
 	"github.com/cavos-io/rtp-agent/core/audio"
 	"github.com/cavos-io/rtp-agent/library/logger"
@@ -158,6 +157,14 @@ func (r *RecorderAudioOutput) CaptureFrame(frame *model.AudioFrame) error {
 			r.lastSpeechStartTime = &now
 		}
 		r.accFrames = append(r.accFrames, frame)
+		if len(r.accFrames) == 1 {
+			logger.Logger.Debugw("[REC] RecorderAudioOutput: first frame captured",
+				"sample_rate", frame.SampleRate,
+				"samples_per_ch", frame.SamplesPerChannel,
+			)
+		}
+	} else {
+		logger.Logger.Warnw("[REC] RecorderAudioOutput: frame DROPPED (recording=false)", nil)
 	}
 	r.mu.Unlock()
 
@@ -181,6 +188,11 @@ func (r *RecorderAudioOutput) WaitForPlayout(ctx context.Context) error {
 }
 
 func (r *RecorderAudioOutput) ClearBuffer() {
+	r.mu.Lock()
+	r.lastSpeechStartTime = nil
+	r.resetPauseState()
+	r.mu.Unlock()
+
 	if r.nextInChain != nil {
 		r.nextInChain.ClearBuffer()
 	}
@@ -290,6 +302,13 @@ func (r *RecorderAudioOutput) onPlaybackFinished(ev agent.PlaybackFinishedEvent)
 		finishTime = *r.currentPauseStart
 	}
 
+	logger.Logger.Debugw("[REC] onPlaybackFinished called",
+		"playback_pos_ms", ev.PlaybackPosition.Milliseconds(),
+		"interrupted", ev.Interrupted,
+		"acc_frames_count", len(r.accFrames),
+		"last_speech_start_set", r.lastSpeechStartTime != nil,
+	)
+
 	playbackPos := ev.PlaybackPosition
 	if r.lastSpeechStartTime == nil {
 		logger.Logger.Warnw("playback finished before speech started", nil, "finish_time", finishTime, "playback_position", playbackPos)
@@ -301,11 +320,31 @@ func (r *RecorderAudioOutput) onPlaybackFinished(ev agent.PlaybackFinishedEvent)
 		}
 	}
 
+	if playbackPos == 0 && len(r.accFrames) > 0 {
+		var totalDur time.Duration
+		for _, f := range r.accFrames {
+			if f != nil && f.SampleRate > 0 {
+				totalDur += time.Duration(float64(f.SamplesPerChannel) / float64(f.SampleRate) * float64(time.Second))
+			}
+		}
+		if totalDur > 0 {
+			logger.Logger.Warnw("playbackPos=0 with captured frames; falling back to frame-based duration",
+				nil,
+				"fallback_dur_ms", totalDur.Milliseconds(),
+				"acc_frames_count", len(r.accFrames),
+			)
+			playbackPos = totalDur
+		}
+	}
+
 	r.recordingIO.mu.Lock()
 	recording := r.recordingIO.started
 	r.recordingIO.mu.Unlock()
 
 	if !recording {
+		r.accFrames = nil
+		r.lastSpeechStartTime = nil
+		r.resetPauseState()
 		return
 	}
 
@@ -407,12 +446,20 @@ func (r *RecorderAudioOutput) onPlaybackFinished(ev agent.PlaybackFinishedEvent)
 	r.lastSpeechEndTime = &now
 	r.lastSpeechStartTime = nil
 
+	logger.Logger.Debugw("[REC] writeCb dispatching buf", "buf_frames", len(buf))
 	if r.writeCb != nil {
 		r.writeCb(buf)
 	}
 }
 
-// RecorderIO records a conversation as a stereo MP3 file.
+// RecordingCodec selects the audio codec used when finalizing an MP4 recording.
+type RecordingCodec int
+
+const (
+	CodecAAC RecordingCodec = iota // lossy 192 kbps, streaming fMP4, no external tools required
+)
+
+// RecorderIO records a conversation as a stereo MP4 file.
 // Left channel = user (input), Right channel = agent (output).
 type RecorderIO struct {
 	Session *agent.AgentSession
@@ -428,17 +475,16 @@ type RecorderIO struct {
 	inQ  chan []*model.AudioFrame
 	outQ chan []*model.AudioFrame
 
-	outputFile  *os.File
-	mp3Encoder  *mp3enc.Encoder
-	mp3Leftover []int16 // partial frame buffer — accessed only from encodeThread
-	sampleRate  int
+	totalSamplesWritten int64
 
-	done chan struct{}
+	aac *astiavAAC
+
+	sampleRate int
+	done       chan struct{}
 
 	OutputPath         string
 	RecordingStartedAt time.Time
-
-	totalSamplesWritten int64
+	Codec              RecordingCodec
 }
 
 func NewRecorderIO(session *agent.AgentSession) *RecorderIO {
@@ -474,7 +520,8 @@ func (r *RecorderIO) writeCb(buf []*model.AudioFrame) {
 	r.outQ <- buf
 }
 
-// Start begins recording to a stereo MP3 file at the given sample rate.
+// Start begins recording to an MP4 file at the given sample rate.
+// The fMP4 container header is written immediately; audio fragments are flushed per batch.
 func (r *RecorderIO) Start(outputPath string, sampleRate int) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -487,13 +534,14 @@ func (r *RecorderIO) Start(outputPath string, sampleRate int) error {
 		return fmt.Errorf("failed to create directory for recording: %w", err)
 	}
 
-	f, err := os.Create(outputPath)
-	if err != nil {
-		return fmt.Errorf("failed to create mp3 file: %w", err)
+	if r.Codec == CodecAAC {
+		aacEnc, err := newAstiavAAC(outputPath, sampleRate)
+		if err != nil {
+			return fmt.Errorf("failed to create AAC encoder: %w", err)
+		}
+		r.aac = aacEnc
 	}
 
-	r.outputFile = f
-	r.mp3Encoder = mp3enc.NewEncoder(sampleRate, 2)
 	r.sampleRate = sampleRate
 	r.OutputPath = outputPath
 	r.RecordingStartedAt = time.Now()
@@ -515,16 +563,20 @@ func (r *RecorderIO) forwardTask() {
 			return
 		case <-ticker.C:
 			r.mu.Lock()
-			outHasPending := r.outRecord != nil && len(r.outRecord.accFrames) > 0
+			outRecord := r.outRecord
 			r.mu.Unlock()
+
+			var outHasPending bool
+			var padSince *time.Time
+			if outRecord != nil {
+				outRecord.mu.Lock()
+				outHasPending = len(outRecord.accFrames) > 0
+				padSince = outRecord.lastSpeechEndTime
+				outRecord.mu.Unlock()
+			}
 
 			if outHasPending {
 				continue
-			}
-
-			var padSince *time.Time
-			if r.outRecord != nil {
-				padSince = r.outRecord.lastSpeechEndTime
 			}
 
 			inputBuf := make([]*model.AudioFrame, 0)
@@ -537,7 +589,7 @@ func (r *RecorderIO) forwardTask() {
 	}
 }
 
-// Stop signals the record loop to flush and close, then waits for it to finish.
+// Stop signals the record loop to flush and close.
 func (r *RecorderIO) Stop() error {
 	r.mu.Lock()
 	if !r.started || r.closed {
@@ -554,16 +606,31 @@ func (r *RecorderIO) Stop() error {
 	return nil
 }
 
+func peakAmplitude(pcm []int16) int16 {
+	var peak int16
+	for _, s := range pcm {
+		if s < 0 {
+			s = -s
+		}
+		if s > peak {
+			peak = s
+		}
+	}
+	return peak
+}
+
 func (r *RecorderIO) encodeThread(sampleRate int) {
 	r.wg.Add(1)
 	defer r.wg.Done()
+
+	batchIdx := 0
 
 	for {
 		inFrames, ok1 := <-r.inQ
 		outFrames, ok2 := <-r.outQ
 
 		if !ok1 || !ok2 {
-			r.finalize()
+			r.finalizeMP4()
 			return
 		}
 
@@ -597,6 +664,24 @@ func (r *RecorderIO) encodeThread(sampleRate int) {
 		}
 		outPcm = audio.ResampleLinear(outPcm, outRate, sampleRate)
 
+		if batchIdx == 0 {
+			inDurMs := float64(len(inPcm)) / float64(sampleRate) * 1000
+			outDurMs := float64(len(outPcm)) / float64(sampleRate) * 1000
+			logger.Logger.Debugw("Recorder first batch",
+				"in_frames", len(inFrames),
+				"out_frames", len(outFrames),
+				"in_rate_src", inRate,
+				"out_rate_src", outRate,
+				"in_samples", len(inPcm),
+				"out_samples", len(outPcm),
+				"in_dur_ms", inDurMs,
+				"out_dur_ms", outDurMs,
+				"in_peak", peakAmplitude(inPcm),
+				"out_peak", peakAmplitude(outPcm),
+			)
+		}
+		batchIdx++
+
 		maxSamples := len(inPcm)
 		if len(outPcm) > maxSamples {
 			maxSamples = len(outPcm)
@@ -606,87 +691,58 @@ func (r *RecorderIO) encodeThread(sampleRate int) {
 			continue
 		}
 
-		// Interleave into stereo int16: [L0, R0, L1, R1, ...]
+		// Interleave into stereo: [L0, R0, L1, R1, ...]
 		// Left = user input, Right = agent output
-		stereoInt16 := make([]int16, maxSamples*2)
+		stereo := make([]int16, maxSamples*2)
 		for i := 0; i < maxSamples; i++ {
-			var left, right int16
 			if i < len(inPcm) {
-				left = inPcm[i]
+				stereo[i*2] = inPcm[i]
 			}
 			if i < len(outPcm) {
-				right = outPcm[i]
+				stereo[i*2+1] = outPcm[i]
 			}
-			stereoInt16[i*2] = left
-			stereoInt16[i*2+1] = right
 		}
 
-		r.mu.Lock()
-		enc := r.mp3Encoder
-		outputFile := r.outputFile
-		r.mu.Unlock()
-
-		if enc == nil || outputFile == nil {
-			continue
-		}
-
-		// shine-mp3 panics if the slice is not a multiple of 1152 samples/channel.
-		// Buffer leftover samples across calls to ensure we only pass complete frames.
-		const shineFrameSize = 1152 * 2 // stereo interleaved, MPEG1
-		stereoInt16 = append(r.mp3Leftover, stereoInt16...)
-		r.mp3Leftover = nil
-
-		complete := (len(stereoInt16) / shineFrameSize) * shineFrameSize
-		if complete == 0 {
-			r.mp3Leftover = stereoInt16
-			continue
-		}
-		if complete < len(stereoInt16) {
-			r.mp3Leftover = make([]int16, len(stereoInt16)-complete)
-			copy(r.mp3Leftover, stereoInt16[complete:])
-			stereoInt16 = stereoInt16[:complete]
-		}
-
-		if err := enc.Write(outputFile, stereoInt16); err != nil {
-			logger.Logger.Errorw("Failed to write MP3 frames", err)
-			continue
+		if err := r.encodeAACFragment(stereo, sampleRate); err != nil {
+			logger.Logger.Errorw("Recorder AAC fragment error", err)
 		}
 
 		r.mu.Lock()
 		r.totalSamplesWritten += int64(maxSamples)
 		total := r.totalSamplesWritten
 		r.mu.Unlock()
-
 		logger.Logger.Infow("Recorder progress", "total_seconds", float64(total)/float64(r.sampleRate))
 	}
 }
 
-func (r *RecorderIO) finalize() {
+func (r *RecorderIO) encodeAACFragment(stereo []int16, _ int) error {
 	r.mu.Lock()
-	enc := r.mp3Encoder
-	outputFile := r.outputFile
-	total := r.totalSamplesWritten
-	sampleRate := r.sampleRate
+	enc := r.aac
 	r.mu.Unlock()
 
-	if outputFile == nil {
+	if enc == nil {
+		return fmt.Errorf("AAC encoder not initialized")
+	}
+	return enc.WritePCM(stereo)
+}
+
+func (r *RecorderIO) finalizeMP4() {
+	r.mu.Lock()
+	total := r.totalSamplesWritten
+	sampleRate := r.sampleRate
+	outputPath := r.OutputPath
+	aacEnc := r.aac
+	r.aac = nil
+	r.mu.Unlock()
+
+	if aacEnc == nil {
+		logger.Logger.Warnw("No AAC encoder, skipping AAC finalization", nil)
 		return
 	}
-
-	// Flush any remaining samples by padding to a complete frame with silence.
-	const shineFrameSize = 1152 * 2
-	if enc != nil && len(r.mp3Leftover) > 0 {
-		rem := len(r.mp3Leftover) % shineFrameSize
-		padded := r.mp3Leftover
-		if rem != 0 {
-			padded = append(r.mp3Leftover, make([]int16, shineFrameSize-rem)...)
-		}
-		if err := enc.Write(outputFile, padded); err != nil {
-			logger.Logger.Errorw("Failed to flush remaining MP3 frames", err)
-		}
+	if err := aacEnc.Close(); err != nil {
+		logger.Logger.Errorw("Failed to close AAC encoder", err)
+		return
 	}
-
-	outputFile.Close()
 	duration := float64(total) / float64(sampleRate)
-	logger.Logger.Infow("MP3 recording finalized", "path", r.OutputPath, "duration", duration, "samples", total)
+	logger.Logger.Infow("MP4 finalized", "path", outputPath, "duration_s", duration, "total_samples", total, "codec", r.Codec)
 }

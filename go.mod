@@ -41,10 +41,8 @@ require (
 )
 
 require (
-	github.com/braheezy/shine-mp3 v0.1.0 // indirect
-	github.com/go-audio/audio v1.0.0 // indirect
-	github.com/go-audio/riff v1.0.0 // indirect
-	github.com/go-audio/wav v1.1.0 // indirect
+	github.com/asticode/go-astiav v0.40.0
+	github.com/asticode/go-astikit v0.42.0 // indirect
 )
 
 require (

@@ -18,11 +18,11 @@ import (
 	"github.com/hraban/opus"
 	"github.com/livekit/protocol/livekit"
 	lksdk "github.com/livekit/server-sdk-go/v2"
-	"google.golang.org/protobuf/proto"
 	"github.com/livekit/server-sdk-go/v2/pkg/samplebuilder"
 	"github.com/pion/rtp/codecs"
 	"github.com/pion/webrtc/v4"
 	"github.com/pion/webrtc/v4/pkg/media"
+	"google.golang.org/protobuf/proto"
 )
 
 type AudioDecoder interface {
@@ -169,6 +169,7 @@ type TextOutputOptions struct {
 // Mirrors Python's RecordingOptions TypedDict.
 type RecordingOptions struct {
 	Audio bool
+	Codec RecordingCodec // CodecAAC
 }
 
 type RoomOptions struct {
@@ -532,6 +533,9 @@ func NewRoomIO(room *lksdk.Room, session *agent.AgentSession, opts RoomOptions) 
 	var recorder *RecorderIO
 	if recordAudio {
 		recorder = NewRecorderIO(session)
+		if opts.Recording != nil {
+			recorder.Codec = opts.Recording.Codec
+		}
 	}
 
 	rioCtx, rioCancel := context.WithCancel(context.Background())
@@ -667,7 +671,7 @@ func NewRoomIO(room *lksdk.Room, session *agent.AgentSession, opts RoomOptions) 
 	// Start recorder if audio recording is enabled (mirrors Python's recorder_io.start()).
 	// Both input and output must be enabled for a meaningful stereo recording.
 	if recorder != nil && opts.JobContext != nil && audioInputEnabled && audioOutputEnabled {
-		outPath := filepath.Join(opts.JobContext.SessionDirectory, "audio.mp3")
+		outPath := filepath.Join(opts.JobContext.SessionDirectory, "audio.mp4")
 		if err := recorder.Start(outPath, outRate); err != nil {
 			logger.Logger.Errorw("Failed to start recorder", err)
 		} else {
@@ -882,16 +886,18 @@ func (rio *RoomIO) playoutLoop(ctx context.Context) {
 			rio.mu.Lock()
 			rio.closeFlushWaitersLocked()
 			rio.targetPlayoutTime = time.Time{}
-			if rio.playbackStarted {
-				if rio.onPlaybackFinished != nil {
-					go rio.onPlaybackFinished(agent.PlaybackFinishedEvent{
-						PlaybackPosition: rio.pushedDuration,
-						Interrupted:      true,
-					})
-				}
-				rio.playbackStarted = false
-				rio.pushedDuration = 0
+			logger.Logger.Debugw("[REC] clearBufferCh: calling onPlaybackFinished",
+				"pushed_duration_ms", rio.pushedDuration.Milliseconds(),
+				"has_callback", rio.onPlaybackFinished != nil,
+			)
+			if rio.onPlaybackFinished != nil {
+				go rio.onPlaybackFinished(agent.PlaybackFinishedEvent{
+					PlaybackPosition: rio.pushedDuration,
+					Interrupted:      true,
+				})
 			}
+			rio.playbackStarted = false
+			rio.pushedDuration = 0
 			pub := rio.audioPub
 			rio.mu.Unlock()
 
@@ -913,16 +919,18 @@ func (rio *RoomIO) playoutLoop(ctx context.Context) {
 					}
 				}
 
-				if rio.playbackStarted {
-					if rio.onPlaybackFinished != nil {
-						go rio.onPlaybackFinished(agent.PlaybackFinishedEvent{
-							PlaybackPosition: rio.pushedDuration,
-							Interrupted:      false,
-						})
-					}
-					rio.playbackStarted = false
-					rio.pushedDuration = 0
+				logger.Logger.Debugw("[REC] flushMarker: calling onPlaybackFinished",
+					"pushed_duration_ms", rio.pushedDuration.Milliseconds(),
+					"has_callback", rio.onPlaybackFinished != nil,
+				)
+				if rio.onPlaybackFinished != nil {
+					go rio.onPlaybackFinished(agent.PlaybackFinishedEvent{
+						PlaybackPosition: rio.pushedDuration,
+						Interrupted:      false,
+					})
 				}
+				rio.playbackStarted = false
+				rio.pushedDuration = 0
 				rio.targetPlayoutTime = time.Time{}
 
 				// Remove from flushWaiters array and close it
