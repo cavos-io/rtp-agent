@@ -169,7 +169,7 @@ type TextOutputOptions struct {
 // Mirrors Python's RecordingOptions TypedDict.
 type RecordingOptions struct {
 	Audio bool
-	Codec RecordingCodec // CodecFLAC (default) or CodecAAC (requires ffmpeg)
+	Codec RecordingCodec // CodecAAC
 }
 
 type RoomOptions struct {

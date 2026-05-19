@@ -1,7 +1,6 @@
 package worker
 
 import (
-	"bytes"
 	"context"
 	"fmt"
 	"os"
@@ -457,8 +456,7 @@ func (r *RecorderAudioOutput) onPlaybackFinished(ev agent.PlaybackFinishedEvent)
 type RecordingCodec int
 
 const (
-	CodecFLAC RecordingCodec = iota // lossless, no external tools required (default)
-	CodecAAC                        // lossy 192 kbps, streaming fMP4, no external tools required
+	CodecAAC RecordingCodec = iota // lossy 192 kbps, streaming fMP4, no external tools required
 )
 
 // RecorderIO records a conversation as a stereo MP4 file.
@@ -477,11 +475,8 @@ type RecorderIO struct {
 	inQ  chan []*model.AudioFrame
 	outQ chan []*model.AudioFrame
 
-	// stereoPCM is used only for CodecFLAC — buffers the entire session, encoded on Stop().
-	stereoPCM           []int16
 	totalSamplesWritten int64
 
-	// aac is used only for CodecAAC — per-instance encoder, receives PCM incrementally.
 	aac *astiavAAC
 
 	sampleRate int
@@ -526,9 +521,7 @@ func (r *RecorderIO) writeCb(buf []*model.AudioFrame) {
 }
 
 // Start begins recording to an MP4 file at the given sample rate.
-// When Codec == CodecAAC the fMP4 container header is written immediately;
-// audio fragments are flushed per batch so memory usage stays O(batch size).
-// When Codec == CodecFLAC the entire session is buffered and encoded on Stop().
+// The fMP4 container header is written immediately; audio fragments are flushed per batch.
 func (r *RecorderIO) Start(outputPath string, sampleRate int) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -596,7 +589,7 @@ func (r *RecorderIO) forwardTask() {
 	}
 }
 
-// Stop signals the record loop to flush, encode to FLAC-in-MP4, and close.
+// Stop signals the record loop to flush and close.
 func (r *RecorderIO) Stop() error {
 	r.mu.Lock()
 	if !r.started || r.closed {
@@ -710,19 +703,8 @@ func (r *RecorderIO) encodeThread(sampleRate int) {
 			}
 		}
 
-		switch r.Codec {
-		case CodecAAC:
-			if err := r.encodeAACFragment(stereo, sampleRate); err != nil {
-				logger.Logger.Errorw("Recorder AAC fragment error", err)
-			}
-		default: // CodecFLAC — buffer everything, write on Stop
-			r.mu.Lock()
-			r.stereoPCM = append(r.stereoPCM, stereo...)
-			r.totalSamplesWritten += int64(maxSamples)
-			total := r.totalSamplesWritten
-			r.mu.Unlock()
-			logger.Logger.Infow("Recorder progress", "total_seconds", float64(total)/float64(r.sampleRate))
-			continue
+		if err := r.encodeAACFragment(stereo, sampleRate); err != nil {
+			logger.Logger.Errorw("Recorder AAC fragment error", err)
 		}
 
 		r.mu.Lock()
@@ -746,44 +728,21 @@ func (r *RecorderIO) encodeAACFragment(stereo []int16, _ int) error {
 
 func (r *RecorderIO) finalizeMP4() {
 	r.mu.Lock()
-	pcm := r.stereoPCM
 	total := r.totalSamplesWritten
 	sampleRate := r.sampleRate
 	outputPath := r.OutputPath
 	aacEnc := r.aac
-	r.stereoPCM = nil
 	r.aac = nil
 	r.mu.Unlock()
 
-	switch r.Codec {
-	case CodecAAC:
-		if aacEnc == nil {
-			logger.Logger.Warnw("No AAC encoder, skipping AAC finalization", nil)
-			return
-		}
-		if err := aacEnc.Close(); err != nil {
-			logger.Logger.Errorw("Failed to close AAC encoder", err)
-			return
-		}
-		duration := float64(total) / float64(sampleRate)
-		logger.Logger.Infow("MP4 finalized", "path", outputPath, "duration_s", duration, "total_samples", total, "codec", r.Codec)
-
-	default: // CodecFLAC
-		if total == 0 || len(pcm) == 0 {
-			logger.Logger.Warnw("No audio recorded, skipping MP4 finalization", nil)
-			return
-		}
-		var flacBuf bytes.Buffer
-		frameSizes, err := encodeStereoFLAC(&flacBuf, pcm, sampleRate)
-		if err != nil {
-			logger.Logger.Errorw("Failed to encode FLAC", err)
-			return
-		}
-		if err := writeMP4WithFLAC(outputPath, flacBuf.Bytes(), frameSizes, sampleRate, total); err != nil {
-			logger.Logger.Errorw("Failed to write MP4", err)
-			return
-		}
-		duration := float64(total) / float64(sampleRate)
-		logger.Logger.Infow("MP4 finalized", "path", outputPath, "duration_s", duration, "total_samples", total, "codec", r.Codec)
+	if aacEnc == nil {
+		logger.Logger.Warnw("No AAC encoder, skipping AAC finalization", nil)
+		return
 	}
+	if err := aacEnc.Close(); err != nil {
+		logger.Logger.Errorw("Failed to close AAC encoder", err)
+		return
+	}
+	duration := float64(total) / float64(sampleRate)
+	logger.Logger.Infow("MP4 finalized", "path", outputPath, "duration_s", duration, "total_samples", total, "codec", r.Codec)
 }
