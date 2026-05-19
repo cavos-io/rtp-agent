@@ -420,41 +420,50 @@ func (t *RoomTextOutput) Flush() {
 	)
 
 	if t.writer != nil {
-		// Close the current segment
 		t.writer.Close()
 		t.writer = nil
 	}
 
-	// Send the complete agent turn as a lk.chat bubble.
-	fullText := t.accumulated.String()
-	segID := t.segmentID
 	t.accumulated.Reset()
+	// Final DataPacket_Transcription and lk.chat are sent via Complete(finalText),
+	// called by the pipeline with the original LLM/ManualText to preserve spacing.
+}
+
+// Complete sends the final DataPacket_Transcription segment and the lk.chat bubble
+// using finalText — the authoritative full text from the LLM or ManualText, which
+// never goes through TTS chunking and therefore retains correct spacing.
+func (t *RoomTextOutput) Complete(finalText string) {
+	if finalText == "" {
+		return
+	}
+
+	t.mu.Lock()
+	segID := t.segmentID
+	room := t.room
+	participantIdentity := t.participantIdentity
+	trackID := t.trackID
 	t.segmentID = ""
+	t.mu.Unlock()
 
-	if fullText == "" {
-		logger.Logger.Warnw("[Transcript] Flush: accumulated text is empty, skipping lk.chat", nil)
-		return
-	}
-	if t.room == nil || t.room.LocalParticipant == nil {
-		logger.Logger.Warnw("[Transcript] Flush: room or LocalParticipant is nil, cannot send lk.chat", nil, "fullText", fullText)
+	if room == nil || room.LocalParticipant == nil {
+		logger.Logger.Warnw("[Transcript] Complete: room or LocalParticipant is nil", nil, "text", finalText)
 		return
 	}
 
-	// Send a final DataPacket_Transcription with the complete text so the UI
-	// replaces partial segments with the full response.
+	// Final DataPacket_Transcription — replaces the streaming partial segment in the UI.
 	if segID != "" {
 		tp := &livekit.Transcription{
-			TranscribedParticipantIdentity: t.participantIdentity,
-			TrackId:                        t.trackID,
+			TranscribedParticipantIdentity: participantIdentity,
+			TrackId:                        trackID,
 			Segments: []*livekit.TranscriptionSegment{
 				{
 					Id:    segID,
-					Text:  fullText,
+					Text:  finalText,
 					Final: true,
 				},
 			},
 		}
-		if err := t.room.LocalParticipant.PublishDataPacket(
+		if err := room.LocalParticipant.PublishDataPacket(
 			&transcriptionDataPacket{tp},
 			lksdk.WithDataPublishReliable(true),
 		); err != nil {
@@ -464,15 +473,15 @@ func (t *RoomTextOutput) Flush() {
 
 	payload, _ := json.Marshal(map[string]interface{}{
 		"id":           fmt.Sprintf("agt-%d", time.Now().UnixNano()),
-		"message":      fullText,
+		"message":      finalText,
 		"timestamp":    time.Now().UnixMilli(),
-		"generated_by": t.participantIdentity,
+		"generated_by": participantIdentity,
 	})
 	logger.Logger.Infow("[Transcript] Sending lk.chat (agent turn)",
-		"fullText", fullText,
-		"participantIdentity", t.participantIdentity,
+		"fullText", finalText,
+		"participantIdentity", participantIdentity,
 	)
-	if err := t.room.LocalParticipant.PublishDataPacket(
+	if err := room.LocalParticipant.PublishDataPacket(
 		&lksdk.UserDataPacket{
 			Payload: payload,
 			Topic:   "lk.chat",
@@ -481,7 +490,7 @@ func (t *RoomTextOutput) Flush() {
 	); err != nil {
 		logger.Logger.Warnw("[Transcript] Failed to publish lk.chat (agent turn)", err)
 	} else {
-		logger.Logger.Infow("[Transcript] lk.chat (agent turn) published OK", "text", fullText)
+		logger.Logger.Infow("[Transcript] lk.chat (agent turn) published OK", "text", finalText)
 	}
 }
 

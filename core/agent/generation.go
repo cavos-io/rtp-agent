@@ -456,6 +456,14 @@ func PerformTTSInference(ctx context.Context, t tts.TTS, textCh <-chan string) (
 				)
 				break
 			}
+			// Process DeltaText before skipping empty audio frames so that
+			// zero-duration chars (spaces) from ElevenLabs alignment are not lost.
+			if audio.DeltaText != "" {
+				select {
+				case data.AlignedTextCh <- audio.DeltaText:
+				default:
+				}
+			}
 			if audio.Frame == nil || len(audio.Frame.Data) == 0 {
 				continue
 			}
@@ -466,12 +474,6 @@ func PerformTTSInference(ctx context.Context, t tts.TTS, textCh <-chan string) (
 			audioFrames++
 			if audio.Frame != nil {
 				data.AudioCh <- audio.Frame
-			}
-			if audio.DeltaText != "" {
-				select {
-				case data.AlignedTextCh <- audio.DeltaText:
-				default:
-				}
 			}
 		}
 	}()

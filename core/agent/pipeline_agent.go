@@ -153,6 +153,11 @@ func (va *PipelineAgent) GenerateReply(speech *SpeechHandle) {
 
 		// Handle Playback and Transcription (Same as default loop but simplified)
 		va.handlePlaybackAndTranscription(ctx, speech, ttsGen)
+
+		// Use the original text for lk.chat to avoid spacing loss from TTS chunking.
+		if session.Output.Transcription != nil {
+			session.Output.Transcription.Complete(speech.ManualText)
+		}
 		return
 	}
 
@@ -219,13 +224,13 @@ func (va *PipelineAgent) GenerateReply(speech *SpeechHandle) {
 			va.handlePlaybackAndTranscription(ctx, speech, ttsGen)
 		}
 
-		// Publish agent transcript from LLM full text as a fallback for
-		// TTS providers that don't emit DeltaText (non-ElevenLabs).
-		// Also append the assistant response to chat context so the LLM
-		// sees its own previous replies in subsequent turns.
+		// Publish lk.chat bubble and append to chat context using the full LLM text,
+		// which preserves original spacing lost during TTS chunking.
 		if genData.FullTextCh != nil {
 			if fullText, ok := <-genData.FullTextCh; ok && fullText != "" {
-				if session.Output.Transcription == nil {
+				if session.Output.Transcription != nil {
+					session.Output.Transcription.Complete(fullText)
+				} else {
 					session.PublishAgentTranscript(fullText)
 				}
 				va.chatCtx.Append(&llm.ChatMessage{

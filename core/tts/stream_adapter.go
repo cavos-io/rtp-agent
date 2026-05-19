@@ -190,8 +190,11 @@ func (w *streamAdapterWrapper) synthesizeOne(text string) {
 }
 
 func (w *streamAdapterWrapper) enqueue(sentence string) error {
-	trimmed := strings.TrimSpace(sentence)
-	if trimmed == "" {
+	// Trim only trailing whitespace so that a leading space (e.g. " Hal Luarbiasa"
+	// produced after splitting on "!") is preserved in DeltaText and therefore
+	// kept when CaptureText accumulates chunks for the live transcription display.
+	trimmed := strings.TrimRight(sentence, " \t\r\n")
+	if strings.TrimSpace(trimmed) == "" {
 		return nil
 	}
 
@@ -239,8 +242,11 @@ func (w *streamAdapterWrapper) collectReadySentencesLocked(flush bool) []string 
 func trimNonEmpty(sentences []string) []string {
 	out := make([]string, 0, len(sentences))
 	for _, sentence := range sentences {
-		trimmed := strings.TrimSpace(sentence)
-		if trimmed != "" {
+		// Trim only trailing whitespace — leading space after a sentence boundary
+		// (e.g. the space in "Pagi! Halo") must be kept so CaptureText accumulation
+		// produces correct spacing in the live transcription display.
+		trimmed := strings.TrimRight(sentence, " \t\r\n")
+		if strings.TrimSpace(trimmed) != "" {
 			out = append(out, trimmed)
 		}
 	}
