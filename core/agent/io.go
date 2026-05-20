@@ -46,6 +46,7 @@ type TextOutput interface {
 	CaptureText(text string) error
 	SetSegmentID(id string)
 	Flush()
+	Complete(finalText string)
 	OnAttached()
 	OnDetached()
 }

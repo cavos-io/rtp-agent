@@ -27,23 +27,23 @@ type SyncEvent struct {
 
 // TranscriptSynchronizer drip-feeds text to match the playout speed of audio.
 type TranscriptSynchronizer struct {
-	ctx      context.Context
-	cancel   context.CancelFunc
-	
-	textCh   chan string
-	audioCh  chan *model.AudioFrame
-	eventCh  chan SyncEvent
-	
-	mu             sync.Mutex
-	textBuffer     string
-	yieldedText    string
+	ctx    context.Context
+	cancel context.CancelFunc
+
+	textCh  chan string
+	audioCh chan *model.AudioFrame
+	eventCh chan SyncEvent
+
+	mu              sync.Mutex
+	textBuffer      string
+	yieldedText     string
 	lastYieldedText string
-	segmentID      string
-	playedAudioDur time.Duration
-	yieldedTextDur time.Duration
-	speakingRate   float64       // syllables per second
-	refreshRate    time.Duration // ticker interval
-	
+	segmentID       string
+	playedAudioDur  time.Duration
+	yieldedTextDur  time.Duration
+	speakingRate    float64       // syllables per second
+	refreshRate     time.Duration // ticker interval
+
 	closed bool
 }
 
@@ -104,7 +104,7 @@ func (s *TranscriptSynchronizer) EventCh() <-chan SyncEvent {
 func (s *TranscriptSynchronizer) RotateSegment() {
 	s.Interrupt() // Flushes remaining text
 	s.eventCh <- SyncEvent{Flush: true, SegmentID: s.segmentID}
-	
+
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.playedAudioDur = 0
@@ -116,7 +116,7 @@ func (s *TranscriptSynchronizer) RotateSegment() {
 func (s *TranscriptSynchronizer) Interrupt() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	
+
 	if s.textBuffer != "" {
 		s.yieldedText += s.textBuffer
 		s.eventCh <- SyncEvent{Text: s.textBuffer, SegmentID: s.segmentID}
@@ -250,6 +250,13 @@ func (s *SyncedTextOutput) Flush() {
 	// Let the audio sync chain flush the text (RotateSegment triggers SyncEvent.Flush).
 	// Calling Flush here would prematurely end the stream before RotateSegment is called.
 }
+
+func (s *SyncedTextOutput) Complete(finalText string) {
+	if s.next != nil {
+		s.next.Complete(finalText)
+	}
+}
+
 func (s *SyncedTextOutput) OnAttached() {
 	if s.next != nil {
 		s.next.OnAttached()
@@ -265,7 +272,7 @@ func countSyllables(text string) int {
 	// A fast heuristic syllable counter using vowel groups
 	text = strings.ToLower(text)
 	text = regexp.MustCompile(`[^a-z]`).ReplaceAllString(text, "")
-	
+
 	if len(text) == 0 {
 		return 0
 	}
@@ -276,10 +283,10 @@ func countSyllables(text string) int {
 	text = strings.TrimSuffix(text, "es")
 	text = strings.TrimSuffix(text, "ed")
 	text = strings.TrimSuffix(text, "e")
-	
+
 	vowels := regexp.MustCompile(`[aeiouy]+`)
 	matches := vowels.FindAllStringIndex(text, -1)
-	
+
 	count := len(matches)
 	if count == 0 {
 		return 1
@@ -289,7 +296,7 @@ func countSyllables(text string) int {
 
 func (s *TranscriptSynchronizer) run() {
 	defer close(s.eventCh)
-	
+
 	ticker := time.NewTicker(s.refreshRate)
 	defer ticker.Stop()
 
@@ -298,7 +305,7 @@ func (s *TranscriptSynchronizer) run() {
 		case <-s.ctx.Done():
 			s.Interrupt()
 			return
-		
+
 		case text, ok := <-s.textCh:
 			if !ok {
 				return
@@ -317,7 +324,7 @@ func (s *TranscriptSynchronizer) run() {
 				s.playedAudioDur += dur
 				s.mu.Unlock()
 			}
-			
+
 		case <-ticker.C:
 			s.mu.Lock()
 			if s.textBuffer == "" {
@@ -334,12 +341,12 @@ func (s *TranscriptSynchronizer) run() {
 
 			// Calculate how many syllables we should emit for this time debt
 			syllablesToEmit := int(math.Max(1.0, timeDebt.Seconds()*s.speakingRate))
-			
+
 			words := strings.Fields(s.textBuffer)
 			var toEmit string
 			var remaining string
 			var emittedSyllables int
-			
+
 			for i, word := range words {
 				syl := countSyllables(word)
 				if emittedSyllables+syl > syllablesToEmit && toEmit != "" {
@@ -379,4 +386,3 @@ func (s *TranscriptSynchronizer) run() {
 		}
 	}
 }
-
