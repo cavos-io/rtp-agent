@@ -155,6 +155,7 @@ type googleSTTStream struct {
 	errCh       chan error
 	closed      bool
 	configSent  bool
+	frameCount  int
 }
 
 func (s *googleSTTStream) readLoop() {
@@ -197,6 +198,8 @@ func (s *googleSTTStream) PushFrame(frame *model.AudioFrame) error {
 	if s.closed {
 		return io.ErrClosedPipe
 	}
+
+	s.frameCount++
 
 	if !s.configSent {
 		s.configSent = true

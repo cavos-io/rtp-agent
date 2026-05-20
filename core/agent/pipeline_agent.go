@@ -193,10 +193,10 @@ func (va *PipelineAgent) GenerateReply(speech *SpeechHandle) {
 
 		if baseAgent != nil && baseAgent.LLMNode != nil {
 			logger.Logger.Debugw("Using custom LLM node", "step", steps)
-			genData, err = baseAgent.LLMNode(llmCtx, va.LLM, va.chatCtx, session.Tools)
+			genData, err = baseAgent.LLMNode(llmCtx, va.LLM, chatCtx, session.Tools)
 		} else {
 			logger.Logger.Debugw("Using default LLM inference", "step", steps)
-			genData, err = PerformLLMInference(llmCtx, va.LLM, va.chatCtx, session.Tools)
+			genData, err = PerformLLMInference(llmCtx, va.LLM, chatCtx, session.Tools)
 		}
 
 		if err != nil {
