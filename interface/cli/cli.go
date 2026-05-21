@@ -2,13 +2,19 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/fang"
+	protologger "github.com/livekit/protocol/logger"
+	"github.com/spf13/cobra"
+	"github.com/spf13/viper"
 
 	"github.com/cavos-io/rtp-agent/core/agent"
 	"github.com/cavos-io/rtp-agent/interface/cli/console"
@@ -25,39 +31,59 @@ type CliArgs struct {
 }
 
 func RunApp(server *worker.AgentServer) {
-	if len(os.Args) < 2 {
-		printUsage()
+	rootCmd := &cobra.Command{
+		Use: "worker",
+	}
+	rootCmd.SetHelpCommand(&cobra.Command{
+		Hidden: true,
+	})
+	rootCmd.PersistentFlags().String("log-level", "info", "Set the log level")
+
+	rootCmd.AddCommand(
+		&cobra.Command{
+			Use:    "start",
+			Short:  "Run the worker in production mode",
+			PreRun: preRun,
+			Run: func(cmd *cobra.Command, args []string) {
+				runWorker(server, false)
+			},
+		},
+		&cobra.Command{
+			Use:    "dev",
+			Short:  "Run the worker in development mode (with auto-reload)",
+			PreRun: preRun,
+			RunE: func(cmd *cobra.Command, args []string) error {
+				return RunWithDevMode(os.Args)
+			},
+		},
+		&cobra.Command{
+			Use:    "connect",
+			Short:  "Connect to a room and execute a local job",
+			PreRun: preRun,
+			Run: func(cmd *cobra.Command, args []string) {
+				runConnect(server)
+			},
+		},
+		&cobra.Command{
+			Use:    "console",
+			Short:  "Run the worker in console mode for interactive testing",
+			PreRun: preRun,
+			Run: func(cmd *cobra.Command, args []string) {
+				runConsole(server)
+			},
+		},
+		&cobra.Command{
+			Use:    "download-files",
+			Short:  "Download required files for all registered plugins",
+			PreRun: preRun,
+			Run: func(cmd *cobra.Command, args []string) {
+				runDownloadFiles()
+			},
+		})
+
+	if err := fang.Execute(context.Background(), rootCmd, fang.WithoutCompletions(), fang.WithoutVersion()); err != nil {
 		os.Exit(1)
 	}
-
-	switch os.Args[1] {
-	case "start":
-		runWorker(server, false)
-	case "dev":
-		if err := RunWithDevMode(os.Args); err != nil {
-			logger.Logger.Errorw("Dev mode error", err)
-			os.Exit(1)
-		}
-	case "connect":
-		runConnect(server)
-	case "console":
-		runConsole(server)
-	case "download-files":
-		runDownloadFiles()
-	default:
-		printUsage()
-		os.Exit(1)
-	}
-}
-
-func printUsage() {
-	fmt.Println("Usage: worker [subcommand]")
-	fmt.Println("Subcommands:")
-	fmt.Println("  start           Run the worker in production mode")
-	fmt.Println("  dev             Run the worker in development mode (with auto-reload)")
-	fmt.Println("  connect         Connect to a room and execute a local job")
-	fmt.Println("  console         Run the worker in console mode for interactive testing")
-	fmt.Println("  download-files  Download required files for all registered plugins")
 }
 
 func runDownloadFiles() {
@@ -77,7 +103,7 @@ func runWorker(server *worker.AgentServer, devMode bool) {
 	defer stop()
 
 	logger.Logger.Infow("Starting worker", "devMode", devMode)
-	if err := server.Run(ctx); err != nil {
+	if err := server.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
 		logger.Logger.Errorw("Worker error", err)
 		os.Exit(1)
 	}
@@ -120,7 +146,7 @@ func runConsole(server *worker.AgentServer) {
 	// Start the agent job in a goroutine
 	go func() {
 		jobCtx := &worker.JobContext{}
-		
+
 		// Execute the entrypoint which creates and registers the session
 		// This call will block while the agent is running
 		entrypointFnc := server.GetEntrypointFunc()
@@ -136,20 +162,20 @@ func runConsole(server *worker.AgentServer) {
 	// Do this in parallel with the entrypoint running (it blocks)
 	for i := 0; i < 100; i++ {
 		s := server.GetConsoleSession()
-		
+
 		if s != nil {
 			if agentSession, ok := s.(*agent.AgentSession); ok {
 				fmt.Println("[Console] ✅ Session found!")
 				fmt.Println("[Console] Acquiring console I/O...")
-				
+
 				// Use ConsoleManager to acquire I/O (replicates Python SDK pattern)
 				if err := cm.AcquireIO(ctx, agentSession); err != nil {
 					fmt.Printf("[Console] ❌ Failed to acquire console I/O: %v\n", err)
 					return
 				}
-				
+
 				fmt.Println("[Console] ✅ Console I/O acquired and attached!")
-				
+
 				// Signal that session is ready
 				sessionReady <- agentSession
 				break
@@ -186,3 +212,11 @@ func runConsole(server *worker.AgentServer) {
 	}
 }
 
+func preRun(cmd *cobra.Command, args []string) {
+	viper.BindPFlags(cmd.Flags())
+	viper.AutomaticEnv()
+	viper.SetEnvKeyReplacer(strings.NewReplacer("-", "_"))
+
+	protologger.InitFromConfig(&protologger.Config{Level: viper.GetString("log-level")}, "worker")
+	logger.SetLogger(protologger.GetLogger())
+}
