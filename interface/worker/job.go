@@ -11,10 +11,11 @@ import (
 )
 
 type JobAcceptArguments struct {
-	Name       string
-	Identity   string
-	Metadata   string
-	Attributes map[string]string
+	Name           string
+	Identity       string
+	Metadata       string
+	Attributes     map[string]string
+	InboundRouting *InboundRoutingResult // populated by requestFnc for inbound SIP calls
 }
 
 type JobRequest struct {
@@ -47,6 +48,8 @@ type JobContext struct {
 	APISecret        string
 	URL              string
 	SessionDirectory string
+
+	InboundRouting *InboundRoutingResult // non-nil for inbound SIP calls
 }
 
 func NewJobContext(job *livekit.Job, url string, apiKey string, apiSecret string) *JobContext {
