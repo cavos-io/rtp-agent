@@ -11,6 +11,7 @@ import (
 	"github.com/cavos-io/rtp-agent/core/llm"
 	"github.com/cavos-io/rtp-agent/core/tts"
 	"github.com/cavos-io/rtp-agent/library/logger"
+	"github.com/cavos-io/rtp-agent/library/telemetry"
 	"github.com/cavos-io/rtp-agent/model"
 )
 
@@ -157,7 +158,7 @@ func PerformLLMInference(ctx context.Context, l llm.LLM, chatCtx *llm.ChatContex
 
 		var chunkCount int
 		var sb strings.Builder
-		
+
 		// Emit LLMStartedEvent
 		if rc := GetRunContext(ctx); rc != nil && rc.Session != nil && rc.Session.Timeline != nil {
 			rc.Session.Timeline.AddEvent(&LLMStartedEvent{
@@ -250,6 +251,19 @@ func PerformLLMInference(ctx context.Context, l llm.LLM, chatCtx *llm.ChatContex
 				Duration:  duration,
 				CreatedAt: time.Now(),
 			})
+
+			// Emit per-turn LLM token usage so consumers can track output tokens.
+			if data.Usage != nil && data.Usage.CompletionTokens > 0 {
+				rc.Session.Timeline.AddEvent(&MetricsCollectedEvent{
+					Metrics: &telemetry.LLMMetrics{
+						CompletionTokens:   data.Usage.CompletionTokens,
+						PromptTokens:       data.Usage.PromptTokens,
+						PromptCachedTokens: data.Usage.PromptCachedTokens,
+						TotalTokens:        data.Usage.TotalTokens,
+					},
+					CreatedAt: time.Now(),
+				})
+			}
 		}
 
 		if data.GeneratedText != "" {
