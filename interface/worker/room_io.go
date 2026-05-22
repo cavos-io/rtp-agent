@@ -1262,13 +1262,26 @@ func (rio *RoomIO) onTrackSubscribed(track *webrtc.TrackRemote, publication *lks
 	identity := rio.participantIdentity
 	rio.mu.Unlock()
 
+	logger.Logger.Infow("[INBOUND] onTrackSubscribed called",
+		"participantIdentity", rp.Identity(),
+		"participantKind", rp.Kind(),
+		"trackKind", track.Kind(),
+		"trackID", track.ID(),
+		"codec", track.Codec().MimeType,
+		"linkedIdentity", identity,
+		"participantKindsFilter", rio.Options.ParticipantKinds,
+	)
+
 	if identity != "" && identity != rp.Identity() {
-		// Ignore tracks from non-linked participants if a specific identity is targeted
+		logger.Logger.Warnw("[INBOUND] onTrackSubscribed: skipping — identity mismatch",
+			nil,
+			"participantIdentity", rp.Identity(),
+			"linkedIdentity", identity,
+		)
 		return
 	}
 
 	if identity == "" && len(rio.Options.ParticipantKinds) > 0 {
-		// If no specific identity is targeted, check if the participant kind is accepted
 		kindAccepted := false
 		for _, kind := range rio.Options.ParticipantKinds {
 			if rp.Kind() == kind {
@@ -1277,12 +1290,18 @@ func (rio *RoomIO) onTrackSubscribed(track *webrtc.TrackRemote, publication *lks
 			}
 		}
 		if !kindAccepted {
+			logger.Logger.Warnw("[INBOUND] onTrackSubscribed: skipping — participant kind not accepted",
+				nil,
+				"participantKind", rp.Kind(),
+				"allowedKinds", rio.Options.ParticipantKinds,
+			)
 			return
 		}
 	}
 
 	rio.trackContextsMu.Lock()
 	if _, ok := rio.trackContexts[track.ID()]; ok {
+		logger.Logger.Warnw("[INBOUND] onTrackSubscribed: track already registered, skipping", nil, "trackID", track.ID())
 		rio.trackContextsMu.Unlock()
 		return
 	}
@@ -1300,7 +1319,16 @@ func (rio *RoomIO) onTrackSubscribed(track *webrtc.TrackRemote, publication *lks
 			audioInputEnabled = false
 		}
 		if audioInputEnabled {
+			logger.Logger.Infow("[INBOUND] Starting audio track handler goroutine",
+				"participantIdentity", rp.Identity(),
+				"trackID", track.ID(),
+			)
 			go rio.handleAudioTrack(ctx, track)
+		} else {
+			logger.Logger.Warnw("[INBOUND] Audio input disabled — audio track NOT handled", nil,
+				"participantIdentity", rp.Identity(),
+				"trackID", track.ID(),
+			)
 		}
 	} else if track.Kind() == webrtc.RTPCodecTypeVideo {
 		videoInputEnabled := false
@@ -1445,9 +1473,19 @@ func (rio *RoomIO) handleAudioTrack(ctx context.Context, track *webrtc.TrackRemo
 
 			frameCount++
 			if frameCount%100 == 1 {
-				logger.Logger.Infow("[STT-PIPE] handleAudioTrack sending frames", "frameCount", frameCount, "dataLen", len(pcm))
+				logger.Logger.Infow("[STT-PIPE] handleAudioTrack sending frames", "frameCount", frameCount, "dataLen", len(pcm), "channelLen", len(rio.audioInCh), "channelCap", cap(rio.audioInCh))
 			}
-			rio.audioInCh <- frame
+			select {
+			case rio.audioInCh <- frame:
+			default:
+				if frameCount%200 == 1 {
+					logger.Logger.Warnw("[INBOUND] audioInCh full — audio frame dropped (consumer too slow?)", nil,
+						"frameCount", frameCount,
+						"channelLen", len(rio.audioInCh),
+						"channelCap", cap(rio.audioInCh),
+					)
+				}
+			}
 		}
 	}
 }
