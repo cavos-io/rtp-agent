@@ -83,6 +83,7 @@ type AgentSession struct {
 	Output AgentOutput
 
 	MetricsCollector *telemetry.UsageCollector
+	LKMetricsAttrs   *telemetry.LKMetricsAttrs
 	Timeline         *EventTimeline
 
 	UserState  UserState
@@ -287,6 +288,12 @@ func (s *AgentSession) Start(ctx context.Context) error {
 	// Trigger periodic usage metrics reporting
 	if s.MetricsCollector != nil {
 		go s.reportUsageLoop(ctx)
+	}
+
+	// Wire lk_agents_* metrics subscriber if attrs are configured.
+	if s.LKMetricsAttrs != nil {
+		recorder := newLKMetricsRecorder(*s.LKMetricsAttrs)
+		s.Timeline.AddSubscriber(recorder.onEvent)
 	}
 
 	s.started = true
