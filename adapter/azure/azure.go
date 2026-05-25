@@ -87,7 +87,6 @@ func (s *AzureSTT) Recognize(ctx context.Context, frames []*model.AudioFrame, la
 	slog.Info("[STT] azure: response body", "status", resp.StatusCode, "body", string(respBody))
 
 	if resp.StatusCode != http.StatusOK {
-		respBody, _ := io.ReadAll(resp.Body)
 		err := fmt.Errorf("azure stt error: %s", string(respBody))
 		logger.Logger.Errorw("Azure STT API error", err, "status", resp.Status)
 		return nil, err
@@ -97,7 +96,7 @@ func (s *AzureSTT) Recognize(ctx context.Context, frames []*model.AudioFrame, la
 		DisplayText       string `json:"DisplayText"`
 		RecognitionStatus string `json:"RecognitionStatus"`
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+	if err := json.Unmarshal(respBody, &result); err != nil {
 		logger.Logger.Errorw("Azure STT decode failed", err)
 		return nil, err
 	}
