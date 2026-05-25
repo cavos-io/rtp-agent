@@ -128,7 +128,6 @@ type openaiStream struct {
 }
 
 func (s *openaiStream) Next() (*llm.ChatChunk, error) {
-	logger.Logger.Debugw("OpenAI stream.Recv calling")
 	resp, err := s.stream.Recv()
 	if err != nil {
 		if errors.Is(err, io.EOF) {
