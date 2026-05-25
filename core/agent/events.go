@@ -322,15 +322,27 @@ func NewAgentEvent(ev Event) *AgentEvent {
 }
 
 type EventTimeline struct {
-	mu      sync.RWMutex
-	events  []*AgentEvent
-	OnEvent func(ev *AgentEvent)
+	mu          sync.RWMutex
+	events      []*AgentEvent
+	OnEvent     func(ev *AgentEvent) // kept for backward compatibility
+	subscribers []func(*AgentEvent)
 }
 
 func NewEventTimeline() *EventTimeline {
 	return &EventTimeline{
 		events: make([]*AgentEvent, 0),
 	}
+}
+
+// AddSubscriber registers an additional event listener alongside OnEvent.
+// Unlike OnEvent (which only allows one), multiple subscribers can coexist.
+func (t *EventTimeline) AddSubscriber(fn func(*AgentEvent)) {
+	if t == nil || fn == nil {
+		return
+	}
+	t.mu.Lock()
+	t.subscribers = append(t.subscribers, fn)
+	t.mu.Unlock()
 }
 
 func (t *EventTimeline) AddEvent(ev Event) {
@@ -343,15 +355,19 @@ func (t *EventTimeline) AddEvent(ev Event) {
 	t.mu.Lock()
 	t.events = append(t.events, ae)
 	onEvent := t.OnEvent
+	subs := t.subscribers
 	t.mu.Unlock()
 
 	if onEvent != nil {
 		onEvent(ae)
 	}
+	for _, sub := range subs {
+		sub(ae)
+	}
 }
 
-// Clear releases all stored events and the OnEvent callback so the
-// timeline (and everything it references) can be garbage-collected.
+// Clear releases all stored events, the OnEvent callback, and all subscribers
+// so the timeline (and everything it references) can be garbage-collected.
 func (t *EventTimeline) Clear() {
 	if t == nil {
 		return
@@ -359,6 +375,7 @@ func (t *EventTimeline) Clear() {
 	t.mu.Lock()
 	t.events = nil
 	t.OnEvent = nil
+	t.subscribers = nil
 	t.mu.Unlock()
 }
 
