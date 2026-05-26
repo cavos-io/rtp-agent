@@ -65,6 +65,10 @@ type AgentSessionOptions struct {
 	// STTLanguage is the BCP-47 language tag passed to the STT stream
 	// (e.g. "id-ID", "en-US"). Leave empty to use the provider default.
 	STTLanguage string
+	// Labels for metrics telemetry tracking
+	JobID    string
+	LLMModel string
+	Language string
 }
 
 type AgentSession struct {
@@ -85,6 +89,7 @@ type AgentSession struct {
 	Output AgentOutput
 
 	MetricsCollector *telemetry.UsageCollector
+	LKMetricsAttrs   *telemetry.LKMetricsAttrs
 	Timeline         *EventTimeline
 
 	UserState  UserState
@@ -180,6 +185,15 @@ func NewAgentSession(agent AgentInterface, room *lksdk.Room, opts AgentSessionOp
 		UserStateChangedCh:  make(chan UserStateChangedEvent, 10),
 		ctx:                 ctx,
 		cancel:              cancel,
+	}
+
+	// Auto-setup LK metrics attributes from options
+	if opts.JobID != "" || opts.LLMModel != "" || opts.Language != "" {
+		s.LKMetricsAttrs = &telemetry.LKMetricsAttrs{
+			JobID:    opts.JobID,
+			Model:    opts.LLMModel,
+			Language: opts.Language,
+		}
 	}
 
 	if chatCtx != nil {
@@ -284,6 +298,12 @@ func (s *AgentSession) Start(ctx context.Context) error {
 	// Trigger periodic usage metrics reporting
 	if s.MetricsCollector != nil {
 		go s.reportUsageLoop(ctx)
+	}
+
+	// Wire lk_agents_* metrics subscriber if attrs are configured.
+	if s.LKMetricsAttrs != nil {
+		recorder := newLKMetricsRecorder(*s.LKMetricsAttrs)
+		s.Timeline.AddSubscriber(recorder.onEvent)
 	}
 
 	s.started = true

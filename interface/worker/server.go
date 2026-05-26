@@ -11,6 +11,7 @@ import (
 
 	"github.com/cavos-io/rtp-agent/core/agent"
 	"github.com/cavos-io/rtp-agent/library/logger"
+	"github.com/cavos-io/rtp-agent/library/telemetry"
 	"github.com/gorilla/websocket"
 	"github.com/livekit/protocol/auth"
 	"github.com/livekit/protocol/livekit"
@@ -39,6 +40,8 @@ type WorkerOptions struct {
 	JobMemoryLimitMB    float64
 	NumIdleProcesses    int
 	DrainTimeoutSeconds int
+	PrometheusPort      int
+	PrometheusHost      string
 }
 
 type AgentServer struct {
@@ -60,6 +63,12 @@ type AgentServer struct {
 	// cpuLoad holds the last sampled CPU fraction (0.0–1.0), stored as float64 bits.
 	// NaN means no sample has been taken yet.
 	cpuLoad atomic.Uint64
+
+	metricsShutdown func(context.Context) error
+
+	// Metrics publishing lifecycle
+	metricsCtx    context.Context
+	metricsCancel context.CancelFunc
 }
 
 func NewAgentServer(opts WorkerOptions) *AgentServer {
@@ -70,6 +79,27 @@ func NewAgentServer(opts WorkerOptions) *AgentServer {
 	s.cpuLoad.Store(math.Float64bits(math.NaN()))
 	go s.sampleCPULoop()
 	s.Emitter = events.NewEmitter[string, *livekit.RegisterWorkerResponse]()
+
+	// Initialize metrics and start Prometheus HTTP server if PrometheusPort is set
+	if opts.PrometheusPort > 0 {
+		metricsHost := opts.PrometheusHost
+		if metricsHost == "" {
+			metricsHost = "0.0.0.0" // default: listen on all interfaces
+		}
+		shutdownMetrics, err := telemetry.InitMetrics(metricsHost, opts.PrometheusPort)
+		if err != nil {
+			logger.Logger.Warnw("Failed to initialize metrics", err)
+		} else {
+			logger.Logger.Infow("Metrics initialized", "host", metricsHost, "port", opts.PrometheusPort)
+			// Store shutdown function for graceful cleanup (can be called during Drain)
+			s.metricsShutdown = shutdownMetrics
+		}
+	}
+
+	// Spawn metrics publishing loop
+	s.metricsCtx, s.metricsCancel = context.WithCancel(context.Background())
+	go s.publishMetricsLoop(s.metricsCtx)
+
 	return s
 }
 
@@ -92,6 +122,25 @@ func (s *AgentServer) sampleCPULoop() {
 // Returns math.NaN() until the first sample is available (~5 s after startup).
 func (s *AgentServer) CurrentCPULoad() float64 {
 	return math.Float64frombits(s.cpuLoad.Load())
+}
+
+// publishMetricsLoop publishes CPU load to metrics every 5 seconds
+func (s *AgentServer) publishMetricsLoop(ctx context.Context) {
+	ticker := time.NewTicker(5 * time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			cpuLoad := s.CurrentCPULoad()
+			// Skip recording if NaN (CPU sampling not yet ready)
+			if math.IsNaN(cpuLoad) {
+				continue
+			}
+			telemetry.RecordWorkerLoad(ctx, cpuLoad)
+		}
+	}
 }
 
 func (s *AgentServer) RTCSession(
@@ -129,6 +178,13 @@ func (s *AgentServer) NumActiveJobs() int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return len(s.activeJobs)
+}
+
+// updateActiveJobsMetric syncs the active jobs metric with the actual activeJobs count
+// Must be called while holding s.mu lock
+func (s *AgentServer) updateActiveJobsMetric(ctx context.Context) {
+	count := int64(len(s.activeJobs))
+	telemetry.UpdateActiveJobsCount(ctx, count)
 }
 
 func (s *AgentServer) currentLoad() float32 {
@@ -367,6 +423,18 @@ func (s *AgentServer) Drain(ctx context.Context) error {
 	activeCount := len(s.activeJobs)
 	s.mu.Unlock()
 
+	// Shutdown metrics if initialized
+	if s.metricsShutdown != nil {
+		if err := s.metricsShutdown(ctx); err != nil {
+			logger.Logger.Warnw("Failed to shutdown metrics", err)
+		}
+	}
+
+	// Cancel metrics publishing loop
+	if s.metricsCancel != nil {
+		s.metricsCancel()
+	}
+
 	logger.Logger.Infow("Draining agent server", "active_jobs", activeCount)
 
 	// Notify LiveKit that we are draining
@@ -546,6 +614,7 @@ func (s *AgentServer) handleAssignment(ctx context.Context, req *livekit.JobAssi
 
 	s.mu.Lock()
 	s.activeJobs[req.Job.Id] = jobCtx
+	s.updateActiveJobsMetric(ctx)
 	s.mu.Unlock()
 	if err := s.sendAvailabilityUpdate(); err != nil {
 		logger.Logger.Warnw("Failed to send load update after job assignment", err)
@@ -572,6 +641,7 @@ func (s *AgentServer) handleAssignment(ctx context.Context, req *livekit.JobAssi
 			// Job done — clean up activeJobs to free memory
 			s.mu.Lock()
 			delete(s.activeJobs, req.Job.Id)
+			s.updateActiveJobsMetric(context.Background())
 			s.mu.Unlock()
 			fmt.Printf("   🧹 [PANEL] Job cleaned up: %s\n", req.Job.Id)
 
@@ -591,6 +661,7 @@ func (s *AgentServer) handleTermination(req *livekit.JobTermination) {
 	jobCtx, exists := s.activeJobs[req.JobId]
 	if exists {
 		delete(s.activeJobs, req.JobId)
+		s.updateActiveJobsMetric(context.Background())
 	}
 	s.mu.Unlock()
 
@@ -638,6 +709,7 @@ func (s *AgentServer) ExecuteLocalJob(ctx context.Context, roomName string, part
 
 	s.mu.Lock()
 	s.activeJobs[job.Id] = jobCtx
+	s.updateActiveJobsMetric(context.Background())
 	s.mu.Unlock()
 	_ = s.sendAvailabilityUpdate()
 
@@ -648,6 +720,7 @@ func (s *AgentServer) ExecuteLocalJob(ctx context.Context, roomName string, part
 			}
 			s.mu.Lock()
 			delete(s.activeJobs, job.Id)
+			s.updateActiveJobsMetric(context.Background())
 			s.mu.Unlock()
 			_ = s.sendAvailabilityUpdate()
 		}()

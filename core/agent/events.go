@@ -115,7 +115,7 @@ type SpeechCreatedEvent struct {
 }
 
 func (e *SpeechCreatedEvent) GetType() string { return "speech_created" }
- 
+
 type LLMStartedEvent struct {
 	CreatedAt time.Time `json:"created_at"`
 }
@@ -166,24 +166,82 @@ type ParticipantActiveEvent struct {
 
 func (e *ParticipantActiveEvent) GetType() string { return "participant_active" }
 
+type VADStartedEvent struct {
+	InferenceDuration float64   `json:"inference_duration"`
+	CreatedAt         time.Time `json:"created_at"`
+}
+
+func (e *VADStartedEvent) GetType() string { return "vad_started" }
+
+type VADEndedEvent struct {
+	SpeechDuration    float64   `json:"speech_duration"`
+	SilenceDuration   float64   `json:"silence_duration"`
+	InferenceDuration float64   `json:"inference_duration"`
+	CreatedAt         time.Time `json:"created_at"`
+}
+
+func (e *VADEndedEvent) GetType() string { return "vad_ended" }
+
+type VADInferenceEvent struct {
+	InferenceDuration float64   `json:"inference_duration"`
+	CreatedAt         time.Time `json:"created_at"`
+}
+
+func (e *VADInferenceEvent) GetType() string { return "vad_inference" }
+
+type BargeInDetectedEvent struct {
+	StreamID  string    `json:"stream_id"`
+	CreatedAt time.Time `json:"created_at"`
+}
+
+func (e *BargeInDetectedEvent) GetType() string { return "barge_in_detected" }
+
+type AgentStopRequestedEvent struct {
+	StreamID  string    `json:"stream_id"`
+	CreatedAt time.Time `json:"created_at"`
+}
+
+func (e *AgentStopRequestedEvent) GetType() string { return "agent_stop_requested" }
+
+type AgentAudioStoppedEvent struct {
+	StreamID  string    `json:"stream_id"`
+	CreatedAt time.Time `json:"created_at"`
+}
+
+func (e *AgentAudioStoppedEvent) GetType() string { return "agent_audio_stopped" }
+
+type STTMetricsEvent struct {
+	AudioDuration float64   `json:"audio_duration"`
+	CreatedAt     time.Time `json:"created_at"`
+}
+
+func (e *STTMetricsEvent) GetType() string { return "stt_metrics" }
+
 type AgentEvent struct {
 	Type      string  `json:"type"`
 	Timestamp float64 `json:"timestamp"`
 
 	UserStateChanged       *UserStateChangedEvent       `json:"user_state_changed,omitempty"`
-	AgentStateChanged       *AgentStateChangedEvent       `json:"agent_state_changed,omitempty"`
-	UserInputTranscribed    *UserInputTranscribedEvent    `json:"user_input_transcribed,omitempty"`
-	AgentFalseInterruption   *AgentFalseInterruptionEvent   `json:"agent_false_interruption,omitempty"`
-	MetricsCollected        *MetricsCollectedEvent        `json:"metrics_collected,omitempty"`
-	ConversationItemAdded    *ConversationItemAddedEvent    `json:"conversation_item_added,omitempty"`
-	FunctionToolsExecuted    *FunctionToolsExecutedEvent    `json:"function_tools_executed,omitempty"`
-	AgentHandoff            *AgentHandoffEvent            `json:"agent_handoff,omitempty"`
-	SpeechCreated           *SpeechCreatedEvent           `json:"speech_created,omitempty"`
-	Error                   *ErrorEvent                   `json:"error,omitempty"`
-	Close                   *CloseEvent                   `json:"close,omitempty"`
-	ParticipantActive       *ParticipantActiveEvent       `json:"participant_active,omitempty"`
-	LLMStarted              *LLMStartedEvent              `json:"llm_started,omitempty"`
-	LLMFirstToken           *LLMFirstTokenEvent           `json:"llm_first_token,omitempty"`
+	AgentStateChanged      *AgentStateChangedEvent      `json:"agent_state_changed,omitempty"`
+	UserInputTranscribed   *UserInputTranscribedEvent   `json:"user_input_transcribed,omitempty"`
+	AgentFalseInterruption *AgentFalseInterruptionEvent `json:"agent_false_interruption,omitempty"`
+	MetricsCollected       *MetricsCollectedEvent       `json:"metrics_collected,omitempty"`
+	ConversationItemAdded  *ConversationItemAddedEvent  `json:"conversation_item_added,omitempty"`
+	FunctionToolsExecuted  *FunctionToolsExecutedEvent  `json:"function_tools_executed,omitempty"`
+	AgentHandoff           *AgentHandoffEvent           `json:"agent_handoff,omitempty"`
+	SpeechCreated          *SpeechCreatedEvent          `json:"speech_created,omitempty"`
+	Error                  *ErrorEvent                  `json:"error,omitempty"`
+	Close                  *CloseEvent                  `json:"close,omitempty"`
+	ParticipantActive      *ParticipantActiveEvent      `json:"participant_active,omitempty"`
+	LLMStarted             *LLMStartedEvent             `json:"llm_started,omitempty"`
+	LLMFirstToken          *LLMFirstTokenEvent          `json:"llm_first_token,omitempty"`
+	VADStarted             *VADStartedEvent             `json:"vad_started,omitempty"`
+	VADEnded               *VADEndedEvent               `json:"vad_ended,omitempty"`
+	VADInference           *VADInferenceEvent           `json:"vad_inference,omitempty"`
+	BargeInDetected        *BargeInDetectedEvent        `json:"barge_in_detected,omitempty"`
+	AgentStopRequested     *AgentStopRequestedEvent     `json:"agent_stop_requested,omitempty"`
+	AgentAudioStopped      *AgentAudioStoppedEvent      `json:"agent_audio_stopped,omitempty"`
+	STTMetrics             *STTMetricsEvent             `json:"stt_metrics,omitempty"`
 }
 
 func (ae *AgentEvent) MarshalJSON() ([]byte, error) {
@@ -245,20 +303,46 @@ func NewAgentEvent(ev Event) *AgentEvent {
 		ae.LLMStarted = v
 	case *LLMFirstTokenEvent:
 		ae.LLMFirstToken = v
+	case *VADStartedEvent:
+		ae.VADStarted = v
+	case *VADEndedEvent:
+		ae.VADEnded = v
+	case *VADInferenceEvent:
+		ae.VADInference = v
+	case *BargeInDetectedEvent:
+		ae.BargeInDetected = v
+	case *AgentStopRequestedEvent:
+		ae.AgentStopRequested = v
+	case *AgentAudioStoppedEvent:
+		ae.AgentAudioStopped = v
+	case *STTMetricsEvent:
+		ae.STTMetrics = v
 	}
 	return ae
 }
 
 type EventTimeline struct {
-	mu      sync.RWMutex
-	events  []*AgentEvent
-	OnEvent func(ev *AgentEvent)
+	mu          sync.RWMutex
+	events      []*AgentEvent
+	OnEvent     func(ev *AgentEvent) // kept for backward compatibility
+	subscribers []func(*AgentEvent)
 }
 
 func NewEventTimeline() *EventTimeline {
 	return &EventTimeline{
 		events: make([]*AgentEvent, 0),
 	}
+}
+
+// AddSubscriber registers an additional event listener alongside OnEvent.
+// Unlike OnEvent (which only allows one), multiple subscribers can coexist.
+func (t *EventTimeline) AddSubscriber(fn func(*AgentEvent)) {
+	if t == nil || fn == nil {
+		return
+	}
+	t.mu.Lock()
+	t.subscribers = append(t.subscribers, fn)
+	t.mu.Unlock()
 }
 
 func (t *EventTimeline) AddEvent(ev Event) {
@@ -271,15 +355,19 @@ func (t *EventTimeline) AddEvent(ev Event) {
 	t.mu.Lock()
 	t.events = append(t.events, ae)
 	onEvent := t.OnEvent
+	subs := t.subscribers
 	t.mu.Unlock()
 
 	if onEvent != nil {
 		onEvent(ae)
 	}
+	for _, sub := range subs {
+		sub(ae)
+	}
 }
 
-// Clear releases all stored events and the OnEvent callback so the
-// timeline (and everything it references) can be garbage-collected.
+// Clear releases all stored events, the OnEvent callback, and all subscribers
+// so the timeline (and everything it references) can be garbage-collected.
 func (t *EventTimeline) Clear() {
 	if t == nil {
 		return
@@ -287,6 +375,7 @@ func (t *EventTimeline) Clear() {
 	t.mu.Lock()
 	t.events = nil
 	t.OnEvent = nil
+	t.subscribers = nil
 	t.mu.Unlock()
 }
 
@@ -373,8 +462,8 @@ type StreamResponse struct {
 }
 
 type TextInputEvent struct {
-	Text        string             `json:"text"`
-	Participant lksdk.Participant  `json:"-"`
+	Text        string            `json:"text"`
+	Participant lksdk.Participant `json:"-"`
 }
 
 type TextInputCallback func(s *AgentSession, ev TextInputEvent) error
@@ -402,11 +491,11 @@ func NewClientEventsDispatcher(room *lksdk.Room, session *AgentSession) *ClientE
 		textInputCb: DefaultTextInputCallback,
 	}
 	d.registerHandlers()
-	
+
 	if session != nil && session.Timeline != nil {
 		session.Timeline.OnEvent = d.streamClientEvent
 	}
-	
+
 	return d
 }
 
@@ -720,7 +809,7 @@ func (d *ClientEventsDispatcher) handleSendMessage(data lksdk.RpcInvocationData)
 	if err != nil {
 		return "", fmt.Errorf("failed to generate reply: %w", err)
 	}
-	
+
 	runResult, _ := res.(JobResult)
 
 	if runResult != nil {
@@ -742,6 +831,7 @@ func (d *ClientEventsDispatcher) handleSendMessage(data lksdk.RpcInvocationData)
 	b, _ := json.Marshal(resp)
 	return string(b), nil
 }
+
 type ClientEventPayload struct {
 	Type  string `json:"type"`
 	State string `json:"state,omitempty"`
@@ -807,4 +897,3 @@ func (d *ClientEventsDispatcher) DispatchUserState(state UserState) {
 		State: stateStr,
 	})
 }
-

@@ -8,14 +8,16 @@ import (
 	"net/http"
 	_ "net/http/pprof"
 	"os"
+	"os/signal"
 	"runtime"
 	"runtime/debug"
+	"strconv"
+	"syscall"
 	"time"
 
-	"os/signal"
-	"syscall"
-
+	azureAdapter "github.com/cavos-io/rtp-agent/adapter/azure"
 	elevenlabsAdapter "github.com/cavos-io/rtp-agent/adapter/elevenlabs"
+	"github.com/cavos-io/rtp-agent/adapter/openai"
 	openaiAdapter "github.com/cavos-io/rtp-agent/adapter/openai"
 	rnnoiseAdapter "github.com/cavos-io/rtp-agent/adapter/rnnoise"
 	sileroAdapter "github.com/cavos-io/rtp-agent/adapter/silero"
@@ -66,12 +68,22 @@ func main() {
 		}
 	}
 
+	// Parse Prometheus port from env (default 9090)
+	prometheusPort := 9090
+	if port := os.Getenv("PROMETHEUS_PORT"); port != "" {
+		if p, err := strconv.Atoi(port); err == nil {
+			prometheusPort = p
+		}
+	}
+
 	opts := worker.WorkerOptions{
-		AgentName:  os.Getenv("AGENT_NAME"),
-		WorkerType: worker.WorkerTypeRoom,
-		WSRL:       os.Getenv("LIVEKIT_URL"),
-		APIKey:     os.Getenv("LIVEKIT_API_KEY"),
-		APISecret:  os.Getenv("LIVEKIT_API_SECRET"),
+		AgentName:      os.Getenv("AGENT_NAME"),
+		WorkerType:     worker.WorkerTypeRoom,
+		WSRL:           os.Getenv("LIVEKIT_URL"),
+		APIKey:         os.Getenv("LIVEKIT_API_KEY"),
+		APISecret:      os.Getenv("LIVEKIT_API_SECRET"),
+		PrometheusHost: os.Getenv("PROMETHEUS_HOST"),
+		PrometheusPort: prometheusPort,
 	}
 
 	server := worker.NewAgentServer(opts)
@@ -105,6 +117,8 @@ func main() {
 
 type JobMetadata struct {
 	Instructions string `json:"instructions"`
+	LLMModel     string `json:"llm_model"`
+	Language     string `json:"language"`
 	VoiceID      string `json:"voice_id"`
 	TTSProvider  string `json:"tts_provider"`
 	TTSModel     string `json:"tts_model"`
@@ -149,12 +163,20 @@ func handleAgent(server *worker.AgentServer, jobCtx *worker.JobContext) error {
 	fmt.Println("✅ [Agent] Agent created")
 
 	// Set up LLM provider (OpenAI)
-	ag.LLM = openaiAdapter.NewOpenAILLM(apiKey, "gpt-4o")
-	fmt.Println("✅ [Agent] LLM (GPT-4o) configured")
+	llmModel := metadata.LLMModel
+	if llmModel == "" {
+		llmModel = "gpt-4.1-mini"
+	}
+	ag.LLM = openai.NewOpenAILLM(os.Getenv("OPENAI_API_KEY"), llmModel)
+	fmt.Printf("✅ [Agent] LLM (%s) configured\n", llmModel)
 
 	// Set up STT provider (OpenAI Whisper)
-	ag.STT = openaiAdapter.NewOpenAISTT(apiKey, "")
-	fmt.Println("✅ [Agent] STT (Whisper) configured")
+	language := metadata.Language
+	if language == "" {
+		language = "id-ID"
+	}
+	ag.STT = azureAdapter.NewAzureSTT(os.Getenv("AZURE_SPEECH_KEY"), os.Getenv("AZURE_SPEECH_REGION"), language)
+	fmt.Printf("✅ [Agent] STT (Whisper) configured for language %s\n", language)
 
 	// Set up VAD (required for speech start/end detection and STT segmentation)
 	modelPath := os.Getenv("SILERO_VAD_MODEL_PATH")
@@ -228,6 +250,8 @@ func handleAgent(server *worker.AgentServer, jobCtx *worker.JobContext) error {
 	case "openai":
 		// Map platform voice names to OpenAI constants if necessary, or pass through
 		ag.TTS = openaiAdapter.NewOpenAITTS(apiKey, openaiAdapter.SpeechModel("tts-1"), openaiAdapter.SpeechVoice(voiceID))
+	case "azure":
+		ag.TTS = azureAdapter.NewAzureTTS(os.Getenv("AZURE_SPEECH_KEY"), os.Getenv("AZURE_SPEECH_REGION"), "id-ID-GadisNeural")
 	default:
 		// Fallback to ElevenLabs default
 		elevenlabsAPIKey := os.Getenv("ELEVENLABS_API_KEY")
@@ -240,18 +264,23 @@ func handleAgent(server *worker.AgentServer, jobCtx *worker.JobContext) error {
 	ag.TurnDetection = agent.TurnDetectionModeSTT
 	fmt.Println("✅ [Agent] Turn detection: STT-based")
 
-	// Create agent session options
+	// Create agent session options (with auto metrics setup)
 	sessionOpts := agent.AgentSessionOptions{
 		AllowInterruptions:        true,
 		MinEndpointingDelay:       0.4,
 		MaxEndpointingDelay:       1.0,
 		MinConsecutiveSpeechDelay: 0.1,
+		// Metrics labels for telemetry tracking (from job metadata)
+		JobID:    jobCtx.Job.Id,
+		LLMModel: llmModel,
+		Language: language,
 	}
 
 	// Create session (do not start yet — RoomIO must be wired first)
+	// Metrics will auto-increment when session.Start() is called
 	session := agent.NewAgentSession(ag, nil, sessionOpts)
 	session.Noise = ag.Noise
-	fmt.Println("✅ [Agent] Session created")
+	fmt.Println("✅ [Agent] Session created (metrics auto-enabled)")
 
 	// Register session with server for console UI to access
 	server.SetConsoleSession(session)
