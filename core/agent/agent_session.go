@@ -304,8 +304,6 @@ func (s *AgentSession) Start(ctx context.Context) error {
 	if s.LKMetricsAttrs != nil {
 		recorder := newLKMetricsRecorder(*s.LKMetricsAttrs)
 		s.Timeline.AddSubscriber(recorder.onEvent)
-		// Auto-increment active job count for telemetry
-		telemetry.AdjustLKActiveJobCount(ctx, +1)
 	}
 
 	s.started = true
@@ -336,13 +334,7 @@ func (s *AgentSession) Close() error {
 	s.started = false
 	activity := s.Activity
 	assistant := s.Assistant
-	metricsAttrs := s.LKMetricsAttrs
 	s.mu.Unlock()
-
-	// Auto-decrement active job count if metrics were tracked
-	if metricsAttrs != nil {
-		telemetry.AdjustLKActiveJobCount(context.Background(), -1)
-	}
 
 	s.cancel()
 

@@ -153,6 +153,14 @@ func (s *AgentServer) NumActiveJobs() int {
 	return len(s.activeJobs)
 }
 
+// updateActiveJobsMetric syncs the active jobs metric with the actual activeJobs count
+// Must be called while holding s.mu lock
+func (s *AgentServer) updateActiveJobsMetric(ctx context.Context) {
+	count := int64(len(s.activeJobs))
+	fmt.Printf("[SERVER] updateActiveJobsMetric: activeJobs count=%d\n", count)
+	telemetry.UpdateActiveJobsCount(ctx, count)
+}
+
 func (s *AgentServer) currentLoad() float32 {
 	if s.Options.LoadFn == nil {
 		return 0.0
@@ -575,6 +583,7 @@ func (s *AgentServer) handleAssignment(ctx context.Context, req *livekit.JobAssi
 
 	s.mu.Lock()
 	s.activeJobs[req.Job.Id] = jobCtx
+	s.updateActiveJobsMetric(ctx)
 	s.mu.Unlock()
 	if err := s.sendAvailabilityUpdate(); err != nil {
 		logger.Logger.Warnw("Failed to send load update after job assignment", err)
@@ -601,6 +610,7 @@ func (s *AgentServer) handleAssignment(ctx context.Context, req *livekit.JobAssi
 			// Job done — clean up activeJobs to free memory
 			s.mu.Lock()
 			delete(s.activeJobs, req.Job.Id)
+			s.updateActiveJobsMetric(context.Background())
 			s.mu.Unlock()
 			fmt.Printf("   🧹 [PANEL] Job cleaned up: %s\n", req.Job.Id)
 
@@ -620,6 +630,7 @@ func (s *AgentServer) handleTermination(req *livekit.JobTermination) {
 	jobCtx, exists := s.activeJobs[req.JobId]
 	if exists {
 		delete(s.activeJobs, req.JobId)
+		s.updateActiveJobsMetric(context.Background())
 	}
 	s.mu.Unlock()
 
@@ -667,6 +678,7 @@ func (s *AgentServer) ExecuteLocalJob(ctx context.Context, roomName string, part
 
 	s.mu.Lock()
 	s.activeJobs[job.Id] = jobCtx
+	s.updateActiveJobsMetric(context.Background())
 	s.mu.Unlock()
 	_ = s.sendAvailabilityUpdate()
 
@@ -677,6 +689,7 @@ func (s *AgentServer) ExecuteLocalJob(ctx context.Context, roomName string, part
 			}
 			s.mu.Lock()
 			delete(s.activeJobs, job.Id)
+			s.updateActiveJobsMetric(context.Background())
 			s.mu.Unlock()
 			_ = s.sendAvailabilityUpdate()
 		}()

@@ -2,6 +2,7 @@ package telemetry
 
 import (
 	"context"
+	"fmt"
 	"sync"
 	"sync/atomic"
 
@@ -87,6 +88,19 @@ func (a LKMetricsAttrs) toOtelAttrs() []attribute.KeyValue {
 		attribute.String("agent_id", jobID),
 		attribute.String("model", model),
 		attribute.String("language", lang),
+	}
+}
+
+// UpdateActiveJobsCount sets the active jobs count directly from the source of truth
+// This ensures metrics are always in sync with actual activeJobs state
+func UpdateActiveJobsCount(ctx context.Context, count int64) {
+	oldCount := lkJobCount.Load()
+	delta := count - oldCount
+	lkJobCount.Store(count)
+	fmt.Printf("[METRICS] UpdateActiveJobsCount: oldCount=%d, newCount=%d, delta=%d\n", oldCount, count, delta)
+	if ins := ensureLK(); ins != nil {
+		ins.cActiveJobs.Add(ctx, delta)
+		ins.gWorkerLoad.Record(ctx, float64(count))
 	}
 }
 
