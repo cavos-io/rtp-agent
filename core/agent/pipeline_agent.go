@@ -158,6 +158,17 @@ func (va *PipelineAgent) GenerateReply(speech *SpeechHandle) {
 		if session.Output.Transcription != nil {
 			session.Output.Transcription.Complete(speech.ManualText)
 		}
+
+		// Mirror LiveKit Python SDK: add to chat context AFTER audio has played,
+		// not at scheduling time. This guarantees the message appears in transcript
+		// history exactly when (and only when) it was actually spoken.
+		if !speech.IsInterrupted() && session.ChatCtx != nil {
+			session.ChatCtx.Append(&llm.ChatMessage{
+				Role:      llm.ChatRoleAssistant,
+				Content:   []llm.ChatContent{{Text: speech.ManualText}},
+				CreatedAt: time.Now(),
+			})
+		}
 		return
 	}
 

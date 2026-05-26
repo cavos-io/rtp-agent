@@ -746,15 +746,6 @@ func (s *AgentSession) Say(text string, allowInterruptions bool) (*SpeechHandle,
 	handle := NewSpeechHandle(allowInterruptions, InputDetails{Modality: "text"})
 	handle.ManualText = text
 
-	// Add the manual speech to the chat context so the LLM remains aware of its own output
-	s.ChatCtx.Append(&llm.ChatMessage{
-		Role: llm.ChatRoleAssistant,
-		Content: []llm.ChatContent{
-			{Text: text},
-		},
-		CreatedAt: time.Now(),
-	})
-
 	err := activity.ScheduleSpeech(handle, SpeechPriorityNormal, false)
 	if err != nil {
 		return nil, err
