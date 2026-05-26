@@ -192,7 +192,7 @@ func (w *streamAdapterWrapper) run() {
 					if err != nil {
 						logger.Logger.WithComponent("stream_adapter").Errorw("Recognize error", err)
 					} else if tEvent != nil && len(tEvent.Alternatives) > 0 && tEvent.Alternatives[0].Text != "" {
-						logger.Logger.Debugw("[StreamAdapter] Recognize success", "text", tEvent.Alternatives[0].Text)
+						logger.Logger.WithComponent("stream_adapter").Debugw("Recognize success", "text", tEvent.Alternatives[0].Text)
 						w.events <- &SpeechEvent{
 							Type:         SpeechEventFinalTranscript,
 							Alternatives: []SpeechData{tEvent.Alternatives[0]},
