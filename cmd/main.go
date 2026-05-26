@@ -320,30 +320,19 @@ func handleAgent(server *worker.AgentServer, jobCtx *worker.JobContext) error {
 	}
 	fmt.Printf("✅ [Agent] Connected to LiveKit room (t=%s)\n", time.Since(startTime).Round(time.Millisecond))
 
-	// Create RoomIO — this wires session.Input.Audio and session.Output.Audio automatically.
-	rio = worker.NewRoomIO(jobCtx.Room, session, worker.RoomOptions{
-		TextOutput: &worker.TextOutputOptions{
-			Enabled: true,
-		},
+	// Wire RoomIO and start both the transport and the session pipeline in one call.
+	// Mirrors Python: await session.start(agent, room=room, room_options=opts)
+	fmt.Printf("⏳ [Agent] Starting RoomIO + session pipeline... (t=%s)\n", time.Since(startTime).Round(time.Millisecond))
+	rio, err = worker.StartSession(ctx, jobCtx.Room, session, worker.RoomOptions{
+		TextOutput: &worker.TextOutputOptions{Enabled: true},
 		JobContext: jobCtx,
 	})
-
-	// Publish agent's audio output track to the room.
-	fmt.Printf("⏳ [Agent] Starting RoomIO (publishing audio track)... (t=%s)\n", time.Since(startTime).Round(time.Millisecond))
-	if err := rio.Start(ctx); err != nil {
-		fmt.Printf("❌ [Agent] Failed to start RoomIO: %v\n", err)
-		return fmt.Errorf("failed to start RoomIO: %w", err)
-	}
-	fmt.Printf("✅ [Agent] RoomIO started (t=%s)\n", time.Since(startTime).Round(time.Millisecond))
-
-	// Start the session pipeline — session.Input.Audio is now set by RoomIO.
-	fmt.Printf("⏳ [Agent] Starting session and pipeline... (t=%s)\n", time.Since(startTime).Round(time.Millisecond))
-	if err := session.Start(ctx); err != nil {
+	if err != nil {
 		fmt.Printf("❌ [Agent] Failed to start session: %v\n", err)
-		logger.Logger.Errorw("Failed to start agent session", err)
+		logger.Logger.Errorw("Failed to start session", err)
 		return err
 	}
-	fmt.Printf("✅ [Agent] Session started (t=%s)\n", time.Since(startTime).Round(time.Millisecond))
+	fmt.Printf("✅ [Agent] RoomIO + session started (t=%s)\n", time.Since(startTime).Round(time.Millisecond))
 
 	fmt.Printf("\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n")
 	fmt.Printf("✅ Agent ready! (total setup: %s)\n", time.Since(startTime).Round(time.Millisecond))
