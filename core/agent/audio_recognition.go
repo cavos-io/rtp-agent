@@ -390,7 +390,7 @@ func (ar *AudioRecognition) resetSTT() {
 			return
 		}
 
-		logger.Logger.Infow("[STT-PIPE] resetting STT stream (end of turn)")
+		logger.Logger.WithComponent("stt-pipe").Infow("Resetting STT stream (end of turn)")
 		ar.sttStream.Close()
 		ar.sttStream = nil
 		ar.reconnectSTT(true)
