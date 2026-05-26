@@ -97,7 +97,7 @@ func (ar *AudioRecognition) Start(ctx context.Context) error {
 	}
 
 	if !hasSTTNode && ar.stt != nil {
-		logger.Logger.Infow("[STT-PIPE] starting STT stream", "language", ar.session.Options.Language)
+		logger.Logger.WithComponent("stt-pipe").Infow("Starting STT stream", "language", ar.session.Options.Language)
 		stream, err := ar.stt.Stream(ctx, ar.session.Options.Language)
 		if err != nil {
 			logger.Logger.Errorw("[STT-PIPE] failed to create STT stream", err)
