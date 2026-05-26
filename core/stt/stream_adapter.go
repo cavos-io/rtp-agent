@@ -198,7 +198,7 @@ func (w *streamAdapterWrapper) run() {
 							Alternatives: []SpeechData{tEvent.Alternatives[0]},
 						}
 					} else {
-						logger.Logger.Debugw("[StreamAdapter] Recognize returned empty result")
+						logger.Logger.WithComponent("stream_adapter").Debugw("Recognize returned empty result")
 					}
 				}
 			}
