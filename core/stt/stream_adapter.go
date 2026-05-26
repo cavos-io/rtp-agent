@@ -187,7 +187,7 @@ func (w *streamAdapterWrapper) run() {
 				w.events <- &SpeechEvent{Type: SpeechEventEndOfSpeech}
 
 				if len(frames) > 0 {
-					logger.Logger.Debugw("[StreamAdapter] calling Recognize", "frames", len(frames), "language", w.language)
+					logger.Logger.WithComponent("stream_adapter").Debugw("Calling Recognize", "frames", len(frames), "language", w.language)
 					tEvent, err := w.adapter.stt.Recognize(w.ctx, frames, w.language)
 					if err != nil {
 						logger.Logger.Errorw("[StreamAdapter] Recognize error", err)
