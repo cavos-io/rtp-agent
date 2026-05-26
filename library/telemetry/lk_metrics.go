@@ -2,7 +2,6 @@ package telemetry
 
 import (
 	"context"
-	"fmt"
 	"sync"
 	"sync/atomic"
 
@@ -59,7 +58,7 @@ func ensureLK() *lkInstruments {
 		ins.cLLMOutputTokens, _ = m.Int64Counter("lk_agents_usage_llm_output_tokens_total",
 			metric.WithUnit("1"), metric.WithDescription("Total LLM completion tokens"))
 		ins.gWorkerLoad, _ = m.Float64Gauge("lk_agents_worker_load",
-			metric.WithUnit("{job}"), metric.WithDescription("Active agent jobs count"))
+			metric.WithUnit("1"), metric.WithDescription("Worker CPU load (0.0-1.0)"))
 
 		lkInstr = ins
 	})
@@ -97,10 +96,8 @@ func UpdateActiveJobsCount(ctx context.Context, count int64) {
 	oldCount := lkJobCount.Load()
 	delta := count - oldCount
 	lkJobCount.Store(count)
-	fmt.Printf("[METRICS] UpdateActiveJobsCount: oldCount=%d, newCount=%d, delta=%d\n", oldCount, count, delta)
 	if ins := ensureLK(); ins != nil {
 		ins.cActiveJobs.Add(ctx, delta)
-		ins.gWorkerLoad.Record(ctx, float64(count))
 	}
 }
 
@@ -159,5 +156,12 @@ func RecordLKTTSTTFB(ctx context.Context, v float64, a LKMetricsAttrs) {
 func AddLKLLMOutputTokens(ctx context.Context, n int64, a LKMetricsAttrs) {
 	if ins := ensureLK(); ins != nil {
 		ins.cLLMOutputTokens.Add(ctx, n, metric.WithAttributes(a.toOtelAttrs()...))
+	}
+}
+
+// RecordWorkerLoad records the current CPU load as a gauge (0.0-1.0)
+func RecordWorkerLoad(ctx context.Context, cpuLoad float64) {
+	if ins := ensureLK(); ins != nil {
+		ins.gWorkerLoad.Record(ctx, cpuLoad)
 	}
 }

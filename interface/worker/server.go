@@ -65,6 +65,10 @@ type AgentServer struct {
 	cpuLoad atomic.Uint64
 
 	metricsShutdown func(context.Context) error
+
+	// Metrics publishing lifecycle
+	metricsCtx    context.Context
+	metricsCancel context.CancelFunc
 }
 
 func NewAgentServer(opts WorkerOptions) *AgentServer {
@@ -92,6 +96,10 @@ func NewAgentServer(opts WorkerOptions) *AgentServer {
 		}
 	}
 
+	// Spawn metrics publishing loop
+	s.metricsCtx, s.metricsCancel = context.WithCancel(context.Background())
+	go s.publishMetricsLoop(s.metricsCtx)
+
 	return s
 }
 
@@ -114,6 +122,25 @@ func (s *AgentServer) sampleCPULoop() {
 // Returns math.NaN() until the first sample is available (~5 s after startup).
 func (s *AgentServer) CurrentCPULoad() float64 {
 	return math.Float64frombits(s.cpuLoad.Load())
+}
+
+// publishMetricsLoop publishes CPU load to metrics every 5 seconds
+func (s *AgentServer) publishMetricsLoop(ctx context.Context) {
+	ticker := time.NewTicker(5 * time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			cpuLoad := s.CurrentCPULoad()
+			// Skip recording if NaN (CPU sampling not yet ready)
+			if math.IsNaN(cpuLoad) {
+				continue
+			}
+			telemetry.RecordWorkerLoad(ctx, cpuLoad)
+		}
+	}
 }
 
 func (s *AgentServer) RTCSession(
@@ -157,7 +184,6 @@ func (s *AgentServer) NumActiveJobs() int {
 // Must be called while holding s.mu lock
 func (s *AgentServer) updateActiveJobsMetric(ctx context.Context) {
 	count := int64(len(s.activeJobs))
-	fmt.Printf("[SERVER] updateActiveJobsMetric: activeJobs count=%d\n", count)
 	telemetry.UpdateActiveJobsCount(ctx, count)
 }
 
@@ -402,6 +428,11 @@ func (s *AgentServer) Drain(ctx context.Context) error {
 		if err := s.metricsShutdown(ctx); err != nil {
 			logger.Logger.Warnw("Failed to shutdown metrics", err)
 		}
+	}
+
+	// Cancel metrics publishing loop
+	if s.metricsCancel != nil {
+		s.metricsCancel()
 	}
 
 	logger.Logger.Infow("Draining agent server", "active_jobs", activeCount)
