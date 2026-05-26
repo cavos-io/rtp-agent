@@ -8,12 +8,12 @@ import (
 	"net/http"
 	_ "net/http/pprof"
 	"os"
+	"os/signal"
 	"runtime"
 	"runtime/debug"
-	"time"
-
-	"os/signal"
+	"strconv"
 	"syscall"
+	"time"
 
 	azureAdapter "github.com/cavos-io/rtp-agent/adapter/azure"
 	elevenlabsAdapter "github.com/cavos-io/rtp-agent/adapter/elevenlabs"
@@ -46,16 +46,6 @@ func main() {
 		}
 	}()
 
-	// Start Prometheus /metrics server.
-	metricsPort := 2112
-	shutdownMetrics, err := telemetry.InitMetrics("", metricsPort)
-	if err != nil {
-		log.Printf("⚠️ [Main] Failed to start metrics server: %v\n", err)
-	} else {
-		log.Printf("📊 [Main] Prometheus metrics available at http://localhost:%d/metrics\n", metricsPort)
-		defer shutdownMetrics(context.Background())
-	}
-
 	// Global pre-warm of Silero VAD to catch errors early and warm up library
 	fmt.Println("🚀 [Main] Pre-warming Silero VAD...")
 	modelPath := os.Getenv("SILERO_VAD_MODEL_PATH")
@@ -79,12 +69,22 @@ func main() {
 		}
 	}
 
+	// Parse Prometheus port from env (default 9090)
+	prometheusPort := 9090
+	if port := os.Getenv("PROMETHEUS_PORT"); port != "" {
+		if p, err := strconv.Atoi(port); err == nil {
+			prometheusPort = p
+		}
+	}
+
 	opts := worker.WorkerOptions{
-		AgentName:  os.Getenv("AGENT_NAME"),
-		WorkerType: worker.WorkerTypeRoom,
-		WSRL:       os.Getenv("LIVEKIT_URL"),
-		APIKey:     os.Getenv("LIVEKIT_API_KEY"),
-		APISecret:  os.Getenv("LIVEKIT_API_SECRET"),
+		AgentName:      os.Getenv("AGENT_NAME"),
+		WorkerType:     worker.WorkerTypeRoom,
+		WSRL:           os.Getenv("LIVEKIT_URL"),
+		APIKey:         os.Getenv("LIVEKIT_API_KEY"),
+		APISecret:      os.Getenv("LIVEKIT_API_SECRET"),
+		PrometheusHost: os.Getenv("PROMETHEUS_HOST"),
+		PrometheusPort: prometheusPort,
 	}
 
 	server := worker.NewAgentServer(opts)

@@ -11,6 +11,7 @@ import (
 
 	"github.com/cavos-io/rtp-agent/core/agent"
 	"github.com/cavos-io/rtp-agent/library/logger"
+	"github.com/cavos-io/rtp-agent/library/telemetry"
 	"github.com/gorilla/websocket"
 	"github.com/livekit/protocol/auth"
 	"github.com/livekit/protocol/livekit"
@@ -39,6 +40,8 @@ type WorkerOptions struct {
 	JobMemoryLimitMB    float64
 	NumIdleProcesses    int
 	DrainTimeoutSeconds int
+	PrometheusPort      int
+	PrometheusHost      string
 }
 
 type AgentServer struct {
@@ -60,6 +63,8 @@ type AgentServer struct {
 	// cpuLoad holds the last sampled CPU fraction (0.0–1.0), stored as float64 bits.
 	// NaN means no sample has been taken yet.
 	cpuLoad atomic.Uint64
+
+	metricsShutdown func(context.Context) error
 }
 
 func NewAgentServer(opts WorkerOptions) *AgentServer {
@@ -70,6 +75,23 @@ func NewAgentServer(opts WorkerOptions) *AgentServer {
 	s.cpuLoad.Store(math.Float64bits(math.NaN()))
 	go s.sampleCPULoop()
 	s.Emitter = events.NewEmitter[string, *livekit.RegisterWorkerResponse]()
+
+	// Initialize metrics and start Prometheus HTTP server if PrometheusPort is set
+	if opts.PrometheusPort > 0 {
+		metricsHost := opts.PrometheusHost
+		if metricsHost == "" {
+			metricsHost = "0.0.0.0" // default: listen on all interfaces
+		}
+		shutdownMetrics, err := telemetry.InitMetrics(metricsHost, opts.PrometheusPort)
+		if err != nil {
+			logger.Logger.Warnw("Failed to initialize metrics", err)
+		} else {
+			logger.Logger.Infow("Metrics initialized", "host", metricsHost, "port", opts.PrometheusPort)
+			// Store shutdown function for graceful cleanup (can be called during Drain)
+			s.metricsShutdown = shutdownMetrics
+		}
+	}
+
 	return s
 }
 
@@ -366,6 +388,13 @@ func (s *AgentServer) Drain(ctx context.Context) error {
 	s.isDraining = true
 	activeCount := len(s.activeJobs)
 	s.mu.Unlock()
+
+	// Shutdown metrics if initialized
+	if s.metricsShutdown != nil {
+		if err := s.metricsShutdown(ctx); err != nil {
+			logger.Logger.Warnw("Failed to shutdown metrics", err)
+		}
+	}
 
 	logger.Logger.Infow("Draining agent server", "active_jobs", activeCount)
 
