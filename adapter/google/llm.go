@@ -8,6 +8,7 @@ import (
 	"iter"
 
 	"github.com/cavos-io/rtp-agent/core/llm"
+	"github.com/cavos-io/rtp-agent/library/logger"
 	"google.golang.org/genai"
 )
 
@@ -93,13 +94,19 @@ func (l *GoogleLLM) Chat(ctx context.Context, chatCtx *llm.ChatContext, opts ...
 			var fd genai.FunctionDeclaration
 			if err := json.Unmarshal(b, &fd); err == nil {
 				declarations = append(declarations, &fd)
+			} else {
+				logger.Logger.Warnw("Failed to unmarshal tool schema for Gemini", err, "schema", string(b))
 			}
 		}
 
-		config.Tools = []*genai.Tool{
-			{FunctionDeclarations: declarations},
+		if len(declarations) > 0 {
+			config.Tools = []*genai.Tool{
+				{FunctionDeclarations: declarations},
+			}
+			logger.Logger.Debugw("Gemini tools configured", "count", len(declarations))
 		}
 	}
+	logger.Logger.Debugw("Gemini GenerateContentStream calling", "model", l.model, "contents_count", len(contents), "system_instructions_len", len(systemInstructions))
 	stream := l.client.Models.GenerateContentStream(ctx, l.model, contents, config)
 
 	next, stop := iter.Pull2(stream)
@@ -118,9 +125,11 @@ type googleLLMStream struct {
 func (s *googleLLMStream) Next() (*llm.ChatChunk, error) {
 	resp, err, ok := s.next()
 	if !ok {
+		logger.Logger.Debugw("Gemini stream closed")
 		return nil, io.EOF
 	}
 	if err != nil {
+		logger.Logger.Errorw("Gemini stream error", err)
 		if errors.Is(err, genai.ErrPageDone) || errors.Is(err, io.EOF) {
 			return nil, io.EOF
 		}
@@ -132,6 +141,7 @@ func (s *googleLLMStream) Next() (*llm.ChatChunk, error) {
 			Role: llm.ChatRoleAssistant,
 		},
 	}
+	logger.Logger.Debugw("Gemini chunk received", "candidates", len(resp.Candidates))
 
 	if len(resp.Candidates) > 0 {
 		cand := resp.Candidates[0]
