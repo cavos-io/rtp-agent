@@ -15,7 +15,9 @@ import (
 	"os/signal"
 	"syscall"
 
+	azureAdapter "github.com/cavos-io/rtp-agent/adapter/azure"
 	elevenlabsAdapter "github.com/cavos-io/rtp-agent/adapter/elevenlabs"
+	"github.com/cavos-io/rtp-agent/adapter/openai"
 	openaiAdapter "github.com/cavos-io/rtp-agent/adapter/openai"
 	rnnoiseAdapter "github.com/cavos-io/rtp-agent/adapter/rnnoise"
 	sileroAdapter "github.com/cavos-io/rtp-agent/adapter/silero"
@@ -23,6 +25,7 @@ import (
 	"github.com/cavos-io/rtp-agent/interface/cli"
 	"github.com/cavos-io/rtp-agent/interface/worker"
 	"github.com/cavos-io/rtp-agent/library/logger"
+	"github.com/cavos-io/rtp-agent/library/telemetry"
 	"github.com/joho/godotenv"
 	lksdk "github.com/livekit/server-sdk-go/v2"
 	"github.com/pion/webrtc/v4"
@@ -42,6 +45,16 @@ func main() {
 			log.Println("pprof server error:", err)
 		}
 	}()
+
+	// Start Prometheus /metrics server.
+	metricsPort := 2112
+	shutdownMetrics, err := telemetry.InitMetrics("", metricsPort)
+	if err != nil {
+		log.Printf("⚠️ [Main] Failed to start metrics server: %v\n", err)
+	} else {
+		log.Printf("📊 [Main] Prometheus metrics available at http://localhost:%d/metrics\n", metricsPort)
+		defer shutdownMetrics(context.Background())
+	}
 
 	// Global pre-warm of Silero VAD to catch errors early and warm up library
 	fmt.Println("🚀 [Main] Pre-warming Silero VAD...")
@@ -149,11 +162,11 @@ func handleAgent(server *worker.AgentServer, jobCtx *worker.JobContext) error {
 	fmt.Println("✅ [Agent] Agent created")
 
 	// Set up LLM provider (OpenAI)
-	ag.LLM = openaiAdapter.NewOpenAILLM(apiKey, "gpt-4o")
+	ag.LLM = openai.NewOpenAILLM(os.Getenv("OPENAI_API_KEY"), "gpt-4.1-mini")
 	fmt.Println("✅ [Agent] LLM (GPT-4o) configured")
 
 	// Set up STT provider (OpenAI Whisper)
-	ag.STT = openaiAdapter.NewOpenAISTT(apiKey, "")
+	ag.STT = azureAdapter.NewAzureSTT(os.Getenv("AZURE_SPEECH_KEY"), os.Getenv("AZURE_SPEECH_REGION"), "id-ID")
 	fmt.Println("✅ [Agent] STT (Whisper) configured")
 
 	// Set up VAD (required for speech start/end detection and STT segmentation)
@@ -228,6 +241,8 @@ func handleAgent(server *worker.AgentServer, jobCtx *worker.JobContext) error {
 	case "openai":
 		// Map platform voice names to OpenAI constants if necessary, or pass through
 		ag.TTS = openaiAdapter.NewOpenAITTS(apiKey, openaiAdapter.SpeechModel("tts-1"), openaiAdapter.SpeechVoice(voiceID))
+	case "azure":
+		ag.TTS = azureAdapter.NewAzureTTS(os.Getenv("AZURE_SPEECH_KEY"), os.Getenv("AZURE_SPEECH_REGION"), "id-ID-GadisNeural")
 	default:
 		// Fallback to ElevenLabs default
 		elevenlabsAPIKey := os.Getenv("ELEVENLABS_API_KEY")
@@ -251,6 +266,13 @@ func handleAgent(server *worker.AgentServer, jobCtx *worker.JobContext) error {
 	// Create session (do not start yet — RoomIO must be wired first)
 	session := agent.NewAgentSession(ag, nil, sessionOpts)
 	session.Noise = ag.Noise
+	session.LKMetricsAttrs = &telemetry.LKMetricsAttrs{
+		JobID:    jobCtx.Job.Id,
+		Model:    "gpt-4.1-mini",
+		Language: "id-ID",
+	}
+	telemetry.AdjustLKActiveJobCount(ctx, +1)
+	defer telemetry.AdjustLKActiveJobCount(ctx, -1)
 	fmt.Println("✅ [Agent] Session created")
 
 	// Register session with server for console UI to access
