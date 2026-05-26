@@ -25,7 +25,6 @@ import (
 	"github.com/cavos-io/rtp-agent/interface/cli"
 	"github.com/cavos-io/rtp-agent/interface/worker"
 	"github.com/cavos-io/rtp-agent/library/logger"
-	"github.com/cavos-io/rtp-agent/library/telemetry"
 	"github.com/joho/godotenv"
 	lksdk "github.com/livekit/server-sdk-go/v2"
 	"github.com/pion/webrtc/v4"
@@ -118,6 +117,8 @@ func main() {
 
 type JobMetadata struct {
 	Instructions string `json:"instructions"`
+	LLMModel     string `json:"llm_model"`
+	Language     string `json:"language"`
 	VoiceID      string `json:"voice_id"`
 	TTSProvider  string `json:"tts_provider"`
 	TTSModel     string `json:"tts_model"`
@@ -162,12 +163,20 @@ func handleAgent(server *worker.AgentServer, jobCtx *worker.JobContext) error {
 	fmt.Println("✅ [Agent] Agent created")
 
 	// Set up LLM provider (OpenAI)
-	ag.LLM = openai.NewOpenAILLM(os.Getenv("OPENAI_API_KEY"), "gpt-4.1-mini")
-	fmt.Println("✅ [Agent] LLM (GPT-4o) configured")
+	llmModel := metadata.LLMModel
+	if llmModel == "" {
+		llmModel = "gpt-4.1-mini"
+	}
+	ag.LLM = openai.NewOpenAILLM(os.Getenv("OPENAI_API_KEY"), llmModel)
+	fmt.Printf("✅ [Agent] LLM (%s) configured\n", llmModel)
 
 	// Set up STT provider (OpenAI Whisper)
-	ag.STT = azureAdapter.NewAzureSTT(os.Getenv("AZURE_SPEECH_KEY"), os.Getenv("AZURE_SPEECH_REGION"), "id-ID")
-	fmt.Println("✅ [Agent] STT (Whisper) configured")
+	language := metadata.Language
+	if language == "" {
+		language = "id-ID"
+	}
+	ag.STT = azureAdapter.NewAzureSTT(os.Getenv("AZURE_SPEECH_KEY"), os.Getenv("AZURE_SPEECH_REGION"), language)
+	fmt.Printf("✅ [Agent] STT (Whisper) configured for language %s\n", language)
 
 	// Set up VAD (required for speech start/end detection and STT segmentation)
 	modelPath := os.Getenv("SILERO_VAD_MODEL_PATH")
@@ -255,25 +264,23 @@ func handleAgent(server *worker.AgentServer, jobCtx *worker.JobContext) error {
 	ag.TurnDetection = agent.TurnDetectionModeSTT
 	fmt.Println("✅ [Agent] Turn detection: STT-based")
 
-	// Create agent session options
+	// Create agent session options (with auto metrics setup)
 	sessionOpts := agent.AgentSessionOptions{
 		AllowInterruptions:        true,
 		MinEndpointingDelay:       0.4,
 		MaxEndpointingDelay:       1.0,
 		MinConsecutiveSpeechDelay: 0.1,
+		// Metrics labels for telemetry tracking (from job metadata)
+		JobID:    jobCtx.Job.Id,
+		LLMModel: llmModel,
+		Language: language,
 	}
 
 	// Create session (do not start yet — RoomIO must be wired first)
+	// Metrics will auto-increment when session.Start() is called
 	session := agent.NewAgentSession(ag, nil, sessionOpts)
 	session.Noise = ag.Noise
-	session.LKMetricsAttrs = &telemetry.LKMetricsAttrs{
-		JobID:    jobCtx.Job.Id,
-		Model:    "gpt-4.1-mini",
-		Language: "id-ID",
-	}
-	telemetry.AdjustLKActiveJobCount(ctx, +1)
-	defer telemetry.AdjustLKActiveJobCount(ctx, -1)
-	fmt.Println("✅ [Agent] Session created")
+	fmt.Println("✅ [Agent] Session created (metrics auto-enabled)")
 
 	// Register session with server for console UI to access
 	server.SetConsoleSession(session)

@@ -65,6 +65,10 @@ type AgentSessionOptions struct {
 	// STTLanguage is the BCP-47 language tag passed to the STT stream
 	// (e.g. "id-ID", "en-US"). Leave empty to use the provider default.
 	STTLanguage string
+	// Labels for metrics telemetry tracking
+	JobID    string
+	LLMModel string
+	Language string
 }
 
 type AgentSession struct {
@@ -183,6 +187,15 @@ func NewAgentSession(agent AgentInterface, room *lksdk.Room, opts AgentSessionOp
 		cancel:              cancel,
 	}
 
+	// Auto-setup LK metrics attributes from options
+	if opts.JobID != "" || opts.LLMModel != "" || opts.Language != "" {
+		s.LKMetricsAttrs = &telemetry.LKMetricsAttrs{
+			JobID:    opts.JobID,
+			Model:    opts.LLMModel,
+			Language: opts.Language,
+		}
+	}
+
 	if chatCtx != nil {
 		chatCtx.OnItemAdded = func(item llm.ChatItem) {
 			if s.Timeline != nil {
@@ -291,6 +304,8 @@ func (s *AgentSession) Start(ctx context.Context) error {
 	if s.LKMetricsAttrs != nil {
 		recorder := newLKMetricsRecorder(*s.LKMetricsAttrs)
 		s.Timeline.AddSubscriber(recorder.onEvent)
+		// Auto-increment active job count for telemetry
+		telemetry.AdjustLKActiveJobCount(ctx, +1)
 	}
 
 	s.started = true
@@ -321,7 +336,13 @@ func (s *AgentSession) Close() error {
 	s.started = false
 	activity := s.Activity
 	assistant := s.Assistant
+	metricsAttrs := s.LKMetricsAttrs
 	s.mu.Unlock()
+
+	// Auto-decrement active job count if metrics were tracked
+	if metricsAttrs != nil {
+		telemetry.AdjustLKActiveJobCount(context.Background(), -1)
+	}
 
 	s.cancel()
 
