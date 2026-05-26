@@ -190,7 +190,7 @@ func (w *streamAdapterWrapper) run() {
 					logger.Logger.WithComponent("stream_adapter").Debugw("Calling Recognize", "frames", len(frames), "language", w.language)
 					tEvent, err := w.adapter.stt.Recognize(w.ctx, frames, w.language)
 					if err != nil {
-						logger.Logger.Errorw("[StreamAdapter] Recognize error", err)
+						logger.Logger.WithComponent("stream_adapter").Errorw("Recognize error", err)
 					} else if tEvent != nil && len(tEvent.Alternatives) > 0 && tEvent.Alternatives[0].Text != "" {
 						logger.Logger.Debugw("[StreamAdapter] Recognize success", "text", tEvent.Alternatives[0].Text)
 						w.events <- &SpeechEvent{
