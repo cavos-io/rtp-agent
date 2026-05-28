@@ -2,8 +2,10 @@ package agent
 
 import (
 	"context"
+	"encoding/binary"
 	"fmt"
 	"io"
+	"math"
 	"sync"
 	"time"
 
@@ -95,8 +97,8 @@ func (ar *AudioRecognition) Start(ctx context.Context) error {
 	}
 
 	if !hasSTTNode && ar.stt != nil {
-		logger.Logger.Infow("[STT-PIPE] starting STT stream")
-		stream, err := ar.stt.Stream(ctx, ar.language)
+		logger.Logger.WithComponent("stt-pipe").Infow("Starting STT stream", "language", ar.session.Options.Language)
+		stream, err := ar.stt.Stream(ctx, ar.session.Options.Language)
 		if err != nil {
 			logger.Logger.Errorw("[STT-PIPE] failed to create STT stream", err)
 			if startErr != nil {
@@ -148,6 +150,7 @@ func (ar *AudioRecognition) vadLoop(ctx context.Context, stream vad.VADStream) {
 			logger.Logger.Infow("User stopped speaking (VAD)")
 			ar.session.UpdateUserState(UserStateListening)
 			ar.hooks.OnEndOfSpeech(ev)
+			ar.resetSTT()
 		}
 	}
 }
@@ -251,12 +254,26 @@ func (ar *AudioRecognition) PushAudio(frame *model.AudioFrame) error {
 	ar.mu.Lock()
 	defer ar.mu.Unlock()
 
+	// Calculate RMS energy for debugging
+	var sum float64
+	numSamples := len(frame.Data) / 2
+	for i := 0; i < numSamples; i++ {
+		sample := int16(binary.LittleEndian.Uint16(frame.Data[i*2:]))
+		sum += float64(sample) * float64(sample)
+	}
+	rms := 0.0
+	if numSamples > 0 {
+		rms = math.Sqrt(sum / float64(numSamples))
+	}
+
 	ar.frameCount++
 	if ar.frameCount%100 == 1 {
 		logger.Logger.Infow("[STT-PIPE] AudioRecognition.PushAudio receiving frames",
 			"frameCount", ar.frameCount,
 			"vadStreamActive", ar.vadStream != nil,
 			"sttStreamActive", ar.sttStream != nil,
+			"sampleRate", frame.SampleRate,
+			"rms", rms,
 		)
 	}
 
@@ -280,7 +297,7 @@ func (ar *AudioRecognition) PushAudio(frame *model.AudioFrame) error {
 			if err == io.EOF {
 				logger.Logger.Warnw("[STT-PIPE] STT stream closed (EOF), reconnecting", nil, "frameCount", ar.frameCount)
 				ar.sttStream = nil
-				ar.reconnectSTT()
+				ar.reconnectSTT(false)
 			} else {
 				logger.Logger.Errorw("[STT-PIPE] failed to push frame to STT stream", err, "frameCount", ar.frameCount)
 			}
@@ -307,7 +324,7 @@ const maxSTTReconnects = 5
 // reconnectSTT creates a new STT stream after the previous one closed.
 // Uses exponential backoff and gives up after maxSTTReconnects consecutive failures.
 // Must be called with ar.mu held.
-func (ar *AudioRecognition) reconnectSTT() {
+func (ar *AudioRecognition) reconnectSTT(immediate bool) {
 	if ar.stt == nil {
 		return
 	}
@@ -324,14 +341,17 @@ func (ar *AudioRecognition) reconnectSTT() {
 	}
 
 	backoff := time.Duration(1<<uint(ar.sttReconnects-1)) * time.Second
-	if backoff > 30*time.Second {
+	if immediate {
+		backoff = 0
+	} else if backoff > 30*time.Second {
 		backoff = 30 * time.Second
 	}
 	ar.sttBackoffUntil = time.Now().Add(backoff)
 	logger.Logger.Warnw("[STT-PIPE] scheduling STT reconnect", nil,
-		"attempt", ar.sttReconnects, "backoff", backoff)
+		"attempt", ar.sttReconnects, "backoff", backoff, "immediate", immediate)
 
 	ctx := ar.ctx
+	language := ar.session.Options.Language
 	sttProvider := ar.stt
 	go func() {
 		time.Sleep(backoff)
@@ -343,7 +363,7 @@ func (ar *AudioRecognition) reconnectSTT() {
 			return
 		}
 
-		stream, err := sttProvider.Stream(ctx, ar.language)
+		stream, err := sttProvider.Stream(ctx, language)
 		if err != nil {
 			logger.Logger.Errorw("[STT-PIPE] failed to reconnect STT stream", err,
 				"attempt", ar.sttReconnects)
@@ -355,6 +375,26 @@ func (ar *AudioRecognition) reconnectSTT() {
 		go ar.sttLoop(ctx, stream)
 		logger.Logger.Infow("[STT-PIPE] STT stream reconnected successfully")
 	}()
+}
+
+func (ar *AudioRecognition) resetSTT() {
+	ar.mu.Lock()
+	defer ar.mu.Unlock()
+
+	if ar.sttStream != nil {
+		// Only reset if the underlying STT engine natively supports interim results (meaning it's a real-time streaming engine).
+		// Non-streaming engines wrapped in StreamAdapter (like Groq, Azure REST, or OpenAI)
+		// handle turns internally upon VAD_END and shouldn't be reset aggressively, as closing
+		// the stream would prevent the final Recognize call from completing.
+		if !ar.stt.Capabilities().InterimResults {
+			return
+		}
+
+		logger.Logger.WithComponent("stt-pipe").Infow("Resetting STT stream (end of turn)")
+		ar.sttStream.Close()
+		ar.sttStream = nil
+		ar.reconnectSTT(true)
+	}
 }
 
 func (ar *AudioRecognition) Close() {
@@ -395,4 +435,3 @@ func (ar *AudioRecognition) Flush() error {
 	// but we could define a marker frame if needed.
 	return nil
 }
-
