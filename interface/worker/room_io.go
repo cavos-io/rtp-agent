@@ -204,8 +204,8 @@ type RoomIO struct {
 	decoder    AudioDecoder
 	encoder    AudioEncoder
 
-	onPlaybackStarted  func(ev agent.PlaybackStartedEvent)
-	onPlaybackFinished func(ev agent.PlaybackFinishedEvent)
+	// Playback events emitted via EventEmitter (supports multiple listeners)
+	playbackEmitter *agent.EventEmitter
 
 	playoutCh     chan interface{}
 	clearBufferCh chan struct{}
@@ -556,6 +556,7 @@ func NewRoomIO(room *lksdk.Room, session *agent.AgentSession, opts RoomOptions) 
 		decoder:             dec,
 		encoder:             enc,
 		Recorder:            recorder,
+		playbackEmitter:     agent.NewEventEmitter(),
 		preConnectAudio:     preConnectAudio,
 		audioInCh:           make(chan *model.AudioFrame, 100),
 		videoInCh:           make(chan *model.VideoFrame, 100),
@@ -794,12 +795,28 @@ func (rio *RoomIO) CaptureVideoFrame(frame *model.VideoFrame) error {
 	}, nil)
 }
 
+// OnPlaybackStarted registers a callback for playback started events.
+// Multiple callbacks can be registered - they'll all be called.
 func (rio *RoomIO) OnPlaybackStarted(f func(ev agent.PlaybackStartedEvent)) {
-	rio.onPlaybackStarted = f
+	if rio.playbackEmitter != nil {
+		rio.playbackEmitter.On("playback_started", func(ev *agent.AgentEvent) {
+			if ev.PlaybackStarted != nil {
+				f(*ev.PlaybackStarted)
+			}
+		})
+	}
 }
 
+// OnPlaybackFinished registers a callback for playback finished events.
+// Multiple callbacks can be registered - they'll all be called.
 func (rio *RoomIO) OnPlaybackFinished(f func(ev agent.PlaybackFinishedEvent)) {
-	rio.onPlaybackFinished = f
+	if rio.playbackEmitter != nil {
+		rio.playbackEmitter.On("playback_finished", func(ev *agent.AgentEvent) {
+			if ev.PlaybackFinished != nil {
+				f(*ev.PlaybackFinished)
+			}
+		})
+	}
 }
 
 // --- agent.AudioOutput Implementation ---
@@ -895,20 +912,26 @@ func (rio *RoomIO) playoutLoop(ctx context.Context) {
 			rio.mu.Lock()
 			rio.closeFlushWaitersLocked()
 			rio.targetPlayoutTime = time.Time{}
-			logger.Logger.Debugw("[REC] clearBufferCh: calling onPlaybackFinished",
+			logger.Logger.Debugw("[REC] clearBufferCh: emitting playback finished",
 				"pushed_duration_ms", rio.pushedDuration.Milliseconds(),
-				"has_callback", rio.onPlaybackFinished != nil,
+				"interrupted", true,
 			)
-			if rio.onPlaybackFinished != nil {
-				go rio.onPlaybackFinished(agent.PlaybackFinishedEvent{
-					PlaybackPosition: rio.pushedDuration,
-					Interrupted:      true,
-				})
-			}
+			emitter := rio.playbackEmitter
+			pushedDuration := rio.pushedDuration
 			rio.playbackStarted = false
 			rio.pushedDuration = 0
 			pub := rio.audioPub
 			rio.mu.Unlock()
+
+			if emitter != nil {
+				go emitter.Emit(&agent.AgentEvent{
+					Type: "playback_finished",
+					PlaybackFinished: &agent.PlaybackFinishedEvent{
+						PlaybackPosition: pushedDuration,
+						Interrupted:      true,
+					},
+				})
+			}
 
 			if pub != nil {
 				pub.SetMuted(false)
@@ -928,16 +951,12 @@ func (rio *RoomIO) playoutLoop(ctx context.Context) {
 					}
 				}
 
-				logger.Logger.Debugw("[REC] flushMarker: calling onPlaybackFinished",
+				logger.Logger.Debugw("[REC] flushMarker: emitting playback finished",
 					"pushed_duration_ms", rio.pushedDuration.Milliseconds(),
-					"has_callback", rio.onPlaybackFinished != nil,
+					"interrupted", false,
 				)
-				if rio.onPlaybackFinished != nil {
-					go rio.onPlaybackFinished(agent.PlaybackFinishedEvent{
-						PlaybackPosition: rio.pushedDuration,
-						Interrupted:      false,
-					})
-				}
+				emitter := rio.playbackEmitter
+				pushedDuration := rio.pushedDuration
 				rio.playbackStarted = false
 				rio.pushedDuration = 0
 				rio.targetPlayoutTime = time.Time{}
@@ -952,6 +971,16 @@ func (rio *RoomIO) playoutLoop(ctx context.Context) {
 				pub := rio.audioPub
 				rio.mu.Unlock()
 				close(v)
+
+				if emitter != nil {
+					go emitter.Emit(&agent.AgentEvent{
+						Type: "playback_finished",
+						PlaybackFinished: &agent.PlaybackFinishedEvent{
+							PlaybackPosition: pushedDuration,
+							Interrupted:      false,
+						},
+					})
+				}
 
 				// Immediately tell server track is still active after
 				// playback ends so Playground doesn't show "Waiting...".
@@ -968,11 +997,20 @@ func (rio *RoomIO) playoutLoop(ctx context.Context) {
 
 				if !paused && !rio.playbackStarted {
 					rio.playbackStarted = true
-					if rio.onPlaybackStarted != nil {
-						go rio.onPlaybackStarted(agent.PlaybackStartedEvent{CreatedAt: time.Now()})
+					emitter := rio.playbackEmitter
+					rio.mu.Unlock()
+
+					if emitter != nil {
+						go emitter.Emit(&agent.AgentEvent{
+							Type: "playback_started",
+							PlaybackStarted: &agent.PlaybackStartedEvent{
+								CreatedAt: time.Now(),
+							},
+						})
 					}
+				} else {
+					rio.mu.Unlock()
 				}
-				rio.mu.Unlock()
 
 				if track == nil {
 					continue
@@ -1548,8 +1586,10 @@ func (rio *RoomIO) Close() error {
 
 	// Release references to help GC.
 	rio.AgentSession = nil
-	rio.onPlaybackStarted = nil
-	rio.onPlaybackFinished = nil
+	if rio.playbackEmitter != nil {
+		rio.playbackEmitter.Clear()
+	}
+	rio.playbackEmitter = nil
 
 	if rio.Options.DeleteRoomOnClose {
 		if rio.Options.JobContext != nil && rio.Room != nil {

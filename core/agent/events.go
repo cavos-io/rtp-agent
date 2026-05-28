@@ -242,6 +242,8 @@ type AgentEvent struct {
 	AgentStopRequested     *AgentStopRequestedEvent     `json:"agent_stop_requested,omitempty"`
 	AgentAudioStopped      *AgentAudioStoppedEvent      `json:"agent_audio_stopped,omitempty"`
 	STTMetrics             *STTMetricsEvent             `json:"stt_metrics,omitempty"`
+	PlaybackStarted        *PlaybackStartedEvent        `json:"playback_started,omitempty"`
+	PlaybackFinished       *PlaybackFinishedEvent       `json:"playback_finished,omitempty"`
 }
 
 func (ae *AgentEvent) MarshalJSON() ([]byte, error) {
@@ -317,6 +319,10 @@ func NewAgentEvent(ev Event) *AgentEvent {
 		ae.AgentAudioStopped = v
 	case *STTMetricsEvent:
 		ae.STTMetrics = v
+	case *PlaybackStartedEvent:
+		ae.PlaybackStarted = v
+	case *PlaybackFinishedEvent:
+		ae.PlaybackFinished = v
 	}
 	return ae
 }

@@ -19,11 +19,15 @@ type PlaybackStartedEvent struct {
 	CreatedAt time.Time
 }
 
+func (e *PlaybackStartedEvent) GetType() string { return "playback_started" }
+
 type PlaybackFinishedEvent struct {
-	PlaybackPosition      time.Duration
-	Interrupted           bool
+	PlaybackPosition       time.Duration
+	Interrupted            bool
 	SynchronizedTranscript string
 }
+
+func (e *PlaybackFinishedEvent) GetType() string { return "playback_finished" }
 
 // AudioOutput represents a destination for audio frames (e.g., speakers or remote track)
 type AudioOutput interface {
