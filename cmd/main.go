@@ -19,7 +19,8 @@ import (
 	elevenlabsAdapter "github.com/cavos-io/rtp-agent/adapter/elevenlabs"
 	"github.com/cavos-io/rtp-agent/adapter/openai"
 	openaiAdapter "github.com/cavos-io/rtp-agent/adapter/openai"
-	rnnoiseAdapter "github.com/cavos-io/rtp-agent/adapter/rnnoise"
+
+	// rnnoiseAdapter "github.com/cavos-io/rtp-agent/adapter/rnnoise"
 	sileroAdapter "github.com/cavos-io/rtp-agent/adapter/silero"
 	"github.com/cavos-io/rtp-agent/core/agent"
 	"github.com/cavos-io/rtp-agent/interface/cli"
@@ -204,22 +205,22 @@ func handleAgent(server *worker.AgentServer, jobCtx *worker.JobContext) error {
 	fmt.Printf("✅ [Agent] VAD (Silero ONNX) pre-warmed in %s\n", time.Since(start))
 
 	// Set up Noise Cancellation (RNNoise)
-	if os.Getenv("NOISE_CANCELLATION_ENABLED") == "true" {
-		sampleRate := 48000
-		if sr := os.Getenv("NOISE_CANCELLATION_SAMPLE_RATE"); sr != "" {
-			fmt.Sscanf(sr, "%d", &sampleRate)
-		}
+	// if os.Getenv("NOISE_CANCELLATION_ENABLED") == "true" {
+	// 	sampleRate := 48000
+	// 	if sr := os.Getenv("NOISE_CANCELLATION_SAMPLE_RATE"); sr != "" {
+	// 		fmt.Sscanf(sr, "%d", &sampleRate)
+	// 	}
 
-		noiseSuppressor, err := rnnoiseAdapter.NewRNNoiseSuppressor(rnnoiseAdapter.RNNoiseOptions{
-			SampleRate: uint32(sampleRate),
-		})
-		if err != nil {
-			fmt.Printf("⚠️ [Agent] Failed to initialize RNNoise: %v\n", err)
-		} else {
-			ag.Noise = noiseSuppressor
-			fmt.Printf("✅ [Agent] Noise Cancellation (RNNoise) configured at %dHz\n", sampleRate)
-		}
-	}
+	// 	noiseSuppressor, err := rnnoiseAdapter.NewRNNoiseSuppressor(rnnoiseAdapter.RNNoiseOptions{
+	// 		SampleRate: uint32(sampleRate),
+	// 	})
+	// 	if err != nil {
+	// 		fmt.Printf("⚠️ [Agent] Failed to initialize RNNoise: %v\n", err)
+	// 	} else {
+	// 		ag.Noise = noiseSuppressor
+	// 		fmt.Printf("✅ [Agent] Noise Cancellation (RNNoise) configured at %dHz\n", sampleRate)
+	// 	}
+	// }
 
 	// Set up TTS provider dynamically
 	voiceID := metadata.VoiceID
@@ -320,19 +321,23 @@ func handleAgent(server *worker.AgentServer, jobCtx *worker.JobContext) error {
 	}
 	fmt.Printf("✅ [Agent] Connected to LiveKit room (t=%s)\n", time.Since(startTime).Round(time.Millisecond))
 
-	// Wire RoomIO and start both the transport and the session pipeline in one call.
-	// Mirrors Python: await session.start(agent, room=room, room_options=opts)
-	fmt.Printf("⏳ [Agent] Starting RoomIO + session pipeline... (t=%s)\n", time.Since(startTime).Round(time.Millisecond))
-	rio, err = worker.StartSession(ctx, jobCtx.Room, session, worker.RoomOptions{
-		TextOutput: &worker.TextOutputOptions{Enabled: true},
+	// Create RoomIO — this wires session.Input.Audio and session.Output.Audio automatically.
+	rio = worker.NewRoomIO(jobCtx.Room, session, worker.RoomOptions{
+		TextOutput: &worker.TextOutputOptions{
+			Enabled: true,
+		},
 		JobContext: jobCtx,
 	})
-	if err != nil {
+
+	session.SetRoomIO(rio)
+
+	fmt.Printf("⏳ [Agent] Starting session and pipeline... (t=%s)\n", time.Since(startTime).Round(time.Millisecond))
+	if err := session.Start(ctx); err != nil {
 		fmt.Printf("❌ [Agent] Failed to start session: %v\n", err)
-		logger.Logger.Errorw("Failed to start session", err)
+		logger.Logger.Errorw("Failed to start agent session", err)
 		return err
 	}
-	fmt.Printf("✅ [Agent] RoomIO + session started (t=%s)\n", time.Since(startTime).Round(time.Millisecond))
+	fmt.Printf("✅ [Agent] Session started (t=%s)\n", time.Since(startTime).Round(time.Millisecond))
 
 	fmt.Printf("\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n")
 	fmt.Printf("✅ Agent ready! (total setup: %s)\n", time.Since(startTime).Round(time.Millisecond))
@@ -342,10 +347,8 @@ func handleAgent(server *worker.AgentServer, jobCtx *worker.JobContext) error {
 	<-ctx.Done()
 	fmt.Printf("⚠️  [PANEL] handleAgent ctx.Done — agent function returning (jobId=%s, uptime=%s)\n", jobCtx.Job.Id, time.Since(startTime).Round(time.Millisecond))
 
-	// Explicit cleanup: close session, RoomIO, disconnect room, nil all
 	// large references so GC can reclaim everything.
 	session.Close()
-	rio.Close()
 
 	// Clear the console session reference held by the server.
 	server.SetConsoleSession(nil)
