@@ -251,7 +251,7 @@ func handleAgent(server *worker.AgentServer, jobCtx *worker.JobContext) error {
 		// Map platform voice names to OpenAI constants if necessary, or pass through
 		ag.TTS = openaiAdapter.NewOpenAITTS(apiKey, openaiAdapter.SpeechModel("tts-1"), openaiAdapter.SpeechVoice(voiceID))
 	case "azure":
-		ag.TTS = azureAdapter.NewAzureTTS(os.Getenv("AZURE_SPEECH_KEY"), os.Getenv("AZURE_SPEECH_REGION"), "id-ID-GadisNeural")
+		ag.TTS = azureAdapter.NewAzureTTS(os.Getenv("AZURE_SPEECH_KEY"), os.Getenv("AZURE_SPEECH_REGION"), "id-ID-GadisNeural", language)
 	default:
 		// Fallback to ElevenLabs default
 		elevenlabsAPIKey := os.Getenv("ELEVENLABS_API_KEY")
