@@ -38,14 +38,22 @@ func RunApp(server *worker.AgentServer) {
 		Hidden: true,
 	})
 	rootCmd.PersistentFlags().String("log-level", "info", "Set the log level")
+	rootCmd.PersistentFlags().Bool("dev-mode", false, "Enable development mode")
 
 	rootCmd.AddCommand(
 		&cobra.Command{
 			Use:    "start",
 			Short:  "Run the worker in production mode",
 			PreRun: preRun,
-			Run: func(cmd *cobra.Command, args []string) {
-				runWorker(server, false)
+			RunE: func(cmd *cobra.Command, args []string) error {
+				ctx, stop := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
+				defer stop()
+
+				logger.Logger.Infow("Starting worker", "devMode", viper.GetBool("dev-mode"))
+				if err := server.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
+					return err
+				}
+				return nil
 			},
 		},
 		&cobra.Command{
@@ -217,6 +225,9 @@ func preRun(cmd *cobra.Command, args []string) {
 	viper.AutomaticEnv()
 	viper.SetEnvKeyReplacer(strings.NewReplacer("-", "_"))
 
-	protologger.InitFromConfig(&protologger.Config{Level: viper.GetString("log-level")}, "worker")
+	protologger.InitFromConfig(&protologger.Config{
+		Level: viper.GetString("log-level"),
+		JSON:  !viper.GetBool("dev-mode"),
+	}, "worker")
 	logger.SetLogger(protologger.GetLogger())
 }
