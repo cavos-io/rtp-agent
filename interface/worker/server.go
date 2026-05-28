@@ -28,20 +28,21 @@ const (
 )
 
 type WorkerOptions struct {
-	AgentName           string
-	WorkerType          WorkerType
-	MaxRetry            int
-	LoadFn              func(*AgentServer) float64
-	WSRL                string
-	APIKey              string
-	APISecret           string
-	HTTPProxy           string
-	JobMemoryWarnMB     float64
-	JobMemoryLimitMB    float64
-	NumIdleProcesses    int
-	DrainTimeoutSeconds int
-	PrometheusPort      int
-	PrometheusHost      string
+	AgentName            string
+	WorkerType           WorkerType
+	MaxRetry             int
+	LoadFn               func(*AgentServer) float64
+	WSRL                 string
+	APIKey               string
+	APISecret            string
+	HTTPProxy            string
+	JobMemoryWarnMB      float64
+	JobMemoryLimitMB     float64
+	NumIdleProcesses     int
+	DrainTimeoutSeconds  int
+	PrometheusPort       int
+	PrometheusHost       string
+	TelephonyManagerAddr string
 }
 
 type AgentServer struct {
@@ -53,11 +54,13 @@ type AgentServer struct {
 	requestFnc    func(*JobRequest) error
 	sessionEndFnc func(*JobContext) error
 
-	activeJobs map[string]*JobContext
-	mu         sync.Mutex
-	conn       *websocket.Conn
-	isDraining bool
+	activeJobs     map[string]*JobContext
+	pendingAccepts map[string]JobAcceptArguments // keyed by jobId, lives between availability and assignment
+	mu             sync.Mutex
+	conn           *websocket.Conn
+	isDraining     bool
 
+	inboundRouter  *InboundRouter
 	consoleSession any // Store local session for CLI console
 
 	// cpuLoad holds the last sampled CPU fraction (0.0–1.0), stored as float64 bits.
@@ -73,8 +76,9 @@ type AgentServer struct {
 
 func NewAgentServer(opts WorkerOptions) *AgentServer {
 	s := &AgentServer{
-		Options:    opts,
-		activeJobs: make(map[string]*JobContext),
+		Options:        opts,
+		activeJobs:     make(map[string]*JobContext),
+		pendingAccepts: make(map[string]JobAcceptArguments),
 	}
 	s.cpuLoad.Store(math.Float64bits(math.NaN()))
 	go s.sampleCPULoop()
@@ -99,6 +103,16 @@ func NewAgentServer(opts WorkerOptions) *AgentServer {
 	// Spawn metrics publishing loop
 	s.metricsCtx, s.metricsCancel = context.WithCancel(context.Background())
 	go s.publishMetricsLoop(s.metricsCtx)
+
+	if opts.TelephonyManagerAddr != "" {
+		router, err := NewInboundRouter(opts.TelephonyManagerAddr)
+		if err != nil {
+			logger.Logger.Errorw("Failed to create inbound router", err, "addr", opts.TelephonyManagerAddr)
+		} else {
+			s.inboundRouter = router
+			logger.Logger.Infow("Inbound router connected", "addr", opts.TelephonyManagerAddr)
+		}
+	}
 
 	return s
 }
@@ -165,6 +179,11 @@ func (s *AgentServer) GetConsoleSession() any {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.consoleSession
+}
+
+// GetInboundRouter returns the InboundRouter if one was configured, otherwise nil.
+func (s *AgentServer) GetInboundRouter() *InboundRouter {
+	return s.inboundRouter
 }
 
 // GetEntrypointFunc retrieves the registered entrypoint function (for console mode)
@@ -552,35 +571,75 @@ func (s *AgentServer) handleMessage(ctx context.Context, msg *livekit.ServerMess
 
 func (s *AgentServer) handleAvailability(ctx context.Context, req *livekit.AvailabilityRequest) {
 	logger.Logger.Infow("Received availability request", "jobId", req.Job.Id)
-	logger.Logger.Infow("Received availability request", "jobId", req.Job.Id)
 
 	s.mu.Lock()
 	draining := s.isDraining
 	s.mu.Unlock()
 
-	// Default to accept unless draining.
-	ans := &livekit.WorkerMessage{
-		Message: &livekit.WorkerMessage_Availability{
-			Availability: &livekit.AvailabilityResponse{
-				JobId:               req.Job.Id,
-				Available:           !draining,
-				ParticipantIdentity: "agent-" + req.Job.Id[:8],
-				ParticipantName:     s.Options.AgentName,
-			},
-		},
-	}
-
-	b, err := proto.Marshal(ans)
-	if err != nil {
-		logger.Logger.Errorw("failed to marshal availability", err)
+	if draining {
+		s.sendAvailabilityResponse(req.Job.Id, false, JobAcceptArguments{})
 		return
 	}
 
+	sendReject := func() {
+		s.sendAvailabilityResponse(req.Job.Id, false, JobAcceptArguments{})
+	}
+
+	sendAccept := func(args JobAcceptArguments) {
+		if args.Identity == "" {
+			args.Identity = "agent-" + req.Job.Id[:8]
+		}
+		if args.Name == "" {
+			args.Name = s.Options.AgentName
+		}
+		s.mu.Lock()
+		s.pendingAccepts[req.Job.Id] = args
+		s.mu.Unlock()
+		s.sendAvailabilityResponse(req.Job.Id, true, args)
+	}
+
+	// If no requestFnc registered, auto-accept (mirrors Python's _default_request_fnc).
+	if s.requestFnc == nil {
+		sendAccept(JobAcceptArguments{})
+		return
+	}
+
+	jobReq := &JobRequest{
+		Job:       req.Job,
+		acceptFnc: func(args JobAcceptArguments) error { sendAccept(args); return nil },
+		rejectFnc: func() error { sendReject(); return nil },
+	}
+
+	go func() {
+		if err := s.requestFnc(jobReq); err != nil {
+			logger.Logger.Errorw("requestFnc failed, rejecting job", err, "jobId", req.Job.Id)
+			sendReject()
+		}
+	}()
+}
+
+func (s *AgentServer) sendAvailabilityResponse(jobId string, available bool, args JobAcceptArguments) {
+	ans := &livekit.WorkerMessage{
+		Message: &livekit.WorkerMessage_Availability{
+			Availability: &livekit.AvailabilityResponse{
+				JobId:               jobId,
+				Available:           available,
+				ParticipantIdentity: args.Identity,
+				ParticipantName:     args.Name,
+				ParticipantMetadata: args.Metadata,
+			},
+		},
+	}
+	b, err := proto.Marshal(ans)
+	if err != nil {
+		logger.Logger.Errorw("failed to marshal availability response", err)
+		return
+	}
 	s.mu.Lock()
 	err = s.conn.WriteMessage(websocket.BinaryMessage, b)
 	s.mu.Unlock()
 	if err != nil {
-		logger.Logger.Errorw("failed to send availability", err)
+		logger.Logger.Errorw("failed to send availability response", err)
 	}
 }
 
@@ -609,10 +668,14 @@ func (s *AgentServer) sendJobStatus(jobID string, status livekit.JobStatus, errM
 func (s *AgentServer) handleAssignment(ctx context.Context, req *livekit.JobAssignment) {
 	logger.Logger.Infow("Received job assignment", "jobId", req.Job.Id, "room", req.Job.Room.Name)
 
-	// Spin up a job context here
 	jobCtx := NewJobContext(req.Job, s.Options.WSRL, s.Options.APIKey, s.Options.APISecret)
 
+	// Attach inbound routing result that was resolved during availability check.
 	s.mu.Lock()
+	if args, ok := s.pendingAccepts[req.Job.Id]; ok {
+		jobCtx.InboundRouting = args.InboundRouting
+		delete(s.pendingAccepts, req.Job.Id)
+	}
 	s.activeJobs[req.Job.Id] = jobCtx
 	s.updateActiveJobsMetric(ctx)
 	s.mu.Unlock()
