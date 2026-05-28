@@ -22,6 +22,11 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
+type RoomStartCloser interface {
+	Start(ctx context.Context) error
+	Close() error
+}
+
 type GenerateReplyOpts struct {
 	AllowInterruptions bool
 	IncludeContext     bool   // Include recent chat context in the instruction
@@ -83,6 +88,8 @@ type AgentSession struct {
 
 	Input  AgentInput
 	Output AgentOutput
+
+	RoomIO RoomStartCloser
 
 	MetricsCollector *telemetry.UsageCollector
 	LKMetricsAttrs   *telemetry.LKMetricsAttrs
@@ -251,6 +258,12 @@ func (s *AgentSession) SetVideoOutput(out VideoOutput) {
 	s.Output.Video = out
 }
 
+func (s *AgentSession) SetRoomIO(rio RoomStartCloser) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.RoomIO = rio
+}
+
 func (s *AgentSession) Start(ctx context.Context) error {
 	s.mu.Lock()
 
@@ -310,6 +323,18 @@ func (s *AgentSession) Start(ctx context.Context) error {
 	s.started = true
 	s.mu.Unlock()
 
+	// Start RoomIO if set — this sets up Input.Audio and Output.Audio
+	// Must be called AFTER releasing s.mu to avoid deadlock
+	if s.RoomIO != nil {
+		if err := s.RoomIO.Start(ctx); err != nil {
+			s.mu.Lock()
+			s.Activity = nil
+			s.started = false
+			s.mu.Unlock()
+			return err
+		}
+	}
+
 	// Activity.Start() must be called AFTER releasing s.mu because it
 	// synchronously calls UpdateUserState which also acquires s.mu.
 	s.Activity.Start()
@@ -347,6 +372,10 @@ func (s *AgentSession) Close() error {
 		assistant.Stop()
 	}
 
+	if s.RoomIO != nil {
+		s.RoomIO.Close()
+	}
+
 	if s.Timeline != nil {
 		s.Timeline.AddEvent(&CloseEvent{
 			Reason:    CloseReasonUserInitiated,
@@ -377,6 +406,7 @@ func (s *AgentSession) Close() error {
 	s.Agent = nil
 	s.clientEvents = nil
 	s.ivrActivity = nil
+	s.RoomIO = nil
 	s.Input = AgentInput{}
 	s.Output = AgentOutput{}
 	s.mu.Unlock()

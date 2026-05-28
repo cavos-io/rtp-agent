@@ -19,6 +19,7 @@ import (
 	elevenlabsAdapter "github.com/cavos-io/rtp-agent/adapter/elevenlabs"
 	"github.com/cavos-io/rtp-agent/adapter/openai"
 	openaiAdapter "github.com/cavos-io/rtp-agent/adapter/openai"
+
 	rnnoiseAdapter "github.com/cavos-io/rtp-agent/adapter/rnnoise"
 	sileroAdapter "github.com/cavos-io/rtp-agent/adapter/silero"
 	"github.com/cavos-io/rtp-agent/core/agent"
@@ -328,15 +329,8 @@ func handleAgent(server *worker.AgentServer, jobCtx *worker.JobContext) error {
 		JobContext: jobCtx,
 	})
 
-	// Publish agent's audio output track to the room.
-	fmt.Printf("⏳ [Agent] Starting RoomIO (publishing audio track)... (t=%s)\n", time.Since(startTime).Round(time.Millisecond))
-	if err := rio.Start(ctx); err != nil {
-		fmt.Printf("❌ [Agent] Failed to start RoomIO: %v\n", err)
-		return fmt.Errorf("failed to start RoomIO: %w", err)
-	}
-	fmt.Printf("✅ [Agent] RoomIO started (t=%s)\n", time.Since(startTime).Round(time.Millisecond))
+	session.SetRoomIO(rio)
 
-	// Start the session pipeline — session.Input.Audio is now set by RoomIO.
 	fmt.Printf("⏳ [Agent] Starting session and pipeline... (t=%s)\n", time.Since(startTime).Round(time.Millisecond))
 	if err := session.Start(ctx); err != nil {
 		fmt.Printf("❌ [Agent] Failed to start session: %v\n", err)
@@ -353,10 +347,8 @@ func handleAgent(server *worker.AgentServer, jobCtx *worker.JobContext) error {
 	<-ctx.Done()
 	fmt.Printf("⚠️  [PANEL] handleAgent ctx.Done — agent function returning (jobId=%s, uptime=%s)\n", jobCtx.Job.Id, time.Since(startTime).Round(time.Millisecond))
 
-	// Explicit cleanup: close session, RoomIO, disconnect room, nil all
 	// large references so GC can reclaim everything.
 	session.Close()
-	rio.Close()
 
 	// Clear the console session reference held by the server.
 	server.SetConsoleSession(nil)
