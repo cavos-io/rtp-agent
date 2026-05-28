@@ -321,27 +321,121 @@ func NewAgentEvent(ev Event) *AgentEvent {
 	return ae
 }
 
+// EventEmitter provides a Python SDK-like event listener pattern.
+// Supports multiple listeners per event type with type-safe event filtering.
+// Usage:
+//
+//	emitter := NewEventEmitter()
+//	emitter.On("user_state_changed", func(ev *AgentEvent) {
+//	    if ev.UserStateChanged != nil {
+//	        println("New state:", ev.UserStateChanged.NewState)
+//	    }
+//	})
+//	emitter.Emit(agentEvent)
+type EventEmitter struct {
+	mu        sync.RWMutex
+	listeners map[string][]func(*AgentEvent)
+}
+
+func NewEventEmitter() *EventEmitter {
+	return &EventEmitter{
+		listeners: make(map[string][]func(*AgentEvent)),
+	}
+}
+
+// On registers a callback for a specific event type.
+// Multiple callbacks can be registered for the same event.
+// Returns the callback for chaining/decorator-like usage.
+// Mirrors Python SDK: room.on("event_type", callback)
+func (e *EventEmitter) On(eventType string, callback func(*AgentEvent)) func(*AgentEvent) {
+	if e == nil || callback == nil {
+		return callback
+	}
+	e.mu.Lock()
+	e.listeners[eventType] = append(e.listeners[eventType], callback)
+	e.mu.Unlock()
+	return callback
+}
+
+// Emit dispatches an event to all registered listeners for that event type.
+// Errors in one callback do not stop other callbacks (error isolation).
+func (e *EventEmitter) Emit(ev *AgentEvent) {
+	if e == nil || ev == nil {
+		return
+	}
+
+	e.mu.RLock()
+	callbacks := e.listeners[ev.Type]
+	// Make a copy to avoid holding the lock during callback execution
+	callbacksCopy := make([]func(*AgentEvent), len(callbacks))
+	copy(callbacksCopy, callbacks)
+	e.mu.RUnlock()
+
+	for _, cb := range callbacksCopy {
+		// Error isolation: recover from panics
+		func() {
+			defer func() {
+				if r := recover(); r != nil {
+					logger.Logger.Errorw("EventEmitter callback panic", fmt.Errorf("%v", r), "eventType", ev.Type)
+				}
+			}()
+			cb(ev)
+		}()
+	}
+}
+
+// Clear removes all listeners.
+func (e *EventEmitter) Clear() {
+	if e == nil {
+		return
+	}
+	e.mu.Lock()
+	e.listeners = make(map[string][]func(*AgentEvent))
+	e.mu.Unlock()
+}
+
+// ListenerCount returns the number of listeners for a specific event type.
+func (e *EventEmitter) ListenerCount(eventType string) int {
+	if e == nil {
+		return 0
+	}
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	return len(e.listeners[eventType])
+}
+
 type EventTimeline struct {
-	mu          sync.RWMutex
-	events      []*AgentEvent
-	OnEvent     func(ev *AgentEvent) // kept for backward compatibility
-	subscribers []func(*AgentEvent)
+	mu        sync.RWMutex
+	events    []*AgentEvent
+	emitter   *EventEmitter
+	OnEvent   func(ev *AgentEvent) // kept for backward compatibility
+	listeners []func(*AgentEvent)  // deprecated: use emitter.On() instead
 }
 
 func NewEventTimeline() *EventTimeline {
 	return &EventTimeline{
-		events: make([]*AgentEvent, 0),
+		events:  make([]*AgentEvent, 0),
+		emitter: NewEventEmitter(),
 	}
 }
 
-// AddSubscriber registers an additional event listener alongside OnEvent.
-// Unlike OnEvent (which only allows one), multiple subscribers can coexist.
+// On registers a callback for a specific event type using the internal EventEmitter.
+// Mirrors Python SDK: timeline.on("event_type", callback)
+func (t *EventTimeline) On(eventType string, callback func(*AgentEvent)) func(*AgentEvent) {
+	if t == nil || t.emitter == nil {
+		return callback
+	}
+	return t.emitter.On(eventType, callback)
+}
+
+// AddSubscriber registers an additional event listener (deprecated).
+// Use On(eventType, callback) for type-safe event filtering instead.
 func (t *EventTimeline) AddSubscriber(fn func(*AgentEvent)) {
 	if t == nil || fn == nil {
 		return
 	}
 	t.mu.Lock()
-	t.subscribers = append(t.subscribers, fn)
+	t.listeners = append(t.listeners, fn)
 	t.mu.Unlock()
 }
 
@@ -355,19 +449,23 @@ func (t *EventTimeline) AddEvent(ev Event) {
 	t.mu.Lock()
 	t.events = append(t.events, ae)
 	onEvent := t.OnEvent
-	subs := t.subscribers
+	oldSubs := t.listeners
 	t.mu.Unlock()
 
 	if onEvent != nil {
 		onEvent(ae)
 	}
-	for _, sub := range subs {
+	for _, sub := range oldSubs {
 		sub(ae)
+	}
+
+	// Emit via EventEmitter for type-safe listeners
+	if t.emitter != nil {
+		t.emitter.Emit(ae)
 	}
 }
 
-// Clear releases all stored events, the OnEvent callback, and all subscribers
-// so the timeline (and everything it references) can be garbage-collected.
+// Clear releases all stored events, callbacks, and listeners.
 func (t *EventTimeline) Clear() {
 	if t == nil {
 		return
@@ -375,8 +473,12 @@ func (t *EventTimeline) Clear() {
 	t.mu.Lock()
 	t.events = nil
 	t.OnEvent = nil
-	t.subscribers = nil
+	t.listeners = nil
 	t.mu.Unlock()
+
+	if t.emitter != nil {
+		t.emitter.Clear()
+	}
 }
 
 func (t *EventTimeline) Snapshot() []*AgentEvent {
