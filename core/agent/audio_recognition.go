@@ -151,6 +151,13 @@ func (ar *AudioRecognition) vadLoop(ctx context.Context, stream vad.VADStream) {
 			ar.session.UpdateUserState(UserStateListening)
 			ar.hooks.OnEndOfSpeech(ev)
 			ar.resetSTT()
+		} else if ev.Type == vad.VADEventInferenceDone {
+			if ar.session != nil && ar.session.Timeline != nil {
+				ar.session.Timeline.AddEvent(&VADInferenceEvent{
+					InferenceDuration: ev.InferenceDuration,
+					CreatedAt:         time.Now(),
+				})
+			}
 		}
 	}
 }
@@ -210,6 +217,15 @@ func (ar *AudioRecognition) sttLoop(ctx context.Context, stream stt.RecognizeStr
 				}
 				logger.Logger.Infow("[STT-PIPE] STT final transcript", "text", text)
 				ar.hooks.OnFinalTranscript(ev)
+				if ar.session != nil && ar.session.Timeline != nil && len(ev.Alternatives) > 0 {
+					alt := ev.Alternatives[0]
+					if alt.EndTime > alt.StartTime {
+						ar.session.Timeline.AddEvent(&STTMetricsEvent{
+							AudioDuration: alt.EndTime - alt.StartTime,
+							CreatedAt:     time.Now(),
+						})
+					}
+				}
 			default:
 				logger.Logger.Infow("[STT-PIPE] STT unknown event type", "type", ev.Type)
 			}

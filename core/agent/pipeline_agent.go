@@ -178,6 +178,12 @@ func (va *PipelineAgent) GenerateReply(speech *SpeechHandle) {
 		logger.Logger.Debugw("GenerateReply loop iteration", "step", steps)
 
 		if speech.IsInterrupted() {
+			if session.Timeline != nil {
+				session.Timeline.AddEvent(&AgentStopRequestedEvent{
+					StreamID:  speech.ID,
+					CreatedAt: time.Now(),
+				})
+			}
 			logger.Logger.Infow("Speech interrupted before LLM inference", "step", steps)
 			if session.Output.Audio == nil {
 				session.UpdateAgentState(AgentStateIdle)
@@ -204,10 +210,10 @@ func (va *PipelineAgent) GenerateReply(speech *SpeechHandle) {
 
 		if baseAgent != nil && baseAgent.LLMNode != nil {
 			logger.Logger.Debugw("Using custom LLM node", "step", steps)
-			genData, err = baseAgent.LLMNode(llmCtx, va.LLM, va.chatCtx, session.Tools)
+			genData, err = baseAgent.LLMNode(llmCtx, va.LLM, chatCtx, session.Tools)
 		} else {
 			logger.Logger.Debugw("Using default LLM inference", "step", steps)
-			genData, err = PerformLLMInference(llmCtx, va.LLM, va.chatCtx, session.Tools)
+			genData, err = PerformLLMInference(llmCtx, va.LLM, chatCtx, session.Tools)
 		}
 
 		if err != nil {
@@ -500,10 +506,22 @@ func (va *PipelineAgent) handlePlaybackAndTranscription(ctx context.Context, spe
 				"ctx_err", ctx.Err(),
 			)
 			session.Output.Audio.ClearBuffer()
+			if session.Timeline != nil {
+				session.Timeline.AddEvent(&AgentAudioStoppedEvent{
+					StreamID:  speech.ID,
+					CreatedAt: time.Now(),
+				})
+			}
 		} else {
 			logger.Logger.Debugw("Waiting for audio playout")
 			_ = session.Output.Audio.WaitForPlayout(ctx)
 			logger.Logger.Debugw("Audio playout complete")
+			if session.Timeline != nil {
+				session.Timeline.AddEvent(&AgentAudioStoppedEvent{
+					StreamID:  speech.ID,
+					CreatedAt: time.Now(),
+				})
+			}
 		}
 	}
 	alignedWG.Wait()

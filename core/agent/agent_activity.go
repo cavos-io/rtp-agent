@@ -102,7 +102,7 @@ func (a *AgentActivity) Start() {
 		}
 	}()
 	if a.recog == nil {
-		a.recog = NewAudioRecognition(a.Session, a, a.Session.STT, a.Session.VAD, a.Session.Noise, a.Session.Options.STTLanguage)
+		a.recog = NewAudioRecognition(a.Session, a, a.Session.STT, a.Session.VAD, a.Session.Noise, a.Session.Options.Language)
 		if err := a.recog.Start(a.ctx); err != nil {
 			logger.Logger.Errorw("failed to start audio recognition", err)
 		}
@@ -377,6 +377,13 @@ func (a *AgentActivity) OnStartOfSpeech(ev *vad.VADEvent) {
 	a.cancelUserAwayTimer()
 	a.Session.UpdateUserState(UserStateSpeaking)
 
+	if ev != nil && a.Session.Timeline != nil {
+		a.Session.Timeline.AddEvent(&VADStartedEvent{
+			InferenceDuration: ev.InferenceDuration,
+			CreatedAt:         time.Now(),
+		})
+	}
+
 	// When VAD is active, only VAD events should cancel EOU and interrupt
 	// the agent. STT SpeechStarted from ambient noise must not interfere.
 	if hasVAD && !fromVAD {
@@ -413,6 +420,13 @@ func (a *AgentActivity) OnStartOfSpeech(ev *vad.VADEvent) {
 		return
 	}
 
+	if a.Session.Timeline != nil {
+		a.Session.Timeline.AddEvent(&BargeInDetectedEvent{
+			StreamID:  current.ID,
+			CreatedAt: time.Now(),
+		})
+	}
+
 	usePause := (a.Session.Options.ResumeFalseInterruption && a.Session.Options.FalseInterruptionTimeout > 0) ||
 		a.Session.Options.MinInterruptionWords > 0
 	if usePause && !current.IsDone() && !current.IsInterrupted() && current.AllowInterruptions {
@@ -440,6 +454,15 @@ func (a *AgentActivity) OnEndOfSpeech(ev *vad.VADEvent) {
 	logger.Logger.Infow("🔇 User stopped speaking", "speechDuration", speechDuration)
 	a.Session.UpdateUserState(UserStateListening)
 	a.startUserAwayTimer(a.Session.Options.UserAwayTimeout)
+
+	if ev != nil && a.Session.Timeline != nil {
+		a.Session.Timeline.AddEvent(&VADEndedEvent{
+			SpeechDuration:    ev.SpeechDuration,
+			SilenceDuration:   ev.SilenceDuration,
+			InferenceDuration: ev.InferenceDuration,
+			CreatedAt:         time.Now(),
+		})
+	}
 
 	if a.discardUserTurn {
 		a.discardUserTurn = false

@@ -236,7 +236,6 @@ func (s *googleSTTStream) Close() error {
 	if s.closed {
 		return nil
 	}
-	slog.Info("[STT] google: stream closed", "total_frames_sent", s.frameCount)
 	s.closed = true
 	return s.stream.CloseSend()
 }

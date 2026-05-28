@@ -187,7 +187,7 @@ func handleAgent(server *worker.AgentServer, jobCtx *worker.JobContext) error {
 		sileroAdapter.WithModelPath(modelPath),
 		sileroAdapter.WithMinSpeechDuration(0.05),
 		sileroAdapter.WithMinSilenceDuration(0.3),
-		sileroAdapter.WithActivationThreshold(0.9),
+		sileroAdapter.WithActivationThreshold(0.5),
 		sileroAdapter.WithSampleRate(16000),
 	)
 	if err != nil {
