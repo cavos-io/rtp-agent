@@ -20,7 +20,7 @@ import (
 	"github.com/cavos-io/rtp-agent/adapter/openai"
 	openaiAdapter "github.com/cavos-io/rtp-agent/adapter/openai"
 
-	// rnnoiseAdapter "github.com/cavos-io/rtp-agent/adapter/rnnoise"
+	rnnoiseAdapter "github.com/cavos-io/rtp-agent/adapter/rnnoise"
 	sileroAdapter "github.com/cavos-io/rtp-agent/adapter/silero"
 	"github.com/cavos-io/rtp-agent/core/agent"
 	"github.com/cavos-io/rtp-agent/interface/cli"
@@ -205,22 +205,22 @@ func handleAgent(server *worker.AgentServer, jobCtx *worker.JobContext) error {
 	fmt.Printf("✅ [Agent] VAD (Silero ONNX) pre-warmed in %s\n", time.Since(start))
 
 	// Set up Noise Cancellation (RNNoise)
-	// if os.Getenv("NOISE_CANCELLATION_ENABLED") == "true" {
-	// 	sampleRate := 48000
-	// 	if sr := os.Getenv("NOISE_CANCELLATION_SAMPLE_RATE"); sr != "" {
-	// 		fmt.Sscanf(sr, "%d", &sampleRate)
-	// 	}
+	if os.Getenv("NOISE_CANCELLATION_ENABLED") == "true" {
+		sampleRate := 48000
+		if sr := os.Getenv("NOISE_CANCELLATION_SAMPLE_RATE"); sr != "" {
+			fmt.Sscanf(sr, "%d", &sampleRate)
+		}
 
-	// 	noiseSuppressor, err := rnnoiseAdapter.NewRNNoiseSuppressor(rnnoiseAdapter.RNNoiseOptions{
-	// 		SampleRate: uint32(sampleRate),
-	// 	})
-	// 	if err != nil {
-	// 		fmt.Printf("⚠️ [Agent] Failed to initialize RNNoise: %v\n", err)
-	// 	} else {
-	// 		ag.Noise = noiseSuppressor
-	// 		fmt.Printf("✅ [Agent] Noise Cancellation (RNNoise) configured at %dHz\n", sampleRate)
-	// 	}
-	// }
+		noiseSuppressor, err := rnnoiseAdapter.NewRNNoiseSuppressor(rnnoiseAdapter.RNNoiseOptions{
+			SampleRate: uint32(sampleRate),
+		})
+		if err != nil {
+			fmt.Printf("⚠️ [Agent] Failed to initialize RNNoise: %v\n", err)
+		} else {
+			ag.Noise = noiseSuppressor
+			fmt.Printf("✅ [Agent] Noise Cancellation (RNNoise) configured at %dHz\n", sampleRate)
+		}
+	}
 
 	// Set up TTS provider dynamically
 	voiceID := metadata.VoiceID
