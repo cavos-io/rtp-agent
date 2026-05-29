@@ -53,10 +53,11 @@ type AgentServer struct {
 	requestFnc    func(*JobRequest) error
 	sessionEndFnc func(*JobContext) error
 
-	activeJobs map[string]*JobContext
-	mu         sync.Mutex
-	conn       *websocket.Conn
-	isDraining bool
+	activeJobs     map[string]*JobContext
+	pendingAccepts map[string]JobAcceptArguments // keyed by jobId, lives between availability and assignment
+	mu             sync.Mutex
+	conn           *websocket.Conn
+	isDraining     bool
 
 	consoleSession any // Store local session for CLI console
 
@@ -73,8 +74,9 @@ type AgentServer struct {
 
 func NewAgentServer(opts WorkerOptions) *AgentServer {
 	s := &AgentServer{
-		Options:    opts,
-		activeJobs: make(map[string]*JobContext),
+		Options:        opts,
+		activeJobs:     make(map[string]*JobContext),
+		pendingAccepts: make(map[string]JobAcceptArguments),
 	}
 	s.cpuLoad.Store(math.Float64bits(math.NaN()))
 	go s.sampleCPULoop()
@@ -552,35 +554,76 @@ func (s *AgentServer) handleMessage(ctx context.Context, msg *livekit.ServerMess
 
 func (s *AgentServer) handleAvailability(ctx context.Context, req *livekit.AvailabilityRequest) {
 	logger.Logger.Infow("Received availability request", "jobId", req.Job.Id)
-	logger.Logger.Infow("Received availability request", "jobId", req.Job.Id)
 
 	s.mu.Lock()
 	draining := s.isDraining
 	s.mu.Unlock()
 
-	// Default to accept unless draining.
-	ans := &livekit.WorkerMessage{
-		Message: &livekit.WorkerMessage_Availability{
-			Availability: &livekit.AvailabilityResponse{
-				JobId:               req.Job.Id,
-				Available:           !draining,
-				ParticipantIdentity: "agent-" + req.Job.Id[:8],
-				ParticipantName:     s.Options.AgentName,
-			},
-		},
-	}
-
-	b, err := proto.Marshal(ans)
-	if err != nil {
-		logger.Logger.Errorw("failed to marshal availability", err)
+	if draining {
+		s.sendAvailabilityResponse(req.Job.Id, false, false, JobAcceptArguments{})
 		return
 	}
 
+	sendReject := func(terminate bool) {
+		s.sendAvailabilityResponse(req.Job.Id, false, terminate, JobAcceptArguments{})
+	}
+
+	sendAccept := func(args JobAcceptArguments) {
+		if args.Identity == "" {
+			args.Identity = "agent-" + req.Job.Id[:8]
+		}
+		if args.Name == "" {
+			args.Name = s.Options.AgentName
+		}
+		s.mu.Lock()
+		s.pendingAccepts[req.Job.Id] = args
+		s.mu.Unlock()
+		s.sendAvailabilityResponse(req.Job.Id, true, false, args)
+	}
+
+	// If no requestFnc registered, auto-accept (mirrors Python's _default_request_fnc).
+	if s.requestFnc == nil {
+		sendAccept(JobAcceptArguments{})
+		return
+	}
+
+	jobReq := &JobRequest{
+		Job:       req.Job,
+		acceptFnc: func(args JobAcceptArguments) error { sendAccept(args); return nil },
+		rejectFnc: func(terminate bool) error { sendReject(terminate); return nil },
+	}
+
+	go func() {
+		if err := s.requestFnc(jobReq); err != nil {
+			logger.Logger.Errorw("requestFnc failed, rejecting job", err, "jobId", req.Job.Id)
+			sendReject(false)
+		}
+	}()
+}
+
+func (s *AgentServer) sendAvailabilityResponse(jobId string, available bool, terminate bool, args JobAcceptArguments) {
+	ans := &livekit.WorkerMessage{
+		Message: &livekit.WorkerMessage_Availability{
+			Availability: &livekit.AvailabilityResponse{
+				JobId:               jobId,
+				Available:           available,
+				Terminate:           terminate,
+				ParticipantIdentity: args.Identity,
+				ParticipantName:     args.Name,
+				ParticipantMetadata: args.Metadata,
+			},
+		},
+	}
+	b, err := proto.Marshal(ans)
+	if err != nil {
+		logger.Logger.Errorw("failed to marshal availability response", err)
+		return
+	}
 	s.mu.Lock()
 	err = s.conn.WriteMessage(websocket.BinaryMessage, b)
 	s.mu.Unlock()
 	if err != nil {
-		logger.Logger.Errorw("failed to send availability", err)
+		logger.Logger.Errorw("failed to send availability response", err)
 	}
 }
 
@@ -609,10 +652,10 @@ func (s *AgentServer) sendJobStatus(jobID string, status livekit.JobStatus, errM
 func (s *AgentServer) handleAssignment(ctx context.Context, req *livekit.JobAssignment) {
 	logger.Logger.Infow("Received job assignment", "jobId", req.Job.Id, "room", req.Job.Room.Name)
 
-	// Spin up a job context here
 	jobCtx := NewJobContext(req.Job, s.Options.WSRL, s.Options.APIKey, s.Options.APISecret)
 
 	s.mu.Lock()
+	delete(s.pendingAccepts, req.Job.Id)
 	s.activeJobs[req.Job.Id] = jobCtx
 	s.updateActiveJobsMetric(ctx)
 	s.mu.Unlock()

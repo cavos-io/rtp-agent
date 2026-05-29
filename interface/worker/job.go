@@ -21,7 +21,7 @@ type JobRequest struct {
 	Job *livekit.Job
 
 	acceptFnc func(JobAcceptArguments) error
-	rejectFnc func() error
+	rejectFnc func(terminate bool) error
 }
 
 func (r *JobRequest) Accept(args JobAcceptArguments) error {
@@ -31,9 +31,14 @@ func (r *JobRequest) Accept(args JobAcceptArguments) error {
 	return nil
 }
 
-func (r *JobRequest) Reject() error {
+// Reject rejects the job. terminate defaults to true, matching Python's reject(terminate=True).
+func (r *JobRequest) Reject(terminate ...bool) error {
+	t := true
+	if len(terminate) > 0 {
+		t = terminate[0]
+	}
 	if r.rejectFnc != nil {
-		return r.rejectFnc()
+		return r.rejectFnc(t)
 	}
 	return nil
 }
