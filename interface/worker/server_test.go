@@ -1,6 +1,9 @@
 package worker
 
-import "testing"
+import (
+	"testing"
+	"time"
+)
 
 func TestAgentServerNumActiveJobs(t *testing.T) {
 	server := NewAgentServer(WorkerOptions{})
@@ -35,5 +38,39 @@ func TestAgentServerCurrentLoadClampsRange(t *testing.T) {
 	server.Options.LoadFn = func(*AgentServer) float64 { return -1.0 }
 	if got := server.currentLoad(); got != 0.0 {
 		t.Fatalf("currentLoad() low clamp = %v, want 0.0", got)
+	}
+}
+
+func TestAgentServerDrain(t *testing.T) {
+	server := NewAgentServer(WorkerOptions{})
+	server.activeJobs["job-1"] = &JobContext{}
+
+	done := make(chan error, 1)
+	go func() {
+		done <- server.Drain(t.Context())
+	}()
+
+	// Should be waiting
+	select {
+	case err := <-done:
+		t.Fatalf("Drain finished early with err: %v", err)
+	case <-time.After(100 * time.Millisecond):
+		// OK
+	}
+
+	// Finish the job
+	server.mu.Lock()
+	delete(server.activeJobs, "job-1")
+	server.mu.Unlock()
+	server.cond.Broadcast()
+
+	// Should finish now
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("Drain failed: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("Drain timed out after job finished")
 	}
 }

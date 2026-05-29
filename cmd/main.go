@@ -8,11 +8,9 @@ import (
 	"net/http"
 	_ "net/http/pprof"
 	"os"
-	"os/signal"
 	"runtime"
 	"runtime/debug"
 	"strconv"
-	"syscall"
 	"time"
 
 	azureAdapter "github.com/cavos-io/rtp-agent/adapter/azure"
@@ -95,24 +93,7 @@ func main() {
 		nil,
 	)
 
-	// Setup signal handling for graceful shutdown
-	sigCtx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
-
-	go func() {
-		cli.RunApp(server)
-	}()
-
-	// Wait for context cancellation (signal or server exit)
-	<-sigCtx.Done()
-	logger.Logger.Infow("Shutdown signal received, draining...")
-
-	drainCtx, drainCancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer drainCancel()
-
-	if err := server.Drain(drainCtx); err != nil {
-		logger.Logger.Errorw("Drain failed", err)
-	}
+	cli.RunApp(server)
 }
 
 type JobMetadata struct {
