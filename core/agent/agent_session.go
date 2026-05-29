@@ -362,18 +362,12 @@ func (s *AgentSession) Close() error {
 	assistant := s.Assistant
 	s.mu.Unlock()
 
-	s.cancel()
-
 	if activity != nil {
 		activity.Stop()
 	}
 
 	if assistant != nil {
 		assistant.Stop()
-	}
-
-	if s.RoomIO != nil {
-		s.RoomIO.Close()
 	}
 
 	if s.Timeline != nil {
@@ -398,6 +392,10 @@ func (s *AgentSession) Close() error {
 		s.clientEvents.Close()
 	}
 
+	if s.RoomIO != nil {
+		s.RoomIO.Close()
+	}
+
 	s.mu.Lock()
 	s.ChatCtx = nil
 	s.Timeline = nil
@@ -411,7 +409,13 @@ func (s *AgentSession) Close() error {
 	s.Output = AgentOutput{}
 	s.mu.Unlock()
 
+	s.cancel()
+
 	return nil
+}
+
+func (s *AgentSession) Done() <-chan struct{} {
+	return s.ctx.Done()
 }
 
 type TransitionActivityAction string

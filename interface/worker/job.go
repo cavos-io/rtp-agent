@@ -40,7 +40,7 @@ func (r *JobRequest) Reject() error {
 
 type JobContext struct {
 	Job    *livekit.Job
-	Room   *lksdk.Room
+	Room   *Room
 	Report *agent.SessionReport
 
 	APIKey           string
@@ -52,6 +52,7 @@ type JobContext struct {
 func NewJobContext(job *livekit.Job, url string, apiKey string, apiSecret string) *JobContext {
 	return &JobContext{
 		Job:              job,
+		Room:             NewRoom(),
 		URL:              url,
 		APIKey:           apiKey,
 		APISecret:        apiSecret,
@@ -60,19 +61,18 @@ func NewJobContext(job *livekit.Job, url string, apiKey string, apiSecret string
 	}
 }
 
-func (c *JobContext) Connect(ctx context.Context, cb *lksdk.RoomCallback) error {
-	room, err := lksdk.ConnectToRoom(c.URL, lksdk.ConnectInfo{
+func (c *JobContext) Connect(ctx context.Context) error {
+	err := c.Room.JoinWithContext(ctx, c.URL, lksdk.ConnectInfo{
 		APIKey:              c.APIKey,
 		APISecret:           c.APISecret,
 		RoomName:            c.Job.Room.Name,
 		ParticipantIdentity: "agent-" + c.Job.Id[:8],
 		ParticipantName:     "Cavos Agent",
 		ParticipantKind:     lksdk.ParticipantAgent,
-	}, cb)
+	})
 	if err != nil {
 		return err
 	}
-	c.Room = room
 	logger.Logger.Infow("Connected to room", "room", c.Job.Room.Name)
 	return nil
 }
@@ -117,4 +117,3 @@ func (c *JobContext) TransferSIPParticipant(ctx context.Context, identity string
 	})
 	return err
 }
-

@@ -28,7 +28,6 @@ import (
 	"github.com/cavos-io/rtp-agent/library/logger"
 	"github.com/joho/godotenv"
 	lksdk "github.com/livekit/server-sdk-go/v2"
-	"github.com/pion/webrtc/v4"
 )
 
 func main() {
@@ -295,34 +294,17 @@ func handleAgent(server *worker.AgentServer, jobCtx *worker.JobContext) error {
 	var rio *worker.RoomIO
 	cb := lksdk.NewRoomCallback()
 	cb.OnDisconnected = func() { cancel() }
-	cb.OnTrackSubscribed = func(track *webrtc.TrackRemote, pub *lksdk.RemoteTrackPublication, rp *lksdk.RemoteParticipant) {
-		if rio == nil {
-			return
-		}
-		rio.GetCallback().OnTrackSubscribed(track, pub, rp)
-	}
-	cb.OnTrackUnsubscribed = func(track *webrtc.TrackRemote, pub *lksdk.RemoteTrackPublication, rp *lksdk.RemoteParticipant) {
-		if rio == nil {
-			return
-		}
-		rio.GetCallback().OnTrackUnsubscribed(track, pub, rp)
-	}
-	cb.OnParticipantDisconnected = func(rp *lksdk.RemoteParticipant) {
-		if rio == nil {
-			return
-		}
-		rio.GetCallback().OnParticipantDisconnected(rp)
-	}
+	jobCtx.Room.AddCallback(cb)
 
 	fmt.Printf("⏳ [Agent] Connecting to LiveKit room... (t=%s)\n", time.Since(startTime).Round(time.Millisecond))
-	if err := jobCtx.Connect(ctx, cb); err != nil {
+	if err := jobCtx.Connect(ctx); err != nil {
 		fmt.Printf("❌ [Agent] Failed to connect to room: %v\n", err)
 		return fmt.Errorf("failed to connect to room: %w", err)
 	}
 	fmt.Printf("✅ [Agent] Connected to LiveKit room (t=%s)\n", time.Since(startTime).Round(time.Millisecond))
 
 	// Create RoomIO — this wires session.Input.Audio and session.Output.Audio automatically.
-	rio = worker.NewRoomIO(jobCtx.Room, session, worker.RoomOptions{
+	rio = worker.NewRoomIO(jobCtx.Room.Room, session, worker.RoomOptions{
 		TextOutput: &worker.TextOutputOptions{
 			Enabled: true,
 		},
