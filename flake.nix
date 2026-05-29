@@ -29,6 +29,7 @@
           then "dylib"
           else "so";
       in {
+        libDeps = libraryDependencies;
         formatter = pkgs.alejandra;
 
         devShells.default = pkgs.mkShell {
