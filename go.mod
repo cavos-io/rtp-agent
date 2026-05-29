@@ -3,7 +3,6 @@ module github.com/cavos-io/rtp-agent
 go 1.25.0
 
 require (
-	github.com/cavos-io/common-grpc/golang v0.0.76
 	cloud.google.com/go/speech v1.30.0
 	cloud.google.com/go/texttospeech v1.16.0
 	github.com/asticode/go-astiav v0.40.0
