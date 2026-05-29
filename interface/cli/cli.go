@@ -38,24 +38,48 @@ func RunApp(server *worker.AgentServer) {
 		Hidden: true,
 	})
 	rootCmd.PersistentFlags().String("log-level", "info", "Set the log level")
-	rootCmd.PersistentFlags().Bool("dev-mode", false, "Enable development mode")
 
-	rootCmd.AddCommand(
-		&cobra.Command{
-			Use:    "start",
-			Short:  "Run the worker in production mode",
-			PreRun: preRun,
-			RunE: func(cmd *cobra.Command, args []string) error {
-				ctx, stop := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
-				defer stop()
+	startCmd := &cobra.Command{
+		Use:    "start",
+		Short:  "Run the worker in production mode",
+		PreRun: preRun,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			ctx, stop := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
+			defer stop()
 
-				logger.Logger.Infow("Starting worker", "devMode", viper.GetBool("dev-mode"))
-				if err := server.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
-					return err
+			logger.Logger.Infow("Starting worker", "devMode", viper.GetBool("dev-mode"))
+
+			if drainTimeout := viper.GetInt("drain-timeout"); drainTimeout > 0 {
+				server.Options.DrainTimeoutSeconds = drainTimeout
+			}
+
+			// Run the server in a goroutine so we can wait for the context to be cancelled
+			// and then call Drain.
+			errCh := make(chan error, 1)
+			go func() {
+				errCh <- server.Run(ctx)
+			}()
+
+			select {
+			case err := <-errCh:
+				return err
+			case <-ctx.Done():
+				logger.Logger.Infow("Shutdown signal received, draining...")
+				// Create a new background context for draining, since 'ctx' is already cancelled
+				drainCtx, drainCancel := context.WithCancel(context.Background())
+				defer drainCancel()
+				if err := server.Drain(drainCtx); err != nil {
+					logger.Logger.Errorw("Error during drain", err)
 				}
 				return nil
-			},
+			}
 		},
+	}
+	startCmd.PersistentFlags().Int("drain-timeout", 0, "Time in seconds to wait for jobs to finish before shutting down")
+	startCmd.PersistentFlags().Bool("dev-mode", false, "Enable development mode")
+
+	rootCmd.AddCommand(
+		startCmd,
 		&cobra.Command{
 			Use:    "dev",
 			Short:  "Run the worker in development mode (with auto-reload)",
@@ -111,9 +135,25 @@ func runWorker(server *worker.AgentServer, devMode bool) {
 	defer stop()
 
 	logger.Logger.Infow("Starting worker", "devMode", devMode)
-	if err := server.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
-		logger.Logger.Errorw("Worker error", err)
-		os.Exit(1)
+
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- server.Run(ctx)
+	}()
+
+	select {
+	case err := <-errCh:
+		if err != nil && !errors.Is(err, context.Canceled) {
+			logger.Logger.Errorw("Worker error", err)
+			os.Exit(1)
+		}
+	case <-ctx.Done():
+		logger.Logger.Infow("Shutdown signal received, draining...")
+		drainCtx, drainCancel := context.WithCancel(context.Background())
+		defer drainCancel()
+		if err := server.Drain(drainCtx); err != nil {
+			logger.Logger.Errorw("Error during drain", err)
+		}
 	}
 }
 
@@ -133,9 +173,24 @@ func runConnect(server *worker.AgentServer) {
 
 	logger.Logger.Infow("Starting connect mode", "room", roomName, "participant", participantIdentity)
 
-	if err := server.ExecuteLocalJob(ctx, roomName, participantIdentity); err != nil {
-		logger.Logger.Errorw("Connect error", err)
-		os.Exit(1)
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- server.ExecuteLocalJob(ctx, roomName, participantIdentity)
+	}()
+
+	select {
+	case err := <-errCh:
+		if err != nil && !errors.Is(err, context.Canceled) {
+			logger.Logger.Errorw("Connect error", err)
+			os.Exit(1)
+		}
+	case <-ctx.Done():
+		logger.Logger.Infow("Connect mode: shutdown signal received, draining...")
+		drainCtx, drainCancel := context.WithCancel(context.Background())
+		defer drainCancel()
+		if err := server.Drain(drainCtx); err != nil {
+			logger.Logger.Errorw("Error during drain", err)
+		}
 	}
 }
 

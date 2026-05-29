@@ -2,6 +2,7 @@ package worker
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"math"
 	"net/url"
@@ -39,7 +40,7 @@ type WorkerOptions struct {
 	JobMemoryWarnMB     float64
 	JobMemoryLimitMB    float64
 	NumIdleProcesses    int
-	DrainTimeoutSeconds int
+	DrainTimeoutSeconds int // 0 means wait indefinitely (default behavior)
 	PrometheusPort      int
 	PrometheusHost      string
 }
@@ -56,6 +57,7 @@ type AgentServer struct {
 	activeJobs     map[string]*JobContext
 	pendingAccepts map[string]JobAcceptArguments // keyed by jobId, lives between availability and assignment
 	mu             sync.Mutex
+	cond           *sync.Cond
 	conn           *websocket.Conn
 	isDraining     bool
 
@@ -78,6 +80,7 @@ func NewAgentServer(opts WorkerOptions) *AgentServer {
 		activeJobs:     make(map[string]*JobContext),
 		pendingAccepts: make(map[string]JobAcceptArguments),
 	}
+	s.cond = sync.NewCond(&s.mu)
 	s.cpuLoad.Store(math.Float64bits(math.NaN()))
 	go s.sampleCPULoop()
 	s.Emitter = events.NewEmitter[string, *livekit.RegisterWorkerResponse]()
@@ -446,23 +449,44 @@ func (s *AgentServer) Drain(ctx context.Context) error {
 		return nil
 	}
 
-	ticker := time.NewTicker(1 * time.Second)
-	defer ticker.Stop()
+	// Handle drain timeout. 0 or negative means wait indefinitely.
+	var drainCtx context.Context
+	var cancel context.CancelFunc
+
+	if s.Options.DrainTimeoutSeconds > 0 {
+		drainCtx, cancel = context.WithTimeout(ctx, time.Duration(s.Options.DrainTimeoutSeconds)*time.Second)
+	} else {
+		drainCtx, cancel = context.WithCancel(ctx)
+	}
+	defer cancel()
+
+	// Create a channel that will be closed when all jobs are finished.
+	// This is more reactive than just a ticker.
+	done := make(chan struct{})
+	go func() {
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		for len(s.activeJobs) > 0 {
+			s.cond.Wait()
+		}
+		close(done)
+	}()
 
 	for {
 		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-ticker.C:
+		case <-done:
+			logger.Logger.Infow("All jobs finished, drain complete")
+			return nil
+		case <-drainCtx.Done():
 			s.mu.Lock()
-			count := len(s.activeJobs)
+			pendingCount := len(s.activeJobs)
 			s.mu.Unlock()
-
-			if count == 0 {
-				logger.Logger.Infow("All jobs finished, drain complete")
-				return nil
+			if errors.Is(drainCtx.Err(), context.DeadlineExceeded) {
+				logger.Logger.Warnw("Drain timed out, forcing shutdown", nil, "pending_jobs", pendingCount)
+				return drainCtx.Err()
 			}
-			logger.Logger.Infow("Waiting for jobs to finish", "pending_jobs", count)
+			// Context cancelled by user or other reason
+			return drainCtx.Err()
 		}
 	}
 }
@@ -659,6 +683,7 @@ func (s *AgentServer) handleAssignment(ctx context.Context, req *livekit.JobAssi
 	s.activeJobs[req.Job.Id] = jobCtx
 	s.updateActiveJobsMetric(ctx)
 	s.mu.Unlock()
+	s.cond.Broadcast()
 	if err := s.sendAvailabilityUpdate(); err != nil {
 		logger.Logger.Warnw("Failed to send load update after job assignment", err)
 	}
@@ -686,6 +711,7 @@ func (s *AgentServer) handleAssignment(ctx context.Context, req *livekit.JobAssi
 			delete(s.activeJobs, req.Job.Id)
 			s.updateActiveJobsMetric(context.Background())
 			s.mu.Unlock()
+			s.cond.Broadcast()
 			fmt.Printf("   🧹 [PANEL] Job cleaned up: %s\n", req.Job.Id)
 
 			// Signal back to AVAILABLE so the next dispatch can be received
@@ -707,6 +733,7 @@ func (s *AgentServer) handleTermination(req *livekit.JobTermination) {
 		s.updateActiveJobsMetric(context.Background())
 	}
 	s.mu.Unlock()
+	s.cond.Broadcast()
 
 	if exists {
 		if s.sessionEndFnc != nil {
@@ -754,6 +781,7 @@ func (s *AgentServer) ExecuteLocalJob(ctx context.Context, roomName string, part
 	s.activeJobs[job.Id] = jobCtx
 	s.updateActiveJobsMetric(context.Background())
 	s.mu.Unlock()
+	s.cond.Broadcast()
 	_ = s.sendAvailabilityUpdate()
 
 	if s.entrypointFnc != nil {
@@ -765,6 +793,7 @@ func (s *AgentServer) ExecuteLocalJob(ctx context.Context, roomName string, part
 			delete(s.activeJobs, job.Id)
 			s.updateActiveJobsMetric(context.Background())
 			s.mu.Unlock()
+			s.cond.Broadcast()
 			_ = s.sendAvailabilityUpdate()
 		}()
 	}
