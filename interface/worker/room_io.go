@@ -223,11 +223,10 @@ type RoomIO struct {
 
 	trackContexts   map[string]context.CancelFunc
 	trackContextsMu sync.Mutex
+	trackHandlersWg sync.WaitGroup
 
 	sync              *agent.TranscriptSynchronizer
 	targetPlayoutTime time.Time
-
-	roomCallback *lksdk.RoomCallback
 }
 
 // --- agent.TextOutput Implementation ---
@@ -572,6 +571,11 @@ func NewRoomIO(room *lksdk.Room, session *agent.AgentSession, opts RoomOptions) 
 	session.SetRoom(room)
 
 	rio.registerRoomCallbacks()
+
+	// Check existing participants
+	for _, rp := range room.GetRemoteParticipants() {
+		rio.onParticipantConnected(rp)
+	}
 
 	go rio.playoutLoop(rioCtx)
 
@@ -1115,19 +1119,15 @@ func (rio *RoomIO) WaitForPlayout(ctx context.Context) error {
 	}
 }
 
-func (rio *RoomIO) GetCallback() *lksdk.RoomCallback {
-	cb := lksdk.NewRoomCallback()
-	cb.OnTrackSubscribed = rio.onTrackSubscribed
-	cb.OnTrackUnsubscribed = rio.onTrackUnsubscribed
-	cb.OnParticipantDisconnected = rio.onParticipantDisconnected
-	rio.roomCallback = cb
-	return cb
-}
-
 func (rio *RoomIO) SetParticipant(identity string) {
 	rio.mu.Lock()
 	prevIdentity := rio.participantIdentity
 	rio.participantIdentity = identity
+
+	if rio.AgentSession != nil {
+		rio.AgentSession.Options.LinkedParticipant = rio.Room.GetParticipantByIdentity(identity)
+	}
+
 	rio.mu.Unlock()
 
 	if prevIdentity != "" && prevIdentity != identity {
@@ -1156,6 +1156,56 @@ func (rio *RoomIO) UnsetParticipant() {
 	}
 }
 
+func (rio *RoomIO) onParticipantConnected(participant *lksdk.RemoteParticipant) {
+	if rio.AgentSession != nil && rio.AgentSession.Timeline != nil {
+		rio.AgentSession.Timeline.AddEvent(&agent.ParticipantActiveEvent{
+			ParticipantID: participant.SID(),
+			Identity:      participant.Identity(),
+			Active:        true,
+			CreatedAt:     time.Now(),
+		})
+	}
+
+	rio.mu.Lock()
+	identity := rio.participantIdentity
+	rio.mu.Unlock()
+
+	if identity != "" {
+		if identity == participant.Identity() {
+			rio.mu.Lock()
+			if rio.AgentSession != nil && rio.AgentSession.Options.LinkedParticipant == nil {
+				rio.AgentSession.Options.LinkedParticipant = participant
+			}
+			rio.mu.Unlock()
+		}
+		return
+	}
+
+	// Skip participants that are marked as publishing for this agent
+	localIdentity := rio.Room.LocalParticipant.Identity()
+	if participant.Attributes()["lk.publish_on_behalf"] == localIdentity {
+		return
+	}
+
+	// Check if the participant kind is accepted
+	if len(rio.Options.ParticipantKinds) > 0 {
+		kindAccepted := false
+		for _, kind := range rio.Options.ParticipantKinds {
+			if participant.Kind() == kind {
+				kindAccepted = true
+				break
+			}
+		}
+		if !kindAccepted {
+			return
+		}
+	}
+
+	// Link to the first matching participant
+	logger.Logger.Infow("Linking to participant", "identity", participant.Identity())
+	rio.SetParticipant(participant.Identity())
+}
+
 func (rio *RoomIO) onParticipantDisconnected(participant *lksdk.RemoteParticipant) {
 	rio.mu.Lock()
 	linkedIdentity := rio.participantIdentity
@@ -1164,6 +1214,25 @@ func (rio *RoomIO) onParticipantDisconnected(participant *lksdk.RemoteParticipan
 	if linkedIdentity == participant.Identity() {
 		if rio.Options.CloseOnDisconnect && rio.AgentSession != nil {
 			_ = rio.AgentSession.Close()
+		}
+	}
+}
+
+func (rio *RoomIO) onMetadataChanged(_ string, participant lksdk.Participant) {
+	var m map[string]interface{}
+	if err := json.Unmarshal([]byte(participant.Metadata()), &m); err == nil {
+		active, _ := m["lk.active"].(bool)
+		if !active {
+			active, _ = m["active"].(bool)
+		}
+
+		if rio.AgentSession != nil && rio.AgentSession.Timeline != nil {
+			rio.AgentSession.Timeline.AddEvent(&agent.ParticipantActiveEvent{
+				ParticipantID: participant.SID(),
+				Identity:      participant.Identity(),
+				Active:        active,
+				CreatedAt:     time.Now(),
+			})
 		}
 	}
 }
@@ -1300,7 +1369,11 @@ func (rio *RoomIO) onTrackSubscribed(track *webrtc.TrackRemote, publication *lks
 			audioInputEnabled = false
 		}
 		if audioInputEnabled {
-			go rio.handleAudioTrack(ctx, track)
+			rio.trackHandlersWg.Add(1)
+			go func() {
+				defer rio.trackHandlersWg.Done()
+				rio.handleAudioTrack(ctx, track)
+			}()
 		}
 	} else if track.Kind() == webrtc.RTPCodecTypeVideo {
 		videoInputEnabled := false
@@ -1308,7 +1381,11 @@ func (rio *RoomIO) onTrackSubscribed(track *webrtc.TrackRemote, publication *lks
 			videoInputEnabled = true
 		}
 		if videoInputEnabled {
-			go rio.handleVideoTrack(ctx, track)
+			rio.trackHandlersWg.Add(1)
+			go func() {
+				defer rio.trackHandlersWg.Done()
+				rio.handleVideoTrack(ctx, track)
+			}()
 		}
 	}
 }
@@ -1351,6 +1428,8 @@ func (rio *RoomIO) handleVideoTrack(ctx context.Context, track *webrtc.TrackRemo
 		}
 
 		select {
+		case <-ctx.Done():
+			return
 		case rio.videoInCh <- frame:
 		default:
 			// drop frame if queue is full
@@ -1367,7 +1446,17 @@ func (rio *RoomIO) handleAudioTrack(ctx context.Context, track *webrtc.TrackRemo
 	if frames := rio.preConnectAudio.WaitForData(preCtx, track.ID()); len(frames) > 0 {
 		logger.Logger.Infow("[STT-PIPE] flushing pre-connect audio", "frames", len(frames))
 		for _, frame := range frames {
-			rio.audioInCh <- frame
+			rio.mu.Lock()
+			closed := rio.closed
+			rio.mu.Unlock()
+			if closed {
+				return
+			}
+			select {
+			case <-ctx.Done():
+				return
+			case rio.audioInCh <- frame:
+			}
 		}
 	}
 
@@ -1447,7 +1536,18 @@ func (rio *RoomIO) handleAudioTrack(ctx context.Context, track *webrtc.TrackRemo
 			if frameCount%100 == 1 {
 				logger.Logger.Infow("[STT-PIPE] handleAudioTrack sending frames", "frameCount", frameCount, "dataLen", len(pcm))
 			}
-			rio.audioInCh <- frame
+
+			rio.mu.Lock()
+			closed := rio.closed
+			rio.mu.Unlock()
+			if closed {
+				return
+			}
+			select {
+			case <-ctx.Done():
+				return
+			case rio.audioInCh <- frame:
+			}
 		}
 	}
 }
@@ -1473,10 +1573,14 @@ func (rio *RoomIO) Close() error {
 	rio.trackContexts = make(map[string]context.CancelFunc)
 	rio.trackContextsMu.Unlock()
 
+	// Wait for all track handlers to exit before closing channels
+	rio.trackHandlersWg.Wait()
+
 	// Close the audio input channel so RecorderAudioInput.loop() can exit.
 	// Track contexts are already cancelled above, so senders (handleAudioTrack)
 	// have stopped before we close the channel.
 	close(rio.audioInCh)
+	close(rio.videoInCh)
 
 	if rio.decoder != nil {
 		rio.decoder.Close()
@@ -1530,38 +1634,12 @@ func (rio *RoomIO) Close() error {
 }
 
 func (rio *RoomIO) registerRoomCallbacks() {
-	if rio.roomCallback == nil {
-		return
-	}
+	cb := lksdk.NewRoomCallback()
+	cb.OnTrackSubscribed = rio.onTrackSubscribed
+	cb.OnTrackUnsubscribed = rio.onTrackUnsubscribed
+	cb.OnMetadataChanged = rio.onMetadataChanged
+	cb.OnParticipantConnected = rio.onParticipantConnected
+	cb.OnParticipantDisconnected = rio.onParticipantDisconnected
 
-	rio.roomCallback.OnMetadataChanged = func(_ string, participant lksdk.Participant) {
-		// Check for "lk.active" or "active" in metadata JSON
-		var m map[string]interface{}
-		if err := json.Unmarshal([]byte(participant.Metadata()), &m); err == nil {
-			active, _ := m["lk.active"].(bool)
-			if !active {
-				active, _ = m["active"].(bool)
-			}
-
-			if rio.AgentSession != nil && rio.AgentSession.Timeline != nil {
-				rio.AgentSession.Timeline.AddEvent(&agent.ParticipantActiveEvent{
-					ParticipantID: participant.SID(),
-					Identity:      participant.Identity(),
-					Active:        active,
-					CreatedAt:     time.Now(),
-				})
-			}
-		}
-	}
-
-	rio.roomCallback.OnParticipantConnected = func(participant *lksdk.RemoteParticipant) {
-		if rio.AgentSession != nil && rio.AgentSession.Timeline != nil {
-			rio.AgentSession.Timeline.AddEvent(&agent.ParticipantActiveEvent{
-				ParticipantID: participant.SID(),
-				Identity:      participant.Identity(),
-				Active:        true,
-				CreatedAt:     time.Now(),
-			})
-		}
-	}
+	rio.Options.JobContext.Room.AddCallback(cb)
 }
