@@ -103,6 +103,11 @@ type AgentSession struct {
 	RemoteTrackSID     string
 	AgentTrackSID      string
 
+	// UserTranscriptFilter, when non-nil, is called on the raw STT text before it
+	// is published to lk.chat and lk.transcription. Use it to apply censorship so
+	// the user's transcript bubble matches what the agent is allowed to repeat.
+	UserTranscriptFilter func(string) string
+
 	mu       sync.Mutex
 	Activity *AgentActivity
 	started  bool
@@ -921,6 +926,9 @@ func (s *AgentSession) PublishUserTranscript(text string) {
 	if text == "" {
 		logger.Logger.Warnw("[Transcript] PublishUserTranscript called with empty text, skipping", nil)
 		return
+	}
+	if s.UserTranscriptFilter != nil {
+		text = s.UserTranscriptFilter(text)
 	}
 	s.mu.Lock()
 	userIdentity := s.RemoteUserIdentity
