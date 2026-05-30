@@ -66,6 +66,8 @@ type WorkerPermissions struct {
 	Hidden            bool
 }
 
+type WorkerRegisteredHandler func(workerID string, serverInfo *livekit.ServerInfo)
+
 type WorkerOptions struct {
 	AgentName  string
 	WorkerType WorkerType
@@ -97,15 +99,16 @@ type AgentServer struct {
 	requestFnc    func(*JobRequest) error
 	sessionEndFnc func(*JobContext) error
 
-	activeJobs        map[string]*JobContext
-	pendingAccepts    map[string]JobAcceptArguments
-	pendingTimers     map[string]*time.Timer
-	reservedSlots     int
-	draining          bool
-	mu                sync.Mutex
-	conn              *websocket.Conn
-	workerMessageSink func(*livekit.WorkerMessage) error
-	workerID          string
+	activeJobs         map[string]*JobContext
+	pendingAccepts     map[string]JobAcceptArguments
+	pendingTimers      map[string]*time.Timer
+	reservedSlots      int
+	draining           bool
+	mu                 sync.Mutex
+	conn               *websocket.Conn
+	workerMessageSink  func(*livekit.WorkerMessage) error
+	workerID           string
+	registeredHandlers []WorkerRegisteredHandler
 
 	consoleSession any // Store local session for CLI console
 }
@@ -118,6 +121,13 @@ func NewAgentServer(opts WorkerOptions) *AgentServer {
 		pendingAccepts: make(map[string]JobAcceptArguments),
 		pendingTimers:  make(map[string]*time.Timer),
 	}
+}
+
+func (s *AgentServer) OnWorkerRegistered(handler WorkerRegisteredHandler) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	s.registeredHandlers = append(s.registeredHandlers, handler)
 }
 
 func resolveWorkerOptions(opts WorkerOptions) WorkerOptions {
@@ -661,6 +671,7 @@ func (s *AgentServer) handleMessage(ctx context.Context, msg *livekit.ServerMess
 		s.mu.Lock()
 		s.workerID = m.Register.WorkerId
 		s.mu.Unlock()
+		s.emitWorkerRegistered(m.Register.WorkerId, m.Register.ServerInfo)
 		s.reportActiveJobs()
 	case *livekit.ServerMessage_Availability:
 		s.handleAvailability(ctx, m.Availability)
@@ -670,6 +681,16 @@ func (s *AgentServer) handleMessage(ctx context.Context, msg *livekit.ServerMess
 		s.handleTermination(m.Termination)
 	default:
 		logger.Logger.Warnw("Unhandled message type received", nil)
+	}
+}
+
+func (s *AgentServer) emitWorkerRegistered(workerID string, serverInfo *livekit.ServerInfo) {
+	s.mu.Lock()
+	handlers := append([]WorkerRegisteredHandler(nil), s.registeredHandlers...)
+	s.mu.Unlock()
+
+	for _, handler := range handlers {
+		handler(workerID, serverInfo)
 	}
 }
 

@@ -240,6 +240,87 @@ func TestRegisterWorkerRequestIncludesDefaultPermissions(t *testing.T) {
 	}
 }
 
+func TestRegisterWorkerRequestIncludesConfiguredPermissions(t *testing.T) {
+	server := NewAgentServer(WorkerOptions{
+		Permissions: &WorkerPermissions{
+			CanPublish:        false,
+			CanSubscribe:      true,
+			CanPublishData:    false,
+			CanUpdateMetadata: false,
+			CanPublishSources: []livekit.TrackSource{
+				livekit.TrackSource_MICROPHONE,
+				livekit.TrackSource_SCREEN_SHARE,
+			},
+			Hidden: true,
+		},
+	})
+
+	register := server.registerWorkerRequest().GetRegister()
+	if register == nil {
+		t.Fatal("register worker message is nil")
+	}
+
+	permissions := register.GetAllowedPermissions()
+	if permissions == nil {
+		t.Fatal("register.AllowedPermissions = nil, want configured permissions")
+	}
+	if permissions.CanPublish {
+		t.Fatal("permissions.CanPublish = true, want false")
+	}
+	if !permissions.CanSubscribe {
+		t.Fatal("permissions.CanSubscribe = false, want true")
+	}
+	if permissions.CanPublishData {
+		t.Fatal("permissions.CanPublishData = true, want false")
+	}
+	if permissions.CanUpdateMetadata {
+		t.Fatal("permissions.CanUpdateMetadata = true, want false")
+	}
+	if !permissions.Hidden {
+		t.Fatal("permissions.Hidden = false, want true")
+	}
+	if !permissions.Agent {
+		t.Fatal("permissions.Agent = false, want true")
+	}
+	if len(permissions.CanPublishSources) != 2 {
+		t.Fatalf("permissions.CanPublishSources len = %d, want 2", len(permissions.CanPublishSources))
+	}
+	if permissions.CanPublishSources[0] != livekit.TrackSource_MICROPHONE {
+		t.Fatalf("permissions.CanPublishSources[0] = %v, want MICROPHONE", permissions.CanPublishSources[0])
+	}
+	if permissions.CanPublishSources[1] != livekit.TrackSource_SCREEN_SHARE {
+		t.Fatalf("permissions.CanPublishSources[1] = %v, want SCREEN_SHARE", permissions.CanPublishSources[1])
+	}
+}
+
+func TestHandleRegisterNotifiesWorkerRegisteredHandlers(t *testing.T) {
+	server := NewAgentServer(WorkerOptions{})
+	serverInfo := &livekit.ServerInfo{}
+
+	var gotWorkerID string
+	var gotServerInfo *livekit.ServerInfo
+	server.OnWorkerRegistered(func(workerID string, info *livekit.ServerInfo) {
+		gotWorkerID = workerID
+		gotServerInfo = info
+	})
+
+	server.handleMessage(context.Background(), &livekit.ServerMessage{
+		Message: &livekit.ServerMessage_Register{
+			Register: &livekit.RegisterWorkerResponse{
+				WorkerId:   "worker-a",
+				ServerInfo: serverInfo,
+			},
+		},
+	})
+
+	if gotWorkerID != "worker-a" {
+		t.Fatalf("registered workerID = %q, want worker-a", gotWorkerID)
+	}
+	if gotServerInfo != serverInfo {
+		t.Fatalf("registered serverInfo = %p, want %p", gotServerInfo, serverInfo)
+	}
+}
+
 func TestWorkerStatusMessageIncludesCurrentLoad(t *testing.T) {
 	server := NewAgentServer(WorkerOptions{
 		LoadFunc: func(*AgentServer) float64 {
