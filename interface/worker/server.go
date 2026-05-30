@@ -7,6 +7,7 @@ import (
 	"net/url"
 	"os"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -48,6 +49,7 @@ type WorkerOptions struct {
 	WSRL                string
 	APIKey              string
 	APISecret           string
+	WorkerToken         string
 	HTTPProxy           string
 	LoadThreshold       float64
 	JobMemoryWarnMB     float64
@@ -108,6 +110,9 @@ func resolveWorkerOptions(opts WorkerOptions) WorkerOptions {
 	if opts.APISecret == "" {
 		opts.APISecret = os.Getenv("LIVEKIT_API_SECRET")
 	}
+	if opts.WorkerToken == "" {
+		opts.WorkerToken = os.Getenv("LIVEKIT_WORKER_TOKEN")
+	}
 	if opts.AgentName == "" {
 		opts.AgentName = os.Getenv("LIVEKIT_AGENT_NAME")
 	}
@@ -140,6 +145,33 @@ func workerTypeToJobType(workerType WorkerType) livekit.JobType {
 	default:
 		return livekit.JobType_JT_ROOM
 	}
+}
+
+func agentWebSocketURL(rawURL string, workerToken string) (string, error) {
+	wsURL, err := url.Parse(rawURL)
+	if err != nil {
+		return "", err
+	}
+
+	if wsURL.Scheme == "http" {
+		wsURL.Scheme = "ws"
+	} else if wsURL.Scheme == "https" {
+		wsURL.Scheme = "wss"
+	}
+
+	basePath := strings.TrimRight(wsURL.Path, "/")
+	wsURL.Path = basePath + "/agent"
+	if basePath == "" {
+		wsURL.Path = "/agent"
+	}
+
+	values := url.Values{}
+	if workerToken != "" {
+		values.Set("worker_token", workerToken)
+	}
+	wsURL.RawQuery = values.Encode()
+
+	return wsURL.String(), nil
 }
 
 func agentIdentityForJobID(jobID string) string {
@@ -400,17 +432,10 @@ func (s *AgentServer) Run(ctx context.Context) error {
 		return err
 	}
 
-	wsURL, err := url.Parse(s.Options.WSRL)
+	agentURL, err := agentWebSocketURL(s.Options.WSRL, s.Options.WorkerToken)
 	if err != nil {
 		return err
 	}
-
-	if wsURL.Scheme == "http" {
-		wsURL.Scheme = "ws"
-	} else if wsURL.Scheme == "https" {
-		wsURL.Scheme = "wss"
-	}
-	wsURL.Path = "/agent"
 
 	// Create JWT token
 	at := auth.NewAccessToken(s.Options.APIKey, s.Options.APISecret)
@@ -432,11 +457,11 @@ func (s *AgentServer) Run(ctx context.Context) error {
 		dialer.Proxy = http.ProxyURL(proxyURL)
 	}
 
-	conn, res, err := dialer.DialContext(ctx, wsURL.String(), map[string][]string{
+	conn, res, err := dialer.DialContext(ctx, agentURL, map[string][]string{
 		"Authorization": {fmt.Sprintf("Bearer %s", token)},
 	})
 	if err != nil {
-		return fmt.Errorf("failed to connect to LiveKit %s: %w", wsURL.String(), err)
+		return fmt.Errorf("failed to connect to LiveKit %s: %w", agentURL, err)
 	}
 	_ = res
 	s.conn = conn

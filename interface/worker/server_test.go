@@ -83,6 +83,40 @@ func TestNewAgentServerPrefersWSURLAliasOverDeprecatedWSRL(t *testing.T) {
 	}
 }
 
+func TestNewAgentServerLoadsWorkerTokenFromEnvironment(t *testing.T) {
+	t.Setenv("LIVEKIT_WORKER_TOKEN", "env-worker-token")
+
+	server := NewAgentServer(WorkerOptions{})
+
+	if server.Options.WorkerToken != "env-worker-token" {
+		t.Fatalf("WorkerToken = %q, want env LIVEKIT_WORKER_TOKEN", server.Options.WorkerToken)
+	}
+}
+
+func TestAgentWebSocketURLPreservesBasePath(t *testing.T) {
+	got, err := agentWebSocketURL("https://livekit.example/project-a", "")
+	if err != nil {
+		t.Fatalf("agentWebSocketURL() error = %v", err)
+	}
+
+	want := "wss://livekit.example/project-a/agent"
+	if got != want {
+		t.Fatalf("agentWebSocketURL() = %q, want %q", got, want)
+	}
+}
+
+func TestAgentWebSocketURLAddsWorkerToken(t *testing.T) {
+	got, err := agentWebSocketURL("wss://livekit.example/project-a/", "cloud token")
+	if err != nil {
+		t.Fatalf("agentWebSocketURL() error = %v", err)
+	}
+
+	want := "wss://livekit.example/project-a/agent?worker_token=cloud+token"
+	if got != want {
+		t.Fatalf("agentWebSocketURL() = %q, want %q", got, want)
+	}
+}
+
 func TestWorkerTypeMapsToLiveKitJobType(t *testing.T) {
 	tests := []struct {
 		name       string
