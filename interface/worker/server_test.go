@@ -618,6 +618,42 @@ func TestAvailabilityReservesLoadWhileRequestCallbackRuns(t *testing.T) {
 	}
 }
 
+func TestHandleAvailabilityReturnsWhileRequestCallbackRuns(t *testing.T) {
+	server := NewAgentServer(WorkerOptions{})
+	requestStarted := make(chan struct{})
+	releaseRequest := make(chan struct{})
+	server.workerMessageSink = func(msg *livekit.WorkerMessage) error {
+		return nil
+	}
+	server.requestFnc = func(req *JobRequest) error {
+		close(requestStarted)
+		<-releaseRequest
+		return req.Accept(JobAcceptArguments{})
+	}
+
+	doneCh := make(chan struct{})
+	go func() {
+		server.handleAvailability(context.Background(), &livekit.AvailabilityRequest{
+			Job: &livekit.Job{Id: "job_async_request"},
+		})
+		close(doneCh)
+	}()
+
+	select {
+	case <-requestStarted:
+	case <-time.After(time.Second):
+		t.Fatal("request callback did not start")
+	}
+
+	select {
+	case <-doneCh:
+	case <-time.After(time.Second):
+		t.Fatal("handleAvailability blocked on request callback")
+	}
+
+	close(releaseRequest)
+}
+
 func TestHandleRegisterReportsActiveJobs(t *testing.T) {
 	server := NewAgentServer(WorkerOptions{})
 	sentCh := make(chan *livekit.WorkerMessage, 1)
@@ -703,7 +739,9 @@ func TestAcceptedAvailabilityExpiresWithoutAssignment(t *testing.T) {
 
 func TestAssignmentPreservesAcceptedParticipantIdentity(t *testing.T) {
 	server := NewAgentServer(WorkerOptions{})
+	sentCh := make(chan *livekit.WorkerMessage, 1)
 	server.workerMessageSink = func(msg *livekit.WorkerMessage) error {
+		sentCh <- msg
 		return nil
 	}
 	server.requestFnc = func(req *JobRequest) error {
@@ -717,6 +755,10 @@ func TestAssignmentPreservesAcceptedParticipantIdentity(t *testing.T) {
 
 	job := &livekit.Job{Id: "job_custom_identity", Room: &livekit.Room{Name: "room-a"}}
 	server.handleAvailability(context.Background(), &livekit.AvailabilityRequest{Job: job})
+	availability := receiveWorkerMessage(t, sentCh).GetAvailability()
+	if availability == nil || !availability.Available {
+		t.Fatal("availability response was not accepted")
+	}
 	server.handleAssignment(context.Background(), &livekit.JobAssignment{Job: job})
 
 	select {

@@ -678,6 +678,10 @@ func (s *AgentServer) reportActiveJobs() {
 }
 
 func (s *AgentServer) handleAvailability(ctx context.Context, req *livekit.AvailabilityRequest) {
+	go s.answerAvailability(ctx, req)
+}
+
+func (s *AgentServer) answerAvailability(ctx context.Context, req *livekit.AvailabilityRequest) {
 	logger.Logger.Infow("Received availability request", "jobId", req.Job.Id)
 
 	if !s.availableForJob() {
@@ -698,10 +702,10 @@ func (s *AgentServer) handleAvailability(ctx context.Context, req *livekit.Avail
 				args.Name = s.Options.AgentName
 			}
 			answered = true
+			s.storePendingAccept(req.Job.Id, args)
 			if err := s.sendWorkerMessage(availabilityResponseForAccept(req, args, s.Options.AgentName)); err != nil {
 				return err
 			}
-			s.storePendingAccept(req.Job.Id, args)
 			return nil
 		},
 		rejectFnc: func(args JobRejectArguments) error {
