@@ -872,9 +872,6 @@ func (s *AgentServer) answerAvailability(ctx context.Context, req *livekit.Avail
 	jobReq := &JobRequest{
 		Job: req.Job,
 		acceptFnc: func(args JobAcceptArguments) error {
-			if args.Name == "" {
-				args.Name = s.Options.AgentName
-			}
 			answered = true
 			s.storePendingAccept(req.Job.Id, args)
 			if err := s.sendWorkerMessage(availabilityResponseForAccept(req, args, s.Options.AgentName)); err != nil {

@@ -699,6 +699,30 @@ func TestHandleAvailabilityRejectsWhenRequestCallbackDoesNotAnswer(t *testing.T)
 	}
 }
 
+func TestHandleAvailabilityDefaultAcceptLeavesParticipantNameEmpty(t *testing.T) {
+	server := NewAgentServer(WorkerOptions{AgentName: "sales-agent"})
+	sentCh := make(chan *livekit.WorkerMessage, 1)
+	server.workerMessageSink = func(msg *livekit.WorkerMessage) error {
+		sentCh <- msg
+		return nil
+	}
+
+	server.handleAvailability(context.Background(), &livekit.AvailabilityRequest{
+		Job: &livekit.Job{Id: "job_default_name"},
+	})
+
+	availability := receiveWorkerMessage(t, sentCh).GetAvailability()
+	if availability == nil || !availability.Available {
+		t.Fatal("availability response was not accepted")
+	}
+	if availability.ParticipantName != "" {
+		t.Fatalf("ParticipantName = %q, want empty default name", availability.ParticipantName)
+	}
+	if availability.ParticipantAttributes["lk.agent.name"] != "sales-agent" {
+		t.Fatalf("ParticipantAttributes[lk.agent.name] = %q, want sales-agent", availability.ParticipantAttributes["lk.agent.name"])
+	}
+}
+
 func TestHandleAvailabilityRejectsWhenLoadExceedsThreshold(t *testing.T) {
 	server := NewAgentServer(WorkerOptions{
 		LoadThreshold: 0.5,
