@@ -70,6 +70,9 @@ func (p *ProcPool) LaunchRunningJob(ctx context.Context, info RunningJobInfo) er
 		err := executor.LaunchRunningJob(ctx, info)
 		if err != nil {
 			delete(p.executors, id)
+			closeCtx, cancel := p.closeContext()
+			_ = executor.Close(closeCtx)
+			cancel()
 			lastErr = err
 			continue
 		}
@@ -115,11 +118,7 @@ func (p *ProcPool) Close() error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
-	closeTimeout := p.closeTimeout
-	if closeTimeout <= 0 {
-		closeTimeout = 5 * time.Second
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), closeTimeout)
+	ctx, cancel := p.closeContext()
 	defer cancel()
 
 	for _, e := range p.executors {
@@ -127,4 +126,12 @@ func (p *ProcPool) Close() error {
 	}
 	p.executors = make(map[string]JobExecutor)
 	return nil
+}
+
+func (p *ProcPool) closeContext() (context.Context, context.CancelFunc) {
+	closeTimeout := p.closeTimeout
+	if closeTimeout <= 0 {
+		closeTimeout = 5 * time.Second
+	}
+	return context.WithTimeout(context.Background(), closeTimeout)
 }

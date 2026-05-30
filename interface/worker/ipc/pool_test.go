@@ -116,6 +116,9 @@ func TestProcPoolLaunchJobRetriesWithFreshExecutor(t *testing.T) {
 	if first.launches != 1 {
 		t.Fatalf("first launches = %d, want 1", first.launches)
 	}
+	if first.closeCalls != 1 {
+		t.Fatalf("first closeCalls = %d, want 1", first.closeCalls)
+	}
 	if second.launches != 1 {
 		t.Fatalf("second launches = %d, want 1", second.launches)
 	}
