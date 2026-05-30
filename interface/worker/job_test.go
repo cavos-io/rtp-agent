@@ -108,6 +108,18 @@ func TestJobContextRoomInfoReturnsJobRoom(t *testing.T) {
 	}
 }
 
+func TestJobContextJobIDReturnsCurrentJobID(t *testing.T) {
+	ctx := NewJobContext(&livekit.Job{Id: "job-a"}, "", "", "")
+	if got := ctx.JobID(); got != "job-a" {
+		t.Fatalf("JobID() = %q, want job-a", got)
+	}
+
+	ctx.Job = nil
+	if got := ctx.JobID(); got != "" {
+		t.Fatalf("JobID() with nil job = %q, want empty", got)
+	}
+}
+
 func TestJobRequestAccessorsExposeJobFields(t *testing.T) {
 	room := &livekit.Room{Name: "room-a"}
 	publisher := &livekit.ParticipantInfo{Identity: "publisher-a"}

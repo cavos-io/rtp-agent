@@ -111,6 +111,13 @@ func (c *JobContext) ParticipantIdentity() string {
 	return agentIdentityForJobID(c.Job.Id)
 }
 
+func (c *JobContext) JobID() string {
+	if c.Job == nil {
+		return ""
+	}
+	return c.Job.Id
+}
+
 func (c *JobContext) IsFakeJob() bool {
 	return c.fakeJob
 }
