@@ -60,6 +60,7 @@ type AgentServer struct {
 	sessionEndFnc func(*JobContext) error
 
 	activeJobs        map[string]*JobContext
+	pendingAccepts    map[string]JobAcceptArguments
 	draining          bool
 	mu                sync.Mutex
 	conn              *websocket.Conn
@@ -71,8 +72,9 @@ type AgentServer struct {
 func NewAgentServer(opts WorkerOptions) *AgentServer {
 	opts = resolveWorkerOptions(opts)
 	return &AgentServer{
-		Options:    opts,
-		activeJobs: make(map[string]*JobContext),
+		Options:        opts,
+		activeJobs:     make(map[string]*JobContext),
+		pendingAccepts: make(map[string]JobAcceptArguments),
 	}
 }
 
@@ -415,7 +417,13 @@ func (s *AgentServer) handleAvailability(ctx context.Context, req *livekit.Avail
 				args.Name = s.Options.AgentName
 			}
 			answered = true
-			return s.sendWorkerMessage(availabilityResponseForAccept(req, args, s.Options.AgentName))
+			if err := s.sendWorkerMessage(availabilityResponseForAccept(req, args, s.Options.AgentName)); err != nil {
+				return err
+			}
+			s.mu.Lock()
+			s.pendingAccepts[req.Job.Id] = args
+			s.mu.Unlock()
+			return nil
 		},
 		rejectFnc: func(args JobRejectArguments) error {
 			answered = true
@@ -461,6 +469,10 @@ func (s *AgentServer) handleAssignment(ctx context.Context, req *livekit.JobAssi
 	jobCtx := NewJobContext(req.Job, s.Options.WSRL, s.Options.APIKey, s.Options.APISecret)
 
 	s.mu.Lock()
+	if args, ok := s.pendingAccepts[req.Job.Id]; ok {
+		jobCtx.AcceptArguments = args
+		delete(s.pendingAccepts, req.Job.Id)
+	}
 	s.activeJobs[req.Job.Id] = jobCtx
 	s.mu.Unlock()
 

@@ -329,6 +329,44 @@ func TestHandleAvailabilityRejectsWhenRequestCallbackDoesNotAnswer(t *testing.T)
 	}
 }
 
+func TestAssignmentPreservesAcceptedParticipantIdentity(t *testing.T) {
+	server := NewAgentServer(WorkerOptions{})
+	server.workerMessageSink = func(msg *livekit.WorkerMessage) error {
+		return nil
+	}
+	server.requestFnc = func(req *JobRequest) error {
+		return req.Accept(JobAcceptArguments{Identity: "custom-agent"})
+	}
+	startedCh := make(chan *JobContext, 1)
+	server.entrypointFnc = func(ctx *JobContext) error {
+		startedCh <- ctx
+		return nil
+	}
+
+	job := &livekit.Job{Id: "job_custom_identity", Room: &livekit.Room{Name: "room-a"}}
+	server.handleAvailability(context.Background(), &livekit.AvailabilityRequest{Job: job})
+	server.handleAssignment(context.Background(), &livekit.JobAssignment{Job: job})
+
+	select {
+	case jobCtx := <-startedCh:
+		if jobCtx.AcceptArguments.Identity != "custom-agent" {
+			t.Fatalf("AcceptArguments.Identity = %q, want custom-agent", jobCtx.AcceptArguments.Identity)
+		}
+		if got := jobCtx.ParticipantIdentity(); got != "custom-agent" {
+			t.Fatalf("ParticipantIdentity() = %q, want custom-agent", got)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("assignment entrypoint did not run")
+	}
+
+	server.mu.Lock()
+	_, pending := server.pendingAccepts[job.Id]
+	server.mu.Unlock()
+	if pending {
+		t.Fatal("accepted arguments remained pending after assignment")
+	}
+}
+
 func TestJobRequestRejectDefaultsToTerminate(t *testing.T) {
 	var got JobRejectArguments
 	req := &JobRequest{
