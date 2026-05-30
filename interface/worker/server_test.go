@@ -286,6 +286,35 @@ func TestDrainingWorkerStatusMessageReportsFullWithoutLoad(t *testing.T) {
 	}
 }
 
+func TestWorkerStatusUpdatesPeriodically(t *testing.T) {
+	server := NewAgentServer(WorkerOptions{
+		LoadFunc: func(*AgentServer) float64 {
+			return 0.25
+		},
+	})
+	sentCh := make(chan *livekit.WorkerMessage, 1)
+	server.workerMessageSink = func(msg *livekit.WorkerMessage) error {
+		sentCh <- msg
+		return nil
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go server.runWorkerStatusUpdates(ctx, time.Millisecond)
+
+	msg := receiveWorkerMessage(t, sentCh)
+	update := msg.GetUpdateWorker()
+	if update == nil {
+		t.Fatal("update worker message is nil")
+	}
+	if update.GetStatus() != livekit.WorkerStatus_WS_AVAILABLE {
+		t.Fatalf("UpdateWorker.Status = %v, want WS_AVAILABLE", update.GetStatus())
+	}
+	if update.Load != 0.25 {
+		t.Fatalf("UpdateWorker.Load = %v, want 0.25", update.Load)
+	}
+}
+
 func TestAgentIdentityForJobIDUsesFullJobID(t *testing.T) {
 	jobID := "job_123456789"
 	want := "agent-" + jobID

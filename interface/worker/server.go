@@ -37,6 +37,8 @@ const (
 
 var assignmentTimeout = 7500 * time.Millisecond
 
+const workerStatusUpdateInterval = 2500 * time.Millisecond
+
 var workerDialContext = func(ctx context.Context, dialer *websocket.Dialer, url string, headers http.Header) (*websocket.Conn, *http.Response, error) {
 	return dialer.DialContext(ctx, url, headers)
 }
@@ -546,6 +548,10 @@ func (s *AgentServer) Run(ctx context.Context) error {
 		return err
 	}
 
+	statusCtx, stopStatusUpdates := context.WithCancel(ctx)
+	defer stopStatusUpdates()
+	go s.runWorkerStatusUpdates(statusCtx, workerStatusUpdateInterval)
+
 	// Message Loop
 	for {
 		select {
@@ -570,6 +576,30 @@ func (s *AgentServer) Run(ctx context.Context) error {
 			s.handleMessage(ctx, msg)
 		}
 	}
+}
+
+func (s *AgentServer) runWorkerStatusUpdates(ctx context.Context, interval time.Duration) {
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			if err := s.sendWorkerStatusUpdate(); err != nil {
+				logger.Logger.Errorw("failed to update worker status", err)
+				return
+			}
+		}
+	}
+}
+
+func (s *AgentServer) sendWorkerStatusUpdate() error {
+	if s.Draining() {
+		return s.sendWorkerMessage(s.drainingWorkerStatusMessage())
+	}
+	return s.sendWorkerMessage(s.workerStatusMessage(livekit.WorkerStatus_WS_AVAILABLE))
 }
 
 func (s *AgentServer) connectWorkerWebSocket(ctx context.Context, dialer *websocket.Dialer, agentURL string, headers http.Header) (*websocket.Conn, *http.Response, error) {
