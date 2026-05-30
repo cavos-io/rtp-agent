@@ -212,6 +212,7 @@ func (s *AgentServer) workerStatusMessage(status livekit.WorkerStatus) *livekit.
 		Message: &livekit.WorkerMessage_UpdateWorker{
 			UpdateWorker: &livekit.UpdateWorkerStatus{
 				Status:   &status,
+				Load:     float32(s.currentLoad()),
 				JobCount: jobCount,
 			},
 		},

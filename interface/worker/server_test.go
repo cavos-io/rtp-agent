@@ -166,6 +166,23 @@ func TestRegisterWorkerRequestIncludesDefaultPermissions(t *testing.T) {
 	}
 }
 
+func TestWorkerStatusMessageIncludesCurrentLoad(t *testing.T) {
+	server := NewAgentServer(WorkerOptions{
+		LoadFunc: func(*AgentServer) float64 {
+			return 0.42
+		},
+	})
+
+	msg := server.workerStatusMessage(livekit.WorkerStatus_WS_AVAILABLE)
+	update := msg.GetUpdateWorker()
+	if update == nil {
+		t.Fatal("update worker message is nil")
+	}
+	if update.Load != 0.42 {
+		t.Fatalf("UpdateWorker.Load = %v, want 0.42", update.Load)
+	}
+}
+
 func TestAgentIdentityForJobIDUsesFullJobID(t *testing.T) {
 	jobID := "job_123456789"
 	want := "agent-" + jobID
