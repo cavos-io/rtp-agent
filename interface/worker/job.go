@@ -81,6 +81,19 @@ func (c *JobContext) ParticipantIdentity() string {
 	return agentIdentityForJobID(c.Job.Id)
 }
 
+func (c *JobContext) connectInfo() lksdk.ConnectInfo {
+	return lksdk.ConnectInfo{
+		APIKey:                c.apiKey,
+		APISecret:             c.apiSecret,
+		RoomName:              c.Job.Room.Name,
+		ParticipantName:       c.AcceptArguments.Name,
+		ParticipantIdentity:   c.ParticipantIdentity(),
+		ParticipantKind:       lksdk.ParticipantAgent,
+		ParticipantMetadata:   c.AcceptArguments.Metadata,
+		ParticipantAttributes: c.AcceptArguments.Attributes,
+	}
+}
+
 func (c *JobContext) Connect(ctx context.Context, cb *lksdk.RoomCallback) error {
 	if c.token != "" {
 		room, err := lksdk.ConnectToRoomWithToken(c.url, c.token, cb)
@@ -92,12 +105,7 @@ func (c *JobContext) Connect(ctx context.Context, cb *lksdk.RoomCallback) error 
 		return nil
 	}
 
-	room, err := lksdk.ConnectToRoom(c.url, lksdk.ConnectInfo{
-		APIKey:              c.apiKey,
-		APISecret:           c.apiSecret,
-		RoomName:            c.Job.Room.Name,
-		ParticipantIdentity: c.ParticipantIdentity(),
-	}, cb)
+	room, err := lksdk.ConnectToRoom(c.url, c.connectInfo(), cb)
 	if err != nil {
 		return err
 	}

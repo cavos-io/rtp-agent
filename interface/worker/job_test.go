@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/livekit/protocol/livekit"
+	lksdk "github.com/livekit/server-sdk-go/v2"
 )
 
 func TestJobContextShutdownRunsCallbacks(t *testing.T) {
@@ -45,5 +46,49 @@ func TestJobContextShutdownRunsCallbacksOnce(t *testing.T) {
 
 	if callCount != 1 {
 		t.Fatalf("shutdown callback call count = %d, want 1", callCount)
+	}
+}
+
+func TestJobContextConnectInfoUsesAcceptedParticipantFields(t *testing.T) {
+	ctx := NewJobContext(
+		&livekit.Job{Id: "job_connect_info", Room: &livekit.Room{Name: "room-a"}},
+		"wss://livekit.example",
+		"key",
+		"secret",
+	)
+	ctx.AcceptArguments = JobAcceptArguments{
+		Name:     "Agent Name",
+		Identity: "custom-agent",
+		Metadata: "custom-metadata",
+		Attributes: map[string]string{
+			"tier": "gold",
+		},
+	}
+
+	info := ctx.connectInfo()
+
+	if info.APIKey != "key" {
+		t.Fatalf("ConnectInfo.APIKey = %q, want key", info.APIKey)
+	}
+	if info.APISecret != "secret" {
+		t.Fatalf("ConnectInfo.APISecret = %q, want secret", info.APISecret)
+	}
+	if info.RoomName != "room-a" {
+		t.Fatalf("ConnectInfo.RoomName = %q, want room-a", info.RoomName)
+	}
+	if info.ParticipantIdentity != "custom-agent" {
+		t.Fatalf("ConnectInfo.ParticipantIdentity = %q, want custom-agent", info.ParticipantIdentity)
+	}
+	if info.ParticipantName != "Agent Name" {
+		t.Fatalf("ConnectInfo.ParticipantName = %q, want Agent Name", info.ParticipantName)
+	}
+	if info.ParticipantMetadata != "custom-metadata" {
+		t.Fatalf("ConnectInfo.ParticipantMetadata = %q, want custom-metadata", info.ParticipantMetadata)
+	}
+	if info.ParticipantAttributes["tier"] != "gold" {
+		t.Fatalf("ConnectInfo.ParticipantAttributes[tier] = %q, want gold", info.ParticipantAttributes["tier"])
+	}
+	if info.ParticipantKind != lksdk.ParticipantAgent {
+		t.Fatalf("ConnectInfo.ParticipantKind = %v, want ParticipantAgent", info.ParticipantKind)
 	}
 }
