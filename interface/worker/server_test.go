@@ -2,6 +2,7 @@ package worker
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -416,6 +417,42 @@ func TestAssignmentSendsRunningJobStatus(t *testing.T) {
 	}
 }
 
+func TestAssignmentReportsSuccessWhenEntrypointCompletes(t *testing.T) {
+	server := NewAgentServer(WorkerOptions{})
+	sentCh := make(chan *livekit.WorkerMessage, 2)
+	server.workerMessageSink = func(msg *livekit.WorkerMessage) error {
+		sentCh <- msg
+		return nil
+	}
+	server.entrypointFnc = func(ctx *JobContext) error {
+		return nil
+	}
+
+	job := &livekit.Job{Id: "job_success_status", Room: &livekit.Room{Name: "room-a"}}
+	server.handleAssignment(context.Background(), &livekit.JobAssignment{Job: job})
+
+	assertJobStatusMessage(t, receiveWorkerMessage(t, sentCh), "job_success_status", livekit.JobStatus_JS_RUNNING)
+	assertJobStatusMessage(t, receiveWorkerMessage(t, sentCh), "job_success_status", livekit.JobStatus_JS_SUCCESS)
+}
+
+func TestAssignmentReportsFailureWhenEntrypointFails(t *testing.T) {
+	server := NewAgentServer(WorkerOptions{})
+	sentCh := make(chan *livekit.WorkerMessage, 2)
+	server.workerMessageSink = func(msg *livekit.WorkerMessage) error {
+		sentCh <- msg
+		return nil
+	}
+	server.entrypointFnc = func(ctx *JobContext) error {
+		return errors.New("entrypoint failed")
+	}
+
+	job := &livekit.Job{Id: "job_failed_status", Room: &livekit.Room{Name: "room-a"}}
+	server.handleAssignment(context.Background(), &livekit.JobAssignment{Job: job})
+
+	assertJobStatusMessage(t, receiveWorkerMessage(t, sentCh), "job_failed_status", livekit.JobStatus_JS_RUNNING)
+	assertJobStatusMessage(t, receiveWorkerMessage(t, sentCh), "job_failed_status", livekit.JobStatus_JS_FAILED)
+}
+
 func TestAssignmentPreservesAssignmentToken(t *testing.T) {
 	server := NewAgentServer(WorkerOptions{})
 	startedCh := make(chan *JobContext, 1)
@@ -676,5 +713,20 @@ func receiveWorkerMessage(t *testing.T, receivedCh <-chan *livekit.WorkerMessage
 	case <-time.After(time.Second):
 		t.Fatal("worker message was not sent")
 		return nil
+	}
+}
+
+func assertJobStatusMessage(t *testing.T, msg *livekit.WorkerMessage, jobID string, status livekit.JobStatus) {
+	t.Helper()
+
+	update := msg.GetUpdateJob()
+	if update == nil {
+		t.Fatal("update job message is nil")
+	}
+	if update.JobId != jobID {
+		t.Fatalf("UpdateJob.JobId = %q, want %s", update.JobId, jobID)
+	}
+	if update.Status != status {
+		t.Fatalf("UpdateJob.Status = %v, want %v", update.Status, status)
 	}
 }
