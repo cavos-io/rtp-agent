@@ -2,6 +2,7 @@ package worker
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/cavos-io/conversation-worker/core/agent"
 	"github.com/cavos-io/conversation-worker/library/logger"
@@ -49,10 +50,11 @@ func (r *JobRequest) Reject(args ...JobRejectArguments) error {
 }
 
 type JobContext struct {
-	Job             *livekit.Job
-	Room            *lksdk.Room
-	Report          *agent.SessionReport
-	AcceptArguments JobAcceptArguments
+	Job               *livekit.Job
+	Room              *lksdk.Room
+	Report            *agent.SessionReport
+	AcceptArguments   JobAcceptArguments
+	shutdownCallbacks []func(string)
 
 	apiKey    string
 	apiSecret string
@@ -91,7 +93,24 @@ func (c *JobContext) Connect(ctx context.Context, cb *lksdk.RoomCallback) error 
 	return nil
 }
 
+func (c *JobContext) AddShutdownCallback(callback any) error {
+	switch cb := callback.(type) {
+	case func():
+		c.shutdownCallbacks = append(c.shutdownCallbacks, func(string) {
+			cb()
+		})
+	case func(string):
+		c.shutdownCallbacks = append(c.shutdownCallbacks, cb)
+	default:
+		return fmt.Errorf("shutdown callback must be func() or func(string)")
+	}
+	return nil
+}
+
 func (c *JobContext) Shutdown(reason string) {
+	for _, callback := range c.shutdownCallbacks {
+		callback(reason)
+	}
 	if c.Room != nil {
 		c.Room.Disconnect()
 	}
