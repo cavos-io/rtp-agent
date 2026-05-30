@@ -26,6 +26,7 @@ type JobExecutor interface {
 	ID() string
 	Status() JobStatus
 	Started() bool
+	Job() *livekit.Job
 	LaunchJob(ctx context.Context, job *livekit.Job) error
 	Close(ctx context.Context) error
 }
@@ -62,6 +63,12 @@ func (e *ThreadJobExecutor) Started() bool {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	return e.started
+}
+
+func (e *ThreadJobExecutor) Job() *livekit.Job {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.job
 }
 
 func (e *ThreadJobExecutor) LaunchJob(ctx context.Context, job *livekit.Job) error {
@@ -101,7 +108,8 @@ type ProcessJobExecutor struct {
 	mu      sync.Mutex
 	started bool
 	cmd     *exec.Cmd
-	
+	job     *livekit.Job
+
 	lastPong time.Time
 }
 
@@ -127,6 +135,12 @@ func (e *ProcessJobExecutor) Started() bool {
 	return e.started
 }
 
+func (e *ProcessJobExecutor) Job() *livekit.Job {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.job
+}
+
 func (e *ProcessJobExecutor) LaunchJob(ctx context.Context, job *livekit.Job) error {
 	e.mu.Lock()
 	if e.started {
@@ -135,6 +149,7 @@ func (e *ProcessJobExecutor) LaunchJob(ctx context.Context, job *livekit.Job) er
 	}
 	e.started = true
 	e.status = JobStatusRunning
+	e.job = job
 	e.lastPong = time.Now()
 	e.mu.Unlock()
 
@@ -156,7 +171,7 @@ func (e *ProcessJobExecutor) LaunchJob(ctx context.Context, job *livekit.Job) er
 
 	// We pass the job details via environment variables for parity with Python's IPC/subprocess launch
 	cmd := exec.CommandContext(ctx, exe, "start")
-	cmd.Env = append(os.Environ(), 
+	cmd.Env = append(os.Environ(),
 		fmt.Sprintf("LIVEKIT_AGENT_PROCESS_ID=%s", e.id),
 		fmt.Sprintf("LIVEKIT_AGENT_JOB_JSON=%s", string(jobJSON)),
 	)
@@ -198,9 +213,9 @@ func (e *ProcessJobExecutor) pingTask(ctx context.Context) {
 				e.mu.Unlock()
 				return
 			}
-			
+
 			// In a full implementation, we would send a ping message via a pipe
-			// and wait for a pong. 
+			// and wait for a pong.
 			// For basic parity, we'll check if the process is still alive.
 			if e.cmd != nil && e.cmd.Process != nil {
 				// check if process exists

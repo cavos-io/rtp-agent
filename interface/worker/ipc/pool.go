@@ -24,6 +24,7 @@ type ProcPool struct {
 	mu           sync.Mutex
 	entrypoint   func() error
 	executorType ExecutorType
+	closeTimeout time.Duration
 }
 
 func NewProcPool(maxProcesses int, executorType ExecutorType, entrypoint func() error) *ProcPool {
@@ -32,6 +33,7 @@ func NewProcPool(maxProcesses int, executorType ExecutorType, entrypoint func() 
 		executors:    make(map[string]JobExecutor),
 		entrypoint:   entrypoint,
 		executorType: executorType,
+		closeTimeout: 5 * time.Second,
 	}
 }
 
@@ -50,7 +52,7 @@ func (p *ProcPool) LaunchJob(ctx context.Context, job *livekit.Job) error {
 	} else {
 		executor = NewThreadJobExecutor(id, p.entrypoint)
 	}
-	
+
 	p.executors[id] = executor
 
 	err := executor.LaunchJob(ctx, job)
@@ -74,11 +76,34 @@ func (p *ProcPool) GetExecutors() []JobExecutor {
 	return executors
 }
 
+func (p *ProcPool) SetCloseTimeout(timeout time.Duration) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.closeTimeout = timeout
+}
+
+func (p *ProcPool) GetByJobID(jobID string) JobExecutor {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	for _, executor := range p.executors {
+		job := executor.Job()
+		if job != nil && job.Id == jobID {
+			return executor
+		}
+	}
+	return nil
+}
+
 func (p *ProcPool) Close() error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	closeTimeout := p.closeTimeout
+	if closeTimeout <= 0 {
+		closeTimeout = 5 * time.Second
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), closeTimeout)
 	defer cancel()
 
 	for _, e := range p.executors {

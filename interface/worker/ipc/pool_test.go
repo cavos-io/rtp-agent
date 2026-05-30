@@ -1,0 +1,79 @@
+package ipc
+
+import (
+	"context"
+	"testing"
+	"time"
+
+	"github.com/livekit/protocol/livekit"
+)
+
+type fakeJobExecutor struct {
+	id         string
+	job        *livekit.Job
+	closeCtx   context.Context
+	closeCalls int
+}
+
+func (e *fakeJobExecutor) ID() string { return e.id }
+
+func (e *fakeJobExecutor) Status() JobStatus { return JobStatusRunning }
+
+func (e *fakeJobExecutor) Started() bool { return e.job != nil }
+
+func (e *fakeJobExecutor) Job() *livekit.Job { return e.job }
+
+func (e *fakeJobExecutor) LaunchJob(ctx context.Context, job *livekit.Job) error {
+	e.job = job
+	return nil
+}
+
+func (e *fakeJobExecutor) Close(ctx context.Context) error {
+	e.closeCtx = ctx
+	e.closeCalls++
+	return nil
+}
+
+func TestProcPoolGetByJobIDFindsRunningExecutor(t *testing.T) {
+	executor := &fakeJobExecutor{
+		id:  "exec-a",
+		job: &livekit.Job{Id: "job-a"},
+	}
+	pool := &ProcPool{
+		executors: map[string]JobExecutor{executor.id: executor},
+	}
+
+	got := pool.GetByJobID("job-a")
+	if got == nil {
+		t.Fatal("GetByJobID returned nil, want executor")
+	}
+	if got.ID() != "exec-a" {
+		t.Fatalf("executor ID = %q, want exec-a", got.ID())
+	}
+	if pool.GetByJobID("missing") != nil {
+		t.Fatal("GetByJobID returned executor for missing job")
+	}
+}
+
+func TestProcPoolCloseUsesConfiguredTimeout(t *testing.T) {
+	executor := &fakeJobExecutor{id: "exec-a"}
+	pool := &ProcPool{
+		executors:    map[string]JobExecutor{executor.id: executor},
+		closeTimeout: 25 * time.Millisecond,
+	}
+
+	if err := pool.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	if executor.closeCalls != 1 {
+		t.Fatalf("closeCalls = %d, want 1", executor.closeCalls)
+	}
+	deadline, ok := executor.closeCtx.Deadline()
+	if !ok {
+		t.Fatal("Close context has no deadline")
+	}
+	remaining := time.Until(deadline)
+	if remaining <= 0 || remaining > 25*time.Millisecond {
+		t.Fatalf("Close deadline remaining = %v, want within configured timeout", remaining)
+	}
+}
