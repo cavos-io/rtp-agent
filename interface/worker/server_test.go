@@ -1461,6 +1461,23 @@ func TestDrainWaitsForActiveJobs(t *testing.T) {
 	}
 }
 
+func TestDrainWithTimeoutReturnsContextDeadline(t *testing.T) {
+	server := NewAgentServer(WorkerOptions{DrainTimeoutSeconds: 1800})
+	jobCtx := NewJobContext(&livekit.Job{Id: "job_drain_timeout"}, "", "", "")
+	server.mu.Lock()
+	server.activeJobs[jobCtx.Job.Id] = jobCtx
+	server.mu.Unlock()
+
+	started := time.Now()
+	err := server.DrainWithTimeout(context.Background(), 10*time.Millisecond)
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("DrainWithTimeout() error = %v, want context deadline exceeded", err)
+	}
+	if elapsed := time.Since(started); elapsed > time.Second {
+		t.Fatalf("DrainWithTimeout() elapsed = %v, want per-call timeout instead of configured timeout", elapsed)
+	}
+}
+
 func TestDrainWaitsForPendingAcceptedJobs(t *testing.T) {
 	oldTimeout := assignmentTimeout
 	assignmentTimeout = time.Second

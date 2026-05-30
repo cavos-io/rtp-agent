@@ -511,11 +511,21 @@ func (s *AgentServer) Draining() bool {
 
 func (s *AgentServer) Drain(ctx context.Context) error {
 	if s.Options.DrainTimeoutSeconds > 0 {
+		return s.DrainWithTimeout(ctx, time.Duration(s.Options.DrainTimeoutSeconds)*time.Second)
+	}
+	return s.drain(ctx)
+}
+
+func (s *AgentServer) DrainWithTimeout(ctx context.Context, timeout time.Duration) error {
+	if timeout > 0 {
 		var cancel context.CancelFunc
-		ctx, cancel = context.WithTimeout(ctx, time.Duration(s.Options.DrainTimeoutSeconds)*time.Second)
+		ctx, cancel = context.WithTimeout(ctx, timeout)
 		defer cancel()
 	}
+	return s.drain(ctx)
+}
 
+func (s *AgentServer) drain(ctx context.Context) error {
 	s.mu.Lock()
 	if s.draining {
 		s.mu.Unlock()
