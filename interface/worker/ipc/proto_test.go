@@ -92,3 +92,88 @@ func TestStartJobRequestCarriesRunningJobInfo(t *testing.T) {
 		t.Fatal("RunningJob.FakeJob = false, want true")
 	}
 }
+
+func TestInferenceMessagesRoundTrip(t *testing.T) {
+	req := InferenceRequest{
+		Method:    "embeddings.create",
+		RequestID: "req-123",
+		Data:      []byte(`{"input":"hello"}`),
+	}
+
+	reqData, err := json.Marshal(req)
+	if err != nil {
+		t.Fatalf("marshal InferenceRequest: %v", err)
+	}
+
+	var decodedReq InferenceRequest
+	if err := json.Unmarshal(reqData, &decodedReq); err != nil {
+		t.Fatalf("decode InferenceRequest: %v", err)
+	}
+	if decodedReq.Method != "embeddings.create" {
+		t.Fatalf("Method = %q, want embeddings.create", decodedReq.Method)
+	}
+	if decodedReq.RequestID != "req-123" {
+		t.Fatalf("RequestID = %q, want req-123", decodedReq.RequestID)
+	}
+	if string(decodedReq.Data) != `{"input":"hello"}` {
+		t.Fatalf("Data = %q, want request payload", string(decodedReq.Data))
+	}
+
+	resp := InferenceResponse{
+		RequestID: "req-123",
+		Data:      []byte(`{"embedding":[1,2,3]}`),
+		Error:     "",
+	}
+
+	respData, err := json.Marshal(resp)
+	if err != nil {
+		t.Fatalf("marshal InferenceResponse: %v", err)
+	}
+
+	var decodedResp InferenceResponse
+	if err := json.Unmarshal(respData, &decodedResp); err != nil {
+		t.Fatalf("decode InferenceResponse: %v", err)
+	}
+	if decodedResp.RequestID != "req-123" {
+		t.Fatalf("Response RequestID = %q, want req-123", decodedResp.RequestID)
+	}
+	if string(decodedResp.Data) != `{"embedding":[1,2,3]}` {
+		t.Fatalf("Response Data = %q, want inference payload", string(decodedResp.Data))
+	}
+	if decodedResp.Error != "" {
+		t.Fatalf("Response Error = %q, want empty", decodedResp.Error)
+	}
+}
+
+func TestReferenceIPCMessageTypesAreNamed(t *testing.T) {
+	expected := map[MessageType]struct{}{
+		MessageTypeInferenceRequest:   {},
+		MessageTypeInferenceResponse:  {},
+		MessageTypeDumpStackTrace:     {},
+		MessageTypeShutdownRequestAck: {},
+		MessageTypeShuttingDown:       {},
+		MessageTypeInitializeRequest:  {},
+		MessageTypeInitializeResponse: {},
+		MessageTypePingRequest:        {},
+		MessageTypePongResponse:       {},
+		MessageTypeStartJobRequest:    {},
+		MessageTypeShutdownRequest:    {},
+		MessageTypeExiting:            {},
+	}
+
+	for typ := range expected {
+		msg := Message{Type: typ}
+		data, err := json.Marshal(msg)
+		if err != nil {
+			t.Fatalf("marshal message type %q: %v", typ, err)
+		}
+
+		var decoded Message
+		if err := json.Unmarshal(data, &decoded); err != nil {
+			t.Fatalf("decode message type %q: %v", typ, err)
+		}
+		if decoded.Type != typ {
+			t.Fatalf("decoded type = %q, want %q", decoded.Type, typ)
+		}
+	}
+}

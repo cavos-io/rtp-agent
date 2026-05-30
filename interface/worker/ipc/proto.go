@@ -16,6 +16,11 @@ const (
 	MessageTypeStartJobRequest    MessageType = "start_job_request"
 	MessageTypeShutdownRequest    MessageType = "shutdown_request"
 	MessageTypeExiting            MessageType = "exiting"
+	MessageTypeInferenceRequest   MessageType = "inference_request"
+	MessageTypeInferenceResponse  MessageType = "inference_response"
+	MessageTypeDumpStackTrace     MessageType = "dump_stack_trace_request"
+	MessageTypeShutdownRequestAck MessageType = "shutdown_request_ack"
+	MessageTypeShuttingDown       MessageType = "shutting_down"
 )
 
 type Message struct {
@@ -71,3 +76,21 @@ type ShutdownRequest struct {
 type Exiting struct {
 	Reason string `json:"reason"`
 }
+
+type InferenceRequest struct {
+	Method    string `json:"method"`
+	RequestID string `json:"request_id"`
+	Data      []byte `json:"data"`
+}
+
+type InferenceResponse struct {
+	RequestID string `json:"request_id"`
+	Data      []byte `json:"data,omitempty"`
+	Error     string `json:"error,omitempty"`
+}
+
+type DumpStackTraceRequest struct{}
+
+type ShutdownRequestAck struct{}
+
+type ShuttingDown struct{}
