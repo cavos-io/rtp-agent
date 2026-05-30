@@ -371,6 +371,43 @@ func TestHandleAvailabilityRejectsWhenLoadExceedsThreshold(t *testing.T) {
 	}
 }
 
+func TestHandleAvailabilityCountsPendingAcceptsAsReservedLoad(t *testing.T) {
+	server := NewAgentServer(WorkerOptions{
+		LoadThreshold:    0.5,
+		NumIdleProcesses: 1,
+		LoadFunc: func(*AgentServer) float64 {
+			return 0
+		},
+	})
+	sentCh := make(chan *livekit.WorkerMessage, 2)
+	server.workerMessageSink = func(msg *livekit.WorkerMessage) error {
+		sentCh <- msg
+		return nil
+	}
+
+	server.handleAvailability(context.Background(), &livekit.AvailabilityRequest{
+		Job: &livekit.Job{Id: "job_reserved_one"},
+	})
+	first := receiveWorkerMessage(t, sentCh).GetAvailability()
+	if first == nil || !first.Available {
+		t.Fatal("first availability response was not accepted")
+	}
+
+	server.handleAvailability(context.Background(), &livekit.AvailabilityRequest{
+		Job: &livekit.Job{Id: "job_reserved_two"},
+	})
+	second := receiveWorkerMessage(t, sentCh).GetAvailability()
+	if second == nil {
+		t.Fatal("second availability response is nil")
+	}
+	if second.Available {
+		t.Fatal("second availability response was accepted despite reserved load")
+	}
+	if second.JobId != "job_reserved_two" {
+		t.Fatalf("second availability JobId = %q, want job_reserved_two", second.JobId)
+	}
+}
+
 func TestHandleRegisterReportsActiveJobs(t *testing.T) {
 	server := NewAgentServer(WorkerOptions{})
 	sentCh := make(chan *livekit.WorkerMessage, 1)

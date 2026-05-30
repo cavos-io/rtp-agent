@@ -324,6 +324,32 @@ func (s *AgentServer) currentLoad() float64 {
 	return load
 }
 
+func (s *AgentServer) effectiveLoad() float64 {
+	load := s.currentLoad()
+	threshold := s.Options.LoadThreshold
+	if threshold <= 0 {
+		return load
+	}
+
+	s.mu.Lock()
+	activeCount := len(s.activeJobs)
+	pendingCount := len(s.pendingAccepts)
+	s.mu.Unlock()
+
+	var jobLoad float64
+	if activeCount > 0 {
+		jobLoad = load / float64(activeCount)
+	} else {
+		idleProcesses := s.Options.NumIdleProcesses
+		if idleProcesses <= 0 {
+			idleProcesses = 1
+		}
+		jobLoad = threshold / float64(idleProcesses)
+	}
+
+	return load + float64(pendingCount)*jobLoad
+}
+
 func (s *AgentServer) availableForJob() bool {
 	if s.Draining() {
 		return false
@@ -332,7 +358,7 @@ func (s *AgentServer) availableForJob() bool {
 	if threshold <= 0 {
 		return true
 	}
-	return s.currentLoad() < threshold
+	return s.effectiveLoad() < threshold
 }
 
 func (s *AgentServer) validateRunPreconditions() error {
