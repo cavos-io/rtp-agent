@@ -428,3 +428,44 @@ func TestExecuteLocalJobCleansUpAndRunsSessionEnd(t *testing.T) {
 		t.Fatal("local job remained in activeJobs after completion")
 	}
 }
+
+func TestDrainWaitsForActiveJobs(t *testing.T) {
+	server := NewAgentServer(WorkerOptions{})
+	jobCtx := NewJobContext(&livekit.Job{Id: "job_drain"}, "", "", "")
+
+	server.mu.Lock()
+	server.activeJobs[jobCtx.Job.Id] = jobCtx
+	server.mu.Unlock()
+
+	doneCh := make(chan error, 1)
+	go func() {
+		doneCh <- server.Drain(context.Background())
+	}()
+
+	drainingDeadline := time.After(time.Second)
+	for !server.Draining() {
+		select {
+		case <-drainingDeadline:
+			t.Fatal("server.Draining() = false, want true")
+		default:
+			time.Sleep(time.Millisecond)
+		}
+	}
+
+	select {
+	case err := <-doneCh:
+		t.Fatalf("Drain() returned before active job finished: %v", err)
+	default:
+	}
+
+	server.finishJob(jobCtx)
+
+	select {
+	case err := <-doneCh:
+		if err != nil {
+			t.Fatalf("Drain() error = %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Drain() did not return after active job finished")
+	}
+}

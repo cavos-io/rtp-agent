@@ -60,6 +60,7 @@ type AgentServer struct {
 	sessionEndFnc func(*JobContext) error
 
 	activeJobs map[string]*JobContext
+	draining   bool
 	mu         sync.Mutex
 	conn       *websocket.Conn
 
@@ -194,6 +195,18 @@ func (s *AgentServer) registerWorkerRequest() *livekit.WorkerMessage {
 	}
 }
 
+func (s *AgentServer) workerStatusMessage(status livekit.WorkerStatus) *livekit.WorkerMessage {
+	jobCount := uint32(s.activeJobCount())
+	return &livekit.WorkerMessage{
+		Message: &livekit.WorkerMessage_UpdateWorker{
+			UpdateWorker: &livekit.UpdateWorkerStatus{
+				Status:   &status,
+				JobCount: jobCount,
+			},
+		},
+	}
+}
+
 func (s *AgentServer) RTCSession(
 	entrypoint func(*JobContext) error,
 	request func(*JobRequest) error,
@@ -220,6 +233,54 @@ func (s *AgentServer) GetConsoleSession() any {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.consoleSession
+}
+
+func (s *AgentServer) Draining() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.draining
+}
+
+func (s *AgentServer) Drain(ctx context.Context) error {
+	if s.Options.DrainTimeoutSeconds > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, time.Duration(s.Options.DrainTimeoutSeconds)*time.Second)
+		defer cancel()
+	}
+
+	s.mu.Lock()
+	if s.draining {
+		s.mu.Unlock()
+		return nil
+	}
+	s.draining = true
+	connected := s.conn != nil
+	s.mu.Unlock()
+
+	if connected {
+		if err := s.sendWorkerMessage(s.workerStatusMessage(livekit.WorkerStatus_WS_FULL)); err != nil {
+			return err
+		}
+	}
+
+	ticker := time.NewTicker(10 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		if s.activeJobCount() == 0 {
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-ticker.C:
+		}
+	}
+}
+
+func (s *AgentServer) activeJobCount() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return len(s.activeJobs)
 }
 
 func (s *AgentServer) validateRunPreconditions() error {
