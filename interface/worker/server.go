@@ -162,10 +162,14 @@ func (s *AgentServer) RTCSession(
 	entrypoint func(*JobContext) error,
 	request func(*JobRequest) error,
 	sessionEnd func(*JobContext) error,
-) {
+) error {
+	if s.entrypointFnc != nil {
+		return fmt.Errorf("the AgentServer currently only supports registering one rtc_session")
+	}
 	s.entrypointFnc = entrypoint
 	s.requestFnc = request
 	s.sessionEndFnc = sessionEnd
+	return nil
 }
 
 // SetConsoleSession allows entrypoints to register their session for console interaction
@@ -182,11 +186,21 @@ func (s *AgentServer) GetConsoleSession() any {
 	return s.consoleSession
 }
 
-func (s *AgentServer) Run(ctx context.Context) error {
+func (s *AgentServer) validateRunPreconditions() error {
 	s.Options = resolveWorkerOptions(s.Options)
 
+	if s.entrypointFnc == nil {
+		return fmt.Errorf("No RTC session entrypoint has been registered")
+	}
 	if s.Options.WSRL == "" || s.Options.APIKey == "" || s.Options.APISecret == "" {
 		return fmt.Errorf("missing LiveKit credentials")
+	}
+	return nil
+}
+
+func (s *AgentServer) Run(ctx context.Context) error {
+	if err := s.validateRunPreconditions(); err != nil {
+		return err
 	}
 
 	wsURL, err := url.Parse(s.Options.WSRL)

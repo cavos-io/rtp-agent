@@ -1,6 +1,7 @@
 package worker
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/livekit/protocol/livekit"
@@ -266,5 +267,50 @@ func TestJobRequestAcceptDefaultsIdentityBeforeCallback(t *testing.T) {
 	}
 	if got.Identity != "agent-job_identity" {
 		t.Fatalf("Accept() Identity = %q, want default identity", got.Identity)
+	}
+}
+
+func TestValidateRunPreconditionsRequiresRTCSession(t *testing.T) {
+	server := NewAgentServer(WorkerOptions{
+		WSRL:      "wss://livekit.example",
+		APIKey:    "key",
+		APISecret: "secret",
+	})
+
+	err := server.validateRunPreconditions()
+	if err == nil {
+		t.Fatal("validateRunPreconditions() error = nil, want missing RTC session error")
+	}
+	if !strings.Contains(err.Error(), "No RTC session entrypoint") {
+		t.Fatalf("validateRunPreconditions() error = %q, want RTC session message", err.Error())
+	}
+}
+
+func TestValidateRunPreconditionsRequiresCredentialsAfterRTCSession(t *testing.T) {
+	server := NewAgentServer(WorkerOptions{})
+	server.RTCSession(func(ctx *JobContext) error { return nil }, nil, nil)
+
+	err := server.validateRunPreconditions()
+	if err == nil {
+		t.Fatal("validateRunPreconditions() error = nil, want missing credentials error")
+	}
+	if !strings.Contains(err.Error(), "missing LiveKit credentials") {
+		t.Fatalf("validateRunPreconditions() error = %q, want credentials message", err.Error())
+	}
+}
+
+func TestRTCSessionRejectsSecondRegistration(t *testing.T) {
+	server := NewAgentServer(WorkerOptions{})
+
+	if err := server.RTCSession(func(ctx *JobContext) error { return nil }, nil, nil); err != nil {
+		t.Fatalf("first RTCSession() error = %v", err)
+	}
+
+	err := server.RTCSession(func(ctx *JobContext) error { return nil }, nil, nil)
+	if err == nil {
+		t.Fatal("second RTCSession() error = nil, want duplicate registration error")
+	}
+	if !strings.Contains(err.Error(), "only supports registering one rtc_session") {
+		t.Fatalf("second RTCSession() error = %q, want duplicate registration message", err.Error())
 	}
 }
