@@ -2,6 +2,8 @@ package cli
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"fmt"
 	"os"
 	"os/signal"
@@ -18,6 +20,11 @@ type CliArgs struct {
 	APIKey    string
 	APISecret string
 	DevMode   bool
+}
+
+type ConnectArgs struct {
+	RoomName            string
+	ParticipantIdentity string
 }
 
 func RunApp(server *worker.AgentServer) {
@@ -80,25 +87,43 @@ func runWorker(server *worker.AgentServer, devMode bool) {
 }
 
 func runConnect(server *worker.AgentServer) {
-	if len(os.Args) < 3 {
+	args, err := parseConnectArgs(os.Args)
+	if err != nil {
 		fmt.Println("Usage: worker connect <room_name> [participant_identity]")
 		os.Exit(1)
-	}
-	roomName := os.Args[2]
-	participantIdentity := "user"
-	if len(os.Args) > 3 {
-		participantIdentity = os.Args[3]
 	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	logger.Logger.Infow("Starting connect mode", "room", roomName, "participant", participantIdentity)
+	logger.Logger.Infow("Starting connect mode", "room", args.RoomName, "participant", args.ParticipantIdentity)
 
-	if err := server.ExecuteLocalJob(ctx, roomName, participantIdentity); err != nil {
+	if err := server.ExecuteLocalJob(ctx, args.RoomName, args.ParticipantIdentity); err != nil {
 		logger.Logger.Errorw("Connect error", err)
 		os.Exit(1)
 	}
+}
+
+func parseConnectArgs(argv []string) (ConnectArgs, error) {
+	if len(argv) < 3 {
+		return ConnectArgs{}, fmt.Errorf("missing room name")
+	}
+	args := ConnectArgs{
+		RoomName:            argv[2],
+		ParticipantIdentity: defaultConnectParticipantIdentity(),
+	}
+	if len(argv) > 3 {
+		args.ParticipantIdentity = argv[3]
+	}
+	return args, nil
+}
+
+func defaultConnectParticipantIdentity() string {
+	var b [6]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		return "agent-local"
+	}
+	return "agent-" + hex.EncodeToString(b[:])
 }
 
 func runConsole(server *worker.AgentServer) {
@@ -147,4 +172,3 @@ func runConsole(server *worker.AgentServer) {
 
 	<-ctx.Done()
 }
-
