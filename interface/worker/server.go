@@ -1034,6 +1034,7 @@ func (s *AgentServer) handleTermination(req *livekit.JobTermination) {
 // ExecuteLocalJob runs a job locally without connecting to the worker service, useful for the CLI console
 func (s *AgentServer) ExecuteLocalJob(ctx context.Context, roomName string, participantIdentity string) error {
 	jobCtx := newLocalJobContext(roomName, participantIdentity, s.Options)
+	jobCtx.WorkerID = s.workerID
 
 	// For local execution, we want to connect immediately
 	// For basic parity, we just trigger the entrypoint directly.

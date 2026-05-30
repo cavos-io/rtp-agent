@@ -1375,6 +1375,49 @@ func TestLocalJobContextGeneratesUniqueReferenceIDs(t *testing.T) {
 	}
 }
 
+func TestExecuteLocalJobRecordsRegisteredWorkerID(t *testing.T) {
+	server := NewAgentServer(WorkerOptions{})
+	server.workerID = "worker-local"
+	startedCh := make(chan *JobContext, 1)
+
+	if err := server.RTCSession(
+		func(ctx *JobContext) error {
+			startedCh <- ctx
+			return nil
+		},
+		nil,
+		nil,
+	); err != nil {
+		t.Fatalf("RTCSession() error = %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	doneCh := make(chan error, 1)
+	go func() {
+		doneCh <- server.ExecuteLocalJob(ctx, "room-a", "agent-local")
+	}()
+
+	select {
+	case jobCtx := <-startedCh:
+		if jobCtx.WorkerID != "worker-local" {
+			t.Fatalf("local job WorkerID = %q, want worker-local", jobCtx.WorkerID)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("local job entrypoint did not run")
+	}
+
+	cancel()
+	select {
+	case err := <-doneCh:
+		if err != nil {
+			t.Fatalf("ExecuteLocalJob() error = %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("ExecuteLocalJob() did not return after context cancellation")
+	}
+}
+
 func TestExecuteLocalJobCleansUpAndRunsSessionEnd(t *testing.T) {
 	server := NewAgentServer(WorkerOptions{})
 	startedCh := make(chan *JobContext, 1)
