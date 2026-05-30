@@ -1,186 +1,279 @@
-# **Hexagonal Architecture Directory Structure Guide**
+# New Go Arch
+
+# Go Service Architecture
+
+This document defines a reusable Go service architecture based on layered ports-and-adapters design. Transport adapters sit at the edge, business logic lives in `core`, infrastructure adapters implement core-defined interfaces, and one composition root wires the application together.
+
+## Directory Structure
 
 ```text
-/adapter                  # External Adapters Layer - connects core to external systems
-  /postgresql             # Database adapter for PostgreSQL persistence
-    /entities             # Database entity mappings and ORM models
-    A_repository.go       # Repository implementation for domain A
-    B_repository.go       # Repository implementation for domain B
-  /util                   # Adapter-specific utility functions
-    A_util.go             # Helper functions for adapter A operations
-    B_util.go             # Helper functions for adapter B operations
-  /kafka_producer         # Message broker adapter for event publishing
-/cmd                      # Application Entry Point - bootstrap and config
-  properties.yaml         # Environment-specific configuration settings
-  main.go                 # Application entry point and dependency injection
-/core                     # Business Logic Layer (The Hexagon) - pure domain logic
-  /serviceA               # Domain service A with business rules
-    service.go            # Core business logic implementation
-    servie_test.go        # Unit tests for business logic
-    repository.go         # Port interface for data access
-    util.go               # Domain-specific utility functions
-    event.go              # Domain events and event handling
-  /serviceB               # Domain service B with business rules
-    service.go            # Core business logic implementation
-    servie_test.go        # Unit tests for business logic
-    repository.go         # Port interface for data access
-    util.go               # Domain-specific utility functions
-    event.go              # Domain events and event handling
-/db                       # Database Management - schema and data
-  /migration              # Database schema version control
-  /seed                   # Test data and initial database setup
-/interface                # Input Adapters (Primary) - external entry points
-  /web                    # HTTP REST API adapter
-  /kafka_consumer         # Message consumer adapter for incoming events
-  /grpc                   # gRPC service adapter for RPC calls
-  /ws                     # WebSocket adapter for real-time communication
-  /worker                 # Background job processing adapter
-/libary                   # Shared Libraries - reusable components
-/model                    # Data Models - shared data structures and DTOs
-  A_model.go              # Domain models and DTOs for service A
-  B_model.go              # Domain models and DTOs for service B
-.gitignore                # Git ignore file
-.dockerignore             # Docker ignore file
-app.go                    # Application orchestration and setup
-Dockerfile                # Container configuration
-README.md                 # Project documentation
+/adapter
+  /postgresql
+    /entities
+      domain_entity.go
+    domain_repository.go
+  /s3
+    object_storage_repository.go
+  /external_service
+    external_repository.go
+
+/cmd
+  /service-name
+    main.go
+  /data-migrator
+    main.go
+    properties.yml
+
+/core
+  /domain
+    /model
+      domain_model.go
+    repository.go
+    service.go
+    error.go
+    constant.go
+    service_test.go
+    repository_mock_test.go
+    service_mock_test.go
+
+/db
+  /migration
+    atlas.sum
+    YYYYMMDDHHMMSS_change_name.sql
+  /data-migrator
+    atlas.sum
+    YYYYMMDDHHMMSS_seed_name.sql
+
+/interface
+  /http
+    controller.go
+    error_mapping.go
+    domain_handler.go
+    /dto
+      domain_dto.go
+      error_dto.go
+      success_dto.go
+  /grpc
+    domain_grpc.go
+    domain_mapper.go
+    /spec
+      domain_service.proto
+
+/library
+  middleware.go
+  helper.go
+
+app.go
+properties.yml
+Dockerfile
+Makefile
+README.md
 ```
 
-## Overview
+## Layer Responsibilities
 
-This project follows hexagonal architecture (ports and adapters pattern) designed for modularity and adaptability. The structure separates business logic from external concerns through well-defined interfaces.
+### `/cmd`
 
-## Directory Breakdown
+Contains executable entry points only. The normal service entry point should:
 
-### `/adapter` - External Adapters Layer
 
-Contains implementations that connect the core business logic to external systems. These are the "adapters" in hexagonal architecture.
+1. Load configuration from `properties.yml`.
+2. Create the application config struct.
+3. Call `app.Init(...)`.
 
-#### `/postgresql`
+Do not put dependency wiring or business logic here. That responsibility belongs to `app.go`.
 
-* **Purpose**: Database adapter for PostgreSQL
-* **Contents**:
-  * `/entities`: Database entity mappings and ORM models
-  * `A_repository.go`, `B_repository.go`: Concrete implementations of repository interfaces defined in core
-* **Role**: Implements data persistence port from the core domain
+### `app.go`
 
-#### `/util`
+Application composition root. It owns startup wiring:
 
-* **Purpose**: Adapter-specific utility functions
-* **Contents**: `A_util.go`, `B_util.go` - Helper functions for adapter operations
-* **Role**: Supporting utilities for external system integrations
+* observability setup: logging, tracing, metrics
+* database clients, object storage clients, gRPC clients, external API clients
+* adapter construction
+* core service construction
+* HTTP controller construction
+* gRPC server registration
+* graceful shutdown
 
-#### `/kafka_producer`
+This file may know concrete implementations. Core services should not.
 
-* **Purpose**: Message broker adapter for publishing events
-* **Role**: Implements event publishing port from the core domain
+### `/interface`
 
-### `/cmd` - Application Entry Point
+Primary/input adapters. These translate external requests into core service calls.
 
-* **Purpose**: Application bootstrap and configuration
-* **Contents**:
-  * `main.go`: Application entry point and dependency injection
-  * `properties.yaml`: Configuration file for environment-specific settings
-* **Role**: Orchestrates the hexagon by wiring up all components
+* `/interface/http`: Echo handlers, route registration, auth middleware, DTO parsing, response/error mapping.
+* `/interface/grpc`: gRPC server implementations, protobuf mappers, service registration.
+* Other input adapters such as WebSocket, Kafka consumers, or workers can be added when the service actually needs them.
 
-### `/core` - Business Logic Layer (The Hexagon)
+Interface code should not contain business rules beyond request validation, authentication extraction, and response mapping.
 
-The heart of the hexagonal architecture containing pure business logic without external dependencies.
+### `/core`
 
-#### `/serviceA` & `/serviceB`
+Business logic layer. Each domain owns its own package:
 
-* **Purpose**: Domain services encapsulating business rules
-* **Contents**:
-  * `service.go`: Business logic implementation
-  * `service_test.go`: Unit tests for business logic
-  * `repository.go`: Port interface for data access
-  * `util.go`: Domain-specific utility functions
-  * `event.go`: Domain events and event handling
-* **Role**: Contains the core business rules and defines ports (interfaces) for external interactions
+* `service.go`: use cases and business rules
+* `repository.go`: outbound port interfaces required by the service
+* `/model`: domain models and lifecycle/state helpers
+* `error.go`: domain errors used by services and mapped by interfaces
+* tests and generated mocks close to the domain they cover
 
-### `/db` - Database Management
+Core code depends on interfaces, not concrete adapters. It can orchestrate multiple outbound ports when a use case requires it.
 
-* **Purpose**: Database schema and data management
-* **Contents**:
-  * `/migration`: Database schema migrations
-  * `/seed`: Test data and initial database seeding scripts
-* **Role**: Database version control and initial data setup
+### `/adapter`
 
-### `/interface` - Input Adapters (Primary Adapters)
+Secondary/output adapters. These implement interfaces defined in `core`.
 
-Contains various ways external systems can interact with your application.
+Common adapter examples:
 
-#### `/web`
+* `adapter/postgresql`: GORM repositories and database entities
+* `adapter/identity_provider`: identity, realm, organization, group, account adapters
+* `adapter/s3`: object storage adapter
+* `adapter/external_service`: outbound gRPC or HTTP client adapter
+* `adapter/message_broker`: event publishing adapter
 
-* **Purpose**: HTTP REST API adapter
-* **Role**: Handles HTTP requests and translates them to business operations
+Adapter DTOs/entities should be converted to core models at the adapter boundary.
 
-#### `/kafka_consumer`
+### `/db`
 
-* **Purpose**: Message consumer adapter
-* **Role**: Processes incoming messages from Kafka topics
+Database migration and seed data.
 
-#### `/grpc`
+* Use `db/migration` for current schema migrations.
+* Use `db/data-migrator` for seed/data migration scripts.
+* If a legacy `migrations/` directory exists, keep it only for historical compatibility and do not add new migrations there.
 
-* **Purpose**: gRPC service adapter
-* **Role**: Provides RPC interface for the application
+### `/library`
 
-#### `/ws`
+Shared helpers that are not domain-specific, such as session middleware, request helpers, or small common utilities. Keep this package small; domain logic belongs in `core`.
 
-* **Purpose**: WebSocket adapter
-* **Role**: Handles real-time bidirectional communication
+## Dependency Direction
 
-#### `/worker`
+```mermaid
+flowchart TB
+    subgraph Composition["Composition Root"]
+        App["app.go"]
+    end
 
-* **Purpose**: Background job processing adapter
-* **Role**: Handles asynchronous task processing
+    subgraph Interface["Input Adapters: /interface"]
+        HTTP["HTTP handlers"]
+        GRPC["gRPC servers"]
+        Worker["Workers / consumers"]
+    end
 
-### `/library` - Shared Libraries
+    subgraph Core["Core: /core"]
+        Service["Domain services"]
+        Port["Outbound port interfaces"]
+        Model["Domain models"]
+    end
 
-* **Purpose**: Reusable components and utilities
-* **Role**: Common functionality that can be used across different parts of the application
+    subgraph Adapter["Output Adapters: /adapter"]
+        DB["PostgreSQL repository"]
+        Storage["Object storage adapter"]
+        External["External service client"]
+        Broker["Message broker adapter"]
+    end
 
-### `/model` - Data Models
+    subgraph ExternalSystems["External Systems"]
+        PostgreSQL[("PostgreSQL")]
+        ObjectStorage[("Object Storage")]
+        API["External API / gRPC"]
+        Queue["Message Broker"]
+    end
 
-* **Purpose**: Shared data structures and DTOs
-* **Contents**: `A_model.go`, `B_model.go` - Domain models and data transfer objects
-* **Role**: Defines the data contracts used throughout the application
+    App -. wires .-> HTTP
+    App -. wires .-> GRPC
+    App -. wires .-> Worker
+    App -. wires .-> Service
+    App -. wires .-> DB
+    App -. wires .-> Storage
+    App -. wires .-> External
+    App -. wires .-> Broker
 
-## Key Principles Achieved
+    HTTP --> Service
+    GRPC --> Service
+    Worker --> Service
 
-### 1. Modularity
+    Service --> Model
+    Service --> Port
 
-* Each service (A, B) is self-contained with its own business logic
-* Adapters are interchangeable without affecting core logic
-* Clear separation between layers prevents tight coupling
+    DB -. implements .-> Port
+    Storage -. implements .-> Port
+    External -. implements .-> Port
+    Broker -. implements .-> Port
 
-### 2. Adaptability
+    DB --> PostgreSQL
+    Storage --> ObjectStorage
+    External --> API
+    Broker --> Queue
+```
 
-* Multiple interface types (web, gRPC, WebSocket, etc.) can coexist
-* Database can be switched by implementing new repository adapters
-* Message brokers can be changed without core logic modification
-* New interfaces can be added without modifying existing code
+The direction is:
 
-### 3. Testability
 
-* Core business logic can be tested independently
-* Adapters can be mocked easily due to interface-based design
-* Each layer has its own test strategy
+1. Interface adapters call core services.
+2. Core services call repository/client interfaces defined in `core`.
+3. Infrastructure adapters implement those interfaces.
+4. `app.go` wires concrete adapters into core services.
 
-### 4. Dependency Direction
+## Request Flow Example
 
-* Core defines interfaces (ports)
-* Adapters implement these interfaces
-* Dependencies point inward toward the core
-* External systems depend on your interfaces, not vice versa
+```text
+HTTP request
+  -> interface/http handler
+  -> parse DTO and extract session claims
+  -> core/domain service method
+  -> core validates business rules
+  -> core calls outbound repository/client ports
+  -> adapter persists data or calls external service
+  -> handler maps result or domain error to response
+```
 
-## Flow Example
+For gRPC:
 
-1. HTTP request comes to `/interface/web`
-2. Web adapter calls core service methods
-3. Core service uses repository port (interface)
-4. Repository implementation in `/adapter/postgresql` handles data persistence
-5. Events are published through `/adapter/kafka_producer`
-6. Response flows back through the layers
+```text
+gRPC request
+  -> interface/grpc server method
+  -> protobuf mapper
+  -> core/domain service method
+  -> adapter through core port
+  -> protobuf response mapper
+```
 
-This structure ensures that your business logic remains pure and testable while providing maximum flexibility for integrating with external systems.
+## Configuration
+
+Use a typed application config struct in `app.go`, loaded by the executable in `cmd`. Configuration should include only runtime concerns such as:
+
+* environment and app name
+* HTTP/gRPC ports
+* trace/log exporters
+* database connection
+* object storage
+* auth/JWKS settings
+* external service hosts
+
+Core services should receive already-constructed dependencies, not raw global configuration.
+
+## Testing Guidance
+
+* Unit-test `core` services with mocks for repository/client interfaces.
+* Test adapter behavior separately when query mapping, external protocol behavior, or persistence details are non-trivial.
+* Keep handler tests focused on transport concerns: parsing, auth extraction, status codes, and error mapping.
+
+## Naming Conventions
+
+* Prefer `/interface/http`, not `/interface/web`, for REST APIs.
+* Keep domain models under `/core/<domain>/model`.
+* Keep transport DTOs under `/interface/http/dto`.
+* Keep database entities under `/adapter/postgresql/entities`.
+* Use `library`, not `libary`.
+* Use one consistent configuration filename, such as `properties.yml`.
+
+## Implementation Notes
+
+Use these conventions consistently across services:
+
+* `app.go` is the real dependency injection and server startup point.
+* `cmd/main.go` is intentionally thin.
+* HTTP and gRPC can coexist under `/interface`.
+* Core services own lifecycle rules and authorization decisions.
+* PostgreSQL, identity providers, object storage, message brokers, and outbound gRPC/HTTP clients are all adapters behind core interfaces.
+* Atlas migrations live in `db/migration`; legacy migration directories should not receive new schema work.

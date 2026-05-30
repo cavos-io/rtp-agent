@@ -1,0 +1,82 @@
+version: 3
+workdir: .
+
+allow:
+  depOnAnyVendor: false
+  deepScan: true
+
+exclude:
+  - .codex
+  - .git
+  - docs
+  - refs
+  - resources
+
+excludeFiles:
+  - ".*_test\\.go"
+
+components:
+  cmd:
+    in: cmd
+
+  interface:
+    in: interface/**
+
+  adapter:
+    in: adapter/**
+
+  core:
+    in:
+      - core/**
+
+  # Current compatibility boundary: this package is named under core, but
+  # constructs OpenAI-backed inference helpers directly.
+  core_inference:
+    in: core/inference
+
+  library:
+    in: library/**
+
+  model:
+    in: model
+
+commonComponents:
+  - library
+  - model
+
+deps:
+  cmd:
+    anyVendorDeps: true
+    mayDependOn:
+      - interface
+
+  interface:
+    anyVendorDeps: true
+    mayDependOn:
+      - core
+      - interface
+
+  adapter:
+    anyVendorDeps: true
+    mayDependOn:
+      - core
+      - adapter
+
+  core:
+    anyVendorDeps: true
+    mayDependOn:
+      - core
+
+  core_inference:
+    anyVendorDeps: true
+    mayDependOn:
+      - core
+      - adapter
+
+  library:
+    anyVendorDeps: true
+    mayDependOn:
+      - library
+
+  model:
+    anyVendorDeps: true
