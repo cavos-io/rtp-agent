@@ -3,7 +3,9 @@ package worker
 import (
 	"context"
 	"fmt"
+	"net/http"
 	"net/url"
+	"os"
 	"sync"
 	"time"
 
@@ -20,12 +22,16 @@ type WorkerType string
 const (
 	WorkerTypeRoom      WorkerType = "room"
 	WorkerTypePublisher WorkerType = "publisher"
+
+	participantAttributeAgentName = "lk.agent.name"
 )
 
 type WorkerOptions struct {
-	AgentName           string
-	WorkerType          WorkerType
-	MaxRetry            int
+	AgentName  string
+	WorkerType WorkerType
+	MaxRetry   int
+	WSURL      string
+	// WSRL is kept for backward compatibility. Prefer WSURL for new code.
 	WSRL                string
 	APIKey              string
 	APISecret           string
@@ -51,9 +57,104 @@ type AgentServer struct {
 }
 
 func NewAgentServer(opts WorkerOptions) *AgentServer {
+	opts = resolveWorkerOptions(opts)
 	return &AgentServer{
 		Options:    opts,
 		activeJobs: make(map[string]*JobContext),
+	}
+}
+
+func resolveWorkerOptions(opts WorkerOptions) WorkerOptions {
+	if opts.WorkerType == "" {
+		opts.WorkerType = WorkerTypeRoom
+	}
+	if opts.WSURL == "" {
+		opts.WSURL = opts.WSRL
+	}
+	if opts.WSURL == "" {
+		opts.WSURL = os.Getenv("LIVEKIT_URL")
+	}
+	opts.WSRL = opts.WSURL
+
+	if opts.APIKey == "" {
+		opts.APIKey = os.Getenv("LIVEKIT_API_KEY")
+	}
+	if opts.APISecret == "" {
+		opts.APISecret = os.Getenv("LIVEKIT_API_SECRET")
+	}
+	if opts.AgentName == "" {
+		opts.AgentName = os.Getenv("LIVEKIT_AGENT_NAME")
+	}
+	if opts.HTTPProxy == "" {
+		opts.HTTPProxy = os.Getenv("HTTPS_PROXY")
+		if opts.HTTPProxy == "" {
+			opts.HTTPProxy = os.Getenv("HTTP_PROXY")
+		}
+	}
+
+	return opts
+}
+
+func workerTypeToJobType(workerType WorkerType) livekit.JobType {
+	switch workerType {
+	case WorkerTypePublisher:
+		return livekit.JobType_JT_PUBLISHER
+	default:
+		return livekit.JobType_JT_ROOM
+	}
+}
+
+func agentIdentityForJobID(jobID string) string {
+	return "agent-" + jobID
+}
+
+func availabilityResponseForAccept(req *livekit.AvailabilityRequest, args JobAcceptArguments, agentName string) *livekit.WorkerMessage {
+	if args.Identity == "" {
+		args.Identity = agentIdentityForJobID(req.Job.Id)
+	}
+	attributes := make(map[string]string, len(args.Attributes)+1)
+	if agentName != "" {
+		attributes[participantAttributeAgentName] = agentName
+	}
+	for key, value := range args.Attributes {
+		attributes[key] = value
+	}
+
+	return &livekit.WorkerMessage{
+		Message: &livekit.WorkerMessage_Availability{
+			Availability: &livekit.AvailabilityResponse{
+				JobId:                 req.Job.Id,
+				Available:             true,
+				ParticipantIdentity:   args.Identity,
+				ParticipantName:       args.Name,
+				ParticipantMetadata:   args.Metadata,
+				ParticipantAttributes: attributes,
+			},
+		},
+	}
+}
+
+func availabilityResponseForReject(req *livekit.AvailabilityRequest, args JobRejectArguments) *livekit.WorkerMessage {
+	return &livekit.WorkerMessage{
+		Message: &livekit.WorkerMessage_Availability{
+			Availability: &livekit.AvailabilityResponse{
+				JobId:     req.Job.Id,
+				Available: false,
+				Terminate: args.Terminate,
+			},
+		},
+	}
+}
+
+func (s *AgentServer) registerWorkerRequest() *livekit.WorkerMessage {
+	return &livekit.WorkerMessage{
+		Message: &livekit.WorkerMessage_Register{
+			Register: &livekit.RegisterWorkerRequest{
+				Type:      workerTypeToJobType(s.Options.WorkerType),
+				AgentName: s.Options.AgentName,
+				Version:   "1.0.0",
+			},
+		},
 	}
 }
 
@@ -61,10 +162,14 @@ func (s *AgentServer) RTCSession(
 	entrypoint func(*JobContext) error,
 	request func(*JobRequest) error,
 	sessionEnd func(*JobContext) error,
-) {
+) error {
+	if s.entrypointFnc != nil {
+		return fmt.Errorf("the AgentServer currently only supports registering one rtc_session")
+	}
 	s.entrypointFnc = entrypoint
 	s.requestFnc = request
 	s.sessionEndFnc = sessionEnd
+	return nil
 }
 
 // SetConsoleSession allows entrypoints to register their session for console interaction
@@ -81,10 +186,21 @@ func (s *AgentServer) GetConsoleSession() any {
 	return s.consoleSession
 }
 
+func (s *AgentServer) validateRunPreconditions() error {
+	s.Options = resolveWorkerOptions(s.Options)
 
-func (s *AgentServer) Run(ctx context.Context) error {
+	if s.entrypointFnc == nil {
+		return fmt.Errorf("No RTC session entrypoint has been registered")
+	}
 	if s.Options.WSRL == "" || s.Options.APIKey == "" || s.Options.APISecret == "" {
 		return fmt.Errorf("missing LiveKit credentials")
+	}
+	return nil
+}
+
+func (s *AgentServer) Run(ctx context.Context) error {
+	if err := s.validateRunPreconditions(); err != nil {
+		return err
 	}
 
 	wsURL, err := url.Parse(s.Options.WSRL)
@@ -110,7 +226,16 @@ func (s *AgentServer) Run(ctx context.Context) error {
 
 	// Connect WS
 	// A robust implementation should include retries and proxy handling
-	conn, res, err := websocket.DefaultDialer.DialContext(ctx, wsURL.String(), map[string][]string{
+	dialer := *websocket.DefaultDialer
+	if s.Options.HTTPProxy != "" {
+		proxyURL, err := url.Parse(s.Options.HTTPProxy)
+		if err != nil {
+			return fmt.Errorf("invalid HTTP proxy URL: %w", err)
+		}
+		dialer.Proxy = http.ProxyURL(proxyURL)
+	}
+
+	conn, res, err := dialer.DialContext(ctx, wsURL.String(), map[string][]string{
 		"Authorization": {fmt.Sprintf("Bearer %s", token)},
 	})
 	if err != nil {
@@ -123,16 +248,7 @@ func (s *AgentServer) Run(ctx context.Context) error {
 	logger.Logger.Infow("Connected to LiveKit Server", "url", s.Options.WSRL)
 
 	// Send Register request
-	req := &livekit.WorkerMessage{
-		Message: &livekit.WorkerMessage_Register{
-			Register: &livekit.RegisterWorkerRequest{
-				Type:      livekit.JobType_JT_ROOM, // Hardcoded for room type for now
-				AgentName: s.Options.AgentName,
-				Version:   "1.0.0",
-			},
-		},
-	}
-
+	req := s.registerWorkerRequest()
 	b, err := proto.Marshal(req)
 	if err != nil {
 		return err
@@ -186,30 +302,47 @@ func (s *AgentServer) handleMessage(ctx context.Context, msg *livekit.ServerMess
 func (s *AgentServer) handleAvailability(ctx context.Context, req *livekit.AvailabilityRequest) {
 	logger.Logger.Infow("Received availability request", "jobId", req.Job.Id)
 
-	// Default to accept
-	ans := &livekit.WorkerMessage{
-		Message: &livekit.WorkerMessage_Availability{
-			Availability: &livekit.AvailabilityResponse{
-				JobId:               req.Job.Id,
-				Available:           true,
-				ParticipantIdentity: "agent-" + req.Job.Id[:8],
-				ParticipantName:     s.Options.AgentName,
-			},
+	answered := false
+	jobReq := &JobRequest{
+		Job: req.Job,
+		acceptFnc: func(args JobAcceptArguments) error {
+			if args.Name == "" {
+				args.Name = s.Options.AgentName
+			}
+			answered = true
+			return s.sendWorkerMessage(availabilityResponseForAccept(req, args, s.Options.AgentName))
+		},
+		rejectFnc: func(args JobRejectArguments) error {
+			answered = true
+			return s.sendWorkerMessage(availabilityResponseForReject(req, args))
 		},
 	}
 
-	b, err := proto.Marshal(ans)
+	if s.requestFnc != nil {
+		if err := s.requestFnc(jobReq); err != nil {
+			logger.Logger.Errorw("availability request callback failed", err, "jobId", req.Job.Id)
+		}
+	} else {
+		_ = jobReq.Accept(JobAcceptArguments{})
+	}
+
+	if !answered {
+		_ = jobReq.Accept(JobAcceptArguments{})
+	}
+}
+
+func (s *AgentServer) sendWorkerMessage(msg *livekit.WorkerMessage) error {
+	b, err := proto.Marshal(msg)
 	if err != nil {
-		logger.Logger.Errorw("failed to marshal availability", err)
-		return
+		return err
 	}
 
 	s.mu.Lock()
-	err = s.conn.WriteMessage(websocket.BinaryMessage, b)
-	s.mu.Unlock()
-	if err != nil {
-		logger.Logger.Errorw("failed to send availability", err)
+	defer s.mu.Unlock()
+	if s.conn == nil {
+		return fmt.Errorf("worker websocket is not connected")
 	}
+	return s.conn.WriteMessage(websocket.BinaryMessage, b)
 }
 
 func (s *AgentServer) handleAssignment(ctx context.Context, req *livekit.JobAssignment) {
@@ -265,6 +398,30 @@ func (s *AgentServer) handleTermination(req *livekit.JobTermination) {
 
 // ExecuteLocalJob runs a job locally without connecting to the worker service, useful for the CLI console
 func (s *AgentServer) ExecuteLocalJob(ctx context.Context, roomName string, participantIdentity string) error {
+	jobCtx := newLocalJobContext(roomName, participantIdentity, s.Options)
+
+	// For local execution, we want to connect immediately
+	// For basic parity, we just trigger the entrypoint directly.
+
+	s.mu.Lock()
+	s.activeJobs[jobCtx.Job.Id] = jobCtx
+	s.mu.Unlock()
+
+	if s.entrypointFnc != nil {
+		go func() {
+			if err := s.entrypointFnc(jobCtx); err != nil {
+				logger.Logger.Errorw("Local job entrypoint failed", err, "jobId", jobCtx.Job.Id)
+			}
+		}()
+	}
+
+	// Block until context is done for local execution
+	<-ctx.Done()
+	return nil
+}
+
+func newLocalJobContext(roomName string, participantIdentity string, opts WorkerOptions) *JobContext {
+	opts = resolveWorkerOptions(opts)
 	job := &livekit.Job{
 		Id: "local-job-" + time.Now().Format("20060102150405"),
 		Room: &livekit.Room{
@@ -274,24 +431,10 @@ func (s *AgentServer) ExecuteLocalJob(ctx context.Context, roomName string, part
 		Type: livekit.JobType_JT_ROOM,
 	}
 
-	jobCtx := NewJobContext(job, s.Options.WSRL, s.Options.APIKey, s.Options.APISecret)
-	
-	// For local execution, we want to connect immediately
-	// For basic parity, we just trigger the entrypoint directly.
-
-	s.mu.Lock()
-	s.activeJobs[job.Id] = jobCtx
-	s.mu.Unlock()
-
-	if s.entrypointFnc != nil {
-		go func() {
-			if err := s.entrypointFnc(jobCtx); err != nil {
-				logger.Logger.Errorw("Local job entrypoint failed", err, "jobId", job.Id)
-			}
-		}()
+	if participantIdentity == "" {
+		participantIdentity = agentIdentityForJobID(job.Id)
 	}
-	
-	// Block until context is done for local execution
-	<-ctx.Done()
-	return nil
+	jobCtx := NewJobContext(job, opts.WSRL, opts.APIKey, opts.APISecret)
+	jobCtx.AcceptArguments = JobAcceptArguments{Identity: participantIdentity}
+	return jobCtx
 }

@@ -1,0 +1,336 @@
+package worker
+
+import (
+	"strings"
+	"testing"
+
+	"github.com/livekit/protocol/livekit"
+)
+
+func TestNewAgentServerLoadsLiveKitOptionsFromEnvironment(t *testing.T) {
+	t.Setenv("LIVEKIT_URL", "wss://livekit.example")
+	t.Setenv("LIVEKIT_API_KEY", "env-key")
+	t.Setenv("LIVEKIT_API_SECRET", "env-secret")
+	t.Setenv("LIVEKIT_AGENT_NAME", "env-agent")
+	t.Setenv("HTTPS_PROXY", "https://proxy.example")
+	t.Setenv("HTTP_PROXY", "http://proxy.example")
+
+	server := NewAgentServer(WorkerOptions{})
+
+	if server.Options.WSRL != "wss://livekit.example" {
+		t.Fatalf("WSRL = %q, want env LIVEKIT_URL", server.Options.WSRL)
+	}
+	if server.Options.APIKey != "env-key" {
+		t.Fatalf("APIKey = %q, want env LIVEKIT_API_KEY", server.Options.APIKey)
+	}
+	if server.Options.APISecret != "env-secret" {
+		t.Fatalf("APISecret = %q, want env LIVEKIT_API_SECRET", server.Options.APISecret)
+	}
+	if server.Options.AgentName != "env-agent" {
+		t.Fatalf("AgentName = %q, want env LIVEKIT_AGENT_NAME", server.Options.AgentName)
+	}
+	if server.Options.HTTPProxy != "https://proxy.example" {
+		t.Fatalf("HTTPProxy = %q, want env HTTPS_PROXY", server.Options.HTTPProxy)
+	}
+}
+
+func TestNewAgentServerExplicitOptionsOverrideEnvironment(t *testing.T) {
+	t.Setenv("LIVEKIT_URL", "wss://env.example")
+	t.Setenv("LIVEKIT_API_KEY", "env-key")
+	t.Setenv("LIVEKIT_API_SECRET", "env-secret")
+	t.Setenv("LIVEKIT_AGENT_NAME", "env-agent")
+	t.Setenv("HTTPS_PROXY", "https://env-proxy.example")
+
+	server := NewAgentServer(WorkerOptions{
+		AgentName: "explicit-agent",
+		WSRL:      "wss://explicit.example",
+		APIKey:    "explicit-key",
+		APISecret: "explicit-secret",
+		HTTPProxy: "https://explicit-proxy.example",
+	})
+
+	if server.Options.WSRL != "wss://explicit.example" {
+		t.Fatalf("WSRL = %q, want explicit value", server.Options.WSRL)
+	}
+	if server.Options.APIKey != "explicit-key" {
+		t.Fatalf("APIKey = %q, want explicit value", server.Options.APIKey)
+	}
+	if server.Options.APISecret != "explicit-secret" {
+		t.Fatalf("APISecret = %q, want explicit value", server.Options.APISecret)
+	}
+	if server.Options.AgentName != "explicit-agent" {
+		t.Fatalf("AgentName = %q, want explicit value", server.Options.AgentName)
+	}
+	if server.Options.HTTPProxy != "https://explicit-proxy.example" {
+		t.Fatalf("HTTPProxy = %q, want explicit value", server.Options.HTTPProxy)
+	}
+}
+
+func TestNewAgentServerPrefersWSURLAliasOverDeprecatedWSRL(t *testing.T) {
+	server := NewAgentServer(WorkerOptions{
+		WSURL: "wss://canonical.example",
+		WSRL:  "wss://legacy.example",
+	})
+
+	if server.Options.WSRL != "wss://canonical.example" {
+		t.Fatalf("WSRL = %q, want canonical WSURL value", server.Options.WSRL)
+	}
+	if server.Options.WSURL != "wss://canonical.example" {
+		t.Fatalf("WSURL = %q, want canonical WSURL value", server.Options.WSURL)
+	}
+}
+
+func TestWorkerTypeMapsToLiveKitJobType(t *testing.T) {
+	tests := []struct {
+		name       string
+		workerType WorkerType
+		want       livekit.JobType
+	}{
+		{
+			name:       "default",
+			workerType: "",
+			want:       livekit.JobType_JT_ROOM,
+		},
+		{
+			name:       "room",
+			workerType: WorkerTypeRoom,
+			want:       livekit.JobType_JT_ROOM,
+		},
+		{
+			name:       "publisher",
+			workerType: WorkerTypePublisher,
+			want:       livekit.JobType_JT_PUBLISHER,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := workerTypeToJobType(tt.workerType); got != tt.want {
+				t.Fatalf("workerTypeToJobType(%q) = %v, want %v", tt.workerType, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestRegisterWorkerRequestUsesConfiguredWorkerType(t *testing.T) {
+	server := NewAgentServer(WorkerOptions{
+		AgentName:  "publisher-agent",
+		WorkerType: WorkerTypePublisher,
+	})
+
+	req := server.registerWorkerRequest()
+	register := req.GetRegister()
+	if register == nil {
+		t.Fatal("register worker message is nil")
+	}
+	if register.Type != livekit.JobType_JT_PUBLISHER {
+		t.Fatalf("register.Type = %v, want %v", register.Type, livekit.JobType_JT_PUBLISHER)
+	}
+	if register.AgentName != "publisher-agent" {
+		t.Fatalf("register.AgentName = %q, want %q", register.AgentName, "publisher-agent")
+	}
+}
+
+func TestAgentIdentityForJobIDUsesFullJobID(t *testing.T) {
+	jobID := "job_123456789"
+	want := "agent-" + jobID
+
+	if got := agentIdentityForJobID(jobID); got != want {
+		t.Fatalf("agentIdentityForJobID(%q) = %q, want %q", jobID, got, want)
+	}
+}
+
+func TestAgentIdentityForJobIDHandlesShortJobID(t *testing.T) {
+	jobID := "abc"
+	want := "agent-abc"
+
+	if got := agentIdentityForJobID(jobID); got != want {
+		t.Fatalf("agentIdentityForJobID(%q) = %q, want %q", jobID, got, want)
+	}
+}
+
+func TestAvailabilityResponseAcceptsWithDefaultIdentity(t *testing.T) {
+	req := &livekit.AvailabilityRequest{
+		Job: &livekit.Job{Id: "job_abc123"},
+	}
+
+	resp := availabilityResponseForAccept(req, JobAcceptArguments{}, "")
+	availability := resp.GetAvailability()
+	if availability == nil {
+		t.Fatal("availability response is nil")
+	}
+	if !availability.Available {
+		t.Fatal("availability.Available = false, want true")
+	}
+	if availability.JobId != "job_abc123" {
+		t.Fatalf("availability.JobId = %q, want %q", availability.JobId, "job_abc123")
+	}
+	if availability.ParticipantIdentity != "agent-job_abc123" {
+		t.Fatalf("availability.ParticipantIdentity = %q, want default identity", availability.ParticipantIdentity)
+	}
+}
+
+func TestAvailabilityResponseAcceptUsesCustomArguments(t *testing.T) {
+	req := &livekit.AvailabilityRequest{
+		Job: &livekit.Job{Id: "job_custom"},
+	}
+
+	resp := availabilityResponseForAccept(req, JobAcceptArguments{
+		Name:     "Agent Name",
+		Identity: "custom-agent",
+		Metadata: "custom-metadata",
+		Attributes: map[string]string{
+			"tier": "gold",
+		},
+	}, "sales-agent")
+
+	availability := resp.GetAvailability()
+	if availability.ParticipantIdentity != "custom-agent" {
+		t.Fatalf("availability.ParticipantIdentity = %q, want custom identity", availability.ParticipantIdentity)
+	}
+	if availability.ParticipantName != "Agent Name" {
+		t.Fatalf("availability.ParticipantName = %q, want custom name", availability.ParticipantName)
+	}
+	if availability.ParticipantMetadata != "custom-metadata" {
+		t.Fatalf("availability.ParticipantMetadata = %q, want custom metadata", availability.ParticipantMetadata)
+	}
+	if availability.ParticipantAttributes["tier"] != "gold" {
+		t.Fatalf("availability.ParticipantAttributes[tier] = %q, want gold", availability.ParticipantAttributes["tier"])
+	}
+	if availability.ParticipantAttributes["lk.agent.name"] != "sales-agent" {
+		t.Fatalf("availability.ParticipantAttributes[lk.agent.name] = %q, want sales-agent", availability.ParticipantAttributes["lk.agent.name"])
+	}
+}
+
+func TestAvailabilityResponseRejectsJob(t *testing.T) {
+	req := &livekit.AvailabilityRequest{
+		Job: &livekit.Job{Id: "job_reject"},
+	}
+
+	resp := availabilityResponseForReject(req, JobRejectArguments{Terminate: true})
+	availability := resp.GetAvailability()
+	if availability == nil {
+		t.Fatal("availability response is nil")
+	}
+	if availability.Available {
+		t.Fatal("availability.Available = true, want false")
+	}
+	if availability.JobId != "job_reject" {
+		t.Fatalf("availability.JobId = %q, want %q", availability.JobId, "job_reject")
+	}
+	if !availability.Terminate {
+		t.Fatal("availability.Terminate = false, want true")
+	}
+}
+
+func TestAvailabilityResponseRejectCanAvoidTermination(t *testing.T) {
+	req := &livekit.AvailabilityRequest{
+		Job: &livekit.Job{Id: "job_requeue"},
+	}
+
+	resp := availabilityResponseForReject(req, JobRejectArguments{Terminate: false})
+	availability := resp.GetAvailability()
+	if availability.Terminate {
+		t.Fatal("availability.Terminate = true, want false")
+	}
+}
+
+func TestJobRequestRejectDefaultsToTerminate(t *testing.T) {
+	var got JobRejectArguments
+	req := &JobRequest{
+		rejectFnc: func(args JobRejectArguments) error {
+			got = args
+			return nil
+		},
+	}
+
+	if err := req.Reject(); err != nil {
+		t.Fatalf("Reject() error = %v", err)
+	}
+	if !got.Terminate {
+		t.Fatal("Reject() Terminate = false, want true")
+	}
+}
+
+func TestJobRequestAcceptDefaultsIdentityBeforeCallback(t *testing.T) {
+	var got JobAcceptArguments
+	req := &JobRequest{
+		Job: &livekit.Job{Id: "job_identity"},
+		acceptFnc: func(args JobAcceptArguments) error {
+			got = args
+			return nil
+		},
+	}
+
+	if err := req.Accept(JobAcceptArguments{}); err != nil {
+		t.Fatalf("Accept() error = %v", err)
+	}
+	if got.Identity != "agent-job_identity" {
+		t.Fatalf("Accept() Identity = %q, want default identity", got.Identity)
+	}
+}
+
+func TestValidateRunPreconditionsRequiresRTCSession(t *testing.T) {
+	server := NewAgentServer(WorkerOptions{
+		WSRL:      "wss://livekit.example",
+		APIKey:    "key",
+		APISecret: "secret",
+	})
+
+	err := server.validateRunPreconditions()
+	if err == nil {
+		t.Fatal("validateRunPreconditions() error = nil, want missing RTC session error")
+	}
+	if !strings.Contains(err.Error(), "No RTC session entrypoint") {
+		t.Fatalf("validateRunPreconditions() error = %q, want RTC session message", err.Error())
+	}
+}
+
+func TestValidateRunPreconditionsRequiresCredentialsAfterRTCSession(t *testing.T) {
+	server := NewAgentServer(WorkerOptions{})
+	server.RTCSession(func(ctx *JobContext) error { return nil }, nil, nil)
+
+	err := server.validateRunPreconditions()
+	if err == nil {
+		t.Fatal("validateRunPreconditions() error = nil, want missing credentials error")
+	}
+	if !strings.Contains(err.Error(), "missing LiveKit credentials") {
+		t.Fatalf("validateRunPreconditions() error = %q, want credentials message", err.Error())
+	}
+}
+
+func TestRTCSessionRejectsSecondRegistration(t *testing.T) {
+	server := NewAgentServer(WorkerOptions{})
+
+	if err := server.RTCSession(func(ctx *JobContext) error { return nil }, nil, nil); err != nil {
+		t.Fatalf("first RTCSession() error = %v", err)
+	}
+
+	err := server.RTCSession(func(ctx *JobContext) error { return nil }, nil, nil)
+	if err == nil {
+		t.Fatal("second RTCSession() error = nil, want duplicate registration error")
+	}
+	if !strings.Contains(err.Error(), "only supports registering one rtc_session") {
+		t.Fatalf("second RTCSession() error = %q, want duplicate registration message", err.Error())
+	}
+}
+
+func TestNewJobContextDefaultsParticipantIdentity(t *testing.T) {
+	job := &livekit.Job{Id: "job_default"}
+	ctx := NewJobContext(job, "wss://livekit.example", "key", "secret")
+
+	if got := ctx.ParticipantIdentity(); got != "agent-job_default" {
+		t.Fatalf("ParticipantIdentity() = %q, want default job identity", got)
+	}
+}
+
+func TestLocalJobContextUsesProvidedParticipantIdentity(t *testing.T) {
+	ctx := newLocalJobContext("room-a", "agent-custom", WorkerOptions{})
+
+	if got := ctx.ParticipantIdentity(); got != "agent-custom" {
+		t.Fatalf("ParticipantIdentity() = %q, want provided local identity", got)
+	}
+	if ctx.Job.Room.Name != "room-a" {
+		t.Fatalf("Job.Room.Name = %q, want room-a", ctx.Job.Room.Name)
+	}
+}

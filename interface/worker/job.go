@@ -16,31 +16,43 @@ type JobAcceptArguments struct {
 	Attributes map[string]string
 }
 
+type JobRejectArguments struct {
+	Terminate bool
+}
+
 type JobRequest struct {
 	Job *livekit.Job
 
 	acceptFnc func(JobAcceptArguments) error
-	rejectFnc func() error
+	rejectFnc func(JobRejectArguments) error
 }
 
 func (r *JobRequest) Accept(args JobAcceptArguments) error {
+	if args.Identity == "" && r.Job != nil {
+		args.Identity = agentIdentityForJobID(r.Job.Id)
+	}
 	if r.acceptFnc != nil {
 		return r.acceptFnc(args)
 	}
 	return nil
 }
 
-func (r *JobRequest) Reject() error {
+func (r *JobRequest) Reject(args ...JobRejectArguments) error {
+	rejectArgs := JobRejectArguments{Terminate: true}
+	if len(args) > 0 {
+		rejectArgs = args[0]
+	}
 	if r.rejectFnc != nil {
-		return r.rejectFnc()
+		return r.rejectFnc(rejectArgs)
 	}
 	return nil
 }
 
 type JobContext struct {
-	Job    *livekit.Job
-	Room   *lksdk.Room
-	Report *agent.SessionReport
+	Job             *livekit.Job
+	Room            *lksdk.Room
+	Report          *agent.SessionReport
+	AcceptArguments JobAcceptArguments
 
 	apiKey    string
 	apiSecret string
@@ -57,12 +69,19 @@ func NewJobContext(job *livekit.Job, url string, apiKey string, apiSecret string
 	}
 }
 
+func (c *JobContext) ParticipantIdentity() string {
+	if c.AcceptArguments.Identity != "" {
+		return c.AcceptArguments.Identity
+	}
+	return agentIdentityForJobID(c.Job.Id)
+}
+
 func (c *JobContext) Connect(ctx context.Context, cb *lksdk.RoomCallback) error {
 	room, err := lksdk.ConnectToRoom(c.url, lksdk.ConnectInfo{
 		APIKey:              c.apiKey,
 		APISecret:           c.apiSecret,
 		RoomName:            c.Job.Room.Name,
-		ParticipantIdentity: "agent-" + c.Job.Id[:8],
+		ParticipantIdentity: c.ParticipantIdentity(),
 	}, cb)
 	if err != nil {
 		return err
