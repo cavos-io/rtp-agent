@@ -63,6 +63,9 @@ func NewAgentServer(opts WorkerOptions) *AgentServer {
 }
 
 func resolveWorkerOptions(opts WorkerOptions) WorkerOptions {
+	if opts.WorkerType == "" {
+		opts.WorkerType = WorkerTypeRoom
+	}
 	if opts.WSURL == "" {
 		opts.WSURL = opts.WSRL
 	}
@@ -88,6 +91,31 @@ func resolveWorkerOptions(opts WorkerOptions) WorkerOptions {
 	}
 
 	return opts
+}
+
+func workerTypeToJobType(workerType WorkerType) livekit.JobType {
+	switch workerType {
+	case WorkerTypePublisher:
+		return livekit.JobType_JT_PUBLISHER
+	default:
+		return livekit.JobType_JT_ROOM
+	}
+}
+
+func agentIdentityForJobID(jobID string) string {
+	return "agent-" + jobID
+}
+
+func (s *AgentServer) registerWorkerRequest() *livekit.WorkerMessage {
+	return &livekit.WorkerMessage{
+		Message: &livekit.WorkerMessage_Register{
+			Register: &livekit.RegisterWorkerRequest{
+				Type:      workerTypeToJobType(s.Options.WorkerType),
+				AgentName: s.Options.AgentName,
+				Version:   "1.0.0",
+			},
+		},
+	}
 }
 
 func (s *AgentServer) RTCSession(
@@ -166,16 +194,7 @@ func (s *AgentServer) Run(ctx context.Context) error {
 	logger.Logger.Infow("Connected to LiveKit Server", "url", s.Options.WSRL)
 
 	// Send Register request
-	req := &livekit.WorkerMessage{
-		Message: &livekit.WorkerMessage_Register{
-			Register: &livekit.RegisterWorkerRequest{
-				Type:      livekit.JobType_JT_ROOM, // Hardcoded for room type for now
-				AgentName: s.Options.AgentName,
-				Version:   "1.0.0",
-			},
-		},
-	}
-
+	req := s.registerWorkerRequest()
 	b, err := proto.Marshal(req)
 	if err != nil {
 		return err
@@ -235,7 +254,7 @@ func (s *AgentServer) handleAvailability(ctx context.Context, req *livekit.Avail
 			Availability: &livekit.AvailabilityResponse{
 				JobId:               req.Job.Id,
 				Available:           true,
-				ParticipantIdentity: "agent-" + req.Job.Id[:8],
+				ParticipantIdentity: agentIdentityForJobID(req.Job.Id),
 				ParticipantName:     s.Options.AgentName,
 			},
 		},

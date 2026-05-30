@@ -1,6 +1,10 @@
 package worker
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/livekit/protocol/livekit"
+)
 
 func TestNewAgentServerLoadsLiveKitOptionsFromEnvironment(t *testing.T) {
 	t.Setenv("LIVEKIT_URL", "wss://livekit.example")
@@ -72,5 +76,74 @@ func TestNewAgentServerPrefersWSURLAliasOverDeprecatedWSRL(t *testing.T) {
 	}
 	if server.Options.WSURL != "wss://canonical.example" {
 		t.Fatalf("WSURL = %q, want canonical WSURL value", server.Options.WSURL)
+	}
+}
+
+func TestWorkerTypeMapsToLiveKitJobType(t *testing.T) {
+	tests := []struct {
+		name       string
+		workerType WorkerType
+		want       livekit.JobType
+	}{
+		{
+			name:       "default",
+			workerType: "",
+			want:       livekit.JobType_JT_ROOM,
+		},
+		{
+			name:       "room",
+			workerType: WorkerTypeRoom,
+			want:       livekit.JobType_JT_ROOM,
+		},
+		{
+			name:       "publisher",
+			workerType: WorkerTypePublisher,
+			want:       livekit.JobType_JT_PUBLISHER,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := workerTypeToJobType(tt.workerType); got != tt.want {
+				t.Fatalf("workerTypeToJobType(%q) = %v, want %v", tt.workerType, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestRegisterWorkerRequestUsesConfiguredWorkerType(t *testing.T) {
+	server := NewAgentServer(WorkerOptions{
+		AgentName:  "publisher-agent",
+		WorkerType: WorkerTypePublisher,
+	})
+
+	req := server.registerWorkerRequest()
+	register := req.GetRegister()
+	if register == nil {
+		t.Fatal("register worker message is nil")
+	}
+	if register.Type != livekit.JobType_JT_PUBLISHER {
+		t.Fatalf("register.Type = %v, want %v", register.Type, livekit.JobType_JT_PUBLISHER)
+	}
+	if register.AgentName != "publisher-agent" {
+		t.Fatalf("register.AgentName = %q, want %q", register.AgentName, "publisher-agent")
+	}
+}
+
+func TestAgentIdentityForJobIDUsesFullJobID(t *testing.T) {
+	jobID := "job_123456789"
+	want := "agent-" + jobID
+
+	if got := agentIdentityForJobID(jobID); got != want {
+		t.Fatalf("agentIdentityForJobID(%q) = %q, want %q", jobID, got, want)
+	}
+}
+
+func TestAgentIdentityForJobIDHandlesShortJobID(t *testing.T) {
+	jobID := "abc"
+	want := "agent-abc"
+
+	if got := agentIdentityForJobID(jobID); got != want {
+		t.Fatalf("agentIdentityForJobID(%q) = %q, want %q", jobID, got, want)
 	}
 }
