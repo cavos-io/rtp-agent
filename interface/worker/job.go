@@ -55,6 +55,7 @@ type JobContext struct {
 	Room              *lksdk.Room
 	Report            *agent.SessionReport
 	AcceptArguments   JobAcceptArguments
+	WorkerID          string
 	shutdownCallbacks []func(string)
 	shutdownOnce      sync.Once
 

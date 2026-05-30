@@ -460,6 +460,36 @@ func TestAssignmentUsesAssignmentURLWhenProvided(t *testing.T) {
 	}
 }
 
+func TestAssignmentRecordsRegisteredWorkerID(t *testing.T) {
+	server := NewAgentServer(WorkerOptions{})
+	startedCh := make(chan *JobContext, 1)
+	server.workerMessageSink = func(msg *livekit.WorkerMessage) error {
+		return nil
+	}
+	server.entrypointFnc = func(ctx *JobContext) error {
+		startedCh <- ctx
+		return nil
+	}
+
+	server.handleMessage(context.Background(), &livekit.ServerMessage{
+		Message: &livekit.ServerMessage_Register{
+			Register: &livekit.RegisterWorkerResponse{WorkerId: "worker-a"},
+		},
+	})
+
+	job := &livekit.Job{Id: "job_worker_id", Room: &livekit.Room{Name: "room-a"}}
+	server.handleAssignment(context.Background(), &livekit.JobAssignment{Job: job})
+
+	select {
+	case jobCtx := <-startedCh:
+		if jobCtx.WorkerID != "worker-a" {
+			t.Fatalf("jobCtx.WorkerID = %q, want worker-a", jobCtx.WorkerID)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("assignment entrypoint did not run")
+	}
+}
+
 func TestAssignmentSendsRunningJobStatus(t *testing.T) {
 	server := NewAgentServer(WorkerOptions{})
 	sentCh := make(chan *livekit.WorkerMessage, 1)

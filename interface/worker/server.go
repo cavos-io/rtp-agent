@@ -69,6 +69,7 @@ type AgentServer struct {
 	mu                sync.Mutex
 	conn              *websocket.Conn
 	workerMessageSink func(*livekit.WorkerMessage) error
+	workerID          string
 
 	consoleSession any // Store local session for CLI console
 }
@@ -412,6 +413,9 @@ func (s *AgentServer) handleMessage(ctx context.Context, msg *livekit.ServerMess
 	switch m := msg.Message.(type) {
 	case *livekit.ServerMessage_Register:
 		logger.Logger.Infow("Worker Registered", "workerId", m.Register.WorkerId, "serverInfo", m.Register.ServerInfo)
+		s.mu.Lock()
+		s.workerID = m.Register.WorkerId
+		s.mu.Unlock()
 		s.reportActiveJobs()
 	case *livekit.ServerMessage_Availability:
 		s.handleAvailability(ctx, m.Availability)
@@ -537,6 +541,7 @@ func (s *AgentServer) handleAssignment(ctx context.Context, req *livekit.JobAssi
 	jobCtx.token = req.GetToken()
 
 	s.mu.Lock()
+	jobCtx.WorkerID = s.workerID
 	if args, ok := s.pendingAccepts[req.Job.Id]; ok {
 		jobCtx.AcceptArguments = args
 		delete(s.pendingAccepts, req.Job.Id)
