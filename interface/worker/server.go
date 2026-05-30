@@ -208,6 +208,9 @@ func (s *AgentServer) registerWorkerRequest() *livekit.WorkerMessage {
 
 func (s *AgentServer) workerStatusMessage(status livekit.WorkerStatus) *livekit.WorkerMessage {
 	jobCount := uint32(s.activeJobCount())
+	if status == livekit.WorkerStatus_WS_AVAILABLE && !s.availableForJob() {
+		status = livekit.WorkerStatus_WS_FULL
+	}
 	return &livekit.WorkerMessage{
 		Message: &livekit.WorkerMessage_UpdateWorker{
 			UpdateWorker: &livekit.UpdateWorkerStatus{
