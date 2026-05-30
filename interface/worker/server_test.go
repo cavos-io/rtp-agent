@@ -3,10 +3,13 @@ package worker
 import (
 	"context"
 	"errors"
+	"net/http"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/gorilla/websocket"
 	"github.com/livekit/protocol/livekit"
 )
 
@@ -83,6 +86,64 @@ func TestNewAgentServerPrefersWSURLAliasOverDeprecatedWSRL(t *testing.T) {
 	}
 }
 
+func TestNewAgentServerUsesReferenceWorkerDefaults(t *testing.T) {
+	server := NewAgentServer(WorkerOptions{})
+
+	if server.Options.MaxRetry != 16 {
+		t.Fatalf("MaxRetry = %d, want reference default 16", server.Options.MaxRetry)
+	}
+	if server.Options.JobMemoryWarnMB != 500 {
+		t.Fatalf("JobMemoryWarnMB = %v, want reference default 500", server.Options.JobMemoryWarnMB)
+	}
+	if server.Options.DrainTimeoutSeconds != 1800 {
+		t.Fatalf("DrainTimeoutSeconds = %d, want reference default 1800", server.Options.DrainTimeoutSeconds)
+	}
+	if server.Options.LoadThreshold != 0.7 {
+		t.Fatalf("LoadThreshold = %v, want reference production default 0.7", server.Options.LoadThreshold)
+	}
+	wantIdle := runtime.NumCPU()
+	if wantIdle > 4 {
+		wantIdle = 4
+	}
+	if server.Options.NumIdleProcesses != wantIdle {
+		t.Fatalf("NumIdleProcesses = %d, want reference production default %d", server.Options.NumIdleProcesses, wantIdle)
+	}
+}
+
+func TestNewAgentServerLoadsWorkerTokenFromEnvironment(t *testing.T) {
+	t.Setenv("LIVEKIT_WORKER_TOKEN", "env-worker-token")
+
+	server := NewAgentServer(WorkerOptions{})
+
+	if server.Options.WorkerToken != "env-worker-token" {
+		t.Fatalf("WorkerToken = %q, want env LIVEKIT_WORKER_TOKEN", server.Options.WorkerToken)
+	}
+}
+
+func TestAgentWebSocketURLPreservesBasePath(t *testing.T) {
+	got, err := agentWebSocketURL("https://livekit.example/project-a", "")
+	if err != nil {
+		t.Fatalf("agentWebSocketURL() error = %v", err)
+	}
+
+	want := "wss://livekit.example/project-a/agent"
+	if got != want {
+		t.Fatalf("agentWebSocketURL() = %q, want %q", got, want)
+	}
+}
+
+func TestAgentWebSocketURLAddsWorkerToken(t *testing.T) {
+	got, err := agentWebSocketURL("wss://livekit.example/project-a/", "cloud token")
+	if err != nil {
+		t.Fatalf("agentWebSocketURL() error = %v", err)
+	}
+
+	want := "wss://livekit.example/project-a/agent?worker_token=cloud+token"
+	if got != want {
+		t.Fatalf("agentWebSocketURL() = %q, want %q", got, want)
+	}
+}
+
 func TestWorkerTypeMapsToLiveKitJobType(t *testing.T) {
 	tests := []struct {
 		name       string
@@ -119,6 +180,7 @@ func TestRegisterWorkerRequestUsesConfiguredWorkerType(t *testing.T) {
 	server := NewAgentServer(WorkerOptions{
 		AgentName:  "publisher-agent",
 		WorkerType: WorkerTypePublisher,
+		Version:    "2.3.4",
 	})
 
 	req := server.registerWorkerRequest()
@@ -131,6 +193,9 @@ func TestRegisterWorkerRequestUsesConfiguredWorkerType(t *testing.T) {
 	}
 	if register.AgentName != "publisher-agent" {
 		t.Fatalf("register.AgentName = %q, want %q", register.AgentName, "publisher-agent")
+	}
+	if register.Version != "2.3.4" {
+		t.Fatalf("register.Version = %q, want configured version", register.Version)
 	}
 }
 
@@ -163,6 +228,61 @@ func TestRegisterWorkerRequestIncludesDefaultPermissions(t *testing.T) {
 	}
 	if !permissions.Agent {
 		t.Fatal("permissions.Agent = false, want true")
+	}
+}
+
+func TestWorkerStatusMessageIncludesCurrentLoad(t *testing.T) {
+	server := NewAgentServer(WorkerOptions{
+		LoadFunc: func(*AgentServer) float64 {
+			return 0.42
+		},
+	})
+
+	msg := server.workerStatusMessage(livekit.WorkerStatus_WS_AVAILABLE)
+	update := msg.GetUpdateWorker()
+	if update == nil {
+		t.Fatal("update worker message is nil")
+	}
+	if update.Load != 0.42 {
+		t.Fatalf("UpdateWorker.Load = %v, want 0.42", update.Load)
+	}
+}
+
+func TestWorkerStatusMessageMarksOverloadedWorkerFull(t *testing.T) {
+	server := NewAgentServer(WorkerOptions{
+		LoadThreshold: 0.5,
+		LoadFunc: func(*AgentServer) float64 {
+			return 0.8
+		},
+	})
+
+	msg := server.workerStatusMessage(livekit.WorkerStatus_WS_AVAILABLE)
+	update := msg.GetUpdateWorker()
+	if update == nil {
+		t.Fatal("update worker message is nil")
+	}
+	if update.GetStatus() != livekit.WorkerStatus_WS_FULL {
+		t.Fatalf("UpdateWorker.Status = %v, want WS_FULL", update.GetStatus())
+	}
+}
+
+func TestDrainingWorkerStatusMessageReportsFullWithoutLoad(t *testing.T) {
+	server := NewAgentServer(WorkerOptions{
+		LoadFunc: func(*AgentServer) float64 {
+			return 0.9
+		},
+	})
+
+	msg := server.drainingWorkerStatusMessage()
+	update := msg.GetUpdateWorker()
+	if update == nil {
+		t.Fatal("update worker message is nil")
+	}
+	if update.GetStatus() != livekit.WorkerStatus_WS_FULL {
+		t.Fatalf("UpdateWorker.Status = %v, want WS_FULL", update.GetStatus())
+	}
+	if update.Load != 0 {
+		t.Fatalf("UpdateWorker.Load = %v, want 0 while draining", update.Load)
 	}
 }
 
@@ -330,6 +450,167 @@ func TestHandleAvailabilityRejectsWhenRequestCallbackDoesNotAnswer(t *testing.T)
 	}
 }
 
+func TestHandleAvailabilityRejectsWhenLoadExceedsThreshold(t *testing.T) {
+	server := NewAgentServer(WorkerOptions{
+		LoadThreshold: 0.5,
+		LoadFunc: func(*AgentServer) float64 {
+			return 0.8
+		},
+	})
+	sentCh := make(chan *livekit.WorkerMessage, 1)
+	requestCalled := false
+	server.workerMessageSink = func(msg *livekit.WorkerMessage) error {
+		sentCh <- msg
+		return nil
+	}
+	server.requestFnc = func(req *JobRequest) error {
+		requestCalled = true
+		return nil
+	}
+
+	server.handleAvailability(context.Background(), &livekit.AvailabilityRequest{
+		Job: &livekit.Job{Id: "job_full_load"},
+	})
+
+	msg := receiveWorkerMessage(t, sentCh)
+	availability := msg.GetAvailability()
+	if availability == nil {
+		t.Fatal("availability response is nil")
+	}
+	if availability.Available {
+		t.Fatal("availability.Available = true, want false")
+	}
+	if availability.JobId != "job_full_load" {
+		t.Fatalf("availability.JobId = %q, want job_full_load", availability.JobId)
+	}
+	if availability.Terminate {
+		t.Fatal("availability.Terminate = true, want false")
+	}
+	if requestCalled {
+		t.Fatal("request callback was called while worker was over load threshold")
+	}
+}
+
+func TestHandleAvailabilityCountsPendingAcceptsAsReservedLoad(t *testing.T) {
+	server := NewAgentServer(WorkerOptions{
+		LoadThreshold:    0.5,
+		NumIdleProcesses: 1,
+		LoadFunc: func(*AgentServer) float64 {
+			return 0
+		},
+	})
+	sentCh := make(chan *livekit.WorkerMessage, 2)
+	server.workerMessageSink = func(msg *livekit.WorkerMessage) error {
+		sentCh <- msg
+		return nil
+	}
+
+	server.handleAvailability(context.Background(), &livekit.AvailabilityRequest{
+		Job: &livekit.Job{Id: "job_reserved_one"},
+	})
+	first := receiveWorkerMessage(t, sentCh).GetAvailability()
+	if first == nil || !first.Available {
+		t.Fatal("first availability response was not accepted")
+	}
+
+	server.handleAvailability(context.Background(), &livekit.AvailabilityRequest{
+		Job: &livekit.Job{Id: "job_reserved_two"},
+	})
+	second := receiveWorkerMessage(t, sentCh).GetAvailability()
+	if second == nil {
+		t.Fatal("second availability response is nil")
+	}
+	if second.Available {
+		t.Fatal("second availability response was accepted despite reserved load")
+	}
+	if second.JobId != "job_reserved_two" {
+		t.Fatalf("second availability JobId = %q, want job_reserved_two", second.JobId)
+	}
+}
+
+func TestHandleRegisterReportsActiveJobs(t *testing.T) {
+	server := NewAgentServer(WorkerOptions{})
+	sentCh := make(chan *livekit.WorkerMessage, 1)
+	server.workerMessageSink = func(msg *livekit.WorkerMessage) error {
+		sentCh <- msg
+		return nil
+	}
+	jobCtx := NewJobContext(&livekit.Job{Id: "job_active"}, "", "", "")
+	server.mu.Lock()
+	server.activeJobs[jobCtx.Job.Id] = jobCtx
+	server.mu.Unlock()
+
+	server.handleMessage(context.Background(), &livekit.ServerMessage{
+		Message: &livekit.ServerMessage_Register{
+			Register: &livekit.RegisterWorkerResponse{WorkerId: "worker-a"},
+		},
+	})
+
+	msg := receiveWorkerMessage(t, sentCh)
+	migrate := msg.GetMigrateJob()
+	if migrate == nil {
+		t.Fatal("migrate job message is nil")
+	}
+	if len(migrate.JobIds) != 1 || migrate.JobIds[0] != "job_active" {
+		t.Fatalf("MigrateJob.JobIds = %v, want [job_active]", migrate.JobIds)
+	}
+}
+
+func TestInitialRegisterMessageRejectsNonRegisterMessage(t *testing.T) {
+	server := NewAgentServer(WorkerOptions{})
+
+	err := server.handleInitialRegisterMessage(context.Background(), &livekit.ServerMessage{
+		Message: &livekit.ServerMessage_Availability{
+			Availability: &livekit.AvailabilityRequest{Job: &livekit.Job{Id: "job_early"}},
+		},
+	})
+	if err == nil {
+		t.Fatal("handleInitialRegisterMessage() error = nil, want expected register response error")
+	}
+	if !strings.Contains(err.Error(), "expected register response as first message") {
+		t.Fatalf("handleInitialRegisterMessage() error = %q, want expected register response message", err.Error())
+	}
+}
+
+func TestAcceptedAvailabilityExpiresWithoutAssignment(t *testing.T) {
+	oldTimeout := assignmentTimeout
+	assignmentTimeout = 10 * time.Millisecond
+	t.Cleanup(func() {
+		assignmentTimeout = oldTimeout
+	})
+
+	server := NewAgentServer(WorkerOptions{})
+	sentCh := make(chan *livekit.WorkerMessage, 1)
+	server.workerMessageSink = func(msg *livekit.WorkerMessage) error {
+		sentCh <- msg
+		return nil
+	}
+
+	job := &livekit.Job{Id: "job_assignment_timeout", Room: &livekit.Room{Name: "room-a"}}
+	server.handleAvailability(context.Background(), &livekit.AvailabilityRequest{Job: job})
+	availability := receiveWorkerMessage(t, sentCh).GetAvailability()
+	if availability == nil || !availability.Available {
+		t.Fatal("availability response was not accepted")
+	}
+
+	deadline := time.After(time.Second)
+	for {
+		server.mu.Lock()
+		_, pending := server.pendingAccepts[job.Id]
+		server.mu.Unlock()
+		if !pending {
+			return
+		}
+
+		select {
+		case <-deadline:
+			t.Fatal("accepted arguments remained pending after assignment timeout")
+		default:
+			time.Sleep(time.Millisecond)
+		}
+	}
+}
+
 func TestAssignmentPreservesAcceptedParticipantIdentity(t *testing.T) {
 	server := NewAgentServer(WorkerOptions{})
 	server.workerMessageSink = func(msg *livekit.WorkerMessage) error {
@@ -368,6 +649,31 @@ func TestAssignmentPreservesAcceptedParticipantIdentity(t *testing.T) {
 	}
 }
 
+func TestAssignmentIgnoresUnknownJob(t *testing.T) {
+	server := NewAgentServer(WorkerOptions{})
+	sentCh := make(chan *livekit.WorkerMessage, 1)
+	startedCh := make(chan *JobContext, 1)
+	server.workerMessageSink = func(msg *livekit.WorkerMessage) error {
+		sentCh <- msg
+		return nil
+	}
+	server.entrypointFnc = func(ctx *JobContext) error {
+		startedCh <- ctx
+		return nil
+	}
+
+	job := &livekit.Job{Id: "job_unknown_assignment", Room: &livekit.Room{Name: "room-a"}}
+	server.handleAssignment(context.Background(), &livekit.JobAssignment{Job: job})
+
+	select {
+	case <-startedCh:
+		t.Fatal("unknown assignment started entrypoint")
+	case <-sentCh:
+		t.Fatal("unknown assignment sent worker message")
+	case <-time.After(20 * time.Millisecond):
+	}
+}
+
 func TestAssignmentUsesAssignmentURLWhenProvided(t *testing.T) {
 	server := NewAgentServer(WorkerOptions{WSRL: "wss://worker.example"})
 	startedCh := make(chan *JobContext, 1)
@@ -378,6 +684,7 @@ func TestAssignmentUsesAssignmentURLWhenProvided(t *testing.T) {
 
 	assignmentURL := "wss://assignment.example"
 	job := &livekit.Job{Id: "job_assignment_url", Room: &livekit.Room{Name: "room-a"}}
+	markJobAccepted(t, server, job)
 	server.handleAssignment(context.Background(), &livekit.JobAssignment{
 		Job: job,
 		Url: &assignmentURL,
@@ -393,6 +700,37 @@ func TestAssignmentUsesAssignmentURLWhenProvided(t *testing.T) {
 	}
 }
 
+func TestAssignmentRecordsRegisteredWorkerID(t *testing.T) {
+	server := NewAgentServer(WorkerOptions{})
+	startedCh := make(chan *JobContext, 1)
+	server.workerMessageSink = func(msg *livekit.WorkerMessage) error {
+		return nil
+	}
+	server.entrypointFnc = func(ctx *JobContext) error {
+		startedCh <- ctx
+		return nil
+	}
+
+	server.handleMessage(context.Background(), &livekit.ServerMessage{
+		Message: &livekit.ServerMessage_Register{
+			Register: &livekit.RegisterWorkerResponse{WorkerId: "worker-a"},
+		},
+	})
+
+	job := &livekit.Job{Id: "job_worker_id", Room: &livekit.Room{Name: "room-a"}}
+	markJobAccepted(t, server, job)
+	server.handleAssignment(context.Background(), &livekit.JobAssignment{Job: job})
+
+	select {
+	case jobCtx := <-startedCh:
+		if jobCtx.WorkerID != "worker-a" {
+			t.Fatalf("jobCtx.WorkerID = %q, want worker-a", jobCtx.WorkerID)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("assignment entrypoint did not run")
+	}
+}
+
 func TestAssignmentSendsRunningJobStatus(t *testing.T) {
 	server := NewAgentServer(WorkerOptions{})
 	sentCh := make(chan *livekit.WorkerMessage, 1)
@@ -402,6 +740,7 @@ func TestAssignmentSendsRunningJobStatus(t *testing.T) {
 	}
 
 	job := &livekit.Job{Id: "job_running_status", Room: &livekit.Room{Name: "room-a"}}
+	markJobAccepted(t, server, job)
 	server.handleAssignment(context.Background(), &livekit.JobAssignment{Job: job})
 
 	msg := receiveWorkerMessage(t, sentCh)
@@ -429,6 +768,7 @@ func TestAssignmentReportsSuccessWhenEntrypointCompletes(t *testing.T) {
 	}
 
 	job := &livekit.Job{Id: "job_success_status", Room: &livekit.Room{Name: "room-a"}}
+	markJobAccepted(t, server, job)
 	server.handleAssignment(context.Background(), &livekit.JobAssignment{Job: job})
 
 	assertJobStatusMessage(t, receiveWorkerMessage(t, sentCh), "job_success_status", livekit.JobStatus_JS_RUNNING)
@@ -454,6 +794,7 @@ func TestAssignmentReportsFailureWhenEntrypointFails(t *testing.T) {
 	}
 
 	job := &livekit.Job{Id: "job_failed_status", Room: &livekit.Room{Name: "room-a"}}
+	markJobAccepted(t, server, job)
 	server.handleAssignment(context.Background(), &livekit.JobAssignment{Job: job})
 
 	assertJobStatusMessage(t, receiveWorkerMessage(t, sentCh), "job_failed_status", livekit.JobStatus_JS_RUNNING)
@@ -476,6 +817,7 @@ func TestAssignmentPreservesAssignmentToken(t *testing.T) {
 	}
 
 	job := &livekit.Job{Id: "job_assignment_token", Room: &livekit.Room{Name: "room-a"}}
+	markJobAccepted(t, server, job)
 	server.handleAssignment(context.Background(), &livekit.JobAssignment{
 		Job:   job,
 		Token: "assignment-token",
@@ -552,6 +894,48 @@ func TestValidateRunPreconditionsRequiresCredentialsAfterRTCSession(t *testing.T
 	}
 	if !strings.Contains(err.Error(), "missing LiveKit credentials") {
 		t.Fatalf("validateRunPreconditions() error = %q, want credentials message", err.Error())
+	}
+}
+
+func TestConnectWorkerWebSocketRetriesDialFailures(t *testing.T) {
+	oldDial := workerDialContext
+	oldSleep := workerRetrySleep
+	t.Cleanup(func() {
+		workerDialContext = oldDial
+		workerRetrySleep = oldSleep
+	})
+
+	attempts := 0
+	workerDialContext = func(context.Context, *websocket.Dialer, string, http.Header) (*websocket.Conn, *http.Response, error) {
+		attempts++
+		if attempts < 3 {
+			return nil, nil, errors.New("dial failed")
+		}
+		return &websocket.Conn{}, nil, nil
+	}
+
+	var sleeps []time.Duration
+	workerRetrySleep = func(_ context.Context, delay time.Duration) error {
+		sleeps = append(sleeps, delay)
+		return nil
+	}
+
+	server := NewAgentServer(WorkerOptions{MaxRetry: 3})
+	_, _, err := server.connectWorkerWebSocket(context.Background(), &websocket.Dialer{}, "wss://livekit.example/agent", nil)
+	if err != nil {
+		t.Fatalf("connectWorkerWebSocket() error = %v", err)
+	}
+	if attempts != 3 {
+		t.Fatalf("dial attempts = %d, want 3", attempts)
+	}
+	wantSleeps := []time.Duration{0, 2 * time.Second}
+	if len(sleeps) != len(wantSleeps) {
+		t.Fatalf("retry sleeps = %v, want %v", sleeps, wantSleeps)
+	}
+	for i := range wantSleeps {
+		if sleeps[i] != wantSleeps[i] {
+			t.Fatalf("retry sleeps = %v, want %v", sleeps, wantSleeps)
+		}
 	}
 }
 
@@ -692,6 +1076,56 @@ func TestDrainWaitsForActiveJobs(t *testing.T) {
 	}
 }
 
+func TestDrainWaitsForPendingAcceptedJobs(t *testing.T) {
+	oldTimeout := assignmentTimeout
+	assignmentTimeout = time.Second
+	t.Cleanup(func() {
+		assignmentTimeout = oldTimeout
+	})
+
+	server := NewAgentServer(WorkerOptions{})
+	jobID := "job_drain_pending"
+	server.storePendingAccept(jobID, JobAcceptArguments{})
+
+	doneCh := make(chan error, 1)
+	go func() {
+		doneCh <- server.Drain(context.Background())
+	}()
+
+	drainingDeadline := time.After(time.Second)
+	for !server.Draining() {
+		select {
+		case <-drainingDeadline:
+			t.Fatal("server.Draining() = false, want true")
+		default:
+			time.Sleep(time.Millisecond)
+		}
+	}
+
+	select {
+	case err := <-doneCh:
+		t.Fatalf("Drain() returned before pending accepted job settled: %v", err)
+	default:
+	}
+
+	server.mu.Lock()
+	if timer, ok := server.pendingTimers[jobID]; ok {
+		timer.Stop()
+		delete(server.pendingTimers, jobID)
+	}
+	delete(server.pendingAccepts, jobID)
+	server.mu.Unlock()
+
+	select {
+	case err := <-doneCh:
+		if err != nil {
+			t.Fatalf("Drain() error = %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Drain() did not return after pending accepted job settled")
+	}
+}
+
 func TestHandleTerminationRunsJobShutdownCallbacks(t *testing.T) {
 	server := NewAgentServer(WorkerOptions{})
 	jobCtx := NewJobContext(&livekit.Job{Id: "job_shutdown"}, "", "", "")
@@ -743,4 +1177,10 @@ func assertJobStatusMessage(t *testing.T, msg *livekit.WorkerMessage, jobID stri
 	if update.Status != status {
 		t.Fatalf("UpdateJob.Status = %v, want %v", update.Status, status)
 	}
+}
+
+func markJobAccepted(t *testing.T, server *AgentServer, job *livekit.Job) {
+	t.Helper()
+
+	server.storePendingAccept(job.Id, JobAcceptArguments{})
 }

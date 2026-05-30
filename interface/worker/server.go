@@ -6,6 +6,9 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"runtime"
+	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -23,8 +26,32 @@ const (
 	WorkerTypeRoom      WorkerType = "room"
 	WorkerTypePublisher WorkerType = "publisher"
 
+	defaultWorkerVersion = "1.0.0"
+	defaultMaxRetry      = 16
+	defaultJobMemoryWarn = 500
+	defaultDrainTimeout  = 1800
+	defaultLoadThreshold = 0.7
+
 	participantAttributeAgentName = "lk.agent.name"
 )
+
+var assignmentTimeout = 7500 * time.Millisecond
+
+var workerDialContext = func(ctx context.Context, dialer *websocket.Dialer, url string, headers http.Header) (*websocket.Conn, *http.Response, error) {
+	return dialer.DialContext(ctx, url, headers)
+}
+
+var workerRetrySleep = func(ctx context.Context, delay time.Duration) error {
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
+}
 
 type WorkerPermissions struct {
 	CanPublish        bool
@@ -39,12 +66,16 @@ type WorkerOptions struct {
 	AgentName  string
 	WorkerType WorkerType
 	MaxRetry   int
+	Version    string
 	WSURL      string
+	LoadFunc   func(*AgentServer) float64
 	// WSRL is kept for backward compatibility. Prefer WSURL for new code.
 	WSRL                string
 	APIKey              string
 	APISecret           string
+	WorkerToken         string
 	HTTPProxy           string
+	LoadThreshold       float64
 	JobMemoryWarnMB     float64
 	JobMemoryLimitMB    float64
 	NumIdleProcesses    int
@@ -61,10 +92,12 @@ type AgentServer struct {
 
 	activeJobs        map[string]*JobContext
 	pendingAccepts    map[string]JobAcceptArguments
+	pendingTimers     map[string]*time.Timer
 	draining          bool
 	mu                sync.Mutex
 	conn              *websocket.Conn
 	workerMessageSink func(*livekit.WorkerMessage) error
+	workerID          string
 
 	consoleSession any // Store local session for CLI console
 }
@@ -75,12 +108,31 @@ func NewAgentServer(opts WorkerOptions) *AgentServer {
 		Options:        opts,
 		activeJobs:     make(map[string]*JobContext),
 		pendingAccepts: make(map[string]JobAcceptArguments),
+		pendingTimers:  make(map[string]*time.Timer),
 	}
 }
 
 func resolveWorkerOptions(opts WorkerOptions) WorkerOptions {
 	if opts.WorkerType == "" {
 		opts.WorkerType = WorkerTypeRoom
+	}
+	if opts.Version == "" {
+		opts.Version = defaultWorkerVersion
+	}
+	if opts.MaxRetry == 0 {
+		opts.MaxRetry = defaultMaxRetry
+	}
+	if opts.JobMemoryWarnMB == 0 {
+		opts.JobMemoryWarnMB = defaultJobMemoryWarn
+	}
+	if opts.DrainTimeoutSeconds == 0 {
+		opts.DrainTimeoutSeconds = defaultDrainTimeout
+	}
+	if opts.LoadThreshold == 0 {
+		opts.LoadThreshold = defaultLoadThreshold
+	}
+	if opts.NumIdleProcesses == 0 {
+		opts.NumIdleProcesses = defaultNumIdleProcesses()
 	}
 	if opts.Permissions == nil {
 		permissions := resolveWorkerPermissions(nil)
@@ -100,6 +152,9 @@ func resolveWorkerOptions(opts WorkerOptions) WorkerOptions {
 	if opts.APISecret == "" {
 		opts.APISecret = os.Getenv("LIVEKIT_API_SECRET")
 	}
+	if opts.WorkerToken == "" {
+		opts.WorkerToken = os.Getenv("LIVEKIT_WORKER_TOKEN")
+	}
 	if opts.AgentName == "" {
 		opts.AgentName = os.Getenv("LIVEKIT_AGENT_NAME")
 	}
@@ -111,6 +166,14 @@ func resolveWorkerOptions(opts WorkerOptions) WorkerOptions {
 	}
 
 	return opts
+}
+
+func defaultNumIdleProcesses() int {
+	cpus := runtime.NumCPU()
+	if cpus > 4 {
+		return 4
+	}
+	return cpus
 }
 
 func resolveWorkerPermissions(permissions *WorkerPermissions) WorkerPermissions {
@@ -132,6 +195,33 @@ func workerTypeToJobType(workerType WorkerType) livekit.JobType {
 	default:
 		return livekit.JobType_JT_ROOM
 	}
+}
+
+func agentWebSocketURL(rawURL string, workerToken string) (string, error) {
+	wsURL, err := url.Parse(rawURL)
+	if err != nil {
+		return "", err
+	}
+
+	if wsURL.Scheme == "http" {
+		wsURL.Scheme = "ws"
+	} else if wsURL.Scheme == "https" {
+		wsURL.Scheme = "wss"
+	}
+
+	basePath := strings.TrimRight(wsURL.Path, "/")
+	wsURL.Path = basePath + "/agent"
+	if basePath == "" {
+		wsURL.Path = "/agent"
+	}
+
+	values := url.Values{}
+	if workerToken != "" {
+		values.Set("worker_token", workerToken)
+	}
+	wsURL.RawQuery = values.Encode()
+
+	return wsURL.String(), nil
 }
 
 func agentIdentityForJobID(jobID string) string {
@@ -183,7 +273,7 @@ func (s *AgentServer) registerWorkerRequest() *livekit.WorkerMessage {
 			Register: &livekit.RegisterWorkerRequest{
 				Type:      workerTypeToJobType(s.Options.WorkerType),
 				AgentName: s.Options.AgentName,
-				Version:   "1.0.0",
+				Version:   s.Options.Version,
 				AllowedPermissions: &livekit.ParticipantPermission{
 					CanPublish:        permissions.CanPublish,
 					CanSubscribe:      permissions.CanSubscribe,
@@ -200,11 +290,27 @@ func (s *AgentServer) registerWorkerRequest() *livekit.WorkerMessage {
 
 func (s *AgentServer) workerStatusMessage(status livekit.WorkerStatus) *livekit.WorkerMessage {
 	jobCount := uint32(s.activeJobCount())
+	if status == livekit.WorkerStatus_WS_AVAILABLE && !s.availableForJob() {
+		status = livekit.WorkerStatus_WS_FULL
+	}
 	return &livekit.WorkerMessage{
 		Message: &livekit.WorkerMessage_UpdateWorker{
 			UpdateWorker: &livekit.UpdateWorkerStatus{
 				Status:   &status,
+				Load:     float32(s.currentLoad()),
 				JobCount: jobCount,
+			},
+		},
+	}
+}
+
+func (s *AgentServer) drainingWorkerStatusMessage() *livekit.WorkerMessage {
+	status := livekit.WorkerStatus_WS_FULL
+	return &livekit.WorkerMessage{
+		Message: &livekit.WorkerMessage_UpdateWorker{
+			UpdateWorker: &livekit.UpdateWorkerStatus{
+				Status:   &status,
+				JobCount: uint32(s.activeJobCount()),
 			},
 		},
 	}
@@ -217,6 +323,14 @@ func jobStatusMessage(jobID string, status livekit.JobStatus) *livekit.WorkerMes
 				JobId:  jobID,
 				Status: status,
 			},
+		},
+	}
+}
+
+func migrateJobMessage(jobIDs []string) *livekit.WorkerMessage {
+	return &livekit.WorkerMessage{
+		Message: &livekit.WorkerMessage_MigrateJob{
+			MigrateJob: &livekit.MigrateJobRequest{JobIds: jobIDs},
 		},
 	}
 }
@@ -272,7 +386,7 @@ func (s *AgentServer) Drain(ctx context.Context) error {
 	s.mu.Unlock()
 
 	if connected {
-		if err := s.sendWorkerMessage(s.workerStatusMessage(livekit.WorkerStatus_WS_FULL)); err != nil {
+		if err := s.sendWorkerMessage(s.drainingWorkerStatusMessage()); err != nil {
 			return err
 		}
 	}
@@ -280,7 +394,7 @@ func (s *AgentServer) Drain(ctx context.Context) error {
 	ticker := time.NewTicker(10 * time.Millisecond)
 	defer ticker.Stop()
 	for {
-		if s.activeJobCount() == 0 {
+		if s.inflightJobCount() == 0 {
 			return nil
 		}
 		select {
@@ -291,10 +405,64 @@ func (s *AgentServer) Drain(ctx context.Context) error {
 	}
 }
 
+func (s *AgentServer) inflightJobCount() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return len(s.activeJobs) + len(s.pendingAccepts)
+}
+
 func (s *AgentServer) activeJobCount() int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return len(s.activeJobs)
+}
+
+func (s *AgentServer) currentLoad() float64 {
+	if s.Options.LoadFunc == nil {
+		return 0
+	}
+	load := s.Options.LoadFunc(s)
+	if load < 0 {
+		return 0
+	}
+	return load
+}
+
+func (s *AgentServer) effectiveLoad() float64 {
+	load := s.currentLoad()
+	threshold := s.Options.LoadThreshold
+	if threshold <= 0 {
+		return load
+	}
+
+	s.mu.Lock()
+	activeCount := len(s.activeJobs)
+	pendingCount := len(s.pendingAccepts)
+	s.mu.Unlock()
+
+	var jobLoad float64
+	if activeCount > 0 {
+		jobLoad = load / float64(activeCount)
+	} else {
+		idleProcesses := s.Options.NumIdleProcesses
+		if idleProcesses <= 0 {
+			idleProcesses = 1
+		}
+		jobLoad = threshold / float64(idleProcesses)
+	}
+
+	return load + float64(pendingCount)*jobLoad
+}
+
+func (s *AgentServer) availableForJob() bool {
+	if s.Draining() {
+		return false
+	}
+	threshold := s.Options.LoadThreshold
+	if threshold <= 0 {
+		return true
+	}
+	return s.effectiveLoad() < threshold
 }
 
 func (s *AgentServer) validateRunPreconditions() error {
@@ -314,17 +482,10 @@ func (s *AgentServer) Run(ctx context.Context) error {
 		return err
 	}
 
-	wsURL, err := url.Parse(s.Options.WSRL)
+	agentURL, err := agentWebSocketURL(s.Options.WSRL, s.Options.WorkerToken)
 	if err != nil {
 		return err
 	}
-
-	if wsURL.Scheme == "http" {
-		wsURL.Scheme = "ws"
-	} else if wsURL.Scheme == "https" {
-		wsURL.Scheme = "wss"
-	}
-	wsURL.Path = "/agent"
 
 	// Create JWT token
 	at := auth.NewAccessToken(s.Options.APIKey, s.Options.APISecret)
@@ -346,11 +507,11 @@ func (s *AgentServer) Run(ctx context.Context) error {
 		dialer.Proxy = http.ProxyURL(proxyURL)
 	}
 
-	conn, res, err := dialer.DialContext(ctx, wsURL.String(), map[string][]string{
-		"Authorization": {fmt.Sprintf("Bearer %s", token)},
+	conn, res, err := s.connectWorkerWebSocket(ctx, &dialer, agentURL, http.Header{
+		"Authorization": []string{fmt.Sprintf("Bearer %s", token)},
 	})
 	if err != nil {
-		return fmt.Errorf("failed to connect to LiveKit %s: %w", wsURL.String(), err)
+		return err
 	}
 	_ = res
 	s.conn = conn
@@ -366,6 +527,22 @@ func (s *AgentServer) Run(ctx context.Context) error {
 	}
 
 	if err := conn.WriteMessage(websocket.BinaryMessage, b); err != nil {
+		return err
+	}
+
+	msgType, data, err := conn.ReadMessage()
+	if err != nil {
+		return err
+	}
+	if msgType != websocket.BinaryMessage {
+		return fmt.Errorf("expected register response as first message")
+	}
+
+	msg := &livekit.ServerMessage{}
+	if err := proto.Unmarshal(data, msg); err != nil {
+		return err
+	}
+	if err := s.handleInitialRegisterMessage(ctx, msg); err != nil {
 		return err
 	}
 
@@ -395,10 +572,50 @@ func (s *AgentServer) Run(ctx context.Context) error {
 	}
 }
 
+func (s *AgentServer) connectWorkerWebSocket(ctx context.Context, dialer *websocket.Dialer, agentURL string, headers http.Header) (*websocket.Conn, *http.Response, error) {
+	retryCount := 0
+	for {
+		conn, res, err := workerDialContext(ctx, dialer, agentURL, headers)
+		if err == nil {
+			return conn, res, nil
+		}
+
+		if retryCount >= s.Options.MaxRetry {
+			return nil, nil, fmt.Errorf("failed to connect to LiveKit after %d attempts %s: %w", retryCount, agentURL, err)
+		}
+
+		delay := workerRetryDelay(retryCount)
+		retryCount++
+		if err := workerRetrySleep(ctx, delay); err != nil {
+			return nil, nil, err
+		}
+	}
+}
+
+func workerRetryDelay(retryCount int) time.Duration {
+	delaySeconds := retryCount * 2
+	if delaySeconds > 10 {
+		delaySeconds = 10
+	}
+	return time.Duration(delaySeconds) * time.Second
+}
+
+func (s *AgentServer) handleInitialRegisterMessage(ctx context.Context, msg *livekit.ServerMessage) error {
+	if msg.GetRegister() == nil {
+		return fmt.Errorf("expected register response as first message")
+	}
+	s.handleMessage(ctx, msg)
+	return nil
+}
+
 func (s *AgentServer) handleMessage(ctx context.Context, msg *livekit.ServerMessage) {
 	switch m := msg.Message.(type) {
 	case *livekit.ServerMessage_Register:
 		logger.Logger.Infow("Worker Registered", "workerId", m.Register.WorkerId, "serverInfo", m.Register.ServerInfo)
+		s.mu.Lock()
+		s.workerID = m.Register.WorkerId
+		s.mu.Unlock()
+		s.reportActiveJobs()
 	case *livekit.ServerMessage_Availability:
 		s.handleAvailability(ctx, m.Availability)
 	case *livekit.ServerMessage_Assignment:
@@ -410,12 +627,30 @@ func (s *AgentServer) handleMessage(ctx context.Context, msg *livekit.ServerMess
 	}
 }
 
+func (s *AgentServer) reportActiveJobs() {
+	s.mu.Lock()
+	jobIDs := make([]string, 0, len(s.activeJobs))
+	for jobID := range s.activeJobs {
+		jobIDs = append(jobIDs, jobID)
+	}
+	s.mu.Unlock()
+
+	if len(jobIDs) == 0 {
+		return
+	}
+
+	sort.Strings(jobIDs)
+	if err := s.sendWorkerMessage(migrateJobMessage(jobIDs)); err != nil {
+		logger.Logger.Errorw("failed to report active jobs", err, "jobIds", jobIDs)
+	}
+}
+
 func (s *AgentServer) handleAvailability(ctx context.Context, req *livekit.AvailabilityRequest) {
 	logger.Logger.Infow("Received availability request", "jobId", req.Job.Id)
 
-	if s.Draining() {
+	if !s.availableForJob() {
 		if err := s.sendWorkerMessage(availabilityResponseForReject(req, JobRejectArguments{Terminate: false})); err != nil {
-			logger.Logger.Errorw("failed to reject availability while draining", err, "jobId", req.Job.Id)
+			logger.Logger.Errorw("failed to reject availability while unavailable", err, "jobId", req.Job.Id)
 		}
 		return
 	}
@@ -431,9 +666,7 @@ func (s *AgentServer) handleAvailability(ctx context.Context, req *livekit.Avail
 			if err := s.sendWorkerMessage(availabilityResponseForAccept(req, args, s.Options.AgentName)); err != nil {
 				return err
 			}
-			s.mu.Lock()
-			s.pendingAccepts[req.Job.Id] = args
-			s.mu.Unlock()
+			s.storePendingAccept(req.Job.Id, args)
 			return nil
 		},
 		rejectFnc: func(args JobRejectArguments) error {
@@ -473,6 +706,28 @@ func (s *AgentServer) sendWorkerMessage(msg *livekit.WorkerMessage) error {
 	return s.conn.WriteMessage(websocket.BinaryMessage, b)
 }
 
+func (s *AgentServer) storePendingAccept(jobID string, args JobAcceptArguments) {
+	s.mu.Lock()
+	if timer, ok := s.pendingTimers[jobID]; ok {
+		timer.Stop()
+	}
+	s.pendingAccepts[jobID] = args
+	var timer *time.Timer
+	timer = time.AfterFunc(assignmentTimeout, func() {
+		s.mu.Lock()
+		if s.pendingTimers[jobID] != timer {
+			s.mu.Unlock()
+			return
+		}
+		delete(s.pendingAccepts, jobID)
+		delete(s.pendingTimers, jobID)
+		s.mu.Unlock()
+		logger.Logger.Warnw("assignment timed out after availability accept", nil, "jobId", jobID)
+	})
+	s.pendingTimers[jobID] = timer
+	s.mu.Unlock()
+}
+
 func (s *AgentServer) handleAssignment(ctx context.Context, req *livekit.JobAssignment) {
 	logger.Logger.Infow("Received job assignment", "jobId", req.Job.Id)
 
@@ -485,9 +740,19 @@ func (s *AgentServer) handleAssignment(ctx context.Context, req *livekit.JobAssi
 	jobCtx.token = req.GetToken()
 
 	s.mu.Lock()
-	if args, ok := s.pendingAccepts[req.Job.Id]; ok {
-		jobCtx.AcceptArguments = args
-		delete(s.pendingAccepts, req.Job.Id)
+	args, accepted := s.pendingAccepts[req.Job.Id]
+	if !accepted {
+		s.mu.Unlock()
+		logger.Logger.Warnw("received assignment for unknown job", nil, "jobId", req.Job.Id)
+		return
+	}
+
+	jobCtx.WorkerID = s.workerID
+	jobCtx.AcceptArguments = args
+	delete(s.pendingAccepts, req.Job.Id)
+	if timer, ok := s.pendingTimers[req.Job.Id]; ok {
+		timer.Stop()
+		delete(s.pendingTimers, req.Job.Id)
 	}
 	s.activeJobs[req.Job.Id] = jobCtx
 	s.mu.Unlock()

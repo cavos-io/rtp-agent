@@ -29,6 +29,34 @@ type JobRequest struct {
 	rejectFnc func(JobRejectArguments) error
 }
 
+func (r *JobRequest) ID() string {
+	if r.Job == nil {
+		return ""
+	}
+	return r.Job.Id
+}
+
+func (r *JobRequest) Room() *livekit.Room {
+	if r.Job == nil {
+		return nil
+	}
+	return r.Job.Room
+}
+
+func (r *JobRequest) Publisher() *livekit.ParticipantInfo {
+	if r.Job == nil {
+		return nil
+	}
+	return r.Job.Participant
+}
+
+func (r *JobRequest) AgentName() string {
+	if r.Job == nil {
+		return ""
+	}
+	return r.Job.AgentName
+}
+
 func (r *JobRequest) Accept(args JobAcceptArguments) error {
 	if args.Identity == "" && r.Job != nil {
 		args.Identity = agentIdentityForJobID(r.Job.Id)
@@ -55,6 +83,7 @@ type JobContext struct {
 	Room              *lksdk.Room
 	Report            *agent.SessionReport
 	AcceptArguments   JobAcceptArguments
+	WorkerID          string
 	shutdownCallbacks []func(string)
 	shutdownOnce      sync.Once
 
