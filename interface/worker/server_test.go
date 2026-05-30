@@ -83,6 +83,20 @@ func TestNewAgentServerPrefersWSURLAliasOverDeprecatedWSRL(t *testing.T) {
 	}
 }
 
+func TestNewAgentServerUsesReferenceWorkerDefaults(t *testing.T) {
+	server := NewAgentServer(WorkerOptions{})
+
+	if server.Options.MaxRetry != 16 {
+		t.Fatalf("MaxRetry = %d, want reference default 16", server.Options.MaxRetry)
+	}
+	if server.Options.JobMemoryWarnMB != 500 {
+		t.Fatalf("JobMemoryWarnMB = %v, want reference default 500", server.Options.JobMemoryWarnMB)
+	}
+	if server.Options.DrainTimeoutSeconds != 1800 {
+		t.Fatalf("DrainTimeoutSeconds = %d, want reference default 1800", server.Options.DrainTimeoutSeconds)
+	}
+}
+
 func TestNewAgentServerLoadsWorkerTokenFromEnvironment(t *testing.T) {
 	t.Setenv("LIVEKIT_WORKER_TOKEN", "env-worker-token")
 

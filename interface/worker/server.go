@@ -26,6 +26,9 @@ const (
 	WorkerTypePublisher WorkerType = "publisher"
 
 	defaultWorkerVersion = "1.0.0"
+	defaultMaxRetry      = 16
+	defaultJobMemoryWarn = 500
+	defaultDrainTimeout  = 1800
 
 	participantAttributeAgentName = "lk.agent.name"
 )
@@ -97,6 +100,15 @@ func resolveWorkerOptions(opts WorkerOptions) WorkerOptions {
 	}
 	if opts.Version == "" {
 		opts.Version = defaultWorkerVersion
+	}
+	if opts.MaxRetry == 0 {
+		opts.MaxRetry = defaultMaxRetry
+	}
+	if opts.JobMemoryWarnMB == 0 {
+		opts.JobMemoryWarnMB = defaultJobMemoryWarn
+	}
+	if opts.DrainTimeoutSeconds == 0 {
+		opts.DrainTimeoutSeconds = defaultDrainTimeout
 	}
 	if opts.Permissions == nil {
 		permissions := resolveWorkerPermissions(nil)
