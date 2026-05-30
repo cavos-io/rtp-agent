@@ -28,6 +28,7 @@ type InitializeRequest struct {
 	PingInterval      float64 `json:"ping_interval"`
 	PingTimeout       float64 `json:"ping_timeout"`
 	HighPingThreshold float64 `json:"high_ping_threshold"`
+	HTTPProxy         string  `json:"http_proxy"`
 }
 
 type InitializeResponse struct {
@@ -43,8 +44,24 @@ type PongResponse struct {
 	Timestamp     int64 `json:"timestamp"`
 }
 
+type JobAcceptArguments struct {
+	Name       string            `json:"name"`
+	Identity   string            `json:"identity"`
+	Metadata   string            `json:"metadata"`
+	Attributes map[string]string `json:"attributes,omitempty"`
+}
+
+type RunningJobInfo struct {
+	AcceptArguments JobAcceptArguments `json:"accept_arguments"`
+	Job             *livekit.Job       `json:"job"`
+	URL             string             `json:"url"`
+	Token           string             `json:"token"`
+	WorkerID        string             `json:"worker_id"`
+	FakeJob         bool               `json:"fake_job"`
+}
+
 type StartJobRequest struct {
-	Job *livekit.Job `json:"job"`
+	RunningJob RunningJobInfo `json:"running_job"`
 }
 
 type ShutdownRequest struct {
