@@ -62,6 +62,7 @@ type JobContext struct {
 	apiSecret string
 	url       string
 	token     string
+	fakeJob   bool
 }
 
 func NewJobContext(job *livekit.Job, url string, apiKey string, apiSecret string) *JobContext {
@@ -79,6 +80,10 @@ func (c *JobContext) ParticipantIdentity() string {
 		return c.AcceptArguments.Identity
 	}
 	return agentIdentityForJobID(c.Job.Id)
+}
+
+func (c *JobContext) IsFakeJob() bool {
+	return c.fakeJob
 }
 
 func (c *JobContext) connectInfo() lksdk.ConnectInfo {
@@ -141,6 +146,10 @@ func (c *JobContext) Shutdown(reason string) {
 
 // DeleteRoom deletes the room and disconnects all participants.
 func (c *JobContext) DeleteRoom(ctx context.Context, roomName string) (*livekit.DeleteRoomResponse, error) {
+	if c.IsFakeJob() {
+		logger.Logger.Warnw("job context DeleteRoom is skipped for fake jobs", nil)
+		return &livekit.DeleteRoomResponse{}, nil
+	}
 	if roomName == "" {
 		roomName = c.Job.Room.Name
 	}
@@ -152,6 +161,10 @@ func (c *JobContext) DeleteRoom(ctx context.Context, roomName string) (*livekit.
 
 // AddSIPParticipant adds a SIP participant to the room.
 func (c *JobContext) AddSIPParticipant(ctx context.Context, callTo string, trunkID string, identity string, name string) (*livekit.SIPParticipantInfo, error) {
+	if c.IsFakeJob() {
+		logger.Logger.Warnw("job context AddSIPParticipant is skipped for fake jobs", nil)
+		return &livekit.SIPParticipantInfo{}, nil
+	}
 	client := lksdk.NewSIPClient(c.url, c.apiKey, c.apiSecret)
 	return client.CreateSIPParticipant(ctx, &livekit.CreateSIPParticipantRequest{
 		RoomName:            c.Job.Room.Name,
@@ -164,6 +177,10 @@ func (c *JobContext) AddSIPParticipant(ctx context.Context, callTo string, trunk
 
 // TransferSIPParticipant transfers a SIP participant to another number.
 func (c *JobContext) TransferSIPParticipant(ctx context.Context, identity string, transferTo string, playDialtone bool) error {
+	if c.IsFakeJob() {
+		logger.Logger.Warnw("job context TransferSIPParticipant is skipped for fake jobs", nil)
+		return nil
+	}
 	client := lksdk.NewSIPClient(c.url, c.apiKey, c.apiSecret)
 	_, err := client.TransferSIPParticipant(ctx, &livekit.TransferSIPParticipantRequest{
 		ParticipantIdentity: identity,

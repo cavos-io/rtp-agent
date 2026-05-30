@@ -605,5 +605,6 @@ func newLocalJobContext(roomName string, participantIdentity string, opts Worker
 	}
 	jobCtx := NewJobContext(job, opts.WSRL, opts.APIKey, opts.APISecret)
 	jobCtx.AcceptArguments = JobAcceptArguments{Identity: participantIdentity}
+	jobCtx.fakeJob = true
 	return jobCtx
 }

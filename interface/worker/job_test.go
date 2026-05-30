@@ -1,6 +1,7 @@
 package worker
 
 import (
+	"context"
 	"reflect"
 	"testing"
 
@@ -90,5 +91,28 @@ func TestJobContextConnectInfoUsesAcceptedParticipantFields(t *testing.T) {
 	}
 	if info.ParticipantKind != lksdk.ParticipantAgent {
 		t.Fatalf("ConnectInfo.ParticipantKind = %v, want ParticipantAgent", info.ParticipantKind)
+	}
+}
+
+func TestLocalJobContextSkipsDestructiveLiveKitAPIs(t *testing.T) {
+	ctx := newLocalJobContext("room-a", "agent-local", WorkerOptions{})
+	if !ctx.IsFakeJob() {
+		t.Fatal("local job context IsFakeJob() = false, want true")
+	}
+
+	if resp, err := ctx.DeleteRoom(context.Background(), ""); err != nil {
+		t.Fatalf("DeleteRoom() error = %v", err)
+	} else if resp == nil {
+		t.Fatal("DeleteRoom() response = nil, want empty response")
+	}
+
+	if info, err := ctx.AddSIPParticipant(context.Background(), "+15551234567", "trunk", "sip-user", "SIP User"); err != nil {
+		t.Fatalf("AddSIPParticipant() error = %v", err)
+	} else if info == nil {
+		t.Fatal("AddSIPParticipant() info = nil, want empty info")
+	}
+
+	if err := ctx.TransferSIPParticipant(context.Background(), "sip-user", "+15557654321", false); err != nil {
+		t.Fatalf("TransferSIPParticipant() error = %v", err)
 	}
 }
