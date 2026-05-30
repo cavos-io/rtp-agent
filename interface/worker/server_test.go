@@ -1350,6 +1350,31 @@ func TestLocalJobContextUsesReferenceFakeRoomSIDPrefix(t *testing.T) {
 	}
 }
 
+func TestLocalJobContextGeneratesUniqueReferenceIDs(t *testing.T) {
+	jobIDs := map[string]struct{}{}
+	roomSIDs := map[string]struct{}{}
+	participantIdentities := map[string]struct{}{}
+
+	for range 3 {
+		ctx := newLocalJobContext("room-a", "", WorkerOptions{})
+
+		if _, exists := jobIDs[ctx.Job.Id]; exists {
+			t.Fatalf("duplicate local job ID generated: %q", ctx.Job.Id)
+		}
+		jobIDs[ctx.Job.Id] = struct{}{}
+
+		if _, exists := roomSIDs[ctx.Job.Room.Sid]; exists {
+			t.Fatalf("duplicate local room SID generated: %q", ctx.Job.Room.Sid)
+		}
+		roomSIDs[ctx.Job.Room.Sid] = struct{}{}
+
+		if _, exists := participantIdentities[ctx.ParticipantIdentity()]; exists {
+			t.Fatalf("duplicate local participant identity generated: %q", ctx.ParticipantIdentity())
+		}
+		participantIdentities[ctx.ParticipantIdentity()] = struct{}{}
+	}
+}
+
 func TestExecuteLocalJobCleansUpAndRunsSessionEnd(t *testing.T) {
 	server := NewAgentServer(WorkerOptions{})
 	startedCh := make(chan *JobContext, 1)

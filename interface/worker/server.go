@@ -14,6 +14,7 @@ import (
 
 	"github.com/cavos-io/conversation-worker/core/agent"
 	"github.com/cavos-io/conversation-worker/library/logger"
+	mathutil "github.com/cavos-io/conversation-worker/library/math"
 	"github.com/gorilla/websocket"
 	"github.com/livekit/protocol/auth"
 	"github.com/livekit/protocol/livekit"
@@ -1100,16 +1101,16 @@ func (s *AgentServer) runSessionEnd(jobCtx *JobContext) {
 func newLocalJobContext(roomName string, participantIdentity string, opts WorkerOptions) *JobContext {
 	opts = resolveWorkerOptions(opts)
 	job := &livekit.Job{
-		Id: "mock-job-" + time.Now().Format("20060102150405"),
+		Id: mathutil.ShortUUID("mock-job-"),
 		Room: &livekit.Room{
 			Name: roomName,
-			Sid:  "SRM_" + time.Now().Format("20060102150405"),
+			Sid:  mathutil.ShortUUID("SRM_"),
 		},
 		Type: livekit.JobType_JT_ROOM,
 	}
 
 	if participantIdentity == "" {
-		participantIdentity = "fake-agent-" + time.Now().Format("20060102150405")
+		participantIdentity = mathutil.ShortUUID("fake-agent-")
 	}
 	jobCtx := NewJobContext(job, opts.WSRL, opts.APIKey, opts.APISecret)
 	jobCtx.AcceptArguments = JobAcceptArguments{Identity: participantIdentity}
