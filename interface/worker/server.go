@@ -59,10 +59,11 @@ type AgentServer struct {
 	requestFnc    func(*JobRequest) error
 	sessionEndFnc func(*JobContext) error
 
-	activeJobs map[string]*JobContext
-	draining   bool
-	mu         sync.Mutex
-	conn       *websocket.Conn
+	activeJobs        map[string]*JobContext
+	draining          bool
+	mu                sync.Mutex
+	conn              *websocket.Conn
+	workerMessageSink func(*livekit.WorkerMessage) error
 
 	consoleSession any // Store local session for CLI console
 }
@@ -399,6 +400,13 @@ func (s *AgentServer) handleMessage(ctx context.Context, msg *livekit.ServerMess
 func (s *AgentServer) handleAvailability(ctx context.Context, req *livekit.AvailabilityRequest) {
 	logger.Logger.Infow("Received availability request", "jobId", req.Job.Id)
 
+	if s.Draining() {
+		if err := s.sendWorkerMessage(availabilityResponseForReject(req, JobRejectArguments{Terminate: false})); err != nil {
+			logger.Logger.Errorw("failed to reject availability while draining", err, "jobId", req.Job.Id)
+		}
+		return
+	}
+
 	answered := false
 	jobReq := &JobRequest{
 		Job: req.Job,
@@ -429,6 +437,10 @@ func (s *AgentServer) handleAvailability(ctx context.Context, req *livekit.Avail
 }
 
 func (s *AgentServer) sendWorkerMessage(msg *livekit.WorkerMessage) error {
+	if s.workerMessageSink != nil {
+		return s.workerMessageSink(msg)
+	}
+
 	b, err := proto.Marshal(msg)
 	if err != nil {
 		return err

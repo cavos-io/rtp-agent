@@ -269,6 +269,35 @@ func TestAvailabilityResponseRejectCanAvoidTermination(t *testing.T) {
 	}
 }
 
+func TestHandleAvailabilityRejectsWhenDraining(t *testing.T) {
+	server := NewAgentServer(WorkerOptions{})
+	sentCh := make(chan *livekit.WorkerMessage, 1)
+	server.workerMessageSink = func(msg *livekit.WorkerMessage) error {
+		sentCh <- msg
+		return nil
+	}
+
+	server.draining = true
+	server.handleAvailability(context.Background(), &livekit.AvailabilityRequest{
+		Job: &livekit.Job{Id: "job_drain_reject"},
+	})
+
+	msg := receiveWorkerMessage(t, sentCh)
+	availability := msg.GetAvailability()
+	if availability == nil {
+		t.Fatal("availability response is nil")
+	}
+	if availability.Available {
+		t.Fatal("availability.Available = true, want false")
+	}
+	if availability.JobId != "job_drain_reject" {
+		t.Fatalf("availability.JobId = %q, want job_drain_reject", availability.JobId)
+	}
+	if availability.Terminate {
+		t.Fatal("availability.Terminate = true, want false")
+	}
+}
+
 func TestJobRequestRejectDefaultsToTerminate(t *testing.T) {
 	var got JobRejectArguments
 	req := &JobRequest{
@@ -493,5 +522,17 @@ func TestHandleTerminationRunsJobShutdownCallbacks(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("shutdown callback did not run")
+	}
+}
+
+func receiveWorkerMessage(t *testing.T, receivedCh <-chan *livekit.WorkerMessage) *livekit.WorkerMessage {
+	t.Helper()
+
+	select {
+	case msg := <-receivedCh:
+		return msg
+	case <-time.After(time.Second):
+		t.Fatal("worker message was not sent")
+		return nil
 	}
 }
