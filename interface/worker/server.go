@@ -37,6 +37,22 @@ const (
 
 var assignmentTimeout = 7500 * time.Millisecond
 
+var workerDialContext = func(ctx context.Context, dialer *websocket.Dialer, url string, headers http.Header) (*websocket.Conn, *http.Response, error) {
+	return dialer.DialContext(ctx, url, headers)
+}
+
+var workerRetrySleep = func(ctx context.Context, delay time.Duration) error {
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
+}
+
 type WorkerPermissions struct {
 	CanPublish        bool
 	CanSubscribe      bool
@@ -491,11 +507,11 @@ func (s *AgentServer) Run(ctx context.Context) error {
 		dialer.Proxy = http.ProxyURL(proxyURL)
 	}
 
-	conn, res, err := dialer.DialContext(ctx, agentURL, map[string][]string{
-		"Authorization": {fmt.Sprintf("Bearer %s", token)},
+	conn, res, err := s.connectWorkerWebSocket(ctx, &dialer, agentURL, http.Header{
+		"Authorization": []string{fmt.Sprintf("Bearer %s", token)},
 	})
 	if err != nil {
-		return fmt.Errorf("failed to connect to LiveKit %s: %w", agentURL, err)
+		return err
 	}
 	_ = res
 	s.conn = conn
@@ -554,6 +570,34 @@ func (s *AgentServer) Run(ctx context.Context) error {
 			s.handleMessage(ctx, msg)
 		}
 	}
+}
+
+func (s *AgentServer) connectWorkerWebSocket(ctx context.Context, dialer *websocket.Dialer, agentURL string, headers http.Header) (*websocket.Conn, *http.Response, error) {
+	retryCount := 0
+	for {
+		conn, res, err := workerDialContext(ctx, dialer, agentURL, headers)
+		if err == nil {
+			return conn, res, nil
+		}
+
+		if retryCount >= s.Options.MaxRetry {
+			return nil, nil, fmt.Errorf("failed to connect to LiveKit after %d attempts %s: %w", retryCount, agentURL, err)
+		}
+
+		delay := workerRetryDelay(retryCount)
+		retryCount++
+		if err := workerRetrySleep(ctx, delay); err != nil {
+			return nil, nil, err
+		}
+	}
+}
+
+func workerRetryDelay(retryCount int) time.Duration {
+	delaySeconds := retryCount * 2
+	if delaySeconds > 10 {
+		delaySeconds = 10
+	}
+	return time.Duration(delaySeconds) * time.Second
 }
 
 func (s *AgentServer) handleInitialRegisterMessage(ctx context.Context, msg *livekit.ServerMessage) error {

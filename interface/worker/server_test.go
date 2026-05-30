@@ -3,11 +3,13 @@ package worker
 import (
 	"context"
 	"errors"
+	"net/http"
 	"runtime"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/gorilla/websocket"
 	"github.com/livekit/protocol/livekit"
 )
 
@@ -892,6 +894,48 @@ func TestValidateRunPreconditionsRequiresCredentialsAfterRTCSession(t *testing.T
 	}
 	if !strings.Contains(err.Error(), "missing LiveKit credentials") {
 		t.Fatalf("validateRunPreconditions() error = %q, want credentials message", err.Error())
+	}
+}
+
+func TestConnectWorkerWebSocketRetriesDialFailures(t *testing.T) {
+	oldDial := workerDialContext
+	oldSleep := workerRetrySleep
+	t.Cleanup(func() {
+		workerDialContext = oldDial
+		workerRetrySleep = oldSleep
+	})
+
+	attempts := 0
+	workerDialContext = func(context.Context, *websocket.Dialer, string, http.Header) (*websocket.Conn, *http.Response, error) {
+		attempts++
+		if attempts < 3 {
+			return nil, nil, errors.New("dial failed")
+		}
+		return &websocket.Conn{}, nil, nil
+	}
+
+	var sleeps []time.Duration
+	workerRetrySleep = func(_ context.Context, delay time.Duration) error {
+		sleeps = append(sleeps, delay)
+		return nil
+	}
+
+	server := NewAgentServer(WorkerOptions{MaxRetry: 3})
+	_, _, err := server.connectWorkerWebSocket(context.Background(), &websocket.Dialer{}, "wss://livekit.example/agent", nil)
+	if err != nil {
+		t.Fatalf("connectWorkerWebSocket() error = %v", err)
+	}
+	if attempts != 3 {
+		t.Fatalf("dial attempts = %d, want 3", attempts)
+	}
+	wantSleeps := []time.Duration{0, 2 * time.Second}
+	if len(sleeps) != len(wantSleeps) {
+		t.Fatalf("retry sleeps = %v, want %v", sleeps, wantSleeps)
+	}
+	for i := range wantSleeps {
+		if sleeps[i] != wantSleeps[i] {
+			t.Fatalf("retry sleeps = %v, want %v", sleeps, wantSleeps)
+		}
 	}
 }
 
