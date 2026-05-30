@@ -557,6 +557,67 @@ func TestHandleAvailabilityCountsPendingAcceptsAsReservedLoad(t *testing.T) {
 	}
 }
 
+func TestAvailabilityReservesLoadWhileRequestCallbackRuns(t *testing.T) {
+	server := NewAgentServer(WorkerOptions{
+		LoadThreshold:    0.5,
+		NumIdleProcesses: 1,
+		LoadFunc: func(*AgentServer) float64 {
+			return 0
+		},
+	})
+	sentCh := make(chan *livekit.WorkerMessage, 2)
+	requestStarted := make(chan struct{})
+	releaseRequest := make(chan struct{})
+	server.workerMessageSink = func(msg *livekit.WorkerMessage) error {
+		sentCh <- msg
+		return nil
+	}
+	server.requestFnc = func(req *JobRequest) error {
+		if req.ID() == "job_reserving_one" {
+			close(requestStarted)
+			<-releaseRequest
+			return req.Accept(JobAcceptArguments{})
+		}
+		return req.Accept(JobAcceptArguments{})
+	}
+
+	doneCh := make(chan struct{})
+	go func() {
+		server.handleAvailability(context.Background(), &livekit.AvailabilityRequest{
+			Job: &livekit.Job{Id: "job_reserving_one"},
+		})
+		close(doneCh)
+	}()
+
+	select {
+	case <-requestStarted:
+	case <-time.After(time.Second):
+		t.Fatal("first request callback did not start")
+	}
+
+	server.handleAvailability(context.Background(), &livekit.AvailabilityRequest{
+		Job: &livekit.Job{Id: "job_reserving_two"},
+	})
+
+	second := receiveWorkerMessage(t, sentCh).GetAvailability()
+	if second == nil {
+		t.Fatal("second availability response is nil")
+	}
+	if second.Available {
+		t.Fatal("second availability response was accepted despite in-flight request reservation")
+	}
+	if second.JobId != "job_reserving_two" {
+		t.Fatalf("second availability JobId = %q, want job_reserving_two", second.JobId)
+	}
+
+	close(releaseRequest)
+	select {
+	case <-doneCh:
+	case <-time.After(time.Second):
+		t.Fatal("first request did not finish")
+	}
+}
+
 func TestHandleRegisterReportsActiveJobs(t *testing.T) {
 	server := NewAgentServer(WorkerOptions{})
 	sentCh := make(chan *livekit.WorkerMessage, 1)

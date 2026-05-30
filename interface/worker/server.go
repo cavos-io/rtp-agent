@@ -95,6 +95,7 @@ type AgentServer struct {
 	activeJobs        map[string]*JobContext
 	pendingAccepts    map[string]JobAcceptArguments
 	pendingTimers     map[string]*time.Timer
+	reservedSlots     int
 	draining          bool
 	mu                sync.Mutex
 	conn              *websocket.Conn
@@ -440,6 +441,7 @@ func (s *AgentServer) effectiveLoad() float64 {
 	s.mu.Lock()
 	activeCount := len(s.activeJobs)
 	pendingCount := len(s.pendingAccepts)
+	reservedSlots := s.reservedSlots
 	s.mu.Unlock()
 
 	var jobLoad float64
@@ -453,7 +455,7 @@ func (s *AgentServer) effectiveLoad() float64 {
 		jobLoad = threshold / float64(idleProcesses)
 	}
 
-	return load + float64(pendingCount)*jobLoad
+	return load + float64(pendingCount+reservedSlots)*jobLoad
 }
 
 func (s *AgentServer) availableForJob() bool {
@@ -685,6 +687,9 @@ func (s *AgentServer) handleAvailability(ctx context.Context, req *livekit.Avail
 		return
 	}
 
+	s.reserveAvailabilitySlot()
+	defer s.releaseAvailabilitySlot()
+
 	answered := false
 	jobReq := &JobRequest{
 		Job: req.Job,
@@ -715,6 +720,20 @@ func (s *AgentServer) handleAvailability(ctx context.Context, req *livekit.Avail
 
 	if !answered {
 		_ = jobReq.Reject(JobRejectArguments{Terminate: false})
+	}
+}
+
+func (s *AgentServer) reserveAvailabilitySlot() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.reservedSlots++
+}
+
+func (s *AgentServer) releaseAvailabilitySlot() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.reservedSlots > 0 {
+		s.reservedSlots--
 	}
 }
 
