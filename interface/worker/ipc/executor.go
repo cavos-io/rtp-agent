@@ -26,7 +26,10 @@ type JobExecutor interface {
 	ID() string
 	Status() JobStatus
 	Started() bool
+	Job() *livekit.Job
+	RunningJob() *RunningJobInfo
 	LaunchJob(ctx context.Context, job *livekit.Job) error
+	LaunchRunningJob(ctx context.Context, info RunningJobInfo) error
 	Close(ctx context.Context) error
 }
 
@@ -37,6 +40,7 @@ type ThreadJobExecutor struct {
 
 	entrypoint func() error
 	job        *livekit.Job
+	runningJob *RunningJobInfo
 	started    bool
 }
 
@@ -64,13 +68,30 @@ func (e *ThreadJobExecutor) Started() bool {
 	return e.started
 }
 
+func (e *ThreadJobExecutor) Job() *livekit.Job {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.job
+}
+
+func (e *ThreadJobExecutor) RunningJob() *RunningJobInfo {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.runningJob
+}
+
 func (e *ThreadJobExecutor) LaunchJob(ctx context.Context, job *livekit.Job) error {
+	return e.LaunchRunningJob(ctx, RunningJobInfo{Job: job})
+}
+
+func (e *ThreadJobExecutor) LaunchRunningJob(ctx context.Context, info RunningJobInfo) error {
 	e.mu.Lock()
 	if e.started {
 		e.mu.Unlock()
 		return fmt.Errorf("executor already started")
 	}
-	e.job = job
+	e.job = info.Job
+	e.runningJob = &info
 	e.started = true
 	e.status = JobStatusRunning
 	e.mu.Unlock()
@@ -79,7 +100,7 @@ func (e *ThreadJobExecutor) LaunchJob(ctx context.Context, job *livekit.Job) err
 		err := e.entrypoint()
 		e.mu.Lock()
 		if err != nil {
-			logger.Logger.Errorw("Job entrypoint failed", err, "job_id", job.Id)
+			logger.Logger.Errorw("Job entrypoint failed", err, "job_id", info.Job.GetId())
 			e.status = JobStatusFailed
 		} else {
 			e.status = JobStatusSuccess
@@ -96,12 +117,14 @@ func (e *ThreadJobExecutor) Close(ctx context.Context) error {
 }
 
 type ProcessJobExecutor struct {
-	id      string
-	status  JobStatus
-	mu      sync.Mutex
-	started bool
-	cmd     *exec.Cmd
-	
+	id         string
+	status     JobStatus
+	mu         sync.Mutex
+	started    bool
+	cmd        *exec.Cmd
+	job        *livekit.Job
+	runningJob *RunningJobInfo
+
 	lastPong time.Time
 }
 
@@ -127,7 +150,23 @@ func (e *ProcessJobExecutor) Started() bool {
 	return e.started
 }
 
+func (e *ProcessJobExecutor) Job() *livekit.Job {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.job
+}
+
+func (e *ProcessJobExecutor) RunningJob() *RunningJobInfo {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.runningJob
+}
+
 func (e *ProcessJobExecutor) LaunchJob(ctx context.Context, job *livekit.Job) error {
+	return e.LaunchRunningJob(ctx, RunningJobInfo{Job: job})
+}
+
+func (e *ProcessJobExecutor) LaunchRunningJob(ctx context.Context, info RunningJobInfo) error {
 	e.mu.Lock()
 	if e.started {
 		e.mu.Unlock()
@@ -135,6 +174,8 @@ func (e *ProcessJobExecutor) LaunchJob(ctx context.Context, job *livekit.Job) er
 	}
 	e.started = true
 	e.status = JobStatusRunning
+	e.job = info.Job
+	e.runningJob = &info
 	e.lastPong = time.Now()
 	e.mu.Unlock()
 
@@ -146,7 +187,7 @@ func (e *ProcessJobExecutor) LaunchJob(ctx context.Context, job *livekit.Job) er
 		return err
 	}
 
-	jobJSON, err := json.Marshal(job)
+	env, err := processJobEnv(os.Environ(), e.id, info)
 	if err != nil {
 		e.mu.Lock()
 		e.status = JobStatusFailed
@@ -156,10 +197,7 @@ func (e *ProcessJobExecutor) LaunchJob(ctx context.Context, job *livekit.Job) er
 
 	// We pass the job details via environment variables for parity with Python's IPC/subprocess launch
 	cmd := exec.CommandContext(ctx, exe, "start")
-	cmd.Env = append(os.Environ(), 
-		fmt.Sprintf("LIVEKIT_AGENT_PROCESS_ID=%s", e.id),
-		fmt.Sprintf("LIVEKIT_AGENT_JOB_JSON=%s", string(jobJSON)),
-	)
+	cmd.Env = env
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 
@@ -174,7 +212,7 @@ func (e *ProcessJobExecutor) LaunchJob(ctx context.Context, job *livekit.Job) er
 		e.mu.Lock()
 		defer e.mu.Unlock()
 		if err != nil {
-			logger.Logger.Errorw("Job process failed", err, "job_id", job.Id, "exec_id", e.id)
+			logger.Logger.Errorw("Job process failed", err, "job_id", info.Job.GetId(), "exec_id", e.id)
 			e.status = JobStatusFailed
 		} else {
 			e.status = JobStatusSuccess
@@ -182,6 +220,25 @@ func (e *ProcessJobExecutor) LaunchJob(ctx context.Context, job *livekit.Job) er
 	}()
 
 	return nil
+}
+
+func processJobEnv(baseEnv []string, processID string, info RunningJobInfo) ([]string, error) {
+	jobJSON, err := json.Marshal(info.Job)
+	if err != nil {
+		return nil, err
+	}
+	runningJobJSON, err := json.Marshal(info)
+	if err != nil {
+		return nil, err
+	}
+
+	env := append([]string{}, baseEnv...)
+	env = append(env,
+		fmt.Sprintf("LIVEKIT_AGENT_PROCESS_ID=%s", processID),
+		fmt.Sprintf("LIVEKIT_AGENT_JOB_JSON=%s", string(jobJSON)),
+		fmt.Sprintf("LIVEKIT_AGENT_RUNNING_JOB_JSON=%s", string(runningJobJSON)),
+	)
+	return env, nil
 }
 
 func (e *ProcessJobExecutor) pingTask(ctx context.Context) {
@@ -198,9 +255,9 @@ func (e *ProcessJobExecutor) pingTask(ctx context.Context) {
 				e.mu.Unlock()
 				return
 			}
-			
+
 			// In a full implementation, we would send a ping message via a pipe
-			// and wait for a pong. 
+			// and wait for a pong.
 			// For basic parity, we'll check if the process is still alive.
 			if e.cmd != nil && e.cmd.Process != nil {
 				// check if process exists

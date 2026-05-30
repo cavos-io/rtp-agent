@@ -18,49 +18,67 @@ const (
 	ExecutorTypeProcess ExecutorType = "process"
 )
 
+const maxLaunchAttempts = 3
+
 type ProcPool struct {
-	maxProcesses int
-	executors    map[string]JobExecutor
-	mu           sync.Mutex
-	entrypoint   func() error
-	executorType ExecutorType
+	maxProcesses    int
+	executors       map[string]JobExecutor
+	mu              sync.Mutex
+	entrypoint      func() error
+	executorType    ExecutorType
+	closeTimeout    time.Duration
+	executorFactory func(id string) JobExecutor
 }
 
 func NewProcPool(maxProcesses int, executorType ExecutorType, entrypoint func() error) *ProcPool {
-	return &ProcPool{
+	pool := &ProcPool{
 		maxProcesses: maxProcesses,
 		executors:    make(map[string]JobExecutor),
 		entrypoint:   entrypoint,
 		executorType: executorType,
+		closeTimeout: 5 * time.Second,
 	}
+	pool.executorFactory = pool.newExecutor
+	return pool
+}
+
+func (p *ProcPool) newExecutor(id string) JobExecutor {
+	if p.executorType == ExecutorTypeProcess {
+		return NewProcessJobExecutor(id)
+	}
+	return NewThreadJobExecutor(id, p.entrypoint)
 }
 
 func (p *ProcPool) LaunchJob(ctx context.Context, job *livekit.Job) error {
+	return p.LaunchRunningJob(ctx, RunningJobInfo{Job: job})
+}
+
+func (p *ProcPool) LaunchRunningJob(ctx context.Context, info RunningJobInfo) error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
-	if len(p.executors) >= p.maxProcesses {
-		return fmt.Errorf("proc pool exhausted, max capacity reached")
+	var lastErr error
+	for attempt := 0; attempt < maxLaunchAttempts; attempt++ {
+		if len(p.executors) >= p.maxProcesses {
+			return fmt.Errorf("proc pool exhausted, max capacity reached")
+		}
+
+		id := "exec_" + uuid.NewString()[:8]
+		executor := p.executorFactory(id)
+		p.executors[id] = executor
+
+		err := executor.LaunchRunningJob(ctx, info)
+		if err != nil {
+			delete(p.executors, id)
+			lastErr = err
+			continue
+		}
+
+		logger.Logger.Infow("Launched job", "executor_type", p.executorType, "executor_id", id, "job_id", info.Job.GetId())
+		return nil
 	}
 
-	id := "exec_" + uuid.NewString()[:8]
-	var executor JobExecutor
-	if p.executorType == ExecutorTypeProcess {
-		executor = NewProcessJobExecutor(id)
-	} else {
-		executor = NewThreadJobExecutor(id, p.entrypoint)
-	}
-	
-	p.executors[id] = executor
-
-	err := executor.LaunchJob(ctx, job)
-	if err != nil {
-		delete(p.executors, id)
-		return err
-	}
-
-	logger.Logger.Infow("Launched job", "executor_type", p.executorType, "executor_id", id, "job_id", job.Id)
-	return nil
+	return lastErr
 }
 
 func (p *ProcPool) GetExecutors() []JobExecutor {
@@ -74,11 +92,34 @@ func (p *ProcPool) GetExecutors() []JobExecutor {
 	return executors
 }
 
+func (p *ProcPool) SetCloseTimeout(timeout time.Duration) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.closeTimeout = timeout
+}
+
+func (p *ProcPool) GetByJobID(jobID string) JobExecutor {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	for _, executor := range p.executors {
+		job := executor.Job()
+		if job != nil && job.Id == jobID {
+			return executor
+		}
+	}
+	return nil
+}
+
 func (p *ProcPool) Close() error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	closeTimeout := p.closeTimeout
+	if closeTimeout <= 0 {
+		closeTimeout = 5 * time.Second
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), closeTimeout)
 	defer cancel()
 
 	for _, e := range p.executors {
