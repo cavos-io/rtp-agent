@@ -61,6 +61,7 @@ type JobContext struct {
 	apiKey    string
 	apiSecret string
 	url       string
+	token     string
 }
 
 func NewJobContext(job *livekit.Job, url string, apiKey string, apiSecret string) *JobContext {
@@ -81,6 +82,16 @@ func (c *JobContext) ParticipantIdentity() string {
 }
 
 func (c *JobContext) Connect(ctx context.Context, cb *lksdk.RoomCallback) error {
+	if c.token != "" {
+		room, err := lksdk.ConnectToRoomWithToken(c.url, c.token, cb)
+		if err != nil {
+			return err
+		}
+		c.Room = room
+		logger.Logger.Infow("Connected to room", "room", c.Job.Room.Name)
+		return nil
+	}
+
 	room, err := lksdk.ConnectToRoom(c.url, lksdk.ConnectInfo{
 		APIKey:              c.apiKey,
 		APISecret:           c.apiSecret,

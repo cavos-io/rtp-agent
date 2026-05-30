@@ -471,6 +471,7 @@ func (s *AgentServer) handleAssignment(ctx context.Context, req *livekit.JobAssi
 		jobURL = req.GetUrl()
 	}
 	jobCtx := NewJobContext(req.Job, jobURL, s.Options.APIKey, s.Options.APISecret)
+	jobCtx.token = req.GetToken()
 
 	s.mu.Lock()
 	if args, ok := s.pendingAccepts[req.Job.Id]; ok {

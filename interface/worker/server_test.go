@@ -392,6 +392,30 @@ func TestAssignmentUsesAssignmentURLWhenProvided(t *testing.T) {
 	}
 }
 
+func TestAssignmentPreservesAssignmentToken(t *testing.T) {
+	server := NewAgentServer(WorkerOptions{})
+	startedCh := make(chan *JobContext, 1)
+	server.entrypointFnc = func(ctx *JobContext) error {
+		startedCh <- ctx
+		return nil
+	}
+
+	job := &livekit.Job{Id: "job_assignment_token", Room: &livekit.Room{Name: "room-a"}}
+	server.handleAssignment(context.Background(), &livekit.JobAssignment{
+		Job:   job,
+		Token: "assignment-token",
+	})
+
+	select {
+	case jobCtx := <-startedCh:
+		if jobCtx.token != "assignment-token" {
+			t.Fatalf("jobCtx.token = %q, want assignment-token", jobCtx.token)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("assignment entrypoint did not run")
+	}
+}
+
 func TestJobRequestRejectDefaultsToTerminate(t *testing.T) {
 	var got JobRejectArguments
 	req := &JobRequest{
