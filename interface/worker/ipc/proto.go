@@ -9,6 +9,7 @@ import (
 )
 
 var ErrUnknownMessageType = errors.New("unknown IPC message type")
+var ErrUnknownPayloadType = errors.New("unknown IPC payload type")
 
 type MessageType string
 
@@ -47,6 +48,18 @@ var payloadFactories = map[MessageType]func() any{
 	MessageTypeShuttingDown:       func() any { return &ShuttingDown{} },
 }
 
+func NewMessage(payload any) (Message, error) {
+	msgType, ok := messageTypeForPayload(payload)
+	if !ok {
+		return Message{}, fmt.Errorf("%w: %T", ErrUnknownPayloadType, payload)
+	}
+	data, err := json.Marshal(payload)
+	if err != nil {
+		return Message{}, err
+	}
+	return Message{Type: msgType, Payload: data}, nil
+}
+
 func DecodePayload(msg Message) (any, error) {
 	factory, ok := payloadFactories[msg.Type]
 	if !ok {
@@ -60,6 +73,37 @@ func DecodePayload(msg Message) (any, error) {
 		return nil, err
 	}
 	return payload, nil
+}
+
+func messageTypeForPayload(payload any) (MessageType, bool) {
+	switch payload.(type) {
+	case InitializeRequest, *InitializeRequest:
+		return MessageTypeInitializeRequest, true
+	case InitializeResponse, *InitializeResponse:
+		return MessageTypeInitializeResponse, true
+	case PingRequest, *PingRequest:
+		return MessageTypePingRequest, true
+	case PongResponse, *PongResponse:
+		return MessageTypePongResponse, true
+	case StartJobRequest, *StartJobRequest:
+		return MessageTypeStartJobRequest, true
+	case ShutdownRequest, *ShutdownRequest:
+		return MessageTypeShutdownRequest, true
+	case Exiting, *Exiting:
+		return MessageTypeExiting, true
+	case InferenceRequest, *InferenceRequest:
+		return MessageTypeInferenceRequest, true
+	case InferenceResponse, *InferenceResponse:
+		return MessageTypeInferenceResponse, true
+	case DumpStackTraceRequest, *DumpStackTraceRequest:
+		return MessageTypeDumpStackTrace, true
+	case ShutdownRequestAck, *ShutdownRequestAck:
+		return MessageTypeShutdownRequestAck, true
+	case ShuttingDown, *ShuttingDown:
+		return MessageTypeShuttingDown, true
+	default:
+		return "", false
+	}
 }
 
 type InitializeRequest struct {

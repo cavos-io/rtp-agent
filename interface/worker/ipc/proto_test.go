@@ -218,3 +218,44 @@ func TestDecodePayloadRejectsUnknownMessageType(t *testing.T) {
 		t.Fatalf("DecodePayload error = %v, want ErrUnknownMessageType", err)
 	}
 }
+
+func TestNewMessageEncodesRegisteredPayload(t *testing.T) {
+	msg, err := NewMessage(&InferenceResponse{
+		RequestID: "req-123",
+		Data:      []byte(`{"ok":true}`),
+	})
+	if err != nil {
+		t.Fatalf("NewMessage: %v", err)
+	}
+	if msg.Type != MessageTypeInferenceResponse {
+		t.Fatalf("Type = %q, want %q", msg.Type, MessageTypeInferenceResponse)
+	}
+	if len(msg.Payload) == 0 {
+		t.Fatal("Payload is empty, want encoded response")
+	}
+
+	decoded, err := DecodePayload(msg)
+	if err != nil {
+		t.Fatalf("DecodePayload: %v", err)
+	}
+	resp, ok := decoded.(*InferenceResponse)
+	if !ok {
+		t.Fatalf("decoded payload type = %T, want *InferenceResponse", decoded)
+	}
+	if resp.RequestID != "req-123" {
+		t.Fatalf("RequestID = %q, want req-123", resp.RequestID)
+	}
+	if string(resp.Data) != `{"ok":true}` {
+		t.Fatalf("Data = %q, want response payload", string(resp.Data))
+	}
+}
+
+func TestNewMessageRejectsUnknownPayloadType(t *testing.T) {
+	_, err := NewMessage(struct{ Value string }{Value: "unknown"})
+	if err == nil {
+		t.Fatal("NewMessage error = nil, want unknown payload type error")
+	}
+	if !errors.Is(err, ErrUnknownPayloadType) {
+		t.Fatalf("NewMessage error = %v, want ErrUnknownPayloadType", err)
+	}
+}
