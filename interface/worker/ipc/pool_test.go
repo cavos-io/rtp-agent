@@ -93,6 +93,53 @@ func TestProcPoolCloseUsesConfiguredTimeout(t *testing.T) {
 	}
 }
 
+func TestProcPoolTargetIdleProcesses(t *testing.T) {
+	pool := NewProcPool(4, ExecutorTypeThread, nil)
+
+	if got := pool.TargetIdleProcesses(); got != 0 {
+		t.Fatalf("TargetIdleProcesses = %d, want 0", got)
+	}
+
+	pool.SetTargetIdleProcesses(2)
+	if got := pool.TargetIdleProcesses(); got != 2 {
+		t.Fatalf("TargetIdleProcesses = %d, want 2", got)
+	}
+
+	pool.SetTargetIdleProcesses(10)
+	if got := pool.TargetIdleProcesses(); got != 4 {
+		t.Fatalf("TargetIdleProcesses after high value = %d, want capped max", got)
+	}
+
+	pool.SetTargetIdleProcesses(-1)
+	if got := pool.TargetIdleProcesses(); got != 0 {
+		t.Fatalf("TargetIdleProcesses after negative value = %d, want 0", got)
+	}
+}
+
+func TestProcPoolLaunchAfterCloseIsRejected(t *testing.T) {
+	var created int
+	pool := NewProcPool(1, ExecutorTypeThread, nil)
+	pool.executorFactory = func(id string) JobExecutor {
+		created++
+		return &fakeJobExecutor{id: id}
+	}
+
+	if err := pool.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	err := pool.LaunchJob(context.Background(), &livekit.Job{Id: "job-a"})
+	if err == nil {
+		t.Fatal("LaunchJob error = nil, want closed pool error")
+	}
+	if !errors.Is(err, ErrProcPoolClosed) {
+		t.Fatalf("LaunchJob error = %v, want ErrProcPoolClosed", err)
+	}
+	if created != 0 {
+		t.Fatalf("created executors = %d, want 0", created)
+	}
+}
+
 func TestProcPoolLaunchJobRetriesWithFreshExecutor(t *testing.T) {
 	first := &fakeJobExecutor{id: "exec-a", launchErr: errors.New("launch failed")}
 	second := &fakeJobExecutor{id: "exec-b"}
@@ -115,6 +162,9 @@ func TestProcPoolLaunchJobRetriesWithFreshExecutor(t *testing.T) {
 	}
 	if first.launches != 1 {
 		t.Fatalf("first launches = %d, want 1", first.launches)
+	}
+	if first.closeCalls != 1 {
+		t.Fatalf("first closeCalls = %d, want 1", first.closeCalls)
 	}
 	if second.launches != 1 {
 		t.Fatalf("second launches = %d, want 1", second.launches)
@@ -172,5 +222,119 @@ func TestProcPoolLaunchRunningJobPreservesAssignmentInfo(t *testing.T) {
 	}
 	if !running.FakeJob {
 		t.Fatal("FakeJob = false, want true")
+	}
+}
+
+func TestProcPoolEmitsJobLaunchedEvent(t *testing.T) {
+	executor := &fakeJobExecutor{id: "exec-a"}
+	pool := NewProcPool(1, ExecutorTypeThread, nil)
+	pool.executorFactory = func(id string) JobExecutor { return executor }
+
+	var launched []string
+	pool.On(ProcPoolEventJobLaunched, func(executor JobExecutor) {
+		launched = append(launched, executor.ID())
+	})
+
+	if err := pool.LaunchJob(context.Background(), &livekit.Job{Id: "job-a"}); err != nil {
+		t.Fatalf("LaunchJob: %v", err)
+	}
+
+	if len(launched) != 1 {
+		t.Fatalf("launched events = %d, want 1", len(launched))
+	}
+	if launched[0] != "exec-a" {
+		t.Fatalf("launched executor = %q, want exec-a", launched[0])
+	}
+}
+
+func TestProcPoolEmitsProcessLifecycleEventsOnLaunch(t *testing.T) {
+	executor := &fakeJobExecutor{id: "exec-a"}
+	pool := NewProcPool(1, ExecutorTypeThread, nil)
+	pool.executorFactory = func(id string) JobExecutor { return executor }
+
+	var events []ProcPoolEvent
+	for _, event := range []ProcPoolEvent{
+		ProcPoolEventProcessCreated,
+		ProcPoolEventProcessStarted,
+		ProcPoolEventProcessReady,
+	} {
+		event := event
+		pool.On(event, func(executor JobExecutor) {
+			if executor.ID() != "exec-a" {
+				t.Fatalf("%s executor = %q, want exec-a", event, executor.ID())
+			}
+			events = append(events, event)
+		})
+	}
+
+	if err := pool.LaunchJob(context.Background(), &livekit.Job{Id: "job-a"}); err != nil {
+		t.Fatalf("LaunchJob: %v", err)
+	}
+
+	wantEvents := []ProcPoolEvent{
+		ProcPoolEventProcessCreated,
+		ProcPoolEventProcessStarted,
+		ProcPoolEventProcessReady,
+	}
+	if len(events) != len(wantEvents) {
+		t.Fatalf("events = %v, want %v", events, wantEvents)
+	}
+	for i := range wantEvents {
+		if events[i] != wantEvents[i] {
+			t.Fatalf("events = %v, want %v", events, wantEvents)
+		}
+	}
+}
+
+func TestProcPoolEmitsProcessClosedEventForFailedLaunch(t *testing.T) {
+	pool := NewProcPool(1, ExecutorTypeThread, nil)
+	created := 0
+	pool.executorFactory = func(id string) JobExecutor {
+		created++
+		return &fakeJobExecutor{id: id, launchErr: errors.New("launch failed")}
+	}
+
+	var closed []string
+	pool.On(ProcPoolEventProcessClosed, func(executor JobExecutor) {
+		closed = append(closed, executor.ID())
+	})
+
+	err := pool.LaunchJob(context.Background(), &livekit.Job{Id: "job-a"})
+	if err == nil {
+		t.Fatal("LaunchJob error = nil, want launch failure")
+	}
+
+	if created != maxLaunchAttempts {
+		t.Fatalf("created executors = %d, want %d", created, maxLaunchAttempts)
+	}
+	if len(closed) != maxLaunchAttempts {
+		t.Fatalf("closed events = %d, want %d", len(closed), maxLaunchAttempts)
+	}
+	for i, executorID := range closed {
+		if executorID == "" {
+			t.Fatalf("closed[%d] executor ID is empty", i)
+		}
+	}
+}
+
+func TestProcPoolEmitsProcessClosedEvent(t *testing.T) {
+	executor := &fakeJobExecutor{id: "exec-a"}
+	pool := NewProcPool(1, ExecutorTypeThread, nil)
+	pool.executors[executor.id] = executor
+
+	var closed []string
+	pool.On(ProcPoolEventProcessClosed, func(executor JobExecutor) {
+		closed = append(closed, executor.ID())
+	})
+
+	if err := pool.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	if len(closed) != 1 {
+		t.Fatalf("closed events = %d, want 1", len(closed))
+	}
+	if closed[0] != "exec-a" {
+		t.Fatalf("closed executor = %q, want exec-a", closed[0])
 	}
 }

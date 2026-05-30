@@ -111,8 +111,22 @@ func (c *JobContext) ParticipantIdentity() string {
 	return agentIdentityForJobID(c.Job.Id)
 }
 
+func (c *JobContext) JobID() string {
+	if c.Job == nil {
+		return ""
+	}
+	return c.Job.Id
+}
+
 func (c *JobContext) IsFakeJob() bool {
 	return c.fakeJob
+}
+
+func (c *JobContext) RoomInfo() *livekit.Room {
+	if c.Job == nil {
+		return nil
+	}
+	return c.Job.Room
 }
 
 func (c *JobContext) connectInfo() lksdk.ConnectInfo {

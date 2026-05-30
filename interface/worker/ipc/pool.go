@@ -2,6 +2,7 @@ package ipc
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 	"time"
@@ -18,7 +19,19 @@ const (
 	ExecutorTypeProcess ExecutorType = "process"
 )
 
+type ProcPoolEvent string
+
+const (
+	ProcPoolEventProcessCreated ProcPoolEvent = "process_created"
+	ProcPoolEventProcessStarted ProcPoolEvent = "process_started"
+	ProcPoolEventProcessReady   ProcPoolEvent = "process_ready"
+	ProcPoolEventJobLaunched    ProcPoolEvent = "process_job_launched"
+	ProcPoolEventProcessClosed  ProcPoolEvent = "process_closed"
+)
+
 const maxLaunchAttempts = 3
+
+var ErrProcPoolClosed = errors.New("proc pool closed")
 
 type ProcPool struct {
 	maxProcesses    int
@@ -27,6 +40,9 @@ type ProcPool struct {
 	entrypoint      func() error
 	executorType    ExecutorType
 	closeTimeout    time.Duration
+	closed          bool
+	targetIdle      int
+	handlers        map[ProcPoolEvent][]func(JobExecutor)
 	executorFactory func(id string) JobExecutor
 }
 
@@ -37,6 +53,7 @@ func NewProcPool(maxProcesses int, executorType ExecutorType, entrypoint func() 
 		entrypoint:   entrypoint,
 		executorType: executorType,
 		closeTimeout: 5 * time.Second,
+		handlers:     make(map[ProcPoolEvent][]func(JobExecutor)),
 	}
 	pool.executorFactory = pool.newExecutor
 	return pool
@@ -57,6 +74,10 @@ func (p *ProcPool) LaunchRunningJob(ctx context.Context, info RunningJobInfo) er
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
+	if p.closed {
+		return ErrProcPoolClosed
+	}
+
 	var lastErr error
 	for attempt := 0; attempt < maxLaunchAttempts; attempt++ {
 		if len(p.executors) >= p.maxProcesses {
@@ -66,15 +87,23 @@ func (p *ProcPool) LaunchRunningJob(ctx context.Context, info RunningJobInfo) er
 		id := "exec_" + uuid.NewString()[:8]
 		executor := p.executorFactory(id)
 		p.executors[id] = executor
+		p.emit(ProcPoolEventProcessCreated, executor)
 
 		err := executor.LaunchRunningJob(ctx, info)
 		if err != nil {
 			delete(p.executors, id)
+			closeCtx, cancel := p.closeContext()
+			_ = executor.Close(closeCtx)
+			cancel()
+			p.emit(ProcPoolEventProcessClosed, executor)
 			lastErr = err
 			continue
 		}
 
+		p.emit(ProcPoolEventProcessStarted, executor)
+		p.emit(ProcPoolEventProcessReady, executor)
 		logger.Logger.Infow("Launched job", "executor_type", p.executorType, "executor_id", id, "job_id", info.Job.GetId())
+		p.emit(ProcPoolEventJobLaunched, executor)
 		return nil
 	}
 
@@ -98,6 +127,27 @@ func (p *ProcPool) SetCloseTimeout(timeout time.Duration) {
 	p.closeTimeout = timeout
 }
 
+func (p *ProcPool) On(event ProcPoolEvent, handler func(JobExecutor)) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.handlers == nil {
+		p.handlers = make(map[ProcPoolEvent][]func(JobExecutor))
+	}
+	p.handlers[event] = append(p.handlers[event], handler)
+}
+
+func (p *ProcPool) SetTargetIdleProcesses(numIdleProcesses int) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.targetIdle = clampInt(numIdleProcesses, 0, p.maxProcesses)
+}
+
+func (p *ProcPool) TargetIdleProcesses() int {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.targetIdle
+}
+
 func (p *ProcPool) GetByJobID(jobID string) JobExecutor {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -115,16 +165,38 @@ func (p *ProcPool) Close() error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
-	closeTimeout := p.closeTimeout
-	if closeTimeout <= 0 {
-		closeTimeout = 5 * time.Second
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), closeTimeout)
+	p.closed = true
+	ctx, cancel := p.closeContext()
 	defer cancel()
 
 	for _, e := range p.executors {
 		_ = e.Close(ctx)
+		p.emit(ProcPoolEventProcessClosed, e)
 	}
 	p.executors = make(map[string]JobExecutor)
 	return nil
+}
+
+func (p *ProcPool) closeContext() (context.Context, context.CancelFunc) {
+	closeTimeout := p.closeTimeout
+	if closeTimeout <= 0 {
+		closeTimeout = 5 * time.Second
+	}
+	return context.WithTimeout(context.Background(), closeTimeout)
+}
+
+func clampInt(value int, min int, max int) int {
+	if value < min {
+		return min
+	}
+	if value > max {
+		return max
+	}
+	return value
+}
+
+func (p *ProcPool) emit(event ProcPoolEvent, executor JobExecutor) {
+	for _, handler := range p.handlers[event] {
+		handler(executor)
+	}
 }

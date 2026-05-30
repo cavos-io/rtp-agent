@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -232,13 +233,39 @@ func processJobEnv(baseEnv []string, processID string, info RunningJobInfo) ([]s
 		return nil, err
 	}
 
-	env := append([]string{}, baseEnv...)
-	env = append(env,
-		fmt.Sprintf("LIVEKIT_AGENT_PROCESS_ID=%s", processID),
-		fmt.Sprintf("LIVEKIT_AGENT_JOB_JSON=%s", string(jobJSON)),
-		fmt.Sprintf("LIVEKIT_AGENT_RUNNING_JOB_JSON=%s", string(runningJobJSON)),
-	)
+	env := upsertEnv(baseEnv, "LIVEKIT_AGENT_PROCESS_ID", processID)
+	env = upsertEnv(env, "LIVEKIT_AGENT_JOB_JSON", string(jobJSON))
+	env = upsertEnv(env, "LIVEKIT_AGENT_RUNNING_JOB_JSON", string(runningJobJSON))
 	return env, nil
+}
+
+func upsertEnv(env []string, key string, value string) []string {
+	next := make([]string, 0, len(env)+1)
+	for _, item := range env {
+		name, _, ok := strings.Cut(item, "=")
+		if ok && name == key {
+			continue
+		}
+		next = append(next, item)
+	}
+	return append(next, fmt.Sprintf("%s=%s", key, value))
+}
+
+func RunningJobInfoFromEnv(env map[string]string) (RunningJobInfo, error) {
+	if raw := env["LIVEKIT_AGENT_RUNNING_JOB_JSON"]; raw != "" {
+		var info RunningJobInfo
+		if err := json.Unmarshal([]byte(raw), &info); err != nil {
+			return RunningJobInfo{}, err
+		}
+		return info, nil
+	}
+
+	rawJob := env["LIVEKIT_AGENT_JOB_JSON"]
+	var job livekit.Job
+	if err := json.Unmarshal([]byte(rawJob), &job); err != nil {
+		return RunningJobInfo{}, err
+	}
+	return RunningJobInfo{Job: &job}, nil
 }
 
 func (e *ProcessJobExecutor) pingTask(ctx context.Context) {

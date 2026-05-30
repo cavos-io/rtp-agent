@@ -94,6 +94,32 @@ func TestJobContextConnectInfoUsesAcceptedParticipantFields(t *testing.T) {
 	}
 }
 
+func TestJobContextRoomInfoReturnsJobRoom(t *testing.T) {
+	room := &livekit.Room{Name: "room-a", Sid: "RM_a"}
+	ctx := NewJobContext(&livekit.Job{Id: "job_room", Room: room}, "", "", "")
+
+	if got := ctx.RoomInfo(); got != room {
+		t.Fatal("RoomInfo() did not return the job room")
+	}
+
+	ctx.Job = nil
+	if got := ctx.RoomInfo(); got != nil {
+		t.Fatalf("RoomInfo() with nil job = %#v, want nil", got)
+	}
+}
+
+func TestJobContextJobIDReturnsCurrentJobID(t *testing.T) {
+	ctx := NewJobContext(&livekit.Job{Id: "job-a"}, "", "", "")
+	if got := ctx.JobID(); got != "job-a" {
+		t.Fatalf("JobID() = %q, want job-a", got)
+	}
+
+	ctx.Job = nil
+	if got := ctx.JobID(); got != "" {
+		t.Fatalf("JobID() with nil job = %q, want empty", got)
+	}
+}
+
 func TestJobRequestAccessorsExposeJobFields(t *testing.T) {
 	room := &livekit.Room{Name: "room-a"}
 	publisher := &livekit.ParticipantInfo{Identity: "publisher-a"}

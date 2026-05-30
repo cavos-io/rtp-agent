@@ -129,6 +129,72 @@ func TestNewAgentServerLoadsWorkerTokenFromEnvironment(t *testing.T) {
 	}
 }
 
+func TestUpdateOptionsMergesConfiguredValuesBeforeRun(t *testing.T) {
+	server := NewAgentServer(WorkerOptions{
+		WSRL:          "wss://old.example",
+		APIKey:        "old-key",
+		APISecret:     "old-secret",
+		MaxRetry:      3,
+		LoadThreshold: 0.5,
+	})
+
+	permissions := &WorkerPermissions{
+		CanPublish:     false,
+		CanSubscribe:   true,
+		CanPublishData: false,
+		Hidden:         true,
+	}
+	err := server.UpdateOptions(WorkerOptions{
+		WSURL:            "wss://new.example",
+		APIKey:           "new-key",
+		MaxRetry:         9,
+		LoadThreshold:    0.8,
+		NumIdleProcesses: 2,
+		Permissions:      permissions,
+	})
+	if err != nil {
+		t.Fatalf("UpdateOptions() error = %v", err)
+	}
+
+	if server.Options.WSURL != "wss://new.example" {
+		t.Fatalf("WSURL = %q, want updated value", server.Options.WSURL)
+	}
+	if server.Options.WSRL != "wss://new.example" {
+		t.Fatalf("WSRL = %q, want canonical updated WSURL value", server.Options.WSRL)
+	}
+	if server.Options.APIKey != "new-key" {
+		t.Fatalf("APIKey = %q, want updated value", server.Options.APIKey)
+	}
+	if server.Options.APISecret != "old-secret" {
+		t.Fatalf("APISecret = %q, want unchanged value", server.Options.APISecret)
+	}
+	if server.Options.MaxRetry != 9 {
+		t.Fatalf("MaxRetry = %d, want updated value", server.Options.MaxRetry)
+	}
+	if server.Options.LoadThreshold != 0.8 {
+		t.Fatalf("LoadThreshold = %v, want updated value", server.Options.LoadThreshold)
+	}
+	if server.Options.NumIdleProcesses != 2 {
+		t.Fatalf("NumIdleProcesses = %d, want updated value", server.Options.NumIdleProcesses)
+	}
+	if server.Options.Permissions != permissions {
+		t.Fatal("Permissions was not replaced with updated pointer")
+	}
+}
+
+func TestUpdateOptionsRejectsAfterWorkerStarted(t *testing.T) {
+	server := NewAgentServer(WorkerOptions{})
+	server.conn = &websocket.Conn{}
+
+	err := server.UpdateOptions(WorkerOptions{APIKey: "new-key"})
+	if err == nil {
+		t.Fatal("UpdateOptions() error = nil, want started worker error")
+	}
+	if !strings.Contains(err.Error(), "cannot update options after starting the server") {
+		t.Fatalf("UpdateOptions() error = %q, want started worker message", err.Error())
+	}
+}
+
 func TestAgentWebSocketURLPreservesBasePath(t *testing.T) {
 	got, err := agentWebSocketURL("https://livekit.example/project-a", "")
 	if err != nil {
@@ -237,6 +303,150 @@ func TestRegisterWorkerRequestIncludesDefaultPermissions(t *testing.T) {
 	}
 	if !permissions.Agent {
 		t.Fatal("permissions.Agent = false, want true")
+	}
+}
+
+func TestRegisterWorkerRequestIncludesConfiguredPermissions(t *testing.T) {
+	server := NewAgentServer(WorkerOptions{
+		Permissions: &WorkerPermissions{
+			CanPublish:        false,
+			CanSubscribe:      true,
+			CanPublishData:    false,
+			CanUpdateMetadata: false,
+			CanPublishSources: []livekit.TrackSource{
+				livekit.TrackSource_MICROPHONE,
+				livekit.TrackSource_SCREEN_SHARE,
+			},
+			Hidden: true,
+		},
+	})
+
+	register := server.registerWorkerRequest().GetRegister()
+	if register == nil {
+		t.Fatal("register worker message is nil")
+	}
+
+	permissions := register.GetAllowedPermissions()
+	if permissions == nil {
+		t.Fatal("register.AllowedPermissions = nil, want configured permissions")
+	}
+	if permissions.CanPublish {
+		t.Fatal("permissions.CanPublish = true, want false")
+	}
+	if !permissions.CanSubscribe {
+		t.Fatal("permissions.CanSubscribe = false, want true")
+	}
+	if permissions.CanPublishData {
+		t.Fatal("permissions.CanPublishData = true, want false")
+	}
+	if permissions.CanUpdateMetadata {
+		t.Fatal("permissions.CanUpdateMetadata = true, want false")
+	}
+	if !permissions.Hidden {
+		t.Fatal("permissions.Hidden = false, want true")
+	}
+	if !permissions.Agent {
+		t.Fatal("permissions.Agent = false, want true")
+	}
+	if len(permissions.CanPublishSources) != 2 {
+		t.Fatalf("permissions.CanPublishSources len = %d, want 2", len(permissions.CanPublishSources))
+	}
+	if permissions.CanPublishSources[0] != livekit.TrackSource_MICROPHONE {
+		t.Fatalf("permissions.CanPublishSources[0] = %v, want MICROPHONE", permissions.CanPublishSources[0])
+	}
+	if permissions.CanPublishSources[1] != livekit.TrackSource_SCREEN_SHARE {
+		t.Fatalf("permissions.CanPublishSources[1] = %v, want SCREEN_SHARE", permissions.CanPublishSources[1])
+	}
+}
+
+func TestHandleRegisterNotifiesWorkerRegisteredHandlers(t *testing.T) {
+	server := NewAgentServer(WorkerOptions{})
+	serverInfo := &livekit.ServerInfo{}
+
+	var gotWorkerID string
+	var gotServerInfo *livekit.ServerInfo
+	server.OnWorkerRegistered(func(workerID string, info *livekit.ServerInfo) {
+		gotWorkerID = workerID
+		gotServerInfo = info
+	})
+
+	server.handleMessage(context.Background(), &livekit.ServerMessage{
+		Message: &livekit.ServerMessage_Register{
+			Register: &livekit.RegisterWorkerResponse{
+				WorkerId:   "worker-a",
+				ServerInfo: serverInfo,
+			},
+		},
+	})
+
+	if gotWorkerID != "worker-a" {
+		t.Fatalf("registered workerID = %q, want worker-a", gotWorkerID)
+	}
+	if gotServerInfo != serverInfo {
+		t.Fatalf("registered serverInfo = %p, want %p", gotServerInfo, serverInfo)
+	}
+}
+
+func TestAgentServerIDReturnsRegisteredWorkerID(t *testing.T) {
+	server := NewAgentServer(WorkerOptions{})
+	if server.ID() != "" {
+		t.Fatalf("ID() before registration = %q, want empty", server.ID())
+	}
+
+	server.handleMessage(context.Background(), &livekit.ServerMessage{
+		Message: &livekit.ServerMessage_Register{
+			Register: &livekit.RegisterWorkerResponse{WorkerId: "worker-a"},
+		},
+	})
+
+	if server.ID() != "worker-a" {
+		t.Fatalf("ID() after registration = %q, want worker-a", server.ID())
+	}
+}
+
+func TestAgentServerActiveJobsReturnsSnapshot(t *testing.T) {
+	server := NewAgentServer(WorkerOptions{})
+	jobA := NewJobContext(&livekit.Job{Id: "job-a"}, "", "", "")
+	jobB := NewJobContext(&livekit.Job{Id: "job-b"}, "", "", "")
+	server.mu.Lock()
+	server.activeJobs[jobA.Job.Id] = jobA
+	server.activeJobs[jobB.Job.Id] = jobB
+	server.mu.Unlock()
+
+	activeJobs := server.ActiveJobs()
+	if len(activeJobs) != 2 {
+		t.Fatalf("ActiveJobs() len = %d, want 2", len(activeJobs))
+	}
+
+	got := map[string]*JobContext{}
+	for _, jobCtx := range activeJobs {
+		got[jobCtx.Job.Id] = jobCtx
+	}
+	if got["job-a"] != jobA {
+		t.Fatal("ActiveJobs() missing job-a context")
+	}
+	if got["job-b"] != jobB {
+		t.Fatal("ActiveJobs() missing job-b context")
+	}
+
+	activeJobs[0] = nil
+	if len(server.ActiveJobs()) != 2 {
+		t.Fatal("mutating ActiveJobs() result changed server active job count")
+	}
+}
+
+func TestEmitWorkerStartedNotifiesHandlers(t *testing.T) {
+	server := NewAgentServer(WorkerOptions{})
+
+	var calls int
+	server.OnWorkerStarted(func() {
+		calls++
+	})
+
+	server.emitWorkerStarted()
+
+	if calls != 1 {
+		t.Fatalf("worker started handler calls = %d, want 1", calls)
 	}
 }
 
@@ -1116,6 +1326,14 @@ func TestLocalJobContextUsesProvidedParticipantIdentity(t *testing.T) {
 	}
 }
 
+func TestLocalJobContextUsesReferenceMockJobIDPrefix(t *testing.T) {
+	ctx := newLocalJobContext("room-a", "agent-local", WorkerOptions{})
+
+	if !strings.HasPrefix(ctx.Job.Id, "mock-job-") {
+		t.Fatalf("local job ID = %q, want mock-job- prefix", ctx.Job.Id)
+	}
+}
+
 func TestExecuteLocalJobCleansUpAndRunsSessionEnd(t *testing.T) {
 	server := NewAgentServer(WorkerOptions{})
 	startedCh := make(chan *JobContext, 1)
@@ -1248,6 +1466,23 @@ func TestDrainWaitsForActiveJobs(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("Drain() did not return after active job finished")
+	}
+}
+
+func TestDrainWithTimeoutReturnsContextDeadline(t *testing.T) {
+	server := NewAgentServer(WorkerOptions{DrainTimeoutSeconds: 1800})
+	jobCtx := NewJobContext(&livekit.Job{Id: "job_drain_timeout"}, "", "", "")
+	server.mu.Lock()
+	server.activeJobs[jobCtx.Job.Id] = jobCtx
+	server.mu.Unlock()
+
+	started := time.Now()
+	err := server.DrainWithTimeout(context.Background(), 10*time.Millisecond)
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("DrainWithTimeout() error = %v, want context deadline exceeded", err)
+	}
+	if elapsed := time.Since(started); elapsed > time.Second {
+		t.Fatalf("DrainWithTimeout() elapsed = %v, want per-call timeout instead of configured timeout", elapsed)
 	}
 }
 

@@ -66,6 +66,10 @@ type WorkerPermissions struct {
 	Hidden            bool
 }
 
+type WorkerStartedHandler func()
+
+type WorkerRegisteredHandler func(workerID string, serverInfo *livekit.ServerInfo)
+
 type WorkerOptions struct {
 	AgentName  string
 	WorkerType WorkerType
@@ -97,15 +101,17 @@ type AgentServer struct {
 	requestFnc    func(*JobRequest) error
 	sessionEndFnc func(*JobContext) error
 
-	activeJobs        map[string]*JobContext
-	pendingAccepts    map[string]JobAcceptArguments
-	pendingTimers     map[string]*time.Timer
-	reservedSlots     int
-	draining          bool
-	mu                sync.Mutex
-	conn              *websocket.Conn
-	workerMessageSink func(*livekit.WorkerMessage) error
-	workerID          string
+	activeJobs         map[string]*JobContext
+	pendingAccepts     map[string]JobAcceptArguments
+	pendingTimers      map[string]*time.Timer
+	reservedSlots      int
+	draining           bool
+	mu                 sync.Mutex
+	conn               *websocket.Conn
+	workerMessageSink  func(*livekit.WorkerMessage) error
+	workerID           string
+	startedHandlers    []WorkerStartedHandler
+	registeredHandlers []WorkerRegisteredHandler
 
 	consoleSession any // Store local session for CLI console
 }
@@ -118,6 +124,123 @@ func NewAgentServer(opts WorkerOptions) *AgentServer {
 		pendingAccepts: make(map[string]JobAcceptArguments),
 		pendingTimers:  make(map[string]*time.Timer),
 	}
+}
+
+func (s *AgentServer) OnWorkerStarted(handler WorkerStartedHandler) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	s.startedHandlers = append(s.startedHandlers, handler)
+}
+
+func (s *AgentServer) OnWorkerRegistered(handler WorkerRegisteredHandler) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	s.registeredHandlers = append(s.registeredHandlers, handler)
+}
+
+func (s *AgentServer) ID() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.workerID
+}
+
+func (s *AgentServer) ActiveJobs() []*JobContext {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	jobs := make([]*JobContext, 0, len(s.activeJobs))
+	for _, jobCtx := range s.activeJobs {
+		jobs = append(jobs, jobCtx)
+	}
+	return jobs
+}
+
+func (s *AgentServer) UpdateOptions(opts WorkerOptions) error {
+	s.mu.Lock()
+	if s.conn != nil {
+		s.mu.Unlock()
+		return fmt.Errorf("cannot update options after starting the server")
+	}
+	current := s.Options
+	s.mu.Unlock()
+
+	updated := mergeWorkerOptions(current, opts)
+	updated = resolveWorkerOptions(updated)
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.conn != nil {
+		return fmt.Errorf("cannot update options after starting the server")
+	}
+	s.Options = updated
+	return nil
+}
+
+func mergeWorkerOptions(current WorkerOptions, next WorkerOptions) WorkerOptions {
+	if next.AgentName != "" {
+		current.AgentName = next.AgentName
+	}
+	if next.WorkerType != "" {
+		current.WorkerType = next.WorkerType
+	}
+	if next.MaxRetry != 0 {
+		current.MaxRetry = next.MaxRetry
+	}
+	if next.Version != "" {
+		current.Version = next.Version
+	}
+	if next.WSURL != "" {
+		current.WSURL = next.WSURL
+		current.WSRL = next.WSURL
+	} else if next.WSRL != "" {
+		current.WSURL = next.WSRL
+		current.WSRL = next.WSRL
+	}
+	if next.LoadFunc != nil {
+		current.LoadFunc = next.LoadFunc
+	}
+	if next.APIKey != "" {
+		current.APIKey = next.APIKey
+	}
+	if next.APISecret != "" {
+		current.APISecret = next.APISecret
+	}
+	if next.WorkerToken != "" {
+		current.WorkerToken = next.WorkerToken
+	}
+	if next.HTTPProxy != "" {
+		current.HTTPProxy = next.HTTPProxy
+	}
+	if next.LoadThreshold != 0 {
+		current.LoadThreshold = next.LoadThreshold
+	}
+	if next.JobMemoryWarnMB != 0 {
+		current.JobMemoryWarnMB = next.JobMemoryWarnMB
+	}
+	if next.JobMemoryLimitMB != 0 {
+		current.JobMemoryLimitMB = next.JobMemoryLimitMB
+	}
+	if next.NumIdleProcesses != 0 {
+		current.NumIdleProcesses = next.NumIdleProcesses
+	}
+	if next.DrainTimeoutSeconds != 0 {
+		current.DrainTimeoutSeconds = next.DrainTimeoutSeconds
+	}
+	if next.SessionEndTimeoutSeconds != 0 {
+		current.SessionEndTimeoutSeconds = next.SessionEndTimeoutSeconds
+	}
+	if next.ShutdownProcessTimeoutSeconds != 0 {
+		current.ShutdownProcessTimeoutSeconds = next.ShutdownProcessTimeoutSeconds
+	}
+	if next.InitializeProcessTimeoutSeconds != 0 {
+		current.InitializeProcessTimeoutSeconds = next.InitializeProcessTimeoutSeconds
+	}
+	if next.Permissions != nil {
+		current.Permissions = next.Permissions
+	}
+	return current
 }
 
 func resolveWorkerOptions(opts WorkerOptions) WorkerOptions {
@@ -388,11 +511,21 @@ func (s *AgentServer) Draining() bool {
 
 func (s *AgentServer) Drain(ctx context.Context) error {
 	if s.Options.DrainTimeoutSeconds > 0 {
+		return s.DrainWithTimeout(ctx, time.Duration(s.Options.DrainTimeoutSeconds)*time.Second)
+	}
+	return s.drain(ctx)
+}
+
+func (s *AgentServer) DrainWithTimeout(ctx context.Context, timeout time.Duration) error {
+	if timeout > 0 {
 		var cancel context.CancelFunc
-		ctx, cancel = context.WithTimeout(ctx, time.Duration(s.Options.DrainTimeoutSeconds)*time.Second)
+		ctx, cancel = context.WithTimeout(ctx, timeout)
 		defer cancel()
 	}
+	return s.drain(ctx)
+}
 
+func (s *AgentServer) drain(ctx context.Context) error {
 	s.mu.Lock()
 	if s.draining {
 		s.mu.Unlock()
@@ -567,6 +700,7 @@ func (s *AgentServer) Run(ctx context.Context) error {
 	statusCtx, stopStatusUpdates := context.WithCancel(ctx)
 	defer stopStatusUpdates()
 	go s.runWorkerStatusUpdates(statusCtx, workerStatusUpdateInterval)
+	s.emitWorkerStarted()
 
 	// Message Loop
 	for {
@@ -591,6 +725,16 @@ func (s *AgentServer) Run(ctx context.Context) error {
 
 			s.handleMessage(ctx, msg)
 		}
+	}
+}
+
+func (s *AgentServer) emitWorkerStarted() {
+	s.mu.Lock()
+	handlers := append([]WorkerStartedHandler(nil), s.startedHandlers...)
+	s.mu.Unlock()
+
+	for _, handler := range handlers {
+		handler()
 	}
 }
 
@@ -661,6 +805,7 @@ func (s *AgentServer) handleMessage(ctx context.Context, msg *livekit.ServerMess
 		s.mu.Lock()
 		s.workerID = m.Register.WorkerId
 		s.mu.Unlock()
+		s.emitWorkerRegistered(m.Register.WorkerId, m.Register.ServerInfo)
 		s.reportActiveJobs()
 	case *livekit.ServerMessage_Availability:
 		s.handleAvailability(ctx, m.Availability)
@@ -670,6 +815,16 @@ func (s *AgentServer) handleMessage(ctx context.Context, msg *livekit.ServerMess
 		s.handleTermination(m.Termination)
 	default:
 		logger.Logger.Warnw("Unhandled message type received", nil)
+	}
+}
+
+func (s *AgentServer) emitWorkerRegistered(workerID string, serverInfo *livekit.ServerInfo) {
+	s.mu.Lock()
+	handlers := append([]WorkerRegisteredHandler(nil), s.registeredHandlers...)
+	s.mu.Unlock()
+
+	for _, handler := range handlers {
+		handler(workerID, serverInfo)
 	}
 }
 
@@ -945,7 +1100,7 @@ func (s *AgentServer) runSessionEnd(jobCtx *JobContext) {
 func newLocalJobContext(roomName string, participantIdentity string, opts WorkerOptions) *JobContext {
 	opts = resolveWorkerOptions(opts)
 	job := &livekit.Job{
-		Id: "local-job-" + time.Now().Format("20060102150405"),
+		Id: "mock-job-" + time.Now().Format("20060102150405"),
 		Room: &livekit.Room{
 			Name: roomName,
 			Sid:  "RM_local",
