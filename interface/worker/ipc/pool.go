@@ -19,6 +19,13 @@ const (
 	ExecutorTypeProcess ExecutorType = "process"
 )
 
+type ProcPoolEvent string
+
+const (
+	ProcPoolEventJobLaunched   ProcPoolEvent = "process_job_launched"
+	ProcPoolEventProcessClosed ProcPoolEvent = "process_closed"
+)
+
 const maxLaunchAttempts = 3
 
 var ErrProcPoolClosed = errors.New("proc pool closed")
@@ -32,6 +39,7 @@ type ProcPool struct {
 	closeTimeout    time.Duration
 	closed          bool
 	targetIdle      int
+	handlers        map[ProcPoolEvent][]func(JobExecutor)
 	executorFactory func(id string) JobExecutor
 }
 
@@ -42,6 +50,7 @@ func NewProcPool(maxProcesses int, executorType ExecutorType, entrypoint func() 
 		entrypoint:   entrypoint,
 		executorType: executorType,
 		closeTimeout: 5 * time.Second,
+		handlers:     make(map[ProcPoolEvent][]func(JobExecutor)),
 	}
 	pool.executorFactory = pool.newExecutor
 	return pool
@@ -87,6 +96,7 @@ func (p *ProcPool) LaunchRunningJob(ctx context.Context, info RunningJobInfo) er
 		}
 
 		logger.Logger.Infow("Launched job", "executor_type", p.executorType, "executor_id", id, "job_id", info.Job.GetId())
+		p.emit(ProcPoolEventJobLaunched, executor)
 		return nil
 	}
 
@@ -108,6 +118,15 @@ func (p *ProcPool) SetCloseTimeout(timeout time.Duration) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.closeTimeout = timeout
+}
+
+func (p *ProcPool) On(event ProcPoolEvent, handler func(JobExecutor)) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.handlers == nil {
+		p.handlers = make(map[ProcPoolEvent][]func(JobExecutor))
+	}
+	p.handlers[event] = append(p.handlers[event], handler)
 }
 
 func (p *ProcPool) SetTargetIdleProcesses(numIdleProcesses int) {
@@ -145,6 +164,7 @@ func (p *ProcPool) Close() error {
 
 	for _, e := range p.executors {
 		_ = e.Close(ctx)
+		p.emit(ProcPoolEventProcessClosed, e)
 	}
 	p.executors = make(map[string]JobExecutor)
 	return nil
@@ -166,4 +186,10 @@ func clampInt(value int, min int, max int) int {
 		return max
 	}
 	return value
+}
+
+func (p *ProcPool) emit(event ProcPoolEvent, executor JobExecutor) {
+	for _, handler := range p.handlers[event] {
+		handler(executor)
+	}
 }
