@@ -5,6 +5,7 @@ import (
 	"reflect"
 	"testing"
 
+	"github.com/livekit/protocol/auth"
 	"github.com/livekit/protocol/livekit"
 	lksdk "github.com/livekit/server-sdk-go/v2"
 )
@@ -135,6 +136,23 @@ func TestJobContextLocalParticipantIdentity(t *testing.T) {
 	ctx.Job = nil
 	if got := ctx.LocalParticipantIdentity(); got != "" {
 		t.Fatalf("LocalParticipantIdentity() with nil job = %q, want empty", got)
+	}
+}
+
+func TestJobContextLocalParticipantIdentityPrefersTokenIdentity(t *testing.T) {
+	token, err := auth.NewAccessToken("key", "secret").
+		SetIdentity("token-agent").
+		ToJWT()
+	if err != nil {
+		t.Fatalf("ToJWT() error = %v", err)
+	}
+
+	ctx := NewJobContext(&livekit.Job{Id: "job-a"}, "", "", "")
+	ctx.AcceptArguments.Identity = "accepted-agent"
+	ctx.token = token
+
+	if got := ctx.LocalParticipantIdentity(); got != "token-agent" {
+		t.Fatalf("LocalParticipantIdentity() = %q, want token-agent", got)
 	}
 }
 
