@@ -115,6 +115,13 @@ func (c *JobContext) IsFakeJob() bool {
 	return c.fakeJob
 }
 
+func (c *JobContext) RoomInfo() *livekit.Room {
+	if c.Job == nil {
+		return nil
+	}
+	return c.Job.Room
+}
+
 func (c *JobContext) connectInfo() lksdk.ConnectInfo {
 	return lksdk.ConnectInfo{
 		APIKey:                c.apiKey,
