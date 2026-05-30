@@ -1100,7 +1100,7 @@ func (s *AgentServer) runSessionEnd(jobCtx *JobContext) {
 func newLocalJobContext(roomName string, participantIdentity string, opts WorkerOptions) *JobContext {
 	opts = resolveWorkerOptions(opts)
 	job := &livekit.Job{
-		Id: "local-job-" + time.Now().Format("20060102150405"),
+		Id: "mock-job-" + time.Now().Format("20060102150405"),
 		Room: &livekit.Room{
 			Name: roomName,
 			Sid:  "RM_local",

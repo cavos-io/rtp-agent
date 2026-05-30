@@ -1326,6 +1326,14 @@ func TestLocalJobContextUsesProvidedParticipantIdentity(t *testing.T) {
 	}
 }
 
+func TestLocalJobContextUsesReferenceMockJobIDPrefix(t *testing.T) {
+	ctx := newLocalJobContext("room-a", "agent-local", WorkerOptions{})
+
+	if !strings.HasPrefix(ctx.Job.Id, "mock-job-") {
+		t.Fatalf("local job ID = %q, want mock-job- prefix", ctx.Job.Id)
+	}
+}
+
 func TestExecuteLocalJobCleansUpAndRunsSessionEnd(t *testing.T) {
 	server := NewAgentServer(WorkerOptions{})
 	startedCh := make(chan *JobContext, 1)
