@@ -201,6 +201,26 @@ func TestWorkerStatusMessageMarksOverloadedWorkerFull(t *testing.T) {
 	}
 }
 
+func TestDrainingWorkerStatusMessageReportsFullWithoutLoad(t *testing.T) {
+	server := NewAgentServer(WorkerOptions{
+		LoadFunc: func(*AgentServer) float64 {
+			return 0.9
+		},
+	})
+
+	msg := server.drainingWorkerStatusMessage()
+	update := msg.GetUpdateWorker()
+	if update == nil {
+		t.Fatal("update worker message is nil")
+	}
+	if update.GetStatus() != livekit.WorkerStatus_WS_FULL {
+		t.Fatalf("UpdateWorker.Status = %v, want WS_FULL", update.GetStatus())
+	}
+	if update.Load != 0 {
+		t.Fatalf("UpdateWorker.Load = %v, want 0 while draining", update.Load)
+	}
+}
+
 func TestAgentIdentityForJobIDUsesFullJobID(t *testing.T) {
 	jobID := "job_123456789"
 	want := "agent-" + jobID

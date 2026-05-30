@@ -222,6 +222,18 @@ func (s *AgentServer) workerStatusMessage(status livekit.WorkerStatus) *livekit.
 	}
 }
 
+func (s *AgentServer) drainingWorkerStatusMessage() *livekit.WorkerMessage {
+	status := livekit.WorkerStatus_WS_FULL
+	return &livekit.WorkerMessage{
+		Message: &livekit.WorkerMessage_UpdateWorker{
+			UpdateWorker: &livekit.UpdateWorkerStatus{
+				Status:   &status,
+				JobCount: uint32(s.activeJobCount()),
+			},
+		},
+	}
+}
+
 func jobStatusMessage(jobID string, status livekit.JobStatus) *livekit.WorkerMessage {
 	return &livekit.WorkerMessage{
 		Message: &livekit.WorkerMessage_UpdateJob{
@@ -292,7 +304,7 @@ func (s *AgentServer) Drain(ctx context.Context) error {
 	s.mu.Unlock()
 
 	if connected {
-		if err := s.sendWorkerMessage(s.workerStatusMessage(livekit.WorkerStatus_WS_FULL)); err != nil {
+		if err := s.sendWorkerMessage(s.drainingWorkerStatusMessage()); err != nil {
 			return err
 		}
 	}
