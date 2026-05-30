@@ -134,12 +134,13 @@ func availabilityResponseForAccept(req *livekit.AvailabilityRequest, args JobAcc
 	}
 }
 
-func availabilityResponseForReject(req *livekit.AvailabilityRequest) *livekit.WorkerMessage {
+func availabilityResponseForReject(req *livekit.AvailabilityRequest, args JobRejectArguments) *livekit.WorkerMessage {
 	return &livekit.WorkerMessage{
 		Message: &livekit.WorkerMessage_Availability{
 			Availability: &livekit.AvailabilityResponse{
 				JobId:     req.Job.Id,
 				Available: false,
+				Terminate: args.Terminate,
 			},
 		},
 	}
@@ -297,9 +298,9 @@ func (s *AgentServer) handleAvailability(ctx context.Context, req *livekit.Avail
 			answered = true
 			return s.sendWorkerMessage(availabilityResponseForAccept(req, args, s.Options.AgentName))
 		},
-		rejectFnc: func() error {
+		rejectFnc: func(args JobRejectArguments) error {
 			answered = true
-			return s.sendWorkerMessage(availabilityResponseForReject(req))
+			return s.sendWorkerMessage(availabilityResponseForReject(req, args))
 		},
 	}
 

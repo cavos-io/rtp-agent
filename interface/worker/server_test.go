@@ -206,7 +206,7 @@ func TestAvailabilityResponseRejectsJob(t *testing.T) {
 		Job: &livekit.Job{Id: "job_reject"},
 	}
 
-	resp := availabilityResponseForReject(req)
+	resp := availabilityResponseForReject(req, JobRejectArguments{Terminate: true})
 	availability := resp.GetAvailability()
 	if availability == nil {
 		t.Fatal("availability response is nil")
@@ -216,5 +216,55 @@ func TestAvailabilityResponseRejectsJob(t *testing.T) {
 	}
 	if availability.JobId != "job_reject" {
 		t.Fatalf("availability.JobId = %q, want %q", availability.JobId, "job_reject")
+	}
+	if !availability.Terminate {
+		t.Fatal("availability.Terminate = false, want true")
+	}
+}
+
+func TestAvailabilityResponseRejectCanAvoidTermination(t *testing.T) {
+	req := &livekit.AvailabilityRequest{
+		Job: &livekit.Job{Id: "job_requeue"},
+	}
+
+	resp := availabilityResponseForReject(req, JobRejectArguments{Terminate: false})
+	availability := resp.GetAvailability()
+	if availability.Terminate {
+		t.Fatal("availability.Terminate = true, want false")
+	}
+}
+
+func TestJobRequestRejectDefaultsToTerminate(t *testing.T) {
+	var got JobRejectArguments
+	req := &JobRequest{
+		rejectFnc: func(args JobRejectArguments) error {
+			got = args
+			return nil
+		},
+	}
+
+	if err := req.Reject(); err != nil {
+		t.Fatalf("Reject() error = %v", err)
+	}
+	if !got.Terminate {
+		t.Fatal("Reject() Terminate = false, want true")
+	}
+}
+
+func TestJobRequestAcceptDefaultsIdentityBeforeCallback(t *testing.T) {
+	var got JobAcceptArguments
+	req := &JobRequest{
+		Job: &livekit.Job{Id: "job_identity"},
+		acceptFnc: func(args JobAcceptArguments) error {
+			got = args
+			return nil
+		},
+	}
+
+	if err := req.Accept(JobAcceptArguments{}); err != nil {
+		t.Fatalf("Accept() error = %v", err)
+	}
+	if got.Identity != "agent-job_identity" {
+		t.Fatalf("Accept() Identity = %q, want default identity", got.Identity)
 	}
 }

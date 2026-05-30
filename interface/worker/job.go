@@ -16,23 +16,34 @@ type JobAcceptArguments struct {
 	Attributes map[string]string
 }
 
+type JobRejectArguments struct {
+	Terminate bool
+}
+
 type JobRequest struct {
 	Job *livekit.Job
 
 	acceptFnc func(JobAcceptArguments) error
-	rejectFnc func() error
+	rejectFnc func(JobRejectArguments) error
 }
 
 func (r *JobRequest) Accept(args JobAcceptArguments) error {
+	if args.Identity == "" && r.Job != nil {
+		args.Identity = agentIdentityForJobID(r.Job.Id)
+	}
 	if r.acceptFnc != nil {
 		return r.acceptFnc(args)
 	}
 	return nil
 }
 
-func (r *JobRequest) Reject() error {
+func (r *JobRequest) Reject(args ...JobRejectArguments) error {
+	rejectArgs := JobRejectArguments{Terminate: true}
+	if len(args) > 0 {
+		rejectArgs = args[0]
+	}
 	if r.rejectFnc != nil {
-		return r.rejectFnc()
+		return r.rejectFnc(rejectArgs)
 	}
 	return nil
 }
