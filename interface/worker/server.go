@@ -27,6 +27,8 @@ const (
 	participantAttributeAgentName = "lk.agent.name"
 )
 
+var assignmentTimeout = 7500 * time.Millisecond
+
 type WorkerPermissions struct {
 	CanPublish        bool
 	CanSubscribe      bool
@@ -62,6 +64,7 @@ type AgentServer struct {
 
 	activeJobs        map[string]*JobContext
 	pendingAccepts    map[string]JobAcceptArguments
+	pendingTimers     map[string]*time.Timer
 	draining          bool
 	mu                sync.Mutex
 	conn              *websocket.Conn
@@ -76,6 +79,7 @@ func NewAgentServer(opts WorkerOptions) *AgentServer {
 		Options:        opts,
 		activeJobs:     make(map[string]*JobContext),
 		pendingAccepts: make(map[string]JobAcceptArguments),
+		pendingTimers:  make(map[string]*time.Timer),
 	}
 }
 
@@ -459,9 +463,7 @@ func (s *AgentServer) handleAvailability(ctx context.Context, req *livekit.Avail
 			if err := s.sendWorkerMessage(availabilityResponseForAccept(req, args, s.Options.AgentName)); err != nil {
 				return err
 			}
-			s.mu.Lock()
-			s.pendingAccepts[req.Job.Id] = args
-			s.mu.Unlock()
+			s.storePendingAccept(req.Job.Id, args)
 			return nil
 		},
 		rejectFnc: func(args JobRejectArguments) error {
@@ -501,6 +503,28 @@ func (s *AgentServer) sendWorkerMessage(msg *livekit.WorkerMessage) error {
 	return s.conn.WriteMessage(websocket.BinaryMessage, b)
 }
 
+func (s *AgentServer) storePendingAccept(jobID string, args JobAcceptArguments) {
+	s.mu.Lock()
+	if timer, ok := s.pendingTimers[jobID]; ok {
+		timer.Stop()
+	}
+	s.pendingAccepts[jobID] = args
+	var timer *time.Timer
+	timer = time.AfterFunc(assignmentTimeout, func() {
+		s.mu.Lock()
+		if s.pendingTimers[jobID] != timer {
+			s.mu.Unlock()
+			return
+		}
+		delete(s.pendingAccepts, jobID)
+		delete(s.pendingTimers, jobID)
+		s.mu.Unlock()
+		logger.Logger.Warnw("assignment timed out after availability accept", nil, "jobId", jobID)
+	})
+	s.pendingTimers[jobID] = timer
+	s.mu.Unlock()
+}
+
 func (s *AgentServer) handleAssignment(ctx context.Context, req *livekit.JobAssignment) {
 	logger.Logger.Infow("Received job assignment", "jobId", req.Job.Id)
 
@@ -516,6 +540,10 @@ func (s *AgentServer) handleAssignment(ctx context.Context, req *livekit.JobAssi
 	if args, ok := s.pendingAccepts[req.Job.Id]; ok {
 		jobCtx.AcceptArguments = args
 		delete(s.pendingAccepts, req.Job.Id)
+	}
+	if timer, ok := s.pendingTimers[req.Job.Id]; ok {
+		timer.Stop()
+		delete(s.pendingTimers, req.Job.Id)
 	}
 	s.activeJobs[req.Job.Id] = jobCtx
 	s.mu.Unlock()

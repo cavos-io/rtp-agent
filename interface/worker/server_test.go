@@ -358,6 +358,45 @@ func TestHandleRegisterReportsActiveJobs(t *testing.T) {
 	}
 }
 
+func TestAcceptedAvailabilityExpiresWithoutAssignment(t *testing.T) {
+	oldTimeout := assignmentTimeout
+	assignmentTimeout = 10 * time.Millisecond
+	t.Cleanup(func() {
+		assignmentTimeout = oldTimeout
+	})
+
+	server := NewAgentServer(WorkerOptions{})
+	sentCh := make(chan *livekit.WorkerMessage, 1)
+	server.workerMessageSink = func(msg *livekit.WorkerMessage) error {
+		sentCh <- msg
+		return nil
+	}
+
+	job := &livekit.Job{Id: "job_assignment_timeout", Room: &livekit.Room{Name: "room-a"}}
+	server.handleAvailability(context.Background(), &livekit.AvailabilityRequest{Job: job})
+	availability := receiveWorkerMessage(t, sentCh).GetAvailability()
+	if availability == nil || !availability.Available {
+		t.Fatal("availability response was not accepted")
+	}
+
+	deadline := time.After(time.Second)
+	for {
+		server.mu.Lock()
+		_, pending := server.pendingAccepts[job.Id]
+		server.mu.Unlock()
+		if !pending {
+			return
+		}
+
+		select {
+		case <-deadline:
+			t.Fatal("accepted arguments remained pending after assignment timeout")
+		default:
+			time.Sleep(time.Millisecond)
+		}
+	}
+}
+
 func TestAssignmentPreservesAcceptedParticipantIdentity(t *testing.T) {
 	server := NewAgentServer(WorkerOptions{})
 	server.workerMessageSink = func(msg *livekit.WorkerMessage) error {
