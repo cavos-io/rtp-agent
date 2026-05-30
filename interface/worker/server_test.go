@@ -387,6 +387,23 @@ func TestHandleRegisterNotifiesWorkerRegisteredHandlers(t *testing.T) {
 	}
 }
 
+func TestAgentServerIDReturnsRegisteredWorkerID(t *testing.T) {
+	server := NewAgentServer(WorkerOptions{})
+	if server.ID() != "" {
+		t.Fatalf("ID() before registration = %q, want empty", server.ID())
+	}
+
+	server.handleMessage(context.Background(), &livekit.ServerMessage{
+		Message: &livekit.ServerMessage_Register{
+			Register: &livekit.RegisterWorkerResponse{WorkerId: "worker-a"},
+		},
+	})
+
+	if server.ID() != "worker-a" {
+		t.Fatalf("ID() after registration = %q, want worker-a", server.ID())
+	}
+}
+
 func TestEmitWorkerStartedNotifiesHandlers(t *testing.T) {
 	server := NewAgentServer(WorkerOptions{})
 

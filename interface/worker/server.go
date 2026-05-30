@@ -140,6 +140,12 @@ func (s *AgentServer) OnWorkerRegistered(handler WorkerRegisteredHandler) {
 	s.registeredHandlers = append(s.registeredHandlers, handler)
 }
 
+func (s *AgentServer) ID() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.workerID
+}
+
 func (s *AgentServer) UpdateOptions(opts WorkerOptions) error {
 	s.mu.Lock()
 	if s.conn != nil {
