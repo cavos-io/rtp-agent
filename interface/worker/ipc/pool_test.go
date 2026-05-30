@@ -93,6 +93,29 @@ func TestProcPoolCloseUsesConfiguredTimeout(t *testing.T) {
 	}
 }
 
+func TestProcPoolTargetIdleProcesses(t *testing.T) {
+	pool := NewProcPool(4, ExecutorTypeThread, nil)
+
+	if got := pool.TargetIdleProcesses(); got != 0 {
+		t.Fatalf("TargetIdleProcesses = %d, want 0", got)
+	}
+
+	pool.SetTargetIdleProcesses(2)
+	if got := pool.TargetIdleProcesses(); got != 2 {
+		t.Fatalf("TargetIdleProcesses = %d, want 2", got)
+	}
+
+	pool.SetTargetIdleProcesses(10)
+	if got := pool.TargetIdleProcesses(); got != 4 {
+		t.Fatalf("TargetIdleProcesses after high value = %d, want capped max", got)
+	}
+
+	pool.SetTargetIdleProcesses(-1)
+	if got := pool.TargetIdleProcesses(); got != 0 {
+		t.Fatalf("TargetIdleProcesses after negative value = %d, want 0", got)
+	}
+}
+
 func TestProcPoolLaunchAfterCloseIsRejected(t *testing.T) {
 	var created int
 	pool := NewProcPool(1, ExecutorTypeThread, nil)

@@ -31,6 +31,7 @@ type ProcPool struct {
 	executorType    ExecutorType
 	closeTimeout    time.Duration
 	closed          bool
+	targetIdle      int
 	executorFactory func(id string) JobExecutor
 }
 
@@ -109,6 +110,18 @@ func (p *ProcPool) SetCloseTimeout(timeout time.Duration) {
 	p.closeTimeout = timeout
 }
 
+func (p *ProcPool) SetTargetIdleProcesses(numIdleProcesses int) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.targetIdle = clampInt(numIdleProcesses, 0, p.maxProcesses)
+}
+
+func (p *ProcPool) TargetIdleProcesses() int {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.targetIdle
+}
+
 func (p *ProcPool) GetByJobID(jobID string) JobExecutor {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -143,4 +156,14 @@ func (p *ProcPool) closeContext() (context.Context, context.CancelFunc) {
 		closeTimeout = 5 * time.Second
 	}
 	return context.WithTimeout(context.Background(), closeTimeout)
+}
+
+func clampInt(value int, min int, max int) int {
+	if value < min {
+		return min
+	}
+	if value > max {
+		return max
+	}
+	return value
 }
