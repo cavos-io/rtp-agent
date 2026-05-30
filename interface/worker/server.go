@@ -476,6 +476,8 @@ func (s *AgentServer) handleTermination(req *livekit.JobTermination) {
 			s.sessionEndFnc(jobCtx)
 		}
 
+		jobCtx.Shutdown("")
+
 		if jobCtx.Report != nil {
 			go func() {
 				err := agent.UploadSessionReport(
@@ -532,6 +534,8 @@ func (s *AgentServer) finishJob(jobCtx *JobContext) {
 			logger.Logger.Errorw("Session end callback failed", err, "jobId", jobCtx.Job.Id)
 		}
 	}
+
+	jobCtx.Shutdown("")
 }
 
 func newLocalJobContext(roomName string, participantIdentity string, opts WorkerOptions) *JobContext {

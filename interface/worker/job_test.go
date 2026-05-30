@@ -29,3 +29,21 @@ func TestJobContextShutdownRunsCallbacks(t *testing.T) {
 		t.Fatalf("shutdown callbacks = %#v, want %#v", calls, want)
 	}
 }
+
+func TestJobContextShutdownRunsCallbacksOnce(t *testing.T) {
+	ctx := NewJobContext(&livekit.Job{Id: "job_shutdown_once"}, "", "", "")
+	callCount := 0
+
+	if err := ctx.AddShutdownCallback(func(string) {
+		callCount++
+	}); err != nil {
+		t.Fatalf("AddShutdownCallback() error = %v", err)
+	}
+
+	ctx.Shutdown("first")
+	ctx.Shutdown("second")
+
+	if callCount != 1 {
+		t.Fatalf("shutdown callback call count = %d, want 1", callCount)
+	}
+}

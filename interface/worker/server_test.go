@@ -469,3 +469,29 @@ func TestDrainWaitsForActiveJobs(t *testing.T) {
 		t.Fatal("Drain() did not return after active job finished")
 	}
 }
+
+func TestHandleTerminationRunsJobShutdownCallbacks(t *testing.T) {
+	server := NewAgentServer(WorkerOptions{})
+	jobCtx := NewJobContext(&livekit.Job{Id: "job_shutdown"}, "", "", "")
+	shutdownCh := make(chan string, 1)
+	if err := jobCtx.AddShutdownCallback(func(reason string) {
+		shutdownCh <- reason
+	}); err != nil {
+		t.Fatalf("AddShutdownCallback() error = %v", err)
+	}
+
+	server.mu.Lock()
+	server.activeJobs[jobCtx.Job.Id] = jobCtx
+	server.mu.Unlock()
+
+	server.handleTermination(&livekit.JobTermination{JobId: jobCtx.Job.Id})
+
+	select {
+	case reason := <-shutdownCh:
+		if reason != "" {
+			t.Fatalf("shutdown reason = %q, want empty reason", reason)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("shutdown callback did not run")
+	}
+}

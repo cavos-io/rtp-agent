@@ -3,6 +3,7 @@ package worker
 import (
 	"context"
 	"fmt"
+	"sync"
 
 	"github.com/cavos-io/conversation-worker/core/agent"
 	"github.com/cavos-io/conversation-worker/library/logger"
@@ -55,6 +56,7 @@ type JobContext struct {
 	Report            *agent.SessionReport
 	AcceptArguments   JobAcceptArguments
 	shutdownCallbacks []func(string)
+	shutdownOnce      sync.Once
 
 	apiKey    string
 	apiSecret string
@@ -108,12 +110,14 @@ func (c *JobContext) AddShutdownCallback(callback any) error {
 }
 
 func (c *JobContext) Shutdown(reason string) {
-	for _, callback := range c.shutdownCallbacks {
-		callback(reason)
-	}
-	if c.Room != nil {
-		c.Room.Disconnect()
-	}
+	c.shutdownOnce.Do(func() {
+		for _, callback := range c.shutdownCallbacks {
+			callback(reason)
+		}
+		if c.Room != nil {
+			c.Room.Disconnect()
+		}
+	})
 }
 
 // DeleteRoom deletes the room and disconnects all participants.
