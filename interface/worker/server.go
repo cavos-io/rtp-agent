@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"runtime"
 	"sort"
 	"strings"
 	"sync"
@@ -29,6 +30,7 @@ const (
 	defaultMaxRetry      = 16
 	defaultJobMemoryWarn = 500
 	defaultDrainTimeout  = 1800
+	defaultLoadThreshold = 0.7
 
 	participantAttributeAgentName = "lk.agent.name"
 )
@@ -110,6 +112,12 @@ func resolveWorkerOptions(opts WorkerOptions) WorkerOptions {
 	if opts.DrainTimeoutSeconds == 0 {
 		opts.DrainTimeoutSeconds = defaultDrainTimeout
 	}
+	if opts.LoadThreshold == 0 {
+		opts.LoadThreshold = defaultLoadThreshold
+	}
+	if opts.NumIdleProcesses == 0 {
+		opts.NumIdleProcesses = defaultNumIdleProcesses()
+	}
 	if opts.Permissions == nil {
 		permissions := resolveWorkerPermissions(nil)
 		opts.Permissions = &permissions
@@ -142,6 +150,14 @@ func resolveWorkerOptions(opts WorkerOptions) WorkerOptions {
 	}
 
 	return opts
+}
+
+func defaultNumIdleProcesses() int {
+	cpus := runtime.NumCPU()
+	if cpus > 4 {
+		return 4
+	}
+	return cpus
 }
 
 func resolveWorkerPermissions(permissions *WorkerPermissions) WorkerPermissions {

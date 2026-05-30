@@ -3,6 +3,7 @@ package worker
 import (
 	"context"
 	"errors"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -94,6 +95,16 @@ func TestNewAgentServerUsesReferenceWorkerDefaults(t *testing.T) {
 	}
 	if server.Options.DrainTimeoutSeconds != 1800 {
 		t.Fatalf("DrainTimeoutSeconds = %d, want reference default 1800", server.Options.DrainTimeoutSeconds)
+	}
+	if server.Options.LoadThreshold != 0.7 {
+		t.Fatalf("LoadThreshold = %v, want reference production default 0.7", server.Options.LoadThreshold)
+	}
+	wantIdle := runtime.NumCPU()
+	if wantIdle > 4 {
+		wantIdle = 4
+	}
+	if server.Options.NumIdleProcesses != wantIdle {
+		t.Fatalf("NumIdleProcesses = %d, want reference production default %d", server.Options.NumIdleProcesses, wantIdle)
 	}
 }
 
