@@ -1,0 +1,26 @@
+repos:
+  - repo: local
+    hooks:
+      - id: go-test
+        name: go test
+        entry: go test ./...
+        language: system
+        pass_filenames: false
+
+      - id: go-build
+        name: go build
+        entry: go build ./...
+        language: system
+        pass_filenames: false
+
+      - id: go-arch-lint-check
+        name: go-arch-lint check
+        entry: go-arch-lint check
+        language: system
+        pass_filenames: false
+
+      - id: go-arch-lint-mapping
+        name: go-arch-lint mapping
+        entry: go-arch-lint mapping
+        language: system
+        pass_filenames: false
