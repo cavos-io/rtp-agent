@@ -210,6 +210,17 @@ func (s *AgentServer) workerStatusMessage(status livekit.WorkerStatus) *livekit.
 	}
 }
 
+func jobStatusMessage(jobID string, status livekit.JobStatus) *livekit.WorkerMessage {
+	return &livekit.WorkerMessage{
+		Message: &livekit.WorkerMessage_UpdateJob{
+			UpdateJob: &livekit.UpdateJobStatus{
+				JobId:  jobID,
+				Status: status,
+			},
+		},
+	}
+}
+
 func (s *AgentServer) RTCSession(
 	entrypoint func(*JobContext) error,
 	request func(*JobRequest) error,
@@ -480,6 +491,10 @@ func (s *AgentServer) handleAssignment(ctx context.Context, req *livekit.JobAssi
 	}
 	s.activeJobs[req.Job.Id] = jobCtx
 	s.mu.Unlock()
+
+	if err := s.sendWorkerMessage(jobStatusMessage(req.Job.Id, livekit.JobStatus_JS_RUNNING)); err != nil {
+		logger.Logger.Errorw("failed to update job status", err, "jobId", req.Job.Id)
+	}
 
 	if s.entrypointFnc != nil {
 		go func() {

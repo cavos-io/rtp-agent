@@ -392,6 +392,30 @@ func TestAssignmentUsesAssignmentURLWhenProvided(t *testing.T) {
 	}
 }
 
+func TestAssignmentSendsRunningJobStatus(t *testing.T) {
+	server := NewAgentServer(WorkerOptions{})
+	sentCh := make(chan *livekit.WorkerMessage, 1)
+	server.workerMessageSink = func(msg *livekit.WorkerMessage) error {
+		sentCh <- msg
+		return nil
+	}
+
+	job := &livekit.Job{Id: "job_running_status", Room: &livekit.Room{Name: "room-a"}}
+	server.handleAssignment(context.Background(), &livekit.JobAssignment{Job: job})
+
+	msg := receiveWorkerMessage(t, sentCh)
+	update := msg.GetUpdateJob()
+	if update == nil {
+		t.Fatal("update job message is nil")
+	}
+	if update.JobId != "job_running_status" {
+		t.Fatalf("UpdateJob.JobId = %q, want job_running_status", update.JobId)
+	}
+	if update.Status != livekit.JobStatus_JS_RUNNING {
+		t.Fatalf("UpdateJob.Status = %v, want JS_RUNNING", update.Status)
+	}
+}
+
 func TestAssignmentPreservesAssignmentToken(t *testing.T) {
 	server := NewAgentServer(WorkerOptions{})
 	startedCh := make(chan *JobContext, 1)
