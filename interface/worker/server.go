@@ -480,6 +480,22 @@ func (s *AgentServer) Run(ctx context.Context) error {
 		return err
 	}
 
+	msgType, data, err := conn.ReadMessage()
+	if err != nil {
+		return err
+	}
+	if msgType != websocket.BinaryMessage {
+		return fmt.Errorf("expected register response as first message")
+	}
+
+	msg := &livekit.ServerMessage{}
+	if err := proto.Unmarshal(data, msg); err != nil {
+		return err
+	}
+	if err := s.handleInitialRegisterMessage(ctx, msg); err != nil {
+		return err
+	}
+
 	// Message Loop
 	for {
 		select {
@@ -504,6 +520,14 @@ func (s *AgentServer) Run(ctx context.Context) error {
 			s.handleMessage(ctx, msg)
 		}
 	}
+}
+
+func (s *AgentServer) handleInitialRegisterMessage(ctx context.Context, msg *livekit.ServerMessage) error {
+	if msg.GetRegister() == nil {
+		return fmt.Errorf("expected register response as first message")
+	}
+	s.handleMessage(ctx, msg)
+	return nil
 }
 
 func (s *AgentServer) handleMessage(ctx context.Context, msg *livekit.ServerMessage) {

@@ -525,6 +525,22 @@ func TestHandleRegisterReportsActiveJobs(t *testing.T) {
 	}
 }
 
+func TestInitialRegisterMessageRejectsNonRegisterMessage(t *testing.T) {
+	server := NewAgentServer(WorkerOptions{})
+
+	err := server.handleInitialRegisterMessage(context.Background(), &livekit.ServerMessage{
+		Message: &livekit.ServerMessage_Availability{
+			Availability: &livekit.AvailabilityRequest{Job: &livekit.Job{Id: "job_early"}},
+		},
+	})
+	if err == nil {
+		t.Fatal("handleInitialRegisterMessage() error = nil, want expected register response error")
+	}
+	if !strings.Contains(err.Error(), "expected register response as first message") {
+		t.Fatalf("handleInitialRegisterMessage() error = %q, want expected register response message", err.Error())
+	}
+}
+
 func TestAcceptedAvailabilityExpiresWithoutAssignment(t *testing.T) {
 	oldTimeout := assignmentTimeout
 	assignmentTimeout = 10 * time.Millisecond
