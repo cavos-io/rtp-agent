@@ -25,6 +25,8 @@ const (
 	WorkerTypeRoom      WorkerType = "room"
 	WorkerTypePublisher WorkerType = "publisher"
 
+	defaultWorkerVersion = "1.0.0"
+
 	participantAttributeAgentName = "lk.agent.name"
 )
 
@@ -43,6 +45,7 @@ type WorkerOptions struct {
 	AgentName  string
 	WorkerType WorkerType
 	MaxRetry   int
+	Version    string
 	WSURL      string
 	LoadFunc   func(*AgentServer) float64
 	// WSRL is kept for backward compatibility. Prefer WSURL for new code.
@@ -91,6 +94,9 @@ func NewAgentServer(opts WorkerOptions) *AgentServer {
 func resolveWorkerOptions(opts WorkerOptions) WorkerOptions {
 	if opts.WorkerType == "" {
 		opts.WorkerType = WorkerTypeRoom
+	}
+	if opts.Version == "" {
+		opts.Version = defaultWorkerVersion
 	}
 	if opts.Permissions == nil {
 		permissions := resolveWorkerPermissions(nil)
@@ -223,7 +229,7 @@ func (s *AgentServer) registerWorkerRequest() *livekit.WorkerMessage {
 			Register: &livekit.RegisterWorkerRequest{
 				Type:      workerTypeToJobType(s.Options.WorkerType),
 				AgentName: s.Options.AgentName,
-				Version:   "1.0.0",
+				Version:   s.Options.Version,
 				AllowedPermissions: &livekit.ParticipantPermission{
 					CanPublish:        permissions.CanPublish,
 					CanSubscribe:      permissions.CanSubscribe,

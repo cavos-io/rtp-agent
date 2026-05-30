@@ -153,6 +153,7 @@ func TestRegisterWorkerRequestUsesConfiguredWorkerType(t *testing.T) {
 	server := NewAgentServer(WorkerOptions{
 		AgentName:  "publisher-agent",
 		WorkerType: WorkerTypePublisher,
+		Version:    "2.3.4",
 	})
 
 	req := server.registerWorkerRequest()
@@ -165,6 +166,9 @@ func TestRegisterWorkerRequestUsesConfiguredWorkerType(t *testing.T) {
 	}
 	if register.AgentName != "publisher-agent" {
 		t.Fatalf("register.AgentName = %q, want %q", register.AgentName, "publisher-agent")
+	}
+	if register.Version != "2.3.4" {
+		t.Fatalf("register.Version = %q, want configured version", register.Version)
 	}
 }
 
