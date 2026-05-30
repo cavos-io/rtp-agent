@@ -133,6 +133,38 @@ func TestRegisterWorkerRequestUsesConfiguredWorkerType(t *testing.T) {
 	}
 }
 
+func TestRegisterWorkerRequestIncludesDefaultPermissions(t *testing.T) {
+	server := NewAgentServer(WorkerOptions{})
+
+	register := server.registerWorkerRequest().GetRegister()
+	if register == nil {
+		t.Fatal("register worker message is nil")
+	}
+
+	permissions := register.GetAllowedPermissions()
+	if permissions == nil {
+		t.Fatal("register.AllowedPermissions = nil, want default permissions")
+	}
+	if !permissions.CanPublish {
+		t.Fatal("permissions.CanPublish = false, want true")
+	}
+	if !permissions.CanSubscribe {
+		t.Fatal("permissions.CanSubscribe = false, want true")
+	}
+	if !permissions.CanPublishData {
+		t.Fatal("permissions.CanPublishData = false, want true")
+	}
+	if !permissions.CanUpdateMetadata {
+		t.Fatal("permissions.CanUpdateMetadata = false, want true")
+	}
+	if permissions.Hidden {
+		t.Fatal("permissions.Hidden = true, want false")
+	}
+	if !permissions.Agent {
+		t.Fatal("permissions.Agent = false, want true")
+	}
+}
+
 func TestAgentIdentityForJobIDUsesFullJobID(t *testing.T) {
 	jobID := "job_123456789"
 	want := "agent-" + jobID

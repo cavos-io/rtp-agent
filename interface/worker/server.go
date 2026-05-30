@@ -26,6 +26,15 @@ const (
 	participantAttributeAgentName = "lk.agent.name"
 )
 
+type WorkerPermissions struct {
+	CanPublish        bool
+	CanSubscribe      bool
+	CanPublishData    bool
+	CanUpdateMetadata bool
+	CanPublishSources []livekit.TrackSource
+	Hidden            bool
+}
+
 type WorkerOptions struct {
 	AgentName  string
 	WorkerType WorkerType
@@ -40,6 +49,7 @@ type WorkerOptions struct {
 	JobMemoryLimitMB    float64
 	NumIdleProcesses    int
 	DrainTimeoutSeconds int
+	Permissions         *WorkerPermissions
 }
 
 type AgentServer struct {
@@ -68,6 +78,10 @@ func resolveWorkerOptions(opts WorkerOptions) WorkerOptions {
 	if opts.WorkerType == "" {
 		opts.WorkerType = WorkerTypeRoom
 	}
+	if opts.Permissions == nil {
+		permissions := resolveWorkerPermissions(nil)
+		opts.Permissions = &permissions
+	}
 	if opts.WSURL == "" {
 		opts.WSURL = opts.WSRL
 	}
@@ -93,6 +107,18 @@ func resolveWorkerOptions(opts WorkerOptions) WorkerOptions {
 	}
 
 	return opts
+}
+
+func resolveWorkerPermissions(permissions *WorkerPermissions) WorkerPermissions {
+	if permissions == nil {
+		return WorkerPermissions{
+			CanPublish:        true,
+			CanSubscribe:      true,
+			CanPublishData:    true,
+			CanUpdateMetadata: true,
+		}
+	}
+	return *permissions
 }
 
 func workerTypeToJobType(workerType WorkerType) livekit.JobType {
@@ -147,12 +173,22 @@ func availabilityResponseForReject(req *livekit.AvailabilityRequest, args JobRej
 }
 
 func (s *AgentServer) registerWorkerRequest() *livekit.WorkerMessage {
+	permissions := resolveWorkerPermissions(s.Options.Permissions)
 	return &livekit.WorkerMessage{
 		Message: &livekit.WorkerMessage_Register{
 			Register: &livekit.RegisterWorkerRequest{
 				Type:      workerTypeToJobType(s.Options.WorkerType),
 				AgentName: s.Options.AgentName,
 				Version:   "1.0.0",
+				AllowedPermissions: &livekit.ParticipantPermission{
+					CanPublish:        permissions.CanPublish,
+					CanSubscribe:      permissions.CanSubscribe,
+					CanPublishData:    permissions.CanPublishData,
+					CanUpdateMetadata: permissions.CanUpdateMetadata,
+					CanPublishSources: permissions.CanPublishSources,
+					Hidden:            permissions.Hidden,
+					Agent:             true,
+				},
 			},
 		},
 	}
