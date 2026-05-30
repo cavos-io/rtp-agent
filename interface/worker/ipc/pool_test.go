@@ -12,6 +12,7 @@ import (
 type fakeJobExecutor struct {
 	id         string
 	job        *livekit.Job
+	runningJob *RunningJobInfo
 	launchErr  error
 	closeCtx   context.Context
 	closeCalls int
@@ -26,12 +27,19 @@ func (e *fakeJobExecutor) Started() bool { return e.job != nil }
 
 func (e *fakeJobExecutor) Job() *livekit.Job { return e.job }
 
+func (e *fakeJobExecutor) RunningJob() *RunningJobInfo { return e.runningJob }
+
 func (e *fakeJobExecutor) LaunchJob(ctx context.Context, job *livekit.Job) error {
+	return e.LaunchRunningJob(ctx, RunningJobInfo{Job: job})
+}
+
+func (e *fakeJobExecutor) LaunchRunningJob(ctx context.Context, info RunningJobInfo) error {
 	e.launches++
 	if e.launchErr != nil {
 		return e.launchErr
 	}
-	e.job = job
+	e.job = info.Job
+	e.runningJob = &info
 	return nil
 }
 
@@ -121,5 +129,48 @@ func TestProcPoolLaunchJobRetriesWithFreshExecutor(t *testing.T) {
 	}
 	if gotExecutors[0].ID() != "exec-b" {
 		t.Fatalf("remaining executor ID = %q, want exec-b", gotExecutors[0].ID())
+	}
+}
+
+func TestProcPoolLaunchRunningJobPreservesAssignmentInfo(t *testing.T) {
+	executor := &fakeJobExecutor{id: "exec-a"}
+	pool := NewProcPool(1, ExecutorTypeThread, nil)
+	pool.executorFactory = func(id string) JobExecutor { return executor }
+
+	info := RunningJobInfo{
+		AcceptArguments: JobAcceptArguments{
+			Name:     "support",
+			Identity: "agent-job-a",
+			Metadata: `{"tier":"gold"}`,
+		},
+		Job:      &livekit.Job{Id: "job-a"},
+		URL:      "wss://livekit.example",
+		Token:    "room-token",
+		WorkerID: "worker-a",
+		FakeJob:  true,
+	}
+
+	if err := pool.LaunchRunningJob(context.Background(), info); err != nil {
+		t.Fatalf("LaunchRunningJob: %v", err)
+	}
+
+	running := executor.RunningJob()
+	if running == nil {
+		t.Fatal("RunningJob = nil, want assignment info")
+	}
+	if running.AcceptArguments.Identity != "agent-job-a" {
+		t.Fatalf("Identity = %q, want agent-job-a", running.AcceptArguments.Identity)
+	}
+	if running.URL != "wss://livekit.example" {
+		t.Fatalf("URL = %q, want room URL", running.URL)
+	}
+	if running.Token != "room-token" {
+		t.Fatalf("Token = %q, want room token", running.Token)
+	}
+	if running.WorkerID != "worker-a" {
+		t.Fatalf("WorkerID = %q, want worker-a", running.WorkerID)
+	}
+	if !running.FakeJob {
+		t.Fatal("FakeJob = false, want true")
 	}
 }

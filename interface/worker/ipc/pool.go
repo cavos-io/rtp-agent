@@ -50,6 +50,10 @@ func (p *ProcPool) newExecutor(id string) JobExecutor {
 }
 
 func (p *ProcPool) LaunchJob(ctx context.Context, job *livekit.Job) error {
+	return p.LaunchRunningJob(ctx, RunningJobInfo{Job: job})
+}
+
+func (p *ProcPool) LaunchRunningJob(ctx context.Context, info RunningJobInfo) error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
@@ -63,14 +67,14 @@ func (p *ProcPool) LaunchJob(ctx context.Context, job *livekit.Job) error {
 		executor := p.executorFactory(id)
 		p.executors[id] = executor
 
-		err := executor.LaunchJob(ctx, job)
+		err := executor.LaunchRunningJob(ctx, info)
 		if err != nil {
 			delete(p.executors, id)
 			lastErr = err
 			continue
 		}
 
-		logger.Logger.Infow("Launched job", "executor_type", p.executorType, "executor_id", id, "job_id", job.Id)
+		logger.Logger.Infow("Launched job", "executor_type", p.executorType, "executor_id", id, "job_id", info.Job.GetId())
 		return nil
 	}
 

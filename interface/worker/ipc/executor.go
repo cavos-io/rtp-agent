@@ -27,7 +27,9 @@ type JobExecutor interface {
 	Status() JobStatus
 	Started() bool
 	Job() *livekit.Job
+	RunningJob() *RunningJobInfo
 	LaunchJob(ctx context.Context, job *livekit.Job) error
+	LaunchRunningJob(ctx context.Context, info RunningJobInfo) error
 	Close(ctx context.Context) error
 }
 
@@ -38,6 +40,7 @@ type ThreadJobExecutor struct {
 
 	entrypoint func() error
 	job        *livekit.Job
+	runningJob *RunningJobInfo
 	started    bool
 }
 
@@ -71,13 +74,24 @@ func (e *ThreadJobExecutor) Job() *livekit.Job {
 	return e.job
 }
 
+func (e *ThreadJobExecutor) RunningJob() *RunningJobInfo {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.runningJob
+}
+
 func (e *ThreadJobExecutor) LaunchJob(ctx context.Context, job *livekit.Job) error {
+	return e.LaunchRunningJob(ctx, RunningJobInfo{Job: job})
+}
+
+func (e *ThreadJobExecutor) LaunchRunningJob(ctx context.Context, info RunningJobInfo) error {
 	e.mu.Lock()
 	if e.started {
 		e.mu.Unlock()
 		return fmt.Errorf("executor already started")
 	}
-	e.job = job
+	e.job = info.Job
+	e.runningJob = &info
 	e.started = true
 	e.status = JobStatusRunning
 	e.mu.Unlock()
@@ -86,7 +100,7 @@ func (e *ThreadJobExecutor) LaunchJob(ctx context.Context, job *livekit.Job) err
 		err := e.entrypoint()
 		e.mu.Lock()
 		if err != nil {
-			logger.Logger.Errorw("Job entrypoint failed", err, "job_id", job.Id)
+			logger.Logger.Errorw("Job entrypoint failed", err, "job_id", info.Job.GetId())
 			e.status = JobStatusFailed
 		} else {
 			e.status = JobStatusSuccess
@@ -103,12 +117,13 @@ func (e *ThreadJobExecutor) Close(ctx context.Context) error {
 }
 
 type ProcessJobExecutor struct {
-	id      string
-	status  JobStatus
-	mu      sync.Mutex
-	started bool
-	cmd     *exec.Cmd
-	job     *livekit.Job
+	id         string
+	status     JobStatus
+	mu         sync.Mutex
+	started    bool
+	cmd        *exec.Cmd
+	job        *livekit.Job
+	runningJob *RunningJobInfo
 
 	lastPong time.Time
 }
@@ -141,7 +156,17 @@ func (e *ProcessJobExecutor) Job() *livekit.Job {
 	return e.job
 }
 
+func (e *ProcessJobExecutor) RunningJob() *RunningJobInfo {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.runningJob
+}
+
 func (e *ProcessJobExecutor) LaunchJob(ctx context.Context, job *livekit.Job) error {
+	return e.LaunchRunningJob(ctx, RunningJobInfo{Job: job})
+}
+
+func (e *ProcessJobExecutor) LaunchRunningJob(ctx context.Context, info RunningJobInfo) error {
 	e.mu.Lock()
 	if e.started {
 		e.mu.Unlock()
@@ -149,7 +174,8 @@ func (e *ProcessJobExecutor) LaunchJob(ctx context.Context, job *livekit.Job) er
 	}
 	e.started = true
 	e.status = JobStatusRunning
-	e.job = job
+	e.job = info.Job
+	e.runningJob = &info
 	e.lastPong = time.Now()
 	e.mu.Unlock()
 
@@ -161,7 +187,7 @@ func (e *ProcessJobExecutor) LaunchJob(ctx context.Context, job *livekit.Job) er
 		return err
 	}
 
-	jobJSON, err := json.Marshal(job)
+	jobJSON, err := json.Marshal(info.Job)
 	if err != nil {
 		e.mu.Lock()
 		e.status = JobStatusFailed
@@ -189,7 +215,7 @@ func (e *ProcessJobExecutor) LaunchJob(ctx context.Context, job *livekit.Job) er
 		e.mu.Lock()
 		defer e.mu.Unlock()
 		if err != nil {
-			logger.Logger.Errorw("Job process failed", err, "job_id", job.Id, "exec_id", e.id)
+			logger.Logger.Errorw("Job process failed", err, "job_id", info.Job.GetId(), "exec_id", e.id)
 			e.status = JobStatusFailed
 		} else {
 			e.status = JobStatusSuccess
