@@ -147,3 +147,74 @@ func TestAgentIdentityForJobIDHandlesShortJobID(t *testing.T) {
 		t.Fatalf("agentIdentityForJobID(%q) = %q, want %q", jobID, got, want)
 	}
 }
+
+func TestAvailabilityResponseAcceptsWithDefaultIdentity(t *testing.T) {
+	req := &livekit.AvailabilityRequest{
+		Job: &livekit.Job{Id: "job_abc123"},
+	}
+
+	resp := availabilityResponseForAccept(req, JobAcceptArguments{}, "")
+	availability := resp.GetAvailability()
+	if availability == nil {
+		t.Fatal("availability response is nil")
+	}
+	if !availability.Available {
+		t.Fatal("availability.Available = false, want true")
+	}
+	if availability.JobId != "job_abc123" {
+		t.Fatalf("availability.JobId = %q, want %q", availability.JobId, "job_abc123")
+	}
+	if availability.ParticipantIdentity != "agent-job_abc123" {
+		t.Fatalf("availability.ParticipantIdentity = %q, want default identity", availability.ParticipantIdentity)
+	}
+}
+
+func TestAvailabilityResponseAcceptUsesCustomArguments(t *testing.T) {
+	req := &livekit.AvailabilityRequest{
+		Job: &livekit.Job{Id: "job_custom"},
+	}
+
+	resp := availabilityResponseForAccept(req, JobAcceptArguments{
+		Name:     "Agent Name",
+		Identity: "custom-agent",
+		Metadata: "custom-metadata",
+		Attributes: map[string]string{
+			"tier": "gold",
+		},
+	}, "sales-agent")
+
+	availability := resp.GetAvailability()
+	if availability.ParticipantIdentity != "custom-agent" {
+		t.Fatalf("availability.ParticipantIdentity = %q, want custom identity", availability.ParticipantIdentity)
+	}
+	if availability.ParticipantName != "Agent Name" {
+		t.Fatalf("availability.ParticipantName = %q, want custom name", availability.ParticipantName)
+	}
+	if availability.ParticipantMetadata != "custom-metadata" {
+		t.Fatalf("availability.ParticipantMetadata = %q, want custom metadata", availability.ParticipantMetadata)
+	}
+	if availability.ParticipantAttributes["tier"] != "gold" {
+		t.Fatalf("availability.ParticipantAttributes[tier] = %q, want gold", availability.ParticipantAttributes["tier"])
+	}
+	if availability.ParticipantAttributes["lk.agent.name"] != "sales-agent" {
+		t.Fatalf("availability.ParticipantAttributes[lk.agent.name] = %q, want sales-agent", availability.ParticipantAttributes["lk.agent.name"])
+	}
+}
+
+func TestAvailabilityResponseRejectsJob(t *testing.T) {
+	req := &livekit.AvailabilityRequest{
+		Job: &livekit.Job{Id: "job_reject"},
+	}
+
+	resp := availabilityResponseForReject(req)
+	availability := resp.GetAvailability()
+	if availability == nil {
+		t.Fatal("availability response is nil")
+	}
+	if availability.Available {
+		t.Fatal("availability.Available = true, want false")
+	}
+	if availability.JobId != "job_reject" {
+		t.Fatalf("availability.JobId = %q, want %q", availability.JobId, "job_reject")
+	}
+}

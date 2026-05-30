@@ -22,6 +22,8 @@ type WorkerType string
 const (
 	WorkerTypeRoom      WorkerType = "room"
 	WorkerTypePublisher WorkerType = "publisher"
+
+	participantAttributeAgentName = "lk.agent.name"
 )
 
 type WorkerOptions struct {
@@ -104,6 +106,43 @@ func workerTypeToJobType(workerType WorkerType) livekit.JobType {
 
 func agentIdentityForJobID(jobID string) string {
 	return "agent-" + jobID
+}
+
+func availabilityResponseForAccept(req *livekit.AvailabilityRequest, args JobAcceptArguments, agentName string) *livekit.WorkerMessage {
+	if args.Identity == "" {
+		args.Identity = agentIdentityForJobID(req.Job.Id)
+	}
+	attributes := make(map[string]string, len(args.Attributes)+1)
+	if agentName != "" {
+		attributes[participantAttributeAgentName] = agentName
+	}
+	for key, value := range args.Attributes {
+		attributes[key] = value
+	}
+
+	return &livekit.WorkerMessage{
+		Message: &livekit.WorkerMessage_Availability{
+			Availability: &livekit.AvailabilityResponse{
+				JobId:                 req.Job.Id,
+				Available:             true,
+				ParticipantIdentity:   args.Identity,
+				ParticipantName:       args.Name,
+				ParticipantMetadata:   args.Metadata,
+				ParticipantAttributes: attributes,
+			},
+		},
+	}
+}
+
+func availabilityResponseForReject(req *livekit.AvailabilityRequest) *livekit.WorkerMessage {
+	return &livekit.WorkerMessage{
+		Message: &livekit.WorkerMessage_Availability{
+			Availability: &livekit.AvailabilityResponse{
+				JobId:     req.Job.Id,
+				Available: false,
+			},
+		},
+	}
 }
 
 func (s *AgentServer) registerWorkerRequest() *livekit.WorkerMessage {
@@ -248,30 +287,47 @@ func (s *AgentServer) handleMessage(ctx context.Context, msg *livekit.ServerMess
 func (s *AgentServer) handleAvailability(ctx context.Context, req *livekit.AvailabilityRequest) {
 	logger.Logger.Infow("Received availability request", "jobId", req.Job.Id)
 
-	// Default to accept
-	ans := &livekit.WorkerMessage{
-		Message: &livekit.WorkerMessage_Availability{
-			Availability: &livekit.AvailabilityResponse{
-				JobId:               req.Job.Id,
-				Available:           true,
-				ParticipantIdentity: agentIdentityForJobID(req.Job.Id),
-				ParticipantName:     s.Options.AgentName,
-			},
+	answered := false
+	jobReq := &JobRequest{
+		Job: req.Job,
+		acceptFnc: func(args JobAcceptArguments) error {
+			if args.Name == "" {
+				args.Name = s.Options.AgentName
+			}
+			answered = true
+			return s.sendWorkerMessage(availabilityResponseForAccept(req, args, s.Options.AgentName))
+		},
+		rejectFnc: func() error {
+			answered = true
+			return s.sendWorkerMessage(availabilityResponseForReject(req))
 		},
 	}
 
-	b, err := proto.Marshal(ans)
+	if s.requestFnc != nil {
+		if err := s.requestFnc(jobReq); err != nil {
+			logger.Logger.Errorw("availability request callback failed", err, "jobId", req.Job.Id)
+		}
+	} else {
+		_ = jobReq.Accept(JobAcceptArguments{})
+	}
+
+	if !answered {
+		_ = jobReq.Accept(JobAcceptArguments{})
+	}
+}
+
+func (s *AgentServer) sendWorkerMessage(msg *livekit.WorkerMessage) error {
+	b, err := proto.Marshal(msg)
 	if err != nil {
-		logger.Logger.Errorw("failed to marshal availability", err)
-		return
+		return err
 	}
 
 	s.mu.Lock()
-	err = s.conn.WriteMessage(websocket.BinaryMessage, b)
-	s.mu.Unlock()
-	if err != nil {
-		logger.Logger.Errorw("failed to send availability", err)
+	defer s.mu.Unlock()
+	if s.conn == nil {
+		return fmt.Errorf("worker websocket is not connected")
 	}
+	return s.conn.WriteMessage(websocket.BinaryMessage, b)
 }
 
 func (s *AgentServer) handleAssignment(ctx context.Context, req *livekit.JobAssignment) {
