@@ -129,6 +129,72 @@ func TestNewAgentServerLoadsWorkerTokenFromEnvironment(t *testing.T) {
 	}
 }
 
+func TestUpdateOptionsMergesConfiguredValuesBeforeRun(t *testing.T) {
+	server := NewAgentServer(WorkerOptions{
+		WSRL:          "wss://old.example",
+		APIKey:        "old-key",
+		APISecret:     "old-secret",
+		MaxRetry:      3,
+		LoadThreshold: 0.5,
+	})
+
+	permissions := &WorkerPermissions{
+		CanPublish:     false,
+		CanSubscribe:   true,
+		CanPublishData: false,
+		Hidden:         true,
+	}
+	err := server.UpdateOptions(WorkerOptions{
+		WSURL:            "wss://new.example",
+		APIKey:           "new-key",
+		MaxRetry:         9,
+		LoadThreshold:    0.8,
+		NumIdleProcesses: 2,
+		Permissions:      permissions,
+	})
+	if err != nil {
+		t.Fatalf("UpdateOptions() error = %v", err)
+	}
+
+	if server.Options.WSURL != "wss://new.example" {
+		t.Fatalf("WSURL = %q, want updated value", server.Options.WSURL)
+	}
+	if server.Options.WSRL != "wss://new.example" {
+		t.Fatalf("WSRL = %q, want canonical updated WSURL value", server.Options.WSRL)
+	}
+	if server.Options.APIKey != "new-key" {
+		t.Fatalf("APIKey = %q, want updated value", server.Options.APIKey)
+	}
+	if server.Options.APISecret != "old-secret" {
+		t.Fatalf("APISecret = %q, want unchanged value", server.Options.APISecret)
+	}
+	if server.Options.MaxRetry != 9 {
+		t.Fatalf("MaxRetry = %d, want updated value", server.Options.MaxRetry)
+	}
+	if server.Options.LoadThreshold != 0.8 {
+		t.Fatalf("LoadThreshold = %v, want updated value", server.Options.LoadThreshold)
+	}
+	if server.Options.NumIdleProcesses != 2 {
+		t.Fatalf("NumIdleProcesses = %d, want updated value", server.Options.NumIdleProcesses)
+	}
+	if server.Options.Permissions != permissions {
+		t.Fatal("Permissions was not replaced with updated pointer")
+	}
+}
+
+func TestUpdateOptionsRejectsAfterWorkerStarted(t *testing.T) {
+	server := NewAgentServer(WorkerOptions{})
+	server.conn = &websocket.Conn{}
+
+	err := server.UpdateOptions(WorkerOptions{APIKey: "new-key"})
+	if err == nil {
+		t.Fatal("UpdateOptions() error = nil, want started worker error")
+	}
+	if !strings.Contains(err.Error(), "cannot update options after starting the server") {
+		t.Fatalf("UpdateOptions() error = %q, want started worker message", err.Error())
+	}
+}
+
 func TestAgentWebSocketURLPreservesBasePath(t *testing.T) {
 	got, err := agentWebSocketURL("https://livekit.example/project-a", "")
 	if err != nil {

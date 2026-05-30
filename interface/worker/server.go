@@ -140,6 +140,92 @@ func (s *AgentServer) OnWorkerRegistered(handler WorkerRegisteredHandler) {
 	s.registeredHandlers = append(s.registeredHandlers, handler)
 }
 
+func (s *AgentServer) UpdateOptions(opts WorkerOptions) error {
+	s.mu.Lock()
+	if s.conn != nil {
+		s.mu.Unlock()
+		return fmt.Errorf("cannot update options after starting the server")
+	}
+	current := s.Options
+	s.mu.Unlock()
+
+	updated := mergeWorkerOptions(current, opts)
+	updated = resolveWorkerOptions(updated)
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.conn != nil {
+		return fmt.Errorf("cannot update options after starting the server")
+	}
+	s.Options = updated
+	return nil
+}
+
+func mergeWorkerOptions(current WorkerOptions, next WorkerOptions) WorkerOptions {
+	if next.AgentName != "" {
+		current.AgentName = next.AgentName
+	}
+	if next.WorkerType != "" {
+		current.WorkerType = next.WorkerType
+	}
+	if next.MaxRetry != 0 {
+		current.MaxRetry = next.MaxRetry
+	}
+	if next.Version != "" {
+		current.Version = next.Version
+	}
+	if next.WSURL != "" {
+		current.WSURL = next.WSURL
+		current.WSRL = next.WSURL
+	} else if next.WSRL != "" {
+		current.WSURL = next.WSRL
+		current.WSRL = next.WSRL
+	}
+	if next.LoadFunc != nil {
+		current.LoadFunc = next.LoadFunc
+	}
+	if next.APIKey != "" {
+		current.APIKey = next.APIKey
+	}
+	if next.APISecret != "" {
+		current.APISecret = next.APISecret
+	}
+	if next.WorkerToken != "" {
+		current.WorkerToken = next.WorkerToken
+	}
+	if next.HTTPProxy != "" {
+		current.HTTPProxy = next.HTTPProxy
+	}
+	if next.LoadThreshold != 0 {
+		current.LoadThreshold = next.LoadThreshold
+	}
+	if next.JobMemoryWarnMB != 0 {
+		current.JobMemoryWarnMB = next.JobMemoryWarnMB
+	}
+	if next.JobMemoryLimitMB != 0 {
+		current.JobMemoryLimitMB = next.JobMemoryLimitMB
+	}
+	if next.NumIdleProcesses != 0 {
+		current.NumIdleProcesses = next.NumIdleProcesses
+	}
+	if next.DrainTimeoutSeconds != 0 {
+		current.DrainTimeoutSeconds = next.DrainTimeoutSeconds
+	}
+	if next.SessionEndTimeoutSeconds != 0 {
+		current.SessionEndTimeoutSeconds = next.SessionEndTimeoutSeconds
+	}
+	if next.ShutdownProcessTimeoutSeconds != 0 {
+		current.ShutdownProcessTimeoutSeconds = next.ShutdownProcessTimeoutSeconds
+	}
+	if next.InitializeProcessTimeoutSeconds != 0 {
+		current.InitializeProcessTimeoutSeconds = next.InitializeProcessTimeoutSeconds
+	}
+	if next.Permissions != nil {
+		current.Permissions = next.Permissions
+	}
+	return current
+}
+
 func resolveWorkerOptions(opts WorkerOptions) WorkerOptions {
 	if opts.WorkerType == "" {
 		opts.WorkerType = WorkerTypeRoom
