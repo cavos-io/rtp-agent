@@ -64,6 +64,48 @@ func TestProcessJobEnvCarriesRunningJobInfo(t *testing.T) {
 	}
 }
 
+func TestProcessJobEnvReplacesStaleAssignmentValues(t *testing.T) {
+	info := RunningJobInfo{
+		Job:      &livekit.Job{Id: "job-new"},
+		WorkerID: "worker-new",
+	}
+
+	env, err := processJobEnv([]string{
+		"LIVEKIT_AGENT_PROCESS_ID=old-exec",
+		"LIVEKIT_AGENT_JOB_JSON={\"id\":\"old-job\"}",
+		"LIVEKIT_AGENT_RUNNING_JOB_JSON={\"worker_id\":\"old-worker\"}",
+		"PATH=/bin",
+	}, "exec-new", info)
+	if err != nil {
+		t.Fatalf("processJobEnv: %v", err)
+	}
+
+	values := envMap(env)
+	if values["LIVEKIT_AGENT_PROCESS_ID"] != "exec-new" {
+		t.Fatalf("process id = %q, want exec-new", values["LIVEKIT_AGENT_PROCESS_ID"])
+	}
+
+	var running RunningJobInfo
+	if err := json.Unmarshal([]byte(values["LIVEKIT_AGENT_RUNNING_JOB_JSON"]), &running); err != nil {
+		t.Fatalf("decode running job: %v", err)
+	}
+	if running.WorkerID != "worker-new" {
+		t.Fatalf("WorkerID = %q, want worker-new", running.WorkerID)
+	}
+	if countEnvKey(env, "LIVEKIT_AGENT_PROCESS_ID") != 1 {
+		t.Fatalf("process id env count = %d, want 1", countEnvKey(env, "LIVEKIT_AGENT_PROCESS_ID"))
+	}
+	if countEnvKey(env, "LIVEKIT_AGENT_JOB_JSON") != 1 {
+		t.Fatalf("job json env count = %d, want 1", countEnvKey(env, "LIVEKIT_AGENT_JOB_JSON"))
+	}
+	if countEnvKey(env, "LIVEKIT_AGENT_RUNNING_JOB_JSON") != 1 {
+		t.Fatalf("running job env count = %d, want 1", countEnvKey(env, "LIVEKIT_AGENT_RUNNING_JOB_JSON"))
+	}
+	if values["PATH"] != "/bin" {
+		t.Fatalf("PATH = %q, want preserved base env", values["PATH"])
+	}
+}
+
 func TestRunningJobInfoFromEnvPrefersFullAssignment(t *testing.T) {
 	info := RunningJobInfo{
 		AcceptArguments: JobAcceptArguments{Identity: "agent-job-a"},
@@ -120,6 +162,17 @@ func TestRunningJobInfoFromEnvFallsBackToLegacyJobJSON(t *testing.T) {
 	if running.AcceptArguments.Identity != "" {
 		t.Fatalf("identity = %q, want empty fallback", running.AcceptArguments.Identity)
 	}
+}
+
+func countEnvKey(env []string, want string) int {
+	count := 0
+	for _, item := range env {
+		key, _, ok := strings.Cut(item, "=")
+		if ok && key == want {
+			count++
+		}
+	}
+	return count
 }
 
 func envMap(env []string) map[string]string {
