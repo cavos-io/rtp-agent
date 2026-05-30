@@ -98,6 +98,9 @@ func TestNewAgentServerUsesReferenceWorkerDefaults(t *testing.T) {
 	if server.Options.DrainTimeoutSeconds != 1800 {
 		t.Fatalf("DrainTimeoutSeconds = %d, want reference default 1800", server.Options.DrainTimeoutSeconds)
 	}
+	if server.Options.SessionEndTimeoutSeconds != 300 {
+		t.Fatalf("SessionEndTimeoutSeconds = %v, want reference default 300", server.Options.SessionEndTimeoutSeconds)
+	}
 	if server.Options.LoadThreshold != 0.7 {
 		t.Fatalf("LoadThreshold = %v, want reference production default 0.7", server.Options.LoadThreshold)
 	}
@@ -1165,6 +1168,40 @@ func TestExecuteLocalJobCleansUpAndRunsSessionEnd(t *testing.T) {
 	if exists {
 		t.Fatal("local job remained in activeJobs after completion")
 	}
+}
+
+func TestFinishJobTimesOutSessionEndCallback(t *testing.T) {
+	server := NewAgentServer(WorkerOptions{SessionEndTimeoutSeconds: 0.01})
+	blockCh := make(chan struct{})
+	jobCtx := NewJobContext(&livekit.Job{Id: "job_session_end_timeout"}, "", "", "")
+	server.sessionEndFnc = func(*JobContext) error {
+		<-blockCh
+		return nil
+	}
+	server.mu.Lock()
+	server.activeJobs[jobCtx.Job.Id] = jobCtx
+	server.mu.Unlock()
+
+	doneCh := make(chan struct{})
+	go func() {
+		server.finishJob(jobCtx)
+		close(doneCh)
+	}()
+
+	select {
+	case <-doneCh:
+	case <-time.After(time.Second):
+		t.Fatal("finishJob() blocked on session end callback beyond timeout")
+	}
+
+	server.mu.Lock()
+	_, exists := server.activeJobs[jobCtx.Job.Id]
+	server.mu.Unlock()
+	if exists {
+		t.Fatal("job remained in activeJobs after session end timeout")
+	}
+
+	close(blockCh)
 }
 
 func TestDrainWaitsForActiveJobs(t *testing.T) {

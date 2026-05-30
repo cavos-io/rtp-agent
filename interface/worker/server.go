@@ -30,6 +30,7 @@ const (
 	defaultMaxRetry      = 16
 	defaultJobMemoryWarn = 500
 	defaultDrainTimeout  = 1800
+	defaultSessionEnd    = 300
 	defaultLoadThreshold = 0.7
 
 	participantAttributeAgentName = "lk.agent.name"
@@ -72,17 +73,18 @@ type WorkerOptions struct {
 	WSURL      string
 	LoadFunc   func(*AgentServer) float64
 	// WSRL is kept for backward compatibility. Prefer WSURL for new code.
-	WSRL                string
-	APIKey              string
-	APISecret           string
-	WorkerToken         string
-	HTTPProxy           string
-	LoadThreshold       float64
-	JobMemoryWarnMB     float64
-	JobMemoryLimitMB    float64
-	NumIdleProcesses    int
-	DrainTimeoutSeconds int
-	Permissions         *WorkerPermissions
+	WSRL                     string
+	APIKey                   string
+	APISecret                string
+	WorkerToken              string
+	HTTPProxy                string
+	LoadThreshold            float64
+	JobMemoryWarnMB          float64
+	JobMemoryLimitMB         float64
+	NumIdleProcesses         int
+	DrainTimeoutSeconds      int
+	SessionEndTimeoutSeconds float64
+	Permissions              *WorkerPermissions
 }
 
 type AgentServer struct {
@@ -130,6 +132,9 @@ func resolveWorkerOptions(opts WorkerOptions) WorkerOptions {
 	}
 	if opts.DrainTimeoutSeconds == 0 {
 		opts.DrainTimeoutSeconds = defaultDrainTimeout
+	}
+	if opts.SessionEndTimeoutSeconds == 0 {
+		opts.SessionEndTimeoutSeconds = defaultSessionEnd
 	}
 	if opts.LoadThreshold == 0 {
 		opts.LoadThreshold = defaultLoadThreshold
@@ -840,9 +845,7 @@ func (s *AgentServer) handleTermination(req *livekit.JobTermination) {
 	s.mu.Unlock()
 
 	if exists {
-		if s.sessionEndFnc != nil {
-			s.sessionEndFnc(jobCtx)
-		}
+		s.runSessionEnd(jobCtx)
 
 		jobCtx.Shutdown("")
 
@@ -897,13 +900,37 @@ func (s *AgentServer) finishJob(jobCtx *JobContext) {
 	delete(s.activeJobs, jobCtx.Job.Id)
 	s.mu.Unlock()
 
-	if s.sessionEndFnc != nil {
-		if err := s.sessionEndFnc(jobCtx); err != nil {
-			logger.Logger.Errorw("Session end callback failed", err, "jobId", jobCtx.Job.Id)
-		}
-	}
+	s.runSessionEnd(jobCtx)
 
 	jobCtx.Shutdown("")
+}
+
+func (s *AgentServer) runSessionEnd(jobCtx *JobContext) {
+	if s.sessionEndFnc == nil {
+		return
+	}
+
+	timeout := time.Duration(s.Options.SessionEndTimeoutSeconds * float64(time.Second))
+	doneCh := make(chan error, 1)
+	go func() {
+		doneCh <- s.sessionEndFnc(jobCtx)
+	}()
+
+	if timeout <= 0 {
+		if err := <-doneCh; err != nil {
+			logger.Logger.Errorw("Session end callback failed", err, "jobId", jobCtx.Job.Id)
+		}
+		return
+	}
+
+	select {
+	case err := <-doneCh:
+		if err != nil {
+			logger.Logger.Errorw("Session end callback failed", err, "jobId", jobCtx.Job.Id)
+		}
+	case <-time.After(timeout):
+		logger.Logger.Errorw("Session end callback timed out", nil, "jobId", jobCtx.Job.Id, "timeout", timeout)
+	}
 }
 
 func newLocalJobContext(roomName string, participantIdentity string, opts WorkerOptions) *JobContext {
