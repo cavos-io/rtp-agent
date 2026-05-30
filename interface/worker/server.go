@@ -498,16 +498,15 @@ func (s *AgentServer) handleAssignment(ctx context.Context, req *livekit.JobAssi
 
 	if s.entrypointFnc != nil {
 		go func() {
+			status := livekit.JobStatus_JS_SUCCESS
 			if err := s.entrypointFnc(jobCtx); err != nil {
 				logger.Logger.Errorw("Job entrypoint failed", err, "jobId", req.Job.Id)
-				if err := s.sendWorkerMessage(jobStatusMessage(req.Job.Id, livekit.JobStatus_JS_FAILED)); err != nil {
-					logger.Logger.Errorw("failed to update job status", err, "jobId", req.Job.Id)
-				}
-				return
+				status = livekit.JobStatus_JS_FAILED
 			}
-			if err := s.sendWorkerMessage(jobStatusMessage(req.Job.Id, livekit.JobStatus_JS_SUCCESS)); err != nil {
+			if err := s.sendWorkerMessage(jobStatusMessage(req.Job.Id, status)); err != nil {
 				logger.Logger.Errorw("failed to update job status", err, "jobId", req.Job.Id)
 			}
+			s.finishJob(jobCtx)
 		}()
 	}
 }

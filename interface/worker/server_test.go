@@ -433,6 +433,13 @@ func TestAssignmentReportsSuccessWhenEntrypointCompletes(t *testing.T) {
 
 	assertJobStatusMessage(t, receiveWorkerMessage(t, sentCh), "job_success_status", livekit.JobStatus_JS_RUNNING)
 	assertJobStatusMessage(t, receiveWorkerMessage(t, sentCh), "job_success_status", livekit.JobStatus_JS_SUCCESS)
+
+	server.mu.Lock()
+	_, exists := server.activeJobs[job.Id]
+	server.mu.Unlock()
+	if exists {
+		t.Fatal("assigned job remained in activeJobs after successful entrypoint completion")
+	}
 }
 
 func TestAssignmentReportsFailureWhenEntrypointFails(t *testing.T) {
@@ -451,6 +458,13 @@ func TestAssignmentReportsFailureWhenEntrypointFails(t *testing.T) {
 
 	assertJobStatusMessage(t, receiveWorkerMessage(t, sentCh), "job_failed_status", livekit.JobStatus_JS_RUNNING)
 	assertJobStatusMessage(t, receiveWorkerMessage(t, sentCh), "job_failed_status", livekit.JobStatus_JS_FAILED)
+
+	server.mu.Lock()
+	_, exists := server.activeJobs[job.Id]
+	server.mu.Unlock()
+	if exists {
+		t.Fatal("assigned job remained in activeJobs after failed entrypoint completion")
+	}
 }
 
 func TestAssignmentPreservesAssignmentToken(t *testing.T) {
