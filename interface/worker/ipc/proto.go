@@ -2,9 +2,13 @@ package ipc
 
 import (
 	"encoding/json"
+	"errors"
+	"fmt"
 
 	"github.com/livekit/protocol/livekit"
 )
+
+var ErrUnknownMessageType = errors.New("unknown IPC message type")
 
 type MessageType string
 
@@ -26,6 +30,36 @@ const (
 type Message struct {
 	Type    MessageType     `json:"type"`
 	Payload json.RawMessage `json:"payload,omitempty"`
+}
+
+var payloadFactories = map[MessageType]func() any{
+	MessageTypeInitializeRequest:  func() any { return &InitializeRequest{} },
+	MessageTypeInitializeResponse: func() any { return &InitializeResponse{} },
+	MessageTypePingRequest:        func() any { return &PingRequest{} },
+	MessageTypePongResponse:       func() any { return &PongResponse{} },
+	MessageTypeStartJobRequest:    func() any { return &StartJobRequest{} },
+	MessageTypeShutdownRequest:    func() any { return &ShutdownRequest{} },
+	MessageTypeExiting:            func() any { return &Exiting{} },
+	MessageTypeInferenceRequest:   func() any { return &InferenceRequest{} },
+	MessageTypeInferenceResponse:  func() any { return &InferenceResponse{} },
+	MessageTypeDumpStackTrace:     func() any { return &DumpStackTraceRequest{} },
+	MessageTypeShutdownRequestAck: func() any { return &ShutdownRequestAck{} },
+	MessageTypeShuttingDown:       func() any { return &ShuttingDown{} },
+}
+
+func DecodePayload(msg Message) (any, error) {
+	factory, ok := payloadFactories[msg.Type]
+	if !ok {
+		return nil, fmt.Errorf("%w: %s", ErrUnknownMessageType, msg.Type)
+	}
+	payload := factory()
+	if len(msg.Payload) == 0 {
+		return payload, nil
+	}
+	if err := json.Unmarshal(msg.Payload, payload); err != nil {
+		return nil, err
+	}
+	return payload, nil
 }
 
 type InitializeRequest struct {

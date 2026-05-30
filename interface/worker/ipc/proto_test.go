@@ -2,6 +2,7 @@ package ipc
 
 import (
 	"encoding/json"
+	"errors"
 	"testing"
 
 	"github.com/livekit/protocol/livekit"
@@ -175,5 +176,45 @@ func TestReferenceIPCMessageTypesAreNamed(t *testing.T) {
 		if decoded.Type != typ {
 			t.Fatalf("decoded type = %q, want %q", decoded.Type, typ)
 		}
+	}
+}
+
+func TestDecodePayloadUsesReferenceMessageRegistry(t *testing.T) {
+	payload, err := json.Marshal(InferenceRequest{
+		Method:    "embeddings.create",
+		RequestID: "req-123",
+		Data:      []byte(`{"input":"hello"}`),
+	})
+	if err != nil {
+		t.Fatalf("marshal payload: %v", err)
+	}
+
+	msg := Message{Type: MessageTypeInferenceRequest, Payload: payload}
+	decoded, err := DecodePayload(msg)
+	if err != nil {
+		t.Fatalf("DecodePayload: %v", err)
+	}
+
+	req, ok := decoded.(*InferenceRequest)
+	if !ok {
+		t.Fatalf("decoded payload type = %T, want *InferenceRequest", decoded)
+	}
+	if req.RequestID != "req-123" {
+		t.Fatalf("RequestID = %q, want req-123", req.RequestID)
+	}
+	if string(req.Data) != `{"input":"hello"}` {
+		t.Fatalf("Data = %q, want inference payload", string(req.Data))
+	}
+}
+
+func TestDecodePayloadRejectsUnknownMessageType(t *testing.T) {
+	msg := Message{Type: MessageType("unknown_message")}
+
+	_, err := DecodePayload(msg)
+	if err == nil {
+		t.Fatal("DecodePayload error = nil, want unknown message type error")
+	}
+	if !errors.Is(err, ErrUnknownMessageType) {
+		t.Fatalf("DecodePayload error = %v, want ErrUnknownMessageType", err)
 	}
 }
