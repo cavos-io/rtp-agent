@@ -367,6 +367,31 @@ func TestAssignmentPreservesAcceptedParticipantIdentity(t *testing.T) {
 	}
 }
 
+func TestAssignmentUsesAssignmentURLWhenProvided(t *testing.T) {
+	server := NewAgentServer(WorkerOptions{WSRL: "wss://worker.example"})
+	startedCh := make(chan *JobContext, 1)
+	server.entrypointFnc = func(ctx *JobContext) error {
+		startedCh <- ctx
+		return nil
+	}
+
+	assignmentURL := "wss://assignment.example"
+	job := &livekit.Job{Id: "job_assignment_url", Room: &livekit.Room{Name: "room-a"}}
+	server.handleAssignment(context.Background(), &livekit.JobAssignment{
+		Job: job,
+		Url: &assignmentURL,
+	})
+
+	select {
+	case jobCtx := <-startedCh:
+		if jobCtx.url != assignmentURL {
+			t.Fatalf("jobCtx.url = %q, want assignment URL", jobCtx.url)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("assignment entrypoint did not run")
+	}
+}
+
 func TestJobRequestRejectDefaultsToTerminate(t *testing.T) {
 	var got JobRejectArguments
 	req := &JobRequest{
