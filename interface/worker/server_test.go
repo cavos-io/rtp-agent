@@ -330,6 +330,47 @@ func TestHandleAvailabilityRejectsWhenRequestCallbackDoesNotAnswer(t *testing.T)
 	}
 }
 
+func TestHandleAvailabilityRejectsWhenLoadExceedsThreshold(t *testing.T) {
+	server := NewAgentServer(WorkerOptions{
+		LoadThreshold: 0.5,
+		LoadFunc: func(*AgentServer) float64 {
+			return 0.8
+		},
+	})
+	sentCh := make(chan *livekit.WorkerMessage, 1)
+	requestCalled := false
+	server.workerMessageSink = func(msg *livekit.WorkerMessage) error {
+		sentCh <- msg
+		return nil
+	}
+	server.requestFnc = func(req *JobRequest) error {
+		requestCalled = true
+		return nil
+	}
+
+	server.handleAvailability(context.Background(), &livekit.AvailabilityRequest{
+		Job: &livekit.Job{Id: "job_full_load"},
+	})
+
+	msg := receiveWorkerMessage(t, sentCh)
+	availability := msg.GetAvailability()
+	if availability == nil {
+		t.Fatal("availability response is nil")
+	}
+	if availability.Available {
+		t.Fatal("availability.Available = true, want false")
+	}
+	if availability.JobId != "job_full_load" {
+		t.Fatalf("availability.JobId = %q, want job_full_load", availability.JobId)
+	}
+	if availability.Terminate {
+		t.Fatal("availability.Terminate = true, want false")
+	}
+	if requestCalled {
+		t.Fatal("request callback was called while worker was over load threshold")
+	}
+}
+
 func TestHandleRegisterReportsActiveJobs(t *testing.T) {
 	server := NewAgentServer(WorkerOptions{})
 	sentCh := make(chan *livekit.WorkerMessage, 1)

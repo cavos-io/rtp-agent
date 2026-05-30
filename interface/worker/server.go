@@ -43,11 +43,13 @@ type WorkerOptions struct {
 	WorkerType WorkerType
 	MaxRetry   int
 	WSURL      string
+	LoadFunc   func(*AgentServer) float64
 	// WSRL is kept for backward compatibility. Prefer WSURL for new code.
 	WSRL                string
 	APIKey              string
 	APISecret           string
 	HTTPProxy           string
+	LoadThreshold       float64
 	JobMemoryWarnMB     float64
 	JobMemoryLimitMB    float64
 	NumIdleProcesses    int
@@ -311,6 +313,28 @@ func (s *AgentServer) activeJobCount() int {
 	return len(s.activeJobs)
 }
 
+func (s *AgentServer) currentLoad() float64 {
+	if s.Options.LoadFunc == nil {
+		return 0
+	}
+	load := s.Options.LoadFunc(s)
+	if load < 0 {
+		return 0
+	}
+	return load
+}
+
+func (s *AgentServer) availableForJob() bool {
+	if s.Draining() {
+		return false
+	}
+	threshold := s.Options.LoadThreshold
+	if threshold <= 0 {
+		return true
+	}
+	return s.currentLoad() < threshold
+}
+
 func (s *AgentServer) validateRunPreconditions() error {
 	s.Options = resolveWorkerOptions(s.Options)
 
@@ -449,9 +473,9 @@ func (s *AgentServer) reportActiveJobs() {
 func (s *AgentServer) handleAvailability(ctx context.Context, req *livekit.AvailabilityRequest) {
 	logger.Logger.Infow("Received availability request", "jobId", req.Job.Id)
 
-	if s.Draining() {
+	if !s.availableForJob() {
 		if err := s.sendWorkerMessage(availabilityResponseForReject(req, JobRejectArguments{Terminate: false})); err != nil {
-			logger.Logger.Errorw("failed to reject availability while draining", err, "jobId", req.Job.Id)
+			logger.Logger.Errorw("failed to reject availability while unavailable", err, "jobId", req.Job.Id)
 		}
 		return
 	}
