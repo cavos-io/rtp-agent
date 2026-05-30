@@ -26,16 +26,20 @@ const (
 	WorkerTypeRoom      WorkerType = "room"
 	WorkerTypePublisher WorkerType = "publisher"
 
-	defaultWorkerVersion = "1.0.0"
-	defaultMaxRetry      = 16
-	defaultJobMemoryWarn = 500
-	defaultDrainTimeout  = 1800
-	defaultLoadThreshold = 0.7
+	defaultWorkerVersion  = "1.0.0"
+	defaultMaxRetry       = 16
+	defaultJobMemoryWarn  = 500
+	defaultDrainTimeout   = 1800
+	defaultSessionEnd     = 300
+	defaultProcessTimeout = 10
+	defaultLoadThreshold  = 0.7
 
 	participantAttributeAgentName = "lk.agent.name"
 )
 
 var assignmentTimeout = 7500 * time.Millisecond
+
+const workerStatusUpdateInterval = 2500 * time.Millisecond
 
 var workerDialContext = func(ctx context.Context, dialer *websocket.Dialer, url string, headers http.Header) (*websocket.Conn, *http.Response, error) {
 	return dialer.DialContext(ctx, url, headers)
@@ -70,17 +74,20 @@ type WorkerOptions struct {
 	WSURL      string
 	LoadFunc   func(*AgentServer) float64
 	// WSRL is kept for backward compatibility. Prefer WSURL for new code.
-	WSRL                string
-	APIKey              string
-	APISecret           string
-	WorkerToken         string
-	HTTPProxy           string
-	LoadThreshold       float64
-	JobMemoryWarnMB     float64
-	JobMemoryLimitMB    float64
-	NumIdleProcesses    int
-	DrainTimeoutSeconds int
-	Permissions         *WorkerPermissions
+	WSRL                            string
+	APIKey                          string
+	APISecret                       string
+	WorkerToken                     string
+	HTTPProxy                       string
+	LoadThreshold                   float64
+	JobMemoryWarnMB                 float64
+	JobMemoryLimitMB                float64
+	NumIdleProcesses                int
+	DrainTimeoutSeconds             int
+	SessionEndTimeoutSeconds        float64
+	ShutdownProcessTimeoutSeconds   float64
+	InitializeProcessTimeoutSeconds float64
+	Permissions                     *WorkerPermissions
 }
 
 type AgentServer struct {
@@ -93,6 +100,7 @@ type AgentServer struct {
 	activeJobs        map[string]*JobContext
 	pendingAccepts    map[string]JobAcceptArguments
 	pendingTimers     map[string]*time.Timer
+	reservedSlots     int
 	draining          bool
 	mu                sync.Mutex
 	conn              *websocket.Conn
@@ -127,6 +135,15 @@ func resolveWorkerOptions(opts WorkerOptions) WorkerOptions {
 	}
 	if opts.DrainTimeoutSeconds == 0 {
 		opts.DrainTimeoutSeconds = defaultDrainTimeout
+	}
+	if opts.SessionEndTimeoutSeconds == 0 {
+		opts.SessionEndTimeoutSeconds = defaultSessionEnd
+	}
+	if opts.ShutdownProcessTimeoutSeconds == 0 {
+		opts.ShutdownProcessTimeoutSeconds = defaultProcessTimeout
+	}
+	if opts.InitializeProcessTimeoutSeconds == 0 {
+		opts.InitializeProcessTimeoutSeconds = defaultProcessTimeout
 	}
 	if opts.LoadThreshold == 0 {
 		opts.LoadThreshold = defaultLoadThreshold
@@ -438,6 +455,7 @@ func (s *AgentServer) effectiveLoad() float64 {
 	s.mu.Lock()
 	activeCount := len(s.activeJobs)
 	pendingCount := len(s.pendingAccepts)
+	reservedSlots := s.reservedSlots
 	s.mu.Unlock()
 
 	var jobLoad float64
@@ -451,7 +469,7 @@ func (s *AgentServer) effectiveLoad() float64 {
 		jobLoad = threshold / float64(idleProcesses)
 	}
 
-	return load + float64(pendingCount)*jobLoad
+	return load + float64(pendingCount+reservedSlots)*jobLoad
 }
 
 func (s *AgentServer) availableForJob() bool {
@@ -546,6 +564,10 @@ func (s *AgentServer) Run(ctx context.Context) error {
 		return err
 	}
 
+	statusCtx, stopStatusUpdates := context.WithCancel(ctx)
+	defer stopStatusUpdates()
+	go s.runWorkerStatusUpdates(statusCtx, workerStatusUpdateInterval)
+
 	// Message Loop
 	for {
 		select {
@@ -570,6 +592,30 @@ func (s *AgentServer) Run(ctx context.Context) error {
 			s.handleMessage(ctx, msg)
 		}
 	}
+}
+
+func (s *AgentServer) runWorkerStatusUpdates(ctx context.Context, interval time.Duration) {
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			if err := s.sendWorkerStatusUpdate(); err != nil {
+				logger.Logger.Errorw("failed to update worker status", err)
+				return
+			}
+		}
+	}
+}
+
+func (s *AgentServer) sendWorkerStatusUpdate() error {
+	if s.Draining() {
+		return s.sendWorkerMessage(s.drainingWorkerStatusMessage())
+	}
+	return s.sendWorkerMessage(s.workerStatusMessage(livekit.WorkerStatus_WS_AVAILABLE))
 }
 
 func (s *AgentServer) connectWorkerWebSocket(ctx context.Context, dialer *websocket.Dialer, agentURL string, headers http.Header) (*websocket.Conn, *http.Response, error) {
@@ -646,6 +692,10 @@ func (s *AgentServer) reportActiveJobs() {
 }
 
 func (s *AgentServer) handleAvailability(ctx context.Context, req *livekit.AvailabilityRequest) {
+	go s.answerAvailability(ctx, req)
+}
+
+func (s *AgentServer) answerAvailability(ctx context.Context, req *livekit.AvailabilityRequest) {
 	logger.Logger.Infow("Received availability request", "jobId", req.Job.Id)
 
 	if !s.availableForJob() {
@@ -655,6 +705,9 @@ func (s *AgentServer) handleAvailability(ctx context.Context, req *livekit.Avail
 		return
 	}
 
+	s.reserveAvailabilitySlot()
+	defer s.releaseAvailabilitySlot()
+
 	answered := false
 	jobReq := &JobRequest{
 		Job: req.Job,
@@ -663,10 +716,10 @@ func (s *AgentServer) handleAvailability(ctx context.Context, req *livekit.Avail
 				args.Name = s.Options.AgentName
 			}
 			answered = true
+			s.storePendingAccept(req.Job.Id, args)
 			if err := s.sendWorkerMessage(availabilityResponseForAccept(req, args, s.Options.AgentName)); err != nil {
 				return err
 			}
-			s.storePendingAccept(req.Job.Id, args)
 			return nil
 		},
 		rejectFnc: func(args JobRejectArguments) error {
@@ -685,6 +738,20 @@ func (s *AgentServer) handleAvailability(ctx context.Context, req *livekit.Avail
 
 	if !answered {
 		_ = jobReq.Reject(JobRejectArguments{Terminate: false})
+	}
+}
+
+func (s *AgentServer) reserveAvailabilitySlot() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.reservedSlots++
+}
+
+func (s *AgentServer) releaseAvailabilitySlot() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.reservedSlots > 0 {
+		s.reservedSlots--
 	}
 }
 
@@ -787,9 +854,7 @@ func (s *AgentServer) handleTermination(req *livekit.JobTermination) {
 	s.mu.Unlock()
 
 	if exists {
-		if s.sessionEndFnc != nil {
-			s.sessionEndFnc(jobCtx)
-		}
+		s.runSessionEnd(jobCtx)
 
 		jobCtx.Shutdown("")
 
@@ -844,13 +909,37 @@ func (s *AgentServer) finishJob(jobCtx *JobContext) {
 	delete(s.activeJobs, jobCtx.Job.Id)
 	s.mu.Unlock()
 
-	if s.sessionEndFnc != nil {
-		if err := s.sessionEndFnc(jobCtx); err != nil {
-			logger.Logger.Errorw("Session end callback failed", err, "jobId", jobCtx.Job.Id)
-		}
-	}
+	s.runSessionEnd(jobCtx)
 
 	jobCtx.Shutdown("")
+}
+
+func (s *AgentServer) runSessionEnd(jobCtx *JobContext) {
+	if s.sessionEndFnc == nil {
+		return
+	}
+
+	timeout := time.Duration(s.Options.SessionEndTimeoutSeconds * float64(time.Second))
+	doneCh := make(chan error, 1)
+	go func() {
+		doneCh <- s.sessionEndFnc(jobCtx)
+	}()
+
+	if timeout <= 0 {
+		if err := <-doneCh; err != nil {
+			logger.Logger.Errorw("Session end callback failed", err, "jobId", jobCtx.Job.Id)
+		}
+		return
+	}
+
+	select {
+	case err := <-doneCh:
+		if err != nil {
+			logger.Logger.Errorw("Session end callback failed", err, "jobId", jobCtx.Job.Id)
+		}
+	case <-time.After(timeout):
+		logger.Logger.Errorw("Session end callback timed out", nil, "jobId", jobCtx.Job.Id, "timeout", timeout)
+	}
 }
 
 func newLocalJobContext(roomName string, participantIdentity string, opts WorkerOptions) *JobContext {

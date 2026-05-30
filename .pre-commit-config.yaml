@@ -24,3 +24,10 @@ repos:
         entry: go-arch-lint mapping
         language: system
         pass_filenames: false
+
+      - id: check-test-additions-than-deletions
+        name: Check *_test.go additions > deletions
+        entry: scripts/check-test-additions-than-deletions.sh
+        language: system
+        pass_filenames: false
+        stages: [pre-commit]

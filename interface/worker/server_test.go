@@ -98,6 +98,15 @@ func TestNewAgentServerUsesReferenceWorkerDefaults(t *testing.T) {
 	if server.Options.DrainTimeoutSeconds != 1800 {
 		t.Fatalf("DrainTimeoutSeconds = %d, want reference default 1800", server.Options.DrainTimeoutSeconds)
 	}
+	if server.Options.SessionEndTimeoutSeconds != 300 {
+		t.Fatalf("SessionEndTimeoutSeconds = %v, want reference default 300", server.Options.SessionEndTimeoutSeconds)
+	}
+	if server.Options.ShutdownProcessTimeoutSeconds != 10 {
+		t.Fatalf("ShutdownProcessTimeoutSeconds = %v, want reference default 10", server.Options.ShutdownProcessTimeoutSeconds)
+	}
+	if server.Options.InitializeProcessTimeoutSeconds != 10 {
+		t.Fatalf("InitializeProcessTimeoutSeconds = %v, want reference default 10", server.Options.InitializeProcessTimeoutSeconds)
+	}
 	if server.Options.LoadThreshold != 0.7 {
 		t.Fatalf("LoadThreshold = %v, want reference production default 0.7", server.Options.LoadThreshold)
 	}
@@ -283,6 +292,35 @@ func TestDrainingWorkerStatusMessageReportsFullWithoutLoad(t *testing.T) {
 	}
 	if update.Load != 0 {
 		t.Fatalf("UpdateWorker.Load = %v, want 0 while draining", update.Load)
+	}
+}
+
+func TestWorkerStatusUpdatesPeriodically(t *testing.T) {
+	server := NewAgentServer(WorkerOptions{
+		LoadFunc: func(*AgentServer) float64 {
+			return 0.25
+		},
+	})
+	sentCh := make(chan *livekit.WorkerMessage, 1)
+	server.workerMessageSink = func(msg *livekit.WorkerMessage) error {
+		sentCh <- msg
+		return nil
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go server.runWorkerStatusUpdates(ctx, time.Millisecond)
+
+	msg := receiveWorkerMessage(t, sentCh)
+	update := msg.GetUpdateWorker()
+	if update == nil {
+		t.Fatal("update worker message is nil")
+	}
+	if update.GetStatus() != livekit.WorkerStatus_WS_AVAILABLE {
+		t.Fatalf("UpdateWorker.Status = %v, want WS_AVAILABLE", update.GetStatus())
+	}
+	if update.Load != 0.25 {
+		t.Fatalf("UpdateWorker.Load = %v, want 0.25", update.Load)
 	}
 }
 
@@ -528,6 +566,103 @@ func TestHandleAvailabilityCountsPendingAcceptsAsReservedLoad(t *testing.T) {
 	}
 }
 
+func TestAvailabilityReservesLoadWhileRequestCallbackRuns(t *testing.T) {
+	server := NewAgentServer(WorkerOptions{
+		LoadThreshold:    0.5,
+		NumIdleProcesses: 1,
+		LoadFunc: func(*AgentServer) float64 {
+			return 0
+		},
+	})
+	sentCh := make(chan *livekit.WorkerMessage, 2)
+	requestStarted := make(chan struct{})
+	releaseRequest := make(chan struct{})
+	server.workerMessageSink = func(msg *livekit.WorkerMessage) error {
+		sentCh <- msg
+		return nil
+	}
+	server.requestFnc = func(req *JobRequest) error {
+		if req.ID() == "job_reserving_one" {
+			close(requestStarted)
+			<-releaseRequest
+			return req.Accept(JobAcceptArguments{})
+		}
+		return req.Accept(JobAcceptArguments{})
+	}
+
+	doneCh := make(chan struct{})
+	go func() {
+		server.handleAvailability(context.Background(), &livekit.AvailabilityRequest{
+			Job: &livekit.Job{Id: "job_reserving_one"},
+		})
+		close(doneCh)
+	}()
+
+	select {
+	case <-requestStarted:
+	case <-time.After(time.Second):
+		t.Fatal("first request callback did not start")
+	}
+
+	server.handleAvailability(context.Background(), &livekit.AvailabilityRequest{
+		Job: &livekit.Job{Id: "job_reserving_two"},
+	})
+
+	second := receiveWorkerMessage(t, sentCh).GetAvailability()
+	if second == nil {
+		t.Fatal("second availability response is nil")
+	}
+	if second.Available {
+		t.Fatal("second availability response was accepted despite in-flight request reservation")
+	}
+	if second.JobId != "job_reserving_two" {
+		t.Fatalf("second availability JobId = %q, want job_reserving_two", second.JobId)
+	}
+
+	close(releaseRequest)
+	select {
+	case <-doneCh:
+	case <-time.After(time.Second):
+		t.Fatal("first request did not finish")
+	}
+}
+
+func TestHandleAvailabilityReturnsWhileRequestCallbackRuns(t *testing.T) {
+	server := NewAgentServer(WorkerOptions{})
+	requestStarted := make(chan struct{})
+	releaseRequest := make(chan struct{})
+	server.workerMessageSink = func(msg *livekit.WorkerMessage) error {
+		return nil
+	}
+	server.requestFnc = func(req *JobRequest) error {
+		close(requestStarted)
+		<-releaseRequest
+		return req.Accept(JobAcceptArguments{})
+	}
+
+	doneCh := make(chan struct{})
+	go func() {
+		server.handleAvailability(context.Background(), &livekit.AvailabilityRequest{
+			Job: &livekit.Job{Id: "job_async_request"},
+		})
+		close(doneCh)
+	}()
+
+	select {
+	case <-requestStarted:
+	case <-time.After(time.Second):
+		t.Fatal("request callback did not start")
+	}
+
+	select {
+	case <-doneCh:
+	case <-time.After(time.Second):
+		t.Fatal("handleAvailability blocked on request callback")
+	}
+
+	close(releaseRequest)
+}
+
 func TestHandleRegisterReportsActiveJobs(t *testing.T) {
 	server := NewAgentServer(WorkerOptions{})
 	sentCh := make(chan *livekit.WorkerMessage, 1)
@@ -613,7 +748,9 @@ func TestAcceptedAvailabilityExpiresWithoutAssignment(t *testing.T) {
 
 func TestAssignmentPreservesAcceptedParticipantIdentity(t *testing.T) {
 	server := NewAgentServer(WorkerOptions{})
+	sentCh := make(chan *livekit.WorkerMessage, 1)
 	server.workerMessageSink = func(msg *livekit.WorkerMessage) error {
+		sentCh <- msg
 		return nil
 	}
 	server.requestFnc = func(req *JobRequest) error {
@@ -627,6 +764,10 @@ func TestAssignmentPreservesAcceptedParticipantIdentity(t *testing.T) {
 
 	job := &livekit.Job{Id: "job_custom_identity", Room: &livekit.Room{Name: "room-a"}}
 	server.handleAvailability(context.Background(), &livekit.AvailabilityRequest{Job: job})
+	availability := receiveWorkerMessage(t, sentCh).GetAvailability()
+	if availability == nil || !availability.Available {
+		t.Fatal("availability response was not accepted")
+	}
 	server.handleAssignment(context.Background(), &livekit.JobAssignment{Job: job})
 
 	select {
@@ -1033,6 +1174,40 @@ func TestExecuteLocalJobCleansUpAndRunsSessionEnd(t *testing.T) {
 	if exists {
 		t.Fatal("local job remained in activeJobs after completion")
 	}
+}
+
+func TestFinishJobTimesOutSessionEndCallback(t *testing.T) {
+	server := NewAgentServer(WorkerOptions{SessionEndTimeoutSeconds: 0.01})
+	blockCh := make(chan struct{})
+	jobCtx := NewJobContext(&livekit.Job{Id: "job_session_end_timeout"}, "", "", "")
+	server.sessionEndFnc = func(*JobContext) error {
+		<-blockCh
+		return nil
+	}
+	server.mu.Lock()
+	server.activeJobs[jobCtx.Job.Id] = jobCtx
+	server.mu.Unlock()
+
+	doneCh := make(chan struct{})
+	go func() {
+		server.finishJob(jobCtx)
+		close(doneCh)
+	}()
+
+	select {
+	case <-doneCh:
+	case <-time.After(time.Second):
+		t.Fatal("finishJob() blocked on session end callback beyond timeout")
+	}
+
+	server.mu.Lock()
+	_, exists := server.activeJobs[jobCtx.Job.Id]
+	server.mu.Unlock()
+	if exists {
+		t.Fatal("job remained in activeJobs after session end timeout")
+	}
+
+	close(blockCh)
 }
 
 func TestDrainWaitsForActiveJobs(t *testing.T) {
