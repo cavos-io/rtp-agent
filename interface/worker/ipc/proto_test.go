@@ -1,8 +1,10 @@
 package ipc
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
+	"io"
 	"testing"
 
 	"github.com/livekit/protocol/livekit"
@@ -257,5 +259,49 @@ func TestNewMessageRejectsUnknownPayloadType(t *testing.T) {
 	}
 	if !errors.Is(err, ErrUnknownPayloadType) {
 		t.Fatalf("NewMessage error = %v, want ErrUnknownPayloadType", err)
+	}
+}
+
+func TestWriteReadMessageRoundTrip(t *testing.T) {
+	msg, err := NewMessage(&PingRequest{Timestamp: 42})
+	if err != nil {
+		t.Fatalf("NewMessage: %v", err)
+	}
+
+	var buf bytes.Buffer
+	if err := WriteMessage(&buf, msg); err != nil {
+		t.Fatalf("WriteMessage: %v", err)
+	}
+
+	decoded, err := ReadMessage(&buf)
+	if err != nil {
+		t.Fatalf("ReadMessage: %v", err)
+	}
+	if decoded.Type != MessageTypePingRequest {
+		t.Fatalf("Type = %q, want %q", decoded.Type, MessageTypePingRequest)
+	}
+
+	payload, err := DecodePayload(decoded)
+	if err != nil {
+		t.Fatalf("DecodePayload: %v", err)
+	}
+	ping, ok := payload.(*PingRequest)
+	if !ok {
+		t.Fatalf("payload type = %T, want *PingRequest", payload)
+	}
+	if ping.Timestamp != 42 {
+		t.Fatalf("Timestamp = %d, want 42", ping.Timestamp)
+	}
+}
+
+func TestReadMessageRejectsTruncatedFrame(t *testing.T) {
+	buf := bytes.NewBuffer([]byte{0, 0, 0, 4, '{'})
+
+	_, err := ReadMessage(buf)
+	if err == nil {
+		t.Fatal("ReadMessage error = nil, want truncated frame error")
+	}
+	if !errors.Is(err, io.ErrUnexpectedEOF) {
+		t.Fatalf("ReadMessage error = %v, want io.ErrUnexpectedEOF", err)
 	}
 }
