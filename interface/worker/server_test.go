@@ -314,3 +314,23 @@ func TestRTCSessionRejectsSecondRegistration(t *testing.T) {
 		t.Fatalf("second RTCSession() error = %q, want duplicate registration message", err.Error())
 	}
 }
+
+func TestNewJobContextDefaultsParticipantIdentity(t *testing.T) {
+	job := &livekit.Job{Id: "job_default"}
+	ctx := NewJobContext(job, "wss://livekit.example", "key", "secret")
+
+	if got := ctx.ParticipantIdentity(); got != "agent-job_default" {
+		t.Fatalf("ParticipantIdentity() = %q, want default job identity", got)
+	}
+}
+
+func TestLocalJobContextUsesProvidedParticipantIdentity(t *testing.T) {
+	ctx := newLocalJobContext("room-a", "agent-custom", WorkerOptions{})
+
+	if got := ctx.ParticipantIdentity(); got != "agent-custom" {
+		t.Fatalf("ParticipantIdentity() = %q, want provided local identity", got)
+	}
+	if ctx.Job.Room.Name != "room-a" {
+		t.Fatalf("Job.Room.Name = %q, want room-a", ctx.Job.Room.Name)
+	}
+}

@@ -398,6 +398,30 @@ func (s *AgentServer) handleTermination(req *livekit.JobTermination) {
 
 // ExecuteLocalJob runs a job locally without connecting to the worker service, useful for the CLI console
 func (s *AgentServer) ExecuteLocalJob(ctx context.Context, roomName string, participantIdentity string) error {
+	jobCtx := newLocalJobContext(roomName, participantIdentity, s.Options)
+
+	// For local execution, we want to connect immediately
+	// For basic parity, we just trigger the entrypoint directly.
+
+	s.mu.Lock()
+	s.activeJobs[jobCtx.Job.Id] = jobCtx
+	s.mu.Unlock()
+
+	if s.entrypointFnc != nil {
+		go func() {
+			if err := s.entrypointFnc(jobCtx); err != nil {
+				logger.Logger.Errorw("Local job entrypoint failed", err, "jobId", jobCtx.Job.Id)
+			}
+		}()
+	}
+
+	// Block until context is done for local execution
+	<-ctx.Done()
+	return nil
+}
+
+func newLocalJobContext(roomName string, participantIdentity string, opts WorkerOptions) *JobContext {
+	opts = resolveWorkerOptions(opts)
 	job := &livekit.Job{
 		Id: "local-job-" + time.Now().Format("20060102150405"),
 		Room: &livekit.Room{
@@ -407,24 +431,10 @@ func (s *AgentServer) ExecuteLocalJob(ctx context.Context, roomName string, part
 		Type: livekit.JobType_JT_ROOM,
 	}
 
-	jobCtx := NewJobContext(job, s.Options.WSRL, s.Options.APIKey, s.Options.APISecret)
-
-	// For local execution, we want to connect immediately
-	// For basic parity, we just trigger the entrypoint directly.
-
-	s.mu.Lock()
-	s.activeJobs[job.Id] = jobCtx
-	s.mu.Unlock()
-
-	if s.entrypointFnc != nil {
-		go func() {
-			if err := s.entrypointFnc(jobCtx); err != nil {
-				logger.Logger.Errorw("Local job entrypoint failed", err, "jobId", job.Id)
-			}
-		}()
+	if participantIdentity == "" {
+		participantIdentity = agentIdentityForJobID(job.Id)
 	}
-
-	// Block until context is done for local execution
-	<-ctx.Done()
-	return nil
+	jobCtx := NewJobContext(job, opts.WSRL, opts.APIKey, opts.APISecret)
+	jobCtx.AcceptArguments = JobAcceptArguments{Identity: participantIdentity}
+	return jobCtx
 }

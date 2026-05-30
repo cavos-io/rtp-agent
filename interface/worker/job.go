@@ -49,9 +49,10 @@ func (r *JobRequest) Reject(args ...JobRejectArguments) error {
 }
 
 type JobContext struct {
-	Job    *livekit.Job
-	Room   *lksdk.Room
-	Report *agent.SessionReport
+	Job             *livekit.Job
+	Room            *lksdk.Room
+	Report          *agent.SessionReport
+	AcceptArguments JobAcceptArguments
 
 	apiKey    string
 	apiSecret string
@@ -68,12 +69,19 @@ func NewJobContext(job *livekit.Job, url string, apiKey string, apiSecret string
 	}
 }
 
+func (c *JobContext) ParticipantIdentity() string {
+	if c.AcceptArguments.Identity != "" {
+		return c.AcceptArguments.Identity
+	}
+	return agentIdentityForJobID(c.Job.Id)
+}
+
 func (c *JobContext) Connect(ctx context.Context, cb *lksdk.RoomCallback) error {
 	room, err := lksdk.ConnectToRoom(c.url, lksdk.ConnectInfo{
 		APIKey:              c.apiKey,
 		APISecret:           c.apiSecret,
 		RoomName:            c.Job.Room.Name,
-		ParticipantIdentity: agentIdentityForJobID(c.Job.Id),
+		ParticipantIdentity: c.ParticipantIdentity(),
 	}, cb)
 	if err != nil {
 		return err
