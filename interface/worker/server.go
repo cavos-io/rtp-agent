@@ -3,7 +3,9 @@ package worker
 import (
 	"context"
 	"fmt"
+	"net/http"
 	"net/url"
+	"os"
 	"sync"
 	"time"
 
@@ -23,9 +25,11 @@ const (
 )
 
 type WorkerOptions struct {
-	AgentName           string
-	WorkerType          WorkerType
-	MaxRetry            int
+	AgentName  string
+	WorkerType WorkerType
+	MaxRetry   int
+	WSURL      string
+	// WSRL is kept for backward compatibility. Prefer WSURL for new code.
 	WSRL                string
 	APIKey              string
 	APISecret           string
@@ -51,10 +55,39 @@ type AgentServer struct {
 }
 
 func NewAgentServer(opts WorkerOptions) *AgentServer {
+	opts = resolveWorkerOptions(opts)
 	return &AgentServer{
 		Options:    opts,
 		activeJobs: make(map[string]*JobContext),
 	}
+}
+
+func resolveWorkerOptions(opts WorkerOptions) WorkerOptions {
+	if opts.WSURL == "" {
+		opts.WSURL = opts.WSRL
+	}
+	if opts.WSURL == "" {
+		opts.WSURL = os.Getenv("LIVEKIT_URL")
+	}
+	opts.WSRL = opts.WSURL
+
+	if opts.APIKey == "" {
+		opts.APIKey = os.Getenv("LIVEKIT_API_KEY")
+	}
+	if opts.APISecret == "" {
+		opts.APISecret = os.Getenv("LIVEKIT_API_SECRET")
+	}
+	if opts.AgentName == "" {
+		opts.AgentName = os.Getenv("LIVEKIT_AGENT_NAME")
+	}
+	if opts.HTTPProxy == "" {
+		opts.HTTPProxy = os.Getenv("HTTPS_PROXY")
+		if opts.HTTPProxy == "" {
+			opts.HTTPProxy = os.Getenv("HTTP_PROXY")
+		}
+	}
+
+	return opts
 }
 
 func (s *AgentServer) RTCSession(
@@ -81,8 +114,9 @@ func (s *AgentServer) GetConsoleSession() any {
 	return s.consoleSession
 }
 
-
 func (s *AgentServer) Run(ctx context.Context) error {
+	s.Options = resolveWorkerOptions(s.Options)
+
 	if s.Options.WSRL == "" || s.Options.APIKey == "" || s.Options.APISecret == "" {
 		return fmt.Errorf("missing LiveKit credentials")
 	}
@@ -110,7 +144,16 @@ func (s *AgentServer) Run(ctx context.Context) error {
 
 	// Connect WS
 	// A robust implementation should include retries and proxy handling
-	conn, res, err := websocket.DefaultDialer.DialContext(ctx, wsURL.String(), map[string][]string{
+	dialer := *websocket.DefaultDialer
+	if s.Options.HTTPProxy != "" {
+		proxyURL, err := url.Parse(s.Options.HTTPProxy)
+		if err != nil {
+			return fmt.Errorf("invalid HTTP proxy URL: %w", err)
+		}
+		dialer.Proxy = http.ProxyURL(proxyURL)
+	}
+
+	conn, res, err := dialer.DialContext(ctx, wsURL.String(), map[string][]string{
 		"Authorization": {fmt.Sprintf("Bearer %s", token)},
 	})
 	if err != nil {
@@ -275,7 +318,7 @@ func (s *AgentServer) ExecuteLocalJob(ctx context.Context, roomName string, part
 	}
 
 	jobCtx := NewJobContext(job, s.Options.WSRL, s.Options.APIKey, s.Options.APISecret)
-	
+
 	// For local execution, we want to connect immediately
 	// For basic parity, we just trigger the entrypoint directly.
 
@@ -290,7 +333,7 @@ func (s *AgentServer) ExecuteLocalJob(ctx context.Context, roomName string, part
 			}
 		}()
 	}
-	
+
 	// Block until context is done for local execution
 	<-ctx.Done()
 	return nil
