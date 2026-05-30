@@ -66,6 +66,8 @@ type WorkerPermissions struct {
 	Hidden            bool
 }
 
+type WorkerStartedHandler func()
+
 type WorkerRegisteredHandler func(workerID string, serverInfo *livekit.ServerInfo)
 
 type WorkerOptions struct {
@@ -108,6 +110,7 @@ type AgentServer struct {
 	conn               *websocket.Conn
 	workerMessageSink  func(*livekit.WorkerMessage) error
 	workerID           string
+	startedHandlers    []WorkerStartedHandler
 	registeredHandlers []WorkerRegisteredHandler
 
 	consoleSession any // Store local session for CLI console
@@ -121,6 +124,13 @@ func NewAgentServer(opts WorkerOptions) *AgentServer {
 		pendingAccepts: make(map[string]JobAcceptArguments),
 		pendingTimers:  make(map[string]*time.Timer),
 	}
+}
+
+func (s *AgentServer) OnWorkerStarted(handler WorkerStartedHandler) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	s.startedHandlers = append(s.startedHandlers, handler)
 }
 
 func (s *AgentServer) OnWorkerRegistered(handler WorkerRegisteredHandler) {
@@ -577,6 +587,7 @@ func (s *AgentServer) Run(ctx context.Context) error {
 	statusCtx, stopStatusUpdates := context.WithCancel(ctx)
 	defer stopStatusUpdates()
 	go s.runWorkerStatusUpdates(statusCtx, workerStatusUpdateInterval)
+	s.emitWorkerStarted()
 
 	// Message Loop
 	for {
@@ -601,6 +612,16 @@ func (s *AgentServer) Run(ctx context.Context) error {
 
 			s.handleMessage(ctx, msg)
 		}
+	}
+}
+
+func (s *AgentServer) emitWorkerStarted() {
+	s.mu.Lock()
+	handlers := append([]WorkerStartedHandler(nil), s.startedHandlers...)
+	s.mu.Unlock()
+
+	for _, handler := range handlers {
+		handler()
 	}
 }
 

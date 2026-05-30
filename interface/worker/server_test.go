@@ -321,6 +321,21 @@ func TestHandleRegisterNotifiesWorkerRegisteredHandlers(t *testing.T) {
 	}
 }
 
+func TestEmitWorkerStartedNotifiesHandlers(t *testing.T) {
+	server := NewAgentServer(WorkerOptions{})
+
+	var calls int
+	server.OnWorkerStarted(func() {
+		calls++
+	})
+
+	server.emitWorkerStarted()
+
+	if calls != 1 {
+		t.Fatalf("worker started handler calls = %d, want 1", calls)
+	}
+}
+
 func TestWorkerStatusMessageIncludesCurrentLoad(t *testing.T) {
 	server := NewAgentServer(WorkerOptions{
 		LoadFunc: func(*AgentServer) float64 {
