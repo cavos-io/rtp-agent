@@ -1342,6 +1342,14 @@ func TestLocalJobContextUsesReferenceMockJobIDPrefix(t *testing.T) {
 	}
 }
 
+func TestLocalJobContextUsesReferenceFakeRoomSIDPrefix(t *testing.T) {
+	ctx := newLocalJobContext("room-a", "agent-local", WorkerOptions{})
+
+	if !strings.HasPrefix(ctx.Job.Room.Sid, "SRM_") {
+		t.Fatalf("local room SID = %q, want SRM_ prefix", ctx.Job.Room.Sid)
+	}
+}
+
 func TestExecuteLocalJobCleansUpAndRunsSessionEnd(t *testing.T) {
 	server := NewAgentServer(WorkerOptions{})
 	startedCh := make(chan *JobContext, 1)

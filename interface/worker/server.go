@@ -1103,7 +1103,7 @@ func newLocalJobContext(roomName string, participantIdentity string, opts Worker
 		Id: "mock-job-" + time.Now().Format("20060102150405"),
 		Room: &livekit.Room{
 			Name: roomName,
-			Sid:  "RM_local",
+			Sid:  "SRM_" + time.Now().Format("20060102150405"),
 		},
 		Type: livekit.JobType_JT_ROOM,
 	}
