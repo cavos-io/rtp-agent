@@ -435,6 +435,31 @@ func TestAssignmentPreservesAcceptedParticipantIdentity(t *testing.T) {
 	}
 }
 
+func TestAssignmentIgnoresUnknownJob(t *testing.T) {
+	server := NewAgentServer(WorkerOptions{})
+	sentCh := make(chan *livekit.WorkerMessage, 1)
+	startedCh := make(chan *JobContext, 1)
+	server.workerMessageSink = func(msg *livekit.WorkerMessage) error {
+		sentCh <- msg
+		return nil
+	}
+	server.entrypointFnc = func(ctx *JobContext) error {
+		startedCh <- ctx
+		return nil
+	}
+
+	job := &livekit.Job{Id: "job_unknown_assignment", Room: &livekit.Room{Name: "room-a"}}
+	server.handleAssignment(context.Background(), &livekit.JobAssignment{Job: job})
+
+	select {
+	case <-startedCh:
+		t.Fatal("unknown assignment started entrypoint")
+	case <-sentCh:
+		t.Fatal("unknown assignment sent worker message")
+	case <-time.After(20 * time.Millisecond):
+	}
+}
+
 func TestAssignmentUsesAssignmentURLWhenProvided(t *testing.T) {
 	server := NewAgentServer(WorkerOptions{WSRL: "wss://worker.example"})
 	startedCh := make(chan *JobContext, 1)
@@ -445,6 +470,7 @@ func TestAssignmentUsesAssignmentURLWhenProvided(t *testing.T) {
 
 	assignmentURL := "wss://assignment.example"
 	job := &livekit.Job{Id: "job_assignment_url", Room: &livekit.Room{Name: "room-a"}}
+	markJobAccepted(t, server, job)
 	server.handleAssignment(context.Background(), &livekit.JobAssignment{
 		Job: job,
 		Url: &assignmentURL,
@@ -478,6 +504,7 @@ func TestAssignmentRecordsRegisteredWorkerID(t *testing.T) {
 	})
 
 	job := &livekit.Job{Id: "job_worker_id", Room: &livekit.Room{Name: "room-a"}}
+	markJobAccepted(t, server, job)
 	server.handleAssignment(context.Background(), &livekit.JobAssignment{Job: job})
 
 	select {
@@ -499,6 +526,7 @@ func TestAssignmentSendsRunningJobStatus(t *testing.T) {
 	}
 
 	job := &livekit.Job{Id: "job_running_status", Room: &livekit.Room{Name: "room-a"}}
+	markJobAccepted(t, server, job)
 	server.handleAssignment(context.Background(), &livekit.JobAssignment{Job: job})
 
 	msg := receiveWorkerMessage(t, sentCh)
@@ -526,6 +554,7 @@ func TestAssignmentReportsSuccessWhenEntrypointCompletes(t *testing.T) {
 	}
 
 	job := &livekit.Job{Id: "job_success_status", Room: &livekit.Room{Name: "room-a"}}
+	markJobAccepted(t, server, job)
 	server.handleAssignment(context.Background(), &livekit.JobAssignment{Job: job})
 
 	assertJobStatusMessage(t, receiveWorkerMessage(t, sentCh), "job_success_status", livekit.JobStatus_JS_RUNNING)
@@ -551,6 +580,7 @@ func TestAssignmentReportsFailureWhenEntrypointFails(t *testing.T) {
 	}
 
 	job := &livekit.Job{Id: "job_failed_status", Room: &livekit.Room{Name: "room-a"}}
+	markJobAccepted(t, server, job)
 	server.handleAssignment(context.Background(), &livekit.JobAssignment{Job: job})
 
 	assertJobStatusMessage(t, receiveWorkerMessage(t, sentCh), "job_failed_status", livekit.JobStatus_JS_RUNNING)
@@ -573,6 +603,7 @@ func TestAssignmentPreservesAssignmentToken(t *testing.T) {
 	}
 
 	job := &livekit.Job{Id: "job_assignment_token", Room: &livekit.Room{Name: "room-a"}}
+	markJobAccepted(t, server, job)
 	server.handleAssignment(context.Background(), &livekit.JobAssignment{
 		Job:   job,
 		Token: "assignment-token",
@@ -840,4 +871,10 @@ func assertJobStatusMessage(t *testing.T, msg *livekit.WorkerMessage, jobID stri
 	if update.Status != status {
 		t.Fatalf("UpdateJob.Status = %v, want %v", update.Status, status)
 	}
+}
+
+func markJobAccepted(t *testing.T, server *AgentServer, job *livekit.Job) {
+	t.Helper()
+
+	server.storePendingAccept(job.Id, JobAcceptArguments{})
 }

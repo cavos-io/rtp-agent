@@ -541,11 +541,16 @@ func (s *AgentServer) handleAssignment(ctx context.Context, req *livekit.JobAssi
 	jobCtx.token = req.GetToken()
 
 	s.mu.Lock()
-	jobCtx.WorkerID = s.workerID
-	if args, ok := s.pendingAccepts[req.Job.Id]; ok {
-		jobCtx.AcceptArguments = args
-		delete(s.pendingAccepts, req.Job.Id)
+	args, accepted := s.pendingAccepts[req.Job.Id]
+	if !accepted {
+		s.mu.Unlock()
+		logger.Logger.Warnw("received assignment for unknown job", nil, "jobId", req.Job.Id)
+		return
 	}
+
+	jobCtx.WorkerID = s.workerID
+	jobCtx.AcceptArguments = args
+	delete(s.pendingAccepts, req.Job.Id)
 	if timer, ok := s.pendingTimers[req.Job.Id]; ok {
 		timer.Stop()
 		delete(s.pendingTimers, req.Job.Id)
