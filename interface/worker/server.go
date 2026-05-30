@@ -432,7 +432,7 @@ func (s *AgentServer) handleAvailability(ctx context.Context, req *livekit.Avail
 	}
 
 	if !answered {
-		_ = jobReq.Accept(JobAcceptArguments{})
+		_ = jobReq.Reject(JobRejectArguments{Terminate: false})
 	}
 }
 

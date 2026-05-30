@@ -298,6 +298,37 @@ func TestHandleAvailabilityRejectsWhenDraining(t *testing.T) {
 	}
 }
 
+func TestHandleAvailabilityRejectsWhenRequestCallbackDoesNotAnswer(t *testing.T) {
+	server := NewAgentServer(WorkerOptions{})
+	sentCh := make(chan *livekit.WorkerMessage, 1)
+	server.workerMessageSink = func(msg *livekit.WorkerMessage) error {
+		sentCh <- msg
+		return nil
+	}
+	server.requestFnc = func(req *JobRequest) error {
+		return nil
+	}
+
+	server.handleAvailability(context.Background(), &livekit.AvailabilityRequest{
+		Job: &livekit.Job{Id: "job_no_answer"},
+	})
+
+	msg := receiveWorkerMessage(t, sentCh)
+	availability := msg.GetAvailability()
+	if availability == nil {
+		t.Fatal("availability response is nil")
+	}
+	if availability.Available {
+		t.Fatal("availability.Available = true, want false")
+	}
+	if availability.JobId != "job_no_answer" {
+		t.Fatalf("availability.JobId = %q, want job_no_answer", availability.JobId)
+	}
+	if availability.Terminate {
+		t.Fatal("availability.Terminate = true, want false")
+	}
+}
+
 func TestJobRequestRejectDefaultsToTerminate(t *testing.T) {
 	var got JobRejectArguments
 	req := &JobRequest{
