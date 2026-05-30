@@ -146,6 +146,17 @@ func (s *AgentServer) ID() string {
 	return s.workerID
 }
 
+func (s *AgentServer) ActiveJobs() []*JobContext {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	jobs := make([]*JobContext, 0, len(s.activeJobs))
+	for _, jobCtx := range s.activeJobs {
+		jobs = append(jobs, jobCtx)
+	}
+	return jobs
+}
+
 func (s *AgentServer) UpdateOptions(opts WorkerOptions) error {
 	s.mu.Lock()
 	if s.conn != nil {

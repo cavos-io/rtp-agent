@@ -404,6 +404,37 @@ func TestAgentServerIDReturnsRegisteredWorkerID(t *testing.T) {
 	}
 }
 
+func TestAgentServerActiveJobsReturnsSnapshot(t *testing.T) {
+	server := NewAgentServer(WorkerOptions{})
+	jobA := NewJobContext(&livekit.Job{Id: "job-a"}, "", "", "")
+	jobB := NewJobContext(&livekit.Job{Id: "job-b"}, "", "", "")
+	server.mu.Lock()
+	server.activeJobs[jobA.Job.Id] = jobA
+	server.activeJobs[jobB.Job.Id] = jobB
+	server.mu.Unlock()
+
+	activeJobs := server.ActiveJobs()
+	if len(activeJobs) != 2 {
+		t.Fatalf("ActiveJobs() len = %d, want 2", len(activeJobs))
+	}
+
+	got := map[string]*JobContext{}
+	for _, jobCtx := range activeJobs {
+		got[jobCtx.Job.Id] = jobCtx
+	}
+	if got["job-a"] != jobA {
+		t.Fatal("ActiveJobs() missing job-a context")
+	}
+	if got["job-b"] != jobB {
+		t.Fatal("ActiveJobs() missing job-b context")
+	}
+
+	activeJobs[0] = nil
+	if len(server.ActiveJobs()) != 2 {
+		t.Fatal("mutating ActiveJobs() result changed server active job count")
+	}
+}
+
 func TestEmitWorkerStartedNotifiesHandlers(t *testing.T) {
 	server := NewAgentServer(WorkerOptions{})
 
