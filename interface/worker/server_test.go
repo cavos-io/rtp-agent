@@ -933,6 +933,56 @@ func TestDrainWaitsForActiveJobs(t *testing.T) {
 	}
 }
 
+func TestDrainWaitsForPendingAcceptedJobs(t *testing.T) {
+	oldTimeout := assignmentTimeout
+	assignmentTimeout = time.Second
+	t.Cleanup(func() {
+		assignmentTimeout = oldTimeout
+	})
+
+	server := NewAgentServer(WorkerOptions{})
+	jobID := "job_drain_pending"
+	server.storePendingAccept(jobID, JobAcceptArguments{})
+
+	doneCh := make(chan error, 1)
+	go func() {
+		doneCh <- server.Drain(context.Background())
+	}()
+
+	drainingDeadline := time.After(time.Second)
+	for !server.Draining() {
+		select {
+		case <-drainingDeadline:
+			t.Fatal("server.Draining() = false, want true")
+		default:
+			time.Sleep(time.Millisecond)
+		}
+	}
+
+	select {
+	case err := <-doneCh:
+		t.Fatalf("Drain() returned before pending accepted job settled: %v", err)
+	default:
+	}
+
+	server.mu.Lock()
+	if timer, ok := server.pendingTimers[jobID]; ok {
+		timer.Stop()
+		delete(server.pendingTimers, jobID)
+	}
+	delete(server.pendingAccepts, jobID)
+	server.mu.Unlock()
+
+	select {
+	case err := <-doneCh:
+		if err != nil {
+			t.Fatalf("Drain() error = %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Drain() did not return after pending accepted job settled")
+	}
+}
+
 func TestHandleTerminationRunsJobShutdownCallbacks(t *testing.T) {
 	server := NewAgentServer(WorkerOptions{})
 	jobCtx := NewJobContext(&livekit.Job{Id: "job_shutdown"}, "", "", "")

@@ -300,7 +300,7 @@ func (s *AgentServer) Drain(ctx context.Context) error {
 	ticker := time.NewTicker(10 * time.Millisecond)
 	defer ticker.Stop()
 	for {
-		if s.activeJobCount() == 0 {
+		if s.inflightJobCount() == 0 {
 			return nil
 		}
 		select {
@@ -309,6 +309,12 @@ func (s *AgentServer) Drain(ctx context.Context) error {
 		case <-ticker.C:
 		}
 	}
+}
+
+func (s *AgentServer) inflightJobCount() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return len(s.activeJobs) + len(s.pendingAccepts)
 }
 
 func (s *AgentServer) activeJobCount() int {
