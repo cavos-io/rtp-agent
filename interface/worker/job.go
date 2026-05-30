@@ -108,7 +108,14 @@ func (c *JobContext) ParticipantIdentity() string {
 	if c.AcceptArguments.Identity != "" {
 		return c.AcceptArguments.Identity
 	}
+	if c.Job == nil {
+		return ""
+	}
 	return agentIdentityForJobID(c.Job.Id)
+}
+
+func (c *JobContext) LocalParticipantIdentity() string {
+	return c.ParticipantIdentity()
 }
 
 func (c *JobContext) JobID() string {

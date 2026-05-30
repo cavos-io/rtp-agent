@@ -120,6 +120,24 @@ func TestJobContextJobIDReturnsCurrentJobID(t *testing.T) {
 	}
 }
 
+func TestJobContextLocalParticipantIdentity(t *testing.T) {
+	ctx := NewJobContext(&livekit.Job{Id: "job-a"}, "", "", "")
+	if got := ctx.LocalParticipantIdentity(); got != "agent-job-a" {
+		t.Fatalf("LocalParticipantIdentity() = %q, want agent-job-a", got)
+	}
+
+	ctx.AcceptArguments.Identity = "custom-agent"
+	if got := ctx.LocalParticipantIdentity(); got != "custom-agent" {
+		t.Fatalf("LocalParticipantIdentity() with accept identity = %q, want custom-agent", got)
+	}
+
+	ctx.AcceptArguments.Identity = ""
+	ctx.Job = nil
+	if got := ctx.LocalParticipantIdentity(); got != "" {
+		t.Fatalf("LocalParticipantIdentity() with nil job = %q, want empty", got)
+	}
+}
+
 func TestJobContextPublisherInfoReturnsJobParticipant(t *testing.T) {
 	publisher := &livekit.ParticipantInfo{Identity: "publisher-a"}
 	ctx := NewJobContext(&livekit.Job{Id: "job-a", Participant: publisher}, "", "", "")
