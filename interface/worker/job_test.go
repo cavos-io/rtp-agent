@@ -5,6 +5,7 @@ import (
 	"reflect"
 	"testing"
 
+	"github.com/livekit/protocol/auth"
 	"github.com/livekit/protocol/livekit"
 	lksdk "github.com/livekit/server-sdk-go/v2"
 )
@@ -117,6 +118,96 @@ func TestJobContextJobIDReturnsCurrentJobID(t *testing.T) {
 	ctx.Job = nil
 	if got := ctx.JobID(); got != "" {
 		t.Fatalf("JobID() with nil job = %q, want empty", got)
+	}
+}
+
+func TestJobContextLocalParticipantIdentity(t *testing.T) {
+	ctx := NewJobContext(&livekit.Job{Id: "job-a"}, "", "", "")
+	if got := ctx.LocalParticipantIdentity(); got != "agent-job-a" {
+		t.Fatalf("LocalParticipantIdentity() = %q, want agent-job-a", got)
+	}
+
+	ctx.AcceptArguments.Identity = "custom-agent"
+	if got := ctx.LocalParticipantIdentity(); got != "custom-agent" {
+		t.Fatalf("LocalParticipantIdentity() with accept identity = %q, want custom-agent", got)
+	}
+
+	ctx.AcceptArguments.Identity = ""
+	ctx.Job = nil
+	if got := ctx.LocalParticipantIdentity(); got != "" {
+		t.Fatalf("LocalParticipantIdentity() with nil job = %q, want empty", got)
+	}
+}
+
+func TestJobContextLocalParticipantIdentityPrefersTokenIdentity(t *testing.T) {
+	token, err := auth.NewAccessToken("key", "secret").
+		SetIdentity("token-agent").
+		ToJWT()
+	if err != nil {
+		t.Fatalf("ToJWT() error = %v", err)
+	}
+
+	ctx := NewJobContext(&livekit.Job{Id: "job-a"}, "", "", "")
+	ctx.AcceptArguments.Identity = "accepted-agent"
+	ctx.token = token
+
+	if got := ctx.LocalParticipantIdentity(); got != "token-agent" {
+		t.Fatalf("LocalParticipantIdentity() = %q, want token-agent", got)
+	}
+}
+
+func TestJobContextTokenClaimsReturnsUnverifiedTokenClaims(t *testing.T) {
+	token, err := auth.NewAccessToken("key", "secret").
+		SetIdentity("token-agent").
+		SetName("Token Agent").
+		SetVideoGrant(&auth.VideoGrant{
+			RoomJoin: true,
+			Room:     "room-a",
+			Agent:    true,
+		}).
+		ToJWT()
+	if err != nil {
+		t.Fatalf("ToJWT() error = %v", err)
+	}
+
+	ctx := NewJobContext(&livekit.Job{Id: "job-a"}, "", "", "")
+	ctx.token = token
+
+	claims, err := ctx.TokenClaims()
+	if err != nil {
+		t.Fatalf("TokenClaims() error = %v", err)
+	}
+	if claims.Identity != "token-agent" {
+		t.Fatalf("TokenClaims().Identity = %q, want token-agent", claims.Identity)
+	}
+	if claims.Name != "Token Agent" {
+		t.Fatalf("TokenClaims().Name = %q, want Token Agent", claims.Name)
+	}
+	if claims.Video == nil {
+		t.Fatal("TokenClaims().Video = nil, want video grant")
+	}
+	if !claims.Video.RoomJoin {
+		t.Fatal("TokenClaims().Video.RoomJoin = false, want true")
+	}
+	if !claims.Video.Agent {
+		t.Fatal("TokenClaims().Video.Agent = false, want true")
+	}
+	if claims.Video.Room != "room-a" {
+		t.Fatalf("TokenClaims().Video.Room = %q, want room-a", claims.Video.Room)
+	}
+}
+
+func TestJobContextPublisherInfoReturnsJobParticipant(t *testing.T) {
+	publisher := &livekit.ParticipantInfo{Identity: "publisher-a"}
+	ctx := NewJobContext(&livekit.Job{Id: "job-a", Participant: publisher}, "", "", "")
+
+	if got := ctx.PublisherInfo(); got != publisher {
+		t.Fatal("PublisherInfo() did not return the job participant")
+	}
+
+	ctx.Job = nil
+	if got := ctx.PublisherInfo(); got != nil {
+		t.Fatalf("PublisherInfo() with nil job = %#v, want nil", got)
 	}
 }
 

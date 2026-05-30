@@ -3,13 +3,18 @@ package worker
 import (
 	"context"
 	"errors"
+	"math"
 	"net/http"
+	"os"
 	"runtime"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/cavos-io/conversation-worker/interface/worker/ipc"
+	"github.com/go-jose/go-jose/v3/jwt"
 	"github.com/gorilla/websocket"
+	"github.com/livekit/protocol/auth"
 	"github.com/livekit/protocol/livekit"
 )
 
@@ -126,6 +131,18 @@ func TestNewAgentServerLoadsWorkerTokenFromEnvironment(t *testing.T) {
 
 	if server.Options.WorkerToken != "env-worker-token" {
 		t.Fatalf("WorkerToken = %q, want env LIVEKIT_WORKER_TOKEN", server.Options.WorkerToken)
+	}
+}
+
+func TestAgentServerWorkerInfoReportsCloudAgentsMode(t *testing.T) {
+	server := NewAgentServer(WorkerOptions{WorkerToken: "worker-token"})
+
+	info := server.WorkerInfo()
+	if !info.CloudAgents {
+		t.Fatal("WorkerInfo().CloudAgents = false, want true with worker token")
+	}
+	if info.HTTPPort != 0 {
+		t.Fatalf("WorkerInfo().HTTPPort = %d, want 0 before HTTP server starts", info.HTTPPort)
 	}
 }
 
@@ -435,6 +452,151 @@ func TestAgentServerActiveJobsReturnsSnapshot(t *testing.T) {
 	}
 }
 
+func TestAgentServerActiveRunningJobsReturnsReferenceAssignmentSnapshots(t *testing.T) {
+	server := NewAgentServer(WorkerOptions{})
+	server.workerID = "worker-a"
+	jobCtx := NewJobContext(&livekit.Job{Id: "job-a", Room: &livekit.Room{Name: "room-a"}}, "wss://livekit.example", "key", "secret")
+	jobCtx.AcceptArguments = JobAcceptArguments{
+		Name:     "Agent A",
+		Identity: "agent-a",
+		Metadata: "metadata-a",
+		Attributes: map[string]string{
+			"tier": "gold",
+		},
+	}
+	jobCtx.token = "assignment-token"
+	jobCtx.fakeJob = true
+	server.mu.Lock()
+	server.activeJobs[jobCtx.Job.Id] = jobCtx
+	server.mu.Unlock()
+
+	runningJobs := server.ActiveRunningJobs()
+	if len(runningJobs) != 1 {
+		t.Fatalf("ActiveRunningJobs() len = %d, want 1", len(runningJobs))
+	}
+
+	running := runningJobs[0]
+	if running.Job != jobCtx.Job {
+		t.Fatal("ActiveRunningJobs()[0].Job did not preserve job pointer")
+	}
+	if running.URL != "wss://livekit.example" {
+		t.Fatalf("ActiveRunningJobs()[0].URL = %q, want wss://livekit.example", running.URL)
+	}
+	if running.Token != "assignment-token" {
+		t.Fatalf("ActiveRunningJobs()[0].Token = %q, want assignment-token", running.Token)
+	}
+	if running.WorkerID != "worker-a" {
+		t.Fatalf("ActiveRunningJobs()[0].WorkerID = %q, want worker-a", running.WorkerID)
+	}
+	if !running.FakeJob {
+		t.Fatal("ActiveRunningJobs()[0].FakeJob = false, want true")
+	}
+	if running.AcceptArguments.Name != "Agent A" {
+		t.Fatalf("ActiveRunningJobs()[0].AcceptArguments.Name = %q, want Agent A", running.AcceptArguments.Name)
+	}
+	if running.AcceptArguments.Identity != "agent-a" {
+		t.Fatalf("ActiveRunningJobs()[0].AcceptArguments.Identity = %q, want agent-a", running.AcceptArguments.Identity)
+	}
+	if running.AcceptArguments.Metadata != "metadata-a" {
+		t.Fatalf("ActiveRunningJobs()[0].AcceptArguments.Metadata = %q, want metadata-a", running.AcceptArguments.Metadata)
+	}
+	if running.AcceptArguments.Attributes["tier"] != "gold" {
+		t.Fatalf("ActiveRunningJobs()[0].AcceptArguments.Attributes[tier] = %q, want gold", running.AcceptArguments.Attributes["tier"])
+	}
+}
+
+func TestRefreshRunningJobTokenForReloadPreservesAssignmentAndExtendsToken(t *testing.T) {
+	originalToken, err := auth.NewAccessToken("api-key", "api-secret").
+		SetIdentity("agent-a").
+		SetName("Agent A").
+		SetMetadata("metadata-a").
+		SetAttributes(map[string]string{"tier": "gold"}).
+		SetKind(livekit.ParticipantInfo_AGENT).
+		SetVideoGrant(&auth.VideoGrant{
+			RoomJoin: true,
+			Room:     "room-a",
+			Agent:    true,
+		}).
+		ToJWT()
+	if err != nil {
+		t.Fatalf("ToJWT() error = %v", err)
+	}
+	info := ipc.RunningJobInfo{
+		AcceptArguments: ipc.JobAcceptArguments{
+			Name:     "Agent A",
+			Identity: "agent-a",
+			Metadata: "metadata-a",
+			Attributes: map[string]string{
+				"tier": "gold",
+			},
+		},
+		Job:      &livekit.Job{Id: "job-a", Room: &livekit.Room{Name: "room-a"}},
+		URL:      "wss://livekit.example",
+		Token:    originalToken,
+		WorkerID: "worker-a",
+		FakeJob:  true,
+	}
+	now := time.Date(2026, 5, 31, 12, 0, 0, 0, time.UTC)
+
+	refreshed, err := refreshRunningJobTokenForReload(info, "api-secret", now)
+	if err != nil {
+		t.Fatalf("refreshRunningJobTokenForReload() error = %v", err)
+	}
+
+	if refreshed.AcceptArguments.Identity != "agent-a" {
+		t.Fatalf("AcceptArguments.Identity = %q, want agent-a", refreshed.AcceptArguments.Identity)
+	}
+	if refreshed.Job != info.Job {
+		t.Fatal("Job pointer was not preserved")
+	}
+	if refreshed.URL != "wss://livekit.example" {
+		t.Fatalf("URL = %q, want wss://livekit.example", refreshed.URL)
+	}
+	if refreshed.WorkerID != "worker-a" {
+		t.Fatalf("WorkerID = %q, want worker-a", refreshed.WorkerID)
+	}
+	if !refreshed.FakeJob {
+		t.Fatal("FakeJob = false, want true")
+	}
+	if refreshed.Token == "" || refreshed.Token == originalToken {
+		t.Fatal("Token was not refreshed")
+	}
+
+	tok, err := jwt.ParseSigned(refreshed.Token)
+	if err != nil {
+		t.Fatalf("ParseSigned() error = %v", err)
+	}
+	standardClaims := jwt.Claims{}
+	grants := auth.ClaimGrants{}
+	if err := tok.Claims([]byte("api-secret"), &standardClaims, &grants); err != nil {
+		t.Fatalf("refreshed token Claims() error = %v", err)
+	}
+	if standardClaims.Expiry == nil {
+		t.Fatal("refreshed token expiry = nil, want one-hour expiry")
+	}
+	if got := standardClaims.Expiry.Time(); !got.Equal(now.Add(time.Hour)) {
+		t.Fatalf("refreshed token expiry = %v, want %v", got, now.Add(time.Hour))
+	}
+	if grants.Identity != "agent-a" {
+		t.Fatalf("refreshed token identity = %q, want agent-a", grants.Identity)
+	}
+	if grants.Name != "Agent A" {
+		t.Fatalf("refreshed token name = %q, want Agent A", grants.Name)
+	}
+	if grants.Metadata != "metadata-a" {
+		t.Fatalf("refreshed token metadata = %q, want metadata-a", grants.Metadata)
+	}
+	if grants.Attributes["tier"] != "gold" {
+		t.Fatalf("refreshed token attribute tier = %q, want gold", grants.Attributes["tier"])
+	}
+	if grants.GetParticipantKind() != livekit.ParticipantInfo_AGENT {
+		t.Fatalf("refreshed token kind = %v, want AGENT", grants.GetParticipantKind())
+	}
+	if grants.Video == nil || !grants.Video.RoomJoin || !grants.Video.Agent || grants.Video.Room != "room-a" {
+		t.Fatalf("refreshed token video grant = %#v, want room-a agent join grant", grants.Video)
+	}
+}
+
 func TestEmitWorkerStartedNotifiesHandlers(t *testing.T) {
 	server := NewAgentServer(WorkerOptions{})
 
@@ -698,6 +860,30 @@ func TestHandleAvailabilityRejectsWhenRequestCallbackDoesNotAnswer(t *testing.T)
 	}
 }
 
+func TestHandleAvailabilityDefaultAcceptLeavesParticipantNameEmpty(t *testing.T) {
+	server := NewAgentServer(WorkerOptions{AgentName: "sales-agent"})
+	sentCh := make(chan *livekit.WorkerMessage, 1)
+	server.workerMessageSink = func(msg *livekit.WorkerMessage) error {
+		sentCh <- msg
+		return nil
+	}
+
+	server.handleAvailability(context.Background(), &livekit.AvailabilityRequest{
+		Job: &livekit.Job{Id: "job_default_name"},
+	})
+
+	availability := receiveWorkerMessage(t, sentCh).GetAvailability()
+	if availability == nil || !availability.Available {
+		t.Fatal("availability response was not accepted")
+	}
+	if availability.ParticipantName != "" {
+		t.Fatalf("ParticipantName = %q, want empty default name", availability.ParticipantName)
+	}
+	if availability.ParticipantAttributes["lk.agent.name"] != "sales-agent" {
+		t.Fatalf("ParticipantAttributes[lk.agent.name] = %q, want sales-agent", availability.ParticipantAttributes["lk.agent.name"])
+	}
+}
+
 func TestHandleAvailabilityRejectsWhenLoadExceedsThreshold(t *testing.T) {
 	server := NewAgentServer(WorkerOptions{
 		LoadThreshold: 0.5,
@@ -736,6 +922,20 @@ func TestHandleAvailabilityRejectsWhenLoadExceedsThreshold(t *testing.T) {
 	}
 	if requestCalled {
 		t.Fatal("request callback was called while worker was over load threshold")
+	}
+}
+
+func TestAvailabilityAllowsReservedSlotsWithInfiniteLoadThreshold(t *testing.T) {
+	server := NewAgentServer(WorkerOptions{
+		LoadThreshold: math.Inf(1),
+		LoadFunc: func(*AgentServer) float64 {
+			return 0
+		},
+	})
+	server.reserveAvailabilitySlot()
+
+	if !server.availableForJob() {
+		t.Fatal("availableForJob() = false, want true for infinite load threshold")
 	}
 }
 
@@ -1243,8 +1443,142 @@ func TestValidateRunPreconditionsRequiresCredentialsAfterRTCSession(t *testing.T
 	if err == nil {
 		t.Fatal("validateRunPreconditions() error = nil, want missing credentials error")
 	}
-	if !strings.Contains(err.Error(), "missing LiveKit credentials") {
-		t.Fatalf("validateRunPreconditions() error = %q, want credentials message", err.Error())
+	if !strings.Contains(err.Error(), "ws_url is required") {
+		t.Fatalf("validateRunPreconditions() error = %q, want ws_url credentials message", err.Error())
+	}
+}
+
+func TestValidateRunPreconditionsReportsSpecificMissingCredential(t *testing.T) {
+	tests := []struct {
+		name    string
+		options WorkerOptions
+		want    string
+	}{
+		{
+			name:    "ws url",
+			options: WorkerOptions{APIKey: "key", APISecret: "secret"},
+			want:    "ws_url is required, or set LIVEKIT_URL environment variable",
+		},
+		{
+			name:    "api key",
+			options: WorkerOptions{WSRL: "wss://livekit.example", APISecret: "secret"},
+			want:    "api_key is required, or set LIVEKIT_API_KEY environment variable",
+		},
+		{
+			name:    "api secret",
+			options: WorkerOptions{WSRL: "wss://livekit.example", APIKey: "key"},
+			want:    "api_secret is required, or set LIVEKIT_API_SECRET environment variable",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			server := NewAgentServer(tt.options)
+			if err := server.RTCSession(func(ctx *JobContext) error { return nil }, nil, nil); err != nil {
+				t.Fatalf("RTCSession() error = %v", err)
+			}
+
+			err := server.validateRunPreconditions()
+			if err == nil {
+				t.Fatal("validateRunPreconditions() error = nil, want missing credential error")
+			}
+			if err.Error() != tt.want {
+				t.Fatalf("validateRunPreconditions() error = %q, want %q", err.Error(), tt.want)
+			}
+		})
+	}
+}
+
+func TestValidateRunPreconditionsNormalizesCloudLoadOptions(t *testing.T) {
+	server := NewAgentServer(WorkerOptions{
+		WSRL:          "wss://livekit.example",
+		APIKey:        "key",
+		APISecret:     "secret",
+		WorkerToken:   "worker-token",
+		LoadThreshold: 0.2,
+		LoadFunc: func(*AgentServer) float64 {
+			return 0.9
+		},
+	})
+	if err := server.RTCSession(func(ctx *JobContext) error { return nil }, nil, nil); err != nil {
+		t.Fatalf("RTCSession() error = %v", err)
+	}
+
+	if err := server.validateRunPreconditions(); err != nil {
+		t.Fatalf("validateRunPreconditions() error = %v", err)
+	}
+
+	if server.Options.LoadFunc != nil {
+		t.Fatal("LoadFunc was not reset for cloud worker token")
+	}
+	if server.Options.LoadThreshold != defaultLoadThreshold {
+		t.Fatalf("LoadThreshold = %v, want default %v for cloud worker token", server.Options.LoadThreshold, defaultLoadThreshold)
+	}
+}
+
+func TestValidateRunPreconditionsRejectsFiniteLoadThresholdAboveOne(t *testing.T) {
+	server := NewAgentServer(WorkerOptions{
+		WSRL:          "wss://livekit.example",
+		APIKey:        "key",
+		APISecret:     "secret",
+		LoadThreshold: 1.2,
+	})
+	if err := server.RTCSession(func(ctx *JobContext) error { return nil }, nil, nil); err != nil {
+		t.Fatalf("RTCSession() error = %v", err)
+	}
+
+	err := server.validateRunPreconditions()
+	if err == nil {
+		t.Fatal("validateRunPreconditions() error = nil, want invalid load threshold error")
+	}
+	if !strings.Contains(err.Error(), "load_threshold in prod env must be less than 1") {
+		t.Fatalf("validateRunPreconditions() error = %q, want load threshold message", err.Error())
+	}
+}
+
+func TestRunExportsLiveKitCredentialsBeforeDial(t *testing.T) {
+	t.Setenv("LIVEKIT_URL", "wss://old.example")
+	t.Setenv("LIVEKIT_API_KEY", "old-key")
+	t.Setenv("LIVEKIT_API_SECRET", "old-secret")
+
+	oldDial := workerDialContext
+	oldSleep := workerRetrySleep
+	t.Cleanup(func() {
+		workerDialContext = oldDial
+		workerRetrySleep = oldSleep
+	})
+
+	dialed := false
+	workerDialContext = func(context.Context, *websocket.Dialer, string, http.Header) (*websocket.Conn, *http.Response, error) {
+		dialed = true
+		if os.Getenv("LIVEKIT_URL") != "wss://run.example" {
+			t.Fatalf("LIVEKIT_URL = %q, want run option", os.Getenv("LIVEKIT_URL"))
+		}
+		if os.Getenv("LIVEKIT_API_KEY") != "run-key" {
+			t.Fatalf("LIVEKIT_API_KEY = %q, want run-key", os.Getenv("LIVEKIT_API_KEY"))
+		}
+		if os.Getenv("LIVEKIT_API_SECRET") != "run-secret" {
+			t.Fatalf("LIVEKIT_API_SECRET = %q, want run-secret", os.Getenv("LIVEKIT_API_SECRET"))
+		}
+		return nil, nil, errors.New("stop after env check")
+	}
+	workerRetrySleep = func(context.Context, time.Duration) error {
+		return context.Canceled
+	}
+
+	server := NewAgentServer(WorkerOptions{
+		WSRL:      "wss://run.example",
+		APIKey:    "run-key",
+		APISecret: "run-secret",
+		MaxRetry:  1,
+	})
+	if err := server.RTCSession(func(ctx *JobContext) error { return nil }, nil, nil); err != nil {
+		t.Fatalf("RTCSession() error = %v", err)
+	}
+
+	_ = server.Run(context.Background())
+	if !dialed {
+		t.Fatal("worker dial was not attempted")
 	}
 }
 
@@ -1326,11 +1660,135 @@ func TestLocalJobContextUsesProvidedParticipantIdentity(t *testing.T) {
 	}
 }
 
+func TestLocalJobContextDefaultsReferenceFakeAgentIdentity(t *testing.T) {
+	ctx := newLocalJobContext("room-a", "", WorkerOptions{})
+
+	if !strings.HasPrefix(ctx.ParticipantIdentity(), "fake-agent-") {
+		t.Fatalf("ParticipantIdentity() = %q, want fake-agent- prefix", ctx.ParticipantIdentity())
+	}
+}
+
 func TestLocalJobContextUsesReferenceMockJobIDPrefix(t *testing.T) {
 	ctx := newLocalJobContext("room-a", "agent-local", WorkerOptions{})
 
 	if !strings.HasPrefix(ctx.Job.Id, "mock-job-") {
 		t.Fatalf("local job ID = %q, want mock-job- prefix", ctx.Job.Id)
+	}
+}
+
+func TestLocalJobContextUsesReferenceFakeRoomSIDPrefix(t *testing.T) {
+	ctx := newLocalJobContext("room-a", "agent-local", WorkerOptions{})
+
+	if !strings.HasPrefix(ctx.Job.Room.Sid, "SRM_") {
+		t.Fatalf("local room SID = %q, want SRM_ prefix", ctx.Job.Room.Sid)
+	}
+}
+
+func TestLocalJobContextCreatesReferenceAgentJoinToken(t *testing.T) {
+	ctx := newLocalJobContext("room-a", "agent-local", WorkerOptions{
+		APIKey:    "api-key",
+		APISecret: "api-secret",
+	})
+
+	if ctx.token == "" {
+		t.Fatal("local job token is empty, want generated agent join token")
+	}
+	verifier, err := auth.ParseAPIToken(ctx.token)
+	if err != nil {
+		t.Fatalf("ParseAPIToken() error = %v", err)
+	}
+	if got := verifier.Identity(); got != "agent-local" {
+		t.Fatalf("token identity = %q, want agent-local", got)
+	}
+	if got := verifier.APIKey(); got != "api-key" {
+		t.Fatalf("token api key = %q, want api-key", got)
+	}
+	_, grants, err := verifier.Verify("api-secret")
+	if err != nil {
+		t.Fatalf("Verify() error = %v", err)
+	}
+	if got := grants.GetParticipantKind(); got != livekit.ParticipantInfo_AGENT {
+		t.Fatalf("token participant kind = %v, want AGENT", got)
+	}
+	if grants.Video == nil {
+		t.Fatal("token video grant = nil, want room join agent grant")
+	}
+	if !grants.Video.RoomJoin {
+		t.Fatal("token video grant RoomJoin = false, want true")
+	}
+	if !grants.Video.Agent {
+		t.Fatal("token video grant Agent = false, want true")
+	}
+	if grants.Video.Room != "room-a" {
+		t.Fatalf("token video grant Room = %q, want room-a", grants.Video.Room)
+	}
+}
+
+func TestLocalJobContextGeneratesUniqueReferenceIDs(t *testing.T) {
+	jobIDs := map[string]struct{}{}
+	roomSIDs := map[string]struct{}{}
+	participantIdentities := map[string]struct{}{}
+
+	for range 3 {
+		ctx := newLocalJobContext("room-a", "", WorkerOptions{})
+
+		if _, exists := jobIDs[ctx.Job.Id]; exists {
+			t.Fatalf("duplicate local job ID generated: %q", ctx.Job.Id)
+		}
+		jobIDs[ctx.Job.Id] = struct{}{}
+
+		if _, exists := roomSIDs[ctx.Job.Room.Sid]; exists {
+			t.Fatalf("duplicate local room SID generated: %q", ctx.Job.Room.Sid)
+		}
+		roomSIDs[ctx.Job.Room.Sid] = struct{}{}
+
+		if _, exists := participantIdentities[ctx.ParticipantIdentity()]; exists {
+			t.Fatalf("duplicate local participant identity generated: %q", ctx.ParticipantIdentity())
+		}
+		participantIdentities[ctx.ParticipantIdentity()] = struct{}{}
+	}
+}
+
+func TestExecuteLocalJobRecordsRegisteredWorkerID(t *testing.T) {
+	server := NewAgentServer(WorkerOptions{})
+	server.workerID = "worker-local"
+	startedCh := make(chan *JobContext, 1)
+
+	if err := server.RTCSession(
+		func(ctx *JobContext) error {
+			startedCh <- ctx
+			return nil
+		},
+		nil,
+		nil,
+	); err != nil {
+		t.Fatalf("RTCSession() error = %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	doneCh := make(chan error, 1)
+	go func() {
+		doneCh <- server.ExecuteLocalJob(ctx, "room-a", "agent-local")
+	}()
+
+	select {
+	case jobCtx := <-startedCh:
+		if jobCtx.WorkerID != "worker-local" {
+			t.Fatalf("local job WorkerID = %q, want worker-local", jobCtx.WorkerID)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("local job entrypoint did not run")
+	}
+
+	cancel()
+	select {
+	case err := <-doneCh:
+		if err != nil {
+			t.Fatalf("ExecuteLocalJob() error = %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("ExecuteLocalJob() did not return after context cancellation")
 	}
 }
 

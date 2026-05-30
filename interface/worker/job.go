@@ -7,6 +7,8 @@ import (
 
 	"github.com/cavos-io/conversation-worker/core/agent"
 	"github.com/cavos-io/conversation-worker/library/logger"
+	"github.com/go-jose/go-jose/v3/jwt"
+	"github.com/livekit/protocol/auth"
 	"github.com/livekit/protocol/livekit"
 	lksdk "github.com/livekit/server-sdk-go/v2"
 )
@@ -108,7 +110,30 @@ func (c *JobContext) ParticipantIdentity() string {
 	if c.AcceptArguments.Identity != "" {
 		return c.AcceptArguments.Identity
 	}
+	if c.Job == nil {
+		return ""
+	}
 	return agentIdentityForJobID(c.Job.Id)
+}
+
+func (c *JobContext) LocalParticipantIdentity() string {
+	claims, err := c.TokenClaims()
+	if err == nil && claims.Identity != "" {
+		return claims.Identity
+	}
+	return c.ParticipantIdentity()
+}
+
+func (c *JobContext) TokenClaims() (*auth.ClaimGrants, error) {
+	tok, err := jwt.ParseSigned(c.token)
+	if err != nil {
+		return nil, err
+	}
+	claims := &auth.ClaimGrants{}
+	if err := tok.UnsafeClaimsWithoutVerification(claims); err != nil {
+		return nil, err
+	}
+	return claims, nil
 }
 
 func (c *JobContext) JobID() string {
@@ -127,6 +152,13 @@ func (c *JobContext) RoomInfo() *livekit.Room {
 		return nil
 	}
 	return c.Job.Room
+}
+
+func (c *JobContext) PublisherInfo() *livekit.ParticipantInfo {
+	if c.Job == nil {
+		return nil
+	}
+	return c.Job.Participant
 }
 
 func (c *JobContext) connectInfo() lksdk.ConnectInfo {

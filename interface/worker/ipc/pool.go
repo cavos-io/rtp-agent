@@ -121,6 +121,21 @@ func (p *ProcPool) GetExecutors() []JobExecutor {
 	return executors
 }
 
+func (p *ProcPool) ActiveJobs() []RunningJobInfo {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	jobs := make([]RunningJobInfo, 0, len(p.executors))
+	for _, executor := range p.executors {
+		runningJob := executor.RunningJob()
+		if runningJob == nil {
+			continue
+		}
+		jobs = append(jobs, *runningJob)
+	}
+	return jobs
+}
+
 func (p *ProcPool) SetCloseTimeout(timeout time.Duration) {
 	p.mu.Lock()
 	defer p.mu.Unlock()

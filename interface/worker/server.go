@@ -3,6 +3,7 @@ package worker
 import (
 	"context"
 	"fmt"
+	"math"
 	"net/http"
 	"net/url"
 	"os"
@@ -13,7 +14,11 @@ import (
 	"time"
 
 	"github.com/cavos-io/conversation-worker/core/agent"
+	workeripc "github.com/cavos-io/conversation-worker/interface/worker/ipc"
 	"github.com/cavos-io/conversation-worker/library/logger"
+	mathutil "github.com/cavos-io/conversation-worker/library/math"
+	"github.com/go-jose/go-jose/v3"
+	"github.com/go-jose/go-jose/v3/jwt"
 	"github.com/gorilla/websocket"
 	"github.com/livekit/protocol/auth"
 	"github.com/livekit/protocol/livekit"
@@ -69,6 +74,11 @@ type WorkerPermissions struct {
 type WorkerStartedHandler func()
 
 type WorkerRegisteredHandler func(workerID string, serverInfo *livekit.ServerInfo)
+
+type WorkerInfo struct {
+	HTTPPort    int
+	CloudAgents bool
+}
 
 type WorkerOptions struct {
 	AgentName  string
@@ -146,6 +156,13 @@ func (s *AgentServer) ID() string {
 	return s.workerID
 }
 
+func (s *AgentServer) WorkerInfo() WorkerInfo {
+	return WorkerInfo{
+		HTTPPort:    0,
+		CloudAgents: s.Options.WorkerToken != "",
+	}
+}
+
 func (s *AgentServer) ActiveJobs() []*JobContext {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -155,6 +172,64 @@ func (s *AgentServer) ActiveJobs() []*JobContext {
 		jobs = append(jobs, jobCtx)
 	}
 	return jobs
+}
+
+func (s *AgentServer) ActiveRunningJobs() []workeripc.RunningJobInfo {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	jobs := make([]workeripc.RunningJobInfo, 0, len(s.activeJobs))
+	for _, jobCtx := range s.activeJobs {
+		info := runningJobInfoFromContext(jobCtx)
+		if info.WorkerID == "" {
+			info.WorkerID = s.workerID
+		}
+		jobs = append(jobs, info)
+	}
+	return jobs
+}
+
+func runningJobInfoFromContext(jobCtx *JobContext) workeripc.RunningJobInfo {
+	return workeripc.RunningJobInfo{
+		AcceptArguments: workeripc.JobAcceptArguments{
+			Name:       jobCtx.AcceptArguments.Name,
+			Identity:   jobCtx.AcceptArguments.Identity,
+			Metadata:   jobCtx.AcceptArguments.Metadata,
+			Attributes: jobCtx.AcceptArguments.Attributes,
+		},
+		Job:      jobCtx.Job,
+		URL:      jobCtx.url,
+		Token:    jobCtx.token,
+		WorkerID: jobCtx.WorkerID,
+		FakeJob:  jobCtx.fakeJob,
+	}
+}
+
+func refreshRunningJobTokenForReload(info workeripc.RunningJobInfo, apiSecret string, now time.Time) (workeripc.RunningJobInfo, error) {
+	if apiSecret == "" {
+		return workeripc.RunningJobInfo{}, fmt.Errorf("api_secret is required to reload jobs")
+	}
+	tok, err := jwt.ParseSigned(info.Token)
+	if err != nil {
+		return workeripc.RunningJobInfo{}, err
+	}
+	standardClaims := jwt.Claims{}
+	grants := auth.ClaimGrants{}
+	if err := tok.Claims([]byte(apiSecret), &standardClaims, &grants); err != nil {
+		return workeripc.RunningJobInfo{}, err
+	}
+	standardClaims.Expiry = jwt.NewNumericDate(now.Add(time.Hour))
+
+	signer, err := jose.NewSigner(jose.SigningKey{Algorithm: jose.HS256, Key: []byte(apiSecret)}, (&jose.SignerOptions{}).WithType("JWT"))
+	if err != nil {
+		return workeripc.RunningJobInfo{}, err
+	}
+	token, err := jwt.Signed(signer).Claims(standardClaims).Claims(grants).CompactSerialize()
+	if err != nil {
+		return workeripc.RunningJobInfo{}, err
+	}
+	info.Token = token
+	return info, nil
 }
 
 func (s *AgentServer) UpdateOptions(opts WorkerOptions) error {
@@ -613,17 +688,33 @@ func (s *AgentServer) availableForJob() bool {
 	if threshold <= 0 {
 		return true
 	}
+	if math.IsInf(threshold, 1) {
+		return true
+	}
 	return s.effectiveLoad() < threshold
 }
 
 func (s *AgentServer) validateRunPreconditions() error {
 	s.Options = resolveWorkerOptions(s.Options)
+	if s.Options.WorkerToken != "" {
+		s.Options.LoadFunc = nil
+		s.Options.LoadThreshold = defaultLoadThreshold
+	}
+	if s.Options.LoadThreshold > 1 && !math.IsInf(s.Options.LoadThreshold, 1) {
+		return fmt.Errorf("load_threshold in prod env must be less than 1, current value: %v", s.Options.LoadThreshold)
+	}
 
 	if s.entrypointFnc == nil {
 		return fmt.Errorf("No RTC session entrypoint has been registered")
 	}
-	if s.Options.WSRL == "" || s.Options.APIKey == "" || s.Options.APISecret == "" {
-		return fmt.Errorf("missing LiveKit credentials")
+	if s.Options.WSRL == "" {
+		return fmt.Errorf("ws_url is required, or set LIVEKIT_URL environment variable")
+	}
+	if s.Options.APIKey == "" {
+		return fmt.Errorf("api_key is required, or set LIVEKIT_API_KEY environment variable")
+	}
+	if s.Options.APISecret == "" {
+		return fmt.Errorf("api_secret is required, or set LIVEKIT_API_SECRET environment variable")
 	}
 	return nil
 }
@@ -632,6 +723,9 @@ func (s *AgentServer) Run(ctx context.Context) error {
 	if err := s.validateRunPreconditions(); err != nil {
 		return err
 	}
+	os.Setenv("LIVEKIT_URL", s.Options.WSRL)
+	os.Setenv("LIVEKIT_API_KEY", s.Options.APIKey)
+	os.Setenv("LIVEKIT_API_SECRET", s.Options.APISecret)
 
 	agentURL, err := agentWebSocketURL(s.Options.WSRL, s.Options.WorkerToken)
 	if err != nil {
@@ -867,9 +961,6 @@ func (s *AgentServer) answerAvailability(ctx context.Context, req *livekit.Avail
 	jobReq := &JobRequest{
 		Job: req.Job,
 		acceptFnc: func(args JobAcceptArguments) error {
-			if args.Name == "" {
-				args.Name = s.Options.AgentName
-			}
 			answered = true
 			s.storePendingAccept(req.Job.Id, args)
 			if err := s.sendWorkerMessage(availabilityResponseForAccept(req, args, s.Options.AgentName)); err != nil {
@@ -1033,6 +1124,7 @@ func (s *AgentServer) handleTermination(req *livekit.JobTermination) {
 // ExecuteLocalJob runs a job locally without connecting to the worker service, useful for the CLI console
 func (s *AgentServer) ExecuteLocalJob(ctx context.Context, roomName string, participantIdentity string) error {
 	jobCtx := newLocalJobContext(roomName, participantIdentity, s.Options)
+	jobCtx.WorkerID = s.workerID
 
 	// For local execution, we want to connect immediately
 	// For basic parity, we just trigger the entrypoint directly.
@@ -1100,19 +1192,34 @@ func (s *AgentServer) runSessionEnd(jobCtx *JobContext) {
 func newLocalJobContext(roomName string, participantIdentity string, opts WorkerOptions) *JobContext {
 	opts = resolveWorkerOptions(opts)
 	job := &livekit.Job{
-		Id: "mock-job-" + time.Now().Format("20060102150405"),
+		Id: mathutil.ShortUUID("mock-job-"),
 		Room: &livekit.Room{
 			Name: roomName,
-			Sid:  "RM_local",
+			Sid:  mathutil.ShortUUID("SRM_"),
 		},
 		Type: livekit.JobType_JT_ROOM,
 	}
 
 	if participantIdentity == "" {
-		participantIdentity = agentIdentityForJobID(job.Id)
+		participantIdentity = mathutil.ShortUUID("fake-agent-")
 	}
 	jobCtx := NewJobContext(job, opts.WSRL, opts.APIKey, opts.APISecret)
 	jobCtx.AcceptArguments = JobAcceptArguments{Identity: participantIdentity}
 	jobCtx.fakeJob = true
+	if opts.APIKey != "" && opts.APISecret != "" {
+		token, err := auth.NewAccessToken(opts.APIKey, opts.APISecret).
+			SetIdentity(participantIdentity).
+			SetKind(livekit.ParticipantInfo_AGENT).
+			SetVideoGrant(&auth.VideoGrant{
+				RoomJoin: true,
+				Room:     roomName,
+				Agent:    true,
+			}).
+			SetValidFor(time.Hour).
+			ToJWT()
+		if err == nil {
+			jobCtx.token = token
+		}
+	}
 	return jobCtx
 }
