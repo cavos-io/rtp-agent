@@ -187,7 +187,7 @@ func (e *ProcessJobExecutor) LaunchRunningJob(ctx context.Context, info RunningJ
 		return err
 	}
 
-	jobJSON, err := json.Marshal(info.Job)
+	env, err := processJobEnv(os.Environ(), e.id, info)
 	if err != nil {
 		e.mu.Lock()
 		e.status = JobStatusFailed
@@ -197,10 +197,7 @@ func (e *ProcessJobExecutor) LaunchRunningJob(ctx context.Context, info RunningJ
 
 	// We pass the job details via environment variables for parity with Python's IPC/subprocess launch
 	cmd := exec.CommandContext(ctx, exe, "start")
-	cmd.Env = append(os.Environ(),
-		fmt.Sprintf("LIVEKIT_AGENT_PROCESS_ID=%s", e.id),
-		fmt.Sprintf("LIVEKIT_AGENT_JOB_JSON=%s", string(jobJSON)),
-	)
+	cmd.Env = env
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 
@@ -223,6 +220,25 @@ func (e *ProcessJobExecutor) LaunchRunningJob(ctx context.Context, info RunningJ
 	}()
 
 	return nil
+}
+
+func processJobEnv(baseEnv []string, processID string, info RunningJobInfo) ([]string, error) {
+	jobJSON, err := json.Marshal(info.Job)
+	if err != nil {
+		return nil, err
+	}
+	runningJobJSON, err := json.Marshal(info)
+	if err != nil {
+		return nil, err
+	}
+
+	env := append([]string{}, baseEnv...)
+	env = append(env,
+		fmt.Sprintf("LIVEKIT_AGENT_PROCESS_ID=%s", processID),
+		fmt.Sprintf("LIVEKIT_AGENT_JOB_JSON=%s", string(jobJSON)),
+		fmt.Sprintf("LIVEKIT_AGENT_RUNNING_JOB_JSON=%s", string(runningJobJSON)),
+	)
+	return env, nil
 }
 
 func (e *ProcessJobExecutor) pingTask(ctx context.Context) {
