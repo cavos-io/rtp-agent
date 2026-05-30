@@ -1,8 +1,11 @@
 package worker
 
 import (
+	"context"
+	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/livekit/protocol/livekit"
 )
@@ -131,6 +134,38 @@ func TestRegisterWorkerRequestUsesConfiguredWorkerType(t *testing.T) {
 	}
 }
 
+func TestRegisterWorkerRequestIncludesDefaultPermissions(t *testing.T) {
+	server := NewAgentServer(WorkerOptions{})
+
+	register := server.registerWorkerRequest().GetRegister()
+	if register == nil {
+		t.Fatal("register worker message is nil")
+	}
+
+	permissions := register.GetAllowedPermissions()
+	if permissions == nil {
+		t.Fatal("register.AllowedPermissions = nil, want default permissions")
+	}
+	if !permissions.CanPublish {
+		t.Fatal("permissions.CanPublish = false, want true")
+	}
+	if !permissions.CanSubscribe {
+		t.Fatal("permissions.CanSubscribe = false, want true")
+	}
+	if !permissions.CanPublishData {
+		t.Fatal("permissions.CanPublishData = false, want true")
+	}
+	if !permissions.CanUpdateMetadata {
+		t.Fatal("permissions.CanUpdateMetadata = false, want true")
+	}
+	if permissions.Hidden {
+		t.Fatal("permissions.Hidden = true, want false")
+	}
+	if !permissions.Agent {
+		t.Fatal("permissions.Agent = false, want true")
+	}
+}
+
 func TestAgentIdentityForJobIDUsesFullJobID(t *testing.T) {
 	jobID := "job_123456789"
 	want := "agent-" + jobID
@@ -235,6 +270,227 @@ func TestAvailabilityResponseRejectCanAvoidTermination(t *testing.T) {
 	}
 }
 
+func TestHandleAvailabilityRejectsWhenDraining(t *testing.T) {
+	server := NewAgentServer(WorkerOptions{})
+	sentCh := make(chan *livekit.WorkerMessage, 1)
+	server.workerMessageSink = func(msg *livekit.WorkerMessage) error {
+		sentCh <- msg
+		return nil
+	}
+
+	server.draining = true
+	server.handleAvailability(context.Background(), &livekit.AvailabilityRequest{
+		Job: &livekit.Job{Id: "job_drain_reject"},
+	})
+
+	msg := receiveWorkerMessage(t, sentCh)
+	availability := msg.GetAvailability()
+	if availability == nil {
+		t.Fatal("availability response is nil")
+	}
+	if availability.Available {
+		t.Fatal("availability.Available = true, want false")
+	}
+	if availability.JobId != "job_drain_reject" {
+		t.Fatalf("availability.JobId = %q, want job_drain_reject", availability.JobId)
+	}
+	if availability.Terminate {
+		t.Fatal("availability.Terminate = true, want false")
+	}
+}
+
+func TestHandleAvailabilityRejectsWhenRequestCallbackDoesNotAnswer(t *testing.T) {
+	server := NewAgentServer(WorkerOptions{})
+	sentCh := make(chan *livekit.WorkerMessage, 1)
+	server.workerMessageSink = func(msg *livekit.WorkerMessage) error {
+		sentCh <- msg
+		return nil
+	}
+	server.requestFnc = func(req *JobRequest) error {
+		return nil
+	}
+
+	server.handleAvailability(context.Background(), &livekit.AvailabilityRequest{
+		Job: &livekit.Job{Id: "job_no_answer"},
+	})
+
+	msg := receiveWorkerMessage(t, sentCh)
+	availability := msg.GetAvailability()
+	if availability == nil {
+		t.Fatal("availability response is nil")
+	}
+	if availability.Available {
+		t.Fatal("availability.Available = true, want false")
+	}
+	if availability.JobId != "job_no_answer" {
+		t.Fatalf("availability.JobId = %q, want job_no_answer", availability.JobId)
+	}
+	if availability.Terminate {
+		t.Fatal("availability.Terminate = true, want false")
+	}
+}
+
+func TestAssignmentPreservesAcceptedParticipantIdentity(t *testing.T) {
+	server := NewAgentServer(WorkerOptions{})
+	server.workerMessageSink = func(msg *livekit.WorkerMessage) error {
+		return nil
+	}
+	server.requestFnc = func(req *JobRequest) error {
+		return req.Accept(JobAcceptArguments{Identity: "custom-agent"})
+	}
+	startedCh := make(chan *JobContext, 1)
+	server.entrypointFnc = func(ctx *JobContext) error {
+		startedCh <- ctx
+		return nil
+	}
+
+	job := &livekit.Job{Id: "job_custom_identity", Room: &livekit.Room{Name: "room-a"}}
+	server.handleAvailability(context.Background(), &livekit.AvailabilityRequest{Job: job})
+	server.handleAssignment(context.Background(), &livekit.JobAssignment{Job: job})
+
+	select {
+	case jobCtx := <-startedCh:
+		if jobCtx.AcceptArguments.Identity != "custom-agent" {
+			t.Fatalf("AcceptArguments.Identity = %q, want custom-agent", jobCtx.AcceptArguments.Identity)
+		}
+		if got := jobCtx.ParticipantIdentity(); got != "custom-agent" {
+			t.Fatalf("ParticipantIdentity() = %q, want custom-agent", got)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("assignment entrypoint did not run")
+	}
+
+	server.mu.Lock()
+	_, pending := server.pendingAccepts[job.Id]
+	server.mu.Unlock()
+	if pending {
+		t.Fatal("accepted arguments remained pending after assignment")
+	}
+}
+
+func TestAssignmentUsesAssignmentURLWhenProvided(t *testing.T) {
+	server := NewAgentServer(WorkerOptions{WSRL: "wss://worker.example"})
+	startedCh := make(chan *JobContext, 1)
+	server.entrypointFnc = func(ctx *JobContext) error {
+		startedCh <- ctx
+		return nil
+	}
+
+	assignmentURL := "wss://assignment.example"
+	job := &livekit.Job{Id: "job_assignment_url", Room: &livekit.Room{Name: "room-a"}}
+	server.handleAssignment(context.Background(), &livekit.JobAssignment{
+		Job: job,
+		Url: &assignmentURL,
+	})
+
+	select {
+	case jobCtx := <-startedCh:
+		if jobCtx.url != assignmentURL {
+			t.Fatalf("jobCtx.url = %q, want assignment URL", jobCtx.url)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("assignment entrypoint did not run")
+	}
+}
+
+func TestAssignmentSendsRunningJobStatus(t *testing.T) {
+	server := NewAgentServer(WorkerOptions{})
+	sentCh := make(chan *livekit.WorkerMessage, 1)
+	server.workerMessageSink = func(msg *livekit.WorkerMessage) error {
+		sentCh <- msg
+		return nil
+	}
+
+	job := &livekit.Job{Id: "job_running_status", Room: &livekit.Room{Name: "room-a"}}
+	server.handleAssignment(context.Background(), &livekit.JobAssignment{Job: job})
+
+	msg := receiveWorkerMessage(t, sentCh)
+	update := msg.GetUpdateJob()
+	if update == nil {
+		t.Fatal("update job message is nil")
+	}
+	if update.JobId != "job_running_status" {
+		t.Fatalf("UpdateJob.JobId = %q, want job_running_status", update.JobId)
+	}
+	if update.Status != livekit.JobStatus_JS_RUNNING {
+		t.Fatalf("UpdateJob.Status = %v, want JS_RUNNING", update.Status)
+	}
+}
+
+func TestAssignmentReportsSuccessWhenEntrypointCompletes(t *testing.T) {
+	server := NewAgentServer(WorkerOptions{})
+	sentCh := make(chan *livekit.WorkerMessage, 2)
+	server.workerMessageSink = func(msg *livekit.WorkerMessage) error {
+		sentCh <- msg
+		return nil
+	}
+	server.entrypointFnc = func(ctx *JobContext) error {
+		return nil
+	}
+
+	job := &livekit.Job{Id: "job_success_status", Room: &livekit.Room{Name: "room-a"}}
+	server.handleAssignment(context.Background(), &livekit.JobAssignment{Job: job})
+
+	assertJobStatusMessage(t, receiveWorkerMessage(t, sentCh), "job_success_status", livekit.JobStatus_JS_RUNNING)
+	assertJobStatusMessage(t, receiveWorkerMessage(t, sentCh), "job_success_status", livekit.JobStatus_JS_SUCCESS)
+
+	server.mu.Lock()
+	_, exists := server.activeJobs[job.Id]
+	server.mu.Unlock()
+	if exists {
+		t.Fatal("assigned job remained in activeJobs after successful entrypoint completion")
+	}
+}
+
+func TestAssignmentReportsFailureWhenEntrypointFails(t *testing.T) {
+	server := NewAgentServer(WorkerOptions{})
+	sentCh := make(chan *livekit.WorkerMessage, 2)
+	server.workerMessageSink = func(msg *livekit.WorkerMessage) error {
+		sentCh <- msg
+		return nil
+	}
+	server.entrypointFnc = func(ctx *JobContext) error {
+		return errors.New("entrypoint failed")
+	}
+
+	job := &livekit.Job{Id: "job_failed_status", Room: &livekit.Room{Name: "room-a"}}
+	server.handleAssignment(context.Background(), &livekit.JobAssignment{Job: job})
+
+	assertJobStatusMessage(t, receiveWorkerMessage(t, sentCh), "job_failed_status", livekit.JobStatus_JS_RUNNING)
+	assertJobStatusMessage(t, receiveWorkerMessage(t, sentCh), "job_failed_status", livekit.JobStatus_JS_FAILED)
+
+	server.mu.Lock()
+	_, exists := server.activeJobs[job.Id]
+	server.mu.Unlock()
+	if exists {
+		t.Fatal("assigned job remained in activeJobs after failed entrypoint completion")
+	}
+}
+
+func TestAssignmentPreservesAssignmentToken(t *testing.T) {
+	server := NewAgentServer(WorkerOptions{})
+	startedCh := make(chan *JobContext, 1)
+	server.entrypointFnc = func(ctx *JobContext) error {
+		startedCh <- ctx
+		return nil
+	}
+
+	job := &livekit.Job{Id: "job_assignment_token", Room: &livekit.Room{Name: "room-a"}}
+	server.handleAssignment(context.Background(), &livekit.JobAssignment{
+		Job:   job,
+		Token: "assignment-token",
+	})
+
+	select {
+	case jobCtx := <-startedCh:
+		if jobCtx.token != "assignment-token" {
+			t.Fatalf("jobCtx.token = %q, want assignment-token", jobCtx.token)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("assignment entrypoint did not run")
+	}
+}
+
 func TestJobRequestRejectDefaultsToTerminate(t *testing.T) {
 	var got JobRejectArguments
 	req := &JobRequest{
@@ -332,5 +588,159 @@ func TestLocalJobContextUsesProvidedParticipantIdentity(t *testing.T) {
 	}
 	if ctx.Job.Room.Name != "room-a" {
 		t.Fatalf("Job.Room.Name = %q, want room-a", ctx.Job.Room.Name)
+	}
+}
+
+func TestExecuteLocalJobCleansUpAndRunsSessionEnd(t *testing.T) {
+	server := NewAgentServer(WorkerOptions{})
+	startedCh := make(chan *JobContext, 1)
+	sessionEndCh := make(chan *JobContext, 1)
+
+	if err := server.RTCSession(
+		func(ctx *JobContext) error {
+			startedCh <- ctx
+			return nil
+		},
+		nil,
+		func(ctx *JobContext) error {
+			sessionEndCh <- ctx
+			return nil
+		},
+	); err != nil {
+		t.Fatalf("RTCSession() error = %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	doneCh := make(chan error, 1)
+	go func() {
+		doneCh <- server.ExecuteLocalJob(ctx, "room-a", "agent-local")
+	}()
+
+	var jobCtx *JobContext
+	select {
+	case jobCtx = <-startedCh:
+	case <-time.After(time.Second):
+		t.Fatal("local job entrypoint did not run")
+	}
+
+	cancel()
+
+	select {
+	case err := <-doneCh:
+		if err != nil {
+			t.Fatalf("ExecuteLocalJob() error = %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("ExecuteLocalJob() did not return after context cancellation")
+	}
+
+	select {
+	case endedCtx := <-sessionEndCh:
+		if endedCtx != jobCtx {
+			t.Fatal("session end callback received a different job context")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("session end callback did not run")
+	}
+
+	server.mu.Lock()
+	_, exists := server.activeJobs[jobCtx.Job.Id]
+	server.mu.Unlock()
+	if exists {
+		t.Fatal("local job remained in activeJobs after completion")
+	}
+}
+
+func TestDrainWaitsForActiveJobs(t *testing.T) {
+	server := NewAgentServer(WorkerOptions{})
+	jobCtx := NewJobContext(&livekit.Job{Id: "job_drain"}, "", "", "")
+
+	server.mu.Lock()
+	server.activeJobs[jobCtx.Job.Id] = jobCtx
+	server.mu.Unlock()
+
+	doneCh := make(chan error, 1)
+	go func() {
+		doneCh <- server.Drain(context.Background())
+	}()
+
+	drainingDeadline := time.After(time.Second)
+	for !server.Draining() {
+		select {
+		case <-drainingDeadline:
+			t.Fatal("server.Draining() = false, want true")
+		default:
+			time.Sleep(time.Millisecond)
+		}
+	}
+
+	select {
+	case err := <-doneCh:
+		t.Fatalf("Drain() returned before active job finished: %v", err)
+	default:
+	}
+
+	server.finishJob(jobCtx)
+
+	select {
+	case err := <-doneCh:
+		if err != nil {
+			t.Fatalf("Drain() error = %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Drain() did not return after active job finished")
+	}
+}
+
+func TestHandleTerminationRunsJobShutdownCallbacks(t *testing.T) {
+	server := NewAgentServer(WorkerOptions{})
+	jobCtx := NewJobContext(&livekit.Job{Id: "job_shutdown"}, "", "", "")
+	shutdownCh := make(chan string, 1)
+	if err := jobCtx.AddShutdownCallback(func(reason string) {
+		shutdownCh <- reason
+	}); err != nil {
+		t.Fatalf("AddShutdownCallback() error = %v", err)
+	}
+
+	server.mu.Lock()
+	server.activeJobs[jobCtx.Job.Id] = jobCtx
+	server.mu.Unlock()
+
+	server.handleTermination(&livekit.JobTermination{JobId: jobCtx.Job.Id})
+
+	select {
+	case reason := <-shutdownCh:
+		if reason != "" {
+			t.Fatalf("shutdown reason = %q, want empty reason", reason)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("shutdown callback did not run")
+	}
+}
+
+func receiveWorkerMessage(t *testing.T, receivedCh <-chan *livekit.WorkerMessage) *livekit.WorkerMessage {
+	t.Helper()
+
+	select {
+	case msg := <-receivedCh:
+		return msg
+	case <-time.After(time.Second):
+		t.Fatal("worker message was not sent")
+		return nil
+	}
+}
+
+func assertJobStatusMessage(t *testing.T, msg *livekit.WorkerMessage, jobID string, status livekit.JobStatus) {
+	t.Helper()
+
+	update := msg.GetUpdateJob()
+	if update == nil {
+		t.Fatal("update job message is nil")
+	}
+	if update.JobId != jobID {
+		t.Fatalf("UpdateJob.JobId = %q, want %s", update.JobId, jobID)
+	}
+	if update.Status != status {
+		t.Fatalf("UpdateJob.Status = %v, want %v", update.Status, status)
 	}
 }

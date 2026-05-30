@@ -2,6 +2,8 @@ package worker
 
 import (
 	"context"
+	"fmt"
+	"sync"
 
 	"github.com/cavos-io/conversation-worker/core/agent"
 	"github.com/cavos-io/conversation-worker/library/logger"
@@ -49,14 +51,18 @@ func (r *JobRequest) Reject(args ...JobRejectArguments) error {
 }
 
 type JobContext struct {
-	Job             *livekit.Job
-	Room            *lksdk.Room
-	Report          *agent.SessionReport
-	AcceptArguments JobAcceptArguments
+	Job               *livekit.Job
+	Room              *lksdk.Room
+	Report            *agent.SessionReport
+	AcceptArguments   JobAcceptArguments
+	shutdownCallbacks []func(string)
+	shutdownOnce      sync.Once
 
 	apiKey    string
 	apiSecret string
 	url       string
+	token     string
+	fakeJob   bool
 }
 
 func NewJobContext(job *livekit.Job, url string, apiKey string, apiSecret string) *JobContext {
@@ -76,13 +82,35 @@ func (c *JobContext) ParticipantIdentity() string {
 	return agentIdentityForJobID(c.Job.Id)
 }
 
+func (c *JobContext) IsFakeJob() bool {
+	return c.fakeJob
+}
+
+func (c *JobContext) connectInfo() lksdk.ConnectInfo {
+	return lksdk.ConnectInfo{
+		APIKey:                c.apiKey,
+		APISecret:             c.apiSecret,
+		RoomName:              c.Job.Room.Name,
+		ParticipantName:       c.AcceptArguments.Name,
+		ParticipantIdentity:   c.ParticipantIdentity(),
+		ParticipantKind:       lksdk.ParticipantAgent,
+		ParticipantMetadata:   c.AcceptArguments.Metadata,
+		ParticipantAttributes: c.AcceptArguments.Attributes,
+	}
+}
+
 func (c *JobContext) Connect(ctx context.Context, cb *lksdk.RoomCallback) error {
-	room, err := lksdk.ConnectToRoom(c.url, lksdk.ConnectInfo{
-		APIKey:              c.apiKey,
-		APISecret:           c.apiSecret,
-		RoomName:            c.Job.Room.Name,
-		ParticipantIdentity: c.ParticipantIdentity(),
-	}, cb)
+	if c.token != "" {
+		room, err := lksdk.ConnectToRoomWithToken(c.url, c.token, cb)
+		if err != nil {
+			return err
+		}
+		c.Room = room
+		logger.Logger.Infow("Connected to room", "room", c.Job.Room.Name)
+		return nil
+	}
+
+	room, err := lksdk.ConnectToRoom(c.url, c.connectInfo(), cb)
 	if err != nil {
 		return err
 	}
@@ -91,14 +119,37 @@ func (c *JobContext) Connect(ctx context.Context, cb *lksdk.RoomCallback) error 
 	return nil
 }
 
-func (c *JobContext) Shutdown(reason string) {
-	if c.Room != nil {
-		c.Room.Disconnect()
+func (c *JobContext) AddShutdownCallback(callback any) error {
+	switch cb := callback.(type) {
+	case func():
+		c.shutdownCallbacks = append(c.shutdownCallbacks, func(string) {
+			cb()
+		})
+	case func(string):
+		c.shutdownCallbacks = append(c.shutdownCallbacks, cb)
+	default:
+		return fmt.Errorf("shutdown callback must be func() or func(string)")
 	}
+	return nil
+}
+
+func (c *JobContext) Shutdown(reason string) {
+	c.shutdownOnce.Do(func() {
+		for _, callback := range c.shutdownCallbacks {
+			callback(reason)
+		}
+		if c.Room != nil {
+			c.Room.Disconnect()
+		}
+	})
 }
 
 // DeleteRoom deletes the room and disconnects all participants.
 func (c *JobContext) DeleteRoom(ctx context.Context, roomName string) (*livekit.DeleteRoomResponse, error) {
+	if c.IsFakeJob() {
+		logger.Logger.Warnw("job context DeleteRoom is skipped for fake jobs", nil)
+		return &livekit.DeleteRoomResponse{}, nil
+	}
 	if roomName == "" {
 		roomName = c.Job.Room.Name
 	}
@@ -110,6 +161,10 @@ func (c *JobContext) DeleteRoom(ctx context.Context, roomName string) (*livekit.
 
 // AddSIPParticipant adds a SIP participant to the room.
 func (c *JobContext) AddSIPParticipant(ctx context.Context, callTo string, trunkID string, identity string, name string) (*livekit.SIPParticipantInfo, error) {
+	if c.IsFakeJob() {
+		logger.Logger.Warnw("job context AddSIPParticipant is skipped for fake jobs", nil)
+		return &livekit.SIPParticipantInfo{}, nil
+	}
 	client := lksdk.NewSIPClient(c.url, c.apiKey, c.apiSecret)
 	return client.CreateSIPParticipant(ctx, &livekit.CreateSIPParticipantRequest{
 		RoomName:            c.Job.Room.Name,
@@ -122,6 +177,10 @@ func (c *JobContext) AddSIPParticipant(ctx context.Context, callTo string, trunk
 
 // TransferSIPParticipant transfers a SIP participant to another number.
 func (c *JobContext) TransferSIPParticipant(ctx context.Context, identity string, transferTo string, playDialtone bool) error {
+	if c.IsFakeJob() {
+		logger.Logger.Warnw("job context TransferSIPParticipant is skipped for fake jobs", nil)
+		return nil
+	}
 	client := lksdk.NewSIPClient(c.url, c.apiKey, c.apiSecret)
 	_, err := client.TransferSIPParticipant(ctx, &livekit.TransferSIPParticipantRequest{
 		ParticipantIdentity: identity,

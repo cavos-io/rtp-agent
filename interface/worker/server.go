@@ -26,6 +26,15 @@ const (
 	participantAttributeAgentName = "lk.agent.name"
 )
 
+type WorkerPermissions struct {
+	CanPublish        bool
+	CanSubscribe      bool
+	CanPublishData    bool
+	CanUpdateMetadata bool
+	CanPublishSources []livekit.TrackSource
+	Hidden            bool
+}
+
 type WorkerOptions struct {
 	AgentName  string
 	WorkerType WorkerType
@@ -40,6 +49,7 @@ type WorkerOptions struct {
 	JobMemoryLimitMB    float64
 	NumIdleProcesses    int
 	DrainTimeoutSeconds int
+	Permissions         *WorkerPermissions
 }
 
 type AgentServer struct {
@@ -49,9 +59,12 @@ type AgentServer struct {
 	requestFnc    func(*JobRequest) error
 	sessionEndFnc func(*JobContext) error
 
-	activeJobs map[string]*JobContext
-	mu         sync.Mutex
-	conn       *websocket.Conn
+	activeJobs        map[string]*JobContext
+	pendingAccepts    map[string]JobAcceptArguments
+	draining          bool
+	mu                sync.Mutex
+	conn              *websocket.Conn
+	workerMessageSink func(*livekit.WorkerMessage) error
 
 	consoleSession any // Store local session for CLI console
 }
@@ -59,14 +72,19 @@ type AgentServer struct {
 func NewAgentServer(opts WorkerOptions) *AgentServer {
 	opts = resolveWorkerOptions(opts)
 	return &AgentServer{
-		Options:    opts,
-		activeJobs: make(map[string]*JobContext),
+		Options:        opts,
+		activeJobs:     make(map[string]*JobContext),
+		pendingAccepts: make(map[string]JobAcceptArguments),
 	}
 }
 
 func resolveWorkerOptions(opts WorkerOptions) WorkerOptions {
 	if opts.WorkerType == "" {
 		opts.WorkerType = WorkerTypeRoom
+	}
+	if opts.Permissions == nil {
+		permissions := resolveWorkerPermissions(nil)
+		opts.Permissions = &permissions
 	}
 	if opts.WSURL == "" {
 		opts.WSURL = opts.WSRL
@@ -93,6 +111,18 @@ func resolveWorkerOptions(opts WorkerOptions) WorkerOptions {
 	}
 
 	return opts
+}
+
+func resolveWorkerPermissions(permissions *WorkerPermissions) WorkerPermissions {
+	if permissions == nil {
+		return WorkerPermissions{
+			CanPublish:        true,
+			CanSubscribe:      true,
+			CanPublishData:    true,
+			CanUpdateMetadata: true,
+		}
+	}
+	return *permissions
 }
 
 func workerTypeToJobType(workerType WorkerType) livekit.JobType {
@@ -147,12 +177,45 @@ func availabilityResponseForReject(req *livekit.AvailabilityRequest, args JobRej
 }
 
 func (s *AgentServer) registerWorkerRequest() *livekit.WorkerMessage {
+	permissions := resolveWorkerPermissions(s.Options.Permissions)
 	return &livekit.WorkerMessage{
 		Message: &livekit.WorkerMessage_Register{
 			Register: &livekit.RegisterWorkerRequest{
 				Type:      workerTypeToJobType(s.Options.WorkerType),
 				AgentName: s.Options.AgentName,
 				Version:   "1.0.0",
+				AllowedPermissions: &livekit.ParticipantPermission{
+					CanPublish:        permissions.CanPublish,
+					CanSubscribe:      permissions.CanSubscribe,
+					CanPublishData:    permissions.CanPublishData,
+					CanUpdateMetadata: permissions.CanUpdateMetadata,
+					CanPublishSources: permissions.CanPublishSources,
+					Hidden:            permissions.Hidden,
+					Agent:             true,
+				},
+			},
+		},
+	}
+}
+
+func (s *AgentServer) workerStatusMessage(status livekit.WorkerStatus) *livekit.WorkerMessage {
+	jobCount := uint32(s.activeJobCount())
+	return &livekit.WorkerMessage{
+		Message: &livekit.WorkerMessage_UpdateWorker{
+			UpdateWorker: &livekit.UpdateWorkerStatus{
+				Status:   &status,
+				JobCount: jobCount,
+			},
+		},
+	}
+}
+
+func jobStatusMessage(jobID string, status livekit.JobStatus) *livekit.WorkerMessage {
+	return &livekit.WorkerMessage{
+		Message: &livekit.WorkerMessage_UpdateJob{
+			UpdateJob: &livekit.UpdateJobStatus{
+				JobId:  jobID,
+				Status: status,
 			},
 		},
 	}
@@ -184,6 +247,54 @@ func (s *AgentServer) GetConsoleSession() any {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.consoleSession
+}
+
+func (s *AgentServer) Draining() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.draining
+}
+
+func (s *AgentServer) Drain(ctx context.Context) error {
+	if s.Options.DrainTimeoutSeconds > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, time.Duration(s.Options.DrainTimeoutSeconds)*time.Second)
+		defer cancel()
+	}
+
+	s.mu.Lock()
+	if s.draining {
+		s.mu.Unlock()
+		return nil
+	}
+	s.draining = true
+	connected := s.conn != nil
+	s.mu.Unlock()
+
+	if connected {
+		if err := s.sendWorkerMessage(s.workerStatusMessage(livekit.WorkerStatus_WS_FULL)); err != nil {
+			return err
+		}
+	}
+
+	ticker := time.NewTicker(10 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		if s.activeJobCount() == 0 {
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-ticker.C:
+		}
+	}
+}
+
+func (s *AgentServer) activeJobCount() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return len(s.activeJobs)
 }
 
 func (s *AgentServer) validateRunPreconditions() error {
@@ -302,6 +413,13 @@ func (s *AgentServer) handleMessage(ctx context.Context, msg *livekit.ServerMess
 func (s *AgentServer) handleAvailability(ctx context.Context, req *livekit.AvailabilityRequest) {
 	logger.Logger.Infow("Received availability request", "jobId", req.Job.Id)
 
+	if s.Draining() {
+		if err := s.sendWorkerMessage(availabilityResponseForReject(req, JobRejectArguments{Terminate: false})); err != nil {
+			logger.Logger.Errorw("failed to reject availability while draining", err, "jobId", req.Job.Id)
+		}
+		return
+	}
+
 	answered := false
 	jobReq := &JobRequest{
 		Job: req.Job,
@@ -310,7 +428,13 @@ func (s *AgentServer) handleAvailability(ctx context.Context, req *livekit.Avail
 				args.Name = s.Options.AgentName
 			}
 			answered = true
-			return s.sendWorkerMessage(availabilityResponseForAccept(req, args, s.Options.AgentName))
+			if err := s.sendWorkerMessage(availabilityResponseForAccept(req, args, s.Options.AgentName)); err != nil {
+				return err
+			}
+			s.mu.Lock()
+			s.pendingAccepts[req.Job.Id] = args
+			s.mu.Unlock()
+			return nil
 		},
 		rejectFnc: func(args JobRejectArguments) error {
 			answered = true
@@ -327,11 +451,15 @@ func (s *AgentServer) handleAvailability(ctx context.Context, req *livekit.Avail
 	}
 
 	if !answered {
-		_ = jobReq.Accept(JobAcceptArguments{})
+		_ = jobReq.Reject(JobRejectArguments{Terminate: false})
 	}
 }
 
 func (s *AgentServer) sendWorkerMessage(msg *livekit.WorkerMessage) error {
+	if s.workerMessageSink != nil {
+		return s.workerMessageSink(msg)
+	}
+
 	b, err := proto.Marshal(msg)
 	if err != nil {
 		return err
@@ -349,17 +477,36 @@ func (s *AgentServer) handleAssignment(ctx context.Context, req *livekit.JobAssi
 	logger.Logger.Infow("Received job assignment", "jobId", req.Job.Id)
 
 	// Spin up a job context here
-	jobCtx := NewJobContext(req.Job, s.Options.WSRL, s.Options.APIKey, s.Options.APISecret)
+	jobURL := s.Options.WSRL
+	if req.GetUrl() != "" {
+		jobURL = req.GetUrl()
+	}
+	jobCtx := NewJobContext(req.Job, jobURL, s.Options.APIKey, s.Options.APISecret)
+	jobCtx.token = req.GetToken()
 
 	s.mu.Lock()
+	if args, ok := s.pendingAccepts[req.Job.Id]; ok {
+		jobCtx.AcceptArguments = args
+		delete(s.pendingAccepts, req.Job.Id)
+	}
 	s.activeJobs[req.Job.Id] = jobCtx
 	s.mu.Unlock()
 
+	if err := s.sendWorkerMessage(jobStatusMessage(req.Job.Id, livekit.JobStatus_JS_RUNNING)); err != nil {
+		logger.Logger.Errorw("failed to update job status", err, "jobId", req.Job.Id)
+	}
+
 	if s.entrypointFnc != nil {
 		go func() {
+			status := livekit.JobStatus_JS_SUCCESS
 			if err := s.entrypointFnc(jobCtx); err != nil {
 				logger.Logger.Errorw("Job entrypoint failed", err, "jobId", req.Job.Id)
+				status = livekit.JobStatus_JS_FAILED
 			}
+			if err := s.sendWorkerMessage(jobStatusMessage(req.Job.Id, status)); err != nil {
+				logger.Logger.Errorw("failed to update job status", err, "jobId", req.Job.Id)
+			}
+			s.finishJob(jobCtx)
 		}()
 	}
 }
@@ -378,6 +525,8 @@ func (s *AgentServer) handleTermination(req *livekit.JobTermination) {
 		if s.sessionEndFnc != nil {
 			s.sessionEndFnc(jobCtx)
 		}
+
+		jobCtx.Shutdown("")
 
 		if jobCtx.Report != nil {
 			go func() {
@@ -417,7 +566,26 @@ func (s *AgentServer) ExecuteLocalJob(ctx context.Context, roomName string, part
 
 	// Block until context is done for local execution
 	<-ctx.Done()
+	s.finishJob(jobCtx)
 	return nil
+}
+
+func (s *AgentServer) finishJob(jobCtx *JobContext) {
+	if jobCtx == nil || jobCtx.Job == nil {
+		return
+	}
+
+	s.mu.Lock()
+	delete(s.activeJobs, jobCtx.Job.Id)
+	s.mu.Unlock()
+
+	if s.sessionEndFnc != nil {
+		if err := s.sessionEndFnc(jobCtx); err != nil {
+			logger.Logger.Errorw("Session end callback failed", err, "jobId", jobCtx.Job.Id)
+		}
+	}
+
+	jobCtx.Shutdown("")
 }
 
 func newLocalJobContext(roomName string, participantIdentity string, opts WorkerOptions) *JobContext {
@@ -436,5 +604,6 @@ func newLocalJobContext(roomName string, participantIdentity string, opts Worker
 	}
 	jobCtx := NewJobContext(job, opts.WSRL, opts.APIKey, opts.APISecret)
 	jobCtx.AcceptArguments = JobAcceptArguments{Identity: participantIdentity}
+	jobCtx.fakeJob = true
 	return jobCtx
 }
