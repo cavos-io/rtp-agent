@@ -22,8 +22,11 @@ const (
 type ProcPoolEvent string
 
 const (
-	ProcPoolEventJobLaunched   ProcPoolEvent = "process_job_launched"
-	ProcPoolEventProcessClosed ProcPoolEvent = "process_closed"
+	ProcPoolEventProcessCreated ProcPoolEvent = "process_created"
+	ProcPoolEventProcessStarted ProcPoolEvent = "process_started"
+	ProcPoolEventProcessReady   ProcPoolEvent = "process_ready"
+	ProcPoolEventJobLaunched    ProcPoolEvent = "process_job_launched"
+	ProcPoolEventProcessClosed  ProcPoolEvent = "process_closed"
 )
 
 const maxLaunchAttempts = 3
@@ -84,6 +87,7 @@ func (p *ProcPool) LaunchRunningJob(ctx context.Context, info RunningJobInfo) er
 		id := "exec_" + uuid.NewString()[:8]
 		executor := p.executorFactory(id)
 		p.executors[id] = executor
+		p.emit(ProcPoolEventProcessCreated, executor)
 
 		err := executor.LaunchRunningJob(ctx, info)
 		if err != nil {
@@ -91,10 +95,13 @@ func (p *ProcPool) LaunchRunningJob(ctx context.Context, info RunningJobInfo) er
 			closeCtx, cancel := p.closeContext()
 			_ = executor.Close(closeCtx)
 			cancel()
+			p.emit(ProcPoolEventProcessClosed, executor)
 			lastErr = err
 			continue
 		}
 
+		p.emit(ProcPoolEventProcessStarted, executor)
+		p.emit(ProcPoolEventProcessReady, executor)
 		logger.Logger.Infow("Launched job", "executor_type", p.executorType, "executor_id", id, "job_id", info.Job.GetId())
 		p.emit(ProcPoolEventJobLaunched, executor)
 		return nil
