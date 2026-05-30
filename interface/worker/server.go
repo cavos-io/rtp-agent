@@ -3,6 +3,7 @@ package worker
 import (
 	"context"
 	"fmt"
+	"math"
 	"net/http"
 	"net/url"
 	"os"
@@ -612,6 +613,9 @@ func (s *AgentServer) availableForJob() bool {
 	}
 	threshold := s.Options.LoadThreshold
 	if threshold <= 0 {
+		return true
+	}
+	if math.IsInf(threshold, 1) {
 		return true
 	}
 	return s.effectiveLoad() < threshold

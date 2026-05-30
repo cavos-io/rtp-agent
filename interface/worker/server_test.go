@@ -3,6 +3,7 @@ package worker
 import (
 	"context"
 	"errors"
+	"math"
 	"net/http"
 	"runtime"
 	"strings"
@@ -736,6 +737,20 @@ func TestHandleAvailabilityRejectsWhenLoadExceedsThreshold(t *testing.T) {
 	}
 	if requestCalled {
 		t.Fatal("request callback was called while worker was over load threshold")
+	}
+}
+
+func TestAvailabilityAllowsReservedSlotsWithInfiniteLoadThreshold(t *testing.T) {
+	server := NewAgentServer(WorkerOptions{
+		LoadThreshold: math.Inf(1),
+		LoadFunc: func(*AgentServer) float64 {
+			return 0
+		},
+	})
+	server.reserveAvailabilitySlot()
+
+	if !server.availableForJob() {
+		t.Fatal("availableForJob() = false, want true for infinite load threshold")
 	}
 }
 
