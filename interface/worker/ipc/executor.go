@@ -241,6 +241,23 @@ func processJobEnv(baseEnv []string, processID string, info RunningJobInfo) ([]s
 	return env, nil
 }
 
+func RunningJobInfoFromEnv(env map[string]string) (RunningJobInfo, error) {
+	if raw := env["LIVEKIT_AGENT_RUNNING_JOB_JSON"]; raw != "" {
+		var info RunningJobInfo
+		if err := json.Unmarshal([]byte(raw), &info); err != nil {
+			return RunningJobInfo{}, err
+		}
+		return info, nil
+	}
+
+	rawJob := env["LIVEKIT_AGENT_JOB_JSON"]
+	var job livekit.Job
+	if err := json.Unmarshal([]byte(rawJob), &job); err != nil {
+		return RunningJobInfo{}, err
+	}
+	return RunningJobInfo{Job: &job}, nil
+}
+
 func (e *ProcessJobExecutor) pingTask(ctx context.Context) {
 	ticker := time.NewTicker(2 * time.Second)
 	defer ticker.Stop()

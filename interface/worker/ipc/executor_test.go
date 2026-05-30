@@ -64,6 +64,64 @@ func TestProcessJobEnvCarriesRunningJobInfo(t *testing.T) {
 	}
 }
 
+func TestRunningJobInfoFromEnvPrefersFullAssignment(t *testing.T) {
+	info := RunningJobInfo{
+		AcceptArguments: JobAcceptArguments{Identity: "agent-job-a"},
+		Job:             &livekit.Job{Id: "job-a"},
+		URL:             "wss://livekit.example",
+		Token:           "room-token",
+		WorkerID:        "worker-a",
+		FakeJob:         true,
+	}
+	env, err := processJobEnv(nil, "exec-a", info)
+	if err != nil {
+		t.Fatalf("processJobEnv: %v", err)
+	}
+
+	running, err := RunningJobInfoFromEnv(envMap(env))
+	if err != nil {
+		t.Fatalf("RunningJobInfoFromEnv: %v", err)
+	}
+	if running.Job.GetId() != "job-a" {
+		t.Fatalf("job id = %q, want job-a", running.Job.GetId())
+	}
+	if running.AcceptArguments.Identity != "agent-job-a" {
+		t.Fatalf("identity = %q, want agent-job-a", running.AcceptArguments.Identity)
+	}
+	if running.URL != "wss://livekit.example" {
+		t.Fatalf("URL = %q, want room URL", running.URL)
+	}
+	if running.Token != "room-token" {
+		t.Fatalf("Token = %q, want room token", running.Token)
+	}
+	if running.WorkerID != "worker-a" {
+		t.Fatalf("WorkerID = %q, want worker-a", running.WorkerID)
+	}
+	if !running.FakeJob {
+		t.Fatal("FakeJob = false, want true")
+	}
+}
+
+func TestRunningJobInfoFromEnvFallsBackToLegacyJobJSON(t *testing.T) {
+	jobData, err := json.Marshal(&livekit.Job{Id: "job-legacy"})
+	if err != nil {
+		t.Fatalf("marshal job: %v", err)
+	}
+
+	running, err := RunningJobInfoFromEnv(map[string]string{
+		"LIVEKIT_AGENT_JOB_JSON": string(jobData),
+	})
+	if err != nil {
+		t.Fatalf("RunningJobInfoFromEnv: %v", err)
+	}
+	if running.Job.GetId() != "job-legacy" {
+		t.Fatalf("job id = %q, want job-legacy", running.Job.GetId())
+	}
+	if running.AcceptArguments.Identity != "" {
+		t.Fatalf("identity = %q, want empty fallback", running.AcceptArguments.Identity)
+	}
+}
+
 func envMap(env []string) map[string]string {
 	values := make(map[string]string, len(env))
 	for _, item := range env {
