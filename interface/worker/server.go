@@ -417,7 +417,24 @@ func (s *AgentServer) ExecuteLocalJob(ctx context.Context, roomName string, part
 
 	// Block until context is done for local execution
 	<-ctx.Done()
+	s.finishJob(jobCtx)
 	return nil
+}
+
+func (s *AgentServer) finishJob(jobCtx *JobContext) {
+	if jobCtx == nil || jobCtx.Job == nil {
+		return
+	}
+
+	s.mu.Lock()
+	delete(s.activeJobs, jobCtx.Job.Id)
+	s.mu.Unlock()
+
+	if s.sessionEndFnc != nil {
+		if err := s.sessionEndFnc(jobCtx); err != nil {
+			logger.Logger.Errorw("Session end callback failed", err, "jobId", jobCtx.Job.Id)
+		}
+	}
 }
 
 func newLocalJobContext(roomName string, participantIdentity string, opts WorkerOptions) *JobContext {
