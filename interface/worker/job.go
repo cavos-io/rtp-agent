@@ -129,6 +129,13 @@ func (c *JobContext) RoomInfo() *livekit.Room {
 	return c.Job.Room
 }
 
+func (c *JobContext) PublisherInfo() *livekit.ParticipantInfo {
+	if c.Job == nil {
+		return nil
+	}
+	return c.Job.Participant
+}
+
 func (c *JobContext) connectInfo() lksdk.ConnectInfo {
 	return lksdk.ConnectInfo{
 		APIKey:                c.apiKey,

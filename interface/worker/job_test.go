@@ -120,6 +120,20 @@ func TestJobContextJobIDReturnsCurrentJobID(t *testing.T) {
 	}
 }
 
+func TestJobContextPublisherInfoReturnsJobParticipant(t *testing.T) {
+	publisher := &livekit.ParticipantInfo{Identity: "publisher-a"}
+	ctx := NewJobContext(&livekit.Job{Id: "job-a", Participant: publisher}, "", "", "")
+
+	if got := ctx.PublisherInfo(); got != publisher {
+		t.Fatal("PublisherInfo() did not return the job participant")
+	}
+
+	ctx.Job = nil
+	if got := ctx.PublisherInfo(); got != nil {
+		t.Fatalf("PublisherInfo() with nil job = %#v, want nil", got)
+	}
+}
+
 func TestJobRequestAccessorsExposeJobFields(t *testing.T) {
 	room := &livekit.Room{Name: "room-a"}
 	publisher := &livekit.ParticipantInfo{Identity: "publisher-a"}
