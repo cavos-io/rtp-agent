@@ -2,6 +2,7 @@ package ipc
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 	"time"
@@ -20,6 +21,8 @@ const (
 
 const maxLaunchAttempts = 3
 
+var ErrProcPoolClosed = errors.New("proc pool closed")
+
 type ProcPool struct {
 	maxProcesses    int
 	executors       map[string]JobExecutor
@@ -27,6 +30,7 @@ type ProcPool struct {
 	entrypoint      func() error
 	executorType    ExecutorType
 	closeTimeout    time.Duration
+	closed          bool
 	executorFactory func(id string) JobExecutor
 }
 
@@ -56,6 +60,10 @@ func (p *ProcPool) LaunchJob(ctx context.Context, job *livekit.Job) error {
 func (p *ProcPool) LaunchRunningJob(ctx context.Context, info RunningJobInfo) error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
+
+	if p.closed {
+		return ErrProcPoolClosed
+	}
 
 	var lastErr error
 	for attempt := 0; attempt < maxLaunchAttempts; attempt++ {
@@ -118,6 +126,7 @@ func (p *ProcPool) Close() error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
+	p.closed = true
 	ctx, cancel := p.closeContext()
 	defer cancel()
 

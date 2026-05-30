@@ -93,6 +93,30 @@ func TestProcPoolCloseUsesConfiguredTimeout(t *testing.T) {
 	}
 }
 
+func TestProcPoolLaunchAfterCloseIsRejected(t *testing.T) {
+	var created int
+	pool := NewProcPool(1, ExecutorTypeThread, nil)
+	pool.executorFactory = func(id string) JobExecutor {
+		created++
+		return &fakeJobExecutor{id: id}
+	}
+
+	if err := pool.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	err := pool.LaunchJob(context.Background(), &livekit.Job{Id: "job-a"})
+	if err == nil {
+		t.Fatal("LaunchJob error = nil, want closed pool error")
+	}
+	if !errors.Is(err, ErrProcPoolClosed) {
+		t.Fatalf("LaunchJob error = %v, want ErrProcPoolClosed", err)
+	}
+	if created != 0 {
+		t.Fatalf("created executors = %d, want 0", created)
+	}
+}
+
 func TestProcPoolLaunchJobRetriesWithFreshExecutor(t *testing.T) {
 	first := &fakeJobExecutor{id: "exec-a", launchErr: errors.New("launch failed")}
 	second := &fakeJobExecutor{id: "exec-b"}
