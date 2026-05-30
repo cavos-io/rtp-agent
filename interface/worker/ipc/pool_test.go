@@ -2,6 +2,7 @@ package ipc
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -11,8 +12,10 @@ import (
 type fakeJobExecutor struct {
 	id         string
 	job        *livekit.Job
+	launchErr  error
 	closeCtx   context.Context
 	closeCalls int
+	launches   int
 }
 
 func (e *fakeJobExecutor) ID() string { return e.id }
@@ -24,6 +27,10 @@ func (e *fakeJobExecutor) Started() bool { return e.job != nil }
 func (e *fakeJobExecutor) Job() *livekit.Job { return e.job }
 
 func (e *fakeJobExecutor) LaunchJob(ctx context.Context, job *livekit.Job) error {
+	e.launches++
+	if e.launchErr != nil {
+		return e.launchErr
+	}
 	e.job = job
 	return nil
 }
@@ -75,5 +82,44 @@ func TestProcPoolCloseUsesConfiguredTimeout(t *testing.T) {
 	remaining := time.Until(deadline)
 	if remaining <= 0 || remaining > 25*time.Millisecond {
 		t.Fatalf("Close deadline remaining = %v, want within configured timeout", remaining)
+	}
+}
+
+func TestProcPoolLaunchJobRetriesWithFreshExecutor(t *testing.T) {
+	first := &fakeJobExecutor{id: "exec-a", launchErr: errors.New("launch failed")}
+	second := &fakeJobExecutor{id: "exec-b"}
+	executors := []*fakeJobExecutor{first, second}
+	var created int
+
+	pool := NewProcPool(1, ExecutorTypeThread, nil)
+	pool.executorFactory = func(id string) JobExecutor {
+		executor := executors[created]
+		created++
+		return executor
+	}
+
+	err := pool.LaunchJob(context.Background(), &livekit.Job{Id: "job-a"})
+	if err != nil {
+		t.Fatalf("LaunchJob: %v", err)
+	}
+	if created != 2 {
+		t.Fatalf("created executors = %d, want 2", created)
+	}
+	if first.launches != 1 {
+		t.Fatalf("first launches = %d, want 1", first.launches)
+	}
+	if second.launches != 1 {
+		t.Fatalf("second launches = %d, want 1", second.launches)
+	}
+	if pool.GetByJobID("job-a") == nil {
+		t.Fatal("GetByJobID returned nil for retried job")
+	}
+
+	gotExecutors := pool.GetExecutors()
+	if len(gotExecutors) != 1 {
+		t.Fatalf("executors len = %d, want 1", len(gotExecutors))
+	}
+	if gotExecutors[0].ID() != "exec-b" {
+		t.Fatalf("remaining executor ID = %q, want exec-b", gotExecutors[0].ID())
 	}
 }

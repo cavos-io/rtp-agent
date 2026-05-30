@@ -18,51 +18,63 @@ const (
 	ExecutorTypeProcess ExecutorType = "process"
 )
 
+const maxLaunchAttempts = 3
+
 type ProcPool struct {
-	maxProcesses int
-	executors    map[string]JobExecutor
-	mu           sync.Mutex
-	entrypoint   func() error
-	executorType ExecutorType
-	closeTimeout time.Duration
+	maxProcesses    int
+	executors       map[string]JobExecutor
+	mu              sync.Mutex
+	entrypoint      func() error
+	executorType    ExecutorType
+	closeTimeout    time.Duration
+	executorFactory func(id string) JobExecutor
 }
 
 func NewProcPool(maxProcesses int, executorType ExecutorType, entrypoint func() error) *ProcPool {
-	return &ProcPool{
+	pool := &ProcPool{
 		maxProcesses: maxProcesses,
 		executors:    make(map[string]JobExecutor),
 		entrypoint:   entrypoint,
 		executorType: executorType,
 		closeTimeout: 5 * time.Second,
 	}
+	pool.executorFactory = pool.newExecutor
+	return pool
+}
+
+func (p *ProcPool) newExecutor(id string) JobExecutor {
+	if p.executorType == ExecutorTypeProcess {
+		return NewProcessJobExecutor(id)
+	}
+	return NewThreadJobExecutor(id, p.entrypoint)
 }
 
 func (p *ProcPool) LaunchJob(ctx context.Context, job *livekit.Job) error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
-	if len(p.executors) >= p.maxProcesses {
-		return fmt.Errorf("proc pool exhausted, max capacity reached")
+	var lastErr error
+	for attempt := 0; attempt < maxLaunchAttempts; attempt++ {
+		if len(p.executors) >= p.maxProcesses {
+			return fmt.Errorf("proc pool exhausted, max capacity reached")
+		}
+
+		id := "exec_" + uuid.NewString()[:8]
+		executor := p.executorFactory(id)
+		p.executors[id] = executor
+
+		err := executor.LaunchJob(ctx, job)
+		if err != nil {
+			delete(p.executors, id)
+			lastErr = err
+			continue
+		}
+
+		logger.Logger.Infow("Launched job", "executor_type", p.executorType, "executor_id", id, "job_id", job.Id)
+		return nil
 	}
 
-	id := "exec_" + uuid.NewString()[:8]
-	var executor JobExecutor
-	if p.executorType == ExecutorTypeProcess {
-		executor = NewProcessJobExecutor(id)
-	} else {
-		executor = NewThreadJobExecutor(id, p.entrypoint)
-	}
-
-	p.executors[id] = executor
-
-	err := executor.LaunchJob(ctx, job)
-	if err != nil {
-		delete(p.executors, id)
-		return err
-	}
-
-	logger.Logger.Infow("Launched job", "executor_type", p.executorType, "executor_id", id, "job_id", job.Id)
-	return nil
+	return lastErr
 }
 
 func (p *ProcPool) GetExecutors() []JobExecutor {
