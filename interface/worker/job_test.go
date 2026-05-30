@@ -94,6 +94,32 @@ func TestJobContextConnectInfoUsesAcceptedParticipantFields(t *testing.T) {
 	}
 }
 
+func TestJobRequestAccessorsExposeJobFields(t *testing.T) {
+	room := &livekit.Room{Name: "room-a"}
+	publisher := &livekit.ParticipantInfo{Identity: "publisher-a"}
+	req := &JobRequest{
+		Job: &livekit.Job{
+			Id:          "job_request",
+			Room:        room,
+			Participant: publisher,
+			AgentName:   "agent-a",
+		},
+	}
+
+	if got := req.ID(); got != "job_request" {
+		t.Fatalf("ID() = %q, want job_request", got)
+	}
+	if got := req.Room(); got != room {
+		t.Fatal("Room() did not return the job room")
+	}
+	if got := req.Publisher(); got != publisher {
+		t.Fatal("Publisher() did not return the job participant")
+	}
+	if got := req.AgentName(); got != "agent-a" {
+		t.Fatalf("AgentName() = %q, want agent-a", got)
+	}
+}
+
 func TestLocalJobContextSkipsDestructiveLiveKitAPIs(t *testing.T) {
 	ctx := newLocalJobContext("room-a", "agent-local", WorkerOptions{})
 	if !ctx.IsFakeJob() {
