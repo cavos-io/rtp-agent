@@ -101,6 +101,12 @@ func TestNewAgentServerUsesReferenceWorkerDefaults(t *testing.T) {
 	if server.Options.SessionEndTimeoutSeconds != 300 {
 		t.Fatalf("SessionEndTimeoutSeconds = %v, want reference default 300", server.Options.SessionEndTimeoutSeconds)
 	}
+	if server.Options.ShutdownProcessTimeoutSeconds != 10 {
+		t.Fatalf("ShutdownProcessTimeoutSeconds = %v, want reference default 10", server.Options.ShutdownProcessTimeoutSeconds)
+	}
+	if server.Options.InitializeProcessTimeoutSeconds != 10 {
+		t.Fatalf("InitializeProcessTimeoutSeconds = %v, want reference default 10", server.Options.InitializeProcessTimeoutSeconds)
+	}
 	if server.Options.LoadThreshold != 0.7 {
 		t.Fatalf("LoadThreshold = %v, want reference production default 0.7", server.Options.LoadThreshold)
 	}

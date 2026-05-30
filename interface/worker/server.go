@@ -26,12 +26,13 @@ const (
 	WorkerTypeRoom      WorkerType = "room"
 	WorkerTypePublisher WorkerType = "publisher"
 
-	defaultWorkerVersion = "1.0.0"
-	defaultMaxRetry      = 16
-	defaultJobMemoryWarn = 500
-	defaultDrainTimeout  = 1800
-	defaultSessionEnd    = 300
-	defaultLoadThreshold = 0.7
+	defaultWorkerVersion  = "1.0.0"
+	defaultMaxRetry       = 16
+	defaultJobMemoryWarn  = 500
+	defaultDrainTimeout   = 1800
+	defaultSessionEnd     = 300
+	defaultProcessTimeout = 10
+	defaultLoadThreshold  = 0.7
 
 	participantAttributeAgentName = "lk.agent.name"
 )
@@ -73,18 +74,20 @@ type WorkerOptions struct {
 	WSURL      string
 	LoadFunc   func(*AgentServer) float64
 	// WSRL is kept for backward compatibility. Prefer WSURL for new code.
-	WSRL                     string
-	APIKey                   string
-	APISecret                string
-	WorkerToken              string
-	HTTPProxy                string
-	LoadThreshold            float64
-	JobMemoryWarnMB          float64
-	JobMemoryLimitMB         float64
-	NumIdleProcesses         int
-	DrainTimeoutSeconds      int
-	SessionEndTimeoutSeconds float64
-	Permissions              *WorkerPermissions
+	WSRL                            string
+	APIKey                          string
+	APISecret                       string
+	WorkerToken                     string
+	HTTPProxy                       string
+	LoadThreshold                   float64
+	JobMemoryWarnMB                 float64
+	JobMemoryLimitMB                float64
+	NumIdleProcesses                int
+	DrainTimeoutSeconds             int
+	SessionEndTimeoutSeconds        float64
+	ShutdownProcessTimeoutSeconds   float64
+	InitializeProcessTimeoutSeconds float64
+	Permissions                     *WorkerPermissions
 }
 
 type AgentServer struct {
@@ -135,6 +138,12 @@ func resolveWorkerOptions(opts WorkerOptions) WorkerOptions {
 	}
 	if opts.SessionEndTimeoutSeconds == 0 {
 		opts.SessionEndTimeoutSeconds = defaultSessionEnd
+	}
+	if opts.ShutdownProcessTimeoutSeconds == 0 {
+		opts.ShutdownProcessTimeoutSeconds = defaultProcessTimeout
+	}
+	if opts.InitializeProcessTimeoutSeconds == 0 {
+		opts.InitializeProcessTimeoutSeconds = defaultProcessTimeout
 	}
 	if opts.LoadThreshold == 0 {
 		opts.LoadThreshold = defaultLoadThreshold
