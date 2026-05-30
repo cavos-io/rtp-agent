@@ -1109,7 +1109,7 @@ func newLocalJobContext(roomName string, participantIdentity string, opts Worker
 	}
 
 	if participantIdentity == "" {
-		participantIdentity = agentIdentityForJobID(job.Id)
+		participantIdentity = "fake-agent-" + time.Now().Format("20060102150405")
 	}
 	jobCtx := NewJobContext(job, opts.WSRL, opts.APIKey, opts.APISecret)
 	jobCtx.AcceptArguments = JobAcceptArguments{Identity: participantIdentity}

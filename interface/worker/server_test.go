@@ -1326,6 +1326,14 @@ func TestLocalJobContextUsesProvidedParticipantIdentity(t *testing.T) {
 	}
 }
 
+func TestLocalJobContextDefaultsReferenceFakeAgentIdentity(t *testing.T) {
+	ctx := newLocalJobContext("room-a", "", WorkerOptions{})
+
+	if !strings.HasPrefix(ctx.ParticipantIdentity(), "fake-agent-") {
+		t.Fatalf("ParticipantIdentity() = %q, want fake-agent- prefix", ctx.ParticipantIdentity())
+	}
+}
+
 func TestLocalJobContextUsesReferenceMockJobIDPrefix(t *testing.T) {
 	ctx := newLocalJobContext("room-a", "agent-local", WorkerOptions{})
 
