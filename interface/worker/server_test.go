@@ -330,6 +330,34 @@ func TestHandleAvailabilityRejectsWhenRequestCallbackDoesNotAnswer(t *testing.T)
 	}
 }
 
+func TestHandleRegisterReportsActiveJobs(t *testing.T) {
+	server := NewAgentServer(WorkerOptions{})
+	sentCh := make(chan *livekit.WorkerMessage, 1)
+	server.workerMessageSink = func(msg *livekit.WorkerMessage) error {
+		sentCh <- msg
+		return nil
+	}
+	jobCtx := NewJobContext(&livekit.Job{Id: "job_active"}, "", "", "")
+	server.mu.Lock()
+	server.activeJobs[jobCtx.Job.Id] = jobCtx
+	server.mu.Unlock()
+
+	server.handleMessage(context.Background(), &livekit.ServerMessage{
+		Message: &livekit.ServerMessage_Register{
+			Register: &livekit.RegisterWorkerResponse{WorkerId: "worker-a"},
+		},
+	})
+
+	msg := receiveWorkerMessage(t, sentCh)
+	migrate := msg.GetMigrateJob()
+	if migrate == nil {
+		t.Fatal("migrate job message is nil")
+	}
+	if len(migrate.JobIds) != 1 || migrate.JobIds[0] != "job_active" {
+		t.Fatalf("MigrateJob.JobIds = %v, want [job_active]", migrate.JobIds)
+	}
+}
+
 func TestAssignmentPreservesAcceptedParticipantIdentity(t *testing.T) {
 	server := NewAgentServer(WorkerOptions{})
 	server.workerMessageSink = func(msg *livekit.WorkerMessage) error {

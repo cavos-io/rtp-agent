@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"sort"
 	"sync"
 	"time"
 
@@ -221,6 +222,14 @@ func jobStatusMessage(jobID string, status livekit.JobStatus) *livekit.WorkerMes
 	}
 }
 
+func migrateJobMessage(jobIDs []string) *livekit.WorkerMessage {
+	return &livekit.WorkerMessage{
+		Message: &livekit.WorkerMessage_MigrateJob{
+			MigrateJob: &livekit.MigrateJobRequest{JobIds: jobIDs},
+		},
+	}
+}
+
 func (s *AgentServer) RTCSession(
 	entrypoint func(*JobContext) error,
 	request func(*JobRequest) error,
@@ -399,6 +408,7 @@ func (s *AgentServer) handleMessage(ctx context.Context, msg *livekit.ServerMess
 	switch m := msg.Message.(type) {
 	case *livekit.ServerMessage_Register:
 		logger.Logger.Infow("Worker Registered", "workerId", m.Register.WorkerId, "serverInfo", m.Register.ServerInfo)
+		s.reportActiveJobs()
 	case *livekit.ServerMessage_Availability:
 		s.handleAvailability(ctx, m.Availability)
 	case *livekit.ServerMessage_Assignment:
@@ -407,6 +417,24 @@ func (s *AgentServer) handleMessage(ctx context.Context, msg *livekit.ServerMess
 		s.handleTermination(m.Termination)
 	default:
 		logger.Logger.Warnw("Unhandled message type received", nil)
+	}
+}
+
+func (s *AgentServer) reportActiveJobs() {
+	s.mu.Lock()
+	jobIDs := make([]string, 0, len(s.activeJobs))
+	for jobID := range s.activeJobs {
+		jobIDs = append(jobIDs, jobID)
+	}
+	s.mu.Unlock()
+
+	if len(jobIDs) == 0 {
+		return
+	}
+
+	sort.Strings(jobIDs)
+	if err := s.sendWorkerMessage(migrateJobMessage(jobIDs)); err != nil {
+		logger.Logger.Errorw("failed to report active jobs", err, "jobIds", jobIDs)
 	}
 }
 
