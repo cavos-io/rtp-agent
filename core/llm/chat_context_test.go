@@ -263,6 +263,117 @@ func TestChatContextTruncateDropsLeadingFunctionSequence(t *testing.T) {
 	}
 }
 
+func TestChatContextIsEquivalentIgnoresTimestampsAndMetadata(t *testing.T) {
+	left := NewChatContext()
+	left.Items = []ChatItem{
+		&ChatMessage{
+			ID:          "message",
+			Role:        ChatRoleAssistant,
+			Content:     []ChatContent{{Text: "hello"}},
+			Interrupted: true,
+			Extra:       map[string]any{"ignored": "left"},
+			CreatedAt:   time.Unix(10, 0),
+		},
+		&FunctionCall{
+			ID:        "call",
+			CallID:    "call_lookup",
+			Name:      "lookup",
+			Arguments: `{"city":"Paris"}`,
+			Extra:     map[string]any{"ignored": "left"},
+			CreatedAt: time.Unix(11, 0),
+		},
+		&FunctionCallOutput{
+			ID:        "output",
+			CallID:    "call_lookup",
+			Name:      "lookup",
+			Output:    "Paris",
+			IsError:   true,
+			CreatedAt: time.Unix(12, 0),
+		},
+		&AgentConfigUpdate{
+			ID:        "config",
+			CreatedAt: time.Unix(13, 0),
+		},
+	}
+	right := NewChatContext()
+	right.Items = []ChatItem{
+		&ChatMessage{
+			ID:          "message",
+			Role:        ChatRoleAssistant,
+			Content:     []ChatContent{{Text: "hello"}},
+			Interrupted: true,
+			Extra:       map[string]any{"ignored": "right"},
+			CreatedAt:   time.Unix(20, 0),
+		},
+		&FunctionCall{
+			ID:        "call",
+			CallID:    "call_lookup",
+			Name:      "lookup",
+			Arguments: `{"city":"Paris"}`,
+			Extra:     map[string]any{"ignored": "right"},
+			CreatedAt: time.Unix(21, 0),
+		},
+		&FunctionCallOutput{
+			ID:        "output",
+			CallID:    "call_lookup",
+			Name:      "lookup",
+			Output:    "Paris",
+			IsError:   true,
+			CreatedAt: time.Unix(22, 0),
+		},
+		&AgentConfigUpdate{
+			ID:        "config",
+			CreatedAt: time.Unix(23, 0),
+		},
+	}
+
+	if !left.IsEquivalent(right) {
+		t.Fatal("IsEquivalent() = false, want true for matching essential fields")
+	}
+}
+
+func TestChatContextIsEquivalentDetectsPayloadDifferences(t *testing.T) {
+	tests := []struct {
+		name  string
+		left  ChatItem
+		right ChatItem
+	}{
+		{
+			name:  "message content",
+			left:  &ChatMessage{ID: "message", Role: ChatRoleUser, Content: []ChatContent{{Text: "hello"}}},
+			right: &ChatMessage{ID: "message", Role: ChatRoleUser, Content: []ChatContent{{Text: "goodbye"}}},
+		},
+		{
+			name:  "message interrupted",
+			left:  &ChatMessage{ID: "message", Role: ChatRoleAssistant, Content: []ChatContent{{Text: "hello"}}},
+			right: &ChatMessage{ID: "message", Role: ChatRoleAssistant, Content: []ChatContent{{Text: "hello"}}, Interrupted: true},
+		},
+		{
+			name:  "function call arguments",
+			left:  &FunctionCall{ID: "call", CallID: "call_lookup", Name: "lookup", Arguments: `{"city":"Paris"}`},
+			right: &FunctionCall{ID: "call", CallID: "call_lookup", Name: "lookup", Arguments: `{"city":"London"}`},
+		},
+		{
+			name:  "function output error flag",
+			left:  &FunctionCallOutput{ID: "output", CallID: "call_lookup", Name: "lookup", Output: "failed"},
+			right: &FunctionCallOutput{ID: "output", CallID: "call_lookup", Name: "lookup", Output: "failed", IsError: true},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			left := NewChatContext()
+			left.Items = []ChatItem{tt.left}
+			right := NewChatContext()
+			right.Items = []ChatItem{tt.right}
+
+			if left.IsEquivalent(right) {
+				t.Fatal("IsEquivalent() = true, want false")
+			}
+		})
+	}
+}
+
 func TestChatContextToOpenAIProviderFormatGroupsToolCallsWithOutputs(t *testing.T) {
 	ctx := NewChatContext()
 	groupID := "assistant-turn"

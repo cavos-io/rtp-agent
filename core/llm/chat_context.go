@@ -1,6 +1,7 @@
 package llm
 
 import (
+	"reflect"
 	"time"
 )
 
@@ -225,6 +226,42 @@ func (c *ChatContext) Merge(other *ChatContext, options ...ChatContextMergeOptio
 			existingIDs[item.GetID()] = struct{}{}
 		}
 	}
+}
+
+func (c *ChatContext) IsEquivalent(other *ChatContext) bool {
+	if c == other {
+		return true
+	}
+	if other == nil || len(c.Items) != len(other.Items) {
+		return false
+	}
+
+	for i, item := range c.Items {
+		otherItem := other.Items[i]
+		if item.GetID() != otherItem.GetID() || item.GetType() != otherItem.GetType() {
+			return false
+		}
+
+		switch a := item.(type) {
+		case *ChatMessage:
+			b, ok := otherItem.(*ChatMessage)
+			if !ok || a.Role != b.Role || a.Interrupted != b.Interrupted || !reflect.DeepEqual(a.Content, b.Content) {
+				return false
+			}
+		case *FunctionCall:
+			b, ok := otherItem.(*FunctionCall)
+			if !ok || a.Name != b.Name || a.CallID != b.CallID || a.Arguments != b.Arguments {
+				return false
+			}
+		case *FunctionCallOutput:
+			b, ok := otherItem.(*FunctionCallOutput)
+			if !ok || a.Name != b.Name || a.CallID != b.CallID || a.Output != b.Output || a.IsError != b.IsError {
+				return false
+			}
+		}
+	}
+
+	return true
 }
 
 func (c *ChatContext) FindInsertionIndex(createdAt time.Time) int {
