@@ -187,39 +187,157 @@ func (c *ChatContext) FindInsertionIndex(createdAt time.Time) int {
 func (c *ChatContext) ToProviderFormat(format string) ([]map[string]any, any) {
 	if format == "openai" {
 		messages := make([]map[string]any, 0)
-		for _, item := range c.Items {
-			switch it := item.(type) {
-			case *ChatMessage:
-				msg := map[string]any{
-					"role":    string(it.Role),
-					"content": it.TextContent(),
+		for _, group := range groupOpenAIToolCalls(c.Items) {
+			if group.message == nil && len(group.toolCalls) == 0 && len(group.toolOutputs) == 0 {
+				continue
+			}
+
+			var msg map[string]any
+			if group.message != nil {
+				msg = openAIChatMessage(group.message)
+			} else {
+				msg = map[string]any{"role": "assistant"}
+			}
+
+			if len(group.toolCalls) > 0 {
+				toolCalls := make([]map[string]any, 0, len(group.toolCalls))
+				for _, toolCall := range group.toolCalls {
+					toolCalls = append(toolCalls, openAIToolCall(toolCall))
 				}
-				messages = append(messages, msg)
-			case *FunctionCall:
-				msg := map[string]any{
-					"role": "assistant",
-					"tool_calls": []map[string]any{
-						{
-							"id":   it.CallID,
-							"type": "function",
-							"function": map[string]any{
-								"name":      it.Name,
-								"arguments": it.Arguments,
-							},
-						},
-					},
-				}
-				messages = append(messages, msg)
-			case *FunctionCallOutput:
-				msg := map[string]any{
-					"role":         "tool",
-					"tool_call_id": it.CallID,
-					"content":      it.Output,
-				}
-				messages = append(messages, msg)
+				msg["tool_calls"] = toolCalls
+			}
+			messages = append(messages, msg)
+
+			for _, toolOutput := range group.toolOutputs {
+				messages = append(messages, openAIToolOutput(toolOutput))
 			}
 		}
 		return messages, nil
 	}
 	return nil, nil
+}
+
+type openAIToolCallGroup struct {
+	message     *ChatMessage
+	toolCalls   []*FunctionCall
+	toolOutputs []*FunctionCallOutput
+}
+
+func groupOpenAIToolCalls(items []ChatItem) []*openAIToolCallGroup {
+	groups := make([]*openAIToolCallGroup, 0)
+	groupsByID := make(map[string]*openAIToolCallGroup)
+	toolOutputs := make([]*FunctionCallOutput, 0)
+
+	addToGroup := func(groupID string, item ChatItem) {
+		group := groupsByID[groupID]
+		if group == nil {
+			group = &openAIToolCallGroup{}
+			groupsByID[groupID] = group
+			groups = append(groups, group)
+		}
+		group.add(item)
+	}
+
+	for _, item := range items {
+		switch it := item.(type) {
+		case *ChatMessage:
+			if it.Role == ChatRoleAssistant {
+				addToGroup(openAIToolGroupID(it.ID, nil), it)
+			} else {
+				addToGroup(it.ID, it)
+			}
+		case *FunctionCall:
+			addToGroup(openAIToolGroupID(it.ID, it.GroupID), it)
+		case *FunctionCallOutput:
+			toolOutputs = append(toolOutputs, it)
+		}
+	}
+
+	groupsByCallID := make(map[string]*openAIToolCallGroup)
+	for _, group := range groups {
+		for _, toolCall := range group.toolCalls {
+			groupsByCallID[toolCall.CallID] = group
+		}
+	}
+	for _, toolOutput := range toolOutputs {
+		if group := groupsByCallID[toolOutput.CallID]; group != nil {
+			group.add(toolOutput)
+		}
+	}
+	for _, group := range groups {
+		group.removeInvalidToolItems()
+	}
+	return groups
+}
+
+func (g *openAIToolCallGroup) add(item ChatItem) {
+	switch it := item.(type) {
+	case *ChatMessage:
+		g.message = it
+	case *FunctionCall:
+		g.toolCalls = append(g.toolCalls, it)
+	case *FunctionCallOutput:
+		g.toolOutputs = append(g.toolOutputs, it)
+	}
+}
+
+func (g *openAIToolCallGroup) removeInvalidToolItems() {
+	if len(g.toolCalls) == len(g.toolOutputs) {
+		return
+	}
+
+	outputsByCallID := make(map[string]*FunctionCallOutput)
+	for _, toolOutput := range g.toolOutputs {
+		outputsByCallID[toolOutput.CallID] = toolOutput
+	}
+
+	validCalls := make([]*FunctionCall, 0, len(g.toolCalls))
+	validOutputs := make([]*FunctionCallOutput, 0, len(g.toolOutputs))
+	for _, toolCall := range g.toolCalls {
+		if toolOutput := outputsByCallID[toolCall.CallID]; toolOutput != nil {
+			validCalls = append(validCalls, toolCall)
+			validOutputs = append(validOutputs, toolOutput)
+		}
+	}
+
+	g.toolCalls = validCalls
+	g.toolOutputs = validOutputs
+}
+
+func openAIToolGroupID(itemID string, groupID *string) string {
+	if groupID != nil && *groupID != "" {
+		return *groupID
+	}
+	for i, r := range itemID {
+		if r == '/' {
+			return itemID[:i]
+		}
+	}
+	return itemID
+}
+
+func openAIChatMessage(msg *ChatMessage) map[string]any {
+	return map[string]any{
+		"role":    string(msg.Role),
+		"content": msg.TextContent(),
+	}
+}
+
+func openAIToolCall(toolCall *FunctionCall) map[string]any {
+	return map[string]any{
+		"id":   toolCall.CallID,
+		"type": "function",
+		"function": map[string]any{
+			"name":      toolCall.Name,
+			"arguments": toolCall.Arguments,
+		},
+	}
+}
+
+func openAIToolOutput(toolOutput *FunctionCallOutput) map[string]any {
+	return map[string]any{
+		"role":         "tool",
+		"tool_call_id": toolOutput.CallID,
+		"content":      toolOutput.Output,
+	}
 }

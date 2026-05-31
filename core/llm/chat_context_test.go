@@ -146,3 +146,62 @@ func TestChatContextMergePreservesCreatedAtOrderAndSkipsDuplicates(t *testing.T)
 		t.Fatalf("Merge() item IDs = %q, want %q", got, want)
 	}
 }
+
+func TestChatContextToOpenAIProviderFormatGroupsToolCallsWithOutputs(t *testing.T) {
+	ctx := NewChatContext()
+	groupID := "assistant-turn"
+	ctx.Items = []ChatItem{
+		&ChatMessage{ID: groupID, Role: ChatRoleAssistant, Content: []ChatContent{{Text: "checking"}}},
+		&FunctionCall{ID: groupID + "/tool-1", CallID: "call_lookup", Name: "lookup", Arguments: `{"city":"Paris"}`},
+		&FunctionCall{ID: groupID + "/tool-2", CallID: "call_weather", Name: "weather", Arguments: `{"city":"Paris"}`},
+		&FunctionCallOutput{ID: "lookup-output", CallID: "call_lookup", Name: "lookup", Output: "Paris"},
+		&FunctionCallOutput{ID: "weather-output", CallID: "call_weather", Name: "weather", Output: "sunny"},
+	}
+
+	messages, extra := ctx.ToProviderFormat("openai")
+
+	if extra != nil {
+		t.Fatalf("ToProviderFormat() extra = %#v, want nil", extra)
+	}
+	if len(messages) != 3 {
+		t.Fatalf("len(messages) = %d, want 3: %#v", len(messages), messages)
+	}
+	assistant := messages[0]
+	if assistant["role"] != "assistant" || assistant["content"] != "checking" {
+		t.Fatalf("assistant message = %#v", assistant)
+	}
+	toolCalls, ok := assistant["tool_calls"].([]map[string]any)
+	if !ok {
+		t.Fatalf("assistant tool_calls = %#v, want []map[string]any", assistant["tool_calls"])
+	}
+	if len(toolCalls) != 2 {
+		t.Fatalf("len(tool_calls) = %d, want 2", len(toolCalls))
+	}
+	if toolCalls[0]["id"] != "call_lookup" || toolCalls[1]["id"] != "call_weather" {
+		t.Fatalf("tool call IDs = %#v", toolCalls)
+	}
+	if messages[1]["role"] != "tool" || messages[1]["tool_call_id"] != "call_lookup" || messages[1]["content"] != "Paris" {
+		t.Fatalf("first tool output = %#v", messages[1])
+	}
+	if messages[2]["role"] != "tool" || messages[2]["tool_call_id"] != "call_weather" || messages[2]["content"] != "sunny" {
+		t.Fatalf("second tool output = %#v", messages[2])
+	}
+}
+
+func TestChatContextToOpenAIProviderFormatFiltersUnmatchedToolItems(t *testing.T) {
+	ctx := NewChatContext()
+	ctx.Items = []ChatItem{
+		&ChatMessage{ID: "user", Role: ChatRoleUser, Content: []ChatContent{{Text: "hello"}}},
+		&FunctionCall{ID: "orphan-call", CallID: "call_missing_output", Name: "lookup", Arguments: `{}`},
+		&FunctionCallOutput{ID: "orphan-output", CallID: "call_missing_call", Name: "lookup", Output: "ignored"},
+	}
+
+	messages, _ := ctx.ToProviderFormat("openai")
+
+	if len(messages) != 1 {
+		t.Fatalf("len(messages) = %d, want 1: %#v", len(messages), messages)
+	}
+	if messages[0]["role"] != "user" || messages[0]["content"] != "hello" {
+		t.Fatalf("message = %#v, want user hello", messages[0])
+	}
+}
