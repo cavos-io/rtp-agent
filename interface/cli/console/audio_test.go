@@ -1,10 +1,12 @@
 package console
 
 import (
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/cavos-io/conversation-worker/model"
+	"github.com/gordonklaus/portaudio"
 )
 
 func TestAudioIOInputAttachmentControlsMicFrames(t *testing.T) {
@@ -78,6 +80,53 @@ func TestAudioIOPushMicSamplesEmitsTenMillisecondFrames(t *testing.T) {
 	case frame := <-audioIO.MicFrames():
 		t.Fatalf("unexpected extra frame: %#v", frame)
 	default:
+	}
+}
+
+func TestSelectConsoleAudioDeviceSupportsIDAndNameSubstring(t *testing.T) {
+	devices := []*portaudio.DeviceInfo{
+		{Index: 0, Name: "Built-in Microphone", MaxInputChannels: 1},
+		{Index: 1, Name: "Built-in Speakers", MaxOutputChannels: 2},
+		{Index: 2, Name: "USB Headset", MaxInputChannels: 1, MaxOutputChannels: 2},
+	}
+
+	input, err := selectConsoleAudioDevice(devices, "usb headset", devices[0], true)
+	if err != nil {
+		t.Fatalf("selectConsoleAudioDevice(input by name) error = %v", err)
+	}
+	if input.Index != 2 {
+		t.Fatalf("input device index = %d, want 2", input.Index)
+	}
+
+	output, err := selectConsoleAudioDevice(devices, "1", devices[2], false)
+	if err != nil {
+		t.Fatalf("selectConsoleAudioDevice(output by ID) error = %v", err)
+	}
+	if output.Index != 1 {
+		t.Fatalf("output device index = %d, want 1", output.Index)
+	}
+
+	defaultInput, err := selectConsoleAudioDevice(devices, "", devices[0], true)
+	if err != nil {
+		t.Fatalf("selectConsoleAudioDevice(default input) error = %v", err)
+	}
+	if defaultInput.Index != 0 {
+		t.Fatalf("default input device index = %d, want 0", defaultInput.Index)
+	}
+}
+
+func TestSelectConsoleAudioDeviceRejectsWrongDirection(t *testing.T) {
+	devices := []*portaudio.DeviceInfo{
+		{Index: 0, Name: "Built-in Microphone", MaxInputChannels: 1},
+		{Index: 1, Name: "Built-in Speakers", MaxOutputChannels: 2},
+	}
+
+	_, err := selectConsoleAudioDevice(devices, "1", devices[0], true)
+	if err == nil {
+		t.Fatal("selectConsoleAudioDevice() error = nil, want wrong-direction error")
+	}
+	if !strings.Contains(err.Error(), "input") {
+		t.Fatalf("selectConsoleAudioDevice() error = %q, want input context", err)
 	}
 }
 

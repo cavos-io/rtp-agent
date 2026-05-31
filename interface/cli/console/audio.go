@@ -3,6 +3,8 @@ package console
 import (
 	"context"
 	"fmt"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -30,6 +32,8 @@ type AudioIO struct {
 	sampleRate      int
 	channels        int
 	framesPerBuffer int
+	inputDevice     string
+	outputDevice    string
 
 	speakerBuffer []int16
 }
@@ -43,6 +47,13 @@ func NewAudioIO() *AudioIO {
 		framesPerBuffer: 2400, // 100ms at 24kHz, chunked into 10ms frames.
 		inputAttached:   true,
 	}
+}
+
+func (a *AudioIO) SetDevices(inputDevice, outputDevice string) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.inputDevice = inputDevice
+	a.outputDevice = outputDevice
 }
 
 func (a *AudioIO) Start(ctx context.Context) error {
@@ -60,7 +71,40 @@ func (a *AudioIO) Start(ctx context.Context) error {
 
 	a.ctx, a.cancel = context.WithCancel(ctx)
 
-	stream, err := portaudio.OpenDefaultStream(a.channels, a.channels, float64(a.sampleRate), a.framesPerBuffer,
+	devices, err := portaudio.Devices()
+	if err != nil {
+		portaudio.Terminate()
+		return fmt.Errorf("failed to list audio devices: %w", err)
+	}
+	defaultInput, _ := portaudio.DefaultInputDevice()
+	defaultOutput, _ := portaudio.DefaultOutputDevice()
+	inputDevice, err := selectConsoleAudioDevice(devices, a.inputDevice, defaultInput, true)
+	if err != nil {
+		portaudio.Terminate()
+		return err
+	}
+	outputDevice, err := selectConsoleAudioDevice(devices, a.outputDevice, defaultOutput, false)
+	if err != nil {
+		portaudio.Terminate()
+		return err
+	}
+
+	params := portaudio.StreamParameters{
+		Input: portaudio.StreamDeviceParameters{
+			Device:   inputDevice,
+			Channels: a.channels,
+			Latency:  inputDevice.DefaultLowInputLatency,
+		},
+		Output: portaudio.StreamDeviceParameters{
+			Device:   outputDevice,
+			Channels: a.channels,
+			Latency:  outputDevice.DefaultLowOutputLatency,
+		},
+		SampleRate:      float64(a.sampleRate),
+		FramesPerBuffer: a.framesPerBuffer,
+	}
+
+	stream, err := portaudio.OpenStream(params,
 		func(in, out []int16) {
 			a.pushMicSamples(in)
 			a.fillSpeakerOutput(out)
@@ -83,6 +127,59 @@ func (a *AudioIO) Start(ctx context.Context) error {
 	go a.receiveLoop()
 
 	return nil
+}
+
+func selectConsoleAudioDevice(devices []*portaudio.DeviceInfo, request string, defaultDevice *portaudio.DeviceInfo, input bool) (*portaudio.DeviceInfo, error) {
+	kind := "output"
+	if input {
+		kind = "input"
+	}
+
+	if request == "" {
+		if defaultDevice == nil {
+			return nil, fmt.Errorf("no default %s device available", kind)
+		}
+		if !consoleAudioDeviceSupports(defaultDevice, input) {
+			return nil, fmt.Errorf("default %s device %q does not support %s", kind, defaultDevice.Name, kind)
+		}
+		return defaultDevice, nil
+	}
+
+	var match *portaudio.DeviceInfo
+	if index, err := strconv.Atoi(request); err == nil {
+		for _, device := range devices {
+			if device != nil && device.Index == index {
+				match = device
+				break
+			}
+		}
+	} else {
+		request = strings.ToLower(request)
+		for _, device := range devices {
+			if device != nil && strings.Contains(strings.ToLower(device.Name), request) {
+				match = device
+				break
+			}
+		}
+	}
+
+	if match == nil {
+		return nil, fmt.Errorf("%s device %q was not found", kind, request)
+	}
+	if !consoleAudioDeviceSupports(match, input) {
+		return nil, fmt.Errorf("%s device %q does not support %s", kind, match.Name, kind)
+	}
+	return match, nil
+}
+
+func consoleAudioDeviceSupports(device *portaudio.DeviceInfo, input bool) bool {
+	if device == nil {
+		return false
+	}
+	if input {
+		return device.MaxInputChannels > 0
+	}
+	return device.MaxOutputChannels > 0
 }
 
 func (a *AudioIO) Stop() error {
