@@ -3,6 +3,7 @@ package cli
 import (
 	"bytes"
 	"io"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -111,6 +112,33 @@ func TestParseConsoleArgsSupportsLogLevel(t *testing.T) {
 	}
 	if args.LogLevel != "TRACE" {
 		t.Fatalf("LogLevel = %q, want TRACE", args.LogLevel)
+	}
+}
+
+func TestApplyDevModeEnvForReferenceSubcommands(t *testing.T) {
+	t.Setenv("LIVEKIT_DEV_MODE", "")
+
+	if err := applyDevModeEnv([]string{"worker", "console"}); err != nil {
+		t.Fatalf("applyDevModeEnv(console) error = %v", err)
+	}
+	if got := os.Getenv("LIVEKIT_DEV_MODE"); got != "1" {
+		t.Fatalf("LIVEKIT_DEV_MODE after console = %q, want 1", got)
+	}
+
+	t.Setenv("LIVEKIT_DEV_MODE", "")
+	if err := applyDevModeEnv([]string{"worker", "dev"}); err != nil {
+		t.Fatalf("applyDevModeEnv(dev) error = %v", err)
+	}
+	if got := os.Getenv("LIVEKIT_DEV_MODE"); got != "1" {
+		t.Fatalf("LIVEKIT_DEV_MODE after dev = %q, want 1", got)
+	}
+
+	t.Setenv("LIVEKIT_DEV_MODE", "")
+	if err := applyDevModeEnv([]string{"worker", "start"}); err != nil {
+		t.Fatalf("applyDevModeEnv(start) error = %v", err)
+	}
+	if got := os.Getenv("LIVEKIT_DEV_MODE"); got != "" {
+		t.Fatalf("LIVEKIT_DEV_MODE after start = %q, want unchanged empty", got)
 	}
 }
 

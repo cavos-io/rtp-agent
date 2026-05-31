@@ -130,6 +130,10 @@ func RunApp(server *worker.AgentServer) {
 		printUsage()
 		os.Exit(1)
 	}
+	if err := applyDevModeEnv(os.Args); err != nil {
+		logger.Logger.Errorw("Failed to set dev mode environment", err)
+		os.Exit(1)
+	}
 
 	switch os.Args[1] {
 	case "start":
@@ -148,6 +152,18 @@ func RunApp(server *worker.AgentServer) {
 	default:
 		printUsage()
 		os.Exit(1)
+	}
+}
+
+func applyDevModeEnv(argv []string) error {
+	if len(argv) < 2 {
+		return nil
+	}
+	switch argv[1] {
+	case "console", "dev":
+		return os.Setenv("LIVEKIT_DEV_MODE", "1")
+	default:
+		return nil
 	}
 }
 
