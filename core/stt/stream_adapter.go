@@ -30,7 +30,7 @@ func (a *StreamAdapter) Label() string {
 }
 
 func (a *StreamAdapter) Capabilities() STTCapabilities {
-	return STTCapabilities{Streaming: true}
+	return STTCapabilities{Streaming: true, OfflineRecognize: true}
 }
 
 func (a *StreamAdapter) Recognize(ctx context.Context, frames []*model.AudioFrame, language string) (*SpeechEvent, error) {

@@ -24,6 +24,23 @@ func TestStreamAdapterPropagatesVADStartError(t *testing.T) {
 	}
 }
 
+func TestStreamAdapterCapabilitiesMatchReference(t *testing.T) {
+	caps := NewStreamAdapter(&fakeStreamAdapterSTT{}, &fakeStreamAdapterVAD{}).Capabilities()
+
+	if !caps.Streaming {
+		t.Fatal("Streaming = false, want true")
+	}
+	if caps.InterimResults {
+		t.Fatal("InterimResults = true, want false")
+	}
+	if caps.Diarization {
+		t.Fatal("Diarization = true, want false")
+	}
+	if !caps.OfflineRecognize {
+		t.Fatal("OfflineRecognize = false, want true because Recognize delegates to wrapped STT")
+	}
+}
+
 func TestStreamAdapterReturnsEOFWhenVADCompletes(t *testing.T) {
 	stream, err := NewStreamAdapter(&fakeStreamAdapterSTT{}, &fakeStreamAdapterVAD{
 		stream: &fakeStreamAdapterVADStream{nextErr: io.EOF},
