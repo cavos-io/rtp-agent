@@ -306,14 +306,26 @@ type RealtimeEvent struct {
 // Fallback Adapter
 
 type FallbackAdapter struct {
-	llms []LLM
+	llms             []LLM
+	retryOnChunkSent bool
+}
+
+type FallbackAdapterOptions struct {
+	RetryOnChunkSent bool
 }
 
 func NewFallbackAdapter(llms []LLM) *FallbackAdapter {
+	return NewFallbackAdapterWithOptions(llms, FallbackAdapterOptions{})
+}
+
+func NewFallbackAdapterWithOptions(llms []LLM, options FallbackAdapterOptions) *FallbackAdapter {
 	if len(llms) == 0 {
 		panic("FallbackAdapter requires at least one LLM")
 	}
-	return &FallbackAdapter{llms: llms}
+	return &FallbackAdapter{
+		llms:             llms,
+		retryOnChunkSent: options.RetryOnChunkSent,
+	}
 }
 
 func (f *FallbackAdapter) Chat(ctx context.Context, chatCtx *ChatContext, opts ...ChatOption) (LLMStream, error) {
@@ -364,7 +376,7 @@ func (s *fallbackLLMStream) Next() (*ChatChunk, error) {
 			}
 			return chunk, nil
 		}
-		if errors.Is(err, io.EOF) || s.outputSent || s.activeIndex+1 >= len(s.adapter.llms) {
+		if errors.Is(err, io.EOF) || (s.outputSent && !s.adapter.retryOnChunkSent) || s.activeIndex+1 >= len(s.adapter.llms) {
 			return nil, err
 		}
 

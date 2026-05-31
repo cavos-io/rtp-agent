@@ -61,6 +61,40 @@ func TestFallbackAdapterDoesNotRetryAfterChunkSent(t *testing.T) {
 	}
 }
 
+func TestFallbackAdapterRetriesAfterChunkSentWhenEnabled(t *testing.T) {
+	firstErr := errors.New("primary stream failed")
+	adapter := NewFallbackAdapterWithOptions([]LLM{
+		&fakeFallbackLLM{stream: &fakeFallbackStream{events: []fakeFallbackEvent{
+			{chunk: &ChatChunk{Delta: &ChoiceDelta{Content: "partial"}}},
+			{err: firstErr},
+		}}},
+		&fakeFallbackLLM{stream: &fakeFallbackStream{events: []fakeFallbackEvent{
+			{chunk: &ChatChunk{Delta: &ChoiceDelta{Content: "fallback"}}},
+		}}},
+	}, FallbackAdapterOptions{RetryOnChunkSent: true})
+
+	stream, err := adapter.Chat(context.Background(), NewChatContext())
+	if err != nil {
+		t.Fatalf("Chat returned error: %v", err)
+	}
+
+	chunk, err := stream.Next()
+	if err != nil {
+		t.Fatalf("first Next returned error: %v", err)
+	}
+	if got := chunk.Delta.Content; got != "partial" {
+		t.Fatalf("first chunk content = %q, want partial", got)
+	}
+
+	chunk, err = stream.Next()
+	if err != nil {
+		t.Fatalf("second Next returned error: %v", err)
+	}
+	if got := chunk.Delta.Content; got != "fallback" {
+		t.Fatalf("second chunk content = %q, want fallback", got)
+	}
+}
+
 func TestFallbackAdapterRetriesAfterUsageOnlyChunk(t *testing.T) {
 	firstErr := errors.New("primary stream failed")
 	adapter := NewFallbackAdapter([]LLM{
