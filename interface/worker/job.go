@@ -86,12 +86,16 @@ func (r *JobRequest) AgentName() string {
 	return r.Job.AgentName
 }
 
-func (r *JobRequest) Accept(args JobAcceptArguments) error {
-	if args.Identity == "" && r.Job != nil {
-		args.Identity = agentIdentityForJobID(r.Job.Id)
+func (r *JobRequest) Accept(args ...JobAcceptArguments) error {
+	acceptArgs := JobAcceptArguments{}
+	if len(args) > 0 {
+		acceptArgs = args[0]
+	}
+	if acceptArgs.Identity == "" && r.Job != nil {
+		acceptArgs.Identity = agentIdentityForJobID(r.Job.Id)
 	}
 	if r.acceptFnc != nil {
-		return r.acceptFnc(args)
+		return r.acceptFnc(acceptArgs)
 	}
 	return nil
 }

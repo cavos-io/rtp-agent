@@ -2141,6 +2141,33 @@ func TestJobRequestAcceptDefaultsIdentityBeforeCallback(t *testing.T) {
 	}
 }
 
+func TestJobRequestAcceptCanUseDefaultArguments(t *testing.T) {
+	var got JobAcceptArguments
+	req := &JobRequest{
+		Job: &livekit.Job{Id: "job_default_accept"},
+		acceptFnc: func(args JobAcceptArguments) error {
+			got = args
+			return nil
+		},
+	}
+
+	if err := req.Accept(); err != nil {
+		t.Fatalf("Accept() error = %v", err)
+	}
+	if got.Identity != "agent-job_default_accept" {
+		t.Fatalf("Accept() Identity = %q, want default identity", got.Identity)
+	}
+	if got.Name != "" {
+		t.Fatalf("Accept() Name = %q, want empty", got.Name)
+	}
+	if got.Metadata != "" {
+		t.Fatalf("Accept() Metadata = %q, want empty", got.Metadata)
+	}
+	if got.Attributes != nil {
+		t.Fatalf("Accept() Attributes = %#v, want nil", got.Attributes)
+	}
+}
+
 func TestValidateRunPreconditionsRequiresRTCSession(t *testing.T) {
 	server := NewAgentServer(WorkerOptions{
 		WSRL:      "wss://livekit.example",
