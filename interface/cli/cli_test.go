@@ -119,6 +119,26 @@ func TestRunConsoleListDevicesReturnsBeforeStartingConsole(t *testing.T) {
 	}
 }
 
+func TestFormatConsoleAudioDevicesListsInputsOutputsAndDefaults(t *testing.T) {
+	got := formatConsoleAudioDevices([]consoleAudioDevice{
+		{Index: 0, Name: "Built-in Mic", MaxInputChannels: 1},
+		{Index: 1, Name: "Built-in Speakers", MaxOutputChannels: 2},
+		{Index: 2, Name: "USB Headset", MaxInputChannels: 1, MaxOutputChannels: 2},
+	}, 0, 1)
+
+	for _, want := range []string{
+		"ID\tType\tName\tDefault",
+		"0\tInput\tBuilt-in Mic\tyes",
+		"1\tOutput\tBuilt-in Speakers\tyes",
+		"2\tInput\tUSB Headset\t",
+		"2\tOutput\tUSB Headset\t",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("formatConsoleAudioDevices() missing %q in:\n%s", want, got)
+		}
+	}
+}
+
 func TestCliArgsCarriesReferenceReloadState(t *testing.T) {
 	args := CliArgs{
 		LogLevel:    "debug",

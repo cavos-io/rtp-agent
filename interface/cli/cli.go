@@ -7,11 +7,13 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 
 	"github.com/cavos-io/conversation-worker/core/agent"
 	"github.com/cavos-io/conversation-worker/interface/worker"
 	"github.com/cavos-io/conversation-worker/library/logger"
+	"github.com/gordonklaus/portaudio"
 )
 
 type CliArgs struct {
@@ -46,8 +48,78 @@ type ConsoleArgs struct {
 	ListDevices  bool
 }
 
+type consoleAudioDevice struct {
+	Index             int
+	Name              string
+	MaxInputChannels  int
+	MaxOutputChannels int
+}
+
 var printConsoleAudioDevices = func() {
-	fmt.Println("Audio device listing is not available in this build.")
+	devices, defaultInput, defaultOutput, err := consoleAudioDevices()
+	if err != nil {
+		fmt.Printf("Failed to list audio devices: %v\n", err)
+		return
+	}
+	fmt.Print(formatConsoleAudioDevices(devices, defaultInput, defaultOutput))
+}
+
+var consoleAudioDevices = func() ([]consoleAudioDevice, int, int, error) {
+	if err := portaudio.Initialize(); err != nil {
+		return nil, -1, -1, err
+	}
+	defer portaudio.Terminate()
+
+	portaudioDevices, err := portaudio.Devices()
+	if err != nil {
+		return nil, -1, -1, err
+	}
+
+	defaultInput := -1
+	if device, err := portaudio.DefaultInputDevice(); err == nil && device != nil {
+		defaultInput = device.Index
+	}
+	defaultOutput := -1
+	if device, err := portaudio.DefaultOutputDevice(); err == nil && device != nil {
+		defaultOutput = device.Index
+	}
+
+	devices := make([]consoleAudioDevice, 0, len(portaudioDevices))
+	for _, device := range portaudioDevices {
+		if device == nil {
+			continue
+		}
+		devices = append(devices, consoleAudioDevice{
+			Index:             device.Index,
+			Name:              device.Name,
+			MaxInputChannels:  device.MaxInputChannels,
+			MaxOutputChannels: device.MaxOutputChannels,
+		})
+	}
+
+	return devices, defaultInput, defaultOutput, nil
+}
+
+func formatConsoleAudioDevices(devices []consoleAudioDevice, defaultInput, defaultOutput int) string {
+	var b strings.Builder
+	b.WriteString("ID\tType\tName\tDefault\n")
+	for _, device := range devices {
+		if device.MaxInputChannels > 0 {
+			defaultMarker := ""
+			if device.Index == defaultInput {
+				defaultMarker = "yes"
+			}
+			fmt.Fprintf(&b, "%d\tInput\t%s\t%s\n", device.Index, device.Name, defaultMarker)
+		}
+		if device.MaxOutputChannels > 0 {
+			defaultMarker := ""
+			if device.Index == defaultOutput {
+				defaultMarker = "yes"
+			}
+			fmt.Fprintf(&b, "%d\tOutput\t%s\t%s\n", device.Index, device.Name, defaultMarker)
+		}
+	}
+	return b.String()
 }
 
 func RunApp(server *worker.AgentServer) {
