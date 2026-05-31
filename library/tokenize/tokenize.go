@@ -210,10 +210,9 @@ func SplitWords(text string, ignorePunctuation bool, splitCharacter bool, retain
 		}
 	}
 
-	runes := []rune(text)
-	for pos, char := range runes {
+	for pos, char := range text {
 		if unicode.IsSpace(char) {
-			if retainFormat && strings.TrimSpace(string(runes[wordStart:pos])) == "" {
+			if retainFormat && strings.TrimSpace(text[wordStart:pos]) == "" {
 				continue
 			}
 			addCurrentWord(wordStart, pos)
@@ -226,12 +225,13 @@ func SplitWords(text string, ignorePunctuation bool, splitCharacter bool, retain
 			if wordStart < pos {
 				addCurrentWord(wordStart, pos)
 			}
-			addCurrentWord(pos, pos+1)
-			wordStart = pos + 1
+			nextPos := pos + len(string(char))
+			addCurrentWord(pos, nextPos)
+			wordStart = nextPos
 		}
 	}
 
-	addCurrentWord(wordStart, len(runes))
+	addCurrentWord(wordStart, len(text))
 
 	return words
 }

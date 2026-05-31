@@ -15,3 +15,22 @@ func TestSplitSentencesPreservesDecimalNumbers(t *testing.T) {
 		t.Fatalf("second token = %q, want next sentence", tokens[1])
 	}
 }
+
+func TestSplitWordsSplitsCharacterBasedUnicode(t *testing.T) {
+	tokens := SplitWords("你好 world", true, true, false)
+
+	got := make([]string, len(tokens))
+	for i, token := range tokens {
+		got[i] = token.Token
+	}
+
+	want := []string{"你", "好", "world"}
+	if len(got) != len(want) {
+		t.Fatalf("tokens = %#v, want %#v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("tokens = %#v, want %#v", got, want)
+		}
+	}
+}
