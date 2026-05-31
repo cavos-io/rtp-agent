@@ -162,11 +162,12 @@ func (w *streamAdapterWrapper) run() {
 				go func(f []*model.AudioFrame) {
 					res, err := w.adapter.stt.Recognize(w.ctx, f, w.language)
 					if err == nil && res != nil && len(res.Alternatives) > 0 && res.Alternatives[0].Text != "" {
-						res.Type = SpeechEventFinalTranscript
-
 						w.mu.Lock()
 						if !w.closed {
-							w.eventCh <- res
+							w.eventCh <- &SpeechEvent{
+								Type:         SpeechEventFinalTranscript,
+								Alternatives: []SpeechData{res.Alternatives[0]},
+							}
 						}
 						w.mu.Unlock()
 					} else if err != nil {
