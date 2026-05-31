@@ -74,3 +74,22 @@ func TestWatcherReloadStateIgnoresOverlappingReloads(t *testing.T) {
 		t.Fatal("beginReload() after Reloaded() = false, want true")
 	}
 }
+
+func TestWatcherBeginReloadIncrementsCliReloadCount(t *testing.T) {
+	args := &CliArgs{ReloadCount: 2}
+	watcher := NewWatcher(nil, nil, args)
+
+	if !watcher.beginReload() {
+		t.Fatal("beginReload() = false, want true")
+	}
+	if args.ReloadCount != 3 {
+		t.Fatalf("ReloadCount after beginReload() = %d, want 3", args.ReloadCount)
+	}
+
+	if watcher.beginReload() {
+		t.Fatal("overlapping beginReload() = true, want false")
+	}
+	if args.ReloadCount != 3 {
+		t.Fatalf("ReloadCount after overlapping beginReload() = %d, want unchanged 3", args.ReloadCount)
+	}
+}

@@ -21,13 +21,18 @@ type Watcher struct {
 	ctx       context.Context
 	cancel    context.CancelFunc
 	reloading bool
+	cliArgs   *CliArgs
 }
 
-func NewWatcher(paths []string, onChange func()) *Watcher {
-	return &Watcher{
+func NewWatcher(paths []string, onChange func(), cliArgs ...*CliArgs) *Watcher {
+	watcher := &Watcher{
 		paths:    paths,
 		onChange: onChange,
 	}
+	if len(cliArgs) > 0 {
+		watcher.cliArgs = cliArgs[0]
+	}
+	return watcher
 }
 
 func (w *Watcher) Start() error {
@@ -79,6 +84,9 @@ func (w *Watcher) beginReload() bool {
 		return false
 	}
 	w.reloading = true
+	if w.cliArgs != nil {
+		w.cliArgs.ReloadCount++
+	}
 	return true
 }
 
