@@ -35,6 +35,23 @@ func TestJobContextShutdownRunsCallbacks(t *testing.T) {
 	}
 }
 
+func TestJobContextShutdownDefaultsEmptyReason(t *testing.T) {
+	ctx := NewJobContext(&livekit.Job{Id: "job_shutdown_default_reason"}, "", "", "")
+	gotReason := "unset"
+
+	if err := ctx.AddShutdownCallback(func(reason string) {
+		gotReason = reason
+	}); err != nil {
+		t.Fatalf("AddShutdownCallback(reason) error = %v", err)
+	}
+
+	ctx.Shutdown()
+
+	if gotReason != "" {
+		t.Fatalf("shutdown callback reason = %q, want empty string", gotReason)
+	}
+}
+
 func TestJobContextShutdownRunsCallbacksOnce(t *testing.T) {
 	ctx := NewJobContext(&livekit.Job{Id: "job_shutdown_once"}, "", "", "")
 	callCount := 0

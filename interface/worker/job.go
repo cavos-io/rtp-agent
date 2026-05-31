@@ -442,7 +442,11 @@ func participantEntrypointMatchesKind(kinds []livekit.ParticipantInfo_Kind, kind
 	return false
 }
 
-func (c *JobContext) Shutdown(reason string) {
+func (c *JobContext) Shutdown(reasons ...string) {
+	reason := ""
+	if len(reasons) > 0 {
+		reason = reasons[0]
+	}
 	c.shutdownOnce.Do(func() {
 		for _, callback := range c.shutdownCallbacks {
 			callback(reason)
