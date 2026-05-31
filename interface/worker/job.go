@@ -32,6 +32,12 @@ type participantEntrypointRegistration struct {
 	kinds      []livekit.ParticipantInfo_Kind
 }
 
+var defaultParticipantEntrypointKinds = []livekit.ParticipantInfo_Kind{
+	livekit.ParticipantInfo_CONNECTOR,
+	livekit.ParticipantInfo_SIP,
+	livekit.ParticipantInfo_STANDARD,
+}
+
 type JobRequest struct {
 	Job *livekit.Job
 
@@ -228,6 +234,9 @@ func (c *JobContext) AddParticipantEntrypoint(entrypoint ParticipantEntrypoint, 
 		if reflect.ValueOf(registered.entrypoint).Pointer() == reflect.ValueOf(entrypoint).Pointer() {
 			return fmt.Errorf("participant entrypoints cannot be added more than once")
 		}
+	}
+	if len(kinds) == 0 {
+		kinds = defaultParticipantEntrypointKinds
 	}
 	c.participantEntrypoints = append(c.participantEntrypoints, participantEntrypointRegistration{
 		entrypoint: entrypoint,

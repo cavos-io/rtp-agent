@@ -179,8 +179,27 @@ func TestJobContextRunParticipantEntrypointsFiltersKinds(t *testing.T) {
 	}
 }
 
-func TestJobContextRunParticipantEntrypointsWithoutKindsRunsForAnyParticipant(t *testing.T) {
+func TestJobContextAddParticipantEntrypointDefaultsReferenceKinds(t *testing.T) {
 	ctx := NewJobContext(&livekit.Job{Id: "job_participant_run_all"}, "", "", "")
+	entrypoint := func(*JobContext, *livekit.ParticipantInfo) {}
+
+	if err := ctx.AddParticipantEntrypoint(entrypoint); err != nil {
+		t.Fatalf("AddParticipantEntrypoint() error = %v", err)
+	}
+
+	gotKinds := ctx.participantEntrypoints[0].kinds
+	wantKinds := []livekit.ParticipantInfo_Kind{
+		livekit.ParticipantInfo_CONNECTOR,
+		livekit.ParticipantInfo_SIP,
+		livekit.ParticipantInfo_STANDARD,
+	}
+	if !reflect.DeepEqual(gotKinds, wantKinds) {
+		t.Fatalf("default participant entrypoint kinds = %#v, want %#v", gotKinds, wantKinds)
+	}
+}
+
+func TestJobContextRunDefaultParticipantEntrypointsSkipsAgentParticipants(t *testing.T) {
+	ctx := NewJobContext(&livekit.Job{Id: "job_participant_run_default"}, "", "", "")
 	var calls []string
 
 	if err := ctx.AddParticipantEntrypoint(func(_ *JobContext, p *livekit.ParticipantInfo) {
@@ -188,13 +207,16 @@ func TestJobContextRunParticipantEntrypointsWithoutKindsRunsForAnyParticipant(t 
 	}); err != nil {
 		t.Fatalf("AddParticipantEntrypoint() error = %v", err)
 	}
-
 	ctx.runParticipantEntrypoints(&livekit.ParticipantInfo{
-		Identity: "participant-a",
+		Identity: "agent-a",
 		Kind:     livekit.ParticipantInfo_AGENT,
 	})
+	ctx.runParticipantEntrypoints(&livekit.ParticipantInfo{
+		Identity: "caller",
+		Kind:     livekit.ParticipantInfo_SIP,
+	})
 
-	want := []string{"participant-a"}
+	want := []string{"caller"}
 	if !reflect.DeepEqual(calls, want) {
 		t.Fatalf("participant entrypoint calls = %#v, want %#v", calls, want)
 	}
