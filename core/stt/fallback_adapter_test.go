@@ -42,6 +42,39 @@ func TestFallbackAdapterAggregatesProviderCapabilities(t *testing.T) {
 	}
 }
 
+func TestFallbackAdapterAggregatesAlignedTranscriptGranularity(t *testing.T) {
+	adapter := NewFallbackAdapter([]STT{
+		&metadataSTT{label: "primary", capabilities: STTCapabilities{
+			Streaming:         true,
+			AlignedTranscript: "word",
+		}},
+		&metadataSTT{label: "fallback", capabilities: STTCapabilities{
+			Streaming:         true,
+			AlignedTranscript: "chunk",
+		}},
+	})
+
+	if got := adapter.Capabilities().AlignedTranscript; got != "word" {
+		t.Fatalf("AlignedTranscript = %q, want primary provider granularity word", got)
+	}
+}
+
+func TestFallbackAdapterClearsAlignedTranscriptWhenAnyProviderLacksIt(t *testing.T) {
+	adapter := NewFallbackAdapter([]STT{
+		&metadataSTT{label: "primary", capabilities: STTCapabilities{
+			Streaming:         true,
+			AlignedTranscript: "word",
+		}},
+		&metadataSTT{label: "fallback", capabilities: STTCapabilities{
+			Streaming: true,
+		}},
+	})
+
+	if got := adapter.Capabilities().AlignedTranscript; got != "" {
+		t.Fatalf("AlignedTranscript = %q, want empty when any provider lacks aligned transcripts", got)
+	}
+}
+
 func TestFallbackAdapterRejectsNonStreamingProviderWithoutVAD(t *testing.T) {
 	defer func() {
 		if recover() == nil {

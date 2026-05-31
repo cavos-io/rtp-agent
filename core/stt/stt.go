@@ -35,10 +35,11 @@ type SpeechEvent struct {
 }
 
 type STTCapabilities struct {
-	Streaming        bool
-	InterimResults   bool
-	Diarization      bool
-	OfflineRecognize bool
+	Streaming         bool
+	InterimResults    bool
+	Diarization       bool
+	AlignedTranscript string
+	OfflineRecognize  bool
 }
 
 type STT interface {

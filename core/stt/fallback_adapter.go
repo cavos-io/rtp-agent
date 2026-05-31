@@ -60,11 +60,17 @@ func newFallbackAdapter(stts []STT, vad vad.VAD, options FallbackAdapterOptions)
 		InterimResults: true,
 		Diarization:    true,
 	}
+	if len(wrapped) > 0 {
+		capabilities.AlignedTranscript = wrapped[0].Capabilities().AlignedTranscript
+	}
 	for _, stt := range wrapped {
 		sttCapabilities := stt.Capabilities()
 		capabilities.Streaming = capabilities.Streaming && sttCapabilities.Streaming
 		capabilities.InterimResults = capabilities.InterimResults && sttCapabilities.InterimResults
 		capabilities.Diarization = capabilities.Diarization && sttCapabilities.Diarization
+		if sttCapabilities.AlignedTranscript == "" {
+			capabilities.AlignedTranscript = ""
+		}
 		capabilities.OfflineRecognize = capabilities.OfflineRecognize || sttCapabilities.OfflineRecognize
 	}
 
