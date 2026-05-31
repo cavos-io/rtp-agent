@@ -102,7 +102,9 @@ func (e *opusEncoder) Close() error {
 }
 
 type RoomOptions struct {
-	AudioTrackName string
+	AudioTrackName         string
+	PreConnectAudioTimeout time.Duration
+	DisablePreConnectAudio bool
 }
 
 type RoomIO struct {
@@ -125,8 +127,11 @@ func NewRoomIO(room *lksdk.Room, session *agent.AgentSession, opts RoomOptions) 
 	dec, _ := newOpusDecoder(48000, 1)
 	enc, _ := newOpusEncoder(48000, 1)
 
-	preConnectAudio := NewPreConnectAudioHandler(room, 5*time.Second)
-	preConnectAudio.Register()
+	var preConnectAudio *PreConnectAudioHandler
+	if !opts.DisablePreConnectAudio {
+		preConnectAudio = NewPreConnectAudioHandler(room, roomIOPreConnectAudioTimeout(opts))
+		preConnectAudio.Register()
+	}
 
 	rio := &RoomIO{
 		Room:            room,
@@ -144,6 +149,13 @@ func NewRoomIO(room *lksdk.Room, session *agent.AgentSession, opts RoomOptions) 
 	session.Assistant.PublishAudio = rio.PublishAudio
 
 	return rio
+}
+
+func roomIOPreConnectAudioTimeout(opts RoomOptions) time.Duration {
+	if opts.PreConnectAudioTimeout > 0 {
+		return opts.PreConnectAudioTimeout
+	}
+	return 3 * time.Second
 }
 
 func (rio *RoomIO) GetCallback() *lksdk.RoomCallback {
@@ -193,12 +205,14 @@ func (rio *RoomIO) handleAudioTrack(track *webrtc.TrackRemote) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 
-	if frames := rio.preConnectAudio.WaitForData(ctx, track.ID()); len(frames) > 0 {
-		for _, frame := range frames {
-			if rio.Recorder != nil {
-				rio.Recorder.RecordInput(frame)
+	if rio.preConnectAudio != nil {
+		if frames := rio.preConnectAudio.WaitForData(ctx, track.ID()); len(frames) > 0 {
+			for _, frame := range frames {
+				if rio.Recorder != nil {
+					rio.Recorder.RecordInput(frame)
+				}
+				rio.AgentSession.OnAudioFrame(context.Background(), frame)
 			}
-			rio.AgentSession.OnAudioFrame(context.Background(), frame)
 		}
 	}
 

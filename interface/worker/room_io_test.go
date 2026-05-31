@@ -2,8 +2,11 @@ package worker
 
 import (
 	"testing"
+	"time"
 
+	"github.com/cavos-io/conversation-worker/core/agent"
 	"github.com/livekit/protocol/livekit"
+	lksdk "github.com/livekit/server-sdk-go/v2"
 )
 
 func TestRoomIOAudioTrackPublicationOptionsUseReferenceDefaults(t *testing.T) {
@@ -33,5 +36,39 @@ func TestRoomIOAudioTrackPublicationOptionsPreserveConfiguredName(t *testing.T) 
 	}
 	if opts.Source != livekit.TrackSource_MICROPHONE {
 		t.Fatalf("audio track source = %v, want MICROPHONE", opts.Source)
+	}
+}
+
+func TestNewRoomIOUsesReferencePreConnectAudioTimeout(t *testing.T) {
+	rio := NewRoomIO(lksdk.NewRoom(nil), &agent.AgentSession{}, RoomOptions{})
+
+	if rio.preConnectAudio == nil {
+		t.Fatal("preConnectAudio = nil, want handler enabled by default")
+	}
+	if rio.preConnectAudio.timeout != 3*time.Second {
+		t.Fatalf("pre-connect audio timeout = %v, want 3s", rio.preConnectAudio.timeout)
+	}
+}
+
+func TestNewRoomIOPreservesConfiguredPreConnectAudioTimeout(t *testing.T) {
+	rio := NewRoomIO(lksdk.NewRoom(nil), &agent.AgentSession{}, RoomOptions{
+		PreConnectAudioTimeout: 750 * time.Millisecond,
+	})
+
+	if rio.preConnectAudio == nil {
+		t.Fatal("preConnectAudio = nil, want handler")
+	}
+	if rio.preConnectAudio.timeout != 750*time.Millisecond {
+		t.Fatalf("pre-connect audio timeout = %v, want 750ms", rio.preConnectAudio.timeout)
+	}
+}
+
+func TestNewRoomIOCanDisablePreConnectAudio(t *testing.T) {
+	rio := NewRoomIO(&lksdk.Room{}, &agent.AgentSession{}, RoomOptions{
+		DisablePreConnectAudio: true,
+	})
+
+	if rio.preConnectAudio != nil {
+		t.Fatalf("preConnectAudio = %#v, want nil when disabled", rio.preConnectAudio)
 	}
 }
