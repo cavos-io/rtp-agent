@@ -845,9 +845,52 @@ func openAIToolGroupID(itemID string, groupID *string) string {
 }
 
 func openAIChatMessage(msg *ChatMessage) map[string]any {
+	content := openAIChatContent(msg.Content)
 	return map[string]any{
 		"role":    string(msg.Role),
-		"content": msg.TextContent(),
+		"content": content,
+	}
+}
+
+func openAIChatContent(content []ChatContent) any {
+	parts := make([]map[string]any, 0)
+	textContent := ""
+	for _, item := range content {
+		if item.Text != "" {
+			if textContent != "" {
+				textContent += "\n"
+			}
+			textContent += item.Text
+		}
+		if item.Image != nil {
+			if part := openAIImageContent(item.Image); part != nil {
+				parts = append(parts, part)
+			}
+		}
+	}
+	if len(parts) == 0 {
+		return textContent
+	}
+	if textContent != "" {
+		parts = append(parts, map[string]any{
+			"type": "text",
+			"text": textContent,
+		})
+	}
+	return parts
+}
+
+func openAIImageContent(image *ImageContent) map[string]any {
+	url, ok := image.Image.(string)
+	if !ok || url == "" {
+		return nil
+	}
+	return map[string]any{
+		"type": "image_url",
+		"image_url": map[string]any{
+			"url":    url,
+			"detail": imageInferenceDetailOrDefault(image.InferenceDetail),
+		},
 	}
 }
 

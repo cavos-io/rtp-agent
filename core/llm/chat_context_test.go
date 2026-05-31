@@ -871,6 +871,46 @@ func TestChatContextToOpenAIProviderFormatGroupsToolCallsWithOutputs(t *testing.
 	}
 }
 
+func TestChatContextToOpenAIProviderFormatIncludesImageContent(t *testing.T) {
+	ctx := NewChatContext()
+	ctx.Items = []ChatItem{
+		&ChatMessage{
+			ID:   "user",
+			Role: ChatRoleUser,
+			Content: []ChatContent{
+				{Text: "describe this"},
+				{Image: &ImageContent{
+					Image:           "https://example.test/image.png",
+					InferenceDetail: "high",
+				}},
+			},
+		},
+	}
+
+	messages, _ := ctx.ToProviderFormat("openai")
+
+	if len(messages) != 1 {
+		t.Fatalf("len(messages) = %d, want 1: %#v", len(messages), messages)
+	}
+	content, ok := messages[0]["content"].([]map[string]any)
+	if !ok {
+		t.Fatalf("content = %#v, want []map[string]any", messages[0]["content"])
+	}
+	if len(content) != 2 {
+		t.Fatalf("len(content) = %d, want 2: %#v", len(content), content)
+	}
+	imageURL, ok := content[0]["image_url"].(map[string]any)
+	if !ok || content[0]["type"] != "image_url" {
+		t.Fatalf("image content = %#v, want image_url part", content[0])
+	}
+	if imageURL["url"] != "https://example.test/image.png" || imageURL["detail"] != "high" {
+		t.Fatalf("image_url = %#v", imageURL)
+	}
+	if content[1]["type"] != "text" || content[1]["text"] != "describe this" {
+		t.Fatalf("text content = %#v", content[1])
+	}
+}
+
 func TestChatContextToOpenAIProviderFormatFiltersUnmatchedToolItems(t *testing.T) {
 	ctx := NewChatContext()
 	ctx.Items = []ChatItem{
