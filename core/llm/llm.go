@@ -2,6 +2,8 @@ package llm
 
 import (
 	"context"
+	"errors"
+	"io"
 	"time"
 
 	"github.com/cavos-io/conversation-worker/library/telemetry"
@@ -307,18 +309,76 @@ type FallbackAdapter struct {
 }
 
 func NewFallbackAdapter(llms []LLM) *FallbackAdapter {
+	if len(llms) == 0 {
+		panic("FallbackAdapter requires at least one LLM")
+	}
 	return &FallbackAdapter{llms: llms}
 }
 
 func (f *FallbackAdapter) Chat(ctx context.Context, chatCtx *ChatContext, opts ...ChatOption) (LLMStream, error) {
-	// Simple sequential fallback implementation
+	stream := &fallbackLLMStream{
+		adapter: f,
+		ctx:     ctx,
+		chatCtx: chatCtx,
+		opts:    opts,
+	}
+	if err := stream.tryStart(0); err != nil {
+		return nil, err
+	}
+	return stream, nil
+}
+
+type fallbackLLMStream struct {
+	adapter *FallbackAdapter
+	ctx     context.Context
+	chatCtx *ChatContext
+	opts    []ChatOption
+
+	activeStream LLMStream
+	activeIndex  int
+	chunkSent    bool
+	closed       bool
+}
+
+func (s *fallbackLLMStream) tryStart(index int) error {
 	var lastErr error
-	for _, l := range f.llms {
-		stream, err := l.Chat(ctx, chatCtx, opts...)
+	for i := index; i < len(s.adapter.llms); i++ {
+		stream, err := s.adapter.llms[i].Chat(s.ctx, s.chatCtx, s.opts...)
 		if err == nil {
-			return stream, nil
+			s.activeStream = stream
+			s.activeIndex = i
+			return nil
 		}
 		lastErr = err
 	}
-	return nil, lastErr
+	return lastErr
+}
+
+func (s *fallbackLLMStream) Next() (*ChatChunk, error) {
+	for {
+		chunk, err := s.activeStream.Next()
+		if err == nil {
+			s.chunkSent = true
+			return chunk, nil
+		}
+		if errors.Is(err, io.EOF) || s.chunkSent || s.activeIndex+1 >= len(s.adapter.llms) {
+			return nil, err
+		}
+
+		_ = s.activeStream.Close()
+		if startErr := s.tryStart(s.activeIndex + 1); startErr != nil {
+			return nil, startErr
+		}
+	}
+}
+
+func (s *fallbackLLMStream) Close() error {
+	if s.closed {
+		return nil
+	}
+	s.closed = true
+	if s.activeStream == nil {
+		return nil
+	}
+	return s.activeStream.Close()
 }
