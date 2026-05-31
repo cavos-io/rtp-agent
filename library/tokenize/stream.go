@@ -114,6 +114,10 @@ func (s *BufferedTokenStream) flushLocked() {
 }
 
 func (s *BufferedTokenStream) Close() error {
+	return s.EndInput()
+}
+
+func (s *BufferedTokenStream) EndInput() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -123,6 +127,21 @@ func (s *BufferedTokenStream) Close() error {
 
 	s.flushLocked()
 
+	s.closed = true
+	close(s.eventCh)
+	return nil
+}
+
+func (s *BufferedTokenStream) AClose() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.closed {
+		return nil
+	}
+
+	s.inBuf = ""
+	s.outBuf = ""
 	s.closed = true
 	close(s.eventCh)
 	return nil

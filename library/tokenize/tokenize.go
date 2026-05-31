@@ -23,6 +23,8 @@ type SentenceTokenizer interface {
 type SentenceStream interface {
 	PushText(text string) error
 	Flush() error
+	EndInput() error
+	AClose() error
 	Close() error
 	Next() (*TokenData, error)
 }
@@ -35,6 +37,8 @@ type WordTokenizer interface {
 type WordStream interface {
 	PushText(text string) error
 	Flush() error
+	EndInput() error
+	AClose() error
 	Close() error
 	Next() (*TokenData, error)
 }
