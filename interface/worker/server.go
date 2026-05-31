@@ -17,6 +17,8 @@ import (
 	workeripc "github.com/cavos-io/conversation-worker/interface/worker/ipc"
 	"github.com/cavos-io/conversation-worker/library/logger"
 	mathutil "github.com/cavos-io/conversation-worker/library/math"
+	"github.com/go-jose/go-jose/v3"
+	"github.com/go-jose/go-jose/v3/jwt"
 	"github.com/gorilla/websocket"
 	"github.com/livekit/protocol/auth"
 	"github.com/livekit/protocol/livekit"
@@ -201,6 +203,33 @@ func runningJobInfoFromContext(jobCtx *JobContext) workeripc.RunningJobInfo {
 		WorkerID: jobCtx.WorkerID,
 		FakeJob:  jobCtx.fakeJob,
 	}
+}
+
+func refreshRunningJobTokenForReload(info workeripc.RunningJobInfo, apiSecret string, now time.Time) (workeripc.RunningJobInfo, error) {
+	if apiSecret == "" {
+		return workeripc.RunningJobInfo{}, fmt.Errorf("api_secret is required to reload jobs")
+	}
+	tok, err := jwt.ParseSigned(info.Token)
+	if err != nil {
+		return workeripc.RunningJobInfo{}, err
+	}
+	standardClaims := jwt.Claims{}
+	grants := auth.ClaimGrants{}
+	if err := tok.Claims([]byte(apiSecret), &standardClaims, &grants); err != nil {
+		return workeripc.RunningJobInfo{}, err
+	}
+	standardClaims.Expiry = jwt.NewNumericDate(now.Add(time.Hour))
+
+	signer, err := jose.NewSigner(jose.SigningKey{Algorithm: jose.HS256, Key: []byte(apiSecret)}, (&jose.SignerOptions{}).WithType("JWT"))
+	if err != nil {
+		return workeripc.RunningJobInfo{}, err
+	}
+	token, err := jwt.Signed(signer).Claims(standardClaims).Claims(grants).CompactSerialize()
+	if err != nil {
+		return workeripc.RunningJobInfo{}, err
+	}
+	info.Token = token
+	return info, nil
 }
 
 func (s *AgentServer) UpdateOptions(opts WorkerOptions) error {

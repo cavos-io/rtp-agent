@@ -11,6 +11,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/cavos-io/conversation-worker/interface/worker/ipc"
+	"github.com/go-jose/go-jose/v3/jwt"
 	"github.com/gorilla/websocket"
 	"github.com/livekit/protocol/auth"
 	"github.com/livekit/protocol/livekit"
@@ -500,6 +502,98 @@ func TestAgentServerActiveRunningJobsReturnsReferenceAssignmentSnapshots(t *test
 	}
 	if running.AcceptArguments.Attributes["tier"] != "gold" {
 		t.Fatalf("ActiveRunningJobs()[0].AcceptArguments.Attributes[tier] = %q, want gold", running.AcceptArguments.Attributes["tier"])
+	}
+}
+
+func TestRefreshRunningJobTokenForReloadPreservesAssignmentAndExtendsToken(t *testing.T) {
+	originalToken, err := auth.NewAccessToken("api-key", "api-secret").
+		SetIdentity("agent-a").
+		SetName("Agent A").
+		SetMetadata("metadata-a").
+		SetAttributes(map[string]string{"tier": "gold"}).
+		SetKind(livekit.ParticipantInfo_AGENT).
+		SetVideoGrant(&auth.VideoGrant{
+			RoomJoin: true,
+			Room:     "room-a",
+			Agent:    true,
+		}).
+		ToJWT()
+	if err != nil {
+		t.Fatalf("ToJWT() error = %v", err)
+	}
+	info := ipc.RunningJobInfo{
+		AcceptArguments: ipc.JobAcceptArguments{
+			Name:     "Agent A",
+			Identity: "agent-a",
+			Metadata: "metadata-a",
+			Attributes: map[string]string{
+				"tier": "gold",
+			},
+		},
+		Job:      &livekit.Job{Id: "job-a", Room: &livekit.Room{Name: "room-a"}},
+		URL:      "wss://livekit.example",
+		Token:    originalToken,
+		WorkerID: "worker-a",
+		FakeJob:  true,
+	}
+	now := time.Date(2026, 5, 31, 12, 0, 0, 0, time.UTC)
+
+	refreshed, err := refreshRunningJobTokenForReload(info, "api-secret", now)
+	if err != nil {
+		t.Fatalf("refreshRunningJobTokenForReload() error = %v", err)
+	}
+
+	if refreshed.AcceptArguments.Identity != "agent-a" {
+		t.Fatalf("AcceptArguments.Identity = %q, want agent-a", refreshed.AcceptArguments.Identity)
+	}
+	if refreshed.Job != info.Job {
+		t.Fatal("Job pointer was not preserved")
+	}
+	if refreshed.URL != "wss://livekit.example" {
+		t.Fatalf("URL = %q, want wss://livekit.example", refreshed.URL)
+	}
+	if refreshed.WorkerID != "worker-a" {
+		t.Fatalf("WorkerID = %q, want worker-a", refreshed.WorkerID)
+	}
+	if !refreshed.FakeJob {
+		t.Fatal("FakeJob = false, want true")
+	}
+	if refreshed.Token == "" || refreshed.Token == originalToken {
+		t.Fatal("Token was not refreshed")
+	}
+
+	tok, err := jwt.ParseSigned(refreshed.Token)
+	if err != nil {
+		t.Fatalf("ParseSigned() error = %v", err)
+	}
+	standardClaims := jwt.Claims{}
+	grants := auth.ClaimGrants{}
+	if err := tok.Claims([]byte("api-secret"), &standardClaims, &grants); err != nil {
+		t.Fatalf("refreshed token Claims() error = %v", err)
+	}
+	if standardClaims.Expiry == nil {
+		t.Fatal("refreshed token expiry = nil, want one-hour expiry")
+	}
+	if got := standardClaims.Expiry.Time(); !got.Equal(now.Add(time.Hour)) {
+		t.Fatalf("refreshed token expiry = %v, want %v", got, now.Add(time.Hour))
+	}
+	if grants.Identity != "agent-a" {
+		t.Fatalf("refreshed token identity = %q, want agent-a", grants.Identity)
+	}
+	if grants.Name != "Agent A" {
+		t.Fatalf("refreshed token name = %q, want Agent A", grants.Name)
+	}
+	if grants.Metadata != "metadata-a" {
+		t.Fatalf("refreshed token metadata = %q, want metadata-a", grants.Metadata)
+	}
+	if grants.Attributes["tier"] != "gold" {
+		t.Fatalf("refreshed token attribute tier = %q, want gold", grants.Attributes["tier"])
+	}
+	if grants.GetParticipantKind() != livekit.ParticipantInfo_AGENT {
+		t.Fatalf("refreshed token kind = %v, want AGENT", grants.GetParticipantKind())
+	}
+	if grants.Video == nil || !grants.Video.RoomJoin || !grants.Video.Agent || grants.Video.Room != "room-a" {
+		t.Fatalf("refreshed token video grant = %#v, want room-a agent join grant", grants.Video)
 	}
 }
 
