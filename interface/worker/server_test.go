@@ -1,8 +1,10 @@
 package worker
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"io"
 	"math"
 	"net/http"
 	"os"
@@ -915,6 +917,163 @@ func TestAgentServerHandleReloadMessageReportsAndReloadsJobs(t *testing.T) {
 	if resp, ok, err := server.handleReloadMessage(context.Background(), &ipc.PingRequest{}, 7, now); err != nil || ok || resp != nil {
 		t.Fatalf("handleReloadMessage(PingRequest) = (%#v, %v, %v), want (nil, false, nil)", resp, ok, err)
 	}
+}
+
+func TestAgentServerHandleReloadIPCMessageWritesResponse(t *testing.T) {
+	server := NewAgentServer(WorkerOptions{})
+	server.workerID = "worker-a"
+	jobCtx := NewJobContext(&livekit.Job{Id: "job-active", Room: &livekit.Room{Name: "room-active"}}, "wss://livekit.example", "api-key", "api-secret")
+	jobCtx.AcceptArguments = JobAcceptArguments{Identity: "agent-active"}
+	jobCtx.token = "active-token"
+	server.mu.Lock()
+	server.activeJobs[jobCtx.Job.Id] = jobCtx
+	server.mu.Unlock()
+
+	req, err := ipc.NewMessage(&ipc.ActiveJobsRequest{})
+	if err != nil {
+		t.Fatalf("NewMessage(ActiveJobsRequest): %v", err)
+	}
+	var input bytes.Buffer
+	if err := ipc.WriteMessage(&input, req); err != nil {
+		t.Fatalf("WriteMessage request: %v", err)
+	}
+	var output bytes.Buffer
+
+	handled, err := server.handleReloadIPCMessage(context.Background(), &input, &output, 9, time.Now())
+	if err != nil {
+		t.Fatalf("handleReloadIPCMessage() error = %v", err)
+	}
+	if !handled {
+		t.Fatal("handleReloadIPCMessage() handled = false, want true")
+	}
+
+	msg, err := ipc.ReadMessage(&output)
+	if err != nil {
+		t.Fatalf("ReadMessage response: %v", err)
+	}
+	if msg.Type != ipc.MessageTypeActiveJobsResponse {
+		t.Fatalf("response Type = %q, want %q", msg.Type, ipc.MessageTypeActiveJobsResponse)
+	}
+	payload, err := ipc.DecodePayload(msg)
+	if err != nil {
+		t.Fatalf("DecodePayload response: %v", err)
+	}
+	resp, ok := payload.(*ipc.ActiveJobsResponse)
+	if !ok {
+		t.Fatalf("response payload = %T, want *ActiveJobsResponse", payload)
+	}
+	if resp.ReloadCount != 9 {
+		t.Fatalf("ReloadCount = %d, want 9", resp.ReloadCount)
+	}
+	if len(resp.Jobs) != 1 || resp.Jobs[0].Job.GetId() != "job-active" {
+		t.Fatalf("Jobs = %#v, want active job", resp.Jobs)
+	}
+	if resp.Jobs[0].Token != "active-token" {
+		t.Fatalf("Jobs[0].Token = %q, want active-token", resp.Jobs[0].Token)
+	}
+}
+
+func TestAgentServerProcessReloadIPCMessagesUntilEOF(t *testing.T) {
+	server := NewAgentServer(WorkerOptions{})
+	server.workerID = "worker-a"
+	jobCtx := NewJobContext(&livekit.Job{Id: "job-active", Room: &livekit.Room{Name: "room-active"}}, "wss://livekit.example", "api-key", "api-secret")
+	jobCtx.token = "active-token"
+	server.mu.Lock()
+	server.activeJobs[jobCtx.Job.Id] = jobCtx
+	server.mu.Unlock()
+
+	req, err := ipc.NewMessage(&ipc.ActiveJobsRequest{})
+	if err != nil {
+		t.Fatalf("NewMessage(ActiveJobsRequest): %v", err)
+	}
+	var input bytes.Buffer
+	if err := ipc.WriteMessage(&input, req); err != nil {
+		t.Fatalf("WriteMessage first request: %v", err)
+	}
+	if err := ipc.WriteMessage(&input, req); err != nil {
+		t.Fatalf("WriteMessage second request: %v", err)
+	}
+	var output bytes.Buffer
+
+	if err := server.processReloadIPCMessages(context.Background(), &input, &output, 10, time.Now()); err != nil {
+		t.Fatalf("processReloadIPCMessages() error = %v", err)
+	}
+
+	for i := 0; i < 2; i++ {
+		msg, err := ipc.ReadMessage(&output)
+		if err != nil {
+			t.Fatalf("ReadMessage response %d: %v", i, err)
+		}
+		if msg.Type != ipc.MessageTypeActiveJobsResponse {
+			t.Fatalf("response %d Type = %q, want %q", i, msg.Type, ipc.MessageTypeActiveJobsResponse)
+		}
+		payload, err := ipc.DecodePayload(msg)
+		if err != nil {
+			t.Fatalf("DecodePayload response %d: %v", i, err)
+		}
+		resp, ok := payload.(*ipc.ActiveJobsResponse)
+		if !ok {
+			t.Fatalf("response %d payload = %T, want *ActiveJobsResponse", i, payload)
+		}
+		if resp.ReloadCount != 10 {
+			t.Fatalf("response %d ReloadCount = %d, want 10", i, resp.ReloadCount)
+		}
+		if len(resp.Jobs) != 1 || resp.Jobs[0].Job.GetId() != "job-active" {
+			t.Fatalf("response %d Jobs = %#v, want active job", i, resp.Jobs)
+		}
+	}
+	if _, err := ipc.ReadMessage(&output); err == nil {
+		t.Fatal("third ReadMessage response error = nil, want EOF")
+	}
+}
+
+func TestAgentServerRunReloadIPCSessionRequestsThenProcessesMessages(t *testing.T) {
+	server := NewAgentServer(WorkerOptions{})
+
+	peerReader, workerWriter := io.Pipe()
+	workerReader, peerWriter := io.Pipe()
+	sessionErr := make(chan error, 1)
+	go func() {
+		sessionErr <- server.runReloadIPCSession(context.Background(), struct {
+			io.Reader
+			io.Writer
+		}{
+			Reader: workerReader,
+			Writer: workerWriter,
+		}, 11, time.Now())
+	}()
+
+	msg, err := ipc.ReadMessage(peerReader)
+	if err != nil {
+		t.Fatalf("ReadMessage initial request: %v", err)
+	}
+	if msg.Type != ipc.MessageTypeReloadJobsRequest {
+		t.Fatalf("initial request Type = %q, want %q", msg.Type, ipc.MessageTypeReloadJobsRequest)
+	}
+	if err := ipc.WriteMessage(peerWriter, mustWorkerIPCMessage(t, &ipc.Reloaded{})); err != nil {
+		t.Fatalf("WriteMessage Reloaded: %v", err)
+	}
+	if err := peerWriter.Close(); err != nil {
+		t.Fatalf("close peer writer: %v", err)
+	}
+
+	select {
+	case err := <-sessionErr:
+		if err != nil {
+			t.Fatalf("runReloadIPCSession() error = %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("runReloadIPCSession() did not return after peer close")
+	}
+}
+
+func mustWorkerIPCMessage(t *testing.T, payload any) ipc.Message {
+	t.Helper()
+	msg, err := ipc.NewMessage(payload)
+	if err != nil {
+		t.Fatalf("NewMessage(%T): %v", payload, err)
+	}
+	return msg
 }
 
 func TestEmitWorkerStartedNotifiesHandlers(t *testing.T) {

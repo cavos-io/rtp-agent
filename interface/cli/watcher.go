@@ -2,6 +2,8 @@ package cli
 
 import (
 	"context"
+	"errors"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -24,6 +26,7 @@ type Watcher struct {
 	reloading  bool
 	cliArgs    *CliArgs
 	activeJobs []ipc.RunningJobInfo
+	reloadIPC  io.Writer
 }
 
 func NewWatcher(paths []string, onChange func(), cliArgs ...*CliArgs) *Watcher {
@@ -92,6 +95,24 @@ func (w *Watcher) beginReload() bool {
 	return true
 }
 
+func (w *Watcher) markReloading() bool {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.reloading {
+		return false
+	}
+	w.reloading = true
+	return true
+}
+
+func (w *Watcher) incrementReloadCount() {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.cliArgs != nil {
+		w.cliArgs.ReloadCount++
+	}
+}
+
 func (w *Watcher) Reloaded() {
 	w.mu.Lock()
 	defer w.mu.Unlock()
@@ -140,13 +161,80 @@ func (w *Watcher) handleReloadMessage(payload any) (any, bool) {
 	}
 }
 
+func (w *Watcher) handleReloadIPCMessage(r io.Reader, out io.Writer) (bool, error) {
+	msg, err := ipc.ReadMessage(r)
+	if err != nil {
+		return false, err
+	}
+	payload, err := ipc.DecodePayload(msg)
+	if err != nil {
+		return false, err
+	}
+
+	resp, handled := w.handleReloadMessage(payload)
+	if !handled || resp == nil {
+		return handled, nil
+	}
+
+	responseMsg, err := ipc.NewMessage(resp)
+	if err != nil {
+		return true, err
+	}
+	if err := ipc.WriteMessage(out, responseMsg); err != nil {
+		return true, err
+	}
+	return true, nil
+}
+
+func (w *Watcher) requestReloadJobs(out io.Writer) error {
+	msg, err := ipc.NewMessage(&ipc.ReloadJobsRequest{})
+	if err != nil {
+		return err
+	}
+	return ipc.WriteMessage(out, msg)
+}
+
+func (w *Watcher) requestActiveJobs(out io.Writer) error {
+	msg, err := ipc.NewMessage(&ipc.ActiveJobsRequest{})
+	if err != nil {
+		return err
+	}
+	return ipc.WriteMessage(out, msg)
+}
+
+func (w *Watcher) processReloadIPCMessages(r io.Reader, out io.Writer) error {
+	for {
+		_, err := w.handleReloadIPCMessage(r, out)
+		if err == nil {
+			continue
+		}
+		if errors.Is(err, io.EOF) {
+			return nil
+		}
+		return err
+	}
+}
+
+func (w *Watcher) runReloadIPCSession(rw io.ReadWriter) error {
+	if err := w.requestReloadJobs(rw); err != nil {
+		return err
+	}
+	return w.processReloadIPCMessages(rw, rw)
+}
+
 func (w *Watcher) triggerReload() bool {
 	if w.onChange == nil {
 		return false
 	}
-	if !w.beginReload() {
+	if !w.markReloading() {
 		return false
 	}
+	if w.reloadIPC != nil {
+		if err := w.requestActiveJobs(w.reloadIPC); err != nil {
+			logger.Logger.Warnw("failed to request active jobs before reload", err)
+		}
+	}
+	w.incrementReloadCount()
 	w.onChange()
 	return true
 }

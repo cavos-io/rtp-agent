@@ -1,8 +1,11 @@
 package cli
 
 import (
+	"bytes"
+	"io"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/cavos-io/conversation-worker/interface/worker/ipc"
 	"github.com/livekit/protocol/livekit"
@@ -129,6 +132,30 @@ func TestWatcherTriggerReloadKeepsReloadingUntilReloaded(t *testing.T) {
 	}
 }
 
+func TestWatcherTriggerReloadRequestsActiveJobsBeforeRestart(t *testing.T) {
+	args := &CliArgs{ReloadCount: 3}
+	var output bytes.Buffer
+	requestedBeforeRestart := false
+	watcher := NewWatcher(nil, func() {
+		msg, err := ipc.ReadMessage(&output)
+		if err != nil {
+			t.Fatalf("ReadMessage ActiveJobsRequest: %v", err)
+		}
+		requestedBeforeRestart = msg.Type == ipc.MessageTypeActiveJobsRequest
+	}, args)
+	watcher.reloadIPC = &output
+
+	if !watcher.triggerReload() {
+		t.Fatal("triggerReload() = false, want true")
+	}
+	if !requestedBeforeRestart {
+		t.Fatal("triggerReload() did not request active jobs before restart")
+	}
+	if args.ReloadCount != 4 {
+		t.Fatalf("ReloadCount = %d, want 4", args.ReloadCount)
+	}
+}
+
 func TestWatcherStoresActiveJobsForCurrentReload(t *testing.T) {
 	args := &CliArgs{ReloadCount: 2}
 	watcher := NewWatcher(nil, nil, args)
@@ -212,4 +239,187 @@ func TestWatcherHandleReloadMessageRespondsWithActiveJobs(t *testing.T) {
 	if resp, ok := watcher.handleReloadMessage(&ipc.PingRequest{}); ok || resp != nil {
 		t.Fatalf("handleReloadMessage(PingRequest) = (%#v, %v), want (nil, false)", resp, ok)
 	}
+}
+
+func TestWatcherHandleReloadIPCMessageWritesResponse(t *testing.T) {
+	args := &CliArgs{ReloadCount: 5}
+	watcher := NewWatcher(nil, nil, args)
+	watcher.recordActiveJobsResponse(ipc.ActiveJobsResponse{
+		Jobs:        []ipc.RunningJobInfo{{Job: &livekit.Job{Id: "job-current"}, Token: "current-token"}},
+		ReloadCount: 5,
+	})
+
+	req, err := ipc.NewMessage(&ipc.ReloadJobsRequest{})
+	if err != nil {
+		t.Fatalf("NewMessage(ReloadJobsRequest): %v", err)
+	}
+	var input bytes.Buffer
+	if err := ipc.WriteMessage(&input, req); err != nil {
+		t.Fatalf("WriteMessage request: %v", err)
+	}
+	var output bytes.Buffer
+
+	handled, err := watcher.handleReloadIPCMessage(&input, &output)
+	if err != nil {
+		t.Fatalf("handleReloadIPCMessage() error = %v", err)
+	}
+	if !handled {
+		t.Fatal("handleReloadIPCMessage() handled = false, want true")
+	}
+
+	msg, err := ipc.ReadMessage(&output)
+	if err != nil {
+		t.Fatalf("ReadMessage response: %v", err)
+	}
+	if msg.Type != ipc.MessageTypeReloadJobsResponse {
+		t.Fatalf("response Type = %q, want %q", msg.Type, ipc.MessageTypeReloadJobsResponse)
+	}
+	payload, err := ipc.DecodePayload(msg)
+	if err != nil {
+		t.Fatalf("DecodePayload response: %v", err)
+	}
+	resp, ok := payload.(*ipc.ReloadJobsResponse)
+	if !ok {
+		t.Fatalf("response payload = %T, want *ReloadJobsResponse", payload)
+	}
+	if resp.ReloadCount != 5 {
+		t.Fatalf("ReloadCount = %d, want 5", resp.ReloadCount)
+	}
+	if len(resp.Jobs) != 1 || resp.Jobs[0].Job.GetId() != "job-current" {
+		t.Fatalf("Jobs = %#v, want current job", resp.Jobs)
+	}
+}
+
+func TestWatcherRequestReloadJobsWritesRequestFrame(t *testing.T) {
+	watcher := NewWatcher(nil, nil)
+	var output bytes.Buffer
+
+	if err := watcher.requestReloadJobs(&output); err != nil {
+		t.Fatalf("requestReloadJobs() error = %v", err)
+	}
+
+	msg, err := ipc.ReadMessage(&output)
+	if err != nil {
+		t.Fatalf("ReadMessage request: %v", err)
+	}
+	if msg.Type != ipc.MessageTypeReloadJobsRequest {
+		t.Fatalf("request Type = %q, want %q", msg.Type, ipc.MessageTypeReloadJobsRequest)
+	}
+	payload, err := ipc.DecodePayload(msg)
+	if err != nil {
+		t.Fatalf("DecodePayload request: %v", err)
+	}
+	if _, ok := payload.(*ipc.ReloadJobsRequest); !ok {
+		t.Fatalf("request payload = %T, want *ReloadJobsRequest", payload)
+	}
+}
+
+func TestWatcherProcessReloadIPCMessagesUntilEOF(t *testing.T) {
+	args := &CliArgs{ReloadCount: 6}
+	watcher := NewWatcher(nil, nil, args)
+
+	var input bytes.Buffer
+	activeResp, err := ipc.NewMessage(&ipc.ActiveJobsResponse{
+		Jobs:        []ipc.RunningJobInfo{{Job: &livekit.Job{Id: "job-current"}, Token: "current-token"}},
+		ReloadCount: 6,
+	})
+	if err != nil {
+		t.Fatalf("NewMessage(ActiveJobsResponse): %v", err)
+	}
+	if err := ipc.WriteMessage(&input, activeResp); err != nil {
+		t.Fatalf("WriteMessage active response: %v", err)
+	}
+	reloadReq, err := ipc.NewMessage(&ipc.ReloadJobsRequest{})
+	if err != nil {
+		t.Fatalf("NewMessage(ReloadJobsRequest): %v", err)
+	}
+	if err := ipc.WriteMessage(&input, reloadReq); err != nil {
+		t.Fatalf("WriteMessage reload request: %v", err)
+	}
+	var output bytes.Buffer
+
+	if err := watcher.processReloadIPCMessages(&input, &output); err != nil {
+		t.Fatalf("processReloadIPCMessages() error = %v", err)
+	}
+
+	msg, err := ipc.ReadMessage(&output)
+	if err != nil {
+		t.Fatalf("ReadMessage response: %v", err)
+	}
+	if msg.Type != ipc.MessageTypeReloadJobsResponse {
+		t.Fatalf("response Type = %q, want %q", msg.Type, ipc.MessageTypeReloadJobsResponse)
+	}
+	payload, err := ipc.DecodePayload(msg)
+	if err != nil {
+		t.Fatalf("DecodePayload response: %v", err)
+	}
+	resp, ok := payload.(*ipc.ReloadJobsResponse)
+	if !ok {
+		t.Fatalf("response payload = %T, want *ReloadJobsResponse", payload)
+	}
+	if resp.ReloadCount != 6 {
+		t.Fatalf("ReloadCount = %d, want 6", resp.ReloadCount)
+	}
+	if len(resp.Jobs) != 1 || resp.Jobs[0].Job.GetId() != "job-current" {
+		t.Fatalf("Jobs = %#v, want current job", resp.Jobs)
+	}
+	if _, err := ipc.ReadMessage(&output); err == nil {
+		t.Fatal("second ReadMessage response error = nil, want EOF")
+	}
+}
+
+func TestWatcherRunReloadIPCSessionRequestsThenProcessesMessages(t *testing.T) {
+	args := &CliArgs{ReloadCount: 7}
+	watcher := NewWatcher(nil, nil, args)
+	if !watcher.beginReload() {
+		t.Fatal("beginReload() = false, want active reload")
+	}
+
+	peerReader, watcherWriter := io.Pipe()
+	watcherReader, peerWriter := io.Pipe()
+	sessionErr := make(chan error, 1)
+	go func() {
+		sessionErr <- watcher.runReloadIPCSession(struct {
+			io.Reader
+			io.Writer
+		}{
+			Reader: watcherReader,
+			Writer: watcherWriter,
+		})
+	}()
+
+	msg, err := ipc.ReadMessage(peerReader)
+	if err != nil {
+		t.Fatalf("ReadMessage initial request: %v", err)
+	}
+	if msg.Type != ipc.MessageTypeReloadJobsRequest {
+		t.Fatalf("initial request Type = %q, want %q", msg.Type, ipc.MessageTypeReloadJobsRequest)
+	}
+	if err := ipc.WriteMessage(peerWriter, mustIPCMessage(t, &ipc.Reloaded{})); err != nil {
+		t.Fatalf("WriteMessage Reloaded: %v", err)
+	}
+	if err := peerWriter.Close(); err != nil {
+		t.Fatalf("close peer writer: %v", err)
+	}
+
+	select {
+	case err := <-sessionErr:
+		if err != nil {
+			t.Fatalf("runReloadIPCSession() error = %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("runReloadIPCSession() did not return after peer close")
+	}
+	if watcher.reloading {
+		t.Fatal("watcher.reloading = true, want false after Reloaded")
+	}
+}
+
+func mustIPCMessage(t *testing.T, payload any) ipc.Message {
+	t.Helper()
+	msg, err := ipc.NewMessage(payload)
+	if err != nil {
+		t.Fatalf("NewMessage(%T): %v", payload, err)
+	}
+	return msg
 }
