@@ -2,6 +2,7 @@ package tts
 
 import (
 	"context"
+	"errors"
 	"io"
 	"testing"
 	"time"
@@ -51,8 +52,67 @@ func TestStreamAdapterFlushSynthesizesBufferedText(t *testing.T) {
 	}
 }
 
+func TestStreamAdapterPropagatesSynthesizeError(t *testing.T) {
+	synthErr := errors.New("synthesize failed")
+	stream, err := NewStreamAdapter(&fakeStreamAdapterTTS{synthesizeErr: synthErr}).Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+	defer stream.Close()
+
+	if err := stream.PushText("hello"); err != nil {
+		t.Fatalf("PushText returned error: %v", err)
+	}
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush returned error: %v", err)
+	}
+
+	err = nextStreamAdapterError(stream)
+	if !errors.Is(err, synthErr) {
+		t.Fatalf("Next error = %v, want synthesize error", err)
+	}
+}
+
+func TestStreamAdapterPropagatesChunkedStreamError(t *testing.T) {
+	streamErr := errors.New("audio stream failed")
+	stream, err := NewStreamAdapter(&fakeStreamAdapterTTS{streamErr: streamErr}).Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+	defer stream.Close()
+
+	if err := stream.PushText("hello"); err != nil {
+		t.Fatalf("PushText returned error: %v", err)
+	}
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush returned error: %v", err)
+	}
+
+	err = nextStreamAdapterError(stream)
+	if !errors.Is(err, streamErr) {
+		t.Fatalf("Next error = %v, want chunked stream error", err)
+	}
+}
+
+func nextStreamAdapterError(stream SynthesizeStream) error {
+	errCh := make(chan error, 1)
+	go func() {
+		_, err := stream.Next()
+		errCh <- err
+	}()
+
+	select {
+	case err := <-errCh:
+		return err
+	case <-time.After(100 * time.Millisecond):
+		return context.DeadlineExceeded
+	}
+}
+
 type fakeStreamAdapterTTS struct {
-	texts []string
+	texts         []string
+	synthesizeErr error
+	streamErr     error
 }
 
 func (f *fakeStreamAdapterTTS) Label() string {
@@ -73,10 +133,14 @@ func (f *fakeStreamAdapterTTS) NumChannels() int {
 
 func (f *fakeStreamAdapterTTS) Synthesize(_ context.Context, text string) (ChunkedStream, error) {
 	f.texts = append(f.texts, text)
+	if f.synthesizeErr != nil {
+		return nil, f.synthesizeErr
+	}
 	return &fakeStreamAdapterChunkedStream{
 		events: []*SynthesizedAudio{{
 			Frame: &model.AudioFrame{Data: []byte{1}, SampleRate: 24000, NumChannels: 1, SamplesPerChannel: 1},
 		}},
+		err: f.streamErr,
 	}, nil
 }
 
@@ -87,9 +151,13 @@ func (f *fakeStreamAdapterTTS) Stream(context.Context) (SynthesizeStream, error)
 type fakeStreamAdapterChunkedStream struct {
 	events []*SynthesizedAudio
 	index  int
+	err    error
 }
 
 func (f *fakeStreamAdapterChunkedStream) Next() (*SynthesizedAudio, error) {
+	if f.err != nil {
+		return nil, f.err
+	}
 	if f.index >= len(f.events) {
 		return nil, io.EOF
 	}
