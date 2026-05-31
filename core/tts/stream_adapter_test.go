@@ -94,6 +94,37 @@ func TestStreamAdapterPropagatesChunkedStreamError(t *testing.T) {
 	}
 }
 
+func TestStreamAdapterCloseIsIdempotent(t *testing.T) {
+	stream, err := NewStreamAdapter(&fakeStreamAdapterTTS{}).Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+
+	if err := stream.Close(); err != nil {
+		t.Fatalf("first Close returned error: %v", err)
+	}
+	if err := stream.Close(); err != nil {
+		t.Fatalf("second Close returned error: %v", err)
+	}
+}
+
+func TestStreamAdapterRejectsInputAfterClose(t *testing.T) {
+	stream, err := NewStreamAdapter(&fakeStreamAdapterTTS{}).Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close returned error: %v", err)
+	}
+
+	if err := stream.PushText("late"); err == nil {
+		t.Fatal("PushText returned nil error after close")
+	}
+	if err := stream.Flush(); err == nil {
+		t.Fatal("Flush returned nil error after close")
+	}
+}
+
 func nextStreamAdapterError(stream SynthesizeStream) error {
 	errCh := make(chan error, 1)
 	go func() {

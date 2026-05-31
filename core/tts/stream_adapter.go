@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"sync"
 
 	"github.com/cavos-io/conversation-worker/library/tokenize"
 )
@@ -46,6 +47,8 @@ type streamAdapterWrapper struct {
 	eventCh chan *SynthesizedAudio
 	errCh   chan error
 	inputCh chan streamAdapterInput
+	mu      sync.Mutex
+	closed  bool
 }
 
 type streamAdapterInput struct {
@@ -136,16 +139,32 @@ func (w *streamAdapterWrapper) sendErr(err error) {
 }
 
 func (w *streamAdapterWrapper) PushText(text string) error {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.closed {
+		return fmt.Errorf("stream closed")
+	}
 	w.inputCh <- streamAdapterInput{text: text}
 	return nil
 }
 
 func (w *streamAdapterWrapper) Flush() error {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.closed {
+		return fmt.Errorf("stream closed")
+	}
 	w.inputCh <- streamAdapterInput{flush: true}
 	return nil
 }
 
 func (w *streamAdapterWrapper) Close() error {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.closed {
+		return nil
+	}
+	w.closed = true
 	w.cancel()
 	close(w.inputCh)
 	return nil
