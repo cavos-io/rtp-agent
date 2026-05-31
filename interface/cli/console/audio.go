@@ -174,6 +174,12 @@ func (a *AudioIO) PushFrame(frame *model.AudioFrame) {
 	a.mu.Unlock()
 }
 
+func (a *AudioIO) ClearOutputBuffer() {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.speakerBuffer = a.speakerBuffer[:0]
+}
+
 func (a *AudioIO) MicFrames() <-chan *model.AudioFrame {
 	return a.audioOutCh
 }

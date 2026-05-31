@@ -39,3 +39,29 @@ func TestAudioIOInputAttachmentControlsMicFrames(t *testing.T) {
 		t.Fatal("MicFrames() did not receive attached frame")
 	}
 }
+
+func TestAudioIOClearOutputBufferDropsQueuedSpeakerAudio(t *testing.T) {
+	audioIO := NewAudioIO()
+	audioIO.PushFrame(&model.AudioFrame{
+		Data:              []byte{0x01, 0x00, 0x02, 0x00},
+		SampleRate:        24000,
+		NumChannels:       1,
+		SamplesPerChannel: 2,
+	})
+
+	audioIO.mu.Lock()
+	buffered := len(audioIO.speakerBuffer)
+	audioIO.mu.Unlock()
+	if buffered != 2 {
+		t.Fatalf("speakerBuffer len after PushFrame = %d, want 2", buffered)
+	}
+
+	audioIO.ClearOutputBuffer()
+
+	audioIO.mu.Lock()
+	buffered = len(audioIO.speakerBuffer)
+	audioIO.mu.Unlock()
+	if buffered != 0 {
+		t.Fatalf("speakerBuffer len after ClearOutputBuffer = %d, want 0", buffered)
+	}
+}
