@@ -2,7 +2,10 @@ package tts
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"io"
+	"sync"
 
 	"github.com/cavos-io/conversation-worker/library/tokenize"
 )
@@ -42,7 +45,15 @@ type streamAdapterWrapper struct {
 	ctx     context.Context
 	cancel  context.CancelFunc
 	eventCh chan *SynthesizedAudio
-	textCh  chan string
+	errCh   chan error
+	inputCh chan streamAdapterInput
+	mu      sync.Mutex
+	closed  bool
+}
+
+type streamAdapterInput struct {
+	text  string
+	flush bool
 }
 
 func (a *StreamAdapter) Stream(ctx context.Context) (SynthesizeStream, error) {
@@ -52,7 +63,8 @@ func (a *StreamAdapter) Stream(ctx context.Context) (SynthesizeStream, error) {
 		ctx:     ctx,
 		cancel:  cancel,
 		eventCh: make(chan *SynthesizedAudio, 100),
-		textCh:  make(chan string, 100),
+		errCh:   make(chan error, 1),
+		inputCh: make(chan streamAdapterInput, 100),
 	}
 
 	go w.run()
@@ -70,13 +82,17 @@ func (w *streamAdapterWrapper) run() {
 			select {
 			case <-w.ctx.Done():
 				return
-			case text, ok := <-w.textCh:
+			case input, ok := <-w.inputCh:
 				if !ok {
 					tokenizer.Flush()
 					tokenizer.Close()
 					return
 				}
-				tokenizer.PushText(text)
+				if input.flush {
+					tokenizer.Flush()
+					continue
+				}
+				tokenizer.PushText(input.text)
 			}
 		}
 	}()
@@ -88,46 +104,83 @@ func (w *streamAdapterWrapper) run() {
 			break
 		}
 		if tok.Token != "" {
-			w.synthesize(tok.Token)
+			if err := w.synthesize(tok.Token); err != nil {
+				w.sendErr(err)
+				return
+			}
 		}
 	}
 }
 
-func (w *streamAdapterWrapper) synthesize(text string) {
+func (w *streamAdapterWrapper) synthesize(text string) error {
 	stream, err := w.adapter.tts.Synthesize(w.ctx, text)
 	if err != nil {
-		return
+		return err
 	}
 	defer stream.Close()
 
 	for {
 		audio, err := stream.Next()
 		if err != nil {
-			break
+			if errors.Is(err, io.EOF) {
+				return nil
+			}
+			return err
 		}
 		w.eventCh <- audio
 	}
 }
 
+func (w *streamAdapterWrapper) sendErr(err error) {
+	select {
+	case w.errCh <- err:
+	default:
+	}
+}
+
 func (w *streamAdapterWrapper) PushText(text string) error {
-	w.textCh <- text
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.closed {
+		return fmt.Errorf("stream closed")
+	}
+	w.inputCh <- streamAdapterInput{text: text}
 	return nil
 }
 
 func (w *streamAdapterWrapper) Flush() error {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.closed {
+		return fmt.Errorf("stream closed")
+	}
+	w.inputCh <- streamAdapterInput{flush: true}
 	return nil
 }
 
 func (w *streamAdapterWrapper) Close() error {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.closed {
+		return nil
+	}
+	w.closed = true
 	w.cancel()
-	close(w.textCh)
+	close(w.inputCh)
 	return nil
 }
 
 func (w *streamAdapterWrapper) Next() (*SynthesizedAudio, error) {
 	ev, ok := <-w.eventCh
-	if !ok {
-		return nil, context.Canceled
+	if ok {
+		return ev, nil
 	}
-	return ev, nil
+	select {
+	case err := <-w.errCh:
+		if err != nil {
+			return nil, err
+		}
+	default:
+	}
+	return nil, context.Canceled
 }

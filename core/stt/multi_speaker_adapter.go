@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"math"
+	"strings"
 	"sync"
 
 	"github.com/cavos-io/conversation-worker/core/audio"
@@ -99,6 +100,7 @@ func (a *MultiSpeakerAdapter) Stream(ctx context.Context, language string) (Reco
 		cancel:   cancel,
 		detector: newPrimarySpeakerDetector(a.detectPrimarySpeaker, a.suppressBackgroundSpeaker, a.primaryFormat, a.backgroundFormat, a.opt),
 		eventCh:  make(chan *SpeechEvent, 100),
+		errCh:    make(chan error, 1),
 		audioCh:  make(chan *model.AudioFrame, 100),
 	}
 
@@ -114,6 +116,7 @@ type multiSpeakerAdapterWrapper struct {
 	cancel   context.CancelFunc
 	detector *primarySpeakerDetector
 	eventCh  chan *SpeechEvent
+	errCh    chan error
 	audioCh  chan *model.AudioFrame
 	mu       sync.Mutex
 	closed   bool
@@ -147,10 +150,17 @@ func (w *multiSpeakerAdapterWrapper) Close() error {
 
 func (w *multiSpeakerAdapterWrapper) Next() (*SpeechEvent, error) {
 	ev, ok := <-w.eventCh
-	if !ok {
-		return nil, context.Canceled
+	if ok {
+		return ev, nil
 	}
-	return ev, nil
+	select {
+	case err := <-w.errCh:
+		if err != nil {
+			return nil, err
+		}
+	default:
+	}
+	return nil, context.Canceled
 }
 
 func (w *multiSpeakerAdapterWrapper) run() {
@@ -174,6 +184,10 @@ func (w *multiSpeakerAdapterWrapper) run() {
 	for {
 		ev, err := w.inner.Next()
 		if err != nil {
+			select {
+			case w.errCh <- err:
+			default:
+			}
 			return
 		}
 
@@ -397,12 +411,18 @@ func (d *primarySpeakerDetector) onSttEvent(ev *SpeechEvent) *SpeechEvent {
 	sd.IsPrimarySpeaker = &isPrimary
 
 	if isPrimary {
-		sd.Text = d.primaryFormat // simplification, no easy dynamic format template built-in
+		sd.Text = formatSpeakerText(d.primaryFormat, sd.Text, sd.SpeakerID)
 	} else {
 		if d.suppressBackground {
 			return nil
 		}
-		sd.Text = d.backgroundFormat
+		sd.Text = formatSpeakerText(d.backgroundFormat, sd.Text, sd.SpeakerID)
 	}
 	return ev
+}
+
+func formatSpeakerText(format string, text string, speakerID string) string {
+	formatted := strings.ReplaceAll(format, "{text}", text)
+	formatted = strings.ReplaceAll(formatted, "{speaker_id}", speakerID)
+	return formatted
 }

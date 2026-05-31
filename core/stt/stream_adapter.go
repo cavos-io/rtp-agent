@@ -25,8 +25,8 @@ func NewStreamAdapter(stt STT, vad vad.VAD) *StreamAdapter {
 	}
 }
 
-func (a *StreamAdapter) Label() string { 
-	return fmt.Sprintf("StreamAdapter(%s)", a.stt.Label()) 
+func (a *StreamAdapter) Label() string {
+	return fmt.Sprintf("StreamAdapter(%s)", a.stt.Label())
 }
 
 func (a *StreamAdapter) Capabilities() STTCapabilities {
@@ -44,6 +44,7 @@ type streamAdapterWrapper struct {
 	language string
 
 	eventCh chan *SpeechEvent
+	errCh   chan error
 	audioCh chan *model.AudioFrame
 
 	mu          sync.Mutex
@@ -59,6 +60,7 @@ func (a *StreamAdapter) Stream(ctx context.Context, language string) (RecognizeS
 		cancel:   cancel,
 		language: language,
 		eventCh:  make(chan *SpeechEvent, 100),
+		errCh:    make(chan error, 1),
 		audioCh:  make(chan *model.AudioFrame, 100),
 	}
 
@@ -68,10 +70,11 @@ func (a *StreamAdapter) Stream(ctx context.Context, language string) (RecognizeS
 
 func (w *streamAdapterWrapper) run() {
 	defer close(w.eventCh)
-	
+
 	vadStream, err := w.adapter.vad.Stream(w.ctx)
 	if err != nil {
 		logger.Logger.Errorw("Failed to start VAD stream in StreamAdapter", err)
+		w.sendErr(err)
 		return
 	}
 
@@ -86,7 +89,7 @@ func (w *streamAdapterWrapper) run() {
 					return
 				}
 				vadStream.PushFrame(frame)
-				
+
 				w.mu.Lock()
 				w.frameBuffer = append(w.frameBuffer, frame)
 				w.mu.Unlock()
@@ -100,19 +103,20 @@ func (w *streamAdapterWrapper) run() {
 			if err != io.EOF && err != context.Canceled {
 				logger.Logger.Errorw("VAD stream error in StreamAdapter", err)
 			}
+			w.sendErr(err)
 			return
 		}
 
 		switch ev.Type {
 		case vad.VADEventStartOfSpeech:
 			w.eventCh <- &SpeechEvent{Type: SpeechEventStartOfSpeech}
-			
+
 			// Clear old frames that are before the speech start
 			w.mu.Lock()
 			// We can optionally keep some padding before speech started, but for simplicity we'll just clear
 			// We'll rely on the VAD event to tell us the actual start frame, or we just keep accumulating
 			// For this implementation, we just start fresh on speech start to avoid huge buffers.
-			// Wait, the VAD event might give us the frames. 
+			// Wait, the VAD event might give us the frames.
 			w.frameBuffer = make([]*model.AudioFrame, 0)
 			if len(ev.Frames) > 0 {
 				w.frameBuffer = append(w.frameBuffer, ev.Frames...)
@@ -140,7 +144,7 @@ func (w *streamAdapterWrapper) run() {
 					res, err := w.adapter.stt.Recognize(w.ctx, f, w.language)
 					if err == nil && res != nil && len(res.Alternatives) > 0 && res.Alternatives[0].Text != "" {
 						res.Type = SpeechEventFinalTranscript
-						
+
 						w.mu.Lock()
 						if !w.closed {
 							w.eventCh <- res
@@ -152,6 +156,13 @@ func (w *streamAdapterWrapper) run() {
 				}(frames)
 			}
 		}
+	}
+}
+
+func (w *streamAdapterWrapper) sendErr(err error) {
+	select {
+	case w.errCh <- err:
+	default:
 	}
 }
 
@@ -187,8 +198,15 @@ func (w *streamAdapterWrapper) Close() error {
 
 func (w *streamAdapterWrapper) Next() (*SpeechEvent, error) {
 	ev, ok := <-w.eventCh
-	if !ok {
-		return nil, context.Canceled
+	if ok {
+		return ev, nil
 	}
-	return ev, nil
+	select {
+	case err := <-w.errCh:
+		if err != nil {
+			return nil, err
+		}
+	default:
+	}
+	return nil, context.Canceled
 }
