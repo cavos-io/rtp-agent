@@ -371,6 +371,17 @@ func (s *AgentServer) processReloadIPCMessages(ctx context.Context, r io.Reader,
 	}
 }
 
+func (s *AgentServer) runReloadIPCSession(ctx context.Context, rw io.ReadWriter, reloadCount int, now time.Time) error {
+	msg, err := workeripc.NewMessage(&workeripc.ReloadJobsRequest{})
+	if err != nil {
+		return err
+	}
+	if err := workeripc.WriteMessage(rw, msg); err != nil {
+		return err
+	}
+	return s.processReloadIPCMessages(ctx, rw, rw, reloadCount, now)
+}
+
 func (s *AgentServer) UpdateOptions(opts WorkerOptions) error {
 	s.mu.Lock()
 	if s.conn != nil {

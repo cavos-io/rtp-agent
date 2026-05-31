@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"io"
 	"math"
 	"net/http"
 	"os"
@@ -1024,6 +1025,55 @@ func TestAgentServerProcessReloadIPCMessagesUntilEOF(t *testing.T) {
 	if _, err := ipc.ReadMessage(&output); err == nil {
 		t.Fatal("third ReadMessage response error = nil, want EOF")
 	}
+}
+
+func TestAgentServerRunReloadIPCSessionRequestsThenProcessesMessages(t *testing.T) {
+	server := NewAgentServer(WorkerOptions{})
+
+	peerReader, workerWriter := io.Pipe()
+	workerReader, peerWriter := io.Pipe()
+	sessionErr := make(chan error, 1)
+	go func() {
+		sessionErr <- server.runReloadIPCSession(context.Background(), struct {
+			io.Reader
+			io.Writer
+		}{
+			Reader: workerReader,
+			Writer: workerWriter,
+		}, 11, time.Now())
+	}()
+
+	msg, err := ipc.ReadMessage(peerReader)
+	if err != nil {
+		t.Fatalf("ReadMessage initial request: %v", err)
+	}
+	if msg.Type != ipc.MessageTypeReloadJobsRequest {
+		t.Fatalf("initial request Type = %q, want %q", msg.Type, ipc.MessageTypeReloadJobsRequest)
+	}
+	if err := ipc.WriteMessage(peerWriter, mustWorkerIPCMessage(t, &ipc.Reloaded{})); err != nil {
+		t.Fatalf("WriteMessage Reloaded: %v", err)
+	}
+	if err := peerWriter.Close(); err != nil {
+		t.Fatalf("close peer writer: %v", err)
+	}
+
+	select {
+	case err := <-sessionErr:
+		if err != nil {
+			t.Fatalf("runReloadIPCSession() error = %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("runReloadIPCSession() did not return after peer close")
+	}
+}
+
+func mustWorkerIPCMessage(t *testing.T, payload any) ipc.Message {
+	t.Helper()
+	msg, err := ipc.NewMessage(payload)
+	if err != nil {
+		t.Fatalf("NewMessage(%T): %v", payload, err)
+	}
+	return msg
 }
 
 func TestEmitWorkerStartedNotifiesHandlers(t *testing.T) {
