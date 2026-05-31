@@ -2,7 +2,9 @@ package tts
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"io"
 	"sync"
 
 	"github.com/cavos-io/conversation-worker/library/logger"
@@ -111,6 +113,7 @@ func (s *fallbackChunkedStream) tryStartStream(index int) error {
 }
 
 func (s *fallbackChunkedStream) monitorStream() {
+	audioSent := false
 	for {
 		s.mu.Lock()
 		if s.closed {
@@ -122,6 +125,11 @@ func (s *fallbackChunkedStream) monitorStream() {
 
 		ev, err := stream.Next()
 		if err != nil {
+			if errors.Is(err, io.EOF) || audioSent {
+				s.errCh <- io.EOF
+				return
+			}
+
 			s.mu.Lock()
 			if s.closed {
 				s.mu.Unlock()
@@ -140,6 +148,7 @@ func (s *fallbackChunkedStream) monitorStream() {
 			continue
 		}
 
+		audioSent = true
 		select {
 		case s.eventCh <- ev:
 		case <-s.closeCh:
@@ -229,6 +238,7 @@ func (s *fallbackSynthesizeStream) tryStartStream(index int) error {
 }
 
 func (s *fallbackSynthesizeStream) monitorStream() {
+	audioSent := false
 	for {
 		s.mu.Lock()
 		if s.closed {
@@ -240,6 +250,11 @@ func (s *fallbackSynthesizeStream) monitorStream() {
 
 		ev, err := stream.Next()
 		if err != nil {
+			if errors.Is(err, io.EOF) || audioSent {
+				s.errCh <- io.EOF
+				return
+			}
+
 			s.mu.Lock()
 			if s.closed {
 				s.mu.Unlock()
@@ -258,6 +273,7 @@ func (s *fallbackSynthesizeStream) monitorStream() {
 			continue
 		}
 
+		audioSent = true
 		select {
 		case s.eventCh <- ev:
 		case <-s.closeCh:
