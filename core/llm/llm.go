@@ -249,6 +249,24 @@ type Tool interface {
 	Execute(ctx context.Context, args string) (string, error)
 }
 
+type ToolError struct {
+	Message string
+}
+
+func NewToolError(message string) ToolError {
+	return ToolError{Message: message}
+}
+
+func (e ToolError) Error() string {
+	return e.Message
+}
+
+type StopResponse struct{}
+
+func (s StopResponse) Error() string {
+	return "stop response"
+}
+
 type Toolset interface {
 	ID() string
 	Tools() []Tool
