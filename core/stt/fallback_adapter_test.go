@@ -6,6 +6,7 @@ import (
 	"io"
 	"testing"
 
+	"github.com/cavos-io/conversation-worker/core/vad"
 	"github.com/cavos-io/conversation-worker/model"
 )
 
@@ -37,6 +38,68 @@ func TestFallbackAdapterAggregatesProviderCapabilities(t *testing.T) {
 	}
 	if !caps.OfflineRecognize {
 		t.Fatal("OfflineRecognize = false, want true when any provider can batch-recognize")
+	}
+}
+
+func TestFallbackAdapterRejectsNonStreamingProviderWithoutVAD(t *testing.T) {
+	defer func() {
+		if recover() == nil {
+			t.Fatal("NewFallbackAdapter did not panic")
+		}
+	}()
+
+	NewFallbackAdapter([]STT{
+		&metadataSTT{
+			label:        "offline",
+			capabilities: STTCapabilities{OfflineRecognize: true},
+		},
+	})
+}
+
+func TestFallbackAdapterWithVADWrapsNonStreamingProvider(t *testing.T) {
+	offline := &metadataSTT{
+		label:        "offline",
+		capabilities: STTCapabilities{OfflineRecognize: true},
+		recognizeResult: &SpeechEvent{
+			Type: SpeechEventFinalTranscript,
+			Alternatives: []SpeechData{{
+				Text: "hello",
+			}},
+		},
+	}
+	adapter := NewFallbackAdapterWithVAD([]STT{offline}, &fakeStreamAdapterVAD{
+		stream: &fakeStreamAdapterVADStream{
+			events: []*vad.VADEvent{{
+				Type:   vad.VADEventEndOfSpeech,
+				Frames: []*model.AudioFrame{{Data: []byte{1, 0}, SampleRate: 16000, NumChannels: 1, SamplesPerChannel: 1}},
+			}},
+			done: make(chan struct{}),
+		},
+	})
+
+	stream, err := adapter.Stream(context.Background(), "en")
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+	defer stream.Close()
+
+	event, err := stream.Next()
+	if err != nil {
+		t.Fatalf("first Next returned error: %v", err)
+	}
+	if event.Type != SpeechEventEndOfSpeech {
+		t.Fatalf("first event type = %s, want end_of_speech", event.Type)
+	}
+
+	event, err = stream.Next()
+	if err != nil {
+		t.Fatalf("second Next returned error: %v", err)
+	}
+	if event.Type != SpeechEventFinalTranscript || len(event.Alternatives) != 1 || event.Alternatives[0].Text != "hello" {
+		t.Fatalf("second event = %#v, want final transcript", event)
+	}
+	if offline.recognizeCalls != 1 {
+		t.Fatalf("recognize calls = %d, want 1", offline.recognizeCalls)
 	}
 }
 
@@ -110,10 +173,12 @@ func TestFallbackStreamRetriesNextProviderBeforeEvents(t *testing.T) {
 }
 
 type metadataSTT struct {
-	label        string
-	capabilities STTCapabilities
-	stream       RecognizeStream
-	streamCalls  int
+	label           string
+	capabilities    STTCapabilities
+	stream          RecognizeStream
+	streamCalls     int
+	recognizeResult *SpeechEvent
+	recognizeCalls  int
 }
 
 func (m *metadataSTT) Label() string {
@@ -130,7 +195,8 @@ func (m *metadataSTT) Stream(context.Context, string) (RecognizeStream, error) {
 }
 
 func (m *metadataSTT) Recognize(context.Context, []*model.AudioFrame, string) (*SpeechEvent, error) {
-	return nil, nil
+	m.recognizeCalls++
+	return m.recognizeResult, nil
 }
 
 type metadataRecognizeStream struct {

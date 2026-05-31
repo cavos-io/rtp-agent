@@ -7,6 +7,7 @@ import (
 	"io"
 	"sync"
 
+	"github.com/cavos-io/conversation-worker/core/vad"
 	"github.com/cavos-io/conversation-worker/library/logger"
 	"github.com/cavos-io/conversation-worker/model"
 )
@@ -17,8 +18,28 @@ type FallbackAdapter struct {
 }
 
 func NewFallbackAdapter(stts []STT) *FallbackAdapter {
+	return newFallbackAdapter(stts, nil)
+}
+
+func NewFallbackAdapterWithVAD(stts []STT, vad vad.VAD) *FallbackAdapter {
+	return newFallbackAdapter(stts, vad)
+}
+
+func newFallbackAdapter(stts []STT, vad vad.VAD) *FallbackAdapter {
 	if len(stts) == 0 {
 		panic("FallbackAdapter requires at least one STT")
+	}
+
+	wrapped := make([]STT, len(stts))
+	for i, stt := range stts {
+		if !stt.Capabilities().Streaming {
+			if vad == nil {
+				panic(fmt.Sprintf("STT %q does not support streaming; provide a VAD or wrap it with StreamAdapter", stt.Label()))
+			}
+			wrapped[i] = NewStreamAdapter(stt, vad)
+			continue
+		}
+		wrapped[i] = stt
 	}
 
 	capabilities := STTCapabilities{
@@ -26,7 +47,7 @@ func NewFallbackAdapter(stts []STT) *FallbackAdapter {
 		InterimResults: true,
 		Diarization:    true,
 	}
-	for _, stt := range stts {
+	for _, stt := range wrapped {
 		sttCapabilities := stt.Capabilities()
 		capabilities.Streaming = capabilities.Streaming && sttCapabilities.Streaming
 		capabilities.InterimResults = capabilities.InterimResults && sttCapabilities.InterimResults
@@ -35,7 +56,7 @@ func NewFallbackAdapter(stts []STT) *FallbackAdapter {
 	}
 
 	return &FallbackAdapter{
-		stts:         stts,
+		stts:         wrapped,
 		capabilities: capabilities,
 	}
 }
