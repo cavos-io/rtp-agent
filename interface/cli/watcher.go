@@ -96,6 +96,17 @@ func (w *Watcher) Reloaded() {
 	w.reloading = false
 }
 
+func (w *Watcher) triggerReload() bool {
+	if w.onChange == nil {
+		return false
+	}
+	if !w.beginReload() {
+		return false
+	}
+	w.onChange()
+	return true
+}
+
 func (w *Watcher) watchLoop() {
 	// Debounce events
 	var timer *time.Timer
@@ -114,13 +125,7 @@ func (w *Watcher) watchLoop() {
 					}
 					timer = time.AfterFunc(500*time.Millisecond, func() {
 						logger.Logger.Infow("File changed, triggering reload", "file", event.Name)
-						if w.onChange != nil {
-							if !w.beginReload() {
-								return
-							}
-							defer w.Reloaded()
-							w.onChange()
-						}
+						w.triggerReload()
 					})
 				}
 			}
@@ -163,9 +168,11 @@ func RunWithDevMode(args []string) error {
 		}
 	}
 
-	w := NewWatcher([]string{"./"}, func() {
+	var w *Watcher
+	w = NewWatcher([]string{"./"}, func() {
 		logger.Logger.Infow("Triggering rebuild and restart")
 		startCmd()
+		w.Reloaded()
 	})
 
 	if err := w.Start(); err != nil {

@@ -93,3 +93,35 @@ func TestWatcherBeginReloadIncrementsCliReloadCount(t *testing.T) {
 		t.Fatalf("ReloadCount after overlapping beginReload() = %d, want unchanged 3", args.ReloadCount)
 	}
 }
+
+func TestWatcherTriggerReloadKeepsReloadingUntilReloaded(t *testing.T) {
+	args := &CliArgs{}
+	calls := 0
+	watcher := NewWatcher(nil, func() {
+		calls++
+	}, args)
+
+	if !watcher.triggerReload() {
+		t.Fatal("triggerReload() = false, want true")
+	}
+	if calls != 1 {
+		t.Fatalf("onChange calls = %d, want 1", calls)
+	}
+	if args.ReloadCount != 1 {
+		t.Fatalf("ReloadCount = %d, want 1", args.ReloadCount)
+	}
+	if watcher.triggerReload() {
+		t.Fatal("overlapping triggerReload() = true, want false")
+	}
+	if calls != 1 {
+		t.Fatalf("onChange calls after overlapping reload = %d, want 1", calls)
+	}
+
+	watcher.Reloaded()
+	if !watcher.triggerReload() {
+		t.Fatal("triggerReload() after Reloaded() = false, want true")
+	}
+	if calls != 2 {
+		t.Fatalf("onChange calls after Reloaded() = %d, want 2", calls)
+	}
+}
