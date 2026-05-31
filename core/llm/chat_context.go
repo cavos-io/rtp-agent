@@ -4,6 +4,15 @@ import (
 	"time"
 )
 
+type ChatMessageArgs struct {
+	ID          string
+	Role        ChatRole
+	Content     []ChatContent
+	Interrupted bool
+	CreatedAt   time.Time
+	Extra       map[string]any
+}
+
 type ChatContextCopyOptions struct {
 	ExcludeFunctionCall bool
 	ExcludeInstructions bool
@@ -46,6 +55,52 @@ func (c *ChatContext) Copy(options ...ChatContextCopyOptions) *ChatContext {
 		newCtx.Items = append(newCtx.Items, item)
 	}
 	return newCtx
+}
+
+func (c *ChatContext) AddMessage(args ChatMessageArgs) *ChatMessage {
+	createdAt := args.CreatedAt
+	if createdAt.IsZero() {
+		createdAt = time.Now()
+	}
+	message := &ChatMessage{
+		ID:          args.ID,
+		Role:        args.Role,
+		Content:     args.Content,
+		Interrupted: args.Interrupted,
+		Extra:       args.Extra,
+		CreatedAt:   createdAt,
+	}
+	if args.CreatedAt.IsZero() {
+		c.Append(message)
+		return message
+	}
+	c.Insert(message)
+	return message
+}
+
+func (c *ChatContext) Insert(items ...ChatItem) {
+	for _, item := range items {
+		idx := c.FindInsertionIndex(item.GetCreatedAt())
+		c.Items = append(c.Items[:idx], append([]ChatItem{item}, c.Items[idx:]...)...)
+	}
+}
+
+func (c *ChatContext) GetByID(itemID string) ChatItem {
+	for _, item := range c.Items {
+		if item.GetID() == itemID {
+			return item
+		}
+	}
+	return nil
+}
+
+func (c *ChatContext) IndexByID(itemID string) *int {
+	for i, item := range c.Items {
+		if item.GetID() == itemID {
+			return &i
+		}
+	}
+	return nil
 }
 
 func chatContextCopyToolNames(tools []interface{}) map[string]struct{} {

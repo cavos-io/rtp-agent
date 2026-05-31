@@ -147,6 +147,84 @@ func TestChatContextMergePreservesCreatedAtOrderAndSkipsDuplicates(t *testing.T)
 	}
 }
 
+func TestChatContextAddMessageInsertsByCreatedAt(t *testing.T) {
+	ctx := NewChatContext()
+	ctx.Items = []ChatItem{
+		&ChatMessage{ID: "late", Role: ChatRoleUser, Content: []ChatContent{{Text: "late"}}, CreatedAt: time.Unix(30, 0)},
+	}
+
+	message := ctx.AddMessage(ChatMessageArgs{
+		ID:        "early",
+		Role:      ChatRoleAssistant,
+		Content:   []ChatContent{{Text: "early"}},
+		CreatedAt: time.Unix(10, 0),
+	})
+
+	if message.ID != "early" || message.Role != ChatRoleAssistant || message.TextContent() != "early" {
+		t.Fatalf("AddMessage() = %#v", message)
+	}
+	if got, want := itemIDs(ctx.Items), "early,late"; got != want {
+		t.Fatalf("items = %q, want %q", got, want)
+	}
+}
+
+func TestChatContextAddMessageAppendsWhenCreatedAtIsZero(t *testing.T) {
+	ctx := NewChatContext()
+	ctx.Items = []ChatItem{
+		&ChatMessage{ID: "existing", Role: ChatRoleUser, Content: []ChatContent{{Text: "existing"}}, CreatedAt: time.Unix(30, 0)},
+	}
+
+	message := ctx.AddMessage(ChatMessageArgs{
+		ID:      "new",
+		Role:    ChatRoleUser,
+		Content: []ChatContent{{Text: "new"}},
+	})
+
+	if message.CreatedAt.IsZero() {
+		t.Fatal("AddMessage() CreatedAt is zero, want generated timestamp")
+	}
+	if got, want := itemIDs(ctx.Items), "existing,new"; got != want {
+		t.Fatalf("items = %q, want %q", got, want)
+	}
+}
+
+func TestChatContextInsertOrdersItemsByCreatedAt(t *testing.T) {
+	ctx := NewChatContext()
+	ctx.Items = []ChatItem{
+		&ChatMessage{ID: "middle", Role: ChatRoleUser, CreatedAt: time.Unix(20, 0)},
+	}
+
+	ctx.Insert(
+		&ChatMessage{ID: "late", Role: ChatRoleUser, CreatedAt: time.Unix(30, 0)},
+		&ChatMessage{ID: "early", Role: ChatRoleUser, CreatedAt: time.Unix(10, 0)},
+	)
+
+	if got, want := itemIDs(ctx.Items), "early,middle,late"; got != want {
+		t.Fatalf("items = %q, want %q", got, want)
+	}
+}
+
+func TestChatContextLookupByID(t *testing.T) {
+	ctx := NewChatContext()
+	ctx.Items = []ChatItem{
+		&ChatMessage{ID: "first", Role: ChatRoleUser},
+		&FunctionCall{ID: "call", CallID: "call_lookup", Name: "lookup"},
+	}
+
+	if got := ctx.GetByID("call"); got != ctx.Items[1] {
+		t.Fatalf("GetByID() = %p, want %p", got, ctx.Items[1])
+	}
+	if got := ctx.GetByID("missing"); got != nil {
+		t.Fatalf("GetByID(missing) = %#v, want nil", got)
+	}
+	if got := ctx.IndexByID("call"); got == nil || *got != 1 {
+		t.Fatalf("IndexByID(call) = %#v, want 1", got)
+	}
+	if got := ctx.IndexByID("missing"); got != nil {
+		t.Fatalf("IndexByID(missing) = %#v, want nil", got)
+	}
+}
+
 func TestChatContextToOpenAIProviderFormatGroupsToolCallsWithOutputs(t *testing.T) {
 	ctx := NewChatContext()
 	groupID := "assistant-turn"
