@@ -3,13 +3,14 @@ package llm
 import (
 	"fmt"
 	"reflect"
+	"sort"
 )
 
 type ToolContext struct {
-	tools          []interface{} // Tool | Toolset
-	functionTools  map[string]Tool
-	providerTools  []Tool
-	toolsets       []Toolset
+	tools         []interface{} // Tool | Toolset
+	functionTools map[string]Tool
+	providerTools []Tool
+	toolsets      []Toolset
 }
 
 func NewToolContext(tools []interface{}) *ToolContext {
@@ -44,8 +45,13 @@ func (c *ToolContext) Toolsets() []Toolset {
 
 func (c *ToolContext) Flatten() []Tool {
 	tools := make([]Tool, 0)
-	for _, t := range c.functionTools {
-		tools = append(tools, t)
+	names := make([]string, 0, len(c.functionTools))
+	for name := range c.functionTools {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		tools = append(tools, c.functionTools[name])
 	}
 	tools = append(tools, c.providerTools...)
 	return tools
@@ -78,13 +84,16 @@ func (c *ToolContext) UpdateTools(tools []interface{}) error {
 
 		if t, ok := tool.(Tool); ok {
 			// In Go parity, we don't differentiate ProviderTool and FunctionTool
-			// by base class as easily, we can assume all non-Toolset interfaces 
+			// by base class as easily, we can assume all non-Toolset interfaces
 			// are function tools if they satisfy Tool interface.
 			// The original python distinguishes ProviderTool.
-			
+
 			// For now, treat all standalone tools as function tools.
 			name := t.Name()
-			if _, exists := c.functionTools[name]; exists {
+			if existing, exists := c.functionTools[name]; exists {
+				if sameTool(existing, t) {
+					return nil
+				}
 				return fmt.Errorf("duplicate function name: %s", name)
 			}
 			c.functionTools[name] = t
@@ -100,6 +109,18 @@ func (c *ToolContext) UpdateTools(tools []interface{}) error {
 		}
 	}
 	return nil
+}
+
+func sameTool(a, b Tool) bool {
+	aValue := reflect.ValueOf(a)
+	bValue := reflect.ValueOf(b)
+	if !aValue.IsValid() || !bValue.IsValid() {
+		return !aValue.IsValid() && !bValue.IsValid()
+	}
+	if aValue.Type() != bValue.Type() || !aValue.Type().Comparable() {
+		return false
+	}
+	return a == b
 }
 
 func (c *ToolContext) Copy() *ToolContext {
