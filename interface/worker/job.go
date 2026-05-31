@@ -387,13 +387,35 @@ func (c *JobContext) createSIPParticipantRequest(callTo string, trunkID string, 
 
 // TransferSIPParticipant transfers a SIP participant to another number.
 func (c *JobContext) TransferSIPParticipant(ctx context.Context, identity string, transferTo string, playDialtone bool) error {
+	return c.TransferSIPParticipantByParticipant(ctx, identity, transferTo, playDialtone)
+}
+
+func (c *JobContext) TransferSIPParticipantByParticipant(ctx context.Context, participant any, transferTo string, playDialtone bool) error {
 	if c.IsFakeJob() {
 		logger.Logger.Warnw("job context TransferSIPParticipant is skipped for fake jobs", nil)
 		return nil
 	}
+	identity, err := transferSIPParticipantIdentity(participant)
+	if err != nil {
+		return err
+	}
 	client := lksdk.NewSIPClient(c.url, c.apiKey, c.apiSecret)
-	_, err := client.TransferSIPParticipant(ctx, c.transferSIPParticipantRequest(identity, transferTo, playDialtone))
+	_, err = client.TransferSIPParticipant(ctx, c.transferSIPParticipantRequest(identity, transferTo, playDialtone))
 	return err
+}
+
+func transferSIPParticipantIdentity(participant any) (string, error) {
+	switch p := participant.(type) {
+	case string:
+		return p, nil
+	case remoteParticipantView:
+		if p.Kind() != lksdk.ParticipantSIP {
+			return "", fmt.Errorf("participant must be a SIP participant")
+		}
+		return p.Identity(), nil
+	default:
+		return "", fmt.Errorf("participant must be a SIP participant or identity string")
+	}
 }
 
 func (c *JobContext) transferSIPParticipantRequest(identity string, transferTo string, playDialtone bool) *livekit.TransferSIPParticipantRequest {

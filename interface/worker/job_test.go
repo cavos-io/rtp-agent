@@ -554,6 +554,39 @@ func TestJobContextTransferSIPParticipantRequestMatchesReferenceFields(t *testin
 	}
 }
 
+func TestTransferSIPParticipantIdentityAcceptsString(t *testing.T) {
+	identity, err := transferSIPParticipantIdentity("caller-a")
+	if err != nil {
+		t.Fatalf("transferSIPParticipantIdentity(string) error = %v", err)
+	}
+	if identity != "caller-a" {
+		t.Fatalf("transferSIPParticipantIdentity(string) = %q, want caller-a", identity)
+	}
+}
+
+func TestTransferSIPParticipantIdentityAcceptsSIPParticipant(t *testing.T) {
+	identity, err := transferSIPParticipantIdentity(fakeParticipantView{
+		identity: "caller-a",
+		kind:     lksdk.ParticipantSIP,
+	})
+	if err != nil {
+		t.Fatalf("transferSIPParticipantIdentity(SIP participant) error = %v", err)
+	}
+	if identity != "caller-a" {
+		t.Fatalf("transferSIPParticipantIdentity(SIP participant) = %q, want caller-a", identity)
+	}
+}
+
+func TestTransferSIPParticipantIdentityRejectsNonSIPParticipant(t *testing.T) {
+	_, err := transferSIPParticipantIdentity(fakeParticipantView{
+		identity: "agent-a",
+		kind:     lksdk.ParticipantAgent,
+	})
+	if err == nil {
+		t.Fatal("transferSIPParticipantIdentity(agent participant) error = nil, want error")
+	}
+}
+
 func TestLocalJobContextSkipsDestructiveLiveKitAPIs(t *testing.T) {
 	ctx := newLocalJobContext("room-a", "agent-local", WorkerOptions{})
 	if !ctx.IsFakeJob() {
