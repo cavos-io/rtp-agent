@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"math"
+	"strings"
 	"sync"
 
 	"github.com/cavos-io/conversation-worker/core/audio"
@@ -397,12 +398,18 @@ func (d *primarySpeakerDetector) onSttEvent(ev *SpeechEvent) *SpeechEvent {
 	sd.IsPrimarySpeaker = &isPrimary
 
 	if isPrimary {
-		sd.Text = d.primaryFormat // simplification, no easy dynamic format template built-in
+		sd.Text = formatSpeakerText(d.primaryFormat, sd.Text, sd.SpeakerID)
 	} else {
 		if d.suppressBackground {
 			return nil
 		}
-		sd.Text = d.backgroundFormat
+		sd.Text = formatSpeakerText(d.backgroundFormat, sd.Text, sd.SpeakerID)
 	}
 	return ev
+}
+
+func formatSpeakerText(format string, text string, speakerID string) string {
+	formatted := strings.ReplaceAll(format, "{text}", text)
+	formatted = strings.ReplaceAll(formatted, "{speaker_id}", speakerID)
+	return formatted
 }
