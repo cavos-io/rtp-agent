@@ -56,6 +56,44 @@ func TestConsoleLocalJobArgsMatchReference(t *testing.T) {
 	}
 }
 
+func TestParseConsoleArgsDefaultsToAudioMode(t *testing.T) {
+	args, err := parseConsoleArgs([]string{"worker", "console"})
+	if err != nil {
+		t.Fatalf("parseConsoleArgs() error = %v", err)
+	}
+	if args.Mode != ConsoleModeAudio {
+		t.Fatalf("Mode = %q, want %q", args.Mode, ConsoleModeAudio)
+	}
+	if args.Record {
+		t.Fatal("Record = true, want false")
+	}
+}
+
+func TestParseConsoleArgsSupportsTextModeAndDevices(t *testing.T) {
+	args, err := parseConsoleArgs([]string{
+		"worker", "console",
+		"--text",
+		"--record",
+		"--input-device", "mic-a",
+		"--output-device", "speaker-a",
+	})
+	if err != nil {
+		t.Fatalf("parseConsoleArgs() error = %v", err)
+	}
+	if args.Mode != ConsoleModeText {
+		t.Fatalf("Mode = %q, want %q", args.Mode, ConsoleModeText)
+	}
+	if !args.Record {
+		t.Fatal("Record = false, want true")
+	}
+	if args.InputDevice != "mic-a" {
+		t.Fatalf("InputDevice = %q, want mic-a", args.InputDevice)
+	}
+	if args.OutputDevice != "speaker-a" {
+		t.Fatalf("OutputDevice = %q, want speaker-a", args.OutputDevice)
+	}
+}
+
 func TestCliArgsCarriesReferenceReloadState(t *testing.T) {
 	args := CliArgs{
 		LogLevel:    "debug",

@@ -31,6 +31,20 @@ type ConnectArgs struct {
 	ParticipantIdentity string
 }
 
+type ConsoleMode string
+
+const (
+	ConsoleModeAudio ConsoleMode = "audio"
+	ConsoleModeText  ConsoleMode = "text"
+)
+
+type ConsoleArgs struct {
+	InputDevice  string
+	OutputDevice string
+	Mode         ConsoleMode
+	Record       bool
+}
+
 func RunApp(server *worker.AgentServer) {
 	if len(os.Args) < 2 {
 		printUsage()
@@ -48,7 +62,7 @@ func RunApp(server *worker.AgentServer) {
 	case "connect":
 		runConnect(server)
 	case "console":
-		runConsole(server)
+		runConsole(server, os.Args)
 	case "download-files":
 		runDownloadFiles()
 	default:
@@ -122,6 +136,33 @@ func parseConnectArgs(argv []string) (ConnectArgs, error) {
 	return args, nil
 }
 
+func parseConsoleArgs(argv []string) (ConsoleArgs, error) {
+	args := ConsoleArgs{Mode: ConsoleModeAudio}
+	for i := 2; i < len(argv); i++ {
+		switch argv[i] {
+		case "--text":
+			args.Mode = ConsoleModeText
+		case "--record":
+			args.Record = true
+		case "--input-device":
+			i++
+			if i >= len(argv) {
+				return ConsoleArgs{}, fmt.Errorf("missing value for --input-device")
+			}
+			args.InputDevice = argv[i]
+		case "--output-device":
+			i++
+			if i >= len(argv) {
+				return ConsoleArgs{}, fmt.Errorf("missing value for --output-device")
+			}
+			args.OutputDevice = argv[i]
+		default:
+			return ConsoleArgs{}, fmt.Errorf("unknown console option %q", argv[i])
+		}
+	}
+	return args, nil
+}
+
 func defaultConnectParticipantIdentity() string {
 	var b [6]byte
 	if _, err := rand.Read(b[:]); err != nil {
@@ -134,12 +175,26 @@ func consoleLocalJobArgs() (roomName string, participantIdentity string) {
 	return "console-room", "console"
 }
 
-func runConsole(server *worker.AgentServer) {
+func runConsole(server *worker.AgentServer, argv []string) {
+	args, err := parseConsoleArgs(argv)
+	if err != nil {
+		fmt.Println("Usage: worker console [--text] [--record] [--input-device <device>] [--output-device <device>]")
+		os.Exit(1)
+	}
+
 	fmt.Println("Starting console mode 🚀")
 	fmt.Println("Type your message and press Enter to talk to the agent. Press Ctrl+C to exit.")
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+
+	logger.Logger.Infow(
+		"Starting console local job",
+		"mode", args.Mode,
+		"record", args.Record,
+		"inputDevice", args.InputDevice,
+		"outputDevice", args.OutputDevice,
+	)
 
 	go func() {
 		roomName, participantIdentity := consoleLocalJobArgs()
