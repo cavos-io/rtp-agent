@@ -2,6 +2,7 @@ package llm
 
 import (
 	"encoding/json"
+	"fmt"
 	"reflect"
 	"time"
 )
@@ -304,6 +305,204 @@ func (c *ChatContext) MarshalJSON() ([]byte, error) {
 	}))
 }
 
+func (c *ChatContext) UnmarshalJSON(data []byte) error {
+	var decoded struct {
+		Items []json.RawMessage `json:"items"`
+	}
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		return err
+	}
+
+	items := make([]ChatItem, 0, len(decoded.Items))
+	for _, rawItem := range decoded.Items {
+		item, err := chatItemFromJSON(rawItem)
+		if err != nil {
+			return err
+		}
+		items = append(items, item)
+	}
+
+	c.Items = items
+	return nil
+}
+
+func chatItemFromJSON(data []byte) (ChatItem, error) {
+	var discriminator struct {
+		Type string `json:"type"`
+	}
+	if err := json.Unmarshal(data, &discriminator); err != nil {
+		return nil, err
+	}
+
+	switch discriminator.Type {
+	case "message":
+		return chatMessageFromJSON(data)
+	case "function_call":
+		var item struct {
+			ID        string         `json:"id"`
+			CallID    string         `json:"call_id"`
+			Name      string         `json:"name"`
+			Arguments string         `json:"arguments"`
+			Extra     map[string]any `json:"extra"`
+			GroupID   *string        `json:"group_id"`
+			CreatedAt *float64       `json:"created_at"`
+		}
+		if err := json.Unmarshal(data, &item); err != nil {
+			return nil, err
+		}
+		return &FunctionCall{
+			ID:        item.ID,
+			CallID:    item.CallID,
+			Name:      item.Name,
+			Arguments: item.Arguments,
+			Extra:     item.Extra,
+			GroupID:   item.GroupID,
+			CreatedAt: unixSecondsToTime(item.CreatedAt),
+		}, nil
+	case "function_call_output":
+		var item struct {
+			ID        string   `json:"id"`
+			CallID    string   `json:"call_id"`
+			Name      string   `json:"name"`
+			Output    string   `json:"output"`
+			IsError   bool     `json:"is_error"`
+			CreatedAt *float64 `json:"created_at"`
+		}
+		if err := json.Unmarshal(data, &item); err != nil {
+			return nil, err
+		}
+		return &FunctionCallOutput{
+			ID:        item.ID,
+			CallID:    item.CallID,
+			Name:      item.Name,
+			Output:    item.Output,
+			IsError:   item.IsError,
+			CreatedAt: unixSecondsToTime(item.CreatedAt),
+		}, nil
+	case "agent_handoff":
+		var item struct {
+			ID         string   `json:"id"`
+			OldAgentID *string  `json:"old_agent_id"`
+			NewAgentID string   `json:"new_agent_id"`
+			CreatedAt  *float64 `json:"created_at"`
+		}
+		if err := json.Unmarshal(data, &item); err != nil {
+			return nil, err
+		}
+		return &AgentHandoff{
+			ID:         item.ID,
+			OldAgentID: item.OldAgentID,
+			NewAgentID: item.NewAgentID,
+			CreatedAt:  unixSecondsToTime(item.CreatedAt),
+		}, nil
+	case "agent_config_update":
+		var item struct {
+			ID           string   `json:"id"`
+			Instructions *string  `json:"instructions"`
+			ToolsAdded   []string `json:"tools_added"`
+			ToolsRemoved []string `json:"tools_removed"`
+			CreatedAt    *float64 `json:"created_at"`
+		}
+		if err := json.Unmarshal(data, &item); err != nil {
+			return nil, err
+		}
+		return &AgentConfigUpdate{
+			ID:           item.ID,
+			Instructions: item.Instructions,
+			ToolsAdded:   item.ToolsAdded,
+			ToolsRemoved: item.ToolsRemoved,
+			CreatedAt:    unixSecondsToTime(item.CreatedAt),
+		}, nil
+	default:
+		return nil, fmt.Errorf("unsupported chat item type %q", discriminator.Type)
+	}
+}
+
+func chatMessageFromJSON(data []byte) (*ChatMessage, error) {
+	var item struct {
+		ID                   string            `json:"id"`
+		Role                 ChatRole          `json:"role"`
+		Content              []json.RawMessage `json:"content"`
+		Interrupted          bool              `json:"interrupted"`
+		TranscriptConfidence *float64          `json:"transcript_confidence"`
+		Extra                map[string]any    `json:"extra"`
+		CreatedAt            *float64          `json:"created_at"`
+	}
+	if err := json.Unmarshal(data, &item); err != nil {
+		return nil, err
+	}
+
+	content := make([]ChatContent, 0, len(item.Content))
+	for _, rawContent := range item.Content {
+		parsed, err := chatContentFromJSON(rawContent)
+		if err != nil {
+			return nil, err
+		}
+		content = append(content, parsed)
+	}
+
+	return &ChatMessage{
+		ID:                   item.ID,
+		Role:                 item.Role,
+		Content:              content,
+		Interrupted:          item.Interrupted,
+		TranscriptConfidence: item.TranscriptConfidence,
+		Extra:                item.Extra,
+		CreatedAt:            unixSecondsToTime(item.CreatedAt),
+	}, nil
+}
+
+func chatContentFromJSON(data []byte) (ChatContent, error) {
+	var text string
+	if err := json.Unmarshal(data, &text); err == nil {
+		return ChatContent{Text: text}, nil
+	}
+
+	var discriminator struct {
+		Type string `json:"type"`
+	}
+	if err := json.Unmarshal(data, &discriminator); err != nil {
+		return ChatContent{}, err
+	}
+
+	switch discriminator.Type {
+	case "image_content":
+		var image struct {
+			ID              string `json:"id"`
+			Image           any    `json:"image"`
+			InferenceWidth  *int   `json:"inference_width"`
+			InferenceHeight *int   `json:"inference_height"`
+			InferenceDetail string `json:"inference_detail"`
+			MimeType        string `json:"mime_type"`
+		}
+		if err := json.Unmarshal(data, &image); err != nil {
+			return ChatContent{}, err
+		}
+		return ChatContent{Image: &ImageContent{
+			ID:              image.ID,
+			Image:           image.Image,
+			InferenceWidth:  image.InferenceWidth,
+			InferenceHeight: image.InferenceHeight,
+			InferenceDetail: image.InferenceDetail,
+			MimeType:        image.MimeType,
+		}}, nil
+	case "audio_content":
+		var audio struct {
+			Frames     []any  `json:"frame"`
+			Transcript string `json:"transcript"`
+		}
+		if err := json.Unmarshal(data, &audio); err != nil {
+			return ChatContent{}, err
+		}
+		return ChatContent{Audio: &AudioContent{
+			Frames:     audio.Frames,
+			Transcript: audio.Transcript,
+		}}, nil
+	default:
+		return ChatContent{}, fmt.Errorf("unsupported chat content type %q", discriminator.Type)
+	}
+}
+
 func chatItemToDict(item ChatItem, opts ChatContextDictOptions) map[string]any {
 	switch it := item.(type) {
 	case *ChatMessage:
@@ -427,6 +626,14 @@ func addCreatedAt(data map[string]any, createdAt time.Time, opts ChatContextDict
 	if opts.IncludeTimestamp {
 		data["created_at"] = float64(createdAt.UnixNano()) / float64(time.Second)
 	}
+}
+
+func unixSecondsToTime(seconds *float64) time.Time {
+	if seconds == nil {
+		return time.Time{}
+	}
+	nanos := int64(*seconds * float64(time.Second))
+	return time.Unix(0, nanos)
 }
 
 func nonNilMap(value map[string]any) map[string]any {

@@ -2,6 +2,7 @@ package llm
 
 import (
 	"encoding/json"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -470,6 +471,144 @@ func TestChatContextMarshalJSONIncludesTimestampsForReports(t *testing.T) {
 	handoff := decoded.Items[3]
 	if handoff["type"] != "agent_handoff" || handoff["new_agent_id"] != "next" {
 		t.Fatalf("handoff = %#v", handoff)
+	}
+}
+
+func TestChatContextUnmarshalJSONRestoresTypedItems(t *testing.T) {
+	data := []byte(`{
+		"items": [
+			{
+				"id": "message",
+				"type": "message",
+				"role": "assistant",
+				"content": [
+					"hello",
+					{
+						"id": "image",
+						"type": "image_content",
+						"image": "https://example.test/image.png",
+						"inference_width": 320,
+						"inference_height": 240,
+						"inference_detail": "high",
+						"mime_type": "image/png"
+					},
+					{
+						"type": "audio_content",
+						"transcript": "audio text"
+					}
+				],
+				"interrupted": true,
+				"transcript_confidence": 0.75,
+				"extra": {"source": "test"},
+				"created_at": 10.25
+			},
+			{
+				"id": "call",
+				"type": "function_call",
+				"call_id": "call_lookup",
+				"name": "lookup",
+				"arguments": "{\"city\":\"Paris\"}",
+				"extra": {"provider": "test"},
+				"group_id": "assistant-turn",
+				"created_at": 11
+			},
+			{
+				"id": "output",
+				"type": "function_call_output",
+				"call_id": "call_lookup",
+				"name": "lookup",
+				"output": "Paris",
+				"is_error": true,
+				"created_at": 12
+			},
+			{
+				"id": "handoff",
+				"type": "agent_handoff",
+				"old_agent_id": "old",
+				"new_agent_id": "new",
+				"created_at": 13
+			},
+			{
+				"id": "config",
+				"type": "agent_config_update",
+				"instructions": "be concise",
+				"tools_added": ["lookup"],
+				"tools_removed": ["search"],
+				"created_at": 14
+			}
+		]
+	}`)
+
+	var ctx ChatContext
+	if err := json.Unmarshal(data, &ctx); err != nil {
+		t.Fatalf("UnmarshalJSON() error = %v", err)
+	}
+
+	if len(ctx.Items) != 5 {
+		t.Fatalf("len(items) = %d, want 5", len(ctx.Items))
+	}
+	message, ok := ctx.Items[0].(*ChatMessage)
+	if !ok {
+		t.Fatalf("item[0] = %T, want *ChatMessage", ctx.Items[0])
+	}
+	if message.ID != "message" || message.Role != ChatRoleAssistant || !message.Interrupted {
+		t.Fatalf("message fields = %#v", message)
+	}
+	if message.TranscriptConfidence == nil || *message.TranscriptConfidence != 0.75 {
+		t.Fatalf("transcript confidence = %#v", message.TranscriptConfidence)
+	}
+	if !message.CreatedAt.Equal(time.Unix(10, 250000000)) {
+		t.Fatalf("message CreatedAt = %v, want unix 10.25", message.CreatedAt)
+	}
+	if len(message.Content) != 3 || message.Content[0].Text != "hello" {
+		t.Fatalf("message content = %#v", message.Content)
+	}
+	if message.Content[1].Image == nil || message.Content[1].Image.ID != "image" || message.Content[1].Image.InferenceWidth == nil || *message.Content[1].Image.InferenceWidth != 320 {
+		t.Fatalf("image content = %#v", message.Content[1].Image)
+	}
+	if message.Content[2].Audio == nil || message.Content[2].Audio.Transcript != "audio text" {
+		t.Fatalf("audio content = %#v", message.Content[2].Audio)
+	}
+
+	call, ok := ctx.Items[1].(*FunctionCall)
+	if !ok {
+		t.Fatalf("item[1] = %T, want *FunctionCall", ctx.Items[1])
+	}
+	if call.CallID != "call_lookup" || call.Name != "lookup" || call.GroupID == nil || *call.GroupID != "assistant-turn" {
+		t.Fatalf("function call = %#v", call)
+	}
+
+	output, ok := ctx.Items[2].(*FunctionCallOutput)
+	if !ok {
+		t.Fatalf("item[2] = %T, want *FunctionCallOutput", ctx.Items[2])
+	}
+	if output.Output != "Paris" || !output.IsError {
+		t.Fatalf("function output = %#v", output)
+	}
+
+	handoff, ok := ctx.Items[3].(*AgentHandoff)
+	if !ok {
+		t.Fatalf("item[3] = %T, want *AgentHandoff", ctx.Items[3])
+	}
+	if handoff.OldAgentID == nil || *handoff.OldAgentID != "old" || handoff.NewAgentID != "new" {
+		t.Fatalf("handoff = %#v", handoff)
+	}
+
+	config, ok := ctx.Items[4].(*AgentConfigUpdate)
+	if !ok {
+		t.Fatalf("item[4] = %T, want *AgentConfigUpdate", ctx.Items[4])
+	}
+	if config.Instructions == nil || *config.Instructions != "be concise" || !reflect.DeepEqual(config.ToolsAdded, []string{"lookup"}) || !reflect.DeepEqual(config.ToolsRemoved, []string{"search"}) {
+		t.Fatalf("config = %#v", config)
+	}
+}
+
+func TestChatContextUnmarshalJSONRejectsUnknownItemType(t *testing.T) {
+	data := []byte(`{"items":[{"id":"bad","type":"unknown"}]}`)
+
+	var ctx ChatContext
+	if err := json.Unmarshal(data, &ctx); err == nil {
+		t.Fatal("UnmarshalJSON() error = nil, want error")
 	}
 }
 
