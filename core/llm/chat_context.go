@@ -1,6 +1,7 @@
 package llm
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"reflect"
@@ -1182,15 +1183,19 @@ func openAIChatContent(content []ChatContent) any {
 }
 
 func openAIImageContent(image *ImageContent) map[string]any {
-	url, ok := image.Image.(string)
-	if !ok || url == "" {
+	img, err := SerializeImage(image)
+	if err != nil {
 		return nil
+	}
+	url := img.ExternalURL
+	if url == "" {
+		url = fmt.Sprintf("data:%s;base64,%s", img.MIMEType, base64.StdEncoding.EncodeToString(img.DataBytes))
 	}
 	return map[string]any{
 		"type": "image_url",
 		"image_url": map[string]any{
 			"url":    url,
-			"detail": imageInferenceDetailOrDefault(image.InferenceDetail),
+			"detail": img.InferenceDetail,
 		},
 	}
 }
@@ -1231,14 +1236,18 @@ func openAIResponsesContent(content []ChatContent) any {
 }
 
 func openAIResponsesImageContent(image *ImageContent) map[string]any {
-	url, ok := image.Image.(string)
-	if !ok || url == "" {
+	img, err := SerializeImage(image)
+	if err != nil {
 		return nil
+	}
+	url := img.ExternalURL
+	if url == "" {
+		url = fmt.Sprintf("data:%s;base64,%s", img.MIMEType, base64.StdEncoding.EncodeToString(img.DataBytes))
 	}
 	return map[string]any{
 		"type":      "input_image",
 		"image_url": url,
-		"detail":    imageInferenceDetailOrDefault(image.InferenceDetail),
+		"detail":    img.InferenceDetail,
 	}
 }
 
@@ -1307,9 +1316,13 @@ func mistralMessageContent(msg *ChatMessage) any {
 }
 
 func mistralImageContent(image *ImageContent) map[string]any {
-	url, ok := image.Image.(string)
-	if !ok || url == "" {
+	img, err := SerializeImage(image)
+	if err != nil {
 		return nil
+	}
+	url := img.ExternalURL
+	if url == "" {
+		url = fmt.Sprintf("data:%s;base64,%s", img.MIMEType, base64.StdEncoding.EncodeToString(img.DataBytes))
 	}
 	return map[string]any{
 		"type":      "image_url",
@@ -1408,17 +1421,25 @@ func googleItemParts(item ChatItem) []map[string]any {
 }
 
 func googleImagePart(image *ImageContent) map[string]any {
-	url, ok := image.Image.(string)
-	if !ok || url == "" {
+	img, err := SerializeImage(image)
+	if err != nil {
 		return nil
 	}
-	mimeType := image.MimeType
+	if img.ExternalURL == "" {
+		return map[string]any{
+			"inline_data": map[string]any{
+				"data":      img.DataBytes,
+				"mime_type": img.MIMEType,
+			},
+		}
+	}
+	mimeType := img.MIMEType
 	if mimeType == "" {
 		mimeType = "image/jpeg"
 	}
 	return map[string]any{
 		"file_data": map[string]any{
-			"file_uri":  url,
+			"file_uri":  img.ExternalURL,
 			"mime_type": mimeType,
 		},
 	}
@@ -1482,15 +1503,25 @@ func anthropicItemContent(item ChatItem) []map[string]any {
 }
 
 func anthropicImageContent(image *ImageContent) map[string]any {
-	url, ok := image.Image.(string)
-	if !ok || url == "" {
+	img, err := SerializeImage(image)
+	if err != nil {
 		return nil
+	}
+	if img.ExternalURL == "" {
+		return map[string]any{
+			"type": "image",
+			"source": map[string]any{
+				"type":       "base64",
+				"data":       base64.StdEncoding.EncodeToString(img.DataBytes),
+				"media_type": img.MIMEType,
+			},
+		}
 	}
 	return map[string]any{
 		"type": "image",
 		"source": map[string]any{
 			"type": "url",
-			"url":  url,
+			"url":  img.ExternalURL,
 		},
 	}
 }
@@ -1527,6 +1558,11 @@ func awsItemContent(item ChatItem) []map[string]any {
 			if text := chatContentText(item); text != "" {
 				content = append(content, map[string]any{"text": text})
 			}
+			if item.Image != nil {
+				if part := awsImageContent(item.Image); part != nil {
+					content = append(content, part)
+				}
+			}
 		}
 		return content
 	case *FunctionCall:
@@ -1553,6 +1589,21 @@ func awsItemContent(item ChatItem) []map[string]any {
 		}}
 	default:
 		return nil
+	}
+}
+
+func awsImageContent(image *ImageContent) map[string]any {
+	img, err := SerializeImage(image)
+	if err != nil || img.ExternalURL != "" {
+		return nil
+	}
+	return map[string]any{
+		"image": map[string]any{
+			"format": "jpeg",
+			"source": map[string]any{
+				"bytes": img.DataBytes,
+			},
+		},
 	}
 }
 

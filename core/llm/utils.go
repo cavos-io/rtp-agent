@@ -1,9 +1,69 @@
 package llm
 
+import (
+	"encoding/base64"
+	"fmt"
+	"strings"
+)
+
 type DiffOps struct {
 	ToRemove []string
 	ToCreate [][2]*string // [previous_item_id, id]
 	ToUpdate [][2]*string // [previous_item_id, id]
+}
+
+type SerializedImage struct {
+	InferenceDetail string
+	MIMEType        string
+	DataBytes       []byte
+	ExternalURL     string
+}
+
+func SerializeImage(image *ImageContent) (*SerializedImage, error) {
+	if image == nil {
+		return nil, fmt.Errorf("image content is nil")
+	}
+	imageString, ok := image.Image.(string)
+	if !ok || imageString == "" {
+		return nil, fmt.Errorf("unsupported image type")
+	}
+	serialized := &SerializedImage{
+		InferenceDetail: imageInferenceDetailOrDefault(image.InferenceDetail),
+		MIMEType:        image.MimeType,
+	}
+	if !strings.HasPrefix(imageString, "data:") {
+		serialized.ExternalURL = imageString
+		return serialized, nil
+	}
+
+	header, encodedData, ok := strings.Cut(imageString, ",")
+	if !ok {
+		return nil, fmt.Errorf("invalid data URL image")
+	}
+	headerMIME := strings.TrimPrefix(strings.Split(header, ";")[0], "data:")
+	mimeType := image.MimeType
+	if mimeType == "" {
+		mimeType = headerMIME
+	}
+	if !isSupportedImageMIMEType(mimeType) {
+		return nil, fmt.Errorf("unsupported mime_type %s", mimeType)
+	}
+	data, err := base64.StdEncoding.DecodeString(encodedData)
+	if err != nil {
+		return nil, fmt.Errorf("decode data URL image: %w", err)
+	}
+	serialized.MIMEType = mimeType
+	serialized.DataBytes = data
+	return serialized, nil
+}
+
+func isSupportedImageMIMEType(mimeType string) bool {
+	switch mimeType {
+	case "image/jpeg", "image/png", "image/webp", "image/gif":
+		return true
+	default:
+		return false
+	}
 }
 
 func ComputeChatCtxDiff(oldCtx, newCtx *ChatContext) *DiffOps {
