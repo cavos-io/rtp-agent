@@ -22,6 +22,7 @@ type ChatMessageArgs struct {
 	ID          string
 	Role        ChatRole
 	Content     []ChatContent
+	Text        string
 	Interrupted bool
 	CreatedAt   time.Time
 	Extra       map[string]any
@@ -76,10 +77,14 @@ func (c *ChatContext) AddMessage(args ChatMessageArgs) *ChatMessage {
 	if createdAt.IsZero() {
 		createdAt = time.Now()
 	}
+	content := args.Content
+	if len(content) == 0 && args.Text != "" {
+		content = []ChatContent{{Text: args.Text}}
+	}
 	message := &ChatMessage{
 		ID:          itemIDOrDefault(args.ID),
 		Role:        args.Role,
-		Content:     args.Content,
+		Content:     content,
 		Interrupted: args.Interrupted,
 		Extra:       args.Extra,
 		CreatedAt:   createdAt,

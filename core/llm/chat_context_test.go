@@ -206,6 +206,19 @@ func TestChatContextAddMessageDefaultsID(t *testing.T) {
 	}
 }
 
+func TestChatContextAddMessageAcceptsTextContent(t *testing.T) {
+	ctx := NewChatContext()
+
+	message := ctx.AddMessage(ChatMessageArgs{
+		Role: ChatRoleUser,
+		Text: "hello",
+	})
+
+	if got, want := message.TextContent(), "hello"; got != want {
+		t.Fatalf("AddMessage() text content = %q, want %q", got, want)
+	}
+}
+
 func TestChatContextInsertOrdersItemsByCreatedAt(t *testing.T) {
 	ctx := NewChatContext()
 	ctx.Items = []ChatItem{
