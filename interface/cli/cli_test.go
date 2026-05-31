@@ -149,6 +149,17 @@ func TestReadConsoleInputPreservesSpaces(t *testing.T) {
 	}
 }
 
+func TestConsoleInputIsEmptyTreatsWhitespaceAsEmpty(t *testing.T) {
+	for _, input := range []string{"", " ", "\t", "  \t  "} {
+		if !consoleInputIsEmpty(input) {
+			t.Fatalf("consoleInputIsEmpty(%q) = false, want true", input)
+		}
+	}
+	if consoleInputIsEmpty(" hello ") {
+		t.Fatal("consoleInputIsEmpty(\" hello \") = true, want false")
+	}
+}
+
 func TestCliArgsCarriesReferenceReloadState(t *testing.T) {
 	args := CliArgs{
 		LogLevel:    "debug",

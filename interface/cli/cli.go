@@ -265,6 +265,10 @@ func readConsoleInput(r io.Reader) (string, error) {
 	return strings.TrimRight(line, "\r\n"), nil
 }
 
+func consoleInputIsEmpty(input string) bool {
+	return strings.TrimSpace(input) == ""
+}
+
 func runConsole(server *worker.AgentServer, argv []string) {
 	args, err := parseConsoleArgs(argv)
 	if err != nil {
@@ -308,7 +312,7 @@ func runConsole(server *worker.AgentServer, argv []string) {
 			if err != nil {
 				break
 			}
-			if input != "" {
+			if !consoleInputIsEmpty(input) {
 				logger.Logger.Infow("User input received", "input", input)
 				if session := server.GetConsoleSession(); session != nil {
 					// We use type assertion via a local interface to avoid tight coupling if preferred,
