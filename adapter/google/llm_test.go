@@ -135,6 +135,36 @@ func TestBuildGoogleFunctionDeclarationKeepsStringRequiredFields(t *testing.T) {
 	}
 }
 
+func TestBuildGoogleToolConfigMapsNamedToolChoice(t *testing.T) {
+	config := buildGoogleToolConfig([]llm.Tool{googleRequestTestTool{}}, map[string]any{
+		"type": "function",
+		"function": map[string]any{
+			"name": "lookup",
+		},
+	})
+
+	if config == nil || config.FunctionCallingConfig == nil {
+		t.Fatalf("tool config = %#v, want function calling config", config)
+	}
+	if config.FunctionCallingConfig.Mode != genai.FunctionCallingConfigModeAny {
+		t.Fatalf("mode = %q, want ANY", config.FunctionCallingConfig.Mode)
+	}
+	if len(config.FunctionCallingConfig.AllowedFunctionNames) != 1 || config.FunctionCallingConfig.AllowedFunctionNames[0] != "lookup" {
+		t.Fatalf("allowed names = %#v, want lookup", config.FunctionCallingConfig.AllowedFunctionNames)
+	}
+}
+
+func TestBuildGoogleToolConfigMapsNoneToolChoice(t *testing.T) {
+	config := buildGoogleToolConfig([]llm.Tool{googleRequestTestTool{}}, "none")
+
+	if config == nil || config.FunctionCallingConfig == nil {
+		t.Fatalf("tool config = %#v, want function calling config", config)
+	}
+	if config.FunctionCallingConfig.Mode != genai.FunctionCallingConfigModeNone {
+		t.Fatalf("mode = %q, want NONE", config.FunctionCallingConfig.Mode)
+	}
+}
+
 func assertGoogleTextPart(t *testing.T, parts []*genai.Part, index int, want string) {
 	t.Helper()
 	if len(parts) <= index {

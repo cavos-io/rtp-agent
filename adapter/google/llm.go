@@ -57,6 +57,9 @@ func (l *GoogleLLM) Chat(ctx context.Context, chatCtx *llm.ChatContext, opts ...
 			{FunctionDeclarations: declarations},
 		}
 	}
+	if toolConfig := buildGoogleToolConfig(options.Tools, options.ToolChoice); toolConfig != nil {
+		config.ToolConfig = toolConfig
+	}
 
 	stream := l.client.Models.GenerateContentStream(ctx, l.model, contents, config)
 
@@ -112,6 +115,63 @@ func googleRequiredFields(value any) []string {
 	default:
 		return nil
 	}
+}
+
+func buildGoogleToolConfig(tools []llm.Tool, choice llm.ToolChoice) *genai.ToolConfig {
+	switch tc := choice.(type) {
+	case string:
+		switch tc {
+		case "auto":
+			return &genai.ToolConfig{
+				FunctionCallingConfig: &genai.FunctionCallingConfig{
+					Mode: genai.FunctionCallingConfigModeAuto,
+				},
+			}
+		case "required":
+			return &genai.ToolConfig{
+				FunctionCallingConfig: &genai.FunctionCallingConfig{
+					Mode:                 genai.FunctionCallingConfigModeAny,
+					AllowedFunctionNames: googleToolNames(tools),
+				},
+			}
+		case "none":
+			return &genai.ToolConfig{
+				FunctionCallingConfig: &genai.FunctionCallingConfig{
+					Mode: genai.FunctionCallingConfigModeNone,
+				},
+			}
+		}
+	case map[string]any:
+		if tc["type"] != "function" {
+			return nil
+		}
+		function, ok := tc["function"].(map[string]any)
+		if !ok {
+			return nil
+		}
+		name, ok := function["name"].(string)
+		if !ok || name == "" {
+			return nil
+		}
+		return &genai.ToolConfig{
+			FunctionCallingConfig: &genai.FunctionCallingConfig{
+				Mode:                 genai.FunctionCallingConfigModeAny,
+				AllowedFunctionNames: []string{name},
+			},
+		}
+	}
+	return nil
+}
+
+func googleToolNames(tools []llm.Tool) []string {
+	names := make([]string, 0, len(tools))
+	for _, tool := range tools {
+		names = append(names, tool.Name())
+	}
+	if len(names) == 0 {
+		return nil
+	}
+	return names
 }
 
 type googleLLMStream struct {
