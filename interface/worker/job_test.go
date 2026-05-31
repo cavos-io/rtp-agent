@@ -3,6 +3,7 @@ package worker
 import (
 	"context"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/livekit/protocol/auth"
@@ -219,6 +220,35 @@ func TestJobContextRunDefaultParticipantEntrypointsSkipsAgentParticipants(t *tes
 	want := []string{"caller"}
 	if !reflect.DeepEqual(calls, want) {
 		t.Fatalf("participant entrypoint calls = %#v, want %#v", calls, want)
+	}
+}
+
+func TestJobContextWaitForParticipantConnectsBeforeWaiting(t *testing.T) {
+	ctx := NewJobContext(
+		&livekit.Job{Id: "job_wait_connect", Room: &livekit.Room{Name: "room-a"}},
+		"://invalid-url",
+		"key",
+		"secret",
+	)
+
+	_, err := ctx.WaitForParticipant(context.Background(), "")
+	if err == nil {
+		t.Fatal("WaitForParticipant() error = nil, want connection error")
+	}
+	if strings.Contains(err.Error(), "room is nil") {
+		t.Fatalf("WaitForParticipant() error = %q, want Connect error before utility wait", err)
+	}
+}
+
+func TestJobContextDefaultParticipantWaitKindsMatchReference(t *testing.T) {
+	got := defaultParticipantWaitKinds(nil)
+	want := []livekit.ParticipantInfo_Kind{
+		livekit.ParticipantInfo_CONNECTOR,
+		livekit.ParticipantInfo_SIP,
+		livekit.ParticipantInfo_STANDARD,
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("default participant wait kinds = %#v, want %#v", got, want)
 	}
 }
 

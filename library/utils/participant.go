@@ -48,7 +48,7 @@ func WaitForAgent(ctx context.Context, room *lksdk.Room, agentName string) (*lks
 	}
 }
 
-func WaitForParticipant(ctx context.Context, room *lksdk.Room, identity string, kind livekit.ParticipantInfo_Kind) (*lksdk.RemoteParticipant, error) {
+func WaitForParticipant(ctx context.Context, room *lksdk.Room, identity string, kinds ...livekit.ParticipantInfo_Kind) (*lksdk.RemoteParticipant, error) {
 	if room == nil {
 		return nil, fmt.Errorf("room is nil")
 	}
@@ -57,10 +57,8 @@ func WaitForParticipant(ctx context.Context, room *lksdk.Room, identity string, 
 		if identity != "" && p.Identity() != identity {
 			return false
 		}
-		if kind != livekit.ParticipantInfo_STANDARD {
-			if p.Kind() != lksdk.ParticipantKind(kind) {
-				return false
-			}
+		if !participantKindMatches(livekit.ParticipantInfo_Kind(p.Kind()), kinds) {
+			return false
 		}
 		return true
 	}
@@ -84,6 +82,18 @@ func WaitForParticipant(ctx context.Context, room *lksdk.Room, identity string, 
 			}
 		}
 	}
+}
+
+func participantKindMatches(kind livekit.ParticipantInfo_Kind, allowed []livekit.ParticipantInfo_Kind) bool {
+	if len(allowed) == 0 {
+		return true
+	}
+	for _, candidate := range allowed {
+		if candidate == kind {
+			return true
+		}
+	}
+	return false
 }
 
 func WaitForTrackPublication(ctx context.Context, room *lksdk.Room, identity string, kind livekit.TrackType) (*lksdk.RemoteTrackPublication, error) {

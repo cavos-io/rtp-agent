@@ -8,6 +8,7 @@ import (
 
 	"github.com/cavos-io/conversation-worker/core/agent"
 	"github.com/cavos-io/conversation-worker/library/logger"
+	"github.com/cavos-io/conversation-worker/library/utils"
 	"github.com/go-jose/go-jose/v3/jwt"
 	"github.com/livekit/protocol/auth"
 	"github.com/livekit/protocol/livekit"
@@ -243,6 +244,26 @@ func (c *JobContext) AddParticipantEntrypoint(entrypoint ParticipantEntrypoint, 
 		kinds:      append([]livekit.ParticipantInfo_Kind(nil), kinds...),
 	})
 	return nil
+}
+
+func (c *JobContext) WaitForParticipant(
+	ctx context.Context,
+	identity string,
+	kinds ...livekit.ParticipantInfo_Kind,
+) (*lksdk.RemoteParticipant, error) {
+	if c.Room == nil {
+		if err := c.Connect(ctx, nil); err != nil {
+			return nil, err
+		}
+	}
+	return utils.WaitForParticipant(ctx, c.Room, identity, defaultParticipantWaitKinds(kinds)...)
+}
+
+func defaultParticipantWaitKinds(kinds []livekit.ParticipantInfo_Kind) []livekit.ParticipantInfo_Kind {
+	if len(kinds) > 0 {
+		return kinds
+	}
+	return defaultParticipantEntrypointKinds
 }
 
 func (c *JobContext) runParticipantEntrypoints(participant *livekit.ParticipantInfo) {
