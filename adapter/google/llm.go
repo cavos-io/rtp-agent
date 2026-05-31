@@ -50,44 +50,7 @@ func (l *GoogleLLM) Chat(ctx context.Context, chatCtx *llm.ChatContext, opts ...
 	if len(options.Tools) > 0 {
 		declarations := make([]*genai.FunctionDeclaration, 0)
 		for _, t := range options.Tools {
-
-			// Map parameters
-			schemaMap := t.Parameters()
-			var properties map[string]*genai.Schema
-
-			if props, ok := schemaMap["properties"].(map[string]any); ok {
-				properties = make(map[string]*genai.Schema)
-				for k, v := range props {
-					if typeMap, ok := v.(map[string]any); ok {
-						typeStr, _ := typeMap["type"].(string)
-						descStr, _ := typeMap["description"].(string)
-						// Simplification for the example
-						properties[k] = &genai.Schema{
-							Type:        genai.Type(typeStr),
-							Description: descStr,
-						}
-					}
-				}
-			}
-
-			var required []string
-			if reqs, ok := schemaMap["required"].([]any); ok {
-				for _, r := range reqs {
-					if reqStr, ok := r.(string); ok {
-						required = append(required, reqStr)
-					}
-				}
-			}
-
-			declarations = append(declarations, &genai.FunctionDeclaration{
-				Name:        t.Name(),
-				Description: t.Description(),
-				Parameters: &genai.Schema{
-					Type:       genai.TypeObject,
-					Properties: properties,
-					Required:   required,
-				},
-			})
+			declarations = append(declarations, buildGoogleFunctionDeclaration(t))
 		}
 
 		config.Tools = []*genai.Tool{
@@ -103,6 +66,52 @@ func (l *GoogleLLM) Chat(ctx context.Context, chatCtx *llm.ChatContext, opts ...
 		next: next,
 		stop: stop,
 	}, nil
+}
+
+func buildGoogleFunctionDeclaration(t llm.Tool) *genai.FunctionDeclaration {
+	schemaMap := t.Parameters()
+	var properties map[string]*genai.Schema
+
+	if props, ok := schemaMap["properties"].(map[string]any); ok {
+		properties = make(map[string]*genai.Schema)
+		for k, v := range props {
+			if typeMap, ok := v.(map[string]any); ok {
+				typeStr, _ := typeMap["type"].(string)
+				descStr, _ := typeMap["description"].(string)
+				properties[k] = &genai.Schema{
+					Type:        genai.Type(typeStr),
+					Description: descStr,
+				}
+			}
+		}
+	}
+
+	return &genai.FunctionDeclaration{
+		Name:        t.Name(),
+		Description: t.Description(),
+		Parameters: &genai.Schema{
+			Type:       genai.TypeObject,
+			Properties: properties,
+			Required:   googleRequiredFields(schemaMap["required"]),
+		},
+	}
+}
+
+func googleRequiredFields(value any) []string {
+	switch reqs := value.(type) {
+	case []string:
+		return append([]string(nil), reqs...)
+	case []any:
+		required := make([]string, 0, len(reqs))
+		for _, r := range reqs {
+			if reqStr, ok := r.(string); ok {
+				required = append(required, reqStr)
+			}
+		}
+		return required
+	default:
+		return nil
+	}
 }
 
 type googleLLMStream struct {
