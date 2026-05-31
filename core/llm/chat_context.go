@@ -766,6 +766,9 @@ func (c *ChatContext) ToProviderFormat(format string) ([]map[string]any, any) {
 	if format == "anthropic" {
 		return c.toAnthropicProviderFormat()
 	}
+	if format == "aws" {
+		return c.toAWSProviderFormat()
+	}
 	return nil, nil
 }
 
@@ -861,6 +864,53 @@ func (c *ChatContext) toAnthropicProviderFormat() ([]map[string]any, any) {
 		messages = append([]map[string]any{{
 			"role":    "user",
 			"content": []map[string]any{{"text": "(empty)", "type": "text"}},
+		}}, messages...)
+	}
+
+	return messages, map[string]any{"system_messages": systemMessages}
+}
+
+func (c *ChatContext) toAWSProviderFormat() ([]map[string]any, any) {
+	messages := make([]map[string]any, 0)
+	systemMessages := make([]string, 0)
+	currentRole := ""
+	content := make([]map[string]any, 0)
+
+	flush := func() {
+		if currentRole == "" || len(content) == 0 {
+			return
+		}
+		messages = append(messages, map[string]any{
+			"role":    currentRole,
+			"content": content,
+		})
+		content = make([]map[string]any, 0)
+	}
+
+	for _, group := range groupOpenAIToolCalls(c.Items) {
+		for _, item := range group.flatten() {
+			if msg, ok := item.(*ChatMessage); ok && msg.Role == ChatRoleSystem && msg.TextContent() != "" {
+				systemMessages = append(systemMessages, msg.TextContent())
+				continue
+			}
+
+			role := awsItemRole(item)
+			if role == "" {
+				continue
+			}
+			if role != currentRole {
+				flush()
+				currentRole = role
+			}
+			content = append(content, awsItemContent(item)...)
+		}
+	}
+	flush()
+
+	if len(messages) == 0 || messages[0]["role"] != "user" {
+		messages = append([]map[string]any{{
+			"role":    "user",
+			"content": []map[string]any{{"text": "(empty)"}},
 		}}, messages...)
 	}
 
@@ -1282,6 +1332,59 @@ func anthropicToolResultContent(output string) any {
 		return parsed
 	}
 	return output
+}
+
+func awsItemRole(item ChatItem) string {
+	switch it := item.(type) {
+	case *ChatMessage:
+		if it.Role == ChatRoleAssistant {
+			return "assistant"
+		}
+		return "user"
+	case *FunctionCall:
+		return "assistant"
+	case *FunctionCallOutput:
+		return "user"
+	default:
+		return ""
+	}
+}
+
+func awsItemContent(item ChatItem) []map[string]any {
+	switch it := item.(type) {
+	case *ChatMessage:
+		content := make([]map[string]any, 0, len(it.Content))
+		for _, item := range it.Content {
+			if item.Text != "" {
+				content = append(content, map[string]any{"text": item.Text})
+			}
+		}
+		return content
+	case *FunctionCall:
+		input := map[string]any{}
+		if it.Arguments != "" {
+			_ = json.Unmarshal([]byte(it.Arguments), &input)
+		}
+		return []map[string]any{{
+			"toolUse": map[string]any{
+				"toolUseId": it.CallID,
+				"name":      it.Name,
+				"input":     input,
+			},
+		}}
+	case *FunctionCallOutput:
+		return []map[string]any{{
+			"toolResult": map[string]any{
+				"toolUseId": it.CallID,
+				"content": []map[string]any{
+					{"text": it.Output},
+				},
+				"status": "success",
+			},
+		}}
+	default:
+		return nil
+	}
 }
 
 func openAIToolOutput(toolOutput *FunctionCallOutput) map[string]any {
