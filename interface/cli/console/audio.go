@@ -18,27 +18,29 @@ type AudioIO struct {
 
 	// Mic to Worker
 	audioOutCh chan *model.AudioFrame
-	
+
 	// Worker to Speakers
 	audioInCh chan *model.AudioFrame
-	
-	mu       sync.Mutex
-	started  bool
-	
-	sampleRate  int
-	channels    int
+
+	mu            sync.Mutex
+	started       bool
+	inputAttached bool
+
+	sampleRate      int
+	channels        int
 	framesPerBuffer int
-	
+
 	speakerBuffer []int16
 }
 
 func NewAudioIO() *AudioIO {
 	return &AudioIO{
-		audioOutCh: make(chan *model.AudioFrame, 100),
-		audioInCh:  make(chan *model.AudioFrame, 100),
-		sampleRate: 24000,
-		channels:   1,
+		audioOutCh:      make(chan *model.AudioFrame, 100),
+		audioInCh:       make(chan *model.AudioFrame, 100),
+		sampleRate:      24000,
+		channels:        1,
 		framesPerBuffer: 480, // 20ms at 24kHz
+		inputAttached:   true,
 	}
 }
 
@@ -59,28 +61,24 @@ func (a *AudioIO) Start(ctx context.Context) error {
 
 	inBuf := make([]int16, a.framesPerBuffer)
 
-	stream, err := portaudio.OpenDefaultStream(a.channels, a.channels, float64(a.sampleRate), a.framesPerBuffer, 
+	stream, err := portaudio.OpenDefaultStream(a.channels, a.channels, float64(a.sampleRate), a.framesPerBuffer,
 		func(in, out []int16) {
 			// Read from Mic
 			copy(inBuf, in)
-			
+
 			// Send Mic data to Agent
 			data := make([]byte, len(inBuf)*2)
 			for i, v := range inBuf {
 				data[i*2] = byte(v)
 				data[i*2+1] = byte(v >> 8)
 			}
-			
-			select {
-			case a.audioOutCh <- &model.AudioFrame{
+
+			a.PushMicFrame(&model.AudioFrame{
 				Data:              data,
 				SampleRate:        uint32(a.sampleRate),
 				NumChannels:       uint32(a.channels),
 				SamplesPerChannel: uint32(len(inBuf)),
-			}:
-			default:
-				// Drop frame if channel full
-			}
+			})
 
 			// Write to Speakers from buffer
 			a.mu.Lock()
@@ -131,6 +129,32 @@ func (a *AudioIO) Stop() error {
 	portaudio.Terminate()
 	a.started = false
 	return nil
+}
+
+func (a *AudioIO) SetInputAttached(attached bool) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.inputAttached = attached
+}
+
+func (a *AudioIO) PushMicFrame(frame *model.AudioFrame) bool {
+	if frame == nil {
+		return false
+	}
+
+	a.mu.Lock()
+	attached := a.inputAttached
+	a.mu.Unlock()
+	if !attached {
+		return false
+	}
+
+	select {
+	case a.audioOutCh <- frame:
+		return true
+	default:
+		return false
+	}
 }
 
 // PushFrame takes audio from the Agent and queues it for the speakers
