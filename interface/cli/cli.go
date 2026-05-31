@@ -1,17 +1,21 @@
 package cli
 
 import (
+	"bufio"
 	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
+	"io"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 
 	"github.com/cavos-io/conversation-worker/core/agent"
 	"github.com/cavos-io/conversation-worker/interface/worker"
 	"github.com/cavos-io/conversation-worker/library/logger"
+	"github.com/gordonklaus/portaudio"
 )
 
 type CliArgs struct {
@@ -44,15 +48,90 @@ type ConsoleArgs struct {
 	Mode         ConsoleMode
 	Record       bool
 	ListDevices  bool
+	LogLevel     string
+}
+
+type consoleAudioDevice struct {
+	Index             int
+	Name              string
+	MaxInputChannels  int
+	MaxOutputChannels int
 }
 
 var printConsoleAudioDevices = func() {
-	fmt.Println("Audio device listing is not available in this build.")
+	devices, defaultInput, defaultOutput, err := consoleAudioDevices()
+	if err != nil {
+		fmt.Printf("Failed to list audio devices: %v\n", err)
+		return
+	}
+	fmt.Print(formatConsoleAudioDevices(devices, defaultInput, defaultOutput))
+}
+
+var consoleAudioDevices = func() ([]consoleAudioDevice, int, int, error) {
+	if err := portaudio.Initialize(); err != nil {
+		return nil, -1, -1, err
+	}
+	defer portaudio.Terminate()
+
+	portaudioDevices, err := portaudio.Devices()
+	if err != nil {
+		return nil, -1, -1, err
+	}
+
+	defaultInput := -1
+	if device, err := portaudio.DefaultInputDevice(); err == nil && device != nil {
+		defaultInput = device.Index
+	}
+	defaultOutput := -1
+	if device, err := portaudio.DefaultOutputDevice(); err == nil && device != nil {
+		defaultOutput = device.Index
+	}
+
+	devices := make([]consoleAudioDevice, 0, len(portaudioDevices))
+	for _, device := range portaudioDevices {
+		if device == nil {
+			continue
+		}
+		devices = append(devices, consoleAudioDevice{
+			Index:             device.Index,
+			Name:              device.Name,
+			MaxInputChannels:  device.MaxInputChannels,
+			MaxOutputChannels: device.MaxOutputChannels,
+		})
+	}
+
+	return devices, defaultInput, defaultOutput, nil
+}
+
+func formatConsoleAudioDevices(devices []consoleAudioDevice, defaultInput, defaultOutput int) string {
+	var b strings.Builder
+	b.WriteString("ID\tType\tName\tDefault\n")
+	for _, device := range devices {
+		if device.MaxInputChannels > 0 {
+			defaultMarker := ""
+			if device.Index == defaultInput {
+				defaultMarker = "yes"
+			}
+			fmt.Fprintf(&b, "%d\tInput\t%s\t%s\n", device.Index, device.Name, defaultMarker)
+		}
+		if device.MaxOutputChannels > 0 {
+			defaultMarker := ""
+			if device.Index == defaultOutput {
+				defaultMarker = "yes"
+			}
+			fmt.Fprintf(&b, "%d\tOutput\t%s\t%s\n", device.Index, device.Name, defaultMarker)
+		}
+	}
+	return b.String()
 }
 
 func RunApp(server *worker.AgentServer) {
 	if len(os.Args) < 2 {
 		printUsage()
+		os.Exit(1)
+	}
+	if err := applyDevModeEnv(os.Args); err != nil {
+		logger.Logger.Errorw("Failed to set dev mode environment", err)
 		os.Exit(1)
 	}
 
@@ -73,6 +152,18 @@ func RunApp(server *worker.AgentServer) {
 	default:
 		printUsage()
 		os.Exit(1)
+	}
+}
+
+func applyDevModeEnv(argv []string) error {
+	if len(argv) < 2 {
+		return nil
+	}
+	switch argv[1] {
+	case "console", "dev":
+		return os.Setenv("LIVEKIT_DEV_MODE", "1")
+	default:
+		return nil
 	}
 }
 
@@ -142,7 +233,7 @@ func parseConnectArgs(argv []string) (ConnectArgs, error) {
 }
 
 func parseConsoleArgs(argv []string) (ConsoleArgs, error) {
-	args := ConsoleArgs{Mode: ConsoleModeAudio}
+	args := ConsoleArgs{Mode: ConsoleModeAudio, LogLevel: "DEBUG"}
 	for i := 2; i < len(argv); i++ {
 		switch argv[i] {
 		case "--text":
@@ -163,11 +254,30 @@ func parseConsoleArgs(argv []string) (ConsoleArgs, error) {
 				return ConsoleArgs{}, fmt.Errorf("missing value for --output-device")
 			}
 			args.OutputDevice = argv[i]
+		case "--log-level":
+			i++
+			if i >= len(argv) {
+				return ConsoleArgs{}, fmt.Errorf("missing value for --log-level")
+			}
+			logLevel := strings.ToUpper(argv[i])
+			if !validConsoleLogLevel(logLevel) {
+				return ConsoleArgs{}, fmt.Errorf("unknown console log level %q", argv[i])
+			}
+			args.LogLevel = logLevel
 		default:
 			return ConsoleArgs{}, fmt.Errorf("unknown console option %q", argv[i])
 		}
 	}
 	return args, nil
+}
+
+func validConsoleLogLevel(logLevel string) bool {
+	switch logLevel {
+	case "TRACE", "DEBUG", "INFO", "WARN", "ERROR", "CRITICAL":
+		return true
+	default:
+		return false
+	}
 }
 
 func defaultConnectParticipantIdentity() string {
@@ -180,6 +290,19 @@ func defaultConnectParticipantIdentity() string {
 
 func consoleLocalJobArgs() (roomName string, participantIdentity string) {
 	return "console-room", "console"
+}
+
+func readConsoleInput(r io.Reader) (string, error) {
+	reader := bufio.NewReader(r)
+	line, err := reader.ReadString('\n')
+	if err != nil && len(line) == 0 {
+		return "", err
+	}
+	return strings.TrimRight(line, "\r\n"), nil
+}
+
+func consoleInputIsEmpty(input string) bool {
+	return strings.TrimSpace(input) == ""
 }
 
 func runConsole(server *worker.AgentServer, argv []string) {
@@ -206,6 +329,7 @@ func runConsole(server *worker.AgentServer, argv []string) {
 		"record", args.Record,
 		"inputDevice", args.InputDevice,
 		"outputDevice", args.OutputDevice,
+		"logLevel", args.LogLevel,
 	)
 
 	go func() {
@@ -218,14 +342,14 @@ func runConsole(server *worker.AgentServer, argv []string) {
 
 	// Console read loop
 	go func() {
-		var input string
+		reader := bufio.NewReader(os.Stdin)
 		for {
 			fmt.Print("❯ ")
-			_, err := fmt.Scanln(&input)
+			input, err := readConsoleInput(reader)
 			if err != nil {
 				break
 			}
-			if input != "" {
+			if !consoleInputIsEmpty(input) {
 				logger.Logger.Infow("User input received", "input", input)
 				if session := server.GetConsoleSession(); session != nil {
 					// We use type assertion via a local interface to avoid tight coupling if preferred,

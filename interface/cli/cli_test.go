@@ -3,6 +3,7 @@ package cli
 import (
 	"bytes"
 	"io"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -104,6 +105,43 @@ func TestParseConsoleArgsSupportsListDevices(t *testing.T) {
 	}
 }
 
+func TestParseConsoleArgsSupportsLogLevel(t *testing.T) {
+	args, err := parseConsoleArgs([]string{"worker", "console", "--log-level", "trace"})
+	if err != nil {
+		t.Fatalf("parseConsoleArgs() error = %v", err)
+	}
+	if args.LogLevel != "TRACE" {
+		t.Fatalf("LogLevel = %q, want TRACE", args.LogLevel)
+	}
+}
+
+func TestApplyDevModeEnvForReferenceSubcommands(t *testing.T) {
+	t.Setenv("LIVEKIT_DEV_MODE", "")
+
+	if err := applyDevModeEnv([]string{"worker", "console"}); err != nil {
+		t.Fatalf("applyDevModeEnv(console) error = %v", err)
+	}
+	if got := os.Getenv("LIVEKIT_DEV_MODE"); got != "1" {
+		t.Fatalf("LIVEKIT_DEV_MODE after console = %q, want 1", got)
+	}
+
+	t.Setenv("LIVEKIT_DEV_MODE", "")
+	if err := applyDevModeEnv([]string{"worker", "dev"}); err != nil {
+		t.Fatalf("applyDevModeEnv(dev) error = %v", err)
+	}
+	if got := os.Getenv("LIVEKIT_DEV_MODE"); got != "1" {
+		t.Fatalf("LIVEKIT_DEV_MODE after dev = %q, want 1", got)
+	}
+
+	t.Setenv("LIVEKIT_DEV_MODE", "")
+	if err := applyDevModeEnv([]string{"worker", "start"}); err != nil {
+		t.Fatalf("applyDevModeEnv(start) error = %v", err)
+	}
+	if got := os.Getenv("LIVEKIT_DEV_MODE"); got != "" {
+		t.Fatalf("LIVEKIT_DEV_MODE after start = %q, want unchanged empty", got)
+	}
+}
+
 func TestRunConsoleListDevicesReturnsBeforeStartingConsole(t *testing.T) {
 	oldPrint := printConsoleAudioDevices
 	defer func() { printConsoleAudioDevices = oldPrint }()
@@ -116,6 +154,47 @@ func TestRunConsoleListDevicesReturnsBeforeStartingConsole(t *testing.T) {
 
 	if calls != 1 {
 		t.Fatalf("printConsoleAudioDevices calls = %d, want 1", calls)
+	}
+}
+
+func TestFormatConsoleAudioDevicesListsInputsOutputsAndDefaults(t *testing.T) {
+	got := formatConsoleAudioDevices([]consoleAudioDevice{
+		{Index: 0, Name: "Built-in Mic", MaxInputChannels: 1},
+		{Index: 1, Name: "Built-in Speakers", MaxOutputChannels: 2},
+		{Index: 2, Name: "USB Headset", MaxInputChannels: 1, MaxOutputChannels: 2},
+	}, 0, 1)
+
+	for _, want := range []string{
+		"ID\tType\tName\tDefault",
+		"0\tInput\tBuilt-in Mic\tyes",
+		"1\tOutput\tBuilt-in Speakers\tyes",
+		"2\tInput\tUSB Headset\t",
+		"2\tOutput\tUSB Headset\t",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("formatConsoleAudioDevices() missing %q in:\n%s", want, got)
+		}
+	}
+}
+
+func TestReadConsoleInputPreservesSpaces(t *testing.T) {
+	got, err := readConsoleInput(strings.NewReader("hello world from console\n"))
+	if err != nil {
+		t.Fatalf("readConsoleInput() error = %v", err)
+	}
+	if got != "hello world from console" {
+		t.Fatalf("readConsoleInput() = %q, want full line", got)
+	}
+}
+
+func TestConsoleInputIsEmptyTreatsWhitespaceAsEmpty(t *testing.T) {
+	for _, input := range []string{"", " ", "\t", "  \t  "} {
+		if !consoleInputIsEmpty(input) {
+			t.Fatalf("consoleInputIsEmpty(%q) = false, want true", input)
+		}
+	}
+	if consoleInputIsEmpty(" hello ") {
+		t.Fatal("consoleInputIsEmpty(\" hello \") = true, want false")
 	}
 }
 
