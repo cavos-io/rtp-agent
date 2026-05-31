@@ -90,7 +90,7 @@ func SplitSentences(text string, minSentenceLen int, retainFormat bool) []TokenD
 	starters := regexp.MustCompile(`(Mr|Mrs|Ms|Dr|Prof|Capt|Cpt|Lt|He\s|She\s|It\s|They\s|Their\s|Our\s|We\s|But\s|However\s|That\s|This\s|Wherever|Moreover|Furthermore|Therefore|Consequently)`)
 	acronyms := regexp.MustCompile(`([A-Z]\.[A-Z]\.(?:[A-Z]\.)?)`)
 	websites := regexp.MustCompile(`\.(com|net|org|io|gov|edu|me|info|biz|dev|ai)`)
-	digits := regexp.MustCompile(`([0-9])`)
+	decimalDigits := regexp.MustCompile(`([0-9])\.([0-9])`)
 	multipleDots := regexp.MustCompile(`\.{2,}`)
 
 	if retainFormat {
@@ -101,7 +101,7 @@ func SplitSentences(text string, minSentenceLen int, retainFormat bool) []TokenD
 
 	text = prefixes.ReplaceAllString(text, "${1}<prd>")
 	text = websites.ReplaceAllString(text, "<prd>${1}")
-	text = digits.ReplaceAllString(text, "${1}<prd>${2}")
+	text = decimalDigits.ReplaceAllString(text, "${1}<prd>${2}")
 
 	text = multipleDots.ReplaceAllStringFunc(text, func(match string) string {
 		return strings.Repeat("<prd>", len(match))
