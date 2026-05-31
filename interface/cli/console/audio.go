@@ -25,6 +25,7 @@ type AudioIO struct {
 	mu            sync.Mutex
 	started       bool
 	inputAttached bool
+	outputPaused  bool
 
 	sampleRate      int
 	channels        int
@@ -80,20 +81,7 @@ func (a *AudioIO) Start(ctx context.Context) error {
 				SamplesPerChannel: uint32(len(inBuf)),
 			})
 
-			// Write to Speakers from buffer
-			a.mu.Lock()
-			if len(a.speakerBuffer) >= len(out) {
-				copy(out, a.speakerBuffer[:len(out)])
-				a.speakerBuffer = a.speakerBuffer[len(out):]
-			} else {
-				// Play what we have, zero out the rest
-				copy(out[:len(a.speakerBuffer)], a.speakerBuffer)
-				for i := len(a.speakerBuffer); i < len(out); i++ {
-					out[i] = 0
-				}
-				a.speakerBuffer = a.speakerBuffer[:0]
-			}
-			a.mu.Unlock()
+			a.fillSpeakerOutput(out)
 		})
 
 	if err != nil {
@@ -137,6 +125,12 @@ func (a *AudioIO) SetInputAttached(attached bool) {
 	a.inputAttached = attached
 }
 
+func (a *AudioIO) SetOutputPaused(paused bool) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.outputPaused = paused
+}
+
 func (a *AudioIO) PushMicFrame(frame *model.AudioFrame) bool {
 	if frame == nil {
 		return false
@@ -172,6 +166,30 @@ func (a *AudioIO) PushFrame(frame *model.AudioFrame) {
 	a.mu.Lock()
 	a.speakerBuffer = append(a.speakerBuffer, pcm...)
 	a.mu.Unlock()
+}
+
+func (a *AudioIO) fillSpeakerOutput(out []int16) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	if a.outputPaused {
+		for i := range out {
+			out[i] = 0
+		}
+		return
+	}
+
+	if len(a.speakerBuffer) >= len(out) {
+		copy(out, a.speakerBuffer[:len(out)])
+		a.speakerBuffer = a.speakerBuffer[len(out):]
+		return
+	}
+
+	copy(out[:len(a.speakerBuffer)], a.speakerBuffer)
+	for i := len(a.speakerBuffer); i < len(out); i++ {
+		out[i] = 0
+	}
+	a.speakerBuffer = a.speakerBuffer[:0]
 }
 
 func (a *AudioIO) ClearOutputBuffer() {
