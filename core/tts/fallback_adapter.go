@@ -9,14 +9,38 @@ import (
 )
 
 type FallbackAdapter struct {
-	ttss []TTS
+	ttss         []TTS
+	capabilities TTSCapabilities
+	sampleRate   int
+	numChannels  int
 }
 
 func NewFallbackAdapter(ttss []TTS) *FallbackAdapter {
 	if len(ttss) == 0 {
 		panic("FallbackAdapter requires at least one TTS")
 	}
-	return &FallbackAdapter{ttss: ttss}
+
+	numChannels := ttss[0].NumChannels()
+	capabilities := TTSCapabilities{AlignedTranscript: true}
+	sampleRate := 0
+	for _, tts := range ttss {
+		if tts.NumChannels() != numChannels {
+			panic("all TTS must have the same number of channels")
+		}
+		ttsCapabilities := tts.Capabilities()
+		capabilities.Streaming = capabilities.Streaming || ttsCapabilities.Streaming
+		capabilities.AlignedTranscript = capabilities.AlignedTranscript && ttsCapabilities.AlignedTranscript
+		if tts.SampleRate() > sampleRate {
+			sampleRate = tts.SampleRate()
+		}
+	}
+
+	return &FallbackAdapter{
+		ttss:         ttss,
+		capabilities: capabilities,
+		sampleRate:   sampleRate,
+		numChannels:  numChannels,
+	}
 }
 
 func (f *FallbackAdapter) Label() string {
@@ -24,15 +48,15 @@ func (f *FallbackAdapter) Label() string {
 }
 
 func (f *FallbackAdapter) Capabilities() TTSCapabilities {
-	return f.ttss[0].Capabilities()
+	return f.capabilities
 }
 
 func (f *FallbackAdapter) SampleRate() int {
-	return f.ttss[0].SampleRate()
+	return f.sampleRate
 }
 
 func (f *FallbackAdapter) NumChannels() int {
-	return f.ttss[0].NumChannels()
+	return f.numChannels
 }
 
 type fallbackChunkedStream struct {
