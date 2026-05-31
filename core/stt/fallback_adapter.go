@@ -10,23 +10,40 @@ import (
 )
 
 type FallbackAdapter struct {
-	stts []STT
+	stts         []STT
+	capabilities STTCapabilities
 }
 
 func NewFallbackAdapter(stts []STT) *FallbackAdapter {
 	if len(stts) == 0 {
 		panic("FallbackAdapter requires at least one STT")
 	}
-	return &FallbackAdapter{stts: stts}
+
+	capabilities := STTCapabilities{
+		Streaming:      true,
+		InterimResults: true,
+		Diarization:    true,
+	}
+	for _, stt := range stts {
+		sttCapabilities := stt.Capabilities()
+		capabilities.Streaming = capabilities.Streaming && sttCapabilities.Streaming
+		capabilities.InterimResults = capabilities.InterimResults && sttCapabilities.InterimResults
+		capabilities.Diarization = capabilities.Diarization && sttCapabilities.Diarization
+		capabilities.OfflineRecognize = capabilities.OfflineRecognize || sttCapabilities.OfflineRecognize
+	}
+
+	return &FallbackAdapter{
+		stts:         stts,
+		capabilities: capabilities,
+	}
 }
 
-func (f *FallbackAdapter) Label() string { 
-	return fmt.Sprintf("FallbackAdapter(%s)", f.stts[0].Label()) 
+func (f *FallbackAdapter) Label() string {
+	return fmt.Sprintf("FallbackAdapter(%s)", f.stts[0].Label())
 }
 
 func (f *FallbackAdapter) Capabilities() STTCapabilities {
-	// Assume capabilities of the first (primary) STT
-	return f.stts[0].Capabilities()
+	return f.capabilities
 }
 
 func (f *FallbackAdapter) Recognize(ctx context.Context, frames []*model.AudioFrame, language string) (*SpeechEvent, error) {
@@ -49,15 +66,15 @@ type fallbackRecognizeStream struct {
 	ctx      context.Context
 	language string
 
-	mu            sync.Mutex
-	activeStream  RecognizeStream
-	activeIndex   int
-	frameBuffer   []*model.AudioFrame // Buffer to replay frames if fallback is needed
-	
-	eventCh       chan *SpeechEvent
-	errCh         chan error
-	closeCh       chan struct{}
-	closed        bool
+	mu           sync.Mutex
+	activeStream RecognizeStream
+	activeIndex  int
+	frameBuffer  []*model.AudioFrame // Buffer to replay frames if fallback is needed
+
+	eventCh chan *SpeechEvent
+	errCh   chan error
+	closeCh chan struct{}
+	closed  bool
 }
 
 func (f *FallbackAdapter) Stream(ctx context.Context, language string) (RecognizeStream, error) {
@@ -123,11 +140,11 @@ func (s *fallbackRecognizeStream) monitorStream() {
 				s.mu.Unlock()
 				return
 			}
-			
+
 			// Try fallback
 			logger.Logger.Warnw("STT stream failed, attempting fallback", err, "failed_stt", s.adapter.stts[s.activeIndex].Label())
 			stream.Close()
-			
+
 			if fbErr := s.tryStartStream(s.activeIndex + 1); fbErr != nil {
 				s.errCh <- fbErr
 				s.mu.Unlock()
@@ -162,7 +179,7 @@ func (s *fallbackRecognizeStream) PushFrame(frame *model.AudioFrame) error {
 	}
 
 	s.frameBuffer = append(s.frameBuffer, frame)
-	
+
 	// Keep buffer reasonable (e.g., last 30 seconds at 100 frames/sec)
 	if len(s.frameBuffer) > 3000 {
 		s.frameBuffer = s.frameBuffer[len(s.frameBuffer)-3000:]
