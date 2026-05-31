@@ -429,6 +429,54 @@ func TestChatContextIsEquivalentIgnoresTimestampsAndMetadata(t *testing.T) {
 	}
 }
 
+func TestToXMLRendersContentAndAttributes(t *testing.T) {
+	got := ToXML("function_call", `{"city":"Paris"}`, map[string]any{
+		"name":    "lookup",
+		"call_id": "call_lookup",
+	})
+
+	want := "<function_call call_id=\"call_lookup\" name=\"lookup\">\n{\"city\":\"Paris\"}\n</function_call>"
+	if got != want {
+		t.Fatalf("ToXML() = %q, want %q", got, want)
+	}
+
+	if got := ToXML("empty", "", nil); got != "<empty />" {
+		t.Fatalf("empty ToXML() = %q", got)
+	}
+}
+
+func TestFunctionCallItemToMessageConvertsToolItemsToXMLMessages(t *testing.T) {
+	call := &FunctionCall{
+		CallID:    "call_lookup",
+		Name:      "lookup",
+		Arguments: `{"city":"Paris"}`,
+		CreatedAt: time.Unix(10, 0),
+	}
+	callMsg := FunctionCallItemToMessage(call)
+	if callMsg == nil || callMsg.Role != ChatRoleUser || callMsg.TextContent() != "<function_call call_id=\"call_lookup\" name=\"lookup\">\n{\"city\":\"Paris\"}\n</function_call>" {
+		t.Fatalf("FunctionCallItemToMessage(call) = %#v", callMsg)
+	}
+	if callMsg.CreatedAt != call.CreatedAt || callMsg.Extra["is_function_call"] != true {
+		t.Fatalf("call message metadata = %#v", callMsg)
+	}
+
+	output := &FunctionCallOutput{
+		CallID:    "call_lookup",
+		Name:      "lookup",
+		Output:    "not found",
+		IsError:   true,
+		CreatedAt: time.Unix(11, 0),
+	}
+	outputMsg := FunctionCallItemToMessage(output)
+	wantOutput := "<function_call_output call_id=\"call_lookup\" name=\"lookup\">\n<error>\nnot found\n</error>\n</function_call_output>"
+	if outputMsg == nil || outputMsg.Role != ChatRoleAssistant || outputMsg.TextContent() != wantOutput {
+		t.Fatalf("FunctionCallItemToMessage(output) = %#v, want %q", outputMsg, wantOutput)
+	}
+	if outputMsg.CreatedAt != output.CreatedAt || outputMsg.Extra["is_function_call_output"] != true {
+		t.Fatalf("output message metadata = %#v", outputMsg)
+	}
+}
+
 func TestChatContextIsEquivalentDetectsPayloadDifferences(t *testing.T) {
 	tests := []struct {
 		name  string
