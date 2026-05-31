@@ -1,6 +1,8 @@
 package tokenize
 
 import (
+	"errors"
+	"io"
 	"testing"
 	"time"
 )
@@ -34,5 +36,19 @@ func TestBufferedTokenStreamCloseFlushesWithoutDeadlock(t *testing.T) {
 	}
 	if token.Token != "hello" {
 		t.Fatalf("token = %q, want hello", token.Token)
+	}
+}
+
+func TestBufferedTokenStreamNextReturnsIOEOFWhenClosed(t *testing.T) {
+	stream := NewBufferedTokenStream(func(text string) []string {
+		return nil
+	}, 1, 1)
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close returned error: %v", err)
+	}
+
+	_, err := stream.Next()
+	if !errors.Is(err, io.EOF) {
+		t.Fatalf("Next error = %v, want io.EOF", err)
 	}
 }

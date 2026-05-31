@@ -2,6 +2,7 @@ package tokenize
 
 import (
 	"fmt"
+	"io"
 	"strings"
 	"sync"
 
@@ -130,7 +131,7 @@ func (s *BufferedTokenStream) Close() error {
 func (s *BufferedTokenStream) Next() (*TokenData, error) {
 	tok, ok := <-s.eventCh
 	if !ok {
-		return nil, fmt.Errorf("EOF")
+		return nil, io.EOF
 	}
 	return tok, nil
 }
