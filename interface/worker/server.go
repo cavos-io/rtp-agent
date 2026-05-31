@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/cavos-io/conversation-worker/core/agent"
+	workeripc "github.com/cavos-io/conversation-worker/interface/worker/ipc"
 	"github.com/cavos-io/conversation-worker/library/logger"
 	mathutil "github.com/cavos-io/conversation-worker/library/math"
 	"github.com/gorilla/websocket"
@@ -169,6 +170,37 @@ func (s *AgentServer) ActiveJobs() []*JobContext {
 		jobs = append(jobs, jobCtx)
 	}
 	return jobs
+}
+
+func (s *AgentServer) ActiveRunningJobs() []workeripc.RunningJobInfo {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	jobs := make([]workeripc.RunningJobInfo, 0, len(s.activeJobs))
+	for _, jobCtx := range s.activeJobs {
+		info := runningJobInfoFromContext(jobCtx)
+		if info.WorkerID == "" {
+			info.WorkerID = s.workerID
+		}
+		jobs = append(jobs, info)
+	}
+	return jobs
+}
+
+func runningJobInfoFromContext(jobCtx *JobContext) workeripc.RunningJobInfo {
+	return workeripc.RunningJobInfo{
+		AcceptArguments: workeripc.JobAcceptArguments{
+			Name:       jobCtx.AcceptArguments.Name,
+			Identity:   jobCtx.AcceptArguments.Identity,
+			Metadata:   jobCtx.AcceptArguments.Metadata,
+			Attributes: jobCtx.AcceptArguments.Attributes,
+		},
+		Job:      jobCtx.Job,
+		URL:      jobCtx.url,
+		Token:    jobCtx.token,
+		WorkerID: jobCtx.WorkerID,
+		FakeJob:  jobCtx.fakeJob,
+	}
 }
 
 func (s *AgentServer) UpdateOptions(opts WorkerOptions) error {

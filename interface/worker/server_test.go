@@ -450,6 +450,59 @@ func TestAgentServerActiveJobsReturnsSnapshot(t *testing.T) {
 	}
 }
 
+func TestAgentServerActiveRunningJobsReturnsReferenceAssignmentSnapshots(t *testing.T) {
+	server := NewAgentServer(WorkerOptions{})
+	server.workerID = "worker-a"
+	jobCtx := NewJobContext(&livekit.Job{Id: "job-a", Room: &livekit.Room{Name: "room-a"}}, "wss://livekit.example", "key", "secret")
+	jobCtx.AcceptArguments = JobAcceptArguments{
+		Name:     "Agent A",
+		Identity: "agent-a",
+		Metadata: "metadata-a",
+		Attributes: map[string]string{
+			"tier": "gold",
+		},
+	}
+	jobCtx.token = "assignment-token"
+	jobCtx.fakeJob = true
+	server.mu.Lock()
+	server.activeJobs[jobCtx.Job.Id] = jobCtx
+	server.mu.Unlock()
+
+	runningJobs := server.ActiveRunningJobs()
+	if len(runningJobs) != 1 {
+		t.Fatalf("ActiveRunningJobs() len = %d, want 1", len(runningJobs))
+	}
+
+	running := runningJobs[0]
+	if running.Job != jobCtx.Job {
+		t.Fatal("ActiveRunningJobs()[0].Job did not preserve job pointer")
+	}
+	if running.URL != "wss://livekit.example" {
+		t.Fatalf("ActiveRunningJobs()[0].URL = %q, want wss://livekit.example", running.URL)
+	}
+	if running.Token != "assignment-token" {
+		t.Fatalf("ActiveRunningJobs()[0].Token = %q, want assignment-token", running.Token)
+	}
+	if running.WorkerID != "worker-a" {
+		t.Fatalf("ActiveRunningJobs()[0].WorkerID = %q, want worker-a", running.WorkerID)
+	}
+	if !running.FakeJob {
+		t.Fatal("ActiveRunningJobs()[0].FakeJob = false, want true")
+	}
+	if running.AcceptArguments.Name != "Agent A" {
+		t.Fatalf("ActiveRunningJobs()[0].AcceptArguments.Name = %q, want Agent A", running.AcceptArguments.Name)
+	}
+	if running.AcceptArguments.Identity != "agent-a" {
+		t.Fatalf("ActiveRunningJobs()[0].AcceptArguments.Identity = %q, want agent-a", running.AcceptArguments.Identity)
+	}
+	if running.AcceptArguments.Metadata != "metadata-a" {
+		t.Fatalf("ActiveRunningJobs()[0].AcceptArguments.Metadata = %q, want metadata-a", running.AcceptArguments.Metadata)
+	}
+	if running.AcceptArguments.Attributes["tier"] != "gold" {
+		t.Fatalf("ActiveRunningJobs()[0].AcceptArguments.Attributes[tier] = %q, want gold", running.AcceptArguments.Attributes["tier"])
+	}
+}
+
 func TestEmitWorkerStartedNotifiesHandlers(t *testing.T) {
 	server := NewAgentServer(WorkerOptions{})
 
