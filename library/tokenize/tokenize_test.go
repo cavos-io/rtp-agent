@@ -67,3 +67,16 @@ func TestSplitWordsStripsReferencePunctuationList(t *testing.T) {
 		}
 	}
 }
+
+func TestReplaceWordsIsCaseInsensitiveAndPreservesPunctuation(t *testing.T) {
+	got := ReplaceWords("Hello, WORLD! workflow stays.", map[string]string{
+		"hello": "hi",
+		"world": "there",
+		"flow":  "stream",
+	})
+
+	want := "hi, there! workflow stays."
+	if got != want {
+		t.Fatalf("ReplaceWords() = %q, want %q", got, want)
+	}
+}
