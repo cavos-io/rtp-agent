@@ -11,13 +11,22 @@ import (
 )
 
 type FallbackAdapter struct {
-	ttss         []TTS
-	capabilities TTSCapabilities
-	sampleRate   int
-	numChannels  int
+	ttss           []TTS
+	capabilities   TTSCapabilities
+	sampleRate     int
+	numChannels    int
+	maxRetryPerTTS int
+}
+
+type FallbackAdapterOptions struct {
+	MaxRetryPerTTS int
 }
 
 func NewFallbackAdapter(ttss []TTS) *FallbackAdapter {
+	return NewFallbackAdapterWithOptions(ttss, FallbackAdapterOptions{MaxRetryPerTTS: 2})
+}
+
+func NewFallbackAdapterWithOptions(ttss []TTS, options FallbackAdapterOptions) *FallbackAdapter {
 	if len(ttss) == 0 {
 		panic("FallbackAdapter requires at least one TTS")
 	}
@@ -38,10 +47,11 @@ func NewFallbackAdapter(ttss []TTS) *FallbackAdapter {
 	}
 
 	return &FallbackAdapter{
-		ttss:         ttss,
-		capabilities: capabilities,
-		sampleRate:   sampleRate,
-		numChannels:  numChannels,
+		ttss:           ttss,
+		capabilities:   capabilities,
+		sampleRate:     sampleRate,
+		numChannels:    numChannels,
+		maxRetryPerTTS: options.MaxRetryPerTTS,
 	}
 }
 
@@ -69,6 +79,7 @@ type fallbackChunkedStream struct {
 	mu           sync.Mutex
 	activeStream ChunkedStream
 	activeIndex  int
+	retries      map[int]int
 
 	eventCh chan *SynthesizedAudio
 	errCh   chan error
@@ -84,6 +95,7 @@ func (f *FallbackAdapter) Synthesize(ctx context.Context, text string) (ChunkedS
 		eventCh: make(chan *SynthesizedAudio, 100),
 		errCh:   make(chan error, 1),
 		closeCh: make(chan struct{}),
+		retries: make(map[int]int),
 	}
 
 	if err := s.tryStartStream(0); err != nil {
@@ -96,20 +108,29 @@ func (f *FallbackAdapter) Synthesize(ctx context.Context, text string) (ChunkedS
 }
 
 func (s *fallbackChunkedStream) tryStartStream(index int) error {
-	if index >= len(s.adapter.ttss) {
-		return fmt.Errorf("all fallback TTS exhausted")
+	var lastErr error
+	for i := index; i < len(s.adapter.ttss); i++ {
+		for {
+			tts := s.adapter.ttss[i]
+			stream, err := tts.Synthesize(s.ctx, s.text)
+			if err == nil {
+				s.activeStream = stream
+				s.activeIndex = i
+				return nil
+			}
+			logger.Logger.Errorw("Failed to start TTS synthesize stream", err, "tts", tts.Label())
+			lastErr = err
+			if !s.canRetryTTS(i) {
+				break
+			}
+			s.retries[i]++
+		}
 	}
 
-	tts := s.adapter.ttss[index]
-	stream, err := tts.Synthesize(s.ctx, s.text)
-	if err != nil {
-		logger.Logger.Errorw("Failed to start TTS synthesize stream", err, "tts", tts.Label())
-		return s.tryStartStream(index + 1)
+	if lastErr != nil {
+		return lastErr
 	}
-
-	s.activeStream = stream
-	s.activeIndex = index
-	return nil
+	return fmt.Errorf("all fallback TTS exhausted")
 }
 
 func (s *fallbackChunkedStream) monitorStream() {
@@ -139,7 +160,13 @@ func (s *fallbackChunkedStream) monitorStream() {
 			logger.Logger.Warnw("TTS synthesize stream failed, attempting fallback", err, "failed_tts", s.adapter.ttss[s.activeIndex].Label())
 			stream.Close()
 
-			if fbErr := s.tryStartStream(s.activeIndex + 1); fbErr != nil {
+			nextIndex := s.activeIndex + 1
+			if s.canRetryTTS(s.activeIndex) {
+				s.retries[s.activeIndex]++
+				nextIndex = s.activeIndex
+			}
+
+			if fbErr := s.tryStartStream(nextIndex); fbErr != nil {
 				s.errCh <- fbErr
 				s.mu.Unlock()
 				return
@@ -155,6 +182,16 @@ func (s *fallbackChunkedStream) monitorStream() {
 			return
 		}
 	}
+}
+
+func (s *fallbackChunkedStream) canRetryTTS(index int) bool {
+	if s.adapter.maxRetryPerTTS <= 0 {
+		return false
+	}
+	if s.retries == nil {
+		s.retries = make(map[int]int)
+	}
+	return s.retries[index] < s.adapter.maxRetryPerTTS
 }
 
 func (s *fallbackChunkedStream) Next() (*SynthesizedAudio, error) {
@@ -186,6 +223,7 @@ type fallbackSynthesizeStream struct {
 	mu           sync.Mutex
 	activeStream SynthesizeStream
 	activeIndex  int
+	retries      map[int]int
 	textBuffer   string
 
 	eventCh chan *SynthesizedAudio
@@ -201,6 +239,7 @@ func (f *FallbackAdapter) Stream(ctx context.Context) (SynthesizeStream, error) 
 		eventCh: make(chan *SynthesizedAudio, 100),
 		errCh:   make(chan error, 1),
 		closeCh: make(chan struct{}),
+		retries: make(map[int]int),
 	}
 
 	if err := s.tryStartStream(0); err != nil {
@@ -213,35 +252,54 @@ func (f *FallbackAdapter) Stream(ctx context.Context) (SynthesizeStream, error) 
 }
 
 func (s *fallbackSynthesizeStream) tryStartStream(index int) error {
-	if index >= len(s.adapter.ttss) {
-		return fmt.Errorf("all fallback TTS exhausted")
-	}
+	var lastErr error
+	for i := index; i < len(s.adapter.ttss); i++ {
+		for {
+			tts := s.adapter.ttss[i]
+			stream, err := s.startProviderStream(tts)
+			if err != nil {
+				logger.Logger.Errorw("Failed to start TTS stream", err, "tts", tts.Label())
+				lastErr = err
+				if s.canRetryTTS(i) {
+					s.retries[i]++
+					continue
+				}
+				break
+			}
 
-	tts := s.adapter.ttss[index]
-	var (
-		stream SynthesizeStream
-		err    error
-	)
-	if tts.Capabilities().Streaming {
-		stream, err = tts.Stream(s.ctx)
-	} else {
-		stream, err = NewStreamAdapter(tts).Stream(s.ctx)
-	}
-	if err != nil {
-		logger.Logger.Errorw("Failed to start TTS stream", err, "tts", tts.Label())
-		return s.tryStartStream(index + 1)
-	}
+			if err := s.replayBufferedText(stream); err != nil {
+				stream.Close()
+				lastErr = err
+				if s.canRetryTTS(i) {
+					s.retries[i]++
+					continue
+				}
+				break
+			}
 
-	s.activeStream = stream
-	s.activeIndex = index
-
-	if s.textBuffer != "" {
-		if err := stream.PushText(s.textBuffer); err != nil {
-			stream.Close()
-			return s.tryStartStream(index + 1)
+			s.activeStream = stream
+			s.activeIndex = i
+			return nil
 		}
 	}
 
+	if lastErr != nil {
+		return lastErr
+	}
+	return fmt.Errorf("all fallback TTS exhausted")
+}
+
+func (s *fallbackSynthesizeStream) startProviderStream(tts TTS) (SynthesizeStream, error) {
+	if tts.Capabilities().Streaming {
+		return tts.Stream(s.ctx)
+	}
+	return NewStreamAdapter(tts).Stream(s.ctx)
+}
+
+func (s *fallbackSynthesizeStream) replayBufferedText(stream SynthesizeStream) error {
+	if s.textBuffer != "" {
+		return stream.PushText(s.textBuffer)
+	}
 	return nil
 }
 
@@ -272,7 +330,13 @@ func (s *fallbackSynthesizeStream) monitorStream() {
 			logger.Logger.Warnw("TTS stream failed, attempting fallback", err, "failed_tts", s.adapter.ttss[s.activeIndex].Label())
 			stream.Close()
 
-			if fbErr := s.tryStartStream(s.activeIndex + 1); fbErr != nil {
+			nextIndex := s.activeIndex + 1
+			if s.canRetryTTS(s.activeIndex) {
+				s.retries[s.activeIndex]++
+				nextIndex = s.activeIndex
+			}
+
+			if fbErr := s.tryStartStream(nextIndex); fbErr != nil {
 				s.errCh <- fbErr
 				s.mu.Unlock()
 				return
@@ -288,6 +352,16 @@ func (s *fallbackSynthesizeStream) monitorStream() {
 			return
 		}
 	}
+}
+
+func (s *fallbackSynthesizeStream) canRetryTTS(index int) bool {
+	if s.adapter.maxRetryPerTTS <= 0 {
+		return false
+	}
+	if s.retries == nil {
+		s.retries = make(map[int]int)
+	}
+	return s.retries[index] < s.adapter.maxRetryPerTTS
 }
 
 func (s *fallbackSynthesizeStream) PushText(text string) error {
