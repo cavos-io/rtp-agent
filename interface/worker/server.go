@@ -635,6 +635,10 @@ func (s *AgentServer) availableForJob() bool {
 
 func (s *AgentServer) validateRunPreconditions() error {
 	s.Options = resolveWorkerOptions(s.Options)
+	if s.Options.WorkerToken != "" {
+		s.Options.LoadFunc = nil
+		s.Options.LoadThreshold = defaultLoadThreshold
+	}
 
 	if s.entrypointFnc == nil {
 		return fmt.Errorf("No RTC session entrypoint has been registered")

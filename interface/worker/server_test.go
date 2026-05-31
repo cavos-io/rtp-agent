@@ -1299,6 +1299,33 @@ func TestValidateRunPreconditionsRequiresCredentialsAfterRTCSession(t *testing.T
 	}
 }
 
+func TestValidateRunPreconditionsNormalizesCloudLoadOptions(t *testing.T) {
+	server := NewAgentServer(WorkerOptions{
+		WSRL:          "wss://livekit.example",
+		APIKey:        "key",
+		APISecret:     "secret",
+		WorkerToken:   "worker-token",
+		LoadThreshold: 0.2,
+		LoadFunc: func(*AgentServer) float64 {
+			return 0.9
+		},
+	})
+	if err := server.RTCSession(func(ctx *JobContext) error { return nil }, nil, nil); err != nil {
+		t.Fatalf("RTCSession() error = %v", err)
+	}
+
+	if err := server.validateRunPreconditions(); err != nil {
+		t.Fatalf("validateRunPreconditions() error = %v", err)
+	}
+
+	if server.Options.LoadFunc != nil {
+		t.Fatal("LoadFunc was not reset for cloud worker token")
+	}
+	if server.Options.LoadThreshold != defaultLoadThreshold {
+		t.Fatalf("LoadThreshold = %v, want default %v for cloud worker token", server.Options.LoadThreshold, defaultLoadThreshold)
+	}
+}
+
 func TestConnectWorkerWebSocketRetriesDialFailures(t *testing.T) {
 	oldDial := workerDialContext
 	oldSleep := workerRetrySleep
