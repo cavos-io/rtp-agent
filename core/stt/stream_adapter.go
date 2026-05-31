@@ -50,6 +50,7 @@ type streamAdapterWrapper struct {
 	mu          sync.Mutex
 	closed      bool
 	frameBuffer []*model.AudioFrame
+	vadStream   vad.VADStream
 }
 
 type streamAdapterInput struct {
@@ -82,6 +83,9 @@ func (w *streamAdapterWrapper) run() {
 		w.sendErr(err)
 		return
 	}
+	w.mu.Lock()
+	w.vadStream = vadStream
+	w.mu.Unlock()
 
 	// Goroutine to push frames to VAD and buffer them
 	go func() {
@@ -213,10 +217,14 @@ func (w *streamAdapterWrapper) Close() error {
 		return nil
 	}
 	w.closed = true
+	vadStream := w.vadStream
 	w.mu.Unlock()
 
 	w.cancel()
 	close(w.inputCh)
+	if vadStream != nil {
+		return vadStream.Close()
+	}
 	return nil
 }
 

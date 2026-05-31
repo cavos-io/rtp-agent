@@ -53,6 +53,34 @@ func TestStreamAdapterPropagatesVADRuntimeError(t *testing.T) {
 	}
 }
 
+func TestStreamAdapterCloseClosesVADStream(t *testing.T) {
+	closedCh := make(chan struct{}, 1)
+	startedCh := make(chan struct{}, 1)
+	stream, err := NewStreamAdapter(&fakeStreamAdapterSTT{}, &fakeStreamAdapterVAD{
+		startedCh: startedCh,
+		stream:    &fakeStreamAdapterVADStream{closedCh: closedCh, done: make(chan struct{})},
+	}).Stream(context.Background(), "")
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+
+	select {
+	case <-startedCh:
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("timed out waiting for VAD stream start")
+	}
+
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close returned error: %v", err)
+	}
+
+	select {
+	case <-closedCh:
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("timed out waiting for VAD Close")
+	}
+}
+
 func TestStreamAdapterForwardsFlushToVAD(t *testing.T) {
 	flushCh := make(chan struct{}, 1)
 	stream, err := NewStreamAdapter(&fakeStreamAdapterSTT{}, &fakeStreamAdapterVAD{
@@ -149,24 +177,29 @@ func (f *fakeStreamAdapterSTT) Recognize(context.Context, []*model.AudioFrame, s
 }
 
 type fakeStreamAdapterVAD struct {
-	stream vad.VADStream
-	err    error
+	stream    vad.VADStream
+	err       error
+	startedCh chan struct{}
 }
 
 func (f *fakeStreamAdapterVAD) Stream(context.Context) (vad.VADStream, error) {
 	if f.err != nil {
 		return nil, f.err
 	}
+	if f.startedCh != nil {
+		f.startedCh <- struct{}{}
+	}
 	return f.stream, nil
 }
 
 type fakeStreamAdapterVADStream struct {
-	events  []*vad.VADEvent
-	index   int
-	nextErr error
-	pushErr error
-	flushCh chan struct{}
-	done    chan struct{}
+	events   []*vad.VADEvent
+	index    int
+	nextErr  error
+	pushErr  error
+	flushCh  chan struct{}
+	closedCh chan struct{}
+	done     chan struct{}
 }
 
 func (f *fakeStreamAdapterVADStream) PushFrame(*model.AudioFrame) error {
@@ -184,6 +217,9 @@ func (f *fakeStreamAdapterVADStream) Flush() error {
 }
 
 func (f *fakeStreamAdapterVADStream) Close() error {
+	if f.closedCh != nil {
+		f.closedCh <- struct{}{}
+	}
 	if f.done != nil {
 		close(f.done)
 	}
