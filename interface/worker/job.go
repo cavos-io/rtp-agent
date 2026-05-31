@@ -3,6 +3,7 @@ package worker
 import (
 	"context"
 	"fmt"
+	"maps"
 	"reflect"
 	"sync"
 
@@ -31,6 +32,15 @@ type ParticipantEntrypoint func(*JobContext, *livekit.ParticipantInfo)
 type participantEntrypointRegistration struct {
 	entrypoint ParticipantEntrypoint
 	kinds      []livekit.ParticipantInfo_Kind
+}
+
+type remoteParticipantView interface {
+	SID() string
+	Identity() string
+	Name() string
+	Kind() lksdk.ParticipantKind
+	Metadata() string
+	Attributes() map[string]string
 }
 
 var defaultParticipantEntrypointKinds = []livekit.ParticipantInfo_Kind{
@@ -194,6 +204,7 @@ func (c *JobContext) Connect(ctx context.Context, cb *lksdk.RoomCallback) error 
 	if c.Room != nil {
 		return nil
 	}
+	cb = c.roomCallbackWithEntrypoints(cb)
 	if c.token != "" {
 		room, err := lksdk.ConnectToRoomWithToken(c.url, c.token, cb)
 		if err != nil {
@@ -211,6 +222,39 @@ func (c *JobContext) Connect(ctx context.Context, cb *lksdk.RoomCallback) error 
 	c.Room = room
 	logger.Logger.Infow("Connected to room", "room", c.Job.Room.Name)
 	return nil
+}
+
+func (c *JobContext) roomCallbackWithEntrypoints(cb *lksdk.RoomCallback) *lksdk.RoomCallback {
+	wrapped := lksdk.NewRoomCallback()
+	wrapped.Merge(cb)
+	onParticipantConnected := wrapped.OnParticipantConnected
+	wrapped.OnParticipantConnected = func(participant *lksdk.RemoteParticipant) {
+		if onParticipantConnected != nil {
+			onParticipantConnected(participant)
+		}
+		if participant != nil {
+			c.participantAvailable(participant)
+		}
+	}
+	return wrapped
+}
+
+func (c *JobContext) participantAvailable(participant remoteParticipantView) {
+	c.runParticipantEntrypoints(participantInfoFromRemoteParticipant(participant))
+}
+
+func participantInfoFromRemoteParticipant(participant remoteParticipantView) *livekit.ParticipantInfo {
+	if participant == nil {
+		return nil
+	}
+	return &livekit.ParticipantInfo{
+		Sid:        participant.SID(),
+		Identity:   participant.Identity(),
+		Name:       participant.Name(),
+		Kind:       livekit.ParticipantInfo_Kind(participant.Kind()),
+		Metadata:   participant.Metadata(),
+		Attributes: maps.Clone(participant.Attributes()),
+	}
 }
 
 func (c *JobContext) AddShutdownCallback(callback any) error {

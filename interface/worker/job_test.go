@@ -223,6 +223,100 @@ func TestJobContextRunDefaultParticipantEntrypointsSkipsAgentParticipants(t *tes
 	}
 }
 
+type fakeParticipantView struct {
+	sid        string
+	identity   string
+	name       string
+	kind       lksdk.ParticipantKind
+	metadata   string
+	attributes map[string]string
+}
+
+func (p fakeParticipantView) SID() string                   { return p.sid }
+func (p fakeParticipantView) Identity() string              { return p.identity }
+func (p fakeParticipantView) Name() string                  { return p.name }
+func (p fakeParticipantView) Kind() lksdk.ParticipantKind   { return p.kind }
+func (p fakeParticipantView) Metadata() string              { return p.metadata }
+func (p fakeParticipantView) Attributes() map[string]string { return p.attributes }
+
+func TestParticipantInfoFromRemoteParticipantCopiesJoinFields(t *testing.T) {
+	info := participantInfoFromRemoteParticipant(fakeParticipantView{
+		sid:      "PA_sip",
+		identity: "caller",
+		name:     "SIP Caller",
+		kind:     lksdk.ParticipantSIP,
+		metadata: "metadata",
+		attributes: map[string]string{
+			"phone": "+15551234567",
+		},
+	})
+
+	if info.Sid != "PA_sip" {
+		t.Fatalf("ParticipantInfo.Sid = %q, want PA_sip", info.Sid)
+	}
+	if info.Identity != "caller" {
+		t.Fatalf("ParticipantInfo.Identity = %q, want caller", info.Identity)
+	}
+	if info.Name != "SIP Caller" {
+		t.Fatalf("ParticipantInfo.Name = %q, want SIP Caller", info.Name)
+	}
+	if info.Kind != livekit.ParticipantInfo_SIP {
+		t.Fatalf("ParticipantInfo.Kind = %v, want SIP", info.Kind)
+	}
+	if info.Metadata != "metadata" {
+		t.Fatalf("ParticipantInfo.Metadata = %q, want metadata", info.Metadata)
+	}
+	if info.Attributes["phone"] != "+15551234567" {
+		t.Fatalf("ParticipantInfo.Attributes[phone] = %q, want +15551234567", info.Attributes["phone"])
+	}
+}
+
+func TestParticipantInfoFromRemoteParticipantCopiesAttributes(t *testing.T) {
+	attrs := map[string]string{"tier": "gold"}
+	info := participantInfoFromRemoteParticipant(fakeParticipantView{attributes: attrs})
+	attrs["tier"] = "platinum"
+
+	if info.Attributes["tier"] != "gold" {
+		t.Fatalf("ParticipantInfo attributes were not copied, got %q", info.Attributes["tier"])
+	}
+}
+
+func TestJobContextRoomCallbackWithEntrypointsPreservesExistingParticipantCallback(t *testing.T) {
+	ctx := NewJobContext(&livekit.Job{Id: "job_callback"}, "", "", "")
+	called := false
+	cb := ctx.roomCallbackWithEntrypoints(&lksdk.RoomCallback{
+		OnParticipantConnected: func(*lksdk.RemoteParticipant) {
+			called = true
+		},
+	})
+
+	cb.OnParticipantConnected(nil)
+
+	if !called {
+		t.Fatal("OnParticipantConnected callback was not preserved")
+	}
+}
+
+func TestJobContextParticipantAvailableRunsMatchingEntrypoints(t *testing.T) {
+	ctx := NewJobContext(&livekit.Job{Id: "job_participant_available"}, "", "", "")
+	var calls []string
+	if err := ctx.AddParticipantEntrypoint(func(_ *JobContext, p *livekit.ParticipantInfo) {
+		calls = append(calls, p.Identity)
+	}); err != nil {
+		t.Fatalf("AddParticipantEntrypoint() error = %v", err)
+	}
+
+	ctx.participantAvailable(fakeParticipantView{
+		identity: "caller",
+		kind:     lksdk.ParticipantSIP,
+	})
+
+	want := []string{"caller"}
+	if !reflect.DeepEqual(calls, want) {
+		t.Fatalf("participant entrypoint calls = %#v, want %#v", calls, want)
+	}
+}
+
 func TestJobContextWaitForParticipantConnectsBeforeWaiting(t *testing.T) {
 	ctx := NewJobContext(
 		&livekit.Job{Id: "job_wait_connect", Room: &livekit.Room{Name: "room-a"}},
