@@ -3,6 +3,7 @@ package telemetry
 import (
 	"context"
 	"fmt"
+	"net"
 	"net/http"
 
 	"github.com/cavos-io/conversation-worker/library/logger"
@@ -27,14 +28,21 @@ func (s *HttpServer) Start() error {
 	mux.Handle("/metrics", promhttp.Handler())
 
 	addr := fmt.Sprintf("%s:%d", s.Host, s.Port)
+	ln, err := net.Listen("tcp", addr)
+	if err != nil {
+		return err
+	}
+	if tcpAddr, ok := ln.Addr().(*net.TCPAddr); ok {
+		s.Port = tcpAddr.Port
+	}
+
 	s.server = &http.Server{
-		Addr:    addr,
 		Handler: mux,
 	}
 
 	go func() {
-		logger.Logger.Infow("Starting telemetry HTTP server", "addr", addr)
-		if err := s.server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+		logger.Logger.Infow("Starting telemetry HTTP server", "addr", ln.Addr().String())
+		if err := s.server.Serve(ln); err != nil && err != http.ErrServerClosed {
 			logger.Logger.Errorw("Telemetry HTTP server error", err)
 		}
 	}()

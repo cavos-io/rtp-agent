@@ -95,6 +95,133 @@ func TestJobContextConnectInfoUsesAcceptedParticipantFields(t *testing.T) {
 	}
 }
 
+func TestJobContextConnectIsNoopWhenRoomAlreadyConnected(t *testing.T) {
+	room := &lksdk.Room{}
+	ctx := NewJobContext(
+		&livekit.Job{Id: "job_connect_once", Room: &livekit.Room{Name: "room-a"}},
+		"://invalid-url",
+		"key",
+		"secret",
+	)
+	ctx.Room = room
+
+	if err := ctx.Connect(context.Background(), nil); err != nil {
+		t.Fatalf("Connect() error = %v, want nil when room is already connected", err)
+	}
+	if ctx.Room != room {
+		t.Fatal("Connect() replaced existing room, want existing room preserved")
+	}
+}
+
+func TestJobContextAddParticipantEntrypointRejectsDuplicates(t *testing.T) {
+	ctx := NewJobContext(&livekit.Job{Id: "job_participant_entrypoint"}, "", "", "")
+	entrypoint := func(*JobContext, *livekit.ParticipantInfo) {}
+
+	if err := ctx.AddParticipantEntrypoint(entrypoint); err != nil {
+		t.Fatalf("AddParticipantEntrypoint() error = %v", err)
+	}
+
+	err := ctx.AddParticipantEntrypoint(entrypoint)
+	if err == nil {
+		t.Fatal("AddParticipantEntrypoint() duplicate error = nil, want error")
+	}
+}
+
+func TestJobContextAddParticipantEntrypointStoresKinds(t *testing.T) {
+	ctx := NewJobContext(&livekit.Job{Id: "job_participant_entrypoint_kinds"}, "", "", "")
+	entrypoint := func(*JobContext, *livekit.ParticipantInfo) {}
+
+	err := ctx.AddParticipantEntrypoint(
+		entrypoint,
+		livekit.ParticipantInfo_AGENT,
+		livekit.ParticipantInfo_SIP,
+	)
+	if err != nil {
+		t.Fatalf("AddParticipantEntrypoint() error = %v", err)
+	}
+
+	if len(ctx.participantEntrypoints) != 1 {
+		t.Fatalf("participant entrypoints = %d, want 1", len(ctx.participantEntrypoints))
+	}
+	gotKinds := ctx.participantEntrypoints[0].kinds
+	wantKinds := []livekit.ParticipantInfo_Kind{
+		livekit.ParticipantInfo_AGENT,
+		livekit.ParticipantInfo_SIP,
+	}
+	if !reflect.DeepEqual(gotKinds, wantKinds) {
+		t.Fatalf("participant entrypoint kinds = %#v, want %#v", gotKinds, wantKinds)
+	}
+}
+
+func TestJobContextRunParticipantEntrypointsFiltersKinds(t *testing.T) {
+	ctx := NewJobContext(&livekit.Job{Id: "job_participant_run"}, "", "", "")
+	var calls []string
+
+	if err := ctx.AddParticipantEntrypoint(func(_ *JobContext, p *livekit.ParticipantInfo) {
+		calls = append(calls, "standard:"+p.Identity)
+	}, livekit.ParticipantInfo_STANDARD); err != nil {
+		t.Fatalf("AddParticipantEntrypoint(standard) error = %v", err)
+	}
+	if err := ctx.AddParticipantEntrypoint(func(_ *JobContext, p *livekit.ParticipantInfo) {
+		calls = append(calls, "sip:"+p.Identity)
+	}, livekit.ParticipantInfo_SIP); err != nil {
+		t.Fatalf("AddParticipantEntrypoint(sip) error = %v", err)
+	}
+
+	ctx.runParticipantEntrypoints(&livekit.ParticipantInfo{
+		Identity: "caller",
+		Kind:     livekit.ParticipantInfo_SIP,
+	})
+
+	want := []string{"sip:caller"}
+	if !reflect.DeepEqual(calls, want) {
+		t.Fatalf("participant entrypoint calls = %#v, want %#v", calls, want)
+	}
+}
+
+func TestJobContextAddParticipantEntrypointDefaultsReferenceKinds(t *testing.T) {
+	ctx := NewJobContext(&livekit.Job{Id: "job_participant_run_all"}, "", "", "")
+	entrypoint := func(*JobContext, *livekit.ParticipantInfo) {}
+
+	if err := ctx.AddParticipantEntrypoint(entrypoint); err != nil {
+		t.Fatalf("AddParticipantEntrypoint() error = %v", err)
+	}
+
+	gotKinds := ctx.participantEntrypoints[0].kinds
+	wantKinds := []livekit.ParticipantInfo_Kind{
+		livekit.ParticipantInfo_CONNECTOR,
+		livekit.ParticipantInfo_SIP,
+		livekit.ParticipantInfo_STANDARD,
+	}
+	if !reflect.DeepEqual(gotKinds, wantKinds) {
+		t.Fatalf("default participant entrypoint kinds = %#v, want %#v", gotKinds, wantKinds)
+	}
+}
+
+func TestJobContextRunDefaultParticipantEntrypointsSkipsAgentParticipants(t *testing.T) {
+	ctx := NewJobContext(&livekit.Job{Id: "job_participant_run_default"}, "", "", "")
+	var calls []string
+
+	if err := ctx.AddParticipantEntrypoint(func(_ *JobContext, p *livekit.ParticipantInfo) {
+		calls = append(calls, p.Identity)
+	}); err != nil {
+		t.Fatalf("AddParticipantEntrypoint() error = %v", err)
+	}
+	ctx.runParticipantEntrypoints(&livekit.ParticipantInfo{
+		Identity: "agent-a",
+		Kind:     livekit.ParticipantInfo_AGENT,
+	})
+	ctx.runParticipantEntrypoints(&livekit.ParticipantInfo{
+		Identity: "caller",
+		Kind:     livekit.ParticipantInfo_SIP,
+	})
+
+	want := []string{"caller"}
+	if !reflect.DeepEqual(calls, want) {
+		t.Fatalf("participant entrypoint calls = %#v, want %#v", calls, want)
+	}
+}
+
 func TestJobContextRoomInfoReturnsJobRoom(t *testing.T) {
 	room := &livekit.Room{Name: "room-a", Sid: "RM_a"}
 	ctx := NewJobContext(&livekit.Job{Id: "job_room", Room: room}, "", "", "")

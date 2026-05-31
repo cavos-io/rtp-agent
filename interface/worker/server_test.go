@@ -6,7 +6,9 @@ import (
 	"errors"
 	"io"
 	"math"
+	"net"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"runtime"
 	"strings"
@@ -42,6 +44,9 @@ func TestNewAgentServerLoadsLiveKitOptionsFromEnvironment(t *testing.T) {
 	if server.Options.AgentName != "env-agent" {
 		t.Fatalf("AgentName = %q, want env LIVEKIT_AGENT_NAME", server.Options.AgentName)
 	}
+	if !server.Options.AgentNameIsEnv {
+		t.Fatal("AgentNameIsEnv = false, want true when loaded from LIVEKIT_AGENT_NAME")
+	}
 	if server.Options.HTTPProxy != "https://proxy.example" {
 		t.Fatalf("HTTPProxy = %q, want env HTTPS_PROXY", server.Options.HTTPProxy)
 	}
@@ -73,6 +78,9 @@ func TestNewAgentServerExplicitOptionsOverrideEnvironment(t *testing.T) {
 	}
 	if server.Options.AgentName != "explicit-agent" {
 		t.Fatalf("AgentName = %q, want explicit value", server.Options.AgentName)
+	}
+	if server.Options.AgentNameIsEnv {
+		t.Fatal("AgentNameIsEnv = true, want false for explicit agent name")
 	}
 	if server.Options.HTTPProxy != "https://explicit-proxy.example" {
 		t.Fatalf("HTTPProxy = %q, want explicit value", server.Options.HTTPProxy)
@@ -124,6 +132,81 @@ func TestNewAgentServerUsesReferenceWorkerDefaults(t *testing.T) {
 	if server.Options.NumIdleProcesses != wantIdle {
 		t.Fatalf("NumIdleProcesses = %d, want reference production default %d", server.Options.NumIdleProcesses, wantIdle)
 	}
+	if server.Options.LogLevel != "INFO" {
+		t.Fatalf("LogLevel = %q, want reference production default INFO", server.Options.LogLevel)
+	}
+	if server.Options.Port != 8081 {
+		t.Fatalf("Port = %d, want reference production default 8081", server.Options.Port)
+	}
+}
+
+func TestNewAgentServerUsesReferenceDevModeDefaultsFromEnvironment(t *testing.T) {
+	t.Setenv("LIVEKIT_DEV_MODE", "1")
+
+	server := NewAgentServer(WorkerOptions{})
+
+	if !server.Options.DevMode {
+		t.Fatal("DevMode = false, want true from LIVEKIT_DEV_MODE")
+	}
+	if !math.IsInf(server.Options.LoadThreshold, 1) {
+		t.Fatalf("LoadThreshold = %v, want reference development default +Inf", server.Options.LoadThreshold)
+	}
+	if server.Options.NumIdleProcesses != 0 {
+		t.Fatalf("NumIdleProcesses = %d, want reference development default 0", server.Options.NumIdleProcesses)
+	}
+	if server.Options.LogLevel != "DEBUG" {
+		t.Fatalf("LogLevel = %q, want reference development default DEBUG", server.Options.LogLevel)
+	}
+	if server.Options.Port != 0 {
+		t.Fatalf("Port = %d, want reference development default 0", server.Options.Port)
+	}
+	if !server.availableForJob() {
+		t.Fatal("availableForJob() = false, want true with development infinite load threshold")
+	}
+}
+
+func TestNewAgentServerUsesReferenceDevModeDefaultsFromOptions(t *testing.T) {
+	server := NewAgentServer(WorkerOptions{DevMode: true})
+
+	if !math.IsInf(server.Options.LoadThreshold, 1) {
+		t.Fatalf("LoadThreshold = %v, want reference development default +Inf", server.Options.LoadThreshold)
+	}
+	if server.Options.NumIdleProcesses != 0 {
+		t.Fatalf("NumIdleProcesses = %d, want reference development default 0", server.Options.NumIdleProcesses)
+	}
+}
+
+func TestNewAgentServerKeepsExplicitDevModeCapacityOptions(t *testing.T) {
+	server := NewAgentServer(WorkerOptions{
+		DevMode:          true,
+		LoadThreshold:    0.5,
+		NumIdleProcesses: 2,
+	})
+
+	if server.Options.LoadThreshold != 0.5 {
+		t.Fatalf("LoadThreshold = %v, want explicit development value 0.5", server.Options.LoadThreshold)
+	}
+	if server.Options.NumIdleProcesses != 2 {
+		t.Fatalf("NumIdleProcesses = %d, want explicit development value 2", server.Options.NumIdleProcesses)
+	}
+}
+
+func TestNewAgentServerNormalizesExplicitLogLevel(t *testing.T) {
+	server := NewAgentServer(WorkerOptions{LogLevel: "trace"})
+
+	if server.Options.LogLevel != "TRACE" {
+		t.Fatalf("LogLevel = %q, want normalized TRACE", server.Options.LogLevel)
+	}
+}
+
+func TestNewAgentServerLoadsLogLevelFromEnvironment(t *testing.T) {
+	t.Setenv("LIVEKIT_LOG_LEVEL", "warn")
+
+	server := NewAgentServer(WorkerOptions{})
+
+	if server.Options.LogLevel != "WARN" {
+		t.Fatalf("LogLevel = %q, want env LIVEKIT_LOG_LEVEL normalized to WARN", server.Options.LogLevel)
+	}
 }
 
 func TestNewAgentServerLoadsWorkerTokenFromEnvironment(t *testing.T) {
@@ -146,6 +229,147 @@ func TestAgentServerWorkerInfoReportsCloudAgentsMode(t *testing.T) {
 	if info.HTTPPort != 0 {
 		t.Fatalf("WorkerInfo().HTTPPort = %d, want 0 before HTTP server starts", info.HTTPPort)
 	}
+}
+
+func TestWorkerHTTPHandlerReportsHealthOK(t *testing.T) {
+	server := NewAgentServer(WorkerOptions{})
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	rec := httptest.NewRecorder()
+
+	server.workerHTTPHandler().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("health status = %d, want 200", rec.Code)
+	}
+	if strings.TrimSpace(rec.Body.String()) != "OK" {
+		t.Fatalf("health body = %q, want OK", rec.Body.String())
+	}
+}
+
+func TestWorkerHTTPHandlerReportsWorkerMetadata(t *testing.T) {
+	server := NewAgentServer(WorkerOptions{
+		AgentName: "sales-agent",
+		LoadFunc:  func(*AgentServer) float64 { return 0.42 },
+	})
+	server.activeJobs["job-a"] = NewJobContext(&livekit.Job{Id: "job-a"}, "", "", "")
+
+	req := httptest.NewRequest(http.MethodGet, "/worker", nil)
+	rec := httptest.NewRecorder()
+
+	server.workerHTTPHandler().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("worker status = %d, want 200", rec.Code)
+	}
+	body := rec.Body.String()
+	for _, want := range []string{
+		`"agent_name":"sales-agent"`,
+		`"agent_name_is_env":false`,
+		`"worker_type":"JT_ROOM"`,
+		`"worker_load":0.42`,
+		`"active_jobs":1`,
+		`"project_type":"go"`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("/worker response missing %s in %s", want, body)
+		}
+	}
+}
+
+func TestWorkerHTTPHandlerReportsEnvAgentNameProvenance(t *testing.T) {
+	t.Setenv("LIVEKIT_AGENT_NAME", "env-agent")
+	server := NewAgentServer(WorkerOptions{})
+
+	req := httptest.NewRequest(http.MethodGet, "/worker", nil)
+	rec := httptest.NewRecorder()
+
+	server.workerHTTPHandler().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("worker status = %d, want 200", rec.Code)
+	}
+	body := rec.Body.String()
+	for _, want := range []string{
+		`"agent_name":"env-agent"`,
+		`"agent_name_is_env":true`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("/worker response missing %s in %s", want, body)
+		}
+	}
+}
+
+func TestWorkerInfoReportsStartedHTTPPort(t *testing.T) {
+	server := NewAgentServer(WorkerOptions{DevMode: true, Host: "127.0.0.1"})
+	httpServer, err := server.startWorkerHTTPServer()
+	if err != nil {
+		t.Fatalf("startWorkerHTTPServer() error = %v", err)
+	}
+	defer httpServer.Close()
+
+	info := server.WorkerInfo()
+	if info.HTTPPort == 0 {
+		t.Fatal("WorkerInfo().HTTPPort = 0, want started HTTP port")
+	}
+}
+
+func TestStartPrometheusServerUsesConfiguredPort(t *testing.T) {
+	server := NewAgentServer(WorkerOptions{
+		Host:           "127.0.0.1",
+		PrometheusPort: 0,
+	})
+
+	prometheusServer, err := server.startPrometheusServer()
+	if err != nil {
+		t.Fatalf("startPrometheusServer() error = %v", err)
+	}
+	if prometheusServer != nil {
+		t.Fatal("startPrometheusServer() = server, want nil when PrometheusPort is unset")
+	}
+
+	port := freeTCPPort(t)
+	server = NewAgentServer(WorkerOptions{
+		Host:           "127.0.0.1",
+		PrometheusPort: port,
+	})
+	prometheusServer, err = server.startPrometheusServer()
+	if err != nil {
+		t.Fatalf("startPrometheusServer() error = %v", err)
+	}
+	if prometheusServer == nil {
+		t.Fatal("startPrometheusServer() = nil, want server when PrometheusPort is configured")
+	}
+	defer prometheusServer.Stop(context.Background())
+	if prometheusServer.Port != port {
+		t.Fatalf("Prometheus server Port = %d, want %d", prometheusServer.Port, port)
+	}
+}
+
+func TestConfigurePrometheusMultiprocDirSetsEnvironment(t *testing.T) {
+	t.Setenv("PROMETHEUS_MULTIPROC_DIR", "")
+	dir := t.TempDir()
+	server := NewAgentServer(WorkerOptions{PrometheusMultiprocDir: dir})
+
+	if err := server.configurePrometheusMultiprocDir(); err != nil {
+		t.Fatalf("configurePrometheusMultiprocDir() error = %v", err)
+	}
+	if got := os.Getenv("PROMETHEUS_MULTIPROC_DIR"); got != dir {
+		t.Fatalf("PROMETHEUS_MULTIPROC_DIR = %q, want %q", got, dir)
+	}
+}
+
+func freeTCPPort(t *testing.T) int {
+	t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen for free TCP port: %v", err)
+	}
+	defer ln.Close()
+	addr, ok := ln.Addr().(*net.TCPAddr)
+	if !ok {
+		t.Fatalf("listener address type = %T, want *net.TCPAddr", ln.Addr())
+	}
+	return addr.Port
 }
 
 func TestUpdateOptionsMergesConfiguredValuesBeforeRun(t *testing.T) {
@@ -198,6 +422,25 @@ func TestUpdateOptionsMergesConfiguredValuesBeforeRun(t *testing.T) {
 	}
 	if server.Options.Permissions != permissions {
 		t.Fatal("Permissions was not replaced with updated pointer")
+	}
+}
+
+func TestUpdateOptionsMarksExplicitAgentNameAsNotEnvironment(t *testing.T) {
+	t.Setenv("LIVEKIT_AGENT_NAME", "env-agent")
+	server := NewAgentServer(WorkerOptions{})
+	if !server.Options.AgentNameIsEnv {
+		t.Fatal("AgentNameIsEnv = false, want true before explicit update")
+	}
+
+	if err := server.UpdateOptions(WorkerOptions{AgentName: "explicit-agent"}); err != nil {
+		t.Fatalf("UpdateOptions() error = %v", err)
+	}
+
+	if server.Options.AgentName != "explicit-agent" {
+		t.Fatalf("AgentName = %q, want explicit-agent", server.Options.AgentName)
+	}
+	if server.Options.AgentNameIsEnv {
+		t.Fatal("AgentNameIsEnv = true, want false after explicit update")
 	}
 }
 
@@ -2015,6 +2258,43 @@ func TestValidateRunPreconditionsRejectsFiniteLoadThresholdAboveOne(t *testing.T
 	}
 }
 
+func TestValidateRunPreconditionsAllowsDevLoadThresholdAboveOne(t *testing.T) {
+	server := NewAgentServer(WorkerOptions{
+		WSRL:          "wss://livekit.example",
+		APIKey:        "key",
+		APISecret:     "secret",
+		DevMode:       true,
+		LoadThreshold: 1.2,
+	})
+	if err := server.RTCSession(func(ctx *JobContext) error { return nil }, nil, nil); err != nil {
+		t.Fatalf("RTCSession() error = %v", err)
+	}
+
+	if err := server.validateRunPreconditions(); err != nil {
+		t.Fatalf("validateRunPreconditions() error = %v, want nil in dev mode", err)
+	}
+}
+
+func TestValidateRunPreconditionsRejectsInvalidLogLevel(t *testing.T) {
+	server := NewAgentServer(WorkerOptions{
+		WSRL:      "wss://livekit.example",
+		APIKey:    "key",
+		APISecret: "secret",
+		LogLevel:  "verbose",
+	})
+	if err := server.RTCSession(func(ctx *JobContext) error { return nil }, nil, nil); err != nil {
+		t.Fatalf("RTCSession() error = %v", err)
+	}
+
+	err := server.validateRunPreconditions()
+	if err == nil {
+		t.Fatal("validateRunPreconditions() error = nil, want invalid log level error")
+	}
+	if !strings.Contains(err.Error(), "invalid log_level") {
+		t.Fatalf("validateRunPreconditions() error = %q, want invalid log level message", err.Error())
+	}
+}
+
 func TestRunExportsLiveKitCredentialsBeforeDial(t *testing.T) {
 	t.Setenv("LIVEKIT_URL", "wss://old.example")
 	t.Setenv("LIVEKIT_API_KEY", "old-key")
@@ -2028,8 +2308,12 @@ func TestRunExportsLiveKitCredentialsBeforeDial(t *testing.T) {
 	})
 
 	dialed := false
+	var server *AgentServer
 	workerDialContext = func(context.Context, *websocket.Dialer, string, http.Header) (*websocket.Conn, *http.Response, error) {
 		dialed = true
+		if serverHTTPPort := server.WorkerInfo().HTTPPort; serverHTTPPort == 0 {
+			t.Fatal("WorkerInfo().HTTPPort = 0 before dial, want started HTTP server port")
+		}
 		if os.Getenv("LIVEKIT_URL") != "wss://run.example" {
 			t.Fatalf("LIVEKIT_URL = %q, want run option", os.Getenv("LIVEKIT_URL"))
 		}
@@ -2045,11 +2329,13 @@ func TestRunExportsLiveKitCredentialsBeforeDial(t *testing.T) {
 		return context.Canceled
 	}
 
-	server := NewAgentServer(WorkerOptions{
+	server = NewAgentServer(WorkerOptions{
 		WSRL:      "wss://run.example",
 		APIKey:    "run-key",
 		APISecret: "run-secret",
 		MaxRetry:  1,
+		DevMode:   true,
+		Host:      "127.0.0.1",
 	})
 	if err := server.RTCSession(func(ctx *JobContext) error { return nil }, nil, nil); err != nil {
 		t.Fatalf("RTCSession() error = %v", err)
@@ -2059,6 +2345,44 @@ func TestRunExportsLiveKitCredentialsBeforeDial(t *testing.T) {
 	if !dialed {
 		t.Fatal("worker dial was not attempted")
 	}
+}
+
+func TestRunStartsConfiguredPrometheusServerBeforeDial(t *testing.T) {
+	oldDial := workerDialContext
+	oldSleep := workerRetrySleep
+	t.Cleanup(func() {
+		workerDialContext = oldDial
+		workerRetrySleep = oldSleep
+	})
+
+	var server *AgentServer
+	workerDialContext = func(context.Context, *websocket.Dialer, string, http.Header) (*websocket.Conn, *http.Response, error) {
+		server.mu.Lock()
+		prometheusStarted := server.prometheusServer != nil
+		server.mu.Unlock()
+		if !prometheusStarted {
+			t.Fatal("prometheusServer = nil before dial, want started Prometheus server")
+		}
+		return nil, nil, errors.New("stop after prometheus check")
+	}
+	workerRetrySleep = func(context.Context, time.Duration) error {
+		return context.Canceled
+	}
+
+	server = NewAgentServer(WorkerOptions{
+		WSRL:           "wss://run.example",
+		APIKey:         "run-key",
+		APISecret:      "run-secret",
+		MaxRetry:       1,
+		DevMode:        true,
+		Host:           "127.0.0.1",
+		PrometheusPort: freeTCPPort(t),
+	})
+	if err := server.RTCSession(func(ctx *JobContext) error { return nil }, nil, nil); err != nil {
+		t.Fatalf("RTCSession() error = %v", err)
+	}
+
+	_ = server.Run(context.Background())
 }
 
 func TestConnectWorkerWebSocketRetriesDialFailures(t *testing.T) {

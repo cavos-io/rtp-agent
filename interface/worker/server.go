@@ -2,10 +2,12 @@ package worker
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"math"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -19,6 +21,7 @@ import (
 	workeripc "github.com/cavos-io/conversation-worker/interface/worker/ipc"
 	"github.com/cavos-io/conversation-worker/library/logger"
 	mathutil "github.com/cavos-io/conversation-worker/library/math"
+	"github.com/cavos-io/conversation-worker/library/telemetry"
 	"github.com/go-jose/go-jose/v3"
 	"github.com/go-jose/go-jose/v3/jwt"
 	"github.com/gorilla/websocket"
@@ -40,6 +43,10 @@ const (
 	defaultSessionEnd     = 300
 	defaultProcessTimeout = 10
 	defaultLoadThreshold  = 0.7
+	defaultProdLogLevel   = "INFO"
+	defaultDevLogLevel    = "DEBUG"
+	defaultProdHTTPPort   = 8081
+	defaultDevHTTPPort    = 0
 
 	participantAttributeAgentName = "lk.agent.name"
 )
@@ -83,18 +90,25 @@ type WorkerInfo struct {
 }
 
 type WorkerOptions struct {
-	AgentName  string
-	WorkerType WorkerType
-	MaxRetry   int
-	Version    string
-	WSURL      string
-	LoadFunc   func(*AgentServer) float64
+	AgentName      string
+	AgentNameIsEnv bool
+	WorkerType     WorkerType
+	MaxRetry       int
+	Version        string
+	Host           string
+	Port           int
+	WSURL          string
+	LoadFunc       func(*AgentServer) float64
 	// WSRL is kept for backward compatibility. Prefer WSURL for new code.
 	WSRL                            string
 	APIKey                          string
 	APISecret                       string
 	WorkerToken                     string
 	HTTPProxy                       string
+	DevMode                         bool
+	LogLevel                        string
+	PrometheusPort                  int
+	PrometheusMultiprocDir          string
 	LoadThreshold                   float64
 	JobMemoryWarnMB                 float64
 	JobMemoryLimitMB                float64
@@ -120,6 +134,9 @@ type AgentServer struct {
 	draining           bool
 	mu                 sync.Mutex
 	conn               *websocket.Conn
+	httpServer         *http.Server
+	httpPort           int
+	prometheusServer   *telemetry.HttpServer
 	workerMessageSink  func(*livekit.WorkerMessage) error
 	workerID           string
 	startedHandlers    []WorkerStartedHandler
@@ -159,8 +176,12 @@ func (s *AgentServer) ID() string {
 }
 
 func (s *AgentServer) WorkerInfo() WorkerInfo {
+	s.mu.Lock()
+	httpPort := s.httpPort
+	s.mu.Unlock()
+
 	return WorkerInfo{
-		HTTPPort:    0,
+		HTTPPort:    httpPort,
 		CloudAgents: s.Options.WorkerToken != "",
 	}
 }
@@ -406,6 +427,7 @@ func (s *AgentServer) UpdateOptions(opts WorkerOptions) error {
 func mergeWorkerOptions(current WorkerOptions, next WorkerOptions) WorkerOptions {
 	if next.AgentName != "" {
 		current.AgentName = next.AgentName
+		current.AgentNameIsEnv = false
 	}
 	if next.WorkerType != "" {
 		current.WorkerType = next.WorkerType
@@ -415,6 +437,12 @@ func mergeWorkerOptions(current WorkerOptions, next WorkerOptions) WorkerOptions
 	}
 	if next.Version != "" {
 		current.Version = next.Version
+	}
+	if next.Host != "" {
+		current.Host = next.Host
+	}
+	if next.Port != 0 {
+		current.Port = next.Port
 	}
 	if next.WSURL != "" {
 		current.WSURL = next.WSURL
@@ -437,6 +465,18 @@ func mergeWorkerOptions(current WorkerOptions, next WorkerOptions) WorkerOptions
 	}
 	if next.HTTPProxy != "" {
 		current.HTTPProxy = next.HTTPProxy
+	}
+	if next.PrometheusPort != 0 {
+		current.PrometheusPort = next.PrometheusPort
+	}
+	if next.PrometheusMultiprocDir != "" {
+		current.PrometheusMultiprocDir = next.PrometheusMultiprocDir
+	}
+	if next.DevMode {
+		current.DevMode = true
+	}
+	if next.LogLevel != "" {
+		current.LogLevel = next.LogLevel
 	}
 	if next.LoadThreshold != 0 {
 		current.LoadThreshold = next.LoadThreshold
@@ -469,6 +509,9 @@ func mergeWorkerOptions(current WorkerOptions, next WorkerOptions) WorkerOptions
 }
 
 func resolveWorkerOptions(opts WorkerOptions) WorkerOptions {
+	if !opts.DevMode {
+		opts.DevMode = liveKitDevModeEnabled(os.Getenv("LIVEKIT_DEV_MODE"))
+	}
 	if opts.WorkerType == "" {
 		opts.WorkerType = WorkerTypeRoom
 	}
@@ -493,10 +536,28 @@ func resolveWorkerOptions(opts WorkerOptions) WorkerOptions {
 	if opts.InitializeProcessTimeoutSeconds == 0 {
 		opts.InitializeProcessTimeoutSeconds = defaultProcessTimeout
 	}
-	if opts.LoadThreshold == 0 {
-		opts.LoadThreshold = defaultLoadThreshold
+	if opts.LogLevel == "" {
+		opts.LogLevel = os.Getenv("LIVEKIT_LOG_LEVEL")
 	}
-	if opts.NumIdleProcesses == 0 {
+	if opts.LogLevel == "" {
+		if opts.DevMode {
+			opts.LogLevel = defaultDevLogLevel
+		} else {
+			opts.LogLevel = defaultProdLogLevel
+		}
+	}
+	opts.LogLevel = strings.ToUpper(opts.LogLevel)
+	if opts.Port == 0 && !opts.DevMode {
+		opts.Port = defaultProdHTTPPort
+	}
+	if opts.LoadThreshold == 0 {
+		if opts.DevMode {
+			opts.LoadThreshold = math.Inf(1)
+		} else {
+			opts.LoadThreshold = defaultLoadThreshold
+		}
+	}
+	if opts.NumIdleProcesses == 0 && !opts.DevMode {
 		opts.NumIdleProcesses = defaultNumIdleProcesses()
 	}
 	if opts.Permissions == nil {
@@ -522,6 +583,7 @@ func resolveWorkerOptions(opts WorkerOptions) WorkerOptions {
 	}
 	if opts.AgentName == "" {
 		opts.AgentName = os.Getenv("LIVEKIT_AGENT_NAME")
+		opts.AgentNameIsEnv = opts.AgentName != ""
 	}
 	if opts.HTTPProxy == "" {
 		opts.HTTPProxy = os.Getenv("HTTPS_PROXY")
@@ -531,6 +593,118 @@ func resolveWorkerOptions(opts WorkerOptions) WorkerOptions {
 	}
 
 	return opts
+}
+
+type workerMetadataResponse struct {
+	AgentName      string  `json:"agent_name"`
+	AgentNameIsEnv bool    `json:"agent_name_is_env"`
+	WorkerType     string  `json:"worker_type"`
+	WorkerLoad     float64 `json:"worker_load"`
+	ActiveJobs     int     `json:"active_jobs"`
+	SDKVersion     string  `json:"sdk_version"`
+	ProjectType    string  `json:"project_type"`
+}
+
+func (s *AgentServer) workerHTTPHandler() http.Handler {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/" {
+			http.NotFound(w, r)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("OK"))
+	})
+	mux.HandleFunc("/worker", func(w http.ResponseWriter, r *http.Request) {
+		body := workerMetadataResponse{
+			AgentName:      s.Options.AgentName,
+			AgentNameIsEnv: s.Options.AgentNameIsEnv,
+			WorkerType:     livekit.JobType_name[int32(workerTypeToJobType(s.Options.WorkerType))],
+			WorkerLoad:     s.currentLoad(),
+			ActiveJobs:     s.activeJobCount(),
+			SDKVersion:     s.Options.Version,
+			ProjectType:    "go",
+		}
+		w.Header().Set("Content-Type", "application/json")
+		if err := json.NewEncoder(w).Encode(body); err != nil {
+			logger.Logger.Errorw("failed to encode worker metadata", err)
+		}
+	})
+	return mux
+}
+
+func (s *AgentServer) startWorkerHTTPServer() (*http.Server, error) {
+	host := s.Options.Host
+	addr := fmt.Sprintf("%s:%d", host, s.Options.Port)
+	ln, err := net.Listen("tcp", addr)
+	if err != nil {
+		return nil, err
+	}
+
+	tcpAddr, ok := ln.Addr().(*net.TCPAddr)
+	if !ok {
+		_ = ln.Close()
+		return nil, fmt.Errorf("unexpected HTTP listener address %T", ln.Addr())
+	}
+
+	srv := &http.Server{Handler: s.workerHTTPHandler()}
+	s.mu.Lock()
+	s.httpServer = srv
+	s.httpPort = tcpAddr.Port
+	s.mu.Unlock()
+
+	go func() {
+		if err := srv.Serve(ln); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			logger.Logger.Errorw("worker HTTP server error", err)
+		}
+	}()
+
+	return srv, nil
+}
+
+func (s *AgentServer) startPrometheusServer() (*telemetry.HttpServer, error) {
+	if s.Options.PrometheusPort == 0 {
+		return nil, nil
+	}
+	server := telemetry.NewHttpServer(s.Options.Host, s.Options.PrometheusPort)
+	if err := server.Start(); err != nil {
+		return nil, err
+	}
+	s.mu.Lock()
+	s.prometheusServer = server
+	s.mu.Unlock()
+	return server, nil
+}
+
+func (s *AgentServer) configurePrometheusMultiprocDir() error {
+	if s.Options.PrometheusMultiprocDir == "" {
+		if dir := os.Getenv("PROMETHEUS_MULTIPROC_DIR"); dir != "" {
+			s.Options.PrometheusMultiprocDir = dir
+		}
+		return nil
+	}
+	if err := os.MkdirAll(s.Options.PrometheusMultiprocDir, 0o755); err != nil {
+		return err
+	}
+	return os.Setenv("PROMETHEUS_MULTIPROC_DIR", s.Options.PrometheusMultiprocDir)
+}
+
+func liveKitDevModeEnabled(value string) bool {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "1", "true", "t", "yes", "y", "on":
+		return true
+	default:
+		return false
+	}
+}
+
+func validWorkerLogLevel(logLevel string) bool {
+	switch strings.ToUpper(strings.TrimSpace(logLevel)) {
+	case "TRACE", "DEBUG", "INFO", "WARN", "ERROR", "CRITICAL":
+		return true
+	default:
+		return false
+	}
 }
 
 func defaultNumIdleProcesses() int {
@@ -850,10 +1024,12 @@ func (s *AgentServer) validateRunPreconditions() error {
 		s.Options.LoadFunc = nil
 		s.Options.LoadThreshold = defaultLoadThreshold
 	}
-	if s.Options.LoadThreshold > 1 && !math.IsInf(s.Options.LoadThreshold, 1) {
+	if s.Options.LoadThreshold > 1 && !math.IsInf(s.Options.LoadThreshold, 1) && !s.Options.DevMode {
 		return fmt.Errorf("load_threshold in prod env must be less than 1, current value: %v", s.Options.LoadThreshold)
 	}
-
+	if !validWorkerLogLevel(s.Options.LogLevel) {
+		return fmt.Errorf("invalid log_level %q, valid levels: CRITICAL, DEBUG, ERROR, INFO, TRACE, WARN", s.Options.LogLevel)
+	}
 	if s.entrypointFnc == nil {
 		return fmt.Errorf("No RTC session entrypoint has been registered")
 	}
@@ -876,6 +1052,42 @@ func (s *AgentServer) Run(ctx context.Context) error {
 	os.Setenv("LIVEKIT_URL", s.Options.WSRL)
 	os.Setenv("LIVEKIT_API_KEY", s.Options.APIKey)
 	os.Setenv("LIVEKIT_API_SECRET", s.Options.APISecret)
+
+	httpServer, err := s.startWorkerHTTPServer()
+	if err != nil {
+		return err
+	}
+	defer func() {
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		if err := httpServer.Shutdown(shutdownCtx); err != nil {
+			_ = httpServer.Close()
+		}
+		s.mu.Lock()
+		s.httpServer = nil
+		s.httpPort = 0
+		s.mu.Unlock()
+	}()
+
+	if err := s.configurePrometheusMultiprocDir(); err != nil {
+		return err
+	}
+	prometheusServer, err := s.startPrometheusServer()
+	if err != nil {
+		return err
+	}
+	if prometheusServer != nil {
+		defer func() {
+			shutdownCtx, cancel := context.WithTimeout(context.Background(), time.Second)
+			defer cancel()
+			if err := prometheusServer.Stop(shutdownCtx); err != nil {
+				logger.Logger.Errorw("failed to stop Prometheus server", err)
+			}
+			s.mu.Lock()
+			s.prometheusServer = nil
+			s.mu.Unlock()
+		}()
+	}
 
 	agentURL, err := agentWebSocketURL(s.Options.WSRL, s.Options.WorkerToken)
 	if err != nil {
