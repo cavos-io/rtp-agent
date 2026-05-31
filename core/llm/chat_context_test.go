@@ -911,6 +911,58 @@ func TestChatContextToOpenAIProviderFormatIncludesImageContent(t *testing.T) {
 	}
 }
 
+func TestChatContextToOpenAIProviderFormatForwardsReferenceExtraContent(t *testing.T) {
+	ctx := NewChatContext()
+	ctx.Items = []ChatItem{
+		&ChatMessage{
+			ID:      "user",
+			Role:    ChatRoleUser,
+			Content: []ChatContent{{Text: "hello"}},
+			Extra: map[string]any{
+				"google":  map[string]any{"thought_signature": "sig"},
+				"ignored": "value",
+			},
+		},
+		&ChatMessage{ID: "assistant", Role: ChatRoleAssistant, Content: []ChatContent{{Text: "checking"}}},
+		&FunctionCall{
+			ID:        "assistant/tool",
+			CallID:    "call_lookup",
+			Name:      "lookup",
+			Arguments: `{}`,
+			Extra: map[string]any{
+				"xai":     map[string]any{"reasoning": "trace"},
+				"ignored": "value",
+			},
+		},
+		&FunctionCallOutput{ID: "output", CallID: "call_lookup", Name: "lookup", Output: "ok"},
+	}
+
+	messages, _ := ctx.ToProviderFormat("openai")
+
+	userExtra, ok := messages[0]["extra_content"].(map[string]any)
+	if !ok {
+		t.Fatalf("user extra_content = %#v, want map", messages[0]["extra_content"])
+	}
+	if _, ok := userExtra["ignored"]; ok {
+		t.Fatalf("user extra_content includes ignored key: %#v", userExtra)
+	}
+	if _, ok := userExtra["google"]; !ok {
+		t.Fatalf("user extra_content = %#v, want google key", userExtra)
+	}
+
+	toolCalls := messages[1]["tool_calls"].([]map[string]any)
+	toolExtra, ok := toolCalls[0]["extra_content"].(map[string]any)
+	if !ok {
+		t.Fatalf("tool extra_content = %#v, want map", toolCalls[0]["extra_content"])
+	}
+	if _, ok := toolExtra["ignored"]; ok {
+		t.Fatalf("tool extra_content includes ignored key: %#v", toolExtra)
+	}
+	if _, ok := toolExtra["xai"]; !ok {
+		t.Fatalf("tool extra_content = %#v, want xai key", toolExtra)
+	}
+}
+
 func TestChatContextToOpenAIProviderFormatFiltersUnmatchedToolItems(t *testing.T) {
 	ctx := NewChatContext()
 	ctx.Items = []ChatItem{

@@ -846,10 +846,14 @@ func openAIToolGroupID(itemID string, groupID *string) string {
 
 func openAIChatMessage(msg *ChatMessage) map[string]any {
 	content := openAIChatContent(msg.Content)
-	return map[string]any{
+	result := map[string]any{
 		"role":    string(msg.Role),
 		"content": content,
 	}
+	if extra := openAIExtraContent(msg.Extra); len(extra) > 0 {
+		result["extra_content"] = extra
+	}
+	return result
 }
 
 func openAIChatContent(content []ChatContent) any {
@@ -895,7 +899,7 @@ func openAIImageContent(image *ImageContent) map[string]any {
 }
 
 func openAIToolCall(toolCall *FunctionCall) map[string]any {
-	return map[string]any{
+	result := map[string]any{
 		"id":   toolCall.CallID,
 		"type": "function",
 		"function": map[string]any{
@@ -903,6 +907,23 @@ func openAIToolCall(toolCall *FunctionCall) map[string]any {
 			"arguments": toolCall.Arguments,
 		},
 	}
+	if extra := openAIExtraContent(toolCall.Extra); len(extra) > 0 {
+		result["extra_content"] = extra
+	}
+	return result
+}
+
+func openAIExtraContent(extra map[string]any) map[string]any {
+	if len(extra) == 0 {
+		return nil
+	}
+	filtered := make(map[string]any)
+	for _, key := range []string{"google", "livekit", "xai"} {
+		if value, ok := extra[key]; ok && value != nil {
+			filtered[key] = value
+		}
+	}
+	return filtered
 }
 
 func openAIToolOutput(toolOutput *FunctionCallOutput) map[string]any {
