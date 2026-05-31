@@ -89,14 +89,15 @@ type WorkerInfo struct {
 }
 
 type WorkerOptions struct {
-	AgentName  string
-	WorkerType WorkerType
-	MaxRetry   int
-	Version    string
-	Host       string
-	Port       int
-	WSURL      string
-	LoadFunc   func(*AgentServer) float64
+	AgentName      string
+	AgentNameIsEnv bool
+	WorkerType     WorkerType
+	MaxRetry       int
+	Version        string
+	Host           string
+	Port           int
+	WSURL          string
+	LoadFunc       func(*AgentServer) float64
 	// WSRL is kept for backward compatibility. Prefer WSURL for new code.
 	WSRL                            string
 	APIKey                          string
@@ -422,6 +423,7 @@ func (s *AgentServer) UpdateOptions(opts WorkerOptions) error {
 func mergeWorkerOptions(current WorkerOptions, next WorkerOptions) WorkerOptions {
 	if next.AgentName != "" {
 		current.AgentName = next.AgentName
+		current.AgentNameIsEnv = false
 	}
 	if next.WorkerType != "" {
 		current.WorkerType = next.WorkerType
@@ -571,6 +573,7 @@ func resolveWorkerOptions(opts WorkerOptions) WorkerOptions {
 	}
 	if opts.AgentName == "" {
 		opts.AgentName = os.Getenv("LIVEKIT_AGENT_NAME")
+		opts.AgentNameIsEnv = opts.AgentName != ""
 	}
 	if opts.HTTPProxy == "" {
 		opts.HTTPProxy = os.Getenv("HTTPS_PROXY")
@@ -583,12 +586,13 @@ func resolveWorkerOptions(opts WorkerOptions) WorkerOptions {
 }
 
 type workerMetadataResponse struct {
-	AgentName   string  `json:"agent_name"`
-	WorkerType  string  `json:"worker_type"`
-	WorkerLoad  float64 `json:"worker_load"`
-	ActiveJobs  int     `json:"active_jobs"`
-	SDKVersion  string  `json:"sdk_version"`
-	ProjectType string  `json:"project_type"`
+	AgentName      string  `json:"agent_name"`
+	AgentNameIsEnv bool    `json:"agent_name_is_env"`
+	WorkerType     string  `json:"worker_type"`
+	WorkerLoad     float64 `json:"worker_load"`
+	ActiveJobs     int     `json:"active_jobs"`
+	SDKVersion     string  `json:"sdk_version"`
+	ProjectType    string  `json:"project_type"`
 }
 
 func (s *AgentServer) workerHTTPHandler() http.Handler {
@@ -603,12 +607,13 @@ func (s *AgentServer) workerHTTPHandler() http.Handler {
 	})
 	mux.HandleFunc("/worker", func(w http.ResponseWriter, r *http.Request) {
 		body := workerMetadataResponse{
-			AgentName:   s.Options.AgentName,
-			WorkerType:  livekit.JobType_name[int32(workerTypeToJobType(s.Options.WorkerType))],
-			WorkerLoad:  s.currentLoad(),
-			ActiveJobs:  s.activeJobCount(),
-			SDKVersion:  s.Options.Version,
-			ProjectType: "go",
+			AgentName:      s.Options.AgentName,
+			AgentNameIsEnv: s.Options.AgentNameIsEnv,
+			WorkerType:     livekit.JobType_name[int32(workerTypeToJobType(s.Options.WorkerType))],
+			WorkerLoad:     s.currentLoad(),
+			ActiveJobs:     s.activeJobCount(),
+			SDKVersion:     s.Options.Version,
+			ProjectType:    "go",
 		}
 		w.Header().Set("Content-Type", "application/json")
 		if err := json.NewEncoder(w).Encode(body); err != nil {

@@ -43,6 +43,9 @@ func TestNewAgentServerLoadsLiveKitOptionsFromEnvironment(t *testing.T) {
 	if server.Options.AgentName != "env-agent" {
 		t.Fatalf("AgentName = %q, want env LIVEKIT_AGENT_NAME", server.Options.AgentName)
 	}
+	if !server.Options.AgentNameIsEnv {
+		t.Fatal("AgentNameIsEnv = false, want true when loaded from LIVEKIT_AGENT_NAME")
+	}
 	if server.Options.HTTPProxy != "https://proxy.example" {
 		t.Fatalf("HTTPProxy = %q, want env HTTPS_PROXY", server.Options.HTTPProxy)
 	}
@@ -74,6 +77,9 @@ func TestNewAgentServerExplicitOptionsOverrideEnvironment(t *testing.T) {
 	}
 	if server.Options.AgentName != "explicit-agent" {
 		t.Fatalf("AgentName = %q, want explicit value", server.Options.AgentName)
+	}
+	if server.Options.AgentNameIsEnv {
+		t.Fatal("AgentNameIsEnv = true, want false for explicit agent name")
 	}
 	if server.Options.HTTPProxy != "https://explicit-proxy.example" {
 		t.Fatalf("HTTPProxy = %q, want explicit value", server.Options.HTTPProxy)
@@ -257,10 +263,34 @@ func TestWorkerHTTPHandlerReportsWorkerMetadata(t *testing.T) {
 	body := rec.Body.String()
 	for _, want := range []string{
 		`"agent_name":"sales-agent"`,
+		`"agent_name_is_env":false`,
 		`"worker_type":"JT_ROOM"`,
 		`"worker_load":0.42`,
 		`"active_jobs":1`,
 		`"project_type":"go"`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("/worker response missing %s in %s", want, body)
+		}
+	}
+}
+
+func TestWorkerHTTPHandlerReportsEnvAgentNameProvenance(t *testing.T) {
+	t.Setenv("LIVEKIT_AGENT_NAME", "env-agent")
+	server := NewAgentServer(WorkerOptions{})
+
+	req := httptest.NewRequest(http.MethodGet, "/worker", nil)
+	rec := httptest.NewRecorder()
+
+	server.workerHTTPHandler().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("worker status = %d, want 200", rec.Code)
+	}
+	body := rec.Body.String()
+	for _, want := range []string{
+		`"agent_name":"env-agent"`,
+		`"agent_name_is_env":true`,
 	} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("/worker response missing %s in %s", want, body)
@@ -332,6 +362,25 @@ func TestUpdateOptionsMergesConfiguredValuesBeforeRun(t *testing.T) {
 	}
 	if server.Options.Permissions != permissions {
 		t.Fatal("Permissions was not replaced with updated pointer")
+	}
+}
+
+func TestUpdateOptionsMarksExplicitAgentNameAsNotEnvironment(t *testing.T) {
+	t.Setenv("LIVEKIT_AGENT_NAME", "env-agent")
+	server := NewAgentServer(WorkerOptions{})
+	if !server.Options.AgentNameIsEnv {
+		t.Fatal("AgentNameIsEnv = false, want true before explicit update")
+	}
+
+	if err := server.UpdateOptions(WorkerOptions{AgentName: "explicit-agent"}); err != nil {
+		t.Fatalf("UpdateOptions() error = %v", err)
+	}
+
+	if server.Options.AgentName != "explicit-agent" {
+		t.Fatalf("AgentName = %q, want explicit-agent", server.Options.AgentName)
+	}
+	if server.Options.AgentNameIsEnv {
+		t.Fatal("AgentNameIsEnv = true, want false after explicit update")
 	}
 }
 
