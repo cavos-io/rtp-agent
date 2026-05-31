@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"reflect"
 	"testing"
 	"time"
 
@@ -114,7 +115,7 @@ func TestMultiSpeakerAdapterWrapperReturnsEOFWhenInnerCompletes(t *testing.T) {
 		ctx:     context.Background(),
 		eventCh: make(chan *SpeechEvent, 1),
 		errCh:   make(chan error, 1),
-		audioCh: make(chan *model.AudioFrame, 1),
+		inputCh: make(chan multiSpeakerInput, 1),
 	}
 	go wrapper.run()
 
@@ -131,7 +132,7 @@ func TestMultiSpeakerAdapterWrapperPropagatesInnerError(t *testing.T) {
 		ctx:     context.Background(),
 		eventCh: make(chan *SpeechEvent, 1),
 		errCh:   make(chan error, 1),
-		audioCh: make(chan *model.AudioFrame, 1),
+		inputCh: make(chan multiSpeakerInput, 1),
 	}
 	go wrapper.run()
 
@@ -141,15 +142,54 @@ func TestMultiSpeakerAdapterWrapperPropagatesInnerError(t *testing.T) {
 	}
 }
 
-type fakeMultiSpeakerStream struct {
-	nextErr error
+func TestMultiSpeakerAdapterWrapperPreservesFrameFlushOrder(t *testing.T) {
+	inner := &fakeMultiSpeakerStream{nextErr: io.EOF, waitCalls: 2, callCh: make(chan struct{}, 2)}
+	wrapper := &multiSpeakerAdapterWrapper{
+		inner:    inner,
+		ctx:      context.Background(),
+		detector: newPrimarySpeakerDetector(false, false, "{text}", "{text}", DefaultPrimarySpeakerDetectionOptions()),
+		eventCh:  make(chan *SpeechEvent, 1),
+		errCh:    make(chan error, 1),
+		inputCh:  make(chan multiSpeakerInput, 2),
+	}
+
+	if err := wrapper.PushFrame(&model.AudioFrame{Data: []byte("a")}); err != nil {
+		t.Fatalf("PushFrame returned error: %v", err)
+	}
+	if err := wrapper.Flush(); err != nil {
+		t.Fatalf("Flush returned error: %v", err)
+	}
+
+	go wrapper.run()
+
+	_, _ = wrapper.Next()
+
+	want := []string{"push:a", "flush"}
+	if !reflect.DeepEqual(inner.calls, want) {
+		t.Fatalf("inner calls = %#v, want %#v", inner.calls, want)
+	}
 }
 
-func (f *fakeMultiSpeakerStream) PushFrame(*model.AudioFrame) error {
+type fakeMultiSpeakerStream struct {
+	nextErr   error
+	calls     []string
+	waitCalls int
+	callCh    chan struct{}
+}
+
+func (f *fakeMultiSpeakerStream) PushFrame(frame *model.AudioFrame) error {
+	f.calls = append(f.calls, "push:"+string(frame.Data))
+	if f.callCh != nil {
+		f.callCh <- struct{}{}
+	}
 	return nil
 }
 
 func (f *fakeMultiSpeakerStream) Flush() error {
+	f.calls = append(f.calls, "flush")
+	if f.callCh != nil {
+		f.callCh <- struct{}{}
+	}
 	return nil
 }
 
@@ -158,5 +198,8 @@ func (f *fakeMultiSpeakerStream) Close() error {
 }
 
 func (f *fakeMultiSpeakerStream) Next() (*SpeechEvent, error) {
+	for range f.waitCalls {
+		<-f.callCh
+	}
 	return nil, f.nextErr
 }

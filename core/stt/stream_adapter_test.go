@@ -24,6 +24,23 @@ func TestStreamAdapterPropagatesVADStartError(t *testing.T) {
 	}
 }
 
+func TestStreamAdapterCapabilitiesMatchReference(t *testing.T) {
+	caps := NewStreamAdapter(&fakeStreamAdapterSTT{}, &fakeStreamAdapterVAD{}).Capabilities()
+
+	if !caps.Streaming {
+		t.Fatal("Streaming = false, want true")
+	}
+	if caps.InterimResults {
+		t.Fatal("InterimResults = true, want false")
+	}
+	if caps.Diarization {
+		t.Fatal("Diarization = true, want false")
+	}
+	if !caps.OfflineRecognize {
+		t.Fatal("OfflineRecognize = false, want true because Recognize delegates to wrapped STT")
+	}
+}
+
 func TestStreamAdapterReturnsEOFWhenVADCompletes(t *testing.T) {
 	stream, err := NewStreamAdapter(&fakeStreamAdapterSTT{}, &fakeStreamAdapterVAD{
 		stream: &fakeStreamAdapterVADStream{nextErr: io.EOF},
@@ -153,8 +170,54 @@ func TestStreamAdapterPropagatesRecognizeError(t *testing.T) {
 	}
 }
 
+func TestStreamAdapterFinalTranscriptUsesFirstRecognizedAlternative(t *testing.T) {
+	stream, err := NewStreamAdapter(
+		&fakeStreamAdapterSTT{recognizeResult: &SpeechEvent{
+			Type: SpeechEventInterimTranscript,
+			Alternatives: []SpeechData{
+				{Text: "first"},
+				{Text: "second"},
+			},
+		}},
+		&fakeStreamAdapterVAD{stream: &fakeStreamAdapterVADStream{
+			events: []*vad.VADEvent{{
+				Type:   vad.VADEventEndOfSpeech,
+				Frames: []*model.AudioFrame{{Data: []byte{1, 0}, SampleRate: 16000, NumChannels: 1, SamplesPerChannel: 1}},
+			}},
+			done: make(chan struct{}),
+		}},
+	).Stream(context.Background(), "")
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+	defer stream.Close()
+
+	event, err := stream.Next()
+	if err != nil {
+		t.Fatalf("first Next returned error: %v", err)
+	}
+	if event.Type != SpeechEventEndOfSpeech {
+		t.Fatalf("first event type = %s, want end_of_speech", event.Type)
+	}
+
+	event, err = stream.Next()
+	if err != nil {
+		t.Fatalf("second Next returned error: %v", err)
+	}
+	if event.Type != SpeechEventFinalTranscript {
+		t.Fatalf("second event type = %s, want final_transcript", event.Type)
+	}
+	if len(event.Alternatives) != 1 {
+		t.Fatalf("final alternatives = %d, want 1", len(event.Alternatives))
+	}
+	if event.Alternatives[0].Text != "first" {
+		t.Fatalf("final text = %q, want first", event.Alternatives[0].Text)
+	}
+}
+
 type fakeStreamAdapterSTT struct {
-	recognizeErr error
+	recognizeErr    error
+	recognizeResult *SpeechEvent
 }
 
 func (f *fakeStreamAdapterSTT) Label() string {
@@ -172,6 +235,9 @@ func (f *fakeStreamAdapterSTT) Stream(context.Context, string) (RecognizeStream,
 func (f *fakeStreamAdapterSTT) Recognize(context.Context, []*model.AudioFrame, string) (*SpeechEvent, error) {
 	if f.recognizeErr != nil {
 		return nil, f.recognizeErr
+	}
+	if f.recognizeResult != nil {
+		return f.recognizeResult, nil
 	}
 	return &SpeechEvent{Type: SpeechEventFinalTranscript}, nil
 }

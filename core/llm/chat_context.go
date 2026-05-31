@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"reflect"
+	"sort"
+	"strings"
 	"time"
 
 	cavosmath "github.com/cavos-io/conversation-worker/library/math"
@@ -283,6 +285,65 @@ func (c *ChatContext) IsEquivalent(other *ChatContext) bool {
 	}
 
 	return true
+}
+
+func ToXML(tagName string, content string, attrs map[string]any) string {
+	attrsStr := xmlAttrsString(attrs)
+	openTag := tagName
+	if attrsStr != "" {
+		openTag += " " + attrsStr
+	}
+	if content == "" {
+		return fmt.Sprintf("<%s />", openTag)
+	}
+	return fmt.Sprintf("<%s>\n%s\n</%s>", openTag, content, tagName)
+}
+
+func xmlAttrsString(attrs map[string]any) string {
+	if len(attrs) == 0 {
+		return ""
+	}
+	keys := make([]string, 0, len(attrs))
+	for key := range attrs {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	parts := make([]string, 0, len(keys))
+	for _, key := range keys {
+		parts = append(parts, fmt.Sprintf(`%s="%v"`, key, attrs[key]))
+	}
+	return strings.Join(parts, " ")
+}
+
+func FunctionCallItemToMessage(item ChatItem) *ChatMessage {
+	switch it := item.(type) {
+	case *FunctionCall:
+		return &ChatMessage{
+			Role: ChatRoleUser,
+			Content: []ChatContent{{Text: ToXML("function_call", it.Arguments, map[string]any{
+				"name":    it.Name,
+				"call_id": it.CallID,
+			})}},
+			CreatedAt: it.CreatedAt,
+			Extra:     map[string]any{"is_function_call": true},
+		}
+	case *FunctionCallOutput:
+		output := it.Output
+		if it.IsError {
+			output = ToXML("error", it.Output, nil)
+		}
+		return &ChatMessage{
+			Role: ChatRoleAssistant,
+			Content: []ChatContent{{Text: ToXML("function_call_output", output, map[string]any{
+				"call_id": it.CallID,
+				"name":    it.Name,
+			})}},
+			CreatedAt: it.CreatedAt,
+			Extra:     map[string]any{"is_function_call_output": true},
+		}
+	default:
+		return nil
+	}
 }
 
 func (c *ChatContext) ToDict(options ...ChatContextDictOptions) map[string]any {

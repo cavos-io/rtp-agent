@@ -101,7 +101,7 @@ func (a *MultiSpeakerAdapter) Stream(ctx context.Context, language string) (Reco
 		detector: newPrimarySpeakerDetector(a.detectPrimarySpeaker, a.suppressBackgroundSpeaker, a.primaryFormat, a.backgroundFormat, a.opt),
 		eventCh:  make(chan *SpeechEvent, 100),
 		errCh:    make(chan error, 1),
-		audioCh:  make(chan *model.AudioFrame, 100),
+		inputCh:  make(chan multiSpeakerInput, 100),
 	}
 
 	go w.run()
@@ -117,9 +117,14 @@ type multiSpeakerAdapterWrapper struct {
 	detector *primarySpeakerDetector
 	eventCh  chan *SpeechEvent
 	errCh    chan error
-	audioCh  chan *model.AudioFrame
+	inputCh  chan multiSpeakerInput
 	mu       sync.Mutex
 	closed   bool
+}
+
+type multiSpeakerInput struct {
+	frame *model.AudioFrame
+	flush bool
 }
 
 func (w *multiSpeakerAdapterWrapper) PushFrame(frame *model.AudioFrame) error {
@@ -128,12 +133,18 @@ func (w *multiSpeakerAdapterWrapper) PushFrame(frame *model.AudioFrame) error {
 	if w.closed {
 		return fmt.Errorf("stream closed")
 	}
-	w.audioCh <- frame
+	w.inputCh <- multiSpeakerInput{frame: frame}
 	return nil
 }
 
 func (w *multiSpeakerAdapterWrapper) Flush() error {
-	return w.inner.Flush()
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.closed {
+		return fmt.Errorf("stream closed")
+	}
+	w.inputCh <- multiSpeakerInput{flush: true}
+	return nil
 }
 
 func (w *multiSpeakerAdapterWrapper) Close() error {
@@ -144,7 +155,7 @@ func (w *multiSpeakerAdapterWrapper) Close() error {
 	}
 	w.closed = true
 	w.cancel()
-	close(w.audioCh)
+	close(w.inputCh)
 	return w.inner.Close()
 }
 
@@ -171,12 +182,16 @@ func (w *multiSpeakerAdapterWrapper) run() {
 			select {
 			case <-w.ctx.Done():
 				return
-			case frame, ok := <-w.audioCh:
+			case input, ok := <-w.inputCh:
 				if !ok {
 					return
 				}
-				w.inner.PushFrame(frame)
-				w.detector.pushAudio(frame)
+				if input.flush {
+					w.inner.Flush()
+					continue
+				}
+				w.inner.PushFrame(input.frame)
+				w.detector.pushAudio(input.frame)
 			}
 		}
 	}()

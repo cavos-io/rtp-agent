@@ -23,6 +23,8 @@ type SentenceTokenizer interface {
 type SentenceStream interface {
 	PushText(text string) error
 	Flush() error
+	EndInput() error
+	AClose() error
 	Close() error
 	Next() (*TokenData, error)
 }
@@ -35,6 +37,8 @@ type WordTokenizer interface {
 type WordStream interface {
 	PushText(text string) error
 	Flush() error
+	EndInput() error
+	AClose() error
 	Close() error
 	Next() (*TokenData, error)
 }
@@ -303,6 +307,15 @@ func SplitParagraphs(text string) []TokenData {
 	}
 
 	return paragraphs
+}
+
+func TokenizeParagraphs(text string) []string {
+	paragraphs := SplitParagraphs(text)
+	tokens := make([]string, len(paragraphs))
+	for i, paragraph := range paragraphs {
+		tokens[i] = paragraph.Token
+	}
+	return tokens
 }
 
 func stripPunctuation(s string) string {

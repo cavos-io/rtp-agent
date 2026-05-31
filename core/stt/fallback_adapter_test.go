@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"strings"
 	"testing"
 
 	"github.com/cavos-io/conversation-worker/core/vad"
@@ -38,6 +39,39 @@ func TestFallbackAdapterAggregatesProviderCapabilities(t *testing.T) {
 	}
 	if !caps.OfflineRecognize {
 		t.Fatal("OfflineRecognize = false, want true when any provider can batch-recognize")
+	}
+}
+
+func TestFallbackAdapterAggregatesAlignedTranscriptGranularity(t *testing.T) {
+	adapter := NewFallbackAdapter([]STT{
+		&metadataSTT{label: "primary", capabilities: STTCapabilities{
+			Streaming:         true,
+			AlignedTranscript: "word",
+		}},
+		&metadataSTT{label: "fallback", capabilities: STTCapabilities{
+			Streaming:         true,
+			AlignedTranscript: "chunk",
+		}},
+	})
+
+	if got := adapter.Capabilities().AlignedTranscript; got != "word" {
+		t.Fatalf("AlignedTranscript = %q, want primary provider granularity word", got)
+	}
+}
+
+func TestFallbackAdapterClearsAlignedTranscriptWhenAnyProviderLacksIt(t *testing.T) {
+	adapter := NewFallbackAdapter([]STT{
+		&metadataSTT{label: "primary", capabilities: STTCapabilities{
+			Streaming:         true,
+			AlignedTranscript: "word",
+		}},
+		&metadataSTT{label: "fallback", capabilities: STTCapabilities{
+			Streaming: true,
+		}},
+	})
+
+	if got := adapter.Capabilities().AlignedTranscript; got != "" {
+		t.Fatalf("AlignedTranscript = %q, want empty when any provider lacks aligned transcripts", got)
 	}
 }
 
@@ -256,6 +290,61 @@ func TestFallbackStreamRetriesSameSTTBeforeFallback(t *testing.T) {
 	}
 }
 
+func TestFallbackStreamReplaysFlushBoundariesOnRetry(t *testing.T) {
+	firstFrame := &model.AudioFrame{Data: []byte("1"), SampleRate: 16000, NumChannels: 1, SamplesPerChannel: 1}
+	secondFrame := &model.AudioFrame{Data: []byte("2"), SampleRate: 16000, NumChannels: 1, SamplesPerChannel: 1}
+	primaryFailure := &blockingFailRecognizeStream{
+		err:     errors.New("primary stream failed"),
+		release: make(chan struct{}),
+	}
+	recovered := &metadataRecognizeStream{events: []*SpeechEvent{{
+		Type:         SpeechEventFinalTranscript,
+		Alternatives: []SpeechData{{Text: "primary recovered"}},
+	}}}
+	primary := &metadataSTT{
+		label:        "primary",
+		capabilities: STTCapabilities{Streaming: true},
+		streams: []RecognizeStream{
+			primaryFailure,
+			recovered,
+		},
+	}
+	adapter := NewFallbackAdapterWithOptions([]STT{primary}, FallbackAdapterOptions{
+		MaxRetryPerSTT: 1,
+	})
+
+	stream, err := adapter.Stream(context.Background(), "en")
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+	defer stream.Close()
+
+	if err := stream.PushFrame(firstFrame); err != nil {
+		t.Fatalf("PushFrame(first) returned error: %v", err)
+	}
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush returned error: %v", err)
+	}
+	if err := stream.PushFrame(secondFrame); err != nil {
+		t.Fatalf("PushFrame(second) returned error: %v", err)
+	}
+
+	close(primaryFailure.release)
+
+	event, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next returned error: %v", err)
+	}
+	if got := event.Alternatives[0].Text; got != "primary recovered" {
+		t.Fatalf("stream text = %q, want primary recovered", got)
+	}
+
+	wantCalls := []string{"push:1", "flush", "push:2"}
+	if strings.Join(recovered.calls, ",") != strings.Join(wantCalls, ",") {
+		t.Fatalf("replayed stream calls = %#v, want %#v", recovered.calls, wantCalls)
+	}
+}
+
 type metadataSTT struct {
 	label            string
 	capabilities     STTCapabilities
@@ -308,13 +397,16 @@ type metadataRecognizeStream struct {
 	events []*SpeechEvent
 	index  int
 	err    error
+	calls  []string
 }
 
-func (m *metadataRecognizeStream) PushFrame(*model.AudioFrame) error {
+func (m *metadataRecognizeStream) PushFrame(frame *model.AudioFrame) error {
+	m.calls = append(m.calls, "push:"+string(frame.Data))
 	return nil
 }
 
 func (m *metadataRecognizeStream) Flush() error {
+	m.calls = append(m.calls, "flush")
 	return nil
 }
 
@@ -332,4 +424,26 @@ func (m *metadataRecognizeStream) Next() (*SpeechEvent, error) {
 		return nil, m.err
 	}
 	return nil, io.EOF
+}
+
+type blockingFailRecognizeStream struct {
+	err     error
+	release chan struct{}
+}
+
+func (s *blockingFailRecognizeStream) PushFrame(*model.AudioFrame) error {
+	return nil
+}
+
+func (s *blockingFailRecognizeStream) Flush() error {
+	return nil
+}
+
+func (s *blockingFailRecognizeStream) Close() error {
+	return nil
+}
+
+func (s *blockingFailRecognizeStream) Next() (*SpeechEvent, error) {
+	<-s.release
+	return nil, s.err
 }

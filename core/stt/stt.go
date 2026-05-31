@@ -25,6 +25,21 @@ type SpeechData struct {
 	Confidence       float64
 	SpeakerID        string
 	IsPrimarySpeaker *bool
+	Words            []TimedString
+	SourceLanguages  []string
+	SourceTexts      []string
+	TargetLanguages  []string
+	TargetTexts      []string
+	Metadata         map[string]any
+}
+
+type TimedString struct {
+	Text            string
+	StartTime       float64
+	EndTime         float64
+	Confidence      float64
+	StartTimeOffset float64
+	SpeakerID       string
 }
 
 type SpeechEvent struct {
@@ -35,10 +50,11 @@ type SpeechEvent struct {
 }
 
 type STTCapabilities struct {
-	Streaming        bool
-	InterimResults   bool
-	Diarization      bool
-	OfflineRecognize bool
+	Streaming         bool
+	InterimResults    bool
+	Diarization       bool
+	AlignedTranscript string
+	OfflineRecognize  bool
 }
 
 type STT interface {

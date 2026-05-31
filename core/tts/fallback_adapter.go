@@ -224,12 +224,17 @@ type fallbackSynthesizeStream struct {
 	activeStream SynthesizeStream
 	activeIndex  int
 	retries      map[int]int
-	textBuffer   string
+	inputBuffer  []fallbackSynthesizeInput
 
 	eventCh chan *SynthesizedAudio
 	errCh   chan error
 	closeCh chan struct{}
 	closed  bool
+}
+
+type fallbackSynthesizeInput struct {
+	text  string
+	flush bool
 }
 
 func (f *FallbackAdapter) Stream(ctx context.Context) (SynthesizeStream, error) {
@@ -297,8 +302,16 @@ func (s *fallbackSynthesizeStream) startProviderStream(tts TTS) (SynthesizeStrea
 }
 
 func (s *fallbackSynthesizeStream) replayBufferedText(stream SynthesizeStream) error {
-	if s.textBuffer != "" {
-		return stream.PushText(s.textBuffer)
+	for _, input := range s.inputBuffer {
+		if input.flush {
+			if err := stream.Flush(); err != nil {
+				return err
+			}
+			continue
+		}
+		if err := stream.PushText(input.text); err != nil {
+			return err
+		}
 	}
 	return nil
 }
@@ -370,7 +383,7 @@ func (s *fallbackSynthesizeStream) PushText(text string) error {
 	if s.closed {
 		return fmt.Errorf("stream closed")
 	}
-	s.textBuffer += text
+	s.inputBuffer = append(s.inputBuffer, fallbackSynthesizeInput{text: text})
 	return s.activeStream.PushText(text)
 }
 
@@ -380,6 +393,7 @@ func (s *fallbackSynthesizeStream) Flush() error {
 	if s.closed {
 		return fmt.Errorf("stream closed")
 	}
+	s.inputBuffer = append(s.inputBuffer, fallbackSynthesizeInput{flush: true})
 	return s.activeStream.Flush()
 }
 

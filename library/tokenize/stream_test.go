@@ -52,3 +52,44 @@ func TestBufferedTokenStreamNextReturnsIOEOFWhenClosed(t *testing.T) {
 		t.Fatalf("Next error = %v, want io.EOF", err)
 	}
 }
+
+func TestBufferedTokenStreamEndInputFlushesAndCloses(t *testing.T) {
+	stream := NewBufferedTokenStream(func(text string) []string {
+		return []string{text}
+	}, 1, 10)
+
+	if err := stream.PushText("hello"); err != nil {
+		t.Fatalf("PushText returned error: %v", err)
+	}
+	if err := stream.EndInput(); err != nil {
+		t.Fatalf("EndInput returned error: %v", err)
+	}
+
+	token, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next returned error: %v", err)
+	}
+	if token.Token != "hello" {
+		t.Fatalf("token = %q, want hello", token.Token)
+	}
+	if _, err := stream.Next(); !errors.Is(err, io.EOF) {
+		t.Fatalf("Next error = %v, want io.EOF", err)
+	}
+}
+
+func TestBufferedTokenStreamACloseDoesNotFlush(t *testing.T) {
+	stream := NewBufferedTokenStream(func(text string) []string {
+		return []string{text}
+	}, 1, 10)
+
+	if err := stream.PushText("hello"); err != nil {
+		t.Fatalf("PushText returned error: %v", err)
+	}
+	if err := stream.AClose(); err != nil {
+		t.Fatalf("AClose returned error: %v", err)
+	}
+
+	if _, err := stream.Next(); !errors.Is(err, io.EOF) {
+		t.Fatalf("Next error = %v, want io.EOF", err)
+	}
+}

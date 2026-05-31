@@ -60,11 +60,17 @@ func newFallbackAdapter(stts []STT, vad vad.VAD, options FallbackAdapterOptions)
 		InterimResults: true,
 		Diarization:    true,
 	}
+	if len(wrapped) > 0 {
+		capabilities.AlignedTranscript = wrapped[0].Capabilities().AlignedTranscript
+	}
 	for _, stt := range wrapped {
 		sttCapabilities := stt.Capabilities()
 		capabilities.Streaming = capabilities.Streaming && sttCapabilities.Streaming
 		capabilities.InterimResults = capabilities.InterimResults && sttCapabilities.InterimResults
 		capabilities.Diarization = capabilities.Diarization && sttCapabilities.Diarization
+		if sttCapabilities.AlignedTranscript == "" {
+			capabilities.AlignedTranscript = ""
+		}
 		capabilities.OfflineRecognize = capabilities.OfflineRecognize || sttCapabilities.OfflineRecognize
 	}
 
@@ -112,12 +118,17 @@ type fallbackRecognizeStream struct {
 	activeStream RecognizeStream
 	activeIndex  int
 	retries      map[int]int
-	frameBuffer  []*model.AudioFrame // Buffer to replay frames if fallback is needed
+	inputBuffer  []fallbackRecognizeInput
 
 	eventCh chan *SpeechEvent
 	errCh   chan error
 	closeCh chan struct{}
 	closed  bool
+}
+
+type fallbackRecognizeInput struct {
+	frame *model.AudioFrame
+	flush bool
 }
 
 func (f *FallbackAdapter) Stream(ctx context.Context, language string) (RecognizeStream, error) {
@@ -128,7 +139,7 @@ func (f *FallbackAdapter) Stream(ctx context.Context, language string) (Recogniz
 		eventCh:     make(chan *SpeechEvent, 100),
 		errCh:       make(chan error, 1),
 		closeCh:     make(chan struct{}),
-		frameBuffer: make([]*model.AudioFrame, 0),
+		inputBuffer: make([]fallbackRecognizeInput, 0),
 		retries:     make(map[int]int),
 	}
 
@@ -180,8 +191,14 @@ func (s *fallbackRecognizeStream) tryStartStream(index int) error {
 }
 
 func (s *fallbackRecognizeStream) replayBufferedFrames(stream RecognizeStream) error {
-	for _, frame := range s.frameBuffer {
-		if err := stream.PushFrame(frame); err != nil {
+	for _, input := range s.inputBuffer {
+		if input.flush {
+			if err := stream.Flush(); err != nil {
+				return err
+			}
+			continue
+		}
+		if err := stream.PushFrame(input.frame); err != nil {
 			return err
 		}
 	}
@@ -232,9 +249,9 @@ func (s *fallbackRecognizeStream) monitorStream() {
 
 		// Success, forward event
 		if ev.Type == SpeechEventFinalTranscript {
-			// Clear frame buffer on final transcript since we don't need to replay previous turns
+			// Clear buffered input on final transcript since we don't need to replay previous turns.
 			s.mu.Lock()
-			s.frameBuffer = make([]*model.AudioFrame, 0)
+			s.inputBuffer = make([]fallbackRecognizeInput, 0)
 			s.mu.Unlock()
 		}
 
@@ -264,11 +281,11 @@ func (s *fallbackRecognizeStream) PushFrame(frame *model.AudioFrame) error {
 		return fmt.Errorf("stream closed")
 	}
 
-	s.frameBuffer = append(s.frameBuffer, frame)
+	s.inputBuffer = append(s.inputBuffer, fallbackRecognizeInput{frame: frame})
 
 	// Keep buffer reasonable (e.g., last 30 seconds at 100 frames/sec)
-	if len(s.frameBuffer) > 3000 {
-		s.frameBuffer = s.frameBuffer[len(s.frameBuffer)-3000:]
+	if len(s.inputBuffer) > 3000 {
+		s.inputBuffer = s.inputBuffer[len(s.inputBuffer)-3000:]
 	}
 
 	return s.activeStream.PushFrame(frame)
@@ -280,6 +297,7 @@ func (s *fallbackRecognizeStream) Flush() error {
 	if s.closed {
 		return fmt.Errorf("stream closed")
 	}
+	s.inputBuffer = append(s.inputBuffer, fallbackRecognizeInput{flush: true})
 	return s.activeStream.Flush()
 }
 
