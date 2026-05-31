@@ -646,8 +646,14 @@ func (s *AgentServer) validateRunPreconditions() error {
 	if s.entrypointFnc == nil {
 		return fmt.Errorf("No RTC session entrypoint has been registered")
 	}
-	if s.Options.WSRL == "" || s.Options.APIKey == "" || s.Options.APISecret == "" {
-		return fmt.Errorf("missing LiveKit credentials")
+	if s.Options.WSRL == "" {
+		return fmt.Errorf("ws_url is required, or set LIVEKIT_URL environment variable")
+	}
+	if s.Options.APIKey == "" {
+		return fmt.Errorf("api_key is required, or set LIVEKIT_API_KEY environment variable")
+	}
+	if s.Options.APISecret == "" {
+		return fmt.Errorf("api_secret is required, or set LIVEKIT_API_SECRET environment variable")
 	}
 	return nil
 }

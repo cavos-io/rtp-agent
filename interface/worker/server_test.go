@@ -1295,8 +1295,49 @@ func TestValidateRunPreconditionsRequiresCredentialsAfterRTCSession(t *testing.T
 	if err == nil {
 		t.Fatal("validateRunPreconditions() error = nil, want missing credentials error")
 	}
-	if !strings.Contains(err.Error(), "missing LiveKit credentials") {
-		t.Fatalf("validateRunPreconditions() error = %q, want credentials message", err.Error())
+	if !strings.Contains(err.Error(), "ws_url is required") {
+		t.Fatalf("validateRunPreconditions() error = %q, want ws_url credentials message", err.Error())
+	}
+}
+
+func TestValidateRunPreconditionsReportsSpecificMissingCredential(t *testing.T) {
+	tests := []struct {
+		name    string
+		options WorkerOptions
+		want    string
+	}{
+		{
+			name:    "ws url",
+			options: WorkerOptions{APIKey: "key", APISecret: "secret"},
+			want:    "ws_url is required, or set LIVEKIT_URL environment variable",
+		},
+		{
+			name:    "api key",
+			options: WorkerOptions{WSRL: "wss://livekit.example", APISecret: "secret"},
+			want:    "api_key is required, or set LIVEKIT_API_KEY environment variable",
+		},
+		{
+			name:    "api secret",
+			options: WorkerOptions{WSRL: "wss://livekit.example", APIKey: "key"},
+			want:    "api_secret is required, or set LIVEKIT_API_SECRET environment variable",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			server := NewAgentServer(tt.options)
+			if err := server.RTCSession(func(ctx *JobContext) error { return nil }, nil, nil); err != nil {
+				t.Fatalf("RTCSession() error = %v", err)
+			}
+
+			err := server.validateRunPreconditions()
+			if err == nil {
+				t.Fatal("validateRunPreconditions() error = nil, want missing credential error")
+			}
+			if err.Error() != tt.want {
+				t.Fatalf("validateRunPreconditions() error = %q, want %q", err.Error(), tt.want)
+			}
+		})
 	}
 }
 
