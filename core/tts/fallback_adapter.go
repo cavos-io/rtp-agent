@@ -218,7 +218,15 @@ func (s *fallbackSynthesizeStream) tryStartStream(index int) error {
 	}
 
 	tts := s.adapter.ttss[index]
-	stream, err := tts.Stream(s.ctx)
+	var (
+		stream SynthesizeStream
+		err    error
+	)
+	if tts.Capabilities().Streaming {
+		stream, err = tts.Stream(s.ctx)
+	} else {
+		stream, err = NewStreamAdapter(tts).Stream(s.ctx)
+	}
 	if err != nil {
 		logger.Logger.Errorw("Failed to start TTS stream", err, "tts", tts.Label())
 		return s.tryStartStream(index + 1)

@@ -224,6 +224,41 @@ func TestFallbackSynthesizeStreamDoesNotFallbackAfterAudio(t *testing.T) {
 	}
 }
 
+func TestFallbackSynthesizeStreamWrapsNonStreamingProvider(t *testing.T) {
+	adapter := NewFallbackAdapter([]TTS{
+		&metadataTTS{
+			label:       "chunked",
+			sampleRate:  24000,
+			numChannels: 1,
+			chunked: &metadataChunkedStream{
+				events: []*SynthesizedAudio{{Frame: &model.AudioFrame{Data: []byte{1}}}},
+			},
+			streamErr: errors.New("stream unsupported"),
+		},
+	})
+
+	stream, err := adapter.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+	defer stream.Close()
+
+	if err := stream.PushText("hello"); err != nil {
+		t.Fatalf("PushText returned error: %v", err)
+	}
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush returned error: %v", err)
+	}
+
+	audio, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next returned error: %v", err)
+	}
+	if string(audio.Frame.Data) != "\x01" {
+		t.Fatalf("audio data = %v, want wrapped chunked provider audio", audio.Frame.Data)
+	}
+}
+
 type metadataTTS struct {
 	label           string
 	sampleRate      int
@@ -231,6 +266,7 @@ type metadataTTS struct {
 	capabilities    TTSCapabilities
 	chunked         ChunkedStream
 	stream          SynthesizeStream
+	streamErr       error
 	synthesizeCalls int
 	streamCalls     int
 }
@@ -261,6 +297,9 @@ func (m *metadataTTS) Synthesize(context.Context, string) (ChunkedStream, error)
 
 func (m *metadataTTS) Stream(context.Context) (SynthesizeStream, error) {
 	m.streamCalls++
+	if m.streamErr != nil {
+		return nil, m.streamErr
+	}
 	return m.stream, nil
 }
 
