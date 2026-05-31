@@ -3,6 +3,7 @@ package worker
 import (
 	"context"
 	"fmt"
+	"reflect"
 	"sync"
 
 	"github.com/cavos-io/conversation-worker/core/agent"
@@ -22,6 +23,13 @@ type JobAcceptArguments struct {
 
 type JobRejectArguments struct {
 	Terminate bool
+}
+
+type ParticipantEntrypoint func(*JobContext, *livekit.ParticipantInfo)
+
+type participantEntrypointRegistration struct {
+	entrypoint ParticipantEntrypoint
+	kinds      []livekit.ParticipantInfo_Kind
 }
 
 type JobRequest struct {
@@ -81,13 +89,14 @@ func (r *JobRequest) Reject(args ...JobRejectArguments) error {
 }
 
 type JobContext struct {
-	Job               *livekit.Job
-	Room              *lksdk.Room
-	Report            *agent.SessionReport
-	AcceptArguments   JobAcceptArguments
-	WorkerID          string
-	shutdownCallbacks []func(string)
-	shutdownOnce      sync.Once
+	Job                    *livekit.Job
+	Room                   *lksdk.Room
+	Report                 *agent.SessionReport
+	AcceptArguments        JobAcceptArguments
+	WorkerID               string
+	shutdownCallbacks      []func(string)
+	shutdownOnce           sync.Once
+	participantEntrypoints []participantEntrypointRegistration
 
 	apiKey    string
 	apiSecret string
@@ -209,6 +218,46 @@ func (c *JobContext) AddShutdownCallback(callback any) error {
 		return fmt.Errorf("shutdown callback must be func() or func(string)")
 	}
 	return nil
+}
+
+func (c *JobContext) AddParticipantEntrypoint(entrypoint ParticipantEntrypoint, kinds ...livekit.ParticipantInfo_Kind) error {
+	if entrypoint == nil {
+		return fmt.Errorf("participant entrypoint must not be nil")
+	}
+	for _, registered := range c.participantEntrypoints {
+		if reflect.ValueOf(registered.entrypoint).Pointer() == reflect.ValueOf(entrypoint).Pointer() {
+			return fmt.Errorf("participant entrypoints cannot be added more than once")
+		}
+	}
+	c.participantEntrypoints = append(c.participantEntrypoints, participantEntrypointRegistration{
+		entrypoint: entrypoint,
+		kinds:      append([]livekit.ParticipantInfo_Kind(nil), kinds...),
+	})
+	return nil
+}
+
+func (c *JobContext) runParticipantEntrypoints(participant *livekit.ParticipantInfo) {
+	if participant == nil {
+		return
+	}
+	for _, registered := range c.participantEntrypoints {
+		if !participantEntrypointMatchesKind(registered.kinds, participant.Kind) {
+			continue
+		}
+		registered.entrypoint(c, participant)
+	}
+}
+
+func participantEntrypointMatchesKind(kinds []livekit.ParticipantInfo_Kind, kind livekit.ParticipantInfo_Kind) bool {
+	if len(kinds) == 0 {
+		return true
+	}
+	for _, allowed := range kinds {
+		if allowed == kind {
+			return true
+		}
+	}
+	return false
 }
 
 func (c *JobContext) Shutdown(reason string) {
