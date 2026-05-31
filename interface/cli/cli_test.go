@@ -3,6 +3,9 @@ package cli
 import (
 	"strings"
 	"testing"
+
+	"github.com/cavos-io/conversation-worker/interface/worker/ipc"
+	"github.com/livekit/protocol/livekit"
 )
 
 func TestParseConnectArgsUsesProvidedIdentity(t *testing.T) {
@@ -123,5 +126,39 @@ func TestWatcherTriggerReloadKeepsReloadingUntilReloaded(t *testing.T) {
 	}
 	if calls != 2 {
 		t.Fatalf("onChange calls after Reloaded() = %d, want 2", calls)
+	}
+}
+
+func TestWatcherStoresActiveJobsForCurrentReload(t *testing.T) {
+	args := &CliArgs{ReloadCount: 2}
+	watcher := NewWatcher(nil, nil, args)
+
+	staleJobs := []ipc.RunningJobInfo{{Job: &livekit.Job{Id: "job-stale"}, Token: "stale-token"}}
+	if watcher.recordActiveJobsResponse(ipc.ActiveJobsResponse{Jobs: staleJobs, ReloadCount: 1}) {
+		t.Fatal("recordActiveJobsResponse() accepted stale reload count")
+	}
+	if got := watcher.reloadJobsResponse(); len(got.Jobs) != 0 {
+		t.Fatalf("reloadJobsResponse() stale jobs len = %d, want 0", len(got.Jobs))
+	}
+
+	currentJobs := []ipc.RunningJobInfo{{Job: &livekit.Job{Id: "job-current"}, Token: "current-token"}}
+	if !watcher.recordActiveJobsResponse(ipc.ActiveJobsResponse{Jobs: currentJobs, ReloadCount: 2}) {
+		t.Fatal("recordActiveJobsResponse() rejected current reload count")
+	}
+
+	resp := watcher.reloadJobsResponse()
+	if resp.ReloadCount != 2 {
+		t.Fatalf("ReloadJobsResponse.ReloadCount = %d, want 2", resp.ReloadCount)
+	}
+	if len(resp.Jobs) != 1 {
+		t.Fatalf("ReloadJobsResponse.Jobs len = %d, want 1", len(resp.Jobs))
+	}
+	if resp.Jobs[0].Job.GetId() != "job-current" {
+		t.Fatalf("ReloadJobsResponse.Jobs[0].Job.Id = %q, want job-current", resp.Jobs[0].Job.GetId())
+	}
+
+	resp.Jobs[0].Token = "mutated"
+	if got := watcher.reloadJobsResponse(); got.Jobs[0].Token != "current-token" {
+		t.Fatalf("mutating ReloadJobsResponse changed stored token to %q", got.Jobs[0].Token)
 	}
 }

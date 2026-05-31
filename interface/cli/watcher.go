@@ -9,19 +9,21 @@ import (
 	"sync"
 	"time"
 
+	"github.com/cavos-io/conversation-worker/interface/worker/ipc"
 	"github.com/cavos-io/conversation-worker/library/logger"
 	"github.com/fsnotify/fsnotify"
 )
 
 type Watcher struct {
-	paths     []string
-	onChange  func()
-	watcher   *fsnotify.Watcher
-	mu        sync.Mutex
-	ctx       context.Context
-	cancel    context.CancelFunc
-	reloading bool
-	cliArgs   *CliArgs
+	paths      []string
+	onChange   func()
+	watcher    *fsnotify.Watcher
+	mu         sync.Mutex
+	ctx        context.Context
+	cancel     context.CancelFunc
+	reloading  bool
+	cliArgs    *CliArgs
+	activeJobs []ipc.RunningJobInfo
 }
 
 func NewWatcher(paths []string, onChange func(), cliArgs ...*CliArgs) *Watcher {
@@ -94,6 +96,29 @@ func (w *Watcher) Reloaded() {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	w.reloading = false
+}
+
+func (w *Watcher) recordActiveJobsResponse(resp ipc.ActiveJobsResponse) bool {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.cliArgs != nil && resp.ReloadCount != w.cliArgs.ReloadCount {
+		return false
+	}
+	w.activeJobs = append([]ipc.RunningJobInfo(nil), resp.Jobs...)
+	return true
+}
+
+func (w *Watcher) reloadJobsResponse() ipc.ReloadJobsResponse {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	reloadCount := 0
+	if w.cliArgs != nil {
+		reloadCount = w.cliArgs.ReloadCount
+	}
+	return ipc.ReloadJobsResponse{
+		Jobs:        append([]ipc.RunningJobInfo(nil), w.activeJobs...),
+		ReloadCount: reloadCount,
+	}
 }
 
 func (w *Watcher) triggerReload() bool {
