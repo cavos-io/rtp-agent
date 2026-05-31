@@ -121,11 +121,7 @@ func SplitSentences(text string, minSentenceLen int, retainFormat bool) []TokenD
 	text = regexp.MustCompile(` `+suffixes.String()+`\.`).ReplaceAllString(text, " ${1}<prd>")
 	text = regexp.MustCompile(` `+alphabets.String()+`\.`).ReplaceAllString(text, " ${1}<prd>")
 
-	// Han, Hiragana, Katakana, Thai punctuation
-	text = regexp.MustCompile(`([。！？])`).ReplaceAllString(text, "${1}<stop>")
-
-	// Common English punctuation
-	text = regexp.MustCompile(`([.!?])(["”])`).ReplaceAllString(text, "${1}${2}<stop>")
+	text = regexp.MustCompile(`([.!?。！？])(["”])`).ReplaceAllString(text, "${1}${2}<stop>")
 	text = addStopAfterSentencePunctuation(text)
 
 	text = strings.ReplaceAll(text, "<prd>", ".")
@@ -182,7 +178,7 @@ func addStopAfterSentencePunctuation(text string) string {
 	runes := []rune(text)
 	for i, char := range runes {
 		builder.WriteRune(char)
-		if char != '.' && char != '!' && char != '?' {
+		if char != '.' && char != '!' && char != '?' && char != '。' && char != '！' && char != '？' {
 			continue
 		}
 		if i+1 < len(runes) && (runes[i+1] == '"' || runes[i+1] == '”') {
