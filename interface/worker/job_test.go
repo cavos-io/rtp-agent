@@ -317,6 +317,27 @@ func TestJobContextParticipantAvailableRunsMatchingEntrypoints(t *testing.T) {
 	}
 }
 
+func TestJobContextParticipantsAvailableReplaysExistingParticipants(t *testing.T) {
+	ctx := NewJobContext(&livekit.Job{Id: "job_existing_participants"}, "", "", "")
+	var calls []string
+	if err := ctx.AddParticipantEntrypoint(func(_ *JobContext, p *livekit.ParticipantInfo) {
+		calls = append(calls, p.Identity)
+	}); err != nil {
+		t.Fatalf("AddParticipantEntrypoint() error = %v", err)
+	}
+
+	ctx.participantsAvailable([]remoteParticipantView{
+		fakeParticipantView{identity: "agent-a", kind: lksdk.ParticipantAgent},
+		fakeParticipantView{identity: "caller-a", kind: lksdk.ParticipantSIP},
+		fakeParticipantView{identity: "caller-b", kind: lksdk.ParticipantStandard},
+	})
+
+	want := []string{"caller-a", "caller-b"}
+	if !reflect.DeepEqual(calls, want) {
+		t.Fatalf("participant entrypoint calls = %#v, want %#v", calls, want)
+	}
+}
+
 func TestJobContextWaitForParticipantConnectsBeforeWaiting(t *testing.T) {
 	ctx := NewJobContext(
 		&livekit.Job{Id: "job_wait_connect", Room: &livekit.Room{Name: "room-a"}},

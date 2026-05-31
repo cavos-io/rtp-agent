@@ -213,6 +213,7 @@ func (c *JobContext) Connect(ctx context.Context, cb *lksdk.RoomCallback) error 
 			return err
 		}
 		c.Room = room
+		c.participantsAvailable(remoteParticipantsAsViews(room.GetRemoteParticipants()))
 		logger.Logger.Infow("Connected to room", "room", c.Job.Room.Name)
 		return nil
 	}
@@ -222,6 +223,7 @@ func (c *JobContext) Connect(ctx context.Context, cb *lksdk.RoomCallback) error 
 		return err
 	}
 	c.Room = room
+	c.participantsAvailable(remoteParticipantsAsViews(room.GetRemoteParticipants()))
 	logger.Logger.Infow("Connected to room", "room", c.Job.Room.Name)
 	return nil
 }
@@ -243,6 +245,22 @@ func (c *JobContext) roomCallbackWithEntrypoints(cb *lksdk.RoomCallback) *lksdk.
 
 func (c *JobContext) participantAvailable(participant remoteParticipantView) {
 	c.runParticipantEntrypoints(participantInfoFromRemoteParticipant(participant))
+}
+
+func (c *JobContext) participantsAvailable(participants []remoteParticipantView) {
+	for _, participant := range participants {
+		c.participantAvailable(participant)
+	}
+}
+
+func remoteParticipantsAsViews(participants []*lksdk.RemoteParticipant) []remoteParticipantView {
+	views := make([]remoteParticipantView, 0, len(participants))
+	for _, participant := range participants {
+		if participant != nil {
+			views = append(views, participant)
+		}
+	}
+	return views
 }
 
 func participantInfoFromRemoteParticipant(participant remoteParticipantView) *livekit.ParticipantInfo {
