@@ -33,10 +33,54 @@ type AudioContent struct {
 	Transcript string
 }
 
+type Instructions struct {
+	Audio     string
+	Text      string
+	represent string
+}
+
+func NewInstructions(audio string, text ...string) *Instructions {
+	textVariant := audio
+	if len(text) > 0 {
+		textVariant = text[0]
+	}
+	return &Instructions{
+		Audio:     audio,
+		Text:      textVariant,
+		represent: audio,
+	}
+}
+
+func (i *Instructions) String() string {
+	if i == nil {
+		return ""
+	}
+	if i.represent != "" {
+		return i.represent
+	}
+	return i.Audio
+}
+
+func (i *Instructions) AsModality(modality string) *Instructions {
+	if i == nil {
+		return nil
+	}
+	represent := i.Audio
+	if modality == "text" {
+		represent = i.Text
+	}
+	return &Instructions{
+		Audio:     i.Audio,
+		Text:      i.Text,
+		represent: represent,
+	}
+}
+
 type ChatContent struct {
-	Text  string
-	Image *ImageContent
-	Audio *AudioContent
+	Text         string
+	Image        *ImageContent
+	Audio        *AudioContent
+	Instructions *Instructions
 }
 
 type ChatMessage struct {
@@ -51,16 +95,22 @@ type ChatMessage struct {
 }
 
 func (m *ChatMessage) TextContent() string {
-	var text string
+	var parts []string
 	for _, c := range m.Content {
 		if c.Text != "" {
-			if text != "" {
-				text += "\n"
-			}
-			text += c.Text
+			parts = append(parts, c.Text)
+		} else if c.Instructions != nil && c.Instructions.String() != "" {
+			parts = append(parts, c.Instructions.String())
 		}
 	}
-	return text
+	out := ""
+	for _, part := range parts {
+		if out != "" {
+			out += "\n"
+		}
+		out += part
+	}
+	return out
 }
 
 type FunctionCall struct {
