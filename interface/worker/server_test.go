@@ -2198,6 +2198,23 @@ func TestValidateRunPreconditionsRejectsFiniteLoadThresholdAboveOne(t *testing.T
 	}
 }
 
+func TestValidateRunPreconditionsAllowsDevLoadThresholdAboveOne(t *testing.T) {
+	server := NewAgentServer(WorkerOptions{
+		WSRL:          "wss://livekit.example",
+		APIKey:        "key",
+		APISecret:     "secret",
+		DevMode:       true,
+		LoadThreshold: 1.2,
+	})
+	if err := server.RTCSession(func(ctx *JobContext) error { return nil }, nil, nil); err != nil {
+		t.Fatalf("RTCSession() error = %v", err)
+	}
+
+	if err := server.validateRunPreconditions(); err != nil {
+		t.Fatalf("validateRunPreconditions() error = %v, want nil in dev mode", err)
+	}
+}
+
 func TestValidateRunPreconditionsRejectsInvalidLogLevel(t *testing.T) {
 	server := NewAgentServer(WorkerOptions{
 		WSRL:      "wss://livekit.example",
