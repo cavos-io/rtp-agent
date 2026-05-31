@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 	"time"
@@ -81,7 +82,7 @@ func PerformTTSInference(ctx context.Context, t tts.TTS, textCh <-chan string) (
 		defer stream.Close()
 
 		startTime := time.Now()
-		
+
 		for text := range textCh {
 			filteredText := tts.ApplyTextTransforms(text)
 			if filteredText != "" {
@@ -127,7 +128,7 @@ func PerformToolExecutions(
 			wg.Add(1)
 			go func(fc *llm.FunctionToolCall) {
 				defer wg.Done()
-				
+
 				call := llm.FunctionCall{
 					CallID:    fc.CallID,
 					Name:      fc.Name,
@@ -153,10 +154,34 @@ func PerformToolExecutions(
 				}
 
 				result, err := tool.Execute(ctx, fc.Arguments)
-				isError := err != nil
-				outputStr := result
 				if err != nil {
-					outputStr = err.Error()
+					var stopResponse llm.StopResponse
+					if errors.As(err, &stopResponse) {
+						outCh <- ToolExecutionOutput{
+							FncCall:  call,
+							RawError: err,
+						}
+						return
+					}
+
+					var toolErr llm.ToolError
+					outputStr := "An internal error occurred"
+					if errors.As(err, &toolErr) {
+						outputStr = toolErr.Message
+					}
+
+					outCh <- ToolExecutionOutput{
+						FncCall: call,
+						FncCallOut: &llm.FunctionCallOutput{
+							CallID:    fc.CallID,
+							Name:      fc.Name,
+							Output:    outputStr,
+							IsError:   true,
+							CreatedAt: time.Now(),
+						},
+						RawError: err,
+					}
+					return
 				}
 
 				outCh <- ToolExecutionOutput{
@@ -164,19 +189,17 @@ func PerformToolExecutions(
 					FncCallOut: &llm.FunctionCallOutput{
 						CallID:    fc.CallID,
 						Name:      fc.Name,
-						Output:    outputStr,
-						IsError:   isError,
+						Output:    result,
+						IsError:   false,
 						CreatedAt: time.Now(),
 					},
 					RawOutput: result,
-					RawError:  err,
 				}
 			}(fncCall)
 		}
-		
+
 		wg.Wait()
 	}()
 
 	return outCh
 }
-

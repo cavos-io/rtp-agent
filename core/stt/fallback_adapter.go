@@ -13,19 +13,32 @@ import (
 )
 
 type FallbackAdapter struct {
-	stts         []STT
-	capabilities STTCapabilities
+	stts           []STT
+	capabilities   STTCapabilities
+	maxRetryPerSTT int
+}
+
+type FallbackAdapterOptions struct {
+	MaxRetryPerSTT int
 }
 
 func NewFallbackAdapter(stts []STT) *FallbackAdapter {
-	return newFallbackAdapter(stts, nil)
+	return NewFallbackAdapterWithOptions(stts, FallbackAdapterOptions{MaxRetryPerSTT: 1})
+}
+
+func NewFallbackAdapterWithOptions(stts []STT, options FallbackAdapterOptions) *FallbackAdapter {
+	return newFallbackAdapter(stts, nil, options)
 }
 
 func NewFallbackAdapterWithVAD(stts []STT, vad vad.VAD) *FallbackAdapter {
-	return newFallbackAdapter(stts, vad)
+	return newFallbackAdapter(stts, vad, FallbackAdapterOptions{MaxRetryPerSTT: 1})
 }
 
-func newFallbackAdapter(stts []STT, vad vad.VAD) *FallbackAdapter {
+func NewFallbackAdapterWithVADAndOptions(stts []STT, vad vad.VAD, options FallbackAdapterOptions) *FallbackAdapter {
+	return newFallbackAdapter(stts, vad, options)
+}
+
+func newFallbackAdapter(stts []STT, vad vad.VAD, options FallbackAdapterOptions) *FallbackAdapter {
 	if len(stts) == 0 {
 		panic("FallbackAdapter requires at least one STT")
 	}
@@ -56,8 +69,9 @@ func newFallbackAdapter(stts []STT, vad vad.VAD) *FallbackAdapter {
 	}
 
 	return &FallbackAdapter{
-		stts:         wrapped,
-		capabilities: capabilities,
+		stts:           wrapped,
+		capabilities:   capabilities,
+		maxRetryPerSTT: options.MaxRetryPerSTT,
 	}
 }
 
@@ -75,11 +89,16 @@ func (f *FallbackAdapter) Recognize(ctx context.Context, frames []*model.AudioFr
 		if i > 0 {
 			logger.Logger.Infow("Falling back to next STT", "stt", stt.Label(), "previous_error", lastErr)
 		}
-		res, err := stt.Recognize(ctx, frames, language)
-		if err == nil {
-			return res, nil
+		for attempt := 0; attempt <= f.maxRetryPerSTT; attempt++ {
+			res, err := stt.Recognize(ctx, frames, language)
+			if err == nil {
+				return res, nil
+			}
+			lastErr = err
+			if attempt < f.maxRetryPerSTT {
+				logger.Logger.Warnw("Retrying STT recognize", err, "stt", stt.Label(), "attempt", attempt+1)
+			}
 		}
-		lastErr = err
 	}
 	return nil, fmt.Errorf("all STTs failed, last error: %w", lastErr)
 }
@@ -92,6 +111,7 @@ type fallbackRecognizeStream struct {
 	mu           sync.Mutex
 	activeStream RecognizeStream
 	activeIndex  int
+	retries      map[int]int
 	frameBuffer  []*model.AudioFrame // Buffer to replay frames if fallback is needed
 
 	eventCh chan *SpeechEvent
@@ -109,6 +129,7 @@ func (f *FallbackAdapter) Stream(ctx context.Context, language string) (Recogniz
 		errCh:       make(chan error, 1),
 		closeCh:     make(chan struct{}),
 		frameBuffer: make([]*model.AudioFrame, 0),
+		retries:     make(map[int]int),
 	}
 
 	if err := s.tryStartStream(0); err != nil {
@@ -121,28 +142,49 @@ func (f *FallbackAdapter) Stream(ctx context.Context, language string) (Recogniz
 }
 
 func (s *fallbackRecognizeStream) tryStartStream(index int) error {
-	if index >= len(s.adapter.stts) {
-		return fmt.Errorf("all fallback STTs exhausted")
-	}
+	var lastErr error
+	for i := index; i < len(s.adapter.stts); i++ {
+		for {
+			stt := s.adapter.stts[i]
+			stream, err := stt.Stream(s.ctx, s.language)
+			if err != nil {
+				logger.Logger.Errorw("Failed to start STT stream", err, "stt", stt.Label())
+				lastErr = err
+				if s.canRetrySTT(i) {
+					s.retries[i]++
+					continue
+				}
+				break
+			}
 
-	stt := s.adapter.stts[index]
-	stream, err := stt.Stream(s.ctx, s.language)
-	if err != nil {
-		logger.Logger.Errorw("Failed to start STT stream", err, "stt", stt.Label())
-		return s.tryStartStream(index + 1)
-	}
+			if err := s.replayBufferedFrames(stream); err != nil {
+				stream.Close()
+				lastErr = err
+				if s.canRetrySTT(i) {
+					s.retries[i]++
+					continue
+				}
+				break
+			}
 
-	s.activeStream = stream
-	s.activeIndex = index
-
-	// Replay buffered frames
-	for _, frame := range s.frameBuffer {
-		if err := stream.PushFrame(frame); err != nil {
-			stream.Close()
-			return s.tryStartStream(index + 1)
+			s.activeStream = stream
+			s.activeIndex = i
+			return nil
 		}
 	}
 
+	if lastErr != nil {
+		return lastErr
+	}
+	return fmt.Errorf("all fallback STTs exhausted")
+}
+
+func (s *fallbackRecognizeStream) replayBufferedFrames(stream RecognizeStream) error {
+	for _, frame := range s.frameBuffer {
+		if err := stream.PushFrame(frame); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
@@ -173,7 +215,13 @@ func (s *fallbackRecognizeStream) monitorStream() {
 			logger.Logger.Warnw("STT stream failed, attempting fallback", err, "failed_stt", s.adapter.stts[s.activeIndex].Label())
 			stream.Close()
 
-			if fbErr := s.tryStartStream(s.activeIndex + 1); fbErr != nil {
+			nextIndex := s.activeIndex + 1
+			if s.canRetrySTT(s.activeIndex) {
+				s.retries[s.activeIndex]++
+				nextIndex = s.activeIndex
+			}
+
+			if fbErr := s.tryStartStream(nextIndex); fbErr != nil {
 				s.errCh <- fbErr
 				s.mu.Unlock()
 				return
@@ -196,6 +244,16 @@ func (s *fallbackRecognizeStream) monitorStream() {
 			return
 		}
 	}
+}
+
+func (s *fallbackRecognizeStream) canRetrySTT(index int) bool {
+	if s.adapter.maxRetryPerSTT <= 0 {
+		return false
+	}
+	if s.retries == nil {
+		s.retries = make(map[int]int)
+	}
+	return s.retries[index] < s.adapter.maxRetryPerSTT
 }
 
 func (s *fallbackRecognizeStream) PushFrame(frame *model.AudioFrame) error {

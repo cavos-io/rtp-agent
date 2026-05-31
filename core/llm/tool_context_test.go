@@ -21,6 +21,12 @@ func (t *testTool) Parameters() map[string]any { return nil }
 
 func (t *testTool) Execute(context.Context, string) (string, error) { return "", nil }
 
+type testProviderTool struct {
+	testTool
+}
+
+func (t *testProviderTool) IsProviderTool() bool { return true }
+
 type testToolset struct {
 	id    string
 	tools []Tool
@@ -115,5 +121,46 @@ func TestToolContextFlattenSortsFunctionToolsByName(t *testing.T) {
 	want := []string{"alpha", "middle", "zeta"}
 	if strings.Join(names, ",") != strings.Join(want, ",") {
 		t.Fatalf("Flatten() names = %v, want %v", names, want)
+	}
+}
+
+func TestToolContextSeparatesAndSortsProviderTools(t *testing.T) {
+	providerZ := &testProviderTool{testTool: testTool{id: "zeta-provider", name: "zeta-provider"}}
+	providerA := &testProviderTool{testTool: testTool{id: "alpha-provider", name: "alpha-provider"}}
+	function := &testTool{id: "lookup", name: "lookup"}
+	ctx := EmptyToolContext()
+
+	if err := ctx.UpdateTools([]interface{}{providerZ, function, providerA}); err != nil {
+		t.Fatalf("UpdateTools() error = %v", err)
+	}
+
+	if len(ctx.FunctionTools()) != 1 || ctx.GetFunctionTool("lookup") != function {
+		t.Fatalf("FunctionTools() = %#v, want only lookup function tool", ctx.FunctionTools())
+	}
+	providerTools := ctx.ProviderTools()
+	if len(providerTools) != 2 || providerTools[0] != providerA || providerTools[1] != providerZ {
+		t.Fatalf("ProviderTools() = %#v, want sorted provider tools", providerTools)
+	}
+
+	flattened := ctx.Flatten()
+	if len(flattened) != 3 || flattened[0] != function || flattened[1] != providerA || flattened[2] != providerZ {
+		t.Fatalf("Flatten() = %#v, want function tools followed by sorted provider tools", flattened)
+	}
+}
+
+func TestToolContextEqualUsesToolIdentity(t *testing.T) {
+	lookup := &testTool{id: "lookup", name: "lookup"}
+	provider := &testProviderTool{testTool: testTool{id: "provider", name: "provider"}}
+	left := NewToolContext([]interface{}{lookup, provider})
+	right := NewToolContext([]interface{}{provider, lookup})
+
+	if !left.Equal(right) {
+		t.Fatal("Equal() = false, want true for same tool identities")
+	}
+
+	otherLookup := &testTool{id: "lookup-other", name: "lookup"}
+	other := NewToolContext([]interface{}{otherLookup, provider})
+	if left.Equal(other) {
+		t.Fatal("Equal() = true, want false for same function name backed by a different tool")
 	}
 }

@@ -489,6 +489,15 @@ func chatContentFromJSON(data []byte) (ChatContent, error) {
 	}
 
 	switch discriminator.Type {
+	case "instructions":
+		var instructions struct {
+			Audio string `json:"audio"`
+			Text  string `json:"text"`
+		}
+		if err := json.Unmarshal(data, &instructions); err != nil {
+			return ChatContent{}, err
+		}
+		return ChatContent{Instructions: NewInstructions(instructions.Audio, instructionsTextOrDefault(instructions.Audio, instructions.Text))}, nil
 	case "image_content":
 		var image struct {
 			ID              string `json:"id"`
@@ -613,6 +622,9 @@ func chatContentToDict(content []ChatContent, opts ChatContextDictOptions) []any
 		if item.Text != "" {
 			serialized = append(serialized, item.Text)
 		}
+		if item.Instructions != nil {
+			serialized = append(serialized, instructionsToDict(item.Instructions))
+		}
 		if opts.IncludeImage && item.Image != nil {
 			serialized = append(serialized, imageContentToDict(item.Image))
 		}
@@ -621,6 +633,34 @@ func chatContentToDict(content []ChatContent, opts ChatContextDictOptions) []any
 		}
 	}
 	return serialized
+}
+
+func chatContentText(item ChatContent) string {
+	if item.Text != "" {
+		return item.Text
+	}
+	if item.Instructions != nil {
+		return item.Instructions.String()
+	}
+	return ""
+}
+
+func instructionsToDict(instructions *Instructions) map[string]any {
+	data := map[string]any{
+		"type":  "instructions",
+		"audio": instructions.Audio,
+	}
+	if instructions.Text != "" && instructions.Text != instructions.Audio {
+		data["text"] = instructions.Text
+	}
+	return data
+}
+
+func instructionsTextOrDefault(audio string, text string) string {
+	if text == "" {
+		return audio
+	}
+	return text
 }
 
 func imageContentToDict(image *ImageContent) map[string]any {
@@ -1117,11 +1157,11 @@ func openAIChatContent(content []ChatContent) any {
 	parts := make([]map[string]any, 0)
 	textContent := ""
 	for _, item := range content {
-		if item.Text != "" {
+		if text := chatContentText(item); text != "" {
 			if textContent != "" {
 				textContent += "\n"
 			}
-			textContent += item.Text
+			textContent += text
 		}
 		if item.Image != nil {
 			if part := openAIImageContent(item.Image); part != nil {
@@ -1166,11 +1206,11 @@ func openAIResponsesContent(content []ChatContent) any {
 	parts := make([]map[string]any, 0)
 	textContent := ""
 	for _, item := range content {
-		if item.Text != "" {
+		if text := chatContentText(item); text != "" {
 			if textContent != "" {
 				textContent += "\n"
 			}
-			textContent += item.Text
+			textContent += text
 		}
 		if item.Image != nil {
 			if part := openAIResponsesImageContent(item.Image); part != nil {
@@ -1242,11 +1282,11 @@ func mistralMessageContent(msg *ChatMessage) any {
 	parts := make([]map[string]any, 0)
 	textContent := ""
 	for _, item := range msg.Content {
-		if item.Text != "" {
+		if text := chatContentText(item); text != "" {
 			if textContent != "" {
 				textContent += "\n"
 			}
-			textContent += item.Text
+			textContent += text
 		}
 		if item.Image != nil {
 			if part := mistralImageContent(item.Image); part != nil {
@@ -1326,8 +1366,8 @@ func googleItemParts(item ChatItem) []map[string]any {
 	case *ChatMessage:
 		parts := make([]map[string]any, 0, len(it.Content))
 		for _, content := range it.Content {
-			if content.Text != "" {
-				parts = append(parts, map[string]any{"text": content.Text})
+			if text := chatContentText(content); text != "" {
+				parts = append(parts, map[string]any{"text": text})
 			}
 			if content.Image != nil {
 				if part := googleImagePart(content.Image); part != nil {
@@ -1405,9 +1445,9 @@ func anthropicItemContent(item ChatItem) []map[string]any {
 	case *ChatMessage:
 		content := make([]map[string]any, 0, len(it.Content))
 		for _, item := range it.Content {
-			if item.Text != "" {
+			if text := chatContentText(item); text != "" {
 				content = append(content, map[string]any{
-					"text": item.Text,
+					"text": text,
 					"type": "text",
 				})
 			}
@@ -1484,8 +1524,8 @@ func awsItemContent(item ChatItem) []map[string]any {
 	case *ChatMessage:
 		content := make([]map[string]any, 0, len(it.Content))
 		for _, item := range it.Content {
-			if item.Text != "" {
-				content = append(content, map[string]any{"text": item.Text})
+			if text := chatContentText(item); text != "" {
+				content = append(content, map[string]any{"text": text})
 			}
 		}
 		return content

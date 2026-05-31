@@ -219,6 +219,71 @@ func TestChatContextAddMessageAcceptsTextContent(t *testing.T) {
 	}
 }
 
+func TestInstructionsPreserveVariantsAndSelectModality(t *testing.T) {
+	instructions := NewInstructions("speak plainly", "write tersely")
+
+	if got := instructions.String(); got != "speak plainly" {
+		t.Fatalf("Instructions.String() = %q, want audio variant", got)
+	}
+	if got := instructions.AsModality("text").String(); got != "write tersely" {
+		t.Fatalf("Instructions.AsModality(text) = %q, want text variant", got)
+	}
+	if got := instructions.AsModality("text").AsModality("audio").String(); got != "speak plainly" {
+		t.Fatalf("Instructions modality round trip = %q, want audio variant", got)
+	}
+}
+
+func TestChatContextInstructionsSerializeAndRoundTrip(t *testing.T) {
+	ctx := NewChatContext()
+	ctx.Items = []ChatItem{
+		&ChatMessage{
+			ID:   "system",
+			Role: ChatRoleSystem,
+			Content: []ChatContent{{
+				Instructions: NewInstructions("audio instructions", "text instructions"),
+			}},
+		},
+	}
+
+	data := ctx.ToDict()
+	items := data["items"].([]map[string]any)
+	content := items[0]["content"].([]any)
+	instructions := content[0].(map[string]any)
+	if instructions["type"] != "instructions" || instructions["audio"] != "audio instructions" || instructions["text"] != "text instructions" {
+		t.Fatalf("serialized instructions = %#v", instructions)
+	}
+
+	roundTrip, err := ChatContextFromDict(data)
+	if err != nil {
+		t.Fatalf("ChatContextFromDict() error = %v", err)
+	}
+	msg := roundTrip.Items[0].(*ChatMessage)
+	if len(msg.Content) != 1 || msg.Content[0].Instructions == nil {
+		t.Fatalf("round-trip content = %#v, want instructions", msg.Content)
+	}
+	if got := msg.Content[0].Instructions.AsModality("text").String(); got != "text instructions" {
+		t.Fatalf("round-trip text instructions = %q, want text instructions", got)
+	}
+}
+
+func TestProviderFormatUsesActiveInstructionText(t *testing.T) {
+	ctx := NewChatContext()
+	ctx.Items = []ChatItem{
+		&ChatMessage{
+			ID:   "system",
+			Role: ChatRoleSystem,
+			Content: []ChatContent{{
+				Instructions: NewInstructions("audio instructions", "text instructions").AsModality("text"),
+			}},
+		},
+	}
+
+	formatted, _ := ctx.ToProviderFormat("openai")
+	if got := formatted[0]["content"]; got != "text instructions" {
+		t.Fatalf("openai content = %#v, want active instruction text", got)
+	}
+}
+
 func TestChatContextInsertOrdersItemsByCreatedAt(t *testing.T) {
 	ctx := NewChatContext()
 	ctx.Items = []ChatItem{

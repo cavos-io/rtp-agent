@@ -259,13 +259,112 @@ func TestFallbackSynthesizeStreamWrapsNonStreamingProvider(t *testing.T) {
 	}
 }
 
+func TestFallbackChunkedStreamRetriesSameTTSBeforeFallback(t *testing.T) {
+	streamErr := errors.New("primary synthesize failed")
+	primary := &metadataTTS{
+		label:       "primary",
+		sampleRate:  24000,
+		numChannels: 1,
+		chunkedStreams: []ChunkedStream{
+			&metadataChunkedStream{err: streamErr},
+			&metadataChunkedStream{events: []*SynthesizedAudio{{
+				Frame: &model.AudioFrame{Data: []byte("primary recovered")},
+			}}},
+		},
+	}
+	fallback := &metadataTTS{
+		label:       "fallback",
+		sampleRate:  24000,
+		numChannels: 1,
+		chunked: &metadataChunkedStream{events: []*SynthesizedAudio{{
+			Frame: &model.AudioFrame{Data: []byte("fallback")},
+		}}},
+	}
+	adapter := NewFallbackAdapterWithOptions([]TTS{primary, fallback}, FallbackAdapterOptions{
+		MaxRetryPerTTS: 1,
+	})
+
+	stream, err := adapter.Synthesize(context.Background(), "hello")
+	if err != nil {
+		t.Fatalf("Synthesize returned error: %v", err)
+	}
+	defer stream.Close()
+
+	audio, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next returned error: %v", err)
+	}
+	if got := string(audio.Frame.Data); got != "primary recovered" {
+		t.Fatalf("audio data = %q, want primary recovered", got)
+	}
+	if primary.synthesizeCalls != 2 {
+		t.Fatalf("primary synthesize calls = %d, want 2", primary.synthesizeCalls)
+	}
+	if fallback.synthesizeCalls != 0 {
+		t.Fatalf("fallback synthesize calls = %d, want 0", fallback.synthesizeCalls)
+	}
+}
+
+func TestFallbackSynthesizeStreamRetriesSameTTSBeforeFallback(t *testing.T) {
+	streamErr := errors.New("primary stream failed")
+	primary := &metadataTTS{
+		label:        "primary",
+		sampleRate:   24000,
+		numChannels:  1,
+		capabilities: TTSCapabilities{Streaming: true},
+		streams: []SynthesizeStream{
+			&metadataSynthesizeStream{err: streamErr},
+			&metadataSynthesizeStream{events: []*SynthesizedAudio{{
+				Frame: &model.AudioFrame{Data: []byte("primary recovered")},
+			}}},
+		},
+	}
+	fallback := &metadataTTS{
+		label:        "fallback",
+		sampleRate:   24000,
+		numChannels:  1,
+		capabilities: TTSCapabilities{Streaming: true},
+		stream: &metadataSynthesizeStream{events: []*SynthesizedAudio{{
+			Frame: &model.AudioFrame{Data: []byte("fallback")},
+		}}},
+	}
+	adapter := NewFallbackAdapterWithOptions([]TTS{primary, fallback}, FallbackAdapterOptions{
+		MaxRetryPerTTS: 1,
+	})
+
+	stream, err := adapter.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+	defer stream.Close()
+
+	if err := stream.PushText("hello"); err != nil {
+		t.Fatalf("PushText returned error: %v", err)
+	}
+	audio, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next returned error: %v", err)
+	}
+	if got := string(audio.Frame.Data); got != "primary recovered" {
+		t.Fatalf("audio data = %q, want primary recovered", got)
+	}
+	if primary.streamCalls != 2 {
+		t.Fatalf("primary stream calls = %d, want 2", primary.streamCalls)
+	}
+	if fallback.streamCalls != 0 {
+		t.Fatalf("fallback stream calls = %d, want 0", fallback.streamCalls)
+	}
+}
+
 type metadataTTS struct {
 	label           string
 	sampleRate      int
 	numChannels     int
 	capabilities    TTSCapabilities
 	chunked         ChunkedStream
+	chunkedStreams  []ChunkedStream
 	stream          SynthesizeStream
+	streams         []SynthesizeStream
 	streamErr       error
 	synthesizeCalls int
 	streamCalls     int
@@ -289,6 +388,11 @@ func (m *metadataTTS) NumChannels() int {
 
 func (m *metadataTTS) Synthesize(context.Context, string) (ChunkedStream, error) {
 	m.synthesizeCalls++
+	if len(m.chunkedStreams) > 0 {
+		stream := m.chunkedStreams[0]
+		m.chunkedStreams = m.chunkedStreams[1:]
+		return stream, nil
+	}
 	if m.chunked != nil {
 		return m.chunked, nil
 	}
@@ -299,6 +403,11 @@ func (m *metadataTTS) Stream(context.Context) (SynthesizeStream, error) {
 	m.streamCalls++
 	if m.streamErr != nil {
 		return nil, m.streamErr
+	}
+	if len(m.streams) > 0 {
+		stream := m.streams[0]
+		m.streams = m.streams[1:]
+		return stream, nil
 	}
 	return m.stream, nil
 }
