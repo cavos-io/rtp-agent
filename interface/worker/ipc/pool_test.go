@@ -70,6 +70,62 @@ func TestProcPoolGetByJobIDFindsRunningExecutor(t *testing.T) {
 	}
 }
 
+func TestProcPoolActiveJobsReturnsRunningAssignments(t *testing.T) {
+	runningA := RunningJobInfo{
+		AcceptArguments: JobAcceptArguments{
+			Identity: "agent-job-a",
+		},
+		Job:      &livekit.Job{Id: "job-a"},
+		URL:      "wss://livekit.example",
+		Token:    "token-a",
+		WorkerID: "worker-a",
+		FakeJob:  true,
+	}
+	runningB := RunningJobInfo{
+		AcceptArguments: JobAcceptArguments{
+			Identity: "agent-job-b",
+		},
+		Job:      &livekit.Job{Id: "job-b"},
+		URL:      "wss://livekit.example",
+		Token:    "token-b",
+		WorkerID: "worker-a",
+	}
+	pool := &ProcPool{
+		executors: map[string]JobExecutor{
+			"exec-a": &fakeJobExecutor{id: "exec-a", runningJob: &runningA},
+			"exec-b": &fakeJobExecutor{id: "exec-b", runningJob: &runningB},
+			"idle":   &fakeJobExecutor{id: "idle"},
+		},
+	}
+
+	activeJobs := pool.ActiveJobs()
+	if len(activeJobs) != 2 {
+		t.Fatalf("ActiveJobs() len = %d, want 2", len(activeJobs))
+	}
+
+	got := map[string]RunningJobInfo{}
+	for _, info := range activeJobs {
+		got[info.Job.GetId()] = info
+	}
+	if got["job-a"].AcceptArguments.Identity != "agent-job-a" {
+		t.Fatalf("job-a identity = %q, want agent-job-a", got["job-a"].AcceptArguments.Identity)
+	}
+	if got["job-a"].Token != "token-a" {
+		t.Fatalf("job-a token = %q, want token-a", got["job-a"].Token)
+	}
+	if !got["job-a"].FakeJob {
+		t.Fatal("job-a FakeJob = false, want true")
+	}
+	if got["job-b"].AcceptArguments.Identity != "agent-job-b" {
+		t.Fatalf("job-b identity = %q, want agent-job-b", got["job-b"].AcceptArguments.Identity)
+	}
+
+	activeJobs[0].Token = "mutated"
+	if got := pool.ActiveJobs(); got[0].Token == "mutated" {
+		t.Fatal("mutating ActiveJobs() result changed stored running job")
+	}
+}
+
 func TestProcPoolCloseUsesConfiguredTimeout(t *testing.T) {
 	executor := &fakeJobExecutor{id: "exec-a"}
 	pool := &ProcPool{
