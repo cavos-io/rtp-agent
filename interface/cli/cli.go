@@ -43,6 +43,11 @@ type ConsoleArgs struct {
 	OutputDevice string
 	Mode         ConsoleMode
 	Record       bool
+	ListDevices  bool
+}
+
+var printConsoleAudioDevices = func() {
+	fmt.Println("Audio device listing is not available in this build.")
 }
 
 func RunApp(server *worker.AgentServer) {
@@ -144,6 +149,8 @@ func parseConsoleArgs(argv []string) (ConsoleArgs, error) {
 			args.Mode = ConsoleModeText
 		case "--record":
 			args.Record = true
+		case "--list-devices":
+			args.ListDevices = true
 		case "--input-device":
 			i++
 			if i >= len(argv) {
@@ -180,6 +187,11 @@ func runConsole(server *worker.AgentServer, argv []string) {
 	if err != nil {
 		fmt.Println("Usage: worker console [--text] [--record] [--input-device <device>] [--output-device <device>]")
 		os.Exit(1)
+	}
+
+	if args.ListDevices {
+		printConsoleAudioDevices()
+		return
 	}
 
 	fmt.Println("Starting console mode 🚀")

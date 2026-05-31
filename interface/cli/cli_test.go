@@ -94,6 +94,31 @@ func TestParseConsoleArgsSupportsTextModeAndDevices(t *testing.T) {
 	}
 }
 
+func TestParseConsoleArgsSupportsListDevices(t *testing.T) {
+	args, err := parseConsoleArgs([]string{"worker", "console", "--list-devices"})
+	if err != nil {
+		t.Fatalf("parseConsoleArgs() error = %v", err)
+	}
+	if !args.ListDevices {
+		t.Fatal("ListDevices = false, want true")
+	}
+}
+
+func TestRunConsoleListDevicesReturnsBeforeStartingConsole(t *testing.T) {
+	oldPrint := printConsoleAudioDevices
+	defer func() { printConsoleAudioDevices = oldPrint }()
+	calls := 0
+	printConsoleAudioDevices = func() {
+		calls++
+	}
+
+	runConsole(nil, []string{"worker", "console", "--list-devices"})
+
+	if calls != 1 {
+		t.Fatalf("printConsoleAudioDevices calls = %d, want 1", calls)
+	}
+}
+
 func TestCliArgsCarriesReferenceReloadState(t *testing.T) {
 	args := CliArgs{
 		LogLevel:    "debug",
