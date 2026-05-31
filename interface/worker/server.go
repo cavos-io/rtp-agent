@@ -232,6 +232,18 @@ func refreshRunningJobTokenForReload(info workeripc.RunningJobInfo, apiSecret st
 	return info, nil
 }
 
+func refreshRunningJobsForReload(jobs []workeripc.RunningJobInfo, apiSecret string, now time.Time) ([]workeripc.RunningJobInfo, error) {
+	refreshed := make([]workeripc.RunningJobInfo, 0, len(jobs))
+	for _, job := range jobs {
+		info, err := refreshRunningJobTokenForReload(job, apiSecret, now)
+		if err != nil {
+			return nil, err
+		}
+		refreshed = append(refreshed, info)
+	}
+	return refreshed, nil
+}
+
 func (s *AgentServer) UpdateOptions(opts WorkerOptions) error {
 	s.mu.Lock()
 	if s.conn != nil {

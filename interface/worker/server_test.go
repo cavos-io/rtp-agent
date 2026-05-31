@@ -597,6 +597,105 @@ func TestRefreshRunningJobTokenForReloadPreservesAssignmentAndExtendsToken(t *te
 	}
 }
 
+func TestRefreshRunningJobsForReloadRefreshesEveryJob(t *testing.T) {
+	tokenA, err := auth.NewAccessToken("api-key", "api-secret").
+		SetIdentity("agent-a").
+		SetName("Agent A").
+		SetVideoGrant(&auth.VideoGrant{
+			RoomJoin: true,
+			Room:     "room-a",
+			Agent:    true,
+		}).
+		ToJWT()
+	if err != nil {
+		t.Fatalf("ToJWT() tokenA error = %v", err)
+	}
+	tokenB, err := auth.NewAccessToken("api-key", "api-secret").
+		SetIdentity("agent-b").
+		SetName("Agent B").
+		SetVideoGrant(&auth.VideoGrant{
+			RoomJoin: true,
+			Room:     "room-b",
+			Agent:    true,
+		}).
+		ToJWT()
+	if err != nil {
+		t.Fatalf("ToJWT() tokenB error = %v", err)
+	}
+
+	jobA := &livekit.Job{Id: "job-a", Room: &livekit.Room{Name: "room-a"}}
+	jobB := &livekit.Job{Id: "job-b", Room: &livekit.Room{Name: "room-b"}}
+	jobs := []ipc.RunningJobInfo{
+		{
+			AcceptArguments: ipc.JobAcceptArguments{Name: "Agent A", Identity: "agent-a"},
+			Job:             jobA,
+			URL:             "wss://livekit.example",
+			Token:           tokenA,
+			WorkerID:        "worker-a",
+		},
+		{
+			AcceptArguments: ipc.JobAcceptArguments{Name: "Agent B", Identity: "agent-b"},
+			Job:             jobB,
+			URL:             "wss://livekit.example",
+			Token:           tokenB,
+			WorkerID:        "worker-a",
+			FakeJob:         true,
+		},
+	}
+	now := time.Date(2026, 5, 31, 13, 0, 0, 0, time.UTC)
+
+	refreshed, err := refreshRunningJobsForReload(jobs, "api-secret", now)
+	if err != nil {
+		t.Fatalf("refreshRunningJobsForReload() error = %v", err)
+	}
+
+	if len(refreshed) != 2 {
+		t.Fatalf("refreshRunningJobsForReload() len = %d, want 2", len(refreshed))
+	}
+	if jobs[0].Token != tokenA || jobs[1].Token != tokenB {
+		t.Fatal("refreshRunningJobsForReload mutated input jobs")
+	}
+	for i, info := range refreshed {
+		if info.Job != jobs[i].Job {
+			t.Fatalf("refreshed[%d].Job was not preserved", i)
+		}
+		if info.AcceptArguments.Identity != jobs[i].AcceptArguments.Identity {
+			t.Fatalf("refreshed[%d].AcceptArguments.Identity = %q, want %q", i, info.AcceptArguments.Identity, jobs[i].AcceptArguments.Identity)
+		}
+		if info.URL != jobs[i].URL {
+			t.Fatalf("refreshed[%d].URL = %q, want %q", i, info.URL, jobs[i].URL)
+		}
+		if info.WorkerID != jobs[i].WorkerID {
+			t.Fatalf("refreshed[%d].WorkerID = %q, want %q", i, info.WorkerID, jobs[i].WorkerID)
+		}
+		if info.FakeJob != jobs[i].FakeJob {
+			t.Fatalf("refreshed[%d].FakeJob = %v, want %v", i, info.FakeJob, jobs[i].FakeJob)
+		}
+		if info.Token == "" || info.Token == jobs[i].Token {
+			t.Fatalf("refreshed[%d].Token was not refreshed", i)
+		}
+
+		tok, err := jwt.ParseSigned(info.Token)
+		if err != nil {
+			t.Fatalf("ParseSigned(refreshed[%d].Token) error = %v", i, err)
+		}
+		standardClaims := jwt.Claims{}
+		grants := auth.ClaimGrants{}
+		if err := tok.Claims([]byte("api-secret"), &standardClaims, &grants); err != nil {
+			t.Fatalf("refreshed[%d] token Claims() error = %v", i, err)
+		}
+		if standardClaims.Expiry == nil {
+			t.Fatalf("refreshed[%d] token expiry = nil, want one-hour expiry", i)
+		}
+		if got := standardClaims.Expiry.Time(); !got.Equal(now.Add(time.Hour)) {
+			t.Fatalf("refreshed[%d] token expiry = %v, want %v", i, got, now.Add(time.Hour))
+		}
+		if grants.Identity != jobs[i].AcceptArguments.Identity {
+			t.Fatalf("refreshed[%d] token identity = %q, want %q", i, grants.Identity, jobs[i].AcceptArguments.Identity)
+		}
+	}
+}
+
 func TestEmitWorkerStartedNotifiesHandlers(t *testing.T) {
 	server := NewAgentServer(WorkerOptions{})
 
