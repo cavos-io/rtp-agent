@@ -1028,3 +1028,221 @@ func TestChatContextToOpenAIProviderFormatFiltersUnmatchedToolItems(t *testing.T
 		t.Fatalf("message = %#v, want user hello", messages[0])
 	}
 }
+
+func TestChatContextToGoogleProviderFormatMapsTurnsAndSystemMessages(t *testing.T) {
+	ctx := NewChatContext()
+	ctx.Items = []ChatItem{
+		&ChatMessage{ID: "system", Role: ChatRoleSystem, Content: []ChatContent{{Text: "be concise"}}},
+		&ChatMessage{ID: "user", Role: ChatRoleUser, Content: []ChatContent{{Text: "weather?"}}},
+		&ChatMessage{ID: "assistant-turn", Role: ChatRoleAssistant, Content: []ChatContent{{Text: "checking"}}},
+		&FunctionCall{ID: "assistant-turn/tool", CallID: "call_weather", Name: "weather", Arguments: `{"city":"Paris"}`},
+		&FunctionCallOutput{ID: "weather-output", CallID: "call_weather", Name: "weather", Output: "sunny"},
+	}
+
+	turns, extra := ctx.ToProviderFormat("google")
+
+	data, ok := extra.(map[string]any)
+	if !ok {
+		t.Fatalf("google extra = %#v, want map", extra)
+	}
+	if !reflect.DeepEqual(data["system_messages"], []string{"be concise"}) {
+		t.Fatalf("system_messages = %#v", data["system_messages"])
+	}
+	if len(turns) != 3 {
+		t.Fatalf("len(turns) = %d, want 3: %#v", len(turns), turns)
+	}
+	if turns[0]["role"] != "user" {
+		t.Fatalf("first turn = %#v, want user", turns[0])
+	}
+	userParts := turns[0]["parts"].([]map[string]any)
+	if userParts[0]["text"] != "weather?" {
+		t.Fatalf("user parts = %#v", userParts)
+	}
+	if turns[1]["role"] != "model" {
+		t.Fatalf("second turn = %#v, want model", turns[1])
+	}
+	modelParts := turns[1]["parts"].([]map[string]any)
+	functionCall := modelParts[1]["function_call"].(map[string]any)
+	if functionCall["id"] != "call_weather" || functionCall["name"] != "weather" {
+		t.Fatalf("function_call = %#v", functionCall)
+	}
+	args := functionCall["args"].(map[string]any)
+	if args["city"] != "Paris" {
+		t.Fatalf("function args = %#v", args)
+	}
+	if turns[2]["role"] != "user" {
+		t.Fatalf("third turn = %#v, want user tool response", turns[2])
+	}
+	toolParts := turns[2]["parts"].([]map[string]any)
+	functionResponse := toolParts[0]["function_response"].(map[string]any)
+	if functionResponse["id"] != "call_weather" || functionResponse["name"] != "weather" {
+		t.Fatalf("function_response = %#v", functionResponse)
+	}
+	response := functionResponse["response"].(map[string]any)
+	if response["output"] != "sunny" {
+		t.Fatalf("function response payload = %#v", response)
+	}
+}
+
+func TestChatContextToAnthropicProviderFormatMapsTurnsAndSystemMessages(t *testing.T) {
+	ctx := NewChatContext()
+	ctx.Items = []ChatItem{
+		&ChatMessage{ID: "system", Role: ChatRoleSystem, Content: []ChatContent{{Text: "be concise"}}},
+		&ChatMessage{ID: "assistant-turn", Role: ChatRoleAssistant, Content: []ChatContent{{Text: "checking"}}},
+		&FunctionCall{ID: "assistant-turn/tool", CallID: "call_weather", Name: "weather", Arguments: `{"city":"Paris"}`},
+		&FunctionCallOutput{ID: "weather-output", CallID: "call_weather", Name: "weather", Output: `["sunny"]`},
+	}
+
+	messages, extra := ctx.ToProviderFormat("anthropic")
+
+	data, ok := extra.(map[string]any)
+	if !ok {
+		t.Fatalf("anthropic extra = %#v, want map", extra)
+	}
+	if !reflect.DeepEqual(data["system_messages"], []string{"be concise"}) {
+		t.Fatalf("system_messages = %#v", data["system_messages"])
+	}
+	if len(messages) != 3 {
+		t.Fatalf("len(messages) = %d, want 3: %#v", len(messages), messages)
+	}
+	if messages[0]["role"] != "user" {
+		t.Fatalf("first message = %#v, want dummy user", messages[0])
+	}
+	dummyContent := messages[0]["content"].([]map[string]any)
+	if dummyContent[0]["type"] != "text" || dummyContent[0]["text"] != "(empty)" {
+		t.Fatalf("dummy content = %#v", dummyContent)
+	}
+	if messages[1]["role"] != "assistant" {
+		t.Fatalf("second message = %#v, want assistant", messages[1])
+	}
+	assistantContent := messages[1]["content"].([]map[string]any)
+	if assistantContent[0]["type"] != "text" || assistantContent[0]["text"] != "checking" {
+		t.Fatalf("assistant text = %#v", assistantContent[0])
+	}
+	toolUse := assistantContent[1]
+	if toolUse["type"] != "tool_use" || toolUse["id"] != "call_weather" || toolUse["name"] != "weather" {
+		t.Fatalf("tool use = %#v", toolUse)
+	}
+	input := toolUse["input"].(map[string]any)
+	if input["city"] != "Paris" {
+		t.Fatalf("tool input = %#v", input)
+	}
+	if messages[2]["role"] != "user" {
+		t.Fatalf("third message = %#v, want user tool result", messages[2])
+	}
+	userContent := messages[2]["content"].([]map[string]any)
+	toolResult := userContent[0]
+	if toolResult["type"] != "tool_result" || toolResult["tool_use_id"] != "call_weather" || toolResult["is_error"] != false {
+		t.Fatalf("tool result = %#v", toolResult)
+	}
+	if !reflect.DeepEqual(toolResult["content"], []any{"sunny"}) {
+		t.Fatalf("tool result content = %#v", toolResult["content"])
+	}
+}
+
+func TestChatContextToAWSProviderFormatMapsTurnsAndSystemMessages(t *testing.T) {
+	ctx := NewChatContext()
+	ctx.Items = []ChatItem{
+		&ChatMessage{ID: "system", Role: ChatRoleSystem, Content: []ChatContent{{Text: "be concise"}}},
+		&ChatMessage{ID: "assistant-turn", Role: ChatRoleAssistant, Content: []ChatContent{{Text: "checking"}}},
+		&FunctionCall{ID: "assistant-turn/tool", CallID: "call_weather", Name: "weather", Arguments: `{"city":"Paris"}`},
+		&FunctionCallOutput{ID: "weather-output", CallID: "call_weather", Name: "weather", Output: "sunny"},
+	}
+
+	messages, extra := ctx.ToProviderFormat("aws")
+
+	data, ok := extra.(map[string]any)
+	if !ok {
+		t.Fatalf("aws extra = %#v, want map", extra)
+	}
+	if !reflect.DeepEqual(data["system_messages"], []string{"be concise"}) {
+		t.Fatalf("system_messages = %#v", data["system_messages"])
+	}
+	if len(messages) != 3 {
+		t.Fatalf("len(messages) = %d, want 3: %#v", len(messages), messages)
+	}
+	if messages[0]["role"] != "user" {
+		t.Fatalf("first message = %#v, want dummy user", messages[0])
+	}
+	dummyContent := messages[0]["content"].([]map[string]any)
+	if dummyContent[0]["text"] != "(empty)" {
+		t.Fatalf("dummy content = %#v", dummyContent)
+	}
+	if messages[1]["role"] != "assistant" {
+		t.Fatalf("second message = %#v, want assistant", messages[1])
+	}
+	assistantContent := messages[1]["content"].([]map[string]any)
+	if assistantContent[0]["text"] != "checking" {
+		t.Fatalf("assistant text = %#v", assistantContent[0])
+	}
+	toolUse := assistantContent[1]["toolUse"].(map[string]any)
+	if toolUse["toolUseId"] != "call_weather" || toolUse["name"] != "weather" {
+		t.Fatalf("toolUse = %#v", toolUse)
+	}
+	input := toolUse["input"].(map[string]any)
+	if input["city"] != "Paris" {
+		t.Fatalf("tool input = %#v", input)
+	}
+	if messages[2]["role"] != "user" {
+		t.Fatalf("third message = %#v, want user tool result", messages[2])
+	}
+	userContent := messages[2]["content"].([]map[string]any)
+	toolResult := userContent[0]["toolResult"].(map[string]any)
+	if toolResult["toolUseId"] != "call_weather" || toolResult["status"] != "success" {
+		t.Fatalf("toolResult = %#v", toolResult)
+	}
+	resultContent := toolResult["content"].([]map[string]any)
+	if resultContent[0]["text"] != "sunny" {
+		t.Fatalf("tool result content = %#v", resultContent)
+	}
+}
+
+func TestChatContextToMistralProviderFormatMapsEntriesAndInstructions(t *testing.T) {
+	ctx := NewChatContext()
+	ctx.Items = []ChatItem{
+		&ChatMessage{ID: "system", Role: ChatRoleSystem, Content: []ChatContent{{Text: "be concise"}}},
+		&ChatMessage{
+			ID:   "user",
+			Role: ChatRoleUser,
+			Content: []ChatContent{
+				{Text: "describe"},
+				{Image: &ImageContent{Image: "https://example.test/image.png"}},
+			},
+		},
+		&ChatMessage{ID: "assistant-turn", Role: ChatRoleAssistant, Content: []ChatContent{{Text: "checking"}}},
+		&FunctionCall{ID: "assistant-turn/tool", CallID: "call_weather", Name: "weather", Arguments: `{"city":"Paris"}`},
+		&FunctionCallOutput{ID: "weather-output", CallID: "call_weather", Name: "weather", Output: "sunny"},
+	}
+
+	entries, extra := ctx.ToProviderFormat("mistralai")
+
+	data, ok := extra.(map[string]any)
+	if !ok {
+		t.Fatalf("mistral extra = %#v, want map", extra)
+	}
+	if data["instructions"] != "be concise" {
+		t.Fatalf("instructions = %#v", data["instructions"])
+	}
+	if len(entries) != 4 {
+		t.Fatalf("len(entries) = %d, want 4: %#v", len(entries), entries)
+	}
+	if entries[0]["type"] != "message.input" || entries[0]["role"] != "user" {
+		t.Fatalf("first entry = %#v", entries[0])
+	}
+	content := entries[0]["content"].([]map[string]any)
+	if content[0]["type"] != "image_url" || content[0]["image_url"] != "https://example.test/image.png" {
+		t.Fatalf("image content = %#v", content[0])
+	}
+	if content[1]["type"] != "text" || content[1]["text"] != "describe" {
+		t.Fatalf("text content = %#v", content[1])
+	}
+	if entries[1]["type"] != "message.output" || entries[1]["role"] != "assistant" || entries[1]["content"] != "checking" {
+		t.Fatalf("assistant entry = %#v", entries[1])
+	}
+	if entries[2]["type"] != "function.call" || entries[2]["tool_call_id"] != "call_weather" || entries[2]["name"] != "weather" || entries[2]["arguments"] != `{"city":"Paris"}` {
+		t.Fatalf("function call entry = %#v", entries[2])
+	}
+	if entries[3]["type"] != "function.result" || entries[3]["tool_call_id"] != "call_weather" || entries[3]["result"] != "sunny" {
+		t.Fatalf("function result entry = %#v", entries[3])
+	}
+}
