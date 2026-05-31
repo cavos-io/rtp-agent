@@ -141,6 +141,41 @@ func TestAnthropicChatUsesStrictToolInputSchema(t *testing.T) {
 	}
 }
 
+func TestAnthropicChatMapsNamedToolChoice(t *testing.T) {
+	transport := &captureRoundTripper{}
+	originalTransport := http.DefaultTransport
+	http.DefaultTransport = transport
+	t.Cleanup(func() { http.DefaultTransport = originalTransport })
+
+	model, err := NewAnthropicLLM("test-key", "claude-test")
+	if err != nil {
+		t.Fatalf("NewAnthropicLLM() error = %v", err)
+	}
+	stream, err := model.Chat(
+		context.Background(),
+		llm.NewChatContext(),
+		llm.WithTools([]llm.Tool{anthropicRequestTestTool{}}),
+		llm.WithToolChoice(map[string]any{
+			"type": "function",
+			"function": map[string]any{
+				"name": "lookup",
+			},
+		}),
+	)
+	if err != nil {
+		t.Fatalf("Chat() error = %v", err)
+	}
+	_ = stream.Close()
+
+	choice, ok := transport.body["tool_choice"].(map[string]any)
+	if !ok {
+		t.Fatalf("tool_choice = %#v, want map", transport.body["tool_choice"])
+	}
+	if choice["type"] != "tool" || choice["name"] != "lookup" {
+		t.Fatalf("tool_choice = %#v, want named lookup tool", choice)
+	}
+}
+
 func TestBuildAnthropicMessagesCollectsSystemText(t *testing.T) {
 	ctx := llm.NewChatContext()
 	ctx.Items = []llm.ChatItem{

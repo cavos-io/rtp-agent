@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/cavos-io/conversation-worker/core/llm"
+	openaisdk "github.com/sashabaranov/go-openai"
 )
 
 type requestTestTool struct{}
@@ -78,5 +79,27 @@ func TestBuildOpenAIChatCompletionRequestMarksToolsStrict(t *testing.T) {
 	}
 	if !req.Tools[0].Function.Strict {
 		t.Fatalf("tool strict = false, want true")
+	}
+}
+
+func TestBuildOpenAIChatCompletionRequestMapsNamedToolChoice(t *testing.T) {
+	req := buildOpenAIChatCompletionRequest("gpt-4o", llm.NewChatContext(), &llm.ChatOptions{
+		ToolChoice: map[string]any{
+			"type": "function",
+			"function": map[string]any{
+				"name": "lookup",
+			},
+		},
+	})
+
+	choice, ok := req.ToolChoice.(openaisdk.ToolChoice)
+	if !ok {
+		t.Fatalf("ToolChoice = %#v, want openai.ToolChoice", req.ToolChoice)
+	}
+	if choice.Type != openaisdk.ToolTypeFunction {
+		t.Fatalf("ToolChoice.Type = %q, want function", choice.Type)
+	}
+	if choice.Function.Name != "lookup" {
+		t.Fatalf("ToolChoice.Function.Name = %q, want lookup", choice.Function.Name)
 	}
 }
