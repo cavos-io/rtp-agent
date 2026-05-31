@@ -1,6 +1,7 @@
 package llm
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 	"time"
@@ -371,6 +372,104 @@ func TestChatContextIsEquivalentDetectsPayloadDifferences(t *testing.T) {
 				t.Fatal("IsEquivalent() = true, want false")
 			}
 		})
+	}
+}
+
+func TestChatContextToDictUsesReferenceItemShapeAndFilters(t *testing.T) {
+	ctx := NewChatContext()
+	ctx.Items = []ChatItem{
+		&ChatMessage{
+			ID:   "message",
+			Role: ChatRoleUser,
+			Content: []ChatContent{
+				{Text: "hello"},
+				{Image: &ImageContent{ID: "image", Image: "https://example.test/image.png", InferenceDetail: "high"}},
+				{Audio: &AudioContent{Transcript: "audio text"}},
+			},
+			CreatedAt: time.Unix(10, 0),
+		},
+		&FunctionCall{ID: "call", CallID: "call_lookup", Name: "lookup", Arguments: `{}`, CreatedAt: time.Unix(11, 0)},
+		&FunctionCallOutput{ID: "output", CallID: "call_lookup", Name: "lookup", Output: "ok", CreatedAt: time.Unix(12, 0)},
+		&AgentConfigUpdate{ID: "config", CreatedAt: time.Unix(13, 0)},
+	}
+
+	data := ctx.ToDict(ChatContextDictOptions{
+		ExcludeFunctionCall: true,
+		ExcludeConfigUpdate: true,
+	})
+
+	items, ok := data["items"].([]map[string]any)
+	if !ok {
+		t.Fatalf("items = %#v, want []map[string]any", data["items"])
+	}
+	if len(items) != 1 {
+		t.Fatalf("len(items) = %d, want 1: %#v", len(items), items)
+	}
+	message := items[0]
+	if message["id"] != "message" || message["type"] != "message" || message["role"] != string(ChatRoleUser) {
+		t.Fatalf("message identity fields = %#v", message)
+	}
+	if _, ok := message["created_at"]; ok {
+		t.Fatalf("created_at present by default: %#v", message)
+	}
+	content, ok := message["content"].([]any)
+	if !ok {
+		t.Fatalf("content = %#v, want []any", message["content"])
+	}
+	if len(content) != 1 || content[0] != "hello" {
+		t.Fatalf("content = %#v, want text-only content", content)
+	}
+}
+
+func TestChatContextMarshalJSONIncludesTimestampsForReports(t *testing.T) {
+	ctx := NewChatContext()
+	ctx.Items = []ChatItem{
+		&ChatMessage{
+			ID:        "message",
+			Role:      ChatRoleAssistant,
+			Content:   []ChatContent{{Text: "hello"}},
+			CreatedAt: time.Unix(10, 250000000),
+		},
+		&FunctionCall{ID: "call", CallID: "call_lookup", Name: "lookup", Arguments: `{"city":"Paris"}`, CreatedAt: time.Unix(11, 0)},
+		&FunctionCallOutput{ID: "output", CallID: "call_lookup", Name: "lookup", Output: "Paris", IsError: false, CreatedAt: time.Unix(12, 0)},
+		&AgentHandoff{ID: "handoff", NewAgentID: "next", CreatedAt: time.Unix(13, 0)},
+	}
+
+	data, err := json.Marshal(ctx)
+	if err != nil {
+		t.Fatalf("MarshalJSON() error = %v", err)
+	}
+	var decoded struct {
+		Items []map[string]any `json:"items"`
+	}
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		t.Fatalf("unmarshal marshaled context: %v", err)
+	}
+
+	if len(decoded.Items) != 4 {
+		t.Fatalf("len(items) = %d, want 4: %s", len(decoded.Items), data)
+	}
+	message := decoded.Items[0]
+	if message["type"] != "message" || message["role"] != string(ChatRoleAssistant) {
+		t.Fatalf("message = %#v", message)
+	}
+	if message["created_at"] != 10.25 {
+		t.Fatalf("message created_at = %#v, want 10.25", message["created_at"])
+	}
+	if content, ok := message["content"].([]any); !ok || len(content) != 1 || content[0] != "hello" {
+		t.Fatalf("message content = %#v", message["content"])
+	}
+	call := decoded.Items[1]
+	if call["type"] != "function_call" || call["call_id"] != "call_lookup" || call["arguments"] != `{"city":"Paris"}` {
+		t.Fatalf("function call = %#v", call)
+	}
+	output := decoded.Items[2]
+	if output["type"] != "function_call_output" || output["is_error"] != false || output["output"] != "Paris" {
+		t.Fatalf("function output = %#v", output)
+	}
+	handoff := decoded.Items[3]
+	if handoff["type"] != "agent_handoff" || handoff["new_agent_id"] != "next" {
+		t.Fatalf("handoff = %#v", handoff)
 	}
 }
 

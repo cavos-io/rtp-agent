@@ -1,9 +1,19 @@
 package llm
 
 import (
+	"encoding/json"
 	"reflect"
 	"time"
 )
+
+type ChatContextDictOptions struct {
+	IncludeImage        bool
+	IncludeAudio        bool
+	IncludeTimestamp    bool
+	ExcludeFunctionCall bool
+	ExcludeMetrics      bool
+	ExcludeConfigUpdate bool
+}
 
 type ChatMessageArgs struct {
 	ID          string
@@ -262,6 +272,168 @@ func (c *ChatContext) IsEquivalent(other *ChatContext) bool {
 	}
 
 	return true
+}
+
+func (c *ChatContext) ToDict(options ...ChatContextDictOptions) map[string]any {
+	var opts ChatContextDictOptions
+	if len(options) > 0 {
+		opts = options[0]
+	}
+
+	items := make([]map[string]any, 0, len(c.Items))
+	for _, item := range c.Items {
+		if opts.ExcludeFunctionCall && isFunctionChatItem(item) {
+			continue
+		}
+		if opts.ExcludeConfigUpdate && item.GetType() == "agent_config_update" {
+			continue
+		}
+		if serialized := chatItemToDict(item, opts); serialized != nil {
+			items = append(items, serialized)
+		}
+	}
+
+	return map[string]any{"items": items}
+}
+
+func (c *ChatContext) MarshalJSON() ([]byte, error) {
+	return json.Marshal(c.ToDict(ChatContextDictOptions{
+		IncludeImage:     true,
+		IncludeAudio:     true,
+		IncludeTimestamp: true,
+	}))
+}
+
+func chatItemToDict(item ChatItem, opts ChatContextDictOptions) map[string]any {
+	switch it := item.(type) {
+	case *ChatMessage:
+		data := map[string]any{
+			"id":          it.ID,
+			"type":        "message",
+			"role":        string(it.Role),
+			"content":     chatContentToDict(it.Content, opts),
+			"interrupted": it.Interrupted,
+			"extra":       nonNilMap(it.Extra),
+		}
+		if it.TranscriptConfidence != nil {
+			data["transcript_confidence"] = *it.TranscriptConfidence
+		}
+		addCreatedAt(data, it.CreatedAt, opts)
+		return data
+	case *FunctionCall:
+		data := map[string]any{
+			"id":        it.ID,
+			"type":      "function_call",
+			"call_id":   it.CallID,
+			"arguments": it.Arguments,
+			"name":      it.Name,
+			"extra":     nonNilMap(it.Extra),
+		}
+		if it.GroupID != nil {
+			data["group_id"] = *it.GroupID
+		}
+		addCreatedAt(data, it.CreatedAt, opts)
+		return data
+	case *FunctionCallOutput:
+		data := map[string]any{
+			"id":       it.ID,
+			"type":     "function_call_output",
+			"name":     it.Name,
+			"call_id":  it.CallID,
+			"output":   it.Output,
+			"is_error": it.IsError,
+		}
+		addCreatedAt(data, it.CreatedAt, opts)
+		return data
+	case *AgentHandoff:
+		data := map[string]any{
+			"id":           it.ID,
+			"type":         "agent_handoff",
+			"new_agent_id": it.NewAgentID,
+		}
+		if it.OldAgentID != nil {
+			data["old_agent_id"] = *it.OldAgentID
+		}
+		addCreatedAt(data, it.CreatedAt, opts)
+		return data
+	case *AgentConfigUpdate:
+		data := map[string]any{
+			"id":   it.ID,
+			"type": "agent_config_update",
+		}
+		if it.Instructions != nil {
+			data["instructions"] = *it.Instructions
+		}
+		if it.ToolsAdded != nil {
+			data["tools_added"] = it.ToolsAdded
+		}
+		if it.ToolsRemoved != nil {
+			data["tools_removed"] = it.ToolsRemoved
+		}
+		addCreatedAt(data, it.CreatedAt, opts)
+		return data
+	default:
+		return nil
+	}
+}
+
+func chatContentToDict(content []ChatContent, opts ChatContextDictOptions) []any {
+	serialized := make([]any, 0, len(content))
+	for _, item := range content {
+		if item.Text != "" {
+			serialized = append(serialized, item.Text)
+		}
+		if opts.IncludeImage && item.Image != nil {
+			serialized = append(serialized, imageContentToDict(item.Image))
+		}
+		if opts.IncludeAudio && item.Audio != nil {
+			serialized = append(serialized, audioContentToDict(item.Audio))
+		}
+	}
+	return serialized
+}
+
+func imageContentToDict(image *ImageContent) map[string]any {
+	data := map[string]any{
+		"id":               image.ID,
+		"type":             "image_content",
+		"image":            image.Image,
+		"inference_detail": image.InferenceDetail,
+	}
+	if image.InferenceWidth != nil {
+		data["inference_width"] = *image.InferenceWidth
+	}
+	if image.InferenceHeight != nil {
+		data["inference_height"] = *image.InferenceHeight
+	}
+	if image.MimeType != "" {
+		data["mime_type"] = image.MimeType
+	}
+	return data
+}
+
+func audioContentToDict(audio *AudioContent) map[string]any {
+	data := map[string]any{
+		"type":  "audio_content",
+		"frame": audio.Frames,
+	}
+	if audio.Transcript != "" {
+		data["transcript"] = audio.Transcript
+	}
+	return data
+}
+
+func addCreatedAt(data map[string]any, createdAt time.Time, opts ChatContextDictOptions) {
+	if opts.IncludeTimestamp {
+		data["created_at"] = float64(createdAt.UnixNano()) / float64(time.Second)
+	}
+}
+
+func nonNilMap(value map[string]any) map[string]any {
+	if value == nil {
+		return map[string]any{}
+	}
+	return value
 }
 
 func (c *ChatContext) FindInsertionIndex(createdAt time.Time) int {
