@@ -1,6 +1,7 @@
 package worker
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"math"
@@ -914,6 +915,60 @@ func TestAgentServerHandleReloadMessageReportsAndReloadsJobs(t *testing.T) {
 
 	if resp, ok, err := server.handleReloadMessage(context.Background(), &ipc.PingRequest{}, 7, now); err != nil || ok || resp != nil {
 		t.Fatalf("handleReloadMessage(PingRequest) = (%#v, %v, %v), want (nil, false, nil)", resp, ok, err)
+	}
+}
+
+func TestAgentServerHandleReloadIPCMessageWritesResponse(t *testing.T) {
+	server := NewAgentServer(WorkerOptions{})
+	server.workerID = "worker-a"
+	jobCtx := NewJobContext(&livekit.Job{Id: "job-active", Room: &livekit.Room{Name: "room-active"}}, "wss://livekit.example", "api-key", "api-secret")
+	jobCtx.AcceptArguments = JobAcceptArguments{Identity: "agent-active"}
+	jobCtx.token = "active-token"
+	server.mu.Lock()
+	server.activeJobs[jobCtx.Job.Id] = jobCtx
+	server.mu.Unlock()
+
+	req, err := ipc.NewMessage(&ipc.ActiveJobsRequest{})
+	if err != nil {
+		t.Fatalf("NewMessage(ActiveJobsRequest): %v", err)
+	}
+	var input bytes.Buffer
+	if err := ipc.WriteMessage(&input, req); err != nil {
+		t.Fatalf("WriteMessage request: %v", err)
+	}
+	var output bytes.Buffer
+
+	handled, err := server.handleReloadIPCMessage(context.Background(), &input, &output, 9, time.Now())
+	if err != nil {
+		t.Fatalf("handleReloadIPCMessage() error = %v", err)
+	}
+	if !handled {
+		t.Fatal("handleReloadIPCMessage() handled = false, want true")
+	}
+
+	msg, err := ipc.ReadMessage(&output)
+	if err != nil {
+		t.Fatalf("ReadMessage response: %v", err)
+	}
+	if msg.Type != ipc.MessageTypeActiveJobsResponse {
+		t.Fatalf("response Type = %q, want %q", msg.Type, ipc.MessageTypeActiveJobsResponse)
+	}
+	payload, err := ipc.DecodePayload(msg)
+	if err != nil {
+		t.Fatalf("DecodePayload response: %v", err)
+	}
+	resp, ok := payload.(*ipc.ActiveJobsResponse)
+	if !ok {
+		t.Fatalf("response payload = %T, want *ActiveJobsResponse", payload)
+	}
+	if resp.ReloadCount != 9 {
+		t.Fatalf("ReloadCount = %d, want 9", resp.ReloadCount)
+	}
+	if len(resp.Jobs) != 1 || resp.Jobs[0].Job.GetId() != "job-active" {
+		t.Fatalf("Jobs = %#v, want active job", resp.Jobs)
+	}
+	if resp.Jobs[0].Token != "active-token" {
+		t.Fatalf("Jobs[0].Token = %q, want active-token", resp.Jobs[0].Token)
 	}
 }
 

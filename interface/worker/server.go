@@ -3,6 +3,7 @@ package worker
 import (
 	"context"
 	"fmt"
+	"io"
 	"math"
 	"net/http"
 	"net/url"
@@ -326,6 +327,34 @@ func (s *AgentServer) handleReloadMessage(ctx context.Context, payload any, relo
 	default:
 		return nil, false, nil
 	}
+}
+
+func (s *AgentServer) handleReloadIPCMessage(ctx context.Context, r io.Reader, out io.Writer, reloadCount int, now time.Time) (bool, error) {
+	msg, err := workeripc.ReadMessage(r)
+	if err != nil {
+		return false, err
+	}
+	payload, err := workeripc.DecodePayload(msg)
+	if err != nil {
+		return false, err
+	}
+
+	resp, handled, err := s.handleReloadMessage(ctx, payload, reloadCount, now)
+	if err != nil {
+		return handled, err
+	}
+	if !handled || resp == nil {
+		return handled, nil
+	}
+
+	responseMsg, err := workeripc.NewMessage(resp)
+	if err != nil {
+		return true, err
+	}
+	if err := workeripc.WriteMessage(out, responseMsg); err != nil {
+		return true, err
+	}
+	return true, nil
 }
 
 func (s *AgentServer) UpdateOptions(opts WorkerOptions) error {
