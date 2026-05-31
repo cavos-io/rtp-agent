@@ -66,6 +66,27 @@ func TestWaitForParticipantAttributeReturnsDisconnectedRoomError(t *testing.T) {
 	}
 }
 
+func TestAgentParticipantMatchesWithoutNameAcceptsAnyAgent(t *testing.T) {
+	if !agentParticipantMatches(livekit.ParticipantInfo_AGENT, map[string]string{}, nil) {
+		t.Fatal("agentParticipantMatches(agent, no name) = false, want true")
+	}
+}
+
+func TestAgentParticipantMatchesExplicitEmptyNameRequiresAttribute(t *testing.T) {
+	if agentParticipantMatches(livekit.ParticipantInfo_AGENT, map[string]string{}, []string{""}) {
+		t.Fatal("agentParticipantMatches(agent without name, empty name) = true, want false")
+	}
+	if !agentParticipantMatches(livekit.ParticipantInfo_AGENT, map[string]string{AttributeAgentName: ""}, []string{""}) {
+		t.Fatal("agentParticipantMatches(agent with empty name, empty name) = false, want true")
+	}
+}
+
+func TestAgentParticipantMatchesRejectsNonAgent(t *testing.T) {
+	if agentParticipantMatches(livekit.ParticipantInfo_STANDARD, map[string]string{}, nil) {
+		t.Fatal("agentParticipantMatches(standard, no name) = true, want false")
+	}
+}
+
 func TestParticipantAttributeMatchesExpectedValue(t *testing.T) {
 	attrs := map[string]string{"status": "ready"}
 	if !participantAttributeMatches(attrs, "status", "ready") {

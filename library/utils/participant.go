@@ -10,21 +10,13 @@ import (
 
 const AttributeAgentName = "lk.agent.name"
 
-func WaitForAgent(ctx context.Context, room *lksdk.Room, agentName string) (*lksdk.RemoteParticipant, error) {
+func WaitForAgent(ctx context.Context, room *lksdk.Room, agentName ...string) (*lksdk.RemoteParticipant, error) {
 	if err := requireConnectedRoom(room); err != nil {
 		return nil, err
 	}
 
 	matchesAgent := func(p *lksdk.RemoteParticipant) bool {
-		if p.Kind() != lksdk.ParticipantKind(livekit.ParticipantInfo_AGENT) {
-			return false
-		}
-		if agentName == "" {
-			return true
-		}
-		attrs := p.Attributes()
-		val, ok := attrs[AttributeAgentName]
-		return ok && val == agentName
+		return agentParticipantMatches(livekit.ParticipantInfo_Kind(p.Kind()), p.Attributes(), agentName)
 	}
 
 	for _, p := range room.GetRemoteParticipants() {
@@ -46,6 +38,16 @@ func WaitForAgent(ctx context.Context, room *lksdk.Room, agentName string) (*lks
 			}
 		}
 	}
+}
+
+func agentParticipantMatches(kind livekit.ParticipantInfo_Kind, attributes map[string]string, agentName []string) bool {
+	if kind != livekit.ParticipantInfo_AGENT {
+		return false
+	}
+	if len(agentName) == 0 {
+		return true
+	}
+	return participantAttributeMatches(attributes, AttributeAgentName, agentName[0])
 }
 
 func WaitForParticipant(ctx context.Context, room *lksdk.Room, identity string, kinds ...livekit.ParticipantInfo_Kind) (*lksdk.RemoteParticipant, error) {
