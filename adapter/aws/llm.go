@@ -59,22 +59,7 @@ func (l *AWSLLM) Chat(ctx context.Context, chatCtx *llm.ChatContext, opts ...llm
 	}
 
 	if len(options.Tools) > 0 {
-		toolSpecs := make([]types.Tool, 0)
-		for _, t := range options.Tools {
-			doc := document.NewLazyDocument(t.Parameters())
-			toolSpecs = append(toolSpecs, &types.ToolMemberToolSpec{
-				Value: types.ToolSpecification{
-					Name:        aws.String(t.Name()),
-					Description: aws.String(t.Description()),
-					InputSchema: &types.ToolInputSchemaMemberJson{
-						Value: doc,
-					},
-				},
-			})
-		}
-		req.ToolConfig = &types.ToolConfiguration{
-			Tools: toolSpecs,
-		}
+		req.ToolConfig = buildAWSToolConfig(options)
 	}
 
 	out, err := l.client.ConverseStream(ctx, req)
@@ -85,6 +70,59 @@ func (l *AWSLLM) Chat(ctx context.Context, chatCtx *llm.ChatContext, opts ...llm
 	return &awsLLMStream{
 		stream: out.GetStream(),
 	}, nil
+}
+
+func buildAWSToolConfig(options *llm.ChatOptions) *types.ToolConfiguration {
+	if len(options.Tools) == 0 || options.ToolChoice == "none" {
+		return nil
+	}
+
+	toolSpecs := make([]types.Tool, 0, len(options.Tools))
+	for _, t := range options.Tools {
+		doc := document.NewLazyDocument(t.Parameters())
+		toolSpecs = append(toolSpecs, &types.ToolMemberToolSpec{
+			Value: types.ToolSpecification{
+				Name:        aws.String(t.Name()),
+				Description: aws.String(t.Description()),
+				InputSchema: &types.ToolInputSchemaMemberJson{
+					Value: doc,
+				},
+			},
+		})
+	}
+
+	return &types.ToolConfiguration{
+		Tools:      toolSpecs,
+		ToolChoice: buildAWSToolChoice(options.ToolChoice),
+	}
+}
+
+func buildAWSToolChoice(choice llm.ToolChoice) types.ToolChoice {
+	switch tc := choice.(type) {
+	case string:
+		switch tc {
+		case "auto":
+			return &types.ToolChoiceMemberAuto{Value: types.AutoToolChoice{}}
+		case "required":
+			return &types.ToolChoiceMemberAny{Value: types.AnyToolChoice{}}
+		}
+	case map[string]any:
+		if tc["type"] != "function" {
+			return nil
+		}
+		function, ok := tc["function"].(map[string]any)
+		if !ok {
+			return nil
+		}
+		name, ok := function["name"].(string)
+		if !ok || name == "" {
+			return nil
+		}
+		return &types.ToolChoiceMemberTool{
+			Value: types.SpecificToolChoice{Name: aws.String(name)},
+		}
+	}
+	return nil
 }
 
 type awsLLMStream struct {
