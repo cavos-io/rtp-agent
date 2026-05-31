@@ -9,7 +9,7 @@ import (
 type ToolContext struct {
 	tools         []interface{} // Tool | Toolset
 	functionTools map[string]Tool
-	providerTools []Tool
+	providerTools []ProviderTool
 	toolsets      []Toolset
 }
 
@@ -31,8 +31,8 @@ func (c *ToolContext) FunctionTools() map[string]Tool {
 	return m
 }
 
-func (c *ToolContext) ProviderTools() []Tool {
-	arr := make([]Tool, len(c.providerTools))
+func (c *ToolContext) ProviderTools() []ProviderTool {
+	arr := make([]ProviderTool, len(c.providerTools))
 	copy(arr, c.providerTools)
 	return arr
 }
@@ -53,7 +53,9 @@ func (c *ToolContext) Flatten() []Tool {
 	for _, name := range names {
 		tools = append(tools, c.functionTools[name])
 	}
-	tools = append(tools, c.providerTools...)
+	for _, tool := range c.providerTools {
+		tools = append(tools, tool)
+	}
 	return tools
 }
 
@@ -67,11 +69,16 @@ func (c *ToolContext) GetFunctionTool(name string) Tool {
 func (c *ToolContext) UpdateTools(tools []interface{}) error {
 	c.tools = tools
 	c.functionTools = make(map[string]Tool)
-	c.providerTools = make([]Tool, 0)
+	c.providerTools = make([]ProviderTool, 0)
 	c.toolsets = make([]Toolset, 0)
 
 	var addTool func(tool interface{}) error
 	addTool = func(tool interface{}) error {
+		if t, ok := tool.(ProviderTool); ok {
+			c.providerTools = append(c.providerTools, t)
+			return nil
+		}
+
 		if t, ok := tool.(Toolset); ok {
 			for _, childTool := range t.Tools() {
 				if err := addTool(childTool); err != nil {
@@ -81,14 +88,7 @@ func (c *ToolContext) UpdateTools(tools []interface{}) error {
 			c.toolsets = append(c.toolsets, t)
 			return nil
 		}
-
 		if t, ok := tool.(Tool); ok {
-			// In Go parity, we don't differentiate ProviderTool and FunctionTool
-			// by base class as easily, we can assume all non-Toolset interfaces
-			// are function tools if they satisfy Tool interface.
-			// The original python distinguishes ProviderTool.
-
-			// For now, treat all standalone tools as function tools.
 			name := t.Name()
 			if existing, exists := c.functionTools[name]; exists {
 				if sameTool(existing, t) {
@@ -108,6 +108,9 @@ func (c *ToolContext) UpdateTools(tools []interface{}) error {
 			return err
 		}
 	}
+	sort.Slice(c.providerTools, func(i, j int) bool {
+		return c.providerTools[i].ID() < c.providerTools[j].ID()
+	})
 	return nil
 }
 
@@ -127,4 +130,52 @@ func (c *ToolContext) Copy() *ToolContext {
 	toolsCopy := make([]interface{}, len(c.tools))
 	copy(toolsCopy, c.tools)
 	return NewToolContext(toolsCopy)
+}
+
+func (c *ToolContext) Equal(other *ToolContext) bool {
+	if c == other {
+		return true
+	}
+	if other == nil {
+		return false
+	}
+	if len(c.functionTools) != len(other.functionTools) {
+		return false
+	}
+	for name, tool := range c.functionTools {
+		if other.functionTools[name] != tool {
+			return false
+		}
+	}
+	if len(c.providerTools) != len(other.providerTools) {
+		return false
+	}
+	for _, tool := range c.providerTools {
+		found := false
+		for _, otherTool := range other.providerTools {
+			if otherTool == tool {
+				found = true
+				break
+			}
+		}
+		if !found {
+			return false
+		}
+	}
+	if len(c.toolsets) != len(other.toolsets) {
+		return false
+	}
+	for _, toolset := range c.toolsets {
+		found := false
+		for _, otherToolset := range other.toolsets {
+			if otherToolset == toolset {
+				found = true
+				break
+			}
+		}
+		if !found {
+			return false
+		}
+	}
+	return true
 }

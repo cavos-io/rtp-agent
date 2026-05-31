@@ -249,6 +249,11 @@ type Tool interface {
 	Execute(ctx context.Context, args string) (string, error)
 }
 
+type ProviderTool interface {
+	Tool
+	IsProviderTool() bool
+}
+
 type ToolError struct {
 	Message string
 }
