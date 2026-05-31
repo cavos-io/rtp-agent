@@ -96,6 +96,104 @@ func TestStartJobRequestCarriesRunningJobInfo(t *testing.T) {
 	}
 }
 
+func TestReloadIPCMessagesRoundTripActiveJobs(t *testing.T) {
+	resp := ActiveJobsResponse{
+		Jobs: []RunningJobInfo{
+			{
+				AcceptArguments: JobAcceptArguments{
+					Name:       "support agent",
+					Identity:   "agent-job-123",
+					Metadata:   `{"tier":"gold"}`,
+					Attributes: map[string]string{"region": "apac"},
+				},
+				Job:      &livekit.Job{Id: "job-123"},
+				URL:      "wss://livekit.example",
+				Token:    "room-token",
+				WorkerID: "worker-a",
+				FakeJob:  true,
+			},
+		},
+		ReloadCount: 3,
+	}
+
+	msg, err := NewMessage(&resp)
+	if err != nil {
+		t.Fatalf("NewMessage(ActiveJobsResponse): %v", err)
+	}
+	if msg.Type != MessageTypeActiveJobsResponse {
+		t.Fatalf("Type = %q, want %q", msg.Type, MessageTypeActiveJobsResponse)
+	}
+
+	decoded, err := DecodePayload(msg)
+	if err != nil {
+		t.Fatalf("DecodePayload: %v", err)
+	}
+	got, ok := decoded.(*ActiveJobsResponse)
+	if !ok {
+		t.Fatalf("decoded payload type = %T, want *ActiveJobsResponse", decoded)
+	}
+	if got.ReloadCount != 3 {
+		t.Fatalf("ReloadCount = %d, want 3", got.ReloadCount)
+	}
+	if len(got.Jobs) != 1 {
+		t.Fatalf("Jobs len = %d, want 1", len(got.Jobs))
+	}
+	if got.Jobs[0].Job.GetId() != "job-123" {
+		t.Fatalf("Jobs[0].Job.Id = %q, want job-123", got.Jobs[0].Job.GetId())
+	}
+	if got.Jobs[0].AcceptArguments.Identity != "agent-job-123" {
+		t.Fatalf("Jobs[0].AcceptArguments.Identity = %q, want agent-job-123", got.Jobs[0].AcceptArguments.Identity)
+	}
+	if got.Jobs[0].AcceptArguments.Attributes["region"] != "apac" {
+		t.Fatalf("Jobs[0].AcceptArguments.Attributes[region] = %q, want apac", got.Jobs[0].AcceptArguments.Attributes["region"])
+	}
+	if got.Jobs[0].URL != "wss://livekit.example" {
+		t.Fatalf("Jobs[0].URL = %q, want room URL", got.Jobs[0].URL)
+	}
+	if got.Jobs[0].Token != "room-token" {
+		t.Fatalf("Jobs[0].Token = %q, want room token", got.Jobs[0].Token)
+	}
+	if got.Jobs[0].WorkerID != "worker-a" {
+		t.Fatalf("Jobs[0].WorkerID = %q, want worker-a", got.Jobs[0].WorkerID)
+	}
+	if !got.Jobs[0].FakeJob {
+		t.Fatal("Jobs[0].FakeJob = false, want true")
+	}
+}
+
+func TestReloadIPCMessageTypesAreRegistered(t *testing.T) {
+	tests := []struct {
+		name    string
+		payload any
+		want    MessageType
+	}{
+		{name: "active jobs request", payload: &ActiveJobsRequest{}, want: MessageTypeActiveJobsRequest},
+		{name: "active jobs response", payload: &ActiveJobsResponse{}, want: MessageTypeActiveJobsResponse},
+		{name: "reload jobs request", payload: &ReloadJobsRequest{}, want: MessageTypeReloadJobsRequest},
+		{name: "reload jobs response", payload: &ReloadJobsResponse{}, want: MessageTypeReloadJobsResponse},
+		{name: "reloaded", payload: &Reloaded{}, want: MessageTypeReloaded},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			msg, err := NewMessage(tt.payload)
+			if err != nil {
+				t.Fatalf("NewMessage(%T): %v", tt.payload, err)
+			}
+			if msg.Type != tt.want {
+				t.Fatalf("Type = %q, want %q", msg.Type, tt.want)
+			}
+			decoded, err := DecodePayload(msg)
+			if err != nil {
+				t.Fatalf("DecodePayload(%q): %v", tt.want, err)
+			}
+			if decoded == nil {
+				t.Fatalf("DecodePayload(%q) returned nil", tt.want)
+			}
+		})
+	}
+}
+
 func TestInferenceMessagesRoundTrip(t *testing.T) {
 	req := InferenceRequest{
 		Method:    "embeddings.create",

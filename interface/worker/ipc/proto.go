@@ -26,6 +26,11 @@ const (
 	MessageTypeDumpStackTrace     MessageType = "dump_stack_trace_request"
 	MessageTypeShutdownRequestAck MessageType = "shutdown_request_ack"
 	MessageTypeShuttingDown       MessageType = "shutting_down"
+	MessageTypeActiveJobsRequest  MessageType = "active_jobs_request"
+	MessageTypeActiveJobsResponse MessageType = "active_jobs_response"
+	MessageTypeReloadJobsRequest  MessageType = "reload_jobs_request"
+	MessageTypeReloadJobsResponse MessageType = "reload_jobs_response"
+	MessageTypeReloaded           MessageType = "reloaded"
 )
 
 type Message struct {
@@ -46,6 +51,11 @@ var payloadFactories = map[MessageType]func() any{
 	MessageTypeDumpStackTrace:     func() any { return &DumpStackTraceRequest{} },
 	MessageTypeShutdownRequestAck: func() any { return &ShutdownRequestAck{} },
 	MessageTypeShuttingDown:       func() any { return &ShuttingDown{} },
+	MessageTypeActiveJobsRequest:  func() any { return &ActiveJobsRequest{} },
+	MessageTypeActiveJobsResponse: func() any { return &ActiveJobsResponse{} },
+	MessageTypeReloadJobsRequest:  func() any { return &ReloadJobsRequest{} },
+	MessageTypeReloadJobsResponse: func() any { return &ReloadJobsResponse{} },
+	MessageTypeReloaded:           func() any { return &Reloaded{} },
 }
 
 func NewMessage(payload any) (Message, error) {
@@ -101,6 +111,16 @@ func messageTypeForPayload(payload any) (MessageType, bool) {
 		return MessageTypeShutdownRequestAck, true
 	case ShuttingDown, *ShuttingDown:
 		return MessageTypeShuttingDown, true
+	case ActiveJobsRequest, *ActiveJobsRequest:
+		return MessageTypeActiveJobsRequest, true
+	case ActiveJobsResponse, *ActiveJobsResponse:
+		return MessageTypeActiveJobsResponse, true
+	case ReloadJobsRequest, *ReloadJobsRequest:
+		return MessageTypeReloadJobsRequest, true
+	case ReloadJobsResponse, *ReloadJobsResponse:
+		return MessageTypeReloadJobsResponse, true
+	case Reloaded, *Reloaded:
+		return MessageTypeReloaded, true
 	default:
 		return "", false
 	}
@@ -146,6 +166,22 @@ type RunningJobInfo struct {
 type StartJobRequest struct {
 	RunningJob RunningJobInfo `json:"running_job"`
 }
+
+type ActiveJobsRequest struct{}
+
+type ActiveJobsResponse struct {
+	Jobs        []RunningJobInfo `json:"jobs,omitempty"`
+	ReloadCount int              `json:"reload_count"`
+}
+
+type ReloadJobsRequest struct{}
+
+type ReloadJobsResponse struct {
+	Jobs        []RunningJobInfo `json:"jobs,omitempty"`
+	ReloadCount int              `json:"reload_count"`
+}
+
+type Reloaded struct{}
 
 type ShutdownRequest struct {
 	Reason string `json:"reason"`
