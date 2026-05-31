@@ -115,6 +115,65 @@ func TestJobContextConnectIsNoopWhenRoomAlreadyConnected(t *testing.T) {
 	}
 }
 
+func TestAutoSubscribeSDKEnabledMatchesReferenceModes(t *testing.T) {
+	tests := []struct {
+		mode AutoSubscribe
+		want bool
+	}{
+		{AutoSubscribeSubscribeAll, true},
+		{AutoSubscribeSubscribeNone, false},
+		{AutoSubscribeAudioOnly, false},
+		{AutoSubscribeVideoOnly, false},
+		{"", true},
+	}
+
+	for _, tt := range tests {
+		t.Run(string(tt.mode), func(t *testing.T) {
+			if got := autoSubscribeSDKEnabled(tt.mode); got != tt.want {
+				t.Fatalf("autoSubscribeSDKEnabled(%q) = %v, want %v", tt.mode, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestShouldAutoSubscribeTrackMatchesReferenceModes(t *testing.T) {
+	tests := []struct {
+		mode AutoSubscribe
+		kind lksdk.TrackKind
+		want bool
+	}{
+		{AutoSubscribeSubscribeAll, lksdk.TrackKindAudio, false},
+		{AutoSubscribeSubscribeNone, lksdk.TrackKindAudio, false},
+		{AutoSubscribeAudioOnly, lksdk.TrackKindAudio, true},
+		{AutoSubscribeAudioOnly, lksdk.TrackKindVideo, false},
+		{AutoSubscribeVideoOnly, lksdk.TrackKindAudio, false},
+		{AutoSubscribeVideoOnly, lksdk.TrackKindVideo, true},
+	}
+
+	for _, tt := range tests {
+		t.Run(string(tt.mode)+"_"+string(tt.kind), func(t *testing.T) {
+			if got := shouldAutoSubscribeTrack(tt.mode, tt.kind); got != tt.want {
+				t.Fatalf("shouldAutoSubscribeTrack(%q, %q) = %v, want %v", tt.mode, tt.kind, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestJobContextConnectAcceptsAutoSubscribeOptions(t *testing.T) {
+	room := &lksdk.Room{}
+	ctx := NewJobContext(
+		&livekit.Job{Id: "job_connect_options", Room: &livekit.Room{Name: "room-a"}},
+		"://invalid-url",
+		"key",
+		"secret",
+	)
+	ctx.Room = room
+
+	if err := ctx.Connect(context.Background(), nil, ConnectOptions{AutoSubscribe: AutoSubscribeAudioOnly}); err != nil {
+		t.Fatalf("Connect() with AutoSubscribe option error = %v", err)
+	}
+}
+
 func TestJobContextAddParticipantEntrypointRejectsDuplicates(t *testing.T) {
 	ctx := NewJobContext(&livekit.Job{Id: "job_participant_entrypoint"}, "", "", "")
 	entrypoint := func(*JobContext, *livekit.ParticipantInfo) {}
@@ -289,7 +348,7 @@ func TestJobContextRoomCallbackWithEntrypointsPreservesExistingParticipantCallba
 		OnParticipantConnected: func(*lksdk.RemoteParticipant) {
 			called = true
 		},
-	})
+	}, AutoSubscribeSubscribeAll)
 
 	cb.OnParticipantConnected(nil)
 

@@ -27,6 +27,19 @@ type JobRejectArguments struct {
 	Terminate bool
 }
 
+type AutoSubscribe string
+
+const (
+	AutoSubscribeSubscribeAll  AutoSubscribe = "subscribe_all"
+	AutoSubscribeSubscribeNone AutoSubscribe = "subscribe_none"
+	AutoSubscribeAudioOnly     AutoSubscribe = "audio_only"
+	AutoSubscribeVideoOnly     AutoSubscribe = "video_only"
+)
+
+type ConnectOptions struct {
+	AutoSubscribe AutoSubscribe
+}
+
 type ParticipantEntrypoint func(*JobContext, *livekit.ParticipantInfo)
 
 type participantEntrypointRegistration struct {
@@ -206,33 +219,81 @@ func (c *JobContext) connectInfo() lksdk.ConnectInfo {
 	}
 }
 
-func (c *JobContext) Connect(ctx context.Context, cb *lksdk.RoomCallback) error {
+func (c *JobContext) Connect(ctx context.Context, cb *lksdk.RoomCallback, options ...ConnectOptions) error {
 	if c.Room != nil {
 		return nil
 	}
-	cb = c.roomCallbackWithEntrypoints(cb)
+	opts := normalizeConnectOptions(options...)
+	cb = c.roomCallbackWithEntrypoints(cb, opts.AutoSubscribe)
+	connectOptions := []lksdk.ConnectOption{
+		lksdk.WithAutoSubscribe(autoSubscribeSDKEnabled(opts.AutoSubscribe)),
+	}
 	if c.token != "" {
-		room, err := lksdk.ConnectToRoomWithToken(c.url, c.token, cb)
+		room, err := lksdk.ConnectToRoomWithToken(c.url, c.token, cb, connectOptions...)
 		if err != nil {
 			return err
 		}
 		c.Room = room
 		c.participantsAvailable(remoteParticipantsAsViews(room.GetRemoteParticipants()))
+		c.applyAutoSubscribeOptions(opts.AutoSubscribe)
 		logger.Logger.Infow("Connected to room", "room", c.Job.Room.Name)
 		return nil
 	}
 
-	room, err := lksdk.ConnectToRoom(c.url, c.connectInfo(), cb)
+	room, err := lksdk.ConnectToRoom(c.url, c.connectInfo(), cb, connectOptions...)
 	if err != nil {
 		return err
 	}
 	c.Room = room
 	c.participantsAvailable(remoteParticipantsAsViews(room.GetRemoteParticipants()))
+	c.applyAutoSubscribeOptions(opts.AutoSubscribe)
 	logger.Logger.Infow("Connected to room", "room", c.Job.Room.Name)
 	return nil
 }
 
-func (c *JobContext) roomCallbackWithEntrypoints(cb *lksdk.RoomCallback) *lksdk.RoomCallback {
+func normalizeConnectOptions(options ...ConnectOptions) ConnectOptions {
+	opts := ConnectOptions{AutoSubscribe: AutoSubscribeSubscribeAll}
+	if len(options) > 0 {
+		opts = options[0]
+	}
+	if opts.AutoSubscribe == "" {
+		opts.AutoSubscribe = AutoSubscribeSubscribeAll
+	}
+	return opts
+}
+
+func autoSubscribeSDKEnabled(mode AutoSubscribe) bool {
+	return normalizeConnectOptions(ConnectOptions{AutoSubscribe: mode}).AutoSubscribe == AutoSubscribeSubscribeAll
+}
+
+func shouldAutoSubscribeTrack(mode AutoSubscribe, kind lksdk.TrackKind) bool {
+	switch normalizeConnectOptions(ConnectOptions{AutoSubscribe: mode}).AutoSubscribe {
+	case AutoSubscribeAudioOnly:
+		return kind == lksdk.TrackKindAudio
+	case AutoSubscribeVideoOnly:
+		return kind == lksdk.TrackKindVideo
+	default:
+		return false
+	}
+}
+
+func (c *JobContext) applyAutoSubscribeOptions(mode AutoSubscribe) {
+	if c.Room == nil {
+		return
+	}
+	for _, participant := range c.Room.GetRemoteParticipants() {
+		for _, publication := range participant.TrackPublications() {
+			remotePublication, ok := publication.(*lksdk.RemoteTrackPublication)
+			if ok && shouldAutoSubscribeTrack(mode, remotePublication.Kind()) {
+				if err := remotePublication.SetSubscribed(true); err != nil {
+					logger.Logger.Warnw("failed to subscribe remote track", err, "trackSid", remotePublication.SID())
+				}
+			}
+		}
+	}
+}
+
+func (c *JobContext) roomCallbackWithEntrypoints(cb *lksdk.RoomCallback, autoSubscribe AutoSubscribe) *lksdk.RoomCallback {
 	wrapped := lksdk.NewRoomCallback()
 	wrapped.Merge(cb)
 	onParticipantConnected := wrapped.OnParticipantConnected
@@ -242,6 +303,17 @@ func (c *JobContext) roomCallbackWithEntrypoints(cb *lksdk.RoomCallback) *lksdk.
 		}
 		if participant != nil {
 			c.participantAvailable(participant)
+		}
+	}
+	onTrackPublished := wrapped.OnTrackPublished
+	wrapped.OnTrackPublished = func(publication *lksdk.RemoteTrackPublication, participant *lksdk.RemoteParticipant) {
+		if onTrackPublished != nil {
+			onTrackPublished(publication, participant)
+		}
+		if publication != nil && shouldAutoSubscribeTrack(autoSubscribe, publication.Kind()) {
+			if err := publication.SetSubscribed(true); err != nil {
+				logger.Logger.Warnw("failed to subscribe published remote track", err, "trackSid", publication.SID())
+			}
 		}
 	}
 	return wrapped
