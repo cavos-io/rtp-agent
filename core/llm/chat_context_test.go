@@ -190,6 +190,35 @@ func TestChatContextAddMessageAppendsWhenCreatedAtIsZero(t *testing.T) {
 	}
 }
 
+func TestChatContextAddMessageDefaultsID(t *testing.T) {
+	ctx := NewChatContext()
+
+	message := ctx.AddMessage(ChatMessageArgs{
+		Role:    ChatRoleUser,
+		Content: []ChatContent{{Text: "hello"}},
+	})
+
+	if !strings.HasPrefix(message.ID, "item_") {
+		t.Fatalf("AddMessage() ID = %q, want item_ prefix", message.ID)
+	}
+	if ctx.Items[0].GetID() != message.ID {
+		t.Fatalf("stored message ID = %q, want %q", ctx.Items[0].GetID(), message.ID)
+	}
+}
+
+func TestChatContextAddMessageAcceptsTextContent(t *testing.T) {
+	ctx := NewChatContext()
+
+	message := ctx.AddMessage(ChatMessageArgs{
+		Role: ChatRoleUser,
+		Text: "hello",
+	})
+
+	if got, want := message.TextContent(), "hello"; got != want {
+		t.Fatalf("AddMessage() text content = %q, want %q", got, want)
+	}
+}
+
 func TestChatContextInsertOrdersItemsByCreatedAt(t *testing.T) {
 	ctx := NewChatContext()
 	ctx.Items = []ChatItem{
@@ -422,6 +451,34 @@ func TestChatContextToDictUsesReferenceItemShapeAndFilters(t *testing.T) {
 	}
 }
 
+func TestChatContextToDictIncludesAndExcludesMessageMetrics(t *testing.T) {
+	ctx := NewChatContext()
+	ctx.Items = []ChatItem{
+		&ChatMessage{
+			ID:      "message",
+			Role:    ChatRoleAssistant,
+			Content: []ChatContent{{Text: "hello"}},
+			Metrics: map[string]any{"llm_node_ttft": 0.25},
+		},
+	}
+
+	data := ctx.ToDict()
+	items := data["items"].([]map[string]any)
+	metrics, ok := items[0]["metrics"].(map[string]any)
+	if !ok {
+		t.Fatalf("metrics = %#v, want map", items[0]["metrics"])
+	}
+	if metrics["llm_node_ttft"] != 0.25 {
+		t.Fatalf("metrics = %#v, want llm_node_ttft", metrics)
+	}
+
+	withoutMetrics := ctx.ToDict(ChatContextDictOptions{ExcludeMetrics: true})
+	filteredItems := withoutMetrics["items"].([]map[string]any)
+	if _, ok := filteredItems[0]["metrics"]; ok {
+		t.Fatalf("metrics present with ExcludeMetrics: %#v", filteredItems[0])
+	}
+}
+
 func TestChatContextMarshalJSONIncludesTimestampsForReports(t *testing.T) {
 	ctx := NewChatContext()
 	ctx.Items = []ChatItem{
@@ -500,6 +557,7 @@ func TestChatContextUnmarshalJSONRestoresTypedItems(t *testing.T) {
 				"interrupted": true,
 				"transcript_confidence": 0.75,
 				"extra": {"source": "test"},
+				"metrics": {"llm_node_ttft": 0.5},
 				"created_at": 10.25
 			},
 			{
@@ -557,6 +615,9 @@ func TestChatContextUnmarshalJSONRestoresTypedItems(t *testing.T) {
 	if message.TranscriptConfidence == nil || *message.TranscriptConfidence != 0.75 {
 		t.Fatalf("transcript confidence = %#v", message.TranscriptConfidence)
 	}
+	if message.Metrics["llm_node_ttft"] != 0.5 {
+		t.Fatalf("metrics = %#v, want llm_node_ttft", message.Metrics)
+	}
 	if !message.CreatedAt.Equal(time.Unix(10, 250000000)) {
 		t.Fatalf("message CreatedAt = %v, want unix 10.25", message.CreatedAt)
 	}
@@ -600,6 +661,126 @@ func TestChatContextUnmarshalJSONRestoresTypedItems(t *testing.T) {
 	}
 	if config.Instructions == nil || *config.Instructions != "be concise" || !reflect.DeepEqual(config.ToolsAdded, []string{"lookup"}) || !reflect.DeepEqual(config.ToolsRemoved, []string{"search"}) {
 		t.Fatalf("config = %#v", config)
+	}
+}
+
+func TestChatContextImageContentDefaultsInferenceDetail(t *testing.T) {
+	data := []byte(`{
+		"items": [{
+			"id": "message",
+			"type": "message",
+			"role": "user",
+			"content": [{
+				"id": "image",
+				"type": "image_content",
+				"image": "https://example.test/image.png"
+			}]
+		}]
+	}`)
+
+	var ctx ChatContext
+	if err := json.Unmarshal(data, &ctx); err != nil {
+		t.Fatalf("UnmarshalJSON() error = %v", err)
+	}
+
+	message := ctx.Items[0].(*ChatMessage)
+	if got := message.Content[0].Image.InferenceDetail; got != "auto" {
+		t.Fatalf("InferenceDetail = %q, want auto", got)
+	}
+
+	encoded := ctx.ToDict(ChatContextDictOptions{IncludeImage: true})
+	items := encoded["items"].([]map[string]any)
+	content := items[0]["content"].([]any)
+	image := content[0].(map[string]any)
+	if got := image["inference_detail"]; got != "auto" {
+		t.Fatalf("serialized inference_detail = %#v, want auto", got)
+	}
+}
+
+func TestChatContextImageContentDefaultsID(t *testing.T) {
+	data := []byte(`{
+		"items": [{
+			"id": "message",
+			"type": "message",
+			"role": "user",
+			"content": [{
+				"type": "image_content",
+				"image": "https://example.test/image.png"
+			}]
+		}]
+	}`)
+
+	var ctx ChatContext
+	if err := json.Unmarshal(data, &ctx); err != nil {
+		t.Fatalf("UnmarshalJSON() error = %v", err)
+	}
+
+	message := ctx.Items[0].(*ChatMessage)
+	id := message.Content[0].Image.ID
+	if !strings.HasPrefix(id, "img_") {
+		t.Fatalf("ImageContent.ID = %q, want img_ prefix", id)
+	}
+
+	encoded := ctx.ToDict(ChatContextDictOptions{IncludeImage: true})
+	items := encoded["items"].([]map[string]any)
+	content := items[0]["content"].([]any)
+	image := content[0].(map[string]any)
+	if got := image["id"]; got != id {
+		t.Fatalf("serialized id = %#v, want %q", got, id)
+	}
+}
+
+func TestChatContextItemsDefaultIDs(t *testing.T) {
+	data := []byte(`{
+		"items": [
+			{"type": "message", "role": "user", "content": ["hello"]},
+			{"type": "function_call", "call_id": "call_lookup", "name": "lookup", "arguments": "{}"},
+			{"type": "function_call_output", "call_id": "call_lookup", "name": "lookup", "output": "ok", "is_error": false},
+			{"type": "agent_handoff", "new_agent_id": "next"},
+			{"type": "agent_config_update", "instructions": "be concise"}
+		]
+	}`)
+
+	var ctx ChatContext
+	if err := json.Unmarshal(data, &ctx); err != nil {
+		t.Fatalf("UnmarshalJSON() error = %v", err)
+	}
+
+	for i, item := range ctx.Items {
+		if !strings.HasPrefix(item.GetID(), "item_") {
+			t.Fatalf("item %d id = %q, want item_ prefix", i, item.GetID())
+		}
+	}
+
+	encoded := ctx.ToDict()
+	items := encoded["items"].([]map[string]any)
+	for i, item := range items {
+		if got := item["id"]; got != ctx.Items[i].GetID() {
+			t.Fatalf("serialized item %d id = %#v, want %q", i, got, ctx.Items[i].GetID())
+		}
+	}
+}
+
+func TestChatContextItemsDefaultCreatedAt(t *testing.T) {
+	data := []byte(`{
+		"items": [
+			{"type": "message", "role": "user", "content": ["hello"]},
+			{"type": "function_call", "call_id": "call_lookup", "name": "lookup", "arguments": "{}"},
+			{"type": "function_call_output", "call_id": "call_lookup", "name": "lookup", "output": "ok", "is_error": false},
+			{"type": "agent_handoff", "new_agent_id": "next"},
+			{"type": "agent_config_update", "instructions": "be concise"}
+		]
+	}`)
+
+	var ctx ChatContext
+	if err := json.Unmarshal(data, &ctx); err != nil {
+		t.Fatalf("UnmarshalJSON() error = %v", err)
+	}
+
+	for i, item := range ctx.Items {
+		if item.GetCreatedAt().IsZero() {
+			t.Fatalf("item %d CreatedAt is zero, want generated timestamp", i)
+		}
 	}
 }
 
@@ -687,6 +868,146 @@ func TestChatContextToOpenAIProviderFormatGroupsToolCallsWithOutputs(t *testing.
 	}
 	if messages[2]["role"] != "tool" || messages[2]["tool_call_id"] != "call_weather" || messages[2]["content"] != "sunny" {
 		t.Fatalf("second tool output = %#v", messages[2])
+	}
+}
+
+func TestChatContextToOpenAIProviderFormatIncludesImageContent(t *testing.T) {
+	ctx := NewChatContext()
+	ctx.Items = []ChatItem{
+		&ChatMessage{
+			ID:   "user",
+			Role: ChatRoleUser,
+			Content: []ChatContent{
+				{Text: "describe this"},
+				{Image: &ImageContent{
+					Image:           "https://example.test/image.png",
+					InferenceDetail: "high",
+				}},
+			},
+		},
+	}
+
+	messages, _ := ctx.ToProviderFormat("openai")
+
+	if len(messages) != 1 {
+		t.Fatalf("len(messages) = %d, want 1: %#v", len(messages), messages)
+	}
+	content, ok := messages[0]["content"].([]map[string]any)
+	if !ok {
+		t.Fatalf("content = %#v, want []map[string]any", messages[0]["content"])
+	}
+	if len(content) != 2 {
+		t.Fatalf("len(content) = %d, want 2: %#v", len(content), content)
+	}
+	imageURL, ok := content[0]["image_url"].(map[string]any)
+	if !ok || content[0]["type"] != "image_url" {
+		t.Fatalf("image content = %#v, want image_url part", content[0])
+	}
+	if imageURL["url"] != "https://example.test/image.png" || imageURL["detail"] != "high" {
+		t.Fatalf("image_url = %#v", imageURL)
+	}
+	if content[1]["type"] != "text" || content[1]["text"] != "describe this" {
+		t.Fatalf("text content = %#v", content[1])
+	}
+}
+
+func TestChatContextToOpenAIProviderFormatForwardsReferenceExtraContent(t *testing.T) {
+	ctx := NewChatContext()
+	ctx.Items = []ChatItem{
+		&ChatMessage{
+			ID:      "user",
+			Role:    ChatRoleUser,
+			Content: []ChatContent{{Text: "hello"}},
+			Extra: map[string]any{
+				"google":  map[string]any{"thought_signature": "sig"},
+				"ignored": "value",
+			},
+		},
+		&ChatMessage{ID: "assistant", Role: ChatRoleAssistant, Content: []ChatContent{{Text: "checking"}}},
+		&FunctionCall{
+			ID:        "assistant/tool",
+			CallID:    "call_lookup",
+			Name:      "lookup",
+			Arguments: `{}`,
+			Extra: map[string]any{
+				"xai":     map[string]any{"reasoning": "trace"},
+				"ignored": "value",
+			},
+		},
+		&FunctionCallOutput{ID: "output", CallID: "call_lookup", Name: "lookup", Output: "ok"},
+	}
+
+	messages, _ := ctx.ToProviderFormat("openai")
+
+	userExtra, ok := messages[0]["extra_content"].(map[string]any)
+	if !ok {
+		t.Fatalf("user extra_content = %#v, want map", messages[0]["extra_content"])
+	}
+	if _, ok := userExtra["ignored"]; ok {
+		t.Fatalf("user extra_content includes ignored key: %#v", userExtra)
+	}
+	if _, ok := userExtra["google"]; !ok {
+		t.Fatalf("user extra_content = %#v, want google key", userExtra)
+	}
+
+	toolCalls := messages[1]["tool_calls"].([]map[string]any)
+	toolExtra, ok := toolCalls[0]["extra_content"].(map[string]any)
+	if !ok {
+		t.Fatalf("tool extra_content = %#v, want map", toolCalls[0]["extra_content"])
+	}
+	if _, ok := toolExtra["ignored"]; ok {
+		t.Fatalf("tool extra_content includes ignored key: %#v", toolExtra)
+	}
+	if _, ok := toolExtra["xai"]; !ok {
+		t.Fatalf("tool extra_content = %#v, want xai key", toolExtra)
+	}
+}
+
+func TestChatContextToOpenAIResponsesProviderFormat(t *testing.T) {
+	ctx := NewChatContext()
+	ctx.Items = []ChatItem{
+		&ChatMessage{
+			ID:   "user",
+			Role: ChatRoleUser,
+			Content: []ChatContent{
+				{Text: "describe this"},
+				{Image: &ImageContent{
+					Image:           "https://example.test/image.png",
+					InferenceDetail: "low",
+				}},
+			},
+		},
+		&ChatMessage{ID: "assistant-turn", Role: ChatRoleAssistant, Content: []ChatContent{{Text: "checking"}}},
+		&FunctionCall{ID: "assistant-turn/tool", CallID: "call_lookup", Name: "lookup", Arguments: `{"city":"Paris"}`},
+		&FunctionCallOutput{ID: "lookup-output", CallID: "call_lookup", Name: "lookup", Output: "Paris"},
+	}
+
+	items, extra := ctx.ToProviderFormat("openai.responses")
+
+	if extra != nil {
+		t.Fatalf("ToProviderFormat() extra = %#v, want nil", extra)
+	}
+	if len(items) != 4 {
+		t.Fatalf("len(items) = %d, want 4: %#v", len(items), items)
+	}
+	content, ok := items[0]["content"].([]map[string]any)
+	if !ok {
+		t.Fatalf("responses content = %#v, want []map[string]any", items[0]["content"])
+	}
+	if content[0]["type"] != "input_image" || content[0]["image_url"] != "https://example.test/image.png" || content[0]["detail"] != "low" {
+		t.Fatalf("responses image content = %#v", content[0])
+	}
+	if content[1]["type"] != "input_text" || content[1]["text"] != "describe this" {
+		t.Fatalf("responses text content = %#v", content[1])
+	}
+	if items[1]["role"] != "assistant" || items[1]["content"] != "checking" {
+		t.Fatalf("assistant item = %#v", items[1])
+	}
+	if items[2]["type"] != "function_call" || items[2]["call_id"] != "call_lookup" || items[2]["name"] != "lookup" || items[2]["arguments"] != `{"city":"Paris"}` {
+		t.Fatalf("function call item = %#v", items[2])
+	}
+	if items[3]["type"] != "function_call_output" || items[3]["call_id"] != "call_lookup" || items[3]["output"] != "Paris" {
+		t.Fatalf("function output item = %#v", items[3])
 	}
 }
 

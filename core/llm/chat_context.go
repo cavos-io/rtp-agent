@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"reflect"
 	"time"
+
+	cavosmath "github.com/cavos-io/conversation-worker/library/math"
 )
 
 type ChatContextDictOptions struct {
@@ -20,9 +22,11 @@ type ChatMessageArgs struct {
 	ID          string
 	Role        ChatRole
 	Content     []ChatContent
+	Text        string
 	Interrupted bool
 	CreatedAt   time.Time
 	Extra       map[string]any
+	Metrics     map[string]any
 }
 
 type ChatContextCopyOptions struct {
@@ -74,12 +78,17 @@ func (c *ChatContext) AddMessage(args ChatMessageArgs) *ChatMessage {
 	if createdAt.IsZero() {
 		createdAt = time.Now()
 	}
+	content := args.Content
+	if len(content) == 0 && args.Text != "" {
+		content = []ChatContent{{Text: args.Text}}
+	}
 	message := &ChatMessage{
-		ID:          args.ID,
+		ID:          itemIDOrDefault(args.ID),
 		Role:        args.Role,
-		Content:     args.Content,
+		Content:     content,
 		Interrupted: args.Interrupted,
 		Extra:       args.Extra,
+		Metrics:     args.Metrics,
 		CreatedAt:   createdAt,
 	}
 	if args.CreatedAt.IsZero() {
@@ -363,13 +372,13 @@ func chatItemFromJSON(data []byte) (ChatItem, error) {
 			return nil, err
 		}
 		return &FunctionCall{
-			ID:        item.ID,
+			ID:        itemIDOrDefault(item.ID),
 			CallID:    item.CallID,
 			Name:      item.Name,
 			Arguments: item.Arguments,
 			Extra:     item.Extra,
 			GroupID:   item.GroupID,
-			CreatedAt: unixSecondsToTime(item.CreatedAt),
+			CreatedAt: chatItemCreatedAtOrDefault(item.CreatedAt),
 		}, nil
 	case "function_call_output":
 		var item struct {
@@ -384,12 +393,12 @@ func chatItemFromJSON(data []byte) (ChatItem, error) {
 			return nil, err
 		}
 		return &FunctionCallOutput{
-			ID:        item.ID,
+			ID:        itemIDOrDefault(item.ID),
 			CallID:    item.CallID,
 			Name:      item.Name,
 			Output:    item.Output,
 			IsError:   item.IsError,
-			CreatedAt: unixSecondsToTime(item.CreatedAt),
+			CreatedAt: chatItemCreatedAtOrDefault(item.CreatedAt),
 		}, nil
 	case "agent_handoff":
 		var item struct {
@@ -402,10 +411,10 @@ func chatItemFromJSON(data []byte) (ChatItem, error) {
 			return nil, err
 		}
 		return &AgentHandoff{
-			ID:         item.ID,
+			ID:         itemIDOrDefault(item.ID),
 			OldAgentID: item.OldAgentID,
 			NewAgentID: item.NewAgentID,
-			CreatedAt:  unixSecondsToTime(item.CreatedAt),
+			CreatedAt:  chatItemCreatedAtOrDefault(item.CreatedAt),
 		}, nil
 	case "agent_config_update":
 		var item struct {
@@ -419,11 +428,11 @@ func chatItemFromJSON(data []byte) (ChatItem, error) {
 			return nil, err
 		}
 		return &AgentConfigUpdate{
-			ID:           item.ID,
+			ID:           itemIDOrDefault(item.ID),
 			Instructions: item.Instructions,
 			ToolsAdded:   item.ToolsAdded,
 			ToolsRemoved: item.ToolsRemoved,
-			CreatedAt:    unixSecondsToTime(item.CreatedAt),
+			CreatedAt:    chatItemCreatedAtOrDefault(item.CreatedAt),
 		}, nil
 	default:
 		return nil, fmt.Errorf("unsupported chat item type %q", discriminator.Type)
@@ -438,6 +447,7 @@ func chatMessageFromJSON(data []byte) (*ChatMessage, error) {
 		Interrupted          bool              `json:"interrupted"`
 		TranscriptConfidence *float64          `json:"transcript_confidence"`
 		Extra                map[string]any    `json:"extra"`
+		Metrics              map[string]any    `json:"metrics"`
 		CreatedAt            *float64          `json:"created_at"`
 	}
 	if err := json.Unmarshal(data, &item); err != nil {
@@ -454,13 +464,14 @@ func chatMessageFromJSON(data []byte) (*ChatMessage, error) {
 	}
 
 	return &ChatMessage{
-		ID:                   item.ID,
+		ID:                   itemIDOrDefault(item.ID),
 		Role:                 item.Role,
 		Content:              content,
 		Interrupted:          item.Interrupted,
 		TranscriptConfidence: item.TranscriptConfidence,
 		Extra:                item.Extra,
-		CreatedAt:            unixSecondsToTime(item.CreatedAt),
+		Metrics:              nonNilMap(item.Metrics),
+		CreatedAt:            chatItemCreatedAtOrDefault(item.CreatedAt),
 	}, nil
 }
 
@@ -491,11 +502,11 @@ func chatContentFromJSON(data []byte) (ChatContent, error) {
 			return ChatContent{}, err
 		}
 		return ChatContent{Image: &ImageContent{
-			ID:              image.ID,
+			ID:              imageIDOrDefault(image.ID),
 			Image:           image.Image,
 			InferenceWidth:  image.InferenceWidth,
 			InferenceHeight: image.InferenceHeight,
-			InferenceDetail: image.InferenceDetail,
+			InferenceDetail: imageInferenceDetailOrDefault(image.InferenceDetail),
 			MimeType:        image.MimeType,
 		}}, nil
 	case "audio_content":
@@ -518,6 +529,7 @@ func chatContentFromJSON(data []byte) (ChatContent, error) {
 func chatItemToDict(item ChatItem, opts ChatContextDictOptions) map[string]any {
 	switch it := item.(type) {
 	case *ChatMessage:
+		it.ID = itemIDOrDefault(it.ID)
 		data := map[string]any{
 			"id":          it.ID,
 			"type":        "message",
@@ -526,12 +538,16 @@ func chatItemToDict(item ChatItem, opts ChatContextDictOptions) map[string]any {
 			"interrupted": it.Interrupted,
 			"extra":       nonNilMap(it.Extra),
 		}
+		if !opts.ExcludeMetrics {
+			data["metrics"] = nonNilMap(it.Metrics)
+		}
 		if it.TranscriptConfidence != nil {
 			data["transcript_confidence"] = *it.TranscriptConfidence
 		}
 		addCreatedAt(data, it.CreatedAt, opts)
 		return data
 	case *FunctionCall:
+		it.ID = itemIDOrDefault(it.ID)
 		data := map[string]any{
 			"id":        it.ID,
 			"type":      "function_call",
@@ -546,6 +562,7 @@ func chatItemToDict(item ChatItem, opts ChatContextDictOptions) map[string]any {
 		addCreatedAt(data, it.CreatedAt, opts)
 		return data
 	case *FunctionCallOutput:
+		it.ID = itemIDOrDefault(it.ID)
 		data := map[string]any{
 			"id":       it.ID,
 			"type":     "function_call_output",
@@ -557,6 +574,7 @@ func chatItemToDict(item ChatItem, opts ChatContextDictOptions) map[string]any {
 		addCreatedAt(data, it.CreatedAt, opts)
 		return data
 	case *AgentHandoff:
+		it.ID = itemIDOrDefault(it.ID)
 		data := map[string]any{
 			"id":           it.ID,
 			"type":         "agent_handoff",
@@ -568,6 +586,7 @@ func chatItemToDict(item ChatItem, opts ChatContextDictOptions) map[string]any {
 		addCreatedAt(data, it.CreatedAt, opts)
 		return data
 	case *AgentConfigUpdate:
+		it.ID = itemIDOrDefault(it.ID)
 		data := map[string]any{
 			"id":   it.ID,
 			"type": "agent_config_update",
@@ -605,11 +624,12 @@ func chatContentToDict(content []ChatContent, opts ChatContextDictOptions) []any
 }
 
 func imageContentToDict(image *ImageContent) map[string]any {
+	image.ID = imageIDOrDefault(image.ID)
 	data := map[string]any{
 		"id":               image.ID,
 		"type":             "image_content",
 		"image":            image.Image,
-		"inference_detail": image.InferenceDetail,
+		"inference_detail": imageInferenceDetailOrDefault(image.InferenceDetail),
 	}
 	if image.InferenceWidth != nil {
 		data["inference_width"] = *image.InferenceWidth
@@ -621,6 +641,27 @@ func imageContentToDict(image *ImageContent) map[string]any {
 		data["mime_type"] = image.MimeType
 	}
 	return data
+}
+
+func itemIDOrDefault(id string) string {
+	if id == "" {
+		return cavosmath.ShortUUID("item_")
+	}
+	return id
+}
+
+func imageIDOrDefault(id string) string {
+	if id == "" {
+		return cavosmath.ShortUUID("img_")
+	}
+	return id
+}
+
+func imageInferenceDetailOrDefault(detail string) string {
+	if detail == "" {
+		return "auto"
+	}
+	return detail
 }
 
 func audioContentToDict(audio *AudioContent) map[string]any {
@@ -646,6 +687,13 @@ func unixSecondsToTime(seconds *float64) time.Time {
 	}
 	nanos := int64(*seconds * float64(time.Second))
 	return time.Unix(0, nanos)
+}
+
+func chatItemCreatedAtOrDefault(seconds *float64) time.Time {
+	if seconds == nil {
+		return time.Now()
+	}
+	return unixSecondsToTime(seconds)
 }
 
 func nonNilMap(value map[string]any) map[string]any {
@@ -693,6 +741,24 @@ func (c *ChatContext) ToProviderFormat(format string) ([]map[string]any, any) {
 			}
 		}
 		return messages, nil
+	}
+	if format == "openai.responses" {
+		items := make([]map[string]any, 0)
+		for _, group := range groupOpenAIToolCalls(c.Items) {
+			if group.message == nil && len(group.toolCalls) == 0 && len(group.toolOutputs) == 0 {
+				continue
+			}
+			if group.message != nil {
+				items = append(items, openAIResponsesMessage(group.message))
+			}
+			for _, toolCall := range group.toolCalls {
+				items = append(items, openAIResponsesToolCall(toolCall))
+			}
+			for _, toolOutput := range group.toolOutputs {
+				items = append(items, openAIResponsesToolOutput(toolOutput))
+			}
+		}
+		return items, nil
 	}
 	return nil, nil
 }
@@ -797,14 +863,125 @@ func openAIToolGroupID(itemID string, groupID *string) string {
 }
 
 func openAIChatMessage(msg *ChatMessage) map[string]any {
+	content := openAIChatContent(msg.Content)
+	result := map[string]any{
+		"role":    string(msg.Role),
+		"content": content,
+	}
+	if extra := openAIExtraContent(msg.Extra); len(extra) > 0 {
+		result["extra_content"] = extra
+	}
+	return result
+}
+
+func openAIChatContent(content []ChatContent) any {
+	parts := make([]map[string]any, 0)
+	textContent := ""
+	for _, item := range content {
+		if item.Text != "" {
+			if textContent != "" {
+				textContent += "\n"
+			}
+			textContent += item.Text
+		}
+		if item.Image != nil {
+			if part := openAIImageContent(item.Image); part != nil {
+				parts = append(parts, part)
+			}
+		}
+	}
+	if len(parts) == 0 {
+		return textContent
+	}
+	if textContent != "" {
+		parts = append(parts, map[string]any{
+			"type": "text",
+			"text": textContent,
+		})
+	}
+	return parts
+}
+
+func openAIImageContent(image *ImageContent) map[string]any {
+	url, ok := image.Image.(string)
+	if !ok || url == "" {
+		return nil
+	}
+	return map[string]any{
+		"type": "image_url",
+		"image_url": map[string]any{
+			"url":    url,
+			"detail": imageInferenceDetailOrDefault(image.InferenceDetail),
+		},
+	}
+}
+
+func openAIResponsesMessage(msg *ChatMessage) map[string]any {
 	return map[string]any{
 		"role":    string(msg.Role),
-		"content": msg.TextContent(),
+		"content": openAIResponsesContent(msg.Content),
+	}
+}
+
+func openAIResponsesContent(content []ChatContent) any {
+	parts := make([]map[string]any, 0)
+	textContent := ""
+	for _, item := range content {
+		if item.Text != "" {
+			if textContent != "" {
+				textContent += "\n"
+			}
+			textContent += item.Text
+		}
+		if item.Image != nil {
+			if part := openAIResponsesImageContent(item.Image); part != nil {
+				parts = append(parts, part)
+			}
+		}
+	}
+	if len(parts) == 0 {
+		return textContent
+	}
+	if textContent != "" {
+		parts = append(parts, map[string]any{
+			"type": "input_text",
+			"text": textContent,
+		})
+	}
+	return parts
+}
+
+func openAIResponsesImageContent(image *ImageContent) map[string]any {
+	url, ok := image.Image.(string)
+	if !ok || url == "" {
+		return nil
+	}
+	return map[string]any{
+		"type":      "input_image",
+		"image_url": url,
+		"detail":    imageInferenceDetailOrDefault(image.InferenceDetail),
+	}
+}
+
+func openAIResponsesToolCall(toolCall *FunctionCall) map[string]any {
+	return map[string]any{
+		"call_id":   toolCall.CallID,
+		"type":      "function_call",
+		"name":      toolCall.Name,
+		"arguments": toolCall.Arguments,
+	}
+}
+
+func openAIResponsesToolOutput(toolOutput *FunctionCallOutput) map[string]any {
+	return map[string]any{
+		"type":    "function_call_output",
+		"call_id": toolOutput.CallID,
+		"output":  toolOutput.Output,
 	}
 }
 
 func openAIToolCall(toolCall *FunctionCall) map[string]any {
-	return map[string]any{
+	result := map[string]any{
 		"id":   toolCall.CallID,
 		"type": "function",
 		"function": map[string]any{
@@ -812,6 +989,23 @@ func openAIToolCall(toolCall *FunctionCall) map[string]any {
 			"arguments": toolCall.Arguments,
 		},
 	}
+	if extra := openAIExtraContent(toolCall.Extra); len(extra) > 0 {
+		result["extra_content"] = extra
+	}
+	return result
+}
+
+func openAIExtraContent(extra map[string]any) map[string]any {
+	if len(extra) == 0 {
+		return nil
+	}
+	filtered := make(map[string]any)
+	for _, key := range []string{"google", "livekit", "xai"} {
+		if value, ok := extra[key]; ok && value != nil {
+			filtered[key] = value
+		}
+	}
+	return filtered
 }
 
 func openAIToolOutput(toolOutput *FunctionCallOutput) map[string]any {

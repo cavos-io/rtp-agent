@@ -46,6 +46,7 @@ type ChatMessage struct {
 	Interrupted          bool
 	TranscriptConfidence *float64
 	Extra                map[string]any
+	Metrics              map[string]any
 	CreatedAt            time.Time
 }
 
