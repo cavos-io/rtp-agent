@@ -1,0 +1,62 @@
+package llm
+
+import (
+	"reflect"
+	"testing"
+)
+
+func TestGenerateStrictJSONSchemaRequiresOmitEmptyFieldsAsNullable(t *testing.T) {
+	type request struct {
+		Query string `json:"query" jsonschema:"search query"`
+		Limit int    `json:"limit,omitempty" jsonschema:"maximum results"`
+	}
+
+	schema := GenerateStrictJSONSchema(reflect.TypeOf(request{}))
+
+	required, ok := schema["required"].([]string)
+	if !ok {
+		t.Fatalf("required = %#v, want []string", schema["required"])
+	}
+	if !reflect.DeepEqual(required, []string{"query", "limit"}) {
+		t.Fatalf("required = %#v, want all properties required", required)
+	}
+
+	props, ok := schema["properties"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("properties = %#v, want map", schema["properties"])
+	}
+	limit, ok := props["limit"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("limit property = %#v, want map", props["limit"])
+	}
+	if !reflect.DeepEqual(limit["type"], []string{"integer", "null"}) {
+		t.Fatalf("limit type = %#v, want nullable integer", limit["type"])
+	}
+}
+
+func TestGenerateStrictJSONSchemaKeepsOptionalNestedStructNullable(t *testing.T) {
+	type filters struct {
+		Status string `json:"status"`
+	}
+	type request struct {
+		Filters *filters `json:"filters,omitempty"`
+	}
+
+	schema := GenerateStrictJSONSchema(reflect.TypeOf(request{}))
+
+	props := schema["properties"].(map[string]interface{})
+	filtersSchema, ok := props["filters"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("filters property = %#v, want map", props["filters"])
+	}
+	if !reflect.DeepEqual(filtersSchema["type"], []string{"object", "null"}) {
+		t.Fatalf("filters type = %#v, want nullable object", filtersSchema["type"])
+	}
+	if filtersSchema["additionalProperties"] != false {
+		t.Fatalf("filters additionalProperties = %#v, want false", filtersSchema["additionalProperties"])
+	}
+	nestedRequired, ok := filtersSchema["required"].([]string)
+	if !ok || !reflect.DeepEqual(nestedRequired, []string{"status"}) {
+		t.Fatalf("filters required = %#v, want status required", filtersSchema["required"])
+	}
+}

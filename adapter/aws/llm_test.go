@@ -1,11 +1,30 @@
 package aws
 
 import (
+	"context"
 	"testing"
 
 	awstypes "github.com/aws/aws-sdk-go-v2/service/bedrockruntime/types"
 	"github.com/cavos-io/conversation-worker/core/llm"
 )
+
+type awsRequestTestTool struct{}
+
+func (awsRequestTestTool) ID() string          { return "lookup" }
+func (awsRequestTestTool) Name() string        { return "lookup" }
+func (awsRequestTestTool) Description() string { return "look up information" }
+func (awsRequestTestTool) Parameters() map[string]any {
+	return map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"query": map[string]any{"type": "string"},
+		},
+		"required": []string{"query"},
+	}
+}
+func (awsRequestTestTool) Execute(context.Context, string) (string, error) {
+	return "", nil
+}
 
 func TestBuildAWSMessagesGroupsToolCallsWithOutputs(t *testing.T) {
 	ctx := llm.NewChatContext()
@@ -60,6 +79,40 @@ func TestBuildAWSMessagesFiltersUnmatchedToolItems(t *testing.T) {
 		t.Fatalf("role = %q, want user", messages[0].Role)
 	}
 	assertTextBlock(t, messages[0].Content, 0, "hello")
+}
+
+func TestBuildAWSToolConfigMapsNamedToolChoice(t *testing.T) {
+	config := buildAWSToolConfig(&llm.ChatOptions{
+		Tools: []llm.Tool{awsRequestTestTool{}},
+		ToolChoice: map[string]any{
+			"type": "function",
+			"function": map[string]any{
+				"name": "lookup",
+			},
+		},
+	})
+
+	if config == nil {
+		t.Fatalf("tool config is nil")
+	}
+	choice, ok := config.ToolChoice.(*awstypes.ToolChoiceMemberTool)
+	if !ok {
+		t.Fatalf("ToolChoice = %T, want tool member", config.ToolChoice)
+	}
+	if choice.Value.Name == nil || *choice.Value.Name != "lookup" {
+		t.Fatalf("ToolChoice name = %#v, want lookup", choice.Value.Name)
+	}
+}
+
+func TestBuildAWSToolConfigDropsToolsForNoneChoice(t *testing.T) {
+	config := buildAWSToolConfig(&llm.ChatOptions{
+		Tools:      []llm.Tool{awsRequestTestTool{}},
+		ToolChoice: "none",
+	})
+
+	if config != nil {
+		t.Fatalf("tool config = %#v, want nil", config)
+	}
 }
 
 func TestBuildAWSMessagesCollectsSystemText(t *testing.T) {

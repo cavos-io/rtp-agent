@@ -71,6 +71,7 @@ func buildOpenAIChatCompletionRequest(model string, chatCtx *llm.ChatContext, op
 			Function: &openai.FunctionDefinition{
 				Name:        tool.Name(),
 				Description: tool.Description(),
+				Strict:      true,
 				Parameters:  json.RawMessage(params),
 			},
 		})
@@ -85,15 +86,40 @@ func buildOpenAIChatCompletionRequest(model string, chatCtx *llm.ChatContext, op
 	}
 
 	if options.ToolChoice != nil {
-		if str, ok := options.ToolChoice.(string); ok {
-			req.ToolChoice = str
-		} else if tc, ok := options.ToolChoice.(openai.ToolChoice); ok {
-			req.ToolChoice = tc
+		if toolChoice := buildOpenAIToolChoice(options.ToolChoice); toolChoice != nil {
+			req.ToolChoice = toolChoice
 		}
 	}
 
 	applyOpenAIExtraParams(&req, options.ExtraParams)
 	return req
+}
+
+func buildOpenAIToolChoice(choice llm.ToolChoice) any {
+	switch tc := choice.(type) {
+	case string:
+		return tc
+	case openai.ToolChoice:
+		return tc
+	case map[string]any:
+		if tc["type"] != "function" {
+			return nil
+		}
+		function, ok := tc["function"].(map[string]any)
+		if !ok {
+			return nil
+		}
+		name, ok := function["name"].(string)
+		if !ok || name == "" {
+			return nil
+		}
+		return openai.ToolChoice{
+			Type:     openai.ToolTypeFunction,
+			Function: openai.ToolFunction{Name: name},
+		}
+	default:
+		return nil
+	}
 }
 
 func applyOpenAIExtraParams(req *openai.ChatCompletionRequest, params map[string]any) {

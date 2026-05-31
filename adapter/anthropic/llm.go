@@ -76,17 +76,17 @@ func (l *AnthropicLLM) Chat(ctx context.Context, chatCtx *llm.ChatContext, opts 
 				})
 			} else {
 				tools = append(tools, map[string]interface{}{
-					"name":        tool.Name(),
-					"description": tool.Description(),
-					"input_schema": map[string]interface{}{
-						"type":       "object",
-						"properties": tool.Parameters()["properties"],
-						"required":   tool.Parameters()["required"],
-					},
+					"name":         tool.Name(),
+					"description":  tool.Description(),
+					"input_schema": tool.Parameters(),
+					"strict":       true,
 				})
 			}
 		}
 		body["tools"] = tools
+	}
+	if toolChoice := buildAnthropicToolChoice(options.ToolChoice, options.ParallelToolCalls); toolChoice != nil {
+		body["tool_choice"] = toolChoice
 	}
 
 	jsonBody, _ := json.Marshal(body)
@@ -114,6 +114,39 @@ func (l *AnthropicLLM) Chat(ctx context.Context, chatCtx *llm.ChatContext, opts 
 		resp:   resp,
 		reader: bufio.NewReader(resp.Body),
 	}, nil
+}
+
+func buildAnthropicToolChoice(choice llm.ToolChoice, parallelToolCalls bool) map[string]any {
+	var toolChoice map[string]any
+	switch tc := choice.(type) {
+	case string:
+		switch tc {
+		case "auto":
+			toolChoice = map[string]any{"type": "auto"}
+		case "required":
+			toolChoice = map[string]any{"type": "any"}
+		case "none":
+			return nil
+		}
+	case map[string]any:
+		if tc["type"] != "function" {
+			return nil
+		}
+		function, ok := tc["function"].(map[string]any)
+		if !ok {
+			return nil
+		}
+		name, ok := function["name"].(string)
+		if !ok || name == "" {
+			return nil
+		}
+		toolChoice = map[string]any{"type": "tool", "name": name}
+	}
+	if toolChoice == nil {
+		return nil
+	}
+	toolChoice["disable_parallel_tool_use"] = !parallelToolCalls
+	return toolChoice
 }
 
 type anthropicStream struct {

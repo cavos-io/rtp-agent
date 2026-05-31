@@ -1,11 +1,31 @@
 package google
 
 import (
+	"context"
 	"testing"
 
 	"github.com/cavos-io/conversation-worker/core/llm"
 	"google.golang.org/genai"
 )
+
+type googleRequestTestTool struct{}
+
+func (googleRequestTestTool) ID() string          { return "lookup" }
+func (googleRequestTestTool) Name() string        { return "lookup" }
+func (googleRequestTestTool) Description() string { return "look up information" }
+func (googleRequestTestTool) Parameters() map[string]any {
+	return map[string]any{
+		"type":                 "object",
+		"additionalProperties": false,
+		"properties": map[string]any{
+			"query": map[string]any{"type": "string"},
+		},
+		"required": []string{"query"},
+	}
+}
+func (googleRequestTestTool) Execute(context.Context, string) (string, error) {
+	return "", nil
+}
 
 func TestBuildGoogleContentsGroupsToolCallsWithResponses(t *testing.T) {
 	ctx := llm.NewChatContext()
@@ -96,6 +116,53 @@ func TestBuildGoogleContentsInjectsDummyUserAfterModelTurn(t *testing.T) {
 		t.Fatalf("second role = %q, want dummy user", contents[1].Role)
 	}
 	assertGoogleTextPart(t, contents[1].Parts, 0, ".")
+}
+
+func TestBuildGoogleFunctionDeclarationKeepsStringRequiredFields(t *testing.T) {
+	declaration := buildGoogleFunctionDeclaration(googleRequestTestTool{})
+
+	if declaration.Name != "lookup" {
+		t.Fatalf("Name = %q, want lookup", declaration.Name)
+	}
+	if declaration.Parameters == nil {
+		t.Fatalf("Parameters is nil")
+	}
+	if len(declaration.Parameters.Required) != 1 || declaration.Parameters.Required[0] != "query" {
+		t.Fatalf("Required = %#v, want query", declaration.Parameters.Required)
+	}
+	if declaration.Parameters.Properties["query"] == nil {
+		t.Fatalf("query property missing: %#v", declaration.Parameters.Properties)
+	}
+}
+
+func TestBuildGoogleToolConfigMapsNamedToolChoice(t *testing.T) {
+	config := buildGoogleToolConfig([]llm.Tool{googleRequestTestTool{}}, map[string]any{
+		"type": "function",
+		"function": map[string]any{
+			"name": "lookup",
+		},
+	})
+
+	if config == nil || config.FunctionCallingConfig == nil {
+		t.Fatalf("tool config = %#v, want function calling config", config)
+	}
+	if config.FunctionCallingConfig.Mode != genai.FunctionCallingConfigModeAny {
+		t.Fatalf("mode = %q, want ANY", config.FunctionCallingConfig.Mode)
+	}
+	if len(config.FunctionCallingConfig.AllowedFunctionNames) != 1 || config.FunctionCallingConfig.AllowedFunctionNames[0] != "lookup" {
+		t.Fatalf("allowed names = %#v, want lookup", config.FunctionCallingConfig.AllowedFunctionNames)
+	}
+}
+
+func TestBuildGoogleToolConfigMapsNoneToolChoice(t *testing.T) {
+	config := buildGoogleToolConfig([]llm.Tool{googleRequestTestTool{}}, "none")
+
+	if config == nil || config.FunctionCallingConfig == nil {
+		t.Fatalf("tool config = %#v, want function calling config", config)
+	}
+	if config.FunctionCallingConfig.Mode != genai.FunctionCallingConfigModeNone {
+		t.Fatalf("mode = %q, want NONE", config.FunctionCallingConfig.Mode)
+	}
 }
 
 func assertGoogleTextPart(t *testing.T, parts []*genai.Part, index int, want string) {

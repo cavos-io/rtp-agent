@@ -7,8 +7,8 @@ import (
 
 // GenerateStrictJSONSchema inspects a Go function or struct to generate
 // an OpenAI-compatible "strict" JSON schema.
-// It enforces additionalProperties: false and makes all fields required
-// by default, unless optional tags are provided.
+// It enforces additionalProperties: false and makes all fields required.
+// Optional tags are represented by adding null to the field's type.
 func GenerateStrictJSONSchema(t reflect.Type) map[string]interface{} {
 	if t.Kind() == reflect.Ptr {
 		t = t.Elem()
@@ -49,11 +49,9 @@ func GenerateStrictJSONSchema(t reflect.Type) map[string]interface{} {
 
 		props[name] = propSchema
 
-		// If omitempty is NOT present in the json tag, the field is required
-		if !strings.Contains(jsonTag, "omitempty") {
-			req = append(req, name)
-		} else {
-			// For strict mode, optional fields must be union types with "null"
+		req = append(req, name)
+
+		if strings.Contains(jsonTag, "omitempty") {
 			if typeArr, ok := propSchema["type"].([]string); ok {
 				foundNull := false
 				for _, t := range typeArr {
@@ -91,13 +89,13 @@ func goTypeToJSONSchema(t reflect.Type, description string) map[string]interface
 			structSchema := GenerateStrictJSONSchema(t.Elem())
 			// This is a simplification; a more correct representation might use "oneOf"
 			// but for many LLMs this is sufficient.
-			return structSchema 
+			return structSchema
 		} else if t.Elem().Kind() == reflect.Slice || t.Elem().Kind() == reflect.Array {
 			schema["items"] = goTypeToJSONSchema(t.Elem().Elem(), "")
 		}
 		return schema
 	}
-	
+
 	schema["type"] = goKindToJSONType(t.Kind())
 
 	switch t.Kind() {
