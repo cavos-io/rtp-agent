@@ -4,6 +4,9 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/cavos-io/conversation-worker/core/agent"
 )
 
 func TestRecordInputsToolRejectsInvalidDtmfEvents(t *testing.T) {
@@ -49,5 +52,25 @@ func TestBuildDtmfConfirmationInstructionsMatchesReferencePrompt(t *testing.T) {
 	}
 	if !strings.Contains(got, "call `confirm_inputs`") {
 		t.Fatalf("confirmation instructions = %q, want confirm_inputs tool instruction", got)
+	}
+}
+
+func TestGetDtmfTaskCompletesFromSessionSipDTMFEvents(t *testing.T) {
+	task := NewGetDtmfTask(2, false)
+	session := agent.NewAgentSession(task, nil, agent.AgentSessionOptions{})
+	task.Agent.Start(session, task)
+	defer task.Agent.GetActivity().Stop()
+
+	session.EmitSipDTMF(agent.SipDTMFEvent{Digit: "1", Code: 1})
+	session.EmitSipDTMF(agent.SipDTMFEvent{Digit: "2", Code: 2})
+	session.EmitSipDTMF(agent.SipDTMFEvent{Digit: "#", Code: 11})
+
+	select {
+	case result := <-task.Result:
+		if result.UserInput != "1 2" {
+			t.Fatalf("UserInput = %q, want 1 2", result.UserInput)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for DTMF task completion")
 	}
 }

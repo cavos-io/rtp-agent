@@ -27,6 +27,7 @@ type GetDtmfTask struct {
 	dtmfReplyRunning   bool
 	mu                 sync.Mutex
 	timer              *time.Timer
+	dtmfStopCh         chan struct{}
 }
 
 func NewGetDtmfTask(numDigits int, askConfirmation bool) *GetDtmfTask {
@@ -59,19 +60,37 @@ user will directly say the digits to you. You should be able to handle both case
 }
 
 func (t *GetDtmfTask) OnEnter() {
-	agentObj := t.Agent.GetAgent()
-	if agentObj == nil {
+	activity := t.Agent.GetActivity()
+	if activity == nil || activity.Session == nil {
 		return
 	}
 
-	// Assuming session is available via some mechanism in real Start
-	// For parity, we should register for SIP DTMF
+	stopCh := make(chan struct{})
+	t.mu.Lock()
+	t.dtmfStopCh = stopCh
+	t.mu.Unlock()
+
+	events := activity.Session.SipDTMFEvents()
+	go func() {
+		for {
+			select {
+			case <-stopCh:
+				return
+			case ev := <-events:
+				t.onSipDTMFReceived(ev.Digit)
+			}
+		}
+	}()
 }
 
 func (t *GetDtmfTask) OnExit() {
 	t.mu.Lock()
 	if t.timer != nil {
 		t.timer.Stop()
+	}
+	if t.dtmfStopCh != nil {
+		close(t.dtmfStopCh)
+		t.dtmfStopCh = nil
 	}
 	t.mu.Unlock()
 }

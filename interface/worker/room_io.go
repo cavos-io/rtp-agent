@@ -161,7 +161,23 @@ func roomIOPreConnectAudioTimeout(opts RoomOptions) time.Duration {
 func (rio *RoomIO) GetCallback() *lksdk.RoomCallback {
 	cb := lksdk.NewRoomCallback()
 	cb.OnTrackSubscribed = rio.onTrackSubscribed
+	cb.OnDataPacket = rio.onDataPacket
 	return cb
+}
+
+func (rio *RoomIO) onDataPacket(data lksdk.DataPacket, params lksdk.DataReceiveParams) {
+	if rio == nil || rio.AgentSession == nil {
+		return
+	}
+	dtmf, ok := data.(*livekit.SipDTMF)
+	if !ok {
+		return
+	}
+	rio.AgentSession.EmitSipDTMF(agent.SipDTMFEvent{
+		Digit:          dtmf.Digit,
+		Code:           dtmf.Code,
+		SenderIdentity: params.SenderIdentity,
+	})
 }
 
 func (rio *RoomIO) Start(ctx context.Context) error {

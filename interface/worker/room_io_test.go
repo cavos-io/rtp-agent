@@ -86,3 +86,28 @@ func TestRoomIOCloseUnregistersPreConnectAudioHandler(t *testing.T) {
 		t.Fatalf("RegisterByteStreamHandler after RoomIO.Close() error = %v, want nil", err)
 	}
 }
+
+func TestRoomIOCallbackForwardsSipDTMFToSession(t *testing.T) {
+	session := &agent.AgentSession{}
+	rio := &RoomIO{AgentSession: session}
+	cb := rio.GetCallback()
+
+	cb.OnDataPacket(&livekit.SipDTMF{Digit: "#", Code: 11}, lksdk.DataReceiveParams{
+		SenderIdentity: "caller",
+	})
+
+	select {
+	case ev := <-session.SipDTMFEvents():
+		if ev.Digit != "#" {
+			t.Fatalf("SipDTMFEvent.Digit = %q, want #", ev.Digit)
+		}
+		if ev.Code != 11 {
+			t.Fatalf("SipDTMFEvent.Code = %d, want 11", ev.Code)
+		}
+		if ev.SenderIdentity != "caller" {
+			t.Fatalf("SipDTMFEvent.SenderIdentity = %q, want caller", ev.SenderIdentity)
+		}
+	default:
+		t.Fatal("session did not receive SIP DTMF event")
+	}
+}
