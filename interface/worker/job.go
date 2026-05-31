@@ -473,10 +473,14 @@ func (c *JobContext) DeleteRoom(ctx context.Context, roomName string) (*livekit.
 }
 
 // AddSIPParticipant adds a SIP participant to the room.
-func (c *JobContext) AddSIPParticipant(ctx context.Context, callTo string, trunkID string, identity string, name string) (*livekit.SIPParticipantInfo, error) {
+func (c *JobContext) AddSIPParticipant(ctx context.Context, callTo string, trunkID string, identity string, names ...string) (*livekit.SIPParticipantInfo, error) {
 	if c.IsFakeJob() {
 		logger.Logger.Warnw("job context AddSIPParticipant is skipped for fake jobs", nil)
 		return &livekit.SIPParticipantInfo{}, nil
+	}
+	name := ""
+	if len(names) > 0 {
+		name = names[0]
 	}
 	client := lksdk.NewSIPClient(c.url, c.apiKey, c.apiSecret)
 	return client.CreateSIPParticipant(ctx, c.createSIPParticipantRequest(callTo, trunkID, identity, name))
@@ -496,11 +500,11 @@ func (c *JobContext) createSIPParticipantRequest(callTo string, trunkID string, 
 }
 
 // TransferSIPParticipant transfers a SIP participant to another number.
-func (c *JobContext) TransferSIPParticipant(ctx context.Context, identity string, transferTo string, playDialtone bool) error {
-	return c.TransferSIPParticipantByParticipant(ctx, identity, transferTo, playDialtone)
+func (c *JobContext) TransferSIPParticipant(ctx context.Context, identity string, transferTo string, playDialtones ...bool) error {
+	return c.TransferSIPParticipantByParticipant(ctx, identity, transferTo, playDialtones...)
 }
 
-func (c *JobContext) TransferSIPParticipantByParticipant(ctx context.Context, participant any, transferTo string, playDialtone bool) error {
+func (c *JobContext) TransferSIPParticipantByParticipant(ctx context.Context, participant any, transferTo string, playDialtones ...bool) error {
 	if c.IsFakeJob() {
 		logger.Logger.Warnw("job context TransferSIPParticipant is skipped for fake jobs", nil)
 		return nil
@@ -508,6 +512,10 @@ func (c *JobContext) TransferSIPParticipantByParticipant(ctx context.Context, pa
 	identity, err := transferSIPParticipantIdentity(participant)
 	if err != nil {
 		return err
+	}
+	playDialtone := false
+	if len(playDialtones) > 0 {
+		playDialtone = playDialtones[0]
 	}
 	client := lksdk.NewSIPClient(c.url, c.apiKey, c.apiSecret)
 	_, err = client.TransferSIPParticipant(ctx, c.transferSIPParticipantRequest(identity, transferTo, playDialtone))

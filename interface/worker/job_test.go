@@ -743,7 +743,17 @@ func TestLocalJobContextSkipsDestructiveLiveKitAPIs(t *testing.T) {
 		t.Fatal("AddSIPParticipant() info = nil, want empty info")
 	}
 
+	if info, err := ctx.AddSIPParticipant(context.Background(), "+15551234567", "trunk", "sip-user"); err != nil {
+		t.Fatalf("AddSIPParticipant() with default name error = %v", err)
+	} else if info == nil {
+		t.Fatal("AddSIPParticipant() with default name info = nil, want empty info")
+	}
+
 	if err := ctx.TransferSIPParticipant(context.Background(), "sip-user", "+15557654321", false); err != nil {
 		t.Fatalf("TransferSIPParticipant() error = %v", err)
+	}
+
+	if err := ctx.TransferSIPParticipant(context.Background(), "sip-user", "+15557654321"); err != nil {
+		t.Fatalf("TransferSIPParticipant() with default dialtone error = %v", err)
 	}
 }
