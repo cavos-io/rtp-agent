@@ -3,7 +3,9 @@ package worker
 import (
 	"context"
 	"reflect"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/livekit/protocol/auth"
 	"github.com/livekit/protocol/livekit"
@@ -222,6 +224,190 @@ func TestJobContextRunDefaultParticipantEntrypointsSkipsAgentParticipants(t *tes
 	}
 }
 
+type fakeParticipantView struct {
+	sid        string
+	identity   string
+	name       string
+	kind       lksdk.ParticipantKind
+	metadata   string
+	attributes map[string]string
+}
+
+func (p fakeParticipantView) SID() string                   { return p.sid }
+func (p fakeParticipantView) Identity() string              { return p.identity }
+func (p fakeParticipantView) Name() string                  { return p.name }
+func (p fakeParticipantView) Kind() lksdk.ParticipantKind   { return p.kind }
+func (p fakeParticipantView) Metadata() string              { return p.metadata }
+func (p fakeParticipantView) Attributes() map[string]string { return p.attributes }
+
+func TestParticipantInfoFromRemoteParticipantCopiesJoinFields(t *testing.T) {
+	info := participantInfoFromRemoteParticipant(fakeParticipantView{
+		sid:      "PA_sip",
+		identity: "caller",
+		name:     "SIP Caller",
+		kind:     lksdk.ParticipantSIP,
+		metadata: "metadata",
+		attributes: map[string]string{
+			"phone": "+15551234567",
+		},
+	})
+
+	if info.Sid != "PA_sip" {
+		t.Fatalf("ParticipantInfo.Sid = %q, want PA_sip", info.Sid)
+	}
+	if info.Identity != "caller" {
+		t.Fatalf("ParticipantInfo.Identity = %q, want caller", info.Identity)
+	}
+	if info.Name != "SIP Caller" {
+		t.Fatalf("ParticipantInfo.Name = %q, want SIP Caller", info.Name)
+	}
+	if info.Kind != livekit.ParticipantInfo_SIP {
+		t.Fatalf("ParticipantInfo.Kind = %v, want SIP", info.Kind)
+	}
+	if info.Metadata != "metadata" {
+		t.Fatalf("ParticipantInfo.Metadata = %q, want metadata", info.Metadata)
+	}
+	if info.Attributes["phone"] != "+15551234567" {
+		t.Fatalf("ParticipantInfo.Attributes[phone] = %q, want +15551234567", info.Attributes["phone"])
+	}
+}
+
+func TestParticipantInfoFromRemoteParticipantCopiesAttributes(t *testing.T) {
+	attrs := map[string]string{"tier": "gold"}
+	info := participantInfoFromRemoteParticipant(fakeParticipantView{attributes: attrs})
+	attrs["tier"] = "platinum"
+
+	if info.Attributes["tier"] != "gold" {
+		t.Fatalf("ParticipantInfo attributes were not copied, got %q", info.Attributes["tier"])
+	}
+}
+
+func TestJobContextRoomCallbackWithEntrypointsPreservesExistingParticipantCallback(t *testing.T) {
+	ctx := NewJobContext(&livekit.Job{Id: "job_callback"}, "", "", "")
+	called := false
+	cb := ctx.roomCallbackWithEntrypoints(&lksdk.RoomCallback{
+		OnParticipantConnected: func(*lksdk.RemoteParticipant) {
+			called = true
+		},
+	})
+
+	cb.OnParticipantConnected(nil)
+
+	if !called {
+		t.Fatal("OnParticipantConnected callback was not preserved")
+	}
+}
+
+func TestJobContextParticipantAvailableRunsMatchingEntrypoints(t *testing.T) {
+	ctx := NewJobContext(&livekit.Job{Id: "job_participant_available"}, "", "", "")
+	calls := make(chan string, 1)
+	if err := ctx.AddParticipantEntrypoint(func(_ *JobContext, p *livekit.ParticipantInfo) {
+		calls <- p.Identity
+	}); err != nil {
+		t.Fatalf("AddParticipantEntrypoint() error = %v", err)
+	}
+
+	ctx.participantAvailable(fakeParticipantView{
+		identity: "caller",
+		kind:     lksdk.ParticipantSIP,
+	})
+
+	select {
+	case got := <-calls:
+		if got != "caller" {
+			t.Fatalf("participant entrypoint call = %q, want caller", got)
+		}
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("participant entrypoint was not called")
+	}
+}
+
+func TestJobContextParticipantAvailableDoesNotBlockOnEntrypoints(t *testing.T) {
+	ctx := NewJobContext(&livekit.Job{Id: "job_participant_available_async"}, "", "", "")
+	block := make(chan struct{})
+	defer close(block)
+	secondCalled := make(chan struct{}, 1)
+	if err := ctx.AddParticipantEntrypoint(func(*JobContext, *livekit.ParticipantInfo) {
+		<-block
+	}, livekit.ParticipantInfo_SIP); err != nil {
+		t.Fatalf("AddParticipantEntrypoint(blocking) error = %v", err)
+	}
+	if err := ctx.AddParticipantEntrypoint(func(*JobContext, *livekit.ParticipantInfo) {
+		secondCalled <- struct{}{}
+	}, livekit.ParticipantInfo_SIP); err != nil {
+		t.Fatalf("AddParticipantEntrypoint(second) error = %v", err)
+	}
+
+	ctx.participantAvailable(fakeParticipantView{
+		identity: "caller",
+		kind:     lksdk.ParticipantSIP,
+	})
+
+	select {
+	case <-secondCalled:
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("second participant entrypoint was blocked by the first")
+	}
+}
+
+func TestJobContextParticipantsAvailableReplaysExistingParticipants(t *testing.T) {
+	ctx := NewJobContext(&livekit.Job{Id: "job_existing_participants"}, "", "", "")
+	calls := make(chan string, 2)
+	if err := ctx.AddParticipantEntrypoint(func(_ *JobContext, p *livekit.ParticipantInfo) {
+		calls <- p.Identity
+	}); err != nil {
+		t.Fatalf("AddParticipantEntrypoint() error = %v", err)
+	}
+
+	ctx.participantsAvailable([]remoteParticipantView{
+		fakeParticipantView{identity: "agent-a", kind: lksdk.ParticipantAgent},
+		fakeParticipantView{identity: "caller-a", kind: lksdk.ParticipantSIP},
+		fakeParticipantView{identity: "caller-b", kind: lksdk.ParticipantStandard},
+	})
+
+	got := map[string]bool{}
+	for range 2 {
+		select {
+		case identity := <-calls:
+			got[identity] = true
+		case <-time.After(500 * time.Millisecond):
+			t.Fatalf("participant entrypoint calls = %#v, want caller-a and caller-b", got)
+		}
+	}
+	if !got["caller-a"] || !got["caller-b"] {
+		t.Fatalf("participant entrypoint calls = %#v, want caller-a and caller-b", got)
+	}
+}
+
+func TestJobContextWaitForParticipantConnectsBeforeWaiting(t *testing.T) {
+	ctx := NewJobContext(
+		&livekit.Job{Id: "job_wait_connect", Room: &livekit.Room{Name: "room-a"}},
+		"://invalid-url",
+		"key",
+		"secret",
+	)
+
+	_, err := ctx.WaitForParticipant(context.Background(), "")
+	if err == nil {
+		t.Fatal("WaitForParticipant() error = nil, want connection error")
+	}
+	if strings.Contains(err.Error(), "room is nil") {
+		t.Fatalf("WaitForParticipant() error = %q, want Connect error before utility wait", err)
+	}
+}
+
+func TestJobContextDefaultParticipantWaitKindsMatchReference(t *testing.T) {
+	got := defaultParticipantWaitKinds(nil)
+	want := []livekit.ParticipantInfo_Kind{
+		livekit.ParticipantInfo_CONNECTOR,
+		livekit.ParticipantInfo_SIP,
+		livekit.ParticipantInfo_STANDARD,
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("default participant wait kinds = %#v, want %#v", got, want)
+	}
+}
+
 func TestJobContextRoomInfoReturnsJobRoom(t *testing.T) {
 	room := &livekit.Room{Name: "room-a", Sid: "RM_a"}
 	ctx := NewJobContext(&livekit.Job{Id: "job_room", Room: room}, "", "", "")
@@ -361,6 +547,105 @@ func TestJobRequestAccessorsExposeJobFields(t *testing.T) {
 	}
 	if got := req.AgentName(); got != "agent-a" {
 		t.Fatalf("AgentName() = %q, want agent-a", got)
+	}
+}
+
+func TestJobContextCreateSIPParticipantRequestUsesReferenceDefaultName(t *testing.T) {
+	ctx := NewJobContext(
+		&livekit.Job{Id: "job_sip", Room: &livekit.Room{Name: "room-a"}},
+		"",
+		"",
+		"",
+	)
+
+	req := ctx.createSIPParticipantRequest("+15551234567", "trunk-a", "caller-a", "")
+
+	if req.RoomName != "room-a" {
+		t.Fatalf("CreateSIPParticipantRequest.RoomName = %q, want room-a", req.RoomName)
+	}
+	if req.ParticipantIdentity != "caller-a" {
+		t.Fatalf("CreateSIPParticipantRequest.ParticipantIdentity = %q, want caller-a", req.ParticipantIdentity)
+	}
+	if req.SipTrunkId != "trunk-a" {
+		t.Fatalf("CreateSIPParticipantRequest.SipTrunkId = %q, want trunk-a", req.SipTrunkId)
+	}
+	if req.SipCallTo != "+15551234567" {
+		t.Fatalf("CreateSIPParticipantRequest.SipCallTo = %q, want +15551234567", req.SipCallTo)
+	}
+	if req.ParticipantName != "SIP-participant" {
+		t.Fatalf("CreateSIPParticipantRequest.ParticipantName = %q, want SIP-participant", req.ParticipantName)
+	}
+}
+
+func TestJobContextCreateSIPParticipantRequestPreservesExplicitName(t *testing.T) {
+	ctx := NewJobContext(
+		&livekit.Job{Id: "job_sip", Room: &livekit.Room{Name: "room-a"}},
+		"",
+		"",
+		"",
+	)
+
+	req := ctx.createSIPParticipantRequest("+15551234567", "trunk-a", "caller-a", "SIP Caller")
+
+	if req.ParticipantName != "SIP Caller" {
+		t.Fatalf("CreateSIPParticipantRequest.ParticipantName = %q, want SIP Caller", req.ParticipantName)
+	}
+}
+
+func TestJobContextTransferSIPParticipantRequestMatchesReferenceFields(t *testing.T) {
+	ctx := NewJobContext(
+		&livekit.Job{Id: "job_sip_transfer", Room: &livekit.Room{Name: "room-a"}},
+		"",
+		"",
+		"",
+	)
+
+	req := ctx.transferSIPParticipantRequest("caller-a", "+15557654321", true)
+
+	if req.RoomName != "room-a" {
+		t.Fatalf("TransferSIPParticipantRequest.RoomName = %q, want room-a", req.RoomName)
+	}
+	if req.ParticipantIdentity != "caller-a" {
+		t.Fatalf("TransferSIPParticipantRequest.ParticipantIdentity = %q, want caller-a", req.ParticipantIdentity)
+	}
+	if req.TransferTo != "+15557654321" {
+		t.Fatalf("TransferSIPParticipantRequest.TransferTo = %q, want +15557654321", req.TransferTo)
+	}
+	if !req.PlayDialtone {
+		t.Fatal("TransferSIPParticipantRequest.PlayDialtone = false, want true")
+	}
+}
+
+func TestTransferSIPParticipantIdentityAcceptsString(t *testing.T) {
+	identity, err := transferSIPParticipantIdentity("caller-a")
+	if err != nil {
+		t.Fatalf("transferSIPParticipantIdentity(string) error = %v", err)
+	}
+	if identity != "caller-a" {
+		t.Fatalf("transferSIPParticipantIdentity(string) = %q, want caller-a", identity)
+	}
+}
+
+func TestTransferSIPParticipantIdentityAcceptsSIPParticipant(t *testing.T) {
+	identity, err := transferSIPParticipantIdentity(fakeParticipantView{
+		identity: "caller-a",
+		kind:     lksdk.ParticipantSIP,
+	})
+	if err != nil {
+		t.Fatalf("transferSIPParticipantIdentity(SIP participant) error = %v", err)
+	}
+	if identity != "caller-a" {
+		t.Fatalf("transferSIPParticipantIdentity(SIP participant) = %q, want caller-a", identity)
+	}
+}
+
+func TestTransferSIPParticipantIdentityRejectsNonSIPParticipant(t *testing.T) {
+	_, err := transferSIPParticipantIdentity(fakeParticipantView{
+		identity: "agent-a",
+		kind:     lksdk.ParticipantAgent,
+	})
+	if err == nil {
+		t.Fatal("transferSIPParticipantIdentity(agent participant) error = nil, want error")
 	}
 }
 
