@@ -225,6 +225,44 @@ func TestChatContextLookupByID(t *testing.T) {
 	}
 }
 
+func TestChatContextTruncateOnlyDropsLeadingFunctionItems(t *testing.T) {
+	ctx := NewChatContext()
+	ctx.Items = []ChatItem{
+		&ChatMessage{ID: "system", Role: ChatRoleSystem, Content: []ChatContent{{Text: "instructions"}}},
+		&ChatMessage{ID: "old", Role: ChatRoleUser, Content: []ChatContent{{Text: "old"}}},
+		&AgentConfigUpdate{ID: "config"},
+		&FunctionCall{ID: "call", CallID: "call_lookup", Name: "lookup"},
+		&FunctionCallOutput{ID: "output", CallID: "call_lookup", Name: "lookup", Output: "ok"},
+		&ChatMessage{ID: "user", Role: ChatRoleUser, Content: []ChatContent{{Text: "hello"}}},
+	}
+
+	truncated := ctx.Truncate(4)
+
+	if truncated != ctx {
+		t.Fatalf("Truncate() = %p, want original context %p", truncated, ctx)
+	}
+	if got, want := itemIDs(ctx.Items), "system,config,call,output,user"; got != want {
+		t.Fatalf("Truncate() item IDs = %q, want %q", got, want)
+	}
+}
+
+func TestChatContextTruncateDropsLeadingFunctionSequence(t *testing.T) {
+	ctx := NewChatContext()
+	ctx.Items = []ChatItem{
+		&ChatMessage{ID: "system", Role: ChatRoleSystem, Content: []ChatContent{{Text: "instructions"}}},
+		&ChatMessage{ID: "old", Role: ChatRoleUser, Content: []ChatContent{{Text: "old"}}},
+		&FunctionCall{ID: "call", CallID: "call_lookup", Name: "lookup"},
+		&FunctionCallOutput{ID: "output", CallID: "call_lookup", Name: "lookup", Output: "ok"},
+		&ChatMessage{ID: "user", Role: ChatRoleUser, Content: []ChatContent{{Text: "hello"}}},
+	}
+
+	ctx.Truncate(3)
+
+	if got, want := itemIDs(ctx.Items), "system,user"; got != want {
+		t.Fatalf("Truncate() item IDs = %q, want %q", got, want)
+	}
+}
+
 func TestChatContextToOpenAIProviderFormatGroupsToolCallsWithOutputs(t *testing.T) {
 	ctx := NewChatContext()
 	groupID := "assistant-turn"

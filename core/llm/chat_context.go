@@ -155,9 +155,9 @@ func (c *ChatContext) Messages() []*ChatMessage {
 	return msgs
 }
 
-func (c *ChatContext) Truncate(maxItems int) {
+func (c *ChatContext) Truncate(maxItems int) *ChatContext {
 	if len(c.Items) <= maxItems {
-		return
+		return c
 	}
 
 	var instructions ChatItem
@@ -170,12 +170,8 @@ func (c *ChatContext) Truncate(maxItems int) {
 
 	newItems := c.Items[len(c.Items)-maxItems:]
 
-	// Don't start with function calls to avoid partial sequences
-	for len(newItems) > 0 {
-		_, isMsg := newItems[0].(*ChatMessage)
-		if isMsg {
-			break
-		}
+	// Don't start with function calls to avoid partial sequences.
+	for len(newItems) > 0 && isFunctionChatItem(newItems[0]) {
 		newItems = newItems[1:]
 	}
 
@@ -193,6 +189,7 @@ func (c *ChatContext) Truncate(maxItems int) {
 	}
 
 	c.Items = newItems
+	return c
 }
 
 type ChatContextMergeOptions struct {
