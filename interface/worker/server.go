@@ -95,6 +95,7 @@ type WorkerOptions struct {
 	APISecret                       string
 	WorkerToken                     string
 	HTTPProxy                       string
+	DevMode                         bool
 	LoadThreshold                   float64
 	JobMemoryWarnMB                 float64
 	JobMemoryLimitMB                float64
@@ -438,6 +439,9 @@ func mergeWorkerOptions(current WorkerOptions, next WorkerOptions) WorkerOptions
 	if next.HTTPProxy != "" {
 		current.HTTPProxy = next.HTTPProxy
 	}
+	if next.DevMode {
+		current.DevMode = true
+	}
 	if next.LoadThreshold != 0 {
 		current.LoadThreshold = next.LoadThreshold
 	}
@@ -469,6 +473,9 @@ func mergeWorkerOptions(current WorkerOptions, next WorkerOptions) WorkerOptions
 }
 
 func resolveWorkerOptions(opts WorkerOptions) WorkerOptions {
+	if !opts.DevMode {
+		opts.DevMode = liveKitDevModeEnabled(os.Getenv("LIVEKIT_DEV_MODE"))
+	}
 	if opts.WorkerType == "" {
 		opts.WorkerType = WorkerTypeRoom
 	}
@@ -494,9 +501,13 @@ func resolveWorkerOptions(opts WorkerOptions) WorkerOptions {
 		opts.InitializeProcessTimeoutSeconds = defaultProcessTimeout
 	}
 	if opts.LoadThreshold == 0 {
-		opts.LoadThreshold = defaultLoadThreshold
+		if opts.DevMode {
+			opts.LoadThreshold = math.Inf(1)
+		} else {
+			opts.LoadThreshold = defaultLoadThreshold
+		}
 	}
-	if opts.NumIdleProcesses == 0 {
+	if opts.NumIdleProcesses == 0 && !opts.DevMode {
 		opts.NumIdleProcesses = defaultNumIdleProcesses()
 	}
 	if opts.Permissions == nil {
@@ -531,6 +542,15 @@ func resolveWorkerOptions(opts WorkerOptions) WorkerOptions {
 	}
 
 	return opts
+}
+
+func liveKitDevModeEnabled(value string) bool {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "1", "true", "t", "yes", "y", "on":
+		return true
+	default:
+		return false
+	}
 }
 
 func defaultNumIdleProcesses() int {

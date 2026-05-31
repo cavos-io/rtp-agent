@@ -126,6 +126,51 @@ func TestNewAgentServerUsesReferenceWorkerDefaults(t *testing.T) {
 	}
 }
 
+func TestNewAgentServerUsesReferenceDevModeDefaultsFromEnvironment(t *testing.T) {
+	t.Setenv("LIVEKIT_DEV_MODE", "1")
+
+	server := NewAgentServer(WorkerOptions{})
+
+	if !server.Options.DevMode {
+		t.Fatal("DevMode = false, want true from LIVEKIT_DEV_MODE")
+	}
+	if !math.IsInf(server.Options.LoadThreshold, 1) {
+		t.Fatalf("LoadThreshold = %v, want reference development default +Inf", server.Options.LoadThreshold)
+	}
+	if server.Options.NumIdleProcesses != 0 {
+		t.Fatalf("NumIdleProcesses = %d, want reference development default 0", server.Options.NumIdleProcesses)
+	}
+	if !server.availableForJob() {
+		t.Fatal("availableForJob() = false, want true with development infinite load threshold")
+	}
+}
+
+func TestNewAgentServerUsesReferenceDevModeDefaultsFromOptions(t *testing.T) {
+	server := NewAgentServer(WorkerOptions{DevMode: true})
+
+	if !math.IsInf(server.Options.LoadThreshold, 1) {
+		t.Fatalf("LoadThreshold = %v, want reference development default +Inf", server.Options.LoadThreshold)
+	}
+	if server.Options.NumIdleProcesses != 0 {
+		t.Fatalf("NumIdleProcesses = %d, want reference development default 0", server.Options.NumIdleProcesses)
+	}
+}
+
+func TestNewAgentServerKeepsExplicitDevModeCapacityOptions(t *testing.T) {
+	server := NewAgentServer(WorkerOptions{
+		DevMode:          true,
+		LoadThreshold:    0.5,
+		NumIdleProcesses: 2,
+	})
+
+	if server.Options.LoadThreshold != 0.5 {
+		t.Fatalf("LoadThreshold = %v, want explicit development value 0.5", server.Options.LoadThreshold)
+	}
+	if server.Options.NumIdleProcesses != 2 {
+		t.Fatalf("NumIdleProcesses = %d, want explicit development value 2", server.Options.NumIdleProcesses)
+	}
+}
+
 func TestNewAgentServerLoadsWorkerTokenFromEnvironment(t *testing.T) {
 	t.Setenv("LIVEKIT_WORKER_TOKEN", "env-worker-token")
 
