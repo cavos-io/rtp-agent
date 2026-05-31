@@ -47,64 +47,7 @@ func (l *OpenAILLM) Chat(ctx context.Context, chatCtx *llm.ChatContext, opts ...
 		opt(options)
 	}
 
-	messages := make([]openai.ChatCompletionMessage, 0, len(chatCtx.Items))
-	for _, item := range chatCtx.Items {
-		switch msg := item.(type) {
-		case *llm.ChatMessage:
-			oaMsg := openai.ChatCompletionMessage{
-				Role: string(msg.Role),
-			}
-			if len(msg.Content) == 1 && msg.Content[0].Text != "" {
-				oaMsg.Content = msg.Content[0].Text
-			} else {
-				parts := make([]openai.ChatMessagePart, 0, len(msg.Content))
-				for _, c := range msg.Content {
-					if c.Text != "" {
-						parts = append(parts, openai.ChatMessagePart{
-							Type: openai.ChatMessagePartTypeText,
-							Text: c.Text,
-						})
-					} else if c.Image != nil {
-						imageURL := ""
-						if str, ok := c.Image.Image.(string); ok {
-							imageURL = str
-						}
-						if imageURL != "" {
-							parts = append(parts, openai.ChatMessagePart{
-								Type: openai.ChatMessagePartTypeImageURL,
-								ImageURL: &openai.ChatMessageImageURL{
-									URL:    imageURL,
-									Detail: openai.ImageURLDetail(c.Image.InferenceDetail),
-								},
-							})
-						}
-					}
-				}
-				oaMsg.MultiContent = parts
-			}
-			messages = append(messages, oaMsg)
-		case *llm.FunctionCall:
-			messages = append(messages, openai.ChatCompletionMessage{
-				Role: openai.ChatMessageRoleAssistant,
-				ToolCalls: []openai.ToolCall{
-					{
-						ID:   msg.CallID,
-						Type: openai.ToolTypeFunction,
-						Function: openai.FunctionCall{
-							Name:      msg.Name,
-							Arguments: msg.Arguments,
-						},
-					},
-				},
-			})
-		case *llm.FunctionCallOutput:
-			messages = append(messages, openai.ChatCompletionMessage{
-				Role:       openai.ChatMessageRoleTool,
-				Content:    msg.Output,
-				ToolCallID: msg.CallID,
-			})
-		}
-	}
+	messages := buildOpenAIChatMessages(chatCtx)
 
 	tools := make([]openai.Tool, 0, len(options.Tools))
 	for _, tool := range options.Tools {
@@ -143,6 +86,185 @@ func (l *OpenAILLM) Chat(ctx context.Context, chatCtx *llm.ChatContext, opts ...
 	return &openaiStream{
 		stream: stream,
 	}, nil
+}
+
+func buildOpenAIChatMessages(chatCtx *llm.ChatContext) []openai.ChatCompletionMessage {
+	messages := make([]openai.ChatCompletionMessage, 0, len(chatCtx.Items))
+	for _, group := range groupOpenAIChatItems(chatCtx.Items) {
+		if group.message == nil && len(group.toolCalls) == 0 && len(group.toolOutputs) == 0 {
+			continue
+		}
+
+		var msg openai.ChatCompletionMessage
+		if group.message != nil {
+			msg = buildOpenAIChatMessage(group.message)
+		} else {
+			msg = openai.ChatCompletionMessage{Role: openai.ChatMessageRoleAssistant}
+		}
+		for _, toolCall := range group.toolCalls {
+			msg.ToolCalls = append(msg.ToolCalls, buildOpenAIToolCall(toolCall))
+		}
+		messages = append(messages, msg)
+
+		for _, toolOutput := range group.toolOutputs {
+			messages = append(messages, buildOpenAIToolOutput(toolOutput))
+		}
+	}
+	return messages
+}
+
+func buildOpenAIChatMessage(msg *llm.ChatMessage) openai.ChatCompletionMessage {
+	oaMsg := openai.ChatCompletionMessage{
+		Role: string(msg.Role),
+	}
+	if len(msg.Content) == 1 && msg.Content[0].Text != "" {
+		oaMsg.Content = msg.Content[0].Text
+		return oaMsg
+	}
+
+	parts := make([]openai.ChatMessagePart, 0, len(msg.Content))
+	for _, c := range msg.Content {
+		if c.Text != "" {
+			parts = append(parts, openai.ChatMessagePart{
+				Type: openai.ChatMessagePartTypeText,
+				Text: c.Text,
+			})
+		} else if c.Image != nil {
+			imageURL := ""
+			if str, ok := c.Image.Image.(string); ok {
+				imageURL = str
+			}
+			if imageURL != "" {
+				parts = append(parts, openai.ChatMessagePart{
+					Type: openai.ChatMessagePartTypeImageURL,
+					ImageURL: &openai.ChatMessageImageURL{
+						URL:    imageURL,
+						Detail: openai.ImageURLDetail(c.Image.InferenceDetail),
+					},
+				})
+			}
+		}
+	}
+	oaMsg.MultiContent = parts
+	return oaMsg
+}
+
+type openAIChatItemGroup struct {
+	message     *llm.ChatMessage
+	toolCalls   []*llm.FunctionCall
+	toolOutputs []*llm.FunctionCallOutput
+}
+
+func groupOpenAIChatItems(items []llm.ChatItem) []*openAIChatItemGroup {
+	groups := make([]*openAIChatItemGroup, 0)
+	groupsByID := make(map[string]*openAIChatItemGroup)
+	toolOutputs := make([]*llm.FunctionCallOutput, 0)
+
+	addToGroup := func(groupID string, item llm.ChatItem) {
+		group := groupsByID[groupID]
+		if group == nil {
+			group = &openAIChatItemGroup{}
+			groupsByID[groupID] = group
+			groups = append(groups, group)
+		}
+		group.add(item)
+	}
+
+	for _, item := range items {
+		switch it := item.(type) {
+		case *llm.ChatMessage:
+			if it.Role == llm.ChatRoleAssistant {
+				addToGroup(openAIGroupID(it.ID, nil), it)
+			} else {
+				addToGroup(it.ID, it)
+			}
+		case *llm.FunctionCall:
+			addToGroup(openAIGroupID(it.ID, it.GroupID), it)
+		case *llm.FunctionCallOutput:
+			toolOutputs = append(toolOutputs, it)
+		}
+	}
+
+	groupsByCallID := make(map[string]*openAIChatItemGroup)
+	for _, group := range groups {
+		for _, toolCall := range group.toolCalls {
+			groupsByCallID[toolCall.CallID] = group
+		}
+	}
+	for _, toolOutput := range toolOutputs {
+		if group := groupsByCallID[toolOutput.CallID]; group != nil {
+			group.add(toolOutput)
+		}
+	}
+	for _, group := range groups {
+		group.removeInvalidToolItems()
+	}
+	return groups
+}
+
+func (g *openAIChatItemGroup) add(item llm.ChatItem) {
+	switch it := item.(type) {
+	case *llm.ChatMessage:
+		g.message = it
+	case *llm.FunctionCall:
+		g.toolCalls = append(g.toolCalls, it)
+	case *llm.FunctionCallOutput:
+		g.toolOutputs = append(g.toolOutputs, it)
+	}
+}
+
+func (g *openAIChatItemGroup) removeInvalidToolItems() {
+	if len(g.toolCalls) == len(g.toolOutputs) {
+		return
+	}
+
+	outputsByCallID := make(map[string]*llm.FunctionCallOutput)
+	for _, toolOutput := range g.toolOutputs {
+		outputsByCallID[toolOutput.CallID] = toolOutput
+	}
+
+	validCalls := make([]*llm.FunctionCall, 0, len(g.toolCalls))
+	validOutputs := make([]*llm.FunctionCallOutput, 0, len(g.toolOutputs))
+	for _, toolCall := range g.toolCalls {
+		if toolOutput := outputsByCallID[toolCall.CallID]; toolOutput != nil {
+			validCalls = append(validCalls, toolCall)
+			validOutputs = append(validOutputs, toolOutput)
+		}
+	}
+
+	g.toolCalls = validCalls
+	g.toolOutputs = validOutputs
+}
+
+func openAIGroupID(itemID string, groupID *string) string {
+	if groupID != nil && *groupID != "" {
+		return *groupID
+	}
+	for i, r := range itemID {
+		if r == '/' {
+			return itemID[:i]
+		}
+	}
+	return itemID
+}
+
+func buildOpenAIToolCall(toolCall *llm.FunctionCall) openai.ToolCall {
+	return openai.ToolCall{
+		ID:   toolCall.CallID,
+		Type: openai.ToolTypeFunction,
+		Function: openai.FunctionCall{
+			Name:      toolCall.Name,
+			Arguments: toolCall.Arguments,
+		},
+	}
+}
+
+func buildOpenAIToolOutput(toolOutput *llm.FunctionCallOutput) openai.ChatCompletionMessage {
+	return openai.ChatCompletionMessage{
+		Role:       openai.ChatMessageRoleTool,
+		Content:    toolOutput.Output,
+		ToolCallID: toolOutput.CallID,
+	}
 }
 
 type openaiStream struct {
