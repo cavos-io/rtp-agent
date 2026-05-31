@@ -34,3 +34,22 @@ func TestSplitWordsSplitsCharacterBasedUnicode(t *testing.T) {
 		}
 	}
 }
+
+func TestSplitWordsStripsReferencePunctuationList(t *testing.T) {
+	tokens := SplitWords("±value… kept", true, false, false)
+
+	got := make([]string, len(tokens))
+	for i, token := range tokens {
+		got[i] = token.Token
+	}
+
+	want := []string{"value", "kept"}
+	if len(got) != len(want) {
+		t.Fatalf("tokens = %#v, want %#v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("tokens = %#v, want %#v", got, want)
+		}
+	}
+}

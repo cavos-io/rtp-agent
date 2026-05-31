@@ -6,6 +6,8 @@ import (
 	"unicode"
 )
 
+const punctuationChars = `!"#$%&'()*+,-./:;<=>?@[\]^_` + "`" + `{|}~±—‘’“”…`
+
 type TokenData struct {
 	SegmentID string
 	Token     string
@@ -276,7 +278,7 @@ func SplitParagraphs(text string) []TokenData {
 func stripPunctuation(s string) string {
 	var result strings.Builder
 	for _, r := range s {
-		if !unicode.IsPunct(r) {
+		if !strings.ContainsRune(punctuationChars, r) {
 			result.WriteRune(r)
 		}
 	}
