@@ -18,27 +18,30 @@ type AudioIO struct {
 
 	// Mic to Worker
 	audioOutCh chan *model.AudioFrame
-	
+
 	// Worker to Speakers
 	audioInCh chan *model.AudioFrame
-	
-	mu       sync.Mutex
-	started  bool
-	
-	sampleRate  int
-	channels    int
+
+	mu            sync.Mutex
+	started       bool
+	inputAttached bool
+	outputPaused  bool
+
+	sampleRate      int
+	channels        int
 	framesPerBuffer int
-	
+
 	speakerBuffer []int16
 }
 
 func NewAudioIO() *AudioIO {
 	return &AudioIO{
-		audioOutCh: make(chan *model.AudioFrame, 100),
-		audioInCh:  make(chan *model.AudioFrame, 100),
-		sampleRate: 24000,
-		channels:   1,
+		audioOutCh:      make(chan *model.AudioFrame, 100),
+		audioInCh:       make(chan *model.AudioFrame, 100),
+		sampleRate:      24000,
+		channels:        1,
 		framesPerBuffer: 480, // 20ms at 24kHz
+		inputAttached:   true,
 	}
 }
 
@@ -59,43 +62,26 @@ func (a *AudioIO) Start(ctx context.Context) error {
 
 	inBuf := make([]int16, a.framesPerBuffer)
 
-	stream, err := portaudio.OpenDefaultStream(a.channels, a.channels, float64(a.sampleRate), a.framesPerBuffer, 
+	stream, err := portaudio.OpenDefaultStream(a.channels, a.channels, float64(a.sampleRate), a.framesPerBuffer,
 		func(in, out []int16) {
 			// Read from Mic
 			copy(inBuf, in)
-			
+
 			// Send Mic data to Agent
 			data := make([]byte, len(inBuf)*2)
 			for i, v := range inBuf {
 				data[i*2] = byte(v)
 				data[i*2+1] = byte(v >> 8)
 			}
-			
-			select {
-			case a.audioOutCh <- &model.AudioFrame{
+
+			a.PushMicFrame(&model.AudioFrame{
 				Data:              data,
 				SampleRate:        uint32(a.sampleRate),
 				NumChannels:       uint32(a.channels),
 				SamplesPerChannel: uint32(len(inBuf)),
-			}:
-			default:
-				// Drop frame if channel full
-			}
+			})
 
-			// Write to Speakers from buffer
-			a.mu.Lock()
-			if len(a.speakerBuffer) >= len(out) {
-				copy(out, a.speakerBuffer[:len(out)])
-				a.speakerBuffer = a.speakerBuffer[len(out):]
-			} else {
-				// Play what we have, zero out the rest
-				copy(out[:len(a.speakerBuffer)], a.speakerBuffer)
-				for i := len(a.speakerBuffer); i < len(out); i++ {
-					out[i] = 0
-				}
-				a.speakerBuffer = a.speakerBuffer[:0]
-			}
-			a.mu.Unlock()
+			a.fillSpeakerOutput(out)
 		})
 
 	if err != nil {
@@ -133,6 +119,44 @@ func (a *AudioIO) Stop() error {
 	return nil
 }
 
+func (a *AudioIO) SetInputAttached(attached bool) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.inputAttached = attached
+}
+
+func (a *AudioIO) SetOutputPaused(paused bool) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.outputPaused = paused
+}
+
+func (a *AudioIO) OutputPaused() bool {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.outputPaused
+}
+
+func (a *AudioIO) PushMicFrame(frame *model.AudioFrame) bool {
+	if frame == nil {
+		return false
+	}
+
+	a.mu.Lock()
+	attached := a.inputAttached
+	a.mu.Unlock()
+	if !attached {
+		return false
+	}
+
+	select {
+	case a.audioOutCh <- frame:
+		return true
+	default:
+		return false
+	}
+}
+
 // PushFrame takes audio from the Agent and queues it for the speakers
 func (a *AudioIO) PushFrame(frame *model.AudioFrame) {
 	if frame == nil {
@@ -148,6 +172,36 @@ func (a *AudioIO) PushFrame(frame *model.AudioFrame) {
 	a.mu.Lock()
 	a.speakerBuffer = append(a.speakerBuffer, pcm...)
 	a.mu.Unlock()
+}
+
+func (a *AudioIO) fillSpeakerOutput(out []int16) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	if a.outputPaused {
+		for i := range out {
+			out[i] = 0
+		}
+		return
+	}
+
+	if len(a.speakerBuffer) >= len(out) {
+		copy(out, a.speakerBuffer[:len(out)])
+		a.speakerBuffer = a.speakerBuffer[len(out):]
+		return
+	}
+
+	copy(out[:len(a.speakerBuffer)], a.speakerBuffer)
+	for i := len(a.speakerBuffer); i < len(out); i++ {
+		out[i] = 0
+	}
+	a.speakerBuffer = a.speakerBuffer[:0]
+}
+
+func (a *AudioIO) ClearOutputBuffer() {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.speakerBuffer = a.speakerBuffer[:0]
 }
 
 func (a *AudioIO) MicFrames() <-chan *model.AudioFrame {

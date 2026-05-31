@@ -31,6 +31,25 @@ type ConnectArgs struct {
 	ParticipantIdentity string
 }
 
+type ConsoleMode string
+
+const (
+	ConsoleModeAudio ConsoleMode = "audio"
+	ConsoleModeText  ConsoleMode = "text"
+)
+
+type ConsoleArgs struct {
+	InputDevice  string
+	OutputDevice string
+	Mode         ConsoleMode
+	Record       bool
+	ListDevices  bool
+}
+
+var printConsoleAudioDevices = func() {
+	fmt.Println("Audio device listing is not available in this build.")
+}
+
 func RunApp(server *worker.AgentServer) {
 	if len(os.Args) < 2 {
 		printUsage()
@@ -48,7 +67,7 @@ func RunApp(server *worker.AgentServer) {
 	case "connect":
 		runConnect(server)
 	case "console":
-		runConsole(server)
+		runConsole(server, os.Args)
 	case "download-files":
 		runDownloadFiles()
 	default:
@@ -122,6 +141,35 @@ func parseConnectArgs(argv []string) (ConnectArgs, error) {
 	return args, nil
 }
 
+func parseConsoleArgs(argv []string) (ConsoleArgs, error) {
+	args := ConsoleArgs{Mode: ConsoleModeAudio}
+	for i := 2; i < len(argv); i++ {
+		switch argv[i] {
+		case "--text":
+			args.Mode = ConsoleModeText
+		case "--record":
+			args.Record = true
+		case "--list-devices":
+			args.ListDevices = true
+		case "--input-device":
+			i++
+			if i >= len(argv) {
+				return ConsoleArgs{}, fmt.Errorf("missing value for --input-device")
+			}
+			args.InputDevice = argv[i]
+		case "--output-device":
+			i++
+			if i >= len(argv) {
+				return ConsoleArgs{}, fmt.Errorf("missing value for --output-device")
+			}
+			args.OutputDevice = argv[i]
+		default:
+			return ConsoleArgs{}, fmt.Errorf("unknown console option %q", argv[i])
+		}
+	}
+	return args, nil
+}
+
 func defaultConnectParticipantIdentity() string {
 	var b [6]byte
 	if _, err := rand.Read(b[:]); err != nil {
@@ -130,15 +178,39 @@ func defaultConnectParticipantIdentity() string {
 	return "agent-" + hex.EncodeToString(b[:])
 }
 
-func runConsole(server *worker.AgentServer) {
+func consoleLocalJobArgs() (roomName string, participantIdentity string) {
+	return "console-room", "console"
+}
+
+func runConsole(server *worker.AgentServer, argv []string) {
+	args, err := parseConsoleArgs(argv)
+	if err != nil {
+		fmt.Println("Usage: worker console [--text] [--record] [--input-device <device>] [--output-device <device>]")
+		os.Exit(1)
+	}
+
+	if args.ListDevices {
+		printConsoleAudioDevices()
+		return
+	}
+
 	fmt.Println("Starting console mode 🚀")
 	fmt.Println("Type your message and press Enter to talk to the agent. Press Ctrl+C to exit.")
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
+	logger.Logger.Infow(
+		"Starting console local job",
+		"mode", args.Mode,
+		"record", args.Record,
+		"inputDevice", args.InputDevice,
+		"outputDevice", args.OutputDevice,
+	)
+
 	go func() {
-		if err := server.ExecuteLocalJob(ctx, "console-room", "console-user"); err != nil {
+		roomName, participantIdentity := consoleLocalJobArgs()
+		if err := server.ExecuteLocalJob(ctx, roomName, participantIdentity); err != nil {
 			logger.Logger.Errorw("Console execution error", err)
 			stop()
 		}

@@ -46,6 +46,79 @@ func TestParseConnectArgsRequiresRoom(t *testing.T) {
 	}
 }
 
+func TestConsoleLocalJobArgsMatchReference(t *testing.T) {
+	roomName, participantIdentity := consoleLocalJobArgs()
+	if roomName != "console-room" {
+		t.Fatalf("roomName = %q, want console-room", roomName)
+	}
+	if participantIdentity != "console" {
+		t.Fatalf("participantIdentity = %q, want console", participantIdentity)
+	}
+}
+
+func TestParseConsoleArgsDefaultsToAudioMode(t *testing.T) {
+	args, err := parseConsoleArgs([]string{"worker", "console"})
+	if err != nil {
+		t.Fatalf("parseConsoleArgs() error = %v", err)
+	}
+	if args.Mode != ConsoleModeAudio {
+		t.Fatalf("Mode = %q, want %q", args.Mode, ConsoleModeAudio)
+	}
+	if args.Record {
+		t.Fatal("Record = true, want false")
+	}
+}
+
+func TestParseConsoleArgsSupportsTextModeAndDevices(t *testing.T) {
+	args, err := parseConsoleArgs([]string{
+		"worker", "console",
+		"--text",
+		"--record",
+		"--input-device", "mic-a",
+		"--output-device", "speaker-a",
+	})
+	if err != nil {
+		t.Fatalf("parseConsoleArgs() error = %v", err)
+	}
+	if args.Mode != ConsoleModeText {
+		t.Fatalf("Mode = %q, want %q", args.Mode, ConsoleModeText)
+	}
+	if !args.Record {
+		t.Fatal("Record = false, want true")
+	}
+	if args.InputDevice != "mic-a" {
+		t.Fatalf("InputDevice = %q, want mic-a", args.InputDevice)
+	}
+	if args.OutputDevice != "speaker-a" {
+		t.Fatalf("OutputDevice = %q, want speaker-a", args.OutputDevice)
+	}
+}
+
+func TestParseConsoleArgsSupportsListDevices(t *testing.T) {
+	args, err := parseConsoleArgs([]string{"worker", "console", "--list-devices"})
+	if err != nil {
+		t.Fatalf("parseConsoleArgs() error = %v", err)
+	}
+	if !args.ListDevices {
+		t.Fatal("ListDevices = false, want true")
+	}
+}
+
+func TestRunConsoleListDevicesReturnsBeforeStartingConsole(t *testing.T) {
+	oldPrint := printConsoleAudioDevices
+	defer func() { printConsoleAudioDevices = oldPrint }()
+	calls := 0
+	printConsoleAudioDevices = func() {
+		calls++
+	}
+
+	runConsole(nil, []string{"worker", "console", "--list-devices"})
+
+	if calls != 1 {
+		t.Fatalf("printConsoleAudioDevices calls = %d, want 1", calls)
+	}
+}
+
 func TestCliArgsCarriesReferenceReloadState(t *testing.T) {
 	args := CliArgs{
 		LogLevel:    "debug",
@@ -144,12 +217,80 @@ func TestWatcherTriggerReloadRequestsActiveJobsBeforeRestart(t *testing.T) {
 		requestedBeforeRestart = msg.Type == ipc.MessageTypeActiveJobsRequest
 	}, args)
 	watcher.reloadIPC = &output
+	watcher.activeJobsTimeout = time.Nanosecond
 
 	if !watcher.triggerReload() {
 		t.Fatal("triggerReload() = false, want true")
 	}
 	if !requestedBeforeRestart {
 		t.Fatal("triggerReload() did not request active jobs before restart")
+	}
+	if args.ReloadCount != 4 {
+		t.Fatalf("ReloadCount = %d, want 4", args.ReloadCount)
+	}
+}
+
+func TestWatcherTriggerReloadWaitsForActiveJobsBeforeRestart(t *testing.T) {
+	args := &CliArgs{ReloadCount: 3}
+	job := ipc.RunningJobInfo{Job: &livekit.Job{Id: "job-current"}, Token: "current-token"}
+	restartStarted := make(chan struct{})
+	var watcher *Watcher
+	watcher = NewWatcher(nil, func() {
+		close(restartStarted)
+		resp := watcher.reloadJobsResponse()
+		if len(resp.Jobs) != 1 || resp.Jobs[0].Job.GetId() != "job-current" {
+			t.Fatalf("reloadJobsResponse().Jobs = %#v, want active job before restart", resp.Jobs)
+		}
+	}, args)
+
+	peerReader, watcherWriter := io.Pipe()
+	watcher.reloadIPC = watcherWriter
+	requestRead := make(chan struct{})
+	allowResponse := make(chan struct{})
+	go func() {
+		defer peerReader.Close()
+		msg, err := ipc.ReadMessage(peerReader)
+		if err != nil {
+			t.Errorf("ReadMessage ActiveJobsRequest: %v", err)
+			return
+		}
+		if msg.Type != ipc.MessageTypeActiveJobsRequest {
+			t.Errorf("request Type = %q, want %q", msg.Type, ipc.MessageTypeActiveJobsRequest)
+			return
+		}
+		close(requestRead)
+		<-allowResponse
+		watcher.recordActiveJobsResponse(ipc.ActiveJobsResponse{
+			Jobs:        []ipc.RunningJobInfo{job},
+			ReloadCount: 3,
+		})
+	}()
+
+	done := make(chan bool, 1)
+	go func() {
+		done <- watcher.triggerReload()
+	}()
+
+	select {
+	case <-requestRead:
+	case <-time.After(time.Second):
+		t.Fatal("triggerReload() did not request active jobs")
+	}
+
+	select {
+	case <-restartStarted:
+		t.Fatal("restart started before active jobs response")
+	case <-time.After(25 * time.Millisecond):
+	}
+
+	close(allowResponse)
+	select {
+	case ok := <-done:
+		if !ok {
+			t.Fatal("triggerReload() = false, want true")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("triggerReload() did not finish after active jobs response")
 	}
 	if args.ReloadCount != 4 {
 		t.Fatalf("ReloadCount = %d, want 4", args.ReloadCount)
@@ -415,6 +556,116 @@ func TestWatcherRunReloadIPCSessionRequestsThenProcessesMessages(t *testing.T) {
 	}
 }
 
+func TestWatcherRunReloadIPCSessionHandlesTriggerReloadRequests(t *testing.T) {
+	args := &CliArgs{ReloadCount: 8}
+	restarted := make(chan struct{})
+	watcher := NewWatcher(nil, func() {
+		close(restarted)
+	}, args)
+	watcher.activeJobsTimeout = time.Nanosecond
+
+	peerReader, watcherWriter := io.Pipe()
+	watcherReader, peerWriter := io.Pipe()
+	sessionErr := make(chan error, 1)
+	go func() {
+		sessionErr <- watcher.runReloadIPCSession(struct {
+			io.Reader
+			io.Writer
+		}{
+			Reader: watcherReader,
+			Writer: watcherWriter,
+		})
+	}()
+
+	msg, err := ipc.ReadMessage(peerReader)
+	if err != nil {
+		t.Fatalf("ReadMessage initial request: %v", err)
+	}
+	if msg.Type != ipc.MessageTypeReloadJobsRequest {
+		t.Fatalf("initial request Type = %q, want %q", msg.Type, ipc.MessageTypeReloadJobsRequest)
+	}
+
+	triggered := make(chan bool, 1)
+	go func() {
+		triggered <- watcher.triggerReload()
+	}()
+
+	msg = readIPCMessageWithin(t, peerReader, time.Second, "active jobs request")
+	if msg.Type != ipc.MessageTypeActiveJobsRequest {
+		t.Fatalf("trigger request Type = %q, want %q", msg.Type, ipc.MessageTypeActiveJobsRequest)
+	}
+
+	select {
+	case ok := <-triggered:
+		if !ok {
+			t.Fatal("triggerReload() = false, want true")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("triggerReload() did not finish")
+	}
+
+	select {
+	case <-restarted:
+	case <-time.After(time.Second):
+		t.Fatal("restart callback was not called")
+	}
+
+	if err := peerWriter.Close(); err != nil {
+		t.Fatalf("close peer writer: %v", err)
+	}
+	select {
+	case err := <-sessionErr:
+		if err != nil {
+			t.Fatalf("runReloadIPCSession() error = %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("runReloadIPCSession() did not return after peer close")
+	}
+}
+
+func TestWatcherRunReloadIPCSessionClearsReloadingOnClose(t *testing.T) {
+	watcher := NewWatcher(nil, nil)
+	if !watcher.beginReload() {
+		t.Fatal("beginReload() = false, want active reload")
+	}
+
+	peerReader, watcherWriter := io.Pipe()
+	watcherReader, peerWriter := io.Pipe()
+	sessionErr := make(chan error, 1)
+	go func() {
+		sessionErr <- watcher.runReloadIPCSession(struct {
+			io.Reader
+			io.Writer
+		}{
+			Reader: watcherReader,
+			Writer: watcherWriter,
+		})
+	}()
+
+	msg, err := ipc.ReadMessage(peerReader)
+	if err != nil {
+		t.Fatalf("ReadMessage initial request: %v", err)
+	}
+	if msg.Type != ipc.MessageTypeReloadJobsRequest {
+		t.Fatalf("initial request Type = %q, want %q", msg.Type, ipc.MessageTypeReloadJobsRequest)
+	}
+	if err := peerWriter.Close(); err != nil {
+		t.Fatalf("close peer writer: %v", err)
+	}
+
+	select {
+	case err := <-sessionErr:
+		if err != nil {
+			t.Fatalf("runReloadIPCSession() error = %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("runReloadIPCSession() did not return after peer close")
+	}
+	if watcher.reloading {
+		t.Fatal("watcher.reloading = true, want false after reload IPC close")
+	}
+}
+
 func mustIPCMessage(t *testing.T, payload any) ipc.Message {
 	t.Helper()
 	msg, err := ipc.NewMessage(payload)
@@ -422,4 +673,27 @@ func mustIPCMessage(t *testing.T, payload any) ipc.Message {
 		t.Fatalf("NewMessage(%T): %v", payload, err)
 	}
 	return msg
+}
+
+func readIPCMessageWithin(t *testing.T, r io.Reader, timeout time.Duration, name string) ipc.Message {
+	t.Helper()
+	type result struct {
+		msg ipc.Message
+		err error
+	}
+	done := make(chan result, 1)
+	go func() {
+		msg, err := ipc.ReadMessage(r)
+		done <- result{msg: msg, err: err}
+	}()
+	select {
+	case res := <-done:
+		if res.err != nil {
+			t.Fatalf("ReadMessage %s: %v", name, res.err)
+		}
+		return res.msg
+	case <-time.After(timeout):
+		t.Fatalf("ReadMessage %s timed out", name)
+		return ipc.Message{}
+	}
 }
