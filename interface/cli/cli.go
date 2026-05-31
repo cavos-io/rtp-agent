@@ -48,6 +48,7 @@ type ConsoleArgs struct {
 	Mode         ConsoleMode
 	Record       bool
 	ListDevices  bool
+	LogLevel     string
 }
 
 type consoleAudioDevice struct {
@@ -216,7 +217,7 @@ func parseConnectArgs(argv []string) (ConnectArgs, error) {
 }
 
 func parseConsoleArgs(argv []string) (ConsoleArgs, error) {
-	args := ConsoleArgs{Mode: ConsoleModeAudio}
+	args := ConsoleArgs{Mode: ConsoleModeAudio, LogLevel: "DEBUG"}
 	for i := 2; i < len(argv); i++ {
 		switch argv[i] {
 		case "--text":
@@ -237,11 +238,30 @@ func parseConsoleArgs(argv []string) (ConsoleArgs, error) {
 				return ConsoleArgs{}, fmt.Errorf("missing value for --output-device")
 			}
 			args.OutputDevice = argv[i]
+		case "--log-level":
+			i++
+			if i >= len(argv) {
+				return ConsoleArgs{}, fmt.Errorf("missing value for --log-level")
+			}
+			logLevel := strings.ToUpper(argv[i])
+			if !validConsoleLogLevel(logLevel) {
+				return ConsoleArgs{}, fmt.Errorf("unknown console log level %q", argv[i])
+			}
+			args.LogLevel = logLevel
 		default:
 			return ConsoleArgs{}, fmt.Errorf("unknown console option %q", argv[i])
 		}
 	}
 	return args, nil
+}
+
+func validConsoleLogLevel(logLevel string) bool {
+	switch logLevel {
+	case "TRACE", "DEBUG", "INFO", "WARN", "ERROR", "CRITICAL":
+		return true
+	default:
+		return false
+	}
 }
 
 func defaultConnectParticipantIdentity() string {
@@ -293,6 +313,7 @@ func runConsole(server *worker.AgentServer, argv []string) {
 		"record", args.Record,
 		"inputDevice", args.InputDevice,
 		"outputDevice", args.OutputDevice,
+		"logLevel", args.LogLevel,
 	)
 
 	go func() {

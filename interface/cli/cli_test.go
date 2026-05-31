@@ -104,6 +104,16 @@ func TestParseConsoleArgsSupportsListDevices(t *testing.T) {
 	}
 }
 
+func TestParseConsoleArgsSupportsLogLevel(t *testing.T) {
+	args, err := parseConsoleArgs([]string{"worker", "console", "--log-level", "trace"})
+	if err != nil {
+		t.Fatalf("parseConsoleArgs() error = %v", err)
+	}
+	if args.LogLevel != "TRACE" {
+		t.Fatalf("LogLevel = %q, want TRACE", args.LogLevel)
+	}
+}
+
 func TestRunConsoleListDevicesReturnsBeforeStartingConsole(t *testing.T) {
 	oldPrint := printConsoleAudioDevices
 	defer func() { printConsoleAudioDevices = oldPrint }()
