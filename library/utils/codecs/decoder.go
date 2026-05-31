@@ -140,12 +140,13 @@ func (d *MP3AudioStreamDecoder) processLoop() {
 type PCMAudioStreamDecoder struct {
 	sampleRate  int
 	numChannels int
-	
+
 	buffer bytes.Buffer
 	mu     sync.Mutex
 	closed bool
 	ended  bool
-	
+	once   sync.Once
+
 	outputCh chan *model.AudioFrame
 	errCh    chan error
 }
@@ -157,7 +158,7 @@ func NewPCMAudioStreamDecoder(sampleRate int, numChannels int) AudioStreamDecode
 		outputCh:    make(chan *model.AudioFrame, 100),
 		errCh:       make(chan error, 1),
 	}
-	
+
 	go d.processLoop()
 	return d
 }
@@ -191,30 +192,33 @@ func (d *PCMAudioStreamDecoder) Next() (*model.AudioFrame, error) {
 
 func (d *PCMAudioStreamDecoder) Close() error {
 	d.mu.Lock()
-	defer d.mu.Unlock()
-	if !d.closed {
-		d.closed = true
-		close(d.outputCh)
+	if d.closed {
+		d.mu.Unlock()
+		return nil
 	}
+	d.closed = true
+	d.mu.Unlock()
 	return nil
 }
 
 func (d *PCMAudioStreamDecoder) processLoop() {
+	defer d.closeOutput()
+
 	// Frame size calculation: e.g., 20ms at sampleRate * channels * 2 bytes/sample
 	frameSize := (d.sampleRate * 20 / 1000) * d.numChannels * 2
-	
+
 	for {
 		d.mu.Lock()
 		if d.closed {
 			d.mu.Unlock()
 			return
 		}
-		
+
 		if d.buffer.Len() >= frameSize {
 			chunk := make([]byte, frameSize)
 			d.buffer.Read(chunk)
 			d.mu.Unlock()
-			
+
 			d.outputCh <- &model.AudioFrame{
 				Data:              chunk,
 				SampleRate:        uint32(d.sampleRate),
@@ -227,7 +231,7 @@ func (d *PCMAudioStreamDecoder) processLoop() {
 				chunk := d.buffer.Bytes()
 				d.buffer.Reset()
 				d.mu.Unlock()
-				
+
 				d.outputCh <- &model.AudioFrame{
 					Data:              chunk,
 					SampleRate:        uint32(d.sampleRate),
@@ -243,4 +247,10 @@ func (d *PCMAudioStreamDecoder) processLoop() {
 			time.Sleep(10 * time.Millisecond)
 		}
 	}
+}
+
+func (d *PCMAudioStreamDecoder) closeOutput() {
+	d.once.Do(func() {
+		close(d.outputCh)
+	})
 }
