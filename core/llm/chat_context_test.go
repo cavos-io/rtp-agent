@@ -700,6 +700,29 @@ func TestChatContextItemsDefaultIDs(t *testing.T) {
 	}
 }
 
+func TestChatContextItemsDefaultCreatedAt(t *testing.T) {
+	data := []byte(`{
+		"items": [
+			{"type": "message", "role": "user", "content": ["hello"]},
+			{"type": "function_call", "call_id": "call_lookup", "name": "lookup", "arguments": "{}"},
+			{"type": "function_call_output", "call_id": "call_lookup", "name": "lookup", "output": "ok", "is_error": false},
+			{"type": "agent_handoff", "new_agent_id": "next"},
+			{"type": "agent_config_update", "instructions": "be concise"}
+		]
+	}`)
+
+	var ctx ChatContext
+	if err := json.Unmarshal(data, &ctx); err != nil {
+		t.Fatalf("UnmarshalJSON() error = %v", err)
+	}
+
+	for i, item := range ctx.Items {
+		if item.GetCreatedAt().IsZero() {
+			t.Fatalf("item %d CreatedAt is zero, want generated timestamp", i)
+		}
+	}
+}
+
 func TestChatContextUnmarshalJSONRejectsUnknownItemType(t *testing.T) {
 	data := []byte(`{"items":[{"id":"bad","type":"unknown"}]}`)
 

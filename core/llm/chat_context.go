@@ -371,7 +371,7 @@ func chatItemFromJSON(data []byte) (ChatItem, error) {
 			Arguments: item.Arguments,
 			Extra:     item.Extra,
 			GroupID:   item.GroupID,
-			CreatedAt: unixSecondsToTime(item.CreatedAt),
+			CreatedAt: chatItemCreatedAtOrDefault(item.CreatedAt),
 		}, nil
 	case "function_call_output":
 		var item struct {
@@ -391,7 +391,7 @@ func chatItemFromJSON(data []byte) (ChatItem, error) {
 			Name:      item.Name,
 			Output:    item.Output,
 			IsError:   item.IsError,
-			CreatedAt: unixSecondsToTime(item.CreatedAt),
+			CreatedAt: chatItemCreatedAtOrDefault(item.CreatedAt),
 		}, nil
 	case "agent_handoff":
 		var item struct {
@@ -407,7 +407,7 @@ func chatItemFromJSON(data []byte) (ChatItem, error) {
 			ID:         itemIDOrDefault(item.ID),
 			OldAgentID: item.OldAgentID,
 			NewAgentID: item.NewAgentID,
-			CreatedAt:  unixSecondsToTime(item.CreatedAt),
+			CreatedAt:  chatItemCreatedAtOrDefault(item.CreatedAt),
 		}, nil
 	case "agent_config_update":
 		var item struct {
@@ -425,7 +425,7 @@ func chatItemFromJSON(data []byte) (ChatItem, error) {
 			Instructions: item.Instructions,
 			ToolsAdded:   item.ToolsAdded,
 			ToolsRemoved: item.ToolsRemoved,
-			CreatedAt:    unixSecondsToTime(item.CreatedAt),
+			CreatedAt:    chatItemCreatedAtOrDefault(item.CreatedAt),
 		}, nil
 	default:
 		return nil, fmt.Errorf("unsupported chat item type %q", discriminator.Type)
@@ -462,7 +462,7 @@ func chatMessageFromJSON(data []byte) (*ChatMessage, error) {
 		Interrupted:          item.Interrupted,
 		TranscriptConfidence: item.TranscriptConfidence,
 		Extra:                item.Extra,
-		CreatedAt:            unixSecondsToTime(item.CreatedAt),
+		CreatedAt:            chatItemCreatedAtOrDefault(item.CreatedAt),
 	}, nil
 }
 
@@ -675,6 +675,13 @@ func unixSecondsToTime(seconds *float64) time.Time {
 	}
 	nanos := int64(*seconds * float64(time.Second))
 	return time.Unix(0, nanos)
+}
+
+func chatItemCreatedAtOrDefault(seconds *float64) time.Time {
+	if seconds == nil {
+		return time.Now()
+	}
+	return unixSecondsToTime(seconds)
 }
 
 func nonNilMap(value map[string]any) map[string]any {
