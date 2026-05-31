@@ -1,10 +1,12 @@
 package cli
 
 import (
+	"bufio"
 	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
+	"io"
 	"os"
 	"os/signal"
 	"strings"
@@ -254,6 +256,15 @@ func consoleLocalJobArgs() (roomName string, participantIdentity string) {
 	return "console-room", "console"
 }
 
+func readConsoleInput(r io.Reader) (string, error) {
+	reader := bufio.NewReader(r)
+	line, err := reader.ReadString('\n')
+	if err != nil && len(line) == 0 {
+		return "", err
+	}
+	return strings.TrimRight(line, "\r\n"), nil
+}
+
 func runConsole(server *worker.AgentServer, argv []string) {
 	args, err := parseConsoleArgs(argv)
 	if err != nil {
@@ -290,10 +301,10 @@ func runConsole(server *worker.AgentServer, argv []string) {
 
 	// Console read loop
 	go func() {
-		var input string
+		reader := bufio.NewReader(os.Stdin)
 		for {
 			fmt.Print("❯ ")
-			_, err := fmt.Scanln(&input)
+			input, err := readConsoleInput(reader)
 			if err != nil {
 				break
 			}

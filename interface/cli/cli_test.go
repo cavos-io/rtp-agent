@@ -139,6 +139,16 @@ func TestFormatConsoleAudioDevicesListsInputsOutputsAndDefaults(t *testing.T) {
 	}
 }
 
+func TestReadConsoleInputPreservesSpaces(t *testing.T) {
+	got, err := readConsoleInput(strings.NewReader("hello world from console\n"))
+	if err != nil {
+		t.Fatalf("readConsoleInput() error = %v", err)
+	}
+	if got != "hello world from console" {
+		t.Fatalf("readConsoleInput() = %q, want full line", got)
+	}
+}
+
 func TestCliArgsCarriesReferenceReloadState(t *testing.T) {
 	args := CliArgs{
 		LogLevel:    "debug",
