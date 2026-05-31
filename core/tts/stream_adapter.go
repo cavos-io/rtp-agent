@@ -42,7 +42,12 @@ type streamAdapterWrapper struct {
 	ctx     context.Context
 	cancel  context.CancelFunc
 	eventCh chan *SynthesizedAudio
-	textCh  chan string
+	inputCh chan streamAdapterInput
+}
+
+type streamAdapterInput struct {
+	text  string
+	flush bool
 }
 
 func (a *StreamAdapter) Stream(ctx context.Context) (SynthesizeStream, error) {
@@ -52,7 +57,7 @@ func (a *StreamAdapter) Stream(ctx context.Context) (SynthesizeStream, error) {
 		ctx:     ctx,
 		cancel:  cancel,
 		eventCh: make(chan *SynthesizedAudio, 100),
-		textCh:  make(chan string, 100),
+		inputCh: make(chan streamAdapterInput, 100),
 	}
 
 	go w.run()
@@ -70,13 +75,17 @@ func (w *streamAdapterWrapper) run() {
 			select {
 			case <-w.ctx.Done():
 				return
-			case text, ok := <-w.textCh:
+			case input, ok := <-w.inputCh:
 				if !ok {
 					tokenizer.Flush()
 					tokenizer.Close()
 					return
 				}
-				tokenizer.PushText(text)
+				if input.flush {
+					tokenizer.Flush()
+					continue
+				}
+				tokenizer.PushText(input.text)
 			}
 		}
 	}()
@@ -110,17 +119,18 @@ func (w *streamAdapterWrapper) synthesize(text string) {
 }
 
 func (w *streamAdapterWrapper) PushText(text string) error {
-	w.textCh <- text
+	w.inputCh <- streamAdapterInput{text: text}
 	return nil
 }
 
 func (w *streamAdapterWrapper) Flush() error {
+	w.inputCh <- streamAdapterInput{flush: true}
 	return nil
 }
 
 func (w *streamAdapterWrapper) Close() error {
 	w.cancel()
-	close(w.textCh)
+	close(w.inputCh)
 	return nil
 }
 
