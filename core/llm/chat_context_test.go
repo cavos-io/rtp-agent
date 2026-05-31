@@ -1,6 +1,7 @@
 package llm
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"reflect"
 	"strings"
@@ -1174,6 +1175,31 @@ func TestChatContextToGoogleProviderFormatInlinesMidConversationInstructions(t *
 	}
 }
 
+func TestChatContextToGoogleProviderFormatUsesInlineDataForDataURLImage(t *testing.T) {
+	imageData := base64.StdEncoding.EncodeToString([]byte("png-bytes"))
+	ctx := NewChatContext()
+	ctx.Items = []ChatItem{
+		&ChatMessage{
+			ID:   "user",
+			Role: ChatRoleUser,
+			Content: []ChatContent{{Image: &ImageContent{
+				Image: "data:image/png;base64," + imageData,
+			}}},
+		},
+	}
+
+	turns, _ := ctx.ToProviderFormat("google")
+
+	parts := turns[0]["parts"].([]map[string]any)
+	inlineData, ok := parts[0]["inline_data"].(map[string]any)
+	if !ok {
+		t.Fatalf("google image part = %#v, want inline_data", parts[0])
+	}
+	if !reflect.DeepEqual(inlineData["data"], []byte("png-bytes")) || inlineData["mime_type"] != "image/png" {
+		t.Fatalf("inline_data = %#v", inlineData)
+	}
+}
+
 func TestChatContextToAnthropicProviderFormatMapsTurnsAndSystemMessages(t *testing.T) {
 	ctx := NewChatContext()
 	ctx.Items = []ChatItem{
@@ -1227,6 +1253,31 @@ func TestChatContextToAnthropicProviderFormatMapsTurnsAndSystemMessages(t *testi
 	}
 	if !reflect.DeepEqual(toolResult["content"], []any{"sunny"}) {
 		t.Fatalf("tool result content = %#v", toolResult["content"])
+	}
+}
+
+func TestChatContextToAnthropicProviderFormatUsesBase64ForDataURLImage(t *testing.T) {
+	imageData := base64.StdEncoding.EncodeToString([]byte("gif-bytes"))
+	ctx := NewChatContext()
+	ctx.Items = []ChatItem{
+		&ChatMessage{
+			ID:   "user",
+			Role: ChatRoleUser,
+			Content: []ChatContent{{Image: &ImageContent{
+				Image: "data:image/gif;base64," + imageData,
+			}}},
+		},
+	}
+
+	messages, _ := ctx.ToProviderFormat("anthropic")
+
+	content := messages[0]["content"].([]map[string]any)
+	source, ok := content[0]["source"].(map[string]any)
+	if !ok || content[0]["type"] != "image" {
+		t.Fatalf("anthropic image content = %#v, want image source", content[0])
+	}
+	if source["type"] != "base64" || source["data"] != imageData || source["media_type"] != "image/gif" {
+		t.Fatalf("anthropic image source = %#v", source)
 	}
 }
 
@@ -1284,6 +1335,32 @@ func TestChatContextToAWSProviderFormatMapsTurnsAndSystemMessages(t *testing.T) 
 	resultContent := toolResult["content"].([]map[string]any)
 	if resultContent[0]["text"] != "sunny" {
 		t.Fatalf("tool result content = %#v", resultContent)
+	}
+}
+
+func TestChatContextToAWSProviderFormatIncludesInlineDataURLImage(t *testing.T) {
+	imageData := base64.StdEncoding.EncodeToString([]byte("jpg-bytes"))
+	ctx := NewChatContext()
+	ctx.Items = []ChatItem{
+		&ChatMessage{
+			ID:   "user",
+			Role: ChatRoleUser,
+			Content: []ChatContent{{Image: &ImageContent{
+				Image: "data:image/jpeg;base64," + imageData,
+			}}},
+		},
+	}
+
+	messages, _ := ctx.ToProviderFormat("aws")
+
+	content := messages[0]["content"].([]map[string]any)
+	imagePart, ok := content[0]["image"].(map[string]any)
+	if !ok {
+		t.Fatalf("aws image content = %#v, want image", content[0])
+	}
+	source := imagePart["source"].(map[string]any)
+	if imagePart["format"] != "jpeg" || !reflect.DeepEqual(source["bytes"], []byte("jpg-bytes")) {
+		t.Fatalf("aws image = %#v", imagePart)
 	}
 }
 

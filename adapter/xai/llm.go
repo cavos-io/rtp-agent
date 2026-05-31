@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -30,7 +31,7 @@ func NewXaiLLM(apiKey string, model string) *XaiLLM {
 
 type xaiMessage struct {
 	Role       string        `json:"role"`
-	Content    string        `json:"content"`
+	Content    any           `json:"content"`
 	ToolCalls  []xaiToolCall `json:"tool_calls,omitempty"`
 	ToolCallID string        `json:"tool_call_id,omitempty"`
 }
@@ -115,8 +116,9 @@ func (l *XaiLLM) Chat(ctx context.Context, chatCtx *llm.ChatContext, opts ...llm
 }
 
 type xaiStream struct {
-	resp    *http.Response
-	scanner *bufio.Scanner
+	resp     *http.Response
+	scanner  *bufio.Scanner
+	thinking bool
 }
 
 func buildXAIMessages(chatCtx *llm.ChatContext) []xaiMessage {
@@ -151,7 +153,53 @@ func buildXAIChatMessage(msg *llm.ChatMessage) xaiMessage {
 	}
 	return xaiMessage{
 		Role:    role,
-		Content: msg.TextContent(),
+		Content: xaiMessageContent(msg),
+	}
+}
+
+func xaiMessageContent(msg *llm.ChatMessage) any {
+	parts := make([]map[string]any, 0)
+	textContent := ""
+	for _, item := range msg.Content {
+		if text := item.Text; text != "" {
+			if textContent != "" {
+				textContent += "\n"
+			}
+			textContent += text
+		}
+		if item.Image != nil {
+			if part := xaiImageContent(item.Image); part != nil {
+				parts = append(parts, part)
+			}
+		}
+	}
+	if len(parts) == 0 {
+		return msg.TextContent()
+	}
+	if textContent != "" {
+		parts = append(parts, map[string]any{
+			"type": "text",
+			"text": textContent,
+		})
+	}
+	return parts
+}
+
+func xaiImageContent(image *llm.ImageContent) map[string]any {
+	img, err := llm.SerializeImage(image)
+	if err != nil {
+		return nil
+	}
+	url := img.ExternalURL
+	if url == "" {
+		url = fmt.Sprintf("data:%s;base64,%s", img.MIMEType, base64.StdEncoding.EncodeToString(img.DataBytes))
+	}
+	return map[string]any{
+		"type": "image_url",
+		"image_url": map[string]any{
+			"url":    url,
+			"detail": img.InferenceDetail,
+		},
 	}
 }
 
@@ -305,11 +353,15 @@ func (s *xaiStream) Next() (*llm.ChatChunk, error) {
 		}
 
 		if len(chunk.Choices) > 0 {
+			content, ok := llm.StripThinkingTokens(chunk.Choices[0].Delta.Content, &s.thinking)
+			if !ok {
+				continue
+			}
 			return &llm.ChatChunk{
 				ID: chunk.ID,
 				Delta: &llm.ChoiceDelta{
 					Role:    llm.ChatRole(chunk.Choices[0].Delta.Role),
-					Content: chunk.Choices[0].Delta.Content,
+					Content: content,
 				},
 			}, nil
 		}

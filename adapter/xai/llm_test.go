@@ -1,6 +1,11 @@
 package xai
 
 import (
+	"encoding/base64"
+	"encoding/json"
+	"io"
+	"net/http"
+	"strings"
 	"testing"
 
 	"github.com/cavos-io/conversation-worker/core/llm"
@@ -71,4 +76,88 @@ func TestBuildXAIMessagesMapsDeveloperRoleToSystem(t *testing.T) {
 	if messages[0].Role != "system" || messages[0].Content != "instructions" {
 		t.Fatalf("message = %#v, want system instructions", messages[0])
 	}
+}
+
+func TestBuildXAIMessagesIncludesImageContent(t *testing.T) {
+	imageData := base64.StdEncoding.EncodeToString([]byte("png-bytes"))
+	ctx := llm.NewChatContext()
+	ctx.Items = []llm.ChatItem{
+		&llm.ChatMessage{
+			ID:   "user",
+			Role: llm.ChatRoleUser,
+			Content: []llm.ChatContent{
+				{Text: "describe"},
+				{Image: &llm.ImageContent{Image: "data:image/png;base64," + imageData, InferenceDetail: "high"}},
+			},
+		},
+	}
+
+	messages := buildXAIMessages(ctx)
+
+	content := xaiMessageContentAsList(t, messages[0])
+	if len(content) != 2 {
+		t.Fatalf("len(content) = %d, want 2: %#v", len(content), content)
+	}
+	if content[0]["type"] != "image_url" {
+		t.Fatalf("image content = %#v", content[0])
+	}
+	imageURL := content[0]["image_url"].(map[string]any)
+	if imageURL["url"] != "data:image/png;base64,"+imageData || imageURL["detail"] != "high" {
+		t.Fatalf("image_url = %#v", imageURL)
+	}
+	if content[1]["type"] != "text" || content[1]["text"] != "describe" {
+		t.Fatalf("text content = %#v", content[1])
+	}
+}
+
+func TestXAIStreamStripsThinkingChunks(t *testing.T) {
+	stream := &xaiStream{resp: &http.Response{
+		Body: io.NopCloser(strings.NewReader(strings.Join([]string{
+			`data: {"id":"chat","choices":[{"delta":{"role":"assistant","content":"<think>"}}]}`,
+			`data: {"id":"chat","choices":[{"delta":{"role":"assistant","content":"hidden reasoning"}}]}`,
+			`data: {"id":"chat","choices":[{"delta":{"role":"assistant","content":"</think>visible"}}]}`,
+			`data: [DONE]`,
+		}, "\n"))),
+	}}
+
+	chunk, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next() error = %v", err)
+	}
+	if chunk.Delta.Content != "" {
+		t.Fatalf("first chunk content = %q, want empty", chunk.Delta.Content)
+	}
+
+	chunk, err = stream.Next()
+	if err != nil {
+		t.Fatalf("Next() error = %v", err)
+	}
+	if chunk.Delta.Content != "visible" {
+		t.Fatalf("second visible content = %q, want visible", chunk.Delta.Content)
+	}
+}
+
+func xaiMessageContentAsList(t *testing.T, message xaiMessage) []map[string]any {
+	t.Helper()
+	data, err := json.Marshal(message)
+	if err != nil {
+		t.Fatalf("marshal message: %v", err)
+	}
+	var raw map[string]any
+	if err := json.Unmarshal(data, &raw); err != nil {
+		t.Fatalf("unmarshal message: %v", err)
+	}
+	rawContent, ok := raw["content"].([]any)
+	if !ok {
+		t.Fatalf("content = %#v, want multipart content", raw["content"])
+	}
+	content := make([]map[string]any, 0, len(rawContent))
+	for _, item := range rawContent {
+		part, ok := item.(map[string]any)
+		if !ok {
+			t.Fatalf("content item = %#v, want map", item)
+		}
+		content = append(content, part)
+	}
+	return content
 }

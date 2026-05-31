@@ -2,6 +2,8 @@ package aws
 
 import (
 	"context"
+	"encoding/base64"
+	"reflect"
 	"testing"
 
 	awstypes "github.com/aws/aws-sdk-go-v2/service/bedrockruntime/types"
@@ -79,6 +81,38 @@ func TestBuildAWSMessagesFiltersUnmatchedToolItems(t *testing.T) {
 		t.Fatalf("role = %q, want user", messages[0].Role)
 	}
 	assertTextBlock(t, messages[0].Content, 0, "hello")
+}
+
+func TestBuildAWSMessagesIncludesInlineImageBlocks(t *testing.T) {
+	imageData := base64.StdEncoding.EncodeToString([]byte("webp-bytes"))
+	ctx := llm.NewChatContext()
+	ctx.Items = []llm.ChatItem{
+		&llm.ChatMessage{
+			ID:   "user",
+			Role: llm.ChatRoleUser,
+			Content: []llm.ChatContent{
+				{Text: "describe"},
+				{Image: &llm.ImageContent{Image: "data:image/webp;base64," + imageData}},
+			},
+		},
+	}
+
+	messages, _ := buildAWSMessages(ctx)
+
+	if len(messages[0].Content) != 2 {
+		t.Fatalf("len(content) = %d, want 2: %#v", len(messages[0].Content), messages[0].Content)
+	}
+	imageBlock, ok := messages[0].Content[1].(*awstypes.ContentBlockMemberImage)
+	if !ok {
+		t.Fatalf("image content = %#v, want ContentBlockMemberImage", messages[0].Content[1])
+	}
+	if imageBlock.Value.Format != awstypes.ImageFormatWebp {
+		t.Fatalf("image format = %q, want webp", imageBlock.Value.Format)
+	}
+	source, ok := imageBlock.Value.Source.(*awstypes.ImageSourceMemberBytes)
+	if !ok || !reflect.DeepEqual(source.Value, []byte("webp-bytes")) {
+		t.Fatalf("image source = %#v, want bytes", imageBlock.Value.Source)
+	}
 }
 
 func TestBuildAWSToolConfigMapsNamedToolChoice(t *testing.T) {

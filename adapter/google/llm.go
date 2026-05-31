@@ -242,8 +242,28 @@ func googleMessageParts(msg *llm.ChatMessage) []*genai.Part {
 		if content.Text != "" {
 			parts = append(parts, genai.NewPartFromText(content.Text))
 		}
+		if content.Image != nil {
+			if part := googleImagePart(content.Image); part != nil {
+				parts = append(parts, part)
+			}
+		}
 	}
 	return parts
+}
+
+func googleImagePart(image *llm.ImageContent) *genai.Part {
+	img, err := llm.SerializeImage(image)
+	if err != nil {
+		return nil
+	}
+	if img.ExternalURL == "" {
+		return genai.NewPartFromBytes(img.DataBytes, img.MIMEType)
+	}
+	mimeType := img.MIMEType
+	if mimeType == "" {
+		mimeType = "image/jpeg"
+	}
+	return genai.NewPartFromURI(img.ExternalURL, mimeType)
 }
 
 func googleFunctionCallPart(fc *llm.FunctionCall) *genai.Part {

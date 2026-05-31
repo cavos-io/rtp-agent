@@ -3,6 +3,7 @@ package anthropic
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -193,6 +194,58 @@ func TestBuildAnthropicMessagesCollectsSystemText(t *testing.T) {
 		t.Fatalf("len(messages) = %d, want 1", len(messages))
 	}
 	assertAnthropicTextBlock(t, messages[0].Content, 0, "hello")
+}
+
+func TestBuildAnthropicMessagesIncludesImageBlocks(t *testing.T) {
+	imageData := base64.StdEncoding.EncodeToString([]byte("gif-bytes"))
+	ctx := llm.NewChatContext()
+	ctx.Items = []llm.ChatItem{
+		&llm.ChatMessage{
+			ID:   "user",
+			Role: llm.ChatRoleUser,
+			Content: []llm.ChatContent{
+				{Text: "describe"},
+				{Image: &llm.ImageContent{Image: "data:image/gif;base64," + imageData}},
+				{Image: &llm.ImageContent{Image: "https://example.test/image.png"}},
+			},
+		},
+	}
+
+	messages, _ := buildAnthropicMessages(ctx)
+
+	blocks := messages[0].Content
+	if len(blocks) != 3 {
+		t.Fatalf("len(blocks) = %d, want 3: %#v", len(blocks), blocks)
+	}
+	inlineBlock := anthropicContentBlockToMap(t, blocks[1])
+	if inlineBlock["type"] != "image" {
+		t.Fatalf("inline image block = %#v", inlineBlock)
+	}
+	inlineSource := inlineBlock["source"].(map[string]any)
+	if inlineSource["type"] != "base64" || inlineSource["data"] != imageData || inlineSource["media_type"] != "image/gif" {
+		t.Fatalf("inline image source = %#v", inlineSource)
+	}
+	urlBlock := anthropicContentBlockToMap(t, blocks[2])
+	if urlBlock["type"] != "image" {
+		t.Fatalf("url image block = %#v", urlBlock)
+	}
+	urlSource := urlBlock["source"].(map[string]any)
+	if urlSource["type"] != "url" || urlSource["url"] != "https://example.test/image.png" {
+		t.Fatalf("url image source = %#v", urlSource)
+	}
+}
+
+func anthropicContentBlockToMap(t *testing.T, block anthropicContentBlock) map[string]any {
+	t.Helper()
+	data, err := json.Marshal(block)
+	if err != nil {
+		t.Fatalf("marshal block: %v", err)
+	}
+	var out map[string]any
+	if err := json.Unmarshal(data, &out); err != nil {
+		t.Fatalf("unmarshal block: %v", err)
+	}
+	return out
 }
 
 func assertAnthropicTextBlock(t *testing.T, blocks []anthropicContentBlock, index int, want string) {

@@ -2,8 +2,11 @@ package agent
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"io"
 	"sync"
+	"time"
 
 	"github.com/cavos-io/conversation-worker/core/llm"
 	"github.com/cavos-io/conversation-worker/library/logger"
@@ -18,7 +21,7 @@ type MultimodalAgent struct {
 
 	rtSession llm.RealtimeSession
 	audioInCh chan *model.AudioFrame
-	
+
 	mu     sync.Mutex
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -116,7 +119,7 @@ func (ma *MultimodalAgent) handleRealtimeEvent(ev llm.RealtimeEvent) {
 
 	case llm.RealtimeEventTypeFunctionCall:
 		logger.Logger.Infow("Executing tool (multimodal)", "name", ev.Function.Name)
-		
+
 		// Find and execute tool
 		var foundTool llm.Tool
 		for _, t := range ma.session.Tools {
@@ -126,28 +129,60 @@ func (ma *MultimodalAgent) handleRealtimeEvent(ev llm.RealtimeEvent) {
 			}
 		}
 
-		if foundTool != nil {
-			output, err := foundTool.Execute(ma.ctx, ev.Function.Arguments)
-			isError := err != nil
-			if isError {
-				output = err.Error()
-			}
-			
-			// Append back to chat context and update realtime session
-			ma.chatCtx.Append(&llm.FunctionCallOutput{
-				CallID:  ev.Function.CallID,
-				Name:    ev.Function.Name,
-				Output:  output,
-				IsError: isError,
+		if foundTool == nil {
+			ma.appendRealtimeToolOutput(&llm.FunctionCallOutput{
+				CallID:    ev.Function.CallID,
+				Name:      ev.Function.Name,
+				Output:    fmt.Sprintf("Unknown function: %s", ev.Function.Name),
+				IsError:   true,
+				CreatedAt: time.Now(),
 			})
-			_ = ma.rtSession.UpdateChatContext(ma.chatCtx)
+			return
 		}
-	
+
+		output, err := foundTool.Execute(ma.ctx, ev.Function.Arguments)
+		if err != nil {
+			var stopResponse llm.StopResponse
+			if errors.As(err, &stopResponse) {
+				return
+			}
+
+			var toolErr llm.ToolError
+			outputStr := "An internal error occurred"
+			if errors.As(err, &toolErr) {
+				outputStr = toolErr.Message
+			}
+			ma.appendRealtimeToolOutput(&llm.FunctionCallOutput{
+				CallID:    ev.Function.CallID,
+				Name:      ev.Function.Name,
+				Output:    outputStr,
+				IsError:   true,
+				CreatedAt: time.Now(),
+			})
+			return
+		}
+
+		ma.appendRealtimeToolOutput(&llm.FunctionCallOutput{
+			CallID:    ev.Function.CallID,
+			Name:      ev.Function.Name,
+			Output:    output,
+			IsError:   false,
+			CreatedAt: time.Now(),
+		})
+
 	case llm.RealtimeEventTypeError:
 		if ev.Error != io.EOF {
 			logger.Logger.Errorw("Realtime stream error", ev.Error)
 		}
 	}
+}
+
+func (ma *MultimodalAgent) appendRealtimeToolOutput(output *llm.FunctionCallOutput) {
+	if output == nil {
+		return
+	}
+	ma.chatCtx.Append(output)
+	_ = ma.rtSession.UpdateChatContext(ma.chatCtx)
 }
 
 func (ma *MultimodalAgent) OnAudioFrame(ctx context.Context, frame *model.AudioFrame) {

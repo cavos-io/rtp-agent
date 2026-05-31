@@ -201,8 +201,39 @@ func awsMessageContentBlocks(msg *llm.ChatMessage) []types.ContentBlock {
 		if c.Text != "" {
 			blocks = append(blocks, &types.ContentBlockMemberText{Value: c.Text})
 		}
+		if c.Image != nil {
+			if block := awsImageBlock(c.Image); block != nil {
+				blocks = append(blocks, block)
+			}
+		}
 	}
 	return blocks
+}
+
+func awsImageBlock(image *llm.ImageContent) types.ContentBlock {
+	img, err := llm.SerializeImage(image)
+	if err != nil || img.ExternalURL != "" {
+		return nil
+	}
+	return &types.ContentBlockMemberImage{
+		Value: types.ImageBlock{
+			Format: awsImageFormat(img.MIMEType),
+			Source: &types.ImageSourceMemberBytes{Value: img.DataBytes},
+		},
+	}
+}
+
+func awsImageFormat(mimeType string) types.ImageFormat {
+	switch mimeType {
+	case "image/png":
+		return types.ImageFormatPng
+	case "image/gif":
+		return types.ImageFormatGif
+	case "image/webp":
+		return types.ImageFormatWebp
+	default:
+		return types.ImageFormatJpeg
+	}
 }
 
 func awsToolUseBlock(fc *llm.FunctionCall) types.ContentBlock {
