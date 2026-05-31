@@ -5,6 +5,7 @@ import (
 	"errors"
 	"math"
 	"net/http"
+	"os"
 	"runtime"
 	"strings"
 	"testing"
@@ -1343,6 +1344,52 @@ func TestValidateRunPreconditionsRejectsFiniteLoadThresholdAboveOne(t *testing.T
 	}
 	if !strings.Contains(err.Error(), "load_threshold in prod env must be less than 1") {
 		t.Fatalf("validateRunPreconditions() error = %q, want load threshold message", err.Error())
+	}
+}
+
+func TestRunExportsLiveKitCredentialsBeforeDial(t *testing.T) {
+	t.Setenv("LIVEKIT_URL", "wss://old.example")
+	t.Setenv("LIVEKIT_API_KEY", "old-key")
+	t.Setenv("LIVEKIT_API_SECRET", "old-secret")
+
+	oldDial := workerDialContext
+	oldSleep := workerRetrySleep
+	t.Cleanup(func() {
+		workerDialContext = oldDial
+		workerRetrySleep = oldSleep
+	})
+
+	dialed := false
+	workerDialContext = func(context.Context, *websocket.Dialer, string, http.Header) (*websocket.Conn, *http.Response, error) {
+		dialed = true
+		if os.Getenv("LIVEKIT_URL") != "wss://run.example" {
+			t.Fatalf("LIVEKIT_URL = %q, want run option", os.Getenv("LIVEKIT_URL"))
+		}
+		if os.Getenv("LIVEKIT_API_KEY") != "run-key" {
+			t.Fatalf("LIVEKIT_API_KEY = %q, want run-key", os.Getenv("LIVEKIT_API_KEY"))
+		}
+		if os.Getenv("LIVEKIT_API_SECRET") != "run-secret" {
+			t.Fatalf("LIVEKIT_API_SECRET = %q, want run-secret", os.Getenv("LIVEKIT_API_SECRET"))
+		}
+		return nil, nil, errors.New("stop after env check")
+	}
+	workerRetrySleep = func(context.Context, time.Duration) error {
+		return context.Canceled
+	}
+
+	server := NewAgentServer(WorkerOptions{
+		WSRL:      "wss://run.example",
+		APIKey:    "run-key",
+		APISecret: "run-secret",
+		MaxRetry:  1,
+	})
+	if err := server.RTCSession(func(ctx *JobContext) error { return nil }, nil, nil); err != nil {
+		t.Fatalf("RTCSession() error = %v", err)
+	}
+
+	_ = server.Run(context.Background())
+	if !dialed {
+		t.Fatal("worker dial was not attempted")
 	}
 }
 

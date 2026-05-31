@@ -656,6 +656,9 @@ func (s *AgentServer) Run(ctx context.Context) error {
 	if err := s.validateRunPreconditions(); err != nil {
 		return err
 	}
+	os.Setenv("LIVEKIT_URL", s.Options.WSRL)
+	os.Setenv("LIVEKIT_API_KEY", s.Options.APIKey)
+	os.Setenv("LIVEKIT_API_SECRET", s.Options.APISecret)
 
 	agentURL, err := agentWebSocketURL(s.Options.WSRL, s.Options.WorkerToken)
 	if err != nil {
