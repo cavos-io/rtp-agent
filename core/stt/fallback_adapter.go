@@ -2,7 +2,9 @@ package stt
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"io"
 	"sync"
 
 	"github.com/cavos-io/conversation-worker/library/logger"
@@ -135,6 +137,11 @@ func (s *fallbackRecognizeStream) monitorStream() {
 
 		ev, err := stream.Next()
 		if err != nil {
+			if errors.Is(err, io.EOF) {
+				s.errCh <- io.EOF
+				return
+			}
+
 			s.mu.Lock()
 			if s.closed {
 				s.mu.Unlock()
