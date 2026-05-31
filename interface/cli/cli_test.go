@@ -144,12 +144,80 @@ func TestWatcherTriggerReloadRequestsActiveJobsBeforeRestart(t *testing.T) {
 		requestedBeforeRestart = msg.Type == ipc.MessageTypeActiveJobsRequest
 	}, args)
 	watcher.reloadIPC = &output
+	watcher.activeJobsTimeout = time.Nanosecond
 
 	if !watcher.triggerReload() {
 		t.Fatal("triggerReload() = false, want true")
 	}
 	if !requestedBeforeRestart {
 		t.Fatal("triggerReload() did not request active jobs before restart")
+	}
+	if args.ReloadCount != 4 {
+		t.Fatalf("ReloadCount = %d, want 4", args.ReloadCount)
+	}
+}
+
+func TestWatcherTriggerReloadWaitsForActiveJobsBeforeRestart(t *testing.T) {
+	args := &CliArgs{ReloadCount: 3}
+	job := ipc.RunningJobInfo{Job: &livekit.Job{Id: "job-current"}, Token: "current-token"}
+	restartStarted := make(chan struct{})
+	var watcher *Watcher
+	watcher = NewWatcher(nil, func() {
+		close(restartStarted)
+		resp := watcher.reloadJobsResponse()
+		if len(resp.Jobs) != 1 || resp.Jobs[0].Job.GetId() != "job-current" {
+			t.Fatalf("reloadJobsResponse().Jobs = %#v, want active job before restart", resp.Jobs)
+		}
+	}, args)
+
+	peerReader, watcherWriter := io.Pipe()
+	watcher.reloadIPC = watcherWriter
+	requestRead := make(chan struct{})
+	allowResponse := make(chan struct{})
+	go func() {
+		defer peerReader.Close()
+		msg, err := ipc.ReadMessage(peerReader)
+		if err != nil {
+			t.Errorf("ReadMessage ActiveJobsRequest: %v", err)
+			return
+		}
+		if msg.Type != ipc.MessageTypeActiveJobsRequest {
+			t.Errorf("request Type = %q, want %q", msg.Type, ipc.MessageTypeActiveJobsRequest)
+			return
+		}
+		close(requestRead)
+		<-allowResponse
+		watcher.recordActiveJobsResponse(ipc.ActiveJobsResponse{
+			Jobs:        []ipc.RunningJobInfo{job},
+			ReloadCount: 3,
+		})
+	}()
+
+	done := make(chan bool, 1)
+	go func() {
+		done <- watcher.triggerReload()
+	}()
+
+	select {
+	case <-requestRead:
+	case <-time.After(time.Second):
+		t.Fatal("triggerReload() did not request active jobs")
+	}
+
+	select {
+	case <-restartStarted:
+		t.Fatal("restart started before active jobs response")
+	case <-time.After(25 * time.Millisecond):
+	}
+
+	close(allowResponse)
+	select {
+	case ok := <-done:
+		if !ok {
+			t.Fatal("triggerReload() = false, want true")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("triggerReload() did not finish after active jobs response")
 	}
 	if args.ReloadCount != 4 {
 		t.Fatalf("ReloadCount = %d, want 4", args.ReloadCount)

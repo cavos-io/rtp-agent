@@ -27,12 +27,16 @@ type Watcher struct {
 	cliArgs    *CliArgs
 	activeJobs []ipc.RunningJobInfo
 	reloadIPC  io.Writer
+	reloadJobs chan struct{}
+
+	activeJobsTimeout time.Duration
 }
 
 func NewWatcher(paths []string, onChange func(), cliArgs ...*CliArgs) *Watcher {
 	watcher := &Watcher{
-		paths:    paths,
-		onChange: onChange,
+		paths:             paths,
+		onChange:          onChange,
+		activeJobsTimeout: 1500 * time.Millisecond,
 	}
 	if len(cliArgs) > 0 {
 		watcher.cliArgs = cliArgs[0]
@@ -113,6 +117,40 @@ func (w *Watcher) incrementReloadCount() {
 	}
 }
 
+func (w *Watcher) beginActiveJobsWait() <-chan struct{} {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	ch := make(chan struct{})
+	w.reloadJobs = ch
+	return ch
+}
+
+func (w *Watcher) clearActiveJobsWait(ch <-chan struct{}) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.reloadJobs == ch {
+		w.reloadJobs = nil
+	}
+}
+
+func (w *Watcher) waitForActiveJobs(ch <-chan struct{}) {
+	if ch == nil {
+		return
+	}
+	timeout := w.activeJobsTimeout
+	if timeout <= 0 {
+		w.clearActiveJobsWait(ch)
+		return
+	}
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+	select {
+	case <-ch:
+	case <-timer.C:
+	}
+	w.clearActiveJobsWait(ch)
+}
+
 func (w *Watcher) Reloaded() {
 	w.mu.Lock()
 	defer w.mu.Unlock()
@@ -126,6 +164,10 @@ func (w *Watcher) recordActiveJobsResponse(resp ipc.ActiveJobsResponse) bool {
 		return false
 	}
 	w.activeJobs = append([]ipc.RunningJobInfo(nil), resp.Jobs...)
+	if w.reloadJobs != nil {
+		close(w.reloadJobs)
+		w.reloadJobs = nil
+	}
 	return true
 }
 
@@ -230,8 +272,12 @@ func (w *Watcher) triggerReload() bool {
 		return false
 	}
 	if w.reloadIPC != nil {
+		waitCh := w.beginActiveJobsWait()
 		if err := w.requestActiveJobs(w.reloadIPC); err != nil {
 			logger.Logger.Warnw("failed to request active jobs before reload", err)
+			w.clearActiveJobsWait(waitCh)
+		} else {
+			w.waitForActiveJobs(waitCh)
 		}
 	}
 	w.incrementReloadCount()
