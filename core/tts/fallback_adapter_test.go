@@ -356,6 +356,60 @@ func TestFallbackSynthesizeStreamRetriesSameTTSBeforeFallback(t *testing.T) {
 	}
 }
 
+func TestFallbackSynthesizeStreamReplaysFlushBoundariesOnRetry(t *testing.T) {
+	primaryFailure := &blockingFailSynthesizeStream{
+		err:     errors.New("primary stream failed"),
+		release: make(chan struct{}),
+	}
+	recovered := &metadataSynthesizeStream{events: []*SynthesizedAudio{{
+		Frame: &model.AudioFrame{Data: []byte("primary recovered")},
+	}}}
+	primary := &metadataTTS{
+		label:        "primary",
+		sampleRate:   24000,
+		numChannels:  1,
+		capabilities: TTSCapabilities{Streaming: true},
+		streams: []SynthesizeStream{
+			primaryFailure,
+			recovered,
+		},
+	}
+	adapter := NewFallbackAdapterWithOptions([]TTS{primary}, FallbackAdapterOptions{
+		MaxRetryPerTTS: 1,
+	})
+
+	stream, err := adapter.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+	defer stream.Close()
+
+	if err := stream.PushText("hello"); err != nil {
+		t.Fatalf("PushText(hello) returned error: %v", err)
+	}
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush returned error: %v", err)
+	}
+	if err := stream.PushText("world"); err != nil {
+		t.Fatalf("PushText(world) returned error: %v", err)
+	}
+
+	close(primaryFailure.release)
+
+	audio, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next returned error: %v", err)
+	}
+	if got := string(audio.Frame.Data); got != "primary recovered" {
+		t.Fatalf("audio data = %q, want primary recovered", got)
+	}
+
+	wantCalls := []string{"push:hello", "flush", "push:world"}
+	if strings.Join(recovered.calls, ",") != strings.Join(wantCalls, ",") {
+		t.Fatalf("replayed stream calls = %#v, want %#v", recovered.calls, wantCalls)
+	}
+}
+
 type metadataTTS struct {
 	label           string
 	sampleRate      int
@@ -438,13 +492,16 @@ type metadataSynthesizeStream struct {
 	events []*SynthesizedAudio
 	index  int
 	err    error
+	calls  []string
 }
 
-func (m *metadataSynthesizeStream) PushText(string) error {
+func (m *metadataSynthesizeStream) PushText(text string) error {
+	m.calls = append(m.calls, "push:"+text)
 	return nil
 }
 
 func (m *metadataSynthesizeStream) Flush() error {
+	m.calls = append(m.calls, "flush")
 	return nil
 }
 
@@ -462,4 +519,26 @@ func (m *metadataSynthesizeStream) Next() (*SynthesizedAudio, error) {
 		return nil, m.err
 	}
 	return nil, io.EOF
+}
+
+type blockingFailSynthesizeStream struct {
+	err     error
+	release chan struct{}
+}
+
+func (s *blockingFailSynthesizeStream) PushText(string) error {
+	return nil
+}
+
+func (s *blockingFailSynthesizeStream) Flush() error {
+	return nil
+}
+
+func (s *blockingFailSynthesizeStream) Close() error {
+	return nil
+}
+
+func (s *blockingFailSynthesizeStream) Next() (*SynthesizedAudio, error) {
+	<-s.release
+	return nil, s.err
 }
