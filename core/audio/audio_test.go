@@ -78,3 +78,97 @@ func TestSilenceFrameHelpersMatchReferenceShape(t *testing.T) {
 		t.Fatalf("CalculateAudioDuration() = %v, want 0.04", got)
 	}
 }
+
+func TestAudioArrayBufferPushReadShiftAndReset(t *testing.T) {
+	buffer := NewAudioArrayBuffer(4, 16000)
+	frame := audioFrameFromInt16(16000, 1, []int16{1, 2, 3})
+
+	written, err := buffer.PushFrame(frame)
+	if err != nil {
+		t.Fatalf("PushFrame() error = %v", err)
+	}
+	if written != 3 {
+		t.Fatalf("PushFrame() written = %d, want 3", written)
+	}
+	if got := buffer.Len(); got != 3 {
+		t.Fatalf("Len() = %d, want 3", got)
+	}
+	if got := buffer.Read(); !equalInt16(got, []int16{1, 2, 3}) {
+		t.Fatalf("Read() = %v, want [1 2 3]", got)
+	}
+
+	buffer.Shift(2)
+	if got := buffer.Read(); !equalInt16(got, []int16{3}) {
+		t.Fatalf("Read() after Shift = %v, want [3]", got)
+	}
+
+	buffer.Reset()
+	if got := buffer.Len(); got != 0 {
+		t.Fatalf("Len() after Reset = %d, want 0", got)
+	}
+	if got := buffer.Read(); len(got) != 0 {
+		t.Fatalf("Read() after Reset = %v, want empty", got)
+	}
+}
+
+func TestAudioArrayBufferSlidesAndMixesMultichannelFrames(t *testing.T) {
+	buffer := NewAudioArrayBuffer(4, 16000)
+	first := audioFrameFromInt16(16000, 2, []int16{
+		10, 30,
+		20, 40,
+		30, 50,
+	})
+	second := audioFrameFromInt16(16000, 2, []int16{
+		40, 60,
+		50, 70,
+	})
+
+	if _, err := buffer.PushFrame(first); err != nil {
+		t.Fatalf("PushFrame(first) error = %v", err)
+	}
+	written, err := buffer.PushFrame(second)
+	if err != nil {
+		t.Fatalf("PushFrame(second) error = %v", err)
+	}
+	if written != 2 {
+		t.Fatalf("PushFrame(second) written = %d, want 2", written)
+	}
+	if got := buffer.Read(); !equalInt16(got, []int16{30, 40, 50, 60}) {
+		t.Fatalf("Read() = %v, want last four mixed mono samples", got)
+	}
+}
+
+func TestAudioArrayBufferRejectsOversizedFrames(t *testing.T) {
+	buffer := NewAudioArrayBuffer(2, 16000)
+	frame := audioFrameFromInt16(16000, 1, []int16{1, 2, 3})
+
+	if _, err := buffer.PushFrame(frame); err == nil {
+		t.Fatal("PushFrame() error = nil, want oversized frame error")
+	}
+}
+
+func audioFrameFromInt16(sampleRate uint32, channels uint32, samples []int16) *AudioFrame {
+	data := make([]byte, len(samples)*2)
+	for i, sample := range samples {
+		data[i*2] = byte(sample)
+		data[i*2+1] = byte(sample >> 8)
+	}
+	return &AudioFrame{
+		Data:              data,
+		SampleRate:        sampleRate,
+		NumChannels:       channels,
+		SamplesPerChannel: uint32(len(samples)) / channels,
+	}
+}
+
+func equalInt16(a []int16, b []int16) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}

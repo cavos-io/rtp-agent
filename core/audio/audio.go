@@ -1,6 +1,8 @@
 package audio
 
 import (
+	"fmt"
+
 	"github.com/cavos-io/conversation-worker/model"
 )
 
@@ -145,4 +147,90 @@ func minUint32(a, b uint32) uint32 {
 		return a
 	}
 	return b
+}
+
+type AudioArrayBuffer struct {
+	buffer     []int16
+	startIndex int
+	sampleRate uint32
+}
+
+func NewAudioArrayBuffer(bufferSize int, sampleRate uint32) *AudioArrayBuffer {
+	return &AudioArrayBuffer{
+		buffer:     make([]int16, bufferSize),
+		sampleRate: sampleRate,
+	}
+}
+
+func (b *AudioArrayBuffer) PushFrame(frame *model.AudioFrame) (int, error) {
+	if frame == nil {
+		return 0, nil
+	}
+	if int(frame.SamplesPerChannel) > len(b.buffer) {
+		return 0, fmt.Errorf("frame samples are greater than the buffer size")
+	}
+	if frame.NumChannels == 0 {
+		return 0, fmt.Errorf("frame has no channels")
+	}
+	if frame.SampleRate != 0 && b.sampleRate != 0 && frame.SampleRate != b.sampleRate {
+		return 0, fmt.Errorf("frame sample rate %d does not match buffer sample rate %d", frame.SampleRate, b.sampleRate)
+	}
+
+	samples := int(frame.SamplesPerChannel)
+	shiftSize := b.startIndex + samples - len(b.buffer)
+	if shiftSize > 0 {
+		b.Shift(shiftSize)
+	}
+	for i := 0; i < samples; i++ {
+		b.buffer[b.startIndex+i] = mixedFrameSample(frame, i)
+	}
+	b.startIndex += samples
+	return samples, nil
+}
+
+func (b *AudioArrayBuffer) Shift(size int) {
+	if size > b.startIndex {
+		size = b.startIndex
+	}
+	if size <= 0 {
+		return
+	}
+	copy(b.buffer[:b.startIndex-size], b.buffer[size:b.startIndex])
+	clear(b.buffer[b.startIndex-size : b.startIndex])
+	b.startIndex -= size
+}
+
+func (b *AudioArrayBuffer) Read() []int16 {
+	out := make([]int16, b.startIndex)
+	copy(out, b.buffer[:b.startIndex])
+	return out
+}
+
+func (b *AudioArrayBuffer) Reset() {
+	clear(b.buffer)
+	b.startIndex = 0
+}
+
+func (b *AudioArrayBuffer) Len() int {
+	return b.startIndex
+}
+
+func mixedFrameSample(frame *model.AudioFrame, sampleIndex int) int16 {
+	channels := int(frame.NumChannels)
+	if channels <= 1 {
+		return int16FromLE(frame.Data[sampleIndex*2:])
+	}
+	var sum int32
+	for channel := 0; channel < channels; channel++ {
+		offset := (sampleIndex*channels + channel) * 2
+		sum += int32(int16FromLE(frame.Data[offset:]))
+	}
+	return int16(sum / int32(channels))
+}
+
+func int16FromLE(data []byte) int16 {
+	if len(data) < 2 {
+		return 0
+	}
+	return int16(uint16(data[0]) | uint16(data[1])<<8)
 }
