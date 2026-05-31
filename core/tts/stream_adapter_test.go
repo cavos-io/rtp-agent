@@ -125,6 +125,21 @@ func TestStreamAdapterRejectsInputAfterClose(t *testing.T) {
 	}
 }
 
+func TestStreamAdapterNextReturnsEOFWhenClosed(t *testing.T) {
+	stream, err := NewStreamAdapter(&fakeStreamAdapterTTS{}).Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close returned error: %v", err)
+	}
+
+	err = nextStreamAdapterError(stream)
+	if !errors.Is(err, io.EOF) {
+		t.Fatalf("Next error = %v, want io.EOF", err)
+	}
+}
+
 func nextStreamAdapterError(stream SynthesizeStream) error {
 	errCh := make(chan error, 1)
 	go func() {

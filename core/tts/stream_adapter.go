@@ -81,6 +81,8 @@ func (w *streamAdapterWrapper) run() {
 		for {
 			select {
 			case <-w.ctx.Done():
+				tokenizer.Flush()
+				tokenizer.Close()
 				return
 			case input, ok := <-w.inputCh:
 				if !ok {
@@ -182,5 +184,5 @@ func (w *streamAdapterWrapper) Next() (*SynthesizedAudio, error) {
 		}
 	default:
 	}
-	return nil, context.Canceled
+	return nil, io.EOF
 }
