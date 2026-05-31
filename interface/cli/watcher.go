@@ -121,6 +121,25 @@ func (w *Watcher) reloadJobsResponse() ipc.ReloadJobsResponse {
 	}
 }
 
+func (w *Watcher) handleReloadMessage(payload any) (any, bool) {
+	switch msg := payload.(type) {
+	case *ipc.ActiveJobsResponse:
+		w.recordActiveJobsResponse(*msg)
+		return nil, true
+	case ipc.ActiveJobsResponse:
+		w.recordActiveJobsResponse(msg)
+		return nil, true
+	case *ipc.ReloadJobsRequest, ipc.ReloadJobsRequest:
+		resp := w.reloadJobsResponse()
+		return &resp, true
+	case *ipc.Reloaded, ipc.Reloaded:
+		w.Reloaded()
+		return nil, true
+	default:
+		return nil, false
+	}
+}
+
 func (w *Watcher) triggerReload() bool {
 	if w.onChange == nil {
 		return false

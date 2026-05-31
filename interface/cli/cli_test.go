@@ -162,3 +162,54 @@ func TestWatcherStoresActiveJobsForCurrentReload(t *testing.T) {
 		t.Fatalf("mutating ReloadJobsResponse changed stored token to %q", got.Jobs[0].Token)
 	}
 }
+
+func TestWatcherHandleReloadMessageRespondsWithActiveJobs(t *testing.T) {
+	args := &CliArgs{ReloadCount: 4}
+	watcher := NewWatcher(nil, nil, args)
+
+	storedJobs := []ipc.RunningJobInfo{{Job: &livekit.Job{Id: "job-current"}, Token: "current-token"}}
+	resp, ok := watcher.handleReloadMessage(&ipc.ActiveJobsResponse{
+		Jobs:        storedJobs,
+		ReloadCount: 4,
+	})
+	if !ok {
+		t.Fatal("handleReloadMessage(ActiveJobsResponse) = false, want true")
+	}
+	if resp != nil {
+		t.Fatalf("handleReloadMessage(ActiveJobsResponse) response = %#v, want nil", resp)
+	}
+
+	resp, ok = watcher.handleReloadMessage(&ipc.ReloadJobsRequest{})
+	if !ok {
+		t.Fatal("handleReloadMessage(ReloadJobsRequest) = false, want true")
+	}
+	reloadResp, ok := resp.(*ipc.ReloadJobsResponse)
+	if !ok {
+		t.Fatalf("handleReloadMessage(ReloadJobsRequest) response = %T, want *ReloadJobsResponse", resp)
+	}
+	if reloadResp.ReloadCount != 4 {
+		t.Fatalf("ReloadJobsResponse.ReloadCount = %d, want 4", reloadResp.ReloadCount)
+	}
+	if len(reloadResp.Jobs) != 1 || reloadResp.Jobs[0].Job.GetId() != "job-current" {
+		t.Fatalf("ReloadJobsResponse.Jobs = %#v, want current job", reloadResp.Jobs)
+	}
+
+	watcher.beginReload()
+	if !watcher.reloading {
+		t.Fatal("watcher.reloading = false, want active reload before Reloaded")
+	}
+	resp, ok = watcher.handleReloadMessage(&ipc.Reloaded{})
+	if !ok {
+		t.Fatal("handleReloadMessage(Reloaded) = false, want true")
+	}
+	if resp != nil {
+		t.Fatalf("handleReloadMessage(Reloaded) response = %#v, want nil", resp)
+	}
+	if watcher.reloading {
+		t.Fatal("watcher.reloading = true, want false after Reloaded")
+	}
+
+	if resp, ok := watcher.handleReloadMessage(&ipc.PingRequest{}); ok || resp != nil {
+		t.Fatalf("handleReloadMessage(PingRequest) = (%#v, %v), want (nil, false)", resp, ok)
+	}
+}
