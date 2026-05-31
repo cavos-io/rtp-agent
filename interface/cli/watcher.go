@@ -279,7 +279,10 @@ func (w *Watcher) processReloadIPCMessages(r io.Reader, out io.Writer) error {
 
 func (w *Watcher) runReloadIPCSession(rw io.ReadWriter) error {
 	w.setReloadIPC(rw)
-	defer w.clearReloadIPC(rw)
+	defer func() {
+		w.clearReloadIPC(rw)
+		w.Reloaded()
+	}()
 	if err := w.requestReloadJobs(rw); err != nil {
 		return err
 	}
