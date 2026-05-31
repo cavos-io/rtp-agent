@@ -3,6 +3,9 @@ package xai
 import (
 	"encoding/base64"
 	"encoding/json"
+	"io"
+	"net/http"
+	"strings"
 	"testing"
 
 	"github.com/cavos-io/conversation-worker/core/llm"
@@ -104,6 +107,33 @@ func TestBuildXAIMessagesIncludesImageContent(t *testing.T) {
 	}
 	if content[1]["type"] != "text" || content[1]["text"] != "describe" {
 		t.Fatalf("text content = %#v", content[1])
+	}
+}
+
+func TestXAIStreamStripsThinkingChunks(t *testing.T) {
+	stream := &xaiStream{resp: &http.Response{
+		Body: io.NopCloser(strings.NewReader(strings.Join([]string{
+			`data: {"id":"chat","choices":[{"delta":{"role":"assistant","content":"<think>"}}]}`,
+			`data: {"id":"chat","choices":[{"delta":{"role":"assistant","content":"hidden reasoning"}}]}`,
+			`data: {"id":"chat","choices":[{"delta":{"role":"assistant","content":"</think>visible"}}]}`,
+			`data: [DONE]`,
+		}, "\n"))),
+	}}
+
+	chunk, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next() error = %v", err)
+	}
+	if chunk.Delta.Content != "" {
+		t.Fatalf("first chunk content = %q, want empty", chunk.Delta.Content)
+	}
+
+	chunk, err = stream.Next()
+	if err != nil {
+		t.Fatalf("Next() error = %v", err)
+	}
+	if chunk.Delta.Content != "visible" {
+		t.Fatalf("second visible content = %q, want visible", chunk.Delta.Content)
 	}
 }
 

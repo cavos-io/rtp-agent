@@ -12,6 +12,11 @@ type DiffOps struct {
 	ToUpdate [][2]*string // [previous_item_id, id]
 }
 
+const (
+	thinkTagStart = "<think>"
+	thinkTagEnd   = "</think>"
+)
+
 type SerializedImage struct {
 	InferenceDetail string
 	MIMEType        string
@@ -64,6 +69,27 @@ func isSupportedImageMIMEType(mimeType string) bool {
 	default:
 		return false
 	}
+}
+
+func StripThinkingTokens(content string, thinking *bool) (string, bool) {
+	if thinking == nil {
+		return content, true
+	}
+	if *thinking {
+		idx := strings.Index(content, thinkTagEnd)
+		if idx >= 0 {
+			*thinking = false
+			return content[idx+len(thinkTagEnd):], true
+		}
+		return "", false
+	}
+
+	idx := strings.Index(content, thinkTagStart)
+	if idx >= 0 {
+		*thinking = true
+		return content[idx+len(thinkTagStart):], true
+	}
+	return content, true
 }
 
 func ComputeChatCtxDiff(oldCtx, newCtx *ChatContext) *DiffOps {

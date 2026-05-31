@@ -116,8 +116,9 @@ func (l *XaiLLM) Chat(ctx context.Context, chatCtx *llm.ChatContext, opts ...llm
 }
 
 type xaiStream struct {
-	resp    *http.Response
-	scanner *bufio.Scanner
+	resp     *http.Response
+	scanner  *bufio.Scanner
+	thinking bool
 }
 
 func buildXAIMessages(chatCtx *llm.ChatContext) []xaiMessage {
@@ -352,11 +353,15 @@ func (s *xaiStream) Next() (*llm.ChatChunk, error) {
 		}
 
 		if len(chunk.Choices) > 0 {
+			content, ok := llm.StripThinkingTokens(chunk.Choices[0].Delta.Content, &s.thinking)
+			if !ok {
+				continue
+			}
 			return &llm.ChatChunk{
 				ID: chunk.ID,
 				Delta: &llm.ChoiceDelta{
 					Role:    llm.ChatRole(chunk.Choices[0].Delta.Role),
-					Content: chunk.Choices[0].Delta.Content,
+					Content: content,
 				},
 			}, nil
 		}
