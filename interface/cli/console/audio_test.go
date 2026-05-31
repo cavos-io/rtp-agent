@@ -68,6 +68,9 @@ func TestAudioIOClearOutputBufferDropsQueuedSpeakerAudio(t *testing.T) {
 
 func TestAudioIOOutputPausePreservesQueuedSpeakerAudio(t *testing.T) {
 	audioIO := NewAudioIO()
+	if audioIO.OutputPaused() {
+		t.Fatal("OutputPaused() = true for new AudioIO, want false")
+	}
 	audioIO.PushFrame(&model.AudioFrame{
 		Data:              []byte{0x03, 0x00, 0x04, 0x00},
 		SampleRate:        24000,
@@ -76,6 +79,9 @@ func TestAudioIOOutputPausePreservesQueuedSpeakerAudio(t *testing.T) {
 	})
 
 	audioIO.SetOutputPaused(true)
+	if !audioIO.OutputPaused() {
+		t.Fatal("OutputPaused() = false after SetOutputPaused(true)")
+	}
 	out := []int16{9, 9}
 	audioIO.fillSpeakerOutput(out)
 	if out[0] != 0 || out[1] != 0 {
@@ -89,6 +95,9 @@ func TestAudioIOOutputPausePreservesQueuedSpeakerAudio(t *testing.T) {
 	}
 
 	audioIO.SetOutputPaused(false)
+	if audioIO.OutputPaused() {
+		t.Fatal("OutputPaused() = true after SetOutputPaused(false)")
+	}
 	audioIO.fillSpeakerOutput(out)
 	if out[0] != 3 || out[1] != 4 {
 		t.Fatalf("resumed speaker output = %v, want queued samples", out)

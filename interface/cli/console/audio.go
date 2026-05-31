@@ -131,6 +131,12 @@ func (a *AudioIO) SetOutputPaused(paused bool) {
 	a.outputPaused = paused
 }
 
+func (a *AudioIO) OutputPaused() bool {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.outputPaused
+}
+
 func (a *AudioIO) PushMicFrame(frame *model.AudioFrame) bool {
 	if frame == nil {
 		return false
