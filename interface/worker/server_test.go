@@ -814,6 +814,109 @@ func TestAgentServerReloadRunningJobsLaunchesRefreshedJobs(t *testing.T) {
 	}
 }
 
+func TestAgentServerHandleReloadMessageReportsAndReloadsJobs(t *testing.T) {
+	originalToken, err := auth.NewAccessToken("api-key", "api-secret").
+		SetIdentity("agent-a").
+		SetName("Agent A").
+		SetVideoGrant(&auth.VideoGrant{
+			RoomJoin: true,
+			Room:     "room-a",
+			Agent:    true,
+		}).
+		ToJWT()
+	if err != nil {
+		t.Fatalf("ToJWT() error = %v", err)
+	}
+
+	server := NewAgentServer(WorkerOptions{
+		WSRL:      "wss://livekit.example",
+		APIKey:    "api-key",
+		APISecret: "api-secret",
+	})
+	server.workerID = "worker-a"
+	activeCtx := NewJobContext(&livekit.Job{Id: "job-active", Room: &livekit.Room{Name: "room-active"}}, "wss://livekit.example", "api-key", "api-secret")
+	activeCtx.AcceptArguments = JobAcceptArguments{Identity: "agent-active"}
+	activeCtx.token = "active-token"
+	server.mu.Lock()
+	server.activeJobs[activeCtx.Job.Id] = activeCtx
+	server.mu.Unlock()
+
+	resp, ok, err := server.handleReloadMessage(context.Background(), &ipc.ActiveJobsRequest{}, 7, time.Now())
+	if err != nil {
+		t.Fatalf("handleReloadMessage(ActiveJobsRequest) error = %v", err)
+	}
+	if !ok {
+		t.Fatal("handleReloadMessage(ActiveJobsRequest) = false, want true")
+	}
+	activeResp, ok := resp.(*ipc.ActiveJobsResponse)
+	if !ok {
+		t.Fatalf("handleReloadMessage(ActiveJobsRequest) response = %T, want *ActiveJobsResponse", resp)
+	}
+	if activeResp.ReloadCount != 7 {
+		t.Fatalf("ActiveJobsResponse.ReloadCount = %d, want 7", activeResp.ReloadCount)
+	}
+	if len(activeResp.Jobs) != 1 || activeResp.Jobs[0].Job.GetId() != "job-active" {
+		t.Fatalf("ActiveJobsResponse.Jobs = %#v, want active job", activeResp.Jobs)
+	}
+
+	now := time.Date(2026, 5, 31, 15, 0, 0, 0, time.UTC)
+	reloadJob := ipc.RunningJobInfo{
+		AcceptArguments: ipc.JobAcceptArguments{Name: "Agent A", Identity: "agent-a"},
+		Job:             &livekit.Job{Id: "job-reloaded", Room: &livekit.Room{Name: "room-a"}},
+		URL:             "wss://old-livekit.example",
+		Token:           originalToken,
+		WorkerID:        "worker-a",
+	}
+	resp, ok, err = server.handleReloadMessage(context.Background(), &ipc.ReloadJobsResponse{
+		Jobs:        []ipc.RunningJobInfo{reloadJob},
+		ReloadCount: 7,
+	}, 7, now)
+	if err != nil {
+		t.Fatalf("handleReloadMessage(ReloadJobsResponse) error = %v", err)
+	}
+	if !ok {
+		t.Fatal("handleReloadMessage(ReloadJobsResponse) = false, want true")
+	}
+	if _, ok := resp.(*ipc.Reloaded); !ok {
+		t.Fatalf("handleReloadMessage(ReloadJobsResponse) response = %T, want *Reloaded", resp)
+	}
+
+	activeJobs := server.ActiveRunningJobs()
+	got := map[string]ipc.RunningJobInfo{}
+	for _, job := range activeJobs {
+		got[job.Job.GetId()] = job
+	}
+	reloaded, ok := got["job-reloaded"]
+	if !ok {
+		t.Fatalf("ActiveRunningJobs() missing reloaded job, got %#v", activeJobs)
+	}
+	if reloaded.Token == "" || reloaded.Token == originalToken {
+		t.Fatal("reloaded token was not refreshed")
+	}
+	tok, err := jwt.ParseSigned(reloaded.Token)
+	if err != nil {
+		t.Fatalf("ParseSigned(reloaded token) error = %v", err)
+	}
+	standardClaims := jwt.Claims{}
+	grants := auth.ClaimGrants{}
+	if err := tok.Claims([]byte("api-secret"), &standardClaims, &grants); err != nil {
+		t.Fatalf("reloaded token Claims() error = %v", err)
+	}
+	if standardClaims.Expiry == nil {
+		t.Fatal("reloaded token expiry = nil, want one-hour expiry")
+	}
+	if got := standardClaims.Expiry.Time(); !got.Equal(now.Add(time.Hour)) {
+		t.Fatalf("reloaded token expiry = %v, want %v", got, now.Add(time.Hour))
+	}
+	if grants.Identity != "agent-a" {
+		t.Fatalf("reloaded token identity = %q, want agent-a", grants.Identity)
+	}
+
+	if resp, ok, err := server.handleReloadMessage(context.Background(), &ipc.PingRequest{}, 7, now); err != nil || ok || resp != nil {
+		t.Fatalf("handleReloadMessage(PingRequest) = (%#v, %v, %v), want (nil, false, nil)", resp, ok, err)
+	}
+}
+
 func TestEmitWorkerStartedNotifiesHandlers(t *testing.T) {
 	server := NewAgentServer(WorkerOptions{})
 

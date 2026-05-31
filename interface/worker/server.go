@@ -306,6 +306,28 @@ func (s *AgentServer) launchReloadedJob(ctx context.Context, jobCtx *JobContext)
 	}()
 }
 
+func (s *AgentServer) handleReloadMessage(ctx context.Context, payload any, reloadCount int, now time.Time) (any, bool, error) {
+	switch msg := payload.(type) {
+	case *workeripc.ActiveJobsRequest, workeripc.ActiveJobsRequest:
+		return &workeripc.ActiveJobsResponse{
+			Jobs:        s.ActiveRunningJobs(),
+			ReloadCount: reloadCount,
+		}, true, nil
+	case *workeripc.ReloadJobsResponse:
+		if err := s.ReloadRunningJobs(ctx, msg.Jobs, now); err != nil {
+			return nil, true, err
+		}
+		return &workeripc.Reloaded{}, true, nil
+	case workeripc.ReloadJobsResponse:
+		if err := s.ReloadRunningJobs(ctx, msg.Jobs, now); err != nil {
+			return nil, true, err
+		}
+		return &workeripc.Reloaded{}, true, nil
+	default:
+		return nil, false, nil
+	}
+}
+
 func (s *AgentServer) UpdateOptions(opts WorkerOptions) error {
 	s.mu.Lock()
 	if s.conn != nil {
