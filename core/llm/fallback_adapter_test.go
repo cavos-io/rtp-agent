@@ -61,6 +61,40 @@ func TestFallbackAdapterDoesNotRetryAfterChunkSent(t *testing.T) {
 	}
 }
 
+func TestFallbackAdapterRetriesAfterChunkSentWhenEnabled(t *testing.T) {
+	firstErr := errors.New("primary stream failed")
+	adapter := NewFallbackAdapterWithOptions([]LLM{
+		&fakeFallbackLLM{stream: &fakeFallbackStream{events: []fakeFallbackEvent{
+			{chunk: &ChatChunk{Delta: &ChoiceDelta{Content: "partial"}}},
+			{err: firstErr},
+		}}},
+		&fakeFallbackLLM{stream: &fakeFallbackStream{events: []fakeFallbackEvent{
+			{chunk: &ChatChunk{Delta: &ChoiceDelta{Content: "fallback"}}},
+		}}},
+	}, FallbackAdapterOptions{RetryOnChunkSent: true})
+
+	stream, err := adapter.Chat(context.Background(), NewChatContext())
+	if err != nil {
+		t.Fatalf("Chat returned error: %v", err)
+	}
+
+	chunk, err := stream.Next()
+	if err != nil {
+		t.Fatalf("first Next returned error: %v", err)
+	}
+	if got := chunk.Delta.Content; got != "partial" {
+		t.Fatalf("first chunk content = %q, want partial", got)
+	}
+
+	chunk, err = stream.Next()
+	if err != nil {
+		t.Fatalf("second Next returned error: %v", err)
+	}
+	if got := chunk.Delta.Content; got != "fallback" {
+		t.Fatalf("second chunk content = %q, want fallback", got)
+	}
+}
+
 func TestFallbackAdapterRetriesAfterUsageOnlyChunk(t *testing.T) {
 	firstErr := errors.New("primary stream failed")
 	adapter := NewFallbackAdapter([]LLM{
@@ -95,6 +129,41 @@ func TestFallbackAdapterRetriesAfterUsageOnlyChunk(t *testing.T) {
 	}
 }
 
+func TestFallbackAdapterRetriesSameLLMBeforeFallback(t *testing.T) {
+	firstErr := errors.New("primary stream failed")
+	primary := &fakeFallbackLLM{streams: []LLMStream{
+		&fakeFallbackStream{events: []fakeFallbackEvent{{err: firstErr}}},
+		&fakeFallbackStream{events: []fakeFallbackEvent{
+			{chunk: &ChatChunk{Delta: &ChoiceDelta{Content: "primary recovered"}}},
+		}},
+	}}
+	fallback := &fakeFallbackLLM{stream: &fakeFallbackStream{events: []fakeFallbackEvent{
+		{chunk: &ChatChunk{Delta: &ChoiceDelta{Content: "fallback"}}},
+	}}}
+	adapter := NewFallbackAdapterWithOptions([]LLM{primary, fallback}, FallbackAdapterOptions{
+		MaxRetryPerLLM: 1,
+	})
+
+	stream, err := adapter.Chat(context.Background(), NewChatContext())
+	if err != nil {
+		t.Fatalf("Chat returned error: %v", err)
+	}
+
+	chunk, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next returned error: %v", err)
+	}
+	if got := chunk.Delta.Content; got != "primary recovered" {
+		t.Fatalf("chunk content = %q, want primary recovered", got)
+	}
+	if primary.calls != 2 {
+		t.Fatalf("primary calls = %d, want 2", primary.calls)
+	}
+	if fallback.calls != 0 {
+		t.Fatalf("fallback calls = %d, want 0", fallback.calls)
+	}
+}
+
 func TestFallbackAdapterDoesNotRetryCleanEOF(t *testing.T) {
 	second := &fakeFallbackLLM{stream: &fakeFallbackStream{events: []fakeFallbackEvent{
 		{chunk: &ChatChunk{Delta: &ChoiceDelta{Content: "fallback"}}},
@@ -119,15 +188,21 @@ func TestFallbackAdapterDoesNotRetryCleanEOF(t *testing.T) {
 }
 
 type fakeFallbackLLM struct {
-	stream LLMStream
-	err    error
-	calls  int
+	streams []LLMStream
+	stream  LLMStream
+	err     error
+	calls   int
 }
 
 func (f *fakeFallbackLLM) Chat(context.Context, *ChatContext, ...ChatOption) (LLMStream, error) {
 	f.calls++
 	if f.err != nil {
 		return nil, f.err
+	}
+	if len(f.streams) > 0 {
+		stream := f.streams[0]
+		f.streams = f.streams[1:]
+		return stream, nil
 	}
 	return f.stream, nil
 }

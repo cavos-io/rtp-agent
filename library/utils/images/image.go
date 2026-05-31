@@ -29,7 +29,7 @@ type EncodeOptions struct {
 func NewEncodeOptions() EncodeOptions {
 	return EncodeOptions{
 		Format:   "jpeg",
-		Quality:  85,
+		Quality:  75,
 		Width:    0,
 		Height:   0,
 		Strategy: "scale_aspect_fit", // Default behavior
@@ -52,7 +52,7 @@ func Encode(frame *VideoFrame, opts EncodeOptions) ([]byte, error) {
 		if len(frame.Data) < ySize+2*cSize {
 			return nil, fmt.Errorf("insufficient data for yuv420p frame: expected %d, got %d", ySize+2*cSize, len(frame.Data))
 		}
-		
+
 		yuvImg := image.NewYCbCr(rect, image.YCbCrSubsampleRatio420)
 		copy(yuvImg.Y, frame.Data[:ySize])
 		copy(yuvImg.Cb, frame.Data[ySize:ySize+cSize])
@@ -163,7 +163,7 @@ func Encode(frame *VideoFrame, opts EncodeOptions) ([]byte, error) {
 			}
 
 			dstImg = image.NewRGBA(image.Rect(0, 0, opts.Width, opts.Height))
-			
+
 			offsetX := (opts.Width - newWidth) / 2
 			offsetY := (opts.Height - newHeight) / 2
 			scaledRect := image.Rect(offsetX, offsetY, offsetX+newWidth, offsetY+newHeight)
@@ -183,8 +183,6 @@ func Encode(frame *VideoFrame, opts EncodeOptions) ([]byte, error) {
 			img = dstImg
 
 		case "scale_aspect_fit":
-			fallthrough
-		default:
 			newWidth = opts.Width
 			newHeight = int(origHeight * (targetWidth / origWidth))
 			if newHeight > opts.Height {
@@ -194,9 +192,11 @@ func Encode(frame *VideoFrame, opts EncodeOptions) ([]byte, error) {
 			dstImg = image.NewRGBA(image.Rect(0, 0, newWidth, newHeight))
 			draw.CatmullRom.Scale(dstImg, dstImg.Bounds(), img, img.Bounds(), draw.Over, nil)
 			img = dstImg
+		default:
+			return nil, fmt.Errorf("unknown resize strategy: %s", opts.Strategy)
 		}
 	}
-	
+
 	var buf bytes.Buffer
 	if opts.Format == "jpeg" || opts.Format == "jpg" {
 		err := jpeg.Encode(&buf, img, &jpeg.Options{Quality: opts.Quality})

@@ -121,11 +121,7 @@ func SplitSentences(text string, minSentenceLen int, retainFormat bool) []TokenD
 	text = regexp.MustCompile(` `+suffixes.String()+`\.`).ReplaceAllString(text, " ${1}<prd>")
 	text = regexp.MustCompile(` `+alphabets.String()+`\.`).ReplaceAllString(text, " ${1}<prd>")
 
-	// Han, Hiragana, Katakana, Thai punctuation
-	text = regexp.MustCompile(`([。！？])`).ReplaceAllString(text, "${1}<stop>")
-
-	// Common English punctuation
-	text = regexp.MustCompile(`([.!?])(["”])`).ReplaceAllString(text, "${1}${2}<stop>")
+	text = regexp.MustCompile(`([.!?。！？])(["”])`).ReplaceAllString(text, "${1}${2}<stop>")
 	text = addStopAfterSentencePunctuation(text)
 
 	text = strings.ReplaceAll(text, "<prd>", ".")
@@ -182,7 +178,7 @@ func addStopAfterSentencePunctuation(text string) string {
 	runes := []rune(text)
 	for i, char := range runes {
 		builder.WriteRune(char)
-		if char != '.' && char != '!' && char != '?' {
+		if char != '.' && char != '!' && char != '?' && char != '。' && char != '！' && char != '？' {
 			continue
 		}
 		if i+1 < len(runes) && (runes[i+1] == '"' || runes[i+1] == '”') {
@@ -236,6 +232,40 @@ func SplitWords(text string, ignorePunctuation bool, splitCharacter bool, retain
 	addCurrentWord(wordStart, len(text))
 
 	return words
+}
+
+func ReplaceWords(text string, replacements map[string]string) string {
+	if text == "" || len(replacements) == 0 {
+		return text
+	}
+
+	normalized := make(map[string]string, len(replacements))
+	for word, replacement := range replacements {
+		normalized[strings.ToLower(word)] = replacement
+	}
+
+	words := SplitWords(text, false, false, false)
+	var builder strings.Builder
+	lastIndex := 0
+	for _, word := range words {
+		noPunctuation := strings.TrimRight(word.Token, punctuationChars)
+		replacement, ok := normalized[strings.ToLower(noPunctuation)]
+		if !ok || noPunctuation == "" {
+			continue
+		}
+
+		punctuationOffset := len(word.Token) - len(noPunctuation)
+		builder.WriteString(text[lastIndex:word.Start])
+		builder.WriteString(replacement)
+		builder.WriteString(text[word.End-punctuationOffset : word.End])
+		lastIndex = word.End
+	}
+
+	if lastIndex == 0 {
+		return text
+	}
+	builder.WriteString(text[lastIndex:])
+	return builder.String()
 }
 
 func SplitParagraphs(text string) []TokenData {

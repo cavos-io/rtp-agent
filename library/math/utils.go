@@ -6,6 +6,8 @@ import (
 	"time"
 )
 
+var timeNow = time.Now
+
 func ShortUUID(prefix string) string {
 	b := make([]byte, 6)
 	if _, err := rand.Read(b); err != nil {
@@ -15,5 +17,5 @@ func ShortUUID(prefix string) string {
 }
 
 func TimeMS() int64 {
-	return time.Now().UnixNano() / int64(time.Millisecond)
+	return (timeNow().UnixNano() + int64(time.Millisecond)/2) / int64(time.Millisecond)
 }
