@@ -102,11 +102,11 @@ func SplitSentences(text string, minSentenceLen int, retainFormat bool) []TokenD
 	text = prefixes.ReplaceAllString(text, "${1}<prd>")
 	text = websites.ReplaceAllString(text, "<prd>${1}")
 	text = digits.ReplaceAllString(text, "${1}<prd>${2}")
-	
+
 	text = multipleDots.ReplaceAllStringFunc(text, func(match string) string {
 		return strings.Repeat("<prd>", len(match))
 	})
-	
+
 	if strings.Contains(text, "Ph.D") {
 		text = strings.ReplaceAll(text, "Ph.D.", "Ph<prd>D<prd>")
 	}
@@ -121,10 +121,10 @@ func SplitSentences(text string, minSentenceLen int, retainFormat bool) []TokenD
 
 	// Han, Hiragana, Katakana, Thai punctuation
 	text = regexp.MustCompile(`([。！？])`).ReplaceAllString(text, "${1}<stop>")
-	
+
 	// Common English punctuation
 	text = regexp.MustCompile(`([.!?])(["”])`).ReplaceAllString(text, "${1}${2}<stop>")
-	text = regexp.MustCompile(`([.!?])(?![”"])`).ReplaceAllString(text, "${1}<stop>")
+	text = addStopAfterSentencePunctuation(text)
 
 	text = strings.ReplaceAll(text, "<prd>", ".")
 
@@ -173,6 +173,22 @@ func SplitSentences(text string, minSentenceLen int, retainFormat bool) []TokenD
 	}
 
 	return sentences
+}
+
+func addStopAfterSentencePunctuation(text string) string {
+	var builder strings.Builder
+	runes := []rune(text)
+	for i, char := range runes {
+		builder.WriteRune(char)
+		if char != '.' && char != '!' && char != '?' {
+			continue
+		}
+		if i+1 < len(runes) && (runes[i+1] == '"' || runes[i+1] == '”') {
+			continue
+		}
+		builder.WriteString("<stop>")
+	}
+	return builder.String()
 }
 
 func SplitWords(text string, ignorePunctuation bool, splitCharacter bool, retainFormat bool) []TokenData {
