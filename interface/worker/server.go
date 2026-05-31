@@ -2,10 +2,12 @@ package worker
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"math"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -42,6 +44,8 @@ const (
 	defaultLoadThreshold  = 0.7
 	defaultProdLogLevel   = "INFO"
 	defaultDevLogLevel    = "DEBUG"
+	defaultProdHTTPPort   = 8081
+	defaultDevHTTPPort    = 0
 
 	participantAttributeAgentName = "lk.agent.name"
 )
@@ -89,6 +93,8 @@ type WorkerOptions struct {
 	WorkerType WorkerType
 	MaxRetry   int
 	Version    string
+	Host       string
+	Port       int
 	WSURL      string
 	LoadFunc   func(*AgentServer) float64
 	// WSRL is kept for backward compatibility. Prefer WSURL for new code.
@@ -124,6 +130,8 @@ type AgentServer struct {
 	draining           bool
 	mu                 sync.Mutex
 	conn               *websocket.Conn
+	httpServer         *http.Server
+	httpPort           int
 	workerMessageSink  func(*livekit.WorkerMessage) error
 	workerID           string
 	startedHandlers    []WorkerStartedHandler
@@ -163,8 +171,12 @@ func (s *AgentServer) ID() string {
 }
 
 func (s *AgentServer) WorkerInfo() WorkerInfo {
+	s.mu.Lock()
+	httpPort := s.httpPort
+	s.mu.Unlock()
+
 	return WorkerInfo{
-		HTTPPort:    0,
+		HTTPPort:    httpPort,
 		CloudAgents: s.Options.WorkerToken != "",
 	}
 }
@@ -420,6 +432,12 @@ func mergeWorkerOptions(current WorkerOptions, next WorkerOptions) WorkerOptions
 	if next.Version != "" {
 		current.Version = next.Version
 	}
+	if next.Host != "" {
+		current.Host = next.Host
+	}
+	if next.Port != 0 {
+		current.Port = next.Port
+	}
 	if next.WSURL != "" {
 		current.WSURL = next.WSURL
 		current.WSRL = next.WSURL
@@ -517,6 +535,9 @@ func resolveWorkerOptions(opts WorkerOptions) WorkerOptions {
 		}
 	}
 	opts.LogLevel = strings.ToUpper(opts.LogLevel)
+	if opts.Port == 0 && !opts.DevMode {
+		opts.Port = defaultProdHTTPPort
+	}
 	if opts.LoadThreshold == 0 {
 		if opts.DevMode {
 			opts.LoadThreshold = math.Inf(1)
@@ -559,6 +580,71 @@ func resolveWorkerOptions(opts WorkerOptions) WorkerOptions {
 	}
 
 	return opts
+}
+
+type workerMetadataResponse struct {
+	AgentName   string  `json:"agent_name"`
+	WorkerType  string  `json:"worker_type"`
+	WorkerLoad  float64 `json:"worker_load"`
+	ActiveJobs  int     `json:"active_jobs"`
+	SDKVersion  string  `json:"sdk_version"`
+	ProjectType string  `json:"project_type"`
+}
+
+func (s *AgentServer) workerHTTPHandler() http.Handler {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/" {
+			http.NotFound(w, r)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("OK"))
+	})
+	mux.HandleFunc("/worker", func(w http.ResponseWriter, r *http.Request) {
+		body := workerMetadataResponse{
+			AgentName:   s.Options.AgentName,
+			WorkerType:  livekit.JobType_name[int32(workerTypeToJobType(s.Options.WorkerType))],
+			WorkerLoad:  s.currentLoad(),
+			ActiveJobs:  s.activeJobCount(),
+			SDKVersion:  s.Options.Version,
+			ProjectType: "go",
+		}
+		w.Header().Set("Content-Type", "application/json")
+		if err := json.NewEncoder(w).Encode(body); err != nil {
+			logger.Logger.Errorw("failed to encode worker metadata", err)
+		}
+	})
+	return mux
+}
+
+func (s *AgentServer) startWorkerHTTPServer() (*http.Server, error) {
+	host := s.Options.Host
+	addr := fmt.Sprintf("%s:%d", host, s.Options.Port)
+	ln, err := net.Listen("tcp", addr)
+	if err != nil {
+		return nil, err
+	}
+
+	tcpAddr, ok := ln.Addr().(*net.TCPAddr)
+	if !ok {
+		_ = ln.Close()
+		return nil, fmt.Errorf("unexpected HTTP listener address %T", ln.Addr())
+	}
+
+	srv := &http.Server{Handler: s.workerHTTPHandler()}
+	s.mu.Lock()
+	s.httpServer = srv
+	s.httpPort = tcpAddr.Port
+	s.mu.Unlock()
+
+	go func() {
+		if err := srv.Serve(ln); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			logger.Logger.Errorw("worker HTTP server error", err)
+		}
+	}()
+
+	return srv, nil
 }
 
 func liveKitDevModeEnabled(value string) bool {
@@ -924,6 +1010,22 @@ func (s *AgentServer) Run(ctx context.Context) error {
 	os.Setenv("LIVEKIT_URL", s.Options.WSRL)
 	os.Setenv("LIVEKIT_API_KEY", s.Options.APIKey)
 	os.Setenv("LIVEKIT_API_SECRET", s.Options.APISecret)
+
+	httpServer, err := s.startWorkerHTTPServer()
+	if err != nil {
+		return err
+	}
+	defer func() {
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		if err := httpServer.Shutdown(shutdownCtx); err != nil {
+			_ = httpServer.Close()
+		}
+		s.mu.Lock()
+		s.httpServer = nil
+		s.httpPort = 0
+		s.mu.Unlock()
+	}()
 
 	agentURL, err := agentWebSocketURL(s.Options.WSRL, s.Options.WorkerToken)
 	if err != nil {

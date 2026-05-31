@@ -7,6 +7,7 @@ import (
 	"io"
 	"math"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"runtime"
 	"strings"
@@ -127,6 +128,9 @@ func TestNewAgentServerUsesReferenceWorkerDefaults(t *testing.T) {
 	if server.Options.LogLevel != "INFO" {
 		t.Fatalf("LogLevel = %q, want reference production default INFO", server.Options.LogLevel)
 	}
+	if server.Options.Port != 8081 {
+		t.Fatalf("Port = %d, want reference production default 8081", server.Options.Port)
+	}
 }
 
 func TestNewAgentServerUsesReferenceDevModeDefaultsFromEnvironment(t *testing.T) {
@@ -145,6 +149,9 @@ func TestNewAgentServerUsesReferenceDevModeDefaultsFromEnvironment(t *testing.T)
 	}
 	if server.Options.LogLevel != "DEBUG" {
 		t.Fatalf("LogLevel = %q, want reference development default DEBUG", server.Options.LogLevel)
+	}
+	if server.Options.Port != 0 {
+		t.Fatalf("Port = %d, want reference development default 0", server.Options.Port)
 	}
 	if !server.availableForJob() {
 		t.Fatal("availableForJob() = false, want true with development infinite load threshold")
@@ -214,6 +221,64 @@ func TestAgentServerWorkerInfoReportsCloudAgentsMode(t *testing.T) {
 	}
 	if info.HTTPPort != 0 {
 		t.Fatalf("WorkerInfo().HTTPPort = %d, want 0 before HTTP server starts", info.HTTPPort)
+	}
+}
+
+func TestWorkerHTTPHandlerReportsHealthOK(t *testing.T) {
+	server := NewAgentServer(WorkerOptions{})
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	rec := httptest.NewRecorder()
+
+	server.workerHTTPHandler().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("health status = %d, want 200", rec.Code)
+	}
+	if strings.TrimSpace(rec.Body.String()) != "OK" {
+		t.Fatalf("health body = %q, want OK", rec.Body.String())
+	}
+}
+
+func TestWorkerHTTPHandlerReportsWorkerMetadata(t *testing.T) {
+	server := NewAgentServer(WorkerOptions{
+		AgentName: "sales-agent",
+		LoadFunc:  func(*AgentServer) float64 { return 0.42 },
+	})
+	server.activeJobs["job-a"] = NewJobContext(&livekit.Job{Id: "job-a"}, "", "", "")
+
+	req := httptest.NewRequest(http.MethodGet, "/worker", nil)
+	rec := httptest.NewRecorder()
+
+	server.workerHTTPHandler().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("worker status = %d, want 200", rec.Code)
+	}
+	body := rec.Body.String()
+	for _, want := range []string{
+		`"agent_name":"sales-agent"`,
+		`"worker_type":"JT_ROOM"`,
+		`"worker_load":0.42`,
+		`"active_jobs":1`,
+		`"project_type":"go"`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("/worker response missing %s in %s", want, body)
+		}
+	}
+}
+
+func TestWorkerInfoReportsStartedHTTPPort(t *testing.T) {
+	server := NewAgentServer(WorkerOptions{DevMode: true, Host: "127.0.0.1"})
+	httpServer, err := server.startWorkerHTTPServer()
+	if err != nil {
+		t.Fatalf("startWorkerHTTPServer() error = %v", err)
+	}
+	defer httpServer.Close()
+
+	info := server.WorkerInfo()
+	if info.HTTPPort == 0 {
+		t.Fatal("WorkerInfo().HTTPPort = 0, want started HTTP port")
 	}
 }
 
@@ -2117,8 +2182,12 @@ func TestRunExportsLiveKitCredentialsBeforeDial(t *testing.T) {
 	})
 
 	dialed := false
+	var server *AgentServer
 	workerDialContext = func(context.Context, *websocket.Dialer, string, http.Header) (*websocket.Conn, *http.Response, error) {
 		dialed = true
+		if serverHTTPPort := server.WorkerInfo().HTTPPort; serverHTTPPort == 0 {
+			t.Fatal("WorkerInfo().HTTPPort = 0 before dial, want started HTTP server port")
+		}
 		if os.Getenv("LIVEKIT_URL") != "wss://run.example" {
 			t.Fatalf("LIVEKIT_URL = %q, want run option", os.Getenv("LIVEKIT_URL"))
 		}
@@ -2134,11 +2203,13 @@ func TestRunExportsLiveKitCredentialsBeforeDial(t *testing.T) {
 		return context.Canceled
 	}
 
-	server := NewAgentServer(WorkerOptions{
+	server = NewAgentServer(WorkerOptions{
 		WSRL:      "wss://run.example",
 		APIKey:    "run-key",
 		APISecret: "run-secret",
 		MaxRetry:  1,
+		DevMode:   true,
+		Host:      "127.0.0.1",
 	})
 	if err := server.RTCSession(func(ctx *JobContext) error { return nil }, nil, nil); err != nil {
 		t.Fatalf("RTCSession() error = %v", err)
