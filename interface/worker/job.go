@@ -49,6 +49,8 @@ var defaultParticipantEntrypointKinds = []livekit.ParticipantInfo_Kind{
 	livekit.ParticipantInfo_STANDARD,
 }
 
+const defaultSIPParticipantName = "SIP-participant"
+
 type JobRequest struct {
 	Job *livekit.Job
 
@@ -367,13 +369,20 @@ func (c *JobContext) AddSIPParticipant(ctx context.Context, callTo string, trunk
 		return &livekit.SIPParticipantInfo{}, nil
 	}
 	client := lksdk.NewSIPClient(c.url, c.apiKey, c.apiSecret)
-	return client.CreateSIPParticipant(ctx, &livekit.CreateSIPParticipantRequest{
+	return client.CreateSIPParticipant(ctx, c.createSIPParticipantRequest(callTo, trunkID, identity, name))
+}
+
+func (c *JobContext) createSIPParticipantRequest(callTo string, trunkID string, identity string, name string) *livekit.CreateSIPParticipantRequest {
+	if name == "" {
+		name = defaultSIPParticipantName
+	}
+	return &livekit.CreateSIPParticipantRequest{
 		RoomName:            c.Job.Room.Name,
 		ParticipantIdentity: identity,
 		ParticipantName:     name,
 		SipTrunkId:          trunkID,
 		SipCallTo:           callTo,
-	})
+	}
 }
 
 // TransferSIPParticipant transfers a SIP participant to another number.
@@ -383,11 +392,15 @@ func (c *JobContext) TransferSIPParticipant(ctx context.Context, identity string
 		return nil
 	}
 	client := lksdk.NewSIPClient(c.url, c.apiKey, c.apiSecret)
-	_, err := client.TransferSIPParticipant(ctx, &livekit.TransferSIPParticipantRequest{
+	_, err := client.TransferSIPParticipant(ctx, c.transferSIPParticipantRequest(identity, transferTo, playDialtone))
+	return err
+}
+
+func (c *JobContext) transferSIPParticipantRequest(identity string, transferTo string, playDialtone bool) *livekit.TransferSIPParticipantRequest {
+	return &livekit.TransferSIPParticipantRequest{
 		ParticipantIdentity: identity,
 		RoomName:            c.Job.Room.Name,
 		TransferTo:          transferTo,
 		PlayDialtone:        playDialtone,
-	})
-	return err
+	}
 }
