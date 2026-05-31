@@ -1084,6 +1084,31 @@ func TestChatContextToGoogleProviderFormatMapsTurnsAndSystemMessages(t *testing.
 	}
 }
 
+func TestChatContextToGoogleProviderFormatInlinesMidConversationInstructions(t *testing.T) {
+	ctx := NewChatContext()
+	ctx.Items = []ChatItem{
+		&ChatMessage{ID: "system", Role: ChatRoleSystem, Content: []ChatContent{{Text: "base instructions"}}},
+		&ChatMessage{ID: "turn-instructions", Role: ChatRoleSystem, Content: []ChatContent{{Text: "use short sentences"}}},
+	}
+
+	turns, extra := ctx.ToProviderFormat("google")
+
+	data := extra.(map[string]any)
+	if !reflect.DeepEqual(data["system_messages"], []string{"base instructions"}) {
+		t.Fatalf("system_messages = %#v", data["system_messages"])
+	}
+	if len(turns) != 1 {
+		t.Fatalf("len(turns) = %d, want 1: %#v", len(turns), turns)
+	}
+	if turns[0]["role"] != "user" {
+		t.Fatalf("turn = %#v, want user", turns[0])
+	}
+	parts := turns[0]["parts"].([]map[string]any)
+	if parts[0]["text"] != "<instructions>\nuse short sentences\n</instructions>" {
+		t.Fatalf("inline instruction part = %#v", parts[0])
+	}
+}
+
 func TestChatContextToAnthropicProviderFormatMapsTurnsAndSystemMessages(t *testing.T) {
 	ctx := NewChatContext()
 	ctx.Items = []ChatItem{

@@ -780,6 +780,7 @@ func (c *ChatContext) toGoogleProviderFormat() ([]map[string]any, any) {
 	systemMessages := make([]string, 0)
 	currentRole := ""
 	parts := make([]map[string]any, 0)
+	items := inlineMidConversationInstructions(c.Items)
 
 	flush := func() {
 		if currentRole == "" || len(parts) == 0 {
@@ -796,7 +797,7 @@ func (c *ChatContext) toGoogleProviderFormat() ([]map[string]any, any) {
 		parts = make([]map[string]any, 0)
 	}
 
-	for _, group := range groupOpenAIToolCalls(c.Items) {
+	for _, group := range groupOpenAIToolCalls(items) {
 		for _, item := range group.flatten() {
 			if msg, ok := item.(*ChatMessage); ok && msg.Role == ChatRoleSystem && msg.TextContent() != "" {
 				systemMessages = append(systemMessages, msg.TextContent())
@@ -831,6 +832,7 @@ func (c *ChatContext) toAnthropicProviderFormat() ([]map[string]any, any) {
 	systemMessages := make([]string, 0)
 	currentRole := ""
 	content := make([]map[string]any, 0)
+	items := inlineMidConversationInstructions(c.Items)
 
 	flush := func() {
 		if currentRole == "" || len(content) == 0 {
@@ -843,7 +845,7 @@ func (c *ChatContext) toAnthropicProviderFormat() ([]map[string]any, any) {
 		content = make([]map[string]any, 0)
 	}
 
-	for _, group := range groupOpenAIToolCalls(c.Items) {
+	for _, group := range groupOpenAIToolCalls(items) {
 		for _, item := range group.flatten() {
 			if msg, ok := item.(*ChatMessage); ok && msg.Role == ChatRoleSystem && msg.TextContent() != "" {
 				systemMessages = append(systemMessages, msg.TextContent())
@@ -913,6 +915,7 @@ func (c *ChatContext) toAWSProviderFormat() ([]map[string]any, any) {
 	systemMessages := make([]string, 0)
 	currentRole := ""
 	content := make([]map[string]any, 0)
+	items := inlineMidConversationInstructions(c.Items)
 
 	flush := func() {
 		if currentRole == "" || len(content) == 0 {
@@ -925,7 +928,7 @@ func (c *ChatContext) toAWSProviderFormat() ([]map[string]any, any) {
 		content = make([]map[string]any, 0)
 	}
 
-	for _, group := range groupOpenAIToolCalls(c.Items) {
+	for _, group := range groupOpenAIToolCalls(items) {
 		for _, item := range group.flatten() {
 			if msg, ok := item.(*ChatMessage); ok && msg.Role == ChatRoleSystem && msg.TextContent() != "" {
 				systemMessages = append(systemMessages, msg.TextContent())
@@ -953,6 +956,36 @@ func (c *ChatContext) toAWSProviderFormat() ([]map[string]any, any) {
 	}
 
 	return messages, map[string]any{"system_messages": systemMessages}
+}
+
+func inlineMidConversationInstructions(items []ChatItem) []ChatItem {
+	converted := make([]ChatItem, 0, len(items))
+	firstInstructionSeen := false
+	for _, item := range items {
+		msg, ok := item.(*ChatMessage)
+		if !ok || !isProviderInstructionRole(msg.Role) {
+			converted = append(converted, item)
+			continue
+		}
+
+		if firstInstructionSeen && msg.TextContent() != "" {
+			converted = append(converted, &ChatMessage{
+				ID:        msg.ID,
+				Role:      ChatRoleUser,
+				Content:   []ChatContent{{Text: fmt.Sprintf("<instructions>\n%s\n</instructions>", msg.TextContent())}},
+				CreatedAt: msg.CreatedAt,
+			})
+			continue
+		}
+
+		firstInstructionSeen = true
+		converted = append(converted, item)
+	}
+	return converted
+}
+
+func isProviderInstructionRole(role ChatRole) bool {
+	return role == ChatRoleSystem || role == ChatRoleDeveloper
 }
 
 type openAIToolCallGroup struct {
