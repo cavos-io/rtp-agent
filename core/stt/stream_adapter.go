@@ -152,6 +152,7 @@ func (w *streamAdapterWrapper) run() {
 						w.mu.Unlock()
 					} else if err != nil {
 						logger.Logger.Warnw("StreamAdapter STT Recognize failed", err)
+						w.sendErr(err)
 					}
 				}(frames)
 			}
@@ -197,10 +198,6 @@ func (w *streamAdapterWrapper) Close() error {
 }
 
 func (w *streamAdapterWrapper) Next() (*SpeechEvent, error) {
-	ev, ok := <-w.eventCh
-	if ok {
-		return ev, nil
-	}
 	select {
 	case err := <-w.errCh:
 		if err != nil {
@@ -208,5 +205,19 @@ func (w *streamAdapterWrapper) Next() (*SpeechEvent, error) {
 		}
 	default:
 	}
-	return nil, context.Canceled
+
+	select {
+	case err := <-w.errCh:
+		if err != nil {
+			return nil, err
+		}
+		return nil, context.Canceled
+	case ev, ok := <-w.eventCh:
+		if ok {
+			return ev, nil
+		}
+		return nil, context.Canceled
+	case <-w.ctx.Done():
+		return nil, w.ctx.Err()
+	}
 }

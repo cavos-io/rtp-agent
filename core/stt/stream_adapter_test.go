@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"testing"
+	"time"
 
 	"github.com/cavos-io/conversation-worker/core/vad"
 	"github.com/cavos-io/conversation-worker/model"
@@ -52,7 +53,40 @@ func TestStreamAdapterPropagatesVADRuntimeError(t *testing.T) {
 	}
 }
 
-type fakeStreamAdapterSTT struct{}
+func TestStreamAdapterPropagatesRecognizeError(t *testing.T) {
+	recognizeErr := errors.New("recognize failed")
+	stream, err := NewStreamAdapter(
+		&fakeStreamAdapterSTT{recognizeErr: recognizeErr},
+		&fakeStreamAdapterVAD{stream: &fakeStreamAdapterVADStream{
+			events: []*vad.VADEvent{{
+				Type:   vad.VADEventEndOfSpeech,
+				Frames: []*model.AudioFrame{{Data: []byte{1, 0}, SampleRate: 16000, NumChannels: 1, SamplesPerChannel: 1}},
+			}},
+			done: make(chan struct{}),
+		}},
+	).Stream(context.Background(), "")
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+	defer stream.Close()
+
+	event, err := stream.Next()
+	if err != nil {
+		t.Fatalf("first Next returned error: %v", err)
+	}
+	if event.Type != SpeechEventEndOfSpeech {
+		t.Fatalf("first event type = %s, want end_of_speech", event.Type)
+	}
+
+	err = nextStreamAdapterSTTError(stream)
+	if !errors.Is(err, recognizeErr) {
+		t.Fatalf("Next error = %v, want recognize error", err)
+	}
+}
+
+type fakeStreamAdapterSTT struct {
+	recognizeErr error
+}
 
 func (f *fakeStreamAdapterSTT) Label() string {
 	return "fake-stt"
@@ -67,6 +101,9 @@ func (f *fakeStreamAdapterSTT) Stream(context.Context, string) (RecognizeStream,
 }
 
 func (f *fakeStreamAdapterSTT) Recognize(context.Context, []*model.AudioFrame, string) (*SpeechEvent, error) {
+	if f.recognizeErr != nil {
+		return nil, f.recognizeErr
+	}
 	return &SpeechEvent{Type: SpeechEventFinalTranscript}, nil
 }
 
@@ -83,7 +120,10 @@ func (f *fakeStreamAdapterVAD) Stream(context.Context) (vad.VADStream, error) {
 }
 
 type fakeStreamAdapterVADStream struct {
+	events  []*vad.VADEvent
+	index   int
 	nextErr error
+	done    chan struct{}
 }
 
 func (f *fakeStreamAdapterVADStream) PushFrame(*model.AudioFrame) error {
@@ -95,9 +135,36 @@ func (f *fakeStreamAdapterVADStream) Flush() error {
 }
 
 func (f *fakeStreamAdapterVADStream) Close() error {
+	if f.done != nil {
+		close(f.done)
+	}
 	return nil
 }
 
 func (f *fakeStreamAdapterVADStream) Next() (*vad.VADEvent, error) {
+	if f.index < len(f.events) {
+		event := f.events[f.index]
+		f.index++
+		return event, nil
+	}
+	if f.done != nil {
+		<-f.done
+		return nil, context.Canceled
+	}
 	return nil, f.nextErr
+}
+
+func nextStreamAdapterSTTError(stream RecognizeStream) error {
+	errCh := make(chan error, 1)
+	go func() {
+		_, err := stream.Next()
+		errCh <- err
+	}()
+
+	select {
+	case err := <-errCh:
+		return err
+	case <-time.After(100 * time.Millisecond):
+		return context.DeadlineExceeded
+	}
 }
