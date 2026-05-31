@@ -61,8 +61,7 @@ func (t *TTS) NumChannels() int {
 }
 
 func (t *TTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStream, error) {
-	// For parity, implement synthesize using stream helper
-	return nil, fmt.Errorf("synthesize is unsupported natively by LiveKit Inference TTS, use stream instead")
+	return tts.SynthesizeWithStream(ctx, t, text)
 }
 
 func (t *TTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
@@ -192,7 +191,7 @@ func (s *inferenceTTSStream) run() {
 			if err != nil {
 				return
 			}
-			
+
 			tokenPkt := map[string]interface{}{
 				"type":       "input_transcript",
 				"transcript": tok.Token + " ",
