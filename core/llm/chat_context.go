@@ -4,10 +4,90 @@ import (
 	"time"
 )
 
-func (c *ChatContext) Copy() *ChatContext {
+type ChatContextCopyOptions struct {
+	ExcludeFunctionCall bool
+	ExcludeInstructions bool
+	ExcludeEmptyMessage bool
+	ExcludeHandoff      bool
+	ExcludeConfigUpdate bool
+	Tools               []interface{}
+}
+
+func (c *ChatContext) Copy(options ...ChatContextCopyOptions) *ChatContext {
+	var opts ChatContextCopyOptions
+	if len(options) > 0 {
+		opts = options[0]
+	}
+
 	newCtx := NewChatContext()
-	newCtx.Items = append(newCtx.Items, c.Items...)
+	validTools := chatContextCopyToolNames(opts.Tools)
+	filterByTools := opts.Tools != nil
+	for _, item := range c.Items {
+		if opts.ExcludeFunctionCall && isFunctionChatItem(item) {
+			continue
+		}
+		if opts.ExcludeInstructions && isInstructionMessage(item) {
+			continue
+		}
+		if opts.ExcludeEmptyMessage && isEmptyMessage(item) {
+			continue
+		}
+		if opts.ExcludeHandoff && item.GetType() == "agent_handoff" {
+			continue
+		}
+		if opts.ExcludeConfigUpdate && item.GetType() == "agent_config_update" {
+			continue
+		}
+		if filterByTools && isFunctionChatItem(item) {
+			if _, ok := validTools[functionChatItemName(item)]; !ok {
+				continue
+			}
+		}
+		newCtx.Items = append(newCtx.Items, item)
+	}
 	return newCtx
+}
+
+func chatContextCopyToolNames(tools []interface{}) map[string]struct{} {
+	names := make(map[string]struct{})
+	for _, tool := range tools {
+		switch t := tool.(type) {
+		case string:
+			names[t] = struct{}{}
+		case Tool:
+			names[t.Name()] = struct{}{}
+		case Toolset:
+			for _, childTool := range t.Tools() {
+				names[childTool.Name()] = struct{}{}
+			}
+		}
+	}
+	return names
+}
+
+func isFunctionChatItem(item ChatItem) bool {
+	return item.GetType() == "function_call" || item.GetType() == "function_call_output"
+}
+
+func isInstructionMessage(item ChatItem) bool {
+	msg, ok := item.(*ChatMessage)
+	return ok && (msg.Role == ChatRoleSystem || msg.Role == ChatRoleDeveloper)
+}
+
+func isEmptyMessage(item ChatItem) bool {
+	msg, ok := item.(*ChatMessage)
+	return ok && len(msg.Content) == 0
+}
+
+func functionChatItemName(item ChatItem) string {
+	switch it := item.(type) {
+	case *FunctionCall:
+		return it.Name
+	case *FunctionCallOutput:
+		return it.Name
+	default:
+		return ""
+	}
 }
 
 func (c *ChatContext) Messages() []*ChatMessage {
