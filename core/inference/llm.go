@@ -69,9 +69,22 @@ func (l *LLM) Chat(ctx context.Context, chatCtx *llm.ChatContext, opts ...llm.Ch
 		return nil, err
 	}
 
-	// For parity, we should apply parameter filtering here if LLM interface supported extra params
-	// but currently it is quite minimal.
-	
+	options := chatOptionsForModel(l.model, opts)
+	if len(options.ExtraParams) > 0 {
+		opts = append(opts, llm.WithExtraParams(options.ExtraParams))
+	}
+
 	inner := openai.NewOpenAILLMWithBaseURL(token, l.model, l.baseURL)
 	return inner.Chat(ctx, chatCtx, opts...)
+}
+
+func chatOptionsForModel(model string, opts []llm.ChatOption) *llm.ChatOptions {
+	options := &llm.ChatOptions{}
+	for _, opt := range opts {
+		opt(options)
+	}
+	if len(options.ExtraParams) > 0 {
+		options.ExtraParams = dropUnsupportedParams(model, options.ExtraParams)
+	}
+	return options
 }

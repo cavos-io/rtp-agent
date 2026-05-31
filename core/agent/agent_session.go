@@ -72,6 +72,13 @@ type AgentSession struct {
 	// Event channels
 	AgentStateChangedCh chan AgentStateChangedEvent
 	UserStateChangedCh  chan UserStateChangedEvent
+	sipDTMFCh           chan SipDTMFEvent
+}
+
+type SipDTMFEvent struct {
+	Digit          string
+	Code           uint32
+	SenderIdentity string
 }
 
 func (s *AgentSession) OnAudioFrame(ctx context.Context, frame *model.AudioFrame) {
@@ -108,7 +115,30 @@ func NewAgentSession(agent AgentInterface, room *lksdk.Room, opts AgentSessionOp
 		Tools:               make([]llm.Tool, 0),
 		AgentStateChangedCh: make(chan AgentStateChangedEvent, 10),
 		UserStateChangedCh:  make(chan UserStateChangedEvent, 10),
+		sipDTMFCh:           make(chan SipDTMFEvent, 10),
 	}
+}
+
+func (s *AgentSession) SipDTMFEvents() <-chan SipDTMFEvent {
+	return s.sipDTMFEvents()
+}
+
+func (s *AgentSession) EmitSipDTMF(ev SipDTMFEvent) {
+	ch := s.sipDTMFEvents()
+	select {
+	case ch <- ev:
+	default:
+	}
+}
+
+func (s *AgentSession) sipDTMFEvents() chan SipDTMFEvent {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.sipDTMFCh == nil {
+		s.sipDTMFCh = make(chan SipDTMFEvent, 10)
+	}
+	return s.sipDTMFCh
 }
 
 func (s *AgentSession) Start(ctx context.Context) error {
@@ -133,7 +163,7 @@ func (s *AgentSession) Start(ctx context.Context) error {
 
 	s.activity = NewAgentActivity(s.Agent, s)
 	s.activity.Start()
-	
+
 	// Trigger periodic usage metrics reporting
 	if s.MetricsCollector != nil {
 		go s.reportUsageLoop(ctx)
@@ -214,7 +244,7 @@ func (s *AgentSession) GenerateReply(ctx context.Context, userInput string) erro
 
 	// Create a speech handle
 	handle := NewSpeechHandle(s.Options.AllowInterruptions, DefaultInputDetails())
-	
+
 	// Add user message to ChatContext if provided
 	if userInput != "" {
 		s.ChatCtx.Append(&llm.ChatMessage{

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 
 	"github.com/cavos-io/conversation-worker/core/llm"
@@ -47,6 +48,19 @@ func (l *OpenAILLM) Chat(ctx context.Context, chatCtx *llm.ChatContext, opts ...
 		opt(options)
 	}
 
+	req := buildOpenAIChatCompletionRequest(l.model, chatCtx, options)
+
+	stream, err := l.client.CreateChatCompletionStream(ctx, req)
+	if err != nil {
+		return nil, err
+	}
+
+	return &openaiStream{
+		stream: stream,
+	}, nil
+}
+
+func buildOpenAIChatCompletionRequest(model string, chatCtx *llm.ChatContext, options *llm.ChatOptions) openai.ChatCompletionRequest {
 	messages := buildOpenAIChatMessages(chatCtx)
 
 	tools := make([]openai.Tool, 0, len(options.Tools))
@@ -63,7 +77,7 @@ func (l *OpenAILLM) Chat(ctx context.Context, chatCtx *llm.ChatContext, opts ...
 	}
 
 	req := openai.ChatCompletionRequest{
-		Model:             l.model,
+		Model:             model,
 		Messages:          messages,
 		Tools:             tools,
 		ParallelToolCalls: &options.ParallelToolCalls,
@@ -78,14 +92,106 @@ func (l *OpenAILLM) Chat(ctx context.Context, chatCtx *llm.ChatContext, opts ...
 		}
 	}
 
-	stream, err := l.client.CreateChatCompletionStream(ctx, req)
-	if err != nil {
-		return nil, err
-	}
+	applyOpenAIExtraParams(&req, options.ExtraParams)
+	return req
+}
 
-	return &openaiStream{
-		stream: stream,
-	}, nil
+func applyOpenAIExtraParams(req *openai.ChatCompletionRequest, params map[string]any) {
+	for key, value := range params {
+		switch key {
+		case "temperature":
+			if v, ok := asFloat32(value); ok {
+				req.Temperature = v
+			}
+		case "top_p":
+			if v, ok := asFloat32(value); ok {
+				req.TopP = v
+			}
+		case "presence_penalty":
+			if v, ok := asFloat32(value); ok {
+				req.PresencePenalty = v
+			}
+		case "frequency_penalty":
+			if v, ok := asFloat32(value); ok {
+				req.FrequencyPenalty = v
+			}
+		case "n":
+			if v, ok := asInt(value); ok {
+				req.N = v
+			}
+		case "max_tokens":
+			if v, ok := asInt(value); ok {
+				req.MaxTokens = v
+			}
+		case "max_completion_tokens":
+			if v, ok := asInt(value); ok {
+				req.MaxCompletionTokens = v
+			}
+		case "logit_bias":
+			if v, ok := value.(map[string]int); ok {
+				req.LogitBias = v
+			}
+		case "logprobs":
+			if v, ok := value.(bool); ok {
+				req.LogProbs = v
+			}
+		case "top_logprobs":
+			if v, ok := asInt(value); ok {
+				req.TopLogProbs = v
+			}
+		case "reasoning_effort":
+			if v, ok := value.(string); ok {
+				req.ReasoningEffort = v
+			}
+		case "metadata":
+			if v := asStringMap(value); v != nil {
+				req.Metadata = v
+			}
+		}
+	}
+}
+
+func asFloat32(value any) (float32, bool) {
+	switch v := value.(type) {
+	case float32:
+		return v, true
+	case float64:
+		return float32(v), true
+	case int:
+		return float32(v), true
+	default:
+		return 0, false
+	}
+}
+
+func asInt(value any) (int, bool) {
+	switch v := value.(type) {
+	case int:
+		return v, true
+	case int32:
+		return int(v), true
+	case int64:
+		return int(v), true
+	case float64:
+		return int(v), true
+	default:
+		return 0, false
+	}
+}
+
+func asStringMap(value any) map[string]string {
+	switch v := value.(type) {
+	case map[string]string:
+		return v
+	case map[string]any:
+		out := make(map[string]string, len(v))
+		for key, val := range v {
+			out[key] = fmt.Sprint(val)
+		}
+		return out
+	default:
+		return nil
+	}
 }
 
 func buildOpenAIChatMessages(chatCtx *llm.ChatContext) []openai.ChatCompletionMessage {

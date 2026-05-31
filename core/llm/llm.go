@@ -100,30 +100,30 @@ type ChatItem interface {
 	GetCreatedAt() time.Time
 }
 
-func (m *ChatMessage) GetID() string            { return m.ID }
-func (m *ChatMessage) GetType() string          { return "message" }
-func (m *ChatMessage) GetCreatedAt() time.Time  { return m.CreatedAt }
-func (f *FunctionCall) GetID() string           { return f.ID }
-func (f *FunctionCall) GetType() string         { return "function_call" }
-func (f *FunctionCall) GetCreatedAt() time.Time { return f.CreatedAt }
-func (f *FunctionCallOutput) GetID() string     { return f.ID }
-func (f *FunctionCallOutput) GetType() string   { return "function_call_output" }
+func (m *ChatMessage) GetID() string                  { return m.ID }
+func (m *ChatMessage) GetType() string                { return "message" }
+func (m *ChatMessage) GetCreatedAt() time.Time        { return m.CreatedAt }
+func (f *FunctionCall) GetID() string                 { return f.ID }
+func (f *FunctionCall) GetType() string               { return "function_call" }
+func (f *FunctionCall) GetCreatedAt() time.Time       { return f.CreatedAt }
+func (f *FunctionCallOutput) GetID() string           { return f.ID }
+func (f *FunctionCallOutput) GetType() string         { return "function_call_output" }
 func (f *FunctionCallOutput) GetCreatedAt() time.Time { return f.CreatedAt }
-func (a *AgentHandoff) GetID() string           { return a.ID }
-func (a *AgentHandoff) GetType() string         { return "agent_handoff" }
-func (a *AgentHandoff) GetCreatedAt() time.Time { return a.CreatedAt }
-func (a *AgentConfigUpdate) GetID() string      { return a.ID }
-func (a *AgentConfigUpdate) GetType() string    { return "agent_config_update" }
-func (a *AgentConfigUpdate) GetCreatedAt() time.Time { return a.CreatedAt }
+func (a *AgentHandoff) GetID() string                 { return a.ID }
+func (a *AgentHandoff) GetType() string               { return "agent_handoff" }
+func (a *AgentHandoff) GetCreatedAt() time.Time       { return a.CreatedAt }
+func (a *AgentConfigUpdate) GetID() string            { return a.ID }
+func (a *AgentConfigUpdate) GetType() string          { return "agent_config_update" }
+func (a *AgentConfigUpdate) GetCreatedAt() time.Time  { return a.CreatedAt }
 
 type MetricsReport struct {
 	Usage     telemetry.UsageSummary
 	CreatedAt time.Time
 }
 
-func (m *MetricsReport) GetID() string               { return "" }
-func (m *MetricsReport) GetType() string             { return "metrics_report" }
-func (m *MetricsReport) GetCreatedAt() time.Time     { return m.CreatedAt }
+func (m *MetricsReport) GetID() string           { return "" }
+func (m *MetricsReport) GetType() string         { return "metrics_report" }
+func (m *MetricsReport) GetCreatedAt() time.Time { return m.CreatedAt }
 
 type ChatContext struct {
 	Items []ChatItem
@@ -143,7 +143,7 @@ func (c *ChatContext) Append(item ChatItem) {
 		"item_id": item.GetID(),
 		"type":    item.GetType(),
 	}
-	
+
 	switch v := item.(type) {
 	case *ChatMessage:
 		attrs["role"] = string(v.Role)
@@ -207,6 +207,7 @@ type ChatOptions struct {
 	Tools             []Tool
 	ToolChoice        ToolChoice
 	ParallelToolCalls bool
+	ExtraParams       map[string]any
 }
 
 type LLM interface {
@@ -238,14 +239,31 @@ func WithParallelToolCalls(parallel bool) ChatOption {
 	}
 }
 
+func WithExtraParams(params map[string]any) ChatOption {
+	return func(o *ChatOptions) {
+		o.ExtraParams = cloneAnyMap(params)
+	}
+}
+
+func cloneAnyMap(params map[string]any) map[string]any {
+	if params == nil {
+		return nil
+	}
+	clone := make(map[string]any, len(params))
+	for k, v := range params {
+		clone[k] = v
+	}
+	return clone
+}
+
 // Realtime Models
 
 type RealtimeCapabilities struct {
-	MessageTruncation        bool
-	TurnDetection            bool
-	UserTranscription        bool
+	MessageTruncation       bool
+	TurnDetection           bool
+	UserTranscription       bool
 	AutoToolReplyGeneration bool
-	AudioOutput              bool
+	AudioOutput             bool
 }
 
 type RealtimeModel interface {
@@ -266,12 +284,12 @@ type RealtimeSession interface {
 type RealtimeEventType string
 
 const (
-	RealtimeEventTypeAudio              RealtimeEventType = "audio"
-	RealtimeEventTypeText               RealtimeEventType = "text"
-	RealtimeEventTypeFunctionCall       RealtimeEventType = "function_call"
-	RealtimeEventTypeSpeechStarted      RealtimeEventType = "speech_started"
-	RealtimeEventTypeSpeechStopped      RealtimeEventType = "speech_stopped"
-	RealtimeEventTypeError              RealtimeEventType = "error"
+	RealtimeEventTypeAudio         RealtimeEventType = "audio"
+	RealtimeEventTypeText          RealtimeEventType = "text"
+	RealtimeEventTypeFunctionCall  RealtimeEventType = "function_call"
+	RealtimeEventTypeSpeechStarted RealtimeEventType = "speech_started"
+	RealtimeEventTypeSpeechStopped RealtimeEventType = "speech_stopped"
+	RealtimeEventTypeError         RealtimeEventType = "error"
 )
 
 type RealtimeEvent struct {

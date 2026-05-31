@@ -27,6 +27,7 @@ type GetDtmfTask struct {
 	dtmfReplyRunning   bool
 	mu                 sync.Mutex
 	timer              *time.Timer
+	dtmfStopCh         chan struct{}
 }
 
 func NewGetDtmfTask(numDigits int, askConfirmation bool) *GetDtmfTask {
@@ -59,19 +60,37 @@ user will directly say the digits to you. You should be able to handle both case
 }
 
 func (t *GetDtmfTask) OnEnter() {
-	agentObj := t.Agent.GetAgent()
-	if agentObj == nil {
+	activity := t.Agent.GetActivity()
+	if activity == nil || activity.Session == nil {
 		return
 	}
-	
-	// Assuming session is available via some mechanism in real Start
-	// For parity, we should register for SIP DTMF
+
+	stopCh := make(chan struct{})
+	t.mu.Lock()
+	t.dtmfStopCh = stopCh
+	t.mu.Unlock()
+
+	events := activity.Session.SipDTMFEvents()
+	go func() {
+		for {
+			select {
+			case <-stopCh:
+				return
+			case ev := <-events:
+				t.onSipDTMFReceived(ev.Digit)
+			}
+		}
+	}()
 }
 
 func (t *GetDtmfTask) OnExit() {
 	t.mu.Lock()
 	if t.timer != nil {
 		t.timer.Stop()
+	}
+	if t.dtmfStopCh != nil {
+		close(t.dtmfStopCh)
+		t.dtmfStopCh = nil
 	}
 	t.mu.Unlock()
 }
@@ -127,9 +146,17 @@ func (t *GetDtmfTask) generateDtmfReply() {
 
 	if activity := t.Agent.GetActivity(); activity != nil {
 		if session := activity.Session; session != nil {
-			_ = session.GenerateReply(context.Background(), fmt.Sprintf("You entered %s. Please confirm if this is correct.", dtmfStr))
+			_ = session.GenerateReply(context.Background(), buildDtmfConfirmationInstructions(dtmfStr))
 		}
 	}
+}
+
+func buildDtmfConfirmationInstructions(dtmfStr string) string {
+	return "User has entered the following valid digits on the telephone keypad:\n" +
+		fmt.Sprintf("<dtmf_inputs>%s</dtmf_inputs>\n", dtmfStr) +
+		"Please confirm it with the user by saying the digits one by one with space in between " +
+		"(.e.g. 'one two three four five six seven eight nine ten'). " +
+		"Once you are sure, call `confirm_inputs` with the inputs."
 }
 
 type confirmInputsTool struct {
@@ -162,9 +189,9 @@ func (t *confirmInputsTool) Execute(ctx context.Context, args string) (string, e
 		return "", err
 	}
 
-	dtmfEvents := make([]beta.DtmfEvent, len(params.Inputs))
-	for i, v := range params.Inputs {
-		dtmfEvents[i] = beta.DtmfEvent(v)
+	dtmfEvents, err := parseDtmfInputs(params.Inputs)
+	if err != nil {
+		return "", err
 	}
 
 	t.task.Complete(&GetDtmfResult{UserInput: beta.FormatDtmf(dtmfEvents)})
@@ -201,11 +228,23 @@ func (t *recordInputsTool) Execute(ctx context.Context, args string) (string, er
 		return "", err
 	}
 
-	dtmfEvents := make([]beta.DtmfEvent, len(params.Inputs))
-	for i, v := range params.Inputs {
-		dtmfEvents[i] = beta.DtmfEvent(v)
+	dtmfEvents, err := parseDtmfInputs(params.Inputs)
+	if err != nil {
+		return "", err
 	}
 
 	t.task.Complete(&GetDtmfResult{UserInput: beta.FormatDtmf(dtmfEvents)})
 	return "Inputs recorded.", nil
+}
+
+func parseDtmfInputs(inputs []string) ([]beta.DtmfEvent, error) {
+	dtmfEvents := make([]beta.DtmfEvent, len(inputs))
+	for i, v := range inputs {
+		event := beta.DtmfEvent(v)
+		if _, err := beta.DtmfEventToCode(event); err != nil {
+			return nil, err
+		}
+		dtmfEvents[i] = event
+	}
+	return dtmfEvents, nil
 }
