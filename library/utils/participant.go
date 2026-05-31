@@ -11,8 +11,8 @@ import (
 const AttributeAgentName = "lk.agent.name"
 
 func WaitForAgent(ctx context.Context, room *lksdk.Room, agentName string) (*lksdk.RemoteParticipant, error) {
-	if room == nil {
-		return nil, fmt.Errorf("room is nil")
+	if err := requireConnectedRoom(room); err != nil {
+		return nil, err
 	}
 
 	matchesAgent := func(p *lksdk.RemoteParticipant) bool {
@@ -49,8 +49,8 @@ func WaitForAgent(ctx context.Context, room *lksdk.Room, agentName string) (*lks
 }
 
 func WaitForParticipant(ctx context.Context, room *lksdk.Room, identity string, kinds ...livekit.ParticipantInfo_Kind) (*lksdk.RemoteParticipant, error) {
-	if room == nil {
-		return nil, fmt.Errorf("room is nil")
+	if err := requireConnectedRoom(room); err != nil {
+		return nil, err
 	}
 
 	matchesParticipant := func(p *lksdk.RemoteParticipant) bool {
@@ -84,6 +84,16 @@ func WaitForParticipant(ctx context.Context, room *lksdk.Room, identity string, 
 	}
 }
 
+func requireConnectedRoom(room *lksdk.Room) error {
+	if room == nil {
+		return fmt.Errorf("room is nil")
+	}
+	if room.ConnectionState() != lksdk.ConnectionStateConnected {
+		return fmt.Errorf("room is not connected")
+	}
+	return nil
+}
+
 func participantKindMatches(kind livekit.ParticipantInfo_Kind, allowed []livekit.ParticipantInfo_Kind) bool {
 	if len(allowed) == 0 {
 		return true
@@ -97,8 +107,8 @@ func participantKindMatches(kind livekit.ParticipantInfo_Kind, allowed []livekit
 }
 
 func WaitForTrackPublication(ctx context.Context, room *lksdk.Room, identity string, kind livekit.TrackType) (*lksdk.RemoteTrackPublication, error) {
-	if room == nil {
-		return nil, fmt.Errorf("room is nil")
+	if err := requireConnectedRoom(room); err != nil {
+		return nil, err
 	}
 
 	matchesTrack := func(pub *lksdk.RemoteTrackPublication, p *lksdk.RemoteParticipant) bool {

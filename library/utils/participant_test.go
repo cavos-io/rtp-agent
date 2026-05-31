@@ -1,10 +1,56 @@
 package utils
 
 import (
+	"context"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/livekit/protocol/livekit"
+	lksdk "github.com/livekit/server-sdk-go/v2"
 )
+
+func TestWaitForParticipantReturnsDisconnectedRoomError(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	room := lksdk.NewRoom(nil)
+
+	_, err := WaitForParticipant(ctx, room, "")
+	if err == nil {
+		t.Fatal("WaitForParticipant() error = nil, want disconnected room error")
+	}
+	if !strings.Contains(err.Error(), "room is not connected") {
+		t.Fatalf("WaitForParticipant() error = %q, want room is not connected", err)
+	}
+}
+
+func TestWaitForAgentReturnsDisconnectedRoomError(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
+	defer cancel()
+	room := lksdk.NewRoom(nil)
+
+	_, err := WaitForAgent(ctx, room, "")
+	if err == nil {
+		t.Fatal("WaitForAgent() error = nil, want disconnected room error")
+	}
+	if !strings.Contains(err.Error(), "room is not connected") {
+		t.Fatalf("WaitForAgent() error = %q, want room is not connected", err)
+	}
+}
+
+func TestWaitForTrackPublicationReturnsDisconnectedRoomError(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
+	defer cancel()
+	room := lksdk.NewRoom(nil)
+
+	_, err := WaitForTrackPublication(ctx, room, "", livekit.TrackType_AUDIO)
+	if err == nil {
+		t.Fatal("WaitForTrackPublication() error = nil, want disconnected room error")
+	}
+	if !strings.Contains(err.Error(), "room is not connected") {
+		t.Fatalf("WaitForTrackPublication() error = %q, want room is not connected", err)
+	}
+}
 
 func TestWaitForParticipantKindMatchWithoutKindsAcceptsAnyKind(t *testing.T) {
 	if !participantKindMatches(livekit.ParticipantInfo_AGENT, nil) {
