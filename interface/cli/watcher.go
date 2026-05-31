@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"io"
 	"os"
 	"os/exec"
@@ -172,6 +173,19 @@ func (w *Watcher) requestReloadJobs(out io.Writer) error {
 		return err
 	}
 	return ipc.WriteMessage(out, msg)
+}
+
+func (w *Watcher) processReloadIPCMessages(r io.Reader, out io.Writer) error {
+	for {
+		_, err := w.handleReloadIPCMessage(r, out)
+		if err == nil {
+			continue
+		}
+		if errors.Is(err, io.EOF) {
+			return nil
+		}
+		return err
+	}
 }
 
 func (w *Watcher) triggerReload() bool {

@@ -287,3 +287,57 @@ func TestWatcherRequestReloadJobsWritesRequestFrame(t *testing.T) {
 		t.Fatalf("request payload = %T, want *ReloadJobsRequest", payload)
 	}
 }
+
+func TestWatcherProcessReloadIPCMessagesUntilEOF(t *testing.T) {
+	args := &CliArgs{ReloadCount: 6}
+	watcher := NewWatcher(nil, nil, args)
+
+	var input bytes.Buffer
+	activeResp, err := ipc.NewMessage(&ipc.ActiveJobsResponse{
+		Jobs:        []ipc.RunningJobInfo{{Job: &livekit.Job{Id: "job-current"}, Token: "current-token"}},
+		ReloadCount: 6,
+	})
+	if err != nil {
+		t.Fatalf("NewMessage(ActiveJobsResponse): %v", err)
+	}
+	if err := ipc.WriteMessage(&input, activeResp); err != nil {
+		t.Fatalf("WriteMessage active response: %v", err)
+	}
+	reloadReq, err := ipc.NewMessage(&ipc.ReloadJobsRequest{})
+	if err != nil {
+		t.Fatalf("NewMessage(ReloadJobsRequest): %v", err)
+	}
+	if err := ipc.WriteMessage(&input, reloadReq); err != nil {
+		t.Fatalf("WriteMessage reload request: %v", err)
+	}
+	var output bytes.Buffer
+
+	if err := watcher.processReloadIPCMessages(&input, &output); err != nil {
+		t.Fatalf("processReloadIPCMessages() error = %v", err)
+	}
+
+	msg, err := ipc.ReadMessage(&output)
+	if err != nil {
+		t.Fatalf("ReadMessage response: %v", err)
+	}
+	if msg.Type != ipc.MessageTypeReloadJobsResponse {
+		t.Fatalf("response Type = %q, want %q", msg.Type, ipc.MessageTypeReloadJobsResponse)
+	}
+	payload, err := ipc.DecodePayload(msg)
+	if err != nil {
+		t.Fatalf("DecodePayload response: %v", err)
+	}
+	resp, ok := payload.(*ipc.ReloadJobsResponse)
+	if !ok {
+		t.Fatalf("response payload = %T, want *ReloadJobsResponse", payload)
+	}
+	if resp.ReloadCount != 6 {
+		t.Fatalf("ReloadCount = %d, want 6", resp.ReloadCount)
+	}
+	if len(resp.Jobs) != 1 || resp.Jobs[0].Job.GetId() != "job-current" {
+		t.Fatalf("Jobs = %#v, want current job", resp.Jobs)
+	}
+	if _, err := ipc.ReadMessage(&output); err == nil {
+		t.Fatal("second ReadMessage response error = nil, want EOF")
+	}
+}
