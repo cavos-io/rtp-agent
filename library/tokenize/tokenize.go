@@ -6,6 +6,8 @@ import (
 	"unicode"
 )
 
+const punctuationChars = `!"#$%&'()*+,-./:;<=>?@[\]^_` + "`" + `{|}~±—‘’“”…`
+
 type TokenData struct {
 	SegmentID string
 	Token     string
@@ -90,7 +92,7 @@ func SplitSentences(text string, minSentenceLen int, retainFormat bool) []TokenD
 	starters := regexp.MustCompile(`(Mr|Mrs|Ms|Dr|Prof|Capt|Cpt|Lt|He\s|She\s|It\s|They\s|Their\s|Our\s|We\s|But\s|However\s|That\s|This\s|Wherever|Moreover|Furthermore|Therefore|Consequently)`)
 	acronyms := regexp.MustCompile(`([A-Z]\.[A-Z]\.(?:[A-Z]\.)?)`)
 	websites := regexp.MustCompile(`\.(com|net|org|io|gov|edu|me|info|biz|dev|ai)`)
-	digits := regexp.MustCompile(`([0-9])`)
+	decimalDigits := regexp.MustCompile(`([0-9])\.([0-9])`)
 	multipleDots := regexp.MustCompile(`\.{2,}`)
 
 	if retainFormat {
@@ -101,7 +103,7 @@ func SplitSentences(text string, minSentenceLen int, retainFormat bool) []TokenD
 
 	text = prefixes.ReplaceAllString(text, "${1}<prd>")
 	text = websites.ReplaceAllString(text, "<prd>${1}")
-	text = digits.ReplaceAllString(text, "${1}<prd>${2}")
+	text = decimalDigits.ReplaceAllString(text, "${1}<prd>${2}")
 
 	text = multipleDots.ReplaceAllStringFunc(text, func(match string) string {
 		return strings.Repeat("<prd>", len(match))
@@ -210,10 +212,9 @@ func SplitWords(text string, ignorePunctuation bool, splitCharacter bool, retain
 		}
 	}
 
-	runes := []rune(text)
-	for pos, char := range runes {
+	for pos, char := range text {
 		if unicode.IsSpace(char) {
-			if retainFormat && strings.TrimSpace(string(runes[wordStart:pos])) == "" {
+			if retainFormat && strings.TrimSpace(text[wordStart:pos]) == "" {
 				continue
 			}
 			addCurrentWord(wordStart, pos)
@@ -226,12 +227,13 @@ func SplitWords(text string, ignorePunctuation bool, splitCharacter bool, retain
 			if wordStart < pos {
 				addCurrentWord(wordStart, pos)
 			}
-			addCurrentWord(pos, pos+1)
-			wordStart = pos + 1
+			nextPos := pos + len(string(char))
+			addCurrentWord(pos, nextPos)
+			wordStart = nextPos
 		}
 	}
 
-	addCurrentWord(wordStart, len(runes))
+	addCurrentWord(wordStart, len(text))
 
 	return words
 }
@@ -276,7 +278,7 @@ func SplitParagraphs(text string) []TokenData {
 func stripPunctuation(s string) string {
 	var result strings.Builder
 	for _, r := range s {
-		if !unicode.IsPunct(r) {
+		if !strings.ContainsRune(punctuationChars, r) {
 			result.WriteRune(r)
 		}
 	}

@@ -336,7 +336,7 @@ type fallbackLLMStream struct {
 
 	activeStream LLMStream
 	activeIndex  int
-	chunkSent    bool
+	outputSent   bool
 	closed       bool
 }
 
@@ -358,10 +358,12 @@ func (s *fallbackLLMStream) Next() (*ChatChunk, error) {
 	for {
 		chunk, err := s.activeStream.Next()
 		if err == nil {
-			s.chunkSent = true
+			if chunkHasVisibleOutput(chunk) {
+				s.outputSent = true
+			}
 			return chunk, nil
 		}
-		if errors.Is(err, io.EOF) || s.chunkSent || s.activeIndex+1 >= len(s.adapter.llms) {
+		if errors.Is(err, io.EOF) || s.outputSent || s.activeIndex+1 >= len(s.adapter.llms) {
 			return nil, err
 		}
 
@@ -370,6 +372,13 @@ func (s *fallbackLLMStream) Next() (*ChatChunk, error) {
 			return nil, startErr
 		}
 	}
+}
+
+func chunkHasVisibleOutput(chunk *ChatChunk) bool {
+	if chunk == nil || chunk.Delta == nil {
+		return false
+	}
+	return chunk.Delta.Content != "" || len(chunk.Delta.ToolCalls) > 0
 }
 
 func (s *fallbackLLMStream) Close() error {

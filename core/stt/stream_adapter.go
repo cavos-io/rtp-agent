@@ -45,11 +45,17 @@ type streamAdapterWrapper struct {
 
 	eventCh chan *SpeechEvent
 	errCh   chan error
-	audioCh chan *model.AudioFrame
+	inputCh chan streamAdapterInput
 
 	mu          sync.Mutex
 	closed      bool
 	frameBuffer []*model.AudioFrame
+	vadStream   vad.VADStream
+}
+
+type streamAdapterInput struct {
+	frame *model.AudioFrame
+	flush bool
 }
 
 func (a *StreamAdapter) Stream(ctx context.Context, language string) (RecognizeStream, error) {
@@ -61,7 +67,7 @@ func (a *StreamAdapter) Stream(ctx context.Context, language string) (RecognizeS
 		language: language,
 		eventCh:  make(chan *SpeechEvent, 100),
 		errCh:    make(chan error, 1),
-		audioCh:  make(chan *model.AudioFrame, 100),
+		inputCh:  make(chan streamAdapterInput, 100),
 	}
 
 	go w.run()
@@ -77,6 +83,9 @@ func (w *streamAdapterWrapper) run() {
 		w.sendErr(err)
 		return
 	}
+	w.mu.Lock()
+	w.vadStream = vadStream
+	w.mu.Unlock()
 
 	// Goroutine to push frames to VAD and buffer them
 	go func() {
@@ -84,14 +93,24 @@ func (w *streamAdapterWrapper) run() {
 			select {
 			case <-w.ctx.Done():
 				return
-			case frame, ok := <-w.audioCh:
+			case input, ok := <-w.inputCh:
 				if !ok {
 					return
 				}
-				vadStream.PushFrame(frame)
+				if input.flush {
+					if err := vadStream.Flush(); err != nil {
+						w.sendErr(err)
+						return
+					}
+					continue
+				}
+				if err := vadStream.PushFrame(input.frame); err != nil {
+					w.sendErr(err)
+					return
+				}
 
 				w.mu.Lock()
-				w.frameBuffer = append(w.frameBuffer, frame)
+				w.frameBuffer = append(w.frameBuffer, input.frame)
 				w.mu.Unlock()
 			}
 		}
@@ -152,6 +171,7 @@ func (w *streamAdapterWrapper) run() {
 						w.mu.Unlock()
 					} else if err != nil {
 						logger.Logger.Warnw("StreamAdapter STT Recognize failed", err)
+						w.sendErr(err)
 					}
 				}(frames)
 			}
@@ -174,11 +194,19 @@ func (w *streamAdapterWrapper) PushFrame(frame *model.AudioFrame) error {
 	}
 	w.mu.Unlock()
 
-	w.audioCh <- frame
+	w.inputCh <- streamAdapterInput{frame: frame}
 	return nil
 }
 
 func (w *streamAdapterWrapper) Flush() error {
+	w.mu.Lock()
+	if w.closed {
+		w.mu.Unlock()
+		return fmt.Errorf("stream closed")
+	}
+	w.mu.Unlock()
+
+	w.inputCh <- streamAdapterInput{flush: true}
 	return nil
 }
 
@@ -189,18 +217,18 @@ func (w *streamAdapterWrapper) Close() error {
 		return nil
 	}
 	w.closed = true
+	vadStream := w.vadStream
 	w.mu.Unlock()
 
 	w.cancel()
-	close(w.audioCh)
+	close(w.inputCh)
+	if vadStream != nil {
+		return vadStream.Close()
+	}
 	return nil
 }
 
 func (w *streamAdapterWrapper) Next() (*SpeechEvent, error) {
-	ev, ok := <-w.eventCh
-	if ok {
-		return ev, nil
-	}
 	select {
 	case err := <-w.errCh:
 		if err != nil {
@@ -208,5 +236,19 @@ func (w *streamAdapterWrapper) Next() (*SpeechEvent, error) {
 		}
 	default:
 	}
-	return nil, context.Canceled
+
+	select {
+	case err := <-w.errCh:
+		if err != nil {
+			return nil, err
+		}
+		return nil, context.Canceled
+	case ev, ok := <-w.eventCh:
+		if ok {
+			return ev, nil
+		}
+		return nil, context.Canceled
+	case <-w.ctx.Done():
+		return nil, w.ctx.Err()
+	}
 }
