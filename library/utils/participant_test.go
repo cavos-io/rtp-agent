@@ -81,3 +81,22 @@ func TestWaitForParticipantKindMatchAcceptsReferenceKindList(t *testing.T) {
 		t.Fatal("participantKindMatches(AGENT, reference kinds) = true, want false")
 	}
 }
+
+func TestWaitForTrackKindMatchWithoutKindsAcceptsAnyKind(t *testing.T) {
+	if !trackKindMatches(livekit.TrackType_AUDIO, nil) {
+		t.Fatal("trackKindMatches(AUDIO, nil) = false, want true")
+	}
+	if !trackKindMatches(livekit.TrackType_VIDEO, nil) {
+		t.Fatal("trackKindMatches(VIDEO, nil) = false, want true")
+	}
+}
+
+func TestWaitForTrackKindMatchFiltersExplicitKinds(t *testing.T) {
+	kinds := []livekit.TrackType{livekit.TrackType_AUDIO}
+	if !trackKindMatches(livekit.TrackType_AUDIO, kinds) {
+		t.Fatal("trackKindMatches(AUDIO, [AUDIO]) = false, want true")
+	}
+	if trackKindMatches(livekit.TrackType_VIDEO, kinds) {
+		t.Fatal("trackKindMatches(VIDEO, [AUDIO]) = true, want false")
+	}
+}

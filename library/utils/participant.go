@@ -106,7 +106,7 @@ func participantKindMatches(kind livekit.ParticipantInfo_Kind, allowed []livekit
 	return false
 }
 
-func WaitForTrackPublication(ctx context.Context, room *lksdk.Room, identity string, kind livekit.TrackType) (*lksdk.RemoteTrackPublication, error) {
+func WaitForTrackPublication(ctx context.Context, room *lksdk.Room, identity string, kinds ...livekit.TrackType) (*lksdk.RemoteTrackPublication, error) {
 	if err := requireConnectedRoom(room); err != nil {
 		return nil, err
 	}
@@ -115,7 +115,7 @@ func WaitForTrackPublication(ctx context.Context, room *lksdk.Room, identity str
 		if identity != "" && p.Identity() != identity {
 			return false
 		}
-		if pub.Kind().ProtoType() != kind {
+		if !trackKindMatches(pub.Kind().ProtoType(), kinds) {
 			return false
 		}
 		return true
@@ -147,4 +147,16 @@ func WaitForTrackPublication(ctx context.Context, room *lksdk.Room, identity str
 			}
 		}
 	}
+}
+
+func trackKindMatches(kind livekit.TrackType, allowed []livekit.TrackType) bool {
+	if len(allowed) == 0 {
+		return true
+	}
+	for _, candidate := range allowed {
+		if candidate == kind {
+			return true
+		}
+	}
+	return false
 }
