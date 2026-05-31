@@ -27,6 +27,19 @@ type JobRejectArguments struct {
 	Terminate bool
 }
 
+type AutoSubscribe string
+
+const (
+	AutoSubscribeSubscribeAll  AutoSubscribe = "subscribe_all"
+	AutoSubscribeSubscribeNone AutoSubscribe = "subscribe_none"
+	AutoSubscribeAudioOnly     AutoSubscribe = "audio_only"
+	AutoSubscribeVideoOnly     AutoSubscribe = "video_only"
+)
+
+type ConnectOptions struct {
+	AutoSubscribe AutoSubscribe
+}
+
 type ParticipantEntrypoint func(*JobContext, *livekit.ParticipantInfo)
 
 type participantEntrypointRegistration struct {
@@ -206,33 +219,81 @@ func (c *JobContext) connectInfo() lksdk.ConnectInfo {
 	}
 }
 
-func (c *JobContext) Connect(ctx context.Context, cb *lksdk.RoomCallback) error {
+func (c *JobContext) Connect(ctx context.Context, cb *lksdk.RoomCallback, options ...ConnectOptions) error {
 	if c.Room != nil {
 		return nil
 	}
-	cb = c.roomCallbackWithEntrypoints(cb)
+	opts := normalizeConnectOptions(options...)
+	cb = c.roomCallbackWithEntrypoints(cb, opts.AutoSubscribe)
+	connectOptions := []lksdk.ConnectOption{
+		lksdk.WithAutoSubscribe(autoSubscribeSDKEnabled(opts.AutoSubscribe)),
+	}
 	if c.token != "" {
-		room, err := lksdk.ConnectToRoomWithToken(c.url, c.token, cb)
+		room, err := lksdk.ConnectToRoomWithToken(c.url, c.token, cb, connectOptions...)
 		if err != nil {
 			return err
 		}
 		c.Room = room
 		c.participantsAvailable(remoteParticipantsAsViews(room.GetRemoteParticipants()))
+		c.applyAutoSubscribeOptions(opts.AutoSubscribe)
 		logger.Logger.Infow("Connected to room", "room", c.Job.Room.Name)
 		return nil
 	}
 
-	room, err := lksdk.ConnectToRoom(c.url, c.connectInfo(), cb)
+	room, err := lksdk.ConnectToRoom(c.url, c.connectInfo(), cb, connectOptions...)
 	if err != nil {
 		return err
 	}
 	c.Room = room
 	c.participantsAvailable(remoteParticipantsAsViews(room.GetRemoteParticipants()))
+	c.applyAutoSubscribeOptions(opts.AutoSubscribe)
 	logger.Logger.Infow("Connected to room", "room", c.Job.Room.Name)
 	return nil
 }
 
-func (c *JobContext) roomCallbackWithEntrypoints(cb *lksdk.RoomCallback) *lksdk.RoomCallback {
+func normalizeConnectOptions(options ...ConnectOptions) ConnectOptions {
+	opts := ConnectOptions{AutoSubscribe: AutoSubscribeSubscribeAll}
+	if len(options) > 0 {
+		opts = options[0]
+	}
+	if opts.AutoSubscribe == "" {
+		opts.AutoSubscribe = AutoSubscribeSubscribeAll
+	}
+	return opts
+}
+
+func autoSubscribeSDKEnabled(mode AutoSubscribe) bool {
+	return normalizeConnectOptions(ConnectOptions{AutoSubscribe: mode}).AutoSubscribe == AutoSubscribeSubscribeAll
+}
+
+func shouldAutoSubscribeTrack(mode AutoSubscribe, kind lksdk.TrackKind) bool {
+	switch normalizeConnectOptions(ConnectOptions{AutoSubscribe: mode}).AutoSubscribe {
+	case AutoSubscribeAudioOnly:
+		return kind == lksdk.TrackKindAudio
+	case AutoSubscribeVideoOnly:
+		return kind == lksdk.TrackKindVideo
+	default:
+		return false
+	}
+}
+
+func (c *JobContext) applyAutoSubscribeOptions(mode AutoSubscribe) {
+	if c.Room == nil {
+		return
+	}
+	for _, participant := range c.Room.GetRemoteParticipants() {
+		for _, publication := range participant.TrackPublications() {
+			remotePublication, ok := publication.(*lksdk.RemoteTrackPublication)
+			if ok && shouldAutoSubscribeTrack(mode, remotePublication.Kind()) {
+				if err := remotePublication.SetSubscribed(true); err != nil {
+					logger.Logger.Warnw("failed to subscribe remote track", err, "trackSid", remotePublication.SID())
+				}
+			}
+		}
+	}
+}
+
+func (c *JobContext) roomCallbackWithEntrypoints(cb *lksdk.RoomCallback, autoSubscribe AutoSubscribe) *lksdk.RoomCallback {
 	wrapped := lksdk.NewRoomCallback()
 	wrapped.Merge(cb)
 	onParticipantConnected := wrapped.OnParticipantConnected
@@ -242,6 +303,17 @@ func (c *JobContext) roomCallbackWithEntrypoints(cb *lksdk.RoomCallback) *lksdk.
 		}
 		if participant != nil {
 			c.participantAvailable(participant)
+		}
+	}
+	onTrackPublished := wrapped.OnTrackPublished
+	wrapped.OnTrackPublished = func(publication *lksdk.RemoteTrackPublication, participant *lksdk.RemoteParticipant) {
+		if onTrackPublished != nil {
+			onTrackPublished(publication, participant)
+		}
+		if publication != nil && shouldAutoSubscribeTrack(autoSubscribe, publication.Kind()) {
+			if err := publication.SetSubscribed(true); err != nil {
+				logger.Logger.Warnw("failed to subscribe published remote track", err, "trackSid", publication.SID())
+			}
 		}
 	}
 	return wrapped
@@ -370,7 +442,11 @@ func participantEntrypointMatchesKind(kinds []livekit.ParticipantInfo_Kind, kind
 	return false
 }
 
-func (c *JobContext) Shutdown(reason string) {
+func (c *JobContext) Shutdown(reasons ...string) {
+	reason := ""
+	if len(reasons) > 0 {
+		reason = reasons[0]
+	}
 	c.shutdownOnce.Do(func() {
 		for _, callback := range c.shutdownCallbacks {
 			callback(reason)
@@ -397,10 +473,14 @@ func (c *JobContext) DeleteRoom(ctx context.Context, roomName string) (*livekit.
 }
 
 // AddSIPParticipant adds a SIP participant to the room.
-func (c *JobContext) AddSIPParticipant(ctx context.Context, callTo string, trunkID string, identity string, name string) (*livekit.SIPParticipantInfo, error) {
+func (c *JobContext) AddSIPParticipant(ctx context.Context, callTo string, trunkID string, identity string, names ...string) (*livekit.SIPParticipantInfo, error) {
 	if c.IsFakeJob() {
 		logger.Logger.Warnw("job context AddSIPParticipant is skipped for fake jobs", nil)
 		return &livekit.SIPParticipantInfo{}, nil
+	}
+	name := ""
+	if len(names) > 0 {
+		name = names[0]
 	}
 	client := lksdk.NewSIPClient(c.url, c.apiKey, c.apiSecret)
 	return client.CreateSIPParticipant(ctx, c.createSIPParticipantRequest(callTo, trunkID, identity, name))
@@ -420,11 +500,11 @@ func (c *JobContext) createSIPParticipantRequest(callTo string, trunkID string, 
 }
 
 // TransferSIPParticipant transfers a SIP participant to another number.
-func (c *JobContext) TransferSIPParticipant(ctx context.Context, identity string, transferTo string, playDialtone bool) error {
-	return c.TransferSIPParticipantByParticipant(ctx, identity, transferTo, playDialtone)
+func (c *JobContext) TransferSIPParticipant(ctx context.Context, identity string, transferTo string, playDialtones ...bool) error {
+	return c.TransferSIPParticipantByParticipant(ctx, identity, transferTo, playDialtones...)
 }
 
-func (c *JobContext) TransferSIPParticipantByParticipant(ctx context.Context, participant any, transferTo string, playDialtone bool) error {
+func (c *JobContext) TransferSIPParticipantByParticipant(ctx context.Context, participant any, transferTo string, playDialtones ...bool) error {
 	if c.IsFakeJob() {
 		logger.Logger.Warnw("job context TransferSIPParticipant is skipped for fake jobs", nil)
 		return nil
@@ -432,6 +512,10 @@ func (c *JobContext) TransferSIPParticipantByParticipant(ctx context.Context, pa
 	identity, err := transferSIPParticipantIdentity(participant)
 	if err != nil {
 		return err
+	}
+	playDialtone := false
+	if len(playDialtones) > 0 {
+		playDialtone = playDialtones[0]
 	}
 	client := lksdk.NewSIPClient(c.url, c.apiKey, c.apiSecret)
 	_, err = client.TransferSIPParticipant(ctx, c.transferSIPParticipantRequest(identity, transferTo, playDialtone))

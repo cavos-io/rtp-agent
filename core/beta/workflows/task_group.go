@@ -7,6 +7,7 @@ import (
 	"sync"
 
 	"github.com/cavos-io/conversation-worker/core/agent"
+	"github.com/cavos-io/conversation-worker/core/llm"
 	"github.com/cavos-io/conversation-worker/library/logger"
 )
 
@@ -35,7 +36,7 @@ type TaskGroup struct {
 	VisitedTasks     map[string]struct{}
 	RegisteredTasks  []FactoryInfo
 	OnTaskCompleted  func(taskID string, result any) error
-	
+
 	currentTask agent.AgentInterface
 	mu          sync.Mutex
 }
@@ -92,9 +93,10 @@ func (g *TaskGroup) runTasks() {
 		// In Python, it updates chat ctx and tools
 		// Here we assume the agent task handles its own execution when Start is called
 
-		logger.Logger.Infow("Running task in group", "taskID", taskID)		
-		// For parity, we should add out_of_scope tool to current task
-		g.currentTask.GetAgent().Tools = append(g.currentTask.GetAgent().Tools, &outOfScopeTool{group: g, activeTaskID: taskID})
+		logger.Logger.Infow("Running task in group", "taskID", taskID)
+		if tool := g.buildOutOfScopeTool(taskID); tool != nil {
+			g.currentTask.GetAgent().Tools = append(g.currentTask.GetAgent().Tools, tool)
+		}
 
 		if waiter, ok := g.currentTask.(agent.TaskWaiter); ok {
 			result, err := waiter.WaitAny(context.Background())
@@ -108,7 +110,7 @@ func (g *TaskGroup) runTasks() {
 				return
 			}
 			results[taskID] = result
-			
+
 			if g.OnTaskCompleted != nil {
 				if err := g.OnTaskCompleted(taskID, result); err != nil {
 					g.Fail(err)
@@ -122,6 +124,21 @@ func (g *TaskGroup) runTasks() {
 	}
 
 	g.Complete(&TaskGroupResult{TaskResults: results})
+}
+
+func (g *TaskGroup) buildOutOfScopeTool(activeTaskID string) llm.Tool {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+
+	if len(g.VisitedTasks) == 0 {
+		return nil
+	}
+	for taskID := range g.VisitedTasks {
+		if taskID != activeTaskID {
+			return &outOfScopeTool{group: g, activeTaskID: activeTaskID}
+		}
+	}
+	return nil
 }
 
 type outOfScopeTool struct {
@@ -141,7 +158,7 @@ func (t *outOfScopeTool) Description() string {
 			taskRepr[info.ID] = info.Description
 		}
 	}
-	
+
 	reprJSON, _ := json.Marshal(taskRepr)
 
 	return fmt.Sprintf(`Call to regress to other tasks according to what the user requested to modify, return the corresponding task ids. 
@@ -170,6 +187,36 @@ func (t *outOfScopeTool) Execute(ctx context.Context, args string) (string, erro
 	if err := json.Unmarshal([]byte(args), &params); err != nil {
 		return "", err
 	}
+	if err := t.validateTaskIDs(params.TaskIDs); err != nil {
+		return "", err
+	}
 
 	return "", &OutOfScopeError{TargetTaskIDs: params.TaskIDs}
+}
+
+func (t *outOfScopeTool) validateTaskIDs(taskIDs []string) error {
+	t.group.mu.Lock()
+	defer t.group.mu.Unlock()
+
+	for _, taskID := range taskIDs {
+		if taskID == t.activeTaskID {
+			return fmt.Errorf("unable to regress, invalid task id %s", taskID)
+		}
+		if _, visited := t.group.VisitedTasks[taskID]; !visited {
+			return fmt.Errorf("unable to regress, invalid task id %s", taskID)
+		}
+		if !t.group.registeredTask(taskID) {
+			return fmt.Errorf("unable to regress, invalid task id %s", taskID)
+		}
+	}
+	return nil
+}
+
+func (g *TaskGroup) registeredTask(taskID string) bool {
+	for _, info := range g.RegisteredTasks {
+		if info.ID == taskID {
+			return true
+		}
+	}
+	return false
 }

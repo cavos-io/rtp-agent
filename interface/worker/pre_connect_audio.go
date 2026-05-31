@@ -21,13 +21,13 @@ type PreConnectAudioBuffer struct {
 }
 
 type PreConnectAudioHandler struct {
-	room         *lksdk.Room
-	timeout      time.Duration
-	maxDelta     time.Duration
-	
-	buffers      map[string]chan *PreConnectAudioBuffer
-	mu           sync.Mutex
-	
+	room     *lksdk.Room
+	timeout  time.Duration
+	maxDelta time.Duration
+
+	buffers map[string]chan *PreConnectAudioBuffer
+	mu      sync.Mutex
+
 	registered   bool
 	afterConnect bool
 }
@@ -44,19 +44,30 @@ func NewPreConnectAudioHandler(room *lksdk.Room, timeout time.Duration) *PreConn
 func (h *PreConnectAudioHandler) Register() {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	
+
 	if h.registered {
 		return
 	}
-	
+
 	h.afterConnect = h.room.ConnectionState() == lksdk.ConnectionStateConnected
-	
+
 	err := h.room.RegisterByteStreamHandler(PreConnectAudioBufferStream, h.handler)
 	if err != nil {
 		logger.Logger.Warnw("failed to register pre-connect audio handler", err)
 	} else {
 		h.registered = true
 	}
+}
+
+func (h *PreConnectAudioHandler) Close() {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+
+	if !h.registered {
+		return
+	}
+	h.room.UnregisterByteStreamHandler(PreConnectAudioBufferStream)
+	h.registered = false
 }
 
 func (h *PreConnectAudioHandler) handler(reader *lksdk.ByteStreamReader, participantIdentity string) {

@@ -35,6 +35,23 @@ func TestJobContextShutdownRunsCallbacks(t *testing.T) {
 	}
 }
 
+func TestJobContextShutdownDefaultsEmptyReason(t *testing.T) {
+	ctx := NewJobContext(&livekit.Job{Id: "job_shutdown_default_reason"}, "", "", "")
+	gotReason := "unset"
+
+	if err := ctx.AddShutdownCallback(func(reason string) {
+		gotReason = reason
+	}); err != nil {
+		t.Fatalf("AddShutdownCallback(reason) error = %v", err)
+	}
+
+	ctx.Shutdown()
+
+	if gotReason != "" {
+		t.Fatalf("shutdown callback reason = %q, want empty string", gotReason)
+	}
+}
+
 func TestJobContextShutdownRunsCallbacksOnce(t *testing.T) {
 	ctx := NewJobContext(&livekit.Job{Id: "job_shutdown_once"}, "", "", "")
 	callCount := 0
@@ -112,6 +129,65 @@ func TestJobContextConnectIsNoopWhenRoomAlreadyConnected(t *testing.T) {
 	}
 	if ctx.Room != room {
 		t.Fatal("Connect() replaced existing room, want existing room preserved")
+	}
+}
+
+func TestAutoSubscribeSDKEnabledMatchesReferenceModes(t *testing.T) {
+	tests := []struct {
+		mode AutoSubscribe
+		want bool
+	}{
+		{AutoSubscribeSubscribeAll, true},
+		{AutoSubscribeSubscribeNone, false},
+		{AutoSubscribeAudioOnly, false},
+		{AutoSubscribeVideoOnly, false},
+		{"", true},
+	}
+
+	for _, tt := range tests {
+		t.Run(string(tt.mode), func(t *testing.T) {
+			if got := autoSubscribeSDKEnabled(tt.mode); got != tt.want {
+				t.Fatalf("autoSubscribeSDKEnabled(%q) = %v, want %v", tt.mode, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestShouldAutoSubscribeTrackMatchesReferenceModes(t *testing.T) {
+	tests := []struct {
+		mode AutoSubscribe
+		kind lksdk.TrackKind
+		want bool
+	}{
+		{AutoSubscribeSubscribeAll, lksdk.TrackKindAudio, false},
+		{AutoSubscribeSubscribeNone, lksdk.TrackKindAudio, false},
+		{AutoSubscribeAudioOnly, lksdk.TrackKindAudio, true},
+		{AutoSubscribeAudioOnly, lksdk.TrackKindVideo, false},
+		{AutoSubscribeVideoOnly, lksdk.TrackKindAudio, false},
+		{AutoSubscribeVideoOnly, lksdk.TrackKindVideo, true},
+	}
+
+	for _, tt := range tests {
+		t.Run(string(tt.mode)+"_"+string(tt.kind), func(t *testing.T) {
+			if got := shouldAutoSubscribeTrack(tt.mode, tt.kind); got != tt.want {
+				t.Fatalf("shouldAutoSubscribeTrack(%q, %q) = %v, want %v", tt.mode, tt.kind, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestJobContextConnectAcceptsAutoSubscribeOptions(t *testing.T) {
+	room := &lksdk.Room{}
+	ctx := NewJobContext(
+		&livekit.Job{Id: "job_connect_options", Room: &livekit.Room{Name: "room-a"}},
+		"://invalid-url",
+		"key",
+		"secret",
+	)
+	ctx.Room = room
+
+	if err := ctx.Connect(context.Background(), nil, ConnectOptions{AutoSubscribe: AutoSubscribeAudioOnly}); err != nil {
+		t.Fatalf("Connect() with AutoSubscribe option error = %v", err)
 	}
 }
 
@@ -289,7 +365,7 @@ func TestJobContextRoomCallbackWithEntrypointsPreservesExistingParticipantCallba
 		OnParticipantConnected: func(*lksdk.RemoteParticipant) {
 			called = true
 		},
-	})
+	}, AutoSubscribeSubscribeAll)
 
 	cb.OnParticipantConnected(nil)
 
@@ -667,7 +743,17 @@ func TestLocalJobContextSkipsDestructiveLiveKitAPIs(t *testing.T) {
 		t.Fatal("AddSIPParticipant() info = nil, want empty info")
 	}
 
+	if info, err := ctx.AddSIPParticipant(context.Background(), "+15551234567", "trunk", "sip-user"); err != nil {
+		t.Fatalf("AddSIPParticipant() with default name error = %v", err)
+	} else if info == nil {
+		t.Fatal("AddSIPParticipant() with default name info = nil, want empty info")
+	}
+
 	if err := ctx.TransferSIPParticipant(context.Background(), "sip-user", "+15557654321", false); err != nil {
 		t.Fatalf("TransferSIPParticipant() error = %v", err)
+	}
+
+	if err := ctx.TransferSIPParticipant(context.Background(), "sip-user", "+15557654321"); err != nil {
+		t.Fatalf("TransferSIPParticipant() with default dialtone error = %v", err)
 	}
 }

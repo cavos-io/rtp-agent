@@ -305,6 +305,18 @@ func (c *ChatContext) MarshalJSON() ([]byte, error) {
 	}))
 }
 
+func ChatContextFromDict(data map[string]any) (*ChatContext, error) {
+	encoded, err := json.Marshal(data)
+	if err != nil {
+		return nil, err
+	}
+	var ctx ChatContext
+	if err := json.Unmarshal(encoded, &ctx); err != nil {
+		return nil, err
+	}
+	return &ctx, nil
+}
+
 func (c *ChatContext) UnmarshalJSON(data []byte) error {
 	var decoded struct {
 		Items []json.RawMessage `json:"items"`

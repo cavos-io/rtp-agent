@@ -612,6 +612,43 @@ func TestChatContextUnmarshalJSONRejectsUnknownItemType(t *testing.T) {
 	}
 }
 
+func TestChatContextFromDictRestoresContext(t *testing.T) {
+	data := map[string]any{
+		"items": []map[string]any{
+			{
+				"id":         "message",
+				"type":       "message",
+				"role":       "user",
+				"content":    []any{"hello"},
+				"created_at": 10.0,
+			},
+			{
+				"id":         "call",
+				"type":       "function_call",
+				"call_id":    "call_lookup",
+				"name":       "lookup",
+				"arguments":  "{}",
+				"created_at": 11.0,
+			},
+		},
+	}
+
+	ctx, err := ChatContextFromDict(data)
+	if err != nil {
+		t.Fatalf("ChatContextFromDict() error = %v", err)
+	}
+
+	if len(ctx.Items) != 2 {
+		t.Fatalf("len(items) = %d, want 2", len(ctx.Items))
+	}
+	if msg, ok := ctx.Items[0].(*ChatMessage); !ok || msg.ID != "message" || msg.TextContent() != "hello" {
+		t.Fatalf("item[0] = %#v, want message", ctx.Items[0])
+	}
+	if call, ok := ctx.Items[1].(*FunctionCall); !ok || call.CallID != "call_lookup" {
+		t.Fatalf("item[1] = %#v, want function call", ctx.Items[1])
+	}
+}
+
 func TestChatContextToOpenAIProviderFormatGroupsToolCallsWithOutputs(t *testing.T) {
 	ctx := NewChatContext()
 	groupID := "assistant-turn"
