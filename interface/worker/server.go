@@ -40,6 +40,8 @@ const (
 	defaultSessionEnd     = 300
 	defaultProcessTimeout = 10
 	defaultLoadThreshold  = 0.7
+	defaultProdLogLevel   = "INFO"
+	defaultDevLogLevel    = "DEBUG"
 
 	participantAttributeAgentName = "lk.agent.name"
 )
@@ -96,6 +98,7 @@ type WorkerOptions struct {
 	WorkerToken                     string
 	HTTPProxy                       string
 	DevMode                         bool
+	LogLevel                        string
 	LoadThreshold                   float64
 	JobMemoryWarnMB                 float64
 	JobMemoryLimitMB                float64
@@ -442,6 +445,9 @@ func mergeWorkerOptions(current WorkerOptions, next WorkerOptions) WorkerOptions
 	if next.DevMode {
 		current.DevMode = true
 	}
+	if next.LogLevel != "" {
+		current.LogLevel = next.LogLevel
+	}
 	if next.LoadThreshold != 0 {
 		current.LoadThreshold = next.LoadThreshold
 	}
@@ -500,6 +506,17 @@ func resolveWorkerOptions(opts WorkerOptions) WorkerOptions {
 	if opts.InitializeProcessTimeoutSeconds == 0 {
 		opts.InitializeProcessTimeoutSeconds = defaultProcessTimeout
 	}
+	if opts.LogLevel == "" {
+		opts.LogLevel = os.Getenv("LIVEKIT_LOG_LEVEL")
+	}
+	if opts.LogLevel == "" {
+		if opts.DevMode {
+			opts.LogLevel = defaultDevLogLevel
+		} else {
+			opts.LogLevel = defaultProdLogLevel
+		}
+	}
+	opts.LogLevel = strings.ToUpper(opts.LogLevel)
 	if opts.LoadThreshold == 0 {
 		if opts.DevMode {
 			opts.LoadThreshold = math.Inf(1)
@@ -547,6 +564,15 @@ func resolveWorkerOptions(opts WorkerOptions) WorkerOptions {
 func liveKitDevModeEnabled(value string) bool {
 	switch strings.ToLower(strings.TrimSpace(value)) {
 	case "1", "true", "t", "yes", "y", "on":
+		return true
+	default:
+		return false
+	}
+}
+
+func validWorkerLogLevel(logLevel string) bool {
+	switch strings.ToUpper(strings.TrimSpace(logLevel)) {
+	case "TRACE", "DEBUG", "INFO", "WARN", "ERROR", "CRITICAL":
 		return true
 	default:
 		return false
@@ -873,7 +899,9 @@ func (s *AgentServer) validateRunPreconditions() error {
 	if s.Options.LoadThreshold > 1 && !math.IsInf(s.Options.LoadThreshold, 1) {
 		return fmt.Errorf("load_threshold in prod env must be less than 1, current value: %v", s.Options.LoadThreshold)
 	}
-
+	if !validWorkerLogLevel(s.Options.LogLevel) {
+		return fmt.Errorf("invalid log_level %q, valid levels: CRITICAL, DEBUG, ERROR, INFO, TRACE, WARN", s.Options.LogLevel)
+	}
 	if s.entrypointFnc == nil {
 		return fmt.Errorf("No RTC session entrypoint has been registered")
 	}

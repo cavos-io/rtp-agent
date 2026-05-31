@@ -124,6 +124,9 @@ func TestNewAgentServerUsesReferenceWorkerDefaults(t *testing.T) {
 	if server.Options.NumIdleProcesses != wantIdle {
 		t.Fatalf("NumIdleProcesses = %d, want reference production default %d", server.Options.NumIdleProcesses, wantIdle)
 	}
+	if server.Options.LogLevel != "INFO" {
+		t.Fatalf("LogLevel = %q, want reference production default INFO", server.Options.LogLevel)
+	}
 }
 
 func TestNewAgentServerUsesReferenceDevModeDefaultsFromEnvironment(t *testing.T) {
@@ -139,6 +142,9 @@ func TestNewAgentServerUsesReferenceDevModeDefaultsFromEnvironment(t *testing.T)
 	}
 	if server.Options.NumIdleProcesses != 0 {
 		t.Fatalf("NumIdleProcesses = %d, want reference development default 0", server.Options.NumIdleProcesses)
+	}
+	if server.Options.LogLevel != "DEBUG" {
+		t.Fatalf("LogLevel = %q, want reference development default DEBUG", server.Options.LogLevel)
 	}
 	if !server.availableForJob() {
 		t.Fatal("availableForJob() = false, want true with development infinite load threshold")
@@ -168,6 +174,24 @@ func TestNewAgentServerKeepsExplicitDevModeCapacityOptions(t *testing.T) {
 	}
 	if server.Options.NumIdleProcesses != 2 {
 		t.Fatalf("NumIdleProcesses = %d, want explicit development value 2", server.Options.NumIdleProcesses)
+	}
+}
+
+func TestNewAgentServerNormalizesExplicitLogLevel(t *testing.T) {
+	server := NewAgentServer(WorkerOptions{LogLevel: "trace"})
+
+	if server.Options.LogLevel != "TRACE" {
+		t.Fatalf("LogLevel = %q, want normalized TRACE", server.Options.LogLevel)
+	}
+}
+
+func TestNewAgentServerLoadsLogLevelFromEnvironment(t *testing.T) {
+	t.Setenv("LIVEKIT_LOG_LEVEL", "warn")
+
+	server := NewAgentServer(WorkerOptions{})
+
+	if server.Options.LogLevel != "WARN" {
+		t.Fatalf("LogLevel = %q, want env LIVEKIT_LOG_LEVEL normalized to WARN", server.Options.LogLevel)
 	}
 }
 
@@ -2057,6 +2081,26 @@ func TestValidateRunPreconditionsRejectsFiniteLoadThresholdAboveOne(t *testing.T
 	}
 	if !strings.Contains(err.Error(), "load_threshold in prod env must be less than 1") {
 		t.Fatalf("validateRunPreconditions() error = %q, want load threshold message", err.Error())
+	}
+}
+
+func TestValidateRunPreconditionsRejectsInvalidLogLevel(t *testing.T) {
+	server := NewAgentServer(WorkerOptions{
+		WSRL:      "wss://livekit.example",
+		APIKey:    "key",
+		APISecret: "secret",
+		LogLevel:  "verbose",
+	})
+	if err := server.RTCSession(func(ctx *JobContext) error { return nil }, nil, nil); err != nil {
+		t.Fatalf("RTCSession() error = %v", err)
+	}
+
+	err := server.validateRunPreconditions()
+	if err == nil {
+		t.Fatal("validateRunPreconditions() error = nil, want invalid log level error")
+	}
+	if !strings.Contains(err.Error(), "invalid log_level") {
+		t.Fatalf("validateRunPreconditions() error = %q, want invalid log level message", err.Error())
 	}
 }
 
