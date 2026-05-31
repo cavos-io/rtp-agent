@@ -248,11 +248,7 @@ func (d *primarySpeakerDetector) pushAudio(frame *model.AudioFrame) {
 
 	if d.bstream == nil {
 		samplePerChannel := uint32(float64(frame.SampleRate) * d.frameSize)
-		d.bstream = &audio.AudioByteStream{
-			SampleRate:        frame.SampleRate,
-			NumChannels:       frame.NumChannels,
-			SamplesPerChannel: samplePerChannel,
-		}
+		d.bstream = audio.NewAudioByteStream(frame.SampleRate, frame.NumChannels, samplePerChannel)
 		d.frameSize = float64(samplePerChannel) / float64(frame.SampleRate)
 	}
 
