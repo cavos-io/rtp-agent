@@ -2,6 +2,8 @@ package google
 
 import (
 	"context"
+	"encoding/base64"
+	"reflect"
 	"testing"
 
 	"github.com/cavos-io/conversation-worker/core/llm"
@@ -76,6 +78,38 @@ func TestBuildGoogleContentsFiltersUnmatchedToolItems(t *testing.T) {
 		t.Fatalf("role = %q, want user", contents[0].Role)
 	}
 	assertGoogleTextPart(t, contents[0].Parts, 0, "hello")
+}
+
+func TestBuildGoogleContentsIncludesImageParts(t *testing.T) {
+	imageData := base64.StdEncoding.EncodeToString([]byte("png-bytes"))
+	ctx := llm.NewChatContext()
+	ctx.Items = []llm.ChatItem{
+		&llm.ChatMessage{
+			ID:   "user",
+			Role: llm.ChatRoleUser,
+			Content: []llm.ChatContent{
+				{Text: "describe"},
+				{Image: &llm.ImageContent{Image: "data:image/png;base64," + imageData}},
+				{Image: &llm.ImageContent{Image: "https://example.test/image.jpg", MimeType: "image/jpeg"}},
+			},
+		},
+	}
+
+	contents, _ := buildGoogleContents(ctx)
+
+	parts := contents[0].Parts
+	if len(parts) != 3 {
+		t.Fatalf("len(parts) = %d, want 3: %#v", len(parts), parts)
+	}
+	if parts[0].Text != "describe" {
+		t.Fatalf("text part = %#v", parts[0])
+	}
+	if parts[1].InlineData == nil || !reflect.DeepEqual(parts[1].InlineData.Data, []byte("png-bytes")) || parts[1].InlineData.MIMEType != "image/png" {
+		t.Fatalf("inline image part = %#v", parts[1])
+	}
+	if parts[2].FileData == nil || parts[2].FileData.FileURI != "https://example.test/image.jpg" || parts[2].FileData.MIMEType != "image/jpeg" {
+		t.Fatalf("file image part = %#v", parts[2])
+	}
 }
 
 func TestBuildGoogleContentsCollectsSystemText(t *testing.T) {

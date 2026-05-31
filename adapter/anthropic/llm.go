@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -36,6 +37,7 @@ type anthropicMessage struct {
 type anthropicContentBlock struct {
 	Type      string         `json:"type"`
 	Text      string         `json:"text,omitempty"`
+	Source    map[string]any `json:"source,omitempty"`
 	ID        string         `json:"id,omitempty"`
 	Name      string         `json:"name,omitempty"`
 	Input     map[string]any `json:"input,omitempty"`
@@ -232,8 +234,37 @@ func anthropicMessageContentBlocks(msg *llm.ChatMessage) []anthropicContentBlock
 		if c.Text != "" {
 			blocks = append(blocks, anthropicContentBlock{Type: "text", Text: c.Text})
 		}
+		if c.Image != nil {
+			if block := anthropicImageBlock(c.Image); block != nil {
+				blocks = append(blocks, *block)
+			}
+		}
 	}
 	return blocks
+}
+
+func anthropicImageBlock(image *llm.ImageContent) *anthropicContentBlock {
+	img, err := llm.SerializeImage(image)
+	if err != nil {
+		return nil
+	}
+	if img.ExternalURL != "" {
+		return &anthropicContentBlock{
+			Type: "image",
+			Source: map[string]any{
+				"type": "url",
+				"url":  img.ExternalURL,
+			},
+		}
+	}
+	return &anthropicContentBlock{
+		Type: "image",
+		Source: map[string]any{
+			"type":       "base64",
+			"data":       base64.StdEncoding.EncodeToString(img.DataBytes),
+			"media_type": img.MIMEType,
+		},
+	}
 }
 
 func anthropicToolUseBlock(fc *llm.FunctionCall) anthropicContentBlock {
