@@ -2,6 +2,7 @@ package worker
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"math"
@@ -355,6 +356,19 @@ func (s *AgentServer) handleReloadIPCMessage(ctx context.Context, r io.Reader, o
 		return true, err
 	}
 	return true, nil
+}
+
+func (s *AgentServer) processReloadIPCMessages(ctx context.Context, r io.Reader, out io.Writer, reloadCount int, now time.Time) error {
+	for {
+		_, err := s.handleReloadIPCMessage(ctx, r, out, reloadCount, now)
+		if err == nil {
+			continue
+		}
+		if errors.Is(err, io.EOF) {
+			return nil
+		}
+		return err
+	}
 }
 
 func (s *AgentServer) UpdateOptions(opts WorkerOptions) error {
