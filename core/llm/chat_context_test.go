@@ -451,6 +451,34 @@ func TestChatContextToDictUsesReferenceItemShapeAndFilters(t *testing.T) {
 	}
 }
 
+func TestChatContextToDictIncludesAndExcludesMessageMetrics(t *testing.T) {
+	ctx := NewChatContext()
+	ctx.Items = []ChatItem{
+		&ChatMessage{
+			ID:      "message",
+			Role:    ChatRoleAssistant,
+			Content: []ChatContent{{Text: "hello"}},
+			Metrics: map[string]any{"llm_node_ttft": 0.25},
+		},
+	}
+
+	data := ctx.ToDict()
+	items := data["items"].([]map[string]any)
+	metrics, ok := items[0]["metrics"].(map[string]any)
+	if !ok {
+		t.Fatalf("metrics = %#v, want map", items[0]["metrics"])
+	}
+	if metrics["llm_node_ttft"] != 0.25 {
+		t.Fatalf("metrics = %#v, want llm_node_ttft", metrics)
+	}
+
+	withoutMetrics := ctx.ToDict(ChatContextDictOptions{ExcludeMetrics: true})
+	filteredItems := withoutMetrics["items"].([]map[string]any)
+	if _, ok := filteredItems[0]["metrics"]; ok {
+		t.Fatalf("metrics present with ExcludeMetrics: %#v", filteredItems[0])
+	}
+}
+
 func TestChatContextMarshalJSONIncludesTimestampsForReports(t *testing.T) {
 	ctx := NewChatContext()
 	ctx.Items = []ChatItem{
@@ -529,6 +557,7 @@ func TestChatContextUnmarshalJSONRestoresTypedItems(t *testing.T) {
 				"interrupted": true,
 				"transcript_confidence": 0.75,
 				"extra": {"source": "test"},
+				"metrics": {"llm_node_ttft": 0.5},
 				"created_at": 10.25
 			},
 			{
@@ -585,6 +614,9 @@ func TestChatContextUnmarshalJSONRestoresTypedItems(t *testing.T) {
 	}
 	if message.TranscriptConfidence == nil || *message.TranscriptConfidence != 0.75 {
 		t.Fatalf("transcript confidence = %#v", message.TranscriptConfidence)
+	}
+	if message.Metrics["llm_node_ttft"] != 0.5 {
+		t.Fatalf("metrics = %#v, want llm_node_ttft", message.Metrics)
 	}
 	if !message.CreatedAt.Equal(time.Unix(10, 250000000)) {
 		t.Fatalf("message CreatedAt = %v, want unix 10.25", message.CreatedAt)

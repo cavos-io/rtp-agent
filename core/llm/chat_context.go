@@ -26,6 +26,7 @@ type ChatMessageArgs struct {
 	Interrupted bool
 	CreatedAt   time.Time
 	Extra       map[string]any
+	Metrics     map[string]any
 }
 
 type ChatContextCopyOptions struct {
@@ -87,6 +88,7 @@ func (c *ChatContext) AddMessage(args ChatMessageArgs) *ChatMessage {
 		Content:     content,
 		Interrupted: args.Interrupted,
 		Extra:       args.Extra,
+		Metrics:     args.Metrics,
 		CreatedAt:   createdAt,
 	}
 	if args.CreatedAt.IsZero() {
@@ -445,6 +447,7 @@ func chatMessageFromJSON(data []byte) (*ChatMessage, error) {
 		Interrupted          bool              `json:"interrupted"`
 		TranscriptConfidence *float64          `json:"transcript_confidence"`
 		Extra                map[string]any    `json:"extra"`
+		Metrics              map[string]any    `json:"metrics"`
 		CreatedAt            *float64          `json:"created_at"`
 	}
 	if err := json.Unmarshal(data, &item); err != nil {
@@ -467,6 +470,7 @@ func chatMessageFromJSON(data []byte) (*ChatMessage, error) {
 		Interrupted:          item.Interrupted,
 		TranscriptConfidence: item.TranscriptConfidence,
 		Extra:                item.Extra,
+		Metrics:              nonNilMap(item.Metrics),
 		CreatedAt:            chatItemCreatedAtOrDefault(item.CreatedAt),
 	}, nil
 }
@@ -533,6 +537,9 @@ func chatItemToDict(item ChatItem, opts ChatContextDictOptions) map[string]any {
 			"content":     chatContentToDict(it.Content, opts),
 			"interrupted": it.Interrupted,
 			"extra":       nonNilMap(it.Extra),
+		}
+		if !opts.ExcludeMetrics {
+			data["metrics"] = nonNilMap(it.Metrics)
 		}
 		if it.TranscriptConfidence != nil {
 			data["transcript_confidence"] = *it.TranscriptConfidence
