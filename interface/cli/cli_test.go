@@ -483,6 +483,73 @@ func TestWatcherRunReloadIPCSessionRequestsThenProcessesMessages(t *testing.T) {
 	}
 }
 
+func TestWatcherRunReloadIPCSessionHandlesTriggerReloadRequests(t *testing.T) {
+	args := &CliArgs{ReloadCount: 8}
+	restarted := make(chan struct{})
+	watcher := NewWatcher(nil, func() {
+		close(restarted)
+	}, args)
+	watcher.activeJobsTimeout = time.Nanosecond
+
+	peerReader, watcherWriter := io.Pipe()
+	watcherReader, peerWriter := io.Pipe()
+	sessionErr := make(chan error, 1)
+	go func() {
+		sessionErr <- watcher.runReloadIPCSession(struct {
+			io.Reader
+			io.Writer
+		}{
+			Reader: watcherReader,
+			Writer: watcherWriter,
+		})
+	}()
+
+	msg, err := ipc.ReadMessage(peerReader)
+	if err != nil {
+		t.Fatalf("ReadMessage initial request: %v", err)
+	}
+	if msg.Type != ipc.MessageTypeReloadJobsRequest {
+		t.Fatalf("initial request Type = %q, want %q", msg.Type, ipc.MessageTypeReloadJobsRequest)
+	}
+
+	triggered := make(chan bool, 1)
+	go func() {
+		triggered <- watcher.triggerReload()
+	}()
+
+	msg = readIPCMessageWithin(t, peerReader, time.Second, "active jobs request")
+	if msg.Type != ipc.MessageTypeActiveJobsRequest {
+		t.Fatalf("trigger request Type = %q, want %q", msg.Type, ipc.MessageTypeActiveJobsRequest)
+	}
+
+	select {
+	case ok := <-triggered:
+		if !ok {
+			t.Fatal("triggerReload() = false, want true")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("triggerReload() did not finish")
+	}
+
+	select {
+	case <-restarted:
+	case <-time.After(time.Second):
+		t.Fatal("restart callback was not called")
+	}
+
+	if err := peerWriter.Close(); err != nil {
+		t.Fatalf("close peer writer: %v", err)
+	}
+	select {
+	case err := <-sessionErr:
+		if err != nil {
+			t.Fatalf("runReloadIPCSession() error = %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("runReloadIPCSession() did not return after peer close")
+	}
+}
+
 func mustIPCMessage(t *testing.T, payload any) ipc.Message {
 	t.Helper()
 	msg, err := ipc.NewMessage(payload)
@@ -490,4 +557,27 @@ func mustIPCMessage(t *testing.T, payload any) ipc.Message {
 		t.Fatalf("NewMessage(%T): %v", payload, err)
 	}
 	return msg
+}
+
+func readIPCMessageWithin(t *testing.T, r io.Reader, timeout time.Duration, name string) ipc.Message {
+	t.Helper()
+	type result struct {
+		msg ipc.Message
+		err error
+	}
+	done := make(chan result, 1)
+	go func() {
+		msg, err := ipc.ReadMessage(r)
+		done <- result{msg: msg, err: err}
+	}()
+	select {
+	case res := <-done:
+		if res.err != nil {
+			t.Fatalf("ReadMessage %s: %v", name, res.err)
+		}
+		return res.msg
+	case <-time.After(timeout):
+		t.Fatalf("ReadMessage %s timed out", name)
+		return ipc.Message{}
+	}
 }

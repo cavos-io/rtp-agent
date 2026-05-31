@@ -184,6 +184,26 @@ func (w *Watcher) reloadJobsResponse() ipc.ReloadJobsResponse {
 	}
 }
 
+func (w *Watcher) setReloadIPC(out io.Writer) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.reloadIPC = out
+}
+
+func (w *Watcher) clearReloadIPC(out io.Writer) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.reloadIPC == out {
+		w.reloadIPC = nil
+	}
+}
+
+func (w *Watcher) currentReloadIPC() io.Writer {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.reloadIPC
+}
+
 func (w *Watcher) handleReloadMessage(payload any) (any, bool) {
 	switch msg := payload.(type) {
 	case *ipc.ActiveJobsResponse:
@@ -258,6 +278,8 @@ func (w *Watcher) processReloadIPCMessages(r io.Reader, out io.Writer) error {
 }
 
 func (w *Watcher) runReloadIPCSession(rw io.ReadWriter) error {
+	w.setReloadIPC(rw)
+	defer w.clearReloadIPC(rw)
 	if err := w.requestReloadJobs(rw); err != nil {
 		return err
 	}
@@ -271,9 +293,9 @@ func (w *Watcher) triggerReload() bool {
 	if !w.markReloading() {
 		return false
 	}
-	if w.reloadIPC != nil {
+	if reloadIPC := w.currentReloadIPC(); reloadIPC != nil {
 		waitCh := w.beginActiveJobsWait()
-		if err := w.requestActiveJobs(w.reloadIPC); err != nil {
+		if err := w.requestActiveJobs(reloadIPC); err != nil {
 			logger.Logger.Warnw("failed to request active jobs before reload", err)
 			w.clearActiveJobsWait(waitCh)
 		} else {
