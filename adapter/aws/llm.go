@@ -22,7 +22,7 @@ func NewAWSLLM(ctx context.Context, region string, model string) (*AWSLLM, error
 	if model == "" {
 		model = "anthropic.claude-3-haiku-20240307-v1:0"
 	}
-	
+
 	opts := []func(*config.LoadOptions) error{}
 	if region != "" {
 		opts = append(opts, config.WithRegion(region))
@@ -45,78 +45,7 @@ func (l *AWSLLM) Chat(ctx context.Context, chatCtx *llm.ChatContext, opts ...llm
 		opt(options)
 	}
 
-	messages := make([]types.Message, 0)
-	var systemText string
-
-	for _, item := range chatCtx.Items {
-		if msg, ok := item.(*llm.ChatMessage); ok {
-			if msg.Role == llm.ChatRoleSystem || msg.Role == llm.ChatRoleDeveloper {
-				systemText += msg.TextContent() + "\n"
-				continue
-			}
-
-			role := types.ConversationRoleUser
-			if msg.Role == llm.ChatRoleAssistant {
-				role = types.ConversationRoleAssistant
-			}
-
-			contentBlocks := make([]types.ContentBlock, 0)
-			for _, c := range msg.Content {
-				if c.Text != "" {
-					contentBlocks = append(contentBlocks, &types.ContentBlockMemberText{Value: c.Text})
-				}
-			}
-
-			if len(contentBlocks) > 0 {
-				messages = append(messages, types.Message{
-					Role:    role,
-					Content: contentBlocks,
-				})
-			}
-		} else if fc, ok := item.(*llm.FunctionCall); ok {
-			var args map[string]interface{}
-			json.Unmarshal([]byte(fc.Arguments), &args)
-
-			doc := document.NewLazyDocument(args)
-
-			messages = append(messages, types.Message{
-				Role: types.ConversationRoleAssistant,
-				Content: []types.ContentBlock{
-					&types.ContentBlockMemberToolUse{
-						Value: types.ToolUseBlock{
-							ToolUseId: aws.String(fc.CallID),
-							Name:      aws.String(fc.Name),
-							Input:     doc,
-						},
-					},
-				},
-			})
-		} else if fco, ok := item.(*llm.FunctionCallOutput); ok {
-			doc := document.NewLazyDocument(map[string]interface{}{
-				"output": fco.Output,
-			})
-			status := types.ToolResultStatusSuccess
-			if fco.IsError {
-				status = types.ToolResultStatusError
-			}
-
-			messages = append(messages, types.Message{
-				Role: types.ConversationRoleUser,
-				Content: []types.ContentBlock{
-					&types.ContentBlockMemberToolResult{
-						Value: types.ToolResultBlock{
-							ToolUseId: aws.String(fco.CallID),
-							Status:    status,
-							Content: []types.ToolResultContentBlock{
-								&types.ToolResultContentBlockMemberJson{
-									Value: doc,
-								},							},
-						},
-					},
-				},
-			})
-		}
-	}
+	messages, systemText := buildAWSMessages(chatCtx)
 
 	req := &bedrockruntime.ConverseStreamInput{
 		ModelId:  aws.String(l.model),
@@ -161,6 +90,231 @@ func (l *AWSLLM) Chat(ctx context.Context, chatCtx *llm.ChatContext, opts ...llm
 type awsLLMStream struct {
 	stream *bedrockruntime.ConverseStreamEventStream
 	closed bool
+}
+
+func buildAWSMessages(chatCtx *llm.ChatContext) ([]types.Message, string) {
+	messages := make([]types.Message, 0, len(chatCtx.Items))
+	var systemText string
+	var currentRole *types.ConversationRole
+	currentContent := make([]types.ContentBlock, 0)
+
+	flush := func() {
+		if currentRole == nil || len(currentContent) == 0 {
+			return
+		}
+		messages = append(messages, types.Message{
+			Role:    *currentRole,
+			Content: currentContent,
+		})
+		currentContent = nil
+	}
+
+	appendBlock := func(role types.ConversationRole, blocks ...types.ContentBlock) {
+		if currentRole == nil || *currentRole != role {
+			flush()
+			currentRole = &role
+			currentContent = make([]types.ContentBlock, 0, len(blocks))
+		}
+		currentContent = append(currentContent, blocks...)
+	}
+
+	for _, group := range groupAWSChatItems(chatCtx.Items) {
+		for _, item := range group.flatten() {
+			switch msg := item.(type) {
+			case *llm.ChatMessage:
+				if msg.Role == llm.ChatRoleSystem || msg.Role == llm.ChatRoleDeveloper {
+					if text := msg.TextContent(); text != "" {
+						systemText += text + "\n"
+					}
+					continue
+				}
+				role := types.ConversationRoleUser
+				if msg.Role == llm.ChatRoleAssistant {
+					role = types.ConversationRoleAssistant
+				}
+				blocks := awsMessageContentBlocks(msg)
+				if len(blocks) > 0 {
+					appendBlock(role, blocks...)
+				}
+			case *llm.FunctionCall:
+				appendBlock(types.ConversationRoleAssistant, awsToolUseBlock(msg))
+			case *llm.FunctionCallOutput:
+				appendBlock(types.ConversationRoleUser, awsToolResultBlock(msg))
+			}
+		}
+	}
+	flush()
+
+	if len(messages) == 0 || messages[0].Role != types.ConversationRoleUser {
+		messages = append([]types.Message{
+			{
+				Role:    types.ConversationRoleUser,
+				Content: []types.ContentBlock{&types.ContentBlockMemberText{Value: "(empty)"}},
+			},
+		}, messages...)
+	}
+
+	return messages, systemText
+}
+
+func awsMessageContentBlocks(msg *llm.ChatMessage) []types.ContentBlock {
+	blocks := make([]types.ContentBlock, 0, len(msg.Content))
+	for _, c := range msg.Content {
+		if c.Text != "" {
+			blocks = append(blocks, &types.ContentBlockMemberText{Value: c.Text})
+		}
+	}
+	return blocks
+}
+
+func awsToolUseBlock(fc *llm.FunctionCall) types.ContentBlock {
+	var args map[string]interface{}
+	_ = json.Unmarshal([]byte(fc.Arguments), &args)
+	if args == nil {
+		args = map[string]interface{}{}
+	}
+
+	return &types.ContentBlockMemberToolUse{
+		Value: types.ToolUseBlock{
+			ToolUseId: aws.String(fc.CallID),
+			Name:      aws.String(fc.Name),
+			Input:     document.NewLazyDocument(args),
+		},
+	}
+}
+
+func awsToolResultBlock(fco *llm.FunctionCallOutput) types.ContentBlock {
+	status := types.ToolResultStatusSuccess
+	if fco.IsError {
+		status = types.ToolResultStatusError
+	}
+
+	return &types.ContentBlockMemberToolResult{
+		Value: types.ToolResultBlock{
+			ToolUseId: aws.String(fco.CallID),
+			Status:    status,
+			Content: []types.ToolResultContentBlock{
+				&types.ToolResultContentBlockMemberJson{
+					Value: document.NewLazyDocument(map[string]interface{}{
+						"output": fco.Output,
+					}),
+				},
+			},
+		},
+	}
+}
+
+type awsChatItemGroup struct {
+	message     *llm.ChatMessage
+	toolCalls   []*llm.FunctionCall
+	toolOutputs []*llm.FunctionCallOutput
+}
+
+func groupAWSChatItems(items []llm.ChatItem) []*awsChatItemGroup {
+	groups := make([]*awsChatItemGroup, 0)
+	groupsByID := make(map[string]*awsChatItemGroup)
+	toolOutputs := make([]*llm.FunctionCallOutput, 0)
+
+	addToGroup := func(groupID string, item llm.ChatItem) {
+		group := groupsByID[groupID]
+		if group == nil {
+			group = &awsChatItemGroup{}
+			groupsByID[groupID] = group
+			groups = append(groups, group)
+		}
+		group.add(item)
+	}
+
+	for _, item := range items {
+		switch it := item.(type) {
+		case *llm.ChatMessage:
+			if it.Role == llm.ChatRoleAssistant {
+				addToGroup(awsGroupID(it.ID, nil), it)
+			} else {
+				addToGroup(it.ID, it)
+			}
+		case *llm.FunctionCall:
+			addToGroup(awsGroupID(it.ID, it.GroupID), it)
+		case *llm.FunctionCallOutput:
+			toolOutputs = append(toolOutputs, it)
+		}
+	}
+
+	groupsByCallID := make(map[string]*awsChatItemGroup)
+	for _, group := range groups {
+		for _, toolCall := range group.toolCalls {
+			groupsByCallID[toolCall.CallID] = group
+		}
+	}
+	for _, toolOutput := range toolOutputs {
+		if group := groupsByCallID[toolOutput.CallID]; group != nil {
+			group.add(toolOutput)
+		}
+	}
+	for _, group := range groups {
+		group.removeInvalidToolItems()
+	}
+	return groups
+}
+
+func (g *awsChatItemGroup) add(item llm.ChatItem) {
+	switch it := item.(type) {
+	case *llm.ChatMessage:
+		g.message = it
+	case *llm.FunctionCall:
+		g.toolCalls = append(g.toolCalls, it)
+	case *llm.FunctionCallOutput:
+		g.toolOutputs = append(g.toolOutputs, it)
+	}
+}
+
+func (g *awsChatItemGroup) flatten() []llm.ChatItem {
+	items := make([]llm.ChatItem, 0, 1+len(g.toolCalls)+len(g.toolOutputs))
+	if g.message != nil {
+		items = append(items, g.message)
+	}
+	for _, toolCall := range g.toolCalls {
+		items = append(items, toolCall)
+	}
+	for _, toolOutput := range g.toolOutputs {
+		items = append(items, toolOutput)
+	}
+	return items
+}
+
+func (g *awsChatItemGroup) removeInvalidToolItems() {
+	if len(g.toolCalls) == len(g.toolOutputs) {
+		return
+	}
+
+	outputsByCallID := make(map[string]*llm.FunctionCallOutput)
+	for _, toolOutput := range g.toolOutputs {
+		outputsByCallID[toolOutput.CallID] = toolOutput
+	}
+
+	validCalls := make([]*llm.FunctionCall, 0, len(g.toolCalls))
+	validOutputs := make([]*llm.FunctionCallOutput, 0, len(g.toolOutputs))
+	for _, toolCall := range g.toolCalls {
+		if toolOutput := outputsByCallID[toolCall.CallID]; toolOutput != nil {
+			validCalls = append(validCalls, toolCall)
+			validOutputs = append(validOutputs, toolOutput)
+		}
+	}
+
+	g.toolCalls = validCalls
+	g.toolOutputs = validOutputs
+}
+
+func awsGroupID(itemID string, groupID *string) string {
+	if groupID != nil && *groupID != "" {
+		return *groupID
+	}
+	for i, r := range itemID {
+		if r == '/' {
+			return itemID[:i]
+		}
+	}
+	return itemID
 }
 
 func (s *awsLLMStream) Next() (*llm.ChatChunk, error) {
