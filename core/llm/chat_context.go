@@ -365,7 +365,7 @@ func chatItemFromJSON(data []byte) (ChatItem, error) {
 			return nil, err
 		}
 		return &FunctionCall{
-			ID:        item.ID,
+			ID:        itemIDOrDefault(item.ID),
 			CallID:    item.CallID,
 			Name:      item.Name,
 			Arguments: item.Arguments,
@@ -386,7 +386,7 @@ func chatItemFromJSON(data []byte) (ChatItem, error) {
 			return nil, err
 		}
 		return &FunctionCallOutput{
-			ID:        item.ID,
+			ID:        itemIDOrDefault(item.ID),
 			CallID:    item.CallID,
 			Name:      item.Name,
 			Output:    item.Output,
@@ -404,7 +404,7 @@ func chatItemFromJSON(data []byte) (ChatItem, error) {
 			return nil, err
 		}
 		return &AgentHandoff{
-			ID:         item.ID,
+			ID:         itemIDOrDefault(item.ID),
 			OldAgentID: item.OldAgentID,
 			NewAgentID: item.NewAgentID,
 			CreatedAt:  unixSecondsToTime(item.CreatedAt),
@@ -421,7 +421,7 @@ func chatItemFromJSON(data []byte) (ChatItem, error) {
 			return nil, err
 		}
 		return &AgentConfigUpdate{
-			ID:           item.ID,
+			ID:           itemIDOrDefault(item.ID),
 			Instructions: item.Instructions,
 			ToolsAdded:   item.ToolsAdded,
 			ToolsRemoved: item.ToolsRemoved,
@@ -456,7 +456,7 @@ func chatMessageFromJSON(data []byte) (*ChatMessage, error) {
 	}
 
 	return &ChatMessage{
-		ID:                   item.ID,
+		ID:                   itemIDOrDefault(item.ID),
 		Role:                 item.Role,
 		Content:              content,
 		Interrupted:          item.Interrupted,
@@ -520,6 +520,7 @@ func chatContentFromJSON(data []byte) (ChatContent, error) {
 func chatItemToDict(item ChatItem, opts ChatContextDictOptions) map[string]any {
 	switch it := item.(type) {
 	case *ChatMessage:
+		it.ID = itemIDOrDefault(it.ID)
 		data := map[string]any{
 			"id":          it.ID,
 			"type":        "message",
@@ -534,6 +535,7 @@ func chatItemToDict(item ChatItem, opts ChatContextDictOptions) map[string]any {
 		addCreatedAt(data, it.CreatedAt, opts)
 		return data
 	case *FunctionCall:
+		it.ID = itemIDOrDefault(it.ID)
 		data := map[string]any{
 			"id":        it.ID,
 			"type":      "function_call",
@@ -548,6 +550,7 @@ func chatItemToDict(item ChatItem, opts ChatContextDictOptions) map[string]any {
 		addCreatedAt(data, it.CreatedAt, opts)
 		return data
 	case *FunctionCallOutput:
+		it.ID = itemIDOrDefault(it.ID)
 		data := map[string]any{
 			"id":       it.ID,
 			"type":     "function_call_output",
@@ -559,6 +562,7 @@ func chatItemToDict(item ChatItem, opts ChatContextDictOptions) map[string]any {
 		addCreatedAt(data, it.CreatedAt, opts)
 		return data
 	case *AgentHandoff:
+		it.ID = itemIDOrDefault(it.ID)
 		data := map[string]any{
 			"id":           it.ID,
 			"type":         "agent_handoff",
@@ -570,6 +574,7 @@ func chatItemToDict(item ChatItem, opts ChatContextDictOptions) map[string]any {
 		addCreatedAt(data, it.CreatedAt, opts)
 		return data
 	case *AgentConfigUpdate:
+		it.ID = itemIDOrDefault(it.ID)
 		data := map[string]any{
 			"id":   it.ID,
 			"type": "agent_config_update",
@@ -624,6 +629,13 @@ func imageContentToDict(image *ImageContent) map[string]any {
 		data["mime_type"] = image.MimeType
 	}
 	return data
+}
+
+func itemIDOrDefault(id string) string {
+	if id == "" {
+		return cavosmath.ShortUUID("item_")
+	}
+	return id
 }
 
 func imageIDOrDefault(id string) string {

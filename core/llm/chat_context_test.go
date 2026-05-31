@@ -669,6 +669,37 @@ func TestChatContextImageContentDefaultsID(t *testing.T) {
 	}
 }
 
+func TestChatContextItemsDefaultIDs(t *testing.T) {
+	data := []byte(`{
+		"items": [
+			{"type": "message", "role": "user", "content": ["hello"]},
+			{"type": "function_call", "call_id": "call_lookup", "name": "lookup", "arguments": "{}"},
+			{"type": "function_call_output", "call_id": "call_lookup", "name": "lookup", "output": "ok", "is_error": false},
+			{"type": "agent_handoff", "new_agent_id": "next"},
+			{"type": "agent_config_update", "instructions": "be concise"}
+		]
+	}`)
+
+	var ctx ChatContext
+	if err := json.Unmarshal(data, &ctx); err != nil {
+		t.Fatalf("UnmarshalJSON() error = %v", err)
+	}
+
+	for i, item := range ctx.Items {
+		if !strings.HasPrefix(item.GetID(), "item_") {
+			t.Fatalf("item %d id = %q, want item_ prefix", i, item.GetID())
+		}
+	}
+
+	encoded := ctx.ToDict()
+	items := encoded["items"].([]map[string]any)
+	for i, item := range items {
+		if got := item["id"]; got != ctx.Items[i].GetID() {
+			t.Fatalf("serialized item %d id = %#v, want %q", i, got, ctx.Items[i].GetID())
+		}
+	}
+}
+
 func TestChatContextUnmarshalJSONRejectsUnknownItemType(t *testing.T) {
 	data := []byte(`{"items":[{"id":"bad","type":"unknown"}]}`)
 
