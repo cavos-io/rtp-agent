@@ -40,43 +40,7 @@ func (l *GoogleLLM) Chat(ctx context.Context, chatCtx *llm.ChatContext, opts ...
 		opt(options)
 	}
 
-	contents := make([]*genai.Content, 0)
-	var systemInstructions string
-
-	for _, item := range chatCtx.Items {
-		if msg, ok := item.(*llm.ChatMessage); ok {
-			if msg.Role == llm.ChatRoleSystem || msg.Role == llm.ChatRoleDeveloper {
-				systemInstructions += msg.TextContent() + "\n"
-				continue
-			}
-
-			role := genai.RoleUser
-			if msg.Role == llm.ChatRoleAssistant {
-				role = "model"
-			}
-
-			parts := make([]*genai.Part, 0)
-			for _, content := range msg.Content {
-				if content.Text != "" {
-					parts = append(parts, genai.NewPartFromText(content.Text))
-				}
-				// We'd add image/audio parts here as needed
-			}
-
-			if len(parts) > 0 {
-				contents = append(contents, genai.NewContentFromParts(parts, genai.Role(role)))
-			}
-		} else if fc, ok := item.(*llm.FunctionCall); ok {
-			// Convert function call to model part
-			args := make(map[string]any)
-			json.Unmarshal([]byte(fc.Arguments), &args)
-			contents = append(contents, genai.NewContentFromFunctionCall(fc.Name, args, "model"))
-		} else if fco, ok := item.(*llm.FunctionCallOutput); ok {
-			// Convert function response to user part
-			resp := map[string]any{"output": fco.Output}
-			contents = append(contents, genai.NewContentFromFunctionResponse(fco.Name, resp, genai.RoleUser))
-		}
-	}
+	contents, systemInstructions := buildGoogleContents(chatCtx)
 
 	config := &genai.GenerateContentConfig{}
 	if systemInstructions != "" {
@@ -86,11 +50,11 @@ func (l *GoogleLLM) Chat(ctx context.Context, chatCtx *llm.ChatContext, opts ...
 	if len(options.Tools) > 0 {
 		declarations := make([]*genai.FunctionDeclaration, 0)
 		for _, t := range options.Tools {
-			
+
 			// Map parameters
 			schemaMap := t.Parameters()
 			var properties map[string]*genai.Schema
-			
+
 			if props, ok := schemaMap["properties"].(map[string]any); ok {
 				properties = make(map[string]*genai.Schema)
 				for k, v := range props {
@@ -125,14 +89,14 @@ func (l *GoogleLLM) Chat(ctx context.Context, chatCtx *llm.ChatContext, opts ...
 				},
 			})
 		}
-		
+
 		config.Tools = []*genai.Tool{
 			{FunctionDeclarations: declarations},
 		}
 	}
 
 	stream := l.client.Models.GenerateContentStream(ctx, l.model, contents, config)
-	
+
 	next, stop := iter.Pull2(stream)
 
 	return &googleLLMStream{
@@ -144,6 +108,204 @@ func (l *GoogleLLM) Chat(ctx context.Context, chatCtx *llm.ChatContext, opts ...
 type googleLLMStream struct {
 	next func() (*genai.GenerateContentResponse, error, bool)
 	stop func()
+}
+
+func buildGoogleContents(chatCtx *llm.ChatContext) ([]*genai.Content, string) {
+	contents := make([]*genai.Content, 0, len(chatCtx.Items))
+	var systemInstructions string
+	var currentRole genai.Role
+	parts := make([]*genai.Part, 0)
+
+	flush := func() {
+		if currentRole == "" || len(parts) == 0 {
+			return
+		}
+		contents = append(contents, genai.NewContentFromParts(parts, currentRole))
+		parts = nil
+	}
+
+	appendParts := func(role genai.Role, newParts ...*genai.Part) {
+		if currentRole == "" || currentRole != role {
+			flush()
+			currentRole = role
+			parts = make([]*genai.Part, 0, len(newParts))
+		}
+		parts = append(parts, newParts...)
+	}
+
+	for _, group := range groupGoogleChatItems(chatCtx.Items) {
+		for _, item := range group.flatten() {
+			switch msg := item.(type) {
+			case *llm.ChatMessage:
+				if msg.Role == llm.ChatRoleSystem || msg.Role == llm.ChatRoleDeveloper {
+					if text := msg.TextContent(); text != "" {
+						systemInstructions += text + "\n"
+					}
+					continue
+				}
+				role := genai.Role(genai.RoleUser)
+				if msg.Role == llm.ChatRoleAssistant {
+					role = genai.Role(genai.RoleModel)
+				}
+				messageParts := googleMessageParts(msg)
+				if len(messageParts) > 0 {
+					appendParts(role, messageParts...)
+				}
+			case *llm.FunctionCall:
+				appendParts(genai.Role(genai.RoleModel), googleFunctionCallPart(msg))
+			case *llm.FunctionCallOutput:
+				appendParts(genai.Role(genai.RoleUser), googleFunctionResponsePart(msg))
+			}
+		}
+	}
+	flush()
+
+	if currentRole != genai.Role(genai.RoleUser) {
+		contents = append(contents, genai.NewContentFromParts([]*genai.Part{genai.NewPartFromText(".")}, genai.Role(genai.RoleUser)))
+	}
+
+	return contents, systemInstructions
+}
+
+func googleMessageParts(msg *llm.ChatMessage) []*genai.Part {
+	parts := make([]*genai.Part, 0, len(msg.Content))
+	for _, content := range msg.Content {
+		if content.Text != "" {
+			parts = append(parts, genai.NewPartFromText(content.Text))
+		}
+	}
+	return parts
+}
+
+func googleFunctionCallPart(fc *llm.FunctionCall) *genai.Part {
+	args := make(map[string]any)
+	_ = json.Unmarshal([]byte(fc.Arguments), &args)
+	part := genai.NewPartFromFunctionCall(fc.Name, args)
+	part.FunctionCall.ID = fc.CallID
+	return part
+}
+
+func googleFunctionResponsePart(fco *llm.FunctionCallOutput) *genai.Part {
+	response := map[string]any{"output": fco.Output}
+	if fco.IsError {
+		response = map[string]any{"error": fco.Output}
+	}
+	part := genai.NewPartFromFunctionResponse(fco.Name, response)
+	part.FunctionResponse.ID = fco.CallID
+	return part
+}
+
+type googleChatItemGroup struct {
+	message     *llm.ChatMessage
+	toolCalls   []*llm.FunctionCall
+	toolOutputs []*llm.FunctionCallOutput
+}
+
+func groupGoogleChatItems(items []llm.ChatItem) []*googleChatItemGroup {
+	groups := make([]*googleChatItemGroup, 0)
+	groupsByID := make(map[string]*googleChatItemGroup)
+	toolOutputs := make([]*llm.FunctionCallOutput, 0)
+
+	addToGroup := func(groupID string, item llm.ChatItem) {
+		group := groupsByID[groupID]
+		if group == nil {
+			group = &googleChatItemGroup{}
+			groupsByID[groupID] = group
+			groups = append(groups, group)
+		}
+		group.add(item)
+	}
+
+	for _, item := range items {
+		switch it := item.(type) {
+		case *llm.ChatMessage:
+			if it.Role == llm.ChatRoleAssistant {
+				addToGroup(googleGroupID(it.ID, nil), it)
+			} else {
+				addToGroup(it.ID, it)
+			}
+		case *llm.FunctionCall:
+			addToGroup(googleGroupID(it.ID, it.GroupID), it)
+		case *llm.FunctionCallOutput:
+			toolOutputs = append(toolOutputs, it)
+		}
+	}
+
+	groupsByCallID := make(map[string]*googleChatItemGroup)
+	for _, group := range groups {
+		for _, toolCall := range group.toolCalls {
+			groupsByCallID[toolCall.CallID] = group
+		}
+	}
+	for _, toolOutput := range toolOutputs {
+		if group := groupsByCallID[toolOutput.CallID]; group != nil {
+			group.add(toolOutput)
+		}
+	}
+	for _, group := range groups {
+		group.removeInvalidToolItems()
+	}
+	return groups
+}
+
+func (g *googleChatItemGroup) add(item llm.ChatItem) {
+	switch it := item.(type) {
+	case *llm.ChatMessage:
+		g.message = it
+	case *llm.FunctionCall:
+		g.toolCalls = append(g.toolCalls, it)
+	case *llm.FunctionCallOutput:
+		g.toolOutputs = append(g.toolOutputs, it)
+	}
+}
+
+func (g *googleChatItemGroup) flatten() []llm.ChatItem {
+	items := make([]llm.ChatItem, 0, 1+len(g.toolCalls)+len(g.toolOutputs))
+	if g.message != nil {
+		items = append(items, g.message)
+	}
+	for _, toolCall := range g.toolCalls {
+		items = append(items, toolCall)
+	}
+	for _, toolOutput := range g.toolOutputs {
+		items = append(items, toolOutput)
+	}
+	return items
+}
+
+func (g *googleChatItemGroup) removeInvalidToolItems() {
+	if len(g.toolCalls) == len(g.toolOutputs) {
+		return
+	}
+
+	outputsByCallID := make(map[string]*llm.FunctionCallOutput)
+	for _, toolOutput := range g.toolOutputs {
+		outputsByCallID[toolOutput.CallID] = toolOutput
+	}
+
+	validCalls := make([]*llm.FunctionCall, 0, len(g.toolCalls))
+	validOutputs := make([]*llm.FunctionCallOutput, 0, len(g.toolOutputs))
+	for _, toolCall := range g.toolCalls {
+		if toolOutput := outputsByCallID[toolCall.CallID]; toolOutput != nil {
+			validCalls = append(validCalls, toolCall)
+			validOutputs = append(validOutputs, toolOutput)
+		}
+	}
+
+	g.toolCalls = validCalls
+	g.toolOutputs = validOutputs
+}
+
+func googleGroupID(itemID string, groupID *string) string {
+	if groupID != nil && *groupID != "" {
+		return *groupID
+	}
+	for i, r := range itemID {
+		if r == '/' {
+			return itemID[:i]
+		}
+	}
+	return itemID
 }
 
 func (s *googleLLMStream) Next() (*llm.ChatChunk, error) {
