@@ -639,6 +639,9 @@ func (s *AgentServer) validateRunPreconditions() error {
 		s.Options.LoadFunc = nil
 		s.Options.LoadThreshold = defaultLoadThreshold
 	}
+	if s.Options.LoadThreshold > 1 && !math.IsInf(s.Options.LoadThreshold, 1) {
+		return fmt.Errorf("load_threshold in prod env must be less than 1, current value: %v", s.Options.LoadThreshold)
+	}
 
 	if s.entrypointFnc == nil {
 		return fmt.Errorf("No RTC session entrypoint has been registered")

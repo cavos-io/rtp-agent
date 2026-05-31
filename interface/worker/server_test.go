@@ -1326,6 +1326,26 @@ func TestValidateRunPreconditionsNormalizesCloudLoadOptions(t *testing.T) {
 	}
 }
 
+func TestValidateRunPreconditionsRejectsFiniteLoadThresholdAboveOne(t *testing.T) {
+	server := NewAgentServer(WorkerOptions{
+		WSRL:          "wss://livekit.example",
+		APIKey:        "key",
+		APISecret:     "secret",
+		LoadThreshold: 1.2,
+	})
+	if err := server.RTCSession(func(ctx *JobContext) error { return nil }, nil, nil); err != nil {
+		t.Fatalf("RTCSession() error = %v", err)
+	}
+
+	err := server.validateRunPreconditions()
+	if err == nil {
+		t.Fatal("validateRunPreconditions() error = nil, want invalid load threshold error")
+	}
+	if !strings.Contains(err.Error(), "load_threshold in prod env must be less than 1") {
+		t.Fatalf("validateRunPreconditions() error = %q, want load threshold message", err.Error())
+	}
+}
+
 func TestConnectWorkerWebSocketRetriesDialFailures(t *testing.T) {
 	oldDial := workerDialContext
 	oldSleep := workerRetrySleep
