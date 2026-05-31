@@ -49,7 +49,7 @@ func DtmfEventToCode(event DtmfEvent) (int, error) {
 	case DtmfEventD:
 		return 15, nil
 	default:
-		if len(event) > 0 && event[0] >= '0' && event[0] <= '9' {
+		if len(event) == 1 && event[0] >= '0' && event[0] <= '9' {
 			return int(event[0] - '0'), nil
 		}
 		return 0, fmt.Errorf("invalid DTMF event: %s", event)
