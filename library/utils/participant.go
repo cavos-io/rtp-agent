@@ -109,18 +109,31 @@ func participantKindMatches(kind livekit.ParticipantInfo_Kind, allowed []livekit
 }
 
 func WaitForTrackPublication(ctx context.Context, room *lksdk.Room, identity string, kinds ...livekit.TrackType) (*lksdk.RemoteTrackPublication, error) {
+	return WaitForTrackPublicationWithOptions(ctx, room, TrackPublicationWaitOptions{
+		Identity: identity,
+		Kinds:    kinds,
+	})
+}
+
+type TrackPublicationWaitOptions struct {
+	Identity            string
+	Kinds               []livekit.TrackType
+	WaitForSubscription bool
+}
+
+func WaitForTrackPublicationWithOptions(ctx context.Context, room *lksdk.Room, options TrackPublicationWaitOptions) (*lksdk.RemoteTrackPublication, error) {
 	if err := requireConnectedRoom(room); err != nil {
 		return nil, err
 	}
 
 	matchesTrack := func(pub *lksdk.RemoteTrackPublication, p *lksdk.RemoteParticipant) bool {
-		if identity != "" && p.Identity() != identity {
-			return false
-		}
-		if !trackKindMatches(pub.Kind().ProtoType(), kinds) {
-			return false
-		}
-		return true
+		return trackPublicationMatches(
+			p.Identity(),
+			pub.Kind().ProtoType(),
+			pub.IsSubscribed(),
+			pub.Track() != nil,
+			options,
+		)
 	}
 
 	for _, p := range room.GetRemoteParticipants() {
@@ -149,6 +162,25 @@ func WaitForTrackPublication(ctx context.Context, room *lksdk.Room, identity str
 			}
 		}
 	}
+}
+
+func trackPublicationMatches(
+	participantIdentity string,
+	kind livekit.TrackType,
+	subscribed bool,
+	hasTrack bool,
+	options TrackPublicationWaitOptions,
+) bool {
+	if options.Identity != "" && participantIdentity != options.Identity {
+		return false
+	}
+	if !trackKindMatches(kind, options.Kinds) {
+		return false
+	}
+	if options.WaitForSubscription && (!subscribed || !hasTrack) {
+		return false
+	}
+	return true
 }
 
 func WaitForParticipantAttribute(ctx context.Context, room *lksdk.Room, identity string, attribute string, value string) error {

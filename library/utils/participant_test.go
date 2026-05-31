@@ -151,3 +151,34 @@ func TestWaitForTrackKindMatchFiltersExplicitKinds(t *testing.T) {
 		t.Fatal("trackKindMatches(VIDEO, [AUDIO]) = true, want false")
 	}
 }
+
+func TestTrackPublicationMatchesRequiresSubscriptionWhenRequested(t *testing.T) {
+	opts := TrackPublicationWaitOptions{
+		WaitForSubscription: true,
+	}
+	if trackPublicationMatches("caller", livekit.TrackType_AUDIO, true, false, opts) {
+		t.Fatal("trackPublicationMatches(subscribed without track) = true, want false")
+	}
+	if trackPublicationMatches("caller", livekit.TrackType_AUDIO, false, true, opts) {
+		t.Fatal("trackPublicationMatches(track without subscription) = true, want false")
+	}
+	if !trackPublicationMatches("caller", livekit.TrackType_AUDIO, true, true, opts) {
+		t.Fatal("trackPublicationMatches(subscribed with track) = false, want true")
+	}
+}
+
+func TestTrackPublicationMatchesFiltersIdentityAndKind(t *testing.T) {
+	opts := TrackPublicationWaitOptions{
+		Identity: "caller",
+		Kinds:    []livekit.TrackType{livekit.TrackType_AUDIO},
+	}
+	if !trackPublicationMatches("caller", livekit.TrackType_AUDIO, false, false, opts) {
+		t.Fatal("trackPublicationMatches(caller audio) = false, want true")
+	}
+	if trackPublicationMatches("other", livekit.TrackType_AUDIO, false, false, opts) {
+		t.Fatal("trackPublicationMatches(other audio) = true, want false")
+	}
+	if trackPublicationMatches("caller", livekit.TrackType_VIDEO, false, false, opts) {
+		t.Fatal("trackPublicationMatches(caller video) = true, want false")
+	}
+}
