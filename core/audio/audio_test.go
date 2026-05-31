@@ -1,6 +1,10 @@
 package audio
 
-import "testing"
+import (
+	"os"
+	"path/filepath"
+	"testing"
+)
 
 func TestAudioByteStreamDefaultsToHundredMillisecondFrames(t *testing.T) {
 	stream := NewAudioByteStream(16000, 1, 0)
@@ -13,6 +17,20 @@ func TestAudioByteStreamDefaultsToHundredMillisecondFrames(t *testing.T) {
 	}
 	if frames[0].SamplesPerChannel != 1600 {
 		t.Fatalf("SamplesPerChannel = %d, want 1600", frames[0].SamplesPerChannel)
+	}
+}
+
+func TestAudioByteStreamWriteAliasesPush(t *testing.T) {
+	stream := NewAudioByteStream(16000, 1, 320)
+	data := make([]byte, 320*2)
+
+	frames := stream.Write(data)
+
+	if len(frames) != 1 {
+		t.Fatalf("Write() frames = %d, want 1", len(frames))
+	}
+	if frames[0].SamplesPerChannel != 320 {
+		t.Fatalf("Write() SamplesPerChannel = %d, want 320", frames[0].SamplesPerChannel)
 	}
 }
 
@@ -144,6 +162,35 @@ func TestAudioArrayBufferRejectsOversizedFrames(t *testing.T) {
 
 	if _, err := buffer.PushFrame(frame); err == nil {
 		t.Fatal("PushFrame() error = nil, want oversized frame error")
+	}
+}
+
+func TestAudioFramesFromFileDecodesPCMFile(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "audio.pcm")
+	if err := os.WriteFile(path, make([]byte, 960*2), 0o600); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	frames, err := AudioFramesFromFile(path, AudioFramesFromFileOptions{
+		SampleRate:  48000,
+		NumChannels: 1,
+	})
+	if err != nil {
+		t.Fatalf("AudioFramesFromFile() error = %v", err)
+	}
+
+	if len(frames) != 1 {
+		t.Fatalf("frames = %d, want 1", len(frames))
+	}
+	if frames[0].SampleRate != 48000 || frames[0].NumChannels != 1 || frames[0].SamplesPerChannel != 960 {
+		t.Fatalf("frame shape = rate %d channels %d samples %d", frames[0].SampleRate, frames[0].NumChannels, frames[0].SamplesPerChannel)
+	}
+}
+
+func TestAudioFramesFromFileReturnsReadError(t *testing.T) {
+	_, err := AudioFramesFromFile(filepath.Join(t.TempDir(), "missing.pcm"), AudioFramesFromFileOptions{})
+	if err == nil {
+		t.Fatal("AudioFramesFromFile() error = nil, want missing file error")
 	}
 }
 

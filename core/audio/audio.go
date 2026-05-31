@@ -2,7 +2,12 @@ package audio
 
 import (
 	"fmt"
+	"io"
+	"os"
+	"path/filepath"
+	"strings"
 
+	"github.com/cavos-io/conversation-worker/library/utils/codecs"
 	"github.com/cavos-io/conversation-worker/model"
 )
 
@@ -12,6 +17,12 @@ const minProgressiveMS = 20
 
 type AudioByteStreamOptions struct {
 	Progressive bool
+}
+
+type AudioFramesFromFileOptions struct {
+	SampleRate  int
+	NumChannels int
+	DecoderType codecs.DecoderType
 }
 
 // AudioByteStream groups small audio frames into larger ones for processing
@@ -76,6 +87,10 @@ func (s *AudioByteStream) Push(data []byte) []*model.AudioFrame {
 		}
 	}
 	return frames
+}
+
+func (s *AudioByteStream) Write(data []byte) []*model.AudioFrame {
+	return s.Push(data)
 }
 
 func (s *AudioByteStream) Flush() []*model.AudioFrame {
@@ -233,4 +248,96 @@ func int16FromLE(data []byte) int16 {
 		return 0
 	}
 	return int16(uint16(data[0]) | uint16(data[1])<<8)
+}
+
+func AudioFramesFromFile(path string, options AudioFramesFromFileOptions) ([]*model.AudioFrame, error) {
+	if options.SampleRate == 0 {
+		options.SampleRate = 48000
+	}
+	if options.NumChannels == 0 {
+		options.NumChannels = 1
+	}
+	decoderType := options.DecoderType
+	if decoderType == "" {
+		decoderType = decoderTypeFromPath(path)
+	}
+	if decoderType == codecs.DecoderTypePCM {
+		return pcmFramesFromFile(path, options.SampleRate, options.NumChannels)
+	}
+
+	decoder, err := newAudioFileDecoder(decoderType, options)
+	if err != nil {
+		return nil, err
+	}
+	defer decoder.Close()
+
+	file, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer file.Close()
+
+	buf := make([]byte, 4096)
+	for {
+		n, readErr := file.Read(buf)
+		if n > 0 {
+			decoder.Push(buf[:n])
+		}
+		if readErr == io.EOF {
+			break
+		}
+		if readErr != nil {
+			return nil, readErr
+		}
+	}
+	decoder.EndInput()
+
+	var frames []*model.AudioFrame
+	for {
+		frame, nextErr := decoder.Next()
+		if nextErr != nil {
+			if strings.Contains(nextErr.Error(), "decoder closed") {
+				return frames, nil
+			}
+			return nil, nextErr
+		}
+		frames = append(frames, frame)
+	}
+}
+
+func pcmFramesFromFile(path string, sampleRate int, numChannels int) ([]*model.AudioFrame, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	if len(data) == 0 {
+		return nil, nil
+	}
+	samplesPerChannel := len(data) / (numChannels * 2)
+	return []*model.AudioFrame{{
+		Data:              append([]byte(nil), data...),
+		SampleRate:        uint32(sampleRate),
+		NumChannels:       uint32(numChannels),
+		SamplesPerChannel: uint32(samplesPerChannel),
+	}}, nil
+}
+
+func decoderTypeFromPath(path string) codecs.DecoderType {
+	switch strings.ToLower(filepath.Ext(path)) {
+	case ".mp3":
+		return codecs.DecoderTypeMP3
+	default:
+		return codecs.DecoderTypePCM
+	}
+}
+
+func newAudioFileDecoder(decoderType codecs.DecoderType, options AudioFramesFromFileOptions) (codecs.AudioStreamDecoder, error) {
+	switch decoderType {
+	case codecs.DecoderTypePCM:
+		return codecs.NewPCMAudioStreamDecoder(options.SampleRate, options.NumChannels), nil
+	case codecs.DecoderTypeMP3:
+		return codecs.NewMP3AudioStreamDecoder(), nil
+	default:
+		return nil, fmt.Errorf("unsupported decoder type: %s", decoderType)
+	}
 }
