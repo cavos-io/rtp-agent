@@ -175,6 +175,9 @@ func (c *JobContext) connectInfo() lksdk.ConnectInfo {
 }
 
 func (c *JobContext) Connect(ctx context.Context, cb *lksdk.RoomCallback) error {
+	if c.Room != nil {
+		return nil
+	}
 	if c.token != "" {
 		room, err := lksdk.ConnectToRoomWithToken(c.url, c.token, cb)
 		if err != nil {

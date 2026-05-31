@@ -95,6 +95,24 @@ func TestJobContextConnectInfoUsesAcceptedParticipantFields(t *testing.T) {
 	}
 }
 
+func TestJobContextConnectIsNoopWhenRoomAlreadyConnected(t *testing.T) {
+	room := &lksdk.Room{}
+	ctx := NewJobContext(
+		&livekit.Job{Id: "job_connect_once", Room: &livekit.Room{Name: "room-a"}},
+		"://invalid-url",
+		"key",
+		"secret",
+	)
+	ctx.Room = room
+
+	if err := ctx.Connect(context.Background(), nil); err != nil {
+		t.Fatalf("Connect() error = %v, want nil when room is already connected", err)
+	}
+	if ctx.Room != room {
+		t.Fatal("Connect() replaced existing room, want existing room preserved")
+	}
+}
+
 func TestJobContextRoomInfoReturnsJobRoom(t *testing.T) {
 	room := &livekit.Room{Name: "room-a", Sid: "RM_a"}
 	ctx := NewJobContext(&livekit.Job{Id: "job_room", Room: room}, "", "", "")
