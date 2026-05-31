@@ -769,6 +769,9 @@ func (c *ChatContext) ToProviderFormat(format string) ([]map[string]any, any) {
 	if format == "aws" {
 		return c.toAWSProviderFormat()
 	}
+	if format == "mistralai" {
+		return c.toMistralProviderFormat()
+	}
 	return nil, nil
 }
 
@@ -868,6 +871,41 @@ func (c *ChatContext) toAnthropicProviderFormat() ([]map[string]any, any) {
 	}
 
 	return messages, map[string]any{"system_messages": systemMessages}
+}
+
+func (c *ChatContext) toMistralProviderFormat() ([]map[string]any, any) {
+	entries := make([]map[string]any, 0)
+	var instructions any
+
+	for _, group := range groupOpenAIToolCalls(c.Items) {
+		if group.message != nil {
+			if group.message.Role == ChatRoleSystem || group.message.Role == ChatRoleDeveloper {
+				if text := group.message.TextContent(); text != "" {
+					instructions = text
+				}
+			} else if entry := mistralMessageEntry(group.message); entry != nil {
+				entries = append(entries, entry)
+			}
+		}
+
+		for _, toolCall := range group.toolCalls {
+			entries = append(entries, map[string]any{
+				"type":         "function.call",
+				"tool_call_id": toolCall.CallID,
+				"name":         toolCall.Name,
+				"arguments":    toolCall.Arguments,
+			})
+		}
+		for _, toolOutput := range group.toolOutputs {
+			entries = append(entries, map[string]any{
+				"type":         "function.result",
+				"tool_call_id": toolOutput.CallID,
+				"result":       toolOutput.Output,
+			})
+		}
+	}
+
+	return entries, map[string]any{"instructions": instructions}
 }
 
 func (c *ChatContext) toAWSProviderFormat() ([]map[string]any, any) {
@@ -1145,6 +1183,64 @@ func openAIResponsesToolOutput(toolOutput *FunctionCallOutput) map[string]any {
 		"type":    "function_call_output",
 		"call_id": toolOutput.CallID,
 		"output":  toolOutput.Output,
+	}
+}
+
+func mistralMessageEntry(msg *ChatMessage) map[string]any {
+	switch msg.Role {
+	case ChatRoleUser:
+		return map[string]any{
+			"type":    "message.input",
+			"role":    "user",
+			"content": mistralMessageContent(msg),
+		}
+	case ChatRoleAssistant:
+		return map[string]any{
+			"type":    "message.output",
+			"role":    "assistant",
+			"content": mistralMessageContent(msg),
+		}
+	default:
+		return nil
+	}
+}
+
+func mistralMessageContent(msg *ChatMessage) any {
+	parts := make([]map[string]any, 0)
+	textContent := ""
+	for _, item := range msg.Content {
+		if item.Text != "" {
+			if textContent != "" {
+				textContent += "\n"
+			}
+			textContent += item.Text
+		}
+		if item.Image != nil {
+			if part := mistralImageContent(item.Image); part != nil {
+				parts = append(parts, part)
+			}
+		}
+	}
+	if len(parts) == 0 {
+		return textContent
+	}
+	if textContent != "" {
+		parts = append(parts, map[string]any{
+			"type": "text",
+			"text": textContent,
+		})
+	}
+	return parts
+}
+
+func mistralImageContent(image *ImageContent) map[string]any {
+	url, ok := image.Image.(string)
+	if !ok || url == "" {
+		return nil
+	}
+	return map[string]any{
+		"type":      "image_url",
+		"image_url": url,
 	}
 }
 

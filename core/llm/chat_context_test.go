@@ -1196,3 +1196,53 @@ func TestChatContextToAWSProviderFormatMapsTurnsAndSystemMessages(t *testing.T) 
 		t.Fatalf("tool result content = %#v", resultContent)
 	}
 }
+
+func TestChatContextToMistralProviderFormatMapsEntriesAndInstructions(t *testing.T) {
+	ctx := NewChatContext()
+	ctx.Items = []ChatItem{
+		&ChatMessage{ID: "system", Role: ChatRoleSystem, Content: []ChatContent{{Text: "be concise"}}},
+		&ChatMessage{
+			ID:   "user",
+			Role: ChatRoleUser,
+			Content: []ChatContent{
+				{Text: "describe"},
+				{Image: &ImageContent{Image: "https://example.test/image.png"}},
+			},
+		},
+		&ChatMessage{ID: "assistant-turn", Role: ChatRoleAssistant, Content: []ChatContent{{Text: "checking"}}},
+		&FunctionCall{ID: "assistant-turn/tool", CallID: "call_weather", Name: "weather", Arguments: `{"city":"Paris"}`},
+		&FunctionCallOutput{ID: "weather-output", CallID: "call_weather", Name: "weather", Output: "sunny"},
+	}
+
+	entries, extra := ctx.ToProviderFormat("mistralai")
+
+	data, ok := extra.(map[string]any)
+	if !ok {
+		t.Fatalf("mistral extra = %#v, want map", extra)
+	}
+	if data["instructions"] != "be concise" {
+		t.Fatalf("instructions = %#v", data["instructions"])
+	}
+	if len(entries) != 4 {
+		t.Fatalf("len(entries) = %d, want 4: %#v", len(entries), entries)
+	}
+	if entries[0]["type"] != "message.input" || entries[0]["role"] != "user" {
+		t.Fatalf("first entry = %#v", entries[0])
+	}
+	content := entries[0]["content"].([]map[string]any)
+	if content[0]["type"] != "image_url" || content[0]["image_url"] != "https://example.test/image.png" {
+		t.Fatalf("image content = %#v", content[0])
+	}
+	if content[1]["type"] != "text" || content[1]["text"] != "describe" {
+		t.Fatalf("text content = %#v", content[1])
+	}
+	if entries[1]["type"] != "message.output" || entries[1]["role"] != "assistant" || entries[1]["content"] != "checking" {
+		t.Fatalf("assistant entry = %#v", entries[1])
+	}
+	if entries[2]["type"] != "function.call" || entries[2]["tool_call_id"] != "call_weather" || entries[2]["name"] != "weather" || entries[2]["arguments"] != `{"city":"Paris"}` {
+		t.Fatalf("function call entry = %#v", entries[2])
+	}
+	if entries[3]["type"] != "function.result" || entries[3]["tool_call_id"] != "call_weather" || entries[3]["result"] != "sunny" {
+		t.Fatalf("function result entry = %#v", entries[3])
+	}
+}
