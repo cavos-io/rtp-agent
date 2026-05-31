@@ -263,3 +263,27 @@ func TestWatcherHandleReloadIPCMessageWritesResponse(t *testing.T) {
 		t.Fatalf("Jobs = %#v, want current job", resp.Jobs)
 	}
 }
+
+func TestWatcherRequestReloadJobsWritesRequestFrame(t *testing.T) {
+	watcher := NewWatcher(nil, nil)
+	var output bytes.Buffer
+
+	if err := watcher.requestReloadJobs(&output); err != nil {
+		t.Fatalf("requestReloadJobs() error = %v", err)
+	}
+
+	msg, err := ipc.ReadMessage(&output)
+	if err != nil {
+		t.Fatalf("ReadMessage request: %v", err)
+	}
+	if msg.Type != ipc.MessageTypeReloadJobsRequest {
+		t.Fatalf("request Type = %q, want %q", msg.Type, ipc.MessageTypeReloadJobsRequest)
+	}
+	payload, err := ipc.DecodePayload(msg)
+	if err != nil {
+		t.Fatalf("DecodePayload request: %v", err)
+	}
+	if _, ok := payload.(*ipc.ReloadJobsRequest); !ok {
+		t.Fatalf("request payload = %T, want *ReloadJobsRequest", payload)
+	}
+}

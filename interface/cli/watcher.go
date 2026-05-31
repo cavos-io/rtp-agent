@@ -166,6 +166,14 @@ func (w *Watcher) handleReloadIPCMessage(r io.Reader, out io.Writer) (bool, erro
 	return true, nil
 }
 
+func (w *Watcher) requestReloadJobs(out io.Writer) error {
+	msg, err := ipc.NewMessage(&ipc.ReloadJobsRequest{})
+	if err != nil {
+		return err
+	}
+	return ipc.WriteMessage(out, msg)
+}
+
 func (w *Watcher) triggerReload() bool {
 	if w.onChange == nil {
 		return false
