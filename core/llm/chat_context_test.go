@@ -636,6 +636,39 @@ func TestChatContextImageContentDefaultsInferenceDetail(t *testing.T) {
 	}
 }
 
+func TestChatContextImageContentDefaultsID(t *testing.T) {
+	data := []byte(`{
+		"items": [{
+			"id": "message",
+			"type": "message",
+			"role": "user",
+			"content": [{
+				"type": "image_content",
+				"image": "https://example.test/image.png"
+			}]
+		}]
+	}`)
+
+	var ctx ChatContext
+	if err := json.Unmarshal(data, &ctx); err != nil {
+		t.Fatalf("UnmarshalJSON() error = %v", err)
+	}
+
+	message := ctx.Items[0].(*ChatMessage)
+	id := message.Content[0].Image.ID
+	if !strings.HasPrefix(id, "img_") {
+		t.Fatalf("ImageContent.ID = %q, want img_ prefix", id)
+	}
+
+	encoded := ctx.ToDict(ChatContextDictOptions{IncludeImage: true})
+	items := encoded["items"].([]map[string]any)
+	content := items[0]["content"].([]any)
+	image := content[0].(map[string]any)
+	if got := image["id"]; got != id {
+		t.Fatalf("serialized id = %#v, want %q", got, id)
+	}
+}
+
 func TestChatContextUnmarshalJSONRejectsUnknownItemType(t *testing.T) {
 	data := []byte(`{"items":[{"id":"bad","type":"unknown"}]}`)
 

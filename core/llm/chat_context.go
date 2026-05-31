@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"reflect"
 	"time"
+
+	cavosmath "github.com/cavos-io/conversation-worker/library/math"
 )
 
 type ChatContextDictOptions struct {
@@ -491,7 +493,7 @@ func chatContentFromJSON(data []byte) (ChatContent, error) {
 			return ChatContent{}, err
 		}
 		return ChatContent{Image: &ImageContent{
-			ID:              image.ID,
+			ID:              imageIDOrDefault(image.ID),
 			Image:           image.Image,
 			InferenceWidth:  image.InferenceWidth,
 			InferenceHeight: image.InferenceHeight,
@@ -605,6 +607,7 @@ func chatContentToDict(content []ChatContent, opts ChatContextDictOptions) []any
 }
 
 func imageContentToDict(image *ImageContent) map[string]any {
+	image.ID = imageIDOrDefault(image.ID)
 	data := map[string]any{
 		"id":               image.ID,
 		"type":             "image_content",
@@ -621,6 +624,13 @@ func imageContentToDict(image *ImageContent) map[string]any {
 		data["mime_type"] = image.MimeType
 	}
 	return data
+}
+
+func imageIDOrDefault(id string) string {
+	if id == "" {
+		return cavosmath.ShortUUID("img_")
+	}
+	return id
 }
 
 func imageInferenceDetailOrDefault(detail string) string {
