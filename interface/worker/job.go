@@ -7,6 +7,7 @@ import (
 
 	"github.com/cavos-io/conversation-worker/core/agent"
 	"github.com/cavos-io/conversation-worker/library/logger"
+	"github.com/go-jose/go-jose/v3/jwt"
 	"github.com/livekit/protocol/auth"
 	"github.com/livekit/protocol/livekit"
 	lksdk "github.com/livekit/server-sdk-go/v2"
@@ -116,13 +117,23 @@ func (c *JobContext) ParticipantIdentity() string {
 }
 
 func (c *JobContext) LocalParticipantIdentity() string {
-	if c.token != "" {
-		verifier, err := auth.ParseAPIToken(c.token)
-		if err == nil && verifier.Identity() != "" {
-			return verifier.Identity()
-		}
+	claims, err := c.TokenClaims()
+	if err == nil && claims.Identity != "" {
+		return claims.Identity
 	}
 	return c.ParticipantIdentity()
+}
+
+func (c *JobContext) TokenClaims() (*auth.ClaimGrants, error) {
+	tok, err := jwt.ParseSigned(c.token)
+	if err != nil {
+		return nil, err
+	}
+	claims := &auth.ClaimGrants{}
+	if err := tok.UnsafeClaimsWithoutVerification(claims); err != nil {
+		return nil, err
+	}
+	return claims, nil
 }
 
 func (c *JobContext) JobID() string {
