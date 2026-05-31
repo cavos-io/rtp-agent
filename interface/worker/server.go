@@ -72,6 +72,11 @@ type WorkerStartedHandler func()
 
 type WorkerRegisteredHandler func(workerID string, serverInfo *livekit.ServerInfo)
 
+type WorkerInfo struct {
+	HTTPPort    int
+	CloudAgents bool
+}
+
 type WorkerOptions struct {
 	AgentName  string
 	WorkerType WorkerType
@@ -146,6 +151,13 @@ func (s *AgentServer) ID() string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.workerID
+}
+
+func (s *AgentServer) WorkerInfo() WorkerInfo {
+	return WorkerInfo{
+		HTTPPort:    0,
+		CloudAgents: s.Options.WorkerToken != "",
+	}
 }
 
 func (s *AgentServer) ActiveJobs() []*JobContext {

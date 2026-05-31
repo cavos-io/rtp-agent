@@ -130,6 +130,18 @@ func TestNewAgentServerLoadsWorkerTokenFromEnvironment(t *testing.T) {
 	}
 }
 
+func TestAgentServerWorkerInfoReportsCloudAgentsMode(t *testing.T) {
+	server := NewAgentServer(WorkerOptions{WorkerToken: "worker-token"})
+
+	info := server.WorkerInfo()
+	if !info.CloudAgents {
+		t.Fatal("WorkerInfo().CloudAgents = false, want true with worker token")
+	}
+	if info.HTTPPort != 0 {
+		t.Fatalf("WorkerInfo().HTTPPort = %d, want 0 before HTTP server starts", info.HTTPPort)
+	}
+}
+
 func TestUpdateOptionsMergesConfiguredValuesBeforeRun(t *testing.T) {
 	server := NewAgentServer(WorkerOptions{
 		WSRL:          "wss://old.example",
