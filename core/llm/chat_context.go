@@ -77,7 +77,7 @@ func (c *ChatContext) AddMessage(args ChatMessageArgs) *ChatMessage {
 		createdAt = time.Now()
 	}
 	message := &ChatMessage{
-		ID:          args.ID,
+		ID:          itemIDOrDefault(args.ID),
 		Role:        args.Role,
 		Content:     args.Content,
 		Interrupted: args.Interrupted,

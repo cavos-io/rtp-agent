@@ -190,6 +190,22 @@ func TestChatContextAddMessageAppendsWhenCreatedAtIsZero(t *testing.T) {
 	}
 }
 
+func TestChatContextAddMessageDefaultsID(t *testing.T) {
+	ctx := NewChatContext()
+
+	message := ctx.AddMessage(ChatMessageArgs{
+		Role:    ChatRoleUser,
+		Content: []ChatContent{{Text: "hello"}},
+	})
+
+	if !strings.HasPrefix(message.ID, "item_") {
+		t.Fatalf("AddMessage() ID = %q, want item_ prefix", message.ID)
+	}
+	if ctx.Items[0].GetID() != message.ID {
+		t.Fatalf("stored message ID = %q, want %q", ctx.Items[0].GetID(), message.ID)
+	}
+}
+
 func TestChatContextInsertOrdersItemsByCreatedAt(t *testing.T) {
 	ctx := NewChatContext()
 	ctx.Items = []ChatItem{
