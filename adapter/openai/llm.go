@@ -71,6 +71,7 @@ func buildOpenAIChatCompletionRequest(model string, chatCtx *llm.ChatContext, op
 			Function: &openai.FunctionDefinition{
 				Name:        tool.Name(),
 				Description: tool.Description(),
+				Strict:      true,
 				Parameters:  json.RawMessage(params),
 			},
 		})

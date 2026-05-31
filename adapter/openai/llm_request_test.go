@@ -1,10 +1,28 @@
 package openai
 
 import (
+	"context"
 	"testing"
 
 	"github.com/cavos-io/conversation-worker/core/llm"
 )
+
+type requestTestTool struct{}
+
+func (requestTestTool) ID() string          { return "lookup" }
+func (requestTestTool) Name() string        { return "lookup" }
+func (requestTestTool) Description() string { return "look up information" }
+func (requestTestTool) Parameters() map[string]any {
+	return map[string]any{
+		"type":                 "object",
+		"additionalProperties": false,
+		"properties": map[string]any{
+			"query": map[string]any{"type": "string"},
+		},
+		"required": []string{"query"},
+	}
+}
+func (requestTestTool) Execute(context.Context, string) (string, error) { return "", nil }
 
 func TestBuildOpenAIChatCompletionRequestAppliesExtraParams(t *testing.T) {
 	req := buildOpenAIChatCompletionRequest("gpt-4o", llm.NewChatContext(), &llm.ChatOptions{
@@ -44,5 +62,21 @@ func TestBuildOpenAIChatCompletionRequestAppliesExtraParams(t *testing.T) {
 	}
 	if req.Metadata["trace"] != "abc" {
 		t.Fatalf("Metadata[trace] = %q, want abc", req.Metadata["trace"])
+	}
+}
+
+func TestBuildOpenAIChatCompletionRequestMarksToolsStrict(t *testing.T) {
+	req := buildOpenAIChatCompletionRequest("gpt-4o", llm.NewChatContext(), &llm.ChatOptions{
+		Tools: []llm.Tool{requestTestTool{}},
+	})
+
+	if len(req.Tools) != 1 {
+		t.Fatalf("len(Tools) = %d, want 1", len(req.Tools))
+	}
+	if req.Tools[0].Function == nil {
+		t.Fatalf("tool function is nil")
+	}
+	if !req.Tools[0].Function.Strict {
+		t.Fatalf("tool strict = false, want true")
 	}
 }
