@@ -1,6 +1,13 @@
 package stt
 
-import "testing"
+import (
+	"context"
+	"errors"
+	"io"
+	"testing"
+
+	"github.com/cavos-io/conversation-worker/model"
+)
 
 func TestPrimarySpeakerDetectorFormatsPrimaryAndBackgroundText(t *testing.T) {
 	detector := newPrimarySpeakerDetector(
@@ -61,4 +68,57 @@ func TestPrimarySpeakerDetectorSuppressesFormattedBackgroundText(t *testing.T) {
 	if event != nil {
 		t.Fatalf("background event = %#v, want suppressed nil event", event)
 	}
+}
+
+func TestMultiSpeakerAdapterWrapperReturnsEOFWhenInnerCompletes(t *testing.T) {
+	wrapper := &multiSpeakerAdapterWrapper{
+		inner:   &fakeMultiSpeakerStream{nextErr: io.EOF},
+		ctx:     context.Background(),
+		eventCh: make(chan *SpeechEvent, 1),
+		errCh:   make(chan error, 1),
+		audioCh: make(chan *model.AudioFrame, 1),
+	}
+	go wrapper.run()
+
+	_, err := wrapper.Next()
+	if !errors.Is(err, io.EOF) {
+		t.Fatalf("Next error = %v, want io.EOF", err)
+	}
+}
+
+func TestMultiSpeakerAdapterWrapperPropagatesInnerError(t *testing.T) {
+	innerErr := errors.New("inner stream failed")
+	wrapper := &multiSpeakerAdapterWrapper{
+		inner:   &fakeMultiSpeakerStream{nextErr: innerErr},
+		ctx:     context.Background(),
+		eventCh: make(chan *SpeechEvent, 1),
+		errCh:   make(chan error, 1),
+		audioCh: make(chan *model.AudioFrame, 1),
+	}
+	go wrapper.run()
+
+	_, err := wrapper.Next()
+	if !errors.Is(err, innerErr) {
+		t.Fatalf("Next error = %v, want inner error", err)
+	}
+}
+
+type fakeMultiSpeakerStream struct {
+	nextErr error
+}
+
+func (f *fakeMultiSpeakerStream) PushFrame(*model.AudioFrame) error {
+	return nil
+}
+
+func (f *fakeMultiSpeakerStream) Flush() error {
+	return nil
+}
+
+func (f *fakeMultiSpeakerStream) Close() error {
+	return nil
+}
+
+func (f *fakeMultiSpeakerStream) Next() (*SpeechEvent, error) {
+	return nil, f.nextErr
 }

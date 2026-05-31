@@ -100,6 +100,7 @@ func (a *MultiSpeakerAdapter) Stream(ctx context.Context, language string) (Reco
 		cancel:   cancel,
 		detector: newPrimarySpeakerDetector(a.detectPrimarySpeaker, a.suppressBackgroundSpeaker, a.primaryFormat, a.backgroundFormat, a.opt),
 		eventCh:  make(chan *SpeechEvent, 100),
+		errCh:    make(chan error, 1),
 		audioCh:  make(chan *model.AudioFrame, 100),
 	}
 
@@ -115,6 +116,7 @@ type multiSpeakerAdapterWrapper struct {
 	cancel   context.CancelFunc
 	detector *primarySpeakerDetector
 	eventCh  chan *SpeechEvent
+	errCh    chan error
 	audioCh  chan *model.AudioFrame
 	mu       sync.Mutex
 	closed   bool
@@ -148,10 +150,17 @@ func (w *multiSpeakerAdapterWrapper) Close() error {
 
 func (w *multiSpeakerAdapterWrapper) Next() (*SpeechEvent, error) {
 	ev, ok := <-w.eventCh
-	if !ok {
-		return nil, context.Canceled
+	if ok {
+		return ev, nil
 	}
-	return ev, nil
+	select {
+	case err := <-w.errCh:
+		if err != nil {
+			return nil, err
+		}
+	default:
+	}
+	return nil, context.Canceled
 }
 
 func (w *multiSpeakerAdapterWrapper) run() {
@@ -175,6 +184,10 @@ func (w *multiSpeakerAdapterWrapper) run() {
 	for {
 		ev, err := w.inner.Next()
 		if err != nil {
+			select {
+			case w.errCh <- err:
+			default:
+			}
 			return
 		}
 
