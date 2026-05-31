@@ -307,10 +307,12 @@ type RealtimeEvent struct {
 
 type FallbackAdapter struct {
 	llms             []LLM
+	maxRetryPerLLM   int
 	retryOnChunkSent bool
 }
 
 type FallbackAdapterOptions struct {
+	MaxRetryPerLLM   int
 	RetryOnChunkSent bool
 }
 
@@ -324,6 +326,7 @@ func NewFallbackAdapterWithOptions(llms []LLM, options FallbackAdapterOptions) *
 	}
 	return &FallbackAdapter{
 		llms:             llms,
+		maxRetryPerLLM:   options.MaxRetryPerLLM,
 		retryOnChunkSent: options.RetryOnChunkSent,
 	}
 }
@@ -349,20 +352,30 @@ type fallbackLLMStream struct {
 
 	activeStream LLMStream
 	activeIndex  int
+	retries      map[int]int
 	outputSent   bool
 	closed       bool
 }
 
 func (s *fallbackLLMStream) tryStart(index int) error {
+	if s.retries == nil {
+		s.retries = make(map[int]int)
+	}
 	var lastErr error
 	for i := index; i < len(s.adapter.llms); i++ {
-		stream, err := s.adapter.llms[i].Chat(s.ctx, s.chatCtx, s.opts...)
-		if err == nil {
-			s.activeStream = stream
-			s.activeIndex = i
-			return nil
+		for {
+			stream, err := s.adapter.llms[i].Chat(s.ctx, s.chatCtx, s.opts...)
+			if err == nil {
+				s.activeStream = stream
+				s.activeIndex = i
+				return nil
+			}
+			lastErr = err
+			if !s.canRetryLLM(i) {
+				break
+			}
+			s.retries[i]++
 		}
-		lastErr = err
 	}
 	return lastErr
 }
@@ -376,15 +389,35 @@ func (s *fallbackLLMStream) Next() (*ChatChunk, error) {
 			}
 			return chunk, nil
 		}
-		if errors.Is(err, io.EOF) || (s.outputSent && !s.adapter.retryOnChunkSent) || s.activeIndex+1 >= len(s.adapter.llms) {
+		if errors.Is(err, io.EOF) || (s.outputSent && !s.adapter.retryOnChunkSent) {
 			return nil, err
 		}
 
 		_ = s.activeStream.Close()
+		if s.canRetryLLM(s.activeIndex) {
+			s.retries[s.activeIndex]++
+			if startErr := s.tryStart(s.activeIndex); startErr != nil {
+				return nil, startErr
+			}
+			continue
+		}
+		if s.activeIndex+1 >= len(s.adapter.llms) {
+			return nil, err
+		}
 		if startErr := s.tryStart(s.activeIndex + 1); startErr != nil {
 			return nil, startErr
 		}
 	}
+}
+
+func (s *fallbackLLMStream) canRetryLLM(index int) bool {
+	if s.adapter.maxRetryPerLLM <= 0 {
+		return false
+	}
+	if s.retries == nil {
+		s.retries = make(map[int]int)
+	}
+	return s.retries[index] < s.adapter.maxRetryPerLLM
 }
 
 func chunkHasVisibleOutput(chunk *ChatChunk) bool {
