@@ -232,6 +232,102 @@ func refreshRunningJobTokenForReload(info workeripc.RunningJobInfo, apiSecret st
 	return info, nil
 }
 
+func refreshRunningJobsForReload(jobs []workeripc.RunningJobInfo, apiSecret string, now time.Time) ([]workeripc.RunningJobInfo, error) {
+	refreshed := make([]workeripc.RunningJobInfo, 0, len(jobs))
+	for _, job := range jobs {
+		info, err := refreshRunningJobTokenForReload(job, apiSecret, now)
+		if err != nil {
+			return nil, err
+		}
+		refreshed = append(refreshed, info)
+	}
+	return refreshed, nil
+}
+
+func (s *AgentServer) ReloadRunningJobs(ctx context.Context, jobs []workeripc.RunningJobInfo, now time.Time) error {
+	refreshed, err := refreshRunningJobsForReload(jobs, s.Options.APISecret, now)
+	if err != nil {
+		return err
+	}
+
+	for _, info := range refreshed {
+		if info.Job == nil {
+			continue
+		}
+
+		jobURL := s.Options.WSRL
+		if jobURL == "" {
+			jobURL = info.URL
+		}
+		jobCtx := NewJobContext(info.Job, jobURL, s.Options.APIKey, s.Options.APISecret)
+		jobCtx.token = info.Token
+		jobCtx.WorkerID = info.WorkerID
+		jobCtx.AcceptArguments = JobAcceptArguments{
+			Name:       info.AcceptArguments.Name,
+			Identity:   info.AcceptArguments.Identity,
+			Metadata:   info.AcceptArguments.Metadata,
+			Attributes: info.AcceptArguments.Attributes,
+		}
+		jobCtx.fakeJob = info.FakeJob
+
+		s.mu.Lock()
+		if jobCtx.WorkerID == "" {
+			jobCtx.WorkerID = s.workerID
+		}
+		s.activeJobs[info.Job.Id] = jobCtx
+		s.mu.Unlock()
+
+		s.launchReloadedJob(ctx, jobCtx)
+	}
+
+	return nil
+}
+
+func (s *AgentServer) launchReloadedJob(ctx context.Context, jobCtx *JobContext) {
+	if s.entrypointFnc == nil {
+		return
+	}
+
+	go func() {
+		status := livekit.JobStatus_JS_SUCCESS
+		if err := s.entrypointFnc(jobCtx); err != nil {
+			logger.Logger.Errorw("Reloaded job entrypoint failed", err, "jobId", jobCtx.JobID())
+			status = livekit.JobStatus_JS_FAILED
+		}
+		select {
+		case <-ctx.Done():
+			logger.Logger.Debugw("reload job status skipped after context cancellation", "jobId", jobCtx.JobID())
+		default:
+			if err := s.sendWorkerMessage(jobStatusMessage(jobCtx.JobID(), status)); err != nil {
+				logger.Logger.Errorw("failed to update reloaded job status", err, "jobId", jobCtx.JobID())
+			}
+		}
+		s.finishJob(jobCtx)
+	}()
+}
+
+func (s *AgentServer) handleReloadMessage(ctx context.Context, payload any, reloadCount int, now time.Time) (any, bool, error) {
+	switch msg := payload.(type) {
+	case *workeripc.ActiveJobsRequest, workeripc.ActiveJobsRequest:
+		return &workeripc.ActiveJobsResponse{
+			Jobs:        s.ActiveRunningJobs(),
+			ReloadCount: reloadCount,
+		}, true, nil
+	case *workeripc.ReloadJobsResponse:
+		if err := s.ReloadRunningJobs(ctx, msg.Jobs, now); err != nil {
+			return nil, true, err
+		}
+		return &workeripc.Reloaded{}, true, nil
+	case workeripc.ReloadJobsResponse:
+		if err := s.ReloadRunningJobs(ctx, msg.Jobs, now); err != nil {
+			return nil, true, err
+		}
+		return &workeripc.Reloaded{}, true, nil
+	default:
+		return nil, false, nil
+	}
+}
+
 func (s *AgentServer) UpdateOptions(opts WorkerOptions) error {
 	s.mu.Lock()
 	if s.conn != nil {

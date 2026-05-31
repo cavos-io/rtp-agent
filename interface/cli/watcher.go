@@ -9,25 +9,32 @@ import (
 	"sync"
 	"time"
 
+	"github.com/cavos-io/conversation-worker/interface/worker/ipc"
 	"github.com/cavos-io/conversation-worker/library/logger"
 	"github.com/fsnotify/fsnotify"
 )
 
 type Watcher struct {
-	paths     []string
-	onChange  func()
-	watcher   *fsnotify.Watcher
-	mu        sync.Mutex
-	ctx       context.Context
-	cancel    context.CancelFunc
-	reloading bool
+	paths      []string
+	onChange   func()
+	watcher    *fsnotify.Watcher
+	mu         sync.Mutex
+	ctx        context.Context
+	cancel     context.CancelFunc
+	reloading  bool
+	cliArgs    *CliArgs
+	activeJobs []ipc.RunningJobInfo
 }
 
-func NewWatcher(paths []string, onChange func()) *Watcher {
-	return &Watcher{
+func NewWatcher(paths []string, onChange func(), cliArgs ...*CliArgs) *Watcher {
+	watcher := &Watcher{
 		paths:    paths,
 		onChange: onChange,
 	}
+	if len(cliArgs) > 0 {
+		watcher.cliArgs = cliArgs[0]
+	}
+	return watcher
 }
 
 func (w *Watcher) Start() error {
@@ -79,6 +86,9 @@ func (w *Watcher) beginReload() bool {
 		return false
 	}
 	w.reloading = true
+	if w.cliArgs != nil {
+		w.cliArgs.ReloadCount++
+	}
 	return true
 }
 
@@ -86,6 +96,59 @@ func (w *Watcher) Reloaded() {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	w.reloading = false
+}
+
+func (w *Watcher) recordActiveJobsResponse(resp ipc.ActiveJobsResponse) bool {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.cliArgs != nil && resp.ReloadCount != w.cliArgs.ReloadCount {
+		return false
+	}
+	w.activeJobs = append([]ipc.RunningJobInfo(nil), resp.Jobs...)
+	return true
+}
+
+func (w *Watcher) reloadJobsResponse() ipc.ReloadJobsResponse {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	reloadCount := 0
+	if w.cliArgs != nil {
+		reloadCount = w.cliArgs.ReloadCount
+	}
+	return ipc.ReloadJobsResponse{
+		Jobs:        append([]ipc.RunningJobInfo(nil), w.activeJobs...),
+		ReloadCount: reloadCount,
+	}
+}
+
+func (w *Watcher) handleReloadMessage(payload any) (any, bool) {
+	switch msg := payload.(type) {
+	case *ipc.ActiveJobsResponse:
+		w.recordActiveJobsResponse(*msg)
+		return nil, true
+	case ipc.ActiveJobsResponse:
+		w.recordActiveJobsResponse(msg)
+		return nil, true
+	case *ipc.ReloadJobsRequest, ipc.ReloadJobsRequest:
+		resp := w.reloadJobsResponse()
+		return &resp, true
+	case *ipc.Reloaded, ipc.Reloaded:
+		w.Reloaded()
+		return nil, true
+	default:
+		return nil, false
+	}
+}
+
+func (w *Watcher) triggerReload() bool {
+	if w.onChange == nil {
+		return false
+	}
+	if !w.beginReload() {
+		return false
+	}
+	w.onChange()
+	return true
 }
 
 func (w *Watcher) watchLoop() {
@@ -106,13 +169,7 @@ func (w *Watcher) watchLoop() {
 					}
 					timer = time.AfterFunc(500*time.Millisecond, func() {
 						logger.Logger.Infow("File changed, triggering reload", "file", event.Name)
-						if w.onChange != nil {
-							if !w.beginReload() {
-								return
-							}
-							defer w.Reloaded()
-							w.onChange()
-						}
+						w.triggerReload()
 					})
 				}
 			}
@@ -155,9 +212,11 @@ func RunWithDevMode(args []string) error {
 		}
 	}
 
-	w := NewWatcher([]string{"./"}, func() {
+	var w *Watcher
+	w = NewWatcher([]string{"./"}, func() {
 		logger.Logger.Infow("Triggering rebuild and restart")
 		startCmd()
+		w.Reloaded()
 	})
 
 	if err := w.Start(); err != nil {
