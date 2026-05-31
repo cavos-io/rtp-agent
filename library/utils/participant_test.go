@@ -77,6 +77,9 @@ func TestParticipantAttributeMatchesExpectedValue(t *testing.T) {
 	if participantAttributeMatches(attrs, "missing", "ready") {
 		t.Fatal("participantAttributeMatches() = true for missing attribute, want false")
 	}
+	if participantAttributeMatches(attrs, "missing", "") {
+		t.Fatal("participantAttributeMatches() = true for missing empty attribute, want false")
+	}
 }
 
 func TestWaitForParticipantKindMatchWithoutKindsAcceptsAnyKind(t *testing.T) {

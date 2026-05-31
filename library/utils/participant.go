@@ -178,7 +178,8 @@ func WaitForParticipantAttribute(ctx context.Context, room *lksdk.Room, identity
 }
 
 func participantAttributeMatches(attributes map[string]string, attribute string, value string) bool {
-	return attributes[attribute] == value
+	got, ok := attributes[attribute]
+	return ok && got == value
 }
 
 func trackKindMatches(kind livekit.TrackType, allowed []livekit.TrackType) bool {
