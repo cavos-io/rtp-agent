@@ -495,7 +495,7 @@ func chatContentFromJSON(data []byte) (ChatContent, error) {
 			Image:           image.Image,
 			InferenceWidth:  image.InferenceWidth,
 			InferenceHeight: image.InferenceHeight,
-			InferenceDetail: image.InferenceDetail,
+			InferenceDetail: imageInferenceDetailOrDefault(image.InferenceDetail),
 			MimeType:        image.MimeType,
 		}}, nil
 	case "audio_content":
@@ -609,7 +609,7 @@ func imageContentToDict(image *ImageContent) map[string]any {
 		"id":               image.ID,
 		"type":             "image_content",
 		"image":            image.Image,
-		"inference_detail": image.InferenceDetail,
+		"inference_detail": imageInferenceDetailOrDefault(image.InferenceDetail),
 	}
 	if image.InferenceWidth != nil {
 		data["inference_width"] = *image.InferenceWidth
@@ -621,6 +621,13 @@ func imageContentToDict(image *ImageContent) map[string]any {
 		data["mime_type"] = image.MimeType
 	}
 	return data
+}
+
+func imageInferenceDetailOrDefault(detail string) string {
+	if detail == "" {
+		return "auto"
+	}
+	return detail
 }
 
 func audioContentToDict(audio *AudioContent) map[string]any {

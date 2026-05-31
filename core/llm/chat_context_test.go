@@ -603,6 +603,39 @@ func TestChatContextUnmarshalJSONRestoresTypedItems(t *testing.T) {
 	}
 }
 
+func TestChatContextImageContentDefaultsInferenceDetail(t *testing.T) {
+	data := []byte(`{
+		"items": [{
+			"id": "message",
+			"type": "message",
+			"role": "user",
+			"content": [{
+				"id": "image",
+				"type": "image_content",
+				"image": "https://example.test/image.png"
+			}]
+		}]
+	}`)
+
+	var ctx ChatContext
+	if err := json.Unmarshal(data, &ctx); err != nil {
+		t.Fatalf("UnmarshalJSON() error = %v", err)
+	}
+
+	message := ctx.Items[0].(*ChatMessage)
+	if got := message.Content[0].Image.InferenceDetail; got != "auto" {
+		t.Fatalf("InferenceDetail = %q, want auto", got)
+	}
+
+	encoded := ctx.ToDict(ChatContextDictOptions{IncludeImage: true})
+	items := encoded["items"].([]map[string]any)
+	content := items[0]["content"].([]any)
+	image := content[0].(map[string]any)
+	if got := image["inference_detail"]; got != "auto" {
+		t.Fatalf("serialized inference_detail = %#v, want auto", got)
+	}
+}
+
 func TestChatContextUnmarshalJSONRejectsUnknownItemType(t *testing.T) {
 	data := []byte(`{"items":[{"id":"bad","type":"unknown"}]}`)
 
