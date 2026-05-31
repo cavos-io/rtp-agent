@@ -305,6 +305,15 @@ func SplitParagraphs(text string) []TokenData {
 	return paragraphs
 }
 
+func TokenizeParagraphs(text string) []string {
+	paragraphs := SplitParagraphs(text)
+	tokens := make([]string, len(paragraphs))
+	for i, paragraph := range paragraphs {
+		tokens[i] = paragraph.Token
+	}
+	return tokens
+}
+
 func stripPunctuation(s string) string {
 	var result strings.Builder
 	for _, r := range s {
