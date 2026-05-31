@@ -303,5 +303,8 @@ func (rio *RoomIO) Close() error {
 	if rio.encoder != nil {
 		rio.encoder.Close()
 	}
+	if rio.preConnectAudio != nil {
+		rio.preConnectAudio.Close()
+	}
 	return nil
 }

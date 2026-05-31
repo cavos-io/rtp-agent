@@ -72,3 +72,17 @@ func TestNewRoomIOCanDisablePreConnectAudio(t *testing.T) {
 		t.Fatalf("preConnectAudio = %#v, want nil when disabled", rio.preConnectAudio)
 	}
 }
+
+func TestRoomIOCloseUnregistersPreConnectAudioHandler(t *testing.T) {
+	room := lksdk.NewRoom(nil)
+	rio := NewRoomIO(room, &agent.AgentSession{}, RoomOptions{})
+
+	if err := rio.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+
+	err := room.RegisterByteStreamHandler(PreConnectAudioBufferStream, func(*lksdk.ByteStreamReader, string) {})
+	if err != nil {
+		t.Fatalf("RegisterByteStreamHandler after RoomIO.Close() error = %v, want nil", err)
+	}
+}
