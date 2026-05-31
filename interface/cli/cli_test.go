@@ -46,6 +46,16 @@ func TestParseConnectArgsRequiresRoom(t *testing.T) {
 	}
 }
 
+func TestConsoleLocalJobArgsMatchReference(t *testing.T) {
+	roomName, participantIdentity := consoleLocalJobArgs()
+	if roomName != "console-room" {
+		t.Fatalf("roomName = %q, want console-room", roomName)
+	}
+	if participantIdentity != "console" {
+		t.Fatalf("participantIdentity = %q, want console", participantIdentity)
+	}
+}
+
 func TestCliArgsCarriesReferenceReloadState(t *testing.T) {
 	args := CliArgs{
 		LogLevel:    "debug",

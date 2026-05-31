@@ -130,6 +130,10 @@ func defaultConnectParticipantIdentity() string {
 	return "agent-" + hex.EncodeToString(b[:])
 }
 
+func consoleLocalJobArgs() (roomName string, participantIdentity string) {
+	return "console-room", "console"
+}
+
 func runConsole(server *worker.AgentServer) {
 	fmt.Println("Starting console mode 🚀")
 	fmt.Println("Type your message and press Enter to talk to the agent. Press Ctrl+C to exit.")
@@ -138,7 +142,8 @@ func runConsole(server *worker.AgentServer) {
 	defer stop()
 
 	go func() {
-		if err := server.ExecuteLocalJob(ctx, "console-room", "console-user"); err != nil {
+		roomName, participantIdentity := consoleLocalJobArgs()
+		if err := server.ExecuteLocalJob(ctx, roomName, participantIdentity); err != nil {
 			logger.Logger.Errorw("Console execution error", err)
 			stop()
 		}
