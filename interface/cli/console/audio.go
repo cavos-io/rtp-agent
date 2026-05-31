@@ -40,7 +40,7 @@ func NewAudioIO() *AudioIO {
 		audioInCh:       make(chan *model.AudioFrame, 100),
 		sampleRate:      24000,
 		channels:        1,
-		framesPerBuffer: 480, // 20ms at 24kHz
+		framesPerBuffer: 2400, // 100ms at 24kHz, chunked into 10ms frames.
 		inputAttached:   true,
 	}
 }
@@ -60,27 +60,9 @@ func (a *AudioIO) Start(ctx context.Context) error {
 
 	a.ctx, a.cancel = context.WithCancel(ctx)
 
-	inBuf := make([]int16, a.framesPerBuffer)
-
 	stream, err := portaudio.OpenDefaultStream(a.channels, a.channels, float64(a.sampleRate), a.framesPerBuffer,
 		func(in, out []int16) {
-			// Read from Mic
-			copy(inBuf, in)
-
-			// Send Mic data to Agent
-			data := make([]byte, len(inBuf)*2)
-			for i, v := range inBuf {
-				data[i*2] = byte(v)
-				data[i*2+1] = byte(v >> 8)
-			}
-
-			a.PushMicFrame(&model.AudioFrame{
-				Data:              data,
-				SampleRate:        uint32(a.sampleRate),
-				NumChannels:       uint32(a.channels),
-				SamplesPerChannel: uint32(len(inBuf)),
-			})
-
+			a.pushMicSamples(in)
 			a.fillSpeakerOutput(out)
 		})
 
@@ -154,6 +136,25 @@ func (a *AudioIO) PushMicFrame(frame *model.AudioFrame) bool {
 		return true
 	default:
 		return false
+	}
+}
+
+func (a *AudioIO) pushMicSamples(samples []int16) {
+	const frameSamples = 240 // 10ms at 24kHz.
+	for start := 0; start+frameSamples <= len(samples); start += frameSamples {
+		chunk := samples[start : start+frameSamples]
+		data := make([]byte, len(chunk)*2)
+		for i, v := range chunk {
+			data[i*2] = byte(v)
+			data[i*2+1] = byte(v >> 8)
+		}
+
+		a.PushMicFrame(&model.AudioFrame{
+			Data:              data,
+			SampleRate:        uint32(a.sampleRate),
+			NumChannels:       uint32(a.channels),
+			SamplesPerChannel: uint32(len(chunk)),
+		})
 	}
 }
 
