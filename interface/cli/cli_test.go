@@ -132,6 +132,30 @@ func TestWatcherTriggerReloadKeepsReloadingUntilReloaded(t *testing.T) {
 	}
 }
 
+func TestWatcherTriggerReloadRequestsActiveJobsBeforeRestart(t *testing.T) {
+	args := &CliArgs{ReloadCount: 3}
+	var output bytes.Buffer
+	requestedBeforeRestart := false
+	watcher := NewWatcher(nil, func() {
+		msg, err := ipc.ReadMessage(&output)
+		if err != nil {
+			t.Fatalf("ReadMessage ActiveJobsRequest: %v", err)
+		}
+		requestedBeforeRestart = msg.Type == ipc.MessageTypeActiveJobsRequest
+	}, args)
+	watcher.reloadIPC = &output
+
+	if !watcher.triggerReload() {
+		t.Fatal("triggerReload() = false, want true")
+	}
+	if !requestedBeforeRestart {
+		t.Fatal("triggerReload() did not request active jobs before restart")
+	}
+	if args.ReloadCount != 4 {
+		t.Fatalf("ReloadCount = %d, want 4", args.ReloadCount)
+	}
+}
+
 func TestWatcherStoresActiveJobsForCurrentReload(t *testing.T) {
 	args := &CliArgs{ReloadCount: 2}
 	watcher := NewWatcher(nil, nil, args)
