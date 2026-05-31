@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"testing"
+	"time"
 
 	"github.com/cavos-io/conversation-worker/model"
 )
@@ -67,6 +68,43 @@ func TestPrimarySpeakerDetectorSuppressesFormattedBackgroundText(t *testing.T) {
 	})
 	if event != nil {
 		t.Fatalf("background event = %#v, want suppressed nil event", event)
+	}
+}
+
+func TestPrimarySpeakerDetectorPushAudioInitializesByteStream(t *testing.T) {
+	detector := newPrimarySpeakerDetector(
+		true,
+		false,
+		"{text}",
+		"{text}",
+		DefaultPrimarySpeakerDetectionOptions(),
+	)
+	frame := &model.AudioFrame{
+		Data:              make([]byte, 1600*2),
+		SampleRate:        16000,
+		NumChannels:       1,
+		SamplesPerChannel: 1600,
+	}
+	done := make(chan struct{})
+
+	go func() {
+		detector.pushAudio(frame)
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(200 * time.Millisecond):
+		t.Fatal("pushAudio did not return, want initialized byte stream to emit frame")
+	}
+	if detector.bstream == nil {
+		t.Fatal("bstream = nil, want initialized byte stream")
+	}
+	if detector.bstream.SamplesPerChannel == 0 {
+		t.Fatal("bstream SamplesPerChannel = 0, want frame-sized stream")
+	}
+	if detector.pushedDuration == 0 {
+		t.Fatal("pushedDuration = 0, want emitted audio duration")
 	}
 }
 
