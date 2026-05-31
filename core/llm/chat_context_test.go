@@ -1028,3 +1028,58 @@ func TestChatContextToOpenAIProviderFormatFiltersUnmatchedToolItems(t *testing.T
 		t.Fatalf("message = %#v, want user hello", messages[0])
 	}
 }
+
+func TestChatContextToGoogleProviderFormatMapsTurnsAndSystemMessages(t *testing.T) {
+	ctx := NewChatContext()
+	ctx.Items = []ChatItem{
+		&ChatMessage{ID: "system", Role: ChatRoleSystem, Content: []ChatContent{{Text: "be concise"}}},
+		&ChatMessage{ID: "user", Role: ChatRoleUser, Content: []ChatContent{{Text: "weather?"}}},
+		&ChatMessage{ID: "assistant-turn", Role: ChatRoleAssistant, Content: []ChatContent{{Text: "checking"}}},
+		&FunctionCall{ID: "assistant-turn/tool", CallID: "call_weather", Name: "weather", Arguments: `{"city":"Paris"}`},
+		&FunctionCallOutput{ID: "weather-output", CallID: "call_weather", Name: "weather", Output: "sunny"},
+	}
+
+	turns, extra := ctx.ToProviderFormat("google")
+
+	data, ok := extra.(map[string]any)
+	if !ok {
+		t.Fatalf("google extra = %#v, want map", extra)
+	}
+	if !reflect.DeepEqual(data["system_messages"], []string{"be concise"}) {
+		t.Fatalf("system_messages = %#v", data["system_messages"])
+	}
+	if len(turns) != 3 {
+		t.Fatalf("len(turns) = %d, want 3: %#v", len(turns), turns)
+	}
+	if turns[0]["role"] != "user" {
+		t.Fatalf("first turn = %#v, want user", turns[0])
+	}
+	userParts := turns[0]["parts"].([]map[string]any)
+	if userParts[0]["text"] != "weather?" {
+		t.Fatalf("user parts = %#v", userParts)
+	}
+	if turns[1]["role"] != "model" {
+		t.Fatalf("second turn = %#v, want model", turns[1])
+	}
+	modelParts := turns[1]["parts"].([]map[string]any)
+	functionCall := modelParts[1]["function_call"].(map[string]any)
+	if functionCall["id"] != "call_weather" || functionCall["name"] != "weather" {
+		t.Fatalf("function_call = %#v", functionCall)
+	}
+	args := functionCall["args"].(map[string]any)
+	if args["city"] != "Paris" {
+		t.Fatalf("function args = %#v", args)
+	}
+	if turns[2]["role"] != "user" {
+		t.Fatalf("third turn = %#v, want user tool response", turns[2])
+	}
+	toolParts := turns[2]["parts"].([]map[string]any)
+	functionResponse := toolParts[0]["function_response"].(map[string]any)
+	if functionResponse["id"] != "call_weather" || functionResponse["name"] != "weather" {
+		t.Fatalf("function_response = %#v", functionResponse)
+	}
+	response := functionResponse["response"].(map[string]any)
+	if response["output"] != "sunny" {
+		t.Fatalf("function response payload = %#v", response)
+	}
+}

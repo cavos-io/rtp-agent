@@ -760,7 +760,61 @@ func (c *ChatContext) ToProviderFormat(format string) ([]map[string]any, any) {
 		}
 		return items, nil
 	}
+	if format == "google" {
+		return c.toGoogleProviderFormat()
+	}
 	return nil, nil
+}
+
+func (c *ChatContext) toGoogleProviderFormat() ([]map[string]any, any) {
+	turns := make([]map[string]any, 0)
+	systemMessages := make([]string, 0)
+	currentRole := ""
+	parts := make([]map[string]any, 0)
+
+	flush := func() {
+		if currentRole == "" || len(parts) == 0 {
+			return
+		}
+		role := currentRole
+		if role == "tool" {
+			role = "user"
+		}
+		turns = append(turns, map[string]any{
+			"role":  role,
+			"parts": parts,
+		})
+		parts = make([]map[string]any, 0)
+	}
+
+	for _, group := range groupOpenAIToolCalls(c.Items) {
+		for _, item := range group.flatten() {
+			if msg, ok := item.(*ChatMessage); ok && msg.Role == ChatRoleSystem && msg.TextContent() != "" {
+				systemMessages = append(systemMessages, msg.TextContent())
+				continue
+			}
+
+			role := googleItemRole(item)
+			if role == "" {
+				continue
+			}
+			if role != currentRole {
+				flush()
+				currentRole = role
+			}
+			parts = append(parts, googleItemParts(item)...)
+		}
+	}
+	flush()
+
+	if currentRole != "user" && currentRole != "tool" {
+		turns = append(turns, map[string]any{
+			"role":  "user",
+			"parts": []map[string]any{{"text": "."}},
+		})
+	}
+
+	return turns, map[string]any{"system_messages": systemMessages}
 }
 
 type openAIToolCallGroup struct {
@@ -825,6 +879,20 @@ func (g *openAIToolCallGroup) add(item ChatItem) {
 	case *FunctionCallOutput:
 		g.toolOutputs = append(g.toolOutputs, it)
 	}
+}
+
+func (g *openAIToolCallGroup) flatten() []ChatItem {
+	items := make([]ChatItem, 0, 1+len(g.toolCalls)+len(g.toolOutputs))
+	if g.message != nil {
+		items = append(items, g.message)
+	}
+	for _, toolCall := range g.toolCalls {
+		items = append(items, toolCall)
+	}
+	for _, toolOutput := range g.toolOutputs {
+		items = append(items, toolOutput)
+	}
+	return items
 }
 
 func (g *openAIToolCallGroup) removeInvalidToolItems() {
@@ -1006,6 +1074,85 @@ func openAIExtraContent(extra map[string]any) map[string]any {
 		}
 	}
 	return filtered
+}
+
+func googleItemRole(item ChatItem) string {
+	switch it := item.(type) {
+	case *ChatMessage:
+		if it.Role == ChatRoleAssistant {
+			return "model"
+		}
+		return "user"
+	case *FunctionCall:
+		return "model"
+	case *FunctionCallOutput:
+		return "tool"
+	default:
+		return ""
+	}
+}
+
+func googleItemParts(item ChatItem) []map[string]any {
+	switch it := item.(type) {
+	case *ChatMessage:
+		parts := make([]map[string]any, 0, len(it.Content))
+		for _, content := range it.Content {
+			if content.Text != "" {
+				parts = append(parts, map[string]any{"text": content.Text})
+			}
+			if content.Image != nil {
+				if part := googleImagePart(content.Image); part != nil {
+					parts = append(parts, part)
+				}
+			}
+		}
+		return parts
+	case *FunctionCall:
+		args := map[string]any{}
+		if it.Arguments != "" {
+			_ = json.Unmarshal([]byte(it.Arguments), &args)
+		}
+		return []map[string]any{{
+			"function_call": map[string]any{
+				"id":   it.CallID,
+				"name": it.Name,
+				"args": args,
+			},
+		}}
+	case *FunctionCallOutput:
+		responseKey := "output"
+		if it.IsError {
+			responseKey = "error"
+		}
+		return []map[string]any{{
+			"function_response": map[string]any{
+				"id":   it.CallID,
+				"name": it.Name,
+				"response": map[string]any{
+					responseKey: it.Output,
+				},
+			},
+		}}
+	default:
+		return nil
+	}
+}
+
+func googleImagePart(image *ImageContent) map[string]any {
+	url, ok := image.Image.(string)
+	if !ok || url == "" {
+		return nil
+	}
+	mimeType := image.MimeType
+	if mimeType == "" {
+		mimeType = "image/jpeg"
+	}
+	return map[string]any{
+		"file_data": map[string]any{
+			"file_uri":  url,
+			"mime_type": mimeType,
+		},
+	}
 }
 
 func openAIToolOutput(toolOutput *FunctionCallOutput) map[string]any {
