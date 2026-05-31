@@ -12,11 +12,11 @@ type BufferedTokenStream struct {
 	tokenizerFnc func(string) []string
 	minTokenLen  int
 	minCtxLen    int
-	
+
 	currentSegmentID string
 	inBuf            string
 	outBuf           string
-	
+
 	eventCh chan *TokenData
 	closed  bool
 	mu      sync.Mutex
@@ -57,7 +57,7 @@ func (s *BufferedTokenStream) PushText(text string) error {
 
 		tok := tokens[0]
 		tokens = tokens[1:]
-		
+
 		s.outBuf += tok
 		if len(s.outBuf) >= s.minTokenLen {
 			s.eventCh <- &TokenData{
@@ -85,6 +85,11 @@ func (s *BufferedTokenStream) Flush() error {
 		return fmt.Errorf("stream closed")
 	}
 
+	s.flushLocked()
+	return nil
+}
+
+func (s *BufferedTokenStream) flushLocked() {
 	if s.inBuf != "" || s.outBuf != "" {
 		tokens := s.tokenizerFnc(s.inBuf)
 		if len(tokens) > 0 {
@@ -105,7 +110,6 @@ func (s *BufferedTokenStream) Flush() error {
 	s.currentSegmentID = math.ShortUUID("")
 	s.inBuf = ""
 	s.outBuf = ""
-	return nil
 }
 
 func (s *BufferedTokenStream) Close() error {
@@ -115,9 +119,8 @@ func (s *BufferedTokenStream) Close() error {
 	if s.closed {
 		return nil
 	}
-	
-	// Ensure we flush on close if not already done manually
-	_ = s.Flush()
+
+	s.flushLocked()
 
 	s.closed = true
 	close(s.eventCh)
