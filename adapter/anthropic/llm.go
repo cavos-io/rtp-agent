@@ -28,37 +28,29 @@ func NewAnthropicLLM(apiKey string, model string) (*AnthropicLLM, error) {
 	}, nil
 }
 
+type anthropicMessage struct {
+	Role    string                  `json:"role"`
+	Content []anthropicContentBlock `json:"content"`
+}
+
+type anthropicContentBlock struct {
+	Type      string         `json:"type"`
+	Text      string         `json:"text,omitempty"`
+	ID        string         `json:"id,omitempty"`
+	Name      string         `json:"name,omitempty"`
+	Input     map[string]any `json:"input,omitempty"`
+	ToolUseID string         `json:"tool_use_id,omitempty"`
+	Content   any            `json:"content,omitempty"`
+	IsError   bool           `json:"is_error,omitempty"`
+}
+
 func (l *AnthropicLLM) Chat(ctx context.Context, chatCtx *llm.ChatContext, opts ...llm.ChatOption) (llm.LLMStream, error) {
 	options := &llm.ChatOptions{}
 	for _, opt := range opts {
 		opt(options)
 	}
 
-	type anthropicMessage struct {
-		Role    string `json:"role"`
-		Content string `json:"content"`
-	}
-
-	messages := make([]anthropicMessage, 0)
-	var system string
-
-	for _, item := range chatCtx.Items {
-		if msg, ok := item.(*llm.ChatMessage); ok {
-			if msg.Role == llm.ChatRoleSystem {
-				system = msg.TextContent()
-				continue
-			}
-			role := string(msg.Role)
-			if role == "developer" {
-				system = msg.TextContent()
-				continue
-			}
-			messages = append(messages, anthropicMessage{
-				Role:    role,
-				Content: msg.TextContent(),
-			})
-		}
-	}
+	messages, system := buildAnthropicMessages(chatCtx)
 
 	body := map[string]interface{}{
 		"model":      l.model,
@@ -76,11 +68,11 @@ func (l *AnthropicLLM) Chat(ctx context.Context, chatCtx *llm.ChatContext, opts 
 		for _, tool := range options.Tools {
 			if tool.Name() == "computer_use" {
 				tools = append(tools, map[string]interface{}{
-					"type": "computer_20241022",
-					"name": "computer",
-					"display_width_px": 1280,
+					"type":              "computer_20241022",
+					"name":              "computer",
+					"display_width_px":  1280,
 					"display_height_px": 720,
-					"display_number": 1,
+					"display_number":    1,
 				})
 			} else {
 				tools = append(tools, map[string]interface{}{
@@ -127,11 +119,221 @@ func (l *AnthropicLLM) Chat(ctx context.Context, chatCtx *llm.ChatContext, opts 
 type anthropicStream struct {
 	resp   *http.Response
 	reader *bufio.Reader
-	
+
 	// internal states for tracking tool calls over multiple chunks
 	toolCallID string
 	toolName   string
 	toolArgs   string
+}
+
+func buildAnthropicMessages(chatCtx *llm.ChatContext) ([]anthropicMessage, string) {
+	messages := make([]anthropicMessage, 0, len(chatCtx.Items))
+	systemMessages := make([]string, 0)
+	var currentRole string
+	content := make([]anthropicContentBlock, 0)
+
+	flush := func() {
+		if currentRole == "" || len(content) == 0 {
+			return
+		}
+		messages = append(messages, anthropicMessage{
+			Role:    currentRole,
+			Content: content,
+		})
+		content = nil
+	}
+
+	appendBlocks := func(role string, blocks ...anthropicContentBlock) {
+		if currentRole == "" || currentRole != role {
+			flush()
+			currentRole = role
+			content = make([]anthropicContentBlock, 0, len(blocks))
+		}
+		content = append(content, blocks...)
+	}
+
+	for _, group := range groupAnthropicChatItems(chatCtx.Items) {
+		for _, item := range group.flatten() {
+			switch msg := item.(type) {
+			case *llm.ChatMessage:
+				if msg.Role == llm.ChatRoleSystem || msg.Role == llm.ChatRoleDeveloper {
+					if text := msg.TextContent(); text != "" {
+						systemMessages = append(systemMessages, text)
+					}
+					continue
+				}
+				role := "user"
+				if msg.Role == llm.ChatRoleAssistant {
+					role = "assistant"
+				}
+				blocks := anthropicMessageContentBlocks(msg)
+				if len(blocks) > 0 {
+					appendBlocks(role, blocks...)
+				}
+			case *llm.FunctionCall:
+				appendBlocks("assistant", anthropicToolUseBlock(msg))
+			case *llm.FunctionCallOutput:
+				appendBlocks("user", anthropicToolResultBlock(msg))
+			}
+		}
+	}
+	flush()
+
+	if len(messages) == 0 || messages[0].Role != "user" {
+		messages = append([]anthropicMessage{
+			{
+				Role: "user",
+				Content: []anthropicContentBlock{
+					{Type: "text", Text: "(empty)"},
+				},
+			},
+		}, messages...)
+	}
+
+	return messages, strings.Join(systemMessages, "\n")
+}
+
+func anthropicMessageContentBlocks(msg *llm.ChatMessage) []anthropicContentBlock {
+	blocks := make([]anthropicContentBlock, 0, len(msg.Content))
+	for _, c := range msg.Content {
+		if c.Text != "" {
+			blocks = append(blocks, anthropicContentBlock{Type: "text", Text: c.Text})
+		}
+	}
+	return blocks
+}
+
+func anthropicToolUseBlock(fc *llm.FunctionCall) anthropicContentBlock {
+	input := make(map[string]any)
+	_ = json.Unmarshal([]byte(fc.Arguments), &input)
+	return anthropicContentBlock{
+		Type:  "tool_use",
+		ID:    fc.CallID,
+		Name:  fc.Name,
+		Input: input,
+	}
+}
+
+func anthropicToolResultBlock(fco *llm.FunctionCallOutput) anthropicContentBlock {
+	return anthropicContentBlock{
+		Type:      "tool_result",
+		ToolUseID: fco.CallID,
+		Content:   fco.Output,
+		IsError:   fco.IsError,
+	}
+}
+
+type anthropicChatItemGroup struct {
+	message     *llm.ChatMessage
+	toolCalls   []*llm.FunctionCall
+	toolOutputs []*llm.FunctionCallOutput
+}
+
+func groupAnthropicChatItems(items []llm.ChatItem) []*anthropicChatItemGroup {
+	groups := make([]*anthropicChatItemGroup, 0)
+	groupsByID := make(map[string]*anthropicChatItemGroup)
+	toolOutputs := make([]*llm.FunctionCallOutput, 0)
+
+	addToGroup := func(groupID string, item llm.ChatItem) {
+		group := groupsByID[groupID]
+		if group == nil {
+			group = &anthropicChatItemGroup{}
+			groupsByID[groupID] = group
+			groups = append(groups, group)
+		}
+		group.add(item)
+	}
+
+	for _, item := range items {
+		switch it := item.(type) {
+		case *llm.ChatMessage:
+			if it.Role == llm.ChatRoleAssistant {
+				addToGroup(anthropicGroupID(it.ID, nil), it)
+			} else {
+				addToGroup(it.ID, it)
+			}
+		case *llm.FunctionCall:
+			addToGroup(anthropicGroupID(it.ID, it.GroupID), it)
+		case *llm.FunctionCallOutput:
+			toolOutputs = append(toolOutputs, it)
+		}
+	}
+
+	groupsByCallID := make(map[string]*anthropicChatItemGroup)
+	for _, group := range groups {
+		for _, toolCall := range group.toolCalls {
+			groupsByCallID[toolCall.CallID] = group
+		}
+	}
+	for _, toolOutput := range toolOutputs {
+		if group := groupsByCallID[toolOutput.CallID]; group != nil {
+			group.add(toolOutput)
+		}
+	}
+	for _, group := range groups {
+		group.removeInvalidToolItems()
+	}
+	return groups
+}
+
+func (g *anthropicChatItemGroup) add(item llm.ChatItem) {
+	switch it := item.(type) {
+	case *llm.ChatMessage:
+		g.message = it
+	case *llm.FunctionCall:
+		g.toolCalls = append(g.toolCalls, it)
+	case *llm.FunctionCallOutput:
+		g.toolOutputs = append(g.toolOutputs, it)
+	}
+}
+
+func (g *anthropicChatItemGroup) flatten() []llm.ChatItem {
+	items := make([]llm.ChatItem, 0, 1+len(g.toolCalls)+len(g.toolOutputs))
+	if g.message != nil {
+		items = append(items, g.message)
+	}
+	for _, toolCall := range g.toolCalls {
+		items = append(items, toolCall)
+	}
+	for _, toolOutput := range g.toolOutputs {
+		items = append(items, toolOutput)
+	}
+	return items
+}
+
+func (g *anthropicChatItemGroup) removeInvalidToolItems() {
+	if len(g.toolCalls) == len(g.toolOutputs) {
+		return
+	}
+
+	outputsByCallID := make(map[string]*llm.FunctionCallOutput)
+	for _, toolOutput := range g.toolOutputs {
+		outputsByCallID[toolOutput.CallID] = toolOutput
+	}
+
+	validCalls := make([]*llm.FunctionCall, 0, len(g.toolCalls))
+	validOutputs := make([]*llm.FunctionCallOutput, 0, len(g.toolOutputs))
+	for _, toolCall := range g.toolCalls {
+		if toolOutput := outputsByCallID[toolCall.CallID]; toolOutput != nil {
+			validCalls = append(validCalls, toolCall)
+			validOutputs = append(validOutputs, toolOutput)
+		}
+	}
+
+	g.toolCalls = validCalls
+	g.toolOutputs = validOutputs
+}
+
+func anthropicGroupID(itemID string, groupID *string) string {
+	if groupID != nil && *groupID != "" {
+		return *groupID
+	}
+	for i, r := range itemID {
+		if r == '/' {
+			return itemID[:i]
+		}
+	}
+	return itemID
 }
 
 func (s *anthropicStream) Next() (*llm.ChatChunk, error) {
@@ -150,15 +352,15 @@ func (s *anthropicStream) Next() (*llm.ChatChunk, error) {
 		}
 
 		data := strings.TrimPrefix(line, "data: ")
-		
+
 		var event struct {
 			Type string `json:"type"`
-			
+
 			// message_start fields
 			Message struct {
 				ID    string `json:"id"`
 				Usage struct {
-					InputTokens int `json:"input_tokens"`
+					InputTokens  int `json:"input_tokens"`
 					OutputTokens int `json:"output_tokens"`
 				} `json:"usage"`
 			} `json:"message"`
@@ -177,9 +379,9 @@ func (s *anthropicStream) Next() (*llm.ChatChunk, error) {
 
 			// content_block_delta fields
 			Delta struct {
-				Type         string `json:"type"`
-				Text         string `json:"text"`
-				PartialJson  string `json:"partial_json"`
+				Type        string `json:"type"`
+				Text        string `json:"text"`
+				PartialJson string `json:"partial_json"`
 			} `json:"delta"`
 		}
 
@@ -195,14 +397,14 @@ func (s *anthropicStream) Next() (*llm.ChatChunk, error) {
 					PromptTokens: event.Message.Usage.InputTokens,
 				},
 			}, nil
-			
+
 		case "content_block_start":
 			if event.ContentBlock.Type == "tool_use" {
 				s.toolCallID = event.ContentBlock.ID
 				s.toolName = event.ContentBlock.Name
 				s.toolArgs = ""
 			}
-			
+
 		case "content_block_delta":
 			if event.Delta.Type == "text_delta" {
 				return &llm.ChatChunk{
@@ -214,7 +416,7 @@ func (s *anthropicStream) Next() (*llm.ChatChunk, error) {
 			} else if event.Delta.Type == "input_json_delta" {
 				s.toolArgs += event.Delta.PartialJson
 			}
-			
+
 		case "content_block_stop":
 			if s.toolCallID != "" {
 				chunk := &llm.ChatChunk{
@@ -235,17 +437,17 @@ func (s *anthropicStream) Next() (*llm.ChatChunk, error) {
 				s.toolArgs = ""
 				return chunk, nil
 			}
-			
+
 		case "message_delta":
 			return &llm.ChatChunk{
 				Usage: &llm.CompletionUsage{
 					CompletionTokens: event.Usage.OutputTokens,
 				},
 			}, nil
-			
+
 		case "message_stop":
 			return nil, io.EOF
-			
+
 		case "error":
 			return nil, fmt.Errorf("anthropic stream error: %s", data)
 		}
