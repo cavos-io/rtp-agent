@@ -76,13 +76,10 @@ func (l *AnthropicLLM) Chat(ctx context.Context, chatCtx *llm.ChatContext, opts 
 				})
 			} else {
 				tools = append(tools, map[string]interface{}{
-					"name":        tool.Name(),
-					"description": tool.Description(),
-					"input_schema": map[string]interface{}{
-						"type":       "object",
-						"properties": tool.Parameters()["properties"],
-						"required":   tool.Parameters()["required"],
-					},
+					"name":         tool.Name(),
+					"description":  tool.Description(),
+					"input_schema": tool.Parameters(),
+					"strict":       true,
 				})
 			}
 		}

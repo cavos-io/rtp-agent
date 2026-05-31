@@ -1,10 +1,51 @@
 package anthropic
 
 import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"io"
+	"net/http"
 	"testing"
 
 	"github.com/cavos-io/conversation-worker/core/llm"
 )
+
+type captureRoundTripper struct {
+	body map[string]any
+}
+
+func (rt *captureRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
+	defer req.Body.Close()
+	if err := json.NewDecoder(req.Body).Decode(&rt.body); err != nil {
+		return nil, err
+	}
+	return &http.Response{
+		StatusCode: http.StatusOK,
+		Body:       io.NopCloser(bytes.NewBuffer(nil)),
+		Header:     make(http.Header),
+		Request:    req,
+	}, nil
+}
+
+type anthropicRequestTestTool struct{}
+
+func (anthropicRequestTestTool) ID() string          { return "lookup" }
+func (anthropicRequestTestTool) Name() string        { return "lookup" }
+func (anthropicRequestTestTool) Description() string { return "look up information" }
+func (anthropicRequestTestTool) Parameters() map[string]any {
+	return map[string]any{
+		"type":                 "object",
+		"additionalProperties": false,
+		"properties": map[string]any{
+			"query": map[string]any{"type": "string"},
+		},
+		"required": []string{"query"},
+	}
+}
+func (anthropicRequestTestTool) Execute(context.Context, string) (string, error) {
+	return "", nil
+}
 
 func TestBuildAnthropicMessagesGroupsToolCallsWithResults(t *testing.T) {
 	ctx := llm.NewChatContext()
@@ -59,6 +100,45 @@ func TestBuildAnthropicMessagesFiltersUnmatchedToolItems(t *testing.T) {
 		t.Fatalf("role = %q, want user", messages[0].Role)
 	}
 	assertAnthropicTextBlock(t, messages[0].Content, 0, "hello")
+}
+
+func TestAnthropicChatUsesStrictToolInputSchema(t *testing.T) {
+	transport := &captureRoundTripper{}
+	originalTransport := http.DefaultTransport
+	http.DefaultTransport = transport
+	t.Cleanup(func() { http.DefaultTransport = originalTransport })
+
+	model, err := NewAnthropicLLM("test-key", "claude-test")
+	if err != nil {
+		t.Fatalf("NewAnthropicLLM() error = %v", err)
+	}
+	stream, err := model.Chat(context.Background(), llm.NewChatContext(), llm.WithTools([]llm.Tool{anthropicRequestTestTool{}}))
+	if err != nil {
+		t.Fatalf("Chat() error = %v", err)
+	}
+	_ = stream.Close()
+
+	tools, ok := transport.body["tools"].([]any)
+	if !ok || len(tools) != 1 {
+		t.Fatalf("tools = %#v, want one tool", transport.body["tools"])
+	}
+	tool, ok := tools[0].(map[string]any)
+	if !ok {
+		t.Fatalf("tool = %#v, want map", tools[0])
+	}
+	if tool["strict"] != true {
+		t.Fatalf("tool strict = %#v, want true", tool["strict"])
+	}
+	inputSchema, ok := tool["input_schema"].(map[string]any)
+	if !ok {
+		t.Fatalf("input_schema = %#v, want map", tool["input_schema"])
+	}
+	if inputSchema["additionalProperties"] != false {
+		t.Fatalf("input_schema additionalProperties = %#v, want false", inputSchema["additionalProperties"])
+	}
+	if inputSchema["type"] != "object" {
+		t.Fatalf("input_schema type = %#v, want object", inputSchema["type"])
+	}
 }
 
 func TestBuildAnthropicMessagesCollectsSystemText(t *testing.T) {
