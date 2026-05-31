@@ -149,6 +149,38 @@ func WaitForTrackPublication(ctx context.Context, room *lksdk.Room, identity str
 	}
 }
 
+func WaitForParticipantAttribute(ctx context.Context, room *lksdk.Room, identity string, attribute string, value string) error {
+	if err := requireConnectedRoom(room); err != nil {
+		return err
+	}
+	participant := room.GetParticipantByIdentity(identity)
+	if participant == nil {
+		return fmt.Errorf("participant %q is not in the room", identity)
+	}
+	if participantAttributeMatches(participant.Attributes(), attribute, value) {
+		return nil
+	}
+
+	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
+			participant := room.GetParticipantByIdentity(identity)
+			if participant == nil {
+				return fmt.Errorf("participant %q disconnected while waiting for %s", identity, attribute)
+			}
+			if participantAttributeMatches(participant.Attributes(), attribute, value) {
+				return nil
+			}
+		}
+	}
+}
+
+func participantAttributeMatches(attributes map[string]string, attribute string, value string) bool {
+	return attributes[attribute] == value
+}
+
 func trackKindMatches(kind livekit.TrackType, allowed []livekit.TrackType) bool {
 	if len(allowed) == 0 {
 		return true

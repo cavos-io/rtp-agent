@@ -52,6 +52,33 @@ func TestWaitForTrackPublicationReturnsDisconnectedRoomError(t *testing.T) {
 	}
 }
 
+func TestWaitForParticipantAttributeReturnsDisconnectedRoomError(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
+	defer cancel()
+	room := lksdk.NewRoom(nil)
+
+	err := WaitForParticipantAttribute(ctx, room, "caller-a", "status", "ready")
+	if err == nil {
+		t.Fatal("WaitForParticipantAttribute() error = nil, want disconnected room error")
+	}
+	if !strings.Contains(err.Error(), "room is not connected") {
+		t.Fatalf("WaitForParticipantAttribute() error = %q, want room is not connected", err)
+	}
+}
+
+func TestParticipantAttributeMatchesExpectedValue(t *testing.T) {
+	attrs := map[string]string{"status": "ready"}
+	if !participantAttributeMatches(attrs, "status", "ready") {
+		t.Fatal("participantAttributeMatches() = false, want true")
+	}
+	if participantAttributeMatches(attrs, "status", "waiting") {
+		t.Fatal("participantAttributeMatches() = true for wrong value, want false")
+	}
+	if participantAttributeMatches(attrs, "missing", "ready") {
+		t.Fatal("participantAttributeMatches() = true for missing attribute, want false")
+	}
+}
+
 func TestWaitForParticipantKindMatchWithoutKindsAcceptsAnyKind(t *testing.T) {
 	if !participantKindMatches(livekit.ParticipantInfo_AGENT, nil) {
 		t.Fatal("participantKindMatches() = false, want true when no kinds are provided")
