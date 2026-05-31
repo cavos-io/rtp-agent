@@ -101,3 +101,48 @@ func TestChatContextCopyPreservesShallowCopyBehavior(t *testing.T) {
 		t.Fatalf("Copy().Items[0] = %p, want %p", copied.Items[0], item)
 	}
 }
+
+func TestChatContextMergeFiltersReferenceItemTypes(t *testing.T) {
+	base := NewChatContext()
+	base.Items = []ChatItem{
+		&ChatMessage{ID: "existing", Role: ChatRoleUser, Content: []ChatContent{{Text: "hello"}}, CreatedAt: time.Unix(10, 0)},
+	}
+	other := NewChatContext()
+	other.Items = []ChatItem{
+		&ChatMessage{ID: "system", Role: ChatRoleSystem, Content: []ChatContent{{Text: "instructions"}}, CreatedAt: time.Unix(1, 0)},
+		&FunctionCall{ID: "call", Name: "lookup", CreatedAt: time.Unix(11, 0)},
+		&FunctionCallOutput{ID: "output", Name: "lookup", CreatedAt: time.Unix(12, 0)},
+		&AgentConfigUpdate{ID: "config", CreatedAt: time.Unix(13, 0)},
+		&ChatMessage{ID: "new", Role: ChatRoleUser, Content: []ChatContent{{Text: "new"}}, CreatedAt: time.Unix(14, 0)},
+	}
+
+	base.Merge(other, ChatContextMergeOptions{
+		ExcludeFunctionCall: true,
+		ExcludeInstructions: true,
+		ExcludeConfigUpdate: true,
+	})
+
+	if got, want := itemIDs(base.Items), "existing,new"; got != want {
+		t.Fatalf("Merge() item IDs = %q, want %q", got, want)
+	}
+}
+
+func TestChatContextMergePreservesCreatedAtOrderAndSkipsDuplicates(t *testing.T) {
+	base := NewChatContext()
+	base.Items = []ChatItem{
+		&ChatMessage{ID: "middle", Role: ChatRoleUser, Content: []ChatContent{{Text: "middle"}}, CreatedAt: time.Unix(20, 0)},
+		&ChatMessage{ID: "duplicate", Role: ChatRoleUser, Content: []ChatContent{{Text: "old"}}, CreatedAt: time.Unix(30, 0)},
+	}
+	other := NewChatContext()
+	other.Items = []ChatItem{
+		&ChatMessage{ID: "early", Role: ChatRoleUser, Content: []ChatContent{{Text: "early"}}, CreatedAt: time.Unix(10, 0)},
+		&ChatMessage{ID: "duplicate", Role: ChatRoleUser, Content: []ChatContent{{Text: "new"}}, CreatedAt: time.Unix(25, 0)},
+		&ChatMessage{ID: "late", Role: ChatRoleUser, Content: []ChatContent{{Text: "late"}}, CreatedAt: time.Unix(40, 0)},
+	}
+
+	base.Merge(other)
+
+	if got, want := itemIDs(base.Items), "early,middle,duplicate,late"; got != want {
+		t.Fatalf("Merge() item IDs = %q, want %q", got, want)
+	}
+}

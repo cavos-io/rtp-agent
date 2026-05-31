@@ -140,13 +140,33 @@ func (c *ChatContext) Truncate(maxItems int) {
 	c.Items = newItems
 }
 
-func (c *ChatContext) Merge(other *ChatContext) {
+type ChatContextMergeOptions struct {
+	ExcludeFunctionCall bool
+	ExcludeInstructions bool
+	ExcludeConfigUpdate bool
+}
+
+func (c *ChatContext) Merge(other *ChatContext, options ...ChatContextMergeOptions) {
+	var opts ChatContextMergeOptions
+	if len(options) > 0 {
+		opts = options[0]
+	}
+
 	existingIDs := make(map[string]struct{})
 	for _, item := range c.Items {
 		existingIDs[item.GetID()] = struct{}{}
 	}
 
 	for _, item := range other.Items {
+		if opts.ExcludeFunctionCall && isFunctionChatItem(item) {
+			continue
+		}
+		if opts.ExcludeInstructions && isInstructionMessage(item) {
+			continue
+		}
+		if opts.ExcludeConfigUpdate && item.GetType() == "agent_config_update" {
+			continue
+		}
 		if _, ok := existingIDs[item.GetID()]; !ok {
 			idx := c.FindInsertionIndex(item.GetCreatedAt())
 			c.Items = append(c.Items[:idx], append([]ChatItem{item}, c.Items[idx:]...)...)
