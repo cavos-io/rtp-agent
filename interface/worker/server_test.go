@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
+	"github.com/livekit/protocol/auth"
 	"github.com/livekit/protocol/livekit"
 )
 
@@ -1533,6 +1534,46 @@ func TestLocalJobContextUsesReferenceFakeRoomSIDPrefix(t *testing.T) {
 
 	if !strings.HasPrefix(ctx.Job.Room.Sid, "SRM_") {
 		t.Fatalf("local room SID = %q, want SRM_ prefix", ctx.Job.Room.Sid)
+	}
+}
+
+func TestLocalJobContextCreatesReferenceAgentJoinToken(t *testing.T) {
+	ctx := newLocalJobContext("room-a", "agent-local", WorkerOptions{
+		APIKey:    "api-key",
+		APISecret: "api-secret",
+	})
+
+	if ctx.token == "" {
+		t.Fatal("local job token is empty, want generated agent join token")
+	}
+	verifier, err := auth.ParseAPIToken(ctx.token)
+	if err != nil {
+		t.Fatalf("ParseAPIToken() error = %v", err)
+	}
+	if got := verifier.Identity(); got != "agent-local" {
+		t.Fatalf("token identity = %q, want agent-local", got)
+	}
+	if got := verifier.APIKey(); got != "api-key" {
+		t.Fatalf("token api key = %q, want api-key", got)
+	}
+	_, grants, err := verifier.Verify("api-secret")
+	if err != nil {
+		t.Fatalf("Verify() error = %v", err)
+	}
+	if got := grants.GetParticipantKind(); got != livekit.ParticipantInfo_AGENT {
+		t.Fatalf("token participant kind = %v, want AGENT", got)
+	}
+	if grants.Video == nil {
+		t.Fatal("token video grant = nil, want room join agent grant")
+	}
+	if !grants.Video.RoomJoin {
+		t.Fatal("token video grant RoomJoin = false, want true")
+	}
+	if !grants.Video.Agent {
+		t.Fatal("token video grant Agent = false, want true")
+	}
+	if grants.Video.Room != "room-a" {
+		t.Fatalf("token video grant Room = %q, want room-a", grants.Video.Room)
 	}
 }
 

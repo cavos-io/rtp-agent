@@ -1145,5 +1145,20 @@ func newLocalJobContext(roomName string, participantIdentity string, opts Worker
 	jobCtx := NewJobContext(job, opts.WSRL, opts.APIKey, opts.APISecret)
 	jobCtx.AcceptArguments = JobAcceptArguments{Identity: participantIdentity}
 	jobCtx.fakeJob = true
+	if opts.APIKey != "" && opts.APISecret != "" {
+		token, err := auth.NewAccessToken(opts.APIKey, opts.APISecret).
+			SetIdentity(participantIdentity).
+			SetKind(livekit.ParticipantInfo_AGENT).
+			SetVideoGrant(&auth.VideoGrant{
+				RoomJoin: true,
+				Room:     roomName,
+				Agent:    true,
+			}).
+			SetValidFor(time.Hour).
+			ToJWT()
+		if err == nil {
+			jobCtx.token = token
+		}
+	}
 	return jobCtx
 }
