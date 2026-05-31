@@ -2,8 +2,10 @@ package cli
 
 import (
 	"bytes"
+	"io"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/cavos-io/conversation-worker/interface/worker/ipc"
 	"github.com/livekit/protocol/livekit"
@@ -340,4 +342,60 @@ func TestWatcherProcessReloadIPCMessagesUntilEOF(t *testing.T) {
 	if _, err := ipc.ReadMessage(&output); err == nil {
 		t.Fatal("second ReadMessage response error = nil, want EOF")
 	}
+}
+
+func TestWatcherRunReloadIPCSessionRequestsThenProcessesMessages(t *testing.T) {
+	args := &CliArgs{ReloadCount: 7}
+	watcher := NewWatcher(nil, nil, args)
+	if !watcher.beginReload() {
+		t.Fatal("beginReload() = false, want active reload")
+	}
+
+	peerReader, watcherWriter := io.Pipe()
+	watcherReader, peerWriter := io.Pipe()
+	sessionErr := make(chan error, 1)
+	go func() {
+		sessionErr <- watcher.runReloadIPCSession(struct {
+			io.Reader
+			io.Writer
+		}{
+			Reader: watcherReader,
+			Writer: watcherWriter,
+		})
+	}()
+
+	msg, err := ipc.ReadMessage(peerReader)
+	if err != nil {
+		t.Fatalf("ReadMessage initial request: %v", err)
+	}
+	if msg.Type != ipc.MessageTypeReloadJobsRequest {
+		t.Fatalf("initial request Type = %q, want %q", msg.Type, ipc.MessageTypeReloadJobsRequest)
+	}
+	if err := ipc.WriteMessage(peerWriter, mustIPCMessage(t, &ipc.Reloaded{})); err != nil {
+		t.Fatalf("WriteMessage Reloaded: %v", err)
+	}
+	if err := peerWriter.Close(); err != nil {
+		t.Fatalf("close peer writer: %v", err)
+	}
+
+	select {
+	case err := <-sessionErr:
+		if err != nil {
+			t.Fatalf("runReloadIPCSession() error = %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("runReloadIPCSession() did not return after peer close")
+	}
+	if watcher.reloading {
+		t.Fatal("watcher.reloading = true, want false after Reloaded")
+	}
+}
+
+func mustIPCMessage(t *testing.T, payload any) ipc.Message {
+	t.Helper()
+	msg, err := ipc.NewMessage(payload)
+	if err != nil {
+		t.Fatalf("NewMessage(%T): %v", payload, err)
+	}
+	return msg
 }

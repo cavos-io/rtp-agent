@@ -188,6 +188,13 @@ func (w *Watcher) processReloadIPCMessages(r io.Reader, out io.Writer) error {
 	}
 }
 
+func (w *Watcher) runReloadIPCSession(rw io.ReadWriter) error {
+	if err := w.requestReloadJobs(rw); err != nil {
+		return err
+	}
+	return w.processReloadIPCMessages(rw, rw)
+}
+
 func (w *Watcher) triggerReload() bool {
 	if w.onChange == nil {
 		return false
