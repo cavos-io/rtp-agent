@@ -1083,3 +1083,59 @@ func TestChatContextToGoogleProviderFormatMapsTurnsAndSystemMessages(t *testing.
 		t.Fatalf("function response payload = %#v", response)
 	}
 }
+
+func TestChatContextToAnthropicProviderFormatMapsTurnsAndSystemMessages(t *testing.T) {
+	ctx := NewChatContext()
+	ctx.Items = []ChatItem{
+		&ChatMessage{ID: "system", Role: ChatRoleSystem, Content: []ChatContent{{Text: "be concise"}}},
+		&ChatMessage{ID: "assistant-turn", Role: ChatRoleAssistant, Content: []ChatContent{{Text: "checking"}}},
+		&FunctionCall{ID: "assistant-turn/tool", CallID: "call_weather", Name: "weather", Arguments: `{"city":"Paris"}`},
+		&FunctionCallOutput{ID: "weather-output", CallID: "call_weather", Name: "weather", Output: `["sunny"]`},
+	}
+
+	messages, extra := ctx.ToProviderFormat("anthropic")
+
+	data, ok := extra.(map[string]any)
+	if !ok {
+		t.Fatalf("anthropic extra = %#v, want map", extra)
+	}
+	if !reflect.DeepEqual(data["system_messages"], []string{"be concise"}) {
+		t.Fatalf("system_messages = %#v", data["system_messages"])
+	}
+	if len(messages) != 3 {
+		t.Fatalf("len(messages) = %d, want 3: %#v", len(messages), messages)
+	}
+	if messages[0]["role"] != "user" {
+		t.Fatalf("first message = %#v, want dummy user", messages[0])
+	}
+	dummyContent := messages[0]["content"].([]map[string]any)
+	if dummyContent[0]["type"] != "text" || dummyContent[0]["text"] != "(empty)" {
+		t.Fatalf("dummy content = %#v", dummyContent)
+	}
+	if messages[1]["role"] != "assistant" {
+		t.Fatalf("second message = %#v, want assistant", messages[1])
+	}
+	assistantContent := messages[1]["content"].([]map[string]any)
+	if assistantContent[0]["type"] != "text" || assistantContent[0]["text"] != "checking" {
+		t.Fatalf("assistant text = %#v", assistantContent[0])
+	}
+	toolUse := assistantContent[1]
+	if toolUse["type"] != "tool_use" || toolUse["id"] != "call_weather" || toolUse["name"] != "weather" {
+		t.Fatalf("tool use = %#v", toolUse)
+	}
+	input := toolUse["input"].(map[string]any)
+	if input["city"] != "Paris" {
+		t.Fatalf("tool input = %#v", input)
+	}
+	if messages[2]["role"] != "user" {
+		t.Fatalf("third message = %#v, want user tool result", messages[2])
+	}
+	userContent := messages[2]["content"].([]map[string]any)
+	toolResult := userContent[0]
+	if toolResult["type"] != "tool_result" || toolResult["tool_use_id"] != "call_weather" || toolResult["is_error"] != false {
+		t.Fatalf("tool result = %#v", toolResult)
+	}
+	if !reflect.DeepEqual(toolResult["content"], []any{"sunny"}) {
+		t.Fatalf("tool result content = %#v", toolResult["content"])
+	}
+}

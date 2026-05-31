@@ -763,6 +763,9 @@ func (c *ChatContext) ToProviderFormat(format string) ([]map[string]any, any) {
 	if format == "google" {
 		return c.toGoogleProviderFormat()
 	}
+	if format == "anthropic" {
+		return c.toAnthropicProviderFormat()
+	}
 	return nil, nil
 }
 
@@ -815,6 +818,53 @@ func (c *ChatContext) toGoogleProviderFormat() ([]map[string]any, any) {
 	}
 
 	return turns, map[string]any{"system_messages": systemMessages}
+}
+
+func (c *ChatContext) toAnthropicProviderFormat() ([]map[string]any, any) {
+	messages := make([]map[string]any, 0)
+	systemMessages := make([]string, 0)
+	currentRole := ""
+	content := make([]map[string]any, 0)
+
+	flush := func() {
+		if currentRole == "" || len(content) == 0 {
+			return
+		}
+		messages = append(messages, map[string]any{
+			"role":    currentRole,
+			"content": content,
+		})
+		content = make([]map[string]any, 0)
+	}
+
+	for _, group := range groupOpenAIToolCalls(c.Items) {
+		for _, item := range group.flatten() {
+			if msg, ok := item.(*ChatMessage); ok && msg.Role == ChatRoleSystem && msg.TextContent() != "" {
+				systemMessages = append(systemMessages, msg.TextContent())
+				continue
+			}
+
+			role := anthropicItemRole(item)
+			if role == "" {
+				continue
+			}
+			if role != currentRole {
+				flush()
+				currentRole = role
+			}
+			content = append(content, anthropicItemContent(item)...)
+		}
+	}
+	flush()
+
+	if len(messages) == 0 || messages[0]["role"] != "user" {
+		messages = append([]map[string]any{{
+			"role":    "user",
+			"content": []map[string]any{{"text": "(empty)", "type": "text"}},
+		}}, messages...)
+	}
+
+	return messages, map[string]any{"system_messages": systemMessages}
 }
 
 type openAIToolCallGroup struct {
@@ -1153,6 +1203,85 @@ func googleImagePart(image *ImageContent) map[string]any {
 			"mime_type": mimeType,
 		},
 	}
+}
+
+func anthropicItemRole(item ChatItem) string {
+	switch it := item.(type) {
+	case *ChatMessage:
+		if it.Role == ChatRoleAssistant {
+			return "assistant"
+		}
+		return "user"
+	case *FunctionCall:
+		return "assistant"
+	case *FunctionCallOutput:
+		return "user"
+	default:
+		return ""
+	}
+}
+
+func anthropicItemContent(item ChatItem) []map[string]any {
+	switch it := item.(type) {
+	case *ChatMessage:
+		content := make([]map[string]any, 0, len(it.Content))
+		for _, item := range it.Content {
+			if item.Text != "" {
+				content = append(content, map[string]any{
+					"text": item.Text,
+					"type": "text",
+				})
+			}
+			if item.Image != nil {
+				if image := anthropicImageContent(item.Image); image != nil {
+					content = append(content, image)
+				}
+			}
+		}
+		return content
+	case *FunctionCall:
+		input := map[string]any{}
+		if it.Arguments != "" {
+			_ = json.Unmarshal([]byte(it.Arguments), &input)
+		}
+		return []map[string]any{{
+			"id":    it.CallID,
+			"type":  "tool_use",
+			"name":  it.Name,
+			"input": input,
+		}}
+	case *FunctionCallOutput:
+		return []map[string]any{{
+			"tool_use_id": it.CallID,
+			"type":        "tool_result",
+			"content":     anthropicToolResultContent(it.Output),
+			"is_error":    it.IsError,
+		}}
+	default:
+		return nil
+	}
+}
+
+func anthropicImageContent(image *ImageContent) map[string]any {
+	url, ok := image.Image.(string)
+	if !ok || url == "" {
+		return nil
+	}
+	return map[string]any{
+		"type": "image",
+		"source": map[string]any{
+			"type": "url",
+			"url":  url,
+		},
+	}
+}
+
+func anthropicToolResultContent(output string) any {
+	var parsed []any
+	if err := json.Unmarshal([]byte(output), &parsed); err == nil {
+		return parsed
+	}
+	return output
 }
 
 func openAIToolOutput(toolOutput *FunctionCallOutput) map[string]any {
