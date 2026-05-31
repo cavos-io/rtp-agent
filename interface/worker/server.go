@@ -21,6 +21,7 @@ import (
 	workeripc "github.com/cavos-io/conversation-worker/interface/worker/ipc"
 	"github.com/cavos-io/conversation-worker/library/logger"
 	mathutil "github.com/cavos-io/conversation-worker/library/math"
+	"github.com/cavos-io/conversation-worker/library/telemetry"
 	"github.com/go-jose/go-jose/v3"
 	"github.com/go-jose/go-jose/v3/jwt"
 	"github.com/gorilla/websocket"
@@ -106,6 +107,8 @@ type WorkerOptions struct {
 	HTTPProxy                       string
 	DevMode                         bool
 	LogLevel                        string
+	PrometheusPort                  int
+	PrometheusMultiprocDir          string
 	LoadThreshold                   float64
 	JobMemoryWarnMB                 float64
 	JobMemoryLimitMB                float64
@@ -133,6 +136,7 @@ type AgentServer struct {
 	conn               *websocket.Conn
 	httpServer         *http.Server
 	httpPort           int
+	prometheusServer   *telemetry.HttpServer
 	workerMessageSink  func(*livekit.WorkerMessage) error
 	workerID           string
 	startedHandlers    []WorkerStartedHandler
@@ -462,6 +466,12 @@ func mergeWorkerOptions(current WorkerOptions, next WorkerOptions) WorkerOptions
 	if next.HTTPProxy != "" {
 		current.HTTPProxy = next.HTTPProxy
 	}
+	if next.PrometheusPort != 0 {
+		current.PrometheusPort = next.PrometheusPort
+	}
+	if next.PrometheusMultiprocDir != "" {
+		current.PrometheusMultiprocDir = next.PrometheusMultiprocDir
+	}
 	if next.DevMode {
 		current.DevMode = true
 	}
@@ -650,6 +660,33 @@ func (s *AgentServer) startWorkerHTTPServer() (*http.Server, error) {
 	}()
 
 	return srv, nil
+}
+
+func (s *AgentServer) startPrometheusServer() (*telemetry.HttpServer, error) {
+	if s.Options.PrometheusPort == 0 {
+		return nil, nil
+	}
+	server := telemetry.NewHttpServer(s.Options.Host, s.Options.PrometheusPort)
+	if err := server.Start(); err != nil {
+		return nil, err
+	}
+	s.mu.Lock()
+	s.prometheusServer = server
+	s.mu.Unlock()
+	return server, nil
+}
+
+func (s *AgentServer) configurePrometheusMultiprocDir() error {
+	if s.Options.PrometheusMultiprocDir == "" {
+		if dir := os.Getenv("PROMETHEUS_MULTIPROC_DIR"); dir != "" {
+			s.Options.PrometheusMultiprocDir = dir
+		}
+		return nil
+	}
+	if err := os.MkdirAll(s.Options.PrometheusMultiprocDir, 0o755); err != nil {
+		return err
+	}
+	return os.Setenv("PROMETHEUS_MULTIPROC_DIR", s.Options.PrometheusMultiprocDir)
 }
 
 func liveKitDevModeEnabled(value string) bool {
@@ -1031,6 +1068,26 @@ func (s *AgentServer) Run(ctx context.Context) error {
 		s.httpPort = 0
 		s.mu.Unlock()
 	}()
+
+	if err := s.configurePrometheusMultiprocDir(); err != nil {
+		return err
+	}
+	prometheusServer, err := s.startPrometheusServer()
+	if err != nil {
+		return err
+	}
+	if prometheusServer != nil {
+		defer func() {
+			shutdownCtx, cancel := context.WithTimeout(context.Background(), time.Second)
+			defer cancel()
+			if err := prometheusServer.Stop(shutdownCtx); err != nil {
+				logger.Logger.Errorw("failed to stop Prometheus server", err)
+			}
+			s.mu.Lock()
+			s.prometheusServer = nil
+			s.mu.Unlock()
+		}()
+	}
 
 	agentURL, err := agentWebSocketURL(s.Options.WSRL, s.Options.WorkerToken)
 	if err != nil {

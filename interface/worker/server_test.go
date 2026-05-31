@@ -6,6 +6,7 @@ import (
 	"errors"
 	"io"
 	"math"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -310,6 +311,65 @@ func TestWorkerInfoReportsStartedHTTPPort(t *testing.T) {
 	if info.HTTPPort == 0 {
 		t.Fatal("WorkerInfo().HTTPPort = 0, want started HTTP port")
 	}
+}
+
+func TestStartPrometheusServerUsesConfiguredPort(t *testing.T) {
+	server := NewAgentServer(WorkerOptions{
+		Host:           "127.0.0.1",
+		PrometheusPort: 0,
+	})
+
+	prometheusServer, err := server.startPrometheusServer()
+	if err != nil {
+		t.Fatalf("startPrometheusServer() error = %v", err)
+	}
+	if prometheusServer != nil {
+		t.Fatal("startPrometheusServer() = server, want nil when PrometheusPort is unset")
+	}
+
+	port := freeTCPPort(t)
+	server = NewAgentServer(WorkerOptions{
+		Host:           "127.0.0.1",
+		PrometheusPort: port,
+	})
+	prometheusServer, err = server.startPrometheusServer()
+	if err != nil {
+		t.Fatalf("startPrometheusServer() error = %v", err)
+	}
+	if prometheusServer == nil {
+		t.Fatal("startPrometheusServer() = nil, want server when PrometheusPort is configured")
+	}
+	defer prometheusServer.Stop(context.Background())
+	if prometheusServer.Port != port {
+		t.Fatalf("Prometheus server Port = %d, want %d", prometheusServer.Port, port)
+	}
+}
+
+func TestConfigurePrometheusMultiprocDirSetsEnvironment(t *testing.T) {
+	t.Setenv("PROMETHEUS_MULTIPROC_DIR", "")
+	dir := t.TempDir()
+	server := NewAgentServer(WorkerOptions{PrometheusMultiprocDir: dir})
+
+	if err := server.configurePrometheusMultiprocDir(); err != nil {
+		t.Fatalf("configurePrometheusMultiprocDir() error = %v", err)
+	}
+	if got := os.Getenv("PROMETHEUS_MULTIPROC_DIR"); got != dir {
+		t.Fatalf("PROMETHEUS_MULTIPROC_DIR = %q, want %q", got, dir)
+	}
+}
+
+func freeTCPPort(t *testing.T) int {
+	t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen for free TCP port: %v", err)
+	}
+	defer ln.Close()
+	addr, ok := ln.Addr().(*net.TCPAddr)
+	if !ok {
+		t.Fatalf("listener address type = %T, want *net.TCPAddr", ln.Addr())
+	}
+	return addr.Port
 }
 
 func TestUpdateOptionsMergesConfiguredValuesBeforeRun(t *testing.T) {
@@ -2285,6 +2345,44 @@ func TestRunExportsLiveKitCredentialsBeforeDial(t *testing.T) {
 	if !dialed {
 		t.Fatal("worker dial was not attempted")
 	}
+}
+
+func TestRunStartsConfiguredPrometheusServerBeforeDial(t *testing.T) {
+	oldDial := workerDialContext
+	oldSleep := workerRetrySleep
+	t.Cleanup(func() {
+		workerDialContext = oldDial
+		workerRetrySleep = oldSleep
+	})
+
+	var server *AgentServer
+	workerDialContext = func(context.Context, *websocket.Dialer, string, http.Header) (*websocket.Conn, *http.Response, error) {
+		server.mu.Lock()
+		prometheusStarted := server.prometheusServer != nil
+		server.mu.Unlock()
+		if !prometheusStarted {
+			t.Fatal("prometheusServer = nil before dial, want started Prometheus server")
+		}
+		return nil, nil, errors.New("stop after prometheus check")
+	}
+	workerRetrySleep = func(context.Context, time.Duration) error {
+		return context.Canceled
+	}
+
+	server = NewAgentServer(WorkerOptions{
+		WSRL:           "wss://run.example",
+		APIKey:         "run-key",
+		APISecret:      "run-secret",
+		MaxRetry:       1,
+		DevMode:        true,
+		Host:           "127.0.0.1",
+		PrometheusPort: freeTCPPort(t),
+	})
+	if err := server.RTCSession(func(ctx *JobContext) error { return nil }, nil, nil); err != nil {
+		t.Fatalf("RTCSession() error = %v", err)
+	}
+
+	_ = server.Run(context.Background())
 }
 
 func TestConnectWorkerWebSocketRetriesDialFailures(t *testing.T) {
