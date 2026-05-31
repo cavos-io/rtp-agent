@@ -14,12 +14,13 @@ import (
 )
 
 type Watcher struct {
-	paths    []string
-	onChange func()
-	watcher  *fsnotify.Watcher
-	mu       sync.Mutex
-	ctx      context.Context
-	cancel   context.CancelFunc
+	paths     []string
+	onChange  func()
+	watcher   *fsnotify.Watcher
+	mu        sync.Mutex
+	ctx       context.Context
+	cancel    context.CancelFunc
+	reloading bool
 }
 
 func NewWatcher(paths []string, onChange func()) *Watcher {
@@ -71,6 +72,22 @@ func (w *Watcher) Stop() error {
 	return nil
 }
 
+func (w *Watcher) beginReload() bool {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.reloading {
+		return false
+	}
+	w.reloading = true
+	return true
+}
+
+func (w *Watcher) Reloaded() {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.reloading = false
+}
+
 func (w *Watcher) watchLoop() {
 	// Debounce events
 	var timer *time.Timer
@@ -90,6 +107,10 @@ func (w *Watcher) watchLoop() {
 					timer = time.AfterFunc(500*time.Millisecond, func() {
 						logger.Logger.Infow("File changed, triggering reload", "file", event.Name)
 						if w.onChange != nil {
+							if !w.beginReload() {
+								return
+							}
+							defer w.Reloaded()
 							w.onChange()
 						}
 					})

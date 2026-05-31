@@ -20,6 +20,10 @@ type CliArgs struct {
 	APIKey    string
 	APISecret string
 	DevMode   bool
+	Reload    bool
+
+	// ReloadCount tracks how many times the dev-mode worker has been reloaded.
+	ReloadCount int
 }
 
 type ConnectArgs struct {
