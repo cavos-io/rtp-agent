@@ -10,6 +10,7 @@ import (
 	"github.com/cavos-io/conversation-worker/core/agent"
 	"github.com/cavos-io/conversation-worker/model"
 	"github.com/hraban/opus"
+	"github.com/livekit/protocol/livekit"
 	lksdk "github.com/livekit/server-sdk-go/v2"
 	"github.com/livekit/server-sdk-go/v2/pkg/samplebuilder"
 	"github.com/pion/rtp/codecs"
@@ -49,7 +50,7 @@ func (d *opusDecoder) Decode(data []byte) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	
+
 	// Convert int16 slice to byte slice
 	out := make([]byte, n*2) // Assuming 1 channel for now, multiply by channels if needed
 	for i := 0; i < n; i++ {
@@ -90,7 +91,7 @@ func (e *opusEncoder) Encode(pcm []byte) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	
+
 	out := make([]byte, n)
 	copy(out, e.buf[:n])
 	return out, nil
@@ -101,6 +102,7 @@ func (e *opusEncoder) Close() error {
 }
 
 type RoomOptions struct {
+	AudioTrackName string
 }
 
 type RoomIO struct {
@@ -160,15 +162,24 @@ func (rio *RoomIO) Start(ctx context.Context) error {
 		return err
 	}
 
-	_, err = rio.Room.LocalParticipant.PublishTrack(track, &lksdk.TrackPublicationOptions{
-		Name: "agent-audio",
-	})
+	_, err = rio.Room.LocalParticipant.PublishTrack(track, rio.audioTrackPublicationOptions())
 	if err != nil {
 		return err
 	}
 
 	rio.audioTrack = track
 	return nil
+}
+
+func (rio *RoomIO) audioTrackPublicationOptions() *lksdk.TrackPublicationOptions {
+	name := rio.Options.AudioTrackName
+	if name == "" {
+		name = "roomio_audio"
+	}
+	return &lksdk.TrackPublicationOptions{
+		Name:   name,
+		Source: livekit.TrackSource_MICROPHONE,
+	}
 }
 
 func (rio *RoomIO) onTrackSubscribed(track *webrtc.TrackRemote, publication *lksdk.RemoteTrackPublication, rp *lksdk.RemoteParticipant) {
@@ -181,7 +192,7 @@ func (rio *RoomIO) handleAudioTrack(track *webrtc.TrackRemote) {
 	// First, check for and flush any pre-connect audio buffered
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
-	
+
 	if frames := rio.preConnectAudio.WaitForData(ctx, track.ID()); len(frames) > 0 {
 		for _, frame := range frames {
 			if rio.Recorder != nil {
@@ -229,7 +240,7 @@ func (rio *RoomIO) handleAudioTrack(track *webrtc.TrackRemote) {
 				NumChannels:       1, // We decode to mono for simplicity
 				SamplesPerChannel: uint32(len(pcm) / 2),
 			}
-			
+
 			if rio.Recorder != nil {
 				rio.Recorder.RecordInput(frame)
 			}
