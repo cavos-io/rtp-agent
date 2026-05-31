@@ -963,6 +963,54 @@ func TestChatContextToOpenAIProviderFormatForwardsReferenceExtraContent(t *testi
 	}
 }
 
+func TestChatContextToOpenAIResponsesProviderFormat(t *testing.T) {
+	ctx := NewChatContext()
+	ctx.Items = []ChatItem{
+		&ChatMessage{
+			ID:   "user",
+			Role: ChatRoleUser,
+			Content: []ChatContent{
+				{Text: "describe this"},
+				{Image: &ImageContent{
+					Image:           "https://example.test/image.png",
+					InferenceDetail: "low",
+				}},
+			},
+		},
+		&ChatMessage{ID: "assistant-turn", Role: ChatRoleAssistant, Content: []ChatContent{{Text: "checking"}}},
+		&FunctionCall{ID: "assistant-turn/tool", CallID: "call_lookup", Name: "lookup", Arguments: `{"city":"Paris"}`},
+		&FunctionCallOutput{ID: "lookup-output", CallID: "call_lookup", Name: "lookup", Output: "Paris"},
+	}
+
+	items, extra := ctx.ToProviderFormat("openai.responses")
+
+	if extra != nil {
+		t.Fatalf("ToProviderFormat() extra = %#v, want nil", extra)
+	}
+	if len(items) != 4 {
+		t.Fatalf("len(items) = %d, want 4: %#v", len(items), items)
+	}
+	content, ok := items[0]["content"].([]map[string]any)
+	if !ok {
+		t.Fatalf("responses content = %#v, want []map[string]any", items[0]["content"])
+	}
+	if content[0]["type"] != "input_image" || content[0]["image_url"] != "https://example.test/image.png" || content[0]["detail"] != "low" {
+		t.Fatalf("responses image content = %#v", content[0])
+	}
+	if content[1]["type"] != "input_text" || content[1]["text"] != "describe this" {
+		t.Fatalf("responses text content = %#v", content[1])
+	}
+	if items[1]["role"] != "assistant" || items[1]["content"] != "checking" {
+		t.Fatalf("assistant item = %#v", items[1])
+	}
+	if items[2]["type"] != "function_call" || items[2]["call_id"] != "call_lookup" || items[2]["name"] != "lookup" || items[2]["arguments"] != `{"city":"Paris"}` {
+		t.Fatalf("function call item = %#v", items[2])
+	}
+	if items[3]["type"] != "function_call_output" || items[3]["call_id"] != "call_lookup" || items[3]["output"] != "Paris" {
+		t.Fatalf("function output item = %#v", items[3])
+	}
+}
+
 func TestChatContextToOpenAIProviderFormatFiltersUnmatchedToolItems(t *testing.T) {
 	ctx := NewChatContext()
 	ctx.Items = []ChatItem{

@@ -742,6 +742,24 @@ func (c *ChatContext) ToProviderFormat(format string) ([]map[string]any, any) {
 		}
 		return messages, nil
 	}
+	if format == "openai.responses" {
+		items := make([]map[string]any, 0)
+		for _, group := range groupOpenAIToolCalls(c.Items) {
+			if group.message == nil && len(group.toolCalls) == 0 && len(group.toolOutputs) == 0 {
+				continue
+			}
+			if group.message != nil {
+				items = append(items, openAIResponsesMessage(group.message))
+			}
+			for _, toolCall := range group.toolCalls {
+				items = append(items, openAIResponsesToolCall(toolCall))
+			}
+			for _, toolOutput := range group.toolOutputs {
+				items = append(items, openAIResponsesToolOutput(toolOutput))
+			}
+		}
+		return items, nil
+	}
 	return nil, nil
 }
 
@@ -895,6 +913,70 @@ func openAIImageContent(image *ImageContent) map[string]any {
 			"url":    url,
 			"detail": imageInferenceDetailOrDefault(image.InferenceDetail),
 		},
+	}
+}
+
+func openAIResponsesMessage(msg *ChatMessage) map[string]any {
+	return map[string]any{
+		"role":    string(msg.Role),
+		"content": openAIResponsesContent(msg.Content),
+	}
+}
+
+func openAIResponsesContent(content []ChatContent) any {
+	parts := make([]map[string]any, 0)
+	textContent := ""
+	for _, item := range content {
+		if item.Text != "" {
+			if textContent != "" {
+				textContent += "\n"
+			}
+			textContent += item.Text
+		}
+		if item.Image != nil {
+			if part := openAIResponsesImageContent(item.Image); part != nil {
+				parts = append(parts, part)
+			}
+		}
+	}
+	if len(parts) == 0 {
+		return textContent
+	}
+	if textContent != "" {
+		parts = append(parts, map[string]any{
+			"type": "input_text",
+			"text": textContent,
+		})
+	}
+	return parts
+}
+
+func openAIResponsesImageContent(image *ImageContent) map[string]any {
+	url, ok := image.Image.(string)
+	if !ok || url == "" {
+		return nil
+	}
+	return map[string]any{
+		"type":      "input_image",
+		"image_url": url,
+		"detail":    imageInferenceDetailOrDefault(image.InferenceDetail),
+	}
+}
+
+func openAIResponsesToolCall(toolCall *FunctionCall) map[string]any {
+	return map[string]any{
+		"call_id":   toolCall.CallID,
+		"type":      "function_call",
+		"name":      toolCall.Name,
+		"arguments": toolCall.Arguments,
+	}
+}
+
+func openAIResponsesToolOutput(toolOutput *FunctionCallOutput) map[string]any {
+	return map[string]any{
+		"type":    "function_call_output",
+		"call_id": toolOutput.CallID,
+		"output":  toolOutput.Output,
 	}
 }
 
