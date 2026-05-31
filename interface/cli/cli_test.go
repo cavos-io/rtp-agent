@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"bytes"
 	"strings"
 	"testing"
 
@@ -211,5 +212,54 @@ func TestWatcherHandleReloadMessageRespondsWithActiveJobs(t *testing.T) {
 
 	if resp, ok := watcher.handleReloadMessage(&ipc.PingRequest{}); ok || resp != nil {
 		t.Fatalf("handleReloadMessage(PingRequest) = (%#v, %v), want (nil, false)", resp, ok)
+	}
+}
+
+func TestWatcherHandleReloadIPCMessageWritesResponse(t *testing.T) {
+	args := &CliArgs{ReloadCount: 5}
+	watcher := NewWatcher(nil, nil, args)
+	watcher.recordActiveJobsResponse(ipc.ActiveJobsResponse{
+		Jobs:        []ipc.RunningJobInfo{{Job: &livekit.Job{Id: "job-current"}, Token: "current-token"}},
+		ReloadCount: 5,
+	})
+
+	req, err := ipc.NewMessage(&ipc.ReloadJobsRequest{})
+	if err != nil {
+		t.Fatalf("NewMessage(ReloadJobsRequest): %v", err)
+	}
+	var input bytes.Buffer
+	if err := ipc.WriteMessage(&input, req); err != nil {
+		t.Fatalf("WriteMessage request: %v", err)
+	}
+	var output bytes.Buffer
+
+	handled, err := watcher.handleReloadIPCMessage(&input, &output)
+	if err != nil {
+		t.Fatalf("handleReloadIPCMessage() error = %v", err)
+	}
+	if !handled {
+		t.Fatal("handleReloadIPCMessage() handled = false, want true")
+	}
+
+	msg, err := ipc.ReadMessage(&output)
+	if err != nil {
+		t.Fatalf("ReadMessage response: %v", err)
+	}
+	if msg.Type != ipc.MessageTypeReloadJobsResponse {
+		t.Fatalf("response Type = %q, want %q", msg.Type, ipc.MessageTypeReloadJobsResponse)
+	}
+	payload, err := ipc.DecodePayload(msg)
+	if err != nil {
+		t.Fatalf("DecodePayload response: %v", err)
+	}
+	resp, ok := payload.(*ipc.ReloadJobsResponse)
+	if !ok {
+		t.Fatalf("response payload = %T, want *ReloadJobsResponse", payload)
+	}
+	if resp.ReloadCount != 5 {
+		t.Fatalf("ReloadCount = %d, want 5", resp.ReloadCount)
+	}
+	if len(resp.Jobs) != 1 || resp.Jobs[0].Job.GetId() != "job-current" {
+		t.Fatalf("Jobs = %#v, want current job", resp.Jobs)
 	}
 }

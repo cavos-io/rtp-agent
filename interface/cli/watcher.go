@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -138,6 +139,31 @@ func (w *Watcher) handleReloadMessage(payload any) (any, bool) {
 	default:
 		return nil, false
 	}
+}
+
+func (w *Watcher) handleReloadIPCMessage(r io.Reader, out io.Writer) (bool, error) {
+	msg, err := ipc.ReadMessage(r)
+	if err != nil {
+		return false, err
+	}
+	payload, err := ipc.DecodePayload(msg)
+	if err != nil {
+		return false, err
+	}
+
+	resp, handled := w.handleReloadMessage(payload)
+	if !handled || resp == nil {
+		return handled, nil
+	}
+
+	responseMsg, err := ipc.NewMessage(resp)
+	if err != nil {
+		return true, err
+	}
+	if err := ipc.WriteMessage(out, responseMsg); err != nil {
+		return true, err
+	}
+	return true, nil
 }
 
 func (w *Watcher) triggerReload() bool {
