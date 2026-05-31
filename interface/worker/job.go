@@ -244,7 +244,7 @@ func (c *JobContext) roomCallbackWithEntrypoints(cb *lksdk.RoomCallback) *lksdk.
 }
 
 func (c *JobContext) participantAvailable(participant remoteParticipantView) {
-	c.runParticipantEntrypoints(participantInfoFromRemoteParticipant(participant))
+	c.scheduleParticipantEntrypoints(participantInfoFromRemoteParticipant(participant))
 }
 
 func (c *JobContext) participantsAvailable(participants []remoteParticipantView) {
@@ -339,6 +339,18 @@ func (c *JobContext) runParticipantEntrypoints(participant *livekit.ParticipantI
 			continue
 		}
 		registered.entrypoint(c, participant)
+	}
+}
+
+func (c *JobContext) scheduleParticipantEntrypoints(participant *livekit.ParticipantInfo) {
+	if participant == nil {
+		return
+	}
+	for _, registered := range c.participantEntrypoints {
+		if !participantEntrypointMatchesKind(registered.kinds, participant.Kind) {
+			continue
+		}
+		go registered.entrypoint(c, participant)
 	}
 }
 

@@ -5,6 +5,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/livekit/protocol/auth"
 	"github.com/livekit/protocol/livekit"
@@ -299,9 +300,9 @@ func TestJobContextRoomCallbackWithEntrypointsPreservesExistingParticipantCallba
 
 func TestJobContextParticipantAvailableRunsMatchingEntrypoints(t *testing.T) {
 	ctx := NewJobContext(&livekit.Job{Id: "job_participant_available"}, "", "", "")
-	var calls []string
+	calls := make(chan string, 1)
 	if err := ctx.AddParticipantEntrypoint(func(_ *JobContext, p *livekit.ParticipantInfo) {
-		calls = append(calls, p.Identity)
+		calls <- p.Identity
 	}); err != nil {
 		t.Fatalf("AddParticipantEntrypoint() error = %v", err)
 	}
@@ -311,17 +312,49 @@ func TestJobContextParticipantAvailableRunsMatchingEntrypoints(t *testing.T) {
 		kind:     lksdk.ParticipantSIP,
 	})
 
-	want := []string{"caller"}
-	if !reflect.DeepEqual(calls, want) {
-		t.Fatalf("participant entrypoint calls = %#v, want %#v", calls, want)
+	select {
+	case got := <-calls:
+		if got != "caller" {
+			t.Fatalf("participant entrypoint call = %q, want caller", got)
+		}
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("participant entrypoint was not called")
+	}
+}
+
+func TestJobContextParticipantAvailableDoesNotBlockOnEntrypoints(t *testing.T) {
+	ctx := NewJobContext(&livekit.Job{Id: "job_participant_available_async"}, "", "", "")
+	block := make(chan struct{})
+	defer close(block)
+	secondCalled := make(chan struct{}, 1)
+	if err := ctx.AddParticipantEntrypoint(func(*JobContext, *livekit.ParticipantInfo) {
+		<-block
+	}, livekit.ParticipantInfo_SIP); err != nil {
+		t.Fatalf("AddParticipantEntrypoint(blocking) error = %v", err)
+	}
+	if err := ctx.AddParticipantEntrypoint(func(*JobContext, *livekit.ParticipantInfo) {
+		secondCalled <- struct{}{}
+	}, livekit.ParticipantInfo_SIP); err != nil {
+		t.Fatalf("AddParticipantEntrypoint(second) error = %v", err)
+	}
+
+	ctx.participantAvailable(fakeParticipantView{
+		identity: "caller",
+		kind:     lksdk.ParticipantSIP,
+	})
+
+	select {
+	case <-secondCalled:
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("second participant entrypoint was blocked by the first")
 	}
 }
 
 func TestJobContextParticipantsAvailableReplaysExistingParticipants(t *testing.T) {
 	ctx := NewJobContext(&livekit.Job{Id: "job_existing_participants"}, "", "", "")
-	var calls []string
+	calls := make(chan string, 2)
 	if err := ctx.AddParticipantEntrypoint(func(_ *JobContext, p *livekit.ParticipantInfo) {
-		calls = append(calls, p.Identity)
+		calls <- p.Identity
 	}); err != nil {
 		t.Fatalf("AddParticipantEntrypoint() error = %v", err)
 	}
@@ -332,9 +365,17 @@ func TestJobContextParticipantsAvailableReplaysExistingParticipants(t *testing.T
 		fakeParticipantView{identity: "caller-b", kind: lksdk.ParticipantStandard},
 	})
 
-	want := []string{"caller-a", "caller-b"}
-	if !reflect.DeepEqual(calls, want) {
-		t.Fatalf("participant entrypoint calls = %#v, want %#v", calls, want)
+	got := map[string]bool{}
+	for range 2 {
+		select {
+		case identity := <-calls:
+			got[identity] = true
+		case <-time.After(500 * time.Millisecond):
+			t.Fatalf("participant entrypoint calls = %#v, want caller-a and caller-b", got)
+		}
+	}
+	if !got["caller-a"] || !got["caller-b"] {
+		t.Fatalf("participant entrypoint calls = %#v, want caller-a and caller-b", got)
 	}
 }
 
