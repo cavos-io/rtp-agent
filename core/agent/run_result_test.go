@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"context"
 	"errors"
 	"reflect"
 	"testing"
@@ -116,6 +117,53 @@ func TestRunResultFinalOutputReturnsValueAfterDone(t *testing.T) {
 	}
 	if !result.Done() {
 		t.Fatal("Done() = false, want true after MarkDone")
+	}
+}
+
+func TestRunResultWaitReturnsAfterMarkDone(t *testing.T) {
+	result := NewRunResult(llm.NewChatContext())
+	done := make(chan error, 1)
+
+	go func() {
+		done <- result.Wait(context.Background())
+	}()
+
+	select {
+	case err := <-done:
+		t.Fatalf("Wait returned before MarkDone: %v", err)
+	case <-time.After(10 * time.Millisecond):
+	}
+
+	result.MarkDone()
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("Wait error = %v, want nil", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Wait did not return after MarkDone")
+	}
+}
+
+func TestRunResultWaitReturnsContextError(t *testing.T) {
+	result := NewRunResult(llm.NewChatContext())
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
+	defer cancel()
+
+	err := result.Wait(ctx)
+
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("Wait error = %v, want context deadline exceeded", err)
+	}
+}
+
+func TestRunResultWaitReturnsImmediatelyAfterDone(t *testing.T) {
+	result := NewRunResult(llm.NewChatContext())
+	result.MarkDone()
+
+	if err := result.Wait(context.Background()); err != nil {
+		t.Fatalf("Wait error = %v, want nil after MarkDone", err)
 	}
 }
 

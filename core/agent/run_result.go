@@ -25,6 +25,7 @@ type RunResult struct {
 	Expect          *RunAssert
 	events          []RunEvent
 	done            bool
+	doneCh          chan struct{}
 	finalOutput     any
 	finalOutputErr  error
 	finalOutputSet  bool
@@ -47,6 +48,7 @@ func NewRunResultWithOutputType(chatCtx *llm.ChatContext, outputType reflect.Typ
 	result := &RunResult{
 		ChatCtx:         chatCtx,
 		events:          make([]RunEvent, 0),
+		doneCh:          make(chan struct{}),
 		finalOutputType: outputType,
 		watchedSpeech:   make(map[*SpeechHandle]runResultSpeechWatch),
 	}
@@ -65,7 +67,28 @@ func (r *RunResult) MarkDone() {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
+	r.markDoneLocked()
+}
+
+func (r *RunResult) markDoneLocked() {
+	if r.done {
+		return
+	}
 	r.done = true
+	close(r.doneCh)
+}
+
+func (r *RunResult) Wait(ctx context.Context) error {
+	r.mu.Lock()
+	doneCh := r.doneCh
+	r.mu.Unlock()
+
+	select {
+	case <-doneCh:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
 
 func (r *RunResult) SetFinalOutput(output any) {
@@ -266,7 +289,7 @@ func (r *RunResult) markDoneIfNeeded(doneSpeech *SpeechHandle) {
 			r.finalOutputSet = true
 		}
 	}
-	r.done = true
+	r.markDoneLocked()
 }
 
 func (r *RunResult) insertEvent(event RunEvent) {
