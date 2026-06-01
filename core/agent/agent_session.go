@@ -152,6 +152,7 @@ func NewAgentSession(agent AgentInterface, room *lksdk.Room, opts AgentSessionOp
 		ChatCtx:             llm.NewChatContext(),
 		Tools:               make([]llm.Tool, 0),
 		UserState:           UserStateListening,
+		AgentState:          AgentStateInitializing,
 		AgentStateChangedCh: make(chan AgentStateChangedEvent, 10),
 		UserStateChangedCh:  make(chan UserStateChangedEvent, 10),
 		userInputCh:         make(chan UserInputTranscribedEvent, 10),

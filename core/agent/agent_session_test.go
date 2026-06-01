@@ -43,6 +43,15 @@ func TestNewAgentSessionInitializesUserStateListening(t *testing.T) {
 	}
 }
 
+func TestNewAgentSessionInitializesAgentStateInitializing(t *testing.T) {
+	agent := NewAgent("test")
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+
+	if session.AgentState != AgentStateInitializing {
+		t.Fatalf("AgentState = %q, want %q", session.AgentState, AgentStateInitializing)
+	}
+}
+
 func TestAgentSessionGenerateReplyEmitsSpeechCreatedEvent(t *testing.T) {
 	agent := NewAgent("test")
 	session := NewAgentSession(agent, nil, AgentSessionOptions{AllowInterruptions: true})
@@ -462,8 +471,8 @@ func TestAgentSessionUpdateAgentStateEmitsTypedTimestampedEvent(t *testing.T) {
 		if event.GetType() != "agent_state_changed" {
 			t.Fatalf("event type = %q, want agent_state_changed", event.GetType())
 		}
-		if ev.OldState != "" || ev.NewState != AgentStateThinking {
-			t.Fatalf("event states = %q -> %q, want empty -> thinking", ev.OldState, ev.NewState)
+		if ev.OldState != AgentStateInitializing || ev.NewState != AgentStateThinking {
+			t.Fatalf("event states = %q -> %q, want initializing -> thinking", ev.OldState, ev.NewState)
 		}
 		if ev.CreatedAt.Before(before) || ev.CreatedAt.IsZero() {
 			t.Fatalf("CreatedAt = %v, want timestamp after %v", ev.CreatedAt, before)
@@ -500,13 +509,14 @@ func TestAgentSessionStartEmitsInitializingThenListening(t *testing.T) {
 		}
 	}()
 
-	first := receiveAgentStateChangedEvent(t, session)
-	if first.OldState != "" || first.NewState != AgentStateInitializing {
-		t.Fatalf("first state event = %q -> %q, want empty -> initializing", first.OldState, first.NewState)
+	ev := receiveAgentStateChangedEvent(t, session)
+	if ev.OldState != AgentStateInitializing || ev.NewState != AgentStateListening {
+		t.Fatalf("state event = %q -> %q, want initializing -> listening", ev.OldState, ev.NewState)
 	}
-	second := receiveAgentStateChangedEvent(t, session)
-	if second.OldState != AgentStateInitializing || second.NewState != AgentStateListening {
-		t.Fatalf("second state event = %q -> %q, want initializing -> listening", second.OldState, second.NewState)
+	select {
+	case extra := <-session.AgentStateChangedCh:
+		t.Fatalf("unexpected extra state event = %q -> %q", extra.OldState, extra.NewState)
+	default:
 	}
 }
 
