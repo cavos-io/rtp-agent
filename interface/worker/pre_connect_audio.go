@@ -97,14 +97,6 @@ func (h *PreConnectAudioHandler) readAudioTask(reader *lksdk.ByteStreamReader, p
 	sampleRate, _ := strconv.Atoi(sampleRateStr)
 	channels, _ := strconv.Atoi(channelsStr)
 
-	h.mu.Lock()
-	if ch, ok := h.buffers[trackID]; ok {
-		close(ch)
-	}
-	bufCh := make(chan *PreConnectAudioBuffer, 1)
-	h.buffers[trackID] = bufCh
-	h.mu.Unlock()
-
 	buf := &PreConnectAudioBuffer{
 		Timestamp: time.Now(),
 		Frames:    make([]*model.AudioFrame, 0),
@@ -165,8 +157,21 @@ func (h *PreConnectAudioHandler) readAudioTask(reader *lksdk.ByteStreamReader, p
 		}
 	}
 
-	bufCh <- buf
-	close(bufCh)
+	h.publishBuffer(trackID, buf)
+}
+
+func (h *PreConnectAudioHandler) publishBuffer(trackID string, buf *PreConnectAudioBuffer) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+
+	ch, ok := h.buffers[trackID]
+	if !ok || len(ch) > 0 {
+		ch = make(chan *PreConnectAudioBuffer, 1)
+		h.buffers[trackID] = ch
+	}
+
+	ch <- buf
+	close(ch)
 }
 
 func (h *PreConnectAudioHandler) WaitForData(ctx context.Context, trackID string) []*model.AudioFrame {
