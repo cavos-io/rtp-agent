@@ -162,6 +162,25 @@ func TestRoomIOHandleChatTextInputIgnoresUnlinkedParticipant(t *testing.T) {
 	}
 }
 
+func TestRoomIOHandleChatTextInputIgnoresUnknownParticipant(t *testing.T) {
+	session := &agent.AgentSession{}
+	called := false
+	rio := &RoomIO{
+		Room:         lksdk.NewRoom(nil),
+		AgentSession: session,
+		textInput: func(context.Context, *agent.AgentSession, TextInputEvent) error {
+			called = true
+			return nil
+		},
+	}
+
+	rio.handleChatTextInput(context.Background(), "ignored", lksdk.TextStreamInfo{}, "missing-user")
+
+	if called {
+		t.Fatal("text input callback was called for unknown participant")
+	}
+}
+
 func TestRoomIOCloseUnregistersPreConnectAudioHandler(t *testing.T) {
 	room := lksdk.NewRoom(nil)
 	rio := NewRoomIO(room, &agent.AgentSession{}, RoomOptions{})

@@ -237,6 +237,9 @@ func (rio *RoomIO) handleChatTextInput(ctx context.Context, text string, info lk
 	if rio.Options.ParticipantIdentity != "" && participantIdentity != rio.Options.ParticipantIdentity {
 		return
 	}
+	if rio.Room != nil && participantIdentity != "" && rio.Room.GetParticipantByIdentity(participantIdentity) == nil {
+		return
+	}
 	_ = rio.textInput(ctx, rio.AgentSession, TextInputEvent{
 		Text:                text,
 		Info:                info,
