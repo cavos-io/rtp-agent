@@ -105,29 +105,31 @@ type WorkerOptions struct {
 	WSURL          string
 	LoadFunc       func(*AgentServer) float64
 	// WSRL is kept for backward compatibility. Prefer WSURL for new code.
-	WSRL                            string
-	APIKey                          string
-	APISecret                       string
-	WorkerToken                     string
-	HTTPProxy                       string
-	DevMode                         bool
-	LogLevel                        string
-	PrometheusPort                  int
-	PrometheusMultiprocDir          string
-	LoadThreshold                   float64
-	LoadThresholdSet                bool
-	JobMemoryWarnMB                 float64
-	JobMemoryWarnMBSet              bool
-	JobMemoryLimitMB                float64
-	JobMemoryLimitMBSet             bool
-	NumIdleProcesses                int
-	NumIdleProcessesSet             bool
-	DrainTimeoutSeconds             int
-	DrainTimeoutSecondsSet          bool
-	SessionEndTimeoutSeconds        float64
-	ShutdownProcessTimeoutSeconds   float64
-	InitializeProcessTimeoutSeconds float64
-	Permissions                     *WorkerPermissions
+	WSRL                             string
+	APIKey                           string
+	APISecret                        string
+	WorkerToken                      string
+	HTTPProxy                        string
+	DevMode                          bool
+	LogLevel                         string
+	PrometheusPort                   int
+	PrometheusMultiprocDir           string
+	LoadThreshold                    float64
+	LoadThresholdSet                 bool
+	JobMemoryWarnMB                  float64
+	JobMemoryWarnMBSet               bool
+	JobMemoryLimitMB                 float64
+	JobMemoryLimitMBSet              bool
+	NumIdleProcesses                 int
+	NumIdleProcessesSet              bool
+	DrainTimeoutSeconds              int
+	DrainTimeoutSecondsSet           bool
+	SessionEndTimeoutSeconds         float64
+	SessionEndTimeoutSecondsSet      bool
+	ShutdownProcessTimeoutSeconds    float64
+	ShutdownProcessTimeoutSecondsSet bool
+	InitializeProcessTimeoutSeconds  float64
+	Permissions                      *WorkerPermissions
 }
 
 type AgentServer struct {
@@ -522,11 +524,13 @@ func mergeWorkerOptions(current WorkerOptions, next WorkerOptions) WorkerOptions
 		current.DrainTimeoutSeconds = next.DrainTimeoutSeconds
 		current.DrainTimeoutSecondsSet = next.DrainTimeoutSecondsSet
 	}
-	if next.SessionEndTimeoutSeconds != 0 {
+	if next.SessionEndTimeoutSecondsSet || next.SessionEndTimeoutSeconds != 0 {
 		current.SessionEndTimeoutSeconds = next.SessionEndTimeoutSeconds
+		current.SessionEndTimeoutSecondsSet = true
 	}
-	if next.ShutdownProcessTimeoutSeconds != 0 {
+	if next.ShutdownProcessTimeoutSecondsSet || next.ShutdownProcessTimeoutSeconds != 0 {
 		current.ShutdownProcessTimeoutSeconds = next.ShutdownProcessTimeoutSeconds
+		current.ShutdownProcessTimeoutSecondsSet = true
 	}
 	if next.InitializeProcessTimeoutSeconds != 0 {
 		current.InitializeProcessTimeoutSeconds = next.InitializeProcessTimeoutSeconds
@@ -556,10 +560,10 @@ func resolveWorkerOptions(opts WorkerOptions) WorkerOptions {
 	if opts.DrainTimeoutSeconds == 0 && !opts.DrainTimeoutSecondsSet {
 		opts.DrainTimeoutSeconds = defaultDrainTimeout
 	}
-	if opts.SessionEndTimeoutSeconds == 0 {
+	if opts.SessionEndTimeoutSeconds == 0 && !opts.SessionEndTimeoutSecondsSet {
 		opts.SessionEndTimeoutSeconds = defaultSessionEnd
 	}
-	if opts.ShutdownProcessTimeoutSeconds == 0 {
+	if opts.ShutdownProcessTimeoutSeconds == 0 && !opts.ShutdownProcessTimeoutSecondsSet {
 		opts.ShutdownProcessTimeoutSeconds = defaultProcessTimeout
 	}
 	if opts.InitializeProcessTimeoutSeconds == 0 {

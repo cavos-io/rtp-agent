@@ -283,6 +283,7 @@ type fallbackRecognizeStream struct {
 type fallbackRecognizeInput struct {
 	frame *model.AudioFrame
 	flush bool
+	end   bool
 }
 
 func (f *FallbackAdapter) Stream(ctx context.Context, language string) (RecognizeStream, error) {
@@ -393,6 +394,16 @@ func (s *fallbackRecognizeStream) applyTiming(stream RecognizeStream) {
 
 func replayFallbackInputs(stream RecognizeStream, inputs []fallbackRecognizeInput) error {
 	for _, input := range inputs {
+		if input.end {
+			if ending, ok := stream.(InputEnding); ok {
+				if err := ending.EndInput(); err != nil {
+					return err
+				}
+			} else if err := stream.Flush(); err != nil {
+				return err
+			}
+			continue
+		}
 		if input.flush {
 			if err := stream.Flush(); err != nil {
 				return err
@@ -530,7 +541,10 @@ func (s *fallbackRecognizeStream) EndInput() error {
 		return fmt.Errorf("stream input ended")
 	}
 	s.inputEnded = true
-	s.inputBuffer = append(s.inputBuffer, fallbackRecognizeInput{flush: true})
+	s.inputBuffer = append(s.inputBuffer, fallbackRecognizeInput{end: true})
+	if ending, ok := s.activeStream.(InputEnding); ok {
+		return ending.EndInput()
+	}
 	return s.activeStream.Flush()
 }
 

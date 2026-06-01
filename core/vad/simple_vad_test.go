@@ -218,6 +218,28 @@ func TestSimpleVADRejectsNilFrames(t *testing.T) {
 	assertNoVADEvent(t, stream)
 }
 
+func TestSimpleVADRejectsInvalidFrameMetadata(t *testing.T) {
+	stream, err := NewSimpleVAD(0.05).Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	defer stream.Close()
+
+	for _, frame := range []*model.AudioFrame{
+		audioFrame(0, 160, 6000),
+		{
+			Data:              audioFrame(16000, 160, 6000).Data,
+			SampleRate:        16000,
+			SamplesPerChannel: 160,
+		},
+	} {
+		if err := stream.PushFrame(frame); err == nil {
+			t.Fatalf("PushFrame(%#v) error = nil, want error", frame)
+		}
+	}
+	assertNoVADEvent(t, stream)
+}
+
 func TestSimpleVADUsesConfiguredInferenceSampleRateForSampleIndex(t *testing.T) {
 	stream, err := NewSimpleVADWithOptions(SimpleVADOptions{
 		Threshold:  0.05,

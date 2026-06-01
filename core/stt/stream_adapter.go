@@ -53,11 +53,14 @@ type streamAdapterWrapper struct {
 	frameBuffer []*model.AudioFrame
 	vadStream   vad.VADStream
 	rateGuard   SampleRateGuard
+	startOffset float64
+	startTime   float64
 }
 
 type streamAdapterInput struct {
 	frame *model.AudioFrame
 	flush bool
+	end   bool
 }
 
 func (a *StreamAdapter) Stream(ctx context.Context, language string) (RecognizeStream, error) {
@@ -105,6 +108,12 @@ func (w *streamAdapterWrapper) run() {
 						return
 					}
 					continue
+				}
+				if input.end {
+					if err := vadStream.EndInput(); err != nil {
+						w.sendErr(err)
+					}
+					return
 				}
 				if err := vadStream.PushFrame(input.frame); err != nil {
 					w.sendErr(err)
@@ -189,6 +198,30 @@ func (w *streamAdapterWrapper) sendErr(err error) {
 	}
 }
 
+func (w *streamAdapterWrapper) StartTimeOffset() float64 {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.startOffset
+}
+
+func (w *streamAdapterWrapper) SetStartTimeOffset(offset float64) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.startOffset = offset
+}
+
+func (w *streamAdapterWrapper) StartTime() float64 {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.startTime
+}
+
+func (w *streamAdapterWrapper) SetStartTime(startTime float64) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.startTime = startTime
+}
+
 func (w *streamAdapterWrapper) PushFrame(frame *model.AudioFrame) error {
 	w.mu.Lock()
 	if w.closed {
@@ -238,7 +271,7 @@ func (w *streamAdapterWrapper) EndInput() error {
 	w.inputEnded = true
 	w.mu.Unlock()
 
-	w.inputCh <- streamAdapterInput{flush: true}
+	w.inputCh <- streamAdapterInput{end: true}
 	return nil
 }
 

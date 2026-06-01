@@ -473,6 +473,28 @@ func TestUpdateOptionsPreservesExplicitZeroResourceValues(t *testing.T) {
 	}
 }
 
+func TestUpdateOptionsPreservesExplicitZeroTimeoutValues(t *testing.T) {
+	server := NewAgentServer(WorkerOptions{
+		SessionEndTimeoutSeconds:      120,
+		ShutdownProcessTimeoutSeconds: 30,
+	})
+
+	err := server.UpdateOptions(WorkerOptions{
+		SessionEndTimeoutSecondsSet:      true,
+		ShutdownProcessTimeoutSecondsSet: true,
+	})
+	if err != nil {
+		t.Fatalf("UpdateOptions() error = %v", err)
+	}
+
+	if server.Options.SessionEndTimeoutSeconds != 0 {
+		t.Fatalf("SessionEndTimeoutSeconds = %v, want explicit zero", server.Options.SessionEndTimeoutSeconds)
+	}
+	if server.Options.ShutdownProcessTimeoutSeconds != 0 {
+		t.Fatalf("ShutdownProcessTimeoutSeconds = %v, want explicit zero", server.Options.ShutdownProcessTimeoutSeconds)
+	}
+}
+
 func TestUpdateOptionsMarksExplicitAgentNameAsNotEnvironment(t *testing.T) {
 	t.Setenv("LIVEKIT_AGENT_NAME", "env-agent")
 	server := NewAgentServer(WorkerOptions{})
