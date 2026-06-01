@@ -104,6 +104,7 @@ type WorkerOptions struct {
 	Version        string
 	Host           string
 	Port           int
+	PortSet        bool
 	WSURL          string
 	LoadFunc       func(*AgentServer) float64
 	// WSRL is kept for backward compatibility. Prefer WSURL for new code.
@@ -115,6 +116,7 @@ type WorkerOptions struct {
 	DevMode                          bool
 	LogLevel                         string
 	PrometheusPort                   int
+	PrometheusPortSet                bool
 	PrometheusMultiprocDir           string
 	LoadThreshold                    float64
 	LoadThresholdSet                 bool
@@ -470,8 +472,9 @@ func mergeWorkerOptions(current WorkerOptions, next WorkerOptions) WorkerOptions
 	if next.Host != "" {
 		current.Host = next.Host
 	}
-	if next.Port != 0 {
+	if next.PortSet || next.Port != 0 {
 		current.Port = next.Port
+		current.PortSet = true
 	}
 	if next.WSURL != "" {
 		current.WSURL = next.WSURL
@@ -495,8 +498,9 @@ func mergeWorkerOptions(current WorkerOptions, next WorkerOptions) WorkerOptions
 	if next.HTTPProxy != "" {
 		current.HTTPProxy = next.HTTPProxy
 	}
-	if next.PrometheusPort != 0 {
+	if next.PrometheusPortSet || next.PrometheusPort != 0 {
 		current.PrometheusPort = next.PrometheusPort
+		current.PrometheusPortSet = true
 	}
 	if next.PrometheusMultiprocDir != "" {
 		current.PrometheusMultiprocDir = next.PrometheusMultiprocDir
@@ -583,7 +587,7 @@ func resolveWorkerOptions(opts WorkerOptions) WorkerOptions {
 		}
 	}
 	opts.LogLevel = strings.ToUpper(opts.LogLevel)
-	if opts.Port == 0 && !opts.DevMode {
+	if opts.Port == 0 && !opts.DevMode && !opts.PortSet {
 		opts.Port = defaultProdHTTPPort
 	}
 	if opts.LoadThreshold == 0 && !opts.LoadThresholdSet {
@@ -703,7 +707,7 @@ func (s *AgentServer) startWorkerHTTPServer() (*http.Server, error) {
 }
 
 func (s *AgentServer) startPrometheusServer() (*telemetry.HttpServer, error) {
-	if s.Options.PrometheusPort == 0 {
+	if s.Options.PrometheusPort == 0 && !s.Options.PrometheusPortSet {
 		return nil, nil
 	}
 	server := telemetry.NewHttpServer(s.Options.Host, s.Options.PrometheusPort)

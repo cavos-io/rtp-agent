@@ -361,6 +361,26 @@ func TestStartPrometheusServerUsesConfiguredPort(t *testing.T) {
 	}
 }
 
+func TestStartPrometheusServerEnablesExplicitZeroPort(t *testing.T) {
+	server := NewAgentServer(WorkerOptions{
+		Host:              "127.0.0.1",
+		PrometheusPortSet: true,
+	})
+
+	prometheusServer, err := server.startPrometheusServer()
+	if err != nil {
+		t.Fatalf("startPrometheusServer() error = %v", err)
+	}
+	if prometheusServer == nil {
+		t.Fatal("startPrometheusServer() = nil, want server for explicit zero Prometheus port")
+	}
+	defer prometheusServer.Stop(context.Background())
+
+	if prometheusServer.Port == 0 {
+		t.Fatal("Prometheus server Port = 0, want assigned listener port")
+	}
+}
+
 func TestConfigurePrometheusMultiprocDirSetsEnvironment(t *testing.T) {
 	t.Setenv("PROMETHEUS_MULTIPROC_DIR", "")
 	dir := t.TempDir()
@@ -438,6 +458,31 @@ func TestUpdateOptionsMergesConfiguredValuesBeforeRun(t *testing.T) {
 	}
 	if server.Options.Permissions != permissions {
 		t.Fatal("Permissions was not replaced with updated pointer")
+	}
+}
+
+func TestUpdateOptionsPreservesExplicitZeroPorts(t *testing.T) {
+	server := NewAgentServer(WorkerOptions{
+		Port:           8081,
+		PrometheusPort: 9090,
+	})
+
+	err := server.UpdateOptions(WorkerOptions{
+		PortSet:           true,
+		PrometheusPortSet: true,
+	})
+	if err != nil {
+		t.Fatalf("UpdateOptions() error = %v", err)
+	}
+
+	if server.Options.Port != 0 {
+		t.Fatalf("Port = %d, want explicit zero", server.Options.Port)
+	}
+	if server.Options.PrometheusPort != 0 {
+		t.Fatalf("PrometheusPort = %d, want explicit zero", server.Options.PrometheusPort)
+	}
+	if !server.Options.PrometheusPortSet {
+		t.Fatal("PrometheusPortSet = false, want true")
 	}
 }
 
