@@ -168,6 +168,32 @@ func TestFallbackAdapterExposesReferenceMetadata(t *testing.T) {
 	}
 }
 
+func TestStreamAdapterForwardsPrewarm(t *testing.T) {
+	wrapped := &fakeMetadataSTT{}
+	adapter := NewStreamAdapter(wrapped, &fakeStreamAdapterVAD{})
+
+	Prewarm(adapter)
+
+	if !wrapped.prewarmed {
+		t.Fatal("StreamAdapter Prewarm did not call wrapped STT Prewarm")
+	}
+}
+
+func TestFallbackAdapterPrewarmsPrimaryProvider(t *testing.T) {
+	primary := &fakeMetadataSTT{capabilities: STTCapabilities{Streaming: true}}
+	fallback := &fakeMetadataSTT{capabilities: STTCapabilities{Streaming: true}}
+	adapter := NewFallbackAdapter([]STT{primary, fallback})
+
+	Prewarm(adapter)
+
+	if !primary.prewarmed {
+		t.Fatal("FallbackAdapter Prewarm did not call primary STT Prewarm")
+	}
+	if fallback.prewarmed {
+		t.Fatal("FallbackAdapter Prewarm called fallback STT, want primary only")
+	}
+}
+
 type fakeStreamTiming struct {
 	startTimeOffset float64
 	startTime       float64

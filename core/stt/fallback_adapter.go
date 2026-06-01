@@ -141,6 +141,10 @@ func (f *FallbackAdapter) Provider() string {
 	return "livekit"
 }
 
+func (f *FallbackAdapter) Prewarm() {
+	Prewarm(f.stts[0])
+}
+
 func (f *FallbackAdapter) Capabilities() STTCapabilities {
 	return f.capabilities
 }
