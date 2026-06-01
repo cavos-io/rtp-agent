@@ -54,6 +54,7 @@ type GladiaSTT struct {
 	translationContext                 string
 	translationInformal                bool
 	customVocabulary                   []any
+	customSpelling                     map[string][]string
 	preProcessingAudioEnhancer         bool
 	preProcessingSpeechThreshold       float64
 }
@@ -83,6 +84,20 @@ func WithGladiaCodeSwitching(codeSwitching bool) GladiaSTTOption {
 func WithGladiaCustomVocabulary(vocabulary []any) GladiaSTTOption {
 	return func(s *GladiaSTT) {
 		s.customVocabulary = append([]any(nil), vocabulary...)
+	}
+}
+
+func WithGladiaCustomSpelling(spelling map[string][]string) GladiaSTTOption {
+	return func(s *GladiaSTT) {
+		if spelling == nil {
+			s.customSpelling = nil
+			return
+		}
+		copied := make(map[string][]string, len(spelling))
+		for word, variants := range spelling {
+			copied[word] = append([]string(nil), variants...)
+		}
+		s.customSpelling = copied
 	}
 }
 
@@ -210,6 +225,10 @@ func buildGladiaStreamingConfig(s *GladiaSTT) map[string]any {
 	if len(s.customVocabulary) > 0 {
 		realtime["custom_vocabulary"] = true
 		realtime["custom_vocabulary_config"] = map[string]any{"vocabulary": s.customVocabulary}
+	}
+	if len(s.customSpelling) > 0 {
+		realtime["custom_spelling"] = true
+		realtime["custom_spelling_config"] = map[string]any{"spelling_dictionary": s.customSpelling}
 	}
 	if s.translationEnabled {
 		realtime["translation"] = true

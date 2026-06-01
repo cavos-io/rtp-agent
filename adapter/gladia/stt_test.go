@@ -37,6 +37,10 @@ func TestBuildGladiaStreamingConfigMatchesReference(t *testing.T) {
 		WithGladiaLanguages([]string{"en", "fr"}),
 		WithGladiaCodeSwitching(false),
 		WithGladiaCustomVocabulary([]any{"LiveKit", map[string]any{"value": "Cavos"}}),
+		WithGladiaCustomSpelling(map[string][]string{
+			"livekit": {"LiveKit", "Live Kit"},
+			"cavos":   {"Cavos"},
+		}),
 		WithGladiaTranslation([]string{"es"}),
 		WithGladiaPreProcessing(true, 0.7),
 	)
@@ -57,6 +61,14 @@ func TestBuildGladiaStreamingConfigMatchesReference(t *testing.T) {
 	realtime := config["realtime_processing"].(map[string]any)
 	if realtime["words_accurate_timestamps"] != false || realtime["custom_vocabulary"] != true || realtime["translation"] != true {
 		t.Fatalf("realtime = %+v, want timestamps false with custom vocab and translation", realtime)
+	}
+	if realtime["custom_spelling"] != true {
+		t.Fatalf("custom_spelling = %#v, want true", realtime["custom_spelling"])
+	}
+	customSpellingConfig := realtime["custom_spelling_config"].(map[string]any)
+	spellingDictionary := customSpellingConfig["spelling_dictionary"].(map[string][]string)
+	if got := spellingDictionary["livekit"]; len(got) != 2 || got[0] != "LiveKit" || got[1] != "Live Kit" {
+		t.Fatalf("livekit spelling = %+v, want LiveKit/Live Kit", got)
 	}
 	messages := config["messages_config"].(map[string]any)
 	if messages["receive_partial_transcripts"] != true || messages["receive_final_transcripts"] != true {
