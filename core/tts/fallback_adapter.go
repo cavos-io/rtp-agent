@@ -32,6 +32,7 @@ type FallbackAdapter struct {
 	closed bool
 
 	nextRecoveryID uint64
+	recoveryWG     sync.WaitGroup
 }
 
 type fallbackTTSStatus struct {
@@ -137,6 +138,7 @@ func (f *FallbackAdapter) Close() error {
 	for _, cancel := range cancels {
 		cancel()
 	}
+	f.recoveryWG.Wait()
 
 	var errs []error
 	for _, tts := range f.ttss {
@@ -309,9 +311,11 @@ func (f *FallbackAdapter) tryRecoverChunked(index int, text string) {
 	f.status[index].recoveryID = recoveryID
 	f.status[index].recoveryCancel = cancel
 	tts := f.ttss[index]
+	f.recoveryWG.Add(1)
 	f.mu.Unlock()
 
 	go func() {
+		defer f.recoveryWG.Done()
 		defer f.finishRecovery(index, recoveryID)
 
 		stream, err := tts.Synthesize(ctx, text)
@@ -372,9 +376,11 @@ func (f *FallbackAdapter) tryRecoverStream(index int, inputs []fallbackSynthesiz
 	f.status[index].recoveryID = recoveryID
 	f.status[index].recoveryCancel = cancel
 	tts := f.ttss[index]
+	f.recoveryWG.Add(1)
 	f.mu.Unlock()
 
 	go func() {
+		defer f.recoveryWG.Done()
 		defer f.finishRecovery(index, recoveryID)
 
 		stream, err := streamForTTS(ctx, tts)
