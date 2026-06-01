@@ -794,9 +794,7 @@ func availabilityResponseForAccept(req *livekit.AvailabilityRequest, args JobAcc
 		args.Identity = agentIdentityForJobID(req.Job.Id)
 	}
 	attributes := make(map[string]string, len(args.Attributes)+1)
-	if agentName != "" {
-		attributes[participantAttributeAgentName] = agentName
-	}
+	attributes[participantAttributeAgentName] = agentName
 	for key, value := range args.Attributes {
 		attributes[key] = value
 	}

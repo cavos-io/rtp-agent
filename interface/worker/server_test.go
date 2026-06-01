@@ -1471,6 +1471,13 @@ func TestAvailabilityResponseAcceptsWithDefaultIdentity(t *testing.T) {
 	if availability.ParticipantIdentity != "agent-job_abc123" {
 		t.Fatalf("availability.ParticipantIdentity = %q, want default identity", availability.ParticipantIdentity)
 	}
+	agentName, ok := availability.ParticipantAttributes["lk.agent.name"]
+	if !ok {
+		t.Fatal("availability.ParticipantAttributes missing lk.agent.name")
+	}
+	if agentName != "" {
+		t.Fatalf("availability.ParticipantAttributes[lk.agent.name] = %q, want empty string", agentName)
+	}
 }
 
 func TestAvailabilityResponseAcceptUsesCustomArguments(t *testing.T) {
