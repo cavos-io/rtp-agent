@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/url"
 	"strings"
+	"time"
 
 	"github.com/cavos-io/rtp-agent/core/llm"
 	"github.com/sashabaranov/go-openai"
@@ -65,18 +66,34 @@ func (l *OpenAILLM) Chat(ctx context.Context, chatCtx *llm.ChatContext, opts ...
 
 	req := buildOpenAIChatCompletionRequest(l.model, chatCtx, options)
 
-	stream, err := l.client.CreateChatCompletionStream(ctx, req)
-	if err != nil {
-		if cancel != nil {
-			cancel()
+	var lastErr error
+	for attempt := 0; attempt <= connectOptions.MaxRetry; attempt++ {
+		stream, err := l.client.CreateChatCompletionStream(ctx, req)
+		if err == nil {
+			return &openaiStream{
+				stream: stream,
+				cancel: cancel,
+			}, nil
 		}
-		return nil, mapOpenAIError(err)
+		lastErr = mapOpenAIError(err)
+		if attempt == connectOptions.MaxRetry || !openAIShouldRetryError(lastErr) {
+			if cancel != nil {
+				cancel()
+			}
+			return nil, lastErr
+		}
+		if err := waitOpenAIRetryInterval(ctx, connectOptions.IntervalForRetry(attempt)); err != nil {
+			if cancel != nil {
+				cancel()
+			}
+			return nil, err
+		}
 	}
 
-	return &openaiStream{
-		stream: stream,
-		cancel: cancel,
-	}, nil
+	if cancel != nil {
+		cancel()
+	}
+	return nil, lastErr
 }
 
 func mapOpenAIError(err error) error {
@@ -89,6 +106,9 @@ func mapOpenAIError(err error) error {
 	var apiErr *openai.APIError
 	if errors.As(err, &apiErr) && apiErr.HTTPStatusCode != 0 {
 		return llm.CreateAPIErrorFromHTTP(apiErr.Message, apiErr.HTTPStatusCode, "", apiErr)
+	}
+	if errors.As(err, &apiErr) {
+		return llm.NewAPIError(apiErr.Message, apiErr, true)
 	}
 	var requestErr *openai.RequestError
 	if errors.As(err, &requestErr) && requestErr.HTTPStatusCode != 0 {
@@ -104,6 +124,25 @@ func openAIConnectionErrorMessage(err error) string {
 		return urlErr.Err.Error()
 	}
 	return err.Error()
+}
+
+func openAIShouldRetryError(err error) bool {
+	var apiErr *llm.APIError
+	return errors.As(err, &apiErr) && apiErr.Retryable
+}
+
+func waitOpenAIRetryInterval(ctx context.Context, interval time.Duration) error {
+	if interval <= 0 {
+		return nil
+	}
+	timer := time.NewTimer(interval)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
 }
 
 func buildOpenAIChatCompletionRequest(model string, chatCtx *llm.ChatContext, options *llm.ChatOptions) openai.ChatCompletionRequest {
@@ -140,7 +179,7 @@ func buildOpenAIChatCompletionRequest(model string, chatCtx *llm.ChatContext, op
 		req.ResponseFormat = responseFormat
 	}
 
-	applyOpenAIExtraParams(&req, options.ExtraParams)
+	applyOpenAIExtraParams(&req, dropUnsupportedOpenAIParams(model, options.ExtraParams, len(options.Tools) > 0))
 	return req
 }
 
@@ -301,6 +340,66 @@ func applyOpenAIExtraParams(req *openai.ChatCompletionRequest, params map[string
 			}
 		}
 	}
+}
+
+var openAIReasoningUnsupportedParams = map[string]struct{}{
+	"temperature":       {},
+	"top_p":             {},
+	"presence_penalty":  {},
+	"frequency_penalty": {},
+	"logit_bias":        {},
+	"logprobs":          {},
+	"top_logprobs":      {},
+	"n":                 {},
+}
+
+var xAIReasoningUnsupportedParams = map[string]struct{}{
+	"presence_penalty":  {},
+	"frequency_penalty": {},
+	"stop":              {},
+}
+
+func dropUnsupportedOpenAIParams(model string, params map[string]any, hasTools bool) map[string]any {
+	if len(params) == 0 {
+		return params
+	}
+	modelName := model
+	if slash := strings.LastIndex(modelName, "/"); slash >= 0 {
+		modelName = modelName[slash+1:]
+	}
+	unsupported := unsupportedOpenAIParamsForModel(modelName)
+	if len(unsupported) == 0 && !(hasTools && openAIReasoningEffortToolIncompatible(modelName)) {
+		return params
+	}
+	filtered := make(map[string]any, len(params))
+	for key, value := range params {
+		if _, drop := unsupported[key]; drop {
+			continue
+		}
+		if key == "reasoning_effort" && hasTools && openAIReasoningEffortToolIncompatible(modelName) {
+			continue
+		}
+		filtered[key] = value
+	}
+	return filtered
+}
+
+func unsupportedOpenAIParamsForModel(modelName string) map[string]struct{} {
+	for _, prefix := range []string{"o1", "o3", "o4", "gpt-5"} {
+		if strings.HasPrefix(modelName, prefix) {
+			return openAIReasoningUnsupportedParams
+		}
+	}
+	for _, prefix := range []string{"grok-4-1-fast-reasoning", "grok-4.20-0309-reasoning", "grok-4.20-multi-agent"} {
+		if strings.HasPrefix(modelName, prefix) {
+			return xAIReasoningUnsupportedParams
+		}
+	}
+	return nil
+}
+
+func openAIReasoningEffortToolIncompatible(modelName string) bool {
+	return strings.HasPrefix(modelName, "gpt-5.2") || strings.HasPrefix(modelName, "gpt-5.4")
 }
 
 func asFloat32(value any) (float32, bool) {
@@ -606,7 +705,7 @@ func (s *openaiStream) Next() (*llm.ChatChunk, error) {
 		if errors.Is(err, io.EOF) {
 			return nil, io.EOF
 		}
-		return nil, err
+		return nil, mapOpenAIError(err)
 	}
 
 	if len(resp.Choices) == 0 {

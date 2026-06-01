@@ -7,11 +7,11 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"io"
 	"net/http"
 	"net/url"
 	"strings"
+	"time"
 
 	"github.com/cavos-io/rtp-agent/core/llm"
 )
@@ -104,6 +104,38 @@ func (l *AnthropicLLM) Chat(ctx context.Context, chatCtx *llm.ChatContext, opts 
 	}
 
 	jsonBody, _ := json.Marshal(body)
+	var lastErr error
+	for attempt := 0; attempt <= connectOptions.MaxRetry; attempt++ {
+		resp, err := l.startAnthropicStream(ctx, jsonBody)
+		if err == nil {
+			return &anthropicStream{
+				resp:   resp,
+				reader: bufio.NewReader(resp.Body),
+				cancel: cancel,
+			}, nil
+		}
+		lastErr = err
+		if attempt == connectOptions.MaxRetry || !anthropicShouldRetryError(lastErr) {
+			if cancel != nil {
+				cancel()
+			}
+			return nil, lastErr
+		}
+		if err := waitAnthropicRetryInterval(ctx, connectOptions.IntervalForRetry(attempt)); err != nil {
+			if cancel != nil {
+				cancel()
+			}
+			return nil, err
+		}
+	}
+
+	if cancel != nil {
+		cancel()
+	}
+	return nil, lastErr
+}
+
+func (l *AnthropicLLM) startAnthropicStream(ctx context.Context, jsonBody []byte) (*http.Response, error) {
 	req, err := http.NewRequestWithContext(ctx, "POST", "https://api.anthropic.com/v1/messages", bytes.NewBuffer(jsonBody))
 	if err != nil {
 		return nil, err
@@ -115,30 +147,38 @@ func (l *AnthropicLLM) Chat(ctx context.Context, chatCtx *llm.ChatContext, opts 
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		if cancel != nil {
-			cancel()
-		}
 		if errors.Is(err, context.DeadlineExceeded) {
 			return nil, llm.NewAPITimeoutError("")
 		}
 		return nil, llm.NewAPIConnectionError(anthropicConnectionErrorMessage(err))
 	}
-
 	if resp.StatusCode != http.StatusOK {
 		respBody, _ := io.ReadAll(resp.Body)
 		resp.Body.Close()
-		if cancel != nil {
-			cancel()
-		}
-		body := strings.TrimSpace(string(respBody))
-		return nil, llm.CreateAPIErrorFromHTTP(body, resp.StatusCode, anthropicRequestID(resp.Header), body)
+		message, body := parseAnthropicErrorBody(respBody)
+		return nil, llm.CreateAPIErrorFromHTTP(message, resp.StatusCode, anthropicRequestID(resp.Header), body)
 	}
+	return resp, nil
+}
 
-	return &anthropicStream{
-		resp:   resp,
-		reader: bufio.NewReader(resp.Body),
-		cancel: cancel,
-	}, nil
+func parseAnthropicErrorBody(respBody []byte) (string, any) {
+	bodyText := strings.TrimSpace(string(respBody))
+	if bodyText == "" {
+		return "", nil
+	}
+	var parsed map[string]any
+	if err := json.Unmarshal(respBody, &parsed); err != nil {
+		return bodyText, bodyText
+	}
+	message := bodyText
+	if errorBody, ok := parsed["error"].(map[string]any); ok {
+		if nestedMessage, ok := errorBody["message"].(string); ok && nestedMessage != "" {
+			message = nestedMessage
+		}
+	} else if topLevelMessage, ok := parsed["message"].(string); ok && topLevelMessage != "" {
+		message = topLevelMessage
+	}
+	return message, parsed
 }
 
 func anthropicConnectionErrorMessage(err error) string {
@@ -147,6 +187,25 @@ func anthropicConnectionErrorMessage(err error) string {
 		return urlErr.Err.Error()
 	}
 	return err.Error()
+}
+
+func anthropicShouldRetryError(err error) bool {
+	var apiErr *llm.APIError
+	return errors.As(err, &apiErr) && apiErr.Retryable
+}
+
+func waitAnthropicRetryInterval(ctx context.Context, interval time.Duration) error {
+	if interval <= 0 {
+		return nil
+	}
+	timer := time.NewTimer(interval)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
 }
 
 func applyAnthropicExtraParams(body map[string]any, params map[string]any) {
@@ -570,7 +629,8 @@ func (s *anthropicStream) Next() (*llm.ChatChunk, error) {
 			return nil, io.EOF
 
 		case "error":
-			return nil, fmt.Errorf("anthropic stream error: %s", data)
+			message, body := parseAnthropicErrorBody([]byte(data))
+			return nil, llm.NewAPIError(message, body, true)
 		}
 	}
 }

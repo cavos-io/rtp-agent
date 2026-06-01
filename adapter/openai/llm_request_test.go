@@ -41,7 +41,7 @@ func TestOpenAIChatAppliesConnectOptionsTimeoutToRequestContext(t *testing.T) {
 	_, err := model.Chat(
 		context.Background(),
 		llm.NewChatContext(),
-		llm.WithConnectOptions(llm.APIConnectOptions{Timeout: 75 * time.Millisecond}),
+		llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 0, Timeout: 75 * time.Millisecond}),
 	)
 
 	var connectionErr *llm.APIConnectionError
@@ -57,8 +57,10 @@ func TestOpenAIChatAppliesConnectOptionsTimeoutToRequestContext(t *testing.T) {
 }
 
 func TestOpenAIChatAppliesDefaultConnectOptionsTimeoutToRequestContext(t *testing.T) {
-	sentinelErr := errors.New("stop after context capture")
-	capture := &captureDeadlineHTTPClient{err: sentinelErr}
+	capture := &captureDeadlineHTTPClient{
+		statusCode:   http.StatusBadRequest,
+		responseBody: `{"error":{"message":"bad request","type":"invalid_request_error","code":"bad_request"}}`,
+	}
 	config := openaisdk.DefaultConfig("test-key")
 	config.HTTPClient = capture
 	model := NewOpenAILLMWithConfig(config)
@@ -66,9 +68,9 @@ func TestOpenAIChatAppliesDefaultConnectOptionsTimeoutToRequestContext(t *testin
 
 	_, err := model.Chat(context.Background(), llm.NewChatContext())
 
-	var connectionErr *llm.APIConnectionError
-	if !errors.As(err, &connectionErr) {
-		t.Fatalf("Chat error = %T %v, want APIConnectionError", err, err)
+	var statusErr *llm.APIStatusError
+	if !errors.As(err, &statusErr) {
+		t.Fatalf("Chat error = %T %v, want APIStatusError", err, err)
 	}
 	if !capture.hasDeadline {
 		t.Fatal("request context has no deadline, want default connect timeout deadline")
@@ -208,7 +210,11 @@ func TestOpenAIChatReturnsAPIStatusErrorOnHTTPError(t *testing.T) {
 	model := NewOpenAILLMWithConfig(config)
 	model.model = "gpt-4o"
 
-	_, err := model.Chat(context.Background(), llm.NewChatContext())
+	_, err := model.Chat(
+		context.Background(),
+		llm.NewChatContext(),
+		llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 0}),
+	)
 
 	var statusErr *llm.APIStatusError
 	if !errors.As(err, &statusErr) {
@@ -232,7 +238,11 @@ func TestOpenAIChatReturnsAPITimeoutErrorOnTransportDeadline(t *testing.T) {
 	model := NewOpenAILLMWithConfig(config)
 	model.model = "gpt-4o"
 
-	_, err := model.Chat(context.Background(), llm.NewChatContext())
+	_, err := model.Chat(
+		context.Background(),
+		llm.NewChatContext(),
+		llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 0}),
+	)
 
 	var timeoutErr *llm.APITimeoutError
 	if !errors.As(err, &timeoutErr) {
@@ -243,6 +253,123 @@ func TestOpenAIChatReturnsAPITimeoutErrorOnTransportDeadline(t *testing.T) {
 	}
 	if !timeoutErr.Retryable {
 		t.Fatal("Retryable = false, want timeout errors retryable")
+	}
+}
+
+func TestOpenAIChatRetriesRetryableSetupAPIError(t *testing.T) {
+	capture := &sequenceHTTPClient{responses: []*http.Response{
+		openAITestResponse(http.StatusTooManyRequests, `{"error":{"message":"rate limit","type":"rate_limit","code":"rate_limit"}}`),
+		openAITestResponse(http.StatusOK, "data: [DONE]\n\n"),
+	}}
+	config := openaisdk.DefaultConfig("test-key")
+	config.HTTPClient = capture
+	model := NewOpenAILLMWithConfig(config)
+	model.model = "gpt-4o"
+
+	stream, err := model.Chat(
+		context.Background(),
+		llm.NewChatContext(),
+		llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 1}),
+	)
+	if err != nil {
+		t.Fatalf("Chat() error = %v, want retry success", err)
+	}
+	_ = stream.Close()
+	if capture.calls != 2 {
+		t.Fatalf("HTTP calls = %d, want initial failure plus retry", capture.calls)
+	}
+}
+
+func TestOpenAIChatDoesNotRetryNonRetryableSetupAPIError(t *testing.T) {
+	capture := &sequenceHTTPClient{responses: []*http.Response{
+		openAITestResponse(http.StatusBadRequest, `{"error":{"message":"bad request","type":"invalid_request_error","code":"bad_request"}}`),
+		openAITestResponse(http.StatusOK, "data: [DONE]\n\n"),
+	}}
+	config := openaisdk.DefaultConfig("test-key")
+	config.HTTPClient = capture
+	model := NewOpenAILLMWithConfig(config)
+	model.model = "gpt-4o"
+
+	_, err := model.Chat(
+		context.Background(),
+		llm.NewChatContext(),
+		llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 1}),
+	)
+
+	var statusErr *llm.APIStatusError
+	if !errors.As(err, &statusErr) {
+		t.Fatalf("Chat error = %T %v, want APIStatusError", err, err)
+	}
+	if capture.calls != 1 {
+		t.Fatalf("HTTP calls = %d, want no retry for non-retryable status", capture.calls)
+	}
+}
+
+func TestOpenAIStreamReturnsAPIErrorOnErrorEvent(t *testing.T) {
+	capture := &sequenceHTTPClient{responses: []*http.Response{
+		openAITestResponse(http.StatusOK, `data: {"error":{"message":"stream failed","type":"server_error","code":"server_error"}}`+"\n\n"),
+	}}
+	config := openaisdk.DefaultConfig("test-key")
+	config.HTTPClient = capture
+	model := NewOpenAILLMWithConfig(config)
+	model.model = "gpt-4o"
+
+	stream, err := model.Chat(
+		context.Background(),
+		llm.NewChatContext(),
+		llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 0}),
+	)
+	if err != nil {
+		t.Fatalf("Chat() error = %v", err)
+	}
+	defer stream.Close()
+
+	_, err = stream.Next()
+
+	var apiErr *llm.APIError
+	if !errors.As(err, &apiErr) {
+		t.Fatalf("Next error = %T %v, want APIError", err, err)
+	}
+	if apiErr.Message != "stream failed" {
+		t.Fatalf("Message = %q, want OpenAI stream error message", apiErr.Message)
+	}
+	body, ok := apiErr.Body.(*openaisdk.APIError)
+	if !ok {
+		t.Fatalf("Body = %T %#v, want OpenAI APIError body", apiErr.Body, apiErr.Body)
+	}
+	if body.Type != "server_error" || body.Code != "server_error" {
+		t.Fatalf("Body = %#v, want server_error metadata", body)
+	}
+	if !apiErr.Retryable {
+		t.Fatal("Retryable = false, want stream API errors retryable")
+	}
+	var connectionErr *llm.APIConnectionError
+	if errors.As(err, &connectionErr) {
+		t.Fatalf("Next error = %T %v, want APIError not APIConnectionError", err, err)
+	}
+}
+
+type sequenceHTTPClient struct {
+	responses []*http.Response
+	calls     int
+}
+
+func (c *sequenceHTTPClient) Do(req *http.Request) (*http.Response, error) {
+	if c.calls >= len(c.responses) {
+		return nil, errors.New("unexpected HTTP call")
+	}
+	resp := c.responses[c.calls]
+	resp.Request = req
+	c.calls++
+	return resp, nil
+}
+
+func openAITestResponse(statusCode int, body string) *http.Response {
+	return &http.Response{
+		StatusCode: statusCode,
+		Status:     http.StatusText(statusCode),
+		Body:       io.NopCloser(strings.NewReader(body)),
+		Header:     make(http.Header),
 	}
 }
 
@@ -314,6 +441,56 @@ func TestBuildOpenAIChatCompletionRequestMapsResponseFormat(t *testing.T) {
 	}
 	if req.ResponseFormat.JSONSchema.Name != "WeatherAnswer" || !req.ResponseFormat.JSONSchema.Strict {
 		t.Fatalf("ResponseFormat.JSONSchema = %#v, want strict WeatherAnswer", req.ResponseFormat.JSONSchema)
+	}
+}
+
+func TestBuildOpenAIChatCompletionRequestDropsUnsupportedReasoningParams(t *testing.T) {
+	req := buildOpenAIChatCompletionRequest("openai/gpt-5", llm.NewChatContext(), &llm.ChatOptions{
+		ParallelToolCalls: true,
+		ExtraParams: map[string]any{
+			"temperature":           0.7,
+			"top_p":                 0.8,
+			"presence_penalty":      0.1,
+			"frequency_penalty":     0.2,
+			"n":                     2,
+			"logit_bias":            map[string]any{"42": 7.0},
+			"logprobs":              true,
+			"top_logprobs":          3,
+			"reasoning_effort":      "low",
+			"max_completion_tokens": 128,
+			"service_tier":          "priority",
+			"stop":                  []string{"END"},
+		},
+	})
+
+	if req.Temperature != 0 || req.TopP != 0 || req.PresencePenalty != 0 || req.FrequencyPenalty != 0 {
+		t.Fatalf("sampling params = %v/%v/%v/%v, want dropped zero values", req.Temperature, req.TopP, req.PresencePenalty, req.FrequencyPenalty)
+	}
+	if req.N != 0 || req.LogitBias != nil || req.LogProbs || req.TopLogProbs != 0 {
+		t.Fatalf("unsupported params not dropped: N=%d LogitBias=%#v LogProbs=%v TopLogProbs=%d", req.N, req.LogitBias, req.LogProbs, req.TopLogProbs)
+	}
+	if req.ReasoningEffort != "low" {
+		t.Fatalf("ReasoningEffort = %q, want preserved for reasoning model without tools", req.ReasoningEffort)
+	}
+	if req.MaxCompletionTokens != 128 || req.ServiceTier != openaisdk.ServiceTierPriority || len(req.Stop) != 1 || req.Stop[0] != "END" {
+		t.Fatalf("supported params = max_completion_tokens %d service_tier %q stop %#v, want preserved", req.MaxCompletionTokens, req.ServiceTier, req.Stop)
+	}
+}
+
+func TestBuildOpenAIChatCompletionRequestDropsReasoningEffortWithIncompatibleTools(t *testing.T) {
+	req := buildOpenAIChatCompletionRequest("gpt-5.2", llm.NewChatContext(), &llm.ChatOptions{
+		Tools: []llm.Tool{requestTestTool{}},
+		ExtraParams: map[string]any{
+			"reasoning_effort":      "low",
+			"max_completion_tokens": 128,
+		},
+	})
+
+	if req.ReasoningEffort != "" {
+		t.Fatalf("ReasoningEffort = %q, want dropped for gpt-5.2 with tools", req.ReasoningEffort)
+	}
+	if req.MaxCompletionTokens != 128 {
+		t.Fatalf("MaxCompletionTokens = %d, want preserved", req.MaxCompletionTokens)
 	}
 }
 

@@ -54,6 +54,30 @@ func (rt *captureRoundTripper) RoundTrip(req *http.Request) (*http.Response, err
 	}, nil
 }
 
+type sequenceRoundTripper struct {
+	responses []*http.Response
+	calls     int
+}
+
+func (rt *sequenceRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
+	defer req.Body.Close()
+	if rt.calls >= len(rt.responses) {
+		return nil, errors.New("unexpected HTTP call")
+	}
+	resp := rt.responses[rt.calls]
+	resp.Request = req
+	rt.calls++
+	return resp, nil
+}
+
+func anthropicTestResponse(statusCode int, body string) *http.Response {
+	return &http.Response{
+		StatusCode: statusCode,
+		Body:       io.NopCloser(strings.NewReader(body)),
+		Header:     make(http.Header),
+	}
+}
+
 func TestAnthropicChatReturnsAPITimeoutErrorOnTransportDeadline(t *testing.T) {
 	transport := &captureRoundTripper{err: context.DeadlineExceeded}
 	originalTransport := http.DefaultTransport
@@ -64,7 +88,11 @@ func TestAnthropicChatReturnsAPITimeoutErrorOnTransportDeadline(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewAnthropicLLM() error = %v", err)
 	}
-	_, err = model.Chat(context.Background(), llm.NewChatContext())
+	_, err = model.Chat(
+		context.Background(),
+		llm.NewChatContext(),
+		llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 0}),
+	)
 
 	var timeoutErr *llm.APITimeoutError
 	if !errors.As(err, &timeoutErr) {
@@ -88,7 +116,11 @@ func TestAnthropicChatReturnsAPIConnectionErrorOnTransportError(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewAnthropicLLM() error = %v", err)
 	}
-	_, err = model.Chat(context.Background(), llm.NewChatContext())
+	_, err = model.Chat(
+		context.Background(),
+		llm.NewChatContext(),
+		llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 0}),
+	)
 
 	var connectionErr *llm.APIConnectionError
 	if !errors.As(err, &connectionErr) {
@@ -191,7 +223,11 @@ func TestAnthropicChatReturnsAPIStatusErrorOnHTTPError(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewAnthropicLLM() error = %v", err)
 	}
-	_, err = model.Chat(context.Background(), llm.NewChatContext())
+	_, err = model.Chat(
+		context.Background(),
+		llm.NewChatContext(),
+		llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 0}),
+	)
 
 	var statusErr *llm.APIStatusError
 	if !errors.As(err, &statusErr) {
@@ -208,6 +244,100 @@ func TestAnthropicChatReturnsAPIStatusErrorOnHTTPError(t *testing.T) {
 	}
 	if !statusErr.Retryable {
 		t.Fatal("Retryable = false, want 429 retryable")
+	}
+}
+
+func TestAnthropicChatReturnsParsedAPIStatusErrorBody(t *testing.T) {
+	transport := &captureRoundTripper{
+		statusCode:   http.StatusBadRequest,
+		responseBody: `{"type":"error","error":{"type":"invalid_request_error","message":"missing messages"}}`,
+	}
+	originalTransport := http.DefaultTransport
+	http.DefaultTransport = transport
+	t.Cleanup(func() { http.DefaultTransport = originalTransport })
+
+	model, err := NewAnthropicLLM("test-key", "claude-test")
+	if err != nil {
+		t.Fatalf("NewAnthropicLLM() error = %v", err)
+	}
+	_, err = model.Chat(
+		context.Background(),
+		llm.NewChatContext(),
+		llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 0}),
+	)
+
+	var statusErr *llm.APIStatusError
+	if !errors.As(err, &statusErr) {
+		t.Fatalf("Chat error = %T %v, want APIStatusError", err, err)
+	}
+	if statusErr.Message != "missing messages (400 Bad Request)" {
+		t.Fatalf("Message = %q, want nested Anthropic error message", statusErr.Message)
+	}
+	body, ok := statusErr.Body.(map[string]any)
+	if !ok {
+		t.Fatalf("Body = %T %#v, want parsed JSON map", statusErr.Body, statusErr.Body)
+	}
+	errorBody, ok := body["error"].(map[string]any)
+	if !ok {
+		t.Fatalf("Body[error] = %T %#v, want parsed nested error", body["error"], body["error"])
+	}
+	if errorBody["type"] != "invalid_request_error" {
+		t.Fatalf("Body[error][type] = %#v, want invalid_request_error", errorBody["type"])
+	}
+}
+
+func TestAnthropicChatRetriesRetryableSetupAPIError(t *testing.T) {
+	transport := &sequenceRoundTripper{responses: []*http.Response{
+		anthropicTestResponse(http.StatusTooManyRequests, "rate limit"),
+		anthropicTestResponse(http.StatusOK, ""),
+	}}
+	originalTransport := http.DefaultTransport
+	http.DefaultTransport = transport
+	t.Cleanup(func() { http.DefaultTransport = originalTransport })
+
+	model, err := NewAnthropicLLM("test-key", "claude-test")
+	if err != nil {
+		t.Fatalf("NewAnthropicLLM() error = %v", err)
+	}
+	stream, err := model.Chat(
+		context.Background(),
+		llm.NewChatContext(),
+		llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 1}),
+	)
+	if err != nil {
+		t.Fatalf("Chat() error = %v, want retry success", err)
+	}
+	_ = stream.Close()
+	if transport.calls != 2 {
+		t.Fatalf("HTTP calls = %d, want initial failure plus retry", transport.calls)
+	}
+}
+
+func TestAnthropicChatDoesNotRetryNonRetryableSetupAPIError(t *testing.T) {
+	transport := &sequenceRoundTripper{responses: []*http.Response{
+		anthropicTestResponse(http.StatusBadRequest, "bad request"),
+		anthropicTestResponse(http.StatusOK, ""),
+	}}
+	originalTransport := http.DefaultTransport
+	http.DefaultTransport = transport
+	t.Cleanup(func() { http.DefaultTransport = originalTransport })
+
+	model, err := NewAnthropicLLM("test-key", "claude-test")
+	if err != nil {
+		t.Fatalf("NewAnthropicLLM() error = %v", err)
+	}
+	_, err = model.Chat(
+		context.Background(),
+		llm.NewChatContext(),
+		llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 1}),
+	)
+
+	var statusErr *llm.APIStatusError
+	if !errors.As(err, &statusErr) {
+		t.Fatalf("Chat error = %T %v, want APIStatusError", err, err)
+	}
+	if transport.calls != 1 {
+		t.Fatalf("HTTP calls = %d, want no retry for non-retryable status", transport.calls)
 	}
 }
 
@@ -283,6 +413,32 @@ func TestAnthropicStreamMapsCacheUsageMetadata(t *testing.T) {
 	}
 	if chunk.Usage.PromptTokens != 11 || chunk.Usage.CacheCreationTokens != 3 || chunk.Usage.CacheReadTokens != 5 {
 		t.Fatalf("Usage = %#v, want prompt and cache token counts", chunk.Usage)
+	}
+}
+
+func TestAnthropicStreamReturnsAPIErrorOnErrorEvent(t *testing.T) {
+	stream := &anthropicStream{
+		reader: bufio.NewReader(strings.NewReader(`data: {"type":"error","error":{"type":"overloaded_error","message":"server overloaded"}}` + "\n\n")),
+	}
+
+	_, err := stream.Next()
+
+	var apiErr *llm.APIError
+	if !errors.As(err, &apiErr) {
+		t.Fatalf("Next error = %T %v, want APIError", err, err)
+	}
+	if apiErr.Message != "server overloaded" {
+		t.Fatalf("Message = %q, want nested Anthropic stream error message", apiErr.Message)
+	}
+	body, ok := apiErr.Body.(map[string]any)
+	if !ok {
+		t.Fatalf("Body = %T %#v, want parsed JSON map", apiErr.Body, apiErr.Body)
+	}
+	if errorBody, ok := body["error"].(map[string]any); !ok || errorBody["type"] != "overloaded_error" {
+		t.Fatalf("Body[error] = %#v, want overloaded_error", body["error"])
+	}
+	if !apiErr.Retryable {
+		t.Fatal("Retryable = false, want stream API errors retryable")
 	}
 }
 
