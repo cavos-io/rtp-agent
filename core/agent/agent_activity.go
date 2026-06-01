@@ -48,6 +48,9 @@ type AgentActivity struct {
 
 	eouMu     sync.Mutex
 	eouCancel context.CancelFunc
+
+	userTurnExceededMu     sync.Mutex
+	userTurnExceededLocked bool
 }
 
 func NewAgentActivity(agentIntf AgentInterface, session *AgentSession) *AgentActivity {
@@ -170,6 +173,36 @@ func (a *AgentActivity) activeSpeechHandles() []*SpeechHandle {
 		}
 	}
 	return active
+}
+
+func (a *AgentActivity) OnUserTurnExceeded(ev UserTurnExceededEvent) {
+	a.queueMu.Lock()
+	schedulingPaused := a.schedulingPaused
+	a.queueMu.Unlock()
+	if schedulingPaused {
+		logger.Logger.Warnw("skipping user turn exceeded, speech scheduling is paused", nil, "num_words", ev.AccumulatedWordCount, "duration", ev.Duration)
+		return
+	}
+
+	a.userTurnExceededMu.Lock()
+	if a.userTurnExceededLocked {
+		a.userTurnExceededMu.Unlock()
+		return
+	}
+	a.userTurnExceededLocked = true
+	a.userTurnExceededMu.Unlock()
+
+	go func() {
+		defer func() {
+			a.userTurnExceededMu.Lock()
+			a.userTurnExceededLocked = false
+			a.userTurnExceededMu.Unlock()
+		}()
+
+		if err := a.AgentIntf.OnUserTurnExceeded(a.ctx, ev); err != nil {
+			logger.Logger.Errorw("error in OnUserTurnExceeded callback", err)
+		}
+	}()
 }
 
 func (a *AgentActivity) UpdateInstructions(ctx context.Context, instructions string) error {

@@ -28,6 +28,7 @@ type AgentInterface interface {
 	OnEnter()
 	OnExit()
 	OnUserTurnCompleted(ctx context.Context, chatCtx *llm.ChatContext, newMsg *llm.ChatMessage) error
+	OnUserTurnExceeded(ctx context.Context, ev UserTurnExceededEvent) error
 	GetAgent() *Agent
 	GetActivity() *AgentActivity
 }
@@ -147,6 +148,23 @@ func (a *Agent) Start(session *AgentSession, agentIntf AgentInterface) *AgentAct
 
 func (a *Agent) OnUserTurnCompleted(ctx context.Context, chatCtx *llm.ChatContext, newMsg *llm.ChatMessage) error {
 	return nil
+}
+
+const defaultUserTurnExceededInstructions = "The user has been speaking too long without giving a chance to reply. Politely cut in with a short reply or notice. Keep it short since the user cannot interrupt it."
+
+func (a *Agent) OnUserTurnExceeded(ctx context.Context, ev UserTurnExceededEvent) error {
+	if a.activity == nil || a.activity.Session == nil {
+		return ErrAgentSessionNotRunning
+	}
+	allowInterruptions := false
+	_, err := a.activity.Session.GenerateReplyWithOptions(ctx, GenerateReplyOptions{
+		UserInput:          ev.Transcript,
+		Instructions:       defaultUserTurnExceededInstructions,
+		AllowInterruptions: &allowInterruptions,
+		ToolChoice:         "none",
+		InputModality:      "text",
+	})
+	return err
 }
 
 // AgentTask represents a sub-agent execution that returns a result

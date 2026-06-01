@@ -266,6 +266,45 @@ func TestAgentUpdateChatContextWhileRunningReplacesInstructionMessage(t *testing
 	}
 }
 
+func TestAgentOnUserTurnExceededGeneratesNonInterruptibleCutIn(t *testing.T) {
+	agent := NewAgent("help")
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	session.activity = NewAgentActivity(agent, session)
+	agent.activity = session.activity
+	ev := UserTurnExceededEvent{Transcript: "I have been talking for too long"}
+
+	if err := agent.OnUserTurnExceeded(context.Background(), ev); err != nil {
+		t.Fatalf("OnUserTurnExceeded error = %v, want nil", err)
+	}
+
+	if len(session.activity.speechQueue) != 1 {
+		t.Fatalf("speech queue length = %d, want 1", len(session.activity.speechQueue))
+	}
+	handle := session.activity.speechQueue[0].speech
+	if handle.AllowInterruptions {
+		t.Fatal("handle.AllowInterruptions = true, want false for default exceeded-turn cut-in")
+	}
+	if handle.Generation.ToolChoice != "none" {
+		t.Fatalf("ToolChoice = %#v, want none", handle.Generation.ToolChoice)
+	}
+	if handle.Generation.Instructions == nil {
+		t.Fatal("Generation.Instructions = nil, want default exceeded-turn instructions")
+	}
+	if got := handle.Generation.Instructions.AsModality("text").String(); got == "" {
+		t.Fatal("Generation.Instructions text is empty, want default exceeded-turn instructions")
+	}
+	if len(session.ChatCtx.Items) != 1 {
+		t.Fatalf("session ChatCtx items = %d, want exceeded transcript committed", len(session.ChatCtx.Items))
+	}
+	msg, ok := session.ChatCtx.Items[0].(*llm.ChatMessage)
+	if !ok {
+		t.Fatalf("session ChatCtx item = %T, want *llm.ChatMessage", session.ChatCtx.Items[0])
+	}
+	if msg.Role != llm.ChatRoleUser || msg.TextContent() != ev.Transcript {
+		t.Fatalf("session ChatCtx message role/text = %s/%q, want user/%q", msg.Role, msg.TextContent(), ev.Transcript)
+	}
+}
+
 func TestAgentTaskCompleteIsOneTime(t *testing.T) {
 	task := NewAgentTask[string]("collect data")
 	if err := task.Complete("first"); err != nil {
