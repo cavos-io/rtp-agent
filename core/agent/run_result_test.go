@@ -211,6 +211,48 @@ func TestRunAssertUsesRecordedEventsForFunctionCalls(t *testing.T) {
 	}
 }
 
+func TestRunAssertUsesRecordedEventsForFunctionCallArguments(t *testing.T) {
+	result := NewRunResult(llm.NewChatContext())
+	functionCall := &llm.FunctionCall{
+		ID:        "fnc_1",
+		CallID:    "call_1",
+		Name:      "lookup",
+		Arguments: `{"city":"Jakarta","limit":3,"includeClosed":false}`,
+		CreatedAt: time.Now(),
+	}
+
+	result.RecordItem(functionCall)
+
+	err := result.Expect.IsFunctionCallWithArguments("lookup", map[string]any{
+		"city":          "Jakarta",
+		"limit":         float64(3),
+		"includeClosed": false,
+	}).HasError()
+	if err != nil {
+		t.Fatalf("IsFunctionCallWithArguments returned error = %v, want nil for matching arguments", err)
+	}
+}
+
+func TestRunAssertReportsFunctionCallArgumentMismatch(t *testing.T) {
+	result := NewRunResult(llm.NewChatContext())
+	functionCall := &llm.FunctionCall{
+		ID:        "fnc_1",
+		CallID:    "call_1",
+		Name:      "lookup",
+		Arguments: `{"city":"Jakarta"}`,
+		CreatedAt: time.Now(),
+	}
+
+	result.RecordItem(functionCall)
+
+	err := result.Expect.IsFunctionCallWithArguments("lookup", map[string]any{
+		"city": "Bandung",
+	}).HasError()
+	if err == nil {
+		t.Fatal("IsFunctionCallWithArguments error = nil, want mismatch error")
+	}
+}
+
 func TestRunAssertUsesRecordedEventsForFunctionCallOutputs(t *testing.T) {
 	result := NewRunResult(llm.NewChatContext())
 	output := &llm.FunctionCallOutput{

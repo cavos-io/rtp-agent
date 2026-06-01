@@ -2,8 +2,10 @@ package agent
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"reflect"
 	"strings"
 	"sync"
 	"time"
@@ -264,18 +266,50 @@ type RunAssert struct {
 }
 
 func (a *RunAssert) IsFunctionCall(name string) *RunAssert {
+	return a.IsFunctionCallWithArguments(name, nil)
+}
+
+func (a *RunAssert) IsFunctionCallWithArguments(name string, arguments map[string]any) *RunAssert {
 	found := false
+	var argumentErr error
 	for _, event := range a.events() {
 		fcEvent, ok := event.(*FunctionCallEvent)
 		if ok && fcEvent.Item.Name == name {
+			if len(arguments) > 0 {
+				if err := assertFunctionCallArguments(fcEvent.Item.Arguments, arguments); err != nil {
+					argumentErr = err
+					continue
+				}
+			}
 			found = true
 			break
 		}
 	}
 	if !found {
-		a.errors = append(a.errors, fmt.Errorf("expected function call %q, but not found", name))
+		if argumentErr != nil {
+			a.errors = append(a.errors, fmt.Errorf("expected function call %q with matching arguments: %w", name, argumentErr))
+		} else {
+			a.errors = append(a.errors, fmt.Errorf("expected function call %q, but not found", name))
+		}
 	}
 	return a
+}
+
+func assertFunctionCallArguments(raw string, expected map[string]any) error {
+	var actual map[string]any
+	if err := json.Unmarshal([]byte(raw), &actual); err != nil {
+		return fmt.Errorf("invalid JSON arguments: %w", err)
+	}
+	for key, expectedValue := range expected {
+		actualValue, ok := actual[key]
+		if !ok {
+			return fmt.Errorf("missing key %q", key)
+		}
+		if !reflect.DeepEqual(actualValue, expectedValue) {
+			return fmt.Errorf("for key %q, expected %#v, got %#v", key, expectedValue, actualValue)
+		}
+	}
+	return nil
 }
 
 func (a *RunAssert) ContainsMessage(role llm.ChatRole, content string) *RunAssert {
