@@ -61,6 +61,46 @@ func TestNewAgentSessionInitializesUsageCollector(t *testing.T) {
 	}
 }
 
+func TestNewAgentSessionAppliesReferenceOptionDefaults(t *testing.T) {
+	agent := NewAgent("test")
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+
+	opts := session.Options
+	if !opts.AllowInterruptions {
+		t.Fatal("AllowInterruptions = false, want default true")
+	}
+	if !opts.DiscardAudioIfUninterruptible {
+		t.Fatal("DiscardAudioIfUninterruptible = false, want default true")
+	}
+	if opts.MinInterruptionDuration != 0.5 {
+		t.Fatalf("MinInterruptionDuration = %v, want 0.5", opts.MinInterruptionDuration)
+	}
+	if opts.MinInterruptionWords != 0 {
+		t.Fatalf("MinInterruptionWords = %d, want 0", opts.MinInterruptionWords)
+	}
+	if opts.MinEndpointingDelay != 0.5 {
+		t.Fatalf("MinEndpointingDelay = %v, want 0.5", opts.MinEndpointingDelay)
+	}
+	if opts.MaxEndpointingDelay != 3.0 {
+		t.Fatalf("MaxEndpointingDelay = %v, want 3.0", opts.MaxEndpointingDelay)
+	}
+	if opts.FalseInterruptionTimeout != 2.0 {
+		t.Fatalf("FalseInterruptionTimeout = %v, want 2.0", opts.FalseInterruptionTimeout)
+	}
+	if !opts.ResumeFalseInterruption {
+		t.Fatal("ResumeFalseInterruption = false, want default true")
+	}
+	if opts.UserAwayTimeout != 15.0 {
+		t.Fatalf("UserAwayTimeout = %v, want 15.0", opts.UserAwayTimeout)
+	}
+	if !opts.PreemptiveGeneration {
+		t.Fatal("PreemptiveGeneration = false, want default true")
+	}
+	if opts.AECWarmupDuration != 3.0 {
+		t.Fatalf("AECWarmupDuration = %v, want 3.0", opts.AECWarmupDuration)
+	}
+}
+
 func TestAgentSessionGenerateReplyEmitsSpeechCreatedEvent(t *testing.T) {
 	agent := NewAgent("test")
 	session := NewAgentSession(agent, nil, AgentSessionOptions{AllowInterruptions: true})

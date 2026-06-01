@@ -172,9 +172,7 @@ type UserStateChangedEvent struct {
 func (e *UserStateChangedEvent) GetType() string { return "user_state_changed" }
 
 func NewAgentSession(agent AgentInterface, room *lksdk.Room, opts AgentSessionOptions) *AgentSession {
-	if opts.MaxToolSteps == 0 {
-		opts.MaxToolSteps = 3
-	}
+	opts = withAgentSessionOptionDefaults(opts)
 	baseAgent := agent.GetAgent()
 	return &AgentSession{
 		Agent:               agent,
@@ -203,6 +201,35 @@ func NewAgentSession(agent AgentInterface, room *lksdk.Room, opts AgentSessionOp
 		errorCh:             make(chan ErrorEvent, 10),
 		sipDTMFCh:           make(chan SipDTMFEvent, 10),
 	}
+}
+
+func withAgentSessionOptionDefaults(opts AgentSessionOptions) AgentSessionOptions {
+	opts.AllowInterruptions = true
+	opts.DiscardAudioIfUninterruptible = true
+	if opts.MinInterruptionDuration == 0 {
+		opts.MinInterruptionDuration = 0.5
+	}
+	if opts.MinEndpointingDelay == 0 {
+		opts.MinEndpointingDelay = 0.5
+	}
+	if opts.MaxEndpointingDelay == 0 {
+		opts.MaxEndpointingDelay = 3.0
+	}
+	if opts.MaxToolSteps == 0 {
+		opts.MaxToolSteps = 3
+	}
+	if opts.UserAwayTimeout == 0 {
+		opts.UserAwayTimeout = 15.0
+	}
+	if opts.FalseInterruptionTimeout == 0 {
+		opts.FalseInterruptionTimeout = 2.0
+	}
+	opts.ResumeFalseInterruption = true
+	opts.PreemptiveGeneration = true
+	if opts.AECWarmupDuration == 0 {
+		opts.AECWarmupDuration = 3.0
+	}
+	return opts
 }
 
 func (s *AgentSession) UserInputTranscribedEvents() <-chan UserInputTranscribedEvent {
