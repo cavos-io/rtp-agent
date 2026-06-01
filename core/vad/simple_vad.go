@@ -362,7 +362,8 @@ func (s *simpleVADStream) startSpeechFrames() []*model.AudioFrame {
 	frames := make([]*model.AudioFrame, 0, len(s.prefixFrames)+len(s.pendingSpeechFrames))
 	frames = append(frames, s.prefixFrames...)
 	frames = append(frames, s.pendingSpeechFrames...)
-	if s.options.MaxBufferedSpeechDuration <= 0 {
+	bufferLimit := s.maxBufferedDurationLimit()
+	if bufferLimit <= 0 {
 		return frames
 	}
 
@@ -370,7 +371,7 @@ func (s *simpleVADStream) startSpeechFrames() []*model.AudioFrame {
 	limited := frames[:0]
 	for _, frame := range frames {
 		duration := frameDuration(frame)
-		if buffered+duration > s.options.MaxBufferedSpeechDuration {
+		if buffered+duration > bufferLimit {
 			break
 		}
 		limited = append(limited, frame)
@@ -380,12 +381,19 @@ func (s *simpleVADStream) startSpeechFrames() []*model.AudioFrame {
 }
 
 func (s *simpleVADStream) appendSpeechFrame(frame *model.AudioFrame, duration float64) {
-	if s.options.MaxBufferedSpeechDuration > 0 &&
-		s.bufferedSpeechDuration+duration > s.options.MaxBufferedSpeechDuration {
+	bufferLimit := s.maxBufferedDurationLimit()
+	if bufferLimit > 0 && s.bufferedSpeechDuration+duration > bufferLimit {
 		return
 	}
 	s.speechFrames = append(s.speechFrames, frame)
 	s.bufferedSpeechDuration += duration
+}
+
+func (s *simpleVADStream) maxBufferedDurationLimit() float64 {
+	if s.options.MaxBufferedSpeechDuration <= 0 {
+		return 0
+	}
+	return s.options.MaxBufferedSpeechDuration + s.options.PrefixPaddingDuration
 }
 
 func (s *simpleVADStream) appendPrefixFrame(frame *model.AudioFrame, duration float64) {
