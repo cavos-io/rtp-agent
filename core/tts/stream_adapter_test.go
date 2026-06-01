@@ -133,7 +133,7 @@ func TestStreamAdapterPropagatesTokenizerSegmentIDWithinSegment(t *testing.T) {
 	}
 }
 
-func TestStreamAdapterIgnoresPushAfterFirstFlush(t *testing.T) {
+func TestStreamAdapterForwardsPushAfterFlush(t *testing.T) {
 	provider := &fakeStreamAdapterTTS{}
 	stream, err := NewStreamAdapter(provider).Stream(context.Background())
 	if err != nil {
@@ -157,8 +157,9 @@ func TestStreamAdapterIgnoresPushAfterFirstFlush(t *testing.T) {
 	}
 	time.Sleep(25 * time.Millisecond)
 
-	if got := provider.texts; len(got) != 1 || got[0] != "first segment" {
-		t.Fatalf("synthesized texts = %#v, want only first segment", got)
+	want := []string{"first segment", "second segment"}
+	if got := provider.texts; strings.Join(got, "|") != strings.Join(want, "|") {
+		t.Fatalf("synthesized texts = %#v, want %#v", got, want)
 	}
 }
 
