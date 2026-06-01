@@ -352,8 +352,17 @@ func (e *ProcessJobExecutor) Close(ctx context.Context) error {
 	}
 
 	if cmd != nil && cmd.Process != nil {
-		if err := processKill(cmd.Process); err != nil && !strings.Contains(err.Error(), "process already finished") {
-			return err
+		killDone := make(chan error, 1)
+		go func() {
+			killDone <- processKill(cmd.Process)
+		}()
+		select {
+		case err := <-killDone:
+			if err != nil && !strings.Contains(err.Error(), "process already finished") {
+				return err
+			}
+		case <-ctx.Done():
+			return ctx.Err()
 		}
 	}
 
