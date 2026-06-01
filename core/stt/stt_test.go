@@ -201,6 +201,27 @@ func TestSTTCapabilitiesMarshalJSONUsesFalseForMissingAlignedTranscript(t *testi
 	}
 }
 
+func TestSTTCapabilitiesUnmarshalJSONAcceptsReferenceAlignedTranscriptFalse(t *testing.T) {
+	var caps STTCapabilities
+	data := []byte(`{
+		"streaming": true,
+		"interim_results": true,
+		"diarization": false,
+		"aligned_transcript": false,
+		"offline_recognize": true
+	}`)
+
+	if err := json.Unmarshal(data, &caps); err != nil {
+		t.Fatalf("Unmarshal STTCapabilities returned error: %v", err)
+	}
+	if caps.AlignedTranscript != "" {
+		t.Fatalf("AlignedTranscript = %q, want empty string for reference false", caps.AlignedTranscript)
+	}
+	if !caps.Streaming || !caps.InterimResults || !caps.OfflineRecognize {
+		t.Fatalf("decoded booleans = %#v, want true streaming/interim/offline", caps)
+	}
+}
+
 func TestSTTErrorCarriesReferenceErrorPayload(t *testing.T) {
 	underlying := errors.New("provider disconnected")
 	before := time.Now()

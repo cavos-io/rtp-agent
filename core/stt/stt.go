@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strconv"
 	"time"
 
 	"github.com/cavos-io/rtp-agent/core/audio/model"
@@ -87,6 +88,54 @@ func (c STTCapabilities) MarshalJSON() ([]byte, error) {
 		AlignedTranscript: alignedTranscript,
 		OfflineRecognize:  c.OfflineRecognize,
 	})
+}
+
+func (c *STTCapabilities) UnmarshalJSON(data []byte) error {
+	type sttCapabilitiesPayload struct {
+		Streaming         bool            `json:"streaming"`
+		InterimResults    bool            `json:"interim_results"`
+		Diarization       bool            `json:"diarization"`
+		AlignedTranscript json.RawMessage `json:"aligned_transcript"`
+		OfflineRecognize  bool            `json:"offline_recognize"`
+	}
+	var payload sttCapabilitiesPayload
+	if err := json.Unmarshal(data, &payload); err != nil {
+		return err
+	}
+
+	alignedTranscript, err := decodeAlignedTranscript(payload.AlignedTranscript)
+	if err != nil {
+		return err
+	}
+	c.Streaming = payload.Streaming
+	c.InterimResults = payload.InterimResults
+	c.Diarization = payload.Diarization
+	c.AlignedTranscript = alignedTranscript
+	c.OfflineRecognize = payload.OfflineRecognize
+	return nil
+}
+
+func decodeAlignedTranscript(data json.RawMessage) (string, error) {
+	if len(data) == 0 || string(data) == "null" {
+		return "", nil
+	}
+	var enabled bool
+	if err := json.Unmarshal(data, &enabled); err == nil {
+		if enabled {
+			return "", fmt.Errorf("aligned_transcript boolean true is not supported")
+		}
+		return "", nil
+	}
+	var granularity string
+	if err := json.Unmarshal(data, &granularity); err != nil {
+		return "", err
+	}
+	switch granularity {
+	case "", "word", "chunk":
+		return granularity, nil
+	default:
+		return "", fmt.Errorf("unsupported aligned_transcript %s", strconv.Quote(granularity))
+	}
 }
 
 const STTErrorType = "stt_error"
