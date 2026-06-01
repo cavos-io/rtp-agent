@@ -139,6 +139,23 @@ func TestStreamAdapterPropagatesVADPushFrameError(t *testing.T) {
 	}
 }
 
+func TestStreamAdapterRejectsMismatchedSampleRates(t *testing.T) {
+	stream, err := NewStreamAdapter(&fakeStreamAdapterSTT{}, &fakeStreamAdapterVAD{
+		stream: &fakeStreamAdapterVADStream{done: make(chan struct{})},
+	}).Stream(context.Background(), "")
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+	defer stream.Close()
+
+	if err := stream.PushFrame(&model.AudioFrame{Data: []byte("first"), SampleRate: 16000, NumChannels: 1, SamplesPerChannel: 1}); err != nil {
+		t.Fatalf("PushFrame(first) returned error: %v", err)
+	}
+	if err := stream.PushFrame(&model.AudioFrame{Data: []byte("second"), SampleRate: 8000, NumChannels: 1, SamplesPerChannel: 1}); err == nil {
+		t.Fatal("PushFrame(second) returned nil, want sample-rate mismatch error")
+	}
+}
+
 func TestStreamAdapterPropagatesRecognizeError(t *testing.T) {
 	recognizeErr := errors.New("recognize failed")
 	stream, err := NewStreamAdapter(

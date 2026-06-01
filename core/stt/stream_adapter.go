@@ -51,6 +51,7 @@ type streamAdapterWrapper struct {
 	closed      bool
 	frameBuffer []*model.AudioFrame
 	vadStream   vad.VADStream
+	rateGuard   SampleRateGuard
 }
 
 type streamAdapterInput struct {
@@ -192,6 +193,10 @@ func (w *streamAdapterWrapper) PushFrame(frame *model.AudioFrame) error {
 	if w.closed {
 		w.mu.Unlock()
 		return fmt.Errorf("stream closed")
+	}
+	if err := w.rateGuard.Check(frame); err != nil {
+		w.mu.Unlock()
+		return err
 	}
 	w.mu.Unlock()
 

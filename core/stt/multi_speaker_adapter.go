@@ -110,16 +110,17 @@ func (a *MultiSpeakerAdapter) Stream(ctx context.Context, language string) (Reco
 }
 
 type multiSpeakerAdapterWrapper struct {
-	adapter  *MultiSpeakerAdapter
-	inner    RecognizeStream
-	ctx      context.Context
-	cancel   context.CancelFunc
-	detector *primarySpeakerDetector
-	eventCh  chan *SpeechEvent
-	errCh    chan error
-	inputCh  chan multiSpeakerInput
-	mu       sync.Mutex
-	closed   bool
+	adapter   *MultiSpeakerAdapter
+	inner     RecognizeStream
+	ctx       context.Context
+	cancel    context.CancelFunc
+	detector  *primarySpeakerDetector
+	eventCh   chan *SpeechEvent
+	errCh     chan error
+	inputCh   chan multiSpeakerInput
+	mu        sync.Mutex
+	closed    bool
+	rateGuard SampleRateGuard
 }
 
 type multiSpeakerInput struct {
@@ -132,6 +133,9 @@ func (w *multiSpeakerAdapterWrapper) PushFrame(frame *model.AudioFrame) error {
 	defer w.mu.Unlock()
 	if w.closed {
 		return fmt.Errorf("stream closed")
+	}
+	if err := w.rateGuard.Check(frame); err != nil {
+		return err
 	}
 	w.inputCh <- multiSpeakerInput{frame: frame}
 	return nil
