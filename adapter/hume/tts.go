@@ -28,6 +28,7 @@ type HumeTTS struct {
 	apiKey          string
 	baseURL         string
 	modelVersion    string
+	voiceID         string
 	voiceName       string
 	voiceProvider   string
 	description     string
@@ -74,9 +75,19 @@ func WithHumeTTSModelVersion(modelVersion string) HumeTTSOption {
 
 func WithHumeTTSVoiceName(name string, provider string) HumeTTSOption {
 	return func(t *HumeTTS) {
+		t.voiceID = ""
 		t.voiceName = name
 		t.voiceProvider = provider
 		t.instantMode = name != ""
+	}
+}
+
+func WithHumeTTSVoiceID(id string, provider string) HumeTTSOption {
+	return func(t *HumeTTS) {
+		t.voiceID = id
+		t.voiceName = ""
+		t.voiceProvider = provider
+		t.instantMode = id != ""
 	}
 }
 
@@ -180,12 +191,12 @@ func buildHumeTTSRequest(ctx context.Context, t *HumeTTS, text string) (*http.Re
 	utterance := map[string]interface{}{
 		"text": text,
 	}
-	if t.voiceName != "" {
-		voice := map[string]interface{}{"name": t.voiceName}
-		if t.voiceProvider != "" {
-			voice["provider"] = t.voiceProvider
-		}
-		utterance["voice"] = voice
+	if t.voiceID != "" || t.voiceName != "" {
+		utterance["voice"] = humeTTSVoicePayload(HumeTTSVoice{
+			ID:       t.voiceID,
+			Name:     t.voiceName,
+			Provider: t.voiceProvider,
+		})
 	}
 	if t.description != "" {
 		utterance["description"] = t.description
@@ -241,19 +252,24 @@ func humeTTSUtterancePayload(utterance HumeTTSUtterance) map[string]interface{} 
 		payload["trailing_silence"] = *utterance.TrailingSilence
 	}
 	if utterance.Voice != nil {
-		voice := map[string]interface{}{}
-		if utterance.Voice.ID != "" {
-			voice["id"] = utterance.Voice.ID
-		}
-		if utterance.Voice.Name != "" {
-			voice["name"] = utterance.Voice.Name
-		}
-		if utterance.Voice.Provider != "" {
-			voice["provider"] = utterance.Voice.Provider
-		}
+		voice := humeTTSVoicePayload(*utterance.Voice)
 		if len(voice) > 0 {
 			payload["voice"] = voice
 		}
+	}
+	return payload
+}
+
+func humeTTSVoicePayload(voice HumeTTSVoice) map[string]interface{} {
+	payload := map[string]interface{}{}
+	if voice.ID != "" {
+		payload["id"] = voice.ID
+	}
+	if voice.Name != "" {
+		payload["name"] = voice.Name
+	}
+	if voice.Provider != "" {
+		payload["provider"] = voice.Provider
 	}
 	return payload
 }

@@ -140,6 +140,32 @@ func TestHumeTTSOptionsMatchReference(t *testing.T) {
 	}
 }
 
+func TestHumeTTSVoiceIDBuildsReferencePayload(t *testing.T) {
+	provider := NewHumeTTS("test-key", "",
+		WithHumeTTSVoiceID("voice-123", "CUSTOM_VOICE"),
+	)
+
+	req, err := buildHumeTTSRequest(context.Background(), provider, "hello")
+	if err != nil {
+		t.Fatalf("build request: %v", err)
+	}
+	var payload map[string]any
+	if err := json.NewDecoder(req.Body).Decode(&payload); err != nil {
+		t.Fatalf("decode body: %v", err)
+	}
+	utterance := payload["utterances"].([]any)[0].(map[string]any)
+	voice := utterance["voice"].(map[string]any)
+	if voice["id"] != "voice-123" {
+		t.Fatalf("voice id = %#v, want voice-123", voice["id"])
+	}
+	if _, ok := voice["name"]; ok {
+		t.Fatalf("voice name included for id voice: %#v", voice)
+	}
+	if voice["provider"] != "CUSTOM_VOICE" {
+		t.Fatalf("voice provider = %#v, want CUSTOM_VOICE", voice["provider"])
+	}
+}
+
 func TestHumeTTSContextBuildsReferencePayload(t *testing.T) {
 	provider := NewHumeTTS("test-key", "",
 		WithHumeTTSContextGenerationID("generation-1"),
