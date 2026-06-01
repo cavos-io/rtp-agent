@@ -36,6 +36,9 @@ WORKTREES=(
   "worktrees/adapter:ramdhan/feature/adapter"
 )
 
+ACTIVE_WORKTREES=()
+SKIPPED_WORKTREES=()
+
 is_clean() {
   local path="$1"
 
@@ -46,14 +49,24 @@ is_clean() {
   fi
 }
 
-assert_all_clean() {
+collect_clean_worktrees() {
   echo "Checking clean worktrees..."
 
-  is_clean "$REPO_ROOT"
+  if ! is_clean "$REPO_ROOT"; then
+    echo "Main worktree must be clean before integration."
+    exit 1
+  fi
 
   for item in "${WORKTREES[@]}"; do
     local path="${item%%:*}"
-    is_clean "$path"
+    local branch="${item##*:}"
+
+    if is_clean "$path"; then
+      ACTIVE_WORKTREES+=("$item")
+    else
+      echo "Skipping dirty worktree: $path ($branch)"
+      SKIPPED_WORKTREES+=("$item")
+    fi
   done
 }
 
@@ -156,13 +169,13 @@ echo "Base: $BASE_BRANCH"
 echo "Log:  $LOG_FILE"
 echo "============================================================"
 
-assert_all_clean
+collect_clean_worktrees
 
 git fetch origin
 
 git switch "$BASE_BRANCH"
 
-for item in "${WORKTREES[@]}"; do
+for item in "${ACTIVE_WORKTREES[@]}"; do
   path="${item%%:*}"
   branch="${item##*:}"
 
@@ -183,12 +196,22 @@ echo "============================================================"
 echo "Rebasing all worktree branches onto latest $BASE_BRANCH"
 echo "============================================================"
 
-for item in "${WORKTREES[@]}"; do
+for item in "${ACTIVE_WORKTREES[@]}"; do
   path="${item%%:*}"
   branch="${item##*:}"
 
   run_or_codex "$path" "$branch" git -C "$path" rebase "$BASE_BRANCH"
 done
+
+if (( ${#SKIPPED_WORKTREES[@]} > 0 )); then
+  echo
+  echo "Skipped dirty worktrees:"
+  for item in "${SKIPPED_WORKTREES[@]}"; do
+    path="${item%%:*}"
+    branch="${item##*:}"
+    echo "  $path ($branch)"
+  done
+fi
 
 echo
 echo "Final verification:"
