@@ -902,6 +902,29 @@ func TestFallbackChunkedStreamRestoresPrimaryAfterRecovery(t *testing.T) {
 	}
 }
 
+func TestFallbackChunkedRecoveryKeepsProviderUnavailableWhenReplayProducesNoAudio(t *testing.T) {
+	primary := &metadataTTS{
+		label:       "primary",
+		sampleRate:  24000,
+		numChannels: 1,
+		chunked:     &metadataChunkedStream{},
+	}
+	adapter := NewFallbackAdapter([]TTS{primary})
+	adapter.status[0].available = false
+
+	adapter.tryRecoverChunked(0, "hello")
+
+	waitForFallbackCondition(t, func() bool {
+		adapter.mu.Lock()
+		defer adapter.mu.Unlock()
+		return !adapter.status[0].recovering
+	})
+
+	if adapter.status[0].available {
+		t.Fatal("provider available = true after no-audio recovery probe, want false")
+	}
+}
+
 func TestFallbackSynthesizeStreamReturnsEOFWhenProviderCompletes(t *testing.T) {
 	firstStream := &metadataSynthesizeStream{
 		events: []*SynthesizedAudio{{Frame: &model.AudioFrame{Data: []byte{1}}}},
@@ -1398,6 +1421,30 @@ func TestFallbackSynthesizeRecoveryIgnoresFlushOnlyInput(t *testing.T) {
 	case <-primary.streamCalled:
 		t.Fatal("recovery stream started for flush-only input, want no recovery")
 	case <-time.After(50 * time.Millisecond):
+	}
+}
+
+func TestFallbackSynthesizeRecoveryKeepsProviderUnavailableWhenReplayProducesNoAudio(t *testing.T) {
+	primary := &metadataTTS{
+		label:        "primary",
+		sampleRate:   24000,
+		numChannels:  1,
+		capabilities: TTSCapabilities{Streaming: true},
+		stream:       &metadataSynthesizeStream{},
+	}
+	adapter := NewFallbackAdapter([]TTS{primary})
+	adapter.status[0].available = false
+
+	adapter.tryRecoverStream(0, []fallbackSynthesizeInput{{text: "hello"}})
+
+	waitForFallbackCondition(t, func() bool {
+		adapter.mu.Lock()
+		defer adapter.mu.Unlock()
+		return !adapter.status[0].recovering
+	})
+
+	if adapter.status[0].available {
+		t.Fatal("provider available = true after no-audio recovery probe, want false")
 	}
 }
 
