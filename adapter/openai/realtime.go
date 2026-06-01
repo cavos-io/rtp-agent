@@ -72,10 +72,11 @@ type realtimeGeneration struct {
 }
 
 type realtimeMessageGeneration struct {
-	textCh       chan string
-	audioCh      chan *model.AudioFrame
-	modalitiesCh chan []string
-	modalities   []string
+	textCh        chan string
+	audioCh       chan *model.AudioFrame
+	modalitiesCh  chan []string
+	modalities    []string
+	streamsClosed bool
 }
 
 func (m *RealtimeModel) Session() (llm.RealtimeSession, error) {
@@ -642,6 +643,14 @@ func (s *realtimeSession) trackOpenAIRealtimeEvent(ev map[string]any) (llm.Realt
 		} else {
 			s.setRealtimeMessageModalities(itemID, []string{"audio", "text"})
 		}
+	case "response.output_item.done":
+		item, _ := ev["item"].(map[string]any)
+		itemID, _ := item["id"].(string)
+		itemType, _ := item["type"].(string)
+		if itemID == "" || itemType != "message" || s.generation == nil {
+			return llm.RealtimeEvent{}, false
+		}
+		s.closeRealtimeMessageStreams(s.generation.messages[itemID])
 	case "conversation.item.deleted":
 		itemID, _ := ev["item_id"].(string)
 		if itemID == "" {
@@ -771,13 +780,21 @@ func (s *realtimeSession) closeRealtimeGeneration() {
 		return
 	}
 	for _, msg := range s.generation.messages {
-		close(msg.textCh)
-		close(msg.audioCh)
+		s.closeRealtimeMessageStreams(msg)
 		close(msg.modalitiesCh)
 	}
 	close(s.generation.messageCh)
 	close(s.generation.functionCh)
 	s.generation = nil
+}
+
+func (s *realtimeSession) closeRealtimeMessageStreams(msg *realtimeMessageGeneration) {
+	if msg == nil || msg.streamsClosed {
+		return
+	}
+	close(msg.textCh)
+	close(msg.audioCh)
+	msg.streamsClosed = true
 }
 
 func (s *realtimeSession) trackRealtimeRemoteItemAdded(ev llm.RealtimeEvent) {
