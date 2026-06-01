@@ -106,12 +106,12 @@ func (s *STT) Stream(ctx context.Context, language string) (stt.RecognizeStream,
 
 	ctx, cancel := context.WithCancel(ctx)
 	stream := &inferenceSTTStream{
-		stt:       s,
-		conn:      conn,
-		ctx:       ctx,
-		cancel:    cancel,
-		audioCh:   make(chan *model.AudioFrame, 100),
-		eventCh:   make(chan *stt.SpeechEvent, 100),
+		stt:     s,
+		conn:    conn,
+		ctx:     ctx,
+		cancel:  cancel,
+		audioCh: make(chan *model.AudioFrame, 100),
+		eventCh: make(chan *stt.SpeechEvent, 100),
 	}
 
 	go stream.run()
@@ -178,6 +178,52 @@ func (s *inferenceSTTStream) Next() (*stt.SpeechEvent, error) {
 	return ev, nil
 }
 
+func (s *inferenceSTTStream) buildSpeechData(data map[string]interface{}) stt.SpeechData {
+	speechData := stt.SpeechData{
+		Text:       stringFromMap(data, "transcript"),
+		Language:   stringFromMap(data, "language"),
+		SpeakerID:  stringFromMap(data, "speaker_id"),
+		Confidence: floatFromMap(data, "confidence"),
+	}
+
+	start := floatFromMap(data, "start")
+	speechData.StartTime = start
+	speechData.EndTime = start + floatFromMap(data, "duration")
+
+	if extra, ok := data["extra"].(map[string]interface{}); ok && len(extra) > 0 {
+		speechData.Metadata = extra
+	}
+
+	if words, ok := data["words"].([]interface{}); ok && len(words) > 0 {
+		speechData.Words = make([]stt.TimedString, 0, len(words))
+		for _, rawWord := range words {
+			word, ok := rawWord.(map[string]interface{})
+			if !ok {
+				continue
+			}
+			speechData.Words = append(speechData.Words, stt.TimedString{
+				Text:       stringFromMap(word, "word"),
+				StartTime:  floatFromMap(word, "start"),
+				EndTime:    floatFromMap(word, "end"),
+				Confidence: floatFromMap(word, "confidence"),
+				SpeakerID:  stringFromMap(word, "speaker_id"),
+			})
+		}
+	}
+
+	return speechData
+}
+
+func stringFromMap(data map[string]interface{}, key string) string {
+	value, _ := data[key].(string)
+	return value
+}
+
+func floatFromMap(data map[string]interface{}, key string) float64 {
+	value, _ := data[key].(float64)
+	return value
+}
+
 func (s *inferenceSTTStream) run() {
 	defer s.Close()
 
@@ -191,7 +237,7 @@ func (s *inferenceSTTStream) run() {
 				if !ok {
 					return
 				}
-				
+
 				base64Audio := base64.StdEncoding.EncodeToString(frame.Data)
 				audioMsg := map[string]interface{}{
 					"type":  "input_audio",
@@ -246,7 +292,7 @@ func (s *inferenceSTTStream) run() {
 func (s *inferenceSTTStream) processTranscript(data map[string]interface{}, isFinal bool) {
 	text, _ := data["transcript"].(string)
 	requestID, _ := data["request_id"].(string)
-	
+
 	if text == "" && !isFinal {
 		return
 	}
@@ -256,21 +302,7 @@ func (s *inferenceSTTStream) processTranscript(data map[string]interface{}, isFi
 		s.eventCh <- &stt.SpeechEvent{Type: stt.SpeechEventStartOfSpeech, RequestID: requestID}
 	}
 
-	speechData := stt.SpeechData{
-		Text: text,
-	}
-	if lang, ok := data["language"].(string); ok {
-		speechData.Language = lang
-	}
-	if conf, ok := data["confidence"].(float64); ok {
-		speechData.Confidence = conf
-	}
-	if start, ok := data["start"].(float64); ok {
-		speechData.StartTime = start
-	}
-	if dur, ok := data["duration"].(float64); ok {
-		speechData.EndTime = speechData.StartTime + dur
-	}
+	speechData := s.buildSpeechData(data)
 
 	if isFinal {
 		s.mu.Lock()
@@ -281,15 +313,11 @@ func (s *inferenceSTTStream) processTranscript(data map[string]interface{}, isFi
 		s.eventCh <- &stt.SpeechEvent{
 			Type:      stt.SpeechEventRecognitionUsage,
 			RequestID: requestID,
-			Alternatives: []stt.SpeechData{
-				{
-					Text:      "",
-					StartTime: 0,
-					EndTime:   duration,
-				},
+			RecognitionUsage: &stt.RecognitionUsage{
+				AudioDuration: duration,
 			},
 		}
-		
+
 		s.eventCh <- &stt.SpeechEvent{
 			Type:         stt.SpeechEventFinalTranscript,
 			RequestID:    requestID,

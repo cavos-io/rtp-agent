@@ -33,6 +33,12 @@ type SpeechData struct {
 	Metadata         map[string]any
 }
 
+type RecognitionUsage struct {
+	AudioDuration float64
+	InputTokens   int
+	OutputTokens  int
+}
+
 type TimedString struct {
 	Text            string
 	StartTime       float64
@@ -43,10 +49,12 @@ type TimedString struct {
 }
 
 type SpeechEvent struct {
-	Type         SpeechEventType
-	RequestID    string
-	Alternatives []SpeechData
-	Interrupted  bool
+	Type             SpeechEventType
+	RequestID        string
+	Alternatives     []SpeechData
+	RecognitionUsage *RecognitionUsage
+	SpeechStartTime  *float64
+	Interrupted      bool
 }
 
 type STTCapabilities struct {
