@@ -93,6 +93,21 @@ func TestSileroVADMetadataAndMetrics(t *testing.T) {
 	}
 }
 
+func TestSileroVADDerivesInitialDeactivationThreshold(t *testing.T) {
+	options := NewSileroVAD(WithActivationThreshold(0.8)).options
+	if options.DeactivationThreshold != 0.65 {
+		t.Fatalf("DeactivationThreshold = %v, want 0.65", options.DeactivationThreshold)
+	}
+
+	options = NewSileroVAD(
+		WithActivationThreshold(0.8),
+		WithDeactivationThreshold(0.2),
+	).options
+	if options.DeactivationThreshold != 0.2 {
+		t.Fatalf("DeactivationThreshold with explicit option = %v, want 0.2", options.DeactivationThreshold)
+	}
+}
+
 func TestSileroVADUpdateOptionsAppliesToActiveStream(t *testing.T) {
 	detector := NewSileroVAD(
 		WithMinSpeechDuration(0.03),
@@ -115,6 +130,44 @@ func TestSileroVADUpdateOptionsAppliesToActiveStream(t *testing.T) {
 	}
 	assertSileroVADEventType(t, stream, vad.VADEventInferenceDone)
 	assertSileroVADEventType(t, stream, vad.VADEventStartOfSpeech)
+}
+
+func TestSileroVADActivationUpdatePreservesDeactivationThreshold(t *testing.T) {
+	detector := NewSileroVAD(
+		WithMinSpeechDuration(0.01),
+		WithMinSilenceDuration(0.01),
+		WithActivationThreshold(0.5),
+	)
+	stream, err := detector.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	defer stream.Close()
+
+	speech := testAudioFrame(16000, 160, 6000)
+	if err := stream.PushFrame(speech); err != nil {
+		t.Fatalf("PushFrame() speech error = %v", err)
+	}
+	assertSileroVADEventType(t, stream, vad.VADEventInferenceDone)
+	assertSileroVADEventType(t, stream, vad.VADEventStartOfSpeech)
+
+	detector.UpdateOptions(VADOptions{ActivationThreshold: 0.8})
+	dipAboveOriginalDeactivation := testAudioFrame(16000, 160, 1800)
+	if err := stream.PushFrame(dipAboveOriginalDeactivation); err != nil {
+		t.Fatalf("PushFrame() dip error = %v", err)
+	}
+	assertSileroVADEventType(t, stream, vad.VADEventInferenceDone)
+
+	silence := testAudioFrame(16000, 160, 0)
+	if err := stream.PushFrame(silence); err != nil {
+		t.Fatalf("PushFrame() silence error = %v", err)
+	}
+	assertSileroVADEventType(t, stream, vad.VADEventInferenceDone)
+	end := nextSileroVADEvent(t, stream)
+	if end.Type != vad.VADEventEndOfSpeech {
+		t.Fatalf("event type = %s, want %s", end.Type, vad.VADEventEndOfSpeech)
+	}
+	assertCombinedSileroFrames(t, end.Frames, speech, dipAboveOriginalDeactivation, silence)
 }
 
 func TestSileroFallbackHonorsBufferingOptions(t *testing.T) {
