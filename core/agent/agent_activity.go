@@ -481,10 +481,7 @@ func (a *AgentActivity) runEOUDetection(info EndOfTurnInfo) {
 	go func() {
 		defer cancel()
 
-		endpointingDelay := a.Agent.MinEndpointingDelay
-		if endpointingDelay <= 0 {
-			endpointingDelay = 0.5 // default
-		}
+		endpointingDelay := a.minEndpointingDelay()
 
 		if a.Agent.TurnDetector != nil && info.NewTranscript != "" {
 			// Predict end of turn
@@ -499,10 +496,7 @@ func (a *AgentActivity) runEOUDetection(info EndOfTurnInfo) {
 				logger.Logger.Infow("EOU prediction", "probability", prob)
 				// Apply probability threshold logic
 				if prob < 0.5 {
-					endpointingDelay = a.Agent.MaxEndpointingDelay
-					if endpointingDelay <= 0 {
-						endpointingDelay = 2.0 // default
-					}
+					endpointingDelay = a.maxEndpointingDelay()
 				}
 			} else {
 				logger.Logger.Errorw("EOU prediction failed", err)
@@ -525,4 +519,24 @@ func (a *AgentActivity) runEOUDetection(info EndOfTurnInfo) {
 			a.AgentIntf.OnUserTurnCompleted(a.ctx, a.Agent.ChatCtx, newMsg)
 		}
 	}()
+}
+
+func (a *AgentActivity) minEndpointingDelay() float64 {
+	if a.Agent.MinEndpointingDelay > 0 {
+		return a.Agent.MinEndpointingDelay
+	}
+	if a.Session != nil && a.Session.Options.MinEndpointingDelay > 0 {
+		return a.Session.Options.MinEndpointingDelay
+	}
+	return 0.5
+}
+
+func (a *AgentActivity) maxEndpointingDelay() float64 {
+	if a.Agent.MaxEndpointingDelay > 0 {
+		return a.Agent.MaxEndpointingDelay
+	}
+	if a.Session != nil && a.Session.Options.MaxEndpointingDelay > 0 {
+		return a.Session.Options.MaxEndpointingDelay
+	}
+	return 3.0
 }

@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"context"
 	"errors"
 	"testing"
 	"time"
@@ -268,6 +269,66 @@ func TestAgentActivityStartSkipsEmptyInitialConfiguration(t *testing.T) {
 	if len(session.ChatCtx.Items) != 0 {
 		t.Fatalf("session chat context items = %#v, want no initial config for empty agent", session.ChatCtx.Items)
 	}
+}
+
+func TestAgentActivityUsesSessionMinEndpointingDelay(t *testing.T) {
+	agent := &turnCompletedAgent{Agent: NewAgent("test"), turns: make(chan *llm.ChatMessage, 1)}
+	agent.TurnDetection = TurnDetectionModeSTT
+	session := NewAgentSession(agent, nil, AgentSessionOptions{MinEndpointingDelay: 0.01})
+	activity := NewAgentActivity(agent, session)
+	defer activity.Stop()
+
+	activity.runEOUDetection(EndOfTurnInfo{NewTranscript: "hello"})
+
+	select {
+	case msg := <-agent.turns:
+		if msg.TextContent() != "hello" {
+			t.Fatalf("turn message text = %q, want hello", msg.TextContent())
+		}
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("OnUserTurnCompleted was not called after session min endpointing delay")
+	}
+}
+
+func TestAgentActivityUsesSessionMaxEndpointingDelay(t *testing.T) {
+	agent := &turnCompletedAgent{Agent: NewAgent("test"), turns: make(chan *llm.ChatMessage, 1)}
+	agent.TurnDetection = TurnDetectionModeSTT
+	agent.TurnDetector = turnDetectorFunc(func(context.Context, *llm.ChatContext) (float64, error) {
+		return 0.1, nil
+	})
+	session := NewAgentSession(agent, nil, AgentSessionOptions{
+		MinEndpointingDelay: 0.01,
+		MaxEndpointingDelay: 0.02,
+	})
+	activity := NewAgentActivity(agent, session)
+	defer activity.Stop()
+
+	activity.runEOUDetection(EndOfTurnInfo{NewTranscript: "still talking"})
+
+	select {
+	case msg := <-agent.turns:
+		if msg.TextContent() != "still talking" {
+			t.Fatalf("turn message text = %q, want still talking", msg.TextContent())
+		}
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("OnUserTurnCompleted was not called after session max endpointing delay")
+	}
+}
+
+type turnCompletedAgent struct {
+	*Agent
+	turns chan *llm.ChatMessage
+}
+
+func (a *turnCompletedAgent) OnUserTurnCompleted(ctx context.Context, chatCtx *llm.ChatContext, newMsg *llm.ChatMessage) error {
+	a.turns <- newMsg
+	return nil
+}
+
+type turnDetectorFunc func(context.Context, *llm.ChatContext) (float64, error)
+
+func (f turnDetectorFunc) PredictEndOfTurn(ctx context.Context, chatCtx *llm.ChatContext) (float64, error) {
+	return f(ctx, chatCtx)
 }
 
 func waitForNoCurrentSpeech(t *testing.T, activity *AgentActivity) {
