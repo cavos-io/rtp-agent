@@ -12,18 +12,46 @@ import (
 )
 
 type OpenAISTT struct {
-	client *openai.Client
-	model  string
+	client         *openai.Client
+	model          string
+	language       string
+	detectLanguage bool
+	prompt         string
 }
 
-func NewOpenAISTT(apiKey string, model string) *OpenAISTT {
+type OpenAISTTOption func(*OpenAISTT)
+
+func WithOpenAISTTLanguage(language string) OpenAISTTOption {
+	return func(s *OpenAISTT) {
+		s.language = language
+	}
+}
+
+func WithOpenAISTTDetectLanguage(detect bool) OpenAISTTOption {
+	return func(s *OpenAISTT) {
+		s.detectLanguage = detect
+	}
+}
+
+func WithOpenAISTTPrompt(prompt string) OpenAISTTOption {
+	return func(s *OpenAISTT) {
+		s.prompt = prompt
+	}
+}
+
+func NewOpenAISTT(apiKey string, model string, opts ...OpenAISTTOption) *OpenAISTT {
 	if model == "" {
-		model = openai.Whisper1
+		model = "gpt-4o-mini-transcribe"
 	}
-	return &OpenAISTT{
-		client: openai.NewClient(apiKey),
-		model:  model,
+	provider := &OpenAISTT{
+		client:   openai.NewClient(apiKey),
+		model:    model,
+		language: "en",
 	}
+	for _, opt := range opts {
+		opt(provider)
+	}
+	return provider
 }
 
 func (s *OpenAISTT) Label() string { return "openai.STT" }
@@ -44,7 +72,7 @@ func (s *OpenAISTT) Recognize(ctx context.Context, frames []*model.AudioFrame, l
 		buf.Write(f.Data)
 	}
 
-	req := openAIAudioRequest(s.model, bytes.NewReader(buf.Bytes()), language)
+	req := openAIAudioRequest(s, bytes.NewReader(buf.Bytes()), language)
 
 	resp, err := s.client.CreateTranscription(ctx, req)
 	if err != nil {
@@ -54,12 +82,20 @@ func (s *OpenAISTT) Recognize(ctx context.Context, frames []*model.AudioFrame, l
 	return openAISpeechEvent(resp), nil
 }
 
-func openAIAudioRequest(model string, reader io.Reader, language string) openai.AudioRequest {
+func openAIAudioRequest(s *OpenAISTT, reader io.Reader, language string) openai.AudioRequest {
+	requestLanguage := s.language
+	if language != "" {
+		requestLanguage = language
+	}
+	if s.detectLanguage {
+		requestLanguage = ""
+	}
 	return openai.AudioRequest{
-		Model:    model,
+		Model:    s.model,
 		FilePath: "audio.wav", // Static filename required by API when Reader is used.
 		Reader:   reader,
-		Language: language,
+		Language: requestLanguage,
+		Prompt:   s.prompt,
 		Format:   openai.AudioResponseFormatVerboseJSON,
 		TimestampGranularities: []openai.TranscriptionTimestampGranularity{
 			openai.TranscriptionTimestampGranularityWord,

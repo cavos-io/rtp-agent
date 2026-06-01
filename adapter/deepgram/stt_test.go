@@ -1,6 +1,7 @@
 package deepgram
 
 import (
+	"net/url"
 	"testing"
 
 	"github.com/cavos-io/conversation-worker/core/stt"
@@ -104,5 +105,82 @@ func TestDeepgramSTTCapabilitiesAdvertiseWordAlignment(t *testing.T) {
 
 	if got := provider.Capabilities().AlignedTranscript; got != "word" {
 		t.Fatalf("AlignedTranscript = %q, want word", got)
+	}
+}
+
+func TestDeepgramSTTDefaultsMatchReference(t *testing.T) {
+	provider := NewDeepgramSTT("test-key", "")
+
+	if provider.model != "nova-3" {
+		t.Fatalf("model = %q, want nova-3", provider.model)
+	}
+	if !provider.punctuate {
+		t.Fatalf("punctuate = false, want true")
+	}
+	if provider.smartFormat {
+		t.Fatalf("smartFormat = true, want false")
+	}
+	if !provider.noDelay {
+		t.Fatalf("noDelay = false, want true")
+	}
+	if provider.endpointingMS != 25 {
+		t.Fatalf("endpointingMS = %d, want 25", provider.endpointingMS)
+	}
+	if !provider.fillerWords {
+		t.Fatalf("fillerWords = false, want true")
+	}
+	if provider.sampleRate != 16000 {
+		t.Fatalf("sampleRate = %d, want 16000", provider.sampleRate)
+	}
+}
+
+func TestDeepgramStreamURLUsesReferenceOptions(t *testing.T) {
+	provider := NewDeepgramSTT("test-key", "")
+
+	got, err := url.Parse(buildDeepgramStreamURL(provider, "en-US"))
+	if err != nil {
+		t.Fatalf("parse stream url: %v", err)
+	}
+
+	if got.Scheme != "wss" {
+		t.Fatalf("scheme = %q, want wss", got.Scheme)
+	}
+	query := got.Query()
+	assertDeepgramQuery(t, query, "model", "nova-3")
+	assertDeepgramQuery(t, query, "language", "en-US")
+	assertDeepgramQuery(t, query, "punctuate", "true")
+	assertDeepgramQuery(t, query, "smart_format", "false")
+	assertDeepgramQuery(t, query, "no_delay", "true")
+	assertDeepgramQuery(t, query, "interim_results", "true")
+	assertDeepgramQuery(t, query, "encoding", "linear16")
+	assertDeepgramQuery(t, query, "sample_rate", "16000")
+	assertDeepgramQuery(t, query, "channels", "1")
+	assertDeepgramQuery(t, query, "endpointing", "25")
+	assertDeepgramQuery(t, query, "vad_events", "true")
+	assertDeepgramQuery(t, query, "filler_words", "true")
+}
+
+func TestDeepgramRecognizeURLUsesReferenceOptions(t *testing.T) {
+	provider := NewDeepgramSTT("test-key", "")
+
+	got, err := url.Parse(buildDeepgramRecognizeURL(provider, "id-ID"))
+	if err != nil {
+		t.Fatalf("parse recognize url: %v", err)
+	}
+
+	if got.Scheme != "https" {
+		t.Fatalf("scheme = %q, want https", got.Scheme)
+	}
+	query := got.Query()
+	assertDeepgramQuery(t, query, "model", "nova-3")
+	assertDeepgramQuery(t, query, "language", "id-ID")
+	assertDeepgramQuery(t, query, "punctuate", "true")
+	assertDeepgramQuery(t, query, "smart_format", "false")
+}
+
+func assertDeepgramQuery(t *testing.T, query url.Values, key string, want string) {
+	t.Helper()
+	if got := query.Get(key); got != want {
+		t.Fatalf("%s = %q, want %q", key, got, want)
 	}
 }

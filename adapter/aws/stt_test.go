@@ -59,3 +59,77 @@ func TestAWSSTTCapabilitiesAdvertiseWordAlignment(t *testing.T) {
 		t.Fatalf("AlignedTranscript = %q, want word", got)
 	}
 }
+
+func TestAWSSTTStreamInputDefaultsMatchReference(t *testing.T) {
+	provider := newAWSSTTWithClient(nil)
+
+	input := buildAWSStartStreamTranscriptionInput(provider, "")
+
+	if input.LanguageCode != types.LanguageCodeEnUs {
+		t.Fatalf("language = %q, want en-US", input.LanguageCode)
+	}
+	if input.MediaEncoding != types.MediaEncodingPcm {
+		t.Fatalf("media encoding = %q, want pcm", input.MediaEncoding)
+	}
+	if input.MediaSampleRateHertz == nil || *input.MediaSampleRateHertz != 24000 {
+		t.Fatalf("sample rate = %v, want 24000", input.MediaSampleRateHertz)
+	}
+}
+
+func TestAWSSTTStreamInputUsesProviderOptions(t *testing.T) {
+	provider := newAWSSTTWithClient(nil,
+		WithAWSSTTSampleRate(8000),
+		WithAWSSTTVocabularyName("support_terms"),
+		WithAWSSTTShowSpeakerLabel(true),
+		WithAWSSTTEnablePartialResultsStabilization(true),
+		WithAWSSTTPartialResultsStability(types.PartialResultsStabilityHigh),
+		WithAWSSTTLanguageModelName("support-model"),
+	)
+
+	input := buildAWSStartStreamTranscriptionInput(provider, "id-ID")
+
+	if input.LanguageCode != types.LanguageCodeIdId {
+		t.Fatalf("language = %q, want id-ID", input.LanguageCode)
+	}
+	if input.MediaSampleRateHertz == nil || *input.MediaSampleRateHertz != 8000 {
+		t.Fatalf("sample rate = %v, want 8000", input.MediaSampleRateHertz)
+	}
+	if input.VocabularyName == nil || *input.VocabularyName != "support_terms" {
+		t.Fatalf("vocabulary name = %v, want support_terms", input.VocabularyName)
+	}
+	if !input.ShowSpeakerLabel {
+		t.Fatal("show speaker label = false, want true")
+	}
+	if !input.EnablePartialResultsStabilization {
+		t.Fatal("partial stabilization = false, want true")
+	}
+	if input.PartialResultsStability != types.PartialResultsStabilityHigh {
+		t.Fatalf("partial stability = %q, want high", input.PartialResultsStability)
+	}
+	if input.LanguageModelName == nil || *input.LanguageModelName != "support-model" {
+		t.Fatalf("language model = %v, want support-model", input.LanguageModelName)
+	}
+}
+
+func TestAWSSTTStreamInputOmitsLanguageWhenIdentifyingLanguage(t *testing.T) {
+	provider := newAWSSTTWithClient(nil,
+		WithAWSSTTIdentifyLanguage(true),
+		WithAWSSTTLanguageOptions("en-US,id-ID"),
+		WithAWSSTTPreferredLanguage(types.LanguageCodeIdId),
+	)
+
+	input := buildAWSStartStreamTranscriptionInput(provider, "en-US")
+
+	if input.LanguageCode != "" {
+		t.Fatalf("language = %q, want empty when identifying language", input.LanguageCode)
+	}
+	if !input.IdentifyLanguage {
+		t.Fatal("identify language = false, want true")
+	}
+	if input.LanguageOptions == nil || *input.LanguageOptions != "en-US,id-ID" {
+		t.Fatalf("language options = %v, want en-US,id-ID", input.LanguageOptions)
+	}
+	if input.PreferredLanguage != types.LanguageCodeIdId {
+		t.Fatalf("preferred language = %q, want id-ID", input.PreferredLanguage)
+	}
+}

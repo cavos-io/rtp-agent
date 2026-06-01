@@ -11,27 +11,86 @@ import (
 	"github.com/cavos-io/conversation-worker/core/stt"
 	"github.com/cavos-io/conversation-worker/model"
 	"google.golang.org/api/option"
+	"google.golang.org/protobuf/types/known/wrapperspb"
 )
 
 type GoogleSTT struct {
-	client *speech.Client
+	client               *speech.Client
+	model                string
+	punctuate            bool
+	spokenPunctuation    bool
+	profanityFilter      bool
+	sampleRate           int32
+	enableWordTimeOffset bool
+	enableWordConfidence bool
+}
+
+type GoogleSTTOption func(*GoogleSTT)
+
+func WithGoogleSTTModel(model string) GoogleSTTOption {
+	return func(s *GoogleSTT) {
+		if model != "" {
+			s.model = model
+		}
+	}
+}
+
+func WithGoogleSTTPunctuate(punctuate bool) GoogleSTTOption {
+	return func(s *GoogleSTT) {
+		s.punctuate = punctuate
+	}
+}
+
+func WithGoogleSTTSpokenPunctuation(spokenPunctuation bool) GoogleSTTOption {
+	return func(s *GoogleSTT) {
+		s.spokenPunctuation = spokenPunctuation
+	}
+}
+
+func WithGoogleSTTProfanityFilter(profanityFilter bool) GoogleSTTOption {
+	return func(s *GoogleSTT) {
+		s.profanityFilter = profanityFilter
+	}
+}
+
+func WithGoogleSTTSampleRate(sampleRate int32) GoogleSTTOption {
+	return func(s *GoogleSTT) {
+		if sampleRate > 0 {
+			s.sampleRate = sampleRate
+		}
+	}
 }
 
 // NewGoogleSTT creates a new STT client using Application Default Credentials,
 // or by providing a path to a credentials JSON file.
-func NewGoogleSTT(credentialsFile string) (*GoogleSTT, error) {
+func NewGoogleSTT(credentialsFile string, providerOpts ...GoogleSTTOption) (*GoogleSTT, error) {
 	ctx := context.Background()
-	var opts []option.ClientOption
+	var clientOpts []option.ClientOption
 	if credentialsFile != "" {
-		opts = append(opts, option.WithCredentialsFile(credentialsFile))
+		clientOpts = append(clientOpts, option.WithCredentialsFile(credentialsFile))
 	}
 
-	client, err := speech.NewClient(ctx, opts...)
+	client, err := speech.NewClient(ctx, clientOpts...)
 	if err != nil {
 		return nil, err
 	}
 
-	return &GoogleSTT{client: client}, nil
+	return newGoogleSTTWithClient(client, providerOpts...), nil
+}
+
+func newGoogleSTTWithClient(client *speech.Client, opts ...GoogleSTTOption) *GoogleSTT {
+	provider := &GoogleSTT{
+		client:               client,
+		model:                "latest_long",
+		punctuate:            true,
+		sampleRate:           16000,
+		enableWordTimeOffset: true,
+		enableWordConfidence: true,
+	}
+	for _, opt := range opts {
+		opt(provider)
+	}
+	return provider
 }
 
 func (s *GoogleSTT) Label() string { return "google.STT" }
@@ -52,7 +111,7 @@ func (s *GoogleSTT) Stream(ctx context.Context, language string) (stt.RecognizeS
 	err = stream.Send(&speechpb.StreamingRecognizeRequest{
 		StreamingRequest: &speechpb.StreamingRecognizeRequest_StreamingConfig{
 			StreamingConfig: &speechpb.StreamingRecognitionConfig{
-				Config:         googleRecognitionConfig(language),
+				Config:         googleRecognitionConfig(s, language),
 				InterimResults: true,
 			},
 		},
@@ -83,7 +142,7 @@ func (s *GoogleSTT) Recognize(ctx context.Context, frames []*model.AudioFrame, l
 	}
 
 	resp, err := s.client.Recognize(ctx, &speechpb.RecognizeRequest{
-		Config: googleRecognitionConfig(language),
+		Config: googleRecognitionConfig(s, language),
 		Audio: &speechpb.RecognitionAudio{
 			AudioSource: &speechpb.RecognitionAudio_Content{
 				Content: buf.Bytes(),
@@ -108,13 +167,17 @@ func (s *GoogleSTT) Recognize(ctx context.Context, frames []*model.AudioFrame, l
 	}, nil
 }
 
-func googleRecognitionConfig(language string) *speechpb.RecognitionConfig {
+func googleRecognitionConfig(s *GoogleSTT, language string) *speechpb.RecognitionConfig {
 	return &speechpb.RecognitionConfig{
-		Encoding:              speechpb.RecognitionConfig_LINEAR16,
-		SampleRateHertz:       16000,
-		LanguageCode:          language,
-		EnableWordTimeOffsets: true,
-		EnableWordConfidence:  true,
+		Encoding:                   speechpb.RecognitionConfig_LINEAR16,
+		SampleRateHertz:            s.sampleRate,
+		LanguageCode:               language,
+		EnableWordTimeOffsets:      s.enableWordTimeOffset,
+		EnableWordConfidence:       s.enableWordConfidence,
+		EnableAutomaticPunctuation: s.punctuate,
+		EnableSpokenPunctuation:    wrapperspb.Bool(s.spokenPunctuation),
+		ProfanityFilter:            s.profanityFilter,
+		Model:                      s.model,
 	}
 }
 
