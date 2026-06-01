@@ -1399,6 +1399,38 @@ func TestSimpleVADEndOfSpeechIncludesAccumulatedSpeechFrames(t *testing.T) {
 	}
 }
 
+func TestSimpleVADEndOfSpeechCopiesInputFrameData(t *testing.T) {
+	stream, err := NewSimpleVAD(0.05).Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	defer stream.Close()
+
+	speech := audioFrame(16000, 160, 6000)
+	silence := audioFrame(16000, 160, 0)
+	if err := stream.PushFrame(speech); err != nil {
+		t.Fatalf("PushFrame() speech error = %v", err)
+	}
+	if err := stream.PushFrame(silence); err != nil {
+		t.Fatalf("PushFrame() silence error = %v", err)
+	}
+	for i := range speech.Data {
+		speech.Data[i] = 0
+	}
+	for i := range silence.Data {
+		silence.Data[i] = 1
+	}
+
+	assertEventType(t, stream, VADEventInferenceDone)
+	assertEventType(t, stream, VADEventStartOfSpeech)
+	assertEventType(t, stream, VADEventInferenceDone)
+	end := nextVADEvent(t, stream)
+	if end.Type != VADEventEndOfSpeech {
+		t.Fatalf("event type = %s, want %s", end.Type, VADEventEndOfSpeech)
+	}
+	assertCombinedFrames(t, end.Frames, audioFrame(16000, 160, 6000), audioFrame(16000, 160, 0))
+}
+
 func TestSimpleVADEndOfSpeechIncludesSilenceThresholdFrames(t *testing.T) {
 	stream, err := NewSimpleVADWithOptions(SimpleVADOptions{
 		Threshold:          0.05,
