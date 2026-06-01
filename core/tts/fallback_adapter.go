@@ -522,12 +522,13 @@ type fallbackSynthesizeStream struct {
 	requestID    string
 	segmentID    string
 
-	eventCh chan *SynthesizedAudio
-	errCh   chan error
-	closeCh chan struct{}
-	closed  bool
-	started bool
-	flushed bool
+	eventCh   chan *SynthesizedAudio
+	errCh     chan error
+	closeCh   chan struct{}
+	closed    bool
+	inputDone bool
+	started   bool
+	flushed   bool
 }
 
 type fallbackSynthesizeInput struct {
@@ -740,6 +741,9 @@ func (s *fallbackSynthesizeStream) PushText(text string) error {
 	if s.closed {
 		return fmt.Errorf("stream closed")
 	}
+	if s.inputDone {
+		return nil
+	}
 	if text == "" || s.flushed {
 		return nil
 	}
@@ -754,11 +758,31 @@ func (s *fallbackSynthesizeStream) Flush() error {
 	if s.closed {
 		return fmt.Errorf("stream closed")
 	}
+	if s.inputDone {
+		return nil
+	}
 	if s.started {
 		s.flushed = true
 	}
 	s.inputBuffer = append(s.inputBuffer, fallbackSynthesizeInput{flush: true})
 	return s.activeStream.Flush()
+}
+
+func (s *fallbackSynthesizeStream) EndInput() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return fmt.Errorf("stream closed")
+	}
+	if s.inputDone {
+		return nil
+	}
+	s.inputDone = true
+	if s.started {
+		s.flushed = true
+	}
+	s.inputBuffer = append(s.inputBuffer, fallbackSynthesizeInput{flush: true})
+	return endSynthesizeStreamInput(s.activeStream)
 }
 
 func (s *fallbackSynthesizeStream) Close() error {
