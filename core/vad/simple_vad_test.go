@@ -323,6 +323,63 @@ func TestSimpleVADWindowDurationPreservesLeftoverSamples(t *testing.T) {
 	assertCombinedFrames(t, start.Frames, audioFrame(16000, 512, 6000), audioFrame(16000, 288, 6000), secondPush)
 }
 
+func TestSimpleVADWindowDurationUsesInferenceDurationForSampleIndex(t *testing.T) {
+	stream, err := NewSimpleVADWithOptions(SimpleVADOptions{
+		Threshold:      0.05,
+		SampleRate:     16000,
+		WindowDuration: 0.032,
+	}).Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	defer stream.Close()
+
+	window := audioFrame(44100, 1411, 0)
+	if err := stream.PushFrame(window); err != nil {
+		t.Fatalf("PushFrame() error = %v", err)
+	}
+
+	inference := nextVADEvent(t, stream)
+	if inference.Type != VADEventInferenceDone {
+		t.Fatalf("event type = %s, want %s", inference.Type, VADEventInferenceDone)
+	}
+	if inference.SamplesIndex != 512 {
+		t.Fatalf("SamplesIndex = %d, want 512 at configured 16 kHz inference rate", inference.SamplesIndex)
+	}
+	if inference.Timestamp != 0.032 {
+		t.Fatalf("Timestamp = %v, want 0.032", inference.Timestamp)
+	}
+	assertCombinedFrames(t, inference.Frames, window)
+}
+
+func TestSimpleVADWindowDurationCarriesFractionalInputSamples(t *testing.T) {
+	stream, err := NewSimpleVADWithOptions(SimpleVADOptions{
+		Threshold:      0.05,
+		SampleRate:     16000,
+		WindowDuration: 0.032,
+	}).Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	defer stream.Close()
+
+	if err := stream.PushFrame(audioFrame(44100, 7056, 0)); err != nil {
+		t.Fatalf("PushFrame() error = %v", err)
+	}
+
+	wantSamples := []int{1411, 1411, 1411, 1411, 1412}
+	for i, samples := range wantSamples {
+		inference := nextVADEvent(t, stream)
+		if inference.Type != VADEventInferenceDone {
+			t.Fatalf("event %d type = %s, want %s", i, inference.Type, VADEventInferenceDone)
+		}
+		if inference.SamplesIndex != (i+1)*512 {
+			t.Fatalf("event %d SamplesIndex = %d, want %d", i, inference.SamplesIndex, (i+1)*512)
+		}
+		assertCombinedFrames(t, inference.Frames, audioFrame(44100, samples, 0))
+	}
+}
+
 func TestSimpleVADWindowDurationLargePushDoesNotBlock(t *testing.T) {
 	stream, err := NewSimpleVADWithOptions(SimpleVADOptions{
 		Threshold:      0.05,

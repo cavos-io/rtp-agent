@@ -133,6 +133,7 @@ type simpleVADStream struct {
 	bufferedSpeechDuration     float64
 	windowFrames               []*model.AudioFrame
 	windowBufferedSamples      uint32
+	windowSampleRemainder      float64
 	lastActivity               time.Time
 	metricsInferenceDuration   float64
 	metricsInferenceCount      int
@@ -167,23 +168,22 @@ func (s *simpleVADStream) PushFrame(frame *model.AudioFrame) error {
 	}
 	frame = cloneFrame(frame)
 
-	windowSamples := s.windowSamples()
-	if windowSamples == 0 {
-		s.processFrame(frame)
+	if s.windowSamples() == 0 {
+		s.processFrame(frame, frameDuration(frame))
 		return nil
 	}
 
 	s.windowFrames = append(s.windowFrames, frame)
 	s.windowBufferedSamples += frame.SamplesPerChannel
-	for s.windowBufferedSamples >= windowSamples {
-		s.processFrame(s.takeWindowFrame(windowSamples))
+	for windowSamples := s.windowSamples(); windowSamples > 0 && s.windowBufferedSamples >= windowSamples; windowSamples = s.windowSamples() {
+		s.advanceWindowSampleRemainder(windowSamples)
+		s.processFrame(s.takeWindowFrame(windowSamples), s.options.WindowDuration)
 	}
 	return nil
 }
 
-func (s *simpleVADStream) processFrame(frame *model.AudioFrame) {
+func (s *simpleVADStream) processFrame(frame *model.AudioFrame, duration float64) {
 	probability := frameRMS(frame)
-	duration := frameDuration(frame)
 	if s.lastActivity.IsZero() {
 		s.lastActivity = time.Now()
 	}
@@ -427,6 +427,7 @@ func (s *simpleVADStream) resetState() {
 	s.resetSegment()
 	s.windowFrames = nil
 	s.windowBufferedSamples = 0
+	s.windowSampleRemainder = 0
 	s.samplesIndex = 0
 	s.sampleIndexRemainder = 0
 	s.timestamp = 0
@@ -436,11 +437,16 @@ func (s *simpleVADStream) windowSamples() uint32 {
 	if s.options.WindowDuration <= 0 || s.inputSampleRate == 0 {
 		return 0
 	}
-	samples := uint32(s.options.WindowDuration * float64(s.inputSampleRate))
+	samples := uint32(s.options.WindowDuration*float64(s.inputSampleRate) + s.windowSampleRemainder)
 	if samples == 0 {
 		return 0
 	}
 	return samples
+}
+
+func (s *simpleVADStream) advanceWindowSampleRemainder(samples uint32) {
+	exactSamples := s.options.WindowDuration*float64(s.inputSampleRate) + s.windowSampleRemainder
+	s.windowSampleRemainder = exactSamples - float64(samples)
 }
 
 func (s *simpleVADStream) takeWindowFrame(samples uint32) *model.AudioFrame {
