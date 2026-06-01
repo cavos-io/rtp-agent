@@ -253,6 +253,20 @@ func TestRealtimeEventCanCarryRemoteItemAdded(t *testing.T) {
 	}
 }
 
+func TestRealtimeEventCanCarrySessionReconnected(t *testing.T) {
+	ev := RealtimeEvent{
+		Type:      RealtimeEventTypeSessionReconnected,
+		Reconnect: &RealtimeSessionReconnectedEvent{},
+	}
+
+	if ev.Type != "session_reconnected" {
+		t.Fatalf("Type = %q, want session_reconnected", ev.Type)
+	}
+	if ev.Reconnect == nil {
+		t.Fatal("Reconnect = nil, want session reconnected payload")
+	}
+}
+
 func TestRealtimeEventCanCarryMetricsCollected(t *testing.T) {
 	ev := RealtimeEvent{
 		Type: RealtimeEventTypeMetricsCollected,
