@@ -106,6 +106,102 @@ func TestSimpleVADEndOfSpeechIncludesAccumulatedSpeechFrames(t *testing.T) {
 	}
 }
 
+func TestSimpleVADRequiresMinimumSpeechDurationBeforeStart(t *testing.T) {
+	stream, err := NewSimpleVADWithOptions(SimpleVADOptions{
+		Threshold:         0.05,
+		MinSpeechDuration: 0.03,
+	}).Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	defer stream.Close()
+
+	firstSpeech := audioFrame(16000, 160, 6000)
+	secondSpeech := audioFrame(16000, 160, 6000)
+	thirdSpeech := audioFrame(16000, 160, 6000)
+	for _, frame := range []*model.AudioFrame{firstSpeech, secondSpeech, thirdSpeech} {
+		if err := stream.PushFrame(frame); err != nil {
+			t.Fatalf("PushFrame() error = %v", err)
+		}
+	}
+
+	assertEventType(t, stream, VADEventInferenceDone)
+	assertEventType(t, stream, VADEventInferenceDone)
+	assertEventType(t, stream, VADEventInferenceDone)
+	start := nextVADEvent(t, stream)
+	if start.Type != VADEventStartOfSpeech {
+		t.Fatalf("event type = %s, want %s", start.Type, VADEventStartOfSpeech)
+	}
+	if start.SpeechDuration != 0.03 {
+		t.Fatalf("SpeechDuration = %v, want 0.03", start.SpeechDuration)
+	}
+	if len(start.Frames) != 3 || start.Frames[0] != firstSpeech || start.Frames[2] != thirdSpeech {
+		t.Fatalf("start frames = %#v, want accumulated threshold speech frames", start.Frames)
+	}
+}
+
+func TestSimpleVADDropsSpeechShorterThanMinimumDuration(t *testing.T) {
+	stream, err := NewSimpleVADWithOptions(SimpleVADOptions{
+		Threshold:         0.05,
+		MinSpeechDuration: 0.03,
+	}).Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	defer stream.Close()
+
+	if err := stream.PushFrame(audioFrame(16000, 160, 6000)); err != nil {
+		t.Fatalf("PushFrame() speech error = %v", err)
+	}
+	if err := stream.PushFrame(audioFrame(16000, 160, 0)); err != nil {
+		t.Fatalf("PushFrame() silence error = %v", err)
+	}
+
+	assertEventType(t, stream, VADEventInferenceDone)
+	assertEventType(t, stream, VADEventInferenceDone)
+	assertNoVADEvent(t, stream)
+}
+
+func TestSimpleVADRequiresMinimumSilenceDurationBeforeEnd(t *testing.T) {
+	stream, err := NewSimpleVADWithOptions(SimpleVADOptions{
+		Threshold:          0.05,
+		MinSilenceDuration: 0.03,
+	}).Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	defer stream.Close()
+
+	speech := audioFrame(16000, 160, 6000)
+	firstSilence := audioFrame(16000, 160, 0)
+	secondSilence := audioFrame(16000, 160, 0)
+	thirdSilence := audioFrame(16000, 160, 0)
+	for _, frame := range []*model.AudioFrame{speech, firstSilence, secondSilence, thirdSilence} {
+		if err := stream.PushFrame(frame); err != nil {
+			t.Fatalf("PushFrame() error = %v", err)
+		}
+	}
+
+	assertEventType(t, stream, VADEventInferenceDone)
+	assertEventType(t, stream, VADEventStartOfSpeech)
+	assertEventType(t, stream, VADEventInferenceDone)
+	assertEventType(t, stream, VADEventInferenceDone)
+	assertEventType(t, stream, VADEventInferenceDone)
+	end := nextVADEvent(t, stream)
+	if end.Type != VADEventEndOfSpeech {
+		t.Fatalf("event type = %s, want %s", end.Type, VADEventEndOfSpeech)
+	}
+	if end.SpeechDuration != 0.01 {
+		t.Fatalf("SpeechDuration = %v, want 0.01", end.SpeechDuration)
+	}
+	if end.SilenceDuration != 0.03 {
+		t.Fatalf("SilenceDuration = %v, want 0.03", end.SilenceDuration)
+	}
+	if len(end.Frames) != 1 || end.Frames[0] != speech {
+		t.Fatalf("end frames = %#v, want accumulated speech frame", end.Frames)
+	}
+}
+
 func TestSimpleVADFlushResetsSegmentState(t *testing.T) {
 	stream, err := NewSimpleVAD(0.05).Stream(context.Background())
 	if err != nil {
@@ -211,6 +307,22 @@ func nextVADEvent(t *testing.T, stream VADStream) *VADEvent {
 	case <-time.After(500 * time.Millisecond):
 		t.Fatal("timed out waiting for VAD event")
 		return nil
+	}
+}
+
+func assertNoVADEvent(t *testing.T, stream VADStream) {
+	t.Helper()
+
+	done := make(chan *VADEvent, 1)
+	go func() {
+		ev, _ := stream.Next()
+		done <- ev
+	}()
+
+	select {
+	case ev := <-done:
+		t.Fatalf("unexpected VAD event: %#v", ev)
+	case <-time.After(50 * time.Millisecond):
 	}
 }
 

@@ -61,8 +61,13 @@ func NewSileroVAD(opts ...VADOption) *SileroVAD {
 
 	// Fallback to simple VAD for now to provide out-of-the-box working plugin
 	// without requiring CGO/ONNX dependencies in the base install.
-	inner := vad.NewSimpleVAD(options.ActivationThreshold / 10.0) // Scale threshold for RMS vs Probability
-	
+	inner := vad.NewSimpleVADWithOptions(vad.SimpleVADOptions{
+		Threshold:             options.ActivationThreshold / 10.0, // Scale threshold for RMS vs probability.
+		MinSpeechDuration:     options.MinSpeechDuration,
+		MinSilenceDuration:    options.MinSilenceDuration,
+		DeactivationThreshold: max(options.ActivationThreshold/10.0-0.015, 0.001),
+	})
+
 	return &SileroVAD{
 		options: options,
 		inner:   inner,

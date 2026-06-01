@@ -11,37 +11,57 @@ import (
 )
 
 type SimpleVAD struct {
-	Threshold float64
+	options SimpleVADOptions
+}
+
+type SimpleVADOptions struct {
+	Threshold             float64
+	MinSpeechDuration     float64
+	MinSilenceDuration    float64
+	DeactivationThreshold float64
 }
 
 func NewSimpleVAD(threshold float64) *SimpleVAD {
 	if threshold == 0 {
 		threshold = 0.05
 	}
-	return &SimpleVAD{Threshold: threshold}
+	return NewSimpleVADWithOptions(SimpleVADOptions{Threshold: threshold})
+}
+
+func NewSimpleVADWithOptions(options SimpleVADOptions) *SimpleVAD {
+	if options.Threshold == 0 {
+		options.Threshold = 0.05
+	}
+	if options.DeactivationThreshold == 0 {
+		options.DeactivationThreshold = options.Threshold
+	}
+	return &SimpleVAD{options: options}
 }
 
 func (v *SimpleVAD) Stream(ctx context.Context) (VADStream, error) {
 	return &simpleVADStream{
-		ctx:       ctx,
-		threshold: v.Threshold,
-		events:    make(chan *VADEvent, 10),
+		ctx:     ctx,
+		options: v.options,
+		events:  make(chan *VADEvent, 10),
 	}, nil
 }
 
 type simpleVADStream struct {
-	ctx             context.Context
-	threshold       float64
-	events          chan *VADEvent
-	speaking        bool
-	closed          bool
-	inputEnded      bool
-	samplesIndex    int
-	timestamp       float64
-	speechDuration  float64
-	silenceDuration float64
-	speechFrames    []*model.AudioFrame
-	mu              sync.Mutex
+	ctx                        context.Context
+	options                    SimpleVADOptions
+	events                     chan *VADEvent
+	speaking                   bool
+	closed                     bool
+	inputEnded                 bool
+	samplesIndex               int
+	timestamp                  float64
+	speechDuration             float64
+	silenceDuration            float64
+	accumulatedSpeechDuration  float64
+	accumulatedSilenceDuration float64
+	pendingSpeechFrames        []*model.AudioFrame
+	speechFrames               []*model.AudioFrame
+	mu                         sync.Mutex
 }
 
 func (s *simpleVADStream) PushFrame(frame *model.AudioFrame) error {
@@ -75,23 +95,29 @@ func (s *simpleVADStream) PushFrame(frame *model.AudioFrame) error {
 		Frames:                []*model.AudioFrame{frame},
 		Probability:           probability,
 		Speaking:              s.speaking,
-		RawAccumulatedSpeech:  s.speechDuration,
-		RawAccumulatedSilence: s.silenceDuration,
+		RawAccumulatedSpeech:  s.accumulatedSpeechDuration,
+		RawAccumulatedSilence: s.accumulatedSilenceDuration,
 	}
 
-	if probability > s.threshold {
+	if probability >= s.options.Threshold || (s.speaking && probability > s.options.DeactivationThreshold) {
+		s.accumulatedSpeechDuration += duration
+		s.accumulatedSilenceDuration = 0
+
 		if !s.speaking {
-			s.speaking = true
-			s.speechDuration = duration
-			s.silenceDuration = 0
-			s.speechFrames = []*model.AudioFrame{frame}
-			s.events <- &VADEvent{
-				Type:           VADEventStartOfSpeech,
-				SamplesIndex:   s.samplesIndex,
-				Timestamp:      s.timestamp,
-				SpeechDuration: s.speechDuration,
-				Frames:         []*model.AudioFrame{frame},
-				Speaking:       true,
+			s.pendingSpeechFrames = append(s.pendingSpeechFrames, frame)
+			if s.accumulatedSpeechDuration >= s.options.MinSpeechDuration {
+				s.speaking = true
+				s.speechDuration = s.accumulatedSpeechDuration
+				s.silenceDuration = 0
+				s.speechFrames = append([]*model.AudioFrame(nil), s.pendingSpeechFrames...)
+				s.events <- &VADEvent{
+					Type:           VADEventStartOfSpeech,
+					SamplesIndex:   s.samplesIndex,
+					Timestamp:      s.timestamp,
+					SpeechDuration: s.speechDuration,
+					Frames:         append([]*model.AudioFrame(nil), s.pendingSpeechFrames...),
+					Speaking:       true,
+				}
 			}
 		} else {
 			s.speechDuration += duration
@@ -99,23 +125,28 @@ func (s *simpleVADStream) PushFrame(frame *model.AudioFrame) error {
 			s.speechFrames = append(s.speechFrames, frame)
 		}
 	} else {
+		s.accumulatedSilenceDuration += duration
+		s.accumulatedSpeechDuration = 0
+
 		if s.speaking {
-			s.speaking = false
-			s.silenceDuration = duration
-			frames := append([]*model.AudioFrame(nil), s.speechFrames...)
-			s.events <- &VADEvent{
-				Type:            VADEventEndOfSpeech,
-				SamplesIndex:    s.samplesIndex,
-				Timestamp:       s.timestamp,
-				SpeechDuration:  s.speechDuration,
-				SilenceDuration: s.silenceDuration,
-				Frames:          frames,
-				Speaking:        false,
+			s.silenceDuration = s.accumulatedSilenceDuration
+			if s.accumulatedSilenceDuration >= s.options.MinSilenceDuration {
+				s.speaking = false
+				frames := append([]*model.AudioFrame(nil), s.speechFrames...)
+				s.events <- &VADEvent{
+					Type:            VADEventEndOfSpeech,
+					SamplesIndex:    s.samplesIndex,
+					Timestamp:       s.timestamp,
+					SpeechDuration:  s.speechDuration,
+					SilenceDuration: s.silenceDuration,
+					Frames:          frames,
+					Speaking:        false,
+				}
+				s.resetSegment()
 			}
-			s.speechDuration = 0
-			s.speechFrames = nil
 		} else {
 			s.silenceDuration += duration
+			s.pendingSpeechFrames = nil
 		}
 	}
 
@@ -178,6 +209,9 @@ func (s *simpleVADStream) resetSegment() {
 	s.speaking = false
 	s.speechDuration = 0
 	s.silenceDuration = 0
+	s.accumulatedSpeechDuration = 0
+	s.accumulatedSilenceDuration = 0
+	s.pendingSpeechFrames = nil
 	s.speechFrames = nil
 }
 
