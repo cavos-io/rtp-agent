@@ -419,16 +419,20 @@ func (a *RunAssert) ContainsMessage(role llm.ChatRole, content string) *RunAsser
 }
 
 func (a *RunAssert) ContainsMessageRole(role llm.ChatRole) *RunAssert {
+	return a.ContainsMessageMatching(RunEventCriteria{Role: role})
+}
+
+func (a *RunAssert) ContainsMessageMatching(criteria RunEventCriteria) *RunAssert {
 	found := false
 	for _, event := range a.events() {
 		msgEvent, ok := event.(*ChatMessageEvent)
-		if ok && msgEvent.Item.Role == role {
+		if ok && eventMatchesCriteria(msgEvent, criteria) {
 			found = true
 			break
 		}
 	}
 	if !found {
-		a.errors = append(a.errors, fmt.Errorf("expected message from %s, but not found", role))
+		a.errors = append(a.errors, errors.New("expected message matching criteria, but not found"))
 	}
 	return a
 }

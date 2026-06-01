@@ -364,6 +364,39 @@ func TestRunAssertUsesRecordedEventsForMessageRole(t *testing.T) {
 	}
 }
 
+func TestRunAssertContainsMessageMatchingAnyMessage(t *testing.T) {
+	result := NewRunResult(llm.NewChatContext())
+	result.RecordItem(&llm.ChatMessage{ID: "msg_1", Role: llm.ChatRoleAssistant, CreatedAt: time.Now()})
+
+	err := result.Expect.ContainsMessageMatching(RunEventCriteria{}).HasError()
+
+	if err != nil {
+		t.Fatalf("ContainsMessageMatching returned error = %v, want nil for any message", err)
+	}
+}
+
+func TestRunAssertContainsMessageMatchingRole(t *testing.T) {
+	result := NewRunResult(llm.NewChatContext())
+	result.RecordItem(&llm.ChatMessage{ID: "msg_1", Role: llm.ChatRoleAssistant, CreatedAt: time.Now()})
+
+	err := result.Expect.ContainsMessageMatching(RunEventCriteria{Role: llm.ChatRoleAssistant}).HasError()
+
+	if err != nil {
+		t.Fatalf("ContainsMessageMatching returned error = %v, want nil for matching role", err)
+	}
+}
+
+func TestRunAssertContainsMessageMatchingReportsRoleMismatch(t *testing.T) {
+	result := NewRunResult(llm.NewChatContext())
+	result.RecordItem(&llm.ChatMessage{ID: "msg_1", Role: llm.ChatRoleAssistant, CreatedAt: time.Now()})
+
+	err := result.Expect.ContainsMessageMatching(RunEventCriteria{Role: llm.ChatRoleUser}).HasError()
+
+	if err == nil {
+		t.Fatal("ContainsMessageMatching error = nil, want role mismatch error")
+	}
+}
+
 func TestRunAssertReportsMissingMessageRole(t *testing.T) {
 	result := NewRunResult(llm.NewChatContext())
 	message := &llm.ChatMessage{
