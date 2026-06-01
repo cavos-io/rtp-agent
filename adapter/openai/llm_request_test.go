@@ -35,6 +35,7 @@ func TestBuildOpenAIChatCompletionRequestAppliesExtraParams(t *testing.T) {
 			"frequency_penalty":     0.2,
 			"n":                     2,
 			"max_completion_tokens": 128,
+			"logit_bias":            map[string]any{"42": 7.0},
 			"reasoning_effort":      "low",
 			"metadata":              map[string]any{"trace": "abc"},
 			"seed":                  42,
@@ -62,6 +63,9 @@ func TestBuildOpenAIChatCompletionRequestAppliesExtraParams(t *testing.T) {
 	}
 	if req.MaxCompletionTokens != 128 {
 		t.Fatalf("MaxCompletionTokens = %d, want 128", req.MaxCompletionTokens)
+	}
+	if req.LogitBias["42"] != 7 {
+		t.Fatalf("LogitBias = %#v, want token 42 bias 7", req.LogitBias)
 	}
 	if req.ReasoningEffort != "low" {
 		t.Fatalf("ReasoningEffort = %q, want low", req.ReasoningEffort)

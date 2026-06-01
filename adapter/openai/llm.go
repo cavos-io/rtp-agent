@@ -198,7 +198,7 @@ func applyOpenAIExtraParams(req *openai.ChatCompletionRequest, params map[string
 				req.MaxCompletionTokens = v
 			}
 		case "logit_bias":
-			if v, ok := value.(map[string]int); ok {
+			if v := asIntMap(value); v != nil {
 				req.LogitBias = v
 			}
 		case "logprobs":
@@ -266,6 +266,25 @@ func asInt(value any) (int, bool) {
 		return int(v), true
 	default:
 		return 0, false
+	}
+}
+
+func asIntMap(value any) map[string]int {
+	switch v := value.(type) {
+	case map[string]int:
+		return v
+	case map[string]any:
+		out := make(map[string]int, len(v))
+		for key, val := range v {
+			intVal, ok := asInt(val)
+			if !ok {
+				return nil
+			}
+			out[key] = intVal
+		}
+		return out
+	default:
+		return nil
 	}
 }
 
