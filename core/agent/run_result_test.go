@@ -117,3 +117,63 @@ func TestRunResultFinalOutputReturnsValueAfterDone(t *testing.T) {
 		t.Fatal("Done() = false, want true after MarkDone")
 	}
 }
+
+func TestRunResultWatchSpeechHandleRecordsAddedItems(t *testing.T) {
+	result := NewRunResult(llm.NewChatContext())
+	speech := NewSpeechHandle(true, DefaultInputDetails())
+	message := &llm.ChatMessage{ID: "msg_1", Role: llm.ChatRoleAssistant, CreatedAt: time.Now()}
+
+	result.WatchSpeechHandle(speech)
+	speech.AddChatItems(message)
+
+	events := result.Events()
+	if len(events) != 1 {
+		t.Fatalf("Events length = %d, want 1", len(events))
+	}
+	ev, ok := events[0].(*ChatMessageEvent)
+	if !ok || ev.Item != message {
+		t.Fatalf("event = %#v, want message event for added item", events[0])
+	}
+}
+
+func TestRunResultWatchSpeechHandleMarksDoneWhenSpeechDone(t *testing.T) {
+	result := NewRunResult(llm.NewChatContext())
+	first := NewSpeechHandle(true, DefaultInputDetails())
+	second := NewSpeechHandle(true, DefaultInputDetails())
+
+	result.WatchSpeechHandle(first)
+	result.WatchSpeechHandle(second)
+	first.MarkDone()
+	if result.Done() {
+		t.Fatal("RunResult marked done before all watched speech handles finished")
+	}
+
+	second.MarkDone()
+
+	if !result.Done() {
+		t.Fatal("RunResult did not mark done after all watched speech handles finished")
+	}
+}
+
+func TestRunResultUnwatchSpeechHandleRemovesCallbacks(t *testing.T) {
+	result := NewRunResult(llm.NewChatContext())
+	speech := NewSpeechHandle(true, DefaultInputDetails())
+	message := &llm.ChatMessage{ID: "msg_1", Role: llm.ChatRoleAssistant, CreatedAt: time.Now()}
+
+	if ok := result.WatchSpeechHandle(speech); !ok {
+		t.Fatal("WatchSpeechHandle returned false, want true for first watch")
+	}
+	if ok := result.UnwatchSpeechHandle(speech); !ok {
+		t.Fatal("UnwatchSpeechHandle returned false, want true for watched handle")
+	}
+
+	speech.AddChatItems(message)
+	speech.MarkDone()
+
+	if len(result.Events()) != 0 {
+		t.Fatalf("Events length = %d, want 0 after unwatch", len(result.Events()))
+	}
+	if result.Done() {
+		t.Fatal("RunResult marked done after unwatched speech completed")
+	}
+}

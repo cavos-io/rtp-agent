@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/cavos-io/conversation-worker/core/evals"
@@ -23,30 +24,50 @@ type RunResult struct {
 	done           bool
 	finalOutput    any
 	finalOutputSet bool
+	watchedSpeech  map[*SpeechHandle]runResultSpeechWatch
+	mu             sync.Mutex
+}
+
+type runResultSpeechWatch struct {
+	removeDoneCallback      func()
+	removeItemAddedCallback func()
 }
 
 func NewRunResult(chatCtx *llm.ChatContext) *RunResult {
 	return &RunResult{
-		ChatCtx: chatCtx,
-		Expect:  &RunAssert{ChatCtx: chatCtx},
-		events:  make([]RunEvent, 0),
+		ChatCtx:       chatCtx,
+		Expect:        &RunAssert{ChatCtx: chatCtx},
+		events:        make([]RunEvent, 0),
+		watchedSpeech: make(map[*SpeechHandle]runResultSpeechWatch),
 	}
 }
 
 func (r *RunResult) Done() bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
 	return r.done
 }
 
 func (r *RunResult) MarkDone() {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
 	r.done = true
 }
 
 func (r *RunResult) SetFinalOutput(output any) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
 	r.finalOutput = output
 	r.finalOutputSet = true
 }
 
 func (r *RunResult) FinalOutput() (any, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
 	if !r.done {
 		return nil, ErrRunResultNotDone
 	}
@@ -92,12 +113,26 @@ func (e *AgentHandoffEvent) GetType() string         { return "agent_handoff" }
 func (e *AgentHandoffEvent) GetCreatedAt() time.Time { return e.Item.GetCreatedAt() }
 
 func (r *RunResult) Events() []RunEvent {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
 	events := make([]RunEvent, len(r.events))
 	copy(events, r.events)
 	return events
 }
 
 func (r *RunResult) RecordItem(item llm.ChatItem) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	r.recordItemLocked(item)
+}
+
+func (r *RunResult) recordItemLocked(item llm.ChatItem) {
+	if r.done {
+		return
+	}
+
 	var event RunEvent
 	switch item := item.(type) {
 	case *llm.ChatMessage:
@@ -113,7 +148,95 @@ func (r *RunResult) RecordItem(item llm.ChatItem) {
 }
 
 func (r *RunResult) RecordAgentHandoff(item *llm.AgentHandoff, oldAgent *Agent, newAgent *Agent) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	if r.done {
+		return
+	}
 	r.insertEvent(&AgentHandoffEvent{Item: item, OldAgent: oldAgent, NewAgent: newAgent})
+}
+
+func (r *RunResult) WatchSpeechHandle(speech *SpeechHandle) bool {
+	if speech == nil {
+		return false
+	}
+
+	r.mu.Lock()
+	if r.done {
+		r.mu.Unlock()
+		return false
+	}
+	if _, ok := r.watchedSpeech[speech]; ok {
+		r.mu.Unlock()
+		return false
+	}
+	r.watchedSpeech[speech] = runResultSpeechWatch{}
+	r.mu.Unlock()
+
+	removeItemAddedCallback := speech.AddItemAddedCallback(func(item llm.ChatItem) {
+		r.RecordItem(item)
+	})
+	removeDoneCallback := speech.AddDoneCallback(func(*SpeechHandle) {
+		r.markDoneIfNeeded()
+	})
+
+	r.mu.Lock()
+	if r.done {
+		r.mu.Unlock()
+		removeDoneCallback()
+		removeItemAddedCallback()
+		return false
+	}
+	if _, ok := r.watchedSpeech[speech]; !ok {
+		r.mu.Unlock()
+		removeDoneCallback()
+		removeItemAddedCallback()
+		return false
+	}
+	r.watchedSpeech[speech] = runResultSpeechWatch{
+		removeDoneCallback:      removeDoneCallback,
+		removeItemAddedCallback: removeItemAddedCallback,
+	}
+	r.mu.Unlock()
+
+	r.markDoneIfNeeded()
+	return true
+}
+
+func (r *RunResult) UnwatchSpeechHandle(speech *SpeechHandle) bool {
+	r.mu.Lock()
+	watch, ok := r.watchedSpeech[speech]
+	if ok {
+		delete(r.watchedSpeech, speech)
+	}
+	r.mu.Unlock()
+	if !ok {
+		return false
+	}
+
+	if watch.removeDoneCallback != nil {
+		watch.removeDoneCallback()
+	}
+	if watch.removeItemAddedCallback != nil {
+		watch.removeItemAddedCallback()
+	}
+	return true
+}
+
+func (r *RunResult) markDoneIfNeeded() {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	if r.done || len(r.watchedSpeech) == 0 {
+		return
+	}
+	for speech := range r.watchedSpeech {
+		if !speech.IsDone() {
+			return
+		}
+	}
+	r.done = true
 }
 
 func (r *RunResult) insertEvent(event RunEvent) {
