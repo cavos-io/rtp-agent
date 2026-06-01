@@ -125,7 +125,8 @@ func (l *AnthropicLLM) Chat(ctx context.Context, chatCtx *llm.ChatContext, opts 
 		if cancel != nil {
 			cancel()
 		}
-		return nil, fmt.Errorf("anthropic error: %s", string(respBody))
+		body := strings.TrimSpace(string(respBody))
+		return nil, llm.CreateAPIErrorFromHTTP(body, resp.StatusCode, anthropicRequestID(resp.Header), body)
 	}
 
 	return &anthropicStream{
@@ -142,6 +143,18 @@ func applyAnthropicExtraParams(body map[string]any, params map[string]any) {
 			body[key] = value
 		}
 	}
+}
+
+func anthropicRequestID(header http.Header) string {
+	if requestID := header.Get("request-id"); requestID != "" {
+		return requestID
+	}
+	for key, values := range header {
+		if strings.EqualFold(key, "request-id") && len(values) > 0 {
+			return values[0]
+		}
+	}
+	return ""
 }
 
 func buildAnthropicToolChoice(choice llm.ToolChoice, parallelToolCalls bool) map[string]any {
