@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"io"
+	"strconv"
 
 	speech "cloud.google.com/go/speech/apiv1"
 	"cloud.google.com/go/speech/apiv1/speechpb"
@@ -51,11 +52,7 @@ func (s *GoogleSTT) Stream(ctx context.Context, language string) (stt.RecognizeS
 	err = stream.Send(&speechpb.StreamingRecognizeRequest{
 		StreamingRequest: &speechpb.StreamingRecognizeRequest_StreamingConfig{
 			StreamingConfig: &speechpb.StreamingRecognitionConfig{
-				Config: &speechpb.RecognitionConfig{
-					Encoding:        speechpb.RecognitionConfig_LINEAR16,
-					SampleRateHertz: 16000,
-					LanguageCode:    language,
-				},
+				Config:         googleRecognitionConfig(language),
 				InterimResults: true,
 			},
 		},
@@ -86,11 +83,7 @@ func (s *GoogleSTT) Recognize(ctx context.Context, frames []*model.AudioFrame, l
 	}
 
 	resp, err := s.client.Recognize(ctx, &speechpb.RecognizeRequest{
-		Config: &speechpb.RecognitionConfig{
-			Encoding:        speechpb.RecognitionConfig_LINEAR16,
-			SampleRateHertz: 16000,
-			LanguageCode:    language,
-		},
+		Config: googleRecognitionConfig(language),
 		Audio: &speechpb.RecognitionAudio{
 			AudioSource: &speechpb.RecognitionAudio_Content{
 				Content: buf.Bytes(),
@@ -102,17 +95,67 @@ func (s *GoogleSTT) Recognize(ctx context.Context, frames []*model.AudioFrame, l
 		return nil, err
 	}
 
-	var transcript string
+	data := stt.SpeechData{}
 	if len(resp.Results) > 0 && len(resp.Results[0].Alternatives) > 0 {
-		transcript = resp.Results[0].Alternatives[0].Transcript
+		data = googleSpeechDataFromAlternative(resp.Results[0].Alternatives[0])
 	}
 
 	return &stt.SpeechEvent{
 		Type: stt.SpeechEventFinalTranscript,
 		Alternatives: []stt.SpeechData{
-			{Text: transcript},
+			data,
 		},
 	}, nil
+}
+
+func googleRecognitionConfig(language string) *speechpb.RecognitionConfig {
+	return &speechpb.RecognitionConfig{
+		Encoding:              speechpb.RecognitionConfig_LINEAR16,
+		SampleRateHertz:       16000,
+		LanguageCode:          language,
+		EnableWordTimeOffsets: true,
+		EnableWordConfidence:  true,
+	}
+}
+
+func googleSpeechDataFromAlternative(alt *speechpb.SpeechRecognitionAlternative) stt.SpeechData {
+	if alt == nil {
+		return stt.SpeechData{}
+	}
+
+	return stt.SpeechData{
+		Text:       alt.GetTranscript(),
+		Confidence: float64(alt.GetConfidence()),
+		Words:      googleTimedStrings(alt.GetWords()),
+	}
+}
+
+func googleTimedStrings(words []*speechpb.WordInfo) []stt.TimedString {
+	if len(words) == 0 {
+		return nil
+	}
+
+	timed := make([]stt.TimedString, 0, len(words))
+	for _, word := range words {
+		timed = append(timed, stt.TimedString{
+			Text:       word.GetWord(),
+			StartTime:  word.GetStartTime().AsDuration().Seconds(),
+			EndTime:    word.GetEndTime().AsDuration().Seconds(),
+			Confidence: float64(word.GetConfidence()),
+			SpeakerID:  googleSpeakerID(word),
+		})
+	}
+	return timed
+}
+
+func googleSpeakerID(word *speechpb.WordInfo) string {
+	if label := word.GetSpeakerLabel(); label != "" {
+		return label
+	}
+	if tag := word.GetSpeakerTag(); tag != 0 {
+		return strconv.Itoa(int(tag))
+	}
+	return ""
 }
 
 type googleSTTStream struct {
@@ -147,10 +190,7 @@ func (s *googleSTTStream) readLoop() {
 			s.events <- &stt.SpeechEvent{
 				Type: eventType,
 				Alternatives: []stt.SpeechData{
-					{
-						Text:       alt.Transcript,
-						Confidence: float64(alt.Confidence),
-					},
+					googleSpeechDataFromAlternative(alt),
 				},
 			}
 		}
