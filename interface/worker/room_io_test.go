@@ -308,6 +308,82 @@ func TestRoomIOShouldAcceptParticipantSkipsPublishOnBehalfWhenUnlinked(t *testin
 	}
 }
 
+func TestRoomIOHandleParticipantDisconnectedClosesSessionForLinkedParticipant(t *testing.T) {
+	session := &agent.AgentSession{}
+	rio := &RoomIO{
+		AgentSession: session,
+		Options: RoomOptions{
+			ParticipantIdentity: "caller-a",
+		},
+	}
+
+	rio.handleParticipantDisconnected("caller-a", livekit.DisconnectReason_CLIENT_INITIATED)
+
+	select {
+	case ev := <-session.CloseEvents():
+		if ev.Reason != agent.CloseReasonParticipantDisconnected {
+			t.Fatalf("CloseEvent.Reason = %q, want participant_disconnected", ev.Reason)
+		}
+	default:
+		t.Fatal("session did not receive participant-disconnected close event")
+	}
+}
+
+func TestRoomIOHandleParticipantDisconnectedIgnoresUnlinkedParticipant(t *testing.T) {
+	session := &agent.AgentSession{}
+	rio := &RoomIO{
+		AgentSession: session,
+		Options: RoomOptions{
+			ParticipantIdentity: "caller-a",
+		},
+	}
+
+	rio.handleParticipantDisconnected("caller-b", livekit.DisconnectReason_CLIENT_INITIATED)
+
+	select {
+	case ev := <-session.CloseEvents():
+		t.Fatalf("unexpected close event: %#v", ev)
+	default:
+	}
+}
+
+func TestRoomIOHandleParticipantDisconnectedCanBeDisabled(t *testing.T) {
+	session := &agent.AgentSession{}
+	rio := &RoomIO{
+		AgentSession: session,
+		Options: RoomOptions{
+			ParticipantIdentity:      "caller-a",
+			DisableCloseOnDisconnect: true,
+		},
+	}
+
+	rio.handleParticipantDisconnected("caller-a", livekit.DisconnectReason_CLIENT_INITIATED)
+
+	select {
+	case ev := <-session.CloseEvents():
+		t.Fatalf("unexpected close event: %#v", ev)
+	default:
+	}
+}
+
+func TestRoomIOHandleParticipantDisconnectedIgnoresNonCloseReasons(t *testing.T) {
+	session := &agent.AgentSession{}
+	rio := &RoomIO{
+		AgentSession: session,
+		Options: RoomOptions{
+			ParticipantIdentity: "caller-a",
+		},
+	}
+
+	rio.handleParticipantDisconnected("caller-a", livekit.DisconnectReason_DUPLICATE_IDENTITY)
+
+	select {
+	case ev := <-session.CloseEvents():
+		t.Fatalf("unexpected close event: %#v", ev)
+	default:
+	}
+}
+
 func TestRoomIOCloseUnregistersPreConnectAudioHandler(t *testing.T) {
 	room := lksdk.NewRoom(nil)
 	rio := NewRoomIO(room, &agent.AgentSession{}, RoomOptions{})

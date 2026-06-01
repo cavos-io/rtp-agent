@@ -103,13 +103,14 @@ func (e *opusEncoder) Close() error {
 }
 
 type RoomOptions struct {
-	AudioTrackName         string
-	PreConnectAudioTimeout time.Duration
-	DisablePreConnectAudio bool
-	DisableTextInput       bool
-	TextInputCallback      TextInputCallback
-	ParticipantIdentity    string
-	ParticipantKinds       []lksdk.ParticipantKind
+	AudioTrackName           string
+	PreConnectAudioTimeout   time.Duration
+	DisablePreConnectAudio   bool
+	DisableTextInput         bool
+	DisableCloseOnDisconnect bool
+	TextInputCallback        TextInputCallback
+	ParticipantIdentity      string
+	ParticipantKinds         []lksdk.ParticipantKind
 }
 
 const RoomIOChatTopic = "lk.chat"
@@ -215,6 +216,7 @@ func (rio *RoomIO) registerTextInput() {
 func (rio *RoomIO) GetCallback() *lksdk.RoomCallback {
 	cb := lksdk.NewRoomCallback()
 	cb.OnTrackSubscribed = rio.onTrackSubscribed
+	cb.OnParticipantDisconnected = rio.onParticipantDisconnected
 	cb.OnDataPacket = rio.onDataPacket
 	return cb
 }
@@ -347,6 +349,38 @@ func (rio *RoomIO) localParticipantIdentity() string {
 		return ""
 	}
 	return rio.Room.LocalParticipant.Identity()
+}
+
+func (rio *RoomIO) onParticipantDisconnected(participant *lksdk.RemoteParticipant) {
+	if participant == nil {
+		return
+	}
+	rio.handleParticipantDisconnected(participant.Identity(), participant.DisconnectReason())
+}
+
+func (rio *RoomIO) handleParticipantDisconnected(participantIdentity string, reason livekit.DisconnectReason) {
+	if rio == nil || rio.AgentSession == nil || rio.Options.DisableCloseOnDisconnect {
+		return
+	}
+	linkedParticipant := rio.participantIdentity()
+	if linkedParticipant == "" || participantIdentity != linkedParticipant {
+		return
+	}
+	if !roomIOCloseOnDisconnectReason(reason) {
+		return
+	}
+	rio.AgentSession.CloseSoon(agent.CloseReasonParticipantDisconnected)
+}
+
+func roomIOCloseOnDisconnectReason(reason livekit.DisconnectReason) bool {
+	switch reason {
+	case livekit.DisconnectReason_CLIENT_INITIATED,
+		livekit.DisconnectReason_ROOM_DELETED,
+		livekit.DisconnectReason_USER_REJECTED:
+		return true
+	default:
+		return false
+	}
 }
 
 func (rio *RoomIO) handleAudioTrack(track *webrtc.TrackRemote) {
