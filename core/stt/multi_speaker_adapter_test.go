@@ -343,8 +343,12 @@ func TestMultiSpeakerAdapterWrapperForwardsEndInput(t *testing.T) {
 	case <-time.After(100 * time.Millisecond):
 		t.Fatal("timed out waiting for inner EndInput")
 	}
-	if !reflect.DeepEqual(inner.calls, []string{"end_input"}) {
-		t.Fatalf("inner calls = %#v, want end_input", inner.calls)
+	want := []string{"flush", "end_input"}
+	if len(inner.calls) != len(want) {
+		t.Fatalf("inner call count = %d, want %d: %#v", len(inner.calls), len(want), inner.calls)
+	}
+	if !reflect.DeepEqual(inner.calls, want) {
+		t.Fatalf("inner calls = %#v, want %#v", inner.calls, want)
 	}
 }
 

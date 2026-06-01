@@ -977,7 +977,10 @@ func TestFallbackStreamEndInputFlushesAndRejectsMoreInput(t *testing.T) {
 		t.Fatal("Flush after EndInput returned nil, want error")
 	}
 
-	want := []string{"push:first", "end_input"}
+	want := []string{"push:first", "flush", "end_input"}
+	if len(inner.calls) != len(want) {
+		t.Fatalf("inner call count = %d, want %d: %#v", len(inner.calls), len(want), inner.calls)
+	}
 	if strings.Join(inner.calls, ",") != strings.Join(want, ",") {
 		t.Fatalf("inner calls = %#v, want %#v", inner.calls, want)
 	}
@@ -1007,8 +1010,12 @@ func TestFallbackStreamForwardsEndInput(t *testing.T) {
 		t.Fatalf("EndInput returned error: %v", err)
 	}
 
-	if strings.Join(inner.calls, ",") != "end_input" {
-		t.Fatalf("inner calls = %#v, want end_input", inner.calls)
+	want := "flush,end_input"
+	if len(inner.calls) != 2 {
+		t.Fatalf("inner call count = %d, want 2: %#v", len(inner.calls), inner.calls)
+	}
+	if strings.Join(inner.calls, ",") != want {
+		t.Fatalf("inner calls = %#v, want flush,end_input", inner.calls)
 	}
 }
 

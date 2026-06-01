@@ -600,18 +600,22 @@ func (s *fallbackRecognizeStream) EndInput() error {
 		return fmt.Errorf("stream input ended")
 	}
 	s.inputEnded = true
-	s.inputBuffer = append(s.inputBuffer, fallbackRecognizeInput{end: true})
+	s.inputBuffer = append(s.inputBuffer, fallbackRecognizeInput{flush: true}, fallbackRecognizeInput{end: true})
 	for _, recovery := range s.recoveries {
+		_ = recovery.Flush()
 		if ending, ok := recovery.(InputEnding); ok {
 			_ = ending.EndInput()
 		} else {
-			_ = recovery.Flush()
+			continue
 		}
+	}
+	if err := s.activeStream.Flush(); err != nil {
+		return err
 	}
 	if ending, ok := s.activeStream.(InputEnding); ok {
 		return ending.EndInput()
 	}
-	return s.activeStream.Flush()
+	return nil
 }
 
 func (s *fallbackRecognizeStream) Close() error {
