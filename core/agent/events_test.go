@@ -72,3 +72,67 @@ func TestRunContextWaitForPlayoutWaitsOnlyInitialGenerationStep(t *testing.T) {
 		t.Fatal("speech is done, want WaitForPlayout to return without requiring full speech completion")
 	}
 }
+
+func TestFunctionToolsExecutedEventPairsCallsAndOutputs(t *testing.T) {
+	callA := &llm.FunctionCall{CallID: "call_a", Name: "lookup"}
+	callB := &llm.FunctionCall{CallID: "call_b", Name: "notify"}
+	outA := &llm.FunctionCallOutput{CallID: "call_a", Name: "lookup", Output: "ok"}
+
+	ev, err := NewFunctionToolsExecutedEvent(
+		[]*llm.FunctionCall{callA, callB},
+		[]*llm.FunctionCallOutput{outA, nil},
+	)
+
+	if err != nil {
+		t.Fatalf("NewFunctionToolsExecutedEvent error = %v, want nil", err)
+	}
+	if ev.GetType() != "function_tools_executed" {
+		t.Fatalf("GetType() = %q, want function_tools_executed", ev.GetType())
+	}
+	if ev.CreatedAt.IsZero() {
+		t.Fatal("CreatedAt is zero")
+	}
+	pairs := ev.Zipped()
+	if len(pairs) != 2 {
+		t.Fatalf("Zipped length = %d, want 2", len(pairs))
+	}
+	if pairs[0].FunctionCall != callA || pairs[0].FunctionCallOutput != outA {
+		t.Fatalf("first pair = %#v, want callA/outA", pairs[0])
+	}
+	if pairs[1].FunctionCall != callB || pairs[1].FunctionCallOutput != nil {
+		t.Fatalf("second pair = %#v, want callB/nil", pairs[1])
+	}
+}
+
+func TestFunctionToolsExecutedEventRequiresParallelLists(t *testing.T) {
+	_, err := NewFunctionToolsExecutedEvent(
+		[]*llm.FunctionCall{{CallID: "call_a", Name: "lookup"}},
+		nil,
+	)
+
+	if !errors.Is(err, ErrFunctionToolEventLengthMismatch) {
+		t.Fatalf("NewFunctionToolsExecutedEvent error = %v, want ErrFunctionToolEventLengthMismatch", err)
+	}
+}
+
+func TestFunctionToolsExecutedEventReplyAndHandoffFlagsCanBeCanceled(t *testing.T) {
+	ev, err := NewFunctionToolsExecutedEvent(
+		[]*llm.FunctionCall{{CallID: "call_a", Name: "lookup"}},
+		[]*llm.FunctionCallOutput{{CallID: "call_a", Name: "lookup", Output: "ok"}},
+	)
+	if err != nil {
+		t.Fatalf("NewFunctionToolsExecutedEvent error = %v, want nil", err)
+	}
+	ev.ReplyRequired = true
+	ev.HandoffRequired = true
+
+	ev.CancelToolReply()
+	ev.CancelAgentHandoff()
+
+	if ev.HasToolReply() {
+		t.Fatal("HasToolReply() = true, want false after CancelToolReply")
+	}
+	if ev.HasAgentHandoff() {
+		t.Fatal("HasAgentHandoff() = true, want false after CancelAgentHandoff")
+	}
+}

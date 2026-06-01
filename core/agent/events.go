@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"sync"
 	"time"
 
@@ -15,6 +16,8 @@ import (
 type Event interface {
 	GetType() string
 }
+
+var ErrFunctionToolEventLengthMismatch = errors.New("function calls and outputs must have the same length")
 
 type UserInputTranscribedEvent struct {
 	Language   string
@@ -32,6 +35,59 @@ type ConversationItemAddedEvent struct {
 }
 
 func (e *ConversationItemAddedEvent) GetType() string { return "conversation_item_added" }
+
+type FunctionToolsExecutedEvent struct {
+	FunctionCalls       []*llm.FunctionCall
+	FunctionCallOutputs []*llm.FunctionCallOutput
+	CreatedAt           time.Time
+	ReplyRequired       bool
+	HandoffRequired     bool
+}
+
+type FunctionToolExecutionPair struct {
+	FunctionCall       *llm.FunctionCall
+	FunctionCallOutput *llm.FunctionCallOutput
+}
+
+func NewFunctionToolsExecutedEvent(calls []*llm.FunctionCall, outputs []*llm.FunctionCallOutput) (*FunctionToolsExecutedEvent, error) {
+	if len(calls) != len(outputs) {
+		return nil, ErrFunctionToolEventLengthMismatch
+	}
+	return &FunctionToolsExecutedEvent{
+		FunctionCalls:       calls,
+		FunctionCallOutputs: outputs,
+		CreatedAt:           time.Now(),
+	}, nil
+}
+
+func (e *FunctionToolsExecutedEvent) GetType() string { return "function_tools_executed" }
+
+func (e *FunctionToolsExecutedEvent) Zipped() []FunctionToolExecutionPair {
+	pairs := make([]FunctionToolExecutionPair, len(e.FunctionCalls))
+	for i := range e.FunctionCalls {
+		pairs[i] = FunctionToolExecutionPair{
+			FunctionCall:       e.FunctionCalls[i],
+			FunctionCallOutput: e.FunctionCallOutputs[i],
+		}
+	}
+	return pairs
+}
+
+func (e *FunctionToolsExecutedEvent) CancelToolReply() {
+	e.ReplyRequired = false
+}
+
+func (e *FunctionToolsExecutedEvent) CancelAgentHandoff() {
+	e.HandoffRequired = false
+}
+
+func (e *FunctionToolsExecutedEvent) HasToolReply() bool {
+	return e.ReplyRequired
+}
+
+func (e *FunctionToolsExecutedEvent) HasAgentHandoff() bool {
+	return e.HandoffRequired
+}
 
 type MetricsCollectedEvent struct {
 	Metrics   telemetry.AgentMetrics
