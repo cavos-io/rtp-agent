@@ -170,6 +170,24 @@ func TestMultiSpeakerAdapterWrapperPreservesFrameFlushOrder(t *testing.T) {
 	}
 }
 
+func TestMultiSpeakerAdapterWrapperRejectsMismatchedSampleRates(t *testing.T) {
+	wrapper := &multiSpeakerAdapterWrapper{
+		inner:    &fakeMultiSpeakerStream{nextErr: io.EOF},
+		ctx:      context.Background(),
+		detector: newPrimarySpeakerDetector(false, false, "{text}", "{text}", DefaultPrimarySpeakerDetectionOptions()),
+		eventCh:  make(chan *SpeechEvent, 1),
+		errCh:    make(chan error, 1),
+		inputCh:  make(chan multiSpeakerInput, 2),
+	}
+
+	if err := wrapper.PushFrame(&model.AudioFrame{Data: []byte("first"), SampleRate: 16000, NumChannels: 1, SamplesPerChannel: 1}); err != nil {
+		t.Fatalf("PushFrame(first) returned error: %v", err)
+	}
+	if err := wrapper.PushFrame(&model.AudioFrame{Data: []byte("second"), SampleRate: 8000, NumChannels: 1, SamplesPerChannel: 1}); err == nil {
+		t.Fatal("PushFrame(second) returned nil, want sample-rate mismatch error")
+	}
+}
+
 type fakeMultiSpeakerStream struct {
 	nextErr   error
 	calls     []string

@@ -608,6 +608,34 @@ func TestFallbackStreamReplaysFlushBoundariesOnRetry(t *testing.T) {
 	}
 }
 
+func TestFallbackStreamRejectsMismatchedSampleRates(t *testing.T) {
+	inner := &metadataRecognizeStream{events: []*SpeechEvent{{Type: SpeechEventFinalTranscript}}}
+	adapter := NewFallbackAdapter([]STT{
+		&metadataSTT{
+			label:        "primary",
+			capabilities: STTCapabilities{Streaming: true},
+			stream:       inner,
+		},
+	})
+
+	stream, err := adapter.Stream(context.Background(), "en")
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+	defer stream.Close()
+
+	if err := stream.PushFrame(&model.AudioFrame{Data: []byte("first"), SampleRate: 16000, NumChannels: 1, SamplesPerChannel: 1}); err != nil {
+		t.Fatalf("PushFrame(first) returned error: %v", err)
+	}
+	err = stream.PushFrame(&model.AudioFrame{Data: []byte("second"), SampleRate: 8000, NumChannels: 1, SamplesPerChannel: 1})
+	if err == nil {
+		t.Fatal("PushFrame(second) returned nil, want sample-rate mismatch error")
+	}
+	if strings.Join(inner.calls, ",") != "push:first" {
+		t.Fatalf("inner calls = %#v, want only first frame forwarded", inner.calls)
+	}
+}
+
 type metadataSTT struct {
 	mu               sync.Mutex
 	label            string

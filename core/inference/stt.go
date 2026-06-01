@@ -120,16 +120,34 @@ func (s *STT) Stream(ctx context.Context, language string) (stt.RecognizeStream,
 }
 
 type inferenceSTTStream struct {
-	stt           *STT
-	conn          *websocket.Conn
-	ctx           context.Context
-	cancel        context.CancelFunc
-	audioCh       chan *model.AudioFrame
-	eventCh       chan *stt.SpeechEvent
-	mu            sync.Mutex
-	closed        bool
-	speaking      bool
-	audioDuration float64
+	stt             *STT
+	conn            *websocket.Conn
+	ctx             context.Context
+	cancel          context.CancelFunc
+	audioCh         chan *model.AudioFrame
+	eventCh         chan *stt.SpeechEvent
+	mu              sync.Mutex
+	closed          bool
+	speaking        bool
+	audioDuration   float64
+	startTimeOffset float64
+	startTime       float64
+}
+
+func (s *inferenceSTTStream) StartTimeOffset() float64 {
+	return s.startTimeOffset
+}
+
+func (s *inferenceSTTStream) SetStartTimeOffset(offset float64) {
+	s.startTimeOffset = offset
+}
+
+func (s *inferenceSTTStream) StartTime() float64 {
+	return s.startTime
+}
+
+func (s *inferenceSTTStream) SetStartTime(startTime float64) {
+	s.startTime = startTime
 }
 
 func (s *inferenceSTTStream) PushFrame(frame *model.AudioFrame) error {
@@ -187,8 +205,8 @@ func (s *inferenceSTTStream) buildSpeechData(data map[string]interface{}) stt.Sp
 	}
 
 	start := floatFromMap(data, "start")
-	speechData.StartTime = start
-	speechData.EndTime = start + floatFromMap(data, "duration")
+	speechData.StartTime = s.startTimeOffset + start
+	speechData.EndTime = s.startTimeOffset + start + floatFromMap(data, "duration")
 
 	if extra, ok := data["extra"].(map[string]interface{}); ok && len(extra) > 0 {
 		speechData.Metadata = extra
@@ -202,11 +220,12 @@ func (s *inferenceSTTStream) buildSpeechData(data map[string]interface{}) stt.Sp
 				continue
 			}
 			speechData.Words = append(speechData.Words, stt.TimedString{
-				Text:       stringFromMap(word, "word"),
-				StartTime:  floatFromMap(word, "start"),
-				EndTime:    floatFromMap(word, "end"),
-				Confidence: floatFromMap(word, "confidence"),
-				SpeakerID:  stringFromMap(word, "speaker_id"),
+				Text:            stringFromMap(word, "word"),
+				StartTime:       s.startTimeOffset + floatFromMap(word, "start"),
+				EndTime:         s.startTimeOffset + floatFromMap(word, "end"),
+				StartTimeOffset: s.startTimeOffset,
+				Confidence:      floatFromMap(word, "confidence"),
+				SpeakerID:       stringFromMap(word, "speaker_id"),
 			})
 		}
 	}

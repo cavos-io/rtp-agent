@@ -108,3 +108,40 @@ func TestInferenceSTTTranscriptPreservesWordsAndMetadata(t *testing.T) {
 		t.Fatalf("second word = %#v, want world metadata", data.Words[1])
 	}
 }
+
+func TestInferenceSTTAppliesStartTimeOffsetToTranscriptAndWords(t *testing.T) {
+	stream := &inferenceSTTStream{
+		eventCh:         make(chan *stt.SpeechEvent, 3),
+		startTimeOffset: 10.0,
+	}
+
+	stream.processTranscript(map[string]interface{}{
+		"request_id": "req-1",
+		"transcript": "hello",
+		"start":      1.0,
+		"duration":   0.5,
+		"words": []interface{}{
+			map[string]interface{}{
+				"word":  "hello",
+				"start": 1.0,
+				"end":   1.5,
+			},
+		},
+	}, false)
+
+	<-stream.eventCh
+	interim := <-stream.eventCh
+	data := interim.Alternatives[0]
+	if data.StartTime != 11.0 || data.EndTime != 11.5 {
+		t.Fatalf("transcript timing = (%v, %v), want (11.0, 11.5)", data.StartTime, data.EndTime)
+	}
+	if len(data.Words) != 1 {
+		t.Fatalf("words = %#v, want one word", data.Words)
+	}
+	if data.Words[0].StartTime != 11.0 || data.Words[0].EndTime != 11.5 {
+		t.Fatalf("word timing = (%v, %v), want (11.0, 11.5)", data.Words[0].StartTime, data.Words[0].EndTime)
+	}
+	if data.Words[0].StartTimeOffset != 10.0 {
+		t.Fatalf("word StartTimeOffset = %v, want 10.0", data.Words[0].StartTimeOffset)
+	}
+}

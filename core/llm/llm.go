@@ -485,6 +485,7 @@ type FallbackAdapter struct {
 	retryOnChunkSent bool
 	mu               sync.Mutex
 	available        []bool
+	recovering       []bool
 }
 
 type FallbackAdapterOptions struct {
@@ -505,6 +506,7 @@ func NewFallbackAdapterWithOptions(llms []LLM, options FallbackAdapterOptions) *
 		maxRetryPerLLM:   options.MaxRetryPerLLM,
 		retryOnChunkSent: options.RetryOnChunkSent,
 		available:        initialAvailability(len(llms)),
+		recovering:       make([]bool, len(llms)),
 	}
 }
 
@@ -537,6 +539,9 @@ func (f *FallbackAdapter) setAvailable(index int, available bool) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.available[index] = available
+	if available {
+		f.recovering[index] = false
+	}
 }
 
 func (f *FallbackAdapter) Chat(ctx context.Context, chatCtx *ChatContext, opts ...ChatOption) (LLMStream, error) {
@@ -565,6 +570,46 @@ type fallbackLLMStream struct {
 	closed       bool
 }
 
+func (s *fallbackLLMStream) markUnavailable(index int, recover bool) {
+	s.adapter.mu.Lock()
+	s.adapter.available[index] = false
+	if !recover || s.adapter.recovering[index] {
+		s.adapter.mu.Unlock()
+		return
+	}
+	s.adapter.recovering[index] = true
+	llm := s.adapter.llms[index]
+	chatCtx := s.chatCtx
+	opts := append([]ChatOption(nil), s.opts...)
+	s.adapter.mu.Unlock()
+
+	go s.adapter.recoverLLM(index, llm, chatCtx, opts)
+}
+
+func (f *FallbackAdapter) recoverLLM(index int, llm LLM, chatCtx *ChatContext, opts []ChatOption) {
+	stream, err := llm.Chat(context.Background(), chatCtx, opts...)
+	if err != nil {
+		f.finishRecovery(index, false)
+		return
+	}
+	defer stream.Close()
+	for {
+		_, err := stream.Next()
+		if err == nil {
+			continue
+		}
+		f.finishRecovery(index, errors.Is(err, io.EOF))
+		return
+	}
+}
+
+func (f *FallbackAdapter) finishRecovery(index int, available bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.available[index] = available
+	f.recovering[index] = false
+}
+
 func (s *fallbackLLMStream) tryStart(index int) error {
 	if s.retries == nil {
 		s.retries = make(map[int]int)
@@ -585,7 +630,7 @@ func (s *fallbackLLMStream) tryStart(index int) error {
 			}
 			lastErr = err
 			if !s.canRetryLLM(i) {
-				s.adapter.setAvailable(i, false)
+				s.markUnavailable(i, true)
 				break
 			}
 			s.retries[i]++
@@ -607,7 +652,7 @@ func (s *fallbackLLMStream) Next() (*ChatChunk, error) {
 			return nil, err
 		}
 		if s.outputSent && !s.adapter.retryOnChunkSent {
-			s.adapter.setAvailable(s.activeIndex, false)
+			s.markUnavailable(s.activeIndex, false)
 			return nil, err
 		}
 
@@ -619,7 +664,7 @@ func (s *fallbackLLMStream) Next() (*ChatChunk, error) {
 			}
 			continue
 		}
-		s.adapter.setAvailable(s.activeIndex, false)
+		s.markUnavailable(s.activeIndex, true)
 		if s.activeIndex+1 >= len(s.adapter.llms) {
 			return nil, err
 		}

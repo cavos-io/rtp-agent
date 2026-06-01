@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"testing"
+	"time"
 )
 
 func TestFallbackAdapterRetriesNextLLMWhenStreamFailsBeforeChunk(t *testing.T) {
@@ -281,6 +282,49 @@ func TestFallbackAdapterMarksProviderUnavailableAfterChunkFailure(t *testing.T) 
 	}
 }
 
+func TestFallbackAdapterRecoversUnavailableProviderInBackground(t *testing.T) {
+	firstErr := errors.New("primary stream failed")
+	primary := &fakeFallbackLLM{streams: []LLMStream{
+		&fakeFallbackStream{events: []fakeFallbackEvent{{err: firstErr}}},
+		&fakeFallbackStream{events: []fakeFallbackEvent{
+			{chunk: &ChatChunk{Delta: &ChoiceDelta{Content: "recovery probe"}}},
+		}},
+		&fakeFallbackStream{events: []fakeFallbackEvent{
+			{chunk: &ChatChunk{Delta: &ChoiceDelta{Content: "primary active"}}},
+		}},
+	}}
+	fallback := &fakeFallbackLLM{stream: &fakeFallbackStream{events: []fakeFallbackEvent{
+		{chunk: &ChatChunk{Delta: &ChoiceDelta{Content: "fallback"}}},
+	}}}
+	adapter := NewFallbackAdapter([]LLM{primary, fallback})
+
+	stream, err := adapter.Chat(context.Background(), NewChatContext())
+	if err != nil {
+		t.Fatalf("Chat returned error: %v", err)
+	}
+	chunk, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next returned error: %v", err)
+	}
+	if got := chunk.Delta.Content; got != "fallback" {
+		t.Fatalf("fallback content = %q, want fallback", got)
+	}
+
+	waitForFallbackCalls(t, primary, 2)
+
+	stream, err = adapter.Chat(context.Background(), NewChatContext())
+	if err != nil {
+		t.Fatalf("second Chat returned error: %v", err)
+	}
+	chunk, err = stream.Next()
+	if err != nil {
+		t.Fatalf("second Next returned error: %v", err)
+	}
+	if got := chunk.Delta.Content; got != "primary active" {
+		t.Fatalf("second stream content = %q, want recovered primary active", got)
+	}
+}
+
 type fakeFallbackLLM struct {
 	streams []LLMStream
 	stream  LLMStream
@@ -327,4 +371,16 @@ func (f *fakeFallbackStream) Next() (*ChatChunk, error) {
 func (f *fakeFallbackStream) Close() error {
 	f.closed = true
 	return nil
+}
+
+func waitForFallbackCalls(t *testing.T, llm *fakeFallbackLLM, calls int) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if llm.calls >= calls {
+			return
+		}
+		time.Sleep(time.Millisecond)
+	}
+	t.Fatalf("llm calls = %d, want at least %d", llm.calls, calls)
 }

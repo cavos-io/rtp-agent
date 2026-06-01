@@ -195,6 +195,39 @@ func TestRunAssertUsesRecordedEventsForMessages(t *testing.T) {
 	}
 }
 
+func TestRunAssertUsesRecordedEventsForMessageRole(t *testing.T) {
+	result := NewRunResult(llm.NewChatContext())
+	message := &llm.ChatMessage{
+		ID:        "msg_1",
+		Role:      llm.ChatRoleAssistant,
+		Content:   []llm.ChatContent{{Text: "any content"}},
+		CreatedAt: time.Now(),
+	}
+
+	result.RecordItem(message)
+
+	if err := result.Expect.ContainsMessageRole(llm.ChatRoleAssistant).HasError(); err != nil {
+		t.Fatalf("ContainsMessageRole returned error = %v, want nil for recorded role", err)
+	}
+}
+
+func TestRunAssertReportsMissingMessageRole(t *testing.T) {
+	result := NewRunResult(llm.NewChatContext())
+	message := &llm.ChatMessage{
+		ID:        "msg_1",
+		Role:      llm.ChatRoleAssistant,
+		Content:   []llm.ChatContent{{Text: "any content"}},
+		CreatedAt: time.Now(),
+	}
+
+	result.RecordItem(message)
+
+	err := result.Expect.ContainsMessageRole(llm.ChatRoleUser).HasError()
+	if err == nil {
+		t.Fatal("ContainsMessageRole error = nil, want missing role error")
+	}
+}
+
 func TestRunAssertUsesRecordedEventsForFunctionCalls(t *testing.T) {
 	result := NewRunResult(llm.NewChatContext())
 	functionCall := &llm.FunctionCall{
@@ -208,6 +241,48 @@ func TestRunAssertUsesRecordedEventsForFunctionCalls(t *testing.T) {
 
 	if err := result.Expect.IsFunctionCall("lookup").HasError(); err != nil {
 		t.Fatalf("IsFunctionCall returned error = %v, want nil for recorded event", err)
+	}
+}
+
+func TestRunAssertUsesRecordedEventsForFunctionCallArguments(t *testing.T) {
+	result := NewRunResult(llm.NewChatContext())
+	functionCall := &llm.FunctionCall{
+		ID:        "fnc_1",
+		CallID:    "call_1",
+		Name:      "lookup",
+		Arguments: `{"city":"Jakarta","limit":3,"includeClosed":false}`,
+		CreatedAt: time.Now(),
+	}
+
+	result.RecordItem(functionCall)
+
+	err := result.Expect.IsFunctionCallWithArguments("lookup", map[string]any{
+		"city":          "Jakarta",
+		"limit":         float64(3),
+		"includeClosed": false,
+	}).HasError()
+	if err != nil {
+		t.Fatalf("IsFunctionCallWithArguments returned error = %v, want nil for matching arguments", err)
+	}
+}
+
+func TestRunAssertReportsFunctionCallArgumentMismatch(t *testing.T) {
+	result := NewRunResult(llm.NewChatContext())
+	functionCall := &llm.FunctionCall{
+		ID:        "fnc_1",
+		CallID:    "call_1",
+		Name:      "lookup",
+		Arguments: `{"city":"Jakarta"}`,
+		CreatedAt: time.Now(),
+	}
+
+	result.RecordItem(functionCall)
+
+	err := result.Expect.IsFunctionCallWithArguments("lookup", map[string]any{
+		"city": "Bandung",
+	}).HasError()
+	if err == nil {
+		t.Fatal("IsFunctionCallWithArguments error = nil, want mismatch error")
 	}
 }
 
@@ -301,5 +376,37 @@ func TestRunAssertNextEventReportsMissingType(t *testing.T) {
 
 	if err == nil {
 		t.Fatal("NextEvent error = nil, want error when type is not found")
+	}
+}
+
+func TestRunAssertSkipNextEventIfConsumesMatchingCurrentEvent(t *testing.T) {
+	result := NewRunResult(llm.NewChatContext())
+	result.RecordItem(&llm.ChatMessage{ID: "msg_1", Role: llm.ChatRoleAssistant, CreatedAt: time.Now()})
+
+	if ok := result.Expect.SkipNextEventIf("message"); !ok {
+		t.Fatal("SkipNextEventIf returned false, want true for matching current event")
+	}
+	if err := result.Expect.NoMoreEvents().HasError(); err != nil {
+		t.Fatalf("NoMoreEvents returned error = %v, want nil after consuming matching event", err)
+	}
+}
+
+func TestRunAssertSkipNextEventIfLeavesNonMatchingCurrentEvent(t *testing.T) {
+	result := NewRunResult(llm.NewChatContext())
+	result.RecordItem(&llm.ChatMessage{ID: "msg_1", Role: llm.ChatRoleAssistant, CreatedAt: time.Now()})
+
+	if ok := result.Expect.SkipNextEventIf("function_call"); ok {
+		t.Fatal("SkipNextEventIf returned true, want false for non-matching current event")
+	}
+	if err := result.Expect.NextEvent("message").NoMoreEvents().HasError(); err != nil {
+		t.Fatalf("NextEvent returned error = %v, want message to remain after non-match", err)
+	}
+}
+
+func TestRunAssertSkipNextEventIfReturnsFalseWhenNoEventsRemain(t *testing.T) {
+	result := NewRunResult(llm.NewChatContext())
+
+	if ok := result.Expect.SkipNextEventIf("message"); ok {
+		t.Fatal("SkipNextEventIf returned true, want false when no events remain")
 	}
 }
