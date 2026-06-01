@@ -2843,6 +2843,24 @@ func TestExecuteLocalJobWithOptionsUsesTokenIdentity(t *testing.T) {
 	}
 }
 
+func TestExecuteLocalJobWithOptionsRejectsInvalidToken(t *testing.T) {
+	server := NewAgentServer(WorkerOptions{})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	err := server.ExecuteLocalJobWithOptions(ctx, "room-a", "", LocalJobOptions{
+		FakeJob:  false,
+		RoomInfo: &livekit.Room{Sid: "RM_existing", Name: "room-a"},
+		Token:    "not-a-jwt",
+	})
+	if err == nil {
+		t.Fatal("ExecuteLocalJobWithOptions() error = nil, want invalid token error")
+	}
+	if !strings.Contains(err.Error(), "invalid local job token") {
+		t.Fatalf("ExecuteLocalJobWithOptions() error = %q, want invalid token message", err.Error())
+	}
+}
+
 func TestExecuteLocalJobWithOptionsRejectsNonFakeWithoutRoomInfo(t *testing.T) {
 	server := NewAgentServer(WorkerOptions{})
 
