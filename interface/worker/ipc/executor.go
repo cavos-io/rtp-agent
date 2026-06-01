@@ -34,6 +34,8 @@ type JobExecutor interface {
 	Close(ctx context.Context) error
 }
 
+var processCommandContext = exec.CommandContext
+
 type ThreadJobExecutor struct {
 	id     string
 	status JobStatus
@@ -146,6 +148,7 @@ type ProcessJobExecutor struct {
 	cmd        *exec.Cmd
 	job        *livekit.Job
 	runningJob *RunningJobInfo
+	done       chan struct{}
 
 	lastPong time.Time
 }
@@ -198,6 +201,7 @@ func (e *ProcessJobExecutor) LaunchRunningJob(ctx context.Context, info RunningJ
 	e.status = JobStatusRunning
 	e.job = info.Job
 	e.runningJob = &info
+	e.done = make(chan struct{})
 	e.lastPong = time.Now()
 	e.mu.Unlock()
 
@@ -218,7 +222,7 @@ func (e *ProcessJobExecutor) LaunchRunningJob(ctx context.Context, info RunningJ
 	}
 
 	// We pass the job details via environment variables for parity with Python's IPC/subprocess launch
-	cmd := exec.CommandContext(ctx, exe, "start")
+	cmd := processCommandContext(ctx, exe, "start")
 	cmd.Env = env
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
@@ -233,6 +237,7 @@ func (e *ProcessJobExecutor) LaunchRunningJob(ctx context.Context, info RunningJ
 		err := cmd.Run()
 		e.mu.Lock()
 		defer e.mu.Unlock()
+		defer close(e.done)
 		if err != nil {
 			logger.Logger.Errorw("Job process failed", err, "job_id", info.Job.GetId(), "exec_id", e.id)
 			e.status = JobStatusFailed
@@ -321,9 +326,24 @@ func (e *ProcessJobExecutor) pingTask(ctx context.Context) {
 
 func (e *ProcessJobExecutor) Close(ctx context.Context) error {
 	e.mu.Lock()
-	defer e.mu.Unlock()
-	if e.cmd != nil && e.cmd.Process != nil {
-		return e.cmd.Process.Kill()
+	cmd := e.cmd
+	done := e.done
+	started := e.started
+	e.mu.Unlock()
+	if !started || done == nil {
+		return nil
 	}
-	return nil
+
+	if cmd != nil && cmd.Process != nil {
+		if err := cmd.Process.Kill(); err != nil && !strings.Contains(err.Error(), "process already finished") {
+			return err
+		}
+	}
+
+	select {
+	case <-done:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }

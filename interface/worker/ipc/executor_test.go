@@ -3,6 +3,7 @@ package ipc
 import (
 	"context"
 	"encoding/json"
+	"os/exec"
 	"strings"
 	"testing"
 	"time"
@@ -220,6 +221,49 @@ func TestRunningJobInfoFromEnvFallsBackToLegacyJobJSON(t *testing.T) {
 	}
 	if running.AcceptArguments.Identity != "" {
 		t.Fatalf("identity = %q, want empty fallback", running.AcceptArguments.Identity)
+	}
+}
+
+func TestProcessJobExecutorCloseWaitsForProcessExit(t *testing.T) {
+	oldCommandContext := processCommandContext
+	processCommandContext = func(ctx context.Context, name string, args ...string) *exec.Cmd {
+		return exec.CommandContext(ctx, "sleep", "10")
+	}
+	defer func() { processCommandContext = oldCommandContext }()
+
+	executor := NewProcessJobExecutor("exec-process-close")
+	if err := executor.LaunchJob(context.Background(), &livekit.Job{Id: "job-process-close"}); err != nil {
+		t.Fatalf("LaunchJob() error = %v", err)
+	}
+	waitForProcessExecutorCommand(t, executor)
+
+	if err := executor.Close(context.Background()); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+	if got := executor.Status(); got != JobStatusFailed {
+		t.Fatalf("Status() after Close = %q, want %q", got, JobStatusFailed)
+	}
+}
+
+func waitForProcessExecutorCommand(t *testing.T, executor *ProcessJobExecutor) {
+	t.Helper()
+
+	deadline := time.After(time.Second)
+	ticker := time.NewTicker(time.Millisecond)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-deadline:
+			t.Fatal("process executor command was not started")
+		case <-ticker.C:
+			executor.mu.Lock()
+			started := executor.cmd != nil && executor.cmd.Process != nil
+			executor.mu.Unlock()
+			if started {
+				return
+			}
+		}
 	}
 }
 
