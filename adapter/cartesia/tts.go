@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strings"
 	"sync"
 
 	"github.com/cavos-io/rtp-agent/core/audio/model"
@@ -16,8 +17,14 @@ import (
 	"github.com/gorilla/websocket"
 )
 
+const (
+	defaultCartesiaTTSBaseURL = "https://api.cartesia.ai"
+	cartesiaTTSUserAgent      = "LiveKit Agents Cartesia Plugin/Go"
+)
+
 type CartesiaTTS struct {
 	apiKey              string
+	baseURL             string
 	voiceID             string
 	model               string
 	language            string
@@ -32,6 +39,14 @@ type CartesiaTTS struct {
 }
 
 type CartesiaTTSOption func(*CartesiaTTS)
+
+func WithCartesiaBaseURL(baseURL string) CartesiaTTSOption {
+	return func(t *CartesiaTTS) {
+		if baseURL != "" {
+			t.baseURL = strings.TrimRight(baseURL, "/")
+		}
+	}
+}
 
 func WithCartesiaSpeed(speed any) CartesiaTTSOption {
 	return func(t *CartesiaTTS) {
@@ -66,6 +81,7 @@ func NewCartesiaTTS(apiKey string, voiceID string, model string, opts ...Cartesi
 	}
 	provider := &CartesiaTTS{
 		apiKey:         apiKey,
+		baseURL:        defaultCartesiaTTSBaseURL,
 		voiceID:        voiceID,
 		model:          model,
 		language:       "en",
@@ -123,7 +139,7 @@ func buildCartesiaSynthesizeRequest(t *CartesiaTTS, text string) (string, []byte
 	reqBody := buildCartesiaOptions(t, false)
 	reqBody["transcript"] = text
 	jsonBody, err := json.Marshal(reqBody)
-	return "https://api.cartesia.ai/tts/bytes", jsonBody, err
+	return strings.TrimRight(t.baseURL, "/") + "/tts/bytes", jsonBody, err
 }
 
 func buildCartesiaOptions(t *CartesiaTTS, streaming bool) map[string]interface{} {
@@ -192,13 +208,7 @@ func (s *cartesiaTTSChunkedStream) Close() error {
 }
 
 func (t *CartesiaTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
-	u := url.URL{Scheme: "wss", Host: "api.cartesia.ai", Path: "/tts/websocket"}
-	q := u.Query()
-	q.Set("api_key", t.apiKey)
-	q.Set("cartesia_version", t.apiVersion)
-	u.RawQuery = q.Encode()
-
-	conn, _, err := websocket.DefaultDialer.DialContext(ctx, u.String(), nil)
+	conn, _, err := websocket.DefaultDialer.DialContext(ctx, buildCartesiaStreamURL(t), buildCartesiaStreamHeaders(t))
 	if err != nil {
 		return nil, err
 	}
@@ -220,6 +230,29 @@ func (t *CartesiaTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) 
 	go stream.readLoop()
 
 	return stream, nil
+}
+
+func buildCartesiaStreamURL(t *CartesiaTTS) string {
+	baseURL := strings.TrimRight(t.baseURL, "/")
+	if strings.HasPrefix(baseURL, "http://") || strings.HasPrefix(baseURL, "https://") {
+		baseURL = strings.Replace(baseURL, "http", "ws", 1)
+	}
+	u, err := url.Parse(baseURL + "/tts/websocket")
+	if err != nil {
+		u = &url.URL{Scheme: "wss", Host: "api.cartesia.ai", Path: "/tts/websocket"}
+	}
+	q := u.Query()
+	q.Set("cartesia_version", t.apiVersion)
+	u.RawQuery = q.Encode()
+	return u.String()
+}
+
+func buildCartesiaStreamHeaders(t *CartesiaTTS) http.Header {
+	headers := make(http.Header)
+	headers.Set("X-API-Key", t.apiKey)
+	headers.Set("Cartesia-Version", t.apiVersion)
+	headers.Set("User-Agent", cartesiaTTSUserAgent)
+	return headers
 }
 
 func buildCartesiaStreamInitMessage(t *CartesiaTTS) map[string]interface{} {
