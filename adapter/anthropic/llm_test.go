@@ -177,6 +177,56 @@ func TestAnthropicChatMapsNamedToolChoice(t *testing.T) {
 	}
 }
 
+func TestAnthropicDefaultsMatchReference(t *testing.T) {
+	model, err := NewAnthropicLLM("test-key", "")
+	if err != nil {
+		t.Fatalf("NewAnthropicLLM() error = %v", err)
+	}
+
+	if model.model != "claude-sonnet-4-6" {
+		t.Fatalf("model = %q, want claude-sonnet-4-6", model.model)
+	}
+}
+
+func TestAnthropicChatAppliesExtraParams(t *testing.T) {
+	transport := &captureRoundTripper{}
+	originalTransport := http.DefaultTransport
+	http.DefaultTransport = transport
+	t.Cleanup(func() { http.DefaultTransport = originalTransport })
+
+	model, err := NewAnthropicLLM("test-key", "claude-test")
+	if err != nil {
+		t.Fatalf("NewAnthropicLLM() error = %v", err)
+	}
+	stream, err := model.Chat(
+		context.Background(),
+		llm.NewChatContext(),
+		llm.WithExtraParams(map[string]any{
+			"user":        "participant-1",
+			"temperature": 0.7,
+			"top_k":       40,
+			"max_tokens":  2048,
+		}),
+	)
+	if err != nil {
+		t.Fatalf("Chat() error = %v", err)
+	}
+	_ = stream.Close()
+
+	if transport.body["user"] != "participant-1" {
+		t.Fatalf("user = %#v, want participant-1", transport.body["user"])
+	}
+	if transport.body["temperature"] != 0.7 {
+		t.Fatalf("temperature = %#v, want 0.7", transport.body["temperature"])
+	}
+	if transport.body["top_k"] != float64(40) {
+		t.Fatalf("top_k = %#v, want 40", transport.body["top_k"])
+	}
+	if transport.body["max_tokens"] != float64(2048) {
+		t.Fatalf("max_tokens = %#v, want 2048", transport.body["max_tokens"])
+	}
+}
+
 func TestBuildAnthropicMessagesCollectsSystemText(t *testing.T) {
 	ctx := llm.NewChatContext()
 	ctx.Items = []llm.ChatItem{

@@ -17,50 +17,78 @@ import (
 )
 
 type CartesiaTTS struct {
-	apiKey  string
-	voiceID string
-	model   string
+	apiKey              string
+	voiceID             string
+	model               string
+	language            string
+	encoding            string
+	sampleRate          int
+	apiVersion          string
+	speed               any
+	emotion             string
+	volume              *float64
+	wordTimestamps      bool
+	pronunciationDictID string
 }
 
-func NewCartesiaTTS(apiKey string, voiceID string, model string) *CartesiaTTS {
+type CartesiaTTSOption func(*CartesiaTTS)
+
+func WithCartesiaSpeed(speed any) CartesiaTTSOption {
+	return func(t *CartesiaTTS) {
+		t.speed = speed
+	}
+}
+
+func WithCartesiaEmotion(emotion string) CartesiaTTSOption {
+	return func(t *CartesiaTTS) {
+		t.emotion = emotion
+	}
+}
+
+func WithCartesiaVolume(volume float64) CartesiaTTSOption {
+	return func(t *CartesiaTTS) {
+		t.volume = &volume
+	}
+}
+
+func WithCartesiaPronunciationDictID(id string) CartesiaTTSOption {
+	return func(t *CartesiaTTS) {
+		t.pronunciationDictID = id
+	}
+}
+
+func NewCartesiaTTS(apiKey string, voiceID string, model string, opts ...CartesiaTTSOption) *CartesiaTTS {
 	if voiceID == "" {
-		voiceID = "79a125e8-cd45-4c13-8a67-188112f4dd22" // A default voice
+		voiceID = "f786b574-daa5-4673-aa0c-cbe3e8534c02"
 	}
 	if model == "" {
-		model = "sonic-english"
+		model = "sonic-3"
 	}
-	return &CartesiaTTS{
-		apiKey:  apiKey,
-		voiceID: voiceID,
-		model:   model,
+	provider := &CartesiaTTS{
+		apiKey:         apiKey,
+		voiceID:        voiceID,
+		model:          model,
+		language:       "en",
+		encoding:       "pcm_s16le",
+		sampleRate:     24000,
+		apiVersion:     "2025-04-16",
+		wordTimestamps: true,
 	}
+	for _, opt := range opts {
+		opt(provider)
+	}
+	return provider
 }
 
 func (t *CartesiaTTS) Label() string { return "cartesia.TTS" }
 func (t *CartesiaTTS) Capabilities() tts.TTSCapabilities {
 	return tts.TTSCapabilities{Streaming: true, AlignedTranscript: false}
 }
-func (t *CartesiaTTS) SampleRate() int { return 24000 }
+func (t *CartesiaTTS) SampleRate() int  { return t.sampleRate }
 func (t *CartesiaTTS) NumChannels() int { return 1 }
 
 func (t *CartesiaTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStream, error) {
-	apiURL := "https://api.cartesia.ai/tts/bytes"
-
-	reqBody := map[string]interface{}{
-		"model_id": t.model,
-		"transcript": text,
-		"voice": map[string]interface{}{
-			"mode": "id",
-			"id":   t.voiceID,
-		},
-		"output_format": map[string]interface{}{
-			"container": "raw",
-			"encoding":  "pcm_s16le",
-			"sample_rate": 24000,
-		},
-	}
-
-	jsonBody, err := json.Marshal(reqBody)
+	apiURL, jsonBody, err := buildCartesiaSynthesizeRequest(t, text)
 	if err != nil {
 		return nil, err
 	}
@@ -72,7 +100,7 @@ func (t *CartesiaTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedS
 
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("X-API-Key", t.apiKey)
-	req.Header.Set("Cartesia-Version", "2024-06-10")
+	req.Header.Set("Cartesia-Version", t.apiVersion)
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
@@ -86,12 +114,57 @@ func (t *CartesiaTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedS
 	}
 
 	return &cartesiaTTSChunkedStream{
-		resp: resp,
+		resp:       resp,
+		sampleRate: t.sampleRate,
 	}, nil
 }
 
+func buildCartesiaSynthesizeRequest(t *CartesiaTTS, text string) (string, []byte, error) {
+	reqBody := buildCartesiaOptions(t, false)
+	reqBody["transcript"] = text
+	jsonBody, err := json.Marshal(reqBody)
+	return "https://api.cartesia.ai/tts/bytes", jsonBody, err
+}
+
+func buildCartesiaOptions(t *CartesiaTTS, streaming bool) map[string]interface{} {
+	options := map[string]interface{}{
+		"model_id": t.model,
+		"voice": map[string]interface{}{
+			"mode": "id",
+			"id":   t.voiceID,
+		},
+		"output_format": map[string]interface{}{
+			"container":   "raw",
+			"encoding":    t.encoding,
+			"sample_rate": t.sampleRate,
+		},
+		"language": t.language,
+	}
+	if t.pronunciationDictID != "" {
+		options["pronunciation_dict_id"] = t.pronunciationDictID
+	}
+	generationConfig := map[string]interface{}{}
+	if t.speed != nil {
+		generationConfig["speed"] = t.speed
+	}
+	if t.emotion != "" {
+		generationConfig["emotion"] = t.emotion
+	}
+	if t.volume != nil {
+		generationConfig["volume"] = *t.volume
+	}
+	if len(generationConfig) > 0 {
+		options["generation_config"] = generationConfig
+	}
+	if streaming {
+		options["add_timestamps"] = t.wordTimestamps
+	}
+	return options
+}
+
 type cartesiaTTSChunkedStream struct {
-	resp *http.Response
+	resp       *http.Response
+	sampleRate int
 }
 
 func (s *cartesiaTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
@@ -107,7 +180,7 @@ func (s *cartesiaTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 	return &tts.SynthesizedAudio{
 		Frame: &model.AudioFrame{
 			Data:              buf[:n],
-			SampleRate:        24000,
+			SampleRate:        uint32(s.sampleRate),
 			NumChannels:       1,
 			SamplesPerChannel: uint32(n / 2),
 		},
@@ -122,7 +195,7 @@ func (t *CartesiaTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) 
 	u := url.URL{Scheme: "wss", Host: "api.cartesia.ai", Path: "/tts/websocket"}
 	q := u.Query()
 	q.Set("api_key", t.apiKey)
-	q.Set("cartesia_version", "2024-06-10")
+	q.Set("cartesia_version", t.apiVersion)
 	u.RawQuery = q.Encode()
 
 	conn, _, err := websocket.DefaultDialer.DialContext(ctx, u.String(), nil)
@@ -131,34 +204,29 @@ func (t *CartesiaTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) 
 	}
 
 	// Send context initialization
-	initMsg := map[string]interface{}{
-		"context_id": "default",
-		"model_id":   t.model,
-		"transcript": " ",
-		"voice": map[string]interface{}{
-			"mode": "id",
-			"id":   t.voiceID,
-		},
-		"output_format": map[string]interface{}{
-			"container":   "raw",
-			"encoding":    "pcm_s16le",
-			"sample_rate": 24000,
-		},
-	}
+	initMsg := buildCartesiaStreamInitMessage(t)
 	if err := conn.WriteJSON(initMsg); err != nil {
 		conn.Close()
 		return nil, err
 	}
 
 	stream := &cartesiaTTSStream{
-		conn:   conn,
-		audio:  make(chan *tts.SynthesizedAudio, 10),
-		errCh:  make(chan error, 1),
+		conn:       conn,
+		audio:      make(chan *tts.SynthesizedAudio, 10),
+		errCh:      make(chan error, 1),
+		sampleRate: t.sampleRate,
 	}
 
 	go stream.readLoop()
 
 	return stream, nil
+}
+
+func buildCartesiaStreamInitMessage(t *CartesiaTTS) map[string]interface{} {
+	initMsg := buildCartesiaOptions(t, true)
+	initMsg["context_id"] = "default"
+	initMsg["transcript"] = " "
+	return initMsg
 }
 
 type cartesiaTTSStream struct {
@@ -167,13 +235,15 @@ type cartesiaTTSStream struct {
 	errCh  chan error
 	mu     sync.Mutex
 	closed bool
+
+	sampleRate int
 }
 
 type cartesiaWSResponse struct {
-	Type     string `json:"type"`
-	Error    string `json:"error"`
-	Data     string `json:"data"` // base64 encoded audio
-	Done     bool   `json:"done"`
+	Type  string `json:"type"`
+	Error string `json:"error"`
+	Data  string `json:"data"` // base64 encoded audio
+	Done  bool   `json:"done"`
 }
 
 func (s *cartesiaTTSStream) readLoop() {
@@ -203,7 +273,7 @@ func (s *cartesiaTTSStream) readLoop() {
 				s.audio <- &tts.SynthesizedAudio{
 					Frame: &model.AudioFrame{
 						Data:              data,
-						SampleRate:        24000,
+						SampleRate:        uint32(s.sampleRate),
 						NumChannels:       1,
 						SamplesPerChannel: uint32(len(data) / 2),
 					},

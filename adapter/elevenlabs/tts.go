@@ -20,40 +20,68 @@ import (
 )
 
 type ElevenLabsTTS struct {
-	apiKey  string
-	voiceID string
-	modelID string
+	apiKey            string
+	voiceID           string
+	modelID           string
+	encoding          string
+	sampleRate        int
+	language          string
+	enableSSMLParsing bool
 }
 
-func NewElevenLabsTTS(apiKey string, voiceID string, modelID string) (*ElevenLabsTTS, error) {
+type ElevenLabsTTSOption func(*ElevenLabsTTS)
+
+func WithElevenLabsLanguage(language string) ElevenLabsTTSOption {
+	return func(t *ElevenLabsTTS) {
+		t.language = language
+	}
+}
+
+func WithElevenLabsEnableSSMLParsing(enable bool) ElevenLabsTTSOption {
+	return func(t *ElevenLabsTTS) {
+		t.enableSSMLParsing = enable
+	}
+}
+
+func WithElevenLabsEncoding(encoding string) ElevenLabsTTSOption {
+	return func(t *ElevenLabsTTS) {
+		if encoding != "" {
+			t.encoding = encoding
+			t.sampleRate = elevenLabsSampleRate(encoding)
+		}
+	}
+}
+
+func NewElevenLabsTTS(apiKey string, voiceID string, modelID string, opts ...ElevenLabsTTSOption) (*ElevenLabsTTS, error) {
 	if voiceID == "" {
-		voiceID = "21m00Tcm4TlvDq8ikWAM" // Rachel
+		voiceID = "hpp4J3VqNfWAUOO0d1Us"
 	}
 	if modelID == "" {
-		modelID = "eleven_monolingual_v1"
+		modelID = "eleven_turbo_v2_5"
 	}
-	return &ElevenLabsTTS{
-		apiKey:  apiKey,
-		voiceID: voiceID,
-		modelID: modelID,
-	}, nil
+	provider := &ElevenLabsTTS{
+		apiKey:     apiKey,
+		voiceID:    voiceID,
+		modelID:    modelID,
+		encoding:   "mp3_22050_32",
+		sampleRate: 22050,
+	}
+	for _, opt := range opts {
+		opt(provider)
+	}
+	return provider, nil
 }
 
 func (t *ElevenLabsTTS) Label() string { return "elevenlabs.TTS" }
 func (t *ElevenLabsTTS) Capabilities() tts.TTSCapabilities {
 	return tts.TTSCapabilities{Streaming: true, AlignedTranscript: true}
 }
-func (t *ElevenLabsTTS) SampleRate() int { return 24000 }
+func (t *ElevenLabsTTS) SampleRate() int  { return t.sampleRate }
 func (t *ElevenLabsTTS) NumChannels() int { return 1 }
 
 // Synthesize performs a full HTTP POST for non-streaming scenarios.
 func (t *ElevenLabsTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStream, error) {
-	apiURL := fmt.Sprintf("https://api.elevenlabs.io/v1/text-to-speech/%s?output_format=pcm_24000", t.voiceID)
-	body := map[string]interface{}{
-		"text":     text,
-		"model_id": t.modelID,
-	}
-	jsonBody, _ := json.Marshal(body)
+	apiURL, jsonBody := buildElevenLabsSynthesizeRequest(t, text)
 
 	req, err := http.NewRequestWithContext(ctx, "POST", apiURL, bytes.NewBuffer(jsonBody))
 	if err != nil {
@@ -75,12 +103,30 @@ func (t *ElevenLabsTTS) Synthesize(ctx context.Context, text string) (tts.Chunke
 	}
 
 	return &elevenLabsChunkedStream{
-		resp: resp,
+		resp:       resp,
+		sampleRate: t.sampleRate,
 	}, nil
 }
 
+func buildElevenLabsSynthesizeRequest(t *ElevenLabsTTS, text string) (string, []byte) {
+	apiURL := fmt.Sprintf("https://api.elevenlabs.io/v1/text-to-speech/%s?output_format=%s", t.voiceID, url.QueryEscape(t.encoding))
+	body := map[string]interface{}{
+		"text":     text,
+		"model_id": t.modelID,
+	}
+	if t.language != "" {
+		body["language_code"] = t.language
+	}
+	if t.enableSSMLParsing {
+		body["enable_ssml_parsing"] = true
+	}
+	jsonBody, _ := json.Marshal(body)
+	return apiURL, jsonBody
+}
+
 type elevenLabsChunkedStream struct {
-	resp *http.Response
+	resp       *http.Response
+	sampleRate int
 }
 
 func (s *elevenLabsChunkedStream) Next() (*tts.SynthesizedAudio, error) {
@@ -93,7 +139,7 @@ func (s *elevenLabsChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 			return &tts.SynthesizedAudio{
 				Frame: &model.AudioFrame{
 					Data:              buf[:n],
-					SampleRate:        24000,
+					SampleRate:        uint32(s.sampleRate),
 					NumChannels:       1,
 					SamplesPerChannel: uint32(n / 2),
 				},
@@ -109,7 +155,7 @@ func (s *elevenLabsChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 	return &tts.SynthesizedAudio{
 		Frame: &model.AudioFrame{
 			Data:              buf[:n],
-			SampleRate:        24000,
+			SampleRate:        uint32(s.sampleRate),
 			NumChannels:       1,
 			SamplesPerChannel: uint32(n / 2),
 		},
@@ -122,16 +168,10 @@ func (s *elevenLabsChunkedStream) Close() error {
 
 // Stream establishes a high-performance WebSocket connection to ElevenLabs for low-latency streaming TTS.
 func (t *ElevenLabsTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
-	u := url.URL{Scheme: "wss", Host: "api.elevenlabs.io", Path: fmt.Sprintf("/v1/text-to-speech/%s/stream-input", t.voiceID)}
-	q := u.Query()
-	q.Set("model_id", t.modelID)
-	q.Set("output_format", "pcm_24000")
-	u.RawQuery = q.Encode()
-
 	header := make(http.Header)
 	header.Set("xi-api-key", t.apiKey)
 
-	conn, _, err := websocket.DefaultDialer.DialContext(ctx, u.String(), header)
+	conn, _, err := websocket.DefaultDialer.DialContext(ctx, buildElevenLabsStreamURL(t), header)
 	if err != nil {
 		return nil, fmt.Errorf("failed to dial elevenlabs websocket: %w", err)
 	}
@@ -154,17 +194,38 @@ func (t *ElevenLabsTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error
 
 	ctx, cancel := context.WithCancel(ctx)
 	stream := &elevenLabsStream{
-		conn:   conn,
-		audio:  make(chan *tts.SynthesizedAudio, 100),
-		errCh:  make(chan error, 1),
-		ctx:    ctx,
-		cancel: cancel,
+		conn:       conn,
+		audio:      make(chan *tts.SynthesizedAudio, 100),
+		errCh:      make(chan error, 1),
+		ctx:        ctx,
+		cancel:     cancel,
+		sampleRate: t.sampleRate,
 	}
 
 	go stream.readLoop()
 	go stream.pingLoop()
 
 	return stream, nil
+}
+
+func buildElevenLabsStreamURL(t *ElevenLabsTTS) string {
+	u := url.URL{Scheme: "wss", Host: "api.elevenlabs.io", Path: fmt.Sprintf("/v1/text-to-speech/%s/stream-input", t.voiceID)}
+	q := u.Query()
+	q.Set("model_id", t.modelID)
+	q.Set("output_format", t.encoding)
+	u.RawQuery = q.Encode()
+	return u.String()
+}
+
+func elevenLabsSampleRate(encoding string) int {
+	parts := strings.Split(encoding, "_")
+	if len(parts) >= 2 {
+		var sampleRate int
+		if _, err := fmt.Sscanf(parts[1], "%d", &sampleRate); err == nil && sampleRate > 0 {
+			return sampleRate
+		}
+	}
+	return 22050
 }
 
 type elevenLabsStream struct {
@@ -176,6 +237,8 @@ type elevenLabsStream struct {
 
 	ctx    context.Context
 	cancel context.CancelFunc
+
+	sampleRate int
 }
 
 type elWSResponse struct {
@@ -232,26 +295,15 @@ func (s *elevenLabsStream) readLoop() {
 		}
 
 		if resp.Audio != "" {
-			data, err := base64.StdEncoding.DecodeString(resp.Audio)
+			audio, err := elevenLabsSynthesizedAudio(resp, s.sampleRate)
 			if err != nil {
 				logger.Logger.Errorw("Failed to decode base64 audio", err)
 				continue
 			}
-
-			// Block slightly if buffer is full, but respect context
 			select {
 			case <-s.ctx.Done():
 				return
-			case s.audio <- &tts.SynthesizedAudio{
-				Frame: &model.AudioFrame{
-					Data:              data,
-					SampleRate:        24000,
-					NumChannels:       1,
-					SamplesPerChannel: uint32(len(data) / 2),
-				},
-				IsFinal:   resp.IsFinal,
-				DeltaText: deltaText.String(),
-			}:
+			case s.audio <- audio:
 			}
 		} else if resp.IsFinal || deltaText.Len() > 0 {
 			// Even if there's no audio, pass alignment or final flags
@@ -264,11 +316,38 @@ func (s *elevenLabsStream) readLoop() {
 			}:
 			}
 		}
-		
+
 		if resp.IsFinal {
 			return
 		}
 	}
+}
+
+func elevenLabsSynthesizedAudio(resp elWSResponse, sampleRate int) (*tts.SynthesizedAudio, error) {
+	data, err := base64.StdEncoding.DecodeString(resp.Audio)
+	if err != nil {
+		return nil, err
+	}
+	var deltaText strings.Builder
+	if resp.NormalizedAlignment != nil {
+		for _, char := range resp.NormalizedAlignment.Chars {
+			deltaText.WriteString(char)
+		}
+	} else if resp.Alignment != nil {
+		for _, char := range resp.Alignment.Chars {
+			deltaText.WriteString(char)
+		}
+	}
+	return &tts.SynthesizedAudio{
+		Frame: &model.AudioFrame{
+			Data:              data,
+			SampleRate:        uint32(sampleRate),
+			NumChannels:       1,
+			SamplesPerChannel: uint32(len(data) / 2),
+		},
+		IsFinal:   resp.IsFinal,
+		DeltaText: deltaText.String(),
+	}, nil
 }
 
 func (s *elevenLabsStream) pingLoop() {
