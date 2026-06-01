@@ -108,6 +108,8 @@ type RoomOptions struct {
 	DisablePreConnectAudio   bool
 	DisableTextInput         bool
 	DisableCloseOnDisconnect bool
+	DeleteRoomOnClose        bool
+	DeleteRoom               func(context.Context, string) error
 	TextInputCallback        TextInputCallback
 	ParticipantIdentity      string
 	ParticipantKinds         []lksdk.ParticipantKind
@@ -151,6 +153,10 @@ type RoomIO struct {
 	agentStateCancel         context.CancelFunc
 	agentStatePublisher      func(map[string]string)
 	agentStatePublishEnabled func() bool
+
+	sessionCloseCancel context.CancelFunc
+	deletingRoom       bool
+	roomName           func() string
 }
 
 func NewRoomIO(room *lksdk.Room, session *agent.AgentSession, opts RoomOptions) *RoomIO {
@@ -175,7 +181,9 @@ func NewRoomIO(room *lksdk.Room, session *agent.AgentSession, opts RoomOptions) 
 	}
 	rio.agentStatePublisher = rio.publishLocalParticipantAttributes
 	rio.agentStatePublishEnabled = rio.roomConnected
+	rio.roomName = rio.liveKitRoomName
 	rio.startAgentStateListener()
+	rio.startSessionCloseListener()
 
 	if !opts.DisableTextInput {
 		rio.registerTextInput()
@@ -200,8 +208,33 @@ func (rio *RoomIO) startAgentStateListener() {
 			select {
 			case <-ctx.Done():
 				return
-			case ev := <-rio.AgentSession.AgentStateChangedCh:
+			case ev, ok := <-rio.AgentSession.AgentStateChangedCh:
+				if !ok {
+					return
+				}
 				rio.handleAgentStateChanged(ev)
+			}
+		}
+	}()
+}
+
+func (rio *RoomIO) startSessionCloseListener() {
+	if rio == nil || rio.AgentSession == nil {
+		return
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	rio.sessionCloseCancel = cancel
+	closeEvents := rio.AgentSession.CloseEvents()
+	go func() {
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case ev, ok := <-closeEvents:
+				if !ok {
+					return
+				}
+				rio.handleAgentSessionClose(ev)
 			}
 		}
 	}()
@@ -252,6 +285,39 @@ func (rio *RoomIO) publishLocalParticipantAttributes(attrs map[string]string) {
 		return
 	}
 	rio.Room.LocalParticipant.SetAttributes(attrs)
+}
+
+func (rio *RoomIO) handleAgentSessionClose(ev agent.CloseEvent) {
+	if rio == nil || !rio.Options.DeleteRoomOnClose || rio.Options.DeleteRoom == nil {
+		return
+	}
+	rio.mu.Lock()
+	if rio.deletingRoom {
+		rio.mu.Unlock()
+		return
+	}
+	rio.deletingRoom = true
+	rio.mu.Unlock()
+	defer func() {
+		rio.mu.Lock()
+		rio.deletingRoom = false
+		rio.mu.Unlock()
+	}()
+
+	roomName := ""
+	if rio.roomName != nil {
+		roomName = rio.roomName()
+	}
+	if err := rio.Options.DeleteRoom(context.Background(), roomName); err != nil {
+		logger.Logger.Warnw("failed to delete room on agent session close", err, "room", roomName, "reason", ev.Reason)
+	}
+}
+
+func (rio *RoomIO) liveKitRoomName() string {
+	if rio == nil || rio.Room == nil {
+		return ""
+	}
+	return rio.Room.Name()
 }
 
 func (rio *RoomIO) SetParticipant(participantIdentity string) {
@@ -588,6 +654,9 @@ func (rio *RoomIO) Close() error {
 	rio.closed = true
 	if rio.agentStateCancel != nil {
 		rio.agentStateCancel()
+	}
+	if rio.sessionCloseCancel != nil {
+		rio.sessionCloseCancel()
 	}
 	if rio.decoder != nil {
 		rio.decoder.Close()

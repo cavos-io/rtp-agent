@@ -174,6 +174,52 @@ func TestRoomIOHandleAgentStateChangedSkipsWhenRoomDisconnected(t *testing.T) {
 	}
 }
 
+func TestRoomIOHandleAgentSessionCloseDeletesRoomWhenEnabled(t *testing.T) {
+	var gotRoomName string
+	calls := 0
+	rio := &RoomIO{
+		Options: RoomOptions{
+			DeleteRoomOnClose: true,
+			DeleteRoom: func(_ context.Context, roomName string) error {
+				calls++
+				gotRoomName = roomName
+				return nil
+			},
+		},
+		roomName: func() string {
+			return "room-a"
+		},
+	}
+
+	rio.handleAgentSessionClose(agent.CloseEvent{Reason: agent.CloseReasonParticipantDisconnected})
+	rio.handleAgentSessionClose(agent.CloseEvent{Reason: agent.CloseReasonParticipantDisconnected})
+
+	if calls != 2 {
+		t.Fatalf("DeleteRoom calls = %d, want 2", calls)
+	}
+	if gotRoomName != "room-a" {
+		t.Fatalf("DeleteRoom roomName = %q, want room-a", gotRoomName)
+	}
+}
+
+func TestRoomIOHandleAgentSessionCloseSkipsRoomDeleteWhenDisabled(t *testing.T) {
+	called := false
+	rio := &RoomIO{
+		Options: RoomOptions{
+			DeleteRoom: func(context.Context, string) error {
+				called = true
+				return nil
+			},
+		},
+	}
+
+	rio.handleAgentSessionClose(agent.CloseEvent{Reason: agent.CloseReasonParticipantDisconnected})
+
+	if called {
+		t.Fatal("DeleteRoom was called when DeleteRoomOnClose was disabled")
+	}
+}
+
 func TestRoomIOHandleChatTextInputDispatchesConfiguredCallback(t *testing.T) {
 	session := &agent.AgentSession{}
 	var gotSession *agent.AgentSession
