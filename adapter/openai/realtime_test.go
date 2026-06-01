@@ -210,13 +210,20 @@ func TestRealtimeEventMapsOutputTextAndAudioAliases(t *testing.T) {
 
 	audioEvent, ok := openAIRealtimeEvent(map[string]any{
 		"type":  "response.output_audio.delta",
-		"delta": "base64-audio",
+		"delta": "aGVsbG8=",
 	})
 	if !ok {
 		t.Fatal("openAIRealtimeEvent audio returned ok=false, want audio event")
 	}
-	if audioEvent.Type != llm.RealtimeEventTypeAudio || string(audioEvent.Data) != "base64-audio" {
-		t.Fatalf("audio event = %#v, want audio delta", audioEvent)
+	if audioEvent.Type != llm.RealtimeEventTypeAudio || string(audioEvent.Data) != "hello" {
+		t.Fatalf("audio event = %#v, want decoded audio bytes", audioEvent)
+	}
+
+	if _, ok := openAIRealtimeEvent(map[string]any{
+		"type":  "response.output_audio.delta",
+		"delta": "not-base64",
+	}); ok {
+		t.Fatal("openAIRealtimeEvent invalid audio returned ok=true, want false")
 	}
 }
 

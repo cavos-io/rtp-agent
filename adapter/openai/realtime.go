@@ -638,9 +638,13 @@ func openAIRealtimeEvent(ev map[string]any) (llm.RealtimeEvent, bool) {
 		}
 	case "response.output_audio.delta", "response.audio.delta":
 		if delta, ok := ev["delta"].(string); ok {
+			data, err := base64.StdEncoding.DecodeString(delta)
+			if err != nil {
+				return llm.RealtimeEvent{}, false
+			}
 			return llm.RealtimeEvent{
 				Type: llm.RealtimeEventTypeAudio,
-				Data: []byte(delta), // base64 encoded audio
+				Data: data,
 			}, true
 		}
 	case "response.function_call_arguments.delta":
