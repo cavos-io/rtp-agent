@@ -54,6 +54,47 @@ func TestMCPProxyToolTreatsEmptyResultAsToolError(t *testing.T) {
 	}
 }
 
+func TestMCPProxyToolReportsUnavailableServer(t *testing.T) {
+	server := NewMCPServerStdio("", nil)
+	tool := &mcpProxyTool{server: server, name: "lookup"}
+
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			t.Fatalf("Execute() panicked for unavailable MCP server: %v", recovered)
+		}
+	}()
+
+	_, err := tool.Execute(context.Background(), `{}`)
+
+	var toolErr ToolError
+	if !errors.As(err, &toolErr) {
+		t.Fatalf("error = %T %v, want ToolError", err, err)
+	}
+	if toolErr.Message != "Tool invocation failed: internal service is unavailable. Please check that the MCPServer is still running." {
+		t.Fatalf("ToolError message = %q, want unavailable service explanation", toolErr.Message)
+	}
+}
+
+func TestMCPServerHTTPReportsUnsupportedNativeClient(t *testing.T) {
+	server := NewMCPServerHTTP("https://example.com/mcp")
+	server.TransportType = "streamable_http"
+	server.AllowedTools = []string{"lookup"}
+	server.Headers = map[string]string{"Authorization": "Bearer token"}
+
+	if server.URL != "https://example.com/mcp" {
+		t.Fatalf("URL = %q, want constructor URL", server.URL)
+	}
+	if err := server.Initialize(context.Background()); err == nil {
+		t.Fatal("Initialize() error = nil, want unsupported native client error")
+	}
+	if tools, err := server.ListTools(context.Background()); err == nil || tools != nil {
+		t.Fatalf("ListTools() = %#v, %v; want nil tools and unsupported native client error", tools, err)
+	}
+	if err := server.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+}
+
 func TestMCPProxyToolSerializesSuccessfulContentResults(t *testing.T) {
 	tests := []struct {
 		name   string
@@ -139,6 +180,45 @@ func TestMCPServerStdioCachesListedToolsUntilInvalidated(t *testing.T) {
 	}
 	if len(reloadedTools) != 1 || reloadedTools[0].Name() != "second" {
 		t.Fatalf("reloaded tools = %#v, want second tool", reloadedTools)
+	}
+}
+
+func TestMCPServerStdioPreservesToolMetaInFunctionSchema(t *testing.T) {
+	server := NewMCPServerStdio("", nil)
+	server.stdin = &fakeMCPWriteCloser{
+		server: server,
+		result: json.RawMessage(`{
+			"tools": [{
+				"name": "lookup",
+				"description": "lookup tool",
+				"inputSchema": {"type": "object"},
+				"meta": {"title": "Lookup", "readOnlyHint": true}
+			}]
+		}`),
+	}
+
+	tools, err := server.ListTools(context.Background())
+	if err != nil {
+		t.Fatalf("ListTools() error = %v", err)
+	}
+	if len(tools) != 1 {
+		t.Fatalf("len(tools) = %d, want 1", len(tools))
+	}
+
+	proxy, ok := tools[0].(*mcpProxyTool)
+	if !ok {
+		t.Fatalf("tool type = %T, want *mcpProxyTool", tools[0])
+	}
+	schema, err := proxy.ParseFunctionTools("")
+	if err != nil {
+		t.Fatalf("ParseFunctionTools() error = %v", err)
+	}
+	meta, ok := schema["meta"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("schema meta = %#v, want MCP meta object", schema["meta"])
+	}
+	if meta["title"] != "Lookup" || meta["readOnlyHint"] != true {
+		t.Fatalf("schema meta = %#v, want MCP meta fields", meta)
 	}
 }
 

@@ -235,6 +235,22 @@ func TestChatContextAddMessageAcceptsTextContent(t *testing.T) {
 	}
 }
 
+func TestChatMessageTextContentIncludesInstructionsAndPlainText(t *testing.T) {
+	message := &ChatMessage{
+		Role: ChatRoleSystem,
+		Content: []ChatContent{
+			{Instructions: NewInstructions("voice instructions", "text instructions")},
+			{Text: "plain text"},
+			{Image: &ImageContent{Image: "https://example.com/image.jpg"}},
+			{Audio: &AudioContent{Transcript: "spoken words"}},
+		},
+	}
+
+	if got, want := message.TextContent(), "voice instructions\nplain text"; got != want {
+		t.Fatalf("TextContent() = %q, want %q", got, want)
+	}
+}
+
 func TestInstructionsPreserveVariantsAndSelectModality(t *testing.T) {
 	instructions := NewInstructions("speak plainly", "write tersely")
 
@@ -1065,6 +1081,16 @@ func TestChatContextUnmarshalJSONAcceptsAgentConfigInstructionObject(t *testing.
 	}
 	if config.Instructions == nil || *config.Instructions != "speak plainly" {
 		t.Fatalf("Instructions = %#v, want audio instruction text", config.Instructions)
+	}
+
+	serialized := ctx.ToDict()
+	items := serialized["items"].([]map[string]any)
+	instructions, ok := items[0]["instructions"].(map[string]any)
+	if !ok {
+		t.Fatalf("serialized instructions = %#v, want instructions object", items[0]["instructions"])
+	}
+	if instructions["type"] != "instructions" || instructions["audio"] != "speak plainly" || instructions["text"] != "write tersely" {
+		t.Fatalf("serialized instructions = %#v, want preserved variants", instructions)
 	}
 }
 
