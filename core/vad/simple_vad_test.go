@@ -306,6 +306,47 @@ func TestSimpleVADUpdateOptionsWithIgnoresInvalidWindowDuration(t *testing.T) {
 	}
 }
 
+func TestSimpleVADRejectsInvalidThresholdAtStream(t *testing.T) {
+	for _, threshold := range []float64{-1, math.NaN(), math.Inf(1)} {
+		detector := NewSimpleVADWithOptions(SimpleVADOptions{
+			Threshold:             threshold,
+			DeactivationThreshold: 0.05,
+		})
+
+		stream, err := detector.Stream(context.Background())
+		if err == nil {
+			if stream != nil {
+				_ = stream.Close()
+			}
+			t.Fatalf("Stream() with threshold %v error = nil, want invalid threshold error", threshold)
+		}
+		if !strings.Contains(err.Error(), "threshold must be greater than or equal to 0") {
+			t.Fatalf("Stream() with threshold %v error = %q, want threshold message", threshold, err.Error())
+		}
+		if len(detector.streams) != 0 {
+			t.Fatalf("registered streams after invalid threshold = %d, want 0", len(detector.streams))
+		}
+	}
+}
+
+func TestSimpleVADUpdateOptionsWithIgnoresInvalidThreshold(t *testing.T) {
+	detector := NewSimpleVADWithOptions(SimpleVADOptions{Threshold: 0.05})
+	stream, err := detector.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	defer stream.Close()
+
+	detector.UpdateOptionsWith(WithThreshold(math.NaN()))
+	if detector.options.Threshold != 0.05 {
+		t.Fatalf("detector threshold = %v, want 0.05", detector.options.Threshold)
+	}
+	simpleStream := stream.(*simpleVADStream)
+	if simpleStream.options.Threshold != 0.05 {
+		t.Fatalf("stream threshold = %v, want 0.05", simpleStream.options.Threshold)
+	}
+}
+
 func TestSimpleVADUpdateOptionsRelaxesMaxBufferedSpeech(t *testing.T) {
 	detector := NewSimpleVADWithOptions(SimpleVADOptions{
 		Threshold:                 0.05,
