@@ -46,6 +46,21 @@ func TestDeepgramTTSSynthesizeRequestUsesReferenceOptions(t *testing.T) {
 	}
 }
 
+func TestDeepgramTTSSynthesizeRequestUsesConfiguredBaseURL(t *testing.T) {
+	provider := NewDeepgramTTS("test-key", "",
+		WithDeepgramTTSBaseURL("https://deepgram.example/v1/speak"),
+	)
+
+	requestURL, _ := buildDeepgramTTSSynthesizeRequest(provider, "hello")
+	parsed, err := url.Parse(requestURL)
+	if err != nil {
+		t.Fatalf("parse url: %v", err)
+	}
+	if parsed.Scheme != "https" || parsed.Host != "deepgram.example" || parsed.Path != "/v1/speak" {
+		t.Fatalf("url = %q, want configured HTTP base URL", requestURL)
+	}
+}
+
 func TestDeepgramTTSStreamURLUsesReferenceOptions(t *testing.T) {
 	provider := NewDeepgramTTS("test-key", "")
 
@@ -62,6 +77,21 @@ func TestDeepgramTTSStreamURLUsesReferenceOptions(t *testing.T) {
 	assertDeepgramTTSQuery(t, query, "encoding", "linear16")
 	assertDeepgramTTSQuery(t, query, "sample_rate", "24000")
 	assertDeepgramTTSQuery(t, query, "mip_opt_out", "false")
+}
+
+func TestDeepgramTTSStreamURLUsesConfiguredBaseURL(t *testing.T) {
+	provider := NewDeepgramTTS("test-key", "",
+		WithDeepgramTTSBaseURL("https://deepgram.example/v1/speak"),
+	)
+
+	streamURL := buildDeepgramTTSStreamURL(provider)
+	parsed, err := url.Parse(streamURL)
+	if err != nil {
+		t.Fatalf("parse url: %v", err)
+	}
+	if parsed.Scheme != "wss" || parsed.Host != "deepgram.example" || parsed.Path != "/v1/speak" {
+		t.Fatalf("url = %q, want configured websocket base URL", streamURL)
+	}
 }
 
 func assertDeepgramTTSQuery(t *testing.T, query url.Values, key string, want string) {

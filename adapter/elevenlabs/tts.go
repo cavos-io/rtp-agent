@@ -19,8 +19,11 @@ import (
 	"github.com/gorilla/websocket"
 )
 
+const defaultElevenLabsBaseURL = "https://api.elevenlabs.io/v1"
+
 type ElevenLabsTTS struct {
 	apiKey            string
+	baseURL           string
 	voiceID           string
 	modelID           string
 	encoding          string
@@ -30,6 +33,14 @@ type ElevenLabsTTS struct {
 }
 
 type ElevenLabsTTSOption func(*ElevenLabsTTS)
+
+func WithElevenLabsBaseURL(baseURL string) ElevenLabsTTSOption {
+	return func(t *ElevenLabsTTS) {
+		if baseURL != "" {
+			t.baseURL = strings.TrimRight(baseURL, "/")
+		}
+	}
+}
 
 func WithElevenLabsLanguage(language string) ElevenLabsTTSOption {
 	return func(t *ElevenLabsTTS) {
@@ -61,6 +72,7 @@ func NewElevenLabsTTS(apiKey string, voiceID string, modelID string, opts ...Ele
 	}
 	provider := &ElevenLabsTTS{
 		apiKey:     apiKey,
+		baseURL:    defaultElevenLabsBaseURL,
 		voiceID:    voiceID,
 		modelID:    modelID,
 		encoding:   "mp3_22050_32",
@@ -109,7 +121,7 @@ func (t *ElevenLabsTTS) Synthesize(ctx context.Context, text string) (tts.Chunke
 }
 
 func buildElevenLabsSynthesizeRequest(t *ElevenLabsTTS, text string) (string, []byte) {
-	apiURL := fmt.Sprintf("https://api.elevenlabs.io/v1/text-to-speech/%s?output_format=%s", t.voiceID, url.QueryEscape(t.encoding))
+	apiURL := fmt.Sprintf("%s/text-to-speech/%s?output_format=%s", strings.TrimRight(t.baseURL, "/"), t.voiceID, url.QueryEscape(t.encoding))
 	body := map[string]interface{}{
 		"text":     text,
 		"model_id": t.modelID,
@@ -209,12 +221,20 @@ func (t *ElevenLabsTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error
 }
 
 func buildElevenLabsStreamURL(t *ElevenLabsTTS) string {
-	u := url.URL{Scheme: "wss", Host: "api.elevenlabs.io", Path: fmt.Sprintf("/v1/text-to-speech/%s/stream-input", t.voiceID)}
-	q := u.Query()
+	streamBaseURL := strings.TrimRight(t.baseURL, "/")
+	if strings.HasPrefix(streamBaseURL, "http://") || strings.HasPrefix(streamBaseURL, "https://") {
+		streamBaseURL = strings.Replace(streamBaseURL, "http", "ws", 1)
+	}
+	parsed, err := url.Parse(streamBaseURL + fmt.Sprintf("/text-to-speech/%s/stream-input", t.voiceID))
+	if err != nil {
+		u := url.URL{Scheme: "wss", Host: "api.elevenlabs.io", Path: fmt.Sprintf("/v1/text-to-speech/%s/stream-input", t.voiceID)}
+		parsed = &u
+	}
+	q := parsed.Query()
 	q.Set("model_id", t.modelID)
 	q.Set("output_format", t.encoding)
-	u.RawQuery = q.Encode()
-	return u.String()
+	parsed.RawQuery = q.Encode()
+	return parsed.String()
 }
 
 func elevenLabsSampleRate(encoding string) int {

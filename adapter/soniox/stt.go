@@ -43,6 +43,23 @@ type SonioxSTT struct {
 	translation                  map[string]string
 }
 
+type SonioxContextGeneralItem struct {
+	Key   string `json:"key"`
+	Value string `json:"value"`
+}
+
+type SonioxContextTranslationTerm struct {
+	Source string `json:"source"`
+	Target string `json:"target"`
+}
+
+type SonioxContextObject struct {
+	General          []SonioxContextGeneralItem     `json:"general,omitempty"`
+	Text             string                         `json:"text,omitempty"`
+	Terms            []string                       `json:"terms,omitempty"`
+	TranslationTerms []SonioxContextTranslationTerm `json:"translation_terms,omitempty"`
+}
+
 type SonioxSTTOption func(*SonioxSTT)
 
 func WithSonioxBaseURL(baseURL string) SonioxSTTOption {
@@ -78,6 +95,12 @@ func WithSonioxContextText(context string) SonioxSTTOption {
 		if context != "" {
 			s.context = context
 		}
+	}
+}
+
+func WithSonioxContextObject(context SonioxContextObject) SonioxSTTOption {
+	return func(s *SonioxSTT) {
+		s.context = context
 	}
 }
 
@@ -127,6 +150,14 @@ func WithSonioxOneWayTranslation(targetLanguage string) SonioxSTTOption {
 	return func(s *SonioxSTT) {
 		if targetLanguage != "" {
 			s.translation = map[string]string{"type": "one_way", "target_language": targetLanguage}
+		}
+	}
+}
+
+func WithSonioxTwoWayTranslation(languageA string, languageB string) SonioxSTTOption {
+	return func(s *SonioxSTT) {
+		if languageA != "" && languageB != "" {
+			s.translation = map[string]string{"type": "two_way", "language_a": languageA, "language_b": languageB}
 		}
 	}
 }

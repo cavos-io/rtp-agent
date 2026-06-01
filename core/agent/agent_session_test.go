@@ -371,8 +371,73 @@ func TestAgentSessionInterruptDelegatesToActivity(t *testing.T) {
 	}
 }
 
+func TestAgentSessionUpdateAgentBeforeStartSwapsAgentOnly(t *testing.T) {
+	initial := &trackingAgent{Agent: NewAgent("initial")}
+	next := &trackingAgent{Agent: NewAgent("next")}
+	session := NewAgentSession(initial, nil, AgentSessionOptions{})
+
+	session.UpdateAgent(next)
+
+	if session.Agent != next {
+		t.Fatalf("session.Agent = %#v, want next agent", session.Agent)
+	}
+	if session.activity != nil {
+		t.Fatalf("session.activity = %#v, want nil before start", session.activity)
+	}
+	if initial.entered != 0 || initial.exited != 0 || next.entered != 0 || next.exited != 0 {
+		t.Fatalf("lifecycle calls initial=%d/%d next=%d/%d, want none", initial.entered, initial.exited, next.entered, next.exited)
+	}
+}
+
+func TestAgentSessionUpdateAgentWhileRunningStartsNewActivity(t *testing.T) {
+	initial := &trackingAgent{Agent: NewAgent("initial")}
+	next := &trackingAgent{Agent: NewAgent("next")}
+	session := NewAgentSession(initial, nil, AgentSessionOptions{})
+	oldActivity := NewAgentActivity(initial, session)
+	session.activity = oldActivity
+	session.started = true
+
+	session.UpdateAgent(next)
+
+	if initial.exited != 1 {
+		t.Fatalf("initial exits = %d, want 1", initial.exited)
+	}
+	if next.entered != 1 {
+		t.Fatalf("next enters = %d, want 1", next.entered)
+	}
+	if session.Agent != next {
+		t.Fatalf("session.Agent = %#v, want next agent", session.Agent)
+	}
+	if session.activity == nil || session.activity == oldActivity {
+		t.Fatalf("session.activity = %#v, want replacement activity", session.activity)
+	}
+	if session.activity.Agent != next.Agent {
+		t.Fatalf("session.activity.Agent = %#v, want next base agent", session.activity.Agent)
+	}
+	if initial.GetActivity() != nil {
+		t.Fatalf("initial activity = %#v, want cleared", initial.GetActivity())
+	}
+	if next.GetActivity() != session.activity {
+		t.Fatalf("next activity = %#v, want session activity", next.GetActivity())
+	}
+}
+
 func testTimeout() <-chan time.Time {
 	return time.After(time.Second)
+}
+
+type trackingAgent struct {
+	*Agent
+	entered int
+	exited  int
+}
+
+func (a *trackingAgent) OnEnter() {
+	a.entered++
+}
+
+func (a *trackingAgent) OnExit() {
+	a.exited++
 }
 
 func TestAgentSessionUpdateAgentStateEmitsTypedTimestampedEvent(t *testing.T) {
@@ -399,6 +464,43 @@ func TestAgentSessionUpdateAgentStateEmitsTypedTimestampedEvent(t *testing.T) {
 	}
 }
 
+func TestAgentSessionStartEmitsInitializingThenListening(t *testing.T) {
+	agent := NewAgent("test")
+	agent.VAD = &fakePipelineVAD{}
+	agent.STT = &fakePipelineSTT{}
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	done := make(chan error, 1)
+	go func() {
+		done <- session.Start(ctx)
+	}()
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("Start error = %v, want nil", err)
+		}
+	case <-testTimeout():
+		t.Fatal("Start did not return")
+	}
+	defer func() {
+		if err := session.Stop(context.Background()); err != nil {
+			t.Fatalf("Stop error = %v, want nil", err)
+		}
+	}()
+
+	first := receiveAgentStateChangedEvent(t, session)
+	if first.OldState != "" || first.NewState != AgentStateInitializing {
+		t.Fatalf("first state event = %q -> %q, want empty -> initializing", first.OldState, first.NewState)
+	}
+	second := receiveAgentStateChangedEvent(t, session)
+	if second.OldState != AgentStateInitializing || second.NewState != AgentStateListening {
+		t.Fatalf("second state event = %q -> %q, want initializing -> listening", second.OldState, second.NewState)
+	}
+}
+
 func TestAgentSessionUpdateUserStateEmitsTypedTimestampedEvent(t *testing.T) {
 	agent := NewAgent("test")
 	session := NewAgentSession(agent, nil, AgentSessionOptions{})
@@ -421,6 +523,17 @@ func TestAgentSessionUpdateUserStateEmitsTypedTimestampedEvent(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("UpdateUserState did not emit an event")
 	}
+}
+
+func receiveAgentStateChangedEvent(t *testing.T, session *AgentSession) AgentStateChangedEvent {
+	t.Helper()
+	select {
+	case ev := <-session.AgentStateChangedCh:
+		return ev
+	case <-testTimeout():
+		t.Fatal("AgentStateChangedCh did not receive event")
+	}
+	return AgentStateChangedEvent{}
 }
 
 func TestAgentSessionEmitMetricsCollectedCollectsUsageAndEmitsEvent(t *testing.T) {

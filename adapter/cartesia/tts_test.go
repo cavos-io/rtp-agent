@@ -75,6 +75,27 @@ func TestCartesiaSynthesizeRequestUsesReferenceOptions(t *testing.T) {
 	}
 }
 
+func TestCartesiaSynthesizeRequestUsesConfiguredBaseURL(t *testing.T) {
+	provider := NewCartesiaTTS("test-key", "", "",
+		WithCartesiaBaseURL("https://cartesia.example"),
+	)
+
+	requestURL, _, err := buildCartesiaSynthesizeRequest(provider, "hello")
+	if err != nil {
+		t.Fatalf("build request: %v", err)
+	}
+	parsed, err := url.Parse(requestURL)
+	if err != nil {
+		t.Fatalf("parse url: %v", err)
+	}
+	if parsed.Scheme != "https" || parsed.Host != "cartesia.example" {
+		t.Fatalf("url = %q, want configured base URL", requestURL)
+	}
+	if parsed.Path != "/tts/bytes" {
+		t.Fatalf("path = %q, want /tts/bytes", parsed.Path)
+	}
+}
+
 func TestCartesiaStreamInitMessageUsesReferenceOptions(t *testing.T) {
 	provider := NewCartesiaTTS("test-key", "", "")
 
@@ -88,5 +109,40 @@ func TestCartesiaStreamInitMessageUsesReferenceOptions(t *testing.T) {
 	}
 	if msg["add_timestamps"] != true {
 		t.Fatalf("add_timestamps = %#v, want true", msg["add_timestamps"])
+	}
+}
+
+func TestCartesiaWebsocketURLAndHeadersMatchReference(t *testing.T) {
+	provider := NewCartesiaTTS("test-key", "", "",
+		WithCartesiaBaseURL("https://cartesia.example"),
+	)
+
+	streamURL := buildCartesiaStreamURL(provider)
+	parsed, err := url.Parse(streamURL)
+	if err != nil {
+		t.Fatalf("parse stream url: %v", err)
+	}
+	if parsed.Scheme != "wss" || parsed.Host != "cartesia.example" {
+		t.Fatalf("stream URL = %q, want configured websocket host", streamURL)
+	}
+	if parsed.Path != "/tts/websocket" {
+		t.Fatalf("path = %q, want /tts/websocket", parsed.Path)
+	}
+	if parsed.Query().Get("cartesia_version") != "2025-04-16" {
+		t.Fatalf("cartesia_version = %q, want 2025-04-16", parsed.Query().Get("cartesia_version"))
+	}
+	if parsed.Query().Get("api_key") != "" {
+		t.Fatalf("api_key query = %q, want API key in header only", parsed.Query().Get("api_key"))
+	}
+
+	headers := buildCartesiaStreamHeaders(provider)
+	if headers.Get("X-API-Key") != "test-key" {
+		t.Fatalf("X-API-Key = %q, want test-key", headers.Get("X-API-Key"))
+	}
+	if headers.Get("Cartesia-Version") != "2025-04-16" {
+		t.Fatalf("Cartesia-Version = %q, want 2025-04-16", headers.Get("Cartesia-Version"))
+	}
+	if headers.Get("User-Agent") == "" {
+		t.Fatal("User-Agent header missing")
 	}
 }

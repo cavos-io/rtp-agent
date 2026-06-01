@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strings"
 	"sync"
 
 	"github.com/cavos-io/rtp-agent/core/audio/model"
@@ -15,8 +16,11 @@ import (
 	"github.com/gorilla/websocket"
 )
 
+const defaultDeepgramTTSBaseURL = "https://api.deepgram.com/v1/speak"
+
 type DeepgramTTS struct {
 	apiKey     string
+	baseURL    string
 	model      string
 	encoding   string
 	sampleRate int
@@ -24,6 +28,14 @@ type DeepgramTTS struct {
 }
 
 type DeepgramTTSOption func(*DeepgramTTS)
+
+func WithDeepgramTTSBaseURL(baseURL string) DeepgramTTSOption {
+	return func(t *DeepgramTTS) {
+		if baseURL != "" {
+			t.baseURL = strings.TrimRight(baseURL, "/")
+		}
+	}
+}
 
 func WithDeepgramTTSMipOptOut(mipOptOut bool) DeepgramTTSOption {
 	return func(t *DeepgramTTS) {
@@ -37,6 +49,7 @@ func NewDeepgramTTS(apiKey string, model string, opts ...DeepgramTTSOption) *Dee
 	}
 	provider := &DeepgramTTS{
 		apiKey:     apiKey,
+		baseURL:    defaultDeepgramTTSBaseURL,
 		model:      model,
 		encoding:   "linear16",
 		sampleRate: 24000,
@@ -129,11 +142,20 @@ func buildDeepgramTTSStreamURL(t *DeepgramTTS) string {
 }
 
 func deepgramTTSBaseURL(t *DeepgramTTS, websocketURL bool) url.URL {
-	scheme := "https"
-	if websocketURL {
-		scheme = "wss"
+	baseURL := t.baseURL
+	if websocketURL && strings.HasPrefix(baseURL, "http") {
+		baseURL = strings.Replace(baseURL, "http", "ws", 1)
+	} else if !websocketURL && strings.HasPrefix(baseURL, "ws") {
+		baseURL = strings.Replace(baseURL, "ws", "http", 1)
 	}
-	return url.URL{Scheme: scheme, Host: "api.deepgram.com", Path: "/v1/speak"}
+	parsed, err := url.Parse(baseURL)
+	if err != nil {
+		if websocketURL {
+			return url.URL{Scheme: "wss", Host: "api.deepgram.com", Path: "/v1/speak"}
+		}
+		return url.URL{Scheme: "https", Host: "api.deepgram.com", Path: "/v1/speak"}
+	}
+	return *parsed
 }
 
 type deepgramTTSChunkedStream struct {

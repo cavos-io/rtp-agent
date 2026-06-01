@@ -52,7 +52,7 @@ type AgentActivity struct {
 
 func NewAgentActivity(agentIntf AgentInterface, session *AgentSession) *AgentActivity {
 	ctx, cancel := context.WithCancel(context.Background())
-	return &AgentActivity{
+	activity := &AgentActivity{
 		AgentIntf:      agentIntf,
 		Agent:          agentIntf.GetAgent(),
 		Session:        session,
@@ -61,6 +61,8 @@ func NewAgentActivity(agentIntf AgentInterface, session *AgentSession) *AgentAct
 		ctx:            ctx,
 		cancel:         cancel,
 	}
+	activity.Agent.activity = activity
+	return activity
 }
 
 type scheduledSpeech struct {
@@ -78,6 +80,9 @@ func (a *AgentActivity) Start() {
 func (a *AgentActivity) Stop() {
 	a.AgentIntf.OnExit()
 	a.cancel()
+	if a.Agent.activity == a {
+		a.Agent.activity = nil
+	}
 }
 
 func (a *AgentActivity) recordInitialConfiguration() error {

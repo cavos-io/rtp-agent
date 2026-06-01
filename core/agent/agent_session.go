@@ -510,9 +510,8 @@ func (s *AgentSession) closeEvents() chan CloseEvent {
 
 func (s *AgentSession) Start(ctx context.Context) error {
 	s.mu.Lock()
-	defer s.mu.Unlock()
-
 	if s.started {
+		s.mu.Unlock()
 		return nil
 	}
 
@@ -523,20 +522,30 @@ func (s *AgentSession) Start(ctx context.Context) error {
 	if s.Assistant == nil {
 		s.Assistant = NewPipelineAgent(s.VAD, s.STT, s.LLM, s.TTS, s.ChatCtx)
 	}
+	assistant := s.Assistant
+	agent := s.Agent
+	hasMetricsCollector := s.MetricsCollector != nil
+	s.mu.Unlock()
 
-	if err := s.Assistant.Start(ctx, s); err != nil {
+	s.UpdateAgentState(AgentStateInitializing)
+
+	if err := assistant.Start(ctx, s); err != nil {
 		return err
 	}
 
-	s.activity = NewAgentActivity(s.Agent, s)
-	s.activity.Start()
+	activity := NewAgentActivity(agent, s)
+	s.mu.Lock()
+	s.activity = activity
+	s.started = true
+	s.mu.Unlock()
+
+	activity.Start()
 
 	// Trigger periodic usage metrics reporting
-	if s.MetricsCollector != nil {
+	if hasMetricsCollector {
 		go s.reportUsageLoop(ctx)
 	}
 
-	s.started = true
 	s.UpdateAgentState(AgentStateListening)
 
 	return nil
@@ -699,6 +708,35 @@ func (s *AgentSession) Interrupt(force bool) error {
 	}
 
 	return activity.Interrupt(force)
+}
+
+func (s *AgentSession) UpdateAgent(agent AgentInterface) {
+	if agent == nil {
+		return
+	}
+	baseAgent := agent.GetAgent()
+
+	s.mu.Lock()
+	oldActivity := s.activity
+	started := s.started
+	s.Agent = agent
+	s.STT = baseAgent.STT
+	s.VAD = baseAgent.VAD
+	s.LLM = baseAgent.LLM
+	s.TTS = baseAgent.TTS
+	if !started {
+		s.mu.Unlock()
+		return
+	}
+
+	newActivity := NewAgentActivity(agent, s)
+	s.activity = newActivity
+	s.mu.Unlock()
+
+	if oldActivity != nil {
+		oldActivity.Stop()
+	}
+	newActivity.Start()
 }
 
 func (s *AgentSession) Stop(ctx context.Context) error {

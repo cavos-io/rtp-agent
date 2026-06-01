@@ -101,6 +101,51 @@ func TestSonioxSTTOptionsBuildReferenceConfig(t *testing.T) {
 	}
 }
 
+func TestSonioxSTTContextObjectBuildsReferenceConfig(t *testing.T) {
+	provider := NewSonioxSTT("test-key",
+		WithSonioxContextObject(SonioxContextObject{
+			General: []SonioxContextGeneralItem{{Key: "product", Value: "rtp-agent"}},
+			Text:    "domain-specific words",
+			Terms:   []string{"LiveKit", "Cavos"},
+			TranslationTerms: []SonioxContextTranslationTerm{
+				{Source: "agent", Target: "agente"},
+			},
+		}),
+	)
+
+	config := buildSonioxConfig(provider)
+
+	context, ok := config["context"].(SonioxContextObject)
+	if !ok {
+		t.Fatalf("context = %#v, want SonioxContextObject", config["context"])
+	}
+	if context.Text != "domain-specific words" {
+		t.Fatalf("context text = %q, want domain-specific words", context.Text)
+	}
+	if len(context.General) != 1 || context.General[0].Key != "product" || context.General[0].Value != "rtp-agent" {
+		t.Fatalf("general context = %#v, want product rtp-agent", context.General)
+	}
+	if len(context.Terms) != 2 || context.Terms[0] != "LiveKit" || context.Terms[1] != "Cavos" {
+		t.Fatalf("terms = %#v, want LiveKit/Cavos", context.Terms)
+	}
+	if len(context.TranslationTerms) != 1 || context.TranslationTerms[0].Source != "agent" || context.TranslationTerms[0].Target != "agente" {
+		t.Fatalf("translation terms = %#v, want agent/agente", context.TranslationTerms)
+	}
+}
+
+func TestSonioxSTTTwoWayTranslationBuildsReferenceConfig(t *testing.T) {
+	provider := NewSonioxSTT("test-key",
+		WithSonioxTwoWayTranslation("en", "es"),
+	)
+
+	config := buildSonioxConfig(provider)
+
+	translation := config["translation"].(map[string]string)
+	if translation["type"] != "two_way" || translation["language_a"] != "en" || translation["language_b"] != "es" {
+		t.Fatalf("translation = %#v, want two-way en/es", translation)
+	}
+}
+
 func TestSonioxSTTInitialConfigJSONOmitsNilOptionalFields(t *testing.T) {
 	provider := NewSonioxSTT("test-key")
 

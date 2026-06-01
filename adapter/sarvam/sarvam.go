@@ -719,6 +719,7 @@ type SarvamTTS struct {
 	maxChunkLength        int
 	enablePreprocessing   bool
 	enableCachedResponses *bool
+	dictID                string
 	outputAudioCodec      string
 }
 
@@ -778,6 +779,66 @@ func WithSarvamTTSSampleRate(sampleRate int) SarvamTTSOption {
 func WithSarvamTTSTemperature(temperature float64) SarvamTTSOption {
 	return func(t *SarvamTTS) {
 		t.temperature = temperature
+	}
+}
+
+func WithSarvamTTSPitch(pitch float64) SarvamTTSOption {
+	return func(t *SarvamTTS) {
+		t.pitch = pitch
+	}
+}
+
+func WithSarvamTTSPace(pace float64) SarvamTTSOption {
+	return func(t *SarvamTTS) {
+		t.pace = pace
+	}
+}
+
+func WithSarvamTTSLoudness(loudness float64) SarvamTTSOption {
+	return func(t *SarvamTTS) {
+		t.loudness = loudness
+	}
+}
+
+func WithSarvamTTSOutputAudioBitrate(bitrate string) SarvamTTSOption {
+	return func(t *SarvamTTS) {
+		if bitrate != "" {
+			t.outputAudioBitrate = bitrate
+		}
+	}
+}
+
+func WithSarvamTTSMinBufferSize(size int) SarvamTTSOption {
+	return func(t *SarvamTTS) {
+		if size > 0 {
+			t.minBufferSize = size
+		}
+	}
+}
+
+func WithSarvamTTSMaxChunkLength(length int) SarvamTTSOption {
+	return func(t *SarvamTTS) {
+		if length > 0 {
+			t.maxChunkLength = length
+		}
+	}
+}
+
+func WithSarvamTTSEnablePreprocessing(enabled bool) SarvamTTSOption {
+	return func(t *SarvamTTS) {
+		t.enablePreprocessing = enabled
+	}
+}
+
+func WithSarvamTTSEnableCachedResponses(enabled bool) SarvamTTSOption {
+	return func(t *SarvamTTS) {
+		t.enableCachedResponses = &enabled
+	}
+}
+
+func WithSarvamTTSDictID(dictID string) SarvamTTSOption {
+	return func(t *SarvamTTS) {
+		t.dictID = dictID
 	}
 }
 
@@ -863,6 +924,9 @@ func buildSarvamTTSRequest(ctx context.Context, t *SarvamTTS, text string) (*htt
 	}
 	if t.model == "bulbul:v3" || t.model == "bulbul:v3-beta" {
 		payload["temperature"] = t.temperature
+	}
+	if t.model == "bulbul:v3" && t.dictID != "" {
+		payload["dict_id"] = t.dictID
 	}
 	body, err := json.Marshal(payload)
 	if err != nil {
@@ -957,6 +1021,9 @@ func sarvamTTSConfigPayload(t *SarvamTTS) map[string]interface{} {
 		data["output_audio_bitrate"] = t.outputAudioBitrate
 		data["min_buffer_size"] = t.minBufferSize
 		data["max_chunk_length"] = t.maxChunkLength
+	}
+	if t.model == "bulbul:v3" && t.dictID != "" {
+		data["dict_id"] = t.dictID
 	}
 	return data
 }
