@@ -580,6 +580,54 @@ func TestApplyWorkerArgsPreservesExplicitZeroDrainTimeout(t *testing.T) {
 	}
 }
 
+func TestRunWorkerLifecycleDrainsAfterSignalCancellation(t *testing.T) {
+	runner := &fakeWorkerLifecycle{runErr: context.Canceled}
+
+	if err := runWorkerLifecycle(context.Background(), runner, false); err != nil {
+		t.Fatalf("runWorkerLifecycle() error = %v", err)
+	}
+	if runner.runCalls != 1 {
+		t.Fatalf("runCalls = %d, want 1", runner.runCalls)
+	}
+	if runner.drainCalls != 1 {
+		t.Fatalf("drainCalls = %d, want 1 after cancellation in start mode", runner.drainCalls)
+	}
+}
+
+func TestRunWorkerLifecycleSkipsDrainInDevMode(t *testing.T) {
+	runner := &fakeWorkerLifecycle{runErr: context.Canceled}
+
+	if err := runWorkerLifecycle(context.Background(), runner, true); err != nil {
+		t.Fatalf("runWorkerLifecycle() error = %v", err)
+	}
+	if runner.drainCalls != 0 {
+		t.Fatalf("drainCalls = %d, want 0 in dev mode", runner.drainCalls)
+	}
+}
+
+func TestRunWorkerLifecyclePropagatesRunErrors(t *testing.T) {
+	runErr := errors.New("run failed")
+	runner := &fakeWorkerLifecycle{runErr: runErr}
+
+	err := runWorkerLifecycle(context.Background(), runner, false)
+	if !errors.Is(err, runErr) {
+		t.Fatalf("runWorkerLifecycle() error = %v, want run error", err)
+	}
+	if runner.drainCalls != 0 {
+		t.Fatalf("drainCalls = %d, want 0 after run failure", runner.drainCalls)
+	}
+}
+
+func TestRunWorkerLifecyclePropagatesDrainErrors(t *testing.T) {
+	drainErr := errors.New("drain failed")
+	runner := &fakeWorkerLifecycle{runErr: context.Canceled, drainErr: drainErr}
+
+	err := runWorkerLifecycle(context.Background(), runner, false)
+	if !errors.Is(err, drainErr) {
+		t.Fatalf("runWorkerLifecycle() error = %v, want drain error", err)
+	}
+}
+
 func TestApplyWorkerArgsUsesDevDefaultLogLevel(t *testing.T) {
 	server := worker.NewAgentServer(worker.WorkerOptions{})
 
@@ -1202,4 +1250,21 @@ func readIPCMessageWithin(t *testing.T, r io.Reader, timeout time.Duration, name
 		t.Fatalf("ReadMessage %s timed out", name)
 		return ipc.Message{}
 	}
+}
+
+type fakeWorkerLifecycle struct {
+	runErr     error
+	drainErr   error
+	runCalls   int
+	drainCalls int
+}
+
+func (f *fakeWorkerLifecycle) Run(context.Context) error {
+	f.runCalls++
+	return f.runErr
+}
+
+func (f *fakeWorkerLifecycle) Drain(context.Context) error {
+	f.drainCalls++
+	return f.drainErr
 }
