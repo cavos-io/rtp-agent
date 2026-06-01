@@ -247,6 +247,45 @@ func TestAnthropicChatReturnsAPIStatusErrorOnHTTPError(t *testing.T) {
 	}
 }
 
+func TestAnthropicChatReturnsParsedAPIStatusErrorBody(t *testing.T) {
+	transport := &captureRoundTripper{
+		statusCode:   http.StatusBadRequest,
+		responseBody: `{"type":"error","error":{"type":"invalid_request_error","message":"missing messages"}}`,
+	}
+	originalTransport := http.DefaultTransport
+	http.DefaultTransport = transport
+	t.Cleanup(func() { http.DefaultTransport = originalTransport })
+
+	model, err := NewAnthropicLLM("test-key", "claude-test")
+	if err != nil {
+		t.Fatalf("NewAnthropicLLM() error = %v", err)
+	}
+	_, err = model.Chat(
+		context.Background(),
+		llm.NewChatContext(),
+		llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 0}),
+	)
+
+	var statusErr *llm.APIStatusError
+	if !errors.As(err, &statusErr) {
+		t.Fatalf("Chat error = %T %v, want APIStatusError", err, err)
+	}
+	if statusErr.Message != "missing messages (400 Bad Request)" {
+		t.Fatalf("Message = %q, want nested Anthropic error message", statusErr.Message)
+	}
+	body, ok := statusErr.Body.(map[string]any)
+	if !ok {
+		t.Fatalf("Body = %T %#v, want parsed JSON map", statusErr.Body, statusErr.Body)
+	}
+	errorBody, ok := body["error"].(map[string]any)
+	if !ok {
+		t.Fatalf("Body[error] = %T %#v, want parsed nested error", body["error"], body["error"])
+	}
+	if errorBody["type"] != "invalid_request_error" {
+		t.Fatalf("Body[error][type] = %#v, want invalid_request_error", errorBody["type"])
+	}
+}
+
 func TestAnthropicChatRetriesRetryableSetupAPIError(t *testing.T) {
 	transport := &sequenceRoundTripper{responses: []*http.Response{
 		anthropicTestResponse(http.StatusTooManyRequests, "rate limit"),

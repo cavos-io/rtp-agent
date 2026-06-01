@@ -156,10 +156,30 @@ func (l *AnthropicLLM) startAnthropicStream(ctx context.Context, jsonBody []byte
 	if resp.StatusCode != http.StatusOK {
 		respBody, _ := io.ReadAll(resp.Body)
 		resp.Body.Close()
-		body := strings.TrimSpace(string(respBody))
-		return nil, llm.CreateAPIErrorFromHTTP(body, resp.StatusCode, anthropicRequestID(resp.Header), body)
+		message, body := parseAnthropicErrorBody(respBody)
+		return nil, llm.CreateAPIErrorFromHTTP(message, resp.StatusCode, anthropicRequestID(resp.Header), body)
 	}
 	return resp, nil
+}
+
+func parseAnthropicErrorBody(respBody []byte) (string, any) {
+	bodyText := strings.TrimSpace(string(respBody))
+	if bodyText == "" {
+		return "", nil
+	}
+	var parsed map[string]any
+	if err := json.Unmarshal(respBody, &parsed); err != nil {
+		return bodyText, bodyText
+	}
+	message := bodyText
+	if errorBody, ok := parsed["error"].(map[string]any); ok {
+		if nestedMessage, ok := errorBody["message"].(string); ok && nestedMessage != "" {
+			message = nestedMessage
+		}
+	} else if topLevelMessage, ok := parsed["message"].(string); ok && topLevelMessage != "" {
+		message = topLevelMessage
+	}
+	return message, parsed
 }
 
 func anthropicConnectionErrorMessage(err error) string {
