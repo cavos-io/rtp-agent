@@ -6,8 +6,12 @@ import (
 	"mime"
 	"mime/multipart"
 	"net/http"
+	"net/url"
 	"strings"
 	"testing"
+
+	"github.com/cavos-io/rtp-agent/core/audio/model"
+	"github.com/cavos-io/rtp-agent/core/stt"
 )
 
 func TestGnaniSTTDefaultsMatchReference(t *testing.T) {
@@ -23,8 +27,8 @@ func TestGnaniSTTDefaultsMatchReference(t *testing.T) {
 		t.Fatalf("sample rate = %d, want 16000", provider.sampleRate)
 	}
 	caps := provider.Capabilities()
-	if caps.Streaming {
-		t.Fatal("streaming = true, want false until websocket streaming is implemented")
+	if !caps.Streaming {
+		t.Fatal("streaming = false, want reference websocket streaming")
 	}
 	if !caps.OfflineRecognize {
 		t.Fatal("offline recognize = false, want true for REST recognition")
@@ -122,6 +126,86 @@ func TestGnaniSTTResponseMapsTranscriptRequestIDAndLanguage(t *testing.T) {
 	}
 	if alt.Confidence != 1.0 {
 		t.Fatalf("confidence = %f, want 1.0", alt.Confidence)
+	}
+}
+
+func TestGnaniSTTWebsocketURLAndHeadersMatchReference(t *testing.T) {
+	provider := NewSTT("test-key",
+		WithSTTBaseURL("https://gnani.example"),
+		WithSTTLanguage("hi-IN"),
+	)
+
+	wsURL := buildSTTWebsocketURL(provider)
+	parsed, err := url.Parse(wsURL)
+	if err != nil {
+		t.Fatalf("parse websocket URL: %v", err)
+	}
+	if parsed.Scheme != "wss" || parsed.Host != "gnani.example" || parsed.Path != "/stt/v3/stream" {
+		t.Fatalf("websocket URL = %q, want converted stream endpoint", wsURL)
+	}
+
+	headers := buildSTTWebsocketHeaders(provider, "ta-IN")
+	if got := headers.Get("x-api-key-id"); got != "test-key" {
+		t.Fatalf("x-api-key-id = %q, want test-key", got)
+	}
+	if got := headers.Get("lang_code"); got != "ta-IN" {
+		t.Fatalf("lang_code = %q, want override language", got)
+	}
+}
+
+func TestGnaniSTTStreamChunksFramesIntoReferenceBytes(t *testing.T) {
+	stream := &sttStream{sampleRate: 16000, chunkBytes: 4}
+	frame := &model.AudioFrame{Data: []byte{0x01, 0x02, 0x03, 0x04, 0x05}, SampleRate: 16000}
+
+	chunks := stream.chunksForFrame(frame)
+	if len(chunks) != 1 || string(chunks[0]) != "\x01\x02\x03\x04" {
+		t.Fatalf("chunks = %#v, want one full 4-byte chunk", chunks)
+	}
+	if string(stream.pendingAudio) != "\x05" {
+		t.Fatalf("pending = %#v, want trailing byte", stream.pendingAudio)
+	}
+
+	flushed := stream.flushPendingAudio()
+	if len(flushed) != 1 || string(flushed[0]) != "\x05" {
+		t.Fatalf("flushed = %#v, want trailing pending audio", flushed)
+	}
+	if len(stream.pendingAudio) != 0 {
+		t.Fatalf("pending after flush = %#v, want empty", stream.pendingAudio)
+	}
+}
+
+func TestGnaniSTTStreamEventsMapReferenceMessages(t *testing.T) {
+	event, err := sttEventFromWebsocketMessage([]byte(`{"type":"transcript","text":"namaste","segment_id":"seg-1"}`), "hi-IN")
+	if err != nil {
+		t.Fatalf("transcript event: %v", err)
+	}
+	if event.Type != stt.SpeechEventFinalTranscript || event.RequestID != "seg-1" {
+		t.Fatalf("event = %+v, want final transcript", event)
+	}
+	alt := event.Alternatives[0]
+	if alt.Text != "namaste" || alt.Language != "hi-IN" || alt.Confidence != 1.0 {
+		t.Fatalf("alternative = %+v, want reference transcript mapping", alt)
+	}
+
+	start, err := sttEventFromWebsocketMessage([]byte(`{"type":"vad_start"}`), "hi-IN")
+	if err != nil || start.Type != stt.SpeechEventStartOfSpeech {
+		t.Fatalf("start = %+v err=%v, want start event", start, err)
+	}
+	end, err := sttEventFromWebsocketMessage([]byte(`{"type":"speech_end"}`), "hi-IN")
+	if err != nil || end.Type != stt.SpeechEventEndOfSpeech {
+		t.Fatalf("end = %+v err=%v, want end event", end, err)
+	}
+	processing, err := sttEventFromWebsocketMessage([]byte(`{"type":"processing"}`), "hi-IN")
+	if err != nil || processing != nil {
+		t.Fatalf("processing = %+v err=%v, want ignored", processing, err)
+	}
+	connected, err := sttEventFromWebsocketMessage([]byte(`{"type":"connected"}`), "en-IN")
+	if err != nil || connected != nil {
+		t.Fatalf("connected = %+v err=%v, want ignored", connected, err)
+	}
+	_, err = sttEventFromWebsocketMessage([]byte(`{"type":"error","message":"bad audio"}`), "hi-IN")
+	if err == nil || !strings.Contains(err.Error(), "bad audio") {
+		t.Fatalf("error = %v, want provider error", err)
 	}
 }
 
