@@ -40,6 +40,10 @@ type prewarmProviderTTS interface {
 	Prewarm()
 }
 
+type closeProviderTTS interface {
+	Close() error
+}
+
 func Model(t TTS) string {
 	if provider, ok := t.(modelProviderTTS); ok {
 		if model := provider.Model(); model != "" {
@@ -62,6 +66,13 @@ func Prewarm(t TTS) {
 	if provider, ok := t.(prewarmProviderTTS); ok {
 		provider.Prewarm()
 	}
+}
+
+func Close(t TTS) error {
+	if provider, ok := t.(closeProviderTTS); ok {
+		return provider.Close()
+	}
+	return nil
 }
 
 type ChunkedStream interface {

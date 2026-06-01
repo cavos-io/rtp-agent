@@ -229,7 +229,10 @@ func buildElevenLabsSTTRecognizeRequest(ctx context.Context, s *ElevenLabsSTT, a
 }
 
 func buildElevenLabsSTTStreamURL(s *ElevenLabsSTT, language string) string {
-	u, _ := url.Parse(strings.Replace(strings.TrimRight(s.baseURL, "/"), "https://", "wss://", 1) + "/speech-to-text/realtime")
+	baseURL := strings.TrimRight(s.baseURL, "/")
+	baseURL = strings.Replace(baseURL, "https://", "wss://", 1)
+	baseURL = strings.Replace(baseURL, "http://", "ws://", 1)
+	u, _ := url.Parse(baseURL + "/speech-to-text/realtime")
 	q := u.Query()
 	q.Set("model_id", s.modelID)
 	q.Set("audio_format", fmt.Sprintf("pcm_%d", s.sampleRate))

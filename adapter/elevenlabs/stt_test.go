@@ -155,6 +155,24 @@ func TestElevenLabsSTTStreamURLAndMessagesMatchReference(t *testing.T) {
 	}
 }
 
+func TestElevenLabsSTTStreamURLConvertsHTTPBaseURLToWebsocket(t *testing.T) {
+	provider := NewElevenLabsSTT("test-key",
+		WithElevenLabsSTTBaseURL("http://eleven.example/v1"),
+		WithElevenLabsSTTModel("scribe_v2_realtime"),
+	)
+
+	streamURL, err := url.Parse(buildElevenLabsSTTStreamURL(provider, ""))
+	if err != nil {
+		t.Fatalf("parse stream URL: %v", err)
+	}
+	if streamURL.Scheme != "ws" {
+		t.Fatalf("scheme = %q, want ws for http base URL", streamURL.Scheme)
+	}
+	if streamURL.Host != "eleven.example" || streamURL.Path != "/v1/speech-to-text/realtime" {
+		t.Fatalf("stream URL = %q, want websocket realtime endpoint", streamURL.String())
+	}
+}
+
 func TestElevenLabsSTTBatchResponseMapsSpeechEvent(t *testing.T) {
 	event := elevenLabsSTTSpeechEvent("en", elevenLabsSTTResponse{
 		Text:         "hello world",

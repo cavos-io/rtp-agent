@@ -83,6 +83,18 @@ func TestStreamAdapterForwardsPrewarm(t *testing.T) {
 	}
 }
 
+func TestStreamAdapterCloseDelegatesToWrappedProvider(t *testing.T) {
+	provider := &fakeStreamAdapterTTS{}
+	adapter := NewStreamAdapter(provider)
+
+	if err := adapter.Close(); err != nil {
+		t.Fatalf("Close error = %v", err)
+	}
+	if !provider.closed {
+		t.Fatal("Close did not delegate to wrapped provider")
+	}
+}
+
 func TestStreamAdapterForwardsMetricsCollected(t *testing.T) {
 	provider := &fakeStreamAdapterTTS{}
 	adapter := NewStreamAdapter(provider)
@@ -971,6 +983,7 @@ type fakeStreamAdapterTTS struct {
 	events        []*SynthesizedAudio
 	chunked       ChunkedStream
 	empty         bool
+	closed        bool
 }
 
 func (f *fakeStreamAdapterTTS) Label() string {
@@ -987,6 +1000,11 @@ func (f *fakeStreamAdapterTTS) Provider() string {
 
 func (f *fakeStreamAdapterTTS) Prewarm() {
 	f.prewarmCalls++
+}
+
+func (f *fakeStreamAdapterTTS) Close() error {
+	f.closed = true
+	return nil
 }
 
 func (f *fakeStreamAdapterTTS) Capabilities() TTSCapabilities {

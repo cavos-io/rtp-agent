@@ -58,6 +58,39 @@ func TestFallbackAdapterPrewarmsPrimaryProviderOnly(t *testing.T) {
 	}
 }
 
+func TestFallbackAdapterCloseClosesAllProviders(t *testing.T) {
+	primary := &metadataTTS{label: "primary", sampleRate: 24000, numChannels: 1}
+	secondary := &metadataTTS{label: "secondary", sampleRate: 24000, numChannels: 1}
+	adapter := NewFallbackAdapter([]TTS{primary, secondary})
+
+	if err := adapter.Close(); err != nil {
+		t.Fatalf("Close error = %v", err)
+	}
+	if !primary.closed {
+		t.Fatal("Close did not close primary provider")
+	}
+	if !secondary.closed {
+		t.Fatal("Close did not close secondary provider")
+	}
+}
+
+func TestFallbackAdapterCloseCancelsChunkedRecovery(t *testing.T) {
+	provider := &contextAwareRecoveryTTS{
+		metadataTTS: metadataTTS{label: "primary", sampleRate: 24000, numChannels: 1},
+		started:     make(chan struct{}, 1),
+		cancelled:   make(chan struct{}, 1),
+	}
+	adapter := NewFallbackAdapter([]TTS{provider})
+
+	adapter.tryRecoverChunked(0, "hello")
+	receiveSignal(t, provider.started, "chunked recovery start")
+
+	if err := adapter.Close(); err != nil {
+		t.Fatalf("Close error = %v", err)
+	}
+	receiveSignal(t, provider.cancelled, "chunked recovery cancellation")
+}
+
 func TestFallbackAdapterEmitsAvailabilityChanges(t *testing.T) {
 	streamErr := errors.New("primary unavailable")
 	primary := &metadataTTS{
@@ -355,6 +388,117 @@ func TestFallbackAdapterCanUnsubscribeErrorEvents(t *testing.T) {
 	case label := <-errCh:
 		t.Fatalf("received error after unsubscribe: %q", label)
 	case <-time.After(50 * time.Millisecond):
+	}
+}
+
+func TestFallbackAdapterEmitsErrorOnChunkedFailure(t *testing.T) {
+	providerErr := errors.New("provider failed")
+	adapter := NewFallbackAdapter([]TTS{
+		&metadataTTS{label: "primary", sampleRate: 24000, numChannels: 1, chunked: &metadataChunkedStream{err: providerErr}},
+	})
+	errCh := make(chan TTSError, 1)
+	adapter.OnError(func(err TTSError) {
+		errCh <- err
+	})
+
+	stream, err := adapter.Synthesize(context.Background(), "hello")
+	if err != nil {
+		t.Fatalf("Synthesize returned error: %v", err)
+	}
+	defer stream.Close()
+
+	_, err = stream.Next()
+	if err == nil {
+		t.Fatal("Next error = nil, want terminal fallback error")
+	}
+	wantErr := err
+
+	select {
+	case got := <-errCh:
+		if got.Type != TTSErrorType {
+			t.Fatalf("error Type = %q, want %q", got.Type, TTSErrorType)
+		}
+		if got.Label != adapter.Label() {
+			t.Fatalf("error Label = %q, want %q", got.Label, adapter.Label())
+		}
+		if !errors.Is(got.Err, wantErr) {
+			t.Fatalf("emitted error = %v, want %v", got.Err, wantErr)
+		}
+		if got.Recoverable {
+			t.Fatal("Recoverable = true, want false")
+		}
+	default:
+		t.Fatal("fallback adapter did not emit chunked TTS error")
+	}
+}
+
+func TestFallbackAdapterEmitsErrorOnStreamFailure(t *testing.T) {
+	providerErr := errors.New("provider failed")
+	adapter := NewFallbackAdapter([]TTS{
+		&metadataTTS{
+			label:        "primary",
+			sampleRate:   24000,
+			numChannels:  1,
+			capabilities: TTSCapabilities{Streaming: true},
+			stream:       &metadataSynthesizeStream{err: providerErr},
+		},
+	})
+	errCh := make(chan TTSError, 1)
+	adapter.OnError(func(err TTSError) {
+		errCh <- err
+	})
+
+	stream, err := adapter.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+	defer stream.Close()
+
+	if err := stream.PushText("hello"); err != nil {
+		t.Fatalf("PushText returned error: %v", err)
+	}
+	if err := EndSynthesizeStreamInput(stream); err != nil {
+		t.Fatalf("EndSynthesizeStreamInput returned error: %v", err)
+	}
+	_, err = stream.Next()
+	if err == nil {
+		t.Fatal("Next error = nil, want terminal fallback error")
+	}
+	wantErr := err
+
+	select {
+	case got := <-errCh:
+		if got.Label != adapter.Label() {
+			t.Fatalf("error Label = %q, want %q", got.Label, adapter.Label())
+		}
+		if !errors.Is(got.Err, wantErr) {
+			t.Fatalf("emitted error = %v, want %v", got.Err, wantErr)
+		}
+		if got.Recoverable {
+			t.Fatal("Recoverable = true, want false")
+		}
+	default:
+		t.Fatal("fallback adapter did not emit streamed TTS error")
+	}
+}
+
+func TestFallbackAdapterErrorUnsubscribeRemovesLocalAndProviderHandlers(t *testing.T) {
+	primary := &metadataTTS{label: "primary", sampleRate: 24000, numChannels: 1}
+	adapter := NewFallbackAdapter([]TTS{primary})
+	errCh := make(chan TTSError, 2)
+	unsubscribe := adapter.OnError(func(err TTSError) {
+		errCh <- err
+	})
+	unsubscribe()
+	unsubscribe()
+
+	primary.EmitError(TTSError{Label: "primary", Err: errors.New("primary failed")})
+	adapter.EmitError(TTSError{Label: "adapter", Err: errors.New("adapter failed")})
+
+	select {
+	case got := <-errCh:
+		t.Fatalf("received error after unsubscribe: %#v", got)
+	default:
 	}
 }
 
@@ -2629,6 +2773,15 @@ func receiveTTSErrorLabel(t *testing.T, errs <-chan string) string {
 	}
 }
 
+func receiveSignal(t *testing.T, signals <-chan struct{}, name string) {
+	t.Helper()
+	select {
+	case <-signals:
+	case <-time.After(200 * time.Millisecond):
+		t.Fatalf("timed out waiting for %s", name)
+	}
+}
+
 func fallbackTestFrame(sampleRate uint32, channels uint32, samplesPerChannel uint32) *model.AudioFrame {
 	return &model.AudioFrame{
 		Data:              make([]byte, int(samplesPerChannel*channels*2)),
@@ -2654,11 +2807,47 @@ type metadataTTS struct {
 	prewarmCalls    int
 	synthesizeCalls int
 	streamCalls     int
+	closed          bool
 }
 
 type notifyStreamTTS struct {
 	metadataTTS
 	streamCalled chan struct{}
+}
+
+type contextAwareRecoveryTTS struct {
+	metadataTTS
+	started   chan struct{}
+	cancelled chan struct{}
+}
+
+func (c *contextAwareRecoveryTTS) Synthesize(ctx context.Context, text string) (ChunkedStream, error) {
+	select {
+	case c.started <- struct{}{}:
+	default:
+	}
+	return &contextAwareRecoveryChunkedStream{
+		ctx:       ctx,
+		cancelled: c.cancelled,
+	}, nil
+}
+
+type contextAwareRecoveryChunkedStream struct {
+	ctx       context.Context
+	cancelled chan struct{}
+}
+
+func (s *contextAwareRecoveryChunkedStream) Next() (*SynthesizedAudio, error) {
+	<-s.ctx.Done()
+	select {
+	case s.cancelled <- struct{}{}:
+	default:
+	}
+	return nil, s.ctx.Err()
+}
+
+func (s *contextAwareRecoveryChunkedStream) Close() error {
+	return nil
 }
 
 func (n *notifyStreamTTS) Stream(ctx context.Context) (SynthesizeStream, error) {
@@ -2687,6 +2876,11 @@ func (m *metadataTTS) NumChannels() int {
 
 func (m *metadataTTS) Prewarm() {
 	m.prewarmCalls++
+}
+
+func (m *metadataTTS) Close() error {
+	m.closed = true
+	return nil
 }
 
 func (m *metadataTTS) Synthesize(context.Context, string) (ChunkedStream, error) {

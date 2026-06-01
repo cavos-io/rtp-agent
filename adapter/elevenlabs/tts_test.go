@@ -42,8 +42,11 @@ func TestElevenLabsSynthesizeRequestUsesReferenceOptions(t *testing.T) {
 		t.Fatalf("parse url: %v", err)
 	}
 
-	if parsed.Path != "/v1/text-to-speech/hpp4J3VqNfWAUOO0d1Us" {
-		t.Fatalf("path = %q, want default voice path", parsed.Path)
+	if parsed.Path != "/v1/text-to-speech/hpp4J3VqNfWAUOO0d1Us/stream" {
+		t.Fatalf("path = %q, want default voice stream path", parsed.Path)
+	}
+	if parsed.Query().Get("model_id") != "eleven_turbo_v2_5" {
+		t.Fatalf("model_id = %q, want eleven_turbo_v2_5", parsed.Query().Get("model_id"))
 	}
 	if parsed.Query().Get("output_format") != "mp3_22050_32" {
 		t.Fatalf("output_format = %q, want mp3_22050_32", parsed.Query().Get("output_format"))
@@ -84,13 +87,16 @@ func TestElevenLabsSynthesizeRequestUsesConfiguredBaseURL(t *testing.T) {
 	if parsed.Scheme != "https" || parsed.Host != "eleven.example" {
 		t.Fatalf("url = %q, want configured host", requestURL)
 	}
-	if parsed.Path != "/v1/text-to-speech/voice-1" {
-		t.Fatalf("path = %q, want configured base URL with synthesize path", parsed.Path)
+	if parsed.Path != "/v1/text-to-speech/voice-1/stream" {
+		t.Fatalf("path = %q, want configured base URL with stream synthesize path", parsed.Path)
 	}
 }
 
 func TestElevenLabsStreamURLUsesReferenceOptions(t *testing.T) {
-	provider, err := NewElevenLabsTTS("test-key", "", "")
+	provider, err := NewElevenLabsTTS("test-key", "", "",
+		WithElevenLabsLanguage("en"),
+		WithElevenLabsEnableSSMLParsing(true),
+	)
 	if err != nil {
 		t.Fatalf("NewElevenLabsTTS() error = %v", err)
 	}
@@ -109,6 +115,24 @@ func TestElevenLabsStreamURLUsesReferenceOptions(t *testing.T) {
 	}
 	if parsed.Query().Get("output_format") != "mp3_22050_32" {
 		t.Fatalf("output_format = %q, want mp3_22050_32", parsed.Query().Get("output_format"))
+	}
+	if parsed.Query().Get("language_code") != "en" {
+		t.Fatalf("language_code = %q, want en", parsed.Query().Get("language_code"))
+	}
+	if parsed.Query().Get("enable_ssml_parsing") != "true" {
+		t.Fatalf("enable_ssml_parsing = %q, want true", parsed.Query().Get("enable_ssml_parsing"))
+	}
+	if parsed.Query().Get("enable_logging") != "true" {
+		t.Fatalf("enable_logging = %q, want true", parsed.Query().Get("enable_logging"))
+	}
+	if parsed.Query().Get("inactivity_timeout") != "300" {
+		t.Fatalf("inactivity_timeout = %q, want 300", parsed.Query().Get("inactivity_timeout"))
+	}
+	if parsed.Query().Get("apply_text_normalization") != "auto" {
+		t.Fatalf("apply_text_normalization = %q, want auto", parsed.Query().Get("apply_text_normalization"))
+	}
+	if parsed.Query().Get("sync_alignment") != "true" {
+		t.Fatalf("sync_alignment = %q, want true", parsed.Query().Get("sync_alignment"))
 	}
 }
 

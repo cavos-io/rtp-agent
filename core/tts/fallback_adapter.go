@@ -17,6 +17,7 @@ import (
 
 type FallbackAdapter struct {
 	MetricsEmitter
+	ErrorEmitter
 
 	ttss                 []TTS
 	capabilities         TTSCapabilities
@@ -28,11 +29,16 @@ type FallbackAdapter struct {
 
 	mu     sync.Mutex
 	status []fallbackTTSStatus
+	closed bool
+
+	nextRecoveryID uint64
 }
 
 type fallbackTTSStatus struct {
-	available  bool
-	recovering bool
+	available      bool
+	recovering     bool
+	recoveryID     uint64
+	recoveryCancel context.CancelFunc
 }
 
 type AvailabilityChangedEvent struct {
@@ -114,6 +120,33 @@ func (f *FallbackAdapter) Prewarm() {
 	Prewarm(f.ttss[0])
 }
 
+func (f *FallbackAdapter) Close() error {
+	f.mu.Lock()
+	f.closed = true
+	cancels := make([]context.CancelFunc, 0, len(f.status))
+	for i := range f.status {
+		if f.status[i].recoveryCancel != nil {
+			cancels = append(cancels, f.status[i].recoveryCancel)
+			f.status[i].recoveryCancel = nil
+		}
+		f.status[i].recovering = false
+		f.status[i].recoveryID = 0
+	}
+	f.mu.Unlock()
+
+	for _, cancel := range cancels {
+		cancel()
+	}
+
+	var errs []error
+	for _, tts := range f.ttss {
+		if err := Close(tts); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	return errors.Join(errs...)
+}
+
 func (f *FallbackAdapter) OnAvailabilityChanged(handler AvailabilityChangedHandler) func() {
 	if handler == nil {
 		return func() {}
@@ -174,7 +207,8 @@ func (f *FallbackAdapter) OnError(handler TTSErrorHandler) func() {
 	if handler == nil {
 		return func() {}
 	}
-	unsubscribes := make([]func(), 0, len(f.ttss))
+	unsubscribes := make([]func(), 0, len(f.ttss)+1)
+	unsubscribes = append(unsubscribes, f.ErrorEmitter.OnError(handler))
 	for _, tts := range f.ttss {
 		collector, ok := tts.(errorCollectorTTS)
 		if !ok {
@@ -264,16 +298,23 @@ func (f *FallbackAdapter) markAvailable(index int) {
 
 func (f *FallbackAdapter) tryRecoverChunked(index int, text string) {
 	f.mu.Lock()
-	if f.status[index].recovering {
+	if f.closed || f.status[index].recovering {
 		f.mu.Unlock()
 		return
 	}
+	ctx, cancel := context.WithCancel(context.Background())
+	f.nextRecoveryID++
+	recoveryID := f.nextRecoveryID
 	f.status[index].recovering = true
+	f.status[index].recoveryID = recoveryID
+	f.status[index].recoveryCancel = cancel
 	tts := f.ttss[index]
 	f.mu.Unlock()
 
 	go func() {
-		stream, err := tts.Synthesize(context.Background(), text)
+		defer f.finishRecovery(index, recoveryID)
+
+		stream, err := tts.Synthesize(ctx, text)
 		if err != nil || stream == nil {
 			f.mu.Lock()
 			f.status[index].recovering = false
@@ -320,16 +361,23 @@ func (f *FallbackAdapter) tryRecoverStream(index int, inputs []fallbackSynthesiz
 	}
 
 	f.mu.Lock()
-	if f.status[index].recovering {
+	if f.closed || f.status[index].recovering {
 		f.mu.Unlock()
 		return
 	}
+	ctx, cancel := context.WithCancel(context.Background())
+	f.nextRecoveryID++
+	recoveryID := f.nextRecoveryID
 	f.status[index].recovering = true
+	f.status[index].recoveryID = recoveryID
+	f.status[index].recoveryCancel = cancel
 	tts := f.ttss[index]
 	f.mu.Unlock()
 
 	go func() {
-		stream, err := streamForTTS(context.Background(), tts)
+		defer f.finishRecovery(index, recoveryID)
+
+		stream, err := streamForTTS(ctx, tts)
 		if err != nil || stream == nil {
 			f.mu.Lock()
 			f.status[index].recovering = false
@@ -376,6 +424,20 @@ func (f *FallbackAdapter) tryRecoverStream(index int, inputs []fallbackSynthesiz
 			return
 		}
 	}()
+}
+
+func (f *FallbackAdapter) finishRecovery(index int, recoveryID uint64) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if index < 0 || index >= len(f.status) {
+		return
+	}
+	if f.status[index].recoveryID != recoveryID {
+		return
+	}
+	f.status[index].recovering = false
+	f.status[index].recoveryID = 0
+	f.status[index].recoveryCancel = nil
 }
 
 func streamForTTS(ctx context.Context, tts TTS) (SynthesizeStream, error) {
@@ -558,6 +620,7 @@ func (s *fallbackChunkedStream) monitorStream() {
 				if errors.Is(err, io.EOF) && !outputSent && pending == nil && strings.TrimSpace(s.text) != "" {
 					err := fmt.Errorf("no audio frames were pushed for text: %s", s.text)
 					s.markDone(err)
+					emitTTSError(s.adapter, err, false)
 					s.errCh <- err
 					return
 				}
@@ -599,6 +662,7 @@ func (s *fallbackChunkedStream) monitorStream() {
 
 			if fbErr := s.tryStartStream(nextIndex); fbErr != nil {
 				s.markDoneLocked(fbErr)
+				emitTTSError(s.adapter, fbErr, false)
 				s.errCh <- fbErr
 				s.mu.Unlock()
 				return
@@ -646,6 +710,7 @@ func (s *fallbackChunkedStream) monitorStream() {
 
 			if fbErr := s.tryStartStream(nextIndex); fbErr != nil {
 				s.markDoneLocked(fbErr)
+				emitTTSError(s.adapter, fbErr, false)
 				s.errCh <- fbErr
 				s.mu.Unlock()
 				return
@@ -939,6 +1004,7 @@ func (s *fallbackSynthesizeStream) monitorStream() {
 				if errors.Is(err, io.EOF) && !outputSent && pending == nil && strings.TrimSpace(s.pushedText()) != "" {
 					err := fmt.Errorf("no audio frames were pushed for text: %s", s.pushedText())
 					s.markDone(err)
+					emitTTSError(s.adapter, err, false)
 					s.errCh <- err
 					return
 				}
@@ -980,6 +1046,7 @@ func (s *fallbackSynthesizeStream) monitorStream() {
 
 			if fbErr := s.tryStartStream(nextIndex); fbErr != nil {
 				s.markDoneLocked(fbErr)
+				emitTTSError(s.adapter, fbErr, false)
 				s.errCh <- fbErr
 				s.mu.Unlock()
 				return
@@ -1027,6 +1094,7 @@ func (s *fallbackSynthesizeStream) monitorStream() {
 
 			if fbErr := s.tryStartStream(nextIndex); fbErr != nil {
 				s.markDoneLocked(fbErr)
+				emitTTSError(s.adapter, fbErr, false)
 				s.errCh <- fbErr
 				s.mu.Unlock()
 				return

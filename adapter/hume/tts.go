@@ -28,6 +28,7 @@ type HumeTTS struct {
 	apiKey          string
 	baseURL         string
 	modelVersion    string
+	voiceID         string
 	voiceName       string
 	voiceProvider   string
 	description     string
@@ -36,6 +37,22 @@ type HumeTTS struct {
 	instantMode     bool
 	audioFormat     string
 	sampleRate      int
+	contextID       string
+	context         []HumeTTSUtterance
+}
+
+type HumeTTSVoice struct {
+	ID       string
+	Name     string
+	Provider string
+}
+
+type HumeTTSUtterance struct {
+	Text            string
+	Description     string
+	Speed           *float64
+	Voice           *HumeTTSVoice
+	TrailingSilence *float64
 }
 
 type HumeTTSOption func(*HumeTTS)
@@ -58,9 +75,19 @@ func WithHumeTTSModelVersion(modelVersion string) HumeTTSOption {
 
 func WithHumeTTSVoiceName(name string, provider string) HumeTTSOption {
 	return func(t *HumeTTS) {
+		t.voiceID = ""
 		t.voiceName = name
 		t.voiceProvider = provider
 		t.instantMode = name != ""
+	}
+}
+
+func WithHumeTTSVoiceID(id string, provider string) HumeTTSOption {
+	return func(t *HumeTTS) {
+		t.voiceID = id
+		t.voiceName = ""
+		t.voiceProvider = provider
+		t.instantMode = id != ""
 	}
 }
 
@@ -93,6 +120,20 @@ func WithHumeTTSAudioFormat(audioFormat string) HumeTTSOption {
 		if audioFormat != "" {
 			t.audioFormat = audioFormat
 		}
+	}
+}
+
+func WithHumeTTSContextGenerationID(generationID string) HumeTTSOption {
+	return func(t *HumeTTS) {
+		t.contextID = generationID
+		t.context = nil
+	}
+}
+
+func WithHumeTTSContextUtterances(context []HumeTTSUtterance) HumeTTSOption {
+	return func(t *HumeTTS) {
+		t.context = context
+		t.contextID = ""
 	}
 }
 
@@ -150,12 +191,12 @@ func buildHumeTTSRequest(ctx context.Context, t *HumeTTS, text string) (*http.Re
 	utterance := map[string]interface{}{
 		"text": text,
 	}
-	if t.voiceName != "" {
-		voice := map[string]interface{}{"name": t.voiceName}
-		if t.voiceProvider != "" {
-			voice["provider"] = t.voiceProvider
-		}
-		utterance["voice"] = voice
+	if t.voiceID != "" || t.voiceName != "" {
+		utterance["voice"] = humeTTSVoicePayload(HumeTTSVoice{
+			ID:       t.voiceID,
+			Name:     t.voiceName,
+			Provider: t.voiceProvider,
+		})
 	}
 	if t.description != "" {
 		utterance["description"] = t.description
@@ -174,6 +215,15 @@ func buildHumeTTSRequest(ctx context.Context, t *HumeTTS, text string) (*http.Re
 		"instant_mode":  t.instantMode,
 		"format":        map[string]interface{}{"type": t.audioFormat},
 	}
+	if t.contextID != "" {
+		body["context"] = map[string]interface{}{"generation_id": t.contextID}
+	} else if len(t.context) > 0 {
+		contextUtterances := make([]map[string]interface{}, 0, len(t.context))
+		for _, utterance := range t.context {
+			contextUtterances = append(contextUtterances, humeTTSUtterancePayload(utterance))
+		}
+		body["context"] = map[string]interface{}{"utterances": contextUtterances}
+	}
 
 	jsonBody, err := json.Marshal(body)
 	if err != nil {
@@ -188,6 +238,40 @@ func buildHumeTTSRequest(ctx context.Context, t *HumeTTS, text string) (*http.Re
 	req.Header.Set("X-Hume-Client-Name", "livekit")
 	req.Header.Set("X-Hume-Client-Version", "go")
 	return req, nil
+}
+
+func humeTTSUtterancePayload(utterance HumeTTSUtterance) map[string]interface{} {
+	payload := map[string]interface{}{"text": utterance.Text}
+	if utterance.Description != "" {
+		payload["description"] = utterance.Description
+	}
+	if utterance.Speed != nil {
+		payload["speed"] = *utterance.Speed
+	}
+	if utterance.TrailingSilence != nil {
+		payload["trailing_silence"] = *utterance.TrailingSilence
+	}
+	if utterance.Voice != nil {
+		voice := humeTTSVoicePayload(*utterance.Voice)
+		if len(voice) > 0 {
+			payload["voice"] = voice
+		}
+	}
+	return payload
+}
+
+func humeTTSVoicePayload(voice HumeTTSVoice) map[string]interface{} {
+	payload := map[string]interface{}{}
+	if voice.ID != "" {
+		payload["id"] = voice.ID
+	}
+	if voice.Name != "" {
+		payload["name"] = voice.Name
+	}
+	if voice.Provider != "" {
+		payload["provider"] = voice.Provider
+	}
+	return payload
 }
 
 func (t *HumeTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {

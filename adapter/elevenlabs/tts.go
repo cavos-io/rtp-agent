@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -121,7 +122,7 @@ func (t *ElevenLabsTTS) Synthesize(ctx context.Context, text string) (tts.Chunke
 }
 
 func buildElevenLabsSynthesizeRequest(t *ElevenLabsTTS, text string) (string, []byte) {
-	apiURL := fmt.Sprintf("%s/text-to-speech/%s?output_format=%s", strings.TrimRight(t.baseURL, "/"), t.voiceID, url.QueryEscape(t.encoding))
+	apiURL := fmt.Sprintf("%s/text-to-speech/%s/stream?model_id=%s&output_format=%s", strings.TrimRight(t.baseURL, "/"), t.voiceID, url.QueryEscape(t.modelID), url.QueryEscape(t.encoding))
 	body := map[string]interface{}{
 		"text":     text,
 		"model_id": t.modelID,
@@ -233,6 +234,14 @@ func buildElevenLabsStreamURL(t *ElevenLabsTTS) string {
 	q := parsed.Query()
 	q.Set("model_id", t.modelID)
 	q.Set("output_format", t.encoding)
+	if t.language != "" {
+		q.Set("language_code", t.language)
+	}
+	q.Set("enable_ssml_parsing", strconv.FormatBool(t.enableSSMLParsing))
+	q.Set("enable_logging", "true")
+	q.Set("inactivity_timeout", "300")
+	q.Set("apply_text_normalization", "auto")
+	q.Set("sync_alignment", "true")
 	parsed.RawQuery = q.Encode()
 	return parsed.String()
 }
