@@ -276,6 +276,35 @@ func TestRealtimeEventMapsConversationItemAddedMessage(t *testing.T) {
 	}
 }
 
+func TestRealtimeSessionTracksRemoteItemAddedEvents(t *testing.T) {
+	session := &realtimeSession{remote: llm.NewRemoteChatContext()}
+	root := &llm.ChatMessage{ID: "root", Role: llm.ChatRoleUser, Content: []llm.ChatContent{{Text: "root"}}}
+	session.remote.Insert(nil, root)
+
+	ev := llm.RealtimeEvent{
+		Type: llm.RealtimeEventTypeRemoteItemAdded,
+		RemoteItem: &llm.RemoteItemAddedEvent{
+			PreviousItemID: "root",
+			Item: &llm.ChatMessage{
+				ID:      "remote_123",
+				Role:    llm.ChatRoleAssistant,
+				Content: []llm.ChatContent{{Text: "hello"}},
+			},
+		},
+	}
+
+	session.trackRealtimeEvent(ev)
+
+	item := session.remote.Get("remote_123")
+	msg, ok := item.(*llm.ChatMessage)
+	if !ok {
+		t.Fatalf("tracked item = %T, want *llm.ChatMessage", item)
+	}
+	if msg.TextContent() != "hello" {
+		t.Fatalf("tracked message text = %q, want hello", msg.TextContent())
+	}
+}
+
 func TestRealtimeEventMapsConversationItemAddedFunctionCall(t *testing.T) {
 	ev, ok := openAIRealtimeEvent(map[string]any{
 		"type": "conversation.item.added",

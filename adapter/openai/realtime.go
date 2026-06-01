@@ -532,8 +532,25 @@ func (s *realtimeSession) eventLoop() {
 			if realtimeEvent.Type == llm.RealtimeEventTypeError {
 				logger.Logger.Errorw("OpenAI realtime error", nil, "payload", string(msg))
 			}
+			s.trackRealtimeEvent(realtimeEvent)
 			s.eventCh <- realtimeEvent
 		}
+	}
+}
+
+func (s *realtimeSession) trackRealtimeEvent(ev llm.RealtimeEvent) {
+	if ev.Type != llm.RealtimeEventTypeRemoteItemAdded || ev.RemoteItem == nil || ev.RemoteItem.Item == nil {
+		return
+	}
+	if s.remote == nil {
+		s.remote = llm.NewRemoteChatContext()
+	}
+	var previousItemID *string
+	if ev.RemoteItem.PreviousItemID != "" {
+		previousItemID = &ev.RemoteItem.PreviousItemID
+	}
+	if err := s.remote.Insert(previousItemID, ev.RemoteItem.Item); err != nil {
+		logger.Logger.Warnw("failed to track OpenAI realtime remote item", err, "item_id", ev.RemoteItem.Item.GetID())
 	}
 }
 
