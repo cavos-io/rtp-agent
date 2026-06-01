@@ -156,6 +156,27 @@ func TestMultiSpeakerAdapterWrapperReturnsEOFWhenInnerCompletes(t *testing.T) {
 	}
 }
 
+func TestMultiSpeakerAdapterWrapperRejectsInputAfterInnerCompletes(t *testing.T) {
+	wrapper := &multiSpeakerAdapterWrapper{
+		inner:   &fakeMultiSpeakerStream{nextErr: io.EOF},
+		ctx:     context.Background(),
+		eventCh: make(chan *SpeechEvent, 1),
+		errCh:   make(chan error, 1),
+		inputCh: make(chan multiSpeakerInput, 1),
+	}
+	go wrapper.run()
+
+	_, err := wrapper.Next()
+	if !errors.Is(err, io.EOF) {
+		t.Fatalf("Next error = %v, want io.EOF", err)
+	}
+
+	err = wrapper.PushFrame(&model.AudioFrame{Data: []byte("late"), SampleRate: 16000, NumChannels: 1, SamplesPerChannel: 1})
+	if err == nil {
+		t.Fatal("PushFrame after inner completion returned nil, want error")
+	}
+}
+
 func TestMultiSpeakerAdapterWrapperPropagatesInnerError(t *testing.T) {
 	innerErr := errors.New("inner stream failed")
 	wrapper := &multiSpeakerAdapterWrapper{
