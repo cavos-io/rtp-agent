@@ -43,9 +43,12 @@ type SpeechHandle struct {
 	numSteps  int
 	chatItems []llm.ChatItem
 
-	interruptCh chan struct{}
-	doneCh      chan struct{}
-	scheduledCh chan struct{}
+	interruptCh        chan struct{}
+	doneCh             chan struct{}
+	scheduledCh        chan struct{}
+	nextCallbackID     uint64
+	doneCallbacks      map[uint64]func(*SpeechHandle)
+	itemAddedCallbacks map[uint64]func(llm.ChatItem)
 
 	mu sync.Mutex
 }
@@ -60,6 +63,8 @@ func NewSpeechHandle(allowInterruptions bool, inputDetails InputDetails) *Speech
 		interruptCh:        make(chan struct{}),
 		doneCh:             make(chan struct{}),
 		scheduledCh:        make(chan struct{}),
+		doneCallbacks:      make(map[uint64]func(*SpeechHandle)),
+		itemAddedCallbacks: make(map[uint64]func(llm.ChatItem)),
 	}
 }
 
@@ -127,10 +132,20 @@ func (s *SpeechHandle) SetAllowInterruptions(allow bool) error {
 
 func (s *SpeechHandle) MarkDone() {
 	s.mu.Lock()
-	defer s.mu.Unlock()
+	if s.IsDone() {
+		s.mu.Unlock()
+		return
+	}
 
-	if !s.IsDone() {
-		close(s.doneCh)
+	close(s.doneCh)
+	callbacks := make([]func(*SpeechHandle), 0, len(s.doneCallbacks))
+	for _, callback := range s.doneCallbacks {
+		callbacks = append(callbacks, callback)
+	}
+	s.mu.Unlock()
+
+	for _, callback := range callbacks {
+		callback(s)
 	}
 }
 
@@ -211,4 +226,74 @@ func (s *SpeechHandle) IncrementStep() {
 	defer s.mu.Unlock()
 
 	s.numSteps++
+}
+
+func (s *SpeechHandle) AddDoneCallback(callback func(*SpeechHandle)) func() {
+	if callback == nil {
+		return func() {}
+	}
+
+	s.mu.Lock()
+	if s.IsDone() {
+		s.mu.Unlock()
+		callback(s)
+		return func() {}
+	}
+
+	id := s.nextCallbackID
+	s.nextCallbackID++
+	s.doneCallbacks[id] = callback
+	s.mu.Unlock()
+
+	return func() {
+		s.mu.Lock()
+		delete(s.doneCallbacks, id)
+		s.mu.Unlock()
+	}
+}
+
+func (s *SpeechHandle) AddItemAddedCallback(callback func(llm.ChatItem)) func() {
+	if callback == nil {
+		return func() {}
+	}
+
+	s.mu.Lock()
+	id := s.nextCallbackID
+	s.nextCallbackID++
+	s.itemAddedCallbacks[id] = callback
+	s.mu.Unlock()
+
+	return func() {
+		s.mu.Lock()
+		delete(s.itemAddedCallbacks, id)
+		s.mu.Unlock()
+	}
+}
+
+func (s *SpeechHandle) AddChatItems(items ...llm.ChatItem) {
+	for _, item := range items {
+		s.mu.Lock()
+		callbacks := make([]func(llm.ChatItem), 0, len(s.itemAddedCallbacks))
+		for _, callback := range s.itemAddedCallbacks {
+			callbacks = append(callbacks, callback)
+		}
+		s.mu.Unlock()
+
+		for _, callback := range callbacks {
+			callback(item)
+		}
+
+		s.mu.Lock()
+		s.chatItems = append(s.chatItems, item)
+		s.mu.Unlock()
+	}
+}
+
+func (s *SpeechHandle) ChatItems() []llm.ChatItem {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	items := make([]llm.ChatItem, len(s.chatItems))
+	copy(items, s.chatItems)
+	return items
 }
