@@ -388,6 +388,65 @@ func TestStreamAdapterFinalTranscriptUsesFirstRecognizedAlternative(t *testing.T
 	}
 }
 
+func TestStreamAdapterRecognizesBufferedFramesWhenVADEndOmitsFrames(t *testing.T) {
+	firstFrame := &model.AudioFrame{Data: []byte("first"), SampleRate: 16000, NumChannels: 1, SamplesPerChannel: 1}
+	secondFrame := &model.AudioFrame{Data: []byte("second"), SampleRate: 16000, NumChannels: 1, SamplesPerChannel: 1}
+	wrapped := &fakeStreamAdapterSTT{recognizeResult: &SpeechEvent{
+		Type:         SpeechEventFinalTranscript,
+		Alternatives: []SpeechData{{Text: "buffered speech"}},
+	}}
+	stream, err := NewStreamAdapter(
+		wrapped,
+		&fakeStreamAdapterVAD{stream: &fakeStreamAdapterVADStream{
+			events: []*vad.VADEvent{
+				{Type: vad.VADEventStartOfSpeech},
+				{Type: vad.VADEventEndOfSpeech},
+			},
+			pushCh:                make(chan struct{}, 2),
+			waitPushesBeforeEvent: []int{2, 0},
+			done:                  make(chan struct{}),
+		}},
+	).Stream(context.Background(), "")
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+	defer stream.Close()
+
+	if err := stream.PushFrame(firstFrame); err != nil {
+		t.Fatalf("PushFrame(first) returned error: %v", err)
+	}
+	if err := stream.PushFrame(secondFrame); err != nil {
+		t.Fatalf("PushFrame(second) returned error: %v", err)
+	}
+
+	event, err := stream.Next()
+	if err != nil {
+		t.Fatalf("first Next returned error: %v", err)
+	}
+	if event.Type != SpeechEventStartOfSpeech {
+		t.Fatalf("first event type = %s, want start_of_speech", event.Type)
+	}
+
+	event, err = stream.Next()
+	if err != nil {
+		t.Fatalf("second Next returned error: %v", err)
+	}
+	if event.Type != SpeechEventEndOfSpeech {
+		t.Fatalf("second event type = %s, want end_of_speech", event.Type)
+	}
+
+	event, err = nextStreamAdapterEvent(stream)
+	if err != nil {
+		t.Fatalf("third Next returned error: %v", err)
+	}
+	if event.Type != SpeechEventFinalTranscript {
+		t.Fatalf("third event type = %s, want final_transcript", event.Type)
+	}
+	if got := len(wrapped.recognizeFrames); got != 2 {
+		t.Fatalf("Recognize frame count = %d, want 2 buffered frames", got)
+	}
+}
+
 func TestStreamAdapterDoesNotReadNextVADEventBeforeFinalTranscript(t *testing.T) {
 	recognizeStarted := make(chan struct{}, 1)
 	releaseRecognize := make(chan struct{})
@@ -471,6 +530,7 @@ type fakeStreamAdapterSTT struct {
 	recognizeResult  *SpeechEvent
 	recognizeStarted chan struct{}
 	releaseRecognize chan struct{}
+	recognizeFrames  []*model.AudioFrame
 }
 
 func (f *fakeStreamAdapterSTT) Label() string {
@@ -485,7 +545,8 @@ func (f *fakeStreamAdapterSTT) Stream(context.Context, string) (RecognizeStream,
 	return nil, nil
 }
 
-func (f *fakeStreamAdapterSTT) Recognize(context.Context, []*model.AudioFrame, string) (*SpeechEvent, error) {
+func (f *fakeStreamAdapterSTT) Recognize(_ context.Context, frames []*model.AudioFrame, _ string) (*SpeechEvent, error) {
+	f.recognizeFrames = append([]*model.AudioFrame(nil), frames...)
 	if f.recognizeStarted != nil {
 		f.recognizeStarted <- struct{}{}
 	}
@@ -536,18 +597,23 @@ func (f *fakeStreamAdapterVAD) Stream(context.Context) (vad.VADStream, error) {
 }
 
 type fakeStreamAdapterVADStream struct {
-	events               []*vad.VADEvent
-	index                int
-	nextErr              error
-	pushErr              error
-	flushCh              chan struct{}
-	endInputCh           chan struct{}
-	closedCh             chan struct{}
-	done                 chan struct{}
-	disableEndInputFlush bool
+	events                []*vad.VADEvent
+	index                 int
+	nextErr               error
+	pushErr               error
+	flushCh               chan struct{}
+	endInputCh            chan struct{}
+	closedCh              chan struct{}
+	done                  chan struct{}
+	pushCh                chan struct{}
+	waitPushesBeforeEvent []int
+	disableEndInputFlush  bool
 }
 
 func (f *fakeStreamAdapterVADStream) PushFrame(*model.AudioFrame) error {
+	if f.pushCh != nil {
+		f.pushCh <- struct{}{}
+	}
 	if f.pushErr != nil {
 		return f.pushErr
 	}
@@ -583,6 +649,11 @@ func (f *fakeStreamAdapterVADStream) Close() error {
 
 func (f *fakeStreamAdapterVADStream) Next() (*vad.VADEvent, error) {
 	if f.index < len(f.events) {
+		if f.index < len(f.waitPushesBeforeEvent) {
+			for range f.waitPushesBeforeEvent[f.index] {
+				<-f.pushCh
+			}
+		}
 		event := f.events[f.index]
 		f.index++
 		return event, nil
@@ -592,6 +663,28 @@ func (f *fakeStreamAdapterVADStream) Next() (*vad.VADEvent, error) {
 		return nil, context.Canceled
 	}
 	return nil, f.nextErr
+}
+
+func nextStreamAdapterEvent(stream RecognizeStream) (*SpeechEvent, error) {
+	eventCh := make(chan *SpeechEvent, 1)
+	errCh := make(chan error, 1)
+	go func() {
+		event, err := stream.Next()
+		if err != nil {
+			errCh <- err
+			return
+		}
+		eventCh <- event
+	}()
+
+	select {
+	case event := <-eventCh:
+		return event, nil
+	case err := <-errCh:
+		return nil, err
+	case <-time.After(100 * time.Millisecond):
+		return nil, context.DeadlineExceeded
+	}
 }
 
 func nextStreamAdapterSTTError(stream RecognizeStream) error {

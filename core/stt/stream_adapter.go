@@ -169,14 +169,9 @@ func (w *streamAdapterWrapper) run() {
 		case vad.VADEventStartOfSpeech:
 			w.eventCh <- &SpeechEvent{Type: SpeechEventStartOfSpeech}
 
-			// Clear old frames that are before the speech start
 			w.mu.Lock()
-			// We can optionally keep some padding before speech started, but for simplicity we'll just clear
-			// We'll rely on the VAD event to tell us the actual start frame, or we just keep accumulating
-			// For this implementation, we just start fresh on speech start to avoid huge buffers.
-			// Wait, the VAD event might give us the frames.
-			w.frameBuffer = make([]*model.AudioFrame, 0)
 			if len(ev.Frames) > 0 {
+				w.frameBuffer = make([]*model.AudioFrame, 0, len(ev.Frames))
 				w.frameBuffer = append(w.frameBuffer, ev.Frames...)
 			}
 			w.mu.Unlock()
