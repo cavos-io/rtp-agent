@@ -223,18 +223,45 @@ func (w *multiSpeakerAdapterWrapper) Close() error {
 }
 
 func (w *multiSpeakerAdapterWrapper) Next() (*SpeechEvent, error) {
-	ev, ok := <-w.eventCh
-	if ok {
-		return ev, nil
-	}
 	select {
+	case ev, ok := <-w.eventCh:
+		if ok {
+			return ev, nil
+		}
+		select {
+		case err := <-w.errCh:
+			if err != nil {
+				return nil, err
+			}
+		default:
+		}
+		return nil, context.Canceled
 	case err := <-w.errCh:
 		if err != nil {
 			return nil, err
 		}
+		return nil, context.Canceled
+	case <-w.ctx.Done():
+		return nil, w.ctx.Err()
+	}
+}
+
+func (w *multiSpeakerAdapterWrapper) sendErr(err error) {
+	if err == nil {
+		return
+	}
+	select {
+	case w.errCh <- err:
 	default:
 	}
-	return nil, context.Canceled
+	_ = w.inner.Close()
+}
+
+func (w *multiSpeakerAdapterWrapper) sendEvent(ev *SpeechEvent) {
+	select {
+	case <-w.ctx.Done():
+	case w.eventCh <- ev:
+	}
 }
 
 func (w *multiSpeakerAdapterWrapper) run() {
@@ -250,18 +277,25 @@ func (w *multiSpeakerAdapterWrapper) run() {
 					return
 				}
 				if input.flush {
-					w.inner.Flush()
+					if err := w.inner.Flush(); err != nil {
+						w.sendErr(err)
+					}
 					continue
 				}
 				if input.end {
 					if ending, ok := w.inner.(InputEnding); ok {
-						ending.EndInput()
-					} else {
-						w.inner.Flush()
+						if err := ending.EndInput(); err != nil {
+							w.sendErr(err)
+						}
+					} else if err := w.inner.Flush(); err != nil {
+						w.sendErr(err)
 					}
 					return
 				}
-				w.inner.PushFrame(input.frame)
+				if err := w.inner.PushFrame(input.frame); err != nil {
+					w.sendErr(err)
+					return
+				}
 				w.detector.pushAudio(input.frame)
 			}
 		}
@@ -270,21 +304,18 @@ func (w *multiSpeakerAdapterWrapper) run() {
 	for {
 		ev, err := w.inner.Next()
 		if err != nil {
-			select {
-			case w.errCh <- err:
-			default:
-			}
+			w.sendErr(err)
 			return
 		}
 
 		updatedEv := w.detector.onSttEvent(ev)
 		if updatedEv != nil {
-			w.eventCh <- updatedEv
+			w.sendEvent(updatedEv)
 		} else if ev.Type == SpeechEventFinalTranscript {
-			w.eventCh <- &SpeechEvent{
+			w.sendEvent(&SpeechEvent{
 				Type:         SpeechEventFinalTranscript,
 				Alternatives: []SpeechData{{Language: "", Text: ""}},
-			}
+			})
 		}
 	}
 }

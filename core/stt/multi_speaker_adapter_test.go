@@ -170,6 +170,33 @@ func TestMultiSpeakerAdapterWrapperPreservesFrameFlushOrder(t *testing.T) {
 	}
 }
 
+func TestMultiSpeakerAdapterWrapperPropagatesForwardInputError(t *testing.T) {
+	pushErr := errors.New("inner push failed")
+	inner := &fakeMultiSpeakerStream{
+		pushErr:   pushErr,
+		waitCalls: 2,
+		callCh:    make(chan struct{}, 2),
+	}
+	wrapper := &multiSpeakerAdapterWrapper{
+		inner:    inner,
+		ctx:      context.Background(),
+		detector: newPrimarySpeakerDetector(false, false, "{text}", "{text}", DefaultPrimarySpeakerDetectionOptions()),
+		eventCh:  make(chan *SpeechEvent, 1),
+		errCh:    make(chan error, 1),
+		inputCh:  make(chan multiSpeakerInput, 1),
+	}
+	go wrapper.run()
+
+	if err := wrapper.PushFrame(&model.AudioFrame{Data: []byte("a"), SampleRate: 16000, NumChannels: 1, SamplesPerChannel: 1}); err != nil {
+		t.Fatalf("PushFrame returned error: %v", err)
+	}
+
+	_, err := wrapper.Next()
+	if !errors.Is(err, pushErr) {
+		t.Fatalf("Next error = %v, want push error", err)
+	}
+}
+
 func TestMultiSpeakerAdapterWrapperRejectsMismatchedSampleRates(t *testing.T) {
 	wrapper := &multiSpeakerAdapterWrapper{
 		inner:    &fakeMultiSpeakerStream{nextErr: io.EOF},
@@ -277,6 +304,9 @@ func TestMultiSpeakerAdapterWrapperForwardsEndInput(t *testing.T) {
 
 type fakeMultiSpeakerStream struct {
 	nextErr         error
+	pushErr         error
+	flushErr        error
+	endInputErr     error
 	calls           []string
 	waitCalls       int
 	callCh          chan struct{}
@@ -289,6 +319,9 @@ func (f *fakeMultiSpeakerStream) PushFrame(frame *model.AudioFrame) error {
 	if f.callCh != nil {
 		f.callCh <- struct{}{}
 	}
+	if f.pushErr != nil {
+		return f.pushErr
+	}
 	return nil
 }
 
@@ -297,6 +330,9 @@ func (f *fakeMultiSpeakerStream) Flush() error {
 	if f.callCh != nil {
 		f.callCh <- struct{}{}
 	}
+	if f.flushErr != nil {
+		return f.flushErr
+	}
 	return nil
 }
 
@@ -304,6 +340,9 @@ func (f *fakeMultiSpeakerStream) EndInput() error {
 	f.calls = append(f.calls, "end_input")
 	if f.callCh != nil {
 		f.callCh <- struct{}{}
+	}
+	if f.endInputErr != nil {
+		return f.endInputErr
 	}
 	return nil
 }
