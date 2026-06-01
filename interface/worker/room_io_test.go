@@ -73,6 +73,42 @@ func TestNewRoomIOCanDisablePreConnectAudio(t *testing.T) {
 	}
 }
 
+func TestNewRoomIORegistersReferenceChatTextHandler(t *testing.T) {
+	room := lksdk.NewRoom(nil)
+	_ = NewRoomIO(room, &agent.AgentSession{}, RoomOptions{})
+
+	err := room.RegisterTextStreamHandler(RoomIOChatTopic, func(*lksdk.TextStreamReader, string) {})
+	if err == nil {
+		t.Fatal("RegisterTextStreamHandler(lk.chat) error = nil, want already registered")
+	}
+}
+
+func TestNewRoomIOCanDisableTextInput(t *testing.T) {
+	room := lksdk.NewRoom(nil)
+	_ = NewRoomIO(room, &agent.AgentSession{}, RoomOptions{
+		DisableTextInput: true,
+	})
+
+	err := room.RegisterTextStreamHandler(RoomIOChatTopic, func(*lksdk.TextStreamReader, string) {})
+	if err != nil {
+		t.Fatalf("RegisterTextStreamHandler(lk.chat) error = %v, want nil when disabled", err)
+	}
+}
+
+func TestRoomIOCloseUnregistersChatTextHandler(t *testing.T) {
+	room := lksdk.NewRoom(nil)
+	rio := NewRoomIO(room, &agent.AgentSession{}, RoomOptions{})
+
+	if err := rio.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+
+	err := room.RegisterTextStreamHandler(RoomIOChatTopic, func(*lksdk.TextStreamReader, string) {})
+	if err != nil {
+		t.Fatalf("RegisterTextStreamHandler after RoomIO.Close() error = %v, want nil", err)
+	}
+}
+
 func TestRoomIOCloseUnregistersPreConnectAudioHandler(t *testing.T) {
 	room := lksdk.NewRoom(nil)
 	rio := NewRoomIO(room, &agent.AgentSession{}, RoomOptions{})
