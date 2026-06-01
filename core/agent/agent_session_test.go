@@ -441,6 +441,66 @@ func TestAgentSessionGenerateReplyAddsUserInputToChatContext(t *testing.T) {
 	}
 }
 
+func TestAgentSessionGenerateReplyOptionsAcceptUserMessage(t *testing.T) {
+	agent := NewAgent("test")
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	session.activity = NewAgentActivity(agent, session)
+	userMessage := &llm.ChatMessage{
+		ID:        "custom_user",
+		Role:      llm.ChatRoleUser,
+		Content:   []llm.ChatContent{{Text: "custom input"}},
+		CreatedAt: time.Now(),
+	}
+
+	handle, err := session.GenerateReplyWithOptions(context.Background(), GenerateReplyOptions{
+		UserMessage:   userMessage,
+		InputModality: "text",
+	})
+
+	if err != nil {
+		t.Fatalf("GenerateReplyWithOptions error = %v, want nil", err)
+	}
+	if handle.Generation.UserMessage != userMessage {
+		t.Fatalf("handle.Generation.UserMessage = %#v, want supplied user message", handle.Generation.UserMessage)
+	}
+	if len(session.ChatCtx.Items) != 1 || session.ChatCtx.Items[0] != userMessage {
+		t.Fatalf("ChatCtx.Items = %#v, want supplied user message", session.ChatCtx.Items)
+	}
+	select {
+	case ev := <-session.ConversationItemAddedEvents():
+		if ev.Item != userMessage {
+			t.Fatalf("ConversationItemAdded item = %#v, want supplied user message", ev.Item)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("ConversationItemAddedEvents did not receive supplied user message")
+	}
+}
+
+func TestAgentSessionGenerateReplyOptionsPreferUserMessageOverString(t *testing.T) {
+	agent := NewAgent("test")
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	session.activity = NewAgentActivity(agent, session)
+	userMessage := &llm.ChatMessage{
+		ID:        "custom_user",
+		Role:      llm.ChatRoleUser,
+		Content:   []llm.ChatContent{{Text: "custom input"}},
+		CreatedAt: time.Now(),
+	}
+
+	_, err := session.GenerateReplyWithOptions(context.Background(), GenerateReplyOptions{
+		UserInput:     "string input",
+		UserMessage:   userMessage,
+		InputModality: "text",
+	})
+
+	if err != nil {
+		t.Fatalf("GenerateReplyWithOptions error = %v, want nil", err)
+	}
+	if len(session.ChatCtx.Items) != 1 || session.ChatCtx.Items[0] != userMessage {
+		t.Fatalf("ChatCtx.Items = %#v, want only supplied user message", session.ChatCtx.Items)
+	}
+}
+
 func TestAgentSessionGenerateReplyOptionsOverrideInterruptionsAndInputModality(t *testing.T) {
 	agent := NewAgent("test")
 	session := NewAgentSession(agent, nil, AgentSessionOptions{AllowInterruptions: true})
