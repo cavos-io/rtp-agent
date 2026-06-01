@@ -7,53 +7,111 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strconv"
+	"strings"
 
 	"github.com/cavos-io/conversation-worker/core/tts"
 	"github.com/cavos-io/conversation-worker/model"
 )
 
+const (
+	defaultSpeechifyBaseURL  = "https://api.sws.speechify.com/v1"
+	defaultSpeechifyVoice    = "jack"
+	defaultSpeechifyEncoding = "ogg_24000"
+)
+
 type SpeechifyTTS struct {
-	apiKey string
-	voice  string
+	apiKey                string
+	baseURL               string
+	voice                 string
+	encoding              string
+	sampleRate            int
+	language              string
+	model                 string
+	loudnessNormalization *bool
+	textNormalization     *bool
 }
 
-func NewSpeechifyTTS(apiKey string, voice string) *SpeechifyTTS {
-	if voice == "" {
-		voice = "snoop"
+type SpeechifyTTSOption func(*SpeechifyTTS)
+
+func WithSpeechifyTTSBaseURL(baseURL string) SpeechifyTTSOption {
+	return func(t *SpeechifyTTS) {
+		if baseURL != "" {
+			t.baseURL = strings.TrimRight(baseURL, "/")
+		}
 	}
-	return &SpeechifyTTS{
-		apiKey: apiKey,
-		voice:  voice,
+}
+
+func WithSpeechifyTTSVoice(voice string) SpeechifyTTSOption {
+	return func(t *SpeechifyTTS) {
+		if voice != "" {
+			t.voice = voice
+		}
 	}
+}
+
+func WithSpeechifyTTSEncoding(encoding string) SpeechifyTTSOption {
+	return func(t *SpeechifyTTS) {
+		if encoding != "" {
+			t.encoding = encoding
+			t.sampleRate = speechifySampleRateFromEncoding(encoding)
+		}
+	}
+}
+
+func WithSpeechifyTTSLanguage(language string) SpeechifyTTSOption {
+	return func(t *SpeechifyTTS) {
+		t.language = language
+	}
+}
+
+func WithSpeechifyTTSModel(model string) SpeechifyTTSOption {
+	return func(t *SpeechifyTTS) {
+		t.model = model
+	}
+}
+
+func WithSpeechifyTTSLoudnessNormalization(enabled bool) SpeechifyTTSOption {
+	return func(t *SpeechifyTTS) {
+		t.loudnessNormalization = &enabled
+	}
+}
+
+func WithSpeechifyTTSTextNormalization(enabled bool) SpeechifyTTSOption {
+	return func(t *SpeechifyTTS) {
+		t.textNormalization = &enabled
+	}
+}
+
+func NewSpeechifyTTS(apiKey string, voice string, opts ...SpeechifyTTSOption) *SpeechifyTTS {
+	provider := &SpeechifyTTS{
+		apiKey:     apiKey,
+		baseURL:    defaultSpeechifyBaseURL,
+		voice:      voice,
+		encoding:   defaultSpeechifyEncoding,
+		sampleRate: speechifySampleRateFromEncoding(defaultSpeechifyEncoding),
+	}
+	for _, opt := range opts {
+		opt(provider)
+	}
+	if provider.voice == "" {
+		provider.voice = defaultSpeechifyVoice
+	}
+	return provider
 }
 
 func (t *SpeechifyTTS) Label() string { return "speechify.TTS" }
 func (t *SpeechifyTTS) Capabilities() tts.TTSCapabilities {
 	return tts.TTSCapabilities{Streaming: false, AlignedTranscript: false}
 }
-func (t *SpeechifyTTS) SampleRate() int { return 24000 }
+func (t *SpeechifyTTS) SampleRate() int  { return t.sampleRate }
 func (t *SpeechifyTTS) NumChannels() int { return 1 }
 
 func (t *SpeechifyTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStream, error) {
-	url := "https://api.speechify.com/v1/tts/synthesize"
-
-	reqBody := map[string]interface{}{
-		"text":    text,
-		"voiceId": t.voice,
-	}
-
-	jsonBody, err := json.Marshal(reqBody)
+	req, err := buildSpeechifyTTSRequest(ctx, t, text)
 	if err != nil {
 		return nil, err
 	}
-
-	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewBuffer(jsonBody))
-	if err != nil {
-		return nil, err
-	}
-
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+t.apiKey)
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
@@ -67,8 +125,39 @@ func (t *SpeechifyTTS) Synthesize(ctx context.Context, text string) (tts.Chunked
 	}
 
 	return &speechifyTTSChunkedStream{
-		resp: resp,
+		resp:       resp,
+		sampleRate: t.sampleRate,
 	}, nil
+}
+
+func buildSpeechifyTTSRequest(ctx context.Context, t *SpeechifyTTS, text string) (*http.Request, error) {
+	body := map[string]interface{}{
+		"input":        text,
+		"voice_id":     t.voice,
+		"language":     optionalString(t.language),
+		"model":        optionalString(t.model),
+		"audio_format": speechifyAudioFormatFromEncoding(t.encoding),
+		"options": map[string]interface{}{
+			"loudness_normalization": optionalBool(t.loudnessNormalization),
+			"text_normalization":     optionalBool(t.textNormalization),
+		},
+	}
+	jsonBody, err := json.Marshal(body)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimRight(t.baseURL, "/")+"/audio/stream", bytes.NewBuffer(jsonBody))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+t.apiKey)
+	req.Header.Set("x-caller", "livekit")
+	if accept := speechifyAcceptHeader(t.encoding); accept != "" {
+		req.Header.Set("Accept", accept)
+	}
+	return req, nil
 }
 
 func (t *SpeechifyTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
@@ -76,7 +165,8 @@ func (t *SpeechifyTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error)
 }
 
 type speechifyTTSChunkedStream struct {
-	resp *http.Response
+	resp       *http.Response
+	sampleRate int
 }
 
 func (s *speechifyTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
@@ -92,7 +182,7 @@ func (s *speechifyTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 	return &tts.SynthesizedAudio{
 		Frame: &model.AudioFrame{
 			Data:              buf[:n],
-			SampleRate:        24000,
+			SampleRate:        uint32(s.sampleRate),
 			NumChannels:       1,
 			SamplesPerChannel: uint32(n / 2),
 		},
@@ -101,4 +191,51 @@ func (s *speechifyTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 
 func (s *speechifyTTSChunkedStream) Close() error {
 	return s.resp.Body.Close()
+}
+
+func speechifySampleRateFromEncoding(encoding string) int {
+	parts := strings.Split(encoding, "_")
+	if len(parts) < 2 {
+		return 24000
+	}
+	sampleRate, err := strconv.Atoi(parts[1])
+	if err != nil {
+		return 24000
+	}
+	return sampleRate
+}
+
+func speechifyAudioFormatFromEncoding(encoding string) string {
+	parts := strings.Split(encoding, "_")
+	if len(parts) == 0 || parts[0] == "" {
+		return "ogg"
+	}
+	return parts[0]
+}
+
+func speechifyAcceptHeader(encoding string) string {
+	switch speechifyAudioFormatFromEncoding(encoding) {
+	case "ogg":
+		return "audio/ogg"
+	case "mp3":
+		return "audio/mpeg"
+	case "aac":
+		return "audio/aac"
+	default:
+		return ""
+	}
+}
+
+func optionalString(value string) interface{} {
+	if value == "" {
+		return nil
+	}
+	return value
+}
+
+func optionalBool(value *bool) interface{} {
+	if value == nil {
+		return nil
+	}
+	return *value
 }
