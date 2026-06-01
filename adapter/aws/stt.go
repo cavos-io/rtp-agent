@@ -14,10 +14,90 @@ import (
 )
 
 type AWSSTT struct {
-	client *transcribestreaming.Client
+	client                            *transcribestreaming.Client
+	sampleRate                        int32
+	encoding                          types.MediaEncoding
+	language                          types.LanguageCode
+	vocabularyName                    string
+	sessionID                         string
+	vocabularyFilterMethod            types.VocabularyFilterMethod
+	vocabularyFilterName              string
+	showSpeakerLabel                  bool
+	enableChannelIdentification       bool
+	numberOfChannels                  int32
+	enablePartialResultsStabilization bool
+	partialResultsStability           types.PartialResultsStability
+	languageModelName                 string
+	identifyLanguage                  bool
+	identifyMultipleLanguages         bool
+	languageOptions                   string
+	preferredLanguage                 types.LanguageCode
+	vocabularyNames                   string
+	vocabularyFilterNames             string
 }
 
-func NewAWSSTT(ctx context.Context, region string) (*AWSSTT, error) {
+type AWSSTTOption func(*AWSSTT)
+
+func WithAWSSTTSampleRate(sampleRate int32) AWSSTTOption {
+	return func(s *AWSSTT) {
+		if sampleRate > 0 {
+			s.sampleRate = sampleRate
+		}
+	}
+}
+
+func WithAWSSTTVocabularyName(name string) AWSSTTOption {
+	return func(s *AWSSTT) {
+		s.vocabularyName = name
+	}
+}
+
+func WithAWSSTTShowSpeakerLabel(show bool) AWSSTTOption {
+	return func(s *AWSSTT) {
+		s.showSpeakerLabel = show
+	}
+}
+
+func WithAWSSTTEnablePartialResultsStabilization(enable bool) AWSSTTOption {
+	return func(s *AWSSTT) {
+		s.enablePartialResultsStabilization = enable
+	}
+}
+
+func WithAWSSTTPartialResultsStability(stability types.PartialResultsStability) AWSSTTOption {
+	return func(s *AWSSTT) {
+		s.partialResultsStability = stability
+	}
+}
+
+func WithAWSSTTLanguageModelName(name string) AWSSTTOption {
+	return func(s *AWSSTT) {
+		s.languageModelName = name
+	}
+}
+
+func WithAWSSTTIdentifyLanguage(identify bool) AWSSTTOption {
+	return func(s *AWSSTT) {
+		s.identifyLanguage = identify
+		if identify {
+			s.identifyMultipleLanguages = false
+		}
+	}
+}
+
+func WithAWSSTTLanguageOptions(options string) AWSSTTOption {
+	return func(s *AWSSTT) {
+		s.languageOptions = options
+	}
+}
+
+func WithAWSSTTPreferredLanguage(language types.LanguageCode) AWSSTTOption {
+	return func(s *AWSSTT) {
+		s.preferredLanguage = language
+	}
+}
+
+func NewAWSSTT(ctx context.Context, region string, providerOpts ...AWSSTTOption) (*AWSSTT, error) {
 	opts := []func(*config.LoadOptions) error{}
 	if region != "" {
 		opts = append(opts, config.WithRegion(region))
@@ -28,9 +108,20 @@ func NewAWSSTT(ctx context.Context, region string) (*AWSSTT, error) {
 		return nil, err
 	}
 
-	return &AWSSTT{
-		client: transcribestreaming.NewFromConfig(cfg),
-	}, nil
+	return newAWSSTTWithClient(transcribestreaming.NewFromConfig(cfg), providerOpts...), nil
+}
+
+func newAWSSTTWithClient(client *transcribestreaming.Client, opts ...AWSSTTOption) *AWSSTT {
+	provider := &AWSSTT{
+		client:     client,
+		sampleRate: 24000,
+		encoding:   types.MediaEncodingPcm,
+		language:   types.LanguageCodeEnUs,
+	}
+	for _, opt := range opts {
+		opt(provider)
+	}
+	return provider
 }
 
 func (s *AWSSTT) Label() string { return "aws.STT" }
@@ -42,13 +133,7 @@ func (s *AWSSTT) Stream(ctx context.Context, language string) (stt.RecognizeStre
 	if language == "" {
 		language = "en-US"
 	}
-	langCode := types.LanguageCode(language)
-
-	out, err := s.client.StartStreamTranscription(ctx, &transcribestreaming.StartStreamTranscriptionInput{
-		LanguageCode:         langCode,
-		MediaEncoding:        types.MediaEncodingPcm,
-		MediaSampleRateHertz: aws.Int32(16000),
-	})
+	out, err := s.client.StartStreamTranscription(ctx, buildAWSStartStreamTranscriptionInput(s, language))
 	if err != nil {
 		return nil, err
 	}
@@ -61,6 +146,61 @@ func (s *AWSSTT) Stream(ctx context.Context, language string) (stt.RecognizeStre
 	go gs.readLoop()
 
 	return gs, nil
+}
+
+func buildAWSStartStreamTranscriptionInput(s *AWSSTT, language string) *transcribestreaming.StartStreamTranscriptionInput {
+	languageCode := s.language
+	if language != "" {
+		languageCode = types.LanguageCode(language)
+	}
+	input := &transcribestreaming.StartStreamTranscriptionInput{
+		MediaEncoding:        s.encoding,
+		MediaSampleRateHertz: aws.Int32(s.sampleRate),
+	}
+	if s.identifyLanguage {
+		input.IdentifyLanguage = true
+	} else if s.identifyMultipleLanguages {
+		input.IdentifyMultipleLanguages = true
+	} else {
+		input.LanguageCode = languageCode
+	}
+	if s.vocabularyName != "" {
+		input.VocabularyName = aws.String(s.vocabularyName)
+	}
+	if s.sessionID != "" {
+		input.SessionId = aws.String(s.sessionID)
+	}
+	if s.vocabularyFilterMethod != "" {
+		input.VocabularyFilterMethod = s.vocabularyFilterMethod
+	}
+	if s.vocabularyFilterName != "" {
+		input.VocabularyFilterName = aws.String(s.vocabularyFilterName)
+	}
+	input.ShowSpeakerLabel = s.showSpeakerLabel
+	input.EnableChannelIdentification = s.enableChannelIdentification
+	if s.numberOfChannels > 0 {
+		input.NumberOfChannels = aws.Int32(s.numberOfChannels)
+	}
+	input.EnablePartialResultsStabilization = s.enablePartialResultsStabilization
+	if s.partialResultsStability != "" {
+		input.PartialResultsStability = s.partialResultsStability
+	}
+	if s.languageModelName != "" {
+		input.LanguageModelName = aws.String(s.languageModelName)
+	}
+	if s.languageOptions != "" {
+		input.LanguageOptions = aws.String(s.languageOptions)
+	}
+	if s.preferredLanguage != "" {
+		input.PreferredLanguage = s.preferredLanguage
+	}
+	if s.vocabularyNames != "" {
+		input.VocabularyNames = aws.String(s.vocabularyNames)
+	}
+	if s.vocabularyFilterNames != "" {
+		input.VocabularyFilterNames = aws.String(s.vocabularyFilterNames)
+	}
+	return input
 }
 
 func (s *AWSSTT) Recognize(ctx context.Context, frames []*model.AudioFrame, language string) (*stt.SpeechEvent, error) {
