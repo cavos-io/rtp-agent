@@ -169,23 +169,20 @@ func (w *streamAdapterWrapper) run() {
 			w.mu.Unlock()
 
 			if len(frames) > 0 {
-				// We pass the accumulated frames to STT Recognize asynchronously
-				go func(f []*model.AudioFrame) {
-					res, err := w.adapter.stt.Recognize(w.ctx, f, w.language)
-					if err == nil && res != nil && len(res.Alternatives) > 0 && res.Alternatives[0].Text != "" {
-						w.mu.Lock()
-						if !w.closed {
-							w.eventCh <- &SpeechEvent{
-								Type:         SpeechEventFinalTranscript,
-								Alternatives: []SpeechData{res.Alternatives[0]},
-							}
+				res, err := w.adapter.stt.Recognize(w.ctx, frames, w.language)
+				if err == nil && res != nil && len(res.Alternatives) > 0 && res.Alternatives[0].Text != "" {
+					w.mu.Lock()
+					if !w.closed {
+						w.eventCh <- &SpeechEvent{
+							Type:         SpeechEventFinalTranscript,
+							Alternatives: []SpeechData{res.Alternatives[0]},
 						}
-						w.mu.Unlock()
-					} else if err != nil {
-						logger.Logger.Warnw("StreamAdapter STT Recognize failed", err)
-						w.sendErr(err)
 					}
-				}(frames)
+					w.mu.Unlock()
+				} else if err != nil {
+					logger.Logger.Warnw("StreamAdapter STT Recognize failed", err)
+					w.sendErr(err)
+				}
 			}
 		}
 	}
