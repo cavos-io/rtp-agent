@@ -282,6 +282,10 @@ func (f *fakeStreamAdapterVADStream) Flush() error {
 	return nil
 }
 
+func (f *fakeStreamAdapterVADStream) EndInput() error {
+	return f.Flush()
+}
+
 func (f *fakeStreamAdapterVADStream) Close() error {
 	if f.closedCh != nil {
 		f.closedCh <- struct{}{}
