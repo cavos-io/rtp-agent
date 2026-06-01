@@ -249,14 +249,11 @@ type assemblyAISTTStream struct {
 }
 
 type aaiResponse struct {
-	MessageType string  `json:"message_type"`
-	Text        string  `json:"text"`
-	Confidence  float64 `json:"confidence"`
-	Words       []struct {
-		Start int `json:"start"`
-		End   int `json:"end"`
-	} `json:"words"`
-	Error string `json:"error"`
+	MessageType string           `json:"message_type"`
+	Text        string           `json:"text"`
+	Confidence  float64          `json:"confidence"`
+	Words       []assemblyAIWord `json:"words"`
+	Error       string           `json:"error"`
 }
 
 func (s *assemblyAISTTStream) readLoop() {
@@ -289,23 +286,32 @@ func (s *assemblyAISTTStream) readLoop() {
 		}
 
 		if resp.MessageType == "PartialTranscript" || resp.MessageType == "FinalTranscript" {
-			eventType := stt.SpeechEventInterimTranscript
-			if resp.MessageType == "FinalTranscript" {
-				eventType = stt.SpeechEventFinalTranscript
-			}
-
-			if resp.Text != "" {
-				s.events <- &stt.SpeechEvent{
-					Type: eventType,
-					Alternatives: []stt.SpeechData{
-						{
-							Text:       resp.Text,
-							Confidence: resp.Confidence,
-						},
-					},
-				}
+			if event := assemblyAIRealtimeTranscriptEvent(resp); event != nil {
+				s.events <- event
 			}
 		}
+	}
+}
+
+func assemblyAIRealtimeTranscriptEvent(resp aaiResponse) *stt.SpeechEvent {
+	if resp.Text == "" {
+		return nil
+	}
+
+	eventType := stt.SpeechEventInterimTranscript
+	if resp.MessageType == "FinalTranscript" {
+		eventType = stt.SpeechEventFinalTranscript
+	}
+
+	return &stt.SpeechEvent{
+		Type: eventType,
+		Alternatives: []stt.SpeechData{
+			{
+				Text:       resp.Text,
+				Confidence: resp.Confidence,
+				Words:      assemblyAITimedStrings(resp.Words),
+			},
+		},
 	}
 }
 
