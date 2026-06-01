@@ -244,7 +244,11 @@ func (f *FallbackAdapter) Stream(ctx context.Context, language string) (Recogniz
 
 func (s *fallbackRecognizeStream) tryStartStream(index int) error {
 	var lastErr error
+	allFailed := s.adapter.allUnavailable()
 	for i := index; i < len(s.adapter.stts); i++ {
+		if !allFailed && !s.adapter.isAvailable(i) {
+			continue
+		}
 		for {
 			stt := s.adapter.stts[i]
 			stream, err := stt.Stream(s.ctx, s.language)
@@ -255,6 +259,7 @@ func (s *fallbackRecognizeStream) tryStartStream(index int) error {
 					s.retries[i]++
 					continue
 				}
+				s.adapter.setAvailable(i, false)
 				break
 			}
 
@@ -265,9 +270,11 @@ func (s *fallbackRecognizeStream) tryStartStream(index int) error {
 					s.retries[i]++
 					continue
 				}
+				s.adapter.setAvailable(i, false)
 				break
 			}
 
+			s.adapter.setAvailable(i, true)
 			s.activeStream = stream
 			s.activeIndex = i
 			return nil
@@ -326,6 +333,8 @@ func (s *fallbackRecognizeStream) monitorStream() {
 			if s.canRetrySTT(s.activeIndex) {
 				s.retries[s.activeIndex]++
 				nextIndex = s.activeIndex
+			} else {
+				s.adapter.setAvailable(s.activeIndex, false)
 			}
 
 			if fbErr := s.tryStartStream(nextIndex); fbErr != nil {

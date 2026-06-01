@@ -334,6 +334,59 @@ func TestFallbackAdapterRecoversUnavailableSTTInBackground(t *testing.T) {
 	}
 }
 
+func TestFallbackStreamSkipsUnavailableSTTFromRecognizeFailure(t *testing.T) {
+	primaryErr := errors.New("primary recognize failed")
+	primary := &metadataSTT{
+		label:         "primary",
+		capabilities:  STTCapabilities{Streaming: true},
+		recognizeErrs: []error{primaryErr, primaryErr},
+		stream: &metadataRecognizeStream{events: []*SpeechEvent{{
+			Type:         SpeechEventFinalTranscript,
+			Alternatives: []SpeechData{{Text: "primary stream"}},
+		}}},
+	}
+	fallback := &metadataSTT{
+		label:        "fallback",
+		capabilities: STTCapabilities{Streaming: true},
+		recognizeResult: &SpeechEvent{
+			Type:         SpeechEventFinalTranscript,
+			Alternatives: []SpeechData{{Text: "fallback recognize"}},
+		},
+		stream: &metadataRecognizeStream{events: []*SpeechEvent{{
+			Type:         SpeechEventFinalTranscript,
+			Alternatives: []SpeechData{{Text: "fallback stream"}},
+		}}},
+	}
+	adapter := NewFallbackAdapterWithOptions([]STT{primary, fallback}, FallbackAdapterOptions{
+		MaxRetryPerSTT: 0,
+	})
+
+	if _, err := adapter.Recognize(context.Background(), nil, "en"); err != nil {
+		t.Fatalf("Recognize returned error: %v", err)
+	}
+	waitForRecognizeCalls(t, primary, 2)
+
+	stream, err := adapter.Stream(context.Background(), "en")
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+	defer stream.Close()
+
+	event, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next returned error: %v", err)
+	}
+	if got := event.Alternatives[0].Text; got != "fallback stream" {
+		t.Fatalf("stream text = %q, want fallback stream", got)
+	}
+	if primary.streamCalls != 0 {
+		t.Fatalf("primary stream calls = %d, want unavailable provider skipped", primary.streamCalls)
+	}
+	if fallback.streamCalls != 1 {
+		t.Fatalf("fallback stream calls = %d, want 1", fallback.streamCalls)
+	}
+}
+
 func TestFallbackStreamRetriesSameSTTBeforeFallback(t *testing.T) {
 	firstErr := errors.New("primary stream failed")
 	primary := &metadataSTT{
