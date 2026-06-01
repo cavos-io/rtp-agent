@@ -43,6 +43,10 @@ type MultiSpeakerAdapter struct {
 	opt                       PrimarySpeakerDetectionOptions
 }
 
+func NewDefaultMultiSpeakerAdapter(stt STT) (*MultiSpeakerAdapter, error) {
+	return NewMultiSpeakerAdapter(stt, true, false, "{text}", "{text}", nil)
+}
+
 func NewMultiSpeakerAdapter(stt STT, detectPrimary bool, suppressBackground bool, primaryFormat string, backgroundFormat string, opt *PrimarySpeakerDetectionOptions) (*MultiSpeakerAdapter, error) {
 	if !stt.Capabilities().Diarization {
 		return nil, fmt.Errorf("MultiSpeakerAdapter needs STT with diarization capability")

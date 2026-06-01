@@ -140,6 +140,32 @@ func TestPrimarySpeakerDetectorPushAudioInitializesByteStream(t *testing.T) {
 	}
 }
 
+func TestNewDefaultMultiSpeakerAdapterUsesReferenceDefaults(t *testing.T) {
+	adapter, err := NewDefaultMultiSpeakerAdapter(&metadataSTT{
+		label:        "diarized",
+		capabilities: STTCapabilities{Streaming: true, Diarization: true},
+	})
+	if err != nil {
+		t.Fatalf("NewDefaultMultiSpeakerAdapter returned error: %v", err)
+	}
+
+	if !adapter.detectPrimarySpeaker {
+		t.Fatal("detectPrimarySpeaker = false, want true reference default")
+	}
+	if adapter.suppressBackgroundSpeaker {
+		t.Fatal("suppressBackgroundSpeaker = true, want false reference default")
+	}
+	if adapter.primaryFormat != "{text}" {
+		t.Fatalf("primaryFormat = %q, want {text}", adapter.primaryFormat)
+	}
+	if adapter.backgroundFormat != "{text}" {
+		t.Fatalf("backgroundFormat = %q, want {text}", adapter.backgroundFormat)
+	}
+	if adapter.opt != DefaultPrimarySpeakerDetectionOptions() {
+		t.Fatalf("options = %#v, want default primary speaker detection options", adapter.opt)
+	}
+}
+
 func TestMultiSpeakerAdapterWrapperReturnsEOFWhenInnerCompletes(t *testing.T) {
 	wrapper := &multiSpeakerAdapterWrapper{
 		inner:   &fakeMultiSpeakerStream{nextErr: io.EOF},
