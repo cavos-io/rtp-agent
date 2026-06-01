@@ -471,6 +471,9 @@ func (d *primarySpeakerDetector) getRmsForTimerange(startTime float64, endTime f
 	if startIdx < 0 {
 		startIdx = 0
 	}
+	if endIdx > len(d.rmsBuffer) {
+		endIdx = len(d.rmsBuffer)
+	}
 
 	if endIdx-startIdx < d.opt.MinRMSSamples {
 		return 0.0, false

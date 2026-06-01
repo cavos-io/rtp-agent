@@ -103,6 +103,26 @@ func TestPrimarySpeakerDetectorTreatsSilentRMSAsValidData(t *testing.T) {
 	}
 }
 
+func TestPrimarySpeakerDetectorClampsFutureRMSRange(t *testing.T) {
+	detector := newPrimarySpeakerDetector(
+		true,
+		false,
+		"{text}",
+		"{text}",
+		DefaultPrimarySpeakerDetectionOptions(),
+	)
+	detector.rmsBuffer = []float64{1, 2, 3}
+	detector.pushedDuration = 0.3
+
+	rms, ok := detector.getRmsForTimerange(0, 1.0)
+	if !ok {
+		t.Fatal("getRmsForTimerange returned ok=false, want clamped RMS")
+	}
+	if rms != 2 {
+		t.Fatalf("RMS = %v, want median of clamped buffer 2", rms)
+	}
+}
+
 func TestPrimarySpeakerDetectorPushAudioInitializesByteStream(t *testing.T) {
 	detector := newPrimarySpeakerDetector(
 		true,
