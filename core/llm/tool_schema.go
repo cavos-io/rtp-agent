@@ -91,6 +91,8 @@ func goTypeToJSONSchema(t reflect.Type, description string) map[string]interface
 			return structSchema
 		} else if t.Elem().Kind() == reflect.Slice || t.Elem().Kind() == reflect.Array {
 			schema["items"] = goTypeToJSONSchema(t.Elem().Elem(), "")
+		} else if t.Elem().Kind() == reflect.Map {
+			schema["additionalProperties"] = goTypeToJSONSchema(t.Elem().Elem(), "")
 		}
 		return schema
 	}

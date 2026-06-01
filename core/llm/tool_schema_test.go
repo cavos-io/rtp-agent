@@ -108,3 +108,27 @@ func TestGenerateStrictJSONSchemaPreservesMapValueSchema(t *testing.T) {
 		t.Fatalf("metadata value type = %#v, want string", valueSchema["type"])
 	}
 }
+
+func TestGenerateStrictJSONSchemaPreservesPointerMapValueSchema(t *testing.T) {
+	type request struct {
+		Metadata *map[string]int `json:"metadata,omitempty"`
+	}
+
+	schema := GenerateStrictJSONSchema(reflect.TypeOf(request{}))
+
+	props := schema["properties"].(map[string]interface{})
+	metadataSchema, ok := props["metadata"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("metadata property = %#v, want map", props["metadata"])
+	}
+	if !reflect.DeepEqual(metadataSchema["type"], []string{"object", "null"}) {
+		t.Fatalf("metadata type = %#v, want nullable object", metadataSchema["type"])
+	}
+	valueSchema, ok := metadataSchema["additionalProperties"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("metadata additionalProperties = %#v, want integer value schema", metadataSchema["additionalProperties"])
+	}
+	if valueSchema["type"] != "integer" {
+		t.Fatalf("metadata value type = %#v, want integer", valueSchema["type"])
+	}
+}
