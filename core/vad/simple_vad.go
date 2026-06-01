@@ -186,6 +186,9 @@ func (v *SimpleVAD) Stream(ctx context.Context) (VADStream, error) {
 	v.mu.RLock()
 	options := v.options
 	v.mu.RUnlock()
+	if err := validateSimpleVADOptions(options); err != nil {
+		return nil, err
+	}
 	stream := &simpleVADStream{
 		vad:          v,
 		ctx:          ctx,
@@ -197,6 +200,13 @@ func (v *SimpleVAD) Stream(ctx context.Context) (VADStream, error) {
 	v.streams[stream] = struct{}{}
 	v.mu.Unlock()
 	return stream, nil
+}
+
+func validateSimpleVADOptions(options SimpleVADOptions) error {
+	if options.ProbabilitySmoothingAlpha > 1 {
+		return errors.New("probability smoothing alpha must be in (0, 1]")
+	}
+	return nil
 }
 
 type simpleVADStream struct {

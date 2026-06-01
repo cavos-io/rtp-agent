@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"strings"
 	"testing"
 	"time"
 
@@ -600,24 +601,25 @@ func TestSimpleVADProbabilitySmoothingDelaysSpeechEnd(t *testing.T) {
 }
 
 func TestSimpleVADRejectsInvalidProbabilitySmoothingAlpha(t *testing.T) {
-	stream, err := NewSimpleVADWithOptions(SimpleVADOptions{
-		Threshold:                 0.05,
-		ProbabilitySmoothingAlpha: 1.1,
-	}).Stream(context.Background())
-	if err != nil {
-		t.Fatalf("Stream() error = %v", err)
-	}
-	defer stream.Close()
-	defer func() {
-		if recovered := recover(); recovered != nil {
-			t.Fatalf("PushFrame() panicked: %v", recovered)
+	for _, alpha := range []float64{1.1, 2} {
+		detector := NewSimpleVADWithOptions(SimpleVADOptions{
+			Threshold:                 0.05,
+			ProbabilitySmoothingAlpha: alpha,
+		})
+		stream, err := detector.Stream(context.Background())
+		if err == nil {
+			if stream != nil {
+				_ = stream.Close()
+			}
+			t.Fatalf("Stream() with alpha %v error = nil, want invalid smoothing alpha error", alpha)
 		}
-	}()
-
-	if err := stream.PushFrame(audioFrame(16000, 160, 6000)); err == nil {
-		t.Fatal("PushFrame() error = nil, want invalid smoothing alpha error")
+		if !strings.Contains(err.Error(), "alpha must be in (0, 1]") {
+			t.Fatalf("Stream() with alpha %v error = %q, want alpha bounds message", alpha, err.Error())
+		}
+		if len(detector.streams) != 0 {
+			t.Fatalf("registered streams after invalid alpha = %d, want 0", len(detector.streams))
+		}
 	}
-	assertNoQueuedVADEvent(t, stream)
 }
 
 func TestSimpleVADEmitsInferenceBeforeSpeechTransition(t *testing.T) {
