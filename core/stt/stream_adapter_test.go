@@ -41,6 +41,15 @@ func TestStreamAdapterCapabilitiesMatchReference(t *testing.T) {
 	}
 }
 
+func TestStreamAdapterExposesWrappedSTT(t *testing.T) {
+	wrapped := &fakeStreamAdapterSTT{}
+	adapter := NewStreamAdapter(wrapped, &fakeStreamAdapterVAD{})
+
+	if adapter.WrappedSTT() != wrapped {
+		t.Fatal("WrappedSTT did not return the wrapped STT")
+	}
+}
+
 func TestStreamAdapterExposesTimingAnchors(t *testing.T) {
 	before := time.Now()
 	stream, err := NewStreamAdapter(&fakeStreamAdapterSTT{}, &fakeStreamAdapterVAD{
