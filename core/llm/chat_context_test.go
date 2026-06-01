@@ -17,6 +17,10 @@ func itemIDs(items []ChatItem) string {
 	return strings.Join(ids, ",")
 }
 
+func boolPtr(value bool) *bool {
+	return &value
+}
+
 func TestChatContextCopyFiltersReferenceItemTypes(t *testing.T) {
 	ctx := NewChatContext()
 	ctx.Items = []ChatItem{
@@ -282,6 +286,46 @@ func TestProviderFormatUsesActiveInstructionText(t *testing.T) {
 	formatted, _ := ctx.ToProviderFormat("openai")
 	if got := formatted[0]["content"]; got != "text instructions" {
 		t.Fatalf("openai content = %#v, want active instruction text", got)
+	}
+}
+
+func TestChatContextToProviderFormatCanDisableDummyUserMessage(t *testing.T) {
+	formats := []string{"google", "anthropic", "aws"}
+	for _, format := range formats {
+		t.Run(format, func(t *testing.T) {
+			ctx := NewChatContext()
+			ctx.Items = []ChatItem{
+				&ChatMessage{
+					ID:      "assistant",
+					Role:    ChatRoleAssistant,
+					Content: []ChatContent{{Text: "hello"}},
+				},
+			}
+
+			messages, _ := ctx.ToProviderFormat(format, ChatContextProviderFormatOptions{
+				InjectDummyUserMessage: boolPtr(false),
+			})
+
+			if len(messages) != 1 {
+				t.Fatalf("len(messages) = %d, want 1: %#v", len(messages), messages)
+			}
+			if got := messages[0]["role"]; got == "user" {
+				t.Fatalf("first role = %q, want no injected dummy user message: %#v", got, messages)
+			}
+		})
+	}
+}
+
+func TestChatContextToProviderFormatEReturnsErrorForUnsupportedFormat(t *testing.T) {
+	ctx := NewChatContext()
+
+	messages, extra, err := ctx.ToProviderFormatE("unknown")
+
+	if err == nil {
+		t.Fatal("ToProviderFormatE() error = nil, want unsupported format error")
+	}
+	if messages != nil || extra != nil {
+		t.Fatalf("ToProviderFormatE() messages=%#v extra=%#v, want nil outputs on error", messages, extra)
 	}
 }
 

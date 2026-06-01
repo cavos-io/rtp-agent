@@ -21,6 +21,17 @@ type ChatContextDictOptions struct {
 	ExcludeConfigUpdate bool
 }
 
+type ChatContextProviderFormatOptions struct {
+	InjectDummyUserMessage *bool
+}
+
+func (o ChatContextProviderFormatOptions) injectDummyUserMessage() bool {
+	if o.InjectDummyUserMessage == nil {
+		return true
+	}
+	return *o.InjectDummyUserMessage
+}
+
 type ChatMessageArgs struct {
 	ID          string
 	Role        ChatRole
@@ -814,7 +825,17 @@ func (c *ChatContext) FindInsertionIndex(createdAt time.Time) int {
 	return 0
 }
 
-func (c *ChatContext) ToProviderFormat(format string) ([]map[string]any, any) {
+func (c *ChatContext) ToProviderFormat(format string, options ...ChatContextProviderFormatOptions) ([]map[string]any, any) {
+	messages, extra, _ := c.ToProviderFormatE(format, options...)
+	return messages, extra
+}
+
+func (c *ChatContext) ToProviderFormatE(format string, options ...ChatContextProviderFormatOptions) ([]map[string]any, any, error) {
+	var opts ChatContextProviderFormatOptions
+	if len(options) > 0 {
+		opts = options[0]
+	}
+
 	if format == "openai" {
 		messages := make([]map[string]any, 0)
 		for _, group := range groupOpenAIToolCalls(c.Items) {
@@ -842,7 +863,7 @@ func (c *ChatContext) ToProviderFormat(format string) ([]map[string]any, any) {
 				messages = append(messages, openAIToolOutput(toolOutput))
 			}
 		}
-		return messages, nil
+		return messages, nil, nil
 	}
 	if format == "openai.responses" {
 		items := make([]map[string]any, 0)
@@ -860,24 +881,28 @@ func (c *ChatContext) ToProviderFormat(format string) ([]map[string]any, any) {
 				items = append(items, openAIResponsesToolOutput(toolOutput))
 			}
 		}
-		return items, nil
+		return items, nil, nil
 	}
 	if format == "google" {
-		return c.toGoogleProviderFormat()
+		messages, extra := c.toGoogleProviderFormat(opts)
+		return messages, extra, nil
 	}
 	if format == "anthropic" {
-		return c.toAnthropicProviderFormat()
+		messages, extra := c.toAnthropicProviderFormat(opts)
+		return messages, extra, nil
 	}
 	if format == "aws" {
-		return c.toAWSProviderFormat()
+		messages, extra := c.toAWSProviderFormat(opts)
+		return messages, extra, nil
 	}
 	if format == "mistralai" {
-		return c.toMistralProviderFormat()
+		messages, extra := c.toMistralProviderFormat()
+		return messages, extra, nil
 	}
-	return nil, nil
+	return nil, nil, fmt.Errorf("unsupported provider format: %s", format)
 }
 
-func (c *ChatContext) toGoogleProviderFormat() ([]map[string]any, any) {
+func (c *ChatContext) toGoogleProviderFormat(opts ChatContextProviderFormatOptions) ([]map[string]any, any) {
 	turns := make([]map[string]any, 0)
 	systemMessages := make([]string, 0)
 	currentRole := ""
@@ -919,7 +944,7 @@ func (c *ChatContext) toGoogleProviderFormat() ([]map[string]any, any) {
 	}
 	flush()
 
-	if currentRole != "user" && currentRole != "tool" {
+	if opts.injectDummyUserMessage() && currentRole != "user" && currentRole != "tool" {
 		turns = append(turns, map[string]any{
 			"role":  "user",
 			"parts": []map[string]any{{"text": "."}},
@@ -929,7 +954,7 @@ func (c *ChatContext) toGoogleProviderFormat() ([]map[string]any, any) {
 	return turns, map[string]any{"system_messages": systemMessages}
 }
 
-func (c *ChatContext) toAnthropicProviderFormat() ([]map[string]any, any) {
+func (c *ChatContext) toAnthropicProviderFormat(opts ChatContextProviderFormatOptions) ([]map[string]any, any) {
 	messages := make([]map[string]any, 0)
 	systemMessages := make([]string, 0)
 	currentRole := ""
@@ -967,7 +992,7 @@ func (c *ChatContext) toAnthropicProviderFormat() ([]map[string]any, any) {
 	}
 	flush()
 
-	if len(messages) == 0 || messages[0]["role"] != "user" {
+	if opts.injectDummyUserMessage() && (len(messages) == 0 || messages[0]["role"] != "user") {
 		messages = append([]map[string]any{{
 			"role":    "user",
 			"content": []map[string]any{{"text": "(empty)", "type": "text"}},
@@ -1012,7 +1037,7 @@ func (c *ChatContext) toMistralProviderFormat() ([]map[string]any, any) {
 	return entries, map[string]any{"instructions": instructions}
 }
 
-func (c *ChatContext) toAWSProviderFormat() ([]map[string]any, any) {
+func (c *ChatContext) toAWSProviderFormat(opts ChatContextProviderFormatOptions) ([]map[string]any, any) {
 	messages := make([]map[string]any, 0)
 	systemMessages := make([]string, 0)
 	currentRole := ""
@@ -1050,7 +1075,7 @@ func (c *ChatContext) toAWSProviderFormat() ([]map[string]any, any) {
 	}
 	flush()
 
-	if len(messages) == 0 || messages[0]["role"] != "user" {
+	if opts.injectDummyUserMessage() && (len(messages) == 0 || messages[0]["role"] != "user") {
 		messages = append([]map[string]any{{
 			"role":    "user",
 			"content": []map[string]any{{"text": "(empty)"}},
