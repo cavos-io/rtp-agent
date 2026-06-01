@@ -347,6 +347,72 @@ func TestSimpleVADUpdateOptionsWithIgnoresInvalidThreshold(t *testing.T) {
 	}
 }
 
+func TestSimpleVADRejectsInvalidTimingDurationsAtStream(t *testing.T) {
+	tests := []struct {
+		name    string
+		options SimpleVADOptions
+		want    string
+	}{
+		{
+			name:    "min speech duration",
+			options: SimpleVADOptions{MinSpeechDuration: math.NaN()},
+			want:    "min speech duration must be greater than or equal to 0",
+		},
+		{
+			name:    "min silence duration",
+			options: SimpleVADOptions{MinSilenceDuration: math.Inf(1)},
+			want:    "min silence duration must be greater than or equal to 0",
+		},
+		{
+			name:    "prefix padding duration",
+			options: SimpleVADOptions{PrefixPaddingDuration: -0.1},
+			want:    "prefix padding duration must be greater than or equal to 0",
+		},
+		{
+			name:    "max buffered speech duration",
+			options: SimpleVADOptions{MaxBufferedSpeechDuration: math.Inf(1)},
+			want:    "max buffered speech duration must be greater than or equal to 0",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			detector := NewSimpleVADWithOptions(tt.options)
+
+			stream, err := detector.Stream(context.Background())
+			if err == nil {
+				if stream != nil {
+					_ = stream.Close()
+				}
+				t.Fatal("Stream() error = nil, want invalid timing duration error")
+			}
+			if !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("Stream() error = %q, want %q", err.Error(), tt.want)
+			}
+			if len(detector.streams) != 0 {
+				t.Fatalf("registered streams after invalid timing duration = %d, want 0", len(detector.streams))
+			}
+		})
+	}
+}
+
+func TestSimpleVADUpdateOptionsWithIgnoresInvalidTimingDuration(t *testing.T) {
+	detector := NewSimpleVADWithOptions(SimpleVADOptions{MinSpeechDuration: 0.02})
+	stream, err := detector.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	defer stream.Close()
+
+	detector.UpdateOptionsWith(WithMinSpeechDuration(math.NaN()))
+	if detector.options.MinSpeechDuration != 0.02 {
+		t.Fatalf("detector min speech duration = %v, want 0.02", detector.options.MinSpeechDuration)
+	}
+	simpleStream := stream.(*simpleVADStream)
+	if simpleStream.options.MinSpeechDuration != 0.02 {
+		t.Fatalf("stream min speech duration = %v, want 0.02", simpleStream.options.MinSpeechDuration)
+	}
+}
+
 func TestSimpleVADUpdateOptionsRelaxesMaxBufferedSpeech(t *testing.T) {
 	detector := NewSimpleVADWithOptions(SimpleVADOptions{
 		Threshold:                 0.05,

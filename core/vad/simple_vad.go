@@ -244,6 +244,18 @@ func validateSimpleVADOptions(options SimpleVADOptions) error {
 	if math.IsNaN(options.Threshold) || math.IsInf(options.Threshold, 0) || options.Threshold < 0 {
 		return errors.New("threshold must be greater than or equal to 0")
 	}
+	if math.IsNaN(options.MinSpeechDuration) || math.IsInf(options.MinSpeechDuration, 0) || options.MinSpeechDuration < 0 {
+		return errors.New("min speech duration must be greater than or equal to 0")
+	}
+	if math.IsNaN(options.MinSilenceDuration) || math.IsInf(options.MinSilenceDuration, 0) || options.MinSilenceDuration < 0 {
+		return errors.New("min silence duration must be greater than or equal to 0")
+	}
+	if math.IsNaN(options.PrefixPaddingDuration) || math.IsInf(options.PrefixPaddingDuration, 0) || options.PrefixPaddingDuration < 0 {
+		return errors.New("prefix padding duration must be greater than or equal to 0")
+	}
+	if math.IsNaN(options.MaxBufferedSpeechDuration) || math.IsInf(options.MaxBufferedSpeechDuration, 0) || options.MaxBufferedSpeechDuration < 0 {
+		return errors.New("max buffered speech duration must be greater than or equal to 0")
+	}
 	if math.IsNaN(options.DeactivationThreshold) || math.IsInf(options.DeactivationThreshold, 0) || options.DeactivationThreshold < 0 {
 		return errors.New("deactivation threshold must be greater than or equal to 0")
 	}
