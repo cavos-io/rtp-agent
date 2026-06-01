@@ -166,6 +166,30 @@ func TestFallbackAdapterRejectsNonStreamingProviderWithoutVAD(t *testing.T) {
 	})
 }
 
+func TestFallbackAdapterRejectsAllNonStreamingProviderLabelsWithoutVAD(t *testing.T) {
+	defer func() {
+		recovered := recover()
+		if recovered == nil {
+			t.Fatal("NewFallbackAdapter did not panic")
+		}
+		message := recovered.(string)
+		if !strings.Contains(message, "offline-a") || !strings.Contains(message, "offline-b") {
+			t.Fatalf("panic message = %q, want all non-streaming provider labels", message)
+		}
+	}()
+
+	NewFallbackAdapter([]STT{
+		&metadataSTT{
+			label:        "offline-a",
+			capabilities: STTCapabilities{OfflineRecognize: true},
+		},
+		&metadataSTT{
+			label:        "offline-b",
+			capabilities: STTCapabilities{OfflineRecognize: true},
+		},
+	})
+}
+
 func TestFallbackAdapterWithVADWrapsNonStreamingProvider(t *testing.T) {
 	offline := &metadataSTT{
 		label:        "offline",
