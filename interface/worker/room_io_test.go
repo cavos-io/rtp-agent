@@ -252,6 +252,24 @@ func TestRoomIOHandleChatTextInputDispatchesConfiguredCallback(t *testing.T) {
 	}
 }
 
+func TestRoomIOHandleChatTextInputRecoversCallbackPanic(t *testing.T) {
+	session := &agent.AgentSession{}
+	rio := &RoomIO{
+		AgentSession: session,
+		textInput: func(context.Context, *agent.AgentSession, TextInputEvent) error {
+			panic("text input callback panic")
+		},
+	}
+
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			t.Fatalf("handleChatTextInput panic = %v, want recovered", recovered)
+		}
+	}()
+
+	rio.handleChatTextInput(context.Background(), "hello from chat", lksdk.TextStreamInfo{}, "caller")
+}
+
 func TestRoomIOHandleChatTextInputIgnoresUnlinkedParticipant(t *testing.T) {
 	session := &agent.AgentSession{}
 	called := false
