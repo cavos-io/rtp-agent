@@ -9,6 +9,7 @@ import (
 
 	"github.com/cavos-io/rtp-agent/core/audio/model"
 	"github.com/cavos-io/rtp-agent/core/llm"
+	"github.com/cavos-io/rtp-agent/library/telemetry"
 	"github.com/cavos-io/rtp-agent/library/utils/images"
 )
 
@@ -121,6 +122,157 @@ func TestMultimodalAgentDoesNotEmitErrorEventForRealtimeEOF(t *testing.T) {
 	case ev := <-session.ErrorEvents():
 		t.Fatalf("unexpected realtime EOF error event: %#v", ev)
 	default:
+	}
+}
+
+func TestMultimodalAgentEmitsFinalInputTranscriptionAndCommitsUserMessage(t *testing.T) {
+	chatCtx := llm.NewChatContext()
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	ma := &MultimodalAgent{
+		session: session,
+		chatCtx: chatCtx,
+	}
+
+	ma.handleRealtimeEvent(llm.RealtimeEvent{
+		Type: llm.RealtimeEventTypeInputAudioTranscriptionCompleted,
+		InputTranscription: &llm.InputTranscriptionCompleted{
+			ItemID:     "item_user_1",
+			Transcript: "hello realtime",
+			IsFinal:    true,
+		},
+	})
+
+	select {
+	case ev := <-session.UserInputTranscribedEvents():
+		if ev.Transcript != "hello realtime" || !ev.IsFinal {
+			t.Fatalf("transcription event = %#v, want final hello realtime", ev)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("UserInputTranscribedEvents did not receive realtime transcript")
+	}
+
+	select {
+	case ev := <-session.ConversationItemAddedEvents():
+		msg, ok := ev.Item.(*llm.ChatMessage)
+		if !ok {
+			t.Fatalf("event item = %T, want *llm.ChatMessage", ev.Item)
+		}
+		if msg.ID != "item_user_1" || msg.Role != llm.ChatRoleUser || msg.TextContent() != "hello realtime" {
+			t.Fatalf("message = %#v, want committed user message with realtime transcript", msg)
+		}
+		if chatCtx.GetByID("item_user_1") != msg {
+			t.Fatalf("chat context item = %#v, want committed message", chatCtx.GetByID("item_user_1"))
+		}
+	case <-time.After(time.Second):
+		t.Fatal("ConversationItemAddedEvents did not receive realtime user message")
+	}
+}
+
+func TestMultimodalAgentEmitsInterimInputTranscriptionWithoutCommittingMessage(t *testing.T) {
+	chatCtx := llm.NewChatContext()
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	ma := &MultimodalAgent{
+		session: session,
+		chatCtx: chatCtx,
+	}
+
+	ma.handleRealtimeEvent(llm.RealtimeEvent{
+		Type: llm.RealtimeEventTypeInputAudioTranscriptionCompleted,
+		InputTranscription: &llm.InputTranscriptionCompleted{
+			ItemID:     "item_user_1",
+			Transcript: "hello",
+			IsFinal:    false,
+		},
+	})
+
+	select {
+	case ev := <-session.UserInputTranscribedEvents():
+		if ev.Transcript != "hello" || ev.IsFinal {
+			t.Fatalf("transcription event = %#v, want interim hello", ev)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("UserInputTranscribedEvents did not receive interim realtime transcript")
+	}
+	select {
+	case ev := <-session.ConversationItemAddedEvents():
+		t.Fatalf("unexpected conversation item for interim transcript: %#v", ev)
+	default:
+	}
+	if len(chatCtx.Items) != 0 {
+		t.Fatalf("chat context items = %#v, want no interim transcript message", chatCtx.Items)
+	}
+}
+
+func TestMultimodalAgentForwardsRealtimeMetrics(t *testing.T) {
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	metrics := &telemetry.RealtimeModelMetrics{RequestID: "req_1"}
+	ma := &MultimodalAgent{session: session, chatCtx: llm.NewChatContext()}
+
+	ma.handleRealtimeEvent(llm.RealtimeEvent{
+		Type:    llm.RealtimeEventTypeMetricsCollected,
+		Metrics: metrics,
+	})
+
+	select {
+	case ev := <-session.MetricsCollectedEvents():
+		if ev.Metrics != metrics {
+			t.Fatalf("Metrics = %#v, want original realtime metrics", ev.Metrics)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("MetricsCollectedEvents did not receive realtime metrics")
+	}
+}
+
+func TestMultimodalAgentAddsServerRemoteItemPlaceholder(t *testing.T) {
+	existing := &llm.ChatMessage{
+		ID:        "item_user_1",
+		Role:      llm.ChatRoleUser,
+		Content:   []llm.ChatContent{{Text: "hello"}},
+		CreatedAt: time.Now(),
+	}
+	remote := &llm.ChatMessage{
+		ID:        "item_assistant_1",
+		Role:      llm.ChatRoleAssistant,
+		Content:   []llm.ChatContent{{Text: "hi"}},
+		CreatedAt: existing.CreatedAt.Add(time.Second),
+	}
+	chatCtx := llm.NewChatContext()
+	chatCtx.Insert(existing)
+	ma := &MultimodalAgent{chatCtx: chatCtx}
+
+	ma.handleRealtimeEvent(llm.RealtimeEvent{
+		Type: llm.RealtimeEventTypeRemoteItemAdded,
+		RemoteItem: &llm.RemoteItemAddedEvent{
+			PreviousItemID: "item_user_1",
+			Item:           remote,
+		},
+	})
+
+	if len(chatCtx.Items) != 2 || chatCtx.Items[1] != remote {
+		t.Fatalf("chat context items = %#v, want remote item appended after previous item", chatCtx.Items)
+	}
+}
+
+func TestMultimodalAgentSkipsDuplicateRemoteItemPlaceholder(t *testing.T) {
+	remote := &llm.ChatMessage{
+		ID:        "item_assistant_1",
+		Role:      llm.ChatRoleAssistant,
+		Content:   []llm.ChatContent{{Text: "hi"}},
+		CreatedAt: time.Now(),
+	}
+	chatCtx := llm.NewChatContext()
+	chatCtx.Insert(remote)
+	ma := &MultimodalAgent{chatCtx: chatCtx}
+
+	ma.handleRealtimeEvent(llm.RealtimeEvent{
+		Type: llm.RealtimeEventTypeRemoteItemAdded,
+		RemoteItem: &llm.RemoteItemAddedEvent{
+			Item: remote,
+		},
+	})
+
+	if len(chatCtx.Items) != 1 {
+		t.Fatalf("chat context items = %#v, want duplicate remote item skipped", chatCtx.Items)
 	}
 }
 

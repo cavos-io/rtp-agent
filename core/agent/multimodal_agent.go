@@ -117,6 +117,50 @@ func (ma *MultimodalAgent) handleRealtimeEvent(ev llm.RealtimeEvent) {
 		// Text delta received, we could pipe this to transcript synchronizer
 		_ = ev.Text
 
+	case llm.RealtimeEventTypeInputAudioTranscriptionCompleted:
+		if ev.InputTranscription == nil || ma.session == nil {
+			return
+		}
+		ma.session.EmitUserInputTranscribed(UserInputTranscribedEvent{
+			Transcript: ev.InputTranscription.Transcript,
+			IsFinal:    ev.InputTranscription.IsFinal,
+		})
+		if ev.InputTranscription.IsFinal {
+			msg := &llm.ChatMessage{
+				ID:   ev.InputTranscription.ItemID,
+				Role: llm.ChatRoleUser,
+				Content: []llm.ChatContent{
+					{Text: ev.InputTranscription.Transcript},
+				},
+				CreatedAt: time.Now(),
+			}
+			if ma.chatCtx != nil {
+				_ = ma.chatCtx.UpsertItem(msg, llm.ChatContextUpsertOptions{AllowTypeMismatch: true})
+			}
+			ma.session.EmitConversationItemAdded(msg)
+		}
+
+	case llm.RealtimeEventTypeRemoteItemAdded:
+		if ev.RemoteItem == nil || ev.RemoteItem.Item == nil || ma.chatCtx == nil {
+			return
+		}
+		item := ev.RemoteItem.Item
+		if item.GetID() != "" && ma.chatCtx.GetByID(item.GetID()) != nil {
+			return
+		}
+		lastItemID := ""
+		if len(ma.chatCtx.Items) > 0 {
+			lastItemID = ma.chatCtx.Items[len(ma.chatCtx.Items)-1].GetID()
+		}
+		if ev.RemoteItem.PreviousItemID == "" || ev.RemoteItem.PreviousItemID == lastItemID {
+			ma.chatCtx.Items = append(ma.chatCtx.Items, item)
+		}
+
+	case llm.RealtimeEventTypeMetricsCollected:
+		if ma.session != nil && ev.Metrics != nil {
+			ma.session.EmitMetricsCollected(ev.Metrics)
+		}
+
 	case llm.RealtimeEventTypeFunctionCall:
 		logger.Logger.Infow("Executing tool (multimodal)", "name", ev.Function.Name)
 
