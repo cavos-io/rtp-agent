@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/cavos-io/rtp-agent/core/agent"
+	"github.com/cavos-io/rtp-agent/model"
 	"github.com/livekit/protocol/livekit"
 	lksdk "github.com/livekit/server-sdk-go/v2"
 )
@@ -428,6 +429,44 @@ func TestRoomIOHandleParticipantConnectedLinksFirstAcceptedParticipant(t *testin
 	}
 	if rio.shouldHandleParticipant("caller-b") {
 		t.Fatal("shouldHandleParticipant(caller-b) = true, want false after linking first participant")
+	}
+}
+
+func TestRoomIOHandleParticipantConnectedDisablesAudioForSimulator(t *testing.T) {
+	recorder := NewRecorderIO(&agent.AgentSession{})
+	recorder.started = true
+	rio := &RoomIO{
+		Recorder:        recorder,
+		preConnectAudio: &PreConnectAudioHandler{},
+	}
+
+	if !rio.handleParticipantConnected(
+		"caller-a",
+		lksdk.ParticipantStandard,
+		map[string]string{RoomIOSimulatorAttribute: "true"},
+		"agent-local",
+	) {
+		t.Fatal("handleParticipantConnected(simulator) = false, want true")
+	}
+
+	if got := rio.participantIdentity(); got != "caller-a" {
+		t.Fatalf("participantIdentity() = %q, want caller-a", got)
+	}
+	if rio.preConnectAudio != nil {
+		t.Fatal("preConnectAudio = non-nil, want disabled for simulator participant")
+	}
+
+	frame := &model.AudioFrame{
+		Data:              []byte{0, 0},
+		SampleRate:        48000,
+		NumChannels:       1,
+		SamplesPerChannel: 1,
+	}
+	if err := rio.PublishAudio(frame); err != nil {
+		t.Fatalf("PublishAudio(simulator) error = %v", err)
+	}
+	if recorder.OutputStartTime != nil {
+		t.Fatal("recorder output was recorded after simulator disabled audio output")
 	}
 }
 

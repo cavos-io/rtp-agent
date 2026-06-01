@@ -118,6 +118,7 @@ type RoomOptions struct {
 const RoomIOChatTopic = "lk.chat"
 const RoomIOPublishOnBehalfAttribute = "lk.publish_on_behalf"
 const RoomIOAgentStateAttribute = "lk.agent.state"
+const RoomIOSimulatorAttribute = "lk.simulator"
 
 type TextInputEvent struct {
 	Text                string
@@ -141,9 +142,10 @@ type RoomIO struct {
 	mu     sync.Mutex
 	closed bool
 
-	audioTrack *lksdk.LocalTrack
-	decoder    AudioDecoder
-	encoder    AudioEncoder
+	audioTrack    *lksdk.LocalTrack
+	decoder       AudioDecoder
+	encoder       AudioEncoder
+	audioDisabled bool
 
 	preConnectAudio *PreConnectAudioHandler
 	textInput       TextInputCallback
@@ -329,6 +331,35 @@ func (rio *RoomIO) isDeletingRoom() bool {
 	return rio.deletingRoom
 }
 
+func (rio *RoomIO) isAudioDisabled() bool {
+	if rio == nil {
+		return false
+	}
+	rio.mu.Lock()
+	defer rio.mu.Unlock()
+	return rio.audioDisabled
+}
+
+func (rio *RoomIO) disableAudioIOForSimulator() {
+	if rio == nil {
+		return
+	}
+	rio.mu.Lock()
+	if rio.audioDisabled {
+		rio.mu.Unlock()
+		return
+	}
+	rio.audioDisabled = true
+	preConnectAudio := rio.preConnectAudio
+	rio.preConnectAudio = nil
+	rio.audioTrack = nil
+	rio.mu.Unlock()
+
+	if preConnectAudio != nil {
+		preConnectAudio.Close()
+	}
+}
+
 func (rio *RoomIO) SetParticipant(participantIdentity string) {
 	rio.setParticipant(participantIdentity, false)
 }
@@ -445,6 +476,9 @@ func (rio *RoomIO) handleParticipantConnected(identity string, kind lksdk.Partic
 		return false
 	}
 	rio.setParticipant(identity, true)
+	if attributes[RoomIOSimulatorAttribute] == "true" {
+		rio.disableAudioIOForSimulator()
+	}
 	return true
 }
 
@@ -502,6 +536,9 @@ func (rio *RoomIO) audioTrackPublicationOptions() *lksdk.TrackPublicationOptions
 
 func (rio *RoomIO) onTrackSubscribed(track *webrtc.TrackRemote, publication *lksdk.RemoteTrackPublication, rp *lksdk.RemoteParticipant) {
 	if rp != nil && !rio.shouldAcceptParticipant(rp.Identity(), rp.Kind(), rp.Attributes(), rio.localParticipantIdentity()) {
+		return
+	}
+	if rio.isAudioDisabled() {
 		return
 	}
 	if track.Kind() == webrtc.RTPCodecTypeAudio {
@@ -568,6 +605,9 @@ func roomIOCloseOnDisconnectReason(reason livekit.DisconnectReason) bool {
 }
 
 func (rio *RoomIO) handleAudioTrack(track *webrtc.TrackRemote) {
+	if rio.isAudioDisabled() {
+		return
+	}
 	// First, check for and flush any pre-connect audio buffered
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
@@ -588,6 +628,10 @@ func (rio *RoomIO) handleAudioTrack(track *webrtc.TrackRemote) {
 	for {
 		rio.mu.Lock()
 		if rio.closed {
+			rio.mu.Unlock()
+			return
+		}
+		if rio.audioDisabled {
 			rio.mu.Unlock()
 			return
 		}
@@ -631,6 +675,9 @@ func (rio *RoomIO) handleAudioTrack(track *webrtc.TrackRemote) {
 }
 
 func (rio *RoomIO) PublishAudio(frame *model.AudioFrame) error {
+	if rio.isAudioDisabled() {
+		return nil
+	}
 	if rio.Recorder != nil {
 		rio.Recorder.RecordOutput(frame)
 	}
