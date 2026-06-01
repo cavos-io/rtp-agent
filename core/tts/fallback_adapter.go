@@ -615,6 +615,9 @@ func (s *fallbackSynthesizeStream) replayBufferedText(stream SynthesizeStream) e
 			return err
 		}
 	}
+	if s.inputDone {
+		return endSynthesizeStreamInput(stream)
+	}
 	return nil
 }
 

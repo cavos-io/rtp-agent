@@ -90,6 +90,36 @@ func TestSentenceStreamPacerAllowsPushAfterFlush(t *testing.T) {
 	}
 }
 
+func TestSentenceStreamPacerEndsInputWhenSupported(t *testing.T) {
+	underlying := newEndInputPacerStream()
+	pacer := NewSentenceStreamPacerWithOptions(context.Background(), underlying, SentenceStreamPacerOptions{})
+	defer pacer.Close()
+
+	ending, ok := any(pacer).(inputEndingSynthesizeStream)
+	if !ok {
+		t.Fatal("SentenceStreamPacer does not implement EndInput")
+	}
+
+	if err := pacer.PushText("Only segment."); err != nil {
+		t.Fatalf("PushText() error = %v", err)
+	}
+	if err := ending.EndInput(); err != nil {
+		t.Fatalf("EndInput() error = %v", err)
+	}
+
+	if _, err := pacer.Next(); err != nil {
+		t.Fatalf("first Next() error = %v", err)
+	}
+	if _, err := pacer.Next(); !errors.Is(err, io.EOF) {
+		t.Fatalf("second Next() error = %v, want io.EOF", err)
+	}
+
+	wantCalls := []string{"push:Only segment.", "end_input"}
+	if got := underlying.calls(); !reflect.DeepEqual(got, wantCalls) {
+		t.Fatalf("underlying calls = %#v, want %#v", got, wantCalls)
+	}
+}
+
 func TestSentenceStreamPacerReturnsEOFWhenUnderlyingCompletes(t *testing.T) {
 	underlying := newEOFAfterOnePacerStream()
 	pacer := NewSentenceStreamPacerWithOptions(context.Background(), underlying, SentenceStreamPacerOptions{})
@@ -209,6 +239,81 @@ func (f *fakePacerStream) waitForPushes(t *testing.T, want []string) bool {
 		time.Sleep(5 * time.Millisecond)
 	}
 	return reflect.DeepEqual(f.pushes(), want)
+}
+
+type endInputPacerStream struct {
+	mu      sync.Mutex
+	cond    *sync.Cond
+	closed  bool
+	ended   bool
+	emitted bool
+	events  []string
+}
+
+func newEndInputPacerStream() *endInputPacerStream {
+	s := &endInputPacerStream{}
+	s.cond = sync.NewCond(&s.mu)
+	return s
+}
+
+func (s *endInputPacerStream) PushText(text string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.events = append(s.events, "push:"+text)
+	s.cond.Broadcast()
+	return nil
+}
+
+func (s *endInputPacerStream) Flush() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.events = append(s.events, "flush")
+	return nil
+}
+
+func (s *endInputPacerStream) EndInput() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.events = append(s.events, "end_input")
+	s.ended = true
+	s.cond.Broadcast()
+	return nil
+}
+
+func (s *endInputPacerStream) Close() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.closed = true
+	s.cond.Broadcast()
+	return nil
+}
+
+func (s *endInputPacerStream) Next() (*SynthesizedAudio, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for !s.closed && !s.ended {
+		s.cond.Wait()
+	}
+	if s.closed {
+		return nil, context.Canceled
+	}
+	if s.emitted {
+		return nil, io.EOF
+	}
+	s.emitted = true
+	return &SynthesizedAudio{
+		Frame: &model.AudioFrame{
+			SampleRate:        24000,
+			NumChannels:       1,
+			SamplesPerChannel: 24000,
+		},
+	}, nil
+}
+
+func (s *endInputPacerStream) calls() []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]string(nil), s.events...)
 }
 
 type eofAfterOnePacerStream struct {

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"math"
 	"net"
 	"net/http"
@@ -255,7 +256,7 @@ func runningJobInfoFromContext(jobCtx *JobContext) workeripc.RunningJobInfo {
 			Name:       jobCtx.AcceptArguments.Name,
 			Identity:   jobCtx.AcceptArguments.Identity,
 			Metadata:   jobCtx.AcceptArguments.Metadata,
-			Attributes: jobCtx.AcceptArguments.Attributes,
+			Attributes: maps.Clone(jobCtx.AcceptArguments.Attributes),
 		},
 		Job:      jobCtx.Job,
 		URL:      jobCtx.url,
@@ -293,6 +294,9 @@ func refreshRunningJobTokenForReload(info workeripc.RunningJobInfo, apiSecret st
 }
 
 func refreshRunningJobsForReload(jobs []workeripc.RunningJobInfo, apiSecret string, now time.Time) ([]workeripc.RunningJobInfo, error) {
+	if apiSecret == "" {
+		return nil, fmt.Errorf("api_secret is required to reload jobs")
+	}
 	refreshed := make([]workeripc.RunningJobInfo, 0, len(jobs))
 	for _, job := range jobs {
 		info, err := refreshRunningJobTokenForReload(job, apiSecret, now)
@@ -320,6 +324,9 @@ func (s *AgentServer) ReloadRunningJobs(ctx context.Context, jobs []workeripc.Ru
 			jobURL = info.URL
 		}
 		jobCtx := NewJobContext(info.Job, jobURL, s.Options.APIKey, s.Options.APISecret)
+		if info.Job.GetEnableRecording() {
+			jobCtx.Report.RecordingOptions = allRecordingOptions()
+		}
 		jobCtx.token = info.Token
 		jobCtx.WorkerID = info.WorkerID
 		jobCtx.AcceptArguments = JobAcceptArguments{
@@ -898,14 +905,15 @@ func (s *AgentServer) registerWorkerRequest() *livekit.WorkerMessage {
 
 func (s *AgentServer) workerStatusMessage(status livekit.WorkerStatus) *livekit.WorkerMessage {
 	jobCount := uint32(s.activeJobCount())
-	if status == livekit.WorkerStatus_WS_AVAILABLE && !s.availableForJob() {
+	load := s.currentLoad()
+	if status == livekit.WorkerStatus_WS_AVAILABLE && !s.availableForJobWithLoad(load) {
 		status = livekit.WorkerStatus_WS_FULL
 	}
 	return &livekit.WorkerMessage{
 		Message: &livekit.WorkerMessage_UpdateWorker{
 			UpdateWorker: &livekit.UpdateWorkerStatus{
 				Status:   &status,
-				Load:     float32(s.currentLoad()),
+				Load:     float32(load),
 				JobCount: jobCount,
 			},
 		},
@@ -1034,13 +1042,20 @@ func (s *AgentServer) drain(ctx context.Context) error {
 func (s *AgentServer) inflightJobCount() int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return len(s.activeJobs) + len(s.pendingAccepts)
+	return len(s.activeJobs) + len(s.pendingAccepts) + s.reservedSlots
 }
 
 func (s *AgentServer) activeJobCount() int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return len(s.activeJobs)
+	count := 0
+	for _, jobCtx := range s.activeJobs {
+		if jobCtx == nil || jobCtx.IsFakeJob() {
+			continue
+		}
+		count++
+	}
+	return count
 }
 
 func (s *AgentServer) currentLoad() float64 {
@@ -1055,7 +1070,10 @@ func (s *AgentServer) currentLoad() float64 {
 }
 
 func (s *AgentServer) effectiveLoad() float64 {
-	load := s.currentLoad()
+	return s.effectiveLoadWithLoad(s.currentLoad())
+}
+
+func (s *AgentServer) effectiveLoadWithLoad(load float64) float64 {
 	threshold := s.Options.LoadThreshold
 	if threshold <= 0 {
 		return load
@@ -1092,7 +1110,21 @@ func (s *AgentServer) availableForJob() bool {
 	if math.IsInf(threshold, 1) {
 		return true
 	}
-	return s.effectiveLoad() < threshold
+	return s.effectiveLoadWithLoad(s.currentLoad()) < threshold
+}
+
+func (s *AgentServer) availableForJobWithLoad(load float64) bool {
+	if s.Draining() {
+		return false
+	}
+	threshold := s.Options.LoadThreshold
+	if threshold <= 0 {
+		return true
+	}
+	if math.IsInf(threshold, 1) {
+		return true
+	}
+	return s.effectiveLoadWithLoad(load) < threshold
 }
 
 func (s *AgentServer) validateRunPreconditions() error {
@@ -1366,7 +1398,10 @@ func (s *AgentServer) emitWorkerRegistered(workerID string, serverInfo *livekit.
 func (s *AgentServer) reportActiveJobs() {
 	s.mu.Lock()
 	jobIDs := make([]string, 0, len(s.activeJobs))
-	for jobID := range s.activeJobs {
+	for jobID, jobCtx := range s.activeJobs {
+		if jobCtx.IsFakeJob() {
+			continue
+		}
 		jobIDs = append(jobIDs, jobID)
 	}
 	s.mu.Unlock()
@@ -1572,6 +1607,10 @@ func (s *AgentServer) ExecuteLocalJobWithOptions(ctx context.Context, roomName s
 	}
 	jobCtx := newLocalJobContextWithOptions(roomName, participantIdentity, s.Options, options)
 	jobCtx.WorkerID = s.workerID
+	shutdownCh := make(chan struct{})
+	_ = jobCtx.AddShutdownCallback(func() {
+		close(shutdownCh)
+	})
 
 	// For local execution, we want to connect immediately
 	// For basic parity, we just trigger the entrypoint directly.
@@ -1588,8 +1627,11 @@ func (s *AgentServer) ExecuteLocalJobWithOptions(ctx context.Context, roomName s
 		}()
 	}
 
-	// Block until context is done for local execution
-	<-ctx.Done()
+	// Block until the local job is canceled or the job context shuts down.
+	select {
+	case <-ctx.Done():
+	case <-shutdownCh:
+	}
 	s.finishJob(jobCtx)
 	if options.SessionReportPath != "" {
 		return saveSessionReport(options.SessionReportPath, jobCtx.Report)

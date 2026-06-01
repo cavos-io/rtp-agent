@@ -954,6 +954,11 @@ func TestAgentServerActiveRunningJobsReturnsReferenceAssignmentSnapshots(t *test
 	if running.AcceptArguments.Attributes["tier"] != "gold" {
 		t.Fatalf("ActiveRunningJobs()[0].AcceptArguments.Attributes[tier] = %q, want gold", running.AcceptArguments.Attributes["tier"])
 	}
+
+	runningJobs[0].AcceptArguments.Attributes["tier"] = "platinum"
+	if got := server.ActiveRunningJobs()[0].AcceptArguments.Attributes["tier"]; got != "gold" {
+		t.Fatalf("mutating ActiveRunningJobs() attributes changed stored context to %q, want gold", got)
+	}
 }
 
 func TestRefreshRunningJobTokenForReloadPreservesAssignmentAndExtendsToken(t *testing.T) {
@@ -1147,6 +1152,18 @@ func TestRefreshRunningJobsForReloadRefreshesEveryJob(t *testing.T) {
 	}
 }
 
+func TestAgentServerReloadRunningJobsRequiresAPISecretEvenWithoutJobs(t *testing.T) {
+	server := NewAgentServer(WorkerOptions{})
+
+	err := server.ReloadRunningJobs(context.Background(), nil, time.Now())
+	if err == nil {
+		t.Fatal("ReloadRunningJobs() error = nil, want missing api secret error")
+	}
+	if !strings.Contains(err.Error(), "api_secret is required to reload jobs") {
+		t.Fatalf("ReloadRunningJobs() error = %v, want missing api secret error", err)
+	}
+}
+
 func TestAgentServerReloadRunningJobsLaunchesRefreshedJobs(t *testing.T) {
 	originalToken, err := auth.NewAccessToken("api-key", "api-secret").
 		SetIdentity("agent-a").
@@ -1262,6 +1279,60 @@ func TestAgentServerReloadRunningJobsLaunchesRefreshedJobs(t *testing.T) {
 	}
 	if activeJobs[0].Token != launched.token {
 		t.Fatal("ActiveRunningJobs()[0].Token does not match refreshed launched token")
+	}
+}
+
+func TestAgentServerReloadRunningJobsPreservesRecordingOptions(t *testing.T) {
+	originalToken, err := auth.NewAccessToken("api-key", "api-secret").
+		SetIdentity("agent-a").
+		SetVideoGrant(&auth.VideoGrant{RoomJoin: true, Room: "room-a", Agent: true}).
+		ToJWT()
+	if err != nil {
+		t.Fatalf("ToJWT() error = %v", err)
+	}
+
+	server := NewAgentServer(WorkerOptions{
+		WSRL:      "wss://new-livekit.example",
+		APIKey:    "api-key",
+		APISecret: "api-secret",
+	})
+	entrypointCh := make(chan *JobContext, 1)
+	releaseEntrypoint := make(chan struct{})
+	if err := server.RTCSession(func(ctx *JobContext) error {
+		entrypointCh <- ctx
+		<-releaseEntrypoint
+		return nil
+	}, nil, nil); err != nil {
+		t.Fatalf("RTCSession() error = %v", err)
+	}
+	t.Cleanup(func() {
+		close(releaseEntrypoint)
+	})
+
+	job := &livekit.Job{
+		Id:              "job-recording-reload",
+		Room:            &livekit.Room{Name: "room-a"},
+		EnableRecording: true,
+	}
+	err = server.ReloadRunningJobs(context.Background(), []ipc.RunningJobInfo{
+		{
+			AcceptArguments: ipc.JobAcceptArguments{Identity: "agent-a"},
+			Job:             job,
+			URL:             "wss://old-livekit.example",
+			Token:           originalToken,
+		},
+	}, time.Date(2026, 5, 31, 14, 0, 0, 0, time.UTC))
+	if err != nil {
+		t.Fatalf("ReloadRunningJobs() error = %v", err)
+	}
+
+	select {
+	case launched := <-entrypointCh:
+		if launched.Report.RecordingOptions != (agent.RecordingOptions{Audio: true, Traces: true, Logs: true, Transcript: true}) {
+			t.Fatalf("RecordingOptions = %#v, want all enabled", launched.Report.RecordingOptions)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("reloaded job entrypoint was not invoked")
 	}
 }
 
@@ -1572,6 +1643,53 @@ func TestWorkerStatusMessageMarksOverloadedWorkerFull(t *testing.T) {
 	}
 	if update.GetStatus() != livekit.WorkerStatus_WS_FULL {
 		t.Fatalf("UpdateWorker.Status = %v, want WS_FULL", update.GetStatus())
+	}
+}
+
+func TestWorkerStatusMessageUsesSingleLoadSample(t *testing.T) {
+	loads := []float64{0.8, 0.1}
+	server := NewAgentServer(WorkerOptions{
+		LoadThreshold: 0.5,
+		LoadFunc: func(*AgentServer) float64 {
+			load := loads[0]
+			loads = loads[1:]
+			return load
+		},
+	})
+
+	msg := server.workerStatusMessage(livekit.WorkerStatus_WS_AVAILABLE)
+	update := msg.GetUpdateWorker()
+	if update == nil {
+		t.Fatal("update worker message is nil")
+	}
+	if update.GetStatus() != livekit.WorkerStatus_WS_FULL {
+		t.Fatalf("UpdateWorker.Status = %v, want WS_FULL", update.GetStatus())
+	}
+	if update.Load != 0.8 {
+		t.Fatalf("UpdateWorker.Load = %v, want the same load sample used for status", update.Load)
+	}
+	if len(loads) != 1 {
+		t.Fatalf("LoadFunc calls consumed %d samples, want 1", 2-len(loads))
+	}
+}
+
+func TestWorkerStatusMessageSkipsFakeJobsInJobCount(t *testing.T) {
+	server := NewAgentServer(WorkerOptions{})
+	realCtx := NewJobContext(&livekit.Job{Id: "job-real"}, "", "", "")
+	fakeCtx := NewJobContext(&livekit.Job{Id: "job-fake"}, "", "", "")
+	fakeCtx.fakeJob = true
+	server.mu.Lock()
+	server.activeJobs[realCtx.Job.Id] = realCtx
+	server.activeJobs[fakeCtx.Job.Id] = fakeCtx
+	server.mu.Unlock()
+
+	msg := server.workerStatusMessage(livekit.WorkerStatus_WS_AVAILABLE)
+	update := msg.GetUpdateWorker()
+	if update == nil {
+		t.Fatal("update worker message is nil")
+	}
+	if update.JobCount != 1 {
+		t.Fatalf("UpdateWorker.JobCount = %d, want only non-fake jobs", update.JobCount)
 	}
 }
 
@@ -2016,8 +2134,11 @@ func TestHandleRegisterReportsActiveJobs(t *testing.T) {
 		return nil
 	}
 	jobCtx := NewJobContext(&livekit.Job{Id: "job_active"}, "", "", "")
+	fakeCtx := NewJobContext(&livekit.Job{Id: "mock-job-local"}, "", "", "")
+	fakeCtx.fakeJob = true
 	server.mu.Lock()
 	server.activeJobs[jobCtx.Job.Id] = jobCtx
+	server.activeJobs[fakeCtx.Job.Id] = fakeCtx
 	server.mu.Unlock()
 
 	server.handleMessage(context.Background(), &livekit.ServerMessage{
@@ -2032,7 +2153,7 @@ func TestHandleRegisterReportsActiveJobs(t *testing.T) {
 		t.Fatal("migrate job message is nil")
 	}
 	if len(migrate.JobIds) != 1 || migrate.JobIds[0] != "job_active" {
-		t.Fatalf("MigrateJob.JobIds = %v, want [job_active]", migrate.JobIds)
+		t.Fatalf("MigrateJob.JobIds = %v, want only non-fake job [job_active]", migrate.JobIds)
 	}
 }
 
@@ -3296,6 +3417,66 @@ func TestExecuteLocalJobCleansUpAndRunsSessionEnd(t *testing.T) {
 	}
 }
 
+func TestExecuteLocalJobReturnsWhenJobContextShutsDown(t *testing.T) {
+	server := NewAgentServer(WorkerOptions{})
+	startedCh := make(chan *JobContext, 1)
+	sessionEndCh := make(chan *JobContext, 1)
+
+	if err := server.RTCSession(
+		func(ctx *JobContext) error {
+			startedCh <- ctx
+			ctx.Shutdown("entrypoint_done")
+			return nil
+		},
+		nil,
+		func(ctx *JobContext) error {
+			sessionEndCh <- ctx
+			return nil
+		},
+	); err != nil {
+		t.Fatalf("RTCSession() error = %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	doneCh := make(chan error, 1)
+	go func() {
+		doneCh <- server.ExecuteLocalJob(ctx, "room-a", "agent-local")
+	}()
+
+	var jobCtx *JobContext
+	select {
+	case jobCtx = <-startedCh:
+	case <-time.After(time.Second):
+		t.Fatal("local job entrypoint did not run")
+	}
+
+	select {
+	case err := <-doneCh:
+		if err != nil {
+			t.Fatalf("ExecuteLocalJob() error = %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("ExecuteLocalJob() did not return after job context shutdown")
+	}
+
+	select {
+	case endedCtx := <-sessionEndCh:
+		if endedCtx != jobCtx {
+			t.Fatal("session end callback received a different job context")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("session end callback did not run")
+	}
+
+	server.mu.Lock()
+	_, exists := server.activeJobs[jobCtx.Job.Id]
+	server.mu.Unlock()
+	if exists {
+		t.Fatal("local job remained in activeJobs after shutdown")
+	}
+}
+
 func TestFinishJobTimesOutSessionEndCallback(t *testing.T) {
 	server := NewAgentServer(WorkerOptions{SessionEndTimeoutSeconds: 0.01})
 	blockCh := make(chan struct{})
@@ -3368,6 +3549,61 @@ func TestDrainWaitsForActiveJobs(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("Drain() did not return after active job finished")
+	}
+}
+
+func TestDrainWaitsForInFlightAvailabilityRequest(t *testing.T) {
+	server := NewAgentServer(WorkerOptions{})
+	requestStarted := make(chan struct{})
+	releaseRequest := make(chan struct{})
+	server.workerMessageSink = func(msg *livekit.WorkerMessage) error {
+		return nil
+	}
+	server.requestFnc = func(req *JobRequest) error {
+		close(requestStarted)
+		<-releaseRequest
+		return nil
+	}
+
+	server.handleAvailability(context.Background(), &livekit.AvailabilityRequest{
+		Job: &livekit.Job{Id: "job_drain_request"},
+	})
+
+	select {
+	case <-requestStarted:
+	case <-time.After(time.Second):
+		t.Fatal("request callback did not start")
+	}
+
+	doneCh := make(chan error, 1)
+	go func() {
+		doneCh <- server.Drain(context.Background())
+	}()
+
+	drainingDeadline := time.After(time.Second)
+	for !server.Draining() {
+		select {
+		case <-drainingDeadline:
+			t.Fatal("server.Draining() = false, want true")
+		default:
+			time.Sleep(time.Millisecond)
+		}
+	}
+
+	select {
+	case err := <-doneCh:
+		t.Fatalf("Drain() returned before in-flight request finished: %v", err)
+	default:
+	}
+
+	close(releaseRequest)
+	select {
+	case err := <-doneCh:
+		if err != nil {
+			t.Fatalf("Drain() error = %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Drain() did not return after in-flight request finished")
 	}
 }
 

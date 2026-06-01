@@ -273,6 +273,16 @@ func TestConsoleLocalJobOptionsEnableRecordingWhenRequested(t *testing.T) {
 	}
 }
 
+func TestConsoleSessionReportPathUsesReferenceDirectory(t *testing.T) {
+	now := time.Date(2026, 6, 1, 9, 8, 7, 0, time.UTC)
+	got := consoleSessionReportPath(now)
+	want := "console-recordings/session-06-01-090807/session_report.json"
+
+	if got != want {
+		t.Fatalf("consoleSessionReportPath() = %q, want %q", got, want)
+	}
+}
+
 func TestConsoleLocalJobOptionsDisableRecordingByDefault(t *testing.T) {
 	options := consoleLocalJobOptions(ConsoleArgs{})
 
@@ -665,6 +675,28 @@ func TestWatcherTriggerReloadKeepsReloadingUntilReloaded(t *testing.T) {
 	}
 	if calls != 2 {
 		t.Fatalf("onChange calls after Reloaded() = %d, want 2", calls)
+	}
+}
+
+func TestDevModeWatcherSharesCliReloadState(t *testing.T) {
+	args := &CliArgs{ReloadCount: 4}
+	calls := 0
+	watcher := newDevModeWatcher(args, func() {
+		calls++
+	})
+	watcher.activeJobsTimeout = time.Nanosecond
+
+	if !watcher.triggerReload() {
+		t.Fatal("triggerReload() = false, want true")
+	}
+	if calls != 1 {
+		t.Fatalf("onChange calls = %d, want 1", calls)
+	}
+	if args.ReloadCount != 5 {
+		t.Fatalf("ReloadCount = %d, want 5", args.ReloadCount)
+	}
+	if resp := watcher.reloadJobsResponse(); resp.ReloadCount != 5 {
+		t.Fatalf("ReloadJobsResponse.ReloadCount = %d, want 5", resp.ReloadCount)
 	}
 }
 

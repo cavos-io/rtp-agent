@@ -261,6 +261,15 @@ func TestPipelineAgentEmitsFunctionToolsExecutedEvent(t *testing.T) {
 		if !ev.HasToolReply() {
 			t.Fatal("HasToolReply() = false, want true when tool returned output")
 		}
+		if len(session.ChatCtx.Items) != 3 {
+			t.Fatalf("session ChatCtx items = %#v, want function call, output, and follow-up assistant", session.ChatCtx.Items)
+		}
+		if session.ChatCtx.Items[0] != ev.FunctionCalls[0] {
+			t.Fatalf("session ChatCtx first item = %#v, want emitted function call", session.ChatCtx.Items[0])
+		}
+		if session.ChatCtx.Items[1] != ev.FunctionCallOutputs[0] {
+			t.Fatalf("session ChatCtx second item = %#v, want emitted function output", session.ChatCtx.Items[1])
+		}
 	case <-time.After(time.Second):
 		t.Fatal("FunctionToolsExecutedEvents did not receive event")
 	}
