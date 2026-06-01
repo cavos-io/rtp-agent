@@ -155,10 +155,22 @@ func (f *fakeGenerationTool) Execute(context.Context, string) (string, error) {
 }
 
 type fakeGenerationLLM struct {
-	stream llm.LLMStream
+	stream  llm.LLMStream
+	streams []llm.LLMStream
+	calls   []llm.ChatOptions
 }
 
-func (f *fakeGenerationLLM) Chat(context.Context, *llm.ChatContext, ...llm.ChatOption) (llm.LLMStream, error) {
+func (f *fakeGenerationLLM) Chat(_ context.Context, _ *llm.ChatContext, opts ...llm.ChatOption) (llm.LLMStream, error) {
+	var options llm.ChatOptions
+	for _, opt := range opts {
+		opt(&options)
+	}
+	f.calls = append(f.calls, options)
+	if len(f.streams) > 0 {
+		stream := f.streams[0]
+		f.streams = f.streams[1:]
+		return stream, nil
+	}
 	return f.stream, nil
 }
 

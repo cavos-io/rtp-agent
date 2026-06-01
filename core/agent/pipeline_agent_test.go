@@ -98,6 +98,49 @@ func TestPipelineAgentReturnsToThinkingWhileExecutingTools(t *testing.T) {
 	}
 }
 
+func TestPipelineAgentForcesNoToolsAfterMaxToolSteps(t *testing.T) {
+	chatCtx := llm.NewChatContext()
+	l := &fakeGenerationLLM{
+		streams: []llm.LLMStream{
+			&fakeGenerationLLMStream{
+				chunks: []*llm.ChatChunk{
+					{Delta: &llm.ChoiceDelta{
+						Content: "checking",
+						ToolCalls: []llm.FunctionToolCall{{
+							Type:      "function",
+							Name:      "lookup",
+							CallID:    "call_lookup",
+							Arguments: `{}`,
+						}},
+					}},
+				},
+			},
+			&fakeGenerationLLMStream{
+				chunks: []*llm.ChatChunk{
+					{Delta: &llm.ChoiceDelta{Content: "final answer"}},
+				},
+			},
+		},
+	}
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{MaxToolSteps: 1})
+	session.Tools = []llm.Tool{&fakeGenerationTool{name: "lookup", result: "done"}}
+	agent := NewPipelineAgent(nil, nil, l, &fakePipelineTTS{}, chatCtx)
+	agent.session = session
+	agent.ctx = context.Background()
+
+	agent.generateReply()
+
+	if len(l.calls) != 2 {
+		t.Fatalf("LLM Chat calls = %d, want 2", len(l.calls))
+	}
+	if l.calls[0].ToolChoice != nil {
+		t.Fatalf("first ToolChoice = %#v, want nil", l.calls[0].ToolChoice)
+	}
+	if l.calls[1].ToolChoice != "none" {
+		t.Fatalf("second ToolChoice = %#v, want none", l.calls[1].ToolChoice)
+	}
+}
+
 type fakePipelineTTS struct {
 	stream *fakePipelineTTSStream
 }

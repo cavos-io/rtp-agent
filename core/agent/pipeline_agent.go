@@ -168,8 +168,13 @@ func (va *PipelineAgent) generateReply() {
 	toolCtx := llm.NewToolContext(toolsInterface)
 
 	// In Python parity, we loop for tool calls
+	toolSteps := 0
 	for {
-		genData, err := PerformLLMInference(ctx, va.LLM, va.chatCtx, session.Tools)
+		var chatOptions []llm.ChatOption
+		if session.Options.MaxToolSteps > 0 && toolSteps >= session.Options.MaxToolSteps {
+			chatOptions = append(chatOptions, llm.WithToolChoice("none"))
+		}
+		genData, err := PerformLLMInference(ctx, va.LLM, va.chatCtx, session.Tools, chatOptions...)
 		if err != nil {
 			logger.Logger.Errorw("LLM inference failed", err)
 			session.UpdateAgentState(AgentStateIdle)
@@ -228,6 +233,7 @@ func (va *PipelineAgent) generateReply() {
 			session.UpdateAgentState(AgentStateIdle)
 			break
 		}
+		toolSteps++
 		// Loop back to LLM with tool outputs
 	}
 }

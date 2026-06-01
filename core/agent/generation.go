@@ -19,14 +19,23 @@ type LLMGenerationData struct {
 	TTFT               time.Duration
 }
 
-func PerformLLMInference(ctx context.Context, l llm.LLM, chatCtx *llm.ChatContext, tools []llm.Tool) (*LLMGenerationData, error) {
+func PerformLLMInference(
+	ctx context.Context,
+	l llm.LLM,
+	chatCtx *llm.ChatContext,
+	tools []llm.Tool,
+	options ...llm.ChatOption,
+) (*LLMGenerationData, error) {
 	data := &LLMGenerationData{
 		TextCh:         make(chan string, 100),
 		FunctionCh:     make(chan *llm.FunctionToolCall, 10),
 		GeneratedExtra: make(map[string]any),
 	}
 
-	stream, err := l.Chat(ctx, chatCtx, llm.WithTools(tools))
+	chatOptions := make([]llm.ChatOption, 0, len(options)+1)
+	chatOptions = append(chatOptions, llm.WithTools(tools))
+	chatOptions = append(chatOptions, options...)
+	stream, err := l.Chat(ctx, chatCtx, chatOptions...)
 	if err != nil {
 		return nil, err
 	}
