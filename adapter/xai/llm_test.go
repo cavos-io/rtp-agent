@@ -44,6 +44,22 @@ func TestBuildXAIMessagesGroupsToolCallsWithOutputs(t *testing.T) {
 	}
 }
 
+func TestNewXaiLLMDefaultsToReferenceModel(t *testing.T) {
+	provider := NewXaiLLM("test-key", "")
+
+	if provider.Model() != "grok-4-1-fast-non-reasoning" {
+		t.Fatalf("model = %q, want reference default model", provider.Model())
+	}
+}
+
+func TestNewXaiLLMUsesCustomModel(t *testing.T) {
+	provider := NewXaiLLM("test-key", "grok-4")
+
+	if provider.Model() != "grok-4" {
+		t.Fatalf("model = %q, want custom model", provider.Model())
+	}
+}
+
 func TestBuildXAIMessagesFiltersUnmatchedToolItems(t *testing.T) {
 	ctx := llm.NewChatContext()
 	ctx.Items = []llm.ChatItem{
