@@ -257,6 +257,34 @@ func TestSimpleVADCloseEndsIterationAfterContextCancel(t *testing.T) {
 	}
 }
 
+func TestSimpleVADContextCancelUnregistersStream(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	detector := NewSimpleVAD(0.05)
+	stream, err := detector.Stream(ctx)
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	defer stream.Close()
+	registeredStreams := func() int {
+		detector.mu.RLock()
+		defer detector.mu.RUnlock()
+		return len(detector.streams)
+	}
+
+	if got := registeredStreams(); got != 1 {
+		t.Fatalf("registered streams before cancel = %d, want 1", got)
+	}
+	cancel()
+
+	deadline := time.Now().Add(time.Second)
+	for registeredStreams() != 0 && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	if got := registeredStreams(); got != 0 {
+		t.Fatalf("registered streams after context cancel = %d, want 0", got)
+	}
+}
+
 func TestSimpleVADEndInputDrainsQueuedEvents(t *testing.T) {
 	stream, err := NewSimpleVAD(0.05).Stream(context.Background())
 	if err != nil {
