@@ -3,6 +3,7 @@ package tts
 import (
 	"context"
 	"fmt"
+	"io"
 	"strings"
 	"sync"
 	"time"
@@ -331,7 +332,7 @@ func (p *SentenceStreamPacer) Next() (*SynthesizedAudio, error) {
 		return nil, p.ctx.Err()
 	case audio, ok := <-p.audioCh:
 		if !ok {
-			return nil, fmt.Errorf("stream closed")
+			return nil, io.EOF
 		}
 		return audio, nil
 	}
