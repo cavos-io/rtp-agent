@@ -93,7 +93,10 @@ func TestElevenLabsSynthesizeRequestUsesConfiguredBaseURL(t *testing.T) {
 }
 
 func TestElevenLabsStreamURLUsesReferenceOptions(t *testing.T) {
-	provider, err := NewElevenLabsTTS("test-key", "", "")
+	provider, err := NewElevenLabsTTS("test-key", "", "",
+		WithElevenLabsLanguage("en"),
+		WithElevenLabsEnableSSMLParsing(true),
+	)
 	if err != nil {
 		t.Fatalf("NewElevenLabsTTS() error = %v", err)
 	}
@@ -112,6 +115,12 @@ func TestElevenLabsStreamURLUsesReferenceOptions(t *testing.T) {
 	}
 	if parsed.Query().Get("output_format") != "mp3_22050_32" {
 		t.Fatalf("output_format = %q, want mp3_22050_32", parsed.Query().Get("output_format"))
+	}
+	if parsed.Query().Get("language_code") != "en" {
+		t.Fatalf("language_code = %q, want en", parsed.Query().Get("language_code"))
+	}
+	if parsed.Query().Get("enable_ssml_parsing") != "true" {
+		t.Fatalf("enable_ssml_parsing = %q, want true", parsed.Query().Get("enable_ssml_parsing"))
 	}
 }
 

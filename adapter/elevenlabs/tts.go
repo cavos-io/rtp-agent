@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -233,6 +234,10 @@ func buildElevenLabsStreamURL(t *ElevenLabsTTS) string {
 	q := parsed.Query()
 	q.Set("model_id", t.modelID)
 	q.Set("output_format", t.encoding)
+	if t.language != "" {
+		q.Set("language_code", t.language)
+	}
+	q.Set("enable_ssml_parsing", strconv.FormatBool(t.enableSSMLParsing))
 	parsed.RawQuery = q.Encode()
 	return parsed.String()
 }
