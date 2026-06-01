@@ -87,6 +87,17 @@ func TestNewAgentServerExplicitOptionsOverrideEnvironment(t *testing.T) {
 	}
 }
 
+func TestNewAgentServerPreservesExplicitEmptyHTTPProxy(t *testing.T) {
+	t.Setenv("HTTPS_PROXY", "https://env-proxy.example")
+	t.Setenv("HTTP_PROXY", "http://env-proxy.example")
+
+	server := NewAgentServer(WorkerOptions{HTTPProxySet: true})
+
+	if server.Options.HTTPProxy != "" {
+		t.Fatalf("HTTPProxy = %q, want explicit empty proxy", server.Options.HTTPProxy)
+	}
+}
+
 func TestNewAgentServerPrefersWSURLAliasOverDeprecatedWSRL(t *testing.T) {
 	server := NewAgentServer(WorkerOptions{
 		WSURL: "wss://canonical.example",
@@ -361,6 +372,26 @@ func TestStartPrometheusServerUsesConfiguredPort(t *testing.T) {
 	}
 }
 
+func TestStartPrometheusServerEnablesExplicitZeroPort(t *testing.T) {
+	server := NewAgentServer(WorkerOptions{
+		Host:              "127.0.0.1",
+		PrometheusPortSet: true,
+	})
+
+	prometheusServer, err := server.startPrometheusServer()
+	if err != nil {
+		t.Fatalf("startPrometheusServer() error = %v", err)
+	}
+	if prometheusServer == nil {
+		t.Fatal("startPrometheusServer() = nil, want server for explicit zero Prometheus port")
+	}
+	defer prometheusServer.Stop(context.Background())
+
+	if prometheusServer.Port == 0 {
+		t.Fatal("Prometheus server Port = 0, want assigned listener port")
+	}
+}
+
 func TestConfigurePrometheusMultiprocDirSetsEnvironment(t *testing.T) {
 	t.Setenv("PROMETHEUS_MULTIPROC_DIR", "")
 	dir := t.TempDir()
@@ -371,6 +402,33 @@ func TestConfigurePrometheusMultiprocDirSetsEnvironment(t *testing.T) {
 	}
 	if got := os.Getenv("PROMETHEUS_MULTIPROC_DIR"); got != dir {
 		t.Fatalf("PROMETHEUS_MULTIPROC_DIR = %q, want %q", got, dir)
+	}
+}
+
+func TestConfigurePrometheusMultiprocDirCleansExistingMetricFiles(t *testing.T) {
+	dir := t.TempDir()
+	staleFile := dir + "/stale.db"
+	if err := os.WriteFile(staleFile, []byte("old metrics"), 0o644); err != nil {
+		t.Fatalf("write stale metric file: %v", err)
+	}
+	nestedDir := dir + "/nested"
+	if err := os.Mkdir(nestedDir, 0o755); err != nil {
+		t.Fatalf("create nested directory: %v", err)
+	}
+	t.Setenv("PROMETHEUS_MULTIPROC_DIR", dir)
+	server := NewAgentServer(WorkerOptions{})
+
+	if err := server.configurePrometheusMultiprocDir(); err != nil {
+		t.Fatalf("configurePrometheusMultiprocDir() error = %v", err)
+	}
+	if server.Options.PrometheusMultiprocDir != dir {
+		t.Fatalf("PrometheusMultiprocDir = %q, want env dir %q", server.Options.PrometheusMultiprocDir, dir)
+	}
+	if _, err := os.Stat(staleFile); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("stale metric file stat error = %v, want not exist", err)
+	}
+	if _, err := os.Stat(nestedDir); err != nil {
+		t.Fatalf("nested directory stat error = %v, want preserved directory", err)
 	}
 }
 
@@ -441,6 +499,31 @@ func TestUpdateOptionsMergesConfiguredValuesBeforeRun(t *testing.T) {
 	}
 }
 
+func TestUpdateOptionsPreservesExplicitZeroPorts(t *testing.T) {
+	server := NewAgentServer(WorkerOptions{
+		Port:           8081,
+		PrometheusPort: 9090,
+	})
+
+	err := server.UpdateOptions(WorkerOptions{
+		PortSet:           true,
+		PrometheusPortSet: true,
+	})
+	if err != nil {
+		t.Fatalf("UpdateOptions() error = %v", err)
+	}
+
+	if server.Options.Port != 0 {
+		t.Fatalf("Port = %d, want explicit zero", server.Options.Port)
+	}
+	if server.Options.PrometheusPort != 0 {
+		t.Fatalf("PrometheusPort = %d, want explicit zero", server.Options.PrometheusPort)
+	}
+	if !server.Options.PrometheusPortSet {
+		t.Fatal("PrometheusPortSet = false, want true")
+	}
+}
+
 func TestUpdateOptionsPreservesExplicitZeroResourceValues(t *testing.T) {
 	server := NewAgentServer(WorkerOptions{
 		LoadThreshold:    0.5,
@@ -470,6 +553,19 @@ func TestUpdateOptionsPreservesExplicitZeroResourceValues(t *testing.T) {
 	}
 	if server.Options.NumIdleProcesses != 0 {
 		t.Fatalf("NumIdleProcesses = %d, want explicit zero", server.Options.NumIdleProcesses)
+	}
+}
+
+func TestUpdateOptionsPreservesExplicitZeroMaxRetry(t *testing.T) {
+	server := NewAgentServer(WorkerOptions{MaxRetry: 5})
+
+	err := server.UpdateOptions(WorkerOptions{MaxRetrySet: true})
+	if err != nil {
+		t.Fatalf("UpdateOptions() error = %v", err)
+	}
+
+	if server.Options.MaxRetry != 0 {
+		t.Fatalf("MaxRetry = %d, want explicit zero", server.Options.MaxRetry)
 	}
 }
 
@@ -2782,6 +2878,82 @@ func TestExecuteLocalJobWithOptionsCanRunReferenceConnectJob(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("ExecuteLocalJobWithOptions() did not return after context cancellation")
+	}
+}
+
+func TestExecuteLocalJobWithOptionsUsesTokenIdentity(t *testing.T) {
+	server := NewAgentServer(WorkerOptions{APIKey: "api-key", APISecret: "api-secret"})
+	startedCh := make(chan *JobContext, 1)
+	roomInfo := &livekit.Room{Sid: "RM_existing", Name: "room-a"}
+	token, err := auth.NewAccessToken("api-key", "api-secret").
+		SetIdentity("agent-token").
+		SetVideoGrant(&auth.VideoGrant{RoomJoin: true, Room: "room-a", Agent: true}).
+		ToJWT()
+	if err != nil {
+		t.Fatalf("ToJWT() error = %v", err)
+	}
+
+	if err := server.RTCSession(
+		func(ctx *JobContext) error {
+			startedCh <- ctx
+			return nil
+		},
+		nil,
+		nil,
+	); err != nil {
+		t.Fatalf("RTCSession() error = %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	doneCh := make(chan error, 1)
+	go func() {
+		doneCh <- server.ExecuteLocalJobWithOptions(ctx, "room-a", "", LocalJobOptions{
+			FakeJob:  false,
+			RoomInfo: roomInfo,
+			Token:    token,
+		})
+	}()
+
+	var jobCtx *JobContext
+	select {
+	case jobCtx = <-startedCh:
+	case <-time.After(time.Second):
+		t.Fatal("local token job entrypoint did not run")
+	}
+
+	if jobCtx.ParticipantIdentity() != "agent-token" {
+		t.Fatalf("ParticipantIdentity() = %q, want token identity", jobCtx.ParticipantIdentity())
+	}
+	if jobCtx.token != token {
+		t.Fatal("local token job did not preserve provided token")
+	}
+
+	cancel()
+	select {
+	case err := <-doneCh:
+		if err != nil {
+			t.Fatalf("ExecuteLocalJobWithOptions() error = %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("ExecuteLocalJobWithOptions() did not return after context cancellation")
+	}
+}
+
+func TestExecuteLocalJobWithOptionsRejectsInvalidToken(t *testing.T) {
+	server := NewAgentServer(WorkerOptions{})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	err := server.ExecuteLocalJobWithOptions(ctx, "room-a", "", LocalJobOptions{
+		FakeJob:  false,
+		RoomInfo: &livekit.Room{Sid: "RM_existing", Name: "room-a"},
+		Token:    "not-a-jwt",
+	})
+	if err == nil {
+		t.Fatal("ExecuteLocalJobWithOptions() error = nil, want invalid token error")
+	}
+	if !strings.Contains(err.Error(), "invalid local job token") {
+		t.Fatalf("ExecuteLocalJobWithOptions() error = %q, want invalid token message", err.Error())
 	}
 }
 

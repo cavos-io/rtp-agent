@@ -703,6 +703,109 @@ func TestRunAssertNextEventReportsMissingType(t *testing.T) {
 	}
 }
 
+func TestRunAssertEventAtValidatesTypeAndCriteria(t *testing.T) {
+	result := NewRunResult(llm.NewChatContext())
+	now := time.Now()
+	result.RecordItem(&llm.ChatMessage{ID: "msg_1", Role: llm.ChatRoleAssistant, CreatedAt: now})
+	result.RecordItem(&llm.FunctionCall{ID: "fnc_1", CallID: "call_1", Name: "lookup", CreatedAt: now.Add(time.Millisecond)})
+
+	err := result.Expect.EventAt(1, "function_call", RunEventCriteria{Name: "lookup"}).HasError()
+
+	if err != nil {
+		t.Fatalf("EventAt returned error = %v, want nil for matching indexed event", err)
+	}
+}
+
+func TestRunAssertEventAtSupportsNegativeIndex(t *testing.T) {
+	result := NewRunResult(llm.NewChatContext())
+	now := time.Now()
+	result.RecordItem(&llm.ChatMessage{ID: "msg_1", Role: llm.ChatRoleAssistant, CreatedAt: now})
+	result.RecordItem(&llm.FunctionCall{ID: "fnc_1", CallID: "call_1", Name: "lookup", CreatedAt: now.Add(time.Millisecond)})
+
+	err := result.Expect.EventAt(-1, "function_call", RunEventCriteria{Name: "lookup"}).HasError()
+
+	if err != nil {
+		t.Fatalf("EventAt returned error = %v, want nil for matching negative index", err)
+	}
+}
+
+func TestRunAssertEventAtDoesNotAdvanceSequentialCursor(t *testing.T) {
+	result := NewRunResult(llm.NewChatContext())
+	result.RecordItem(&llm.ChatMessage{ID: "msg_1", Role: llm.ChatRoleAssistant, CreatedAt: time.Now()})
+
+	err := result.Expect.
+		EventAt(0, "message", RunEventCriteria{Role: llm.ChatRoleAssistant}).
+		NextEvent("message").
+		NoMoreEvents().
+		HasError()
+
+	if err != nil {
+		t.Fatalf("EventAt advanced sequential cursor: %v", err)
+	}
+}
+
+func TestRunAssertEventAtReportsOutOfRange(t *testing.T) {
+	result := NewRunResult(llm.NewChatContext())
+	result.RecordItem(&llm.ChatMessage{ID: "msg_1", Role: llm.ChatRoleAssistant, CreatedAt: time.Now()})
+
+	err := result.Expect.EventAt(2, "message").HasError()
+
+	if err == nil {
+		t.Fatal("EventAt error = nil, want out-of-range error")
+	}
+}
+
+func TestRunAssertContainsEventInRangeMatchesCriteria(t *testing.T) {
+	result := NewRunResult(llm.NewChatContext())
+	now := time.Now()
+	result.RecordItem(&llm.ChatMessage{ID: "msg_1", Role: llm.ChatRoleAssistant, CreatedAt: now})
+	result.RecordItem(&llm.FunctionCall{ID: "fnc_1", CallID: "call_1", Name: "lookup", CreatedAt: now.Add(time.Millisecond)})
+	result.RecordItem(&llm.FunctionCallOutput{ID: "out_1", CallID: "call_1", Name: "lookup", Output: "done", CreatedAt: now.Add(2 * time.Millisecond)})
+
+	err := result.Expect.ContainsEventInRange(1, 3, "function_call", RunEventCriteria{Name: "lookup"}).HasError()
+
+	if err != nil {
+		t.Fatalf("ContainsEventInRange returned error = %v, want nil for matching range event", err)
+	}
+}
+
+func TestRunAssertContainsEventInRangeExcludesEventsOutsideRange(t *testing.T) {
+	result := NewRunResult(llm.NewChatContext())
+	now := time.Now()
+	result.RecordItem(&llm.ChatMessage{ID: "msg_1", Role: llm.ChatRoleAssistant, CreatedAt: now})
+	result.RecordItem(&llm.FunctionCall{ID: "fnc_1", CallID: "call_1", Name: "lookup", CreatedAt: now.Add(time.Millisecond)})
+
+	err := result.Expect.ContainsEventInRange(0, 1, "function_call", RunEventCriteria{Name: "lookup"}).HasError()
+
+	if err == nil {
+		t.Fatal("ContainsEventInRange error = nil, want missing event when match is outside range")
+	}
+}
+
+func TestRunAssertContainsEventInRangeSupportsNegativeBounds(t *testing.T) {
+	result := NewRunResult(llm.NewChatContext())
+	now := time.Now()
+	result.RecordItem(&llm.ChatMessage{ID: "msg_1", Role: llm.ChatRoleAssistant, CreatedAt: now})
+	result.RecordItem(&llm.FunctionCall{ID: "fnc_1", CallID: "call_1", Name: "lookup", CreatedAt: now.Add(time.Millisecond)})
+
+	err := result.Expect.ContainsEventInRange(-1, 2, "function_call", RunEventCriteria{Name: "lookup"}).HasError()
+
+	if err != nil {
+		t.Fatalf("ContainsEventInRange returned error = %v, want nil for negative start range", err)
+	}
+}
+
+func TestRunAssertContainsEventInRangeReportsInvalidRange(t *testing.T) {
+	result := NewRunResult(llm.NewChatContext())
+	result.RecordItem(&llm.ChatMessage{ID: "msg_1", Role: llm.ChatRoleAssistant, CreatedAt: time.Now()})
+
+	err := result.Expect.ContainsEventInRange(1, 0, "message").HasError()
+
+	if err == nil {
+		t.Fatal("ContainsEventInRange error = nil, want invalid range error")
+	}
+}
+
 func TestRunAssertNextMessageAndFunctionCallValidateDetails(t *testing.T) {
 	result := NewRunResult(llm.NewChatContext())
 	now := time.Now()

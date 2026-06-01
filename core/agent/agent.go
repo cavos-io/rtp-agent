@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"sync"
 
 	"github.com/cavos-io/conversation-worker/core/llm"
 	"github.com/cavos-io/conversation-worker/core/stt"
@@ -77,8 +78,55 @@ func (a *Agent) UpdateInstructions(ctx context.Context, instructions string) err
 }
 
 func (a *Agent) UpdateTools(ctx context.Context, tools []llm.Tool) error {
-	a.Tools = tools
+	a.Tools = dedupeAgentToolsByID(tools)
+	if a.ChatCtx != nil {
+		a.ChatCtx = a.ChatCtx.Copy(llm.ChatContextCopyOptions{
+			Tools: agentToolsAsInterfaces(a.Tools),
+		})
+	}
 	return nil
+}
+
+func dedupeAgentToolsByID(tools []llm.Tool) []llm.Tool {
+	deduped := make([]llm.Tool, 0, len(tools))
+	indexByID := make(map[string]int, len(tools))
+	for _, tool := range tools {
+		if idx, ok := indexByID[tool.ID()]; ok {
+			deduped[idx] = tool
+			continue
+		}
+		indexByID[tool.ID()] = len(deduped)
+		deduped = append(deduped, tool)
+	}
+	return deduped
+}
+
+func (a *Agent) UpdateChatContext(ctx context.Context, chatCtx *llm.ChatContext, excludeInvalidFunctionCalls ...bool) error {
+	excludeInvalid := true
+	if len(excludeInvalidFunctionCalls) > 0 {
+		excludeInvalid = excludeInvalidFunctionCalls[0]
+	}
+	if chatCtx == nil {
+		a.ChatCtx = llm.NewChatContext()
+		return nil
+	}
+	if !excludeInvalid {
+		a.ChatCtx = chatCtx.Copy()
+		return nil
+	}
+
+	a.ChatCtx = chatCtx.Copy(llm.ChatContextCopyOptions{
+		Tools: agentToolsAsInterfaces(a.Tools),
+	})
+	return nil
+}
+
+func agentToolsAsInterfaces(tools []llm.Tool) []interface{} {
+	converted := make([]interface{}, 0, len(tools))
+	for _, tool := range tools {
+		converted = append(converted, tool)
+	}
+	return converted
 }
 
 func (a *Agent) Start(session *AgentSession, agentIntf AgentInterface) *AgentActivity {
@@ -94,8 +142,9 @@ func (a *Agent) OnUserTurnCompleted(ctx context.Context, chatCtx *llm.ChatContex
 // AgentTask represents a sub-agent execution that returns a result
 type AgentTask[T any] struct {
 	Agent
-	Result chan T
-	Err    chan error
+	Result       chan T
+	Err          chan error
+	completeOnce sync.Once
 }
 
 type TaskWaiter interface {
@@ -112,11 +161,15 @@ func NewAgentTask[T any](instructions string) *AgentTask[T] {
 }
 
 func (t *AgentTask[T]) Complete(result T) {
-	t.Result <- result
+	t.completeOnce.Do(func() {
+		t.Result <- result
+	})
 }
 
 func (t *AgentTask[T]) Fail(err error) {
-	t.Err <- err
+	t.completeOnce.Do(func() {
+		t.Err <- err
+	})
 }
 
 func (t *AgentTask[T]) WaitAny(ctx context.Context) (any, error) {

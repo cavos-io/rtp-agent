@@ -154,6 +154,15 @@ func TestChatContextMergePreservesCreatedAtOrderAndSkipsDuplicates(t *testing.T)
 	}
 }
 
+func TestChatContextMergeReturnsReceiver(t *testing.T) {
+	base := NewChatContext()
+	other := NewChatContext()
+
+	if got := base.Merge(other); got != base {
+		t.Fatalf("Merge() = %p, want receiver %p", got, base)
+	}
+}
+
 func TestChatContextAddMessageInsertsByCreatedAt(t *testing.T) {
 	ctx := NewChatContext()
 	ctx.Items = []ChatItem{

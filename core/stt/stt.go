@@ -86,6 +86,9 @@ type RecognizeStream interface {
 	Next() (*SpeechEvent, error)
 }
 
+// SpeechStream is a deprecated alias kept for LiveKit Agents API compatibility.
+type SpeechStream = RecognizeStream
+
 type StreamTiming interface {
 	StartTimeOffset() float64
 	SetStartTimeOffset(offset float64)

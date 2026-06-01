@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"path/filepath"
 	"runtime"
 	"sort"
 	"strings"
@@ -92,6 +93,7 @@ type WorkerInfo struct {
 type LocalJobOptions struct {
 	FakeJob  bool
 	RoomInfo *livekit.Room
+	Token    string
 }
 
 type WorkerOptions struct {
@@ -99,9 +101,11 @@ type WorkerOptions struct {
 	AgentNameIsEnv bool
 	WorkerType     WorkerType
 	MaxRetry       int
+	MaxRetrySet    bool
 	Version        string
 	Host           string
 	Port           int
+	PortSet        bool
 	WSURL          string
 	LoadFunc       func(*AgentServer) float64
 	// WSRL is kept for backward compatibility. Prefer WSURL for new code.
@@ -110,9 +114,11 @@ type WorkerOptions struct {
 	APISecret                        string
 	WorkerToken                      string
 	HTTPProxy                        string
+	HTTPProxySet                     bool
 	DevMode                          bool
 	LogLevel                         string
 	PrometheusPort                   int
+	PrometheusPortSet                bool
 	PrometheusMultiprocDir           string
 	LoadThreshold                    float64
 	LoadThresholdSet                 bool
@@ -458,8 +464,9 @@ func mergeWorkerOptions(current WorkerOptions, next WorkerOptions) WorkerOptions
 	if next.WorkerType != "" {
 		current.WorkerType = next.WorkerType
 	}
-	if next.MaxRetry != 0 {
+	if next.MaxRetrySet || next.MaxRetry != 0 {
 		current.MaxRetry = next.MaxRetry
+		current.MaxRetrySet = true
 	}
 	if next.Version != "" {
 		current.Version = next.Version
@@ -467,8 +474,9 @@ func mergeWorkerOptions(current WorkerOptions, next WorkerOptions) WorkerOptions
 	if next.Host != "" {
 		current.Host = next.Host
 	}
-	if next.Port != 0 {
+	if next.PortSet || next.Port != 0 {
 		current.Port = next.Port
+		current.PortSet = true
 	}
 	if next.WSURL != "" {
 		current.WSURL = next.WSURL
@@ -489,11 +497,13 @@ func mergeWorkerOptions(current WorkerOptions, next WorkerOptions) WorkerOptions
 	if next.WorkerToken != "" {
 		current.WorkerToken = next.WorkerToken
 	}
-	if next.HTTPProxy != "" {
+	if next.HTTPProxySet || next.HTTPProxy != "" {
 		current.HTTPProxy = next.HTTPProxy
+		current.HTTPProxySet = true
 	}
-	if next.PrometheusPort != 0 {
+	if next.PrometheusPortSet || next.PrometheusPort != 0 {
 		current.PrometheusPort = next.PrometheusPort
+		current.PrometheusPortSet = true
 	}
 	if next.PrometheusMultiprocDir != "" {
 		current.PrometheusMultiprocDir = next.PrometheusMultiprocDir
@@ -551,7 +561,7 @@ func resolveWorkerOptions(opts WorkerOptions) WorkerOptions {
 	if opts.Version == "" {
 		opts.Version = defaultWorkerVersion
 	}
-	if opts.MaxRetry == 0 {
+	if opts.MaxRetry == 0 && !opts.MaxRetrySet {
 		opts.MaxRetry = defaultMaxRetry
 	}
 	if opts.JobMemoryWarnMB == 0 && !opts.JobMemoryWarnMBSet {
@@ -580,7 +590,7 @@ func resolveWorkerOptions(opts WorkerOptions) WorkerOptions {
 		}
 	}
 	opts.LogLevel = strings.ToUpper(opts.LogLevel)
-	if opts.Port == 0 && !opts.DevMode {
+	if opts.Port == 0 && !opts.DevMode && !opts.PortSet {
 		opts.Port = defaultProdHTTPPort
 	}
 	if opts.LoadThreshold == 0 && !opts.LoadThresholdSet {
@@ -618,7 +628,7 @@ func resolveWorkerOptions(opts WorkerOptions) WorkerOptions {
 		opts.AgentName = os.Getenv("LIVEKIT_AGENT_NAME")
 		opts.AgentNameIsEnv = opts.AgentName != ""
 	}
-	if opts.HTTPProxy == "" {
+	if opts.HTTPProxy == "" && !opts.HTTPProxySet {
 		opts.HTTPProxy = os.Getenv("HTTPS_PROXY")
 		if opts.HTTPProxy == "" {
 			opts.HTTPProxy = os.Getenv("HTTP_PROXY")
@@ -700,7 +710,7 @@ func (s *AgentServer) startWorkerHTTPServer() (*http.Server, error) {
 }
 
 func (s *AgentServer) startPrometheusServer() (*telemetry.HttpServer, error) {
-	if s.Options.PrometheusPort == 0 {
+	if s.Options.PrometheusPort == 0 && !s.Options.PrometheusPortSet {
 		return nil, nil
 	}
 	server := telemetry.NewHttpServer(s.Options.Host, s.Options.PrometheusPort)
@@ -718,12 +728,30 @@ func (s *AgentServer) configurePrometheusMultiprocDir() error {
 		if dir := os.Getenv("PROMETHEUS_MULTIPROC_DIR"); dir != "" {
 			s.Options.PrometheusMultiprocDir = dir
 		}
+	}
+	if s.Options.PrometheusMultiprocDir == "" {
 		return nil
 	}
 	if err := os.MkdirAll(s.Options.PrometheusMultiprocDir, 0o755); err != nil {
 		return err
 	}
-	return os.Setenv("PROMETHEUS_MULTIPROC_DIR", s.Options.PrometheusMultiprocDir)
+	if err := os.Setenv("PROMETHEUS_MULTIPROC_DIR", s.Options.PrometheusMultiprocDir); err != nil {
+		return err
+	}
+	entries, err := os.ReadDir(s.Options.PrometheusMultiprocDir)
+	if err != nil {
+		return err
+	}
+	for _, entry := range entries {
+		if !entry.Type().IsRegular() {
+			continue
+		}
+		path := filepath.Join(s.Options.PrometheusMultiprocDir, entry.Name())
+		if err := os.Remove(path); err != nil {
+			logger.Logger.Warnw("failed to remove Prometheus multiprocess file", err, "path", path)
+		}
+	}
+	return nil
 }
 
 func liveKitDevModeEnabled(value string) bool {
@@ -1537,7 +1565,14 @@ func (s *AgentServer) ExecuteLocalJobWithOptions(ctx context.Context, roomName s
 	if !options.FakeJob && options.RoomInfo == nil {
 		return fmt.Errorf("room info is required for non-fake local jobs")
 	}
-	if !options.FakeJob && participantIdentity == "" {
+	if options.Token != "" {
+		verifier, err := auth.ParseAPIToken(options.Token)
+		if err != nil {
+			return fmt.Errorf("invalid local job token: %w", err)
+		}
+		participantIdentity = verifier.Identity()
+	}
+	if !options.FakeJob && participantIdentity == "" && options.Token == "" {
 		return fmt.Errorf("agent identity is required for non-fake local jobs")
 	}
 	jobCtx := newLocalJobContextWithOptions(roomName, participantIdentity, s.Options, options)
@@ -1612,6 +1647,12 @@ func newLocalJobContext(roomName string, participantIdentity string, opts Worker
 
 func newLocalJobContextWithOptions(roomName string, participantIdentity string, opts WorkerOptions, options LocalJobOptions) *JobContext {
 	opts = resolveWorkerOptions(opts)
+	token := options.Token
+	if token != "" {
+		if verifier, err := auth.ParseAPIToken(token); err == nil {
+			participantIdentity = verifier.Identity()
+		}
+	}
 	jobIDPrefix := "job-"
 	if options.FakeJob {
 		jobIDPrefix = "mock-job-"
@@ -1634,8 +1675,10 @@ func newLocalJobContextWithOptions(roomName string, participantIdentity string, 
 	jobCtx := NewJobContext(job, opts.WSRL, opts.APIKey, opts.APISecret)
 	jobCtx.AcceptArguments = JobAcceptArguments{Identity: participantIdentity}
 	jobCtx.fakeJob = options.FakeJob
-	if opts.APIKey != "" && opts.APISecret != "" {
-		token, err := auth.NewAccessToken(opts.APIKey, opts.APISecret).
+	if token != "" {
+		jobCtx.token = token
+	} else if opts.APIKey != "" && opts.APISecret != "" {
+		generatedToken, err := auth.NewAccessToken(opts.APIKey, opts.APISecret).
 			SetIdentity(participantIdentity).
 			SetKind(livekit.ParticipantInfo_AGENT).
 			SetVideoGrant(&auth.VideoGrant{
@@ -1646,7 +1689,7 @@ func newLocalJobContextWithOptions(roomName string, participantIdentity string, 
 			SetValidFor(time.Hour).
 			ToJWT()
 		if err == nil {
-			jobCtx.token = token
+			jobCtx.token = generatedToken
 		}
 	}
 	return jobCtx

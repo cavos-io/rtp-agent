@@ -3,16 +3,34 @@ package cli
 import (
 	"bytes"
 	"context"
+	"errors"
 	"io"
 	"os"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/cavos-io/conversation-worker/core/agent"
 	"github.com/cavos-io/conversation-worker/interface/worker"
 	"github.com/cavos-io/conversation-worker/interface/worker/ipc"
 	"github.com/livekit/protocol/livekit"
 )
+
+type fakePlugin struct {
+	title       string
+	version     string
+	packageName string
+	err         error
+	calls       int
+}
+
+func (p *fakePlugin) Title() string   { return p.title }
+func (p *fakePlugin) Version() string { return p.version }
+func (p *fakePlugin) Package() string { return p.packageName }
+func (p *fakePlugin) DownloadFiles() error {
+	p.calls++
+	return p.err
+}
 
 type fakeLiveKitRoomService struct {
 	listNames    []string
@@ -360,6 +378,28 @@ func TestConsoleInputIsEmptyTreatsWhitespaceAsEmpty(t *testing.T) {
 	}
 	if consoleInputIsEmpty(" hello ") {
 		t.Fatal("consoleInputIsEmpty(\" hello \") = true, want false")
+	}
+}
+
+func TestRunDownloadFilesForPluginsReturnsPluginError(t *testing.T) {
+	errBoom := errors.New("download failed")
+	plugins := []agent.Plugin{
+		&fakePlugin{title: "ok", packageName: "plugin-ok"},
+		&fakePlugin{title: "bad", packageName: "plugin-bad", err: errBoom},
+	}
+
+	err := runDownloadFilesForPlugins(plugins)
+	if err == nil {
+		t.Fatal("runDownloadFilesForPlugins() error = nil, want plugin error")
+	}
+	if !errors.Is(err, errBoom) {
+		t.Fatalf("runDownloadFilesForPlugins() error = %v, want wrapped plugin error", err)
+	}
+	if plugins[0].(*fakePlugin).calls != 1 {
+		t.Fatalf("first plugin calls = %d, want 1", plugins[0].(*fakePlugin).calls)
+	}
+	if plugins[1].(*fakePlugin).calls != 1 {
+		t.Fatalf("second plugin calls = %d, want 1", plugins[1].(*fakePlugin).calls)
 	}
 }
 
