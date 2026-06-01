@@ -188,6 +188,38 @@ func TestMultiSpeakerAdapterWrapperRejectsMismatchedSampleRates(t *testing.T) {
 	}
 }
 
+func TestMultiSpeakerAdapterWrapperPropagatesTimingAnchors(t *testing.T) {
+	inner := &fakeMultiSpeakerStream{nextErr: io.EOF}
+	wrapper := &multiSpeakerAdapterWrapper{
+		inner:    inner,
+		ctx:      context.Background(),
+		detector: newPrimarySpeakerDetector(false, false, "{text}", "{text}", DefaultPrimarySpeakerDetectionOptions()),
+		eventCh:  make(chan *SpeechEvent, 1),
+		errCh:    make(chan error, 1),
+		inputCh:  make(chan multiSpeakerInput, 1),
+	}
+
+	timing, ok := any(wrapper).(StreamTiming)
+	if !ok {
+		t.Fatal("wrapper does not implement StreamTiming")
+	}
+	timing.SetStartTimeOffset(4.5)
+	timing.SetStartTime(88.0)
+
+	if timing.StartTimeOffset() != 4.5 {
+		t.Fatalf("StartTimeOffset = %v, want 4.5", timing.StartTimeOffset())
+	}
+	if timing.StartTime() != 88.0 {
+		t.Fatalf("StartTime = %v, want 88.0", timing.StartTime())
+	}
+	if inner.startTimeOffset != 4.5 {
+		t.Fatalf("inner StartTimeOffset = %v, want 4.5", inner.startTimeOffset)
+	}
+	if inner.startTime != 88.0 {
+		t.Fatalf("inner StartTime = %v, want 88.0", inner.startTime)
+	}
+}
+
 func TestMultiSpeakerAdapterWrapperEndInputFlushesAndRejectsMoreInput(t *testing.T) {
 	inner := &fakeMultiSpeakerStream{nextErr: io.EOF}
 	wrapper := &multiSpeakerAdapterWrapper{
@@ -218,10 +250,12 @@ func TestMultiSpeakerAdapterWrapperEndInputFlushesAndRejectsMoreInput(t *testing
 }
 
 type fakeMultiSpeakerStream struct {
-	nextErr   error
-	calls     []string
-	waitCalls int
-	callCh    chan struct{}
+	nextErr         error
+	calls           []string
+	waitCalls       int
+	callCh          chan struct{}
+	startTimeOffset float64
+	startTime       float64
 }
 
 func (f *fakeMultiSpeakerStream) PushFrame(frame *model.AudioFrame) error {
@@ -249,4 +283,20 @@ func (f *fakeMultiSpeakerStream) Next() (*SpeechEvent, error) {
 		<-f.callCh
 	}
 	return nil, f.nextErr
+}
+
+func (f *fakeMultiSpeakerStream) StartTimeOffset() float64 {
+	return f.startTimeOffset
+}
+
+func (f *fakeMultiSpeakerStream) SetStartTimeOffset(offset float64) {
+	f.startTimeOffset = offset
+}
+
+func (f *fakeMultiSpeakerStream) StartTime() float64 {
+	return f.startTime
+}
+
+func (f *fakeMultiSpeakerStream) SetStartTime(startTime float64) {
+	f.startTime = startTime
 }

@@ -41,6 +41,30 @@ func TestStreamAdapterCapabilitiesMatchReference(t *testing.T) {
 	}
 }
 
+func TestStreamAdapterExposesTimingAnchors(t *testing.T) {
+	stream, err := NewStreamAdapter(&fakeStreamAdapterSTT{}, &fakeStreamAdapterVAD{
+		stream: &fakeStreamAdapterVADStream{done: make(chan struct{})},
+	}).Stream(context.Background(), "")
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+	defer stream.Close()
+
+	timing, ok := stream.(StreamTiming)
+	if !ok {
+		t.Fatal("stream does not implement StreamTiming")
+	}
+	timing.SetStartTimeOffset(1.5)
+	timing.SetStartTime(24.0)
+
+	if timing.StartTimeOffset() != 1.5 {
+		t.Fatalf("StartTimeOffset = %v, want 1.5", timing.StartTimeOffset())
+	}
+	if timing.StartTime() != 24.0 {
+		t.Fatalf("StartTime = %v, want 24.0", timing.StartTime())
+	}
+}
+
 func TestStreamAdapterReturnsEOFWhenVADCompletes(t *testing.T) {
 	stream, err := NewStreamAdapter(&fakeStreamAdapterSTT{}, &fakeStreamAdapterVAD{
 		stream: &fakeStreamAdapterVADStream{nextErr: io.EOF},

@@ -53,6 +53,8 @@ type streamAdapterWrapper struct {
 	frameBuffer []*model.AudioFrame
 	vadStream   vad.VADStream
 	rateGuard   SampleRateGuard
+	startOffset float64
+	startTime   float64
 }
 
 type streamAdapterInput struct {
@@ -187,6 +189,30 @@ func (w *streamAdapterWrapper) sendErr(err error) {
 	case w.errCh <- err:
 	default:
 	}
+}
+
+func (w *streamAdapterWrapper) StartTimeOffset() float64 {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.startOffset
+}
+
+func (w *streamAdapterWrapper) SetStartTimeOffset(offset float64) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.startOffset = offset
+}
+
+func (w *streamAdapterWrapper) StartTime() float64 {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.startTime
+}
+
+func (w *streamAdapterWrapper) SetStartTime(startTime float64) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.startTime = startTime
 }
 
 func (w *streamAdapterWrapper) PushFrame(frame *model.AudioFrame) error {

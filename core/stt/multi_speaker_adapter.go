@@ -110,23 +110,60 @@ func (a *MultiSpeakerAdapter) Stream(ctx context.Context, language string) (Reco
 }
 
 type multiSpeakerAdapterWrapper struct {
-	adapter    *MultiSpeakerAdapter
-	inner      RecognizeStream
-	ctx        context.Context
-	cancel     context.CancelFunc
-	detector   *primarySpeakerDetector
-	eventCh    chan *SpeechEvent
-	errCh      chan error
-	inputCh    chan multiSpeakerInput
-	mu         sync.Mutex
-	closed     bool
-	rateGuard  SampleRateGuard
-	inputEnded bool
+	adapter     *MultiSpeakerAdapter
+	inner       RecognizeStream
+	ctx         context.Context
+	cancel      context.CancelFunc
+	detector    *primarySpeakerDetector
+	eventCh     chan *SpeechEvent
+	errCh       chan error
+	inputCh     chan multiSpeakerInput
+	mu          sync.Mutex
+	closed      bool
+	rateGuard   SampleRateGuard
+	inputEnded  bool
+	startOffset float64
+	startTime   float64
 }
 
 type multiSpeakerInput struct {
 	frame *model.AudioFrame
 	flush bool
+}
+
+func (w *multiSpeakerAdapterWrapper) StartTimeOffset() float64 {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.startOffset
+}
+
+func (w *multiSpeakerAdapterWrapper) SetStartTimeOffset(offset float64) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.startOffset = offset
+	w.applyTiming()
+}
+
+func (w *multiSpeakerAdapterWrapper) StartTime() float64 {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.startTime
+}
+
+func (w *multiSpeakerAdapterWrapper) SetStartTime(startTime float64) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.startTime = startTime
+	w.applyTiming()
+}
+
+func (w *multiSpeakerAdapterWrapper) applyTiming() {
+	timing, ok := w.inner.(StreamTiming)
+	if !ok {
+		return
+	}
+	timing.SetStartTimeOffset(w.startOffset)
+	timing.SetStartTime(w.startTime)
 }
 
 func (w *multiSpeakerAdapterWrapper) PushFrame(frame *model.AudioFrame) error {
