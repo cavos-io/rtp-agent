@@ -248,7 +248,7 @@ func (e *ProcessJobExecutor) LaunchRunningJob(ctx context.Context, info RunningJ
 		if err != nil {
 			logger.Logger.Errorw("Job process failed", err, "job_id", info.Job.GetId(), "exec_id", e.id)
 			e.status = JobStatusFailed
-		} else {
+		} else if e.status == JobStatusRunning {
 			e.status = JobStatusSuccess
 		}
 	}()

@@ -349,6 +349,40 @@ func TestProcessJobExecutorPingDoesNotHoldLockWhileKilling(t *testing.T) {
 	}
 }
 
+func TestProcessJobExecutorPingFailureIsNotOverwrittenByCleanExit(t *testing.T) {
+	oldPingInterval := processPingInterval
+	oldProcessSignal := processSignal
+	oldKill := processKill
+	oldCommandContext := processCommandContext
+	processPingInterval = time.Millisecond
+	processSignal = func(*os.Process, os.Signal) error {
+		return errors.New("process missing")
+	}
+	processKill = func(*os.Process) error {
+		return nil
+	}
+	processCommandContext = func(ctx context.Context, name string, args ...string) *exec.Cmd {
+		return exec.CommandContext(ctx, "sleep", "0.05")
+	}
+	defer func() {
+		processPingInterval = oldPingInterval
+		processSignal = oldProcessSignal
+		processKill = oldKill
+		processCommandContext = oldCommandContext
+	}()
+
+	executor := NewProcessJobExecutor("exec-ping-clean-exit")
+	if err := executor.LaunchJob(context.Background(), &livekit.Job{Id: "job-ping-clean-exit"}); err != nil {
+		t.Fatalf("LaunchJob() error = %v", err)
+	}
+	if err := executor.Close(context.Background()); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+	if got := executor.Status(); got != JobStatusFailed {
+		t.Fatalf("Status() after ping failure and clean exit = %q, want %q", got, JobStatusFailed)
+	}
+}
+
 func waitForProcessExecutorCommand(t *testing.T, executor *ProcessJobExecutor) {
 	t.Helper()
 
