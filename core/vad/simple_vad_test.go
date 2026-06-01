@@ -567,6 +567,38 @@ func TestSimpleVADUsesDeactivationThresholdWhileSpeaking(t *testing.T) {
 	assertCombinedFrames(t, end.Frames, speech, dipAboveDeactivation, silence)
 }
 
+func TestSimpleVADProbabilitySmoothingDelaysSpeechEnd(t *testing.T) {
+	stream, err := NewSimpleVADWithOptions(SimpleVADOptions{
+		Threshold:                 0.05,
+		MinSilenceDuration:        0.01,
+		ProbabilitySmoothingAlpha: 0.35,
+	}).Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	defer stream.Close()
+
+	speech := audioFrame(16000, 160, 6000)
+	firstSilence := audioFrame(16000, 160, 0)
+	secondSilence := audioFrame(16000, 160, 0)
+	for _, frame := range []*model.AudioFrame{speech, firstSilence} {
+		if err := stream.PushFrame(frame); err != nil {
+			t.Fatalf("PushFrame() error = %v", err)
+		}
+	}
+
+	assertEventType(t, stream, VADEventInferenceDone)
+	assertEventType(t, stream, VADEventStartOfSpeech)
+	assertEventType(t, stream, VADEventInferenceDone)
+	assertNoQueuedVADEvent(t, stream)
+
+	if err := stream.PushFrame(secondSilence); err != nil {
+		t.Fatalf("PushFrame() second silence error = %v", err)
+	}
+	assertEventType(t, stream, VADEventInferenceDone)
+	assertEventType(t, stream, VADEventEndOfSpeech)
+}
+
 func TestSimpleVADEmitsInferenceBeforeSpeechTransition(t *testing.T) {
 	stream, err := NewSimpleVAD(0.05).Stream(context.Background())
 	if err != nil {
@@ -1278,6 +1310,19 @@ func assertNoVADEvent(t *testing.T, stream VADStream) {
 	case ev := <-done:
 		t.Fatalf("unexpected VAD event: %#v", ev)
 	case <-time.After(50 * time.Millisecond):
+	}
+}
+
+func assertNoQueuedVADEvent(t *testing.T, stream VADStream) {
+	t.Helper()
+	simpleStream, ok := stream.(*simpleVADStream)
+	if !ok {
+		t.Fatalf("stream type = %T, want *simpleVADStream", stream)
+	}
+	simpleStream.eventMu.Lock()
+	defer simpleStream.eventMu.Unlock()
+	if len(simpleStream.eventQueue) != 0 {
+		t.Fatalf("unexpected queued VAD event: %#v", simpleStream.eventQueue[0])
 	}
 }
 

@@ -189,6 +189,7 @@ func simpleOptionsFromSilero(options VADOptions) vad.SimpleVADOptions {
 		UpdateInterval:            options.UpdateInterval,
 		SampleRate:                uint32(options.SampleRate),
 		WindowDuration:            options.UpdateInterval,
+		ProbabilitySmoothingAlpha: 0.35,
 	}
 }
 
@@ -203,6 +204,7 @@ func simpleUpdateOptionsFromSilero(options VADOptions) []vad.SimpleVADOption {
 		vad.WithUpdateInterval(options.UpdateInterval),
 		vad.WithSampleRate(uint32(options.SampleRate)),
 		vad.WithWindowDuration(options.UpdateInterval),
+		vad.WithProbabilitySmoothingAlpha(0.35),
 	}
 }
 

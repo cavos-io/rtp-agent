@@ -31,6 +31,7 @@ func TestSileroFallbackHonorsMinimumDurations(t *testing.T) {
 		testAudioFrame(16000, 512, 0),
 		testAudioFrame(16000, 512, 0),
 		testAudioFrame(16000, 512, 0),
+		testAudioFrame(16000, 512, 0),
 	} {
 		if err := stream.PushFrame(frame); err != nil {
 			t.Fatalf("PushFrame() error = %v", err)
@@ -41,7 +42,7 @@ func TestSileroFallbackHonorsMinimumDurations(t *testing.T) {
 		assertSileroVADEventType(t, stream, vad.VADEventInferenceDone)
 	}
 	assertSileroVADEventType(t, stream, vad.VADEventStartOfSpeech)
-	for range 3 {
+	for range 4 {
 		assertSileroVADEventType(t, stream, vad.VADEventInferenceDone)
 	}
 	assertSileroVADEventType(t, stream, vad.VADEventEndOfSpeech)

@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	lkmath "github.com/cavos-io/conversation-worker/library/math"
 	"github.com/cavos-io/conversation-worker/library/telemetry"
 	"github.com/cavos-io/conversation-worker/model"
 )
@@ -29,6 +30,7 @@ type SimpleVADOptions struct {
 	UpdateInterval            float64
 	SampleRate                uint32
 	WindowDuration            float64
+	ProbabilitySmoothingAlpha float64
 
 	maxBufferedSpeechDurationSet bool
 }
@@ -87,6 +89,12 @@ func WithSampleRate(sampleRate uint32) SimpleVADOption {
 func WithWindowDuration(duration float64) SimpleVADOption {
 	return func(o *SimpleVADOptions) {
 		o.WindowDuration = duration
+	}
+}
+
+func WithProbabilitySmoothingAlpha(alpha float64) SimpleVADOption {
+	return func(o *SimpleVADOptions) {
+		o.ProbabilitySmoothingAlpha = alpha
 	}
 }
 
@@ -214,6 +222,7 @@ type simpleVADStream struct {
 	windowFrames               []*model.AudioFrame
 	windowBufferedSamples      uint32
 	windowSampleRemainder      float64
+	probabilityFilter          *lkmath.ExpFilter
 	lastActivity               time.Time
 	metricsInferenceDuration   float64
 	metricsInferenceCount      int
@@ -227,7 +236,11 @@ type simpleVADStream struct {
 func (s *simpleVADStream) updateOptions(options SimpleVADOptions) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.options = mergeSimpleVADOptions(s.options, options)
+	merged := mergeSimpleVADOptions(s.options, options)
+	if merged.ProbabilitySmoothingAlpha != s.options.ProbabilitySmoothingAlpha {
+		s.probabilityFilter = nil
+	}
+	s.options = merged
 	s.trimSpeechFrames()
 	s.trimPrefixFrames()
 }
@@ -235,6 +248,9 @@ func (s *simpleVADStream) updateOptions(options SimpleVADOptions) {
 func (s *simpleVADStream) setOptions(options SimpleVADOptions) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if options.ProbabilitySmoothingAlpha != s.options.ProbabilitySmoothingAlpha {
+		s.probabilityFilter = nil
+	}
 	s.options = options
 	s.trimSpeechFrames()
 	s.trimPrefixFrames()
@@ -287,7 +303,7 @@ func (s *simpleVADStream) PushFrame(frame *model.AudioFrame) error {
 }
 
 func (s *simpleVADStream) processFrame(frame *model.AudioFrame, duration float64) {
-	probability := frameRMS(frame)
+	probability := s.smoothProbability(frameRMS(frame))
 	if s.lastActivity.IsZero() {
 		s.lastActivity = time.Now()
 	}
@@ -541,6 +557,18 @@ func (s *simpleVADStream) resetState() {
 	s.samplesIndex = 0
 	s.sampleIndexRemainder = 0
 	s.timestamp = 0
+	s.probabilityFilter = nil
+}
+
+func (s *simpleVADStream) smoothProbability(probability float64) float64 {
+	if s.options.ProbabilitySmoothingAlpha <= 0 {
+		s.probabilityFilter = nil
+		return probability
+	}
+	if s.probabilityFilter == nil {
+		s.probabilityFilter = lkmath.NewExpFilter(s.options.ProbabilitySmoothingAlpha, -1)
+	}
+	return s.probabilityFilter.Apply(1, probability)
 }
 
 func (s *simpleVADStream) windowSamples() uint32 {
@@ -909,6 +937,9 @@ func mergeSimpleVADOptions(current, updates SimpleVADOptions) SimpleVADOptions {
 	}
 	if updates.WindowDuration != 0 {
 		current.WindowDuration = updates.WindowDuration
+	}
+	if updates.ProbabilitySmoothingAlpha != 0 {
+		current.ProbabilitySmoothingAlpha = updates.ProbabilitySmoothingAlpha
 	}
 	return current
 }
