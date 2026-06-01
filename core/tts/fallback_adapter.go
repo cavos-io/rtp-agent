@@ -31,11 +31,12 @@ type fallbackTTSStatus struct {
 
 type FallbackAdapterOptions struct {
 	MaxRetryPerTTS int
+	DisableRetries bool
 	SampleRate     int
 }
 
 func NewFallbackAdapter(ttss []TTS) *FallbackAdapter {
-	return NewFallbackAdapterWithOptions(ttss, FallbackAdapterOptions{MaxRetryPerTTS: 2})
+	return NewFallbackAdapterWithOptions(ttss, FallbackAdapterOptions{})
 }
 
 func NewFallbackAdapterWithOptions(ttss []TTS, options FallbackAdapterOptions) *FallbackAdapter {
@@ -46,6 +47,12 @@ func NewFallbackAdapterWithOptions(ttss []TTS, options FallbackAdapterOptions) *
 	numChannels := ttss[0].NumChannels()
 	capabilities := TTSCapabilities{AlignedTranscript: true}
 	sampleRate := options.SampleRate
+	maxRetryPerTTS := options.MaxRetryPerTTS
+	if options.DisableRetries {
+		maxRetryPerTTS = 0
+	} else if maxRetryPerTTS == 0 {
+		maxRetryPerTTS = 2
+	}
 	for _, tts := range ttss {
 		if tts.NumChannels() != numChannels {
 			panic("all TTS must have the same number of channels")
@@ -68,7 +75,7 @@ func NewFallbackAdapterWithOptions(ttss []TTS, options FallbackAdapterOptions) *
 		capabilities:   capabilities,
 		sampleRate:     sampleRate,
 		numChannels:    numChannels,
-		maxRetryPerTTS: options.MaxRetryPerTTS,
+		maxRetryPerTTS: maxRetryPerTTS,
 		status:         status,
 	}
 }

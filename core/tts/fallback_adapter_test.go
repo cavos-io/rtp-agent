@@ -39,6 +39,51 @@ func TestFallbackAdapterUsesConfiguredSampleRate(t *testing.T) {
 	}
 }
 
+func TestFallbackAdapterKeepsDefaultRetriesWithConfiguredSampleRate(t *testing.T) {
+	streamErr := errors.New("primary synthesize failed")
+	primary := &metadataTTS{
+		label:       "primary",
+		sampleRate:  16000,
+		numChannels: 1,
+		chunkedStreams: []ChunkedStream{
+			&metadataChunkedStream{err: streamErr},
+			&metadataChunkedStream{err: streamErr},
+			&metadataChunkedStream{events: []*SynthesizedAudio{{
+				Frame: fallbackTestFrame(16000, 1, 2),
+			}}},
+		},
+	}
+	fallback := &metadataTTS{
+		label:       "fallback",
+		sampleRate:  24000,
+		numChannels: 1,
+		chunked: &metadataChunkedStream{events: []*SynthesizedAudio{{
+			Frame: fallbackTestFrame(24000, 1, 2),
+		}}},
+	}
+	adapter := NewFallbackAdapterWithOptions([]TTS{primary, fallback}, FallbackAdapterOptions{SampleRate: 24000})
+
+	stream, err := adapter.Synthesize(context.Background(), "hello")
+	if err != nil {
+		t.Fatalf("Synthesize returned error: %v", err)
+	}
+	defer stream.Close()
+
+	audio, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next returned error: %v", err)
+	}
+	if audio.Frame.SampleRate != 24000 {
+		t.Fatalf("SampleRate = %d, want configured sample rate", audio.Frame.SampleRate)
+	}
+	if primary.synthesizeCalls != 3 {
+		t.Fatalf("primary synthesize calls = %d, want 3 with default retries", primary.synthesizeCalls)
+	}
+	if fallback.synthesizeCalls != 0 {
+		t.Fatalf("fallback synthesize calls = %d, want 0", fallback.synthesizeCalls)
+	}
+}
+
 func TestFallbackAdapterRejectsMixedChannelCounts(t *testing.T) {
 	defer func() {
 		recovered := recover()
@@ -204,7 +249,7 @@ func TestFallbackChunkedStreamDoesNotFallbackWhenProviderProducesNoAudio(t *test
 		},
 	}
 	adapter := NewFallbackAdapterWithOptions([]TTS{primary, fallback}, FallbackAdapterOptions{
-		MaxRetryPerTTS: 0,
+		DisableRetries: true,
 	})
 
 	stream, err := adapter.Synthesize(context.Background(), "hello")
@@ -712,7 +757,7 @@ func TestFallbackChunkedStreamSkipsUnavailablePrimaryOnLaterRequests(t *testing.
 		},
 	}
 	adapter := NewFallbackAdapterWithOptions([]TTS{primary, fallback}, FallbackAdapterOptions{
-		MaxRetryPerTTS: 0,
+		DisableRetries: true,
 	})
 
 	first, err := adapter.Synthesize(context.Background(), "hello")
@@ -777,7 +822,7 @@ func TestFallbackChunkedStreamRestoresPrimaryAfterRecovery(t *testing.T) {
 		}}},
 	}
 	adapter := NewFallbackAdapterWithOptions([]TTS{primary, fallback}, FallbackAdapterOptions{
-		MaxRetryPerTTS: 0,
+		DisableRetries: true,
 	})
 
 	first, err := adapter.Synthesize(context.Background(), "hello")
@@ -980,7 +1025,7 @@ func TestFallbackSynthesizeStreamSkipsUnavailablePrimaryOnLaterRequests(t *testi
 		},
 	}
 	adapter := NewFallbackAdapterWithOptions([]TTS{primary, fallback}, FallbackAdapterOptions{
-		MaxRetryPerTTS: 0,
+		DisableRetries: true,
 	})
 
 	first, err := adapter.Stream(context.Background())
@@ -1054,7 +1099,7 @@ func TestFallbackSynthesizeStreamRestoresPrimaryAfterRecovery(t *testing.T) {
 		}}},
 	}
 	adapter := NewFallbackAdapterWithOptions([]TTS{primary, fallback}, FallbackAdapterOptions{
-		MaxRetryPerTTS: 0,
+		DisableRetries: true,
 	})
 
 	first, err := adapter.Stream(context.Background())
