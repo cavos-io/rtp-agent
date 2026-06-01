@@ -20,6 +20,7 @@ type VADOptions struct {
 	SampleRate            int
 
 	deactivationThresholdSet bool
+	activationThresholdSet   bool
 	maxBufferedSpeechSet     bool
 }
 
@@ -74,6 +75,7 @@ func WithMaxBufferedSpeech(d float64) VADOption {
 func WithActivationThreshold(t float64) VADOption {
 	return func(o *VADOptions) {
 		o.ActivationThreshold = t
+		o.activationThresholdSet = true
 	}
 }
 
@@ -91,17 +93,41 @@ func WithSampleRate(r int) VADOption {
 }
 
 func NewSileroVAD(opts ...VADOption) *SileroVAD {
-	options := DefaultVADOptions()
-	for _, opt := range opts {
-		opt(&options)
-	}
+	options := buildVADOptions(opts...)
 	if !options.deactivationThresholdSet {
 		options.DeactivationThreshold = max(options.ActivationThreshold-0.15, 0.01)
 	}
+	return newSileroVADWithResolvedOptions(options)
+}
 
+func NewSileroVADWithOptions(opts ...VADOption) (*SileroVAD, error) {
+	options := buildVADOptions(opts...)
+	if !options.deactivationThresholdSet {
+		options.DeactivationThreshold = max(options.ActivationThreshold-0.15, 0.01)
+	}
+	if err := validateVADOptions(options); err != nil {
+		return nil, err
+	}
+	return newSileroVADWithResolvedOptions(options), nil
+}
+
+func buildVADOptions(opts ...VADOption) VADOptions {
+	options := DefaultVADOptions()
+	for _, opt := range opts {
+		if opt != nil {
+			opt(&options)
+		}
+	}
+	return options
+}
+
+func newSileroVADWithResolvedOptions(options VADOptions) *SileroVAD {
 	// Fallback to simple VAD for now to provide out-of-the-box working plugin
 	// without requiring CGO/ONNX dependencies in the base install.
 	inner := vad.NewSimpleVADWithOptions(simpleOptionsFromSilero(options))
+	if options.activationThresholdSet {
+		inner.UpdateOptionsWith(vad.WithThreshold(options.ActivationThreshold / 10.0))
+	}
 	if options.maxBufferedSpeechSet {
 		inner.UpdateOptionsWith(vad.WithMaxBufferedSpeechDuration(options.MaxBufferedSpeech))
 	}
@@ -189,6 +215,7 @@ func simpleOptionsFromSilero(options VADOptions) vad.SimpleVADOptions {
 		UpdateInterval:            options.UpdateInterval,
 		SampleRate:                uint32(options.SampleRate),
 		WindowDuration:            options.UpdateInterval,
+		ProbabilitySmoothingAlpha: 0.35,
 	}
 }
 
@@ -203,6 +230,7 @@ func simpleUpdateOptionsFromSilero(options VADOptions) []vad.SimpleVADOption {
 		vad.WithUpdateInterval(options.UpdateInterval),
 		vad.WithSampleRate(uint32(options.SampleRate)),
 		vad.WithWindowDuration(options.UpdateInterval),
+		vad.WithProbabilitySmoothingAlpha(0.35),
 	}
 }
 
@@ -222,6 +250,7 @@ func mergeVADOptions(current, updates VADOptions) VADOptions {
 	}
 	if updates.ActivationThreshold != 0 {
 		current.ActivationThreshold = updates.ActivationThreshold
+		current.activationThresholdSet = true
 	}
 	if updates.DeactivationThreshold != 0 {
 		current.DeactivationThreshold = updates.DeactivationThreshold

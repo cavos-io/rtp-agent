@@ -107,6 +107,165 @@ func TestAgentUpdateToolsDeduplicatesByToolID(t *testing.T) {
 	}
 }
 
+func TestAgentUpdateInstructionsWhileRunningRecordsConfigUpdate(t *testing.T) {
+	agent := NewAgent("old")
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	agent.activity = NewAgentActivity(agent, session)
+
+	if err := agent.UpdateInstructions(context.Background(), "new"); err != nil {
+		t.Fatalf("UpdateInstructions error = %v, want nil", err)
+	}
+
+	if agent.Instructions != "new" {
+		t.Fatalf("agent instructions = %q, want new", agent.Instructions)
+	}
+	assertLastInstructionUpdate(t, agent.ChatCtx, "new")
+	assertLastInstructionUpdate(t, session.ChatCtx, "new")
+}
+
+func TestAgentUpdateInstructionsWhileRunningAddsInstructionMessage(t *testing.T) {
+	agent := NewAgent("old")
+	agent.ChatCtx.Append(&llm.ChatMessage{ID: "user", Role: llm.ChatRoleUser, Content: []llm.ChatContent{{Text: "hello"}}})
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	agent.activity = NewAgentActivity(agent, session)
+
+	if err := agent.UpdateInstructions(context.Background(), "new"); err != nil {
+		t.Fatalf("UpdateInstructions error = %v, want nil", err)
+	}
+
+	if len(agent.ChatCtx.Items) < 2 {
+		t.Fatalf("chat items = %d, want at least instruction and existing user message", len(agent.ChatCtx.Items))
+	}
+	msg, ok := agent.ChatCtx.Items[0].(*llm.ChatMessage)
+	if !ok {
+		t.Fatalf("first item = %T, want *llm.ChatMessage", agent.ChatCtx.Items[0])
+	}
+	if msg.ID != agentInstructionsMessageID || msg.Role != llm.ChatRoleSystem || msg.TextContent() != "new" {
+		t.Fatalf("instruction message = %#v, want system instructions with new text", msg)
+	}
+}
+
+func TestAgentUpdateInstructionsWhileRunningReplacesInstructionMessage(t *testing.T) {
+	agent := NewAgent("old")
+	createdAt := time.Unix(10, 0)
+	agent.ChatCtx.Append(&llm.ChatMessage{
+		ID:        agentInstructionsMessageID,
+		Role:      llm.ChatRoleSystem,
+		Content:   []llm.ChatContent{{Text: "old"}},
+		CreatedAt: createdAt,
+	})
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	agent.activity = NewAgentActivity(agent, session)
+
+	if err := agent.UpdateInstructions(context.Background(), "new"); err != nil {
+		t.Fatalf("UpdateInstructions error = %v, want nil", err)
+	}
+
+	instructionCount := 0
+	var msg *llm.ChatMessage
+	for _, item := range agent.ChatCtx.Items {
+		if item.GetID() != agentInstructionsMessageID {
+			continue
+		}
+		instructionCount++
+		var ok bool
+		msg, ok = item.(*llm.ChatMessage)
+		if !ok {
+			t.Fatalf("instruction item = %T, want *llm.ChatMessage", item)
+		}
+	}
+	if instructionCount != 1 {
+		t.Fatalf("instruction message count = %d, want 1", instructionCount)
+	}
+	if msg.TextContent() != "new" || !msg.CreatedAt.Equal(createdAt) {
+		t.Fatalf("instruction message text/createdAt = %q/%v, want new/%v", msg.TextContent(), msg.CreatedAt, createdAt)
+	}
+}
+
+func TestAgentUpdateToolsWhileRunningRecordsToolDiffAndFiltersWithSessionTools(t *testing.T) {
+	agent := NewAgent("help")
+	agent.Tools = []llm.Tool{&agentTestTool{id: "lookup", name: "lookup"}}
+	agent.ChatCtx.Append(&llm.FunctionCall{ID: "lookup-call", Name: "lookup"})
+	agent.ChatCtx.Append(&llm.FunctionCall{ID: "calc-call", Name: "calc"})
+	agent.ChatCtx.Append(&llm.FunctionCall{ID: "calendar-call", Name: "calendar"})
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	session.Tools = []llm.Tool{&agentTestTool{id: "calendar", name: "calendar"}}
+	agent.activity = NewAgentActivity(agent, session)
+
+	if err := agent.UpdateTools(context.Background(), []llm.Tool{&agentTestTool{id: "calc", name: "calc"}}); err != nil {
+		t.Fatalf("UpdateTools error = %v, want nil", err)
+	}
+
+	if len(agent.Tools) != 1 || agent.Tools[0].Name() != "calc" {
+		t.Fatalf("agent tools = %#v, want calc only", agent.Tools)
+	}
+	gotIDs := chatItemIDs(agent.ChatCtx.Items)
+	wantIDs := []string{agentInstructionsMessageID, "calc-call", "calendar-call", ""}
+	if !stringSlicesEqual(gotIDs, wantIDs) {
+		t.Fatalf("agent ChatCtx item IDs = %q, want %q", gotIDs, wantIDs)
+	}
+	config := assertLastToolUpdate(t, agent.ChatCtx)
+	if !stringSlicesEqual(config.ToolsAdded, []string{"calc"}) {
+		t.Fatalf("ToolsAdded = %q, want [calc]", config.ToolsAdded)
+	}
+	if !stringSlicesEqual(config.ToolsRemoved, []string{"lookup"}) {
+		t.Fatalf("ToolsRemoved = %q, want [lookup]", config.ToolsRemoved)
+	}
+	assertLastToolUpdate(t, session.ChatCtx)
+}
+
+func TestAgentUpdateChatContextWhileRunningAddsInstructionMessage(t *testing.T) {
+	agent := NewAgent("be helpful")
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	agent.activity = NewAgentActivity(agent, session)
+	source := llm.NewChatContext()
+	source.Append(&llm.ChatMessage{ID: "user", Role: llm.ChatRoleUser, Content: []llm.ChatContent{{Text: "hello"}}})
+
+	if err := agent.UpdateChatContext(context.Background(), source); err != nil {
+		t.Fatalf("UpdateChatContext error = %v, want nil", err)
+	}
+
+	if got := chatItemIDs(agent.ChatCtx.Items); !stringSlicesEqual(got, []string{agentInstructionsMessageID, "user"}) {
+		t.Fatalf("agent ChatCtx item IDs = %q, want instructions then user", got)
+	}
+	msg, ok := agent.ChatCtx.Items[0].(*llm.ChatMessage)
+	if !ok {
+		t.Fatalf("first item = %T, want *llm.ChatMessage", agent.ChatCtx.Items[0])
+	}
+	if msg.Role != llm.ChatRoleSystem || msg.TextContent() != "be helpful" {
+		t.Fatalf("instruction message role/text = %s/%q, want system/be helpful", msg.Role, msg.TextContent())
+	}
+}
+
+func TestAgentUpdateChatContextWhileRunningReplacesInstructionMessage(t *testing.T) {
+	agent := NewAgent("new instructions")
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	agent.activity = NewAgentActivity(agent, session)
+	createdAt := time.Unix(20, 0)
+	source := llm.NewChatContext()
+	source.Append(&llm.ChatMessage{
+		ID:        agentInstructionsMessageID,
+		Role:      llm.ChatRoleSystem,
+		Content:   []llm.ChatContent{{Text: "old instructions"}},
+		CreatedAt: createdAt,
+	})
+
+	if err := agent.UpdateChatContext(context.Background(), source); err != nil {
+		t.Fatalf("UpdateChatContext error = %v, want nil", err)
+	}
+
+	if len(agent.ChatCtx.Items) != 1 {
+		t.Fatalf("chat item count = %d, want 1", len(agent.ChatCtx.Items))
+	}
+	msg, ok := agent.ChatCtx.Items[0].(*llm.ChatMessage)
+	if !ok {
+		t.Fatalf("first item = %T, want *llm.ChatMessage", agent.ChatCtx.Items[0])
+	}
+	if msg.TextContent() != "new instructions" || !msg.CreatedAt.Equal(createdAt) {
+		t.Fatalf("instruction message text/createdAt = %q/%v, want new instructions/%v", msg.TextContent(), msg.CreatedAt, createdAt)
+	}
+}
+
 func TestAgentTaskCompleteIsOneTime(t *testing.T) {
 	task := NewAgentTask[string]("collect data")
 	task.Complete("first")
@@ -235,4 +394,30 @@ func stringSlicesEqual(left []string, right []string) bool {
 		}
 	}
 	return true
+}
+
+func assertLastInstructionUpdate(t *testing.T, chatCtx *llm.ChatContext, instructions string) {
+	t.Helper()
+	if len(chatCtx.Items) == 0 {
+		t.Fatal("chat context has no items")
+	}
+	config, ok := chatCtx.Items[len(chatCtx.Items)-1].(*llm.AgentConfigUpdate)
+	if !ok {
+		t.Fatalf("last item = %T, want *llm.AgentConfigUpdate", chatCtx.Items[len(chatCtx.Items)-1])
+	}
+	if config.Instructions == nil || *config.Instructions != instructions {
+		t.Fatalf("config instructions = %v, want %q", config.Instructions, instructions)
+	}
+}
+
+func assertLastToolUpdate(t *testing.T, chatCtx *llm.ChatContext) *llm.AgentConfigUpdate {
+	t.Helper()
+	if len(chatCtx.Items) == 0 {
+		t.Fatal("chat context has no items")
+	}
+	config, ok := chatCtx.Items[len(chatCtx.Items)-1].(*llm.AgentConfigUpdate)
+	if !ok {
+		t.Fatalf("last item = %T, want *llm.AgentConfigUpdate", chatCtx.Items[len(chatCtx.Items)-1])
+	}
+	return config
 }

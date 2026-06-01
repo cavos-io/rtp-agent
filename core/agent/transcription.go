@@ -21,20 +21,21 @@ func NewTranscriptionFilter() *TranscriptionFilter {
 
 // TranscriptSynchronizer drip-feeds text to match the playout speed of audio.
 type TranscriptSynchronizer struct {
-	ctx      context.Context
-	cancel   context.CancelFunc
-	
-	textCh   chan string
-	audioCh  chan *model.AudioFrame
-	eventCh  chan string
-	
+	ctx    context.Context
+	cancel context.CancelFunc
+
+	textCh  chan string
+	audioCh chan *model.AudioFrame
+	eventCh chan string
+
 	mu             sync.Mutex
 	textBuffer     string
 	playedAudioDur time.Duration
 	yieldedTextDur time.Duration
 	speakingRate   float64 // syllables per second
-	
-	closed bool
+
+	closed      bool
+	interrupted bool
 }
 
 // NewTranscriptSynchronizer initializes the synchronizer. Default speaking rate is usually ~3.83 syllables/sec.
@@ -58,7 +59,7 @@ func NewTranscriptSynchronizer(speakingRate float64) *TranscriptSynchronizer {
 
 func (s *TranscriptSynchronizer) PushText(text string) {
 	s.mu.Lock()
-	if s.closed {
+	if s.closed || s.interrupted {
 		s.mu.Unlock()
 		return
 	}
@@ -68,7 +69,7 @@ func (s *TranscriptSynchronizer) PushText(text string) {
 
 func (s *TranscriptSynchronizer) PushAudio(frame *model.AudioFrame) {
 	s.mu.Lock()
-	if s.closed {
+	if s.closed || s.interrupted {
 		s.mu.Unlock()
 		return
 	}
@@ -84,7 +85,8 @@ func (s *TranscriptSynchronizer) EventCh() <-chan string {
 func (s *TranscriptSynchronizer) Interrupt() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	
+
+	s.interrupted = true
 	if s.textBuffer != "" {
 		s.eventCh <- s.textBuffer
 		s.textBuffer = ""
@@ -109,7 +111,7 @@ func countSyllables(text string) int {
 	// A fast heuristic syllable counter using vowel groups
 	text = strings.ToLower(text)
 	text = regexp.MustCompile(`[^a-z]`).ReplaceAllString(text, "")
-	
+
 	if len(text) == 0 {
 		return 0
 	}
@@ -120,10 +122,10 @@ func countSyllables(text string) int {
 	text = strings.TrimSuffix(text, "es")
 	text = strings.TrimSuffix(text, "ed")
 	text = strings.TrimSuffix(text, "e")
-	
+
 	vowels := regexp.MustCompile(`[aeiouy]+`)
 	matches := vowels.FindAllStringIndex(text, -1)
-	
+
 	count := len(matches)
 	if count == 0 {
 		return 1
@@ -133,7 +135,7 @@ func countSyllables(text string) int {
 
 func (s *TranscriptSynchronizer) run() {
 	defer close(s.eventCh)
-	
+
 	ticker := time.NewTicker(50 * time.Millisecond)
 	defer ticker.Stop()
 
@@ -142,12 +144,16 @@ func (s *TranscriptSynchronizer) run() {
 		case <-s.ctx.Done():
 			s.Interrupt()
 			return
-		
+
 		case text, ok := <-s.textCh:
 			if !ok {
 				return
 			}
 			s.mu.Lock()
+			if s.interrupted {
+				s.mu.Unlock()
+				continue
+			}
 			s.textBuffer += text
 			s.mu.Unlock()
 
@@ -158,13 +164,15 @@ func (s *TranscriptSynchronizer) run() {
 			if frame != nil && frame.SampleRate > 0 {
 				dur := time.Duration(float64(frame.SamplesPerChannel)/float64(frame.SampleRate)*1000.0) * time.Millisecond
 				s.mu.Lock()
-				s.playedAudioDur += dur
+				if !s.interrupted {
+					s.playedAudioDur += dur
+				}
 				s.mu.Unlock()
 			}
-			
+
 		case <-ticker.C:
 			s.mu.Lock()
-			if s.textBuffer == "" {
+			if s.interrupted || s.textBuffer == "" {
 				s.mu.Unlock()
 				continue
 			}
@@ -178,12 +186,12 @@ func (s *TranscriptSynchronizer) run() {
 
 			// Calculate how many syllables we should emit for this time debt
 			syllablesToEmit := int(math.Max(1.0, timeDebt.Seconds()*s.speakingRate))
-			
+
 			words := strings.Fields(s.textBuffer)
 			var toEmit string
 			var remaining string
 			var emittedSyllables int
-			
+
 			for i, word := range words {
 				syl := countSyllables(word)
 				if emittedSyllables+syl > syllablesToEmit && toEmit != "" {
@@ -214,7 +222,7 @@ func (s *TranscriptSynchronizer) run() {
 				s.yieldedTextDur += estDur
 				s.textBuffer = remaining
 				s.mu.Unlock()
-				
+
 				s.eventCh <- toEmit
 			} else {
 				s.mu.Unlock()

@@ -31,6 +31,7 @@ func TestSileroFallbackHonorsMinimumDurations(t *testing.T) {
 		testAudioFrame(16000, 512, 0),
 		testAudioFrame(16000, 512, 0),
 		testAudioFrame(16000, 512, 0),
+		testAudioFrame(16000, 512, 0),
 	} {
 		if err := stream.PushFrame(frame); err != nil {
 			t.Fatalf("PushFrame() error = %v", err)
@@ -41,7 +42,7 @@ func TestSileroFallbackHonorsMinimumDurations(t *testing.T) {
 		assertSileroVADEventType(t, stream, vad.VADEventInferenceDone)
 	}
 	assertSileroVADEventType(t, stream, vad.VADEventStartOfSpeech)
-	for range 3 {
+	for range 4 {
 		assertSileroVADEventType(t, stream, vad.VADEventInferenceDone)
 	}
 	assertSileroVADEventType(t, stream, vad.VADEventEndOfSpeech)
@@ -109,6 +110,24 @@ func TestSileroVADDerivesInitialDeactivationThreshold(t *testing.T) {
 	}
 }
 
+func TestSileroVADHonorsExplicitZeroActivationThreshold(t *testing.T) {
+	detector := NewSileroVAD(
+		WithActivationThreshold(0),
+		WithMinSpeechDuration(0.032),
+	)
+	stream, err := detector.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	defer stream.Close()
+
+	if err := stream.PushFrame(testAudioFrame(16000, 512, 0)); err != nil {
+		t.Fatalf("PushFrame() error = %v", err)
+	}
+	assertSileroVADEventType(t, stream, vad.VADEventInferenceDone)
+	assertSileroVADEventType(t, stream, vad.VADEventStartOfSpeech)
+}
+
 func TestSileroVADStreamRejectsUnsupportedSampleRate(t *testing.T) {
 	detector := NewSileroVAD(WithSampleRate(44100))
 
@@ -126,6 +145,20 @@ func TestSileroVADStreamRejectsInvalidDeactivationThreshold(t *testing.T) {
 		t.Fatal("Stream() error = nil, want invalid deactivation threshold error")
 	} else if !strings.Contains(err.Error(), "deactivation_threshold must be greater than 0") {
 		t.Fatalf("Stream() error = %q, want deactivation threshold message", err.Error())
+	}
+}
+
+func TestNewSileroVADWithOptionsRejectsInvalidOptions(t *testing.T) {
+	if _, err := NewSileroVADWithOptions(WithSampleRate(44100)); err == nil {
+		t.Fatal("NewSileroVADWithOptions() error = nil, want unsupported sample rate error")
+	} else if !strings.Contains(err.Error(), "8KHz and 16KHz") {
+		t.Fatalf("NewSileroVADWithOptions() error = %q, want supported sample rate message", err.Error())
+	}
+
+	if _, err := NewSileroVADWithOptions(WithDeactivationThreshold(-0.1)); err == nil {
+		t.Fatal("NewSileroVADWithOptions() error = nil, want invalid deactivation threshold error")
+	} else if !strings.Contains(err.Error(), "deactivation_threshold must be greater than 0") {
+		t.Fatalf("NewSileroVADWithOptions() error = %q, want deactivation threshold message", err.Error())
 	}
 }
 

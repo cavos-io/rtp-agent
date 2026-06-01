@@ -11,10 +11,11 @@ import (
 )
 
 type LLMGenerationData struct {
-	TextCh        chan string
-	FunctionCh    chan *llm.FunctionToolCall
-	GeneratedText string
-	TTFT          time.Duration
+	TextCh             chan string
+	FunctionCh         chan *llm.FunctionToolCall
+	GeneratedText      string
+	GeneratedFunctions []llm.FunctionToolCall
+	TTFT               time.Duration
 }
 
 func PerformLLMInference(ctx context.Context, l llm.LLM, chatCtx *llm.ChatContext, tools []llm.Tool) (*LLMGenerationData, error) {
@@ -50,7 +51,11 @@ func PerformLLMInference(ctx context.Context, l llm.LLM, chatCtx *llm.ChatContex
 					data.TextCh <- chunk.Delta.Content
 				}
 				for _, fc := range chunk.Delta.ToolCalls {
+					if fc.Type != "" && fc.Type != "function" {
+						continue
+					}
 					f := fc
+					data.GeneratedFunctions = append(data.GeneratedFunctions, f)
 					data.FunctionCh <- &f
 				}
 			}

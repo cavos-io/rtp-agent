@@ -73,11 +73,17 @@ func (a *Agent) OnEnter() {}
 func (a *Agent) OnExit()  {}
 
 func (a *Agent) UpdateInstructions(ctx context.Context, instructions string) error {
+	if a.activity != nil {
+		return a.activity.UpdateInstructions(ctx, instructions)
+	}
 	a.Instructions = instructions
 	return nil
 }
 
 func (a *Agent) UpdateTools(ctx context.Context, tools []llm.Tool) error {
+	if a.activity != nil {
+		return a.activity.UpdateTools(ctx, tools)
+	}
 	a.Tools = dedupeAgentToolsByID(tools)
 	if a.ChatCtx != nil {
 		a.ChatCtx = a.ChatCtx.Copy(llm.ChatContextCopyOptions{
@@ -102,6 +108,9 @@ func dedupeAgentToolsByID(tools []llm.Tool) []llm.Tool {
 }
 
 func (a *Agent) UpdateChatContext(ctx context.Context, chatCtx *llm.ChatContext, excludeInvalidFunctionCalls ...bool) error {
+	if a.activity != nil {
+		return a.activity.UpdateChatContext(ctx, chatCtx, excludeInvalidFunctionCalls...)
+	}
 	excludeInvalid := true
 	if len(excludeInvalidFunctionCalls) > 0 {
 		excludeInvalid = excludeInvalidFunctionCalls[0]
