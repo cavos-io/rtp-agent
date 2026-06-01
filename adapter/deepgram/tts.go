@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"os"
 	"strings"
 	"sync"
 
@@ -43,7 +44,21 @@ func WithDeepgramTTSMipOptOut(mipOptOut bool) DeepgramTTSOption {
 	}
 }
 
+func WithDeepgramTTSAudioFormat(encoding string, sampleRate int) DeepgramTTSOption {
+	return func(t *DeepgramTTS) {
+		if encoding != "" {
+			t.encoding = encoding
+		}
+		if sampleRate > 0 {
+			t.sampleRate = sampleRate
+		}
+	}
+}
+
 func NewDeepgramTTS(apiKey string, model string, opts ...DeepgramTTSOption) *DeepgramTTS {
+	if apiKey == "" {
+		apiKey = os.Getenv("DEEPGRAM_API_KEY")
+	}
 	if model == "" {
 		model = "aura-2-andromeda-en"
 	}
