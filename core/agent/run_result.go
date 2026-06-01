@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/cavos-io/conversation-worker/core/evals"
 	"github.com/cavos-io/conversation-worker/core/llm"
@@ -12,13 +13,91 @@ import (
 type RunResult struct {
 	ChatCtx *llm.ChatContext
 	Expect  *RunAssert
+	events  []RunEvent
 }
 
 func NewRunResult(chatCtx *llm.ChatContext) *RunResult {
 	return &RunResult{
 		ChatCtx: chatCtx,
 		Expect:  &RunAssert{ChatCtx: chatCtx},
+		events:  make([]RunEvent, 0),
 	}
+}
+
+type RunEvent interface {
+	GetType() string
+	GetCreatedAt() time.Time
+}
+
+type ChatMessageEvent struct {
+	Item *llm.ChatMessage
+}
+
+func (e *ChatMessageEvent) GetType() string         { return "message" }
+func (e *ChatMessageEvent) GetCreatedAt() time.Time { return e.Item.GetCreatedAt() }
+
+type FunctionCallEvent struct {
+	Item *llm.FunctionCall
+}
+
+func (e *FunctionCallEvent) GetType() string         { return "function_call" }
+func (e *FunctionCallEvent) GetCreatedAt() time.Time { return e.Item.GetCreatedAt() }
+
+type FunctionCallOutputEvent struct {
+	Item *llm.FunctionCallOutput
+}
+
+func (e *FunctionCallOutputEvent) GetType() string         { return "function_call_output" }
+func (e *FunctionCallOutputEvent) GetCreatedAt() time.Time { return e.Item.GetCreatedAt() }
+
+type AgentHandoffEvent struct {
+	Item     *llm.AgentHandoff
+	OldAgent *Agent
+	NewAgent *Agent
+}
+
+func (e *AgentHandoffEvent) GetType() string         { return "agent_handoff" }
+func (e *AgentHandoffEvent) GetCreatedAt() time.Time { return e.Item.GetCreatedAt() }
+
+func (r *RunResult) Events() []RunEvent {
+	events := make([]RunEvent, len(r.events))
+	copy(events, r.events)
+	return events
+}
+
+func (r *RunResult) RecordItem(item llm.ChatItem) {
+	var event RunEvent
+	switch item := item.(type) {
+	case *llm.ChatMessage:
+		event = &ChatMessageEvent{Item: item}
+	case *llm.FunctionCall:
+		event = &FunctionCallEvent{Item: item}
+	case *llm.FunctionCallOutput:
+		event = &FunctionCallOutputEvent{Item: item}
+	default:
+		return
+	}
+	r.insertEvent(event)
+}
+
+func (r *RunResult) RecordAgentHandoff(item *llm.AgentHandoff, oldAgent *Agent, newAgent *Agent) {
+	r.insertEvent(&AgentHandoffEvent{Item: item, OldAgent: oldAgent, NewAgent: newAgent})
+}
+
+func (r *RunResult) insertEvent(event RunEvent) {
+	idx := r.findEventInsertionIndex(event.GetCreatedAt())
+	r.events = append(r.events, nil)
+	copy(r.events[idx+1:], r.events[idx:])
+	r.events[idx] = event
+}
+
+func (r *RunResult) findEventInsertionIndex(createdAt time.Time) int {
+	for i := len(r.events) - 1; i >= 0; i-- {
+		if !r.events[i].GetCreatedAt().After(createdAt) {
+			return i + 1
+		}
+	}
+	return 0
 }
 
 type RunAssert struct {
