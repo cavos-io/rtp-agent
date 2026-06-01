@@ -603,7 +603,11 @@ func (s *fallbackLLMStream) Next() (*ChatChunk, error) {
 			}
 			return chunk, nil
 		}
-		if errors.Is(err, io.EOF) || (s.outputSent && !s.adapter.retryOnChunkSent) {
+		if errors.Is(err, io.EOF) {
+			return nil, err
+		}
+		if s.outputSent && !s.adapter.retryOnChunkSent {
+			s.adapter.setAvailable(s.activeIndex, false)
 			return nil, err
 		}
 
