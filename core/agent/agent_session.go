@@ -510,9 +510,8 @@ func (s *AgentSession) closeEvents() chan CloseEvent {
 
 func (s *AgentSession) Start(ctx context.Context) error {
 	s.mu.Lock()
-	defer s.mu.Unlock()
-
 	if s.started {
+		s.mu.Unlock()
 		return nil
 	}
 
@@ -523,20 +522,30 @@ func (s *AgentSession) Start(ctx context.Context) error {
 	if s.Assistant == nil {
 		s.Assistant = NewPipelineAgent(s.VAD, s.STT, s.LLM, s.TTS, s.ChatCtx)
 	}
+	assistant := s.Assistant
+	agent := s.Agent
+	hasMetricsCollector := s.MetricsCollector != nil
+	s.mu.Unlock()
 
-	if err := s.Assistant.Start(ctx, s); err != nil {
+	s.UpdateAgentState(AgentStateInitializing)
+
+	if err := assistant.Start(ctx, s); err != nil {
 		return err
 	}
 
-	s.activity = NewAgentActivity(s.Agent, s)
-	s.activity.Start()
+	activity := NewAgentActivity(agent, s)
+	s.mu.Lock()
+	s.activity = activity
+	s.started = true
+	s.mu.Unlock()
+
+	activity.Start()
 
 	// Trigger periodic usage metrics reporting
-	if s.MetricsCollector != nil {
+	if hasMetricsCollector {
 		go s.reportUsageLoop(ctx)
 	}
 
-	s.started = true
 	s.UpdateAgentState(AgentStateListening)
 
 	return nil
