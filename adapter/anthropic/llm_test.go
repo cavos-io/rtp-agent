@@ -416,6 +416,32 @@ func TestAnthropicStreamMapsCacheUsageMetadata(t *testing.T) {
 	}
 }
 
+func TestAnthropicStreamReturnsAPIErrorOnErrorEvent(t *testing.T) {
+	stream := &anthropicStream{
+		reader: bufio.NewReader(strings.NewReader(`data: {"type":"error","error":{"type":"overloaded_error","message":"server overloaded"}}` + "\n\n")),
+	}
+
+	_, err := stream.Next()
+
+	var apiErr *llm.APIError
+	if !errors.As(err, &apiErr) {
+		t.Fatalf("Next error = %T %v, want APIError", err, err)
+	}
+	if apiErr.Message != "server overloaded" {
+		t.Fatalf("Message = %q, want nested Anthropic stream error message", apiErr.Message)
+	}
+	body, ok := apiErr.Body.(map[string]any)
+	if !ok {
+		t.Fatalf("Body = %T %#v, want parsed JSON map", apiErr.Body, apiErr.Body)
+	}
+	if errorBody, ok := body["error"].(map[string]any); !ok || errorBody["type"] != "overloaded_error" {
+		t.Fatalf("Body[error] = %#v, want overloaded_error", body["error"])
+	}
+	if !apiErr.Retryable {
+		t.Fatal("Retryable = false, want stream API errors retryable")
+	}
+}
+
 func TestAnthropicChatUsesStrictToolInputSchema(t *testing.T) {
 	transport := &captureRoundTripper{}
 	originalTransport := http.DefaultTransport

@@ -7,7 +7,6 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"io"
 	"net/http"
 	"net/url"
@@ -630,7 +629,8 @@ func (s *anthropicStream) Next() (*llm.ChatChunk, error) {
 			return nil, io.EOF
 
 		case "error":
-			return nil, fmt.Errorf("anthropic stream error: %s", data)
+			message, body := parseAnthropicErrorBody([]byte(data))
+			return nil, llm.NewAPIError(message, body, true)
 		}
 	}
 }
