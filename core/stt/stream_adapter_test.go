@@ -248,6 +248,24 @@ type fakeStreamAdapterVAD struct {
 	startedCh chan struct{}
 }
 
+func (f *fakeStreamAdapterVAD) Label() string {
+	return "fake.VAD"
+}
+
+func (f *fakeStreamAdapterVAD) Model() string {
+	return "fake"
+}
+
+func (f *fakeStreamAdapterVAD) Provider() string {
+	return "fake"
+}
+
+func (f *fakeStreamAdapterVAD) Capabilities() vad.VADCapabilities {
+	return vad.VADCapabilities{UpdateInterval: 1}
+}
+
+func (f *fakeStreamAdapterVAD) OnMetricsCollected(vad.VADMetricsHandler) {}
+
 func (f *fakeStreamAdapterVAD) Stream(context.Context) (vad.VADStream, error) {
 	if f.err != nil {
 		return nil, f.err

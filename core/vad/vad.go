@@ -3,6 +3,7 @@ package vad
 import (
 	"context"
 
+	"github.com/cavos-io/conversation-worker/library/telemetry"
 	"github.com/cavos-io/conversation-worker/model"
 )
 
@@ -28,7 +29,18 @@ type VADEvent struct {
 	RawAccumulatedSpeech  float64
 }
 
+type VADCapabilities struct {
+	UpdateInterval float64
+}
+
+type VADMetricsHandler func(*telemetry.VADMetrics)
+
 type VAD interface {
+	Label() string
+	Model() string
+	Provider() string
+	Capabilities() VADCapabilities
+	OnMetricsCollected(handler VADMetricsHandler)
 	Stream(ctx context.Context) (VADStream, error)
 }
 
