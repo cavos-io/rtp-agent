@@ -1,6 +1,7 @@
 
 # Local runtime/config
 .env
+.tmp/
 models/
 refs/
 
