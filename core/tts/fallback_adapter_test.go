@@ -129,6 +129,40 @@ func TestFallbackChunkedStreamSetsStableRequestID(t *testing.T) {
 	}
 }
 
+func TestFallbackChunkedStreamClearsProviderSegmentID(t *testing.T) {
+	adapter := NewFallbackAdapter([]TTS{
+		&metadataTTS{
+			label:       "primary",
+			sampleRate:  24000,
+			numChannels: 1,
+			chunked: &metadataChunkedStream{
+				events: []*SynthesizedAudio{
+					{SegmentID: "provider-a", Frame: &model.AudioFrame{Data: []byte{1}}},
+					{SegmentID: "provider-b", Frame: &model.AudioFrame{Data: []byte{2}}},
+				},
+			},
+		},
+	})
+
+	stream, err := adapter.Synthesize(context.Background(), "hello")
+	if err != nil {
+		t.Fatalf("Synthesize returned error: %v", err)
+	}
+	defer stream.Close()
+
+	first, err := stream.Next()
+	if err != nil {
+		t.Fatalf("first Next returned error: %v", err)
+	}
+	second, err := stream.Next()
+	if err != nil {
+		t.Fatalf("second Next returned error: %v", err)
+	}
+	if first.SegmentID != "" || second.SegmentID != "" {
+		t.Fatalf("SegmentID forwarded provider ids: first=%q second=%q", first.SegmentID, second.SegmentID)
+	}
+}
+
 func TestFallbackChunkedStreamErrorsWhenNonEmptyTextProducesNoAudio(t *testing.T) {
 	adapter := NewFallbackAdapter([]TTS{
 		&metadataTTS{

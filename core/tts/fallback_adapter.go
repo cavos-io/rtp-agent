@@ -439,6 +439,7 @@ func (s *fallbackChunkedStream) monitorStream() {
 		}
 		ev = cloneSynthesizedAudio(ev)
 		ev.RequestID = s.requestID
+		ev.SegmentID = ""
 
 		audioSent = true
 		if ev.IsFinal {
