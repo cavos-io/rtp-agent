@@ -2281,7 +2281,7 @@ func TestValidateRunPreconditionsNormalizesCloudLoadOptions(t *testing.T) {
 	}
 }
 
-func TestValidateRunPreconditionsRejectsFiniteLoadThresholdAboveOne(t *testing.T) {
+func TestValidateRunPreconditionsAllowsFiniteLoadThresholdAboveOne(t *testing.T) {
 	server := NewAgentServer(WorkerOptions{
 		WSRL:          "wss://livekit.example",
 		APIKey:        "key",
@@ -2293,11 +2293,14 @@ func TestValidateRunPreconditionsRejectsFiniteLoadThresholdAboveOne(t *testing.T
 	}
 
 	err := server.validateRunPreconditions()
-	if err == nil {
-		t.Fatal("validateRunPreconditions() error = nil, want invalid load threshold error")
+	if err != nil {
+		t.Fatalf("validateRunPreconditions() error = %v, want nil for reference warning-only behavior", err)
 	}
-	if !strings.Contains(err.Error(), "load_threshold in prod env must be less than 1") {
-		t.Fatalf("validateRunPreconditions() error = %q, want load threshold message", err.Error())
+	if server.Options.LoadThreshold != 1.2 {
+		t.Fatalf("LoadThreshold = %v, want explicit threshold preserved after validation", server.Options.LoadThreshold)
+	}
+	if server.Options.DevMode {
+		t.Fatal("DevMode = true, want production validation case")
 	}
 }
 

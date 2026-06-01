@@ -1047,7 +1047,7 @@ func (s *AgentServer) validateRunPreconditions() error {
 		s.Options.LoadThreshold = defaultLoadThreshold
 	}
 	if s.Options.LoadThreshold > 1 && !math.IsInf(s.Options.LoadThreshold, 1) && !s.Options.DevMode {
-		return fmt.Errorf("load_threshold in prod env must be less than 1, current value: %v", s.Options.LoadThreshold)
+		logger.Logger.Warnw("load_threshold in prod env should be less than 1", nil, "currentValue", s.Options.LoadThreshold)
 	}
 	if !validWorkerLogLevel(s.Options.LogLevel) {
 		return fmt.Errorf("invalid log_level %q, valid levels: CRITICAL, DEBUG, ERROR, INFO, TRACE, WARN", s.Options.LogLevel)
