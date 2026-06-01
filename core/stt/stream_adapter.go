@@ -110,6 +110,10 @@ func (w *streamAdapterWrapper) run() {
 					continue
 				}
 				if input.end {
+					if err := vadStream.Flush(); err != nil {
+						w.sendErr(err)
+						return
+					}
 					if err := vadStream.EndInput(); err != nil {
 						w.sendErr(err)
 					}

@@ -156,7 +156,12 @@ func TestStreamAdapterEndInputFlushesAndRejectsMoreInput(t *testing.T) {
 	flushCh := make(chan struct{}, 1)
 	endInputCh := make(chan struct{}, 1)
 	stream, err := NewStreamAdapter(&fakeStreamAdapterSTT{}, &fakeStreamAdapterVAD{
-		stream: &fakeStreamAdapterVADStream{flushCh: flushCh, endInputCh: endInputCh, done: make(chan struct{})},
+		stream: &fakeStreamAdapterVADStream{
+			flushCh:              flushCh,
+			endInputCh:           endInputCh,
+			done:                 make(chan struct{}),
+			disableEndInputFlush: true,
+		},
 	}).Stream(context.Background(), "")
 	if err != nil {
 		t.Fatalf("Stream returned error: %v", err)
@@ -450,14 +455,15 @@ func (f *fakeStreamAdapterVAD) Stream(context.Context) (vad.VADStream, error) {
 }
 
 type fakeStreamAdapterVADStream struct {
-	events     []*vad.VADEvent
-	index      int
-	nextErr    error
-	pushErr    error
-	flushCh    chan struct{}
-	endInputCh chan struct{}
-	closedCh   chan struct{}
-	done       chan struct{}
+	events               []*vad.VADEvent
+	index                int
+	nextErr              error
+	pushErr              error
+	flushCh              chan struct{}
+	endInputCh           chan struct{}
+	closedCh             chan struct{}
+	done                 chan struct{}
+	disableEndInputFlush bool
 }
 
 func (f *fakeStreamAdapterVADStream) PushFrame(*model.AudioFrame) error {
@@ -477,6 +483,9 @@ func (f *fakeStreamAdapterVADStream) Flush() error {
 func (f *fakeStreamAdapterVADStream) EndInput() error {
 	if f.endInputCh != nil {
 		f.endInputCh <- struct{}{}
+	}
+	if f.disableEndInputFlush {
+		return nil
 	}
 	return f.Flush()
 }
