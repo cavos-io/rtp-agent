@@ -33,6 +33,12 @@ func TestPerformLLMInferenceIgnoresNonFunctionToolCalls(t *testing.T) {
 	if got[0].Name != "lookup" || got[0].CallID != "call_lookup" {
 		t.Fatalf("function call = %#v, want lookup/call_lookup", got[0])
 	}
+	if len(data.GeneratedFunctions) != 1 {
+		t.Fatalf("len(GeneratedFunctions) = %d, want 1", len(data.GeneratedFunctions))
+	}
+	if data.GeneratedFunctions[0].Name != "lookup" || data.GeneratedFunctions[0].CallID != "call_lookup" {
+		t.Fatalf("GeneratedFunctions[0] = %#v, want lookup/call_lookup", data.GeneratedFunctions[0])
+	}
 }
 
 func TestPerformToolExecutionsUsesToolErrorMessage(t *testing.T) {
