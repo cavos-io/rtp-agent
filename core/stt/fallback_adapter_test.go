@@ -44,6 +44,23 @@ func TestFallbackAdapterAggregatesProviderCapabilities(t *testing.T) {
 	}
 }
 
+func TestFallbackAdapterAlwaysAdvertisesOfflineRecognize(t *testing.T) {
+	adapter := NewFallbackAdapter([]STT{
+		&metadataSTT{label: "primary", capabilities: STTCapabilities{
+			Streaming:        true,
+			OfflineRecognize: false,
+		}},
+		&metadataSTT{label: "fallback", capabilities: STTCapabilities{
+			Streaming:        true,
+			OfflineRecognize: false,
+		}},
+	})
+
+	if !adapter.Capabilities().OfflineRecognize {
+		t.Fatal("OfflineRecognize = false, want true because FallbackAdapter exposes Recognize")
+	}
+}
+
 func TestFallbackAdapterAggregatesAlignedTranscriptGranularity(t *testing.T) {
 	adapter := NewFallbackAdapter([]STT{
 		&metadataSTT{label: "primary", capabilities: STTCapabilities{
