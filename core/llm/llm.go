@@ -680,15 +680,16 @@ type FallbackAdapterOptions struct {
 
 type FallbackAllFailedError struct {
 	Count    int
+	Labels   []string
 	Duration time.Duration
 	Err      error
 }
 
 func (e *FallbackAllFailedError) Error() string {
 	if e.Err == nil {
-		return fmt.Sprintf("all LLMs failed (%d providers) after %s", e.Count, e.Duration)
+		return fmt.Sprintf("all LLMs failed (%v) after %s", e.Labels, e.Duration)
 	}
-	return fmt.Sprintf("all LLMs failed (%d providers) after %s: %v", e.Count, e.Duration, e.Err)
+	return fmt.Sprintf("all LLMs failed (%v) after %s: %v", e.Labels, e.Duration, e.Err)
 }
 
 func (e *FallbackAllFailedError) Unwrap() error {
@@ -961,11 +962,20 @@ func (s *fallbackLLMStream) tryStart(index int) error {
 	if lastErr != nil {
 		return &FallbackAllFailedError{
 			Count:    len(s.adapter.llms),
+			Labels:   s.adapter.labels(),
 			Duration: time.Since(start),
 			Err:      lastErr,
 		}
 	}
 	return lastErr
+}
+
+func (f *FallbackAdapter) labels() []string {
+	labels := make([]string, len(f.llms))
+	for i, llm := range f.llms {
+		labels[i] = Label(llm)
+	}
+	return labels
 }
 
 func (s *fallbackLLMStream) Next() (*ChatChunk, error) {

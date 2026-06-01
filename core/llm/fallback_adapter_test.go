@@ -361,8 +361,8 @@ func TestFallbackAdapterReturnsAllFailedErrorWhenProvidersExhausted(t *testing.T
 	firstErr := errors.New("primary unavailable")
 	secondErr := errors.New("fallback unavailable")
 	adapter := NewFallbackAdapter([]LLM{
-		&fakeFallbackLLM{err: firstErr},
-		&fakeFallbackLLM{err: secondErr},
+		&fakeFallbackLLM{label: "primary.LLM", err: firstErr},
+		&fakeFallbackLLM{label: "fallback.LLM", err: secondErr},
 	})
 
 	_, err := adapter.Chat(context.Background(), NewChatContext())
@@ -374,6 +374,16 @@ func TestFallbackAdapterReturnsAllFailedErrorWhenProvidersExhausted(t *testing.T
 	}
 	if !strings.Contains(err.Error(), "all LLMs failed") {
 		t.Fatalf("Chat error = %q, want all LLMs failed message", err)
+	}
+	var allFailed *FallbackAllFailedError
+	if !errors.As(err, &allFailed) {
+		t.Fatalf("Chat error type = %T, want FallbackAllFailedError", err)
+	}
+	if got, want := strings.Join(allFailed.Labels, ","), "primary.LLM,fallback.LLM"; got != want {
+		t.Fatalf("FallbackAllFailedError.Labels = %q, want %q", got, want)
+	}
+	if !strings.Contains(err.Error(), "primary.LLM") || !strings.Contains(err.Error(), "fallback.LLM") {
+		t.Fatalf("Chat error = %q, want exhausted provider labels", err)
 	}
 }
 
