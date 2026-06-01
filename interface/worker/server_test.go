@@ -2217,6 +2217,32 @@ func TestAssignmentRecordsRegisteredWorkerID(t *testing.T) {
 	}
 }
 
+func TestAssignmentEnablesRecordingOptionsWhenRequested(t *testing.T) {
+	server := NewAgentServer(WorkerOptions{})
+	startedCh := make(chan *JobContext, 1)
+	server.entrypointFnc = func(ctx *JobContext) error {
+		startedCh <- ctx
+		return nil
+	}
+
+	job := &livekit.Job{
+		Id:              "job_recording",
+		Room:            &livekit.Room{Name: "room-a"},
+		EnableRecording: true,
+	}
+	markJobAccepted(t, server, job)
+	server.handleAssignment(context.Background(), &livekit.JobAssignment{Job: job})
+
+	select {
+	case jobCtx := <-startedCh:
+		if jobCtx.Report.RecordingOptions != (agent.RecordingOptions{Audio: true, Traces: true, Logs: true, Transcript: true}) {
+			t.Fatalf("RecordingOptions = %#v, want all enabled", jobCtx.Report.RecordingOptions)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("assignment entrypoint did not run")
+	}
+}
+
 func TestAssignmentSendsRunningJobStatus(t *testing.T) {
 	server := NewAgentServer(WorkerOptions{})
 	sentCh := make(chan *livekit.WorkerMessage, 1)

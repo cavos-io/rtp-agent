@@ -1489,6 +1489,9 @@ func (s *AgentServer) handleAssignment(ctx context.Context, req *livekit.JobAssi
 		jobURL = req.GetUrl()
 	}
 	jobCtx := NewJobContext(req.Job, jobURL, s.Options.APIKey, s.Options.APISecret)
+	if req.Job.GetEnableRecording() {
+		jobCtx.Report.RecordingOptions = allRecordingOptions()
+	}
 	jobCtx.token = req.GetToken()
 
 	s.mu.Lock()
@@ -1663,6 +1666,15 @@ func saveSessionReport(path string, report *agent.SessionReport) error {
 		return fmt.Errorf("write session report: %w", err)
 	}
 	return nil
+}
+
+func allRecordingOptions() agent.RecordingOptions {
+	return agent.RecordingOptions{
+		Audio:      true,
+		Traces:     true,
+		Logs:       true,
+		Transcript: true,
+	}
 }
 
 func newLocalJobContext(roomName string, participantIdentity string, opts WorkerOptions) *JobContext {
