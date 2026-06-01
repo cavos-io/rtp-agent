@@ -10,9 +10,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/cavos-io/conversation-worker/core/agent"
-	"github.com/cavos-io/conversation-worker/interface/worker"
-	"github.com/cavos-io/conversation-worker/interface/worker/ipc"
+	"github.com/cavos-io/rtp-agent/core/agent"
+	"github.com/cavos-io/rtp-agent/interface/worker"
+	"github.com/cavos-io/rtp-agent/interface/worker/ipc"
 	"github.com/livekit/protocol/livekit"
 )
 

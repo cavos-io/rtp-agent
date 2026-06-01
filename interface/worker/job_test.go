@@ -450,7 +450,7 @@ func TestJobContextParticipantAvailableDoesNotBlockOnEntrypoints(t *testing.T) {
 	}
 }
 
-func TestJobContextParticipantAvailableSkipsDuplicateEntrypointWhileRunning(t *testing.T) {
+func TestJobContextParticipantAvailableStartsDuplicateEntrypointWhileRunning(t *testing.T) {
 	ctx := NewJobContext(&livekit.Job{Id: "job_participant_available_duplicate"}, "", "", "")
 	release := make(chan struct{})
 	started := make(chan string, 2)
@@ -479,8 +479,11 @@ func TestJobContextParticipantAvailableSkipsDuplicateEntrypointWhileRunning(t *t
 	ctx.participantAvailable(participant)
 	select {
 	case got := <-started:
-		t.Fatalf("duplicate participant entrypoint call = %q, want none while first is running", got)
-	case <-time.After(100 * time.Millisecond):
+		if got != "caller" {
+			t.Fatalf("duplicate participant entrypoint call = %q, want caller", got)
+		}
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("duplicate participant entrypoint was not called")
 	}
 
 	close(release)

@@ -13,9 +13,9 @@ import (
 	"strings"
 	"syscall"
 
-	"github.com/cavos-io/conversation-worker/core/agent"
-	"github.com/cavos-io/conversation-worker/interface/worker"
-	"github.com/cavos-io/conversation-worker/library/logger"
+	"github.com/cavos-io/rtp-agent/core/agent"
+	"github.com/cavos-io/rtp-agent/interface/worker"
+	"github.com/cavos-io/rtp-agent/library/logger"
 	"github.com/gordonklaus/portaudio"
 	"github.com/livekit/protocol/livekit"
 	lksdk "github.com/livekit/server-sdk-go/v2"

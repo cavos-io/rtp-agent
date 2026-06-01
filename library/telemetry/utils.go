@@ -1,7 +1,7 @@
 package telemetry
 
 import (
-	"github.com/cavos-io/conversation-worker/library/logger"
+	"github.com/cavos-io/rtp-agent/library/logger"
 )
 
 func LogMetrics(metrics AgentMetrics) {
@@ -30,11 +30,11 @@ func LogMetrics(metrics AgentMetrics) {
 				"model_provider": m.Metadata.ModelProvider,
 			}
 		}
-		
+
 		inputCachedTextTokens := 0
 		inputCachedImageTokens := 0
 		inputCachedAudioTokens := 0
-		
+
 		if m.InputTokenDetails.CachedTokensDetails != nil {
 			inputCachedTextTokens = m.InputTokenDetails.CachedTokensDetails.TextTokens
 			inputCachedImageTokens = m.InputTokenDetails.CachedTokensDetails.ImageTokens

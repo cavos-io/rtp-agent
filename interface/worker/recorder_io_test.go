@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/cavos-io/conversation-worker/core/agent"
+	"github.com/cavos-io/rtp-agent/core/agent"
 )
 
 func TestRecorderIORecordingStartedAtReturnsNilBeforeAudio(t *testing.T) {

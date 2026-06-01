@@ -6,7 +6,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/cavos-io/conversation-worker/library/math"
+	"github.com/cavos-io/rtp-agent/library/math"
 )
 
 type BufferedTokenStream struct {

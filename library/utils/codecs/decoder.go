@@ -7,8 +7,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/cavos-io/conversation-worker/library/logger"
-	"github.com/cavos-io/conversation-worker/model"
+	"github.com/cavos-io/rtp-agent/library/logger"
+	"github.com/cavos-io/rtp-agent/model"
 	"github.com/hajimehoshi/go-mp3"
 )
 

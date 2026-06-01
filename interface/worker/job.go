@@ -7,9 +7,9 @@ import (
 	"reflect"
 	"sync"
 
-	"github.com/cavos-io/conversation-worker/core/agent"
-	"github.com/cavos-io/conversation-worker/library/logger"
-	"github.com/cavos-io/conversation-worker/library/utils"
+	"github.com/cavos-io/rtp-agent/core/agent"
+	"github.com/cavos-io/rtp-agent/library/logger"
+	"github.com/cavos-io/rtp-agent/library/utils"
 	"github.com/go-jose/go-jose/v3/jwt"
 	"github.com/livekit/protocol/auth"
 	"github.com/livekit/protocol/livekit"
@@ -477,9 +477,7 @@ func (c *JobContext) scheduleParticipantEntrypoint(registration participantEntry
 		c.participantTasks = make(map[participantEntrypointTaskKey]struct{})
 	}
 	if _, ok := c.participantTasks[key]; ok {
-		c.participantTasksMu.Unlock()
 		logger.Logger.Warnw("participant entrypoint already running for participant", nil, "participant", participant.Identity)
-		return
 	}
 	c.participantTasks[key] = struct{}{}
 	c.participantTasksMu.Unlock()
