@@ -1254,6 +1254,35 @@ func TestChatContextToOpenAIProviderFormatIncludesImageContent(t *testing.T) {
 	}
 }
 
+func TestChatContextToOpenAIProviderFormatReturnsImageSerializationError(t *testing.T) {
+	for _, format := range []string{"openai", "openai.responses"} {
+		t.Run(format, func(t *testing.T) {
+			ctx := NewChatContext()
+			ctx.Items = []ChatItem{
+				&ChatMessage{
+					ID:   "user",
+					Role: ChatRoleUser,
+					Content: []ChatContent{
+						{Image: &ImageContent{Image: "data:image/png;base64,not-valid-base64"}},
+					},
+				},
+			}
+
+			messages, extra, err := ctx.ToProviderFormatE(format)
+
+			if err == nil {
+				t.Fatalf("ToProviderFormatE(%s) error = nil, want image serialization error", format)
+			}
+			if messages != nil || extra != nil {
+				t.Fatalf("ToProviderFormatE(%s) messages=%#v extra=%#v, want nil outputs on error", format, messages, extra)
+			}
+			if !strings.Contains(err.Error(), "decode data URL image") {
+				t.Fatalf("ToProviderFormatE(%s) error = %q, want decode data URL image error", format, err)
+			}
+		})
+	}
+}
+
 func TestChatContextToOpenAIProviderFormatForwardsReferenceExtraContent(t *testing.T) {
 	ctx := NewChatContext()
 	ctx.Items = []ChatItem{

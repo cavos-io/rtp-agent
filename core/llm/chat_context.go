@@ -876,7 +876,11 @@ func (c *ChatContext) ToProviderFormatE(format string, options ...ChatContextPro
 
 			var msg map[string]any
 			if group.message != nil {
-				msg = openAIChatMessage(group.message)
+				var err error
+				msg, err = openAIChatMessage(group.message)
+				if err != nil {
+					return nil, nil, err
+				}
 			} else {
 				msg = map[string]any{"role": "assistant"}
 			}
@@ -903,7 +907,11 @@ func (c *ChatContext) ToProviderFormatE(format string, options ...ChatContextPro
 				continue
 			}
 			if group.message != nil {
-				items = append(items, openAIResponsesMessage(group.message))
+				msg, err := openAIResponsesMessage(group.message)
+				if err != nil {
+					return nil, nil, err
+				}
+				items = append(items, msg)
 			}
 			for _, toolCall := range group.toolCalls {
 				items = append(items, openAIResponsesToolCall(toolCall))
@@ -1274,8 +1282,11 @@ func openAIToolGroupID(itemID string, groupID *string) string {
 	return itemID
 }
 
-func openAIChatMessage(msg *ChatMessage) map[string]any {
-	content := openAIChatContent(msg.Content)
+func openAIChatMessage(msg *ChatMessage) (map[string]any, error) {
+	content, err := openAIChatContent(msg.Content)
+	if err != nil {
+		return nil, err
+	}
 	result := map[string]any{
 		"role":    string(msg.Role),
 		"content": content,
@@ -1283,10 +1294,10 @@ func openAIChatMessage(msg *ChatMessage) map[string]any {
 	if extra := openAIExtraContent(msg.Extra); len(extra) > 0 {
 		result["extra_content"] = extra
 	}
-	return result
+	return result, nil
 }
 
-func openAIChatContent(content []ChatContent) any {
+func openAIChatContent(content []ChatContent) (any, error) {
 	parts := make([]map[string]any, 0)
 	textContent := ""
 	for _, item := range content {
@@ -1297,13 +1308,17 @@ func openAIChatContent(content []ChatContent) any {
 			textContent += text
 		}
 		if item.Image != nil {
-			if part := openAIImageContent(item.Image); part != nil {
+			part, err := openAIImageContent(item.Image)
+			if err != nil {
+				return nil, err
+			}
+			if part != nil {
 				parts = append(parts, part)
 			}
 		}
 	}
 	if len(parts) == 0 {
-		return textContent
+		return textContent, nil
 	}
 	if textContent != "" {
 		parts = append(parts, map[string]any{
@@ -1311,13 +1326,13 @@ func openAIChatContent(content []ChatContent) any {
 			"text": textContent,
 		})
 	}
-	return parts
+	return parts, nil
 }
 
-func openAIImageContent(image *ImageContent) map[string]any {
+func openAIImageContent(image *ImageContent) (map[string]any, error) {
 	img, err := SerializeImage(image)
 	if err != nil {
-		return nil
+		return nil, err
 	}
 	url := img.ExternalURL
 	if url == "" {
@@ -1329,17 +1344,21 @@ func openAIImageContent(image *ImageContent) map[string]any {
 			"url":    url,
 			"detail": img.InferenceDetail,
 		},
-	}
+	}, nil
 }
 
-func openAIResponsesMessage(msg *ChatMessage) map[string]any {
+func openAIResponsesMessage(msg *ChatMessage) (map[string]any, error) {
+	content, err := openAIResponsesContent(msg.Content)
+	if err != nil {
+		return nil, err
+	}
 	return map[string]any{
 		"role":    string(msg.Role),
-		"content": openAIResponsesContent(msg.Content),
-	}
+		"content": content,
+	}, nil
 }
 
-func openAIResponsesContent(content []ChatContent) any {
+func openAIResponsesContent(content []ChatContent) (any, error) {
 	parts := make([]map[string]any, 0)
 	textContent := ""
 	for _, item := range content {
@@ -1350,13 +1369,17 @@ func openAIResponsesContent(content []ChatContent) any {
 			textContent += text
 		}
 		if item.Image != nil {
-			if part := openAIResponsesImageContent(item.Image); part != nil {
+			part, err := openAIResponsesImageContent(item.Image)
+			if err != nil {
+				return nil, err
+			}
+			if part != nil {
 				parts = append(parts, part)
 			}
 		}
 	}
 	if len(parts) == 0 {
-		return textContent
+		return textContent, nil
 	}
 	if textContent != "" {
 		parts = append(parts, map[string]any{
@@ -1364,13 +1387,13 @@ func openAIResponsesContent(content []ChatContent) any {
 			"text": textContent,
 		})
 	}
-	return parts
+	return parts, nil
 }
 
-func openAIResponsesImageContent(image *ImageContent) map[string]any {
+func openAIResponsesImageContent(image *ImageContent) (map[string]any, error) {
 	img, err := SerializeImage(image)
 	if err != nil {
-		return nil
+		return nil, err
 	}
 	url := img.ExternalURL
 	if url == "" {
@@ -1380,7 +1403,7 @@ func openAIResponsesImageContent(image *ImageContent) map[string]any {
 		"type":      "input_image",
 		"image_url": url,
 		"detail":    img.InferenceDetail,
-	}
+	}, nil
 }
 
 func openAIResponsesToolCall(toolCall *FunctionCall) map[string]any {
