@@ -424,16 +424,23 @@ func (a *RunAssert) ContainsMessageRole(role llm.ChatRole) *RunAssert {
 }
 
 func (a *RunAssert) ContainsFunctionCallOutput(output string, isError bool) *RunAssert {
+	return a.ContainsFunctionCallOutputMatching(RunEventCriteria{
+		Output:  output,
+		IsError: &isError,
+	})
+}
+
+func (a *RunAssert) ContainsFunctionCallOutputMatching(criteria RunEventCriteria) *RunAssert {
 	found := false
 	for _, event := range a.events() {
 		outputEvent, ok := event.(*FunctionCallOutputEvent)
-		if ok && outputEvent.Item.Output == output && outputEvent.Item.IsError == isError {
+		if ok && eventMatchesCriteria(outputEvent, criteria) {
 			found = true
 			break
 		}
 	}
 	if !found {
-		a.errors = append(a.errors, fmt.Errorf("expected function call output %q with is_error=%t, but not found", output, isError))
+		a.errors = append(a.errors, errors.New("expected function call output matching criteria, but not found"))
 	}
 	return a
 }

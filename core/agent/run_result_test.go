@@ -457,6 +457,61 @@ func TestRunAssertUsesRecordedEventsForFunctionCallOutputs(t *testing.T) {
 	}
 }
 
+func TestRunAssertContainsFunctionCallOutputMatchingOutputOnly(t *testing.T) {
+	result := NewRunResult(llm.NewChatContext())
+	result.RecordItem(&llm.FunctionCallOutput{
+		ID:        "out_1",
+		CallID:    "call_1",
+		Name:      "lookup",
+		Output:    "done",
+		IsError:   true,
+		CreatedAt: time.Now(),
+	})
+
+	err := result.Expect.ContainsFunctionCallOutputMatching(RunEventCriteria{Output: "done"}).HasError()
+
+	if err != nil {
+		t.Fatalf("ContainsFunctionCallOutputMatching returned error = %v, want nil for output-only match", err)
+	}
+}
+
+func TestRunAssertContainsFunctionCallOutputMatchingErrorOnly(t *testing.T) {
+	result := NewRunResult(llm.NewChatContext())
+	isError := true
+	result.RecordItem(&llm.FunctionCallOutput{
+		ID:        "out_1",
+		CallID:    "call_1",
+		Name:      "lookup",
+		Output:    "tool failed",
+		IsError:   isError,
+		CreatedAt: time.Now(),
+	})
+
+	err := result.Expect.ContainsFunctionCallOutputMatching(RunEventCriteria{IsError: &isError}).HasError()
+
+	if err != nil {
+		t.Fatalf("ContainsFunctionCallOutputMatching returned error = %v, want nil for is_error-only match", err)
+	}
+}
+
+func TestRunAssertContainsFunctionCallOutputMatchingReportsMismatch(t *testing.T) {
+	result := NewRunResult(llm.NewChatContext())
+	result.RecordItem(&llm.FunctionCallOutput{
+		ID:        "out_1",
+		CallID:    "call_1",
+		Name:      "lookup",
+		Output:    "done",
+		IsError:   false,
+		CreatedAt: time.Now(),
+	})
+
+	err := result.Expect.ContainsFunctionCallOutputMatching(RunEventCriteria{Output: "missing"}).HasError()
+
+	if err == nil {
+		t.Fatal("ContainsFunctionCallOutputMatching error = nil, want mismatch error")
+	}
+}
+
 func TestRunAssertUsesRecordedEventsForAgentHandoffs(t *testing.T) {
 	result := NewRunResult(llm.NewChatContext())
 	handoff := &llm.AgentHandoff{ID: "handoff_1", NewAgentID: "agent_2", CreatedAt: time.Now()}
