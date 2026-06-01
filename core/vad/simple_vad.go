@@ -157,6 +157,7 @@ func (s *simpleVADStream) PushFrame(frame *model.AudioFrame) error {
 	} else if frame.SampleRate != s.inputSampleRate {
 		return nil
 	}
+	frame = cloneFrame(frame)
 
 	probability := frameRMS(frame)
 	duration := frameDuration(frame)
@@ -613,6 +614,19 @@ func combineFrames(frames []*model.AudioFrame) []*model.AudioFrame {
 		NumChannels:       first.NumChannels,
 		SamplesPerChannel: samples,
 	}}
+}
+
+func cloneFrame(frame *model.AudioFrame) *model.AudioFrame {
+	if frame == nil {
+		return nil
+	}
+	data := append([]byte(nil), frame.Data...)
+	return &model.AudioFrame{
+		Data:              data,
+		SampleRate:        frame.SampleRate,
+		NumChannels:       frame.NumChannels,
+		SamplesPerChannel: frame.SamplesPerChannel,
+	}
 }
 
 func (v *SimpleVAD) emitMetrics(metrics *telemetry.VADMetrics) {

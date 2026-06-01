@@ -196,9 +196,7 @@ func TestSimpleVADIgnoresMismatchedSampleRateFrames(t *testing.T) {
 	if inference.Type != VADEventInferenceDone {
 		t.Fatalf("event type = %s, want %s", inference.Type, VADEventInferenceDone)
 	}
-	if len(inference.Frames) != 1 || inference.Frames[0] != matchingSilence {
-		t.Fatalf("inference frames = %#v, want matching sample-rate frame", inference.Frames)
-	}
+	assertCombinedFrames(t, inference.Frames, matchingSilence)
 	assertEventType(t, stream, VADEventEndOfSpeech)
 }
 
@@ -260,9 +258,7 @@ func TestSimpleVADEmitsInferenceBeforeSpeechTransition(t *testing.T) {
 	if inference.Speaking {
 		t.Fatal("inference Speaking = true before start of speech, want false")
 	}
-	if len(inference.Frames) != 1 || inference.Frames[0] != frame {
-		t.Fatalf("inference frames = %#v, want pushed frame", inference.Frames)
-	}
+	assertCombinedFrames(t, inference.Frames, frame)
 
 	start := nextVADEvent(t, stream)
 	if start.Type != VADEventStartOfSpeech {
@@ -272,6 +268,64 @@ func TestSimpleVADEmitsInferenceBeforeSpeechTransition(t *testing.T) {
 		t.Fatal("start Speaking = false, want true")
 	}
 	assertCombinedFrames(t, start.Frames, frame)
+}
+
+func TestSimpleVADInferenceEventCopiesInputFrameData(t *testing.T) {
+	stream, err := NewSimpleVAD(0.05).Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	defer stream.Close()
+
+	frame := audioFrame(16000, 160, 6000)
+	if err := stream.PushFrame(frame); err != nil {
+		t.Fatalf("PushFrame() error = %v", err)
+	}
+	for i := range frame.Data {
+		frame.Data[i] = 0
+	}
+
+	inference := nextVADEvent(t, stream)
+	if inference.Type != VADEventInferenceDone {
+		t.Fatalf("event type = %s, want %s", inference.Type, VADEventInferenceDone)
+	}
+	assertCombinedFrames(t, inference.Frames, audioFrame(16000, 160, 6000))
+}
+
+func TestSimpleVADPrefixBufferCopiesInputFrameData(t *testing.T) {
+	stream, err := NewSimpleVADWithOptions(SimpleVADOptions{
+		Threshold:             0.05,
+		MinSpeechDuration:     0.02,
+		PrefixPaddingDuration: 0.02,
+	}).Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	defer stream.Close()
+
+	silence := audioFrame(16000, 160, 100)
+	firstSpeech := audioFrame(16000, 160, 6000)
+	secondSpeech := audioFrame(16000, 160, 6000)
+	if err := stream.PushFrame(silence); err != nil {
+		t.Fatalf("PushFrame() silence error = %v", err)
+	}
+	for i := range silence.Data {
+		silence.Data[i] = 0
+	}
+	for _, frame := range []*model.AudioFrame{firstSpeech, secondSpeech} {
+		if err := stream.PushFrame(frame); err != nil {
+			t.Fatalf("PushFrame() speech error = %v", err)
+		}
+	}
+
+	assertEventType(t, stream, VADEventInferenceDone)
+	assertEventType(t, stream, VADEventInferenceDone)
+	assertEventType(t, stream, VADEventInferenceDone)
+	start := nextVADEvent(t, stream)
+	if start.Type != VADEventStartOfSpeech {
+		t.Fatalf("event type = %s, want %s", start.Type, VADEventStartOfSpeech)
+	}
+	assertCombinedFrames(t, start.Frames, audioFrame(16000, 160, 100), firstSpeech, secondSpeech)
 }
 
 func TestSimpleVADEndOfSpeechIncludesAccumulatedSpeechFrames(t *testing.T) {
