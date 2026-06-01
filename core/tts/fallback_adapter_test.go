@@ -423,6 +423,50 @@ func TestFallbackSynthesizeStreamSetsStableSegmentID(t *testing.T) {
 	}
 }
 
+func TestFallbackSynthesizeStreamIgnoresPushAfterFirstFlush(t *testing.T) {
+	providerStream := &metadataSynthesizeStream{
+		events: []*SynthesizedAudio{{Frame: &model.AudioFrame{Data: []byte{1}}}},
+	}
+	adapter := NewFallbackAdapter([]TTS{
+		&metadataTTS{
+			label:        "primary",
+			sampleRate:   24000,
+			numChannels:  1,
+			capabilities: TTSCapabilities{Streaming: true},
+			stream:       providerStream,
+		},
+	})
+
+	stream, err := adapter.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+	defer stream.Close()
+
+	if err := stream.PushText("first segment"); err != nil {
+		t.Fatalf("PushText(first) returned error: %v", err)
+	}
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush(first) returned error: %v", err)
+	}
+	if _, err := stream.Next(); err != nil {
+		t.Fatalf("Next returned error: %v", err)
+	}
+
+	if err := stream.PushText("second segment"); err != nil {
+		t.Fatalf("PushText(second) returned error: %v", err)
+	}
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush(second) returned error: %v", err)
+	}
+	time.Sleep(25 * time.Millisecond)
+
+	wantCalls := []string{"push:first segment", "flush", "flush"}
+	if strings.Join(providerStream.calls, ",") != strings.Join(wantCalls, ",") {
+		t.Fatalf("provider stream calls = %#v, want %#v", providerStream.calls, wantCalls)
+	}
+}
+
 func TestFallbackSynthesizeStreamIgnoresEmptyText(t *testing.T) {
 	providerStream := &metadataSynthesizeStream{}
 	adapter := NewFallbackAdapter([]TTS{
@@ -1278,7 +1322,7 @@ func TestFallbackSynthesizeStreamRetriesSameTTSBeforeFallback(t *testing.T) {
 	}
 }
 
-func TestFallbackSynthesizeStreamReplaysOnlyTextOnRetry(t *testing.T) {
+func TestFallbackSynthesizeStreamReplaysOnlyFirstSegmentTextOnRetry(t *testing.T) {
 	primaryFailure := &blockingFailSynthesizeStream{
 		err:     errors.New("primary stream failed"),
 		release: make(chan struct{}),
@@ -1326,7 +1370,7 @@ func TestFallbackSynthesizeStreamReplaysOnlyTextOnRetry(t *testing.T) {
 		t.Fatalf("audio data = %q, want primary recovered", got)
 	}
 
-	wantCalls := []string{"push:hello", "push:world"}
+	wantCalls := []string{"push:hello"}
 	if len(recovered.calls) != len(wantCalls) {
 		t.Fatalf("replayed stream call count = %d, want %d", len(recovered.calls), len(wantCalls))
 	}

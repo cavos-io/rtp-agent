@@ -510,6 +510,8 @@ type fallbackSynthesizeStream struct {
 	errCh   chan error
 	closeCh chan struct{}
 	closed  bool
+	started bool
+	flushed bool
 }
 
 type fallbackSynthesizeInput struct {
@@ -722,9 +724,10 @@ func (s *fallbackSynthesizeStream) PushText(text string) error {
 	if s.closed {
 		return fmt.Errorf("stream closed")
 	}
-	if text == "" {
+	if text == "" || s.flushed {
 		return nil
 	}
+	s.started = true
 	s.inputBuffer = append(s.inputBuffer, fallbackSynthesizeInput{text: text})
 	return s.activeStream.PushText(text)
 }
@@ -734,6 +737,9 @@ func (s *fallbackSynthesizeStream) Flush() error {
 	defer s.mu.Unlock()
 	if s.closed {
 		return fmt.Errorf("stream closed")
+	}
+	if s.started {
+		s.flushed = true
 	}
 	s.inputBuffer = append(s.inputBuffer, fallbackSynthesizeInput{flush: true})
 	return s.activeStream.Flush()
