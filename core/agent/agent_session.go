@@ -136,6 +136,16 @@ func (s *AgentSession) CurrentSpeech() *SpeechHandle {
 	return activity.currentSpeech
 }
 
+func (s *AgentSession) WaitForInactive(ctx context.Context) error {
+	s.mu.Lock()
+	activity := s.activity
+	s.mu.Unlock()
+	if activity == nil {
+		return nil
+	}
+	return activity.WaitForInactive(ctx)
+}
+
 type AgentStateChangedEvent struct {
 	OldState  AgentState
 	NewState  AgentState

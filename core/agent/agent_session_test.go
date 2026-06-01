@@ -394,6 +394,45 @@ func TestAgentSessionCurrentSpeechReturnsActivitySpeech(t *testing.T) {
 	}
 }
 
+func TestAgentSessionWaitForInactiveReturnsWithoutActivity(t *testing.T) {
+	agent := NewAgent("test")
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+
+	if err := session.WaitForInactive(context.Background()); err != nil {
+		t.Fatalf("WaitForInactive error = %v, want nil without activity", err)
+	}
+}
+
+func TestAgentSessionWaitForInactiveWaitsForCurrentSpeech(t *testing.T) {
+	agent := NewAgent("test")
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	session.activity = NewAgentActivity(agent, session)
+	current := NewSpeechHandle(true, DefaultInputDetails())
+	session.activity.currentSpeech = current
+
+	done := make(chan error, 1)
+	go func() {
+		done <- session.WaitForInactive(context.Background())
+	}()
+
+	select {
+	case err := <-done:
+		t.Fatalf("WaitForInactive returned before current speech completed: %v", err)
+	case <-time.After(20 * time.Millisecond):
+	}
+
+	current.MarkDone()
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("WaitForInactive error = %v, want nil", err)
+		}
+	case <-testTimeout():
+		t.Fatal("WaitForInactive did not return after current speech completed")
+	}
+}
+
 func TestAgentSessionInterruptRequiresRunningActivity(t *testing.T) {
 	agent := NewAgent("test")
 	session := NewAgentSession(agent, nil, AgentSessionOptions{})
