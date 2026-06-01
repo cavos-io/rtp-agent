@@ -14,13 +14,77 @@ import (
 )
 
 type SpeechmaticsSTT struct {
-	apiKey string
+	apiKey            string
+	language          string
+	sampleRate        int
+	audioEncoding     string
+	domain            string
+	outputLocale      string
+	includePartials   *bool
+	enableDiarization *bool
 }
 
-func NewSpeechmaticsSTT(apiKey string) *SpeechmaticsSTT {
-	return &SpeechmaticsSTT{
-		apiKey: apiKey,
+type SpeechmaticsSTTOption func(*SpeechmaticsSTT)
+
+func WithSpeechmaticsSTTLanguage(language string) SpeechmaticsSTTOption {
+	return func(s *SpeechmaticsSTT) {
+		if language != "" {
+			s.language = language
+		}
 	}
+}
+
+func WithSpeechmaticsSTTSampleRate(sampleRate int) SpeechmaticsSTTOption {
+	return func(s *SpeechmaticsSTT) {
+		if sampleRate > 0 {
+			s.sampleRate = sampleRate
+		}
+	}
+}
+
+func WithSpeechmaticsSTTAudioEncoding(encoding string) SpeechmaticsSTTOption {
+	return func(s *SpeechmaticsSTT) {
+		if encoding != "" {
+			s.audioEncoding = encoding
+		}
+	}
+}
+
+func WithSpeechmaticsSTTDomain(domain string) SpeechmaticsSTTOption {
+	return func(s *SpeechmaticsSTT) {
+		s.domain = domain
+	}
+}
+
+func WithSpeechmaticsSTTOutputLocale(outputLocale string) SpeechmaticsSTTOption {
+	return func(s *SpeechmaticsSTT) {
+		s.outputLocale = outputLocale
+	}
+}
+
+func WithSpeechmaticsSTTIncludePartials(enabled bool) SpeechmaticsSTTOption {
+	return func(s *SpeechmaticsSTT) {
+		s.includePartials = &enabled
+	}
+}
+
+func WithSpeechmaticsSTTEnableDiarization(enabled bool) SpeechmaticsSTTOption {
+	return func(s *SpeechmaticsSTT) {
+		s.enableDiarization = &enabled
+	}
+}
+
+func NewSpeechmaticsSTT(apiKey string, opts ...SpeechmaticsSTTOption) *SpeechmaticsSTT {
+	provider := &SpeechmaticsSTT{
+		apiKey:        apiKey,
+		language:      "en",
+		sampleRate:    16000,
+		audioEncoding: "pcm_s16le",
+	}
+	for _, opt := range opts {
+		opt(provider)
+	}
+	return provider
 }
 
 func (s *SpeechmaticsSTT) Label() string { return "speechmatics.STT" }
@@ -29,10 +93,6 @@ func (s *SpeechmaticsSTT) Capabilities() stt.STTCapabilities {
 }
 
 func (s *SpeechmaticsSTT) Stream(ctx context.Context, language string) (stt.RecognizeStream, error) {
-	if language == "" {
-		language = "en"
-	}
-
 	// Speechmatics API websocket URL
 	u := url.URL{Scheme: "wss", Host: "en.rt.speechmatics.com", Path: "/v2"}
 
@@ -50,19 +110,7 @@ func (s *SpeechmaticsSTT) Stream(ctx context.Context, language string) (stt.Reco
 		errCh:  make(chan error, 1),
 	}
 
-	// Initialize Speechmatics session
-	initMsg := map[string]interface{}{
-		"message": "StartRecognition",
-		"audio_format": map[string]interface{}{
-			"type":        "raw",
-			"encoding":    "pcm_s16le",
-			"sample_rate": 16000,
-		},
-		"transcription_config": map[string]interface{}{
-			"language":        language,
-			"enable_partials": true,
-		},
-	}
+	initMsg := buildSpeechmaticsSTTStartMessage(s, language)
 
 	if err := conn.WriteJSON(initMsg); err != nil {
 		conn.Close()
@@ -76,6 +124,42 @@ func (s *SpeechmaticsSTT) Stream(ctx context.Context, language string) (stt.Reco
 
 func (s *SpeechmaticsSTT) Recognize(ctx context.Context, frames []*model.AudioFrame, language string) (*stt.SpeechEvent, error) {
 	return nil, fmt.Errorf("speechmatics offline recognize is not implemented")
+}
+
+func buildSpeechmaticsSTTStartMessage(s *SpeechmaticsSTT, language string) map[string]interface{} {
+	if language == "" {
+		language = s.language
+	}
+	config := map[string]interface{}{
+		"language": language,
+	}
+	if s.includePartials != nil {
+		config["enable_partials"] = *s.includePartials
+	} else {
+		config["enable_partials"] = true
+	}
+	if s.domain != "" {
+		config["domain"] = s.domain
+	}
+	if s.outputLocale != "" {
+		config["output_locale"] = s.outputLocale
+	}
+	if s.enableDiarization != nil {
+		if *s.enableDiarization {
+			config["diarization"] = "speaker"
+		} else {
+			config["diarization"] = "none"
+		}
+	}
+	return map[string]interface{}{
+		"message": "StartRecognition",
+		"audio_format": map[string]interface{}{
+			"type":        "raw",
+			"encoding":    s.audioEncoding,
+			"sample_rate": s.sampleRate,
+		},
+		"transcription_config": config,
+	}
 }
 
 type speechmaticsSTTStream struct {

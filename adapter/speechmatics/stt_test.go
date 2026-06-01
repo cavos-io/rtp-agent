@@ -2,6 +2,7 @@ package speechmatics
 
 import (
 	"context"
+	"encoding/json"
 	"strings"
 	"testing"
 
@@ -102,5 +103,50 @@ func TestSpeechmaticsSTTRecognizeMatchesReferenceUnsupportedOffline(t *testing.T
 	}
 	if !strings.Contains(err.Error(), "not implemented") {
 		t.Fatalf("Recognize error = %q, want not implemented", err.Error())
+	}
+}
+
+func TestSpeechmaticsSTTStartMessageUsesReferenceOptions(t *testing.T) {
+	provider := NewSpeechmaticsSTT("test-key",
+		WithSpeechmaticsSTTLanguage("de"),
+		WithSpeechmaticsSTTSampleRate(48000),
+		WithSpeechmaticsSTTAudioEncoding("pcm_f32le"),
+		WithSpeechmaticsSTTDomain("finance"),
+		WithSpeechmaticsSTTOutputLocale("de-DE"),
+		WithSpeechmaticsSTTIncludePartials(false),
+		WithSpeechmaticsSTTEnableDiarization(false),
+	)
+
+	message := buildSpeechmaticsSTTStartMessage(provider, "")
+	if message["message"] != "StartRecognition" {
+		t.Fatalf("message = %#v, want StartRecognition", message["message"])
+	}
+	audioFormat := message["audio_format"].(map[string]interface{})
+	if audioFormat["sample_rate"] != 48000 {
+		t.Fatalf("sample_rate = %#v, want 48000", audioFormat["sample_rate"])
+	}
+	if audioFormat["encoding"] != "pcm_f32le" {
+		t.Fatalf("encoding = %#v, want pcm_f32le", audioFormat["encoding"])
+	}
+	config := message["transcription_config"].(map[string]interface{})
+	assertSpeechmaticsConfig(t, config, "language", "de")
+	assertSpeechmaticsConfig(t, config, "domain", "finance")
+	assertSpeechmaticsConfig(t, config, "output_locale", "de-DE")
+	assertSpeechmaticsConfig(t, config, "enable_partials", false)
+	assertSpeechmaticsConfig(t, config, "diarization", "none")
+
+	message = buildSpeechmaticsSTTStartMessage(provider, "fr")
+	config = message["transcription_config"].(map[string]interface{})
+	assertSpeechmaticsConfig(t, config, "language", "fr")
+
+	if _, err := json.Marshal(message); err != nil {
+		t.Fatalf("marshal start message: %v", err)
+	}
+}
+
+func assertSpeechmaticsConfig(t *testing.T, config map[string]interface{}, key string, want interface{}) {
+	t.Helper()
+	if got := config[key]; got != want {
+		t.Fatalf("%s = %#v, want %#v in %#v", key, got, want, config)
 	}
 }
