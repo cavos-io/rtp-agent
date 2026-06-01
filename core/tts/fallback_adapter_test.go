@@ -1576,6 +1576,23 @@ func TestFallbackChunkedStreamDoesNotFallbackAfterAudio(t *testing.T) {
 	}
 }
 
+func TestFallbackChunkedStreamCloseCancelsProviderContext(t *testing.T) {
+	provider := &contextCapturingTTS{
+		metadataTTS: metadataTTS{label: "primary", sampleRate: 24000, numChannels: 1},
+	}
+	adapter := NewFallbackAdapter([]TTS{provider})
+
+	stream, err := adapter.Synthesize(context.Background(), "hello")
+	if err != nil {
+		t.Fatalf("Synthesize returned error: %v", err)
+	}
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close returned error: %v", err)
+	}
+
+	receiveContextCancellation(t, provider.ctx, "provider context")
+}
+
 func TestFallbackChunkedStreamFallsBackWhenProviderErrorsBeforeEmittingAudio(t *testing.T) {
 	streamErr := errors.New("stream failed before emitted audio")
 	second := &metadataTTS{
@@ -2807,6 +2824,15 @@ func receiveCloseResult(t *testing.T, results <-chan error) error {
 	}
 }
 
+func receiveContextCancellation(t *testing.T, ctx context.Context, name string) {
+	t.Helper()
+	select {
+	case <-ctx.Done():
+	case <-time.After(200 * time.Millisecond):
+		t.Fatalf("timed out waiting for %s cancellation", name)
+	}
+}
+
 func fallbackTestFrame(sampleRate uint32, channels uint32, samplesPerChannel uint32) *model.AudioFrame {
 	return &model.AudioFrame{
 		Data:              make([]byte, int(samplesPerChannel*channels*2)),
@@ -2845,6 +2871,31 @@ type contextAwareRecoveryTTS struct {
 	started   chan struct{}
 	cancelled chan struct{}
 	release   chan struct{}
+}
+
+type contextCapturingTTS struct {
+	metadataTTS
+	ctx context.Context
+}
+
+func (c *contextCapturingTTS) Synthesize(ctx context.Context, text string) (ChunkedStream, error) {
+	c.ctx = ctx
+	return &contextCapturingChunkedStream{
+		ctx: ctx,
+	}, nil
+}
+
+type contextCapturingChunkedStream struct {
+	ctx context.Context
+}
+
+func (s *contextCapturingChunkedStream) Next() (*SynthesizedAudio, error) {
+	<-s.ctx.Done()
+	return nil, s.ctx.Err()
+}
+
+func (s *contextCapturingChunkedStream) Close() error {
+	return nil
 }
 
 func (c *contextAwareRecoveryTTS) Synthesize(ctx context.Context, text string) (ChunkedStream, error) {

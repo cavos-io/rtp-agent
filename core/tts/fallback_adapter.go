@@ -529,6 +529,7 @@ func resampleAudioFrame(frame *model.AudioFrame, outputRate uint32) (*model.Audi
 type fallbackChunkedStream struct {
 	adapter *FallbackAdapter
 	ctx     context.Context
+	cancel  context.CancelFunc
 	text    string
 
 	mu           sync.Mutex
@@ -554,9 +555,11 @@ type fallbackMetricsState struct {
 }
 
 func (f *FallbackAdapter) Synthesize(ctx context.Context, text string) (ChunkedStream, error) {
+	ctx, cancel := context.WithCancel(ctx)
 	s := &fallbackChunkedStream{
 		adapter:   f,
 		ctx:       ctx,
+		cancel:    cancel,
 		text:      text,
 		eventCh:   make(chan *SynthesizedAudio, 100),
 		errCh:     make(chan error, 1),
@@ -567,6 +570,7 @@ func (f *FallbackAdapter) Synthesize(ctx context.Context, text string) (ChunkedS
 	}
 
 	if err := s.tryStartStream(0); err != nil {
+		cancel()
 		return nil, err
 	}
 
@@ -607,6 +611,8 @@ func (s *fallbackChunkedStream) tryStartStream(index int) error {
 }
 
 func (s *fallbackChunkedStream) monitorStream() {
+	defer s.cancel()
+
 	outputSent := false
 	var pending *SynthesizedAudio
 	pendingTail := false
@@ -843,6 +849,7 @@ func (s *fallbackChunkedStream) Close() error {
 	}
 	s.closed = true
 	close(s.closeCh)
+	s.cancel()
 	s.markDoneLocked(nil)
 	return s.activeStream.Close()
 }
@@ -875,6 +882,7 @@ func (s *fallbackChunkedStream) markDoneLocked(err error) {
 type fallbackSynthesizeStream struct {
 	adapter *FallbackAdapter
 	ctx     context.Context
+	cancel  context.CancelFunc
 
 	mu           sync.Mutex
 	activeStream SynthesizeStream
@@ -902,9 +910,11 @@ type fallbackSynthesizeInput struct {
 }
 
 func (f *FallbackAdapter) Stream(ctx context.Context) (SynthesizeStream, error) {
+	ctx, cancel := context.WithCancel(ctx)
 	s := &fallbackSynthesizeStream{
 		adapter:   f,
 		ctx:       ctx,
+		cancel:    cancel,
 		eventCh:   make(chan *SynthesizedAudio, 100),
 		errCh:     make(chan error, 1),
 		closeCh:   make(chan struct{}),
@@ -915,6 +925,7 @@ func (f *FallbackAdapter) Stream(ctx context.Context) (SynthesizeStream, error) 
 	}
 
 	if err := s.tryStartStream(0); err != nil {
+		cancel()
 		return nil, err
 	}
 
@@ -991,6 +1002,8 @@ func (s *fallbackSynthesizeStream) replayBufferedText(stream SynthesizeStream) e
 }
 
 func (s *fallbackSynthesizeStream) monitorStream() {
+	defer s.cancel()
+
 	outputSent := false
 	var pending *SynthesizedAudio
 	pendingTail := false
@@ -1298,6 +1311,7 @@ func (s *fallbackSynthesizeStream) Close() error {
 	}
 	s.closed = true
 	close(s.closeCh)
+	s.cancel()
 	s.markDoneLocked(nil)
 	return s.activeStream.Close()
 }
