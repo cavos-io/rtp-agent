@@ -218,7 +218,7 @@ func (h *PreConnectAudioHandler) WaitForData(ctx context.Context, trackID string
 		}
 		if time.Since(buf.Timestamp) > h.maxDelta {
 			logger.Logger.Warnw("pre-connect audio buffer is too old", nil, "track_id", trackID)
-			return nil
+			return []*model.AudioFrame{}
 		}
 		return buf.Frames
 	}
