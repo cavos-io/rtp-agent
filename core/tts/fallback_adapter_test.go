@@ -188,6 +188,46 @@ func TestFallbackChunkedStreamErrorsWhenNonEmptyTextProducesNoAudio(t *testing.T
 	}
 }
 
+func TestFallbackChunkedStreamFallsBackWhenProviderProducesNoAudio(t *testing.T) {
+	primary := &metadataTTS{
+		label:       "primary",
+		sampleRate:  24000,
+		numChannels: 1,
+		chunked:     &metadataChunkedStream{},
+	}
+	fallback := &metadataTTS{
+		label:       "fallback",
+		sampleRate:  24000,
+		numChannels: 1,
+		chunked: &metadataChunkedStream{
+			events: []*SynthesizedAudio{{Frame: &model.AudioFrame{Data: []byte("fallback")}}},
+		},
+	}
+	adapter := NewFallbackAdapterWithOptions([]TTS{primary, fallback}, FallbackAdapterOptions{
+		MaxRetryPerTTS: 0,
+	})
+
+	stream, err := adapter.Synthesize(context.Background(), "hello")
+	if err != nil {
+		t.Fatalf("Synthesize returned error: %v", err)
+	}
+	defer stream.Close()
+
+	audio, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next returned error: %v", err)
+	}
+	if got := string(audio.Frame.Data); got != "fallback" {
+		t.Fatalf("audio data = %q, want fallback provider audio", got)
+	}
+	if primary.synthesizeCalls != 1 {
+		t.Fatalf("primary synthesize calls = %d, want 1", primary.synthesizeCalls)
+	}
+	if fallback.synthesizeCalls != 1 {
+		t.Fatalf("fallback synthesize calls = %d, want 1", fallback.synthesizeCalls)
+	}
+}
+
 func TestFallbackChunkedStreamReturnsEOFWhenWhitespaceTextProducesNoAudio(t *testing.T) {
 	adapter := NewFallbackAdapter([]TTS{
 		&metadataTTS{
