@@ -207,7 +207,7 @@ func (w *streamAdapterWrapper) StartTimeOffset() float64 {
 func (w *streamAdapterWrapper) SetStartTimeOffset(offset float64) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	w.startOffset = offset
+	w.startOffset = nonNegativeStreamTime(offset)
 }
 
 func (w *streamAdapterWrapper) StartTime() float64 {
@@ -219,7 +219,7 @@ func (w *streamAdapterWrapper) StartTime() float64 {
 func (w *streamAdapterWrapper) SetStartTime(startTime float64) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	w.startTime = startTime
+	w.startTime = nonNegativeStreamTime(startTime)
 }
 
 func (w *streamAdapterWrapper) PushFrame(frame *model.AudioFrame) error {

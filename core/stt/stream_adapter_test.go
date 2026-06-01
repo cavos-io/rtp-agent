@@ -63,6 +63,15 @@ func TestStreamAdapterExposesTimingAnchors(t *testing.T) {
 	if timing.StartTime() != 24.0 {
 		t.Fatalf("StartTime = %v, want 24.0", timing.StartTime())
 	}
+
+	timing.SetStartTimeOffset(-1)
+	timing.SetStartTime(-2)
+	if timing.StartTimeOffset() < 0 {
+		t.Fatalf("negative StartTimeOffset was stored: %v", timing.StartTimeOffset())
+	}
+	if timing.StartTime() < 0 {
+		t.Fatalf("negative StartTime was stored: %v", timing.StartTime())
+	}
 }
 
 func TestStreamAdapterReturnsEOFWhenVADCompletes(t *testing.T) {

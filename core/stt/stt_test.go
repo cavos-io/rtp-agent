@@ -88,6 +88,19 @@ func TestStreamTimingInterfaceCapturesReferenceTimingAnchors(t *testing.T) {
 	}
 }
 
+func TestStreamTimingRejectsNegativeReferenceTimingAnchors(t *testing.T) {
+	stream := &fakeStreamTiming{}
+	SetStreamStartTimeOffset(stream, -1)
+	SetStreamStartTime(stream, -2)
+
+	if stream.StartTimeOffset() < 0 {
+		t.Fatalf("StartTimeOffset = %v, want non-negative", stream.StartTimeOffset())
+	}
+	if stream.StartTime() < 0 {
+		t.Fatalf("StartTime = %v, want non-negative", stream.StartTime())
+	}
+}
+
 func TestSpeechStreamAliasMatchesRecognizeStream(t *testing.T) {
 	var stream SpeechStream = (*fakeSpeechStream)(nil)
 	var _ RecognizeStream = stream

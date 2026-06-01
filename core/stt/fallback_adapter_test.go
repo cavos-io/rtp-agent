@@ -770,6 +770,15 @@ func TestFallbackStreamPropagatesTimingAnchorsOnRetry(t *testing.T) {
 	if recovered.startTime != 42.5 {
 		t.Fatalf("recovered StartTime = %v, want 42.5", recovered.startTime)
 	}
+
+	timing.SetStartTimeOffset(-1)
+	timing.SetStartTime(-2)
+	if timing.StartTimeOffset() < 0 {
+		t.Fatalf("negative StartTimeOffset was stored: %v", timing.StartTimeOffset())
+	}
+	if timing.StartTime() < 0 {
+		t.Fatalf("negative StartTime was stored: %v", timing.StartTime())
+	}
 }
 
 func TestFallbackStreamRejectsMismatchedSampleRates(t *testing.T) {

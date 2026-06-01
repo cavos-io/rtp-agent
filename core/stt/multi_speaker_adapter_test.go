@@ -245,6 +245,21 @@ func TestMultiSpeakerAdapterWrapperPropagatesTimingAnchors(t *testing.T) {
 	if inner.startTime != 88.0 {
 		t.Fatalf("inner StartTime = %v, want 88.0", inner.startTime)
 	}
+
+	timing.SetStartTimeOffset(-1)
+	timing.SetStartTime(-2)
+	if timing.StartTimeOffset() < 0 {
+		t.Fatalf("negative StartTimeOffset was stored: %v", timing.StartTimeOffset())
+	}
+	if timing.StartTime() < 0 {
+		t.Fatalf("negative StartTime was stored: %v", timing.StartTime())
+	}
+	if inner.startTimeOffset < 0 {
+		t.Fatalf("negative inner StartTimeOffset was propagated: %v", inner.startTimeOffset)
+	}
+	if inner.startTime < 0 {
+		t.Fatalf("negative inner StartTime was propagated: %v", inner.startTime)
+	}
 }
 
 func TestMultiSpeakerAdapterWrapperEndInputFlushesAndRejectsMoreInput(t *testing.T) {

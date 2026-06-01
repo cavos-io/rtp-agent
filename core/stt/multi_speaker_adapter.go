@@ -141,7 +141,7 @@ func (w *multiSpeakerAdapterWrapper) StartTimeOffset() float64 {
 func (w *multiSpeakerAdapterWrapper) SetStartTimeOffset(offset float64) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	w.startOffset = offset
+	w.startOffset = nonNegativeStreamTime(offset)
 	w.applyTiming()
 }
 
@@ -154,7 +154,7 @@ func (w *multiSpeakerAdapterWrapper) StartTime() float64 {
 func (w *multiSpeakerAdapterWrapper) SetStartTime(startTime float64) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	w.startTime = startTime
+	w.startTime = nonNegativeStreamTime(startTime)
 	w.applyTiming()
 }
 
@@ -163,8 +163,8 @@ func (w *multiSpeakerAdapterWrapper) applyTiming() {
 	if !ok {
 		return
 	}
-	timing.SetStartTimeOffset(w.startOffset)
-	timing.SetStartTime(w.startTime)
+	SetStreamStartTimeOffset(timing, w.startOffset)
+	SetStreamStartTime(timing, w.startTime)
 }
 
 func (w *multiSpeakerAdapterWrapper) PushFrame(frame *model.AudioFrame) error {

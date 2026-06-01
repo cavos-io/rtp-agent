@@ -367,7 +367,7 @@ func (s *fallbackRecognizeStream) StartTimeOffset() float64 {
 func (s *fallbackRecognizeStream) SetStartTimeOffset(offset float64) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.startOffset = offset
+	s.startOffset = nonNegativeStreamTime(offset)
 	s.applyTiming(s.activeStream)
 }
 
@@ -380,7 +380,7 @@ func (s *fallbackRecognizeStream) StartTime() float64 {
 func (s *fallbackRecognizeStream) SetStartTime(startTime float64) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.startTime = startTime
+	s.startTime = nonNegativeStreamTime(startTime)
 	s.applyTiming(s.activeStream)
 }
 
@@ -389,8 +389,8 @@ func (s *fallbackRecognizeStream) applyTiming(stream RecognizeStream) {
 	if !ok {
 		return
 	}
-	timing.SetStartTimeOffset(s.startOffset)
-	timing.SetStartTime(s.startTime)
+	SetStreamStartTimeOffset(timing, s.startOffset)
+	SetStreamStartTime(timing, s.startTime)
 }
 
 func replayFallbackInputs(stream RecognizeStream, inputs []fallbackRecognizeInput) error {
