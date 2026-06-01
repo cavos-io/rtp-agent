@@ -88,6 +88,26 @@ func TestGenerateStrictJSONSchemaKeepsPointerNestedStructNullable(t *testing.T) 
 	}
 }
 
+func TestGenerateStrictJSONSchemaPreservesNestedStructDescription(t *testing.T) {
+	type location struct {
+		City string `json:"city"`
+	}
+	type request struct {
+		Location *location `json:"location,omitempty" jsonschema:"user location"`
+	}
+
+	schema := GenerateStrictJSONSchema(reflect.TypeOf(request{}))
+
+	props := schema["properties"].(map[string]interface{})
+	locationSchema, ok := props["location"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("location property = %#v, want map", props["location"])
+	}
+	if locationSchema["description"] != "user location" {
+		t.Fatalf("location description = %#v, want user location", locationSchema["description"])
+	}
+}
+
 func TestGenerateStrictJSONSchemaPreservesMapValueSchema(t *testing.T) {
 	type request struct {
 		Metadata map[string]string `json:"metadata"`

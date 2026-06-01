@@ -88,6 +88,9 @@ func goTypeToJSONSchema(t reflect.Type, description string) map[string]interface
 			// but also allow "null".
 			structSchema := GenerateStrictJSONSchema(t.Elem())
 			structSchema["type"] = []string{"object", "null"}
+			if description != "" {
+				structSchema["description"] = description
+			}
 			return structSchema
 		} else if t.Elem().Kind() == reflect.Slice || t.Elem().Kind() == reflect.Array {
 			schema["items"] = goTypeToJSONSchema(t.Elem().Elem(), "")
@@ -103,7 +106,11 @@ func goTypeToJSONSchema(t reflect.Type, description string) map[string]interface
 	case reflect.Slice, reflect.Array:
 		schema["items"] = goTypeToJSONSchema(t.Elem(), "")
 	case reflect.Struct:
-		return GenerateStrictJSONSchema(t)
+		structSchema := GenerateStrictJSONSchema(t)
+		if description != "" {
+			structSchema["description"] = description
+		}
+		return structSchema
 	case reflect.Map:
 		schema["additionalProperties"] = goTypeToJSONSchema(t.Elem(), "")
 	}
