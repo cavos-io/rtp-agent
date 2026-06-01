@@ -410,6 +410,63 @@ func TestRealtimeSessionUpdatesRemoteItemOnFinalInputAudioTranscription(t *testi
 	}
 }
 
+func TestRealtimeSessionEmitsFinalPartialTranscriptOnInputAudioTranscriptionFailed(t *testing.T) {
+	session := &realtimeSession{}
+	session.trackRealtimeEvent(llm.RealtimeEvent{
+		Type: llm.RealtimeEventTypeInputAudioTranscriptionCompleted,
+		InputTranscription: &llm.InputTranscriptionCompleted{
+			ItemID:     "item_123",
+			Transcript: "hel",
+			IsFinal:    false,
+		},
+	})
+	session.trackRealtimeEvent(llm.RealtimeEvent{
+		Type: llm.RealtimeEventTypeInputAudioTranscriptionCompleted,
+		InputTranscription: &llm.InputTranscriptionCompleted{
+			ItemID:     "item_123",
+			Transcript: "lo",
+			IsFinal:    false,
+		},
+	})
+
+	ev, ok := session.trackOpenAIRealtimeEvent(map[string]any{
+		"type":    "conversation.item.input_audio_transcription.failed",
+		"item_id": "item_123",
+	})
+	if !ok {
+		t.Fatal("trackOpenAIRealtimeEvent returned ok=false, want final partial event")
+	}
+	if ev.Type != llm.RealtimeEventTypeInputAudioTranscriptionCompleted || ev.InputTranscription == nil {
+		t.Fatalf("event = %#v, want input transcription event", ev)
+	}
+	if ev.InputTranscription.Transcript != "hello" || !ev.InputTranscription.IsFinal {
+		t.Fatalf("InputTranscription = %#v, want final accumulated hello", ev.InputTranscription)
+	}
+
+	next := session.trackRealtimeEvent(llm.RealtimeEvent{
+		Type: llm.RealtimeEventTypeInputAudioTranscriptionCompleted,
+		InputTranscription: &llm.InputTranscriptionCompleted{
+			ItemID:     "item_123",
+			Transcript: "new",
+			IsFinal:    false,
+		},
+	})
+	if next.InputTranscription.Transcript != "new" {
+		t.Fatalf("next transcript = %q, want new after failure clears accumulator", next.InputTranscription.Transcript)
+	}
+}
+
+func TestRealtimeSessionIgnoresInputAudioTranscriptionFailedWithoutPartial(t *testing.T) {
+	session := &realtimeSession{}
+
+	if ev, ok := session.trackOpenAIRealtimeEvent(map[string]any{
+		"type":    "conversation.item.input_audio_transcription.failed",
+		"item_id": "item_123",
+	}); ok {
+		t.Fatalf("trackOpenAIRealtimeEvent = %#v, true; want no event", ev)
+	}
+}
+
 func TestRealtimeEventMapsConversationItemAddedFunctionCall(t *testing.T) {
 	ev, ok := openAIRealtimeEvent(map[string]any{
 		"type": "conversation.item.added",

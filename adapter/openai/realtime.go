@@ -526,9 +526,12 @@ func (s *realtimeSession) eventLoop() {
 				continue
 			}
 
-			s.trackOpenAIRealtimeEvent(ev)
+			trackedEvent, trackedOK := s.trackOpenAIRealtimeEvent(ev)
 			realtimeEvent, ok := openAIRealtimeEvent(ev)
 			if !ok {
+				if trackedOK {
+					s.eventCh <- trackedEvent
+				}
 				continue
 			}
 			if realtimeEvent.Type == llm.RealtimeEventTypeError {
@@ -540,21 +543,37 @@ func (s *realtimeSession) eventLoop() {
 	}
 }
 
-func (s *realtimeSession) trackOpenAIRealtimeEvent(ev map[string]any) {
+func (s *realtimeSession) trackOpenAIRealtimeEvent(ev map[string]any) (llm.RealtimeEvent, bool) {
 	evType, _ := ev["type"].(string)
-	if evType != "conversation.item.deleted" {
-		return
+	switch evType {
+	case "conversation.item.deleted":
+		itemID, _ := ev["item_id"].(string)
+		if itemID == "" {
+			return llm.RealtimeEvent{}, false
+		}
+		if s.remote == nil {
+			s.remote = llm.NewRemoteChatContext()
+		}
+		if err := s.remote.Delete(itemID); err != nil {
+			logger.Logger.Warnw("failed to track OpenAI realtime deleted item", err, "item_id", itemID)
+		}
+	case "conversation.item.input_audio_transcription.failed":
+		itemID, _ := ev["item_id"].(string)
+		logger.Logger.Errorw("OpenAI realtime input audio transcription failed", nil, "item_id", itemID, "error", ev["error"])
+		partial, ok := s.clearRealtimeInputTranscript(itemID)
+		if !ok {
+			return llm.RealtimeEvent{}, false
+		}
+		return llm.RealtimeEvent{
+			Type: llm.RealtimeEventTypeInputAudioTranscriptionCompleted,
+			InputTranscription: &llm.InputTranscriptionCompleted{
+				ItemID:     itemID,
+				Transcript: partial,
+				IsFinal:    true,
+			},
+		}, true
 	}
-	itemID, _ := ev["item_id"].(string)
-	if itemID == "" {
-		return
-	}
-	if s.remote == nil {
-		s.remote = llm.NewRemoteChatContext()
-	}
-	if err := s.remote.Delete(itemID); err != nil {
-		logger.Logger.Warnw("failed to track OpenAI realtime deleted item", err, "item_id", itemID)
-	}
+	return llm.RealtimeEvent{}, false
 }
 
 func (s *realtimeSession) trackRealtimeEvent(ev llm.RealtimeEvent) llm.RealtimeEvent {
@@ -597,9 +616,7 @@ func (s *realtimeSession) trackRealtimeInputTranscription(ev llm.RealtimeEvent) 
 		transcription.Transcript = s.inputTranscripts[transcription.ItemID]
 		return ev
 	}
-	if s.inputTranscripts != nil {
-		delete(s.inputTranscripts, transcription.ItemID)
-	}
+	s.clearRealtimeInputTranscript(transcription.ItemID)
 	if s.remote == nil {
 		return ev
 	}
@@ -612,6 +629,15 @@ func (s *realtimeSession) trackRealtimeInputTranscription(ev llm.RealtimeEvent) 
 	}
 	msg.TranscriptConfidence = transcription.Confidence
 	return ev
+}
+
+func (s *realtimeSession) clearRealtimeInputTranscript(itemID string) (string, bool) {
+	if itemID == "" || s.inputTranscripts == nil {
+		return "", false
+	}
+	transcript, ok := s.inputTranscripts[itemID]
+	delete(s.inputTranscripts, itemID)
+	return transcript, ok
 }
 
 func openAIRealtimeEvent(ev map[string]any) (llm.RealtimeEvent, bool) {
