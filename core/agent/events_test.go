@@ -171,3 +171,40 @@ func TestAgentFalseInterruptionEventPreservesDeprecatedCompatibilityFields(t *te
 		t.Fatalf("ExtraInstructions = %q, want %q", ev.ExtraInstructions, instructions)
 	}
 }
+
+func TestUserTurnExceededEventIsTypedAndTimestamped(t *testing.T) {
+	before := time.Now()
+	ev := NewUserTurnExceededEvent("latest words", "all accumulated words", 3, 4*time.Second)
+
+	var event Event = ev
+	if event.GetType() != "user_turn_exceeded" {
+		t.Fatalf("GetType() = %q, want user_turn_exceeded", event.GetType())
+	}
+	if ev.Transcript != "latest words" {
+		t.Fatalf("Transcript = %q, want latest words", ev.Transcript)
+	}
+	if ev.AccumulatedTranscript != "all accumulated words" {
+		t.Fatalf("AccumulatedTranscript = %q, want all accumulated words", ev.AccumulatedTranscript)
+	}
+	if ev.AccumulatedWordCount != 3 {
+		t.Fatalf("AccumulatedWordCount = %d, want 3", ev.AccumulatedWordCount)
+	}
+	if ev.Duration != 4*time.Second {
+		t.Fatalf("Duration = %v, want 4s", ev.Duration)
+	}
+	if ev.CreatedAt.IsZero() || ev.CreatedAt.Before(before) {
+		t.Fatalf("CreatedAt = %v, want timestamp after %v", ev.CreatedAt, before)
+	}
+}
+
+func TestCloseReasonIncludesTaskCompleted(t *testing.T) {
+	ev := &CloseEvent{Reason: CloseReasonTaskCompleted, CreatedAt: time.Now()}
+
+	var event Event = ev
+	if event.GetType() != "close" {
+		t.Fatalf("GetType() = %q, want close", event.GetType())
+	}
+	if ev.Reason != "task_completed" {
+		t.Fatalf("Reason = %q, want task_completed", ev.Reason)
+	}
+}

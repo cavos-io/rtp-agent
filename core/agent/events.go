@@ -29,6 +29,26 @@ type UserInputTranscribedEvent struct {
 
 func (e *UserInputTranscribedEvent) GetType() string { return "user_input_transcribed" }
 
+type UserTurnExceededEvent struct {
+	Transcript            string
+	AccumulatedTranscript string
+	AccumulatedWordCount  int
+	Duration              time.Duration
+	CreatedAt             time.Time
+}
+
+func NewUserTurnExceededEvent(transcript string, accumulatedTranscript string, accumulatedWordCount int, duration time.Duration) *UserTurnExceededEvent {
+	return &UserTurnExceededEvent{
+		Transcript:            transcript,
+		AccumulatedTranscript: accumulatedTranscript,
+		AccumulatedWordCount:  accumulatedWordCount,
+		Duration:              duration,
+		CreatedAt:             time.Now(),
+	}
+}
+
+func (e *UserTurnExceededEvent) GetType() string { return "user_turn_exceeded" }
+
 type ConversationItemAddedEvent struct {
 	Item      llm.ChatItem
 	CreatedAt time.Time
@@ -128,6 +148,7 @@ const (
 	CloseReasonJobShutdown             CloseReason = "job_shutdown"
 	CloseReasonParticipantDisconnected CloseReason = "participant_disconnected"
 	CloseReasonUserInitiated           CloseReason = "user_initiated"
+	CloseReasonTaskCompleted           CloseReason = "task_completed"
 )
 
 type CloseEvent struct {
