@@ -31,6 +31,62 @@ type SimpleVADOptions struct {
 	WindowDuration            float64
 }
 
+type SimpleVADOption func(*SimpleVADOptions)
+
+func WithThreshold(threshold float64) SimpleVADOption {
+	return func(o *SimpleVADOptions) {
+		o.Threshold = threshold
+	}
+}
+
+func WithMinSpeechDuration(duration float64) SimpleVADOption {
+	return func(o *SimpleVADOptions) {
+		o.MinSpeechDuration = duration
+	}
+}
+
+func WithMinSilenceDuration(duration float64) SimpleVADOption {
+	return func(o *SimpleVADOptions) {
+		o.MinSilenceDuration = duration
+	}
+}
+
+func WithPrefixPaddingDuration(duration float64) SimpleVADOption {
+	return func(o *SimpleVADOptions) {
+		o.PrefixPaddingDuration = duration
+	}
+}
+
+func WithMaxBufferedSpeechDuration(duration float64) SimpleVADOption {
+	return func(o *SimpleVADOptions) {
+		o.MaxBufferedSpeechDuration = duration
+	}
+}
+
+func WithDeactivationThreshold(threshold float64) SimpleVADOption {
+	return func(o *SimpleVADOptions) {
+		o.DeactivationThreshold = threshold
+	}
+}
+
+func WithUpdateInterval(interval float64) SimpleVADOption {
+	return func(o *SimpleVADOptions) {
+		o.UpdateInterval = interval
+	}
+}
+
+func WithSampleRate(sampleRate uint32) SimpleVADOption {
+	return func(o *SimpleVADOptions) {
+		o.SampleRate = sampleRate
+	}
+}
+
+func WithWindowDuration(duration float64) SimpleVADOption {
+	return func(o *SimpleVADOptions) {
+		o.WindowDuration = duration
+	}
+}
+
 func NewSimpleVAD(threshold float64) *SimpleVAD {
 	if threshold == 0 {
 		threshold = 0.05
@@ -95,6 +151,26 @@ func (v *SimpleVAD) UpdateOptions(options SimpleVADOptions) {
 	}
 }
 
+func (v *SimpleVAD) UpdateOptionsWith(opts ...SimpleVADOption) {
+	v.mu.Lock()
+	options := v.options
+	for _, opt := range opts {
+		if opt != nil {
+			opt(&options)
+		}
+	}
+	v.options = options
+	streams := make([]*simpleVADStream, 0, len(v.streams))
+	for stream := range v.streams {
+		streams = append(streams, stream)
+	}
+	v.mu.Unlock()
+
+	for _, stream := range streams {
+		stream.setOptions(options)
+	}
+}
+
 func (v *SimpleVAD) Stream(ctx context.Context) (VADStream, error) {
 	v.mu.RLock()
 	options := v.options
@@ -149,6 +225,14 @@ func (s *simpleVADStream) updateOptions(options SimpleVADOptions) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.options = mergeSimpleVADOptions(s.options, options)
+	s.trimSpeechFrames()
+	s.trimPrefixFrames()
+}
+
+func (s *simpleVADStream) setOptions(options SimpleVADOptions) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.options = options
 	s.trimSpeechFrames()
 	s.trimPrefixFrames()
 }

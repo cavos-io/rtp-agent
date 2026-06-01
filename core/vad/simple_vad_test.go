@@ -119,6 +119,25 @@ func TestSimpleVADUpdateOptionsAppliesToActiveStream(t *testing.T) {
 	assertEventType(t, stream, VADEventStartOfSpeech)
 }
 
+func TestSimpleVADUpdateOptionsWithAllowsZeroMinSpeechDuration(t *testing.T) {
+	detector := NewSimpleVADWithOptions(SimpleVADOptions{
+		Threshold:         0.05,
+		MinSpeechDuration: 0.02,
+	})
+	stream, err := detector.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	defer stream.Close()
+
+	detector.UpdateOptionsWith(WithMinSpeechDuration(0))
+	if err := stream.PushFrame(audioFrame(16000, 160, 6000)); err != nil {
+		t.Fatalf("PushFrame() error = %v", err)
+	}
+	assertEventType(t, stream, VADEventInferenceDone)
+	assertEventType(t, stream, VADEventStartOfSpeech)
+}
+
 func TestSimpleVADUpdateOptionsRelaxesMaxBufferedSpeech(t *testing.T) {
 	detector := NewSimpleVADWithOptions(SimpleVADOptions{
 		Threshold:                 0.05,

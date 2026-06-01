@@ -151,6 +151,18 @@ func (v *SileroVAD) UpdateOptions(options VADOptions) {
 	v.inner.UpdateOptions(simpleOptionsFromSilero(merged))
 }
 
+func (v *SileroVAD) UpdateOptionsWith(opts ...VADOption) {
+	v.mu.Lock()
+	for _, opt := range opts {
+		if opt != nil {
+			opt(&v.options)
+		}
+	}
+	merged := v.options
+	v.mu.Unlock()
+	v.inner.UpdateOptionsWith(simpleUpdateOptionsFromSilero(merged)...)
+}
+
 func (v *SileroVAD) Stream(ctx context.Context) (vad.VADStream, error) {
 	v.mu.RLock()
 	options := v.options
@@ -172,6 +184,20 @@ func simpleOptionsFromSilero(options VADOptions) vad.SimpleVADOptions {
 		UpdateInterval:            options.UpdateInterval,
 		SampleRate:                uint32(options.SampleRate),
 		WindowDuration:            options.UpdateInterval,
+	}
+}
+
+func simpleUpdateOptionsFromSilero(options VADOptions) []vad.SimpleVADOption {
+	return []vad.SimpleVADOption{
+		vad.WithThreshold(options.ActivationThreshold / 10.0),
+		vad.WithMinSpeechDuration(options.MinSpeechDuration),
+		vad.WithMinSilenceDuration(options.MinSilenceDuration),
+		vad.WithPrefixPaddingDuration(options.PrefixPaddingDuration),
+		vad.WithMaxBufferedSpeechDuration(options.MaxBufferedSpeech),
+		vad.WithDeactivationThreshold(options.DeactivationThreshold / 10.0),
+		vad.WithUpdateInterval(options.UpdateInterval),
+		vad.WithSampleRate(uint32(options.SampleRate)),
+		vad.WithWindowDuration(options.UpdateInterval),
 	}
 }
 

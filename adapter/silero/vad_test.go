@@ -218,6 +218,25 @@ func TestSileroVADUpdateOptionsAppliesToActiveStream(t *testing.T) {
 	assertSileroVADEventType(t, stream, vad.VADEventStartOfSpeech)
 }
 
+func TestSileroVADUpdateOptionsWithAllowsZeroMinSpeechDuration(t *testing.T) {
+	detector := NewSileroVAD(
+		WithMinSpeechDuration(0.064),
+		WithActivationThreshold(0.5),
+	)
+	stream, err := detector.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	defer stream.Close()
+
+	detector.UpdateOptionsWith(WithMinSpeechDuration(0))
+	if err := stream.PushFrame(testAudioFrame(16000, 512, 6000)); err != nil {
+		t.Fatalf("PushFrame() error = %v", err)
+	}
+	assertSileroVADEventType(t, stream, vad.VADEventInferenceDone)
+	assertSileroVADEventType(t, stream, vad.VADEventStartOfSpeech)
+}
+
 func TestSileroVADActivationUpdatePreservesDeactivationThreshold(t *testing.T) {
 	detector := NewSileroVAD(
 		WithMinSpeechDuration(0.01),
