@@ -544,6 +544,39 @@ func TestRealtimeSessionClosesGenerationStreamsWhenResponseDone(t *testing.T) {
 	}
 }
 
+func TestRealtimeSessionRoutesOutputFunctionCallsToGenerationStream(t *testing.T) {
+	session := &realtimeSession{}
+	created := session.trackRealtimeEvent(llm.RealtimeEvent{
+		Type:       llm.RealtimeEventTypeGenerationCreated,
+		Generation: &llm.GenerationCreatedEvent{},
+	})
+
+	if ev, ok := session.trackOpenAIRealtimeEvent(map[string]any{
+		"type": "response.output_item.done",
+		"item": map[string]any{
+			"id":        "fc_123",
+			"type":      "function_call",
+			"call_id":   "call_123",
+			"name":      "lookup",
+			"arguments": `{"query":"hello"}`,
+		},
+	}); ok {
+		t.Fatalf("trackOpenAIRealtimeEvent = %#v, true; want side effect only", ev)
+	}
+
+	select {
+	case call := <-created.Generation.FunctionCh:
+		if call == nil {
+			t.Fatal("function call = nil, want completed call")
+		}
+		if call.ID != "fc_123" || call.CallID != "call_123" || call.Name != "lookup" || call.Arguments != `{"query":"hello"}` {
+			t.Fatalf("function call = %#v, want OpenAI function call item", call)
+		}
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("timed out waiting for function call")
+	}
+}
+
 func TestRealtimeEventMapsConversationItemAddedMessage(t *testing.T) {
 	ev, ok := openAIRealtimeEvent(map[string]any{
 		"type":             "conversation.item.added",
