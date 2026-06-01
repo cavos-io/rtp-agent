@@ -1,6 +1,7 @@
 package llm
 
 import (
+	"context"
 	"errors"
 	"testing"
 )
@@ -146,4 +147,90 @@ func TestMakeFunctionCallOutputDropsInvalidStructuredOutputs(t *testing.T) {
 	if result.RawError != nil {
 		t.Fatalf("RawError = %v, want nil", result.RawError)
 	}
+}
+
+func TestExecuteFunctionCallReturnsUnknownFunctionOutput(t *testing.T) {
+	toolCtx := EmptyToolContext()
+
+	result := ExecuteFunctionCall(context.Background(), &FunctionToolCall{
+		Name:   "missing",
+		CallID: "call_missing",
+	}, toolCtx)
+
+	if result.FncCall.Name != "missing" || result.FncCall.CallID != "call_missing" || result.FncCall.Arguments != "{}" {
+		t.Fatalf("FncCall = %#v, want defaulted missing call", result.FncCall)
+	}
+	if result.FncCallOut == nil {
+		t.Fatal("FncCallOut = nil, want unknown function output")
+	}
+	if !result.FncCallOut.IsError || result.FncCallOut.Output != "Unknown function: missing" {
+		t.Fatalf("FncCallOut = %#v, want unknown function error", result.FncCallOut)
+	}
+	if result.RawError == nil {
+		t.Fatal("RawError = nil, want unknown function error")
+	}
+}
+
+func TestExecuteFunctionCallDefaultsEmptyArgumentsAndReturnsOutput(t *testing.T) {
+	tool := &recordingTool{name: "lookup", result: "Paris"}
+	toolCtx := NewToolContext([]interface{}{tool})
+
+	result := ExecuteFunctionCall(context.Background(), &FunctionToolCall{
+		Name:   "lookup",
+		CallID: "call_lookup",
+	}, toolCtx)
+
+	if tool.args != "{}" {
+		t.Fatalf("tool args = %q, want default JSON object", tool.args)
+	}
+	if result.FncCall.Arguments != "{}" {
+		t.Fatalf("FncCall.Arguments = %q, want default JSON object", result.FncCall.Arguments)
+	}
+	if result.FncCallOut == nil || result.FncCallOut.IsError || result.FncCallOut.Output != "Paris" {
+		t.Fatalf("FncCallOut = %#v, want successful Paris output", result.FncCallOut)
+	}
+	if result.RawOutput != "Paris" {
+		t.Fatalf("RawOutput = %#v, want Paris", result.RawOutput)
+	}
+}
+
+func TestExecuteFunctionCallNormalizesToolError(t *testing.T) {
+	tool := &recordingTool{name: "lookup", err: NewToolError("visible failure")}
+	toolCtx := NewToolContext([]interface{}{tool})
+
+	result := ExecuteFunctionCall(context.Background(), &FunctionToolCall{
+		Name:      "lookup",
+		CallID:    "call_lookup",
+		Arguments: `{"city":"Paris"}`,
+	}, toolCtx)
+
+	if tool.args != `{"city":"Paris"}` {
+		t.Fatalf("tool args = %q, want original arguments", tool.args)
+	}
+	if result.FncCallOut == nil || !result.FncCallOut.IsError || result.FncCallOut.Output != "visible failure" {
+		t.Fatalf("FncCallOut = %#v, want visible tool error", result.FncCallOut)
+	}
+	if result.RawError == nil {
+		t.Fatal("RawError = nil, want tool error")
+	}
+}
+
+type recordingTool struct {
+	name   string
+	args   string
+	result string
+	err    error
+}
+
+func (t *recordingTool) ID() string { return t.name }
+
+func (t *recordingTool) Name() string { return t.name }
+
+func (t *recordingTool) Description() string { return "" }
+
+func (t *recordingTool) Parameters() map[string]any { return nil }
+
+func (t *recordingTool) Execute(_ context.Context, args string) (string, error) {
+	t.args = args
+	return t.result, t.err
 }

@@ -1,12 +1,14 @@
 package llm
 
 import (
+	"context"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"reflect"
 	"strings"
+	"time"
 )
 
 type DiffOps struct {
@@ -194,6 +196,43 @@ func MakeFunctionCallOutput(fncCall FunctionCall, output any, exception error) F
 		},
 		RawOutput: output,
 	}
+}
+
+func ExecuteFunctionCall(ctx context.Context, toolCall *FunctionToolCall, toolCtx *ToolContext) FunctionCallResult {
+	args := toolCall.Arguments
+	if args == "" {
+		args = "{}"
+	}
+	fncCall := FunctionCall{
+		CallID:    toolCall.CallID,
+		Name:      toolCall.Name,
+		Arguments: args,
+		Extra:     toolCall.Extra,
+		CreatedAt: time.Now(),
+	}
+
+	tool := toolCtx.GetFunctionTool(toolCall.Name)
+	if tool == nil {
+		err := fmt.Errorf("unknown function: %s", toolCall.Name)
+		return FunctionCallResult{
+			FncCall: fncCall,
+			FncCallOut: &FunctionCallOutput{
+				CallID:    toolCall.CallID,
+				Name:      toolCall.Name,
+				Output:    fmt.Sprintf("Unknown function: %s", toolCall.Name),
+				IsError:   true,
+				CreatedAt: time.Now(),
+			},
+			RawError: err,
+		}
+	}
+
+	output, err := tool.Execute(ctx, args)
+	result := MakeFunctionCallOutput(fncCall, output, err)
+	if result.FncCallOut != nil && result.FncCallOut.CreatedAt.IsZero() {
+		result.FncCallOut.CreatedAt = time.Now()
+	}
+	return result
 }
 
 func isValidFunctionOutput(value any) bool {
