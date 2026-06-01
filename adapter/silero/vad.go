@@ -315,6 +315,11 @@ func (v *SileroVAD) emitMetrics(metrics *telemetry.VADMetrics) {
 	handlers := append([]vad.VADMetricsHandler(nil), v.handlers...)
 	v.mu.RUnlock()
 	for _, handler := range handlers {
-		handler(metrics)
+		func(handler vad.VADMetricsHandler) {
+			defer func() {
+				_ = recover()
+			}()
+			handler(metrics)
+		}(handler)
 	}
 }
