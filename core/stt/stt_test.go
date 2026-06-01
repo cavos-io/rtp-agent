@@ -156,6 +156,25 @@ func TestSpeechEventMarshalJSONMatchesReferenceFieldNames(t *testing.T) {
 	}
 }
 
+func TestSpeechEventMarshalJSONDefaultsAlternativesToEmptyList(t *testing.T) {
+	data, err := json.Marshal(SpeechEvent{Type: SpeechEventEndOfSpeech})
+	if err != nil {
+		t.Fatalf("Marshal SpeechEvent returned error: %v", err)
+	}
+
+	var payload map[string]any
+	if err := json.Unmarshal(data, &payload); err != nil {
+		t.Fatalf("Unmarshal SpeechEvent payload returned error: %v", err)
+	}
+	alternatives, ok := payload["alternatives"].([]any)
+	if !ok {
+		t.Fatalf("alternatives = %#v, want empty JSON array; payload %s", payload["alternatives"], data)
+	}
+	if len(alternatives) != 0 {
+		t.Fatalf("alternatives length = %d, want 0", len(alternatives))
+	}
+}
+
 func TestSTTCapabilitiesMarshalJSONMatchesReferenceFieldNames(t *testing.T) {
 	data, err := json.Marshal(STTCapabilities{
 		Streaming:         true,

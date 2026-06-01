@@ -61,6 +61,15 @@ type SpeechEvent struct {
 	Interrupted      bool              `json:"interrupted"`
 }
 
+func (e SpeechEvent) MarshalJSON() ([]byte, error) {
+	type speechEventPayload SpeechEvent
+	payload := speechEventPayload(e)
+	if payload.Alternatives == nil {
+		payload.Alternatives = []SpeechData{}
+	}
+	return json.Marshal(payload)
+}
+
 type STTCapabilities struct {
 	Streaming         bool   `json:"streaming"`
 	InterimResults    bool   `json:"interim_results"`
