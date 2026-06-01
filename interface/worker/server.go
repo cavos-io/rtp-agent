@@ -158,6 +158,7 @@ func NewAgentServer(opts WorkerOptions) *AgentServer {
 		activeJobs:     make(map[string]*JobContext),
 		pendingAccepts: make(map[string]JobAcceptArguments),
 		pendingTimers:  make(map[string]*time.Timer),
+		workerID:       "unregistered",
 	}
 }
 

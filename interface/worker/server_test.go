@@ -667,8 +667,11 @@ func TestHandleRegisterNotifiesWorkerRegisteredHandlers(t *testing.T) {
 
 func TestAgentServerIDReturnsRegisteredWorkerID(t *testing.T) {
 	server := NewAgentServer(WorkerOptions{})
-	if server.ID() != "" {
-		t.Fatalf("ID() before registration = %q, want empty", server.ID())
+	if server.ID() != "unregistered" {
+		t.Fatalf("ID() before registration = %q, want unregistered", server.ID())
+	}
+	if server.WorkerInfo().CloudAgents {
+		t.Fatal("WorkerInfo().CloudAgents = true, want false for unregistered worker without token")
 	}
 
 	server.handleMessage(context.Background(), &livekit.ServerMessage{
