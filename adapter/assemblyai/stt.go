@@ -1,7 +1,6 @@
 package assemblyai
 
 import (
-	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/json"
@@ -9,49 +8,129 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"sync"
-	"time"
 
 	"github.com/cavos-io/conversation-worker/core/stt"
 	"github.com/cavos-io/conversation-worker/model"
 	"github.com/gorilla/websocket"
 )
 
-var (
-	assemblyAIBaseURL      = "https://api.assemblyai.com/v2"
-	assemblyAIHTTPClient   = http.DefaultClient
-	assemblyAIPollInterval = time.Second
+const (
+	defaultAssemblyAIBaseURL        = "wss://streaming.assemblyai.com"
+	defaultAssemblyAIEncoding       = "pcm_s16le"
+	defaultAssemblyAISpeechModel    = "universal-streaming-english"
+	defaultAssemblyAISampleRate     = 16000
+	defaultAssemblyAIMinTurnSilence = 100
 )
 
 type AssemblyAISTT struct {
-	apiKey string
+	apiKey             string
+	baseURL            string
+	sampleRate         int
+	encoding           string
+	speechModel        string
+	languageDetection  *bool
+	minTurnSilence     *int
+	maxTurnSilence     *int
+	continuousPartials *bool
+	speakerLabels      *bool
 }
 
-func NewAssemblyAISTT(apiKey string) *AssemblyAISTT {
-	return &AssemblyAISTT{
-		apiKey: apiKey,
+type AssemblyAISTTOption func(*AssemblyAISTT)
+
+func WithAssemblyAISTTBaseURL(baseURL string) AssemblyAISTTOption {
+	return func(s *AssemblyAISTT) {
+		if baseURL != "" {
+			s.baseURL = strings.TrimRight(baseURL, "/")
+		}
 	}
+}
+
+func WithAssemblyAISTTSampleRate(sampleRate int) AssemblyAISTTOption {
+	return func(s *AssemblyAISTT) {
+		if sampleRate > 0 {
+			s.sampleRate = sampleRate
+		}
+	}
+}
+
+func WithAssemblyAISTTModel(model string) AssemblyAISTTOption {
+	return func(s *AssemblyAISTT) {
+		if model == "u3-pro" {
+			model = "u3-rt-pro"
+		}
+		if model != "" {
+			s.speechModel = model
+		}
+	}
+}
+
+func WithAssemblyAISTTMinTurnSilence(ms int) AssemblyAISTTOption {
+	return func(s *AssemblyAISTT) {
+		if ms > 0 {
+			s.minTurnSilence = intPtr(ms)
+		}
+	}
+}
+
+func WithAssemblyAISTTMaxTurnSilence(ms int) AssemblyAISTTOption {
+	return func(s *AssemblyAISTT) {
+		if ms > 0 {
+			s.maxTurnSilence = intPtr(ms)
+		}
+	}
+}
+
+func WithAssemblyAISTTLanguageDetection(enabled bool) AssemblyAISTTOption {
+	return func(s *AssemblyAISTT) {
+		s.languageDetection = boolPtr(enabled)
+	}
+}
+
+func WithAssemblyAISTTContinuousPartials(enabled bool) AssemblyAISTTOption {
+	return func(s *AssemblyAISTT) {
+		s.continuousPartials = boolPtr(enabled)
+	}
+}
+
+func WithAssemblyAISTTSpeakerLabels(enabled bool) AssemblyAISTTOption {
+	return func(s *AssemblyAISTT) {
+		s.speakerLabels = boolPtr(enabled)
+	}
+}
+
+func NewAssemblyAISTT(apiKey string, opts ...AssemblyAISTTOption) *AssemblyAISTT {
+	provider := &AssemblyAISTT{
+		apiKey:         apiKey,
+		baseURL:        defaultAssemblyAIBaseURL,
+		sampleRate:     defaultAssemblyAISampleRate,
+		encoding:       defaultAssemblyAIEncoding,
+		speechModel:    defaultAssemblyAISpeechModel,
+		minTurnSilence: intPtr(defaultAssemblyAIMinTurnSilence),
+	}
+	for _, opt := range opts {
+		opt(provider)
+	}
+	if provider.speechModel == "u3-rt-pro" && provider.continuousPartials == nil {
+		provider.continuousPartials = boolPtr(true)
+	}
+	return provider
 }
 
 func (s *AssemblyAISTT) Label() string { return "assemblyai.STT" }
 func (s *AssemblyAISTT) Capabilities() stt.STTCapabilities {
-	return stt.STTCapabilities{Streaming: true, InterimResults: true, Diarization: false, AlignedTranscript: "word", OfflineRecognize: true}
+	return stt.STTCapabilities{Streaming: true, InterimResults: true, Diarization: s.speakerLabels != nil && *s.speakerLabels, AlignedTranscript: "word", OfflineRecognize: false}
 }
 
 func (s *AssemblyAISTT) Stream(ctx context.Context, language string) (stt.RecognizeStream, error) {
-	// AssemblyAI requires fetching a temporary token or passing the API key in the header
-	// Standard websocket connection to wss://api.assemblyai.com/v2/realtime/ws
-
-	u := url.URL{Scheme: "wss", Host: "api.assemblyai.com", Path: "/v2/realtime/ws"}
-	q := u.Query()
-	q.Set("sample_rate", "16000")
-	u.RawQuery = q.Encode()
-
 	header := make(http.Header)
 	header.Set("Authorization", s.apiKey)
+	header.Set("Content-Type", "application/json")
+	header.Set("User-Agent", "AssemblyAI/1.0 (integration=Livekit)")
 
-	conn, _, err := websocket.DefaultDialer.DialContext(ctx, u.String(), header)
+	conn, _, err := websocket.DefaultDialer.DialContext(ctx, buildAssemblyAIStreamURL(s), header)
 	if err != nil {
 		return nil, err
 	}
@@ -68,153 +147,39 @@ func (s *AssemblyAISTT) Stream(ctx context.Context, language string) (stt.Recogn
 }
 
 func (s *AssemblyAISTT) Recognize(ctx context.Context, frames []*model.AudioFrame, language string) (*stt.SpeechEvent, error) {
-	var buf bytes.Buffer
-	for _, f := range frames {
-		buf.Write(f.Data)
-	}
-
-	uploadReq, err := http.NewRequestWithContext(ctx, "POST", assemblyAIEndpoint("/upload"), bytes.NewReader(buf.Bytes()))
-	if err != nil {
-		return nil, err
-	}
-	uploadReq.Header.Set("Authorization", s.apiKey)
-
-	uploadResp, err := assemblyAIHTTPClient.Do(uploadReq)
-	if err != nil {
-		return nil, err
-	}
-	defer uploadResp.Body.Close()
-	if err := assemblyAIStatusError(uploadResp); err != nil {
-		return nil, err
-	}
-
-	var uploadResult struct {
-		UploadURL string `json:"upload_url"`
-	}
-	if err := json.NewDecoder(uploadResp.Body).Decode(&uploadResult); err != nil {
-		return nil, err
-	}
-	if uploadResult.UploadURL == "" {
-		return nil, fmt.Errorf("assemblyai upload response missing upload_url")
-	}
-
-	reqBody := map[string]interface{}{
-		"audio_url": uploadResult.UploadURL,
-	}
-	if language != "" {
-		reqBody["language_code"] = language
-	}
-
-	jsonBody, err := json.Marshal(reqBody)
-	if err != nil {
-		return nil, err
-	}
-	req, err := http.NewRequestWithContext(ctx, "POST", assemblyAIEndpoint("/transcript"), bytes.NewBuffer(jsonBody))
-	if err != nil {
-		return nil, err
-	}
-	req.Header.Set("Authorization", s.apiKey)
-	req.Header.Set("Content-Type", "application/json")
-
-	resp, err := assemblyAIHTTPClient.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-	if err := assemblyAIStatusError(resp); err != nil {
-		return nil, err
-	}
-
-	var result struct {
-		ID string `json:"id"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return nil, err
-	}
-	if result.ID == "" {
-		return nil, fmt.Errorf("assemblyai transcript response missing id")
-	}
-
-	return s.pollTranscript(ctx, result.ID)
+	return nil, fmt.Errorf("assemblyai offline recognize is not implemented")
 }
 
-func (s *AssemblyAISTT) pollTranscript(ctx context.Context, id string) (*stt.SpeechEvent, error) {
-	for {
-		req, err := http.NewRequestWithContext(ctx, "GET", assemblyAIEndpoint("/transcript/"+id), nil)
-		if err != nil {
-			return nil, err
-		}
-		req.Header.Set("Authorization", s.apiKey)
-
-		resp, err := assemblyAIHTTPClient.Do(req)
-		if err != nil {
-			return nil, err
-		}
-
-		var result struct {
-			Status     string           `json:"status"`
-			Text       string           `json:"text"`
-			Confidence float64          `json:"confidence"`
-			Error      string           `json:"error"`
-			Words      []assemblyAIWord `json:"words"`
-		}
-		statusErr := assemblyAIStatusError(resp)
-		decodeErr := json.NewDecoder(resp.Body).Decode(&result)
-		closeErr := resp.Body.Close()
-		if statusErr != nil {
-			return nil, statusErr
-		}
-		if decodeErr != nil {
-			return nil, decodeErr
-		}
-		if closeErr != nil {
-			return nil, closeErr
-		}
-
-		switch result.Status {
-		case "completed":
-			return assemblyAITranscriptEvent(result.Text, result.Confidence, assemblyAITimedStrings(result.Words)), nil
-		case "error":
-			if result.Error == "" {
-				result.Error = "transcript failed"
-			}
-			return nil, fmt.Errorf("assemblyai transcript error: %s", result.Error)
-		}
-
-		select {
-		case <-ctx.Done():
-			return nil, ctx.Err()
-		case <-time.After(assemblyAIPollInterval):
-		}
+func buildAssemblyAIStreamURL(s *AssemblyAISTT) string {
+	u, err := url.Parse(strings.TrimRight(s.baseURL, "/") + "/v3/ws")
+	if err != nil {
+		return ""
 	}
-}
-
-func assemblyAIEndpoint(path string) string {
-	return strings.TrimRight(assemblyAIBaseURL, "/") + "/" + strings.TrimLeft(path, "/")
-}
-
-func assemblyAIStatusError(resp *http.Response) error {
-	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
-		return nil
+	q := u.Query()
+	q.Set("sample_rate", strconv.Itoa(s.sampleRate))
+	q.Set("encoding", s.encoding)
+	q.Set("speech_model", s.speechModel)
+	if s.minTurnSilence != nil {
+		q.Set("min_turn_silence", strconv.Itoa(*s.minTurnSilence))
 	}
-	body, _ := io.ReadAll(resp.Body)
-	if len(body) > 0 {
-		return fmt.Errorf("assemblyai request failed: %s: %s", resp.Status, strings.TrimSpace(string(body)))
+	if s.maxTurnSilence != nil {
+		q.Set("max_turn_silence", strconv.Itoa(*s.maxTurnSilence))
+	} else if s.speechModel == "u3-rt-pro" && s.minTurnSilence != nil {
+		q.Set("max_turn_silence", strconv.Itoa(*s.minTurnSilence))
 	}
-	return fmt.Errorf("assemblyai request failed: %s", resp.Status)
-}
-
-func assemblyAITranscriptEvent(text string, confidence float64, words []stt.TimedString) *stt.SpeechEvent {
-	return &stt.SpeechEvent{
-		Type: stt.SpeechEventFinalTranscript,
-		Alternatives: []stt.SpeechData{
-			{
-				Text:       text,
-				Confidence: confidence,
-				Words:      words,
-			},
-		},
+	if s.continuousPartials != nil {
+		q.Set("continuous_partials", strconv.FormatBool(*s.continuousPartials))
 	}
+	if s.languageDetection != nil {
+		q.Set("language_detection", strconv.FormatBool(*s.languageDetection))
+	} else {
+		q.Set("language_detection", strconv.FormatBool(strings.Contains(s.speechModel, "multilingual") || s.speechModel == "u3-rt-pro"))
+	}
+	if s.speakerLabels != nil {
+		q.Set("speaker_labels", strconv.FormatBool(*s.speakerLabels))
+	}
+	u.RawQuery = q.Encode()
+	return u.String()
 }
 
 type assemblyAIWord struct {
@@ -249,9 +214,12 @@ type assemblyAISTTStream struct {
 }
 
 type aaiResponse struct {
+	Type        string           `json:"type"`
 	MessageType string           `json:"message_type"`
 	Text        string           `json:"text"`
+	Transcript  string           `json:"transcript"`
 	Confidence  float64          `json:"confidence"`
+	EndOfTurn   bool             `json:"end_of_turn"`
 	Words       []assemblyAIWord `json:"words"`
 	Error       string           `json:"error"`
 }
@@ -272,11 +240,11 @@ func (s *assemblyAISTTStream) readLoop() {
 			continue
 		}
 
-		if resp.MessageType == "SessionBegins" {
+		if resp.Type == "Begin" || resp.MessageType == "SessionBegins" {
 			continue
 		}
 
-		if resp.MessageType == "SessionTerminated" {
+		if resp.Type == "Termination" || resp.MessageType == "SessionTerminated" {
 			return
 		}
 
@@ -285,7 +253,7 @@ func (s *assemblyAISTTStream) readLoop() {
 			return
 		}
 
-		if resp.MessageType == "PartialTranscript" || resp.MessageType == "FinalTranscript" {
+		if resp.Type == "Turn" || resp.MessageType == "PartialTranscript" || resp.MessageType == "FinalTranscript" {
 			if event := assemblyAIRealtimeTranscriptEvent(resp); event != nil {
 				s.events <- event
 			}
@@ -294,25 +262,45 @@ func (s *assemblyAISTTStream) readLoop() {
 }
 
 func assemblyAIRealtimeTranscriptEvent(resp aaiResponse) *stt.SpeechEvent {
-	if resp.Text == "" {
+	text := resp.Text
+	if text == "" {
+		text = resp.Transcript
+	}
+	if text == "" {
 		return nil
 	}
 
 	eventType := stt.SpeechEventInterimTranscript
-	if resp.MessageType == "FinalTranscript" {
+	if resp.EndOfTurn || resp.MessageType == "FinalTranscript" {
 		eventType = stt.SpeechEventFinalTranscript
+	}
+	words := assemblyAITimedStrings(resp.Words)
+	confidence := resp.Confidence
+	if confidence == 0 && len(words) > 0 {
+		for _, word := range words {
+			confidence += word.Confidence
+		}
+		confidence /= float64(len(words))
 	}
 
 	return &stt.SpeechEvent{
 		Type: eventType,
 		Alternatives: []stt.SpeechData{
 			{
-				Text:       resp.Text,
-				Confidence: resp.Confidence,
-				Words:      assemblyAITimedStrings(resp.Words),
+				Text:       text,
+				Confidence: confidence,
+				Words:      words,
 			},
 		},
 	}
+}
+
+func intPtr(value int) *int {
+	return &value
+}
+
+func boolPtr(value bool) *bool {
+	return &value
 }
 
 func (s *assemblyAISTTStream) PushFrame(frame *model.AudioFrame) error {
