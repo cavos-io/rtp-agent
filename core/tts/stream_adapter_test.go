@@ -162,6 +162,39 @@ func TestStreamAdapterSetsStableRequestID(t *testing.T) {
 	}
 }
 
+func TestStreamAdapterDoesNotMutateProviderAudioMetadata(t *testing.T) {
+	providerAudio := &SynthesizedAudio{
+		RequestID: "provider-request",
+		SegmentID: "provider-segment",
+		IsFinal:   false,
+		Frame:     &model.AudioFrame{Data: []byte{1}, SampleRate: 24000, NumChannels: 1, SamplesPerChannel: 1},
+	}
+	provider := &fakeStreamAdapterTTS{events: []*SynthesizedAudio{providerAudio}}
+	stream, err := NewStreamAdapter(provider).Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+	defer stream.Close()
+
+	if err := stream.PushText("wrapped segment"); err != nil {
+		t.Fatalf("PushText returned error: %v", err)
+	}
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush returned error: %v", err)
+	}
+
+	got := nextStreamAdapterAudio(t, stream)
+	if got == providerAudio {
+		t.Fatal("returned provider audio pointer, want wrapper-owned event")
+	}
+	if got.RequestID == providerAudio.RequestID || got.SegmentID == providerAudio.SegmentID || !got.IsFinal {
+		t.Fatalf("wrapped metadata = request:%q segment:%q final:%t, want wrapper metadata", got.RequestID, got.SegmentID, got.IsFinal)
+	}
+	if providerAudio.RequestID != "provider-request" || providerAudio.SegmentID != "provider-segment" || providerAudio.IsFinal {
+		t.Fatalf("provider audio mutated: %#v", providerAudio)
+	}
+}
+
 func TestStreamAdapterPropagatesSynthesizeError(t *testing.T) {
 	synthErr := errors.New("synthesize failed")
 	stream, err := NewStreamAdapter(&fakeStreamAdapterTTS{synthesizeErr: synthErr}).Stream(context.Background())

@@ -42,6 +42,7 @@ func (s *chunkedStreamFromSynthesizeStream) Next() (*SynthesizedAudio, error) {
 		return nil, err
 	}
 	s.audioSeen = true
+	audio = cloneSynthesizedAudio(audio)
 	audio.RequestID = s.requestID
 	return audio, nil
 }

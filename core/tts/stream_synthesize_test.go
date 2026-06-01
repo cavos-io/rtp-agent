@@ -26,7 +26,7 @@ func TestSynthesizeWithStreamPushesTextAndFlushes(t *testing.T) {
 }
 
 func TestSynthesizeWithStreamReturnsStreamEvents(t *testing.T) {
-	want := &SynthesizedAudio{RequestID: "req-a"}
+	want := &SynthesizedAudio{RequestID: "req-a", DeltaText: "hello"}
 	provider := &fakeStreamingTTS{
 		stream: &fakeSynthesizeStream{
 			events: []*SynthesizedAudio{want},
@@ -43,8 +43,14 @@ func TestSynthesizeWithStreamReturnsStreamEvents(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Next() error = %v", err)
 	}
-	if got != want {
-		t.Fatalf("Next() = %#v, want %#v", got, want)
+	if got == want {
+		t.Fatal("Next() returned provider audio pointer, want wrapper-owned event")
+	}
+	if got.DeltaText != want.DeltaText {
+		t.Fatalf("DeltaText = %q, want %q", got.DeltaText, want.DeltaText)
+	}
+	if got.RequestID == "" || got.RequestID == want.RequestID {
+		t.Fatalf("RequestID = %q, want wrapper request id", got.RequestID)
 	}
 }
 
@@ -80,6 +86,35 @@ func TestSynthesizeWithStreamSetsStableRequestID(t *testing.T) {
 	}
 	if first.RequestID == "provider-a" || second.RequestID == "provider-b" {
 		t.Fatalf("RequestID forwarded provider ids: first=%q second=%q", first.RequestID, second.RequestID)
+	}
+}
+
+func TestSynthesizeWithStreamDoesNotMutateProviderAudioMetadata(t *testing.T) {
+	providerAudio := &SynthesizedAudio{RequestID: "provider-request"}
+	provider := &fakeStreamingTTS{
+		stream: &fakeSynthesizeStream{
+			events: []*SynthesizedAudio{providerAudio},
+		},
+	}
+
+	chunked, err := SynthesizeWithStream(context.Background(), provider, "hello")
+	if err != nil {
+		t.Fatalf("SynthesizeWithStream() error = %v", err)
+	}
+	defer chunked.Close()
+
+	got, err := chunked.Next()
+	if err != nil {
+		t.Fatalf("Next() error = %v", err)
+	}
+	if got == providerAudio {
+		t.Fatal("returned provider audio pointer, want wrapper-owned event")
+	}
+	if got.RequestID == "" || got.RequestID == providerAudio.RequestID {
+		t.Fatalf("RequestID = %q, want wrapper request id", got.RequestID)
+	}
+	if providerAudio.RequestID != "provider-request" {
+		t.Fatalf("provider RequestID = %q, want unchanged", providerAudio.RequestID)
 	}
 }
 

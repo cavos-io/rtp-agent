@@ -43,15 +43,15 @@ func (a *StreamAdapter) Synthesize(ctx context.Context, text string) (ChunkedStr
 }
 
 type streamAdapterWrapper struct {
-	adapter *StreamAdapter
-	ctx     context.Context
-	cancel  context.CancelFunc
+	adapter   *StreamAdapter
+	ctx       context.Context
+	cancel    context.CancelFunc
 	requestID string
-	eventCh chan *SynthesizedAudio
-	errCh   chan error
-	inputCh chan streamAdapterInput
-	mu      sync.Mutex
-	closed  bool
+	eventCh   chan *SynthesizedAudio
+	errCh     chan error
+	inputCh   chan streamAdapterInput
+	mu        sync.Mutex
+	closed    bool
 }
 
 type streamAdapterInput struct {
@@ -131,6 +131,7 @@ func (w *streamAdapterWrapper) synthesize(text string, segmentID string) error {
 		if err != nil {
 			if errors.Is(err, io.EOF) {
 				if pending != nil {
+					pending = cloneSynthesizedAudio(pending)
 					pending.SegmentID = segmentID
 					pending.RequestID = w.requestID
 					pending.IsFinal = true
@@ -143,6 +144,7 @@ func (w *streamAdapterWrapper) synthesize(text string, segmentID string) error {
 			return err
 		}
 		if pending != nil {
+			pending = cloneSynthesizedAudio(pending)
 			pending.SegmentID = segmentID
 			pending.RequestID = w.requestID
 			w.eventCh <- pending

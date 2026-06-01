@@ -426,6 +426,7 @@ func (s *fallbackChunkedStream) monitorStream() {
 			s.errCh <- err
 			return
 		}
+		ev = cloneSynthesizedAudio(ev)
 		ev.RequestID = s.requestID
 
 		audioSent = true
@@ -635,6 +636,7 @@ func (s *fallbackSynthesizeStream) monitorStream() {
 			s.errCh <- err
 			return
 		}
+		ev = cloneSynthesizedAudio(ev)
 		ev.RequestID = s.requestID
 
 		audioSent = true
