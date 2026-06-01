@@ -7,8 +7,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/cavos-io/conversation-worker/core/agent"
-	"github.com/cavos-io/conversation-worker/library/telemetry"
+	"github.com/cavos-io/rtp-agent/core/agent"
+	"github.com/cavos-io/rtp-agent/library/telemetry"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 )
@@ -22,9 +22,9 @@ var (
 			MarginTop(1).
 			MarginBottom(1)
 
-	stateIdleStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color("#888888"))
-	stateThinkingStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("#E8D13E")).Bold(true)
-	stateSpeakingStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("#56F4A8")).Bold(true)
+	stateIdleStyle      = lipgloss.NewStyle().Foreground(lipgloss.Color("#888888"))
+	stateThinkingStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("#E8D13E")).Bold(true)
+	stateSpeakingStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("#56F4A8")).Bold(true)
 	stateListeningStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("#3E8EE8")).Bold(true)
 
 	logStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("#AAAAAA"))
@@ -41,7 +41,7 @@ type audioLevelMsg float64
 type ConsoleModel struct {
 	agentState agent.AgentState
 	userState  agent.UserState
-	
+
 	logs       []string
 	metrics    *telemetry.UsageSummary
 	audioLevel float64 // 0.0 to 1.0
@@ -82,7 +82,7 @@ func (m *ConsoleModel) listenToAudio() tea.Cmd {
 		if m.audioIO == nil {
 			return nil
 		}
-		
+
 		select {
 		case <-m.ctx.Done():
 			return nil
@@ -90,7 +90,7 @@ func (m *ConsoleModel) listenToAudio() tea.Cmd {
 			if frame == nil {
 				return nil
 			}
-			
+
 			// Calculate simple RMS amplitude for visualizer
 			var sum float64
 			pcm := make([]int16, len(frame.Data)/2)
@@ -98,12 +98,12 @@ func (m *ConsoleModel) listenToAudio() tea.Cmd {
 				pcm[i] = int16(frame.Data[i*2]) | (int16(frame.Data[i*2+1]) << 8)
 				sum += float64(pcm[i]) * float64(pcm[i])
 			}
-			
+
 			rms := 0.0
 			if len(pcm) > 0 {
 				rms = math.Sqrt(sum / float64(len(pcm)))
 			}
-			
+
 			// Normalize to 0-1 range roughly (max int16 is 32767)
 			level := math.Min(1.0, rms/10000.0)
 			return audioLevelMsg(level)
@@ -119,19 +119,19 @@ func (m *ConsoleModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.cancel()
 			return m, tea.Quit
 		}
-	
+
 	case agentStateMsg:
 		m.agentState = agent.AgentState(msg)
-	
+
 	case userStateMsg:
 		m.userState = agent.UserState(msg)
-	
+
 	case logMsg:
 		m.logs = append(m.logs, string(msg))
 		if len(m.logs) > 10 {
 			m.logs = m.logs[len(m.logs)-10:]
 		}
-		
+
 	case metricsMsg:
 		sum := telemetry.UsageSummary(msg)
 		m.metrics = &sum

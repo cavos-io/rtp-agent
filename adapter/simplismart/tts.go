@@ -8,8 +8,8 @@ import (
 	"io"
 	"net/http"
 
-	"github.com/cavos-io/conversation-worker/core/tts"
-	"github.com/cavos-io/conversation-worker/model"
+	"github.com/cavos-io/rtp-agent/core/tts"
+	"github.com/cavos-io/rtp-agent/model"
 )
 
 type SimplismartTTS struct {
@@ -31,7 +31,7 @@ func (t *SimplismartTTS) Label() string { return "simplismart.TTS" }
 func (t *SimplismartTTS) Capabilities() tts.TTSCapabilities {
 	return tts.TTSCapabilities{Streaming: false, AlignedTranscript: false}
 }
-func (t *SimplismartTTS) SampleRate() int { return 24000 }
+func (t *SimplismartTTS) SampleRate() int  { return 24000 }
 func (t *SimplismartTTS) NumChannels() int { return 1 }
 
 func (t *SimplismartTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStream, error) {

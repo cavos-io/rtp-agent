@@ -3,8 +3,8 @@ package main
 import (
 	"fmt"
 
-	"github.com/cavos-io/conversation-worker/interface/cli"
-	"github.com/cavos-io/conversation-worker/interface/worker"
+	"github.com/cavos-io/rtp-agent/interface/cli"
+	"github.com/cavos-io/rtp-agent/interface/worker"
 )
 
 func main() {

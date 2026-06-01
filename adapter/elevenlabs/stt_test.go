@@ -12,7 +12,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/cavos-io/conversation-worker/core/stt"
+	"github.com/cavos-io/rtp-agent/core/stt"
 )
 
 func TestElevenLabsSTTDefaultsMatchReference(t *testing.T) {

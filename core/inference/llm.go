@@ -5,8 +5,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/cavos-io/conversation-worker/adapter/openai"
-	"github.com/cavos-io/conversation-worker/core/llm"
+	"github.com/cavos-io/rtp-agent/adapter/openai"
+	"github.com/cavos-io/rtp-agent/core/llm"
 )
 
 var reasoningUnsupportedParams = map[string]bool{

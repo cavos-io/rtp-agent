@@ -11,8 +11,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/cavos-io/conversation-worker/interface/worker/ipc"
-	"github.com/cavos-io/conversation-worker/library/logger"
+	"github.com/cavos-io/rtp-agent/interface/worker/ipc"
+	"github.com/cavos-io/rtp-agent/library/logger"
 	"github.com/fsnotify/fsnotify"
 )
 

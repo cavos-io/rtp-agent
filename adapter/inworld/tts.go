@@ -8,8 +8,8 @@ import (
 	"io"
 	"net/http"
 
-	"github.com/cavos-io/conversation-worker/core/tts"
-	"github.com/cavos-io/conversation-worker/model"
+	"github.com/cavos-io/rtp-agent/core/tts"
+	"github.com/cavos-io/rtp-agent/model"
 )
 
 type InworldTTS struct {
@@ -31,7 +31,7 @@ func (t *InworldTTS) Label() string { return "inworld.TTS" }
 func (t *InworldTTS) Capabilities() tts.TTSCapabilities {
 	return tts.TTSCapabilities{Streaming: false, AlignedTranscript: false}
 }
-func (t *InworldTTS) SampleRate() int { return 24000 }
+func (t *InworldTTS) SampleRate() int  { return 24000 }
 func (t *InworldTTS) NumChannels() int { return 1 }
 
 func (t *InworldTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStream, error) {

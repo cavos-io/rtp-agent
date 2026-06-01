@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	cavosmath "github.com/cavos-io/conversation-worker/library/math"
+	cavosmath "github.com/cavos-io/rtp-agent/library/math"
 )
 
 type ChatContextDictOptions struct {

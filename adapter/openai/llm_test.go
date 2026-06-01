@@ -3,7 +3,7 @@ package openai
 import (
 	"testing"
 
-	"github.com/cavos-io/conversation-worker/core/llm"
+	"github.com/cavos-io/rtp-agent/core/llm"
 )
 
 func TestBuildOpenAIChatMessagesGroupsToolCallsWithOutputs(t *testing.T) {

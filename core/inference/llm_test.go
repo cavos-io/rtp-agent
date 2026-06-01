@@ -3,7 +3,7 @@ package inference
 import (
 	"testing"
 
-	"github.com/cavos-io/conversation-worker/core/llm"
+	"github.com/cavos-io/rtp-agent/core/llm"
 )
 
 func TestChatOptionsForModelDropsUnsupportedReasoningParams(t *testing.T) {

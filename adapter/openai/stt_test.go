@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/cavos-io/conversation-worker/core/stt"
+	"github.com/cavos-io/rtp-agent/core/stt"
 	goopenai "github.com/sashabaranov/go-openai"
 )
 

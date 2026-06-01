@@ -9,8 +9,8 @@ import (
 	"net/url"
 	"sync"
 
-	"github.com/cavos-io/conversation-worker/core/stt"
-	"github.com/cavos-io/conversation-worker/model"
+	"github.com/cavos-io/rtp-agent/core/stt"
+	"github.com/cavos-io/rtp-agent/model"
 	"github.com/gorilla/websocket"
 )
 
@@ -33,7 +33,7 @@ func (s *GladiaSTT) Stream(ctx context.Context, language string) (stt.RecognizeS
 	if language == "" {
 		language = "en"
 	}
-	
+
 	// Gladia API websocket URL
 	u := url.URL{Scheme: "wss", Host: "api.gladia.io", Path: "/audio/text/audio-transcription"}
 
@@ -44,10 +44,10 @@ func (s *GladiaSTT) Stream(ctx context.Context, language string) (stt.RecognizeS
 
 	// Initialize Gladia session
 	initMsg := map[string]interface{}{
-		"x_gladia_key": s.apiKey,
+		"x_gladia_key":      s.apiKey,
 		"language_behavior": "automatic single language",
-		"sample_rate": 16000,
-		"encoding": "wav/pcm",
+		"sample_rate":       16000,
+		"encoding":          "wav/pcm",
 	}
 
 	if err := conn.WriteJSON(initMsg); err != nil {
@@ -79,12 +79,12 @@ type gladiaSTTStream struct {
 }
 
 type gladiaResponse struct {
-	Type        string `json:"type"`
-	Transcription string `json:"transcription"`
-	Confidence  float64 `json:"confidence"`
-	Language    string `json:"language"`
-	TimeBegin   float64 `json:"time_begin"`
-	TimeEnd     float64 `json:"time_end"`
+	Type          string  `json:"type"`
+	Transcription string  `json:"transcription"`
+	Confidence    float64 `json:"confidence"`
+	Language      string  `json:"language"`
+	TimeBegin     float64 `json:"time_begin"`
+	TimeEnd       float64 `json:"time_end"`
 }
 
 func (s *gladiaSTTStream) readLoop() {

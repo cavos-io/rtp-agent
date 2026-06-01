@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/cavos-io/conversation-worker/core/vad"
+	"github.com/cavos-io/rtp-agent/core/vad"
 )
 
 type SileroVADOptions struct {

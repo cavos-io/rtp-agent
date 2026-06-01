@@ -5,7 +5,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/cavos-io/conversation-worker/library/utils/images"
+	"github.com/cavos-io/rtp-agent/library/utils/images"
 )
 
 // VoiceActivityVideoSampler samples video frames at a reduced rate (e.g. 1 fps)
@@ -49,9 +49,9 @@ func (s *VoiceActivityVideoSampler) OnVideoFrame(ctx context.Context, frame *ima
 
 	now := time.Now()
 	elapsed := now.Sub(s.lastTime)
-	
+
 	interval := time.Duration(float64(time.Second) / s.sampleRate)
-	
+
 	if elapsed >= interval {
 		s.lastTime = now
 		return true

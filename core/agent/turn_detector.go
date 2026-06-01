@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/cavos-io/conversation-worker/core/llm"
+	"github.com/cavos-io/rtp-agent/core/llm"
 )
 
 // LLMTurnDetector uses an LLM to predict if the user has finished speaking.
@@ -31,7 +31,7 @@ func (m *LLMTurnDetector) PredictEndOfTurn(ctx context.Context, chatCtx *llm.Cha
 	}
 
 	evalCtx := llm.NewChatContext()
-	
+
 	systemPrompt := `You are an End-of-Utterance (EOU) detection model.
 Analyze the provided conversation history and determine the probability (0.0 to 1.0) that the user has finished their turn and expects a response.
 A complete thought, question, or sentence usually indicates a high probability (> 0.8).

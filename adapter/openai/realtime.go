@@ -8,9 +8,9 @@ import (
 	"net/http"
 	"sync"
 
-	"github.com/cavos-io/conversation-worker/core/llm"
-	"github.com/cavos-io/conversation-worker/library/logger"
-	"github.com/cavos-io/conversation-worker/model"
+	"github.com/cavos-io/rtp-agent/core/llm"
+	"github.com/cavos-io/rtp-agent/library/logger"
+	"github.com/cavos-io/rtp-agent/model"
 	"github.com/gorilla/websocket"
 )
 
@@ -41,7 +41,7 @@ type realtimeSession struct {
 
 func (m *RealtimeModel) Session() (llm.RealtimeSession, error) {
 	wsURL := fmt.Sprintf("%s?model=%s", m.baseURL, m.model)
-	
+
 	header := http.Header{}
 	header.Add("Authorization", "Bearer "+m.apiKey)
 	header.Add("OpenAI-Beta", "realtime=v1")
@@ -87,10 +87,10 @@ func (s *realtimeSession) UpdateTools(tools []llm.Tool) error {
 	var oaTools []map[string]any
 	for _, t := range tools {
 		oaTools = append(oaTools, map[string]any{
-			"type": "function",
-			"name": t.Name(),
+			"type":        "function",
+			"name":        t.Name(),
 			"description": t.Description(),
-			"parameters": t.Parameters(),
+			"parameters":  t.Parameters(),
 		})
 	}
 
@@ -117,7 +117,7 @@ func (s *realtimeSession) PushAudio(frame *model.AudioFrame) error {
 
 	b64Audio := base64.StdEncoding.EncodeToString(frame.Data)
 	msg := map[string]any{
-		"type": "input_audio_buffer.append",
+		"type":  "input_audio_buffer.append",
 		"audio": b64Audio,
 	}
 	return s.sendMsg(msg)

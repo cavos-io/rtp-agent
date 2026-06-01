@@ -7,7 +7,7 @@ import (
 	"io"
 	"strings"
 
-	cavosmath "github.com/cavos-io/conversation-worker/library/math"
+	cavosmath "github.com/cavos-io/rtp-agent/library/math"
 )
 
 func SynthesizeWithStream(ctx context.Context, provider TTS, text string) (ChunkedStream, error) {

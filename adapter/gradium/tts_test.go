@@ -8,7 +8,7 @@ import (
 	"net/http"
 	"testing"
 
-	"github.com/cavos-io/conversation-worker/core/tts"
+	"github.com/cavos-io/rtp-agent/core/tts"
 )
 
 func TestGradiumTTSDefaultsMatchReference(t *testing.T) {
