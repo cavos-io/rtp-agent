@@ -324,39 +324,56 @@ func (s *simpleVADStream) setOptions(options SimpleVADOptions) {
 
 func (s *simpleVADStream) PushFrame(frame *model.AudioFrame) error {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	if s.inputEnded {
+		s.mu.Unlock()
 		return errors.New("vad stream input ended")
 	}
 	if s.closed {
+		s.mu.Unlock()
 		return errors.New("vad stream closed")
 	}
 	if frame == nil {
+		s.mu.Unlock()
 		return errors.New("vad frame nil")
 	}
 	if frame.SampleRate == 0 {
+		s.mu.Unlock()
 		return errors.New("vad frame sample rate zero")
 	}
 	if frame.NumChannels == 0 {
+		s.mu.Unlock()
 		return errors.New("vad frame channel count zero")
 	}
 	if frame.SamplesPerChannel == 0 {
+		s.mu.Unlock()
 		return errors.New("vad frame samples per channel zero")
 	}
 	expectedDataLength := uint64(frame.SamplesPerChannel) * uint64(frame.NumChannels) * 2
 	if uint64(len(frame.Data)) != expectedDataLength {
+		s.mu.Unlock()
 		return errors.New("vad frame data length mismatch")
 	}
 	if s.inputSampleRate == 0 {
 		s.inputSampleRate = frame.SampleRate
 	} else if frame.SampleRate != s.inputSampleRate {
+		s.mu.Unlock()
 		return nil
 	}
 	frame = cloneFrame(frame)
+	var metrics []*telemetry.VADMetrics
 
 	if s.windowSamples() == 0 {
-		if err := s.processFrame(frame, frameDuration(frame)); err != nil {
+		metric, err := s.processFrame(frame, frameDuration(frame))
+		if err != nil {
+			s.mu.Unlock()
 			return err
+		}
+		if metric != nil {
+			metrics = append(metrics, metric)
+		}
+		s.mu.Unlock()
+		for _, metric := range metrics {
+			s.vad.emitMetrics(metric)
 		}
 		return nil
 	}
@@ -365,17 +382,26 @@ func (s *simpleVADStream) PushFrame(frame *model.AudioFrame) error {
 	s.windowBufferedSamples += frame.SamplesPerChannel
 	for windowSamples := s.windowSamples(); windowSamples > 0 && s.windowBufferedSamples >= windowSamples; windowSamples = s.windowSamples() {
 		s.advanceWindowSampleRemainder(windowSamples)
-		if err := s.processFrame(s.takeWindowFrame(windowSamples), s.options.WindowDuration); err != nil {
+		metric, err := s.processFrame(s.takeWindowFrame(windowSamples), s.options.WindowDuration)
+		if err != nil {
+			s.mu.Unlock()
 			return err
 		}
+		if metric != nil {
+			metrics = append(metrics, metric)
+		}
+	}
+	s.mu.Unlock()
+	for _, metric := range metrics {
+		s.vad.emitMetrics(metric)
 	}
 	return nil
 }
 
-func (s *simpleVADStream) processFrame(frame *model.AudioFrame, duration float64) error {
+func (s *simpleVADStream) processFrame(frame *model.AudioFrame, duration float64) (*telemetry.VADMetrics, error) {
 	probability, err := s.smoothProbability(frameRMS(frame))
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if s.lastActivity.IsZero() {
 		s.lastActivity = time.Now()
@@ -405,7 +431,7 @@ func (s *simpleVADStream) processFrame(frame *model.AudioFrame, duration float64
 		RawAccumulatedSpeech:  s.accumulatedSpeechDuration,
 		RawAccumulatedSilence: s.accumulatedSilenceDuration,
 	})
-	s.collectInferenceMetrics(inferenceDuration)
+	metrics := s.collectInferenceMetrics(inferenceDuration)
 
 	if probability >= s.options.Threshold || (s.speaking && probability > s.options.DeactivationThreshold) {
 		s.accumulatedSpeechDuration += duration
@@ -466,10 +492,10 @@ func (s *simpleVADStream) processFrame(frame *model.AudioFrame, duration float64
 			s.pendingSpeechFrames = nil
 		}
 	}
-	return nil
+	return metrics, nil
 }
 
-func (s *simpleVADStream) collectInferenceMetrics(inferenceDuration float64) {
+func (s *simpleVADStream) collectInferenceMetrics(inferenceDuration float64) *telemetry.VADMetrics {
 	s.metricsInferenceDuration += inferenceDuration
 	s.metricsInferenceCount++
 	updateInterval := s.options.UpdateInterval
@@ -477,7 +503,7 @@ func (s *simpleVADStream) collectInferenceMetrics(inferenceDuration float64) {
 		updateInterval = 1
 	}
 	if float64(s.metricsInferenceCount) < 1/updateInterval {
-		return
+		return nil
 	}
 
 	idleTime := 0.0
@@ -495,10 +521,10 @@ func (s *simpleVADStream) collectInferenceMetrics(inferenceDuration float64) {
 			ModelProvider: s.vad.Provider(),
 		},
 	}
-	s.vad.emitMetrics(metrics)
 
 	s.metricsInferenceDuration = 0
 	s.metricsInferenceCount = 0
+	return metrics
 }
 
 func (s *simpleVADStream) Flush() error {
