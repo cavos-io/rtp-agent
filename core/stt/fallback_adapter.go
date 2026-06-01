@@ -29,6 +29,11 @@ type FallbackAdapter struct {
 	nextAvailabilityID   uint64
 }
 
+const (
+	defaultFallbackAttemptTimeout = 10 * time.Second
+	defaultFallbackRetryInterval  = 5 * time.Second
+)
+
 type FallbackAdapterOptions struct {
 	MaxRetryPerSTT int
 	AttemptTimeout time.Duration
@@ -66,7 +71,10 @@ func (e *FallbackAllFailedError) Unwrap() error {
 }
 
 func NewFallbackAdapter(stts []STT) *FallbackAdapter {
-	return NewFallbackAdapterWithOptions(stts, FallbackAdapterOptions{MaxRetryPerSTT: 1})
+	return NewFallbackAdapterWithOptions(stts, FallbackAdapterOptions{
+		MaxRetryPerSTT: 1,
+		RetryInterval:  defaultFallbackRetryInterval,
+	})
 }
 
 func NewFallbackAdapterWithOptions(stts []STT, options FallbackAdapterOptions) *FallbackAdapter {
@@ -74,7 +82,10 @@ func NewFallbackAdapterWithOptions(stts []STT, options FallbackAdapterOptions) *
 }
 
 func NewFallbackAdapterWithVAD(stts []STT, vad vad.VAD) *FallbackAdapter {
-	return newFallbackAdapter(stts, vad, FallbackAdapterOptions{MaxRetryPerSTT: 1})
+	return newFallbackAdapter(stts, vad, FallbackAdapterOptions{
+		MaxRetryPerSTT: 1,
+		RetryInterval:  defaultFallbackRetryInterval,
+	})
 }
 
 func NewFallbackAdapterWithVADAndOptions(stts []STT, vad vad.VAD, options FallbackAdapterOptions) *FallbackAdapter {
@@ -86,7 +97,7 @@ func newFallbackAdapter(stts []STT, vad vad.VAD, options FallbackAdapterOptions)
 		panic("FallbackAdapter requires at least one STT")
 	}
 	if options.AttemptTimeout <= 0 {
-		options.AttemptTimeout = 10 * time.Second
+		options.AttemptTimeout = defaultFallbackAttemptTimeout
 	}
 
 	wrapped := make([]STT, len(stts))

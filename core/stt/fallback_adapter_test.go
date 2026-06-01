@@ -44,6 +44,24 @@ func TestFallbackAdapterAggregatesProviderCapabilities(t *testing.T) {
 	}
 }
 
+func TestFallbackAdapterDefaultConstructorsUseReferenceRetryInterval(t *testing.T) {
+	adapter := NewFallbackAdapter([]STT{
+		&metadataSTT{label: "primary", capabilities: STTCapabilities{Streaming: true}},
+	})
+	if adapter.retryInterval != 5*time.Second {
+		t.Fatalf("RetryInterval = %s, want 5s reference default", adapter.retryInterval)
+	}
+
+	offline := &metadataSTT{
+		label:        "offline",
+		capabilities: STTCapabilities{OfflineRecognize: true},
+	}
+	withVAD := NewFallbackAdapterWithVAD([]STT{offline}, &fakeStreamAdapterVAD{})
+	if withVAD.retryInterval != 5*time.Second {
+		t.Fatalf("VAD RetryInterval = %s, want 5s reference default", withVAD.retryInterval)
+	}
+}
+
 func TestFallbackAdapterAlwaysAdvertisesOfflineRecognize(t *testing.T) {
 	adapter := NewFallbackAdapter([]STT{
 		&metadataSTT{label: "primary", capabilities: STTCapabilities{
