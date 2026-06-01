@@ -1,6 +1,7 @@
 package worker
 
 import (
+	"strings"
 	"testing"
 	"time"
 
@@ -49,7 +50,7 @@ func TestRecorderIOPopulateSessionReportSetsRecordingMetadata(t *testing.T) {
 	recorder := NewRecorderIO(&agent.AgentSession{})
 	inputStart := time.Unix(100, 250000000)
 	recorder.InputStartTime = &inputStart
-	recorder.outPath = "/tmp/session.ogg"
+	recorder.outPath = ".tmp/session.ogg"
 	report := agent.NewSessionReport()
 	report.Timestamp = 145.75
 
@@ -58,8 +59,11 @@ func TestRecorderIOPopulateSessionReportSetsRecordingMetadata(t *testing.T) {
 	if report.AudioRecordingPath == nil {
 		t.Fatal("AudioRecordingPath = nil, want recorder output path")
 	}
-	if *report.AudioRecordingPath != "/tmp/session.ogg" {
-		t.Fatalf("AudioRecordingPath = %q, want %q", *report.AudioRecordingPath, "/tmp/session.ogg")
+	if *report.AudioRecordingPath != ".tmp/session.ogg" {
+		t.Fatalf("AudioRecordingPath = %q, want %q", *report.AudioRecordingPath, ".tmp/session.ogg")
+	}
+	if strings.HasPrefix(*report.AudioRecordingPath, "/") {
+		t.Fatalf("AudioRecordingPath = %q, want workspace-local relative path", *report.AudioRecordingPath)
 	}
 	if report.AudioRecordingStartedAt == nil {
 		t.Fatal("AudioRecordingStartedAt = nil, want recorder start time")

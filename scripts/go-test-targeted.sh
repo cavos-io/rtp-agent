@@ -1,6 +1,12 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+REPO_ROOT="$(git rev-parse --show-toplevel)"
+mkdir -p "$REPO_ROOT/.tmp/gocache" "$REPO_ROOT/.tmp/gotmp"
+
+export GOCACHE="${GOCACHE:-$REPO_ROOT/.tmp/gocache}"
+export TMPDIR="${TMPDIR:-$REPO_ROOT/.tmp/gotmp}"
+
 declare -A dirs=()
 
 while IFS= read -r file; do
@@ -26,5 +32,4 @@ if (( ${#packages[@]} == 0 )); then
   exit 0
 fi
 
-export GOCACHE="${GOCACHE:-/tmp/gocache}"
 go test "${packages[@]}"

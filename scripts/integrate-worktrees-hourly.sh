@@ -13,7 +13,7 @@ REPO_ROOT="$(git rev-parse --show-toplevel)"
 cd "$REPO_ROOT"
 
 LOG_DIR="$REPO_ROOT/.git/worktree-integrator/logs"
-mkdir -p "$LOG_DIR"
+mkdir -p "$LOG_DIR" "$REPO_ROOT/.tmp/gocache" "$REPO_ROOT/.tmp/gotmp"
 
 LOG_FILE="$LOG_DIR/$(date +%Y%m%d-%H%M%S).log"
 exec > >(tee -a "$LOG_FILE") 2>&1
@@ -166,7 +166,7 @@ run_worktree_tests() {
   local path="$1"
   local branch="$2"
 
-  run_or_codex "$path" "$branch" env "GOCACHE=${GOCACHE:-/tmp/gocache}" go -C "$path" test ./...
+  run_or_codex "$path" "$branch" env "GOCACHE=${GOCACHE:-$REPO_ROOT/.tmp/gocache}" "TMPDIR=${TMPDIR:-$REPO_ROOT/.tmp/gotmp}" go -C "$path" test ./...
 }
 
 echo "============================================================"
