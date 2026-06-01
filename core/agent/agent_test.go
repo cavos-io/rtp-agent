@@ -200,7 +200,7 @@ func TestAgentUpdateToolsWhileRunningRecordsToolDiffAndFiltersWithSessionTools(t
 		t.Fatalf("agent tools = %#v, want calc only", agent.Tools)
 	}
 	gotIDs := chatItemIDs(agent.ChatCtx.Items)
-	wantIDs := []string{"calc-call", "calendar-call", ""}
+	wantIDs := []string{agentInstructionsMessageID, "calc-call", "calendar-call", ""}
 	if !stringSlicesEqual(gotIDs, wantIDs) {
 		t.Fatalf("agent ChatCtx item IDs = %q, want %q", gotIDs, wantIDs)
 	}
@@ -212,6 +212,58 @@ func TestAgentUpdateToolsWhileRunningRecordsToolDiffAndFiltersWithSessionTools(t
 		t.Fatalf("ToolsRemoved = %q, want [lookup]", config.ToolsRemoved)
 	}
 	assertLastToolUpdate(t, session.ChatCtx)
+}
+
+func TestAgentUpdateChatContextWhileRunningAddsInstructionMessage(t *testing.T) {
+	agent := NewAgent("be helpful")
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	agent.activity = NewAgentActivity(agent, session)
+	source := llm.NewChatContext()
+	source.Append(&llm.ChatMessage{ID: "user", Role: llm.ChatRoleUser, Content: []llm.ChatContent{{Text: "hello"}}})
+
+	if err := agent.UpdateChatContext(context.Background(), source); err != nil {
+		t.Fatalf("UpdateChatContext error = %v, want nil", err)
+	}
+
+	if got := chatItemIDs(agent.ChatCtx.Items); !stringSlicesEqual(got, []string{agentInstructionsMessageID, "user"}) {
+		t.Fatalf("agent ChatCtx item IDs = %q, want instructions then user", got)
+	}
+	msg, ok := agent.ChatCtx.Items[0].(*llm.ChatMessage)
+	if !ok {
+		t.Fatalf("first item = %T, want *llm.ChatMessage", agent.ChatCtx.Items[0])
+	}
+	if msg.Role != llm.ChatRoleSystem || msg.TextContent() != "be helpful" {
+		t.Fatalf("instruction message role/text = %s/%q, want system/be helpful", msg.Role, msg.TextContent())
+	}
+}
+
+func TestAgentUpdateChatContextWhileRunningReplacesInstructionMessage(t *testing.T) {
+	agent := NewAgent("new instructions")
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	agent.activity = NewAgentActivity(agent, session)
+	createdAt := time.Unix(20, 0)
+	source := llm.NewChatContext()
+	source.Append(&llm.ChatMessage{
+		ID:        agentInstructionsMessageID,
+		Role:      llm.ChatRoleSystem,
+		Content:   []llm.ChatContent{{Text: "old instructions"}},
+		CreatedAt: createdAt,
+	})
+
+	if err := agent.UpdateChatContext(context.Background(), source); err != nil {
+		t.Fatalf("UpdateChatContext error = %v, want nil", err)
+	}
+
+	if len(agent.ChatCtx.Items) != 1 {
+		t.Fatalf("chat item count = %d, want 1", len(agent.ChatCtx.Items))
+	}
+	msg, ok := agent.ChatCtx.Items[0].(*llm.ChatMessage)
+	if !ok {
+		t.Fatalf("first item = %T, want *llm.ChatMessage", agent.ChatCtx.Items[0])
+	}
+	if msg.TextContent() != "new instructions" || !msg.CreatedAt.Equal(createdAt) {
+		t.Fatalf("instruction message text/createdAt = %q/%v, want new instructions/%v", msg.TextContent(), msg.CreatedAt, createdAt)
+	}
 }
 
 func TestAgentTaskCompleteIsOneTime(t *testing.T) {

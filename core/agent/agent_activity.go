@@ -162,15 +162,18 @@ func (a *AgentActivity) UpdateChatContext(ctx context.Context, chatCtx *llm.Chat
 	}
 	if chatCtx == nil {
 		a.Agent.ChatCtx = llm.NewChatContext()
-		return nil
+		return updateAgentInstructionsMessage(a.Agent.ChatCtx, a.Agent.Instructions, true)
 	}
 	if !excludeInvalid {
 		a.Agent.ChatCtx = chatCtx.Copy()
-		return nil
+		return updateAgentInstructionsMessage(a.Agent.ChatCtx, a.Agent.Instructions, true)
 	}
 	a.Agent.ChatCtx = chatCtx.Copy(llm.ChatContextCopyOptions{
 		Tools: a.chatContextTools(),
 	})
+	if err := updateAgentInstructionsMessage(a.Agent.ChatCtx, a.Agent.Instructions, true); err != nil {
+		return err
+	}
 	return nil
 }
 
