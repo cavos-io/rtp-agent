@@ -8,10 +8,16 @@ import (
 )
 
 type agentTestTool struct {
+	id   string
 	name string
 }
 
-func (t *agentTestTool) ID() string { return t.name }
+func (t *agentTestTool) ID() string {
+	if t.id != "" {
+		return t.id
+	}
+	return t.name
+}
 
 func (t *agentTestTool) Name() string { return t.name }
 
@@ -60,6 +66,42 @@ func TestAgentUpdateChatContextCanKeepInvalidFunctionItems(t *testing.T) {
 	want := []string{"lookup-call", "calendar-call"}
 	if !stringSlicesEqual(got, want) {
 		t.Fatalf("agent ChatCtx item IDs = %q, want %q", got, want)
+	}
+}
+
+func TestAgentUpdateToolsFiltersChatContextFunctionItems(t *testing.T) {
+	agent := NewAgent("help")
+	agent.ChatCtx.Append(&llm.ChatMessage{ID: "msg_1", Role: llm.ChatRoleUser})
+	agent.ChatCtx.Append(&llm.FunctionCall{ID: "lookup-call", Name: "lookup"})
+	agent.ChatCtx.Append(&llm.FunctionCallOutput{ID: "lookup-output", Name: "lookup"})
+	agent.ChatCtx.Append(&llm.FunctionCall{ID: "calendar-call", Name: "calendar"})
+	agent.ChatCtx.Append(&llm.FunctionCallOutput{ID: "calendar-output", Name: "calendar"})
+
+	if err := agent.UpdateTools(context.Background(), []llm.Tool{&agentTestTool{name: "lookup"}}); err != nil {
+		t.Fatalf("UpdateTools error = %v, want nil", err)
+	}
+
+	got := chatItemIDs(agent.ChatCtx.Items)
+	want := []string{"msg_1", "lookup-call", "lookup-output"}
+	if !stringSlicesEqual(got, want) {
+		t.Fatalf("agent ChatCtx item IDs = %q, want %q", got, want)
+	}
+}
+
+func TestAgentUpdateToolsDeduplicatesByToolID(t *testing.T) {
+	agent := NewAgent("help")
+	first := &agentTestTool{id: "lookup", name: "lookup"}
+	replacement := &agentTestTool{id: "lookup", name: "lookup_v2"}
+
+	if err := agent.UpdateTools(context.Background(), []llm.Tool{first, replacement}); err != nil {
+		t.Fatalf("UpdateTools error = %v, want nil", err)
+	}
+
+	if len(agent.Tools) != 1 {
+		t.Fatalf("len(agent.Tools) = %d, want 1", len(agent.Tools))
+	}
+	if agent.Tools[0] != replacement {
+		t.Fatalf("agent.Tools[0] = %p, want replacement %p", agent.Tools[0], replacement)
 	}
 }
 

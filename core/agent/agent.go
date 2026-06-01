@@ -77,8 +77,27 @@ func (a *Agent) UpdateInstructions(ctx context.Context, instructions string) err
 }
 
 func (a *Agent) UpdateTools(ctx context.Context, tools []llm.Tool) error {
-	a.Tools = tools
+	a.Tools = dedupeAgentToolsByID(tools)
+	if a.ChatCtx != nil {
+		a.ChatCtx = a.ChatCtx.Copy(llm.ChatContextCopyOptions{
+			Tools: agentToolsAsInterfaces(a.Tools),
+		})
+	}
 	return nil
+}
+
+func dedupeAgentToolsByID(tools []llm.Tool) []llm.Tool {
+	deduped := make([]llm.Tool, 0, len(tools))
+	indexByID := make(map[string]int, len(tools))
+	for _, tool := range tools {
+		if idx, ok := indexByID[tool.ID()]; ok {
+			deduped[idx] = tool
+			continue
+		}
+		indexByID[tool.ID()] = len(deduped)
+		deduped = append(deduped, tool)
+	}
+	return deduped
 }
 
 func (a *Agent) UpdateChatContext(ctx context.Context, chatCtx *llm.ChatContext, excludeInvalidFunctionCalls ...bool) error {
