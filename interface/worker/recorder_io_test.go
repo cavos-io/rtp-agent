@@ -44,3 +44,35 @@ func TestRecorderIORecordingStartedAtHandlesSingleSideAudio(t *testing.T) {
 		t.Fatalf("RecordingStartedAt() = %v, want input start %v", got, inputStart)
 	}
 }
+
+func TestRecorderIOPopulateSessionReportSetsRecordingMetadata(t *testing.T) {
+	recorder := NewRecorderIO(&agent.AgentSession{})
+	inputStart := time.Unix(100, 250000000)
+	recorder.InputStartTime = &inputStart
+	recorder.outPath = "/tmp/session.ogg"
+	report := agent.NewSessionReport()
+	report.Timestamp = 145.75
+
+	recorder.PopulateSessionReport(report)
+
+	if report.AudioRecordingPath == nil {
+		t.Fatal("AudioRecordingPath = nil, want recorder output path")
+	}
+	if *report.AudioRecordingPath != "/tmp/session.ogg" {
+		t.Fatalf("AudioRecordingPath = %q, want %q", *report.AudioRecordingPath, "/tmp/session.ogg")
+	}
+	if report.AudioRecordingStartedAt == nil {
+		t.Fatal("AudioRecordingStartedAt = nil, want recorder start time")
+	}
+	wantStartedAt := 100.25
+	if *report.AudioRecordingStartedAt != wantStartedAt {
+		t.Fatalf("AudioRecordingStartedAt = %v, want %v", *report.AudioRecordingStartedAt, wantStartedAt)
+	}
+	if report.Duration == nil {
+		t.Fatal("Duration = nil, want timestamp minus recording start")
+	}
+	wantDuration := report.Timestamp - wantStartedAt
+	if *report.Duration != wantDuration {
+		t.Fatalf("Duration = %v, want %v", *report.Duration, wantDuration)
+	}
+}

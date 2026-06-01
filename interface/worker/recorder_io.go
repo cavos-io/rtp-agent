@@ -49,17 +49,41 @@ func NewRecorderIO(session *agent.AgentSession) *RecorderIO {
 func (r *RecorderIO) RecordingStartedAt() *time.Time {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	return earliestRecordingStart(r.InputStartTime, r.OutputStartTime)
+}
 
-	if r.InputStartTime == nil {
-		return r.OutputStartTime
+func (r *RecorderIO) PopulateSessionReport(report *agent.SessionReport) {
+	if report == nil {
+		return
 	}
-	if r.OutputStartTime == nil {
-		return r.InputStartTime
+
+	r.mu.Lock()
+	outPath := r.outPath
+	startedAt := earliestRecordingStart(r.InputStartTime, r.OutputStartTime)
+	r.mu.Unlock()
+
+	if outPath != "" {
+		report.AudioRecordingPath = &outPath
 	}
-	if r.OutputStartTime.Before(*r.InputStartTime) {
-		return r.OutputStartTime
+	if startedAt != nil {
+		startedAtSeconds := float64(startedAt.UnixNano()) / 1e9
+		report.AudioRecordingStartedAt = &startedAtSeconds
+		duration := report.Timestamp - startedAtSeconds
+		report.Duration = &duration
 	}
-	return r.InputStartTime
+}
+
+func earliestRecordingStart(inputStart, outputStart *time.Time) *time.Time {
+	if inputStart == nil {
+		return outputStart
+	}
+	if outputStart == nil {
+		return inputStart
+	}
+	if outputStart.Before(*inputStart) {
+		return outputStart
+	}
+	return inputStart
 }
 
 func (r *RecorderIO) Start(outputPath string, sampleRate int) error {
