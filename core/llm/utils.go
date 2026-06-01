@@ -3,7 +3,9 @@ package llm
 import (
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"reflect"
 	"strings"
 )
 
@@ -23,6 +25,13 @@ type SerializedImage struct {
 	MIMEType        string
 	DataBytes       []byte
 	ExternalURL     string
+}
+
+type FunctionCallResult struct {
+	FncCall    FunctionCall
+	FncCallOut *FunctionCallOutput
+	RawOutput  any
+	RawError   error
 }
 
 func SerializeImage(image *ImageContent) (*SerializedImage, error) {
@@ -117,6 +126,106 @@ func ParseFunctionArguments(jsonArguments string) (map[string]any, error) {
 		return nil, fmt.Errorf("expected object from function arguments, got %T", value)
 	}
 	return args, nil
+}
+
+func MakeFunctionCallOutput(fncCall FunctionCall, output any, exception error) FunctionCallResult {
+	if outputErr, ok := output.(error); ok {
+		exception = outputErr
+		output = nil
+	}
+
+	var toolErr ToolError
+	if errors.As(exception, &toolErr) {
+		return FunctionCallResult{
+			FncCall: fncCall,
+			FncCallOut: &FunctionCallOutput{
+				CallID:  fncCall.CallID,
+				Name:    fncCall.Name,
+				Output:  toolErr.Message,
+				IsError: true,
+			},
+			RawOutput: output,
+			RawError:  exception,
+		}
+	}
+
+	var stopResponse StopResponse
+	if errors.As(exception, &stopResponse) {
+		return FunctionCallResult{
+			FncCall:   fncCall,
+			RawOutput: output,
+			RawError:  exception,
+		}
+	}
+
+	if exception != nil {
+		return FunctionCallResult{
+			FncCall: fncCall,
+			FncCallOut: &FunctionCallOutput{
+				CallID:  fncCall.CallID,
+				Name:    fncCall.Name,
+				Output:  "An internal error occurred",
+				IsError: true,
+			},
+			RawOutput: output,
+			RawError:  exception,
+		}
+	}
+
+	if !isValidFunctionOutput(output) {
+		return FunctionCallResult{
+			FncCall:   fncCall,
+			RawOutput: output,
+		}
+	}
+
+	outputString := ""
+	if output != nil {
+		outputString = fmt.Sprint(output)
+	}
+
+	return FunctionCallResult{
+		FncCall: fncCall,
+		FncCallOut: &FunctionCallOutput{
+			CallID:  fncCall.CallID,
+			Name:    fncCall.Name,
+			Output:  outputString,
+			IsError: false,
+		},
+		RawOutput: output,
+	}
+}
+
+func isValidFunctionOutput(value any) bool {
+	if value == nil {
+		return true
+	}
+	switch value.(type) {
+	case string, int, int8, int16, int32, int64,
+		uint, uint8, uint16, uint32, uint64,
+		float32, float64, bool, complex64, complex128:
+		return true
+	}
+
+	v := reflect.ValueOf(value)
+	switch v.Kind() {
+	case reflect.Array, reflect.Slice:
+		for i := 0; i < v.Len(); i++ {
+			if !isValidFunctionOutput(v.Index(i).Interface()) {
+				return false
+			}
+		}
+		return true
+	case reflect.Map:
+		for _, key := range v.MapKeys() {
+			if !isValidFunctionOutput(key.Interface()) || !isValidFunctionOutput(v.MapIndex(key).Interface()) {
+				return false
+			}
+		}
+		return true
+	default:
+		return false
+	}
 }
 
 func ComputeChatCtxDiff(oldCtx, newCtx *ChatContext) *DiffOps {
