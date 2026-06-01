@@ -54,6 +54,30 @@ func (rt *captureRoundTripper) RoundTrip(req *http.Request) (*http.Response, err
 	}, nil
 }
 
+type sequenceRoundTripper struct {
+	responses []*http.Response
+	calls     int
+}
+
+func (rt *sequenceRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
+	defer req.Body.Close()
+	if rt.calls >= len(rt.responses) {
+		return nil, errors.New("unexpected HTTP call")
+	}
+	resp := rt.responses[rt.calls]
+	resp.Request = req
+	rt.calls++
+	return resp, nil
+}
+
+func anthropicTestResponse(statusCode int, body string) *http.Response {
+	return &http.Response{
+		StatusCode: statusCode,
+		Body:       io.NopCloser(strings.NewReader(body)),
+		Header:     make(http.Header),
+	}
+}
+
 func TestAnthropicChatReturnsAPITimeoutErrorOnTransportDeadline(t *testing.T) {
 	transport := &captureRoundTripper{err: context.DeadlineExceeded}
 	originalTransport := http.DefaultTransport
@@ -64,7 +88,11 @@ func TestAnthropicChatReturnsAPITimeoutErrorOnTransportDeadline(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewAnthropicLLM() error = %v", err)
 	}
-	_, err = model.Chat(context.Background(), llm.NewChatContext())
+	_, err = model.Chat(
+		context.Background(),
+		llm.NewChatContext(),
+		llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 0}),
+	)
 
 	var timeoutErr *llm.APITimeoutError
 	if !errors.As(err, &timeoutErr) {
@@ -88,7 +116,11 @@ func TestAnthropicChatReturnsAPIConnectionErrorOnTransportError(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewAnthropicLLM() error = %v", err)
 	}
-	_, err = model.Chat(context.Background(), llm.NewChatContext())
+	_, err = model.Chat(
+		context.Background(),
+		llm.NewChatContext(),
+		llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 0}),
+	)
 
 	var connectionErr *llm.APIConnectionError
 	if !errors.As(err, &connectionErr) {
@@ -191,7 +223,11 @@ func TestAnthropicChatReturnsAPIStatusErrorOnHTTPError(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewAnthropicLLM() error = %v", err)
 	}
-	_, err = model.Chat(context.Background(), llm.NewChatContext())
+	_, err = model.Chat(
+		context.Background(),
+		llm.NewChatContext(),
+		llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 0}),
+	)
 
 	var statusErr *llm.APIStatusError
 	if !errors.As(err, &statusErr) {
@@ -208,6 +244,61 @@ func TestAnthropicChatReturnsAPIStatusErrorOnHTTPError(t *testing.T) {
 	}
 	if !statusErr.Retryable {
 		t.Fatal("Retryable = false, want 429 retryable")
+	}
+}
+
+func TestAnthropicChatRetriesRetryableSetupAPIError(t *testing.T) {
+	transport := &sequenceRoundTripper{responses: []*http.Response{
+		anthropicTestResponse(http.StatusTooManyRequests, "rate limit"),
+		anthropicTestResponse(http.StatusOK, ""),
+	}}
+	originalTransport := http.DefaultTransport
+	http.DefaultTransport = transport
+	t.Cleanup(func() { http.DefaultTransport = originalTransport })
+
+	model, err := NewAnthropicLLM("test-key", "claude-test")
+	if err != nil {
+		t.Fatalf("NewAnthropicLLM() error = %v", err)
+	}
+	stream, err := model.Chat(
+		context.Background(),
+		llm.NewChatContext(),
+		llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 1}),
+	)
+	if err != nil {
+		t.Fatalf("Chat() error = %v, want retry success", err)
+	}
+	_ = stream.Close()
+	if transport.calls != 2 {
+		t.Fatalf("HTTP calls = %d, want initial failure plus retry", transport.calls)
+	}
+}
+
+func TestAnthropicChatDoesNotRetryNonRetryableSetupAPIError(t *testing.T) {
+	transport := &sequenceRoundTripper{responses: []*http.Response{
+		anthropicTestResponse(http.StatusBadRequest, "bad request"),
+		anthropicTestResponse(http.StatusOK, ""),
+	}}
+	originalTransport := http.DefaultTransport
+	http.DefaultTransport = transport
+	t.Cleanup(func() { http.DefaultTransport = originalTransport })
+
+	model, err := NewAnthropicLLM("test-key", "claude-test")
+	if err != nil {
+		t.Fatalf("NewAnthropicLLM() error = %v", err)
+	}
+	_, err = model.Chat(
+		context.Background(),
+		llm.NewChatContext(),
+		llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 1}),
+	)
+
+	var statusErr *llm.APIStatusError
+	if !errors.As(err, &statusErr) {
+		t.Fatalf("Chat error = %T %v, want APIStatusError", err, err)
+	}
+	if transport.calls != 1 {
+		t.Fatalf("HTTP calls = %d, want no retry for non-retryable status", transport.calls)
 	}
 }
 
