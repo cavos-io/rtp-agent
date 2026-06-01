@@ -380,36 +380,12 @@ func (s *fallbackChunkedStream) monitorStream() {
 
 		ev, err := stream.Next()
 		if err != nil {
-			if errors.Is(err, io.EOF) && !audioSent && strings.TrimSpace(s.text) != "" {
-				noAudioErr := fmt.Errorf("no audio frames were pushed for text: %s", s.text)
-				_ = stream.Close()
-
-				s.mu.Lock()
-				if s.closed {
-					s.mu.Unlock()
-					return
-				}
-
-				logger.Logger.Warnw("TTS synthesize stream produced no audio, attempting fallback", noAudioErr, "failed_tts", s.adapter.ttss[s.activeIndex].Label())
-				nextIndex := s.activeIndex + 1
-				if s.canRetryTTS(s.activeIndex) {
-					s.retries[s.activeIndex]++
-					nextIndex = s.activeIndex
-				} else {
-					s.adapter.markUnavailable(s.activeIndex)
-					s.adapter.tryRecoverChunked(s.activeIndex, s.text)
-				}
-
-				if fbErr := s.tryStartStream(nextIndex); fbErr != nil {
-					s.errCh <- noAudioErr
-					s.mu.Unlock()
-					return
-				}
-				s.mu.Unlock()
-				continue
-			}
 			if errors.Is(err, io.EOF) || audioSent {
 				_ = stream.Close()
+				if errors.Is(err, io.EOF) && !audioSent && strings.TrimSpace(s.text) != "" {
+					s.errCh <- fmt.Errorf("no audio frames were pushed for text: %s", s.text)
+					return
+				}
 				if pending != nil {
 					pending = cloneSynthesizedAudio(pending)
 					pending.IsFinal = true

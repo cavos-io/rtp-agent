@@ -188,7 +188,7 @@ func TestFallbackChunkedStreamErrorsWhenNonEmptyTextProducesNoAudio(t *testing.T
 	}
 }
 
-func TestFallbackChunkedStreamFallsBackWhenProviderProducesNoAudio(t *testing.T) {
+func TestFallbackChunkedStreamDoesNotFallbackWhenProviderProducesNoAudio(t *testing.T) {
 	primary := &metadataTTS{
 		label:       "primary",
 		sampleRate:  24000,
@@ -213,18 +213,21 @@ func TestFallbackChunkedStreamFallsBackWhenProviderProducesNoAudio(t *testing.T)
 	}
 	defer stream.Close()
 
-	audio, err := stream.Next()
-	if err != nil {
-		t.Fatalf("Next returned error: %v", err)
+	_, err = stream.Next()
+	if err == nil {
+		t.Fatal("Next error = nil, want no-audio error")
 	}
-	if got := string(audio.Frame.Data); got != "fallback" {
-		t.Fatalf("audio data = %q, want fallback provider audio", got)
+	if !strings.Contains(err.Error(), "no audio frames") {
+		t.Fatalf("Next error = %v, want no-audio error", err)
 	}
 	if primary.synthesizeCalls != 1 {
 		t.Fatalf("primary synthesize calls = %d, want 1", primary.synthesizeCalls)
 	}
-	if fallback.synthesizeCalls != 1 {
-		t.Fatalf("fallback synthesize calls = %d, want 1", fallback.synthesizeCalls)
+	if fallback.synthesizeCalls != 0 {
+		t.Fatalf("fallback synthesize calls = %d, want 0", fallback.synthesizeCalls)
+	}
+	if !adapter.status[0].available {
+		t.Fatal("primary availability = false, want unchanged after no-audio completion")
 	}
 }
 
