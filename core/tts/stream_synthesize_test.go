@@ -111,6 +111,36 @@ func TestSynthesizeWithStreamSetsStableRequestID(t *testing.T) {
 	}
 }
 
+func TestSynthesizeWithStreamClearsProviderSegmentID(t *testing.T) {
+	provider := &fakeStreamingTTS{
+		stream: &fakeSynthesizeStream{
+			events: []*SynthesizedAudio{
+				{SegmentID: "provider-a"},
+				{SegmentID: "provider-b"},
+			},
+			emptyErr: io.EOF,
+		},
+	}
+
+	chunked, err := SynthesizeWithStream(context.Background(), provider, "hello")
+	if err != nil {
+		t.Fatalf("SynthesizeWithStream() error = %v", err)
+	}
+	defer chunked.Close()
+
+	first, err := chunked.Next()
+	if err != nil {
+		t.Fatalf("first Next() error = %v", err)
+	}
+	second, err := chunked.Next()
+	if err != nil {
+		t.Fatalf("second Next() error = %v", err)
+	}
+	if first.SegmentID != "" || second.SegmentID != "" {
+		t.Fatalf("SegmentID forwarded provider ids: first=%q second=%q", first.SegmentID, second.SegmentID)
+	}
+}
+
 func TestSynthesizeWithStreamMarksLastFrameFinal(t *testing.T) {
 	provider := &fakeStreamingTTS{
 		stream: &fakeSynthesizeStream{
