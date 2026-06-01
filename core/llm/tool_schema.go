@@ -37,14 +37,30 @@ func GenerateStrictJSONSchema(t reflect.Type) map[string]interface{} {
 		// Get JSON tag, default to field name lowercase
 		name := strings.ToLower(field.Name)
 		jsonTag := field.Tag.Get("json")
+		jsonParts := []string{""}
 		if jsonTag != "" {
-			parts := strings.Split(jsonTag, ",")
-			if parts[0] == "-" {
+			jsonParts = strings.Split(jsonTag, ",")
+			if jsonParts[0] == "-" {
 				continue
 			}
-			if parts[0] != "" {
-				name = parts[0]
+			if jsonParts[0] != "" {
+				name = jsonParts[0]
 			}
+		}
+
+		if field.Anonymous && jsonParts[0] == "" && indirectKind(field.Type) == reflect.Struct {
+			embeddedSchema := GenerateStrictJSONSchema(indirectType(field.Type))
+			if embeddedProps, ok := embeddedSchema["properties"].(map[string]interface{}); ok {
+				for key, value := range embeddedProps {
+					props[key] = value
+				}
+			}
+			if embeddedRequired, ok := embeddedSchema["required"].([]string); ok {
+				for _, requiredField := range embeddedRequired {
+					req = appendRequiredField(req, requiredField)
+				}
+			}
+			continue
 		}
 
 		desc := field.Tag.Get("jsonschema")
@@ -52,7 +68,7 @@ func GenerateStrictJSONSchema(t reflect.Type) map[string]interface{} {
 
 		props[name] = propSchema
 
-		req = append(req, name)
+		req = appendRequiredField(req, name)
 
 		if strings.Contains(jsonTag, "omitempty") {
 			if typeArr, ok := propSchema["type"].([]string); ok {
@@ -74,6 +90,26 @@ func GenerateStrictJSONSchema(t reflect.Type) map[string]interface{} {
 
 	schema["required"] = req
 	return schema
+}
+
+func appendRequiredField(required []string, name string) []string {
+	for _, existing := range required {
+		if existing == name {
+			return required
+		}
+	}
+	return append(required, name)
+}
+
+func indirectType(t reflect.Type) reflect.Type {
+	for t.Kind() == reflect.Ptr {
+		t = t.Elem()
+	}
+	return t
+}
+
+func indirectKind(t reflect.Type) reflect.Kind {
+	return indirectType(t).Kind()
 }
 
 func goTypeToJSONSchema(t reflect.Type, description string) map[string]interface{} {

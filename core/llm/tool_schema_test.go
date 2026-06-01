@@ -52,6 +52,30 @@ func TestGenerateStrictJSONSchemaSkipsUnexportedFields(t *testing.T) {
 	}
 }
 
+func TestGenerateStrictJSONSchemaFlattensAnonymousStructFields(t *testing.T) {
+	type Paging struct {
+		Limit int `json:"limit"`
+	}
+	type request struct {
+		Paging
+		Query string `json:"query"`
+	}
+
+	schema := GenerateStrictJSONSchema(reflect.TypeOf(request{}))
+
+	props := schema["properties"].(map[string]interface{})
+	if _, ok := props["paging"]; ok {
+		t.Fatalf("properties contains embedded struct field instead of flattened fields: %#v", props)
+	}
+	if _, ok := props["limit"]; !ok {
+		t.Fatalf("properties missing flattened limit field: %#v", props)
+	}
+	required := schema["required"].([]string)
+	if !reflect.DeepEqual(required, []string{"limit", "query"}) {
+		t.Fatalf("required = %#v, want flattened embedded field order", required)
+	}
+}
+
 func TestGenerateStrictJSONSchemaKeepsOptionalNestedStructNullable(t *testing.T) {
 	type filters struct {
 		Status string `json:"status"`
