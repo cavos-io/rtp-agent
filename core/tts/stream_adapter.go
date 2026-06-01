@@ -131,6 +131,7 @@ func (w *streamAdapterWrapper) synthesize(text string, segmentID string) error {
 	}()
 
 	var pending *SynthesizedAudio
+	transcriptPending := true
 	for {
 		audio, err := stream.Next()
 		if err != nil {
@@ -139,6 +140,9 @@ func (w *streamAdapterWrapper) synthesize(text string, segmentID string) error {
 					pending = cloneSynthesizedAudio(pending)
 					pending.SegmentID = segmentID
 					pending.RequestID = w.requestID
+					if transcriptPending {
+						pending.DeltaText = text
+					}
 					pending.IsFinal = true
 					w.eventCh <- pending
 				} else if strings.TrimSpace(text) != "" {
@@ -152,6 +156,10 @@ func (w *streamAdapterWrapper) synthesize(text string, segmentID string) error {
 			pending = cloneSynthesizedAudio(pending)
 			pending.SegmentID = segmentID
 			pending.RequestID = w.requestID
+			if transcriptPending {
+				pending.DeltaText = text
+				transcriptPending = false
+			}
 			w.eventCh <- pending
 		}
 		pending = audio
