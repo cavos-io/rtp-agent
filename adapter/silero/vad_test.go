@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/cavos-io/conversation-worker/core/vad"
+	"github.com/cavos-io/conversation-worker/library/telemetry"
 	"github.com/cavos-io/conversation-worker/model"
 )
 
@@ -42,6 +43,53 @@ func TestSileroFallbackHonorsMinimumDurations(t *testing.T) {
 		assertSileroVADEventType(t, stream, vad.VADEventInferenceDone)
 	}
 	assertSileroVADEventType(t, stream, vad.VADEventEndOfSpeech)
+}
+
+func TestSileroVADMetadataAndMetrics(t *testing.T) {
+	detector := NewSileroVAD()
+	if detector.Label() != "silero.VAD" {
+		t.Fatalf("Label() = %q, want silero.VAD", detector.Label())
+	}
+	if detector.Model() != "silero" {
+		t.Fatalf("Model() = %q, want silero", detector.Model())
+	}
+	if detector.Provider() != "ONNX" {
+		t.Fatalf("Provider() = %q, want ONNX", detector.Provider())
+	}
+	if detector.Capabilities().UpdateInterval != 0.032 {
+		t.Fatalf("Capabilities().UpdateInterval = %v, want 0.032", detector.Capabilities().UpdateInterval)
+	}
+
+	metricsCh := make(chan string, 1)
+	detector.OnMetricsCollected(func(metrics *telemetry.VADMetrics) {
+		if metrics.Metadata == nil {
+			metricsCh <- "missing metadata"
+			return
+		}
+		metricsCh <- metrics.Label + ":" + metrics.Metadata.ModelName + ":" + metrics.Metadata.ModelProvider
+	})
+	stream, err := detector.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	defer stream.Close()
+
+	for range 32 {
+		if err := stream.PushFrame(testAudioFrame(16000, 160, 6000)); err != nil {
+			t.Fatalf("PushFrame() error = %v", err)
+		}
+		nextSileroVADEvent(t, stream)
+	}
+	nextSileroVADEvent(t, stream)
+
+	select {
+	case got := <-metricsCh:
+		if got != "silero.VAD:silero:ONNX" {
+			t.Fatalf("metrics identity = %q, want silero.VAD:silero:ONNX", got)
+		}
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("timed out waiting for VAD metrics")
+	}
 }
 
 func TestSileroFallbackHonorsBufferingOptions(t *testing.T) {

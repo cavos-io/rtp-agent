@@ -6,12 +6,16 @@ import (
 	"io"
 	"math"
 	"sync"
+	"time"
 
+	"github.com/cavos-io/conversation-worker/library/telemetry"
 	"github.com/cavos-io/conversation-worker/model"
 )
 
 type SimpleVAD struct {
-	options SimpleVADOptions
+	options  SimpleVADOptions
+	mu       sync.RWMutex
+	handlers []VADMetricsHandler
 }
 
 type SimpleVADOptions struct {
@@ -21,6 +25,7 @@ type SimpleVADOptions struct {
 	PrefixPaddingDuration     float64
 	MaxBufferedSpeechDuration float64
 	DeactivationThreshold     float64
+	UpdateInterval            float64
 }
 
 func NewSimpleVAD(threshold float64) *SimpleVAD {
@@ -37,11 +42,40 @@ func NewSimpleVADWithOptions(options SimpleVADOptions) *SimpleVAD {
 	if options.DeactivationThreshold == 0 {
 		options.DeactivationThreshold = options.Threshold
 	}
+	if options.UpdateInterval == 0 {
+		options.UpdateInterval = 1
+	}
 	return &SimpleVAD{options: options}
+}
+
+func (v *SimpleVAD) Label() string {
+	return "vad.SimpleVAD"
+}
+
+func (v *SimpleVAD) Model() string {
+	return "simple"
+}
+
+func (v *SimpleVAD) Provider() string {
+	return "builtin"
+}
+
+func (v *SimpleVAD) Capabilities() VADCapabilities {
+	return VADCapabilities{UpdateInterval: v.options.UpdateInterval}
+}
+
+func (v *SimpleVAD) OnMetricsCollected(handler VADMetricsHandler) {
+	if handler == nil {
+		return
+	}
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	v.handlers = append(v.handlers, handler)
 }
 
 func (v *SimpleVAD) Stream(ctx context.Context) (VADStream, error) {
 	return &simpleVADStream{
+		vad:     v,
 		ctx:     ctx,
 		options: v.options,
 		events:  make(chan *VADEvent, 10),
@@ -49,6 +83,7 @@ func (v *SimpleVAD) Stream(ctx context.Context) (VADStream, error) {
 }
 
 type simpleVADStream struct {
+	vad                        *SimpleVAD
 	ctx                        context.Context
 	options                    SimpleVADOptions
 	events                     chan *VADEvent
@@ -66,6 +101,9 @@ type simpleVADStream struct {
 	pendingSpeechFrames        []*model.AudioFrame
 	speechFrames               []*model.AudioFrame
 	bufferedSpeechDuration     float64
+	lastActivity               time.Time
+	metricsInferenceDuration   float64
+	metricsInferenceCount      int
 	mu                         sync.Mutex
 }
 
@@ -81,9 +119,14 @@ func (s *simpleVADStream) PushFrame(frame *model.AudioFrame) error {
 
 	probability := frameRMS(frame)
 	duration := frameDuration(frame)
+	if s.lastActivity.IsZero() {
+		s.lastActivity = time.Now()
+	}
 	s.samplesIndex += int(frame.SamplesPerChannel)
 	s.timestamp += duration
 
+	inferenceStart := time.Now()
+	inferenceDuration := time.Since(inferenceStart).Seconds()
 	inferenceSpeechDuration := s.speechDuration
 	inferenceSilenceDuration := s.silenceDuration
 	if s.speaking {
@@ -99,10 +142,12 @@ func (s *simpleVADStream) PushFrame(frame *model.AudioFrame) error {
 		SilenceDuration:       inferenceSilenceDuration,
 		Frames:                []*model.AudioFrame{frame},
 		Probability:           probability,
+		InferenceDuration:     inferenceDuration,
 		Speaking:              s.speaking,
 		RawAccumulatedSpeech:  s.accumulatedSpeechDuration,
 		RawAccumulatedSilence: s.accumulatedSilenceDuration,
 	}
+	s.collectInferenceMetrics(inferenceDuration)
 
 	if probability >= s.options.Threshold || (s.speaking && probability > s.options.DeactivationThreshold) {
 		s.accumulatedSpeechDuration += duration
@@ -125,6 +170,7 @@ func (s *simpleVADStream) PushFrame(frame *model.AudioFrame) error {
 					Frames:         startFrames,
 					Speaking:       true,
 				}
+				s.lastActivity = time.Now()
 			}
 		} else {
 			s.speechDuration += duration
@@ -149,6 +195,7 @@ func (s *simpleVADStream) PushFrame(frame *model.AudioFrame) error {
 					Frames:          frames,
 					Speaking:        false,
 				}
+				s.lastActivity = time.Now()
 				s.resetSegment()
 			}
 		} else {
@@ -159,6 +206,38 @@ func (s *simpleVADStream) PushFrame(frame *model.AudioFrame) error {
 	}
 
 	return nil
+}
+
+func (s *simpleVADStream) collectInferenceMetrics(inferenceDuration float64) {
+	s.metricsInferenceDuration += inferenceDuration
+	s.metricsInferenceCount++
+	updateInterval := s.options.UpdateInterval
+	if updateInterval <= 0 {
+		updateInterval = 1
+	}
+	if float64(s.metricsInferenceCount) < 1/updateInterval {
+		return
+	}
+
+	idleTime := 0.0
+	if !s.lastActivity.IsZero() {
+		idleTime = time.Since(s.lastActivity).Seconds()
+	}
+	metrics := &telemetry.VADMetrics{
+		Label:                  s.vad.Label(),
+		Timestamp:              time.Now(),
+		IdleTime:               idleTime,
+		InferenceDurationTotal: s.metricsInferenceDuration,
+		InferenceCount:         s.metricsInferenceCount,
+		Metadata: &telemetry.Metadata{
+			ModelName:     s.vad.Model(),
+			ModelProvider: s.vad.Provider(),
+		},
+	}
+	s.vad.emitMetrics(metrics)
+
+	s.metricsInferenceDuration = 0
+	s.metricsInferenceCount = 0
 }
 
 func (s *simpleVADStream) Flush() error {
@@ -299,4 +378,13 @@ func framesDuration(frames []*model.AudioFrame) float64 {
 		duration += frameDuration(frame)
 	}
 	return duration
+}
+
+func (v *SimpleVAD) emitMetrics(metrics *telemetry.VADMetrics) {
+	v.mu.RLock()
+	handlers := append([]VADMetricsHandler(nil), v.handlers...)
+	v.mu.RUnlock()
+	for _, handler := range handlers {
+		handler(metrics)
+	}
 }

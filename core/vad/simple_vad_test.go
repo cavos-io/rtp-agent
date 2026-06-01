@@ -7,8 +7,63 @@ import (
 	"testing"
 	"time"
 
+	"github.com/cavos-io/conversation-worker/library/telemetry"
 	"github.com/cavos-io/conversation-worker/model"
 )
+
+func TestSimpleVADMetadataAndCapabilities(t *testing.T) {
+	detector := NewSimpleVADWithOptions(SimpleVADOptions{UpdateInterval: 0.5})
+
+	if detector.Label() != "vad.SimpleVAD" {
+		t.Fatalf("Label() = %q, want vad.SimpleVAD", detector.Label())
+	}
+	if detector.Model() != "simple" {
+		t.Fatalf("Model() = %q, want simple", detector.Model())
+	}
+	if detector.Provider() != "builtin" {
+		t.Fatalf("Provider() = %q, want builtin", detector.Provider())
+	}
+	if detector.Capabilities().UpdateInterval != 0.5 {
+		t.Fatalf("Capabilities().UpdateInterval = %v, want 0.5", detector.Capabilities().UpdateInterval)
+	}
+}
+
+func TestSimpleVADEmitsMetricsCollected(t *testing.T) {
+	detector := NewSimpleVADWithOptions(SimpleVADOptions{UpdateInterval: 1})
+	metricsCh := make(chan *telemetry.VADMetrics, 1)
+	detector.OnMetricsCollected(func(metrics *telemetry.VADMetrics) {
+		metricsCh <- metrics
+	})
+
+	stream, err := detector.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	defer stream.Close()
+
+	if err := stream.PushFrame(audioFrame(16000, 160, 6000)); err != nil {
+		t.Fatalf("PushFrame() error = %v", err)
+	}
+	assertEventType(t, stream, VADEventInferenceDone)
+
+	select {
+	case metrics := <-metricsCh:
+		if metrics.Label != "vad.SimpleVAD" {
+			t.Fatalf("metrics Label = %q, want vad.SimpleVAD", metrics.Label)
+		}
+		if metrics.InferenceCount != 1 {
+			t.Fatalf("metrics InferenceCount = %d, want 1", metrics.InferenceCount)
+		}
+		if metrics.Metadata == nil {
+			t.Fatal("metrics Metadata = nil, want model metadata")
+		}
+		if metrics.Metadata.ModelName != "simple" || metrics.Metadata.ModelProvider != "builtin" {
+			t.Fatalf("metrics Metadata = %#v, want simple/builtin", metrics.Metadata)
+		}
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("timed out waiting for VAD metrics")
+	}
+}
 
 func TestSimpleVADEmitsInferenceBeforeSpeechTransition(t *testing.T) {
 	stream, err := NewSimpleVAD(0.05).Stream(context.Background())
