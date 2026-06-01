@@ -115,9 +115,13 @@ type WorkerOptions struct {
 	PrometheusPort                  int
 	PrometheusMultiprocDir          string
 	LoadThreshold                   float64
+	LoadThresholdSet                bool
 	JobMemoryWarnMB                 float64
+	JobMemoryWarnMBSet              bool
 	JobMemoryLimitMB                float64
+	JobMemoryLimitMBSet             bool
 	NumIdleProcesses                int
+	NumIdleProcessesSet             bool
 	DrainTimeoutSeconds             int
 	DrainTimeoutSecondsSet          bool
 	SessionEndTimeoutSeconds        float64
@@ -498,17 +502,21 @@ func mergeWorkerOptions(current WorkerOptions, next WorkerOptions) WorkerOptions
 	if next.LogLevel != "" {
 		current.LogLevel = next.LogLevel
 	}
-	if next.LoadThreshold != 0 {
+	if next.LoadThresholdSet || next.LoadThreshold != 0 {
 		current.LoadThreshold = next.LoadThreshold
+		current.LoadThresholdSet = true
 	}
-	if next.JobMemoryWarnMB != 0 {
+	if next.JobMemoryWarnMBSet || next.JobMemoryWarnMB != 0 {
 		current.JobMemoryWarnMB = next.JobMemoryWarnMB
+		current.JobMemoryWarnMBSet = true
 	}
-	if next.JobMemoryLimitMB != 0 {
+	if next.JobMemoryLimitMBSet || next.JobMemoryLimitMB != 0 {
 		current.JobMemoryLimitMB = next.JobMemoryLimitMB
+		current.JobMemoryLimitMBSet = true
 	}
-	if next.NumIdleProcesses != 0 {
+	if next.NumIdleProcessesSet || next.NumIdleProcesses != 0 {
 		current.NumIdleProcesses = next.NumIdleProcesses
+		current.NumIdleProcessesSet = true
 	}
 	if next.DrainTimeoutSecondsSet || next.DrainTimeoutSeconds != 0 {
 		current.DrainTimeoutSeconds = next.DrainTimeoutSeconds
@@ -542,7 +550,7 @@ func resolveWorkerOptions(opts WorkerOptions) WorkerOptions {
 	if opts.MaxRetry == 0 {
 		opts.MaxRetry = defaultMaxRetry
 	}
-	if opts.JobMemoryWarnMB == 0 {
+	if opts.JobMemoryWarnMB == 0 && !opts.JobMemoryWarnMBSet {
 		opts.JobMemoryWarnMB = defaultJobMemoryWarn
 	}
 	if opts.DrainTimeoutSeconds == 0 && !opts.DrainTimeoutSecondsSet {
@@ -571,14 +579,14 @@ func resolveWorkerOptions(opts WorkerOptions) WorkerOptions {
 	if opts.Port == 0 && !opts.DevMode {
 		opts.Port = defaultProdHTTPPort
 	}
-	if opts.LoadThreshold == 0 {
+	if opts.LoadThreshold == 0 && !opts.LoadThresholdSet {
 		if opts.DevMode {
 			opts.LoadThreshold = math.Inf(1)
 		} else {
 			opts.LoadThreshold = defaultLoadThreshold
 		}
 	}
-	if opts.NumIdleProcesses == 0 && !opts.DevMode {
+	if opts.NumIdleProcesses == 0 && !opts.DevMode && !opts.NumIdleProcessesSet {
 		opts.NumIdleProcesses = defaultNumIdleProcesses()
 	}
 	if opts.Permissions == nil {

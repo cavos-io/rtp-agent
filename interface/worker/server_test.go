@@ -441,6 +441,38 @@ func TestUpdateOptionsMergesConfiguredValuesBeforeRun(t *testing.T) {
 	}
 }
 
+func TestUpdateOptionsPreservesExplicitZeroResourceValues(t *testing.T) {
+	server := NewAgentServer(WorkerOptions{
+		LoadThreshold:    0.5,
+		JobMemoryWarnMB:  250,
+		JobMemoryLimitMB: 512,
+		NumIdleProcesses: 2,
+	})
+
+	err := server.UpdateOptions(WorkerOptions{
+		LoadThresholdSet:    true,
+		JobMemoryWarnMBSet:  true,
+		JobMemoryLimitMBSet: true,
+		NumIdleProcessesSet: true,
+	})
+	if err != nil {
+		t.Fatalf("UpdateOptions() error = %v", err)
+	}
+
+	if server.Options.LoadThreshold != 0 {
+		t.Fatalf("LoadThreshold = %v, want explicit zero", server.Options.LoadThreshold)
+	}
+	if server.Options.JobMemoryWarnMB != 0 {
+		t.Fatalf("JobMemoryWarnMB = %v, want explicit zero", server.Options.JobMemoryWarnMB)
+	}
+	if server.Options.JobMemoryLimitMB != 0 {
+		t.Fatalf("JobMemoryLimitMB = %v, want explicit zero", server.Options.JobMemoryLimitMB)
+	}
+	if server.Options.NumIdleProcesses != 0 {
+		t.Fatalf("NumIdleProcesses = %d, want explicit zero", server.Options.NumIdleProcesses)
+	}
+}
+
 func TestUpdateOptionsMarksExplicitAgentNameAsNotEnvironment(t *testing.T) {
 	t.Setenv("LIVEKIT_AGENT_NAME", "env-agent")
 	server := NewAgentServer(WorkerOptions{})
