@@ -128,6 +128,7 @@ func ParseFunctionArguments(jsonArguments string) (map[string]any, error) {
 		if retryErr := json.Unmarshal([]byte(repaired), &value); retryErr != nil {
 			return nil, fmt.Errorf("could not parse function arguments as JSON: %w", err)
 		}
+		value = cleanRepairedFunctionArguments(value)
 	}
 
 	for {
@@ -159,6 +160,31 @@ func repairFunctionArguments(value string) string {
 	out = unquotedObjectKeyPattern.ReplaceAllString(out, `${1}"${2}"${3}`)
 	out = trailingCommaPattern.ReplaceAllString(out, "$1")
 	return strings.TrimSpace(out)
+}
+
+func cleanRepairedFunctionArguments(value any) any {
+	switch v := value.(type) {
+	case string:
+		return strings.TrimSpace(v)
+	case []any:
+		cleaned := make([]any, 0, len(v))
+		for _, item := range v {
+			item = cleanRepairedFunctionArguments(item)
+			if item == "" || item == nil {
+				continue
+			}
+			cleaned = append(cleaned, item)
+		}
+		return cleaned
+	case map[string]any:
+		cleaned := make(map[string]any, len(v))
+		for key, item := range v {
+			cleaned[key] = cleanRepairedFunctionArguments(item)
+		}
+		return cleaned
+	default:
+		return value
+	}
 }
 
 func MakeFunctionCallOutput(fncCall FunctionCall, output any, exception error) FunctionCallResult {

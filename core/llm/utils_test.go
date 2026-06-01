@@ -59,6 +59,21 @@ func TestParseFunctionArgumentsRepairsLeakedTemplateTokens(t *testing.T) {
 	}
 }
 
+func TestParseFunctionArgumentsDropsListItemsEmptiedByTemplateRepair(t *testing.T) {
+	args, err := ParseFunctionArguments(`{"tags":["<|im_start|>","urgent"]}<|im_end|>`)
+	if err != nil {
+		t.Fatalf("ParseFunctionArguments() error = %v", err)
+	}
+
+	tags, ok := args["tags"].([]any)
+	if !ok {
+		t.Fatalf("tags = %#v, want []any", args["tags"])
+	}
+	if len(tags) != 1 || tags[0] != "urgent" {
+		t.Fatalf("tags = %#v, want only urgent after dropping empty repaired token", tags)
+	}
+}
+
 func TestParseFunctionArgumentsRepairsTrailingCommas(t *testing.T) {
 	args, err := ParseFunctionArguments(`{"city":"Paris","limit":3,}`)
 	if err != nil {
