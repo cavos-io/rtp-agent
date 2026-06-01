@@ -35,6 +35,10 @@ type JobExecutor interface {
 }
 
 var processCommandContext = exec.CommandContext
+var processPingInterval = 2 * time.Second
+var processSignal = func(process *os.Process, signal os.Signal) error {
+	return process.Signal(signal)
+}
 
 type ThreadJobExecutor struct {
 	id     string
@@ -295,7 +299,7 @@ func RunningJobInfoFromEnv(env map[string]string) (RunningJobInfo, error) {
 }
 
 func (e *ProcessJobExecutor) pingTask(ctx context.Context) {
-	ticker := time.NewTicker(2 * time.Second)
+	ticker := time.NewTicker(processPingInterval)
 	defer ticker.Stop()
 
 	for {
@@ -314,9 +318,11 @@ func (e *ProcessJobExecutor) pingTask(ctx context.Context) {
 			// For basic parity, we'll check if the process is still alive.
 			if e.cmd != nil && e.cmd.Process != nil {
 				// check if process exists
-				if err := e.cmd.Process.Signal(syscall.Signal(0)); err != nil {
+				if err := processSignal(e.cmd.Process, syscall.Signal(0)); err != nil {
 					logger.Logger.Warnw("Job process unresponsive", err, "exec_id", e.id)
-					// Handle unresponsiveness
+					e.status = JobStatusFailed
+					e.mu.Unlock()
+					return
 				}
 			}
 			e.mu.Unlock()

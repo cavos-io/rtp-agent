@@ -3,6 +3,8 @@ package ipc
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"os"
 	"os/exec"
 	"strings"
 	"testing"
@@ -242,6 +244,43 @@ func TestProcessJobExecutorCloseWaitsForProcessExit(t *testing.T) {
 	}
 	if got := executor.Status(); got != JobStatusFailed {
 		t.Fatalf("Status() after Close = %q, want %q", got, JobStatusFailed)
+	}
+}
+
+func TestProcessJobExecutorPingMarksFailedWhenProcessMissing(t *testing.T) {
+	oldPingInterval := processPingInterval
+	oldProcessSignal := processSignal
+	processPingInterval = time.Millisecond
+	processSignal = func(*os.Process, os.Signal) error {
+		return errors.New("process missing")
+	}
+	defer func() {
+		processPingInterval = oldPingInterval
+		processSignal = oldProcessSignal
+	}()
+
+	executor := NewProcessJobExecutor("exec-ping")
+	executor.mu.Lock()
+	executor.status = JobStatusRunning
+	executor.cmd = &exec.Cmd{Process: &os.Process{Pid: 12345}}
+	executor.mu.Unlock()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go executor.pingTask(ctx)
+
+	deadline := time.After(time.Second)
+	ticker := time.NewTicker(time.Millisecond)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-deadline:
+			t.Fatalf("Status() = %q, want %q", executor.Status(), JobStatusFailed)
+		case <-ticker.C:
+			if executor.Status() == JobStatusFailed {
+				return
+			}
+		}
 	}
 }
 
