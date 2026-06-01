@@ -166,6 +166,40 @@ func TestStreamAdapterMarksLastFrameInSegmentFinal(t *testing.T) {
 	}
 }
 
+func TestStreamAdapterDoesNotMarkIntermediateSentenceFinal(t *testing.T) {
+	provider := &fakeStreamAdapterTTS{}
+	stream, err := NewStreamAdapter(provider).Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+	defer stream.Close()
+
+	if err := stream.PushText("First sentence has enough words. Second sentence"); err != nil {
+		t.Fatalf("PushText(first) returned error: %v", err)
+	}
+	if err := stream.PushText(" has enough words."); err != nil {
+		t.Fatalf("PushText(second) returned error: %v", err)
+	}
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush returned error: %v", err)
+	}
+
+	first := nextStreamAdapterAudio(t, stream)
+	second := nextStreamAdapterAudio(t, stream)
+	if first.SegmentID == "" || second.SegmentID == "" || second.SegmentID != first.SegmentID {
+		t.Fatalf("segment ids = first:%q second:%q, want same non-empty segment", first.SegmentID, second.SegmentID)
+	}
+	if first.IsFinal {
+		t.Fatal("first sentence audio IsFinal = true, want non-final within the same segment")
+	}
+	if !second.IsFinal {
+		t.Fatal("second sentence audio IsFinal = false, want final at segment end")
+	}
+	if got, want := provider.texts, []string{"First sentence has enough words.", "Second sentence has enough words."}; strings.Join(got, "|") != strings.Join(want, "|") {
+		t.Fatalf("synthesized texts = %#v, want %#v", got, want)
+	}
+}
+
 func TestStreamAdapterEmitsLongFrameHeadBeforeProviderEOF(t *testing.T) {
 	frame := &model.AudioFrame{
 		Data:              make([]byte, 24000*2),
