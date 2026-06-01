@@ -124,6 +124,11 @@ type TextInputEvent struct {
 
 type TextInputCallback func(context.Context, *agent.AgentSession, TextInputEvent) error
 
+type roomIOTextResponder interface {
+	Interrupt(force bool) error
+	GenerateReply(ctx context.Context, userInput string) (*agent.SpeechHandle, error)
+}
+
 type RoomIO struct {
 	Room         *lksdk.Room
 	AgentSession *agent.AgentSession
@@ -186,9 +191,16 @@ func roomIOTextInputCallback(opts RoomOptions) TextInputCallback {
 		return opts.TextInputCallback
 	}
 	return func(ctx context.Context, session *agent.AgentSession, ev TextInputEvent) error {
-		_, err := session.GenerateReply(ctx, ev.Text)
+		return roomIODefaultTextInput(ctx, session, ev.Text)
+	}
+}
+
+func roomIODefaultTextInput(ctx context.Context, responder roomIOTextResponder, text string) error {
+	if err := responder.Interrupt(false); err != nil {
 		return err
 	}
+	_, err := responder.GenerateReply(ctx, text)
+	return err
 }
 
 func (rio *RoomIO) SetParticipant(participantIdentity string) {

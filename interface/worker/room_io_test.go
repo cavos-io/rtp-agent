@@ -11,6 +11,20 @@ import (
 	lksdk "github.com/livekit/server-sdk-go/v2"
 )
 
+type fakeRoomIOTextResponder struct {
+	calls []string
+}
+
+func (f *fakeRoomIOTextResponder) Interrupt(force bool) error {
+	f.calls = append(f.calls, "interrupt")
+	return nil
+}
+
+func (f *fakeRoomIOTextResponder) GenerateReply(ctx context.Context, userInput string) (*agent.SpeechHandle, error) {
+	f.calls = append(f.calls, "generate:"+userInput)
+	return agent.NewSpeechHandle(true, agent.DefaultInputDetails()), nil
+}
+
 func TestRoomIOAudioTrackPublicationOptionsUseReferenceDefaults(t *testing.T) {
 	rio := &RoomIO{}
 
@@ -108,6 +122,19 @@ func TestRoomIOCloseUnregistersChatTextHandler(t *testing.T) {
 	err := room.RegisterTextStreamHandler(RoomIOChatTopic, func(*lksdk.TextStreamReader, string) {})
 	if err != nil {
 		t.Fatalf("RegisterTextStreamHandler after RoomIO.Close() error = %v, want nil", err)
+	}
+}
+
+func TestRoomIODefaultTextInputInterruptsBeforeGenerateReply(t *testing.T) {
+	responder := &fakeRoomIOTextResponder{}
+
+	if err := roomIODefaultTextInput(context.Background(), responder, "hello"); err != nil {
+		t.Fatalf("roomIODefaultTextInput() error = %v", err)
+	}
+
+	want := []string{"interrupt", "generate:hello"}
+	if !reflect.DeepEqual(responder.calls, want) {
+		t.Fatalf("calls = %#v, want %#v", responder.calls, want)
 	}
 }
 
