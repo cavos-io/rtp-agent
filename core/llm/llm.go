@@ -481,6 +481,7 @@ type RealtimeEvent struct {
 
 type FallbackAdapter struct {
 	llms             []LLM
+	attemptTimeout   time.Duration
 	maxRetryPerLLM   int
 	retryOnChunkSent bool
 	mu               sync.Mutex
@@ -489,6 +490,7 @@ type FallbackAdapter struct {
 }
 
 type FallbackAdapterOptions struct {
+	AttemptTimeout   time.Duration
 	MaxRetryPerLLM   int
 	RetryOnChunkSent bool
 }
@@ -503,6 +505,7 @@ func NewFallbackAdapterWithOptions(llms []LLM, options FallbackAdapterOptions) *
 	}
 	return &FallbackAdapter{
 		llms:             llms,
+		attemptTimeout:   options.AttemptTimeout,
 		maxRetryPerLLM:   options.MaxRetryPerLLM,
 		retryOnChunkSent: options.RetryOnChunkSent,
 		available:        initialAvailability(len(llms)),
@@ -564,6 +567,7 @@ type fallbackLLMStream struct {
 	opts    []ChatOption
 
 	activeStream LLMStream
+	activeCancel context.CancelFunc
 	activeIndex  int
 	retries      map[int]int
 	outputSent   bool
@@ -587,12 +591,17 @@ func (s *fallbackLLMStream) markUnavailable(index int, recover bool) {
 }
 
 func (f *FallbackAdapter) recoverLLM(index int, llm LLM, chatCtx *ChatContext, opts []ChatOption) {
-	stream, err := llm.Chat(context.Background(), chatCtx, opts...)
+	ctx, cancel := f.attemptContext(context.Background())
+	stream, err := llm.Chat(ctx, chatCtx, opts...)
 	if err != nil {
+		cancel()
 		f.finishRecovery(index, false)
 		return
 	}
-	defer stream.Close()
+	defer func() {
+		_ = stream.Close()
+		cancel()
+	}()
 	for {
 		_, err := stream.Next()
 		if err == nil {
@@ -621,13 +630,17 @@ func (s *fallbackLLMStream) tryStart(index int) error {
 			continue
 		}
 		for {
-			stream, err := s.adapter.llms[i].Chat(s.ctx, s.chatCtx, s.opts...)
+			ctx, cancel := s.adapter.attemptContext(s.ctx)
+			stream, err := s.adapter.llms[i].Chat(ctx, s.chatCtx, s.opts...)
 			if err == nil {
 				s.adapter.setAvailable(i, true)
+				s.closeActive()
 				s.activeStream = stream
+				s.activeCancel = cancel
 				s.activeIndex = i
 				return nil
 			}
+			cancel()
 			lastErr = err
 			if !s.canRetryLLM(i) {
 				s.markUnavailable(i, true)
@@ -656,7 +669,7 @@ func (s *fallbackLLMStream) Next() (*ChatChunk, error) {
 			return nil, err
 		}
 
-		_ = s.activeStream.Close()
+		s.closeActive()
 		if s.canRetryLLM(s.activeIndex) {
 			s.retries[s.activeIndex]++
 			if startErr := s.tryStart(s.activeIndex); startErr != nil {
@@ -684,6 +697,24 @@ func (s *fallbackLLMStream) canRetryLLM(index int) bool {
 	return s.retries[index] < s.adapter.maxRetryPerLLM
 }
 
+func (f *FallbackAdapter) attemptContext(parent context.Context) (context.Context, context.CancelFunc) {
+	if f.attemptTimeout <= 0 {
+		return context.WithCancel(parent)
+	}
+	return context.WithTimeout(parent, f.attemptTimeout)
+}
+
+func (s *fallbackLLMStream) closeActive() {
+	if s.activeStream != nil {
+		_ = s.activeStream.Close()
+		s.activeStream = nil
+	}
+	if s.activeCancel != nil {
+		s.activeCancel()
+		s.activeCancel = nil
+	}
+}
+
 func chunkHasVisibleOutput(chunk *ChatChunk) bool {
 	if chunk == nil || chunk.Delta == nil {
 		return false
@@ -699,5 +730,10 @@ func (s *fallbackLLMStream) Close() error {
 	if s.activeStream == nil {
 		return nil
 	}
-	return s.activeStream.Close()
+	err := s.activeStream.Close()
+	if s.activeCancel != nil {
+		s.activeCancel()
+		s.activeCancel = nil
+	}
+	return err
 }
