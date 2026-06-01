@@ -51,6 +51,50 @@ func TestMCPProxyToolTreatsEmptyResultAsToolError(t *testing.T) {
 	}
 }
 
+func TestMCPProxyToolSerializesSuccessfulContentResults(t *testing.T) {
+	tests := []struct {
+		name   string
+		result json.RawMessage
+		want   string
+	}{
+		{
+			name:   "single item",
+			result: json.RawMessage(`{"content":[{"type":"text","text":"Paris"}],"isError":false}`),
+			want:   `{"type":"text","text":"Paris"}`,
+		},
+		{
+			name: "multiple items",
+			result: json.RawMessage(`{
+				"content": [
+					{"type": "text", "text": "Paris"},
+					{"type": "resource", "uri": "file:///weather.txt"}
+				],
+				"isError": false
+			}`),
+			want: `[{"type":"text","text":"Paris"},{"type":"resource","uri":"file:///weather.txt"}]`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			server := NewMCPServerStdio("", nil)
+			server.stdin = &fakeMCPWriteCloser{
+				server: server,
+				result: tt.result,
+			}
+			tool := &mcpProxyTool{server: server, name: "lookup"}
+
+			got, err := tool.Execute(context.Background(), `{}`)
+			if err != nil {
+				t.Fatalf("Execute() error = %v", err)
+			}
+			if got != tt.want {
+				t.Fatalf("Execute() output = %q, want serialized MCP content %q", got, tt.want)
+			}
+		})
+	}
+}
+
 type fakeMCPWriteCloser struct {
 	server *MCPServerStdio
 	result json.RawMessage

@@ -110,6 +110,21 @@ func (c mcpToolContent) visibleText() string {
 	return string(c.raw)
 }
 
+func serializeMCPToolContent(content []mcpToolContent) (string, error) {
+	if len(content) == 1 {
+		return string(content[0].raw), nil
+	}
+	items := make([]json.RawMessage, 0, len(content))
+	for _, item := range content {
+		items = append(items, item.raw)
+	}
+	data, err := json.Marshal(items)
+	if err != nil {
+		return "", err
+	}
+	return string(data), nil
+}
+
 func (s *MCPServerStdio) Initialize(ctx context.Context) error {
 	s.cmd = exec.CommandContext(ctx, s.Command, s.Args...)
 	s.cmd.Dir = s.Cwd
@@ -313,7 +328,7 @@ func (t *mcpProxyTool) Execute(ctx context.Context, args string) (string, error)
 	if len(result.Content) == 0 {
 		return "", NewToolError(fmt.Sprintf("Tool %q completed without producing a result.", t.name))
 	}
-	return result.Content[0].Text, nil
+	return serializeMCPToolContent(result.Content)
 }
 
 func (t *mcpProxyTool) ParseFunctionTools(format string) (map[string]interface{}, error) {
