@@ -353,6 +353,26 @@ func TestAgentSessionCloseSoonStopsRunningSession(t *testing.T) {
 	}
 }
 
+func TestAgentSessionStopResetsSessionStates(t *testing.T) {
+	agent := NewAgent("test")
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	session.activity = NewAgentActivity(agent, session)
+	session.started = true
+	session.UserState = UserStateSpeaking
+	session.AgentState = AgentStateThinking
+
+	if err := session.Stop(context.Background()); err != nil {
+		t.Fatalf("Stop error = %v, want nil", err)
+	}
+
+	if session.UserState != UserStateListening {
+		t.Fatalf("UserState after Stop = %q, want %q", session.UserState, UserStateListening)
+	}
+	if session.AgentState != AgentStateInitializing {
+		t.Fatalf("AgentState after Stop = %q, want %q", session.AgentState, AgentStateInitializing)
+	}
+}
+
 func TestAgentSessionInterruptRequiresRunningActivity(t *testing.T) {
 	agent := NewAgent("test")
 	session := NewAgentSession(agent, nil, AgentSessionOptions{})

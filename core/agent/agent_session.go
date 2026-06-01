@@ -754,5 +754,7 @@ func (s *AgentSession) Stop(ctx context.Context) error {
 	}
 	s.activity = nil
 	s.started = false
+	s.UserState = UserStateListening
+	s.AgentState = AgentStateInitializing
 	return nil
 }
