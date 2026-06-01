@@ -148,6 +148,20 @@ func TestSileroVADStreamRejectsInvalidDeactivationThreshold(t *testing.T) {
 	}
 }
 
+func TestNewSileroVADWithOptionsRejectsInvalidOptions(t *testing.T) {
+	if _, err := NewSileroVADWithOptions(WithSampleRate(44100)); err == nil {
+		t.Fatal("NewSileroVADWithOptions() error = nil, want unsupported sample rate error")
+	} else if !strings.Contains(err.Error(), "8KHz and 16KHz") {
+		t.Fatalf("NewSileroVADWithOptions() error = %q, want supported sample rate message", err.Error())
+	}
+
+	if _, err := NewSileroVADWithOptions(WithDeactivationThreshold(-0.1)); err == nil {
+		t.Fatal("NewSileroVADWithOptions() error = nil, want invalid deactivation threshold error")
+	} else if !strings.Contains(err.Error(), "deactivation_threshold must be greater than 0") {
+		t.Fatalf("NewSileroVADWithOptions() error = %q, want deactivation threshold message", err.Error())
+	}
+}
+
 func TestSileroVADSampleRateControlsInferenceSampleIndex(t *testing.T) {
 	detector := NewSileroVAD(
 		WithSampleRate(8000),

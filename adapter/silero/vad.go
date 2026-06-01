@@ -93,14 +93,35 @@ func WithSampleRate(r int) VADOption {
 }
 
 func NewSileroVAD(opts ...VADOption) *SileroVAD {
-	options := DefaultVADOptions()
-	for _, opt := range opts {
-		opt(&options)
-	}
+	options := buildVADOptions(opts...)
 	if !options.deactivationThresholdSet {
 		options.DeactivationThreshold = max(options.ActivationThreshold-0.15, 0.01)
 	}
+	return newSileroVADWithResolvedOptions(options)
+}
 
+func NewSileroVADWithOptions(opts ...VADOption) (*SileroVAD, error) {
+	options := buildVADOptions(opts...)
+	if !options.deactivationThresholdSet {
+		options.DeactivationThreshold = max(options.ActivationThreshold-0.15, 0.01)
+	}
+	if err := validateVADOptions(options); err != nil {
+		return nil, err
+	}
+	return newSileroVADWithResolvedOptions(options), nil
+}
+
+func buildVADOptions(opts ...VADOption) VADOptions {
+	options := DefaultVADOptions()
+	for _, opt := range opts {
+		if opt != nil {
+			opt(&options)
+		}
+	}
+	return options
+}
+
+func newSileroVADWithResolvedOptions(options VADOptions) *SileroVAD {
 	// Fallback to simple VAD for now to provide out-of-the-box working plugin
 	// without requiring CGO/ONNX dependencies in the base install.
 	inner := vad.NewSimpleVADWithOptions(simpleOptionsFromSilero(options))
