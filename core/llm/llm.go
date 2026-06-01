@@ -1086,7 +1086,7 @@ func (s *fallbackLLMStream) markUnavailable(index int, recover bool) {
 
 func (f *FallbackAdapter) recoverLLM(index int, llm LLM, chatCtx *ChatContext, opts []ChatOption) {
 	ctx, cancel := f.attemptContext(context.Background())
-	stream, err := llm.Chat(ctx, chatCtx, opts...)
+	stream, err := llm.Chat(ctx, chatCtx, f.attemptOptions(opts)...)
 	if err != nil {
 		cancel()
 		f.finishRecovery(index, false)
@@ -1130,7 +1130,7 @@ func (s *fallbackLLMStream) tryStart(index int) error {
 		}
 		for {
 			ctx, cancel := s.adapter.attemptContext(s.ctx)
-			stream, err := s.adapter.llms[i].Chat(ctx, s.chatCtx, s.opts...)
+			stream, err := s.adapter.llms[i].Chat(ctx, s.chatCtx, s.adapter.attemptOptions(s.opts)...)
 			if err == nil {
 				s.adapter.setAvailable(i, true)
 				s.closeActive()
@@ -1216,6 +1216,16 @@ func (s *fallbackLLMStream) canRetryLLM(index int) bool {
 		s.retries = make(map[int]int)
 	}
 	return s.retries[index] < s.adapter.maxRetryPerLLM
+}
+
+func (f *FallbackAdapter) attemptOptions(opts []ChatOption) []ChatOption {
+	attemptOptions := append([]ChatOption(nil), opts...)
+	attemptOptions = append(attemptOptions, WithConnectOptions(APIConnectOptions{
+		MaxRetry:      f.maxRetryPerLLM,
+		RetryInterval: f.retryInterval,
+		Timeout:       f.attemptTimeout,
+	}))
+	return attemptOptions
 }
 
 func (f *FallbackAdapter) attemptContext(parent context.Context) (context.Context, context.CancelFunc) {
