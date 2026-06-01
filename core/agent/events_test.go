@@ -73,6 +73,52 @@ func TestRunContextWaitForPlayoutWaitsOnlyInitialGenerationStep(t *testing.T) {
 	}
 }
 
+func TestRunContextUserdataReturnsSessionUserdata(t *testing.T) {
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	want := map[string]string{"account_id": "acct_123"}
+	session.SetUserdata(want)
+	runCtx := NewRunContext(session, nil, &llm.FunctionCall{Name: "lookup"})
+
+	value, err := runCtx.Userdata()
+
+	if err != nil {
+		t.Fatalf("Userdata error = %v, want nil", err)
+	}
+	got, ok := value.(map[string]string)
+	if !ok {
+		t.Fatalf("Userdata value = %T, want map[string]string", value)
+	}
+	if got["account_id"] != want["account_id"] {
+		t.Fatalf("Userdata account_id = %q, want %q", got["account_id"], want["account_id"])
+	}
+}
+
+func TestRunContextUserdataRequiresSessionUserdata(t *testing.T) {
+	runCtx := NewRunContext(NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{}), nil, &llm.FunctionCall{Name: "lookup"})
+
+	value, err := runCtx.Userdata()
+
+	if value != nil {
+		t.Fatalf("Userdata value = %#v, want nil when unset", value)
+	}
+	if !errors.Is(err, ErrAgentSessionUserdataNotSet) {
+		t.Fatalf("Userdata error = %v, want ErrAgentSessionUserdataNotSet", err)
+	}
+}
+
+func TestRunContextUserdataRequiresSession(t *testing.T) {
+	runCtx := NewRunContext(nil, nil, &llm.FunctionCall{Name: "lookup"})
+
+	value, err := runCtx.Userdata()
+
+	if value != nil {
+		t.Fatalf("Userdata value = %#v, want nil without session", value)
+	}
+	if !errors.Is(err, ErrAgentSessionUserdataNotSet) {
+		t.Fatalf("Userdata error = %v, want ErrAgentSessionUserdataNotSet", err)
+	}
+}
+
 func TestFunctionToolsExecutedEventPairsCallsAndOutputs(t *testing.T) {
 	callA := &llm.FunctionCall{CallID: "call_a", Name: "lookup"}
 	callB := &llm.FunctionCall{CallID: "call_b", Name: "notify"}

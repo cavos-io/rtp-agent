@@ -235,6 +235,13 @@ func (r *RunContext) WaitForPlayout(ctx context.Context) error {
 	return r.SpeechHandle.Wait(ctx)
 }
 
+func (r *RunContext) Userdata() (any, error) {
+	if r == nil || r.Session == nil {
+		return nil, ErrAgentSessionUserdataNotSet
+	}
+	return r.Session.Userdata()
+}
+
 type contextKey string
 
 const runContextKey contextKey = "run_context"
