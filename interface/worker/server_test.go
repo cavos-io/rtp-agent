@@ -2489,6 +2489,27 @@ func TestRTCSessionRejectsSecondRegistration(t *testing.T) {
 	}
 }
 
+func TestRTCSessionLoadsAgentNameFromEnvironmentAtRegistration(t *testing.T) {
+	t.Setenv("LIVEKIT_AGENT_NAME", "")
+	server := NewAgentServer(WorkerOptions{})
+	t.Setenv("LIVEKIT_AGENT_NAME", "late-env-agent")
+
+	if err := server.RTCSession(func(ctx *JobContext) error { return nil }, nil, nil); err != nil {
+		t.Fatalf("RTCSession() error = %v", err)
+	}
+
+	if server.Options.AgentName != "late-env-agent" {
+		t.Fatalf("AgentName = %q, want late env agent", server.Options.AgentName)
+	}
+	if !server.Options.AgentNameIsEnv {
+		t.Fatal("AgentNameIsEnv = false, want true when env is loaded at registration")
+	}
+	register := server.registerWorkerRequest().GetRegister()
+	if register.GetAgentName() != "late-env-agent" {
+		t.Fatalf("register.AgentName = %q, want late env agent", register.GetAgentName())
+	}
+}
+
 func TestNewJobContextDefaultsParticipantIdentity(t *testing.T) {
 	job := &livekit.Job{Id: "job_default"}
 	ctx := NewJobContext(job, "wss://livekit.example", "key", "secret")
