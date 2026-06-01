@@ -1554,13 +1554,13 @@ func TestFallbackSynthesizeStreamEndsInputOnRetryAfterEndInput(t *testing.T) {
 	if got := string(audio.Frame.Data); got != "primary recovered" {
 		t.Fatalf("audio data = %q, want primary recovered", got)
 	}
-	wantCalls := []string{"push:hello", "end_input"}
+	wantCalls := []string{"push:hello", "flush", "end_input"}
 	if strings.Join(recovered.calls, ",") != strings.Join(wantCalls, ",") {
 		t.Fatalf("replayed stream calls = %#v, want %#v", recovered.calls, wantCalls)
 	}
 }
 
-func TestFallbackSynthesizeStreamReplaysOnlyFirstSegmentTextOnRetry(t *testing.T) {
+func TestFallbackSynthesizeStreamReplaysOnlyFirstSegmentInputOnRetry(t *testing.T) {
 	primaryFailure := &blockingFailSynthesizeStream{
 		err:     errors.New("primary stream failed"),
 		release: make(chan struct{}),
@@ -1608,10 +1608,56 @@ func TestFallbackSynthesizeStreamReplaysOnlyFirstSegmentTextOnRetry(t *testing.T
 		t.Fatalf("audio data = %q, want primary recovered", got)
 	}
 
-	wantCalls := []string{"push:hello"}
+	wantCalls := []string{"push:hello", "flush"}
 	if len(recovered.calls) != len(wantCalls) {
 		t.Fatalf("replayed stream call count = %d, want %d", len(recovered.calls), len(wantCalls))
 	}
+	if strings.Join(recovered.calls, ",") != strings.Join(wantCalls, ",") {
+		t.Fatalf("replayed stream calls = %#v, want %#v", recovered.calls, wantCalls)
+	}
+}
+
+func TestFallbackSynthesizeStreamReplaysFlushOnRetry(t *testing.T) {
+	primaryFailure := &blockingFailSynthesizeStream{
+		err:     errors.New("primary stream failed"),
+		release: make(chan struct{}),
+	}
+	recovered := newFlushGatedSynthesizeStream(&SynthesizedAudio{
+		Frame: &model.AudioFrame{Data: []byte("primary recovered")},
+	})
+	primary := &metadataTTS{
+		label:        "primary",
+		sampleRate:   24000,
+		numChannels:  1,
+		capabilities: TTSCapabilities{Streaming: true},
+		streams: []SynthesizeStream{
+			primaryFailure,
+			recovered,
+		},
+	}
+	adapter := NewFallbackAdapterWithOptions([]TTS{primary}, FallbackAdapterOptions{
+		MaxRetryPerTTS: 1,
+	})
+
+	stream, err := adapter.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+	defer stream.Close()
+
+	if err := stream.PushText("hello"); err != nil {
+		t.Fatalf("PushText returned error: %v", err)
+	}
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush returned error: %v", err)
+	}
+	close(primaryFailure.release)
+
+	audio := nextStreamAdapterAudio(t, stream)
+	if got := string(audio.Frame.Data); got != "primary recovered" {
+		t.Fatalf("audio data = %q, want primary recovered", got)
+	}
+	wantCalls := []string{"push:hello", "flush"}
 	if strings.Join(recovered.calls, ",") != strings.Join(wantCalls, ",") {
 		t.Fatalf("replayed stream calls = %#v, want %#v", recovered.calls, wantCalls)
 	}
@@ -1906,6 +1952,55 @@ func (s *blockingEndInputSynthesizeStream) Next() (*SynthesizedAudio, error) {
 	ev := s.events[0]
 	s.events = s.events[1:]
 	return ev, nil
+}
+
+type flushGatedSynthesizeStream struct {
+	event   *SynthesizedAudio
+	calls   []string
+	flushed chan struct{}
+	once    sync.Once
+	closed  bool
+	emitted bool
+}
+
+func newFlushGatedSynthesizeStream(event *SynthesizedAudio) *flushGatedSynthesizeStream {
+	return &flushGatedSynthesizeStream{
+		event:   event,
+		flushed: make(chan struct{}),
+	}
+}
+
+func (s *flushGatedSynthesizeStream) PushText(text string) error {
+	s.calls = append(s.calls, "push:"+text)
+	return nil
+}
+
+func (s *flushGatedSynthesizeStream) Flush() error {
+	s.calls = append(s.calls, "flush")
+	s.once.Do(func() {
+		close(s.flushed)
+	})
+	return nil
+}
+
+func (s *flushGatedSynthesizeStream) Close() error {
+	s.closed = true
+	s.once.Do(func() {
+		close(s.flushed)
+	})
+	return nil
+}
+
+func (s *flushGatedSynthesizeStream) Next() (*SynthesizedAudio, error) {
+	<-s.flushed
+	if s.closed {
+		return nil, io.EOF
+	}
+	if s.emitted {
+		return nil, io.EOF
+	}
+	s.emitted = true
+	return s.event, nil
 }
 
 type finalFrameThenBlockingSynthesizeStream struct {
