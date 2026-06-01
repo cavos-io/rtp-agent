@@ -25,8 +25,9 @@ type PreConnectAudioHandler struct {
 	timeout  time.Duration
 	maxDelta time.Duration
 
-	buffers map[string]chan *PreConnectAudioBuffer
-	mu      sync.Mutex
+	buffers  map[string]chan *PreConnectAudioBuffer
+	timedOut map[string]struct{}
+	mu       sync.Mutex
 
 	registered   bool
 	afterConnect bool
@@ -38,6 +39,7 @@ func NewPreConnectAudioHandler(room *lksdk.Room, timeout time.Duration) *PreConn
 		timeout:  timeout,
 		maxDelta: 1 * time.Second,
 		buffers:  make(map[string]chan *PreConnectAudioBuffer),
+		timedOut: make(map[string]struct{}),
 	}
 }
 
@@ -165,6 +167,12 @@ func (h *PreConnectAudioHandler) publishBuffer(trackID string, buf *PreConnectAu
 	defer h.mu.Unlock()
 
 	ch, ok := h.buffers[trackID]
+	if !ok {
+		if _, timedOut := h.timedOut[trackID]; timedOut {
+			delete(h.timedOut, trackID)
+			return
+		}
+	}
 	if !ok || len(ch) > 0 {
 		ch = make(chan *PreConnectAudioBuffer, 1)
 		h.buffers[trackID] = ch
@@ -195,8 +203,14 @@ func (h *PreConnectAudioHandler) WaitForData(ctx context.Context, trackID string
 
 	select {
 	case <-ctx.Done():
+		h.mu.Lock()
+		h.timedOut[trackID] = struct{}{}
+		h.mu.Unlock()
 		return nil
 	case <-time.After(h.timeout):
+		h.mu.Lock()
+		h.timedOut[trackID] = struct{}{}
+		h.mu.Unlock()
 		return nil
 	case buf := <-ch:
 		if buf == nil {

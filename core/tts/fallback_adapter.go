@@ -834,7 +834,7 @@ func (s *fallbackSynthesizeStream) PushText(text string) error {
 	if s.inputDone {
 		return nil
 	}
-	if text == "" || s.flushed {
+	if s.flushed {
 		return nil
 	}
 	s.started = true
@@ -871,7 +871,6 @@ func (s *fallbackSynthesizeStream) EndInput() error {
 	if s.started {
 		s.flushed = true
 	}
-	s.inputBuffer = append(s.inputBuffer, fallbackSynthesizeInput{flush: true})
 	return endSynthesizeStreamInput(s.activeStream)
 }
 

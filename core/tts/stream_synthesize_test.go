@@ -50,7 +50,7 @@ func TestSynthesizeWithStreamEndsInputWhenSupported(t *testing.T) {
 	}
 }
 
-func TestSynthesizeWithStreamIgnoresEmptyText(t *testing.T) {
+func TestSynthesizeWithStreamPushesEmptyText(t *testing.T) {
 	provider := &fakeStreamingTTS{
 		stream: &fakeSynthesizeStream{},
 	}
@@ -61,9 +61,12 @@ func TestSynthesizeWithStreamIgnoresEmptyText(t *testing.T) {
 	}
 	defer chunked.Close()
 
-	wantCalls := []string{"flush"}
+	wantCalls := []string{"push:", "flush"}
 	if !reflect.DeepEqual(provider.stream.calls, wantCalls) {
 		t.Fatalf("stream calls = %#v, want %#v", provider.stream.calls, wantCalls)
+	}
+	if provider.stream.calls[0] != "push:" {
+		t.Fatalf("first stream call = %q, want empty PushText before input end", provider.stream.calls[0])
 	}
 }
 

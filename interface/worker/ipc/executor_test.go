@@ -1,12 +1,38 @@
 package ipc
 
 import (
+	"context"
 	"encoding/json"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/livekit/protocol/livekit"
 )
+
+func TestThreadJobExecutorMarksPanicFailed(t *testing.T) {
+	executor := NewThreadJobExecutor("exec-panic", func() error {
+		panic("entrypoint panic")
+	})
+
+	if err := executor.LaunchJob(context.Background(), &livekit.Job{Id: "job-panic"}); err != nil {
+		t.Fatalf("LaunchJob() error = %v", err)
+	}
+
+	deadline := time.After(time.Second)
+	ticker := time.NewTicker(time.Millisecond)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-deadline:
+			t.Fatalf("executor status = %q, want %q", executor.Status(), JobStatusFailed)
+		case <-ticker.C:
+			if executor.Status() == JobStatusFailed {
+				return
+			}
+		}
+	}
+}
 
 func TestProcessJobEnvCarriesRunningJobInfo(t *testing.T) {
 	info := RunningJobInfo{

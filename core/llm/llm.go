@@ -522,8 +522,17 @@ const (
 )
 
 type GenerationCreatedEvent struct {
+	MessageCh     <-chan MessageGeneration
+	FunctionCh    <-chan *FunctionCall
 	ResponseID    string
 	UserInitiated bool
+}
+
+type MessageGeneration struct {
+	MessageID    string
+	TextCh       <-chan string
+	AudioCh      <-chan *model.AudioFrame
+	ModalitiesCh <-chan []string
 }
 
 type RemoteItemAddedEvent struct {

@@ -112,6 +112,8 @@ func (r *RecorderIO) Start(outputPath string, sampleRate int) error {
 	r.oggWriter = writer
 	r.encoder = encoder
 	r.outPath = outputPath
+	r.done = make(chan struct{})
+	r.closed = false
 	r.started = true
 
 	go r.recordLoop(sampleRate)
@@ -128,6 +130,7 @@ func (r *RecorderIO) Stop() error {
 	}
 
 	r.closed = true
+	r.started = false
 	close(r.done)
 	return nil
 }

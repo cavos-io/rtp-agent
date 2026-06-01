@@ -80,3 +80,16 @@ func TestRecorderIOPopulateSessionReportSetsRecordingMetadata(t *testing.T) {
 		t.Fatalf("Duration = %v, want %v", *report.Duration, wantDuration)
 	}
 }
+
+func TestRecorderIOStopMarksRecorderStopped(t *testing.T) {
+	recorder := NewRecorderIO(&agent.AgentSession{})
+	recorder.started = true
+
+	if err := recorder.Stop(); err != nil {
+		t.Fatalf("Stop() error = %v", err)
+	}
+
+	if recorder.started {
+		t.Fatal("started = true after Stop(), want false")
+	}
+}
