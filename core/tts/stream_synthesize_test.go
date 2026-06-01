@@ -194,7 +194,7 @@ func TestSynthesizeWithStreamErrorsWhenNonEmptyTextProducesNoAudio(t *testing.T)
 	}
 }
 
-func TestSynthesizeWithStreamErrorsWhenWhitespaceTextProducesNoAudio(t *testing.T) {
+func TestSynthesizeWithStreamReturnsEOFWhenWhitespaceTextProducesNoAudio(t *testing.T) {
 	provider := &fakeStreamingTTS{
 		stream: &fakeSynthesizeStream{emptyErr: io.EOF},
 	}
@@ -206,11 +206,8 @@ func TestSynthesizeWithStreamErrorsWhenWhitespaceTextProducesNoAudio(t *testing.
 	defer chunked.Close()
 
 	_, err = chunked.Next()
-	if err == nil {
-		t.Fatal("Next() error = nil, want no-audio error")
-	}
-	if !strings.Contains(err.Error(), "no audio frames") {
-		t.Fatalf("Next() error = %v, want no-audio error", err)
+	if !errors.Is(err, io.EOF) {
+		t.Fatalf("Next() error = %v, want io.EOF", err)
 	}
 }
 

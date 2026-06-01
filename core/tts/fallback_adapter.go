@@ -374,6 +374,7 @@ func (s *fallbackChunkedStream) tryStartStream(index int) error {
 
 func (s *fallbackChunkedStream) monitorStream() {
 	audioSent := false
+	var pending *SynthesizedAudio
 	for {
 		s.mu.Lock()
 		if s.closed {
@@ -387,9 +388,18 @@ func (s *fallbackChunkedStream) monitorStream() {
 		if err != nil {
 			if errors.Is(err, io.EOF) || audioSent {
 				_ = stream.Close()
-				if errors.Is(err, io.EOF) && !audioSent && s.text != "" {
+				if errors.Is(err, io.EOF) && !audioSent && strings.TrimSpace(s.text) != "" {
 					s.errCh <- fmt.Errorf("no audio frames were pushed for text: %s", s.text)
 					return
+				}
+				if pending != nil {
+					pending = cloneSynthesizedAudio(pending)
+					pending.IsFinal = true
+					select {
+					case s.eventCh <- pending:
+					case <-s.closeCh:
+						return
+					}
 				}
 				s.errCh <- io.EOF
 				return
@@ -431,11 +441,30 @@ func (s *fallbackChunkedStream) monitorStream() {
 		ev.RequestID = s.requestID
 
 		audioSent = true
-		select {
-		case s.eventCh <- ev:
-		case <-s.closeCh:
-			return
+		if ev.IsFinal {
+			if pending != nil {
+				select {
+				case s.eventCh <- pending:
+				case <-s.closeCh:
+					return
+				}
+			}
+			pending = nil
+			select {
+			case s.eventCh <- ev:
+			case <-s.closeCh:
+				return
+			}
+			continue
 		}
+		if pending != nil {
+			select {
+			case s.eventCh <- pending:
+			case <-s.closeCh:
+				return
+			}
+		}
+		pending = ev
 	}
 }
 
@@ -585,6 +614,7 @@ func (s *fallbackSynthesizeStream) replayBufferedText(stream SynthesizeStream) e
 
 func (s *fallbackSynthesizeStream) monitorStream() {
 	audioSent := false
+	var pending *SynthesizedAudio
 	for {
 		s.mu.Lock()
 		if s.closed {
@@ -598,9 +628,18 @@ func (s *fallbackSynthesizeStream) monitorStream() {
 		if err != nil {
 			if errors.Is(err, io.EOF) || audioSent {
 				_ = stream.Close()
-				if errors.Is(err, io.EOF) && !audioSent && s.pushedText() != "" {
+				if errors.Is(err, io.EOF) && !audioSent && strings.TrimSpace(s.pushedText()) != "" {
 					s.errCh <- fmt.Errorf("no audio frames were pushed for text: %s", s.pushedText())
 					return
+				}
+				if pending != nil {
+					pending = cloneSynthesizedAudio(pending)
+					pending.IsFinal = true
+					select {
+					case s.eventCh <- pending:
+					case <-s.closeCh:
+						return
+					}
 				}
 				s.errCh <- io.EOF
 				return
@@ -642,11 +681,30 @@ func (s *fallbackSynthesizeStream) monitorStream() {
 		ev.RequestID = s.requestID
 
 		audioSent = true
-		select {
-		case s.eventCh <- ev:
-		case <-s.closeCh:
-			return
+		if ev.IsFinal {
+			if pending != nil {
+				select {
+				case s.eventCh <- pending:
+				case <-s.closeCh:
+					return
+				}
+			}
+			pending = nil
+			select {
+			case s.eventCh <- ev:
+			case <-s.closeCh:
+				return
+			}
+			continue
 		}
+		if pending != nil {
+			select {
+			case s.eventCh <- pending:
+			case <-s.closeCh:
+				return
+			}
+		}
+		pending = ev
 	}
 }
 
