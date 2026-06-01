@@ -1,6 +1,10 @@
 package stt
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/cavos-io/conversation-worker/model"
+)
 
 func TestSpeechDataCarriesReferenceMetadataFields(t *testing.T) {
 	word := TimedString{
@@ -84,6 +88,11 @@ func TestStreamTimingInterfaceCapturesReferenceTimingAnchors(t *testing.T) {
 	}
 }
 
+func TestSpeechStreamAliasMatchesRecognizeStream(t *testing.T) {
+	var stream SpeechStream = (*fakeSpeechStream)(nil)
+	var _ RecognizeStream = stream
+}
+
 type fakeStreamTiming struct {
 	startTimeOffset float64
 	startTime       float64
@@ -103,4 +112,22 @@ func (f *fakeStreamTiming) StartTime() float64 {
 
 func (f *fakeStreamTiming) SetStartTime(startTime float64) {
 	f.startTime = startTime
+}
+
+type fakeSpeechStream struct{}
+
+func (f *fakeSpeechStream) PushFrame(*model.AudioFrame) error {
+	return nil
+}
+
+func (f *fakeSpeechStream) Flush() error {
+	return nil
+}
+
+func (f *fakeSpeechStream) Close() error {
+	return nil
+}
+
+func (f *fakeSpeechStream) Next() (*SpeechEvent, error) {
+	return nil, nil
 }
