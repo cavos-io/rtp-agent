@@ -753,6 +753,7 @@ func (s *fallbackRecognizeStream) tryRecoverStream(index int) {
 		return
 	}
 
+	s.applyTiming(stream)
 	s.adapter.setRecoveryStream(index, stream)
 	s.recoveries = append(s.recoveries, stream)
 
