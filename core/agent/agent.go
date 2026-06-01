@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"sync"
 
 	"github.com/cavos-io/conversation-worker/core/llm"
 	"github.com/cavos-io/conversation-worker/core/stt"
@@ -141,8 +142,9 @@ func (a *Agent) OnUserTurnCompleted(ctx context.Context, chatCtx *llm.ChatContex
 // AgentTask represents a sub-agent execution that returns a result
 type AgentTask[T any] struct {
 	Agent
-	Result chan T
-	Err    chan error
+	Result       chan T
+	Err          chan error
+	completeOnce sync.Once
 }
 
 type TaskWaiter interface {
@@ -159,11 +161,15 @@ func NewAgentTask[T any](instructions string) *AgentTask[T] {
 }
 
 func (t *AgentTask[T]) Complete(result T) {
-	t.Result <- result
+	t.completeOnce.Do(func() {
+		t.Result <- result
+	})
 }
 
 func (t *AgentTask[T]) Fail(err error) {
-	t.Err <- err
+	t.completeOnce.Do(func() {
+		t.Err <- err
+	})
 }
 
 func (t *AgentTask[T]) WaitAny(ctx context.Context) (any, error) {

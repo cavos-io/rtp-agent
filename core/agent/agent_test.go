@@ -2,7 +2,9 @@ package agent
 
 import (
 	"context"
+	"errors"
 	"testing"
+	"time"
 
 	"github.com/cavos-io/conversation-worker/core/llm"
 )
@@ -102,6 +104,57 @@ func TestAgentUpdateToolsDeduplicatesByToolID(t *testing.T) {
 	}
 	if agent.Tools[0] != replacement {
 		t.Fatalf("agent.Tools[0] = %p, want replacement %p", agent.Tools[0], replacement)
+	}
+}
+
+func TestAgentTaskCompleteIsOneTime(t *testing.T) {
+	task := NewAgentTask[string]("collect data")
+	task.Complete("first")
+
+	returned := make(chan struct{})
+	go func() {
+		task.Complete("second")
+		close(returned)
+	}()
+
+	select {
+	case <-returned:
+	case <-time.After(50 * time.Millisecond):
+		t.Fatal("second Complete blocked, want no-op after task completion")
+	}
+
+	got, err := task.WaitAny(context.Background())
+	if err != nil {
+		t.Fatalf("WaitAny error = %v, want nil", err)
+	}
+	if got != "first" {
+		t.Fatalf("WaitAny result = %v, want first", got)
+	}
+}
+
+func TestAgentTaskFailIsOneTime(t *testing.T) {
+	task := NewAgentTask[string]("collect data")
+	firstErr := errors.New("first failure")
+	task.Fail(firstErr)
+
+	returned := make(chan struct{})
+	go func() {
+		task.Fail(errors.New("second failure"))
+		close(returned)
+	}()
+
+	select {
+	case <-returned:
+	case <-time.After(50 * time.Millisecond):
+		t.Fatal("second Fail blocked, want no-op after task failure")
+	}
+
+	got, err := task.WaitAny(context.Background())
+	if err != firstErr {
+		t.Fatalf("WaitAny error = %v, want %v", err, firstErr)
+	}
+	if got != nil {
+		t.Fatalf("WaitAny result = %v, want nil", got)
 	}
 }
 
