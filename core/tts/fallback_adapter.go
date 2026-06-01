@@ -8,6 +8,7 @@ import (
 	"sync"
 
 	"github.com/cavos-io/conversation-worker/library/logger"
+	"github.com/cavos-io/conversation-worker/model"
 )
 
 type FallbackAdapter struct {
@@ -28,6 +29,7 @@ type fallbackTTSStatus struct {
 
 type FallbackAdapterOptions struct {
 	MaxRetryPerTTS int
+	SampleRate     int
 }
 
 func NewFallbackAdapter(ttss []TTS) *FallbackAdapter {
@@ -41,7 +43,7 @@ func NewFallbackAdapterWithOptions(ttss []TTS, options FallbackAdapterOptions) *
 
 	numChannels := ttss[0].NumChannels()
 	capabilities := TTSCapabilities{AlignedTranscript: true}
-	sampleRate := 0
+	sampleRate := options.SampleRate
 	for _, tts := range ttss {
 		if tts.NumChannels() != numChannels {
 			panic("all TTS must have the same number of channels")
@@ -49,7 +51,7 @@ func NewFallbackAdapterWithOptions(ttss []TTS, options FallbackAdapterOptions) *
 		ttsCapabilities := tts.Capabilities()
 		capabilities.Streaming = capabilities.Streaming || ttsCapabilities.Streaming
 		capabilities.AlignedTranscript = capabilities.AlignedTranscript && ttsCapabilities.AlignedTranscript
-		if tts.SampleRate() > sampleRate {
+		if options.SampleRate == 0 && tts.SampleRate() > sampleRate {
 			sampleRate = tts.SampleRate()
 		}
 	}
@@ -226,6 +228,79 @@ func streamForTTS(ctx context.Context, tts TTS) (SynthesizeStream, error) {
 	return NewStreamAdapter(tts).Stream(ctx)
 }
 
+func (f *FallbackAdapter) normalizeAudio(audio *SynthesizedAudio) (*SynthesizedAudio, error) {
+	if audio == nil || audio.Frame == nil || audio.Frame.SampleRate == 0 || audio.Frame.SampleRate == uint32(f.sampleRate) {
+		return audio, nil
+	}
+	frame, err := resampleAudioFrame(audio.Frame, uint32(f.sampleRate))
+	if err != nil {
+		return nil, err
+	}
+	normalized := *audio
+	normalized.Frame = frame
+	return &normalized, nil
+}
+
+func resampleAudioFrame(frame *model.AudioFrame, outputRate uint32) (*model.AudioFrame, error) {
+	if frame == nil || outputRate == 0 || frame.SampleRate == outputRate {
+		return frame, nil
+	}
+	if frame.SampleRate == 0 {
+		return nil, fmt.Errorf("cannot resample audio with zero sample rate")
+	}
+	if frame.NumChannels == 0 {
+		return nil, fmt.Errorf("cannot resample audio with zero channels")
+	}
+	if len(frame.Data)%2 != 0 {
+		return nil, fmt.Errorf("cannot resample non-16-bit PCM audio")
+	}
+	expectedBytes := int(frame.SamplesPerChannel * frame.NumChannels * 2)
+	if len(frame.Data) < expectedBytes {
+		return nil, fmt.Errorf("audio frame data is shorter than declared sample count")
+	}
+	if frame.SamplesPerChannel == 0 {
+		return &model.AudioFrame{
+			Data:              nil,
+			SampleRate:        outputRate,
+			NumChannels:       frame.NumChannels,
+			SamplesPerChannel: 0,
+		}, nil
+	}
+
+	inRate := frame.SampleRate
+	channels := frame.NumChannels
+	outSamples := uint32((uint64(frame.SamplesPerChannel)*uint64(outputRate) + uint64(inRate) - 1) / uint64(inRate))
+	if outSamples == 0 && frame.SamplesPerChannel > 0 {
+		outSamples = 1
+	}
+	out := make([]byte, int(outSamples*channels*2))
+
+	inputSamples := int(frame.SamplesPerChannel)
+	outputSamples := int(outSamples)
+	channelCount := int(channels)
+	for outIdx := 0; outIdx < outputSamples; outIdx++ {
+		srcIdx := 0
+		if outputSamples > 0 {
+			srcIdx = int(uint64(outIdx) * uint64(inRate) / uint64(outputRate))
+		}
+		if srcIdx >= inputSamples {
+			srcIdx = inputSamples - 1
+		}
+		for ch := 0; ch < channelCount; ch++ {
+			inOffset := (srcIdx*channelCount + ch) * 2
+			outOffset := (outIdx*channelCount + ch) * 2
+			copy(out[outOffset:outOffset+2], frame.Data[inOffset:inOffset+2])
+		}
+	}
+
+	return &model.AudioFrame{
+		Data:              out,
+		SampleRate:        outputRate,
+		NumChannels:       channels,
+		SamplesPerChannel: outSamples,
+	}, nil
+}
+
 type fallbackChunkedStream struct {
 	adapter *FallbackAdapter
 	ctx     context.Context
@@ -336,6 +411,12 @@ func (s *fallbackChunkedStream) monitorStream() {
 			}
 			s.mu.Unlock()
 			continue
+		}
+
+		ev, err = s.adapter.normalizeAudio(ev)
+		if err != nil {
+			s.errCh <- err
+			return
 		}
 
 		audioSent = true
@@ -526,6 +607,12 @@ func (s *fallbackSynthesizeStream) monitorStream() {
 			}
 			s.mu.Unlock()
 			continue
+		}
+
+		ev, err = s.adapter.normalizeAudio(ev)
+		if err != nil {
+			s.errCh <- err
+			return
 		}
 
 		audioSent = true

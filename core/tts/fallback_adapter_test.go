@@ -28,6 +28,17 @@ func TestFallbackAdapterAggregatesProviderMetadata(t *testing.T) {
 	}
 }
 
+func TestFallbackAdapterUsesConfiguredSampleRate(t *testing.T) {
+	adapter := NewFallbackAdapterWithOptions([]TTS{
+		&metadataTTS{label: "low", sampleRate: 16000, numChannels: 1, capabilities: TTSCapabilities{}},
+		&metadataTTS{label: "high", sampleRate: 48000, numChannels: 1, capabilities: TTSCapabilities{}},
+	}, FallbackAdapterOptions{SampleRate: 24000})
+
+	if got := adapter.SampleRate(); got != 24000 {
+		t.Fatalf("SampleRate = %d, want configured sample rate", got)
+	}
+}
+
 func TestFallbackAdapterRejectsMixedChannelCounts(t *testing.T) {
 	defer func() {
 		recovered := recover()
@@ -43,6 +54,76 @@ func TestFallbackAdapterRejectsMixedChannelCounts(t *testing.T) {
 		&metadataTTS{label: "mono", sampleRate: 24000, numChannels: 1},
 		&metadataTTS{label: "stereo", sampleRate: 24000, numChannels: 2},
 	})
+}
+
+func TestFallbackChunkedStreamResamplesProviderAudioToAdapterSampleRate(t *testing.T) {
+	adapter := NewFallbackAdapterWithOptions([]TTS{
+		&metadataTTS{
+			label:       "low",
+			sampleRate:  16000,
+			numChannels: 1,
+			chunked: &metadataChunkedStream{
+				events: []*SynthesizedAudio{{Frame: fallbackTestFrame(16000, 1, 2)}},
+			},
+		},
+	}, FallbackAdapterOptions{SampleRate: 32000})
+
+	stream, err := adapter.Synthesize(context.Background(), "hello")
+	if err != nil {
+		t.Fatalf("Synthesize returned error: %v", err)
+	}
+	defer stream.Close()
+
+	audio, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next returned error: %v", err)
+	}
+	if audio.Frame.SampleRate != 32000 {
+		t.Fatalf("SampleRate = %d, want resampled adapter rate", audio.Frame.SampleRate)
+	}
+	if audio.Frame.SamplesPerChannel != 4 {
+		t.Fatalf("SamplesPerChannel = %d, want duration-preserving sample count", audio.Frame.SamplesPerChannel)
+	}
+	if len(audio.Frame.Data) != 8 {
+		t.Fatalf("data bytes = %d, want 16-bit mono data for four samples", len(audio.Frame.Data))
+	}
+}
+
+func TestFallbackSynthesizeStreamResamplesProviderAudioToAdapterSampleRate(t *testing.T) {
+	adapter := NewFallbackAdapterWithOptions([]TTS{
+		&metadataTTS{
+			label:        "low",
+			sampleRate:   16000,
+			numChannels:  1,
+			capabilities: TTSCapabilities{Streaming: true},
+			stream: &metadataSynthesizeStream{
+				events: []*SynthesizedAudio{{Frame: fallbackTestFrame(16000, 1, 2)}},
+			},
+		},
+	}, FallbackAdapterOptions{SampleRate: 32000})
+
+	stream, err := adapter.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+	defer stream.Close()
+	if err := stream.PushText("hello"); err != nil {
+		t.Fatalf("PushText returned error: %v", err)
+	}
+
+	audio, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next returned error: %v", err)
+	}
+	if audio.Frame.SampleRate != 32000 {
+		t.Fatalf("SampleRate = %d, want resampled adapter rate", audio.Frame.SampleRate)
+	}
+	if audio.Frame.SamplesPerChannel != 4 {
+		t.Fatalf("SamplesPerChannel = %d, want duration-preserving sample count", audio.Frame.SamplesPerChannel)
+	}
+	if len(audio.Frame.Data) != 8 {
+		t.Fatalf("data bytes = %d, want 16-bit mono data for four samples", len(audio.Frame.Data))
+	}
 }
 
 func TestFallbackChunkedStreamReturnsEOFWhenProviderCompletes(t *testing.T) {
@@ -697,6 +778,15 @@ func waitForFallbackCondition(t *testing.T, condition func() bool) {
 	}
 	if !condition() {
 		t.Fatal("condition was not met before deadline")
+	}
+}
+
+func fallbackTestFrame(sampleRate uint32, channels uint32, samplesPerChannel uint32) *model.AudioFrame {
+	return &model.AudioFrame{
+		Data:              make([]byte, int(samplesPerChannel*channels*2)),
+		SampleRate:        sampleRate,
+		NumChannels:       channels,
+		SamplesPerChannel: samplesPerChannel,
 	}
 }
 
