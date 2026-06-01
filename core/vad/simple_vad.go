@@ -211,7 +211,7 @@ func (s *simpleVADStream) PushFrame(frame *model.AudioFrame) error {
 					SamplesIndex:   s.samplesIndex,
 					Timestamp:      s.timestamp,
 					SpeechDuration: s.speechDuration,
-					Frames:         startFrames,
+					Frames:         combineFrames(startFrames),
 					Speaking:       true,
 				}
 				s.lastActivity = time.Now()
@@ -237,7 +237,7 @@ func (s *simpleVADStream) PushFrame(frame *model.AudioFrame) error {
 					Timestamp:       s.timestamp,
 					SpeechDuration:  s.speechDuration,
 					SilenceDuration: s.silenceDuration,
-					Frames:          frames,
+					Frames:          combineFrames(frames),
 					Speaking:        false,
 				}
 				s.lastActivity = time.Now()
@@ -429,6 +429,36 @@ func framesDuration(frames []*model.AudioFrame) float64 {
 		duration += frameDuration(frame)
 	}
 	return duration
+}
+
+func combineFrames(frames []*model.AudioFrame) []*model.AudioFrame {
+	if len(frames) == 0 {
+		return nil
+	}
+	if len(frames) == 1 {
+		frame := frames[0]
+		data := append([]byte(nil), frame.Data...)
+		return []*model.AudioFrame{{
+			Data:              data,
+			SampleRate:        frame.SampleRate,
+			NumChannels:       frame.NumChannels,
+			SamplesPerChannel: frame.SamplesPerChannel,
+		}}
+	}
+
+	first := frames[0]
+	var samples uint32
+	var data []byte
+	for _, frame := range frames {
+		samples += frame.SamplesPerChannel
+		data = append(data, frame.Data...)
+	}
+	return []*model.AudioFrame{{
+		Data:              data,
+		SampleRate:        first.SampleRate,
+		NumChannels:       first.NumChannels,
+		SamplesPerChannel: samples,
+	}}
 }
 
 func (v *SimpleVAD) emitMetrics(metrics *telemetry.VADMetrics) {

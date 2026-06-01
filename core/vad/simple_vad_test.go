@@ -1,6 +1,7 @@
 package vad
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"io"
@@ -118,7 +119,8 @@ func TestSimpleVADUpdateOptionsRelaxesMaxBufferedSpeech(t *testing.T) {
 		t.Fatalf("PushFrame() third error = %v", err)
 	}
 	assertEventType(t, stream, VADEventInferenceDone)
-	if err := stream.PushFrame(audioFrame(16000, 160, 0)); err != nil {
+	silence := audioFrame(16000, 160, 0)
+	if err := stream.PushFrame(silence); err != nil {
 		t.Fatalf("PushFrame() silence error = %v", err)
 	}
 	assertEventType(t, stream, VADEventInferenceDone)
@@ -126,9 +128,7 @@ func TestSimpleVADUpdateOptionsRelaxesMaxBufferedSpeech(t *testing.T) {
 	if end.Type != VADEventEndOfSpeech {
 		t.Fatalf("event type = %s, want %s", end.Type, VADEventEndOfSpeech)
 	}
-	if len(end.Frames) != 3 || end.Frames[0] != firstSpeech || end.Frames[1] != thirdSpeech {
-		t.Fatalf("end frames = %#v, want buffered speech and trailing silence frames", end.Frames)
-	}
+	assertCombinedFrames(t, end.Frames, firstSpeech, thirdSpeech, silence)
 }
 
 func TestSimpleVADIgnoresMismatchedSampleRateFrames(t *testing.T) {
@@ -189,9 +189,7 @@ func TestSimpleVADUsesDeactivationThresholdWhileSpeaking(t *testing.T) {
 	if end.Type != VADEventEndOfSpeech {
 		t.Fatalf("event type = %s, want %s", end.Type, VADEventEndOfSpeech)
 	}
-	if len(end.Frames) != 3 || end.Frames[0] != speech || end.Frames[1] != dipAboveDeactivation || end.Frames[2] != silence {
-		t.Fatalf("end frames = %#v, want speech, hysteresis, and trailing silence frames", end.Frames)
-	}
+	assertCombinedFrames(t, end.Frames, speech, dipAboveDeactivation, silence)
 }
 
 func TestSimpleVADEmitsInferenceBeforeSpeechTransition(t *testing.T) {
@@ -233,9 +231,7 @@ func TestSimpleVADEmitsInferenceBeforeSpeechTransition(t *testing.T) {
 	if !start.Speaking {
 		t.Fatal("start Speaking = false, want true")
 	}
-	if len(start.Frames) != 1 || start.Frames[0] != frame {
-		t.Fatalf("start frames = %#v, want triggering frame", start.Frames)
-	}
+	assertCombinedFrames(t, start.Frames, frame)
 }
 
 func TestSimpleVADEndOfSpeechIncludesAccumulatedSpeechFrames(t *testing.T) {
@@ -279,9 +275,7 @@ func TestSimpleVADEndOfSpeechIncludesAccumulatedSpeechFrames(t *testing.T) {
 	if end.Speaking {
 		t.Fatal("end Speaking = true, want false")
 	}
-	if len(end.Frames) != 3 || end.Frames[0] != firstSpeech || end.Frames[1] != secondSpeech || end.Frames[2] != silence {
-		t.Fatalf("end frames = %#v, want accumulated speech and trailing silence frames", end.Frames)
-	}
+	assertCombinedFrames(t, end.Frames, firstSpeech, secondSpeech, silence)
 	if end.SpeechDuration != 0.02 {
 		t.Fatalf("SpeechDuration = %v, want 0.02", end.SpeechDuration)
 	}
@@ -317,9 +311,7 @@ func TestSimpleVADEndOfSpeechIncludesSilenceThresholdFrames(t *testing.T) {
 	if end.Type != VADEventEndOfSpeech {
 		t.Fatalf("event type = %s, want %s", end.Type, VADEventEndOfSpeech)
 	}
-	if len(end.Frames) != 3 || end.Frames[0] != speech || end.Frames[1] != firstSilence || end.Frames[2] != secondSilence {
-		t.Fatalf("end frames = %#v, want speech and silence threshold frames", end.Frames)
-	}
+	assertCombinedFrames(t, end.Frames, speech, firstSilence, secondSilence)
 	if end.SpeechDuration != 0.01 {
 		t.Fatalf("SpeechDuration = %v, want 0.01", end.SpeechDuration)
 	}
@@ -357,9 +349,7 @@ func TestSimpleVADRequiresMinimumSpeechDurationBeforeStart(t *testing.T) {
 	if start.SpeechDuration != 0.03 {
 		t.Fatalf("SpeechDuration = %v, want 0.03", start.SpeechDuration)
 	}
-	if len(start.Frames) != 3 || start.Frames[0] != firstSpeech || start.Frames[2] != thirdSpeech {
-		t.Fatalf("start frames = %#v, want accumulated threshold speech frames", start.Frames)
-	}
+	assertCombinedFrames(t, start.Frames, firstSpeech, secondSpeech, thirdSpeech)
 }
 
 func TestSimpleVADDropsSpeechShorterThanMinimumDuration(t *testing.T) {
@@ -419,10 +409,7 @@ func TestSimpleVADRequiresMinimumSilenceDurationBeforeEnd(t *testing.T) {
 	if end.SilenceDuration != 0.03 {
 		t.Fatalf("SilenceDuration = %v, want 0.03", end.SilenceDuration)
 	}
-	if len(end.Frames) != 4 || end.Frames[0] != speech ||
-		end.Frames[1] != firstSilence || end.Frames[2] != secondSilence || end.Frames[3] != thirdSilence {
-		t.Fatalf("end frames = %#v, want speech and silence threshold frames", end.Frames)
-	}
+	assertCombinedFrames(t, end.Frames, speech, firstSilence, secondSilence, thirdSilence)
 }
 
 func TestSimpleVADStartOfSpeechIncludesPrefixPaddingFrames(t *testing.T) {
@@ -453,13 +440,7 @@ func TestSimpleVADStartOfSpeechIncludesPrefixPaddingFrames(t *testing.T) {
 	if start.Type != VADEventStartOfSpeech {
 		t.Fatalf("event type = %s, want %s", start.Type, VADEventStartOfSpeech)
 	}
-	if len(start.Frames) != 4 {
-		t.Fatalf("start frames len = %d, want 4", len(start.Frames))
-	}
-	if start.Frames[0] != firstSilence || start.Frames[1] != secondSilence ||
-		start.Frames[2] != firstSpeech || start.Frames[3] != secondSpeech {
-		t.Fatalf("start frames = %#v, want prefix silence followed by speech", start.Frames)
-	}
+	assertCombinedFrames(t, start.Frames, firstSilence, secondSilence, firstSpeech, secondSpeech)
 }
 
 func TestSimpleVADLimitsBufferedSpeechFrames(t *testing.T) {
@@ -497,14 +478,7 @@ func TestSimpleVADLimitsBufferedSpeechFrames(t *testing.T) {
 	if end.Type != VADEventEndOfSpeech {
 		t.Fatalf("event type = %s, want %s", end.Type, VADEventEndOfSpeech)
 	}
-	if len(end.Frames) != 3 {
-		t.Fatalf("end frames len = %d, want 3", len(end.Frames))
-	}
-	for i, wantFrame := range speechFrames[:3] {
-		if end.Frames[i] != wantFrame {
-			t.Fatalf("end frame %d = %#v, want %#v", i, end.Frames[i], wantFrame)
-		}
-	}
+	assertCombinedFrames(t, end.Frames, speechFrames[0], speechFrames[1], speechFrames[2])
 }
 
 func TestSimpleVADFlushResetsSegmentState(t *testing.T) {
@@ -628,6 +602,38 @@ func assertNoVADEvent(t *testing.T, stream VADStream) {
 	case ev := <-done:
 		t.Fatalf("unexpected VAD event: %#v", ev)
 	case <-time.After(50 * time.Millisecond):
+	}
+}
+
+func assertCombinedFrames(t *testing.T, got []*model.AudioFrame, want ...*model.AudioFrame) {
+	t.Helper()
+	if len(got) != 1 {
+		t.Fatalf("frames len = %d, want 1 combined frame", len(got))
+	}
+	combined := got[0]
+	if len(want) == 0 {
+		if len(combined.Data) != 0 || combined.SamplesPerChannel != 0 {
+			t.Fatalf("combined frame = %#v, want empty frame", combined)
+		}
+		return
+	}
+	if combined.SampleRate != want[0].SampleRate {
+		t.Fatalf("combined SampleRate = %d, want %d", combined.SampleRate, want[0].SampleRate)
+	}
+	if combined.NumChannels != want[0].NumChannels {
+		t.Fatalf("combined NumChannels = %d, want %d", combined.NumChannels, want[0].NumChannels)
+	}
+	var wantSamples uint32
+	var wantData []byte
+	for _, frame := range want {
+		wantSamples += frame.SamplesPerChannel
+		wantData = append(wantData, frame.Data...)
+	}
+	if combined.SamplesPerChannel != wantSamples {
+		t.Fatalf("combined SamplesPerChannel = %d, want %d", combined.SamplesPerChannel, wantSamples)
+	}
+	if !bytes.Equal(combined.Data, wantData) {
+		t.Fatalf("combined Data = %v, want %v", combined.Data, wantData)
 	}
 }
 
