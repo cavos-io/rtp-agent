@@ -25,6 +25,7 @@ type RunResult struct {
 	events         []RunEvent
 	done           bool
 	finalOutput    any
+	finalOutputErr error
 	finalOutputSet bool
 	watchedSpeech  map[*SpeechHandle]runResultSpeechWatch
 	lastSpeech     *SpeechHandle
@@ -77,6 +78,9 @@ func (r *RunResult) FinalOutput() (any, error) {
 	}
 	if !r.finalOutputSet {
 		return nil, ErrRunResultNoFinalOutput
+	}
+	if r.finalOutputErr != nil {
+		return nil, r.finalOutputErr
 	}
 	return r.finalOutput, nil
 }
@@ -245,7 +249,11 @@ func (r *RunResult) markDoneIfNeeded(doneSpeech *SpeechHandle) {
 	}
 	if r.lastSpeech != nil {
 		if output, ok := r.lastSpeech.RunFinalOutput(); ok {
-			r.finalOutput = output
+			if err, ok := output.(error); ok {
+				r.finalOutputErr = err
+			} else {
+				r.finalOutput = output
+			}
 			r.finalOutputSet = true
 		}
 	}

@@ -177,6 +177,24 @@ func TestRunResultFinalOutputUsesLastCompletedSpeechHandle(t *testing.T) {
 	}
 }
 
+func TestRunResultFinalOutputReturnsSpeechFinalOutputError(t *testing.T) {
+	result := NewRunResult(llm.NewChatContext())
+	speech := NewSpeechHandle(true, DefaultInputDetails())
+	finalErr := errors.New("final output failed")
+	speech.SetRunFinalOutput(finalErr)
+
+	result.WatchSpeechHandle(speech)
+	speech.MarkDone()
+
+	output, err := result.FinalOutput()
+	if !errors.Is(err, finalErr) {
+		t.Fatalf("FinalOutput error = %v, want finalErr", err)
+	}
+	if output != nil {
+		t.Fatalf("FinalOutput output = %#v, want nil when final output is error", output)
+	}
+}
+
 func TestRunResultUnwatchSpeechHandleRemovesCallbacks(t *testing.T) {
 	result := NewRunResult(llm.NewChatContext())
 	speech := NewSpeechHandle(true, DefaultInputDetails())
