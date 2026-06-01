@@ -15,6 +15,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -2910,6 +2911,47 @@ func TestRunStartsConfiguredPrometheusServerBeforeDial(t *testing.T) {
 	}
 
 	_ = server.Run(context.Background())
+}
+
+func TestRunWorkerMessageLoopReturnsPromptlyWhenContextCanceled(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	closed := make(chan struct{})
+	readStarted := make(chan struct{})
+	var closeOnce sync.Once
+	server := NewAgentServer(WorkerOptions{})
+
+	doneCh := make(chan error, 1)
+	go func() {
+		doneCh <- server.runWorkerMessageLoop(
+			ctx,
+			func() (int, []byte, error) {
+				close(readStarted)
+				<-closed
+				return 0, nil, errors.New("closed")
+			},
+			func() error {
+				closeOnce.Do(func() { close(closed) })
+				return nil
+			},
+		)
+	}()
+
+	select {
+	case <-readStarted:
+	case <-time.After(time.Second):
+		t.Fatal("worker read loop did not start reading")
+	}
+	cancel()
+
+	select {
+	case err := <-doneCh:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("runWorkerMessageLoop() error = %v, want context canceled", err)
+		}
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("runWorkerMessageLoop() did not return promptly after context cancellation")
+	}
 }
 
 func TestConnectWorkerWebSocketRetriesDialFailures(t *testing.T) {

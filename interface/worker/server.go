@@ -1283,23 +1283,42 @@ func (s *AgentServer) Run(ctx context.Context) error {
 	go s.runWorkerStatusUpdates(statusCtx, workerStatusUpdateInterval)
 	s.emitWorkerStarted()
 
-	// Message Loop
+	return s.runWorkerMessageLoop(ctx, conn.ReadMessage, conn.Close)
+}
+
+func (s *AgentServer) runWorkerMessageLoop(ctx context.Context, readMessage func() (int, []byte, error), closeConn func() error) error {
 	for {
+		readDone := make(chan struct {
+			msgType int
+			data    []byte
+			err     error
+		}, 1)
+		go func() {
+			msgType, data, err := readMessage()
+			readDone <- struct {
+				msgType int
+				data    []byte
+				err     error
+			}{msgType: msgType, data: data, err: err}
+		}()
+
 		select {
 		case <-ctx.Done():
+			if closeConn != nil {
+				_ = closeConn()
+			}
 			return ctx.Err()
-		default:
-			msgType, data, err := conn.ReadMessage()
-			if err != nil {
-				return err
+		case result := <-readDone:
+			if result.err != nil {
+				return result.err
 			}
 
-			if msgType != websocket.BinaryMessage {
+			if result.msgType != websocket.BinaryMessage {
 				continue
 			}
 
 			msg := &livekit.ServerMessage{}
-			if err := proto.Unmarshal(data, msg); err != nil {
+			if err := proto.Unmarshal(result.data, msg); err != nil {
 				logger.Logger.Errorw("Failed to unmarshal server message", err)
 				continue
 			}
