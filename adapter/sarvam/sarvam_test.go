@@ -412,7 +412,7 @@ func TestSarvamTTSStreamMessagesMatchReference(t *testing.T) {
 }
 
 func TestSarvamTTSAudioFromStreamMessage(t *testing.T) {
-	audio, done, err := sarvamTTSAudioFromStreamMessage([]byte(`{"type":"audio","data":{"audio":"AQIDBA==","request_id":"req-1"}}`), 22050)
+	audio, done, err := sarvamTTSAudioFromStreamMessage([]byte(`{"type":"audio","data":{"audio":"AQIDBA==","request_id":"req-1"}}`), 22050, "mp3")
 	if err != nil {
 		t.Fatalf("audio from stream message: %v", err)
 	}
@@ -426,12 +426,48 @@ func TestSarvamTTSAudioFromStreamMessage(t *testing.T) {
 		t.Fatalf("audio = %+v, want request id and 22050 Hz mono", audio)
 	}
 
-	finished, done, err := sarvamTTSAudioFromStreamMessage([]byte(`{"type":"event","data":{"event_type":"final","request_id":"req-2"}}`), 22050)
+	finished, done, err := sarvamTTSAudioFromStreamMessage([]byte(`{"type":"event","data":{"event_type":"final","request_id":"req-2"}}`), 22050, "mp3")
 	if err != nil {
 		t.Fatalf("final event: %v", err)
 	}
 	if finished != nil || !done {
 		t.Fatalf("finished=%+v done=%v, want final event to finish stream", finished, done)
+	}
+}
+
+func TestSarvamTTSAudioFromStreamMessageDecodesTelephonyCodecs(t *testing.T) {
+	audio, done, err := sarvamTTSAudioFromStreamMessage([]byte(`{"type":"audio","data":{"audio":"AP8=","request_id":"req-mulaw"}}`), 8000, "mulaw")
+	if err != nil {
+		t.Fatalf("mulaw audio from stream message: %v", err)
+	}
+	if done {
+		t.Fatal("done = true for mulaw audio message")
+	}
+	if audio == nil {
+		t.Fatal("mulaw audio = nil")
+	}
+	if got, want := audio.Frame.Data, []byte{0x84, 0x82, 0x00, 0x00}; !bytes.Equal(got, want) {
+		t.Fatalf("mulaw decoded data = %v, want %v", got, want)
+	}
+	if audio.Frame.SamplesPerChannel != 2 {
+		t.Fatalf("mulaw samples = %d, want one 16-bit PCM sample per encoded byte", audio.Frame.SamplesPerChannel)
+	}
+
+	audio, done, err = sarvamTTSAudioFromStreamMessage([]byte(`{"type":"audio","data":{"audio":"1VU=","request_id":"req-alaw"}}`), 8000, "alaw")
+	if err != nil {
+		t.Fatalf("alaw audio from stream message: %v", err)
+	}
+	if done {
+		t.Fatal("done = true for alaw audio message")
+	}
+	if audio == nil {
+		t.Fatal("alaw audio = nil")
+	}
+	if got, want := audio.Frame.Data, []byte{0x08, 0x00, 0xf8, 0xff}; !bytes.Equal(got, want) {
+		t.Fatalf("alaw decoded data = %v, want %v", got, want)
+	}
+	if audio.Frame.SamplesPerChannel != 2 {
+		t.Fatalf("alaw samples = %d, want one 16-bit PCM sample per encoded byte", audio.Frame.SamplesPerChannel)
 	}
 }
 
