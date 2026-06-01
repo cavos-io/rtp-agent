@@ -294,6 +294,9 @@ func refreshRunningJobTokenForReload(info workeripc.RunningJobInfo, apiSecret st
 }
 
 func refreshRunningJobsForReload(jobs []workeripc.RunningJobInfo, apiSecret string, now time.Time) ([]workeripc.RunningJobInfo, error) {
+	if apiSecret == "" {
+		return nil, fmt.Errorf("api_secret is required to reload jobs")
+	}
 	refreshed := make([]workeripc.RunningJobInfo, 0, len(jobs))
 	for _, job := range jobs {
 		info, err := refreshRunningJobTokenForReload(job, apiSecret, now)

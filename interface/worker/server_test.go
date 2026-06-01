@@ -1152,6 +1152,18 @@ func TestRefreshRunningJobsForReloadRefreshesEveryJob(t *testing.T) {
 	}
 }
 
+func TestAgentServerReloadRunningJobsRequiresAPISecretEvenWithoutJobs(t *testing.T) {
+	server := NewAgentServer(WorkerOptions{})
+
+	err := server.ReloadRunningJobs(context.Background(), nil, time.Now())
+	if err == nil {
+		t.Fatal("ReloadRunningJobs() error = nil, want missing api secret error")
+	}
+	if !strings.Contains(err.Error(), "api_secret is required to reload jobs") {
+		t.Fatalf("ReloadRunningJobs() error = %v, want missing api secret error", err)
+	}
+}
+
 func TestAgentServerReloadRunningJobsLaunchesRefreshedJobs(t *testing.T) {
 	originalToken, err := auth.NewAccessToken("api-key", "api-secret").
 		SetIdentity("agent-a").
