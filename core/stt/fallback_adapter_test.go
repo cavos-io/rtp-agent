@@ -244,6 +244,49 @@ func TestFallbackAdapterRetriesSameSTTBeforeFallback(t *testing.T) {
 	}
 }
 
+func TestFallbackAdapterSkipsUnavailableSTTOnNextRecognize(t *testing.T) {
+	primaryErr := errors.New("primary recognize failed")
+	primary := &metadataSTT{
+		label:           "primary",
+		capabilities:    STTCapabilities{Streaming: true},
+		recognizeErrs:   []error{primaryErr, primaryErr},
+		recognizeResult: &SpeechEvent{Type: SpeechEventFinalTranscript, Alternatives: []SpeechData{{Text: "primary"}}},
+	}
+	fallback := &metadataSTT{
+		label:        "fallback",
+		capabilities: STTCapabilities{Streaming: true},
+		recognizeResult: &SpeechEvent{
+			Type:         SpeechEventFinalTranscript,
+			Alternatives: []SpeechData{{Text: "fallback"}},
+		},
+	}
+	adapter := NewFallbackAdapterWithOptions([]STT{primary, fallback}, FallbackAdapterOptions{
+		MaxRetryPerSTT: 0,
+	})
+
+	event, err := adapter.Recognize(context.Background(), nil, "en")
+	if err != nil {
+		t.Fatalf("first Recognize returned error: %v", err)
+	}
+	if got := event.Alternatives[0].Text; got != "fallback" {
+		t.Fatalf("first recognized text = %q, want fallback", got)
+	}
+
+	event, err = adapter.Recognize(context.Background(), nil, "en")
+	if err != nil {
+		t.Fatalf("second Recognize returned error: %v", err)
+	}
+	if got := event.Alternatives[0].Text; got != "fallback" {
+		t.Fatalf("second recognized text = %q, want fallback", got)
+	}
+	if primary.recognizeCalls != 1 {
+		t.Fatalf("primary recognize calls = %d, want 1 because unavailable providers are skipped", primary.recognizeCalls)
+	}
+	if fallback.recognizeCalls != 2 {
+		t.Fatalf("fallback recognize calls = %d, want 2", fallback.recognizeCalls)
+	}
+}
+
 func TestFallbackStreamRetriesSameSTTBeforeFallback(t *testing.T) {
 	firstErr := errors.New("primary stream failed")
 	primary := &metadataSTT{

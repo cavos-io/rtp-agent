@@ -16,6 +16,8 @@ type FallbackAdapter struct {
 	stts           []STT
 	capabilities   STTCapabilities
 	maxRetryPerSTT int
+	mu             sync.Mutex
+	available      []bool
 }
 
 type FallbackAdapterOptions struct {
@@ -78,7 +80,16 @@ func newFallbackAdapter(stts []STT, vad vad.VAD, options FallbackAdapterOptions)
 		stts:           wrapped,
 		capabilities:   capabilities,
 		maxRetryPerSTT: options.MaxRetryPerSTT,
+		available:      initialAvailability(len(wrapped)),
 	}
+}
+
+func initialAvailability(size int) []bool {
+	available := make([]bool, size)
+	for i := range available {
+		available[i] = true
+	}
+	return available
 }
 
 func (f *FallbackAdapter) Label() string {
@@ -91,13 +102,18 @@ func (f *FallbackAdapter) Capabilities() STTCapabilities {
 
 func (f *FallbackAdapter) Recognize(ctx context.Context, frames []*model.AudioFrame, language string) (*SpeechEvent, error) {
 	var lastErr error
+	allFailed := f.allUnavailable()
 	for i, stt := range f.stts {
+		if !allFailed && !f.isAvailable(i) {
+			continue
+		}
 		if i > 0 {
 			logger.Logger.Infow("Falling back to next STT", "stt", stt.Label(), "previous_error", lastErr)
 		}
 		for attempt := 0; attempt <= f.maxRetryPerSTT; attempt++ {
 			res, err := stt.Recognize(ctx, frames, language)
 			if err == nil {
+				f.setAvailable(i, true)
 				return res, nil
 			}
 			lastErr = err
@@ -105,8 +121,38 @@ func (f *FallbackAdapter) Recognize(ctx context.Context, frames []*model.AudioFr
 				logger.Logger.Warnw("Retrying STT recognize", err, "stt", stt.Label(), "attempt", attempt+1)
 			}
 		}
+		f.setAvailable(i, false)
 	}
 	return nil, fmt.Errorf("all STTs failed, last error: %w", lastErr)
+}
+
+func (f *FallbackAdapter) allUnavailable() bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for _, available := range f.available {
+		if available {
+			return false
+		}
+	}
+	return true
+}
+
+func (f *FallbackAdapter) isAvailable(index int) bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if index < 0 || index >= len(f.available) {
+		return false
+	}
+	return f.available[index]
+}
+
+func (f *FallbackAdapter) setAvailable(index int, available bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if index < 0 || index >= len(f.available) {
+		return
+	}
+	f.available[index] = available
 }
 
 type fallbackRecognizeStream struct {
