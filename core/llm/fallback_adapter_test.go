@@ -399,6 +399,31 @@ func TestFallbackAdapterDoesNotRetryCleanEOF(t *testing.T) {
 	}
 }
 
+func TestFallbackAdapterTreatsClientClosedStatusAsCleanEOF(t *testing.T) {
+	second := &fakeFallbackLLM{stream: &fakeFallbackStream{events: []fakeFallbackEvent{
+		{chunk: &ChatChunk{Delta: &ChoiceDelta{Content: "fallback"}}},
+	}}}
+	adapter := NewFallbackAdapter([]LLM{
+		&fakeFallbackLLM{stream: &fakeFallbackStream{events: []fakeFallbackEvent{
+			{err: NewAPIStatusError("client closed", 499, "req_123", nil)},
+		}}},
+		second,
+	})
+
+	stream, err := adapter.Chat(context.Background(), NewChatContext())
+	if err != nil {
+		t.Fatalf("Chat returned error: %v", err)
+	}
+
+	_, err = stream.Next()
+	if !errors.Is(err, io.EOF) {
+		t.Fatalf("Next error = %v, want EOF for 499 client closed", err)
+	}
+	if second.calls != 0 {
+		t.Fatalf("fallback LLM calls = %d, want 0 for client closed", second.calls)
+	}
+}
+
 func TestFallbackAdapterReturnsAllFailedErrorWhenProvidersExhausted(t *testing.T) {
 	firstErr := errors.New("primary unavailable")
 	secondErr := errors.New("fallback unavailable")
