@@ -137,6 +137,9 @@ func TestPerformTTSInferenceEndsStreamInput(t *testing.T) {
 		if !ok {
 			t.Fatal("AudioCh closed before audio, want audio after EndInput")
 		}
+		if frame == nil {
+			t.Fatal("audio frame = nil, want synthesized audio frame")
+		}
 		if string(frame.Data) != "audio" {
 			t.Fatalf("audio data = %q, want audio", frame.Data)
 		}
