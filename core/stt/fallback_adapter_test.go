@@ -717,6 +717,69 @@ func TestFallbackStreamRecoversFailedProviderInBackground(t *testing.T) {
 	}
 }
 
+func TestFallbackStreamRecoversProviderAfterStreamStartFailure(t *testing.T) {
+	startErr := errors.New("primary stream start failed")
+	recovery := &metadataRecognizeStream{events: []*SpeechEvent{{
+		Type:         SpeechEventFinalTranscript,
+		Alternatives: []SpeechData{{Text: "primary recovered"}},
+	}}}
+	active := &metadataRecognizeStream{events: []*SpeechEvent{{
+		Type:         SpeechEventFinalTranscript,
+		Alternatives: []SpeechData{{Text: "primary active"}},
+	}}}
+	primary := &metadataSTT{
+		label:        "primary",
+		capabilities: STTCapabilities{Streaming: true},
+		streamErrs:   []error{startErr},
+		streams: []RecognizeStream{
+			recovery,
+			active,
+		},
+	}
+	fallback := &metadataSTT{
+		label:        "fallback",
+		capabilities: STTCapabilities{Streaming: true},
+		stream: &metadataRecognizeStream{events: []*SpeechEvent{{
+			Type:         SpeechEventFinalTranscript,
+			Alternatives: []SpeechData{{Text: "fallback stream"}},
+		}}},
+	}
+	adapter := NewFallbackAdapterWithOptions([]STT{primary, fallback}, FallbackAdapterOptions{
+		MaxRetryPerSTT: 0,
+	})
+
+	stream, err := adapter.Stream(context.Background(), "en")
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+	defer stream.Close()
+
+	event, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next returned error: %v", err)
+	}
+	if got := event.Alternatives[0].Text; got != "fallback stream" {
+		t.Fatalf("first stream text = %q, want fallback stream", got)
+	}
+
+	waitForStreamCalls(t, primary, 2)
+	waitForProviderAvailable(t, adapter, 0)
+
+	nextStream, err := adapter.Stream(context.Background(), "en")
+	if err != nil {
+		t.Fatalf("second Stream returned error: %v", err)
+	}
+	defer nextStream.Close()
+
+	event, err = nextStream.Next()
+	if err != nil {
+		t.Fatalf("second Next returned error: %v", err)
+	}
+	if got := event.Alternatives[0].Text; got != "primary active" {
+		t.Fatalf("second stream text = %q, want recovered primary active", got)
+	}
+}
+
 func TestFallbackStreamForwardsOnlyNewInputToRecoveringProvider(t *testing.T) {
 	firstFrame := &model.AudioFrame{Data: []byte("1"), SampleRate: 16000, NumChannels: 1, SamplesPerChannel: 1}
 	secondFrame := &model.AudioFrame{Data: []byte("2"), SampleRate: 16000, NumChannels: 1, SamplesPerChannel: 1}

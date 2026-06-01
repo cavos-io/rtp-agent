@@ -328,6 +328,7 @@ func (s *fallbackRecognizeStream) tryStartStream(index int) error {
 					continue
 				}
 				s.adapter.setAvailable(i, false)
+				s.tryRecoverStream(i)
 				break
 			}
 
@@ -339,6 +340,7 @@ func (s *fallbackRecognizeStream) tryStartStream(index int) error {
 					continue
 				}
 				s.adapter.setAvailable(i, false)
+				s.tryRecoverStream(i)
 				break
 			}
 
@@ -517,7 +519,7 @@ func (s *fallbackRecognizeStream) tryRecoverStream(index int) {
 	recoveryCtx := context.WithoutCancel(s.ctx)
 	stt := s.adapter.stts[index]
 	stream, err := stt.Stream(recoveryCtx, s.language)
-	if err != nil {
+	if err != nil || stream == nil {
 		s.adapter.clearRecoveringStream(index)
 		return
 	}
