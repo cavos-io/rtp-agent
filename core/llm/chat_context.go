@@ -927,22 +927,19 @@ func (c *ChatContext) ToProviderFormatE(format string, options ...ChatContextPro
 		if err := validateProviderImages(c.Items); err != nil {
 			return nil, nil, err
 		}
-		messages, extra := c.toGoogleProviderFormat(opts)
-		return messages, extra, nil
+		return c.toGoogleProviderFormat(opts)
 	}
 	if format == "anthropic" {
 		if err := validateProviderImages(c.Items); err != nil {
 			return nil, nil, err
 		}
-		messages, extra := c.toAnthropicProviderFormat(opts)
-		return messages, extra, nil
+		return c.toAnthropicProviderFormat(opts)
 	}
 	if format == "aws" {
 		if err := validateAWSProviderImages(c.Items); err != nil {
 			return nil, nil, err
 		}
-		messages, extra := c.toAWSProviderFormat(opts)
-		return messages, extra, nil
+		return c.toAWSProviderFormat(opts)
 	}
 	if format == "mistralai" {
 		messages, extra, err := c.toMistralProviderFormat()
@@ -954,7 +951,7 @@ func (c *ChatContext) ToProviderFormatE(format string, options ...ChatContextPro
 	return nil, nil, fmt.Errorf("unsupported provider format: %s", format)
 }
 
-func (c *ChatContext) toGoogleProviderFormat(opts ChatContextProviderFormatOptions) ([]map[string]any, any) {
+func (c *ChatContext) toGoogleProviderFormat(opts ChatContextProviderFormatOptions) ([]map[string]any, any, error) {
 	turns := make([]map[string]any, 0)
 	systemMessages := make([]string, 0)
 	currentRole := ""
@@ -991,7 +988,11 @@ func (c *ChatContext) toGoogleProviderFormat(opts ChatContextProviderFormatOptio
 				flush()
 				currentRole = role
 			}
-			parts = append(parts, googleItemParts(item, opts)...)
+			itemParts, err := googleItemParts(item, opts)
+			if err != nil {
+				return nil, nil, err
+			}
+			parts = append(parts, itemParts...)
 		}
 	}
 	flush()
@@ -1003,10 +1004,10 @@ func (c *ChatContext) toGoogleProviderFormat(opts ChatContextProviderFormatOptio
 		})
 	}
 
-	return turns, map[string]any{"system_messages": systemMessages}
+	return turns, map[string]any{"system_messages": systemMessages}, nil
 }
 
-func (c *ChatContext) toAnthropicProviderFormat(opts ChatContextProviderFormatOptions) ([]map[string]any, any) {
+func (c *ChatContext) toAnthropicProviderFormat(opts ChatContextProviderFormatOptions) ([]map[string]any, any, error) {
 	messages := make([]map[string]any, 0)
 	systemMessages := make([]string, 0)
 	currentRole := ""
@@ -1039,7 +1040,11 @@ func (c *ChatContext) toAnthropicProviderFormat(opts ChatContextProviderFormatOp
 				flush()
 				currentRole = role
 			}
-			content = append(content, anthropicItemContent(item)...)
+			itemContent, err := anthropicItemContent(item)
+			if err != nil {
+				return nil, nil, err
+			}
+			content = append(content, itemContent...)
 		}
 	}
 	flush()
@@ -1058,7 +1063,7 @@ func (c *ChatContext) toAnthropicProviderFormat(opts ChatContextProviderFormatOp
 		})
 	}
 
-	return messages, map[string]any{"system_messages": systemMessages}
+	return messages, map[string]any{"system_messages": systemMessages}, nil
 }
 
 func (c *ChatContext) toMistralProviderFormat() ([]map[string]any, any, error) {
@@ -1098,7 +1103,7 @@ func (c *ChatContext) toMistralProviderFormat() ([]map[string]any, any, error) {
 	return entries, map[string]any{"instructions": instructions}, nil
 }
 
-func (c *ChatContext) toAWSProviderFormat(opts ChatContextProviderFormatOptions) ([]map[string]any, any) {
+func (c *ChatContext) toAWSProviderFormat(opts ChatContextProviderFormatOptions) ([]map[string]any, any, error) {
 	messages := make([]map[string]any, 0)
 	systemMessages := make([]string, 0)
 	currentRole := ""
@@ -1131,7 +1136,11 @@ func (c *ChatContext) toAWSProviderFormat(opts ChatContextProviderFormatOptions)
 				flush()
 				currentRole = role
 			}
-			content = append(content, awsItemContent(item)...)
+			itemContent, err := awsItemContent(item)
+			if err != nil {
+				return nil, nil, err
+			}
+			content = append(content, itemContent...)
 		}
 	}
 	flush()
@@ -1143,7 +1152,7 @@ func (c *ChatContext) toAWSProviderFormat(opts ChatContextProviderFormatOptions)
 		}}, messages...)
 	}
 
-	return messages, map[string]any{"system_messages": systemMessages}
+	return messages, map[string]any{"system_messages": systemMessages}, nil
 }
 
 func inlineMidConversationInstructions(items []ChatItem) []ChatItem {
@@ -1544,7 +1553,7 @@ func googleItemRole(item ChatItem) string {
 	}
 }
 
-func googleItemParts(item ChatItem, opts ChatContextProviderFormatOptions) []map[string]any {
+func googleItemParts(item ChatItem, opts ChatContextProviderFormatOptions) ([]map[string]any, error) {
 	switch it := item.(type) {
 	case *ChatMessage:
 		parts := make([]map[string]any, 0, len(it.Content))
@@ -1558,11 +1567,11 @@ func googleItemParts(item ChatItem, opts ChatContextProviderFormatOptions) []map
 				}
 			}
 		}
-		return parts
+		return parts, nil
 	case *FunctionCall:
-		args := map[string]any{}
-		if it.Arguments != "" {
-			_ = json.Unmarshal([]byte(it.Arguments), &args)
+		args, err := parseProviderFunctionArguments(it)
+		if err != nil {
+			return nil, err
 		}
 		part := map[string]any{
 			"function_call": map[string]any{
@@ -1576,7 +1585,7 @@ func googleItemParts(item ChatItem, opts ChatContextProviderFormatOptions) []map
 				part["thought_signature"] = signature
 			}
 		}
-		return []map[string]any{part}
+		return []map[string]any{part}, nil
 	case *FunctionCallOutput:
 		responseKey := "output"
 		if it.IsError {
@@ -1590,9 +1599,9 @@ func googleItemParts(item ChatItem, opts ChatContextProviderFormatOptions) []map
 					responseKey: it.Output,
 				},
 			},
-		}}
+		}}, nil
 	default:
-		return nil
+		return nil, nil
 	}
 }
 
@@ -1637,7 +1646,7 @@ func anthropicItemRole(item ChatItem) string {
 	}
 }
 
-func anthropicItemContent(item ChatItem) []map[string]any {
+func anthropicItemContent(item ChatItem) ([]map[string]any, error) {
 	switch it := item.(type) {
 	case *ChatMessage:
 		content := make([]map[string]any, 0, len(it.Content))
@@ -1654,27 +1663,27 @@ func anthropicItemContent(item ChatItem) []map[string]any {
 				}
 			}
 		}
-		return content
+		return content, nil
 	case *FunctionCall:
-		input := map[string]any{}
-		if it.Arguments != "" {
-			_ = json.Unmarshal([]byte(it.Arguments), &input)
+		input, err := parseProviderFunctionArguments(it)
+		if err != nil {
+			return nil, err
 		}
 		return []map[string]any{{
 			"id":    it.CallID,
 			"type":  "tool_use",
 			"name":  it.Name,
 			"input": input,
-		}}
+		}}, nil
 	case *FunctionCallOutput:
 		return []map[string]any{{
 			"tool_use_id": it.CallID,
 			"type":        "tool_result",
 			"content":     anthropicToolResultContent(it.Output),
 			"is_error":    it.IsError,
-		}}
+		}}, nil
 	default:
-		return nil
+		return nil, nil
 	}
 }
 
@@ -1726,7 +1735,7 @@ func awsItemRole(item ChatItem) string {
 	}
 }
 
-func awsItemContent(item ChatItem) []map[string]any {
+func awsItemContent(item ChatItem) ([]map[string]any, error) {
 	switch it := item.(type) {
 	case *ChatMessage:
 		content := make([]map[string]any, 0, len(it.Content))
@@ -1740,11 +1749,11 @@ func awsItemContent(item ChatItem) []map[string]any {
 				}
 			}
 		}
-		return content
+		return content, nil
 	case *FunctionCall:
-		input := map[string]any{}
-		if it.Arguments != "" {
-			_ = json.Unmarshal([]byte(it.Arguments), &input)
+		input, err := parseProviderFunctionArguments(it)
+		if err != nil {
+			return nil, err
 		}
 		return []map[string]any{{
 			"toolUse": map[string]any{
@@ -1752,7 +1761,7 @@ func awsItemContent(item ChatItem) []map[string]any {
 				"name":      it.Name,
 				"input":     input,
 			},
-		}}
+		}}, nil
 	case *FunctionCallOutput:
 		return []map[string]any{{
 			"toolResult": map[string]any{
@@ -1762,10 +1771,21 @@ func awsItemContent(item ChatItem) []map[string]any {
 				},
 				"status": "success",
 			},
-		}}
+		}}, nil
 	default:
-		return nil
+		return nil, nil
 	}
+}
+
+func parseProviderFunctionArguments(call *FunctionCall) (map[string]any, error) {
+	args := map[string]any{}
+	if call.Arguments == "" {
+		return args, nil
+	}
+	if err := json.Unmarshal([]byte(call.Arguments), &args); err != nil {
+		return nil, fmt.Errorf("parse function arguments for %s: %w", call.Name, err)
+	}
+	return args, nil
 }
 
 func awsImageContent(image *ImageContent) map[string]any {
