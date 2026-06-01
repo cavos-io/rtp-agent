@@ -458,21 +458,42 @@ type RealtimeCapabilities struct {
 	UserTranscription       bool
 	AutoToolReplyGeneration bool
 	AudioOutput             bool
+	ManualFunctionCalls     bool
+	MutableChatContext      bool
+	MutableInstructions     bool
+	MutableTools            bool
+	PerResponseToolChoice   bool
+	SupportsSay             bool
 }
 
 type RealtimeModel interface {
+	Capabilities() RealtimeCapabilities
 	Session() (RealtimeSession, error)
 	Close() error
+}
+
+type RealtimeSessionOptions struct {
+	ToolChoice ToolChoice
+}
+
+type RealtimeGenerateReplyOptions struct {
+	Instructions string
+	ToolChoice   ToolChoice
+	Tools        []Tool
 }
 
 type RealtimeSession interface {
 	UpdateInstructions(instructions string) error
 	UpdateChatContext(chatCtx *ChatContext) error
 	UpdateTools(tools []Tool) error
+	UpdateOptions(options RealtimeSessionOptions) error
+	GenerateReply(options RealtimeGenerateReplyOptions) error
 	Interrupt() error
 	Close() error
 	EventCh() <-chan RealtimeEvent
 	PushAudio(frame *model.AudioFrame) error
+	CommitAudio() error
+	ClearAudio() error
 }
 
 type RealtimeEventType string
