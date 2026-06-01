@@ -71,9 +71,11 @@ func TestSimpleVADEmitsMetricsCollected(t *testing.T) {
 func TestSimpleVADMetricsHandlerCanCloseStream(t *testing.T) {
 	detector := NewSimpleVADWithOptions(SimpleVADOptions{UpdateInterval: 1})
 	var stream VADStream
+	closed := make(chan struct{}, 1)
 	detector.OnMetricsCollected(func(metrics *telemetry.VADMetrics) {
 		if stream != nil {
 			_ = stream.Close()
+			closed <- struct{}{}
 		}
 	})
 
@@ -97,8 +99,50 @@ func TestSimpleVADMetricsHandlerCanCloseStream(t *testing.T) {
 		t.Fatal("PushFrame() blocked while metrics handler closed stream")
 	}
 
+	select {
+	case <-closed:
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("timed out waiting for metrics handler to close stream")
+	}
 	if _, err := stream.Next(); !errors.Is(err, io.EOF) {
 		t.Fatalf("Next() after metrics handler close error = %v, want io.EOF", err)
+	}
+}
+
+func TestSimpleVADMetricsHandlerDoesNotBlockPushFrame(t *testing.T) {
+	detector := NewSimpleVADWithOptions(SimpleVADOptions{UpdateInterval: 1})
+	release := make(chan struct{})
+	handlerStarted := make(chan struct{}, 1)
+	detector.OnMetricsCollected(func(metrics *telemetry.VADMetrics) {
+		handlerStarted <- struct{}{}
+		<-release
+	})
+	defer close(release)
+
+	stream, err := detector.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	defer stream.Close()
+
+	done := make(chan error, 1)
+	go func() {
+		done <- stream.PushFrame(audioFrame(16000, 160, 6000))
+	}()
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("PushFrame() error = %v", err)
+		}
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("PushFrame() blocked on metrics handler")
+	}
+
+	select {
+	case <-handlerStarted:
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("timed out waiting for metrics handler")
 	}
 }
 
