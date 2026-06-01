@@ -3,6 +3,7 @@ package llm
 import (
 	"context"
 	"errors"
+	"io"
 	"testing"
 )
 
@@ -315,6 +316,87 @@ func TestExecuteFunctionCallNormalizesToolError(t *testing.T) {
 	}
 }
 
+func TestCollectStreamAggregatesChunks(t *testing.T) {
+	stream := &fakeCollectStream{events: []fakeCollectEvent{
+		{chunk: &ChatChunk{
+			ID: "req-1",
+			Delta: &ChoiceDelta{
+				Content: " hello",
+				Extra:   map[string]any{"reasoning": "first"},
+			},
+		}},
+		{chunk: &ChatChunk{
+			ID: "req-1",
+			Delta: &ChoiceDelta{
+				Content: " world ",
+				ToolCalls: []FunctionToolCall{{
+					Type:      "function",
+					Name:      "lookup",
+					Arguments: `{"city":"Paris"}`,
+					CallID:    "call_lookup",
+				}},
+				Extra: map[string]any{"reasoning": "latest", "trace": "abc"},
+			},
+		}},
+		{chunk: &ChatChunk{
+			ID: "req-1",
+			Usage: &CompletionUsage{
+				CompletionTokens: 3,
+				PromptTokens:     5,
+				TotalTokens:      8,
+			},
+		}},
+	}}
+
+	collected, err := CollectStream(stream)
+	if err != nil {
+		t.Fatalf("CollectStream() error = %v", err)
+	}
+	if collected.Text != "hello world" {
+		t.Fatalf("Text = %q, want trimmed aggregate", collected.Text)
+	}
+	if len(collected.ToolCalls) != 1 || collected.ToolCalls[0].Name != "lookup" {
+		t.Fatalf("ToolCalls = %#v, want lookup call", collected.ToolCalls)
+	}
+	if collected.Usage == nil || collected.Usage.TotalTokens != 8 {
+		t.Fatalf("Usage = %#v, want final usage", collected.Usage)
+	}
+	if collected.Extra["reasoning"] != "latest" || collected.Extra["trace"] != "abc" {
+		t.Fatalf("Extra = %#v, want merged latest extra", collected.Extra)
+	}
+	if !stream.closed {
+		t.Fatal("stream was not closed")
+	}
+}
+
+func TestCollectStreamClosesAndReturnsStreamError(t *testing.T) {
+	streamErr := errors.New("stream failed")
+	stream := &fakeCollectStream{events: []fakeCollectEvent{{err: streamErr}}}
+
+	collected, err := CollectStream(stream)
+
+	if !errors.Is(err, streamErr) {
+		t.Fatalf("CollectStream() error = %v, want stream failure", err)
+	}
+	if collected != nil {
+		t.Fatalf("CollectStream() response = %#v, want nil on error", collected)
+	}
+	if !stream.closed {
+		t.Fatal("stream was not closed after error")
+	}
+}
+
+func TestCollectStreamRejectsNilStream(t *testing.T) {
+	collected, err := CollectStream(nil)
+
+	if err == nil {
+		t.Fatal("CollectStream(nil) error = nil, want error")
+	}
+	if collected != nil {
+		t.Fatalf("CollectStream(nil) response = %#v, want nil", collected)
+	}
+}
+
 type recordingTool struct {
 	name   string
 	args   string
@@ -333,4 +415,31 @@ func (t *recordingTool) Parameters() map[string]any { return nil }
 func (t *recordingTool) Execute(_ context.Context, args string) (string, error) {
 	t.args = args
 	return t.result, t.err
+}
+
+type fakeCollectEvent struct {
+	chunk *ChatChunk
+	err   error
+}
+
+type fakeCollectStream struct {
+	events []fakeCollectEvent
+	closed bool
+}
+
+func (s *fakeCollectStream) Next() (*ChatChunk, error) {
+	if len(s.events) == 0 {
+		return nil, io.EOF
+	}
+	event := s.events[0]
+	s.events = s.events[1:]
+	if event.err != nil {
+		return nil, event.err
+	}
+	return event.chunk, nil
+}
+
+func (s *fakeCollectStream) Close() error {
+	s.closed = true
+	return nil
 }

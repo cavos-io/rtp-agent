@@ -342,6 +342,13 @@ type ChatChunk struct {
 	Usage *CompletionUsage
 }
 
+type CollectedResponse struct {
+	Text      string
+	ToolCalls []FunctionToolCall
+	Usage     *CompletionUsage
+	Extra     map[string]any
+}
+
 type Tool interface {
 	ID() string
 	Name() string
