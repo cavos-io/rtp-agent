@@ -492,6 +492,9 @@ func (c *JobContext) scheduleParticipantEntrypoint(registration participantEntry
 
 	go func() {
 		defer func() {
+			if recovered := recover(); recovered != nil {
+				logger.Logger.Errorw("Participant entrypoint panicked", fmt.Errorf("%v", recovered), "participant", participant.Identity)
+			}
 			c.participantTasksMu.Lock()
 			delete(c.participantTasks, key)
 			c.participantTasksMu.Unlock()

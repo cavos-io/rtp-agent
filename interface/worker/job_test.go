@@ -2,6 +2,8 @@ package worker
 
 import (
 	"context"
+	"os"
+	"os/exec"
 	"reflect"
 	"strings"
 	"testing"
@@ -472,6 +474,30 @@ func TestJobContextParticipantAvailableDoesNotBlockOnEntrypoints(t *testing.T) {
 	case <-secondCalled:
 	case <-time.After(500 * time.Millisecond):
 		t.Fatal("second participant entrypoint was blocked by the first")
+	}
+}
+
+func TestJobContextParticipantEntrypointPanicDoesNotCrashProcess(t *testing.T) {
+	if os.Getenv("RTP_AGENT_PARTICIPANT_ENTRYPOINT_PANIC_HELPER") == "1" {
+		ctx := NewJobContext(&livekit.Job{Id: "job_participant_entrypoint_panic"}, "", "", "")
+		if err := ctx.AddParticipantEntrypoint(func(*JobContext, *livekit.ParticipantInfo) {
+			panic("participant entrypoint panic")
+		}); err != nil {
+			t.Fatalf("AddParticipantEntrypoint() error = %v", err)
+		}
+		ctx.participantAvailable(fakeParticipantView{
+			identity: "caller",
+			kind:     lksdk.ParticipantStandard,
+		})
+		time.Sleep(50 * time.Millisecond)
+		return
+	}
+
+	cmd := exec.Command(os.Args[0], "-test.run=^TestJobContextParticipantEntrypointPanicDoesNotCrashProcess$")
+	cmd.Env = append(os.Environ(), "RTP_AGENT_PARTICIPANT_ENTRYPOINT_PANIC_HELPER=1")
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("participant entrypoint panic helper exited with %v\n%s", err, output)
 	}
 }
 
