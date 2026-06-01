@@ -20,17 +20,37 @@ import (
 )
 
 type DeepgramSTT struct {
-	apiKey string
-	model  string
+	apiKey         string
+	model          string
+	punctuate      bool
+	smartFormat    bool
+	noDelay        bool
+	endpointingMS  int
+	fillerWords    bool
+	sampleRate     int
+	numChannels    int
+	interimResults bool
+	vadEvents      bool
+	baseURL        string
 }
 
 func NewDeepgramSTT(apiKey string, model string) *DeepgramSTT {
 	if model == "" {
-		model = "nova-2"
+		model = "nova-3"
 	}
 	return &DeepgramSTT{
-		apiKey: apiKey,
-		model:  model,
+		apiKey:         apiKey,
+		model:          model,
+		punctuate:      true,
+		smartFormat:    false,
+		noDelay:        true,
+		endpointingMS:  25,
+		fillerWords:    true,
+		sampleRate:     16000,
+		numChannels:    1,
+		interimResults: true,
+		vadEvents:      true,
+		baseURL:        "https://api.deepgram.com/v1/listen",
 	}
 }
 
@@ -42,25 +62,10 @@ func (s *DeepgramSTT) Capabilities() stt.STTCapabilities {
 func (s *DeepgramSTT) Stream(ctx context.Context, languageStr string) (stt.RecognizeStream, error) {
 	languageStr = language.NormalizeLanguage(languageStr)
 
-	u := url.URL{Scheme: "wss", Host: "api.deepgram.com", Path: "/v1/listen"}
-	q := u.Query()
-	q.Set("model", s.model)
-	if languageStr != "" {
-		q.Set("language", languageStr)
-	}
-	q.Set("smart_format", "true")
-	q.Set("interim_results", "true")
-	q.Set("encoding", "linear16")
-	q.Set("sample_rate", "24000")
-	// Enable Deepgram's native Voice Activity Detection / Endpointing
-	q.Set("endpointing", "300")
-	q.Set("vad_events", "true")
-	u.RawQuery = q.Encode()
-
 	header := make(http.Header)
 	header.Set("Authorization", "Token "+s.apiKey)
 
-	conn, _, err := websocket.DefaultDialer.DialContext(ctx, u.String(), header)
+	conn, _, err := websocket.DefaultDialer.DialContext(ctx, buildDeepgramStreamURL(s, languageStr), header)
 	if err != nil {
 		return nil, fmt.Errorf("failed to dial deepgram websocket: %w", err)
 	}
@@ -83,17 +88,12 @@ func (s *DeepgramSTT) Stream(ctx context.Context, languageStr string) (stt.Recog
 func (s *DeepgramSTT) Recognize(ctx context.Context, frames []*model.AudioFrame, languageStr string) (*stt.SpeechEvent, error) {
 	languageStr = language.NormalizeLanguage(languageStr)
 
-	apiURL := "https://api.deepgram.com/v1/listen?model=" + s.model + "&smart_format=true"
-	if languageStr != "" {
-		apiURL += "&language=" + languageStr
-	}
-
 	var buf bytes.Buffer
 	for _, f := range frames {
 		buf.Write(f.Data)
 	}
 
-	req, err := http.NewRequestWithContext(ctx, "POST", apiURL, bytes.NewReader(buf.Bytes()))
+	req, err := http.NewRequestWithContext(ctx, "POST", buildDeepgramRecognizeURL(s, languageStr), bytes.NewReader(buf.Bytes()))
 	if err != nil {
 		return nil, err
 	}
@@ -118,6 +118,59 @@ func (s *DeepgramSTT) Recognize(ctx context.Context, frames []*model.AudioFrame,
 	}
 
 	return deepgramRecognizeSpeechEvent(result), nil
+}
+
+func buildDeepgramStreamURL(s *DeepgramSTT, languageStr string) string {
+	u, q := deepgramBaseURL(s, true)
+	q.Set("model", s.model)
+	if languageStr != "" {
+		q.Set("language", languageStr)
+	}
+	q.Set("punctuate", strconv.FormatBool(s.punctuate))
+	q.Set("smart_format", strconv.FormatBool(s.smartFormat))
+	q.Set("no_delay", strconv.FormatBool(s.noDelay))
+	q.Set("interim_results", strconv.FormatBool(s.interimResults))
+	q.Set("encoding", "linear16")
+	q.Set("sample_rate", strconv.Itoa(s.sampleRate))
+	q.Set("channels", strconv.Itoa(s.numChannels))
+	if s.endpointingMS == 0 {
+		q.Set("endpointing", "false")
+	} else {
+		q.Set("endpointing", strconv.Itoa(s.endpointingMS))
+	}
+	q.Set("vad_events", strconv.FormatBool(s.vadEvents))
+	q.Set("filler_words", strconv.FormatBool(s.fillerWords))
+	u.RawQuery = q.Encode()
+	return u.String()
+}
+
+func buildDeepgramRecognizeURL(s *DeepgramSTT, languageStr string) string {
+	u, q := deepgramBaseURL(s, false)
+	q.Set("model", s.model)
+	q.Set("punctuate", strconv.FormatBool(s.punctuate))
+	q.Set("smart_format", strconv.FormatBool(s.smartFormat))
+	if languageStr != "" {
+		q.Set("language", languageStr)
+	}
+	u.RawQuery = q.Encode()
+	return u.String()
+}
+
+func deepgramBaseURL(s *DeepgramSTT, websocketURL bool) (*url.URL, url.Values) {
+	parsed, err := url.Parse(s.baseURL)
+	if err != nil {
+		parsed = &url.URL{Scheme: "https", Host: "api.deepgram.com", Path: "/v1/listen"}
+	}
+	if websocketURL && parsed.Scheme == "https" {
+		parsed.Scheme = "wss"
+	} else if websocketURL && parsed.Scheme == "http" {
+		parsed.Scheme = "ws"
+	} else if !websocketURL && parsed.Scheme == "wss" {
+		parsed.Scheme = "https"
+	} else if !websocketURL && parsed.Scheme == "ws" {
+		parsed.Scheme = "http"
+	}
+	return parsed, parsed.Query()
 }
 
 type deepgramStream struct {
