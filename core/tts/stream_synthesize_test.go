@@ -28,6 +28,27 @@ func TestSynthesizeWithStreamPushesTextAndFlushes(t *testing.T) {
 	}
 }
 
+func TestSynthesizeWithStreamEndsInputWhenSupported(t *testing.T) {
+	stream := &endInputSynthesizeStream{
+		events: []*SynthesizedAudio{{Frame: &model.AudioFrame{Data: []byte{1}}}},
+	}
+	provider := &endInputStreamingTTS{stream: stream}
+
+	chunked, err := SynthesizeWithStream(context.Background(), provider, "hello world")
+	if err != nil {
+		t.Fatalf("SynthesizeWithStream() error = %v", err)
+	}
+	defer chunked.Close()
+
+	wantCalls := []string{"push:hello world", "end_input"}
+	if !reflect.DeepEqual(stream.calls, wantCalls) {
+		t.Fatalf("stream calls = %#v, want %#v", stream.calls, wantCalls)
+	}
+	if _, err := chunked.Next(); err != nil {
+		t.Fatalf("Next() error = %v", err)
+	}
+}
+
 func TestSynthesizeWithStreamIgnoresEmptyText(t *testing.T) {
 	provider := &fakeStreamingTTS{
 		stream: &fakeSynthesizeStream{},
@@ -330,6 +351,23 @@ func (f *fakeStreamingTTS) Stream(context.Context) (SynthesizeStream, error) {
 	return f.stream, nil
 }
 
+type endInputStreamingTTS struct {
+	stream *endInputSynthesizeStream
+}
+
+func (f *endInputStreamingTTS) Label() string { return "end-input" }
+func (f *endInputStreamingTTS) Capabilities() TTSCapabilities {
+	return TTSCapabilities{Streaming: true}
+}
+func (f *endInputStreamingTTS) SampleRate() int  { return 24000 }
+func (f *endInputStreamingTTS) NumChannels() int { return 1 }
+func (f *endInputStreamingTTS) Synthesize(context.Context, string) (ChunkedStream, error) {
+	return nil, nil
+}
+func (f *endInputStreamingTTS) Stream(context.Context) (SynthesizeStream, error) {
+	return f.stream, nil
+}
+
 type fakeSynthesizeStream struct {
 	calls    []string
 	events   []*SynthesizedAudio
@@ -361,5 +399,45 @@ func (f *fakeSynthesizeStream) Next() (*SynthesizedAudio, error) {
 	}
 	ev := f.events[0]
 	f.events = f.events[1:]
+	return ev, nil
+}
+
+type endInputSynthesizeStream struct {
+	calls  []string
+	events []*SynthesizedAudio
+	ended  bool
+	closed bool
+}
+
+func (s *endInputSynthesizeStream) PushText(text string) error {
+	s.calls = append(s.calls, "push:"+text)
+	return nil
+}
+
+func (s *endInputSynthesizeStream) Flush() error {
+	s.calls = append(s.calls, "flush")
+	return nil
+}
+
+func (s *endInputSynthesizeStream) EndInput() error {
+	s.calls = append(s.calls, "end_input")
+	s.ended = true
+	return nil
+}
+
+func (s *endInputSynthesizeStream) Close() error {
+	s.closed = true
+	return nil
+}
+
+func (s *endInputSynthesizeStream) Next() (*SynthesizedAudio, error) {
+	if !s.ended {
+		return nil, errors.New("input not ended")
+	}
+	if len(s.events) == 0 {
+		return nil, io.EOF
+	}
+	ev := s.events[0]
+	s.events = s.events[1:]
 	return ev, nil
 }

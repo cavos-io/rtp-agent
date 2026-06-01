@@ -21,11 +21,22 @@ func SynthesizeWithStream(ctx context.Context, provider TTS, text string) (Chunk
 			return nil, err
 		}
 	}
-	if err := stream.Flush(); err != nil {
+	if err := endSynthesizeStreamInput(stream); err != nil {
 		_ = stream.Close()
 		return nil, err
 	}
 	return &chunkedStreamFromSynthesizeStream{stream: stream, text: text, requestID: cavosmath.ShortUUID("")}, nil
+}
+
+type inputEndingSynthesizeStream interface {
+	EndInput() error
+}
+
+func endSynthesizeStreamInput(stream SynthesizeStream) error {
+	if ending, ok := stream.(inputEndingSynthesizeStream); ok {
+		return ending.EndInput()
+	}
+	return stream.Flush()
 }
 
 type chunkedStreamFromSynthesizeStream struct {
