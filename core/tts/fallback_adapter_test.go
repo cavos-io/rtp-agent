@@ -257,6 +257,50 @@ func TestFallbackSynthesizeStreamSetsStableRequestID(t *testing.T) {
 	}
 }
 
+func TestFallbackSynthesizeStreamSetsStableSegmentID(t *testing.T) {
+	adapter := NewFallbackAdapter([]TTS{
+		&metadataTTS{
+			label:        "primary",
+			sampleRate:   24000,
+			numChannels:  1,
+			capabilities: TTSCapabilities{Streaming: true},
+			stream: &metadataSynthesizeStream{
+				events: []*SynthesizedAudio{
+					{SegmentID: "provider-a", Frame: &model.AudioFrame{Data: []byte{1}}},
+					{SegmentID: "provider-b", Frame: &model.AudioFrame{Data: []byte{2}}},
+				},
+			},
+		},
+	})
+
+	stream, err := adapter.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+	defer stream.Close()
+	if err := stream.PushText("hello"); err != nil {
+		t.Fatalf("PushText returned error: %v", err)
+	}
+
+	first, err := stream.Next()
+	if err != nil {
+		t.Fatalf("first Next returned error: %v", err)
+	}
+	second, err := stream.Next()
+	if err != nil {
+		t.Fatalf("second Next returned error: %v", err)
+	}
+	if first.SegmentID == "" {
+		t.Fatal("first SegmentID is empty")
+	}
+	if second.SegmentID != first.SegmentID {
+		t.Fatalf("second SegmentID = %q, want stable segment id %q", second.SegmentID, first.SegmentID)
+	}
+	if first.SegmentID == "provider-a" || second.SegmentID == "provider-b" {
+		t.Fatalf("SegmentID forwarded provider ids: first=%q second=%q", first.SegmentID, second.SegmentID)
+	}
+}
+
 func TestFallbackSynthesizeStreamIgnoresEmptyText(t *testing.T) {
 	providerStream := &metadataSynthesizeStream{}
 	adapter := NewFallbackAdapter([]TTS{
