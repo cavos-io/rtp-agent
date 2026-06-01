@@ -41,8 +41,10 @@ type SpeechHandle struct {
 	Priority           int
 	CreatedAt          time.Time
 
-	numSteps  int
-	chatItems []llm.ChatItem
+	numSteps          int
+	chatItems         []llm.ChatItem
+	runFinalOutput    any
+	runFinalOutputSet bool
 
 	interruptCh        chan struct{}
 	doneCh             chan struct{}
@@ -132,6 +134,21 @@ func (s *SpeechHandle) SetAllowInterruptions(allow bool) error {
 
 	s.AllowInterruptions = allow
 	return nil
+}
+
+func (s *SpeechHandle) SetRunFinalOutput(output any) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	s.runFinalOutput = output
+	s.runFinalOutputSet = true
+}
+
+func (s *SpeechHandle) RunFinalOutput() (any, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	return s.runFinalOutput, s.runFinalOutputSet
 }
 
 func (s *SpeechHandle) MarkDone() {

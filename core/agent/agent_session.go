@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"errors"
+	"reflect"
 	"sync"
 	"time"
 
@@ -48,12 +49,22 @@ type AgentSessionOptions struct {
 	AECWarmupDuration             float64
 }
 
-var ErrAgentSessionNotRunning = errors.New("agent session is not running")
+var (
+	ErrAgentSessionNotRunning = errors.New("agent session is not running")
+	ErrAgentSessionNestedRun  = errors.New("nested agent session runs are not supported")
+)
 
 type GenerateReplyOptions struct {
 	UserInput          string
 	AllowInterruptions *bool
 	InputModality      string
+}
+
+type RunOptions struct {
+	UserInput          string
+	AllowInterruptions *bool
+	InputModality      string
+	OutputType         reflect.Type
 }
 
 type AgentSession struct {
@@ -77,6 +88,7 @@ type AgentSession struct {
 	mu       sync.Mutex
 	activity *AgentActivity
 	started  bool
+	runState *RunResult
 
 	// Event channels
 	AgentStateChangedCh chan AgentStateChangedEvent
@@ -276,6 +288,41 @@ func (s *AgentSession) GenerateReply(ctx context.Context, userInput string) (*Sp
 		UserInput:     userInput,
 		InputModality: "text",
 	})
+}
+
+func (s *AgentSession) Run(ctx context.Context, userInput string) (*RunResult, error) {
+	return s.RunWithOptions(ctx, RunOptions{
+		UserInput:     userInput,
+		InputModality: "text",
+	})
+}
+
+func (s *AgentSession) RunWithOptions(ctx context.Context, opts RunOptions) (*RunResult, error) {
+	s.mu.Lock()
+	if s.runState != nil && !s.runState.Done() {
+		s.mu.Unlock()
+		return nil, ErrAgentSessionNestedRun
+	}
+	result := newRunResult(s.ChatCtx, opts.UserInput, opts.OutputType)
+	s.runState = result
+	s.mu.Unlock()
+
+	handle, err := s.GenerateReplyWithOptions(ctx, GenerateReplyOptions{
+		UserInput:          opts.UserInput,
+		AllowInterruptions: opts.AllowInterruptions,
+		InputModality:      opts.InputModality,
+	})
+	if err != nil {
+		s.mu.Lock()
+		if s.runState == result {
+			s.runState = nil
+		}
+		s.mu.Unlock()
+		return nil, err
+	}
+
+	result.WatchSpeechHandle(handle)
+	return result, nil
 }
 
 func (s *AgentSession) GenerateReplyWithOptions(ctx context.Context, opts GenerateReplyOptions) (*SpeechHandle, error) {

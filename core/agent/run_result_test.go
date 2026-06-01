@@ -1,7 +1,10 @@
 package agent
 
 import (
+	"context"
 	"errors"
+	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -79,6 +82,22 @@ func TestRunResultEventsReturnsCopy(t *testing.T) {
 	}
 }
 
+func TestRunResultStoresUserInput(t *testing.T) {
+	result := NewRunResultWithUserInput(llm.NewChatContext(), "hello")
+
+	if got := result.UserInput(); got != "hello" {
+		t.Fatalf("UserInput = %q, want hello", got)
+	}
+}
+
+func TestRunResultDefaultUserInputIsEmpty(t *testing.T) {
+	result := NewRunResult(llm.NewChatContext())
+
+	if got := result.UserInput(); got != "" {
+		t.Fatalf("UserInput = %q, want empty", got)
+	}
+}
+
 func TestRunResultFinalOutputRequiresDone(t *testing.T) {
 	result := NewRunResult(llm.NewChatContext())
 
@@ -118,6 +137,53 @@ func TestRunResultFinalOutputReturnsValueAfterDone(t *testing.T) {
 	}
 }
 
+func TestRunResultWaitReturnsAfterMarkDone(t *testing.T) {
+	result := NewRunResult(llm.NewChatContext())
+	done := make(chan error, 1)
+
+	go func() {
+		done <- result.Wait(context.Background())
+	}()
+
+	select {
+	case err := <-done:
+		t.Fatalf("Wait returned before MarkDone: %v", err)
+	case <-time.After(10 * time.Millisecond):
+	}
+
+	result.MarkDone()
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("Wait error = %v, want nil", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Wait did not return after MarkDone")
+	}
+}
+
+func TestRunResultWaitReturnsContextError(t *testing.T) {
+	result := NewRunResult(llm.NewChatContext())
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
+	defer cancel()
+
+	err := result.Wait(ctx)
+
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("Wait error = %v, want context deadline exceeded", err)
+	}
+}
+
+func TestRunResultWaitReturnsImmediatelyAfterDone(t *testing.T) {
+	result := NewRunResult(llm.NewChatContext())
+	result.MarkDone()
+
+	if err := result.Wait(context.Background()); err != nil {
+		t.Fatalf("Wait error = %v, want nil after MarkDone", err)
+	}
+}
+
 func TestRunResultWatchSpeechHandleRecordsAddedItems(t *testing.T) {
 	result := NewRunResult(llm.NewChatContext())
 	speech := NewSpeechHandle(true, DefaultInputDetails())
@@ -152,6 +218,94 @@ func TestRunResultWatchSpeechHandleMarksDoneWhenSpeechDone(t *testing.T) {
 
 	if !result.Done() {
 		t.Fatal("RunResult did not mark done after all watched speech handles finished")
+	}
+}
+
+func TestRunResultFinalOutputUsesLastCompletedSpeechHandle(t *testing.T) {
+	result := NewRunResult(llm.NewChatContext())
+	first := NewSpeechHandle(true, DefaultInputDetails())
+	second := NewSpeechHandle(true, DefaultInputDetails())
+	first.SetRunFinalOutput("first")
+	second.SetRunFinalOutput("second")
+
+	result.WatchSpeechHandle(first)
+	result.WatchSpeechHandle(second)
+
+	first.MarkDone()
+	second.MarkDone()
+
+	output, err := result.FinalOutput()
+	if err != nil {
+		t.Fatalf("FinalOutput error = %v, want nil", err)
+	}
+	if output != "second" {
+		t.Fatalf("FinalOutput = %#v, want second", output)
+	}
+}
+
+func TestRunResultFinalOutputReturnsSpeechFinalOutputError(t *testing.T) {
+	result := NewRunResult(llm.NewChatContext())
+	speech := NewSpeechHandle(true, DefaultInputDetails())
+	finalErr := errors.New("final output failed")
+	speech.SetRunFinalOutput(finalErr)
+
+	result.WatchSpeechHandle(speech)
+	speech.MarkDone()
+
+	output, err := result.FinalOutput()
+	if !errors.Is(err, finalErr) {
+		t.Fatalf("FinalOutput error = %v, want finalErr", err)
+	}
+	if output != nil {
+		t.Fatalf("FinalOutput output = %#v, want nil when final output is error", output)
+	}
+}
+
+func TestRunResultFinalOutputRejectsUnexpectedType(t *testing.T) {
+	result := NewRunResultWithOutputType(llm.NewChatContext(), reflect.TypeOf(""))
+	speech := NewSpeechHandle(true, DefaultInputDetails())
+	speech.SetRunFinalOutput(42)
+
+	result.WatchSpeechHandle(speech)
+	speech.MarkDone()
+
+	output, err := result.FinalOutput()
+	if !errors.Is(err, ErrRunResultFinalOutputType) {
+		t.Fatalf("FinalOutput error = %v, want ErrRunResultFinalOutputType", err)
+	}
+	if output != nil {
+		t.Fatalf("FinalOutput output = %#v, want nil on type mismatch", output)
+	}
+}
+
+func TestRunResultFinalOutputAcceptsExpectedType(t *testing.T) {
+	result := NewRunResultWithOutputType(llm.NewChatContext(), reflect.TypeOf(""))
+	speech := NewSpeechHandle(true, DefaultInputDetails())
+	speech.SetRunFinalOutput("done")
+
+	result.WatchSpeechHandle(speech)
+	speech.MarkDone()
+
+	output, err := result.FinalOutput()
+	if err != nil {
+		t.Fatalf("FinalOutput error = %v, want nil", err)
+	}
+	if output != "done" {
+		t.Fatalf("FinalOutput = %#v, want done", output)
+	}
+}
+
+func TestRunResultSetFinalOutputRejectsUnexpectedType(t *testing.T) {
+	result := NewRunResultWithOutputType(llm.NewChatContext(), reflect.TypeOf(""))
+	result.SetFinalOutput(42)
+	result.MarkDone()
+
+	output, err := result.FinalOutput()
+	if !errors.Is(err, ErrRunResultFinalOutputType) {
+		t.Fatalf("FinalOutput error = %v, want ErrRunResultFinalOutputType", err)
+	}
+	if output != nil {
+		t.Fatalf("FinalOutput output = %#v, want nil on type mismatch", output)
 	}
 }
 
@@ -211,6 +365,39 @@ func TestRunAssertUsesRecordedEventsForMessageRole(t *testing.T) {
 	}
 }
 
+func TestRunAssertContainsMessageMatchingAnyMessage(t *testing.T) {
+	result := NewRunResult(llm.NewChatContext())
+	result.RecordItem(&llm.ChatMessage{ID: "msg_1", Role: llm.ChatRoleAssistant, CreatedAt: time.Now()})
+
+	err := result.Expect.ContainsMessageMatching(RunEventCriteria{}).HasError()
+
+	if err != nil {
+		t.Fatalf("ContainsMessageMatching returned error = %v, want nil for any message", err)
+	}
+}
+
+func TestRunAssertContainsMessageMatchingRole(t *testing.T) {
+	result := NewRunResult(llm.NewChatContext())
+	result.RecordItem(&llm.ChatMessage{ID: "msg_1", Role: llm.ChatRoleAssistant, CreatedAt: time.Now()})
+
+	err := result.Expect.ContainsMessageMatching(RunEventCriteria{Role: llm.ChatRoleAssistant}).HasError()
+
+	if err != nil {
+		t.Fatalf("ContainsMessageMatching returned error = %v, want nil for matching role", err)
+	}
+}
+
+func TestRunAssertContainsMessageMatchingReportsRoleMismatch(t *testing.T) {
+	result := NewRunResult(llm.NewChatContext())
+	result.RecordItem(&llm.ChatMessage{ID: "msg_1", Role: llm.ChatRoleAssistant, CreatedAt: time.Now()})
+
+	err := result.Expect.ContainsMessageMatching(RunEventCriteria{Role: llm.ChatRoleUser}).HasError()
+
+	if err == nil {
+		t.Fatal("ContainsMessageMatching error = nil, want role mismatch error")
+	}
+}
+
 func TestRunAssertReportsMissingMessageRole(t *testing.T) {
 	result := NewRunResult(llm.NewChatContext())
 	message := &llm.ChatMessage{
@@ -266,6 +453,65 @@ func TestRunAssertUsesRecordedEventsForFunctionCallArguments(t *testing.T) {
 	}
 }
 
+func TestRunAssertContainsFunctionCallMatchingArgumentsOnly(t *testing.T) {
+	result := NewRunResult(llm.NewChatContext())
+	result.RecordItem(&llm.FunctionCall{
+		ID:        "fnc_1",
+		CallID:    "call_1",
+		Name:      "lookup",
+		Arguments: `{"city":"Jakarta","limit":3}`,
+		CreatedAt: time.Now(),
+	})
+
+	err := result.Expect.ContainsFunctionCallMatching(RunEventCriteria{
+		Arguments: map[string]any{"city": "Jakarta"},
+	}).HasError()
+
+	if err != nil {
+		t.Fatalf("ContainsFunctionCallMatching returned error = %v, want nil for argument-only match", err)
+	}
+}
+
+func TestRunAssertContainsFunctionCallMatchingNameAndArguments(t *testing.T) {
+	result := NewRunResult(llm.NewChatContext())
+	result.RecordItem(&llm.FunctionCall{
+		ID:        "fnc_1",
+		CallID:    "call_1",
+		Name:      "lookup",
+		Arguments: `{"city":"Jakarta","limit":3}`,
+		CreatedAt: time.Now(),
+	})
+
+	err := result.Expect.ContainsFunctionCallMatching(RunEventCriteria{
+		Name:      "lookup",
+		Arguments: map[string]any{"limit": float64(3)},
+	}).HasError()
+
+	if err != nil {
+		t.Fatalf("ContainsFunctionCallMatching returned error = %v, want nil for matching name and arguments", err)
+	}
+}
+
+func TestRunAssertContainsFunctionCallMatchingReportsMismatch(t *testing.T) {
+	result := NewRunResult(llm.NewChatContext())
+	result.RecordItem(&llm.FunctionCall{
+		ID:        "fnc_1",
+		CallID:    "call_1",
+		Name:      "lookup",
+		Arguments: `{"city":"Jakarta"}`,
+		CreatedAt: time.Now(),
+	})
+
+	err := result.Expect.ContainsFunctionCallMatching(RunEventCriteria{
+		Name:      "lookup",
+		Arguments: map[string]any{"city": "Bandung"},
+	}).HasError()
+
+	if err == nil {
+		t.Fatal("ContainsFunctionCallMatching error = nil, want mismatch error")
+	}
+}
+
 func TestRunAssertReportsFunctionCallArgumentMismatch(t *testing.T) {
 	result := NewRunResult(llm.NewChatContext())
 	functionCall := &llm.FunctionCall{
@@ -304,6 +550,61 @@ func TestRunAssertUsesRecordedEventsForFunctionCallOutputs(t *testing.T) {
 	}
 }
 
+func TestRunAssertContainsFunctionCallOutputMatchingOutputOnly(t *testing.T) {
+	result := NewRunResult(llm.NewChatContext())
+	result.RecordItem(&llm.FunctionCallOutput{
+		ID:        "out_1",
+		CallID:    "call_1",
+		Name:      "lookup",
+		Output:    "done",
+		IsError:   true,
+		CreatedAt: time.Now(),
+	})
+
+	err := result.Expect.ContainsFunctionCallOutputMatching(RunEventCriteria{Output: "done"}).HasError()
+
+	if err != nil {
+		t.Fatalf("ContainsFunctionCallOutputMatching returned error = %v, want nil for output-only match", err)
+	}
+}
+
+func TestRunAssertContainsFunctionCallOutputMatchingErrorOnly(t *testing.T) {
+	result := NewRunResult(llm.NewChatContext())
+	isError := true
+	result.RecordItem(&llm.FunctionCallOutput{
+		ID:        "out_1",
+		CallID:    "call_1",
+		Name:      "lookup",
+		Output:    "tool failed",
+		IsError:   isError,
+		CreatedAt: time.Now(),
+	})
+
+	err := result.Expect.ContainsFunctionCallOutputMatching(RunEventCriteria{IsError: &isError}).HasError()
+
+	if err != nil {
+		t.Fatalf("ContainsFunctionCallOutputMatching returned error = %v, want nil for is_error-only match", err)
+	}
+}
+
+func TestRunAssertContainsFunctionCallOutputMatchingReportsMismatch(t *testing.T) {
+	result := NewRunResult(llm.NewChatContext())
+	result.RecordItem(&llm.FunctionCallOutput{
+		ID:        "out_1",
+		CallID:    "call_1",
+		Name:      "lookup",
+		Output:    "done",
+		IsError:   false,
+		CreatedAt: time.Now(),
+	})
+
+	err := result.Expect.ContainsFunctionCallOutputMatching(RunEventCriteria{Output: "missing"}).HasError()
+
+	if err == nil {
+		t.Fatal("ContainsFunctionCallOutputMatching error = nil, want mismatch error")
+	}
+}
+
 func TestRunAssertUsesRecordedEventsForAgentHandoffs(t *testing.T) {
 	result := NewRunResult(llm.NewChatContext())
 	handoff := &llm.AgentHandoff{ID: "handoff_1", NewAgentID: "agent_2", CreatedAt: time.Now()}
@@ -335,6 +636,29 @@ func TestRunAssertNoMoreEventsReportsRemainingEvents(t *testing.T) {
 
 	if err == nil {
 		t.Fatal("NoMoreEvents error = nil, want error when events remain")
+	}
+}
+
+func TestRunAssertHasErrorIncludesEventDebugContext(t *testing.T) {
+	result := NewRunResult(llm.NewChatContext())
+	now := time.Now()
+	result.RecordItem(&llm.ChatMessage{ID: "msg_1", Role: llm.ChatRoleAssistant, CreatedAt: now})
+	result.RecordItem(&llm.FunctionCall{ID: "fnc_1", CallID: "call_1", Name: "lookup", CreatedAt: now.Add(time.Millisecond)})
+
+	err := result.Expect.NextEvent("message").NoMoreEvents().HasError()
+
+	if err == nil {
+		t.Fatal("HasError error = nil, want remaining event error")
+	}
+	msg := err.Error()
+	for _, want := range []string{
+		"Context around failure:",
+		"   [0] message",
+		">>> [1] function_call",
+	} {
+		if !strings.Contains(msg, want) {
+			t.Fatalf("HasError message = %q, want to contain %q", msg, want)
+		}
 	}
 }
 
@@ -379,6 +703,140 @@ func TestRunAssertNextEventReportsMissingType(t *testing.T) {
 	}
 }
 
+func TestRunAssertNextMessageAndFunctionCallValidateDetails(t *testing.T) {
+	result := NewRunResult(llm.NewChatContext())
+	now := time.Now()
+	result.RecordItem(&llm.ChatMessage{ID: "msg_1", Role: llm.ChatRoleAssistant, CreatedAt: now})
+	result.RecordItem(&llm.FunctionCall{
+		ID:        "fnc_1",
+		CallID:    "call_1",
+		Name:      "lookup",
+		Arguments: `{"city":"Jakarta"}`,
+		CreatedAt: now.Add(time.Millisecond),
+	})
+
+	err := result.Expect.
+		NextMessage(llm.ChatRoleAssistant).
+		NextFunctionCallWithArguments("lookup", map[string]any{"city": "Jakarta"}).
+		NoMoreEvents().
+		HasError()
+
+	if err != nil {
+		t.Fatalf("typed next assertions returned error = %v, want nil", err)
+	}
+}
+
+func TestRunAssertNextFunctionCallValidatesName(t *testing.T) {
+	result := NewRunResult(llm.NewChatContext())
+	result.RecordItem(&llm.FunctionCall{ID: "fnc_1", CallID: "call_1", Name: "lookup", CreatedAt: time.Now()})
+
+	err := result.Expect.
+		NextFunctionCall("lookup").
+		NoMoreEvents().
+		HasError()
+
+	if err != nil {
+		t.Fatalf("NextFunctionCall returned error = %v, want nil", err)
+	}
+}
+
+func TestRunAssertNextFunctionCallReportsNameMismatch(t *testing.T) {
+	result := NewRunResult(llm.NewChatContext())
+	result.RecordItem(&llm.FunctionCall{ID: "fnc_1", CallID: "call_1", Name: "lookup", CreatedAt: time.Now()})
+
+	err := result.Expect.NextFunctionCall("search").HasError()
+
+	if err == nil {
+		t.Fatal("NextFunctionCall error = nil, want name mismatch error")
+	}
+}
+
+func TestRunAssertNextMessageReportsRoleMismatch(t *testing.T) {
+	result := NewRunResult(llm.NewChatContext())
+	result.RecordItem(&llm.ChatMessage{ID: "msg_1", Role: llm.ChatRoleAssistant, CreatedAt: time.Now()})
+
+	err := result.Expect.NextMessage(llm.ChatRoleUser).HasError()
+
+	if err == nil {
+		t.Fatal("NextMessage error = nil, want role mismatch error")
+	}
+}
+
+func TestRunAssertNextFunctionCallOutputValidatesDetails(t *testing.T) {
+	result := NewRunResult(llm.NewChatContext())
+	isError := true
+	result.RecordItem(&llm.FunctionCallOutput{
+		ID:        "out_1",
+		CallID:    "call_1",
+		Name:      "lookup",
+		Output:    "failed",
+		IsError:   isError,
+		CreatedAt: time.Now(),
+	})
+
+	err := result.Expect.
+		NextFunctionCallOutput(RunEventCriteria{Output: "failed", IsError: &isError}).
+		NoMoreEvents().
+		HasError()
+
+	if err != nil {
+		t.Fatalf("NextFunctionCallOutput returned error = %v, want nil", err)
+	}
+}
+
+func TestRunAssertNextFunctionCallOutputReportsMismatch(t *testing.T) {
+	result := NewRunResult(llm.NewChatContext())
+	isError := false
+	result.RecordItem(&llm.FunctionCallOutput{
+		ID:        "out_1",
+		CallID:    "call_1",
+		Name:      "lookup",
+		Output:    "ok",
+		IsError:   isError,
+		CreatedAt: time.Now(),
+	})
+
+	err := result.Expect.NextFunctionCallOutput(RunEventCriteria{Output: "failed"}).HasError()
+
+	if err == nil {
+		t.Fatal("NextFunctionCallOutput error = nil, want output mismatch error")
+	}
+}
+
+func TestRunAssertNextAgentHandoffValidatesTarget(t *testing.T) {
+	result := NewRunResult(llm.NewChatContext())
+	handoff := &llm.AgentHandoff{ID: "handoff_1", NewAgentID: "agent_2", CreatedAt: time.Now()}
+	oldAgent := NewAgent("old")
+	newAgent := NewAgent("new")
+
+	result.RecordAgentHandoff(handoff, oldAgent, newAgent)
+
+	err := result.Expect.
+		NextAgentHandoff(newAgent).
+		NoMoreEvents().
+		HasError()
+
+	if err != nil {
+		t.Fatalf("NextAgentHandoff returned error = %v, want nil", err)
+	}
+}
+
+func TestRunAssertNextAgentHandoffReportsTargetMismatch(t *testing.T) {
+	result := NewRunResult(llm.NewChatContext())
+	handoff := &llm.AgentHandoff{ID: "handoff_1", NewAgentID: "agent_2", CreatedAt: time.Now()}
+	oldAgent := NewAgent("old")
+	newAgent := NewAgent("new")
+	otherAgent := NewAgent("other")
+
+	result.RecordAgentHandoff(handoff, oldAgent, newAgent)
+
+	err := result.Expect.NextAgentHandoff(otherAgent).HasError()
+
+	if err == nil {
+		t.Fatal("NextAgentHandoff error = nil, want target mismatch error")
+	}
+}
+
 func TestRunAssertSkipNextEventIfConsumesMatchingCurrentEvent(t *testing.T) {
 	result := NewRunResult(llm.NewChatContext())
 	result.RecordItem(&llm.ChatMessage{ID: "msg_1", Role: llm.ChatRoleAssistant, CreatedAt: time.Now()})
@@ -400,6 +858,35 @@ func TestRunAssertSkipNextEventIfLeavesNonMatchingCurrentEvent(t *testing.T) {
 	}
 	if err := result.Expect.NextEvent("message").NoMoreEvents().HasError(); err != nil {
 		t.Fatalf("NextEvent returned error = %v, want message to remain after non-match", err)
+	}
+}
+
+func TestRunAssertSkipNextEventIfConsumesMatchingMessageRole(t *testing.T) {
+	result := NewRunResult(llm.NewChatContext())
+	result.RecordItem(&llm.ChatMessage{ID: "msg_1", Role: llm.ChatRoleAssistant, CreatedAt: time.Now()})
+
+	if ok := result.Expect.SkipNextEventIf("message", RunEventCriteria{Role: llm.ChatRoleAssistant}); !ok {
+		t.Fatal("SkipNextEventIf returned false, want true for matching message role")
+	}
+	if err := result.Expect.NoMoreEvents().HasError(); err != nil {
+		t.Fatalf("NoMoreEvents returned error = %v, want nil after consuming matching role", err)
+	}
+}
+
+func TestRunAssertSkipNextEventIfLeavesNonMatchingFunctionCallName(t *testing.T) {
+	result := NewRunResult(llm.NewChatContext())
+	result.RecordItem(&llm.FunctionCall{
+		ID:        "fnc_1",
+		CallID:    "call_1",
+		Name:      "lookup",
+		CreatedAt: time.Now(),
+	})
+
+	if ok := result.Expect.SkipNextEventIf("function_call", RunEventCriteria{Name: "search"}); ok {
+		t.Fatal("SkipNextEventIf returned true, want false for non-matching function call name")
+	}
+	if err := result.Expect.NextEvent("function_call").NoMoreEvents().HasError(); err != nil {
+		t.Fatalf("NextEvent returned error = %v, want function call to remain after non-match", err)
 	}
 }
 

@@ -15,19 +15,25 @@ import (
 )
 
 var (
-	ErrRunResultNotDone       = errors.New("run result is not done")
-	ErrRunResultNoFinalOutput = errors.New("run result has no final output")
+	ErrRunResultNotDone         = errors.New("run result is not done")
+	ErrRunResultNoFinalOutput   = errors.New("run result has no final output")
+	ErrRunResultFinalOutputType = errors.New("run result final output type mismatch")
 )
 
 type RunResult struct {
-	ChatCtx        *llm.ChatContext
-	Expect         *RunAssert
-	events         []RunEvent
-	done           bool
-	finalOutput    any
-	finalOutputSet bool
-	watchedSpeech  map[*SpeechHandle]runResultSpeechWatch
-	mu             sync.Mutex
+	ChatCtx         *llm.ChatContext
+	Expect          *RunAssert
+	userInput       string
+	events          []RunEvent
+	done            bool
+	doneCh          chan struct{}
+	finalOutput     any
+	finalOutputErr  error
+	finalOutputSet  bool
+	finalOutputType reflect.Type
+	watchedSpeech   map[*SpeechHandle]runResultSpeechWatch
+	lastSpeech      *SpeechHandle
+	mu              sync.Mutex
 }
 
 type runResultSpeechWatch struct {
@@ -36,13 +42,35 @@ type runResultSpeechWatch struct {
 }
 
 func NewRunResult(chatCtx *llm.ChatContext) *RunResult {
+	return NewRunResultWithOutputType(chatCtx, nil)
+}
+
+func NewRunResultWithOutputType(chatCtx *llm.ChatContext, outputType reflect.Type) *RunResult {
+	return newRunResult(chatCtx, "", outputType)
+}
+
+func NewRunResultWithUserInput(chatCtx *llm.ChatContext, userInput string) *RunResult {
+	return newRunResult(chatCtx, userInput, nil)
+}
+
+func newRunResult(chatCtx *llm.ChatContext, userInput string, outputType reflect.Type) *RunResult {
 	result := &RunResult{
-		ChatCtx:       chatCtx,
-		events:        make([]RunEvent, 0),
-		watchedSpeech: make(map[*SpeechHandle]runResultSpeechWatch),
+		ChatCtx:         chatCtx,
+		userInput:       userInput,
+		events:          make([]RunEvent, 0),
+		doneCh:          make(chan struct{}),
+		finalOutputType: outputType,
+		watchedSpeech:   make(map[*SpeechHandle]runResultSpeechWatch),
 	}
 	result.Expect = &RunAssert{ChatCtx: chatCtx, result: result}
 	return result
+}
+
+func (r *RunResult) UserInput() string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	return r.userInput
 }
 
 func (r *RunResult) Done() bool {
@@ -56,15 +84,35 @@ func (r *RunResult) MarkDone() {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
+	r.markDoneLocked()
+}
+
+func (r *RunResult) markDoneLocked() {
+	if r.done {
+		return
+	}
 	r.done = true
+	close(r.doneCh)
+}
+
+func (r *RunResult) Wait(ctx context.Context) error {
+	r.mu.Lock()
+	doneCh := r.doneCh
+	r.mu.Unlock()
+
+	select {
+	case <-doneCh:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
 
 func (r *RunResult) SetFinalOutput(output any) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	r.finalOutput = output
-	r.finalOutputSet = true
+	r.setFinalOutputLocked(output)
 }
 
 func (r *RunResult) FinalOutput() (any, error) {
@@ -76,6 +124,9 @@ func (r *RunResult) FinalOutput() (any, error) {
 	}
 	if !r.finalOutputSet {
 		return nil, ErrRunResultNoFinalOutput
+	}
+	if r.finalOutputErr != nil {
+		return nil, r.finalOutputErr
 	}
 	return r.finalOutput, nil
 }
@@ -180,8 +231,8 @@ func (r *RunResult) WatchSpeechHandle(speech *SpeechHandle) bool {
 	removeItemAddedCallback := speech.AddItemAddedCallback(func(item llm.ChatItem) {
 		r.RecordItem(item)
 	})
-	removeDoneCallback := speech.AddDoneCallback(func(*SpeechHandle) {
-		r.markDoneIfNeeded()
+	removeDoneCallback := speech.AddDoneCallback(func(doneSpeech *SpeechHandle) {
+		r.markDoneIfNeeded(doneSpeech)
 	})
 
 	r.mu.Lock()
@@ -203,7 +254,7 @@ func (r *RunResult) WatchSpeechHandle(speech *SpeechHandle) bool {
 	}
 	r.mu.Unlock()
 
-	r.markDoneIfNeeded()
+	r.markDoneIfNeeded(nil)
 	return true
 }
 
@@ -227,19 +278,40 @@ func (r *RunResult) UnwatchSpeechHandle(speech *SpeechHandle) bool {
 	return true
 }
 
-func (r *RunResult) markDoneIfNeeded() {
+func (r *RunResult) markDoneIfNeeded(doneSpeech *SpeechHandle) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
 	if r.done || len(r.watchedSpeech) == 0 {
 		return
 	}
+	if doneSpeech != nil {
+		r.lastSpeech = doneSpeech
+	}
 	for speech := range r.watchedSpeech {
 		if !speech.IsDone() {
 			return
 		}
 	}
-	r.done = true
+	if r.lastSpeech != nil {
+		if output, ok := r.lastSpeech.RunFinalOutput(); ok {
+			r.setFinalOutputLocked(output)
+		}
+	}
+	r.markDoneLocked()
+}
+
+func (r *RunResult) setFinalOutputLocked(output any) {
+	r.finalOutput = nil
+	r.finalOutputErr = nil
+	if err, ok := output.(error); ok {
+		r.finalOutputErr = err
+	} else if r.finalOutputType != nil && reflect.TypeOf(output) != r.finalOutputType {
+		r.finalOutputErr = fmt.Errorf("%w: expected %s, got %T", ErrRunResultFinalOutputType, r.finalOutputType, output)
+	} else {
+		r.finalOutput = output
+	}
+	r.finalOutputSet = true
 }
 
 func (r *RunResult) insertEvent(event RunEvent) {
@@ -265,18 +337,37 @@ type RunAssert struct {
 	index   int
 }
 
+type RunEventCriteria struct {
+	Role      llm.ChatRole
+	Name      string
+	Arguments map[string]any
+	Output    string
+	IsError   *bool
+	NewAgent  *Agent
+}
+
 func (a *RunAssert) IsFunctionCall(name string) *RunAssert {
 	return a.IsFunctionCallWithArguments(name, nil)
 }
 
 func (a *RunAssert) IsFunctionCallWithArguments(name string, arguments map[string]any) *RunAssert {
+	return a.ContainsFunctionCallMatching(RunEventCriteria{
+		Name:      name,
+		Arguments: arguments,
+	})
+}
+
+func (a *RunAssert) ContainsFunctionCallMatching(criteria RunEventCriteria) *RunAssert {
 	found := false
 	var argumentErr error
 	for _, event := range a.events() {
 		fcEvent, ok := event.(*FunctionCallEvent)
-		if ok && fcEvent.Item.Name == name {
-			if len(arguments) > 0 {
-				if err := assertFunctionCallArguments(fcEvent.Item.Arguments, arguments); err != nil {
+		if ok {
+			if criteria.Name != "" && fcEvent.Item.Name != criteria.Name {
+				continue
+			}
+			if len(criteria.Arguments) > 0 {
+				if err := assertFunctionCallArguments(fcEvent.Item.Arguments, criteria.Arguments); err != nil {
 					argumentErr = err
 					continue
 				}
@@ -287,9 +378,9 @@ func (a *RunAssert) IsFunctionCallWithArguments(name string, arguments map[strin
 	}
 	if !found {
 		if argumentErr != nil {
-			a.errors = append(a.errors, fmt.Errorf("expected function call %q with matching arguments: %w", name, argumentErr))
+			a.errors = append(a.errors, fmt.Errorf("expected function call matching criteria: %w", argumentErr))
 		} else {
-			a.errors = append(a.errors, fmt.Errorf("expected function call %q, but not found", name))
+			a.errors = append(a.errors, errors.New("expected function call matching criteria, but not found"))
 		}
 	}
 	return a
@@ -328,31 +419,42 @@ func (a *RunAssert) ContainsMessage(role llm.ChatRole, content string) *RunAsser
 }
 
 func (a *RunAssert) ContainsMessageRole(role llm.ChatRole) *RunAssert {
+	return a.ContainsMessageMatching(RunEventCriteria{Role: role})
+}
+
+func (a *RunAssert) ContainsMessageMatching(criteria RunEventCriteria) *RunAssert {
 	found := false
 	for _, event := range a.events() {
 		msgEvent, ok := event.(*ChatMessageEvent)
-		if ok && msgEvent.Item.Role == role {
+		if ok && eventMatchesCriteria(msgEvent, criteria) {
 			found = true
 			break
 		}
 	}
 	if !found {
-		a.errors = append(a.errors, fmt.Errorf("expected message from %s, but not found", role))
+		a.errors = append(a.errors, errors.New("expected message matching criteria, but not found"))
 	}
 	return a
 }
 
 func (a *RunAssert) ContainsFunctionCallOutput(output string, isError bool) *RunAssert {
+	return a.ContainsFunctionCallOutputMatching(RunEventCriteria{
+		Output:  output,
+		IsError: &isError,
+	})
+}
+
+func (a *RunAssert) ContainsFunctionCallOutputMatching(criteria RunEventCriteria) *RunAssert {
 	found := false
 	for _, event := range a.events() {
 		outputEvent, ok := event.(*FunctionCallOutputEvent)
-		if ok && outputEvent.Item.Output == output && outputEvent.Item.IsError == isError {
+		if ok && eventMatchesCriteria(outputEvent, criteria) {
 			found = true
 			break
 		}
 	}
 	if !found {
-		a.errors = append(a.errors, fmt.Errorf("expected function call output %q with is_error=%t, but not found", output, isError))
+		a.errors = append(a.errors, errors.New("expected function call output matching criteria, but not found"))
 	}
 	return a
 }
@@ -378,13 +480,8 @@ func (a *RunAssert) NextEvent(eventType ...string) *RunAssert {
 		expectedType = eventType[0]
 	}
 
-	events := a.events()
-	for a.index < len(events) {
-		event := events[a.index]
-		a.index++
-		if expectedType == "" || event.GetType() == expectedType {
-			return a
-		}
+	if _, ok := a.nextEvent(expectedType); ok {
+		return a
 	}
 
 	if expectedType == "" {
@@ -395,17 +492,138 @@ func (a *RunAssert) NextEvent(eventType ...string) *RunAssert {
 	return a
 }
 
-func (a *RunAssert) SkipNextEventIf(eventType string) bool {
+func (a *RunAssert) NextMessage(role llm.ChatRole) *RunAssert {
+	event, ok := a.nextEvent("message")
+	if !ok {
+		a.errors = append(a.errors, errors.New("expected message event, but none found"))
+		return a
+	}
+	msgEvent, ok := event.(*ChatMessageEvent)
+	if !ok {
+		a.errors = append(a.errors, fmt.Errorf("expected message event, got %s", event.GetType()))
+		return a
+	}
+	if role != "" && msgEvent.Item.Role != role {
+		a.errors = append(a.errors, fmt.Errorf("expected message from %s, got %s", role, msgEvent.Item.Role))
+	}
+	return a
+}
+
+func (a *RunAssert) NextFunctionCall(name string) *RunAssert {
+	return a.NextFunctionCallWithArguments(name, nil)
+}
+
+func (a *RunAssert) NextFunctionCallWithArguments(name string, arguments map[string]any) *RunAssert {
+	event, ok := a.nextEvent("function_call")
+	if !ok {
+		a.errors = append(a.errors, errors.New("expected function_call event, but none found"))
+		return a
+	}
+	fcEvent, ok := event.(*FunctionCallEvent)
+	if !ok {
+		a.errors = append(a.errors, fmt.Errorf("expected function_call event, got %s", event.GetType()))
+		return a
+	}
+	if name != "" && fcEvent.Item.Name != name {
+		a.errors = append(a.errors, fmt.Errorf("expected function call %q, got %q", name, fcEvent.Item.Name))
+		return a
+	}
+	if len(arguments) > 0 {
+		if err := assertFunctionCallArguments(fcEvent.Item.Arguments, arguments); err != nil {
+			a.errors = append(a.errors, fmt.Errorf("expected function call %q with matching arguments: %w", name, err))
+		}
+	}
+	return a
+}
+
+func (a *RunAssert) NextAgentHandoff(newAgent *Agent) *RunAssert {
+	event, ok := a.nextEvent("agent_handoff")
+	if !ok {
+		a.errors = append(a.errors, errors.New("expected agent_handoff event, but none found"))
+		return a
+	}
+	handoffEvent, ok := event.(*AgentHandoffEvent)
+	if !ok {
+		a.errors = append(a.errors, fmt.Errorf("expected agent_handoff event, got %s", event.GetType()))
+		return a
+	}
+	if newAgent != nil && handoffEvent.NewAgent != newAgent {
+		a.errors = append(a.errors, errors.New("expected agent handoff to target agent"))
+	}
+	return a
+}
+
+func (a *RunAssert) NextFunctionCallOutput(criteria RunEventCriteria) *RunAssert {
+	event, ok := a.nextEvent("function_call_output")
+	if !ok {
+		a.errors = append(a.errors, errors.New("expected function_call_output event, but none found"))
+		return a
+	}
+	outputEvent, ok := event.(*FunctionCallOutputEvent)
+	if !ok {
+		a.errors = append(a.errors, fmt.Errorf("expected function_call_output event, got %s", event.GetType()))
+		return a
+	}
+	if !eventMatchesCriteria(outputEvent, criteria) {
+		a.errors = append(a.errors, errors.New("expected function call output matching criteria"))
+	}
+	return a
+}
+
+func (a *RunAssert) nextEvent(expectedType string) (RunEvent, bool) {
+	events := a.events()
+	for a.index < len(events) {
+		event := events[a.index]
+		a.index++
+		if expectedType == "" || event.GetType() == expectedType {
+			return event, true
+		}
+	}
+	return nil, false
+}
+
+func (a *RunAssert) SkipNextEventIf(eventType string, criteria ...RunEventCriteria) bool {
 	events := a.events()
 	if a.index >= len(events) {
 		return false
 	}
-	if events[a.index].GetType() != eventType {
+	event := events[a.index]
+	if event.GetType() != eventType {
+		return false
+	}
+	if len(criteria) > 0 && !eventMatchesCriteria(event, criteria[0]) {
 		return false
 	}
 
 	a.index++
 	return true
+}
+
+func eventMatchesCriteria(event RunEvent, criteria RunEventCriteria) bool {
+	switch event := event.(type) {
+	case *ChatMessageEvent:
+		return criteria.Role == "" || event.Item.Role == criteria.Role
+	case *FunctionCallEvent:
+		if criteria.Name != "" && event.Item.Name != criteria.Name {
+			return false
+		}
+		if len(criteria.Arguments) > 0 {
+			return assertFunctionCallArguments(event.Item.Arguments, criteria.Arguments) == nil
+		}
+		return true
+	case *FunctionCallOutputEvent:
+		if criteria.Output != "" && event.Item.Output != criteria.Output {
+			return false
+		}
+		if criteria.IsError != nil && event.Item.IsError != *criteria.IsError {
+			return false
+		}
+		return true
+	case *AgentHandoffEvent:
+		return criteria.NewAgent == nil || event.NewAgent == criteria.NewAgent
+	default:
+		return true
+	}
 }
 
 func (a *RunAssert) SkipNext(count int) *RunAssert {
@@ -441,7 +659,23 @@ func (a *RunAssert) HasError() error {
 	for _, err := range a.errors {
 		msgs = append(msgs, err.Error())
 	}
-	return fmt.Errorf("assertions failed:\\n%s", strings.Join(msgs, "\\n"))
+	message := fmt.Sprintf("assertions failed:\n%s", strings.Join(msgs, "\n"))
+	if events := a.events(); len(events) > 0 {
+		message += "\nContext around failure:\n" + formatRunEvents(events, a.index)
+	}
+	return errors.New(message)
+}
+
+func formatRunEvents(events []RunEvent, selectedIndex int) string {
+	lines := make([]string, 0, len(events))
+	for i, event := range events {
+		prefix := "   "
+		if i == selectedIndex {
+			prefix = ">>>"
+		}
+		lines = append(lines, fmt.Sprintf("%s [%d] %s", prefix, i, event.GetType()))
+	}
+	return strings.Join(lines, "\n")
 }
 
 func (a *RunAssert) Judge(ctx context.Context, evaluator evals.Evaluator, llmInstance llm.LLM) (*RunAssert, error) {

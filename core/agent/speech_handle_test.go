@@ -50,6 +50,24 @@ func TestSpeechHandleDisallowInterruptionsAfterInterruptFails(t *testing.T) {
 	}
 }
 
+func TestSpeechHandleRunFinalOutput(t *testing.T) {
+	speech := NewSpeechHandle(true, DefaultInputDetails())
+
+	if _, ok := speech.RunFinalOutput(); ok {
+		t.Fatal("RunFinalOutput ok = true, want false before SetRunFinalOutput")
+	}
+
+	speech.SetRunFinalOutput("done")
+
+	output, ok := speech.RunFinalOutput()
+	if !ok {
+		t.Fatal("RunFinalOutput ok = false, want true after SetRunFinalOutput")
+	}
+	if output != "done" {
+		t.Fatalf("RunFinalOutput = %#v, want done", output)
+	}
+}
+
 func TestSpeechHandleWaitIfNotInterruptedReturnsWhenWorkCompletes(t *testing.T) {
 	speech := NewSpeechHandle(true, DefaultInputDetails())
 	workDone := make(chan error, 1)
