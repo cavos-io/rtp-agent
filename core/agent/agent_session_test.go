@@ -249,6 +249,52 @@ func TestAgentSessionSayOptionsOverrideInterruptionsAndChatContext(t *testing.T)
 	}
 }
 
+func TestAgentSessionSayWatchesActiveRunState(t *testing.T) {
+	agent := NewAgent("test")
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	session.activity = NewAgentActivity(agent, session)
+	result := NewRunResult(session.ChatCtx)
+	session.runState = result
+
+	handle, err := session.SayWithOptions(context.Background(), SayOptions{
+		Text: "hello",
+	})
+	if err != nil {
+		t.Fatalf("SayWithOptions error = %v, want nil", err)
+	}
+	if result.Done() {
+		t.Fatal("run result marked done before watched say speech completed")
+	}
+
+	handle.MarkDone()
+
+	if !result.Done() {
+		t.Fatal("run result not marked done after say speech completed")
+	}
+}
+
+func TestAgentSessionGenerateReplyWatchesActiveRunState(t *testing.T) {
+	agent := NewAgent("test")
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	session.activity = NewAgentActivity(agent, session)
+	result := NewRunResult(session.ChatCtx)
+	session.runState = result
+
+	handle, err := session.GenerateReply(context.Background(), "hello")
+	if err != nil {
+		t.Fatalf("GenerateReply error = %v, want nil", err)
+	}
+	if result.Done() {
+		t.Fatal("run result marked done before watched generated speech completed")
+	}
+
+	handle.MarkDone()
+
+	if !result.Done() {
+		t.Fatal("run result not marked done after generated speech completed")
+	}
+}
+
 func TestAgentSessionEmitErrorEmitsTimestampedEvent(t *testing.T) {
 	agent := NewAgent("test")
 	session := NewAgentSession(agent, nil, AgentSessionOptions{})

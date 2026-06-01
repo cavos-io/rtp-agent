@@ -783,6 +783,7 @@ func (s *AgentSession) GenerateReplyWithOptions(ctx context.Context, opts Genera
 	if userMessage != nil {
 		s.EmitConversationItemAdded(userMessage)
 	}
+	s.watchActiveRunSpeechHandle(handle)
 	return handle, nil
 }
 
@@ -831,7 +832,17 @@ func (s *AgentSession) SayWithOptions(ctx context.Context, opts SayOptions) (*Sp
 		s.EmitConversationItemAdded(assistantMessage)
 		handle.AddChatItems(assistantMessage)
 	}
+	s.watchActiveRunSpeechHandle(handle)
 	return handle, nil
+}
+
+func (s *AgentSession) watchActiveRunSpeechHandle(handle *SpeechHandle) {
+	s.mu.Lock()
+	runState := s.runState
+	s.mu.Unlock()
+	if runState != nil {
+		runState.WatchSpeechHandle(handle)
+	}
 }
 
 func (s *AgentSession) Interrupt(force bool) error {
