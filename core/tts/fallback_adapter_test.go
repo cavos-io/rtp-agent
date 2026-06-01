@@ -1233,7 +1233,7 @@ func TestFallbackSynthesizeStreamRetriesSameTTSBeforeFallback(t *testing.T) {
 	}
 }
 
-func TestFallbackSynthesizeStreamReplaysFlushBoundariesOnRetry(t *testing.T) {
+func TestFallbackSynthesizeStreamReplaysOnlyTextOnRetry(t *testing.T) {
 	primaryFailure := &blockingFailSynthesizeStream{
 		err:     errors.New("primary stream failed"),
 		release: make(chan struct{}),
@@ -1281,7 +1281,10 @@ func TestFallbackSynthesizeStreamReplaysFlushBoundariesOnRetry(t *testing.T) {
 		t.Fatalf("audio data = %q, want primary recovered", got)
 	}
 
-	wantCalls := []string{"push:hello", "flush", "push:world"}
+	wantCalls := []string{"push:hello", "push:world"}
+	if len(recovered.calls) != len(wantCalls) {
+		t.Fatalf("replayed stream call count = %d, want %d", len(recovered.calls), len(wantCalls))
+	}
 	if strings.Join(recovered.calls, ",") != strings.Join(wantCalls, ",") {
 		t.Fatalf("replayed stream calls = %#v, want %#v", recovered.calls, wantCalls)
 	}
