@@ -570,14 +570,21 @@ type RealtimeEvent struct {
 // Fallback Adapter
 
 type FallbackAdapter struct {
-	llms             []LLM
-	attemptTimeout   time.Duration
-	maxRetryPerLLM   int
-	retryInterval    time.Duration
-	retryOnChunkSent bool
-	mu               sync.Mutex
-	available        []bool
-	recovering       []bool
+	llms                []LLM
+	attemptTimeout      time.Duration
+	maxRetryPerLLM      int
+	retryInterval       time.Duration
+	retryOnChunkSent    bool
+	mu                  sync.Mutex
+	available           []bool
+	recovering          []bool
+	availabilityChanged chan FallbackAvailabilityChangedEvent
+}
+
+type FallbackAvailabilityChangedEvent struct {
+	LLM       LLM
+	Index     int
+	Available bool
 }
 
 type FallbackAdapterOptions struct {
@@ -625,14 +632,19 @@ func NewFallbackAdapterWithOptions(llms []LLM, options FallbackAdapterOptions) *
 	if retryInterval <= 0 {
 		retryInterval = defaultFallbackRetryInterval
 	}
+	eventBuffer := len(llms) * 2
+	if eventBuffer < 16 {
+		eventBuffer = 16
+	}
 	return &FallbackAdapter{
-		llms:             llms,
-		attemptTimeout:   attemptTimeout,
-		maxRetryPerLLM:   options.MaxRetryPerLLM,
-		retryInterval:    retryInterval,
-		retryOnChunkSent: options.RetryOnChunkSent,
-		available:        initialAvailability(len(llms)),
-		recovering:       make([]bool, len(llms)),
+		llms:                llms,
+		attemptTimeout:      attemptTimeout,
+		maxRetryPerLLM:      options.MaxRetryPerLLM,
+		retryInterval:       retryInterval,
+		retryOnChunkSent:    options.RetryOnChunkSent,
+		available:           initialAvailability(len(llms)),
+		recovering:          make([]bool, len(llms)),
+		availabilityChanged: make(chan FallbackAvailabilityChangedEvent, eventBuffer),
 	}
 }
 
@@ -663,10 +675,30 @@ func (f *FallbackAdapter) allUnavailable() bool {
 
 func (f *FallbackAdapter) setAvailable(index int, available bool) {
 	f.mu.Lock()
-	defer f.mu.Unlock()
+	changed := f.available[index] != available
 	f.available[index] = available
 	if available {
 		f.recovering[index] = false
+	}
+	f.mu.Unlock()
+	if changed {
+		f.emitAvailabilityChanged(index, available)
+	}
+}
+
+func (f *FallbackAdapter) AvailabilityChangedCh() <-chan FallbackAvailabilityChangedEvent {
+	return f.availabilityChanged
+}
+
+func (f *FallbackAdapter) emitAvailabilityChanged(index int, available bool) {
+	event := FallbackAvailabilityChangedEvent{
+		LLM:       f.llms[index],
+		Index:     index,
+		Available: available,
+	}
+	select {
+	case f.availabilityChanged <- event:
+	default:
 	}
 }
 
@@ -699,9 +731,13 @@ type fallbackLLMStream struct {
 
 func (s *fallbackLLMStream) markUnavailable(index int, recover bool) {
 	s.adapter.mu.Lock()
+	changed := s.adapter.available[index]
 	s.adapter.available[index] = false
 	if !recover || s.adapter.recovering[index] {
 		s.adapter.mu.Unlock()
+		if changed {
+			s.adapter.emitAvailabilityChanged(index, false)
+		}
 		return
 	}
 	s.adapter.recovering[index] = true
@@ -710,6 +746,9 @@ func (s *fallbackLLMStream) markUnavailable(index int, recover bool) {
 	opts := append([]ChatOption(nil), s.opts...)
 	s.adapter.mu.Unlock()
 
+	if changed {
+		s.adapter.emitAvailabilityChanged(index, false)
+	}
 	go s.adapter.recoverLLM(index, llm, chatCtx, opts)
 }
 
@@ -737,9 +776,13 @@ func (f *FallbackAdapter) recoverLLM(index int, llm LLM, chatCtx *ChatContext, o
 
 func (f *FallbackAdapter) finishRecovery(index int, available bool) {
 	f.mu.Lock()
-	defer f.mu.Unlock()
+	changed := f.available[index] != available
 	f.available[index] = available
 	f.recovering[index] = false
+	f.mu.Unlock()
+	if changed {
+		f.emitAvailabilityChanged(index, available)
+	}
 }
 
 func (s *fallbackLLMStream) tryStart(index int) error {
