@@ -459,13 +459,8 @@ func (a *RunAssert) NextEvent(eventType ...string) *RunAssert {
 		expectedType = eventType[0]
 	}
 
-	events := a.events()
-	for a.index < len(events) {
-		event := events[a.index]
-		a.index++
-		if expectedType == "" || event.GetType() == expectedType {
-			return a
-		}
+	if _, ok := a.nextEvent(expectedType); ok {
+		return a
 	}
 
 	if expectedType == "" {
@@ -474,6 +469,58 @@ func (a *RunAssert) NextEvent(eventType ...string) *RunAssert {
 		a.errors = append(a.errors, fmt.Errorf("expected another event of type %s, but none found", expectedType))
 	}
 	return a
+}
+
+func (a *RunAssert) NextMessage(role llm.ChatRole) *RunAssert {
+	event, ok := a.nextEvent("message")
+	if !ok {
+		a.errors = append(a.errors, errors.New("expected message event, but none found"))
+		return a
+	}
+	msgEvent, ok := event.(*ChatMessageEvent)
+	if !ok {
+		a.errors = append(a.errors, fmt.Errorf("expected message event, got %s", event.GetType()))
+		return a
+	}
+	if role != "" && msgEvent.Item.Role != role {
+		a.errors = append(a.errors, fmt.Errorf("expected message from %s, got %s", role, msgEvent.Item.Role))
+	}
+	return a
+}
+
+func (a *RunAssert) NextFunctionCallWithArguments(name string, arguments map[string]any) *RunAssert {
+	event, ok := a.nextEvent("function_call")
+	if !ok {
+		a.errors = append(a.errors, errors.New("expected function_call event, but none found"))
+		return a
+	}
+	fcEvent, ok := event.(*FunctionCallEvent)
+	if !ok {
+		a.errors = append(a.errors, fmt.Errorf("expected function_call event, got %s", event.GetType()))
+		return a
+	}
+	if name != "" && fcEvent.Item.Name != name {
+		a.errors = append(a.errors, fmt.Errorf("expected function call %q, got %q", name, fcEvent.Item.Name))
+		return a
+	}
+	if len(arguments) > 0 {
+		if err := assertFunctionCallArguments(fcEvent.Item.Arguments, arguments); err != nil {
+			a.errors = append(a.errors, fmt.Errorf("expected function call %q with matching arguments: %w", name, err))
+		}
+	}
+	return a
+}
+
+func (a *RunAssert) nextEvent(expectedType string) (RunEvent, bool) {
+	events := a.events()
+	for a.index < len(events) {
+		event := events[a.index]
+		a.index++
+		if expectedType == "" || event.GetType() == expectedType {
+			return event, true
+		}
+	}
+	return nil, false
 }
 
 func (a *RunAssert) SkipNextEventIf(eventType string, criteria ...RunEventCriteria) bool {

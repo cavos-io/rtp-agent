@@ -532,6 +532,40 @@ func TestRunAssertNextEventReportsMissingType(t *testing.T) {
 	}
 }
 
+func TestRunAssertNextMessageAndFunctionCallValidateDetails(t *testing.T) {
+	result := NewRunResult(llm.NewChatContext())
+	now := time.Now()
+	result.RecordItem(&llm.ChatMessage{ID: "msg_1", Role: llm.ChatRoleAssistant, CreatedAt: now})
+	result.RecordItem(&llm.FunctionCall{
+		ID:        "fnc_1",
+		CallID:    "call_1",
+		Name:      "lookup",
+		Arguments: `{"city":"Jakarta"}`,
+		CreatedAt: now.Add(time.Millisecond),
+	})
+
+	err := result.Expect.
+		NextMessage(llm.ChatRoleAssistant).
+		NextFunctionCallWithArguments("lookup", map[string]any{"city": "Jakarta"}).
+		NoMoreEvents().
+		HasError()
+
+	if err != nil {
+		t.Fatalf("typed next assertions returned error = %v, want nil", err)
+	}
+}
+
+func TestRunAssertNextMessageReportsRoleMismatch(t *testing.T) {
+	result := NewRunResult(llm.NewChatContext())
+	result.RecordItem(&llm.ChatMessage{ID: "msg_1", Role: llm.ChatRoleAssistant, CreatedAt: time.Now()})
+
+	err := result.Expect.NextMessage(llm.ChatRoleUser).HasError()
+
+	if err == nil {
+		t.Fatal("NextMessage error = nil, want role mismatch error")
+	}
+}
+
 func TestRunAssertSkipNextEventIfConsumesMatchingCurrentEvent(t *testing.T) {
 	result := NewRunResult(llm.NewChatContext())
 	result.RecordItem(&llm.ChatMessage{ID: "msg_1", Role: llm.ChatRoleAssistant, CreatedAt: time.Now()})
