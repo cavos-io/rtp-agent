@@ -436,23 +436,9 @@ func (s *fallbackChunkedStream) monitorStream() {
 		ev.SegmentID = ""
 
 		audioSent = true
-		if ev.IsFinal {
-			if pending != nil {
-				select {
-				case s.eventCh <- pending:
-				case <-s.closeCh:
-					return
-				}
-			}
-			pending = nil
-			select {
-			case s.eventCh <- ev:
-			case <-s.closeCh:
-				return
-			}
-			continue
-		}
 		if pending != nil {
+			pending = cloneSynthesizedAudio(pending)
+			pending.IsFinal = false
 			select {
 			case s.eventCh <- pending:
 			case <-s.closeCh:

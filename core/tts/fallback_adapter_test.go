@@ -566,6 +566,43 @@ func TestFallbackChunkedStreamMarksLastFrameFinal(t *testing.T) {
 	}
 }
 
+func TestFallbackChunkedStreamClearsProviderFinalBeforeLastFrame(t *testing.T) {
+	adapter := NewFallbackAdapter([]TTS{
+		&metadataTTS{
+			label:       "primary",
+			sampleRate:  24000,
+			numChannels: 1,
+			chunked: &metadataChunkedStream{
+				events: []*SynthesizedAudio{
+					{IsFinal: true, Frame: &model.AudioFrame{Data: []byte{1}}},
+					{Frame: &model.AudioFrame{Data: []byte{2}}},
+				},
+			},
+		},
+	})
+
+	stream, err := adapter.Synthesize(context.Background(), "hello")
+	if err != nil {
+		t.Fatalf("Synthesize returned error: %v", err)
+	}
+	defer stream.Close()
+
+	first, err := stream.Next()
+	if err != nil {
+		t.Fatalf("first Next returned error: %v", err)
+	}
+	if first.IsFinal {
+		t.Fatal("first audio IsFinal = true, want fallback wrapper to clear provider final before last frame")
+	}
+	second, err := stream.Next()
+	if err != nil {
+		t.Fatalf("second Next returned error: %v", err)
+	}
+	if !second.IsFinal {
+		t.Fatal("second audio IsFinal = false, want wrapper-owned final marker")
+	}
+}
+
 func TestFallbackChunkedStreamDoesNotFallbackAfterAudio(t *testing.T) {
 	streamErr := errors.New("stream failed after audio")
 	second := &metadataTTS{
