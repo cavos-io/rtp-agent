@@ -91,10 +91,11 @@ type AgentSession struct {
 	UserState  UserState
 	AgentState AgentState
 
-	mu       sync.Mutex
-	activity *AgentActivity
-	started  bool
-	runState *RunResult
+	mu            sync.Mutex
+	activity      *AgentActivity
+	started       bool
+	runState      *RunResult
+	userAwayTimer *time.Timer
 
 	// Event channels
 	AgentStateChangedCh chan AgentStateChangedEvent
@@ -657,6 +658,10 @@ func (s *AgentSession) UpdateAgentState(state AgentState) {
 	s.mu.Unlock()
 
 	if oldState != state {
+		s.updateUserAwayTimer()
+	}
+
+	if oldState != state {
 		logger.Logger.Debugw("Agent state changed", "old", oldState, "new", state)
 		select {
 		case s.AgentStateChangedCh <- AgentStateChangedEvent{
@@ -677,6 +682,10 @@ func (s *AgentSession) UpdateUserState(state UserState) {
 	s.mu.Unlock()
 
 	if oldState != state {
+		s.updateUserAwayTimer()
+	}
+
+	if oldState != state {
 		logger.Logger.Debugw("User state changed", "old", oldState, "new", state)
 		select {
 		case s.UserStateChangedCh <- UserStateChangedEvent{
@@ -688,6 +697,36 @@ func (s *AgentSession) UpdateUserState(state UserState) {
 			// Channel full, ignore
 		}
 	}
+}
+
+func (s *AgentSession) updateUserAwayTimer() {
+	s.mu.Lock()
+	if s.userAwayTimer != nil {
+		s.userAwayTimer.Stop()
+		s.userAwayTimer = nil
+	}
+	shouldStart := s.Options.UserAwayTimeout > 0 &&
+		s.AgentState == AgentStateListening &&
+		s.UserState == UserStateListening
+	timeout := s.Options.UserAwayTimeout
+	s.mu.Unlock()
+
+	if !shouldStart {
+		return
+	}
+
+	timer := time.AfterFunc(time.Duration(timeout*float64(time.Second)), func() {
+		s.UpdateUserState(UserStateAway)
+	})
+
+	s.mu.Lock()
+	if s.AgentState == AgentStateListening && s.UserState == UserStateListening && s.userAwayTimer == nil {
+		s.userAwayTimer = timer
+		s.mu.Unlock()
+		return
+	}
+	s.mu.Unlock()
+	timer.Stop()
 }
 
 func (s *AgentSession) GenerateReply(ctx context.Context, userInput string) (*SpeechHandle, error) {
@@ -898,6 +937,10 @@ func (s *AgentSession) Stop(ctx context.Context) error {
 	s.started = false
 	s.UserState = UserStateListening
 	s.AgentState = AgentStateInitializing
+	if s.userAwayTimer != nil {
+		s.userAwayTimer.Stop()
+		s.userAwayTimer = nil
+	}
 	s.mu.Unlock()
 
 	if activity != nil {

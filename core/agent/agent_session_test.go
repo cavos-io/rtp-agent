@@ -925,6 +925,50 @@ func TestAgentSessionUpdateUserStateEmitsTypedTimestampedEvent(t *testing.T) {
 	}
 }
 
+func TestAgentSessionMarksUserAwayAfterIdleTimeout(t *testing.T) {
+	agent := NewAgent("test")
+	session := NewAgentSession(agent, nil, AgentSessionOptions{UserAwayTimeout: 0.01})
+
+	session.UpdateAgentState(AgentStateListening)
+
+	select {
+	case ev := <-session.UserStateChangedCh:
+		if ev.OldState != UserStateListening || ev.NewState != UserStateAway {
+			t.Fatalf("event states = %q -> %q, want listening -> away", ev.OldState, ev.NewState)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("UserStateChangedCh did not receive away event")
+	}
+	if session.UserState != UserStateAway {
+		t.Fatalf("UserState = %q, want away", session.UserState)
+	}
+}
+
+func TestAgentSessionCancelsUserAwayTimerWhenUserSpeaks(t *testing.T) {
+	agent := NewAgent("test")
+	session := NewAgentSession(agent, nil, AgentSessionOptions{UserAwayTimeout: 0.02})
+
+	session.UpdateAgentState(AgentStateListening)
+	session.UpdateUserState(UserStateSpeaking)
+
+	select {
+	case ev := <-session.UserStateChangedCh:
+		if ev.NewState != UserStateSpeaking {
+			t.Fatalf("first user state event = %q, want speaking", ev.NewState)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("UserStateChangedCh did not receive speaking event")
+	}
+	select {
+	case ev := <-session.UserStateChangedCh:
+		t.Fatalf("unexpected user state event after speaking = %q -> %q", ev.OldState, ev.NewState)
+	case <-time.After(60 * time.Millisecond):
+	}
+	if session.UserState != UserStateSpeaking {
+		t.Fatalf("UserState = %q, want speaking", session.UserState)
+	}
+}
+
 func receiveAgentStateChangedEvent(t *testing.T, session *AgentSession) AgentStateChangedEvent {
 	t.Helper()
 	select {
