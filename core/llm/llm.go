@@ -485,6 +485,8 @@ type RealtimeSession interface {
 	Close() error
 	EventCh() <-chan RealtimeEvent
 	PushAudio(frame *model.AudioFrame) error
+	CommitAudio() error
+	ClearAudio() error
 }
 
 type RealtimeEventType string

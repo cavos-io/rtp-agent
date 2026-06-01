@@ -42,3 +42,15 @@ func TestRealtimeUpdateOptionsMessageMapsNamedToolChoice(t *testing.T) {
 		t.Fatalf("tool_choice = %#v, want realtime named function", choice)
 	}
 }
+
+func TestRealtimeAudioBufferMessages(t *testing.T) {
+	commit := openAIRealtimeCommitAudioMessage()
+	if commit["type"] != "input_audio_buffer.commit" {
+		t.Fatalf("commit message type = %#v, want input_audio_buffer.commit", commit["type"])
+	}
+
+	clear := openAIRealtimeClearAudioMessage()
+	if clear["type"] != "input_audio_buffer.clear" {
+		t.Fatalf("clear message type = %#v, want input_audio_buffer.clear", clear["type"])
+	}
+}

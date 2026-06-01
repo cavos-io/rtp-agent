@@ -180,6 +180,26 @@ func (s *realtimeSession) PushAudio(frame *model.AudioFrame) error {
 	return s.sendMsg(msg)
 }
 
+func (s *realtimeSession) CommitAudio() error {
+	return s.sendMsg(openAIRealtimeCommitAudioMessage())
+}
+
+func openAIRealtimeCommitAudioMessage() map[string]any {
+	return map[string]any{
+		"type": "input_audio_buffer.commit",
+	}
+}
+
+func (s *realtimeSession) ClearAudio() error {
+	return s.sendMsg(openAIRealtimeClearAudioMessage())
+}
+
+func openAIRealtimeClearAudioMessage() map[string]any {
+	return map[string]any{
+		"type": "input_audio_buffer.clear",
+	}
+}
+
 func (s *realtimeSession) Close() error {
 	s.cancel()
 	s.mu.Lock()

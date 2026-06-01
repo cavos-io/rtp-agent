@@ -110,3 +110,7 @@ func (f *fakeRealtimeSession) EventCh() <-chan llm.RealtimeEvent {
 }
 
 func (f *fakeRealtimeSession) PushAudio(*model.AudioFrame) error { return nil }
+
+func (f *fakeRealtimeSession) CommitAudio() error { return nil }
+
+func (f *fakeRealtimeSession) ClearAudio() error { return nil }
