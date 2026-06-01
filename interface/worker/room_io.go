@@ -150,7 +150,8 @@ type RoomIO struct {
 	preConnectAudio *PreConnectAudioHandler
 	textInput       TextInputCallback
 
-	participantAvailable bool
+	participantAvailable  bool
+	connectedParticipants map[string]struct{}
 
 	agentStateCancel         context.CancelFunc
 	agentStatePublisher      func(map[string]string)
@@ -362,7 +363,7 @@ func (rio *RoomIO) disableAudioIOForSimulator() {
 
 func (rio *RoomIO) SetParticipant(participantIdentity string) {
 	currentParticipant, available := rio.participantState()
-	rio.setParticipant(participantIdentity, currentParticipant == participantIdentity && available)
+	rio.setParticipant(participantIdentity, (currentParticipant == participantIdentity && available) || rio.isParticipantConnected(participantIdentity))
 }
 
 func (rio *RoomIO) setParticipant(participantIdentity string, available bool) {
@@ -469,6 +470,7 @@ func (rio *RoomIO) handleParticipantConnected(identity string, kind lksdk.Partic
 	if rio == nil {
 		return false
 	}
+	rio.recordConnectedParticipant(identity)
 	linkedParticipant, available := rio.participantState()
 	if linkedParticipant != "" && (identity != linkedParticipant || available) {
 		return false
@@ -577,6 +579,7 @@ func (rio *RoomIO) handleParticipantDisconnected(participantIdentity string, rea
 	if rio == nil {
 		return
 	}
+	rio.forgetConnectedParticipant(participantIdentity)
 	linkedParticipant, available := rio.participantState()
 	if linkedParticipant == "" || participantIdentity != linkedParticipant || !available {
 		return
@@ -592,6 +595,37 @@ func (rio *RoomIO) handleParticipantDisconnected(participantIdentity string, rea
 		return
 	}
 	rio.AgentSession.CloseSoon(agent.CloseReasonParticipantDisconnected)
+}
+
+func (rio *RoomIO) recordConnectedParticipant(identity string) {
+	if rio == nil || identity == "" {
+		return
+	}
+	rio.mu.Lock()
+	defer rio.mu.Unlock()
+	if rio.connectedParticipants == nil {
+		rio.connectedParticipants = make(map[string]struct{})
+	}
+	rio.connectedParticipants[identity] = struct{}{}
+}
+
+func (rio *RoomIO) forgetConnectedParticipant(identity string) {
+	if rio == nil || identity == "" {
+		return
+	}
+	rio.mu.Lock()
+	defer rio.mu.Unlock()
+	delete(rio.connectedParticipants, identity)
+}
+
+func (rio *RoomIO) isParticipantConnected(identity string) bool {
+	if rio == nil || identity == "" {
+		return false
+	}
+	rio.mu.Lock()
+	defer rio.mu.Unlock()
+	_, ok := rio.connectedParticipants[identity]
+	return ok
 }
 
 func roomIOCloseOnDisconnectReason(reason livekit.DisconnectReason) bool {

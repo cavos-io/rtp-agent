@@ -92,6 +92,10 @@ func (f *FallbackAdapter) Provider() string {
 	return "livekit"
 }
 
+func (f *FallbackAdapter) Prewarm() {
+	Prewarm(f.ttss[0])
+}
+
 func (f *FallbackAdapter) Capabilities() TTSCapabilities {
 	return f.capabilities
 }

@@ -8,9 +8,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/cavos-io/rtp-agent/core/audio/model"
 	"github.com/cavos-io/rtp-agent/core/llm"
 	"github.com/cavos-io/rtp-agent/core/tts"
-	"github.com/cavos-io/rtp-agent/model"
 )
 
 func TestPerformLLMInferenceIgnoresNonFunctionToolCalls(t *testing.T) {
@@ -329,7 +329,12 @@ func (s *endInputGenerationTTSStream) Next() (*tts.SynthesizedAudio, error) {
 	}
 	s.emitted = true
 	return &tts.SynthesizedAudio{
-		Frame: &model.AudioFrame{Data: []byte("audio")},
+		Frame: &model.AudioFrame{
+			Data:              []byte("audio"),
+			SampleRate:        24000,
+			NumChannels:       1,
+			SamplesPerChannel: 2,
+		},
 	}, nil
 }
 

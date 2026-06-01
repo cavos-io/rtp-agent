@@ -16,6 +16,12 @@ func TestTTSMetadataDefaultsUnknown(t *testing.T) {
 	}
 }
 
+func TestTTSPrewarmDefaultNoop(t *testing.T) {
+	provider := &metadataDefaultsTTS{}
+
+	Prewarm(provider)
+}
+
 type metadataDefaultsTTS struct{}
 
 func (m *metadataDefaultsTTS) Label() string {

@@ -34,6 +34,10 @@ func (a *StreamAdapter) Provider() string {
 	return Provider(a.tts)
 }
 
+func (a *StreamAdapter) Prewarm() {
+	Prewarm(a.tts)
+}
+
 func (a *StreamAdapter) Capabilities() TTSCapabilities {
 	return TTSCapabilities{Streaming: true, AlignedTranscript: true}
 }

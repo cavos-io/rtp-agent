@@ -42,6 +42,21 @@ func TestFallbackAdapterReportsModelProvider(t *testing.T) {
 	}
 }
 
+func TestFallbackAdapterPrewarmsPrimaryProviderOnly(t *testing.T) {
+	primary := &metadataTTS{label: "primary", sampleRate: 24000, numChannels: 1}
+	secondary := &metadataTTS{label: "secondary", sampleRate: 24000, numChannels: 1}
+	adapter := NewFallbackAdapter([]TTS{primary, secondary})
+
+	adapter.Prewarm()
+
+	if primary.prewarmCalls != 1 {
+		t.Fatalf("primary prewarm calls = %d, want 1", primary.prewarmCalls)
+	}
+	if secondary.prewarmCalls != 0 {
+		t.Fatalf("secondary prewarm calls = %d, want 0", secondary.prewarmCalls)
+	}
+}
+
 func TestFallbackAdapterUsesConfiguredSampleRate(t *testing.T) {
 	adapter := NewFallbackAdapterWithOptions([]TTS{
 		&metadataTTS{label: "low", sampleRate: 16000, numChannels: 1, capabilities: TTSCapabilities{}},
@@ -1857,6 +1872,7 @@ type metadataTTS struct {
 	stream          SynthesizeStream
 	streams         []SynthesizeStream
 	streamErr       error
+	prewarmCalls    int
 	synthesizeCalls int
 	streamCalls     int
 }
@@ -1888,6 +1904,10 @@ func (m *metadataTTS) SampleRate() int {
 
 func (m *metadataTTS) NumChannels() int {
 	return m.numChannels
+}
+
+func (m *metadataTTS) Prewarm() {
+	m.prewarmCalls++
 }
 
 func (m *metadataTTS) Synthesize(context.Context, string) (ChunkedStream, error) {

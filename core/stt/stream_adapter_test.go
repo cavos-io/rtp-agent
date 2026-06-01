@@ -91,6 +91,24 @@ func TestStreamAdapterReturnsEOFWhenVADCompletes(t *testing.T) {
 	}
 }
 
+func TestStreamAdapterKeepsReturningEOFAfterVADCompletes(t *testing.T) {
+	stream, err := NewStreamAdapter(&fakeStreamAdapterSTT{}, &fakeStreamAdapterVAD{
+		stream: &fakeStreamAdapterVADStream{nextErr: io.EOF},
+	}).Stream(context.Background(), "")
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+
+	_, err = stream.Next()
+	if !errors.Is(err, io.EOF) {
+		t.Fatalf("first Next error = %v, want io.EOF", err)
+	}
+	err = nextStreamAdapterSTTError(stream)
+	if !errors.Is(err, io.EOF) {
+		t.Fatalf("second Next error = %v, want io.EOF", err)
+	}
+}
+
 func TestStreamAdapterClosesVADStreamWhenRunCompletes(t *testing.T) {
 	closedCh := make(chan struct{}, 1)
 	stream, err := NewStreamAdapter(&fakeStreamAdapterSTT{}, &fakeStreamAdapterVAD{

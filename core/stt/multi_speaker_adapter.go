@@ -121,6 +121,8 @@ type multiSpeakerAdapterWrapper struct {
 	inputCh     chan multiSpeakerInput
 	mu          sync.Mutex
 	closed      bool
+	inputClosed bool
+	terminalErr error
 	rateGuard   SampleRateGuard
 	inputEnded  bool
 	startOffset float64
@@ -218,8 +220,8 @@ func (w *multiSpeakerAdapterWrapper) Close() error {
 		return nil
 	}
 	w.closed = true
+	w.closeInputLocked()
 	w.cancel()
-	close(w.inputCh)
 	return w.inner.Close()
 }
 
@@ -236,6 +238,12 @@ func (w *multiSpeakerAdapterWrapper) Next() (*SpeechEvent, error) {
 			}
 		default:
 		}
+		w.mu.Lock()
+		err := w.terminalErr
+		w.mu.Unlock()
+		if err != nil {
+			return nil, err
+		}
 		return nil, context.Canceled
 	case err := <-w.errCh:
 		if err != nil {
@@ -243,6 +251,12 @@ func (w *multiSpeakerAdapterWrapper) Next() (*SpeechEvent, error) {
 		}
 		return nil, context.Canceled
 	case <-w.ctx.Done():
+		w.mu.Lock()
+		err := w.terminalErr
+		w.mu.Unlock()
+		if err != nil {
+			return nil, err
+		}
 		return nil, w.ctx.Err()
 	}
 }
@@ -251,6 +265,9 @@ func (w *multiSpeakerAdapterWrapper) sendErr(err error) {
 	if err == nil {
 		return
 	}
+	w.mu.Lock()
+	w.terminalErr = err
+	w.mu.Unlock()
 	select {
 	case w.errCh <- err:
 	default:
@@ -267,6 +284,8 @@ func (w *multiSpeakerAdapterWrapper) sendEvent(ev *SpeechEvent) {
 
 func (w *multiSpeakerAdapterWrapper) run() {
 	defer close(w.eventCh)
+	defer w.markClosedFromRun()
+	defer w.inner.Close()
 
 	go func() {
 		for {
@@ -320,6 +339,25 @@ func (w *multiSpeakerAdapterWrapper) run() {
 				Alternatives: []SpeechData{{Language: "", Text: ""}},
 			})
 		}
+	}
+}
+
+func (w *multiSpeakerAdapterWrapper) markClosedFromRun() {
+	w.mu.Lock()
+	if !w.closed {
+		w.closed = true
+		w.closeInputLocked()
+	}
+	w.mu.Unlock()
+	if w.cancel != nil {
+		w.cancel()
+	}
+}
+
+func (w *multiSpeakerAdapterWrapper) closeInputLocked() {
+	if !w.inputClosed {
+		close(w.inputCh)
+		w.inputClosed = true
 	}
 }
 

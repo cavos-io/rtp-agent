@@ -275,10 +275,11 @@ type fallbackRecognizeStream struct {
 	startedAt    time.Time
 	lastErr      error
 
-	eventCh chan *SpeechEvent
-	errCh   chan error
-	closeCh chan struct{}
-	closed  bool
+	eventCh     chan *SpeechEvent
+	errCh       chan error
+	closeCh     chan struct{}
+	closed      bool
+	terminalErr error
 }
 
 type fallbackRecognizeInput struct {
@@ -302,6 +303,7 @@ func (f *FallbackAdapter) Stream(ctx context.Context, language string) (Recogniz
 	}
 
 	if err := s.tryStartStream(0); err != nil {
+		s.closeRecoveries()
 		return nil, err
 	}
 
@@ -315,6 +317,7 @@ func (s *fallbackRecognizeStream) tryStartStream(index int) error {
 	allFailed := s.adapter.allUnavailable()
 	for i := index; i < len(s.adapter.stts); i++ {
 		if !allFailed && !s.adapter.isAvailable(i) {
+			s.tryRecoverStream(i)
 			continue
 		}
 		for {
@@ -328,6 +331,7 @@ func (s *fallbackRecognizeStream) tryStartStream(index int) error {
 					continue
 				}
 				s.adapter.setAvailable(i, false)
+				s.tryRecoverStream(i)
 				break
 			}
 
@@ -339,6 +343,7 @@ func (s *fallbackRecognizeStream) tryStartStream(index int) error {
 					continue
 				}
 				s.adapter.setAvailable(i, false)
+				s.tryRecoverStream(i)
 				break
 			}
 
@@ -443,8 +448,7 @@ func (s *fallbackRecognizeStream) monitorStream() {
 		if err != nil {
 			if errors.Is(err, io.EOF) {
 				_ = stream.Close()
-				s.markClosed()
-				s.errCh <- io.EOF
+				s.finish(io.EOF)
 				return
 			}
 
@@ -469,9 +473,12 @@ func (s *fallbackRecognizeStream) monitorStream() {
 			}
 
 			if fbErr := s.tryStartStream(nextIndex); fbErr != nil {
+				recoveries := s.detachRecoveriesLocked()
 				s.closed = true
-				s.errCh <- fbErr
+				s.terminalErr = fbErr
+				close(s.closeCh)
 				s.mu.Unlock()
+				closeStreams(recoveries)
 				return
 			}
 			s.mu.Unlock()
@@ -494,9 +501,13 @@ func (s *fallbackRecognizeStream) monitorStream() {
 	}
 }
 
-func (s *fallbackRecognizeStream) markClosed() {
+func (s *fallbackRecognizeStream) finish(err error) {
 	s.mu.Lock()
-	s.closed = true
+	if !s.closed {
+		s.closed = true
+		s.terminalErr = err
+		close(s.closeCh)
+	}
 	s.mu.Unlock()
 }
 
@@ -517,7 +528,7 @@ func (s *fallbackRecognizeStream) tryRecoverStream(index int) {
 	recoveryCtx := context.WithoutCancel(s.ctx)
 	stt := s.adapter.stts[index]
 	stream, err := stt.Stream(recoveryCtx, s.language)
-	if err != nil {
+	if err != nil || stream == nil {
 		s.adapter.clearRecoveringStream(index)
 		return
 	}
@@ -634,15 +645,31 @@ func (s *fallbackRecognizeStream) Close() error {
 	}
 	s.closed = true
 	activeStream := s.activeStream
-	recoveries := append([]RecognizeStream(nil), s.recoveries...)
-	s.recoveries = nil
+	recoveries := s.detachRecoveriesLocked()
 	close(s.closeCh)
 	s.mu.Unlock()
 
-	for _, recovery := range recoveries {
-		_ = recovery.Close()
-	}
+	closeStreams(recoveries)
 	return activeStream.Close()
+}
+
+func (s *fallbackRecognizeStream) closeRecoveries() {
+	s.mu.Lock()
+	recoveries := s.detachRecoveriesLocked()
+	s.mu.Unlock()
+	closeStreams(recoveries)
+}
+
+func (s *fallbackRecognizeStream) detachRecoveriesLocked() []RecognizeStream {
+	recoveries := append([]RecognizeStream(nil), s.recoveries...)
+	s.recoveries = nil
+	return recoveries
+}
+
+func closeStreams(streams []RecognizeStream) {
+	for _, stream := range streams {
+		_ = stream.Close()
+	}
 }
 
 func (s *fallbackRecognizeStream) Next() (*SpeechEvent, error) {
@@ -652,6 +679,12 @@ func (s *fallbackRecognizeStream) Next() (*SpeechEvent, error) {
 	case err := <-s.errCh:
 		return nil, err
 	case <-s.closeCh:
+		s.mu.Lock()
+		err := s.terminalErr
+		s.mu.Unlock()
+		if err != nil {
+			return nil, err
+		}
 		return nil, context.Canceled
 	}
 }
