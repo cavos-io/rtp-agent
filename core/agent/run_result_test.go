@@ -419,6 +419,65 @@ func TestRunAssertUsesRecordedEventsForFunctionCallArguments(t *testing.T) {
 	}
 }
 
+func TestRunAssertContainsFunctionCallMatchingArgumentsOnly(t *testing.T) {
+	result := NewRunResult(llm.NewChatContext())
+	result.RecordItem(&llm.FunctionCall{
+		ID:        "fnc_1",
+		CallID:    "call_1",
+		Name:      "lookup",
+		Arguments: `{"city":"Jakarta","limit":3}`,
+		CreatedAt: time.Now(),
+	})
+
+	err := result.Expect.ContainsFunctionCallMatching(RunEventCriteria{
+		Arguments: map[string]any{"city": "Jakarta"},
+	}).HasError()
+
+	if err != nil {
+		t.Fatalf("ContainsFunctionCallMatching returned error = %v, want nil for argument-only match", err)
+	}
+}
+
+func TestRunAssertContainsFunctionCallMatchingNameAndArguments(t *testing.T) {
+	result := NewRunResult(llm.NewChatContext())
+	result.RecordItem(&llm.FunctionCall{
+		ID:        "fnc_1",
+		CallID:    "call_1",
+		Name:      "lookup",
+		Arguments: `{"city":"Jakarta","limit":3}`,
+		CreatedAt: time.Now(),
+	})
+
+	err := result.Expect.ContainsFunctionCallMatching(RunEventCriteria{
+		Name:      "lookup",
+		Arguments: map[string]any{"limit": float64(3)},
+	}).HasError()
+
+	if err != nil {
+		t.Fatalf("ContainsFunctionCallMatching returned error = %v, want nil for matching name and arguments", err)
+	}
+}
+
+func TestRunAssertContainsFunctionCallMatchingReportsMismatch(t *testing.T) {
+	result := NewRunResult(llm.NewChatContext())
+	result.RecordItem(&llm.FunctionCall{
+		ID:        "fnc_1",
+		CallID:    "call_1",
+		Name:      "lookup",
+		Arguments: `{"city":"Jakarta"}`,
+		CreatedAt: time.Now(),
+	})
+
+	err := result.Expect.ContainsFunctionCallMatching(RunEventCriteria{
+		Name:      "lookup",
+		Arguments: map[string]any{"city": "Bandung"},
+	}).HasError()
+
+	if err == nil {
+		t.Fatal("ContainsFunctionCallMatching error = nil, want mismatch error")
+	}
+}
+
 func TestRunAssertReportsFunctionCallArgumentMismatch(t *testing.T) {
 	result := NewRunResult(llm.NewChatContext())
 	functionCall := &llm.FunctionCall{

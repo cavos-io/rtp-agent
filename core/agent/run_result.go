@@ -351,13 +351,23 @@ func (a *RunAssert) IsFunctionCall(name string) *RunAssert {
 }
 
 func (a *RunAssert) IsFunctionCallWithArguments(name string, arguments map[string]any) *RunAssert {
+	return a.ContainsFunctionCallMatching(RunEventCriteria{
+		Name:      name,
+		Arguments: arguments,
+	})
+}
+
+func (a *RunAssert) ContainsFunctionCallMatching(criteria RunEventCriteria) *RunAssert {
 	found := false
 	var argumentErr error
 	for _, event := range a.events() {
 		fcEvent, ok := event.(*FunctionCallEvent)
-		if ok && fcEvent.Item.Name == name {
-			if len(arguments) > 0 {
-				if err := assertFunctionCallArguments(fcEvent.Item.Arguments, arguments); err != nil {
+		if ok {
+			if criteria.Name != "" && fcEvent.Item.Name != criteria.Name {
+				continue
+			}
+			if len(criteria.Arguments) > 0 {
+				if err := assertFunctionCallArguments(fcEvent.Item.Arguments, criteria.Arguments); err != nil {
 					argumentErr = err
 					continue
 				}
@@ -368,9 +378,9 @@ func (a *RunAssert) IsFunctionCallWithArguments(name string, arguments map[strin
 	}
 	if !found {
 		if argumentErr != nil {
-			a.errors = append(a.errors, fmt.Errorf("expected function call %q with matching arguments: %w", name, argumentErr))
+			a.errors = append(a.errors, fmt.Errorf("expected function call matching criteria: %w", argumentErr))
 		} else {
-			a.errors = append(a.errors, fmt.Errorf("expected function call %q, but not found", name))
+			a.errors = append(a.errors, errors.New("expected function call matching criteria, but not found"))
 		}
 	}
 	return a
