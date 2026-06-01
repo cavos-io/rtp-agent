@@ -2,8 +2,11 @@ package tts
 
 import (
 	"context"
+	"errors"
+	"io"
 	"testing"
 
+	"github.com/cavos-io/rtp-agent/core/audio/model"
 	"github.com/cavos-io/rtp-agent/library/telemetry"
 )
 
@@ -136,6 +139,59 @@ func TestTTSErrorEmitterIgnoresNilHandler(t *testing.T) {
 	emitter.EmitError(TTSError{Label: "tts", Err: context.Canceled})
 }
 
+func TestCollectCombinesChunkedStreamFrames(t *testing.T) {
+	stream := &collectChunkedStream{events: []*SynthesizedAudio{
+		{Frame: &model.AudioFrame{
+			Data:              []byte{1, 0, 2, 0},
+			SampleRate:        24000,
+			NumChannels:       1,
+			SamplesPerChannel: 2,
+		}},
+		{Frame: &model.AudioFrame{
+			Data:              []byte{3, 0, 4, 0},
+			SampleRate:        24000,
+			NumChannels:       1,
+			SamplesPerChannel: 2,
+		}},
+	}}
+
+	frame, err := Collect(stream)
+	if err != nil {
+		t.Fatalf("Collect error = %v", err)
+	}
+	if frame.SampleRate != 24000 {
+		t.Fatalf("SampleRate = %d, want 24000", frame.SampleRate)
+	}
+	if frame.SamplesPerChannel != 4 {
+		t.Fatalf("SamplesPerChannel = %d, want 4", frame.SamplesPerChannel)
+	}
+	if got := string(frame.Data); got != string([]byte{1, 0, 2, 0, 3, 0, 4, 0}) {
+		t.Fatalf("Data = %v, want concatenated PCM data", frame.Data)
+	}
+}
+
+func TestCollectReturnsStreamError(t *testing.T) {
+	wantErr := errors.New("provider failed")
+	stream := &collectChunkedStream{err: wantErr}
+
+	_, err := Collect(stream)
+	if !errors.Is(err, wantErr) {
+		t.Fatalf("Collect error = %v, want %v", err, wantErr)
+	}
+}
+
+func TestCollectClosesStreamAfterEOF(t *testing.T) {
+	stream := &collectChunkedStream{}
+
+	_, err := Collect(stream)
+	if err != nil {
+		t.Fatalf("Collect error = %v", err)
+	}
+	if !stream.closed {
+		t.Fatal("Collect did not close stream after EOF")
+	}
+}
+
 type metadataDefaultsTTS struct{}
 
 func (m *metadataDefaultsTTS) Label() string {
@@ -160,4 +216,27 @@ func (m *metadataDefaultsTTS) Synthesize(context.Context, string) (ChunkedStream
 
 func (m *metadataDefaultsTTS) Stream(context.Context) (SynthesizeStream, error) {
 	return nil, nil
+}
+
+type collectChunkedStream struct {
+	events []*SynthesizedAudio
+	err    error
+	closed bool
+}
+
+func (s *collectChunkedStream) Next() (*SynthesizedAudio, error) {
+	if s.err != nil {
+		return nil, s.err
+	}
+	if len(s.events) == 0 {
+		return nil, io.EOF
+	}
+	event := s.events[0]
+	s.events = s.events[1:]
+	return event, nil
+}
+
+func (s *collectChunkedStream) Close() error {
+	s.closed = true
+	return nil
 }
