@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/url"
 	"strings"
+	"time"
 
 	"github.com/cavos-io/rtp-agent/core/llm"
 	"github.com/sashabaranov/go-openai"
@@ -65,18 +66,34 @@ func (l *OpenAILLM) Chat(ctx context.Context, chatCtx *llm.ChatContext, opts ...
 
 	req := buildOpenAIChatCompletionRequest(l.model, chatCtx, options)
 
-	stream, err := l.client.CreateChatCompletionStream(ctx, req)
-	if err != nil {
-		if cancel != nil {
-			cancel()
+	var lastErr error
+	for attempt := 0; attempt <= connectOptions.MaxRetry; attempt++ {
+		stream, err := l.client.CreateChatCompletionStream(ctx, req)
+		if err == nil {
+			return &openaiStream{
+				stream: stream,
+				cancel: cancel,
+			}, nil
 		}
-		return nil, mapOpenAIError(err)
+		lastErr = mapOpenAIError(err)
+		if attempt == connectOptions.MaxRetry || !openAIShouldRetryError(lastErr) {
+			if cancel != nil {
+				cancel()
+			}
+			return nil, lastErr
+		}
+		if err := waitOpenAIRetryInterval(ctx, connectOptions.IntervalForRetry(attempt)); err != nil {
+			if cancel != nil {
+				cancel()
+			}
+			return nil, err
+		}
 	}
 
-	return &openaiStream{
-		stream: stream,
-		cancel: cancel,
-	}, nil
+	if cancel != nil {
+		cancel()
+	}
+	return nil, lastErr
 }
 
 func mapOpenAIError(err error) error {
@@ -104,6 +121,25 @@ func openAIConnectionErrorMessage(err error) string {
 		return urlErr.Err.Error()
 	}
 	return err.Error()
+}
+
+func openAIShouldRetryError(err error) bool {
+	var apiErr *llm.APIError
+	return errors.As(err, &apiErr) && apiErr.Retryable
+}
+
+func waitOpenAIRetryInterval(ctx context.Context, interval time.Duration) error {
+	if interval <= 0 {
+		return nil
+	}
+	timer := time.NewTimer(interval)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
 }
 
 func buildOpenAIChatCompletionRequest(model string, chatCtx *llm.ChatContext, options *llm.ChatOptions) openai.ChatCompletionRequest {

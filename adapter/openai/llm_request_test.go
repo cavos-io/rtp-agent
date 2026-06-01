@@ -41,7 +41,7 @@ func TestOpenAIChatAppliesConnectOptionsTimeoutToRequestContext(t *testing.T) {
 	_, err := model.Chat(
 		context.Background(),
 		llm.NewChatContext(),
-		llm.WithConnectOptions(llm.APIConnectOptions{Timeout: 75 * time.Millisecond}),
+		llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 0, Timeout: 75 * time.Millisecond}),
 	)
 
 	var connectionErr *llm.APIConnectionError
@@ -57,8 +57,10 @@ func TestOpenAIChatAppliesConnectOptionsTimeoutToRequestContext(t *testing.T) {
 }
 
 func TestOpenAIChatAppliesDefaultConnectOptionsTimeoutToRequestContext(t *testing.T) {
-	sentinelErr := errors.New("stop after context capture")
-	capture := &captureDeadlineHTTPClient{err: sentinelErr}
+	capture := &captureDeadlineHTTPClient{
+		statusCode:   http.StatusBadRequest,
+		responseBody: `{"error":{"message":"bad request","type":"invalid_request_error","code":"bad_request"}}`,
+	}
 	config := openaisdk.DefaultConfig("test-key")
 	config.HTTPClient = capture
 	model := NewOpenAILLMWithConfig(config)
@@ -66,9 +68,9 @@ func TestOpenAIChatAppliesDefaultConnectOptionsTimeoutToRequestContext(t *testin
 
 	_, err := model.Chat(context.Background(), llm.NewChatContext())
 
-	var connectionErr *llm.APIConnectionError
-	if !errors.As(err, &connectionErr) {
-		t.Fatalf("Chat error = %T %v, want APIConnectionError", err, err)
+	var statusErr *llm.APIStatusError
+	if !errors.As(err, &statusErr) {
+		t.Fatalf("Chat error = %T %v, want APIStatusError", err, err)
 	}
 	if !capture.hasDeadline {
 		t.Fatal("request context has no deadline, want default connect timeout deadline")
@@ -208,7 +210,11 @@ func TestOpenAIChatReturnsAPIStatusErrorOnHTTPError(t *testing.T) {
 	model := NewOpenAILLMWithConfig(config)
 	model.model = "gpt-4o"
 
-	_, err := model.Chat(context.Background(), llm.NewChatContext())
+	_, err := model.Chat(
+		context.Background(),
+		llm.NewChatContext(),
+		llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 0}),
+	)
 
 	var statusErr *llm.APIStatusError
 	if !errors.As(err, &statusErr) {
@@ -232,7 +238,11 @@ func TestOpenAIChatReturnsAPITimeoutErrorOnTransportDeadline(t *testing.T) {
 	model := NewOpenAILLMWithConfig(config)
 	model.model = "gpt-4o"
 
-	_, err := model.Chat(context.Background(), llm.NewChatContext())
+	_, err := model.Chat(
+		context.Background(),
+		llm.NewChatContext(),
+		llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 0}),
+	)
 
 	var timeoutErr *llm.APITimeoutError
 	if !errors.As(err, &timeoutErr) {
@@ -243,6 +253,79 @@ func TestOpenAIChatReturnsAPITimeoutErrorOnTransportDeadline(t *testing.T) {
 	}
 	if !timeoutErr.Retryable {
 		t.Fatal("Retryable = false, want timeout errors retryable")
+	}
+}
+
+func TestOpenAIChatRetriesRetryableSetupAPIError(t *testing.T) {
+	capture := &sequenceHTTPClient{responses: []*http.Response{
+		openAITestResponse(http.StatusTooManyRequests, `{"error":{"message":"rate limit","type":"rate_limit","code":"rate_limit"}}`),
+		openAITestResponse(http.StatusOK, "data: [DONE]\n\n"),
+	}}
+	config := openaisdk.DefaultConfig("test-key")
+	config.HTTPClient = capture
+	model := NewOpenAILLMWithConfig(config)
+	model.model = "gpt-4o"
+
+	stream, err := model.Chat(
+		context.Background(),
+		llm.NewChatContext(),
+		llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 1}),
+	)
+	if err != nil {
+		t.Fatalf("Chat() error = %v, want retry success", err)
+	}
+	_ = stream.Close()
+	if capture.calls != 2 {
+		t.Fatalf("HTTP calls = %d, want initial failure plus retry", capture.calls)
+	}
+}
+
+func TestOpenAIChatDoesNotRetryNonRetryableSetupAPIError(t *testing.T) {
+	capture := &sequenceHTTPClient{responses: []*http.Response{
+		openAITestResponse(http.StatusBadRequest, `{"error":{"message":"bad request","type":"invalid_request_error","code":"bad_request"}}`),
+		openAITestResponse(http.StatusOK, "data: [DONE]\n\n"),
+	}}
+	config := openaisdk.DefaultConfig("test-key")
+	config.HTTPClient = capture
+	model := NewOpenAILLMWithConfig(config)
+	model.model = "gpt-4o"
+
+	_, err := model.Chat(
+		context.Background(),
+		llm.NewChatContext(),
+		llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 1}),
+	)
+
+	var statusErr *llm.APIStatusError
+	if !errors.As(err, &statusErr) {
+		t.Fatalf("Chat error = %T %v, want APIStatusError", err, err)
+	}
+	if capture.calls != 1 {
+		t.Fatalf("HTTP calls = %d, want no retry for non-retryable status", capture.calls)
+	}
+}
+
+type sequenceHTTPClient struct {
+	responses []*http.Response
+	calls     int
+}
+
+func (c *sequenceHTTPClient) Do(req *http.Request) (*http.Response, error) {
+	if c.calls >= len(c.responses) {
+		return nil, errors.New("unexpected HTTP call")
+	}
+	resp := c.responses[c.calls]
+	resp.Request = req
+	c.calls++
+	return resp, nil
+}
+
+func openAITestResponse(statusCode int, body string) *http.Response {
+	return &http.Response{
+		StatusCode: statusCode,
+		Status:     http.StatusText(statusCode),
+		Body:       io.NopCloser(strings.NewReader(body)),
+		Header:     make(http.Header),
 	}
 }
 
