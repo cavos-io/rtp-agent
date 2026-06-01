@@ -408,6 +408,32 @@ func TestProcPoolEmitsJobLaunchedEvent(t *testing.T) {
 	}
 }
 
+func TestProcPoolEventHandlersCanInspectPool(t *testing.T) {
+	executor := &fakeJobExecutor{id: "exec-a"}
+	pool := NewProcPool(1, ExecutorTypeThread, nil)
+	pool.executorFactory = func(id string) JobExecutor { return executor }
+
+	pool.On(ProcPoolEventJobLaunched, func(JobExecutor) {
+		if got := pool.GetByJobID("job-a"); got == nil {
+			t.Fatal("GetByJobID() from event handler returned nil")
+		}
+	})
+
+	done := make(chan error, 1)
+	go func() {
+		done <- pool.LaunchJob(context.Background(), &livekit.Job{Id: "job-a"})
+	}()
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("LaunchJob: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("LaunchJob deadlocked while event handler inspected pool")
+	}
+}
+
 func TestProcPoolEmitsProcessLifecycleEventsOnLaunch(t *testing.T) {
 	executor := &fakeJobExecutor{id: "exec-a"}
 	pool := NewProcPool(1, ExecutorTypeThread, nil)
