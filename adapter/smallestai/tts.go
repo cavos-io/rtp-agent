@@ -20,6 +20,7 @@ import (
 const (
 	defaultSmallestAIBaseURL       = "https://api.smallest.ai/waves/v1"
 	defaultSmallestAIWebsocketURL  = "wss://api.smallest.ai/waves/v1/tts/live"
+	smallestAIPluginVersion        = "1.5.15"
 	defaultSmallestAIModel         = "lightning_v3.1_pro"
 	defaultSmallestAIProVoice      = "meher"
 	defaultSmallestAIStandardVoice = "sophia"
@@ -185,7 +186,7 @@ func buildSmallestAITTSRequest(ctx context.Context, t *SmallestAITTS, text strin
 }
 
 func (t *SmallestAITTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
-	conn, _, err := websocket.DefaultDialer.DialContext(ctx, t.wsURL, buildSmallestAITTSWebsocketHeaders(t))
+	conn, _, err := websocket.DefaultDialer.DialContext(ctx, buildSmallestAITTSWebsocketURL(t), buildSmallestAITTSWebsocketHeaders(t))
 	if err != nil {
 		return nil, fmt.Errorf("failed to dial smallestai tts websocket: %w", err)
 	}
@@ -199,10 +200,15 @@ func (t *SmallestAITTS) Stream(ctx context.Context) (tts.SynthesizeStream, error
 	}, nil
 }
 
+func buildSmallestAITTSWebsocketURL(t *SmallestAITTS) string {
+	return t.wsURL
+}
+
 func buildSmallestAITTSWebsocketHeaders(t *SmallestAITTS) http.Header {
 	headers := make(http.Header)
 	headers.Set("Authorization", "Bearer "+t.apiKey)
 	headers.Set("X-Source", "livekit")
+	headers.Set("X-LiveKit-Version", smallestAIPluginVersion)
 	return headers
 }
 
@@ -306,6 +312,9 @@ func (s *smallestaiTTSSynthesizeStream) PushText(text string) error {
 	if text == "" {
 		return nil
 	}
+	if s.closed {
+		return fmt.Errorf("smallestai tts stream is closed")
+	}
 	_, err := s.pendingText.WriteString(text)
 	return err
 }
@@ -313,6 +322,9 @@ func (s *smallestaiTTSSynthesizeStream) PushText(text string) error {
 func (s *smallestaiTTSSynthesizeStream) Flush() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.closed {
+		return fmt.Errorf("smallestai tts stream is closed")
+	}
 	text := strings.TrimSpace(s.pendingText.String())
 	s.pendingText.Reset()
 	if text == "" {
@@ -376,6 +388,9 @@ func smallestAITTSAudioFromWebsocketMessage(payload []byte, sampleRate int, segm
 		audio, err := base64.StdEncoding.DecodeString(message.Data.Audio)
 		if err != nil {
 			return nil, false, err
+		}
+		if len(audio) == 0 {
+			return nil, false, nil
 		}
 		return &tts.SynthesizedAudio{
 			Frame: &model.AudioFrame{

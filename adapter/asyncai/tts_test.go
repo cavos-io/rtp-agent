@@ -53,6 +53,36 @@ func TestAsyncAITTSWebsocketURLUsesReferenceQuery(t *testing.T) {
 	if query.Get("version") != "v1" {
 		t.Fatalf("version = %q, want v1", query.Get("version"))
 	}
+
+	provider = NewAsyncAITTS("test-key", "", WithAsyncAITTSBaseURL("http://async.example"))
+	parsed, err = url.Parse(buildAsyncAITTSWebsocketURL(provider))
+	if err != nil {
+		t.Fatalf("parse websocket URL: %v", err)
+	}
+	if parsed.Scheme != "ws" {
+		t.Fatalf("websocket scheme = %q, want ws for http base URL", parsed.Scheme)
+	}
+}
+
+func TestAsyncAITTSOptionsMatchReference(t *testing.T) {
+	provider := NewAsyncAITTS("test-key", "",
+		WithAsyncAITTSBaseURL("https://async.example"),
+		WithAsyncAITTSModel("async_flash_v1.0"),
+		WithAsyncAITTSVoice("voice-2"),
+		WithAsyncAITTSLanguage("en"),
+		WithAsyncAITTSEncoding("pcm_mulaw"),
+		WithAsyncAITTSSampleRate(24000),
+	)
+
+	if provider.baseURL != "https://async.example" {
+		t.Fatalf("base URL = %q, want custom base URL", provider.baseURL)
+	}
+	if provider.voice != "voice-2" || provider.language != "en" {
+		t.Fatalf("provider = %+v, want custom voice/language", provider)
+	}
+	if provider.encoding != "pcm_mulaw" || provider.sampleRate != 24000 {
+		t.Fatalf("provider = %+v, want custom encoding/sample rate", provider)
+	}
 }
 
 func TestAsyncAITTSInitPayloadMatchesReference(t *testing.T) {

@@ -153,12 +153,19 @@ func TestSmallestAITTSStreamMessageMatchesReference(t *testing.T) {
 func TestSmallestAITTSWebsocketHeadersMatchReference(t *testing.T) {
 	provider := NewSmallestAITTS("test-key", "")
 
+	if got := buildSmallestAITTSWebsocketURL(provider); got != "wss://api.smallest.ai/waves/v1/tts/live" {
+		t.Fatalf("websocket URL = %q, want reference websocket URL", got)
+	}
+
 	headers := buildSmallestAITTSWebsocketHeaders(provider)
 	if got := headers.Get("Authorization"); got != "Bearer test-key" {
 		t.Fatalf("authorization = %q, want bearer token", got)
 	}
 	if got := headers.Get("X-Source"); got != "livekit" {
 		t.Fatalf("X-Source = %q, want livekit", got)
+	}
+	if got := headers.Get("X-LiveKit-Version"); got != "1.5.15" {
+		t.Fatalf("X-LiveKit-Version = %q, want plugin version", got)
 	}
 }
 
