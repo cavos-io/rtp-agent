@@ -129,6 +129,31 @@ func TestFallbackChunkedStreamSetsStableRequestID(t *testing.T) {
 	}
 }
 
+func TestFallbackChunkedStreamErrorsWhenNonEmptyTextProducesNoAudio(t *testing.T) {
+	adapter := NewFallbackAdapter([]TTS{
+		&metadataTTS{
+			label:       "primary",
+			sampleRate:  24000,
+			numChannels: 1,
+			chunked:     &metadataChunkedStream{},
+		},
+	})
+
+	stream, err := adapter.Synthesize(context.Background(), "hello")
+	if err != nil {
+		t.Fatalf("Synthesize returned error: %v", err)
+	}
+	defer stream.Close()
+
+	_, err = stream.Next()
+	if err == nil {
+		t.Fatal("Next error = nil, want no-audio error")
+	}
+	if !strings.Contains(err.Error(), "no audio frames") {
+		t.Fatalf("Next error = %v, want no-audio error", err)
+	}
+}
+
 func TestFallbackSynthesizeStreamResamplesProviderAudioToAdapterSampleRate(t *testing.T) {
 	adapter := NewFallbackAdapterWithOptions([]TTS{
 		&metadataTTS{
@@ -207,6 +232,35 @@ func TestFallbackSynthesizeStreamSetsStableRequestID(t *testing.T) {
 	}
 	if first.RequestID == "provider-a" || second.RequestID == "provider-b" {
 		t.Fatalf("RequestID forwarded provider ids: first=%q second=%q", first.RequestID, second.RequestID)
+	}
+}
+
+func TestFallbackSynthesizeStreamErrorsWhenNonEmptyTextProducesNoAudio(t *testing.T) {
+	adapter := NewFallbackAdapter([]TTS{
+		&metadataTTS{
+			label:        "primary",
+			sampleRate:   24000,
+			numChannels:  1,
+			capabilities: TTSCapabilities{Streaming: true},
+			stream:       &metadataSynthesizeStream{},
+		},
+	})
+
+	stream, err := adapter.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+	defer stream.Close()
+	if err := stream.PushText("hello"); err != nil {
+		t.Fatalf("PushText returned error: %v", err)
+	}
+
+	_, err = stream.Next()
+	if err == nil {
+		t.Fatal("Next error = nil, want no-audio error")
+	}
+	if !strings.Contains(err.Error(), "no audio frames") {
+		t.Fatalf("Next error = %v, want no-audio error", err)
 	}
 }
 

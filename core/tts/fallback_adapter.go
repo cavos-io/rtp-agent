@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"strings"
 	"sync"
 
 	"github.com/cavos-io/conversation-worker/library/logger"
@@ -385,6 +386,10 @@ func (s *fallbackChunkedStream) monitorStream() {
 		ev, err := stream.Next()
 		if err != nil {
 			if errors.Is(err, io.EOF) || audioSent {
+				if errors.Is(err, io.EOF) && !audioSent && strings.TrimSpace(s.text) != "" {
+					s.errCh <- fmt.Errorf("no audio frames were pushed for text: %s", s.text)
+					return
+				}
 				s.errCh <- io.EOF
 				return
 			}
@@ -590,6 +595,10 @@ func (s *fallbackSynthesizeStream) monitorStream() {
 		ev, err := stream.Next()
 		if err != nil {
 			if errors.Is(err, io.EOF) || audioSent {
+				if errors.Is(err, io.EOF) && !audioSent && strings.TrimSpace(s.pushedText()) != "" {
+					s.errCh <- fmt.Errorf("no audio frames were pushed for text: %s", s.pushedText())
+					return
+				}
 				s.errCh <- io.EOF
 				return
 			}
@@ -645,6 +654,16 @@ func (s *fallbackSynthesizeStream) canRetryTTS(index int) bool {
 		s.retries = make(map[int]int)
 	}
 	return s.retries[index] < s.adapter.maxRetryPerTTS
+}
+
+func (s *fallbackSynthesizeStream) pushedText() string {
+	texts := make([]string, 0, len(s.inputBuffer))
+	for _, input := range s.inputBuffer {
+		if !input.flush {
+			texts = append(texts, input.text)
+		}
+	}
+	return strings.Join(texts, "")
 }
 
 func (s *fallbackSynthesizeStream) PushText(text string) error {
