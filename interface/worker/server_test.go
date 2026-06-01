@@ -473,6 +473,19 @@ func TestUpdateOptionsPreservesExplicitZeroResourceValues(t *testing.T) {
 	}
 }
 
+func TestUpdateOptionsPreservesExplicitZeroMaxRetry(t *testing.T) {
+	server := NewAgentServer(WorkerOptions{MaxRetry: 5})
+
+	err := server.UpdateOptions(WorkerOptions{MaxRetrySet: true})
+	if err != nil {
+		t.Fatalf("UpdateOptions() error = %v", err)
+	}
+
+	if server.Options.MaxRetry != 0 {
+		t.Fatalf("MaxRetry = %d, want explicit zero", server.Options.MaxRetry)
+	}
+}
+
 func TestUpdateOptionsPreservesExplicitZeroTimeoutValues(t *testing.T) {
 	server := NewAgentServer(WorkerOptions{
 		SessionEndTimeoutSeconds:      120,

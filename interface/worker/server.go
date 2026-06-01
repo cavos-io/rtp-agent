@@ -100,6 +100,7 @@ type WorkerOptions struct {
 	AgentNameIsEnv bool
 	WorkerType     WorkerType
 	MaxRetry       int
+	MaxRetrySet    bool
 	Version        string
 	Host           string
 	Port           int
@@ -459,8 +460,9 @@ func mergeWorkerOptions(current WorkerOptions, next WorkerOptions) WorkerOptions
 	if next.WorkerType != "" {
 		current.WorkerType = next.WorkerType
 	}
-	if next.MaxRetry != 0 {
+	if next.MaxRetrySet || next.MaxRetry != 0 {
 		current.MaxRetry = next.MaxRetry
+		current.MaxRetrySet = true
 	}
 	if next.Version != "" {
 		current.Version = next.Version
@@ -552,7 +554,7 @@ func resolveWorkerOptions(opts WorkerOptions) WorkerOptions {
 	if opts.Version == "" {
 		opts.Version = defaultWorkerVersion
 	}
-	if opts.MaxRetry == 0 {
+	if opts.MaxRetry == 0 && !opts.MaxRetrySet {
 		opts.MaxRetry = defaultMaxRetry
 	}
 	if opts.JobMemoryWarnMB == 0 && !opts.JobMemoryWarnMBSet {
