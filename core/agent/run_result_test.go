@@ -177,3 +177,36 @@ func TestRunResultUnwatchSpeechHandleRemovesCallbacks(t *testing.T) {
 		t.Fatal("RunResult marked done after unwatched speech completed")
 	}
 }
+
+func TestRunAssertUsesRecordedEventsForMessages(t *testing.T) {
+	chatCtx := llm.NewChatContext()
+	result := NewRunResult(chatCtx)
+	message := &llm.ChatMessage{
+		ID:        "msg_1",
+		Role:      llm.ChatRoleAssistant,
+		Content:   []llm.ChatContent{{Text: "hello from recorded events"}},
+		CreatedAt: time.Now(),
+	}
+
+	result.RecordItem(message)
+
+	if err := result.Expect.ContainsMessage(llm.ChatRoleAssistant, "recorded events").HasError(); err != nil {
+		t.Fatalf("ContainsMessage returned error = %v, want nil for recorded event", err)
+	}
+}
+
+func TestRunAssertUsesRecordedEventsForFunctionCalls(t *testing.T) {
+	result := NewRunResult(llm.NewChatContext())
+	functionCall := &llm.FunctionCall{
+		ID:        "fnc_1",
+		CallID:    "call_1",
+		Name:      "lookup",
+		CreatedAt: time.Now(),
+	}
+
+	result.RecordItem(functionCall)
+
+	if err := result.Expect.IsFunctionCall("lookup").HasError(); err != nil {
+		t.Fatalf("IsFunctionCall returned error = %v, want nil for recorded event", err)
+	}
+}

@@ -34,12 +34,13 @@ type runResultSpeechWatch struct {
 }
 
 func NewRunResult(chatCtx *llm.ChatContext) *RunResult {
-	return &RunResult{
+	result := &RunResult{
 		ChatCtx:       chatCtx,
-		Expect:        &RunAssert{ChatCtx: chatCtx},
 		events:        make([]RunEvent, 0),
 		watchedSpeech: make(map[*SpeechHandle]runResultSpeechWatch),
 	}
+	result.Expect = &RunAssert{ChatCtx: chatCtx, result: result}
+	return result
 }
 
 func (r *RunResult) Done() bool {
@@ -257,17 +258,17 @@ func (r *RunResult) findEventInsertionIndex(createdAt time.Time) int {
 
 type RunAssert struct {
 	ChatCtx *llm.ChatContext
+	result  *RunResult
 	errors  []error
 }
 
 func (a *RunAssert) IsFunctionCall(name string) *RunAssert {
 	found := false
-	for _, item := range a.ChatCtx.Items {
-		if fc, ok := item.(*llm.FunctionCall); ok {
-			if fc.Name == name {
-				found = true
-				break
-			}
+	for _, event := range a.events() {
+		fcEvent, ok := event.(*FunctionCallEvent)
+		if ok && fcEvent.Item.Name == name {
+			found = true
+			break
 		}
 	}
 	if !found {
@@ -278,12 +279,11 @@ func (a *RunAssert) IsFunctionCall(name string) *RunAssert {
 
 func (a *RunAssert) ContainsMessage(role llm.ChatRole, content string) *RunAssert {
 	found := false
-	for _, item := range a.ChatCtx.Items {
-		if msg, ok := item.(*llm.ChatMessage); ok && msg.Role == role {
-			if strings.Contains(msg.TextContent(), content) {
-				found = true
-				break
-			}
+	for _, event := range a.events() {
+		msgEvent, ok := event.(*ChatMessageEvent)
+		if ok && msgEvent.Item.Role == role && strings.Contains(msgEvent.Item.TextContent(), content) {
+			found = true
+			break
 		}
 	}
 	if !found {
@@ -317,4 +317,11 @@ func (a *RunAssert) Judge(ctx context.Context, evaluator evals.Evaluator, llmIns
 	}
 
 	return a, nil
+}
+
+func (a *RunAssert) events() []RunEvent {
+	if a.result == nil {
+		return nil
+	}
+	return a.result.Events()
 }
