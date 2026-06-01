@@ -74,6 +74,23 @@ func TestFallbackAdapterCloseClosesAllProviders(t *testing.T) {
 	}
 }
 
+func TestFallbackAdapterCloseCancelsChunkedRecovery(t *testing.T) {
+	provider := &contextAwareRecoveryTTS{
+		metadataTTS: metadataTTS{label: "primary", sampleRate: 24000, numChannels: 1},
+		started:     make(chan struct{}, 1),
+		cancelled:   make(chan struct{}, 1),
+	}
+	adapter := NewFallbackAdapter([]TTS{provider})
+
+	adapter.tryRecoverChunked(0, "hello")
+	receiveSignal(t, provider.started, "chunked recovery start")
+
+	if err := adapter.Close(); err != nil {
+		t.Fatalf("Close error = %v", err)
+	}
+	receiveSignal(t, provider.cancelled, "chunked recovery cancellation")
+}
+
 func TestFallbackAdapterEmitsAvailabilityChanges(t *testing.T) {
 	streamErr := errors.New("primary unavailable")
 	primary := &metadataTTS{
@@ -2756,6 +2773,15 @@ func receiveTTSErrorLabel(t *testing.T, errs <-chan string) string {
 	}
 }
 
+func receiveSignal(t *testing.T, signals <-chan struct{}, name string) {
+	t.Helper()
+	select {
+	case <-signals:
+	case <-time.After(200 * time.Millisecond):
+		t.Fatalf("timed out waiting for %s", name)
+	}
+}
+
 func fallbackTestFrame(sampleRate uint32, channels uint32, samplesPerChannel uint32) *model.AudioFrame {
 	return &model.AudioFrame{
 		Data:              make([]byte, int(samplesPerChannel*channels*2)),
@@ -2787,6 +2813,41 @@ type metadataTTS struct {
 type notifyStreamTTS struct {
 	metadataTTS
 	streamCalled chan struct{}
+}
+
+type contextAwareRecoveryTTS struct {
+	metadataTTS
+	started   chan struct{}
+	cancelled chan struct{}
+}
+
+func (c *contextAwareRecoveryTTS) Synthesize(ctx context.Context, text string) (ChunkedStream, error) {
+	select {
+	case c.started <- struct{}{}:
+	default:
+	}
+	return &contextAwareRecoveryChunkedStream{
+		ctx:       ctx,
+		cancelled: c.cancelled,
+	}, nil
+}
+
+type contextAwareRecoveryChunkedStream struct {
+	ctx       context.Context
+	cancelled chan struct{}
+}
+
+func (s *contextAwareRecoveryChunkedStream) Next() (*SynthesizedAudio, error) {
+	<-s.ctx.Done()
+	select {
+	case s.cancelled <- struct{}{}:
+	default:
+	}
+	return nil, s.ctx.Err()
+}
+
+func (s *contextAwareRecoveryChunkedStream) Close() error {
+	return nil
 }
 
 func (n *notifyStreamTTS) Stream(ctx context.Context) (SynthesizeStream, error) {
