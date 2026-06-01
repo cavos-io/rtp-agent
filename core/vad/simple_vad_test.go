@@ -126,8 +126,8 @@ func TestSimpleVADUpdateOptionsRelaxesMaxBufferedSpeech(t *testing.T) {
 	if end.Type != VADEventEndOfSpeech {
 		t.Fatalf("event type = %s, want %s", end.Type, VADEventEndOfSpeech)
 	}
-	if len(end.Frames) != 2 || end.Frames[0] != firstSpeech || end.Frames[1] != thirdSpeech {
-		t.Fatalf("end frames = %#v, want first and post-update speech frames", end.Frames)
+	if len(end.Frames) != 3 || end.Frames[0] != firstSpeech || end.Frames[1] != thirdSpeech {
+		t.Fatalf("end frames = %#v, want buffered speech and trailing silence frames", end.Frames)
 	}
 }
 
@@ -189,8 +189,8 @@ func TestSimpleVADUsesDeactivationThresholdWhileSpeaking(t *testing.T) {
 	if end.Type != VADEventEndOfSpeech {
 		t.Fatalf("event type = %s, want %s", end.Type, VADEventEndOfSpeech)
 	}
-	if len(end.Frames) != 2 || end.Frames[0] != speech || end.Frames[1] != dipAboveDeactivation {
-		t.Fatalf("end frames = %#v, want speech plus hysteresis frame", end.Frames)
+	if len(end.Frames) != 3 || end.Frames[0] != speech || end.Frames[1] != dipAboveDeactivation || end.Frames[2] != silence {
+		t.Fatalf("end frames = %#v, want speech, hysteresis, and trailing silence frames", end.Frames)
 	}
 }
 
@@ -279,14 +279,52 @@ func TestSimpleVADEndOfSpeechIncludesAccumulatedSpeechFrames(t *testing.T) {
 	if end.Speaking {
 		t.Fatal("end Speaking = true, want false")
 	}
-	if len(end.Frames) != 2 || end.Frames[0] != firstSpeech || end.Frames[1] != secondSpeech {
-		t.Fatalf("end frames = %#v, want accumulated speech frames", end.Frames)
+	if len(end.Frames) != 3 || end.Frames[0] != firstSpeech || end.Frames[1] != secondSpeech || end.Frames[2] != silence {
+		t.Fatalf("end frames = %#v, want accumulated speech and trailing silence frames", end.Frames)
 	}
 	if end.SpeechDuration != 0.02 {
 		t.Fatalf("SpeechDuration = %v, want 0.02", end.SpeechDuration)
 	}
 	if end.SilenceDuration != 0.01 {
 		t.Fatalf("SilenceDuration = %v, want 0.01", end.SilenceDuration)
+	}
+}
+
+func TestSimpleVADEndOfSpeechIncludesSilenceThresholdFrames(t *testing.T) {
+	stream, err := NewSimpleVADWithOptions(SimpleVADOptions{
+		Threshold:          0.05,
+		MinSilenceDuration: 0.02,
+	}).Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	defer stream.Close()
+
+	speech := audioFrame(16000, 160, 6000)
+	firstSilence := audioFrame(16000, 160, 0)
+	secondSilence := audioFrame(16000, 160, 0)
+	for _, frame := range []*model.AudioFrame{speech, firstSilence, secondSilence} {
+		if err := stream.PushFrame(frame); err != nil {
+			t.Fatalf("PushFrame() error = %v", err)
+		}
+	}
+
+	assertEventType(t, stream, VADEventInferenceDone)
+	assertEventType(t, stream, VADEventStartOfSpeech)
+	assertEventType(t, stream, VADEventInferenceDone)
+	assertEventType(t, stream, VADEventInferenceDone)
+	end := nextVADEvent(t, stream)
+	if end.Type != VADEventEndOfSpeech {
+		t.Fatalf("event type = %s, want %s", end.Type, VADEventEndOfSpeech)
+	}
+	if len(end.Frames) != 3 || end.Frames[0] != speech || end.Frames[1] != firstSilence || end.Frames[2] != secondSilence {
+		t.Fatalf("end frames = %#v, want speech and silence threshold frames", end.Frames)
+	}
+	if end.SpeechDuration != 0.01 {
+		t.Fatalf("SpeechDuration = %v, want 0.01", end.SpeechDuration)
+	}
+	if end.SilenceDuration != 0.02 {
+		t.Fatalf("SilenceDuration = %v, want 0.02", end.SilenceDuration)
 	}
 }
 
@@ -381,8 +419,9 @@ func TestSimpleVADRequiresMinimumSilenceDurationBeforeEnd(t *testing.T) {
 	if end.SilenceDuration != 0.03 {
 		t.Fatalf("SilenceDuration = %v, want 0.03", end.SilenceDuration)
 	}
-	if len(end.Frames) != 1 || end.Frames[0] != speech {
-		t.Fatalf("end frames = %#v, want accumulated speech frame", end.Frames)
+	if len(end.Frames) != 4 || end.Frames[0] != speech ||
+		end.Frames[1] != firstSilence || end.Frames[2] != secondSilence || end.Frames[3] != thirdSilence {
+		t.Fatalf("end frames = %#v, want speech and silence threshold frames", end.Frames)
 	}
 }
 

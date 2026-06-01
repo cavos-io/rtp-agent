@@ -227,6 +227,7 @@ func (s *simpleVADStream) PushFrame(frame *model.AudioFrame) error {
 
 		if s.speaking {
 			s.silenceDuration = s.accumulatedSilenceDuration
+			s.appendSpeechFrame(frame, duration)
 			if s.accumulatedSilenceDuration >= s.options.MinSilenceDuration {
 				s.speaking = false
 				frames := append([]*model.AudioFrame(nil), s.speechFrames...)
