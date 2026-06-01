@@ -484,9 +484,10 @@ type RealtimeGenerateReplyOptions struct {
 }
 
 type RealtimeTruncateOptions struct {
-	MessageID      string
-	Modalities     []string
-	AudioEndMillis int
+	MessageID       string
+	Modalities      []string
+	AudioEndMillis  int
+	AudioTranscript *string
 }
 
 type RealtimeSession interface {

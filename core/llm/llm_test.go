@@ -59,10 +59,12 @@ func TestRealtimeGenerateReplyOptionsExposePerResponseOverrides(t *testing.T) {
 }
 
 func TestRealtimeTruncateOptionsExposeAudioTruncationFields(t *testing.T) {
+	transcript := "spoken text"
 	options := RealtimeTruncateOptions{
-		MessageID:      "msg_123",
-		Modalities:     []string{"audio"},
-		AudioEndMillis: 1500,
+		MessageID:       "msg_123",
+		Modalities:      []string{"audio"},
+		AudioEndMillis:  1500,
+		AudioTranscript: &transcript,
 	}
 
 	if options.MessageID != "msg_123" {
@@ -73,6 +75,9 @@ func TestRealtimeTruncateOptionsExposeAudioTruncationFields(t *testing.T) {
 	}
 	if options.AudioEndMillis != 1500 {
 		t.Fatalf("AudioEndMillis = %d, want 1500", options.AudioEndMillis)
+	}
+	if options.AudioTranscript == nil || *options.AudioTranscript != "spoken text" {
+		t.Fatalf("AudioTranscript = %#v, want spoken text", options.AudioTranscript)
 	}
 }
 

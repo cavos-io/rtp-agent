@@ -452,10 +452,26 @@ func openAIRealtimeGenerateReplyMessage(options llm.RealtimeGenerateReplyOptions
 }
 
 func (s *realtimeSession) Truncate(options llm.RealtimeTruncateOptions) error {
-	if !realtimeModalitiesInclude(options.Modalities, "audio") {
+	if realtimeModalitiesInclude(options.Modalities, "audio") {
+		return s.sendMsg(openAIRealtimeTruncateMessage(options))
+	}
+	if options.AudioTranscript == nil {
 		return nil
 	}
-	return s.sendMsg(openAIRealtimeTruncateMessage(options))
+	if s.remote == nil {
+		s.remote = llm.NewRemoteChatContext()
+	}
+	msgs, err := openAIRealtimeTruncateTranscriptUpdateMessages(s.remote.ToChatCtx(), options)
+	if err != nil {
+		return err
+	}
+	for _, msg := range msgs {
+		if err := s.sendMsg(msg); err != nil {
+			return err
+		}
+	}
+	s.remote = openAIRealtimeRemoteSnapshot(openAIRealtimeTruncatedTranscriptChatContext(s.remote.ToChatCtx(), options))
+	return nil
 }
 
 func openAIRealtimeTruncateMessage(options llm.RealtimeTruncateOptions) map[string]any {
@@ -474,6 +490,30 @@ func realtimeModalitiesInclude(modalities []string, target string) bool {
 		}
 	}
 	return false
+}
+
+func openAIRealtimeTruncateTranscriptUpdateMessages(oldCtx *llm.ChatContext, options llm.RealtimeTruncateOptions) ([]map[string]any, error) {
+	newCtx := openAIRealtimeTruncatedTranscriptChatContext(oldCtx, options)
+	return openAIRealtimeChatContextUpdateMessages(oldCtx, newCtx)
+}
+
+func openAIRealtimeTruncatedTranscriptChatContext(oldCtx *llm.ChatContext, options llm.RealtimeTruncateOptions) *llm.ChatContext {
+	newCtx := openAIRealtimeSyncedChatContext(oldCtx)
+	if options.AudioTranscript == nil {
+		return newCtx
+	}
+	idx := newCtx.IndexByID(options.MessageID)
+	if idx == nil {
+		return newCtx
+	}
+	msg, ok := newCtx.Items[*idx].(*llm.ChatMessage)
+	if !ok {
+		return newCtx
+	}
+	updated := *msg
+	updated.Content = []llm.ChatContent{{Text: *options.AudioTranscript}}
+	newCtx.Items[*idx] = &updated
+	return newCtx
 }
 
 func (s *realtimeSession) CommitAudio() error {

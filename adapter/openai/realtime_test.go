@@ -699,6 +699,35 @@ func TestRealtimeChatContextUpdateMessagesDeleteRemovedAndRecreateChangedItems(t
 	}
 }
 
+func TestRealtimeTruncateTranscriptUpdateMessagesReplacesTextOnlyMessage(t *testing.T) {
+	oldCtx := llm.NewChatContext()
+	oldCtx.AddMessage(llm.ChatMessageArgs{ID: "msg_123", Role: llm.ChatRoleAssistant, Text: "old transcript"})
+	audioTranscript := "forwarded transcript"
+
+	msgs, err := openAIRealtimeTruncateTranscriptUpdateMessages(oldCtx, llm.RealtimeTruncateOptions{
+		MessageID:       "msg_123",
+		Modalities:      []string{"text"},
+		AudioTranscript: &audioTranscript,
+	})
+	if err != nil {
+		t.Fatalf("openAIRealtimeTruncateTranscriptUpdateMessages error = %v, want nil", err)
+	}
+	if len(msgs) != 2 {
+		t.Fatalf("messages len = %d, want delete and recreate changed message", len(msgs))
+	}
+	if msgs[0]["type"] != "conversation.item.delete" || msgs[0]["item_id"] != "msg_123" {
+		t.Fatalf("first message = %#v, want delete msg_123", msgs[0])
+	}
+	if msgs[1]["type"] != "conversation.item.create" || msgs[1]["previous_item_id"] != "root" {
+		t.Fatalf("second message = %#v, want recreate at root", msgs[1])
+	}
+	item := msgs[1]["item"].(map[string]any)
+	content := item["content"].([]map[string]any)
+	if item["id"] != "msg_123" || content[0]["text"] != "forwarded transcript" {
+		t.Fatalf("recreated item = %#v, want forwarded transcript", item)
+	}
+}
+
 func TestRealtimeEventMapsResponseDoneMetrics(t *testing.T) {
 	ev, ok := openAIRealtimeEvent(map[string]any{
 		"type": "response.done",
