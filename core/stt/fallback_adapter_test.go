@@ -369,6 +369,62 @@ func TestFallbackStreamReturnsAllFailedErrorWhenProvidersExhausted(t *testing.T)
 	}
 }
 
+func TestFallbackStreamClosesRecoveriesWhenRuntimeProvidersExhausted(t *testing.T) {
+	primaryErr := errors.New("primary stream failed")
+	fallbackErr := errors.New("fallback stream failed")
+	primaryRecovery := &liveRecoveryStream{
+		release: make(chan struct{}),
+		event: &SpeechEvent{
+			Type:         SpeechEventFinalTranscript,
+			Alternatives: []SpeechData{{Text: "primary recovered"}},
+		},
+	}
+	fallbackRecovery := &liveRecoveryStream{
+		release: make(chan struct{}),
+		event: &SpeechEvent{
+			Type:         SpeechEventFinalTranscript,
+			Alternatives: []SpeechData{{Text: "fallback recovered"}},
+		},
+	}
+	adapter := NewFallbackAdapterWithOptions([]STT{
+		&metadataSTT{
+			label:        "primary",
+			capabilities: STTCapabilities{Streaming: true},
+			streams: []RecognizeStream{
+				&metadataRecognizeStream{err: primaryErr},
+				primaryRecovery,
+			},
+		},
+		&metadataSTT{
+			label:        "fallback",
+			capabilities: STTCapabilities{Streaming: true},
+			streams: []RecognizeStream{
+				&metadataRecognizeStream{err: fallbackErr},
+				fallbackRecovery,
+			},
+		},
+	}, FallbackAdapterOptions{MaxRetryPerSTT: 0})
+
+	stream, err := adapter.Stream(context.Background(), "en")
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+	defer stream.Close()
+
+	_, err = stream.Next()
+	if err == nil {
+		t.Fatal("Next error = nil, want all STTs failed error")
+	}
+	var allFailed *FallbackAllFailedError
+	if !errors.As(err, &allFailed) {
+		t.Fatalf("Next error = %T, want *FallbackAllFailedError", err)
+	}
+	waitForRecoveryClosed(t, primaryRecovery)
+	waitForRecoveryClosed(t, fallbackRecovery)
+	close(primaryRecovery.release)
+	close(fallbackRecovery.release)
+}
+
 func TestFallbackStreamStartReturnsAllFailedErrorWhenProvidersExhausted(t *testing.T) {
 	primaryErr := errors.New("primary stream start failed")
 	fallbackErr := errors.New("fallback stream start failed")

@@ -473,10 +473,12 @@ func (s *fallbackRecognizeStream) monitorStream() {
 			}
 
 			if fbErr := s.tryStartStream(nextIndex); fbErr != nil {
+				recoveries := s.detachRecoveriesLocked()
 				s.closed = true
 				s.terminalErr = fbErr
 				close(s.closeCh)
 				s.mu.Unlock()
+				closeStreams(recoveries)
 				return
 			}
 			s.mu.Unlock()
@@ -643,24 +645,30 @@ func (s *fallbackRecognizeStream) Close() error {
 	}
 	s.closed = true
 	activeStream := s.activeStream
-	recoveries := append([]RecognizeStream(nil), s.recoveries...)
-	s.recoveries = nil
+	recoveries := s.detachRecoveriesLocked()
 	close(s.closeCh)
 	s.mu.Unlock()
 
-	for _, recovery := range recoveries {
-		_ = recovery.Close()
-	}
+	closeStreams(recoveries)
 	return activeStream.Close()
 }
 
 func (s *fallbackRecognizeStream) closeRecoveries() {
 	s.mu.Lock()
+	recoveries := s.detachRecoveriesLocked()
+	s.mu.Unlock()
+	closeStreams(recoveries)
+}
+
+func (s *fallbackRecognizeStream) detachRecoveriesLocked() []RecognizeStream {
 	recoveries := append([]RecognizeStream(nil), s.recoveries...)
 	s.recoveries = nil
-	s.mu.Unlock()
-	for _, recovery := range recoveries {
-		_ = recovery.Close()
+	return recoveries
+}
+
+func closeStreams(streams []RecognizeStream) {
+	for _, stream := range streams {
+		_ = stream.Close()
 	}
 }
 
