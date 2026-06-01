@@ -3,6 +3,7 @@ package silero
 import (
 	"bytes"
 	"context"
+	"math"
 	"strings"
 	"testing"
 	"time"
@@ -156,6 +157,12 @@ func TestNewSileroVADWithOptionsRejectsInvalidOptions(t *testing.T) {
 	}
 
 	if _, err := NewSileroVADWithOptions(WithDeactivationThreshold(-0.1)); err == nil {
+		t.Fatal("NewSileroVADWithOptions() error = nil, want invalid deactivation threshold error")
+	} else if !strings.Contains(err.Error(), "deactivation_threshold must be greater than 0") {
+		t.Fatalf("NewSileroVADWithOptions() error = %q, want deactivation threshold message", err.Error())
+	}
+
+	if _, err := NewSileroVADWithOptions(WithDeactivationThreshold(math.NaN())); err == nil {
 		t.Fatal("NewSileroVADWithOptions() error = nil, want invalid deactivation threshold error")
 	} else if !strings.Contains(err.Error(), "deactivation_threshold must be greater than 0") {
 		t.Fatalf("NewSileroVADWithOptions() error = %q, want deactivation threshold message", err.Error())
@@ -336,6 +343,25 @@ func TestSileroVADUpdateOptionsWithIgnoresInvalidDeactivationThreshold(t *testin
 	)
 
 	detector.UpdateOptionsWith(WithDeactivationThreshold(-0.1))
+	if detector.options.DeactivationThreshold != 0.2 {
+		t.Fatalf("detector DeactivationThreshold = %v, want 0.2", detector.options.DeactivationThreshold)
+	}
+
+	stream, err := detector.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream() after invalid update error = %v", err)
+	}
+	defer stream.Close()
+}
+
+func TestSileroVADUpdateOptionsIgnoresNonFiniteDeactivationThreshold(t *testing.T) {
+	detector := NewSileroVAD(
+		WithDeactivationThreshold(0.2),
+		WithMinSpeechDuration(0.032),
+		WithActivationThreshold(0.5),
+	)
+
+	detector.UpdateOptions(VADOptions{DeactivationThreshold: math.Inf(1)})
 	if detector.options.DeactivationThreshold != 0.2 {
 		t.Fatalf("detector DeactivationThreshold = %v, want 0.2", detector.options.DeactivationThreshold)
 	}
