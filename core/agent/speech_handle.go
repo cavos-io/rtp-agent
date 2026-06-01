@@ -23,6 +23,7 @@ var (
 	ErrSpeechInterruptionsDisabled = errors.New("speech handle does not allow interruptions")
 	ErrSpeechAlreadyInterrupted    = errors.New("speech handle is already interrupted")
 	ErrSpeechInterrupted           = errors.New("speech interrupted")
+	ErrSpeechNoActiveGeneration    = errors.New("speech handle has no active generation")
 )
 
 type InputDetails struct {
@@ -46,6 +47,8 @@ type SpeechHandle struct {
 	interruptCh        chan struct{}
 	doneCh             chan struct{}
 	scheduledCh        chan struct{}
+	authorizationCh    chan struct{}
+	generationChs      []chan struct{}
 	nextCallbackID     uint64
 	doneCallbacks      map[uint64]func(*SpeechHandle)
 	itemAddedCallbacks map[uint64]func(llm.ChatItem)
@@ -63,6 +66,7 @@ func NewSpeechHandle(allowInterruptions bool, inputDetails InputDetails) *Speech
 		interruptCh:        make(chan struct{}),
 		doneCh:             make(chan struct{}),
 		scheduledCh:        make(chan struct{}),
+		authorizationCh:    make(chan struct{}),
 		doneCallbacks:      make(map[uint64]func(*SpeechHandle)),
 		itemAddedCallbacks: make(map[uint64]func(llm.ChatItem)),
 	}
@@ -138,6 +142,9 @@ func (s *SpeechHandle) MarkDone() {
 	}
 
 	close(s.doneCh)
+	if len(s.generationChs) > 0 {
+		s.closeGenerationLocked(len(s.generationChs) - 1)
+	}
 	callbacks := make([]func(*SpeechHandle), 0, len(s.doneCallbacks))
 	for _, callback := range s.doneCallbacks {
 		callbacks = append(callbacks, callback)
@@ -153,8 +160,17 @@ func (s *SpeechHandle) MarkScheduled() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	if !s.IsScheduled() {
+	if !isClosed(s.scheduledCh) {
 		close(s.scheduledCh)
+	}
+}
+
+func (s *SpeechHandle) WaitForScheduled(ctx context.Context) error {
+	select {
+	case <-s.scheduledCh:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
 	}
 }
 
@@ -296,4 +312,87 @@ func (s *SpeechHandle) ChatItems() []llm.ChatItem {
 	items := make([]llm.ChatItem, len(s.chatItems))
 	copy(items, s.chatItems)
 	return items
+}
+
+func (s *SpeechHandle) AuthorizeGeneration() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	s.generationChs = append(s.generationChs, make(chan struct{}))
+	if !isClosed(s.authorizationCh) {
+		close(s.authorizationCh)
+	}
+}
+
+func (s *SpeechHandle) ClearAuthorization() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if isClosed(s.authorizationCh) {
+		s.authorizationCh = make(chan struct{})
+	}
+}
+
+func (s *SpeechHandle) WaitForAuthorization(ctx context.Context) error {
+	s.mu.Lock()
+	authorizationCh := s.authorizationCh
+	s.mu.Unlock()
+
+	select {
+	case <-authorizationCh:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+func (s *SpeechHandle) WaitForGeneration(ctx context.Context, stepIndex int) error {
+	s.mu.Lock()
+	if len(s.generationChs) == 0 {
+		s.mu.Unlock()
+		return ErrSpeechNoActiveGeneration
+	}
+	if stepIndex < 0 {
+		stepIndex = len(s.generationChs) + stepIndex
+	}
+	if stepIndex < 0 || stepIndex >= len(s.generationChs) {
+		s.mu.Unlock()
+		return ErrSpeechNoActiveGeneration
+	}
+	generationCh := s.generationChs[stepIndex]
+	s.mu.Unlock()
+
+	select {
+	case <-generationCh:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+func (s *SpeechHandle) MarkGenerationDone() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if len(s.generationChs) == 0 {
+		return ErrSpeechNoActiveGeneration
+	}
+
+	s.closeGenerationLocked(len(s.generationChs) - 1)
+	return nil
+}
+
+func (s *SpeechHandle) closeGenerationLocked(index int) {
+	if !isClosed(s.generationChs[index]) {
+		close(s.generationChs[index])
+	}
+}
+
+func isClosed(ch <-chan struct{}) bool {
+	select {
+	case <-ch:
+		return true
+	default:
+		return false
+	}
 }

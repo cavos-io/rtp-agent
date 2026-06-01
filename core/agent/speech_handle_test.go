@@ -219,3 +219,111 @@ func TestSpeechHandleRemoveItemAddedCallback(t *testing.T) {
 		t.Fatal("removed item callback was called")
 	}
 }
+
+func TestSpeechHandleWaitForScheduledReturnsAfterMarkScheduled(t *testing.T) {
+	speech := NewSpeechHandle(true, DefaultInputDetails())
+
+	done := make(chan error, 1)
+	go func() {
+		done <- speech.WaitForScheduled(context.Background())
+	}()
+
+	select {
+	case err := <-done:
+		t.Fatalf("WaitForScheduled returned before MarkScheduled: %v", err)
+	case <-time.After(10 * time.Millisecond):
+	}
+
+	speech.MarkScheduled()
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("WaitForScheduled error = %v, want nil", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("WaitForScheduled did not return after MarkScheduled")
+	}
+}
+
+func TestSpeechHandleAuthorizationCanBeClearedAndReauthorized(t *testing.T) {
+	speech := NewSpeechHandle(true, DefaultInputDetails())
+
+	speech.AuthorizeGeneration()
+	if err := speech.WaitForAuthorization(context.Background()); err != nil {
+		t.Fatalf("WaitForAuthorization after AuthorizeGeneration error = %v, want nil", err)
+	}
+
+	speech.ClearAuthorization()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
+	defer cancel()
+	if err := speech.WaitForAuthorization(ctx); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("WaitForAuthorization after ClearAuthorization error = %v, want deadline exceeded", err)
+	}
+
+	speech.AuthorizeGeneration()
+	if err := speech.WaitForAuthorization(context.Background()); err != nil {
+		t.Fatalf("WaitForAuthorization after reauthorize error = %v, want nil", err)
+	}
+}
+
+func TestSpeechHandleWaitForGenerationRequiresActiveGeneration(t *testing.T) {
+	speech := NewSpeechHandle(true, DefaultInputDetails())
+
+	err := speech.WaitForGeneration(context.Background(), -1)
+
+	if !errors.Is(err, ErrSpeechNoActiveGeneration) {
+		t.Fatalf("WaitForGeneration error = %v, want ErrSpeechNoActiveGeneration", err)
+	}
+}
+
+func TestSpeechHandleWaitForGenerationReturnsAfterMarkGenerationDone(t *testing.T) {
+	speech := NewSpeechHandle(true, DefaultInputDetails())
+	speech.AuthorizeGeneration()
+
+	done := make(chan error, 1)
+	go func() {
+		done <- speech.WaitForGeneration(context.Background(), -1)
+	}()
+
+	select {
+	case err := <-done:
+		t.Fatalf("WaitForGeneration returned before MarkGenerationDone: %v", err)
+	case <-time.After(10 * time.Millisecond):
+	}
+
+	if err := speech.MarkGenerationDone(); err != nil {
+		t.Fatalf("MarkGenerationDone error = %v, want nil", err)
+	}
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("WaitForGeneration error = %v, want nil", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("WaitForGeneration did not return after MarkGenerationDone")
+	}
+}
+
+func TestSpeechHandleMarkDoneCompletesActiveGeneration(t *testing.T) {
+	speech := NewSpeechHandle(true, DefaultInputDetails())
+	speech.AuthorizeGeneration()
+
+	done := make(chan error, 1)
+	go func() {
+		done <- speech.WaitForGeneration(context.Background(), -1)
+	}()
+
+	speech.MarkDone()
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("WaitForGeneration error = %v, want nil", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("MarkDone did not complete active generation")
+	}
+}
