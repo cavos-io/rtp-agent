@@ -923,10 +923,16 @@ func (c *ChatContext) ToProviderFormatE(format string, options ...ChatContextPro
 		return items, nil, nil
 	}
 	if format == "google" {
+		if err := validateProviderImages(c.Items); err != nil {
+			return nil, nil, err
+		}
 		messages, extra := c.toGoogleProviderFormat(opts)
 		return messages, extra, nil
 	}
 	if format == "anthropic" {
+		if err := validateProviderImages(c.Items); err != nil {
+			return nil, nil, err
+		}
 		messages, extra := c.toAnthropicProviderFormat(opts)
 		return messages, extra, nil
 	}
@@ -1792,6 +1798,24 @@ func validateAWSProviderImages(items []ChatItem) error {
 			}
 			if image.ExternalURL != "" {
 				return fmt.Errorf("external image URLs are not supported by AWS Bedrock")
+			}
+		}
+	}
+	return nil
+}
+
+func validateProviderImages(items []ChatItem) error {
+	for _, item := range items {
+		msg, ok := item.(*ChatMessage)
+		if !ok {
+			continue
+		}
+		for _, content := range msg.Content {
+			if content.Image == nil {
+				continue
+			}
+			if _, err := SerializeImage(content.Image); err != nil {
+				return err
 			}
 		}
 	}
