@@ -661,6 +661,38 @@ func TestSimpleVADLimitsBufferedSpeechFrames(t *testing.T) {
 	assertCombinedFrames(t, end.Frames, speechFrames[0], speechFrames[1], speechFrames[2])
 }
 
+func TestSimpleVADLimitsBufferedSpeechAtSampleBoundary(t *testing.T) {
+	stream, err := NewSimpleVADWithOptions(SimpleVADOptions{
+		Threshold:                 0.05,
+		MaxBufferedSpeechDuration: 0.025,
+	}).Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	defer stream.Close()
+
+	firstSpeech := audioFrame(16000, 160, 6000)
+	secondSpeech := audioFrame(16000, 160, 7000)
+	thirdSpeech := audioFrame(16000, 160, 8000)
+	silence := audioFrame(16000, 160, 0)
+	for _, frame := range []*model.AudioFrame{firstSpeech, secondSpeech, thirdSpeech, silence} {
+		if err := stream.PushFrame(frame); err != nil {
+			t.Fatalf("PushFrame() error = %v", err)
+		}
+	}
+
+	assertEventType(t, stream, VADEventInferenceDone)
+	assertEventType(t, stream, VADEventStartOfSpeech)
+	assertEventType(t, stream, VADEventInferenceDone)
+	assertEventType(t, stream, VADEventInferenceDone)
+	assertEventType(t, stream, VADEventInferenceDone)
+	end := nextVADEvent(t, stream)
+	if end.Type != VADEventEndOfSpeech {
+		t.Fatalf("event type = %s, want %s", end.Type, VADEventEndOfSpeech)
+	}
+	assertCombinedFrames(t, end.Frames, firstSpeech, secondSpeech, audioFrame(16000, 80, 8000))
+}
+
 func TestSimpleVADFlushResetsSegmentState(t *testing.T) {
 	stream, err := NewSimpleVAD(0.05).Stream(context.Background())
 	if err != nil {
