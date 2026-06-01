@@ -384,6 +384,29 @@ func TestRealtimeChatContextCreateMessagesMapUserTextMessage(t *testing.T) {
 	}
 }
 
+func TestRealtimeChatContextCreateMessagesSkipAgentMetadataItems(t *testing.T) {
+	chatCtx := llm.NewChatContext()
+	chatCtx.Append(&llm.AgentHandoff{ID: "handoff", NewAgentID: "next"})
+	chatCtx.Append(&llm.AgentConfigUpdate{ID: "config"})
+	chatCtx.AddMessage(llm.ChatMessageArgs{
+		ID:   "msg_123",
+		Role: llm.ChatRoleUser,
+		Text: "hello",
+	})
+
+	msgs, err := openAIRealtimeChatContextCreateMessages(chatCtx)
+	if err != nil {
+		t.Fatalf("openAIRealtimeChatContextCreateMessages error = %v, want nil", err)
+	}
+	if len(msgs) != 1 {
+		t.Fatalf("messages len = %d, want only user message", len(msgs))
+	}
+	item := msgs[0]["item"].(map[string]any)
+	if item["id"] != "msg_123" {
+		t.Fatalf("item = %#v, want user message only", item)
+	}
+}
+
 func TestRealtimeChatContextUpdateMessagesDeleteRemovedAndRecreateChangedItems(t *testing.T) {
 	oldCtx := llm.NewChatContext()
 	oldCtx.AddMessage(llm.ChatMessageArgs{ID: "keep", Role: llm.ChatRoleUser, Text: "keep"})

@@ -101,7 +101,8 @@ func (s *realtimeSession) UpdateChatContext(chatCtx *llm.ChatContext) error {
 	if s.remote == nil {
 		s.remote = llm.NewRemoteChatContext()
 	}
-	msgs, err := openAIRealtimeChatContextUpdateMessages(s.remote.ToChatCtx(), chatCtx)
+	syncedChatCtx := openAIRealtimeSyncedChatContext(chatCtx)
+	msgs, err := openAIRealtimeChatContextUpdateMessages(s.remote.ToChatCtx(), syncedChatCtx)
 	if err != nil {
 		return err
 	}
@@ -110,7 +111,7 @@ func (s *realtimeSession) UpdateChatContext(chatCtx *llm.ChatContext) error {
 			return err
 		}
 	}
-	s.remote = openAIRealtimeRemoteSnapshot(chatCtx)
+	s.remote = openAIRealtimeRemoteSnapshot(syncedChatCtx)
 	return nil
 }
 
@@ -138,7 +139,7 @@ func openAIRealtimeTools(tools []llm.Tool) []map[string]any {
 }
 
 func openAIRealtimeChatContextCreateMessages(chatCtx *llm.ChatContext) ([]map[string]any, error) {
-	return openAIRealtimeChatContextUpdateMessages(llm.NewChatContext(), chatCtx)
+	return openAIRealtimeChatContextUpdateMessages(llm.NewChatContext(), openAIRealtimeSyncedChatContext(chatCtx))
 }
 
 func openAIRealtimeChatContextUpdateMessages(oldCtx, newCtx *llm.ChatContext) ([]map[string]any, error) {
@@ -172,6 +173,16 @@ func openAIRealtimeChatContextUpdateMessages(oldCtx, newCtx *llm.ChatContext) ([
 		msgs = append(msgs, msg)
 	}
 	return msgs, nil
+}
+
+func openAIRealtimeSyncedChatContext(chatCtx *llm.ChatContext) *llm.ChatContext {
+	if chatCtx == nil {
+		return llm.NewChatContext()
+	}
+	return chatCtx.Copy(llm.ChatContextCopyOptions{
+		ExcludeHandoff:      true,
+		ExcludeConfigUpdate: true,
+	})
 }
 
 func openAIRealtimeRemoteSnapshot(chatCtx *llm.ChatContext) *llm.RemoteChatContext {
