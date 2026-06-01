@@ -175,6 +175,7 @@ func RunApp(server *worker.AgentServer) {
 			logger.Logger.Errorw("Failed to apply worker options", err)
 			os.Exit(1)
 		}
+		applyDevReloadCompatibility(&args)
 		if !args.Reload {
 			runWorker(server, true)
 			return
@@ -285,6 +286,15 @@ func applyDevModeEnv(argv []string) error {
 		return os.Setenv("LIVEKIT_DEV_MODE", "1")
 	default:
 		return nil
+	}
+}
+
+func applyDevReloadCompatibility(args *CliArgs) {
+	if args == nil || !args.DevMode || !args.Reload {
+		return
+	}
+	if os.Getenv("TERM_PROGRAM") == "iTerm.app" {
+		args.Reload = false
 	}
 }
 

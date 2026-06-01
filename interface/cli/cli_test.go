@@ -285,6 +285,28 @@ func TestApplyDevModeEnvForReferenceSubcommands(t *testing.T) {
 	}
 }
 
+func TestApplyDevReloadCompatibilityDisablesReloadOnITerm(t *testing.T) {
+	t.Setenv("TERM_PROGRAM", "iTerm.app")
+	args := CliArgs{DevMode: true, Reload: true}
+
+	applyDevReloadCompatibility(&args)
+
+	if args.Reload {
+		t.Fatal("Reload = true, want false on iTerm.app")
+	}
+}
+
+func TestApplyDevReloadCompatibilityLeavesReloadOnOtherTerminals(t *testing.T) {
+	t.Setenv("TERM_PROGRAM", "xterm-256color")
+	args := CliArgs{DevMode: true, Reload: true}
+
+	applyDevReloadCompatibility(&args)
+
+	if !args.Reload {
+		t.Fatal("Reload = false, want true outside iTerm.app")
+	}
+}
+
 func TestRunConsoleListDevicesReturnsBeforeStartingConsole(t *testing.T) {
 	oldPrint := printConsoleAudioDevices
 	defer func() { printConsoleAudioDevices = oldPrint }()
