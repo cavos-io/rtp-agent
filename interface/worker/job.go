@@ -522,7 +522,14 @@ func (c *JobContext) Shutdown(reasons ...string) {
 	}
 	c.shutdownOnce.Do(func() {
 		for _, callback := range c.shutdownCallbacks {
-			callback(reason)
+			func(callback func(string)) {
+				defer func() {
+					if recovered := recover(); recovered != nil {
+						logger.Logger.Errorw("Shutdown callback panicked", fmt.Errorf("%v", recovered), "job_id", c.JobID())
+					}
+				}()
+				callback(reason)
+			}(callback)
 		}
 		if c.Room != nil {
 			c.Room.Disconnect()

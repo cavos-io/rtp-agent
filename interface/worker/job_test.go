@@ -72,6 +72,28 @@ func TestJobContextShutdownRunsCallbacksOnce(t *testing.T) {
 	}
 }
 
+func TestJobContextShutdownContinuesAfterCallbackPanic(t *testing.T) {
+	ctx := NewJobContext(&livekit.Job{Id: "job_shutdown_callback_panic"}, "", "", "")
+	laterCalled := false
+
+	if err := ctx.AddShutdownCallback(func(string) {
+		panic("shutdown callback panic")
+	}); err != nil {
+		t.Fatalf("AddShutdownCallback(panic) error = %v", err)
+	}
+	if err := ctx.AddShutdownCallback(func() {
+		laterCalled = true
+	}); err != nil {
+		t.Fatalf("AddShutdownCallback(later) error = %v", err)
+	}
+
+	ctx.Shutdown("job done")
+
+	if !laterCalled {
+		t.Fatal("shutdown callback after panic was not called")
+	}
+}
+
 func TestNewJobContextInitializesSessionReportMetadata(t *testing.T) {
 	ctx := NewJobContext(
 		&livekit.Job{
