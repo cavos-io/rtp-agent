@@ -136,12 +136,19 @@ func (va *PipelineAgent) sttLoop(stream stt.RecognizeStream) {
 			transcript := ev.Alternatives[0].Text
 			logger.Logger.Infow("Final transcript", "text", transcript)
 
-			va.chatCtx.Append(&llm.ChatMessage{
+			msg := &llm.ChatMessage{
 				Role: llm.ChatRoleUser,
 				Content: []llm.ChatContent{
 					{Text: transcript},
 				},
-			})
+			}
+			va.chatCtx.Append(msg)
+			va.mu.Lock()
+			session := va.session
+			va.mu.Unlock()
+			if session != nil {
+				session.EmitConversationItemAdded(msg)
+			}
 
 			go va.generateReply()
 		}
@@ -168,15 +175,18 @@ func (va *PipelineAgent) generateReply() {
 	toolCtx := llm.NewToolContext(toolsInterface)
 
 	// In Python parity, we loop for tool calls
+	toolSteps := 0
 	for {
-		genData, err := PerformLLMInference(ctx, va.LLM, va.chatCtx, session.Tools)
+		var chatOptions []llm.ChatOption
+		if session.Options.MaxToolSteps > 0 && toolSteps >= session.Options.MaxToolSteps {
+			chatOptions = append(chatOptions, llm.WithToolChoice("none"))
+		}
+		genData, err := PerformLLMInference(ctx, va.LLM, va.chatCtx, session.Tools, chatOptions...)
 		if err != nil {
 			logger.Logger.Errorw("LLM inference failed", err)
 			session.UpdateAgentState(AgentStateIdle)
 			return
 		}
-
-		toolOutCh := PerformToolExecutions(ctx, genData.FunctionCh, toolCtx)
 
 		// Start TTS in parallel with LLM text
 		ttsGen, err := PerformTTSInference(ctx, va.tts, genData.TextCh)
@@ -196,15 +206,50 @@ func (va *PipelineAgent) generateReply() {
 			}
 		}
 
+		if genData.GeneratedText != "" {
+			args := llm.ChatMessageArgs{
+				Role: llm.ChatRoleAssistant,
+				Text: genData.GeneratedText,
+			}
+			if len(genData.GeneratedExtra) > 0 {
+				args.Extra = genData.GeneratedExtra
+			}
+			msg := va.chatCtx.AddMessage(args)
+			session.EmitConversationItemAdded(msg)
+		}
+
+		if len(genData.GeneratedFunctions) > 0 {
+			session.UpdateAgentState(AgentStateThinking)
+		}
+
+		toolOutCh := PerformToolExecutions(ctx, genData.FunctionCh, toolCtx)
+
 		// Wait for tool executions to complete and collect results
 		var executedTools bool
+		var functionCalls []*llm.FunctionCall
+		var functionCallOutputs []*llm.FunctionCallOutput
 		for toolOut := range toolOutCh {
 			executedTools = true
 			logger.Logger.Infow("Tool executed", "name", toolOut.FncCall.Name)
 
-			va.chatCtx.Append(&toolOut.FncCall)
+			fncCall := toolOut.FncCall
+			functionCalls = append(functionCalls, &fncCall)
+			functionCallOutputs = append(functionCallOutputs, toolOut.FncCallOut)
+			va.chatCtx.Append(&fncCall)
 			if toolOut.FncCallOut != nil {
 				va.chatCtx.Append(toolOut.FncCallOut)
+			}
+		}
+
+		if executedTools {
+			if ev, err := NewFunctionToolsExecutedEvent(functionCalls, functionCallOutputs); err == nil {
+				for _, out := range functionCallOutputs {
+					if out != nil {
+						ev.ReplyRequired = true
+						break
+					}
+				}
+				session.EmitFunctionToolsExecuted(*ev)
 			}
 		}
 
@@ -213,6 +258,7 @@ func (va *PipelineAgent) generateReply() {
 			session.UpdateAgentState(AgentStateIdle)
 			break
 		}
+		toolSteps++
 		// Loop back to LLM with tool outputs
 	}
 }

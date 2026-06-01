@@ -41,6 +41,39 @@ func TestPerformLLMInferenceIgnoresNonFunctionToolCalls(t *testing.T) {
 	}
 }
 
+func TestPerformLLMInferenceTracksGeneratedExtra(t *testing.T) {
+	l := &fakeGenerationLLM{
+		stream: &fakeGenerationLLMStream{
+			chunks: []*llm.ChatChunk{
+				{Delta: &llm.ChoiceDelta{Extra: map[string]any{
+					"trace_id": "first",
+					"score":    1,
+				}}},
+				{Delta: &llm.ChoiceDelta{Extra: map[string]any{
+					"trace_id": "second",
+					"model":    "test-model",
+				}}},
+			},
+		},
+	}
+
+	data, err := PerformLLMInference(context.Background(), l, llm.NewChatContext(), nil)
+	if err != nil {
+		t.Fatalf("PerformLLMInference error = %v, want nil", err)
+	}
+
+	drainStrings(data.TextCh)
+	if got := data.GeneratedExtra["trace_id"]; got != "second" {
+		t.Fatalf("GeneratedExtra[trace_id] = %#v, want second", got)
+	}
+	if got := data.GeneratedExtra["score"]; got != 1 {
+		t.Fatalf("GeneratedExtra[score] = %#v, want 1", got)
+	}
+	if got := data.GeneratedExtra["model"]; got != "test-model" {
+		t.Fatalf("GeneratedExtra[model] = %#v, want test-model", got)
+	}
+}
+
 func TestPerformToolExecutionsUsesToolErrorMessage(t *testing.T) {
 	output := executeOneToolCall(t, &fakeGenerationTool{
 		name: "lookup",
@@ -122,10 +155,22 @@ func (f *fakeGenerationTool) Execute(context.Context, string) (string, error) {
 }
 
 type fakeGenerationLLM struct {
-	stream llm.LLMStream
+	stream  llm.LLMStream
+	streams []llm.LLMStream
+	calls   []llm.ChatOptions
 }
 
-func (f *fakeGenerationLLM) Chat(context.Context, *llm.ChatContext, ...llm.ChatOption) (llm.LLMStream, error) {
+func (f *fakeGenerationLLM) Chat(_ context.Context, _ *llm.ChatContext, opts ...llm.ChatOption) (llm.LLMStream, error) {
+	var options llm.ChatOptions
+	for _, opt := range opts {
+		opt(&options)
+	}
+	f.calls = append(f.calls, options)
+	if len(f.streams) > 0 {
+		stream := f.streams[0]
+		f.streams = f.streams[1:]
+		return stream, nil
+	}
 	return f.stream, nil
 }
 
@@ -151,4 +196,12 @@ func drainFunctionCalls(ch <-chan *llm.FunctionToolCall) []*llm.FunctionToolCall
 		calls = append(calls, call)
 	}
 	return calls
+}
+
+func drainStrings(ch <-chan string) []string {
+	values := make([]string, 0)
+	for value := range ch {
+		values = append(values, value)
+	}
+	return values
 }
