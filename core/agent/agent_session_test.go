@@ -95,6 +95,60 @@ func TestAgentSessionEmitErrorEmitsTimestampedEvent(t *testing.T) {
 	}
 }
 
+func TestAgentSessionEmitAgentFalseInterruptionEmitsTimestampedEvent(t *testing.T) {
+	agent := NewAgent("test")
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	before := time.Now()
+
+	session.EmitAgentFalseInterruption(AgentFalseInterruptionEvent{Resumed: true})
+
+	select {
+	case ev := <-session.AgentFalseInterruptionEvents():
+		if ev.GetType() != "agent_false_interruption" {
+			t.Fatalf("event type = %q, want agent_false_interruption", ev.GetType())
+		}
+		if !ev.Resumed {
+			t.Fatal("Resumed = false, want true")
+		}
+		if ev.CreatedAt.Before(before) || ev.CreatedAt.IsZero() {
+			t.Fatalf("CreatedAt = %v, want timestamp after %v", ev.CreatedAt, before)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("AgentFalseInterruptionEvents did not receive event")
+	}
+}
+
+func TestAgentSessionEmitUserTurnExceededEmitsTimestampedEvent(t *testing.T) {
+	agent := NewAgent("test")
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	before := time.Now()
+
+	session.EmitUserTurnExceeded(UserTurnExceededEvent{
+		Transcript:            "latest words",
+		AccumulatedTranscript: "all words",
+		AccumulatedWordCount:  2,
+		Duration:              3 * time.Second,
+	})
+
+	select {
+	case ev := <-session.UserTurnExceededEvents():
+		if ev.GetType() != "user_turn_exceeded" {
+			t.Fatalf("event type = %q, want user_turn_exceeded", ev.GetType())
+		}
+		if ev.Transcript != "latest words" || ev.AccumulatedTranscript != "all words" {
+			t.Fatalf("event transcript fields = %#v, want latest/all words", ev)
+		}
+		if ev.AccumulatedWordCount != 2 || ev.Duration != 3*time.Second {
+			t.Fatalf("event accumulation fields = %#v, want 2 words and 3s", ev)
+		}
+		if ev.CreatedAt.Before(before) || ev.CreatedAt.IsZero() {
+			t.Fatalf("CreatedAt = %v, want timestamp after %v", ev.CreatedAt, before)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("UserTurnExceededEvents did not receive event")
+	}
+}
+
 func TestAgentSessionGenerateReplyAddsUserInputToChatContext(t *testing.T) {
 	agent := NewAgent("test")
 	session := NewAgentSession(agent, nil, AgentSessionOptions{})

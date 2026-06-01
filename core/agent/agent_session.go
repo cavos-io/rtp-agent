@@ -95,6 +95,8 @@ type AgentSession struct {
 	UserStateChangedCh  chan UserStateChangedEvent
 	userInputCh         chan UserInputTranscribedEvent
 	speechCreatedCh     chan SpeechCreatedEvent
+	falseInterruptionCh chan AgentFalseInterruptionEvent
+	userTurnExceededCh  chan UserTurnExceededEvent
 	conversationItemCh  chan ConversationItemAddedEvent
 	functionToolsCh     chan FunctionToolsExecutedEvent
 	metricsCollectedCh  chan MetricsCollectedEvent
@@ -152,6 +154,8 @@ func NewAgentSession(agent AgentInterface, room *lksdk.Room, opts AgentSessionOp
 		UserStateChangedCh:  make(chan UserStateChangedEvent, 10),
 		userInputCh:         make(chan UserInputTranscribedEvent, 10),
 		speechCreatedCh:     make(chan SpeechCreatedEvent, 10),
+		falseInterruptionCh: make(chan AgentFalseInterruptionEvent, 10),
+		userTurnExceededCh:  make(chan UserTurnExceededEvent, 10),
 		conversationItemCh:  make(chan ConversationItemAddedEvent, 10),
 		functionToolsCh:     make(chan FunctionToolsExecutedEvent, 10),
 		metricsCollectedCh:  make(chan MetricsCollectedEvent, 10),
@@ -215,6 +219,56 @@ func (s *AgentSession) speechCreatedEvents() chan SpeechCreatedEvent {
 		s.speechCreatedCh = make(chan SpeechCreatedEvent, 10)
 	}
 	return s.speechCreatedCh
+}
+
+func (s *AgentSession) AgentFalseInterruptionEvents() <-chan AgentFalseInterruptionEvent {
+	return s.agentFalseInterruptionEvents()
+}
+
+func (s *AgentSession) EmitAgentFalseInterruption(ev AgentFalseInterruptionEvent) {
+	if ev.CreatedAt.IsZero() {
+		ev.CreatedAt = time.Now()
+	}
+	ch := s.agentFalseInterruptionEvents()
+	select {
+	case ch <- ev:
+	default:
+	}
+}
+
+func (s *AgentSession) agentFalseInterruptionEvents() chan AgentFalseInterruptionEvent {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.falseInterruptionCh == nil {
+		s.falseInterruptionCh = make(chan AgentFalseInterruptionEvent, 10)
+	}
+	return s.falseInterruptionCh
+}
+
+func (s *AgentSession) UserTurnExceededEvents() <-chan UserTurnExceededEvent {
+	return s.userTurnExceededEvents()
+}
+
+func (s *AgentSession) EmitUserTurnExceeded(ev UserTurnExceededEvent) {
+	if ev.CreatedAt.IsZero() {
+		ev.CreatedAt = time.Now()
+	}
+	ch := s.userTurnExceededEvents()
+	select {
+	case ch <- ev:
+	default:
+	}
+}
+
+func (s *AgentSession) userTurnExceededEvents() chan UserTurnExceededEvent {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.userTurnExceededCh == nil {
+		s.userTurnExceededCh = make(chan UserTurnExceededEvent, 10)
+	}
+	return s.userTurnExceededCh
 }
 
 func (s *AgentSession) ConversationItemAddedEvents() <-chan ConversationItemAddedEvent {
