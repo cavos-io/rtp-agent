@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/cavos-io/rtp-agent/core/audio/model"
+	"github.com/cavos-io/rtp-agent/library/telemetry"
 )
 
 func TestSynthesizeWithStreamPushesTextAndFlushes(t *testing.T) {
@@ -127,6 +128,65 @@ func TestSynthesizeWithStreamReturnsStreamEvents(t *testing.T) {
 	}
 	if got.RequestID == "" || got.RequestID == want.RequestID {
 		t.Fatalf("RequestID = %q, want wrapper request id", got.RequestID)
+	}
+}
+
+func TestSynthesizeWithStreamEmitsMetricsAfterEOF(t *testing.T) {
+	provider := &fakeStreamingTTS{
+		stream: &fakeSynthesizeStream{
+			events: []*SynthesizedAudio{{Frame: &model.AudioFrame{
+				Data:              []byte{1, 0, 2, 0},
+				SampleRate:        24000,
+				NumChannels:       1,
+				SamplesPerChannel: 2,
+			}}},
+			emptyErr: io.EOF,
+		},
+	}
+	metricsCh := make(chan *telemetry.TTSMetrics, 1)
+	provider.OnMetricsCollected(func(metrics *telemetry.TTSMetrics) {
+		metricsCh <- metrics
+	})
+
+	chunked, err := SynthesizeWithStream(context.Background(), provider, "hello")
+	if err != nil {
+		t.Fatalf("SynthesizeWithStream() error = %v", err)
+	}
+	defer chunked.Close()
+
+	audio, err := chunked.Next()
+	if err != nil {
+		t.Fatalf("first Next() error = %v", err)
+	}
+	if audio.RequestID == "" {
+		t.Fatal("first audio RequestID is empty")
+	}
+	if _, err := chunked.Next(); !errors.Is(err, io.EOF) {
+		t.Fatalf("second Next() error = %v, want io.EOF", err)
+	}
+
+	select {
+	case got := <-metricsCh:
+		if got.Label != "fake" {
+			t.Fatalf("metrics Label = %q, want fake", got.Label)
+		}
+		if got.RequestID != audio.RequestID {
+			t.Fatalf("metrics RequestID = %q, want %q", got.RequestID, audio.RequestID)
+		}
+		if got.CharactersCount != len("hello") {
+			t.Fatalf("metrics CharactersCount = %d, want %d", got.CharactersCount, len("hello"))
+		}
+		if got.Streamed {
+			t.Fatal("metrics Streamed = true, want false")
+		}
+		if got.AudioDuration <= 0 {
+			t.Fatalf("metrics AudioDuration = %f, want > 0", got.AudioDuration)
+		}
+		if got.Metadata == nil || got.Metadata.ModelName != "unknown" || got.Metadata.ModelProvider != "unknown" {
+			t.Fatalf("metrics Metadata = %#v, want unknown model/provider", got.Metadata)
+		}
+	default:
+		t.Fatal("provider did not emit TTS metrics")
 	}
 }
 
@@ -455,6 +515,7 @@ func TestSynthesizeWithStreamEmitsErrorOnStreamFailure(t *testing.T) {
 
 type fakeStreamingTTS struct {
 	ErrorEmitter
+	MetricsEmitter
 	stream *fakeSynthesizeStream
 }
 

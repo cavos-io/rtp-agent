@@ -6,8 +6,11 @@ import (
 	"fmt"
 	"io"
 	"strings"
+	"time"
 
+	"github.com/cavos-io/rtp-agent/core/audio/model"
 	cavosmath "github.com/cavos-io/rtp-agent/library/math"
+	"github.com/cavos-io/rtp-agent/library/telemetry"
 )
 
 func SynthesizeWithStream(ctx context.Context, provider TTS, text string) (ChunkedStream, error) {
@@ -31,6 +34,7 @@ func SynthesizeWithStream(ctx context.Context, provider TTS, text string) (Chunk
 		stream:    stream,
 		text:      text,
 		requestID: cavosmath.ShortUUID(""),
+		startedAt: time.Now(),
 	}, nil
 }
 
@@ -59,6 +63,11 @@ type chunkedStreamFromSynthesizeStream struct {
 	audioSeen   bool
 	closed      bool
 	errEmitted  bool
+	metricsSent bool
+	startedAt   time.Time
+	ttfb        float64
+	ttfbSet     bool
+	audioDur    float64
 }
 
 func (s *chunkedStreamFromSynthesizeStream) Next() (*SynthesizedAudio, error) {
@@ -80,6 +89,7 @@ func (s *chunkedStreamFromSynthesizeStream) Next() (*SynthesizedAudio, error) {
 					s.emitError(err)
 					return nil, err
 				}
+				s.emitMetrics()
 			}
 			if !errors.Is(err, io.EOF) {
 				s.emitError(err)
@@ -87,6 +97,7 @@ func (s *chunkedStreamFromSynthesizeStream) Next() (*SynthesizedAudio, error) {
 			return nil, err
 		}
 		s.audioSeen = true
+		s.observeAudio(audio)
 		if s.pending != nil {
 			combined, combineErr := combineAudioFrames(s.pending.Frame, audio.Frame)
 			if s.pendingTail && combineErr == nil {
@@ -110,12 +121,54 @@ func (s *chunkedStreamFromSynthesizeStream) Next() (*SynthesizedAudio, error) {
 	}
 }
 
+func (s *chunkedStreamFromSynthesizeStream) observeAudio(audio *SynthesizedAudio) {
+	if audio == nil || audio.Frame == nil {
+		return
+	}
+	if !s.ttfbSet {
+		s.ttfb = time.Since(s.startedAt).Seconds()
+		s.ttfbSet = true
+	}
+	s.audioDur += audioFrameDurationSeconds(audio.Frame)
+}
+
 func (s *chunkedStreamFromSynthesizeStream) emitError(err error) {
 	if s.errEmitted {
 		return
 	}
 	s.errEmitted = true
 	emitTTSError(s.provider, err, false)
+}
+
+func (s *chunkedStreamFromSynthesizeStream) emitMetrics() {
+	if s.metricsSent || s.errEmitted {
+		return
+	}
+	s.metricsSent = true
+
+	emitter, ok := s.provider.(metricsEmitterTTS)
+	if !ok {
+		return
+	}
+
+	ttfb := -1.0
+	if s.ttfbSet {
+		ttfb = s.ttfb
+	}
+	emitter.EmitMetricsCollected(&telemetry.TTSMetrics{
+		Label:           s.provider.Label(),
+		RequestID:       s.requestID,
+		Timestamp:       time.Now(),
+		TTFB:            ttfb,
+		Duration:        time.Since(s.startedAt).Seconds(),
+		AudioDuration:   s.audioDur,
+		CharactersCount: len(s.text),
+		Streamed:        false,
+		Metadata: &telemetry.Metadata{
+			ModelName:     Model(s.provider),
+			ModelProvider: Provider(s.provider),
+		},
+	})
 }
 
 func (s *chunkedStreamFromSynthesizeStream) stampAudio(audio *SynthesizedAudio, isFinal bool) *SynthesizedAudio {
@@ -132,4 +185,11 @@ func (s *chunkedStreamFromSynthesizeStream) Close() error {
 	}
 	s.closed = true
 	return s.stream.Close()
+}
+
+func audioFrameDurationSeconds(frame *model.AudioFrame) float64 {
+	if frame == nil || frame.SampleRate == 0 {
+		return 0
+	}
+	return float64(frame.SamplesPerChannel) / float64(frame.SampleRate)
 }
