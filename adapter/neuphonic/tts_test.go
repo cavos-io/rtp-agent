@@ -7,6 +7,8 @@ import (
 	"io"
 	"net/http"
 	"testing"
+
+	"github.com/cavos-io/rtp-agent/core/tts"
 )
 
 func TestNeuphonicTTSDefaultsMatchReference(t *testing.T) {
@@ -29,6 +31,9 @@ func TestNeuphonicTTSDefaultsMatchReference(t *testing.T) {
 	}
 	if provider.speed == nil || *provider.speed != 1.0 {
 		t.Fatalf("speed = %v, want 1.0", provider.speed)
+	}
+	if !provider.Capabilities().Streaming {
+		t.Fatalf("streaming = false, want true")
 	}
 }
 
@@ -121,6 +126,86 @@ func TestNeuphonicTTSChunkedStreamDecodesSSEAudio(t *testing.T) {
 	if audio.Frame.SampleRate != 16000 {
 		t.Fatalf("sample rate = %d, want 16000", audio.Frame.SampleRate)
 	}
+}
+
+func TestNeuphonicTTSWebsocketURLAndHeadersMatchReference(t *testing.T) {
+	provider := NewNeuphonicTTS("test-key", "",
+		WithNeuphonicTTSBaseURL("https://neuphonic.example"),
+		WithNeuphonicTTSLangCode("es"),
+		WithNeuphonicTTSSampleRate(16000),
+		WithNeuphonicTTSSpeed(0.75),
+	)
+
+	wsURL := buildNeuphonicTTSWebsocketURL(provider)
+	if wsURL.Scheme != "wss" {
+		t.Fatalf("scheme = %q, want wss", wsURL.Scheme)
+	}
+	if wsURL.Host != "neuphonic.example" || wsURL.Path != "/speak/en" {
+		t.Fatalf("websocket URL = %q, want /speak/en on custom host", wsURL.String())
+	}
+	query := wsURL.Query()
+	if query.Get("speed") != "0.75" {
+		t.Fatalf("speed query = %q, want 0.75", query.Get("speed"))
+	}
+	if query.Get("lang_code") != "es" {
+		t.Fatalf("lang_code query = %q, want es", query.Get("lang_code"))
+	}
+	if query.Get("sampling_rate") != "16000" {
+		t.Fatalf("sampling_rate query = %q, want 16000", query.Get("sampling_rate"))
+	}
+	if query.Get("voice_id") != "8e9c4bc8-3979-48ab-8626-df53befc2090" {
+		t.Fatalf("voice_id query = %q, want default voice", query.Get("voice_id"))
+	}
+
+	headers := buildNeuphonicTTSWebsocketHeaders(provider)
+	if headers.Get("x-api-key") != "test-key" {
+		t.Fatalf("x-api-key = %q, want test-key", headers.Get("x-api-key"))
+	}
+}
+
+func TestNeuphonicTTSStreamTextMessageMatchesReference(t *testing.T) {
+	payload, err := buildNeuphonicTTSTextMessage("hello", "segment-1")
+	if err != nil {
+		t.Fatalf("build text message: %v", err)
+	}
+	var message map[string]any
+	if err := json.Unmarshal(payload, &message); err != nil {
+		t.Fatalf("decode text message: %v", err)
+	}
+	if message["text"] != "hello<STOP>" {
+		t.Fatalf("text = %#v, want text with STOP sentinel", message["text"])
+	}
+	if message["context_id"] != "segment-1" {
+		t.Fatalf("context_id = %#v, want segment-1", message["context_id"])
+	}
+}
+
+func TestNeuphonicTTSAudioFromStreamMessage(t *testing.T) {
+	audio, done, err := neuphonicAudioFromStreamMessage([]byte(`{"data":{"audio":"AQIDBA==","context_id":"segment-1"}}`), "segment-1", 22050)
+	if err != nil {
+		t.Fatalf("audio from stream message: %v", err)
+	}
+	if done {
+		t.Fatal("done = true for audio message")
+	}
+	if audio == nil || string(audio.Frame.Data) != string([]byte{1, 2, 3, 4}) {
+		t.Fatalf("audio = %+v, want decoded frame", audio)
+	}
+	if audio.Frame.SampleRate != 22050 || audio.Frame.NumChannels != 1 {
+		t.Fatalf("frame = %+v, want 22050 Hz mono", audio.Frame)
+	}
+
+	finished, done, err := neuphonicAudioFromStreamMessage([]byte(`{"data":{"context_id":"segment-1","stop":true}}`), "segment-1", 22050)
+	if err != nil {
+		t.Fatalf("stop message: %v", err)
+	}
+	if finished != nil || !done {
+		t.Fatalf("finished=%+v done=%v, want done with no audio", finished, done)
+	}
+}
+
+func TestNeuphonicTTSImplementsStreamingInterface(t *testing.T) {
+	var _ tts.TTS = NewNeuphonicTTS("test-key", "")
 }
 
 func assertNeuphonicPayload(t *testing.T, payload map[string]any, key string, want string) {
