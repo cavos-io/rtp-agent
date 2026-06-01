@@ -5,7 +5,9 @@ import (
 	"errors"
 	"io"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/cavos-io/conversation-worker/core/vad"
 	"github.com/cavos-io/conversation-worker/model"
@@ -244,6 +246,267 @@ func TestFallbackAdapterRetriesSameSTTBeforeFallback(t *testing.T) {
 	}
 }
 
+func TestFallbackAdapterSkipsUnavailableSTTOnNextRecognize(t *testing.T) {
+	primaryErr := errors.New("primary recognize failed")
+	primary := &metadataSTT{
+		label:           "primary",
+		capabilities:    STTCapabilities{Streaming: true},
+		recognizeErrs:   []error{primaryErr, primaryErr},
+		recognizeResult: &SpeechEvent{Type: SpeechEventFinalTranscript, Alternatives: []SpeechData{{Text: "primary"}}},
+	}
+	fallback := &metadataSTT{
+		label:        "fallback",
+		capabilities: STTCapabilities{Streaming: true},
+		recognizeResult: &SpeechEvent{
+			Type:         SpeechEventFinalTranscript,
+			Alternatives: []SpeechData{{Text: "fallback"}},
+		},
+	}
+	adapter := NewFallbackAdapterWithOptions([]STT{primary, fallback}, FallbackAdapterOptions{
+		MaxRetryPerSTT: 0,
+	})
+
+	event, err := adapter.Recognize(context.Background(), nil, "en")
+	if err != nil {
+		t.Fatalf("first Recognize returned error: %v", err)
+	}
+	if got := event.Alternatives[0].Text; got != "fallback" {
+		t.Fatalf("first recognized text = %q, want fallback", got)
+	}
+
+	event, err = adapter.Recognize(context.Background(), nil, "en")
+	if err != nil {
+		t.Fatalf("second Recognize returned error: %v", err)
+	}
+	if got := event.Alternatives[0].Text; got != "fallback" {
+		t.Fatalf("second recognized text = %q, want fallback", got)
+	}
+	if primary.recognizeCalls != 1 {
+		t.Fatalf("primary recognize calls = %d, want 1 because unavailable providers are skipped", primary.recognizeCalls)
+	}
+	if fallback.recognizeCalls != 2 {
+		t.Fatalf("fallback recognize calls = %d, want 2", fallback.recognizeCalls)
+	}
+}
+
+func TestFallbackAdapterRecoversUnavailableSTTInBackground(t *testing.T) {
+	primaryErr := errors.New("primary recognize failed")
+	primary := &metadataSTT{
+		label:           "primary",
+		capabilities:    STTCapabilities{Streaming: true},
+		recognizeErrs:   []error{primaryErr, nil, nil},
+		recognizeResult: &SpeechEvent{Type: SpeechEventFinalTranscript, Alternatives: []SpeechData{{Text: "primary"}}},
+	}
+	fallback := &metadataSTT{
+		label:        "fallback",
+		capabilities: STTCapabilities{Streaming: true},
+		recognizeResult: &SpeechEvent{
+			Type:         SpeechEventFinalTranscript,
+			Alternatives: []SpeechData{{Text: "fallback"}},
+		},
+	}
+	adapter := NewFallbackAdapterWithOptions([]STT{primary, fallback}, FallbackAdapterOptions{
+		MaxRetryPerSTT: 0,
+	})
+
+	event, err := adapter.Recognize(context.Background(), nil, "en")
+	if err != nil {
+		t.Fatalf("first Recognize returned error: %v", err)
+	}
+	if got := event.Alternatives[0].Text; got != "fallback" {
+		t.Fatalf("first recognized text = %q, want fallback", got)
+	}
+
+	waitForRecognizeCalls(t, primary, 2)
+
+	event, err = adapter.Recognize(context.Background(), nil, "en")
+	if err != nil {
+		t.Fatalf("second Recognize returned error: %v", err)
+	}
+	if got := event.Alternatives[0].Text; got != "primary" {
+		t.Fatalf("second recognized text = %q, want recovered primary", got)
+	}
+	if primary.recognizeCalls != 3 {
+		t.Fatalf("primary recognize calls = %d, want failure + recovery + active call", primary.recognizeCalls)
+	}
+	if fallback.recognizeCalls != 1 {
+		t.Fatalf("fallback recognize calls = %d, want only initial fallback", fallback.recognizeCalls)
+	}
+}
+
+func TestFallbackAdapterRecoverySurvivesCallerContextCancellation(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	releaseRecovery := make(chan struct{})
+	primary := &contextRecoverySTT{
+		releaseRecovery: releaseRecovery,
+		recoveryStarted: make(chan struct{}, 1),
+	}
+	fallback := &metadataSTT{
+		label:        "fallback",
+		capabilities: STTCapabilities{Streaming: true},
+		recognizeResult: &SpeechEvent{
+			Type:         SpeechEventFinalTranscript,
+			Alternatives: []SpeechData{{Text: "fallback"}},
+		},
+	}
+	adapter := NewFallbackAdapterWithOptions([]STT{primary, fallback}, FallbackAdapterOptions{
+		MaxRetryPerSTT: 0,
+	})
+
+	event, err := adapter.Recognize(ctx, nil, "en")
+	if err != nil {
+		t.Fatalf("first Recognize returned error: %v", err)
+	}
+	if got := event.Alternatives[0].Text; got != "fallback" {
+		t.Fatalf("first recognized text = %q, want fallback", got)
+	}
+
+	select {
+	case <-primary.recoveryStarted:
+	case <-time.After(200 * time.Millisecond):
+		t.Fatal("timed out waiting for recovery attempt")
+	}
+	cancel()
+	close(releaseRecovery)
+	waitForContextRecoveryCalls(t, primary, 2)
+	waitForProviderAvailable(t, adapter, 0)
+
+	event, err = adapter.Recognize(context.Background(), nil, "en")
+	if err != nil {
+		t.Fatalf("second Recognize returned error: %v", err)
+	}
+	if got := event.Alternatives[0].Text; got != "primary" {
+		t.Fatalf("second recognized text = %q, want recovered primary", got)
+	}
+}
+
+func TestFallbackStreamSkipsUnavailableSTTFromRecognizeFailure(t *testing.T) {
+	primaryErr := errors.New("primary recognize failed")
+	primary := &metadataSTT{
+		label:         "primary",
+		capabilities:  STTCapabilities{Streaming: true},
+		recognizeErrs: []error{primaryErr, primaryErr},
+		stream: &metadataRecognizeStream{events: []*SpeechEvent{{
+			Type:         SpeechEventFinalTranscript,
+			Alternatives: []SpeechData{{Text: "primary stream"}},
+		}}},
+	}
+	fallback := &metadataSTT{
+		label:        "fallback",
+		capabilities: STTCapabilities{Streaming: true},
+		recognizeResult: &SpeechEvent{
+			Type:         SpeechEventFinalTranscript,
+			Alternatives: []SpeechData{{Text: "fallback recognize"}},
+		},
+		stream: &metadataRecognizeStream{events: []*SpeechEvent{{
+			Type:         SpeechEventFinalTranscript,
+			Alternatives: []SpeechData{{Text: "fallback stream"}},
+		}}},
+	}
+	adapter := NewFallbackAdapterWithOptions([]STT{primary, fallback}, FallbackAdapterOptions{
+		MaxRetryPerSTT: 0,
+	})
+
+	if _, err := adapter.Recognize(context.Background(), nil, "en"); err != nil {
+		t.Fatalf("Recognize returned error: %v", err)
+	}
+	waitForRecognizeCalls(t, primary, 2)
+
+	stream, err := adapter.Stream(context.Background(), "en")
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+	defer stream.Close()
+
+	event, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next returned error: %v", err)
+	}
+	if got := event.Alternatives[0].Text; got != "fallback stream" {
+		t.Fatalf("stream text = %q, want fallback stream", got)
+	}
+	if primary.streamCalls != 0 {
+		t.Fatalf("primary stream calls = %d, want unavailable provider skipped", primary.streamCalls)
+	}
+	if fallback.streamCalls != 1 {
+		t.Fatalf("fallback stream calls = %d, want 1", fallback.streamCalls)
+	}
+}
+
+func TestFallbackStreamRecoversFailedProviderInBackground(t *testing.T) {
+	firstFrame := &model.AudioFrame{Data: []byte("1"), SampleRate: 16000, NumChannels: 1, SamplesPerChannel: 1}
+	primaryFailure := &blockingFailRecognizeStream{
+		err:     errors.New("primary stream failed"),
+		release: make(chan struct{}),
+	}
+	recovery := &metadataRecognizeStream{events: []*SpeechEvent{{
+		Type:         SpeechEventFinalTranscript,
+		Alternatives: []SpeechData{{Text: "primary recovered"}},
+	}}}
+	active := &metadataRecognizeStream{events: []*SpeechEvent{{
+		Type:         SpeechEventFinalTranscript,
+		Alternatives: []SpeechData{{Text: "primary active"}},
+	}}}
+	primary := &metadataSTT{
+		label:        "primary",
+		capabilities: STTCapabilities{Streaming: true},
+		streams: []RecognizeStream{
+			primaryFailure,
+			recovery,
+			active,
+		},
+	}
+	fallback := &metadataSTT{
+		label:        "fallback",
+		capabilities: STTCapabilities{Streaming: true},
+		stream: &metadataRecognizeStream{events: []*SpeechEvent{{
+			Type:         SpeechEventFinalTranscript,
+			Alternatives: []SpeechData{{Text: "fallback stream"}},
+		}}},
+	}
+	adapter := NewFallbackAdapterWithOptions([]STT{primary, fallback}, FallbackAdapterOptions{
+		MaxRetryPerSTT: 0,
+	})
+
+	stream, err := adapter.Stream(context.Background(), "en")
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+	defer stream.Close()
+	if err := stream.PushFrame(firstFrame); err != nil {
+		t.Fatalf("PushFrame returned error: %v", err)
+	}
+
+	close(primaryFailure.release)
+
+	event, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next returned error: %v", err)
+	}
+	if got := event.Alternatives[0].Text; got != "fallback stream" {
+		t.Fatalf("first stream text = %q, want fallback stream", got)
+	}
+
+	waitForStreamCalls(t, primary, 2)
+
+	nextStream, err := adapter.Stream(context.Background(), "en")
+	if err != nil {
+		t.Fatalf("second Stream returned error: %v", err)
+	}
+	defer nextStream.Close()
+
+	event, err = nextStream.Next()
+	if err != nil {
+		t.Fatalf("second Next returned error: %v", err)
+	}
+	if got := event.Alternatives[0].Text; got != "primary active" {
+		t.Fatalf("second stream text = %q, want recovered primary active", got)
+	}
+	if primary.streamCalls != 3 {
+		t.Fatalf("primary stream calls = %d, want failure + recovery + active", primary.streamCalls)
+	}
+}
+
 func TestFallbackStreamRetriesSameSTTBeforeFallback(t *testing.T) {
 	firstErr := errors.New("primary stream failed")
 	primary := &metadataSTT{
@@ -346,6 +609,7 @@ func TestFallbackStreamReplaysFlushBoundariesOnRetry(t *testing.T) {
 }
 
 type metadataSTT struct {
+	mu               sync.Mutex
 	label            string
 	capabilities     STTCapabilities
 	stream           RecognizeStream
@@ -366,6 +630,8 @@ func (m *metadataSTT) Capabilities() STTCapabilities {
 }
 
 func (m *metadataSTT) Stream(context.Context, string) (RecognizeStream, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	m.streamCalls++
 	if len(m.streams) > 0 {
 		stream := m.streams[0]
@@ -376,6 +642,8 @@ func (m *metadataSTT) Stream(context.Context, string) (RecognizeStream, error) {
 }
 
 func (m *metadataSTT) Recognize(context.Context, []*model.AudioFrame, string) (*SpeechEvent, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	m.recognizeCalls++
 	if len(m.recognizeErrs) > 0 || len(m.recognizeResults) > 0 {
 		var err error
@@ -387,10 +655,140 @@ func (m *metadataSTT) Recognize(context.Context, []*model.AudioFrame, string) (*
 		if len(m.recognizeResults) > 0 {
 			event = m.recognizeResults[0]
 			m.recognizeResults = m.recognizeResults[1:]
+		} else {
+			event = m.recognizeResult
 		}
 		return event, err
 	}
 	return m.recognizeResult, nil
+}
+
+func waitForRecognizeCalls(t *testing.T, stt *metadataSTT, want int) {
+	t.Helper()
+	deadline := time.After(200 * time.Millisecond)
+	ticker := time.NewTicker(time.Millisecond)
+	defer ticker.Stop()
+
+	for {
+		stt.mu.Lock()
+		got := stt.recognizeCalls
+		stt.mu.Unlock()
+		if got >= want {
+			return
+		}
+
+		select {
+		case <-deadline:
+			t.Fatalf("recognize calls did not reach %d", want)
+		case <-ticker.C:
+		}
+	}
+}
+
+func waitForStreamCalls(t *testing.T, stt *metadataSTT, want int) {
+	t.Helper()
+	deadline := time.After(200 * time.Millisecond)
+	ticker := time.NewTicker(time.Millisecond)
+	defer ticker.Stop()
+
+	for {
+		stt.mu.Lock()
+		got := stt.streamCalls
+		stt.mu.Unlock()
+		if got >= want {
+			return
+		}
+
+		select {
+		case <-deadline:
+			t.Fatalf("stream calls did not reach %d", want)
+		case <-ticker.C:
+		}
+	}
+}
+
+type contextRecoverySTT struct {
+	mu              sync.Mutex
+	calls           int
+	releaseRecovery chan struct{}
+	recoveryStarted chan struct{}
+}
+
+func (s *contextRecoverySTT) Label() string {
+	return "context-primary"
+}
+
+func (s *contextRecoverySTT) Capabilities() STTCapabilities {
+	return STTCapabilities{Streaming: true}
+}
+
+func (s *contextRecoverySTT) Stream(context.Context, string) (RecognizeStream, error) {
+	return nil, errors.New("stream unsupported")
+}
+
+func (s *contextRecoverySTT) Recognize(ctx context.Context, _ []*model.AudioFrame, _ string) (*SpeechEvent, error) {
+	s.mu.Lock()
+	s.calls++
+	call := s.calls
+	s.mu.Unlock()
+
+	if call == 1 {
+		return nil, errors.New("primary failed")
+	}
+	if call == 2 {
+		s.recoveryStarted <- struct{}{}
+		<-s.releaseRecovery
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		default:
+		}
+	}
+	return &SpeechEvent{
+		Type:         SpeechEventFinalTranscript,
+		Alternatives: []SpeechData{{Text: "primary"}},
+	}, nil
+}
+
+func waitForContextRecoveryCalls(t *testing.T, stt *contextRecoverySTT, want int) {
+	t.Helper()
+	deadline := time.After(200 * time.Millisecond)
+	ticker := time.NewTicker(time.Millisecond)
+	defer ticker.Stop()
+
+	for {
+		stt.mu.Lock()
+		got := stt.calls
+		stt.mu.Unlock()
+		if got >= want {
+			return
+		}
+
+		select {
+		case <-deadline:
+			t.Fatalf("recognize calls did not reach %d", want)
+		case <-ticker.C:
+		}
+	}
+}
+
+func waitForProviderAvailable(t *testing.T, adapter *FallbackAdapter, index int) {
+	t.Helper()
+	deadline := time.After(200 * time.Millisecond)
+	ticker := time.NewTicker(time.Millisecond)
+	defer ticker.Stop()
+
+	for {
+		if adapter.isAvailable(index) {
+			return
+		}
+
+		select {
+		case <-deadline:
+			t.Fatalf("provider %d did not become available", index)
+		case <-ticker.C:
+		}
+	}
 }
 
 type metadataRecognizeStream struct {

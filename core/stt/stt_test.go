@@ -40,3 +40,31 @@ func TestSpeechDataCarriesReferenceMetadataFields(t *testing.T) {
 		t.Fatalf("Metadata[provider] = %v, want test", data.Metadata["provider"])
 	}
 }
+
+func TestSpeechEventCarriesReferenceUsageAndSpeechStartTime(t *testing.T) {
+	usage := &RecognitionUsage{
+		AudioDuration: 1.25,
+		InputTokens:   3,
+		OutputTokens:  5,
+	}
+	startTime := 42.5
+	event := SpeechEvent{
+		Type:             SpeechEventRecognitionUsage,
+		RequestID:        "req-1",
+		RecognitionUsage: usage,
+		SpeechStartTime:  &startTime,
+	}
+
+	if event.RecognitionUsage == nil {
+		t.Fatal("RecognitionUsage = nil, want structured usage data")
+	}
+	if event.RecognitionUsage.AudioDuration != 1.25 {
+		t.Fatalf("AudioDuration = %v, want 1.25", event.RecognitionUsage.AudioDuration)
+	}
+	if event.RecognitionUsage.InputTokens != 3 || event.RecognitionUsage.OutputTokens != 5 {
+		t.Fatalf("tokens = (%d, %d), want (3, 5)", event.RecognitionUsage.InputTokens, event.RecognitionUsage.OutputTokens)
+	}
+	if event.SpeechStartTime == nil || *event.SpeechStartTime != 42.5 {
+		t.Fatalf("SpeechStartTime = %v, want 42.5", event.SpeechStartTime)
+	}
+}

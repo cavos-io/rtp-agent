@@ -13,9 +13,13 @@ import (
 )
 
 type FallbackAdapter struct {
-	stts           []STT
-	capabilities   STTCapabilities
-	maxRetryPerSTT int
+	stts             []STT
+	capabilities     STTCapabilities
+	maxRetryPerSTT   int
+	mu               sync.Mutex
+	available        []bool
+	recovering       []bool
+	recoveringStream []bool
 }
 
 type FallbackAdapterOptions struct {
@@ -75,10 +79,21 @@ func newFallbackAdapter(stts []STT, vad vad.VAD, options FallbackAdapterOptions)
 	}
 
 	return &FallbackAdapter{
-		stts:           wrapped,
-		capabilities:   capabilities,
-		maxRetryPerSTT: options.MaxRetryPerSTT,
+		stts:             wrapped,
+		capabilities:     capabilities,
+		maxRetryPerSTT:   options.MaxRetryPerSTT,
+		available:        initialAvailability(len(wrapped)),
+		recovering:       make([]bool, len(wrapped)),
+		recoveringStream: make([]bool, len(wrapped)),
 	}
+}
+
+func initialAvailability(size int) []bool {
+	available := make([]bool, size)
+	for i := range available {
+		available[i] = true
+	}
+	return available
 }
 
 func (f *FallbackAdapter) Label() string {
@@ -91,13 +106,18 @@ func (f *FallbackAdapter) Capabilities() STTCapabilities {
 
 func (f *FallbackAdapter) Recognize(ctx context.Context, frames []*model.AudioFrame, language string) (*SpeechEvent, error) {
 	var lastErr error
+	allFailed := f.allUnavailable()
 	for i, stt := range f.stts {
+		if !allFailed && !f.isAvailable(i) {
+			continue
+		}
 		if i > 0 {
 			logger.Logger.Infow("Falling back to next STT", "stt", stt.Label(), "previous_error", lastErr)
 		}
 		for attempt := 0; attempt <= f.maxRetryPerSTT; attempt++ {
 			res, err := stt.Recognize(ctx, frames, language)
 			if err == nil {
+				f.setAvailable(i, true)
 				return res, nil
 			}
 			lastErr = err
@@ -105,8 +125,138 @@ func (f *FallbackAdapter) Recognize(ctx context.Context, frames []*model.AudioFr
 				logger.Logger.Warnw("Retrying STT recognize", err, "stt", stt.Label(), "attempt", attempt+1)
 			}
 		}
+		f.setAvailable(i, false)
+		f.tryRecover(ctx, i, frames, language)
 	}
 	return nil, fmt.Errorf("all STTs failed, last error: %w", lastErr)
+}
+
+func (f *FallbackAdapter) tryRecover(ctx context.Context, index int, frames []*model.AudioFrame, language string) {
+	if !f.markRecovering(index) {
+		return
+	}
+	recoveryCtx := context.WithoutCancel(ctx)
+
+	go func() {
+		defer f.clearRecovering(index)
+
+		stt := f.stts[index]
+		for attempt := 0; attempt <= f.maxRetryPerSTT; attempt++ {
+			if _, err := stt.Recognize(recoveryCtx, frames, language); err == nil {
+				f.setAvailable(index, true)
+				logger.Logger.Infow("Recovered STT provider", "stt", stt.Label())
+				return
+			}
+		}
+	}()
+}
+
+func (f *FallbackAdapter) allUnavailable() bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for _, available := range f.available {
+		if available {
+			return false
+		}
+	}
+	return true
+}
+
+func (f *FallbackAdapter) isAvailable(index int) bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if index < 0 || index >= len(f.available) {
+		return false
+	}
+	return f.available[index]
+}
+
+func (f *FallbackAdapter) setAvailable(index int, available bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if index < 0 || index >= len(f.available) {
+		return
+	}
+	f.available[index] = available
+}
+
+func (f *FallbackAdapter) markRecovering(index int) bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if index < 0 || index >= len(f.recovering) {
+		return false
+	}
+	if f.recovering[index] {
+		return false
+	}
+	f.recovering[index] = true
+	return true
+}
+
+func (f *FallbackAdapter) clearRecovering(index int) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if index < 0 || index >= len(f.recovering) {
+		return
+	}
+	f.recovering[index] = false
+}
+
+func (f *FallbackAdapter) tryRecoverStream(ctx context.Context, index int, language string, inputs []fallbackRecognizeInput) {
+	if !f.markRecoveringStream(index) {
+		return
+	}
+	recoveryCtx := context.WithoutCancel(ctx)
+
+	go func() {
+		defer f.clearRecoveringStream(index)
+
+		stt := f.stts[index]
+		stream, err := stt.Stream(recoveryCtx, language)
+		if err != nil {
+			return
+		}
+		defer stream.Close()
+
+		if err := replayFallbackInputs(stream, inputs); err != nil {
+			return
+		}
+
+		for {
+			ev, err := stream.Next()
+			if err != nil {
+				return
+			}
+			if ev.Type != SpeechEventFinalTranscript || len(ev.Alternatives) == 0 || ev.Alternatives[0].Text == "" {
+				continue
+			}
+			f.setAvailable(index, true)
+			logger.Logger.Infow("Recovered STT stream provider", "stt", stt.Label())
+			return
+		}
+	}()
+}
+
+func (f *FallbackAdapter) markRecoveringStream(index int) bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if index < 0 || index >= len(f.recoveringStream) {
+		return false
+	}
+	if f.recoveringStream[index] {
+		return false
+	}
+	f.recoveringStream[index] = true
+	return true
+}
+
+func (f *FallbackAdapter) clearRecoveringStream(index int) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if index < 0 || index >= len(f.recoveringStream) {
+		return
+	}
+	f.recoveringStream[index] = false
 }
 
 type fallbackRecognizeStream struct {
@@ -154,7 +304,11 @@ func (f *FallbackAdapter) Stream(ctx context.Context, language string) (Recogniz
 
 func (s *fallbackRecognizeStream) tryStartStream(index int) error {
 	var lastErr error
+	allFailed := s.adapter.allUnavailable()
 	for i := index; i < len(s.adapter.stts); i++ {
+		if !allFailed && !s.adapter.isAvailable(i) {
+			continue
+		}
 		for {
 			stt := s.adapter.stts[i]
 			stream, err := stt.Stream(s.ctx, s.language)
@@ -165,6 +319,7 @@ func (s *fallbackRecognizeStream) tryStartStream(index int) error {
 					s.retries[i]++
 					continue
 				}
+				s.adapter.setAvailable(i, false)
 				break
 			}
 
@@ -175,9 +330,11 @@ func (s *fallbackRecognizeStream) tryStartStream(index int) error {
 					s.retries[i]++
 					continue
 				}
+				s.adapter.setAvailable(i, false)
 				break
 			}
 
+			s.adapter.setAvailable(i, true)
 			s.activeStream = stream
 			s.activeIndex = i
 			return nil
@@ -191,7 +348,11 @@ func (s *fallbackRecognizeStream) tryStartStream(index int) error {
 }
 
 func (s *fallbackRecognizeStream) replayBufferedFrames(stream RecognizeStream) error {
-	for _, input := range s.inputBuffer {
+	return replayFallbackInputs(stream, s.inputBuffer)
+}
+
+func replayFallbackInputs(stream RecognizeStream, inputs []fallbackRecognizeInput) error {
+	for _, input := range inputs {
 		if input.flush {
 			if err := stream.Flush(); err != nil {
 				return err
@@ -203,6 +364,12 @@ func (s *fallbackRecognizeStream) replayBufferedFrames(stream RecognizeStream) e
 		}
 	}
 	return nil
+}
+
+func cloneFallbackInputs(inputs []fallbackRecognizeInput) []fallbackRecognizeInput {
+	cloned := make([]fallbackRecognizeInput, len(inputs))
+	copy(cloned, inputs)
+	return cloned
 }
 
 func (s *fallbackRecognizeStream) monitorStream() {
@@ -236,6 +403,9 @@ func (s *fallbackRecognizeStream) monitorStream() {
 			if s.canRetrySTT(s.activeIndex) {
 				s.retries[s.activeIndex]++
 				nextIndex = s.activeIndex
+			} else {
+				s.adapter.setAvailable(s.activeIndex, false)
+				s.adapter.tryRecoverStream(s.ctx, s.activeIndex, s.language, cloneFallbackInputs(s.inputBuffer))
 			}
 
 			if fbErr := s.tryStartStream(nextIndex); fbErr != nil {
