@@ -43,6 +43,11 @@ func TestBuildOpenAIChatCompletionRequestAppliesExtraParams(t *testing.T) {
 			"user":                  "caller-123",
 			"store":                 true,
 			"stream_options":        map[string]any{"include_usage": true},
+			"service_tier":          "priority",
+			"verbosity":             "low",
+			"safety_identifier":     "hashed-user",
+			"chat_template_kwargs":  map[string]any{"enable_thinking": false},
+			"prediction":            map[string]any{"type": "content", "content": "known prefix"},
 		},
 	})
 
@@ -87,6 +92,21 @@ func TestBuildOpenAIChatCompletionRequestAppliesExtraParams(t *testing.T) {
 	}
 	if req.StreamOptions == nil || !req.StreamOptions.IncludeUsage {
 		t.Fatalf("StreamOptions = %#v, want include_usage", req.StreamOptions)
+	}
+	if req.ServiceTier != openaisdk.ServiceTierPriority {
+		t.Fatalf("ServiceTier = %q, want priority", req.ServiceTier)
+	}
+	if req.Verbosity != "low" {
+		t.Fatalf("Verbosity = %q, want low", req.Verbosity)
+	}
+	if req.SafetyIdentifier != "hashed-user" {
+		t.Fatalf("SafetyIdentifier = %q, want hashed-user", req.SafetyIdentifier)
+	}
+	if enabled, ok := req.ChatTemplateKwargs["enable_thinking"].(bool); !ok || enabled {
+		t.Fatalf("ChatTemplateKwargs = %#v, want enable_thinking false", req.ChatTemplateKwargs)
+	}
+	if req.Prediction == nil || req.Prediction.Type != "content" || req.Prediction.Content != "known prefix" {
+		t.Fatalf("Prediction = %#v, want content prediction", req.Prediction)
 	}
 }
 
