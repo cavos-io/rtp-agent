@@ -294,6 +294,20 @@ func TestRunResultFinalOutputAcceptsExpectedType(t *testing.T) {
 	}
 }
 
+func TestRunResultSetFinalOutputRejectsUnexpectedType(t *testing.T) {
+	result := NewRunResultWithOutputType(llm.NewChatContext(), reflect.TypeOf(""))
+	result.SetFinalOutput(42)
+	result.MarkDone()
+
+	output, err := result.FinalOutput()
+	if !errors.Is(err, ErrRunResultFinalOutputType) {
+		t.Fatalf("FinalOutput error = %v, want ErrRunResultFinalOutputType", err)
+	}
+	if output != nil {
+		t.Fatalf("FinalOutput output = %#v, want nil on type mismatch", output)
+	}
+}
+
 func TestRunResultUnwatchSpeechHandleRemovesCallbacks(t *testing.T) {
 	result := NewRunResult(llm.NewChatContext())
 	speech := NewSpeechHandle(true, DefaultInputDetails())

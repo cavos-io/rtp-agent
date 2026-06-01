@@ -112,8 +112,7 @@ func (r *RunResult) SetFinalOutput(output any) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	r.finalOutput = output
-	r.finalOutputSet = true
+	r.setFinalOutputLocked(output)
 }
 
 func (r *RunResult) FinalOutput() (any, error) {
@@ -296,17 +295,23 @@ func (r *RunResult) markDoneIfNeeded(doneSpeech *SpeechHandle) {
 	}
 	if r.lastSpeech != nil {
 		if output, ok := r.lastSpeech.RunFinalOutput(); ok {
-			if err, ok := output.(error); ok {
-				r.finalOutputErr = err
-			} else if r.finalOutputType != nil && reflect.TypeOf(output) != r.finalOutputType {
-				r.finalOutputErr = fmt.Errorf("%w: expected %s, got %T", ErrRunResultFinalOutputType, r.finalOutputType, output)
-			} else {
-				r.finalOutput = output
-			}
-			r.finalOutputSet = true
+			r.setFinalOutputLocked(output)
 		}
 	}
 	r.markDoneLocked()
+}
+
+func (r *RunResult) setFinalOutputLocked(output any) {
+	r.finalOutput = nil
+	r.finalOutputErr = nil
+	if err, ok := output.(error); ok {
+		r.finalOutputErr = err
+	} else if r.finalOutputType != nil && reflect.TypeOf(output) != r.finalOutputType {
+		r.finalOutputErr = fmt.Errorf("%w: expected %s, got %T", ErrRunResultFinalOutputType, r.finalOutputType, output)
+	} else {
+		r.finalOutput = output
+	}
+	r.finalOutputSet = true
 }
 
 func (r *RunResult) insertEvent(event RunEvent) {
