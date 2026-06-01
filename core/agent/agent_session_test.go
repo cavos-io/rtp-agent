@@ -91,6 +91,32 @@ func TestAgentSessionGenerateReplyRequiresRunningActivity(t *testing.T) {
 	}
 }
 
+func TestAgentSessionCloseSoonStopsRunningSession(t *testing.T) {
+	agent := NewAgent("test")
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	session.activity = NewAgentActivity(agent, session)
+	session.started = true
+
+	session.CloseSoon(CloseReasonParticipantDisconnected)
+
+	select {
+	case ev := <-session.CloseEvents():
+		if ev.Reason != CloseReasonParticipantDisconnected {
+			t.Fatalf("CloseEvent.Reason = %q, want participant_disconnected", ev.Reason)
+		}
+	default:
+		t.Fatal("CloseSoon did not emit close event")
+	}
+
+	handle, err := session.GenerateReply(context.Background(), "hello")
+	if handle != nil {
+		t.Fatalf("GenerateReply handle after CloseSoon = %#v, want nil", handle)
+	}
+	if !errors.Is(err, ErrAgentSessionNotRunning) {
+		t.Fatalf("GenerateReply error after CloseSoon = %v, want ErrAgentSessionNotRunning", err)
+	}
+}
+
 func TestAgentSessionInterruptRequiresRunningActivity(t *testing.T) {
 	agent := NewAgent("test")
 	session := NewAgentSession(agent, nil, AgentSessionOptions{})

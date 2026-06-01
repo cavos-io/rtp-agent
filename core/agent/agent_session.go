@@ -167,6 +167,7 @@ func (s *AgentSession) CloseSoon(reason CloseReason) {
 	case ch <- CloseEvent{Reason: reason, CreatedAt: time.Now()}:
 	default:
 	}
+	_ = s.Stop(context.Background())
 }
 
 func (s *AgentSession) closeEvents() chan CloseEvent {
@@ -337,7 +338,9 @@ func (s *AgentSession) Stop(ctx context.Context) error {
 		return nil
 	}
 
-	s.activity.Stop()
+	if s.activity != nil {
+		s.activity.Stop()
+	}
 	s.activity = nil
 	s.started = false
 	return nil

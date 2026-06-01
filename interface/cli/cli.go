@@ -259,8 +259,12 @@ func parseWorkerArgs(argv []string, devMode bool) (CliArgs, *int, error) {
 }
 
 func applyWorkerArgs(server *worker.AgentServer, args CliArgs, drainTimeout *int) error {
+	logLevel := args.LogLevel
+	if logLevel == "" && args.DevMode && server.Options.LogLevel == "INFO" && os.Getenv("LIVEKIT_LOG_LEVEL") == "" {
+		logLevel = "DEBUG"
+	}
 	opts := worker.WorkerOptions{
-		LogLevel:  args.LogLevel,
+		LogLevel:  logLevel,
 		WSURL:     args.URL,
 		APIKey:    args.APIKey,
 		APISecret: args.APISecret,

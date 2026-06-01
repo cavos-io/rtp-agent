@@ -467,6 +467,18 @@ func TestApplyWorkerArgsUpdatesServerOptions(t *testing.T) {
 	}
 }
 
+func TestApplyWorkerArgsUsesDevDefaultLogLevel(t *testing.T) {
+	server := worker.NewAgentServer(worker.WorkerOptions{})
+
+	if err := applyWorkerArgs(server, CliArgs{DevMode: true}, nil); err != nil {
+		t.Fatalf("applyWorkerArgs() error = %v", err)
+	}
+
+	if server.Options.LogLevel != "DEBUG" {
+		t.Fatalf("LogLevel = %q, want reference dev default DEBUG", server.Options.LogLevel)
+	}
+}
+
 func TestStartArgsForDevReloadForwardsReferenceConnectionOptions(t *testing.T) {
 	got := startArgsForDevReload(CliArgs{
 		LogLevel:  "TRACE",
