@@ -57,13 +57,17 @@ type MCPServerStdio struct {
 	msgID   atomic.Int64
 	pending map[int64]chan *jsonRPCResponse
 	mu      sync.Mutex
+
+	cacheDirty bool
+	toolsCache []Tool
 }
 
 func NewMCPServerStdio(command string, args []string) *MCPServerStdio {
 	return &MCPServerStdio{
-		Command: command,
-		Args:    args,
-		pending: make(map[int64]chan *jsonRPCResponse),
+		Command:    command,
+		Args:       args,
+		pending:    make(map[int64]chan *jsonRPCResponse),
+		cacheDirty: true,
 	}
 }
 
@@ -110,6 +114,21 @@ func (c mcpToolContent) visibleText() string {
 	return string(c.raw)
 }
 
+func serializeMCPToolContent(content []mcpToolContent) (string, error) {
+	if len(content) == 1 {
+		return string(content[0].raw), nil
+	}
+	items := make([]json.RawMessage, 0, len(content))
+	for _, item := range content {
+		items = append(items, item.raw)
+	}
+	data, err := json.Marshal(items)
+	if err != nil {
+		return "", err
+	}
+	return string(data), nil
+}
+
 func (s *MCPServerStdio) Initialize(ctx context.Context) error {
 	s.cmd = exec.CommandContext(ctx, s.Command, s.Args...)
 	s.cmd.Dir = s.Cwd
@@ -150,6 +169,10 @@ func (s *MCPServerStdio) Initialize(ctx context.Context) error {
 }
 
 func (s *MCPServerStdio) ListTools(ctx context.Context) ([]Tool, error) {
+	if tools, ok := s.cachedTools(); ok {
+		return tools, nil
+	}
+
 	resp, err := s.sendRequest(ctx, "tools/list", map[string]interface{}{})
 	if err != nil {
 		return nil, fmt.Errorf("tools/list failed: %w", err)
@@ -177,10 +200,38 @@ func (s *MCPServerStdio) ListTools(ctx context.Context) ([]Tool, error) {
 		})
 	}
 
+	s.setToolsCache(tools)
 	return tools, nil
 }
 
+func (s *MCPServerStdio) InvalidateCache() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.cacheDirty = true
+	s.toolsCache = nil
+}
+
+func (s *MCPServerStdio) cachedTools() ([]Tool, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.cacheDirty || s.toolsCache == nil {
+		return nil, false
+	}
+	tools := make([]Tool, len(s.toolsCache))
+	copy(tools, s.toolsCache)
+	return tools, true
+}
+
+func (s *MCPServerStdio) setToolsCache(tools []Tool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.toolsCache = make([]Tool, len(tools))
+	copy(s.toolsCache, tools)
+	s.cacheDirty = false
+}
+
 func (s *MCPServerStdio) Close() error {
+	s.InvalidateCache()
 	if s.stdin != nil {
 		s.stdin.Close()
 	}
@@ -313,7 +364,7 @@ func (t *mcpProxyTool) Execute(ctx context.Context, args string) (string, error)
 	if len(result.Content) == 0 {
 		return "", NewToolError(fmt.Sprintf("Tool %q completed without producing a result.", t.name))
 	}
-	return result.Content[0].Text, nil
+	return serializeMCPToolContent(result.Content)
 }
 
 func (t *mcpProxyTool) ParseFunctionTools(format string) (map[string]interface{}, error) {

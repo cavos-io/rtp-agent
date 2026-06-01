@@ -2,6 +2,7 @@ package worker
 
 import (
 	"context"
+	"reflect"
 	"testing"
 	"time"
 
@@ -178,6 +179,208 @@ func TestRoomIOHandleChatTextInputIgnoresUnknownParticipant(t *testing.T) {
 
 	if called {
 		t.Fatal("text input callback was called for unknown participant")
+	}
+}
+
+func TestRoomIOSetParticipantSwitchesTextInputFilter(t *testing.T) {
+	session := &agent.AgentSession{}
+	var calls []string
+	rio := &RoomIO{
+		AgentSession: session,
+		Options: RoomOptions{
+			ParticipantIdentity: "caller-a",
+		},
+		textInput: func(_ context.Context, _ *agent.AgentSession, ev TextInputEvent) error {
+			calls = append(calls, ev.ParticipantIdentity)
+			return nil
+		},
+	}
+
+	rio.handleChatTextInput(context.Background(), "ignored", lksdk.TextStreamInfo{}, "caller-b")
+	rio.SetParticipant("caller-b")
+	rio.handleChatTextInput(context.Background(), "accepted", lksdk.TextStreamInfo{}, "caller-b")
+	rio.handleChatTextInput(context.Background(), "ignored", lksdk.TextStreamInfo{}, "caller-a")
+
+	want := []string{"caller-b"}
+	if !reflect.DeepEqual(calls, want) {
+		t.Fatalf("text input calls = %#v, want %#v", calls, want)
+	}
+}
+
+func TestRoomIOUnsetParticipantClearsTextInputFilter(t *testing.T) {
+	session := &agent.AgentSession{}
+	var calls []string
+	rio := &RoomIO{
+		AgentSession: session,
+		Options: RoomOptions{
+			ParticipantIdentity: "caller-a",
+		},
+		textInput: func(_ context.Context, _ *agent.AgentSession, ev TextInputEvent) error {
+			calls = append(calls, ev.ParticipantIdentity)
+			return nil
+		},
+	}
+
+	rio.UnsetParticipant()
+	rio.handleChatTextInput(context.Background(), "accepted", lksdk.TextStreamInfo{}, "caller-b")
+
+	want := []string{"caller-b"}
+	if !reflect.DeepEqual(calls, want) {
+		t.Fatalf("text input calls = %#v, want %#v", calls, want)
+	}
+}
+
+func TestRoomIOShouldHandleParticipantMatchesLinkedParticipant(t *testing.T) {
+	rio := &RoomIO{Options: RoomOptions{ParticipantIdentity: "caller-a"}}
+
+	if !rio.shouldHandleParticipant("caller-a") {
+		t.Fatal("shouldHandleParticipant(caller-a) = false, want true for linked participant")
+	}
+	if rio.shouldHandleParticipant("caller-b") {
+		t.Fatal("shouldHandleParticipant(caller-b) = true, want false for non-linked participant")
+	}
+}
+
+func TestRoomIOShouldHandleParticipantAllowsAnyWhenUnset(t *testing.T) {
+	rio := &RoomIO{}
+
+	if !rio.shouldHandleParticipant("caller-b") {
+		t.Fatal("shouldHandleParticipant(caller-b) = false, want true when participant is unset")
+	}
+}
+
+func TestRoomIOShouldAcceptParticipantUsesReferenceDefaultKinds(t *testing.T) {
+	rio := &RoomIO{}
+
+	tests := []struct {
+		name string
+		kind lksdk.ParticipantKind
+		want bool
+	}{
+		{"standard", lksdk.ParticipantStandard, true},
+		{"sip", lksdk.ParticipantSIP, true},
+		{"connector", lksdk.ParticipantConnector, true},
+		{"agent", lksdk.ParticipantAgent, false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := rio.shouldAcceptParticipant("caller", tt.kind, nil, "agent-local"); got != tt.want {
+				t.Fatalf("shouldAcceptParticipant(%s) = %v, want %v", tt.name, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestRoomIOShouldAcceptParticipantUsesConfiguredKinds(t *testing.T) {
+	rio := &RoomIO{Options: RoomOptions{
+		ParticipantKinds: []lksdk.ParticipantKind{lksdk.ParticipantAgent},
+	}}
+
+	if !rio.shouldAcceptParticipant("agent-a", lksdk.ParticipantAgent, nil, "agent-local") {
+		t.Fatal("shouldAcceptParticipant(agent) = false, want true for configured kind")
+	}
+	if rio.shouldAcceptParticipant("caller-a", lksdk.ParticipantSIP, nil, "agent-local") {
+		t.Fatal("shouldAcceptParticipant(sip) = true, want false when SIP is not configured")
+	}
+}
+
+func TestRoomIOShouldAcceptParticipantSkipsPublishOnBehalfWhenUnlinked(t *testing.T) {
+	rio := &RoomIO{}
+
+	if rio.shouldAcceptParticipant(
+		"agent-output",
+		lksdk.ParticipantStandard,
+		map[string]string{RoomIOPublishOnBehalfAttribute: "agent-local"},
+		"agent-local",
+	) {
+		t.Fatal("shouldAcceptParticipant(publish-on-behalf) = true, want false when participant is unlinked")
+	}
+
+	rio.SetParticipant("agent-output")
+	if !rio.shouldAcceptParticipant(
+		"agent-output",
+		lksdk.ParticipantStandard,
+		map[string]string{RoomIOPublishOnBehalfAttribute: "agent-local"},
+		"agent-local",
+	) {
+		t.Fatal("shouldAcceptParticipant(linked publish-on-behalf) = false, want true for explicit linked participant")
+	}
+}
+
+func TestRoomIOHandleParticipantDisconnectedClosesSessionForLinkedParticipant(t *testing.T) {
+	session := &agent.AgentSession{}
+	rio := &RoomIO{
+		AgentSession: session,
+		Options: RoomOptions{
+			ParticipantIdentity: "caller-a",
+		},
+	}
+
+	rio.handleParticipantDisconnected("caller-a", livekit.DisconnectReason_CLIENT_INITIATED)
+
+	select {
+	case ev := <-session.CloseEvents():
+		if ev.Reason != agent.CloseReasonParticipantDisconnected {
+			t.Fatalf("CloseEvent.Reason = %q, want participant_disconnected", ev.Reason)
+		}
+	default:
+		t.Fatal("session did not receive participant-disconnected close event")
+	}
+}
+
+func TestRoomIOHandleParticipantDisconnectedIgnoresUnlinkedParticipant(t *testing.T) {
+	session := &agent.AgentSession{}
+	rio := &RoomIO{
+		AgentSession: session,
+		Options: RoomOptions{
+			ParticipantIdentity: "caller-a",
+		},
+	}
+
+	rio.handleParticipantDisconnected("caller-b", livekit.DisconnectReason_CLIENT_INITIATED)
+
+	select {
+	case ev := <-session.CloseEvents():
+		t.Fatalf("unexpected close event: %#v", ev)
+	default:
+	}
+}
+
+func TestRoomIOHandleParticipantDisconnectedCanBeDisabled(t *testing.T) {
+	session := &agent.AgentSession{}
+	rio := &RoomIO{
+		AgentSession: session,
+		Options: RoomOptions{
+			ParticipantIdentity:      "caller-a",
+			DisableCloseOnDisconnect: true,
+		},
+	}
+
+	rio.handleParticipantDisconnected("caller-a", livekit.DisconnectReason_CLIENT_INITIATED)
+
+	select {
+	case ev := <-session.CloseEvents():
+		t.Fatalf("unexpected close event: %#v", ev)
+	default:
+	}
+}
+
+func TestRoomIOHandleParticipantDisconnectedIgnoresNonCloseReasons(t *testing.T) {
+	session := &agent.AgentSession{}
+	rio := &RoomIO{
+		AgentSession: session,
+		Options: RoomOptions{
+			ParticipantIdentity: "caller-a",
+		},
+	}
+
+	rio.handleParticipantDisconnected("caller-a", livekit.DisconnectReason_DUPLICATE_IDENTITY)
+
+	select {
+	case ev := <-session.CloseEvents():
+		t.Fatalf("unexpected close event: %#v", ev)
+	default:
 	}
 }
 

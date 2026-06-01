@@ -103,15 +103,18 @@ func (e *opusEncoder) Close() error {
 }
 
 type RoomOptions struct {
-	AudioTrackName         string
-	PreConnectAudioTimeout time.Duration
-	DisablePreConnectAudio bool
-	DisableTextInput       bool
-	TextInputCallback      TextInputCallback
-	ParticipantIdentity    string
+	AudioTrackName           string
+	PreConnectAudioTimeout   time.Duration
+	DisablePreConnectAudio   bool
+	DisableTextInput         bool
+	DisableCloseOnDisconnect bool
+	TextInputCallback        TextInputCallback
+	ParticipantIdentity      string
+	ParticipantKinds         []lksdk.ParticipantKind
 }
 
 const RoomIOChatTopic = "lk.chat"
+const RoomIOPublishOnBehalfAttribute = "lk.publish_on_behalf"
 
 type TextInputEvent struct {
 	Text                string
@@ -183,8 +186,19 @@ func roomIOTextInputCallback(opts RoomOptions) TextInputCallback {
 		return opts.TextInputCallback
 	}
 	return func(ctx context.Context, session *agent.AgentSession, ev TextInputEvent) error {
-		return session.GenerateReply(ctx, ev.Text)
+		_, err := session.GenerateReply(ctx, ev.Text)
+		return err
 	}
+}
+
+func (rio *RoomIO) SetParticipant(participantIdentity string) {
+	rio.mu.Lock()
+	defer rio.mu.Unlock()
+	rio.Options.ParticipantIdentity = participantIdentity
+}
+
+func (rio *RoomIO) UnsetParticipant() {
+	rio.SetParticipant("")
 }
 
 func (rio *RoomIO) registerTextInput() {
@@ -202,6 +216,7 @@ func (rio *RoomIO) registerTextInput() {
 func (rio *RoomIO) GetCallback() *lksdk.RoomCallback {
 	cb := lksdk.NewRoomCallback()
 	cb.OnTrackSubscribed = rio.onTrackSubscribed
+	cb.OnParticipantDisconnected = rio.onParticipantDisconnected
 	cb.OnDataPacket = rio.onDataPacket
 	return cb
 }
@@ -234,7 +249,7 @@ func (rio *RoomIO) handleChatTextInput(ctx context.Context, text string, info lk
 	if rio == nil || rio.AgentSession == nil || rio.textInput == nil {
 		return
 	}
-	if rio.Options.ParticipantIdentity != "" && participantIdentity != rio.Options.ParticipantIdentity {
+	if !rio.shouldHandleParticipant(participantIdentity) {
 		return
 	}
 	if rio.Room != nil && participantIdentity != "" && rio.Room.GetParticipantByIdentity(participantIdentity) == nil {
@@ -245,6 +260,49 @@ func (rio *RoomIO) handleChatTextInput(ctx context.Context, text string, info lk
 		Info:                info,
 		ParticipantIdentity: participantIdentity,
 	})
+}
+
+func (rio *RoomIO) participantIdentity() string {
+	rio.mu.Lock()
+	defer rio.mu.Unlock()
+	return rio.Options.ParticipantIdentity
+}
+
+func (rio *RoomIO) shouldHandleParticipant(participantIdentity string) bool {
+	linkedParticipant := rio.participantIdentity()
+	return linkedParticipant == "" || participantIdentity == linkedParticipant
+}
+
+func (rio *RoomIO) shouldAcceptParticipant(identity string, kind lksdk.ParticipantKind, attributes map[string]string, localIdentity string) bool {
+	if !rio.shouldHandleParticipant(identity) {
+		return false
+	}
+	if rio.participantIdentity() == "" && localIdentity != "" && attributes[RoomIOPublishOnBehalfAttribute] == localIdentity {
+		return false
+	}
+	return participantKindAllowed(kind, rio.participantKinds())
+}
+
+func (rio *RoomIO) participantKinds() []lksdk.ParticipantKind {
+	rio.mu.Lock()
+	defer rio.mu.Unlock()
+	return append([]lksdk.ParticipantKind(nil), rio.Options.ParticipantKinds...)
+}
+
+func participantKindAllowed(kind lksdk.ParticipantKind, allowed []lksdk.ParticipantKind) bool {
+	if len(allowed) == 0 {
+		allowed = []lksdk.ParticipantKind{
+			lksdk.ParticipantConnector,
+			lksdk.ParticipantSIP,
+			lksdk.ParticipantStandard,
+		}
+	}
+	for _, accepted := range allowed {
+		if kind == accepted {
+			return true
+		}
+	}
+	return false
 }
 
 func (rio *RoomIO) Start(ctx context.Context) error {
@@ -278,8 +336,50 @@ func (rio *RoomIO) audioTrackPublicationOptions() *lksdk.TrackPublicationOptions
 }
 
 func (rio *RoomIO) onTrackSubscribed(track *webrtc.TrackRemote, publication *lksdk.RemoteTrackPublication, rp *lksdk.RemoteParticipant) {
+	if rp != nil && !rio.shouldAcceptParticipant(rp.Identity(), rp.Kind(), rp.Attributes(), rio.localParticipantIdentity()) {
+		return
+	}
 	if track.Kind() == webrtc.RTPCodecTypeAudio {
 		go rio.handleAudioTrack(track)
+	}
+}
+
+func (rio *RoomIO) localParticipantIdentity() string {
+	if rio.Room == nil || rio.Room.LocalParticipant == nil {
+		return ""
+	}
+	return rio.Room.LocalParticipant.Identity()
+}
+
+func (rio *RoomIO) onParticipantDisconnected(participant *lksdk.RemoteParticipant) {
+	if participant == nil {
+		return
+	}
+	rio.handleParticipantDisconnected(participant.Identity(), participant.DisconnectReason())
+}
+
+func (rio *RoomIO) handleParticipantDisconnected(participantIdentity string, reason livekit.DisconnectReason) {
+	if rio == nil || rio.AgentSession == nil || rio.Options.DisableCloseOnDisconnect {
+		return
+	}
+	linkedParticipant := rio.participantIdentity()
+	if linkedParticipant == "" || participantIdentity != linkedParticipant {
+		return
+	}
+	if !roomIOCloseOnDisconnectReason(reason) {
+		return
+	}
+	rio.AgentSession.CloseSoon(agent.CloseReasonParticipantDisconnected)
+}
+
+func roomIOCloseOnDisconnectReason(reason livekit.DisconnectReason) bool {
+	switch reason {
+	case livekit.DisconnectReason_CLIENT_INITIATED,
+		livekit.DisconnectReason_ROOM_DELETED,
+		livekit.DisconnectReason_USER_REJECTED:
+		return true
+	default:
+		return false
 	}
 }
 

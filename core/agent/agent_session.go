@@ -82,6 +82,7 @@ type AgentSession struct {
 	AgentStateChangedCh chan AgentStateChangedEvent
 	UserStateChangedCh  chan UserStateChangedEvent
 	sipDTMFCh           chan SipDTMFEvent
+	closeCh             chan CloseEvent
 }
 
 type SipDTMFEvent struct {
@@ -154,6 +155,28 @@ func (s *AgentSession) sipDTMFEvents() chan SipDTMFEvent {
 		s.sipDTMFCh = make(chan SipDTMFEvent, 10)
 	}
 	return s.sipDTMFCh
+}
+
+func (s *AgentSession) CloseEvents() <-chan CloseEvent {
+	return s.closeEvents()
+}
+
+func (s *AgentSession) CloseSoon(reason CloseReason) {
+	ch := s.closeEvents()
+	select {
+	case ch <- CloseEvent{Reason: reason, CreatedAt: time.Now()}:
+	default:
+	}
+}
+
+func (s *AgentSession) closeEvents() chan CloseEvent {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.closeCh == nil {
+		s.closeCh = make(chan CloseEvent, 10)
+	}
+	return s.closeCh
 }
 
 func (s *AgentSession) Start(ctx context.Context) error {
