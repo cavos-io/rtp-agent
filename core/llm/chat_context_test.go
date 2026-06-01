@@ -17,6 +17,10 @@ func itemIDs(items []ChatItem) string {
 	return strings.Join(ids, ",")
 }
 
+func boolPtr(value bool) *bool {
+	return &value
+}
+
 func TestChatContextCopyFiltersReferenceItemTypes(t *testing.T) {
 	ctx := NewChatContext()
 	ctx.Items = []ChatItem{
@@ -285,6 +289,94 @@ func TestProviderFormatUsesActiveInstructionText(t *testing.T) {
 	}
 }
 
+func TestChatContextToProviderFormatCanDisableDummyUserMessage(t *testing.T) {
+	formats := []string{"google", "anthropic", "aws"}
+	for _, format := range formats {
+		t.Run(format, func(t *testing.T) {
+			ctx := NewChatContext()
+			ctx.Items = []ChatItem{
+				&ChatMessage{
+					ID:      "assistant",
+					Role:    ChatRoleAssistant,
+					Content: []ChatContent{{Text: "hello"}},
+				},
+			}
+
+			messages, _ := ctx.ToProviderFormat(format, ChatContextProviderFormatOptions{
+				InjectDummyUserMessage: boolPtr(false),
+			})
+
+			if len(messages) != 1 {
+				t.Fatalf("len(messages) = %d, want 1: %#v", len(messages), messages)
+			}
+			if got := messages[0]["role"]; got == "user" {
+				t.Fatalf("first role = %q, want no injected dummy user message: %#v", got, messages)
+			}
+		})
+	}
+}
+
+func TestChatContextToProviderFormatEReturnsErrorForUnsupportedFormat(t *testing.T) {
+	ctx := NewChatContext()
+
+	messages, extra, err := ctx.ToProviderFormatE("unknown")
+
+	if err == nil {
+		t.Fatal("ToProviderFormatE() error = nil, want unsupported format error")
+	}
+	if messages != nil || extra != nil {
+		t.Fatalf("ToProviderFormatE() messages=%#v extra=%#v, want nil outputs on error", messages, extra)
+	}
+}
+
+func TestGoogleProviderFormatInjectsThoughtSignatures(t *testing.T) {
+	ctx := NewChatContext()
+	ctx.Items = []ChatItem{
+		&ChatMessage{ID: "assistant", Role: ChatRoleAssistant, Content: []ChatContent{{Text: "checking"}}},
+		&FunctionCall{ID: "assistant/tool", CallID: "call_lookup", Name: "lookup", Arguments: `{"city":"Paris"}`},
+		&FunctionCallOutput{ID: "output", CallID: "call_lookup", Name: "lookup", Output: "Paris"},
+	}
+
+	turns, _ := ctx.ToProviderFormat("google", ChatContextProviderFormatOptions{
+		ThoughtSignatures: map[string][]byte{"call_lookup": []byte("signature")},
+	})
+
+	if len(turns) == 0 {
+		t.Fatal("len(turns) = 0, want model turn with function_call")
+	}
+	parts := turns[0]["parts"].([]map[string]any)
+	if len(parts) < 2 {
+		t.Fatalf("model parts = %#v, want function_call part", parts)
+	}
+	if got, ok := parts[1]["thought_signature"].([]byte); !ok || string(got) != "signature" {
+		t.Fatalf("thought_signature = %#v, want signature bytes", parts[1]["thought_signature"])
+	}
+}
+
+func TestAnthropicProviderFormatCanInjectTrailingUserMessage(t *testing.T) {
+	ctx := NewChatContext()
+	ctx.Items = []ChatItem{
+		&ChatMessage{ID: "user", Role: ChatRoleUser, Content: []ChatContent{{Text: "hello"}}},
+		&ChatMessage{ID: "assistant", Role: ChatRoleAssistant, Content: []ChatContent{{Text: "hi"}}},
+	}
+
+	messages, _ := ctx.ToProviderFormat("anthropic", ChatContextProviderFormatOptions{
+		InjectTrailingUserMessage: boolPtr(true),
+	})
+
+	if len(messages) != 3 {
+		t.Fatalf("len(messages) = %d, want 3: %#v", len(messages), messages)
+	}
+	trailing := messages[2]
+	if trailing["role"] != "user" {
+		t.Fatalf("trailing message = %#v, want user role", trailing)
+	}
+	content := trailing["content"].([]map[string]any)
+	if len(content) != 1 || content[0]["type"] != "text" || content[0]["text"] != " " {
+		t.Fatalf("trailing content = %#v, want single blank text item", content)
+	}
+}
+
 func TestChatContextInsertOrdersItemsByCreatedAt(t *testing.T) {
 	ctx := NewChatContext()
 	ctx.Items = []ChatItem{
@@ -298,6 +390,83 @@ func TestChatContextInsertOrdersItemsByCreatedAt(t *testing.T) {
 
 	if got, want := itemIDs(ctx.Items), "early,middle,late"; got != want {
 		t.Fatalf("items = %q, want %q", got, want)
+	}
+}
+
+func TestChatContextUpsertItemReplacesExistingItemByID(t *testing.T) {
+	ctx := NewChatContext()
+	ctx.Items = []ChatItem{
+		&ChatMessage{ID: "first", Role: ChatRoleUser, Content: []ChatContent{{Text: "old"}}},
+		&ChatMessage{ID: "second", Role: ChatRoleAssistant, Content: []ChatContent{{Text: "kept"}}},
+	}
+	updated := &ChatMessage{ID: "first", Role: ChatRoleUser, Content: []ChatContent{{Text: "new"}}}
+
+	if err := ctx.UpsertItem(updated); err != nil {
+		t.Fatalf("UpsertItem() error = %v", err)
+	}
+
+	if len(ctx.Items) != 2 {
+		t.Fatalf("len(items) = %d, want 2", len(ctx.Items))
+	}
+	if ctx.Items[0] != updated {
+		t.Fatalf("items[0] = %#v, want updated item", ctx.Items[0])
+	}
+	if got, want := itemIDs(ctx.Items), "first,second"; got != want {
+		t.Fatalf("items = %q, want %q", got, want)
+	}
+}
+
+func TestChatContextUpsertItemAppendsMissingItem(t *testing.T) {
+	ctx := NewChatContext()
+	ctx.Items = []ChatItem{
+		&ChatMessage{ID: "first", Role: ChatRoleUser, Content: []ChatContent{{Text: "old"}}},
+	}
+	inserted := &FunctionCall{ID: "call", CallID: "call_lookup", Name: "lookup", Arguments: "{}"}
+
+	if err := ctx.UpsertItem(inserted); err != nil {
+		t.Fatalf("UpsertItem() error = %v", err)
+	}
+
+	if got, want := itemIDs(ctx.Items), "first,call"; got != want {
+		t.Fatalf("items = %q, want %q", got, want)
+	}
+	if ctx.Items[1] != inserted {
+		t.Fatalf("items[1] = %#v, want inserted item", ctx.Items[1])
+	}
+}
+
+func TestChatContextUpsertItemRejectsTypeMismatchByDefault(t *testing.T) {
+	ctx := NewChatContext()
+	ctx.Items = []ChatItem{
+		&ChatMessage{ID: "item", Role: ChatRoleUser, Content: []ChatContent{{Text: "old"}}},
+	}
+
+	err := ctx.UpsertItem(&FunctionCall{ID: "item", CallID: "call_lookup", Name: "lookup"})
+
+	if err == nil {
+		t.Fatal("UpsertItem() error = nil, want type mismatch error")
+	}
+	if got, want := itemIDs(ctx.Items), "item"; got != want {
+		t.Fatalf("items = %q, want %q", got, want)
+	}
+	if _, ok := ctx.Items[0].(*ChatMessage); !ok {
+		t.Fatalf("items[0] = %T, want original *ChatMessage", ctx.Items[0])
+	}
+}
+
+func TestChatContextUpsertItemCanAllowTypeMismatch(t *testing.T) {
+	ctx := NewChatContext()
+	ctx.Items = []ChatItem{
+		&ChatMessage{ID: "item", Role: ChatRoleUser, Content: []ChatContent{{Text: "old"}}},
+	}
+	replacement := &FunctionCall{ID: "item", CallID: "call_lookup", Name: "lookup"}
+
+	if err := ctx.UpsertItem(replacement, ChatContextUpsertOptions{AllowTypeMismatch: true}); err != nil {
+		t.Fatalf("UpsertItem() error = %v", err)
+	}
+
+	if ctx.Items[0] != replacement {
+		t.Fatalf("items[0] = %#v, want replacement function call", ctx.Items[0])
 	}
 }
 

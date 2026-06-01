@@ -1,9 +1,14 @@
 package llm
 
 import (
+	"context"
 	"encoding/base64"
+	"encoding/json"
+	"errors"
 	"fmt"
+	"reflect"
 	"strings"
+	"time"
 )
 
 type DiffOps struct {
@@ -22,6 +27,13 @@ type SerializedImage struct {
 	MIMEType        string
 	DataBytes       []byte
 	ExternalURL     string
+}
+
+type FunctionCallResult struct {
+	FncCall    FunctionCall
+	FncCallOut *FunctionCallOutput
+	RawOutput  any
+	RawError   error
 }
 
 func SerializeImage(image *ImageContent) (*SerializedImage, error) {
@@ -90,6 +102,169 @@ func StripThinkingTokens(content string, thinking *bool) (string, bool) {
 		return content[idx+len(thinkTagStart):], true
 	}
 	return content, true
+}
+
+func ParseFunctionArguments(jsonArguments string) (map[string]any, error) {
+	var value any
+	if err := json.Unmarshal([]byte(jsonArguments), &value); err != nil {
+		return nil, fmt.Errorf("could not parse function arguments as JSON: %w", err)
+	}
+
+	for {
+		nested, ok := value.(string)
+		if !ok {
+			break
+		}
+		if err := json.Unmarshal([]byte(nested), &value); err != nil {
+			return nil, fmt.Errorf("function arguments decoded to a non-JSON string: %.200s", nested)
+		}
+	}
+
+	if value == nil {
+		return map[string]any{}, nil
+	}
+	args, ok := value.(map[string]any)
+	if !ok {
+		return nil, fmt.Errorf("expected object from function arguments, got %T", value)
+	}
+	return args, nil
+}
+
+func MakeFunctionCallOutput(fncCall FunctionCall, output any, exception error) FunctionCallResult {
+	if outputErr, ok := output.(error); ok {
+		exception = outputErr
+		output = nil
+	}
+
+	var toolErr ToolError
+	if errors.As(exception, &toolErr) {
+		return FunctionCallResult{
+			FncCall: fncCall,
+			FncCallOut: &FunctionCallOutput{
+				CallID:  fncCall.CallID,
+				Name:    fncCall.Name,
+				Output:  toolErr.Message,
+				IsError: true,
+			},
+			RawOutput: output,
+			RawError:  exception,
+		}
+	}
+
+	var stopResponse StopResponse
+	if errors.As(exception, &stopResponse) {
+		return FunctionCallResult{
+			FncCall:   fncCall,
+			RawOutput: output,
+			RawError:  exception,
+		}
+	}
+
+	if exception != nil {
+		return FunctionCallResult{
+			FncCall: fncCall,
+			FncCallOut: &FunctionCallOutput{
+				CallID:  fncCall.CallID,
+				Name:    fncCall.Name,
+				Output:  "An internal error occurred",
+				IsError: true,
+			},
+			RawOutput: output,
+			RawError:  exception,
+		}
+	}
+
+	if !isValidFunctionOutput(output) {
+		return FunctionCallResult{
+			FncCall:   fncCall,
+			RawOutput: output,
+		}
+	}
+
+	outputString := ""
+	if output != nil {
+		outputString = fmt.Sprint(output)
+	}
+
+	return FunctionCallResult{
+		FncCall: fncCall,
+		FncCallOut: &FunctionCallOutput{
+			CallID:  fncCall.CallID,
+			Name:    fncCall.Name,
+			Output:  outputString,
+			IsError: false,
+		},
+		RawOutput: output,
+	}
+}
+
+func ExecuteFunctionCall(ctx context.Context, toolCall *FunctionToolCall, toolCtx *ToolContext) FunctionCallResult {
+	args := toolCall.Arguments
+	if args == "" {
+		args = "{}"
+	}
+	fncCall := FunctionCall{
+		CallID:    toolCall.CallID,
+		Name:      toolCall.Name,
+		Arguments: args,
+		Extra:     toolCall.Extra,
+		CreatedAt: time.Now(),
+	}
+
+	tool := toolCtx.GetFunctionTool(toolCall.Name)
+	if tool == nil {
+		err := fmt.Errorf("unknown function: %s", toolCall.Name)
+		return FunctionCallResult{
+			FncCall: fncCall,
+			FncCallOut: &FunctionCallOutput{
+				CallID:    toolCall.CallID,
+				Name:      toolCall.Name,
+				Output:    fmt.Sprintf("Unknown function: %s", toolCall.Name),
+				IsError:   true,
+				CreatedAt: time.Now(),
+			},
+			RawError: err,
+		}
+	}
+
+	output, err := tool.Execute(ctx, args)
+	result := MakeFunctionCallOutput(fncCall, output, err)
+	if result.FncCallOut != nil && result.FncCallOut.CreatedAt.IsZero() {
+		result.FncCallOut.CreatedAt = time.Now()
+	}
+	return result
+}
+
+func isValidFunctionOutput(value any) bool {
+	if value == nil {
+		return true
+	}
+	switch value.(type) {
+	case string, int, int8, int16, int32, int64,
+		uint, uint8, uint16, uint32, uint64,
+		float32, float64, bool, complex64, complex128:
+		return true
+	}
+
+	v := reflect.ValueOf(value)
+	switch v.Kind() {
+	case reflect.Array, reflect.Slice:
+		for i := 0; i < v.Len(); i++ {
+			if !isValidFunctionOutput(v.Index(i).Interface()) {
+				return false
+			}
+		}
+		return true
+	case reflect.Map:
+		for _, key := range v.MapKeys() {
+			if !isValidFunctionOutput(key.Interface()) || !isValidFunctionOutput(v.MapIndex(key).Interface()) {
+				return false
+			}
+		}
+		return true
+	default:
+		return false
+	}
 }
 
 func ComputeChatCtxDiff(oldCtx, newCtx *ChatContext) *DiffOps {

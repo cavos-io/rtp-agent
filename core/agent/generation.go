@@ -2,8 +2,6 @@ package agent
 
 import (
 	"context"
-	"errors"
-	"fmt"
 	"sync"
 	"time"
 
@@ -128,72 +126,12 @@ func PerformToolExecutions(
 			wg.Add(1)
 			go func(fc *llm.FunctionToolCall) {
 				defer wg.Done()
-
-				call := llm.FunctionCall{
-					CallID:    fc.CallID,
-					Name:      fc.Name,
-					Arguments: fc.Arguments,
-					Extra:     fc.Extra,
-					CreatedAt: time.Now(),
-				}
-
-				tool := toolCtx.GetFunctionTool(fc.Name)
-				if tool == nil {
-					outCh <- ToolExecutionOutput{
-						FncCall: call,
-						FncCallOut: &llm.FunctionCallOutput{
-							CallID:    fc.CallID,
-							Name:      fc.Name,
-							Output:    fmt.Sprintf("Unknown function: %s", fc.Name),
-							IsError:   true,
-							CreatedAt: time.Now(),
-						},
-						RawError: fmt.Errorf("unknown function: %s", fc.Name),
-					}
-					return
-				}
-
-				result, err := tool.Execute(ctx, fc.Arguments)
-				if err != nil {
-					var stopResponse llm.StopResponse
-					if errors.As(err, &stopResponse) {
-						outCh <- ToolExecutionOutput{
-							FncCall:  call,
-							RawError: err,
-						}
-						return
-					}
-
-					var toolErr llm.ToolError
-					outputStr := "An internal error occurred"
-					if errors.As(err, &toolErr) {
-						outputStr = toolErr.Message
-					}
-
-					outCh <- ToolExecutionOutput{
-						FncCall: call,
-						FncCallOut: &llm.FunctionCallOutput{
-							CallID:    fc.CallID,
-							Name:      fc.Name,
-							Output:    outputStr,
-							IsError:   true,
-							CreatedAt: time.Now(),
-						},
-						RawError: err,
-					}
-					return
-				}
-
+				result := llm.ExecuteFunctionCall(ctx, fc, toolCtx)
 				outCh <- ToolExecutionOutput{
-					FncCall: call,
-					FncCallOut: &llm.FunctionCallOutput{
-						CallID:    fc.CallID,
-						Name:      fc.Name,
-						Output:    result,
-						IsError:   false,
-						CreatedAt: time.Now(),
-					},
-					RawOutput: result,
+					FncCall:    result.FncCall,
+					FncCallOut: result.FncCallOut,
+					RawOutput:  result.RawOutput,
+					RawError:   result.RawError,
 				}
 			}(fncCall)
 		}

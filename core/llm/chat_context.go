@@ -21,6 +21,26 @@ type ChatContextDictOptions struct {
 	ExcludeConfigUpdate bool
 }
 
+type ChatContextProviderFormatOptions struct {
+	InjectDummyUserMessage    *bool
+	InjectTrailingUserMessage *bool
+	ThoughtSignatures         map[string][]byte
+}
+
+func (o ChatContextProviderFormatOptions) injectDummyUserMessage() bool {
+	if o.InjectDummyUserMessage == nil {
+		return true
+	}
+	return *o.InjectDummyUserMessage
+}
+
+func (o ChatContextProviderFormatOptions) injectTrailingUserMessage() bool {
+	if o.InjectTrailingUserMessage == nil {
+		return false
+	}
+	return *o.InjectTrailingUserMessage
+}
+
 type ChatMessageArgs struct {
 	ID          string
 	Role        ChatRole
@@ -39,6 +59,10 @@ type ChatContextCopyOptions struct {
 	ExcludeHandoff      bool
 	ExcludeConfigUpdate bool
 	Tools               []interface{}
+}
+
+type ChatContextUpsertOptions struct {
+	AllowTypeMismatch bool
 }
 
 func (c *ChatContext) Copy(options ...ChatContextCopyOptions) *ChatContext {
@@ -124,6 +148,24 @@ func (c *ChatContext) IndexByID(itemID string) *int {
 			return &i
 		}
 	}
+	return nil
+}
+
+func (c *ChatContext) UpsertItem(item ChatItem, options ...ChatContextUpsertOptions) error {
+	var opts ChatContextUpsertOptions
+	if len(options) > 0 {
+		opts = options[0]
+	}
+
+	idx := c.IndexByID(item.GetID())
+	if idx == nil {
+		c.Items = append(c.Items, item)
+		return nil
+	}
+	if !opts.AllowTypeMismatch && item.GetType() != c.Items[*idx].GetType() {
+		return fmt.Errorf("item type mismatch: %s != %s", item.GetType(), c.Items[*idx].GetType())
+	}
+	c.Items[*idx] = item
 	return nil
 }
 
@@ -814,7 +856,17 @@ func (c *ChatContext) FindInsertionIndex(createdAt time.Time) int {
 	return 0
 }
 
-func (c *ChatContext) ToProviderFormat(format string) ([]map[string]any, any) {
+func (c *ChatContext) ToProviderFormat(format string, options ...ChatContextProviderFormatOptions) ([]map[string]any, any) {
+	messages, extra, _ := c.ToProviderFormatE(format, options...)
+	return messages, extra
+}
+
+func (c *ChatContext) ToProviderFormatE(format string, options ...ChatContextProviderFormatOptions) ([]map[string]any, any, error) {
+	var opts ChatContextProviderFormatOptions
+	if len(options) > 0 {
+		opts = options[0]
+	}
+
 	if format == "openai" {
 		messages := make([]map[string]any, 0)
 		for _, group := range groupOpenAIToolCalls(c.Items) {
@@ -842,7 +894,7 @@ func (c *ChatContext) ToProviderFormat(format string) ([]map[string]any, any) {
 				messages = append(messages, openAIToolOutput(toolOutput))
 			}
 		}
-		return messages, nil
+		return messages, nil, nil
 	}
 	if format == "openai.responses" {
 		items := make([]map[string]any, 0)
@@ -860,24 +912,28 @@ func (c *ChatContext) ToProviderFormat(format string) ([]map[string]any, any) {
 				items = append(items, openAIResponsesToolOutput(toolOutput))
 			}
 		}
-		return items, nil
+		return items, nil, nil
 	}
 	if format == "google" {
-		return c.toGoogleProviderFormat()
+		messages, extra := c.toGoogleProviderFormat(opts)
+		return messages, extra, nil
 	}
 	if format == "anthropic" {
-		return c.toAnthropicProviderFormat()
+		messages, extra := c.toAnthropicProviderFormat(opts)
+		return messages, extra, nil
 	}
 	if format == "aws" {
-		return c.toAWSProviderFormat()
+		messages, extra := c.toAWSProviderFormat(opts)
+		return messages, extra, nil
 	}
 	if format == "mistralai" {
-		return c.toMistralProviderFormat()
+		messages, extra := c.toMistralProviderFormat()
+		return messages, extra, nil
 	}
-	return nil, nil
+	return nil, nil, fmt.Errorf("unsupported provider format: %s", format)
 }
 
-func (c *ChatContext) toGoogleProviderFormat() ([]map[string]any, any) {
+func (c *ChatContext) toGoogleProviderFormat(opts ChatContextProviderFormatOptions) ([]map[string]any, any) {
 	turns := make([]map[string]any, 0)
 	systemMessages := make([]string, 0)
 	currentRole := ""
@@ -914,12 +970,12 @@ func (c *ChatContext) toGoogleProviderFormat() ([]map[string]any, any) {
 				flush()
 				currentRole = role
 			}
-			parts = append(parts, googleItemParts(item)...)
+			parts = append(parts, googleItemParts(item, opts)...)
 		}
 	}
 	flush()
 
-	if currentRole != "user" && currentRole != "tool" {
+	if opts.injectDummyUserMessage() && currentRole != "user" && currentRole != "tool" {
 		turns = append(turns, map[string]any{
 			"role":  "user",
 			"parts": []map[string]any{{"text": "."}},
@@ -929,7 +985,7 @@ func (c *ChatContext) toGoogleProviderFormat() ([]map[string]any, any) {
 	return turns, map[string]any{"system_messages": systemMessages}
 }
 
-func (c *ChatContext) toAnthropicProviderFormat() ([]map[string]any, any) {
+func (c *ChatContext) toAnthropicProviderFormat(opts ChatContextProviderFormatOptions) ([]map[string]any, any) {
 	messages := make([]map[string]any, 0)
 	systemMessages := make([]string, 0)
 	currentRole := ""
@@ -967,11 +1023,18 @@ func (c *ChatContext) toAnthropicProviderFormat() ([]map[string]any, any) {
 	}
 	flush()
 
-	if len(messages) == 0 || messages[0]["role"] != "user" {
+	if opts.injectDummyUserMessage() && (len(messages) == 0 || messages[0]["role"] != "user") {
 		messages = append([]map[string]any{{
 			"role":    "user",
 			"content": []map[string]any{{"text": "(empty)", "type": "text"}},
 		}}, messages...)
+	}
+
+	if opts.injectTrailingUserMessage() && len(messages) > 0 && messages[len(messages)-1]["role"] == "assistant" {
+		messages = append(messages, map[string]any{
+			"role":    "user",
+			"content": []map[string]any{{"text": " ", "type": "text"}},
+		})
 	}
 
 	return messages, map[string]any{"system_messages": systemMessages}
@@ -1012,7 +1075,7 @@ func (c *ChatContext) toMistralProviderFormat() ([]map[string]any, any) {
 	return entries, map[string]any{"instructions": instructions}
 }
 
-func (c *ChatContext) toAWSProviderFormat() ([]map[string]any, any) {
+func (c *ChatContext) toAWSProviderFormat(opts ChatContextProviderFormatOptions) ([]map[string]any, any) {
 	messages := make([]map[string]any, 0)
 	systemMessages := make([]string, 0)
 	currentRole := ""
@@ -1050,7 +1113,7 @@ func (c *ChatContext) toAWSProviderFormat() ([]map[string]any, any) {
 	}
 	flush()
 
-	if len(messages) == 0 || messages[0]["role"] != "user" {
+	if opts.injectDummyUserMessage() && (len(messages) == 0 || messages[0]["role"] != "user") {
 		messages = append([]map[string]any{{
 			"role":    "user",
 			"content": []map[string]any{{"text": "(empty)"}},
@@ -1435,7 +1498,7 @@ func googleItemRole(item ChatItem) string {
 	}
 }
 
-func googleItemParts(item ChatItem) []map[string]any {
+func googleItemParts(item ChatItem, opts ChatContextProviderFormatOptions) []map[string]any {
 	switch it := item.(type) {
 	case *ChatMessage:
 		parts := make([]map[string]any, 0, len(it.Content))
@@ -1455,13 +1518,19 @@ func googleItemParts(item ChatItem) []map[string]any {
 		if it.Arguments != "" {
 			_ = json.Unmarshal([]byte(it.Arguments), &args)
 		}
-		return []map[string]any{{
+		part := map[string]any{
 			"function_call": map[string]any{
 				"id":   it.CallID,
 				"name": it.Name,
 				"args": args,
 			},
-		}}
+		}
+		if opts.ThoughtSignatures != nil {
+			if signature, ok := opts.ThoughtSignatures[it.CallID]; ok {
+				part["thought_signature"] = signature
+			}
+		}
+		return []map[string]any{part}
 	case *FunctionCallOutput:
 		responseKey := "output"
 		if it.IsError {
