@@ -53,6 +53,28 @@ func TestStreamAdapterFlushSynthesizesBufferedText(t *testing.T) {
 	}
 }
 
+func TestStreamAdapterPreservesInternalNewlinesForSynthesis(t *testing.T) {
+	provider := &fakeStreamAdapterTTS{}
+	stream, err := NewStreamAdapter(provider).Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+	defer stream.Close()
+
+	if err := stream.PushText("first line\nsecond line"); err != nil {
+		t.Fatalf("PushText returned error: %v", err)
+	}
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush returned error: %v", err)
+	}
+
+	_ = nextStreamAdapterAudio(t, stream)
+
+	if got := provider.texts; len(got) != 1 || got[0] != "first line\nsecond line" {
+		t.Fatalf("synthesized texts = %#v, want internal newline preserved", got)
+	}
+}
+
 func TestStreamAdapterPropagatesTokenizerSegmentIDWithinSegment(t *testing.T) {
 	provider := &fakeStreamAdapterTTS{
 		events: []*SynthesizedAudio{

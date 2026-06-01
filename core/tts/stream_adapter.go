@@ -81,7 +81,7 @@ func (a *StreamAdapter) Stream(ctx context.Context) (SynthesizeStream, error) {
 func (w *streamAdapterWrapper) run() {
 	defer close(w.eventCh)
 
-	tokenizer := tokenize.NewBasicSentenceTokenizer().Stream("en")
+	tokenizer := newRetainFormatSentenceStream("en")
 
 	// Stream text to tokenizer
 	go func() {
@@ -122,7 +122,12 @@ func (w *streamAdapterWrapper) run() {
 }
 
 func (w *streamAdapterWrapper) synthesize(text string, segmentID string) error {
-	stream, err := w.adapter.tts.Synthesize(w.ctx, text)
+	synthText := strings.TrimSpace(text)
+	if synthText == "" {
+		return nil
+	}
+
+	stream, err := w.adapter.tts.Synthesize(w.ctx, synthText)
 	if err != nil {
 		return err
 	}
@@ -147,8 +152,8 @@ func (w *streamAdapterWrapper) synthesize(text string, segmentID string) error {
 					}
 					pending.IsFinal = true
 					w.eventCh <- pending
-				} else if strings.TrimSpace(text) != "" {
-					return fmt.Errorf("no audio frames were pushed for text: %s", text)
+				} else {
+					return fmt.Errorf("no audio frames were pushed for text: %s", synthText)
 				}
 				return nil
 			}
@@ -167,6 +172,17 @@ func (w *streamAdapterWrapper) synthesize(text string, segmentID string) error {
 		}
 		pending = audio
 	}
+}
+
+func newRetainFormatSentenceStream(language string) tokenize.SentenceStream {
+	return tokenize.NewBufferedTokenStream(func(s string) []string {
+		res := tokenize.SplitSentences(s, 20, true)
+		tokens := make([]string, len(res))
+		for i, r := range res {
+			tokens[i] = r.Token
+		}
+		return tokens
+	}, 20, 10)
 }
 
 func (w *streamAdapterWrapper) sendErr(err error) {
