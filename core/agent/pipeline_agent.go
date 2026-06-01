@@ -196,6 +196,17 @@ func (va *PipelineAgent) generateReply() {
 			}
 		}
 
+		if genData.GeneratedText != "" {
+			args := llm.ChatMessageArgs{
+				Role: llm.ChatRoleAssistant,
+				Text: genData.GeneratedText,
+			}
+			if len(genData.GeneratedExtra) > 0 {
+				args.Extra = genData.GeneratedExtra
+			}
+			va.chatCtx.AddMessage(args)
+		}
+
 		// Wait for tool executions to complete and collect results
 		var executedTools bool
 		for toolOut := range toolOutCh {
