@@ -592,15 +592,25 @@ func (s *openaiStream) Next() (*llm.ChatChunk, error) {
 	}
 
 	if resp.Usage != nil {
-		chunk.Usage = &llm.CompletionUsage{
-			CompletionTokens:   resp.Usage.CompletionTokens,
-			PromptTokens:       resp.Usage.PromptTokens,
-			PromptCachedTokens: resp.Usage.PromptTokensDetails.CachedTokens,
-			TotalTokens:        resp.Usage.TotalTokens,
-		}
+		chunk.Usage = openAICompletionUsage(resp.Usage)
 	}
 
 	return chunk, nil
+}
+
+func openAICompletionUsage(usage *openai.Usage) *llm.CompletionUsage {
+	if usage == nil {
+		return nil
+	}
+	result := &llm.CompletionUsage{
+		CompletionTokens: usage.CompletionTokens,
+		PromptTokens:     usage.PromptTokens,
+		TotalTokens:      usage.TotalTokens,
+	}
+	if usage.PromptTokensDetails != nil {
+		result.PromptCachedTokens = usage.PromptTokensDetails.CachedTokens
+	}
+	return result
 }
 
 func (s *openaiStream) Close() error {

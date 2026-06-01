@@ -180,3 +180,34 @@ func TestBuildOpenAIChatCompletionRequestMapsResponseFormat(t *testing.T) {
 		t.Fatalf("ResponseFormat.JSONSchema = %#v, want strict WeatherAnswer", req.ResponseFormat.JSONSchema)
 	}
 }
+
+func TestOpenAICompletionUsageHandlesMissingTokenDetails(t *testing.T) {
+	usage := openAICompletionUsage(&openaisdk.Usage{
+		CompletionTokens: 7,
+		PromptTokens:     11,
+		TotalTokens:      18,
+	})
+
+	if usage == nil {
+		t.Fatal("openAICompletionUsage() = nil, want usage")
+	}
+	if usage.CompletionTokens != 7 || usage.PromptTokens != 11 || usage.TotalTokens != 18 {
+		t.Fatalf("usage = %#v, want base token counts", usage)
+	}
+	if usage.PromptCachedTokens != 0 {
+		t.Fatalf("PromptCachedTokens = %d, want 0 without prompt token details", usage.PromptCachedTokens)
+	}
+}
+
+func TestOpenAICompletionUsageMapsCachedPromptTokens(t *testing.T) {
+	usage := openAICompletionUsage(&openaisdk.Usage{
+		PromptTokensDetails: &openaisdk.PromptTokensDetails{CachedTokens: 5},
+	})
+
+	if usage == nil {
+		t.Fatal("openAICompletionUsage() = nil, want usage")
+	}
+	if usage.PromptCachedTokens != 5 {
+		t.Fatalf("PromptCachedTokens = %d, want 5", usage.PromptCachedTokens)
+	}
+}
