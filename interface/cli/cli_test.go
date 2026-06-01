@@ -265,6 +265,12 @@ func TestConsoleLocalJobOptionsEnableRecordingWhenRequested(t *testing.T) {
 	if options.RecordingOptions != (agent.RecordingOptions{Audio: true, Traces: true, Logs: true, Transcript: true}) {
 		t.Fatalf("RecordingOptions = %#v, want all enabled", options.RecordingOptions)
 	}
+	if !strings.HasPrefix(options.SessionReportPath, "console-recordings/session-") {
+		t.Fatalf("SessionReportPath = %q, want console recording session path", options.SessionReportPath)
+	}
+	if !strings.HasSuffix(options.SessionReportPath, "/session_report.json") {
+		t.Fatalf("SessionReportPath = %q, want session_report.json", options.SessionReportPath)
+	}
 }
 
 func TestConsoleLocalJobOptionsDisableRecordingByDefault(t *testing.T) {
@@ -272,6 +278,9 @@ func TestConsoleLocalJobOptionsDisableRecordingByDefault(t *testing.T) {
 
 	if options.RecordingOptions != (agent.RecordingOptions{}) {
 		t.Fatalf("RecordingOptions = %#v, want zero value", options.RecordingOptions)
+	}
+	if options.SessionReportPath != "" {
+		t.Fatalf("SessionReportPath = %q, want empty when not recording", options.SessionReportPath)
 	}
 }
 

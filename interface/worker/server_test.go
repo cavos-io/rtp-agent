@@ -3,6 +3,7 @@ package worker
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"math"
@@ -10,6 +11,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"testing"
@@ -3022,6 +3024,67 @@ func TestExecuteLocalJobWithOptionsAppliesRecordingOptions(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("ExecuteLocalJobWithOptions() did not return after context cancellation")
+	}
+}
+
+func TestExecuteLocalJobWithOptionsSavesSessionReport(t *testing.T) {
+	server := NewAgentServer(WorkerOptions{})
+	startedCh := make(chan *JobContext, 1)
+	reportPath := filepath.Join(t.TempDir(), "recordings", "session_report.json")
+
+	if err := server.RTCSession(
+		func(ctx *JobContext) error {
+			startedCh <- ctx
+			return nil
+		},
+		nil,
+		func(ctx *JobContext) error {
+			ctx.Report.JobID = ctx.Job.GetId()
+			ctx.Report.Room = ctx.Job.GetRoom().GetName()
+			return nil
+		},
+	); err != nil {
+		t.Fatalf("RTCSession() error = %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	doneCh := make(chan error, 1)
+	go func() {
+		doneCh <- server.ExecuteLocalJobWithOptions(ctx, "room-a", "agent-local", LocalJobOptions{
+			FakeJob:           true,
+			SessionReportPath: reportPath,
+		})
+	}()
+
+	select {
+	case <-startedCh:
+	case <-time.After(time.Second):
+		t.Fatal("local job entrypoint did not run")
+	}
+
+	cancel()
+	select {
+	case err := <-doneCh:
+		if err != nil {
+			t.Fatalf("ExecuteLocalJobWithOptions() error = %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("ExecuteLocalJobWithOptions() did not return after context cancellation")
+	}
+
+	reportBytes, err := os.ReadFile(reportPath)
+	if err != nil {
+		t.Fatalf("ReadFile(%q): %v", reportPath, err)
+	}
+	var report agent.SessionReport
+	if err := json.Unmarshal(reportBytes, &report); err != nil {
+		t.Fatalf("Unmarshal report: %v", err)
+	}
+	if report.JobID == "" {
+		t.Fatal("saved report JobID is empty")
+	}
+	if report.Room != "room-a" {
+		t.Fatalf("saved report Room = %q, want room-a", report.Room)
 	}
 }
 

@@ -9,9 +9,11 @@ import (
 	"io"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/cavos-io/rtp-agent/core/agent"
 	"github.com/cavos-io/rtp-agent/interface/worker"
@@ -535,6 +537,11 @@ func consoleLocalJobOptions(args ConsoleArgs) worker.LocalJobOptions {
 			Logs:       true,
 			Transcript: true,
 		}
+		options.SessionReportPath = filepath.Join(
+			"console-recordings",
+			"session-"+time.Now().Format("01-02-150405"),
+			"session_report.json",
+		)
 	}
 	return options
 }

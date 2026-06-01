@@ -91,10 +91,11 @@ type WorkerInfo struct {
 }
 
 type LocalJobOptions struct {
-	FakeJob          bool
-	RoomInfo         *livekit.Room
-	Token            string
-	RecordingOptions agent.RecordingOptions
+	FakeJob           bool
+	RoomInfo          *livekit.Room
+	Token             string
+	RecordingOptions  agent.RecordingOptions
+	SessionReportPath string
 }
 
 type WorkerOptions struct {
@@ -1599,6 +1600,9 @@ func (s *AgentServer) ExecuteLocalJobWithOptions(ctx context.Context, roomName s
 	// Block until context is done for local execution
 	<-ctx.Done()
 	s.finishJob(jobCtx)
+	if options.SessionReportPath != "" {
+		return saveSessionReport(options.SessionReportPath, jobCtx.Report)
+	}
 	return nil
 }
 
@@ -1642,6 +1646,23 @@ func (s *AgentServer) runSessionEnd(jobCtx *JobContext) {
 	case <-time.After(timeout):
 		logger.Logger.Errorw("Session end callback timed out", nil, "jobId", jobCtx.Job.Id, "timeout", timeout)
 	}
+}
+
+func saveSessionReport(path string, report *agent.SessionReport) error {
+	if report == nil {
+		return nil
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return fmt.Errorf("create session report directory: %w", err)
+	}
+	reportBytes, err := json.MarshalIndent(report, "", "  ")
+	if err != nil {
+		return fmt.Errorf("marshal session report: %w", err)
+	}
+	if err := os.WriteFile(path, reportBytes, 0o644); err != nil {
+		return fmt.Errorf("write session report: %w", err)
+	}
+	return nil
 }
 
 func newLocalJobContext(roomName string, participantIdentity string, opts WorkerOptions) *JobContext {
