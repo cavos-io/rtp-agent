@@ -4,7 +4,7 @@ import (
 	"net/url"
 	"testing"
 
-	"github.com/cavos-io/conversation-worker/core/stt"
+	"github.com/cavos-io/rtp-agent/core/stt"
 )
 
 func TestDeepgramSpeechEventPreservesAlternativeWords(t *testing.T) {

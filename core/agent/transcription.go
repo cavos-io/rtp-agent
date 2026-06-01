@@ -8,7 +8,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/cavos-io/conversation-worker/model"
+	"github.com/cavos-io/rtp-agent/model"
 )
 
 type TranscriptionFilter struct {

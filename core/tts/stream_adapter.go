@@ -8,8 +8,8 @@ import (
 	"strings"
 	"sync"
 
-	cavosmath "github.com/cavos-io/conversation-worker/library/math"
-	"github.com/cavos-io/conversation-worker/library/tokenize"
+	cavosmath "github.com/cavos-io/rtp-agent/library/math"
+	"github.com/cavos-io/rtp-agent/library/tokenize"
 )
 
 type StreamAdapter struct {

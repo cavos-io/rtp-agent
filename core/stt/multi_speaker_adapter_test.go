@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/cavos-io/conversation-worker/model"
+	"github.com/cavos-io/rtp-agent/model"
 )
 
 func TestPrimarySpeakerDetectorFormatsPrimaryAndBackgroundText(t *testing.T) {

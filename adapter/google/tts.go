@@ -7,8 +7,8 @@ import (
 
 	texttospeech "cloud.google.com/go/texttospeech/apiv1"
 	"cloud.google.com/go/texttospeech/apiv1/texttospeechpb"
-	"github.com/cavos-io/conversation-worker/core/tts"
-	"github.com/cavos-io/conversation-worker/model"
+	"github.com/cavos-io/rtp-agent/core/tts"
+	"github.com/cavos-io/rtp-agent/model"
 	"google.golang.org/api/option"
 )
 
@@ -49,7 +49,7 @@ func (t *GoogleTTS) Label() string { return "google.TTS" }
 func (t *GoogleTTS) Capabilities() tts.TTSCapabilities {
 	return tts.TTSCapabilities{Streaming: false, AlignedTranscript: false}
 }
-func (t *GoogleTTS) SampleRate() int { return 24000 }
+func (t *GoogleTTS) SampleRate() int  { return 24000 }
 func (t *GoogleTTS) NumChannels() int { return 1 }
 
 func (t *GoogleTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStream, error) {
@@ -73,14 +73,14 @@ func (t *GoogleTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStr
 
 func (t *GoogleTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
 	// Google Cloud TTS doesn't support a streaming input API natively in the same way as STT.
-	// You provide text and it streams audio back via StreamingSynthesize, 
+	// You provide text and it streams audio back via StreamingSynthesize,
 	// but the text is sent in one go per request.
 	return nil, fmt.Errorf("streaming tts input not yet implemented for google cloud")
 }
 
 type googleTTSChunkedStream struct {
-	data   []byte
-	offset int
+	data           []byte
+	offset         int
 	headerStripped bool
 }
 

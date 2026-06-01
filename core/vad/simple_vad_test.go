@@ -9,8 +9,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/cavos-io/conversation-worker/library/telemetry"
-	"github.com/cavos-io/conversation-worker/model"
+	"github.com/cavos-io/rtp-agent/library/telemetry"
+	"github.com/cavos-io/rtp-agent/model"
 )
 
 func TestSimpleVADMetadataAndCapabilities(t *testing.T) {

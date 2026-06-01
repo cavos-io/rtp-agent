@@ -8,9 +8,9 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/cavos-io/conversation-worker/library/logger"
-	cavosmath "github.com/cavos-io/conversation-worker/library/math"
-	"github.com/cavos-io/conversation-worker/model"
+	"github.com/cavos-io/rtp-agent/library/logger"
+	cavosmath "github.com/cavos-io/rtp-agent/library/math"
+	"github.com/cavos-io/rtp-agent/model"
 )
 
 type FallbackAdapter struct {

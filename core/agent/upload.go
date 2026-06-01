@@ -9,11 +9,11 @@ import (
 	"net/http"
 	"net/textproto"
 	"net/url"
-	"time"
 	"os"
 	"strings"
+	"time"
 
-	"github.com/cavos-io/conversation-worker/library/logger"
+	"github.com/cavos-io/rtp-agent/library/logger"
 	"github.com/livekit/protocol/auth"
 	"github.com/livekit/protocol/livekit"
 	"google.golang.org/protobuf/proto"
@@ -47,7 +47,7 @@ func UploadSessionReport(
 	at := auth.NewAccessToken(apiKey, apiSecret).
 		AddGrant(&auth.VideoGrant{}).
 		SetValidFor(6 * 3600 * time.Second)
-	
+
 	// Add observability grants
 	// Note: go auth package might not have Observability grants struct yet or it's handled differently,
 	// let's just use standard grants if Observability isn't available
@@ -68,7 +68,7 @@ func UploadSessionReport(
 	if report.AudioRecordingStartedAt != nil {
 		headerMsg.StartTime = timestamppb.New(time.UnixMilli(int64(*report.AudioRecordingStartedAt * 1000)))
 	}
-	
+
 	headerBytes, err := proto.Marshal(headerMsg)
 	if err != nil {
 		return fmt.Errorf("failed to marshal header msg: %w", err)

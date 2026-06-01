@@ -8,9 +8,9 @@ import (
 	"sync"
 	"time"
 
-	lkmath "github.com/cavos-io/conversation-worker/library/math"
-	"github.com/cavos-io/conversation-worker/library/telemetry"
-	"github.com/cavos-io/conversation-worker/model"
+	lkmath "github.com/cavos-io/rtp-agent/library/math"
+	"github.com/cavos-io/rtp-agent/library/telemetry"
+	"github.com/cavos-io/rtp-agent/model"
 )
 
 type SimpleVAD struct {

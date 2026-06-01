@@ -8,10 +8,10 @@ import (
 	"io"
 	"net/http"
 
-	"github.com/cavos-io/conversation-worker/core/stt"
-	"github.com/cavos-io/conversation-worker/core/tts"
-	"github.com/cavos-io/conversation-worker/library/utils/language"
-	"github.com/cavos-io/conversation-worker/model"
+	"github.com/cavos-io/rtp-agent/core/stt"
+	"github.com/cavos-io/rtp-agent/core/tts"
+	"github.com/cavos-io/rtp-agent/library/utils/language"
+	"github.com/cavos-io/rtp-agent/model"
 )
 
 type AzureSTT struct {
@@ -67,7 +67,7 @@ func (s *AzureSTT) Recognize(ctx context.Context, frames []*model.AudioFrame, la
 	}
 
 	var result struct {
-		DisplayText string `json:"DisplayText"`
+		DisplayText       string `json:"DisplayText"`
 		RecognitionStatus string `json:"RecognitionStatus"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
@@ -103,7 +103,7 @@ func (t *AzureTTS) Label() string { return "azure.TTS" }
 func (t *AzureTTS) Capabilities() tts.TTSCapabilities {
 	return tts.TTSCapabilities{Streaming: false, AlignedTranscript: false}
 }
-func (t *AzureTTS) SampleRate() int { return 16000 }
+func (t *AzureTTS) SampleRate() int  { return 16000 }
 func (t *AzureTTS) NumChannels() int { return 1 }
 
 func (t *AzureTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStream, error) {

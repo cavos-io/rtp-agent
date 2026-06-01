@@ -7,8 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/cavos-io/conversation-worker/library/utils/codecs"
-	"github.com/cavos-io/conversation-worker/model"
+	"github.com/cavos-io/rtp-agent/library/utils/codecs"
+	"github.com/cavos-io/rtp-agent/model"
 )
 
 type AudioFrame = model.AudioFrame

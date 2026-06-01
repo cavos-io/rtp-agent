@@ -5,7 +5,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/cavos-io/conversation-worker/library/logger"
+	"github.com/cavos-io/rtp-agent/library/logger"
 )
 
 type DtmfEvent struct {
@@ -61,7 +61,7 @@ func (i *IVRActivity) Stop() {
 func (i *IVRActivity) OnDtmf(digit string) {
 	i.mu.Lock()
 	defer i.mu.Unlock()
-	
+
 	if i.ctx.Err() != nil {
 		return
 	}
@@ -83,7 +83,7 @@ func (i *IVRActivity) run() {
 				timer.Stop()
 			}
 			return
-		
+
 		case ev := <-i.dtmfCh:
 			i.mu.Lock()
 			i.buffer += ev.Digit

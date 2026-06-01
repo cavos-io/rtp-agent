@@ -8,8 +8,8 @@ import (
 	"io"
 	"net/http"
 
-	"github.com/cavos-io/conversation-worker/core/tts"
-	"github.com/cavos-io/conversation-worker/model"
+	"github.com/cavos-io/rtp-agent/core/tts"
+	"github.com/cavos-io/rtp-agent/model"
 )
 
 type AsyncAITTS struct {
@@ -31,7 +31,7 @@ func (t *AsyncAITTS) Label() string { return "asyncai.TTS" }
 func (t *AsyncAITTS) Capabilities() tts.TTSCapabilities {
 	return tts.TTSCapabilities{Streaming: false, AlignedTranscript: false}
 }
-func (t *AsyncAITTS) SampleRate() int { return 24000 }
+func (t *AsyncAITTS) SampleRate() int  { return 24000 }
 func (t *AsyncAITTS) NumChannels() int { return 1 }
 
 func (t *AsyncAITTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStream, error) {

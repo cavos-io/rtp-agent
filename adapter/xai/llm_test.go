@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/cavos-io/conversation-worker/core/llm"
+	"github.com/cavos-io/rtp-agent/core/llm"
 )
 
 func TestBuildXAIMessagesGroupsToolCallsWithOutputs(t *testing.T) {

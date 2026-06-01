@@ -6,7 +6,7 @@ import (
 	"io"
 	"testing"
 
-	"github.com/cavos-io/conversation-worker/core/llm"
+	"github.com/cavos-io/rtp-agent/core/llm"
 )
 
 func TestPerformLLMInferenceIgnoresNonFunctionToolCalls(t *testing.T) {

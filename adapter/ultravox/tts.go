@@ -8,8 +8,8 @@ import (
 	"io"
 	"net/http"
 
-	"github.com/cavos-io/conversation-worker/core/tts"
-	"github.com/cavos-io/conversation-worker/model"
+	"github.com/cavos-io/rtp-agent/core/tts"
+	"github.com/cavos-io/rtp-agent/model"
 )
 
 type UltravoxTTS struct {
@@ -31,7 +31,7 @@ func (t *UltravoxTTS) Label() string { return "ultravox.TTS" }
 func (t *UltravoxTTS) Capabilities() tts.TTSCapabilities {
 	return tts.TTSCapabilities{Streaming: false, AlignedTranscript: false}
 }
-func (t *UltravoxTTS) SampleRate() int { return 24000 }
+func (t *UltravoxTTS) SampleRate() int  { return 24000 }
 func (t *UltravoxTTS) NumChannels() int { return 1 }
 
 func (t *UltravoxTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStream, error) {

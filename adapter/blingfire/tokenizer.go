@@ -3,7 +3,7 @@ package blingfire
 import (
 	"strings"
 
-	"github.com/cavos-io/conversation-worker/library/tokenize"
+	"github.com/cavos-io/rtp-agent/library/tokenize"
 )
 
 type SentenceTokenizer struct {
@@ -31,7 +31,7 @@ func NewSentenceTokenizer(language string, minSentenceLen, streamContextLen int)
 
 func (t *SentenceTokenizer) Tokenize(text string, language string) []string {
 	sentences := TextToSentences(text)
-	
+
 	var newSentences []string
 	var buff string
 

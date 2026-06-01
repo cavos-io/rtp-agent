@@ -10,8 +10,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/cavos-io/conversation-worker/library/logger"
-	"github.com/cavos-io/conversation-worker/model"
+	"github.com/cavos-io/rtp-agent/library/logger"
+	"github.com/cavos-io/rtp-agent/model"
 	"github.com/hajimehoshi/go-mp3"
 	"github.com/jfreymuth/oggvorbis"
 	lksdk "github.com/livekit/server-sdk-go/v2"
@@ -446,11 +446,11 @@ func readAudioFramesFromFile(path string, loop bool, stopCh <-chan struct{}) <-c
 						return
 					}
 					sampleRate = uint32(vorbis.SampleRate())
-					
+
 					// Convert float32 to int16 PCM
 					floatBuf := make([]float32, 4096)
 					pcmBuf := make([]int16, 4096)
-					
+
 					for {
 						n, err := vorbis.Read(floatBuf)
 						if err == io.EOF {
@@ -462,8 +462,12 @@ func readAudioFramesFromFile(path string, loop bool, stopCh <-chan struct{}) <-c
 
 						for i := 0; i < n; i++ {
 							val := floatBuf[i] * 32767
-							if val > 32767 { val = 32767 }
-							if val < -32768 { val = -32768 }
+							if val > 32767 {
+								val = 32767
+							}
+							if val < -32768 {
+								val = -32768
+							}
 							pcmBuf[i] = int16(val)
 						}
 
@@ -483,7 +487,7 @@ func readAudioFramesFromFile(path string, loop bool, stopCh <-chan struct{}) <-c
 					}
 					sampleRate = uint32(decoder.SampleRate())
 					reader = decoder
-				
+
 					buf := make([]byte, 4096)
 					for {
 						n, err := reader.Read(buf)

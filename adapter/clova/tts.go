@@ -8,8 +8,8 @@ import (
 	"net/http"
 	"net/url"
 
-	"github.com/cavos-io/conversation-worker/core/tts"
-	"github.com/cavos-io/conversation-worker/model"
+	"github.com/cavos-io/rtp-agent/core/tts"
+	"github.com/cavos-io/rtp-agent/model"
 )
 
 type ClovaTTS struct {
@@ -33,7 +33,7 @@ func (t *ClovaTTS) Label() string { return "clova.TTS" }
 func (t *ClovaTTS) Capabilities() tts.TTSCapabilities {
 	return tts.TTSCapabilities{Streaming: false, AlignedTranscript: false}
 }
-func (t *ClovaTTS) SampleRate() int { return 24000 }
+func (t *ClovaTTS) SampleRate() int  { return 24000 }
 func (t *ClovaTTS) NumChannels() int { return 1 }
 
 func (t *ClovaTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStream, error) {

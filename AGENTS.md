@@ -85,7 +85,7 @@ environment.
 ## Current Known Drift
 
 - The repository is branded as `rtp-agent`, but the Go module path is currently
-  `github.com/cavos-io/conversation-worker`.
+  `github.com/cavos-io/rtp-agent`.
 - Several LiveKit reference areas already have partial Go equivalents. Treat
   existing Go code as the starting point and close behavioral gaps
   incrementally.

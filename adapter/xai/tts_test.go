@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/cavos-io/conversation-worker/core/tts"
+	"github.com/cavos-io/rtp-agent/core/tts"
 )
 
 func TestXaiTTSDefaultsMatchReference(t *testing.T) {

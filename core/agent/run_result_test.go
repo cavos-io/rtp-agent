@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/cavos-io/conversation-worker/core/llm"
+	"github.com/cavos-io/rtp-agent/core/llm"
 )
 
 func TestRunResultRecordsSupportedItemsInChronologicalOrder(t *testing.T) {

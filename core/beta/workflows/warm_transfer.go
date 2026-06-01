@@ -7,9 +7,9 @@ import (
 	"os"
 	"sync"
 
-	"github.com/cavos-io/conversation-worker/core/agent"
-	"github.com/cavos-io/conversation-worker/core/llm"
-	"github.com/cavos-io/conversation-worker/library/logger"
+	"github.com/cavos-io/rtp-agent/core/agent"
+	"github.com/cavos-io/rtp-agent/core/llm"
+	"github.com/cavos-io/rtp-agent/library/logger"
 	lksdk "github.com/livekit/server-sdk-go/v2"
 )
 
@@ -51,13 +51,13 @@ type WarmTransferTask struct {
 	SipHeaders        map[string]string
 	HoldAudio         interface{}
 
-	callerRoom        *lksdk.Room
-	humanAgentSess    *agent.AgentSession
+	callerRoom         *lksdk.Room
+	humanAgentSess     *agent.AgentSession
 	humanAgentIdentity string
-	
-	backgroundAudio   *agent.BackgroundAudioPlayer
-	holdAudioHandle   *agent.PlayHandle
-	
+
+	backgroundAudio *agent.BackgroundAudioPlayer
+	holdAudioHandle *agent.PlayHandle
+
 	mu sync.Mutex
 }
 
@@ -105,16 +105,16 @@ func (t *WarmTransferTask) OnEnter() {
 	defer t.mu.Unlock()
 
 	logger.Logger.Infow("Entering warm transfer task, dialing human agent", "target", t.TargetPhoneNumber)
-	
+
 	// In a full implementation, we would start background audio and dial SIP
 	// self.background_audio = BackgroundAudioPlayer()
 	// self.hold_audio = AudioConfig(BuiltinAudioClip.HOLD_MUSIC, volume=0.8)
-	
+
 	t.backgroundAudio = agent.NewBackgroundAudioPlayer(agent.AudioConfig{
 		Source: agent.HoldMusic,
 		Volume: 0.8,
 	}, nil)
-	
+
 	// We'll need the room from the session to start background audio
 	// This part is tricky without a fully linked session/activity
 }
@@ -136,7 +136,7 @@ func (t *WarmTransferTask) ConnectToCaller() error {
 	defer t.mu.Unlock()
 
 	logger.Logger.Debugw("Connecting human agent to caller")
-	
+
 	// In Python:
 	// await job_ctx.api.room.move_participant(
 	//    api.MoveParticipantRequest(
@@ -145,7 +145,7 @@ func (t *WarmTransferTask) ConnectToCaller() error {
 	//        destination_room=self._caller_room.name,
 	//    )
 	// )
-	
+
 	t.Complete(&WarmTransferResult{HumanAgentIdentity: t.humanAgentIdentity})
 	return nil
 }

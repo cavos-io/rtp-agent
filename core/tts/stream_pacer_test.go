@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/cavos-io/conversation-worker/model"
+	"github.com/cavos-io/rtp-agent/model"
 )
 
 func TestSentenceStreamPacerBatchesQueuedSentencesByMaxTextLength(t *testing.T) {

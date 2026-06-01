@@ -5,12 +5,12 @@ import (
 	"io"
 	"sync"
 
-	"github.com/cavos-io/conversation-worker/core/llm"
-	"github.com/cavos-io/conversation-worker/core/stt"
-	"github.com/cavos-io/conversation-worker/core/tts"
-	"github.com/cavos-io/conversation-worker/core/vad"
-	"github.com/cavos-io/conversation-worker/library/logger"
-	"github.com/cavos-io/conversation-worker/model"
+	"github.com/cavos-io/rtp-agent/core/llm"
+	"github.com/cavos-io/rtp-agent/core/stt"
+	"github.com/cavos-io/rtp-agent/core/tts"
+	"github.com/cavos-io/rtp-agent/core/vad"
+	"github.com/cavos-io/rtp-agent/library/logger"
+	"github.com/cavos-io/rtp-agent/model"
 )
 
 type PipelineAgent struct {
@@ -105,7 +105,7 @@ func (va *PipelineAgent) vadLoop(stream vad.VADStream) {
 		if ev.Type == vad.VADEventStartOfSpeech {
 			logger.Logger.Infow("User started speaking")
 			va.session.UpdateUserState(UserStateSpeaking)
-			
+
 			// Interrupt ongoing agent speech/generation
 			va.mu.Lock()
 			if va.cancel != nil {
@@ -201,7 +201,7 @@ func (va *PipelineAgent) generateReply() {
 		for toolOut := range toolOutCh {
 			executedTools = true
 			logger.Logger.Infow("Tool executed", "name", toolOut.FncCall.Name)
-			
+
 			va.chatCtx.Append(&toolOut.FncCall)
 			if toolOut.FncCallOut != nil {
 				va.chatCtx.Append(toolOut.FncCallOut)

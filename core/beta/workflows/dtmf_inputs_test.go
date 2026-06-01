@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/cavos-io/conversation-worker/core/agent"
+	"github.com/cavos-io/rtp-agent/core/agent"
 )
 
 func TestRecordInputsToolRejectsInvalidDtmfEvents(t *testing.T) {

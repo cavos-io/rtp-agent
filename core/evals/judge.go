@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/cavos-io/conversation-worker/core/llm"
+	"github.com/cavos-io/rtp-agent/core/llm"
 )
 
 type Judge struct {
@@ -85,7 +85,7 @@ type submitVerdictTool struct {
 	reasoning string
 }
 
-func (t *submitVerdictTool) ID() string { return "submit_verdict" }
+func (t *submitVerdictTool) ID() string   { return "submit_verdict" }
 func (t *submitVerdictTool) Name() string { return "submit_verdict" }
 func (t *submitVerdictTool) Description() string {
 	return "Submit your evaluation verdict."
@@ -95,12 +95,12 @@ func (t *submitVerdictTool) Parameters() map[string]any {
 		"type": "object",
 		"properties": map[string]any{
 			"verdict": map[string]any{
-				"type": "string",
-				"enum": []string{"pass", "fail", "maybe"},
+				"type":        "string",
+				"enum":        []string{"pass", "fail", "maybe"},
 				"description": "Your judgment - 'pass' if criteria met, 'fail' if not, 'maybe' if uncertain.",
 			},
 			"reasoning": map[string]any{
-				"type": "string",
+				"type":        "string",
 				"description": "Brief explanation of your reasoning.",
 			},
 		},

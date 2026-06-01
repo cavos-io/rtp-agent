@@ -8,8 +8,8 @@ import (
 	"io"
 	"net/http"
 
-	"github.com/cavos-io/conversation-worker/core/tts"
-	"github.com/cavos-io/conversation-worker/model"
+	"github.com/cavos-io/rtp-agent/core/tts"
+	"github.com/cavos-io/rtp-agent/model"
 )
 
 type TelnyxTTS struct {
@@ -31,7 +31,7 @@ func (t *TelnyxTTS) Label() string { return "telnyx.TTS" }
 func (t *TelnyxTTS) Capabilities() tts.TTSCapabilities {
 	return tts.TTSCapabilities{Streaming: false, AlignedTranscript: false}
 }
-func (t *TelnyxTTS) SampleRate() int { return 24000 }
+func (t *TelnyxTTS) SampleRate() int  { return 24000 }
 func (t *TelnyxTTS) NumChannels() int { return 1 }
 
 func (t *TelnyxTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStream, error) {

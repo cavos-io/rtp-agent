@@ -3,7 +3,7 @@ package nltk
 import (
 	"strings"
 
-	"github.com/cavos-io/conversation-worker/library/tokenize"
+	"github.com/cavos-io/rtp-agent/library/tokenize"
 )
 
 type SentenceTokenizer struct {
@@ -32,7 +32,7 @@ func NewSentenceTokenizer(language string, minSentenceLen, streamContextLen int)
 func (t *SentenceTokenizer) Tokenize(text string, language string) []string {
 	// Fallback to library regex-based tokenization as NLTK is a python native module
 	sentences := tokenize.SplitSentences(text, 20, false)
-	
+
 	var newSentences []string
 	var buff string
 
