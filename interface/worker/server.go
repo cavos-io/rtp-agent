@@ -1370,7 +1370,10 @@ func (s *AgentServer) emitWorkerRegistered(workerID string, serverInfo *livekit.
 func (s *AgentServer) reportActiveJobs() {
 	s.mu.Lock()
 	jobIDs := make([]string, 0, len(s.activeJobs))
-	for jobID := range s.activeJobs {
+	for jobID, jobCtx := range s.activeJobs {
+		if jobCtx.IsFakeJob() {
+			continue
+		}
 		jobIDs = append(jobIDs, jobID)
 	}
 	s.mu.Unlock()

@@ -2075,8 +2075,11 @@ func TestHandleRegisterReportsActiveJobs(t *testing.T) {
 		return nil
 	}
 	jobCtx := NewJobContext(&livekit.Job{Id: "job_active"}, "", "", "")
+	fakeCtx := NewJobContext(&livekit.Job{Id: "mock-job-local"}, "", "", "")
+	fakeCtx.fakeJob = true
 	server.mu.Lock()
 	server.activeJobs[jobCtx.Job.Id] = jobCtx
+	server.activeJobs[fakeCtx.Job.Id] = fakeCtx
 	server.mu.Unlock()
 
 	server.handleMessage(context.Background(), &livekit.ServerMessage{
@@ -2091,7 +2094,7 @@ func TestHandleRegisterReportsActiveJobs(t *testing.T) {
 		t.Fatal("migrate job message is nil")
 	}
 	if len(migrate.JobIds) != 1 || migrate.JobIds[0] != "job_active" {
-		t.Fatalf("MigrateJob.JobIds = %v, want [job_active]", migrate.JobIds)
+		t.Fatalf("MigrateJob.JobIds = %v, want only non-fake job [job_active]", migrate.JobIds)
 	}
 }
 
