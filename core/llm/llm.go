@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"reflect"
+	"strings"
 	"sync"
 	"time"
 
@@ -403,6 +405,79 @@ type LLM interface {
 	Chat(ctx context.Context, chatCtx *ChatContext, opts ...ChatOption) (LLMStream, error)
 }
 
+type labelProviderLLM interface {
+	Label() string
+}
+
+type modelProviderLLM interface {
+	Model() string
+}
+
+type providerProviderLLM interface {
+	Provider() string
+}
+
+type prewarmProviderLLM interface {
+	Prewarm()
+}
+
+func Label(llm LLM) string {
+	if provider, ok := llm.(labelProviderLLM); ok {
+		if label := provider.Label(); label != "" {
+			return label
+		}
+	}
+	if label := reflectedLLMLabel(llm); label != "" {
+		return label
+	}
+	return "unknown"
+}
+
+func Model(llm LLM) string {
+	if provider, ok := llm.(modelProviderLLM); ok {
+		if model := provider.Model(); model != "" {
+			return model
+		}
+	}
+	return "unknown"
+}
+
+func Provider(llm LLM) string {
+	if provider, ok := llm.(providerProviderLLM); ok {
+		if name := provider.Provider(); name != "" {
+			return name
+		}
+	}
+	return "unknown"
+}
+
+func Prewarm(llm LLM) {
+	if provider, ok := llm.(prewarmProviderLLM); ok {
+		provider.Prewarm()
+	}
+}
+
+func reflectedLLMLabel(llm LLM) string {
+	if llm == nil {
+		return ""
+	}
+	t := reflect.TypeOf(llm)
+	for t.Kind() == reflect.Pointer {
+		t = t.Elem()
+	}
+	if t.Name() == "" {
+		return ""
+	}
+	pkg := t.PkgPath()
+	if idx := strings.LastIndex(pkg, "/"); idx >= 0 {
+		pkg = pkg[idx+1:]
+	}
+	if pkg == "" {
+		return t.Name()
+	}
+	return pkg + "." + t.Name()
+}
+
 type LLMStream interface {
 	Next() (*ChatChunk, error)
 	Close() error
@@ -684,6 +759,22 @@ func (f *FallbackAdapter) setAvailable(index int, available bool) {
 	if changed {
 		f.emitAvailabilityChanged(index, available)
 	}
+}
+
+func (f *FallbackAdapter) Label() string {
+	return fmt.Sprintf("FallbackAdapter(%s)", Label(f.llms[0]))
+}
+
+func (f *FallbackAdapter) Model() string {
+	return "FallbackAdapter"
+}
+
+func (f *FallbackAdapter) Provider() string {
+	return "livekit"
+}
+
+func (f *FallbackAdapter) Prewarm() {
+	Prewarm(f.llms[0])
 }
 
 func (f *FallbackAdapter) AvailabilityChangedCh() <-chan FallbackAvailabilityChangedEvent {

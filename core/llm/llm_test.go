@@ -1,12 +1,56 @@
 package llm
 
 import (
+	"context"
+	"io"
 	"testing"
 
 	"github.com/cavos-io/rtp-agent/core/audio/model"
 	"github.com/cavos-io/rtp-agent/library/telemetry"
 	"github.com/cavos-io/rtp-agent/library/utils/images"
 )
+
+func TestLLMMetadataDefaults(t *testing.T) {
+	provider := &metadataTestLLM{}
+
+	if got := Label(provider); got != "llm.metadataTestLLM" {
+		t.Fatalf("Label() = %q, want llm.metadataTestLLM", got)
+	}
+	if got := Model(provider); got != "unknown" {
+		t.Fatalf("Model() = %q, want unknown", got)
+	}
+	if got := Provider(provider); got != "unknown" {
+		t.Fatalf("Provider() = %q, want unknown", got)
+	}
+}
+
+func TestLLMMetadataUsesProviderOverrides(t *testing.T) {
+	provider := &metadataTestLLM{
+		label:    "test.LLM",
+		model:    "model-a",
+		provider: "provider-a",
+	}
+
+	if got := Label(provider); got != "test.LLM" {
+		t.Fatalf("Label() = %q, want provider label", got)
+	}
+	if got := Model(provider); got != "model-a" {
+		t.Fatalf("Model() = %q, want model-a", got)
+	}
+	if got := Provider(provider); got != "provider-a" {
+		t.Fatalf("Provider() = %q, want provider-a", got)
+	}
+}
+
+func TestLLMPrewarmDelegatesWhenSupported(t *testing.T) {
+	provider := &metadataTestLLM{}
+
+	Prewarm(provider)
+
+	if !provider.prewarmed {
+		t.Fatal("Prewarm() did not call provider Prewarm")
+	}
+}
 
 func TestRealtimeCapabilitiesExposeReferenceFlags(t *testing.T) {
 	capabilities := RealtimeCapabilities{
@@ -226,4 +270,41 @@ func TestRealtimeEventCanCarryMetricsCollected(t *testing.T) {
 	if ev.Metrics.RequestID != "resp_123" || ev.Metrics.InputTokens != 11 || ev.Metrics.OutputTokens != 7 || ev.Metrics.TotalTokens != 18 {
 		t.Fatalf("Metrics = %#v, want realtime token usage", ev.Metrics)
 	}
+}
+
+type metadataTestLLM struct {
+	label     string
+	model     string
+	provider  string
+	prewarmed bool
+}
+
+func (m *metadataTestLLM) Chat(context.Context, *ChatContext, ...ChatOption) (LLMStream, error) {
+	return &metadataTestStream{}, nil
+}
+
+func (m *metadataTestLLM) Label() string {
+	return m.label
+}
+
+func (m *metadataTestLLM) Model() string {
+	return m.model
+}
+
+func (m *metadataTestLLM) Provider() string {
+	return m.provider
+}
+
+func (m *metadataTestLLM) Prewarm() {
+	m.prewarmed = true
+}
+
+type metadataTestStream struct{}
+
+func (m *metadataTestStream) Next() (*ChatChunk, error) {
+	return nil, io.EOF
+}
+
+func (m *metadataTestStream) Close() error {
+	return nil
 }

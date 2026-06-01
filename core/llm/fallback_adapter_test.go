@@ -32,6 +32,22 @@ func TestFallbackAdapterRetriesNextLLMWhenStreamFailsBeforeChunk(t *testing.T) {
 	}
 }
 
+func TestFallbackAdapterReportsReferenceMetadata(t *testing.T) {
+	adapter := NewFallbackAdapter([]LLM{
+		&fakeFallbackLLM{label: "primary.LLM"},
+	})
+
+	if got := adapter.Label(); got != "FallbackAdapter(primary.LLM)" {
+		t.Fatalf("Label() = %q, want FallbackAdapter(primary.LLM)", got)
+	}
+	if got := adapter.Model(); got != "FallbackAdapter" {
+		t.Fatalf("Model() = %q, want FallbackAdapter", got)
+	}
+	if got := adapter.Provider(); got != "livekit" {
+		t.Fatalf("Provider() = %q, want livekit", got)
+	}
+}
+
 func TestFallbackAdapterDoesNotRetryAfterChunkSent(t *testing.T) {
 	firstErr := errors.New("primary stream failed")
 	adapter := NewFallbackAdapter([]LLM{
@@ -569,6 +585,7 @@ type fakeFallbackLLM struct {
 	streams []LLMStream
 	stream  LLMStream
 	err     error
+	label   string
 	calls   int
 	onChat  func(context.Context)
 }
@@ -587,6 +604,10 @@ func (f *fakeFallbackLLM) Chat(ctx context.Context, _ *ChatContext, _ ...ChatOpt
 		return stream, nil
 	}
 	return f.stream, nil
+}
+
+func (f *fakeFallbackLLM) Label() string {
+	return f.label
 }
 
 type fakeFallbackEvent struct {
