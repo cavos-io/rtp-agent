@@ -111,6 +111,112 @@ func TestAgentActivityScheduleSpeechAllowsForcedSpeechWhilePaused(t *testing.T) 
 	}
 }
 
+func TestAgentActivityInterruptInterruptsCurrentAndQueuedSpeech(t *testing.T) {
+	agent := NewAgent("test")
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	activity := NewAgentActivity(agent, session)
+
+	current := NewSpeechHandle(true, DefaultInputDetails())
+	queued := NewSpeechHandle(true, DefaultInputDetails())
+	activity.currentSpeech = current
+	if err := activity.ScheduleSpeech(queued, SpeechPriorityNormal, false); err != nil {
+		t.Fatalf("ScheduleSpeech queued error = %v, want nil", err)
+	}
+
+	done := make(chan error, 1)
+	go func() {
+		done <- activity.Interrupt(false)
+	}()
+
+	waitForInterrupted(t, current)
+	waitForInterrupted(t, queued)
+
+	select {
+	case err := <-done:
+		t.Fatalf("Interrupt returned before speech handles were done: %v", err)
+	case <-time.After(10 * time.Millisecond):
+	}
+
+	current.MarkDone()
+	select {
+	case err := <-done:
+		t.Fatalf("Interrupt returned before queued speech was done: %v", err)
+	case <-time.After(10 * time.Millisecond):
+	}
+
+	queued.MarkDone()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("Interrupt error = %v, want nil", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Interrupt did not return after all interrupted speech handles were done")
+	}
+}
+
+func TestAgentActivityInterruptReturnsImmediatelyWhenNoSpeech(t *testing.T) {
+	agent := NewAgent("test")
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	activity := NewAgentActivity(agent, session)
+
+	done := make(chan error, 1)
+	go func() {
+		done <- activity.Interrupt(false)
+	}()
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("Interrupt error = %v, want nil", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Interrupt did not return with no active or queued speech")
+	}
+}
+
+func TestAgentActivityInterruptForceBypassesDisallowedInterruptions(t *testing.T) {
+	agent := NewAgent("test")
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	activity := NewAgentActivity(agent, session)
+	current := NewSpeechHandle(false, DefaultInputDetails())
+	activity.currentSpeech = current
+
+	done := make(chan error, 1)
+	go func() {
+		done <- activity.Interrupt(true)
+	}()
+
+	waitForInterrupted(t, current)
+	current.MarkDone()
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("Interrupt(force=true) error = %v, want nil", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Interrupt(force=true) did not return after speech was done")
+	}
+}
+
+func TestAgentActivityInterruptReturnsDisallowedInterruptionError(t *testing.T) {
+	agent := NewAgent("test")
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	activity := NewAgentActivity(agent, session)
+	current := NewSpeechHandle(false, DefaultInputDetails())
+	activity.currentSpeech = current
+
+	err := activity.Interrupt(false)
+
+	if !errors.Is(err, ErrSpeechInterruptionsDisabled) {
+		t.Fatalf("Interrupt error = %v, want ErrSpeechInterruptionsDisabled", err)
+	}
+	if current.IsInterrupted() {
+		t.Fatal("current speech was interrupted despite disallowing interruptions")
+	}
+}
+
 func waitForNoCurrentSpeech(t *testing.T, activity *AgentActivity) {
 	t.Helper()
 
@@ -127,6 +233,25 @@ func waitForNoCurrentSpeech(t *testing.T, activity *AgentActivity) {
 			cleared := activity.currentSpeech == nil
 			activity.queueMu.Unlock()
 			if cleared {
+				return
+			}
+		}
+	}
+}
+
+func waitForInterrupted(t *testing.T, speech *SpeechHandle) {
+	t.Helper()
+
+	deadline := time.After(time.Second)
+	ticker := time.NewTicker(time.Millisecond)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-deadline:
+			t.Fatal("speech was not interrupted")
+		case <-ticker.C:
+			if speech.IsInterrupted() {
 				return
 			}
 		}

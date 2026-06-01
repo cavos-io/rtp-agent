@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/cavos-io/conversation-worker/core/llm"
 )
@@ -88,4 +89,44 @@ func TestAgentSessionGenerateReplyRequiresRunningActivity(t *testing.T) {
 	if !errors.Is(err, ErrAgentSessionNotRunning) {
 		t.Fatalf("GenerateReply error = %v, want ErrAgentSessionNotRunning", err)
 	}
+}
+
+func TestAgentSessionInterruptRequiresRunningActivity(t *testing.T) {
+	agent := NewAgent("test")
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+
+	err := session.Interrupt(false)
+
+	if !errors.Is(err, ErrAgentSessionNotRunning) {
+		t.Fatalf("Interrupt error = %v, want ErrAgentSessionNotRunning", err)
+	}
+}
+
+func TestAgentSessionInterruptDelegatesToActivity(t *testing.T) {
+	agent := NewAgent("test")
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	session.activity = NewAgentActivity(agent, session)
+	current := NewSpeechHandle(true, DefaultInputDetails())
+	session.activity.currentSpeech = current
+
+	done := make(chan error, 1)
+	go func() {
+		done <- session.Interrupt(false)
+	}()
+
+	waitForInterrupted(t, current)
+	current.MarkDone()
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("Interrupt error = %v, want nil", err)
+		}
+	case <-testTimeout():
+		t.Fatal("Interrupt did not return after current speech was done")
+	}
+}
+
+func testTimeout() <-chan time.Time {
+	return time.After(time.Second)
 }

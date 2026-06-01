@@ -286,6 +286,18 @@ func (s *AgentSession) GenerateReplyWithOptions(ctx context.Context, opts Genera
 	return handle, nil
 }
 
+func (s *AgentSession) Interrupt(force bool) error {
+	s.mu.Lock()
+	activity := s.activity
+	s.mu.Unlock()
+
+	if activity == nil {
+		return ErrAgentSessionNotRunning
+	}
+
+	return activity.Interrupt(force)
+}
+
 func (s *AgentSession) Stop(ctx context.Context) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()

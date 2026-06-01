@@ -76,6 +76,34 @@ func (a *AgentActivity) Stop() {
 	a.cancel()
 }
 
+func (a *AgentActivity) Interrupt(force bool) error {
+	a.queueMu.Lock()
+	interrupted := make([]*SpeechHandle, 0, len(a.speechQueue)+1)
+	if a.currentSpeech != nil {
+		if err := a.currentSpeech.Interrupt(force); err != nil {
+			a.queueMu.Unlock()
+			return err
+		}
+		interrupted = append(interrupted, a.currentSpeech)
+	}
+	for _, queued := range a.speechQueue {
+		if err := queued.speech.Interrupt(force); err != nil {
+			a.queueMu.Unlock()
+			return err
+		}
+		interrupted = append(interrupted, queued.speech)
+	}
+	a.queueMu.Unlock()
+
+	for _, speech := range interrupted {
+		if err := speech.Wait(a.ctx); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
 func (a *AgentActivity) ScheduleSpeech(speech *SpeechHandle, priority int, force bool) error {
 	a.queueMu.Lock()
 	defer a.queueMu.Unlock()
