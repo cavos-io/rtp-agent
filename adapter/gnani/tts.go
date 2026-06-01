@@ -25,9 +25,9 @@ const (
 	defaultSampleRate  = 16000
 	defaultEncoding    = "linear_pcm"
 	defaultContainer   = "wav"
-	defaultLanguage    = "hi"
 	defaultNumChannels = 1
 	defaultSampleWidth = 2
+	defaultTTSLanguage = "hi"
 	wavHeaderSize      = 44
 )
 
@@ -39,9 +39,9 @@ type TTS struct {
 	sampleRate  int
 	encoding    string
 	container   string
-	language    string
 	numChannels int
 	sampleWidth int
+	language    string
 }
 
 type Option func(*TTS)
@@ -94,14 +94,6 @@ func WithContainer(container string) Option {
 	}
 }
 
-func WithLanguage(language string) Option {
-	return func(t *TTS) {
-		if language != "" {
-			t.language = language
-		}
-	}
-}
-
 func WithNumChannels(numChannels int) Option {
 	return func(t *TTS) {
 		if numChannels > 0 {
@@ -118,6 +110,14 @@ func WithSampleWidth(sampleWidth int) Option {
 	}
 }
 
+func WithLanguage(language string) Option {
+	return func(t *TTS) {
+		if language != "" {
+			t.language = language
+		}
+	}
+}
+
 func NewTTS(apiKey string, opts ...Option) *TTS {
 	provider := &TTS{
 		apiKey:      apiKey,
@@ -127,9 +127,9 @@ func NewTTS(apiKey string, opts ...Option) *TTS {
 		sampleRate:  defaultSampleRate,
 		encoding:    defaultEncoding,
 		container:   defaultContainer,
-		language:    defaultLanguage,
 		numChannels: defaultNumChannels,
 		sampleWidth: defaultSampleWidth,
+		language:    defaultTTSLanguage,
 	}
 	for _, opt := range opts {
 		opt(provider)
@@ -162,7 +162,18 @@ func (t *TTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStream, e
 }
 
 func buildTTSRequest(ctx context.Context, t *TTS, text string) (*http.Request, error) {
-	reqBody := buildTTSPayload(t, text)
+	reqBody := map[string]interface{}{
+		"text":  text,
+		"voice": t.voice,
+		"model": t.model,
+		"audio_config": map[string]interface{}{
+			"sample_rate":  t.sampleRate,
+			"encoding":     t.encoding,
+			"num_channels": t.numChannels,
+			"sample_width": t.sampleWidth,
+			"container":    t.container,
+		},
+	}
 	jsonBody, err := json.Marshal(reqBody)
 	if err != nil {
 		return nil, err
@@ -177,65 +188,16 @@ func buildTTSRequest(ctx context.Context, t *TTS, text string) (*http.Request, e
 }
 
 func (t *TTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
-	conn, _, err := websocket.DefaultDialer.DialContext(ctx, buildTTSWebsocketURL(t), buildTTSHeaders(t))
-	if err != nil {
-		return nil, fmt.Errorf("failed to dial gnani tts websocket: %w", err)
-	}
 	streamCtx, cancel := context.WithCancel(ctx)
-	return &ttsStream{
-		conn:        conn,
+	return &gnaniTTSSynthesizeStream{
 		ctx:         streamCtx,
 		cancel:      cancel,
 		provider:    t,
 		sampleRate:  t.sampleRate,
 		numChannels: t.numChannels,
+		events:      make(chan *tts.SynthesizedAudio, 100),
+		errCh:       make(chan error, 1),
 	}, nil
-}
-
-func buildTTSWebsocketURL(t *TTS) string {
-	u, err := url.Parse(strings.TrimRight(t.baseURL, "/"))
-	if err != nil {
-		return strings.TrimRight(t.baseURL, "/") + "/api/v1/tts"
-	}
-	switch u.Scheme {
-	case "https":
-		u.Scheme = "wss"
-	case "http":
-		u.Scheme = "ws"
-	case "":
-		u.Scheme = "wss"
-	}
-	u.Path = strings.TrimRight(u.Path, "/") + "/api/v1/tts"
-	u.RawQuery = ""
-	return u.String()
-}
-
-func buildTTSHeaders(t *TTS) http.Header {
-	headers := make(http.Header)
-	headers.Set("X-API-Key-ID", t.apiKey)
-	headers.Set("Content-Type", "application/json")
-	return headers
-}
-
-func buildTTSWebsocketRequest(t *TTS, text string) ([]byte, error) {
-	reqBody := buildTTSPayload(t, text)
-	reqBody["language"] = t.language
-	return json.Marshal(reqBody)
-}
-
-func buildTTSPayload(t *TTS, text string) map[string]interface{} {
-	return map[string]interface{}{
-		"text":  text,
-		"voice": t.voice,
-		"model": t.model,
-		"audio_config": map[string]interface{}{
-			"sample_rate":  t.sampleRate,
-			"encoding":     t.encoding,
-			"num_channels": t.numChannels,
-			"sample_width": t.sampleWidth,
-			"container":    t.container,
-		},
-	}
 }
 
 type ttsChunkedStream struct {
@@ -275,40 +237,107 @@ func stripWAVHeader(data []byte) []byte {
 	return data
 }
 
-type ttsStream struct {
-	conn        *websocket.Conn
+func buildGnaniTTSWebsocketURL(t *TTS) *url.URL {
+	baseURL := strings.TrimRight(t.baseURL, "/")
+	switch {
+	case strings.HasPrefix(baseURL, "https://"):
+		baseURL = "wss://" + strings.TrimPrefix(baseURL, "https://")
+	case strings.HasPrefix(baseURL, "http://"):
+		baseURL = "ws://" + strings.TrimPrefix(baseURL, "http://")
+	case !strings.HasPrefix(baseURL, "wss://") && !strings.HasPrefix(baseURL, "ws://"):
+		baseURL = "wss://" + baseURL
+	}
+	wsURL, err := url.Parse(baseURL + "/api/v1/tts")
+	if err != nil {
+		return &url.URL{Scheme: "wss", Host: strings.TrimPrefix(baseURL, "wss://"), Path: "/api/v1/tts"}
+	}
+	return wsURL
+}
+
+func buildGnaniTTSWebsocketHeaders(t *TTS) http.Header {
+	headers := make(http.Header)
+	headers.Set("X-API-Key-ID", t.apiKey)
+	headers.Set("Content-Type", "application/json")
+	return headers
+}
+
+func buildGnaniTTSWebsocketRequest(t *TTS, text string) ([]byte, error) {
+	reqBody := map[string]interface{}{
+		"text":     text,
+		"voice":    t.voice,
+		"model":    t.model,
+		"language": t.language,
+		"audio_config": map[string]interface{}{
+			"sample_rate":  t.sampleRate,
+			"encoding":     t.encoding,
+			"num_channels": t.numChannels,
+			"sample_width": t.sampleWidth,
+			"container":    t.container,
+		},
+	}
+	return json.Marshal(reqBody)
+}
+
+type gnaniTTSSynthesizeStream struct {
 	ctx         context.Context
 	cancel      context.CancelFunc
 	provider    *TTS
 	sampleRate  int
 	numChannels int
-	pendingText bytes.Buffer
+	events      chan *tts.SynthesizedAudio
+	errCh       chan error
+	textParts   []string
 	mu          sync.Mutex
 	closed      bool
+	started     bool
+	conn        *websocket.Conn
 }
 
-func (s *ttsStream) PushText(text string) error {
+func (s *gnaniTTSSynthesizeStream) PushText(text string) error {
 	if text == "" {
 		return nil
 	}
-	_, err := s.pendingText.WriteString(text)
-	return err
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.started {
+		return fmt.Errorf("gnani tts stream already flushed")
+	}
+	s.textParts = append(s.textParts, text)
+	return nil
 }
 
-func (s *ttsStream) Flush() error {
-	text := strings.TrimSpace(s.pendingText.String())
-	s.pendingText.Reset()
-	if text == "" {
+func (s *gnaniTTSSynthesizeStream) Flush() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.started {
 		return nil
 	}
-	payload, err := buildTTSWebsocketRequest(s.provider, text)
+	fullText := strings.TrimSpace(strings.Join(s.textParts, ""))
+	if fullText == "" {
+		s.started = true
+		close(s.events)
+		return nil
+	}
+	conn, _, err := websocket.DefaultDialer.DialContext(s.ctx, buildGnaniTTSWebsocketURL(s.provider).String(), buildGnaniTTSWebsocketHeaders(s.provider))
 	if err != nil {
+		return fmt.Errorf("failed to dial gnani tts websocket: %w", err)
+	}
+	request, err := buildGnaniTTSWebsocketRequest(s.provider, fullText)
+	if err != nil {
+		conn.Close()
 		return err
 	}
-	return s.conn.WriteMessage(websocket.TextMessage, payload)
+	if err := conn.WriteMessage(websocket.TextMessage, request); err != nil {
+		conn.Close()
+		return err
+	}
+	s.conn = conn
+	s.started = true
+	go s.readLoop()
+	return nil
 }
 
-func (s *ttsStream) Close() error {
+func (s *gnaniTTSSynthesizeStream) Close() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.closed {
@@ -316,47 +345,65 @@ func (s *ttsStream) Close() error {
 	}
 	s.closed = true
 	s.cancel()
+	if s.conn == nil {
+		return nil
+	}
 	_ = s.conn.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""), time.Now().Add(time.Second))
 	return s.conn.Close()
 }
 
-func (s *ttsStream) Next() (*tts.SynthesizedAudio, error) {
+func (s *gnaniTTSSynthesizeStream) Next() (*tts.SynthesizedAudio, error) {
 	select {
+	case audio, ok := <-s.events:
+		if !ok {
+			select {
+			case err := <-s.errCh:
+				return nil, err
+			default:
+				return nil, io.EOF
+			}
+		}
+		return audio, nil
+	case err := <-s.errCh:
+		return nil, err
 	case <-s.ctx.Done():
 		return nil, s.ctx.Err()
-	default:
 	}
+}
+
+func (s *gnaniTTSSynthesizeStream) readLoop() {
+	defer close(s.events)
 	for {
 		msgType, payload, err := s.conn.ReadMessage()
 		if err != nil {
-			if websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway) || err == io.EOF {
-				return nil, io.EOF
+			if !websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway) && err != io.EOF {
+				s.errCh <- err
 			}
-			return nil, err
+			return
 		}
-		if msgType == websocket.BinaryMessage {
-			return ttsAudioFrame(stripWAVHeader(payload), s.sampleRate, s.numChannels), nil
-		}
-		if msgType != websocket.TextMessage {
-			continue
-		}
-		audio, done, err := ttsAudioFromWebsocketMessage(payload, s.sampleRate, s.numChannels)
-		if err != nil {
-			return nil, err
-		}
-		if audio != nil {
-			return audio, nil
-		}
-		if done {
-			return nil, io.EOF
+		switch msgType {
+		case websocket.BinaryMessage:
+			data := stripWAVHeader(payload)
+			if len(data) > 0 {
+				s.events <- gnaniTTSAudioFrame(data, s.sampleRate, s.numChannels, false)
+			}
+		case websocket.TextMessage:
+			audio, done, err := gnaniTTSAudioFromWebsocketMessage(payload, s.sampleRate, s.numChannels)
+			if err != nil {
+				s.errCh <- err
+				return
+			}
+			if audio != nil {
+				s.events <- audio
+			}
+			if done {
+				return
+			}
 		}
 	}
 }
 
-func ttsAudioFromWebsocketMessage(payload []byte, sampleRate int, numChannels int) (*tts.SynthesizedAudio, bool, error) {
-	if !json.Valid(payload) {
-		return ttsAudioFrame(stripWAVHeader(payload), sampleRate, numChannels), false, nil
-	}
+func gnaniTTSAudioFromWebsocketMessage(payload []byte, sampleRate int, numChannels int) (*tts.SynthesizedAudio, bool, error) {
 	var message struct {
 		Type    string `json:"type"`
 		Message string `json:"message"`
@@ -376,7 +423,11 @@ func ttsAudioFromWebsocketMessage(payload []byte, sampleRate int, numChannels in
 		if err != nil {
 			return nil, false, err
 		}
-		return ttsAudioFrame(stripWAVHeader(audio), sampleRate, numChannels), false, nil
+		audio = stripWAVHeader(audio)
+		if len(audio) == 0 {
+			return nil, false, nil
+		}
+		return gnaniTTSAudioFrame(audio, sampleRate, numChannels, false), false, nil
 	case "complete":
 		if message.Data.Audio == "" {
 			return nil, true, nil
@@ -385,10 +436,14 @@ func ttsAudioFromWebsocketMessage(payload []byte, sampleRate int, numChannels in
 		if err != nil {
 			return nil, false, err
 		}
-		return ttsAudioFrame(stripWAVHeader(audio), sampleRate, numChannels), true, nil
+		audio = stripWAVHeader(audio)
+		if len(audio) == 0 {
+			return nil, true, nil
+		}
+		return gnaniTTSAudioFrame(audio, sampleRate, numChannels, true), true, nil
 	case "error":
 		if message.Message == "" {
-			message.Message = "unknown gnani tts stream error"
+			message.Message = string(payload)
 		}
 		return nil, false, fmt.Errorf("gnani tts stream error: %s", message.Message)
 	default:
@@ -396,16 +451,17 @@ func ttsAudioFromWebsocketMessage(payload []byte, sampleRate int, numChannels in
 	}
 }
 
-func ttsAudioFrame(data []byte, sampleRate int, numChannels int) *tts.SynthesizedAudio {
+func gnaniTTSAudioFrame(audio []byte, sampleRate int, numChannels int, final bool) *tts.SynthesizedAudio {
 	if numChannels <= 0 {
 		numChannels = 1
 	}
 	return &tts.SynthesizedAudio{
 		Frame: &model.AudioFrame{
-			Data:              bytes.Clone(data),
+			Data:              bytes.Clone(audio),
 			SampleRate:        uint32(sampleRate),
 			NumChannels:       uint32(numChannels),
-			SamplesPerChannel: uint32(len(data) / 2 / numChannels),
+			SamplesPerChannel: uint32(len(audio) / 2 / numChannels),
 		},
+		IsFinal: final,
 	}
 }

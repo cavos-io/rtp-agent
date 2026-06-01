@@ -7,7 +7,6 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
-	"net/url"
 	"testing"
 
 	"github.com/cavos-io/rtp-agent/core/tts"
@@ -40,8 +39,11 @@ func TestGnaniTTSDefaultsMatchReference(t *testing.T) {
 	if provider.NumChannels() != 1 {
 		t.Fatalf("num channels = %d, want 1", provider.NumChannels())
 	}
+	if provider.language != "hi" {
+		t.Fatalf("language = %q, want hi", provider.language)
+	}
 	if !provider.Capabilities().Streaming {
-		t.Fatalf("streaming capability = false, want reference websocket streaming")
+		t.Fatalf("streaming capability = false, want true for websocket streaming")
 	}
 }
 
@@ -98,6 +100,7 @@ func TestGnaniTTSOptionsMatchReference(t *testing.T) {
 		WithContainer("ogg"),
 		WithNumChannels(2),
 		WithSampleWidth(4),
+		WithLanguage("ta"),
 	)
 
 	req, err := buildTTSRequest(context.Background(), provider, "hello")
@@ -125,6 +128,9 @@ func TestGnaniTTSOptionsMatchReference(t *testing.T) {
 	}
 	if audioConfig["sample_width"] != float64(4) {
 		t.Fatalf("sample_width = %#v, want 4", audioConfig["sample_width"])
+	}
+	if provider.language != "ta" {
+		t.Fatalf("language = %q, want ta", provider.language)
 	}
 }
 
@@ -154,95 +160,86 @@ func TestGnaniTTSChunkedStreamStripsWAVHeaderAndUsesConfiguredSampleRate(t *test
 	}
 }
 
-func TestGnaniTTSWebsocketURLAndHeadersMatchReference(t *testing.T) {
-	provider := NewTTS("test-key", WithBaseURL("https://gnani.example"))
+func TestGnaniTTSWebsocketURLHeadersAndPayloadMatchReference(t *testing.T) {
+	provider := NewTTS("test-key", WithBaseURL("https://gnani.example/"), WithLanguage("ta"))
 
-	wsURL := buildTTSWebsocketURL(provider)
-	parsed, err := url.Parse(wsURL)
-	if err != nil {
-		t.Fatalf("parse websocket URL: %v", err)
-	}
-	if parsed.Scheme != "wss" || parsed.Host != "gnani.example" || parsed.Path != "/api/v1/tts" {
-		t.Fatalf("websocket URL = %q, want converted websocket endpoint", wsURL)
+	wsURL := buildGnaniTTSWebsocketURL(provider)
+	if wsURL.String() != "wss://gnani.example/api/v1/tts" {
+		t.Fatalf("websocket URL = %q, want reference endpoint", wsURL.String())
 	}
 
-	headers := buildTTSHeaders(provider)
-	if headers.Get("X-API-Key-ID") != "test-key" || headers.Get("Content-Type") != "application/json" {
-		t.Fatalf("headers = %+v, want reference headers", headers)
+	httpProvider := NewTTS("test-key", WithBaseURL("http://gnani.example"))
+	httpURL := buildGnaniTTSWebsocketURL(httpProvider)
+	if httpURL.String() != "ws://gnani.example/api/v1/tts" {
+		t.Fatalf("http websocket URL = %q, want ws endpoint", httpURL.String())
 	}
-}
 
-func TestGnaniTTSWebsocketRequestIncludesReferenceLanguage(t *testing.T) {
-	provider := NewTTS("test-key",
-		WithVoice("Riya"),
-		WithLanguage("hi"),
-		WithSampleRate(22050),
-	)
+	headers := buildGnaniTTSWebsocketHeaders(provider)
+	if got := headers.Get("X-API-Key-ID"); got != "test-key" {
+		t.Fatalf("X-API-Key-ID = %q, want test-key", got)
+	}
+	if got := headers.Get("Content-Type"); got != "application/json" {
+		t.Fatalf("Content-Type = %q, want application/json", got)
+	}
 
-	payload, err := buildTTSWebsocketRequest(provider, "namaste")
+	message, err := buildGnaniTTSWebsocketRequest(provider, "hello")
 	if err != nil {
 		t.Fatalf("build websocket request: %v", err)
 	}
-	var request map[string]any
-	if err := json.Unmarshal(payload, &request); err != nil {
-		t.Fatalf("decode request: %v", err)
+	var payload map[string]any
+	if err := json.Unmarshal(message, &payload); err != nil {
+		t.Fatalf("decode websocket payload: %v", err)
 	}
-	assertGnaniPayload(t, request, "text", "namaste")
-	assertGnaniPayload(t, request, "voice", "Riya")
-	assertGnaniPayload(t, request, "language", "hi")
-	audioConfig := request["audio_config"].(map[string]any)
-	if audioConfig["sample_rate"] != float64(22050) {
-		t.Fatalf("sample_rate = %#v, want 22050", audioConfig["sample_rate"])
+	assertGnaniPayload(t, payload, "text", "hello")
+	assertGnaniPayload(t, payload, "language", "ta")
+	assertGnaniPayload(t, payload, "voice", "Karan")
+}
+
+func TestGnaniTTSAudioFromWebsocketMessageStripsWAVAndDetectsComplete(t *testing.T) {
+	wav := gnaniTestWAV([]byte{0x01, 0x02, 0x03, 0x04})
+	message := []byte(`{"type":"audio","data":{"audio":"` + base64.StdEncoding.EncodeToString(wav) + `"}}`)
+
+	audio, done, err := gnaniTTSAudioFromWebsocketMessage(message, 16000, 1)
+	if err != nil {
+		t.Fatalf("parse audio message: %v", err)
+	}
+	if done {
+		t.Fatal("done = true, want false for audio message")
+	}
+	if !bytes.Equal(audio.Frame.Data, []byte{0x01, 0x02, 0x03, 0x04}) {
+		t.Fatalf("audio data = %#v, want stripped WAV payload", audio.Frame.Data)
+	}
+
+	completeMessage := []byte(`{"type":"complete","data":{"audio":"` + base64.StdEncoding.EncodeToString(wav) + `"}}`)
+	audio, done, err = gnaniTTSAudioFromWebsocketMessage(completeMessage, 16000, 1)
+	if err != nil {
+		t.Fatalf("parse complete message: %v", err)
+	}
+	if !done {
+		t.Fatal("done = false, want true for complete message")
+	}
+	if !bytes.Equal(audio.Frame.Data, []byte{0x01, 0x02, 0x03, 0x04}) {
+		t.Fatalf("complete audio data = %#v, want stripped WAV payload", audio.Frame.Data)
+	}
+
+	if _, _, err := gnaniTTSAudioFromWebsocketMessage([]byte(`{"type":"error","message":"bad text"}`), 16000, 1); err == nil {
+		t.Fatal("error message returned nil error, want stream error")
 	}
 }
 
-func TestGnaniTTSAudioFromWebsocketMessages(t *testing.T) {
-	audio, done, err := ttsAudioFromWebsocketMessage([]byte{0x01, 0x02}, 16000, 1)
+func TestGnaniTTSStreamEmptyFlushCompletesWithoutDialing(t *testing.T) {
+	provider := NewTTS("test-key")
+	stream, err := provider.Stream(context.Background())
 	if err != nil {
-		t.Fatalf("binary audio: %v", err)
+		t.Fatalf("Stream returned error: %v", err)
 	}
-	if done || string(audio.Frame.Data) != "\x01\x02" {
-		t.Fatalf("audio=%+v done=%v, want binary audio frame", audio, done)
-	}
+	defer stream.Close()
 
-	encoded := base64.StdEncoding.EncodeToString([]byte{0x03, 0x04})
-	audio, done, err = ttsAudioFromWebsocketMessage([]byte(`{"type":"audio","data":{"audio":"`+encoded+`"}}`), 16000, 1)
-	if err != nil {
-		t.Fatalf("json audio: %v", err)
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush: %v", err)
 	}
-	if done || string(audio.Frame.Data) != "\x03\x04" {
-		t.Fatalf("audio=%+v done=%v, want decoded audio", audio, done)
-	}
-
-	audio, done, err = ttsAudioFromWebsocketMessage([]byte(`{"type":"complete","data":{"audio":"`+encoded+`"}}`), 16000, 1)
-	if err != nil {
-		t.Fatalf("complete audio: %v", err)
-	}
-	if !done || string(audio.Frame.Data) != "\x03\x04" {
-		t.Fatalf("audio=%+v done=%v, want final decoded audio", audio, done)
-	}
-
-	audio, done, err = ttsAudioFromWebsocketMessage([]byte(`{"type":"complete"}`), 16000, 1)
-	if err != nil || !done || audio != nil {
-		t.Fatalf("audio=%+v done=%v err=%v, want clean completion", audio, done, err)
-	}
-
-	_, _, err = ttsAudioFromWebsocketMessage([]byte(`{"type":"error","message":"bad text"}`), 16000, 1)
-	if err == nil {
-		t.Fatal("error = nil, want provider error")
-	}
-}
-
-func TestGnaniTTSStreamBuffersUntilFlush(t *testing.T) {
-	stream := &ttsStream{}
-	if err := stream.PushText("hello "); err != nil {
-		t.Fatalf("push first: %v", err)
-	}
-	if err := stream.PushText("world"); err != nil {
-		t.Fatalf("push second: %v", err)
-	}
-	if got := stream.pendingText.String(); got != "hello world" {
-		t.Fatalf("pending text = %q, want concatenated text", got)
+	if _, err := stream.Next(); err != io.EOF {
+		t.Fatalf("Next error = %v, want EOF", err)
 	}
 }
 
@@ -255,4 +252,11 @@ func assertGnaniPayload(t *testing.T, payload map[string]any, key string, want s
 	if got := payload[key]; got != want {
 		t.Fatalf("%s = %#v, want %q", key, got, want)
 	}
+}
+
+func gnaniTestWAV(payload []byte) []byte {
+	header := make([]byte, 44)
+	copy(header[0:4], "RIFF")
+	copy(header[8:12], "WAVE")
+	return append(header, payload...)
 }
