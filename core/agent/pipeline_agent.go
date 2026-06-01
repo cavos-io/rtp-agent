@@ -218,13 +218,30 @@ func (va *PipelineAgent) generateReply() {
 
 		// Wait for tool executions to complete and collect results
 		var executedTools bool
+		var functionCalls []*llm.FunctionCall
+		var functionCallOutputs []*llm.FunctionCallOutput
 		for toolOut := range toolOutCh {
 			executedTools = true
 			logger.Logger.Infow("Tool executed", "name", toolOut.FncCall.Name)
 
-			va.chatCtx.Append(&toolOut.FncCall)
+			fncCall := toolOut.FncCall
+			functionCalls = append(functionCalls, &fncCall)
+			functionCallOutputs = append(functionCallOutputs, toolOut.FncCallOut)
+			va.chatCtx.Append(&fncCall)
 			if toolOut.FncCallOut != nil {
 				va.chatCtx.Append(toolOut.FncCallOut)
+			}
+		}
+
+		if executedTools {
+			if ev, err := NewFunctionToolsExecutedEvent(functionCalls, functionCallOutputs); err == nil {
+				for _, out := range functionCallOutputs {
+					if out != nil {
+						ev.ReplyRequired = true
+						break
+					}
+				}
+				session.EmitFunctionToolsExecuted(*ev)
 			}
 		}
 

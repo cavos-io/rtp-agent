@@ -141,6 +141,56 @@ func TestPipelineAgentForcesNoToolsAfterMaxToolSteps(t *testing.T) {
 	}
 }
 
+func TestPipelineAgentEmitsFunctionToolsExecutedEvent(t *testing.T) {
+	chatCtx := llm.NewChatContext()
+	l := &fakeGenerationLLM{
+		streams: []llm.LLMStream{
+			&fakeGenerationLLMStream{
+				chunks: []*llm.ChatChunk{
+					{Delta: &llm.ChoiceDelta{
+						ToolCalls: []llm.FunctionToolCall{{
+							Type:      "function",
+							Name:      "lookup",
+							CallID:    "call_lookup",
+							Arguments: `{}`,
+						}},
+					}},
+				},
+			},
+			&fakeGenerationLLMStream{
+				chunks: []*llm.ChatChunk{
+					{Delta: &llm.ChoiceDelta{Content: "done"}},
+				},
+			},
+		},
+	}
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	session.Tools = []llm.Tool{&fakeGenerationTool{name: "lookup", result: "tool result"}}
+	agent := NewPipelineAgent(nil, nil, l, &fakePipelineTTS{}, chatCtx)
+	agent.session = session
+	agent.ctx = context.Background()
+
+	agent.generateReply()
+
+	select {
+	case ev := <-session.FunctionToolsExecutedEvents():
+		if ev.GetType() != "function_tools_executed" {
+			t.Fatalf("event type = %q, want function_tools_executed", ev.GetType())
+		}
+		if len(ev.FunctionCalls) != 1 || ev.FunctionCalls[0].CallID != "call_lookup" {
+			t.Fatalf("FunctionCalls = %#v, want call_lookup", ev.FunctionCalls)
+		}
+		if len(ev.FunctionCallOutputs) != 1 || ev.FunctionCallOutputs[0].Output != "tool result" {
+			t.Fatalf("FunctionCallOutputs = %#v, want tool result", ev.FunctionCallOutputs)
+		}
+		if !ev.HasToolReply() {
+			t.Fatal("HasToolReply() = false, want true when tool returned output")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("FunctionToolsExecutedEvents did not receive event")
+	}
+}
+
 type fakePipelineTTS struct {
 	stream *fakePipelineTTSStream
 }
