@@ -100,6 +100,51 @@ func TestPipelineAgentGenerateReplyWithInstructionsUsesTemporaryChatContext(t *t
 	}
 }
 
+func TestPipelineAgentGenerateReplyWithChatContextUsesTemporaryContext(t *testing.T) {
+	persistentCtx := llm.NewChatContext()
+	overrideCtx := llm.NewChatContext()
+	overrideCtx.Append(&llm.ChatMessage{
+		ID:      "override_user",
+		Role:    llm.ChatRoleUser,
+		Content: []llm.ChatContent{{Text: "override"}},
+	})
+	l := &fakeGenerationLLM{
+		stream: &fakeGenerationLLMStream{
+			chunks: []*llm.ChatChunk{
+				{Delta: &llm.ChoiceDelta{Content: "from override"}},
+			},
+		},
+	}
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	agent := NewPipelineAgent(nil, nil, l, &fakePipelineTTS{}, persistentCtx)
+	agent.session = session
+	agent.ctx = context.Background()
+
+	agent.generateReplyWithOptions(pipelineReplyOptions{
+		ChatCtx: overrideCtx,
+	})
+
+	if len(l.chatContexts) != 1 {
+		t.Fatalf("LLM chat contexts = %d, want 1", len(l.chatContexts))
+	}
+	if l.chatContexts[0] == overrideCtx {
+		t.Fatal("LLM chat context aliases override context, want copy")
+	}
+	if len(l.chatContexts[0].Items) != 1 || l.chatContexts[0].Items[0].GetID() != "override_user" {
+		t.Fatalf("LLM chat context items = %#v, want override context", l.chatContexts[0].Items)
+	}
+	if len(persistentCtx.Items) != 1 {
+		t.Fatalf("persistent chat item count = %d, want assistant only", len(persistentCtx.Items))
+	}
+	msg, ok := persistentCtx.Items[0].(*llm.ChatMessage)
+	if !ok || msg.Role != llm.ChatRoleAssistant || msg.TextContent() != "from override" {
+		t.Fatalf("persistent item = %#v, want assistant generated from override context", persistentCtx.Items[0])
+	}
+	if len(overrideCtx.Items) != 1 {
+		t.Fatalf("override chat item count = %d, want unchanged", len(overrideCtx.Items))
+	}
+}
+
 func TestPipelineAgentGenerateReplyWithToolChoicePassesChatOption(t *testing.T) {
 	chatCtx := llm.NewChatContext()
 	l := &fakeGenerationLLM{

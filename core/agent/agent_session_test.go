@@ -525,6 +525,37 @@ func TestAgentSessionGenerateReplyOptionsPreserveTools(t *testing.T) {
 	}
 }
 
+func TestAgentSessionGenerateReplyOptionsPreserveChatContext(t *testing.T) {
+	agent := NewAgent("test")
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	session.activity = NewAgentActivity(agent, session)
+	replyCtx := llm.NewChatContext()
+	replyCtx.Append(&llm.ChatMessage{
+		ID:      "custom_user",
+		Role:    llm.ChatRoleUser,
+		Content: []llm.ChatContent{{Text: "custom context"}},
+	})
+
+	handle, err := session.GenerateReplyWithOptions(context.Background(), GenerateReplyOptions{
+		UserInput:     "hello",
+		ChatCtx:       replyCtx,
+		InputModality: "text",
+	})
+
+	if err != nil {
+		t.Fatalf("GenerateReplyWithOptions error = %v, want nil", err)
+	}
+	if handle.Generation.ChatCtx == nil {
+		t.Fatal("handle.Generation.ChatCtx = nil, want per-call chat context")
+	}
+	if handle.Generation.ChatCtx == replyCtx {
+		t.Fatal("handle.Generation.ChatCtx aliases input context, want copy")
+	}
+	if len(handle.Generation.ChatCtx.Items) != 1 || handle.Generation.ChatCtx.Items[0].GetID() != "custom_user" {
+		t.Fatalf("handle.Generation.ChatCtx.Items = %#v, want copied custom context", handle.Generation.ChatCtx.Items)
+	}
+}
+
 func TestAgentSessionGenerateReplyOptionsRejectUnknownTools(t *testing.T) {
 	agent := NewAgent("test")
 	session := NewAgentSession(agent, nil, AgentSessionOptions{})

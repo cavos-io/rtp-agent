@@ -66,6 +66,7 @@ type GenerateReplyOptions struct {
 	Instructions       string
 	ToolChoice         llm.ToolChoice
 	Tools              []string
+	ChatCtx            *llm.ChatContext
 	AllowInterruptions *bool
 	InputModality      string
 }
@@ -845,6 +846,9 @@ func (s *AgentSession) GenerateReplyWithOptions(ctx context.Context, opts Genera
 	}
 	if len(opts.Tools) > 0 {
 		handle.Generation.Tools = append([]string(nil), opts.Tools...)
+	}
+	if opts.ChatCtx != nil {
+		handle.Generation.ChatCtx = opts.ChatCtx.Copy()
 	}
 	s.EmitSpeechCreated(SpeechCreatedEvent{
 		UserInitiated: true,
