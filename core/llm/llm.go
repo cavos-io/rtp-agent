@@ -315,10 +315,13 @@ func (c *ChatContext) Append(item ChatItem) {
 }
 
 type CompletionUsage struct {
-	CompletionTokens   int
-	PromptTokens       int
-	PromptCachedTokens int
-	TotalTokens        int
+	CompletionTokens    int
+	PromptTokens        int
+	PromptCachedTokens  int
+	CacheCreationTokens int
+	CacheReadTokens     int
+	TotalTokens         int
+	ServiceTier         string
 }
 
 type ChoiceDelta struct {

@@ -341,9 +341,13 @@ func TestCollectStreamAggregatesChunks(t *testing.T) {
 		{chunk: &ChatChunk{
 			ID: "req-1",
 			Usage: &CompletionUsage{
-				CompletionTokens: 3,
-				PromptTokens:     5,
-				TotalTokens:      8,
+				CompletionTokens:    3,
+				PromptTokens:        5,
+				PromptCachedTokens:  2,
+				CacheCreationTokens: 1,
+				CacheReadTokens:     4,
+				TotalTokens:         8,
+				ServiceTier:         "priority",
 			},
 		}},
 	}}
@@ -360,6 +364,9 @@ func TestCollectStreamAggregatesChunks(t *testing.T) {
 	}
 	if collected.Usage == nil || collected.Usage.TotalTokens != 8 {
 		t.Fatalf("Usage = %#v, want final usage", collected.Usage)
+	}
+	if collected.Usage.CacheCreationTokens != 1 || collected.Usage.CacheReadTokens != 4 || collected.Usage.ServiceTier != "priority" {
+		t.Fatalf("Usage metadata = %#v, want cache counters and service tier", collected.Usage)
 	}
 	if collected.Extra["reasoning"] != "latest" || collected.Extra["trace"] != "abc" {
 		t.Fatalf("Extra = %#v, want merged latest extra", collected.Extra)
