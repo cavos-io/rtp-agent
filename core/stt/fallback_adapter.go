@@ -18,6 +18,7 @@ type FallbackAdapter struct {
 	capabilities         STTCapabilities
 	maxRetryPerSTT       int
 	attemptTimeout       time.Duration
+	retryInterval        time.Duration
 	mu                   sync.Mutex
 	available            []bool
 	recovering           []bool
@@ -29,6 +30,7 @@ type FallbackAdapter struct {
 type FallbackAdapterOptions struct {
 	MaxRetryPerSTT int
 	AttemptTimeout time.Duration
+	RetryInterval  time.Duration
 }
 
 type AvailabilityChangedEvent struct {
@@ -121,6 +123,7 @@ func newFallbackAdapter(stts []STT, vad vad.VAD, options FallbackAdapterOptions)
 		capabilities:     capabilities,
 		maxRetryPerSTT:   options.MaxRetryPerSTT,
 		attemptTimeout:   options.AttemptTimeout,
+		retryInterval:    options.RetryInterval,
 		available:        initialAvailability(len(wrapped)),
 		recovering:       make([]bool, len(wrapped)),
 		recoveringStream: make([]bool, len(wrapped)),
@@ -207,6 +210,10 @@ func (f *FallbackAdapter) Recognize(ctx context.Context, frames []*model.AudioFr
 			lastErr = err
 			if attempt < f.maxRetryPerSTT {
 				logger.Logger.Warnw("Retrying STT recognize", err, "stt", stt.Label(), "attempt", attempt+1)
+				if err := f.waitRetryInterval(ctx); err != nil {
+					lastErr = err
+					break
+				}
 			}
 		}
 		f.setAvailable(i, false)
@@ -244,8 +251,27 @@ func (f *FallbackAdapter) tryRecover(ctx context.Context, index int, frames []*m
 				logger.Logger.Infow("Recovered STT provider", "stt", stt.Label())
 				return
 			}
+			if attempt < f.maxRetryPerSTT {
+				if err := f.waitRetryInterval(recoveryCtx); err != nil {
+					return
+				}
+			}
 		}
 	}()
+}
+
+func (f *FallbackAdapter) waitRetryInterval(ctx context.Context) error {
+	if f.retryInterval <= 0 {
+		return nil
+	}
+	timer := time.NewTimer(f.retryInterval)
+	defer timer.Stop()
+	select {
+	case <-timer.C:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
 
 func (f *FallbackAdapter) recognizeAttempt(ctx context.Context, stt STT, frames []*model.AudioFrame, language string) (*SpeechEvent, error) {
@@ -413,6 +439,10 @@ func (s *fallbackRecognizeStream) tryStartStream(index int) error {
 				lastErr = err
 				if s.canRetrySTT(i) {
 					s.retries[i]++
+					if err := s.adapter.waitRetryInterval(s.ctx); err != nil {
+						lastErr = err
+						break
+					}
 					continue
 				}
 				s.adapter.setAvailable(i, false)
@@ -425,6 +455,10 @@ func (s *fallbackRecognizeStream) tryStartStream(index int) error {
 				lastErr = err
 				if s.canRetrySTT(i) {
 					s.retries[i]++
+					if err := s.adapter.waitRetryInterval(s.ctx); err != nil {
+						lastErr = err
+						break
+					}
 					continue
 				}
 				s.adapter.setAvailable(i, false)
@@ -552,6 +586,15 @@ func (s *fallbackRecognizeStream) monitorStream() {
 			if s.canRetrySTT(s.activeIndex) {
 				s.retries[s.activeIndex]++
 				nextIndex = s.activeIndex
+				if retryErr := s.adapter.waitRetryInterval(s.ctx); retryErr != nil {
+					recoveries := s.detachRecoveriesLocked()
+					s.closed = true
+					s.terminalErr = retryErr
+					close(s.closeCh)
+					s.mu.Unlock()
+					closeStreams(recoveries)
+					return
+				}
 			} else {
 				s.adapter.setAvailable(s.activeIndex, false)
 				s.tryRecoverStream(s.activeIndex)

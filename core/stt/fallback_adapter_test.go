@@ -537,6 +537,36 @@ func TestFallbackAdapterRetriesSameSTTBeforeFallback(t *testing.T) {
 	}
 }
 
+func TestFallbackAdapterWaitsRetryIntervalBeforeSameSTTRetry(t *testing.T) {
+	firstErr := errors.New("primary recognize failed")
+	primary := &metadataSTT{
+		label:        "primary",
+		capabilities: STTCapabilities{Streaming: true},
+		recognizeResults: []*SpeechEvent{
+			nil,
+			{Type: SpeechEventFinalTranscript, Alternatives: []SpeechData{{Text: "primary recovered"}}},
+		},
+		recognizeErrs: []error{firstErr, nil},
+	}
+	adapter := NewFallbackAdapterWithOptions([]STT{primary}, FallbackAdapterOptions{
+		MaxRetryPerSTT: 1,
+		RetryInterval:  30 * time.Millisecond,
+	})
+
+	startedAt := time.Now()
+	event, err := adapter.Recognize(context.Background(), nil, "en")
+	elapsed := time.Since(startedAt)
+	if err != nil {
+		t.Fatalf("Recognize returned error: %v", err)
+	}
+	if got := event.Alternatives[0].Text; got != "primary recovered" {
+		t.Fatalf("recognized text = %q, want primary recovered", got)
+	}
+	if elapsed < 25*time.Millisecond {
+		t.Fatalf("Recognize elapsed = %s, want retry interval delay", elapsed)
+	}
+}
+
 func TestFallbackAdapterTimesOutBlockedRecognizeAttempt(t *testing.T) {
 	primary := &blockingContextSTT{
 		label:        "primary",
@@ -1245,6 +1275,44 @@ func TestFallbackStreamRetriesSameSTTBeforeFallback(t *testing.T) {
 	}
 	if fallback.streamCalls != 0 {
 		t.Fatalf("fallback stream calls = %d, want 0", fallback.streamCalls)
+	}
+}
+
+func TestFallbackStreamWaitsRetryIntervalBeforeSameSTTRetry(t *testing.T) {
+	firstErr := errors.New("primary stream failed")
+	primary := &metadataSTT{
+		label:        "primary",
+		capabilities: STTCapabilities{Streaming: true},
+		streams: []RecognizeStream{
+			&metadataRecognizeStream{err: firstErr},
+			&metadataRecognizeStream{events: []*SpeechEvent{{
+				Type:         SpeechEventFinalTranscript,
+				Alternatives: []SpeechData{{Text: "primary recovered"}},
+			}}},
+		},
+	}
+	adapter := NewFallbackAdapterWithOptions([]STT{primary}, FallbackAdapterOptions{
+		MaxRetryPerSTT: 1,
+		RetryInterval:  30 * time.Millisecond,
+	})
+
+	stream, err := adapter.Stream(context.Background(), "en")
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+	defer stream.Close()
+
+	startedAt := time.Now()
+	event, err := stream.Next()
+	elapsed := time.Since(startedAt)
+	if err != nil {
+		t.Fatalf("Next returned error: %v", err)
+	}
+	if got := event.Alternatives[0].Text; got != "primary recovered" {
+		t.Fatalf("stream text = %q, want primary recovered", got)
+	}
+	if elapsed < 25*time.Millisecond {
+		t.Fatalf("Next elapsed = %s, want retry interval delay", elapsed)
 	}
 }
 
