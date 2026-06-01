@@ -542,8 +542,36 @@ func (s *fallbackChunkedStream) monitorStream() {
 
 		ev, err = s.adapter.normalizeAudio(ev)
 		if err != nil {
-			s.errCh <- err
-			return
+			if outputSent {
+				s.errCh <- err
+				return
+			}
+			s.mu.Lock()
+			if s.closed {
+				s.mu.Unlock()
+				return
+			}
+			logger.Logger.Warnw("TTS synthesize stream produced invalid audio, attempting fallback", err, "failed_tts", s.adapter.ttss[s.activeIndex].Label())
+			stream.Close()
+			pending = nil
+			pendingTail = false
+
+			nextIndex := s.activeIndex + 1
+			if s.canRetryTTS(s.activeIndex) {
+				s.retries[s.activeIndex]++
+				nextIndex = s.activeIndex
+			} else {
+				s.adapter.markUnavailable(s.activeIndex)
+				s.adapter.tryRecoverChunked(s.activeIndex, s.text)
+			}
+
+			if fbErr := s.tryStartStream(nextIndex); fbErr != nil {
+				s.errCh <- fbErr
+				s.mu.Unlock()
+				return
+			}
+			s.mu.Unlock()
+			continue
 		}
 		ev = cloneSynthesizedAudio(ev)
 		ev.RequestID = s.requestID
@@ -804,8 +832,36 @@ func (s *fallbackSynthesizeStream) monitorStream() {
 
 		ev, err = s.adapter.normalizeAudio(ev)
 		if err != nil {
-			s.errCh <- err
-			return
+			if outputSent {
+				s.errCh <- err
+				return
+			}
+			s.mu.Lock()
+			if s.closed {
+				s.mu.Unlock()
+				return
+			}
+			logger.Logger.Warnw("TTS stream produced invalid audio, attempting fallback", err, "failed_tts", s.adapter.ttss[s.activeIndex].Label())
+			stream.Close()
+			pending = nil
+			pendingTail = false
+
+			nextIndex := s.activeIndex + 1
+			if s.canRetryTTS(s.activeIndex) {
+				s.retries[s.activeIndex]++
+				nextIndex = s.activeIndex
+			} else {
+				s.adapter.markUnavailable(s.activeIndex)
+				s.adapter.tryRecoverStream(s.activeIndex, s.inputBuffer)
+			}
+
+			if fbErr := s.tryStartStream(nextIndex); fbErr != nil {
+				s.errCh <- fbErr
+				s.mu.Unlock()
+				return
+			}
+			s.mu.Unlock()
+			continue
 		}
 		ev = cloneSynthesizedAudio(ev)
 		ev.RequestID = s.requestID
