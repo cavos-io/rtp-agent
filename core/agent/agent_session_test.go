@@ -77,6 +77,65 @@ func TestAgentSessionGenerateReplyOptionsOverrideInterruptionsAndInputModality(t
 	}
 }
 
+func TestAgentSessionRunReturnsRunResultWatchingGeneratedSpeech(t *testing.T) {
+	agent := NewAgent("test")
+	session := NewAgentSession(agent, nil, AgentSessionOptions{AllowInterruptions: true})
+	session.activity = NewAgentActivity(agent, session)
+
+	result, err := session.Run(context.Background(), "hello")
+
+	if err != nil {
+		t.Fatalf("Run error = %v, want nil", err)
+	}
+	if result == nil {
+		t.Fatal("Run result = nil, want RunResult")
+	}
+	if got := result.UserInput(); got != "hello" {
+		t.Fatalf("UserInput = %q, want hello", got)
+	}
+
+	handle := session.activity.speechQueue[0].speech
+	msg := &llm.ChatMessage{ID: "msg_1", Role: llm.ChatRoleAssistant, CreatedAt: time.Now()}
+	handle.AddChatItems(msg)
+	handle.MarkDone()
+
+	if !result.Done() {
+		t.Fatal("Run result not done after generated speech completed")
+	}
+	events := result.Events()
+	if len(events) != 1 {
+		t.Fatalf("Events length = %d, want 1", len(events))
+	}
+	if ev, ok := events[0].(*ChatMessageEvent); !ok || ev.Item != msg {
+		t.Fatalf("events[0] = %#v, want recorded assistant message", events[0])
+	}
+}
+
+func TestAgentSessionRunRejectsNestedActiveRun(t *testing.T) {
+	agent := NewAgent("test")
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	session.activity = NewAgentActivity(agent, session)
+
+	first, err := session.Run(context.Background(), "first")
+	if err != nil {
+		t.Fatalf("first Run error = %v, want nil", err)
+	}
+
+	second, err := session.Run(context.Background(), "second")
+
+	if second != nil {
+		t.Fatalf("second Run result = %#v, want nil", second)
+	}
+	if !errors.Is(err, ErrAgentSessionNestedRun) {
+		t.Fatalf("second Run error = %v, want ErrAgentSessionNestedRun", err)
+	}
+
+	session.activity.speechQueue[0].speech.MarkDone()
+	if !first.Done() {
+		t.Fatal("first Run result not done after scheduled speech completed")
+	}
+}
+
 func TestAgentSessionGenerateReplyRequiresRunningActivity(t *testing.T) {
 	agent := NewAgent("test")
 	session := NewAgentSession(agent, nil, AgentSessionOptions{})
