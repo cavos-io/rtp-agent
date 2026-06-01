@@ -151,6 +151,14 @@ func TestNewAgentServerUsesReferenceWorkerDefaults(t *testing.T) {
 	}
 }
 
+func TestNewAgentServerPreservesExplicitZeroInitializeProcessTimeout(t *testing.T) {
+	server := NewAgentServer(WorkerOptions{InitializeProcessTimeoutSecondsSet: true})
+
+	if server.Options.InitializeProcessTimeoutSeconds != 0 {
+		t.Fatalf("InitializeProcessTimeoutSeconds = %v, want explicit zero", server.Options.InitializeProcessTimeoutSeconds)
+	}
+}
+
 func TestNewAgentServerUsesReferenceDevModeDefaultsFromEnvironment(t *testing.T) {
 	t.Setenv("LIVEKIT_DEV_MODE", "1")
 
@@ -571,13 +579,15 @@ func TestUpdateOptionsPreservesExplicitZeroMaxRetry(t *testing.T) {
 
 func TestUpdateOptionsPreservesExplicitZeroTimeoutValues(t *testing.T) {
 	server := NewAgentServer(WorkerOptions{
-		SessionEndTimeoutSeconds:      120,
-		ShutdownProcessTimeoutSeconds: 30,
+		SessionEndTimeoutSeconds:        120,
+		ShutdownProcessTimeoutSeconds:   30,
+		InitializeProcessTimeoutSeconds: 20,
 	})
 
 	err := server.UpdateOptions(WorkerOptions{
-		SessionEndTimeoutSecondsSet:      true,
-		ShutdownProcessTimeoutSecondsSet: true,
+		SessionEndTimeoutSecondsSet:        true,
+		ShutdownProcessTimeoutSecondsSet:   true,
+		InitializeProcessTimeoutSecondsSet: true,
 	})
 	if err != nil {
 		t.Fatalf("UpdateOptions() error = %v", err)
@@ -588,6 +598,9 @@ func TestUpdateOptionsPreservesExplicitZeroTimeoutValues(t *testing.T) {
 	}
 	if server.Options.ShutdownProcessTimeoutSeconds != 0 {
 		t.Fatalf("ShutdownProcessTimeoutSeconds = %v, want explicit zero", server.Options.ShutdownProcessTimeoutSeconds)
+	}
+	if server.Options.InitializeProcessTimeoutSeconds != 0 {
+		t.Fatalf("InitializeProcessTimeoutSeconds = %v, want explicit zero", server.Options.InitializeProcessTimeoutSeconds)
 	}
 }
 

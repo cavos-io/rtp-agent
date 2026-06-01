@@ -158,6 +158,65 @@ func TestAgentTaskFailIsOneTime(t *testing.T) {
 	}
 }
 
+func TestAgentTaskDoneReflectsCompletion(t *testing.T) {
+	task := NewAgentTask[string]("collect data")
+	if task.Done() {
+		t.Fatal("Done() = true, want false before completion")
+	}
+
+	task.Complete("done")
+
+	if !task.Done() {
+		t.Fatal("Done() = false, want true after Complete")
+	}
+}
+
+func TestAgentTaskDoneReflectsFailure(t *testing.T) {
+	task := NewAgentTask[string]("collect data")
+	task.Fail(errors.New("failed"))
+
+	if !task.Done() {
+		t.Fatal("Done() = false, want true after Fail")
+	}
+}
+
+func TestAgentTaskCancelFailsWithToolError(t *testing.T) {
+	task := NewAgentTask[string]("collect data")
+	task.ID = "task_1"
+
+	task.Cancel()
+
+	if !task.Done() {
+		t.Fatal("Done() = false, want true after Cancel")
+	}
+	got, err := task.WaitAny(context.Background())
+	if got != nil {
+		t.Fatalf("WaitAny result = %v, want nil", got)
+	}
+	var toolErr llm.ToolError
+	if !errors.As(err, &toolErr) {
+		t.Fatalf("WaitAny error = %T %v, want llm.ToolError", err, err)
+	}
+	if toolErr.Message != "AgentTask task_1 is cancelled" {
+		t.Fatalf("ToolError message = %q, want cancellation message", toolErr.Message)
+	}
+}
+
+func TestAgentTaskCancelAfterCompleteDoesNotOverrideResult(t *testing.T) {
+	task := NewAgentTask[string]("collect data")
+	task.Complete("done")
+
+	task.Cancel()
+
+	got, err := task.WaitAny(context.Background())
+	if err != nil {
+		t.Fatalf("WaitAny error = %v, want nil", err)
+	}
+	if got != "done" {
+		t.Fatalf("WaitAny result = %v, want done", got)
+	}
+}
+
 func chatItemIDs(items []llm.ChatItem) []string {
 	ids := make([]string, 0, len(items))
 	for _, item := range items {

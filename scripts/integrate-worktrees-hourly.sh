@@ -162,6 +162,13 @@ run_or_codex() {
   fi
 }
 
+run_worktree_tests() {
+  local path="$1"
+  local branch="$2"
+
+  run_or_codex "$path" "$branch" env "GOCACHE=${GOCACHE:-/tmp/gocache}" go -C "$path" test ./...
+}
+
 echo "============================================================"
 echo "Hourly worktree integration started at $(date --iso-8601=seconds)"
 echo "Repo: $REPO_ROOT"
@@ -185,6 +192,7 @@ for item in "${ACTIVE_WORKTREES[@]}"; do
   echo "============================================================"
 
   run_or_codex "$path" "$branch" git -C "$path" rebase "$BASE_BRANCH"
+  run_worktree_tests "$path" "$branch"
 
   git switch "$BASE_BRANCH"
 

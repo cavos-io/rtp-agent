@@ -1,29 +1,54 @@
 repos:
   - repo: local
     hooks:
+      - id: check-go-test-additions
+        name: Check Go test additions
+        entry: scripts/check-go-test-additions.sh
+        language: system
+        pass_filenames: false
+        stages: [pre-commit]
+
+      - id: check-go-test-weakening
+        name: Check Go test weakening
+        entry: scripts/check-go-test-weakening.sh
+        language: system
+        pass_filenames: false
+        stages: [pre-commit]
+
+      - id: go-test-targeted
+        name: go test targeted staged packages
+        entry: scripts/go-test-targeted.sh
+        language: system
+        pass_filenames: false
+        stages: [pre-commit]
+
       - id: go-test
         name: go test
         entry: bash -c 'go list ./... | grep -v "/worktrees/" | xargs go test'
         language: system
         pass_filenames: false
+        stages: [pre-commit]
 
       - id: go-build
         name: go build
         entry: bash -c 'go list ./... | grep -v "/worktrees/" | xargs go build'
         language: system
         pass_filenames: false
+        stages: [pre-commit]
 
       - id: go-arch-lint-check
         name: go-arch-lint check
         entry: go-arch-lint check
         language: system
         pass_filenames: false
+        stages: [pre-commit]
 
       - id: go-arch-lint-mapping
         name: go-arch-lint mapping
         entry: go-arch-lint mapping
         language: system
         pass_filenames: false
+        stages: [pre-commit]
 
       - id: check-test-additions-than-deletions
         name: Check *_test.go additions > deletions
@@ -31,3 +56,10 @@ repos:
         language: system
         pass_filenames: false
         stages: [pre-commit]
+
+      - id: go-test-all
+        name: go test ./...
+        entry: scripts/go-test-all.sh
+        language: system
+        pass_filenames: false
+        stages: [pre-push]

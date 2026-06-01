@@ -3,7 +3,6 @@ set -euo pipefail
 
 failed=0
 
-# Only staged Go test files
 while IFS= read -r FILE; do
   [ -z "$FILE" ] && continue
 
@@ -22,5 +21,13 @@ while IFS= read -r FILE; do
 done < <(
   git diff --cached --name-only --diff-filter=ACMR -- '*_test.go'
 )
+
+deleted_tests=$(git diff --cached --name-only --diff-filter=D -- '*_test.go' || true)
+
+if [ -n "$deleted_tests" ]; then
+  echo "Rejected: deleting Go test files is not allowed:"
+  echo "$deleted_tests"
+  failed=1
+fi
 
 exit "$failed"
