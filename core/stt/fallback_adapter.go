@@ -21,7 +21,8 @@ type FallbackAdapter struct {
 	available            []bool
 	recovering           []bool
 	recoveringStream     []bool
-	availabilityHandlers []AvailabilityChangedHandler
+	availabilityHandlers []availabilityHandlerSubscription
+	nextAvailabilityID   uint64
 }
 
 type FallbackAdapterOptions struct {
@@ -34,6 +35,11 @@ type AvailabilityChangedEvent struct {
 }
 
 type AvailabilityChangedHandler func(AvailabilityChangedEvent)
+
+type availabilityHandlerSubscription struct {
+	id      uint64
+	handler AvailabilityChangedHandler
+}
 
 type FallbackAllFailedError struct {
 	Count    int
@@ -131,13 +137,36 @@ func (f *FallbackAdapter) Capabilities() STTCapabilities {
 	return f.capabilities
 }
 
-func (f *FallbackAdapter) OnAvailabilityChanged(handler AvailabilityChangedHandler) {
+func (f *FallbackAdapter) OnAvailabilityChanged(handler AvailabilityChangedHandler) func() {
 	if handler == nil {
-		return
+		return func() {}
 	}
 	f.mu.Lock()
-	f.availabilityHandlers = append(f.availabilityHandlers, handler)
+	f.nextAvailabilityID++
+	id := f.nextAvailabilityID
+	f.availabilityHandlers = append(f.availabilityHandlers, availabilityHandlerSubscription{
+		id:      id,
+		handler: handler,
+	})
 	f.mu.Unlock()
+
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			f.removeAvailabilityChangedHandler(id)
+		})
+	}
+}
+
+func (f *FallbackAdapter) removeAvailabilityChangedHandler(id uint64) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for i, subscription := range f.availabilityHandlers {
+		if subscription.id == id {
+			f.availabilityHandlers = append(f.availabilityHandlers[:i], f.availabilityHandlers[i+1:]...)
+			return
+		}
+	}
 }
 
 func (f *FallbackAdapter) Recognize(ctx context.Context, frames []*model.AudioFrame, language string) (*SpeechEvent, error) {
@@ -233,11 +262,11 @@ func (f *FallbackAdapter) setAvailable(index int, available bool) {
 	}
 	f.available[index] = available
 	event := AvailabilityChangedEvent{STT: f.stts[index], Available: available}
-	handlers := append([]AvailabilityChangedHandler(nil), f.availabilityHandlers...)
+	subscriptions := append([]availabilityHandlerSubscription(nil), f.availabilityHandlers...)
 	f.mu.Unlock()
 
-	for _, handler := range handlers {
-		handler(event)
+	for _, subscription := range subscriptions {
+		subscription.handler(event)
 	}
 }
 

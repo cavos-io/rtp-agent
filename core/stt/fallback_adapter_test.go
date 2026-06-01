@@ -711,6 +711,41 @@ func TestFallbackAdapterEmitsAvailabilityChanges(t *testing.T) {
 	}
 }
 
+func TestFallbackAdapterCanUnsubscribeAvailabilityChanges(t *testing.T) {
+	primaryErr := errors.New("primary recognize failed")
+	primary := &metadataSTT{
+		label:         "primary",
+		capabilities:  STTCapabilities{Streaming: true},
+		recognizeErrs: []error{primaryErr},
+	}
+	fallback := &metadataSTT{
+		label:        "fallback",
+		capabilities: STTCapabilities{Streaming: true},
+		recognizeResult: &SpeechEvent{
+			Type:         SpeechEventFinalTranscript,
+			Alternatives: []SpeechData{{Text: "fallback"}},
+		},
+	}
+	adapter := NewFallbackAdapterWithOptions([]STT{primary, fallback}, FallbackAdapterOptions{
+		MaxRetryPerSTT: 0,
+	})
+	changes := make(chan AvailabilityChangedEvent, 2)
+	unsubscribe := adapter.OnAvailabilityChanged(func(event AvailabilityChangedEvent) {
+		changes <- event
+	})
+	unsubscribe()
+
+	if _, err := adapter.Recognize(context.Background(), nil, "en"); err != nil {
+		t.Fatalf("Recognize returned error: %v", err)
+	}
+
+	select {
+	case event := <-changes:
+		t.Fatalf("received availability change after unsubscribe: %#v", event)
+	case <-time.After(50 * time.Millisecond):
+	}
+}
+
 func TestFallbackAdapterRecoverySurvivesCallerContextCancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	releaseRecovery := make(chan struct{})
