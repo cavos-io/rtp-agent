@@ -283,6 +283,38 @@ func TestRealtimeEventMapsConversationItemAddedFunctionCallOutput(t *testing.T) 
 	}
 }
 
+func TestRealtimeChatContextCreateMessagesMapUserTextMessage(t *testing.T) {
+	chatCtx := llm.NewChatContext()
+	chatCtx.AddMessage(llm.ChatMessageArgs{
+		ID:   "msg_123",
+		Role: llm.ChatRoleUser,
+		Text: "hello",
+	})
+
+	msgs, err := openAIRealtimeChatContextCreateMessages(chatCtx)
+	if err != nil {
+		t.Fatalf("openAIRealtimeChatContextCreateMessages error = %v, want nil", err)
+	}
+	if len(msgs) != 1 {
+		t.Fatalf("messages len = %d, want 1", len(msgs))
+	}
+	msg := msgs[0]
+	if msg["type"] != "conversation.item.create" {
+		t.Fatalf("message type = %#v, want conversation.item.create", msg["type"])
+	}
+	if msg["previous_item_id"] != "root" {
+		t.Fatalf("previous_item_id = %#v, want root", msg["previous_item_id"])
+	}
+	item := msg["item"].(map[string]any)
+	if item["id"] != "msg_123" || item["type"] != "message" || item["role"] != "user" {
+		t.Fatalf("item = %#v, want user message item", item)
+	}
+	content := item["content"].([]map[string]any)
+	if len(content) != 1 || content[0]["type"] != "input_text" || content[0]["text"] != "hello" {
+		t.Fatalf("content = %#v, want input text hello", content)
+	}
+}
+
 func TestRealtimeEventMapsResponseDoneMetrics(t *testing.T) {
 	ev, ok := openAIRealtimeEvent(map[string]any{
 		"type": "response.done",

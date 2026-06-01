@@ -96,7 +96,15 @@ func (s *realtimeSession) UpdateInstructions(instructions string) error {
 }
 
 func (s *realtimeSession) UpdateChatContext(chatCtx *llm.ChatContext) error {
-	// Send existing context to OpenAI
+	msgs, err := openAIRealtimeChatContextCreateMessages(chatCtx)
+	if err != nil {
+		return err
+	}
+	for _, msg := range msgs {
+		if err := s.sendMsg(msg); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
@@ -121,6 +129,113 @@ func openAIRealtimeTools(tools []llm.Tool) []map[string]any {
 		})
 	}
 	return oaTools
+}
+
+func openAIRealtimeChatContextCreateMessages(chatCtx *llm.ChatContext) ([]map[string]any, error) {
+	if chatCtx == nil {
+		return nil, nil
+	}
+	msgs := make([]map[string]any, 0, len(chatCtx.Items))
+	var previousItemID any = "root"
+	for _, item := range chatCtx.Items {
+		openAIItem, err := openAIRealtimeChatItemMessage(item)
+		if err != nil {
+			return nil, err
+		}
+		msgs = append(msgs, map[string]any{
+			"type":             "conversation.item.create",
+			"previous_item_id": previousItemID,
+			"item":             openAIItem,
+		})
+		previousItemID = item.GetID()
+	}
+	return msgs, nil
+}
+
+func openAIRealtimeChatItemMessage(item llm.ChatItem) (map[string]any, error) {
+	switch it := item.(type) {
+	case *llm.ChatMessage:
+		content, err := openAIRealtimeChatMessageContent(it)
+		if err != nil {
+			return nil, err
+		}
+		return map[string]any{
+			"id":      it.ID,
+			"type":    "message",
+			"role":    string(openAIRealtimeMessageRole(it.Role)),
+			"content": content,
+		}, nil
+	case *llm.FunctionCall:
+		return map[string]any{
+			"id":        it.ID,
+			"type":      "function_call",
+			"call_id":   it.CallID,
+			"name":      it.Name,
+			"arguments": it.Arguments,
+		}, nil
+	case *llm.FunctionCallOutput:
+		return map[string]any{
+			"id":      it.ID,
+			"type":    "function_call_output",
+			"call_id": it.CallID,
+			"output":  it.Output,
+		}, nil
+	default:
+		return nil, fmt.Errorf("unsupported realtime chat item %T", item)
+	}
+}
+
+func openAIRealtimeMessageRole(role llm.ChatRole) llm.ChatRole {
+	if role == llm.ChatRoleDeveloper {
+		return llm.ChatRoleSystem
+	}
+	return role
+}
+
+func openAIRealtimeChatMessageContent(msg *llm.ChatMessage) ([]map[string]any, error) {
+	content := make([]map[string]any, 0, len(msg.Content))
+	for _, part := range msg.Content {
+		if part.Text != "" {
+			partType := "input_text"
+			if msg.Role == llm.ChatRoleAssistant {
+				partType = "output_text"
+			}
+			content = append(content, map[string]any{
+				"type": partType,
+				"text": part.Text,
+			})
+		}
+		if part.Image != nil {
+			imagePart, err := openAIRealtimeImageContent(part.Image)
+			if err != nil {
+				return nil, err
+			}
+			if imagePart != nil {
+				content = append(content, imagePart)
+			}
+		}
+		if part.Audio != nil && part.Audio.Transcript != "" {
+			content = append(content, map[string]any{
+				"type":       "input_audio",
+				"transcript": part.Audio.Transcript,
+			})
+		}
+	}
+	return content, nil
+}
+
+func openAIRealtimeImageContent(image *llm.ImageContent) (map[string]any, error) {
+	img, err := llm.SerializeImage(image)
+	if err != nil {
+		return nil, err
+	}
+	if img.ExternalURL != "" {
+		return nil, nil
+	}
+	return map[string]any{
+		"type":      "input_image",
+		"image_url": fmt.Sprintf("data:%s;base64,%s", img.MIMEType, base64.StdEncoding.EncodeToString(img.DataBytes)),
+	}, nil
 }
 
 func (s *realtimeSession) UpdateOptions(options llm.RealtimeSessionOptions) error {
