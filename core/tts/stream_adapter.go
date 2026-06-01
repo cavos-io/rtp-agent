@@ -106,7 +106,7 @@ func (w *streamAdapterWrapper) run() {
 			break
 		}
 		if tok.Token != "" {
-			if err := w.synthesize(tok.Token); err != nil {
+			if err := w.synthesize(tok.Token, tok.SegmentID); err != nil {
 				w.sendErr(err)
 				return
 			}
@@ -114,7 +114,7 @@ func (w *streamAdapterWrapper) run() {
 	}
 }
 
-func (w *streamAdapterWrapper) synthesize(text string) error {
+func (w *streamAdapterWrapper) synthesize(text string, segmentID string) error {
 	stream, err := w.adapter.tts.Synthesize(w.ctx, text)
 	if err != nil {
 		return err
@@ -129,6 +129,7 @@ func (w *streamAdapterWrapper) synthesize(text string) error {
 			}
 			return err
 		}
+		audio.SegmentID = segmentID
 		w.eventCh <- audio
 	}
 }
