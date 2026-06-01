@@ -92,6 +92,7 @@ func (w *streamAdapterWrapper) run() {
 	w.mu.Lock()
 	w.vadStream = vadStream
 	w.mu.Unlock()
+	defer w.closeVADStream()
 
 	// Goroutine to push frames to VAD and buffer them
 	go func() {
@@ -284,11 +285,18 @@ func (w *streamAdapterWrapper) Close() error {
 		return nil
 	}
 	w.closed = true
-	vadStream := w.vadStream
 	w.mu.Unlock()
 
 	w.cancel()
 	close(w.inputCh)
+	return w.closeVADStream()
+}
+
+func (w *streamAdapterWrapper) closeVADStream() error {
+	w.mu.Lock()
+	vadStream := w.vadStream
+	w.vadStream = nil
+	w.mu.Unlock()
 	if vadStream != nil {
 		return vadStream.Close()
 	}

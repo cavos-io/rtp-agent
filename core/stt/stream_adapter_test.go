@@ -91,6 +91,26 @@ func TestStreamAdapterReturnsEOFWhenVADCompletes(t *testing.T) {
 	}
 }
 
+func TestStreamAdapterClosesVADStreamWhenRunCompletes(t *testing.T) {
+	closedCh := make(chan struct{}, 1)
+	stream, err := NewStreamAdapter(&fakeStreamAdapterSTT{}, &fakeStreamAdapterVAD{
+		stream: &fakeStreamAdapterVADStream{nextErr: io.EOF, closedCh: closedCh},
+	}).Stream(context.Background(), "")
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+
+	_, err = stream.Next()
+	if !errors.Is(err, io.EOF) {
+		t.Fatalf("Next error = %v, want io.EOF", err)
+	}
+	select {
+	case <-closedCh:
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("timed out waiting for VAD Close")
+	}
+}
+
 func TestStreamAdapterPropagatesVADRuntimeError(t *testing.T) {
 	runtimeErr := errors.New("vad failed")
 	stream, err := NewStreamAdapter(&fakeStreamAdapterSTT{}, &fakeStreamAdapterVAD{
