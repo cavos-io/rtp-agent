@@ -175,6 +175,24 @@ func TestSpeechEventMarshalJSONDefaultsAlternativesToEmptyList(t *testing.T) {
 	}
 }
 
+func TestSpeechEventUnmarshalJSONDefaultsAlternativesToEmptyList(t *testing.T) {
+	var event SpeechEvent
+	data := []byte(`{"type":"end_of_speech","request_id":"req-1"}`)
+
+	if err := json.Unmarshal(data, &event); err != nil {
+		t.Fatalf("Unmarshal SpeechEvent returned error: %v", err)
+	}
+	if event.Alternatives == nil {
+		t.Fatal("Alternatives = nil, want empty slice")
+	}
+	if len(event.Alternatives) != 0 {
+		t.Fatalf("Alternatives length = %d, want 0", len(event.Alternatives))
+	}
+	if event.Type != SpeechEventEndOfSpeech || event.RequestID != "req-1" {
+		t.Fatalf("decoded event = %#v, want end_of_speech req-1", event)
+	}
+}
+
 func TestSTTCapabilitiesMarshalJSONMatchesReferenceFieldNames(t *testing.T) {
 	data, err := json.Marshal(STTCapabilities{
 		Streaming:         true,

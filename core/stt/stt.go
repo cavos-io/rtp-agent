@@ -70,6 +70,19 @@ func (e SpeechEvent) MarshalJSON() ([]byte, error) {
 	return json.Marshal(payload)
 }
 
+func (e *SpeechEvent) UnmarshalJSON(data []byte) error {
+	type speechEventPayload SpeechEvent
+	var payload speechEventPayload
+	if err := json.Unmarshal(data, &payload); err != nil {
+		return err
+	}
+	*e = SpeechEvent(payload)
+	if e.Alternatives == nil {
+		e.Alternatives = []SpeechData{}
+	}
+	return nil
+}
+
 type STTCapabilities struct {
 	Streaming         bool   `json:"streaming"`
 	InterimResults    bool   `json:"interim_results"`
