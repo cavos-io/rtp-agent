@@ -99,14 +99,17 @@ func PerformTTSInference(ctx context.Context, t tts.TTS, textCh <-chan string) (
 		defer stream.Close()
 
 		startTime := time.Now()
+		transformBuffer := tts.NewTextTransformBuffer()
 
 		for text := range textCh {
-			filteredText := tts.ApplyTextTransforms(text)
-			if filteredText != "" {
+			for _, filteredText := range transformBuffer.Push(text) {
 				_ = stream.PushText(filteredText)
 			}
 		}
-		_ = stream.Flush()
+		for _, filteredText := range transformBuffer.Flush() {
+			_ = stream.PushText(filteredText)
+		}
+		_ = tts.EndSynthesizeStreamInput(stream)
 
 		for {
 			audio, err := stream.Next()

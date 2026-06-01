@@ -392,6 +392,7 @@ func (s *fallbackChunkedStream) tryStartStream(index int) error {
 func (s *fallbackChunkedStream) monitorStream() {
 	audioSent := false
 	var pending *SynthesizedAudio
+	pendingTail := false
 	for {
 		s.mu.Lock()
 		if s.closed {
@@ -460,15 +461,37 @@ func (s *fallbackChunkedStream) monitorStream() {
 
 		audioSent = true
 		if pending != nil {
-			pending = cloneSynthesizedAudio(pending)
-			pending.IsFinal = false
+			combined, combineErr := combineAudioFrames(pending.Frame, ev.Frame)
+			if pendingTail && combineErr == nil {
+				ev = cloneSynthesizedAudio(ev)
+				ev.Frame = combined
+			} else {
+				pending = cloneSynthesizedAudio(pending)
+				pending.IsFinal = false
+				select {
+				case s.eventCh <- pending:
+				case <-s.closeCh:
+					return
+				}
+				pendingTail = false
+			}
+		}
+		head, tail, ok := splitSynthesizedAudioTail(ev)
+		if ok {
+			head.RequestID = s.requestID
+			head.SegmentID = ""
+			head.IsFinal = false
 			select {
-			case s.eventCh <- pending:
+			case s.eventCh <- head:
 			case <-s.closeCh:
 				return
 			}
+			pending = tail
+			pendingTail = true
+			continue
 		}
-		pending = ev
+		pending = tail
+		pendingTail = false
 	}
 }
 
@@ -608,7 +631,13 @@ func (s *fallbackSynthesizeStream) startProviderStream(tts TTS) (SynthesizeStrea
 
 func (s *fallbackSynthesizeStream) replayBufferedText(stream SynthesizeStream) error {
 	for _, input := range s.inputBuffer {
-		if input.flush || input.text == "" {
+		if input.flush {
+			if err := stream.Flush(); err != nil {
+				return err
+			}
+			continue
+		}
+		if input.text == "" {
 			continue
 		}
 		if err := stream.PushText(input.text); err != nil {
@@ -624,6 +653,7 @@ func (s *fallbackSynthesizeStream) replayBufferedText(stream SynthesizeStream) e
 func (s *fallbackSynthesizeStream) monitorStream() {
 	audioSent := false
 	var pending *SynthesizedAudio
+	pendingTail := false
 	for {
 		s.mu.Lock()
 		if s.closed {
@@ -690,31 +720,66 @@ func (s *fallbackSynthesizeStream) monitorStream() {
 		ev.RequestID = s.requestID
 		ev.SegmentID = s.segmentID
 
+		providerFinal := ev.IsFinal
 		audioSent = true
-		if ev.IsFinal {
-			if pending != nil {
+		if pending != nil {
+			combined, combineErr := combineAudioFrames(pending.Frame, ev.Frame)
+			if pendingTail && combineErr == nil {
+				ev = cloneSynthesizedAudio(ev)
+				ev.Frame = combined
+			} else {
+				pending = cloneSynthesizedAudio(pending)
+				pending.IsFinal = false
 				select {
 				case s.eventCh <- pending:
 				case <-s.closeCh:
 					return
 				}
+				pendingTail = false
 			}
-			pending = nil
+		}
+		if providerFinal {
+			head, tail, ok := splitSynthesizedAudioTail(ev)
+			if ok {
+				head.RequestID = s.requestID
+				head.SegmentID = s.segmentID
+				head.IsFinal = false
+				select {
+				case s.eventCh <- head:
+				case <-s.closeCh:
+					return
+				}
+				ev = tail
+			}
+			ev = cloneSynthesizedAudio(ev)
+			ev.RequestID = s.requestID
+			ev.SegmentID = s.segmentID
+			ev.IsFinal = true
 			select {
 			case s.eventCh <- ev:
 			case <-s.closeCh:
 				return
 			}
-			continue
+			_ = stream.Close()
+			s.errCh <- io.EOF
+			return
 		}
-		if pending != nil {
+		head, tail, ok := splitSynthesizedAudioTail(ev)
+		if ok {
+			head.RequestID = s.requestID
+			head.SegmentID = s.segmentID
+			head.IsFinal = false
 			select {
-			case s.eventCh <- pending:
+			case s.eventCh <- head:
 			case <-s.closeCh:
 				return
 			}
+			pending = tail
+			pendingTail = true
+			continue
 		}
-		pending = ev
+		pending = tail
+		pendingTail = false
 	}
 }
 

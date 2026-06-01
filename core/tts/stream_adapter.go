@@ -139,20 +139,14 @@ func (w *streamAdapterWrapper) synthesize(text string, segmentID string) error {
 	}()
 
 	var pending *SynthesizedAudio
+	pendingTail := false
 	transcriptPending := true
 	for {
 		audio, err := stream.Next()
 		if err != nil {
 			if errors.Is(err, io.EOF) {
 				if pending != nil {
-					pending = cloneSynthesizedAudio(pending)
-					pending.SegmentID = segmentID
-					pending.RequestID = w.requestID
-					if transcriptPending {
-						pending.DeltaText = text
-					}
-					pending.IsFinal = true
-					w.eventCh <- pending
+					w.sendSynthesizedAudio(pending, text, segmentID, true, transcriptPending)
 				} else {
 					return fmt.Errorf("no audio frames were pushed for text: %s", synthText)
 				}
@@ -160,19 +154,41 @@ func (w *streamAdapterWrapper) synthesize(text string, segmentID string) error {
 			}
 			return err
 		}
+
 		if pending != nil {
-			pending = cloneSynthesizedAudio(pending)
-			pending.SegmentID = segmentID
-			pending.RequestID = w.requestID
-			if transcriptPending {
-				pending.DeltaText = text
+			combined, combineErr := combineAudioFrames(pending.Frame, audio.Frame)
+			if pendingTail && combineErr == nil {
+				audio = cloneSynthesizedAudio(audio)
+				audio.Frame = combined
+			} else {
+				w.sendSynthesizedAudio(pending, text, segmentID, false, transcriptPending)
 				transcriptPending = false
+				pendingTail = false
 			}
-			pending.IsFinal = false
-			w.eventCh <- pending
 		}
-		pending = audio
+
+		head, tail, ok := splitSynthesizedAudioTail(audio)
+		if ok {
+			w.sendSynthesizedAudio(head, text, segmentID, false, transcriptPending)
+			transcriptPending = false
+			pending = tail
+			pendingTail = true
+			continue
+		}
+		pending = tail
+		pendingTail = false
 	}
+}
+
+func (w *streamAdapterWrapper) sendSynthesizedAudio(audio *SynthesizedAudio, text string, segmentID string, isFinal bool, includeTranscript bool) {
+	audio = cloneSynthesizedAudio(audio)
+	audio.SegmentID = segmentID
+	audio.RequestID = w.requestID
+	audio.IsFinal = isFinal
+	if includeTranscript {
+		audio.DeltaText = text
+	}
+	w.eventCh <- audio
 }
 
 func newRetainFormatSentenceStream(language string) tokenize.SentenceStream {

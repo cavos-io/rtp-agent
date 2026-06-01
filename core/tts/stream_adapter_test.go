@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -162,6 +163,37 @@ func TestStreamAdapterMarksLastFrameInSegmentFinal(t *testing.T) {
 	second := nextStreamAdapterAudio(t, stream)
 	if !second.IsFinal {
 		t.Fatal("second audio IsFinal = false, want true")
+	}
+}
+
+func TestStreamAdapterEmitsLongFrameHeadBeforeProviderEOF(t *testing.T) {
+	frame := &model.AudioFrame{
+		Data:              make([]byte, 24000*2),
+		SampleRate:        24000,
+		NumChannels:       1,
+		SamplesPerChannel: 24000,
+	}
+	chunked := newOneFrameThenBlockingChunkedStream(frame)
+	provider := &fakeStreamAdapterTTS{chunked: chunked}
+	stream, err := NewStreamAdapter(provider).Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+	defer stream.Close()
+
+	if err := stream.PushText("long frame"); err != nil {
+		t.Fatalf("PushText returned error: %v", err)
+	}
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush returned error: %v", err)
+	}
+
+	audio := nextStreamAdapterAudio(t, stream)
+	if audio.IsFinal {
+		t.Fatal("first audio IsFinal = true, want non-final head before provider EOF")
+	}
+	if got, want := audio.Frame.SamplesPerChannel, uint32(23760); got != want {
+		t.Fatalf("head SamplesPerChannel = %d, want %d", got, want)
 	}
 }
 
@@ -622,4 +654,34 @@ func (b *blockingStreamAdapterChunkedStream) waitForClose(t *testing.T) bool {
 	case <-time.After(100 * time.Millisecond):
 		return false
 	}
+}
+
+type oneFrameThenBlockingChunkedStream struct {
+	frame   *model.AudioFrame
+	closeCh chan struct{}
+	once    sync.Once
+	index   int
+}
+
+func newOneFrameThenBlockingChunkedStream(frame *model.AudioFrame) *oneFrameThenBlockingChunkedStream {
+	return &oneFrameThenBlockingChunkedStream{
+		frame:   frame,
+		closeCh: make(chan struct{}),
+	}
+}
+
+func (s *oneFrameThenBlockingChunkedStream) Next() (*SynthesizedAudio, error) {
+	if s.index == 0 {
+		s.index++
+		return &SynthesizedAudio{Frame: s.frame}, nil
+	}
+	<-s.closeCh
+	return nil, io.EOF
+}
+
+func (s *oneFrameThenBlockingChunkedStream) Close() error {
+	s.once.Do(func() {
+		close(s.closeCh)
+	})
+	return nil
 }
