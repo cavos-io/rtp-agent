@@ -129,6 +129,7 @@ type multiSpeakerAdapterWrapper struct {
 type multiSpeakerInput struct {
 	frame *model.AudioFrame
 	flush bool
+	end   bool
 }
 
 func (w *multiSpeakerAdapterWrapper) StartTimeOffset() float64 {
@@ -205,7 +206,7 @@ func (w *multiSpeakerAdapterWrapper) EndInput() error {
 		return fmt.Errorf("stream input ended")
 	}
 	w.inputEnded = true
-	w.inputCh <- multiSpeakerInput{flush: true}
+	w.inputCh <- multiSpeakerInput{end: true}
 	return nil
 }
 
@@ -251,6 +252,14 @@ func (w *multiSpeakerAdapterWrapper) run() {
 				if input.flush {
 					w.inner.Flush()
 					continue
+				}
+				if input.end {
+					if ending, ok := w.inner.(InputEnding); ok {
+						ending.EndInput()
+					} else {
+						w.inner.Flush()
+					}
+					return
 				}
 				w.inner.PushFrame(input.frame)
 				w.detector.pushAudio(input.frame)

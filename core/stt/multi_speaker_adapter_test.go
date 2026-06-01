@@ -249,6 +249,32 @@ func TestMultiSpeakerAdapterWrapperEndInputFlushesAndRejectsMoreInput(t *testing
 	}
 }
 
+func TestMultiSpeakerAdapterWrapperForwardsEndInput(t *testing.T) {
+	inner := &fakeMultiSpeakerStream{nextErr: io.EOF, callCh: make(chan struct{}, 1)}
+	wrapper := &multiSpeakerAdapterWrapper{
+		inner:    inner,
+		ctx:      context.Background(),
+		detector: newPrimarySpeakerDetector(false, false, "{text}", "{text}", DefaultPrimarySpeakerDetectionOptions()),
+		eventCh:  make(chan *SpeechEvent, 1),
+		errCh:    make(chan error, 1),
+		inputCh:  make(chan multiSpeakerInput, 1),
+	}
+	go wrapper.run()
+
+	if err := wrapper.EndInput(); err != nil {
+		t.Fatalf("EndInput returned error: %v", err)
+	}
+
+	select {
+	case <-inner.callCh:
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("timed out waiting for inner EndInput")
+	}
+	if !reflect.DeepEqual(inner.calls, []string{"end_input"}) {
+		t.Fatalf("inner calls = %#v, want end_input", inner.calls)
+	}
+}
+
 type fakeMultiSpeakerStream struct {
 	nextErr         error
 	calls           []string
@@ -268,6 +294,14 @@ func (f *fakeMultiSpeakerStream) PushFrame(frame *model.AudioFrame) error {
 
 func (f *fakeMultiSpeakerStream) Flush() error {
 	f.calls = append(f.calls, "flush")
+	if f.callCh != nil {
+		f.callCh <- struct{}{}
+	}
+	return nil
+}
+
+func (f *fakeMultiSpeakerStream) EndInput() error {
+	f.calls = append(f.calls, "end_input")
 	if f.callCh != nil {
 		f.callCh <- struct{}{}
 	}

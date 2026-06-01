@@ -717,9 +717,38 @@ func TestFallbackStreamEndInputFlushesAndRejectsMoreInput(t *testing.T) {
 		t.Fatal("Flush after EndInput returned nil, want error")
 	}
 
-	want := []string{"push:first", "flush"}
+	want := []string{"push:first", "end_input"}
 	if strings.Join(inner.calls, ",") != strings.Join(want, ",") {
 		t.Fatalf("inner calls = %#v, want %#v", inner.calls, want)
+	}
+}
+
+func TestFallbackStreamForwardsEndInput(t *testing.T) {
+	inner := &metadataRecognizeStream{events: []*SpeechEvent{{Type: SpeechEventFinalTranscript}}}
+	adapter := NewFallbackAdapter([]STT{
+		&metadataSTT{
+			label:        "primary",
+			capabilities: STTCapabilities{Streaming: true},
+			stream:       inner,
+		},
+	})
+
+	stream, err := adapter.Stream(context.Background(), "en")
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+	defer stream.Close()
+
+	ending, ok := stream.(InputEnding)
+	if !ok {
+		t.Fatal("stream does not implement InputEnding")
+	}
+	if err := ending.EndInput(); err != nil {
+		t.Fatalf("EndInput returned error: %v", err)
+	}
+
+	if strings.Join(inner.calls, ",") != "end_input" {
+		t.Fatalf("inner calls = %#v, want end_input", inner.calls)
 	}
 }
 
@@ -922,6 +951,11 @@ func (m *metadataRecognizeStream) PushFrame(frame *model.AudioFrame) error {
 
 func (m *metadataRecognizeStream) Flush() error {
 	m.calls = append(m.calls, "flush")
+	return nil
+}
+
+func (m *metadataRecognizeStream) EndInput() error {
+	m.calls = append(m.calls, "end_input")
 	return nil
 }
 

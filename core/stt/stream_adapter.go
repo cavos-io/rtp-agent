@@ -60,6 +60,7 @@ type streamAdapterWrapper struct {
 type streamAdapterInput struct {
 	frame *model.AudioFrame
 	flush bool
+	end   bool
 }
 
 func (a *StreamAdapter) Stream(ctx context.Context, language string) (RecognizeStream, error) {
@@ -107,6 +108,12 @@ func (w *streamAdapterWrapper) run() {
 						return
 					}
 					continue
+				}
+				if input.end {
+					if err := vadStream.EndInput(); err != nil {
+						w.sendErr(err)
+					}
+					return
 				}
 				if err := vadStream.PushFrame(input.frame); err != nil {
 					w.sendErr(err)
@@ -264,7 +271,7 @@ func (w *streamAdapterWrapper) EndInput() error {
 	w.inputEnded = true
 	w.mu.Unlock()
 
-	w.inputCh <- streamAdapterInput{flush: true}
+	w.inputCh <- streamAdapterInput{end: true}
 	return nil
 }
 
