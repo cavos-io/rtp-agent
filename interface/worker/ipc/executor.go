@@ -39,6 +39,9 @@ var processPingInterval = 2 * time.Second
 var processSignal = func(process *os.Process, signal os.Signal) error {
 	return process.Signal(signal)
 }
+var processKill = func(process *os.Process) error {
+	return process.Kill()
+}
 
 type ThreadJobExecutor struct {
 	id     string
@@ -321,6 +324,7 @@ func (e *ProcessJobExecutor) pingTask(ctx context.Context) {
 				if err := processSignal(e.cmd.Process, syscall.Signal(0)); err != nil {
 					logger.Logger.Warnw("Job process unresponsive", err, "exec_id", e.id)
 					e.status = JobStatusFailed
+					_ = processKill(e.cmd.Process)
 					e.mu.Unlock()
 					return
 				}
@@ -341,7 +345,7 @@ func (e *ProcessJobExecutor) Close(ctx context.Context) error {
 	}
 
 	if cmd != nil && cmd.Process != nil {
-		if err := cmd.Process.Kill(); err != nil && !strings.Contains(err.Error(), "process already finished") {
+		if err := processKill(cmd.Process); err != nil && !strings.Contains(err.Error(), "process already finished") {
 			return err
 		}
 	}

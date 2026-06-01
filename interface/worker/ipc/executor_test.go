@@ -250,13 +250,20 @@ func TestProcessJobExecutorCloseWaitsForProcessExit(t *testing.T) {
 func TestProcessJobExecutorPingMarksFailedWhenProcessMissing(t *testing.T) {
 	oldPingInterval := processPingInterval
 	oldProcessSignal := processSignal
+	oldKill := processKill
 	processPingInterval = time.Millisecond
 	processSignal = func(*os.Process, os.Signal) error {
 		return errors.New("process missing")
 	}
+	killed := make(chan struct{}, 1)
+	processKill = func(*os.Process) error {
+		killed <- struct{}{}
+		return nil
+	}
 	defer func() {
 		processPingInterval = oldPingInterval
 		processSignal = oldProcessSignal
+		processKill = oldKill
 	}()
 
 	executor := NewProcessJobExecutor("exec-ping")
@@ -278,7 +285,12 @@ func TestProcessJobExecutorPingMarksFailedWhenProcessMissing(t *testing.T) {
 			t.Fatalf("Status() = %q, want %q", executor.Status(), JobStatusFailed)
 		case <-ticker.C:
 			if executor.Status() == JobStatusFailed {
-				return
+				select {
+				case <-killed:
+					return
+				case <-time.After(time.Second):
+					t.Fatal("process was not killed after failed ping")
+				}
 			}
 		}
 	}
