@@ -21,6 +21,52 @@ func TestCartesiaTTSDefaultsMatchReference(t *testing.T) {
 	if provider.apiVersion != "2025-04-16" {
 		t.Fatalf("api version = %q, want 2025-04-16", provider.apiVersion)
 	}
+	if !provider.Capabilities().AlignedTranscript {
+		t.Fatalf("AlignedTranscript = false, want true when word timestamps are enabled")
+	}
+}
+
+func TestCartesiaTTSConstructorOptionsMatchReference(t *testing.T) {
+	t.Setenv("CARTESIA_API_KEY", "env-key")
+
+	provider := NewCartesiaTTS("", "voice-1", "sonic-custom",
+		WithCartesiaLanguage("es"),
+		WithCartesiaAudioFormat("pcm_mulaw", 8000),
+		WithCartesiaAPIVersion("2025-01-01"),
+		WithCartesiaWordTimestamps(false),
+	)
+	if provider.apiKey != "env-key" {
+		t.Fatalf("apiKey = %q, want env key", provider.apiKey)
+	}
+	if provider.language != "es" {
+		t.Fatalf("language = %q, want es", provider.language)
+	}
+	if provider.encoding != "pcm_mulaw" || provider.sampleRate != 8000 {
+		t.Fatalf("audio format = %s/%d, want pcm_mulaw/8000", provider.encoding, provider.sampleRate)
+	}
+	if provider.apiVersion != "2025-01-01" {
+		t.Fatalf("apiVersion = %q, want configured version", provider.apiVersion)
+	}
+	if provider.Capabilities().AlignedTranscript {
+		t.Fatalf("AlignedTranscript = true, want false when word timestamps are disabled")
+	}
+
+	msg := buildCartesiaStreamInitMessage(provider)
+	if msg["language"] != "es" {
+		t.Fatalf("language = %#v, want es", msg["language"])
+	}
+	if msg["add_timestamps"] != false {
+		t.Fatalf("add_timestamps = %#v, want false", msg["add_timestamps"])
+	}
+	outputFormat := msg["output_format"].(map[string]interface{})
+	if outputFormat["encoding"] != "pcm_mulaw" || outputFormat["sample_rate"] != 8000 {
+		t.Fatalf("output_format = %+v, want configured encoding/sample rate", outputFormat)
+	}
+
+	provider = NewCartesiaTTS("explicit-key", "", "")
+	if provider.apiKey != "explicit-key" {
+		t.Fatalf("apiKey = %q, want explicit key", provider.apiKey)
+	}
 }
 
 func TestCartesiaSynthesizeRequestUsesReferenceOptions(t *testing.T) {
