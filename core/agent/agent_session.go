@@ -123,6 +123,38 @@ func (s *AgentSession) OnAudioFrame(ctx context.Context, frame *model.AudioFrame
 	}
 }
 
+func (s *AgentSession) CurrentSpeech() *SpeechHandle {
+	s.mu.Lock()
+	activity := s.activity
+	s.mu.Unlock()
+	if activity == nil {
+		return nil
+	}
+
+	activity.queueMu.Lock()
+	defer activity.queueMu.Unlock()
+	return activity.currentSpeech
+}
+
+func (s *AgentSession) CurrentAgent() (AgentInterface, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !s.started || s.Agent == nil {
+		return nil, ErrAgentSessionNotRunning
+	}
+	return s.Agent, nil
+}
+
+func (s *AgentSession) WaitForInactive(ctx context.Context) error {
+	s.mu.Lock()
+	activity := s.activity
+	s.mu.Unlock()
+	if activity == nil {
+		return nil
+	}
+	return activity.WaitForInactive(ctx)
+}
+
 type AgentStateChangedEvent struct {
 	OldState  AgentState
 	NewState  AgentState
@@ -140,6 +172,9 @@ type UserStateChangedEvent struct {
 func (e *UserStateChangedEvent) GetType() string { return "user_state_changed" }
 
 func NewAgentSession(agent AgentInterface, room *lksdk.Room, opts AgentSessionOptions) *AgentSession {
+	if opts.MaxToolSteps == 0 {
+		opts.MaxToolSteps = 3
+	}
 	baseAgent := agent.GetAgent()
 	return &AgentSession{
 		Agent:               agent,
@@ -151,6 +186,9 @@ func NewAgentSession(agent AgentInterface, room *lksdk.Room, opts AgentSessionOp
 		Options:             opts,
 		ChatCtx:             llm.NewChatContext(),
 		Tools:               make([]llm.Tool, 0),
+		MetricsCollector:    telemetry.NewUsageCollector(),
+		UserState:           UserStateListening,
+		AgentState:          AgentStateInitializing,
 		AgentStateChangedCh: make(chan AgentStateChangedEvent, 10),
 		UserStateChangedCh:  make(chan UserStateChangedEvent, 10),
 		userInputCh:         make(chan UserInputTranscribedEvent, 10),
@@ -403,6 +441,13 @@ func (s *AgentSession) EmitMetricsCollected(metrics telemetry.AgentMetrics) {
 	}
 }
 
+func (s *AgentSession) Usage() telemetry.UsageSummary {
+	if s.MetricsCollector == nil {
+		return telemetry.UsageSummary{}
+	}
+	return s.MetricsCollector.GetSummary()
+}
+
 func (s *AgentSession) metricsCollectedEvents() chan MetricsCollectedEvent {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -496,6 +541,10 @@ func (s *AgentSession) CloseSoon(reason CloseReason) {
 	default:
 	}
 	_ = s.Stop(context.Background())
+}
+
+func (s *AgentSession) Shutdown() {
+	s.CloseSoon(CloseReasonUserInitiated)
 }
 
 func (s *AgentSession) closeEvents() chan CloseEvent {
@@ -741,16 +790,20 @@ func (s *AgentSession) UpdateAgent(agent AgentInterface) {
 
 func (s *AgentSession) Stop(ctx context.Context) error {
 	s.mu.Lock()
-	defer s.mu.Unlock()
-
 	if !s.started {
+		s.mu.Unlock()
 		return nil
 	}
 
-	if s.activity != nil {
-		s.activity.Stop()
-	}
+	activity := s.activity
 	s.activity = nil
 	s.started = false
+	s.UserState = UserStateListening
+	s.AgentState = AgentStateInitializing
+	s.mu.Unlock()
+
+	if activity != nil {
+		activity.Stop()
+	}
 	return nil
 }

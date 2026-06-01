@@ -137,6 +137,7 @@ type JobContext struct {
 	WorkerID               string
 	shutdownCallbacks      []func(string)
 	shutdownOnce           sync.Once
+	finishOnce             sync.Once
 	participantEntrypoints []participantEntrypointRegistration
 	availableParticipants  []*livekit.ParticipantInfo
 	participantTasks       map[participantEntrypointTaskKey]struct{}

@@ -38,21 +38,22 @@ const (
 	WorkerTypeRoom      WorkerType = "room"
 	WorkerTypePublisher WorkerType = "publisher"
 
-	defaultWorkerVersion     = "1.0.0"
-	defaultMaxRetry          = 16
-	defaultJobMemoryWarn     = 500
-	defaultDrainTimeout      = 1800
-	defaultSessionEnd        = 300
-	defaultProcessTimeout    = 10
-	localEntrypointCloseWait = 15 * time.Second
-	defaultLoadThreshold     = 0.7
-	defaultProdLogLevel      = "INFO"
-	defaultDevLogLevel       = "DEBUG"
-	defaultProdHTTPPort      = 8081
-	defaultDevHTTPPort       = 0
+	defaultWorkerVersion  = "1.0.0"
+	defaultMaxRetry       = 16
+	defaultJobMemoryWarn  = 500
+	defaultDrainTimeout   = 1800
+	defaultSessionEnd     = 300
+	defaultProcessTimeout = 10
+	defaultLoadThreshold  = 0.7
+	defaultProdLogLevel   = "INFO"
+	defaultDevLogLevel    = "DEBUG"
+	defaultProdHTTPPort   = 8081
+	defaultDevHTTPPort    = 0
 
 	participantAttributeAgentName = "lk.agent.name"
 )
+
+var localEntrypointCloseWait = 15 * time.Second
 
 var assignmentTimeout = 7500 * time.Millisecond
 
@@ -1597,10 +1598,7 @@ func (s *AgentServer) handleTermination(req *livekit.JobTermination) {
 	s.mu.Unlock()
 
 	if exists {
-		s.runSessionEnd(jobCtx)
-
-		jobCtx.Shutdown("")
-		s.uploadJobSessionReport(jobCtx)
+		s.finishJob(jobCtx)
 	}
 }
 
@@ -1683,6 +1681,13 @@ func waitForLocalEntrypoint(done <-chan struct{}) {
 
 func (s *AgentServer) finishJob(jobCtx *JobContext) {
 	if jobCtx == nil || jobCtx.Job == nil {
+		return
+	}
+	finalized := false
+	jobCtx.finishOnce.Do(func() {
+		finalized = true
+	})
+	if !finalized {
 		return
 	}
 

@@ -34,6 +34,33 @@ func TestAgentSessionGenerateReplyReturnsScheduledSpeechHandle(t *testing.T) {
 	}
 }
 
+func TestNewAgentSessionInitializesUserStateListening(t *testing.T) {
+	agent := NewAgent("test")
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+
+	if session.UserState != UserStateListening {
+		t.Fatalf("UserState = %q, want %q", session.UserState, UserStateListening)
+	}
+}
+
+func TestNewAgentSessionInitializesAgentStateInitializing(t *testing.T) {
+	agent := NewAgent("test")
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+
+	if session.AgentState != AgentStateInitializing {
+		t.Fatalf("AgentState = %q, want %q", session.AgentState, AgentStateInitializing)
+	}
+}
+
+func TestNewAgentSessionInitializesUsageCollector(t *testing.T) {
+	agent := NewAgent("test")
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+
+	if session.MetricsCollector == nil {
+		t.Fatal("MetricsCollector = nil, want default usage collector")
+	}
+}
+
 func TestAgentSessionGenerateReplyEmitsSpeechCreatedEvent(t *testing.T) {
 	agent := NewAgent("test")
 	session := NewAgentSession(agent, nil, AgentSessionOptions{AllowInterruptions: true})
@@ -309,6 +336,35 @@ func TestAgentSessionGenerateReplyRequiresRunningActivity(t *testing.T) {
 	}
 }
 
+func TestAgentSessionCurrentAgentRequiresRunningSession(t *testing.T) {
+	agent := NewAgent("test")
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+
+	current, err := session.CurrentAgent()
+
+	if current != nil {
+		t.Fatalf("CurrentAgent = %#v, want nil when session is not running", current)
+	}
+	if !errors.Is(err, ErrAgentSessionNotRunning) {
+		t.Fatalf("CurrentAgent error = %v, want ErrAgentSessionNotRunning", err)
+	}
+}
+
+func TestAgentSessionCurrentAgentReturnsRunningAgent(t *testing.T) {
+	agent := NewAgent("test")
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	session.started = true
+
+	current, err := session.CurrentAgent()
+
+	if err != nil {
+		t.Fatalf("CurrentAgent error = %v, want nil", err)
+	}
+	if current != agent {
+		t.Fatalf("CurrentAgent = %#v, want session agent %#v", current, agent)
+	}
+}
+
 func TestAgentSessionCloseSoonStopsRunningSession(t *testing.T) {
 	agent := NewAgent("test")
 	session := NewAgentSession(agent, nil, AgentSessionOptions{})
@@ -332,6 +388,137 @@ func TestAgentSessionCloseSoonStopsRunningSession(t *testing.T) {
 	}
 	if !errors.Is(err, ErrAgentSessionNotRunning) {
 		t.Fatalf("GenerateReply error after CloseSoon = %v, want ErrAgentSessionNotRunning", err)
+	}
+}
+
+func TestAgentSessionShutdownClosesWithUserInitiatedReason(t *testing.T) {
+	agent := NewAgent("test")
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	session.activity = NewAgentActivity(agent, session)
+	session.started = true
+
+	session.Shutdown()
+
+	select {
+	case ev := <-session.CloseEvents():
+		if ev.Reason != CloseReasonUserInitiated {
+			t.Fatalf("CloseEvent.Reason = %q, want user_initiated", ev.Reason)
+		}
+	default:
+		t.Fatal("Shutdown did not emit close event")
+	}
+
+	handle, err := session.GenerateReply(context.Background(), "hello")
+	if handle != nil {
+		t.Fatalf("GenerateReply handle after Shutdown = %#v, want nil", handle)
+	}
+	if !errors.Is(err, ErrAgentSessionNotRunning) {
+		t.Fatalf("GenerateReply error after Shutdown = %v, want ErrAgentSessionNotRunning", err)
+	}
+}
+
+func TestAgentSessionStopResetsSessionStates(t *testing.T) {
+	agent := NewAgent("test")
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	session.activity = NewAgentActivity(agent, session)
+	session.started = true
+	session.UserState = UserStateSpeaking
+	session.AgentState = AgentStateThinking
+
+	if err := session.Stop(context.Background()); err != nil {
+		t.Fatalf("Stop error = %v, want nil", err)
+	}
+
+	if session.UserState != UserStateListening {
+		t.Fatalf("UserState after Stop = %q, want %q", session.UserState, UserStateListening)
+	}
+	if session.AgentState != AgentStateInitializing {
+		t.Fatalf("AgentState after Stop = %q, want %q", session.AgentState, AgentStateInitializing)
+	}
+}
+
+func TestAgentSessionStopAllowsOnExitSessionCallbacks(t *testing.T) {
+	agent := &sessionCallbackAgent{Agent: NewAgent("test")}
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	agent.session = session
+	session.activity = NewAgentActivity(agent, session)
+	session.started = true
+
+	done := make(chan error, 1)
+	go func() {
+		done <- session.Stop(context.Background())
+	}()
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("Stop error = %v, want nil", err)
+		}
+	case <-testTimeout():
+		t.Fatal("Stop deadlocked while OnExit called back into session")
+	}
+	if !agent.exited {
+		t.Fatal("OnExit was not called")
+	}
+}
+
+func TestAgentSessionCurrentSpeechReturnsNilWithoutActivity(t *testing.T) {
+	agent := NewAgent("test")
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+
+	if got := session.CurrentSpeech(); got != nil {
+		t.Fatalf("CurrentSpeech = %#v, want nil without activity", got)
+	}
+}
+
+func TestAgentSessionCurrentSpeechReturnsActivitySpeech(t *testing.T) {
+	agent := NewAgent("test")
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	session.activity = NewAgentActivity(agent, session)
+	current := NewSpeechHandle(true, DefaultInputDetails())
+	session.activity.currentSpeech = current
+
+	if got := session.CurrentSpeech(); got != current {
+		t.Fatalf("CurrentSpeech = %#v, want current activity speech %#v", got, current)
+	}
+}
+
+func TestAgentSessionWaitForInactiveReturnsWithoutActivity(t *testing.T) {
+	agent := NewAgent("test")
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+
+	if err := session.WaitForInactive(context.Background()); err != nil {
+		t.Fatalf("WaitForInactive error = %v, want nil without activity", err)
+	}
+}
+
+func TestAgentSessionWaitForInactiveWaitsForCurrentSpeech(t *testing.T) {
+	agent := NewAgent("test")
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	session.activity = NewAgentActivity(agent, session)
+	current := NewSpeechHandle(true, DefaultInputDetails())
+	session.activity.currentSpeech = current
+
+	done := make(chan error, 1)
+	go func() {
+		done <- session.WaitForInactive(context.Background())
+	}()
+
+	select {
+	case err := <-done:
+		t.Fatalf("WaitForInactive returned before current speech completed: %v", err)
+	case <-time.After(20 * time.Millisecond):
+	}
+
+	current.MarkDone()
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("WaitForInactive error = %v, want nil", err)
+		}
+	case <-testTimeout():
+		t.Fatal("WaitForInactive did not return after current speech completed")
 	}
 }
 
@@ -440,6 +627,17 @@ func (a *trackingAgent) OnExit() {
 	a.exited++
 }
 
+type sessionCallbackAgent struct {
+	*Agent
+	session *AgentSession
+	exited  bool
+}
+
+func (a *sessionCallbackAgent) OnExit() {
+	a.exited = true
+	a.session.UpdateUserState(UserStateSpeaking)
+}
+
 func TestAgentSessionUpdateAgentStateEmitsTypedTimestampedEvent(t *testing.T) {
 	agent := NewAgent("test")
 	session := NewAgentSession(agent, nil, AgentSessionOptions{})
@@ -453,8 +651,8 @@ func TestAgentSessionUpdateAgentStateEmitsTypedTimestampedEvent(t *testing.T) {
 		if event.GetType() != "agent_state_changed" {
 			t.Fatalf("event type = %q, want agent_state_changed", event.GetType())
 		}
-		if ev.OldState != "" || ev.NewState != AgentStateThinking {
-			t.Fatalf("event states = %q -> %q, want empty -> thinking", ev.OldState, ev.NewState)
+		if ev.OldState != AgentStateInitializing || ev.NewState != AgentStateThinking {
+			t.Fatalf("event states = %q -> %q, want initializing -> thinking", ev.OldState, ev.NewState)
 		}
 		if ev.CreatedAt.Before(before) || ev.CreatedAt.IsZero() {
 			t.Fatalf("CreatedAt = %v, want timestamp after %v", ev.CreatedAt, before)
@@ -491,13 +689,14 @@ func TestAgentSessionStartEmitsInitializingThenListening(t *testing.T) {
 		}
 	}()
 
-	first := receiveAgentStateChangedEvent(t, session)
-	if first.OldState != "" || first.NewState != AgentStateInitializing {
-		t.Fatalf("first state event = %q -> %q, want empty -> initializing", first.OldState, first.NewState)
+	ev := receiveAgentStateChangedEvent(t, session)
+	if ev.OldState != AgentStateInitializing || ev.NewState != AgentStateListening {
+		t.Fatalf("state event = %q -> %q, want initializing -> listening", ev.OldState, ev.NewState)
 	}
-	second := receiveAgentStateChangedEvent(t, session)
-	if second.OldState != AgentStateInitializing || second.NewState != AgentStateListening {
-		t.Fatalf("second state event = %q -> %q, want initializing -> listening", second.OldState, second.NewState)
+	select {
+	case extra := <-session.AgentStateChangedCh:
+		t.Fatalf("unexpected extra state event = %q -> %q", extra.OldState, extra.NewState)
+	default:
 	}
 }
 
@@ -514,8 +713,8 @@ func TestAgentSessionUpdateUserStateEmitsTypedTimestampedEvent(t *testing.T) {
 		if event.GetType() != "user_state_changed" {
 			t.Fatalf("event type = %q, want user_state_changed", event.GetType())
 		}
-		if ev.OldState != "" || ev.NewState != UserStateSpeaking {
-			t.Fatalf("event states = %q -> %q, want empty -> speaking", ev.OldState, ev.NewState)
+		if ev.OldState != UserStateListening || ev.NewState != UserStateSpeaking {
+			t.Fatalf("event states = %q -> %q, want listening -> speaking", ev.OldState, ev.NewState)
 		}
 		if ev.CreatedAt.Before(before) || ev.CreatedAt.IsZero() {
 			t.Fatalf("CreatedAt = %v, want timestamp after %v", ev.CreatedAt, before)
@@ -539,7 +738,6 @@ func receiveAgentStateChangedEvent(t *testing.T, session *AgentSession) AgentSta
 func TestAgentSessionEmitMetricsCollectedCollectsUsageAndEmitsEvent(t *testing.T) {
 	agent := NewAgent("test")
 	session := NewAgentSession(agent, nil, AgentSessionOptions{})
-	session.MetricsCollector = telemetry.NewUsageCollector()
 	metrics := &telemetry.LLMMetrics{
 		PromptTokens:     7,
 		CompletionTokens: 11,
@@ -578,5 +776,20 @@ func TestAgentSessionEmitMetricsCollectedCollectsUsageAndEmitsEvent(t *testing.T
 		}
 	case <-time.After(time.Second):
 		t.Fatal("SessionUsageUpdatedEvents did not receive event")
+	}
+}
+
+func TestAgentSessionUsageReturnsCollectedSummary(t *testing.T) {
+	agent := NewAgent("test")
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+
+	session.EmitMetricsCollected(&telemetry.LLMMetrics{
+		PromptTokens:     3,
+		CompletionTokens: 5,
+	})
+
+	usage := session.Usage()
+	if usage.LLMPromptTokens != 3 || usage.LLMCompletionTokens != 5 {
+		t.Fatalf("Usage = %#v, want prompt=3 completion=5", usage)
 	}
 }

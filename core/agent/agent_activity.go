@@ -142,6 +142,36 @@ func (a *AgentActivity) Interrupt(force bool) error {
 	return nil
 }
 
+func (a *AgentActivity) WaitForInactive(ctx context.Context) error {
+	for {
+		active := a.activeSpeechHandles()
+		if len(active) == 0 {
+			return nil
+		}
+		for _, speech := range active {
+			if err := speech.Wait(ctx); err != nil {
+				return err
+			}
+		}
+	}
+}
+
+func (a *AgentActivity) activeSpeechHandles() []*SpeechHandle {
+	a.queueMu.Lock()
+	defer a.queueMu.Unlock()
+
+	active := make([]*SpeechHandle, 0, len(a.speechQueue)+1)
+	if a.currentSpeech != nil && !a.currentSpeech.IsDone() {
+		active = append(active, a.currentSpeech)
+	}
+	for _, queued := range a.speechQueue {
+		if !queued.speech.IsDone() {
+			active = append(active, queued.speech)
+		}
+	}
+	return active
+}
+
 func (a *AgentActivity) UpdateInstructions(ctx context.Context, instructions string) error {
 	a.Agent.Instructions = instructions
 	configUpdate := &llm.AgentConfigUpdate{
