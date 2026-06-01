@@ -1,0 +1,7 @@
+
+# Local runtime/config
+.env
+refs/
+
+# Git worktrees
+worktrees/

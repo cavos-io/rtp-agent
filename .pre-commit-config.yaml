@@ -3,13 +3,13 @@ repos:
     hooks:
       - id: go-test
         name: go test
-        entry: go test ./...
+        entry: bash -c 'go list ./... | grep -v "/worktrees/" | xargs go test'
         language: system
         pass_filenames: false
 
       - id: go-build
         name: go build
-        entry: go build ./...
+        entry: bash -c 'go list ./... | grep -v "/worktrees/" | xargs go build'
         language: system
         pass_filenames: false
 
