@@ -447,7 +447,7 @@ func (a *AgentActivity) OnEndOfSpeech(ev *vad.VADEvent) {
 	a.speaking = false
 	logger.Logger.Infow("End of speech detected")
 
-	if a.Agent.TurnDetection == TurnDetectionModeVAD {
+	if a.turnDetectionMode() == TurnDetectionModeVAD {
 		// Trigger EOU detection
 		a.runEOUDetection(EndOfTurnInfo{})
 	}
@@ -455,7 +455,7 @@ func (a *AgentActivity) OnEndOfSpeech(ev *vad.VADEvent) {
 
 func (a *AgentActivity) OnFinalTranscript(ev *stt.SpeechEvent) {
 	a.sttEOSReceived = true
-	if a.Agent.TurnDetection == TurnDetectionModeSTT {
+	if a.turnDetectionMode() == TurnDetectionModeSTT {
 		transcript := ""
 		confidence := 0.0
 		if len(ev.Alternatives) > 0 {
@@ -467,6 +467,16 @@ func (a *AgentActivity) OnFinalTranscript(ev *stt.SpeechEvent) {
 			TranscriptConfidence: confidence,
 		})
 	}
+}
+
+func (a *AgentActivity) turnDetectionMode() TurnDetectionMode {
+	if a.Agent.TurnDetection != "" {
+		return a.Agent.TurnDetection
+	}
+	if a.Session != nil {
+		return a.Session.Options.TurnDetection
+	}
+	return ""
 }
 
 func (a *AgentActivity) runEOUDetection(info EndOfTurnInfo) {
@@ -481,10 +491,7 @@ func (a *AgentActivity) runEOUDetection(info EndOfTurnInfo) {
 	go func() {
 		defer cancel()
 
-		endpointingDelay := a.Agent.MinEndpointingDelay
-		if endpointingDelay <= 0 {
-			endpointingDelay = 0.5 // default
-		}
+		endpointingDelay := a.minEndpointingDelay()
 
 		if a.Agent.TurnDetector != nil && info.NewTranscript != "" {
 			// Predict end of turn
@@ -499,10 +506,7 @@ func (a *AgentActivity) runEOUDetection(info EndOfTurnInfo) {
 				logger.Logger.Infow("EOU prediction", "probability", prob)
 				// Apply probability threshold logic
 				if prob < 0.5 {
-					endpointingDelay = a.Agent.MaxEndpointingDelay
-					if endpointingDelay <= 0 {
-						endpointingDelay = 2.0 // default
-					}
+					endpointingDelay = a.maxEndpointingDelay()
 				}
 			} else {
 				logger.Logger.Errorw("EOU prediction failed", err)
@@ -525,4 +529,24 @@ func (a *AgentActivity) runEOUDetection(info EndOfTurnInfo) {
 			a.AgentIntf.OnUserTurnCompleted(a.ctx, a.Agent.ChatCtx, newMsg)
 		}
 	}()
+}
+
+func (a *AgentActivity) minEndpointingDelay() float64 {
+	if a.Agent.MinEndpointingDelay > 0 {
+		return a.Agent.MinEndpointingDelay
+	}
+	if a.Session != nil && a.Session.Options.MinEndpointingDelay > 0 {
+		return a.Session.Options.MinEndpointingDelay
+	}
+	return 0.5
+}
+
+func (a *AgentActivity) maxEndpointingDelay() float64 {
+	if a.Agent.MaxEndpointingDelay > 0 {
+		return a.Agent.MaxEndpointingDelay
+	}
+	if a.Session != nil && a.Session.Options.MaxEndpointingDelay > 0 {
+		return a.Session.Options.MaxEndpointingDelay
+	}
+	return 3.0
 }

@@ -2,6 +2,7 @@ package stt
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"testing"
 	"time"
@@ -96,6 +97,41 @@ func TestSTTErrorCarriesReferenceErrorPayload(t *testing.T) {
 	}
 	if sttErr.Timestamp.Before(before) || sttErr.Timestamp.After(after) {
 		t.Fatalf("Timestamp = %s, want between %s and %s", sttErr.Timestamp, before, after)
+	}
+}
+
+func TestSTTErrorMarshalJSONMatchesReferencePayload(t *testing.T) {
+	underlying := errors.New("provider disconnected")
+	sttErr := NewSTTError("provider.STT", underlying, true)
+
+	data, err := json.Marshal(sttErr)
+	if err != nil {
+		t.Fatalf("MarshalJSON returned error: %v", err)
+	}
+
+	var payload map[string]any
+	if err := json.Unmarshal(data, &payload); err != nil {
+		t.Fatalf("Unmarshal marshaled STTError returned error: %v", err)
+	}
+
+	if payload["type"] != STTErrorType {
+		t.Fatalf("type = %v, want %q", payload["type"], STTErrorType)
+	}
+	if payload["label"] != "provider.STT" {
+		t.Fatalf("label = %v, want provider.STT", payload["label"])
+	}
+	if payload["recoverable"] != true {
+		t.Fatalf("recoverable = %v, want true", payload["recoverable"])
+	}
+	timestamp, ok := payload["timestamp"].(float64)
+	if !ok || timestamp <= 0 {
+		t.Fatalf("timestamp = %v, want positive numeric Unix seconds", payload["timestamp"])
+	}
+	if _, ok := payload["err"]; ok {
+		t.Fatalf("err serialized in payload: %s", data)
+	}
+	if _, ok := payload["error"]; ok {
+		t.Fatalf("error serialized in payload: %s", data)
 	}
 }
 

@@ -79,16 +79,30 @@ func TestFallbackAdapterCloseCancelsChunkedRecovery(t *testing.T) {
 		metadataTTS: metadataTTS{label: "primary", sampleRate: 24000, numChannels: 1},
 		started:     make(chan struct{}, 1),
 		cancelled:   make(chan struct{}, 1),
+		release:     make(chan struct{}),
 	}
 	adapter := NewFallbackAdapter([]TTS{provider})
 
 	adapter.tryRecoverChunked(0, "hello")
 	receiveSignal(t, provider.started, "chunked recovery start")
 
-	if err := adapter.Close(); err != nil {
+	closeDone := make(chan error, 1)
+	go func() {
+		closeDone <- adapter.Close()
+	}()
+
+	receiveSignal(t, provider.cancelled, "chunked recovery cancellation")
+
+	select {
+	case err := <-closeDone:
+		t.Fatalf("Close returned before recovery exited: %v", err)
+	default:
+	}
+
+	close(provider.release)
+	if err := receiveCloseResult(t, closeDone); err != nil {
 		t.Fatalf("Close error = %v", err)
 	}
-	receiveSignal(t, provider.cancelled, "chunked recovery cancellation")
 }
 
 func TestFallbackAdapterEmitsAvailabilityChanges(t *testing.T) {
@@ -1562,6 +1576,23 @@ func TestFallbackChunkedStreamDoesNotFallbackAfterAudio(t *testing.T) {
 	}
 }
 
+func TestFallbackChunkedStreamCloseCancelsProviderContext(t *testing.T) {
+	provider := &contextCapturingTTS{
+		metadataTTS: metadataTTS{label: "primary", sampleRate: 24000, numChannels: 1},
+	}
+	adapter := NewFallbackAdapter([]TTS{provider})
+
+	stream, err := adapter.Synthesize(context.Background(), "hello")
+	if err != nil {
+		t.Fatalf("Synthesize returned error: %v", err)
+	}
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close returned error: %v", err)
+	}
+
+	receiveContextCancellation(t, provider.ctx, "provider context")
+}
+
 func TestFallbackChunkedStreamFallsBackWhenProviderErrorsBeforeEmittingAudio(t *testing.T) {
 	streamErr := errors.New("stream failed before emitted audio")
 	second := &metadataTTS{
@@ -2782,6 +2813,26 @@ func receiveSignal(t *testing.T, signals <-chan struct{}, name string) {
 	}
 }
 
+func receiveCloseResult(t *testing.T, results <-chan error) error {
+	t.Helper()
+	select {
+	case err := <-results:
+		return err
+	case <-time.After(200 * time.Millisecond):
+		t.Fatal("timed out waiting for Close to return")
+		return nil
+	}
+}
+
+func receiveContextCancellation(t *testing.T, ctx context.Context, name string) {
+	t.Helper()
+	select {
+	case <-ctx.Done():
+	case <-time.After(200 * time.Millisecond):
+		t.Fatalf("timed out waiting for %s cancellation", name)
+	}
+}
+
 func fallbackTestFrame(sampleRate uint32, channels uint32, samplesPerChannel uint32) *model.AudioFrame {
 	return &model.AudioFrame{
 		Data:              make([]byte, int(samplesPerChannel*channels*2)),
@@ -2819,6 +2870,32 @@ type contextAwareRecoveryTTS struct {
 	metadataTTS
 	started   chan struct{}
 	cancelled chan struct{}
+	release   chan struct{}
+}
+
+type contextCapturingTTS struct {
+	metadataTTS
+	ctx context.Context
+}
+
+func (c *contextCapturingTTS) Synthesize(ctx context.Context, text string) (ChunkedStream, error) {
+	c.ctx = ctx
+	return &contextCapturingChunkedStream{
+		ctx: ctx,
+	}, nil
+}
+
+type contextCapturingChunkedStream struct {
+	ctx context.Context
+}
+
+func (s *contextCapturingChunkedStream) Next() (*SynthesizedAudio, error) {
+	<-s.ctx.Done()
+	return nil, s.ctx.Err()
+}
+
+func (s *contextCapturingChunkedStream) Close() error {
+	return nil
 }
 
 func (c *contextAwareRecoveryTTS) Synthesize(ctx context.Context, text string) (ChunkedStream, error) {
@@ -2829,12 +2906,14 @@ func (c *contextAwareRecoveryTTS) Synthesize(ctx context.Context, text string) (
 	return &contextAwareRecoveryChunkedStream{
 		ctx:       ctx,
 		cancelled: c.cancelled,
+		release:   c.release,
 	}, nil
 }
 
 type contextAwareRecoveryChunkedStream struct {
 	ctx       context.Context
 	cancelled chan struct{}
+	release   chan struct{}
 }
 
 func (s *contextAwareRecoveryChunkedStream) Next() (*SynthesizedAudio, error) {
@@ -2842,6 +2921,9 @@ func (s *contextAwareRecoveryChunkedStream) Next() (*SynthesizedAudio, error) {
 	select {
 	case s.cancelled <- struct{}{}:
 	default:
+	}
+	if s.release != nil {
+		<-s.release
 	}
 	return nil, s.ctx.Err()
 }

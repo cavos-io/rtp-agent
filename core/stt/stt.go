@@ -2,6 +2,7 @@ package stt
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"time"
 
@@ -99,6 +100,24 @@ func (e *STTError) Unwrap() error {
 		return nil
 	}
 	return e.Err
+}
+
+func (e *STTError) MarshalJSON() ([]byte, error) {
+	type sttErrorPayload struct {
+		Type        string  `json:"type"`
+		Timestamp   float64 `json:"timestamp"`
+		Label       string  `json:"label"`
+		Recoverable bool    `json:"recoverable"`
+	}
+	if e == nil {
+		return json.Marshal((*sttErrorPayload)(nil))
+	}
+	return json.Marshal(sttErrorPayload{
+		Type:        e.Type,
+		Timestamp:   float64(e.Timestamp.UnixNano()) / float64(time.Second),
+		Label:       e.Label,
+		Recoverable: e.Recoverable,
+	})
 }
 
 type STT interface {

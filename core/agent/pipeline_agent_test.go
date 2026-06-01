@@ -51,6 +51,114 @@ func TestPipelineAgentGenerateReplyAddsAssistantMessageWithExtra(t *testing.T) {
 	}
 }
 
+func TestPipelineAgentGenerateReplyWithInstructionsUsesTemporaryChatContext(t *testing.T) {
+	chatCtx := llm.NewChatContext()
+	chatCtx.Append(&llm.ChatMessage{
+		ID:      "user_1",
+		Role:    llm.ChatRoleUser,
+		Content: []llm.ChatContent{{Text: "hello"}},
+	})
+	l := &fakeGenerationLLM{
+		stream: &fakeGenerationLLMStream{
+			chunks: []*llm.ChatChunk{
+				{Delta: &llm.ChoiceDelta{Content: "brief answer"}},
+			},
+		},
+	}
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	agent := NewPipelineAgent(nil, nil, l, &fakePipelineTTS{}, chatCtx)
+	agent.session = session
+	agent.ctx = context.Background()
+
+	agent.generateReplyWithOptions(pipelineReplyOptions{
+		Instructions: "answer in one sentence",
+	})
+
+	if len(l.chatContexts) != 1 {
+		t.Fatalf("LLM chat contexts = %d, want 1", len(l.chatContexts))
+	}
+	inferenceCtx := l.chatContexts[0]
+	if len(inferenceCtx.Items) != 2 {
+		t.Fatalf("inference chat item count = %d, want instruction and original user", len(inferenceCtx.Items))
+	}
+	instruction, ok := inferenceCtx.Items[0].(*llm.ChatMessage)
+	if !ok {
+		t.Fatalf("first inference item = %T, want *llm.ChatMessage", inferenceCtx.Items[0])
+	}
+	if instruction.Role != llm.ChatRoleSystem || instruction.TextContent() != "answer in one sentence" {
+		t.Fatalf("instruction message = %#v, want temporary system instructions", instruction)
+	}
+	if len(chatCtx.Items) != 2 {
+		t.Fatalf("persistent chat item count = %d, want original user and assistant only", len(chatCtx.Items))
+	}
+	if chatCtx.Items[0].GetID() != "user_1" {
+		t.Fatalf("persistent first item ID = %q, want user_1", chatCtx.Items[0].GetID())
+	}
+	msg, ok := chatCtx.Items[1].(*llm.ChatMessage)
+	if !ok || msg.Role != llm.ChatRoleAssistant || msg.TextContent() != "brief answer" {
+		t.Fatalf("persistent second item = %#v, want assistant response only", chatCtx.Items[1])
+	}
+}
+
+func TestPipelineAgentGenerateReplyWithToolChoicePassesChatOption(t *testing.T) {
+	chatCtx := llm.NewChatContext()
+	l := &fakeGenerationLLM{
+		stream: &fakeGenerationLLMStream{
+			chunks: []*llm.ChatChunk{
+				{Delta: &llm.ChoiceDelta{Content: "no tools"}},
+			},
+		},
+	}
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	agent := NewPipelineAgent(nil, nil, l, &fakePipelineTTS{}, chatCtx)
+	agent.session = session
+	agent.ctx = context.Background()
+
+	agent.generateReplyWithOptions(pipelineReplyOptions{
+		ToolChoice: "none",
+	})
+
+	if len(l.calls) != 1 {
+		t.Fatalf("LLM Chat calls = %d, want 1", len(l.calls))
+	}
+	if l.calls[0].ToolChoice != "none" {
+		t.Fatalf("ToolChoice = %#v, want none", l.calls[0].ToolChoice)
+	}
+}
+
+func TestPipelineAgentGenerateReplyWithToolsFiltersChatOptions(t *testing.T) {
+	chatCtx := llm.NewChatContext()
+	l := &fakeGenerationLLM{
+		stream: &fakeGenerationLLMStream{
+			chunks: []*llm.ChatChunk{
+				{Delta: &llm.ChoiceDelta{Content: "lookup only"}},
+			},
+		},
+	}
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	session.Tools = []llm.Tool{
+		&fakeGenerationTool{name: "lookup"},
+		&fakeGenerationTool{name: "calendar"},
+	}
+	agent := NewPipelineAgent(nil, nil, l, &fakePipelineTTS{}, chatCtx)
+	agent.session = session
+	agent.ctx = context.Background()
+
+	agent.generateReplyWithOptions(pipelineReplyOptions{
+		Tools: []string{"lookup"},
+	})
+
+	if len(l.calls) != 1 {
+		t.Fatalf("LLM Chat calls = %d, want 1", len(l.calls))
+	}
+	if len(l.calls[0].Tools) != 1 {
+		t.Fatalf("LLM tools = %#v, want only lookup", l.calls[0].Tools)
+	}
+	if got := l.calls[0].Tools[0].ID(); got != "lookup" {
+		t.Fatalf("LLM tool ID = %q, want lookup", got)
+	}
+}
+
 func TestPipelineAgentEmitsConversationItemAddedForAssistantMessage(t *testing.T) {
 	chatCtx := llm.NewChatContext()
 	l := &fakeGenerationLLM{

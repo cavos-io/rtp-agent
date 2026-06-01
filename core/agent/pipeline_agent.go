@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"sync"
 
@@ -29,6 +30,12 @@ type PipelineAgent struct {
 	cancel context.CancelFunc
 
 	PublishAudio func(frame *model.AudioFrame) error
+}
+
+type pipelineReplyOptions struct {
+	Instructions string
+	ToolChoice   llm.ToolChoice
+	Tools        []string
 }
 
 func NewPipelineAgent(
@@ -191,6 +198,10 @@ func (va *PipelineAgent) emitError(err error, source any) {
 }
 
 func (va *PipelineAgent) generateReply() {
+	va.generateReplyWithOptions(pipelineReplyOptions{})
+}
+
+func (va *PipelineAgent) generateReplyWithOptions(opts pipelineReplyOptions) {
 	va.mu.Lock()
 	session := va.session
 	ctx := va.ctx
@@ -203,8 +214,16 @@ func (va *PipelineAgent) generateReply() {
 	logger.Logger.Infow("Generating reply")
 	session.UpdateAgentState(AgentStateThinking)
 
-	toolsInterface := make([]interface{}, len(session.Tools))
-	for i, t := range session.Tools {
+	selectedTools, err := resolveToolsByID(session.Tools, opts.Tools)
+	if err != nil {
+		logger.Logger.Errorw("failed to resolve reply tools", err)
+		session.EmitError(ErrorEvent{Error: err, Source: va})
+		session.UpdateAgentState(AgentStateIdle)
+		return
+	}
+
+	toolsInterface := make([]interface{}, len(selectedTools))
+	for i, t := range selectedTools {
 		toolsInterface[i] = t
 	}
 	toolCtx := llm.NewToolContext(toolsInterface)
@@ -212,11 +231,23 @@ func (va *PipelineAgent) generateReply() {
 	// In Python parity, we loop for tool calls
 	toolSteps := 0
 	for {
+		inferenceCtx := va.chatCtx
+		if opts.Instructions != "" {
+			inferenceCtx = va.chatCtx.Copy()
+			inferenceCtx.Items = append([]llm.ChatItem{&llm.ChatMessage{
+				Role:    llm.ChatRoleSystem,
+				Content: []llm.ChatContent{{Text: opts.Instructions}},
+			}}, inferenceCtx.Items...)
+		}
+
 		var chatOptions []llm.ChatOption
+		if opts.ToolChoice != nil {
+			chatOptions = append(chatOptions, llm.WithToolChoice(opts.ToolChoice))
+		}
 		if session.Options.MaxToolSteps > 0 && toolSteps >= session.Options.MaxToolSteps {
 			chatOptions = append(chatOptions, llm.WithToolChoice("none"))
 		}
-		genData, err := PerformLLMInference(ctx, va.LLM, va.chatCtx, session.Tools, chatOptions...)
+		genData, err := PerformLLMInference(ctx, va.LLM, inferenceCtx, selectedTools, chatOptions...)
 		if err != nil {
 			logger.Logger.Errorw("LLM inference failed", err)
 			session.UpdateAgentState(AgentStateIdle)
@@ -296,6 +327,38 @@ func (va *PipelineAgent) generateReply() {
 		toolSteps++
 		// Loop back to LLM with tool outputs
 	}
+}
+
+func resolveToolsByID(tools []llm.Tool, ids []string) ([]llm.Tool, error) {
+	if len(ids) == 0 {
+		return tools, nil
+	}
+
+	byID := make(map[string]llm.Tool, len(tools))
+	available := make([]string, 0, len(tools))
+	for _, tool := range tools {
+		id := tool.ID()
+		if id == "" {
+			id = tool.Name()
+		}
+		byID[id] = tool
+		available = append(available, id)
+	}
+
+	resolved := make([]llm.Tool, 0, len(ids))
+	seen := make(map[string]struct{}, len(ids))
+	for _, id := range ids {
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		tool, ok := byID[id]
+		if !ok {
+			return nil, fmt.Errorf("tool %q not found in registered tools: %v", id, available)
+		}
+		resolved = append(resolved, tool)
+		seen[id] = struct{}{}
+	}
+	return resolved, nil
 }
 
 func (va *PipelineAgent) OnAudioFrame(ctx context.Context, frame *model.AudioFrame) {

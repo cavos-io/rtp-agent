@@ -14,17 +14,40 @@ import (
 )
 
 type SpeechmaticsSTT struct {
-	apiKey            string
-	language          string
-	sampleRate        int
-	audioEncoding     string
-	domain            string
-	outputLocale      string
-	includePartials   *bool
-	enableDiarization *bool
+	apiKey               string
+	language             string
+	sampleRate           int
+	audioEncoding        string
+	domain               string
+	outputLocale         string
+	includePartials      *bool
+	enableDiarization    *bool
+	additionalVocab      []SpeechmaticsAdditionalVocabEntry
+	focusSpeakers        []string
+	ignoreSpeakers       []string
+	focusMode            string
+	knownSpeakers        []SpeechmaticsSpeakerIdentifier
+	operatingPoint       string
+	maxDelay             *float64
+	eouSilenceTrigger    *float64
+	eouMaxDelay          *float64
+	punctuation          map[string]interface{}
+	speakerSensitivity   *float64
+	maxSpeakers          *int
+	preferCurrentSpeaker *bool
 }
 
 type SpeechmaticsSTTOption func(*SpeechmaticsSTT)
+
+type SpeechmaticsAdditionalVocabEntry struct {
+	Content    string   `json:"content"`
+	SoundsLike []string `json:"sounds_like,omitempty"`
+}
+
+type SpeechmaticsSpeakerIdentifier struct {
+	Label     string `json:"label"`
+	SpeakerID string `json:"speaker_id"`
+}
 
 func WithSpeechmaticsSTTLanguage(language string) SpeechmaticsSTTOption {
 	return func(s *SpeechmaticsSTT) {
@@ -74,12 +97,83 @@ func WithSpeechmaticsSTTEnableDiarization(enabled bool) SpeechmaticsSTTOption {
 	}
 }
 
+func WithSpeechmaticsSTTAdditionalVocab(vocab []SpeechmaticsAdditionalVocabEntry) SpeechmaticsSTTOption {
+	return func(s *SpeechmaticsSTT) {
+		s.additionalVocab = vocab
+	}
+}
+
+func WithSpeechmaticsSTTSpeakerFocus(focusSpeakers []string, ignoreSpeakers []string, focusMode string) SpeechmaticsSTTOption {
+	return func(s *SpeechmaticsSTT) {
+		s.focusSpeakers = focusSpeakers
+		s.ignoreSpeakers = ignoreSpeakers
+		if focusMode != "" {
+			s.focusMode = focusMode
+		}
+	}
+}
+
+func WithSpeechmaticsSTTKnownSpeakers(speakers []SpeechmaticsSpeakerIdentifier) SpeechmaticsSTTOption {
+	return func(s *SpeechmaticsSTT) {
+		s.knownSpeakers = speakers
+	}
+}
+
+func WithSpeechmaticsSTTOperatingPoint(operatingPoint string) SpeechmaticsSTTOption {
+	return func(s *SpeechmaticsSTT) {
+		s.operatingPoint = operatingPoint
+	}
+}
+
+func WithSpeechmaticsSTTMaxDelay(maxDelay float64) SpeechmaticsSTTOption {
+	return func(s *SpeechmaticsSTT) {
+		s.maxDelay = &maxDelay
+	}
+}
+
+func WithSpeechmaticsSTTEndOfUtteranceSilenceTrigger(trigger float64) SpeechmaticsSTTOption {
+	return func(s *SpeechmaticsSTT) {
+		s.eouSilenceTrigger = &trigger
+	}
+}
+
+func WithSpeechmaticsSTTEndOfUtteranceMaxDelay(maxDelay float64) SpeechmaticsSTTOption {
+	return func(s *SpeechmaticsSTT) {
+		s.eouMaxDelay = &maxDelay
+	}
+}
+
+func WithSpeechmaticsSTTPunctuationOverrides(overrides map[string]interface{}) SpeechmaticsSTTOption {
+	return func(s *SpeechmaticsSTT) {
+		s.punctuation = overrides
+	}
+}
+
+func WithSpeechmaticsSTTSpeakerSensitivity(sensitivity float64) SpeechmaticsSTTOption {
+	return func(s *SpeechmaticsSTT) {
+		s.speakerSensitivity = &sensitivity
+	}
+}
+
+func WithSpeechmaticsSTTMaxSpeakers(maxSpeakers int) SpeechmaticsSTTOption {
+	return func(s *SpeechmaticsSTT) {
+		s.maxSpeakers = &maxSpeakers
+	}
+}
+
+func WithSpeechmaticsSTTPreferCurrentSpeaker(prefer bool) SpeechmaticsSTTOption {
+	return func(s *SpeechmaticsSTT) {
+		s.preferCurrentSpeaker = &prefer
+	}
+}
+
 func NewSpeechmaticsSTT(apiKey string, opts ...SpeechmaticsSTTOption) *SpeechmaticsSTT {
 	provider := &SpeechmaticsSTT{
 		apiKey:        apiKey,
 		language:      "en",
 		sampleRate:    16000,
 		audioEncoding: "pcm_s16le",
+		focusMode:     "retain",
 	}
 	for _, opt := range opts {
 		opt(provider)
@@ -150,6 +244,43 @@ func buildSpeechmaticsSTTStartMessage(s *SpeechmaticsSTT, language string) map[s
 		} else {
 			config["diarization"] = "none"
 		}
+	}
+	if len(s.additionalVocab) > 0 {
+		config["additional_vocab"] = s.additionalVocab
+	}
+	if len(s.focusSpeakers) > 0 || len(s.ignoreSpeakers) > 0 || s.focusMode != "" {
+		config["speaker_config"] = map[string]interface{}{
+			"focus_speakers":  s.focusSpeakers,
+			"ignore_speakers": s.ignoreSpeakers,
+			"focus_mode":      s.focusMode,
+		}
+	}
+	if len(s.knownSpeakers) > 0 {
+		config["known_speakers"] = s.knownSpeakers
+	}
+	if s.operatingPoint != "" {
+		config["operating_point"] = s.operatingPoint
+	}
+	if s.maxDelay != nil {
+		config["max_delay"] = *s.maxDelay
+	}
+	if s.eouSilenceTrigger != nil {
+		config["end_of_utterance_silence_trigger"] = *s.eouSilenceTrigger
+	}
+	if s.eouMaxDelay != nil {
+		config["end_of_utterance_max_delay"] = *s.eouMaxDelay
+	}
+	if s.punctuation != nil {
+		config["punctuation_overrides"] = s.punctuation
+	}
+	if s.speakerSensitivity != nil {
+		config["speaker_sensitivity"] = *s.speakerSensitivity
+	}
+	if s.maxSpeakers != nil {
+		config["max_speakers"] = *s.maxSpeakers
+	}
+	if s.preferCurrentSpeaker != nil {
+		config["prefer_current_speaker"] = *s.preferCurrentSpeaker
 	}
 	return map[string]interface{}{
 		"message": "StartRecognition",

@@ -144,6 +144,69 @@ func TestSpeechmaticsSTTStartMessageUsesReferenceOptions(t *testing.T) {
 	}
 }
 
+func TestSpeechmaticsSTTStartMessageUsesVocabularyAndSpeakerOptions(t *testing.T) {
+	provider := NewSpeechmaticsSTT("test-key",
+		WithSpeechmaticsSTTAdditionalVocab([]SpeechmaticsAdditionalVocabEntry{
+			{Content: "LiveKit", SoundsLike: []string{"live kit"}},
+			{Content: "Cavos"},
+		}),
+		WithSpeechmaticsSTTSpeakerFocus([]string{"agent"}, []string{"customer"}, "ignore"),
+		WithSpeechmaticsSTTKnownSpeakers([]SpeechmaticsSpeakerIdentifier{
+			{Label: "agent", SpeakerID: "spk-1"},
+		}),
+	)
+
+	message := buildSpeechmaticsSTTStartMessage(provider, "")
+	config := message["transcription_config"].(map[string]interface{})
+
+	vocab := config["additional_vocab"].([]SpeechmaticsAdditionalVocabEntry)
+	if len(vocab) != 2 || vocab[0].Content != "LiveKit" || vocab[0].SoundsLike[0] != "live kit" {
+		t.Fatalf("additional_vocab = %#v, want LiveKit sounds-like entry", vocab)
+	}
+	speakerConfig := config["speaker_config"].(map[string]interface{})
+	if got := speakerConfig["focus_speakers"].([]string); len(got) != 1 || got[0] != "agent" {
+		t.Fatalf("focus_speakers = %#v, want agent", got)
+	}
+	if got := speakerConfig["ignore_speakers"].([]string); len(got) != 1 || got[0] != "customer" {
+		t.Fatalf("ignore_speakers = %#v, want customer", got)
+	}
+	if speakerConfig["focus_mode"] != "ignore" {
+		t.Fatalf("focus_mode = %#v, want ignore", speakerConfig["focus_mode"])
+	}
+	knownSpeakers := config["known_speakers"].([]SpeechmaticsSpeakerIdentifier)
+	if len(knownSpeakers) != 1 || knownSpeakers[0].Label != "agent" || knownSpeakers[0].SpeakerID != "spk-1" {
+		t.Fatalf("known_speakers = %#v, want agent speaker id", knownSpeakers)
+	}
+}
+
+func TestSpeechmaticsSTTStartMessageUsesAdvancedReferenceOptions(t *testing.T) {
+	provider := NewSpeechmaticsSTT("test-key",
+		WithSpeechmaticsSTTOperatingPoint("enhanced"),
+		WithSpeechmaticsSTTMaxDelay(1.2),
+		WithSpeechmaticsSTTEndOfUtteranceSilenceTrigger(0.6),
+		WithSpeechmaticsSTTEndOfUtteranceMaxDelay(1.8),
+		WithSpeechmaticsSTTPunctuationOverrides(map[string]interface{}{"permitted_marks": []string{".", "?"}}),
+		WithSpeechmaticsSTTSpeakerSensitivity(0.7),
+		WithSpeechmaticsSTTMaxSpeakers(4),
+		WithSpeechmaticsSTTPreferCurrentSpeaker(true),
+	)
+
+	message := buildSpeechmaticsSTTStartMessage(provider, "")
+	config := message["transcription_config"].(map[string]interface{})
+	assertSpeechmaticsConfig(t, config, "operating_point", "enhanced")
+	assertSpeechmaticsConfig(t, config, "max_delay", float64(1.2))
+	assertSpeechmaticsConfig(t, config, "end_of_utterance_silence_trigger", float64(0.6))
+	assertSpeechmaticsConfig(t, config, "end_of_utterance_max_delay", float64(1.8))
+	assertSpeechmaticsConfig(t, config, "speaker_sensitivity", float64(0.7))
+	assertSpeechmaticsConfig(t, config, "max_speakers", 4)
+	assertSpeechmaticsConfig(t, config, "prefer_current_speaker", true)
+	overrides := config["punctuation_overrides"].(map[string]interface{})
+	marks := overrides["permitted_marks"].([]string)
+	if len(marks) != 2 || marks[0] != "." || marks[1] != "?" {
+		t.Fatalf("punctuation_overrides = %#v, want permitted marks", overrides)
+	}
+}
+
 func assertSpeechmaticsConfig(t *testing.T, config map[string]interface{}, key string, want interface{}) {
 	t.Helper()
 	if got := config[key]; got != want {

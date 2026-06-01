@@ -32,6 +32,7 @@ type FallbackAdapter struct {
 	closed bool
 
 	nextRecoveryID uint64
+	recoveryWG     sync.WaitGroup
 }
 
 type fallbackTTSStatus struct {
@@ -137,6 +138,7 @@ func (f *FallbackAdapter) Close() error {
 	for _, cancel := range cancels {
 		cancel()
 	}
+	f.recoveryWG.Wait()
 
 	var errs []error
 	for _, tts := range f.ttss {
@@ -309,9 +311,11 @@ func (f *FallbackAdapter) tryRecoverChunked(index int, text string) {
 	f.status[index].recoveryID = recoveryID
 	f.status[index].recoveryCancel = cancel
 	tts := f.ttss[index]
+	f.recoveryWG.Add(1)
 	f.mu.Unlock()
 
 	go func() {
+		defer f.recoveryWG.Done()
 		defer f.finishRecovery(index, recoveryID)
 
 		stream, err := tts.Synthesize(ctx, text)
@@ -372,9 +376,11 @@ func (f *FallbackAdapter) tryRecoverStream(index int, inputs []fallbackSynthesiz
 	f.status[index].recoveryID = recoveryID
 	f.status[index].recoveryCancel = cancel
 	tts := f.ttss[index]
+	f.recoveryWG.Add(1)
 	f.mu.Unlock()
 
 	go func() {
+		defer f.recoveryWG.Done()
 		defer f.finishRecovery(index, recoveryID)
 
 		stream, err := streamForTTS(ctx, tts)
@@ -523,6 +529,7 @@ func resampleAudioFrame(frame *model.AudioFrame, outputRate uint32) (*model.Audi
 type fallbackChunkedStream struct {
 	adapter *FallbackAdapter
 	ctx     context.Context
+	cancel  context.CancelFunc
 	text    string
 
 	mu           sync.Mutex
@@ -548,9 +555,11 @@ type fallbackMetricsState struct {
 }
 
 func (f *FallbackAdapter) Synthesize(ctx context.Context, text string) (ChunkedStream, error) {
+	ctx, cancel := context.WithCancel(ctx)
 	s := &fallbackChunkedStream{
 		adapter:   f,
 		ctx:       ctx,
+		cancel:    cancel,
 		text:      text,
 		eventCh:   make(chan *SynthesizedAudio, 100),
 		errCh:     make(chan error, 1),
@@ -561,6 +570,7 @@ func (f *FallbackAdapter) Synthesize(ctx context.Context, text string) (ChunkedS
 	}
 
 	if err := s.tryStartStream(0); err != nil {
+		cancel()
 		return nil, err
 	}
 
@@ -601,6 +611,8 @@ func (s *fallbackChunkedStream) tryStartStream(index int) error {
 }
 
 func (s *fallbackChunkedStream) monitorStream() {
+	defer s.cancel()
+
 	outputSent := false
 	var pending *SynthesizedAudio
 	pendingTail := false
@@ -837,6 +849,7 @@ func (s *fallbackChunkedStream) Close() error {
 	}
 	s.closed = true
 	close(s.closeCh)
+	s.cancel()
 	s.markDoneLocked(nil)
 	return s.activeStream.Close()
 }
@@ -869,6 +882,7 @@ func (s *fallbackChunkedStream) markDoneLocked(err error) {
 type fallbackSynthesizeStream struct {
 	adapter *FallbackAdapter
 	ctx     context.Context
+	cancel  context.CancelFunc
 
 	mu           sync.Mutex
 	activeStream SynthesizeStream
@@ -896,9 +910,11 @@ type fallbackSynthesizeInput struct {
 }
 
 func (f *FallbackAdapter) Stream(ctx context.Context) (SynthesizeStream, error) {
+	ctx, cancel := context.WithCancel(ctx)
 	s := &fallbackSynthesizeStream{
 		adapter:   f,
 		ctx:       ctx,
+		cancel:    cancel,
 		eventCh:   make(chan *SynthesizedAudio, 100),
 		errCh:     make(chan error, 1),
 		closeCh:   make(chan struct{}),
@@ -909,6 +925,7 @@ func (f *FallbackAdapter) Stream(ctx context.Context) (SynthesizeStream, error) 
 	}
 
 	if err := s.tryStartStream(0); err != nil {
+		cancel()
 		return nil, err
 	}
 
@@ -985,6 +1002,8 @@ func (s *fallbackSynthesizeStream) replayBufferedText(stream SynthesizeStream) e
 }
 
 func (s *fallbackSynthesizeStream) monitorStream() {
+	defer s.cancel()
+
 	outputSent := false
 	var pending *SynthesizedAudio
 	pendingTail := false
@@ -1292,6 +1311,7 @@ func (s *fallbackSynthesizeStream) Close() error {
 	}
 	s.closed = true
 	close(s.closeCh)
+	s.cancel()
 	s.markDoneLocked(nil)
 	return s.activeStream.Close()
 }

@@ -47,6 +47,13 @@ type AgentSessionOptions struct {
 	UseTTSAlignedTranscript       bool
 	PreemptiveGeneration          bool
 	AECWarmupDuration             float64
+	TurnDetection                 TurnDetectionMode
+}
+
+type AgentSessionUpdateOptions struct {
+	MinEndpointingDelay *float64
+	MaxEndpointingDelay *float64
+	TurnDetection       *TurnDetectionMode
 }
 
 var (
@@ -56,6 +63,9 @@ var (
 
 type GenerateReplyOptions struct {
 	UserInput          string
+	Instructions       string
+	ToolChoice         llm.ToolChoice
+	Tools              []string
 	AllowInterruptions *bool
 	InputModality      string
 }
@@ -237,6 +247,21 @@ func withAgentSessionOptionDefaults(opts AgentSessionOptions) AgentSessionOption
 		opts.AECWarmupDuration = 3.0
 	}
 	return opts
+}
+
+func (s *AgentSession) UpdateOptions(opts AgentSessionUpdateOptions) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if opts.MinEndpointingDelay != nil {
+		s.Options.MinEndpointingDelay = *opts.MinEndpointingDelay
+	}
+	if opts.MaxEndpointingDelay != nil {
+		s.Options.MaxEndpointingDelay = *opts.MaxEndpointingDelay
+	}
+	if opts.TurnDetection != nil {
+		s.Options.TurnDetection = *opts.TurnDetection
+	}
 }
 
 func (s *AgentSession) UserInputTranscribedEvents() <-chan UserInputTranscribedEvent {
@@ -569,6 +594,15 @@ func (s *AgentSession) CloseEvents() <-chan CloseEvent {
 }
 
 func (s *AgentSession) CloseSoon(reason CloseReason) {
+	s.mu.Lock()
+	started := s.started
+	activity := s.activity
+	agent := s.Agent
+	s.mu.Unlock()
+	if !started && activity == nil && agent != nil {
+		return
+	}
+
 	ch := s.closeEvents()
 	select {
 	case ch <- CloseEvent{Reason: reason, CreatedAt: time.Now()}:
@@ -785,6 +819,11 @@ func (s *AgentSession) GenerateReplyWithOptions(ctx context.Context, opts Genera
 	if activity == nil {
 		return nil, ErrAgentSessionNotRunning
 	}
+	if len(opts.Tools) > 0 {
+		if _, err := resolveToolsByID(s.Tools, opts.Tools); err != nil {
+			return nil, err
+		}
+	}
 
 	// Trigger the pipeline
 	logger.Logger.Infow("Generating reply", "userInput", opts.UserInput)
@@ -798,6 +837,15 @@ func (s *AgentSession) GenerateReplyWithOptions(ctx context.Context, opts Genera
 		inputModality = "text"
 	}
 	handle := NewSpeechHandle(allowInterruptions, InputDetails{Modality: inputModality})
+	if opts.Instructions != "" {
+		handle.Generation.Instructions = llm.NewInstructions(opts.Instructions)
+	}
+	if opts.ToolChoice != nil {
+		handle.Generation.ToolChoice = opts.ToolChoice
+	}
+	if len(opts.Tools) > 0 {
+		handle.Generation.Tools = append([]string(nil), opts.Tools...)
+	}
 	s.EmitSpeechCreated(SpeechCreatedEvent{
 		UserInitiated: true,
 		Source:        "generate_reply",

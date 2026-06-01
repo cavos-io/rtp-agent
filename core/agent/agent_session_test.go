@@ -464,6 +464,87 @@ func TestAgentSessionGenerateReplyOptionsOverrideInterruptionsAndInputModality(t
 	}
 }
 
+func TestAgentSessionGenerateReplyOptionsPreserveInstructions(t *testing.T) {
+	agent := NewAgent("test")
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	session.activity = NewAgentActivity(agent, session)
+
+	handle, err := session.GenerateReplyWithOptions(context.Background(), GenerateReplyOptions{
+		UserInput:     "hello",
+		Instructions:  "answer briefly",
+		InputModality: "text",
+	})
+
+	if err != nil {
+		t.Fatalf("GenerateReplyWithOptions error = %v, want nil", err)
+	}
+	if handle.Generation.Instructions == nil {
+		t.Fatal("handle.Generation.Instructions = nil, want per-call instructions")
+	}
+	if got := handle.Generation.Instructions.AsModality("text").String(); got != "answer briefly" {
+		t.Fatalf("handle.Generation.Instructions text = %q, want answer briefly", got)
+	}
+}
+
+func TestAgentSessionGenerateReplyOptionsPreserveToolChoice(t *testing.T) {
+	agent := NewAgent("test")
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	session.activity = NewAgentActivity(agent, session)
+
+	handle, err := session.GenerateReplyWithOptions(context.Background(), GenerateReplyOptions{
+		UserInput:     "hello",
+		ToolChoice:    "none",
+		InputModality: "text",
+	})
+
+	if err != nil {
+		t.Fatalf("GenerateReplyWithOptions error = %v, want nil", err)
+	}
+	if handle.Generation.ToolChoice != "none" {
+		t.Fatalf("handle.Generation.ToolChoice = %#v, want none", handle.Generation.ToolChoice)
+	}
+}
+
+func TestAgentSessionGenerateReplyOptionsPreserveTools(t *testing.T) {
+	agent := NewAgent("test")
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	session.Tools = []llm.Tool{&fakeGenerationTool{name: "lookup"}}
+	session.activity = NewAgentActivity(agent, session)
+
+	handle, err := session.GenerateReplyWithOptions(context.Background(), GenerateReplyOptions{
+		UserInput:     "hello",
+		Tools:         []string{"lookup"},
+		InputModality: "text",
+	})
+
+	if err != nil {
+		t.Fatalf("GenerateReplyWithOptions error = %v, want nil", err)
+	}
+	if !stringSlicesEqual(handle.Generation.Tools, []string{"lookup"}) {
+		t.Fatalf("handle.Generation.Tools = %q, want [lookup]", handle.Generation.Tools)
+	}
+}
+
+func TestAgentSessionGenerateReplyOptionsRejectUnknownTools(t *testing.T) {
+	agent := NewAgent("test")
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	session.Tools = []llm.Tool{&fakeGenerationTool{name: "lookup"}}
+	session.activity = NewAgentActivity(agent, session)
+
+	handle, err := session.GenerateReplyWithOptions(context.Background(), GenerateReplyOptions{
+		UserInput:     "hello",
+		Tools:         []string{"missing"},
+		InputModality: "text",
+	})
+
+	if handle != nil {
+		t.Fatalf("GenerateReplyWithOptions handle = %#v, want nil", handle)
+	}
+	if err == nil {
+		t.Fatal("GenerateReplyWithOptions error = nil, want unknown tool error")
+	}
+}
+
 func TestAgentSessionRunReturnsRunResultWatchingGeneratedSpeech(t *testing.T) {
 	agent := NewAgent("test")
 	session := NewAgentSession(agent, nil, AgentSessionOptions{AllowInterruptions: true})
@@ -615,6 +696,19 @@ func TestAgentSessionShutdownClosesWithUserInitiatedReason(t *testing.T) {
 	}
 	if !errors.Is(err, ErrAgentSessionNotRunning) {
 		t.Fatalf("GenerateReply error after Shutdown = %v, want ErrAgentSessionNotRunning", err)
+	}
+}
+
+func TestAgentSessionShutdownDoesNotCloseUnstartedSession(t *testing.T) {
+	agent := NewAgent("test")
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+
+	session.Shutdown()
+
+	select {
+	case ev := <-session.CloseEvents():
+		t.Fatalf("unexpected close event for unstarted session: %#v", ev)
+	default:
 	}
 }
 
