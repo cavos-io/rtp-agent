@@ -67,6 +67,40 @@ type STTCapabilities struct {
 	OfflineRecognize  bool
 }
 
+const STTErrorType = "stt_error"
+
+type STTError struct {
+	Type        string
+	Timestamp   time.Time
+	Label       string
+	Err         error
+	Recoverable bool
+}
+
+func NewSTTError(label string, err error, recoverable bool) *STTError {
+	return &STTError{
+		Type:        STTErrorType,
+		Timestamp:   time.Now(),
+		Label:       label,
+		Err:         err,
+		Recoverable: recoverable,
+	}
+}
+
+func (e *STTError) Error() string {
+	if e == nil || e.Err == nil {
+		return "stt error"
+	}
+	return e.Err.Error()
+}
+
+func (e *STTError) Unwrap() error {
+	if e == nil {
+		return nil
+	}
+	return e.Err
+}
+
 type STT interface {
 	Label() string
 	Capabilities() STTCapabilities
