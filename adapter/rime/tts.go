@@ -3,24 +3,33 @@ package rime
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
+	"strconv"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/cavos-io/rtp-agent/core/audio/model"
 	"github.com/cavos-io/rtp-agent/core/tts"
+	cavosmath "github.com/cavos-io/rtp-agent/library/math"
+	"github.com/gorilla/websocket"
 )
 
 const (
 	defaultRimeHTTPBaseURL = "https://users.rime.ai/v1/rime-tts"
+	defaultRimeWSBaseURL   = "wss://users-ws.rime.ai"
 	defaultRimeModel       = "arcana"
 	defaultRimeArcanaVoice = "astra"
 	defaultRimeMistVoice   = "cove"
 	defaultRimeCodaVoice   = "lyra"
 	defaultRimeLang        = "eng"
 	defaultRimeSampleRate  = 22050
+	defaultRimeSegment     = "bySentence"
 )
 
 type RimeTTS struct {
@@ -31,6 +40,8 @@ type RimeTTS struct {
 	lang            string
 	sampleRate      int
 	timeScaleFactor *float64
+	useWebsocket    bool
+	segment         string
 }
 
 type RimeTTSOption func(*RimeTTS)
@@ -39,6 +50,9 @@ func WithRimeTTSBaseURL(baseURL string) RimeTTSOption {
 	return func(t *RimeTTS) {
 		if baseURL != "" {
 			t.baseURL = strings.TrimRight(baseURL, "/")
+			if strings.HasPrefix(baseURL, "ws://") || strings.HasPrefix(baseURL, "wss://") {
+				t.useWebsocket = true
+			}
 		}
 	}
 }
@@ -76,6 +90,20 @@ func WithRimeTTSTimeScaleFactor(timeScaleFactor float64) RimeTTSOption {
 	}
 }
 
+func WithRimeTTSWebsocket(useWebsocket bool) RimeTTSOption {
+	return func(t *RimeTTS) {
+		t.useWebsocket = useWebsocket
+	}
+}
+
+func WithRimeTTSSegment(segment string) RimeTTSOption {
+	return func(t *RimeTTS) {
+		if segment != "" {
+			t.segment = segment
+		}
+	}
+}
+
 func NewRimeTTS(apiKey string, voice string, opts ...RimeTTSOption) *RimeTTS {
 	provider := &RimeTTS{
 		apiKey:     apiKey,
@@ -83,9 +111,13 @@ func NewRimeTTS(apiKey string, voice string, opts ...RimeTTSOption) *RimeTTS {
 		model:      defaultRimeModel,
 		lang:       defaultRimeLang,
 		sampleRate: defaultRimeSampleRate,
+		segment:    defaultRimeSegment,
 	}
 	for _, opt := range opts {
 		opt(provider)
+	}
+	if provider.useWebsocket && provider.baseURL == defaultRimeHTTPBaseURL {
+		provider.baseURL = defaultRimeWSBaseURL
 	}
 	if voice == "" {
 		voice = defaultRimeVoice(provider.model)
@@ -107,12 +139,15 @@ func defaultRimeVoice(model string) string {
 
 func (t *RimeTTS) Label() string { return "rime.TTS" }
 func (t *RimeTTS) Capabilities() tts.TTSCapabilities {
-	return tts.TTSCapabilities{Streaming: false, AlignedTranscript: false}
+	return tts.TTSCapabilities{Streaming: t.useWebsocket, AlignedTranscript: t.useWebsocket}
 }
 func (t *RimeTTS) SampleRate() int  { return t.sampleRate }
 func (t *RimeTTS) NumChannels() int { return 1 }
 
 func (t *RimeTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStream, error) {
+	if t.useWebsocket {
+		return nil, fmt.Errorf("rime tts one-shot synthesize requires websocket mode disabled")
+	}
 	req, err := buildRimeTTSRequest(ctx, t, text)
 	if err != nil {
 		return nil, err
@@ -163,7 +198,69 @@ func buildRimeTTSRequest(ctx context.Context, t *RimeTTS, text string) (*http.Re
 }
 
 func (t *RimeTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
-	return nil, fmt.Errorf("streaming tts is not supported by the Rime TTS API")
+	if !t.useWebsocket {
+		return nil, fmt.Errorf("rime tts streaming requires websocket mode enabled")
+	}
+	conn, _, err := websocket.DefaultDialer.DialContext(ctx, buildRimeTTSWebsocketURL(t).String(), buildRimeTTSWebsocketHeaders(t))
+	if err != nil {
+		return nil, fmt.Errorf("failed to dial rime tts websocket: %w", err)
+	}
+	streamCtx, cancel := context.WithCancel(ctx)
+	stream := &rimeTTSSynthesizeStream{
+		conn:      conn,
+		ctx:       streamCtx,
+		cancel:    cancel,
+		provider:  t,
+		contextID: cavosmath.ShortUUID(""),
+		events:    make(chan *tts.SynthesizedAudio, 100),
+		errCh:     make(chan error, 1),
+	}
+	go stream.readLoop()
+	return stream, nil
+}
+
+func buildRimeTTSWebsocketURL(t *RimeTTS) *url.URL {
+	wsURL, err := url.Parse(strings.TrimRight(t.baseURL, "/") + "/ws3")
+	if err != nil {
+		wsURL = &url.URL{Scheme: "wss", Host: strings.TrimPrefix(t.baseURL, "wss://"), Path: "/ws3"}
+	}
+	query := wsURL.Query()
+	query.Set("speaker", t.voice)
+	query.Set("modelId", t.model)
+	query.Set("audioFormat", "pcm")
+	query.Set("samplingRate", strconv.Itoa(t.sampleRate))
+	query.Set("segment", t.segment)
+	if t.lang != "" {
+		query.Set("lang", t.lang)
+	}
+	if t.timeScaleFactor != nil {
+		query.Set("timeScaleFactor", strconv.FormatFloat(*t.timeScaleFactor, 'f', -1, 64))
+	}
+	wsURL.RawQuery = query.Encode()
+	return wsURL
+}
+
+func buildRimeTTSWebsocketHeaders(t *RimeTTS) http.Header {
+	header := http.Header{}
+	header.Set("Authorization", "Bearer "+t.apiKey)
+	return header
+}
+
+func buildRimeTTSTextMessage(contextID string, text string) ([]byte, error) {
+	if !strings.HasSuffix(text, " ") {
+		text += " "
+	}
+	return json.Marshal(map[string]interface{}{
+		"text":      text,
+		"contextId": contextID,
+	})
+}
+
+func buildRimeTTSFlushMessage(contextID string) ([]byte, error) {
+	return json.Marshal(map[string]interface{}{
+		"operation": "flush",
+		"contextId": contextID,
+	})
 }
 
 type rimeTTSChunkedStream struct {
@@ -193,4 +290,167 @@ func (s *rimeTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 
 func (s *rimeTTSChunkedStream) Close() error {
 	return s.resp.Body.Close()
+}
+
+type rimeTTSSynthesizeStream struct {
+	conn      *websocket.Conn
+	ctx       context.Context
+	cancel    context.CancelFunc
+	provider  *RimeTTS
+	contextID string
+	events    chan *tts.SynthesizedAudio
+	errCh     chan error
+	mu        sync.Mutex
+	closed    bool
+	started   bool
+}
+
+func (s *rimeTTSSynthesizeStream) PushText(text string) error {
+	if text == "" {
+		return nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return fmt.Errorf("rime tts stream is closed")
+	}
+	message, err := buildRimeTTSTextMessage(s.contextID, text)
+	if err != nil {
+		return err
+	}
+	s.started = true
+	return s.conn.WriteMessage(websocket.TextMessage, message)
+}
+
+func (s *rimeTTSSynthesizeStream) Flush() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return fmt.Errorf("rime tts stream is closed")
+	}
+	if !s.started {
+		return nil
+	}
+	message, err := buildRimeTTSFlushMessage(s.contextID)
+	if err != nil {
+		return err
+	}
+	return s.conn.WriteMessage(websocket.TextMessage, message)
+}
+
+func (s *rimeTTSSynthesizeStream) Close() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return nil
+	}
+	s.closed = true
+	s.cancel()
+	_ = s.conn.WriteMessage(websocket.TextMessage, []byte(`{"operation":"eos"}`))
+	_ = s.conn.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""), time.Now().Add(time.Second))
+	return s.conn.Close()
+}
+
+func (s *rimeTTSSynthesizeStream) Next() (*tts.SynthesizedAudio, error) {
+	select {
+	case audio, ok := <-s.events:
+		if !ok {
+			select {
+			case err := <-s.errCh:
+				return nil, err
+			default:
+				return nil, io.EOF
+			}
+		}
+		return audio, nil
+	case err := <-s.errCh:
+		return nil, err
+	case <-s.ctx.Done():
+		return nil, s.ctx.Err()
+	}
+}
+
+func (s *rimeTTSSynthesizeStream) readLoop() {
+	defer close(s.events)
+	for {
+		msgType, payload, err := s.conn.ReadMessage()
+		if err != nil {
+			if !websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway) && err != io.EOF {
+				s.errCh <- err
+			}
+			return
+		}
+		if msgType != websocket.TextMessage {
+			continue
+		}
+		audio, done, transcript, err := rimeTTSAudioFromWebsocketMessage(payload, s.provider.sampleRate)
+		if err != nil {
+			s.errCh <- err
+			return
+		}
+		if audio != nil {
+			s.events <- audio
+		}
+		if transcript != "" {
+			s.events <- &tts.SynthesizedAudio{DeltaText: transcript}
+		}
+		if done {
+			return
+		}
+	}
+}
+
+func rimeTTSAudioFromWebsocketMessage(payload []byte, sampleRate int) (*tts.SynthesizedAudio, bool, string, error) {
+	var message struct {
+		Type           string `json:"type"`
+		Data           string `json:"data"`
+		Message        string `json:"message"`
+		WordTimestamps struct {
+			Words []string  `json:"words"`
+			Start []float64 `json:"start"`
+			End   []float64 `json:"end"`
+		} `json:"word_timestamps"`
+	}
+	if err := json.Unmarshal(payload, &message); err != nil {
+		return nil, false, "", err
+	}
+	switch message.Type {
+	case "chunk":
+		if message.Data == "" {
+			return nil, false, "", nil
+		}
+		audio, err := base64.StdEncoding.DecodeString(message.Data)
+		if err != nil {
+			return nil, false, "", err
+		}
+		if len(audio) == 0 {
+			return nil, false, "", nil
+		}
+		return rimeTTSAudioFrame(audio, sampleRate), false, "", nil
+	case "timestamps":
+		if len(message.WordTimestamps.Words) == 0 {
+			return nil, false, "", nil
+		}
+		return nil, false, strings.Join(message.WordTimestamps.Words, " ") + " ", nil
+	case "done":
+		return nil, true, "", nil
+	case "error":
+		if message.Message == "" {
+			message.Message = string(payload)
+		}
+		return nil, false, "", fmt.Errorf("rime tts stream error: %s", message.Message)
+	default:
+		return nil, false, "", nil
+	}
+}
+
+func rimeTTSAudioFrame(audio []byte, sampleRate int) *tts.SynthesizedAudio {
+	return &tts.SynthesizedAudio{
+		Frame: &model.AudioFrame{
+			Data:              bytes.Clone(audio),
+			SampleRate:        uint32(sampleRate),
+			NumChannels:       1,
+			SamplesPerChannel: uint32(len(audio) / 2),
+		},
+	}
 }
