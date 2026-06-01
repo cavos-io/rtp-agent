@@ -579,12 +579,14 @@ func TestUpdateOptionsPreservesExplicitZeroMaxRetry(t *testing.T) {
 
 func TestUpdateOptionsPreservesExplicitZeroTimeoutValues(t *testing.T) {
 	server := NewAgentServer(WorkerOptions{
+		DrainTimeoutSeconds:             1800,
 		SessionEndTimeoutSeconds:        120,
 		ShutdownProcessTimeoutSeconds:   30,
 		InitializeProcessTimeoutSeconds: 20,
 	})
 
 	err := server.UpdateOptions(WorkerOptions{
+		DrainTimeoutSecondsSet:             true,
 		SessionEndTimeoutSecondsSet:        true,
 		ShutdownProcessTimeoutSecondsSet:   true,
 		InitializeProcessTimeoutSecondsSet: true,
@@ -593,6 +595,9 @@ func TestUpdateOptionsPreservesExplicitZeroTimeoutValues(t *testing.T) {
 		t.Fatalf("UpdateOptions() error = %v", err)
 	}
 
+	if server.Options.DrainTimeoutSeconds != 0 {
+		t.Fatalf("DrainTimeoutSeconds = %d, want explicit zero", server.Options.DrainTimeoutSeconds)
+	}
 	if server.Options.SessionEndTimeoutSeconds != 0 {
 		t.Fatalf("SessionEndTimeoutSeconds = %v, want explicit zero", server.Options.SessionEndTimeoutSeconds)
 	}
@@ -601,6 +606,22 @@ func TestUpdateOptionsPreservesExplicitZeroTimeoutValues(t *testing.T) {
 	}
 	if server.Options.InitializeProcessTimeoutSeconds != 0 {
 		t.Fatalf("InitializeProcessTimeoutSeconds = %v, want explicit zero", server.Options.InitializeProcessTimeoutSeconds)
+	}
+}
+
+func TestUpdateOptionsMarksNonZeroDrainTimeoutAsSet(t *testing.T) {
+	server := NewAgentServer(WorkerOptions{})
+
+	err := server.UpdateOptions(WorkerOptions{DrainTimeoutSeconds: 60})
+	if err != nil {
+		t.Fatalf("UpdateOptions() error = %v", err)
+	}
+
+	if server.Options.DrainTimeoutSeconds != 60 {
+		t.Fatalf("DrainTimeoutSeconds = %d, want updated value", server.Options.DrainTimeoutSeconds)
+	}
+	if !server.Options.DrainTimeoutSecondsSet {
+		t.Fatal("DrainTimeoutSecondsSet = false, want true for non-zero update")
 	}
 }
 
