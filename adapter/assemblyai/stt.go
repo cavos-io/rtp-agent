@@ -32,10 +32,18 @@ type AssemblyAISTT struct {
 	encoding           string
 	speechModel        string
 	languageDetection  *bool
+	endTurnConfidence  *float64
 	minTurnSilence     *int
 	maxTurnSilence     *int
+	formatTurns        *bool
 	continuousPartials *bool
+	interruptionDelay  *int
+	keytermsPrompt     []string
+	prompt             string
+	vadThreshold       *float64
 	speakerLabels      *bool
+	maxSpeakers        *int
+	domain             string
 }
 
 type AssemblyAISTTOption func(*AssemblyAISTT)
@@ -83,6 +91,18 @@ func WithAssemblyAISTTMaxTurnSilence(ms int) AssemblyAISTTOption {
 	}
 }
 
+func WithAssemblyAISTTEndOfTurnConfidenceThreshold(threshold float64) AssemblyAISTTOption {
+	return func(s *AssemblyAISTT) {
+		s.endTurnConfidence = &threshold
+	}
+}
+
+func WithAssemblyAISTTFormatTurns(enabled bool) AssemblyAISTTOption {
+	return func(s *AssemblyAISTT) {
+		s.formatTurns = boolPtr(enabled)
+	}
+}
+
 func WithAssemblyAISTTLanguageDetection(enabled bool) AssemblyAISTTOption {
 	return func(s *AssemblyAISTT) {
 		s.languageDetection = boolPtr(enabled)
@@ -95,9 +115,49 @@ func WithAssemblyAISTTContinuousPartials(enabled bool) AssemblyAISTTOption {
 	}
 }
 
+func WithAssemblyAISTTInterruptionDelay(ms int) AssemblyAISTTOption {
+	return func(s *AssemblyAISTT) {
+		if ms >= 0 {
+			s.interruptionDelay = intPtr(ms)
+		}
+	}
+}
+
+func WithAssemblyAISTTKeytermsPrompt(keyterms []string) AssemblyAISTTOption {
+	return func(s *AssemblyAISTT) {
+		s.keytermsPrompt = append([]string(nil), keyterms...)
+	}
+}
+
+func WithAssemblyAISTTPrompt(prompt string) AssemblyAISTTOption {
+	return func(s *AssemblyAISTT) {
+		s.prompt = prompt
+	}
+}
+
+func WithAssemblyAISTTVADThreshold(threshold float64) AssemblyAISTTOption {
+	return func(s *AssemblyAISTT) {
+		s.vadThreshold = &threshold
+	}
+}
+
 func WithAssemblyAISTTSpeakerLabels(enabled bool) AssemblyAISTTOption {
 	return func(s *AssemblyAISTT) {
 		s.speakerLabels = boolPtr(enabled)
+	}
+}
+
+func WithAssemblyAISTTMaxSpeakers(maxSpeakers int) AssemblyAISTTOption {
+	return func(s *AssemblyAISTT) {
+		if maxSpeakers > 0 {
+			s.maxSpeakers = intPtr(maxSpeakers)
+		}
+	}
+}
+
+func WithAssemblyAISTTDomain(domain string) AssemblyAISTTOption {
+	return func(s *AssemblyAISTT) {
+		s.domain = domain
 	}
 }
 
@@ -159,6 +219,18 @@ func buildAssemblyAIStreamURL(s *AssemblyAISTT) string {
 	q.Set("sample_rate", strconv.Itoa(s.sampleRate))
 	q.Set("encoding", s.encoding)
 	q.Set("speech_model", s.speechModel)
+	if s.formatTurns != nil {
+		q.Set("format_turns", strconv.FormatBool(*s.formatTurns))
+	}
+	if s.continuousPartials != nil {
+		q.Set("continuous_partials", strconv.FormatBool(*s.continuousPartials))
+	}
+	if s.interruptionDelay != nil {
+		q.Set("interruption_delay", strconv.Itoa(*s.interruptionDelay))
+	}
+	if s.endTurnConfidence != nil {
+		q.Set("end_of_turn_confidence_threshold", strconv.FormatFloat(*s.endTurnConfidence, 'f', -1, 64))
+	}
 	if s.minTurnSilence != nil {
 		q.Set("min_turn_silence", strconv.Itoa(*s.minTurnSilence))
 	}
@@ -167,16 +239,30 @@ func buildAssemblyAIStreamURL(s *AssemblyAISTT) string {
 	} else if s.speechModel == "u3-rt-pro" && s.minTurnSilence != nil {
 		q.Set("max_turn_silence", strconv.Itoa(*s.minTurnSilence))
 	}
-	if s.continuousPartials != nil {
-		q.Set("continuous_partials", strconv.FormatBool(*s.continuousPartials))
+	if len(s.keytermsPrompt) > 0 {
+		if encoded, err := json.Marshal(s.keytermsPrompt); err == nil {
+			q.Set("keyterms_prompt", string(encoded))
+		}
 	}
 	if s.languageDetection != nil {
 		q.Set("language_detection", strconv.FormatBool(*s.languageDetection))
 	} else {
 		q.Set("language_detection", strconv.FormatBool(strings.Contains(s.speechModel, "multilingual") || s.speechModel == "u3-rt-pro"))
 	}
+	if s.prompt != "" {
+		q.Set("prompt", s.prompt)
+	}
+	if s.vadThreshold != nil {
+		q.Set("vad_threshold", strconv.FormatFloat(*s.vadThreshold, 'f', -1, 64))
+	}
 	if s.speakerLabels != nil {
 		q.Set("speaker_labels", strconv.FormatBool(*s.speakerLabels))
+	}
+	if s.maxSpeakers != nil {
+		q.Set("max_speakers", strconv.Itoa(*s.maxSpeakers))
+	}
+	if s.domain != "" {
+		q.Set("domain", s.domain)
 	}
 	u.RawQuery = q.Encode()
 	return u.String()

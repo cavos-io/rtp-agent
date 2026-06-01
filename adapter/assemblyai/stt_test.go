@@ -105,6 +105,31 @@ func TestAssemblyAIStreamURLEncodesReferenceOptions(t *testing.T) {
 	assertAssemblyAIQuery(t, query, "speaker_labels", "true")
 }
 
+func TestAssemblyAIStreamURLEncodesReferenceTurnControls(t *testing.T) {
+	provider := NewAssemblyAISTT("test-key",
+		WithAssemblyAISTTModel("u3-rt-pro"),
+		WithAssemblyAISTTFormatTurns(true),
+		WithAssemblyAISTTInterruptionDelay(250),
+		WithAssemblyAISTTEndOfTurnConfidenceThreshold(0.72),
+		WithAssemblyAISTTKeytermsPrompt([]string{"LiveKit", "Cavos"}),
+		WithAssemblyAISTTPrompt("agent terms"),
+		WithAssemblyAISTTVADThreshold(0.41),
+		WithAssemblyAISTTMaxSpeakers(3),
+		WithAssemblyAISTTDomain("healthcare"),
+	)
+
+	query := mustAssemblyAIStreamQuery(t, buildAssemblyAIStreamURL(provider))
+
+	assertAssemblyAIQuery(t, query, "format_turns", "true")
+	assertAssemblyAIQuery(t, query, "interruption_delay", "250")
+	assertAssemblyAIQuery(t, query, "end_of_turn_confidence_threshold", "0.72")
+	assertAssemblyAIQuery(t, query, "keyterms_prompt", `["LiveKit","Cavos"]`)
+	assertAssemblyAIQuery(t, query, "prompt", "agent terms")
+	assertAssemblyAIQuery(t, query, "vad_threshold", "0.41")
+	assertAssemblyAIQuery(t, query, "max_speakers", "3")
+	assertAssemblyAIQuery(t, query, "domain", "healthcare")
+}
+
 func TestAssemblyAIRealtimeTranscriptEventPreservesWordTimings(t *testing.T) {
 	resp := aaiResponse{
 		Type:       "Turn",
