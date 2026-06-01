@@ -215,6 +215,9 @@ func (v *SimpleVAD) UpdateOptionsWith(opts ...SimpleVADOption) {
 }
 
 func (v *SimpleVAD) Stream(ctx context.Context) (VADStream, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	v.mu.RLock()
 	options := v.options
 	v.mu.RUnlock()
@@ -332,6 +335,10 @@ func (s *simpleVADStream) PushFrame(frame *model.AudioFrame) error {
 	if s.closed {
 		s.mu.Unlock()
 		return errors.New("vad stream closed")
+	}
+	if err := s.contextErr(); err != nil {
+		s.mu.Unlock()
+		return err
 	}
 	if frame == nil {
 		s.mu.Unlock()
@@ -541,6 +548,9 @@ func (s *simpleVADStream) Flush() error {
 	if s.closed {
 		return errors.New("vad stream closed")
 	}
+	if err := s.contextErr(); err != nil {
+		return err
+	}
 	s.resetState()
 	return nil
 }
@@ -553,6 +563,9 @@ func (s *simpleVADStream) EndInput() error {
 	}
 	if s.closed {
 		return errors.New("vad stream closed")
+	}
+	if err := s.contextErr(); err != nil {
+		return err
 	}
 	s.resetState()
 	s.inputEnded = true
@@ -573,6 +586,13 @@ func (s *simpleVADStream) Close() error {
 	s.closeEvents(true)
 	s.vad.unregisterStream(s)
 	return nil
+}
+
+func (s *simpleVADStream) contextErr() error {
+	if s.ctx == nil {
+		return nil
+	}
+	return s.ctx.Err()
 }
 
 func (s *simpleVADStream) Next() (*VADEvent, error) {

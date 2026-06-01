@@ -199,6 +199,30 @@ func TestSimpleVADUpdateOptionsAppliesToActiveStream(t *testing.T) {
 	assertEventType(t, stream, VADEventStartOfSpeech)
 }
 
+func TestSimpleVADRejectsInputAfterContextCancel(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	stream, err := NewSimpleVAD(0.05).Stream(ctx)
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	defer stream.Close()
+
+	cancel()
+
+	if err := stream.PushFrame(audioFrame(16000, 160, 6000)); !errors.Is(err, context.Canceled) {
+		t.Fatalf("PushFrame() after context cancel error = %v, want context.Canceled", err)
+	}
+	if err := stream.Flush(); !errors.Is(err, context.Canceled) {
+		t.Fatalf("Flush() after context cancel error = %v, want context.Canceled", err)
+	}
+	if err := stream.EndInput(); !errors.Is(err, context.Canceled) {
+		t.Fatalf("EndInput() after context cancel error = %v, want context.Canceled", err)
+	}
+	if _, err := stream.Next(); !errors.Is(err, context.Canceled) {
+		t.Fatalf("Next() after context cancel error = %v, want context.Canceled", err)
+	}
+}
+
 func TestNewSimpleVADWithAllowsExplicitZeroThreshold(t *testing.T) {
 	detector := NewSimpleVADWith(
 		WithThreshold(0),
