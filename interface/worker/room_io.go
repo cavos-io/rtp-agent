@@ -119,6 +119,7 @@ const RoomIOChatTopic = "lk.chat"
 const RoomIOPublishOnBehalfAttribute = "lk.publish_on_behalf"
 const RoomIOAgentStateAttribute = "lk.agent.state"
 const RoomIOSimulatorAttribute = "lk.simulator"
+const roomIODeleteRoomCloseTimeout = 10 * time.Second
 
 type TextInputEvent struct {
 	Text                string
@@ -159,6 +160,7 @@ type RoomIO struct {
 
 	sessionCloseCancel context.CancelFunc
 	deletingRoom       bool
+	deleteRoomDone     chan struct{}
 	roomName           func() string
 }
 
@@ -299,7 +301,9 @@ func (rio *RoomIO) handleAgentSessionClose(ev agent.CloseEvent) {
 		rio.mu.Unlock()
 		return
 	}
+	done := make(chan struct{})
 	rio.deletingRoom = true
+	rio.deleteRoomDone = done
 	rio.mu.Unlock()
 
 	roomName := ""
@@ -312,7 +316,11 @@ func (rio *RoomIO) handleAgentSessionClose(ev agent.CloseEvent) {
 		defer func() {
 			rio.mu.Lock()
 			rio.deletingRoom = false
+			if rio.deleteRoomDone == done {
+				rio.deleteRoomDone = nil
+			}
 			rio.mu.Unlock()
+			close(done)
 		}()
 		if err := deleteRoom(context.Background(), roomName); err != nil {
 			logger.Logger.Warnw("failed to delete room on agent session close", err, "room", roomName, "reason", reason)
@@ -755,7 +763,6 @@ func (rio *RoomIO) PublishAudio(frame *model.AudioFrame) error {
 
 func (rio *RoomIO) Close() error {
 	rio.mu.Lock()
-	defer rio.mu.Unlock()
 	rio.closed = true
 	if rio.agentStateCancel != nil {
 		rio.agentStateCancel()
@@ -763,6 +770,19 @@ func (rio *RoomIO) Close() error {
 	if rio.sessionCloseCancel != nil {
 		rio.sessionCloseCancel()
 	}
+	deleteRoomDone := rio.deleteRoomDone
+	rio.mu.Unlock()
+
+	if deleteRoomDone != nil {
+		select {
+		case <-deleteRoomDone:
+		case <-time.After(roomIODeleteRoomCloseTimeout):
+			logger.Logger.Warnw("automatic room deletion timed out", nil)
+		}
+	}
+
+	rio.mu.Lock()
+	defer rio.mu.Unlock()
 	if rio.decoder != nil {
 		rio.decoder.Close()
 	}

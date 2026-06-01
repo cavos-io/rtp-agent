@@ -278,6 +278,52 @@ func TestRoomIOHandleAgentSessionCloseDoesNotBlockOnRoomDelete(t *testing.T) {
 	}
 }
 
+func TestRoomIOCloseWaitsForInFlightRoomDelete(t *testing.T) {
+	deleteStarted := make(chan struct{})
+	releaseDelete := make(chan struct{})
+	rio := &RoomIO{
+		Options: RoomOptions{
+			DeleteRoomOnClose: true,
+			DeleteRoom: func(context.Context, string) error {
+				close(deleteStarted)
+				<-releaseDelete
+				return nil
+			},
+		},
+		roomName: func() string {
+			return "room-a"
+		},
+	}
+
+	rio.handleAgentSessionClose(agent.CloseEvent{Reason: agent.CloseReasonParticipantDisconnected})
+	select {
+	case <-deleteStarted:
+	case <-time.After(time.Second):
+		t.Fatal("DeleteRoom was not started")
+	}
+
+	closeReturned := make(chan error, 1)
+	go func() {
+		closeReturned <- rio.Close()
+	}()
+
+	select {
+	case err := <-closeReturned:
+		t.Fatalf("Close() returned before DeleteRoom finished: %v", err)
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	close(releaseDelete)
+	select {
+	case err := <-closeReturned:
+		if err != nil {
+			t.Fatalf("Close() error = %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Close() did not return after DeleteRoom finished")
+	}
+}
+
 func TestRoomIOHandleAgentSessionCloseSkipsRoomDeleteWhenDisabled(t *testing.T) {
 	called := false
 	rio := &RoomIO{
