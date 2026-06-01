@@ -149,6 +149,26 @@ func TestPerformTTSInferenceEndsStreamInput(t *testing.T) {
 	}
 }
 
+func TestPerformTTSInferenceFiltersMarkdownAcrossChunks(t *testing.T) {
+	providerStream := newEndInputGenerationTTSStream()
+	provider := &fakeGenerationTTS{stream: providerStream}
+	textCh := make(chan string, 2)
+	textCh <- "Say **bo"
+	textCh <- "ld** now"
+	close(textCh)
+
+	data, err := PerformTTSInference(context.Background(), provider, textCh)
+	if err != nil {
+		t.Fatalf("PerformTTSInference error = %v", err)
+	}
+	<-data.AudioCh
+
+	wantCalls := []string{"push:Say bold now", "end_input"}
+	if got := providerStream.calls; len(got) != len(wantCalls) || got[0] != wantCalls[0] || got[1] != wantCalls[1] {
+		t.Fatalf("stream calls = %#v, want %#v", got, wantCalls)
+	}
+}
+
 func executeOneToolCall(t *testing.T, tool llm.Tool) ToolExecutionOutput {
 	t.Helper()
 
