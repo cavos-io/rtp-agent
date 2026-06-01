@@ -100,10 +100,11 @@ func (v *SimpleVAD) Stream(ctx context.Context) (VADStream, error) {
 	options := v.options
 	v.mu.RUnlock()
 	stream := &simpleVADStream{
-		vad:         v,
-		ctx:         ctx,
-		options:     options,
-		eventNotify: make(chan struct{}, 1),
+		vad:          v,
+		ctx:          ctx,
+		options:      options,
+		eventNotify:  make(chan struct{}, 1),
+		lastActivity: time.Now(),
 	}
 	v.mu.Lock()
 	v.streams[stream] = struct{}{}

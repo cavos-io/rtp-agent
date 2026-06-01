@@ -66,6 +66,35 @@ func TestSimpleVADEmitsMetricsCollected(t *testing.T) {
 	}
 }
 
+func TestSimpleVADMetricsIdleTimeStartsAtStreamCreation(t *testing.T) {
+	detector := NewSimpleVADWithOptions(SimpleVADOptions{UpdateInterval: 1})
+	metricsCh := make(chan *telemetry.VADMetrics, 1)
+	detector.OnMetricsCollected(func(metrics *telemetry.VADMetrics) {
+		metricsCh <- metrics
+	})
+
+	stream, err := detector.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	defer stream.Close()
+	time.Sleep(20 * time.Millisecond)
+
+	if err := stream.PushFrame(audioFrame(16000, 160, 0)); err != nil {
+		t.Fatalf("PushFrame() error = %v", err)
+	}
+	assertEventType(t, stream, VADEventInferenceDone)
+
+	select {
+	case metrics := <-metricsCh:
+		if metrics.IdleTime < 0.01 {
+			t.Fatalf("metrics IdleTime = %v, want at least 0.01s since stream creation", metrics.IdleTime)
+		}
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("timed out waiting for VAD metrics")
+	}
+}
+
 func TestSimpleVADUpdateOptionsAppliesToActiveStream(t *testing.T) {
 	detector := NewSimpleVADWithOptions(SimpleVADOptions{
 		Threshold:         0.05,
