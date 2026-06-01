@@ -7,6 +7,8 @@ import (
 	"io"
 	"net/http"
 	"testing"
+
+	"github.com/cavos-io/rtp-agent/core/tts"
 )
 
 func TestMinimaxTTSDefaultsMatchReference(t *testing.T) {
@@ -29,6 +31,9 @@ func TestMinimaxTTSDefaultsMatchReference(t *testing.T) {
 	}
 	if provider.audioFormat != "mp3" {
 		t.Fatalf("audio format = %q, want mp3", provider.audioFormat)
+	}
+	if !provider.Capabilities().Streaming {
+		t.Fatal("streaming = false, want reference streaming support")
 	}
 }
 
@@ -155,6 +160,97 @@ func TestMinimaxTTSChunkedStreamDecodesReferenceSSEAudio(t *testing.T) {
 	if audio.Frame.SampleRate != 16000 {
 		t.Fatalf("sample rate = %d, want 16000", audio.Frame.SampleRate)
 	}
+}
+
+func TestMinimaxTTSWebsocketURLMatchesReference(t *testing.T) {
+	provider := NewMinimaxTTS("test-key", "", WithMinimaxTTSBaseURL("https://minimax.example"))
+
+	if got := buildMinimaxTTSWebsocketURL(provider); got != "wss://minimax.example/ws/v1/t2a_v2" {
+		t.Fatalf("websocket URL = %q, want reference websocket endpoint", got)
+	}
+}
+
+func TestMinimaxTTSWebsocketMessagesMatchReference(t *testing.T) {
+	provider := NewMinimaxTTS("test-key", "",
+		WithMinimaxTTSModel("speech-2.6-hd"),
+		WithMinimaxTTSVoice("voice-2"),
+		WithMinimaxTTSSampleRate(44100),
+		WithMinimaxTTSBitrate(256000),
+		WithMinimaxTTSAudioFormat("wav"),
+		WithMinimaxTTSEmotion("fluent"),
+	)
+
+	startPayload, err := buildMinimaxTTSTaskStartMessage(provider)
+	if err != nil {
+		t.Fatalf("build start message: %v", err)
+	}
+	var start map[string]any
+	if err := json.Unmarshal(startPayload, &start); err != nil {
+		t.Fatalf("decode start message: %v", err)
+	}
+	assertMinimaxPayload(t, start, "event", "task_start")
+	assertMinimaxPayload(t, start, "model", "speech-2.6-hd")
+	voiceSetting := start["voice_setting"].(map[string]any)
+	assertMinimaxPayload(t, voiceSetting, "voice_id", "voice-2")
+	assertMinimaxPayload(t, voiceSetting, "emotion", "fluent")
+	audioSetting := start["audio_setting"].(map[string]any)
+	assertMinimaxPayload(t, audioSetting, "format", "wav")
+
+	continuePayload, err := buildMinimaxTTSTaskContinueMessage("hello")
+	if err != nil {
+		t.Fatalf("build continue message: %v", err)
+	}
+	var cont map[string]any
+	if err := json.Unmarshal(continuePayload, &cont); err != nil {
+		t.Fatalf("decode continue message: %v", err)
+	}
+	assertMinimaxPayload(t, cont, "event", "task_continue")
+	assertMinimaxPayload(t, cont, "text", "hello")
+
+	finishPayload, err := buildMinimaxTTSTaskFinishMessage()
+	if err != nil {
+		t.Fatalf("build finish message: %v", err)
+	}
+	var finish map[string]any
+	if err := json.Unmarshal(finishPayload, &finish); err != nil {
+		t.Fatalf("decode finish message: %v", err)
+	}
+	assertMinimaxPayload(t, finish, "event", "task_finish")
+}
+
+func TestMinimaxTTSAudioFromWebsocketMessage(t *testing.T) {
+	audio, done, err := minimaxAudioFromWebsocketMessage([]byte(`{"event":"task_continued","trace_id":"trace-1","data":{"audio":"0102"}}`), 24000, "seg-1")
+	if err != nil {
+		t.Fatalf("audio message: %v", err)
+	}
+	if done || string(audio.Frame.Data) != "\x01\x02" || audio.RequestID != "trace-1" || audio.SegmentID != "seg-1" {
+		t.Fatalf("audio=%+v done=%v, want decoded websocket audio", audio, done)
+	}
+
+	audio, done, err = minimaxAudioFromWebsocketMessage([]byte(`{"event":"task_finished"}`), 24000, "seg-1")
+	if err != nil {
+		t.Fatalf("finish message: %v", err)
+	}
+	if audio != nil || !done {
+		t.Fatalf("audio=%+v done=%v, want task finished marker", audio, done)
+	}
+}
+
+func TestMinimaxTTSStreamBuffersTextUntilFlush(t *testing.T) {
+	stream := &minimaxTTSSynthesizeStream{}
+	if err := stream.PushText("hello "); err != nil {
+		t.Fatalf("push first: %v", err)
+	}
+	if err := stream.PushText("world"); err != nil {
+		t.Fatalf("push second: %v", err)
+	}
+	if got := stream.pendingText.String(); got != "hello world" {
+		t.Fatalf("pending text = %q, want concatenated text", got)
+	}
+}
+
+func TestMinimaxTTSImplementsInterface(t *testing.T) {
+	var _ tts.TTS = NewMinimaxTTS("test-key", "")
 }
 
 func assertMinimaxPayload(t *testing.T, payload map[string]any, key string, want string) {
