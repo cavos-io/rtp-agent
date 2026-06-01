@@ -169,6 +169,12 @@ func TestNewSileroVADWithOptionsRejectsInvalidOptions(t *testing.T) {
 		t.Fatalf("NewSileroVADWithOptions() error = %q, want activation threshold message", err.Error())
 	}
 
+	if _, err := NewSileroVADWithOptions(WithMinSpeechDuration(math.NaN())); err == nil {
+		t.Fatal("NewSileroVADWithOptions() error = nil, want invalid timing duration error")
+	} else if !strings.Contains(err.Error(), "min_speech_duration must be greater than or equal to 0") {
+		t.Fatalf("NewSileroVADWithOptions() error = %q, want min speech duration message", err.Error())
+	}
+
 	if _, err := NewSileroVADWithOptions(WithDeactivationThreshold(-0.1)); err == nil {
 		t.Fatal("NewSileroVADWithOptions() error = nil, want invalid deactivation threshold error")
 	} else if !strings.Contains(err.Error(), "deactivation_threshold must be greater than 0") {
@@ -395,6 +401,24 @@ func TestSileroVADUpdateOptionsWithIgnoresInvalidActivationThreshold(t *testing.
 	detector.UpdateOptionsWith(WithActivationThreshold(math.NaN()))
 	if detector.options.ActivationThreshold != 0.5 {
 		t.Fatalf("detector ActivationThreshold = %v, want 0.5", detector.options.ActivationThreshold)
+	}
+
+	stream, err := detector.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream() after invalid update error = %v", err)
+	}
+	defer stream.Close()
+}
+
+func TestSileroVADUpdateOptionsWithIgnoresInvalidTimingDuration(t *testing.T) {
+	detector := NewSileroVAD(
+		WithMinSpeechDuration(0.032),
+		WithActivationThreshold(0.5),
+	)
+
+	detector.UpdateOptionsWith(WithMinSpeechDuration(math.NaN()))
+	if detector.options.MinSpeechDuration != 0.032 {
+		t.Fatalf("detector MinSpeechDuration = %v, want 0.032", detector.options.MinSpeechDuration)
 	}
 
 	stream, err := detector.Stream(context.Background())
