@@ -483,6 +483,7 @@ type FallbackAdapter struct {
 	llms             []LLM
 	attemptTimeout   time.Duration
 	maxRetryPerLLM   int
+	retryInterval    time.Duration
 	retryOnChunkSent bool
 	mu               sync.Mutex
 	available        []bool
@@ -492,6 +493,7 @@ type FallbackAdapter struct {
 type FallbackAdapterOptions struct {
 	AttemptTimeout   time.Duration
 	MaxRetryPerLLM   int
+	RetryInterval    time.Duration
 	RetryOnChunkSent bool
 }
 
@@ -507,6 +509,7 @@ func NewFallbackAdapterWithOptions(llms []LLM, options FallbackAdapterOptions) *
 		llms:             llms,
 		attemptTimeout:   options.AttemptTimeout,
 		maxRetryPerLLM:   options.MaxRetryPerLLM,
+		retryInterval:    options.RetryInterval,
 		retryOnChunkSent: options.RetryOnChunkSent,
 		available:        initialAvailability(len(llms)),
 		recovering:       make([]bool, len(llms)),
@@ -647,6 +650,9 @@ func (s *fallbackLLMStream) tryStart(index int) error {
 				break
 			}
 			s.retries[i]++
+			if err := s.adapter.waitRetryInterval(s.ctx); err != nil {
+				return err
+			}
 		}
 	}
 	return lastErr
@@ -672,6 +678,9 @@ func (s *fallbackLLMStream) Next() (*ChatChunk, error) {
 		s.closeActive()
 		if s.canRetryLLM(s.activeIndex) {
 			s.retries[s.activeIndex]++
+			if retryErr := s.adapter.waitRetryInterval(s.ctx); retryErr != nil {
+				return nil, retryErr
+			}
 			if startErr := s.tryStart(s.activeIndex); startErr != nil {
 				return nil, startErr
 			}
@@ -702,6 +711,20 @@ func (f *FallbackAdapter) attemptContext(parent context.Context) (context.Contex
 		return context.WithCancel(parent)
 	}
 	return context.WithTimeout(parent, f.attemptTimeout)
+}
+
+func (f *FallbackAdapter) waitRetryInterval(ctx context.Context) error {
+	if f.retryInterval <= 0 {
+		return nil
+	}
+	timer := time.NewTimer(f.retryInterval)
+	defer timer.Stop()
+	select {
+	case <-timer.C:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
 
 func (s *fallbackLLMStream) closeActive() {
