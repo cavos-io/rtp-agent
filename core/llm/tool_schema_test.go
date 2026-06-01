@@ -87,3 +87,24 @@ func TestGenerateStrictJSONSchemaKeepsPointerNestedStructNullable(t *testing.T) 
 		t.Fatalf("location required = %#v, want city required", locationSchema["required"])
 	}
 }
+
+func TestGenerateStrictJSONSchemaPreservesMapValueSchema(t *testing.T) {
+	type request struct {
+		Metadata map[string]string `json:"metadata"`
+	}
+
+	schema := GenerateStrictJSONSchema(reflect.TypeOf(request{}))
+
+	props := schema["properties"].(map[string]interface{})
+	metadataSchema, ok := props["metadata"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("metadata property = %#v, want map", props["metadata"])
+	}
+	valueSchema, ok := metadataSchema["additionalProperties"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("metadata additionalProperties = %#v, want string value schema", metadataSchema["additionalProperties"])
+	}
+	if valueSchema["type"] != "string" {
+		t.Fatalf("metadata value type = %#v, want string", valueSchema["type"])
+	}
+}

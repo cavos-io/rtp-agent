@@ -1254,6 +1254,35 @@ func TestChatContextToOpenAIProviderFormatIncludesImageContent(t *testing.T) {
 	}
 }
 
+func TestChatContextToOpenAIProviderFormatReturnsImageSerializationError(t *testing.T) {
+	for _, format := range []string{"openai", "openai.responses"} {
+		t.Run(format, func(t *testing.T) {
+			ctx := NewChatContext()
+			ctx.Items = []ChatItem{
+				&ChatMessage{
+					ID:   "user",
+					Role: ChatRoleUser,
+					Content: []ChatContent{
+						{Image: &ImageContent{Image: "data:image/png;base64,not-valid-base64"}},
+					},
+				},
+			}
+
+			messages, extra, err := ctx.ToProviderFormatE(format)
+
+			if err == nil {
+				t.Fatalf("ToProviderFormatE(%s) error = nil, want image serialization error", format)
+			}
+			if messages != nil || extra != nil {
+				t.Fatalf("ToProviderFormatE(%s) messages=%#v extra=%#v, want nil outputs on error", format, messages, extra)
+			}
+			if !strings.Contains(err.Error(), "decode data URL image") {
+				t.Fatalf("ToProviderFormatE(%s) error = %q, want decode data URL image error", format, err)
+			}
+		})
+	}
+}
+
 func TestChatContextToOpenAIProviderFormatForwardsReferenceExtraContent(t *testing.T) {
 	ctx := NewChatContext()
 	ctx.Items = []ChatItem{
@@ -1477,6 +1506,31 @@ func TestChatContextToGoogleProviderFormatUsesInlineDataForDataURLImage(t *testi
 	}
 }
 
+func TestChatContextToGoogleProviderFormatReturnsImageSerializationError(t *testing.T) {
+	ctx := NewChatContext()
+	ctx.Items = []ChatItem{
+		&ChatMessage{
+			ID:   "user",
+			Role: ChatRoleUser,
+			Content: []ChatContent{
+				{Image: &ImageContent{Image: "data:image/png;base64,not-valid-base64"}},
+			},
+		},
+	}
+
+	turns, extra, err := ctx.ToProviderFormatE("google")
+
+	if err == nil {
+		t.Fatal("ToProviderFormatE(google) error = nil, want image serialization error")
+	}
+	if turns != nil || extra != nil {
+		t.Fatalf("ToProviderFormatE(google) turns=%#v extra=%#v, want nil outputs on error", turns, extra)
+	}
+	if !strings.Contains(err.Error(), "decode data URL image") {
+		t.Fatalf("ToProviderFormatE(google) error = %q, want decode data URL image error", err)
+	}
+}
+
 func TestChatContextToAnthropicProviderFormatMapsTurnsAndSystemMessages(t *testing.T) {
 	ctx := NewChatContext()
 	ctx.Items = []ChatItem{
@@ -1555,6 +1609,31 @@ func TestChatContextToAnthropicProviderFormatUsesBase64ForDataURLImage(t *testin
 	}
 	if source["type"] != "base64" || source["data"] != imageData || source["media_type"] != "image/gif" {
 		t.Fatalf("anthropic image source = %#v", source)
+	}
+}
+
+func TestChatContextToAnthropicProviderFormatReturnsImageSerializationError(t *testing.T) {
+	ctx := NewChatContext()
+	ctx.Items = []ChatItem{
+		&ChatMessage{
+			ID:   "user",
+			Role: ChatRoleUser,
+			Content: []ChatContent{
+				{Image: &ImageContent{Image: "data:image/png;base64,not-valid-base64"}},
+			},
+		},
+	}
+
+	messages, extra, err := ctx.ToProviderFormatE("anthropic")
+
+	if err == nil {
+		t.Fatal("ToProviderFormatE(anthropic) error = nil, want image serialization error")
+	}
+	if messages != nil || extra != nil {
+		t.Fatalf("ToProviderFormatE(anthropic) messages=%#v extra=%#v, want nil outputs on error", messages, extra)
+	}
+	if !strings.Contains(err.Error(), "decode data URL image") {
+		t.Fatalf("ToProviderFormatE(anthropic) error = %q, want decode data URL image error", err)
 	}
 }
 
@@ -1713,5 +1792,30 @@ func TestChatContextToMistralProviderFormatMapsEntriesAndInstructions(t *testing
 	}
 	if entries[3]["type"] != "function.result" || entries[3]["tool_call_id"] != "call_weather" || entries[3]["result"] != "sunny" {
 		t.Fatalf("function result entry = %#v", entries[3])
+	}
+}
+
+func TestChatContextToMistralProviderFormatReturnsImageSerializationError(t *testing.T) {
+	ctx := NewChatContext()
+	ctx.Items = []ChatItem{
+		&ChatMessage{
+			ID:   "user",
+			Role: ChatRoleUser,
+			Content: []ChatContent{
+				{Image: &ImageContent{Image: "data:image/png;base64,not-valid-base64"}},
+			},
+		},
+	}
+
+	entries, extra, err := ctx.ToProviderFormatE("mistralai")
+
+	if err == nil {
+		t.Fatal("ToProviderFormatE(mistralai) error = nil, want image serialization error")
+	}
+	if entries != nil || extra != nil {
+		t.Fatalf("ToProviderFormatE(mistralai) entries=%#v extra=%#v, want nil outputs on error", entries, extra)
+	}
+	if !strings.Contains(err.Error(), "decode data URL image") {
+		t.Fatalf("ToProviderFormatE(mistralai) error = %q, want decode data URL image error", err)
 	}
 }

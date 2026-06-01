@@ -876,7 +876,11 @@ func (c *ChatContext) ToProviderFormatE(format string, options ...ChatContextPro
 
 			var msg map[string]any
 			if group.message != nil {
-				msg = openAIChatMessage(group.message)
+				var err error
+				msg, err = openAIChatMessage(group.message)
+				if err != nil {
+					return nil, nil, err
+				}
 			} else {
 				msg = map[string]any{"role": "assistant"}
 			}
@@ -903,7 +907,11 @@ func (c *ChatContext) ToProviderFormatE(format string, options ...ChatContextPro
 				continue
 			}
 			if group.message != nil {
-				items = append(items, openAIResponsesMessage(group.message))
+				msg, err := openAIResponsesMessage(group.message)
+				if err != nil {
+					return nil, nil, err
+				}
+				items = append(items, msg)
 			}
 			for _, toolCall := range group.toolCalls {
 				items = append(items, openAIResponsesToolCall(toolCall))
@@ -915,10 +923,16 @@ func (c *ChatContext) ToProviderFormatE(format string, options ...ChatContextPro
 		return items, nil, nil
 	}
 	if format == "google" {
+		if err := validateProviderImages(c.Items); err != nil {
+			return nil, nil, err
+		}
 		messages, extra := c.toGoogleProviderFormat(opts)
 		return messages, extra, nil
 	}
 	if format == "anthropic" {
+		if err := validateProviderImages(c.Items); err != nil {
+			return nil, nil, err
+		}
 		messages, extra := c.toAnthropicProviderFormat(opts)
 		return messages, extra, nil
 	}
@@ -930,7 +944,10 @@ func (c *ChatContext) ToProviderFormatE(format string, options ...ChatContextPro
 		return messages, extra, nil
 	}
 	if format == "mistralai" {
-		messages, extra := c.toMistralProviderFormat()
+		messages, extra, err := c.toMistralProviderFormat()
+		if err != nil {
+			return nil, nil, err
+		}
 		return messages, extra, nil
 	}
 	return nil, nil, fmt.Errorf("unsupported provider format: %s", format)
@@ -1043,7 +1060,7 @@ func (c *ChatContext) toAnthropicProviderFormat(opts ChatContextProviderFormatOp
 	return messages, map[string]any{"system_messages": systemMessages}
 }
 
-func (c *ChatContext) toMistralProviderFormat() ([]map[string]any, any) {
+func (c *ChatContext) toMistralProviderFormat() ([]map[string]any, any, error) {
 	entries := make([]map[string]any, 0)
 	var instructions any
 
@@ -1053,7 +1070,9 @@ func (c *ChatContext) toMistralProviderFormat() ([]map[string]any, any) {
 				if text := group.message.TextContent(); text != "" {
 					instructions = text
 				}
-			} else if entry := mistralMessageEntry(group.message); entry != nil {
+			} else if entry, err := mistralMessageEntry(group.message); err != nil {
+				return nil, nil, err
+			} else if entry != nil {
 				entries = append(entries, entry)
 			}
 		}
@@ -1075,7 +1094,7 @@ func (c *ChatContext) toMistralProviderFormat() ([]map[string]any, any) {
 		}
 	}
 
-	return entries, map[string]any{"instructions": instructions}
+	return entries, map[string]any{"instructions": instructions}, nil
 }
 
 func (c *ChatContext) toAWSProviderFormat(opts ChatContextProviderFormatOptions) ([]map[string]any, any) {
@@ -1269,8 +1288,11 @@ func openAIToolGroupID(itemID string, groupID *string) string {
 	return itemID
 }
 
-func openAIChatMessage(msg *ChatMessage) map[string]any {
-	content := openAIChatContent(msg.Content)
+func openAIChatMessage(msg *ChatMessage) (map[string]any, error) {
+	content, err := openAIChatContent(msg.Content)
+	if err != nil {
+		return nil, err
+	}
 	result := map[string]any{
 		"role":    string(msg.Role),
 		"content": content,
@@ -1278,10 +1300,10 @@ func openAIChatMessage(msg *ChatMessage) map[string]any {
 	if extra := openAIExtraContent(msg.Extra); len(extra) > 0 {
 		result["extra_content"] = extra
 	}
-	return result
+	return result, nil
 }
 
-func openAIChatContent(content []ChatContent) any {
+func openAIChatContent(content []ChatContent) (any, error) {
 	parts := make([]map[string]any, 0)
 	textContent := ""
 	for _, item := range content {
@@ -1292,13 +1314,17 @@ func openAIChatContent(content []ChatContent) any {
 			textContent += text
 		}
 		if item.Image != nil {
-			if part := openAIImageContent(item.Image); part != nil {
+			part, err := openAIImageContent(item.Image)
+			if err != nil {
+				return nil, err
+			}
+			if part != nil {
 				parts = append(parts, part)
 			}
 		}
 	}
 	if len(parts) == 0 {
-		return textContent
+		return textContent, nil
 	}
 	if textContent != "" {
 		parts = append(parts, map[string]any{
@@ -1306,13 +1332,13 @@ func openAIChatContent(content []ChatContent) any {
 			"text": textContent,
 		})
 	}
-	return parts
+	return parts, nil
 }
 
-func openAIImageContent(image *ImageContent) map[string]any {
+func openAIImageContent(image *ImageContent) (map[string]any, error) {
 	img, err := SerializeImage(image)
 	if err != nil {
-		return nil
+		return nil, err
 	}
 	url := img.ExternalURL
 	if url == "" {
@@ -1324,17 +1350,21 @@ func openAIImageContent(image *ImageContent) map[string]any {
 			"url":    url,
 			"detail": img.InferenceDetail,
 		},
-	}
+	}, nil
 }
 
-func openAIResponsesMessage(msg *ChatMessage) map[string]any {
+func openAIResponsesMessage(msg *ChatMessage) (map[string]any, error) {
+	content, err := openAIResponsesContent(msg.Content)
+	if err != nil {
+		return nil, err
+	}
 	return map[string]any{
 		"role":    string(msg.Role),
-		"content": openAIResponsesContent(msg.Content),
-	}
+		"content": content,
+	}, nil
 }
 
-func openAIResponsesContent(content []ChatContent) any {
+func openAIResponsesContent(content []ChatContent) (any, error) {
 	parts := make([]map[string]any, 0)
 	textContent := ""
 	for _, item := range content {
@@ -1345,13 +1375,17 @@ func openAIResponsesContent(content []ChatContent) any {
 			textContent += text
 		}
 		if item.Image != nil {
-			if part := openAIResponsesImageContent(item.Image); part != nil {
+			part, err := openAIResponsesImageContent(item.Image)
+			if err != nil {
+				return nil, err
+			}
+			if part != nil {
 				parts = append(parts, part)
 			}
 		}
 	}
 	if len(parts) == 0 {
-		return textContent
+		return textContent, nil
 	}
 	if textContent != "" {
 		parts = append(parts, map[string]any{
@@ -1359,13 +1393,13 @@ func openAIResponsesContent(content []ChatContent) any {
 			"text": textContent,
 		})
 	}
-	return parts
+	return parts, nil
 }
 
-func openAIResponsesImageContent(image *ImageContent) map[string]any {
+func openAIResponsesImageContent(image *ImageContent) (map[string]any, error) {
 	img, err := SerializeImage(image)
 	if err != nil {
-		return nil
+		return nil, err
 	}
 	url := img.ExternalURL
 	if url == "" {
@@ -1375,7 +1409,7 @@ func openAIResponsesImageContent(image *ImageContent) map[string]any {
 		"type":      "input_image",
 		"image_url": url,
 		"detail":    img.InferenceDetail,
-	}
+	}, nil
 }
 
 func openAIResponsesToolCall(toolCall *FunctionCall) map[string]any {
@@ -1395,26 +1429,30 @@ func openAIResponsesToolOutput(toolOutput *FunctionCallOutput) map[string]any {
 	}
 }
 
-func mistralMessageEntry(msg *ChatMessage) map[string]any {
+func mistralMessageEntry(msg *ChatMessage) (map[string]any, error) {
+	content, err := mistralMessageContent(msg)
+	if err != nil {
+		return nil, err
+	}
 	switch msg.Role {
 	case ChatRoleUser:
 		return map[string]any{
 			"type":    "message.input",
 			"role":    "user",
-			"content": mistralMessageContent(msg),
-		}
+			"content": content,
+		}, nil
 	case ChatRoleAssistant:
 		return map[string]any{
 			"type":    "message.output",
 			"role":    "assistant",
-			"content": mistralMessageContent(msg),
-		}
+			"content": content,
+		}, nil
 	default:
-		return nil
+		return nil, nil
 	}
 }
 
-func mistralMessageContent(msg *ChatMessage) any {
+func mistralMessageContent(msg *ChatMessage) (any, error) {
 	parts := make([]map[string]any, 0)
 	textContent := ""
 	for _, item := range msg.Content {
@@ -1425,13 +1463,17 @@ func mistralMessageContent(msg *ChatMessage) any {
 			textContent += text
 		}
 		if item.Image != nil {
-			if part := mistralImageContent(item.Image); part != nil {
+			part, err := mistralImageContent(item.Image)
+			if err != nil {
+				return nil, err
+			}
+			if part != nil {
 				parts = append(parts, part)
 			}
 		}
 	}
 	if len(parts) == 0 {
-		return textContent
+		return textContent, nil
 	}
 	if textContent != "" {
 		parts = append(parts, map[string]any{
@@ -1439,13 +1481,13 @@ func mistralMessageContent(msg *ChatMessage) any {
 			"text": textContent,
 		})
 	}
-	return parts
+	return parts, nil
 }
 
-func mistralImageContent(image *ImageContent) map[string]any {
+func mistralImageContent(image *ImageContent) (map[string]any, error) {
 	img, err := SerializeImage(image)
 	if err != nil {
-		return nil
+		return nil, err
 	}
 	url := img.ExternalURL
 	if url == "" {
@@ -1454,7 +1496,7 @@ func mistralImageContent(image *ImageContent) map[string]any {
 	return map[string]any{
 		"type":      "image_url",
 		"image_url": url,
-	}
+	}, nil
 }
 
 func openAIToolCall(toolCall *FunctionCall) map[string]any {
@@ -1756,6 +1798,24 @@ func validateAWSProviderImages(items []ChatItem) error {
 			}
 			if image.ExternalURL != "" {
 				return fmt.Errorf("external image URLs are not supported by AWS Bedrock")
+			}
+		}
+	}
+	return nil
+}
+
+func validateProviderImages(items []ChatItem) error {
+	for _, item := range items {
+		msg, ok := item.(*ChatMessage)
+		if !ok {
+			continue
+		}
+		for _, content := range msg.Content {
+			if content.Image == nil {
+				continue
+			}
+			if _, err := SerializeImage(content.Image); err != nil {
+				return err
 			}
 		}
 	}

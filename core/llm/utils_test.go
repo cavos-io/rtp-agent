@@ -48,6 +48,80 @@ func TestParseFunctionArgumentsUnwrapsNestedJSONString(t *testing.T) {
 	}
 }
 
+func TestParseFunctionArgumentsRepairsLeakedTemplateTokens(t *testing.T) {
+	args, err := ParseFunctionArguments(`{"city":"Paris"}<|im_end|>`)
+	if err != nil {
+		t.Fatalf("ParseFunctionArguments() error = %v", err)
+	}
+
+	if args["city"] != "Paris" {
+		t.Fatalf("args = %#v, want repaired city", args)
+	}
+}
+
+func TestParseFunctionArgumentsDropsListItemsEmptiedByTemplateRepair(t *testing.T) {
+	args, err := ParseFunctionArguments(`{"tags":["<|im_start|>","urgent"]}<|im_end|>`)
+	if err != nil {
+		t.Fatalf("ParseFunctionArguments() error = %v", err)
+	}
+
+	tags, ok := args["tags"].([]any)
+	if !ok {
+		t.Fatalf("tags = %#v, want []any", args["tags"])
+	}
+	if len(tags) != 1 || tags[0] != "urgent" {
+		t.Fatalf("tags = %#v, want only urgent after dropping empty repaired token", tags)
+	}
+}
+
+func TestParseFunctionArgumentsRepairsTrailingCommas(t *testing.T) {
+	args, err := ParseFunctionArguments(`{"city":"Paris","limit":3,}`)
+	if err != nil {
+		t.Fatalf("ParseFunctionArguments() error = %v", err)
+	}
+
+	if args["city"] != "Paris" || args["limit"] != float64(3) {
+		t.Fatalf("args = %#v, want repaired city and limit", args)
+	}
+}
+
+func TestParseFunctionArgumentsRepairsMissingClosingDelimiter(t *testing.T) {
+	args, err := ParseFunctionArguments(`{"city":"Paris","tags":["metro","food"]`)
+	if err != nil {
+		t.Fatalf("ParseFunctionArguments() error = %v", err)
+	}
+
+	if args["city"] != "Paris" {
+		t.Fatalf("city = %#v, want Paris", args["city"])
+	}
+	tags, ok := args["tags"].([]any)
+	if !ok || len(tags) != 2 || tags[0] != "metro" || tags[1] != "food" {
+		t.Fatalf("tags = %#v, want metro and food", args["tags"])
+	}
+}
+
+func TestParseFunctionArgumentsRepairsUnquotedObjectKeys(t *testing.T) {
+	args, err := ParseFunctionArguments(`{city:"Paris",limit:3}`)
+	if err != nil {
+		t.Fatalf("ParseFunctionArguments() error = %v", err)
+	}
+
+	if args["city"] != "Paris" || args["limit"] != float64(3) {
+		t.Fatalf("args = %#v, want repaired city and limit", args)
+	}
+}
+
+func TestParseFunctionArgumentsRepairsSingleQuotedValues(t *testing.T) {
+	args, err := ParseFunctionArguments(`{'city':'Paris','country':'FR'}`)
+	if err != nil {
+		t.Fatalf("ParseFunctionArguments() error = %v", err)
+	}
+
+	if args["city"] != "Paris" || args["country"] != "FR" {
+		t.Fatalf("args = %#v, want repaired city and country", args)
+	}
+}
+
 func TestParseFunctionArgumentsTreatsNullAsEmptyObject(t *testing.T) {
 	args, err := ParseFunctionArguments(`null`)
 	if err != nil {

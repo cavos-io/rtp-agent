@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"regexp"
 	"reflect"
 	"strings"
 	"time"
@@ -21,6 +22,19 @@ const (
 	thinkTagStart = "<think>"
 	thinkTagEnd   = "</think>"
 )
+
+var templateTokenPatterns = []*regexp.Regexp{
+	regexp.MustCompile(`<\|[^<>|]{0,40}\|>`),
+	regexp.MustCompile(`<\|[^<>a-zA-Z0-9_]{0,10}`),
+	regexp.MustCompile(`[^<>a-zA-Z0-9_]{0,10}\|>`),
+	regexp.MustCompile(`<(?:start|end)_of_turn>`),
+}
+
+var trailingCommaPattern = regexp.MustCompile(`,\s*([}\]])`)
+
+var unquotedObjectKeyPattern = regexp.MustCompile(`([,{]\s*)([A-Za-z_][A-Za-z0-9_-]*)(\s*:)`)
+
+var singleQuotedStringPattern = regexp.MustCompile(`'([^'\\]*)'`)
 
 type SerializedImage struct {
 	InferenceDetail string
@@ -107,7 +121,14 @@ func StripThinkingTokens(content string, thinking *bool) (string, bool) {
 func ParseFunctionArguments(jsonArguments string) (map[string]any, error) {
 	var value any
 	if err := json.Unmarshal([]byte(jsonArguments), &value); err != nil {
-		return nil, fmt.Errorf("could not parse function arguments as JSON: %w", err)
+		repaired := repairFunctionArguments(jsonArguments)
+		if repaired == jsonArguments {
+			return nil, fmt.Errorf("could not parse function arguments as JSON: %w", err)
+		}
+		if retryErr := json.Unmarshal([]byte(repaired), &value); retryErr != nil {
+			return nil, fmt.Errorf("could not parse function arguments as JSON: %w", err)
+		}
+		value = cleanRepairedFunctionArguments(value)
 	}
 
 	for {
@@ -128,6 +149,92 @@ func ParseFunctionArguments(jsonArguments string) (map[string]any, error) {
 		return nil, fmt.Errorf("expected object from function arguments, got %T", value)
 	}
 	return args, nil
+}
+
+func repairFunctionArguments(value string) string {
+	out := value
+	for _, pattern := range templateTokenPatterns {
+		out = pattern.ReplaceAllString(out, "")
+	}
+	out = singleQuotedStringPattern.ReplaceAllString(out, `"$1"`)
+	out = unquotedObjectKeyPattern.ReplaceAllString(out, `${1}"${2}"${3}`)
+	out = closeUnbalancedJSONContainers(out)
+	out = trailingCommaPattern.ReplaceAllString(out, "$1")
+	return strings.TrimSpace(out)
+}
+
+func closeUnbalancedJSONContainers(value string) string {
+	stack := make([]byte, 0)
+	inString := false
+	escaped := false
+
+	for i := 0; i < len(value); i++ {
+		ch := value[i]
+		if inString {
+			if escaped {
+				escaped = false
+				continue
+			}
+			if ch == '\\' {
+				escaped = true
+				continue
+			}
+			if ch == '"' {
+				inString = false
+			}
+			continue
+		}
+
+		switch ch {
+		case '"':
+			inString = true
+		case '{':
+			stack = append(stack, '}')
+		case '[':
+			stack = append(stack, ']')
+		case '}', ']':
+			if len(stack) == 0 || stack[len(stack)-1] != ch {
+				return value
+			}
+			stack = stack[:len(stack)-1]
+		}
+	}
+
+	if inString || len(stack) == 0 {
+		return value
+	}
+	var b strings.Builder
+	b.Grow(len(value) + len(stack))
+	b.WriteString(value)
+	for i := len(stack) - 1; i >= 0; i-- {
+		b.WriteByte(stack[i])
+	}
+	return b.String()
+}
+
+func cleanRepairedFunctionArguments(value any) any {
+	switch v := value.(type) {
+	case string:
+		return strings.TrimSpace(v)
+	case []any:
+		cleaned := make([]any, 0, len(v))
+		for _, item := range v {
+			item = cleanRepairedFunctionArguments(item)
+			if item == "" || item == nil {
+				continue
+			}
+			cleaned = append(cleaned, item)
+		}
+		return cleaned
+	case map[string]any:
+		cleaned := make(map[string]any, len(v))
+		for key, item := range v {
+			cleaned[key] = cleanRepairedFunctionArguments(item)
+		}
+		return cleaned
+	default:
+		return value
+	}
 }
 
 func MakeFunctionCallOutput(fncCall FunctionCall, output any, exception error) FunctionCallResult {

@@ -86,6 +86,33 @@ func TestToolContextUpdateToolsRejectsDifferentToolsWithSameName(t *testing.T) {
 	}
 }
 
+func TestNewToolContextPanicsOnDuplicateFunctionName(t *testing.T) {
+	defer func() {
+		if r := recover(); r == nil {
+			t.Fatal("NewToolContext() did not panic, want duplicate function name panic")
+		} else if err, ok := r.(error); !ok || !strings.Contains(err.Error(), "duplicate function name: lookup") {
+			t.Fatalf("NewToolContext() panic = %v, want duplicate function name", r)
+		}
+	}()
+
+	NewToolContext([]interface{}{
+		&testTool{id: "lookup-a", name: "lookup"},
+		&testTool{id: "lookup-b", name: "lookup"},
+	})
+}
+
+func TestNewToolContextPanicsOnUnknownToolType(t *testing.T) {
+	defer func() {
+		if r := recover(); r == nil {
+			t.Fatal("NewToolContext() did not panic, want unknown tool type panic")
+		} else if err, ok := r.(error); !ok || !strings.Contains(err.Error(), "unknown tool type: string") {
+			t.Fatalf("NewToolContext() panic = %v, want unknown tool type", r)
+		}
+	}()
+
+	NewToolContext([]interface{}{"not-a-tool"})
+}
+
 func TestToolContextUpdateToolsRejectsNonComparableDuplicateName(t *testing.T) {
 	ctx := EmptyToolContext()
 
