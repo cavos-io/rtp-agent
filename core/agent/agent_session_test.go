@@ -373,6 +373,27 @@ func TestAgentSessionStopResetsSessionStates(t *testing.T) {
 	}
 }
 
+func TestAgentSessionCurrentSpeechReturnsNilWithoutActivity(t *testing.T) {
+	agent := NewAgent("test")
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+
+	if got := session.CurrentSpeech(); got != nil {
+		t.Fatalf("CurrentSpeech = %#v, want nil without activity", got)
+	}
+}
+
+func TestAgentSessionCurrentSpeechReturnsActivitySpeech(t *testing.T) {
+	agent := NewAgent("test")
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	session.activity = NewAgentActivity(agent, session)
+	current := NewSpeechHandle(true, DefaultInputDetails())
+	session.activity.currentSpeech = current
+
+	if got := session.CurrentSpeech(); got != current {
+		t.Fatalf("CurrentSpeech = %#v, want current activity speech %#v", got, current)
+	}
+}
+
 func TestAgentSessionInterruptRequiresRunningActivity(t *testing.T) {
 	agent := NewAgent("test")
 	session := NewAgentSession(agent, nil, AgentSessionOptions{})

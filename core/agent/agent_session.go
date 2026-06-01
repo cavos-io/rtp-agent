@@ -123,6 +123,19 @@ func (s *AgentSession) OnAudioFrame(ctx context.Context, frame *model.AudioFrame
 	}
 }
 
+func (s *AgentSession) CurrentSpeech() *SpeechHandle {
+	s.mu.Lock()
+	activity := s.activity
+	s.mu.Unlock()
+	if activity == nil {
+		return nil
+	}
+
+	activity.queueMu.Lock()
+	defer activity.queueMu.Unlock()
+	return activity.currentSpeech
+}
+
 type AgentStateChangedEvent struct {
 	OldState  AgentState
 	NewState  AgentState
