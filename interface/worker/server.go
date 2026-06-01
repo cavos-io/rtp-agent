@@ -357,19 +357,25 @@ func (s *AgentServer) launchReloadedJob(ctx context.Context, jobCtx *JobContext)
 
 	go func() {
 		status := livekit.JobStatus_JS_SUCCESS
+		defer func() {
+			if recovered := recover(); recovered != nil {
+				logger.Logger.Errorw("Reloaded job entrypoint panicked", fmt.Errorf("%v", recovered), "jobId", jobCtx.JobID())
+				status = livekit.JobStatus_JS_FAILED
+			}
+			select {
+			case <-ctx.Done():
+				logger.Logger.Debugw("reload job status skipped after context cancellation", "jobId", jobCtx.JobID())
+			default:
+				if err := s.sendWorkerMessage(jobStatusMessage(jobCtx.JobID(), status)); err != nil {
+					logger.Logger.Errorw("failed to update reloaded job status", err, "jobId", jobCtx.JobID())
+				}
+			}
+			s.finishJob(jobCtx)
+		}()
 		if err := s.entrypointFnc(jobCtx); err != nil {
 			logger.Logger.Errorw("Reloaded job entrypoint failed", err, "jobId", jobCtx.JobID())
 			status = livekit.JobStatus_JS_FAILED
 		}
-		select {
-		case <-ctx.Done():
-			logger.Logger.Debugw("reload job status skipped after context cancellation", "jobId", jobCtx.JobID())
-		default:
-			if err := s.sendWorkerMessage(jobStatusMessage(jobCtx.JobID(), status)); err != nil {
-				logger.Logger.Errorw("failed to update reloaded job status", err, "jobId", jobCtx.JobID())
-			}
-		}
-		s.finishJob(jobCtx)
 	}()
 }
 

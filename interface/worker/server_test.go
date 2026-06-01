@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -1503,6 +1504,30 @@ func TestAgentServerHandleReloadIPCMessageWritesResponse(t *testing.T) {
 	}
 	if resp.Jobs[0].Token != "active-token" {
 		t.Fatalf("Jobs[0].Token = %q, want active-token", resp.Jobs[0].Token)
+	}
+}
+
+func TestReloadedJobEntrypointPanicDoesNotCrashProcess(t *testing.T) {
+	if os.Getenv("RTP_AGENT_RELOADED_PANIC_HELPER") == "1" {
+		server := NewAgentServer(WorkerOptions{})
+		server.entrypointFnc = func(*JobContext) error {
+			panic("reloaded entrypoint panic")
+		}
+		jobCtx := NewJobContext(&livekit.Job{Id: "job-reloaded-panic", Room: &livekit.Room{Name: "room-a"}}, "", "", "")
+		server.mu.Lock()
+		server.activeJobs[jobCtx.Job.Id] = jobCtx
+		server.mu.Unlock()
+
+		server.launchReloadedJob(context.Background(), jobCtx)
+		time.Sleep(50 * time.Millisecond)
+		return
+	}
+
+	cmd := exec.Command(os.Args[0], "-test.run=^TestReloadedJobEntrypointPanicDoesNotCrashProcess$")
+	cmd.Env = append(os.Environ(), "RTP_AGENT_RELOADED_PANIC_HELPER=1")
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("reloaded job panic helper exited with %v\n%s", err, output)
 	}
 }
 
