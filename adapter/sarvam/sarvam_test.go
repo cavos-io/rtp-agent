@@ -3,14 +3,17 @@ package sarvam
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"io"
 	"mime/multipart"
 	"net/http"
+	"net/url"
 	"strings"
 	"testing"
 
 	"github.com/cavos-io/rtp-agent/core/stt"
+	"github.com/cavos-io/rtp-agent/core/tts"
 )
 
 func TestSarvamSTTDefaultsMatchReference(t *testing.T) {
@@ -125,6 +128,125 @@ func TestSarvamSTTSpeechEventMapsReferenceMetadata(t *testing.T) {
 	}
 }
 
+func TestSarvamSTTWebsocketURLAndHeadersMatchReference(t *testing.T) {
+	provider := NewSarvamSTT("test-key",
+		WithSarvamSTTStreamingURL("wss://sarvam.example/stt/ws"),
+		WithSarvamSTTModel("saaras:v3"),
+		WithSarvamSTTLanguage("ta-IN"),
+		WithSarvamSTTMode("translate"),
+		WithSarvamSTTSampleRate(8000),
+	)
+
+	wsURL := buildSarvamSTTWebsocketURL(provider, "")
+	if wsURL.Scheme != "wss" || wsURL.Host != "sarvam.example" || wsURL.Path != "/stt/ws" {
+		t.Fatalf("websocket URL = %q, want configured websocket endpoint", wsURL.String())
+	}
+	query := wsURL.Query()
+	assertSarvamQuery(t, query, "language-code", "ta-IN")
+	assertSarvamQuery(t, query, "model", "saaras:v3")
+	assertSarvamQuery(t, query, "vad_signals", "true")
+	assertSarvamQuery(t, query, "sample_rate", "8000")
+	assertSarvamQuery(t, query, "mode", "translate")
+
+	overrideURL := buildSarvamSTTWebsocketURL(provider, "hi-IN")
+	assertSarvamQuery(t, overrideURL.Query(), "language-code", "hi-IN")
+
+	headers := buildSarvamSTTWebsocketHeaders(provider)
+	if headers.Get("api-subscription-key") != "test-key" {
+		t.Fatalf("api-subscription-key = %q, want test-key", headers.Get("api-subscription-key"))
+	}
+	if headers.Get("User-Agent") == "" {
+		t.Fatalf("headers = %+v, want User-Agent", headers)
+	}
+}
+
+func TestSarvamSTTStreamMessagesMatchReference(t *testing.T) {
+	provider := NewSarvamSTT("test-key",
+		WithSarvamSTTModel("saaras:v3"),
+		WithSarvamSTTPrompt("names: Kavya"),
+		WithSarvamSTTSampleRate(8000),
+	)
+
+	configPayload, err := buildSarvamSTTConfigMessage(provider)
+	if err != nil {
+		t.Fatalf("build config: %v", err)
+	}
+	var config map[string]any
+	if err := json.Unmarshal(configPayload, &config); err != nil {
+		t.Fatalf("decode config: %v", err)
+	}
+	assertSarvamJSONField(t, config, "type", "config")
+	assertSarvamJSONField(t, config, "prompt", "names: Kavya")
+
+	audioPayload, err := buildSarvamSTTAudioMessage([]byte{0x01, 0x02}, "audio/wav", 8000)
+	if err != nil {
+		t.Fatalf("build audio: %v", err)
+	}
+	var audio map[string]any
+	if err := json.Unmarshal(audioPayload, &audio); err != nil {
+		t.Fatalf("decode audio: %v", err)
+	}
+	audioData := audio["audio"].(map[string]any)
+	assertSarvamJSONField(t, audioData, "data", base64.StdEncoding.EncodeToString([]byte{0x01, 0x02}))
+	assertSarvamJSONField(t, audioData, "encoding", "audio/wav")
+	assertSarvamJSONField(t, audioData, "sample_rate", float64(8000))
+
+	endPayload, err := buildSarvamSTTEndOfStreamMessage("audio/wav", 8000)
+	if err != nil {
+		t.Fatalf("build end of stream: %v", err)
+	}
+	var end map[string]any
+	if err := json.Unmarshal(endPayload, &end); err != nil {
+		t.Fatalf("decode end of stream: %v", err)
+	}
+	assertSarvamJSONField(t, end, "type", "end_of_stream")
+	endAudio := end["audio"].(map[string]any)
+	assertSarvamJSONField(t, endAudio, "data", "")
+	assertSarvamJSONField(t, endAudio, "encoding", "audio/wav")
+	assertSarvamJSONField(t, endAudio, "sample_rate", float64(8000))
+}
+
+func TestSarvamSTTStreamEventsMapReferenceMessages(t *testing.T) {
+	events, err := sarvamSTTEventsFromStreamMessage([]byte(`{"type":"data","data":{"transcript":"hello","language_code":"hi-IN","request_id":"req-1","speech_start":0.1,"speech_end":0.7,"language_probability":0.91,"metrics":{"audio_duration":1.2}}}`))
+	if err != nil {
+		t.Fatalf("stream event: %v", err)
+	}
+	if len(events) != 2 {
+		t.Fatalf("events = %d, want usage and final transcript", len(events))
+	}
+	if events[0].Type != stt.SpeechEventRecognitionUsage || events[0].RecognitionUsage.AudioDuration != 1.2 {
+		t.Fatalf("usage event = %+v, want audio duration", events[0])
+	}
+	if events[1].Type != stt.SpeechEventFinalTranscript || events[1].RequestID != "req-1" {
+		t.Fatalf("transcript event = %+v, want final transcript", events[1])
+	}
+	alt := events[1].Alternatives[0]
+	if alt.Text != "hello" || alt.Language != "hi-IN" || alt.StartTime != 0.1 || alt.EndTime != 0.7 || alt.Confidence != 0.91 {
+		t.Fatalf("alternative = %+v, want reference transcript data", alt)
+	}
+
+	start, err := sarvamSTTEventsFromStreamMessage([]byte(`{"type":"events","data":{"signal_type":"START_SPEECH"}}`))
+	if err != nil {
+		t.Fatalf("start event: %v", err)
+	}
+	if len(start) != 1 || start[0].Type != stt.SpeechEventStartOfSpeech {
+		t.Fatalf("start events = %+v, want start of speech", start)
+	}
+
+	end, err := sarvamSTTEventsFromStreamMessage([]byte(`{"type":"event","data":{"signal_type":"END_SPEECH"}}`))
+	if err != nil {
+		t.Fatalf("end event: %v", err)
+	}
+	if len(end) != 1 || end[0].Type != stt.SpeechEventEndOfSpeech {
+		t.Fatalf("end events = %+v, want end of speech", end)
+	}
+
+	_, err = sarvamSTTEventsFromStreamMessage([]byte(`{"type":"error","data":{"message":"bad request","code":"400"}}`))
+	if err == nil || !strings.Contains(err.Error(), "bad request") {
+		t.Fatalf("error = %v, want provider error", err)
+	}
+}
+
 func TestSarvamTTSDefaultsMatchReference(t *testing.T) {
 	provider := NewSarvamTTS("test-key", "")
 
@@ -188,6 +310,117 @@ func TestBuildSarvamTTSRequestMatchesReferencePayload(t *testing.T) {
 	}
 }
 
+func TestSarvamTTSWebsocketURLAndHeadersMatchReference(t *testing.T) {
+	provider := NewSarvamTTS("test-key", "",
+		WithSarvamTTSWSURL("wss://sarvam.example/tts/ws"),
+		WithSarvamTTSModel("bulbul:v3-beta"),
+	)
+
+	wsURL := buildSarvamTTSWebsocketURL(provider)
+	if wsURL.Scheme != "wss" || wsURL.Host != "sarvam.example" || wsURL.Path != "/tts/ws" {
+		t.Fatalf("websocket URL = %q, want configured websocket endpoint", wsURL.String())
+	}
+	query := wsURL.Query()
+	if query.Get("model") != "bulbul:v3-beta" {
+		t.Fatalf("model query = %q, want bulbul:v3-beta", query.Get("model"))
+	}
+	if query.Get("send_completion_event") != "true" {
+		t.Fatalf("send_completion_event query = %q, want true", query.Get("send_completion_event"))
+	}
+
+	headers := buildSarvamTTSWebsocketHeaders(provider)
+	if headers.Get("api-subscription-key") != "test-key" {
+		t.Fatalf("api-subscription-key = %q, want test-key", headers.Get("api-subscription-key"))
+	}
+	if headers.Get("User-Agent") == "" || headers.Get("Accept") != "*/*" {
+		t.Fatalf("headers = %+v, want reference websocket headers", headers)
+	}
+}
+
+func TestSarvamTTSStreamMessagesMatchReference(t *testing.T) {
+	provider := NewSarvamTTS("test-key", "",
+		WithSarvamTTSModel("bulbul:v3"),
+		WithSarvamTTSVoice("ritu"),
+		WithSarvamTTSLanguage("hi-IN"),
+		WithSarvamTTSSampleRate(24000),
+		WithSarvamTTSTemperature(0.7),
+	)
+
+	configPayload, err := buildSarvamTTSConfigMessage(provider)
+	if err != nil {
+		t.Fatalf("build config: %v", err)
+	}
+	var config map[string]any
+	if err := json.Unmarshal(configPayload, &config); err != nil {
+		t.Fatalf("decode config: %v", err)
+	}
+	if config["type"] != "config" {
+		t.Fatalf("config type = %#v, want config", config["type"])
+	}
+	data := config["data"].(map[string]any)
+	assertSarvamJSONField(t, data, "target_language_code", "hi-IN")
+	assertSarvamJSONField(t, data, "speaker", "ritu")
+	assertSarvamJSONField(t, data, "model", "bulbul:v3")
+	assertSarvamJSONField(t, data, "output_audio_codec", "mp3")
+	assertSarvamJSONField(t, data, "temperature", float64(0.7))
+	assertSarvamJSONField(t, data, "output_audio_bitrate", "128k")
+	if data["speech_sample_rate"] != float64(24000) {
+		t.Fatalf("speech_sample_rate = %#v, want 24000", data["speech_sample_rate"])
+	}
+
+	textPayload, err := buildSarvamTTSTextMessage("hello")
+	if err != nil {
+		t.Fatalf("build text: %v", err)
+	}
+	var text map[string]any
+	if err := json.Unmarshal(textPayload, &text); err != nil {
+		t.Fatalf("decode text: %v", err)
+	}
+	if text["type"] != "text" || text["data"].(map[string]any)["text"] != "hello" {
+		t.Fatalf("text message = %+v, want reference text packet", text)
+	}
+
+	flushPayload, err := buildSarvamTTSFlushMessage()
+	if err != nil {
+		t.Fatalf("build flush: %v", err)
+	}
+	var flush map[string]any
+	if err := json.Unmarshal(flushPayload, &flush); err != nil {
+		t.Fatalf("decode flush: %v", err)
+	}
+	if flush["type"] != "flush" {
+		t.Fatalf("flush type = %#v, want flush", flush["type"])
+	}
+}
+
+func TestSarvamTTSAudioFromStreamMessage(t *testing.T) {
+	audio, done, err := sarvamTTSAudioFromStreamMessage([]byte(`{"type":"audio","data":{"audio":"AQIDBA==","request_id":"req-1"}}`), 22050)
+	if err != nil {
+		t.Fatalf("audio from stream message: %v", err)
+	}
+	if done {
+		t.Fatal("done = true for audio message")
+	}
+	if audio == nil || string(audio.Frame.Data) != string([]byte{1, 2, 3, 4}) {
+		t.Fatalf("audio = %+v, want decoded frame", audio)
+	}
+	if audio.RequestID != "req-1" || audio.Frame.SampleRate != 22050 || audio.Frame.NumChannels != 1 {
+		t.Fatalf("audio = %+v, want request id and 22050 Hz mono", audio)
+	}
+
+	finished, done, err := sarvamTTSAudioFromStreamMessage([]byte(`{"type":"event","data":{"event_type":"final","request_id":"req-2"}}`), 22050)
+	if err != nil {
+		t.Fatalf("final event: %v", err)
+	}
+	if finished != nil || !done {
+		t.Fatalf("finished=%+v done=%v, want final event to finish stream", finished, done)
+	}
+}
+
+func TestSarvamTTSImplementsStreamingInterface(t *testing.T) {
+	var _ tts.TTS = NewSarvamTTS("test-key", "")
+}
+
 func readMultipartFields(t *testing.T, req *http.Request) map[string]string {
 	t.Helper()
 	body, err := io.ReadAll(req.Body)
@@ -220,5 +453,12 @@ func assertSarvamJSONField(t *testing.T, payload map[string]any, key string, wan
 	t.Helper()
 	if got := payload[key]; got != want {
 		t.Fatalf("%s = %#v, want %#v", key, got, want)
+	}
+}
+
+func assertSarvamQuery(t *testing.T, query url.Values, key string, want string) {
+	t.Helper()
+	if got := query.Get(key); got != want {
+		t.Fatalf("%s = %q, want %q in query %s", key, got, want, query.Encode())
 	}
 }
