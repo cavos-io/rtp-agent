@@ -58,6 +58,22 @@ func TestFallbackAdapterPrewarmsPrimaryProviderOnly(t *testing.T) {
 	}
 }
 
+func TestFallbackAdapterCloseClosesAllProviders(t *testing.T) {
+	primary := &metadataTTS{label: "primary", sampleRate: 24000, numChannels: 1}
+	secondary := &metadataTTS{label: "secondary", sampleRate: 24000, numChannels: 1}
+	adapter := NewFallbackAdapter([]TTS{primary, secondary})
+
+	if err := adapter.Close(); err != nil {
+		t.Fatalf("Close error = %v", err)
+	}
+	if !primary.closed {
+		t.Fatal("Close did not close primary provider")
+	}
+	if !secondary.closed {
+		t.Fatal("Close did not close secondary provider")
+	}
+}
+
 func TestFallbackAdapterEmitsAvailabilityChanges(t *testing.T) {
 	streamErr := errors.New("primary unavailable")
 	primary := &metadataTTS{
@@ -2765,6 +2781,7 @@ type metadataTTS struct {
 	prewarmCalls    int
 	synthesizeCalls int
 	streamCalls     int
+	closed          bool
 }
 
 type notifyStreamTTS struct {
@@ -2798,6 +2815,11 @@ func (m *metadataTTS) NumChannels() int {
 
 func (m *metadataTTS) Prewarm() {
 	m.prewarmCalls++
+}
+
+func (m *metadataTTS) Close() error {
+	m.closed = true
+	return nil
 }
 
 func (m *metadataTTS) Synthesize(context.Context, string) (ChunkedStream, error) {

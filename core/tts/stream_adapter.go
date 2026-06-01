@@ -42,6 +42,10 @@ func (a *StreamAdapter) Prewarm() {
 	Prewarm(a.tts)
 }
 
+func (a *StreamAdapter) Close() error {
+	return Close(a.tts)
+}
+
 func (a *StreamAdapter) OnMetricsCollected(handler TTSMetricsHandler) func() {
 	unsubscribes := []func(){a.MetricsEmitter.OnMetricsCollected(handler)}
 	if collector, ok := a.tts.(metricsCollectorTTS); ok {

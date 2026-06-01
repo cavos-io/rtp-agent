@@ -27,6 +27,25 @@ func TestTTSPrewarmDefaultNoop(t *testing.T) {
 	Prewarm(provider)
 }
 
+func TestTTSCloseDefaultNoop(t *testing.T) {
+	provider := &metadataDefaultsTTS{}
+
+	if err := Close(provider); err != nil {
+		t.Fatalf("Close error = %v", err)
+	}
+}
+
+func TestTTSCloseDelegatesWhenSupported(t *testing.T) {
+	provider := &closableMetadataTTS{}
+
+	if err := Close(provider); err != nil {
+		t.Fatalf("Close error = %v", err)
+	}
+	if !provider.closed {
+		t.Fatal("Close did not delegate to provider")
+	}
+}
+
 func TestTTSMetricsEmitterEmitsToHandlers(t *testing.T) {
 	var emitter MetricsEmitter
 	metrics := &telemetry.TTSMetrics{Label: "tts", RequestID: "req"}
@@ -216,6 +235,16 @@ func (m *metadataDefaultsTTS) Synthesize(context.Context, string) (ChunkedStream
 
 func (m *metadataDefaultsTTS) Stream(context.Context) (SynthesizeStream, error) {
 	return nil, nil
+}
+
+type closableMetadataTTS struct {
+	metadataDefaultsTTS
+	closed bool
+}
+
+func (m *closableMetadataTTS) Close() error {
+	m.closed = true
+	return nil
 }
 
 type collectChunkedStream struct {

@@ -115,6 +115,16 @@ func (f *FallbackAdapter) Prewarm() {
 	Prewarm(f.ttss[0])
 }
 
+func (f *FallbackAdapter) Close() error {
+	var errs []error
+	for _, tts := range f.ttss {
+		if err := Close(tts); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	return errors.Join(errs...)
+}
+
 func (f *FallbackAdapter) OnAvailabilityChanged(handler AvailabilityChangedHandler) func() {
 	if handler == nil {
 		return func() {}
