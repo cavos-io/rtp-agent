@@ -386,6 +386,7 @@ func (s *fallbackChunkedStream) monitorStream() {
 		ev, err := stream.Next()
 		if err != nil {
 			if errors.Is(err, io.EOF) || audioSent {
+				_ = stream.Close()
 				if errors.Is(err, io.EOF) && !audioSent && strings.TrimSpace(s.text) != "" {
 					s.errCh <- fmt.Errorf("no audio frames were pushed for text: %s", s.text)
 					return
@@ -596,6 +597,7 @@ func (s *fallbackSynthesizeStream) monitorStream() {
 		ev, err := stream.Next()
 		if err != nil {
 			if errors.Is(err, io.EOF) || audioSent {
+				_ = stream.Close()
 				if errors.Is(err, io.EOF) && !audioSent && strings.TrimSpace(s.pushedText()) != "" {
 					s.errCh <- fmt.Errorf("no audio frames were pushed for text: %s", s.pushedText())
 					return

@@ -327,6 +327,9 @@ func TestFallbackSynthesizeStreamErrorsWhenNonEmptyTextProducesNoAudio(t *testin
 }
 
 func TestFallbackChunkedStreamReturnsEOFWhenProviderCompletes(t *testing.T) {
+	firstStream := &metadataChunkedStream{
+		events: []*SynthesizedAudio{{Frame: &model.AudioFrame{Data: []byte{1}}}},
+	}
 	second := &metadataTTS{
 		label:       "second",
 		sampleRate:  24000,
@@ -340,9 +343,7 @@ func TestFallbackChunkedStreamReturnsEOFWhenProviderCompletes(t *testing.T) {
 			label:       "first",
 			sampleRate:  24000,
 			numChannels: 1,
-			chunked: &metadataChunkedStream{
-				events: []*SynthesizedAudio{{Frame: &model.AudioFrame{Data: []byte{1}}}},
-			},
+			chunked:     firstStream,
 		},
 		second,
 	})
@@ -367,6 +368,9 @@ func TestFallbackChunkedStreamReturnsEOFWhenProviderCompletes(t *testing.T) {
 	}
 	if second.synthesizeCalls != 0 {
 		t.Fatalf("fallback synthesize calls = %d, want 0", second.synthesizeCalls)
+	}
+	if !firstStream.closed {
+		t.Fatal("provider chunked stream closed = false, want true after EOF")
 	}
 }
 
@@ -538,6 +542,9 @@ func TestFallbackChunkedStreamRestoresPrimaryAfterRecovery(t *testing.T) {
 }
 
 func TestFallbackSynthesizeStreamReturnsEOFWhenProviderCompletes(t *testing.T) {
+	firstStream := &metadataSynthesizeStream{
+		events: []*SynthesizedAudio{{Frame: &model.AudioFrame{Data: []byte{1}}}},
+	}
 	second := &metadataTTS{
 		label:        "second",
 		sampleRate:   24000,
@@ -553,9 +560,7 @@ func TestFallbackSynthesizeStreamReturnsEOFWhenProviderCompletes(t *testing.T) {
 			sampleRate:   24000,
 			numChannels:  1,
 			capabilities: TTSCapabilities{Streaming: true},
-			stream: &metadataSynthesizeStream{
-				events: []*SynthesizedAudio{{Frame: &model.AudioFrame{Data: []byte{1}}}},
-			},
+			stream:       firstStream,
 		},
 		second,
 	})
@@ -583,6 +588,9 @@ func TestFallbackSynthesizeStreamReturnsEOFWhenProviderCompletes(t *testing.T) {
 	}
 	if second.streamCalls != 0 {
 		t.Fatalf("fallback stream calls = %d, want 0", second.streamCalls)
+	}
+	if !firstStream.closed {
+		t.Fatal("provider synthesize stream closed = false, want true after EOF")
 	}
 }
 
@@ -1050,6 +1058,7 @@ type metadataChunkedStream struct {
 	events []*SynthesizedAudio
 	index  int
 	err    error
+	closed bool
 }
 
 func (m *metadataChunkedStream) Next() (*SynthesizedAudio, error) {
@@ -1065,6 +1074,7 @@ func (m *metadataChunkedStream) Next() (*SynthesizedAudio, error) {
 }
 
 func (m *metadataChunkedStream) Close() error {
+	m.closed = true
 	return nil
 }
 
@@ -1073,6 +1083,7 @@ type metadataSynthesizeStream struct {
 	index  int
 	err    error
 	calls  []string
+	closed bool
 }
 
 func (m *metadataSynthesizeStream) PushText(text string) error {
@@ -1086,6 +1097,7 @@ func (m *metadataSynthesizeStream) Flush() error {
 }
 
 func (m *metadataSynthesizeStream) Close() error {
+	m.closed = true
 	return nil
 }
 
