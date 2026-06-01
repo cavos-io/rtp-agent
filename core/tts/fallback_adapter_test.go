@@ -410,7 +410,7 @@ func TestFallbackAdapterEmitsErrorOnChunkedFailure(t *testing.T) {
 	adapter := NewFallbackAdapter([]TTS{
 		&metadataTTS{label: "primary", sampleRate: 24000, numChannels: 1, chunked: &metadataChunkedStream{err: providerErr}},
 	})
-	errCh := make(chan TTSError, 1)
+	errCh := make(chan TTSError, 4)
 	adapter.OnError(func(err TTSError) {
 		errCh <- err
 	})
@@ -427,6 +427,50 @@ func TestFallbackAdapterEmitsErrorOnChunkedFailure(t *testing.T) {
 	}
 	wantErr := err
 
+	got := receiveTerminalTTSError(t, errCh)
+	if got.Type != TTSErrorType {
+		t.Fatalf("error Type = %q, want %q", got.Type, TTSErrorType)
+	}
+	if got.Label != adapter.Label() {
+		t.Fatalf("error Label = %q, want %q", got.Label, adapter.Label())
+	}
+	if !errors.Is(got.Err, wantErr) {
+		t.Fatalf("emitted error = %v, want %v", got.Err, wantErr)
+	}
+}
+
+func TestFallbackAdapterEmitsRecoverableErrorOnChunkedRetry(t *testing.T) {
+	providerErr := errors.New("retryable provider failure")
+	adapter := NewFallbackAdapterWithOptions([]TTS{
+		&metadataTTS{
+			label:       "primary",
+			sampleRate:  24000,
+			numChannels: 1,
+			chunkedStreams: []ChunkedStream{
+				&metadataChunkedStream{err: providerErr},
+				&metadataChunkedStream{events: []*SynthesizedAudio{{Frame: &model.AudioFrame{Data: []byte("retry success")}}}},
+			},
+		},
+	}, FallbackAdapterOptions{MaxRetryPerTTS: 1})
+	errCh := make(chan TTSError, 4)
+	adapter.OnError(func(err TTSError) {
+		errCh <- err
+	})
+
+	stream, err := adapter.Synthesize(context.Background(), "hello")
+	if err != nil {
+		t.Fatalf("Synthesize returned error: %v", err)
+	}
+	defer stream.Close()
+
+	audio, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next returned error: %v", err)
+	}
+	if got := string(audio.Frame.Data); got != "retry success" {
+		t.Fatalf("audio data = %q, want retry success", got)
+	}
+
 	select {
 	case got := <-errCh:
 		if got.Type != TTSErrorType {
@@ -435,14 +479,14 @@ func TestFallbackAdapterEmitsErrorOnChunkedFailure(t *testing.T) {
 		if got.Label != adapter.Label() {
 			t.Fatalf("error Label = %q, want %q", got.Label, adapter.Label())
 		}
-		if !errors.Is(got.Err, wantErr) {
-			t.Fatalf("emitted error = %v, want %v", got.Err, wantErr)
+		if !errors.Is(got.Err, providerErr) {
+			t.Fatalf("emitted error = %v, want %v", got.Err, providerErr)
 		}
-		if got.Recoverable {
-			t.Fatal("Recoverable = true, want false")
+		if !got.Recoverable {
+			t.Fatal("Recoverable = false, want true")
 		}
 	default:
-		t.Fatal("fallback adapter did not emit chunked TTS error")
+		t.Fatal("fallback adapter did not emit recoverable chunked TTS error")
 	}
 }
 
@@ -457,7 +501,7 @@ func TestFallbackAdapterEmitsErrorOnStreamFailure(t *testing.T) {
 			stream:       &metadataSynthesizeStream{err: providerErr},
 		},
 	})
-	errCh := make(chan TTSError, 1)
+	errCh := make(chan TTSError, 4)
 	adapter.OnError(func(err TTSError) {
 		errCh <- err
 	})
@@ -480,19 +524,71 @@ func TestFallbackAdapterEmitsErrorOnStreamFailure(t *testing.T) {
 	}
 	wantErr := err
 
+	got := receiveTerminalTTSError(t, errCh)
+	if got.Label != adapter.Label() {
+		t.Fatalf("error Label = %q, want %q", got.Label, adapter.Label())
+	}
+	if !errors.Is(got.Err, wantErr) {
+		t.Fatalf("emitted error = %v, want %v", got.Err, wantErr)
+	}
+}
+
+func TestFallbackAdapterEmitsRecoverableErrorOnStreamRetry(t *testing.T) {
+	providerErr := errors.New("retryable stream failure")
+	adapter := NewFallbackAdapterWithOptions([]TTS{
+		&metadataTTS{
+			label:        "primary",
+			sampleRate:   24000,
+			numChannels:  1,
+			capabilities: TTSCapabilities{Streaming: true},
+			streams: []SynthesizeStream{
+				&metadataSynthesizeStream{err: providerErr},
+				&metadataSynthesizeStream{events: []*SynthesizedAudio{{Frame: &model.AudioFrame{Data: []byte("retry success")}}}},
+			},
+		},
+	}, FallbackAdapterOptions{MaxRetryPerTTS: 1})
+	errCh := make(chan TTSError, 4)
+	adapter.OnError(func(err TTSError) {
+		errCh <- err
+	})
+
+	stream, err := adapter.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+	defer stream.Close()
+
+	if err := stream.PushText("hello"); err != nil {
+		t.Fatalf("PushText returned error: %v", err)
+	}
+	if err := EndSynthesizeStreamInput(stream); err != nil {
+		t.Fatalf("EndSynthesizeStreamInput returned error: %v", err)
+	}
+
+	audio, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next returned error: %v", err)
+	}
+	if got := string(audio.Frame.Data); got != "retry success" {
+		t.Fatalf("audio data = %q, want retry success", got)
+	}
+
 	select {
 	case got := <-errCh:
+		if got.Type != TTSErrorType {
+			t.Fatalf("error Type = %q, want %q", got.Type, TTSErrorType)
+		}
 		if got.Label != adapter.Label() {
 			t.Fatalf("error Label = %q, want %q", got.Label, adapter.Label())
 		}
-		if !errors.Is(got.Err, wantErr) {
-			t.Fatalf("emitted error = %v, want %v", got.Err, wantErr)
+		if !errors.Is(got.Err, providerErr) {
+			t.Fatalf("emitted error = %v, want %v", got.Err, providerErr)
 		}
-		if got.Recoverable {
-			t.Fatal("Recoverable = true, want false")
+		if !got.Recoverable {
+			t.Fatal("Recoverable = false, want true")
 		}
 	default:
-		t.Fatal("fallback adapter did not emit streamed TTS error")
+		t.Fatal("fallback adapter did not emit recoverable streamed TTS error")
 	}
 }
 
@@ -2835,6 +2931,22 @@ func receiveTTSErrorLabel(t *testing.T, errs <-chan string) string {
 	case <-time.After(200 * time.Millisecond):
 		t.Fatal("timed out waiting for TTS error")
 		return ""
+	}
+}
+
+func receiveTerminalTTSError(t *testing.T, errs <-chan TTSError) TTSError {
+	t.Helper()
+	timeout := time.After(200 * time.Millisecond)
+	for {
+		select {
+		case err := <-errs:
+			if !err.Recoverable {
+				return err
+			}
+		case <-timeout:
+			t.Fatal("timed out waiting for terminal TTS error")
+			return TTSError{}
+		}
 	}
 }
 

@@ -597,12 +597,14 @@ func (s *fallbackChunkedStream) tryStartStream(index int) error {
 			}
 			logger.Logger.Errorw("Failed to start TTS synthesize stream", err, "tts", tts.Label())
 			lastErr = err
-			if !s.canRetryTTS(i) {
-				s.adapter.markUnavailable(i)
-				s.adapter.tryRecoverChunked(i, s.text)
-				break
+			if s.canRetryTTS(i) {
+				emitTTSError(s.adapter, err, true)
+				s.retries[i]++
+				continue
 			}
-			s.retries[i]++
+			s.adapter.markUnavailable(i)
+			s.adapter.tryRecoverChunked(i, s.text)
+			break
 		}
 	}
 
@@ -668,6 +670,7 @@ func (s *fallbackChunkedStream) monitorStream() {
 
 			nextIndex := s.activeIndex + 1
 			if s.canRetryTTS(s.activeIndex) {
+				emitTTSError(s.adapter, err, true)
 				s.retries[s.activeIndex]++
 				nextIndex = s.activeIndex
 			} else {
@@ -716,6 +719,7 @@ func (s *fallbackChunkedStream) monitorStream() {
 
 			nextIndex := s.activeIndex + 1
 			if s.canRetryTTS(s.activeIndex) {
+				emitTTSError(s.adapter, err, true)
 				s.retries[s.activeIndex]++
 				nextIndex = s.activeIndex
 			} else {
@@ -957,6 +961,7 @@ func (s *fallbackSynthesizeStream) tryStartStream(index int) error {
 				logger.Logger.Errorw("Failed to start TTS stream", err, "tts", tts.Label())
 				lastErr = err
 				if s.canRetryTTS(i) {
+					emitTTSError(s.adapter, err, true)
 					s.retries[i]++
 					continue
 				}
@@ -969,6 +974,7 @@ func (s *fallbackSynthesizeStream) tryStartStream(index int) error {
 				stream.Close()
 				lastErr = err
 				if s.canRetryTTS(i) {
+					emitTTSError(s.adapter, err, true)
 					s.retries[i]++
 					continue
 				}
@@ -1067,6 +1073,7 @@ func (s *fallbackSynthesizeStream) monitorStream() {
 
 			nextIndex := s.activeIndex + 1
 			if s.canRetryTTS(s.activeIndex) {
+				emitTTSError(s.adapter, err, true)
 				s.retries[s.activeIndex]++
 				nextIndex = s.activeIndex
 			} else {
@@ -1115,6 +1122,7 @@ func (s *fallbackSynthesizeStream) monitorStream() {
 
 			nextIndex := s.activeIndex + 1
 			if s.canRetryTTS(s.activeIndex) {
+				emitTTSError(s.adapter, err, true)
 				s.retries[s.activeIndex]++
 				nextIndex = s.activeIndex
 			} else {
