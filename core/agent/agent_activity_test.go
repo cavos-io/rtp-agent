@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/cavos-io/rtp-agent/core/llm"
+	"github.com/cavos-io/rtp-agent/core/stt"
 )
 
 func TestAgentActivityScheduleSpeechProcessesHighestPriorityFirst(t *testing.T) {
@@ -312,6 +313,60 @@ func TestAgentActivityUsesSessionMaxEndpointingDelay(t *testing.T) {
 		}
 	case <-time.After(100 * time.Millisecond):
 		t.Fatal("OnUserTurnCompleted was not called after session max endpointing delay")
+	}
+}
+
+func TestAgentSessionUpdateOptionsAffectsActiveEndpointingDelay(t *testing.T) {
+	agent := &turnCompletedAgent{Agent: NewAgent("test"), turns: make(chan *llm.ChatMessage, 1)}
+	agent.TurnDetection = TurnDetectionModeSTT
+	session := NewAgentSession(agent, nil, AgentSessionOptions{MinEndpointingDelay: 1})
+	activity := NewAgentActivity(agent, session)
+	defer activity.Stop()
+
+	minDelay := 0.01
+	session.UpdateOptions(AgentSessionUpdateOptions{MinEndpointingDelay: &minDelay})
+
+	activity.runEOUDetection(EndOfTurnInfo{NewTranscript: "updated delay"})
+
+	select {
+	case msg := <-agent.turns:
+		if msg.TextContent() != "updated delay" {
+			t.Fatalf("turn message text = %q, want updated delay", msg.TextContent())
+		}
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("OnUserTurnCompleted was not called after updated session min endpointing delay")
+	}
+}
+
+func TestAgentSessionUpdateOptionsAffectsActiveTurnDetection(t *testing.T) {
+	agent := &turnCompletedAgent{Agent: NewAgent("test"), turns: make(chan *llm.ChatMessage, 1)}
+	session := NewAgentSession(agent, nil, AgentSessionOptions{MinEndpointingDelay: 0.01})
+	activity := NewAgentActivity(agent, session)
+	defer activity.Stop()
+
+	activity.OnFinalTranscript(&stt.SpeechEvent{
+		Alternatives: []stt.SpeechData{{Text: "ignored before update"}},
+	})
+	select {
+	case msg := <-agent.turns:
+		t.Fatalf("OnUserTurnCompleted called before session turn detection update with %q", msg.TextContent())
+	case <-time.After(20 * time.Millisecond):
+	}
+
+	turnDetection := TurnDetectionModeSTT
+	session.UpdateOptions(AgentSessionUpdateOptions{TurnDetection: &turnDetection})
+
+	activity.OnFinalTranscript(&stt.SpeechEvent{
+		Alternatives: []stt.SpeechData{{Text: "after update", Confidence: 0.9}},
+	})
+
+	select {
+	case msg := <-agent.turns:
+		if msg.TextContent() != "after update" {
+			t.Fatalf("turn message text = %q, want after update", msg.TextContent())
+		}
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("OnUserTurnCompleted was not called after session turn detection update")
 	}
 }
 

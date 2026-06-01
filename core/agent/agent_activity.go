@@ -447,7 +447,7 @@ func (a *AgentActivity) OnEndOfSpeech(ev *vad.VADEvent) {
 	a.speaking = false
 	logger.Logger.Infow("End of speech detected")
 
-	if a.Agent.TurnDetection == TurnDetectionModeVAD {
+	if a.turnDetectionMode() == TurnDetectionModeVAD {
 		// Trigger EOU detection
 		a.runEOUDetection(EndOfTurnInfo{})
 	}
@@ -455,7 +455,7 @@ func (a *AgentActivity) OnEndOfSpeech(ev *vad.VADEvent) {
 
 func (a *AgentActivity) OnFinalTranscript(ev *stt.SpeechEvent) {
 	a.sttEOSReceived = true
-	if a.Agent.TurnDetection == TurnDetectionModeSTT {
+	if a.turnDetectionMode() == TurnDetectionModeSTT {
 		transcript := ""
 		confidence := 0.0
 		if len(ev.Alternatives) > 0 {
@@ -467,6 +467,16 @@ func (a *AgentActivity) OnFinalTranscript(ev *stt.SpeechEvent) {
 			TranscriptConfidence: confidence,
 		})
 	}
+}
+
+func (a *AgentActivity) turnDetectionMode() TurnDetectionMode {
+	if a.Agent.TurnDetection != "" {
+		return a.Agent.TurnDetection
+	}
+	if a.Session != nil {
+		return a.Session.Options.TurnDetection
+	}
+	return ""
 }
 
 func (a *AgentActivity) runEOUDetection(info EndOfTurnInfo) {

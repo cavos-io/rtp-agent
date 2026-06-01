@@ -47,6 +47,13 @@ type AgentSessionOptions struct {
 	UseTTSAlignedTranscript       bool
 	PreemptiveGeneration          bool
 	AECWarmupDuration             float64
+	TurnDetection                 TurnDetectionMode
+}
+
+type AgentSessionUpdateOptions struct {
+	MinEndpointingDelay *float64
+	MaxEndpointingDelay *float64
+	TurnDetection       *TurnDetectionMode
 }
 
 var (
@@ -237,6 +244,21 @@ func withAgentSessionOptionDefaults(opts AgentSessionOptions) AgentSessionOption
 		opts.AECWarmupDuration = 3.0
 	}
 	return opts
+}
+
+func (s *AgentSession) UpdateOptions(opts AgentSessionUpdateOptions) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if opts.MinEndpointingDelay != nil {
+		s.Options.MinEndpointingDelay = *opts.MinEndpointingDelay
+	}
+	if opts.MaxEndpointingDelay != nil {
+		s.Options.MaxEndpointingDelay = *opts.MaxEndpointingDelay
+	}
+	if opts.TurnDetection != nil {
+		s.Options.TurnDetection = *opts.TurnDetection
+	}
 }
 
 func (s *AgentSession) UserInputTranscribedEvents() <-chan UserInputTranscribedEvent {
