@@ -178,24 +178,33 @@ func (v *SileroVAD) UpdateOptions(options VADOptions) {
 	v.mu.Lock()
 	options.SampleRate = 0
 	options.UpdateInterval = 0
-	v.options = mergeVADOptions(v.options, options)
-	merged := v.options
+	merged := mergeVADOptions(v.options, options)
+	if err := validateVADOptions(merged); err != nil {
+		v.mu.Unlock()
+		return
+	}
+	v.options = merged
 	v.mu.Unlock()
 	v.inner.UpdateOptions(simpleOptionsFromSilero(merged))
 }
 
 func (v *SileroVAD) UpdateOptionsWith(opts ...VADOption) {
 	v.mu.Lock()
-	sampleRate := v.options.SampleRate
-	updateInterval := v.options.UpdateInterval
+	merged := v.options
+	sampleRate := merged.SampleRate
+	updateInterval := merged.UpdateInterval
 	for _, opt := range opts {
 		if opt != nil {
-			opt(&v.options)
+			opt(&merged)
 		}
 	}
-	v.options.SampleRate = sampleRate
-	v.options.UpdateInterval = updateInterval
-	merged := v.options
+	merged.SampleRate = sampleRate
+	merged.UpdateInterval = updateInterval
+	if err := validateVADOptions(merged); err != nil {
+		v.mu.Unlock()
+		return
+	}
+	v.options = merged
 	v.mu.Unlock()
 	v.inner.UpdateOptionsWith(simpleUpdateOptionsFromSilero(merged)...)
 }

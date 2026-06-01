@@ -309,6 +309,44 @@ func TestSileroVADUpdateOptionsWithDoesNotChangeUpdateInterval(t *testing.T) {
 	assertSileroVADEventType(t, stream, vad.VADEventStartOfSpeech)
 }
 
+func TestSileroVADUpdateOptionsIgnoresInvalidDeactivationThreshold(t *testing.T) {
+	detector := NewSileroVAD(
+		WithDeactivationThreshold(0.2),
+		WithMinSpeechDuration(0.032),
+		WithActivationThreshold(0.5),
+	)
+
+	detector.UpdateOptions(VADOptions{DeactivationThreshold: -0.1})
+	if detector.options.DeactivationThreshold != 0.2 {
+		t.Fatalf("detector DeactivationThreshold = %v, want 0.2", detector.options.DeactivationThreshold)
+	}
+
+	stream, err := detector.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream() after invalid update error = %v", err)
+	}
+	defer stream.Close()
+}
+
+func TestSileroVADUpdateOptionsWithIgnoresInvalidDeactivationThreshold(t *testing.T) {
+	detector := NewSileroVAD(
+		WithDeactivationThreshold(0.2),
+		WithMinSpeechDuration(0.032),
+		WithActivationThreshold(0.5),
+	)
+
+	detector.UpdateOptionsWith(WithDeactivationThreshold(-0.1))
+	if detector.options.DeactivationThreshold != 0.2 {
+		t.Fatalf("detector DeactivationThreshold = %v, want 0.2", detector.options.DeactivationThreshold)
+	}
+
+	stream, err := detector.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream() after invalid update error = %v", err)
+	}
+	defer stream.Close()
+}
+
 func TestSileroVADBuffersDefaultInferenceWindow(t *testing.T) {
 	detector := NewSileroVAD(
 		WithMinSpeechDuration(0.032),
