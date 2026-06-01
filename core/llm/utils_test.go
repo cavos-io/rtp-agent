@@ -70,6 +70,17 @@ func TestParseFunctionArgumentsRepairsTrailingCommas(t *testing.T) {
 	}
 }
 
+func TestParseFunctionArgumentsRepairsUnquotedObjectKeys(t *testing.T) {
+	args, err := ParseFunctionArguments(`{city:"Paris",limit:3}`)
+	if err != nil {
+		t.Fatalf("ParseFunctionArguments() error = %v", err)
+	}
+
+	if args["city"] != "Paris" || args["limit"] != float64(3) {
+		t.Fatalf("args = %#v, want repaired city and limit", args)
+	}
+}
+
 func TestParseFunctionArgumentsTreatsNullAsEmptyObject(t *testing.T) {
 	args, err := ParseFunctionArguments(`null`)
 	if err != nil {

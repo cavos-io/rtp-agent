@@ -32,6 +32,8 @@ var templateTokenPatterns = []*regexp.Regexp{
 
 var trailingCommaPattern = regexp.MustCompile(`,\s*([}\]])`)
 
+var unquotedObjectKeyPattern = regexp.MustCompile(`([,{]\s*)([A-Za-z_][A-Za-z0-9_-]*)(\s*:)`)
+
 type SerializedImage struct {
 	InferenceDetail string
 	MIMEType        string
@@ -151,6 +153,7 @@ func repairFunctionArguments(value string) string {
 	for _, pattern := range templateTokenPatterns {
 		out = pattern.ReplaceAllString(out, "")
 	}
+	out = unquotedObjectKeyPattern.ReplaceAllString(out, `${1}"${2}"${3}`)
 	out = trailingCommaPattern.ReplaceAllString(out, "$1")
 	return strings.TrimSpace(out)
 }
