@@ -1715,3 +1715,28 @@ func TestChatContextToMistralProviderFormatMapsEntriesAndInstructions(t *testing
 		t.Fatalf("function result entry = %#v", entries[3])
 	}
 }
+
+func TestChatContextToMistralProviderFormatReturnsImageSerializationError(t *testing.T) {
+	ctx := NewChatContext()
+	ctx.Items = []ChatItem{
+		&ChatMessage{
+			ID:   "user",
+			Role: ChatRoleUser,
+			Content: []ChatContent{
+				{Image: &ImageContent{Image: "data:image/png;base64,not-valid-base64"}},
+			},
+		},
+	}
+
+	entries, extra, err := ctx.ToProviderFormatE("mistralai")
+
+	if err == nil {
+		t.Fatal("ToProviderFormatE(mistralai) error = nil, want image serialization error")
+	}
+	if entries != nil || extra != nil {
+		t.Fatalf("ToProviderFormatE(mistralai) entries=%#v extra=%#v, want nil outputs on error", entries, extra)
+	}
+	if !strings.Contains(err.Error(), "decode data URL image") {
+		t.Fatalf("ToProviderFormatE(mistralai) error = %q, want decode data URL image error", err)
+	}
+}
