@@ -53,6 +53,30 @@ func TestLLMPrewarmDelegatesWhenSupported(t *testing.T) {
 	}
 }
 
+func TestLLMErrorCarriesReferenceFields(t *testing.T) {
+	cause := errors.New("provider unavailable")
+	err := NewLLMError("openai.LLM", cause, true)
+
+	if err.Type != "llm_error" {
+		t.Fatalf("Type = %q, want llm_error", err.Type)
+	}
+	if err.Timestamp.IsZero() {
+		t.Fatal("Timestamp is zero, want creation time")
+	}
+	if err.Label != "openai.LLM" {
+		t.Fatalf("Label = %q, want openai.LLM", err.Label)
+	}
+	if err.Err != cause {
+		t.Fatalf("Err = %v, want wrapped cause", err.Err)
+	}
+	if !err.Recoverable {
+		t.Fatal("Recoverable = false, want true")
+	}
+	if !errors.Is(err, cause) {
+		t.Fatal("errors.Is() = false, want wrapped cause")
+	}
+}
+
 func TestRealtimeModelMetadataDefaults(t *testing.T) {
 	model := &metadataRealtimeModel{}
 
@@ -82,6 +106,30 @@ func TestRealtimeModelMetadataUsesProviderOverrides(t *testing.T) {
 	}
 	if got := RealtimeProvider(model); got != "provider-a" {
 		t.Fatalf("RealtimeProvider() = %q, want provider-a", got)
+	}
+}
+
+func TestRealtimeModelErrorCarriesReferenceFields(t *testing.T) {
+	cause := errors.New("session disconnected")
+	err := NewRealtimeModelError("openai.RealtimeModel", cause, false)
+
+	if err.Type != "realtime_model_error" {
+		t.Fatalf("Type = %q, want realtime_model_error", err.Type)
+	}
+	if err.Timestamp.IsZero() {
+		t.Fatal("Timestamp is zero, want creation time")
+	}
+	if err.Label != "openai.RealtimeModel" {
+		t.Fatalf("Label = %q, want openai.RealtimeModel", err.Label)
+	}
+	if err.Err != cause {
+		t.Fatalf("Err = %v, want wrapped cause", err.Err)
+	}
+	if err.Recoverable {
+		t.Fatal("Recoverable = true, want false")
+	}
+	if !errors.Is(err, cause) {
+		t.Fatal("errors.Is() = false, want wrapped cause")
 	}
 }
 

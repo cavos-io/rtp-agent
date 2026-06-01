@@ -355,6 +355,38 @@ type CollectedResponse struct {
 	Extra     map[string]any
 }
 
+type LLMError struct {
+	Type        string
+	Timestamp   time.Time
+	Label       string
+	Err         error
+	Recoverable bool
+}
+
+func NewLLMError(label string, err error, recoverable bool) *LLMError {
+	return &LLMError{
+		Type:        "llm_error",
+		Timestamp:   time.Now(),
+		Label:       label,
+		Err:         err,
+		Recoverable: recoverable,
+	}
+}
+
+func (e *LLMError) Error() string {
+	if e == nil || e.Err == nil {
+		return "llm_error"
+	}
+	return e.Err.Error()
+}
+
+func (e *LLMError) Unwrap() error {
+	if e == nil {
+		return nil
+	}
+	return e.Err
+}
+
 type Tool interface {
 	ID() string
 	Name() string
@@ -565,6 +597,38 @@ func (e RealtimeError) Error() string {
 }
 
 func (e RealtimeError) Unwrap() error {
+	return e.Err
+}
+
+type RealtimeModelError struct {
+	Type        string
+	Timestamp   time.Time
+	Label       string
+	Err         error
+	Recoverable bool
+}
+
+func NewRealtimeModelError(label string, err error, recoverable bool) *RealtimeModelError {
+	return &RealtimeModelError{
+		Type:        "realtime_model_error",
+		Timestamp:   time.Now(),
+		Label:       label,
+		Err:         err,
+		Recoverable: recoverable,
+	}
+}
+
+func (e *RealtimeModelError) Error() string {
+	if e == nil || e.Err == nil {
+		return "realtime_model_error"
+	}
+	return e.Err.Error()
+}
+
+func (e *RealtimeModelError) Unwrap() error {
+	if e == nil {
+		return nil
+	}
 	return e.Err
 }
 
