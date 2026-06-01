@@ -44,6 +44,20 @@ func TestAssemblyAIRecognizePollsTranscriptUntilCompleted(t *testing.T) {
 				"status":     "completed",
 				"text":       "hello from assembly",
 				"confidence": 0.91,
+				"words": []map[string]any{
+					{
+						"text":       "hello",
+						"start":      100,
+						"end":        300,
+						"confidence": 0.93,
+					},
+					{
+						"text":       "assembly",
+						"start":      350,
+						"end":        700,
+						"confidence": 0.89,
+					},
+				},
 			})
 		default:
 			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
@@ -71,6 +85,13 @@ func TestAssemblyAIRecognizePollsTranscriptUntilCompleted(t *testing.T) {
 	}
 	if got := event.Alternatives[0].Confidence; got != 0.91 {
 		t.Fatalf("confidence = %v, want 0.91", got)
+	}
+	words := event.Alternatives[0].Words
+	if len(words) != 2 {
+		t.Fatalf("words = %#v, want two timed words", words)
+	}
+	if words[0].Text != "hello" || words[0].StartTime != 0.1 || words[0].EndTime != 0.3 || words[0].Confidence != 0.93 {
+		t.Fatalf("first word = %#v, want converted AssemblyAI word timing", words[0])
 	}
 	if transcriptPolls != 2 {
 		t.Fatalf("transcript polls = %d, want 2", transcriptPolls)

@@ -152,10 +152,11 @@ func (s *AssemblyAISTT) pollTranscript(ctx context.Context, id string) (*stt.Spe
 		}
 
 		var result struct {
-			Status     string  `json:"status"`
-			Text       string  `json:"text"`
-			Confidence float64 `json:"confidence"`
-			Error      string  `json:"error"`
+			Status     string           `json:"status"`
+			Text       string           `json:"text"`
+			Confidence float64          `json:"confidence"`
+			Error      string           `json:"error"`
+			Words      []assemblyAIWord `json:"words"`
 		}
 		statusErr := assemblyAIStatusError(resp)
 		decodeErr := json.NewDecoder(resp.Body).Decode(&result)
@@ -172,7 +173,7 @@ func (s *AssemblyAISTT) pollTranscript(ctx context.Context, id string) (*stt.Spe
 
 		switch result.Status {
 		case "completed":
-			return assemblyAITranscriptEvent(result.Text, result.Confidence), nil
+			return assemblyAITranscriptEvent(result.Text, result.Confidence, assemblyAITimedStrings(result.Words)), nil
 		case "error":
 			if result.Error == "" {
 				result.Error = "transcript failed"
@@ -203,16 +204,40 @@ func assemblyAIStatusError(resp *http.Response) error {
 	return fmt.Errorf("assemblyai request failed: %s", resp.Status)
 }
 
-func assemblyAITranscriptEvent(text string, confidence float64) *stt.SpeechEvent {
+func assemblyAITranscriptEvent(text string, confidence float64, words []stt.TimedString) *stt.SpeechEvent {
 	return &stt.SpeechEvent{
 		Type: stt.SpeechEventFinalTranscript,
 		Alternatives: []stt.SpeechData{
 			{
 				Text:       text,
 				Confidence: confidence,
+				Words:      words,
 			},
 		},
 	}
+}
+
+type assemblyAIWord struct {
+	Text       string  `json:"text"`
+	Start      int     `json:"start"`
+	End        int     `json:"end"`
+	Confidence float64 `json:"confidence"`
+}
+
+func assemblyAITimedStrings(words []assemblyAIWord) []stt.TimedString {
+	if len(words) == 0 {
+		return nil
+	}
+	timed := make([]stt.TimedString, 0, len(words))
+	for _, word := range words {
+		timed = append(timed, stt.TimedString{
+			Text:       word.Text,
+			StartTime:  float64(word.Start) / 1000,
+			EndTime:    float64(word.End) / 1000,
+			Confidence: word.Confidence,
+		})
+	}
+	return timed
 }
 
 type assemblyAISTTStream struct {
