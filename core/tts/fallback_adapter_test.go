@@ -451,6 +451,43 @@ func TestFallbackChunkedStreamReturnsEOFWhenProviderCompletes(t *testing.T) {
 	}
 }
 
+func TestFallbackChunkedStreamMarksLastFrameFinal(t *testing.T) {
+	adapter := NewFallbackAdapter([]TTS{
+		&metadataTTS{
+			label:       "primary",
+			sampleRate:  24000,
+			numChannels: 1,
+			chunked: &metadataChunkedStream{
+				events: []*SynthesizedAudio{
+					{Frame: &model.AudioFrame{Data: []byte{1}}},
+					{Frame: &model.AudioFrame{Data: []byte{2}}},
+				},
+			},
+		},
+	})
+
+	stream, err := adapter.Synthesize(context.Background(), "hello")
+	if err != nil {
+		t.Fatalf("Synthesize returned error: %v", err)
+	}
+	defer stream.Close()
+
+	first, err := stream.Next()
+	if err != nil {
+		t.Fatalf("first Next returned error: %v", err)
+	}
+	if first.IsFinal {
+		t.Fatal("first audio IsFinal = true, want false")
+	}
+	second, err := stream.Next()
+	if err != nil {
+		t.Fatalf("second Next returned error: %v", err)
+	}
+	if !second.IsFinal {
+		t.Fatal("second audio IsFinal = false, want true")
+	}
+}
+
 func TestFallbackChunkedStreamDoesNotFallbackAfterAudio(t *testing.T) {
 	streamErr := errors.New("stream failed after audio")
 	second := &metadataTTS{
@@ -668,6 +705,47 @@ func TestFallbackSynthesizeStreamReturnsEOFWhenProviderCompletes(t *testing.T) {
 	}
 	if !firstStream.closed {
 		t.Fatal("provider synthesize stream closed = false, want true after EOF")
+	}
+}
+
+func TestFallbackSynthesizeStreamMarksLastFrameFinal(t *testing.T) {
+	adapter := NewFallbackAdapter([]TTS{
+		&metadataTTS{
+			label:        "primary",
+			sampleRate:   24000,
+			numChannels:  1,
+			capabilities: TTSCapabilities{Streaming: true},
+			stream: &metadataSynthesizeStream{
+				events: []*SynthesizedAudio{
+					{Frame: &model.AudioFrame{Data: []byte{1}}},
+					{Frame: &model.AudioFrame{Data: []byte{2}}},
+				},
+			},
+		},
+	})
+
+	stream, err := adapter.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+	defer stream.Close()
+	if err := stream.PushText("hello"); err != nil {
+		t.Fatalf("PushText returned error: %v", err)
+	}
+
+	first, err := stream.Next()
+	if err != nil {
+		t.Fatalf("first Next returned error: %v", err)
+	}
+	if first.IsFinal {
+		t.Fatal("first audio IsFinal = true, want false")
+	}
+	second, err := stream.Next()
+	if err != nil {
+		t.Fatalf("second Next returned error: %v", err)
+	}
+	if !second.IsFinal {
+		t.Fatal("second audio IsFinal = false, want true")
 	}
 }
 
