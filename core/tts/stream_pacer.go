@@ -30,6 +30,7 @@ type SentenceStreamPacer struct {
 	audioCh    chan *SynthesizedAudio
 
 	sendMu            sync.Mutex
+	wg                sync.WaitGroup
 	mu                sync.Mutex
 	yieldedAudioTime  time.Duration
 	playbackStartTime time.Time
@@ -85,6 +86,7 @@ func NewSentenceStreamPacerWithOptions(ctx context.Context, underlying Synthesiz
 		audioCh:           make(chan *SynthesizedAudio, 100),
 	}
 
+	p.wg.Add(3)
 	go p.tokenizeLoop()
 	go p.paceLoop()
 	go p.audioLoop()
@@ -93,6 +95,7 @@ func NewSentenceStreamPacerWithOptions(ctx context.Context, underlying Synthesiz
 }
 
 func (p *SentenceStreamPacer) tokenizeLoop() {
+	defer p.wg.Done()
 	defer close(p.sentenceCh)
 
 	var buffer string
@@ -108,7 +111,11 @@ func (p *SentenceStreamPacer) tokenizeLoop() {
 			if input.flush {
 				p.sendTokenizedSentences(buffer)
 				buffer = ""
-				p.sentenceCh <- pacerSentence{flush: true}
+				select {
+				case <-p.ctx.Done():
+					return
+				case p.sentenceCh <- pacerSentence{flush: true}:
+				}
 				continue
 			}
 
@@ -131,13 +138,19 @@ func (p *SentenceStreamPacer) sendTokenizedSentences(text string) bool {
 	}
 	for _, sentence := range sentences {
 		if sentence != "" {
-			p.sentenceCh <- pacerSentence{text: sentence}
+			select {
+			case <-p.ctx.Done():
+				return false
+			case p.sentenceCh <- pacerSentence{text: sentence}:
+			}
 		}
 	}
 	return true
 }
 
 func (p *SentenceStreamPacer) paceLoop() {
+	defer p.wg.Done()
+
 	var pending []string
 	firstSentence := true
 
@@ -268,6 +281,7 @@ func (p *SentenceStreamPacer) pushBatch(pending *[]string, firstSentence *bool) 
 }
 
 func (p *SentenceStreamPacer) audioLoop() {
+	defer p.wg.Done()
 	defer close(p.audioCh)
 
 	for {
@@ -374,7 +388,9 @@ func (p *SentenceStreamPacer) Close() error {
 	}
 	p.mu.Unlock()
 	p.cancel()
-	return p.underlying.Close()
+	err := p.underlying.Close()
+	p.wg.Wait()
+	return err
 }
 
 func (p *SentenceStreamPacer) isInputDone() bool {
