@@ -615,13 +615,21 @@ func (s *fallbackRecognizeStream) EndInput() error {
 
 func (s *fallbackRecognizeStream) Close() error {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	if s.closed {
+		s.mu.Unlock()
 		return nil
 	}
 	s.closed = true
+	activeStream := s.activeStream
+	recoveries := append([]RecognizeStream(nil), s.recoveries...)
+	s.recoveries = nil
 	close(s.closeCh)
-	return s.activeStream.Close()
+	s.mu.Unlock()
+
+	for _, recovery := range recoveries {
+		_ = recovery.Close()
+	}
+	return activeStream.Close()
 }
 
 func (s *fallbackRecognizeStream) Next() (*SpeechEvent, error) {

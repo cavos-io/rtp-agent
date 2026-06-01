@@ -574,6 +574,56 @@ func TestFallbackStreamForwardsNewInputToRecoveringProvider(t *testing.T) {
 	close(recovery.release)
 }
 
+func TestFallbackStreamCloseClosesRecoveringProvider(t *testing.T) {
+	firstFrame := &model.AudioFrame{Data: []byte("1"), SampleRate: 16000, NumChannels: 1, SamplesPerChannel: 1}
+	primaryFailure := &blockingFailRecognizeStream{
+		err:     errors.New("primary stream failed"),
+		release: make(chan struct{}),
+	}
+	recovery := &liveRecoveryStream{
+		release: make(chan struct{}),
+		event: &SpeechEvent{
+			Type:         SpeechEventFinalTranscript,
+			Alternatives: []SpeechData{{Text: "primary recovered"}},
+		},
+	}
+	primary := &metadataSTT{
+		label:        "primary",
+		capabilities: STTCapabilities{Streaming: true},
+		streams: []RecognizeStream{
+			primaryFailure,
+			recovery,
+		},
+	}
+	fallback := &metadataSTT{
+		label:        "fallback",
+		capabilities: STTCapabilities{Streaming: true},
+		stream: &metadataRecognizeStream{events: []*SpeechEvent{{
+			Type:         SpeechEventFinalTranscript,
+			Alternatives: []SpeechData{{Text: "fallback stream"}},
+		}}},
+	}
+	adapter := NewFallbackAdapterWithOptions([]STT{primary, fallback}, FallbackAdapterOptions{
+		MaxRetryPerSTT: 0,
+	})
+
+	stream, err := adapter.Stream(context.Background(), "en")
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+	if err := stream.PushFrame(firstFrame); err != nil {
+		t.Fatalf("PushFrame returned error: %v", err)
+	}
+	close(primaryFailure.release)
+	waitForStreamCalls(t, primary, 2)
+
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close returned error: %v", err)
+	}
+	waitForRecoveryClosed(t, recovery)
+	close(recovery.release)
+}
+
 func TestFallbackStreamRetriesSameSTTBeforeFallback(t *testing.T) {
 	firstErr := errors.New("primary stream failed")
 	primary := &metadataSTT{
@@ -1145,6 +1195,28 @@ func waitForRecoveryCall(t *testing.T, stream *liveRecoveryStream, want string) 
 		select {
 		case <-deadline:
 			t.Fatalf("recovery calls = %#v, want %s", calls, want)
+		case <-ticker.C:
+		}
+	}
+}
+
+func waitForRecoveryClosed(t *testing.T, stream *liveRecoveryStream) {
+	t.Helper()
+	deadline := time.After(200 * time.Millisecond)
+	ticker := time.NewTicker(time.Millisecond)
+	defer ticker.Stop()
+
+	for {
+		stream.mu.Lock()
+		closed := stream.closed
+		stream.mu.Unlock()
+		if closed {
+			return
+		}
+
+		select {
+		case <-deadline:
+			t.Fatal("recovery stream was not closed")
 		case <-ticker.C:
 		}
 	}
