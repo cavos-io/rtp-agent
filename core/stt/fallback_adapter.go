@@ -271,6 +271,8 @@ type fallbackRecognizeStream struct {
 	inputBuffer  []fallbackRecognizeInput
 	rateGuard    SampleRateGuard
 	inputEnded   bool
+	startOffset  float64
+	startTime    float64
 
 	eventCh chan *SpeechEvent
 	errCh   chan error
@@ -336,6 +338,7 @@ func (s *fallbackRecognizeStream) tryStartStream(index int) error {
 				break
 			}
 
+			s.applyTiming(stream)
 			s.adapter.setAvailable(i, true)
 			s.activeStream = stream
 			s.activeIndex = i
@@ -351,6 +354,41 @@ func (s *fallbackRecognizeStream) tryStartStream(index int) error {
 
 func (s *fallbackRecognizeStream) replayBufferedFrames(stream RecognizeStream) error {
 	return replayFallbackInputs(stream, s.inputBuffer)
+}
+
+func (s *fallbackRecognizeStream) StartTimeOffset() float64 {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.startOffset
+}
+
+func (s *fallbackRecognizeStream) SetStartTimeOffset(offset float64) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.startOffset = offset
+	s.applyTiming(s.activeStream)
+}
+
+func (s *fallbackRecognizeStream) StartTime() float64 {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.startTime
+}
+
+func (s *fallbackRecognizeStream) SetStartTime(startTime float64) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.startTime = startTime
+	s.applyTiming(s.activeStream)
+}
+
+func (s *fallbackRecognizeStream) applyTiming(stream RecognizeStream) {
+	timing, ok := stream.(StreamTiming)
+	if !ok {
+		return
+	}
+	timing.SetStartTimeOffset(s.startOffset)
+	timing.SetStartTime(s.startTime)
 }
 
 func replayFallbackInputs(stream RecognizeStream, inputs []fallbackRecognizeInput) error {
