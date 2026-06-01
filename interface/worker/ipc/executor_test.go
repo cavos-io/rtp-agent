@@ -247,6 +247,29 @@ func TestProcessJobExecutorCloseWaitsForProcessExit(t *testing.T) {
 	}
 }
 
+func TestProcessJobExecutorLaunchExecutableFailureDoesNotStart(t *testing.T) {
+	oldExecutable := processExecutable
+	processExecutable = func() (string, error) {
+		return "", errors.New("missing executable")
+	}
+	defer func() { processExecutable = oldExecutable }()
+
+	executor := NewProcessJobExecutor("exec-launch-error")
+	err := executor.LaunchJob(context.Background(), &livekit.Job{Id: "job-launch-error"})
+	if err == nil {
+		t.Fatal("LaunchJob() error = nil, want executable error")
+	}
+	if executor.Started() {
+		t.Fatal("Started() = true after executable lookup failed")
+	}
+	if got := executor.Status(); got != JobStatusFailed {
+		t.Fatalf("Status() after executable lookup failed = %q, want %q", got, JobStatusFailed)
+	}
+	if err := executor.Close(context.Background()); err != nil {
+		t.Fatalf("Close() after executable lookup failed error = %v", err)
+	}
+}
+
 func TestProcessJobExecutorPingMarksFailedWhenProcessMissing(t *testing.T) {
 	oldPingInterval := processPingInterval
 	oldProcessSignal := processSignal

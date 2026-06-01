@@ -34,6 +34,7 @@ type JobExecutor interface {
 	Close(ctx context.Context) error
 }
 
+var processExecutable = os.Executable
 var processCommandContext = exec.CommandContext
 var processPingInterval = 2 * time.Second
 var processSignal = func(process *os.Process, signal os.Signal) error {
@@ -212,10 +213,12 @@ func (e *ProcessJobExecutor) LaunchRunningJob(ctx context.Context, info RunningJ
 	e.lastPong = time.Now()
 	e.mu.Unlock()
 
-	exe, err := os.Executable()
+	exe, err := processExecutable()
 	if err != nil {
 		e.mu.Lock()
 		e.status = JobStatusFailed
+		e.started = false
+		e.done = nil
 		e.mu.Unlock()
 		return err
 	}
@@ -224,6 +227,8 @@ func (e *ProcessJobExecutor) LaunchRunningJob(ctx context.Context, info RunningJ
 	if err != nil {
 		e.mu.Lock()
 		e.status = JobStatusFailed
+		e.started = false
+		e.done = nil
 		e.mu.Unlock()
 		return err
 	}
