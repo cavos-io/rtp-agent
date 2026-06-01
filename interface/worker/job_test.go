@@ -450,6 +450,42 @@ func TestJobContextParticipantAvailableDoesNotBlockOnEntrypoints(t *testing.T) {
 	}
 }
 
+func TestJobContextParticipantAvailableSkipsDuplicateEntrypointWhileRunning(t *testing.T) {
+	ctx := NewJobContext(&livekit.Job{Id: "job_participant_available_duplicate"}, "", "", "")
+	release := make(chan struct{})
+	started := make(chan string, 2)
+	entrypoint := func(_ *JobContext, p *livekit.ParticipantInfo) {
+		started <- p.Identity
+		<-release
+	}
+	if err := ctx.AddParticipantEntrypoint(entrypoint); err != nil {
+		t.Fatalf("AddParticipantEntrypoint() error = %v", err)
+	}
+
+	participant := fakeParticipantView{
+		identity: "caller",
+		kind:     lksdk.ParticipantStandard,
+	}
+	ctx.participantAvailable(participant)
+
+	select {
+	case got := <-started:
+		if got != "caller" {
+			t.Fatalf("participant entrypoint call = %q, want caller", got)
+		}
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("participant entrypoint was not called")
+	}
+	ctx.participantAvailable(participant)
+	select {
+	case got := <-started:
+		t.Fatalf("duplicate participant entrypoint call = %q, want none while first is running", got)
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	close(release)
+}
+
 func TestJobContextParticipantsAvailableReplaysExistingParticipants(t *testing.T) {
 	ctx := NewJobContext(&livekit.Job{Id: "job_existing_participants"}, "", "", "")
 	calls := make(chan string, 2)
