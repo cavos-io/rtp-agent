@@ -140,6 +140,60 @@ func TestHumeTTSOptionsMatchReference(t *testing.T) {
 	}
 }
 
+func TestHumeTTSContextBuildsReferencePayload(t *testing.T) {
+	provider := NewHumeTTS("test-key", "",
+		WithHumeTTSContextGenerationID("generation-1"),
+	)
+
+	req, err := buildHumeTTSRequest(context.Background(), provider, "hello")
+	if err != nil {
+		t.Fatalf("build generation context request: %v", err)
+	}
+	var payload map[string]any
+	if err := json.NewDecoder(req.Body).Decode(&payload); err != nil {
+		t.Fatalf("decode generation context body: %v", err)
+	}
+	contextPayload := payload["context"].(map[string]any)
+	if contextPayload["generation_id"] != "generation-1" {
+		t.Fatalf("generation_id = %#v, want generation-1", contextPayload["generation_id"])
+	}
+
+	speed := 1.1
+	trailingSilence := 0.2
+	provider = NewHumeTTS("test-key", "",
+		WithHumeTTSContextUtterances([]HumeTTSUtterance{
+			{
+				Text:            "previous line",
+				Description:     "warm",
+				Speed:           &speed,
+				TrailingSilence: &trailingSilence,
+				Voice:           &HumeTTSVoice{Name: "Narrator", Provider: "CUSTOM_VOICE"},
+			},
+		}),
+	)
+
+	req, err = buildHumeTTSRequest(context.Background(), provider, "next line")
+	if err != nil {
+		t.Fatalf("build utterance context request: %v", err)
+	}
+	payload = map[string]any{}
+	if err := json.NewDecoder(req.Body).Decode(&payload); err != nil {
+		t.Fatalf("decode utterance context body: %v", err)
+	}
+	contextPayload = payload["context"].(map[string]any)
+	utterance := contextPayload["utterances"].([]any)[0].(map[string]any)
+	if utterance["text"] != "previous line" || utterance["description"] != "warm" {
+		t.Fatalf("context utterance = %#v, want previous warm line", utterance)
+	}
+	if utterance["speed"] != float64(1.1) || utterance["trailing_silence"] != float64(0.2) {
+		t.Fatalf("context utterance timing = %#v, want speed and trailing silence", utterance)
+	}
+	voice := utterance["voice"].(map[string]any)
+	if voice["name"] != "Narrator" || voice["provider"] != "CUSTOM_VOICE" {
+		t.Fatalf("context voice = %#v, want Narrator custom voice", voice)
+	}
+}
+
 func TestHumeTTSChunkedStreamDecodesReferenceJSONLines(t *testing.T) {
 	stream := &humeTTSChunkedStream{
 		resp:       &http.Response{Body: io.NopCloser(bytes.NewReader([]byte("{\"audio\":\"AQI=\"}\n\n")))},

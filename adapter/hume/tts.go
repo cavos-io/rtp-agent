@@ -36,6 +36,22 @@ type HumeTTS struct {
 	instantMode     bool
 	audioFormat     string
 	sampleRate      int
+	contextID       string
+	context         []HumeTTSUtterance
+}
+
+type HumeTTSVoice struct {
+	ID       string
+	Name     string
+	Provider string
+}
+
+type HumeTTSUtterance struct {
+	Text            string
+	Description     string
+	Speed           *float64
+	Voice           *HumeTTSVoice
+	TrailingSilence *float64
 }
 
 type HumeTTSOption func(*HumeTTS)
@@ -93,6 +109,20 @@ func WithHumeTTSAudioFormat(audioFormat string) HumeTTSOption {
 		if audioFormat != "" {
 			t.audioFormat = audioFormat
 		}
+	}
+}
+
+func WithHumeTTSContextGenerationID(generationID string) HumeTTSOption {
+	return func(t *HumeTTS) {
+		t.contextID = generationID
+		t.context = nil
+	}
+}
+
+func WithHumeTTSContextUtterances(context []HumeTTSUtterance) HumeTTSOption {
+	return func(t *HumeTTS) {
+		t.context = context
+		t.contextID = ""
 	}
 }
 
@@ -174,6 +204,15 @@ func buildHumeTTSRequest(ctx context.Context, t *HumeTTS, text string) (*http.Re
 		"instant_mode":  t.instantMode,
 		"format":        map[string]interface{}{"type": t.audioFormat},
 	}
+	if t.contextID != "" {
+		body["context"] = map[string]interface{}{"generation_id": t.contextID}
+	} else if len(t.context) > 0 {
+		contextUtterances := make([]map[string]interface{}, 0, len(t.context))
+		for _, utterance := range t.context {
+			contextUtterances = append(contextUtterances, humeTTSUtterancePayload(utterance))
+		}
+		body["context"] = map[string]interface{}{"utterances": contextUtterances}
+	}
 
 	jsonBody, err := json.Marshal(body)
 	if err != nil {
@@ -188,6 +227,35 @@ func buildHumeTTSRequest(ctx context.Context, t *HumeTTS, text string) (*http.Re
 	req.Header.Set("X-Hume-Client-Name", "livekit")
 	req.Header.Set("X-Hume-Client-Version", "go")
 	return req, nil
+}
+
+func humeTTSUtterancePayload(utterance HumeTTSUtterance) map[string]interface{} {
+	payload := map[string]interface{}{"text": utterance.Text}
+	if utterance.Description != "" {
+		payload["description"] = utterance.Description
+	}
+	if utterance.Speed != nil {
+		payload["speed"] = *utterance.Speed
+	}
+	if utterance.TrailingSilence != nil {
+		payload["trailing_silence"] = *utterance.TrailingSilence
+	}
+	if utterance.Voice != nil {
+		voice := map[string]interface{}{}
+		if utterance.Voice.ID != "" {
+			voice["id"] = utterance.Voice.ID
+		}
+		if utterance.Voice.Name != "" {
+			voice["name"] = utterance.Voice.Name
+		}
+		if utterance.Voice.Provider != "" {
+			voice["provider"] = utterance.Voice.Provider
+		}
+		if len(voice) > 0 {
+			payload["voice"] = voice
+		}
+	}
+	return payload
 }
 
 func (t *HumeTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
