@@ -373,6 +373,9 @@ func TestRoomIOHandleParticipantDisconnectedClosesSessionForLinkedParticipant(t 
 			ParticipantIdentity: "caller-a",
 		},
 	}
+	if !rio.handleParticipantConnected("caller-a", lksdk.ParticipantStandard, nil, "agent-local") {
+		t.Fatal("handleParticipantConnected(caller-a) = false, want true")
+	}
 
 	rio.handleParticipantDisconnected("caller-a", livekit.DisconnectReason_CLIENT_INITIATED)
 
@@ -383,6 +386,24 @@ func TestRoomIOHandleParticipantDisconnectedClosesSessionForLinkedParticipant(t 
 		}
 	default:
 		t.Fatal("session did not receive participant-disconnected close event")
+	}
+}
+
+func TestRoomIOHandleParticipantDisconnectedIgnoresUnavailableConfiguredParticipant(t *testing.T) {
+	session := &agent.AgentSession{}
+	rio := &RoomIO{
+		AgentSession: session,
+		Options: RoomOptions{
+			ParticipantIdentity: "caller-a",
+		},
+	}
+
+	rio.handleParticipantDisconnected("caller-a", livekit.DisconnectReason_CLIENT_INITIATED)
+
+	select {
+	case ev := <-session.CloseEvents():
+		t.Fatalf("unexpected close event before participant was linked: %#v", ev)
+	default:
 	}
 }
 
@@ -438,6 +459,23 @@ func TestRoomIOHandleParticipantDisconnectedIgnoresNonCloseReasons(t *testing.T)
 	case ev := <-session.CloseEvents():
 		t.Fatalf("unexpected close event: %#v", ev)
 	default:
+	}
+}
+
+func TestRoomIOHandleParticipantDisconnectedAllowsLinkedParticipantReconnect(t *testing.T) {
+	rio := &RoomIO{}
+
+	if !rio.handleParticipantConnected("caller-a", lksdk.ParticipantStandard, nil, "agent-local") {
+		t.Fatal("handleParticipantConnected(caller-a) = false, want true for initial participant")
+	}
+
+	rio.handleParticipantDisconnected("caller-a", livekit.DisconnectReason_DUPLICATE_IDENTITY)
+
+	if !rio.handleParticipantConnected("caller-a", lksdk.ParticipantStandard, nil, "agent-local") {
+		t.Fatal("handleParticipantConnected(caller-a reconnect) = false, want true after linked participant disconnect")
+	}
+	if got := rio.participantIdentity(); got != "caller-a" {
+		t.Fatalf("participantIdentity() = %q, want caller-a", got)
 	}
 }
 
