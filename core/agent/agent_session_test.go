@@ -486,6 +486,25 @@ func TestAgentSessionGenerateReplyOptionsPreserveInstructions(t *testing.T) {
 	}
 }
 
+func TestAgentSessionGenerateReplyOptionsPreserveToolChoice(t *testing.T) {
+	agent := NewAgent("test")
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	session.activity = NewAgentActivity(agent, session)
+
+	handle, err := session.GenerateReplyWithOptions(context.Background(), GenerateReplyOptions{
+		UserInput:     "hello",
+		ToolChoice:    "none",
+		InputModality: "text",
+	})
+
+	if err != nil {
+		t.Fatalf("GenerateReplyWithOptions error = %v, want nil", err)
+	}
+	if handle.Generation.ToolChoice != "none" {
+		t.Fatalf("handle.Generation.ToolChoice = %#v, want none", handle.Generation.ToolChoice)
+	}
+}
+
 func TestAgentSessionRunReturnsRunResultWatchingGeneratedSpeech(t *testing.T) {
 	agent := NewAgent("test")
 	session := NewAgentSession(agent, nil, AgentSessionOptions{AllowInterruptions: true})

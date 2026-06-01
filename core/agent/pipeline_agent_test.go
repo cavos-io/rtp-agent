@@ -100,6 +100,32 @@ func TestPipelineAgentGenerateReplyWithInstructionsUsesTemporaryChatContext(t *t
 	}
 }
 
+func TestPipelineAgentGenerateReplyWithToolChoicePassesChatOption(t *testing.T) {
+	chatCtx := llm.NewChatContext()
+	l := &fakeGenerationLLM{
+		stream: &fakeGenerationLLMStream{
+			chunks: []*llm.ChatChunk{
+				{Delta: &llm.ChoiceDelta{Content: "no tools"}},
+			},
+		},
+	}
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	agent := NewPipelineAgent(nil, nil, l, &fakePipelineTTS{}, chatCtx)
+	agent.session = session
+	agent.ctx = context.Background()
+
+	agent.generateReplyWithOptions(pipelineReplyOptions{
+		ToolChoice: "none",
+	})
+
+	if len(l.calls) != 1 {
+		t.Fatalf("LLM Chat calls = %d, want 1", len(l.calls))
+	}
+	if l.calls[0].ToolChoice != "none" {
+		t.Fatalf("ToolChoice = %#v, want none", l.calls[0].ToolChoice)
+	}
+}
+
 func TestPipelineAgentEmitsConversationItemAddedForAssistantMessage(t *testing.T) {
 	chatCtx := llm.NewChatContext()
 	l := &fakeGenerationLLM{

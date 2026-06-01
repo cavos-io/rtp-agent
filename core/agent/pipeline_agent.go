@@ -33,6 +33,7 @@ type PipelineAgent struct {
 
 type pipelineReplyOptions struct {
 	Instructions string
+	ToolChoice   llm.ToolChoice
 }
 
 func NewPipelineAgent(
@@ -230,6 +231,9 @@ func (va *PipelineAgent) generateReplyWithOptions(opts pipelineReplyOptions) {
 		}
 
 		var chatOptions []llm.ChatOption
+		if opts.ToolChoice != nil {
+			chatOptions = append(chatOptions, llm.WithToolChoice(opts.ToolChoice))
+		}
 		if session.Options.MaxToolSteps > 0 && toolSteps >= session.Options.MaxToolSteps {
 			chatOptions = append(chatOptions, llm.WithToolChoice("none"))
 		}
