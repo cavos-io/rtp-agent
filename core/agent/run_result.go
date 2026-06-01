@@ -511,6 +511,23 @@ func (a *RunAssert) NextFunctionCallWithArguments(name string, arguments map[str
 	return a
 }
 
+func (a *RunAssert) NextFunctionCallOutput(criteria RunEventCriteria) *RunAssert {
+	event, ok := a.nextEvent("function_call_output")
+	if !ok {
+		a.errors = append(a.errors, errors.New("expected function_call_output event, but none found"))
+		return a
+	}
+	outputEvent, ok := event.(*FunctionCallOutputEvent)
+	if !ok {
+		a.errors = append(a.errors, fmt.Errorf("expected function_call_output event, got %s", event.GetType()))
+		return a
+	}
+	if !eventMatchesCriteria(outputEvent, criteria) {
+		a.errors = append(a.errors, errors.New("expected function call output matching criteria"))
+	}
+	return a
+}
+
 func (a *RunAssert) nextEvent(expectedType string) (RunEvent, bool) {
 	events := a.events()
 	for a.index < len(events) {

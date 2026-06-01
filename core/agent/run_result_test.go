@@ -566,6 +566,47 @@ func TestRunAssertNextMessageReportsRoleMismatch(t *testing.T) {
 	}
 }
 
+func TestRunAssertNextFunctionCallOutputValidatesDetails(t *testing.T) {
+	result := NewRunResult(llm.NewChatContext())
+	isError := true
+	result.RecordItem(&llm.FunctionCallOutput{
+		ID:        "out_1",
+		CallID:    "call_1",
+		Name:      "lookup",
+		Output:    "failed",
+		IsError:   isError,
+		CreatedAt: time.Now(),
+	})
+
+	err := result.Expect.
+		NextFunctionCallOutput(RunEventCriteria{Output: "failed", IsError: &isError}).
+		NoMoreEvents().
+		HasError()
+
+	if err != nil {
+		t.Fatalf("NextFunctionCallOutput returned error = %v, want nil", err)
+	}
+}
+
+func TestRunAssertNextFunctionCallOutputReportsMismatch(t *testing.T) {
+	result := NewRunResult(llm.NewChatContext())
+	isError := false
+	result.RecordItem(&llm.FunctionCallOutput{
+		ID:        "out_1",
+		CallID:    "call_1",
+		Name:      "lookup",
+		Output:    "ok",
+		IsError:   isError,
+		CreatedAt: time.Now(),
+	})
+
+	err := result.Expect.NextFunctionCallOutput(RunEventCriteria{Output: "failed"}).HasError()
+
+	if err == nil {
+		t.Fatal("NextFunctionCallOutput error = nil, want output mismatch error")
+	}
+}
+
 func TestRunAssertSkipNextEventIfConsumesMatchingCurrentEvent(t *testing.T) {
 	result := NewRunResult(llm.NewChatContext())
 	result.RecordItem(&llm.ChatMessage{ID: "msg_1", Role: llm.ChatRoleAssistant, CreatedAt: time.Now()})
