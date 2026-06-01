@@ -541,6 +541,7 @@ type fallbackChunkedStream struct {
 	eventCh chan *SynthesizedAudio
 	errCh   chan error
 	closeCh chan struct{}
+	doneCh  chan struct{}
 	closed  bool
 	done    bool
 	err     error
@@ -564,6 +565,7 @@ func (f *FallbackAdapter) Synthesize(ctx context.Context, text string) (ChunkedS
 		eventCh:   make(chan *SynthesizedAudio, 100),
 		errCh:     make(chan error, 1),
 		closeCh:   make(chan struct{}),
+		doneCh:    make(chan struct{}),
 		retries:   make(map[int]int),
 		requestID: cavosmath.ShortUUID(""),
 		metrics:   fallbackMetricsState{startedAt: time.Now()},
@@ -611,6 +613,7 @@ func (s *fallbackChunkedStream) tryStartStream(index int) error {
 }
 
 func (s *fallbackChunkedStream) monitorStream() {
+	defer close(s.doneCh)
 	defer s.cancel()
 
 	outputSent := false
@@ -843,15 +846,20 @@ func (s *fallbackChunkedStream) Next() (*SynthesizedAudio, error) {
 
 func (s *fallbackChunkedStream) Close() error {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	if s.closed {
+		s.mu.Unlock()
 		return nil
 	}
 	s.closed = true
 	close(s.closeCh)
 	s.cancel()
 	s.markDoneLocked(nil)
-	return s.activeStream.Close()
+	active := s.activeStream
+	s.mu.Unlock()
+
+	err := active.Close()
+	<-s.doneCh
+	return err
 }
 
 func (s *fallbackChunkedStream) Done() bool {
@@ -895,6 +903,7 @@ type fallbackSynthesizeStream struct {
 	eventCh   chan *SynthesizedAudio
 	errCh     chan error
 	closeCh   chan struct{}
+	doneCh    chan struct{}
 	closed    bool
 	inputDone bool
 	started   bool
@@ -918,6 +927,7 @@ func (f *FallbackAdapter) Stream(ctx context.Context) (SynthesizeStream, error) 
 		eventCh:   make(chan *SynthesizedAudio, 100),
 		errCh:     make(chan error, 1),
 		closeCh:   make(chan struct{}),
+		doneCh:    make(chan struct{}),
 		retries:   make(map[int]int),
 		requestID: cavosmath.ShortUUID(""),
 		segmentID: cavosmath.ShortUUID(""),
@@ -1002,6 +1012,7 @@ func (s *fallbackSynthesizeStream) replayBufferedText(stream SynthesizeStream) e
 }
 
 func (s *fallbackSynthesizeStream) monitorStream() {
+	defer close(s.doneCh)
 	defer s.cancel()
 
 	outputSent := false
@@ -1305,15 +1316,20 @@ func (s *fallbackSynthesizeStream) EndInput() error {
 
 func (s *fallbackSynthesizeStream) Close() error {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	if s.closed {
+		s.mu.Unlock()
 		return nil
 	}
 	s.closed = true
 	close(s.closeCh)
 	s.cancel()
 	s.markDoneLocked(nil)
-	return s.activeStream.Close()
+	active := s.activeStream
+	s.mu.Unlock()
+
+	err := active.Close()
+	<-s.doneCh
+	return err
 }
 
 func (s *fallbackSynthesizeStream) Next() (*SynthesizedAudio, error) {

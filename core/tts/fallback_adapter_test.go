@@ -1593,6 +1593,40 @@ func TestFallbackChunkedStreamCloseCancelsProviderContext(t *testing.T) {
 	receiveContextCancellation(t, provider.ctx, "provider context")
 }
 
+func TestFallbackChunkedStreamCloseWaitsForProviderReadLoop(t *testing.T) {
+	provider := &contextCapturingTTS{
+		metadataTTS: metadataTTS{label: "primary", sampleRate: 24000, numChannels: 1},
+		started:     make(chan struct{}, 1),
+		cancelled:   make(chan struct{}, 1),
+		release:     make(chan struct{}),
+	}
+	adapter := NewFallbackAdapter([]TTS{provider})
+
+	stream, err := adapter.Synthesize(context.Background(), "hello")
+	if err != nil {
+		t.Fatalf("Synthesize returned error: %v", err)
+	}
+	receiveSignal(t, provider.started, "provider read loop start")
+
+	closeDone := make(chan error, 1)
+	go func() {
+		closeDone <- stream.Close()
+	}()
+
+	receiveSignal(t, provider.cancelled, "provider context cancellation")
+
+	select {
+	case err := <-closeDone:
+		t.Fatalf("Close returned before provider read loop exited: %v", err)
+	default:
+	}
+
+	close(provider.release)
+	if err := receiveCloseResult(t, closeDone); err != nil {
+		t.Fatalf("Close returned error = %v", err)
+	}
+}
+
 func TestFallbackChunkedStreamFallsBackWhenProviderErrorsBeforeEmittingAudio(t *testing.T) {
 	streamErr := errors.New("stream failed before emitted audio")
 	second := &metadataTTS{
@@ -2875,22 +2909,46 @@ type contextAwareRecoveryTTS struct {
 
 type contextCapturingTTS struct {
 	metadataTTS
-	ctx context.Context
+	ctx       context.Context
+	started   chan struct{}
+	cancelled chan struct{}
+	release   chan struct{}
 }
 
 func (c *contextCapturingTTS) Synthesize(ctx context.Context, text string) (ChunkedStream, error) {
 	c.ctx = ctx
 	return &contextCapturingChunkedStream{
-		ctx: ctx,
+		ctx:       ctx,
+		started:   c.started,
+		cancelled: c.cancelled,
+		release:   c.release,
 	}, nil
 }
 
 type contextCapturingChunkedStream struct {
-	ctx context.Context
+	ctx       context.Context
+	started   chan struct{}
+	cancelled chan struct{}
+	release   chan struct{}
 }
 
 func (s *contextCapturingChunkedStream) Next() (*SynthesizedAudio, error) {
+	if s.started != nil {
+		select {
+		case s.started <- struct{}{}:
+		default:
+		}
+	}
 	<-s.ctx.Done()
+	if s.cancelled != nil {
+		select {
+		case s.cancelled <- struct{}{}:
+		default:
+		}
+	}
+	if s.release != nil {
+		<-s.release
+	}
 	return nil, s.ctx.Err()
 }
 
