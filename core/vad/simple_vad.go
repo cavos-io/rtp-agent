@@ -173,6 +173,10 @@ func (s *simpleVADStream) PushFrame(frame *model.AudioFrame) error {
 	if frame.SamplesPerChannel == 0 {
 		return errors.New("vad frame samples per channel zero")
 	}
+	expectedDataLength := uint64(frame.SamplesPerChannel) * uint64(frame.NumChannels) * 2
+	if uint64(len(frame.Data)) != expectedDataLength {
+		return errors.New("vad frame data length mismatch")
+	}
 	if s.inputSampleRate == 0 {
 		s.inputSampleRate = frame.SampleRate
 	} else if frame.SampleRate != s.inputSampleRate {

@@ -236,6 +236,12 @@ func TestSimpleVADRejectsInvalidFrameMetadata(t *testing.T) {
 			SampleRate:  16000,
 			NumChannels: 1,
 		},
+		{
+			Data:              []byte{0, 0},
+			SampleRate:        16000,
+			NumChannels:       1,
+			SamplesPerChannel: 160,
+		},
 	} {
 		if err := stream.PushFrame(frame); err == nil {
 			t.Fatalf("PushFrame(%#v) error = nil, want error", frame)
