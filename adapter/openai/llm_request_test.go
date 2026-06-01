@@ -37,6 +37,11 @@ func TestBuildOpenAIChatCompletionRequestAppliesExtraParams(t *testing.T) {
 			"max_completion_tokens": 128,
 			"reasoning_effort":      "low",
 			"metadata":              map[string]any{"trace": "abc"},
+			"seed":                  42,
+			"stop":                  []string{"END"},
+			"user":                  "caller-123",
+			"store":                 true,
+			"stream_options":        map[string]any{"include_usage": true},
 		},
 	})
 
@@ -63,6 +68,21 @@ func TestBuildOpenAIChatCompletionRequestAppliesExtraParams(t *testing.T) {
 	}
 	if req.Metadata["trace"] != "abc" {
 		t.Fatalf("Metadata[trace] = %q, want abc", req.Metadata["trace"])
+	}
+	if req.Seed == nil || *req.Seed != 42 {
+		t.Fatalf("Seed = %#v, want 42", req.Seed)
+	}
+	if len(req.Stop) != 1 || req.Stop[0] != "END" {
+		t.Fatalf("Stop = %#v, want END", req.Stop)
+	}
+	if req.User != "caller-123" {
+		t.Fatalf("User = %q, want caller-123", req.User)
+	}
+	if !req.Store {
+		t.Fatal("Store = false, want true")
+	}
+	if req.StreamOptions == nil || !req.StreamOptions.IncludeUsage {
+		t.Fatalf("StreamOptions = %#v, want include_usage", req.StreamOptions)
 	}
 }
 

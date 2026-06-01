@@ -217,6 +217,26 @@ func applyOpenAIExtraParams(req *openai.ChatCompletionRequest, params map[string
 			if v := asStringMap(value); v != nil {
 				req.Metadata = v
 			}
+		case "seed":
+			if v, ok := asInt(value); ok {
+				req.Seed = &v
+			}
+		case "stop":
+			if v := asStringSlice(value); v != nil {
+				req.Stop = v
+			}
+		case "user":
+			if v, ok := value.(string); ok {
+				req.User = v
+			}
+		case "store":
+			if v, ok := value.(bool); ok {
+				req.Store = v
+			}
+		case "stream_options":
+			if v := asStreamOptions(value); v != nil {
+				req.StreamOptions = v
+			}
 		}
 	}
 }
@@ -262,6 +282,39 @@ func asStringMap(value any) map[string]string {
 	default:
 		return nil
 	}
+}
+
+func asStringSlice(value any) []string {
+	switch v := value.(type) {
+	case string:
+		return []string{v}
+	case []string:
+		return v
+	case []any:
+		out := make([]string, 0, len(v))
+		for _, item := range v {
+			str, ok := item.(string)
+			if !ok {
+				return nil
+			}
+			out = append(out, str)
+		}
+		return out
+	default:
+		return nil
+	}
+}
+
+func asStreamOptions(value any) *openai.StreamOptions {
+	optionsMap, ok := value.(map[string]any)
+	if !ok {
+		return nil
+	}
+	options := &openai.StreamOptions{}
+	if includeUsage, ok := optionsMap["include_usage"].(bool); ok {
+		options.IncludeUsage = includeUsage
+	}
+	return options
 }
 
 func buildOpenAIChatMessages(chatCtx *llm.ChatContext) []openai.ChatCompletionMessage {
