@@ -1082,6 +1082,16 @@ func TestChatContextUnmarshalJSONAcceptsAgentConfigInstructionObject(t *testing.
 	if config.Instructions == nil || *config.Instructions != "speak plainly" {
 		t.Fatalf("Instructions = %#v, want audio instruction text", config.Instructions)
 	}
+
+	serialized := ctx.ToDict()
+	items := serialized["items"].([]map[string]any)
+	instructions, ok := items[0]["instructions"].(map[string]any)
+	if !ok {
+		t.Fatalf("serialized instructions = %#v, want instructions object", items[0]["instructions"])
+	}
+	if instructions["type"] != "instructions" || instructions["audio"] != "speak plainly" || instructions["text"] != "write tersely" {
+		t.Fatalf("serialized instructions = %#v, want preserved variants", instructions)
+	}
 }
 
 func TestChatContextImageContentDefaultsInferenceDetail(t *testing.T) {

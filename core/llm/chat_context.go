@@ -673,39 +673,40 @@ func chatItemFromJSON(data []byte) (ChatItem, error) {
 		if err := json.Unmarshal(data, &item); err != nil {
 			return nil, err
 		}
-		instructions, err := agentConfigInstructionsFromJSON(item.Instructions)
+		instructions, variants, err := agentConfigInstructionsFromJSON(item.Instructions)
 		if err != nil {
 			return nil, err
 		}
 		return &AgentConfigUpdate{
-			ID:           itemIDOrDefault(item.ID),
-			Instructions: instructions,
-			ToolsAdded:   item.ToolsAdded,
-			ToolsRemoved: item.ToolsRemoved,
-			CreatedAt:    chatItemCreatedAtOrDefault(item.CreatedAt),
+			ID:                  itemIDOrDefault(item.ID),
+			Instructions:        instructions,
+			InstructionVariants: variants,
+			ToolsAdded:          item.ToolsAdded,
+			ToolsRemoved:        item.ToolsRemoved,
+			CreatedAt:           chatItemCreatedAtOrDefault(item.CreatedAt),
 		}, nil
 	default:
 		return nil, fmt.Errorf("unsupported chat item type %q", discriminator.Type)
 	}
 }
 
-func agentConfigInstructionsFromJSON(data json.RawMessage) (*string, error) {
+func agentConfigInstructionsFromJSON(data json.RawMessage) (*string, *Instructions, error) {
 	if len(data) == 0 || string(data) == "null" {
-		return nil, nil
+		return nil, nil, nil
 	}
 	var text string
 	if err := json.Unmarshal(data, &text); err == nil {
-		return &text, nil
+		return &text, nil, nil
 	}
 	content, err := chatContentFromJSON(data)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if content.Instructions == nil {
-		return nil, fmt.Errorf("agent_config_update instructions must be a string or instructions object")
+		return nil, nil, fmt.Errorf("agent_config_update instructions must be a string or instructions object")
 	}
 	text = content.Instructions.String()
-	return &text, nil
+	return &text, content.Instructions, nil
 }
 
 func chatMessageFromJSON(data []byte) (*ChatMessage, error) {
@@ -869,7 +870,9 @@ func chatItemToDict(item ChatItem, opts ChatContextDictOptions) map[string]any {
 			"id":   it.ID,
 			"type": "agent_config_update",
 		}
-		if it.Instructions != nil {
+		if it.InstructionVariants != nil {
+			data["instructions"] = instructionsToDict(it.InstructionVariants)
+		} else if it.Instructions != nil {
 			data["instructions"] = *it.Instructions
 		}
 		if it.ToolsAdded != nil {

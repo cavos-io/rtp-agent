@@ -245,11 +245,12 @@ type AgentHandoff struct {
 }
 
 type AgentConfigUpdate struct {
-	ID           string
-	Instructions *string
-	ToolsAdded   []string
-	ToolsRemoved []string
-	CreatedAt    time.Time
+	ID                  string
+	Instructions        *string
+	InstructionVariants *Instructions
+	ToolsAdded          []string
+	ToolsRemoved        []string
+	CreatedAt           time.Time
 }
 
 type ChatItem interface {
