@@ -326,6 +326,83 @@ func TestRealtimeSessionTracksRemoteItemDeletedEvents(t *testing.T) {
 	}
 }
 
+func TestRealtimeSessionAccumulatesInputAudioTranscriptionDeltas(t *testing.T) {
+	session := &realtimeSession{}
+
+	first := session.trackRealtimeEvent(llm.RealtimeEvent{
+		Type: llm.RealtimeEventTypeInputAudioTranscriptionCompleted,
+		InputTranscription: &llm.InputTranscriptionCompleted{
+			ItemID:     "item_123",
+			Transcript: "hel",
+			IsFinal:    false,
+		},
+	})
+	second := session.trackRealtimeEvent(llm.RealtimeEvent{
+		Type: llm.RealtimeEventTypeInputAudioTranscriptionCompleted,
+		InputTranscription: &llm.InputTranscriptionCompleted{
+			ItemID:     "item_123",
+			Transcript: "lo",
+			IsFinal:    false,
+		},
+	})
+
+	if first.InputTranscription.Transcript != "hel" {
+		t.Fatalf("first transcript = %q, want hel", first.InputTranscription.Transcript)
+	}
+	if second.InputTranscription.Transcript != "hello" {
+		t.Fatalf("second transcript = %q, want accumulated hello", second.InputTranscription.Transcript)
+	}
+
+	session.trackRealtimeEvent(llm.RealtimeEvent{
+		Type: llm.RealtimeEventTypeInputAudioTranscriptionCompleted,
+		InputTranscription: &llm.InputTranscriptionCompleted{
+			ItemID:     "item_123",
+			Transcript: "hello",
+			IsFinal:    true,
+		},
+	})
+	next := session.trackRealtimeEvent(llm.RealtimeEvent{
+		Type: llm.RealtimeEventTypeInputAudioTranscriptionCompleted,
+		InputTranscription: &llm.InputTranscriptionCompleted{
+			ItemID:     "item_123",
+			Transcript: "new",
+			IsFinal:    false,
+		},
+	})
+	if next.InputTranscription.Transcript != "new" {
+		t.Fatalf("next transcript = %q, want new after final clears accumulator", next.InputTranscription.Transcript)
+	}
+}
+
+func TestRealtimeSessionUpdatesRemoteItemOnFinalInputAudioTranscription(t *testing.T) {
+	session := &realtimeSession{remote: llm.NewRemoteChatContext()}
+	msg := &llm.ChatMessage{ID: "item_123", Role: llm.ChatRoleUser}
+	session.remote.Insert(nil, msg)
+	confidence := 0.82
+
+	session.trackRealtimeEvent(llm.RealtimeEvent{
+		Type: llm.RealtimeEventTypeInputAudioTranscriptionCompleted,
+		InputTranscription: &llm.InputTranscriptionCompleted{
+			ItemID:     "item_123",
+			Transcript: "hello",
+			IsFinal:    true,
+			Confidence: &confidence,
+		},
+	})
+
+	item := session.remote.Get("item_123")
+	tracked, ok := item.(*llm.ChatMessage)
+	if !ok {
+		t.Fatalf("tracked item = %T, want *llm.ChatMessage", item)
+	}
+	if tracked.TextContent() != "hello" {
+		t.Fatalf("tracked message text = %q, want hello", tracked.TextContent())
+	}
+	if tracked.TranscriptConfidence == nil || *tracked.TranscriptConfidence != confidence {
+		t.Fatalf("tracked confidence = %#v, want %.2f", tracked.TranscriptConfidence, confidence)
+	}
+}
+
 func TestRealtimeEventMapsConversationItemAddedFunctionCall(t *testing.T) {
 	ev, ok := openAIRealtimeEvent(map[string]any{
 		"type": "conversation.item.added",
