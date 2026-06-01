@@ -57,13 +57,17 @@ type MCPServerStdio struct {
 	msgID   atomic.Int64
 	pending map[int64]chan *jsonRPCResponse
 	mu      sync.Mutex
+
+	cacheDirty bool
+	toolsCache []Tool
 }
 
 func NewMCPServerStdio(command string, args []string) *MCPServerStdio {
 	return &MCPServerStdio{
-		Command: command,
-		Args:    args,
-		pending: make(map[int64]chan *jsonRPCResponse),
+		Command:    command,
+		Args:       args,
+		pending:    make(map[int64]chan *jsonRPCResponse),
+		cacheDirty: true,
 	}
 }
 
@@ -165,6 +169,10 @@ func (s *MCPServerStdio) Initialize(ctx context.Context) error {
 }
 
 func (s *MCPServerStdio) ListTools(ctx context.Context) ([]Tool, error) {
+	if tools, ok := s.cachedTools(); ok {
+		return tools, nil
+	}
+
 	resp, err := s.sendRequest(ctx, "tools/list", map[string]interface{}{})
 	if err != nil {
 		return nil, fmt.Errorf("tools/list failed: %w", err)
@@ -192,10 +200,38 @@ func (s *MCPServerStdio) ListTools(ctx context.Context) ([]Tool, error) {
 		})
 	}
 
+	s.setToolsCache(tools)
 	return tools, nil
 }
 
+func (s *MCPServerStdio) InvalidateCache() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.cacheDirty = true
+	s.toolsCache = nil
+}
+
+func (s *MCPServerStdio) cachedTools() ([]Tool, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.cacheDirty || s.toolsCache == nil {
+		return nil, false
+	}
+	tools := make([]Tool, len(s.toolsCache))
+	copy(tools, s.toolsCache)
+	return tools, true
+}
+
+func (s *MCPServerStdio) setToolsCache(tools []Tool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.toolsCache = make([]Tool, len(tools))
+	copy(s.toolsCache, tools)
+	s.cacheDirty = false
+}
+
 func (s *MCPServerStdio) Close() error {
+	s.InvalidateCache()
 	if s.stdin != nil {
 		s.stdin.Close()
 	}
