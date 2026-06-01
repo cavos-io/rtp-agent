@@ -296,6 +296,59 @@ func TestProcessJobExecutorPingMarksFailedWhenProcessMissing(t *testing.T) {
 	}
 }
 
+func TestProcessJobExecutorPingDoesNotHoldLockWhileKilling(t *testing.T) {
+	oldPingInterval := processPingInterval
+	oldProcessSignal := processSignal
+	oldKill := processKill
+	processPingInterval = time.Millisecond
+	processSignal = func(*os.Process, os.Signal) error {
+		return errors.New("process missing")
+	}
+	killStarted := make(chan struct{})
+	releaseKill := make(chan struct{})
+	processKill = func(*os.Process) error {
+		close(killStarted)
+		<-releaseKill
+		return nil
+	}
+	defer func() {
+		processPingInterval = oldPingInterval
+		processSignal = oldProcessSignal
+		processKill = oldKill
+	}()
+	defer close(releaseKill)
+
+	executor := NewProcessJobExecutor("exec-ping-lock")
+	executor.mu.Lock()
+	executor.status = JobStatusRunning
+	executor.cmd = &exec.Cmd{Process: &os.Process{Pid: 12345}}
+	executor.mu.Unlock()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go executor.pingTask(ctx)
+
+	select {
+	case <-killStarted:
+	case <-time.After(time.Second):
+		t.Fatal("process kill did not start after failed ping")
+	}
+
+	statusCh := make(chan JobStatus, 1)
+	go func() {
+		statusCh <- executor.Status()
+	}()
+
+	select {
+	case got := <-statusCh:
+		if got != JobStatusFailed {
+			t.Fatalf("Status() while kill is blocked = %q, want %q", got, JobStatusFailed)
+		}
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("Status() blocked while process kill was running")
+	}
+}
+
 func waitForProcessExecutorCommand(t *testing.T, executor *ProcessJobExecutor) {
 	t.Helper()
 

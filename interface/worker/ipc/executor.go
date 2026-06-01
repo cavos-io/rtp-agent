@@ -319,13 +319,15 @@ func (e *ProcessJobExecutor) pingTask(ctx context.Context) {
 			// In a full implementation, we would send a ping message via a pipe
 			// and wait for a pong.
 			// For basic parity, we'll check if the process is still alive.
+			var killProcess *os.Process
 			if e.cmd != nil && e.cmd.Process != nil {
 				// check if process exists
 				if err := processSignal(e.cmd.Process, syscall.Signal(0)); err != nil {
 					logger.Logger.Warnw("Job process unresponsive", err, "exec_id", e.id)
 					e.status = JobStatusFailed
-					_ = processKill(e.cmd.Process)
+					killProcess = e.cmd.Process
 					e.mu.Unlock()
+					_ = processKill(killProcess)
 					return
 				}
 			}
