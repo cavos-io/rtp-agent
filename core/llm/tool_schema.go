@@ -85,10 +85,9 @@ func goTypeToJSONSchema(t reflect.Type, description string) map[string]interface
 		schema["type"] = []string{goKindToJSONType(t.Elem().Kind()), "null"}
 		if t.Elem().Kind() == reflect.Struct {
 			// If it's a pointer to a struct, we should describe the struct properties
-			// but also allow "null"
+			// but also allow "null".
 			structSchema := GenerateStrictJSONSchema(t.Elem())
-			// This is a simplification; a more correct representation might use "oneOf"
-			// but for many LLMs this is sufficient.
+			structSchema["type"] = []string{"object", "null"}
 			return structSchema
 		} else if t.Elem().Kind() == reflect.Slice || t.Elem().Kind() == reflect.Array {
 			schema["items"] = goTypeToJSONSchema(t.Elem().Elem(), "")
