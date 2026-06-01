@@ -1634,6 +1634,33 @@ func TestWorkerStatusMessageMarksOverloadedWorkerFull(t *testing.T) {
 	}
 }
 
+func TestWorkerStatusMessageUsesSingleLoadSample(t *testing.T) {
+	loads := []float64{0.8, 0.1}
+	server := NewAgentServer(WorkerOptions{
+		LoadThreshold: 0.5,
+		LoadFunc: func(*AgentServer) float64 {
+			load := loads[0]
+			loads = loads[1:]
+			return load
+		},
+	})
+
+	msg := server.workerStatusMessage(livekit.WorkerStatus_WS_AVAILABLE)
+	update := msg.GetUpdateWorker()
+	if update == nil {
+		t.Fatal("update worker message is nil")
+	}
+	if update.GetStatus() != livekit.WorkerStatus_WS_FULL {
+		t.Fatalf("UpdateWorker.Status = %v, want WS_FULL", update.GetStatus())
+	}
+	if update.Load != 0.8 {
+		t.Fatalf("UpdateWorker.Load = %v, want the same load sample used for status", update.Load)
+	}
+	if len(loads) != 1 {
+		t.Fatalf("LoadFunc calls consumed %d samples, want 1", 2-len(loads))
+	}
+}
+
 func TestDrainingWorkerStatusMessageReportsFullWithoutLoad(t *testing.T) {
 	server := NewAgentServer(WorkerOptions{
 		LoadFunc: func(*AgentServer) float64 {

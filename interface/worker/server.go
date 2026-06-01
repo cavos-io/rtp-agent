@@ -902,14 +902,15 @@ func (s *AgentServer) registerWorkerRequest() *livekit.WorkerMessage {
 
 func (s *AgentServer) workerStatusMessage(status livekit.WorkerStatus) *livekit.WorkerMessage {
 	jobCount := uint32(s.activeJobCount())
-	if status == livekit.WorkerStatus_WS_AVAILABLE && !s.availableForJob() {
+	load := s.currentLoad()
+	if status == livekit.WorkerStatus_WS_AVAILABLE && !s.availableForJobWithLoad(load) {
 		status = livekit.WorkerStatus_WS_FULL
 	}
 	return &livekit.WorkerMessage{
 		Message: &livekit.WorkerMessage_UpdateWorker{
 			UpdateWorker: &livekit.UpdateWorkerStatus{
 				Status:   &status,
-				Load:     float32(s.currentLoad()),
+				Load:     float32(load),
 				JobCount: jobCount,
 			},
 		},
@@ -1059,7 +1060,10 @@ func (s *AgentServer) currentLoad() float64 {
 }
 
 func (s *AgentServer) effectiveLoad() float64 {
-	load := s.currentLoad()
+	return s.effectiveLoadWithLoad(s.currentLoad())
+}
+
+func (s *AgentServer) effectiveLoadWithLoad(load float64) float64 {
 	threshold := s.Options.LoadThreshold
 	if threshold <= 0 {
 		return load
@@ -1096,7 +1100,21 @@ func (s *AgentServer) availableForJob() bool {
 	if math.IsInf(threshold, 1) {
 		return true
 	}
-	return s.effectiveLoad() < threshold
+	return s.effectiveLoadWithLoad(s.currentLoad()) < threshold
+}
+
+func (s *AgentServer) availableForJobWithLoad(load float64) bool {
+	if s.Draining() {
+		return false
+	}
+	threshold := s.Options.LoadThreshold
+	if threshold <= 0 {
+		return true
+	}
+	if math.IsInf(threshold, 1) {
+		return true
+	}
+	return s.effectiveLoadWithLoad(load) < threshold
 }
 
 func (s *AgentServer) validateRunPreconditions() error {
