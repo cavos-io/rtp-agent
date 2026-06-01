@@ -486,6 +486,39 @@ func TestJobContextParticipantAvailableSkipsDuplicateEntrypointWhileRunning(t *t
 	close(release)
 }
 
+func TestJobContextAddParticipantEntrypointReplaysAvailableParticipantOncePerIdentity(t *testing.T) {
+	ctx := NewJobContext(&livekit.Job{Id: "job_participant_available_replay_unique"}, "", "", "")
+	participant := fakeParticipantView{
+		sid:      "PA_first",
+		identity: "caller",
+		kind:     lksdk.ParticipantStandard,
+	}
+	ctx.participantAvailable(participant)
+	participant.sid = "PA_second"
+	ctx.participantAvailable(participant)
+
+	calls := make(chan string, 2)
+	if err := ctx.AddParticipantEntrypoint(func(_ *JobContext, p *livekit.ParticipantInfo) {
+		calls <- p.Sid
+	}); err != nil {
+		t.Fatalf("AddParticipantEntrypoint() error = %v", err)
+	}
+
+	select {
+	case got := <-calls:
+		if got != "PA_second" {
+			t.Fatalf("replayed participant SID = %q, want latest PA_second", got)
+		}
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("participant entrypoint was not called for available participant")
+	}
+	select {
+	case got := <-calls:
+		t.Fatalf("duplicate replayed participant SID = %q, want one replay per identity", got)
+	case <-time.After(100 * time.Millisecond):
+	}
+}
+
 func TestJobContextParticipantsAvailableReplaysExistingParticipants(t *testing.T) {
 	ctx := NewJobContext(&livekit.Job{Id: "job_existing_participants"}, "", "", "")
 	calls := make(chan string, 2)

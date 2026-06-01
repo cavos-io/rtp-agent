@@ -332,8 +332,18 @@ func (c *JobContext) participantAvailable(participant remoteParticipantView) {
 	if info == nil {
 		return
 	}
-	c.availableParticipants = append(c.availableParticipants, info)
+	c.rememberAvailableParticipant(info)
 	c.scheduleParticipantEntrypoints(info)
+}
+
+func (c *JobContext) rememberAvailableParticipant(info *livekit.ParticipantInfo) {
+	for i, participant := range c.availableParticipants {
+		if participant.Identity == info.Identity {
+			c.availableParticipants[i] = info
+			return
+		}
+	}
+	c.availableParticipants = append(c.availableParticipants, info)
 }
 
 func (c *JobContext) participantsAvailable(participants []remoteParticipantView) {
