@@ -7,12 +7,16 @@ import (
 	"io"
 	"strings"
 	"sync"
+	"time"
 
 	cavosmath "github.com/cavos-io/rtp-agent/library/math"
+	"github.com/cavos-io/rtp-agent/library/telemetry"
 	"github.com/cavos-io/rtp-agent/library/tokenize"
 )
 
 type StreamAdapter struct {
+	MetricsEmitter
+	ErrorEmitter
 	tts TTS
 }
 
@@ -39,17 +43,33 @@ func (a *StreamAdapter) Prewarm() {
 }
 
 func (a *StreamAdapter) OnMetricsCollected(handler TTSMetricsHandler) func() {
+	unsubscribes := []func(){a.MetricsEmitter.OnMetricsCollected(handler)}
 	if collector, ok := a.tts.(metricsCollectorTTS); ok {
-		return collector.OnMetricsCollected(handler)
+		unsubscribes = append(unsubscribes, collector.OnMetricsCollected(handler))
 	}
-	return func() {}
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			for _, unsubscribe := range unsubscribes {
+				unsubscribe()
+			}
+		})
+	}
 }
 
 func (a *StreamAdapter) OnError(handler TTSErrorHandler) func() {
+	unsubscribes := []func(){a.ErrorEmitter.OnError(handler)}
 	if collector, ok := a.tts.(errorCollectorTTS); ok {
-		return collector.OnError(handler)
+		unsubscribes = append(unsubscribes, collector.OnError(handler))
 	}
-	return func() {}
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			for _, unsubscribe := range unsubscribes {
+				unsubscribe()
+			}
+		})
+	}
 }
 
 func (a *StreamAdapter) Capabilities() TTSCapabilities {
@@ -86,11 +106,20 @@ type streamAdapterWrapper struct {
 	exception error
 
 	segmentPending *SynthesizedAudio
+	metrics        map[string]*streamAdapterSegmentMetrics
 }
 
 type streamAdapterInput struct {
 	text  string
 	flush bool
+}
+
+type streamAdapterSegmentMetrics struct {
+	text      string
+	startedAt time.Time
+	ttfb      float64
+	ttfbSet   bool
+	audioDur  float64
 }
 
 func (a *StreamAdapter) Stream(ctx context.Context) (SynthesizeStream, error) {
@@ -104,6 +133,7 @@ func (a *StreamAdapter) Stream(ctx context.Context) (SynthesizeStream, error) {
 		errCh:     make(chan error, 1),
 		inputCh:   make(chan streamAdapterInput, 100),
 		flushCh:   make(chan struct{}, 100),
+		metrics:   make(map[string]*streamAdapterSegmentMetrics),
 	}
 
 	go w.run()
@@ -253,7 +283,11 @@ func (w *streamAdapterWrapper) flushSegmentPending(isFinal bool) {
 	audio := cloneSynthesizedAudio(w.segmentPending)
 	audio.IsFinal = isFinal
 	w.segmentPending = nil
+	w.observeSegmentAudio(audio, audio.DeltaText)
 	w.eventCh <- audio
+	if isFinal {
+		w.emitSegmentMetrics(audio)
+	}
 }
 
 func (w *streamAdapterWrapper) sendSynthesizedAudio(audio *SynthesizedAudio, text string, segmentID string, isFinal bool, includeTranscript bool) {
@@ -264,7 +298,63 @@ func (w *streamAdapterWrapper) sendSynthesizedAudio(audio *SynthesizedAudio, tex
 	if includeTranscript {
 		audio.DeltaText = text
 	}
+	w.observeSegmentAudio(audio, text)
 	w.eventCh <- audio
+	if isFinal {
+		w.emitSegmentMetrics(audio)
+	}
+}
+
+func (w *streamAdapterWrapper) observeSegmentAudio(audio *SynthesizedAudio, text string) {
+	if audio == nil || audio.Frame == nil {
+		return
+	}
+	key := audio.SegmentID
+	metrics := w.metrics[key]
+	if metrics == nil {
+		metrics = &streamAdapterSegmentMetrics{startedAt: time.Now()}
+		w.metrics[key] = metrics
+	}
+	if metrics.text == "" && text != "" {
+		metrics.text = text
+	}
+	if !metrics.ttfbSet {
+		metrics.ttfb = time.Since(metrics.startedAt).Seconds()
+		metrics.ttfbSet = true
+	}
+	metrics.audioDur += audioFrameDurationSeconds(audio.Frame)
+}
+
+func (w *streamAdapterWrapper) emitSegmentMetrics(audio *SynthesizedAudio) {
+	if audio == nil {
+		return
+	}
+	key := audio.SegmentID
+	metrics := w.metrics[key]
+	if metrics == nil {
+		return
+	}
+	delete(w.metrics, key)
+
+	ttfb := -1.0
+	if metrics.ttfbSet {
+		ttfb = metrics.ttfb
+	}
+	w.adapter.EmitMetricsCollected(&telemetry.TTSMetrics{
+		Label:           w.adapter.Label(),
+		RequestID:       audio.RequestID,
+		SegmentID:       audio.SegmentID,
+		Timestamp:       time.Now(),
+		TTFB:            ttfb,
+		Duration:        time.Since(metrics.startedAt).Seconds(),
+		AudioDuration:   metrics.audioDur,
+		CharactersCount: len(metrics.text),
+		Streamed:        true,
+		Metadata: &telemetry.Metadata{
+			ModelName:     w.adapter.Model(),
+			ModelProvider: w.adapter.Provider(),
+		},
+	})
 }
 
 func newRetainFormatSentenceStream(language string) tokenize.SentenceStream {
@@ -279,6 +369,7 @@ func newRetainFormatSentenceStream(language string) tokenize.SentenceStream {
 }
 
 func (w *streamAdapterWrapper) sendErr(err error) {
+	emitTTSError(w.adapter, err, false)
 	select {
 	case w.errCh <- err:
 	default:

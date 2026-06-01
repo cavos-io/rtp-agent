@@ -7,13 +7,17 @@ import (
 	"io"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/cavos-io/rtp-agent/core/audio/model"
 	"github.com/cavos-io/rtp-agent/library/logger"
 	cavosmath "github.com/cavos-io/rtp-agent/library/math"
+	"github.com/cavos-io/rtp-agent/library/telemetry"
 )
 
 type FallbackAdapter struct {
+	MetricsEmitter
+
 	ttss                 []TTS
 	capabilities         TTSCapabilities
 	sampleRate           int
@@ -146,7 +150,8 @@ func (f *FallbackAdapter) OnMetricsCollected(handler TTSMetricsHandler) func() {
 	if handler == nil {
 		return func() {}
 	}
-	unsubscribes := make([]func(), 0, len(f.ttss))
+	unsubscribes := make([]func(), 0, len(f.ttss)+1)
+	unsubscribes = append(unsubscribes, f.MetricsEmitter.OnMetricsCollected(handler))
 	for _, tts := range f.ttss {
 		collector, ok := tts.(metricsCollectorTTS)
 		if !ok {
@@ -470,6 +475,14 @@ type fallbackChunkedStream struct {
 	closed  bool
 	done    bool
 	err     error
+	metrics fallbackMetricsState
+}
+
+type fallbackMetricsState struct {
+	startedAt time.Time
+	ttfb      float64
+	ttfbSet   bool
+	audioDur  float64
 }
 
 func (f *FallbackAdapter) Synthesize(ctx context.Context, text string) (ChunkedStream, error) {
@@ -482,6 +495,7 @@ func (f *FallbackAdapter) Synthesize(ctx context.Context, text string) (ChunkedS
 		closeCh:   make(chan struct{}),
 		retries:   make(map[int]int),
 		requestID: cavosmath.ShortUUID(""),
+		metrics:   fallbackMetricsState{startedAt: time.Now()},
 	}
 
 	if err := s.tryStartStream(0); err != nil {
@@ -550,6 +564,7 @@ func (s *fallbackChunkedStream) monitorStream() {
 				if pending != nil {
 					pending = cloneSynthesizedAudio(pending)
 					pending.IsFinal = true
+					s.emitMetrics(pending)
 					select {
 					case s.eventCh <- pending:
 						outputSent = true
@@ -599,6 +614,7 @@ func (s *fallbackChunkedStream) monitorStream() {
 				if pending != nil {
 					pending = cloneSynthesizedAudio(pending)
 					pending.IsFinal = true
+					s.emitMetrics(pending)
 					select {
 					case s.eventCh <- pending:
 					case <-s.closeCh:
@@ -640,6 +656,7 @@ func (s *fallbackChunkedStream) monitorStream() {
 		ev = cloneSynthesizedAudio(ev)
 		ev.RequestID = s.requestID
 		ev.SegmentID = ""
+		s.observeAudio(ev)
 
 		if pending != nil {
 			combined, combineErr := combineAudioFrames(pending.Frame, ev.Frame)
@@ -686,6 +703,48 @@ func (s *fallbackChunkedStream) canRetryTTS(index int) bool {
 		s.retries = make(map[int]int)
 	}
 	return s.retries[index] < s.adapter.maxRetryPerTTS
+}
+
+func (s *fallbackChunkedStream) observeAudio(audio *SynthesizedAudio) {
+	if audio == nil || audio.Frame == nil {
+		return
+	}
+	if s.metrics.startedAt.IsZero() {
+		s.metrics.startedAt = time.Now()
+	}
+	if !s.metrics.ttfbSet {
+		s.metrics.ttfb = time.Since(s.metrics.startedAt).Seconds()
+		s.metrics.ttfbSet = true
+	}
+	s.metrics.audioDur += audioFrameDurationSeconds(audio.Frame)
+}
+
+func (s *fallbackChunkedStream) emitMetrics(audio *SynthesizedAudio) {
+	if audio == nil {
+		return
+	}
+	ttfb := -1.0
+	if s.metrics.ttfbSet {
+		ttfb = s.metrics.ttfb
+	}
+	startedAt := s.metrics.startedAt
+	if startedAt.IsZero() {
+		startedAt = time.Now()
+	}
+	s.adapter.EmitMetricsCollected(&telemetry.TTSMetrics{
+		Label:           s.adapter.Label(),
+		RequestID:       audio.RequestID,
+		Timestamp:       time.Now(),
+		TTFB:            ttfb,
+		Duration:        time.Since(startedAt).Seconds(),
+		AudioDuration:   s.metrics.audioDur,
+		CharactersCount: len(s.text),
+		Streamed:        false,
+		Metadata: &telemetry.Metadata{
+			ModelName:     s.adapter.Model(),
+			ModelProvider: s.adapter.Provider(),
+		},
+	})
 }
 
 func (s *fallbackChunkedStream) Next() (*SynthesizedAudio, error) {
@@ -763,6 +822,7 @@ type fallbackSynthesizeStream struct {
 	flushed   bool
 	done      bool
 	err       error
+	metrics   fallbackMetricsState
 }
 
 type fallbackSynthesizeInput struct {
@@ -780,6 +840,7 @@ func (f *FallbackAdapter) Stream(ctx context.Context) (SynthesizeStream, error) 
 		retries:   make(map[int]int),
 		requestID: cavosmath.ShortUUID(""),
 		segmentID: cavosmath.ShortUUID(""),
+		metrics:   fallbackMetricsState{startedAt: time.Now()},
 	}
 
 	if err := s.tryStartStream(0); err != nil {
@@ -884,6 +945,7 @@ func (s *fallbackSynthesizeStream) monitorStream() {
 				if pending != nil {
 					pending = cloneSynthesizedAudio(pending)
 					pending.IsFinal = true
+					s.emitMetrics(pending)
 					select {
 					case s.eventCh <- pending:
 						outputSent = true
@@ -933,6 +995,7 @@ func (s *fallbackSynthesizeStream) monitorStream() {
 				if pending != nil {
 					pending = cloneSynthesizedAudio(pending)
 					pending.IsFinal = true
+					s.emitMetrics(pending)
 					select {
 					case s.eventCh <- pending:
 					case <-s.closeCh:
@@ -974,6 +1037,7 @@ func (s *fallbackSynthesizeStream) monitorStream() {
 		ev = cloneSynthesizedAudio(ev)
 		ev.RequestID = s.requestID
 		ev.SegmentID = s.segmentID
+		s.observeAudio(ev)
 
 		providerFinal := ev.IsFinal
 		if pending != nil {
@@ -1011,6 +1075,7 @@ func (s *fallbackSynthesizeStream) monitorStream() {
 			ev.RequestID = s.requestID
 			ev.SegmentID = s.segmentID
 			ev.IsFinal = true
+			s.emitMetrics(ev)
 			select {
 			case s.eventCh <- ev:
 				outputSent = true
@@ -1050,6 +1115,49 @@ func (s *fallbackSynthesizeStream) canRetryTTS(index int) bool {
 		s.retries = make(map[int]int)
 	}
 	return s.retries[index] < s.adapter.maxRetryPerTTS
+}
+
+func (s *fallbackSynthesizeStream) observeAudio(audio *SynthesizedAudio) {
+	if audio == nil || audio.Frame == nil {
+		return
+	}
+	if s.metrics.startedAt.IsZero() {
+		s.metrics.startedAt = time.Now()
+	}
+	if !s.metrics.ttfbSet {
+		s.metrics.ttfb = time.Since(s.metrics.startedAt).Seconds()
+		s.metrics.ttfbSet = true
+	}
+	s.metrics.audioDur += audioFrameDurationSeconds(audio.Frame)
+}
+
+func (s *fallbackSynthesizeStream) emitMetrics(audio *SynthesizedAudio) {
+	if audio == nil {
+		return
+	}
+	ttfb := -1.0
+	if s.metrics.ttfbSet {
+		ttfb = s.metrics.ttfb
+	}
+	startedAt := s.metrics.startedAt
+	if startedAt.IsZero() {
+		startedAt = time.Now()
+	}
+	s.adapter.EmitMetricsCollected(&telemetry.TTSMetrics{
+		Label:           s.adapter.Label(),
+		RequestID:       audio.RequestID,
+		SegmentID:       audio.SegmentID,
+		Timestamp:       time.Now(),
+		TTFB:            ttfb,
+		Duration:        time.Since(startedAt).Seconds(),
+		AudioDuration:   s.metrics.audioDur,
+		CharactersCount: len(s.pushedText()),
+		Streamed:        true,
+		Metadata: &telemetry.Metadata{
+			ModelName:     s.adapter.Model(),
+			ModelProvider: s.adapter.Provider(),
+		},
+	})
 }
 
 func (s *fallbackSynthesizeStream) pushedText() string {

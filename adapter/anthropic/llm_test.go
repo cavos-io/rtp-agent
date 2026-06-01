@@ -2,10 +2,10 @@ package anthropic
 
 import (
 	"bufio"
-	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"strings"
@@ -16,9 +16,12 @@ import (
 )
 
 type captureRoundTripper struct {
-	body        map[string]any
-	hasDeadline bool
-	remaining   time.Duration
+	body         map[string]any
+	hasDeadline  bool
+	remaining    time.Duration
+	statusCode   int
+	responseBody string
+	header       http.Header
 }
 
 func (rt *captureRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
@@ -31,10 +34,18 @@ func (rt *captureRoundTripper) RoundTrip(req *http.Request) (*http.Response, err
 	if err := json.NewDecoder(req.Body).Decode(&rt.body); err != nil {
 		return nil, err
 	}
+	statusCode := rt.statusCode
+	if statusCode == 0 {
+		statusCode = http.StatusOK
+	}
+	header := rt.header
+	if header == nil {
+		header = make(http.Header)
+	}
 	return &http.Response{
-		StatusCode: http.StatusOK,
-		Body:       io.NopCloser(bytes.NewBuffer(nil)),
-		Header:     make(http.Header),
+		StatusCode: statusCode,
+		Body:       io.NopCloser(strings.NewReader(rt.responseBody)),
+		Header:     header,
 		Request:    req,
 	}, nil
 }
@@ -107,6 +118,40 @@ func TestAnthropicChatAppliesDefaultConnectOptionsTimeoutToRequestContext(t *tes
 	}
 	if transport.remaining <= 0 || transport.remaining > llm.DefaultAPIConnectOptions().Timeout {
 		t.Fatalf("request context deadline remaining = %v, want bounded by default connect timeout", transport.remaining)
+	}
+}
+
+func TestAnthropicChatReturnsAPIStatusErrorOnHTTPError(t *testing.T) {
+	transport := &captureRoundTripper{
+		statusCode:   http.StatusTooManyRequests,
+		responseBody: "rate limit",
+		header:       http.Header{"request-id": []string{"req_123"}},
+	}
+	originalTransport := http.DefaultTransport
+	http.DefaultTransport = transport
+	t.Cleanup(func() { http.DefaultTransport = originalTransport })
+
+	model, err := NewAnthropicLLM("test-key", "claude-test")
+	if err != nil {
+		t.Fatalf("NewAnthropicLLM() error = %v", err)
+	}
+	_, err = model.Chat(context.Background(), llm.NewChatContext())
+
+	var statusErr *llm.APIStatusError
+	if !errors.As(err, &statusErr) {
+		t.Fatalf("Chat error = %T %v, want APIStatusError", err, err)
+	}
+	if statusErr.Message != "rate limit (429 Too Many Requests)" {
+		t.Fatalf("Message = %q, want formatted rate limit message", statusErr.Message)
+	}
+	if statusErr.StatusCode != http.StatusTooManyRequests || statusErr.RequestID != "req_123" {
+		t.Fatalf("status metadata = %#v, want 429 req_123", statusErr)
+	}
+	if statusErr.Body != "rate limit" {
+		t.Fatalf("Body = %#v, want response body", statusErr.Body)
+	}
+	if !statusErr.Retryable {
+		t.Fatal("Retryable = false, want 429 retryable")
 	}
 }
 
