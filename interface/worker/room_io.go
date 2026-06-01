@@ -361,7 +361,8 @@ func (rio *RoomIO) disableAudioIOForSimulator() {
 }
 
 func (rio *RoomIO) SetParticipant(participantIdentity string) {
-	rio.setParticipant(participantIdentity, false)
+	currentParticipant, available := rio.participantState()
+	rio.setParticipant(participantIdentity, currentParticipant == participantIdentity && available)
 }
 
 func (rio *RoomIO) setParticipant(participantIdentity string, available bool) {
