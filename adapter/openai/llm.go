@@ -107,6 +107,9 @@ func mapOpenAIError(err error) error {
 	if errors.As(err, &apiErr) && apiErr.HTTPStatusCode != 0 {
 		return llm.CreateAPIErrorFromHTTP(apiErr.Message, apiErr.HTTPStatusCode, "", apiErr)
 	}
+	if errors.As(err, &apiErr) {
+		return llm.NewAPIError(apiErr.Message, apiErr, true)
+	}
 	var requestErr *openai.RequestError
 	if errors.As(err, &requestErr) && requestErr.HTTPStatusCode != 0 {
 		message := strings.TrimSpace(string(requestErr.Body))
@@ -642,7 +645,7 @@ func (s *openaiStream) Next() (*llm.ChatChunk, error) {
 		if errors.Is(err, io.EOF) {
 			return nil, io.EOF
 		}
-		return nil, err
+		return nil, mapOpenAIError(err)
 	}
 
 	if len(resp.Choices) == 0 {

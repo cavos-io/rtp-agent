@@ -305,6 +305,50 @@ func TestOpenAIChatDoesNotRetryNonRetryableSetupAPIError(t *testing.T) {
 	}
 }
 
+func TestOpenAIStreamReturnsAPIErrorOnErrorEvent(t *testing.T) {
+	capture := &sequenceHTTPClient{responses: []*http.Response{
+		openAITestResponse(http.StatusOK, `data: {"error":{"message":"stream failed","type":"server_error","code":"server_error"}}`+"\n\n"),
+	}}
+	config := openaisdk.DefaultConfig("test-key")
+	config.HTTPClient = capture
+	model := NewOpenAILLMWithConfig(config)
+	model.model = "gpt-4o"
+
+	stream, err := model.Chat(
+		context.Background(),
+		llm.NewChatContext(),
+		llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 0}),
+	)
+	if err != nil {
+		t.Fatalf("Chat() error = %v", err)
+	}
+	defer stream.Close()
+
+	_, err = stream.Next()
+
+	var apiErr *llm.APIError
+	if !errors.As(err, &apiErr) {
+		t.Fatalf("Next error = %T %v, want APIError", err, err)
+	}
+	if apiErr.Message != "stream failed" {
+		t.Fatalf("Message = %q, want OpenAI stream error message", apiErr.Message)
+	}
+	body, ok := apiErr.Body.(*openaisdk.APIError)
+	if !ok {
+		t.Fatalf("Body = %T %#v, want OpenAI APIError body", apiErr.Body, apiErr.Body)
+	}
+	if body.Type != "server_error" || body.Code != "server_error" {
+		t.Fatalf("Body = %#v, want server_error metadata", body)
+	}
+	if !apiErr.Retryable {
+		t.Fatal("Retryable = false, want stream API errors retryable")
+	}
+	var connectionErr *llm.APIConnectionError
+	if errors.As(err, &connectionErr) {
+		t.Fatalf("Next error = %T %v, want APIError not APIConnectionError", err, err)
+	}
+}
+
 type sequenceHTTPClient struct {
 	responses []*http.Response
 	calls     int
