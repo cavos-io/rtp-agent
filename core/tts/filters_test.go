@@ -20,6 +20,15 @@ func TestFilterMarkdownPreservesLiteralPunctuationInsideWords(t *testing.T) {
 	}
 }
 
+func TestFilterMarkdownRemovesSingleCharacterEmphasis(t *testing.T) {
+	input := "Say **x** and *y*, plus __z__ and _q_."
+	want := "Say x and y, plus z and q."
+
+	if got := FilterMarkdown(input); got != want {
+		t.Fatalf("FilterMarkdown() = %q, want %q", got, want)
+	}
+}
+
 func TestFilterMarkdownRemovesCodeFencesWithoutDroppingCode(t *testing.T) {
 	input := "Before\n```go\nfmt.Println(\"hi\")\n```\nAfter"
 	want := "Before\n\nfmt.Println(\"hi\")\n\nAfter"
