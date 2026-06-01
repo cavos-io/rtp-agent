@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/cavos-io/conversation-worker/core/stt"
+	"github.com/cavos-io/conversation-worker/model"
 )
 
 func TestInferenceSTTFinalTranscriptEmitsStructuredRecognitionUsage(t *testing.T) {
@@ -143,5 +144,21 @@ func TestInferenceSTTAppliesStartTimeOffsetToTranscriptAndWords(t *testing.T) {
 	}
 	if data.Words[0].StartTimeOffset != 10.0 {
 		t.Fatalf("word StartTimeOffset = %v, want 10.0", data.Words[0].StartTimeOffset)
+	}
+}
+
+func TestInferenceSTTStreamRejectsMismatchedSampleRates(t *testing.T) {
+	stream := &inferenceSTTStream{
+		audioCh: make(chan *model.AudioFrame, 2),
+	}
+
+	if err := stream.PushFrame(&model.AudioFrame{Data: []byte("first"), SampleRate: 16000, NumChannels: 1, SamplesPerChannel: 1}); err != nil {
+		t.Fatalf("PushFrame(first) returned error: %v", err)
+	}
+	if err := stream.PushFrame(&model.AudioFrame{Data: []byte("second"), SampleRate: 8000, NumChannels: 1, SamplesPerChannel: 1}); err == nil {
+		t.Fatal("PushFrame(second) returned nil, want sample-rate mismatch error")
+	}
+	if got := len(stream.audioCh); got != 1 {
+		t.Fatalf("audio frames forwarded = %d, want 1", got)
 	}
 }

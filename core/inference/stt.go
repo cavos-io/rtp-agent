@@ -128,6 +128,7 @@ type inferenceSTTStream struct {
 	eventCh         chan *stt.SpeechEvent
 	mu              sync.Mutex
 	closed          bool
+	rateGuard       stt.SampleRateGuard
 	speaking        bool
 	audioDuration   float64
 	startTimeOffset float64
@@ -155,6 +156,9 @@ func (s *inferenceSTTStream) PushFrame(frame *model.AudioFrame) error {
 	defer s.mu.Unlock()
 	if s.closed {
 		return fmt.Errorf("stream closed")
+	}
+	if err := s.rateGuard.Check(frame); err != nil {
+		return err
 	}
 	s.audioDuration += float64(frame.SamplesPerChannel) / float64(frame.SampleRate)
 	s.audioCh <- frame
