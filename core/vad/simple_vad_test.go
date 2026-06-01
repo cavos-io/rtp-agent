@@ -557,6 +557,36 @@ func TestSimpleVADIgnoresMismatchedSampleRateFrames(t *testing.T) {
 	assertEventType(t, stream, VADEventEndOfSpeech)
 }
 
+func TestSimpleVADIgnoresMismatchedChannelCountFrames(t *testing.T) {
+	stream, err := NewSimpleVAD(0.05).Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	defer stream.Close()
+
+	if err := stream.PushFrame(audioFrame(16000, 160, 6000)); err != nil {
+		t.Fatalf("PushFrame() first frame error = %v", err)
+	}
+	assertEventType(t, stream, VADEventInferenceDone)
+	assertEventType(t, stream, VADEventStartOfSpeech)
+
+	if err := stream.PushFrame(audioFrameWithChannels(16000, 2, 160, 0)); err != nil {
+		t.Fatalf("PushFrame() mismatched channel count error = %v", err)
+	}
+	assertNoQueuedVADEvent(t, stream)
+
+	matchingSilence := audioFrame(16000, 160, 0)
+	if err := stream.PushFrame(matchingSilence); err != nil {
+		t.Fatalf("PushFrame() matching silence error = %v", err)
+	}
+	inference := nextVADEvent(t, stream)
+	if inference.Type != VADEventInferenceDone {
+		t.Fatalf("event type = %s, want %s", inference.Type, VADEventInferenceDone)
+	}
+	assertCombinedFrames(t, inference.Frames, matchingSilence)
+	assertEventType(t, stream, VADEventEndOfSpeech)
+}
+
 func TestSimpleVADRejectsNilFrames(t *testing.T) {
 	stream, err := NewSimpleVAD(0.05).Stream(context.Background())
 	if err != nil {
@@ -1786,15 +1816,19 @@ func assertCombinedFrames(t *testing.T, got []*model.AudioFrame, want ...*model.
 }
 
 func audioFrame(sampleRate uint32, samples int, value int16) *model.AudioFrame {
-	data := make([]byte, samples*2)
-	for i := 0; i < samples; i++ {
+	return audioFrameWithChannels(sampleRate, 1, samples, value)
+}
+
+func audioFrameWithChannels(sampleRate uint32, channels uint32, samples int, value int16) *model.AudioFrame {
+	data := make([]byte, samples*int(channels)*2)
+	for i := 0; i < samples*int(channels); i++ {
 		data[i*2] = byte(value)
 		data[i*2+1] = byte(uint16(value) >> 8)
 	}
 	return &model.AudioFrame{
 		Data:              data,
 		SampleRate:        sampleRate,
-		NumChannels:       1,
+		NumChannels:       channels,
 		SamplesPerChannel: uint32(samples),
 	}
 }

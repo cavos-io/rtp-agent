@@ -273,6 +273,7 @@ type simpleVADStream struct {
 	closed                     bool
 	inputEnded                 bool
 	inputSampleRate            uint32
+	inputNumChannels           uint32
 	samplesIndex               int
 	sampleIndexRemainder       float64
 	timestamp                  float64
@@ -355,7 +356,11 @@ func (s *simpleVADStream) PushFrame(frame *model.AudioFrame) error {
 	}
 	if s.inputSampleRate == 0 {
 		s.inputSampleRate = frame.SampleRate
+		s.inputNumChannels = frame.NumChannels
 	} else if frame.SampleRate != s.inputSampleRate {
+		s.mu.Unlock()
+		return nil
+	} else if frame.NumChannels != s.inputNumChannels {
 		s.mu.Unlock()
 		return nil
 	}
