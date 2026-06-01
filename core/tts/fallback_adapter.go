@@ -31,11 +31,12 @@ type fallbackTTSStatus struct {
 
 type FallbackAdapterOptions struct {
 	MaxRetryPerTTS int
+	DisableRetries bool
 	SampleRate     int
 }
 
 func NewFallbackAdapter(ttss []TTS) *FallbackAdapter {
-	return NewFallbackAdapterWithOptions(ttss, FallbackAdapterOptions{MaxRetryPerTTS: 2})
+	return NewFallbackAdapterWithOptions(ttss, FallbackAdapterOptions{})
 }
 
 func NewFallbackAdapterWithOptions(ttss []TTS, options FallbackAdapterOptions) *FallbackAdapter {
@@ -46,6 +47,12 @@ func NewFallbackAdapterWithOptions(ttss []TTS, options FallbackAdapterOptions) *
 	numChannels := ttss[0].NumChannels()
 	capabilities := TTSCapabilities{AlignedTranscript: true}
 	sampleRate := options.SampleRate
+	maxRetryPerTTS := options.MaxRetryPerTTS
+	if options.DisableRetries {
+		maxRetryPerTTS = 0
+	} else if maxRetryPerTTS == 0 {
+		maxRetryPerTTS = 2
+	}
 	for _, tts := range ttss {
 		if tts.NumChannels() != numChannels {
 			panic("all TTS must have the same number of channels")
@@ -68,7 +75,7 @@ func NewFallbackAdapterWithOptions(ttss []TTS, options FallbackAdapterOptions) *
 		capabilities:   capabilities,
 		sampleRate:     sampleRate,
 		numChannels:    numChannels,
-		maxRetryPerTTS: options.MaxRetryPerTTS,
+		maxRetryPerTTS: maxRetryPerTTS,
 		status:         status,
 	}
 }
@@ -155,11 +162,16 @@ func (f *FallbackAdapter) tryRecoverChunked(index int, text string) {
 }
 
 func (f *FallbackAdapter) tryRecoverStream(index int, inputs []fallbackSynthesizeInput) {
-	if len(inputs) == 0 {
+	replay := make([]string, 0, len(inputs))
+	for _, input := range inputs {
+		if input.flush || input.text == "" {
+			continue
+		}
+		replay = append(replay, input.text)
+	}
+	if len(replay) == 0 {
 		return
 	}
-
-	replay := append([]fallbackSynthesizeInput(nil), inputs...)
 
 	f.mu.Lock()
 	if f.status[index].recovering {
@@ -180,30 +192,19 @@ func (f *FallbackAdapter) tryRecoverStream(index int, inputs []fallbackSynthesiz
 		}
 		defer stream.Close()
 
-		for _, input := range replay {
-			if input.flush {
-				if err := stream.Flush(); err != nil {
-					f.mu.Lock()
-					f.status[index].recovering = false
-					f.mu.Unlock()
-					return
-				}
-				continue
-			}
-			if err := stream.PushText(input.text); err != nil {
+		for _, text := range replay {
+			if err := stream.PushText(text); err != nil {
 				f.mu.Lock()
 				f.status[index].recovering = false
 				f.mu.Unlock()
 				return
 			}
 		}
-		if !replay[len(replay)-1].flush {
-			if err := stream.Flush(); err != nil {
-				f.mu.Lock()
-				f.status[index].recovering = false
-				f.mu.Unlock()
-				return
-			}
+		if err := stream.Flush(); err != nil {
+			f.mu.Lock()
+			f.status[index].recovering = false
+			f.mu.Unlock()
+			return
 		}
 
 		for {
@@ -439,25 +440,12 @@ func (s *fallbackChunkedStream) monitorStream() {
 		}
 		ev = cloneSynthesizedAudio(ev)
 		ev.RequestID = s.requestID
+		ev.SegmentID = ""
 
 		audioSent = true
-		if ev.IsFinal {
-			if pending != nil {
-				select {
-				case s.eventCh <- pending:
-				case <-s.closeCh:
-					return
-				}
-			}
-			pending = nil
-			select {
-			case s.eventCh <- ev:
-			case <-s.closeCh:
-				return
-			}
-			continue
-		}
 		if pending != nil {
+			pending = cloneSynthesizedAudio(pending)
+			pending.IsFinal = false
 			select {
 			case s.eventCh <- pending:
 			case <-s.closeCh:
@@ -601,10 +589,7 @@ func (s *fallbackSynthesizeStream) startProviderStream(tts TTS) (SynthesizeStrea
 
 func (s *fallbackSynthesizeStream) replayBufferedText(stream SynthesizeStream) error {
 	for _, input := range s.inputBuffer {
-		if input.flush {
-			if err := stream.Flush(); err != nil {
-				return err
-			}
+		if input.flush || input.text == "" {
 			continue
 		}
 		if err := stream.PushText(input.text); err != nil {

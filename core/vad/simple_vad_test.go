@@ -169,6 +169,48 @@ func TestSimpleVADUpdateOptionsWithAllowsZeroMaxBufferedSpeech(t *testing.T) {
 	assertCombinedFrames(t, start.Frames, prefix)
 }
 
+func TestSimpleVADUpdateOptionsIgnoresInvalidProbabilitySmoothingAlpha(t *testing.T) {
+	detector := NewSimpleVADWithOptions(SimpleVADOptions{
+		Threshold:                 0.05,
+		ProbabilitySmoothingAlpha: 0.35,
+	})
+	stream, err := detector.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	defer stream.Close()
+
+	detector.UpdateOptions(SimpleVADOptions{ProbabilitySmoothingAlpha: -0.1})
+	if detector.options.ProbabilitySmoothingAlpha != 0.35 {
+		t.Fatalf("detector smoothing alpha = %v, want 0.35", detector.options.ProbabilitySmoothingAlpha)
+	}
+	simpleStream := stream.(*simpleVADStream)
+	if simpleStream.options.ProbabilitySmoothingAlpha != 0.35 {
+		t.Fatalf("stream smoothing alpha = %v, want 0.35", simpleStream.options.ProbabilitySmoothingAlpha)
+	}
+}
+
+func TestSimpleVADUpdateOptionsWithIgnoresInvalidProbabilitySmoothingAlpha(t *testing.T) {
+	detector := NewSimpleVADWithOptions(SimpleVADOptions{
+		Threshold:                 0.05,
+		ProbabilitySmoothingAlpha: 0.35,
+	})
+	stream, err := detector.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	defer stream.Close()
+
+	detector.UpdateOptionsWith(WithProbabilitySmoothingAlpha(1.1))
+	if detector.options.ProbabilitySmoothingAlpha != 0.35 {
+		t.Fatalf("detector smoothing alpha = %v, want 0.35", detector.options.ProbabilitySmoothingAlpha)
+	}
+	simpleStream := stream.(*simpleVADStream)
+	if simpleStream.options.ProbabilitySmoothingAlpha != 0.35 {
+		t.Fatalf("stream smoothing alpha = %v, want 0.35", simpleStream.options.ProbabilitySmoothingAlpha)
+	}
+}
+
 func TestSimpleVADUpdateOptionsRelaxesMaxBufferedSpeech(t *testing.T) {
 	detector := NewSimpleVADWithOptions(SimpleVADOptions{
 		Threshold:                 0.05,

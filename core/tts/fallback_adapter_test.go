@@ -39,6 +39,51 @@ func TestFallbackAdapterUsesConfiguredSampleRate(t *testing.T) {
 	}
 }
 
+func TestFallbackAdapterKeepsDefaultRetriesWithConfiguredSampleRate(t *testing.T) {
+	streamErr := errors.New("primary synthesize failed")
+	primary := &metadataTTS{
+		label:       "primary",
+		sampleRate:  16000,
+		numChannels: 1,
+		chunkedStreams: []ChunkedStream{
+			&metadataChunkedStream{err: streamErr},
+			&metadataChunkedStream{err: streamErr},
+			&metadataChunkedStream{events: []*SynthesizedAudio{{
+				Frame: fallbackTestFrame(16000, 1, 2),
+			}}},
+		},
+	}
+	fallback := &metadataTTS{
+		label:       "fallback",
+		sampleRate:  24000,
+		numChannels: 1,
+		chunked: &metadataChunkedStream{events: []*SynthesizedAudio{{
+			Frame: fallbackTestFrame(24000, 1, 2),
+		}}},
+	}
+	adapter := NewFallbackAdapterWithOptions([]TTS{primary, fallback}, FallbackAdapterOptions{SampleRate: 24000})
+
+	stream, err := adapter.Synthesize(context.Background(), "hello")
+	if err != nil {
+		t.Fatalf("Synthesize returned error: %v", err)
+	}
+	defer stream.Close()
+
+	audio, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next returned error: %v", err)
+	}
+	if audio.Frame.SampleRate != 24000 {
+		t.Fatalf("SampleRate = %d, want configured sample rate", audio.Frame.SampleRate)
+	}
+	if primary.synthesizeCalls != 3 {
+		t.Fatalf("primary synthesize calls = %d, want 3 with default retries", primary.synthesizeCalls)
+	}
+	if fallback.synthesizeCalls != 0 {
+		t.Fatalf("fallback synthesize calls = %d, want 0", fallback.synthesizeCalls)
+	}
+}
+
 func TestFallbackAdapterRejectsMixedChannelCounts(t *testing.T) {
 	defer func() {
 		recovered := recover()
@@ -129,6 +174,40 @@ func TestFallbackChunkedStreamSetsStableRequestID(t *testing.T) {
 	}
 }
 
+func TestFallbackChunkedStreamClearsProviderSegmentID(t *testing.T) {
+	adapter := NewFallbackAdapter([]TTS{
+		&metadataTTS{
+			label:       "primary",
+			sampleRate:  24000,
+			numChannels: 1,
+			chunked: &metadataChunkedStream{
+				events: []*SynthesizedAudio{
+					{SegmentID: "provider-a", Frame: &model.AudioFrame{Data: []byte{1}}},
+					{SegmentID: "provider-b", Frame: &model.AudioFrame{Data: []byte{2}}},
+				},
+			},
+		},
+	})
+
+	stream, err := adapter.Synthesize(context.Background(), "hello")
+	if err != nil {
+		t.Fatalf("Synthesize returned error: %v", err)
+	}
+	defer stream.Close()
+
+	first, err := stream.Next()
+	if err != nil {
+		t.Fatalf("first Next returned error: %v", err)
+	}
+	second, err := stream.Next()
+	if err != nil {
+		t.Fatalf("second Next returned error: %v", err)
+	}
+	if first.SegmentID != "" || second.SegmentID != "" {
+		t.Fatalf("SegmentID forwarded provider ids: first=%q second=%q", first.SegmentID, second.SegmentID)
+	}
+}
+
 func TestFallbackChunkedStreamErrorsWhenNonEmptyTextProducesNoAudio(t *testing.T) {
 	adapter := NewFallbackAdapter([]TTS{
 		&metadataTTS{
@@ -151,6 +230,49 @@ func TestFallbackChunkedStreamErrorsWhenNonEmptyTextProducesNoAudio(t *testing.T
 	}
 	if !strings.Contains(err.Error(), "no audio frames") {
 		t.Fatalf("Next error = %v, want no-audio error", err)
+	}
+}
+
+func TestFallbackChunkedStreamDoesNotFallbackWhenProviderProducesNoAudio(t *testing.T) {
+	primary := &metadataTTS{
+		label:       "primary",
+		sampleRate:  24000,
+		numChannels: 1,
+		chunked:     &metadataChunkedStream{},
+	}
+	fallback := &metadataTTS{
+		label:       "fallback",
+		sampleRate:  24000,
+		numChannels: 1,
+		chunked: &metadataChunkedStream{
+			events: []*SynthesizedAudio{{Frame: &model.AudioFrame{Data: []byte("fallback")}}},
+		},
+	}
+	adapter := NewFallbackAdapterWithOptions([]TTS{primary, fallback}, FallbackAdapterOptions{
+		DisableRetries: true,
+	})
+
+	stream, err := adapter.Synthesize(context.Background(), "hello")
+	if err != nil {
+		t.Fatalf("Synthesize returned error: %v", err)
+	}
+	defer stream.Close()
+
+	_, err = stream.Next()
+	if err == nil {
+		t.Fatal("Next error = nil, want no-audio error")
+	}
+	if !strings.Contains(err.Error(), "no audio frames") {
+		t.Fatalf("Next error = %v, want no-audio error", err)
+	}
+	if primary.synthesizeCalls != 1 {
+		t.Fatalf("primary synthesize calls = %d, want 1", primary.synthesizeCalls)
+	}
+	if fallback.synthesizeCalls != 0 {
+		t.Fatalf("fallback synthesize calls = %d, want 0", fallback.synthesizeCalls)
+	}
+	if !adapter.status[0].available {
+		t.Fatal("primary availability = false, want unchanged after no-audio completion")
 	}
 }
 
@@ -532,6 +654,43 @@ func TestFallbackChunkedStreamMarksLastFrameFinal(t *testing.T) {
 	}
 }
 
+func TestFallbackChunkedStreamClearsProviderFinalBeforeLastFrame(t *testing.T) {
+	adapter := NewFallbackAdapter([]TTS{
+		&metadataTTS{
+			label:       "primary",
+			sampleRate:  24000,
+			numChannels: 1,
+			chunked: &metadataChunkedStream{
+				events: []*SynthesizedAudio{
+					{IsFinal: true, Frame: &model.AudioFrame{Data: []byte{1}}},
+					{Frame: &model.AudioFrame{Data: []byte{2}}},
+				},
+			},
+		},
+	})
+
+	stream, err := adapter.Synthesize(context.Background(), "hello")
+	if err != nil {
+		t.Fatalf("Synthesize returned error: %v", err)
+	}
+	defer stream.Close()
+
+	first, err := stream.Next()
+	if err != nil {
+		t.Fatalf("first Next returned error: %v", err)
+	}
+	if first.IsFinal {
+		t.Fatal("first audio IsFinal = true, want fallback wrapper to clear provider final before last frame")
+	}
+	second, err := stream.Next()
+	if err != nil {
+		t.Fatalf("second Next returned error: %v", err)
+	}
+	if !second.IsFinal {
+		t.Fatal("second audio IsFinal = false, want wrapper-owned final marker")
+	}
+}
+
 func TestFallbackChunkedStreamDoesNotFallbackAfterAudio(t *testing.T) {
 	streamErr := errors.New("stream failed after audio")
 	second := &metadataTTS{
@@ -598,7 +757,7 @@ func TestFallbackChunkedStreamSkipsUnavailablePrimaryOnLaterRequests(t *testing.
 		},
 	}
 	adapter := NewFallbackAdapterWithOptions([]TTS{primary, fallback}, FallbackAdapterOptions{
-		MaxRetryPerTTS: 0,
+		DisableRetries: true,
 	})
 
 	first, err := adapter.Synthesize(context.Background(), "hello")
@@ -663,7 +822,7 @@ func TestFallbackChunkedStreamRestoresPrimaryAfterRecovery(t *testing.T) {
 		}}},
 	}
 	adapter := NewFallbackAdapterWithOptions([]TTS{primary, fallback}, FallbackAdapterOptions{
-		MaxRetryPerTTS: 0,
+		DisableRetries: true,
 	})
 
 	first, err := adapter.Synthesize(context.Background(), "hello")
@@ -866,7 +1025,7 @@ func TestFallbackSynthesizeStreamSkipsUnavailablePrimaryOnLaterRequests(t *testi
 		},
 	}
 	adapter := NewFallbackAdapterWithOptions([]TTS{primary, fallback}, FallbackAdapterOptions{
-		MaxRetryPerTTS: 0,
+		DisableRetries: true,
 	})
 
 	first, err := adapter.Stream(context.Background())
@@ -940,7 +1099,7 @@ func TestFallbackSynthesizeStreamRestoresPrimaryAfterRecovery(t *testing.T) {
 		}}},
 	}
 	adapter := NewFallbackAdapterWithOptions([]TTS{primary, fallback}, FallbackAdapterOptions{
-		MaxRetryPerTTS: 0,
+		DisableRetries: true,
 	})
 
 	first, err := adapter.Stream(context.Background())
@@ -1119,7 +1278,7 @@ func TestFallbackSynthesizeStreamRetriesSameTTSBeforeFallback(t *testing.T) {
 	}
 }
 
-func TestFallbackSynthesizeStreamReplaysFlushBoundariesOnRetry(t *testing.T) {
+func TestFallbackSynthesizeStreamReplaysOnlyTextOnRetry(t *testing.T) {
 	primaryFailure := &blockingFailSynthesizeStream{
 		err:     errors.New("primary stream failed"),
 		release: make(chan struct{}),
@@ -1167,9 +1326,34 @@ func TestFallbackSynthesizeStreamReplaysFlushBoundariesOnRetry(t *testing.T) {
 		t.Fatalf("audio data = %q, want primary recovered", got)
 	}
 
-	wantCalls := []string{"push:hello", "flush", "push:world"}
+	wantCalls := []string{"push:hello", "push:world"}
+	if len(recovered.calls) != len(wantCalls) {
+		t.Fatalf("replayed stream call count = %d, want %d", len(recovered.calls), len(wantCalls))
+	}
 	if strings.Join(recovered.calls, ",") != strings.Join(wantCalls, ",") {
 		t.Fatalf("replayed stream calls = %#v, want %#v", recovered.calls, wantCalls)
+	}
+}
+
+func TestFallbackSynthesizeRecoveryIgnoresFlushOnlyInput(t *testing.T) {
+	primary := &notifyStreamTTS{
+		metadataTTS: metadataTTS{
+			label:        "primary",
+			sampleRate:   24000,
+			numChannels:  1,
+			capabilities: TTSCapabilities{Streaming: true},
+			stream:       &metadataSynthesizeStream{},
+		},
+		streamCalled: make(chan struct{}, 1),
+	}
+	adapter := NewFallbackAdapter([]TTS{primary})
+
+	adapter.tryRecoverStream(0, []fallbackSynthesizeInput{{flush: true}})
+
+	select {
+	case <-primary.streamCalled:
+		t.Fatal("recovery stream started for flush-only input, want no recovery")
+	case <-time.After(50 * time.Millisecond):
 	}
 }
 
@@ -1209,6 +1393,19 @@ type metadataTTS struct {
 	streamErr       error
 	synthesizeCalls int
 	streamCalls     int
+}
+
+type notifyStreamTTS struct {
+	metadataTTS
+	streamCalled chan struct{}
+}
+
+func (n *notifyStreamTTS) Stream(ctx context.Context) (SynthesizeStream, error) {
+	select {
+	case n.streamCalled <- struct{}{}:
+	default:
+	}
+	return n.metadataTTS.Stream(ctx)
 }
 
 func (m *metadataTTS) Label() string {

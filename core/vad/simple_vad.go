@@ -150,7 +150,12 @@ func (v *SimpleVAD) OnMetricsCollected(handler VADMetricsHandler) {
 
 func (v *SimpleVAD) UpdateOptions(options SimpleVADOptions) {
 	v.mu.Lock()
-	v.options = mergeSimpleVADOptions(v.options, options)
+	merged := mergeSimpleVADOptions(v.options, options)
+	if err := validateSimpleVADOptions(merged); err != nil {
+		v.mu.Unlock()
+		return
+	}
+	v.options = merged
 	streams := make([]*simpleVADStream, 0, len(v.streams))
 	for stream := range v.streams {
 		streams = append(streams, stream)
@@ -169,6 +174,10 @@ func (v *SimpleVAD) UpdateOptionsWith(opts ...SimpleVADOption) {
 		if opt != nil {
 			opt(&options)
 		}
+	}
+	if err := validateSimpleVADOptions(options); err != nil {
+		v.mu.Unlock()
+		return
 	}
 	v.options = options
 	streams := make([]*simpleVADStream, 0, len(v.streams))

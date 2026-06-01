@@ -3,110 +3,162 @@ package baseten
 import (
 	"bytes"
 	"context"
-	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 
 	"github.com/cavos-io/conversation-worker/core/tts"
 	"github.com/cavos-io/conversation-worker/model"
 )
 
+const (
+	defaultBasetenTTSVoice       = "tara"
+	defaultBasetenTTSLanguage    = "en"
+	defaultBasetenTTSTemperature = 0.6
+	defaultBasetenTTSSampleRate  = 24000
+)
+
 type BasetenTTS struct {
-	apiKey string
-	model  string
+	apiKey        string
+	modelEndpoint string
+	voice         string
+	language      string
+	temperature   float64
+	sampleRate    int
 }
 
-func NewBasetenTTS(apiKey string, model string) *BasetenTTS {
-	if model == "" {
-		model = "xtts-v2"
+type BasetenTTSOption func(*BasetenTTS)
+
+func WithBasetenTTSModelEndpoint(endpoint string) BasetenTTSOption {
+	return func(t *BasetenTTS) {
+		if endpoint != "" {
+			t.modelEndpoint = endpoint
+		}
 	}
-	return &BasetenTTS{
-		apiKey: apiKey,
-		model:  model,
+}
+
+func WithBasetenTTSVoice(voice string) BasetenTTSOption {
+	return func(t *BasetenTTS) {
+		if voice != "" {
+			t.voice = voice
+		}
 	}
+}
+
+func WithBasetenTTSLanguage(language string) BasetenTTSOption {
+	return func(t *BasetenTTS) {
+		if language != "" {
+			t.language = language
+		}
+	}
+}
+
+func WithBasetenTTSTemperature(temperature float64) BasetenTTSOption {
+	return func(t *BasetenTTS) {
+		t.temperature = temperature
+	}
+}
+
+func NewBasetenTTS(apiKey string, model string, opts ...BasetenTTSOption) *BasetenTTS {
+	endpoint := model
+	if endpoint == "" {
+		endpoint = "xtts-v2"
+	}
+	if !strings.HasPrefix(endpoint, "http://") && !strings.HasPrefix(endpoint, "https://") &&
+		!strings.HasPrefix(endpoint, "ws://") && !strings.HasPrefix(endpoint, "wss://") {
+		endpoint = fmt.Sprintf("https://model-%s.api.baseten.co/environments/production/predict", endpoint)
+	}
+	provider := &BasetenTTS{
+		apiKey:        apiKey,
+		modelEndpoint: endpoint,
+		voice:         defaultBasetenTTSVoice,
+		language:      defaultBasetenTTSLanguage,
+		temperature:   defaultBasetenTTSTemperature,
+		sampleRate:    defaultBasetenTTSSampleRate,
+	}
+	for _, opt := range opts {
+		opt(provider)
+	}
+	return provider
 }
 
 func (t *BasetenTTS) Label() string { return "baseten.TTS" }
 func (t *BasetenTTS) Capabilities() tts.TTSCapabilities {
-	return tts.TTSCapabilities{Streaming: false, AlignedTranscript: false}
+	return tts.TTSCapabilities{Streaming: strings.HasPrefix(t.modelEndpoint, "ws://") || strings.HasPrefix(t.modelEndpoint, "wss://"), AlignedTranscript: false}
 }
-func (t *BasetenTTS) SampleRate() int { return 24000 }
+func (t *BasetenTTS) SampleRate() int  { return t.sampleRate }
 func (t *BasetenTTS) NumChannels() int { return 1 }
 
 func (t *BasetenTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStream, error) {
-	url := fmt.Sprintf("https://model-%s.api.baseten.co/environments/production/predict", t.model)
-
-	reqBody := map[string]interface{}{
-		"text":     text,
-		"language": "en",
-	}
-
-	jsonBody, _ := json.Marshal(reqBody)
-	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewBuffer(jsonBody))
+	req, err := buildBasetenTTSRequest(ctx, t, text)
 	if err != nil {
 		return nil, err
 	}
-
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Api-Key "+t.apiKey)
-
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		return nil, err
 	}
-
 	if resp.StatusCode != http.StatusOK {
 		respBody, _ := io.ReadAll(resp.Body)
 		resp.Body.Close()
 		return nil, fmt.Errorf("baseten tts error: %s", string(respBody))
 	}
+	return &basetenTTSChunkedStream{body: resp.Body, sampleRate: t.sampleRate}, nil
+}
 
-	return &basetenTTSChunkedStream{
-		resp: resp,
-	}, nil
+func buildBasetenTTSRequest(ctx context.Context, t *BasetenTTS, text string) (*http.Request, error) {
+	reqBody := map[string]interface{}{
+		"prompt":      text,
+		"voice":       t.voice,
+		"temperature": t.temperature,
+		"language":    t.language,
+	}
+	jsonBody, err := json.Marshal(reqBody)
+	if err != nil {
+		return nil, err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, t.modelEndpoint, bytes.NewBuffer(jsonBody))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Api-Key "+t.apiKey)
+	return req, nil
 }
 
 func (t *BasetenTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
-	return nil, fmt.Errorf("baseten streaming tts not natively supported by basic rest api")
+	return nil, fmt.Errorf("baseten websocket tts streaming is not implemented")
 }
 
 type basetenTTSChunkedStream struct {
-	resp *http.Response
+	body       io.ReadCloser
+	sampleRate int
 }
 
 func (s *basetenTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
-	var result struct {
-		Audio string `json:"audio"` // Assuming base64 encoded audio in JSON
-	}
-
-	if err := json.NewDecoder(s.resp.Body).Decode(&result); err != nil {
+	buf := make([]byte, 4096)
+	n, err := s.body.Read(buf)
+	if err != nil {
 		if err == io.EOF {
 			return nil, io.EOF
 		}
 		return nil, err
 	}
-
-	if result.Audio == "" {
+	if n == 0 {
 		return nil, io.EOF
 	}
-
-	data, err := base64.StdEncoding.DecodeString(result.Audio)
-	if err != nil {
-		return nil, err
-	}
-
 	return &tts.SynthesizedAudio{
 		Frame: &model.AudioFrame{
-			Data:              data,
-			SampleRate:        24000,
+			Data:              buf[:n],
+			SampleRate:        uint32(s.sampleRate),
 			NumChannels:       1,
-			SamplesPerChannel: uint32(len(data) / 2),
+			SamplesPerChannel: uint32(n / 2),
 		},
 	}, nil
 }
 
 func (s *basetenTTSChunkedStream) Close() error {
-	return s.resp.Body.Close()
+	return s.body.Close()
 }

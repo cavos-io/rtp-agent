@@ -20,6 +20,15 @@ func TestFilterMarkdownPreservesLiteralPunctuationInsideWords(t *testing.T) {
 	}
 }
 
+func TestFilterMarkdownPreservesFormattingMarkersInsideUnicodeWords(t *testing.T) {
+	input := "Keep café**bold** and mañana_italic_ intact."
+	want := "Keep café**bold** and mañana_italic_ intact."
+
+	if got := FilterMarkdown(input); got != want {
+		t.Fatalf("FilterMarkdown() = %q, want %q", got, want)
+	}
+}
+
 func TestFilterMarkdownRemovesSingleCharacterEmphasis(t *testing.T) {
 	input := "Say **x** and *y*, plus __z__ and _q_."
 	want := "Say x and y, plus z and q."

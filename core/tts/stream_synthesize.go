@@ -46,6 +46,7 @@ func (s *chunkedStreamFromSynthesizeStream) Next() (*SynthesizedAudio, error) {
 				if s.pending != nil {
 					pending := cloneSynthesizedAudio(s.pending)
 					pending.RequestID = s.requestID
+					pending.SegmentID = ""
 					pending.IsFinal = true
 					s.pending = nil
 					return pending, nil
@@ -60,6 +61,8 @@ func (s *chunkedStreamFromSynthesizeStream) Next() (*SynthesizedAudio, error) {
 		if s.pending != nil {
 			pending := cloneSynthesizedAudio(s.pending)
 			pending.RequestID = s.requestID
+			pending.SegmentID = ""
+			pending.IsFinal = false
 			s.pending = audio
 			return pending, nil
 		}
