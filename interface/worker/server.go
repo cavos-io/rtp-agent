@@ -91,9 +91,10 @@ type WorkerInfo struct {
 }
 
 type LocalJobOptions struct {
-	FakeJob  bool
-	RoomInfo *livekit.Room
-	Token    string
+	FakeJob          bool
+	RoomInfo         *livekit.Room
+	Token            string
+	RecordingOptions agent.RecordingOptions
 }
 
 type WorkerOptions struct {
@@ -1677,6 +1678,7 @@ func newLocalJobContextWithOptions(roomName string, participantIdentity string, 
 	jobCtx := NewJobContext(job, opts.WSRL, opts.APIKey, opts.APISecret)
 	jobCtx.AcceptArguments = JobAcceptArguments{Identity: participantIdentity}
 	jobCtx.fakeJob = options.FakeJob
+	jobCtx.Report.RecordingOptions = options.RecordingOptions
 	if token != "" {
 		jobCtx.token = token
 	} else if opts.APIKey != "" && opts.APISecret != "" {

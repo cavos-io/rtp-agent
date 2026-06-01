@@ -256,6 +256,25 @@ func TestParseConsoleArgsSupportsTextModeAndDevices(t *testing.T) {
 	}
 }
 
+func TestConsoleLocalJobOptionsEnableRecordingWhenRequested(t *testing.T) {
+	options := consoleLocalJobOptions(ConsoleArgs{Record: true})
+
+	if !options.FakeJob {
+		t.Fatal("FakeJob = false, want console local jobs to remain fake")
+	}
+	if options.RecordingOptions != (agent.RecordingOptions{Audio: true, Traces: true, Logs: true, Transcript: true}) {
+		t.Fatalf("RecordingOptions = %#v, want all enabled", options.RecordingOptions)
+	}
+}
+
+func TestConsoleLocalJobOptionsDisableRecordingByDefault(t *testing.T) {
+	options := consoleLocalJobOptions(ConsoleArgs{})
+
+	if options.RecordingOptions != (agent.RecordingOptions{}) {
+		t.Fatalf("RecordingOptions = %#v, want zero value", options.RecordingOptions)
+	}
+}
+
 func TestParseConsoleArgsSupportsListDevices(t *testing.T) {
 	args, err := parseConsoleArgs([]string{"worker", "console", "--list-devices"})
 	if err != nil {

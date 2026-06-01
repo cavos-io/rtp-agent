@@ -15,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/cavos-io/rtp-agent/core/agent"
 	"github.com/cavos-io/rtp-agent/interface/worker/ipc"
 	"github.com/go-jose/go-jose/v3/jwt"
 	"github.com/gorilla/websocket"
@@ -2960,6 +2961,57 @@ func TestExecuteLocalJobWithOptionsUsesTokenIdentity(t *testing.T) {
 	}
 	if jobCtx.token != token {
 		t.Fatal("local token job did not preserve provided token")
+	}
+
+	cancel()
+	select {
+	case err := <-doneCh:
+		if err != nil {
+			t.Fatalf("ExecuteLocalJobWithOptions() error = %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("ExecuteLocalJobWithOptions() did not return after context cancellation")
+	}
+}
+
+func TestExecuteLocalJobWithOptionsAppliesRecordingOptions(t *testing.T) {
+	server := NewAgentServer(WorkerOptions{})
+	startedCh := make(chan *JobContext, 1)
+
+	if err := server.RTCSession(
+		func(ctx *JobContext) error {
+			startedCh <- ctx
+			return nil
+		},
+		nil,
+		nil,
+	); err != nil {
+		t.Fatalf("RTCSession() error = %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	doneCh := make(chan error, 1)
+	go func() {
+		doneCh <- server.ExecuteLocalJobWithOptions(ctx, "room-a", "agent-local", LocalJobOptions{
+			FakeJob: true,
+			RecordingOptions: agent.RecordingOptions{
+				Audio:      true,
+				Traces:     true,
+				Logs:       true,
+				Transcript: true,
+			},
+		})
+	}()
+
+	var jobCtx *JobContext
+	select {
+	case jobCtx = <-startedCh:
+	case <-time.After(time.Second):
+		t.Fatal("local job entrypoint did not run")
+	}
+
+	if jobCtx.Report.RecordingOptions != (agent.RecordingOptions{Audio: true, Traces: true, Logs: true, Transcript: true}) {
+		t.Fatalf("RecordingOptions = %#v, want all enabled", jobCtx.Report.RecordingOptions)
 	}
 
 	cancel()
