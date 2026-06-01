@@ -117,3 +117,189 @@ func TestRunResultFinalOutputReturnsValueAfterDone(t *testing.T) {
 		t.Fatal("Done() = false, want true after MarkDone")
 	}
 }
+
+func TestRunResultWatchSpeechHandleRecordsAddedItems(t *testing.T) {
+	result := NewRunResult(llm.NewChatContext())
+	speech := NewSpeechHandle(true, DefaultInputDetails())
+	message := &llm.ChatMessage{ID: "msg_1", Role: llm.ChatRoleAssistant, CreatedAt: time.Now()}
+
+	result.WatchSpeechHandle(speech)
+	speech.AddChatItems(message)
+
+	events := result.Events()
+	if len(events) != 1 {
+		t.Fatalf("Events length = %d, want 1", len(events))
+	}
+	ev, ok := events[0].(*ChatMessageEvent)
+	if !ok || ev.Item != message {
+		t.Fatalf("event = %#v, want message event for added item", events[0])
+	}
+}
+
+func TestRunResultWatchSpeechHandleMarksDoneWhenSpeechDone(t *testing.T) {
+	result := NewRunResult(llm.NewChatContext())
+	first := NewSpeechHandle(true, DefaultInputDetails())
+	second := NewSpeechHandle(true, DefaultInputDetails())
+
+	result.WatchSpeechHandle(first)
+	result.WatchSpeechHandle(second)
+	first.MarkDone()
+	if result.Done() {
+		t.Fatal("RunResult marked done before all watched speech handles finished")
+	}
+
+	second.MarkDone()
+
+	if !result.Done() {
+		t.Fatal("RunResult did not mark done after all watched speech handles finished")
+	}
+}
+
+func TestRunResultUnwatchSpeechHandleRemovesCallbacks(t *testing.T) {
+	result := NewRunResult(llm.NewChatContext())
+	speech := NewSpeechHandle(true, DefaultInputDetails())
+	message := &llm.ChatMessage{ID: "msg_1", Role: llm.ChatRoleAssistant, CreatedAt: time.Now()}
+
+	if ok := result.WatchSpeechHandle(speech); !ok {
+		t.Fatal("WatchSpeechHandle returned false, want true for first watch")
+	}
+	if ok := result.UnwatchSpeechHandle(speech); !ok {
+		t.Fatal("UnwatchSpeechHandle returned false, want true for watched handle")
+	}
+
+	speech.AddChatItems(message)
+	speech.MarkDone()
+
+	if len(result.Events()) != 0 {
+		t.Fatalf("Events length = %d, want 0 after unwatch", len(result.Events()))
+	}
+	if result.Done() {
+		t.Fatal("RunResult marked done after unwatched speech completed")
+	}
+}
+
+func TestRunAssertUsesRecordedEventsForMessages(t *testing.T) {
+	chatCtx := llm.NewChatContext()
+	result := NewRunResult(chatCtx)
+	message := &llm.ChatMessage{
+		ID:        "msg_1",
+		Role:      llm.ChatRoleAssistant,
+		Content:   []llm.ChatContent{{Text: "hello from recorded events"}},
+		CreatedAt: time.Now(),
+	}
+
+	result.RecordItem(message)
+
+	if err := result.Expect.ContainsMessage(llm.ChatRoleAssistant, "recorded events").HasError(); err != nil {
+		t.Fatalf("ContainsMessage returned error = %v, want nil for recorded event", err)
+	}
+}
+
+func TestRunAssertUsesRecordedEventsForFunctionCalls(t *testing.T) {
+	result := NewRunResult(llm.NewChatContext())
+	functionCall := &llm.FunctionCall{
+		ID:        "fnc_1",
+		CallID:    "call_1",
+		Name:      "lookup",
+		CreatedAt: time.Now(),
+	}
+
+	result.RecordItem(functionCall)
+
+	if err := result.Expect.IsFunctionCall("lookup").HasError(); err != nil {
+		t.Fatalf("IsFunctionCall returned error = %v, want nil for recorded event", err)
+	}
+}
+
+func TestRunAssertUsesRecordedEventsForFunctionCallOutputs(t *testing.T) {
+	result := NewRunResult(llm.NewChatContext())
+	output := &llm.FunctionCallOutput{
+		ID:        "out_1",
+		CallID:    "call_1",
+		Name:      "lookup",
+		Output:    "done",
+		IsError:   true,
+		CreatedAt: time.Now(),
+	}
+
+	result.RecordItem(output)
+
+	if err := result.Expect.ContainsFunctionCallOutput("done", true).HasError(); err != nil {
+		t.Fatalf("ContainsFunctionCallOutput returned error = %v, want nil for recorded event", err)
+	}
+}
+
+func TestRunAssertUsesRecordedEventsForAgentHandoffs(t *testing.T) {
+	result := NewRunResult(llm.NewChatContext())
+	handoff := &llm.AgentHandoff{ID: "handoff_1", NewAgentID: "agent_2", CreatedAt: time.Now()}
+	oldAgent := NewAgent("old")
+	newAgent := NewAgent("new")
+
+	result.RecordAgentHandoff(handoff, oldAgent, newAgent)
+
+	if err := result.Expect.ContainsAgentHandoff(newAgent).HasError(); err != nil {
+		t.Fatalf("ContainsAgentHandoff returned error = %v, want nil for recorded event", err)
+	}
+}
+
+func TestRunAssertNoMoreEventsPassesAfterSkippingRecordedEvents(t *testing.T) {
+	result := NewRunResult(llm.NewChatContext())
+	result.RecordItem(&llm.ChatMessage{ID: "msg_1", Role: llm.ChatRoleAssistant, CreatedAt: time.Now()})
+	result.RecordItem(&llm.FunctionCall{ID: "fnc_1", CallID: "call_1", Name: "lookup", CreatedAt: time.Now().Add(time.Millisecond)})
+
+	if err := result.Expect.SkipNext(2).NoMoreEvents().HasError(); err != nil {
+		t.Fatalf("NoMoreEvents returned error = %v, want nil after skipping all events", err)
+	}
+}
+
+func TestRunAssertNoMoreEventsReportsRemainingEvents(t *testing.T) {
+	result := NewRunResult(llm.NewChatContext())
+	result.RecordItem(&llm.ChatMessage{ID: "msg_1", Role: llm.ChatRoleAssistant, CreatedAt: time.Now()})
+
+	err := result.Expect.NoMoreEvents().HasError()
+
+	if err == nil {
+		t.Fatal("NoMoreEvents error = nil, want error when events remain")
+	}
+}
+
+func TestRunAssertSkipNextReportsOutOfRange(t *testing.T) {
+	result := NewRunResult(llm.NewChatContext())
+
+	err := result.Expect.SkipNext(1).HasError()
+
+	if err == nil {
+		t.Fatal("SkipNext error = nil, want error when skipping past available events")
+	}
+}
+
+func TestRunAssertNextEventAdvancesToNextRecordedEvent(t *testing.T) {
+	result := NewRunResult(llm.NewChatContext())
+	result.RecordItem(&llm.ChatMessage{ID: "msg_1", Role: llm.ChatRoleAssistant, CreatedAt: time.Now()})
+
+	if err := result.Expect.NextEvent().NoMoreEvents().HasError(); err != nil {
+		t.Fatalf("NextEvent returned error = %v, want nil after advancing past one event", err)
+	}
+}
+
+func TestRunAssertNextEventFiltersByType(t *testing.T) {
+	result := NewRunResult(llm.NewChatContext())
+	now := time.Now()
+	result.RecordItem(&llm.ChatMessage{ID: "msg_1", Role: llm.ChatRoleAssistant, CreatedAt: now})
+	result.RecordItem(&llm.FunctionCall{ID: "fnc_1", CallID: "call_1", Name: "lookup", CreatedAt: now.Add(time.Millisecond)})
+
+	if err := result.Expect.NextEvent("function_call").NoMoreEvents().HasError(); err != nil {
+		t.Fatalf("NextEvent returned error = %v, want nil after finding function_call", err)
+	}
+}
+
+func TestRunAssertNextEventReportsMissingType(t *testing.T) {
+	result := NewRunResult(llm.NewChatContext())
+	result.RecordItem(&llm.ChatMessage{ID: "msg_1", Role: llm.ChatRoleAssistant, CreatedAt: time.Now()})
+
+	err := result.Expect.NextEvent("function_call").HasError()
+
+	if err == nil {
+		t.Fatal("NextEvent error = nil, want error when type is not found")
+	}
+}
