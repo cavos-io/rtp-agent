@@ -46,6 +46,22 @@ func NewRecorderIO(session *agent.AgentSession) *RecorderIO {
 	}
 }
 
+func (r *RecorderIO) RecordingStartedAt() *time.Time {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	if r.InputStartTime == nil {
+		return r.OutputStartTime
+	}
+	if r.OutputStartTime == nil {
+		return r.InputStartTime
+	}
+	if r.OutputStartTime.Before(*r.InputStartTime) {
+		return r.OutputStartTime
+	}
+	return r.InputStartTime
+}
+
 func (r *RecorderIO) Start(outputPath string, sampleRate int) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -229,7 +245,7 @@ func (r *RecorderIO) flush(sampleRate int) {
 			},
 			Payload: opusBuf[:n],
 		}
-		
+
 		r.sequenceNumber++
 		r.timestamp += uint32(chunkSamples)
 
