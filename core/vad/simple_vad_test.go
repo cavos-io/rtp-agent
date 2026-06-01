@@ -599,6 +599,27 @@ func TestSimpleVADProbabilitySmoothingDelaysSpeechEnd(t *testing.T) {
 	assertEventType(t, stream, VADEventEndOfSpeech)
 }
 
+func TestSimpleVADRejectsInvalidProbabilitySmoothingAlpha(t *testing.T) {
+	stream, err := NewSimpleVADWithOptions(SimpleVADOptions{
+		Threshold:                 0.05,
+		ProbabilitySmoothingAlpha: 1.1,
+	}).Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	defer stream.Close()
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			t.Fatalf("PushFrame() panicked: %v", recovered)
+		}
+	}()
+
+	if err := stream.PushFrame(audioFrame(16000, 160, 6000)); err == nil {
+		t.Fatal("PushFrame() error = nil, want invalid smoothing alpha error")
+	}
+	assertNoQueuedVADEvent(t, stream)
+}
+
 func TestSimpleVADEmitsInferenceBeforeSpeechTransition(t *testing.T) {
 	stream, err := NewSimpleVAD(0.05).Stream(context.Background())
 	if err != nil {

@@ -289,7 +289,9 @@ func (s *simpleVADStream) PushFrame(frame *model.AudioFrame) error {
 	frame = cloneFrame(frame)
 
 	if s.windowSamples() == 0 {
-		s.processFrame(frame, frameDuration(frame))
+		if err := s.processFrame(frame, frameDuration(frame)); err != nil {
+			return err
+		}
 		return nil
 	}
 
@@ -297,13 +299,18 @@ func (s *simpleVADStream) PushFrame(frame *model.AudioFrame) error {
 	s.windowBufferedSamples += frame.SamplesPerChannel
 	for windowSamples := s.windowSamples(); windowSamples > 0 && s.windowBufferedSamples >= windowSamples; windowSamples = s.windowSamples() {
 		s.advanceWindowSampleRemainder(windowSamples)
-		s.processFrame(s.takeWindowFrame(windowSamples), s.options.WindowDuration)
+		if err := s.processFrame(s.takeWindowFrame(windowSamples), s.options.WindowDuration); err != nil {
+			return err
+		}
 	}
 	return nil
 }
 
-func (s *simpleVADStream) processFrame(frame *model.AudioFrame, duration float64) {
-	probability := s.smoothProbability(frameRMS(frame))
+func (s *simpleVADStream) processFrame(frame *model.AudioFrame, duration float64) error {
+	probability, err := s.smoothProbability(frameRMS(frame))
+	if err != nil {
+		return err
+	}
 	if s.lastActivity.IsZero() {
 		s.lastActivity = time.Now()
 	}
@@ -393,6 +400,7 @@ func (s *simpleVADStream) processFrame(frame *model.AudioFrame, duration float64
 			s.pendingSpeechFrames = nil
 		}
 	}
+	return nil
 }
 
 func (s *simpleVADStream) collectInferenceMetrics(inferenceDuration float64) {
@@ -560,15 +568,19 @@ func (s *simpleVADStream) resetState() {
 	s.probabilityFilter = nil
 }
 
-func (s *simpleVADStream) smoothProbability(probability float64) float64 {
+func (s *simpleVADStream) smoothProbability(probability float64) (float64, error) {
 	if s.options.ProbabilitySmoothingAlpha <= 0 {
 		s.probabilityFilter = nil
-		return probability
+		return probability, nil
 	}
 	if s.probabilityFilter == nil {
-		s.probabilityFilter = lkmath.NewExpFilter(s.options.ProbabilitySmoothingAlpha, -1)
+		filter, err := lkmath.NewExpFilterWithOptions(s.options.ProbabilitySmoothingAlpha, lkmath.ExpFilterOptions{})
+		if err != nil {
+			return 0, err
+		}
+		s.probabilityFilter = filter
 	}
-	return s.probabilityFilter.Apply(1, probability)
+	return s.probabilityFilter.Apply(1, probability), nil
 }
 
 func (s *simpleVADStream) windowSamples() uint32 {
