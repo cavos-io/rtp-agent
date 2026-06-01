@@ -113,6 +113,7 @@ type WorkerOptions struct {
 	APISecret                        string
 	WorkerToken                      string
 	HTTPProxy                        string
+	HTTPProxySet                     bool
 	DevMode                          bool
 	LogLevel                         string
 	PrometheusPort                   int
@@ -495,8 +496,9 @@ func mergeWorkerOptions(current WorkerOptions, next WorkerOptions) WorkerOptions
 	if next.WorkerToken != "" {
 		current.WorkerToken = next.WorkerToken
 	}
-	if next.HTTPProxy != "" {
+	if next.HTTPProxySet || next.HTTPProxy != "" {
 		current.HTTPProxy = next.HTTPProxy
+		current.HTTPProxySet = true
 	}
 	if next.PrometheusPortSet || next.PrometheusPort != 0 {
 		current.PrometheusPort = next.PrometheusPort
@@ -625,7 +627,7 @@ func resolveWorkerOptions(opts WorkerOptions) WorkerOptions {
 		opts.AgentName = os.Getenv("LIVEKIT_AGENT_NAME")
 		opts.AgentNameIsEnv = opts.AgentName != ""
 	}
-	if opts.HTTPProxy == "" {
+	if opts.HTTPProxy == "" && !opts.HTTPProxySet {
 		opts.HTTPProxy = os.Getenv("HTTPS_PROXY")
 		if opts.HTTPProxy == "" {
 			opts.HTTPProxy = os.Getenv("HTTP_PROXY")

@@ -87,6 +87,17 @@ func TestNewAgentServerExplicitOptionsOverrideEnvironment(t *testing.T) {
 	}
 }
 
+func TestNewAgentServerPreservesExplicitEmptyHTTPProxy(t *testing.T) {
+	t.Setenv("HTTPS_PROXY", "https://env-proxy.example")
+	t.Setenv("HTTP_PROXY", "http://env-proxy.example")
+
+	server := NewAgentServer(WorkerOptions{HTTPProxySet: true})
+
+	if server.Options.HTTPProxy != "" {
+		t.Fatalf("HTTPProxy = %q, want explicit empty proxy", server.Options.HTTPProxy)
+	}
+}
+
 func TestNewAgentServerPrefersWSURLAliasOverDeprecatedWSRL(t *testing.T) {
 	server := NewAgentServer(WorkerOptions{
 		WSURL: "wss://canonical.example",
