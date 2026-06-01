@@ -204,8 +204,10 @@ func TestRealtimeEventMapsOutputAudioTranscriptDelta(t *testing.T) {
 	} {
 		t.Run(eventType, func(t *testing.T) {
 			ev, ok := openAIRealtimeEvent(map[string]any{
-				"type":  eventType,
-				"delta": "hello",
+				"type":          eventType,
+				"item_id":       "msg_123",
+				"content_index": 2,
+				"delta":         "hello",
 			})
 			if !ok {
 				t.Fatal("openAIRealtimeEvent returned ok=false, want text event")
@@ -213,14 +215,19 @@ func TestRealtimeEventMapsOutputAudioTranscriptDelta(t *testing.T) {
 			if ev.Type != llm.RealtimeEventTypeText || ev.Text != "hello" {
 				t.Fatalf("event = %#v, want text delta hello", ev)
 			}
+			if ev.ItemID != "msg_123" || ev.ContentIndex != 2 {
+				t.Fatalf("event metadata = item %q content %d, want msg_123 content 2", ev.ItemID, ev.ContentIndex)
+			}
 		})
 	}
 }
 
 func TestRealtimeEventMapsOutputTextAndAudioAliases(t *testing.T) {
 	textEvent, ok := openAIRealtimeEvent(map[string]any{
-		"type":  "response.output_text.delta",
-		"delta": "hello",
+		"type":          "response.output_text.delta",
+		"item_id":       "msg_123",
+		"content_index": 1,
+		"delta":         "hello",
 	})
 	if !ok {
 		t.Fatal("openAIRealtimeEvent text returned ok=false, want text event")
@@ -228,16 +235,24 @@ func TestRealtimeEventMapsOutputTextAndAudioAliases(t *testing.T) {
 	if textEvent.Type != llm.RealtimeEventTypeText || textEvent.Text != "hello" {
 		t.Fatalf("text event = %#v, want text delta hello", textEvent)
 	}
+	if textEvent.ItemID != "msg_123" || textEvent.ContentIndex != 1 {
+		t.Fatalf("text event metadata = item %q content %d, want msg_123 content 1", textEvent.ItemID, textEvent.ContentIndex)
+	}
 
 	audioEvent, ok := openAIRealtimeEvent(map[string]any{
-		"type":  "response.output_audio.delta",
-		"delta": "aGVsbG8=",
+		"type":          "response.output_audio.delta",
+		"item_id":       "msg_456",
+		"content_index": 3,
+		"delta":         "aGVsbG8=",
 	})
 	if !ok {
 		t.Fatal("openAIRealtimeEvent audio returned ok=false, want audio event")
 	}
 	if audioEvent.Type != llm.RealtimeEventTypeAudio || string(audioEvent.Data) != "hello" {
 		t.Fatalf("audio event = %#v, want decoded audio bytes", audioEvent)
+	}
+	if audioEvent.ItemID != "msg_456" || audioEvent.ContentIndex != 3 {
+		t.Fatalf("audio event metadata = item %q content %d, want msg_456 content 3", audioEvent.ItemID, audioEvent.ContentIndex)
 	}
 
 	if _, ok := openAIRealtimeEvent(map[string]any{

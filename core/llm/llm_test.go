@@ -117,6 +117,22 @@ func TestRealtimeEventCanCarryInputAudioTranscription(t *testing.T) {
 	}
 }
 
+func TestRealtimeEventCanCarryOutputItemMetadata(t *testing.T) {
+	ev := RealtimeEvent{
+		Type:         RealtimeEventTypeText,
+		ItemID:       "msg_123",
+		ContentIndex: 2,
+		Text:         "hello",
+	}
+
+	if ev.ItemID != "msg_123" {
+		t.Fatalf("ItemID = %q, want msg_123", ev.ItemID)
+	}
+	if ev.ContentIndex != 2 {
+		t.Fatalf("ContentIndex = %d, want 2", ev.ContentIndex)
+	}
+}
+
 func TestRealtimeEventCanCarryGenerationCreated(t *testing.T) {
 	ev := RealtimeEvent{
 		Type: RealtimeEventTypeGenerationCreated,

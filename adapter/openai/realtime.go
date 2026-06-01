@@ -713,15 +713,19 @@ func openAIRealtimeEvent(ev map[string]any) (llm.RealtimeEvent, bool) {
 	case "response.output_text.delta", "response.text.delta":
 		if delta, ok := ev["delta"].(string); ok {
 			return llm.RealtimeEvent{
-				Type: llm.RealtimeEventTypeText,
-				Text: delta,
+				Type:         llm.RealtimeEventTypeText,
+				ItemID:       openAIRealtimeString(ev["item_id"]),
+				ContentIndex: openAIRealtimeInt(ev["content_index"]),
+				Text:         delta,
 			}, true
 		}
 	case "response.output_audio_transcript.delta", "response.audio_transcript.delta":
 		if delta, ok := ev["delta"].(string); ok {
 			return llm.RealtimeEvent{
-				Type: llm.RealtimeEventTypeText,
-				Text: delta,
+				Type:         llm.RealtimeEventTypeText,
+				ItemID:       openAIRealtimeString(ev["item_id"]),
+				ContentIndex: openAIRealtimeInt(ev["content_index"]),
+				Text:         delta,
 			}, true
 		}
 	case "response.output_audio.delta", "response.audio.delta":
@@ -731,8 +735,10 @@ func openAIRealtimeEvent(ev map[string]any) (llm.RealtimeEvent, bool) {
 				return llm.RealtimeEvent{}, false
 			}
 			return llm.RealtimeEvent{
-				Type: llm.RealtimeEventTypeAudio,
-				Data: data,
+				Type:         llm.RealtimeEventTypeAudio,
+				ItemID:       openAIRealtimeString(ev["item_id"]),
+				ContentIndex: openAIRealtimeInt(ev["content_index"]),
+				Data:         data,
 			}, true
 		}
 	case "response.function_call_arguments.delta":
@@ -1008,6 +1014,11 @@ func openAIRealtimeFloat(v any) float64 {
 	default:
 		return 0
 	}
+}
+
+func openAIRealtimeString(v any) string {
+	value, _ := v.(string)
+	return value
 }
 
 func openAIRealtimeInt(v any) int {

@@ -541,6 +541,8 @@ type InputTranscriptionCompleted struct {
 
 type RealtimeEvent struct {
 	Type               RealtimeEventType
+	ItemID             string
+	ContentIndex       int
 	Data               []byte // For audio frames
 	Text               string // For text deltas
 	Function           *FunctionToolCall
