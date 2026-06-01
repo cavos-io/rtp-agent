@@ -93,6 +93,7 @@ type AgentSession struct {
 	// Event channels
 	AgentStateChangedCh chan AgentStateChangedEvent
 	UserStateChangedCh  chan UserStateChangedEvent
+	userInputCh         chan UserInputTranscribedEvent
 	speechCreatedCh     chan SpeechCreatedEvent
 	conversationItemCh  chan ConversationItemAddedEvent
 	functionToolsCh     chan FunctionToolsExecutedEvent
@@ -146,11 +147,43 @@ func NewAgentSession(agent AgentInterface, room *lksdk.Room, opts AgentSessionOp
 		Tools:               make([]llm.Tool, 0),
 		AgentStateChangedCh: make(chan AgentStateChangedEvent, 10),
 		UserStateChangedCh:  make(chan UserStateChangedEvent, 10),
+		userInputCh:         make(chan UserInputTranscribedEvent, 10),
 		speechCreatedCh:     make(chan SpeechCreatedEvent, 10),
 		conversationItemCh:  make(chan ConversationItemAddedEvent, 10),
 		functionToolsCh:     make(chan FunctionToolsExecutedEvent, 10),
 		sipDTMFCh:           make(chan SipDTMFEvent, 10),
 	}
+}
+
+func (s *AgentSession) UserInputTranscribedEvents() <-chan UserInputTranscribedEvent {
+	return s.userInputTranscribedEvents()
+}
+
+func (s *AgentSession) EmitUserInputTranscribed(ev UserInputTranscribedEvent) {
+	if ev.CreatedAt.IsZero() {
+		ev.CreatedAt = time.Now()
+	}
+	s.mu.Lock()
+	userState := s.UserState
+	s.mu.Unlock()
+	if ev.IsFinal && userState == UserStateAway {
+		s.UpdateUserState(UserStateListening)
+	}
+	ch := s.userInputTranscribedEvents()
+	select {
+	case ch <- ev:
+	default:
+	}
+}
+
+func (s *AgentSession) userInputTranscribedEvents() chan UserInputTranscribedEvent {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.userInputCh == nil {
+		s.userInputCh = make(chan UserInputTranscribedEvent, 10)
+	}
+	return s.userInputCh
 }
 
 func (s *AgentSession) SpeechCreatedEvents() <-chan SpeechCreatedEvent {

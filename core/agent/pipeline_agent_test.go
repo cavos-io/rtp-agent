@@ -122,6 +122,57 @@ func TestPipelineAgentEmitsConversationItemAddedForUserTranscript(t *testing.T) 
 	}
 }
 
+func TestPipelineAgentEmitsUserInputTranscribedEvents(t *testing.T) {
+	chatCtx := llm.NewChatContext()
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	agent := NewPipelineAgent(nil, nil, &fakeGenerationLLM{
+		stream: &fakeGenerationLLMStream{},
+	}, &fakePipelineTTS{}, chatCtx)
+	agent.session = session
+	agent.ctx = context.Background()
+	stream := &fakePipelineRecognizeStream{
+		events: []*stt.SpeechEvent{
+			{
+				Type: stt.SpeechEventInterimTranscript,
+				Alternatives: []stt.SpeechData{{
+					Language:  "en",
+					Text:      "hello",
+					SpeakerID: "speaker_1",
+				}},
+			},
+			{
+				Type: stt.SpeechEventFinalTranscript,
+				Alternatives: []stt.SpeechData{{
+					Language:  "en",
+					Text:      "hello there",
+					SpeakerID: "speaker_1",
+				}},
+			},
+		},
+	}
+
+	agent.sttLoop(stream)
+
+	events := []UserInputTranscribedEvent{
+		receiveUserInputTranscribedEvent(t, session),
+		receiveUserInputTranscribedEvent(t, session),
+	}
+	if events[0].Transcript != "hello" || events[0].IsFinal {
+		t.Fatalf("interim transcript event = %#v, want non-final hello", events[0])
+	}
+	if events[1].Transcript != "hello there" || !events[1].IsFinal {
+		t.Fatalf("final transcript event = %#v, want final hello there", events[1])
+	}
+	for i, ev := range events {
+		if ev.Language != "en" || ev.SpeakerID != "speaker_1" {
+			t.Fatalf("event %d language/speaker = %q/%q, want en/speaker_1", i, ev.Language, ev.SpeakerID)
+		}
+		if ev.CreatedAt.IsZero() {
+			t.Fatalf("event %d CreatedAt is zero", i)
+		}
+	}
+}
+
 func TestPipelineAgentReturnsToThinkingWhileExecutingTools(t *testing.T) {
 	chatCtx := llm.NewChatContext()
 	l := &fakeGenerationLLM{
@@ -346,6 +397,18 @@ func currentAgentState(session *AgentSession) AgentState {
 	session.mu.Lock()
 	defer session.mu.Unlock()
 	return session.AgentState
+}
+
+func receiveUserInputTranscribedEvent(t *testing.T, session *AgentSession) UserInputTranscribedEvent {
+	t.Helper()
+
+	select {
+	case ev := <-session.UserInputTranscribedEvents():
+		return ev
+	case <-time.After(time.Second):
+		t.Fatal("UserInputTranscribedEvents did not receive transcript")
+	}
+	return UserInputTranscribedEvent{}
 }
 
 type fakePipelineRecognizeStream struct {
