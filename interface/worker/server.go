@@ -460,6 +460,24 @@ func (s *AgentServer) runReloadIPCSession(ctx context.Context, rw io.ReadWriter,
 	return s.processReloadIPCMessages(ctx, rw, rw, reloadCount, now)
 }
 
+func (s *AgentServer) startReloadIPCSessionFromEnv(ctx context.Context) {
+	path := os.Getenv("RTP_AGENT_RELOAD_IPC")
+	if path == "" {
+		return
+	}
+	go func() {
+		file, err := os.OpenFile(path, os.O_RDWR, 0)
+		if err != nil {
+			logger.Logger.Errorw("failed to open reload IPC", err, "path", path)
+			return
+		}
+		defer file.Close()
+		if err := s.runReloadIPCSession(ctx, file, 0, time.Now()); err != nil && !errors.Is(err, context.Canceled) {
+			logger.Logger.Errorw("reload IPC session failed", err, "path", path)
+		}
+	}()
+}
+
 func (s *AgentServer) UpdateOptions(opts WorkerOptions) error {
 	s.mu.Lock()
 	if s.started() {
@@ -1102,10 +1120,6 @@ func (s *AgentServer) currentLoad() float64 {
 	return load
 }
 
-func (s *AgentServer) effectiveLoad() float64 {
-	return s.effectiveLoadWithLoad(s.currentLoad())
-}
-
 func (s *AgentServer) effectiveLoadWithLoad(load float64) float64 {
 	threshold := s.Options.LoadThreshold
 	if threshold <= 0 {
@@ -1173,7 +1187,7 @@ func (s *AgentServer) validateRunPreconditions() error {
 		return fmt.Errorf("invalid log_level %q, valid levels: CRITICAL, DEBUG, ERROR, INFO, TRACE, WARN", s.Options.LogLevel)
 	}
 	if s.entrypointFnc == nil {
-		return fmt.Errorf("No RTC session entrypoint has been registered")
+		return fmt.Errorf("no RTC session entrypoint has been registered")
 	}
 	if s.Options.WSRL == "" {
 		return fmt.Errorf("ws_url is required, or set LIVEKIT_URL environment variable")
@@ -1183,6 +1197,17 @@ func (s *AgentServer) validateRunPreconditions() error {
 	}
 	if s.Options.APISecret == "" {
 		return fmt.Errorf("api_secret is required, or set LIVEKIT_API_SECRET environment variable")
+	}
+	return nil
+}
+
+func (s *AgentServer) validateUnregisteredRunPreconditions() error {
+	s.Options = resolveWorkerOptions(s.Options)
+	if !validWorkerLogLevel(s.Options.LogLevel) {
+		return fmt.Errorf("invalid log_level %q, valid levels: CRITICAL, DEBUG, ERROR, INFO, TRACE, WARN", s.Options.LogLevel)
+	}
+	if s.entrypointFnc == nil {
+		return fmt.Errorf("no RTC session entrypoint has been registered")
 	}
 	return nil
 }
@@ -1243,8 +1268,7 @@ func (s *AgentServer) Run(ctx context.Context) error {
 
 	// Create JWT token
 	at := auth.NewAccessToken(s.Options.APIKey, s.Options.APISecret)
-	grant := &auth.VideoGrant{Agent: true}
-	at.AddGrant(grant).SetValidFor(time.Hour)
+	at.SetVideoGrant(&auth.VideoGrant{Agent: true}).SetValidFor(time.Hour)
 	token, err := at.ToJWT()
 	if err != nil {
 		return err
@@ -1313,8 +1337,60 @@ func (s *AgentServer) Run(ctx context.Context) error {
 	defer stopStatusUpdates()
 	go s.runWorkerStatusUpdates(statusCtx, workerStatusUpdateInterval)
 	s.emitWorkerStarted()
+	s.startReloadIPCSessionFromEnv(ctx)
 
 	return s.runWorkerMessageLoop(ctx, conn.ReadMessage, conn.Close)
+}
+
+func (s *AgentServer) RunUnregistered(ctx context.Context) error {
+	if err := s.beginRun(); err != nil {
+		return err
+	}
+	defer s.finishRun()
+
+	if err := s.validateUnregisteredRunPreconditions(); err != nil {
+		return err
+	}
+
+	httpServer, err := s.startWorkerHTTPServer()
+	if err != nil {
+		return err
+	}
+	defer func() {
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		if err := httpServer.Shutdown(shutdownCtx); err != nil {
+			_ = httpServer.Close()
+		}
+		s.mu.Lock()
+		s.httpServer = nil
+		s.httpPort = 0
+		s.mu.Unlock()
+	}()
+
+	if err := s.configurePrometheusMultiprocDir(); err != nil {
+		return err
+	}
+	prometheusServer, err := s.startPrometheusServer()
+	if err != nil {
+		return err
+	}
+	if prometheusServer != nil {
+		defer func() {
+			shutdownCtx, cancel := context.WithTimeout(context.Background(), time.Second)
+			defer cancel()
+			if err := prometheusServer.Stop(shutdownCtx); err != nil {
+				logger.Logger.Errorw("failed to stop Prometheus server", err)
+			}
+			s.mu.Lock()
+			s.prometheusServer = nil
+			s.mu.Unlock()
+		}()
+	}
+
+	s.emitWorkerStarted()
+	<-ctx.Done()
+	return ctx.Err()
 }
 
 func (s *AgentServer) runWorkerMessageLoop(ctx context.Context, readMessage func() (int, []byte, error), closeConn func() error) error {
@@ -1676,9 +1752,12 @@ func (s *AgentServer) ExecuteLocalJobWithOptions(ctx context.Context, roomName s
 		return fmt.Errorf("agent identity is required for non-fake local jobs")
 	}
 	if s.entrypointFnc == nil {
-		return fmt.Errorf("No RTC session entrypoint has been registered")
+		return fmt.Errorf("no RTC session entrypoint has been registered")
 	}
 	jobCtx := newLocalJobContextWithOptions(roomName, participantIdentity, s.Options, options)
+	if options == (LocalJobOptions{FakeJob: true}) {
+		jobCtx = newLocalJobContext(roomName, participantIdentity, s.Options)
+	}
 	jobCtx.WorkerID = s.workerID
 	shutdownCh := make(chan struct{})
 	_ = jobCtx.AddShutdownCallback(func() {
