@@ -1,0 +1,180 @@
+package gladia
+
+import (
+	"context"
+	"encoding/base64"
+	"encoding/json"
+	"net/http"
+	"net/url"
+	"testing"
+
+	"github.com/cavos-io/rtp-agent/core/stt"
+)
+
+func TestGladiaSTTDefaultsMatchReferenceV2(t *testing.T) {
+	provider := NewGladiaSTT("test-key")
+
+	if provider.baseURL != "https://api.gladia.io/v2/live" {
+		t.Fatalf("base URL = %q, want v2 live endpoint", provider.baseURL)
+	}
+	if provider.model != "solaria-1" {
+		t.Fatalf("model = %q, want solaria-1", provider.model)
+	}
+	if provider.sampleRate != 16000 || provider.bitDepth != 16 || provider.channels != 1 {
+		t.Fatalf("audio config = %d/%d/%d, want 16000/16/1", provider.sampleRate, provider.bitDepth, provider.channels)
+	}
+	if provider.region != "eu-west" || provider.encoding != "wav/pcm" {
+		t.Fatalf("region/encoding = %q/%q, want eu-west/wav/pcm", provider.region, provider.encoding)
+	}
+	caps := provider.Capabilities()
+	if !caps.Streaming || !caps.InterimResults || caps.AlignedTranscript != "word" || caps.OfflineRecognize {
+		t.Fatalf("capabilities = %+v, want streaming interim word-aligned only", caps)
+	}
+}
+
+func TestBuildGladiaStreamingConfigMatchesReference(t *testing.T) {
+	provider := NewGladiaSTT("test-key",
+		WithGladiaLanguages([]string{"en", "fr"}),
+		WithGladiaCodeSwitching(false),
+		WithGladiaCustomVocabulary([]any{"LiveKit", map[string]any{"value": "Cavos"}}),
+		WithGladiaTranslation([]string{"es"}),
+		WithGladiaPreProcessing(true, 0.7),
+	)
+
+	config := buildGladiaStreamingConfig(provider)
+	assertGladiaField(t, config, "region", "eu-west")
+	assertGladiaField(t, config, "encoding", "wav/pcm")
+	assertGladiaField(t, config, "sample_rate", 16000)
+	assertGladiaField(t, config, "model", "solaria-1")
+
+	languageConfig := config["language_config"].(map[string]any)
+	if languages := languageConfig["languages"].([]string); len(languages) != 2 || languages[0] != "en" || languages[1] != "fr" {
+		t.Fatalf("languages = %+v, want en/fr", languages)
+	}
+	if languageConfig["code_switching"] != false {
+		t.Fatalf("code_switching = %#v, want false", languageConfig["code_switching"])
+	}
+	realtime := config["realtime_processing"].(map[string]any)
+	if realtime["words_accurate_timestamps"] != false || realtime["custom_vocabulary"] != true || realtime["translation"] != true {
+		t.Fatalf("realtime = %+v, want timestamps false with custom vocab and translation", realtime)
+	}
+	messages := config["messages_config"].(map[string]any)
+	if messages["receive_partial_transcripts"] != true || messages["receive_final_transcripts"] != true {
+		t.Fatalf("messages = %+v, want partial/final transcripts", messages)
+	}
+	pre := config["pre_processing"].(map[string]any)
+	if pre["audio_enhancer"] != true || pre["speech_threshold"] != 0.7 {
+		t.Fatalf("pre_processing = %+v, want enhancer threshold", pre)
+	}
+}
+
+func TestBuildGladiaInitRequestMovesRegionToQuery(t *testing.T) {
+	provider := NewGladiaSTT("test-key", WithGladiaBaseURL("https://gladia.example/v2/live"))
+	req, err := buildGladiaInitRequest(context.Background(), provider)
+	if err != nil {
+		t.Fatalf("build init request: %v", err)
+	}
+	if req.Method != http.MethodPost {
+		t.Fatalf("method = %s, want POST", req.Method)
+	}
+	parsed, err := url.Parse(req.URL.String())
+	if err != nil {
+		t.Fatalf("parse URL: %v", err)
+	}
+	if parsed.Scheme != "https" || parsed.Host != "gladia.example" || parsed.Path != "/v2/live" {
+		t.Fatalf("URL = %q, want configured init endpoint", req.URL.String())
+	}
+	if parsed.Query().Get("region") != "eu-west" {
+		t.Fatalf("region query = %q, want eu-west", parsed.Query().Get("region"))
+	}
+	if req.Header.Get("X-Gladia-Key") != "test-key" {
+		t.Fatalf("X-Gladia-Key = %q, want key", req.Header.Get("X-Gladia-Key"))
+	}
+
+	var body map[string]any
+	if err := json.NewDecoder(req.Body).Decode(&body); err != nil {
+		t.Fatalf("decode body: %v", err)
+	}
+	if _, ok := body["region"]; ok {
+		t.Fatalf("body still contains region: %+v", body)
+	}
+}
+
+func TestGladiaAudioMessagesUseV2Schema(t *testing.T) {
+	audioMessage := buildGladiaAudioChunkMessage([]byte{1, 2, 3})
+	if audioMessage["type"] != "audio_chunk" {
+		t.Fatalf("type = %q, want audio_chunk", audioMessage["type"])
+	}
+	data := audioMessage["data"].(map[string]any)
+	if data["chunk"] != base64.StdEncoding.EncodeToString([]byte{1, 2, 3}) {
+		t.Fatalf("chunk = %q, want base64 audio", data["chunk"])
+	}
+	stop := buildGladiaStopRecordingMessage()
+	if stop["type"] != "stop_recording" {
+		t.Fatalf("stop type = %q, want stop_recording", stop["type"])
+	}
+}
+
+func TestGladiaTranscriptEventsMatchReferenceLifecycle(t *testing.T) {
+	state := &gladiaSTTStreamState{requestID: "session-1", languages: []string{"en"}}
+	events, err := processGladiaMessage(state, map[string]any{
+		"type": "transcript",
+		"data": map[string]any{
+			"is_final": false,
+			"utterance": map[string]any{
+				"text":       "hello",
+				"start":      0.1,
+				"end":        0.4,
+				"confidence": 0.8,
+				"language":   "en",
+				"words":      []any{map[string]any{"word": "hello", "start": 0.1, "end": 0.4}},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("process interim: %v", err)
+	}
+	assertGladiaEvent(t, events, 0, stt.SpeechEventStartOfSpeech, "")
+	assertGladiaEvent(t, events, 1, stt.SpeechEventInterimTranscript, "hello")
+
+	events, err = processGladiaMessage(state, map[string]any{
+		"type": "transcript",
+		"data": map[string]any{
+			"is_final": true,
+			"utterance": map[string]any{
+				"text":       "hello final",
+				"start":      0.1,
+				"end":        0.5,
+				"confidence": 0.9,
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("process final: %v", err)
+	}
+	assertGladiaEvent(t, events, 0, stt.SpeechEventFinalTranscript, "hello final")
+	assertGladiaEvent(t, events, 1, stt.SpeechEventEndOfSpeech, "")
+}
+
+func assertGladiaField(t *testing.T, config map[string]any, key string, want any) {
+	t.Helper()
+	if got := config[key]; got != want {
+		t.Fatalf("%s = %#v, want %#v", key, got, want)
+	}
+}
+
+func assertGladiaEvent(t *testing.T, events []*stt.SpeechEvent, index int, eventType stt.SpeechEventType, text string) {
+	t.Helper()
+	if len(events) <= index {
+		t.Fatalf("events length = %d, missing index %d", len(events), index)
+	}
+	if events[index].Type != eventType {
+		t.Fatalf("event type = %v, want %v", events[index].Type, eventType)
+	}
+	if text == "" {
+		return
+	}
+	if len(events[index].Alternatives) != 1 || events[index].Alternatives[0].Text != text {
+		t.Fatalf("alternatives = %+v, want text %q", events[index].Alternatives, text)
+	}
+}
