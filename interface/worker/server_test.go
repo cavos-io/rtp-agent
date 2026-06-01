@@ -2527,6 +2527,32 @@ func TestAssignmentReportsFailureWhenEntrypointFails(t *testing.T) {
 	}
 }
 
+func TestAssignmentReportsFailureWhenEntrypointPanics(t *testing.T) {
+	server := NewAgentServer(WorkerOptions{})
+	sentCh := make(chan *livekit.WorkerMessage, 2)
+	server.workerMessageSink = func(msg *livekit.WorkerMessage) error {
+		sentCh <- msg
+		return nil
+	}
+	server.entrypointFnc = func(ctx *JobContext) error {
+		panic("entrypoint panic")
+	}
+
+	job := &livekit.Job{Id: "job_panic_status", Room: &livekit.Room{Name: "room-a"}}
+	markJobAccepted(t, server, job)
+	server.handleAssignment(context.Background(), &livekit.JobAssignment{Job: job})
+
+	assertJobStatusMessage(t, receiveWorkerMessage(t, sentCh), "job_panic_status", livekit.JobStatus_JS_RUNNING)
+	assertJobStatusMessage(t, receiveWorkerMessage(t, sentCh), "job_panic_status", livekit.JobStatus_JS_FAILED)
+
+	server.mu.Lock()
+	_, exists := server.activeJobs[job.Id]
+	server.mu.Unlock()
+	if exists {
+		t.Fatal("assigned job remained in activeJobs after panicked entrypoint")
+	}
+}
+
 func TestAssignmentPreservesAssignmentToken(t *testing.T) {
 	server := NewAgentServer(WorkerOptions{})
 	startedCh := make(chan *JobContext, 1)
