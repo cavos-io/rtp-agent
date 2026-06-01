@@ -33,6 +33,7 @@ type SimpleVADOptions struct {
 	ProbabilitySmoothingAlpha float64
 
 	maxBufferedSpeechDurationSet bool
+	deactivationThresholdSet     bool
 }
 
 type SimpleVADOption func(*SimpleVADOptions)
@@ -71,6 +72,7 @@ func WithMaxBufferedSpeechDuration(duration float64) SimpleVADOption {
 func WithDeactivationThreshold(threshold float64) SimpleVADOption {
 	return func(o *SimpleVADOptions) {
 		o.DeactivationThreshold = threshold
+		o.deactivationThresholdSet = true
 	}
 }
 
@@ -105,6 +107,23 @@ func NewSimpleVAD(threshold float64) *SimpleVAD {
 	return NewSimpleVADWithOptions(SimpleVADOptions{Threshold: threshold})
 }
 
+func NewSimpleVADWith(opts ...SimpleVADOption) *SimpleVAD {
+	options := SimpleVADOptions{
+		Threshold:             0.05,
+		DeactivationThreshold: 0.05,
+		UpdateInterval:        1,
+	}
+	for _, opt := range opts {
+		if opt != nil {
+			opt(&options)
+		}
+	}
+	if !options.deactivationThresholdSet {
+		options.DeactivationThreshold = options.Threshold
+	}
+	return newSimpleVADWithResolvedOptions(options)
+}
+
 func NewSimpleVADWithOptions(options SimpleVADOptions) *SimpleVAD {
 	if options.Threshold == 0 {
 		options.Threshold = 0.05
@@ -115,6 +134,10 @@ func NewSimpleVADWithOptions(options SimpleVADOptions) *SimpleVAD {
 	if options.UpdateInterval == 0 {
 		options.UpdateInterval = 1
 	}
+	return newSimpleVADWithResolvedOptions(options)
+}
+
+func newSimpleVADWithResolvedOptions(options SimpleVADOptions) *SimpleVAD {
 	return &SimpleVAD{
 		options: options,
 		streams: make(map[*simpleVADStream]struct{}),
