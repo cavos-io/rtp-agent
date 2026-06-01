@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 	"sync"
 	"time"
@@ -219,60 +220,32 @@ func minimaxOptions(t *MinimaxTTS) map[string]interface{} {
 }
 
 func (t *MinimaxTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
-	conn, _, err := websocket.DefaultDialer.DialContext(ctx, buildMinimaxTTSWebsocketURL(t), buildMinimaxTTSWebsocketHeaders(t))
+	conn, _, err := websocket.DefaultDialer.DialContext(ctx, buildMinimaxTTSWebsocketURL(t).String(), buildMinimaxTTSWebsocketHeaders(t))
 	if err != nil {
 		return nil, fmt.Errorf("failed to dial minimax tts websocket: %w", err)
 	}
-	startPayload, err := buildMinimaxTTSTaskStartMessage(t)
+	startMessage, err := buildMinimaxTTSTaskStartMessage(t)
 	if err != nil {
 		conn.Close()
 		return nil, err
 	}
-	if err := conn.WriteMessage(websocket.TextMessage, startPayload); err != nil {
+	if err := conn.WriteMessage(websocket.TextMessage, startMessage); err != nil {
 		conn.Close()
 		return nil, err
 	}
 	streamCtx, cancel := context.WithCancel(ctx)
-	return &minimaxTTSSynthesizeStream{
+	stream := &minimaxTTSSynthesizeStream{
 		conn:       conn,
 		ctx:        streamCtx,
 		cancel:     cancel,
+		provider:   t,
 		sampleRate: t.sampleRate,
-		segmentID:  fmt.Sprintf("seg-%d", time.Now().UnixNano()),
-	}, nil
-}
-
-func buildMinimaxTTSWebsocketURL(t *MinimaxTTS) string {
-	baseURL := strings.TrimRight(t.baseURL, "/")
-	if strings.HasPrefix(baseURL, "https://") {
-		baseURL = "wss://" + strings.TrimPrefix(baseURL, "https://")
-	} else if strings.HasPrefix(baseURL, "http://") {
-		baseURL = "ws://" + strings.TrimPrefix(baseURL, "http://")
+		events:     make(chan *tts.SynthesizedAudio, 100),
+		errCh:      make(chan error, 1),
+		traceID:    "",
 	}
-	return baseURL + "/ws/v1/t2a_v2"
-}
-
-func buildMinimaxTTSWebsocketHeaders(t *MinimaxTTS) http.Header {
-	headers := make(http.Header)
-	headers.Set("Authorization", "Bearer "+t.apiKey)
-	return headers
-}
-
-func buildMinimaxTTSTaskStartMessage(t *MinimaxTTS) ([]byte, error) {
-	message := minimaxOptions(t)
-	message["event"] = "task_start"
-	return json.Marshal(message)
-}
-
-func buildMinimaxTTSTaskContinueMessage(text string) ([]byte, error) {
-	return json.Marshal(map[string]any{
-		"event": "task_continue",
-		"text":  text,
-	})
-}
-
-func buildMinimaxTTSTaskFinishMessage() ([]byte, error) {
-	return json.Marshal(map[string]any{"event": "task_finish"})
+	go stream.readLoop()
+	return stream, nil
 }
 
 type minimaxTTSChunkedStream struct {
@@ -324,176 +297,6 @@ func (s *minimaxTTSChunkedStream) Close() error {
 	return s.resp.Body.Close()
 }
 
-type minimaxTTSWebsocketChunkedStream struct {
-	conn       *websocket.Conn
-	sampleRate int
-	segmentID  string
-}
-
-func (s *minimaxTTSWebsocketChunkedStream) Next() (*tts.SynthesizedAudio, error) {
-	if s.conn == nil {
-		return nil, io.EOF
-	}
-	for {
-		msgType, payload, err := s.conn.ReadMessage()
-		if err != nil {
-			if websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway) || err == io.EOF {
-				return nil, io.EOF
-			}
-			return nil, err
-		}
-		if msgType != websocket.TextMessage {
-			continue
-		}
-		audio, done, err := minimaxAudioFromWebsocketMessage(payload, s.sampleRate, s.segmentID)
-		if err != nil {
-			return nil, err
-		}
-		if done {
-			return nil, io.EOF
-		}
-		if audio != nil {
-			return audio, nil
-		}
-	}
-}
-
-func (s *minimaxTTSWebsocketChunkedStream) Close() error {
-	if s.conn == nil {
-		return nil
-	}
-	_ = s.conn.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""), time.Now().Add(time.Second))
-	return s.conn.Close()
-}
-
-type minimaxTTSSynthesizeStream struct {
-	conn        *websocket.Conn
-	ctx         context.Context
-	cancel      context.CancelFunc
-	sampleRate  int
-	segmentID   string
-	pendingText bytes.Buffer
-	mu          sync.Mutex
-	closed      bool
-}
-
-func (s *minimaxTTSSynthesizeStream) PushText(text string) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if text == "" {
-		return nil
-	}
-	_, err := s.pendingText.WriteString(text)
-	return err
-}
-
-func (s *minimaxTTSSynthesizeStream) Flush() error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	text := strings.TrimSpace(s.pendingText.String())
-	s.pendingText.Reset()
-	if s.conn == nil {
-		return nil
-	}
-	if text != "" {
-		payload, err := buildMinimaxTTSTaskContinueMessage(text)
-		if err != nil {
-			return err
-		}
-		if err := s.conn.WriteMessage(websocket.TextMessage, payload); err != nil {
-			return err
-		}
-	}
-	finishPayload, err := buildMinimaxTTSTaskFinishMessage()
-	if err != nil {
-		return err
-	}
-	return s.conn.WriteMessage(websocket.TextMessage, finishPayload)
-}
-
-func (s *minimaxTTSSynthesizeStream) Close() error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.closed {
-		return nil
-	}
-	s.closed = true
-	if s.cancel != nil {
-		s.cancel()
-	}
-	if s.conn == nil {
-		return nil
-	}
-	_ = s.conn.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""), time.Now().Add(time.Second))
-	return s.conn.Close()
-}
-
-func (s *minimaxTTSSynthesizeStream) Next() (*tts.SynthesizedAudio, error) {
-	if s.ctx != nil {
-		select {
-		case <-s.ctx.Done():
-			return nil, s.ctx.Err()
-		default:
-		}
-	}
-	return (&minimaxTTSWebsocketChunkedStream{conn: s.conn, sampleRate: s.sampleRate, segmentID: s.segmentID}).Next()
-}
-
-func minimaxAudioFromWebsocketMessage(payload []byte, sampleRate int, segmentID string) (*tts.SynthesizedAudio, bool, error) {
-	var data struct {
-		Event   string `json:"event"`
-		TraceID string `json:"trace_id"`
-		IsFinal bool   `json:"is_final"`
-		Data    struct {
-			Audio string `json:"audio"`
-		} `json:"data"`
-		BaseResp struct {
-			StatusCode int    `json:"status_code"`
-			StatusMsg  string `json:"status_msg"`
-			TraceID    string `json:"trace_id"`
-		} `json:"base_resp"`
-	}
-	if err := json.Unmarshal(payload, &data); err != nil {
-		return nil, false, err
-	}
-	traceID := data.TraceID
-	if traceID == "" {
-		traceID = data.BaseResp.TraceID
-	}
-	if data.BaseResp.StatusCode != 0 {
-		if data.BaseResp.StatusMsg == "" {
-			data.BaseResp.StatusMsg = "unknown error"
-		}
-		return nil, false, fmt.Errorf("minimax error [%d]: %s", data.BaseResp.StatusCode, data.BaseResp.StatusMsg)
-	}
-	switch data.Event {
-	case "task_continued":
-		if data.Data.Audio == "" {
-			return nil, false, nil
-		}
-		audio, err := hex.DecodeString(data.Data.Audio)
-		if err != nil {
-			return nil, false, err
-		}
-		return &tts.SynthesizedAudio{
-			RequestID: traceID,
-			SegmentID: segmentID,
-			Frame: &model.AudioFrame{
-				Data:              audio,
-				SampleRate:        uint32(sampleRate),
-				NumChannels:       1,
-				SamplesPerChannel: uint32(len(audio) / 2),
-			},
-		}, false, nil
-	case "task_finished":
-		return nil, true, nil
-	case "task_failed":
-		return nil, false, fmt.Errorf("minimax task failed: %s", string(payload))
-	default:
-		return nil, false, nil
-	}
-}
-
 func minimaxAudioFromSSELine(line string) ([]byte, error) {
 	var data struct {
 		Data struct {
@@ -517,4 +320,200 @@ func minimaxAudioFromSSELine(line string) ([]byte, error) {
 		return nil, nil
 	}
 	return hex.DecodeString(data.Data.Audio)
+}
+
+func buildMinimaxTTSWebsocketURL(t *MinimaxTTS) *url.URL {
+	baseURL := strings.TrimRight(t.baseURL, "/")
+	if strings.HasPrefix(baseURL, "http://") || strings.HasPrefix(baseURL, "https://") {
+		baseURL = strings.Replace(baseURL, "http", "ws", 1)
+	}
+	wsURL, err := url.Parse(baseURL + "/ws/v1/t2a_v2")
+	if err != nil {
+		return &url.URL{Scheme: "wss", Host: strings.TrimPrefix(baseURL, "wss://"), Path: "/ws/v1/t2a_v2"}
+	}
+	return wsURL
+}
+
+func buildMinimaxTTSWebsocketHeaders(t *MinimaxTTS) http.Header {
+	headers := make(http.Header)
+	headers.Set("Authorization", "Bearer "+t.apiKey)
+	return headers
+}
+
+func buildMinimaxTTSTaskStartMessage(t *MinimaxTTS) ([]byte, error) {
+	message := minimaxOptions(t)
+	message["event"] = "task_start"
+	return json.Marshal(message)
+}
+
+func buildMinimaxTTSTaskContinueMessage(text string) ([]byte, error) {
+	return json.Marshal(map[string]interface{}{
+		"event": "task_continue",
+		"text":  text,
+	})
+}
+
+func buildMinimaxTTSTaskFinishMessage() ([]byte, error) {
+	return json.Marshal(map[string]interface{}{"event": "task_finish"})
+}
+
+type minimaxTTSSynthesizeStream struct {
+	conn       *websocket.Conn
+	ctx        context.Context
+	cancel     context.CancelFunc
+	provider   *MinimaxTTS
+	sampleRate int
+	events     chan *tts.SynthesizedAudio
+	errCh      chan error
+	traceID    string
+	mu         sync.Mutex
+	closed     bool
+}
+
+func (s *minimaxTTSSynthesizeStream) PushText(text string) error {
+	if text == "" {
+		return nil
+	}
+	message, err := buildMinimaxTTSTaskContinueMessage(text)
+	if err != nil {
+		return err
+	}
+	return s.conn.WriteMessage(websocket.TextMessage, message)
+}
+
+func (s *minimaxTTSSynthesizeStream) Flush() error {
+	return nil
+}
+
+func (s *minimaxTTSSynthesizeStream) Close() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return nil
+	}
+	s.closed = true
+	s.cancel()
+	finishMessage, err := buildMinimaxTTSTaskFinishMessage()
+	if err == nil {
+		_ = s.conn.WriteMessage(websocket.TextMessage, finishMessage)
+	}
+	_ = s.conn.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""), time.Now().Add(time.Second))
+	return s.conn.Close()
+}
+
+func (s *minimaxTTSSynthesizeStream) Next() (*tts.SynthesizedAudio, error) {
+	select {
+	case audio, ok := <-s.events:
+		if !ok {
+			select {
+			case err := <-s.errCh:
+				return nil, err
+			default:
+				return nil, io.EOF
+			}
+		}
+		return audio, nil
+	case err := <-s.errCh:
+		return nil, err
+	case <-s.ctx.Done():
+		return nil, s.ctx.Err()
+	}
+}
+
+func (s *minimaxTTSSynthesizeStream) readLoop() {
+	defer close(s.events)
+	for {
+		msgType, payload, err := s.conn.ReadMessage()
+		if err != nil {
+			if !websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway) && err != io.EOF {
+				s.errCh <- err
+			}
+			return
+		}
+		if msgType != websocket.TextMessage {
+			continue
+		}
+		audio, done, traceID, err := minimaxAudioFromWebsocketMessage(payload, s.traceID, s.sampleRate)
+		if traceID != "" {
+			s.traceID = traceID
+		}
+		if err != nil {
+			s.errCh <- err
+			return
+		}
+		if audio != nil {
+			s.events <- audio
+		}
+		if done {
+			return
+		}
+	}
+}
+
+func minimaxAudioFromWebsocketMessage(payload []byte, fallbackTraceID string, sampleRate int) (*tts.SynthesizedAudio, bool, string, error) {
+	var data struct {
+		Event     string `json:"event"`
+		TraceID   string `json:"trace_id"`
+		SessionID string `json:"session_id"`
+		IsFinal   bool   `json:"is_final"`
+		Data      struct {
+			Audio string `json:"audio"`
+		} `json:"data"`
+		BaseResp struct {
+			TraceID    string `json:"trace_id"`
+			StatusCode int    `json:"status_code"`
+			StatusMsg  string `json:"status_msg"`
+		} `json:"base_resp"`
+	}
+	if err := json.Unmarshal(payload, &data); err != nil {
+		return nil, false, fallbackTraceID, err
+	}
+	traceID := data.TraceID
+	if traceID == "" {
+		traceID = data.BaseResp.TraceID
+	}
+	if traceID == "" {
+		traceID = fallbackTraceID
+	}
+	if data.BaseResp.StatusCode != 0 {
+		statusMsg := data.BaseResp.StatusMsg
+		if statusMsg == "" {
+			statusMsg = "unknown error"
+		}
+		return nil, false, traceID, fmt.Errorf("minimax websocket error [%d]: %s", data.BaseResp.StatusCode, statusMsg)
+	}
+	switch data.Event {
+	case "connected_success", "task_started":
+		return nil, false, traceID, nil
+	case "task_continued":
+		if data.Data.Audio == "" {
+			return nil, data.IsFinal, traceID, nil
+		}
+		audio, err := hex.DecodeString(data.Data.Audio)
+		if err != nil {
+			return nil, false, traceID, err
+		}
+		if len(audio) == 0 {
+			return nil, data.IsFinal, traceID, nil
+		}
+		return minimaxTTSAudioFrame(audio, sampleRate, traceID), data.IsFinal, traceID, nil
+	case "task_finished":
+		return nil, true, traceID, nil
+	case "task_failed":
+		return nil, false, traceID, fmt.Errorf("minimax websocket task failed: %s", string(payload))
+	default:
+		return nil, false, traceID, nil
+	}
+}
+
+func minimaxTTSAudioFrame(audio []byte, sampleRate int, requestID string) *tts.SynthesizedAudio {
+	return &tts.SynthesizedAudio{
+		RequestID: requestID,
+		Frame: &model.AudioFrame{
+			Data:              bytes.Clone(audio),
+			SampleRate:        uint32(sampleRate),
+			NumChannels:       1,
+			SamplesPerChannel: uint32(len(audio) / 2),
+		},
+	}
 }
