@@ -152,3 +152,26 @@ func TestRealtimeEventMapsInputAudioTranscriptionCompleted(t *testing.T) {
 		t.Fatalf("Confidence = %#v, want %.2f", ev.InputTranscription.Confidence, confidence)
 	}
 }
+
+func TestRealtimeEventMapsInputAudioTranscriptionDelta(t *testing.T) {
+	ev, ok := openAIRealtimeEvent(map[string]any{
+		"type":    "conversation.item.input_audio_transcription.delta",
+		"item_id": "item_123",
+		"delta":   "hel",
+	})
+	if !ok {
+		t.Fatal("openAIRealtimeEvent returned ok=false, want transcription delta event")
+	}
+	if ev.Type != llm.RealtimeEventTypeInputAudioTranscriptionCompleted {
+		t.Fatalf("event type = %q, want input audio transcription", ev.Type)
+	}
+	if ev.InputTranscription == nil {
+		t.Fatal("InputTranscription = nil, want transcription payload")
+	}
+	if ev.InputTranscription.ItemID != "item_123" || ev.InputTranscription.Transcript != "hel" || ev.InputTranscription.IsFinal {
+		t.Fatalf("InputTranscription = %#v, want non-final delta transcript", ev.InputTranscription)
+	}
+	if ev.InputTranscription.Confidence != nil {
+		t.Fatalf("Confidence = %#v, want nil for delta", ev.InputTranscription.Confidence)
+	}
+}

@@ -393,6 +393,20 @@ func openAIRealtimeEvent(ev map[string]any) (llm.RealtimeEvent, bool) {
 				Confidence: openAIRealtimeFloatPtr(ev["confidence"]),
 			},
 		}, true
+	case "conversation.item.input_audio_transcription.delta":
+		itemID, _ := ev["item_id"].(string)
+		delta, _ := ev["delta"].(string)
+		if itemID == "" && delta == "" {
+			return llm.RealtimeEvent{}, false
+		}
+		return llm.RealtimeEvent{
+			Type: llm.RealtimeEventTypeInputAudioTranscriptionCompleted,
+			InputTranscription: &llm.InputTranscriptionCompleted{
+				ItemID:     itemID,
+				Transcript: delta,
+				IsFinal:    false,
+			},
+		}, true
 	case "input_audio_buffer.speech_started":
 		return llm.RealtimeEvent{Type: llm.RealtimeEventTypeSpeechStarted}, true
 	case "input_audio_buffer.speech_stopped":
