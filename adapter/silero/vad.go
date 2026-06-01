@@ -20,6 +20,9 @@ type VADOptions struct {
 	UpdateInterval        float64
 	SampleRate            int
 
+	minSpeechDurationSet     bool
+	minSilenceDurationSet    bool
+	prefixPaddingDurationSet bool
 	deactivationThresholdSet bool
 	activationThresholdSet   bool
 	maxBufferedSpeechSet     bool
@@ -51,18 +54,21 @@ type VADOption func(*VADOptions)
 func WithMinSpeechDuration(d float64) VADOption {
 	return func(o *VADOptions) {
 		o.MinSpeechDuration = d
+		o.minSpeechDurationSet = true
 	}
 }
 
 func WithMinSilenceDuration(d float64) VADOption {
 	return func(o *VADOptions) {
 		o.MinSilenceDuration = d
+		o.minSilenceDurationSet = true
 	}
 }
 
 func WithPrefixPaddingDuration(d float64) VADOption {
 	return func(o *VADOptions) {
 		o.PrefixPaddingDuration = d
+		o.prefixPaddingDurationSet = true
 	}
 }
 
@@ -190,7 +196,7 @@ func (v *SileroVAD) UpdateOptions(options VADOptions) {
 	}
 	v.options = merged
 	v.mu.Unlock()
-	v.inner.UpdateOptions(simpleOptionsFromSilero(merged))
+	v.inner.UpdateOptionsWith(simpleUpdateOptionsFromSilero(merged)...)
 }
 
 func (v *SileroVAD) UpdateOptionsWith(opts ...VADOption) {
@@ -255,26 +261,29 @@ func simpleUpdateOptionsFromSilero(options VADOptions) []vad.SimpleVADOption {
 }
 
 func mergeVADOptions(current, updates VADOptions) VADOptions {
-	if updates.MinSpeechDuration != 0 {
+	if updates.MinSpeechDuration != 0 || updates.minSpeechDurationSet {
 		current.MinSpeechDuration = updates.MinSpeechDuration
+		current.minSpeechDurationSet = updates.minSpeechDurationSet
 	}
-	if updates.MinSilenceDuration != 0 {
+	if updates.MinSilenceDuration != 0 || updates.minSilenceDurationSet {
 		current.MinSilenceDuration = updates.MinSilenceDuration
+		current.minSilenceDurationSet = updates.minSilenceDurationSet
 	}
-	if updates.PrefixPaddingDuration != 0 {
+	if updates.PrefixPaddingDuration != 0 || updates.prefixPaddingDurationSet {
 		current.PrefixPaddingDuration = updates.PrefixPaddingDuration
+		current.prefixPaddingDurationSet = updates.prefixPaddingDurationSet
 	}
-	if updates.MaxBufferedSpeech != 0 {
+	if updates.MaxBufferedSpeech != 0 || updates.maxBufferedSpeechSet {
 		current.MaxBufferedSpeech = updates.MaxBufferedSpeech
-		current.maxBufferedSpeechSet = true
+		current.maxBufferedSpeechSet = updates.maxBufferedSpeechSet
 	}
-	if updates.ActivationThreshold != 0 {
+	if updates.ActivationThreshold != 0 || updates.activationThresholdSet {
 		current.ActivationThreshold = updates.ActivationThreshold
-		current.activationThresholdSet = true
+		current.activationThresholdSet = updates.activationThresholdSet
 	}
-	if updates.DeactivationThreshold != 0 {
+	if updates.DeactivationThreshold != 0 || updates.deactivationThresholdSet {
 		current.DeactivationThreshold = updates.DeactivationThreshold
-		current.deactivationThresholdSet = true
+		current.deactivationThresholdSet = updates.deactivationThresholdSet
 	}
 	if updates.UpdateInterval != 0 {
 		current.UpdateInterval = updates.UpdateInterval
