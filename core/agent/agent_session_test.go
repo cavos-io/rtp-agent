@@ -61,6 +61,40 @@ func TestNewAgentSessionInitializesUsageCollector(t *testing.T) {
 	}
 }
 
+func TestAgentSessionUserdataRequiresValue(t *testing.T) {
+	agent := NewAgent("test")
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+
+	value, err := session.Userdata()
+
+	if value != nil {
+		t.Fatalf("Userdata value = %#v, want nil when unset", value)
+	}
+	if !errors.Is(err, ErrAgentSessionUserdataNotSet) {
+		t.Fatalf("Userdata error = %v, want ErrAgentSessionUserdataNotSet", err)
+	}
+}
+
+func TestAgentSessionUserdataCanBeSet(t *testing.T) {
+	agent := NewAgent("test")
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	want := map[string]string{"customer_id": "cust_123"}
+
+	session.SetUserdata(want)
+	value, err := session.Userdata()
+
+	if err != nil {
+		t.Fatalf("Userdata error = %v, want nil", err)
+	}
+	got, ok := value.(map[string]string)
+	if !ok {
+		t.Fatalf("Userdata value = %T, want map[string]string", value)
+	}
+	if got["customer_id"] != want["customer_id"] {
+		t.Fatalf("Userdata customer_id = %q, want %q", got["customer_id"], want["customer_id"])
+	}
+}
+
 func TestNewAgentSessionAppliesReferenceOptionDefaults(t *testing.T) {
 	agent := NewAgent("test")
 	session := NewAgentSession(agent, nil, AgentSessionOptions{})
@@ -320,6 +354,58 @@ func TestAgentSessionEmitErrorEmitsTimestampedEvent(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("ErrorEvents did not receive error event")
+	}
+}
+
+func TestAgentSessionRecordsEmittedEvents(t *testing.T) {
+	agent := NewAgent("test")
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	cause := errors.New("provider failed")
+
+	session.EmitError(ErrorEvent{Error: cause, Source: "llm"})
+
+	events := session.RecordedEvents()
+	if len(events) != 1 {
+		t.Fatalf("RecordedEvents length = %d, want 1", len(events))
+	}
+	ev, ok := events[0].(*ErrorEvent)
+	if !ok {
+		t.Fatalf("RecordedEvents[0] = %T, want *ErrorEvent", events[0])
+	}
+	if !errors.Is(ev.Error, cause) || ev.Source != "llm" {
+		t.Fatalf("recorded error event = %#v, want original error/source", ev)
+	}
+}
+
+func TestAgentSessionRecordedEventsReturnsCopy(t *testing.T) {
+	agent := NewAgent("test")
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	session.EmitError(ErrorEvent{Error: errors.New("failed"), Source: "llm"})
+
+	events := session.RecordedEvents()
+	events[0] = nil
+
+	if session.RecordedEvents()[0] == nil {
+		t.Fatal("RecordedEvents returned mutable backing storage")
+	}
+}
+
+func TestAgentSessionRecordsStateChangedEvents(t *testing.T) {
+	agent := NewAgent("test")
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+
+	session.UpdateAgentState(AgentStateThinking)
+	session.UpdateUserState(UserStateSpeaking)
+
+	events := session.RecordedEvents()
+	if len(events) != 2 {
+		t.Fatalf("RecordedEvents length = %d, want 2", len(events))
+	}
+	if ev, ok := events[0].(*AgentStateChangedEvent); !ok || ev.NewState != AgentStateThinking {
+		t.Fatalf("RecordedEvents[0] = %#v, want agent state changed to thinking", events[0])
+	}
+	if ev, ok := events[1].(*UserStateChangedEvent); !ok || ev.NewState != UserStateSpeaking {
+		t.Fatalf("RecordedEvents[1] = %#v, want user state changed to speaking", events[1])
 	}
 }
 

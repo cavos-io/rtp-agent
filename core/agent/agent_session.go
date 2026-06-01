@@ -57,8 +57,9 @@ type AgentSessionUpdateOptions struct {
 }
 
 var (
-	ErrAgentSessionNotRunning = errors.New("agent session is not running")
-	ErrAgentSessionNestedRun  = errors.New("nested agent session runs are not supported")
+	ErrAgentSessionNotRunning     = errors.New("agent session is not running")
+	ErrAgentSessionNestedRun      = errors.New("nested agent session runs are not supported")
+	ErrAgentSessionUserdataNotSet = errors.New("agent session userdata is not set")
 )
 
 type GenerateReplyOptions struct {
@@ -103,11 +104,14 @@ type AgentSession struct {
 	UserState  UserState
 	AgentState AgentState
 
-	mu            sync.Mutex
-	activity      *AgentActivity
-	started       bool
-	runState      *RunResult
-	userAwayTimer *time.Timer
+	mu             sync.Mutex
+	activity       *AgentActivity
+	started        bool
+	runState       *RunResult
+	userAwayTimer  *time.Timer
+	userdata       any
+	userdataSet    bool
+	recordedEvents []Event
 
 	// Event channels
 	AgentStateChangedCh chan AgentStateChangedEvent
@@ -153,6 +157,42 @@ func (s *AgentSession) CurrentSpeech() *SpeechHandle {
 	activity.queueMu.Lock()
 	defer activity.queueMu.Unlock()
 	return activity.currentSpeech
+}
+
+func (s *AgentSession) Userdata() (any, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if !s.userdataSet {
+		return nil, ErrAgentSessionUserdataNotSet
+	}
+	return s.userdata, nil
+}
+
+func (s *AgentSession) SetUserdata(value any) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	s.userdata = value
+	s.userdataSet = true
+}
+
+func (s *AgentSession) RecordedEvents() []Event {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	events := make([]Event, len(s.recordedEvents))
+	copy(events, s.recordedEvents)
+	return events
+}
+
+func (s *AgentSession) recordEvent(ev Event) {
+	if ev == nil {
+		return
+	}
+	s.mu.Lock()
+	s.recordedEvents = append(s.recordedEvents, ev)
+	s.mu.Unlock()
 }
 
 func (s *AgentSession) CurrentAgent() (AgentInterface, error) {
@@ -274,6 +314,7 @@ func (s *AgentSession) EmitUserInputTranscribed(ev UserInputTranscribedEvent) {
 	if ev.CreatedAt.IsZero() {
 		ev.CreatedAt = time.Now()
 	}
+	s.recordEvent(&ev)
 	s.mu.Lock()
 	userState := s.UserState
 	s.mu.Unlock()
@@ -305,6 +346,7 @@ func (s *AgentSession) EmitSpeechCreated(ev SpeechCreatedEvent) {
 	if ev.CreatedAt.IsZero() {
 		ev.CreatedAt = time.Now()
 	}
+	s.recordEvent(&ev)
 	ch := s.speechCreatedEvents()
 	select {
 	case ch <- ev:
@@ -330,6 +372,7 @@ func (s *AgentSession) EmitAgentFalseInterruption(ev AgentFalseInterruptionEvent
 	if ev.CreatedAt.IsZero() {
 		ev.CreatedAt = time.Now()
 	}
+	s.recordEvent(&ev)
 	ch := s.agentFalseInterruptionEvents()
 	select {
 	case ch <- ev:
@@ -355,6 +398,7 @@ func (s *AgentSession) EmitUserTurnExceeded(ev UserTurnExceededEvent) {
 	if ev.CreatedAt.IsZero() {
 		ev.CreatedAt = time.Now()
 	}
+	s.recordEvent(&ev)
 	s.mu.Lock()
 	activity := s.activity
 	s.mu.Unlock()
@@ -390,6 +434,7 @@ func (s *AgentSession) EmitOverlappingSpeech(ev OverlappingSpeechEvent) {
 	if ev.DetectedAt.IsZero() {
 		ev.DetectedAt = now
 	}
+	s.recordEvent(&ev)
 	ch := s.overlappingSpeechEvents()
 	select {
 	case ch <- ev:
@@ -416,9 +461,11 @@ func (s *AgentSession) EmitConversationItemAdded(item llm.ChatItem) {
 		return
 	}
 	s.insertChatItem(item)
+	ev := ConversationItemAddedEvent{Item: item, CreatedAt: time.Now()}
+	s.recordEvent(&ev)
 	ch := s.conversationItemAddedEvents()
 	select {
-	case ch <- ConversationItemAddedEvent{Item: item, CreatedAt: time.Now()}:
+	case ch <- ev:
 	default:
 	}
 }
@@ -456,6 +503,9 @@ func (s *AgentSession) FunctionToolsExecutedEvents() <-chan FunctionToolsExecute
 }
 
 func (s *AgentSession) EmitFunctionToolsExecuted(ev FunctionToolsExecutedEvent) {
+	if ev.CreatedAt.IsZero() {
+		ev.CreatedAt = time.Now()
+	}
 	for _, call := range ev.FunctionCalls {
 		s.insertChatItem(call)
 	}
@@ -464,6 +514,7 @@ func (s *AgentSession) EmitFunctionToolsExecuted(ev FunctionToolsExecutedEvent) 
 			s.insertChatItem(output)
 		}
 	}
+	s.recordEvent(&ev)
 	ch := s.functionToolsExecutedEvents()
 	select {
 	case ch <- ev:
@@ -499,6 +550,7 @@ func (s *AgentSession) EmitMetricsCollected(metrics telemetry.AgentMetrics) {
 		Metrics:   metrics,
 		CreatedAt: time.Now(),
 	}
+	s.recordEvent(&ev)
 	select {
 	case ch <- ev:
 	default:
@@ -533,6 +585,7 @@ func (s *AgentSession) EmitSessionUsageUpdated(ev SessionUsageUpdatedEvent) {
 	if ev.CreatedAt.IsZero() {
 		ev.CreatedAt = time.Now()
 	}
+	s.recordEvent(&ev)
 	ch := s.sessionUsageUpdatedEvents()
 	select {
 	case ch <- ev:
@@ -558,6 +611,7 @@ func (s *AgentSession) EmitError(ev ErrorEvent) {
 	if ev.CreatedAt.IsZero() {
 		ev.CreatedAt = time.Now()
 	}
+	s.recordEvent(&ev)
 	ch := s.errorEvents()
 	select {
 	case ch <- ev:
@@ -611,9 +665,11 @@ func (s *AgentSession) CloseSoon(reason CloseReason) {
 		return
 	}
 
+	ev := CloseEvent{Reason: reason, CreatedAt: time.Now()}
+	s.recordEvent(&ev)
 	ch := s.closeEvents()
 	select {
-	case ch <- CloseEvent{Reason: reason, CreatedAt: time.Now()}:
+	case ch <- ev:
 	default:
 	}
 	_ = s.Stop(context.Background())
@@ -705,12 +761,14 @@ func (s *AgentSession) UpdateAgentState(state AgentState) {
 
 	if oldState != state {
 		logger.Logger.Debugw("Agent state changed", "old", oldState, "new", state)
-		select {
-		case s.AgentStateChangedCh <- AgentStateChangedEvent{
+		ev := AgentStateChangedEvent{
 			OldState:  oldState,
 			NewState:  state,
 			CreatedAt: time.Now(),
-		}:
+		}
+		s.recordEvent(&ev)
+		select {
+		case s.AgentStateChangedCh <- ev:
 		default:
 			// Channel full, ignore
 		}
@@ -729,12 +787,14 @@ func (s *AgentSession) UpdateUserState(state UserState) {
 
 	if oldState != state {
 		logger.Logger.Debugw("User state changed", "old", oldState, "new", state)
-		select {
-		case s.UserStateChangedCh <- UserStateChangedEvent{
+		ev := UserStateChangedEvent{
 			OldState:  oldState,
 			NewState:  state,
 			CreatedAt: time.Now(),
-		}:
+		}
+		s.recordEvent(&ev)
+		select {
+		case s.UserStateChangedCh <- ev:
 		default:
 			// Channel full, ignore
 		}
