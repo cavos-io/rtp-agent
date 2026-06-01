@@ -93,6 +93,7 @@ type AgentSession struct {
 	// Event channels
 	AgentStateChangedCh chan AgentStateChangedEvent
 	UserStateChangedCh  chan UserStateChangedEvent
+	conversationItemCh  chan ConversationItemAddedEvent
 	functionToolsCh     chan FunctionToolsExecutedEvent
 	sipDTMFCh           chan SipDTMFEvent
 	closeCh             chan CloseEvent
@@ -144,9 +145,35 @@ func NewAgentSession(agent AgentInterface, room *lksdk.Room, opts AgentSessionOp
 		Tools:               make([]llm.Tool, 0),
 		AgentStateChangedCh: make(chan AgentStateChangedEvent, 10),
 		UserStateChangedCh:  make(chan UserStateChangedEvent, 10),
+		conversationItemCh:  make(chan ConversationItemAddedEvent, 10),
 		functionToolsCh:     make(chan FunctionToolsExecutedEvent, 10),
 		sipDTMFCh:           make(chan SipDTMFEvent, 10),
 	}
+}
+
+func (s *AgentSession) ConversationItemAddedEvents() <-chan ConversationItemAddedEvent {
+	return s.conversationItemAddedEvents()
+}
+
+func (s *AgentSession) EmitConversationItemAdded(item llm.ChatItem) {
+	if item == nil {
+		return
+	}
+	ch := s.conversationItemAddedEvents()
+	select {
+	case ch <- ConversationItemAddedEvent{Item: item, CreatedAt: time.Now()}:
+	default:
+	}
+}
+
+func (s *AgentSession) conversationItemAddedEvents() chan ConversationItemAddedEvent {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.conversationItemCh == nil {
+		s.conversationItemCh = make(chan ConversationItemAddedEvent, 10)
+	}
+	return s.conversationItemCh
 }
 
 func (s *AgentSession) FunctionToolsExecutedEvents() <-chan FunctionToolsExecutedEvent {

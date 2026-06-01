@@ -47,6 +47,42 @@ func TestPipelineAgentGenerateReplyAddsAssistantMessageWithExtra(t *testing.T) {
 	}
 }
 
+func TestPipelineAgentEmitsConversationItemAddedForAssistantMessage(t *testing.T) {
+	chatCtx := llm.NewChatContext()
+	l := &fakeGenerationLLM{
+		stream: &fakeGenerationLLMStream{
+			chunks: []*llm.ChatChunk{
+				{Delta: &llm.ChoiceDelta{Content: "hello"}},
+			},
+		},
+	}
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	agent := NewPipelineAgent(nil, nil, l, &fakePipelineTTS{}, chatCtx)
+	agent.session = session
+	agent.ctx = context.Background()
+
+	agent.generateReply()
+
+	select {
+	case ev := <-session.ConversationItemAddedEvents():
+		msg, ok := ev.Item.(*llm.ChatMessage)
+		if !ok {
+			t.Fatalf("event item = %T, want *llm.ChatMessage", ev.Item)
+		}
+		if msg.Role != llm.ChatRoleAssistant || msg.TextContent() != "hello" {
+			t.Fatalf("event message = %#v, want assistant hello", msg)
+		}
+		if len(chatCtx.Items) != 1 || chatCtx.Items[0] != msg {
+			t.Fatalf("event item was not the committed chat item")
+		}
+		if ev.CreatedAt.IsZero() {
+			t.Fatal("event CreatedAt is zero")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("ConversationItemAddedEvents did not receive assistant message")
+	}
+}
+
 func TestPipelineAgentReturnsToThinkingWhileExecutingTools(t *testing.T) {
 	chatCtx := llm.NewChatContext()
 	l := &fakeGenerationLLM{

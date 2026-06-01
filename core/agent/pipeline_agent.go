@@ -209,7 +209,8 @@ func (va *PipelineAgent) generateReply() {
 			if len(genData.GeneratedExtra) > 0 {
 				args.Extra = genData.GeneratedExtra
 			}
-			va.chatCtx.AddMessage(args)
+			msg := va.chatCtx.AddMessage(args)
+			session.EmitConversationItemAdded(msg)
 		}
 
 		if len(genData.GeneratedFunctions) > 0 {
