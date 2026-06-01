@@ -383,6 +383,56 @@ func TestRealtimeSessionRoutesOutputMessageAudioDeltasToGenerationStream(t *test
 	}
 }
 
+func TestRealtimeSessionRoutesContentPartModalitiesToGenerationStream(t *testing.T) {
+	session := &realtimeSession{}
+	created := session.trackRealtimeEvent(llm.RealtimeEvent{
+		Type:       llm.RealtimeEventTypeGenerationCreated,
+		Generation: &llm.GenerationCreatedEvent{},
+	})
+	session.trackOpenAIRealtimeEvent(map[string]any{
+		"type": "response.output_item.added",
+		"item": map[string]any{
+			"id":   "msg_123",
+			"type": "message",
+		},
+	})
+
+	var msg llm.MessageGeneration
+	select {
+	case msg = <-created.Generation.MessageCh:
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("timed out waiting for message generation")
+	}
+
+	if ev, ok := session.trackOpenAIRealtimeEvent(map[string]any{
+		"type":    "response.content_part.added",
+		"item_id": "msg_123",
+		"part":    map[string]any{"type": "audio"},
+	}); ok {
+		t.Fatalf("trackOpenAIRealtimeEvent = %#v, true; want side effect only", ev)
+	}
+
+	select {
+	case modalities := <-msg.ModalitiesCh:
+		if len(modalities) != 2 || modalities[0] != "audio" || modalities[1] != "text" {
+			t.Fatalf("modalities = %#v, want audio and text", modalities)
+		}
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("timed out waiting for modalities")
+	}
+
+	session.trackOpenAIRealtimeEvent(map[string]any{
+		"type":    "response.content_part.added",
+		"item_id": "msg_123",
+		"part":    map[string]any{"type": "text"},
+	})
+	select {
+	case modalities := <-msg.ModalitiesCh:
+		t.Fatalf("unexpected duplicate modalities = %#v", modalities)
+	default:
+	}
+}
+
 func TestRealtimeEventMapsConversationItemAddedMessage(t *testing.T) {
 	ev, ok := openAIRealtimeEvent(map[string]any{
 		"type":             "conversation.item.added",

@@ -75,6 +75,7 @@ type realtimeMessageGeneration struct {
 	textCh       chan string
 	audioCh      chan *model.AudioFrame
 	modalitiesCh chan []string
+	modalities   []string
 }
 
 func (m *RealtimeModel) Session() (llm.RealtimeSession, error) {
@@ -629,6 +630,18 @@ func (s *realtimeSession) trackOpenAIRealtimeEvent(ev map[string]any) (llm.Realt
 		default:
 			logger.Logger.Warnw("dropping OpenAI realtime message generation for full stream", nil, "item_id", itemID)
 		}
+	case "response.content_part.added":
+		itemID, _ := ev["item_id"].(string)
+		part, _ := ev["part"].(map[string]any)
+		partType, _ := part["type"].(string)
+		if itemID == "" || partType == "" {
+			return llm.RealtimeEvent{}, false
+		}
+		if partType == "text" {
+			s.setRealtimeMessageModalities(itemID, []string{"text"})
+		} else {
+			s.setRealtimeMessageModalities(itemID, []string{"audio", "text"})
+		}
 	case "conversation.item.deleted":
 		itemID, _ := ev["item_id"].(string)
 		if itemID == "" {
@@ -729,10 +742,27 @@ func (s *realtimeSession) trackRealtimeAudio(ev llm.RealtimeEvent) {
 		NumChannels:       1,
 		SamplesPerChannel: uint32(len(ev.Data) / 2),
 	}
+	s.setRealtimeMessageModalities(ev.ItemID, []string{"audio", "text"})
 	select {
 	case msg.audioCh <- frame:
 	default:
 		logger.Logger.Warnw("dropping OpenAI realtime audio delta for full message stream", nil, "item_id", ev.ItemID)
+	}
+}
+
+func (s *realtimeSession) setRealtimeMessageModalities(itemID string, modalities []string) {
+	if s.generation == nil || itemID == "" {
+		return
+	}
+	msg := s.generation.messages[itemID]
+	if msg == nil || msg.modalities != nil {
+		return
+	}
+	msg.modalities = append([]string(nil), modalities...)
+	select {
+	case msg.modalitiesCh <- msg.modalities:
+	default:
+		logger.Logger.Warnw("dropping OpenAI realtime message modalities for full stream", nil, "item_id", itemID)
 	}
 }
 
