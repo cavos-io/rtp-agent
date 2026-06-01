@@ -68,6 +68,27 @@ type STTCapabilities struct {
 	OfflineRecognize  bool   `json:"offline_recognize"`
 }
 
+func (c STTCapabilities) MarshalJSON() ([]byte, error) {
+	alignedTranscript := any(false)
+	if c.AlignedTranscript != "" {
+		alignedTranscript = c.AlignedTranscript
+	}
+	type sttCapabilitiesPayload struct {
+		Streaming         bool `json:"streaming"`
+		InterimResults    bool `json:"interim_results"`
+		Diarization       bool `json:"diarization"`
+		AlignedTranscript any  `json:"aligned_transcript"`
+		OfflineRecognize  bool `json:"offline_recognize"`
+	}
+	return json.Marshal(sttCapabilitiesPayload{
+		Streaming:         c.Streaming,
+		InterimResults:    c.InterimResults,
+		Diarization:       c.Diarization,
+		AlignedTranscript: alignedTranscript,
+		OfflineRecognize:  c.OfflineRecognize,
+	})
+}
+
 const STTErrorType = "stt_error"
 
 type STTError struct {

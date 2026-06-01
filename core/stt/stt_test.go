@@ -182,6 +182,25 @@ func TestSTTCapabilitiesMarshalJSONMatchesReferenceFieldNames(t *testing.T) {
 	}
 }
 
+func TestSTTCapabilitiesMarshalJSONUsesFalseForMissingAlignedTranscript(t *testing.T) {
+	data, err := json.Marshal(STTCapabilities{
+		Streaming:        true,
+		InterimResults:   true,
+		OfflineRecognize: true,
+	})
+	if err != nil {
+		t.Fatalf("Marshal STTCapabilities returned error: %v", err)
+	}
+
+	var payload map[string]any
+	if err := json.Unmarshal(data, &payload); err != nil {
+		t.Fatalf("Unmarshal STTCapabilities payload returned error: %v", err)
+	}
+	if payload["aligned_transcript"] != false {
+		t.Fatalf("aligned_transcript = %#v, want false; payload %s", payload["aligned_transcript"], data)
+	}
+}
+
 func TestSTTErrorCarriesReferenceErrorPayload(t *testing.T) {
 	underlying := errors.New("provider disconnected")
 	before := time.Now()
