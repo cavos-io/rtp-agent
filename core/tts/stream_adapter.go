@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"strings"
 	"sync"
 
 	"github.com/cavos-io/conversation-worker/library/tokenize"
@@ -130,6 +131,8 @@ func (w *streamAdapterWrapper) synthesize(text string, segmentID string) error {
 					pending.SegmentID = segmentID
 					pending.IsFinal = true
 					w.eventCh <- pending
+				} else if strings.TrimSpace(text) != "" {
+					return fmt.Errorf("no audio frames were pushed for text: %s", text)
 				}
 				return nil
 			}

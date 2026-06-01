@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"strings"
 	"testing"
 	"time"
 
@@ -170,6 +171,31 @@ func TestStreamAdapterPropagatesChunkedStreamError(t *testing.T) {
 	}
 }
 
+func TestStreamAdapterErrorsWhenNonEmptyTextProducesNoAudio(t *testing.T) {
+	stream, err := NewStreamAdapter(&fakeStreamAdapterTTS{
+		empty: true,
+	}).Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+	defer stream.Close()
+
+	if err := stream.PushText("hello"); err != nil {
+		t.Fatalf("PushText returned error: %v", err)
+	}
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush returned error: %v", err)
+	}
+
+	err = nextStreamAdapterError(stream)
+	if err == nil {
+		t.Fatal("Next error = nil, want no-audio error")
+	}
+	if !strings.Contains(err.Error(), "no audio frames") {
+		t.Fatalf("Next error = %v, want no-audio error", err)
+	}
+}
+
 func TestStreamAdapterCloseIsIdempotent(t *testing.T) {
 	stream, err := NewStreamAdapter(&fakeStreamAdapterTTS{}).Stream(context.Background())
 	if err != nil {
@@ -260,6 +286,7 @@ type fakeStreamAdapterTTS struct {
 	synthesizeErr error
 	streamErr     error
 	events        []*SynthesizedAudio
+	empty         bool
 }
 
 func (f *fakeStreamAdapterTTS) Label() string {
@@ -284,7 +311,7 @@ func (f *fakeStreamAdapterTTS) Synthesize(_ context.Context, text string) (Chunk
 		return nil, f.synthesizeErr
 	}
 	events := f.events
-	if len(events) == 0 {
+	if len(events) == 0 && !f.empty {
 		events = []*SynthesizedAudio{{
 			Frame: &model.AudioFrame{Data: []byte{1}, SampleRate: 24000, NumChannels: 1, SamplesPerChannel: 1},
 		}}
