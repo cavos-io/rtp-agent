@@ -1622,9 +1622,18 @@ func TestSimpleVADCloseIsIdempotentAndEndsIteration(t *testing.T) {
 	}
 	if err := stream.PushFrame(audioFrame(16000, 160, 6000)); err == nil {
 		t.Fatal("PushFrame() after Close() error = nil, want error")
+	} else if !strings.Contains(err.Error(), "input ended") {
+		t.Fatalf("PushFrame() after Close() error = %q, want input ended", err.Error())
 	}
 	if err := stream.Flush(); err == nil {
 		t.Fatal("Flush() after Close() error = nil, want error")
+	} else if !strings.Contains(err.Error(), "input ended") {
+		t.Fatalf("Flush() after Close() error = %q, want input ended", err.Error())
+	}
+	if err := stream.EndInput(); err == nil {
+		t.Fatal("EndInput() after Close() error = nil, want error")
+	} else if !strings.Contains(err.Error(), "input ended") {
+		t.Fatalf("EndInput() after Close() error = %q, want input ended", err.Error())
 	}
 	if _, err := stream.Next(); !errors.Is(err, io.EOF) {
 		t.Fatalf("Next() after Close() error = %v, want io.EOF", err)

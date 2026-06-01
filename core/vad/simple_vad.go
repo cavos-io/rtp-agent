@@ -537,6 +537,7 @@ func (s *simpleVADStream) Close() error {
 	if s.closed {
 		return nil
 	}
+	s.inputEnded = true
 	s.closed = true
 	s.closeEvents(true)
 	s.vad.unregisterStream(s)
