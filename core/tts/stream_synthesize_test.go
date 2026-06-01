@@ -7,6 +7,8 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/cavos-io/conversation-worker/model"
 )
 
 func TestSynthesizeWithStreamPushesTextAndFlushes(t *testing.T) {
@@ -47,7 +49,8 @@ func TestSynthesizeWithStreamReturnsStreamEvents(t *testing.T) {
 	want := &SynthesizedAudio{RequestID: "req-a", DeltaText: "hello"}
 	provider := &fakeStreamingTTS{
 		stream: &fakeSynthesizeStream{
-			events: []*SynthesizedAudio{want},
+			events:   []*SynthesizedAudio{want},
+			emptyErr: io.EOF,
 		},
 	}
 
@@ -79,6 +82,7 @@ func TestSynthesizeWithStreamSetsStableRequestID(t *testing.T) {
 				{RequestID: "provider-a"},
 				{RequestID: "provider-b"},
 			},
+			emptyErr: io.EOF,
 		},
 	}
 
@@ -107,11 +111,45 @@ func TestSynthesizeWithStreamSetsStableRequestID(t *testing.T) {
 	}
 }
 
+func TestSynthesizeWithStreamMarksLastFrameFinal(t *testing.T) {
+	provider := &fakeStreamingTTS{
+		stream: &fakeSynthesizeStream{
+			events: []*SynthesizedAudio{
+				{Frame: &model.AudioFrame{Data: []byte{1}}},
+				{Frame: &model.AudioFrame{Data: []byte{2}}},
+			},
+			emptyErr: io.EOF,
+		},
+	}
+
+	chunked, err := SynthesizeWithStream(context.Background(), provider, "hello")
+	if err != nil {
+		t.Fatalf("SynthesizeWithStream() error = %v", err)
+	}
+	defer chunked.Close()
+
+	first, err := chunked.Next()
+	if err != nil {
+		t.Fatalf("first Next() error = %v", err)
+	}
+	if first.IsFinal {
+		t.Fatal("first audio IsFinal = true, want false")
+	}
+	second, err := chunked.Next()
+	if err != nil {
+		t.Fatalf("second Next() error = %v", err)
+	}
+	if !second.IsFinal {
+		t.Fatal("second audio IsFinal = false, want true")
+	}
+}
+
 func TestSynthesizeWithStreamDoesNotMutateProviderAudioMetadata(t *testing.T) {
 	providerAudio := &SynthesizedAudio{RequestID: "provider-request"}
 	provider := &fakeStreamingTTS{
 		stream: &fakeSynthesizeStream{
-			events: []*SynthesizedAudio{providerAudio},
+			events:   []*SynthesizedAudio{providerAudio},
+			emptyErr: io.EOF,
 		},
 	}
 

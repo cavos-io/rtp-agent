@@ -31,23 +31,39 @@ type chunkedStreamFromSynthesizeStream struct {
 	stream    SynthesizeStream
 	text      string
 	requestID string
+	pending   *SynthesizedAudio
 	audioSeen bool
 	closed    bool
 }
 
 func (s *chunkedStreamFromSynthesizeStream) Next() (*SynthesizedAudio, error) {
-	audio, err := s.stream.Next()
-	if err != nil {
-		_ = s.Close()
-		if errors.Is(err, io.EOF) && !s.audioSeen && s.text != "" {
-			return nil, fmt.Errorf("no audio frames were pushed for text: %s", s.text)
+	for {
+		audio, err := s.stream.Next()
+		if err != nil {
+			_ = s.Close()
+			if errors.Is(err, io.EOF) {
+				if s.pending != nil {
+					pending := cloneSynthesizedAudio(s.pending)
+					pending.RequestID = s.requestID
+					pending.IsFinal = true
+					s.pending = nil
+					return pending, nil
+				}
+				if !s.audioSeen && s.text != "" {
+					return nil, fmt.Errorf("no audio frames were pushed for text: %s", s.text)
+				}
+			}
+			return nil, err
 		}
-		return nil, err
+		s.audioSeen = true
+		if s.pending != nil {
+			pending := cloneSynthesizedAudio(s.pending)
+			pending.RequestID = s.requestID
+			s.pending = audio
+			return pending, nil
+		}
+		s.pending = audio
 	}
-	s.audioSeen = true
-	audio = cloneSynthesizedAudio(audio)
-	audio.RequestID = s.requestID
-	return audio, nil
 }
 
 func (s *chunkedStreamFromSynthesizeStream) Close() error {
