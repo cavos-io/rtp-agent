@@ -605,7 +605,7 @@ func TestFallbackStreamRecoversFailedProviderInBackground(t *testing.T) {
 	}
 }
 
-func TestFallbackStreamForwardsNewInputToRecoveringProvider(t *testing.T) {
+func TestFallbackStreamForwardsOnlyNewInputToRecoveringProvider(t *testing.T) {
 	firstFrame := &model.AudioFrame{Data: []byte("1"), SampleRate: 16000, NumChannels: 1, SamplesPerChannel: 1}
 	secondFrame := &model.AudioFrame{Data: []byte("2"), SampleRate: 16000, NumChannels: 1, SamplesPerChannel: 1}
 	primaryFailure := &blockingFailRecognizeStream{
@@ -650,7 +650,7 @@ func TestFallbackStreamForwardsNewInputToRecoveringProvider(t *testing.T) {
 	}
 	close(primaryFailure.release)
 	waitForStreamCalls(t, primary, 2)
-	waitForRecoveryCall(t, recovery, "push:1")
+	assertNoRecoveryCall(t, recovery, "push:1")
 
 	if err := stream.PushFrame(secondFrame); err != nil {
 		t.Fatalf("PushFrame(second) returned error: %v", err)
@@ -1301,6 +1301,30 @@ func waitForRecoveryCall(t *testing.T, stream *liveRecoveryStream, want string) 
 		select {
 		case <-deadline:
 			t.Fatalf("recovery calls = %#v, want %s", calls, want)
+		case <-ticker.C:
+		}
+	}
+}
+
+func assertNoRecoveryCall(t *testing.T, stream *liveRecoveryStream, unwanted string) {
+	t.Helper()
+	deadline := time.After(20 * time.Millisecond)
+	ticker := time.NewTicker(time.Millisecond)
+	defer ticker.Stop()
+
+	for {
+		stream.mu.Lock()
+		calls := append([]string(nil), stream.calls...)
+		stream.mu.Unlock()
+		for _, call := range calls {
+			if call == unwanted {
+				t.Fatalf("recovery calls = %#v, did not want %s", calls, unwanted)
+			}
+		}
+
+		select {
+		case <-deadline:
+			return
 		case <-ticker.C:
 		}
 	}

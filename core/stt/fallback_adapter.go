@@ -235,41 +235,6 @@ func (f *FallbackAdapter) clearRecovering(index int) {
 	f.recovering[index] = false
 }
 
-func (f *FallbackAdapter) tryRecoverStream(ctx context.Context, index int, language string, inputs []fallbackRecognizeInput) {
-	if !f.markRecoveringStream(index) {
-		return
-	}
-	recoveryCtx := context.WithoutCancel(ctx)
-
-	go func() {
-		defer f.clearRecoveringStream(index)
-
-		stt := f.stts[index]
-		stream, err := stt.Stream(recoveryCtx, language)
-		if err != nil {
-			return
-		}
-		defer stream.Close()
-
-		if err := replayFallbackInputs(stream, inputs); err != nil {
-			return
-		}
-
-		for {
-			ev, err := stream.Next()
-			if err != nil {
-				return
-			}
-			if ev.Type != SpeechEventFinalTranscript || len(ev.Alternatives) == 0 || ev.Alternatives[0].Text == "" {
-				continue
-			}
-			f.setAvailable(index, true)
-			logger.Logger.Infow("Recovered STT stream provider", "stt", stt.Label())
-			return
-		}
-	}()
-}
-
 func (f *FallbackAdapter) markRecoveringStream(index int) bool {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -463,12 +428,6 @@ func replayFallbackInputs(stream RecognizeStream, inputs []fallbackRecognizeInpu
 	return nil
 }
 
-func cloneFallbackInputs(inputs []fallbackRecognizeInput) []fallbackRecognizeInput {
-	cloned := make([]fallbackRecognizeInput, len(inputs))
-	copy(cloned, inputs)
-	return cloned
-}
-
 func (s *fallbackRecognizeStream) monitorStream() {
 	for {
 		s.mu.Lock()
@@ -503,7 +462,7 @@ func (s *fallbackRecognizeStream) monitorStream() {
 				nextIndex = s.activeIndex
 			} else {
 				s.adapter.setAvailable(s.activeIndex, false)
-				s.tryRecoverStream(s.activeIndex, cloneFallbackInputs(s.inputBuffer))
+				s.tryRecoverStream(s.activeIndex)
 			}
 
 			if fbErr := s.tryStartStream(nextIndex); fbErr != nil {
@@ -541,7 +500,7 @@ func (s *fallbackRecognizeStream) canRetrySTT(index int) bool {
 	return s.retries[index] < s.adapter.maxRetryPerSTT
 }
 
-func (s *fallbackRecognizeStream) tryRecoverStream(index int, inputs []fallbackRecognizeInput) {
+func (s *fallbackRecognizeStream) tryRecoverStream(index int) {
 	if !s.adapter.markRecoveringStream(index) {
 		return
 	}
@@ -561,10 +520,6 @@ func (s *fallbackRecognizeStream) tryRecoverStream(index int, inputs []fallbackR
 		s.recoveries = append(s.recoveries, stream)
 		s.mu.Unlock()
 		defer s.removeRecovery(stream)
-
-		if err := replayFallbackInputs(stream, inputs); err != nil {
-			return
-		}
 
 		for {
 			ev, err := stream.Next()
