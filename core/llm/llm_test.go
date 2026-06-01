@@ -125,6 +125,45 @@ func TestAPIStatusErrorDefaultsRetryabilityLikeReference(t *testing.T) {
 	}
 }
 
+func TestCreateAPIErrorFromHTTPFormatsReferenceMessage(t *testing.T) {
+	err := CreateAPIErrorFromHTTP("quota exceeded", 429, "req_123", map[string]any{"type": "rate_limit"})
+
+	if err.Message != "quota exceeded (429 Too Many Requests)" {
+		t.Fatalf("Message = %q, want message with status reason", err.Message)
+	}
+	if err.StatusCode != 429 || err.RequestID != "req_123" {
+		t.Fatalf("status metadata = %#v, want 429 req_123", err)
+	}
+	if err.Body == nil {
+		t.Fatal("Body = nil, want response body")
+	}
+	if !err.Retryable {
+		t.Fatal("Retryable = false, want 429 retryable")
+	}
+}
+
+func TestCreateAPIErrorFromHTTPUsesReasonWhenMessageEmptyOrSame(t *testing.T) {
+	tests := []struct {
+		name    string
+		message string
+		status  int
+		want    string
+	}{
+		{name: "empty", message: "", status: 404, want: "Not Found (404)"},
+		{name: "same as reason", message: "Not Found", status: 404, want: "Not Found (404)"},
+		{name: "unknown", message: "", status: 599, want: "HTTP 599 (599)"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := CreateAPIErrorFromHTTP(tt.message, tt.status, "", nil)
+			if err.Message != tt.want {
+				t.Fatalf("Message = %q, want %q", err.Message, tt.want)
+			}
+		})
+	}
+}
+
 func TestAPIConnectionAndTimeoutErrorsAreRetryable(t *testing.T) {
 	connectionErr := NewAPIConnectionError("")
 	if connectionErr.Message != "Connection error." || !connectionErr.Retryable {

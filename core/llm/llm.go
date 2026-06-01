@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/http"
 	"reflect"
 	"strings"
 	"sync"
@@ -400,6 +401,18 @@ func NewAPIStatusErrorWithRetryable(message string, statusCode int, requestID st
 		StatusCode: statusCode,
 		RequestID:  requestID,
 	}
+}
+
+func CreateAPIErrorFromHTTP(message string, statusCode int, requestID string, body any) *APIStatusError {
+	reason := http.StatusText(statusCode)
+	if reason == "" {
+		reason = fmt.Sprintf("HTTP %d", statusCode)
+	}
+	display := fmt.Sprintf("%s (%d)", reason, statusCode)
+	if message != "" && message != reason {
+		display = fmt.Sprintf("%s (%d %s)", message, statusCode, reason)
+	}
+	return NewAPIStatusError(display, statusCode, requestID, body)
 }
 
 func (e *APIStatusError) Unwrap() error {
