@@ -38,6 +38,29 @@ func TestPreConnectAudioPublishFulfillsExistingWaiter(t *testing.T) {
 	}
 }
 
+func TestPreConnectAudioLatePublishAfterTimeoutIsNotReused(t *testing.T) {
+	handler := NewPreConnectAudioHandler(nil, 10*time.Millisecond)
+	frame := &model.AudioFrame{
+		Data:              []byte{1, 2, 3, 4},
+		SampleRate:        24000,
+		NumChannels:       1,
+		SamplesPerChannel: 2,
+	}
+
+	if frames := handler.WaitForData(context.Background(), "track-timeout"); frames != nil {
+		t.Fatalf("WaitForData() before publish = %#v, want nil after timeout", frames)
+	}
+
+	handler.publishBuffer("track-timeout", &PreConnectAudioBuffer{
+		Timestamp: time.Now(),
+		Frames:    []*model.AudioFrame{frame},
+	})
+
+	if frames := handler.WaitForData(context.Background(), "track-timeout"); frames != nil {
+		t.Fatalf("WaitForData() after late publish = %#v, want nil", frames)
+	}
+}
+
 func waitForPreConnectBufferWaiter(t *testing.T, handler *PreConnectAudioHandler, trackID string) {
 	t.Helper()
 
