@@ -376,6 +376,42 @@ func TestFallbackStreamStartReturnsAllFailedErrorWhenProvidersExhausted(t *testi
 	}
 }
 
+func TestFallbackStreamStartClosesRecoveryStreamsWhenProvidersExhausted(t *testing.T) {
+	primaryErr := errors.New("primary stream start failed")
+	fallbackErr := errors.New("fallback stream start failed")
+	recovery := &liveRecoveryStream{
+		release: make(chan struct{}),
+		event: &SpeechEvent{
+			Type:         SpeechEventFinalTranscript,
+			Alternatives: []SpeechData{{Text: "primary recovered"}},
+		},
+	}
+	adapter := NewFallbackAdapterWithOptions([]STT{
+		&metadataSTT{
+			label:        "primary",
+			capabilities: STTCapabilities{Streaming: true},
+			streamErrs:   []error{primaryErr},
+			streams:      []RecognizeStream{recovery},
+		},
+		&metadataSTT{
+			label:        "fallback",
+			capabilities: STTCapabilities{Streaming: true},
+			streamErrs:   []error{fallbackErr},
+		},
+	}, FallbackAdapterOptions{MaxRetryPerSTT: 0})
+
+	_, err := adapter.Stream(context.Background(), "en")
+	if err == nil {
+		t.Fatal("Stream error = nil, want all STTs failed error")
+	}
+	var allFailed *FallbackAllFailedError
+	if !errors.As(err, &allFailed) {
+		t.Fatalf("Stream error = %T, want *FallbackAllFailedError", err)
+	}
+	waitForRecoveryClosed(t, recovery)
+	close(recovery.release)
+}
+
 func TestFallbackAdapterRetriesSameSTTBeforeFallback(t *testing.T) {
 	firstErr := errors.New("primary recognize failed")
 	primary := &metadataSTT{

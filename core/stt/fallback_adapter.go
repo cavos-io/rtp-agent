@@ -302,6 +302,7 @@ func (f *FallbackAdapter) Stream(ctx context.Context, language string) (Recogniz
 	}
 
 	if err := s.tryStartStream(0); err != nil {
+		s.closeRecoveries()
 		return nil, err
 	}
 
@@ -646,6 +647,16 @@ func (s *fallbackRecognizeStream) Close() error {
 		_ = recovery.Close()
 	}
 	return activeStream.Close()
+}
+
+func (s *fallbackRecognizeStream) closeRecoveries() {
+	s.mu.Lock()
+	recoveries := append([]RecognizeStream(nil), s.recoveries...)
+	s.recoveries = nil
+	s.mu.Unlock()
+	for _, recovery := range recoveries {
+		_ = recovery.Close()
+	}
 }
 
 func (s *fallbackRecognizeStream) Next() (*SpeechEvent, error) {
