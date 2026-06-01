@@ -161,6 +161,9 @@ func (s *simpleVADStream) PushFrame(frame *model.AudioFrame) error {
 	if s.inputEnded {
 		return errors.New("vad stream input ended")
 	}
+	if frame == nil {
+		return errors.New("vad frame nil")
+	}
 	if s.inputSampleRate == 0 {
 		s.inputSampleRate = frame.SampleRate
 	} else if frame.SampleRate != s.inputSampleRate {

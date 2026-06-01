@@ -200,6 +200,24 @@ func TestSimpleVADIgnoresMismatchedSampleRateFrames(t *testing.T) {
 	assertEventType(t, stream, VADEventEndOfSpeech)
 }
 
+func TestSimpleVADRejectsNilFrames(t *testing.T) {
+	stream, err := NewSimpleVAD(0.05).Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	defer stream.Close()
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			t.Fatalf("PushFrame(nil) panicked: %v", recovered)
+		}
+	}()
+
+	if err := stream.PushFrame(nil); err == nil {
+		t.Fatal("PushFrame(nil) error = nil, want error")
+	}
+	assertNoVADEvent(t, stream)
+}
+
 func TestSimpleVADUsesConfiguredInferenceSampleRateForSampleIndex(t *testing.T) {
 	stream, err := NewSimpleVADWithOptions(SimpleVADOptions{
 		Threshold:  0.05,
