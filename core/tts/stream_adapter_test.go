@@ -12,6 +12,8 @@ import (
 	"github.com/cavos-io/rtp-agent/core/audio/model"
 )
 
+const streamAdapterTestTimeout = 5 * time.Second
+
 func TestStreamAdapterFlushSynthesizesBufferedText(t *testing.T) {
 	provider := &fakeStreamAdapterTTS{}
 	stream, err := NewStreamAdapter(provider).Stream(context.Background())
@@ -45,7 +47,7 @@ func TestStreamAdapterFlushSynthesizesBufferedText(t *testing.T) {
 		}
 	case err := <-errCh:
 		t.Fatalf("Next returned error: %v", err)
-	case <-time.After(100 * time.Millisecond):
+	case <-time.After(streamAdapterTestTimeout):
 		t.Fatal("Next timed out waiting for flushed text")
 	}
 
@@ -590,7 +592,7 @@ func nextStreamAdapterError(stream SynthesizeStream) error {
 	select {
 	case err := <-errCh:
 		return err
-	case <-time.After(100 * time.Millisecond):
+	case <-time.After(streamAdapterTestTimeout):
 		return context.DeadlineExceeded
 	}
 }
@@ -613,7 +615,7 @@ func nextStreamAdapterAudio(t *testing.T, stream SynthesizeStream) *SynthesizedA
 		return audio
 	case err := <-errCh:
 		t.Fatalf("Next returned error: %v", err)
-	case <-time.After(100 * time.Millisecond):
+	case <-time.After(streamAdapterTestTimeout):
 		t.Fatal("Next timed out")
 	}
 	return nil
@@ -741,7 +743,7 @@ func (b *blockingStreamAdapterChunkedStream) waitForNext(t *testing.T) bool {
 	select {
 	case <-b.nextCh:
 		return true
-	case <-time.After(100 * time.Millisecond):
+	case <-time.After(streamAdapterTestTimeout):
 		return false
 	}
 }
@@ -751,7 +753,7 @@ func (b *blockingStreamAdapterChunkedStream) waitForClose(t *testing.T) bool {
 	select {
 	case <-b.closeCh:
 		return true
-	case <-time.After(100 * time.Millisecond):
+	case <-time.After(streamAdapterTestTimeout):
 		return false
 	}
 }

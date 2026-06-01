@@ -543,7 +543,17 @@ func (s *fallbackChunkedStream) monitorStream() {
 		ev, err = s.adapter.normalizeAudio(ev)
 		if err != nil {
 			if outputSent {
-				s.errCh <- err
+				_ = stream.Close()
+				if pending != nil {
+					pending = cloneSynthesizedAudio(pending)
+					pending.IsFinal = true
+					select {
+					case s.eventCh <- pending:
+					case <-s.closeCh:
+						return
+					}
+				}
+				s.errCh <- io.EOF
 				return
 			}
 			s.mu.Lock()
@@ -833,7 +843,17 @@ func (s *fallbackSynthesizeStream) monitorStream() {
 		ev, err = s.adapter.normalizeAudio(ev)
 		if err != nil {
 			if outputSent {
-				s.errCh <- err
+				_ = stream.Close()
+				if pending != nil {
+					pending = cloneSynthesizedAudio(pending)
+					pending.IsFinal = true
+					select {
+					case s.eventCh <- pending:
+					case <-s.closeCh:
+						return
+					}
+				}
+				s.errCh <- io.EOF
 				return
 			}
 			s.mu.Lock()

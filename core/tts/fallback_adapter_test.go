@@ -316,6 +316,64 @@ func TestFallbackChunkedStreamFallsBackWhenNormalizationFailsBeforeAudio(t *test
 	}
 }
 
+func TestFallbackChunkedStreamFinishesWhenNormalizationFailsAfterAudio(t *testing.T) {
+	primary := &metadataTTS{
+		label:       "primary",
+		sampleRate:  16000,
+		numChannels: 1,
+		chunked: &metadataChunkedStream{
+			events: []*SynthesizedAudio{
+				{Frame: fallbackTestFrame(16000, 1, 320)},
+				{Frame: &model.AudioFrame{
+					Data:              []byte{1, 2},
+					SampleRate:        16000,
+					NumChannels:       1,
+					SamplesPerChannel: 2,
+				}},
+			},
+		},
+	}
+	fallback := &metadataTTS{
+		label:       "fallback",
+		sampleRate:  32000,
+		numChannels: 1,
+		chunked: &metadataChunkedStream{
+			events: []*SynthesizedAudio{{Frame: fallbackTestFrame(32000, 1, 2)}},
+		},
+	}
+	adapter := NewFallbackAdapterWithOptions([]TTS{primary, fallback}, FallbackAdapterOptions{
+		DisableRetries: true,
+		SampleRate:     32000,
+	})
+
+	stream, err := adapter.Synthesize(context.Background(), "hello")
+	if err != nil {
+		t.Fatalf("Synthesize returned error: %v", err)
+	}
+	defer stream.Close()
+
+	first, err := stream.Next()
+	if err != nil {
+		t.Fatalf("first Next returned error: %v", err)
+	}
+	if first.IsFinal {
+		t.Fatal("first audio IsFinal = true, want non-final head")
+	}
+	second, err := stream.Next()
+	if err != nil {
+		t.Fatalf("second Next returned error: %v", err)
+	}
+	if !second.IsFinal {
+		t.Fatal("second audio IsFinal = false, want final pending tail")
+	}
+	if _, err = stream.Next(); !errors.Is(err, io.EOF) {
+		t.Fatalf("third Next error = %v, want io.EOF", err)
+	}
+	if fallback.synthesizeCalls != 0 {
+		t.Fatalf("fallback synthesize calls = %d, want 0 after partial output", fallback.synthesizeCalls)
+	}
+}
+
 func TestFallbackChunkedStreamSetsStableRequestID(t *testing.T) {
 	adapter := NewFallbackAdapter([]TTS{
 		&metadataTTS{
@@ -570,6 +628,69 @@ func TestFallbackSynthesizeStreamFallsBackWhenNormalizationFailsBeforeAudio(t *t
 	}
 	if adapter.status[0].available {
 		t.Fatal("primary availability = true, want false after normalization failure")
+	}
+}
+
+func TestFallbackSynthesizeStreamFinishesWhenNormalizationFailsAfterAudio(t *testing.T) {
+	primary := &metadataTTS{
+		label:        "primary",
+		sampleRate:   16000,
+		numChannels:  1,
+		capabilities: TTSCapabilities{Streaming: true},
+		stream: &metadataSynthesizeStream{
+			events: []*SynthesizedAudio{
+				{Frame: fallbackTestFrame(16000, 1, 320)},
+				{Frame: &model.AudioFrame{
+					Data:              []byte{1, 2},
+					SampleRate:        16000,
+					NumChannels:       1,
+					SamplesPerChannel: 2,
+				}},
+			},
+		},
+	}
+	fallback := &metadataTTS{
+		label:        "fallback",
+		sampleRate:   32000,
+		numChannels:  1,
+		capabilities: TTSCapabilities{Streaming: true},
+		stream: &metadataSynthesizeStream{
+			events: []*SynthesizedAudio{{Frame: fallbackTestFrame(32000, 1, 2)}},
+		},
+	}
+	adapter := NewFallbackAdapterWithOptions([]TTS{primary, fallback}, FallbackAdapterOptions{
+		DisableRetries: true,
+		SampleRate:     32000,
+	})
+
+	stream, err := adapter.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+	defer stream.Close()
+	if err := stream.PushText("hello"); err != nil {
+		t.Fatalf("PushText returned error: %v", err)
+	}
+
+	first, err := stream.Next()
+	if err != nil {
+		t.Fatalf("first Next returned error: %v", err)
+	}
+	if first.IsFinal {
+		t.Fatal("first audio IsFinal = true, want non-final head")
+	}
+	second, err := stream.Next()
+	if err != nil {
+		t.Fatalf("second Next returned error: %v", err)
+	}
+	if !second.IsFinal {
+		t.Fatal("second audio IsFinal = false, want final pending tail")
+	}
+	if _, err = stream.Next(); !errors.Is(err, io.EOF) {
+		t.Fatalf("third Next error = %v, want io.EOF", err)
+	}
+	if fallback.streamCalls != 0 {
+		t.Fatalf("fallback stream calls = %d, want 0 after partial output", fallback.streamCalls)
 	}
 }
 
