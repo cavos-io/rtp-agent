@@ -231,3 +231,29 @@ func TestRealtimeEventMapsConversationItemAddedMessage(t *testing.T) {
 		t.Fatalf("message = %#v, want user text message", msg)
 	}
 }
+
+func TestRealtimeEventMapsConversationItemAddedFunctionCall(t *testing.T) {
+	ev, ok := openAIRealtimeEvent(map[string]any{
+		"type": "conversation.item.added",
+		"item": map[string]any{
+			"id":        "fc_123",
+			"type":      "function_call",
+			"call_id":   "call_123",
+			"name":      "lookup",
+			"arguments": `{"query":"hello"}`,
+		},
+	})
+	if !ok {
+		t.Fatal("openAIRealtimeEvent returned ok=false, want remote function call event")
+	}
+	if ev.Type != llm.RealtimeEventTypeRemoteItemAdded {
+		t.Fatalf("event type = %q, want remote item added", ev.Type)
+	}
+	call, ok := ev.RemoteItem.Item.(*llm.FunctionCall)
+	if !ok {
+		t.Fatalf("RemoteItem.Item = %T, want *llm.FunctionCall", ev.RemoteItem.Item)
+	}
+	if call.ID != "fc_123" || call.CallID != "call_123" || call.Name != "lookup" || call.Arguments != `{"query":"hello"}` {
+		t.Fatalf("function call = %#v, want OpenAI function call item", call)
+	}
+}
