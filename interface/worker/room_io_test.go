@@ -339,6 +339,31 @@ func TestRoomIOSetParticipantPreservesAvailableSameParticipant(t *testing.T) {
 	}
 }
 
+func TestRoomIOSetParticipantLinksAlreadyConnectedParticipant(t *testing.T) {
+	session := &agent.AgentSession{}
+	rio := &RoomIO{
+		AgentSession: session,
+	}
+	if !rio.handleParticipantConnected("caller-a", lksdk.ParticipantStandard, nil, "agent-local") {
+		t.Fatal("handleParticipantConnected(caller-a) = false, want true")
+	}
+	if rio.handleParticipantConnected("caller-b", lksdk.ParticipantStandard, nil, "agent-local") {
+		t.Fatal("handleParticipantConnected(caller-b) = true, want false while caller-a is linked")
+	}
+
+	rio.SetParticipant("caller-b")
+	rio.handleParticipantDisconnected("caller-b", livekit.DisconnectReason_CLIENT_INITIATED)
+
+	select {
+	case ev := <-session.CloseEvents():
+		if ev.Reason != agent.CloseReasonParticipantDisconnected {
+			t.Fatalf("CloseEvent.Reason = %q, want participant_disconnected", ev.Reason)
+		}
+	default:
+		t.Fatal("session did not receive participant-disconnected close event")
+	}
+}
+
 func TestRoomIOUnsetParticipantClearsTextInputFilter(t *testing.T) {
 	session := &agent.AgentSession{}
 	var calls []string
