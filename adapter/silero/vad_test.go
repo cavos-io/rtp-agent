@@ -14,8 +14,8 @@ import (
 
 func TestSileroFallbackHonorsMinimumDurations(t *testing.T) {
 	detector := NewSileroVAD(
-		WithMinSpeechDuration(0.03),
-		WithMinSilenceDuration(0.03),
+		WithMinSpeechDuration(0.096),
+		WithMinSilenceDuration(0.096),
 		WithActivationThreshold(0.5),
 	)
 	stream, err := detector.Stream(context.Background())
@@ -25,12 +25,12 @@ func TestSileroFallbackHonorsMinimumDurations(t *testing.T) {
 	defer stream.Close()
 
 	for _, frame := range []*model.AudioFrame{
-		testAudioFrame(16000, 160, 6000),
-		testAudioFrame(16000, 160, 6000),
-		testAudioFrame(16000, 160, 6000),
-		testAudioFrame(16000, 160, 0),
-		testAudioFrame(16000, 160, 0),
-		testAudioFrame(16000, 160, 0),
+		testAudioFrame(16000, 512, 6000),
+		testAudioFrame(16000, 512, 6000),
+		testAudioFrame(16000, 512, 6000),
+		testAudioFrame(16000, 512, 0),
+		testAudioFrame(16000, 512, 0),
+		testAudioFrame(16000, 512, 0),
 	} {
 		if err := stream.PushFrame(frame); err != nil {
 			t.Fatalf("PushFrame() error = %v", err)
@@ -77,7 +77,7 @@ func TestSileroVADMetadataAndMetrics(t *testing.T) {
 	defer stream.Close()
 
 	for range 32 {
-		if err := stream.PushFrame(testAudioFrame(16000, 160, 6000)); err != nil {
+		if err := stream.PushFrame(testAudioFrame(16000, 512, 6000)); err != nil {
 			t.Fatalf("PushFrame() error = %v", err)
 		}
 		nextSileroVADEvent(t, stream)
@@ -141,28 +141,28 @@ func TestSileroVADSampleRateControlsInferenceSampleIndex(t *testing.T) {
 	}
 	defer stream.Close()
 
-	if err := stream.PushFrame(testAudioFrame(16000, 160, 6000)); err != nil {
+	if err := stream.PushFrame(testAudioFrame(16000, 512, 6000)); err != nil {
 		t.Fatalf("PushFrame() error = %v", err)
 	}
 	inference := nextSileroVADEvent(t, stream)
 	if inference.Type != vad.VADEventInferenceDone {
 		t.Fatalf("event type = %s, want %s", inference.Type, vad.VADEventInferenceDone)
 	}
-	if inference.SamplesIndex != 80 {
-		t.Fatalf("SamplesIndex = %d, want 80 at configured 8 kHz sample rate", inference.SamplesIndex)
+	if inference.SamplesIndex != 256 {
+		t.Fatalf("SamplesIndex = %d, want 256 at configured 8 kHz sample rate", inference.SamplesIndex)
 	}
 	start := nextSileroVADEvent(t, stream)
 	if start.Type != vad.VADEventStartOfSpeech {
 		t.Fatalf("event type = %s, want %s", start.Type, vad.VADEventStartOfSpeech)
 	}
-	if start.SamplesIndex != 80 {
-		t.Fatalf("start SamplesIndex = %d, want 80", start.SamplesIndex)
+	if start.SamplesIndex != 256 {
+		t.Fatalf("start SamplesIndex = %d, want 256", start.SamplesIndex)
 	}
 }
 
-func TestSileroVADUpdateOptionsAppliesToActiveStream(t *testing.T) {
+func TestSileroVADBuffersDefaultInferenceWindow(t *testing.T) {
 	detector := NewSileroVAD(
-		WithMinSpeechDuration(0.03),
+		WithMinSpeechDuration(0.032),
 		WithActivationThreshold(0.5),
 	)
 	stream, err := detector.Stream(context.Background())
@@ -171,13 +171,47 @@ func TestSileroVADUpdateOptionsAppliesToActiveStream(t *testing.T) {
 	}
 	defer stream.Close()
 
-	if err := stream.PushFrame(testAudioFrame(16000, 160, 6000)); err != nil {
+	firstPartial := testAudioFrame(16000, 160, 6000)
+	secondPartial := testAudioFrame(16000, 352, 6000)
+	if err := stream.PushFrame(firstPartial); err != nil {
+		t.Fatalf("PushFrame() first partial error = %v", err)
+	}
+	if err := stream.PushFrame(secondPartial); err != nil {
+		t.Fatalf("PushFrame() second partial error = %v", err)
+	}
+
+	inference := nextSileroVADEvent(t, stream)
+	if inference.Type != vad.VADEventInferenceDone {
+		t.Fatalf("event type = %s, want %s", inference.Type, vad.VADEventInferenceDone)
+	}
+	if inference.SamplesIndex != 512 {
+		t.Fatalf("SamplesIndex = %d, want 512", inference.SamplesIndex)
+	}
+	if inference.Timestamp != 0.032 {
+		t.Fatalf("Timestamp = %v, want 0.032", inference.Timestamp)
+	}
+	assertCombinedSileroFrames(t, inference.Frames, firstPartial, secondPartial)
+	assertSileroVADEventType(t, stream, vad.VADEventStartOfSpeech)
+}
+
+func TestSileroVADUpdateOptionsAppliesToActiveStream(t *testing.T) {
+	detector := NewSileroVAD(
+		WithMinSpeechDuration(0.064),
+		WithActivationThreshold(0.5),
+	)
+	stream, err := detector.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	defer stream.Close()
+
+	if err := stream.PushFrame(testAudioFrame(16000, 512, 6000)); err != nil {
 		t.Fatalf("PushFrame() error = %v", err)
 	}
 	assertSileroVADEventType(t, stream, vad.VADEventInferenceDone)
 
-	detector.UpdateOptions(VADOptions{MinSpeechDuration: 0.01})
-	if err := stream.PushFrame(testAudioFrame(16000, 160, 6000)); err != nil {
+	detector.UpdateOptions(VADOptions{MinSpeechDuration: 0.032})
+	if err := stream.PushFrame(testAudioFrame(16000, 512, 6000)); err != nil {
 		t.Fatalf("PushFrame() after UpdateOptions() error = %v", err)
 	}
 	assertSileroVADEventType(t, stream, vad.VADEventInferenceDone)
@@ -196,7 +230,7 @@ func TestSileroVADActivationUpdatePreservesDeactivationThreshold(t *testing.T) {
 	}
 	defer stream.Close()
 
-	speech := testAudioFrame(16000, 160, 6000)
+	speech := testAudioFrame(16000, 512, 6000)
 	if err := stream.PushFrame(speech); err != nil {
 		t.Fatalf("PushFrame() speech error = %v", err)
 	}
@@ -204,13 +238,13 @@ func TestSileroVADActivationUpdatePreservesDeactivationThreshold(t *testing.T) {
 	assertSileroVADEventType(t, stream, vad.VADEventStartOfSpeech)
 
 	detector.UpdateOptions(VADOptions{ActivationThreshold: 0.8})
-	dipAboveOriginalDeactivation := testAudioFrame(16000, 160, 1800)
+	dipAboveOriginalDeactivation := testAudioFrame(16000, 512, 1800)
 	if err := stream.PushFrame(dipAboveOriginalDeactivation); err != nil {
 		t.Fatalf("PushFrame() dip error = %v", err)
 	}
 	assertSileroVADEventType(t, stream, vad.VADEventInferenceDone)
 
-	silence := testAudioFrame(16000, 160, 0)
+	silence := testAudioFrame(16000, 512, 0)
 	if err := stream.PushFrame(silence); err != nil {
 		t.Fatalf("PushFrame() silence error = %v", err)
 	}
@@ -224,9 +258,9 @@ func TestSileroVADActivationUpdatePreservesDeactivationThreshold(t *testing.T) {
 
 func TestSileroFallbackHonorsBufferingOptions(t *testing.T) {
 	detector := NewSileroVAD(
-		WithPrefixPaddingDuration(0.02),
-		WithMaxBufferedSpeech(0.04),
-		WithMinSpeechDuration(0.02),
+		WithPrefixPaddingDuration(0.064),
+		WithMaxBufferedSpeech(0.064),
+		WithMinSpeechDuration(0.064),
 		WithActivationThreshold(0.5),
 	)
 	stream, err := detector.Stream(context.Background())
@@ -236,11 +270,11 @@ func TestSileroFallbackHonorsBufferingOptions(t *testing.T) {
 	defer stream.Close()
 
 	frames := []*model.AudioFrame{
-		testAudioFrame(16000, 160, 0),
-		testAudioFrame(16000, 160, 0),
-		testAudioFrame(16000, 160, 6000),
-		testAudioFrame(16000, 160, 6000),
-		testAudioFrame(16000, 160, 6000),
+		testAudioFrame(16000, 512, 0),
+		testAudioFrame(16000, 512, 0),
+		testAudioFrame(16000, 512, 6000),
+		testAudioFrame(16000, 512, 6000),
+		testAudioFrame(16000, 512, 6000),
 	}
 	for _, frame := range frames {
 		if err := stream.PushFrame(frame); err != nil {
