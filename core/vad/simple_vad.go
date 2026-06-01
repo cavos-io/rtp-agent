@@ -238,7 +238,7 @@ func (s *simpleVADStream) PushFrame(frame *model.AudioFrame) error {
 					Speaking:        false,
 				}
 				s.lastActivity = time.Now()
-				s.resetSegment()
+				s.resetSegmentWithPrefixTail(frames)
 			}
 		} else {
 			s.silenceDuration += duration
@@ -352,10 +352,36 @@ func (s *simpleVADStream) resetSegment() {
 	s.bufferedSpeechDuration = 0
 }
 
+func (s *simpleVADStream) resetSegmentWithPrefixTail(frames []*model.AudioFrame) {
+	prefixFrames := s.prefixTailFrames(frames)
+	s.resetSegment()
+	for _, frame := range prefixFrames {
+		s.appendPrefixFrame(frame, frameDuration(frame))
+	}
+}
+
 func (s *simpleVADStream) resetState() {
 	s.resetSegment()
 	s.samplesIndex = 0
 	s.timestamp = 0
+}
+
+func (s *simpleVADStream) prefixTailFrames(frames []*model.AudioFrame) []*model.AudioFrame {
+	if s.options.PrefixPaddingDuration <= 0 || len(frames) == 0 {
+		return nil
+	}
+
+	var duration float64
+	start := len(frames)
+	for start > 0 {
+		frameDuration := frameDuration(frames[start-1])
+		if duration+frameDuration > s.options.PrefixPaddingDuration {
+			break
+		}
+		duration += frameDuration
+		start--
+	}
+	return append([]*model.AudioFrame(nil), frames[start:]...)
 }
 
 func (s *simpleVADStream) startSpeechFrames() []*model.AudioFrame {
