@@ -387,6 +387,80 @@ func TestFallbackStreamSkipsUnavailableSTTFromRecognizeFailure(t *testing.T) {
 	}
 }
 
+func TestFallbackStreamRecoversFailedProviderInBackground(t *testing.T) {
+	firstFrame := &model.AudioFrame{Data: []byte("1"), SampleRate: 16000, NumChannels: 1, SamplesPerChannel: 1}
+	primaryFailure := &blockingFailRecognizeStream{
+		err:     errors.New("primary stream failed"),
+		release: make(chan struct{}),
+	}
+	recovery := &metadataRecognizeStream{events: []*SpeechEvent{{
+		Type:         SpeechEventFinalTranscript,
+		Alternatives: []SpeechData{{Text: "primary recovered"}},
+	}}}
+	active := &metadataRecognizeStream{events: []*SpeechEvent{{
+		Type:         SpeechEventFinalTranscript,
+		Alternatives: []SpeechData{{Text: "primary active"}},
+	}}}
+	primary := &metadataSTT{
+		label:        "primary",
+		capabilities: STTCapabilities{Streaming: true},
+		streams: []RecognizeStream{
+			primaryFailure,
+			recovery,
+			active,
+		},
+	}
+	fallback := &metadataSTT{
+		label:        "fallback",
+		capabilities: STTCapabilities{Streaming: true},
+		stream: &metadataRecognizeStream{events: []*SpeechEvent{{
+			Type:         SpeechEventFinalTranscript,
+			Alternatives: []SpeechData{{Text: "fallback stream"}},
+		}}},
+	}
+	adapter := NewFallbackAdapterWithOptions([]STT{primary, fallback}, FallbackAdapterOptions{
+		MaxRetryPerSTT: 0,
+	})
+
+	stream, err := adapter.Stream(context.Background(), "en")
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+	defer stream.Close()
+	if err := stream.PushFrame(firstFrame); err != nil {
+		t.Fatalf("PushFrame returned error: %v", err)
+	}
+
+	close(primaryFailure.release)
+
+	event, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next returned error: %v", err)
+	}
+	if got := event.Alternatives[0].Text; got != "fallback stream" {
+		t.Fatalf("first stream text = %q, want fallback stream", got)
+	}
+
+	waitForStreamCalls(t, primary, 2)
+
+	nextStream, err := adapter.Stream(context.Background(), "en")
+	if err != nil {
+		t.Fatalf("second Stream returned error: %v", err)
+	}
+	defer nextStream.Close()
+
+	event, err = nextStream.Next()
+	if err != nil {
+		t.Fatalf("second Next returned error: %v", err)
+	}
+	if got := event.Alternatives[0].Text; got != "primary active" {
+		t.Fatalf("second stream text = %q, want recovered primary active", got)
+	}
+	if primary.streamCalls != 3 {
+		t.Fatalf("primary stream calls = %d, want failure + recovery + active", primary.streamCalls)
+	}
+}
+
 func TestFallbackStreamRetriesSameSTTBeforeFallback(t *testing.T) {
 	firstErr := errors.New("primary stream failed")
 	primary := &metadataSTT{
@@ -560,6 +634,28 @@ func waitForRecognizeCalls(t *testing.T, stt *metadataSTT, want int) {
 		select {
 		case <-deadline:
 			t.Fatalf("recognize calls did not reach %d", want)
+		case <-ticker.C:
+		}
+	}
+}
+
+func waitForStreamCalls(t *testing.T, stt *metadataSTT, want int) {
+	t.Helper()
+	deadline := time.After(200 * time.Millisecond)
+	ticker := time.NewTicker(time.Millisecond)
+	defer ticker.Stop()
+
+	for {
+		stt.mu.Lock()
+		got := stt.streamCalls
+		stt.mu.Unlock()
+		if got >= want {
+			return
+		}
+
+		select {
+		case <-deadline:
+			t.Fatalf("stream calls did not reach %d", want)
 		case <-ticker.C:
 		}
 	}
