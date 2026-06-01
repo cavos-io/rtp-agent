@@ -246,6 +246,47 @@ func TestFallbackAdapterRetriesSameSTTBeforeFallback(t *testing.T) {
 	}
 }
 
+func TestFallbackAdapterReturnsAllFailedErrorWhenProvidersExhausted(t *testing.T) {
+	primaryErr := errors.New("primary recognize failed")
+	fallbackErr := errors.New("fallback recognize failed")
+	adapter := NewFallbackAdapterWithOptions([]STT{
+		&metadataSTT{
+			label:         "primary",
+			capabilities:  STTCapabilities{Streaming: true},
+			recognizeErrs: []error{primaryErr},
+		},
+		&metadataSTT{
+			label:         "fallback",
+			capabilities:  STTCapabilities{Streaming: true},
+			recognizeErrs: []error{fallbackErr},
+		},
+	}, FallbackAdapterOptions{MaxRetryPerSTT: 0})
+
+	_, err := adapter.Recognize(context.Background(), nil, "en")
+	if err == nil {
+		t.Fatal("Recognize error = nil, want all STTs failed error")
+	}
+	if !errors.Is(err, fallbackErr) {
+		t.Fatalf("Recognize error = %v, want to wrap final provider error", err)
+	}
+	var allFailed *FallbackAllFailedError
+	if !errors.As(err, &allFailed) {
+		t.Fatalf("Recognize error = %T, want *FallbackAllFailedError", err)
+	}
+	if allFailed.Count != 2 {
+		t.Fatalf("all failed Count = %d, want 2", allFailed.Count)
+	}
+	if strings.Join(allFailed.Labels, ",") != "primary,fallback" {
+		t.Fatalf("all failed Labels = %#v, want primary/fallback", allFailed.Labels)
+	}
+	if allFailed.Duration <= 0 {
+		t.Fatalf("all failed Duration = %s, want positive duration", allFailed.Duration)
+	}
+	if !strings.Contains(err.Error(), "all STTs failed") {
+		t.Fatalf("Recognize error = %q, want all STTs failed message", err)
+	}
+}
+
 func TestFallbackAdapterSkipsUnavailableSTTOnNextRecognize(t *testing.T) {
 	primaryErr := errors.New("primary recognize failed")
 	primary := &metadataSTT{

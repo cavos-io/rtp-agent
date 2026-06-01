@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"sync"
+	"time"
 
 	"github.com/cavos-io/conversation-worker/core/vad"
 	"github.com/cavos-io/conversation-worker/library/logger"
@@ -24,6 +25,24 @@ type FallbackAdapter struct {
 
 type FallbackAdapterOptions struct {
 	MaxRetryPerSTT int
+}
+
+type FallbackAllFailedError struct {
+	Count    int
+	Labels   []string
+	Duration time.Duration
+	Err      error
+}
+
+func (e *FallbackAllFailedError) Error() string {
+	if e.Err == nil {
+		return fmt.Sprintf("all STTs failed (%v) after %s", e.Labels, e.Duration)
+	}
+	return fmt.Sprintf("all STTs failed (%v) after %s: %v", e.Labels, e.Duration, e.Err)
+}
+
+func (e *FallbackAllFailedError) Unwrap() error {
+	return e.Err
 }
 
 func NewFallbackAdapter(stts []STT) *FallbackAdapter {
@@ -105,6 +124,7 @@ func (f *FallbackAdapter) Capabilities() STTCapabilities {
 }
 
 func (f *FallbackAdapter) Recognize(ctx context.Context, frames []*model.AudioFrame, language string) (*SpeechEvent, error) {
+	startedAt := time.Now()
 	var lastErr error
 	allFailed := f.allUnavailable()
 	for i, stt := range f.stts {
@@ -128,7 +148,20 @@ func (f *FallbackAdapter) Recognize(ctx context.Context, frames []*model.AudioFr
 		f.setAvailable(i, false)
 		f.tryRecover(ctx, i, frames, language)
 	}
-	return nil, fmt.Errorf("all STTs failed, last error: %w", lastErr)
+	return nil, &FallbackAllFailedError{
+		Count:    len(f.stts),
+		Labels:   f.labels(),
+		Duration: time.Since(startedAt),
+		Err:      lastErr,
+	}
+}
+
+func (f *FallbackAdapter) labels() []string {
+	labels := make([]string, len(f.stts))
+	for i, stt := range f.stts {
+		labels[i] = stt.Label()
+	}
+	return labels
 }
 
 func (f *FallbackAdapter) tryRecover(ctx context.Context, index int, frames []*model.AudioFrame, language string) {
