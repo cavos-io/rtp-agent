@@ -421,6 +421,13 @@ func TestFallbackAdapterReturnsAllFailedErrorWhenProvidersExhausted(t *testing.T
 	if !errors.As(err, &allFailed) {
 		t.Fatalf("Chat error type = %T, want FallbackAllFailedError", err)
 	}
+	var connectionErr *APIConnectionError
+	if !errors.As(err, &connectionErr) {
+		t.Fatalf("Chat error type = %T, want APIConnectionError", err)
+	}
+	if !connectionErr.Retryable {
+		t.Fatal("APIConnectionError retryable = false, want true")
+	}
 	if got, want := strings.Join(allFailed.Labels, ","), "primary.LLM,fallback.LLM"; got != want {
 		t.Fatalf("FallbackAllFailedError.Labels = %q, want %q", got, want)
 	}

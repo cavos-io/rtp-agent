@@ -995,17 +995,35 @@ type FallbackAllFailedError struct {
 	Labels   []string
 	Duration time.Duration
 	Err      error
+	APIError *APIConnectionError
 }
 
 func (e *FallbackAllFailedError) Error() string {
-	if e.Err == nil {
-		return fmt.Sprintf("all LLMs failed (%v) after %s", e.Labels, e.Duration)
+	if e.APIError != nil {
+		if e.Err == nil {
+			return e.APIError.Error()
+		}
+		return fmt.Sprintf("%s: %v", e.APIError.Error(), e.Err)
 	}
-	return fmt.Sprintf("all LLMs failed (%v) after %s: %v", e.Labels, e.Duration, e.Err)
+	message := fallbackAllFailedMessage(e.Labels, e.Duration)
+	if e.Err == nil {
+		return message
+	}
+	return fmt.Sprintf("%s: %v", message, e.Err)
 }
 
 func (e *FallbackAllFailedError) Unwrap() error {
-	return e.Err
+	if e.APIError == nil {
+		return e.Err
+	}
+	if e.Err == nil {
+		return e.APIError
+	}
+	return errors.Join(e.APIError, e.Err)
+}
+
+func fallbackAllFailedMessage(labels []string, duration time.Duration) string {
+	return fmt.Sprintf("all LLMs failed (%v) after %s", labels, duration)
 }
 
 const (
@@ -1275,11 +1293,14 @@ func (s *fallbackLLMStream) tryStart(index int) error {
 		}
 	}
 	if lastErr != nil {
+		labels := s.adapter.labels()
+		duration := time.Since(start)
 		return &FallbackAllFailedError{
 			Count:    len(s.adapter.llms),
-			Labels:   s.adapter.labels(),
-			Duration: time.Since(start),
+			Labels:   labels,
+			Duration: duration,
 			Err:      lastErr,
+			APIError: NewAPIConnectionError(fallbackAllFailedMessage(labels, duration)),
 		}
 	}
 	return lastErr
