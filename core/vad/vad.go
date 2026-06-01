@@ -35,6 +35,7 @@ type VAD interface {
 type VADStream interface {
 	PushFrame(frame *model.AudioFrame) error
 	Flush() error
+	EndInput() error
 	Close() error
 	Next() (*VADEvent, error)
 }

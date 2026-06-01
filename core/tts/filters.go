@@ -17,20 +17,20 @@ var (
 	imagePattern = regexp.MustCompile(`!\[([^\]]*)\]\([^)]*\)`)
 	// links: keep text part [text](url) -> text
 	linkPattern = regexp.MustCompile(`\[([^\]]*)\]\([^)]*\)`)
-	// bold: remove asterisks from **text**
-	boldPattern = regexp.MustCompile(`(?<!\S)\*\*([^*]+?)\*\*(?!\S)`)
-	// italic: remove asterisks from *text*
-	italicPattern = regexp.MustCompile(`(?<!\S)\*([^*]+?)\*(?!\S)`)
-	// bold with underscores: remove underscores from __text__
-	boldUnderPattern = regexp.MustCompile(`\b__([^_]+?)__\b`)
-	// italic with underscores: remove underscores from _text_
-	italicUnderPattern = regexp.MustCompile(`\b_([^_]+?)_\b`)
-	// code blocks: remove ``` from ```text```
-	codeBlockPattern = regexp.MustCompile("(?s)```.*?```")
+	// bold: remove asterisks from **text** while preserving literal asterisks in words/expressions
+	boldPattern = regexp.MustCompile(`(^|[^\w*])\*\*([^\s*][^*\n]*?[^\s*])\*\*($|[^\w*])`)
+	// italic: remove asterisks from *text* while preserving literal asterisks in words/expressions
+	italicPattern = regexp.MustCompile(`(^|[^\w*])\*([^\s*][^*\n]*?[^\s*])\*($|[^\w*])`)
+	// bold with underscores: remove underscores from __text__ while preserving intra-word underscores
+	boldUnderPattern = regexp.MustCompile(`(^|\W)__([^_]+?)__($|\W)`)
+	// italic with underscores: remove underscores from _text_ while preserving intra-word underscores
+	italicUnderPattern = regexp.MustCompile(`(^|\W)_([^_]+?)_($|\W)`)
+	// code fences: remove ``` or ```lang while preserving fenced text
+	codeBlockPattern = regexp.MustCompile("`{3,4}\\S*")
 	// inline code: remove ` from `text`
 	inlineCodePattern = regexp.MustCompile("`([^`]+?)`")
-	// strikethrough: remove ~~text~~
-	strikePattern = regexp.MustCompile(`~~([^~]*?)~~`)
+	// strikethrough: remove ~~text~~ only when text is tight against tildes
+	strikePattern = regexp.MustCompile(`~~([^\s~][^~]*?[^\s~])~~`)
 
 	// Emoji block ranges
 	emojiPattern = regexp.MustCompile(`[\x{1F000}-\x{1FBFF}]|[\x{2600}-\x{26FF}]|[\x{2700}-\x{27BF}]|[\x{2B00}-\x{2BFF}]|[\x{FE00}-\x{FE0F}]|\x{200D}|\x{20E3}`)
@@ -49,20 +49,15 @@ func FilterMarkdown(text string) string {
 	// Inline patterns
 	text = imagePattern.ReplaceAllString(text, "$1")
 	text = linkPattern.ReplaceAllString(text, "$1")
-	text = boldPattern.ReplaceAllString(text, "$1")
-	text = italicPattern.ReplaceAllString(text, "$1")
-	text = boldUnderPattern.ReplaceAllString(text, "$1")
-	text = italicUnderPattern.ReplaceAllString(text, "$1")
+	text = boldPattern.ReplaceAllString(text, "$1$2$3")
+	text = italicPattern.ReplaceAllString(text, "$1$2$3")
+	text = boldUnderPattern.ReplaceAllString(text, "$1$2$3")
+	text = italicUnderPattern.ReplaceAllString(text, "$1$2$3")
 	text = codeBlockPattern.ReplaceAllString(text, "")
 	text = inlineCodePattern.ReplaceAllString(text, "$1")
 	text = strikePattern.ReplaceAllString(text, "")
 
 	// Final cleanup
-	text = strings.ReplaceAll(text, "**", "")
-	text = strings.ReplaceAll(text, "*", "")
-	text = strings.ReplaceAll(text, "__", "")
-	text = strings.ReplaceAll(text, "_", "")
-	text = strings.ReplaceAll(text, "~~", "")
 	text = strings.ReplaceAll(text, "`", "")
 
 	return strings.TrimSpace(text)

@@ -2,7 +2,9 @@ package tts
 
 import (
 	"context"
+	"io"
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -46,6 +48,26 @@ func TestSynthesizeWithStreamReturnsStreamEvents(t *testing.T) {
 	}
 }
 
+func TestSynthesizeWithStreamErrorsWhenNonEmptyTextProducesNoAudio(t *testing.T) {
+	provider := &fakeStreamingTTS{
+		stream: &fakeSynthesizeStream{emptyErr: io.EOF},
+	}
+
+	chunked, err := SynthesizeWithStream(context.Background(), provider, "hello")
+	if err != nil {
+		t.Fatalf("SynthesizeWithStream() error = %v", err)
+	}
+	defer chunked.Close()
+
+	_, err = chunked.Next()
+	if err == nil {
+		t.Fatal("Next() error = nil, want no-audio error")
+	}
+	if !strings.Contains(err.Error(), "no audio frames") {
+		t.Fatalf("Next() error = %v, want no-audio error", err)
+	}
+}
+
 func TestSynthesizeWithStreamCloseDelegatesToStream(t *testing.T) {
 	stream := &fakeSynthesizeStream{}
 	provider := &fakeStreamingTTS{stream: stream}
@@ -79,9 +101,10 @@ func (f *fakeStreamingTTS) Stream(context.Context) (SynthesizeStream, error) {
 }
 
 type fakeSynthesizeStream struct {
-	calls  []string
-	events []*SynthesizedAudio
-	closed bool
+	calls    []string
+	events   []*SynthesizedAudio
+	closed   bool
+	emptyErr error
 }
 
 func (f *fakeSynthesizeStream) PushText(text string) error {
@@ -101,6 +124,9 @@ func (f *fakeSynthesizeStream) Close() error {
 
 func (f *fakeSynthesizeStream) Next() (*SynthesizedAudio, error) {
 	if len(f.events) == 0 {
+		if f.emptyErr != nil {
+			return nil, f.emptyErr
+		}
 		return nil, context.Canceled
 	}
 	ev := f.events[0]

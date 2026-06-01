@@ -1,0 +1,341 @@
+package vad
+
+import (
+	"context"
+	"errors"
+	"io"
+	"testing"
+	"time"
+
+	"github.com/cavos-io/conversation-worker/model"
+)
+
+func TestSimpleVADEmitsInferenceBeforeSpeechTransition(t *testing.T) {
+	stream, err := NewSimpleVAD(0.05).Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	defer stream.Close()
+
+	frame := audioFrame(16000, 160, 6000)
+	if err := stream.PushFrame(frame); err != nil {
+		t.Fatalf("PushFrame() error = %v", err)
+	}
+
+	inference := nextVADEvent(t, stream)
+	if inference.Type != VADEventInferenceDone {
+		t.Fatalf("first event type = %s, want %s", inference.Type, VADEventInferenceDone)
+	}
+	if inference.SamplesIndex != int(frame.SamplesPerChannel) {
+		t.Fatalf("SamplesIndex = %d, want %d", inference.SamplesIndex, frame.SamplesPerChannel)
+	}
+	if inference.Timestamp != 0.01 {
+		t.Fatalf("Timestamp = %v, want 0.01", inference.Timestamp)
+	}
+	if inference.Probability <= 0 {
+		t.Fatalf("Probability = %v, want positive speech probability", inference.Probability)
+	}
+	if inference.Speaking {
+		t.Fatal("inference Speaking = true before start of speech, want false")
+	}
+	if len(inference.Frames) != 1 || inference.Frames[0] != frame {
+		t.Fatalf("inference frames = %#v, want pushed frame", inference.Frames)
+	}
+
+	start := nextVADEvent(t, stream)
+	if start.Type != VADEventStartOfSpeech {
+		t.Fatalf("second event type = %s, want %s", start.Type, VADEventStartOfSpeech)
+	}
+	if !start.Speaking {
+		t.Fatal("start Speaking = false, want true")
+	}
+	if len(start.Frames) != 1 || start.Frames[0] != frame {
+		t.Fatalf("start frames = %#v, want triggering frame", start.Frames)
+	}
+}
+
+func TestSimpleVADEndOfSpeechIncludesAccumulatedSpeechFrames(t *testing.T) {
+	stream, err := NewSimpleVAD(0.05).Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	defer stream.Close()
+
+	firstSpeech := audioFrame(16000, 160, 6000)
+	secondSpeech := audioFrame(16000, 160, 7000)
+	silence := audioFrame(16000, 160, 0)
+
+	for _, frame := range []*model.AudioFrame{firstSpeech, secondSpeech, silence} {
+		if err := stream.PushFrame(frame); err != nil {
+			t.Fatalf("PushFrame() error = %v", err)
+		}
+	}
+
+	wantTypes := []VADEventType{
+		VADEventInferenceDone,
+		VADEventStartOfSpeech,
+		VADEventInferenceDone,
+		VADEventInferenceDone,
+		VADEventEndOfSpeech,
+	}
+	var end *VADEvent
+	for _, wantType := range wantTypes {
+		ev := nextVADEvent(t, stream)
+		if ev.Type != wantType {
+			t.Fatalf("event type = %s, want %s", ev.Type, wantType)
+		}
+		if ev.Type == VADEventEndOfSpeech {
+			end = ev
+		}
+	}
+
+	if end == nil {
+		t.Fatal("missing end of speech event")
+	}
+	if end.Speaking {
+		t.Fatal("end Speaking = true, want false")
+	}
+	if len(end.Frames) != 2 || end.Frames[0] != firstSpeech || end.Frames[1] != secondSpeech {
+		t.Fatalf("end frames = %#v, want accumulated speech frames", end.Frames)
+	}
+	if end.SpeechDuration != 0.02 {
+		t.Fatalf("SpeechDuration = %v, want 0.02", end.SpeechDuration)
+	}
+	if end.SilenceDuration != 0.01 {
+		t.Fatalf("SilenceDuration = %v, want 0.01", end.SilenceDuration)
+	}
+}
+
+func TestSimpleVADRequiresMinimumSpeechDurationBeforeStart(t *testing.T) {
+	stream, err := NewSimpleVADWithOptions(SimpleVADOptions{
+		Threshold:         0.05,
+		MinSpeechDuration: 0.03,
+	}).Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	defer stream.Close()
+
+	firstSpeech := audioFrame(16000, 160, 6000)
+	secondSpeech := audioFrame(16000, 160, 6000)
+	thirdSpeech := audioFrame(16000, 160, 6000)
+	for _, frame := range []*model.AudioFrame{firstSpeech, secondSpeech, thirdSpeech} {
+		if err := stream.PushFrame(frame); err != nil {
+			t.Fatalf("PushFrame() error = %v", err)
+		}
+	}
+
+	assertEventType(t, stream, VADEventInferenceDone)
+	assertEventType(t, stream, VADEventInferenceDone)
+	assertEventType(t, stream, VADEventInferenceDone)
+	start := nextVADEvent(t, stream)
+	if start.Type != VADEventStartOfSpeech {
+		t.Fatalf("event type = %s, want %s", start.Type, VADEventStartOfSpeech)
+	}
+	if start.SpeechDuration != 0.03 {
+		t.Fatalf("SpeechDuration = %v, want 0.03", start.SpeechDuration)
+	}
+	if len(start.Frames) != 3 || start.Frames[0] != firstSpeech || start.Frames[2] != thirdSpeech {
+		t.Fatalf("start frames = %#v, want accumulated threshold speech frames", start.Frames)
+	}
+}
+
+func TestSimpleVADDropsSpeechShorterThanMinimumDuration(t *testing.T) {
+	stream, err := NewSimpleVADWithOptions(SimpleVADOptions{
+		Threshold:         0.05,
+		MinSpeechDuration: 0.03,
+	}).Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	defer stream.Close()
+
+	if err := stream.PushFrame(audioFrame(16000, 160, 6000)); err != nil {
+		t.Fatalf("PushFrame() speech error = %v", err)
+	}
+	if err := stream.PushFrame(audioFrame(16000, 160, 0)); err != nil {
+		t.Fatalf("PushFrame() silence error = %v", err)
+	}
+
+	assertEventType(t, stream, VADEventInferenceDone)
+	assertEventType(t, stream, VADEventInferenceDone)
+	assertNoVADEvent(t, stream)
+}
+
+func TestSimpleVADRequiresMinimumSilenceDurationBeforeEnd(t *testing.T) {
+	stream, err := NewSimpleVADWithOptions(SimpleVADOptions{
+		Threshold:          0.05,
+		MinSilenceDuration: 0.03,
+	}).Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	defer stream.Close()
+
+	speech := audioFrame(16000, 160, 6000)
+	firstSilence := audioFrame(16000, 160, 0)
+	secondSilence := audioFrame(16000, 160, 0)
+	thirdSilence := audioFrame(16000, 160, 0)
+	for _, frame := range []*model.AudioFrame{speech, firstSilence, secondSilence, thirdSilence} {
+		if err := stream.PushFrame(frame); err != nil {
+			t.Fatalf("PushFrame() error = %v", err)
+		}
+	}
+
+	assertEventType(t, stream, VADEventInferenceDone)
+	assertEventType(t, stream, VADEventStartOfSpeech)
+	assertEventType(t, stream, VADEventInferenceDone)
+	assertEventType(t, stream, VADEventInferenceDone)
+	assertEventType(t, stream, VADEventInferenceDone)
+	end := nextVADEvent(t, stream)
+	if end.Type != VADEventEndOfSpeech {
+		t.Fatalf("event type = %s, want %s", end.Type, VADEventEndOfSpeech)
+	}
+	if end.SpeechDuration != 0.01 {
+		t.Fatalf("SpeechDuration = %v, want 0.01", end.SpeechDuration)
+	}
+	if end.SilenceDuration != 0.03 {
+		t.Fatalf("SilenceDuration = %v, want 0.03", end.SilenceDuration)
+	}
+	if len(end.Frames) != 1 || end.Frames[0] != speech {
+		t.Fatalf("end frames = %#v, want accumulated speech frame", end.Frames)
+	}
+}
+
+func TestSimpleVADFlushResetsSegmentState(t *testing.T) {
+	stream, err := NewSimpleVAD(0.05).Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	defer stream.Close()
+
+	if err := stream.PushFrame(audioFrame(16000, 160, 6000)); err != nil {
+		t.Fatalf("PushFrame() error = %v", err)
+	}
+	assertEventType(t, stream, VADEventInferenceDone)
+	assertEventType(t, stream, VADEventStartOfSpeech)
+
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush() error = %v", err)
+	}
+	if err := stream.PushFrame(audioFrame(16000, 160, 0)); err != nil {
+		t.Fatalf("PushFrame() after Flush() error = %v", err)
+	}
+	assertEventType(t, stream, VADEventInferenceDone)
+
+	if err := stream.PushFrame(audioFrame(16000, 160, 6000)); err != nil {
+		t.Fatalf("PushFrame() second segment error = %v", err)
+	}
+	assertEventType(t, stream, VADEventInferenceDone)
+	assertEventType(t, stream, VADEventStartOfSpeech)
+}
+
+func TestSimpleVADEndInputFlushesAndRejectsMoreInput(t *testing.T) {
+	stream, err := NewSimpleVAD(0.05).Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	defer stream.Close()
+
+	if err := stream.PushFrame(audioFrame(16000, 160, 6000)); err != nil {
+		t.Fatalf("PushFrame() error = %v", err)
+	}
+	assertEventType(t, stream, VADEventInferenceDone)
+	assertEventType(t, stream, VADEventStartOfSpeech)
+
+	if err := stream.EndInput(); err != nil {
+		t.Fatalf("EndInput() error = %v", err)
+	}
+	if err := stream.PushFrame(audioFrame(16000, 160, 6000)); err == nil {
+		t.Fatal("PushFrame() after EndInput() error = nil, want error")
+	}
+	if err := stream.Flush(); err == nil {
+		t.Fatal("Flush() after EndInput() error = nil, want error")
+	}
+}
+
+func TestSimpleVADCloseIsIdempotentAndEndsIteration(t *testing.T) {
+	stream, err := NewSimpleVAD(0.05).Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+	if err := stream.Close(); err != nil {
+		t.Fatalf("second Close() error = %v", err)
+	}
+	if err := stream.PushFrame(audioFrame(16000, 160, 6000)); err == nil {
+		t.Fatal("PushFrame() after Close() error = nil, want error")
+	}
+	if err := stream.Flush(); err == nil {
+		t.Fatal("Flush() after Close() error = nil, want error")
+	}
+	if _, err := stream.Next(); !errors.Is(err, io.EOF) {
+		t.Fatalf("Next() after Close() error = %v, want io.EOF", err)
+	}
+}
+
+func assertEventType(t *testing.T, stream VADStream, want VADEventType) {
+	t.Helper()
+	ev := nextVADEvent(t, stream)
+	if ev.Type != want {
+		t.Fatalf("event type = %s, want %s", ev.Type, want)
+	}
+}
+
+func nextVADEvent(t *testing.T, stream VADStream) *VADEvent {
+	t.Helper()
+
+	type result struct {
+		ev  *VADEvent
+		err error
+	}
+	done := make(chan result, 1)
+	go func() {
+		ev, err := stream.Next()
+		done <- result{ev: ev, err: err}
+	}()
+
+	select {
+	case result := <-done:
+		if result.err != nil {
+			t.Fatalf("Next() error = %v", result.err)
+		}
+		return result.ev
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("timed out waiting for VAD event")
+		return nil
+	}
+}
+
+func assertNoVADEvent(t *testing.T, stream VADStream) {
+	t.Helper()
+
+	done := make(chan *VADEvent, 1)
+	go func() {
+		ev, _ := stream.Next()
+		done <- ev
+	}()
+
+	select {
+	case ev := <-done:
+		t.Fatalf("unexpected VAD event: %#v", ev)
+	case <-time.After(50 * time.Millisecond):
+	}
+}
+
+func audioFrame(sampleRate uint32, samples int, value int16) *model.AudioFrame {
+	data := make([]byte, samples*2)
+	for i := 0; i < samples; i++ {
+		data[i*2] = byte(value)
+		data[i*2+1] = byte(uint16(value) >> 8)
+	}
+	return &model.AudioFrame{
+		Data:              data,
+		SampleRate:        sampleRate,
+		NumChannels:       1,
+		SamplesPerChannel: uint32(samples),
+	}
+}
