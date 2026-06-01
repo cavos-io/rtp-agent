@@ -145,6 +145,7 @@ type AgentTask[T any] struct {
 	Result       chan T
 	Err          chan error
 	completeOnce sync.Once
+	doneCh       chan struct{}
 }
 
 type TaskWaiter interface {
@@ -157,19 +158,38 @@ func NewAgentTask[T any](instructions string) *AgentTask[T] {
 		Agent:  *baseAgent,
 		Result: make(chan T, 1),
 		Err:    make(chan error, 1),
+		doneCh: make(chan struct{}),
 	}
 }
 
 func (t *AgentTask[T]) Complete(result T) {
 	t.completeOnce.Do(func() {
 		t.Result <- result
+		close(t.doneCh)
 	})
 }
 
 func (t *AgentTask[T]) Fail(err error) {
 	t.completeOnce.Do(func() {
 		t.Err <- err
+		close(t.doneCh)
 	})
+}
+
+func (t *AgentTask[T]) Done() bool {
+	select {
+	case <-t.doneCh:
+		return true
+	default:
+		return false
+	}
+}
+
+func (t *AgentTask[T]) Cancel() {
+	if t.activity != nil {
+		_ = t.activity.Interrupt(true)
+	}
+	t.Fail(llm.NewToolError("AgentTask " + t.ID + " is cancelled"))
 }
 
 func (t *AgentTask[T]) WaitAny(ctx context.Context) (any, error) {
