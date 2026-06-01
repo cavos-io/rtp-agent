@@ -32,6 +32,25 @@ type errorCollectorTTS interface {
 	OnError(TTSErrorHandler) func()
 }
 
+type errorEmitterTTS interface {
+	EmitError(TTSError)
+}
+
+func emitTTSError(provider TTS, err error, recoverable bool) {
+	if provider == nil || err == nil {
+		return
+	}
+	emitter, ok := provider.(errorEmitterTTS)
+	if !ok {
+		return
+	}
+	emitter.EmitError(TTSError{
+		Label:       provider.Label(),
+		Err:         err,
+		Recoverable: recoverable,
+	})
+}
+
 func (e *ErrorEmitter) OnError(handler TTSErrorHandler) func() {
 	if handler == nil {
 		return func() {}

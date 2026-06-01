@@ -13,17 +13,25 @@ import (
 func SynthesizeWithStream(ctx context.Context, provider TTS, text string) (ChunkedStream, error) {
 	stream, err := provider.Stream(ctx)
 	if err != nil {
+		emitTTSError(provider, err, false)
 		return nil, err
 	}
 	if err := stream.PushText(text); err != nil {
 		_ = stream.Close()
+		emitTTSError(provider, err, false)
 		return nil, err
 	}
 	if err := endSynthesizeStreamInput(stream); err != nil {
 		_ = stream.Close()
+		emitTTSError(provider, err, false)
 		return nil, err
 	}
-	return &chunkedStreamFromSynthesizeStream{stream: stream, text: text, requestID: cavosmath.ShortUUID("")}, nil
+	return &chunkedStreamFromSynthesizeStream{
+		provider:  provider,
+		stream:    stream,
+		text:      text,
+		requestID: cavosmath.ShortUUID(""),
+	}, nil
 }
 
 type inputEndingSynthesizeStream interface {
@@ -42,6 +50,7 @@ func EndSynthesizeStreamInput(stream SynthesizeStream) error {
 }
 
 type chunkedStreamFromSynthesizeStream struct {
+	provider    TTS
 	stream      SynthesizeStream
 	text        string
 	requestID   string
@@ -49,6 +58,7 @@ type chunkedStreamFromSynthesizeStream struct {
 	pendingTail bool
 	audioSeen   bool
 	closed      bool
+	errEmitted  bool
 }
 
 func (s *chunkedStreamFromSynthesizeStream) Next() (*SynthesizedAudio, error) {
@@ -66,8 +76,13 @@ func (s *chunkedStreamFromSynthesizeStream) Next() (*SynthesizedAudio, error) {
 					return pending, nil
 				}
 				if !s.audioSeen && strings.TrimSpace(s.text) != "" {
-					return nil, fmt.Errorf("no audio frames were pushed for text: %s", s.text)
+					err := fmt.Errorf("no audio frames were pushed for text: %s", s.text)
+					s.emitError(err)
+					return nil, err
 				}
+			}
+			if !errors.Is(err, io.EOF) {
+				s.emitError(err)
 			}
 			return nil, err
 		}
@@ -93,6 +108,14 @@ func (s *chunkedStreamFromSynthesizeStream) Next() (*SynthesizedAudio, error) {
 		s.pending = tail
 		s.pendingTail = false
 	}
+}
+
+func (s *chunkedStreamFromSynthesizeStream) emitError(err error) {
+	if s.errEmitted {
+		return
+	}
+	s.errEmitted = true
+	emitTTSError(s.provider, err, false)
 }
 
 func (s *chunkedStreamFromSynthesizeStream) stampAudio(audio *SynthesizedAudio, isFinal bool) *SynthesizedAudio {

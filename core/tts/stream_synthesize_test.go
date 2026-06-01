@@ -70,6 +70,36 @@ func TestSynthesizeWithStreamPushesEmptyText(t *testing.T) {
 	}
 }
 
+func TestSynthesizeWithStreamEmitsErrorOnPushFailure(t *testing.T) {
+	wantErr := errors.New("push failed")
+	stream := &fakeSynthesizeStream{pushErr: wantErr}
+	provider := &fakeStreamingTTS{stream: stream}
+	errCh := make(chan TTSError, 1)
+	provider.OnError(func(err TTSError) {
+		errCh <- err
+	})
+
+	_, err := SynthesizeWithStream(context.Background(), provider, "hello")
+	if !errors.Is(err, wantErr) {
+		t.Fatalf("SynthesizeWithStream() error = %v, want %v", err, wantErr)
+	}
+	if !stream.closed {
+		t.Fatal("stream closed = false, want closed after push failure")
+	}
+
+	select {
+	case got := <-errCh:
+		if !errors.Is(got.Err, wantErr) {
+			t.Fatalf("emitted error = %v, want %v", got.Err, wantErr)
+		}
+		if got.Recoverable {
+			t.Fatal("emitted error is recoverable, want false")
+		}
+	default:
+		t.Fatal("provider did not emit push error")
+	}
+}
+
 func TestSynthesizeWithStreamReturnsStreamEvents(t *testing.T) {
 	want := &SynthesizedAudio{RequestID: "req-a", DeltaText: "hello"}
 	provider := &fakeStreamingTTS{
@@ -294,6 +324,10 @@ func TestSynthesizeWithStreamErrorsWhenNonEmptyTextProducesNoAudio(t *testing.T)
 	provider := &fakeStreamingTTS{
 		stream: &fakeSynthesizeStream{emptyErr: io.EOF},
 	}
+	errCh := make(chan TTSError, 1)
+	provider.OnError(func(err TTSError) {
+		errCh <- err
+	})
 
 	chunked, err := SynthesizeWithStream(context.Background(), provider, "hello")
 	if err != nil {
@@ -307,6 +341,17 @@ func TestSynthesizeWithStreamErrorsWhenNonEmptyTextProducesNoAudio(t *testing.T)
 	}
 	if !strings.Contains(err.Error(), "no audio frames") {
 		t.Fatalf("Next() error = %v, want no-audio error", err)
+	}
+	select {
+	case got := <-errCh:
+		if !strings.Contains(got.Err.Error(), "no audio frames") {
+			t.Fatalf("emitted error = %v, want no-audio error", got.Err)
+		}
+		if got.Recoverable {
+			t.Fatal("emitted error is recoverable, want false")
+		}
+	default:
+		t.Fatal("provider did not emit no-audio error")
 	}
 }
 
@@ -368,7 +413,48 @@ func TestSynthesizeWithStreamClosesUnderlyingStreamAfterEOF(t *testing.T) {
 	}
 }
 
+func TestSynthesizeWithStreamEmitsErrorOnStreamFailure(t *testing.T) {
+	wantErr := errors.New("provider failed")
+	provider := &fakeStreamingTTS{
+		stream: &fakeSynthesizeStream{emptyErr: wantErr},
+	}
+	errCh := make(chan TTSError, 1)
+	provider.OnError(func(err TTSError) {
+		errCh <- err
+	})
+
+	chunked, err := SynthesizeWithStream(context.Background(), provider, "hello")
+	if err != nil {
+		t.Fatalf("SynthesizeWithStream() error = %v", err)
+	}
+	defer chunked.Close()
+
+	_, err = chunked.Next()
+	if !errors.Is(err, wantErr) {
+		t.Fatalf("Next() error = %v, want %v", err, wantErr)
+	}
+
+	select {
+	case got := <-errCh:
+		if got.Type != TTSErrorType {
+			t.Fatalf("error type = %q, want %q", got.Type, TTSErrorType)
+		}
+		if got.Label != "fake" {
+			t.Fatalf("error label = %q, want fake", got.Label)
+		}
+		if !errors.Is(got.Err, wantErr) {
+			t.Fatalf("emitted error = %v, want %v", got.Err, wantErr)
+		}
+		if got.Recoverable {
+			t.Fatal("emitted error is recoverable, want false")
+		}
+	default:
+		t.Fatal("provider did not emit TTS error")
+	}
+}
+
 type fakeStreamingTTS struct {
+	ErrorEmitter
 	stream *fakeSynthesizeStream
 }
 
@@ -421,12 +507,13 @@ type fakeSynthesizeStream struct {
 	calls    []string
 	events   []*SynthesizedAudio
 	closed   bool
+	pushErr  error
 	emptyErr error
 }
 
 func (f *fakeSynthesizeStream) PushText(text string) error {
 	f.calls = append(f.calls, "push:"+text)
-	return nil
+	return f.pushErr
 }
 
 func (f *fakeSynthesizeStream) Flush() error {
