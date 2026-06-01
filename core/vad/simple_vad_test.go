@@ -2256,6 +2256,33 @@ func TestSimpleVADEndInputFlushesAndRejectsMoreInput(t *testing.T) {
 	}
 }
 
+func TestSimpleVADEndInputUnblocksNext(t *testing.T) {
+	stream, err := NewSimpleVAD(0.05).Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := stream.Next()
+		done <- err
+	}()
+
+	time.Sleep(10 * time.Millisecond)
+	if err := stream.EndInput(); err != nil {
+		t.Fatalf("EndInput() error = %v", err)
+	}
+
+	select {
+	case err := <-done:
+		if !errors.Is(err, io.EOF) {
+			t.Fatalf("blocked Next() after EndInput() error = %v, want io.EOF", err)
+		}
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("Next() remained blocked after EndInput()")
+	}
+}
+
 func TestSimpleVADCloseIsIdempotentAndEndsIteration(t *testing.T) {
 	stream, err := NewSimpleVAD(0.05).Stream(context.Background())
 	if err != nil {
@@ -2285,6 +2312,33 @@ func TestSimpleVADCloseIsIdempotentAndEndsIteration(t *testing.T) {
 	}
 	if _, err := stream.Next(); !errors.Is(err, io.EOF) {
 		t.Fatalf("Next() after Close() error = %v, want io.EOF", err)
+	}
+}
+
+func TestSimpleVADCloseUnblocksNext(t *testing.T) {
+	stream, err := NewSimpleVAD(0.05).Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := stream.Next()
+		done <- err
+	}()
+
+	time.Sleep(10 * time.Millisecond)
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+
+	select {
+	case err := <-done:
+		if !errors.Is(err, io.EOF) {
+			t.Fatalf("blocked Next() after Close() error = %v, want io.EOF", err)
+		}
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("Next() remained blocked after Close()")
 	}
 }
 
