@@ -55,6 +55,14 @@ func WithAsyncAITTSModel(model string) AsyncAITTSOption {
 	}
 }
 
+func WithAsyncAITTSVoice(voice string) AsyncAITTSOption {
+	return func(t *AsyncAITTS) {
+		if voice != "" {
+			t.voice = voice
+		}
+	}
+}
+
 func WithAsyncAITTSLanguage(language string) AsyncAITTSOption {
 	return func(t *AsyncAITTS) {
 		if language != "" {
@@ -244,6 +252,9 @@ func (s *asyncAITTSStream) PushText(text string) error {
 	if text == "" {
 		return nil
 	}
+	if s.closed {
+		return fmt.Errorf("asyncai tts stream is closed")
+	}
 	_, err := s.pendingText.WriteString(text)
 	return err
 }
@@ -251,6 +262,9 @@ func (s *asyncAITTSStream) PushText(text string) error {
 func (s *asyncAITTSStream) Flush() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.closed {
+		return fmt.Errorf("asyncai tts stream is closed")
+	}
 	if s.conn == nil {
 		s.pendingText.Reset()
 		return nil
@@ -323,6 +337,9 @@ func asyncAITTSAudioFromWebsocketMessage(payload []byte, sampleRate int) (*tts.S
 	audio, err := base64.StdEncoding.DecodeString(message.Audio)
 	if err != nil {
 		return nil, false, err
+	}
+	if len(audio) == 0 {
+		return nil, false, nil
 	}
 	return &tts.SynthesizedAudio{
 		Frame: &model.AudioFrame{
