@@ -570,6 +570,40 @@ func TestSileroVADUpdateOptionsWithAllowsZeroMaxBufferedSpeech(t *testing.T) {
 	assertCombinedSileroFrames(t, start.Frames, prefix)
 }
 
+func TestSileroVADUpdateOptionsWithAllowsZeroPrefixPadding(t *testing.T) {
+	detector := NewSileroVAD(
+		WithPrefixPaddingDuration(0.032),
+		WithMinSpeechDuration(0.064),
+		WithActivationThreshold(0.5),
+	)
+	stream, err := detector.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	defer stream.Close()
+
+	prefix := testAudioFrame(16000, 512, 0)
+	firstSpeech := testAudioFrame(16000, 512, 6000)
+	secondSpeech := testAudioFrame(16000, 512, 7000)
+	if err := stream.PushFrame(prefix); err != nil {
+		t.Fatalf("PushFrame() prefix error = %v", err)
+	}
+	assertSileroVADEventType(t, stream, vad.VADEventInferenceDone)
+
+	detector.UpdateOptionsWith(WithPrefixPaddingDuration(0))
+	for _, frame := range []*model.AudioFrame{firstSpeech, secondSpeech} {
+		if err := stream.PushFrame(frame); err != nil {
+			t.Fatalf("PushFrame() speech error = %v", err)
+		}
+		assertSileroVADEventType(t, stream, vad.VADEventInferenceDone)
+	}
+	start := nextSileroVADEvent(t, stream)
+	if start.Type != vad.VADEventStartOfSpeech {
+		t.Fatalf("event type = %s, want %s", start.Type, vad.VADEventStartOfSpeech)
+	}
+	assertCombinedSileroFrames(t, start.Frames, firstSpeech, secondSpeech)
+}
+
 func TestSileroVADActivationUpdatePreservesDeactivationThreshold(t *testing.T) {
 	detector := NewSileroVAD(
 		WithMinSpeechDuration(0.01),
