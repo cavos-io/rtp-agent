@@ -781,6 +781,7 @@ func TestRegisterWorkerRequestIncludesDefaultPermissions(t *testing.T) {
 	if permissions.Hidden {
 		t.Fatal("permissions.Hidden = true, want false")
 	}
+	//lint:ignore SA1019 keep verifying the deprecated protobuf field while LiveKit still sends it
 	if !permissions.Agent {
 		t.Fatal("permissions.Agent = false, want true")
 	}
@@ -825,6 +826,7 @@ func TestRegisterWorkerRequestIncludesConfiguredPermissions(t *testing.T) {
 	if !permissions.Hidden {
 		t.Fatal("permissions.Hidden = false, want true")
 	}
+	//lint:ignore SA1019 keep verifying the deprecated protobuf field while LiveKit still sends it
 	if !permissions.Agent {
 		t.Fatal("permissions.Agent = false, want true")
 	}
@@ -2677,7 +2679,7 @@ func TestValidateRunPreconditionsRequiresRTCSession(t *testing.T) {
 	if err == nil {
 		t.Fatal("validateRunPreconditions() error = nil, want missing RTC session error")
 	}
-	if !strings.Contains(err.Error(), "No RTC session entrypoint") {
+	if !strings.Contains(err.Error(), "no RTC session entrypoint") {
 		t.Fatalf("validateRunPreconditions() error = %q, want RTC session message", err.Error())
 	}
 }
@@ -2911,6 +2913,47 @@ func TestRunStartsConfiguredPrometheusServerBeforeDial(t *testing.T) {
 	}
 
 	_ = server.Run(context.Background())
+}
+
+func TestRunUnregisteredStartsHTTPAndSkipsLiveKitCredentials(t *testing.T) {
+	server := NewAgentServer(WorkerOptions{DevMode: true, Host: "127.0.0.1"})
+	if err := server.RTCSession(func(*JobContext) error { return nil }, nil, nil); err != nil {
+		t.Fatalf("RTCSession() error = %v", err)
+	}
+	startedCh := make(chan struct{}, 1)
+	server.OnWorkerStarted(func() {
+		startedCh <- struct{}{}
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	doneCh := make(chan error, 1)
+	go func() {
+		doneCh <- server.RunUnregistered(ctx)
+	}()
+
+	select {
+	case <-startedCh:
+	case <-time.After(time.Second):
+		t.Fatal("RunUnregistered() did not emit worker started")
+	}
+	info := server.WorkerInfo()
+	if info.HTTPPort == 0 {
+		t.Fatal("WorkerInfo().HTTPPort = 0, want unregistered HTTP server port")
+	}
+	if server.conn != nil {
+		t.Fatal("RunUnregistered() established worker websocket, want unregistered local run")
+	}
+
+	cancel()
+	select {
+	case err := <-doneCh:
+		if err != nil && !errors.Is(err, context.Canceled) {
+			t.Fatalf("RunUnregistered() error = %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("RunUnregistered() did not return after context cancellation")
+	}
 }
 
 func TestRunRejectsAlreadyStartedServer(t *testing.T) {
@@ -3296,7 +3339,7 @@ func TestExecuteLocalJobRejectsMissingRTCSession(t *testing.T) {
 	if err == nil {
 		t.Fatal("ExecuteLocalJob() error = nil, want missing RTC session error")
 	}
-	if !strings.Contains(err.Error(), "No RTC session entrypoint") {
+	if !strings.Contains(err.Error(), "no RTC session entrypoint") {
 		t.Fatalf("ExecuteLocalJob() error = %q, want RTC session message", err.Error())
 	}
 }

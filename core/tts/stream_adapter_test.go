@@ -669,6 +669,53 @@ func TestStreamAdapterStampsTranscriptText(t *testing.T) {
 	}
 }
 
+func TestStreamAdapterStampsTimedTranscriptAtAudioCursor(t *testing.T) {
+	frame := &model.AudioFrame{
+		Data:              make([]byte, 480),
+		SampleRate:        24000,
+		NumChannels:       1,
+		SamplesPerChannel: 240,
+	}
+	provider := &fakeStreamAdapterTTS{
+		events: []*SynthesizedAudio{{Frame: frame}},
+	}
+	stream, err := NewStreamAdapter(provider).Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+	defer stream.Close()
+
+	if err := stream.PushText("First sentence has enough words."); err != nil {
+		t.Fatalf("first PushText returned error: %v", err)
+	}
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("first Flush returned error: %v", err)
+	}
+
+	first := nextStreamAdapterAudio(t, stream)
+	if len(first.TimedTranscript) != 1 {
+		t.Fatalf("first TimedTranscript = %#v, want one transcript entry", first.TimedTranscript)
+	}
+	if first.TimedTranscript[0].Text != "First sentence has enough words." || first.TimedTranscript[0].StartTime != 0 {
+		t.Fatalf("first TimedTranscript = %#v, want first sentence at start 0", first.TimedTranscript)
+	}
+
+	if err := stream.PushText("Second sentence has enough words."); err != nil {
+		t.Fatalf("second PushText returned error: %v", err)
+	}
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("second Flush returned error: %v", err)
+	}
+
+	second := nextStreamAdapterAudio(t, stream)
+	if len(second.TimedTranscript) != 1 {
+		t.Fatalf("second TimedTranscript = %#v, want one transcript entry", second.TimedTranscript)
+	}
+	if second.TimedTranscript[0].Text != "Second sentence has enough words." || second.TimedTranscript[0].StartTime != 0.01 {
+		t.Fatalf("second TimedTranscript = %#v, want second sentence at start 0.01", second.TimedTranscript)
+	}
+}
+
 func TestStreamAdapterSetsStableRequestID(t *testing.T) {
 	provider := &fakeStreamAdapterTTS{
 		events: []*SynthesizedAudio{

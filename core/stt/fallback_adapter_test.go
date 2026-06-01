@@ -166,6 +166,30 @@ func TestFallbackAdapterRejectsNonStreamingProviderWithoutVAD(t *testing.T) {
 	})
 }
 
+func TestFallbackAdapterRejectsAllNonStreamingProviderLabelsWithoutVAD(t *testing.T) {
+	defer func() {
+		recovered := recover()
+		if recovered == nil {
+			t.Fatal("NewFallbackAdapter did not panic")
+		}
+		message := recovered.(string)
+		if !strings.Contains(message, "offline-a") || !strings.Contains(message, "offline-b") {
+			t.Fatalf("panic message = %q, want all non-streaming provider labels", message)
+		}
+	}()
+
+	NewFallbackAdapter([]STT{
+		&metadataSTT{
+			label:        "offline-a",
+			capabilities: STTCapabilities{OfflineRecognize: true},
+		},
+		&metadataSTT{
+			label:        "offline-b",
+			capabilities: STTCapabilities{OfflineRecognize: true},
+		},
+	})
+}
+
 func TestFallbackAdapterWithVADWrapsNonStreamingProvider(t *testing.T) {
 	offline := &metadataSTT{
 		label:        "offline",
@@ -1128,6 +1152,64 @@ func TestFallbackStreamRecoversFailedProviderInBackground(t *testing.T) {
 	}
 	if primary.streamCalls != 3 {
 		t.Fatalf("primary stream calls = %d, want failure + recovery + active", primary.streamCalls)
+	}
+}
+
+func TestFallbackStreamPropagatesTimingAnchorsToRecoveryStream(t *testing.T) {
+	primaryFailure := &blockingFailRecognizeStream{
+		err:     errors.New("primary stream failed"),
+		release: make(chan struct{}),
+	}
+	recovery := &metadataRecognizeStream{events: []*SpeechEvent{{
+		Type:         SpeechEventFinalTranscript,
+		Alternatives: []SpeechData{{Text: "primary recovered"}},
+	}}}
+	primary := &metadataSTT{
+		label:        "primary",
+		capabilities: STTCapabilities{Streaming: true},
+		streams: []RecognizeStream{
+			primaryFailure,
+			recovery,
+		},
+	}
+	fallback := &metadataSTT{
+		label:        "fallback",
+		capabilities: STTCapabilities{Streaming: true},
+		stream: &metadataRecognizeStream{events: []*SpeechEvent{{
+			Type:         SpeechEventFinalTranscript,
+			Alternatives: []SpeechData{{Text: "fallback stream"}},
+		}}},
+	}
+	adapter := NewFallbackAdapterWithOptions([]STT{primary, fallback}, FallbackAdapterOptions{
+		MaxRetryPerSTT: 0,
+	})
+
+	stream, err := adapter.Stream(context.Background(), "en")
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+	defer stream.Close()
+
+	timing, ok := stream.(StreamTiming)
+	if !ok {
+		t.Fatal("fallback stream does not implement StreamTiming")
+	}
+	timing.SetStartTimeOffset(7.5)
+	timing.SetStartTime(123.25)
+
+	close(primaryFailure.release)
+
+	if _, err := stream.Next(); err != nil {
+		t.Fatalf("Next returned error: %v", err)
+	}
+	waitForStreamCalls(t, primary, 2)
+	waitForProviderAvailable(t, adapter, 0)
+
+	if recovery.startTimeOffset != 7.5 {
+		t.Fatalf("recovery StartTimeOffset = %v, want 7.5", recovery.startTimeOffset)
+	}
+	if recovery.startTime != 123.25 {
+		t.Fatalf("recovery StartTime = %v, want 123.25", recovery.startTime)
 	}
 }
 

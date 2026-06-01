@@ -112,6 +112,7 @@ type streamAdapterWrapper struct {
 
 	segmentPending *SynthesizedAudio
 	metrics        map[string]*streamAdapterSegmentMetrics
+	audioCursor    float64
 }
 
 type streamAdapterInput struct {
@@ -283,6 +284,7 @@ func (w *streamAdapterWrapper) setSegmentPending(audio *SynthesizedAudio, text s
 	audio.IsFinal = false
 	if includeTranscript {
 		audio.DeltaText = text
+		audio.TimedTranscript = []TimedString{{Text: text, StartTime: w.audioCursor}}
 	}
 	w.segmentPending = audio
 }
@@ -308,6 +310,7 @@ func (w *streamAdapterWrapper) sendSynthesizedAudio(audio *SynthesizedAudio, tex
 	audio.IsFinal = isFinal
 	if includeTranscript {
 		audio.DeltaText = text
+		audio.TimedTranscript = []TimedString{{Text: text, StartTime: w.audioCursor}}
 	}
 	w.observeSegmentAudio(audio, text)
 	w.eventCh <- audio
@@ -333,7 +336,9 @@ func (w *streamAdapterWrapper) observeSegmentAudio(audio *SynthesizedAudio, text
 		metrics.ttfb = time.Since(metrics.startedAt).Seconds()
 		metrics.ttfbSet = true
 	}
-	metrics.audioDur += audioFrameDurationSeconds(audio.Frame)
+	duration := audioFrameDurationSeconds(audio.Frame)
+	metrics.audioDur += duration
+	w.audioCursor += duration
 }
 
 func (w *streamAdapterWrapper) emitSegmentMetrics(audio *SynthesizedAudio) {

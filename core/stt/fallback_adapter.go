@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"strings"
 	"sync"
 	"time"
 
@@ -102,12 +103,24 @@ func newFallbackAdapter(stts []STT, vad vad.VAD, options FallbackAdapterOptions)
 		options.AttemptTimeout = defaultFallbackAttemptTimeout
 	}
 
+	if vad == nil {
+		nonStreamingLabels := make([]string, 0)
+		for _, stt := range stts {
+			if !stt.Capabilities().Streaming {
+				nonStreamingLabels = append(nonStreamingLabels, stt.Label())
+			}
+		}
+		if len(nonStreamingLabels) > 0 {
+			panic(fmt.Sprintf(
+				"STTs do not support streaming: %s. Provide a VAD to enable stt.StreamAdapter automatically or wrap them with stt.StreamAdapter before using this adapter.",
+				strings.Join(nonStreamingLabels, ", "),
+			))
+		}
+	}
+
 	wrapped := make([]STT, len(stts))
 	for i, stt := range stts {
 		if !stt.Capabilities().Streaming {
-			if vad == nil {
-				panic(fmt.Sprintf("STT %q does not support streaming; provide a VAD or wrap it with StreamAdapter", stt.Label()))
-			}
 			wrapped[i] = NewStreamAdapter(stt, vad)
 			continue
 		}
@@ -740,6 +753,7 @@ func (s *fallbackRecognizeStream) tryRecoverStream(index int) {
 		return
 	}
 
+	s.applyTiming(stream)
 	s.adapter.setRecoveryStream(index, stream)
 	s.recoveries = append(s.recoveries, stream)
 

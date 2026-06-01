@@ -1419,6 +1419,102 @@ func TestFallbackStreamsDoNotMutateProviderAudioMetadata(t *testing.T) {
 	}
 }
 
+func TestFallbackStreamsPreserveTimedTranscript(t *testing.T) {
+	timed := []TimedString{{Text: "hello", StartTime: 0.25, EndTime: 0.5}}
+	chunkedAdapter := NewFallbackAdapter([]TTS{
+		&metadataTTS{
+			label:       "chunked",
+			sampleRate:  24000,
+			numChannels: 1,
+			chunked: &metadataChunkedStream{events: []*SynthesizedAudio{{
+				Frame:           &model.AudioFrame{Data: []byte{1}},
+				TimedTranscript: timed,
+			}}},
+		},
+	})
+	chunked, err := chunkedAdapter.Synthesize(context.Background(), "hello")
+	if err != nil {
+		t.Fatalf("Synthesize returned error: %v", err)
+	}
+	defer chunked.Close()
+	gotChunked, err := chunked.Next()
+	if err != nil {
+		t.Fatalf("chunked Next returned error: %v", err)
+	}
+	if len(gotChunked.TimedTranscript) != 1 || gotChunked.TimedTranscript[0] != timed[0] {
+		t.Fatalf("chunked TimedTranscript = %#v, want provider transcript", gotChunked.TimedTranscript)
+	}
+
+	streamAdapter := NewFallbackAdapter([]TTS{
+		&metadataTTS{
+			label:        "stream",
+			sampleRate:   24000,
+			numChannels:  1,
+			capabilities: TTSCapabilities{Streaming: true},
+			stream: &metadataSynthesizeStream{events: []*SynthesizedAudio{{
+				Frame:           &model.AudioFrame{Data: []byte{2}},
+				TimedTranscript: timed,
+			}}},
+		},
+	})
+	stream, err := streamAdapter.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+	defer stream.Close()
+	if err := stream.PushText("hello"); err != nil {
+		t.Fatalf("PushText returned error: %v", err)
+	}
+	gotStream, err := stream.Next()
+	if err != nil {
+		t.Fatalf("stream Next returned error: %v", err)
+	}
+	if len(gotStream.TimedTranscript) != 1 || gotStream.TimedTranscript[0] != timed[0] {
+		t.Fatalf("stream TimedTranscript = %#v, want provider transcript", gotStream.TimedTranscript)
+	}
+}
+
+func TestFallbackChunkedStreamDoesNotDuplicateTimedTranscriptOnFinalTail(t *testing.T) {
+	timed := []TimedString{{Text: "hello", StartTime: 0.25, EndTime: 0.5}}
+	adapter := NewFallbackAdapter([]TTS{
+		&metadataTTS{
+			label:       "chunked",
+			sampleRate:  24000,
+			numChannels: 1,
+			chunked: &metadataChunkedStream{events: []*SynthesizedAudio{{
+				Frame: &model.AudioFrame{
+					Data:              make([]byte, 960),
+					SampleRate:        24000,
+					NumChannels:       1,
+					SamplesPerChannel: 480,
+				},
+				TimedTranscript: timed,
+			}}},
+		},
+	})
+
+	stream, err := adapter.Synthesize(context.Background(), "hello")
+	if err != nil {
+		t.Fatalf("Synthesize returned error: %v", err)
+	}
+	defer stream.Close()
+
+	first, err := stream.Next()
+	if err != nil {
+		t.Fatalf("first Next returned error: %v", err)
+	}
+	if len(first.TimedTranscript) != 1 || first.TimedTranscript[0] != timed[0] {
+		t.Fatalf("first TimedTranscript = %#v, want provider transcript", first.TimedTranscript)
+	}
+	second, err := stream.Next()
+	if err != nil {
+		t.Fatalf("second Next returned error: %v", err)
+	}
+	if len(second.TimedTranscript) != 0 {
+		t.Fatalf("second TimedTranscript = %#v, want no duplicate transcript on final tail", second.TimedTranscript)
+	}
+}
+
 func TestFallbackSynthesizeStreamErrorsWhenNonEmptyTextProducesNoAudio(t *testing.T) {
 	adapter := NewFallbackAdapter([]TTS{
 		&metadataTTS{
@@ -3311,55 +3407,6 @@ func (s *blockingEndInputSynthesizeStream) Next() (*SynthesizedAudio, error) {
 	ev := s.events[0]
 	s.events = s.events[1:]
 	return ev, nil
-}
-
-type flushGatedSynthesizeStream struct {
-	event   *SynthesizedAudio
-	calls   []string
-	flushed chan struct{}
-	once    sync.Once
-	closed  bool
-	emitted bool
-}
-
-func newFlushGatedSynthesizeStream(event *SynthesizedAudio) *flushGatedSynthesizeStream {
-	return &flushGatedSynthesizeStream{
-		event:   event,
-		flushed: make(chan struct{}),
-	}
-}
-
-func (s *flushGatedSynthesizeStream) PushText(text string) error {
-	s.calls = append(s.calls, "push:"+text)
-	return nil
-}
-
-func (s *flushGatedSynthesizeStream) Flush() error {
-	s.calls = append(s.calls, "flush")
-	s.once.Do(func() {
-		close(s.flushed)
-	})
-	return nil
-}
-
-func (s *flushGatedSynthesizeStream) Close() error {
-	s.closed = true
-	s.once.Do(func() {
-		close(s.flushed)
-	})
-	return nil
-}
-
-func (s *flushGatedSynthesizeStream) Next() (*SynthesizedAudio, error) {
-	<-s.flushed
-	if s.closed {
-		return nil, io.EOF
-	}
-	if s.emitted {
-		return nil, io.EOF
-	}
-	s.emitted = true
-	return s.event, nil
 }
 
 type finalFrameThenBlockingSynthesizeStream struct {

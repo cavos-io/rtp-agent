@@ -145,6 +145,7 @@ func formatConsoleAudioDevices(devices []consoleAudioDevice, defaultInput, defau
 }
 
 func RunApp(server *worker.AgentServer) {
+	DiscoverPlugins()
 	if len(os.Args) < 2 {
 		printUsage()
 		os.Exit(1)
@@ -388,12 +389,24 @@ func runConnect(server *worker.AgentServer) {
 		os.Exit(1)
 	}
 
-	if err := server.ExecuteLocalJobWithOptions(
-		ctx,
-		args.RoomName,
-		args.ParticipantIdentity,
-		worker.LocalJobOptions{FakeJob: false, RoomInfo: roomInfo},
-	); err != nil {
+	jobDone := make(chan error, 1)
+	server.OnWorkerStarted(func() {
+		go func() {
+			jobDone <- server.ExecuteLocalJobWithOptions(
+				ctx,
+				args.RoomName,
+				args.ParticipantIdentity,
+				worker.LocalJobOptions{FakeJob: false, RoomInfo: roomInfo},
+			)
+			stop()
+		}()
+	})
+
+	if err := server.RunUnregistered(ctx); err != nil && !errors.Is(err, context.Canceled) {
+		logger.Logger.Errorw("Connect error", err)
+		os.Exit(1)
+	}
+	if err := <-jobDone; err != nil && !errors.Is(err, context.Canceled) {
 		logger.Logger.Errorw("Connect error", err)
 		os.Exit(1)
 	}

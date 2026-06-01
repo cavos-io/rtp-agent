@@ -120,6 +120,7 @@ func (a *MultiSpeakerAdapter) Stream(ctx context.Context, language string) (Reco
 		inputCh:   make(chan multiSpeakerInput, 100),
 		startTime: streamStartTimeNow(),
 	}
+	w.applyTiming()
 
 	go w.run()
 

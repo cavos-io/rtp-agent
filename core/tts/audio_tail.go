@@ -18,6 +18,7 @@ func splitSynthesizedAudioTail(audio *SynthesizedAudio) (*SynthesizedAudio, *Syn
 	if !ok {
 		return nil, tail, false
 	}
+	tail.TimedTranscript = nil
 	head := cloneSynthesizedAudio(audio)
 	head.Frame = headFrame
 	head.IsFinal = false
