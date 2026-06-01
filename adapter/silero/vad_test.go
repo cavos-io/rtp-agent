@@ -251,6 +251,64 @@ func TestSileroVADUpdateOptionsWithDoesNotChangeSampleRate(t *testing.T) {
 	assertSileroVADEventType(t, stream, vad.VADEventStartOfSpeech)
 }
 
+func TestSileroVADUpdateOptionsDoesNotChangeUpdateInterval(t *testing.T) {
+	detector := NewSileroVAD(
+		WithMinSpeechDuration(0.032),
+		WithActivationThreshold(0.5),
+	)
+	stream, err := detector.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	defer stream.Close()
+
+	detector.UpdateOptions(VADOptions{UpdateInterval: 0.016})
+	if detector.Capabilities().UpdateInterval != 0.032 {
+		t.Fatalf("Capabilities().UpdateInterval = %v, want 0.032", detector.Capabilities().UpdateInterval)
+	}
+	if err := stream.PushFrame(testAudioFrame(16000, 512, 6000)); err != nil {
+		t.Fatalf("PushFrame() error = %v", err)
+	}
+	inference := nextSileroVADEvent(t, stream)
+	if inference.Type != vad.VADEventInferenceDone {
+		t.Fatalf("event type = %s, want %s", inference.Type, vad.VADEventInferenceDone)
+	}
+	if inference.SamplesIndex != 512 {
+		t.Fatalf("SamplesIndex after update interval update = %d, want 512", inference.SamplesIndex)
+	}
+	assertSileroVADEventType(t, stream, vad.VADEventStartOfSpeech)
+}
+
+func TestSileroVADUpdateOptionsWithDoesNotChangeUpdateInterval(t *testing.T) {
+	detector := NewSileroVAD(
+		WithMinSpeechDuration(0.032),
+		WithActivationThreshold(0.5),
+	)
+	stream, err := detector.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	defer stream.Close()
+
+	detector.UpdateOptionsWith(func(options *VADOptions) {
+		options.UpdateInterval = 0.016
+	})
+	if detector.Capabilities().UpdateInterval != 0.032 {
+		t.Fatalf("Capabilities().UpdateInterval = %v, want 0.032", detector.Capabilities().UpdateInterval)
+	}
+	if err := stream.PushFrame(testAudioFrame(16000, 512, 6000)); err != nil {
+		t.Fatalf("PushFrame() error = %v", err)
+	}
+	inference := nextSileroVADEvent(t, stream)
+	if inference.Type != vad.VADEventInferenceDone {
+		t.Fatalf("event type = %s, want %s", inference.Type, vad.VADEventInferenceDone)
+	}
+	if inference.SamplesIndex != 512 {
+		t.Fatalf("SamplesIndex after update interval update = %d, want 512", inference.SamplesIndex)
+	}
+	assertSileroVADEventType(t, stream, vad.VADEventStartOfSpeech)
+}
+
 func TestSileroVADBuffersDefaultInferenceWindow(t *testing.T) {
 	detector := NewSileroVAD(
 		WithMinSpeechDuration(0.032),

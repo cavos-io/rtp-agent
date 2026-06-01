@@ -177,6 +177,7 @@ func (v *SileroVAD) OnMetricsCollected(handler vad.VADMetricsHandler) {
 func (v *SileroVAD) UpdateOptions(options VADOptions) {
 	v.mu.Lock()
 	options.SampleRate = 0
+	options.UpdateInterval = 0
 	v.options = mergeVADOptions(v.options, options)
 	merged := v.options
 	v.mu.Unlock()
@@ -186,12 +187,14 @@ func (v *SileroVAD) UpdateOptions(options VADOptions) {
 func (v *SileroVAD) UpdateOptionsWith(opts ...VADOption) {
 	v.mu.Lock()
 	sampleRate := v.options.SampleRate
+	updateInterval := v.options.UpdateInterval
 	for _, opt := range opts {
 		if opt != nil {
 			opt(&v.options)
 		}
 	}
 	v.options.SampleRate = sampleRate
+	v.options.UpdateInterval = updateInterval
 	merged := v.options
 	v.mu.Unlock()
 	v.inner.UpdateOptionsWith(simpleUpdateOptionsFromSilero(merged)...)
