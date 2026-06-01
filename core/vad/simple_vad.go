@@ -597,6 +597,9 @@ func (s *simpleVADStream) contextErr() error {
 
 func (s *simpleVADStream) Next() (*VADEvent, error) {
 	for {
+		if err := s.contextErr(); err != nil {
+			return nil, err
+		}
 		s.eventMu.Lock()
 		if len(s.eventQueue) > 0 {
 			ev := s.eventQueue[0]
