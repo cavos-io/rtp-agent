@@ -105,6 +105,29 @@ func TestGladiaSTTConfigOptionsMatchReference(t *testing.T) {
 	}
 }
 
+func TestGladiaTranslationConfigOptionsMatchReference(t *testing.T) {
+	provider := NewGladiaSTT("test-key",
+		WithGladiaTranslationConfig([]string{"es", "fr"}, "enhanced", false, false, true, "medical appointment", true),
+	)
+
+	config := buildGladiaStreamingConfig(provider)
+	realtime := config["realtime_processing"].(map[string]any)
+	if realtime["translation"] != true {
+		t.Fatalf("translation = %#v, want true", realtime["translation"])
+	}
+	translationConfig := realtime["translation_config"].(map[string]any)
+	targetLanguages := translationConfig["target_languages"].([]string)
+	if len(targetLanguages) != 2 || targetLanguages[0] != "es" || targetLanguages[1] != "fr" {
+		t.Fatalf("target_languages = %+v, want es/fr", targetLanguages)
+	}
+	assertGladiaField(t, translationConfig, "model", "enhanced")
+	assertGladiaField(t, translationConfig, "match_original_utterances", false)
+	assertGladiaField(t, translationConfig, "lipsync", false)
+	assertGladiaField(t, translationConfig, "context_adaptation", true)
+	assertGladiaField(t, translationConfig, "context", "medical appointment")
+	assertGladiaField(t, translationConfig, "informal", true)
+}
+
 func TestBuildGladiaInitRequestMovesRegionToQuery(t *testing.T) {
 	provider := NewGladiaSTT("test-key", WithGladiaBaseURL("https://gladia.example/v2/live"))
 	req, err := buildGladiaInitRequest(context.Background(), provider)

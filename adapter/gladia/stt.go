@@ -158,6 +158,21 @@ func WithGladiaTranslation(targetLanguages []string) GladiaSTTOption {
 	}
 }
 
+func WithGladiaTranslationConfig(targetLanguages []string, model string, matchOriginalUtterances bool, lipsync bool, contextAdaptation bool, context string, informal bool) GladiaSTTOption {
+	return func(s *GladiaSTT) {
+		s.translationEnabled = true
+		s.translationTargetLanguages = append([]string(nil), targetLanguages...)
+		if model != "" {
+			s.translationModel = model
+		}
+		s.translationMatchOriginalUtterances = matchOriginalUtterances
+		s.translationLipsync = lipsync
+		s.translationContextAdaptation = contextAdaptation
+		s.translationContext = context
+		s.translationInformal = informal
+	}
+}
+
 func WithGladiaPreProcessing(audioEnhancer bool, speechThreshold float64) GladiaSTTOption {
 	return func(s *GladiaSTT) {
 		s.preProcessingAudioEnhancer = audioEnhancer
