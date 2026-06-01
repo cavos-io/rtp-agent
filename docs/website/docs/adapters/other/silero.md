@@ -5,7 +5,13 @@ title: Silero
 
 # Silero Other Adapter for RTP Agent
 
-Silero provides an ultra-fast, robust Voice Activity Detection (VAD) model. This is an essential component for determining exactly when a user starts or stops speaking, enabling accurate turn-taking.
+Silero provides a Voice Activity Detection (VAD) adapter for turn-taking.
+
+The Go adapter exposes Silero-compatible options and metadata through
+`adapter/silero`. It currently uses the built-in `core/vad.SimpleVAD` engine as
+the runtime fallback, so it works without CGO or ONNX runtime dependencies in
+the base install. Native ONNX-backed Silero inference can be added behind the
+same package later.
 
 ## Installation
 
@@ -17,7 +23,7 @@ go get github.com/cavos-io/rtp-agent/adapter/silero
 
 ## Usage
 
-Below is a basic conceptual example demonstrating how to initialize the Silero Other adapter within an RTP Agent session:
+Initialize the VAD adapter and pass it to an agent session:
 
 ```go
 package main
@@ -33,17 +39,32 @@ import (
 func main() {
 	ctx := context.Background()
 
-	// Initialize the adapter
-	vadProvider := silero.NewSileroVAD(silero.VADOption{})
+	vadProvider := silero.NewSileroVAD(
+		silero.WithMinSpeechDuration(0.05),
+		silero.WithMinSilenceDuration(0.55),
+		silero.WithActivationThreshold(0.5),
+	)
 
-	// Create and configure the RTP agent session
 	session := agent.NewSession(
 		agent.WithVAD(vadProvider),
 	)
 
-	// Start the session
 	if err := session.Start(ctx); err != nil {
 		log.Fatalf("session failed: %v", err)
 	}
 }
 ```
+
+## Options
+
+Common options:
+
+- `WithMinSpeechDuration`
+- `WithMinSilenceDuration`
+- `WithPrefixPaddingDuration`
+- `WithMaxBufferedSpeech`
+- `WithActivationThreshold`
+- `WithDeactivationThreshold`
+- `WithSampleRate`
+
+Supported sample rates are 8 kHz and 16 kHz.
