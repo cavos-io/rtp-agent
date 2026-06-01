@@ -43,6 +43,10 @@ type MultiSpeakerAdapter struct {
 	opt                       PrimarySpeakerDetectionOptions
 }
 
+func NewDefaultMultiSpeakerAdapter(stt STT) (*MultiSpeakerAdapter, error) {
+	return NewMultiSpeakerAdapter(stt, true, false, "{text}", "{text}", nil)
+}
+
 func NewMultiSpeakerAdapter(stt STT, detectPrimary bool, suppressBackground bool, primaryFormat string, backgroundFormat string, opt *PrimarySpeakerDetectionOptions) (*MultiSpeakerAdapter, error) {
 	if !stt.Capabilities().Diarization {
 		return nil, fmt.Errorf("MultiSpeakerAdapter needs STT with diarization capability")
@@ -430,7 +434,7 @@ func (d *primarySpeakerDetector) pushAudio(frame *model.AudioFrame) {
 		d.pushedDuration += fduration
 	}
 
-	if len(d.rmsBuffer) > d.maxRmsSize {
+	if d.maxRmsSize > 0 && len(d.rmsBuffer) > d.maxRmsSize {
 		d.rmsBuffer = d.rmsBuffer[len(d.rmsBuffer)-d.maxRmsSize:]
 	}
 }
@@ -466,6 +470,9 @@ func (d *primarySpeakerDetector) getRmsForTimerange(startTime float64, endTime f
 	}
 	if startIdx < 0 {
 		startIdx = 0
+	}
+	if endIdx > len(d.rmsBuffer) {
+		endIdx = len(d.rmsBuffer)
 	}
 
 	if endIdx-startIdx < d.opt.MinRMSSamples {

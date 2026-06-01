@@ -103,6 +103,26 @@ func TestPrimarySpeakerDetectorTreatsSilentRMSAsValidData(t *testing.T) {
 	}
 }
 
+func TestPrimarySpeakerDetectorClampsFutureRMSRange(t *testing.T) {
+	detector := newPrimarySpeakerDetector(
+		true,
+		false,
+		"{text}",
+		"{text}",
+		DefaultPrimarySpeakerDetectionOptions(),
+	)
+	detector.rmsBuffer = []float64{1, 2, 3}
+	detector.pushedDuration = 0.3
+
+	rms, ok := detector.getRmsForTimerange(0, 1.0)
+	if !ok {
+		t.Fatal("getRmsForTimerange returned ok=false, want clamped RMS")
+	}
+	if rms != 2 {
+		t.Fatalf("RMS = %v, want median of clamped buffer 2", rms)
+	}
+}
+
 func TestPrimarySpeakerDetectorPushAudioInitializesByteStream(t *testing.T) {
 	detector := newPrimarySpeakerDetector(
 		true,
@@ -137,6 +157,55 @@ func TestPrimarySpeakerDetectorPushAudioInitializesByteStream(t *testing.T) {
 	}
 	if detector.pushedDuration == 0 {
 		t.Fatal("pushedDuration = 0, want emitted audio duration")
+	}
+}
+
+func TestPrimarySpeakerDetectorKeepsRMSBufferWhenMaxSizeIsZero(t *testing.T) {
+	options := DefaultPrimarySpeakerDetectionOptions()
+	options.RMSBufferDuration = 0
+	detector := newPrimarySpeakerDetector(
+		true,
+		false,
+		"{text}",
+		"{text}",
+		options,
+	)
+
+	detector.pushAudio(&model.AudioFrame{
+		Data:              make([]byte, 1600*2),
+		SampleRate:        16000,
+		NumChannels:       1,
+		SamplesPerChannel: 1600,
+	})
+
+	if len(detector.rmsBuffer) == 0 {
+		t.Fatal("rmsBuffer was emptied, want Python [-0:] behavior to retain samples")
+	}
+}
+
+func TestNewDefaultMultiSpeakerAdapterUsesReferenceDefaults(t *testing.T) {
+	adapter, err := NewDefaultMultiSpeakerAdapter(&metadataSTT{
+		label:        "diarized",
+		capabilities: STTCapabilities{Streaming: true, Diarization: true},
+	})
+	if err != nil {
+		t.Fatalf("NewDefaultMultiSpeakerAdapter returned error: %v", err)
+	}
+
+	if !adapter.detectPrimarySpeaker {
+		t.Fatal("detectPrimarySpeaker = false, want true reference default")
+	}
+	if adapter.suppressBackgroundSpeaker {
+		t.Fatal("suppressBackgroundSpeaker = true, want false reference default")
+	}
+	if adapter.primaryFormat != "{text}" {
+		t.Fatalf("primaryFormat = %q, want {text}", adapter.primaryFormat)
+	}
+	if adapter.backgroundFormat != "{text}" {
+		t.Fatalf("backgroundFormat = %q, want {text}", adapter.backgroundFormat)
+	}
+	if adapter.opt != DefaultPrimarySpeakerDetectionOptions() {
+		t.Fatalf("options = %#v, want default primary speaker detection options", adapter.opt)
 	}
 }
 

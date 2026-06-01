@@ -44,6 +44,38 @@ func TestFallbackAdapterAggregatesProviderCapabilities(t *testing.T) {
 	}
 }
 
+func TestFallbackAdapterDefaultConstructorsUseReferenceRetryInterval(t *testing.T) {
+	adapter := NewFallbackAdapter([]STT{
+		&metadataSTT{label: "primary", capabilities: STTCapabilities{Streaming: true}},
+	})
+	if adapter.retryInterval != 5*time.Second {
+		t.Fatalf("RetryInterval = %s, want 5s reference default", adapter.retryInterval)
+	}
+
+	offline := &metadataSTT{
+		label:        "offline",
+		capabilities: STTCapabilities{OfflineRecognize: true},
+	}
+	withVAD := NewFallbackAdapterWithVAD([]STT{offline}, &fakeStreamAdapterVAD{})
+	if withVAD.retryInterval != 5*time.Second {
+		t.Fatalf("VAD RetryInterval = %s, want 5s reference default", withVAD.retryInterval)
+	}
+}
+
+func TestDefaultFallbackAdapterOptionsMatchReferenceDefaults(t *testing.T) {
+	options := DefaultFallbackAdapterOptions()
+
+	if options.MaxRetryPerSTT != 1 {
+		t.Fatalf("MaxRetryPerSTT = %d, want 1", options.MaxRetryPerSTT)
+	}
+	if options.AttemptTimeout != 10*time.Second {
+		t.Fatalf("AttemptTimeout = %s, want 10s", options.AttemptTimeout)
+	}
+	if options.RetryInterval != 5*time.Second {
+		t.Fatalf("RetryInterval = %s, want 5s", options.RetryInterval)
+	}
+}
+
 func TestFallbackAdapterAlwaysAdvertisesOfflineRecognize(t *testing.T) {
 	adapter := NewFallbackAdapter([]STT{
 		&metadataSTT{label: "primary", capabilities: STTCapabilities{
@@ -537,6 +569,75 @@ func TestFallbackAdapterRetriesSameSTTBeforeFallback(t *testing.T) {
 	}
 }
 
+func TestFallbackAdapterWaitsRetryIntervalBeforeSameSTTRetry(t *testing.T) {
+	firstErr := errors.New("primary recognize failed")
+	primary := &metadataSTT{
+		label:        "primary",
+		capabilities: STTCapabilities{Streaming: true},
+		recognizeResults: []*SpeechEvent{
+			nil,
+			{Type: SpeechEventFinalTranscript, Alternatives: []SpeechData{{Text: "primary recovered"}}},
+		},
+		recognizeErrs: []error{firstErr, nil},
+	}
+	adapter := NewFallbackAdapterWithOptions([]STT{primary}, FallbackAdapterOptions{
+		MaxRetryPerSTT: 1,
+		RetryInterval:  30 * time.Millisecond,
+	})
+
+	startedAt := time.Now()
+	event, err := adapter.Recognize(context.Background(), nil, "en")
+	elapsed := time.Since(startedAt)
+	if err != nil {
+		t.Fatalf("Recognize returned error: %v", err)
+	}
+	if got := event.Alternatives[0].Text; got != "primary recovered" {
+		t.Fatalf("recognized text = %q, want primary recovered", got)
+	}
+	if elapsed < 25*time.Millisecond {
+		t.Fatalf("Recognize elapsed = %s, want retry interval delay", elapsed)
+	}
+}
+
+func TestFallbackAdapterTimesOutBlockedRecognizeAttempt(t *testing.T) {
+	primary := &blockingContextSTT{
+		label:        "primary",
+		capabilities: STTCapabilities{Streaming: true},
+		started:      make(chan struct{}, 1),
+	}
+	fallback := &metadataSTT{
+		label:        "fallback",
+		capabilities: STTCapabilities{Streaming: true},
+		recognizeResult: &SpeechEvent{
+			Type:         SpeechEventFinalTranscript,
+			Alternatives: []SpeechData{{Text: "fallback"}},
+		},
+	}
+	adapter := NewFallbackAdapterWithOptions([]STT{primary, fallback}, FallbackAdapterOptions{
+		MaxRetryPerSTT: 0,
+		AttemptTimeout: 20 * time.Millisecond,
+	})
+
+	event, err := adapter.Recognize(context.Background(), nil, "en")
+	if err != nil {
+		t.Fatalf("Recognize returned error: %v", err)
+	}
+	if got := event.Alternatives[0].Text; got != "fallback" {
+		t.Fatalf("recognized text = %q, want fallback", got)
+	}
+	select {
+	case <-primary.started:
+	default:
+		t.Fatal("primary recognize was not attempted")
+	}
+	if !primary.wasCanceled() {
+		t.Fatal("primary recognize context was not canceled after attempt timeout")
+	}
+	if adapter.isAvailable(0) {
+		t.Fatal("primary provider is still available after timed-out attempt")
+	}
+}
+
 func TestFallbackAdapterReturnsAllFailedErrorWhenProvidersExhausted(t *testing.T) {
 	primaryErr := errors.New("primary recognize failed")
 	fallbackErr := errors.New("fallback recognize failed")
@@ -789,6 +890,46 @@ func TestFallbackAdapterRecoverySurvivesCallerContextCancellation(t *testing.T) 
 	}
 	if got := event.Alternatives[0].Text; got != "primary" {
 		t.Fatalf("second recognized text = %q, want recovered primary", got)
+	}
+}
+
+func TestFallbackAdapterCloseCancelsRecognizeRecovery(t *testing.T) {
+	primary := &closeCancelRecoverySTT{
+		recoveryStarted:  make(chan struct{}, 1),
+		recoveryCanceled: make(chan struct{}, 1),
+	}
+	fallback := &metadataSTT{
+		label:        "fallback",
+		capabilities: STTCapabilities{Streaming: true},
+		recognizeResult: &SpeechEvent{
+			Type:         SpeechEventFinalTranscript,
+			Alternatives: []SpeechData{{Text: "fallback"}},
+		},
+	}
+	adapter := NewFallbackAdapterWithOptions([]STT{primary, fallback}, FallbackAdapterOptions{
+		MaxRetryPerSTT: 0,
+	})
+
+	event, err := adapter.Recognize(context.Background(), nil, "en")
+	if err != nil {
+		t.Fatalf("Recognize returned error: %v", err)
+	}
+	if got := event.Alternatives[0].Text; got != "fallback" {
+		t.Fatalf("recognized text = %q, want fallback", got)
+	}
+
+	select {
+	case <-primary.recoveryStarted:
+	case <-time.After(200 * time.Millisecond):
+		t.Fatal("timed out waiting for recovery attempt")
+	}
+	if err := adapter.Close(); err != nil {
+		t.Fatalf("Close returned error: %v", err)
+	}
+	select {
+	case <-primary.recoveryCanceled:
+	case <-time.After(200 * time.Millisecond):
+		t.Fatal("timed out waiting for recovery cancellation")
 	}
 }
 
@@ -1163,6 +1304,54 @@ func TestFallbackStreamCloseClosesRecoveringProvider(t *testing.T) {
 	close(recovery.release)
 }
 
+func TestFallbackAdapterCloseClosesStreamRecovery(t *testing.T) {
+	firstFrame := &model.AudioFrame{Data: []byte("1"), SampleRate: 16000, NumChannels: 1, SamplesPerChannel: 1}
+	primaryFailure := &blockingFailRecognizeStream{
+		err:     errors.New("primary stream failed"),
+		release: make(chan struct{}),
+	}
+	recovery := &liveRecoveryStream{
+		release: make(chan struct{}),
+		event: &SpeechEvent{
+			Type:         SpeechEventFinalTranscript,
+			Alternatives: []SpeechData{{Text: "primary recovered"}},
+		},
+	}
+	primary := &metadataSTT{
+		label:        "primary",
+		capabilities: STTCapabilities{Streaming: true},
+		streams: []RecognizeStream{
+			primaryFailure,
+			recovery,
+		},
+	}
+	fallback := &metadataSTT{
+		label:        "fallback",
+		capabilities: STTCapabilities{Streaming: true},
+		stream:       newBlockingRecognizeStream(),
+	}
+	adapter := NewFallbackAdapterWithOptions([]STT{primary, fallback}, FallbackAdapterOptions{
+		MaxRetryPerSTT: 0,
+	})
+
+	stream, err := adapter.Stream(context.Background(), "en")
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+	defer stream.Close()
+	if err := stream.PushFrame(firstFrame); err != nil {
+		t.Fatalf("PushFrame returned error: %v", err)
+	}
+	close(primaryFailure.release)
+	waitForStreamCalls(t, primary, 2)
+
+	if err := adapter.Close(); err != nil {
+		t.Fatalf("Close returned error: %v", err)
+	}
+	waitForRecoveryClosed(t, recovery)
+	close(recovery.release)
+}
+
 func TestFallbackStreamRetriesSameSTTBeforeFallback(t *testing.T) {
 	firstErr := errors.New("primary stream failed")
 	primary := &metadataSTT{
@@ -1206,6 +1395,147 @@ func TestFallbackStreamRetriesSameSTTBeforeFallback(t *testing.T) {
 	}
 	if fallback.streamCalls != 0 {
 		t.Fatalf("fallback stream calls = %d, want 0", fallback.streamCalls)
+	}
+}
+
+func TestFallbackStreamWaitsRetryIntervalBeforeSameSTTRetry(t *testing.T) {
+	firstErr := errors.New("primary stream failed")
+	primary := &metadataSTT{
+		label:        "primary",
+		capabilities: STTCapabilities{Streaming: true},
+		streams: []RecognizeStream{
+			&metadataRecognizeStream{err: firstErr},
+			&metadataRecognizeStream{events: []*SpeechEvent{{
+				Type:         SpeechEventFinalTranscript,
+				Alternatives: []SpeechData{{Text: "primary recovered"}},
+			}}},
+		},
+	}
+	adapter := NewFallbackAdapterWithOptions([]STT{primary}, FallbackAdapterOptions{
+		MaxRetryPerSTT: 1,
+		RetryInterval:  30 * time.Millisecond,
+	})
+
+	stream, err := adapter.Stream(context.Background(), "en")
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+	defer stream.Close()
+
+	startedAt := time.Now()
+	event, err := stream.Next()
+	elapsed := time.Since(startedAt)
+	if err != nil {
+		t.Fatalf("Next returned error: %v", err)
+	}
+	if got := event.Alternatives[0].Text; got != "primary recovered" {
+		t.Fatalf("stream text = %q, want primary recovered", got)
+	}
+	if elapsed < 25*time.Millisecond {
+		t.Fatalf("Next elapsed = %s, want retry interval delay", elapsed)
+	}
+}
+
+func TestFallbackStreamTimesOutBlockedProvider(t *testing.T) {
+	primaryStream := newBlockingRecognizeStream()
+	fallbackStream := &metadataRecognizeStream{events: []*SpeechEvent{{
+		Type:         SpeechEventFinalTranscript,
+		Alternatives: []SpeechData{{Text: "fallback stream"}},
+	}}}
+	primary := &metadataSTT{
+		label:        "primary",
+		capabilities: STTCapabilities{Streaming: true},
+		streams:      []RecognizeStream{primaryStream},
+	}
+	fallback := &metadataSTT{
+		label:        "fallback",
+		capabilities: STTCapabilities{Streaming: true},
+		stream:       fallbackStream,
+	}
+	adapter := NewFallbackAdapterWithOptions([]STT{primary, fallback}, FallbackAdapterOptions{
+		MaxRetryPerSTT: 0,
+		AttemptTimeout: 20 * time.Millisecond,
+	})
+
+	stream, err := adapter.Stream(context.Background(), "en")
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+	defer stream.Close()
+
+	eventCh := make(chan *SpeechEvent, 1)
+	errCh := make(chan error, 1)
+	go func() {
+		event, err := stream.Next()
+		if err != nil {
+			errCh <- err
+			return
+		}
+		eventCh <- event
+	}()
+
+	select {
+	case event := <-eventCh:
+		if got := event.Alternatives[0].Text; got != "fallback stream" {
+			t.Fatalf("stream text = %q, want fallback stream", got)
+		}
+	case err := <-errCh:
+		t.Fatalf("Next returned error: %v", err)
+	case <-time.After(200 * time.Millisecond):
+		t.Fatal("timed out waiting for fallback stream after blocked provider")
+	}
+	if primary.streamCalls != 2 {
+		t.Fatalf("primary stream calls = %d, want active attempt plus recovery attempt", primary.streamCalls)
+	}
+	if fallback.streamCalls != 1 {
+		t.Fatalf("fallback stream calls = %d, want 1", fallback.streamCalls)
+	}
+}
+
+func TestFallbackStreamTimesOutBlockedRecoveryProvider(t *testing.T) {
+	primaryFailure := &blockingFailRecognizeStream{
+		err:     errors.New("primary stream failed"),
+		release: make(chan struct{}),
+	}
+	recovery := newBlockingRecognizeStream()
+	primary := &metadataSTT{
+		label:        "primary",
+		capabilities: STTCapabilities{Streaming: true},
+		streams: []RecognizeStream{
+			primaryFailure,
+			recovery,
+		},
+	}
+	fallback := &metadataSTT{
+		label:        "fallback",
+		capabilities: STTCapabilities{Streaming: true},
+		stream:       newHeartbeatRecognizeStream(5 * time.Millisecond),
+	}
+	adapter := NewFallbackAdapterWithOptions([]STT{primary, fallback}, FallbackAdapterOptions{
+		MaxRetryPerSTT: 0,
+		AttemptTimeout: 20 * time.Millisecond,
+	})
+
+	stream, err := adapter.Stream(context.Background(), "en")
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+	defer stream.Close()
+
+	nextErr := make(chan error, 1)
+	go func() {
+		_, err := stream.Next()
+		nextErr <- err
+	}()
+
+	close(primaryFailure.release)
+	waitForStreamCalls(t, primary, 2)
+	waitForBlockingStreamClosed(t, recovery)
+	adapter.mu.Lock()
+	recovering := adapter.recoveringStream[0]
+	adapter.mu.Unlock()
+	if recovering {
+		t.Fatal("primary provider is still marked as recovering after recovery timeout")
 	}
 }
 
@@ -1486,6 +1816,83 @@ func (m *metadataSTT) Recognize(context.Context, []*model.AudioFrame, string) (*
 	return m.recognizeResult, nil
 }
 
+type blockingContextSTT struct {
+	mu           sync.Mutex
+	label        string
+	capabilities STTCapabilities
+	started      chan struct{}
+	canceled     bool
+}
+
+func (s *blockingContextSTT) Label() string {
+	return s.label
+}
+
+func (s *blockingContextSTT) Capabilities() STTCapabilities {
+	return s.capabilities
+}
+
+func (s *blockingContextSTT) Stream(context.Context, string) (RecognizeStream, error) {
+	return nil, errors.New("stream unsupported")
+}
+
+func (s *blockingContextSTT) Recognize(ctx context.Context, _ []*model.AudioFrame, _ string) (*SpeechEvent, error) {
+	select {
+	case s.started <- struct{}{}:
+	default:
+	}
+	<-ctx.Done()
+	s.mu.Lock()
+	s.canceled = true
+	s.mu.Unlock()
+	return nil, ctx.Err()
+}
+
+func (s *blockingContextSTT) wasCanceled() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.canceled
+}
+
+type closeCancelRecoverySTT struct {
+	mu               sync.Mutex
+	calls            int
+	recoveryStarted  chan struct{}
+	recoveryCanceled chan struct{}
+}
+
+func (s *closeCancelRecoverySTT) Label() string {
+	return "close-cancel-primary"
+}
+
+func (s *closeCancelRecoverySTT) Capabilities() STTCapabilities {
+	return STTCapabilities{Streaming: true}
+}
+
+func (s *closeCancelRecoverySTT) Stream(context.Context, string) (RecognizeStream, error) {
+	return nil, errors.New("stream unsupported")
+}
+
+func (s *closeCancelRecoverySTT) Recognize(ctx context.Context, _ []*model.AudioFrame, _ string) (*SpeechEvent, error) {
+	s.mu.Lock()
+	s.calls++
+	call := s.calls
+	s.mu.Unlock()
+	if call == 1 {
+		return nil, errors.New("primary failed")
+	}
+	select {
+	case s.recoveryStarted <- struct{}{}:
+	default:
+	}
+	<-ctx.Done()
+	select {
+	case s.recoveryCanceled <- struct{}{}:
+	default:
+	}
+	return nil, ctx.Err()
+}
+
 func waitForRecognizeCalls(t *testing.T, stt *metadataSTT, want int) {
 	t.Helper()
 	deadline := time.After(200 * time.Millisecond)
@@ -1746,6 +2153,45 @@ func (s *blockingRecognizeStream) Next() (*SpeechEvent, error) {
 	return nil, io.EOF
 }
 
+type heartbeatRecognizeStream struct {
+	interval  time.Duration
+	closeOnce sync.Once
+	closeCh   chan struct{}
+}
+
+func newHeartbeatRecognizeStream(interval time.Duration) *heartbeatRecognizeStream {
+	return &heartbeatRecognizeStream{interval: interval, closeCh: make(chan struct{})}
+}
+
+func (s *heartbeatRecognizeStream) PushFrame(*model.AudioFrame) error {
+	return nil
+}
+
+func (s *heartbeatRecognizeStream) Flush() error {
+	return nil
+}
+
+func (s *heartbeatRecognizeStream) Close() error {
+	s.closeOnce.Do(func() {
+		close(s.closeCh)
+	})
+	return nil
+}
+
+func (s *heartbeatRecognizeStream) Next() (*SpeechEvent, error) {
+	timer := time.NewTimer(s.interval)
+	defer timer.Stop()
+	select {
+	case <-timer.C:
+		return &SpeechEvent{
+			Type:         SpeechEventFinalTranscript,
+			Alternatives: []SpeechData{{Text: "heartbeat"}},
+		}, nil
+	case <-s.closeCh:
+		return nil, io.EOF
+	}
+}
+
 type liveRecoveryStream struct {
 	mu      sync.Mutex
 	calls   []string
@@ -1860,5 +2306,14 @@ func waitForRecoveryClosed(t *testing.T, stream *liveRecoveryStream) {
 			t.Fatal("recovery stream was not closed")
 		case <-ticker.C:
 		}
+	}
+}
+
+func waitForBlockingStreamClosed(t *testing.T, stream *blockingRecognizeStream) {
+	t.Helper()
+	select {
+	case <-stream.closeCh:
+	case <-time.After(200 * time.Millisecond):
+		t.Fatal("blocking stream was not closed")
 	}
 }

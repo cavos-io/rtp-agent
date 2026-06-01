@@ -17,16 +17,35 @@ type FallbackAdapter struct {
 	stts                 []STT
 	capabilities         STTCapabilities
 	maxRetryPerSTT       int
+	attemptTimeout       time.Duration
+	retryInterval        time.Duration
 	mu                   sync.Mutex
 	available            []bool
 	recovering           []bool
+	recoveryCancels      []context.CancelFunc
 	recoveringStream     []bool
+	recoveryStreams      []RecognizeStream
 	availabilityHandlers []availabilityHandlerSubscription
 	nextAvailabilityID   uint64
 }
 
+const (
+	defaultFallbackAttemptTimeout = 10 * time.Second
+	defaultFallbackRetryInterval  = 5 * time.Second
+)
+
 type FallbackAdapterOptions struct {
 	MaxRetryPerSTT int
+	AttemptTimeout time.Duration
+	RetryInterval  time.Duration
+}
+
+func DefaultFallbackAdapterOptions() FallbackAdapterOptions {
+	return FallbackAdapterOptions{
+		MaxRetryPerSTT: 1,
+		AttemptTimeout: defaultFallbackAttemptTimeout,
+		RetryInterval:  defaultFallbackRetryInterval,
+	}
 }
 
 type AvailabilityChangedEvent struct {
@@ -60,7 +79,7 @@ func (e *FallbackAllFailedError) Unwrap() error {
 }
 
 func NewFallbackAdapter(stts []STT) *FallbackAdapter {
-	return NewFallbackAdapterWithOptions(stts, FallbackAdapterOptions{MaxRetryPerSTT: 1})
+	return NewFallbackAdapterWithOptions(stts, DefaultFallbackAdapterOptions())
 }
 
 func NewFallbackAdapterWithOptions(stts []STT, options FallbackAdapterOptions) *FallbackAdapter {
@@ -68,7 +87,7 @@ func NewFallbackAdapterWithOptions(stts []STT, options FallbackAdapterOptions) *
 }
 
 func NewFallbackAdapterWithVAD(stts []STT, vad vad.VAD) *FallbackAdapter {
-	return newFallbackAdapter(stts, vad, FallbackAdapterOptions{MaxRetryPerSTT: 1})
+	return newFallbackAdapter(stts, vad, DefaultFallbackAdapterOptions())
 }
 
 func NewFallbackAdapterWithVADAndOptions(stts []STT, vad vad.VAD, options FallbackAdapterOptions) *FallbackAdapter {
@@ -78,6 +97,9 @@ func NewFallbackAdapterWithVADAndOptions(stts []STT, vad vad.VAD, options Fallba
 func newFallbackAdapter(stts []STT, vad vad.VAD, options FallbackAdapterOptions) *FallbackAdapter {
 	if len(stts) == 0 {
 		panic("FallbackAdapter requires at least one STT")
+	}
+	if options.AttemptTimeout <= 0 {
+		options.AttemptTimeout = defaultFallbackAttemptTimeout
 	}
 
 	wrapped := make([]STT, len(stts))
@@ -115,9 +137,13 @@ func newFallbackAdapter(stts []STT, vad vad.VAD, options FallbackAdapterOptions)
 		stts:             wrapped,
 		capabilities:     capabilities,
 		maxRetryPerSTT:   options.MaxRetryPerSTT,
+		attemptTimeout:   options.AttemptTimeout,
+		retryInterval:    options.RetryInterval,
 		available:        initialAvailability(len(wrapped)),
 		recovering:       make([]bool, len(wrapped)),
+		recoveryCancels:  make([]context.CancelFunc, len(wrapped)),
 		recoveringStream: make([]bool, len(wrapped)),
+		recoveryStreams:  make([]RecognizeStream, len(wrapped)),
 	}
 }
 
@@ -147,6 +173,27 @@ func (f *FallbackAdapter) Prewarm() {
 
 func (f *FallbackAdapter) Capabilities() STTCapabilities {
 	return f.capabilities
+}
+
+func (f *FallbackAdapter) Close() error {
+	f.mu.Lock()
+	cancels := append([]context.CancelFunc(nil), f.recoveryCancels...)
+	for i := range f.recoveryCancels {
+		f.recoveryCancels[i] = nil
+	}
+	streams := append([]RecognizeStream(nil), f.recoveryStreams...)
+	for i := range f.recoveryStreams {
+		f.recoveryStreams[i] = nil
+	}
+	f.mu.Unlock()
+
+	for _, cancel := range cancels {
+		if cancel != nil {
+			cancel()
+		}
+	}
+	closeStreams(streams)
+	return nil
 }
 
 func (f *FallbackAdapter) OnAvailabilityChanged(handler AvailabilityChangedHandler) func() {
@@ -193,7 +240,7 @@ func (f *FallbackAdapter) Recognize(ctx context.Context, frames []*model.AudioFr
 			logger.Logger.Infow("Falling back to next STT", "stt", stt.Label(), "previous_error", lastErr)
 		}
 		for attempt := 0; attempt <= f.maxRetryPerSTT; attempt++ {
-			res, err := stt.Recognize(ctx, frames, language)
+			res, err := f.recognizeAttempt(ctx, stt, frames, language)
 			if err == nil {
 				f.setAvailable(i, true)
 				return res, nil
@@ -201,6 +248,10 @@ func (f *FallbackAdapter) Recognize(ctx context.Context, frames []*model.AudioFr
 			lastErr = err
 			if attempt < f.maxRetryPerSTT {
 				logger.Logger.Warnw("Retrying STT recognize", err, "stt", stt.Label(), "attempt", attempt+1)
+				if err := f.waitRetryInterval(ctx); err != nil {
+					lastErr = err
+					break
+				}
 			}
 		}
 		f.setAvailable(i, false)
@@ -226,20 +277,61 @@ func (f *FallbackAdapter) tryRecover(ctx context.Context, index int, frames []*m
 	if !f.markRecovering(index) {
 		return
 	}
-	recoveryCtx := context.WithoutCancel(ctx)
+	recoveryCtx, cancel := context.WithCancel(context.WithoutCancel(ctx))
+	f.setRecoveryCancel(index, cancel)
 
 	go func() {
+		defer cancel()
+		defer f.setRecoveryCancel(index, nil)
 		defer f.clearRecovering(index)
 
 		stt := f.stts[index]
 		for attempt := 0; attempt <= f.maxRetryPerSTT; attempt++ {
-			if _, err := stt.Recognize(recoveryCtx, frames, language); err == nil {
+			if _, err := f.recognizeAttempt(recoveryCtx, stt, frames, language); err == nil {
 				f.setAvailable(index, true)
 				logger.Logger.Infow("Recovered STT provider", "stt", stt.Label())
 				return
 			}
+			if attempt < f.maxRetryPerSTT {
+				if err := f.waitRetryInterval(recoveryCtx); err != nil {
+					return
+				}
+			}
 		}
 	}()
+}
+
+func (f *FallbackAdapter) setRecoveryCancel(index int, cancel context.CancelFunc) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if index < 0 || index >= len(f.recoveryCancels) {
+		return
+	}
+	f.recoveryCancels[index] = cancel
+}
+
+func (f *FallbackAdapter) waitRetryInterval(ctx context.Context) error {
+	if f.retryInterval <= 0 {
+		return nil
+	}
+	timer := time.NewTimer(f.retryInterval)
+	defer timer.Stop()
+	select {
+	case <-timer.C:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+func (f *FallbackAdapter) recognizeAttempt(ctx context.Context, stt STT, frames []*model.AudioFrame, language string) (*SpeechEvent, error) {
+	attemptCtx := ctx
+	var cancel context.CancelFunc
+	if f.attemptTimeout > 0 {
+		attemptCtx, cancel = context.WithTimeout(ctx, f.attemptTimeout)
+		defer cancel()
+	}
+	return stt.Recognize(attemptCtx, frames, language)
 }
 
 func (f *FallbackAdapter) allUnavailable() bool {
@@ -397,6 +489,10 @@ func (s *fallbackRecognizeStream) tryStartStream(index int) error {
 				lastErr = err
 				if s.canRetrySTT(i) {
 					s.retries[i]++
+					if err := s.adapter.waitRetryInterval(s.ctx); err != nil {
+						lastErr = err
+						break
+					}
 					continue
 				}
 				s.adapter.setAvailable(i, false)
@@ -409,6 +505,10 @@ func (s *fallbackRecognizeStream) tryStartStream(index int) error {
 				lastErr = err
 				if s.canRetrySTT(i) {
 					s.retries[i]++
+					if err := s.adapter.waitRetryInterval(s.ctx); err != nil {
+						lastErr = err
+						break
+					}
 					continue
 				}
 				s.adapter.setAvailable(i, false)
@@ -513,7 +613,7 @@ func (s *fallbackRecognizeStream) monitorStream() {
 		stream := s.activeStream
 		s.mu.Unlock()
 
-		ev, err := stream.Next()
+		ev, err := s.nextActiveStreamEvent(stream)
 		if err != nil {
 			if errors.Is(err, io.EOF) {
 				_ = stream.Close()
@@ -536,6 +636,15 @@ func (s *fallbackRecognizeStream) monitorStream() {
 			if s.canRetrySTT(s.activeIndex) {
 				s.retries[s.activeIndex]++
 				nextIndex = s.activeIndex
+				if retryErr := s.adapter.waitRetryInterval(s.ctx); retryErr != nil {
+					recoveries := s.detachRecoveriesLocked()
+					s.closed = true
+					s.terminalErr = retryErr
+					close(s.closeCh)
+					s.mu.Unlock()
+					closeStreams(recoveries)
+					return
+				}
 			} else {
 				s.adapter.setAvailable(s.activeIndex, false)
 				s.tryRecoverStream(s.activeIndex)
@@ -567,6 +676,35 @@ func (s *fallbackRecognizeStream) monitorStream() {
 		case <-s.closeCh:
 			return
 		}
+	}
+}
+
+func (s *fallbackRecognizeStream) nextActiveStreamEvent(stream RecognizeStream) (*SpeechEvent, error) {
+	if s.adapter.attemptTimeout <= 0 {
+		return stream.Next()
+	}
+
+	type nextResult struct {
+		event *SpeechEvent
+		err   error
+	}
+	resultCh := make(chan nextResult, 1)
+	go func() {
+		event, err := stream.Next()
+		resultCh <- nextResult{event: event, err: err}
+	}()
+
+	timer := time.NewTimer(s.adapter.attemptTimeout)
+	defer timer.Stop()
+
+	select {
+	case result := <-resultCh:
+		return result.event, result.err
+	case <-timer.C:
+		_ = stream.Close()
+		return nil, context.DeadlineExceeded
+	case <-s.closeCh:
+		return nil, context.Canceled
 	}
 }
 
@@ -602,15 +740,17 @@ func (s *fallbackRecognizeStream) tryRecoverStream(index int) {
 		return
 	}
 
+	s.adapter.setRecoveryStream(index, stream)
 	s.recoveries = append(s.recoveries, stream)
 
 	go func() {
 		defer s.adapter.clearRecoveringStream(index)
+		defer s.adapter.setRecoveryStream(index, nil)
 		defer stream.Close()
 		defer s.removeRecovery(stream)
 
 		for {
-			ev, err := stream.Next()
+			ev, err := s.nextRecoveryStreamEvent(stream)
 			if err != nil {
 				return
 			}
@@ -622,6 +762,42 @@ func (s *fallbackRecognizeStream) tryRecoverStream(index int) {
 			return
 		}
 	}()
+}
+
+func (s *fallbackRecognizeStream) nextRecoveryStreamEvent(stream RecognizeStream) (*SpeechEvent, error) {
+	if s.adapter.attemptTimeout <= 0 {
+		return stream.Next()
+	}
+
+	type nextResult struct {
+		event *SpeechEvent
+		err   error
+	}
+	resultCh := make(chan nextResult, 1)
+	go func() {
+		event, err := stream.Next()
+		resultCh <- nextResult{event: event, err: err}
+	}()
+
+	timer := time.NewTimer(s.adapter.attemptTimeout)
+	defer timer.Stop()
+
+	select {
+	case result := <-resultCh:
+		return result.event, result.err
+	case <-timer.C:
+		_ = stream.Close()
+		return nil, context.DeadlineExceeded
+	}
+}
+
+func (f *FallbackAdapter) setRecoveryStream(index int, stream RecognizeStream) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if index < 0 || index >= len(f.recoveryStreams) {
+		return
+	}
+	f.recoveryStreams[index] = stream
 }
 
 func (s *fallbackRecognizeStream) removeRecovery(stream RecognizeStream) {
@@ -737,6 +913,9 @@ func (s *fallbackRecognizeStream) detachRecoveriesLocked() []RecognizeStream {
 
 func closeStreams(streams []RecognizeStream) {
 	for _, stream := range streams {
+		if stream == nil {
+			continue
+		}
 		_ = stream.Close()
 	}
 }
