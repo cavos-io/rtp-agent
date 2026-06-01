@@ -103,7 +103,7 @@ func goTypeToJSONSchema(t reflect.Type, description string) map[string]interface
 	case reflect.Struct:
 		return GenerateStrictJSONSchema(t)
 	case reflect.Map:
-		schema["additionalProperties"] = true
+		schema["additionalProperties"] = goTypeToJSONSchema(t.Elem(), "")
 	}
 
 	return schema
