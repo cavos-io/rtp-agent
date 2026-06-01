@@ -207,6 +207,10 @@ func (va *PipelineAgent) generateReply() {
 			va.chatCtx.AddMessage(args)
 		}
 
+		if len(genData.GeneratedFunctions) > 0 {
+			session.UpdateAgentState(AgentStateThinking)
+		}
+
 		// Wait for tool executions to complete and collect results
 		var executedTools bool
 		for toolOut := range toolOutCh {
