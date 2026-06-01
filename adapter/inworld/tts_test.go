@@ -1,8 +1,8 @@
 package inworld
 
 import (
+	"bytes"
 	"context"
-	"encoding/base64"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -14,17 +14,17 @@ import (
 func TestInworldTTSDefaultsMatchReference(t *testing.T) {
 	provider := NewInworldTTS("test-key", "")
 
-	if provider.baseURL != "https://api.inworld.ai" {
+	if provider.baseURL != "https://api.inworld.ai/" {
 		t.Fatalf("base URL = %q, want reference base URL", provider.baseURL)
 	}
-	if provider.wsURL != "wss://api.inworld.ai" {
+	if provider.wsURL != "wss://api.inworld.ai/" {
 		t.Fatalf("websocket URL = %q, want reference websocket URL", provider.wsURL)
+	}
+	if provider.voice != "Ashley" {
+		t.Fatalf("voice = %q, want Ashley", provider.voice)
 	}
 	if provider.model != "inworld-tts-1.5-max" {
 		t.Fatalf("model = %q, want reference model", provider.model)
-	}
-	if provider.voice != "Ashley" {
-		t.Fatalf("voice = %q, want reference voice", provider.voice)
 	}
 	if provider.encoding != "PCM" {
 		t.Fatalf("encoding = %q, want PCM", provider.encoding)
@@ -32,23 +32,57 @@ func TestInworldTTSDefaultsMatchReference(t *testing.T) {
 	if provider.bitRate != 64000 {
 		t.Fatalf("bit rate = %d, want 64000", provider.bitRate)
 	}
-	if provider.SampleRate() != 24000 {
-		t.Fatalf("sample rate = %d, want 24000", provider.SampleRate())
+	if provider.sampleRate != 24000 {
+		t.Fatalf("sample rate = %d, want 24000", provider.sampleRate)
 	}
 	if !provider.Capabilities().Streaming {
-		t.Fatal("streaming = false, want reference streaming support")
+		t.Fatal("streaming = false, want true")
+	}
+	if provider.Capabilities().AlignedTranscript {
+		t.Fatal("aligned transcript = true, want false without timestamp type")
 	}
 }
 
-func TestInworldTTSSynthesizeRequestMatchesReference(t *testing.T) {
+func TestInworldTTSOptionsMatchReference(t *testing.T) {
 	provider := NewInworldTTS("test-key", "",
 		WithInworldTTSBaseURL("https://inworld.example/"),
+		WithInworldTTSWebsocketURL("wss://inworld.example/"),
+		WithInworldTTSVoice("Ava"),
 		WithInworldTTSModel("inworld-tts-2"),
 		WithInworldTTSEncoding("MP3"),
-		WithInworldTTSBitRate(96000),
+		WithInworldTTSBitRate(128000),
 		WithInworldTTSSampleRate(44100),
 		WithInworldTTSSpeakingRate(1.2),
-		WithInworldTTSTemperature(0.7),
+		WithInworldTTSTemperature(0.8),
+		WithInworldTTSLanguage("en-US"),
+		WithInworldTTSTimestampType("WORD"),
+		WithInworldTTSTextNormalization(true),
+		WithInworldTTSDeliveryMode("BALANCED"),
+		WithInworldTTSTimestampTransportStrategy("SYNC"),
+		WithInworldTTSBufferCharThreshold(120),
+		WithInworldTTSMaxBufferDelayMS(500),
+	)
+
+	if provider.baseURL != "https://inworld.example/" || provider.wsURL != "wss://inworld.example/" {
+		t.Fatalf("provider URLs = %q %q, want custom URLs", provider.baseURL, provider.wsURL)
+	}
+	if provider.voice != "Ava" || provider.model != "inworld-tts-2" || provider.encoding != "MP3" {
+		t.Fatalf("provider = %+v, want custom voice/model/encoding", provider)
+	}
+	if !provider.Capabilities().AlignedTranscript {
+		t.Fatal("aligned transcript = false, want true with timestamp type")
+	}
+}
+
+func TestInworldTTSSynthesizeRequestUsesReferencePayload(t *testing.T) {
+	provider := NewInworldTTS("test-key", "",
+		WithInworldTTSVoice("Ava"),
+		WithInworldTTSModel("inworld-tts-2"),
+		WithInworldTTSEncoding("MP3"),
+		WithInworldTTSLanguage("en-US"),
+		WithInworldTTSTimestampType("WORD"),
+		WithInworldTTSTextNormalization(false),
+		WithInworldTTSDeliveryMode("STABLE"),
 	)
 
 	req, err := buildInworldTTSRequest(context.Background(), provider, "hello")
@@ -58,11 +92,14 @@ func TestInworldTTSSynthesizeRequestMatchesReference(t *testing.T) {
 	if req.Method != http.MethodPost {
 		t.Fatalf("method = %q, want POST", req.Method)
 	}
-	if req.URL.String() != "https://inworld.example/tts/v1/voice:stream" {
-		t.Fatalf("url = %q, want reference endpoint", req.URL.String())
+	if req.URL.String() != "https://api.inworld.ai/tts/v1/voice:stream" {
+		t.Fatalf("url = %q, want reference stream endpoint", req.URL.String())
 	}
 	if got := req.Header.Get("Authorization"); got != "Basic test-key" {
-		t.Fatalf("authorization = %q, want basic token", got)
+		t.Fatalf("Authorization = %q, want Basic token", got)
+	}
+	if got := req.Header.Get("X-User-Agent"); got != "livekit-agents-py/1.5.15" {
+		t.Fatalf("X-User-Agent = %q, want reference user agent", got)
 	}
 
 	var payload map[string]any
@@ -70,79 +107,146 @@ func TestInworldTTSSynthesizeRequestMatchesReference(t *testing.T) {
 		t.Fatalf("decode body: %v", err)
 	}
 	assertInworldPayload(t, payload, "text", "hello")
-	assertInworldPayload(t, payload, "voiceId", "Ashley")
+	assertInworldPayload(t, payload, "voiceId", "Ava")
 	assertInworldPayload(t, payload, "modelId", "inworld-tts-2")
+	assertInworldPayload(t, payload, "language", "en-US")
+	assertInworldPayload(t, payload, "timestampType", "WORD")
+	assertInworldPayload(t, payload, "applyTextNormalization", "OFF")
+	assertInworldPayload(t, payload, "deliveryMode", "STABLE")
+	assertInworldPayload(t, payload, "timestampTransportStrategy", "ASYNC")
 	audioConfig := payload["audioConfig"].(map[string]any)
 	assertInworldPayload(t, audioConfig, "audioEncoding", "MP3")
-	if audioConfig["sampleRateHertz"] != float64(44100) || audioConfig["bitrate"] != float64(96000) {
-		t.Fatalf("audio config = %+v, want sample rate and bitrate", audioConfig)
+	if audioConfig["sampleRateHertz"] != float64(24000) {
+		t.Fatalf("sampleRateHertz = %#v, want 24000", audioConfig["sampleRateHertz"])
+	}
+}
+
+func TestInworldTTSWebsocketURLAndHeadersMatchReference(t *testing.T) {
+	provider := NewInworldTTS("test-key", "", WithInworldTTSWebsocketURL("wss://inworld.example/"))
+
+	if got := buildInworldTTSWebsocketURL(provider); got != "wss://inworld.example/tts/v1/voice:streamBidirectional" {
+		t.Fatalf("websocket URL = %q, want bidirectional endpoint", got)
+	}
+	headers := buildInworldTTSWebsocketHeaders(provider)
+	if got := headers.Get("Authorization"); got != "Basic test-key" {
+		t.Fatalf("Authorization = %q, want Basic token", got)
+	}
+	if got := headers.Get("X-User-Agent"); got != "livekit-agents-py/1.5.15" {
+		t.Fatalf("X-User-Agent = %q, want reference user agent", got)
 	}
 }
 
 func TestInworldTTSWebsocketMessagesMatchReference(t *testing.T) {
-	provider := NewInworldTTS("test-key", "", WithInworldTTSWebsocketURL("wss://inworld.example/"))
+	provider := NewInworldTTS("test-key", "",
+		WithInworldTTSVoice("Ava"),
+		WithInworldTTSModel("inworld-tts-2"),
+		WithInworldTTSLanguage("en-US"),
+		WithInworldTTSBufferCharThreshold(120),
+		WithInworldTTSMaxBufferDelayMS(500),
+	)
 
-	if got := buildInworldTTSWebsocketURL(provider); got != "wss://inworld.example/tts/v1/voice:streamBidirectional" {
-		t.Fatalf("websocket URL = %q, want reference endpoint", got)
-	}
-
-	createPayload, err := buildInworldTTSCreateContextMessage(provider, "ctx-1")
+	createMessage, err := buildInworldTTSCreateMessage(provider, "ctx-1")
 	if err != nil {
 		t.Fatalf("build create message: %v", err)
 	}
-	var create map[string]any
-	if err := json.Unmarshal(createPayload, &create); err != nil {
+	var createPayload map[string]any
+	if err := json.Unmarshal(createMessage, &createPayload); err != nil {
 		t.Fatalf("decode create message: %v", err)
 	}
-	if create["contextId"] != "ctx-1" {
-		t.Fatalf("contextId = %q, want ctx-1", create["contextId"])
+	assertInworldPayload(t, createPayload, "contextId", "ctx-1")
+	create := createPayload["create"].(map[string]any)
+	assertInworldPayload(t, create, "voiceId", "Ava")
+	assertInworldPayload(t, create, "modelId", "inworld-tts-2")
+	assertInworldPayload(t, create, "language", "en-US")
+	if create["autoMode"] != true {
+		t.Fatalf("autoMode = %#v, want true", create["autoMode"])
 	}
-	createBody := create["create"].(map[string]any)
-	assertInworldPayload(t, createBody, "voiceId", "Ashley")
-	assertInworldPayload(t, createBody, "modelId", "inworld-tts-1.5-max")
-	if createBody["autoMode"] != true {
-		t.Fatalf("autoMode = %#v, want true", createBody["autoMode"])
+	if create["bufferCharThreshold"] != float64(120) || create["maxBufferDelayMs"] != float64(500) {
+		t.Fatalf("buffer settings = %#v/%#v, want 120/500", create["bufferCharThreshold"], create["maxBufferDelayMs"])
 	}
 
-	textPayload, err := buildInworldTTSSendTextMessage("ctx-1", "hello")
+	textMessage, err := buildInworldTTSSendTextMessage("ctx-1", "hello")
 	if err != nil {
 		t.Fatalf("build text message: %v", err)
 	}
-	var text map[string]any
-	if err := json.Unmarshal(textPayload, &text); err != nil {
+	var textPayload map[string]any
+	if err := json.Unmarshal(textMessage, &textPayload); err != nil {
 		t.Fatalf("decode text message: %v", err)
 	}
-	assertInworldPayload(t, text["send_text"].(map[string]any), "text", "hello")
+	assertInworldPayload(t, textPayload, "contextId", "ctx-1")
+	sendText := textPayload["send_text"].(map[string]any)
+	assertInworldPayload(t, sendText, "text", "hello")
 
-	flushPayload, err := buildInworldTTSFlushContextMessage("ctx-1")
+	flushMessage, err := buildInworldTTSFlushMessage("ctx-1")
 	if err != nil {
 		t.Fatalf("build flush message: %v", err)
 	}
-	var flush map[string]any
-	if err := json.Unmarshal(flushPayload, &flush); err != nil {
+	var flushPayload map[string]any
+	if err := json.Unmarshal(flushMessage, &flushPayload); err != nil {
 		t.Fatalf("decode flush message: %v", err)
 	}
-	if _, ok := flush["flush_context"]; !ok {
-		t.Fatalf("flush message = %+v, want flush_context", flush)
+	if _, ok := flushPayload["flush_context"].(map[string]any); !ok {
+		t.Fatalf("flush_context missing from %#v", flushPayload)
+	}
+
+	closeMessage, err := buildInworldTTSCloseMessage("ctx-1")
+	if err != nil {
+		t.Fatalf("build close message: %v", err)
+	}
+	var closePayload map[string]any
+	if err := json.Unmarshal(closeMessage, &closePayload); err != nil {
+		t.Fatalf("decode close message: %v", err)
+	}
+	if _, ok := closePayload["close_context"].(map[string]any); !ok {
+		t.Fatalf("close_context missing from %#v", closePayload)
 	}
 }
 
-func TestInworldTTSAudioFromWebsocketMessage(t *testing.T) {
-	encoded := base64.StdEncoding.EncodeToString([]byte{0x01, 0x02})
-	audio, done, err := inworldAudioFromWebsocketMessage([]byte(`{"result":{"contextId":"ctx-1","audioChunk":{"audioContent":"`+encoded+`"}}}`), 24000)
+func TestInworldTTSAudioFromReferenceResponses(t *testing.T) {
+	audio, done, err := inworldTTSAudioFromResponseLine([]byte(`{"result":{"audioContent":"AQIDBA=="}}`), 24000)
 	if err != nil {
-		t.Fatalf("audio message: %v", err)
+		t.Fatalf("audio from response line: %v", err)
 	}
-	if done || string(audio.Frame.Data) != "\x01\x02" || audio.SegmentID != "ctx-1" {
-		t.Fatalf("audio=%+v done=%v, want decoded segment audio", audio, done)
+	if done {
+		t.Fatal("done = true for audio response")
+	}
+	if audio == nil || string(audio.Frame.Data) != string([]byte{1, 2, 3, 4}) {
+		t.Fatalf("audio = %+v, want decoded frame", audio)
 	}
 
-	audio, done, err = inworldAudioFromWebsocketMessage([]byte(`{"result":{"contextId":"ctx-1","contextClosed":{}}}`), 24000)
+	wsAudio, done, err := inworldTTSAudioFromWebsocketMessage([]byte(`{"result":{"contextId":"ctx-1","audioChunk":{"audioContent":"AQIDBA=="}}}`), "ctx-1", 24000)
+	if err != nil {
+		t.Fatalf("audio from websocket message: %v", err)
+	}
+	if done || wsAudio == nil || string(wsAudio.Frame.Data) != string([]byte{1, 2, 3, 4}) || wsAudio.SegmentID != "ctx-1" {
+		t.Fatalf("wsAudio=%+v done=%v, want decoded segment audio", wsAudio, done)
+	}
+
+	_, done, err = inworldTTSAudioFromWebsocketMessage([]byte(`{"result":{"contextId":"ctx-1","contextClosed":{}}}`), "ctx-1", 24000)
 	if err != nil {
 		t.Fatalf("context closed message: %v", err)
 	}
-	if audio != nil || !done {
-		t.Fatalf("audio=%+v done=%v, want context closed marker", audio, done)
+	if !done {
+		t.Fatal("done = false, want true for contextClosed")
+	}
+
+	if _, _, err := inworldTTSAudioFromResponseLine([]byte(`{"error":{"code":3,"message":"bad text"}}`), 24000); err == nil {
+		t.Fatal("error response returned nil error, want API error")
+	}
+}
+
+func TestInworldTTSChunkedStreamDecodesReferenceJSONLines(t *testing.T) {
+	stream := &inworldTTSChunkedStream{
+		resp:       &http.Response{Body: io.NopCloser(bytes.NewReader([]byte("{\"result\":{\"audioContent\":\"AQI=\"}}\n")))},
+		sampleRate: 24000,
+	}
+
+	audio, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next returned error: %v", err)
+	}
+	if string(audio.Frame.Data) != string([]byte{1, 2}) {
+		t.Fatalf("audio data = %#v, want decoded base64 audio", audio.Frame.Data)
 	}
 }
 
@@ -157,13 +261,11 @@ func TestInworldTTSStreamBuffersTextUntilFlush(t *testing.T) {
 	if got := stream.pendingText.String(); got != "hello world" {
 		t.Fatalf("pending text = %q, want concatenated text", got)
 	}
-}
-
-func TestInworldTTSEmptyStreamNextEOF(t *testing.T) {
-	stream := &inworldTTSWebsocketChunkedStream{sampleRate: 24000}
-	_, err := stream.Next()
-	if err != io.EOF {
-		t.Fatalf("Next err = %v, want EOF without websocket", err)
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("flush without websocket: %v", err)
+	}
+	if got := stream.pendingText.String(); got != "" {
+		t.Fatalf("pending text = %q, want reset after flush", got)
 	}
 }
 
