@@ -50,6 +50,7 @@ type streamAdapterWrapper struct {
 	mu          sync.Mutex
 	closed      bool
 	inputClosed bool
+	terminalErr error
 	inputEnded  bool
 	frameBuffer []*model.AudioFrame
 	vadStream   vad.VADStream
@@ -197,6 +198,12 @@ func (w *streamAdapterWrapper) run() {
 }
 
 func (w *streamAdapterWrapper) sendErr(err error) {
+	if err == nil {
+		return
+	}
+	w.mu.Lock()
+	w.terminalErr = err
+	w.mu.Unlock()
 	select {
 	case w.errCh <- err:
 	default:
@@ -341,8 +348,20 @@ func (w *streamAdapterWrapper) Next() (*SpeechEvent, error) {
 		if ok {
 			return ev, nil
 		}
+		w.mu.Lock()
+		err := w.terminalErr
+		w.mu.Unlock()
+		if err != nil {
+			return nil, err
+		}
 		return nil, context.Canceled
 	case <-w.ctx.Done():
+		w.mu.Lock()
+		err := w.terminalErr
+		w.mu.Unlock()
+		if err != nil {
+			return nil, err
+		}
 		return nil, w.ctx.Err()
 	}
 }
