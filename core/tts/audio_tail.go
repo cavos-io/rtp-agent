@@ -3,7 +3,7 @@ package tts
 import (
 	"fmt"
 
-	"github.com/cavos-io/rtp-agent/model"
+	"github.com/cavos-io/rtp-agent/core/audio/model"
 )
 
 const finalTailMillis = 10

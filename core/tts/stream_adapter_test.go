@@ -69,6 +69,17 @@ func TestStreamAdapterForwardsModelProvider(t *testing.T) {
 	}
 }
 
+func TestStreamAdapterForwardsPrewarm(t *testing.T) {
+	provider := &fakeStreamAdapterTTS{}
+	adapter := NewStreamAdapter(provider)
+
+	adapter.Prewarm()
+
+	if provider.prewarmCalls != 1 {
+		t.Fatalf("provider prewarm calls = %d, want 1", provider.prewarmCalls)
+	}
+}
+
 func TestStreamAdapterPreservesInternalNewlinesForSynthesis(t *testing.T) {
 	provider := &fakeStreamAdapterTTS{}
 	stream, err := NewStreamAdapter(provider).Stream(context.Background())
@@ -611,6 +622,7 @@ type fakeStreamAdapterTTS struct {
 	texts         []string
 	model         string
 	provider      string
+	prewarmCalls  int
 	synthesizeErr error
 	streamErr     error
 	events        []*SynthesizedAudio
@@ -628,6 +640,10 @@ func (f *fakeStreamAdapterTTS) Model() string {
 
 func (f *fakeStreamAdapterTTS) Provider() string {
 	return f.provider
+}
+
+func (f *fakeStreamAdapterTTS) Prewarm() {
+	f.prewarmCalls++
 }
 
 func (f *fakeStreamAdapterTTS) Capabilities() TTSCapabilities {
