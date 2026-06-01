@@ -27,6 +27,8 @@ type SimpleVADOptions struct {
 	MaxBufferedSpeechDuration float64
 	DeactivationThreshold     float64
 	UpdateInterval            float64
+	SampleRate                uint32
+	WindowDuration            float64
 }
 
 func NewSimpleVAD(threshold float64) *SimpleVAD {
@@ -98,10 +100,10 @@ func (v *SimpleVAD) Stream(ctx context.Context) (VADStream, error) {
 	options := v.options
 	v.mu.RUnlock()
 	stream := &simpleVADStream{
-		vad:     v,
-		ctx:     ctx,
-		options: options,
-		events:  make(chan *VADEvent, 10),
+		vad:         v,
+		ctx:         ctx,
+		options:     options,
+		eventNotify: make(chan struct{}, 1),
 	}
 	v.mu.Lock()
 	v.streams[stream] = struct{}{}
@@ -113,12 +115,12 @@ type simpleVADStream struct {
 	vad                        *SimpleVAD
 	ctx                        context.Context
 	options                    SimpleVADOptions
-	events                     chan *VADEvent
 	speaking                   bool
 	closed                     bool
 	inputEnded                 bool
 	inputSampleRate            uint32
 	samplesIndex               int
+	sampleIndexRemainder       float64
 	timestamp                  float64
 	speechDuration             float64
 	silenceDuration            float64
@@ -129,9 +131,16 @@ type simpleVADStream struct {
 	pendingSpeechFrames        []*model.AudioFrame
 	speechFrames               []*model.AudioFrame
 	bufferedSpeechDuration     float64
+	windowFrames               []*model.AudioFrame
+	windowBufferedSamples      uint32
+	windowSampleRemainder      float64
 	lastActivity               time.Time
 	metricsInferenceDuration   float64
 	metricsInferenceCount      int
+	eventQueue                 []*VADEvent
+	eventClosed                bool
+	eventNotify                chan struct{}
+	eventMu                    sync.Mutex
 	mu                         sync.Mutex
 }
 
@@ -152,19 +161,37 @@ func (s *simpleVADStream) PushFrame(frame *model.AudioFrame) error {
 	if s.inputEnded {
 		return errors.New("vad stream input ended")
 	}
+	if frame == nil {
+		return errors.New("vad frame nil")
+	}
 	if s.inputSampleRate == 0 {
 		s.inputSampleRate = frame.SampleRate
 	} else if frame.SampleRate != s.inputSampleRate {
 		return nil
 	}
+	frame = cloneFrame(frame)
 
+	if s.windowSamples() == 0 {
+		s.processFrame(frame, frameDuration(frame))
+		return nil
+	}
+
+	s.windowFrames = append(s.windowFrames, frame)
+	s.windowBufferedSamples += frame.SamplesPerChannel
+	for windowSamples := s.windowSamples(); windowSamples > 0 && s.windowBufferedSamples >= windowSamples; windowSamples = s.windowSamples() {
+		s.advanceWindowSampleRemainder(windowSamples)
+		s.processFrame(s.takeWindowFrame(windowSamples), s.options.WindowDuration)
+	}
+	return nil
+}
+
+func (s *simpleVADStream) processFrame(frame *model.AudioFrame, duration float64) {
 	probability := frameRMS(frame)
-	duration := frameDuration(frame)
 	if s.lastActivity.IsZero() {
 		s.lastActivity = time.Now()
 	}
-	s.samplesIndex += int(frame.SamplesPerChannel)
 	s.timestamp += duration
+	s.samplesIndex += s.sampleIndexAdvance(duration)
 
 	inferenceStart := time.Now()
 	inferenceDuration := time.Since(inferenceStart).Seconds()
@@ -175,7 +202,7 @@ func (s *simpleVADStream) PushFrame(frame *model.AudioFrame) error {
 	} else {
 		inferenceSilenceDuration += duration
 	}
-	s.events <- &VADEvent{
+	s.enqueueEvent(&VADEvent{
 		Type:                  VADEventInferenceDone,
 		SamplesIndex:          s.samplesIndex,
 		Timestamp:             s.timestamp,
@@ -187,7 +214,7 @@ func (s *simpleVADStream) PushFrame(frame *model.AudioFrame) error {
 		Speaking:              s.speaking,
 		RawAccumulatedSpeech:  s.accumulatedSpeechDuration,
 		RawAccumulatedSilence: s.accumulatedSilenceDuration,
-	}
+	})
 	s.collectInferenceMetrics(inferenceDuration)
 
 	if probability >= s.options.Threshold || (s.speaking && probability > s.options.DeactivationThreshold) {
@@ -203,14 +230,14 @@ func (s *simpleVADStream) PushFrame(frame *model.AudioFrame) error {
 				startFrames := s.startSpeechFrames()
 				s.speechFrames = append([]*model.AudioFrame(nil), startFrames...)
 				s.bufferedSpeechDuration = framesDuration(startFrames)
-				s.events <- &VADEvent{
+				s.enqueueEvent(&VADEvent{
 					Type:           VADEventStartOfSpeech,
 					SamplesIndex:   s.samplesIndex,
 					Timestamp:      s.timestamp,
 					SpeechDuration: s.speechDuration,
 					Frames:         combineFrames(startFrames),
 					Speaking:       true,
-				}
+				})
 				s.lastActivity = time.Now()
 			}
 		} else {
@@ -228,7 +255,7 @@ func (s *simpleVADStream) PushFrame(frame *model.AudioFrame) error {
 			if s.accumulatedSilenceDuration >= s.options.MinSilenceDuration {
 				s.speaking = false
 				frames := append([]*model.AudioFrame(nil), s.speechFrames...)
-				s.events <- &VADEvent{
+				s.enqueueEvent(&VADEvent{
 					Type:            VADEventEndOfSpeech,
 					SamplesIndex:    s.samplesIndex,
 					Timestamp:       s.timestamp,
@@ -236,7 +263,7 @@ func (s *simpleVADStream) PushFrame(frame *model.AudioFrame) error {
 					SilenceDuration: s.silenceDuration,
 					Frames:          combineFrames(frames),
 					Speaking:        false,
-				}
+				})
 				s.lastActivity = time.Now()
 				s.resetSegmentWithPrefixTail(frames)
 			}
@@ -249,8 +276,6 @@ func (s *simpleVADStream) PushFrame(frame *model.AudioFrame) error {
 			s.pendingSpeechFrames = nil
 		}
 	}
-
-	return nil
 }
 
 func (s *simpleVADStream) collectInferenceMetrics(inferenceDuration float64) {
@@ -310,7 +335,7 @@ func (s *simpleVADStream) EndInput() error {
 	s.resetState()
 	s.inputEnded = true
 	s.closed = true
-	close(s.events)
+	s.closeEvents(false)
 	s.vad.unregisterStream(s)
 	return nil
 }
@@ -322,20 +347,67 @@ func (s *simpleVADStream) Close() error {
 		return nil
 	}
 	s.closed = true
-	close(s.events)
+	s.closeEvents(true)
 	s.vad.unregisterStream(s)
 	return nil
 }
 
 func (s *simpleVADStream) Next() (*VADEvent, error) {
-	select {
-	case <-s.ctx.Done():
-		return nil, s.ctx.Err()
-	case ev, ok := <-s.events:
-		if !ok {
+	for {
+		s.eventMu.Lock()
+		if len(s.eventQueue) > 0 {
+			ev := s.eventQueue[0]
+			copy(s.eventQueue, s.eventQueue[1:])
+			s.eventQueue[len(s.eventQueue)-1] = nil
+			s.eventQueue = s.eventQueue[:len(s.eventQueue)-1]
+			s.eventMu.Unlock()
+			return ev, nil
+		}
+		if s.eventClosed {
+			s.eventMu.Unlock()
 			return nil, io.EOF
 		}
-		return ev, nil
+		notify := s.eventNotify
+		s.eventMu.Unlock()
+
+		select {
+		case <-s.ctx.Done():
+			return nil, s.ctx.Err()
+		case <-notify:
+		}
+	}
+}
+
+func (s *simpleVADStream) enqueueEvent(event *VADEvent) {
+	s.eventMu.Lock()
+	defer s.eventMu.Unlock()
+	if s.eventClosed {
+		return
+	}
+	s.eventQueue = append(s.eventQueue, event)
+	s.notifyEventsLocked()
+}
+
+func (s *simpleVADStream) closeEvents(dropQueued bool) {
+	s.eventMu.Lock()
+	defer s.eventMu.Unlock()
+	if s.eventClosed {
+		return
+	}
+	if dropQueued {
+		for i := range s.eventQueue {
+			s.eventQueue[i] = nil
+		}
+		s.eventQueue = nil
+	}
+	s.eventClosed = true
+	s.notifyEventsLocked()
+}
+
+func (s *simpleVADStream) notifyEventsLocked() {
+	select {
+	case s.eventNotify <- struct{}{}:
+	default:
 	}
 }
 
@@ -362,8 +434,63 @@ func (s *simpleVADStream) resetSegmentWithPrefixTail(frames []*model.AudioFrame)
 
 func (s *simpleVADStream) resetState() {
 	s.resetSegment()
+	s.windowFrames = nil
+	s.windowBufferedSamples = 0
+	s.windowSampleRemainder = 0
 	s.samplesIndex = 0
+	s.sampleIndexRemainder = 0
 	s.timestamp = 0
+}
+
+func (s *simpleVADStream) windowSamples() uint32 {
+	if s.options.WindowDuration <= 0 || s.inputSampleRate == 0 {
+		return 0
+	}
+	samples := uint32(s.options.WindowDuration*float64(s.inputSampleRate) + s.windowSampleRemainder)
+	if samples == 0 {
+		return 0
+	}
+	return samples
+}
+
+func (s *simpleVADStream) advanceWindowSampleRemainder(samples uint32) {
+	exactSamples := s.options.WindowDuration*float64(s.inputSampleRate) + s.windowSampleRemainder
+	s.windowSampleRemainder = exactSamples - float64(samples)
+}
+
+func (s *simpleVADStream) takeWindowFrame(samples uint32) *model.AudioFrame {
+	var taken []*model.AudioFrame
+	remaining := samples
+	for remaining > 0 && len(s.windowFrames) > 0 {
+		frame := s.windowFrames[0]
+		if frame.SamplesPerChannel <= remaining {
+			taken = append(taken, frame)
+			remaining -= frame.SamplesPerChannel
+			s.windowFrames = s.windowFrames[1:]
+			continue
+		}
+
+		taken = append(taken, trimFrameEndSamples(frame, remaining))
+		s.windowFrames[0] = trimFrameStartSamples(frame, remaining)
+		remaining = 0
+	}
+	s.windowBufferedSamples -= samples - remaining
+	frames := combineFrames(taken)
+	if len(frames) == 0 {
+		return &model.AudioFrame{SampleRate: s.inputSampleRate, NumChannels: 1}
+	}
+	return frames[0]
+}
+
+func (s *simpleVADStream) sampleIndexAdvance(duration float64) int {
+	sampleRate := s.options.SampleRate
+	if sampleRate == 0 {
+		sampleRate = s.inputSampleRate
+	}
+	advance := duration*float64(sampleRate) + s.sampleIndexRemainder
+	whole := int(advance)
+	s.sampleIndexRemainder = advance - float64(whole)
+	return whole
 }
 
 func (s *simpleVADStream) prefixTailFrames(frames []*model.AudioFrame) []*model.AudioFrame {
@@ -498,6 +625,19 @@ func trimFrameStart(frame *model.AudioFrame, duration float64) *model.AudioFrame
 	}
 
 	samplesToTrim := uint32(duration * float64(frame.SampleRate))
+	return trimFrameStartSamples(frame, samplesToTrim)
+}
+
+func trimFrameEnd(frame *model.AudioFrame, duration float64) *model.AudioFrame {
+	if duration <= 0 || frame.SampleRate == 0 || frame.NumChannels == 0 {
+		return frame
+	}
+
+	samplesToKeep := uint32(duration * float64(frame.SampleRate))
+	return trimFrameEndSamples(frame, samplesToKeep)
+}
+
+func trimFrameStartSamples(frame *model.AudioFrame, samplesToTrim uint32) *model.AudioFrame {
 	if samplesToTrim == 0 {
 		return frame
 	}
@@ -522,12 +662,7 @@ func trimFrameStart(frame *model.AudioFrame, duration float64) *model.AudioFrame
 	}
 }
 
-func trimFrameEnd(frame *model.AudioFrame, duration float64) *model.AudioFrame {
-	if duration <= 0 || frame.SampleRate == 0 || frame.NumChannels == 0 {
-		return frame
-	}
-
-	samplesToKeep := uint32(duration * float64(frame.SampleRate))
+func trimFrameEndSamples(frame *model.AudioFrame, samplesToKeep uint32) *model.AudioFrame {
 	if samplesToKeep >= frame.SamplesPerChannel {
 		return frame
 	}
@@ -615,6 +750,19 @@ func combineFrames(frames []*model.AudioFrame) []*model.AudioFrame {
 	}}
 }
 
+func cloneFrame(frame *model.AudioFrame) *model.AudioFrame {
+	if frame == nil {
+		return nil
+	}
+	data := append([]byte(nil), frame.Data...)
+	return &model.AudioFrame{
+		Data:              data,
+		SampleRate:        frame.SampleRate,
+		NumChannels:       frame.NumChannels,
+		SamplesPerChannel: frame.SamplesPerChannel,
+	}
+}
+
 func (v *SimpleVAD) emitMetrics(metrics *telemetry.VADMetrics) {
 	v.mu.RLock()
 	handlers := append([]VADMetricsHandler(nil), v.handlers...)
@@ -653,6 +801,12 @@ func mergeSimpleVADOptions(current, updates SimpleVADOptions) SimpleVADOptions {
 	}
 	if updates.UpdateInterval != 0 {
 		current.UpdateInterval = updates.UpdateInterval
+	}
+	if updates.SampleRate != 0 {
+		current.SampleRate = updates.SampleRate
+	}
+	if updates.WindowDuration != 0 {
+		current.WindowDuration = updates.WindowDuration
 	}
 	return current
 }
