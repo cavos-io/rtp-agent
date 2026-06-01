@@ -1,6 +1,7 @@
 package llm
 
 import (
+	"context"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -264,6 +265,10 @@ type ChatContextMergeOptions struct {
 	ExcludeConfigUpdate bool
 }
 
+type ChatContextSummarizeOptions struct {
+	KeepLastTurns int
+}
+
 func (c *ChatContext) Merge(other *ChatContext, options ...ChatContextMergeOptions) *ChatContext {
 	var opts ChatContextMergeOptions
 	if len(options) > 0 {
@@ -293,6 +298,142 @@ func (c *ChatContext) Merge(other *ChatContext, options ...ChatContextMergeOptio
 	}
 	return c
 }
+
+func (c *ChatContext) Summarize(ctx context.Context, llm LLM, options ...ChatContextSummarizeOptions) (*ChatContext, error) {
+	keepLastTurns := 2
+	if len(options) > 0 {
+		keepLastTurns = options[0].KeepLastTurns
+	}
+
+	splitIdx := len(c.Items)
+	msgBudget := keepLastTurns * 2
+	if msgBudget > 0 {
+		msgCount := 0
+		for i := len(c.Items) - 1; i >= 0; i-- {
+			msg, ok := c.Items[i].(*ChatMessage)
+			if !ok || (msg.Role != ChatRoleUser && msg.Role != ChatRoleAssistant) {
+				continue
+			}
+			msgCount++
+			if msgCount >= msgBudget {
+				splitIdx = i
+				break
+			}
+		}
+		if msgCount < msgBudget {
+			return c, nil
+		}
+	}
+	if splitIdx == 0 {
+		return c, nil
+	}
+
+	headItems := c.Items[:splitIdx]
+	tailItems := append([]ChatItem(nil), c.Items[splitIdx:]...)
+	toSummarize := make([]ChatItem, 0, len(headItems))
+	for _, item := range headItems {
+		switch it := item.(type) {
+		case *ChatMessage:
+			if it.Role != ChatRoleUser && it.Role != ChatRoleAssistant {
+				continue
+			}
+			if isSummary, _ := it.Extra["is_summary"].(bool); isSummary {
+				continue
+			}
+			if strings.TrimSpace(it.TextContent()) != "" {
+				toSummarize = append(toSummarize, it)
+			}
+		case *FunctionCall, *FunctionCallOutput:
+			toSummarize = append(toSummarize, item)
+		}
+	}
+	if len(toSummarize) == 0 {
+		return c, nil
+	}
+
+	contents := make([]string, 0, len(toSummarize))
+	for _, item := range toSummarize {
+		if msg := FunctionCallItemToMessage(item); msg != nil {
+			contents = append(contents, msg.TextContent())
+			continue
+		}
+		msg, ok := item.(*ChatMessage)
+		if !ok {
+			continue
+		}
+		contents = append(contents, ToXML(string(msg.Role), strings.TrimSpace(msg.TextContent()), nil))
+	}
+	sourceText := strings.TrimSpace(strings.Join(contents, "\n"))
+	if sourceText == "" {
+		return c, nil
+	}
+
+	summaryCtx := NewChatContext()
+	summaryCtx.AddMessage(ChatMessageArgs{
+		Role: ChatRoleSystem,
+		Text: chatContextSummaryInstructions,
+	})
+	summaryCtx.AddMessage(ChatMessageArgs{
+		Role: ChatRoleUser,
+		Text: "Conversation to summarize:\n\n" + sourceText,
+	})
+
+	stream, err := llm.Chat(ctx, summaryCtx)
+	if err != nil {
+		return nil, err
+	}
+	response, err := CollectStream(stream)
+	if err != nil {
+		return nil, err
+	}
+	summary := strings.TrimSpace(response.Text)
+	if summary == "" {
+		return c, nil
+	}
+
+	preserved := make([]ChatItem, 0, len(headItems)+1+len(tailItems))
+	for _, item := range headItems {
+		switch it := item.(type) {
+		case *ChatMessage:
+			if it.Role == ChatRoleUser || it.Role == ChatRoleAssistant {
+				continue
+			}
+		case *FunctionCall, *FunctionCallOutput:
+			continue
+		}
+		preserved = append(preserved, item)
+	}
+	c.Items = preserved
+
+	createdAt := time.Time{}
+	if len(tailItems) > 0 {
+		createdAt = tailItems[0].GetCreatedAt().Add(-time.Microsecond)
+	} else if len(headItems) > 0 {
+		createdAt = headItems[len(headItems)-1].GetCreatedAt().Add(time.Microsecond)
+	}
+	c.AddMessage(ChatMessageArgs{
+		Role:      ChatRoleAssistant,
+		Text:      ToXML("chat_history_summary", summary, nil),
+		CreatedAt: createdAt,
+		Extra:     map[string]any{"is_summary": true},
+	})
+	c.Items = append(c.Items, tailItems...)
+	return c, nil
+}
+
+const chatContextSummaryInstructions = `Compress older conversation history into a short, faithful summary.
+
+The conversation is formatted as XML. Here is how to read it:
+- <user>...</user> - something the user said.
+- <assistant>...</assistant> - something the assistant said.
+- <function_call name="..." call_id="...">...</function_call> - the assistant invoked an action.
+- <function_call_output name="..." call_id="...">...</function_call_output> - the result of that action. May contain <error>...</error> if it failed.
+
+Guidelines:
+- Distill the information learned from function call outputs into the summary. Do not mention that a tool/function was called - just preserve the knowledge gained.
+- Focus on: user goals, constraints, decisions, key facts, preferences, entities, and any pending or unresolved tasks.
+- Omit greetings, filler, and chit-chat.
+- Be concise.`
 
 func (c *ChatContext) IsEquivalent(other *ChatContext) bool {
 	if c == other {
