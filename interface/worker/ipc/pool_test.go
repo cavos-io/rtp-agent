@@ -196,6 +196,33 @@ func TestProcPoolLaunchAfterCloseIsRejected(t *testing.T) {
 	}
 }
 
+func TestProcPoolLaunchReusesCapacityAfterExecutorCompletes(t *testing.T) {
+	completed := make(chan struct{}, 2)
+	pool := NewProcPool(1, ExecutorTypeThread, func() error {
+		completed <- struct{}{}
+		return nil
+	})
+
+	if err := pool.LaunchJob(context.Background(), &livekit.Job{Id: "job-a"}); err != nil {
+		t.Fatalf("first LaunchJob: %v", err)
+	}
+	select {
+	case <-completed:
+	case <-time.After(time.Second):
+		t.Fatal("first job did not complete")
+	}
+	waitForProcPoolExecutorStatus(t, pool, JobStatusSuccess)
+
+	if err := pool.LaunchJob(context.Background(), &livekit.Job{Id: "job-b"}); err != nil {
+		t.Fatalf("second LaunchJob after completed executor: %v", err)
+	}
+	select {
+	case <-completed:
+	case <-time.After(time.Second):
+		t.Fatal("second job did not complete")
+	}
+}
+
 func TestProcPoolLaunchJobRetriesWithFreshExecutor(t *testing.T) {
 	first := &fakeJobExecutor{id: "exec-a", launchErr: errors.New("launch failed")}
 	second := &fakeJobExecutor{id: "exec-b"}
@@ -235,6 +262,27 @@ func TestProcPoolLaunchJobRetriesWithFreshExecutor(t *testing.T) {
 	}
 	if gotExecutors[0].ID() != "exec-b" {
 		t.Fatalf("remaining executor ID = %q, want exec-b", gotExecutors[0].ID())
+	}
+}
+
+func waitForProcPoolExecutorStatus(t *testing.T, pool *ProcPool, status JobStatus) {
+	t.Helper()
+
+	deadline := time.After(time.Second)
+	ticker := time.NewTicker(time.Millisecond)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-deadline:
+			t.Fatalf("executor did not reach status %q", status)
+		case <-ticker.C:
+			for _, executor := range pool.GetExecutors() {
+				if executor.Status() == status {
+					return
+				}
+			}
+		}
 	}
 }
 

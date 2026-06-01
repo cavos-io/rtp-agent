@@ -80,6 +80,7 @@ func (p *ProcPool) LaunchRunningJob(ctx context.Context, info RunningJobInfo) er
 
 	var lastErr error
 	for attempt := 0; attempt < maxLaunchAttempts; attempt++ {
+		p.pruneFinishedExecutorsLocked()
 		if len(p.executors) >= p.maxProcesses {
 			return fmt.Errorf("proc pool exhausted, max capacity reached")
 		}
@@ -108,6 +109,16 @@ func (p *ProcPool) LaunchRunningJob(ctx context.Context, info RunningJobInfo) er
 	}
 
 	return lastErr
+}
+
+func (p *ProcPool) pruneFinishedExecutorsLocked() {
+	for id, executor := range p.executors {
+		if !executor.Started() || executor.Status() == JobStatusRunning {
+			continue
+		}
+		delete(p.executors, id)
+		p.emit(ProcPoolEventProcessClosed, executor)
+	}
 }
 
 func (p *ProcPool) GetExecutors() []JobExecutor {
