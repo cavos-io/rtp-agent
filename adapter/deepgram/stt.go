@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/url"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -20,25 +21,154 @@ import (
 )
 
 type DeepgramSTT struct {
-	apiKey         string
-	model          string
-	punctuate      bool
-	smartFormat    bool
-	noDelay        bool
-	endpointingMS  int
-	fillerWords    bool
-	sampleRate     int
-	numChannels    int
-	interimResults bool
-	vadEvents      bool
-	baseURL        string
+	apiKey            string
+	model             string
+	punctuate         bool
+	smartFormat       bool
+	noDelay           bool
+	endpointingMS     int
+	enableDiarization bool
+	fillerWords       bool
+	sampleRate        int
+	numChannels       int
+	interimResults    bool
+	vadEvents         bool
+	profanityFilter   bool
+	numerals          bool
+	mipOptOut         bool
+	keywords          []DeepgramKeyword
+	keyterms          []string
+	redact            []string
+	tags              []string
+	baseURL           string
 }
 
-func NewDeepgramSTT(apiKey string, model string) *DeepgramSTT {
+type DeepgramKeyword struct {
+	Keyword string
+	Boost   float64
+}
+
+type DeepgramSTTOption func(*DeepgramSTT)
+
+func WithDeepgramSTTBaseURL(baseURL string) DeepgramSTTOption {
+	return func(s *DeepgramSTT) {
+		if baseURL != "" {
+			s.baseURL = strings.TrimRight(baseURL, "/")
+		}
+	}
+}
+
+func WithDeepgramSTTInterimResults(interimResults bool) DeepgramSTTOption {
+	return func(s *DeepgramSTT) {
+		s.interimResults = interimResults
+	}
+}
+
+func WithDeepgramSTTPunctuate(punctuate bool) DeepgramSTTOption {
+	return func(s *DeepgramSTT) {
+		s.punctuate = punctuate
+	}
+}
+
+func WithDeepgramSTTSmartFormat(smartFormat bool) DeepgramSTTOption {
+	return func(s *DeepgramSTT) {
+		s.smartFormat = smartFormat
+	}
+}
+
+func WithDeepgramSTTNoDelay(noDelay bool) DeepgramSTTOption {
+	return func(s *DeepgramSTT) {
+		s.noDelay = noDelay
+	}
+}
+
+func WithDeepgramSTTEndpointing(endpointingMS int) DeepgramSTTOption {
+	return func(s *DeepgramSTT) {
+		s.endpointingMS = endpointingMS
+	}
+}
+
+func WithDeepgramSTTDiarization(enableDiarization bool) DeepgramSTTOption {
+	return func(s *DeepgramSTT) {
+		s.enableDiarization = enableDiarization
+	}
+}
+
+func WithDeepgramSTTFillerWords(fillerWords bool) DeepgramSTTOption {
+	return func(s *DeepgramSTT) {
+		s.fillerWords = fillerWords
+	}
+}
+
+func WithDeepgramSTTSampleRate(sampleRate int) DeepgramSTTOption {
+	return func(s *DeepgramSTT) {
+		if sampleRate > 0 {
+			s.sampleRate = sampleRate
+		}
+	}
+}
+
+func WithDeepgramSTTNumChannels(numChannels int) DeepgramSTTOption {
+	return func(s *DeepgramSTT) {
+		if numChannels > 0 {
+			s.numChannels = numChannels
+		}
+	}
+}
+
+func WithDeepgramSTTVADEvents(vadEvents bool) DeepgramSTTOption {
+	return func(s *DeepgramSTT) {
+		s.vadEvents = vadEvents
+	}
+}
+
+func WithDeepgramSTTProfanityFilter(profanityFilter bool) DeepgramSTTOption {
+	return func(s *DeepgramSTT) {
+		s.profanityFilter = profanityFilter
+	}
+}
+
+func WithDeepgramSTTNumerals(numerals bool) DeepgramSTTOption {
+	return func(s *DeepgramSTT) {
+		s.numerals = numerals
+	}
+}
+
+func WithDeepgramSTTMipOptOut(mipOptOut bool) DeepgramSTTOption {
+	return func(s *DeepgramSTT) {
+		s.mipOptOut = mipOptOut
+	}
+}
+
+func WithDeepgramSTTKeywords(keywords []DeepgramKeyword) DeepgramSTTOption {
+	return func(s *DeepgramSTT) {
+		s.keywords = append([]DeepgramKeyword(nil), keywords...)
+	}
+}
+
+func WithDeepgramSTTKeyterms(keyterms []string) DeepgramSTTOption {
+	return func(s *DeepgramSTT) {
+		s.keyterms = append([]string(nil), keyterms...)
+	}
+}
+
+func WithDeepgramSTTRedact(redact []string) DeepgramSTTOption {
+	return func(s *DeepgramSTT) {
+		s.redact = append([]string(nil), redact...)
+	}
+}
+
+func WithDeepgramSTTTags(tags []string) DeepgramSTTOption {
+	return func(s *DeepgramSTT) {
+		s.tags = append([]string(nil), tags...)
+	}
+}
+
+func NewDeepgramSTT(apiKey string, model string, opts ...DeepgramSTTOption) *DeepgramSTT {
 	if model == "" {
 		model = "nova-3"
 	}
-	return &DeepgramSTT{
+	provider := &DeepgramSTT{
 		apiKey:         apiKey,
 		model:          model,
 		punctuate:      true,
@@ -52,11 +182,15 @@ func NewDeepgramSTT(apiKey string, model string) *DeepgramSTT {
 		vadEvents:      true,
 		baseURL:        "https://api.deepgram.com/v1/listen",
 	}
+	for _, opt := range opts {
+		opt(provider)
+	}
+	return provider
 }
 
 func (s *DeepgramSTT) Label() string { return "deepgram.STT" }
 func (s *DeepgramSTT) Capabilities() stt.STTCapabilities {
-	return stt.STTCapabilities{Streaming: true, InterimResults: true, Diarization: false, AlignedTranscript: "word", OfflineRecognize: true}
+	return stt.STTCapabilities{Streaming: true, InterimResults: s.interimResults, Diarization: s.enableDiarization, AlignedTranscript: "word", OfflineRecognize: true}
 }
 
 func (s *DeepgramSTT) Stream(ctx context.Context, languageStr string) (stt.RecognizeStream, error) {
@@ -140,6 +274,13 @@ func buildDeepgramStreamURL(s *DeepgramSTT, languageStr string) string {
 	}
 	q.Set("vad_events", strconv.FormatBool(s.vadEvents))
 	q.Set("filler_words", strconv.FormatBool(s.fillerWords))
+	q.Set("profanity_filter", strconv.FormatBool(s.profanityFilter))
+	q.Set("numerals", strconv.FormatBool(s.numerals))
+	q.Set("mip_opt_out", strconv.FormatBool(s.mipOptOut))
+	if s.enableDiarization {
+		q.Set("diarize", "true")
+	}
+	addDeepgramSTTAdvancedQuery(q, s)
 	u.RawQuery = q.Encode()
 	return u.String()
 }
@@ -149,11 +290,38 @@ func buildDeepgramRecognizeURL(s *DeepgramSTT, languageStr string) string {
 	q.Set("model", s.model)
 	q.Set("punctuate", strconv.FormatBool(s.punctuate))
 	q.Set("smart_format", strconv.FormatBool(s.smartFormat))
+	q.Set("profanity_filter", strconv.FormatBool(s.profanityFilter))
+	q.Set("numerals", strconv.FormatBool(s.numerals))
+	q.Set("mip_opt_out", strconv.FormatBool(s.mipOptOut))
 	if languageStr != "" {
 		q.Set("language", languageStr)
 	}
+	addDeepgramSTTAdvancedQuery(q, s)
 	u.RawQuery = q.Encode()
 	return u.String()
+}
+
+func addDeepgramSTTAdvancedQuery(q url.Values, s *DeepgramSTT) {
+	for _, keyword := range s.keywords {
+		if keyword.Keyword != "" {
+			q.Add("keywords", keyword.Keyword+":"+strconv.FormatFloat(keyword.Boost, 'f', -1, 64))
+		}
+	}
+	for _, keyterm := range s.keyterms {
+		if keyterm != "" {
+			q.Add("keyterm", keyterm)
+		}
+	}
+	for _, redact := range s.redact {
+		if redact != "" {
+			q.Add("redact", redact)
+		}
+	}
+	for _, tag := range s.tags {
+		if tag != "" {
+			q.Add("tag", tag)
+		}
+	}
 }
 
 func deepgramBaseURL(s *DeepgramSTT, websocketURL bool) (*url.URL, url.Values) {
