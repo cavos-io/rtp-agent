@@ -468,6 +468,8 @@ type fallbackChunkedStream struct {
 	errCh   chan error
 	closeCh chan struct{}
 	closed  bool
+	done    bool
+	err     error
 }
 
 func (f *FallbackAdapter) Synthesize(ctx context.Context, text string) (ChunkedStream, error) {
@@ -540,7 +542,9 @@ func (s *fallbackChunkedStream) monitorStream() {
 			if errors.Is(err, io.EOF) || outputSent {
 				_ = stream.Close()
 				if errors.Is(err, io.EOF) && !outputSent && pending == nil && strings.TrimSpace(s.text) != "" {
-					s.errCh <- fmt.Errorf("no audio frames were pushed for text: %s", s.text)
+					err := fmt.Errorf("no audio frames were pushed for text: %s", s.text)
+					s.markDone(err)
+					s.errCh <- err
 					return
 				}
 				if pending != nil {
@@ -553,6 +557,7 @@ func (s *fallbackChunkedStream) monitorStream() {
 						return
 					}
 				}
+				s.markDone(nil)
 				s.errCh <- io.EOF
 				return
 			}
@@ -578,6 +583,7 @@ func (s *fallbackChunkedStream) monitorStream() {
 			}
 
 			if fbErr := s.tryStartStream(nextIndex); fbErr != nil {
+				s.markDoneLocked(fbErr)
 				s.errCh <- fbErr
 				s.mu.Unlock()
 				return
@@ -599,6 +605,7 @@ func (s *fallbackChunkedStream) monitorStream() {
 						return
 					}
 				}
+				s.markDone(nil)
 				s.errCh <- io.EOF
 				return
 			}
@@ -622,6 +629,7 @@ func (s *fallbackChunkedStream) monitorStream() {
 			}
 
 			if fbErr := s.tryStartStream(nextIndex); fbErr != nil {
+				s.markDoneLocked(fbErr)
 				s.errCh <- fbErr
 				s.mu.Unlock()
 				return
@@ -705,7 +713,33 @@ func (s *fallbackChunkedStream) Close() error {
 	}
 	s.closed = true
 	close(s.closeCh)
+	s.markDoneLocked(nil)
 	return s.activeStream.Close()
+}
+
+func (s *fallbackChunkedStream) Done() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.done
+}
+
+func (s *fallbackChunkedStream) Exception() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.err
+}
+
+func (s *fallbackChunkedStream) markDone(err error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.markDoneLocked(err)
+}
+
+func (s *fallbackChunkedStream) markDoneLocked(err error) {
+	s.done = true
+	if err != nil && !errors.Is(err, io.EOF) {
+		s.err = err
+	}
 }
 
 type fallbackSynthesizeStream struct {
@@ -727,6 +761,8 @@ type fallbackSynthesizeStream struct {
 	inputDone bool
 	started   bool
 	flushed   bool
+	done      bool
+	err       error
 }
 
 type fallbackSynthesizeInput struct {
@@ -840,7 +876,9 @@ func (s *fallbackSynthesizeStream) monitorStream() {
 			if errors.Is(err, io.EOF) || outputSent {
 				_ = stream.Close()
 				if errors.Is(err, io.EOF) && !outputSent && pending == nil && strings.TrimSpace(s.pushedText()) != "" {
-					s.errCh <- fmt.Errorf("no audio frames were pushed for text: %s", s.pushedText())
+					err := fmt.Errorf("no audio frames were pushed for text: %s", s.pushedText())
+					s.markDone(err)
+					s.errCh <- err
 					return
 				}
 				if pending != nil {
@@ -853,6 +891,7 @@ func (s *fallbackSynthesizeStream) monitorStream() {
 						return
 					}
 				}
+				s.markDone(nil)
 				s.errCh <- io.EOF
 				return
 			}
@@ -878,6 +917,7 @@ func (s *fallbackSynthesizeStream) monitorStream() {
 			}
 
 			if fbErr := s.tryStartStream(nextIndex); fbErr != nil {
+				s.markDoneLocked(fbErr)
 				s.errCh <- fbErr
 				s.mu.Unlock()
 				return
@@ -899,6 +939,7 @@ func (s *fallbackSynthesizeStream) monitorStream() {
 						return
 					}
 				}
+				s.markDone(nil)
 				s.errCh <- io.EOF
 				return
 			}
@@ -922,6 +963,7 @@ func (s *fallbackSynthesizeStream) monitorStream() {
 			}
 
 			if fbErr := s.tryStartStream(nextIndex); fbErr != nil {
+				s.markDoneLocked(fbErr)
 				s.errCh <- fbErr
 				s.mu.Unlock()
 				return
@@ -976,6 +1018,7 @@ func (s *fallbackSynthesizeStream) monitorStream() {
 				return
 			}
 			_ = stream.Close()
+			s.markDone(nil)
 			s.errCh <- io.EOF
 			return
 		}
@@ -1073,6 +1116,7 @@ func (s *fallbackSynthesizeStream) Close() error {
 	}
 	s.closed = true
 	close(s.closeCh)
+	s.markDoneLocked(nil)
 	return s.activeStream.Close()
 }
 
@@ -1090,5 +1134,30 @@ func (s *fallbackSynthesizeStream) Next() (*SynthesizedAudio, error) {
 		return nil, err
 	case <-s.closeCh:
 		return nil, context.Canceled
+	}
+}
+
+func (s *fallbackSynthesizeStream) Done() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.done
+}
+
+func (s *fallbackSynthesizeStream) Exception() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.err
+}
+
+func (s *fallbackSynthesizeStream) markDone(err error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.markDoneLocked(err)
+}
+
+func (s *fallbackSynthesizeStream) markDoneLocked(err error) {
+	s.done = true
+	if err != nil && !errors.Is(err, io.EOF) {
+		s.err = err
 	}
 }
