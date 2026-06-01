@@ -837,7 +837,7 @@ func (t *SarvamTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStr
 		resp.Body.Close()
 		return nil, fmt.Errorf("sarvam tts error: %s", string(respBody))
 	}
-	return &sarvamTTSChunkedStream{resp: resp, sampleRate: t.sampleRate}, nil
+	return &sarvamTTSChunkedStream{resp: resp, sampleRate: t.sampleRate, outputAudioCodec: t.outputAudioCodec}, nil
 }
 
 func buildSarvamTTSRequest(ctx context.Context, t *SarvamTTS, text string) (*http.Request, error) {
@@ -894,12 +894,13 @@ func (t *SarvamTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
 	}
 	streamCtx, cancel := context.WithCancel(ctx)
 	stream := &sarvamTTSSynthesizeStream{
-		conn:       conn,
-		ctx:        streamCtx,
-		cancel:     cancel,
-		sampleRate: t.sampleRate,
-		events:     make(chan *tts.SynthesizedAudio, 100),
-		errCh:      make(chan error, 1),
+		conn:             conn,
+		ctx:              streamCtx,
+		cancel:           cancel,
+		sampleRate:       t.sampleRate,
+		outputAudioCodec: t.outputAudioCodec,
+		events:           make(chan *tts.SynthesizedAudio, 100),
+		errCh:            make(chan error, 1),
 	}
 	go stream.readLoop()
 	return stream, nil
@@ -972,9 +973,10 @@ func buildSarvamTTSFlushMessage() ([]byte, error) {
 }
 
 type sarvamTTSChunkedStream struct {
-	resp       *http.Response
-	sampleRate int
-	read       bool
+	resp             *http.Response
+	sampleRate       int
+	outputAudioCodec string
+	read             bool
 }
 
 func (s *sarvamTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
@@ -996,15 +998,7 @@ func (s *sarvamTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &tts.SynthesizedAudio{
-		RequestID: result.RequestID,
-		Frame: &model.AudioFrame{
-			Data:              data,
-			SampleRate:        uint32(s.sampleRate),
-			NumChannels:       1,
-			SamplesPerChannel: uint32(len(data) / 2),
-		},
-	}, nil
+	return sarvamTTSAudioFrame(data, s.sampleRate, result.RequestID, s.outputAudioCodec), nil
 }
 
 func (s *sarvamTTSChunkedStream) Close() error {
@@ -1029,14 +1023,15 @@ func validateSarvamTTSModelSpeaker(model, speaker string) error {
 }
 
 type sarvamTTSSynthesizeStream struct {
-	conn       *websocket.Conn
-	ctx        context.Context
-	cancel     context.CancelFunc
-	sampleRate int
-	events     chan *tts.SynthesizedAudio
-	errCh      chan error
-	mu         sync.Mutex
-	closed     bool
+	conn             *websocket.Conn
+	ctx              context.Context
+	cancel           context.CancelFunc
+	sampleRate       int
+	outputAudioCodec string
+	events           chan *tts.SynthesizedAudio
+	errCh            chan error
+	mu               sync.Mutex
+	closed           bool
 }
 
 func (s *sarvamTTSSynthesizeStream) PushText(text string) error {
@@ -1102,7 +1097,7 @@ func (s *sarvamTTSSynthesizeStream) readLoop() {
 		if msgType != websocket.TextMessage {
 			continue
 		}
-		audio, done, err := sarvamTTSAudioFromStreamMessage(payload, s.sampleRate)
+		audio, done, err := sarvamTTSAudioFromStreamMessage(payload, s.sampleRate, s.outputAudioCodec)
 		if err != nil {
 			s.errCh <- err
 			return
@@ -1116,7 +1111,7 @@ func (s *sarvamTTSSynthesizeStream) readLoop() {
 	}
 }
 
-func sarvamTTSAudioFromStreamMessage(payload []byte, sampleRate int) (*tts.SynthesizedAudio, bool, error) {
+func sarvamTTSAudioFromStreamMessage(payload []byte, sampleRate int, outputAudioCodec string) (*tts.SynthesizedAudio, bool, error) {
 	var message struct {
 		Type string `json:"type"`
 		Data struct {
@@ -1142,7 +1137,7 @@ func sarvamTTSAudioFromStreamMessage(payload []byte, sampleRate int) (*tts.Synth
 		if len(data) == 0 {
 			return nil, false, nil
 		}
-		return sarvamTTSAudioFrame(data, sampleRate, message.Data.RequestID), false, nil
+		return sarvamTTSAudioFrame(data, sampleRate, message.Data.RequestID, outputAudioCodec), false, nil
 	case "event":
 		return nil, message.Data.EventType == "final", nil
 	case "error":
@@ -1152,14 +1147,67 @@ func sarvamTTSAudioFromStreamMessage(payload []byte, sampleRate int) (*tts.Synth
 	}
 }
 
-func sarvamTTSAudioFrame(data []byte, sampleRate int, requestID string) *tts.SynthesizedAudio {
+func sarvamTTSAudioFrame(data []byte, sampleRate int, requestID string, outputAudioCodec string) *tts.SynthesizedAudio {
+	frameData := sarvamTTSDecodeTelephony(outputAudioCodec, data)
 	return &tts.SynthesizedAudio{
 		RequestID: requestID,
 		Frame: &model.AudioFrame{
-			Data:              bytes.Clone(data),
+			Data:              frameData,
 			SampleRate:        uint32(sampleRate),
 			NumChannels:       1,
-			SamplesPerChannel: uint32(len(data) / 2),
+			SamplesPerChannel: uint32(len(frameData) / 2),
 		},
 	}
+}
+
+func sarvamTTSDecodeTelephony(codec string, data []byte) []byte {
+	switch codec {
+	case "mulaw":
+		return sarvamTTSDecodeMuLaw(data)
+	case "alaw":
+		return sarvamTTSDecodeALaw(data)
+	default:
+		return bytes.Clone(data)
+	}
+}
+
+func sarvamTTSDecodeMuLaw(data []byte) []byte {
+	pcm := make([]byte, len(data)*2)
+	for i, encoded := range data {
+		u := ^encoded
+		sign := 1
+		if u&0x80 != 0 {
+			sign = -1
+		}
+		exponent := int((u >> 4) & 0x07)
+		mantissa := int(u & 0x0f)
+		sample := ((mantissa << 3) + 0x84) << exponent
+		value := int16(sign * (sample - 0x84))
+		pcm[i*2] = byte(value)
+		pcm[i*2+1] = byte(value >> 8)
+	}
+	return pcm
+}
+
+func sarvamTTSDecodeALaw(data []byte) []byte {
+	pcm := make([]byte, len(data)*2)
+	for i, encoded := range data {
+		a := encoded ^ 0x55
+		sign := -1
+		if a&0x80 != 0 {
+			sign = 1
+		}
+		exponent := int((a >> 4) & 0x07)
+		mantissa := int(a & 0x0f)
+		sample := 0
+		if exponent == 0 {
+			sample = (mantissa << 4) + 8
+		} else {
+			sample = ((mantissa << 4) + 0x108) << (exponent - 1)
+		}
+		value := int16(sign * sample)
+		pcm[i*2] = byte(value)
+		pcm[i*2+1] = byte(value >> 8)
+	}
+	return pcm
 }

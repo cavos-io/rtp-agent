@@ -2326,6 +2326,180 @@ func receiveTTSMetricRequestID(t *testing.T, metrics <-chan string) string {
 	}
 }
 
+func TestFallbackChunkedStreamReportsDoneAndExceptionAfterFailure(t *testing.T) {
+	providerErr := errors.New("provider failed")
+	adapter := NewFallbackAdapter([]TTS{
+		&metadataTTS{
+			label:       "primary",
+			sampleRate:  24000,
+			numChannels: 1,
+			chunked:     &metadataChunkedStream{err: providerErr},
+		},
+	})
+
+	stream, err := adapter.Synthesize(context.Background(), "hello")
+	if err != nil {
+		t.Fatalf("Synthesize returned error: %v", err)
+	}
+	defer stream.Close()
+
+	doneStream, ok := stream.(DoneStream)
+	if !ok {
+		t.Fatal("chunked stream does not implement DoneStream")
+	}
+	exceptionStream, ok := stream.(ExceptionStream)
+	if !ok {
+		t.Fatal("chunked stream does not implement ExceptionStream")
+	}
+	if doneStream.Done() {
+		t.Fatal("Done() = true before failure")
+	}
+
+	_, err = stream.Next()
+	if err == nil {
+		t.Fatal("Next error = nil, want terminal fallback error")
+	}
+	wantErr := err
+	if !doneStream.Done() {
+		t.Fatal("Done() = false after failure")
+	}
+	if err := exceptionStream.Exception(); !errors.Is(err, wantErr) {
+		t.Fatalf("Exception() = %v, want %v", err, wantErr)
+	}
+}
+
+func TestFallbackChunkedStreamReportsDoneAfterEOF(t *testing.T) {
+	adapter := NewFallbackAdapter([]TTS{
+		&metadataTTS{
+			label:       "primary",
+			sampleRate:  24000,
+			numChannels: 1,
+			chunked: &metadataChunkedStream{events: []*SynthesizedAudio{{
+				Frame: &model.AudioFrame{Data: []byte{1}, SampleRate: 24000, NumChannels: 1, SamplesPerChannel: 1},
+			}}},
+		},
+	})
+
+	stream, err := adapter.Synthesize(context.Background(), "hello")
+	if err != nil {
+		t.Fatalf("Synthesize returned error: %v", err)
+	}
+	defer stream.Close()
+
+	doneStream, ok := stream.(DoneStream)
+	if !ok {
+		t.Fatal("chunked stream does not implement DoneStream")
+	}
+	exceptionStream, ok := stream.(ExceptionStream)
+	if !ok {
+		t.Fatal("chunked stream does not implement ExceptionStream")
+	}
+
+	if _, err := stream.Next(); err != nil {
+		t.Fatalf("first Next error = %v", err)
+	}
+	if !doneStream.Done() {
+		t.Fatal("Done() = false after final audio")
+	}
+	if err := exceptionStream.Exception(); err != nil {
+		t.Fatalf("Exception() = %v, want nil", err)
+	}
+}
+
+func TestFallbackSynthesizeStreamReportsDoneAndExceptionAfterFailure(t *testing.T) {
+	providerErr := errors.New("provider failed")
+	adapter := NewFallbackAdapter([]TTS{
+		&metadataTTS{
+			label:       "primary",
+			sampleRate:  24000,
+			numChannels: 1,
+			capabilities: TTSCapabilities{
+				Streaming: true,
+			},
+			stream: &metadataSynthesizeStream{err: providerErr},
+		},
+	})
+
+	stream, err := adapter.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+	defer stream.Close()
+
+	doneStream, ok := stream.(DoneStream)
+	if !ok {
+		t.Fatal("synthesize stream does not implement DoneStream")
+	}
+	exceptionStream, ok := stream.(ExceptionStream)
+	if !ok {
+		t.Fatal("synthesize stream does not implement ExceptionStream")
+	}
+
+	if err := stream.PushText("hello"); err != nil {
+		t.Fatalf("PushText error = %v", err)
+	}
+	if err := EndSynthesizeStreamInput(stream); err != nil {
+		t.Fatalf("EndSynthesizeStreamInput error = %v", err)
+	}
+	_, err = stream.Next()
+	if err == nil {
+		t.Fatal("Next error = nil, want terminal fallback error")
+	}
+	wantErr := err
+	if !doneStream.Done() {
+		t.Fatal("Done() = false after failure")
+	}
+	if err := exceptionStream.Exception(); !errors.Is(err, wantErr) {
+		t.Fatalf("Exception() = %v, want %v", err, wantErr)
+	}
+}
+
+func TestFallbackSynthesizeStreamReportsDoneAfterEOF(t *testing.T) {
+	adapter := NewFallbackAdapter([]TTS{
+		&metadataTTS{
+			label:        "primary",
+			sampleRate:   24000,
+			numChannels:  1,
+			capabilities: TTSCapabilities{Streaming: true},
+			stream: &metadataSynthesizeStream{events: []*SynthesizedAudio{{
+				Frame:   &model.AudioFrame{Data: []byte{1}, SampleRate: 24000, NumChannels: 1, SamplesPerChannel: 1},
+				IsFinal: true,
+			}}},
+		},
+	})
+
+	stream, err := adapter.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+	defer stream.Close()
+
+	doneStream, ok := stream.(DoneStream)
+	if !ok {
+		t.Fatal("synthesize stream does not implement DoneStream")
+	}
+	exceptionStream, ok := stream.(ExceptionStream)
+	if !ok {
+		t.Fatal("synthesize stream does not implement ExceptionStream")
+	}
+
+	if err := stream.PushText("hello"); err != nil {
+		t.Fatalf("PushText error = %v", err)
+	}
+	if err := EndSynthesizeStreamInput(stream); err != nil {
+		t.Fatalf("EndSynthesizeStreamInput error = %v", err)
+	}
+	if _, err := stream.Next(); err != nil {
+		t.Fatalf("first Next error = %v", err)
+	}
+	if !doneStream.Done() {
+		t.Fatal("Done() = false after final audio")
+	}
+	if err := exceptionStream.Exception(); err != nil {
+		t.Fatalf("Exception() = %v, want nil", err)
+	}
+}
+
 func receiveTTSErrorLabel(t *testing.T, errs <-chan string) string {
 	t.Helper()
 	select {

@@ -131,6 +131,125 @@ func TestStreamAdapterForwardsErrorEvents(t *testing.T) {
 	}
 }
 
+func TestStreamAdapterStreamReportsDoneAndExceptionAfterFailure(t *testing.T) {
+	wantErr := errors.New("provider failed")
+	provider := &fakeStreamAdapterTTS{
+		streamErr: wantErr,
+	}
+	adapter := NewStreamAdapter(provider)
+
+	stream, err := adapter.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	defer stream.Close()
+
+	doneStream, ok := stream.(DoneStream)
+	if !ok {
+		t.Fatal("stream does not implement DoneStream")
+	}
+	exceptionStream, ok := stream.(ExceptionStream)
+	if !ok {
+		t.Fatal("stream does not implement ExceptionStream")
+	}
+	if doneStream.Done() {
+		t.Fatal("Done() = true before input")
+	}
+	if err := exceptionStream.Exception(); err != nil {
+		t.Fatalf("Exception() before failure = %v, want nil", err)
+	}
+
+	if err := stream.PushText("hello."); err != nil {
+		t.Fatalf("PushText() error = %v", err)
+	}
+	if err := EndSynthesizeStreamInput(stream); err != nil {
+		t.Fatalf("EndSynthesizeStreamInput() error = %v", err)
+	}
+
+	_, err = stream.Next()
+	if !errors.Is(err, wantErr) {
+		t.Fatalf("Next() error = %v, want %v", err, wantErr)
+	}
+	if !doneStream.Done() {
+		t.Fatal("Done() = false after stream failure")
+	}
+	if err := exceptionStream.Exception(); !errors.Is(err, wantErr) {
+		t.Fatalf("Exception() after failure = %v, want %v", err, wantErr)
+	}
+}
+
+func TestStreamAdapterStreamReportsDoneAfterEOF(t *testing.T) {
+	provider := &fakeStreamAdapterTTS{}
+	adapter := NewStreamAdapter(provider)
+
+	stream, err := adapter.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	defer stream.Close()
+
+	doneStream, ok := stream.(DoneStream)
+	if !ok {
+		t.Fatal("stream does not implement DoneStream")
+	}
+	exceptionStream, ok := stream.(ExceptionStream)
+	if !ok {
+		t.Fatal("stream does not implement ExceptionStream")
+	}
+
+	if err := EndSynthesizeStreamInput(stream); err != nil {
+		t.Fatalf("EndSynthesizeStreamInput() error = %v", err)
+	}
+	_, err = stream.Next()
+	if !errors.Is(err, io.EOF) {
+		t.Fatalf("Next() error = %v, want io.EOF", err)
+	}
+	if !doneStream.Done() {
+		t.Fatal("Done() = false after EOF")
+	}
+	if err := exceptionStream.Exception(); err != nil {
+		t.Fatalf("Exception() after EOF = %v, want nil", err)
+	}
+}
+
+func TestStreamAdapterStreamReportsDoneAfterCloseWithActiveStream(t *testing.T) {
+	chunked := newBlockingStreamAdapterChunkedStream()
+	provider := &fakeStreamAdapterTTS{chunked: chunked}
+	adapter := NewStreamAdapter(provider)
+
+	stream, err := adapter.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	doneStream, ok := stream.(DoneStream)
+	if !ok {
+		t.Fatal("stream does not implement DoneStream")
+	}
+	exceptionStream, ok := stream.(ExceptionStream)
+	if !ok {
+		t.Fatal("stream does not implement ExceptionStream")
+	}
+
+	if err := stream.PushText("hello."); err != nil {
+		t.Fatalf("PushText() error = %v", err)
+	}
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush() error = %v", err)
+	}
+	if !chunked.waitForNext(t) {
+		t.Fatal("active chunked stream was not entered")
+	}
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+	if !doneStream.Done() {
+		t.Fatal("Done() = false after Close")
+	}
+	if err := exceptionStream.Exception(); err != nil {
+		t.Fatalf("Exception() after Close = %v, want nil", err)
+	}
+}
+
 func TestStreamAdapterPreservesInternalNewlinesForSynthesis(t *testing.T) {
 	provider := &fakeStreamAdapterTTS{}
 	stream, err := NewStreamAdapter(provider).Stream(context.Background())

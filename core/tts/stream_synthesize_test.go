@@ -190,6 +190,63 @@ func TestSynthesizeWithStreamEmitsMetricsAfterEOF(t *testing.T) {
 	}
 }
 
+func TestSynthesizeWithStreamEmitsMetricsWhenReturningFinalTail(t *testing.T) {
+	provider := &fakeStreamingTTS{
+		stream: &fakeSynthesizeStream{
+			events: []*SynthesizedAudio{{Frame: &model.AudioFrame{
+				Data:              make([]byte, 24000*2),
+				SampleRate:        24000,
+				NumChannels:       1,
+				SamplesPerChannel: 24000,
+			}}},
+			emptyErr: io.EOF,
+		},
+	}
+	metricsCh := make(chan *telemetry.TTSMetrics, 1)
+	provider.OnMetricsCollected(func(metrics *telemetry.TTSMetrics) {
+		metricsCh <- metrics
+	})
+
+	chunked, err := SynthesizeWithStream(context.Background(), provider, "hello")
+	if err != nil {
+		t.Fatalf("SynthesizeWithStream() error = %v", err)
+	}
+	defer chunked.Close()
+
+	head, err := chunked.Next()
+	if err != nil {
+		t.Fatalf("first Next() error = %v", err)
+	}
+	if head.IsFinal {
+		t.Fatal("first audio IsFinal = true, want non-final head")
+	}
+	select {
+	case got := <-metricsCh:
+		t.Fatalf("metrics emitted before final tail: %#v", got)
+	default:
+	}
+
+	tail, err := chunked.Next()
+	if err != nil {
+		t.Fatalf("second Next() error = %v", err)
+	}
+	if !tail.IsFinal {
+		t.Fatal("second audio IsFinal = false, want final tail")
+	}
+
+	select {
+	case got := <-metricsCh:
+		if got.RequestID != tail.RequestID {
+			t.Fatalf("metrics RequestID = %q, want %q", got.RequestID, tail.RequestID)
+		}
+		if got.AudioDuration <= 0 {
+			t.Fatalf("metrics AudioDuration = %f, want > 0", got.AudioDuration)
+		}
+	default:
+		t.Fatal("provider did not emit TTS metrics when final tail was returned")
+	}
+}
+
 func TestSynthesizeWithStreamSetsStableRequestID(t *testing.T) {
 	provider := &fakeStreamingTTS{
 		stream: &fakeSynthesizeStream{
@@ -510,6 +567,94 @@ func TestSynthesizeWithStreamEmitsErrorOnStreamFailure(t *testing.T) {
 		}
 	default:
 		t.Fatal("provider did not emit TTS error")
+	}
+}
+
+func TestSynthesizeWithStreamReportsDoneAndExceptionAfterFailure(t *testing.T) {
+	wantErr := errors.New("provider failed")
+	provider := &fakeStreamingTTS{
+		stream: &fakeSynthesizeStream{emptyErr: wantErr},
+	}
+
+	chunked, err := SynthesizeWithStream(context.Background(), provider, "hello")
+	if err != nil {
+		t.Fatalf("SynthesizeWithStream() error = %v", err)
+	}
+	defer chunked.Close()
+
+	doneStream, ok := chunked.(DoneStream)
+	if !ok {
+		t.Fatal("chunked stream does not implement DoneStream")
+	}
+	exceptionStream, ok := chunked.(ExceptionStream)
+	if !ok {
+		t.Fatal("chunked stream does not implement ExceptionStream")
+	}
+	if doneStream.Done() {
+		t.Fatal("Done() = true before stream failure")
+	}
+	if err := exceptionStream.Exception(); err != nil {
+		t.Fatalf("Exception() before failure = %v, want nil", err)
+	}
+
+	_, err = chunked.Next()
+	if !errors.Is(err, wantErr) {
+		t.Fatalf("Next() error = %v, want %v", err, wantErr)
+	}
+	if !doneStream.Done() {
+		t.Fatal("Done() = false after stream failure")
+	}
+	if err := exceptionStream.Exception(); !errors.Is(err, wantErr) {
+		t.Fatalf("Exception() after failure = %v, want %v", err, wantErr)
+	}
+}
+
+func TestSynthesizeWithStreamReportsDoneAfterFinalTail(t *testing.T) {
+	provider := &fakeStreamingTTS{
+		stream: &fakeSynthesizeStream{
+			events: []*SynthesizedAudio{{Frame: &model.AudioFrame{
+				Data:              make([]byte, 24000*2),
+				SampleRate:        24000,
+				NumChannels:       1,
+				SamplesPerChannel: 24000,
+			}}},
+			emptyErr: io.EOF,
+		},
+	}
+
+	chunked, err := SynthesizeWithStream(context.Background(), provider, "hello")
+	if err != nil {
+		t.Fatalf("SynthesizeWithStream() error = %v", err)
+	}
+	defer chunked.Close()
+
+	doneStream, ok := chunked.(DoneStream)
+	if !ok {
+		t.Fatal("chunked stream does not implement DoneStream")
+	}
+	exceptionStream, ok := chunked.(ExceptionStream)
+	if !ok {
+		t.Fatal("chunked stream does not implement ExceptionStream")
+	}
+
+	if _, err := chunked.Next(); err != nil {
+		t.Fatalf("first Next() error = %v", err)
+	}
+	if doneStream.Done() {
+		t.Fatal("Done() = true before final tail")
+	}
+	tail, err := chunked.Next()
+	if err != nil {
+		t.Fatalf("second Next() error = %v", err)
+	}
+	if !tail.IsFinal {
+		t.Fatal("second audio IsFinal = false, want final tail")
+	}
+	if !doneStream.Done() {
+		t.Fatal("Done() = false after final tail")
+	}
+	if err := exceptionStream.Exception(); err != nil {
+		t.Fatalf("Exception() after final tail = %v, want nil", err)
 	}
 }
 

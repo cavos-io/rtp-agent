@@ -152,7 +152,7 @@ func buildSpeechifyTTSRequest(ctx context.Context, t *SpeechifyTTS, text string)
 		return nil, err
 	}
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+t.apiKey)
+	req.Header.Set("Authorization", speechifyAuthorizationHeader(t.apiKey))
 	req.Header.Set("x-caller", "livekit")
 	if accept := speechifyAcceptHeader(t.encoding); accept != "" {
 		req.Header.Set("Accept", accept)
@@ -224,6 +224,13 @@ func speechifyAcceptHeader(encoding string) string {
 	default:
 		return ""
 	}
+}
+
+func speechifyAuthorizationHeader(apiKey string) string {
+	if strings.HasPrefix(apiKey, "Bearer ") {
+		return apiKey
+	}
+	return "Bearer " + apiKey
 }
 
 func optionalString(value string) interface{} {

@@ -82,6 +82,8 @@ type streamAdapterWrapper struct {
 	closed    bool
 	inputDone bool
 	started   bool
+	done      bool
+	exception error
 
 	segmentPending *SynthesizedAudio
 }
@@ -151,6 +153,7 @@ func (w *streamAdapterWrapper) run() {
 		}
 		if tok.Token != "" {
 			if err := w.synthesize(tok.Token, tok.SegmentID); err != nil {
+				w.markDone(err)
 				w.sendErr(err)
 				return
 			}
@@ -158,6 +161,7 @@ func (w *streamAdapterWrapper) run() {
 		w.flushCompletedSegments()
 	}
 	w.flushSegmentPending(true)
+	w.markDone(nil)
 }
 
 func (w *streamAdapterWrapper) flushCompletedSegments() {
@@ -359,6 +363,7 @@ func (w *streamAdapterWrapper) Close() error {
 		close(w.inputCh)
 	}
 	w.mu.Unlock()
+	w.markDone(nil)
 	if active != nil {
 		return active.Close()
 	}
@@ -378,4 +383,25 @@ func (w *streamAdapterWrapper) Next() (*SynthesizedAudio, error) {
 	default:
 	}
 	return nil, io.EOF
+}
+
+func (w *streamAdapterWrapper) Done() bool {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.done
+}
+
+func (w *streamAdapterWrapper) Exception() error {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.exception
+}
+
+func (w *streamAdapterWrapper) markDone(err error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.done = true
+	if err != nil && !errors.Is(err, io.EOF) {
+		w.exception = err
+	}
 }
