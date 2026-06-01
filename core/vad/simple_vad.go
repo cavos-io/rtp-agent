@@ -235,10 +235,10 @@ func (v *SimpleVAD) Stream(ctx context.Context) (VADStream, error) {
 }
 
 func validateSimpleVADOptions(options SimpleVADOptions) error {
-	if options.UpdateInterval <= 0 {
+	if math.IsNaN(options.UpdateInterval) || math.IsInf(options.UpdateInterval, 0) || options.UpdateInterval <= 0 {
 		return errors.New("update interval must be greater than 0")
 	}
-	if options.ProbabilitySmoothingAlpha < 0 || options.ProbabilitySmoothingAlpha > 1 {
+	if math.IsNaN(options.ProbabilitySmoothingAlpha) || math.IsInf(options.ProbabilitySmoothingAlpha, 0) || options.ProbabilitySmoothingAlpha < 0 || options.ProbabilitySmoothingAlpha > 1 {
 		return errors.New("probability smoothing alpha must be in [0, 1]")
 	}
 	return nil

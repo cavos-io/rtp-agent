@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"math"
 	"strings"
 	"testing"
 	"time"
@@ -230,20 +231,22 @@ func TestSimpleVADUpdateOptionsWithIgnoresInvalidProbabilitySmoothingAlpha(t *te
 }
 
 func TestSimpleVADRejectsInvalidUpdateIntervalAtStream(t *testing.T) {
-	detector := NewSimpleVADWithOptions(SimpleVADOptions{UpdateInterval: -1})
+	for _, interval := range []float64{-1, math.NaN(), math.Inf(1)} {
+		detector := NewSimpleVADWithOptions(SimpleVADOptions{UpdateInterval: interval})
 
-	stream, err := detector.Stream(context.Background())
-	if err == nil {
-		if stream != nil {
-			_ = stream.Close()
+		stream, err := detector.Stream(context.Background())
+		if err == nil {
+			if stream != nil {
+				_ = stream.Close()
+			}
+			t.Fatalf("Stream() with update interval %v error = nil, want invalid update interval error", interval)
 		}
-		t.Fatal("Stream() error = nil, want invalid update interval error")
-	}
-	if !strings.Contains(err.Error(), "update interval must be greater than 0") {
-		t.Fatalf("Stream() error = %q, want update interval message", err.Error())
-	}
-	if len(detector.streams) != 0 {
-		t.Fatalf("registered streams after invalid update interval = %d, want 0", len(detector.streams))
+		if !strings.Contains(err.Error(), "update interval must be greater than 0") {
+			t.Fatalf("Stream() with update interval %v error = %q, want update interval message", interval, err.Error())
+		}
+		if len(detector.streams) != 0 {
+			t.Fatalf("registered streams after invalid update interval = %d, want 0", len(detector.streams))
+		}
 	}
 }
 
@@ -697,7 +700,7 @@ func TestSimpleVADProbabilitySmoothingDelaysSpeechEnd(t *testing.T) {
 }
 
 func TestSimpleVADRejectsInvalidProbabilitySmoothingAlpha(t *testing.T) {
-	for _, alpha := range []float64{-0.1, 1.1, 2} {
+	for _, alpha := range []float64{-0.1, 1.1, 2, math.NaN(), math.Inf(1)} {
 		detector := NewSimpleVADWithOptions(SimpleVADOptions{
 			Threshold:                 0.05,
 			ProbabilitySmoothingAlpha: alpha,
