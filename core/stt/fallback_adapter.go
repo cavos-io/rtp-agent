@@ -298,6 +298,7 @@ func (f *FallbackAdapter) Stream(ctx context.Context, language string) (Recogniz
 		inputBuffer: make([]fallbackRecognizeInput, 0),
 		retries:     make(map[int]int),
 		startedAt:   time.Now(),
+		startTime:   streamStartTimeNow(),
 	}
 
 	if err := s.tryStartStream(0); err != nil {

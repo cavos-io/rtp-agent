@@ -61,6 +61,31 @@ func TestFallbackAdapterAlwaysAdvertisesOfflineRecognize(t *testing.T) {
 	}
 }
 
+func TestFallbackStreamSeedsStartTime(t *testing.T) {
+	inner := &metadataRecognizeStream{events: []*SpeechEvent{{Type: SpeechEventFinalTranscript}}}
+	adapter := NewFallbackAdapter([]STT{
+		&metadataSTT{
+			label:        "primary",
+			capabilities: STTCapabilities{Streaming: true},
+			stream:       inner,
+		},
+	})
+
+	before := time.Now()
+	stream, err := adapter.Stream(context.Background(), "en")
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+	after := time.Now()
+	defer stream.Close()
+
+	timing, ok := stream.(StreamTiming)
+	if !ok {
+		t.Fatal("stream does not implement StreamTiming")
+	}
+	assertStreamStartTimeSeeded(t, timing, before, after)
+}
+
 func TestFallbackAdapterAggregatesAlignedTranscriptGranularity(t *testing.T) {
 	adapter := NewFallbackAdapter([]STT{
 		&metadataSTT{label: "primary", capabilities: STTCapabilities{

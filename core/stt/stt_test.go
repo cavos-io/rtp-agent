@@ -2,6 +2,7 @@ package stt
 
 import (
 	"testing"
+	"time"
 
 	"github.com/cavos-io/conversation-worker/model"
 )
@@ -85,6 +86,16 @@ func TestStreamTimingInterfaceCapturesReferenceTimingAnchors(t *testing.T) {
 	}
 	if stream.StartTime() != 42.0 {
 		t.Fatalf("StartTime = %v, want 42.0", stream.StartTime())
+	}
+}
+
+func assertStreamStartTimeSeeded(t *testing.T, timing StreamTiming, before time.Time, after time.Time) {
+	t.Helper()
+	startTime := timing.StartTime()
+	beforeSeconds := float64(before.UnixNano()) / float64(time.Second)
+	afterSeconds := float64(after.UnixNano()) / float64(time.Second)
+	if startTime < beforeSeconds || startTime > afterSeconds {
+		t.Fatalf("StartTime = %v, want between %v and %v", startTime, beforeSeconds, afterSeconds)
 	}
 }
 

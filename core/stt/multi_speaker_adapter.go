@@ -94,14 +94,15 @@ func (a *MultiSpeakerAdapter) Stream(ctx context.Context, language string) (Reco
 
 	ctx, cancel := context.WithCancel(ctx)
 	w := &multiSpeakerAdapterWrapper{
-		adapter:  a,
-		inner:    innerStream,
-		ctx:      ctx,
-		cancel:   cancel,
-		detector: newPrimarySpeakerDetector(a.detectPrimarySpeaker, a.suppressBackgroundSpeaker, a.primaryFormat, a.backgroundFormat, a.opt),
-		eventCh:  make(chan *SpeechEvent, 100),
-		errCh:    make(chan error, 1),
-		inputCh:  make(chan multiSpeakerInput, 100),
+		adapter:   a,
+		inner:     innerStream,
+		ctx:       ctx,
+		cancel:    cancel,
+		detector:  newPrimarySpeakerDetector(a.detectPrimarySpeaker, a.suppressBackgroundSpeaker, a.primaryFormat, a.backgroundFormat, a.opt),
+		eventCh:   make(chan *SpeechEvent, 100),
+		errCh:     make(chan error, 1),
+		inputCh:   make(chan multiSpeakerInput, 100),
+		startTime: streamStartTimeNow(),
 	}
 
 	go w.run()

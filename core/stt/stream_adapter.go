@@ -66,13 +66,14 @@ type streamAdapterInput struct {
 func (a *StreamAdapter) Stream(ctx context.Context, language string) (RecognizeStream, error) {
 	ctx, cancel := context.WithCancel(ctx)
 	w := &streamAdapterWrapper{
-		adapter:  a,
-		ctx:      ctx,
-		cancel:   cancel,
-		language: language,
-		eventCh:  make(chan *SpeechEvent, 100),
-		errCh:    make(chan error, 1),
-		inputCh:  make(chan streamAdapterInput, 100),
+		adapter:   a,
+		ctx:       ctx,
+		cancel:    cancel,
+		language:  language,
+		eventCh:   make(chan *SpeechEvent, 100),
+		errCh:     make(chan error, 1),
+		inputCh:   make(chan streamAdapterInput, 100),
+		startTime: streamStartTimeNow(),
 	}
 
 	go w.run()

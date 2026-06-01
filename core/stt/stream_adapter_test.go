@@ -42,18 +42,21 @@ func TestStreamAdapterCapabilitiesMatchReference(t *testing.T) {
 }
 
 func TestStreamAdapterExposesTimingAnchors(t *testing.T) {
+	before := time.Now()
 	stream, err := NewStreamAdapter(&fakeStreamAdapterSTT{}, &fakeStreamAdapterVAD{
 		stream: &fakeStreamAdapterVADStream{done: make(chan struct{})},
 	}).Stream(context.Background(), "")
 	if err != nil {
 		t.Fatalf("Stream returned error: %v", err)
 	}
+	after := time.Now()
 	defer stream.Close()
 
 	timing, ok := stream.(StreamTiming)
 	if !ok {
 		t.Fatal("stream does not implement StreamTiming")
 	}
+	assertStreamStartTimeSeeded(t, timing, before, after)
 	timing.SetStartTimeOffset(1.5)
 	timing.SetStartTime(24.0)
 

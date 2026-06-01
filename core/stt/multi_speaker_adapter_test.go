@@ -293,6 +293,32 @@ func TestMultiSpeakerAdapterWrapperPropagatesTimingAnchors(t *testing.T) {
 	}
 }
 
+func TestMultiSpeakerAdapterStreamSeedsStartTime(t *testing.T) {
+	inner := &fakeMultiSpeakerStream{nextErr: io.EOF}
+	adapter, err := NewMultiSpeakerAdapter(&metadataSTT{
+		label:        "diarized",
+		capabilities: STTCapabilities{Streaming: true, Diarization: true},
+		stream:       inner,
+	}, true, false, "{text}", "{text}", nil)
+	if err != nil {
+		t.Fatalf("NewMultiSpeakerAdapter returned error: %v", err)
+	}
+
+	before := time.Now()
+	stream, err := adapter.Stream(context.Background(), "en")
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+	after := time.Now()
+	defer stream.Close()
+
+	timing, ok := stream.(StreamTiming)
+	if !ok {
+		t.Fatal("stream does not implement StreamTiming")
+	}
+	assertStreamStartTimeSeeded(t, timing, before, after)
+}
+
 func TestMultiSpeakerAdapterWrapperEndInputFlushesAndRejectsMoreInput(t *testing.T) {
 	inner := &fakeMultiSpeakerStream{nextErr: io.EOF}
 	wrapper := &multiSpeakerAdapterWrapper{
