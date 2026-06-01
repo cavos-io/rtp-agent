@@ -3,6 +3,7 @@ package worker
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"math"
@@ -10,11 +11,13 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/cavos-io/rtp-agent/core/agent"
 	"github.com/cavos-io/rtp-agent/interface/worker/ipc"
 	"github.com/go-jose/go-jose/v3/jwt"
 	"github.com/gorilla/websocket"
@@ -2214,6 +2217,32 @@ func TestAssignmentRecordsRegisteredWorkerID(t *testing.T) {
 	}
 }
 
+func TestAssignmentEnablesRecordingOptionsWhenRequested(t *testing.T) {
+	server := NewAgentServer(WorkerOptions{})
+	startedCh := make(chan *JobContext, 1)
+	server.entrypointFnc = func(ctx *JobContext) error {
+		startedCh <- ctx
+		return nil
+	}
+
+	job := &livekit.Job{
+		Id:              "job_recording",
+		Room:            &livekit.Room{Name: "room-a"},
+		EnableRecording: true,
+	}
+	markJobAccepted(t, server, job)
+	server.handleAssignment(context.Background(), &livekit.JobAssignment{Job: job})
+
+	select {
+	case jobCtx := <-startedCh:
+		if jobCtx.Report.RecordingOptions != (agent.RecordingOptions{Audio: true, Traces: true, Logs: true, Transcript: true}) {
+			t.Fatalf("RecordingOptions = %#v, want all enabled", jobCtx.Report.RecordingOptions)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("assignment entrypoint did not run")
+	}
+}
+
 func TestAssignmentSendsRunningJobStatus(t *testing.T) {
 	server := NewAgentServer(WorkerOptions{})
 	sentCh := make(chan *livekit.WorkerMessage, 1)
@@ -2262,6 +2291,79 @@ func TestAssignmentReportsSuccessWhenEntrypointCompletes(t *testing.T) {
 	server.mu.Unlock()
 	if exists {
 		t.Fatal("assigned job remained in activeJobs after successful entrypoint completion")
+	}
+}
+
+func TestAssignmentCompletionUploadsRecordedSessionReport(t *testing.T) {
+	oldUpload := uploadSessionReport
+	uploadCh := make(chan struct {
+		cloudURL string
+		apiKey   string
+		secret   string
+		agent    string
+		report   *agent.SessionReport
+	}, 1)
+	uploadSessionReport = func(cloudURL string, apiKey string, apiSecret string, agentName string, report *agent.SessionReport) error {
+		uploadCh <- struct {
+			cloudURL string
+			apiKey   string
+			secret   string
+			agent    string
+			report   *agent.SessionReport
+		}{
+			cloudURL: cloudURL,
+			apiKey:   apiKey,
+			secret:   apiSecret,
+			agent:    agentName,
+			report:   report,
+		}
+		return nil
+	}
+	defer func() { uploadSessionReport = oldUpload }()
+
+	server := NewAgentServer(WorkerOptions{
+		APIKey:    "api-key",
+		APISecret: "api-secret",
+		AgentName: "support-agent",
+	})
+	sentCh := make(chan *livekit.WorkerMessage, 2)
+	server.workerMessageSink = func(msg *livekit.WorkerMessage) error {
+		sentCh <- msg
+		return nil
+	}
+	server.entrypointFnc = func(ctx *JobContext) error {
+		ctx.Report.Room = ctx.Job.GetRoom().GetName()
+		return nil
+	}
+
+	assignmentURL := "wss://tenant.livekit.cloud"
+	job := &livekit.Job{
+		Id:              "job_upload_report",
+		Room:            &livekit.Room{Name: "room-a"},
+		EnableRecording: true,
+	}
+	markJobAccepted(t, server, job)
+	server.handleAssignment(context.Background(), &livekit.JobAssignment{
+		Job: job,
+		Url: &assignmentURL,
+	})
+
+	assertJobStatusMessage(t, receiveWorkerMessage(t, sentCh), "job_upload_report", livekit.JobStatus_JS_RUNNING)
+	assertJobStatusMessage(t, receiveWorkerMessage(t, sentCh), "job_upload_report", livekit.JobStatus_JS_SUCCESS)
+
+	select {
+	case upload := <-uploadCh:
+		if upload.cloudURL != assignmentURL {
+			t.Fatalf("upload cloudURL = %q, want assignment URL", upload.cloudURL)
+		}
+		if upload.apiKey != "api-key" || upload.secret != "api-secret" || upload.agent != "support-agent" {
+			t.Fatalf("upload credentials = (%q, %q, %q), want server credentials", upload.apiKey, upload.secret, upload.agent)
+		}
+		if upload.report.Room != "room-a" {
+			t.Fatalf("uploaded report Room = %q, want room-a", upload.report.Room)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("recorded assignment did not upload session report")
 	}
 }
 
@@ -2970,6 +3072,118 @@ func TestExecuteLocalJobWithOptionsUsesTokenIdentity(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("ExecuteLocalJobWithOptions() did not return after context cancellation")
+	}
+}
+
+func TestExecuteLocalJobWithOptionsAppliesRecordingOptions(t *testing.T) {
+	server := NewAgentServer(WorkerOptions{})
+	startedCh := make(chan *JobContext, 1)
+
+	if err := server.RTCSession(
+		func(ctx *JobContext) error {
+			startedCh <- ctx
+			return nil
+		},
+		nil,
+		nil,
+	); err != nil {
+		t.Fatalf("RTCSession() error = %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	doneCh := make(chan error, 1)
+	go func() {
+		doneCh <- server.ExecuteLocalJobWithOptions(ctx, "room-a", "agent-local", LocalJobOptions{
+			FakeJob: true,
+			RecordingOptions: agent.RecordingOptions{
+				Audio:      true,
+				Traces:     true,
+				Logs:       true,
+				Transcript: true,
+			},
+		})
+	}()
+
+	var jobCtx *JobContext
+	select {
+	case jobCtx = <-startedCh:
+	case <-time.After(time.Second):
+		t.Fatal("local job entrypoint did not run")
+	}
+
+	if jobCtx.Report.RecordingOptions != (agent.RecordingOptions{Audio: true, Traces: true, Logs: true, Transcript: true}) {
+		t.Fatalf("RecordingOptions = %#v, want all enabled", jobCtx.Report.RecordingOptions)
+	}
+
+	cancel()
+	select {
+	case err := <-doneCh:
+		if err != nil {
+			t.Fatalf("ExecuteLocalJobWithOptions() error = %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("ExecuteLocalJobWithOptions() did not return after context cancellation")
+	}
+}
+
+func TestExecuteLocalJobWithOptionsSavesSessionReport(t *testing.T) {
+	server := NewAgentServer(WorkerOptions{})
+	startedCh := make(chan *JobContext, 1)
+	reportPath := filepath.Join(t.TempDir(), "recordings", "session_report.json")
+
+	if err := server.RTCSession(
+		func(ctx *JobContext) error {
+			startedCh <- ctx
+			return nil
+		},
+		nil,
+		func(ctx *JobContext) error {
+			ctx.Report.JobID = ctx.Job.GetId()
+			ctx.Report.Room = ctx.Job.GetRoom().GetName()
+			return nil
+		},
+	); err != nil {
+		t.Fatalf("RTCSession() error = %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	doneCh := make(chan error, 1)
+	go func() {
+		doneCh <- server.ExecuteLocalJobWithOptions(ctx, "room-a", "agent-local", LocalJobOptions{
+			FakeJob:           true,
+			SessionReportPath: reportPath,
+		})
+	}()
+
+	select {
+	case <-startedCh:
+	case <-time.After(time.Second):
+		t.Fatal("local job entrypoint did not run")
+	}
+
+	cancel()
+	select {
+	case err := <-doneCh:
+		if err != nil {
+			t.Fatalf("ExecuteLocalJobWithOptions() error = %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("ExecuteLocalJobWithOptions() did not return after context cancellation")
+	}
+
+	reportBytes, err := os.ReadFile(reportPath)
+	if err != nil {
+		t.Fatalf("ReadFile(%q): %v", reportPath, err)
+	}
+	var report agent.SessionReport
+	if err := json.Unmarshal(reportBytes, &report); err != nil {
+		t.Fatalf("Unmarshal report: %v", err)
+	}
+	if report.JobID == "" {
+		t.Fatal("saved report JobID is empty")
+	}
+	if report.Room != "room-a" {
+		t.Fatalf("saved report Room = %q, want room-a", report.Room)
 	}
 }
 

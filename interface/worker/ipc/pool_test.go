@@ -13,6 +13,7 @@ type fakeJobExecutor struct {
 	id         string
 	job        *livekit.Job
 	runningJob *RunningJobInfo
+	status     JobStatus
 	launchErr  error
 	closeCtx   context.Context
 	closeCalls int
@@ -21,7 +22,12 @@ type fakeJobExecutor struct {
 
 func (e *fakeJobExecutor) ID() string { return e.id }
 
-func (e *fakeJobExecutor) Status() JobStatus { return JobStatusRunning }
+func (e *fakeJobExecutor) Status() JobStatus {
+	if e.status != "" {
+		return e.status
+	}
+	return JobStatusRunning
+}
 
 func (e *fakeJobExecutor) Started() bool { return e.job != nil }
 
@@ -126,6 +132,54 @@ func TestProcPoolActiveJobsReturnsRunningAssignments(t *testing.T) {
 	}
 }
 
+func TestProcPoolActiveJobsSkipsCompletedExecutors(t *testing.T) {
+	completed := RunningJobInfo{Job: &livekit.Job{Id: "job-done"}}
+	running := RunningJobInfo{Job: &livekit.Job{Id: "job-running"}}
+	pool := &ProcPool{
+		executors: map[string]JobExecutor{
+			"done":    &fakeJobExecutor{id: "done", job: completed.Job, runningJob: &completed, status: JobStatusSuccess},
+			"running": &fakeJobExecutor{id: "running", job: running.Job, runningJob: &running, status: JobStatusRunning},
+		},
+	}
+
+	activeJobs := pool.ActiveJobs()
+
+	if len(activeJobs) != 1 {
+		t.Fatalf("ActiveJobs() len = %d, want only running job", len(activeJobs))
+	}
+	if activeJobs[0].Job.GetId() != "job-running" {
+		t.Fatalf("ActiveJobs()[0].Job.Id = %q, want job-running", activeJobs[0].Job.GetId())
+	}
+}
+
+func TestProcPoolGetExecutorsSkipsCompletedExecutors(t *testing.T) {
+	completed := &fakeJobExecutor{
+		id:     "done",
+		job:    &livekit.Job{Id: "job-done"},
+		status: JobStatusSuccess,
+	}
+	running := &fakeJobExecutor{
+		id:     "running",
+		job:    &livekit.Job{Id: "job-running"},
+		status: JobStatusRunning,
+	}
+	pool := &ProcPool{
+		executors: map[string]JobExecutor{
+			completed.id: completed,
+			running.id:   running,
+		},
+	}
+
+	executors := pool.GetExecutors()
+
+	if len(executors) != 1 {
+		t.Fatalf("GetExecutors() len = %d, want only running executor", len(executors))
+	}
+	if executors[0].ID() != "running" {
+		t.Fatalf("GetExecutors()[0].ID() = %q, want running", executors[0].ID())
+	}
+}
+
 func TestProcPoolCloseUsesConfiguredTimeout(t *testing.T) {
 	executor := &fakeJobExecutor{id: "exec-a"}
 	pool := &ProcPool{
@@ -196,6 +250,33 @@ func TestProcPoolLaunchAfterCloseIsRejected(t *testing.T) {
 	}
 }
 
+func TestProcPoolLaunchReusesCapacityAfterExecutorCompletes(t *testing.T) {
+	completed := make(chan struct{}, 2)
+	pool := NewProcPool(1, ExecutorTypeThread, func() error {
+		completed <- struct{}{}
+		return nil
+	})
+
+	if err := pool.LaunchJob(context.Background(), &livekit.Job{Id: "job-a"}); err != nil {
+		t.Fatalf("first LaunchJob: %v", err)
+	}
+	select {
+	case <-completed:
+	case <-time.After(time.Second):
+		t.Fatal("first job did not complete")
+	}
+	waitForProcPoolExecutorStatus(t, pool, JobStatusSuccess)
+
+	if err := pool.LaunchJob(context.Background(), &livekit.Job{Id: "job-b"}); err != nil {
+		t.Fatalf("second LaunchJob after completed executor: %v", err)
+	}
+	select {
+	case <-completed:
+	case <-time.After(time.Second):
+		t.Fatal("second job did not complete")
+	}
+}
+
 func TestProcPoolLaunchJobRetriesWithFreshExecutor(t *testing.T) {
 	first := &fakeJobExecutor{id: "exec-a", launchErr: errors.New("launch failed")}
 	second := &fakeJobExecutor{id: "exec-b"}
@@ -235,6 +316,30 @@ func TestProcPoolLaunchJobRetriesWithFreshExecutor(t *testing.T) {
 	}
 	if gotExecutors[0].ID() != "exec-b" {
 		t.Fatalf("remaining executor ID = %q, want exec-b", gotExecutors[0].ID())
+	}
+}
+
+func waitForProcPoolExecutorStatus(t *testing.T, pool *ProcPool, status JobStatus) {
+	t.Helper()
+
+	deadline := time.After(time.Second)
+	ticker := time.NewTicker(time.Millisecond)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-deadline:
+			t.Fatalf("executor did not reach status %q", status)
+		case <-ticker.C:
+			pool.mu.Lock()
+			for _, executor := range pool.executors {
+				if executor.Status() == status {
+					pool.mu.Unlock()
+					return
+				}
+			}
+			pool.mu.Unlock()
+		}
 	}
 }
 

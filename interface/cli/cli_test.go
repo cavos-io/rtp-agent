@@ -256,6 +256,34 @@ func TestParseConsoleArgsSupportsTextModeAndDevices(t *testing.T) {
 	}
 }
 
+func TestConsoleLocalJobOptionsEnableRecordingWhenRequested(t *testing.T) {
+	options := consoleLocalJobOptions(ConsoleArgs{Record: true})
+
+	if !options.FakeJob {
+		t.Fatal("FakeJob = false, want console local jobs to remain fake")
+	}
+	if options.RecordingOptions != (agent.RecordingOptions{Audio: true, Traces: true, Logs: true, Transcript: true}) {
+		t.Fatalf("RecordingOptions = %#v, want all enabled", options.RecordingOptions)
+	}
+	if !strings.HasPrefix(options.SessionReportPath, "console-recordings/session-") {
+		t.Fatalf("SessionReportPath = %q, want console recording session path", options.SessionReportPath)
+	}
+	if !strings.HasSuffix(options.SessionReportPath, "/session_report.json") {
+		t.Fatalf("SessionReportPath = %q, want session_report.json", options.SessionReportPath)
+	}
+}
+
+func TestConsoleLocalJobOptionsDisableRecordingByDefault(t *testing.T) {
+	options := consoleLocalJobOptions(ConsoleArgs{})
+
+	if options.RecordingOptions != (agent.RecordingOptions{}) {
+		t.Fatalf("RecordingOptions = %#v, want zero value", options.RecordingOptions)
+	}
+	if options.SessionReportPath != "" {
+		t.Fatalf("SessionReportPath = %q, want empty when not recording", options.SessionReportPath)
+	}
+}
+
 func TestParseConsoleArgsSupportsListDevices(t *testing.T) {
 	args, err := parseConsoleArgs([]string{"worker", "console", "--list-devices"})
 	if err != nil {

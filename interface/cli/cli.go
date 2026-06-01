@@ -9,9 +9,11 @@ import (
 	"io"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/cavos-io/rtp-agent/core/agent"
 	"github.com/cavos-io/rtp-agent/interface/worker"
@@ -526,6 +528,24 @@ func consoleLocalJobArgs() (roomName string, participantIdentity string) {
 	return "console-room", "console"
 }
 
+func consoleLocalJobOptions(args ConsoleArgs) worker.LocalJobOptions {
+	options := worker.LocalJobOptions{FakeJob: true}
+	if args.Record {
+		options.RecordingOptions = agent.RecordingOptions{
+			Audio:      true,
+			Traces:     true,
+			Logs:       true,
+			Transcript: true,
+		}
+		options.SessionReportPath = filepath.Join(
+			"console-recordings",
+			"session-"+time.Now().Format("01-02-150405"),
+			"session_report.json",
+		)
+	}
+	return options
+}
+
 func readConsoleInput(r io.Reader) (string, error) {
 	reader := bufio.NewReader(r)
 	line, err := reader.ReadString('\n')
@@ -568,7 +588,7 @@ func runConsole(server *worker.AgentServer, argv []string) {
 
 	go func() {
 		roomName, participantIdentity := consoleLocalJobArgs()
-		if err := server.ExecuteLocalJob(ctx, roomName, participantIdentity); err != nil {
+		if err := server.ExecuteLocalJobWithOptions(ctx, roomName, participantIdentity, consoleLocalJobOptions(args)); err != nil {
 			logger.Logger.Errorw("Console execution error", err)
 			stop()
 		}

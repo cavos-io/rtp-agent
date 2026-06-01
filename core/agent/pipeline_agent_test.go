@@ -8,10 +8,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/cavos-io/rtp-agent/core/audio/model"
 	"github.com/cavos-io/rtp-agent/core/llm"
 	"github.com/cavos-io/rtp-agent/core/stt"
 	"github.com/cavos-io/rtp-agent/core/tts"
-	"github.com/cavos-io/rtp-agent/model"
 )
 
 func TestPipelineAgentGenerateReplyAddsAssistantMessageWithExtra(t *testing.T) {
@@ -113,6 +113,9 @@ func TestPipelineAgentEmitsConversationItemAddedForUserTranscript(t *testing.T) 
 		}
 		if len(chatCtx.Items) == 0 || chatCtx.Items[0] != msg {
 			t.Fatalf("event item was not the committed user chat item")
+		}
+		if len(session.ChatCtx.Items) != 1 || session.ChatCtx.Items[0] != msg {
+			t.Fatalf("session ChatCtx items = %#v, want committed user message", session.ChatCtx.Items)
 		}
 	case <-time.After(time.Second):
 		t.Fatal("ConversationItemAddedEvents did not receive user transcript")

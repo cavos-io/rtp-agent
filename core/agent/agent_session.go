@@ -159,6 +159,7 @@ func (s *AgentSession) EmitConversationItemAdded(item llm.ChatItem) {
 	if item == nil {
 		return
 	}
+	s.insertConversationItem(item)
 	ch := s.conversationItemAddedEvents()
 	select {
 	case ch <- ConversationItemAddedEvent{Item: item, CreatedAt: time.Now()}:
@@ -174,6 +175,24 @@ func (s *AgentSession) conversationItemAddedEvents() chan ConversationItemAddedE
 		s.conversationItemCh = make(chan ConversationItemAddedEvent, 10)
 	}
 	return s.conversationItemCh
+}
+
+func (s *AgentSession) insertConversationItem(item llm.ChatItem) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.ChatCtx == nil {
+		s.ChatCtx = llm.NewChatContext()
+	}
+	for _, existing := range s.ChatCtx.Items {
+		if existing == item {
+			return
+		}
+		if item.GetID() != "" && existing.GetID() == item.GetID() && existing.GetType() == item.GetType() {
+			return
+		}
+	}
+	s.ChatCtx.Insert(item)
 }
 
 func (s *AgentSession) FunctionToolsExecutedEvents() <-chan FunctionToolsExecutedEvent {
