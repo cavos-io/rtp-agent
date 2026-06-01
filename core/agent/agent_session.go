@@ -136,6 +136,15 @@ func (s *AgentSession) CurrentSpeech() *SpeechHandle {
 	return activity.currentSpeech
 }
 
+func (s *AgentSession) CurrentAgent() (AgentInterface, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !s.started || s.Agent == nil {
+		return nil, ErrAgentSessionNotRunning
+	}
+	return s.Agent, nil
+}
+
 func (s *AgentSession) WaitForInactive(ctx context.Context) error {
 	s.mu.Lock()
 	activity := s.activity

@@ -327,6 +327,35 @@ func TestAgentSessionGenerateReplyRequiresRunningActivity(t *testing.T) {
 	}
 }
 
+func TestAgentSessionCurrentAgentRequiresRunningSession(t *testing.T) {
+	agent := NewAgent("test")
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+
+	current, err := session.CurrentAgent()
+
+	if current != nil {
+		t.Fatalf("CurrentAgent = %#v, want nil when session is not running", current)
+	}
+	if !errors.Is(err, ErrAgentSessionNotRunning) {
+		t.Fatalf("CurrentAgent error = %v, want ErrAgentSessionNotRunning", err)
+	}
+}
+
+func TestAgentSessionCurrentAgentReturnsRunningAgent(t *testing.T) {
+	agent := NewAgent("test")
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	session.started = true
+
+	current, err := session.CurrentAgent()
+
+	if err != nil {
+		t.Fatalf("CurrentAgent error = %v, want nil", err)
+	}
+	if current != agent {
+		t.Fatalf("CurrentAgent = %#v, want session agent %#v", current, agent)
+	}
+}
+
 func TestAgentSessionCloseSoonStopsRunningSession(t *testing.T) {
 	agent := NewAgent("test")
 	session := NewAgentSession(agent, nil, AgentSessionOptions{})
