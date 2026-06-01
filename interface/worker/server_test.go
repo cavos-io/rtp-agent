@@ -954,6 +954,11 @@ func TestAgentServerActiveRunningJobsReturnsReferenceAssignmentSnapshots(t *test
 	if running.AcceptArguments.Attributes["tier"] != "gold" {
 		t.Fatalf("ActiveRunningJobs()[0].AcceptArguments.Attributes[tier] = %q, want gold", running.AcceptArguments.Attributes["tier"])
 	}
+
+	runningJobs[0].AcceptArguments.Attributes["tier"] = "platinum"
+	if got := server.ActiveRunningJobs()[0].AcceptArguments.Attributes["tier"]; got != "gold" {
+		t.Fatalf("mutating ActiveRunningJobs() attributes changed stored context to %q, want gold", got)
+	}
 }
 
 func TestRefreshRunningJobTokenForReloadPreservesAssignmentAndExtendsToken(t *testing.T) {

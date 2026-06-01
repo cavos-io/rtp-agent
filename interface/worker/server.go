@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"math"
 	"net"
 	"net/http"
@@ -255,7 +256,7 @@ func runningJobInfoFromContext(jobCtx *JobContext) workeripc.RunningJobInfo {
 			Name:       jobCtx.AcceptArguments.Name,
 			Identity:   jobCtx.AcceptArguments.Identity,
 			Metadata:   jobCtx.AcceptArguments.Metadata,
-			Attributes: jobCtx.AcceptArguments.Attributes,
+			Attributes: maps.Clone(jobCtx.AcceptArguments.Attributes),
 		},
 		Job:      jobCtx.Job,
 		URL:      jobCtx.url,
