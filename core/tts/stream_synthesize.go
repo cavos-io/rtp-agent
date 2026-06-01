@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"strings"
 
 	cavosmath "github.com/cavos-io/conversation-worker/library/math"
 )
@@ -40,7 +39,7 @@ func (s *chunkedStreamFromSynthesizeStream) Next() (*SynthesizedAudio, error) {
 	audio, err := s.stream.Next()
 	if err != nil {
 		_ = s.Close()
-		if errors.Is(err, io.EOF) && !s.audioSeen && strings.TrimSpace(s.text) != "" {
+		if errors.Is(err, io.EOF) && !s.audioSeen && s.text != "" {
 			return nil, fmt.Errorf("no audio frames were pushed for text: %s", s.text)
 		}
 		return nil, err
