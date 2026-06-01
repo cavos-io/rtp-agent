@@ -1282,7 +1282,7 @@ func TestFallbackSynthesizeStreamForwardsPushAfterFlush(t *testing.T) {
 	}
 }
 
-func TestFallbackSynthesizeStreamBuffersEmptyText(t *testing.T) {
+func TestFallbackSynthesizeStreamIgnoresEmptyText(t *testing.T) {
 	providerStream := &metadataSynthesizeStream{}
 	adapter := NewFallbackAdapter([]TTS{
 		&metadataTTS{
@@ -1303,12 +1303,18 @@ func TestFallbackSynthesizeStreamBuffersEmptyText(t *testing.T) {
 	if err := stream.PushText(""); err != nil {
 		t.Fatalf("PushText returned error: %v", err)
 	}
-	if len(providerStream.calls) != 1 || providerStream.calls[0] != "push:" {
-		t.Fatalf("provider stream calls = %#v, want empty push", providerStream.calls)
+	if len(providerStream.calls) != 0 {
+		t.Fatalf("provider stream calls = %#v, want no empty push", providerStream.calls)
 	}
 	buffer := stream.(*fallbackSynthesizeStream).inputBuffer
-	if len(buffer) != 1 || buffer[0].text != "" || buffer[0].flush {
-		t.Fatalf("input buffer = %#v, want buffered empty text", buffer)
+	if len(buffer) != 0 {
+		t.Fatalf("input buffer = %#v, want no buffered empty text", buffer)
+	}
+	if err := stream.PushText("hello"); err != nil {
+		t.Fatalf("PushText(hello) returned error: %v", err)
+	}
+	if len(providerStream.calls) != 1 || providerStream.calls[0] != "push:hello" {
+		t.Fatalf("provider stream calls = %#v, want later non-empty push", providerStream.calls)
 	}
 }
 
@@ -2062,7 +2068,7 @@ func TestFallbackSynthesizeStreamReturnsEOFWhenProviderCompletes(t *testing.T) {
 	}
 }
 
-func TestFallbackSynthesizeStreamPushesEmptyTextToActiveProvider(t *testing.T) {
+func TestFallbackSynthesizeStreamDoesNotPushEmptyTextToActiveProvider(t *testing.T) {
 	providerStream := &metadataSynthesizeStream{}
 	adapter := NewFallbackAdapter([]TTS{
 		&metadataTTS{
@@ -2084,8 +2090,8 @@ func TestFallbackSynthesizeStreamPushesEmptyTextToActiveProvider(t *testing.T) {
 		t.Fatalf("PushText returned error: %v", err)
 	}
 
-	if len(providerStream.calls) != 1 || providerStream.calls[0] != "push:" {
-		t.Fatalf("provider calls = %#v, want empty PushText forwarded", providerStream.calls)
+	if len(providerStream.calls) != 0 {
+		t.Fatalf("provider calls = %#v, want no empty PushText forwarded", providerStream.calls)
 	}
 }
 

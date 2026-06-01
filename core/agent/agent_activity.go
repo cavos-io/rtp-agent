@@ -38,10 +38,16 @@ type AgentActivity struct {
 	queueMu        sync.Mutex
 	queueUpdatedCh chan struct{}
 
-	schedulingPaused bool
+	schedulingPaused   bool
+	schedulingDraining bool
 
 	sttEOSReceived bool
 	speaking       bool
+
+	userTurnMu                   sync.Mutex
+	pendingUserTranscript        string
+	pendingTranscriptConfidence  float64
+	pendingUserTranscriptPresent bool
 
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -147,6 +153,7 @@ func (a *AgentActivity) Interrupt(force bool) error {
 
 func (a *AgentActivity) WaitForInactive(ctx context.Context) error {
 	for {
+		a.processQueue()
 		active := a.activeSpeechHandles()
 		if len(active) == 0 {
 			return nil
@@ -155,6 +162,7 @@ func (a *AgentActivity) WaitForInactive(ctx context.Context) error {
 			if err := speech.Wait(ctx); err != nil {
 				return err
 			}
+			a.processQueue()
 		}
 	}
 }
@@ -379,7 +387,7 @@ func (a *AgentActivity) ScheduleSpeech(speech *SpeechHandle, priority int, force
 	a.queueMu.Lock()
 	defer a.queueMu.Unlock()
 
-	if a.schedulingPaused && !force {
+	if (a.schedulingPaused || a.schedulingDraining) && !force {
 		_ = speech.Interrupt(true)
 		return ErrSpeechSchedulingPaused
 	}
@@ -418,6 +426,9 @@ func (a *AgentActivity) processQueue() {
 	a.queueMu.Lock()
 	defer a.queueMu.Unlock()
 
+	if a.currentSpeech != nil && a.currentSpeech.IsDone() {
+		a.currentSpeech = nil
+	}
 	if len(a.speechQueue) == 0 || a.schedulingPaused || a.currentSpeech != nil {
 		return
 	}
@@ -447,6 +458,34 @@ func (a *AgentActivity) processQueue() {
 		default:
 		}
 	}()
+}
+
+func (a *AgentActivity) Drain(ctx context.Context) error {
+	if ctx == nil {
+		ctx = a.ctx
+	}
+
+	a.queueMu.Lock()
+	if a.schedulingPaused {
+		a.queueMu.Unlock()
+		return nil
+	}
+	a.schedulingDraining = true
+	a.queueMu.Unlock()
+
+	select {
+	case a.queueUpdatedCh <- struct{}{}:
+	default:
+	}
+
+	err := a.WaitForInactive(ctx)
+
+	a.queueMu.Lock()
+	a.schedulingPaused = true
+	a.schedulingDraining = false
+	a.queueMu.Unlock()
+
+	return err
 }
 
 func (a *AgentActivity) nextSpeechIndexLocked() int {
@@ -488,18 +527,95 @@ func (a *AgentActivity) OnEndOfSpeech(ev *vad.VADEvent) {
 
 func (a *AgentActivity) OnFinalTranscript(ev *stt.SpeechEvent) {
 	a.sttEOSReceived = true
+	transcript := ""
+	confidence := 0.0
+	if len(ev.Alternatives) > 0 {
+		transcript = ev.Alternatives[0].Text
+		confidence = ev.Alternatives[0].Confidence
+	}
+
+	a.userTurnMu.Lock()
+	a.pendingUserTranscript = transcript
+	a.pendingTranscriptConfidence = confidence
+	a.pendingUserTranscriptPresent = true
+	a.userTurnMu.Unlock()
+
 	if a.turnDetectionMode() == TurnDetectionModeSTT {
-		transcript := ""
-		confidence := 0.0
-		if len(ev.Alternatives) > 0 {
-			transcript = ev.Alternatives[0].Text
-			confidence = ev.Alternatives[0].Confidence
-		}
 		a.runEOUDetection(EndOfTurnInfo{
 			NewTranscript:        transcript,
 			TranscriptConfidence: confidence,
 		})
 	}
+}
+
+func (a *AgentActivity) ClearUserTurn() {
+	a.eouMu.Lock()
+	if a.eouCancel != nil {
+		a.eouCancel()
+		a.eouCancel = nil
+	}
+	a.eouMu.Unlock()
+
+	a.clearPendingUserTurn()
+
+	a.sttEOSReceived = false
+	a.speaking = false
+}
+
+func (a *AgentActivity) CommitUserTurn(ctx context.Context, opts CommitUserTurnOptions) (string, error) {
+	a.eouMu.Lock()
+	if a.eouCancel != nil {
+		a.eouCancel()
+		a.eouCancel = nil
+	}
+	a.eouMu.Unlock()
+
+	a.userTurnMu.Lock()
+	transcript := a.pendingUserTranscript
+	confidence := a.pendingTranscriptConfidence
+	present := a.pendingUserTranscriptPresent
+	a.pendingUserTranscript = ""
+	a.pendingTranscriptConfidence = 0
+	a.pendingUserTranscriptPresent = false
+	a.userTurnMu.Unlock()
+
+	if !present || transcript == "" {
+		return "", nil
+	}
+
+	newMsg := &llm.ChatMessage{
+		Role:                 llm.ChatRoleUser,
+		Content:              []llm.ChatContent{{Text: transcript}},
+		TranscriptConfidence: &confidence,
+		CreatedAt:            time.Now(),
+	}
+	if opts.SkipReply {
+		if a.Agent.ChatCtx == nil {
+			a.Agent.ChatCtx = llm.NewChatContext()
+		}
+		a.Agent.ChatCtx.Append(newMsg)
+		if a.Session != nil {
+			a.Session.EmitConversationItemAdded(newMsg)
+		}
+		return transcript, nil
+	}
+
+	if ctx == nil {
+		ctx = a.ctx
+	}
+	if err := a.AgentIntf.OnUserTurnCompleted(ctx, a.Agent.ChatCtx, newMsg); err != nil {
+		return transcript, err
+	}
+	return transcript, nil
+}
+
+func (a *AgentActivity) clearPendingUserTurn() {
+	a.userTurnMu.Lock()
+	defer a.userTurnMu.Unlock()
+
+	a.pendingUserTranscript = ""
+	a.pendingTranscriptConfidence = 0
+	a.pendingUserTranscriptPresent = false
 }
 
 func (a *AgentActivity) turnDetectionMode() TurnDetectionMode {
@@ -555,6 +671,7 @@ func (a *AgentActivity) runEOUDetection(info EndOfTurnInfo) {
 		case <-timer.C:
 			// EOU detected
 			logger.Logger.Infow("EOU detected, completing user turn")
+			a.clearPendingUserTurn()
 			newMsg := &llm.ChatMessage{
 				Role:    llm.ChatRoleUser,
 				Content: []llm.ChatContent{{Text: info.NewTranscript}},

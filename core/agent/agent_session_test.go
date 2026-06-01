@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/cavos-io/rtp-agent/core/llm"
+	"github.com/cavos-io/rtp-agent/core/stt"
 	"github.com/cavos-io/rtp-agent/library/telemetry"
 )
 
@@ -911,6 +912,72 @@ func TestAgentSessionShutdownClosesWithUserInitiatedReason(t *testing.T) {
 	}
 }
 
+func TestAgentSessionShutdownDrainsByDefaultBeforeClosing(t *testing.T) {
+	agent := NewAgent("test")
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	session.activity = NewAgentActivity(agent, session)
+	session.started = true
+	current := NewSpeechHandle(true, DefaultInputDetails())
+	session.activity.currentSpeech = current
+
+	done := make(chan struct{}, 1)
+	go func() {
+		session.Shutdown()
+		done <- struct{}{}
+	}()
+
+	waitForDraining(t, session.activity)
+	select {
+	case <-session.CloseEvents():
+		t.Fatal("Shutdown emitted close event before active speech drained")
+	case <-done:
+		t.Fatal("Shutdown returned before active speech drained")
+	case <-time.After(20 * time.Millisecond):
+	}
+
+	current.MarkDone()
+
+	select {
+	case <-done:
+	case <-testTimeout():
+		t.Fatal("Shutdown did not return after active speech completed")
+	}
+	select {
+	case ev := <-session.CloseEvents():
+		if ev.Reason != CloseReasonUserInitiated {
+			t.Fatalf("CloseEvent.Reason = %q, want user_initiated", ev.Reason)
+		}
+	default:
+		t.Fatal("Shutdown did not emit close event after draining")
+	}
+	if session.activity != nil {
+		t.Fatalf("session.activity = %#v, want nil after drained shutdown", session.activity)
+	}
+}
+
+func TestAgentSessionShutdownCanSkipDrain(t *testing.T) {
+	agent := NewAgent("test")
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	session.activity = NewAgentActivity(agent, session)
+	session.started = true
+	current := NewSpeechHandle(true, DefaultInputDetails())
+	session.activity.currentSpeech = current
+
+	session.Shutdown(false)
+
+	select {
+	case ev := <-session.CloseEvents():
+		if ev.Reason != CloseReasonUserInitiated {
+			t.Fatalf("CloseEvent.Reason = %q, want user_initiated", ev.Reason)
+		}
+	default:
+		t.Fatal("Shutdown(false) did not emit close event")
+	}
+	if session.activity != nil {
+		t.Fatalf("session.activity = %#v, want nil after non-draining shutdown", session.activity)
+	}
+}
+
 func TestAgentSessionShutdownDoesNotCloseUnstartedSession(t *testing.T) {
 	agent := NewAgent("test")
 	session := NewAgentSession(agent, nil, AgentSessionOptions{})
@@ -1029,6 +1096,45 @@ func TestAgentSessionWaitForInactiveWaitsForCurrentSpeech(t *testing.T) {
 	}
 }
 
+func TestAgentSessionDrainRequiresRunningActivity(t *testing.T) {
+	agent := NewAgent("test")
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+
+	err := session.Drain(context.Background())
+
+	if !errors.Is(err, ErrAgentSessionNotRunning) {
+		t.Fatalf("Drain error = %v, want ErrAgentSessionNotRunning", err)
+	}
+}
+
+func TestAgentSessionDrainDelegatesToActivity(t *testing.T) {
+	agent := NewAgent("test")
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	session.activity = NewAgentActivity(agent, session)
+	current := NewSpeechHandle(true, DefaultInputDetails())
+	session.activity.currentSpeech = current
+
+	done := make(chan error, 1)
+	go func() {
+		done <- session.Drain(context.Background())
+	}()
+
+	waitForDraining(t, session.activity)
+	current.MarkDone()
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("Drain error = %v, want nil", err)
+		}
+	case <-testTimeout():
+		t.Fatal("Drain did not return after current speech completed")
+	}
+	if !session.activity.schedulingPaused {
+		t.Fatal("schedulingPaused = false after Drain, want true")
+	}
+}
+
 func TestAgentSessionInterruptRequiresRunningActivity(t *testing.T) {
 	agent := NewAgent("test")
 	session := NewAgentSession(agent, nil, AgentSessionOptions{})
@@ -1062,6 +1168,54 @@ func TestAgentSessionInterruptDelegatesToActivity(t *testing.T) {
 		}
 	case <-testTimeout():
 		t.Fatal("Interrupt did not return after current speech was done")
+	}
+}
+
+func TestAgentSessionClearUserTurnRequiresRunningActivity(t *testing.T) {
+	agent := NewAgent("test")
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+
+	err := session.ClearUserTurn()
+
+	if !errors.Is(err, ErrAgentSessionNotRunning) {
+		t.Fatalf("ClearUserTurn error = %v, want ErrAgentSessionNotRunning", err)
+	}
+}
+
+func TestAgentSessionCommitUserTurnRequiresRunningActivity(t *testing.T) {
+	agent := NewAgent("test")
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+
+	_, err := session.CommitUserTurn(context.Background(), CommitUserTurnOptions{})
+
+	if !errors.Is(err, ErrAgentSessionNotRunning) {
+		t.Fatalf("CommitUserTurn error = %v, want ErrAgentSessionNotRunning", err)
+	}
+}
+
+func TestAgentSessionCommitUserTurnDelegatesToActivity(t *testing.T) {
+	agent := &turnCompletedAgent{Agent: NewAgent("test"), turns: make(chan *llm.ChatMessage, 1)}
+	agent.TurnDetection = TurnDetectionModeManual
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	session.activity = NewAgentActivity(agent, session)
+	session.activity.OnFinalTranscript(&stt.SpeechEvent{
+		Alternatives: []stt.SpeechData{{Text: "manual session turn"}},
+	})
+
+	transcript, err := session.CommitUserTurn(context.Background(), CommitUserTurnOptions{})
+	if err != nil {
+		t.Fatalf("CommitUserTurn error = %v, want nil", err)
+	}
+	if transcript != "manual session turn" {
+		t.Fatalf("CommitUserTurn transcript = %q, want manual session turn", transcript)
+	}
+	select {
+	case msg := <-agent.turns:
+		if msg.TextContent() != "manual session turn" {
+			t.Fatalf("turn message text = %q, want manual session turn", msg.TextContent())
+		}
+	case <-testTimeout():
+		t.Fatal("OnUserTurnCompleted was not called")
 	}
 }
 

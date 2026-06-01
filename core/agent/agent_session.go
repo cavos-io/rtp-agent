@@ -86,6 +86,12 @@ type RunOptions struct {
 	OutputType         reflect.Type
 }
 
+type CommitUserTurnOptions struct {
+	TranscriptTimeout time.Duration
+	STTFlushDuration  time.Duration
+	SkipReply         bool
+}
+
 type AgentSession struct {
 	Options AgentSessionOptions
 
@@ -212,6 +218,16 @@ func (s *AgentSession) WaitForInactive(ctx context.Context) error {
 		return nil
 	}
 	return activity.WaitForInactive(ctx)
+}
+
+func (s *AgentSession) Drain(ctx context.Context) error {
+	s.mu.Lock()
+	activity := s.activity
+	s.mu.Unlock()
+	if activity == nil {
+		return ErrAgentSessionNotRunning
+	}
+	return activity.Drain(ctx)
 }
 
 type AgentStateChangedEvent struct {
@@ -675,7 +691,16 @@ func (s *AgentSession) CloseSoon(reason CloseReason) {
 	_ = s.Stop(context.Background())
 }
 
-func (s *AgentSession) Shutdown() {
+func (s *AgentSession) Shutdown(drain ...bool) {
+	shouldDrain := true
+	if len(drain) > 0 {
+		shouldDrain = drain[0]
+	}
+	if shouldDrain {
+		if err := s.Drain(context.Background()); err != nil && !errors.Is(err, ErrAgentSessionNotRunning) {
+			s.EmitError(ErrorEvent{Error: err, CreatedAt: time.Now()})
+		}
+	}
 	s.CloseSoon(CloseReasonUserInitiated)
 }
 
@@ -1018,6 +1043,31 @@ func (s *AgentSession) Interrupt(force bool) error {
 	}
 
 	return activity.Interrupt(force)
+}
+
+func (s *AgentSession) ClearUserTurn() error {
+	s.mu.Lock()
+	activity := s.activity
+	s.mu.Unlock()
+
+	if activity == nil {
+		return ErrAgentSessionNotRunning
+	}
+
+	activity.ClearUserTurn()
+	return nil
+}
+
+func (s *AgentSession) CommitUserTurn(ctx context.Context, opts CommitUserTurnOptions) (string, error) {
+	s.mu.Lock()
+	activity := s.activity
+	s.mu.Unlock()
+
+	if activity == nil {
+		return "", ErrAgentSessionNotRunning
+	}
+
+	return activity.CommitUserTurn(ctx, opts)
 }
 
 func (s *AgentSession) UpdateAgent(agent AgentInterface) {
