@@ -33,6 +33,7 @@ type InputDetails struct {
 type SpeechGenerationOptions struct {
 	Instructions *llm.Instructions
 	ToolChoice   llm.ToolChoice
+	Tools        []string
 }
 
 func DefaultInputDetails() InputDetails {

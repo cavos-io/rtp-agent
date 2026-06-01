@@ -126,6 +126,39 @@ func TestPipelineAgentGenerateReplyWithToolChoicePassesChatOption(t *testing.T) 
 	}
 }
 
+func TestPipelineAgentGenerateReplyWithToolsFiltersChatOptions(t *testing.T) {
+	chatCtx := llm.NewChatContext()
+	l := &fakeGenerationLLM{
+		stream: &fakeGenerationLLMStream{
+			chunks: []*llm.ChatChunk{
+				{Delta: &llm.ChoiceDelta{Content: "lookup only"}},
+			},
+		},
+	}
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	session.Tools = []llm.Tool{
+		&fakeGenerationTool{name: "lookup"},
+		&fakeGenerationTool{name: "calendar"},
+	}
+	agent := NewPipelineAgent(nil, nil, l, &fakePipelineTTS{}, chatCtx)
+	agent.session = session
+	agent.ctx = context.Background()
+
+	agent.generateReplyWithOptions(pipelineReplyOptions{
+		Tools: []string{"lookup"},
+	})
+
+	if len(l.calls) != 1 {
+		t.Fatalf("LLM Chat calls = %d, want 1", len(l.calls))
+	}
+	if len(l.calls[0].Tools) != 1 {
+		t.Fatalf("LLM tools = %#v, want only lookup", l.calls[0].Tools)
+	}
+	if got := l.calls[0].Tools[0].ID(); got != "lookup" {
+		t.Fatalf("LLM tool ID = %q, want lookup", got)
+	}
+}
+
 func TestPipelineAgentEmitsConversationItemAddedForAssistantMessage(t *testing.T) {
 	chatCtx := llm.NewChatContext()
 	l := &fakeGenerationLLM{

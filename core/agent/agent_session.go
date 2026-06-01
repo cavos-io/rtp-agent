@@ -65,6 +65,7 @@ type GenerateReplyOptions struct {
 	UserInput          string
 	Instructions       string
 	ToolChoice         llm.ToolChoice
+	Tools              []string
 	AllowInterruptions *bool
 	InputModality      string
 }
@@ -818,6 +819,11 @@ func (s *AgentSession) GenerateReplyWithOptions(ctx context.Context, opts Genera
 	if activity == nil {
 		return nil, ErrAgentSessionNotRunning
 	}
+	if len(opts.Tools) > 0 {
+		if _, err := resolveToolsByID(s.Tools, opts.Tools); err != nil {
+			return nil, err
+		}
+	}
 
 	// Trigger the pipeline
 	logger.Logger.Infow("Generating reply", "userInput", opts.UserInput)
@@ -836,6 +842,9 @@ func (s *AgentSession) GenerateReplyWithOptions(ctx context.Context, opts Genera
 	}
 	if opts.ToolChoice != nil {
 		handle.Generation.ToolChoice = opts.ToolChoice
+	}
+	if len(opts.Tools) > 0 {
+		handle.Generation.Tools = append([]string(nil), opts.Tools...)
 	}
 	s.EmitSpeechCreated(SpeechCreatedEvent{
 		UserInitiated: true,
