@@ -350,7 +350,7 @@ func (s *fallbackRecognizeStream) tryStartStream(index int) error {
 	}
 
 	if lastErr != nil {
-		return lastErr
+		return s.allFailedError(lastErr)
 	}
 	return s.allFailedError(s.lastErr)
 }

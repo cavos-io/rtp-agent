@@ -264,6 +264,44 @@ func TestFallbackStreamReturnsAllFailedErrorWhenProvidersExhausted(t *testing.T)
 	}
 }
 
+func TestFallbackStreamStartReturnsAllFailedErrorWhenProvidersExhausted(t *testing.T) {
+	primaryErr := errors.New("primary stream start failed")
+	fallbackErr := errors.New("fallback stream start failed")
+	adapter := NewFallbackAdapterWithOptions([]STT{
+		&metadataSTT{
+			label:        "primary",
+			capabilities: STTCapabilities{Streaming: true},
+			streamErrs:   []error{primaryErr},
+		},
+		&metadataSTT{
+			label:        "fallback",
+			capabilities: STTCapabilities{Streaming: true},
+			streamErrs:   []error{fallbackErr},
+		},
+	}, FallbackAdapterOptions{MaxRetryPerSTT: 0})
+
+	_, err := adapter.Stream(context.Background(), "en")
+	if err == nil {
+		t.Fatal("Stream error = nil, want all STTs failed error")
+	}
+	if !errors.Is(err, fallbackErr) {
+		t.Fatalf("Stream error = %v, want to wrap final provider start error", err)
+	}
+	var allFailed *FallbackAllFailedError
+	if !errors.As(err, &allFailed) {
+		t.Fatalf("Stream error = %T, want *FallbackAllFailedError", err)
+	}
+	if allFailed.Count != 2 {
+		t.Fatalf("all failed Count = %d, want 2", allFailed.Count)
+	}
+	if strings.Join(allFailed.Labels, ",") != "primary,fallback" {
+		t.Fatalf("all failed Labels = %#v, want primary/fallback", allFailed.Labels)
+	}
+	if allFailed.Duration <= 0 {
+		t.Fatalf("all failed Duration = %s, want positive duration", allFailed.Duration)
+	}
+}
+
 func TestFallbackAdapterRetriesSameSTTBeforeFallback(t *testing.T) {
 	firstErr := errors.New("primary recognize failed")
 	primary := &metadataSTT{
@@ -980,6 +1018,7 @@ type metadataSTT struct {
 	capabilities     STTCapabilities
 	stream           RecognizeStream
 	streams          []RecognizeStream
+	streamErrs       []error
 	streamCalls      int
 	recognizeResult  *SpeechEvent
 	recognizeResults []*SpeechEvent
@@ -999,6 +1038,13 @@ func (m *metadataSTT) Stream(context.Context, string) (RecognizeStream, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.streamCalls++
+	if len(m.streamErrs) > 0 {
+		err := m.streamErrs[0]
+		m.streamErrs = m.streamErrs[1:]
+		if err != nil {
+			return nil, err
+		}
+	}
 	if len(m.streams) > 0 {
 		stream := m.streams[0]
 		m.streams = m.streams[1:]
