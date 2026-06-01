@@ -429,8 +429,43 @@ type ChatOptions struct {
 	Tools             []Tool
 	ToolChoice        ToolChoice
 	ParallelToolCalls bool
+	ConnectOptions    *APIConnectOptions
 	ExtraParams       map[string]any
 	ResponseFormat    map[string]any
+}
+
+type APIConnectOptions struct {
+	MaxRetry      int
+	RetryInterval time.Duration
+	Timeout       time.Duration
+}
+
+func DefaultAPIConnectOptions() APIConnectOptions {
+	return APIConnectOptions{
+		MaxRetry:      3,
+		RetryInterval: 2 * time.Second,
+		Timeout:       10 * time.Second,
+	}
+}
+
+func (o APIConnectOptions) Validate() error {
+	if o.MaxRetry < 0 {
+		return errors.New("max retry must be greater than or equal to 0")
+	}
+	if o.RetryInterval < 0 {
+		return errors.New("retry interval must be greater than or equal to 0")
+	}
+	if o.Timeout < 0 {
+		return errors.New("timeout must be greater than or equal to 0")
+	}
+	return nil
+}
+
+func (o APIConnectOptions) IntervalForRetry(numRetries int) time.Duration {
+	if numRetries == 0 {
+		return 100 * time.Millisecond
+	}
+	return o.RetryInterval
 }
 
 type LLM interface {
@@ -532,6 +567,12 @@ func WithToolChoice(choice ToolChoice) ChatOption {
 func WithParallelToolCalls(parallel bool) ChatOption {
 	return func(o *ChatOptions) {
 		o.ParallelToolCalls = parallel
+	}
+}
+
+func WithConnectOptions(options APIConnectOptions) ChatOption {
+	return func(o *ChatOptions) {
+		o.ConnectOptions = &options
 	}
 }
 
