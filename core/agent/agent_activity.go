@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"time"
 
@@ -10,6 +11,8 @@ import (
 	"github.com/cavos-io/conversation-worker/core/vad"
 	"github.com/cavos-io/conversation-worker/library/logger"
 )
+
+var ErrSpeechSchedulingPaused = errors.New("speech scheduling is paused")
 
 type EndOfTurnInfo struct {
 	SkipReply            bool
@@ -27,7 +30,8 @@ type AgentActivity struct {
 	Session   *AgentSession
 
 	currentSpeech  *SpeechHandle
-	speechQueue    []*SpeechHandle
+	speechQueue    []scheduledSpeech
+	nextSpeechSeq  uint64
 	queueMu        sync.Mutex
 	queueUpdatedCh chan struct{}
 
@@ -49,11 +53,17 @@ func NewAgentActivity(agentIntf AgentInterface, session *AgentSession) *AgentAct
 		AgentIntf:      agentIntf,
 		Agent:          agentIntf.GetAgent(),
 		Session:        session,
-		speechQueue:    make([]*SpeechHandle, 0),
+		speechQueue:    make([]scheduledSpeech, 0),
 		queueUpdatedCh: make(chan struct{}, 1),
 		ctx:            ctx,
 		cancel:         cancel,
 	}
+}
+
+type scheduledSpeech struct {
+	speech   *SpeechHandle
+	priority int
+	seq      uint64
 }
 
 func (a *AgentActivity) Start() {
@@ -70,10 +80,19 @@ func (a *AgentActivity) ScheduleSpeech(speech *SpeechHandle, priority int, force
 	a.queueMu.Lock()
 	defer a.queueMu.Unlock()
 
+	if a.schedulingPaused && !force {
+		_ = speech.Interrupt(true)
+		return ErrSpeechSchedulingPaused
+	}
+
 	speech.Priority = priority
 
-	// Add to queue (ideally a priority queue, but simple slice for now)
-	a.speechQueue = append(a.speechQueue, speech)
+	a.speechQueue = append(a.speechQueue, scheduledSpeech{
+		speech:   speech,
+		priority: priority,
+		seq:      a.nextSpeechSeq,
+	})
+	a.nextSpeechSeq++
 
 	// Notify the scheduling loop
 	select {
@@ -100,13 +119,13 @@ func (a *AgentActivity) processQueue() {
 	a.queueMu.Lock()
 	defer a.queueMu.Unlock()
 
-	if len(a.speechQueue) == 0 || a.schedulingPaused {
+	if len(a.speechQueue) == 0 || a.schedulingPaused || a.currentSpeech != nil {
 		return
 	}
 
-	// Basic queue processing, grabbing the first item
-	speech := a.speechQueue[0]
-	a.speechQueue = a.speechQueue[1:]
+	nextIdx := a.nextSpeechIndexLocked()
+	speech := a.speechQueue[nextIdx].speech
+	a.speechQueue = append(a.speechQueue[:nextIdx], a.speechQueue[nextIdx+1:]...)
 
 	if speech.IsDone() {
 		return
@@ -129,6 +148,18 @@ func (a *AgentActivity) processQueue() {
 		default:
 		}
 	}()
+}
+
+func (a *AgentActivity) nextSpeechIndexLocked() int {
+	best := 0
+	for i := 1; i < len(a.speechQueue); i++ {
+		current := a.speechQueue[i]
+		candidate := a.speechQueue[best]
+		if current.priority > candidate.priority || (current.priority == candidate.priority && current.seq < candidate.seq) {
+			best = i
+		}
+	}
+	return best
 }
 
 // Event callbacks from RecognitionHooks
