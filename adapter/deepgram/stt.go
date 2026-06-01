@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strconv"
 	"sync"
 	"time"
 
@@ -111,34 +112,12 @@ func (s *DeepgramSTT) Recognize(ctx context.Context, frames []*model.AudioFrame,
 		return nil, fmt.Errorf("deepgram recognize error: %s", string(respBody))
 	}
 
-	var result struct {
-		Results struct {
-			Channels []struct {
-				Alternatives []struct {
-					Transcript string `json:"transcript"`
-					Confidence float64 `json:"confidence"`
-				} `json:"alternatives"`
-			} `json:"channels"`
-		} `json:"results"`
-	}
+	var result dgRecognitionResponse
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
 		return nil, err
 	}
 
-	var transcript string
-	var confidence float64
-	if len(result.Results.Channels) > 0 && len(result.Results.Channels[0].Alternatives) > 0 {
-		alt := result.Results.Channels[0].Alternatives[0]
-		transcript = alt.Transcript
-		confidence = alt.Confidence
-	}
-
-	return &stt.SpeechEvent{
-		Type: stt.SpeechEventFinalTranscript,
-		Alternatives: []stt.SpeechData{
-			{Text: transcript, Confidence: confidence},
-		},
-	}, nil
+	return deepgramRecognizeSpeechEvent(result), nil
 }
 
 type deepgramStream struct {
@@ -152,21 +131,120 @@ type deepgramStream struct {
 	cancel context.CancelFunc
 }
 
+type dgWord struct {
+	Word       string  `json:"word"`
+	Start      float64 `json:"start"`
+	End        float64 `json:"end"`
+	Confidence float64 `json:"confidence"`
+	Speaker    *int    `json:"speaker,omitempty"`
+}
+
+type dgAlternative struct {
+	Transcript string   `json:"transcript"`
+	Confidence float64  `json:"confidence"`
+	Words      []dgWord `json:"words"`
+}
+
+type dgRecognitionChannel struct {
+	Alternatives []dgAlternative `json:"alternatives"`
+}
+
+type dgRecognitionResponse struct {
+	Results struct {
+		Channels []dgRecognitionChannel `json:"channels"`
+	} `json:"results"`
+}
+
 type dgResponse struct {
 	Type        string `json:"type"`
 	IsFinal     bool   `json:"is_final"`
 	SpeechFinal bool   `json:"speech_final"`
 	Channel     struct {
-		Alternatives []struct {
-			Transcript string  `json:"transcript"`
-			Confidence float64 `json:"confidence"`
-		} `json:"alternatives"`
+		Alternatives []dgAlternative `json:"alternatives"`
 	} `json:"channel"`
 	Start    float64 `json:"start"`
 	Duration float64 `json:"duration"`
 	Metadata struct {
 		RequestID string `json:"request_id"`
 	} `json:"metadata"`
+}
+
+func deepgramRecognizeSpeechEvent(resp dgRecognitionResponse) *stt.SpeechEvent {
+	event := &stt.SpeechEvent{
+		Type: stt.SpeechEventFinalTranscript,
+		Alternatives: []stt.SpeechData{
+			{},
+		},
+	}
+
+	if len(resp.Results.Channels) == 0 || len(resp.Results.Channels[0].Alternatives) == 0 {
+		return event
+	}
+
+	alt := resp.Results.Channels[0].Alternatives[0]
+	event.Alternatives[0] = stt.SpeechData{
+		Text:       alt.Transcript,
+		Confidence: alt.Confidence,
+		Words:      deepgramTimedStrings(alt.Words),
+	}
+	return event
+}
+
+func deepgramSpeechEvent(resp dgResponse) *stt.SpeechEvent {
+	if resp.Type != "Results" || len(resp.Channel.Alternatives) == 0 {
+		return nil
+	}
+
+	event := &stt.SpeechEvent{
+		Type:      stt.SpeechEventInterimTranscript,
+		RequestID: resp.Metadata.RequestID,
+	}
+	if resp.IsFinal {
+		event.Type = stt.SpeechEventFinalTranscript
+	}
+
+	var transcriptBuilder string
+	for _, alt := range resp.Channel.Alternatives {
+		transcriptBuilder += alt.Transcript
+		event.Alternatives = append(event.Alternatives, stt.SpeechData{
+			Text:       alt.Transcript,
+			Confidence: alt.Confidence,
+			StartTime:  resp.Start,
+			EndTime:    resp.Start + resp.Duration,
+			Words:      deepgramTimedStrings(alt.Words),
+		})
+	}
+
+	if transcriptBuilder == "" && !resp.IsFinal {
+		return nil
+	}
+
+	return event
+}
+
+func deepgramTimedStrings(words []dgWord) []stt.TimedString {
+	if len(words) == 0 {
+		return nil
+	}
+
+	timed := make([]stt.TimedString, 0, len(words))
+	for _, word := range words {
+		timed = append(timed, stt.TimedString{
+			Text:       word.Word,
+			StartTime:  word.Start,
+			EndTime:    word.End,
+			Confidence: word.Confidence,
+			SpeakerID:  deepgramSpeakerID(word.Speaker),
+		})
+	}
+	return timed
+}
+
+func deepgramSpeakerID(speaker *int) string {
+	if speaker == nil {
+		return ""
+	}
+	return strconv.Itoa(*speaker)
 }
 
 func (s *deepgramStream) readLoop() {
@@ -191,36 +269,13 @@ func (s *deepgramStream) readLoop() {
 		switch resp.Type {
 		case "SpeechStarted":
 			s.sendEvent(&stt.SpeechEvent{Type: stt.SpeechEventStartOfSpeech})
-			
+
 		case "UtteranceEnd":
 			s.sendEvent(&stt.SpeechEvent{Type: stt.SpeechEventEndOfSpeech})
-			
+
 		case "Results":
-			if len(resp.Channel.Alternatives) > 0 {
-				event := &stt.SpeechEvent{
-					Type:      stt.SpeechEventInterimTranscript,
-					RequestID: resp.Metadata.RequestID,
-				}
-
-				if resp.IsFinal {
-					event.Type = stt.SpeechEventFinalTranscript
-				}
-
-				var transcriptBuilder string
-				for _, alt := range resp.Channel.Alternatives {
-					transcriptBuilder += alt.Transcript
-					event.Alternatives = append(event.Alternatives, stt.SpeechData{
-						Text:       alt.Transcript,
-						Confidence: alt.Confidence,
-						StartTime:  resp.Start,
-						EndTime:    resp.Start + resp.Duration,
-					})
-				}
-
-				// Only send if there is actual text or if it's explicitly marked final
-				if transcriptBuilder != "" || resp.IsFinal {
-					s.sendEvent(event)
-				}
+			if event := deepgramSpeechEvent(resp); event != nil {
+				s.sendEvent(event)
 
 				if resp.SpeechFinal {
 					s.sendEvent(&stt.SpeechEvent{Type: stt.SpeechEventEndOfSpeech})
