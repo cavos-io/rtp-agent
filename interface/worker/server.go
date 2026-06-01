@@ -449,7 +449,7 @@ func (s *AgentServer) runReloadIPCSession(ctx context.Context, rw io.ReadWriter,
 
 func (s *AgentServer) UpdateOptions(opts WorkerOptions) error {
 	s.mu.Lock()
-	if s.conn != nil {
+	if s.started() {
 		s.mu.Unlock()
 		return fmt.Errorf("cannot update options after starting the server")
 	}
@@ -461,11 +461,15 @@ func (s *AgentServer) UpdateOptions(opts WorkerOptions) error {
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.conn != nil {
+	if s.started() {
 		return fmt.Errorf("cannot update options after starting the server")
 	}
 	s.Options = updated
 	return nil
+}
+
+func (s *AgentServer) started() bool {
+	return s.conn != nil || s.httpServer != nil
 }
 
 func mergeWorkerOptions(current WorkerOptions, next WorkerOptions) WorkerOptions {

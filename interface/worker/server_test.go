@@ -660,6 +660,19 @@ func TestUpdateOptionsRejectsAfterWorkerStarted(t *testing.T) {
 	}
 }
 
+func TestUpdateOptionsRejectsAfterHTTPServerStarted(t *testing.T) {
+	server := NewAgentServer(WorkerOptions{})
+	server.httpServer = &http.Server{}
+
+	err := server.UpdateOptions(WorkerOptions{APIKey: "new-key"})
+	if err == nil {
+		t.Fatal("UpdateOptions() error = nil, want started worker error")
+	}
+	if !strings.Contains(err.Error(), "cannot update options after starting the server") {
+		t.Fatalf("UpdateOptions() error = %q, want started worker message", err.Error())
+	}
+}
+
 func TestAgentWebSocketURLPreservesBasePath(t *testing.T) {
 	got, err := agentWebSocketURL("https://livekit.example/project-a", "")
 	if err != nil {
