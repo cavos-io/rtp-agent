@@ -11,6 +11,7 @@ import (
 	"github.com/cavos-io/rtp-agent/core/audio/model"
 	"github.com/cavos-io/rtp-agent/core/llm"
 	"github.com/cavos-io/rtp-agent/library/logger"
+	"github.com/cavos-io/rtp-agent/library/utils/images"
 	"github.com/gorilla/websocket"
 )
 
@@ -181,6 +182,49 @@ func (s *realtimeSession) PushAudio(frame *model.AudioFrame) error {
 		"audio": b64Audio,
 	}
 	return s.sendMsg(msg)
+}
+
+func (s *realtimeSession) PushVideo(frame *images.VideoFrame) error {
+	if frame == nil || len(frame.Data) == 0 {
+		return nil
+	}
+	data, err := images.Encode(frame, images.NewEncodeOptions())
+	if err != nil {
+		return err
+	}
+	image := &llm.ImageContent{
+		Image:    fmt.Sprintf("data:image/jpeg;base64,%s", base64.StdEncoding.EncodeToString(data)),
+		MimeType: "image/jpeg",
+	}
+	msg, err := openAIRealtimeVideoMessage(image)
+	if err != nil {
+		return err
+	}
+	return s.sendMsg(msg)
+}
+
+func openAIRealtimeVideoMessage(image *llm.ImageContent) (map[string]any, error) {
+	img, err := llm.SerializeImage(image)
+	if err != nil {
+		return nil, err
+	}
+	if img.ExternalURL != "" {
+		return nil, fmt.Errorf("openai realtime input_image does not support external image URLs")
+	}
+	url := fmt.Sprintf("data:%s;base64,%s", img.MIMEType, base64.StdEncoding.EncodeToString(img.DataBytes))
+	return map[string]any{
+		"type": "conversation.item.create",
+		"item": map[string]any{
+			"type": "message",
+			"role": "user",
+			"content": []map[string]any{
+				{
+					"type":      "input_image",
+					"image_url": url,
+				},
+			},
+		},
+	}, nil
 }
 
 func (s *realtimeSession) GenerateReply(options llm.RealtimeGenerateReplyOptions) error {

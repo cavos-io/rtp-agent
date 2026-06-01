@@ -102,3 +102,28 @@ func TestRealtimeTruncateMessageMapsAudioModality(t *testing.T) {
 		t.Fatalf("audio_end_ms = %#v, want 1500", msg["audio_end_ms"])
 	}
 }
+
+func TestRealtimeVideoMessageMapsImageContent(t *testing.T) {
+	msg, err := openAIRealtimeVideoMessage(&llm.ImageContent{
+		Image:    "data:image/png;base64,aW1hZ2U=",
+		MimeType: "image/png",
+	})
+	if err != nil {
+		t.Fatalf("openAIRealtimeVideoMessage error = %v, want nil", err)
+	}
+
+	if msg["type"] != "conversation.item.create" {
+		t.Fatalf("message type = %#v, want conversation.item.create", msg["type"])
+	}
+	item := msg["item"].(map[string]any)
+	if item["type"] != "message" || item["role"] != "user" {
+		t.Fatalf("item = %#v, want user message", item)
+	}
+	content := item["content"].([]map[string]any)
+	if len(content) != 1 || content[0]["type"] != "input_image" {
+		t.Fatalf("content = %#v, want one input_image part", content)
+	}
+	if content[0]["image_url"] != "data:image/png;base64,aW1hZ2U=" {
+		t.Fatalf("image_url = %#v, want data URL", content[0]["image_url"])
+	}
+}

@@ -1,6 +1,10 @@
 package llm
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/cavos-io/rtp-agent/library/utils/images"
+)
 
 func TestRealtimeCapabilitiesExposeReferenceFlags(t *testing.T) {
 	capabilities := RealtimeCapabilities{
@@ -69,4 +73,13 @@ func TestRealtimeTruncateOptionsExposeAudioTruncationFields(t *testing.T) {
 	if options.AudioEndMillis != 1500 {
 		t.Fatalf("AudioEndMillis = %d, want 1500", options.AudioEndMillis)
 	}
+}
+
+func TestRealtimeSessionCanAcceptVideoFrames(t *testing.T) {
+	var _ interface {
+		PushVideo(*images.VideoFrame) error
+	} = (RealtimeSession)(nil)
+
+	var frame *images.VideoFrame
+	_ = frame
 }

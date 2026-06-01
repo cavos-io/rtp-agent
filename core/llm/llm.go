@@ -10,6 +10,7 @@ import (
 
 	"github.com/cavos-io/rtp-agent/core/audio/model"
 	"github.com/cavos-io/rtp-agent/library/telemetry"
+	"github.com/cavos-io/rtp-agent/library/utils/images"
 )
 
 type ChatRole string
@@ -499,6 +500,7 @@ type RealtimeSession interface {
 	Close() error
 	EventCh() <-chan RealtimeEvent
 	PushAudio(frame *model.AudioFrame) error
+	PushVideo(frame *images.VideoFrame) error
 	CommitAudio() error
 	ClearAudio() error
 }

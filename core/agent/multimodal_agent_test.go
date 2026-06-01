@@ -7,6 +7,7 @@ import (
 
 	"github.com/cavos-io/rtp-agent/core/audio/model"
 	"github.com/cavos-io/rtp-agent/core/llm"
+	"github.com/cavos-io/rtp-agent/library/utils/images"
 )
 
 func TestMultimodalToolExecutionMasksInternalErrors(t *testing.T) {
@@ -114,6 +115,8 @@ func (f *fakeRealtimeSession) EventCh() <-chan llm.RealtimeEvent {
 }
 
 func (f *fakeRealtimeSession) PushAudio(*model.AudioFrame) error { return nil }
+
+func (f *fakeRealtimeSession) PushVideo(*images.VideoFrame) error { return nil }
 
 func (f *fakeRealtimeSession) CommitAudio() error { return nil }
 
