@@ -110,6 +110,28 @@ func TestSentenceStreamPacerReturnsEOFWhenUnderlyingCompletes(t *testing.T) {
 	}
 }
 
+func TestSentenceStreamPacerPropagatesUnderlyingError(t *testing.T) {
+	streamErr := errors.New("provider stream failed")
+	underlying := newEOFAfterOnePacerStream()
+	underlying.err = streamErr
+	pacer := NewSentenceStreamPacerWithOptions(context.Background(), underlying, SentenceStreamPacerOptions{})
+	defer pacer.Close()
+
+	if err := pacer.PushText("Only segment."); err != nil {
+		t.Fatalf("PushText() error = %v", err)
+	}
+	if err := pacer.Flush(); err != nil {
+		t.Fatalf("Flush() error = %v", err)
+	}
+
+	if _, err := pacer.Next(); err != nil {
+		t.Fatalf("first Next() error = %v", err)
+	}
+	if _, err := pacer.Next(); !errors.Is(err, streamErr) {
+		t.Fatalf("second Next() error = %v, want %v", err, streamErr)
+	}
+}
+
 type fakePacerStream struct {
 	mu         sync.Mutex
 	cond       *sync.Cond
@@ -193,6 +215,7 @@ type eofAfterOnePacerStream struct {
 	ready chan struct{}
 	once  sync.Once
 	index int
+	err   error
 }
 
 func newEOFAfterOnePacerStream() *eofAfterOnePacerStream {
@@ -222,6 +245,9 @@ func (s *eofAfterOnePacerStream) Close() error {
 func (s *eofAfterOnePacerStream) Next() (*SynthesizedAudio, error) {
 	<-s.ready
 	if s.index > 0 {
+		if s.err != nil {
+			return nil, s.err
+		}
 		return nil, io.EOF
 	}
 	s.index++

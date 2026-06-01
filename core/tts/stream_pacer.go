@@ -35,6 +35,7 @@ type SentenceStreamPacer struct {
 	playbackStarted   bool
 	generationStarted bool
 	lastAudioTime     time.Time
+	audioErr          error
 
 	closed bool
 }
@@ -265,6 +266,9 @@ func (p *SentenceStreamPacer) audioLoop() {
 	for {
 		audio, err := p.underlying.Next()
 		if err != nil {
+			p.mu.Lock()
+			p.audioErr = err
+			p.mu.Unlock()
 			return
 		}
 
@@ -332,6 +336,12 @@ func (p *SentenceStreamPacer) Next() (*SynthesizedAudio, error) {
 		return nil, p.ctx.Err()
 	case audio, ok := <-p.audioCh:
 		if !ok {
+			p.mu.Lock()
+			err := p.audioErr
+			p.mu.Unlock()
+			if err != nil {
+				return nil, err
+			}
 			return nil, io.EOF
 		}
 		return audio, nil
