@@ -1247,6 +1247,9 @@ func (s *fallbackLLMStream) tryStart(index int) error {
 				return nil
 			}
 			cancel()
+			if !isRetryableLLMError(err) {
+				return err
+			}
 			lastErr = err
 			if !s.canRetryLLM(i) {
 				s.markUnavailable(i, true)
@@ -1289,6 +1292,10 @@ func (s *fallbackLLMStream) Next() (*ChatChunk, error) {
 		if errors.Is(err, io.EOF) {
 			return nil, err
 		}
+		if !isRetryableLLMError(err) {
+			s.markUnavailable(s.activeIndex, false)
+			return nil, err
+		}
 		if s.outputSent && !s.adapter.retryOnChunkSent {
 			s.markUnavailable(s.activeIndex, false)
 			return nil, err
@@ -1323,6 +1330,14 @@ func (s *fallbackLLMStream) canRetryLLM(index int) bool {
 		s.retries = make(map[int]int)
 	}
 	return s.retries[index] < s.adapter.maxRetryPerLLM
+}
+
+func isRetryableLLMError(err error) bool {
+	var apiErr *APIError
+	if errors.As(err, &apiErr) {
+		return apiErr.Retryable
+	}
+	return true
 }
 
 func (f *FallbackAdapter) attemptOptions(opts []ChatOption) []ChatOption {

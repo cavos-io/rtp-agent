@@ -429,6 +429,25 @@ func TestFallbackAdapterReturnsAllFailedErrorWhenProvidersExhausted(t *testing.T
 	}
 }
 
+func TestFallbackAdapterDoesNotFallbackOnNonRetryableAPIError(t *testing.T) {
+	primaryErr := NewAPIStatusError("bad request", 400, "req_123", nil)
+	fallback := &fakeFallbackLLM{stream: &fakeFallbackStream{events: []fakeFallbackEvent{
+		{chunk: &ChatChunk{Delta: &ChoiceDelta{Content: "fallback"}}},
+	}}}
+	adapter := NewFallbackAdapter([]LLM{
+		&fakeFallbackLLM{err: primaryErr},
+		fallback,
+	})
+
+	_, err := adapter.Chat(context.Background(), NewChatContext())
+	if !errors.Is(err, primaryErr) {
+		t.Fatalf("Chat error = %v, want non-retryable API error", err)
+	}
+	if fallback.calls != 0 {
+		t.Fatalf("fallback calls = %d, want 0 for non-retryable API error", fallback.calls)
+	}
+}
+
 func TestFallbackAdapterSkipsUnavailableProviderOnNextChat(t *testing.T) {
 	firstErr := errors.New("primary stream failed")
 	primary := &fakeFallbackLLM{streams: []LLMStream{
