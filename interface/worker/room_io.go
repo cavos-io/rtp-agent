@@ -225,13 +225,19 @@ func (rio *RoomIO) onChatTextStream(reader *lksdk.TextStreamReader, participantI
 		return
 	}
 	go func() {
-		text := reader.ReadAll()
-		_ = rio.textInput(context.Background(), rio.AgentSession, TextInputEvent{
-			Text:                text,
-			Info:                reader.Info,
-			ParticipantIdentity: participantIdentity,
-		})
+		rio.handleChatTextInput(context.Background(), reader.ReadAll(), reader.Info, participantIdentity)
 	}()
+}
+
+func (rio *RoomIO) handleChatTextInput(ctx context.Context, text string, info lksdk.TextStreamInfo, participantIdentity string) {
+	if rio == nil || rio.AgentSession == nil || rio.textInput == nil {
+		return
+	}
+	_ = rio.textInput(ctx, rio.AgentSession, TextInputEvent{
+		Text:                text,
+		Info:                info,
+		ParticipantIdentity: participantIdentity,
+	})
 }
 
 func (rio *RoomIO) Start(ctx context.Context) error {

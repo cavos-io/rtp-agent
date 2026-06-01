@@ -1,6 +1,7 @@
 package worker
 
 import (
+	"context"
 	"testing"
 	"time"
 
@@ -106,6 +107,37 @@ func TestRoomIOCloseUnregistersChatTextHandler(t *testing.T) {
 	err := room.RegisterTextStreamHandler(RoomIOChatTopic, func(*lksdk.TextStreamReader, string) {})
 	if err != nil {
 		t.Fatalf("RegisterTextStreamHandler after RoomIO.Close() error = %v, want nil", err)
+	}
+}
+
+func TestRoomIOHandleChatTextInputDispatchesConfiguredCallback(t *testing.T) {
+	session := &agent.AgentSession{}
+	var gotSession *agent.AgentSession
+	var gotEvent TextInputEvent
+	called := false
+	rio := &RoomIO{
+		AgentSession: session,
+		textInput: func(_ context.Context, sess *agent.AgentSession, ev TextInputEvent) error {
+			called = true
+			gotSession = sess
+			gotEvent = ev
+			return nil
+		},
+	}
+
+	rio.handleChatTextInput(context.Background(), "hello from chat", lksdk.TextStreamInfo{}, "caller")
+
+	if !called {
+		t.Fatal("text input callback was not called")
+	}
+	if gotSession != session {
+		t.Fatal("text input callback received a different session")
+	}
+	if gotEvent.Text != "hello from chat" {
+		t.Fatalf("TextInputEvent.Text = %q, want hello from chat", gotEvent.Text)
+	}
+	if gotEvent.ParticipantIdentity != "caller" {
+		t.Fatalf("TextInputEvent.ParticipantIdentity = %q, want caller", gotEvent.ParticipantIdentity)
 	}
 }
 
