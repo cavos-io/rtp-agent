@@ -482,6 +482,68 @@ func TestRealtimeSessionClosesOutputMessageStreamsWhenItemDone(t *testing.T) {
 	}
 }
 
+func TestRealtimeSessionClosesGenerationStreamsWhenResponseDone(t *testing.T) {
+	session := &realtimeSession{}
+	created := session.trackRealtimeEvent(llm.RealtimeEvent{
+		Type:       llm.RealtimeEventTypeGenerationCreated,
+		Generation: &llm.GenerationCreatedEvent{},
+	})
+	session.trackOpenAIRealtimeEvent(map[string]any{
+		"type": "response.output_item.added",
+		"item": map[string]any{
+			"id":   "msg_123",
+			"type": "message",
+		},
+	})
+
+	var msg llm.MessageGeneration
+	select {
+	case msg = <-created.Generation.MessageCh:
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("timed out waiting for message generation")
+	}
+
+	if ev, ok := session.trackOpenAIRealtimeEvent(map[string]any{
+		"type":     "response.done",
+		"response": map[string]any{"id": "resp_123"},
+	}); ok {
+		t.Fatalf("trackOpenAIRealtimeEvent = %#v, true; want side effect only", ev)
+	}
+
+	select {
+	case _, ok := <-msg.TextCh:
+		if ok {
+			t.Fatal("TextCh still open, want closed")
+		}
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("timed out waiting for text stream close")
+	}
+	select {
+	case _, ok := <-msg.AudioCh:
+		if ok {
+			t.Fatal("AudioCh still open, want closed")
+		}
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("timed out waiting for audio stream close")
+	}
+	select {
+	case _, ok := <-created.Generation.MessageCh:
+		if ok {
+			t.Fatal("MessageCh still open, want closed")
+		}
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("timed out waiting for generation message stream close")
+	}
+	select {
+	case _, ok := <-created.Generation.FunctionCh:
+		if ok {
+			t.Fatal("FunctionCh still open, want closed")
+		}
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("timed out waiting for generation function stream close")
+	}
+}
+
 func TestRealtimeEventMapsConversationItemAddedMessage(t *testing.T) {
 	ev, ok := openAIRealtimeEvent(map[string]any{
 		"type":             "conversation.item.added",
