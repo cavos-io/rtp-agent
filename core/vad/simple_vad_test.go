@@ -66,6 +66,35 @@ func TestSimpleVADEmitsMetricsCollected(t *testing.T) {
 	}
 }
 
+func TestSimpleVADMetricsIdleTimeStartsAtStreamCreation(t *testing.T) {
+	detector := NewSimpleVADWithOptions(SimpleVADOptions{UpdateInterval: 1})
+	metricsCh := make(chan *telemetry.VADMetrics, 1)
+	detector.OnMetricsCollected(func(metrics *telemetry.VADMetrics) {
+		metricsCh <- metrics
+	})
+
+	stream, err := detector.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	defer stream.Close()
+	time.Sleep(20 * time.Millisecond)
+
+	if err := stream.PushFrame(audioFrame(16000, 160, 0)); err != nil {
+		t.Fatalf("PushFrame() error = %v", err)
+	}
+	assertEventType(t, stream, VADEventInferenceDone)
+
+	select {
+	case metrics := <-metricsCh:
+		if metrics.IdleTime < 0.01 {
+			t.Fatalf("metrics IdleTime = %v, want at least 0.01s since stream creation", metrics.IdleTime)
+		}
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("timed out waiting for VAD metrics")
+	}
+}
+
 func TestSimpleVADUpdateOptionsAppliesToActiveStream(t *testing.T) {
 	detector := NewSimpleVADWithOptions(SimpleVADOptions{
 		Threshold:         0.05,
@@ -88,6 +117,55 @@ func TestSimpleVADUpdateOptionsAppliesToActiveStream(t *testing.T) {
 	}
 	assertEventType(t, stream, VADEventInferenceDone)
 	assertEventType(t, stream, VADEventStartOfSpeech)
+}
+
+func TestSimpleVADUpdateOptionsWithAllowsZeroMinSpeechDuration(t *testing.T) {
+	detector := NewSimpleVADWithOptions(SimpleVADOptions{
+		Threshold:         0.05,
+		MinSpeechDuration: 0.02,
+	})
+	stream, err := detector.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	defer stream.Close()
+
+	detector.UpdateOptionsWith(WithMinSpeechDuration(0))
+	if err := stream.PushFrame(audioFrame(16000, 160, 6000)); err != nil {
+		t.Fatalf("PushFrame() error = %v", err)
+	}
+	assertEventType(t, stream, VADEventInferenceDone)
+	assertEventType(t, stream, VADEventStartOfSpeech)
+}
+
+func TestSimpleVADUpdateOptionsWithAllowsZeroMaxBufferedSpeech(t *testing.T) {
+	detector := NewSimpleVADWithOptions(SimpleVADOptions{
+		Threshold:                 0.05,
+		PrefixPaddingDuration:     0.01,
+		MaxBufferedSpeechDuration: 0.03,
+	})
+	stream, err := detector.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	defer stream.Close()
+
+	prefix := audioFrame(16000, 160, 0)
+	if err := stream.PushFrame(prefix); err != nil {
+		t.Fatalf("PushFrame() prefix error = %v", err)
+	}
+	assertEventType(t, stream, VADEventInferenceDone)
+
+	detector.UpdateOptionsWith(WithMaxBufferedSpeechDuration(0))
+	if err := stream.PushFrame(audioFrame(16000, 160, 6000)); err != nil {
+		t.Fatalf("PushFrame() speech error = %v", err)
+	}
+	assertEventType(t, stream, VADEventInferenceDone)
+	start := nextVADEvent(t, stream)
+	if start.Type != VADEventStartOfSpeech {
+		t.Fatalf("event type = %s, want %s", start.Type, VADEventStartOfSpeech)
+	}
+	assertCombinedFrames(t, start.Frames, prefix)
 }
 
 func TestSimpleVADUpdateOptionsRelaxesMaxBufferedSpeech(t *testing.T) {
@@ -235,6 +313,12 @@ func TestSimpleVADRejectsInvalidFrameMetadata(t *testing.T) {
 		{
 			SampleRate:  16000,
 			NumChannels: 1,
+		},
+		{
+			Data:              []byte{0, 0},
+			SampleRate:        16000,
+			NumChannels:       1,
+			SamplesPerChannel: 160,
 		},
 	} {
 		if err := stream.PushFrame(frame); err == nil {

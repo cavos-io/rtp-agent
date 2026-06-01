@@ -30,18 +30,37 @@ func GenerateStrictJSONSchema(t reflect.Type) map[string]interface{} {
 
 	for i := 0; i < t.NumField(); i++ {
 		field := t.Field(i)
+		if field.PkgPath != "" {
+			continue
+		}
 
 		// Get JSON tag, default to field name lowercase
 		name := strings.ToLower(field.Name)
 		jsonTag := field.Tag.Get("json")
+		jsonParts := []string{""}
 		if jsonTag != "" {
-			parts := strings.Split(jsonTag, ",")
-			if parts[0] == "-" {
+			jsonParts = strings.Split(jsonTag, ",")
+			if jsonParts[0] == "-" {
 				continue
 			}
-			if parts[0] != "" {
-				name = parts[0]
+			if jsonParts[0] != "" {
+				name = jsonParts[0]
 			}
+		}
+
+		if field.Anonymous && jsonParts[0] == "" && indirectKind(field.Type) == reflect.Struct {
+			embeddedSchema := GenerateStrictJSONSchema(indirectType(field.Type))
+			if embeddedProps, ok := embeddedSchema["properties"].(map[string]interface{}); ok {
+				for key, value := range embeddedProps {
+					props[key] = value
+				}
+			}
+			if embeddedRequired, ok := embeddedSchema["required"].([]string); ok {
+				for _, requiredField := range embeddedRequired {
+					req = appendRequiredField(req, requiredField)
+				}
+			}
+			continue
 		}
 
 		desc := field.Tag.Get("jsonschema")
@@ -49,7 +68,7 @@ func GenerateStrictJSONSchema(t reflect.Type) map[string]interface{} {
 
 		props[name] = propSchema
 
-		req = append(req, name)
+		req = appendRequiredField(req, name)
 
 		if strings.Contains(jsonTag, "omitempty") {
 			if typeArr, ok := propSchema["type"].([]string); ok {
@@ -73,6 +92,26 @@ func GenerateStrictJSONSchema(t reflect.Type) map[string]interface{} {
 	return schema
 }
 
+func appendRequiredField(required []string, name string) []string {
+	for _, existing := range required {
+		if existing == name {
+			return required
+		}
+	}
+	return append(required, name)
+}
+
+func indirectType(t reflect.Type) reflect.Type {
+	for t.Kind() == reflect.Ptr {
+		t = t.Elem()
+	}
+	return t
+}
+
+func indirectKind(t reflect.Type) reflect.Kind {
+	return indirectType(t).Kind()
+}
+
 func goTypeToJSONSchema(t reflect.Type, description string) map[string]interface{} {
 	schema := map[string]interface{}{}
 
@@ -88,9 +127,14 @@ func goTypeToJSONSchema(t reflect.Type, description string) map[string]interface
 			// but also allow "null".
 			structSchema := GenerateStrictJSONSchema(t.Elem())
 			structSchema["type"] = []string{"object", "null"}
+			if description != "" {
+				structSchema["description"] = description
+			}
 			return structSchema
 		} else if t.Elem().Kind() == reflect.Slice || t.Elem().Kind() == reflect.Array {
 			schema["items"] = goTypeToJSONSchema(t.Elem().Elem(), "")
+		} else if t.Elem().Kind() == reflect.Map {
+			schema["additionalProperties"] = goTypeToJSONSchema(t.Elem().Elem(), "")
 		}
 		return schema
 	}
@@ -101,7 +145,11 @@ func goTypeToJSONSchema(t reflect.Type, description string) map[string]interface
 	case reflect.Slice, reflect.Array:
 		schema["items"] = goTypeToJSONSchema(t.Elem(), "")
 	case reflect.Struct:
-		return GenerateStrictJSONSchema(t)
+		structSchema := GenerateStrictJSONSchema(t)
+		if description != "" {
+			structSchema["description"] = description
+		}
+		return structSchema
 	case reflect.Map:
 		schema["additionalProperties"] = goTypeToJSONSchema(t.Elem(), "")
 	}

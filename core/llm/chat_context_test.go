@@ -398,6 +398,29 @@ func TestChatContextToProviderFormatEReturnsErrorForUnsupportedFormat(t *testing
 	}
 }
 
+func TestChatContextToProviderFormatEReturnsErrorForMalformedToolArguments(t *testing.T) {
+	formats := []string{"google", "anthropic", "aws"}
+	for _, format := range formats {
+		t.Run(format, func(t *testing.T) {
+			ctx := NewChatContext()
+			ctx.Items = []ChatItem{
+				&ChatMessage{ID: "assistant-turn", Role: ChatRoleAssistant, Content: []ChatContent{{Text: "checking"}}},
+				&FunctionCall{ID: "assistant-turn/tool", CallID: "call_lookup", Name: "lookup", Arguments: `{"city":`},
+				&FunctionCallOutput{ID: "output", CallID: "call_lookup", Name: "lookup", Output: "Paris"},
+			}
+
+			messages, extra, err := ctx.ToProviderFormatE(format)
+
+			if err == nil {
+				t.Fatal("ToProviderFormatE() error = nil, want malformed tool arguments error")
+			}
+			if messages != nil || extra != nil {
+				t.Fatalf("ToProviderFormatE() messages=%#v extra=%#v, want nil outputs on error", messages, extra)
+			}
+		})
+	}
+}
+
 func TestGoogleProviderFormatInjectsThoughtSignatures(t *testing.T) {
 	ctx := NewChatContext()
 	ctx.Items = []ChatItem{
