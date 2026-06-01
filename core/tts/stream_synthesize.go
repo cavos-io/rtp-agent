@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"io"
 	"strings"
+
+	cavosmath "github.com/cavos-io/conversation-worker/library/math"
 )
 
 func SynthesizeWithStream(ctx context.Context, provider TTS, text string) (ChunkedStream, error) {
@@ -21,12 +23,13 @@ func SynthesizeWithStream(ctx context.Context, provider TTS, text string) (Chunk
 		_ = stream.Close()
 		return nil, err
 	}
-	return &chunkedStreamFromSynthesizeStream{stream: stream, text: text}, nil
+	return &chunkedStreamFromSynthesizeStream{stream: stream, text: text, requestID: cavosmath.ShortUUID("")}, nil
 }
 
 type chunkedStreamFromSynthesizeStream struct {
 	stream    SynthesizeStream
 	text      string
+	requestID string
 	audioSeen bool
 }
 
@@ -39,6 +42,7 @@ func (s *chunkedStreamFromSynthesizeStream) Next() (*SynthesizedAudio, error) {
 		return nil, err
 	}
 	s.audioSeen = true
+	audio.RequestID = s.requestID
 	return audio, nil
 }
 

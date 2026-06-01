@@ -5,9 +5,11 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"strings"
 	"sync"
 
 	"github.com/cavos-io/conversation-worker/library/logger"
+	cavosmath "github.com/cavos-io/conversation-worker/library/math"
 	"github.com/cavos-io/conversation-worker/model"
 )
 
@@ -310,6 +312,7 @@ type fallbackChunkedStream struct {
 	activeStream ChunkedStream
 	activeIndex  int
 	retries      map[int]int
+	requestID    string
 
 	eventCh chan *SynthesizedAudio
 	errCh   chan error
@@ -319,13 +322,14 @@ type fallbackChunkedStream struct {
 
 func (f *FallbackAdapter) Synthesize(ctx context.Context, text string) (ChunkedStream, error) {
 	s := &fallbackChunkedStream{
-		adapter: f,
-		ctx:     ctx,
-		text:    text,
-		eventCh: make(chan *SynthesizedAudio, 100),
-		errCh:   make(chan error, 1),
-		closeCh: make(chan struct{}),
-		retries: make(map[int]int),
+		adapter:   f,
+		ctx:       ctx,
+		text:      text,
+		eventCh:   make(chan *SynthesizedAudio, 100),
+		errCh:     make(chan error, 1),
+		closeCh:   make(chan struct{}),
+		retries:   make(map[int]int),
+		requestID: cavosmath.ShortUUID(""),
 	}
 
 	if err := s.tryStartStream(0); err != nil {
@@ -382,6 +386,10 @@ func (s *fallbackChunkedStream) monitorStream() {
 		ev, err := stream.Next()
 		if err != nil {
 			if errors.Is(err, io.EOF) || audioSent {
+				if errors.Is(err, io.EOF) && !audioSent && strings.TrimSpace(s.text) != "" {
+					s.errCh <- fmt.Errorf("no audio frames were pushed for text: %s", s.text)
+					return
+				}
 				s.errCh <- io.EOF
 				return
 			}
@@ -418,6 +426,7 @@ func (s *fallbackChunkedStream) monitorStream() {
 			s.errCh <- err
 			return
 		}
+		ev.RequestID = s.requestID
 
 		audioSent = true
 		select {
@@ -439,6 +448,12 @@ func (s *fallbackChunkedStream) canRetryTTS(index int) bool {
 }
 
 func (s *fallbackChunkedStream) Next() (*SynthesizedAudio, error) {
+	select {
+	case ev := <-s.eventCh:
+		return ev, nil
+	default:
+	}
+
 	select {
 	case ev := <-s.eventCh:
 		return ev, nil
@@ -469,6 +484,7 @@ type fallbackSynthesizeStream struct {
 	activeIndex  int
 	retries      map[int]int
 	inputBuffer  []fallbackSynthesizeInput
+	requestID    string
 
 	eventCh chan *SynthesizedAudio
 	errCh   chan error
@@ -483,12 +499,13 @@ type fallbackSynthesizeInput struct {
 
 func (f *FallbackAdapter) Stream(ctx context.Context) (SynthesizeStream, error) {
 	s := &fallbackSynthesizeStream{
-		adapter: f,
-		ctx:     ctx,
-		eventCh: make(chan *SynthesizedAudio, 100),
-		errCh:   make(chan error, 1),
-		closeCh: make(chan struct{}),
-		retries: make(map[int]int),
+		adapter:   f,
+		ctx:       ctx,
+		eventCh:   make(chan *SynthesizedAudio, 100),
+		errCh:     make(chan error, 1),
+		closeCh:   make(chan struct{}),
+		retries:   make(map[int]int),
+		requestID: cavosmath.ShortUUID(""),
 	}
 
 	if err := s.tryStartStream(0); err != nil {
@@ -578,6 +595,10 @@ func (s *fallbackSynthesizeStream) monitorStream() {
 		ev, err := stream.Next()
 		if err != nil {
 			if errors.Is(err, io.EOF) || audioSent {
+				if errors.Is(err, io.EOF) && !audioSent && strings.TrimSpace(s.pushedText()) != "" {
+					s.errCh <- fmt.Errorf("no audio frames were pushed for text: %s", s.pushedText())
+					return
+				}
 				s.errCh <- io.EOF
 				return
 			}
@@ -614,6 +635,7 @@ func (s *fallbackSynthesizeStream) monitorStream() {
 			s.errCh <- err
 			return
 		}
+		ev.RequestID = s.requestID
 
 		audioSent = true
 		select {
@@ -632,6 +654,16 @@ func (s *fallbackSynthesizeStream) canRetryTTS(index int) bool {
 		s.retries = make(map[int]int)
 	}
 	return s.retries[index] < s.adapter.maxRetryPerTTS
+}
+
+func (s *fallbackSynthesizeStream) pushedText() string {
+	texts := make([]string, 0, len(s.inputBuffer))
+	for _, input := range s.inputBuffer {
+		if !input.flush {
+			texts = append(texts, input.text)
+		}
+	}
+	return strings.Join(texts, "")
 }
 
 func (s *fallbackSynthesizeStream) PushText(text string) error {
@@ -666,6 +698,12 @@ func (s *fallbackSynthesizeStream) Close() error {
 }
 
 func (s *fallbackSynthesizeStream) Next() (*SynthesizedAudio, error) {
+	select {
+	case ev := <-s.eventCh:
+		return ev, nil
+	default:
+	}
+
 	select {
 	case ev := <-s.eventCh:
 		return ev, nil

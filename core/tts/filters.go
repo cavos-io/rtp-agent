@@ -18,9 +18,9 @@ var (
 	// links: keep text part [text](url) -> text
 	linkPattern = regexp.MustCompile(`\[([^\]]*)\]\([^)]*\)`)
 	// bold: remove asterisks from **text** while preserving literal asterisks in words/expressions
-	boldPattern = regexp.MustCompile(`(^|[^\w*])\*\*([^\s*][^*\n]*?[^\s*])\*\*($|[^\w*])`)
+	boldPattern = regexp.MustCompile(`(^|[^\w*])\*\*([^\s*](?:[^*\n]*?[^\s*])?)\*\*($|[^\w*])`)
 	// italic: remove asterisks from *text* while preserving literal asterisks in words/expressions
-	italicPattern = regexp.MustCompile(`(^|[^\w*])\*([^\s*][^*\n]*?[^\s*])\*($|[^\w*])`)
+	italicPattern = regexp.MustCompile(`(^|[^\w*])\*([^\s*](?:[^*\n]*?[^\s*])?)\*($|[^\w*])`)
 	// bold with underscores: remove underscores from __text__ while preserving intra-word underscores
 	boldUnderPattern = regexp.MustCompile(`(^|\W)__([^_]+?)__($|\W)`)
 	// italic with underscores: remove underscores from _text_ while preserving intra-word underscores
@@ -30,7 +30,7 @@ var (
 	// inline code: remove ` from `text`
 	inlineCodePattern = regexp.MustCompile("`([^`]+?)`")
 	// strikethrough: remove ~~text~~ only when text is tight against tildes
-	strikePattern = regexp.MustCompile(`~~([^\s~][^~]*?[^\s~])~~`)
+	strikePattern = regexp.MustCompile(`~~([^\s~](?:[^~]*?[^\s~])?)~~`)
 
 	// Emoji block ranges
 	emojiPattern = regexp.MustCompile(`[\x{1F000}-\x{1FBFF}]|[\x{2600}-\x{26FF}]|[\x{2700}-\x{27BF}]|[\x{2B00}-\x{2BFF}]|[\x{FE00}-\x{FE0F}]|\x{200D}|\x{20E3}`)

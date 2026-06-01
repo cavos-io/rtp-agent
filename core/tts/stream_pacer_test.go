@@ -59,6 +59,35 @@ func TestSentenceStreamPacerWaitsForGenerationProgressBeforeDrainingFlush(t *tes
 	}
 }
 
+func TestSentenceStreamPacerAllowsPushAfterFlush(t *testing.T) {
+	underlying := newFakePacerStream()
+	pacer := NewSentenceStreamPacerWithOptions(context.Background(), underlying, SentenceStreamPacerOptions{
+		MinRemainingAudio: 20 * time.Second,
+		MaxTextLength:     80,
+	})
+	defer pacer.Close()
+
+	if err := pacer.PushText("First segment."); err != nil {
+		t.Fatalf("first PushText() error = %v", err)
+	}
+	if err := pacer.Flush(); err != nil {
+		t.Fatalf("first Flush() error = %v", err)
+	}
+	if !underlying.waitForPushes(t, []string{"First segment."}) {
+		t.Fatalf("pushed text = %#v, want first segment", underlying.pushes())
+	}
+
+	if err := pacer.PushText("Second segment."); err != nil {
+		t.Fatalf("second PushText() error = %v", err)
+	}
+	if err := pacer.Flush(); err != nil {
+		t.Fatalf("second Flush() error = %v", err)
+	}
+	if !underlying.waitForPushes(t, []string{"First segment.", "Second segment."}) {
+		t.Fatalf("pushed text = %#v, want both segments", underlying.pushes())
+	}
+}
+
 type fakePacerStream struct {
 	mu         sync.Mutex
 	cond       *sync.Cond

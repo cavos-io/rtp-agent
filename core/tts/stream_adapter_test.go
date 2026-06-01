@@ -129,6 +129,39 @@ func TestStreamAdapterMarksLastFrameInSegmentFinal(t *testing.T) {
 	}
 }
 
+func TestStreamAdapterSetsStableRequestID(t *testing.T) {
+	provider := &fakeStreamAdapterTTS{
+		events: []*SynthesizedAudio{
+			{RequestID: "provider-a", Frame: &model.AudioFrame{Data: []byte{1}, SampleRate: 24000, NumChannels: 1, SamplesPerChannel: 1}},
+			{RequestID: "provider-b", Frame: &model.AudioFrame{Data: []byte{2}, SampleRate: 24000, NumChannels: 1, SamplesPerChannel: 1}},
+		},
+	}
+	stream, err := NewStreamAdapter(provider).Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+	defer stream.Close()
+
+	if err := stream.PushText("request id segment"); err != nil {
+		t.Fatalf("PushText returned error: %v", err)
+	}
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush returned error: %v", err)
+	}
+
+	first := nextStreamAdapterAudio(t, stream)
+	second := nextStreamAdapterAudio(t, stream)
+	if first.RequestID == "" {
+		t.Fatal("first RequestID is empty")
+	}
+	if second.RequestID != first.RequestID {
+		t.Fatalf("second RequestID = %q, want stable request id %q", second.RequestID, first.RequestID)
+	}
+	if first.RequestID == "provider-a" || second.RequestID == "provider-b" {
+		t.Fatalf("RequestID forwarded provider ids: first=%q second=%q", first.RequestID, second.RequestID)
+	}
+}
+
 func TestStreamAdapterPropagatesSynthesizeError(t *testing.T) {
 	synthErr := errors.New("synthesize failed")
 	stream, err := NewStreamAdapter(&fakeStreamAdapterTTS{synthesizeErr: synthErr}).Stream(context.Background())
