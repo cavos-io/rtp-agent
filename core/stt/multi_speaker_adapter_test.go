@@ -156,6 +156,26 @@ func TestMultiSpeakerAdapterWrapperReturnsEOFWhenInnerCompletes(t *testing.T) {
 	}
 }
 
+func TestMultiSpeakerAdapterWrapperKeepsReturningEOFAfterInnerCompletes(t *testing.T) {
+	wrapper := &multiSpeakerAdapterWrapper{
+		inner:   &fakeMultiSpeakerStream{nextErr: io.EOF},
+		ctx:     context.Background(),
+		eventCh: make(chan *SpeechEvent, 1),
+		errCh:   make(chan error, 1),
+		inputCh: make(chan multiSpeakerInput, 1),
+	}
+	go wrapper.run()
+
+	_, err := wrapper.Next()
+	if !errors.Is(err, io.EOF) {
+		t.Fatalf("first Next error = %v, want io.EOF", err)
+	}
+	err = nextMultiSpeakerAdapterError(wrapper)
+	if !errors.Is(err, io.EOF) {
+		t.Fatalf("second Next error = %v, want io.EOF", err)
+	}
+}
+
 func TestMultiSpeakerAdapterWrapperRejectsInputAfterInnerCompletes(t *testing.T) {
 	wrapper := &multiSpeakerAdapterWrapper{
 		inner:   &fakeMultiSpeakerStream{nextErr: io.EOF},
@@ -469,4 +489,18 @@ func (f *fakeMultiSpeakerStream) StartTime() float64 {
 
 func (f *fakeMultiSpeakerStream) SetStartTime(startTime float64) {
 	f.startTime = startTime
+}
+
+func nextMultiSpeakerAdapterError(stream RecognizeStream) error {
+	errCh := make(chan error, 1)
+	go func() {
+		_, err := stream.Next()
+		errCh <- err
+	}()
+	select {
+	case err := <-errCh:
+		return err
+	case <-time.After(100 * time.Millisecond):
+		return errors.New("timed out waiting for multi-speaker stream Next")
+	}
 }
