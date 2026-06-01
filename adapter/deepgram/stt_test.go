@@ -134,6 +134,20 @@ func TestDeepgramSTTDefaultsMatchReference(t *testing.T) {
 	}
 }
 
+func TestDeepgramSTTUsesEnvAPIKeyWhenOmitted(t *testing.T) {
+	t.Setenv("DEEPGRAM_API_KEY", "env-key")
+
+	provider := NewDeepgramSTT("", "")
+	if provider.apiKey != "env-key" {
+		t.Fatalf("apiKey = %q, want env key", provider.apiKey)
+	}
+
+	provider = NewDeepgramSTT("explicit-key", "")
+	if provider.apiKey != "explicit-key" {
+		t.Fatalf("apiKey = %q, want explicit key", provider.apiKey)
+	}
+}
+
 func TestDeepgramStreamURLUsesReferenceOptions(t *testing.T) {
 	provider := NewDeepgramSTT("test-key", "")
 
@@ -178,9 +192,77 @@ func TestDeepgramRecognizeURLUsesReferenceOptions(t *testing.T) {
 	assertDeepgramQuery(t, query, "smart_format", "false")
 }
 
+func TestDeepgramSTTAdvancedOptionsUseReferenceQueryParams(t *testing.T) {
+	provider := NewDeepgramSTT("test-key", "nova-2",
+		WithDeepgramSTTBaseURL("https://deepgram.example/v1/listen"),
+		WithDeepgramSTTInterimResults(false),
+		WithDeepgramSTTPunctuate(false),
+		WithDeepgramSTTSmartFormat(true),
+		WithDeepgramSTTNoDelay(false),
+		WithDeepgramSTTEndpointing(0),
+		WithDeepgramSTTDiarization(true),
+		WithDeepgramSTTFillerWords(false),
+		WithDeepgramSTTSampleRate(48000),
+		WithDeepgramSTTNumChannels(2),
+		WithDeepgramSTTVADEvents(false),
+		WithDeepgramSTTProfanityFilter(true),
+		WithDeepgramSTTNumerals(true),
+		WithDeepgramSTTMipOptOut(true),
+		WithDeepgramSTTKeywords([]DeepgramKeyword{{Keyword: "cavos", Boost: 2.5}}),
+		WithDeepgramSTTKeyterms([]string{"LiveKit", "rtp-agent"}),
+		WithDeepgramSTTRedact([]string{"pci", "ssn"}),
+		WithDeepgramSTTTags([]string{"agent", "test"}),
+	)
+
+	caps := provider.Capabilities()
+	if caps.InterimResults || !caps.Diarization {
+		t.Fatalf("capabilities = %+v, want interim false and diarization true", caps)
+	}
+
+	got, err := url.Parse(buildDeepgramStreamURL(provider, "en-US"))
+	if err != nil {
+		t.Fatalf("parse stream url: %v", err)
+	}
+	if got.Scheme != "wss" || got.Host != "deepgram.example" || got.Path != "/v1/listen" {
+		t.Fatalf("stream url = %q, want configured websocket URL", got.String())
+	}
+	query := got.Query()
+	assertDeepgramQuery(t, query, "model", "nova-2")
+	assertDeepgramQuery(t, query, "punctuate", "false")
+	assertDeepgramQuery(t, query, "smart_format", "true")
+	assertDeepgramQuery(t, query, "no_delay", "false")
+	assertDeepgramQuery(t, query, "interim_results", "false")
+	assertDeepgramQuery(t, query, "sample_rate", "48000")
+	assertDeepgramQuery(t, query, "channels", "2")
+	assertDeepgramQuery(t, query, "endpointing", "false")
+	assertDeepgramQuery(t, query, "vad_events", "false")
+	assertDeepgramQuery(t, query, "filler_words", "false")
+	assertDeepgramQuery(t, query, "diarize", "true")
+	assertDeepgramQuery(t, query, "profanity_filter", "true")
+	assertDeepgramQuery(t, query, "numerals", "true")
+	assertDeepgramQuery(t, query, "mip_opt_out", "true")
+	assertDeepgramQueryValues(t, query, "keywords", []string{"cavos:2.5"})
+	assertDeepgramQueryValues(t, query, "keyterm", []string{"LiveKit", "rtp-agent"})
+	assertDeepgramQueryValues(t, query, "redact", []string{"pci", "ssn"})
+	assertDeepgramQueryValues(t, query, "tag", []string{"agent", "test"})
+}
+
 func assertDeepgramQuery(t *testing.T, query url.Values, key string, want string) {
 	t.Helper()
 	if got := query.Get(key); got != want {
 		t.Fatalf("%s = %q, want %q", key, got, want)
+	}
+}
+
+func assertDeepgramQueryValues(t *testing.T, query url.Values, key string, want []string) {
+	t.Helper()
+	got := query[key]
+	if len(got) != len(want) {
+		t.Fatalf("%s = %+v, want %+v", key, got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("%s = %+v, want %+v", key, got, want)
+		}
 	}
 }

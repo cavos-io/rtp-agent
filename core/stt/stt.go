@@ -70,6 +70,19 @@ func (e SpeechEvent) MarshalJSON() ([]byte, error) {
 	return json.Marshal(payload)
 }
 
+func (e *SpeechEvent) UnmarshalJSON(data []byte) error {
+	type speechEventPayload SpeechEvent
+	var payload speechEventPayload
+	if err := json.Unmarshal(data, &payload); err != nil {
+		return err
+	}
+	*e = SpeechEvent(payload)
+	if e.Alternatives == nil {
+		e.Alternatives = []SpeechData{}
+	}
+	return nil
+}
+
 type STTCapabilities struct {
 	Streaming         bool   `json:"streaming"`
 	InterimResults    bool   `json:"interim_results"`
@@ -105,7 +118,7 @@ func (c *STTCapabilities) UnmarshalJSON(data []byte) error {
 		InterimResults    bool            `json:"interim_results"`
 		Diarization       bool            `json:"diarization"`
 		AlignedTranscript json.RawMessage `json:"aligned_transcript"`
-		OfflineRecognize  bool            `json:"offline_recognize"`
+		OfflineRecognize  *bool           `json:"offline_recognize"`
 	}
 	var payload sttCapabilitiesPayload
 	if err := json.Unmarshal(data, &payload); err != nil {
@@ -120,7 +133,10 @@ func (c *STTCapabilities) UnmarshalJSON(data []byte) error {
 	c.InterimResults = payload.InterimResults
 	c.Diarization = payload.Diarization
 	c.AlignedTranscript = alignedTranscript
-	c.OfflineRecognize = payload.OfflineRecognize
+	c.OfflineRecognize = true
+	if payload.OfflineRecognize != nil {
+		c.OfflineRecognize = *payload.OfflineRecognize
+	}
 	return nil
 }
 

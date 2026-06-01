@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"net/url"
+	"strings"
 	"sync"
 
 	"github.com/cavos-io/rtp-agent/core/audio/model"
@@ -15,6 +15,7 @@ import (
 
 type SpeechmaticsSTT struct {
 	apiKey               string
+	baseURL              string
 	language             string
 	sampleRate           int
 	audioEncoding        string
@@ -53,6 +54,14 @@ func WithSpeechmaticsSTTLanguage(language string) SpeechmaticsSTTOption {
 	return func(s *SpeechmaticsSTT) {
 		if language != "" {
 			s.language = language
+		}
+	}
+}
+
+func WithSpeechmaticsSTTBaseURL(baseURL string) SpeechmaticsSTTOption {
+	return func(s *SpeechmaticsSTT) {
+		if baseURL != "" {
+			s.baseURL = strings.TrimRight(baseURL, "/")
 		}
 	}
 }
@@ -170,6 +179,7 @@ func WithSpeechmaticsSTTPreferCurrentSpeaker(prefer bool) SpeechmaticsSTTOption 
 func NewSpeechmaticsSTT(apiKey string, opts ...SpeechmaticsSTTOption) *SpeechmaticsSTT {
 	provider := &SpeechmaticsSTT{
 		apiKey:        apiKey,
+		baseURL:       "wss://eu2.rt.speechmatics.com/v2",
 		language:      "en",
 		sampleRate:    16000,
 		audioEncoding: "pcm_s16le",
@@ -187,13 +197,10 @@ func (s *SpeechmaticsSTT) Capabilities() stt.STTCapabilities {
 }
 
 func (s *SpeechmaticsSTT) Stream(ctx context.Context, language string) (stt.RecognizeStream, error) {
-	// Speechmatics API websocket URL
-	u := url.URL{Scheme: "wss", Host: "en.rt.speechmatics.com", Path: "/v2"}
-
 	header := make(map[string][]string)
 	header["Authorization"] = []string{"Bearer " + s.apiKey}
 
-	conn, _, err := websocket.DefaultDialer.DialContext(ctx, u.String(), header)
+	conn, _, err := websocket.DefaultDialer.DialContext(ctx, buildSpeechmaticsSTTStreamURL(s), header)
 	if err != nil {
 		return nil, err
 	}
@@ -218,6 +225,10 @@ func (s *SpeechmaticsSTT) Stream(ctx context.Context, language string) (stt.Reco
 
 func (s *SpeechmaticsSTT) Recognize(ctx context.Context, frames []*model.AudioFrame, language string) (*stt.SpeechEvent, error) {
 	return nil, fmt.Errorf("speechmatics offline recognize is not implemented")
+}
+
+func buildSpeechmaticsSTTStreamURL(s *SpeechmaticsSTT) string {
+	return strings.TrimRight(s.baseURL, "/")
 }
 
 func buildSpeechmaticsSTTStartMessage(s *SpeechmaticsSTT, language string) map[string]interface{} {

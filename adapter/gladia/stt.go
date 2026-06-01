@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"os"
 	"sync"
 	"time"
 
@@ -54,6 +55,7 @@ type GladiaSTT struct {
 	translationContext                 string
 	translationInformal                bool
 	customVocabulary                   []any
+	customSpelling                     map[string][]string
 	preProcessingAudioEnhancer         bool
 	preProcessingSpeechThreshold       float64
 }
@@ -65,6 +67,20 @@ func WithGladiaBaseURL(baseURL string) GladiaSTTOption {
 		if baseURL != "" {
 			s.baseURL = baseURL
 		}
+	}
+}
+
+func WithGladiaModel(model string) GladiaSTTOption {
+	return func(s *GladiaSTT) {
+		if model != "" {
+			s.model = model
+		}
+	}
+}
+
+func WithGladiaInterimResults(interimResults bool) GladiaSTTOption {
+	return func(s *GladiaSTT) {
+		s.interimResults = interimResults
 	}
 }
 
@@ -80,9 +96,59 @@ func WithGladiaCodeSwitching(codeSwitching bool) GladiaSTTOption {
 	}
 }
 
+func WithGladiaAudioFormat(sampleRate int, bitDepth int, channels int, encoding string) GladiaSTTOption {
+	return func(s *GladiaSTT) {
+		if sampleRate > 0 {
+			s.sampleRate = sampleRate
+		}
+		if bitDepth > 0 {
+			s.bitDepth = bitDepth
+		}
+		if channels > 0 {
+			s.channels = channels
+		}
+		if encoding != "" {
+			s.encoding = encoding
+		}
+	}
+}
+
+func WithGladiaEndpointing(endpointing float64, maximumDurationWithoutEndpointing float64) GladiaSTTOption {
+	return func(s *GladiaSTT) {
+		if endpointing >= 0 {
+			s.endpointing = endpointing
+		}
+		if maximumDurationWithoutEndpointing > 0 {
+			s.maximumDurationWithoutEndpointing = maximumDurationWithoutEndpointing
+		}
+	}
+}
+
+func WithGladiaRegion(region string) GladiaSTTOption {
+	return func(s *GladiaSTT) {
+		if region != "" {
+			s.region = region
+		}
+	}
+}
+
 func WithGladiaCustomVocabulary(vocabulary []any) GladiaSTTOption {
 	return func(s *GladiaSTT) {
 		s.customVocabulary = append([]any(nil), vocabulary...)
+	}
+}
+
+func WithGladiaCustomSpelling(spelling map[string][]string) GladiaSTTOption {
+	return func(s *GladiaSTT) {
+		if spelling == nil {
+			s.customSpelling = nil
+			return
+		}
+		copied := make(map[string][]string, len(spelling))
+		for word, variants := range spelling {
+			copied[word] = append([]string(nil), variants...)
+		}
+		s.customSpelling = copied
 	}
 }
 
@@ -90,6 +156,21 @@ func WithGladiaTranslation(targetLanguages []string) GladiaSTTOption {
 	return func(s *GladiaSTT) {
 		s.translationEnabled = true
 		s.translationTargetLanguages = append([]string(nil), targetLanguages...)
+	}
+}
+
+func WithGladiaTranslationConfig(targetLanguages []string, model string, matchOriginalUtterances bool, lipsync bool, contextAdaptation bool, context string, informal bool) GladiaSTTOption {
+	return func(s *GladiaSTT) {
+		s.translationEnabled = true
+		s.translationTargetLanguages = append([]string(nil), targetLanguages...)
+		if model != "" {
+			s.translationModel = model
+		}
+		s.translationMatchOriginalUtterances = matchOriginalUtterances
+		s.translationLipsync = lipsync
+		s.translationContextAdaptation = contextAdaptation
+		s.translationContext = context
+		s.translationInformal = informal
 	}
 }
 
@@ -101,6 +182,9 @@ func WithGladiaPreProcessing(audioEnhancer bool, speechThreshold float64) Gladia
 }
 
 func NewGladiaSTT(apiKey string, opts ...GladiaSTTOption) *GladiaSTT {
+	if apiKey == "" {
+		apiKey = os.Getenv("GLADIA_API_KEY")
+	}
 	provider := &GladiaSTT{
 		apiKey:                             apiKey,
 		baseURL:                            defaultGladiaBaseURL,
@@ -210,6 +294,10 @@ func buildGladiaStreamingConfig(s *GladiaSTT) map[string]any {
 	if len(s.customVocabulary) > 0 {
 		realtime["custom_vocabulary"] = true
 		realtime["custom_vocabulary_config"] = map[string]any{"vocabulary": s.customVocabulary}
+	}
+	if len(s.customSpelling) > 0 {
+		realtime["custom_spelling"] = true
+		realtime["custom_spelling_config"] = map[string]any{"spelling_dictionary": s.customSpelling}
 	}
 	if s.translationEnabled {
 		realtime["translation"] = true

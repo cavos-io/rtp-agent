@@ -20,6 +20,38 @@ func TestDeepgramTTSDefaultsMatchReference(t *testing.T) {
 	}
 }
 
+func TestDeepgramTTSConstructorOptionsMatchReference(t *testing.T) {
+	t.Setenv("DEEPGRAM_API_KEY", "env-key")
+
+	provider := NewDeepgramTTS("", "aura-custom",
+		WithDeepgramTTSAudioFormat("mulaw", 8000),
+	)
+	if provider.apiKey != "env-key" {
+		t.Fatalf("apiKey = %q, want env key", provider.apiKey)
+	}
+	if provider.model != "aura-custom" {
+		t.Fatalf("model = %q, want aura-custom", provider.model)
+	}
+	if provider.encoding != "mulaw" || provider.sampleRate != 8000 {
+		t.Fatalf("audio format = %s/%d, want mulaw/8000", provider.encoding, provider.sampleRate)
+	}
+
+	requestURL, _ := buildDeepgramTTSSynthesizeRequest(provider, "hello")
+	parsed, err := url.Parse(requestURL)
+	if err != nil {
+		t.Fatalf("parse url: %v", err)
+	}
+	query := parsed.Query()
+	assertDeepgramTTSQuery(t, query, "model", "aura-custom")
+	assertDeepgramTTSQuery(t, query, "encoding", "mulaw")
+	assertDeepgramTTSQuery(t, query, "sample_rate", "8000")
+
+	provider = NewDeepgramTTS("explicit-key", "")
+	if provider.apiKey != "explicit-key" {
+		t.Fatalf("apiKey = %q, want explicit key", provider.apiKey)
+	}
+}
+
 func TestDeepgramTTSSynthesizeRequestUsesReferenceOptions(t *testing.T) {
 	provider := NewDeepgramTTS("test-key", "",
 		WithDeepgramTTSMipOptOut(true),

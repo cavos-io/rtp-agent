@@ -3,6 +3,7 @@ package speechmatics
 import (
 	"context"
 	"encoding/json"
+	"net/url"
 	"strings"
 	"testing"
 
@@ -91,6 +92,26 @@ func TestSpeechmaticsSTTCapabilitiesMatchReference(t *testing.T) {
 	}
 	if capabilities.OfflineRecognize {
 		t.Fatal("OfflineRecognize = true, want false")
+	}
+}
+
+func TestSpeechmaticsSTTStreamURLMatchesReference(t *testing.T) {
+	provider := NewSpeechmaticsSTT("test-key")
+	streamURL, err := url.Parse(buildSpeechmaticsSTTStreamURL(provider))
+	if err != nil {
+		t.Fatalf("parse default stream URL: %v", err)
+	}
+	if streamURL.Scheme != "wss" || streamURL.Host != "eu2.rt.speechmatics.com" || streamURL.Path != "/v2" {
+		t.Fatalf("stream URL = %q, want reference default realtime endpoint", streamURL.String())
+	}
+
+	provider = NewSpeechmaticsSTT("test-key", WithSpeechmaticsSTTBaseURL("wss://speechmatics.example/v2/"))
+	streamURL, err = url.Parse(buildSpeechmaticsSTTStreamURL(provider))
+	if err != nil {
+		t.Fatalf("parse custom stream URL: %v", err)
+	}
+	if streamURL.String() != "wss://speechmatics.example/v2" {
+		t.Fatalf("stream URL = %q, want trimmed custom base URL", streamURL.String())
 	}
 }
 
