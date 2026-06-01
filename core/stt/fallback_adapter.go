@@ -275,10 +275,11 @@ type fallbackRecognizeStream struct {
 	startedAt    time.Time
 	lastErr      error
 
-	eventCh chan *SpeechEvent
-	errCh   chan error
-	closeCh chan struct{}
-	closed  bool
+	eventCh     chan *SpeechEvent
+	errCh       chan error
+	closeCh     chan struct{}
+	closed      bool
+	terminalErr error
 }
 
 type fallbackRecognizeInput struct {
@@ -447,8 +448,7 @@ func (s *fallbackRecognizeStream) monitorStream() {
 		if err != nil {
 			if errors.Is(err, io.EOF) {
 				_ = stream.Close()
-				s.markClosed()
-				s.errCh <- io.EOF
+				s.finish(io.EOF)
 				return
 			}
 
@@ -474,7 +474,8 @@ func (s *fallbackRecognizeStream) monitorStream() {
 
 			if fbErr := s.tryStartStream(nextIndex); fbErr != nil {
 				s.closed = true
-				s.errCh <- fbErr
+				s.terminalErr = fbErr
+				close(s.closeCh)
 				s.mu.Unlock()
 				return
 			}
@@ -498,9 +499,13 @@ func (s *fallbackRecognizeStream) monitorStream() {
 	}
 }
 
-func (s *fallbackRecognizeStream) markClosed() {
+func (s *fallbackRecognizeStream) finish(err error) {
 	s.mu.Lock()
-	s.closed = true
+	if !s.closed {
+		s.closed = true
+		s.terminalErr = err
+		close(s.closeCh)
+	}
 	s.mu.Unlock()
 }
 
@@ -666,6 +671,12 @@ func (s *fallbackRecognizeStream) Next() (*SpeechEvent, error) {
 	case err := <-s.errCh:
 		return nil, err
 	case <-s.closeCh:
+		s.mu.Lock()
+		err := s.terminalErr
+		s.mu.Unlock()
+		if err != nil {
+			return nil, err
+		}
 		return nil, context.Canceled
 	}
 }

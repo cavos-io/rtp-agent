@@ -218,6 +218,37 @@ func TestFallbackStreamReturnsEOFWhenProviderCompletes(t *testing.T) {
 	}
 }
 
+func TestFallbackStreamKeepsReturningEOFAfterProviderCompletes(t *testing.T) {
+	adapter := NewFallbackAdapter([]STT{
+		&metadataSTT{
+			label:        "primary",
+			capabilities: STTCapabilities{Streaming: true},
+			stream: &metadataRecognizeStream{
+				events: []*SpeechEvent{{Type: SpeechEventFinalTranscript}},
+			},
+		},
+	})
+
+	stream, err := adapter.Stream(context.Background(), "en")
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+	defer stream.Close()
+
+	if _, err := stream.Next(); err != nil {
+		t.Fatalf("first Next returned error: %v", err)
+	}
+	_, err = stream.Next()
+	if !errors.Is(err, io.EOF) {
+		t.Fatalf("second Next error = %v, want io.EOF", err)
+	}
+
+	err = nextFallbackStreamError(stream)
+	if !errors.Is(err, io.EOF) {
+		t.Fatalf("third Next error = %v, want io.EOF", err)
+	}
+}
+
 func TestFallbackStreamRejectsInputAfterProviderCompletes(t *testing.T) {
 	inner := &metadataRecognizeStream{
 		events: []*SpeechEvent{{Type: SpeechEventFinalTranscript}},
@@ -1444,6 +1475,20 @@ func waitForProviderAvailable(t *testing.T, adapter *FallbackAdapter, index int)
 			t.Fatalf("provider %d did not become available", index)
 		case <-ticker.C:
 		}
+	}
+}
+
+func nextFallbackStreamError(stream RecognizeStream) error {
+	errCh := make(chan error, 1)
+	go func() {
+		_, err := stream.Next()
+		errCh <- err
+	}()
+	select {
+	case err := <-errCh:
+		return err
+	case <-time.After(100 * time.Millisecond):
+		return errors.New("timed out waiting for fallback stream Next")
 	}
 }
 
