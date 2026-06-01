@@ -24,6 +24,7 @@ type FallbackAdapter struct {
 	recovering           []bool
 	recoveryCancels      []context.CancelFunc
 	recoveringStream     []bool
+	recoveryStreams      []RecognizeStream
 	availabilityHandlers []availabilityHandlerSubscription
 	nextAvailabilityID   uint64
 }
@@ -129,6 +130,7 @@ func newFallbackAdapter(stts []STT, vad vad.VAD, options FallbackAdapterOptions)
 		recovering:       make([]bool, len(wrapped)),
 		recoveryCancels:  make([]context.CancelFunc, len(wrapped)),
 		recoveringStream: make([]bool, len(wrapped)),
+		recoveryStreams:  make([]RecognizeStream, len(wrapped)),
 	}
 }
 
@@ -166,6 +168,10 @@ func (f *FallbackAdapter) Close() error {
 	for i := range f.recoveryCancels {
 		f.recoveryCancels[i] = nil
 	}
+	streams := append([]RecognizeStream(nil), f.recoveryStreams...)
+	for i := range f.recoveryStreams {
+		f.recoveryStreams[i] = nil
+	}
 	f.mu.Unlock()
 
 	for _, cancel := range cancels {
@@ -173,6 +179,7 @@ func (f *FallbackAdapter) Close() error {
 			cancel()
 		}
 	}
+	closeStreams(streams)
 	return nil
 }
 
@@ -720,10 +727,12 @@ func (s *fallbackRecognizeStream) tryRecoverStream(index int) {
 		return
 	}
 
+	s.adapter.setRecoveryStream(index, stream)
 	s.recoveries = append(s.recoveries, stream)
 
 	go func() {
 		defer s.adapter.clearRecoveringStream(index)
+		defer s.adapter.setRecoveryStream(index, nil)
 		defer stream.Close()
 		defer s.removeRecovery(stream)
 
@@ -740,6 +749,15 @@ func (s *fallbackRecognizeStream) tryRecoverStream(index int) {
 			return
 		}
 	}()
+}
+
+func (f *FallbackAdapter) setRecoveryStream(index int, stream RecognizeStream) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if index < 0 || index >= len(f.recoveryStreams) {
+		return
+	}
+	f.recoveryStreams[index] = stream
 }
 
 func (s *fallbackRecognizeStream) removeRecovery(stream RecognizeStream) {
@@ -855,6 +873,9 @@ func (s *fallbackRecognizeStream) detachRecoveriesLocked() []RecognizeStream {
 
 func closeStreams(streams []RecognizeStream) {
 	for _, stream := range streams {
+		if stream == nil {
+			continue
+		}
 		_ = stream.Close()
 	}
 }

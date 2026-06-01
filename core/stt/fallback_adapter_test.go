@@ -1272,6 +1272,54 @@ func TestFallbackStreamCloseClosesRecoveringProvider(t *testing.T) {
 	close(recovery.release)
 }
 
+func TestFallbackAdapterCloseClosesStreamRecovery(t *testing.T) {
+	firstFrame := &model.AudioFrame{Data: []byte("1"), SampleRate: 16000, NumChannels: 1, SamplesPerChannel: 1}
+	primaryFailure := &blockingFailRecognizeStream{
+		err:     errors.New("primary stream failed"),
+		release: make(chan struct{}),
+	}
+	recovery := &liveRecoveryStream{
+		release: make(chan struct{}),
+		event: &SpeechEvent{
+			Type:         SpeechEventFinalTranscript,
+			Alternatives: []SpeechData{{Text: "primary recovered"}},
+		},
+	}
+	primary := &metadataSTT{
+		label:        "primary",
+		capabilities: STTCapabilities{Streaming: true},
+		streams: []RecognizeStream{
+			primaryFailure,
+			recovery,
+		},
+	}
+	fallback := &metadataSTT{
+		label:        "fallback",
+		capabilities: STTCapabilities{Streaming: true},
+		stream:       newBlockingRecognizeStream(),
+	}
+	adapter := NewFallbackAdapterWithOptions([]STT{primary, fallback}, FallbackAdapterOptions{
+		MaxRetryPerSTT: 0,
+	})
+
+	stream, err := adapter.Stream(context.Background(), "en")
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+	defer stream.Close()
+	if err := stream.PushFrame(firstFrame); err != nil {
+		t.Fatalf("PushFrame returned error: %v", err)
+	}
+	close(primaryFailure.release)
+	waitForStreamCalls(t, primary, 2)
+
+	if err := adapter.Close(); err != nil {
+		t.Fatalf("Close returned error: %v", err)
+	}
+	waitForRecoveryClosed(t, recovery)
+	close(recovery.release)
+}
+
 func TestFallbackStreamRetriesSameSTTBeforeFallback(t *testing.T) {
 	firstErr := errors.New("primary stream failed")
 	primary := &metadataSTT{
