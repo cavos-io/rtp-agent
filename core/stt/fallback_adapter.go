@@ -18,6 +18,7 @@ type FallbackAdapter struct {
 	maxRetryPerSTT int
 	mu             sync.Mutex
 	available      []bool
+	recovering     []bool
 }
 
 type FallbackAdapterOptions struct {
@@ -81,6 +82,7 @@ func newFallbackAdapter(stts []STT, vad vad.VAD, options FallbackAdapterOptions)
 		capabilities:   capabilities,
 		maxRetryPerSTT: options.MaxRetryPerSTT,
 		available:      initialAvailability(len(wrapped)),
+		recovering:     make([]bool, len(wrapped)),
 	}
 }
 
@@ -122,8 +124,28 @@ func (f *FallbackAdapter) Recognize(ctx context.Context, frames []*model.AudioFr
 			}
 		}
 		f.setAvailable(i, false)
+		f.tryRecover(ctx, i, frames, language)
 	}
 	return nil, fmt.Errorf("all STTs failed, last error: %w", lastErr)
+}
+
+func (f *FallbackAdapter) tryRecover(ctx context.Context, index int, frames []*model.AudioFrame, language string) {
+	if !f.markRecovering(index) {
+		return
+	}
+
+	go func() {
+		defer f.clearRecovering(index)
+
+		stt := f.stts[index]
+		for attempt := 0; attempt <= f.maxRetryPerSTT; attempt++ {
+			if _, err := stt.Recognize(ctx, frames, language); err == nil {
+				f.setAvailable(index, true)
+				logger.Logger.Infow("Recovered STT provider", "stt", stt.Label())
+				return
+			}
+		}
+	}()
 }
 
 func (f *FallbackAdapter) allUnavailable() bool {
@@ -153,6 +175,28 @@ func (f *FallbackAdapter) setAvailable(index int, available bool) {
 		return
 	}
 	f.available[index] = available
+}
+
+func (f *FallbackAdapter) markRecovering(index int) bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if index < 0 || index >= len(f.recovering) {
+		return false
+	}
+	if f.recovering[index] {
+		return false
+	}
+	f.recovering[index] = true
+	return true
+}
+
+func (f *FallbackAdapter) clearRecovering(index int) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if index < 0 || index >= len(f.recovering) {
+		return
+	}
+	f.recovering[index] = false
 }
 
 type fallbackRecognizeStream struct {
