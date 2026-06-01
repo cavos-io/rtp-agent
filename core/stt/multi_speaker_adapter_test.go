@@ -160,6 +160,29 @@ func TestPrimarySpeakerDetectorPushAudioInitializesByteStream(t *testing.T) {
 	}
 }
 
+func TestPrimarySpeakerDetectorKeepsRMSBufferWhenMaxSizeIsZero(t *testing.T) {
+	options := DefaultPrimarySpeakerDetectionOptions()
+	options.RMSBufferDuration = 0
+	detector := newPrimarySpeakerDetector(
+		true,
+		false,
+		"{text}",
+		"{text}",
+		options,
+	)
+
+	detector.pushAudio(&model.AudioFrame{
+		Data:              make([]byte, 1600*2),
+		SampleRate:        16000,
+		NumChannels:       1,
+		SamplesPerChannel: 1600,
+	})
+
+	if len(detector.rmsBuffer) == 0 {
+		t.Fatal("rmsBuffer was emptied, want Python [-0:] behavior to retain samples")
+	}
+}
+
 func TestNewDefaultMultiSpeakerAdapterUsesReferenceDefaults(t *testing.T) {
 	adapter, err := NewDefaultMultiSpeakerAdapter(&metadataSTT{
 		label:        "diarized",

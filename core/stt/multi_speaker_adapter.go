@@ -434,7 +434,7 @@ func (d *primarySpeakerDetector) pushAudio(frame *model.AudioFrame) {
 		d.pushedDuration += fduration
 	}
 
-	if len(d.rmsBuffer) > d.maxRmsSize {
+	if d.maxRmsSize > 0 && len(d.rmsBuffer) > d.maxRmsSize {
 		d.rmsBuffer = d.rmsBuffer[len(d.rmsBuffer)-d.maxRmsSize:]
 	}
 }
