@@ -12,6 +12,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/cavos-io/rtp-agent/core/audio/model"
 	"github.com/cavos-io/rtp-agent/core/stt"
 	"github.com/cavos-io/rtp-agent/core/tts"
 )
@@ -178,7 +179,12 @@ func TestSarvamSTTStreamMessagesMatchReference(t *testing.T) {
 	assertSarvamJSONField(t, config, "type", "config")
 	assertSarvamJSONField(t, config, "prompt", "names: Kavya")
 
-	audioPayload, err := buildSarvamSTTAudioMessage([]byte{0x01, 0x02}, "audio/wav", 8000)
+	audioPayload, err := buildSarvamSTTAudioMessage(&model.AudioFrame{
+		Data:              []byte{0x01, 0x02},
+		SampleRate:        8000,
+		NumChannels:       1,
+		SamplesPerChannel: 1,
+	}, "audio/wav")
 	if err != nil {
 		t.Fatalf("build audio: %v", err)
 	}
@@ -207,7 +213,7 @@ func TestSarvamSTTStreamMessagesMatchReference(t *testing.T) {
 }
 
 func TestSarvamSTTStreamEventsMapReferenceMessages(t *testing.T) {
-	events, err := sarvamSTTEventsFromStreamMessage([]byte(`{"type":"data","data":{"transcript":"hello","language_code":"hi-IN","request_id":"req-1","speech_start":0.1,"speech_end":0.7,"language_probability":0.91,"metrics":{"audio_duration":1.2}}}`))
+	events, err := sarvamSTTEventsFromStreamMessage([]byte(`{"type":"data","data":{"transcript":"hello","language_code":"hi-IN","request_id":"req-1","speech_start":0.1,"speech_end":0.7,"language_probability":0.91,"metrics":{"audio_duration":1.2}}}`), "en-IN")
 	if err != nil {
 		t.Fatalf("stream event: %v", err)
 	}
@@ -225,7 +231,15 @@ func TestSarvamSTTStreamEventsMapReferenceMessages(t *testing.T) {
 		t.Fatalf("alternative = %+v, want reference transcript data", alt)
 	}
 
-	start, err := sarvamSTTEventsFromStreamMessage([]byte(`{"type":"events","data":{"signal_type":"START_SPEECH"}}`))
+	fallbackEvents, err := sarvamSTTEventsFromStreamMessage([]byte(`{"type":"data","data":{"transcript":"fallback","request_id":"req-2"}}`), "en-IN")
+	if err != nil {
+		t.Fatalf("fallback language event: %v", err)
+	}
+	if len(fallbackEvents) != 1 || fallbackEvents[0].Alternatives[0].Language != "en-IN" {
+		t.Fatalf("fallback events = %+v, want default language", fallbackEvents)
+	}
+
+	start, err := sarvamSTTEventsFromStreamMessage([]byte(`{"type":"events","data":{"signal_type":"START_SPEECH"}}`), "en-IN")
 	if err != nil {
 		t.Fatalf("start event: %v", err)
 	}
@@ -233,7 +247,7 @@ func TestSarvamSTTStreamEventsMapReferenceMessages(t *testing.T) {
 		t.Fatalf("start events = %+v, want start of speech", start)
 	}
 
-	end, err := sarvamSTTEventsFromStreamMessage([]byte(`{"type":"event","data":{"signal_type":"END_SPEECH"}}`))
+	end, err := sarvamSTTEventsFromStreamMessage([]byte(`{"type":"event","data":{"signal_type":"END_SPEECH"}}`), "en-IN")
 	if err != nil {
 		t.Fatalf("end event: %v", err)
 	}
@@ -241,10 +255,14 @@ func TestSarvamSTTStreamEventsMapReferenceMessages(t *testing.T) {
 		t.Fatalf("end events = %+v, want end of speech", end)
 	}
 
-	_, err = sarvamSTTEventsFromStreamMessage([]byte(`{"type":"error","data":{"message":"bad request","code":"400"}}`))
+	_, err = sarvamSTTEventsFromStreamMessage([]byte(`{"type":"error","data":{"message":"bad request","code":"400"}}`), "en-IN")
 	if err == nil || !strings.Contains(err.Error(), "bad request") {
 		t.Fatalf("error = %v, want provider error", err)
 	}
+}
+
+func TestSarvamSTTImplementsStreamingInterface(t *testing.T) {
+	var _ stt.STT = NewSarvamSTT("test-key")
 }
 
 func TestSarvamTTSDefaultsMatchReference(t *testing.T) {
