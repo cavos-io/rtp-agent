@@ -3,6 +3,7 @@ package llm
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"time"
 
@@ -37,6 +38,7 @@ type Instructions struct {
 	Audio     string
 	Text      string
 	represent string
+	textSet   bool
 }
 
 func NewInstructions(audio string, text ...string) *Instructions {
@@ -48,6 +50,7 @@ func NewInstructions(audio string, text ...string) *Instructions {
 		Audio:     audio,
 		Text:      textVariant,
 		represent: audio,
+		textSet:   len(text) > 0,
 	}
 }
 
@@ -73,6 +76,103 @@ func (i *Instructions) AsModality(modality string) *Instructions {
 		Audio:     i.Audio,
 		Text:      i.Text,
 		represent: represent,
+		textSet:   i.textSet,
+	}
+}
+
+func (i *Instructions) Format(args ...any) *Instructions {
+	if i == nil {
+		return nil
+	}
+
+	audioArgs := make([]any, len(args))
+	textArgs := make([]any, len(args))
+	representArgs := make([]any, len(args))
+	usesInstructions := false
+	for idx, arg := range args {
+		if instructions, ok := arg.(*Instructions); ok {
+			usesInstructions = true
+			audioArgs[idx] = instructions.Audio
+			textArgs[idx] = instructions.Text
+			representArgs[idx] = instructions.String()
+			continue
+		}
+		audioArgs[idx] = arg
+		textArgs[idx] = arg
+		representArgs[idx] = arg
+	}
+
+	textSet := i.textSet || usesInstructions || i.Text != i.Audio
+	text := fmt.Sprintf(i.Audio, audioArgs...)
+	if textSet {
+		text = fmt.Sprintf(i.Text, textArgs...)
+	}
+
+	return &Instructions{
+		Audio:     fmt.Sprintf(i.Audio, audioArgs...),
+		Text:      text,
+		represent: fmt.Sprintf(i.String(), representArgs...),
+		textSet:   textSet,
+	}
+}
+
+func (i *Instructions) Concat(other *Instructions) *Instructions {
+	if i == nil {
+		return other
+	}
+	if other == nil {
+		return i
+	}
+
+	textSet := i.textSet || other.textSet || i.Text != i.Audio || other.Text != other.Audio
+	text := i.Audio + other.Audio
+	if textSet {
+		text = i.Text + other.Text
+	}
+
+	return &Instructions{
+		Audio:     i.Audio + other.Audio,
+		Text:      text,
+		represent: i.String() + other.String(),
+		textSet:   textSet,
+	}
+}
+
+func (i *Instructions) AppendString(suffix string) *Instructions {
+	if i == nil {
+		return nil
+	}
+
+	textSet := i.textSet || i.Text != i.Audio
+	text := i.Audio + suffix
+	if textSet {
+		text = i.Text + suffix
+	}
+
+	return &Instructions{
+		Audio:     i.Audio + suffix,
+		Text:      text,
+		represent: i.String() + suffix,
+		textSet:   textSet,
+	}
+}
+
+func (i *Instructions) PrependString(prefix string) *Instructions {
+	if i == nil {
+		return nil
+	}
+
+	textSet := i.textSet || i.Text != i.Audio
+	text := prefix + i.Audio
+	if textSet {
+		text = prefix + i.Text
+	}
+
+	return &Instructions{
+		Audio:     prefix + i.Audio,
+		Text:      text,
+		represent: prefix + i.String(),
+		textSet:   textSet,
 	}
 }
 

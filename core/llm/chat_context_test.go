@@ -238,6 +238,66 @@ func TestInstructionsPreserveVariantsAndSelectModality(t *testing.T) {
 	}
 }
 
+func TestInstructionsFormatPreservesNestedVariants(t *testing.T) {
+	template := NewInstructions("Say: %s", "Write: %s")
+	value := NewInstructions("hello out loud", "hello in text")
+
+	formatted := template.Format(value)
+
+	if got := formatted.String(); got != "Say: hello out loud" {
+		t.Fatalf("formatted.String() = %q, want audio representation", got)
+	}
+	if got := formatted.AsModality("audio").String(); got != "Say: hello out loud" {
+		t.Fatalf("formatted audio = %q, want audio variant", got)
+	}
+	if got := formatted.AsModality("text").String(); got != "Write: hello in text" {
+		t.Fatalf("formatted text = %q, want text variant", got)
+	}
+}
+
+func TestInstructionsFormatPreservesActiveRepresentation(t *testing.T) {
+	template := NewInstructions("Say: %s", "Write: %s").AsModality("text")
+
+	formatted := template.Format("hello")
+
+	if got := formatted.String(); got != "Write: hello" {
+		t.Fatalf("formatted.String() = %q, want active text representation", got)
+	}
+	if got := formatted.AsModality("audio").String(); got != "Say: hello" {
+		t.Fatalf("formatted audio = %q, want audio variant", got)
+	}
+}
+
+func TestInstructionsConcatPreservesVariants(t *testing.T) {
+	left := NewInstructions("audio A", "text A").AsModality("text")
+	right := NewInstructions(" audio B", " text B")
+
+	combined := left.Concat(right)
+
+	if got := combined.String(); got != "text A audio B" {
+		t.Fatalf("combined.String() = %q, want active left plus active right", got)
+	}
+	if got := combined.AsModality("audio").String(); got != "audio A audio B" {
+		t.Fatalf("combined audio = %q, want audio variants", got)
+	}
+	if got := combined.AsModality("text").String(); got != "text A text B" {
+		t.Fatalf("combined text = %q, want text variants", got)
+	}
+}
+
+func TestInstructionsAppendStringPreservesExplicitTextVariant(t *testing.T) {
+	instructions := NewInstructions("audio", "text")
+
+	appended := instructions.AppendString(" suffix")
+
+	if got := appended.AsModality("audio").String(); got != "audio suffix" {
+		t.Fatalf("appended audio = %q, want suffix", got)
+	}
+	if got := appended.AsModality("text").String(); got != "text suffix" {
+		t.Fatalf("appended text = %q, want suffix", got)
+	}
+}
+
 func TestChatContextInstructionsSerializeAndRoundTrip(t *testing.T) {
 	ctx := NewChatContext()
 	ctx.Items = []ChatItem{
