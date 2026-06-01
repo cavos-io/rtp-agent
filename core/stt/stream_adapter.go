@@ -37,6 +37,14 @@ func (a *StreamAdapter) WrappedSTT() STT {
 	return a.stt
 }
 
+func (a *StreamAdapter) Model() string {
+	return Model(a.stt)
+}
+
+func (a *StreamAdapter) Provider() string {
+	return Provider(a.stt)
+}
+
 func (a *StreamAdapter) Recognize(ctx context.Context, frames []*model.AudioFrame, language string) (*SpeechEvent, error) {
 	return a.stt.Recognize(ctx, frames, language)
 }

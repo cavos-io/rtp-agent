@@ -74,6 +74,42 @@ type STT interface {
 	Recognize(ctx context.Context, frames []*model.AudioFrame, language string) (*SpeechEvent, error)
 }
 
+type modelProviderSTT interface {
+	Model() string
+}
+
+type providerProviderSTT interface {
+	Provider() string
+}
+
+type prewarmProviderSTT interface {
+	Prewarm()
+}
+
+func Model(stt STT) string {
+	if provider, ok := stt.(modelProviderSTT); ok {
+		if model := provider.Model(); model != "" {
+			return model
+		}
+	}
+	return "unknown"
+}
+
+func Provider(stt STT) string {
+	if provider, ok := stt.(providerProviderSTT); ok {
+		if name := provider.Provider(); name != "" {
+			return name
+		}
+	}
+	return "unknown"
+}
+
+func Prewarm(stt STT) {
+	if provider, ok := stt.(prewarmProviderSTT); ok {
+		provider.Prewarm()
+	}
+}
+
 type SearchStream interface {
 	PushFrame(frame *model.AudioFrame) error
 	Close() error

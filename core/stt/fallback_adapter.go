@@ -133,6 +133,14 @@ func (f *FallbackAdapter) Label() string {
 	return fmt.Sprintf("FallbackAdapter(%s)", f.stts[0].Label())
 }
 
+func (f *FallbackAdapter) Model() string {
+	return "FallbackAdapter"
+}
+
+func (f *FallbackAdapter) Provider() string {
+	return "livekit"
+}
+
 func (f *FallbackAdapter) Capabilities() STTCapabilities {
 	return f.capabilities
 }
