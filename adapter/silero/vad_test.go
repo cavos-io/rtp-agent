@@ -110,6 +110,24 @@ func TestSileroVADDerivesInitialDeactivationThreshold(t *testing.T) {
 	}
 }
 
+func TestSileroVADHonorsExplicitZeroActivationThreshold(t *testing.T) {
+	detector := NewSileroVAD(
+		WithActivationThreshold(0),
+		WithMinSpeechDuration(0.032),
+	)
+	stream, err := detector.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	defer stream.Close()
+
+	if err := stream.PushFrame(testAudioFrame(16000, 512, 0)); err != nil {
+		t.Fatalf("PushFrame() error = %v", err)
+	}
+	assertSileroVADEventType(t, stream, vad.VADEventInferenceDone)
+	assertSileroVADEventType(t, stream, vad.VADEventStartOfSpeech)
+}
+
 func TestSileroVADStreamRejectsUnsupportedSampleRate(t *testing.T) {
 	detector := NewSileroVAD(WithSampleRate(44100))
 

@@ -20,6 +20,7 @@ type VADOptions struct {
 	SampleRate            int
 
 	deactivationThresholdSet bool
+	activationThresholdSet   bool
 	maxBufferedSpeechSet     bool
 }
 
@@ -74,6 +75,7 @@ func WithMaxBufferedSpeech(d float64) VADOption {
 func WithActivationThreshold(t float64) VADOption {
 	return func(o *VADOptions) {
 		o.ActivationThreshold = t
+		o.activationThresholdSet = true
 	}
 }
 
@@ -102,6 +104,9 @@ func NewSileroVAD(opts ...VADOption) *SileroVAD {
 	// Fallback to simple VAD for now to provide out-of-the-box working plugin
 	// without requiring CGO/ONNX dependencies in the base install.
 	inner := vad.NewSimpleVADWithOptions(simpleOptionsFromSilero(options))
+	if options.activationThresholdSet {
+		inner.UpdateOptionsWith(vad.WithThreshold(options.ActivationThreshold / 10.0))
+	}
 	if options.maxBufferedSpeechSet {
 		inner.UpdateOptionsWith(vad.WithMaxBufferedSpeechDuration(options.MaxBufferedSpeech))
 	}
@@ -224,6 +229,7 @@ func mergeVADOptions(current, updates VADOptions) VADOptions {
 	}
 	if updates.ActivationThreshold != 0 {
 		current.ActivationThreshold = updates.ActivationThreshold
+		current.activationThresholdSet = true
 	}
 	if updates.DeactivationThreshold != 0 {
 		current.DeactivationThreshold = updates.DeactivationThreshold
