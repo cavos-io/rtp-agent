@@ -294,7 +294,7 @@ func (s *simpleVADStream) Flush() error {
 	if s.inputEnded {
 		return errors.New("vad stream input ended")
 	}
-	s.resetSegment()
+	s.resetState()
 	return nil
 }
 
@@ -307,7 +307,7 @@ func (s *simpleVADStream) EndInput() error {
 	if s.inputEnded {
 		return errors.New("vad stream input ended")
 	}
-	s.resetSegment()
+	s.resetState()
 	s.inputEnded = true
 	s.closed = true
 	close(s.events)
@@ -350,6 +350,12 @@ func (s *simpleVADStream) resetSegment() {
 	s.pendingSpeechFrames = nil
 	s.speechFrames = nil
 	s.bufferedSpeechDuration = 0
+}
+
+func (s *simpleVADStream) resetState() {
+	s.resetSegment()
+	s.samplesIndex = 0
+	s.timestamp = 0
 }
 
 func (s *simpleVADStream) startSpeechFrames() []*model.AudioFrame {

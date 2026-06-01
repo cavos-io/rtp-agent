@@ -497,10 +497,20 @@ func TestSimpleVADFlushResetsSegmentState(t *testing.T) {
 	if err := stream.Flush(); err != nil {
 		t.Fatalf("Flush() error = %v", err)
 	}
-	if err := stream.PushFrame(audioFrame(16000, 160, 0)); err != nil {
+	afterFlushSilence := audioFrame(16000, 160, 0)
+	if err := stream.PushFrame(afterFlushSilence); err != nil {
 		t.Fatalf("PushFrame() after Flush() error = %v", err)
 	}
-	assertEventType(t, stream, VADEventInferenceDone)
+	inference := nextVADEvent(t, stream)
+	if inference.Type != VADEventInferenceDone {
+		t.Fatalf("event type = %s, want %s", inference.Type, VADEventInferenceDone)
+	}
+	if inference.SamplesIndex != int(afterFlushSilence.SamplesPerChannel) {
+		t.Fatalf("SamplesIndex after Flush() = %d, want %d", inference.SamplesIndex, afterFlushSilence.SamplesPerChannel)
+	}
+	if inference.Timestamp != 0.01 {
+		t.Fatalf("Timestamp after Flush() = %v, want 0.01", inference.Timestamp)
+	}
 
 	if err := stream.PushFrame(audioFrame(16000, 160, 6000)); err != nil {
 		t.Fatalf("PushFrame() second segment error = %v", err)
