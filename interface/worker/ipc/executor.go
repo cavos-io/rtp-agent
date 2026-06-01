@@ -394,12 +394,23 @@ func (e *ProcessJobExecutor) Close(ctx context.Context) error {
 	cmd := e.cmd
 	done := e.done
 	started := e.started
+	shutdownWriter := e.pingWriter
 	e.mu.Unlock()
 	if !started || done == nil {
 		return nil
 	}
 
 	if cmd != nil && cmd.Process != nil {
+		if shutdownWriter != nil {
+			msg, err := NewMessage(&ShutdownRequest{})
+			if err == nil {
+				err = WriteMessage(shutdownWriter, msg)
+			}
+			if err != nil {
+				logger.Logger.Warnw("failed to send job process shutdown request", err, "exec_id", e.id)
+			}
+		}
+
 		e.mu.Lock()
 		if e.status == JobStatusRunning {
 			e.status = JobStatusFailed

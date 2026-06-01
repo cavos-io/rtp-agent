@@ -96,6 +96,36 @@ func TestSileroVADMetadataAndMetrics(t *testing.T) {
 	}
 }
 
+func TestSileroVADMetricsHandlerPanicDoesNotStopOtherHandlers(t *testing.T) {
+	detector := NewSileroVAD()
+	metricsCh := make(chan *telemetry.VADMetrics, 1)
+	detector.OnMetricsCollected(func(metrics *telemetry.VADMetrics) {
+		panic("metrics handler panic")
+	})
+	detector.OnMetricsCollected(func(metrics *telemetry.VADMetrics) {
+		metricsCh <- metrics
+	})
+	stream, err := detector.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	defer stream.Close()
+
+	for range 32 {
+		if err := stream.PushFrame(testAudioFrame(16000, 512, 6000)); err != nil {
+			t.Fatalf("PushFrame() error = %v", err)
+		}
+		nextSileroVADEvent(t, stream)
+	}
+	nextSileroVADEvent(t, stream)
+
+	select {
+	case <-metricsCh:
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("timed out waiting for second metrics handler")
+	}
+}
+
 func TestSileroVADDerivesInitialDeactivationThreshold(t *testing.T) {
 	options := NewSileroVAD(WithActivationThreshold(0.8)).options
 	if options.DeactivationThreshold != 0.65 {
@@ -616,6 +646,27 @@ func TestSileroVADUpdateOptionsWithAllowsZeroActivationThreshold(t *testing.T) {
 	defer stream.Close()
 
 	detector.UpdateOptionsWith(WithActivationThreshold(0))
+	if err := stream.PushFrame(testAudioFrame(16000, 512, 0)); err != nil {
+		t.Fatalf("PushFrame() error = %v", err)
+	}
+	assertSileroVADEventType(t, stream, vad.VADEventInferenceDone)
+	assertSileroVADEventType(t, stream, vad.VADEventStartOfSpeech)
+}
+
+func TestSileroVADUpdateOptionsAllowsZeroActivationThreshold(t *testing.T) {
+	detector := NewSileroVAD(
+		WithMinSpeechDuration(0.032),
+		WithActivationThreshold(0.5),
+	)
+	stream, err := detector.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	defer stream.Close()
+
+	var updates VADOptions
+	WithActivationThreshold(0)(&updates)
+	detector.UpdateOptions(updates)
 	if err := stream.PushFrame(testAudioFrame(16000, 512, 0)); err != nil {
 		t.Fatalf("PushFrame() error = %v", err)
 	}

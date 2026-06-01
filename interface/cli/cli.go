@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -336,10 +337,29 @@ func runWorker(server *worker.AgentServer, devMode bool) {
 	defer stop()
 
 	logger.Logger.Infow("Starting worker", "devMode", devMode)
-	if err := server.Run(ctx); err != nil {
+	if err := runWorkerLifecycle(ctx, server, devMode); err != nil {
 		logger.Logger.Errorw("Worker error", err)
 		os.Exit(1)
 	}
+}
+
+type workerLifecycle interface {
+	Run(context.Context) error
+	Drain(context.Context) error
+}
+
+func runWorkerLifecycle(ctx context.Context, server workerLifecycle, devMode bool) error {
+	err := server.Run(ctx)
+	if err != nil && !errors.Is(err, context.Canceled) {
+		return err
+	}
+	if devMode {
+		return nil
+	}
+	if err := server.Drain(context.Background()); err != nil {
+		return err
+	}
+	return nil
 }
 
 func runConnect(server *worker.AgentServer) {

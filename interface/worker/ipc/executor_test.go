@@ -249,6 +249,39 @@ func TestProcessJobExecutorCloseWaitsForProcessExit(t *testing.T) {
 	}
 }
 
+func TestProcessJobExecutorCloseSendsShutdownRequestBeforeKill(t *testing.T) {
+	oldKill := processKill
+	defer func() { processKill = oldKill }()
+
+	var output bytes.Buffer
+	done := make(chan struct{})
+	shutdownSeenBeforeKill := false
+	processKill = func(*os.Process) error {
+		msg, err := ReadMessage(&output)
+		if err == nil && msg.Type == MessageTypeShutdownRequest {
+			shutdownSeenBeforeKill = true
+		}
+		close(done)
+		return nil
+	}
+
+	executor := NewProcessJobExecutor("exec-process-close-shutdown")
+	executor.mu.Lock()
+	executor.started = true
+	executor.status = JobStatusRunning
+	executor.done = done
+	executor.cmd = &exec.Cmd{Process: &os.Process{Pid: 12345}}
+	executor.pingWriter = &output
+	executor.mu.Unlock()
+
+	if err := executor.Close(context.Background()); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+	if !shutdownSeenBeforeKill {
+		t.Fatal("Close() did not send ShutdownRequest before killing process")
+	}
+}
+
 func TestProcessJobExecutorCloseRespectsContextWhenKillBlocks(t *testing.T) {
 	oldCommandContext := processCommandContext
 	oldKill := processKill

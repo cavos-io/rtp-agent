@@ -218,6 +218,9 @@ func (v *SimpleVAD) Stream(ctx context.Context) (VADStream, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	v.mu.RLock()
 	options := v.options
 	v.mu.RUnlock()

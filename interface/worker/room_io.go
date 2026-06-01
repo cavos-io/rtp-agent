@@ -426,17 +426,24 @@ func (rio *RoomIO) handleChatTextInput(ctx context.Context, text string, info lk
 	if rio == nil || rio.AgentSession == nil || rio.textInput == nil {
 		return
 	}
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			logger.Logger.Warnw("failed to handle chat text stream", nil, "panic", recovered)
+		}
+	}()
 	if !rio.shouldHandleParticipant(participantIdentity) {
 		return
 	}
 	if rio.Room != nil && participantIdentity != "" && rio.Room.GetParticipantByIdentity(participantIdentity) == nil {
 		return
 	}
-	_ = rio.textInput(ctx, rio.AgentSession, TextInputEvent{
+	if err := rio.textInput(ctx, rio.AgentSession, TextInputEvent{
 		Text:                text,
 		Info:                info,
 		ParticipantIdentity: participantIdentity,
-	})
+	}); err != nil {
+		logger.Logger.Warnw("failed to handle chat text stream", err)
+	}
 }
 
 func (rio *RoomIO) participantIdentity() string {
