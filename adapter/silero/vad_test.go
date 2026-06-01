@@ -1,6 +1,7 @@
 package silero
 
 import (
+	"bytes"
 	"context"
 	"testing"
 	"time"
@@ -92,6 +93,30 @@ func TestSileroVADMetadataAndMetrics(t *testing.T) {
 	}
 }
 
+func TestSileroVADUpdateOptionsAppliesToActiveStream(t *testing.T) {
+	detector := NewSileroVAD(
+		WithMinSpeechDuration(0.03),
+		WithActivationThreshold(0.5),
+	)
+	stream, err := detector.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	defer stream.Close()
+
+	if err := stream.PushFrame(testAudioFrame(16000, 160, 6000)); err != nil {
+		t.Fatalf("PushFrame() error = %v", err)
+	}
+	assertSileroVADEventType(t, stream, vad.VADEventInferenceDone)
+
+	detector.UpdateOptions(VADOptions{MinSpeechDuration: 0.01})
+	if err := stream.PushFrame(testAudioFrame(16000, 160, 6000)); err != nil {
+		t.Fatalf("PushFrame() after UpdateOptions() error = %v", err)
+	}
+	assertSileroVADEventType(t, stream, vad.VADEventInferenceDone)
+	assertSileroVADEventType(t, stream, vad.VADEventStartOfSpeech)
+}
+
 func TestSileroFallbackHonorsBufferingOptions(t *testing.T) {
 	detector := NewSileroVAD(
 		WithPrefixPaddingDuration(0.02),
@@ -125,14 +150,7 @@ func TestSileroFallbackHonorsBufferingOptions(t *testing.T) {
 	if start.Type != vad.VADEventStartOfSpeech {
 		t.Fatalf("event type = %s, want %s", start.Type, vad.VADEventStartOfSpeech)
 	}
-	if len(start.Frames) != 4 {
-		t.Fatalf("start frames len = %d, want 4", len(start.Frames))
-	}
-	for i, want := range frames[:4] {
-		if start.Frames[i] != want {
-			t.Fatalf("start frame %d = %#v, want %#v", i, start.Frames[i], want)
-		}
-	}
+	assertCombinedSileroFrames(t, start.Frames, frames[:4]...)
 }
 
 func assertSileroVADEventType(t *testing.T, stream vad.VADStream, want vad.VADEventType) {
@@ -167,6 +185,29 @@ func nextSileroVADEvent(t *testing.T, stream vad.VADStream) *vad.VADEvent {
 	case <-time.After(500 * time.Millisecond):
 		t.Fatal("timed out waiting for VAD event")
 		return nil
+	}
+}
+
+func assertCombinedSileroFrames(t *testing.T, got []*model.AudioFrame, want ...*model.AudioFrame) {
+	t.Helper()
+	if len(got) != 1 {
+		t.Fatalf("frames len = %d, want 1 combined frame", len(got))
+	}
+	combined := got[0]
+	if combined.SampleRate != want[0].SampleRate {
+		t.Fatalf("combined SampleRate = %d, want %d", combined.SampleRate, want[0].SampleRate)
+	}
+	var samples uint32
+	var data []byte
+	for _, frame := range want {
+		samples += frame.SamplesPerChannel
+		data = append(data, frame.Data...)
+	}
+	if combined.SamplesPerChannel != samples {
+		t.Fatalf("combined SamplesPerChannel = %d, want %d", combined.SamplesPerChannel, samples)
+	}
+	if !bytes.Equal(combined.Data, data) {
+		t.Fatalf("combined Data = %v, want %v", combined.Data, data)
 	}
 }
 

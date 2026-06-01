@@ -16,6 +16,7 @@ type SimpleVAD struct {
 	options  SimpleVADOptions
 	mu       sync.RWMutex
 	handlers []VADMetricsHandler
+	streams  map[*simpleVADStream]struct{}
 }
 
 type SimpleVADOptions struct {
@@ -45,7 +46,10 @@ func NewSimpleVADWithOptions(options SimpleVADOptions) *SimpleVAD {
 	if options.UpdateInterval == 0 {
 		options.UpdateInterval = 1
 	}
-	return &SimpleVAD{options: options}
+	return &SimpleVAD{
+		options: options,
+		streams: make(map[*simpleVADStream]struct{}),
+	}
 }
 
 func (v *SimpleVAD) Label() string {
@@ -61,6 +65,8 @@ func (v *SimpleVAD) Provider() string {
 }
 
 func (v *SimpleVAD) Capabilities() VADCapabilities {
+	v.mu.RLock()
+	defer v.mu.RUnlock()
 	return VADCapabilities{UpdateInterval: v.options.UpdateInterval}
 }
 
@@ -73,13 +79,34 @@ func (v *SimpleVAD) OnMetricsCollected(handler VADMetricsHandler) {
 	v.handlers = append(v.handlers, handler)
 }
 
+func (v *SimpleVAD) UpdateOptions(options SimpleVADOptions) {
+	v.mu.Lock()
+	v.options = mergeSimpleVADOptions(v.options, options)
+	streams := make([]*simpleVADStream, 0, len(v.streams))
+	for stream := range v.streams {
+		streams = append(streams, stream)
+	}
+	v.mu.Unlock()
+
+	for _, stream := range streams {
+		stream.updateOptions(options)
+	}
+}
+
 func (v *SimpleVAD) Stream(ctx context.Context) (VADStream, error) {
-	return &simpleVADStream{
+	v.mu.RLock()
+	options := v.options
+	v.mu.RUnlock()
+	stream := &simpleVADStream{
 		vad:     v,
 		ctx:     ctx,
-		options: v.options,
+		options: options,
 		events:  make(chan *VADEvent, 10),
-	}, nil
+	}
+	v.mu.Lock()
+	v.streams[stream] = struct{}{}
+	v.mu.Unlock()
+	return stream, nil
 }
 
 type simpleVADStream struct {
@@ -90,6 +117,7 @@ type simpleVADStream struct {
 	speaking                   bool
 	closed                     bool
 	inputEnded                 bool
+	inputSampleRate            uint32
 	samplesIndex               int
 	timestamp                  float64
 	speechDuration             float64
@@ -107,6 +135,17 @@ type simpleVADStream struct {
 	mu                         sync.Mutex
 }
 
+func (s *simpleVADStream) updateOptions(options SimpleVADOptions) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	oldMaxBufferedSpeech := s.options.MaxBufferedSpeechDuration
+	s.options = mergeSimpleVADOptions(s.options, options)
+	if s.options.MaxBufferedSpeechDuration > oldMaxBufferedSpeech {
+		s.bufferedSpeechDuration = framesDuration(s.speechFrames)
+	}
+	s.trimPrefixFrames()
+}
+
 func (s *simpleVADStream) PushFrame(frame *model.AudioFrame) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -115,6 +154,11 @@ func (s *simpleVADStream) PushFrame(frame *model.AudioFrame) error {
 	}
 	if s.inputEnded {
 		return errors.New("vad stream input ended")
+	}
+	if s.inputSampleRate == 0 {
+		s.inputSampleRate = frame.SampleRate
+	} else if frame.SampleRate != s.inputSampleRate {
+		return nil
 	}
 
 	probability := frameRMS(frame)
@@ -167,7 +211,7 @@ func (s *simpleVADStream) PushFrame(frame *model.AudioFrame) error {
 					SamplesIndex:   s.samplesIndex,
 					Timestamp:      s.timestamp,
 					SpeechDuration: s.speechDuration,
-					Frames:         startFrames,
+					Frames:         combineFrames(startFrames),
 					Speaking:       true,
 				}
 				s.lastActivity = time.Now()
@@ -183,6 +227,7 @@ func (s *simpleVADStream) PushFrame(frame *model.AudioFrame) error {
 
 		if s.speaking {
 			s.silenceDuration = s.accumulatedSilenceDuration
+			s.appendSpeechFrame(frame, duration)
 			if s.accumulatedSilenceDuration >= s.options.MinSilenceDuration {
 				s.speaking = false
 				frames := append([]*model.AudioFrame(nil), s.speechFrames...)
@@ -192,7 +237,7 @@ func (s *simpleVADStream) PushFrame(frame *model.AudioFrame) error {
 					Timestamp:       s.timestamp,
 					SpeechDuration:  s.speechDuration,
 					SilenceDuration: s.silenceDuration,
-					Frames:          frames,
+					Frames:          combineFrames(frames),
 					Speaking:        false,
 				}
 				s.lastActivity = time.Now()
@@ -249,7 +294,7 @@ func (s *simpleVADStream) Flush() error {
 	if s.inputEnded {
 		return errors.New("vad stream input ended")
 	}
-	s.resetSegment()
+	s.resetState()
 	return nil
 }
 
@@ -262,10 +307,11 @@ func (s *simpleVADStream) EndInput() error {
 	if s.inputEnded {
 		return errors.New("vad stream input ended")
 	}
-	s.resetSegment()
+	s.resetState()
 	s.inputEnded = true
 	s.closed = true
 	close(s.events)
+	s.vad.unregisterStream(s)
 	return nil
 }
 
@@ -277,6 +323,7 @@ func (s *simpleVADStream) Close() error {
 	}
 	s.closed = true
 	close(s.events)
+	s.vad.unregisterStream(s)
 	return nil
 }
 
@@ -303,6 +350,12 @@ func (s *simpleVADStream) resetSegment() {
 	s.pendingSpeechFrames = nil
 	s.speechFrames = nil
 	s.bufferedSpeechDuration = 0
+}
+
+func (s *simpleVADStream) resetState() {
+	s.resetSegment()
+	s.samplesIndex = 0
+	s.timestamp = 0
 }
 
 func (s *simpleVADStream) startSpeechFrames() []*model.AudioFrame {
@@ -341,6 +394,10 @@ func (s *simpleVADStream) appendPrefixFrame(frame *model.AudioFrame, duration fl
 	}
 	s.prefixFrames = append(s.prefixFrames, frame)
 	s.prefixDuration += duration
+	s.trimPrefixFrames()
+}
+
+func (s *simpleVADStream) trimPrefixFrames() {
 	for s.prefixDuration > s.options.PrefixPaddingDuration && len(s.prefixFrames) > 0 {
 		s.prefixDuration -= frameDuration(s.prefixFrames[0])
 		s.prefixFrames = s.prefixFrames[1:]
@@ -380,6 +437,36 @@ func framesDuration(frames []*model.AudioFrame) float64 {
 	return duration
 }
 
+func combineFrames(frames []*model.AudioFrame) []*model.AudioFrame {
+	if len(frames) == 0 {
+		return nil
+	}
+	if len(frames) == 1 {
+		frame := frames[0]
+		data := append([]byte(nil), frame.Data...)
+		return []*model.AudioFrame{{
+			Data:              data,
+			SampleRate:        frame.SampleRate,
+			NumChannels:       frame.NumChannels,
+			SamplesPerChannel: frame.SamplesPerChannel,
+		}}
+	}
+
+	first := frames[0]
+	var samples uint32
+	var data []byte
+	for _, frame := range frames {
+		samples += frame.SamplesPerChannel
+		data = append(data, frame.Data...)
+	}
+	return []*model.AudioFrame{{
+		Data:              data,
+		SampleRate:        first.SampleRate,
+		NumChannels:       first.NumChannels,
+		SamplesPerChannel: samples,
+	}}
+}
+
 func (v *SimpleVAD) emitMetrics(metrics *telemetry.VADMetrics) {
 	v.mu.RLock()
 	handlers := append([]VADMetricsHandler(nil), v.handlers...)
@@ -387,4 +474,37 @@ func (v *SimpleVAD) emitMetrics(metrics *telemetry.VADMetrics) {
 	for _, handler := range handlers {
 		handler(metrics)
 	}
+}
+
+func (v *SimpleVAD) unregisterStream(stream *simpleVADStream) {
+	v.mu.Lock()
+	delete(v.streams, stream)
+	v.mu.Unlock()
+}
+
+func mergeSimpleVADOptions(current, updates SimpleVADOptions) SimpleVADOptions {
+	if updates.Threshold != 0 {
+		current.Threshold = updates.Threshold
+	}
+	if updates.MinSpeechDuration != 0 {
+		current.MinSpeechDuration = updates.MinSpeechDuration
+	}
+	if updates.MinSilenceDuration != 0 {
+		current.MinSilenceDuration = updates.MinSilenceDuration
+	}
+	if updates.PrefixPaddingDuration != 0 {
+		current.PrefixPaddingDuration = updates.PrefixPaddingDuration
+	}
+	if updates.MaxBufferedSpeechDuration != 0 {
+		current.MaxBufferedSpeechDuration = updates.MaxBufferedSpeechDuration
+	}
+	if updates.DeactivationThreshold != 0 {
+		current.DeactivationThreshold = updates.DeactivationThreshold
+	} else if updates.Threshold != 0 {
+		current.DeactivationThreshold = updates.Threshold
+	}
+	if updates.UpdateInterval != 0 {
+		current.UpdateInterval = updates.UpdateInterval
+	}
+	return current
 }

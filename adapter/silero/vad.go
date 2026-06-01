@@ -32,7 +32,7 @@ func DefaultVADOptions() VADOptions {
 
 type SileroVAD struct {
 	options  VADOptions
-	inner    vad.VAD
+	inner    *vad.SimpleVAD
 	mu       sync.RWMutex
 	handlers []vad.VADMetricsHandler
 }
@@ -83,15 +83,7 @@ func NewSileroVAD(opts ...VADOption) *SileroVAD {
 
 	// Fallback to simple VAD for now to provide out-of-the-box working plugin
 	// without requiring CGO/ONNX dependencies in the base install.
-	inner := vad.NewSimpleVADWithOptions(vad.SimpleVADOptions{
-		Threshold:                 options.ActivationThreshold / 10.0, // Scale threshold for RMS vs probability.
-		MinSpeechDuration:         options.MinSpeechDuration,
-		MinSilenceDuration:        options.MinSilenceDuration,
-		PrefixPaddingDuration:     options.PrefixPaddingDuration,
-		MaxBufferedSpeechDuration: options.MaxBufferedSpeech,
-		DeactivationThreshold:     max(options.ActivationThreshold/10.0-0.015, 0.001),
-		UpdateInterval:            options.UpdateInterval,
-	})
+	inner := vad.NewSimpleVADWithOptions(simpleOptionsFromSilero(options))
 
 	detector := &SileroVAD{
 		options: options,
@@ -121,6 +113,8 @@ func (v *SileroVAD) Provider() string {
 }
 
 func (v *SileroVAD) Capabilities() vad.VADCapabilities {
+	v.mu.RLock()
+	defer v.mu.RUnlock()
 	return vad.VADCapabilities{UpdateInterval: v.options.UpdateInterval}
 }
 
@@ -133,8 +127,53 @@ func (v *SileroVAD) OnMetricsCollected(handler vad.VADMetricsHandler) {
 	v.handlers = append(v.handlers, handler)
 }
 
+func (v *SileroVAD) UpdateOptions(options VADOptions) {
+	v.mu.Lock()
+	v.options = mergeVADOptions(v.options, options)
+	merged := v.options
+	v.mu.Unlock()
+	v.inner.UpdateOptions(simpleOptionsFromSilero(merged))
+}
+
 func (v *SileroVAD) Stream(ctx context.Context) (vad.VADStream, error) {
 	return v.inner.Stream(ctx)
+}
+
+func simpleOptionsFromSilero(options VADOptions) vad.SimpleVADOptions {
+	return vad.SimpleVADOptions{
+		Threshold:                 options.ActivationThreshold / 10.0, // Scale threshold for RMS vs probability.
+		MinSpeechDuration:         options.MinSpeechDuration,
+		MinSilenceDuration:        options.MinSilenceDuration,
+		PrefixPaddingDuration:     options.PrefixPaddingDuration,
+		MaxBufferedSpeechDuration: options.MaxBufferedSpeech,
+		DeactivationThreshold:     max(options.ActivationThreshold/10.0-0.015, 0.001),
+		UpdateInterval:            options.UpdateInterval,
+	}
+}
+
+func mergeVADOptions(current, updates VADOptions) VADOptions {
+	if updates.MinSpeechDuration != 0 {
+		current.MinSpeechDuration = updates.MinSpeechDuration
+	}
+	if updates.MinSilenceDuration != 0 {
+		current.MinSilenceDuration = updates.MinSilenceDuration
+	}
+	if updates.PrefixPaddingDuration != 0 {
+		current.PrefixPaddingDuration = updates.PrefixPaddingDuration
+	}
+	if updates.MaxBufferedSpeech != 0 {
+		current.MaxBufferedSpeech = updates.MaxBufferedSpeech
+	}
+	if updates.ActivationThreshold != 0 {
+		current.ActivationThreshold = updates.ActivationThreshold
+	}
+	if updates.UpdateInterval != 0 {
+		current.UpdateInterval = updates.UpdateInterval
+	}
+	if updates.SampleRate != 0 {
+		current.SampleRate = updates.SampleRate
+	}
+	return current
 }
 
 func (v *SileroVAD) emitMetrics(metrics *telemetry.VADMetrics) {
