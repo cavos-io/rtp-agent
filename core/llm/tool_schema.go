@@ -65,31 +65,52 @@ func GenerateStrictJSONSchema(t reflect.Type) map[string]interface{} {
 
 		desc := field.Tag.Get("jsonschema")
 		propSchema := goTypeToJSONSchema(field.Type, desc)
+		if enumValues := jsonSchemaEnumValues(field.Tag.Get("enum")); len(enumValues) > 0 {
+			propSchema["enum"] = enumValues
+		}
 
 		props[name] = propSchema
 
 		req = appendRequiredField(req, name)
 
-		if strings.Contains(jsonTag, "omitempty") {
-			if typeArr, ok := propSchema["type"].([]string); ok {
-				foundNull := false
-				for _, t := range typeArr {
-					if t == "null" {
-						foundNull = true
-						break
-					}
-				}
-				if !foundNull {
-					propSchema["type"] = append(typeArr, "null")
-				}
-			} else if typeStr, ok := propSchema["type"].(string); ok && typeStr != "null" {
-				propSchema["type"] = []string{typeStr, "null"}
-			}
+		if strings.Contains(jsonTag, "omitempty") || field.Tag.Get("default") != "" {
+			markSchemaNullable(propSchema)
 		}
 	}
 
 	schema["required"] = req
 	return schema
+}
+
+func jsonSchemaEnumValues(tag string) []any {
+	if tag == "" {
+		return nil
+	}
+	parts := strings.Split(tag, ",")
+	values := make([]any, 0, len(parts))
+	for _, part := range parts {
+		value := strings.TrimSpace(part)
+		if value == "" {
+			continue
+		}
+		values = append(values, value)
+	}
+	return values
+}
+
+func markSchemaNullable(schema map[string]interface{}) {
+	if typeArr, ok := schema["type"].([]string); ok {
+		for _, t := range typeArr {
+			if t == "null" {
+				return
+			}
+		}
+		schema["type"] = append(typeArr, "null")
+		return
+	}
+	if typeStr, ok := schema["type"].(string); ok && typeStr != "null" {
+		schema["type"] = []string{typeStr, "null"}
+	}
 }
 
 func appendRequiredField(required []string, name string) []string {

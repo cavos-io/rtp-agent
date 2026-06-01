@@ -548,6 +548,10 @@ type InputTranscriptionCompleted struct {
 	Confidence   *float64
 }
 
+type InputSpeechStoppedEvent struct {
+	UserTranscriptionEnabled bool
+}
+
 type RealtimeEvent struct {
 	Type               RealtimeEventType
 	ItemID             string
@@ -558,6 +562,7 @@ type RealtimeEvent struct {
 	Generation         *GenerationCreatedEvent
 	RemoteItem         *RemoteItemAddedEvent
 	InputTranscription *InputTranscriptionCompleted
+	SpeechStopped      *InputSpeechStoppedEvent
 	Metrics            *telemetry.RealtimeModelMetrics
 	Error              error
 }

@@ -14,11 +14,13 @@ import (
 )
 
 type FallbackAdapter struct {
-	ttss           []TTS
-	capabilities   TTSCapabilities
-	sampleRate     int
-	numChannels    int
-	maxRetryPerTTS int
+	ttss                 []TTS
+	capabilities         TTSCapabilities
+	sampleRate           int
+	numChannels          int
+	maxRetryPerTTS       int
+	availabilityHandlers []availabilityHandlerSubscription
+	nextAvailabilityID   uint64
 
 	mu     sync.Mutex
 	status []fallbackTTSStatus
@@ -27,6 +29,18 @@ type FallbackAdapter struct {
 type fallbackTTSStatus struct {
 	available  bool
 	recovering bool
+}
+
+type AvailabilityChangedEvent struct {
+	TTS       TTS
+	Available bool
+}
+
+type AvailabilityChangedHandler func(AvailabilityChangedEvent)
+
+type availabilityHandlerSubscription struct {
+	id      uint64
+	handler AvailabilityChangedHandler
 }
 
 type FallbackAdapterOptions struct {
@@ -96,6 +110,38 @@ func (f *FallbackAdapter) Prewarm() {
 	Prewarm(f.ttss[0])
 }
 
+func (f *FallbackAdapter) OnAvailabilityChanged(handler AvailabilityChangedHandler) func() {
+	if handler == nil {
+		return func() {}
+	}
+	f.mu.Lock()
+	f.nextAvailabilityID++
+	id := f.nextAvailabilityID
+	f.availabilityHandlers = append(f.availabilityHandlers, availabilityHandlerSubscription{
+		id:      id,
+		handler: handler,
+	})
+	f.mu.Unlock()
+
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			f.removeAvailabilityChangedHandler(id)
+		})
+	}
+}
+
+func (f *FallbackAdapter) removeAvailabilityChangedHandler(id uint64) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for i, subscription := range f.availabilityHandlers {
+		if subscription.id == id {
+			f.availabilityHandlers = append(f.availabilityHandlers[:i], f.availabilityHandlers[i+1:]...)
+			return
+		}
+	}
+}
+
 func (f *FallbackAdapter) Capabilities() TTSCapabilities {
 	return f.capabilities
 }
@@ -125,15 +171,44 @@ func (f *FallbackAdapter) shouldTry(index int) bool {
 
 func (f *FallbackAdapter) markUnavailable(index int) {
 	f.mu.Lock()
-	defer f.mu.Unlock()
+	if index < 0 || index >= len(f.status) {
+		f.mu.Unlock()
+		return
+	}
+	if !f.status[index].available {
+		f.mu.Unlock()
+		return
+	}
 	f.status[index].available = false
+	event := AvailabilityChangedEvent{TTS: f.ttss[index], Available: false}
+	subscriptions := append([]availabilityHandlerSubscription(nil), f.availabilityHandlers...)
+	f.mu.Unlock()
+
+	for _, subscription := range subscriptions {
+		subscription.handler(event)
+	}
 }
 
 func (f *FallbackAdapter) markAvailable(index int) {
 	f.mu.Lock()
-	defer f.mu.Unlock()
+	if index < 0 || index >= len(f.status) {
+		f.mu.Unlock()
+		return
+	}
+	alreadyAvailable := f.status[index].available
 	f.status[index].available = true
 	f.status[index].recovering = false
+	if alreadyAvailable {
+		f.mu.Unlock()
+		return
+	}
+	event := AvailabilityChangedEvent{TTS: f.ttss[index], Available: true}
+	subscriptions := append([]availabilityHandlerSubscription(nil), f.availabilityHandlers...)
+	f.mu.Unlock()
+
+	for _, subscription := range subscriptions {
+		subscription.handler(event)
+	}
 }
 
 func (f *FallbackAdapter) tryRecoverChunked(index int, text string) {
@@ -467,8 +542,36 @@ func (s *fallbackChunkedStream) monitorStream() {
 
 		ev, err = s.adapter.normalizeAudio(ev)
 		if err != nil {
-			s.errCh <- err
-			return
+			if outputSent {
+				s.errCh <- err
+				return
+			}
+			s.mu.Lock()
+			if s.closed {
+				s.mu.Unlock()
+				return
+			}
+			logger.Logger.Warnw("TTS synthesize stream produced invalid audio, attempting fallback", err, "failed_tts", s.adapter.ttss[s.activeIndex].Label())
+			stream.Close()
+			pending = nil
+			pendingTail = false
+
+			nextIndex := s.activeIndex + 1
+			if s.canRetryTTS(s.activeIndex) {
+				s.retries[s.activeIndex]++
+				nextIndex = s.activeIndex
+			} else {
+				s.adapter.markUnavailable(s.activeIndex)
+				s.adapter.tryRecoverChunked(s.activeIndex, s.text)
+			}
+
+			if fbErr := s.tryStartStream(nextIndex); fbErr != nil {
+				s.errCh <- fbErr
+				s.mu.Unlock()
+				return
+			}
+			s.mu.Unlock()
+			continue
 		}
 		ev = cloneSynthesizedAudio(ev)
 		ev.RequestID = s.requestID
@@ -648,9 +751,6 @@ func (s *fallbackSynthesizeStream) startProviderStream(tts TTS) (SynthesizeStrea
 func (s *fallbackSynthesizeStream) replayBufferedText(stream SynthesizeStream) error {
 	for _, input := range s.inputBuffer {
 		if input.flush {
-			if err := stream.Flush(); err != nil {
-				return err
-			}
 			continue
 		}
 		if input.text == "" {
@@ -732,8 +832,36 @@ func (s *fallbackSynthesizeStream) monitorStream() {
 
 		ev, err = s.adapter.normalizeAudio(ev)
 		if err != nil {
-			s.errCh <- err
-			return
+			if outputSent {
+				s.errCh <- err
+				return
+			}
+			s.mu.Lock()
+			if s.closed {
+				s.mu.Unlock()
+				return
+			}
+			logger.Logger.Warnw("TTS stream produced invalid audio, attempting fallback", err, "failed_tts", s.adapter.ttss[s.activeIndex].Label())
+			stream.Close()
+			pending = nil
+			pendingTail = false
+
+			nextIndex := s.activeIndex + 1
+			if s.canRetryTTS(s.activeIndex) {
+				s.retries[s.activeIndex]++
+				nextIndex = s.activeIndex
+			} else {
+				s.adapter.markUnavailable(s.activeIndex)
+				s.adapter.tryRecoverStream(s.activeIndex, s.inputBuffer)
+			}
+
+			if fbErr := s.tryStartStream(nextIndex); fbErr != nil {
+				s.errCh <- fbErr
+				s.mu.Unlock()
+				return
+			}
+			s.mu.Unlock()
+			continue
 		}
 		ev = cloneSynthesizedAudio(ev)
 		ev.RequestID = s.requestID

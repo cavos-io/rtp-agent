@@ -62,12 +62,12 @@ type streamAdapterWrapper struct {
 	eventCh   chan *SynthesizedAudio
 	errCh     chan error
 	inputCh   chan streamAdapterInput
+	flushCh   chan struct{}
 	mu        sync.Mutex
 	active    ChunkedStream
 	closed    bool
 	inputDone bool
 	started   bool
-	flushed   bool
 
 	segmentPending *SynthesizedAudio
 }
@@ -87,6 +87,7 @@ func (a *StreamAdapter) Stream(ctx context.Context) (SynthesizeStream, error) {
 		eventCh:   make(chan *SynthesizedAudio, 100),
 		errCh:     make(chan error, 1),
 		inputCh:   make(chan streamAdapterInput, 100),
+		flushCh:   make(chan struct{}, 100),
 	}
 
 	go w.run()
@@ -117,8 +118,11 @@ func (w *streamAdapterWrapper) run() {
 				}
 				if input.flush {
 					tokenizer.Flush()
-					tokenizer.Close()
-					return
+					select {
+					case w.flushCh <- struct{}{}:
+					default:
+					}
+					continue
 				}
 				tokenizer.PushText(input.text)
 			}
@@ -137,8 +141,20 @@ func (w *streamAdapterWrapper) run() {
 				return
 			}
 		}
+		w.flushCompletedSegments()
 	}
 	w.flushSegmentPending(true)
+}
+
+func (w *streamAdapterWrapper) flushCompletedSegments() {
+	for {
+		select {
+		case <-w.flushCh:
+			w.flushSegmentPending(true)
+		default:
+			return
+		}
+	}
 }
 
 func (w *streamAdapterWrapper) synthesize(text string, segmentID string) error {
@@ -280,7 +296,7 @@ func (w *streamAdapterWrapper) PushText(text string) error {
 	if w.inputDone {
 		return nil
 	}
-	if text == "" || w.flushed {
+	if text == "" {
 		return nil
 	}
 	w.started = true
@@ -296,9 +312,6 @@ func (w *streamAdapterWrapper) Flush() error {
 	}
 	if w.inputDone {
 		return nil
-	}
-	if w.started {
-		w.flushed = true
 	}
 	w.inputCh <- streamAdapterInput{flush: true}
 	return nil

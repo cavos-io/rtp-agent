@@ -1,6 +1,7 @@
 package stt
 
 import (
+	"context"
 	"testing"
 	"time"
 
@@ -117,6 +118,56 @@ func TestSpeechStreamAliasMatchesRecognizeStream(t *testing.T) {
 	var _ RecognizeStream = stream
 }
 
+func TestSTTMetadataHelpersMatchReferenceDefaults(t *testing.T) {
+	stt := &fakeMetadataSTT{}
+
+	if got := Model(stt); got != "unknown" {
+		t.Fatalf("Model = %q, want unknown", got)
+	}
+	if got := Provider(stt); got != "unknown" {
+		t.Fatalf("Provider = %q, want unknown", got)
+	}
+
+	stt.model = "test-model"
+	stt.provider = "test-provider"
+	if got := Model(stt); got != "test-model" {
+		t.Fatalf("Model = %q, want wrapped model", got)
+	}
+	if got := Provider(stt); got != "test-provider" {
+		t.Fatalf("Provider = %q, want wrapped provider", got)
+	}
+
+	Prewarm(stt)
+	if !stt.prewarmed {
+		t.Fatal("Prewarm did not call provider Prewarm")
+	}
+}
+
+func TestStreamAdapterForwardsWrappedMetadata(t *testing.T) {
+	wrapped := &fakeMetadataSTT{model: "wrapped-model", provider: "wrapped-provider"}
+	adapter := NewStreamAdapter(wrapped, &fakeStreamAdapterVAD{})
+
+	if got := Model(adapter); got != "wrapped-model" {
+		t.Fatalf("StreamAdapter Model = %q, want wrapped model", got)
+	}
+	if got := Provider(adapter); got != "wrapped-provider" {
+		t.Fatalf("StreamAdapter Provider = %q, want wrapped provider", got)
+	}
+}
+
+func TestFallbackAdapterExposesReferenceMetadata(t *testing.T) {
+	adapter := NewFallbackAdapter([]STT{&fakeMetadataSTT{
+		capabilities: STTCapabilities{Streaming: true},
+	}})
+
+	if got := Model(adapter); got != "FallbackAdapter" {
+		t.Fatalf("FallbackAdapter Model = %q, want FallbackAdapter", got)
+	}
+	if got := Provider(adapter); got != "livekit" {
+		t.Fatalf("FallbackAdapter Provider = %q, want livekit", got)
+	}
+}
+
 type fakeStreamTiming struct {
 	startTimeOffset float64
 	startTime       float64
@@ -154,4 +205,39 @@ func (f *fakeSpeechStream) Close() error {
 
 func (f *fakeSpeechStream) Next() (*SpeechEvent, error) {
 	return nil, nil
+}
+
+type fakeMetadataSTT struct {
+	model        string
+	provider     string
+	prewarmed    bool
+	capabilities STTCapabilities
+}
+
+func (f *fakeMetadataSTT) Label() string {
+	return "fake-metadata-stt"
+}
+
+func (f *fakeMetadataSTT) Capabilities() STTCapabilities {
+	return f.capabilities
+}
+
+func (f *fakeMetadataSTT) Stream(context.Context, string) (RecognizeStream, error) {
+	return nil, nil
+}
+
+func (f *fakeMetadataSTT) Recognize(context.Context, []*model.AudioFrame, string) (*SpeechEvent, error) {
+	return nil, nil
+}
+
+func (f *fakeMetadataSTT) Model() string {
+	return f.model
+}
+
+func (f *fakeMetadataSTT) Provider() string {
+	return f.provider
+}
+
+func (f *fakeMetadataSTT) Prewarm() {
+	f.prewarmed = true
 }

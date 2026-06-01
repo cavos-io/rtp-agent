@@ -118,6 +118,22 @@ func TestRealtimeEventCanCarryInputAudioTranscription(t *testing.T) {
 	}
 }
 
+func TestRealtimeEventCanCarryInputSpeechStoppedPayload(t *testing.T) {
+	ev := RealtimeEvent{
+		Type: RealtimeEventTypeSpeechStopped,
+		SpeechStopped: &InputSpeechStoppedEvent{
+			UserTranscriptionEnabled: true,
+		},
+	}
+
+	if ev.SpeechStopped == nil {
+		t.Fatal("SpeechStopped = nil, want speech stopped payload")
+	}
+	if !ev.SpeechStopped.UserTranscriptionEnabled {
+		t.Fatal("UserTranscriptionEnabled = false, want true")
+	}
+}
+
 func TestRealtimeEventCanCarryOutputItemMetadata(t *testing.T) {
 	ev := RealtimeEvent{
 		Type:         RealtimeEventTypeText,

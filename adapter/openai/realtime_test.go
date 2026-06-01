@@ -264,6 +264,24 @@ func TestRealtimeEventMapsOutputTextAndAudioAliases(t *testing.T) {
 	}
 }
 
+func TestRealtimeEventMapsInputAudioBufferSpeechStoppedPayload(t *testing.T) {
+	ev, ok := openAIRealtimeEvent(map[string]any{
+		"type": "input_audio_buffer.speech_stopped",
+	})
+	if !ok {
+		t.Fatal("openAIRealtimeEvent returned ok=false, want speech stopped event")
+	}
+	if ev.Type != llm.RealtimeEventTypeSpeechStopped {
+		t.Fatalf("event type = %q, want speech stopped", ev.Type)
+	}
+	if ev.SpeechStopped == nil {
+		t.Fatal("SpeechStopped = nil, want speech stopped payload")
+	}
+	if !ev.SpeechStopped.UserTranscriptionEnabled {
+		t.Fatal("UserTranscriptionEnabled = false, want OpenAI realtime transcription enabled")
+	}
+}
+
 func TestRealtimeEventMapsResponseCreated(t *testing.T) {
 	ev, ok := openAIRealtimeEvent(map[string]any{
 		"type": "response.created",

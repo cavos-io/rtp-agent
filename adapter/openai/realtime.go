@@ -1032,7 +1032,12 @@ func openAIRealtimeEvent(ev map[string]any) (llm.RealtimeEvent, bool) {
 	case "input_audio_buffer.speech_started":
 		return llm.RealtimeEvent{Type: llm.RealtimeEventTypeSpeechStarted}, true
 	case "input_audio_buffer.speech_stopped":
-		return llm.RealtimeEvent{Type: llm.RealtimeEventTypeSpeechStopped}, true
+		return llm.RealtimeEvent{
+			Type: llm.RealtimeEventTypeSpeechStopped,
+			SpeechStopped: &llm.InputSpeechStoppedEvent{
+				UserTranscriptionEnabled: true,
+			},
+		}, true
 	}
 	return llm.RealtimeEvent{}, false
 }
