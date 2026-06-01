@@ -131,6 +131,46 @@ func TestSimpleVADUpdateOptionsRelaxesMaxBufferedSpeech(t *testing.T) {
 	assertCombinedFrames(t, end.Frames, firstSpeech, thirdSpeech, silence)
 }
 
+func TestSimpleVADUpdateOptionsShrinksBufferedSpeech(t *testing.T) {
+	detector := NewSimpleVADWithOptions(SimpleVADOptions{
+		Threshold:                 0.05,
+		MaxBufferedSpeechDuration: 0.05,
+	})
+	stream, err := detector.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	defer stream.Close()
+
+	speechFrames := []*model.AudioFrame{
+		audioFrame(16000, 160, 6000),
+		audioFrame(16000, 160, 6000),
+		audioFrame(16000, 160, 6000),
+		audioFrame(16000, 160, 6000),
+	}
+	for _, frame := range speechFrames {
+		if err := stream.PushFrame(frame); err != nil {
+			t.Fatalf("PushFrame() speech error = %v", err)
+		}
+	}
+	assertEventType(t, stream, VADEventInferenceDone)
+	assertEventType(t, stream, VADEventStartOfSpeech)
+	for range len(speechFrames) - 1 {
+		assertEventType(t, stream, VADEventInferenceDone)
+	}
+
+	detector.UpdateOptions(SimpleVADOptions{MaxBufferedSpeechDuration: 0.02})
+	if err := stream.PushFrame(audioFrame(16000, 160, 0)); err != nil {
+		t.Fatalf("PushFrame() silence error = %v", err)
+	}
+	assertEventType(t, stream, VADEventInferenceDone)
+	end := nextVADEvent(t, stream)
+	if end.Type != VADEventEndOfSpeech {
+		t.Fatalf("event type = %s, want %s", end.Type, VADEventEndOfSpeech)
+	}
+	assertCombinedFrames(t, end.Frames, speechFrames[0], speechFrames[1])
+}
+
 func TestSimpleVADIgnoresMismatchedSampleRateFrames(t *testing.T) {
 	stream, err := NewSimpleVAD(0.05).Stream(context.Background())
 	if err != nil {

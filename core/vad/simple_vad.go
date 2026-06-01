@@ -138,11 +138,8 @@ type simpleVADStream struct {
 func (s *simpleVADStream) updateOptions(options SimpleVADOptions) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	oldMaxBufferedSpeech := s.options.MaxBufferedSpeechDuration
 	s.options = mergeSimpleVADOptions(s.options, options)
-	if s.options.MaxBufferedSpeechDuration > oldMaxBufferedSpeech {
-		s.bufferedSpeechDuration = framesDuration(s.speechFrames)
-	}
+	s.trimSpeechFrames()
 	s.trimPrefixFrames()
 }
 
@@ -387,6 +384,27 @@ func (s *simpleVADStream) appendSpeechFrame(frame *model.AudioFrame, duration fl
 	}
 	s.speechFrames = append(s.speechFrames, frame)
 	s.bufferedSpeechDuration += duration
+}
+
+func (s *simpleVADStream) trimSpeechFrames() {
+	bufferLimit := s.maxBufferedDurationLimit()
+	if bufferLimit <= 0 {
+		s.bufferedSpeechDuration = framesDuration(s.speechFrames)
+		return
+	}
+
+	var buffered float64
+	limited := s.speechFrames[:0]
+	for _, frame := range s.speechFrames {
+		duration := frameDuration(frame)
+		if buffered+duration > bufferLimit {
+			break
+		}
+		limited = append(limited, frame)
+		buffered += duration
+	}
+	s.speechFrames = limited
+	s.bufferedSpeechDuration = buffered
 }
 
 func (s *simpleVADStream) maxBufferedDurationLimit() float64 {
