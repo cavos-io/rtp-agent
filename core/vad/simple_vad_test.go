@@ -1087,6 +1087,23 @@ func TestSimpleVADCloseIsIdempotentAndEndsIteration(t *testing.T) {
 	}
 }
 
+func TestSimpleVADCloseDropsQueuedEvents(t *testing.T) {
+	stream, err := NewSimpleVAD(0.05).Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	if err := stream.PushFrame(audioFrame(16000, 160, 6000)); err != nil {
+		t.Fatalf("PushFrame() error = %v", err)
+	}
+
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+	if _, err := stream.Next(); !errors.Is(err, io.EOF) {
+		t.Fatalf("Next() after Close() with queued events error = %v, want io.EOF", err)
+	}
+}
+
 func assertEventType(t *testing.T, stream VADStream, want VADEventType) {
 	t.Helper()
 	ev := nextVADEvent(t, stream)

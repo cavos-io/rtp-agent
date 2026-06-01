@@ -332,7 +332,7 @@ func (s *simpleVADStream) EndInput() error {
 	s.resetState()
 	s.inputEnded = true
 	s.closed = true
-	s.closeEvents()
+	s.closeEvents(false)
 	s.vad.unregisterStream(s)
 	return nil
 }
@@ -344,7 +344,7 @@ func (s *simpleVADStream) Close() error {
 		return nil
 	}
 	s.closed = true
-	s.closeEvents()
+	s.closeEvents(true)
 	s.vad.unregisterStream(s)
 	return nil
 }
@@ -385,11 +385,17 @@ func (s *simpleVADStream) enqueueEvent(event *VADEvent) {
 	s.notifyEventsLocked()
 }
 
-func (s *simpleVADStream) closeEvents() {
+func (s *simpleVADStream) closeEvents(dropQueued bool) {
 	s.eventMu.Lock()
 	defer s.eventMu.Unlock()
 	if s.eventClosed {
 		return
+	}
+	if dropQueued {
+		for i := range s.eventQueue {
+			s.eventQueue[i] = nil
+		}
+		s.eventQueue = nil
 	}
 	s.eventClosed = true
 	s.notifyEventsLocked()
