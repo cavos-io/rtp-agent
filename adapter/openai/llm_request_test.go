@@ -2,7 +2,10 @@ package openai
 
 import (
 	"context"
+	"errors"
+	"net/http"
 	"testing"
+	"time"
 
 	"github.com/cavos-io/rtp-agent/core/llm"
 	openaisdk "github.com/sashabaranov/go-openai"
@@ -24,6 +27,31 @@ func (requestTestTool) Parameters() map[string]any {
 	}
 }
 func (requestTestTool) Execute(context.Context, string) (string, error) { return "", nil }
+
+func TestOpenAIChatAppliesConnectOptionsTimeoutToRequestContext(t *testing.T) {
+	sentinelErr := errors.New("stop after context capture")
+	capture := &captureDeadlineHTTPClient{err: sentinelErr}
+	config := openaisdk.DefaultConfig("test-key")
+	config.HTTPClient = capture
+	model := NewOpenAILLMWithConfig(config)
+	model.model = "gpt-4o"
+
+	_, err := model.Chat(
+		context.Background(),
+		llm.NewChatContext(),
+		llm.WithConnectOptions(llm.APIConnectOptions{Timeout: 75 * time.Millisecond}),
+	)
+
+	if !errors.Is(err, sentinelErr) {
+		t.Fatalf("Chat error = %v, want sentinel HTTP client error", err)
+	}
+	if !capture.hasDeadline {
+		t.Fatal("request context has no deadline, want connect options timeout deadline")
+	}
+	if capture.remaining <= 0 || capture.remaining > 75*time.Millisecond {
+		t.Fatalf("request context deadline remaining = %v, want bounded by connect timeout", capture.remaining)
+	}
+}
 
 func TestBuildOpenAIChatCompletionRequestAppliesExtraParams(t *testing.T) {
 	req := buildOpenAIChatCompletionRequest("gpt-4o", llm.NewChatContext(), &llm.ChatOptions{
@@ -108,6 +136,21 @@ func TestBuildOpenAIChatCompletionRequestAppliesExtraParams(t *testing.T) {
 	if req.Prediction == nil || req.Prediction.Type != "content" || req.Prediction.Content != "known prefix" {
 		t.Fatalf("Prediction = %#v, want content prediction", req.Prediction)
 	}
+}
+
+type captureDeadlineHTTPClient struct {
+	err         error
+	hasDeadline bool
+	remaining   time.Duration
+}
+
+func (c *captureDeadlineHTTPClient) Do(req *http.Request) (*http.Response, error) {
+	deadline, ok := req.Context().Deadline()
+	c.hasDeadline = ok
+	if ok {
+		c.remaining = time.Until(deadline)
+	}
+	return nil, c.err
 }
 
 func TestBuildOpenAIChatCompletionRequestMarksToolsStrict(t *testing.T) {
