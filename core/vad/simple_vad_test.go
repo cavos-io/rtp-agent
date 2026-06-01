@@ -251,6 +251,23 @@ func TestSimpleVADRejectsInputAfterContextCancel(t *testing.T) {
 	}
 }
 
+func TestSimpleVADRejectsCanceledContextAtStreamCreation(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	detector := NewSimpleVAD(0.05)
+
+	stream, err := detector.Stream(ctx)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("Stream() with canceled context error = %v, want context.Canceled", err)
+	}
+	if stream != nil {
+		t.Fatalf("Stream() with canceled context returned stream %T, want nil", stream)
+	}
+	if len(detector.streams) != 0 {
+		t.Fatalf("registered streams after canceled context = %d, want 0", len(detector.streams))
+	}
+}
+
 func TestSimpleVADContextCancelStopsIterationBeforeQueuedEvents(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	stream, err := NewSimpleVAD(0.05).Stream(ctx)
