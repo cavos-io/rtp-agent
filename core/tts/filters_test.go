@@ -19,3 +19,12 @@ func TestFilterMarkdownPreservesLiteralPunctuationInsideWords(t *testing.T) {
 		t.Fatalf("FilterMarkdown() = %q, want %q", got, want)
 	}
 }
+
+func TestFilterMarkdownRemovesCodeFencesWithoutDroppingCode(t *testing.T) {
+	input := "Before\n```go\nfmt.Println(\"hi\")\n```\nAfter"
+	want := "Before\n\nfmt.Println(\"hi\")\n\nAfter"
+
+	if got := FilterMarkdown(input); got != want {
+		t.Fatalf("FilterMarkdown() = %q, want %q", got, want)
+	}
+}

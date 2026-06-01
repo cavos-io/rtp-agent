@@ -25,8 +25,8 @@ var (
 	boldUnderPattern = regexp.MustCompile(`(^|\W)__([^_]+?)__($|\W)`)
 	// italic with underscores: remove underscores from _text_ while preserving intra-word underscores
 	italicUnderPattern = regexp.MustCompile(`(^|\W)_([^_]+?)_($|\W)`)
-	// code blocks: remove ``` from ```text```
-	codeBlockPattern = regexp.MustCompile("(?s)```.*?```")
+	// code fences: remove ``` or ```lang while preserving fenced text
+	codeBlockPattern = regexp.MustCompile("`{3,4}\\S*")
 	// inline code: remove ` from `text`
 	inlineCodePattern = regexp.MustCompile("`([^`]+?)`")
 	// strikethrough: remove ~~text~~
