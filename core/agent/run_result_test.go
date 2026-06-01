@@ -241,3 +241,34 @@ func TestRunAssertUsesRecordedEventsForAgentHandoffs(t *testing.T) {
 		t.Fatalf("ContainsAgentHandoff returned error = %v, want nil for recorded event", err)
 	}
 }
+
+func TestRunAssertNoMoreEventsPassesAfterSkippingRecordedEvents(t *testing.T) {
+	result := NewRunResult(llm.NewChatContext())
+	result.RecordItem(&llm.ChatMessage{ID: "msg_1", Role: llm.ChatRoleAssistant, CreatedAt: time.Now()})
+	result.RecordItem(&llm.FunctionCall{ID: "fnc_1", CallID: "call_1", Name: "lookup", CreatedAt: time.Now().Add(time.Millisecond)})
+
+	if err := result.Expect.SkipNext(2).NoMoreEvents().HasError(); err != nil {
+		t.Fatalf("NoMoreEvents returned error = %v, want nil after skipping all events", err)
+	}
+}
+
+func TestRunAssertNoMoreEventsReportsRemainingEvents(t *testing.T) {
+	result := NewRunResult(llm.NewChatContext())
+	result.RecordItem(&llm.ChatMessage{ID: "msg_1", Role: llm.ChatRoleAssistant, CreatedAt: time.Now()})
+
+	err := result.Expect.NoMoreEvents().HasError()
+
+	if err == nil {
+		t.Fatal("NoMoreEvents error = nil, want error when events remain")
+	}
+}
+
+func TestRunAssertSkipNextReportsOutOfRange(t *testing.T) {
+	result := NewRunResult(llm.NewChatContext())
+
+	err := result.Expect.SkipNext(1).HasError()
+
+	if err == nil {
+		t.Fatal("SkipNext error = nil, want error when skipping past available events")
+	}
+}

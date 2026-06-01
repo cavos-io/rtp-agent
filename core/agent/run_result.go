@@ -260,6 +260,7 @@ type RunAssert struct {
 	ChatCtx *llm.ChatContext
 	result  *RunResult
 	errors  []error
+	index   int
 }
 
 func (a *RunAssert) IsFunctionCall(name string) *RunAssert {
@@ -318,6 +319,31 @@ func (a *RunAssert) ContainsAgentHandoff(newAgent *Agent) *RunAssert {
 	}
 	if !found {
 		a.errors = append(a.errors, errors.New("expected agent handoff, but not found"))
+	}
+	return a
+}
+
+func (a *RunAssert) SkipNext(count int) *RunAssert {
+	if count < 0 {
+		a.errors = append(a.errors, fmt.Errorf("cannot skip negative event count %d", count))
+		return a
+	}
+
+	events := a.events()
+	if a.index+count > len(events) {
+		a.errors = append(a.errors, fmt.Errorf("tried to skip %d event(s), but only %d available", count, len(events)-a.index))
+		a.index = len(events)
+		return a
+	}
+
+	a.index += count
+	return a
+}
+
+func (a *RunAssert) NoMoreEvents() *RunAssert {
+	events := a.events()
+	if a.index < len(events) {
+		a.errors = append(a.errors, fmt.Errorf("expected no more events, but found %s", events[a.index].GetType()))
 	}
 	return a
 }
