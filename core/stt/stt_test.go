@@ -168,6 +168,25 @@ func TestFallbackAdapterExposesReferenceMetadata(t *testing.T) {
 	}
 }
 
+func TestMultiSpeakerAdapterForwardsWrappedMetadata(t *testing.T) {
+	wrapped := &fakeMetadataSTT{
+		model:        "diarized-model",
+		provider:     "diarized-provider",
+		capabilities: STTCapabilities{Streaming: true, Diarization: true},
+	}
+	adapter, err := NewMultiSpeakerAdapter(wrapped, true, false, "{text}", "{text}", nil)
+	if err != nil {
+		t.Fatalf("NewMultiSpeakerAdapter returned error: %v", err)
+	}
+
+	if got := Model(adapter); got != "diarized-model" {
+		t.Fatalf("MultiSpeakerAdapter Model = %q, want wrapped model", got)
+	}
+	if got := Provider(adapter); got != "diarized-provider" {
+		t.Fatalf("MultiSpeakerAdapter Provider = %q, want wrapped provider", got)
+	}
+}
+
 func TestStreamAdapterForwardsPrewarm(t *testing.T) {
 	wrapped := &fakeMetadataSTT{}
 	adapter := NewStreamAdapter(wrapped, &fakeStreamAdapterVAD{})
@@ -191,6 +210,22 @@ func TestFallbackAdapterPrewarmsPrimaryProvider(t *testing.T) {
 	}
 	if fallback.prewarmed {
 		t.Fatal("FallbackAdapter Prewarm called fallback STT, want primary only")
+	}
+}
+
+func TestMultiSpeakerAdapterForwardsPrewarm(t *testing.T) {
+	wrapped := &fakeMetadataSTT{
+		capabilities: STTCapabilities{Streaming: true, Diarization: true},
+	}
+	adapter, err := NewMultiSpeakerAdapter(wrapped, true, false, "{text}", "{text}", nil)
+	if err != nil {
+		t.Fatalf("NewMultiSpeakerAdapter returned error: %v", err)
+	}
+
+	Prewarm(adapter)
+
+	if !wrapped.prewarmed {
+		t.Fatal("MultiSpeakerAdapter Prewarm did not call wrapped STT Prewarm")
 	}
 }
 
