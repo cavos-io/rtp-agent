@@ -161,6 +161,77 @@ func TestSarvamSTTWebsocketURLAndHeadersMatchReference(t *testing.T) {
 	}
 }
 
+func TestSarvamSTTWebsocketURLIncludesReferenceVADOptions(t *testing.T) {
+	provider := NewSarvamSTT("test-key",
+		WithSarvamSTTStreamingURL("wss://sarvam.example/stt/ws"),
+		WithSarvamSTTModel("saaras:v3"),
+		WithSarvamSTTHighVADSensitivity(true),
+		WithSarvamSTTFlushSignal(false),
+		WithSarvamSTTInputAudioCodec("audio/wav"),
+		WithSarvamSTTPositiveSpeechThreshold(0.52),
+		WithSarvamSTTNegativeSpeechThreshold(0.24),
+		WithSarvamSTTMinSpeechFrames(4),
+		WithSarvamSTTFirstTurnMinSpeechFrames(6),
+		WithSarvamSTTNegativeFramesCount(8),
+		WithSarvamSTTNegativeFramesWindow(10),
+		WithSarvamSTTStartSpeechVolumeThreshold(0.18),
+		WithSarvamSTTInterruptMinSpeechFrames(12),
+		WithSarvamSTTPreSpeechPadFrames(14),
+		WithSarvamSTTNumInitialIgnoredFrames(16),
+	)
+
+	query := buildSarvamSTTWebsocketURL(provider, "").Query()
+	assertSarvamQuery(t, query, "high_vad_sensitivity", "true")
+	assertSarvamQuery(t, query, "flush_signal", "false")
+	assertSarvamQuery(t, query, "input_audio_codec", "audio/wav")
+	assertSarvamQuery(t, query, "positive_speech_threshold", "0.52")
+	assertSarvamQuery(t, query, "negative_speech_threshold", "0.24")
+	assertSarvamQuery(t, query, "min_speech_frames", "4")
+	assertSarvamQuery(t, query, "first_turn_min_speech_frames", "6")
+	assertSarvamQuery(t, query, "negative_frames_count", "8")
+	assertSarvamQuery(t, query, "negative_frames_window", "10")
+	assertSarvamQuery(t, query, "start_speech_volume_threshold", "0.18")
+	assertSarvamQuery(t, query, "interrupt_min_speech_frames", "12")
+	assertSarvamQuery(t, query, "pre_speech_pad_frames", "14")
+	assertSarvamQuery(t, query, "num_initial_ignored_frames", "16")
+}
+
+func TestSarvamSTTWebsocketURLOmitsV3OnlyVADOptionsForOlderModels(t *testing.T) {
+	provider := NewSarvamSTT("test-key",
+		WithSarvamSTTStreamingURL("wss://sarvam.example/stt/ws"),
+		WithSarvamSTTModel("saarika:v2.5"),
+		WithSarvamSTTHighVADSensitivity(false),
+		WithSarvamSTTFlushSignal(true),
+		WithSarvamSTTInputAudioCodec("audio/wav"),
+		WithSarvamSTTPositiveSpeechThreshold(0.52),
+		WithSarvamSTTNegativeSpeechThreshold(0.24),
+		WithSarvamSTTMinSpeechFrames(4),
+	)
+
+	query := buildSarvamSTTWebsocketURL(provider, "").Query()
+	assertSarvamQuery(t, query, "high_vad_sensitivity", "false")
+	assertSarvamQuery(t, query, "flush_signal", "true")
+	assertSarvamQuery(t, query, "input_audio_codec", "audio/wav")
+	if got := query.Get("positive_speech_threshold"); got != "" {
+		t.Fatalf("positive_speech_threshold = %q, want omitted for saarika:v2.5", got)
+	}
+	if got := query.Get("negative_speech_threshold"); got != "" {
+		t.Fatalf("negative_speech_threshold = %q, want omitted for saarika:v2.5", got)
+	}
+	if got := query.Get("min_speech_frames"); got != "" {
+		t.Fatalf("min_speech_frames = %q, want omitted for saarika:v2.5", got)
+	}
+}
+
+func TestSarvamSTTInputAudioCodecControlsStreamMessageEncoding(t *testing.T) {
+	provider := NewSarvamSTT("test-key", WithSarvamSTTInputAudioCodec("audio/pcm"))
+	stream := newSarvamSTTRecognizeStream(context.Background(), nil, provider, "en-IN")
+
+	if stream.encoding != "audio/pcm" {
+		t.Fatalf("stream encoding = %q, want configured input_audio_codec", stream.encoding)
+	}
+}
+
 func TestSarvamSTTStreamMessagesMatchReference(t *testing.T) {
 	provider := NewSarvamSTT("test-key",
 		WithSarvamSTTModel("saaras:v3"),

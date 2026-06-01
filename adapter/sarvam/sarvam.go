@@ -65,26 +65,32 @@ var (
 		"as-IN": {}, "ur-IN": {}, "ne-IN": {}, "kok-IN": {}, "ks-IN": {}, "sd-IN": {},
 		"sa-IN": {}, "sat-IN": {}, "mni-IN": {}, "brx-IN": {}, "mai-IN": {}, "doi-IN": {},
 	}
-	sarvamTTSV3Speakers = map[string]struct{}{
-		"shubh": {}, "ritu": {}, "rahul": {}, "pooja": {}, "simran": {}, "kavya": {},
-		"amit": {}, "ratan": {}, "rohan": {}, "dev": {}, "ishita": {}, "shreya": {},
-		"manan": {}, "sumit": {}, "priya": {}, "aditya": {}, "kabir": {}, "neha": {},
-		"varun": {}, "roopa": {}, "aayan": {}, "ashutosh": {}, "advait": {}, "amelia": {},
-		"sophia": {}, "suhani": {}, "rupali": {}, "tanya": {}, "shruti": {}, "kavitha": {},
-	}
 )
 
 type SarvamSTT struct {
-	apiKey       string
-	baseURL      string
-	streamingURL string
-	baseURLSet   bool
-	streamingSet bool
-	model        string
-	language     string
-	mode         string
-	prompt       string
-	sampleRate   int
+	apiKey                     string
+	baseURL                    string
+	streamingURL               string
+	baseURLSet                 bool
+	streamingSet               bool
+	model                      string
+	language                   string
+	mode                       string
+	prompt                     string
+	sampleRate                 int
+	highVADSensitivity         *bool
+	flushSignal                *bool
+	inputAudioCodec            string
+	positiveSpeechThreshold    *float64
+	negativeSpeechThreshold    *float64
+	minSpeechFrames            *int
+	firstTurnMinSpeechFrames   *int
+	negativeFramesCount        *int
+	negativeFramesWindow       *int
+	startSpeechVolumeThreshold *float64
+	interruptMinSpeechFrames   *int
+	preSpeechPadFrames         *int
+	numInitialIgnoredFrames    *int
 }
 
 type SarvamSTTOption func(*SarvamSTT)
@@ -160,6 +166,86 @@ func WithSarvamSTTSampleRate(sampleRate int) SarvamSTTOption {
 	}
 }
 
+func WithSarvamSTTHighVADSensitivity(enabled bool) SarvamSTTOption {
+	return func(s *SarvamSTT) {
+		s.highVADSensitivity = &enabled
+	}
+}
+
+func WithSarvamSTTFlushSignal(enabled bool) SarvamSTTOption {
+	return func(s *SarvamSTT) {
+		s.flushSignal = &enabled
+	}
+}
+
+func WithSarvamSTTInputAudioCodec(codec string) SarvamSTTOption {
+	return func(s *SarvamSTT) {
+		if codec != "" {
+			s.inputAudioCodec = codec
+		}
+	}
+}
+
+func WithSarvamSTTPositiveSpeechThreshold(threshold float64) SarvamSTTOption {
+	return func(s *SarvamSTT) {
+		s.positiveSpeechThreshold = &threshold
+	}
+}
+
+func WithSarvamSTTNegativeSpeechThreshold(threshold float64) SarvamSTTOption {
+	return func(s *SarvamSTT) {
+		s.negativeSpeechThreshold = &threshold
+	}
+}
+
+func WithSarvamSTTMinSpeechFrames(frames int) SarvamSTTOption {
+	return func(s *SarvamSTT) {
+		s.minSpeechFrames = &frames
+	}
+}
+
+func WithSarvamSTTFirstTurnMinSpeechFrames(frames int) SarvamSTTOption {
+	return func(s *SarvamSTT) {
+		s.firstTurnMinSpeechFrames = &frames
+	}
+}
+
+func WithSarvamSTTNegativeFramesCount(frames int) SarvamSTTOption {
+	return func(s *SarvamSTT) {
+		s.negativeFramesCount = &frames
+	}
+}
+
+func WithSarvamSTTNegativeFramesWindow(frames int) SarvamSTTOption {
+	return func(s *SarvamSTT) {
+		s.negativeFramesWindow = &frames
+	}
+}
+
+func WithSarvamSTTStartSpeechVolumeThreshold(threshold float64) SarvamSTTOption {
+	return func(s *SarvamSTT) {
+		s.startSpeechVolumeThreshold = &threshold
+	}
+}
+
+func WithSarvamSTTInterruptMinSpeechFrames(frames int) SarvamSTTOption {
+	return func(s *SarvamSTT) {
+		s.interruptMinSpeechFrames = &frames
+	}
+}
+
+func WithSarvamSTTPreSpeechPadFrames(frames int) SarvamSTTOption {
+	return func(s *SarvamSTT) {
+		s.preSpeechPadFrames = &frames
+	}
+}
+
+func WithSarvamSTTNumInitialIgnoredFrames(frames int) SarvamSTTOption {
+	return func(s *SarvamSTT) {
+		s.numInitialIgnoredFrames = &frames
+	}
+}
+
 func NewSarvamSTT(apiKey string, opts ...SarvamSTTOption) *SarvamSTT {
 	provider, _ := NewSarvamSTTWithError(apiKey, opts...)
 	return provider
@@ -209,17 +295,7 @@ func (s *SarvamSTT) Stream(ctx context.Context, language string) (stt.RecognizeS
 			return nil, err
 		}
 	}
-	streamCtx, cancel := context.WithCancel(ctx)
-	stream := &sarvamSTTRecognizeStream{
-		conn:       conn,
-		ctx:        streamCtx,
-		cancel:     cancel,
-		language:   requestLanguage,
-		encoding:   "audio/wav",
-		sampleRate: s.sampleRate,
-		events:     make(chan *stt.SpeechEvent, 100),
-		errCh:      make(chan error, 1),
-	}
+	stream := newSarvamSTTRecognizeStream(ctx, conn, s, requestLanguage)
 	go stream.readLoop()
 	return stream, nil
 }
@@ -239,8 +315,41 @@ func buildSarvamSTTWebsocketURL(s *SarvamSTT, language string) *url.URL {
 	if sarvamSTTSupportsMode(s.model) {
 		query.Set("mode", s.mode)
 	}
+	if s.highVADSensitivity != nil {
+		query.Set("high_vad_sensitivity", strconv.FormatBool(*s.highVADSensitivity))
+	}
+	if s.flushSignal != nil {
+		query.Set("flush_signal", strconv.FormatBool(*s.flushSignal))
+	}
+	if s.inputAudioCodec != "" {
+		query.Set("input_audio_codec", s.inputAudioCodec)
+	}
+	if sarvamSTTSupportsVADParams(s.model) {
+		setSarvamFloatQuery(query, "positive_speech_threshold", s.positiveSpeechThreshold)
+		setSarvamFloatQuery(query, "negative_speech_threshold", s.negativeSpeechThreshold)
+		setSarvamIntQuery(query, "min_speech_frames", s.minSpeechFrames)
+		setSarvamIntQuery(query, "first_turn_min_speech_frames", s.firstTurnMinSpeechFrames)
+		setSarvamIntQuery(query, "negative_frames_count", s.negativeFramesCount)
+		setSarvamIntQuery(query, "negative_frames_window", s.negativeFramesWindow)
+		setSarvamFloatQuery(query, "start_speech_volume_threshold", s.startSpeechVolumeThreshold)
+		setSarvamIntQuery(query, "interrupt_min_speech_frames", s.interruptMinSpeechFrames)
+		setSarvamIntQuery(query, "pre_speech_pad_frames", s.preSpeechPadFrames)
+		setSarvamIntQuery(query, "num_initial_ignored_frames", s.numInitialIgnoredFrames)
+	}
 	wsURL.RawQuery = query.Encode()
 	return wsURL
+}
+
+func setSarvamFloatQuery(query url.Values, key string, value *float64) {
+	if value != nil {
+		query.Set(key, strconv.FormatFloat(*value, 'f', -1, 64))
+	}
+}
+
+func setSarvamIntQuery(query url.Values, key string, value *int) {
+	if value != nil {
+		query.Set(key, strconv.Itoa(*value))
+	}
 }
 
 func buildSarvamSTTWebsocketHeaders(s *SarvamSTT) http.Header {
@@ -433,6 +542,10 @@ func sarvamSTTSupportsMode(model string) bool {
 	return model == "saaras:v3"
 }
 
+func sarvamSTTSupportsVADParams(model string) bool {
+	return model == "saaras:v3"
+}
+
 func sarvamSTTSupportsPrompt(model string) bool {
 	return strings.HasPrefix(model, "saaras")
 }
@@ -473,6 +586,24 @@ type sarvamSTTRecognizeStream struct {
 	errCh      chan error
 	mu         sync.Mutex
 	closed     bool
+}
+
+func newSarvamSTTRecognizeStream(ctx context.Context, conn *websocket.Conn, provider *SarvamSTT, language string) *sarvamSTTRecognizeStream {
+	streamCtx, cancel := context.WithCancel(ctx)
+	encoding := "audio/wav"
+	if provider.inputAudioCodec != "" {
+		encoding = provider.inputAudioCodec
+	}
+	return &sarvamSTTRecognizeStream{
+		conn:       conn,
+		ctx:        streamCtx,
+		cancel:     cancel,
+		language:   language,
+		encoding:   encoding,
+		sampleRate: provider.sampleRate,
+		events:     make(chan *stt.SpeechEvent, 100),
+		errCh:      make(chan error, 1),
+	}
 }
 
 func (s *sarvamSTTRecognizeStream) PushFrame(frame *model.AudioFrame) error {
@@ -1077,16 +1208,6 @@ func defaultSarvamTTSVoice(model string) string {
 		return "shubh"
 	}
 	return "anushka"
-}
-
-func validateSarvamTTSModelSpeaker(model, speaker string) error {
-	if model != "bulbul:v3" && model != "bulbul:v3-beta" {
-		return nil
-	}
-	if _, ok := sarvamTTSV3Speakers[strings.ToLower(speaker)]; !ok {
-		return fmt.Errorf("speaker %s is not compatible with model %s", speaker, model)
-	}
-	return nil
 }
 
 type sarvamTTSSynthesizeStream struct {
