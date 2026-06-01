@@ -555,6 +555,31 @@ func TestRunAssertNextMessageAndFunctionCallValidateDetails(t *testing.T) {
 	}
 }
 
+func TestRunAssertNextFunctionCallValidatesName(t *testing.T) {
+	result := NewRunResult(llm.NewChatContext())
+	result.RecordItem(&llm.FunctionCall{ID: "fnc_1", CallID: "call_1", Name: "lookup", CreatedAt: time.Now()})
+
+	err := result.Expect.
+		NextFunctionCall("lookup").
+		NoMoreEvents().
+		HasError()
+
+	if err != nil {
+		t.Fatalf("NextFunctionCall returned error = %v, want nil", err)
+	}
+}
+
+func TestRunAssertNextFunctionCallReportsNameMismatch(t *testing.T) {
+	result := NewRunResult(llm.NewChatContext())
+	result.RecordItem(&llm.FunctionCall{ID: "fnc_1", CallID: "call_1", Name: "lookup", CreatedAt: time.Now()})
+
+	err := result.Expect.NextFunctionCall("search").HasError()
+
+	if err == nil {
+		t.Fatal("NextFunctionCall error = nil, want name mismatch error")
+	}
+}
+
 func TestRunAssertNextMessageReportsRoleMismatch(t *testing.T) {
 	result := NewRunResult(llm.NewChatContext())
 	result.RecordItem(&llm.ChatMessage{ID: "msg_1", Role: llm.ChatRoleAssistant, CreatedAt: time.Now()})
@@ -604,6 +629,40 @@ func TestRunAssertNextFunctionCallOutputReportsMismatch(t *testing.T) {
 
 	if err == nil {
 		t.Fatal("NextFunctionCallOutput error = nil, want output mismatch error")
+	}
+}
+
+func TestRunAssertNextAgentHandoffValidatesTarget(t *testing.T) {
+	result := NewRunResult(llm.NewChatContext())
+	handoff := &llm.AgentHandoff{ID: "handoff_1", NewAgentID: "agent_2", CreatedAt: time.Now()}
+	oldAgent := NewAgent("old")
+	newAgent := NewAgent("new")
+
+	result.RecordAgentHandoff(handoff, oldAgent, newAgent)
+
+	err := result.Expect.
+		NextAgentHandoff(newAgent).
+		NoMoreEvents().
+		HasError()
+
+	if err != nil {
+		t.Fatalf("NextAgentHandoff returned error = %v, want nil", err)
+	}
+}
+
+func TestRunAssertNextAgentHandoffReportsTargetMismatch(t *testing.T) {
+	result := NewRunResult(llm.NewChatContext())
+	handoff := &llm.AgentHandoff{ID: "handoff_1", NewAgentID: "agent_2", CreatedAt: time.Now()}
+	oldAgent := NewAgent("old")
+	newAgent := NewAgent("new")
+	otherAgent := NewAgent("other")
+
+	result.RecordAgentHandoff(handoff, oldAgent, newAgent)
+
+	err := result.Expect.NextAgentHandoff(otherAgent).HasError()
+
+	if err == nil {
+		t.Fatal("NextAgentHandoff error = nil, want target mismatch error")
 	}
 }
 

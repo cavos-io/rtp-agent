@@ -488,6 +488,10 @@ func (a *RunAssert) NextMessage(role llm.ChatRole) *RunAssert {
 	return a
 }
 
+func (a *RunAssert) NextFunctionCall(name string) *RunAssert {
+	return a.NextFunctionCallWithArguments(name, nil)
+}
+
 func (a *RunAssert) NextFunctionCallWithArguments(name string, arguments map[string]any) *RunAssert {
 	event, ok := a.nextEvent("function_call")
 	if !ok {
@@ -507,6 +511,23 @@ func (a *RunAssert) NextFunctionCallWithArguments(name string, arguments map[str
 		if err := assertFunctionCallArguments(fcEvent.Item.Arguments, arguments); err != nil {
 			a.errors = append(a.errors, fmt.Errorf("expected function call %q with matching arguments: %w", name, err))
 		}
+	}
+	return a
+}
+
+func (a *RunAssert) NextAgentHandoff(newAgent *Agent) *RunAssert {
+	event, ok := a.nextEvent("agent_handoff")
+	if !ok {
+		a.errors = append(a.errors, errors.New("expected agent_handoff event, but none found"))
+		return a
+	}
+	handoffEvent, ok := event.(*AgentHandoffEvent)
+	if !ok {
+		a.errors = append(a.errors, fmt.Errorf("expected agent_handoff event, got %s", event.GetType()))
+		return a
+	}
+	if newAgent != nil && handoffEvent.NewAgent != newAgent {
+		a.errors = append(a.errors, errors.New("expected agent handoff to target agent"))
 	}
 	return a
 }
