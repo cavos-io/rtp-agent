@@ -15,6 +15,7 @@ import (
 
 	"github.com/cavos-io/rtp-agent/core/audio/model"
 	"github.com/cavos-io/rtp-agent/core/tts"
+	cavosmath "github.com/cavos-io/rtp-agent/library/math"
 	"github.com/gorilla/websocket"
 )
 
@@ -157,41 +158,22 @@ func buildRespeecherTTSRequest(ctx context.Context, t *RespeecherTTS, text strin
 }
 
 func (t *RespeecherTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
-	conn, _, err := websocket.DefaultDialer.DialContext(ctx, buildRespeecherTTSStreamURL(t), nil)
+	conn, _, err := websocket.DefaultDialer.DialContext(ctx, buildRespeecherTTSWebsocketURL(t).String(), nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to dial respeecher tts websocket: %w", err)
 	}
 	streamCtx, cancel := context.WithCancel(ctx)
-	return &respeecherTTSSynthesizeStream{
-		conn:       conn,
-		ctx:        streamCtx,
-		cancel:     cancel,
-		contextID:  respeecherTTSContextID(),
-		sampleRate: t.sampleRate,
-		voiceID:    t.voiceID,
-		encoding:   t.encoding,
-		params:     t.samplingParams,
-	}, nil
-}
-
-func buildRespeecherTTSStreamURL(t *RespeecherTTS) string {
-	baseURL := strings.TrimRight(t.baseURL, "/")
-	switch {
-	case strings.HasPrefix(baseURL, "https://"):
-		baseURL = "wss://" + strings.TrimPrefix(baseURL, "https://")
-	case strings.HasPrefix(baseURL, "http://"):
-		baseURL = "ws://" + strings.TrimPrefix(baseURL, "http://")
+	stream := &respeecherTTSSynthesizeStream{
+		conn:      conn,
+		ctx:       streamCtx,
+		cancel:    cancel,
+		provider:  t,
+		contextID: cavosmath.ShortUUID(""),
+		events:    make(chan *tts.SynthesizedAudio, 100),
+		errCh:     make(chan error, 1),
 	}
-	u, err := url.Parse(baseURL + t.model + "/tts/websocket")
-	if err != nil {
-		return baseURL + t.model + "/tts/websocket"
-	}
-	q := u.Query()
-	q.Set("api_key", t.apiKey)
-	q.Set("source", "LiveKit-Plugin-Respeecher-Version")
-	q.Set("version", respeecherAPIVersion)
-	u.RawQuery = q.Encode()
-	return u.String()
+	go stream.readLoop()
+	return stream, nil
 }
 
 type respeecherTTSChunkedStream struct {
@@ -222,28 +204,77 @@ func (s *respeecherTTSChunkedStream) Close() error {
 	return s.resp.Body.Close()
 }
 
+func buildRespeecherTTSWebsocketURL(t *RespeecherTTS) *url.URL {
+	baseURL := strings.TrimRight(t.baseURL, "/")
+	if strings.HasPrefix(baseURL, "http://") || strings.HasPrefix(baseURL, "https://") {
+		baseURL = strings.Replace(baseURL, "http", "ws", 1)
+	}
+	wsURL, err := url.Parse(baseURL + t.model + "/tts/websocket")
+	if err != nil {
+		return &url.URL{Scheme: "wss", Host: strings.TrimPrefix(baseURL, "wss://"), Path: t.model + "/tts/websocket"}
+	}
+	query := wsURL.Query()
+	query.Set("api_key", t.apiKey)
+	query.Set("source", "LiveKit-Plugin-Respeecher-Version")
+	query.Set("version", respeecherAPIVersion)
+	wsURL.RawQuery = query.Encode()
+	return wsURL
+}
+
+func buildRespeecherTTSTextMessage(t *RespeecherTTS, contextID string, text string, continuation bool) ([]byte, error) {
+	voice := map[string]interface{}{"id": t.voiceID}
+	if len(t.samplingParams) > 0 {
+		voice["sampling_params"] = t.samplingParams
+	}
+	return json.Marshal(map[string]interface{}{
+		"context_id":    contextID,
+		"transcript":    text,
+		"voice":         voice,
+		"continue":      continuation,
+		"output_format": respeecherTTSOutputFormat(t),
+	})
+}
+
+func buildRespeecherTTSEndMessage(t *RespeecherTTS, contextID string) ([]byte, error) {
+	return buildRespeecherTTSTextMessage(t, contextID, " ", false)
+}
+
+func respeecherTTSOutputFormat(t *RespeecherTTS) map[string]interface{} {
+	return map[string]interface{}{
+		"sample_rate": t.sampleRate,
+		"encoding":    t.encoding,
+	}
+}
+
 type respeecherTTSSynthesizeStream struct {
-	conn       *websocket.Conn
-	ctx        context.Context
-	cancel     context.CancelFunc
-	contextID  string
-	sampleRate int
-	voiceID    string
-	encoding   string
-	params     map[string]any
-	mu         sync.Mutex
-	closed     bool
+	conn      *websocket.Conn
+	ctx       context.Context
+	cancel    context.CancelFunc
+	provider  *RespeecherTTS
+	contextID string
+	events    chan *tts.SynthesizedAudio
+	errCh     chan error
+	mu        sync.Mutex
+	closed    bool
 }
 
 func (s *respeecherTTSSynthesizeStream) PushText(text string) error {
 	if text == "" {
-		text = " "
+		return nil
 	}
-	return writeRespeecherTTSStreamPayload(s.conn, s.buildPayload(text, true))
+	message, err := buildRespeecherTTSTextMessage(s.provider, s.contextID, text, true)
+	if err != nil {
+		return err
+	}
+	return s.conn.WriteMessage(websocket.TextMessage, message)
 }
 
 func (s *respeecherTTSSynthesizeStream) Flush() error {
-	return nil
+	message, err := buildRespeecherTTSEndMessage(s.provider, s.contextID)
+	if err != nil {
+		return err
+	}
+	return s.conn.WriteMessage(websocket.TextMessage, message)
 }
 
 func (s *respeecherTTSSynthesizeStream) Close() error {
@@ -254,64 +285,54 @@ func (s *respeecherTTSSynthesizeStream) Close() error {
 	}
 	s.closed = true
 	s.cancel()
-	_ = writeRespeecherTTSStreamPayload(s.conn, s.buildPayload(" ", false))
 	_ = s.conn.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""), time.Now().Add(time.Second))
 	return s.conn.Close()
 }
 
 func (s *respeecherTTSSynthesizeStream) Next() (*tts.SynthesizedAudio, error) {
 	select {
+	case audio, ok := <-s.events:
+		if !ok {
+			select {
+			case err := <-s.errCh:
+				return nil, err
+			default:
+				return nil, io.EOF
+			}
+		}
+		return audio, nil
+	case err := <-s.errCh:
+		return nil, err
 	case <-s.ctx.Done():
 		return nil, s.ctx.Err()
-	default:
 	}
+}
+
+func (s *respeecherTTSSynthesizeStream) readLoop() {
+	defer close(s.events)
 	for {
 		msgType, payload, err := s.conn.ReadMessage()
 		if err != nil {
-			if websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway) || err == io.EOF {
-				return nil, io.EOF
+			if !websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway) && err != io.EOF {
+				s.errCh <- err
 			}
-			return nil, err
+			return
 		}
 		if msgType != websocket.TextMessage {
 			continue
 		}
-		audio, done, err := respeecherTTSAudioFromStreamMessage(payload, s.contextID, s.sampleRate)
+		audio, done, err := respeecherTTSAudioFromStreamMessage(payload, s.contextID, s.provider.sampleRate)
 		if err != nil {
-			return nil, err
-		}
-		if done {
-			return nil, io.EOF
+			s.errCh <- err
+			return
 		}
 		if audio != nil {
-			return audio, nil
+			s.events <- audio
+		}
+		if done {
+			return
 		}
 	}
-}
-
-func (s *respeecherTTSSynthesizeStream) buildPayload(text string, continueStream bool) map[string]any {
-	voice := map[string]any{"id": s.voiceID}
-	if len(s.params) > 0 {
-		voice["sampling_params"] = s.params
-	}
-	return map[string]any{
-		"context_id": s.contextID,
-		"transcript": text,
-		"voice":      voice,
-		"continue":   continueStream,
-		"output_format": map[string]any{
-			"encoding":    s.encoding,
-			"sample_rate": s.sampleRate,
-		},
-	}
-}
-
-func writeRespeecherTTSStreamPayload(conn *websocket.Conn, payload map[string]any) error {
-	data, err := json.Marshal(payload)
-	if err != nil {
-		return err
-	}
-	return conn.WriteMessage(websocket.TextMessage, data)
 }
 
 func respeecherTTSAudioFromStreamMessage(payload []byte, contextID string, sampleRate int) (*tts.SynthesizedAudio, bool, error) {
@@ -319,7 +340,7 @@ func respeecherTTSAudioFromStreamMessage(payload []byte, contextID string, sampl
 		ContextID string `json:"context_id"`
 		Type      string `json:"type"`
 		Data      string `json:"data"`
-		Error     string `json:"error"`
+		Error     any    `json:"error"`
 	}
 	if err := json.Unmarshal(payload, &message); err != nil {
 		return nil, false, err
@@ -329,18 +350,21 @@ func respeecherTTSAudioFromStreamMessage(payload []byte, contextID string, sampl
 	}
 	switch message.Type {
 	case "chunk":
+		if message.Data == "" {
+			return nil, false, nil
+		}
 		audio, err := base64.StdEncoding.DecodeString(message.Data)
 		if err != nil {
 			return nil, false, err
+		}
+		if len(audio) == 0 {
+			return nil, false, nil
 		}
 		return respeecherTTSAudioFrame(audio, sampleRate), false, nil
 	case "done":
 		return nil, true, nil
 	case "error":
-		if message.Error == "" {
-			message.Error = "unknown respeecher tts error"
-		}
-		return nil, false, fmt.Errorf("respeecher tts error: %s", message.Error)
+		return nil, false, fmt.Errorf("respeecher tts stream error: %v", message.Error)
 	default:
 		return nil, false, nil
 	}
@@ -355,8 +379,4 @@ func respeecherTTSAudioFrame(audio []byte, sampleRate int) *tts.SynthesizedAudio
 			SamplesPerChannel: uint32(len(audio) / 2),
 		},
 	}
-}
-
-func respeecherTTSContextID() string {
-	return fmt.Sprintf("%d", time.Now().UnixNano())
 }
