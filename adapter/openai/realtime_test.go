@@ -340,6 +340,49 @@ func TestRealtimeSessionRoutesOutputMessageTextDeltasToGenerationStream(t *testi
 	}
 }
 
+func TestRealtimeSessionRoutesOutputMessageAudioDeltasToGenerationStream(t *testing.T) {
+	session := &realtimeSession{}
+	created := session.trackRealtimeEvent(llm.RealtimeEvent{
+		Type:       llm.RealtimeEventTypeGenerationCreated,
+		Generation: &llm.GenerationCreatedEvent{},
+	})
+	session.trackOpenAIRealtimeEvent(map[string]any{
+		"type": "response.output_item.added",
+		"item": map[string]any{
+			"id":   "msg_123",
+			"type": "message",
+		},
+	})
+
+	var msg llm.MessageGeneration
+	select {
+	case msg = <-created.Generation.MessageCh:
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("timed out waiting for message generation")
+	}
+
+	session.trackRealtimeEvent(llm.RealtimeEvent{
+		Type:   llm.RealtimeEventTypeAudio,
+		ItemID: "msg_123",
+		Data:   []byte{1, 0, 2, 0},
+	})
+
+	select {
+	case frame := <-msg.AudioCh:
+		if frame == nil {
+			t.Fatal("audio frame = nil, want frame")
+		}
+		if string(frame.Data) != string([]byte{1, 0, 2, 0}) {
+			t.Fatalf("audio data = %v, want [1 0 2 0]", frame.Data)
+		}
+		if frame.SampleRate != 24000 || frame.NumChannels != 1 || frame.SamplesPerChannel != 2 {
+			t.Fatalf("audio frame metadata = %#v, want 24kHz mono with 2 samples", frame)
+		}
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("timed out waiting for audio delta")
+	}
+}
+
 func TestRealtimeEventMapsConversationItemAddedMessage(t *testing.T) {
 	ev, ok := openAIRealtimeEvent(map[string]any{
 		"type":             "conversation.item.added",

@@ -670,6 +670,10 @@ func (s *realtimeSession) trackRealtimeEvent(ev llm.RealtimeEvent) llm.RealtimeE
 		s.trackRealtimeText(ev)
 		return ev
 	}
+	if ev.Type == llm.RealtimeEventTypeAudio {
+		s.trackRealtimeAudio(ev)
+		return ev
+	}
 	if ev.Type == llm.RealtimeEventTypeRemoteItemAdded {
 		s.trackRealtimeRemoteItemAdded(ev)
 		return ev
@@ -708,6 +712,27 @@ func (s *realtimeSession) trackRealtimeText(ev llm.RealtimeEvent) {
 	case msg.textCh <- ev.Text:
 	default:
 		logger.Logger.Warnw("dropping OpenAI realtime text delta for full message stream", nil, "item_id", ev.ItemID)
+	}
+}
+
+func (s *realtimeSession) trackRealtimeAudio(ev llm.RealtimeEvent) {
+	if s.generation == nil || ev.ItemID == "" {
+		return
+	}
+	msg := s.generation.messages[ev.ItemID]
+	if msg == nil {
+		return
+	}
+	frame := &model.AudioFrame{
+		Data:              ev.Data,
+		SampleRate:        24000,
+		NumChannels:       1,
+		SamplesPerChannel: uint32(len(ev.Data) / 2),
+	}
+	select {
+	case msg.audioCh <- frame:
+	default:
+		logger.Logger.Warnw("dropping OpenAI realtime audio delta for full message stream", nil, "item_id", ev.ItemID)
 	}
 }
 
