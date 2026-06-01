@@ -259,6 +259,22 @@ func TestSTTCapabilitiesUnmarshalJSONAcceptsReferenceAlignedTranscriptFalse(t *t
 	}
 }
 
+func TestSTTCapabilitiesUnmarshalJSONDefaultsOfflineRecognizeToTrue(t *testing.T) {
+	var caps STTCapabilities
+	data := []byte(`{
+		"streaming": true,
+		"interim_results": true,
+		"aligned_transcript": false
+	}`)
+
+	if err := json.Unmarshal(data, &caps); err != nil {
+		t.Fatalf("Unmarshal STTCapabilities returned error: %v", err)
+	}
+	if !caps.OfflineRecognize {
+		t.Fatalf("OfflineRecognize = false, want reference default true")
+	}
+}
+
 func TestSTTErrorCarriesReferenceErrorPayload(t *testing.T) {
 	underlying := errors.New("provider disconnected")
 	before := time.Now()
