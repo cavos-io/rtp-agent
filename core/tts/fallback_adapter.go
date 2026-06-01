@@ -8,6 +8,7 @@ import (
 	"sync"
 
 	"github.com/cavos-io/conversation-worker/library/logger"
+	"github.com/cavos-io/conversation-worker/model"
 )
 
 type FallbackAdapter struct {
@@ -16,10 +17,19 @@ type FallbackAdapter struct {
 	sampleRate     int
 	numChannels    int
 	maxRetryPerTTS int
+
+	mu     sync.Mutex
+	status []fallbackTTSStatus
+}
+
+type fallbackTTSStatus struct {
+	available  bool
+	recovering bool
 }
 
 type FallbackAdapterOptions struct {
 	MaxRetryPerTTS int
+	SampleRate     int
 }
 
 func NewFallbackAdapter(ttss []TTS) *FallbackAdapter {
@@ -33,7 +43,7 @@ func NewFallbackAdapterWithOptions(ttss []TTS, options FallbackAdapterOptions) *
 
 	numChannels := ttss[0].NumChannels()
 	capabilities := TTSCapabilities{AlignedTranscript: true}
-	sampleRate := 0
+	sampleRate := options.SampleRate
 	for _, tts := range ttss {
 		if tts.NumChannels() != numChannels {
 			panic("all TTS must have the same number of channels")
@@ -41,9 +51,14 @@ func NewFallbackAdapterWithOptions(ttss []TTS, options FallbackAdapterOptions) *
 		ttsCapabilities := tts.Capabilities()
 		capabilities.Streaming = capabilities.Streaming || ttsCapabilities.Streaming
 		capabilities.AlignedTranscript = capabilities.AlignedTranscript && ttsCapabilities.AlignedTranscript
-		if tts.SampleRate() > sampleRate {
+		if options.SampleRate == 0 && tts.SampleRate() > sampleRate {
 			sampleRate = tts.SampleRate()
 		}
+	}
+
+	status := make([]fallbackTTSStatus, len(ttss))
+	for i := range status {
+		status[i].available = true
 	}
 
 	return &FallbackAdapter{
@@ -52,6 +67,7 @@ func NewFallbackAdapterWithOptions(ttss []TTS, options FallbackAdapterOptions) *
 		sampleRate:     sampleRate,
 		numChannels:    numChannels,
 		maxRetryPerTTS: options.MaxRetryPerTTS,
+		status:         status,
 	}
 }
 
@@ -69,6 +85,220 @@ func (f *FallbackAdapter) SampleRate() int {
 
 func (f *FallbackAdapter) NumChannels() int {
 	return f.numChannels
+}
+
+func (f *FallbackAdapter) allUnavailableLocked() bool {
+	for _, status := range f.status {
+		if status.available {
+			return false
+		}
+	}
+	return true
+}
+
+func (f *FallbackAdapter) shouldTry(index int) bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.status[index].available || f.allUnavailableLocked()
+}
+
+func (f *FallbackAdapter) markUnavailable(index int) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.status[index].available = false
+}
+
+func (f *FallbackAdapter) markAvailable(index int) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.status[index].available = true
+	f.status[index].recovering = false
+}
+
+func (f *FallbackAdapter) tryRecoverChunked(index int, text string) {
+	f.mu.Lock()
+	if f.status[index].recovering {
+		f.mu.Unlock()
+		return
+	}
+	f.status[index].recovering = true
+	tts := f.ttss[index]
+	f.mu.Unlock()
+
+	go func() {
+		stream, err := tts.Synthesize(context.Background(), text)
+		if err != nil || stream == nil {
+			f.mu.Lock()
+			f.status[index].recovering = false
+			f.mu.Unlock()
+			return
+		}
+		defer stream.Close()
+
+		for {
+			_, err := stream.Next()
+			if err == nil {
+				continue
+			}
+			if errors.Is(err, io.EOF) {
+				f.markAvailable(index)
+				return
+			}
+			f.mu.Lock()
+			f.status[index].recovering = false
+			f.mu.Unlock()
+			return
+		}
+	}()
+}
+
+func (f *FallbackAdapter) tryRecoverStream(index int, inputs []fallbackSynthesizeInput) {
+	if len(inputs) == 0 {
+		return
+	}
+
+	replay := append([]fallbackSynthesizeInput(nil), inputs...)
+
+	f.mu.Lock()
+	if f.status[index].recovering {
+		f.mu.Unlock()
+		return
+	}
+	f.status[index].recovering = true
+	tts := f.ttss[index]
+	f.mu.Unlock()
+
+	go func() {
+		stream, err := streamForTTS(context.Background(), tts)
+		if err != nil || stream == nil {
+			f.mu.Lock()
+			f.status[index].recovering = false
+			f.mu.Unlock()
+			return
+		}
+		defer stream.Close()
+
+		for _, input := range replay {
+			if input.flush {
+				if err := stream.Flush(); err != nil {
+					f.mu.Lock()
+					f.status[index].recovering = false
+					f.mu.Unlock()
+					return
+				}
+				continue
+			}
+			if err := stream.PushText(input.text); err != nil {
+				f.mu.Lock()
+				f.status[index].recovering = false
+				f.mu.Unlock()
+				return
+			}
+		}
+		if !replay[len(replay)-1].flush {
+			if err := stream.Flush(); err != nil {
+				f.mu.Lock()
+				f.status[index].recovering = false
+				f.mu.Unlock()
+				return
+			}
+		}
+
+		for {
+			_, err := stream.Next()
+			if err == nil {
+				continue
+			}
+			if errors.Is(err, io.EOF) {
+				f.markAvailable(index)
+				return
+			}
+			f.mu.Lock()
+			f.status[index].recovering = false
+			f.mu.Unlock()
+			return
+		}
+	}()
+}
+
+func streamForTTS(ctx context.Context, tts TTS) (SynthesizeStream, error) {
+	if tts.Capabilities().Streaming {
+		return tts.Stream(ctx)
+	}
+	return NewStreamAdapter(tts).Stream(ctx)
+}
+
+func (f *FallbackAdapter) normalizeAudio(audio *SynthesizedAudio) (*SynthesizedAudio, error) {
+	if audio == nil || audio.Frame == nil || audio.Frame.SampleRate == 0 || audio.Frame.SampleRate == uint32(f.sampleRate) {
+		return audio, nil
+	}
+	frame, err := resampleAudioFrame(audio.Frame, uint32(f.sampleRate))
+	if err != nil {
+		return nil, err
+	}
+	normalized := *audio
+	normalized.Frame = frame
+	return &normalized, nil
+}
+
+func resampleAudioFrame(frame *model.AudioFrame, outputRate uint32) (*model.AudioFrame, error) {
+	if frame == nil || outputRate == 0 || frame.SampleRate == outputRate {
+		return frame, nil
+	}
+	if frame.SampleRate == 0 {
+		return nil, fmt.Errorf("cannot resample audio with zero sample rate")
+	}
+	if frame.NumChannels == 0 {
+		return nil, fmt.Errorf("cannot resample audio with zero channels")
+	}
+	if len(frame.Data)%2 != 0 {
+		return nil, fmt.Errorf("cannot resample non-16-bit PCM audio")
+	}
+	expectedBytes := int(frame.SamplesPerChannel * frame.NumChannels * 2)
+	if len(frame.Data) < expectedBytes {
+		return nil, fmt.Errorf("audio frame data is shorter than declared sample count")
+	}
+	if frame.SamplesPerChannel == 0 {
+		return &model.AudioFrame{
+			Data:              nil,
+			SampleRate:        outputRate,
+			NumChannels:       frame.NumChannels,
+			SamplesPerChannel: 0,
+		}, nil
+	}
+
+	inRate := frame.SampleRate
+	channels := frame.NumChannels
+	outSamples := uint32((uint64(frame.SamplesPerChannel)*uint64(outputRate) + uint64(inRate) - 1) / uint64(inRate))
+	if outSamples == 0 && frame.SamplesPerChannel > 0 {
+		outSamples = 1
+	}
+	out := make([]byte, int(outSamples*channels*2))
+
+	inputSamples := int(frame.SamplesPerChannel)
+	outputSamples := int(outSamples)
+	channelCount := int(channels)
+	for outIdx := 0; outIdx < outputSamples; outIdx++ {
+		srcIdx := 0
+		if outputSamples > 0 {
+			srcIdx = int(uint64(outIdx) * uint64(inRate) / uint64(outputRate))
+		}
+		if srcIdx >= inputSamples {
+			srcIdx = inputSamples - 1
+		}
+		for ch := 0; ch < channelCount; ch++ {
+			inOffset := (srcIdx*channelCount + ch) * 2
+			outOffset := (outIdx*channelCount + ch) * 2
+			copy(out[outOffset:outOffset+2], frame.Data[inOffset:inOffset+2])
+		}
+	}
+
+	return &model.AudioFrame{
+		Data:              out,
+		SampleRate:        outputRate,
+		NumChannels:       channels,
+		SamplesPerChannel: outSamples,
+	}, nil
 }
 
 type fallbackChunkedStream struct {
@@ -110,6 +340,9 @@ func (f *FallbackAdapter) Synthesize(ctx context.Context, text string) (ChunkedS
 func (s *fallbackChunkedStream) tryStartStream(index int) error {
 	var lastErr error
 	for i := index; i < len(s.adapter.ttss); i++ {
+		if !s.adapter.shouldTry(i) {
+			continue
+		}
 		for {
 			tts := s.adapter.ttss[i]
 			stream, err := tts.Synthesize(s.ctx, s.text)
@@ -121,6 +354,8 @@ func (s *fallbackChunkedStream) tryStartStream(index int) error {
 			logger.Logger.Errorw("Failed to start TTS synthesize stream", err, "tts", tts.Label())
 			lastErr = err
 			if !s.canRetryTTS(i) {
+				s.adapter.markUnavailable(i)
+				s.adapter.tryRecoverChunked(i, s.text)
 				break
 			}
 			s.retries[i]++
@@ -164,6 +399,9 @@ func (s *fallbackChunkedStream) monitorStream() {
 			if s.canRetryTTS(s.activeIndex) {
 				s.retries[s.activeIndex]++
 				nextIndex = s.activeIndex
+			} else {
+				s.adapter.markUnavailable(s.activeIndex)
+				s.adapter.tryRecoverChunked(s.activeIndex, s.text)
 			}
 
 			if fbErr := s.tryStartStream(nextIndex); fbErr != nil {
@@ -173,6 +411,12 @@ func (s *fallbackChunkedStream) monitorStream() {
 			}
 			s.mu.Unlock()
 			continue
+		}
+
+		ev, err = s.adapter.normalizeAudio(ev)
+		if err != nil {
+			s.errCh <- err
+			return
 		}
 
 		audioSent = true
@@ -259,6 +503,9 @@ func (f *FallbackAdapter) Stream(ctx context.Context) (SynthesizeStream, error) 
 func (s *fallbackSynthesizeStream) tryStartStream(index int) error {
 	var lastErr error
 	for i := index; i < len(s.adapter.ttss); i++ {
+		if !s.adapter.shouldTry(i) {
+			continue
+		}
 		for {
 			tts := s.adapter.ttss[i]
 			stream, err := s.startProviderStream(tts)
@@ -269,6 +516,8 @@ func (s *fallbackSynthesizeStream) tryStartStream(index int) error {
 					s.retries[i]++
 					continue
 				}
+				s.adapter.markUnavailable(i)
+				s.adapter.tryRecoverStream(i, s.inputBuffer)
 				break
 			}
 
@@ -279,6 +528,8 @@ func (s *fallbackSynthesizeStream) tryStartStream(index int) error {
 					s.retries[i]++
 					continue
 				}
+				s.adapter.markUnavailable(i)
+				s.adapter.tryRecoverStream(i, s.inputBuffer)
 				break
 			}
 
@@ -295,10 +546,7 @@ func (s *fallbackSynthesizeStream) tryStartStream(index int) error {
 }
 
 func (s *fallbackSynthesizeStream) startProviderStream(tts TTS) (SynthesizeStream, error) {
-	if tts.Capabilities().Streaming {
-		return tts.Stream(s.ctx)
-	}
-	return NewStreamAdapter(tts).Stream(s.ctx)
+	return streamForTTS(s.ctx, tts)
 }
 
 func (s *fallbackSynthesizeStream) replayBufferedText(stream SynthesizeStream) error {
@@ -347,6 +595,9 @@ func (s *fallbackSynthesizeStream) monitorStream() {
 			if s.canRetryTTS(s.activeIndex) {
 				s.retries[s.activeIndex]++
 				nextIndex = s.activeIndex
+			} else {
+				s.adapter.markUnavailable(s.activeIndex)
+				s.adapter.tryRecoverStream(s.activeIndex, s.inputBuffer)
 			}
 
 			if fbErr := s.tryStartStream(nextIndex); fbErr != nil {
@@ -356,6 +607,12 @@ func (s *fallbackSynthesizeStream) monitorStream() {
 			}
 			s.mu.Unlock()
 			continue
+		}
+
+		ev, err = s.adapter.normalizeAudio(ev)
+		if err != nil {
+			s.errCh <- err
+			return
 		}
 
 		audioSent = true

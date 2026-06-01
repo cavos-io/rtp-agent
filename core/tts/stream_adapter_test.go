@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"strings"
 	"testing"
 	"time"
 
@@ -98,6 +99,36 @@ func TestStreamAdapterPropagatesTokenizerSegmentID(t *testing.T) {
 	}
 }
 
+func TestStreamAdapterMarksLastFrameInSegmentFinal(t *testing.T) {
+	provider := &fakeStreamAdapterTTS{
+		events: []*SynthesizedAudio{
+			{Frame: &model.AudioFrame{Data: []byte{1}, SampleRate: 24000, NumChannels: 1, SamplesPerChannel: 1}},
+			{Frame: &model.AudioFrame{Data: []byte{2}, SampleRate: 24000, NumChannels: 1, SamplesPerChannel: 1}},
+		},
+	}
+	stream, err := NewStreamAdapter(provider).Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+	defer stream.Close()
+
+	if err := stream.PushText("final segment"); err != nil {
+		t.Fatalf("PushText returned error: %v", err)
+	}
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush returned error: %v", err)
+	}
+
+	first := nextStreamAdapterAudio(t, stream)
+	if first.IsFinal {
+		t.Fatal("first audio IsFinal = true, want false")
+	}
+	second := nextStreamAdapterAudio(t, stream)
+	if !second.IsFinal {
+		t.Fatal("second audio IsFinal = false, want true")
+	}
+}
+
 func TestStreamAdapterPropagatesSynthesizeError(t *testing.T) {
 	synthErr := errors.New("synthesize failed")
 	stream, err := NewStreamAdapter(&fakeStreamAdapterTTS{synthesizeErr: synthErr}).Stream(context.Background())
@@ -137,6 +168,31 @@ func TestStreamAdapterPropagatesChunkedStreamError(t *testing.T) {
 	err = nextStreamAdapterError(stream)
 	if !errors.Is(err, streamErr) {
 		t.Fatalf("Next error = %v, want chunked stream error", err)
+	}
+}
+
+func TestStreamAdapterErrorsWhenNonEmptyTextProducesNoAudio(t *testing.T) {
+	stream, err := NewStreamAdapter(&fakeStreamAdapterTTS{
+		empty: true,
+	}).Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+	defer stream.Close()
+
+	if err := stream.PushText("hello"); err != nil {
+		t.Fatalf("PushText returned error: %v", err)
+	}
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush returned error: %v", err)
+	}
+
+	err = nextStreamAdapterError(stream)
+	if err == nil {
+		t.Fatal("Next error = nil, want no-audio error")
+	}
+	if !strings.Contains(err.Error(), "no audio frames") {
+		t.Fatalf("Next error = %v, want no-audio error", err)
 	}
 }
 
@@ -230,6 +286,7 @@ type fakeStreamAdapterTTS struct {
 	synthesizeErr error
 	streamErr     error
 	events        []*SynthesizedAudio
+	empty         bool
 }
 
 func (f *fakeStreamAdapterTTS) Label() string {
@@ -254,7 +311,7 @@ func (f *fakeStreamAdapterTTS) Synthesize(_ context.Context, text string) (Chunk
 		return nil, f.synthesizeErr
 	}
 	events := f.events
-	if len(events) == 0 {
+	if len(events) == 0 && !f.empty {
 		events = []*SynthesizedAudio{{
 			Frame: &model.AudioFrame{Data: []byte{1}, SampleRate: 24000, NumChannels: 1, SamplesPerChannel: 1},
 		}}
