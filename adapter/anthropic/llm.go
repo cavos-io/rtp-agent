@@ -21,7 +21,7 @@ type AnthropicLLM struct {
 
 func NewAnthropicLLM(apiKey string, model string) (*AnthropicLLM, error) {
 	if model == "" {
-		model = "claude-3-5-sonnet-20241022" // Parity with python defaults
+		model = "claude-sonnet-4-6"
 	}
 	return &AnthropicLLM{
 		apiKey: apiKey,
@@ -63,6 +63,7 @@ func (l *AnthropicLLM) Chat(ctx context.Context, chatCtx *llm.ChatContext, opts 
 	if system != "" {
 		body["system"] = system
 	}
+	applyAnthropicExtraParams(body, options.ExtraParams)
 
 	// Tool support
 	if len(options.Tools) > 0 {
@@ -116,6 +117,15 @@ func (l *AnthropicLLM) Chat(ctx context.Context, chatCtx *llm.ChatContext, opts 
 		resp:   resp,
 		reader: bufio.NewReader(resp.Body),
 	}, nil
+}
+
+func applyAnthropicExtraParams(body map[string]any, params map[string]any) {
+	for key, value := range params {
+		switch key {
+		case "user", "temperature", "top_k", "max_tokens":
+			body[key] = value
+		}
+	}
 }
 
 func buildAnthropicToolChoice(choice llm.ToolChoice, parallelToolCalls bool) map[string]any {
