@@ -1,0 +1,188 @@
+package mistralai
+
+import (
+	"bytes"
+	"context"
+	"io"
+	"mime"
+	"mime/multipart"
+	"net/http"
+	"strings"
+	"testing"
+
+	"github.com/cavos-io/conversation-worker/core/stt"
+)
+
+func TestMistralAISTTDefaultsMatchReference(t *testing.T) {
+	provider := NewMistralAISTT("test-key")
+
+	if provider.baseURL != "https://api.mistral.ai/v1" {
+		t.Fatalf("base URL = %q, want reference base URL", provider.baseURL)
+	}
+	if provider.model != "voxtral-mini-latest" {
+		t.Fatalf("model = %q, want default batch model", provider.model)
+	}
+	if provider.language != "" {
+		t.Fatalf("language = %q, want unset", provider.language)
+	}
+	if provider.sampleRate != 16000 {
+		t.Fatalf("sample rate = %d, want 16000", provider.sampleRate)
+	}
+	caps := provider.Capabilities()
+	if caps.Streaming {
+		t.Fatal("streaming = true, want false for default batch model")
+	}
+	if caps.InterimResults {
+		t.Fatal("interim results = true, want false for default batch model")
+	}
+	if caps.AlignedTranscript != "" {
+		t.Fatalf("aligned transcript = %q, want empty", caps.AlignedTranscript)
+	}
+	if !caps.OfflineRecognize {
+		t.Fatal("offline recognize = false, want true for default batch model")
+	}
+}
+
+func TestMistralAISTTRealtimeCapabilitiesFollowReference(t *testing.T) {
+	provider := NewMistralAISTT("test-key", WithMistralAISTTModel("voxtral-realtime-latest"))
+
+	caps := provider.Capabilities()
+	if !caps.Streaming || !caps.InterimResults {
+		t.Fatalf("capabilities = %+v, want streaming/interim for realtime model", caps)
+	}
+	if caps.OfflineRecognize {
+		t.Fatal("offline recognize = true, want false for realtime model")
+	}
+}
+
+func TestMistralAISTTRecognizeRequestUsesReferenceMultipartFields(t *testing.T) {
+	provider := NewMistralAISTT("test-key",
+		WithMistralAISTTBaseURL("https://mistral.example/v1"),
+		WithMistralAISTTModel("voxtral-mini-2507"),
+		WithMistralAISTTContextBias([]string{"Chicago", "Joplin"}),
+	)
+
+	req, err := buildMistralAISTTRecognizeRequest(context.Background(), provider, []byte{0x01, 0x02}, "")
+	if err != nil {
+		t.Fatalf("build request: %v", err)
+	}
+	if req.Method != http.MethodPost {
+		t.Fatalf("method = %q, want POST", req.Method)
+	}
+	if req.URL.String() != "https://mistral.example/v1/audio/transcriptions" {
+		t.Fatalf("url = %q, want transcription endpoint", req.URL.String())
+	}
+	if got := req.Header.Get("x-api-key"); got != "test-key" {
+		t.Fatalf("x-api-key = %q, want API key", got)
+	}
+	if got := req.Header.Get("Content-Type"); !strings.HasPrefix(got, "multipart/form-data; boundary=") {
+		t.Fatalf("content type = %q, want multipart form", got)
+	}
+
+	fields, files := readMistralMultipartRequest(t, req)
+	assertMistralFormField(t, fields, "model", "voxtral-mini-2507")
+	assertMistralFormField(t, fields, "context_bias", "Chicago,Joplin")
+	assertMistralFormField(t, fields, "timestamp_granularities", "segment")
+	if _, ok := fields["language"]; ok {
+		t.Fatalf("language present without override: %#v", fields)
+	}
+	file := files["file"]
+	if file.filename != "audio.wav" {
+		t.Fatalf("filename = %q, want audio.wav", file.filename)
+	}
+	if file.contentType != "audio/wav" {
+		t.Fatalf("file content type = %q, want audio/wav", file.contentType)
+	}
+	if !bytes.Equal(file.data, []byte{0x01, 0x02}) {
+		t.Fatalf("file data = %#v, want audio bytes", file.data)
+	}
+}
+
+func TestMistralAISTTRecognizeRequestLanguageSkipsTimestampGranularity(t *testing.T) {
+	provider := NewMistralAISTT("test-key", WithMistralAISTTLanguage("en"))
+
+	req, err := buildMistralAISTTRecognizeRequest(context.Background(), provider, []byte{0x01}, "fr")
+	if err != nil {
+		t.Fatalf("build request: %v", err)
+	}
+	fields, _ := readMistralMultipartRequest(t, req)
+	assertMistralFormField(t, fields, "language", "fr")
+	if _, ok := fields["timestamp_granularities"]; ok {
+		t.Fatalf("timestamp_granularities present with language: %#v", fields)
+	}
+}
+
+func TestMistralAISTTResponseMapsSpeechEvent(t *testing.T) {
+	event := mistralAISTTSpeechEvent("fr", mistralAISTTResponse{
+		Text:     "bonjour monde",
+		Language: "fr",
+		Segments: []mistralAISTTSegment{
+			{Text: "bonjour", Start: 0.2, End: 0.7},
+			{Text: "monde", Start: 0.8, End: 1.1},
+		},
+	})
+
+	if event.Type != stt.SpeechEventFinalTranscript {
+		t.Fatalf("type = %v, want final transcript", event.Type)
+	}
+	if len(event.Alternatives) != 1 {
+		t.Fatalf("alternatives = %d, want 1", len(event.Alternatives))
+	}
+	alt := event.Alternatives[0]
+	if alt.Text != "bonjour monde" || alt.Language != "fr" {
+		t.Fatalf("alt = %+v, want French transcript", alt)
+	}
+	if alt.StartTime != 0.2 || alt.EndTime != 1.1 {
+		t.Fatalf("time range = %v-%v, want segment span", alt.StartTime, alt.EndTime)
+	}
+	if len(alt.Words) != 2 || alt.Words[0].Text != "bonjour" {
+		t.Fatalf("words = %+v, want segment timings", alt.Words)
+	}
+}
+
+type mistralMultipartFile struct {
+	filename    string
+	contentType string
+	data        []byte
+}
+
+func readMistralMultipartRequest(t *testing.T, req *http.Request) (map[string]string, map[string]mistralMultipartFile) {
+	t.Helper()
+	_, params, err := mime.ParseMediaType(req.Header.Get("Content-Type"))
+	if err != nil {
+		t.Fatalf("parse content type: %v", err)
+	}
+	reader := multipart.NewReader(req.Body, params["boundary"])
+	fields := map[string]string{}
+	files := map[string]mistralMultipartFile{}
+	for {
+		part, err := reader.NextPart()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			t.Fatalf("next part: %v", err)
+		}
+		data, err := io.ReadAll(part)
+		if err != nil {
+			t.Fatalf("read part: %v", err)
+		}
+		if part.FileName() == "" {
+			fields[part.FormName()] = string(data)
+			continue
+		}
+		files[part.FormName()] = mistralMultipartFile{
+			filename:    part.FileName(),
+			contentType: part.Header.Get("Content-Type"),
+			data:        data,
+		}
+	}
+	return fields, files
+}
+
+func assertMistralFormField(t *testing.T, fields map[string]string, key string, want string) {
+	t.Helper()
+	if got := fields[key]; got != want {
+		t.Fatalf("%s = %q, want %q in fields %#v", key, got, want, fields)
+	}
+}

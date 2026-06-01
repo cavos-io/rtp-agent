@@ -1,0 +1,232 @@
+package mistralai
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"fmt"
+	"io"
+	"mime/multipart"
+	"net/http"
+	"net/textproto"
+	"strings"
+
+	"github.com/cavos-io/conversation-worker/core/stt"
+	"github.com/cavos-io/conversation-worker/model"
+)
+
+const (
+	defaultMistralAISTTBaseURL    = "https://api.mistral.ai/v1"
+	defaultMistralAISTTModel      = "voxtral-mini-latest"
+	defaultMistralAISTTSampleRate = 16000
+)
+
+type MistralAISTT struct {
+	apiKey      string
+	baseURL     string
+	model       string
+	language    string
+	contextBias []string
+	sampleRate  int
+}
+
+type MistralAISTTOption func(*MistralAISTT)
+
+func WithMistralAISTTBaseURL(baseURL string) MistralAISTTOption {
+	return func(s *MistralAISTT) {
+		if baseURL != "" {
+			s.baseURL = strings.TrimRight(baseURL, "/")
+		}
+	}
+}
+
+func WithMistralAISTTModel(model string) MistralAISTTOption {
+	return func(s *MistralAISTT) {
+		if model != "" {
+			s.model = model
+		}
+	}
+}
+
+func WithMistralAISTTLanguage(language string) MistralAISTTOption {
+	return func(s *MistralAISTT) {
+		s.language = language
+	}
+}
+
+func WithMistralAISTTContextBias(contextBias []string) MistralAISTTOption {
+	return func(s *MistralAISTT) {
+		s.contextBias = contextBias
+	}
+}
+
+func NewMistralAISTT(apiKey string, opts ...MistralAISTTOption) *MistralAISTT {
+	provider := &MistralAISTT{
+		apiKey:     apiKey,
+		baseURL:    defaultMistralAISTTBaseURL,
+		model:      defaultMistralAISTTModel,
+		sampleRate: defaultMistralAISTTSampleRate,
+	}
+	for _, opt := range opts {
+		opt(provider)
+	}
+	return provider
+}
+
+func (s *MistralAISTT) Label() string { return "mistralai.STT" }
+func (s *MistralAISTT) Capabilities() stt.STTCapabilities {
+	realtime := mistralAISTTIsRealtime(s.model)
+	return stt.STTCapabilities{
+		Streaming:         realtime,
+		InterimResults:    realtime,
+		Diarization:       false,
+		AlignedTranscript: "",
+		OfflineRecognize:  !realtime,
+	}
+}
+
+func (s *MistralAISTT) Stream(ctx context.Context, language string) (stt.RecognizeStream, error) {
+	if mistralAISTTIsRealtime(s.model) {
+		return nil, fmt.Errorf("mistralai realtime stt streaming is not implemented")
+	}
+	return nil, fmt.Errorf("mistralai stt streaming is only available for realtime models")
+}
+
+func (s *MistralAISTT) Recognize(ctx context.Context, frames []*model.AudioFrame, language string) (*stt.SpeechEvent, error) {
+	if mistralAISTTIsRealtime(s.model) {
+		return nil, fmt.Errorf("mistralai realtime models do not support offline recognize")
+	}
+	var audio bytes.Buffer
+	for _, frame := range frames {
+		audio.Write(frame.Data)
+	}
+	req, err := buildMistralAISTTRecognizeRequest(ctx, s, audio.Bytes(), language)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		respBody, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("mistralai stt error: %s", string(respBody))
+	}
+	var result mistralAISTTResponse
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, err
+	}
+	return mistralAISTTSpeechEvent(resolveMistralAISTTLanguage(s, language), result), nil
+}
+
+func buildMistralAISTTRecognizeRequest(ctx context.Context, s *MistralAISTT, audio []byte, language string) (*http.Request, error) {
+	var body bytes.Buffer
+	writer := multipart.NewWriter(&body)
+	header := make(textproto.MIMEHeader)
+	header.Set("Content-Disposition", `form-data; name="file"; filename="audio.wav"`)
+	header.Set("Content-Type", "audio/wav")
+	part, err := writer.CreatePart(header)
+	if err != nil {
+		return nil, err
+	}
+	if _, err := part.Write(audio); err != nil {
+		return nil, err
+	}
+	if err := writer.WriteField("model", s.model); err != nil {
+		return nil, err
+	}
+	if len(s.contextBias) > 0 {
+		if err := writer.WriteField("context_bias", strings.Join(s.contextBias, ",")); err != nil {
+			return nil, err
+		}
+	}
+	if requestLanguage := resolveMistralAISTTLanguage(s, language); requestLanguage != "" {
+		if err := writer.WriteField("language", requestLanguage); err != nil {
+			return nil, err
+		}
+	} else if err := writer.WriteField("timestamp_granularities", "segment"); err != nil {
+		return nil, err
+	}
+	if err := writer.Close(); err != nil {
+		return nil, err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimRight(s.baseURL, "/")+"/audio/transcriptions", &body)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("x-api-key", s.apiKey)
+	req.Header.Set("Content-Type", writer.FormDataContentType())
+	return req, nil
+}
+
+func resolveMistralAISTTLanguage(s *MistralAISTT, language string) string {
+	if language != "" {
+		return language
+	}
+	return s.language
+}
+
+func mistralAISTTIsRealtime(model string) bool {
+	return strings.Contains(model, "realtime")
+}
+
+type mistralAISTTResponse struct {
+	Text     string                `json:"text"`
+	Language string                `json:"language"`
+	Segments []mistralAISTTSegment `json:"segments"`
+}
+
+type mistralAISTTSegment struct {
+	Text  string  `json:"text"`
+	Start float64 `json:"start"`
+	End   float64 `json:"end"`
+}
+
+func mistralAISTTSpeechEvent(defaultLanguage string, resp mistralAISTTResponse) *stt.SpeechEvent {
+	language := resp.Language
+	if language == "" {
+		language = defaultLanguage
+	}
+	return &stt.SpeechEvent{
+		Type: stt.SpeechEventFinalTranscript,
+		Alternatives: []stt.SpeechData{
+			{
+				Text:      resp.Text,
+				Language:  language,
+				StartTime: mistralAISTTStartTime(resp.Segments),
+				EndTime:   mistralAISTTEndTime(resp.Segments),
+				Words:     mistralAISTTTimedStrings(resp.Segments),
+			},
+		},
+	}
+}
+
+func mistralAISTTStartTime(segments []mistralAISTTSegment) float64 {
+	if len(segments) == 0 {
+		return 0
+	}
+	return segments[0].Start
+}
+
+func mistralAISTTEndTime(segments []mistralAISTTSegment) float64 {
+	if len(segments) == 0 {
+		return 0
+	}
+	return segments[len(segments)-1].End
+}
+
+func mistralAISTTTimedStrings(segments []mistralAISTTSegment) []stt.TimedString {
+	if len(segments) == 0 {
+		return nil
+	}
+	timed := make([]stt.TimedString, 0, len(segments))
+	for _, segment := range segments {
+		timed = append(timed, stt.TimedString{
+			Text:      segment.Text,
+			StartTime: segment.Start,
+			EndTime:   segment.End,
+		})
+	}
+	return timed
+}
