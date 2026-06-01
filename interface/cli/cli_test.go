@@ -25,6 +25,9 @@ func TestParseConnectArgsUsesProvidedIdentity(t *testing.T) {
 	if args.ParticipantIdentity != "agent-custom" {
 		t.Fatalf("ParticipantIdentity = %q, want agent-custom", args.ParticipantIdentity)
 	}
+	if args.LogLevel != "DEBUG" {
+		t.Fatalf("LogLevel = %q, want DEBUG", args.LogLevel)
+	}
 }
 
 func TestParseConnectArgsDefaultsAgentIdentity(t *testing.T) {
@@ -41,10 +44,95 @@ func TestParseConnectArgsDefaultsAgentIdentity(t *testing.T) {
 	}
 }
 
+func TestParseConnectArgsSupportsReferenceOptions(t *testing.T) {
+	args, err := parseConnectArgs([]string{
+		"worker", "connect",
+		"--room", "room-a",
+		"--participant-identity", "agent-custom",
+		"--url", "wss://livekit.example",
+		"--api-key", "api-key",
+		"--api-secret", "api-secret",
+		"--log-level", "trace",
+	})
+	if err != nil {
+		t.Fatalf("parseConnectArgs() error = %v", err)
+	}
+
+	if args.RoomName != "room-a" {
+		t.Fatalf("RoomName = %q, want room-a", args.RoomName)
+	}
+	if args.ParticipantIdentity != "agent-custom" {
+		t.Fatalf("ParticipantIdentity = %q, want agent-custom", args.ParticipantIdentity)
+	}
+	if args.URL != "wss://livekit.example" {
+		t.Fatalf("URL = %q, want wss://livekit.example", args.URL)
+	}
+	if args.APIKey != "api-key" {
+		t.Fatalf("APIKey = %q, want api-key", args.APIKey)
+	}
+	if args.APISecret != "api-secret" {
+		t.Fatalf("APISecret = %q, want api-secret", args.APISecret)
+	}
+	if args.LogLevel != "TRACE" {
+		t.Fatalf("LogLevel = %q, want TRACE", args.LogLevel)
+	}
+}
+
+func TestParseConnectArgsSupportsReferenceOptionsAfterPositionalRoom(t *testing.T) {
+	args, err := parseConnectArgs([]string{
+		"worker", "connect", "room-a",
+		"--participant-identity", "agent-custom",
+		"--url", "wss://livekit.example",
+	})
+	if err != nil {
+		t.Fatalf("parseConnectArgs() error = %v", err)
+	}
+
+	if args.RoomName != "room-a" {
+		t.Fatalf("RoomName = %q, want room-a", args.RoomName)
+	}
+	if args.ParticipantIdentity != "agent-custom" {
+		t.Fatalf("ParticipantIdentity = %q, want agent-custom", args.ParticipantIdentity)
+	}
+	if args.URL != "wss://livekit.example" {
+		t.Fatalf("URL = %q, want wss://livekit.example", args.URL)
+	}
+}
+
 func TestParseConnectArgsRequiresRoom(t *testing.T) {
 	_, err := parseConnectArgs([]string{"worker", "connect"})
 	if err == nil {
 		t.Fatal("parseConnectArgs() error = nil, want missing room error")
+	}
+}
+
+func TestApplyConnectArgsUpdatesServerOptions(t *testing.T) {
+	server := worker.NewAgentServer(worker.WorkerOptions{})
+	args := ConnectArgs{
+		URL:       "wss://connect.example",
+		APIKey:    "connect-key",
+		APISecret: "connect-secret",
+		LogLevel:  "WARN",
+	}
+
+	if err := applyConnectArgs(server, args); err != nil {
+		t.Fatalf("applyConnectArgs() error = %v", err)
+	}
+
+	if server.Options.WSURL != "wss://connect.example" || server.Options.WSRL != "wss://connect.example" {
+		t.Fatalf("WSURL/WSRL = %q/%q, want connect URL", server.Options.WSURL, server.Options.WSRL)
+	}
+	if server.Options.APIKey != "connect-key" {
+		t.Fatalf("APIKey = %q, want connect-key", server.Options.APIKey)
+	}
+	if server.Options.APISecret != "connect-secret" {
+		t.Fatalf("APISecret = %q, want connect-secret", server.Options.APISecret)
+	}
+	if server.Options.LogLevel != "WARN" {
+		t.Fatalf("LogLevel = %q, want WARN", server.Options.LogLevel)
+	}
+	if !server.Options.DevMode {
+		t.Fatal("DevMode = false, want true for connect")
 	}
 }
 

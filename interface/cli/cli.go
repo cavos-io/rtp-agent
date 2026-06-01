@@ -34,6 +34,10 @@ type CliArgs struct {
 type ConnectArgs struct {
 	RoomName            string
 	ParticipantIdentity string
+	LogLevel            string
+	URL                 string
+	APIKey              string
+	APISecret           string
 }
 
 type ConsoleMode string
@@ -308,6 +312,10 @@ func runConnect(server *worker.AgentServer) {
 		fmt.Println("Usage: worker connect <room_name> [participant_identity]")
 		os.Exit(1)
 	}
+	if err := applyConnectArgs(server, args); err != nil {
+		logger.Logger.Errorw("Failed to apply connect options", err)
+		os.Exit(1)
+	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -321,17 +329,85 @@ func runConnect(server *worker.AgentServer) {
 }
 
 func parseConnectArgs(argv []string) (ConnectArgs, error) {
-	if len(argv) < 3 {
-		return ConnectArgs{}, fmt.Errorf("missing room name")
-	}
 	args := ConnectArgs{
-		RoomName:            argv[2],
+		LogLevel:            "DEBUG",
 		ParticipantIdentity: defaultConnectParticipantIdentity(),
 	}
-	if len(argv) > 3 {
-		args.ParticipantIdentity = argv[3]
+	positional := 0
+	for i := 2; i < len(argv); i++ {
+		switch argv[i] {
+		case "--room":
+			i++
+			if i >= len(argv) {
+				return ConnectArgs{}, fmt.Errorf("missing value for --room")
+			}
+			args.RoomName = argv[i]
+		case "--participant-identity":
+			i++
+			if i >= len(argv) {
+				return ConnectArgs{}, fmt.Errorf("missing value for --participant-identity")
+			}
+			args.ParticipantIdentity = argv[i]
+		case "--url":
+			i++
+			if i >= len(argv) {
+				return ConnectArgs{}, fmt.Errorf("missing value for --url")
+			}
+			args.URL = argv[i]
+		case "--api-key":
+			i++
+			if i >= len(argv) {
+				return ConnectArgs{}, fmt.Errorf("missing value for --api-key")
+			}
+			args.APIKey = argv[i]
+		case "--api-secret":
+			i++
+			if i >= len(argv) {
+				return ConnectArgs{}, fmt.Errorf("missing value for --api-secret")
+			}
+			args.APISecret = argv[i]
+		case "--log-level":
+			i++
+			if i >= len(argv) {
+				return ConnectArgs{}, fmt.Errorf("missing value for --log-level")
+			}
+			logLevel := strings.ToUpper(argv[i])
+			if !validConsoleLogLevel(logLevel) {
+				return ConnectArgs{}, fmt.Errorf("unknown connect log level %q", argv[i])
+			}
+			args.LogLevel = logLevel
+		default:
+			if strings.HasPrefix(argv[i], "-") {
+				return ConnectArgs{}, fmt.Errorf("unknown connect option %q", argv[i])
+			}
+			switch positional {
+			case 0:
+				if args.RoomName != "" {
+					return ConnectArgs{}, fmt.Errorf("room specified more than once")
+				}
+				args.RoomName = argv[i]
+			case 1:
+				args.ParticipantIdentity = argv[i]
+			default:
+				return ConnectArgs{}, fmt.Errorf("unexpected connect argument %q", argv[i])
+			}
+			positional++
+		}
+	}
+	if args.RoomName == "" {
+		return ConnectArgs{}, fmt.Errorf("missing room name")
 	}
 	return args, nil
+}
+
+func applyConnectArgs(server *worker.AgentServer, args ConnectArgs) error {
+	return server.UpdateOptions(worker.WorkerOptions{
+		LogLevel:  args.LogLevel,
+		WSURL:     args.URL,
+		APIKey:    args.APIKey,
+		APISecret: args.APISecret,
+		DevMode:   true,
+	})
 }
 
 func parseConsoleArgs(argv []string) (ConsoleArgs, error) {
