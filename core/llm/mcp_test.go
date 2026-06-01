@@ -142,6 +142,45 @@ func TestMCPServerStdioCachesListedToolsUntilInvalidated(t *testing.T) {
 	}
 }
 
+func TestMCPServerStdioPreservesToolMetaInFunctionSchema(t *testing.T) {
+	server := NewMCPServerStdio("", nil)
+	server.stdin = &fakeMCPWriteCloser{
+		server: server,
+		result: json.RawMessage(`{
+			"tools": [{
+				"name": "lookup",
+				"description": "lookup tool",
+				"inputSchema": {"type": "object"},
+				"meta": {"title": "Lookup", "readOnlyHint": true}
+			}]
+		}`),
+	}
+
+	tools, err := server.ListTools(context.Background())
+	if err != nil {
+		t.Fatalf("ListTools() error = %v", err)
+	}
+	if len(tools) != 1 {
+		t.Fatalf("len(tools) = %d, want 1", len(tools))
+	}
+
+	proxy, ok := tools[0].(*mcpProxyTool)
+	if !ok {
+		t.Fatalf("tool type = %T, want *mcpProxyTool", tools[0])
+	}
+	schema, err := proxy.ParseFunctionTools("")
+	if err != nil {
+		t.Fatalf("ParseFunctionTools() error = %v", err)
+	}
+	meta, ok := schema["meta"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("schema meta = %#v, want MCP meta object", schema["meta"])
+	}
+	if meta["title"] != "Lookup" || meta["readOnlyHint"] != true {
+		t.Fatalf("schema meta = %#v, want MCP meta fields", meta)
+	}
+}
+
 func TestMCPServerStdioInitializePassesEnvAndCwd(t *testing.T) {
 	tmpDir := t.TempDir()
 	scriptPath := filepath.Join(tmpDir, "mcp-env-cwd-test.sh")

@@ -191,6 +191,7 @@ func (s *MCPServerStdio) ListTools(ctx context.Context) ([]Tool, error) {
 			Name        string                 `json:"name"`
 			Description string                 `json:"description"`
 			InputSchema map[string]interface{} `json:"inputSchema"`
+			Meta        map[string]interface{} `json:"meta"`
 		} `json:"tools"`
 	}
 
@@ -205,6 +206,7 @@ func (s *MCPServerStdio) ListTools(ctx context.Context) ([]Tool, error) {
 			name:        t.Name,
 			description: t.Description,
 			parameters:  t.InputSchema,
+			meta:        t.Meta,
 		})
 	}
 
@@ -329,6 +331,7 @@ type mcpProxyTool struct {
 	name        string
 	description string
 	parameters  map[string]interface{}
+	meta        map[string]interface{}
 }
 
 func (t *mcpProxyTool) ID() string          { return t.name }
@@ -376,5 +379,13 @@ func (t *mcpProxyTool) Execute(ctx context.Context, args string) (string, error)
 }
 
 func (t *mcpProxyTool) ParseFunctionTools(format string) (map[string]interface{}, error) {
-	return t.parameters, nil
+	schema := map[string]interface{}{
+		"name":        t.name,
+		"description": t.description,
+		"parameters":  t.parameters,
+	}
+	if len(t.meta) > 0 {
+		schema["meta"] = t.meta
+	}
+	return schema, nil
 }
