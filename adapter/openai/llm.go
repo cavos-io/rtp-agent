@@ -40,6 +40,10 @@ func NewOpenAILLMWithBaseURL(apiKey string, model string, baseURL string) *OpenA
 	}
 }
 
+func (l *OpenAILLM) Model() string {
+	return l.model
+}
+
 func (l *OpenAILLM) Chat(ctx context.Context, chatCtx *llm.ChatContext, opts ...llm.ChatOption) (llm.LLMStream, error) {
 	options := &llm.ChatOptions{
 		ParallelToolCalls: true,
