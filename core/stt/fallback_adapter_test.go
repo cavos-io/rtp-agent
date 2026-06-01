@@ -488,6 +488,7 @@ func TestFallbackStreamRecoversFailedProviderInBackground(t *testing.T) {
 	}
 
 	waitForStreamCalls(t, primary, 2)
+	waitForProviderAvailable(t, adapter, 0)
 
 	nextStream, err := adapter.Stream(context.Background(), "en")
 	if err != nil {
@@ -633,6 +634,45 @@ func TestFallbackStreamRejectsMismatchedSampleRates(t *testing.T) {
 	}
 	if strings.Join(inner.calls, ",") != "push:first" {
 		t.Fatalf("inner calls = %#v, want only first frame forwarded", inner.calls)
+	}
+}
+
+func TestFallbackStreamEndInputFlushesAndRejectsMoreInput(t *testing.T) {
+	inner := &metadataRecognizeStream{events: []*SpeechEvent{{Type: SpeechEventFinalTranscript}}}
+	adapter := NewFallbackAdapter([]STT{
+		&metadataSTT{
+			label:        "primary",
+			capabilities: STTCapabilities{Streaming: true},
+			stream:       inner,
+		},
+	})
+
+	stream, err := adapter.Stream(context.Background(), "en")
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+	defer stream.Close()
+
+	ending, ok := stream.(InputEnding)
+	if !ok {
+		t.Fatal("stream does not implement InputEnding")
+	}
+	if err := stream.PushFrame(&model.AudioFrame{Data: []byte("first"), SampleRate: 16000, NumChannels: 1, SamplesPerChannel: 1}); err != nil {
+		t.Fatalf("PushFrame returned error: %v", err)
+	}
+	if err := ending.EndInput(); err != nil {
+		t.Fatalf("EndInput returned error: %v", err)
+	}
+	if err := stream.PushFrame(&model.AudioFrame{Data: []byte("late"), SampleRate: 16000, NumChannels: 1, SamplesPerChannel: 1}); err == nil {
+		t.Fatal("PushFrame after EndInput returned nil, want error")
+	}
+	if err := stream.Flush(); err == nil {
+		t.Fatal("Flush after EndInput returned nil, want error")
+	}
+
+	want := []string{"push:first", "flush"}
+	if strings.Join(inner.calls, ",") != strings.Join(want, ",") {
+		t.Fatalf("inner calls = %#v, want %#v", inner.calls, want)
 	}
 }
 

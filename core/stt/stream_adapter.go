@@ -49,6 +49,7 @@ type streamAdapterWrapper struct {
 
 	mu          sync.Mutex
 	closed      bool
+	inputEnded  bool
 	frameBuffer []*model.AudioFrame
 	vadStream   vad.VADStream
 	rateGuard   SampleRateGuard
@@ -194,6 +195,10 @@ func (w *streamAdapterWrapper) PushFrame(frame *model.AudioFrame) error {
 		w.mu.Unlock()
 		return fmt.Errorf("stream closed")
 	}
+	if w.inputEnded {
+		w.mu.Unlock()
+		return fmt.Errorf("stream input ended")
+	}
 	if err := w.rateGuard.Check(frame); err != nil {
 		w.mu.Unlock()
 		return err
@@ -210,6 +215,27 @@ func (w *streamAdapterWrapper) Flush() error {
 		w.mu.Unlock()
 		return fmt.Errorf("stream closed")
 	}
+	if w.inputEnded {
+		w.mu.Unlock()
+		return fmt.Errorf("stream input ended")
+	}
+	w.mu.Unlock()
+
+	w.inputCh <- streamAdapterInput{flush: true}
+	return nil
+}
+
+func (w *streamAdapterWrapper) EndInput() error {
+	w.mu.Lock()
+	if w.closed {
+		w.mu.Unlock()
+		return fmt.Errorf("stream closed")
+	}
+	if w.inputEnded {
+		w.mu.Unlock()
+		return fmt.Errorf("stream input ended")
+	}
+	w.inputEnded = true
 	w.mu.Unlock()
 
 	w.inputCh <- streamAdapterInput{flush: true}

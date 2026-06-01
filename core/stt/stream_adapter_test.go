@@ -119,6 +119,37 @@ func TestStreamAdapterForwardsFlushToVAD(t *testing.T) {
 	}
 }
 
+func TestStreamAdapterEndInputFlushesAndRejectsMoreInput(t *testing.T) {
+	flushCh := make(chan struct{}, 1)
+	stream, err := NewStreamAdapter(&fakeStreamAdapterSTT{}, &fakeStreamAdapterVAD{
+		stream: &fakeStreamAdapterVADStream{flushCh: flushCh, done: make(chan struct{})},
+	}).Stream(context.Background(), "")
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+	defer stream.Close()
+
+	ending, ok := stream.(InputEnding)
+	if !ok {
+		t.Fatal("stream does not implement InputEnding")
+	}
+	if err := ending.EndInput(); err != nil {
+		t.Fatalf("EndInput returned error: %v", err)
+	}
+
+	select {
+	case <-flushCh:
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("timed out waiting for EndInput flush")
+	}
+	if err := stream.PushFrame(&model.AudioFrame{Data: []byte("late"), SampleRate: 16000, NumChannels: 1, SamplesPerChannel: 1}); err == nil {
+		t.Fatal("PushFrame after EndInput returned nil, want error")
+	}
+	if err := stream.Flush(); err == nil {
+		t.Fatal("Flush after EndInput returned nil, want error")
+	}
+}
+
 func TestStreamAdapterPropagatesVADPushFrameError(t *testing.T) {
 	pushErr := errors.New("vad push failed")
 	stream, err := NewStreamAdapter(&fakeStreamAdapterSTT{}, &fakeStreamAdapterVAD{

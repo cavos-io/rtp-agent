@@ -93,6 +93,10 @@ type StreamTiming interface {
 	SetStartTime(startTime float64)
 }
 
+type InputEnding interface {
+	EndInput() error
+}
+
 type SampleRateGuard struct {
 	sampleRate uint32
 }

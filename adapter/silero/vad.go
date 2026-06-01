@@ -2,6 +2,7 @@ package silero
 
 import (
 	"context"
+	"fmt"
 	"sync"
 
 	"github.com/cavos-io/conversation-worker/core/vad"
@@ -14,17 +15,22 @@ type VADOptions struct {
 	PrefixPaddingDuration float64
 	MaxBufferedSpeech     float64
 	ActivationThreshold   float64
+	DeactivationThreshold float64
 	UpdateInterval        float64
 	SampleRate            int
+
+	deactivationThresholdSet bool
 }
 
 func DefaultVADOptions() VADOptions {
+	activationThreshold := 0.5
 	return VADOptions{
 		MinSpeechDuration:     0.05,
 		MinSilenceDuration:    0.55,
 		PrefixPaddingDuration: 0.5,
 		MaxBufferedSpeech:     60.0,
-		ActivationThreshold:   0.5,
+		ActivationThreshold:   activationThreshold,
+		DeactivationThreshold: max(activationThreshold-0.15, 0.01),
 		UpdateInterval:        0.032,
 		SampleRate:            16000,
 	}
@@ -69,6 +75,13 @@ func WithActivationThreshold(t float64) VADOption {
 	}
 }
 
+func WithDeactivationThreshold(t float64) VADOption {
+	return func(o *VADOptions) {
+		o.DeactivationThreshold = t
+		o.deactivationThresholdSet = true
+	}
+}
+
 func WithSampleRate(r int) VADOption {
 	return func(o *VADOptions) {
 		o.SampleRate = r
@@ -79,6 +92,9 @@ func NewSileroVAD(opts ...VADOption) *SileroVAD {
 	options := DefaultVADOptions()
 	for _, opt := range opts {
 		opt(&options)
+	}
+	if !options.deactivationThresholdSet {
+		options.DeactivationThreshold = max(options.ActivationThreshold-0.15, 0.01)
 	}
 
 	// Fallback to simple VAD for now to provide out-of-the-box working plugin
@@ -136,6 +152,12 @@ func (v *SileroVAD) UpdateOptions(options VADOptions) {
 }
 
 func (v *SileroVAD) Stream(ctx context.Context) (vad.VADStream, error) {
+	v.mu.RLock()
+	options := v.options
+	v.mu.RUnlock()
+	if err := validateVADOptions(options); err != nil {
+		return nil, err
+	}
 	return v.inner.Stream(ctx)
 }
 
@@ -146,7 +168,7 @@ func simpleOptionsFromSilero(options VADOptions) vad.SimpleVADOptions {
 		MinSilenceDuration:        options.MinSilenceDuration,
 		PrefixPaddingDuration:     options.PrefixPaddingDuration,
 		MaxBufferedSpeechDuration: options.MaxBufferedSpeech,
-		DeactivationThreshold:     max(options.ActivationThreshold/10.0-0.015, 0.001),
+		DeactivationThreshold:     options.DeactivationThreshold / 10.0,
 		UpdateInterval:            options.UpdateInterval,
 	}
 }
@@ -167,6 +189,10 @@ func mergeVADOptions(current, updates VADOptions) VADOptions {
 	if updates.ActivationThreshold != 0 {
 		current.ActivationThreshold = updates.ActivationThreshold
 	}
+	if updates.DeactivationThreshold != 0 {
+		current.DeactivationThreshold = updates.DeactivationThreshold
+		current.deactivationThresholdSet = true
+	}
 	if updates.UpdateInterval != 0 {
 		current.UpdateInterval = updates.UpdateInterval
 	}
@@ -174,6 +200,16 @@ func mergeVADOptions(current, updates VADOptions) VADOptions {
 		current.SampleRate = updates.SampleRate
 	}
 	return current
+}
+
+func validateVADOptions(options VADOptions) error {
+	if options.SampleRate != 8000 && options.SampleRate != 16000 {
+		return fmt.Errorf("silero VAD only supports 8KHz and 16KHz sample rates")
+	}
+	if options.DeactivationThreshold <= 0 {
+		return fmt.Errorf("deactivation_threshold must be greater than 0")
+	}
+	return nil
 }
 
 func (v *SileroVAD) emitMetrics(metrics *telemetry.VADMetrics) {
