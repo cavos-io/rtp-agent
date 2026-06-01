@@ -152,6 +152,34 @@ func TestProcPoolActiveJobsSkipsCompletedExecutors(t *testing.T) {
 	}
 }
 
+func TestProcPoolGetExecutorsSkipsCompletedExecutors(t *testing.T) {
+	completed := &fakeJobExecutor{
+		id:     "done",
+		job:    &livekit.Job{Id: "job-done"},
+		status: JobStatusSuccess,
+	}
+	running := &fakeJobExecutor{
+		id:     "running",
+		job:    &livekit.Job{Id: "job-running"},
+		status: JobStatusRunning,
+	}
+	pool := &ProcPool{
+		executors: map[string]JobExecutor{
+			completed.id: completed,
+			running.id:   running,
+		},
+	}
+
+	executors := pool.GetExecutors()
+
+	if len(executors) != 1 {
+		t.Fatalf("GetExecutors() len = %d, want only running executor", len(executors))
+	}
+	if executors[0].ID() != "running" {
+		t.Fatalf("GetExecutors()[0].ID() = %q, want running", executors[0].ID())
+	}
+}
+
 func TestProcPoolCloseUsesConfiguredTimeout(t *testing.T) {
 	executor := &fakeJobExecutor{id: "exec-a"}
 	pool := &ProcPool{
@@ -303,11 +331,14 @@ func waitForProcPoolExecutorStatus(t *testing.T, pool *ProcPool, status JobStatu
 		case <-deadline:
 			t.Fatalf("executor did not reach status %q", status)
 		case <-ticker.C:
-			for _, executor := range pool.GetExecutors() {
+			pool.mu.Lock()
+			for _, executor := range pool.executors {
 				if executor.Status() == status {
+					pool.mu.Unlock()
 					return
 				}
 			}
+			pool.mu.Unlock()
 		}
 	}
 }

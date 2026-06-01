@@ -124,6 +124,7 @@ func (p *ProcPool) pruneFinishedExecutorsLocked() {
 func (p *ProcPool) GetExecutors() []JobExecutor {
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	p.pruneFinishedExecutorsLocked()
 
 	executors := make([]JobExecutor, 0, len(p.executors))
 	for _, e := range p.executors {
