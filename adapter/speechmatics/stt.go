@@ -14,19 +14,27 @@ import (
 )
 
 type SpeechmaticsSTT struct {
-	apiKey            string
-	language          string
-	sampleRate        int
-	audioEncoding     string
-	domain            string
-	outputLocale      string
-	includePartials   *bool
-	enableDiarization *bool
-	additionalVocab   []SpeechmaticsAdditionalVocabEntry
-	focusSpeakers     []string
-	ignoreSpeakers    []string
-	focusMode         string
-	knownSpeakers     []SpeechmaticsSpeakerIdentifier
+	apiKey               string
+	language             string
+	sampleRate           int
+	audioEncoding        string
+	domain               string
+	outputLocale         string
+	includePartials      *bool
+	enableDiarization    *bool
+	additionalVocab      []SpeechmaticsAdditionalVocabEntry
+	focusSpeakers        []string
+	ignoreSpeakers       []string
+	focusMode            string
+	knownSpeakers        []SpeechmaticsSpeakerIdentifier
+	operatingPoint       string
+	maxDelay             *float64
+	eouSilenceTrigger    *float64
+	eouMaxDelay          *float64
+	punctuation          map[string]interface{}
+	speakerSensitivity   *float64
+	maxSpeakers          *int
+	preferCurrentSpeaker *bool
 }
 
 type SpeechmaticsSTTOption func(*SpeechmaticsSTT)
@@ -108,6 +116,54 @@ func WithSpeechmaticsSTTSpeakerFocus(focusSpeakers []string, ignoreSpeakers []st
 func WithSpeechmaticsSTTKnownSpeakers(speakers []SpeechmaticsSpeakerIdentifier) SpeechmaticsSTTOption {
 	return func(s *SpeechmaticsSTT) {
 		s.knownSpeakers = speakers
+	}
+}
+
+func WithSpeechmaticsSTTOperatingPoint(operatingPoint string) SpeechmaticsSTTOption {
+	return func(s *SpeechmaticsSTT) {
+		s.operatingPoint = operatingPoint
+	}
+}
+
+func WithSpeechmaticsSTTMaxDelay(maxDelay float64) SpeechmaticsSTTOption {
+	return func(s *SpeechmaticsSTT) {
+		s.maxDelay = &maxDelay
+	}
+}
+
+func WithSpeechmaticsSTTEndOfUtteranceSilenceTrigger(trigger float64) SpeechmaticsSTTOption {
+	return func(s *SpeechmaticsSTT) {
+		s.eouSilenceTrigger = &trigger
+	}
+}
+
+func WithSpeechmaticsSTTEndOfUtteranceMaxDelay(maxDelay float64) SpeechmaticsSTTOption {
+	return func(s *SpeechmaticsSTT) {
+		s.eouMaxDelay = &maxDelay
+	}
+}
+
+func WithSpeechmaticsSTTPunctuationOverrides(overrides map[string]interface{}) SpeechmaticsSTTOption {
+	return func(s *SpeechmaticsSTT) {
+		s.punctuation = overrides
+	}
+}
+
+func WithSpeechmaticsSTTSpeakerSensitivity(sensitivity float64) SpeechmaticsSTTOption {
+	return func(s *SpeechmaticsSTT) {
+		s.speakerSensitivity = &sensitivity
+	}
+}
+
+func WithSpeechmaticsSTTMaxSpeakers(maxSpeakers int) SpeechmaticsSTTOption {
+	return func(s *SpeechmaticsSTT) {
+		s.maxSpeakers = &maxSpeakers
+	}
+}
+
+func WithSpeechmaticsSTTPreferCurrentSpeaker(prefer bool) SpeechmaticsSTTOption {
+	return func(s *SpeechmaticsSTT) {
+		s.preferCurrentSpeaker = &prefer
 	}
 }
 
@@ -201,6 +257,30 @@ func buildSpeechmaticsSTTStartMessage(s *SpeechmaticsSTT, language string) map[s
 	}
 	if len(s.knownSpeakers) > 0 {
 		config["known_speakers"] = s.knownSpeakers
+	}
+	if s.operatingPoint != "" {
+		config["operating_point"] = s.operatingPoint
+	}
+	if s.maxDelay != nil {
+		config["max_delay"] = *s.maxDelay
+	}
+	if s.eouSilenceTrigger != nil {
+		config["end_of_utterance_silence_trigger"] = *s.eouSilenceTrigger
+	}
+	if s.eouMaxDelay != nil {
+		config["end_of_utterance_max_delay"] = *s.eouMaxDelay
+	}
+	if s.punctuation != nil {
+		config["punctuation_overrides"] = s.punctuation
+	}
+	if s.speakerSensitivity != nil {
+		config["speaker_sensitivity"] = *s.speakerSensitivity
+	}
+	if s.maxSpeakers != nil {
+		config["max_speakers"] = *s.maxSpeakers
+	}
+	if s.preferCurrentSpeaker != nil {
+		config["prefer_current_speaker"] = *s.preferCurrentSpeaker
 	}
 	return map[string]interface{}{
 		"message": "StartRecognition",

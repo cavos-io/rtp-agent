@@ -179,6 +179,34 @@ func TestSpeechmaticsSTTStartMessageUsesVocabularyAndSpeakerOptions(t *testing.T
 	}
 }
 
+func TestSpeechmaticsSTTStartMessageUsesAdvancedReferenceOptions(t *testing.T) {
+	provider := NewSpeechmaticsSTT("test-key",
+		WithSpeechmaticsSTTOperatingPoint("enhanced"),
+		WithSpeechmaticsSTTMaxDelay(1.2),
+		WithSpeechmaticsSTTEndOfUtteranceSilenceTrigger(0.6),
+		WithSpeechmaticsSTTEndOfUtteranceMaxDelay(1.8),
+		WithSpeechmaticsSTTPunctuationOverrides(map[string]interface{}{"permitted_marks": []string{".", "?"}}),
+		WithSpeechmaticsSTTSpeakerSensitivity(0.7),
+		WithSpeechmaticsSTTMaxSpeakers(4),
+		WithSpeechmaticsSTTPreferCurrentSpeaker(true),
+	)
+
+	message := buildSpeechmaticsSTTStartMessage(provider, "")
+	config := message["transcription_config"].(map[string]interface{})
+	assertSpeechmaticsConfig(t, config, "operating_point", "enhanced")
+	assertSpeechmaticsConfig(t, config, "max_delay", float64(1.2))
+	assertSpeechmaticsConfig(t, config, "end_of_utterance_silence_trigger", float64(0.6))
+	assertSpeechmaticsConfig(t, config, "end_of_utterance_max_delay", float64(1.8))
+	assertSpeechmaticsConfig(t, config, "speaker_sensitivity", float64(0.7))
+	assertSpeechmaticsConfig(t, config, "max_speakers", 4)
+	assertSpeechmaticsConfig(t, config, "prefer_current_speaker", true)
+	overrides := config["punctuation_overrides"].(map[string]interface{})
+	marks := overrides["permitted_marks"].([]string)
+	if len(marks) != 2 || marks[0] != "." || marks[1] != "?" {
+		t.Fatalf("punctuation_overrides = %#v, want permitted marks", overrides)
+	}
+}
+
 func assertSpeechmaticsConfig(t *testing.T, config map[string]interface{}, key string, want interface{}) {
 	t.Helper()
 	if got := config[key]; got != want {
