@@ -444,6 +444,56 @@ func TestBuildOpenAIChatCompletionRequestMapsResponseFormat(t *testing.T) {
 	}
 }
 
+func TestBuildOpenAIChatCompletionRequestDropsUnsupportedReasoningParams(t *testing.T) {
+	req := buildOpenAIChatCompletionRequest("openai/gpt-5", llm.NewChatContext(), &llm.ChatOptions{
+		ParallelToolCalls: true,
+		ExtraParams: map[string]any{
+			"temperature":           0.7,
+			"top_p":                 0.8,
+			"presence_penalty":      0.1,
+			"frequency_penalty":     0.2,
+			"n":                     2,
+			"logit_bias":            map[string]any{"42": 7.0},
+			"logprobs":              true,
+			"top_logprobs":          3,
+			"reasoning_effort":      "low",
+			"max_completion_tokens": 128,
+			"service_tier":          "priority",
+			"stop":                  []string{"END"},
+		},
+	})
+
+	if req.Temperature != 0 || req.TopP != 0 || req.PresencePenalty != 0 || req.FrequencyPenalty != 0 {
+		t.Fatalf("sampling params = %v/%v/%v/%v, want dropped zero values", req.Temperature, req.TopP, req.PresencePenalty, req.FrequencyPenalty)
+	}
+	if req.N != 0 || req.LogitBias != nil || req.LogProbs || req.TopLogProbs != 0 {
+		t.Fatalf("unsupported params not dropped: N=%d LogitBias=%#v LogProbs=%v TopLogProbs=%d", req.N, req.LogitBias, req.LogProbs, req.TopLogProbs)
+	}
+	if req.ReasoningEffort != "low" {
+		t.Fatalf("ReasoningEffort = %q, want preserved for reasoning model without tools", req.ReasoningEffort)
+	}
+	if req.MaxCompletionTokens != 128 || req.ServiceTier != openaisdk.ServiceTierPriority || len(req.Stop) != 1 || req.Stop[0] != "END" {
+		t.Fatalf("supported params = max_completion_tokens %d service_tier %q stop %#v, want preserved", req.MaxCompletionTokens, req.ServiceTier, req.Stop)
+	}
+}
+
+func TestBuildOpenAIChatCompletionRequestDropsReasoningEffortWithIncompatibleTools(t *testing.T) {
+	req := buildOpenAIChatCompletionRequest("gpt-5.2", llm.NewChatContext(), &llm.ChatOptions{
+		Tools: []llm.Tool{requestTestTool{}},
+		ExtraParams: map[string]any{
+			"reasoning_effort":      "low",
+			"max_completion_tokens": 128,
+		},
+	})
+
+	if req.ReasoningEffort != "" {
+		t.Fatalf("ReasoningEffort = %q, want dropped for gpt-5.2 with tools", req.ReasoningEffort)
+	}
+	if req.MaxCompletionTokens != 128 {
+		t.Fatalf("MaxCompletionTokens = %d, want preserved", req.MaxCompletionTokens)
+	}
+}
+
 func TestOpenAICompletionUsageHandlesMissingTokenDetails(t *testing.T) {
 	usage := openAICompletionUsage(&openaisdk.Usage{
 		CompletionTokens: 7,

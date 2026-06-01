@@ -179,7 +179,7 @@ func buildOpenAIChatCompletionRequest(model string, chatCtx *llm.ChatContext, op
 		req.ResponseFormat = responseFormat
 	}
 
-	applyOpenAIExtraParams(&req, options.ExtraParams)
+	applyOpenAIExtraParams(&req, dropUnsupportedOpenAIParams(model, options.ExtraParams, len(options.Tools) > 0))
 	return req
 }
 
@@ -340,6 +340,66 @@ func applyOpenAIExtraParams(req *openai.ChatCompletionRequest, params map[string
 			}
 		}
 	}
+}
+
+var openAIReasoningUnsupportedParams = map[string]struct{}{
+	"temperature":       {},
+	"top_p":             {},
+	"presence_penalty":  {},
+	"frequency_penalty": {},
+	"logit_bias":        {},
+	"logprobs":          {},
+	"top_logprobs":      {},
+	"n":                 {},
+}
+
+var xAIReasoningUnsupportedParams = map[string]struct{}{
+	"presence_penalty":  {},
+	"frequency_penalty": {},
+	"stop":              {},
+}
+
+func dropUnsupportedOpenAIParams(model string, params map[string]any, hasTools bool) map[string]any {
+	if len(params) == 0 {
+		return params
+	}
+	modelName := model
+	if slash := strings.LastIndex(modelName, "/"); slash >= 0 {
+		modelName = modelName[slash+1:]
+	}
+	unsupported := unsupportedOpenAIParamsForModel(modelName)
+	if len(unsupported) == 0 && !(hasTools && openAIReasoningEffortToolIncompatible(modelName)) {
+		return params
+	}
+	filtered := make(map[string]any, len(params))
+	for key, value := range params {
+		if _, drop := unsupported[key]; drop {
+			continue
+		}
+		if key == "reasoning_effort" && hasTools && openAIReasoningEffortToolIncompatible(modelName) {
+			continue
+		}
+		filtered[key] = value
+	}
+	return filtered
+}
+
+func unsupportedOpenAIParamsForModel(modelName string) map[string]struct{} {
+	for _, prefix := range []string{"o1", "o3", "o4", "gpt-5"} {
+		if strings.HasPrefix(modelName, prefix) {
+			return openAIReasoningUnsupportedParams
+		}
+	}
+	for _, prefix := range []string{"grok-4-1-fast-reasoning", "grok-4.20-0309-reasoning", "grok-4.20-multi-agent"} {
+		if strings.HasPrefix(modelName, prefix) {
+			return xAIReasoningUnsupportedParams
+		}
+	}
+	return nil
+}
+
+func openAIReasoningEffortToolIncompatible(modelName string) bool {
+	return strings.HasPrefix(modelName, "gpt-5.2") || strings.HasPrefix(modelName, "gpt-5.4")
 }
 
 func asFloat32(value any) (float32, bool) {
