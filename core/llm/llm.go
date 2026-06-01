@@ -458,9 +458,16 @@ type RealtimeCapabilities struct {
 	UserTranscription       bool
 	AutoToolReplyGeneration bool
 	AudioOutput             bool
+	ManualFunctionCalls     bool
+	MutableChatContext      bool
+	MutableInstructions     bool
+	MutableTools            bool
+	PerResponseToolChoice   bool
+	SupportsSay             bool
 }
 
 type RealtimeModel interface {
+	Capabilities() RealtimeCapabilities
 	Session() (RealtimeSession, error)
 	Close() error
 }

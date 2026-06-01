@@ -31,6 +31,21 @@ func NewRealtimeModel(apiKey, model string) *RealtimeModel {
 	}
 }
 
+func (m *RealtimeModel) Capabilities() llm.RealtimeCapabilities {
+	return llm.RealtimeCapabilities{
+		MessageTruncation:       true,
+		TurnDetection:           true,
+		UserTranscription:       true,
+		AutoToolReplyGeneration: false,
+		AudioOutput:             true,
+		ManualFunctionCalls:     true,
+		MutableChatContext:      true,
+		MutableInstructions:     true,
+		MutableTools:            true,
+		PerResponseToolChoice:   true,
+	}
+}
+
 type realtimeSession struct {
 	conn    *websocket.Conn
 	ctx     context.Context
