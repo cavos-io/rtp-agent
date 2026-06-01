@@ -80,6 +80,31 @@ func TestBuildGladiaStreamingConfigMatchesReference(t *testing.T) {
 	}
 }
 
+func TestGladiaSTTConfigOptionsMatchReference(t *testing.T) {
+	provider := NewGladiaSTT("test-key",
+		WithGladiaModel("solaria-1-large"),
+		WithGladiaInterimResults(false),
+		WithGladiaAudioFormat(48000, 24, 2, "wav/alaw"),
+		WithGladiaEndpointing(0.2, 8.5),
+		WithGladiaRegion("us-west"),
+	)
+
+	config := buildGladiaStreamingConfig(provider)
+	assertGladiaField(t, config, "model", "solaria-1-large")
+	assertGladiaField(t, config, "sample_rate", 48000)
+	assertGladiaField(t, config, "bit_depth", 24)
+	assertGladiaField(t, config, "channels", 2)
+	assertGladiaField(t, config, "encoding", "wav/alaw")
+	assertGladiaField(t, config, "endpointing", 0.2)
+	assertGladiaField(t, config, "maximum_duration_without_endpointing", 8.5)
+	assertGladiaField(t, config, "region", "us-west")
+
+	messages := config["messages_config"].(map[string]any)
+	if messages["receive_partial_transcripts"] != false || provider.Capabilities().InterimResults {
+		t.Fatalf("interim results = message:%#v capability:%t, want disabled", messages["receive_partial_transcripts"], provider.Capabilities().InterimResults)
+	}
+}
+
 func TestBuildGladiaInitRequestMovesRegionToQuery(t *testing.T) {
 	provider := NewGladiaSTT("test-key", WithGladiaBaseURL("https://gladia.example/v2/live"))
 	req, err := buildGladiaInitRequest(context.Background(), provider)

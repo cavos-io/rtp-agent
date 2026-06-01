@@ -69,6 +69,20 @@ func WithGladiaBaseURL(baseURL string) GladiaSTTOption {
 	}
 }
 
+func WithGladiaModel(model string) GladiaSTTOption {
+	return func(s *GladiaSTT) {
+		if model != "" {
+			s.model = model
+		}
+	}
+}
+
+func WithGladiaInterimResults(interimResults bool) GladiaSTTOption {
+	return func(s *GladiaSTT) {
+		s.interimResults = interimResults
+	}
+}
+
 func WithGladiaLanguages(languages []string) GladiaSTTOption {
 	return func(s *GladiaSTT) {
 		s.languages = append([]string(nil), languages...)
@@ -78,6 +92,42 @@ func WithGladiaLanguages(languages []string) GladiaSTTOption {
 func WithGladiaCodeSwitching(codeSwitching bool) GladiaSTTOption {
 	return func(s *GladiaSTT) {
 		s.codeSwitching = codeSwitching
+	}
+}
+
+func WithGladiaAudioFormat(sampleRate int, bitDepth int, channels int, encoding string) GladiaSTTOption {
+	return func(s *GladiaSTT) {
+		if sampleRate > 0 {
+			s.sampleRate = sampleRate
+		}
+		if bitDepth > 0 {
+			s.bitDepth = bitDepth
+		}
+		if channels > 0 {
+			s.channels = channels
+		}
+		if encoding != "" {
+			s.encoding = encoding
+		}
+	}
+}
+
+func WithGladiaEndpointing(endpointing float64, maximumDurationWithoutEndpointing float64) GladiaSTTOption {
+	return func(s *GladiaSTT) {
+		if endpointing >= 0 {
+			s.endpointing = endpointing
+		}
+		if maximumDurationWithoutEndpointing > 0 {
+			s.maximumDurationWithoutEndpointing = maximumDurationWithoutEndpointing
+		}
+	}
+}
+
+func WithGladiaRegion(region string) GladiaSTTOption {
+	return func(s *GladiaSTT) {
+		if region != "" {
+			s.region = region
+		}
 	}
 }
 
