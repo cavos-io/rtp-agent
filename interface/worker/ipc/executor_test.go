@@ -3,6 +3,8 @@ package ipc
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"os"
 	"os/exec"
 	"strings"
 	"testing"
@@ -242,6 +244,165 @@ func TestProcessJobExecutorCloseWaitsForProcessExit(t *testing.T) {
 	}
 	if got := executor.Status(); got != JobStatusFailed {
 		t.Fatalf("Status() after Close = %q, want %q", got, JobStatusFailed)
+	}
+}
+
+func TestProcessJobExecutorLaunchExecutableFailureDoesNotStart(t *testing.T) {
+	oldExecutable := processExecutable
+	processExecutable = func() (string, error) {
+		return "", errors.New("missing executable")
+	}
+	defer func() { processExecutable = oldExecutable }()
+
+	executor := NewProcessJobExecutor("exec-launch-error")
+	err := executor.LaunchJob(context.Background(), &livekit.Job{Id: "job-launch-error"})
+	if err == nil {
+		t.Fatal("LaunchJob() error = nil, want executable error")
+	}
+	if executor.Started() {
+		t.Fatal("Started() = true after executable lookup failed")
+	}
+	if got := executor.Status(); got != JobStatusFailed {
+		t.Fatalf("Status() after executable lookup failed = %q, want %q", got, JobStatusFailed)
+	}
+	if err := executor.Close(context.Background()); err != nil {
+		t.Fatalf("Close() after executable lookup failed error = %v", err)
+	}
+}
+
+func TestProcessJobExecutorPingMarksFailedWhenProcessMissing(t *testing.T) {
+	oldPingInterval := processPingInterval
+	oldProcessSignal := processSignal
+	oldKill := processKill
+	processPingInterval = time.Millisecond
+	processSignal = func(*os.Process, os.Signal) error {
+		return errors.New("process missing")
+	}
+	killed := make(chan struct{}, 1)
+	processKill = func(*os.Process) error {
+		killed <- struct{}{}
+		return nil
+	}
+	defer func() {
+		processPingInterval = oldPingInterval
+		processSignal = oldProcessSignal
+		processKill = oldKill
+	}()
+
+	executor := NewProcessJobExecutor("exec-ping")
+	executor.mu.Lock()
+	executor.status = JobStatusRunning
+	executor.cmd = &exec.Cmd{Process: &os.Process{Pid: 12345}}
+	executor.mu.Unlock()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go executor.pingTask(ctx)
+
+	deadline := time.After(time.Second)
+	ticker := time.NewTicker(time.Millisecond)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-deadline:
+			t.Fatalf("Status() = %q, want %q", executor.Status(), JobStatusFailed)
+		case <-ticker.C:
+			if executor.Status() == JobStatusFailed {
+				select {
+				case <-killed:
+					return
+				case <-time.After(time.Second):
+					t.Fatal("process was not killed after failed ping")
+				}
+			}
+		}
+	}
+}
+
+func TestProcessJobExecutorPingDoesNotHoldLockWhileKilling(t *testing.T) {
+	oldPingInterval := processPingInterval
+	oldProcessSignal := processSignal
+	oldKill := processKill
+	processPingInterval = time.Millisecond
+	processSignal = func(*os.Process, os.Signal) error {
+		return errors.New("process missing")
+	}
+	killStarted := make(chan struct{})
+	releaseKill := make(chan struct{})
+	processKill = func(*os.Process) error {
+		close(killStarted)
+		<-releaseKill
+		return nil
+	}
+	defer func() {
+		processPingInterval = oldPingInterval
+		processSignal = oldProcessSignal
+		processKill = oldKill
+	}()
+	defer close(releaseKill)
+
+	executor := NewProcessJobExecutor("exec-ping-lock")
+	executor.mu.Lock()
+	executor.status = JobStatusRunning
+	executor.cmd = &exec.Cmd{Process: &os.Process{Pid: 12345}}
+	executor.mu.Unlock()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go executor.pingTask(ctx)
+
+	select {
+	case <-killStarted:
+	case <-time.After(time.Second):
+		t.Fatal("process kill did not start after failed ping")
+	}
+
+	statusCh := make(chan JobStatus, 1)
+	go func() {
+		statusCh <- executor.Status()
+	}()
+
+	select {
+	case got := <-statusCh:
+		if got != JobStatusFailed {
+			t.Fatalf("Status() while kill is blocked = %q, want %q", got, JobStatusFailed)
+		}
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("Status() blocked while process kill was running")
+	}
+}
+
+func TestProcessJobExecutorPingFailureIsNotOverwrittenByCleanExit(t *testing.T) {
+	oldPingInterval := processPingInterval
+	oldProcessSignal := processSignal
+	oldKill := processKill
+	oldCommandContext := processCommandContext
+	processPingInterval = time.Millisecond
+	processSignal = func(*os.Process, os.Signal) error {
+		return errors.New("process missing")
+	}
+	processKill = func(*os.Process) error {
+		return nil
+	}
+	processCommandContext = func(ctx context.Context, name string, args ...string) *exec.Cmd {
+		return exec.CommandContext(ctx, "sleep", "0.05")
+	}
+	defer func() {
+		processPingInterval = oldPingInterval
+		processSignal = oldProcessSignal
+		processKill = oldKill
+		processCommandContext = oldCommandContext
+	}()
+
+	executor := NewProcessJobExecutor("exec-ping-clean-exit")
+	if err := executor.LaunchJob(context.Background(), &livekit.Job{Id: "job-ping-clean-exit"}); err != nil {
+		t.Fatalf("LaunchJob() error = %v", err)
+	}
+	if err := executor.Close(context.Background()); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+	if got := executor.Status(); got != JobStatusFailed {
+		t.Fatalf("Status() after ping failure and clean exit = %q, want %q", got, JobStatusFailed)
 	}
 }
 

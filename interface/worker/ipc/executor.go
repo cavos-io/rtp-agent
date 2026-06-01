@@ -34,7 +34,15 @@ type JobExecutor interface {
 	Close(ctx context.Context) error
 }
 
+var processExecutable = os.Executable
 var processCommandContext = exec.CommandContext
+var processPingInterval = 2 * time.Second
+var processSignal = func(process *os.Process, signal os.Signal) error {
+	return process.Signal(signal)
+}
+var processKill = func(process *os.Process) error {
+	return process.Kill()
+}
 
 type ThreadJobExecutor struct {
 	id     string
@@ -205,10 +213,12 @@ func (e *ProcessJobExecutor) LaunchRunningJob(ctx context.Context, info RunningJ
 	e.lastPong = time.Now()
 	e.mu.Unlock()
 
-	exe, err := os.Executable()
+	exe, err := processExecutable()
 	if err != nil {
 		e.mu.Lock()
 		e.status = JobStatusFailed
+		e.started = false
+		e.done = nil
 		e.mu.Unlock()
 		return err
 	}
@@ -217,6 +227,8 @@ func (e *ProcessJobExecutor) LaunchRunningJob(ctx context.Context, info RunningJ
 	if err != nil {
 		e.mu.Lock()
 		e.status = JobStatusFailed
+		e.started = false
+		e.done = nil
 		e.mu.Unlock()
 		return err
 	}
@@ -241,7 +253,7 @@ func (e *ProcessJobExecutor) LaunchRunningJob(ctx context.Context, info RunningJ
 		if err != nil {
 			logger.Logger.Errorw("Job process failed", err, "job_id", info.Job.GetId(), "exec_id", e.id)
 			e.status = JobStatusFailed
-		} else {
+		} else if e.status == JobStatusRunning {
 			e.status = JobStatusSuccess
 		}
 	}()
@@ -295,7 +307,7 @@ func RunningJobInfoFromEnv(env map[string]string) (RunningJobInfo, error) {
 }
 
 func (e *ProcessJobExecutor) pingTask(ctx context.Context) {
-	ticker := time.NewTicker(2 * time.Second)
+	ticker := time.NewTicker(processPingInterval)
 	defer ticker.Stop()
 
 	for {
@@ -312,11 +324,16 @@ func (e *ProcessJobExecutor) pingTask(ctx context.Context) {
 			// In a full implementation, we would send a ping message via a pipe
 			// and wait for a pong.
 			// For basic parity, we'll check if the process is still alive.
+			var killProcess *os.Process
 			if e.cmd != nil && e.cmd.Process != nil {
 				// check if process exists
-				if err := e.cmd.Process.Signal(syscall.Signal(0)); err != nil {
+				if err := processSignal(e.cmd.Process, syscall.Signal(0)); err != nil {
 					logger.Logger.Warnw("Job process unresponsive", err, "exec_id", e.id)
-					// Handle unresponsiveness
+					e.status = JobStatusFailed
+					killProcess = e.cmd.Process
+					e.mu.Unlock()
+					_ = processKill(killProcess)
+					return
 				}
 			}
 			e.mu.Unlock()
@@ -335,7 +352,7 @@ func (e *ProcessJobExecutor) Close(ctx context.Context) error {
 	}
 
 	if cmd != nil && cmd.Process != nil {
-		if err := cmd.Process.Kill(); err != nil && !strings.Contains(err.Error(), "process already finished") {
+		if err := processKill(cmd.Process); err != nil && !strings.Contains(err.Error(), "process already finished") {
 			return err
 		}
 	}

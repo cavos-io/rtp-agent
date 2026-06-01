@@ -1,8 +1,10 @@
 package llm
 
 import (
+	"context"
 	"encoding/base64"
 	"encoding/json"
+	"io"
 	"reflect"
 	"strings"
 	"testing"
@@ -1917,3 +1919,81 @@ func TestChatContextToMistralProviderFormatReturnsImageSerializationError(t *tes
 		t.Fatalf("ToProviderFormatE(mistralai) error = %q, want decode data URL image error", err)
 	}
 }
+
+func TestChatContextSummarizeCompactsOlderHistoryAndPreservesTail(t *testing.T) {
+	ctx := NewChatContext()
+	ctx.Items = []ChatItem{
+		&ChatMessage{ID: "system", Role: ChatRoleSystem, Content: []ChatContent{{Text: "base instructions"}}, CreatedAt: time.Unix(1, 0)},
+		&ChatMessage{ID: "old-user", Role: ChatRoleUser, Content: []ChatContent{{Text: "old question"}}, CreatedAt: time.Unix(2, 0)},
+		&ChatMessage{ID: "old-assistant", Role: ChatRoleAssistant, Content: []ChatContent{{Text: "old answer"}}, CreatedAt: time.Unix(3, 0)},
+		&FunctionCall{ID: "old-assistant/tool", CallID: "call_lookup", Name: "lookup", Arguments: `{"q":"old"}`, CreatedAt: time.Unix(4, 0)},
+		&FunctionCallOutput{ID: "lookup-output", CallID: "call_lookup", Name: "lookup", Output: "old fact", CreatedAt: time.Unix(5, 0)},
+		&ChatMessage{ID: "tail-user", Role: ChatRoleUser, Content: []ChatContent{{Text: "recent question"}}, CreatedAt: time.Unix(6, 0)},
+		&ChatMessage{ID: "tail-assistant", Role: ChatRoleAssistant, Content: []ChatContent{{Text: "recent answer"}}, CreatedAt: time.Unix(7, 0)},
+	}
+	llm := &summaryTestLLM{response: "summary text"}
+
+	result, err := ctx.Summarize(context.Background(), llm, ChatContextSummarizeOptions{KeepLastTurns: 1})
+	if err != nil {
+		t.Fatalf("Summarize() error = %v", err)
+	}
+	if result != ctx {
+		t.Fatalf("Summarize() = %p, want receiver %p", result, ctx)
+	}
+	if len(ctx.Items) != 4 {
+		t.Fatalf("len(items) = %d, want 4: %q", len(ctx.Items), itemIDs(ctx.Items))
+	}
+	if ctx.Items[0].GetID() != "system" || ctx.Items[2].GetID() != "tail-user" || ctx.Items[3].GetID() != "tail-assistant" {
+		t.Fatalf("items = %q, want system, summary, tail-user, tail-assistant", itemIDs(ctx.Items))
+	}
+	summary, ok := ctx.Items[1].(*ChatMessage)
+	if !ok {
+		t.Fatalf("summary item = %T, want *ChatMessage", ctx.Items[1])
+	}
+	if summary.Role != ChatRoleAssistant || summary.Extra["is_summary"] != true {
+		t.Fatalf("summary fields = %#v", summary)
+	}
+	if summary.TextContent() != "<chat_history_summary>\nsummary text\n</chat_history_summary>" {
+		t.Fatalf("summary text = %q", summary.TextContent())
+	}
+	if !summary.CreatedAt.Before(ctx.Items[2].GetCreatedAt()) {
+		t.Fatalf("summary CreatedAt = %v, want before tail %v", summary.CreatedAt, ctx.Items[2].GetCreatedAt())
+	}
+	if len(llm.requests) != 1 {
+		t.Fatalf("llm requests = %d, want 1", len(llm.requests))
+	}
+	prompt := llm.requests[0].Messages()[1].TextContent()
+	if !strings.Contains(prompt, "<user>\nold question\n</user>") ||
+		!strings.Contains(prompt, "<assistant>\nold answer\n</assistant>") ||
+		!strings.Contains(prompt, "<function_call") ||
+		!strings.Contains(prompt, "old fact") ||
+		strings.Contains(prompt, "recent question") {
+		t.Fatalf("summary prompt = %q", prompt)
+	}
+}
+
+type summaryTestLLM struct {
+	response string
+	requests []*ChatContext
+}
+
+func (f *summaryTestLLM) Chat(_ context.Context, chatCtx *ChatContext, _ ...ChatOption) (LLMStream, error) {
+	f.requests = append(f.requests, chatCtx)
+	return &summaryTestStream{chunks: []*ChatChunk{{Delta: &ChoiceDelta{Content: f.response}}}}, nil
+}
+
+type summaryTestStream struct {
+	chunks []*ChatChunk
+	index  int
+}
+
+func (s *summaryTestStream) Next() (*ChatChunk, error) {
+	if s.index >= len(s.chunks) {
+		return nil, io.EOF
+	}
+	chunk := s.chunks[s.index]
+	s.index++
+	return chunk, nil
+}
+
+func (s *summaryTestStream) Close() error { return nil }

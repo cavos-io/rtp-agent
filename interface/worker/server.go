@@ -1638,10 +1638,12 @@ func (s *AgentServer) ExecuteLocalJobWithOptions(ctx context.Context, roomName s
 			defer func() {
 				if recovered := recover(); recovered != nil {
 					logger.Logger.Errorw("Local job entrypoint panicked", fmt.Errorf("%v", recovered), "jobId", jobCtx.Job.Id)
+					jobCtx.Shutdown("job crashed")
 				}
 			}()
 			if err := s.entrypointFnc(jobCtx); err != nil {
 				logger.Logger.Errorw("Local job entrypoint failed", err, "jobId", jobCtx.Job.Id)
+				jobCtx.Shutdown("job failed")
 			}
 		}()
 	}
