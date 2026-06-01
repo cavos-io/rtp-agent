@@ -30,7 +30,7 @@ var (
 	// inline code: remove ` from `text`
 	inlineCodePattern = regexp.MustCompile("`([^`]+?)`")
 	// strikethrough: remove ~~text~~ only when text is tight against tildes
-	strikePattern = regexp.MustCompile(`~~([^\s~][^~]*?[^\s~])~~`)
+	strikePattern = regexp.MustCompile(`~~([^\s~](?:[^~]*?[^\s~])?)~~`)
 
 	// Emoji block ranges
 	emojiPattern = regexp.MustCompile(`[\x{1F000}-\x{1FBFF}]|[\x{2600}-\x{26FF}]|[\x{2700}-\x{27BF}]|[\x{2B00}-\x{2BFF}]|[\x{FE00}-\x{FE0F}]|\x{200D}|\x{20E3}`)

@@ -46,3 +46,12 @@ func TestFilterMarkdownPreservesLooseTildes(t *testing.T) {
 		t.Fatalf("FilterMarkdown() = %q, want %q", got, want)
 	}
 }
+
+func TestFilterMarkdownRemovesSingleCharacterStrikethrough(t *testing.T) {
+	input := "Remove ~~x~~ but keep ~~ spaced ~~."
+	want := "Remove  but keep ~~ spaced ~~."
+
+	if got := FilterMarkdown(input); got != want {
+		t.Fatalf("FilterMarkdown() = %q, want %q", got, want)
+	}
+}
