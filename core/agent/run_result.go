@@ -492,6 +492,28 @@ func (a *RunAssert) NextEvent(eventType ...string) *RunAssert {
 	return a
 }
 
+func (a *RunAssert) EventAt(index int, eventType string, criteria ...RunEventCriteria) *RunAssert {
+	events := a.events()
+	resolvedIndex := index
+	if resolvedIndex < 0 {
+		resolvedIndex += len(events)
+	}
+	if resolvedIndex < 0 || resolvedIndex >= len(events) {
+		a.errors = append(a.errors, fmt.Errorf("event index %d out of range (total events: %d)", index, len(events)))
+		return a
+	}
+
+	event := events[resolvedIndex]
+	if eventType != "" && event.GetType() != eventType {
+		a.errors = append(a.errors, fmt.Errorf("expected event at index %d to be %s, got %s", index, eventType, event.GetType()))
+		return a
+	}
+	if len(criteria) > 0 && !eventMatchesCriteria(event, criteria[0]) {
+		a.errors = append(a.errors, fmt.Errorf("expected event at index %d matching criteria", index))
+	}
+	return a
+}
+
 func (a *RunAssert) NextMessage(role llm.ChatRole) *RunAssert {
 	event, ok := a.nextEvent("message")
 	if !ok {

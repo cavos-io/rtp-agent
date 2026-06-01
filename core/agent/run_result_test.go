@@ -703,6 +703,58 @@ func TestRunAssertNextEventReportsMissingType(t *testing.T) {
 	}
 }
 
+func TestRunAssertEventAtValidatesTypeAndCriteria(t *testing.T) {
+	result := NewRunResult(llm.NewChatContext())
+	now := time.Now()
+	result.RecordItem(&llm.ChatMessage{ID: "msg_1", Role: llm.ChatRoleAssistant, CreatedAt: now})
+	result.RecordItem(&llm.FunctionCall{ID: "fnc_1", CallID: "call_1", Name: "lookup", CreatedAt: now.Add(time.Millisecond)})
+
+	err := result.Expect.EventAt(1, "function_call", RunEventCriteria{Name: "lookup"}).HasError()
+
+	if err != nil {
+		t.Fatalf("EventAt returned error = %v, want nil for matching indexed event", err)
+	}
+}
+
+func TestRunAssertEventAtSupportsNegativeIndex(t *testing.T) {
+	result := NewRunResult(llm.NewChatContext())
+	now := time.Now()
+	result.RecordItem(&llm.ChatMessage{ID: "msg_1", Role: llm.ChatRoleAssistant, CreatedAt: now})
+	result.RecordItem(&llm.FunctionCall{ID: "fnc_1", CallID: "call_1", Name: "lookup", CreatedAt: now.Add(time.Millisecond)})
+
+	err := result.Expect.EventAt(-1, "function_call", RunEventCriteria{Name: "lookup"}).HasError()
+
+	if err != nil {
+		t.Fatalf("EventAt returned error = %v, want nil for matching negative index", err)
+	}
+}
+
+func TestRunAssertEventAtDoesNotAdvanceSequentialCursor(t *testing.T) {
+	result := NewRunResult(llm.NewChatContext())
+	result.RecordItem(&llm.ChatMessage{ID: "msg_1", Role: llm.ChatRoleAssistant, CreatedAt: time.Now()})
+
+	err := result.Expect.
+		EventAt(0, "message", RunEventCriteria{Role: llm.ChatRoleAssistant}).
+		NextEvent("message").
+		NoMoreEvents().
+		HasError()
+
+	if err != nil {
+		t.Fatalf("EventAt advanced sequential cursor: %v", err)
+	}
+}
+
+func TestRunAssertEventAtReportsOutOfRange(t *testing.T) {
+	result := NewRunResult(llm.NewChatContext())
+	result.RecordItem(&llm.ChatMessage{ID: "msg_1", Role: llm.ChatRoleAssistant, CreatedAt: time.Now()})
+
+	err := result.Expect.EventAt(2, "message").HasError()
+
+	if err == nil {
+		t.Fatal("EventAt error = nil, want out-of-range error")
+	}
+}
+
 func TestRunAssertNextMessageAndFunctionCallValidateDetails(t *testing.T) {
 	result := NewRunResult(llm.NewChatContext())
 	now := time.Now()
