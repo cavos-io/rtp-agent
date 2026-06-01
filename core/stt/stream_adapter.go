@@ -75,6 +75,9 @@ type streamAdapterWrapper struct {
 	startTime   float64
 }
 
+// StreamAdapterWrapper is kept public for LiveKit Agents API compatibility.
+type StreamAdapterWrapper = streamAdapterWrapper
+
 type streamAdapterInput struct {
 	frame *model.AudioFrame
 	flush bool

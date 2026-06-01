@@ -50,6 +50,12 @@ func TestStreamAdapterExposesWrappedSTT(t *testing.T) {
 	}
 }
 
+func TestStreamAdapterWrapperIsPublicReferenceType(t *testing.T) {
+	var _ RecognizeStream = (*StreamAdapterWrapper)(nil)
+	var _ StreamTiming = (*StreamAdapterWrapper)(nil)
+	var _ InputEnding = (*StreamAdapterWrapper)(nil)
+}
+
 func TestStreamAdapterExposesTimingAnchors(t *testing.T) {
 	before := time.Now()
 	stream, err := NewStreamAdapter(&fakeStreamAdapterSTT{}, &fakeStreamAdapterVAD{
