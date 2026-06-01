@@ -176,14 +176,12 @@ func TestRoomIOHandleAgentStateChangedSkipsWhenRoomDisconnected(t *testing.T) {
 }
 
 func TestRoomIOHandleAgentSessionCloseDeletesRoomWhenEnabled(t *testing.T) {
-	var gotRoomName string
-	calls := 0
+	calls := make(chan string, 2)
 	rio := &RoomIO{
 		Options: RoomOptions{
 			DeleteRoomOnClose: true,
 			DeleteRoom: func(_ context.Context, roomName string) error {
-				calls++
-				gotRoomName = roomName
+				calls <- roomName
 				return nil
 			},
 		},
@@ -193,13 +191,90 @@ func TestRoomIOHandleAgentSessionCloseDeletesRoomWhenEnabled(t *testing.T) {
 	}
 
 	rio.handleAgentSessionClose(agent.CloseEvent{Reason: agent.CloseReasonParticipantDisconnected})
-	rio.handleAgentSessionClose(agent.CloseEvent{Reason: agent.CloseReasonParticipantDisconnected})
-
-	if calls != 2 {
-		t.Fatalf("DeleteRoom calls = %d, want 2", calls)
+	select {
+	case gotRoomName := <-calls:
+		if gotRoomName != "room-a" {
+			t.Fatalf("DeleteRoom roomName = %q, want room-a", gotRoomName)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("DeleteRoom was not called")
 	}
-	if gotRoomName != "room-a" {
-		t.Fatalf("DeleteRoom roomName = %q, want room-a", gotRoomName)
+	waitForRoomDeleteIdle(t, rio)
+
+	rio.handleAgentSessionClose(agent.CloseEvent{Reason: agent.CloseReasonParticipantDisconnected})
+	select {
+	case gotRoomName := <-calls:
+		if gotRoomName != "room-a" {
+			t.Fatalf("second DeleteRoom roomName = %q, want room-a", gotRoomName)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("second DeleteRoom was not called after first completed")
+	}
+}
+
+func waitForRoomDeleteIdle(t *testing.T, rio *RoomIO) {
+	t.Helper()
+
+	deadline := time.After(time.Second)
+	ticker := time.NewTicker(time.Millisecond)
+	defer ticker.Stop()
+
+	for {
+		if !rio.isDeletingRoom() {
+			return
+		}
+		select {
+		case <-ticker.C:
+		case <-deadline:
+			t.Fatal("deletingRoom was not cleared")
+		}
+	}
+}
+
+func TestRoomIOHandleAgentSessionCloseDoesNotBlockOnRoomDelete(t *testing.T) {
+	deleteStarted := make(chan struct{})
+	releaseDelete := make(chan struct{})
+	deleteDone := make(chan struct{})
+	rio := &RoomIO{
+		Options: RoomOptions{
+			DeleteRoomOnClose: true,
+			DeleteRoom: func(context.Context, string) error {
+				close(deleteStarted)
+				<-releaseDelete
+				close(deleteDone)
+				return nil
+			},
+		},
+		roomName: func() string {
+			return "room-a"
+		},
+	}
+
+	returned := make(chan struct{})
+	go func() {
+		rio.handleAgentSessionClose(agent.CloseEvent{Reason: agent.CloseReasonParticipantDisconnected})
+		close(returned)
+	}()
+
+	select {
+	case <-deleteStarted:
+	case <-time.After(time.Second):
+		t.Fatal("DeleteRoom was not started")
+	}
+	select {
+	case <-returned:
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("handleAgentSessionClose blocked waiting for DeleteRoom")
+	}
+	if !rio.isDeletingRoom() {
+		t.Fatal("deletingRoom = false while DeleteRoom is in flight")
+	}
+
+	close(releaseDelete)
+	select {
+	case <-deleteDone:
+	case <-time.After(time.Second):
+		t.Fatal("DeleteRoom did not finish after release")
 	}
 }
 
