@@ -165,6 +165,14 @@ func TestAssemblyAIRealtimeTranscriptEventPreservesWordTimings(t *testing.T) {
 	}
 }
 
+func TestAssemblyAISTTCapabilitiesAdvertiseWordAlignment(t *testing.T) {
+	provider := NewAssemblyAISTT("test-key")
+
+	if got := provider.Capabilities().AlignedTranscript; got != "word" {
+		t.Fatalf("AlignedTranscript = %q, want word", got)
+	}
+}
+
 func writeJSON(t *testing.T, w http.ResponseWriter, value any) {
 	t.Helper()
 	w.Header().Set("Content-Type", "application/json")

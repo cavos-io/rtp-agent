@@ -35,7 +35,7 @@ func NewAWSSTT(ctx context.Context, region string) (*AWSSTT, error) {
 
 func (s *AWSSTT) Label() string { return "aws.STT" }
 func (s *AWSSTT) Capabilities() stt.STTCapabilities {
-	return stt.STTCapabilities{Streaming: true, InterimResults: true, Diarization: false, OfflineRecognize: false}
+	return stt.STTCapabilities{Streaming: true, InterimResults: true, Diarization: false, AlignedTranscript: "word", OfflineRecognize: false}
 }
 
 func (s *AWSSTT) Stream(ctx context.Context, language string) (stt.RecognizeStream, error) {

@@ -36,7 +36,7 @@ func NewAssemblyAISTT(apiKey string) *AssemblyAISTT {
 
 func (s *AssemblyAISTT) Label() string { return "assemblyai.STT" }
 func (s *AssemblyAISTT) Capabilities() stt.STTCapabilities {
-	return stt.STTCapabilities{Streaming: true, InterimResults: true, Diarization: false, OfflineRecognize: true}
+	return stt.STTCapabilities{Streaming: true, InterimResults: true, Diarization: false, AlignedTranscript: "word", OfflineRecognize: true}
 }
 
 func (s *AssemblyAISTT) Stream(ctx context.Context, language string) (stt.RecognizeStream, error) {

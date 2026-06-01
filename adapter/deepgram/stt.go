@@ -36,7 +36,7 @@ func NewDeepgramSTT(apiKey string, model string) *DeepgramSTT {
 
 func (s *DeepgramSTT) Label() string { return "deepgram.STT" }
 func (s *DeepgramSTT) Capabilities() stt.STTCapabilities {
-	return stt.STTCapabilities{Streaming: true, InterimResults: true, Diarization: false, OfflineRecognize: true}
+	return stt.STTCapabilities{Streaming: true, InterimResults: true, Diarization: false, AlignedTranscript: "word", OfflineRecognize: true}
 }
 
 func (s *DeepgramSTT) Stream(ctx context.Context, languageStr string) (stt.RecognizeStream, error) {

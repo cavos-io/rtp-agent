@@ -28,7 +28,7 @@ func NewOpenAISTT(apiKey string, model string) *OpenAISTT {
 
 func (s *OpenAISTT) Label() string { return "openai.STT" }
 func (s *OpenAISTT) Capabilities() stt.STTCapabilities {
-	return stt.STTCapabilities{Streaming: false, InterimResults: false, Diarization: false, OfflineRecognize: true}
+	return stt.STTCapabilities{Streaming: false, InterimResults: false, Diarization: false, AlignedTranscript: "word", OfflineRecognize: true}
 }
 
 func (s *OpenAISTT) Stream(ctx context.Context, language string) (stt.RecognizeStream, error) {
