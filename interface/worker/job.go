@@ -477,9 +477,7 @@ func (c *JobContext) scheduleParticipantEntrypoint(registration participantEntry
 		c.participantTasks = make(map[participantEntrypointTaskKey]struct{})
 	}
 	if _, ok := c.participantTasks[key]; ok {
-		c.participantTasksMu.Unlock()
 		logger.Logger.Warnw("participant entrypoint already running for participant", nil, "participant", participant.Identity)
-		return
 	}
 	c.participantTasks[key] = struct{}{}
 	c.participantTasksMu.Unlock()
