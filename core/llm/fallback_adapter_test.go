@@ -334,6 +334,48 @@ func TestFallbackAdapterDefaultsRetryInterval(t *testing.T) {
 	}
 }
 
+func TestFallbackAdapterPassesAttemptConnectOptionsToProvider(t *testing.T) {
+	primary := &fakeFallbackLLM{stream: &fakeFallbackStream{events: []fakeFallbackEvent{
+		{chunk: &ChatChunk{Delta: &ChoiceDelta{Content: "ok"}}},
+	}}}
+	adapter := NewFallbackAdapterWithOptions([]LLM{primary}, FallbackAdapterOptions{
+		AttemptTimeout: 75 * time.Millisecond,
+		MaxRetryPerLLM: 2,
+		RetryInterval:  25 * time.Millisecond,
+	})
+
+	stream, err := adapter.Chat(
+		context.Background(),
+		NewChatContext(),
+		WithConnectOptions(APIConnectOptions{
+			MaxRetry:      7,
+			RetryInterval: time.Second,
+			Timeout:       3 * time.Second,
+		}),
+	)
+	if err != nil {
+		t.Fatalf("Chat returned error: %v", err)
+	}
+	defer stream.Close()
+
+	if len(primary.options) != 1 {
+		t.Fatalf("captured options = %d, want 1", len(primary.options))
+	}
+	connectOptions := primary.options[0].ConnectOptions
+	if connectOptions == nil {
+		t.Fatal("provider ConnectOptions = nil, want fallback attempt options")
+	}
+	if connectOptions.MaxRetry != 2 {
+		t.Fatalf("MaxRetry = %d, want fallback max retry per LLM", connectOptions.MaxRetry)
+	}
+	if connectOptions.RetryInterval != 25*time.Millisecond {
+		t.Fatalf("RetryInterval = %v, want fallback retry interval", connectOptions.RetryInterval)
+	}
+	if connectOptions.Timeout != 75*time.Millisecond {
+		t.Fatalf("Timeout = %v, want fallback attempt timeout", connectOptions.Timeout)
+	}
+}
+
 func TestFallbackAdapterDoesNotRetryCleanEOF(t *testing.T) {
 	second := &fakeFallbackLLM{stream: &fakeFallbackStream{events: []fakeFallbackEvent{
 		{chunk: &ChatChunk{Delta: &ChoiceDelta{Content: "fallback"}}},
@@ -667,10 +709,16 @@ type fakeFallbackLLM struct {
 	label   string
 	calls   int
 	onChat  func(context.Context)
+	options []ChatOptions
 }
 
-func (f *fakeFallbackLLM) Chat(ctx context.Context, _ *ChatContext, _ ...ChatOption) (LLMStream, error) {
+func (f *fakeFallbackLLM) Chat(ctx context.Context, _ *ChatContext, opts ...ChatOption) (LLMStream, error) {
 	f.calls++
+	var options ChatOptions
+	for _, opt := range opts {
+		opt(&options)
+	}
+	f.options = append(f.options, options)
 	if f.onChat != nil {
 		f.onChat(ctx)
 	}

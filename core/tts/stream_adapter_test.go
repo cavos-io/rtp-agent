@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/cavos-io/rtp-agent/core/audio/model"
+	"github.com/cavos-io/rtp-agent/library/telemetry"
 )
 
 const streamAdapterTestTimeout = 5 * time.Second
@@ -79,6 +80,28 @@ func TestStreamAdapterForwardsPrewarm(t *testing.T) {
 
 	if provider.prewarmCalls != 1 {
 		t.Fatalf("provider prewarm calls = %d, want 1", provider.prewarmCalls)
+	}
+}
+
+func TestStreamAdapterForwardsMetricsCollected(t *testing.T) {
+	provider := &fakeStreamAdapterTTS{}
+	adapter := NewStreamAdapter(provider)
+	metricsCh := make(chan string, 1)
+
+	unsubscribe := adapter.OnMetricsCollected(func(metrics *telemetry.TTSMetrics) {
+		metricsCh <- metrics.RequestID
+	})
+	defer unsubscribe()
+
+	provider.EmitMetricsCollected(&telemetry.TTSMetrics{RequestID: "req-1"})
+
+	select {
+	case requestID := <-metricsCh:
+		if requestID != "req-1" {
+			t.Fatalf("metrics RequestID = %q, want req-1", requestID)
+		}
+	default:
+		t.Fatal("metrics handler was not called")
 	}
 }
 
@@ -211,6 +234,11 @@ func TestStreamAdapterDoesNotMarkIntermediateSentenceFinal(t *testing.T) {
 	}
 	if err := stream.Flush(); err != nil {
 		t.Fatalf("Flush returned error: %v", err)
+	}
+	if ending, ok := stream.(interface{ EndInput() error }); ok {
+		if err := ending.EndInput(); err != nil {
+			t.Fatalf("EndInput returned error: %v", err)
+		}
 	}
 
 	first := nextStreamAdapterAudio(t, stream)
@@ -622,6 +650,8 @@ func nextStreamAdapterAudio(t *testing.T, stream SynthesizeStream) *SynthesizedA
 }
 
 type fakeStreamAdapterTTS struct {
+	MetricsEmitter
+
 	texts         []string
 	model         string
 	provider      string

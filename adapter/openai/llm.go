@@ -52,15 +52,29 @@ func (l *OpenAILLM) Chat(ctx context.Context, chatCtx *llm.ChatContext, opts ...
 		opt(options)
 	}
 
+	var cancel context.CancelFunc
+	if options.ConnectOptions != nil {
+		if err := options.ConnectOptions.Validate(); err != nil {
+			return nil, err
+		}
+		if options.ConnectOptions.Timeout > 0 {
+			ctx, cancel = context.WithTimeout(ctx, options.ConnectOptions.Timeout)
+		}
+	}
+
 	req := buildOpenAIChatCompletionRequest(l.model, chatCtx, options)
 
 	stream, err := l.client.CreateChatCompletionStream(ctx, req)
 	if err != nil {
+		if cancel != nil {
+			cancel()
+		}
 		return nil, err
 	}
 
 	return &openaiStream{
 		stream: stream,
+		cancel: cancel,
 	}, nil
 }
 
@@ -555,6 +569,7 @@ func buildOpenAIToolOutput(toolOutput *llm.FunctionCallOutput) openai.ChatComple
 
 type openaiStream struct {
 	stream *openai.ChatCompletionStream
+	cancel context.CancelFunc
 }
 
 func (s *openaiStream) Next() (*llm.ChatChunk, error) {
@@ -615,6 +630,10 @@ func openAICompletionUsage(usage *openai.Usage) *llm.CompletionUsage {
 
 func (s *openaiStream) Close() error {
 	s.stream.Close()
+	if s.cancel != nil {
+		s.cancel()
+		s.cancel = nil
+	}
 	return nil
 }
 

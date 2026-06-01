@@ -2,6 +2,7 @@ package llm
 
 import (
 	"context"
+	"errors"
 	"io"
 	"testing"
 
@@ -49,6 +50,113 @@ func TestLLMPrewarmDelegatesWhenSupported(t *testing.T) {
 
 	if !provider.prewarmed {
 		t.Fatal("Prewarm() did not call provider Prewarm")
+	}
+}
+
+func TestLLMErrorCarriesReferenceFields(t *testing.T) {
+	cause := errors.New("provider unavailable")
+	err := NewLLMError("openai.LLM", cause, true)
+
+	if err.Type != "llm_error" {
+		t.Fatalf("Type = %q, want llm_error", err.Type)
+	}
+	if err.Timestamp.IsZero() {
+		t.Fatal("Timestamp is zero, want creation time")
+	}
+	if err.Label != "openai.LLM" {
+		t.Fatalf("Label = %q, want openai.LLM", err.Label)
+	}
+	if err.Err != cause {
+		t.Fatalf("Err = %v, want wrapped cause", err.Err)
+	}
+	if !err.Recoverable {
+		t.Fatal("Recoverable = false, want true")
+	}
+	if !errors.Is(err, cause) {
+		t.Fatal("errors.Is() = false, want wrapped cause")
+	}
+}
+
+func TestRealtimeModelMetadataDefaults(t *testing.T) {
+	model := &metadataRealtimeModel{}
+
+	if got := RealtimeLabel(model); got != "llm.metadataRealtimeModel" {
+		t.Fatalf("RealtimeLabel() = %q, want llm.metadataRealtimeModel", got)
+	}
+	if got := RealtimeModelName(model); got != "unknown" {
+		t.Fatalf("RealtimeModelName() = %q, want unknown", got)
+	}
+	if got := RealtimeProvider(model); got != "unknown" {
+		t.Fatalf("RealtimeProvider() = %q, want unknown", got)
+	}
+}
+
+func TestRealtimeModelMetadataUsesProviderOverrides(t *testing.T) {
+	model := &metadataRealtimeModel{
+		label:    "test.RealtimeModel",
+		model:    "realtime-a",
+		provider: "provider-a",
+	}
+
+	if got := RealtimeLabel(model); got != "test.RealtimeModel" {
+		t.Fatalf("RealtimeLabel() = %q, want provider label", got)
+	}
+	if got := RealtimeModelName(model); got != "realtime-a" {
+		t.Fatalf("RealtimeModelName() = %q, want realtime-a", got)
+	}
+	if got := RealtimeProvider(model); got != "provider-a" {
+		t.Fatalf("RealtimeProvider() = %q, want provider-a", got)
+	}
+}
+
+func TestRealtimeModelErrorCarriesReferenceFields(t *testing.T) {
+	cause := errors.New("session disconnected")
+	err := NewRealtimeModelError("openai.RealtimeModel", cause, false)
+
+	if err.Type != "realtime_model_error" {
+		t.Fatalf("Type = %q, want realtime_model_error", err.Type)
+	}
+	if err.Timestamp.IsZero() {
+		t.Fatal("Timestamp is zero, want creation time")
+	}
+	if err.Label != "openai.RealtimeModel" {
+		t.Fatalf("Label = %q, want openai.RealtimeModel", err.Label)
+	}
+	if err.Err != cause {
+		t.Fatalf("Err = %v, want wrapped cause", err.Err)
+	}
+	if err.Recoverable {
+		t.Fatal("Recoverable = true, want false")
+	}
+	if !errors.Is(err, cause) {
+		t.Fatal("errors.Is() = false, want wrapped cause")
+	}
+}
+
+func TestRealtimeErrorCarriesMessageAndCause(t *testing.T) {
+	cause := errors.New("timeout")
+	err := NewRealtimeError("update chat context failed", cause)
+
+	if err.Error() != "update chat context failed: timeout" {
+		t.Fatalf("Error() = %q, want wrapped message", err.Error())
+	}
+	if !errors.Is(err, cause) {
+		t.Fatal("errors.Is() = false, want wrapped cause")
+	}
+	var realtimeErr RealtimeError
+	if !errors.As(err, &realtimeErr) {
+		t.Fatalf("errors.As() failed for %T", err)
+	}
+}
+
+func TestRealtimeErrorCanCarryMessageOnly(t *testing.T) {
+	err := NewRealtimeError("generation timed out", nil)
+
+	if err.Error() != "generation timed out" {
+		t.Fatalf("Error() = %q, want message only", err.Error())
+	}
+	if errors.Unwrap(err) != nil {
+		t.Fatalf("Unwrap() = %v, want nil", errors.Unwrap(err))
 	}
 }
 
@@ -321,4 +429,34 @@ func (m *metadataTestStream) Next() (*ChatChunk, error) {
 
 func (m *metadataTestStream) Close() error {
 	return nil
+}
+
+type metadataRealtimeModel struct {
+	label    string
+	model    string
+	provider string
+}
+
+func (m *metadataRealtimeModel) Capabilities() RealtimeCapabilities {
+	return RealtimeCapabilities{}
+}
+
+func (m *metadataRealtimeModel) Session() (RealtimeSession, error) {
+	return nil, nil
+}
+
+func (m *metadataRealtimeModel) Close() error {
+	return nil
+}
+
+func (m *metadataRealtimeModel) Label() string {
+	return m.label
+}
+
+func (m *metadataRealtimeModel) Model() string {
+	return m.model
+}
+
+func (m *metadataRealtimeModel) Provider() string {
+	return m.provider
 }

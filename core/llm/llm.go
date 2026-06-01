@@ -355,6 +355,38 @@ type CollectedResponse struct {
 	Extra     map[string]any
 }
 
+type LLMError struct {
+	Type        string
+	Timestamp   time.Time
+	Label       string
+	Err         error
+	Recoverable bool
+}
+
+func NewLLMError(label string, err error, recoverable bool) *LLMError {
+	return &LLMError{
+		Type:        "llm_error",
+		Timestamp:   time.Now(),
+		Label:       label,
+		Err:         err,
+		Recoverable: recoverable,
+	}
+}
+
+func (e *LLMError) Error() string {
+	if e == nil || e.Err == nil {
+		return "llm_error"
+	}
+	return e.Err.Error()
+}
+
+func (e *LLMError) Unwrap() error {
+	if e == nil {
+		return nil
+	}
+	return e.Err
+}
+
 type Tool interface {
 	ID() string
 	Name() string
@@ -397,8 +429,43 @@ type ChatOptions struct {
 	Tools             []Tool
 	ToolChoice        ToolChoice
 	ParallelToolCalls bool
+	ConnectOptions    *APIConnectOptions
 	ExtraParams       map[string]any
 	ResponseFormat    map[string]any
+}
+
+type APIConnectOptions struct {
+	MaxRetry      int
+	RetryInterval time.Duration
+	Timeout       time.Duration
+}
+
+func DefaultAPIConnectOptions() APIConnectOptions {
+	return APIConnectOptions{
+		MaxRetry:      3,
+		RetryInterval: 2 * time.Second,
+		Timeout:       10 * time.Second,
+	}
+}
+
+func (o APIConnectOptions) Validate() error {
+	if o.MaxRetry < 0 {
+		return errors.New("max retry must be greater than or equal to 0")
+	}
+	if o.RetryInterval < 0 {
+		return errors.New("retry interval must be greater than or equal to 0")
+	}
+	if o.Timeout < 0 {
+		return errors.New("timeout must be greater than or equal to 0")
+	}
+	return nil
+}
+
+func (o APIConnectOptions) IntervalForRetry(numRetries int) time.Duration {
+	if numRetries == 0 {
+		return 100 * time.Millisecond
+	}
+	return o.RetryInterval
 }
 
 type LLM interface {
@@ -503,6 +570,12 @@ func WithParallelToolCalls(parallel bool) ChatOption {
 	}
 }
 
+func WithConnectOptions(options APIConnectOptions) ChatOption {
+	return func(o *ChatOptions) {
+		o.ConnectOptions = &options
+	}
+}
+
 func WithExtraParams(params map[string]any) ChatOption {
 	return func(o *ChatOptions) {
 		o.ExtraParams = cloneAnyMap(params)
@@ -546,6 +619,121 @@ type RealtimeModel interface {
 	Capabilities() RealtimeCapabilities
 	Session() (RealtimeSession, error)
 	Close() error
+}
+
+type RealtimeError struct {
+	Message string
+	Err     error
+}
+
+func NewRealtimeError(message string, err error) RealtimeError {
+	return RealtimeError{Message: message, Err: err}
+}
+
+func (e RealtimeError) Error() string {
+	if e.Err == nil {
+		return e.Message
+	}
+	return fmt.Sprintf("%s: %v", e.Message, e.Err)
+}
+
+func (e RealtimeError) Unwrap() error {
+	return e.Err
+}
+
+type RealtimeModelError struct {
+	Type        string
+	Timestamp   time.Time
+	Label       string
+	Err         error
+	Recoverable bool
+}
+
+func NewRealtimeModelError(label string, err error, recoverable bool) *RealtimeModelError {
+	return &RealtimeModelError{
+		Type:        "realtime_model_error",
+		Timestamp:   time.Now(),
+		Label:       label,
+		Err:         err,
+		Recoverable: recoverable,
+	}
+}
+
+func (e *RealtimeModelError) Error() string {
+	if e == nil || e.Err == nil {
+		return "realtime_model_error"
+	}
+	return e.Err.Error()
+}
+
+func (e *RealtimeModelError) Unwrap() error {
+	if e == nil {
+		return nil
+	}
+	return e.Err
+}
+
+type labelProviderRealtimeModel interface {
+	Label() string
+}
+
+type modelProviderRealtimeModel interface {
+	Model() string
+}
+
+type providerProviderRealtimeModel interface {
+	Provider() string
+}
+
+func RealtimeLabel(model RealtimeModel) string {
+	if provider, ok := model.(labelProviderRealtimeModel); ok {
+		if label := provider.Label(); label != "" {
+			return label
+		}
+	}
+	if label := reflectedRealtimeModelLabel(model); label != "" {
+		return label
+	}
+	return "unknown"
+}
+
+func RealtimeModelName(model RealtimeModel) string {
+	if provider, ok := model.(modelProviderRealtimeModel); ok {
+		if name := provider.Model(); name != "" {
+			return name
+		}
+	}
+	return "unknown"
+}
+
+func RealtimeProvider(model RealtimeModel) string {
+	if provider, ok := model.(providerProviderRealtimeModel); ok {
+		if name := provider.Provider(); name != "" {
+			return name
+		}
+	}
+	return "unknown"
+}
+
+func reflectedRealtimeModelLabel(model RealtimeModel) string {
+	if model == nil {
+		return ""
+	}
+	t := reflect.TypeOf(model)
+	for t.Kind() == reflect.Pointer {
+		t = t.Elem()
+	}
+	if t.Name() == "" {
+		return ""
+	}
+	pkg := t.PkgPath()
+	if idx := strings.LastIndex(pkg, "/"); idx >= 0 {
+		pkg = pkg[idx+1:]
+	}
+	if pkg == "" {
+		return t.Name()
+	}
+	return pkg + "." + t.Name()
 }
 
 type RealtimeSessionOptions struct {
@@ -898,7 +1086,7 @@ func (s *fallbackLLMStream) markUnavailable(index int, recover bool) {
 
 func (f *FallbackAdapter) recoverLLM(index int, llm LLM, chatCtx *ChatContext, opts []ChatOption) {
 	ctx, cancel := f.attemptContext(context.Background())
-	stream, err := llm.Chat(ctx, chatCtx, opts...)
+	stream, err := llm.Chat(ctx, chatCtx, f.attemptOptions(opts)...)
 	if err != nil {
 		cancel()
 		f.finishRecovery(index, false)
@@ -942,7 +1130,7 @@ func (s *fallbackLLMStream) tryStart(index int) error {
 		}
 		for {
 			ctx, cancel := s.adapter.attemptContext(s.ctx)
-			stream, err := s.adapter.llms[i].Chat(ctx, s.chatCtx, s.opts...)
+			stream, err := s.adapter.llms[i].Chat(ctx, s.chatCtx, s.adapter.attemptOptions(s.opts)...)
 			if err == nil {
 				s.adapter.setAvailable(i, true)
 				s.closeActive()
@@ -1028,6 +1216,16 @@ func (s *fallbackLLMStream) canRetryLLM(index int) bool {
 		s.retries = make(map[int]int)
 	}
 	return s.retries[index] < s.adapter.maxRetryPerLLM
+}
+
+func (f *FallbackAdapter) attemptOptions(opts []ChatOption) []ChatOption {
+	attemptOptions := append([]ChatOption(nil), opts...)
+	attemptOptions = append(attemptOptions, WithConnectOptions(APIConnectOptions{
+		MaxRetry:      f.maxRetryPerLLM,
+		RetryInterval: f.retryInterval,
+		Timeout:       f.attemptTimeout,
+	}))
+	return attemptOptions
 }
 
 func (f *FallbackAdapter) attemptContext(parent context.Context) (context.Context, context.CancelFunc) {

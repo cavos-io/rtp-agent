@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/cavos-io/rtp-agent/core/audio/model"
+	"github.com/cavos-io/rtp-agent/library/telemetry"
 )
 
 func TestFallbackAdapterAggregatesProviderMetadata(t *testing.T) {
@@ -155,6 +156,46 @@ func TestFallbackAdapterCanUnsubscribeAvailabilityChanges(t *testing.T) {
 	select {
 	case event := <-changes:
 		t.Fatalf("received availability change after unsubscribe: %#v", event)
+	case <-time.After(50 * time.Millisecond):
+	}
+}
+
+func TestFallbackAdapterForwardsMetricsCollected(t *testing.T) {
+	primary := &metadataTTS{label: "primary", sampleRate: 24000, numChannels: 1}
+	secondary := &metadataTTS{label: "secondary", sampleRate: 24000, numChannels: 1}
+	adapter := NewFallbackAdapter([]TTS{primary, secondary})
+	metricsCh := make(chan string, 2)
+
+	unsubscribe := adapter.OnMetricsCollected(func(metrics *telemetry.TTSMetrics) {
+		metricsCh <- metrics.RequestID
+	})
+	defer unsubscribe()
+
+	primary.EmitMetricsCollected(&telemetry.TTSMetrics{RequestID: "primary-req"})
+	secondary.EmitMetricsCollected(&telemetry.TTSMetrics{RequestID: "secondary-req"})
+
+	first := receiveTTSMetricRequestID(t, metricsCh)
+	second := receiveTTSMetricRequestID(t, metricsCh)
+	if strings.Join([]string{first, second}, ",") != "primary-req,secondary-req" {
+		t.Fatalf("metric request IDs = %q, %q; want primary then secondary", first, second)
+	}
+}
+
+func TestFallbackAdapterCanUnsubscribeMetricsCollected(t *testing.T) {
+	primary := &metadataTTS{label: "primary", sampleRate: 24000, numChannels: 1}
+	adapter := NewFallbackAdapter([]TTS{primary})
+	metricsCh := make(chan string, 1)
+	unsubscribe := adapter.OnMetricsCollected(func(metrics *telemetry.TTSMetrics) {
+		metricsCh <- metrics.RequestID
+	})
+	unsubscribe()
+	unsubscribe()
+
+	primary.EmitMetricsCollected(&telemetry.TTSMetrics{RequestID: "primary-req"})
+
+	select {
+	case requestID := <-metricsCh:
+		t.Fatalf("received metrics after unsubscribe: %q", requestID)
 	case <-time.After(50 * time.Millisecond):
 	}
 }
@@ -2234,6 +2275,17 @@ func receiveTTSAvailabilityChange(t *testing.T, changes <-chan AvailabilityChang
 	}
 }
 
+func receiveTTSMetricRequestID(t *testing.T, metrics <-chan string) string {
+	t.Helper()
+	select {
+	case requestID := <-metrics:
+		return requestID
+	case <-time.After(200 * time.Millisecond):
+		t.Fatal("timed out waiting for TTS metrics")
+		return ""
+	}
+}
+
 func fallbackTestFrame(sampleRate uint32, channels uint32, samplesPerChannel uint32) *model.AudioFrame {
 	return &model.AudioFrame{
 		Data:              make([]byte, int(samplesPerChannel*channels*2)),
@@ -2244,6 +2296,8 @@ func fallbackTestFrame(sampleRate uint32, channels uint32, samplesPerChannel uin
 }
 
 type metadataTTS struct {
+	MetricsEmitter
+
 	label           string
 	sampleRate      int
 	numChannels     int
