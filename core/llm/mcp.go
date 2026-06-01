@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"os"
 	"os/exec"
 	"strings"
 	"sync"
@@ -132,6 +133,13 @@ func serializeMCPToolContent(content []mcpToolContent) (string, error) {
 func (s *MCPServerStdio) Initialize(ctx context.Context) error {
 	s.cmd = exec.CommandContext(ctx, s.Command, s.Args...)
 	s.cmd.Dir = s.Cwd
+	if len(s.Env) > 0 {
+		env := os.Environ()
+		for key, value := range s.Env {
+			env = append(env, fmt.Sprintf("%s=%s", key, value))
+		}
+		s.cmd.Env = env
+	}
 
 	var err error
 	if s.stdin, err = s.cmd.StdinPipe(); err != nil {

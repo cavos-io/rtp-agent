@@ -187,6 +187,100 @@ func TestFallbackAdapterDoesNotRetryCleanEOF(t *testing.T) {
 	}
 }
 
+func TestFallbackAdapterSkipsUnavailableProviderOnNextChat(t *testing.T) {
+	firstErr := errors.New("primary stream failed")
+	primary := &fakeFallbackLLM{streams: []LLMStream{
+		&fakeFallbackStream{events: []fakeFallbackEvent{{err: firstErr}}},
+		&fakeFallbackStream{events: []fakeFallbackEvent{
+			{chunk: &ChatChunk{Delta: &ChoiceDelta{Content: "primary should be skipped"}}},
+		}},
+	}}
+	fallback := &fakeFallbackLLM{streams: []LLMStream{
+		&fakeFallbackStream{events: []fakeFallbackEvent{
+			{chunk: &ChatChunk{Delta: &ChoiceDelta{Content: "fallback first"}}},
+		}},
+		&fakeFallbackStream{events: []fakeFallbackEvent{
+			{chunk: &ChatChunk{Delta: &ChoiceDelta{Content: "fallback second"}}},
+		}},
+	}}
+	adapter := NewFallbackAdapter([]LLM{primary, fallback})
+
+	stream, err := adapter.Chat(context.Background(), NewChatContext())
+	if err != nil {
+		t.Fatalf("Chat returned error: %v", err)
+	}
+	chunk, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next returned error: %v", err)
+	}
+	if got := chunk.Delta.Content; got != "fallback first" {
+		t.Fatalf("first stream content = %q, want fallback first", got)
+	}
+
+	stream, err = adapter.Chat(context.Background(), NewChatContext())
+	if err != nil {
+		t.Fatalf("second Chat returned error: %v", err)
+	}
+	chunk, err = stream.Next()
+	if err != nil {
+		t.Fatalf("second Next returned error: %v", err)
+	}
+	if got := chunk.Delta.Content; got != "fallback second" {
+		t.Fatalf("second stream content = %q, want fallback second", got)
+	}
+	if primary.calls != 1 {
+		t.Fatalf("primary calls = %d, want failed provider skipped on second chat", primary.calls)
+	}
+}
+
+func TestFallbackAdapterMarksProviderUnavailableAfterChunkFailure(t *testing.T) {
+	firstErr := errors.New("primary stream failed after output")
+	primary := &fakeFallbackLLM{streams: []LLMStream{
+		&fakeFallbackStream{events: []fakeFallbackEvent{
+			{chunk: &ChatChunk{Delta: &ChoiceDelta{Content: "partial"}}},
+			{err: firstErr},
+		}},
+		&fakeFallbackStream{events: []fakeFallbackEvent{
+			{chunk: &ChatChunk{Delta: &ChoiceDelta{Content: "primary should be skipped"}}},
+		}},
+	}}
+	fallback := &fakeFallbackLLM{stream: &fakeFallbackStream{events: []fakeFallbackEvent{
+		{chunk: &ChatChunk{Delta: &ChoiceDelta{Content: "fallback"}}},
+	}}}
+	adapter := NewFallbackAdapter([]LLM{primary, fallback})
+
+	stream, err := adapter.Chat(context.Background(), NewChatContext())
+	if err != nil {
+		t.Fatalf("Chat returned error: %v", err)
+	}
+	chunk, err := stream.Next()
+	if err != nil {
+		t.Fatalf("first Next returned error: %v", err)
+	}
+	if got := chunk.Delta.Content; got != "partial" {
+		t.Fatalf("first stream content = %q, want partial", got)
+	}
+	_, err = stream.Next()
+	if !errors.Is(err, firstErr) {
+		t.Fatalf("second Next error = %v, want primary stream error", err)
+	}
+
+	stream, err = adapter.Chat(context.Background(), NewChatContext())
+	if err != nil {
+		t.Fatalf("second Chat returned error: %v", err)
+	}
+	chunk, err = stream.Next()
+	if err != nil {
+		t.Fatalf("fallback Next returned error: %v", err)
+	}
+	if got := chunk.Delta.Content; got != "fallback" {
+		t.Fatalf("fallback content = %q, want fallback", got)
+	}
+	if primary.calls != 1 {
+		t.Fatalf("primary calls = %d, want failed provider skipped after chunk failure", primary.calls)
+	}
+}
+
 type fakeFallbackLLM struct {
 	streams []LLMStream
 	stream  LLMStream

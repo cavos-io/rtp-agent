@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"sync"
 	"time"
 
 	"github.com/cavos-io/conversation-worker/library/telemetry"
@@ -482,6 +483,8 @@ type FallbackAdapter struct {
 	llms             []LLM
 	maxRetryPerLLM   int
 	retryOnChunkSent bool
+	mu               sync.Mutex
+	available        []bool
 }
 
 type FallbackAdapterOptions struct {
@@ -501,7 +504,39 @@ func NewFallbackAdapterWithOptions(llms []LLM, options FallbackAdapterOptions) *
 		llms:             llms,
 		maxRetryPerLLM:   options.MaxRetryPerLLM,
 		retryOnChunkSent: options.RetryOnChunkSent,
+		available:        initialAvailability(len(llms)),
 	}
+}
+
+func initialAvailability(n int) []bool {
+	available := make([]bool, n)
+	for i := range available {
+		available[i] = true
+	}
+	return available
+}
+
+func (f *FallbackAdapter) isAvailable(index int, allUnavailable bool) bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return allUnavailable || f.available[index]
+}
+
+func (f *FallbackAdapter) allUnavailable() bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for _, available := range f.available {
+		if available {
+			return false
+		}
+	}
+	return true
+}
+
+func (f *FallbackAdapter) setAvailable(index int, available bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.available[index] = available
 }
 
 func (f *FallbackAdapter) Chat(ctx context.Context, chatCtx *ChatContext, opts ...ChatOption) (LLMStream, error) {
@@ -535,16 +570,22 @@ func (s *fallbackLLMStream) tryStart(index int) error {
 		s.retries = make(map[int]int)
 	}
 	var lastErr error
+	allUnavailable := s.adapter.allUnavailable()
 	for i := index; i < len(s.adapter.llms); i++ {
+		if !s.adapter.isAvailable(i, allUnavailable) {
+			continue
+		}
 		for {
 			stream, err := s.adapter.llms[i].Chat(s.ctx, s.chatCtx, s.opts...)
 			if err == nil {
+				s.adapter.setAvailable(i, true)
 				s.activeStream = stream
 				s.activeIndex = i
 				return nil
 			}
 			lastErr = err
 			if !s.canRetryLLM(i) {
+				s.adapter.setAvailable(i, false)
 				break
 			}
 			s.retries[i]++
@@ -562,7 +603,11 @@ func (s *fallbackLLMStream) Next() (*ChatChunk, error) {
 			}
 			return chunk, nil
 		}
-		if errors.Is(err, io.EOF) || (s.outputSent && !s.adapter.retryOnChunkSent) {
+		if errors.Is(err, io.EOF) {
+			return nil, err
+		}
+		if s.outputSent && !s.adapter.retryOnChunkSent {
+			s.adapter.setAvailable(s.activeIndex, false)
 			return nil, err
 		}
 
@@ -574,6 +619,7 @@ func (s *fallbackLLMStream) Next() (*ChatChunk, error) {
 			}
 			continue
 		}
+		s.adapter.setAvailable(s.activeIndex, false)
 		if s.activeIndex+1 >= len(s.adapter.llms) {
 			return nil, err
 		}
