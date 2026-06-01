@@ -34,6 +34,24 @@ func TestGenerateStrictJSONSchemaRequiresOmitEmptyFieldsAsNullable(t *testing.T)
 	}
 }
 
+func TestGenerateStrictJSONSchemaSkipsUnexportedFields(t *testing.T) {
+	type request struct {
+		Query  string `json:"query"`
+		secret string `json:"secret"`
+	}
+
+	schema := GenerateStrictJSONSchema(reflect.TypeOf(request{}))
+
+	props := schema["properties"].(map[string]interface{})
+	if _, ok := props["secret"]; ok {
+		t.Fatalf("properties contains unexported field: %#v", props)
+	}
+	required := schema["required"].([]string)
+	if !reflect.DeepEqual(required, []string{"query"}) {
+		t.Fatalf("required = %#v, want only exported query", required)
+	}
+}
+
 func TestGenerateStrictJSONSchemaKeepsOptionalNestedStructNullable(t *testing.T) {
 	type filters struct {
 		Status string `json:"status"`

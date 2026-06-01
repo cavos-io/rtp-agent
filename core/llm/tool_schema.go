@@ -30,6 +30,9 @@ func GenerateStrictJSONSchema(t reflect.Type) map[string]interface{} {
 
 	for i := 0; i < t.NumField(); i++ {
 		field := t.Field(i)
+		if field.PkgPath != "" {
+			continue
+		}
 
 		// Get JSON tag, default to field name lowercase
 		name := strings.ToLower(field.Name)
