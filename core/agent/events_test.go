@@ -208,3 +208,25 @@ func TestCloseReasonIncludesTaskCompleted(t *testing.T) {
 		t.Fatalf("Reason = %q, want task_completed", ev.Reason)
 	}
 }
+
+func TestErrorEventIsTypedAndTimestamped(t *testing.T) {
+	before := time.Now()
+	source := "llm"
+	cause := errors.New("provider failed")
+
+	ev := NewErrorEvent(cause, source)
+
+	var event Event = ev
+	if event.GetType() != "error" {
+		t.Fatalf("GetType() = %q, want error", event.GetType())
+	}
+	if !errors.Is(ev.Error, cause) {
+		t.Fatalf("Error = %v, want provider failure", ev.Error)
+	}
+	if ev.Source != source {
+		t.Fatalf("Source = %#v, want %q", ev.Source, source)
+	}
+	if ev.CreatedAt.IsZero() || ev.CreatedAt.Before(before) {
+		t.Fatalf("CreatedAt = %v, want timestamp after %v", ev.CreatedAt, before)
+	}
+}

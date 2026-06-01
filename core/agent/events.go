@@ -132,6 +132,22 @@ type MetricsCollectedEvent struct {
 
 func (e *MetricsCollectedEvent) GetType() string { return "metrics_collected" }
 
+type ErrorEvent struct {
+	Error     error
+	Source    any
+	CreatedAt time.Time
+}
+
+func NewErrorEvent(err error, source any) *ErrorEvent {
+	return &ErrorEvent{
+		Error:     err,
+		Source:    source,
+		CreatedAt: time.Now(),
+	}
+}
+
+func (e *ErrorEvent) GetType() string { return "error" }
+
 type SpeechCreatedEvent struct {
 	UserInitiated bool
 	Source        string // "say" or "generate_reply"
