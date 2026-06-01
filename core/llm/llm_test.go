@@ -52,6 +52,38 @@ func TestLLMPrewarmDelegatesWhenSupported(t *testing.T) {
 	}
 }
 
+func TestRealtimeModelMetadataDefaults(t *testing.T) {
+	model := &metadataRealtimeModel{}
+
+	if got := RealtimeLabel(model); got != "llm.metadataRealtimeModel" {
+		t.Fatalf("RealtimeLabel() = %q, want llm.metadataRealtimeModel", got)
+	}
+	if got := RealtimeModelName(model); got != "unknown" {
+		t.Fatalf("RealtimeModelName() = %q, want unknown", got)
+	}
+	if got := RealtimeProvider(model); got != "unknown" {
+		t.Fatalf("RealtimeProvider() = %q, want unknown", got)
+	}
+}
+
+func TestRealtimeModelMetadataUsesProviderOverrides(t *testing.T) {
+	model := &metadataRealtimeModel{
+		label:    "test.RealtimeModel",
+		model:    "realtime-a",
+		provider: "provider-a",
+	}
+
+	if got := RealtimeLabel(model); got != "test.RealtimeModel" {
+		t.Fatalf("RealtimeLabel() = %q, want provider label", got)
+	}
+	if got := RealtimeModelName(model); got != "realtime-a" {
+		t.Fatalf("RealtimeModelName() = %q, want realtime-a", got)
+	}
+	if got := RealtimeProvider(model); got != "provider-a" {
+		t.Fatalf("RealtimeProvider() = %q, want provider-a", got)
+	}
+}
+
 func TestRealtimeCapabilitiesExposeReferenceFlags(t *testing.T) {
 	capabilities := RealtimeCapabilities{
 		MessageTruncation:       true,
@@ -321,4 +353,34 @@ func (m *metadataTestStream) Next() (*ChatChunk, error) {
 
 func (m *metadataTestStream) Close() error {
 	return nil
+}
+
+type metadataRealtimeModel struct {
+	label    string
+	model    string
+	provider string
+}
+
+func (m *metadataRealtimeModel) Capabilities() RealtimeCapabilities {
+	return RealtimeCapabilities{}
+}
+
+func (m *metadataRealtimeModel) Session() (RealtimeSession, error) {
+	return nil, nil
+}
+
+func (m *metadataRealtimeModel) Close() error {
+	return nil
+}
+
+func (m *metadataRealtimeModel) Label() string {
+	return m.label
+}
+
+func (m *metadataRealtimeModel) Model() string {
+	return m.model
+}
+
+func (m *metadataRealtimeModel) Provider() string {
+	return m.provider
 }

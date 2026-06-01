@@ -548,6 +548,69 @@ type RealtimeModel interface {
 	Close() error
 }
 
+type labelProviderRealtimeModel interface {
+	Label() string
+}
+
+type modelProviderRealtimeModel interface {
+	Model() string
+}
+
+type providerProviderRealtimeModel interface {
+	Provider() string
+}
+
+func RealtimeLabel(model RealtimeModel) string {
+	if provider, ok := model.(labelProviderRealtimeModel); ok {
+		if label := provider.Label(); label != "" {
+			return label
+		}
+	}
+	if label := reflectedRealtimeModelLabel(model); label != "" {
+		return label
+	}
+	return "unknown"
+}
+
+func RealtimeModelName(model RealtimeModel) string {
+	if provider, ok := model.(modelProviderRealtimeModel); ok {
+		if name := provider.Model(); name != "" {
+			return name
+		}
+	}
+	return "unknown"
+}
+
+func RealtimeProvider(model RealtimeModel) string {
+	if provider, ok := model.(providerProviderRealtimeModel); ok {
+		if name := provider.Provider(); name != "" {
+			return name
+		}
+	}
+	return "unknown"
+}
+
+func reflectedRealtimeModelLabel(model RealtimeModel) string {
+	if model == nil {
+		return ""
+	}
+	t := reflect.TypeOf(model)
+	for t.Kind() == reflect.Pointer {
+		t = t.Elem()
+	}
+	if t.Name() == "" {
+		return ""
+	}
+	pkg := t.PkgPath()
+	if idx := strings.LastIndex(pkg, "/"); idx >= 0 {
+		pkg = pkg[idx+1:]
+	}
+	if pkg == "" {
+		return t.Name()
+	}
+	return pkg + "." + t.Name()
+}
+
 type RealtimeSessionOptions struct {
 	ToolChoice ToolChoice
 }
