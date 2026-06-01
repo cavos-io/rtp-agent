@@ -14,18 +14,64 @@ import (
 )
 
 type FalSTT struct {
-	apiKey string
+	apiKey     string
+	language   string
+	task       string
+	chunkLevel string
+	version    string
 }
 
-func NewFalSTT(apiKey string) *FalSTT {
-	return &FalSTT{
-		apiKey: apiKey,
+type FalSTTOption func(*FalSTT)
+
+func WithFalSTTLanguage(language string) FalSTTOption {
+	return func(s *FalSTT) {
+		if language != "" {
+			s.language = language
+		}
 	}
+}
+
+func WithFalSTTTask(task string) FalSTTOption {
+	return func(s *FalSTT) {
+		if task != "" {
+			s.task = task
+		}
+	}
+}
+
+func WithFalSTTChunkLevel(chunkLevel string) FalSTTOption {
+	return func(s *FalSTT) {
+		if chunkLevel != "" {
+			s.chunkLevel = chunkLevel
+		}
+	}
+}
+
+func WithFalSTTVersion(version string) FalSTTOption {
+	return func(s *FalSTT) {
+		if version != "" {
+			s.version = version
+		}
+	}
+}
+
+func NewFalSTT(apiKey string, opts ...FalSTTOption) *FalSTT {
+	provider := &FalSTT{
+		apiKey:     apiKey,
+		language:   "en",
+		task:       "transcribe",
+		chunkLevel: "segment",
+		version:    "3",
+	}
+	for _, opt := range opts {
+		opt(provider)
+	}
+	return provider
 }
 
 func (s *FalSTT) Label() string { return "fal.STT" }
 func (s *FalSTT) Capabilities() stt.STTCapabilities {
-	return stt.STTCapabilities{Streaming: false, InterimResults: false, Diarization: false, OfflineRecognize: true}
+	return stt.STTCapabilities{Streaming: false, InterimResults: true, Diarization: false, OfflineRecognize: true}
 }
 
 func (s *FalSTT) Stream(ctx context.Context, language string) (stt.RecognizeStream, error) {
@@ -39,29 +85,10 @@ func (s *FalSTT) Recognize(ctx context.Context, frames []*model.AudioFrame, lang
 		buf.Write(f.Data)
 	}
 
-	// This is a basic implementation assuming fal.ai's Whisper endpoint
-	// In reality, Fal often requires a pre-uploaded URL or base64 dataURI
-	// We'll use the actual Fal endpoint
-	url := "https://fal.run/fal-ai/wizper"
-
-	b64 := base64.StdEncoding.EncodeToString(buf.Bytes())
-
-	body := map[string]interface{}{
-		"audio_url": fmt.Sprintf("data:audio/x-wav;base64,%s", b64),
-	}
-	if language != "" {
-		body["language"] = language
-	}
-
-	jsonBody, _ := json.Marshal(body)
-
-	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewBuffer(jsonBody))
+	req, err := buildFalSTTRequest(ctx, s, buf.Bytes(), language)
 	if err != nil {
 		return nil, err
 	}
-
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Key "+s.apiKey)
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
@@ -87,4 +114,32 @@ func (s *FalSTT) Recognize(ctx context.Context, frames []*model.AudioFrame, lang
 			{Text: result.Text},
 		},
 	}, nil
+}
+
+func buildFalSTTRequest(ctx context.Context, s *FalSTT, audio []byte, language string) (*http.Request, error) {
+	b64 := base64.StdEncoding.EncodeToString(audio)
+	resolvedLanguage := s.language
+	if language != "" {
+		resolvedLanguage = language
+	}
+
+	body := map[string]interface{}{
+		"audio_url":   fmt.Sprintf("data:audio/x-wav;base64,%s", b64),
+		"task":        s.task,
+		"language":    resolvedLanguage,
+		"chunk_level": s.chunkLevel,
+		"version":     s.version,
+	}
+	jsonBody, err := json.Marshal(body)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, "https://fal.run/fal-ai/wizper", bytes.NewBuffer(jsonBody))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Key "+s.apiKey)
+	return req, nil
 }

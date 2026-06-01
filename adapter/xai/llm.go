@@ -21,12 +21,16 @@ type XaiLLM struct {
 
 func NewXaiLLM(apiKey string, model string) *XaiLLM {
 	if model == "" {
-		model = "grok-2-latest"
+		model = "grok-4-1-fast-non-reasoning"
 	}
 	return &XaiLLM{
 		apiKey: apiKey,
 		model:  model,
 	}
+}
+
+func (l *XaiLLM) Model() string {
+	return l.model
 }
 
 type xaiMessage struct {
