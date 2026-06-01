@@ -50,6 +50,14 @@ repos:
         pass_filenames: false
         stages: [pre-commit]
 
+      - id: go-deadcode-related
+        name: go staticcheck/deadcode on related staged files
+        entry: scripts/check-deadcode.sh
+        language: system
+        pass_filenames: false
+        types_or: [go]
+        stages: [pre-commit]
+
       - id: check-test-additions-than-deletions
         name: Check *_test.go additions > deletions
         entry: scripts/check-test-additions-than-deletions.sh
