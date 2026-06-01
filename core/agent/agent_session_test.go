@@ -34,6 +34,15 @@ func TestAgentSessionGenerateReplyReturnsScheduledSpeechHandle(t *testing.T) {
 	}
 }
 
+func TestNewAgentSessionInitializesUserStateListening(t *testing.T) {
+	agent := NewAgent("test")
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+
+	if session.UserState != UserStateListening {
+		t.Fatalf("UserState = %q, want %q", session.UserState, UserStateListening)
+	}
+}
+
 func TestAgentSessionGenerateReplyEmitsSpeechCreatedEvent(t *testing.T) {
 	agent := NewAgent("test")
 	session := NewAgentSession(agent, nil, AgentSessionOptions{AllowInterruptions: true})
@@ -514,8 +523,8 @@ func TestAgentSessionUpdateUserStateEmitsTypedTimestampedEvent(t *testing.T) {
 		if event.GetType() != "user_state_changed" {
 			t.Fatalf("event type = %q, want user_state_changed", event.GetType())
 		}
-		if ev.OldState != "" || ev.NewState != UserStateSpeaking {
-			t.Fatalf("event states = %q -> %q, want empty -> speaking", ev.OldState, ev.NewState)
+		if ev.OldState != UserStateListening || ev.NewState != UserStateSpeaking {
+			t.Fatalf("event states = %q -> %q, want listening -> speaking", ev.OldState, ev.NewState)
 		}
 		if ev.CreatedAt.Before(before) || ev.CreatedAt.IsZero() {
 			t.Fatalf("CreatedAt = %v, want timestamp after %v", ev.CreatedAt, before)
