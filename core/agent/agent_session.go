@@ -97,6 +97,7 @@ type AgentSession struct {
 	speechCreatedCh     chan SpeechCreatedEvent
 	falseInterruptionCh chan AgentFalseInterruptionEvent
 	userTurnExceededCh  chan UserTurnExceededEvent
+	overlappingSpeechCh chan OverlappingSpeechEvent
 	conversationItemCh  chan ConversationItemAddedEvent
 	functionToolsCh     chan FunctionToolsExecutedEvent
 	metricsCollectedCh  chan MetricsCollectedEvent
@@ -156,6 +157,7 @@ func NewAgentSession(agent AgentInterface, room *lksdk.Room, opts AgentSessionOp
 		speechCreatedCh:     make(chan SpeechCreatedEvent, 10),
 		falseInterruptionCh: make(chan AgentFalseInterruptionEvent, 10),
 		userTurnExceededCh:  make(chan UserTurnExceededEvent, 10),
+		overlappingSpeechCh: make(chan OverlappingSpeechEvent, 10),
 		conversationItemCh:  make(chan ConversationItemAddedEvent, 10),
 		functionToolsCh:     make(chan FunctionToolsExecutedEvent, 10),
 		metricsCollectedCh:  make(chan MetricsCollectedEvent, 10),
@@ -269,6 +271,35 @@ func (s *AgentSession) userTurnExceededEvents() chan UserTurnExceededEvent {
 		s.userTurnExceededCh = make(chan UserTurnExceededEvent, 10)
 	}
 	return s.userTurnExceededCh
+}
+
+func (s *AgentSession) OverlappingSpeechEvents() <-chan OverlappingSpeechEvent {
+	return s.overlappingSpeechEvents()
+}
+
+func (s *AgentSession) EmitOverlappingSpeech(ev OverlappingSpeechEvent) {
+	now := time.Now()
+	if ev.CreatedAt.IsZero() {
+		ev.CreatedAt = now
+	}
+	if ev.DetectedAt.IsZero() {
+		ev.DetectedAt = now
+	}
+	ch := s.overlappingSpeechEvents()
+	select {
+	case ch <- ev:
+	default:
+	}
+}
+
+func (s *AgentSession) overlappingSpeechEvents() chan OverlappingSpeechEvent {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.overlappingSpeechCh == nil {
+		s.overlappingSpeechCh = make(chan OverlappingSpeechEvent, 10)
+	}
+	return s.overlappingSpeechCh
 }
 
 func (s *AgentSession) ConversationItemAddedEvents() <-chan ConversationItemAddedEvent {

@@ -197,6 +197,41 @@ func TestUserTurnExceededEventIsTypedAndTimestamped(t *testing.T) {
 	}
 }
 
+func TestOverlappingSpeechEventIsTypedAndCarriesTimingAndPredictionFields(t *testing.T) {
+	overlapStartedAt := time.Now().Add(-250 * time.Millisecond)
+	detectedAt := time.Now()
+	ev := &OverlappingSpeechEvent{
+		DetectedAt:         detectedAt,
+		IsInterruption:     true,
+		TotalDuration:      120 * time.Millisecond,
+		PredictionDuration: 35 * time.Millisecond,
+		DetectionDelay:     250 * time.Millisecond,
+		OverlapStartedAt:   &overlapStartedAt,
+		SpeechInput:        []int16{1, -1},
+		Probabilities:      []float32{0.1, 0.9},
+		Probability:        0.9,
+		NumRequests:        2,
+		CreatedAt:          detectedAt.Add(time.Millisecond),
+	}
+
+	var event Event = ev
+	if event.GetType() != "overlapping_speech" {
+		t.Fatalf("GetType() = %q, want overlapping_speech", event.GetType())
+	}
+	if !ev.IsInterruption {
+		t.Fatal("IsInterruption = false, want true")
+	}
+	if !ev.DetectedAt.Equal(detectedAt) || ev.OverlapStartedAt == nil || !ev.OverlapStartedAt.Equal(overlapStartedAt) {
+		t.Fatalf("timing fields = %#v, want detected and overlap timestamps", ev)
+	}
+	if ev.TotalDuration != 120*time.Millisecond || ev.PredictionDuration != 35*time.Millisecond || ev.DetectionDelay != 250*time.Millisecond {
+		t.Fatalf("duration fields = %#v, want reference durations", ev)
+	}
+	if len(ev.SpeechInput) != 2 || len(ev.Probabilities) != 2 || ev.Probability != 0.9 || ev.NumRequests != 2 {
+		t.Fatalf("prediction fields = %#v, want preserved samples/probability/request count", ev)
+	}
+}
+
 func TestCloseReasonIncludesTaskCompleted(t *testing.T) {
 	ev := &CloseEvent{Reason: CloseReasonTaskCompleted, CreatedAt: time.Now()}
 
