@@ -18,13 +18,13 @@ var (
 	// links: keep text part [text](url) -> text
 	linkPattern = regexp.MustCompile(`\[([^\]]*)\]\([^)]*\)`)
 	// bold: remove asterisks from **text** while preserving literal asterisks in words/expressions
-	boldPattern = regexp.MustCompile(`(^|[^\w*])\*\*([^\s*](?:[^*\n]*?[^\s*])?)\*\*($|[^\w*])`)
+	boldPattern = regexp.MustCompile(`(^|[^\p{L}\p{N}_*])\*\*([^\s*](?:[^*\n]*?[^\s*])?)\*\*($|[^\p{L}\p{N}_*])`)
 	// italic: remove asterisks from *text* while preserving literal asterisks in words/expressions
-	italicPattern = regexp.MustCompile(`(^|[^\w*])\*([^\s*](?:[^*\n]*?[^\s*])?)\*($|[^\w*])`)
+	italicPattern = regexp.MustCompile(`(^|[^\p{L}\p{N}_*])\*([^\s*](?:[^*\n]*?[^\s*])?)\*($|[^\p{L}\p{N}_*])`)
 	// bold with underscores: remove underscores from __text__ while preserving intra-word underscores
-	boldUnderPattern = regexp.MustCompile(`(^|\W)__([^_]+?)__($|\W)`)
+	boldUnderPattern = regexp.MustCompile(`(^|[^\p{L}\p{N}_])__([^_]+?)__($|[^\p{L}\p{N}_])`)
 	// italic with underscores: remove underscores from _text_ while preserving intra-word underscores
-	italicUnderPattern = regexp.MustCompile(`(^|\W)_([^_]+?)_($|\W)`)
+	italicUnderPattern = regexp.MustCompile(`(^|[^\p{L}\p{N}_])_([^_]+?)_($|[^\p{L}\p{N}_])`)
 	// code fences: remove ``` or ```lang while preserving fenced text
 	codeBlockPattern = regexp.MustCompile("`{3,4}\\S*")
 	// inline code: remove ` from `text`
