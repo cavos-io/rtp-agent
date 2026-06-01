@@ -7,8 +7,8 @@ import (
 
 	texttospeech "cloud.google.com/go/texttospeech/apiv1"
 	"cloud.google.com/go/texttospeech/apiv1/texttospeechpb"
+	"github.com/cavos-io/rtp-agent/core/audio/model"
 	"github.com/cavos-io/rtp-agent/core/tts"
-	"github.com/cavos-io/rtp-agent/model"
 	"google.golang.org/api/option"
 )
 

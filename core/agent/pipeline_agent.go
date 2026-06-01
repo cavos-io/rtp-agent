@@ -5,12 +5,12 @@ import (
 	"io"
 	"sync"
 
+	"github.com/cavos-io/rtp-agent/core/audio/model"
 	"github.com/cavos-io/rtp-agent/core/llm"
 	"github.com/cavos-io/rtp-agent/core/stt"
 	"github.com/cavos-io/rtp-agent/core/tts"
 	"github.com/cavos-io/rtp-agent/core/vad"
 	"github.com/cavos-io/rtp-agent/library/logger"
-	"github.com/cavos-io/rtp-agent/model"
 )
 
 type PipelineAgent struct {

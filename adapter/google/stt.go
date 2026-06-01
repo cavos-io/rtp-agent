@@ -8,8 +8,8 @@ import (
 
 	speech "cloud.google.com/go/speech/apiv1"
 	"cloud.google.com/go/speech/apiv1/speechpb"
+	"github.com/cavos-io/rtp-agent/core/audio/model"
 	"github.com/cavos-io/rtp-agent/core/stt"
-	"github.com/cavos-io/rtp-agent/model"
 	"google.golang.org/api/option"
 	"google.golang.org/protobuf/types/known/wrapperspb"
 )

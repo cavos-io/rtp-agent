@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/cavos-io/rtp-agent/model"
+	"github.com/cavos-io/rtp-agent/core/audio/model"
 )
 
 type SpeechEventType string

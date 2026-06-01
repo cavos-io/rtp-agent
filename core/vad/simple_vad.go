@@ -8,9 +8,9 @@ import (
 	"sync"
 	"time"
 
+	"github.com/cavos-io/rtp-agent/core/audio/model"
 	lkmath "github.com/cavos-io/rtp-agent/library/math"
 	"github.com/cavos-io/rtp-agent/library/telemetry"
-	"github.com/cavos-io/rtp-agent/model"
 )
 
 type SimpleVAD struct {

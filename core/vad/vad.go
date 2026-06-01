@@ -3,8 +3,8 @@ package vad
 import (
 	"context"
 
+	"github.com/cavos-io/rtp-agent/core/audio/model"
 	"github.com/cavos-io/rtp-agent/library/telemetry"
-	"github.com/cavos-io/rtp-agent/model"
 )
 
 type VADEventType string

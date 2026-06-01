@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/cavos-io/rtp-agent/model"
+	"github.com/cavos-io/rtp-agent/core/audio/model"
 )
 
 func TestSynthesizeWithStreamPushesTextAndFlushes(t *testing.T) {

@@ -8,8 +8,8 @@ import (
 	"sync"
 
 	"github.com/cavos-io/rtp-agent/core/audio"
+	"github.com/cavos-io/rtp-agent/core/audio/model"
 	"github.com/cavos-io/rtp-agent/library/logger"
-	"github.com/cavos-io/rtp-agent/model"
 )
 
 type PrimarySpeakerDetectionOptions struct {
