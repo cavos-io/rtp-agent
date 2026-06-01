@@ -54,6 +54,23 @@ func TestGenerateStrictJSONSchemaRemovesDefaultsAndMarksFieldNullable(t *testing
 	}
 }
 
+func TestGenerateStrictJSONSchemaIncludesEnumTagValues(t *testing.T) {
+	type request struct {
+		Verdict string `json:"verdict" enum:"pass,fail,maybe"`
+	}
+
+	schema := GenerateStrictJSONSchema(reflect.TypeOf(request{}))
+
+	props := schema["properties"].(map[string]interface{})
+	verdict, ok := props["verdict"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("verdict property = %#v, want map", props["verdict"])
+	}
+	if !reflect.DeepEqual(verdict["enum"], []any{"pass", "fail", "maybe"}) {
+		t.Fatalf("verdict enum = %#v, want pass/fail/maybe", verdict["enum"])
+	}
+}
+
 func TestGenerateStrictJSONSchemaSkipsUnexportedFields(t *testing.T) {
 	type request struct {
 		Query  string `json:"query"`

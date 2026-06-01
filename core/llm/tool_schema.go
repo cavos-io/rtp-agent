@@ -65,6 +65,9 @@ func GenerateStrictJSONSchema(t reflect.Type) map[string]interface{} {
 
 		desc := field.Tag.Get("jsonschema")
 		propSchema := goTypeToJSONSchema(field.Type, desc)
+		if enumValues := jsonSchemaEnumValues(field.Tag.Get("enum")); len(enumValues) > 0 {
+			propSchema["enum"] = enumValues
+		}
 
 		props[name] = propSchema
 
@@ -77,6 +80,22 @@ func GenerateStrictJSONSchema(t reflect.Type) map[string]interface{} {
 
 	schema["required"] = req
 	return schema
+}
+
+func jsonSchemaEnumValues(tag string) []any {
+	if tag == "" {
+		return nil
+	}
+	parts := strings.Split(tag, ",")
+	values := make([]any, 0, len(parts))
+	for _, part := range parts {
+		value := strings.TrimSpace(part)
+		if value == "" {
+			continue
+		}
+		values = append(values, value)
+	}
+	return values
 }
 
 func markSchemaNullable(schema map[string]interface{}) {
