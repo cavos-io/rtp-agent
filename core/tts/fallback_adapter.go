@@ -676,6 +676,9 @@ func (s *fallbackSynthesizeStream) PushText(text string) error {
 	if s.closed {
 		return fmt.Errorf("stream closed")
 	}
+	if text == "" {
+		return nil
+	}
 	s.inputBuffer = append(s.inputBuffer, fallbackSynthesizeInput{text: text})
 	return s.activeStream.PushText(text)
 }

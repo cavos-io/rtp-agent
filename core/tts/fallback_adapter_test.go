@@ -235,6 +235,35 @@ func TestFallbackSynthesizeStreamSetsStableRequestID(t *testing.T) {
 	}
 }
 
+func TestFallbackSynthesizeStreamIgnoresEmptyText(t *testing.T) {
+	providerStream := &metadataSynthesizeStream{}
+	adapter := NewFallbackAdapter([]TTS{
+		&metadataTTS{
+			label:        "primary",
+			sampleRate:   24000,
+			numChannels:  1,
+			capabilities: TTSCapabilities{Streaming: true},
+			stream:       providerStream,
+		},
+	})
+
+	stream, err := adapter.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+	defer stream.Close()
+
+	if err := stream.PushText(""); err != nil {
+		t.Fatalf("PushText returned error: %v", err)
+	}
+	if len(providerStream.calls) != 0 {
+		t.Fatalf("provider stream calls = %#v, want no empty push", providerStream.calls)
+	}
+	if len(stream.(*fallbackSynthesizeStream).inputBuffer) != 0 {
+		t.Fatalf("input buffer = %#v, want no empty input buffered", stream.(*fallbackSynthesizeStream).inputBuffer)
+	}
+}
+
 func TestFallbackStreamsDoNotMutateProviderAudioMetadata(t *testing.T) {
 	chunkedAudio := &SynthesizedAudio{RequestID: "chunked-provider", Frame: &model.AudioFrame{Data: []byte{1}}}
 	chunkedAdapter := NewFallbackAdapter([]TTS{

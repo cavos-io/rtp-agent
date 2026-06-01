@@ -15,9 +15,11 @@ func SynthesizeWithStream(ctx context.Context, provider TTS, text string) (Chunk
 	if err != nil {
 		return nil, err
 	}
-	if err := stream.PushText(text); err != nil {
-		_ = stream.Close()
-		return nil, err
+	if text != "" {
+		if err := stream.PushText(text); err != nil {
+			_ = stream.Close()
+			return nil, err
+		}
 	}
 	if err := stream.Flush(); err != nil {
 		_ = stream.Close()

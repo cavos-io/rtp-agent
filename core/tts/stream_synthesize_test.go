@@ -26,6 +26,23 @@ func TestSynthesizeWithStreamPushesTextAndFlushes(t *testing.T) {
 	}
 }
 
+func TestSynthesizeWithStreamIgnoresEmptyText(t *testing.T) {
+	provider := &fakeStreamingTTS{
+		stream: &fakeSynthesizeStream{},
+	}
+
+	chunked, err := SynthesizeWithStream(context.Background(), provider, "")
+	if err != nil {
+		t.Fatalf("SynthesizeWithStream() error = %v", err)
+	}
+	defer chunked.Close()
+
+	wantCalls := []string{"flush"}
+	if !reflect.DeepEqual(provider.stream.calls, wantCalls) {
+		t.Fatalf("stream calls = %#v, want %#v", provider.stream.calls, wantCalls)
+	}
+}
+
 func TestSynthesizeWithStreamReturnsStreamEvents(t *testing.T) {
 	want := &SynthesizedAudio{RequestID: "req-a", DeltaText: "hello"}
 	provider := &fakeStreamingTTS{
