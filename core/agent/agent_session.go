@@ -63,6 +63,7 @@ var (
 
 type GenerateReplyOptions struct {
 	UserInput          string
+	Instructions       string
 	AllowInterruptions *bool
 	InputModality      string
 }
@@ -829,6 +830,9 @@ func (s *AgentSession) GenerateReplyWithOptions(ctx context.Context, opts Genera
 		inputModality = "text"
 	}
 	handle := NewSpeechHandle(allowInterruptions, InputDetails{Modality: inputModality})
+	if opts.Instructions != "" {
+		handle.Generation.Instructions = llm.NewInstructions(opts.Instructions)
+	}
 	s.EmitSpeechCreated(SpeechCreatedEvent{
 		UserInitiated: true,
 		Source:        "generate_reply",

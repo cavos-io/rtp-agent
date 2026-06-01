@@ -31,6 +31,10 @@ type PipelineAgent struct {
 	PublishAudio func(frame *model.AudioFrame) error
 }
 
+type pipelineReplyOptions struct {
+	Instructions string
+}
+
 func NewPipelineAgent(
 	vad vad.VAD,
 	stt stt.STT,
@@ -191,6 +195,10 @@ func (va *PipelineAgent) emitError(err error, source any) {
 }
 
 func (va *PipelineAgent) generateReply() {
+	va.generateReplyWithOptions(pipelineReplyOptions{})
+}
+
+func (va *PipelineAgent) generateReplyWithOptions(opts pipelineReplyOptions) {
 	va.mu.Lock()
 	session := va.session
 	ctx := va.ctx
@@ -212,11 +220,20 @@ func (va *PipelineAgent) generateReply() {
 	// In Python parity, we loop for tool calls
 	toolSteps := 0
 	for {
+		inferenceCtx := va.chatCtx
+		if opts.Instructions != "" {
+			inferenceCtx = va.chatCtx.Copy()
+			inferenceCtx.Items = append([]llm.ChatItem{&llm.ChatMessage{
+				Role:    llm.ChatRoleSystem,
+				Content: []llm.ChatContent{{Text: opts.Instructions}},
+			}}, inferenceCtx.Items...)
+		}
+
 		var chatOptions []llm.ChatOption
 		if session.Options.MaxToolSteps > 0 && toolSteps >= session.Options.MaxToolSteps {
 			chatOptions = append(chatOptions, llm.WithToolChoice("none"))
 		}
-		genData, err := PerformLLMInference(ctx, va.LLM, va.chatCtx, session.Tools, chatOptions...)
+		genData, err := PerformLLMInference(ctx, va.LLM, inferenceCtx, session.Tools, chatOptions...)
 		if err != nil {
 			logger.Logger.Errorw("LLM inference failed", err)
 			session.UpdateAgentState(AgentStateIdle)

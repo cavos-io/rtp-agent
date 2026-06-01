@@ -30,6 +30,10 @@ type InputDetails struct {
 	Modality string
 }
 
+type SpeechGenerationOptions struct {
+	Instructions *llm.Instructions
+}
+
 func DefaultInputDetails() InputDetails {
 	return InputDetails{Modality: "audio"}
 }
@@ -38,6 +42,7 @@ type SpeechHandle struct {
 	ID                 string
 	AllowInterruptions bool
 	InputDetails       InputDetails
+	Generation         SpeechGenerationOptions
 	Priority           int
 	CreatedAt          time.Time
 

@@ -464,6 +464,28 @@ func TestAgentSessionGenerateReplyOptionsOverrideInterruptionsAndInputModality(t
 	}
 }
 
+func TestAgentSessionGenerateReplyOptionsPreserveInstructions(t *testing.T) {
+	agent := NewAgent("test")
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	session.activity = NewAgentActivity(agent, session)
+
+	handle, err := session.GenerateReplyWithOptions(context.Background(), GenerateReplyOptions{
+		UserInput:     "hello",
+		Instructions:  "answer briefly",
+		InputModality: "text",
+	})
+
+	if err != nil {
+		t.Fatalf("GenerateReplyWithOptions error = %v, want nil", err)
+	}
+	if handle.Generation.Instructions == nil {
+		t.Fatal("handle.Generation.Instructions = nil, want per-call instructions")
+	}
+	if got := handle.Generation.Instructions.AsModality("text").String(); got != "answer briefly" {
+		t.Fatalf("handle.Generation.Instructions text = %q, want answer briefly", got)
+	}
+}
+
 func TestAgentSessionRunReturnsRunResultWatchingGeneratedSpeech(t *testing.T) {
 	agent := NewAgent("test")
 	session := NewAgentSession(agent, nil, AgentSessionOptions{AllowInterruptions: true})
