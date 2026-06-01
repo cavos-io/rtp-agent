@@ -95,10 +95,14 @@ type AgentSession struct {
 	UserStateChangedCh  chan UserStateChangedEvent
 	userInputCh         chan UserInputTranscribedEvent
 	speechCreatedCh     chan SpeechCreatedEvent
+	falseInterruptionCh chan AgentFalseInterruptionEvent
+	userTurnExceededCh  chan UserTurnExceededEvent
+	overlappingSpeechCh chan OverlappingSpeechEvent
 	conversationItemCh  chan ConversationItemAddedEvent
 	functionToolsCh     chan FunctionToolsExecutedEvent
 	metricsCollectedCh  chan MetricsCollectedEvent
 	sessionUsageCh      chan SessionUsageUpdatedEvent
+	errorCh             chan ErrorEvent
 	sipDTMFCh           chan SipDTMFEvent
 	closeCh             chan CloseEvent
 }
@@ -151,10 +155,14 @@ func NewAgentSession(agent AgentInterface, room *lksdk.Room, opts AgentSessionOp
 		UserStateChangedCh:  make(chan UserStateChangedEvent, 10),
 		userInputCh:         make(chan UserInputTranscribedEvent, 10),
 		speechCreatedCh:     make(chan SpeechCreatedEvent, 10),
+		falseInterruptionCh: make(chan AgentFalseInterruptionEvent, 10),
+		userTurnExceededCh:  make(chan UserTurnExceededEvent, 10),
+		overlappingSpeechCh: make(chan OverlappingSpeechEvent, 10),
 		conversationItemCh:  make(chan ConversationItemAddedEvent, 10),
 		functionToolsCh:     make(chan FunctionToolsExecutedEvent, 10),
 		metricsCollectedCh:  make(chan MetricsCollectedEvent, 10),
 		sessionUsageCh:      make(chan SessionUsageUpdatedEvent, 10),
+		errorCh:             make(chan ErrorEvent, 10),
 		sipDTMFCh:           make(chan SipDTMFEvent, 10),
 	}
 }
@@ -213,6 +221,85 @@ func (s *AgentSession) speechCreatedEvents() chan SpeechCreatedEvent {
 		s.speechCreatedCh = make(chan SpeechCreatedEvent, 10)
 	}
 	return s.speechCreatedCh
+}
+
+func (s *AgentSession) AgentFalseInterruptionEvents() <-chan AgentFalseInterruptionEvent {
+	return s.agentFalseInterruptionEvents()
+}
+
+func (s *AgentSession) EmitAgentFalseInterruption(ev AgentFalseInterruptionEvent) {
+	if ev.CreatedAt.IsZero() {
+		ev.CreatedAt = time.Now()
+	}
+	ch := s.agentFalseInterruptionEvents()
+	select {
+	case ch <- ev:
+	default:
+	}
+}
+
+func (s *AgentSession) agentFalseInterruptionEvents() chan AgentFalseInterruptionEvent {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.falseInterruptionCh == nil {
+		s.falseInterruptionCh = make(chan AgentFalseInterruptionEvent, 10)
+	}
+	return s.falseInterruptionCh
+}
+
+func (s *AgentSession) UserTurnExceededEvents() <-chan UserTurnExceededEvent {
+	return s.userTurnExceededEvents()
+}
+
+func (s *AgentSession) EmitUserTurnExceeded(ev UserTurnExceededEvent) {
+	if ev.CreatedAt.IsZero() {
+		ev.CreatedAt = time.Now()
+	}
+	ch := s.userTurnExceededEvents()
+	select {
+	case ch <- ev:
+	default:
+	}
+}
+
+func (s *AgentSession) userTurnExceededEvents() chan UserTurnExceededEvent {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.userTurnExceededCh == nil {
+		s.userTurnExceededCh = make(chan UserTurnExceededEvent, 10)
+	}
+	return s.userTurnExceededCh
+}
+
+func (s *AgentSession) OverlappingSpeechEvents() <-chan OverlappingSpeechEvent {
+	return s.overlappingSpeechEvents()
+}
+
+func (s *AgentSession) EmitOverlappingSpeech(ev OverlappingSpeechEvent) {
+	now := time.Now()
+	if ev.CreatedAt.IsZero() {
+		ev.CreatedAt = now
+	}
+	if ev.DetectedAt.IsZero() {
+		ev.DetectedAt = now
+	}
+	ch := s.overlappingSpeechEvents()
+	select {
+	case ch <- ev:
+	default:
+	}
+}
+
+func (s *AgentSession) overlappingSpeechEvents() chan OverlappingSpeechEvent {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.overlappingSpeechCh == nil {
+		s.overlappingSpeechCh = make(chan OverlappingSpeechEvent, 10)
+	}
+	return s.overlappingSpeechCh
 }
 
 func (s *AgentSession) ConversationItemAddedEvents() <-chan ConversationItemAddedEvent {
@@ -349,6 +436,31 @@ func (s *AgentSession) sessionUsageUpdatedEvents() chan SessionUsageUpdatedEvent
 		s.sessionUsageCh = make(chan SessionUsageUpdatedEvent, 10)
 	}
 	return s.sessionUsageCh
+}
+
+func (s *AgentSession) ErrorEvents() <-chan ErrorEvent {
+	return s.errorEvents()
+}
+
+func (s *AgentSession) EmitError(ev ErrorEvent) {
+	if ev.CreatedAt.IsZero() {
+		ev.CreatedAt = time.Now()
+	}
+	ch := s.errorEvents()
+	select {
+	case ch <- ev:
+	default:
+	}
+}
+
+func (s *AgentSession) errorEvents() chan ErrorEvent {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.errorCh == nil {
+		s.errorCh = make(chan ErrorEvent, 10)
+	}
+	return s.errorCh
 }
 
 func (s *AgentSession) SipDTMFEvents() <-chan SipDTMFEvent {

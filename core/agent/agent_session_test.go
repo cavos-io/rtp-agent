@@ -67,6 +67,123 @@ func TestAgentSessionGenerateReplyEmitsSpeechCreatedEvent(t *testing.T) {
 	}
 }
 
+func TestAgentSessionEmitErrorEmitsTimestampedEvent(t *testing.T) {
+	agent := NewAgent("test")
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	cause := errors.New("provider failed")
+	source := "stt"
+	before := time.Now()
+
+	session.EmitError(ErrorEvent{Error: cause, Source: source})
+
+	select {
+	case ev := <-session.ErrorEvents():
+		if ev.GetType() != "error" {
+			t.Fatalf("event type = %q, want error", ev.GetType())
+		}
+		if !errors.Is(ev.Error, cause) {
+			t.Fatalf("Error = %v, want %v", ev.Error, cause)
+		}
+		if ev.Source != source {
+			t.Fatalf("Source = %#v, want %q", ev.Source, source)
+		}
+		if ev.CreatedAt.Before(before) || ev.CreatedAt.IsZero() {
+			t.Fatalf("CreatedAt = %v, want timestamp after %v", ev.CreatedAt, before)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("ErrorEvents did not receive error event")
+	}
+}
+
+func TestAgentSessionEmitAgentFalseInterruptionEmitsTimestampedEvent(t *testing.T) {
+	agent := NewAgent("test")
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	before := time.Now()
+
+	session.EmitAgentFalseInterruption(AgentFalseInterruptionEvent{Resumed: true})
+
+	select {
+	case ev := <-session.AgentFalseInterruptionEvents():
+		if ev.GetType() != "agent_false_interruption" {
+			t.Fatalf("event type = %q, want agent_false_interruption", ev.GetType())
+		}
+		if !ev.Resumed {
+			t.Fatal("Resumed = false, want true")
+		}
+		if ev.CreatedAt.Before(before) || ev.CreatedAt.IsZero() {
+			t.Fatalf("CreatedAt = %v, want timestamp after %v", ev.CreatedAt, before)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("AgentFalseInterruptionEvents did not receive event")
+	}
+}
+
+func TestAgentSessionEmitUserTurnExceededEmitsTimestampedEvent(t *testing.T) {
+	agent := NewAgent("test")
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	before := time.Now()
+
+	session.EmitUserTurnExceeded(UserTurnExceededEvent{
+		Transcript:            "latest words",
+		AccumulatedTranscript: "all words",
+		AccumulatedWordCount:  2,
+		Duration:              3 * time.Second,
+	})
+
+	select {
+	case ev := <-session.UserTurnExceededEvents():
+		if ev.GetType() != "user_turn_exceeded" {
+			t.Fatalf("event type = %q, want user_turn_exceeded", ev.GetType())
+		}
+		if ev.Transcript != "latest words" || ev.AccumulatedTranscript != "all words" {
+			t.Fatalf("event transcript fields = %#v, want latest/all words", ev)
+		}
+		if ev.AccumulatedWordCount != 2 || ev.Duration != 3*time.Second {
+			t.Fatalf("event accumulation fields = %#v, want 2 words and 3s", ev)
+		}
+		if ev.CreatedAt.Before(before) || ev.CreatedAt.IsZero() {
+			t.Fatalf("CreatedAt = %v, want timestamp after %v", ev.CreatedAt, before)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("UserTurnExceededEvents did not receive event")
+	}
+}
+
+func TestAgentSessionEmitOverlappingSpeechEmitsTimestampedEvent(t *testing.T) {
+	agent := NewAgent("test")
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	overlapStartedAt := time.Now().Add(-100 * time.Millisecond)
+	before := time.Now()
+
+	session.EmitOverlappingSpeech(OverlappingSpeechEvent{
+		IsInterruption:   true,
+		DetectionDelay:   100 * time.Millisecond,
+		OverlapStartedAt: &overlapStartedAt,
+		Probability:      0.8,
+	})
+
+	select {
+	case ev := <-session.OverlappingSpeechEvents():
+		if ev.GetType() != "overlapping_speech" {
+			t.Fatalf("event type = %q, want overlapping_speech", ev.GetType())
+		}
+		if !ev.IsInterruption || ev.DetectionDelay != 100*time.Millisecond || ev.Probability != 0.8 {
+			t.Fatalf("event fields = %#v, want interruption with delay/probability", ev)
+		}
+		if ev.OverlapStartedAt == nil || !ev.OverlapStartedAt.Equal(overlapStartedAt) {
+			t.Fatalf("OverlapStartedAt = %#v, want %v", ev.OverlapStartedAt, overlapStartedAt)
+		}
+		if ev.CreatedAt.Before(before) || ev.CreatedAt.IsZero() {
+			t.Fatalf("CreatedAt = %v, want timestamp after %v", ev.CreatedAt, before)
+		}
+		if ev.DetectedAt.Before(before) || ev.DetectedAt.IsZero() {
+			t.Fatalf("DetectedAt = %v, want timestamp after %v", ev.DetectedAt, before)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("OverlappingSpeechEvents did not receive event")
+	}
+}
+
 func TestAgentSessionGenerateReplyAddsUserInputToChatContext(t *testing.T) {
 	agent := NewAgent("test")
 	session := NewAgentSession(agent, nil, AgentSessionOptions{})

@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"errors"
 	"io"
 	"strings"
 	"sync"
@@ -12,6 +13,7 @@ import (
 	"github.com/cavos-io/rtp-agent/core/llm"
 	"github.com/cavos-io/rtp-agent/core/stt"
 	"github.com/cavos-io/rtp-agent/core/tts"
+	"github.com/cavos-io/rtp-agent/core/vad"
 )
 
 func TestPipelineAgentGenerateReplyAddsAssistantMessageWithExtra(t *testing.T) {
@@ -170,6 +172,61 @@ func TestPipelineAgentEmitsUserInputTranscribedEvents(t *testing.T) {
 		if ev.CreatedAt.IsZero() {
 			t.Fatalf("event %d CreatedAt is zero", i)
 		}
+	}
+}
+
+func TestPipelineAgentEmitsErrorEventForSTTStreamError(t *testing.T) {
+	chatCtx := llm.NewChatContext()
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	source := &fakePipelineSTT{}
+	cause := errors.New("stt stream failed")
+	agent := NewPipelineAgent(nil, source, &fakeGenerationLLM{
+		stream: &fakeGenerationLLMStream{},
+	}, &fakePipelineTTS{}, chatCtx)
+	agent.session = session
+	agent.ctx = context.Background()
+	stream := &fakePipelineRecognizeStream{err: cause}
+
+	agent.sttLoop(stream)
+
+	select {
+	case ev := <-session.ErrorEvents():
+		if !errors.Is(ev.Error, cause) {
+			t.Fatalf("Error = %v, want %v", ev.Error, cause)
+		}
+		if ev.Source != source {
+			t.Fatalf("Source = %#v, want STT source", ev.Source)
+		}
+		if ev.CreatedAt.IsZero() {
+			t.Fatal("CreatedAt is zero")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("ErrorEvents did not receive STT stream error")
+	}
+}
+
+func TestPipelineAgentEmitsErrorEventForVADStreamError(t *testing.T) {
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	source := &fakePipelineVAD{}
+	cause := errors.New("vad stream failed")
+	agent := NewPipelineAgent(source, nil, nil, nil, nil)
+	agent.session = session
+
+	agent.vadLoop(&fakePipelineVADStream{err: cause})
+
+	select {
+	case ev := <-session.ErrorEvents():
+		if !errors.Is(ev.Error, cause) {
+			t.Fatalf("Error = %v, want %v", ev.Error, cause)
+		}
+		if ev.Source != source {
+			t.Fatalf("Source = %#v, want VAD source", ev.Source)
+		}
+		if ev.CreatedAt.IsZero() {
+			t.Fatal("CreatedAt is zero")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("ErrorEvents did not receive VAD stream error")
 	}
 }
 
@@ -368,6 +425,61 @@ func (f *fakePipelineTTSStream) Next() (*tts.SynthesizedAudio, error) {
 	return nil, io.EOF
 }
 
+type fakePipelineSTT struct{}
+
+func (f *fakePipelineSTT) Label() string { return "fake-stt" }
+
+func (f *fakePipelineSTT) Capabilities() stt.STTCapabilities {
+	return stt.STTCapabilities{Streaming: true}
+}
+
+func (f *fakePipelineSTT) Stream(context.Context, string) (stt.RecognizeStream, error) {
+	return &fakePipelineRecognizeStream{}, nil
+}
+
+func (f *fakePipelineSTT) Recognize(context.Context, []*model.AudioFrame, string) (*stt.SpeechEvent, error) {
+	return nil, nil
+}
+
+type fakePipelineVAD struct{}
+
+func (f *fakePipelineVAD) Label() string { return "fake-vad" }
+
+func (f *fakePipelineVAD) Model() string { return "fake-vad" }
+
+func (f *fakePipelineVAD) Provider() string { return "fake" }
+
+func (f *fakePipelineVAD) Capabilities() vad.VADCapabilities {
+	return vad.VADCapabilities{}
+}
+
+func (f *fakePipelineVAD) OnMetricsCollected(vad.VADMetricsHandler) {}
+
+func (f *fakePipelineVAD) Stream(context.Context) (vad.VADStream, error) {
+	return &fakePipelineVADStream{}, nil
+}
+
+type fakePipelineVADStream struct {
+	err error
+}
+
+func (f *fakePipelineVADStream) PushFrame(*model.AudioFrame) error { return nil }
+
+func (f *fakePipelineVADStream) Flush() error { return nil }
+
+func (f *fakePipelineVADStream) EndInput() error { return nil }
+
+func (f *fakePipelineVADStream) Close() error { return nil }
+
+func (f *fakePipelineVADStream) Next() (*vad.VADEvent, error) {
+	if f.err != nil {
+		err := f.err
+		f.err = nil
+		return nil, err
+	}
+	return nil, io.EOF
+}
+
 type blockingPipelineTool struct {
 	name    string
 	started chan struct{}
@@ -414,6 +526,7 @@ func receiveUserInputTranscribedEvent(t *testing.T, session *AgentSession) UserI
 type fakePipelineRecognizeStream struct {
 	events []*stt.SpeechEvent
 	index  int
+	err    error
 }
 
 func (f *fakePipelineRecognizeStream) PushFrame(*model.AudioFrame) error { return nil }
@@ -424,6 +537,11 @@ func (f *fakePipelineRecognizeStream) Close() error { return nil }
 
 func (f *fakePipelineRecognizeStream) Next() (*stt.SpeechEvent, error) {
 	if f.index >= len(f.events) {
+		if f.err != nil {
+			err := f.err
+			f.err = nil
+			return nil, err
+		}
 		return nil, io.EOF
 	}
 	ev := f.events[f.index]

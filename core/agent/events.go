@@ -49,6 +49,22 @@ func NewUserTurnExceededEvent(transcript string, accumulatedTranscript string, a
 
 func (e *UserTurnExceededEvent) GetType() string { return "user_turn_exceeded" }
 
+type OverlappingSpeechEvent struct {
+	CreatedAt          time.Time
+	DetectedAt         time.Time
+	IsInterruption     bool
+	TotalDuration      time.Duration
+	PredictionDuration time.Duration
+	DetectionDelay     time.Duration
+	OverlapStartedAt   *time.Time
+	SpeechInput        []int16
+	Probabilities      []float32
+	Probability        float64
+	NumRequests        int
+}
+
+func (e *OverlappingSpeechEvent) GetType() string { return "overlapping_speech" }
+
 type ConversationItemAddedEvent struct {
 	Item      llm.ChatItem
 	CreatedAt time.Time

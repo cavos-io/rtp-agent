@@ -70,6 +70,7 @@ type scheduledSpeech struct {
 }
 
 func (a *AgentActivity) Start() {
+	_ = a.recordInitialConfiguration()
 	a.AgentIntf.OnEnter()
 	go a.schedulingTask()
 }
@@ -77,6 +78,35 @@ func (a *AgentActivity) Start() {
 func (a *AgentActivity) Stop() {
 	a.AgentIntf.OnExit()
 	a.cancel()
+}
+
+func (a *AgentActivity) recordInitialConfiguration() error {
+	if a.Agent.ChatCtx == nil {
+		a.Agent.ChatCtx = llm.NewChatContext()
+	}
+	if a.Session != nil && a.Session.ChatCtx == nil {
+		a.Session.ChatCtx = llm.NewChatContext()
+	}
+
+	if err := updateAgentInstructionsMessage(a.Agent.ChatCtx, a.Agent.Instructions, a.Agent.Instructions != ""); err != nil {
+		return err
+	}
+
+	toolNames := sortedAgentToolNames(a.chatContextTools())
+	if a.Agent.Instructions == "" && len(toolNames) == 0 {
+		return nil
+	}
+
+	configUpdate := &llm.AgentConfigUpdate{
+		Instructions: stringPtrIfNotEmpty(a.Agent.Instructions),
+		ToolsAdded:   toolNames,
+		CreatedAt:    time.Now(),
+	}
+	a.Agent.ChatCtx.Insert(configUpdate)
+	if a.Session != nil {
+		a.Session.ChatCtx.Insert(configUpdate)
+	}
+	return nil
 }
 
 func (a *AgentActivity) Interrupt(force bool) error {
@@ -214,6 +244,38 @@ func agentToolDiff(oldToolNames map[string]struct{}, newToolNames map[string]str
 	sort.Strings(added)
 	sort.Strings(removed)
 	return added, removed
+}
+
+func sortedAgentToolNames(tools []interface{}) []string {
+	if len(tools) == 0 {
+		return nil
+	}
+	names := make([]string, 0, len(tools))
+	seen := make(map[string]struct{}, len(tools))
+	for _, tool := range tools {
+		t, ok := tool.(llm.Tool)
+		if !ok {
+			continue
+		}
+		name := t.Name()
+		if _, ok := seen[name]; ok {
+			continue
+		}
+		seen[name] = struct{}{}
+		names = append(names, name)
+	}
+	if len(names) == 0 {
+		return nil
+	}
+	sort.Strings(names)
+	return names
+}
+
+func stringPtrIfNotEmpty(value string) *string {
+	if value == "" {
+		return nil
+	}
+	return &value
 }
 
 func updateAgentInstructionsMessage(chatCtx *llm.ChatContext, instructions string, addIfMissing bool) error {
