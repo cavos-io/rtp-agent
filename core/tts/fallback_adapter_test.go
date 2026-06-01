@@ -1422,6 +1422,55 @@ func TestFallbackSynthesizeStreamRetriesSameTTSBeforeFallback(t *testing.T) {
 	}
 }
 
+func TestFallbackSynthesizeStreamEndsInputOnRetryAfterEndInput(t *testing.T) {
+	streamErr := errors.New("primary stream failed")
+	recovered := &endInputSynthesizeStream{events: []*SynthesizedAudio{{
+		Frame: &model.AudioFrame{Data: []byte("primary recovered")},
+	}}}
+	primary := &metadataTTS{
+		label:        "primary",
+		sampleRate:   24000,
+		numChannels:  1,
+		capabilities: TTSCapabilities{Streaming: true},
+		streams: []SynthesizeStream{
+			&failingEndInputSynthesizeStream{err: streamErr},
+			recovered,
+		},
+	}
+	adapter := NewFallbackAdapterWithOptions([]TTS{primary}, FallbackAdapterOptions{
+		MaxRetryPerTTS: 1,
+	})
+
+	stream, err := adapter.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+	defer stream.Close()
+
+	ending, ok := stream.(inputEndingSynthesizeStream)
+	if !ok {
+		t.Fatal("FallbackAdapter stream does not implement EndInput")
+	}
+	if err := stream.PushText("hello"); err != nil {
+		t.Fatalf("PushText returned error: %v", err)
+	}
+	if err := ending.EndInput(); err != nil {
+		t.Fatalf("EndInput returned error: %v", err)
+	}
+
+	audio, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next returned error: %v", err)
+	}
+	if got := string(audio.Frame.Data); got != "primary recovered" {
+		t.Fatalf("audio data = %q, want primary recovered", got)
+	}
+	wantCalls := []string{"push:hello", "end_input"}
+	if strings.Join(recovered.calls, ",") != strings.Join(wantCalls, ",") {
+		t.Fatalf("replayed stream calls = %#v, want %#v", recovered.calls, wantCalls)
+	}
+}
+
 func TestFallbackSynthesizeStreamReplaysOnlyFirstSegmentTextOnRetry(t *testing.T) {
 	primaryFailure := &blockingFailSynthesizeStream{
 		err:     errors.New("primary stream failed"),
@@ -1696,6 +1745,35 @@ func (s *blockingFailSynthesizeStream) Close() error {
 
 func (s *blockingFailSynthesizeStream) Next() (*SynthesizedAudio, error) {
 	<-s.release
+	return nil, s.err
+}
+
+type failingEndInputSynthesizeStream struct {
+	err   error
+	ended bool
+}
+
+func (s *failingEndInputSynthesizeStream) PushText(string) error {
+	return nil
+}
+
+func (s *failingEndInputSynthesizeStream) Flush() error {
+	return nil
+}
+
+func (s *failingEndInputSynthesizeStream) EndInput() error {
+	s.ended = true
+	return nil
+}
+
+func (s *failingEndInputSynthesizeStream) Close() error {
+	return nil
+}
+
+func (s *failingEndInputSynthesizeStream) Next() (*SynthesizedAudio, error) {
+	if !s.ended {
+		return nil, errors.New("input not ended")
+	}
 	return nil, s.err
 }
 
