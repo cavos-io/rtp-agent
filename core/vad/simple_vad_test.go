@@ -1430,6 +1430,40 @@ func TestSimpleVADPreStartSpeechIncrementsSilenceDuration(t *testing.T) {
 	assertEventType(t, stream, VADEventStartOfSpeech)
 }
 
+func TestSimpleVADShortSpeechSilenceInferenceUsesPreTransitionThresholds(t *testing.T) {
+	stream, err := NewSimpleVADWithOptions(SimpleVADOptions{
+		Threshold:         0.05,
+		MinSpeechDuration: 0.03,
+	}).Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	defer stream.Close()
+
+	if err := stream.PushFrame(audioFrame(16000, 160, 6000)); err != nil {
+		t.Fatalf("PushFrame() speech error = %v", err)
+	}
+	if err := stream.PushFrame(audioFrame(16000, 160, 0)); err != nil {
+		t.Fatalf("PushFrame() silence error = %v", err)
+	}
+
+	assertEventType(t, stream, VADEventInferenceDone)
+	inference := nextVADEvent(t, stream)
+	if inference.Type != VADEventInferenceDone {
+		t.Fatalf("event type = %s, want %s", inference.Type, VADEventInferenceDone)
+	}
+	if inference.SilenceDuration != 0.02 {
+		t.Fatalf("SilenceDuration = %v, want 0.02", inference.SilenceDuration)
+	}
+	if inference.RawAccumulatedSpeech != 0.01 {
+		t.Fatalf("RawAccumulatedSpeech = %v, want 0.01", inference.RawAccumulatedSpeech)
+	}
+	if inference.RawAccumulatedSilence != 0 {
+		t.Fatalf("RawAccumulatedSilence = %v, want 0", inference.RawAccumulatedSilence)
+	}
+	assertNoVADEvent(t, stream)
+}
+
 func TestSimpleVADDropsSpeechShorterThanMinimumDuration(t *testing.T) {
 	stream, err := NewSimpleVADWithOptions(SimpleVADOptions{
 		Threshold:         0.05,
