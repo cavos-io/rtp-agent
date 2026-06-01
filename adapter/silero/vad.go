@@ -66,6 +66,10 @@ func WithPrefixPaddingDuration(d float64) VADOption {
 	}
 }
 
+func WithPaddingDuration(d float64) VADOption {
+	return WithPrefixPaddingDuration(d)
+}
+
 func WithMaxBufferedSpeech(d float64) VADOption {
 	return func(o *VADOptions) {
 		o.MaxBufferedSpeech = d

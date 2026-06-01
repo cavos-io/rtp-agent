@@ -111,6 +111,13 @@ func TestSileroVADDerivesInitialDeactivationThreshold(t *testing.T) {
 	}
 }
 
+func TestSileroVADPaddingDurationAliasesPrefixPaddingDuration(t *testing.T) {
+	options := NewSileroVAD(WithPaddingDuration(0.123)).options
+	if options.PrefixPaddingDuration != 0.123 {
+		t.Fatalf("PrefixPaddingDuration = %v, want 0.123", options.PrefixPaddingDuration)
+	}
+}
+
 func TestSileroVADHonorsExplicitZeroActivationThreshold(t *testing.T) {
 	detector := NewSileroVAD(
 		WithActivationThreshold(0),
