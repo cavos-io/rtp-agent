@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"reflect"
+	"strings"
 	"sync"
 	"time"
 
@@ -403,6 +405,79 @@ type LLM interface {
 	Chat(ctx context.Context, chatCtx *ChatContext, opts ...ChatOption) (LLMStream, error)
 }
 
+type labelProviderLLM interface {
+	Label() string
+}
+
+type modelProviderLLM interface {
+	Model() string
+}
+
+type providerProviderLLM interface {
+	Provider() string
+}
+
+type prewarmProviderLLM interface {
+	Prewarm()
+}
+
+func Label(llm LLM) string {
+	if provider, ok := llm.(labelProviderLLM); ok {
+		if label := provider.Label(); label != "" {
+			return label
+		}
+	}
+	if label := reflectedLLMLabel(llm); label != "" {
+		return label
+	}
+	return "unknown"
+}
+
+func Model(llm LLM) string {
+	if provider, ok := llm.(modelProviderLLM); ok {
+		if model := provider.Model(); model != "" {
+			return model
+		}
+	}
+	return "unknown"
+}
+
+func Provider(llm LLM) string {
+	if provider, ok := llm.(providerProviderLLM); ok {
+		if name := provider.Provider(); name != "" {
+			return name
+		}
+	}
+	return "unknown"
+}
+
+func Prewarm(llm LLM) {
+	if provider, ok := llm.(prewarmProviderLLM); ok {
+		provider.Prewarm()
+	}
+}
+
+func reflectedLLMLabel(llm LLM) string {
+	if llm == nil {
+		return ""
+	}
+	t := reflect.TypeOf(llm)
+	for t.Kind() == reflect.Pointer {
+		t = t.Elem()
+	}
+	if t.Name() == "" {
+		return ""
+	}
+	pkg := t.PkgPath()
+	if idx := strings.LastIndex(pkg, "/"); idx >= 0 {
+		pkg = pkg[idx+1:]
+	}
+	if pkg == "" {
+		return t.Name()
+	}
+	return pkg + "." + t.Name()
+}
+
 type LLMStream interface {
 	Next() (*ChatChunk, error)
 	Close() error
@@ -570,14 +645,30 @@ type RealtimeEvent struct {
 // Fallback Adapter
 
 type FallbackAdapter struct {
-	llms             []LLM
-	attemptTimeout   time.Duration
-	maxRetryPerLLM   int
-	retryInterval    time.Duration
-	retryOnChunkSent bool
-	mu               sync.Mutex
-	available        []bool
-	recovering       []bool
+	llms                 []LLM
+	attemptTimeout       time.Duration
+	maxRetryPerLLM       int
+	retryInterval        time.Duration
+	retryOnChunkSent     bool
+	mu                   sync.Mutex
+	available            []bool
+	recovering           []bool
+	availabilityChanged  chan FallbackAvailabilityChangedEvent
+	availabilityHandlers []fallbackAvailabilityHandlerSubscription
+	nextAvailabilityID   uint64
+}
+
+type FallbackAvailabilityChangedEvent struct {
+	LLM       LLM
+	Index     int
+	Available bool
+}
+
+type FallbackAvailabilityChangedHandler func(FallbackAvailabilityChangedEvent)
+
+type fallbackAvailabilityHandlerSubscription struct {
+	id      uint64
+	handler FallbackAvailabilityChangedHandler
 }
 
 type FallbackAdapterOptions struct {
@@ -589,15 +680,16 @@ type FallbackAdapterOptions struct {
 
 type FallbackAllFailedError struct {
 	Count    int
+	Labels   []string
 	Duration time.Duration
 	Err      error
 }
 
 func (e *FallbackAllFailedError) Error() string {
 	if e.Err == nil {
-		return fmt.Sprintf("all LLMs failed (%d providers) after %s", e.Count, e.Duration)
+		return fmt.Sprintf("all LLMs failed (%v) after %s", e.Labels, e.Duration)
 	}
-	return fmt.Sprintf("all LLMs failed (%d providers) after %s: %v", e.Count, e.Duration, e.Err)
+	return fmt.Sprintf("all LLMs failed (%v) after %s: %v", e.Labels, e.Duration, e.Err)
 }
 
 func (e *FallbackAllFailedError) Unwrap() error {
@@ -625,14 +717,19 @@ func NewFallbackAdapterWithOptions(llms []LLM, options FallbackAdapterOptions) *
 	if retryInterval <= 0 {
 		retryInterval = defaultFallbackRetryInterval
 	}
+	eventBuffer := len(llms) * 2
+	if eventBuffer < 16 {
+		eventBuffer = 16
+	}
 	return &FallbackAdapter{
-		llms:             llms,
-		attemptTimeout:   attemptTimeout,
-		maxRetryPerLLM:   options.MaxRetryPerLLM,
-		retryInterval:    retryInterval,
-		retryOnChunkSent: options.RetryOnChunkSent,
-		available:        initialAvailability(len(llms)),
-		recovering:       make([]bool, len(llms)),
+		llms:                llms,
+		attemptTimeout:      attemptTimeout,
+		maxRetryPerLLM:      options.MaxRetryPerLLM,
+		retryInterval:       retryInterval,
+		retryOnChunkSent:    options.RetryOnChunkSent,
+		available:           initialAvailability(len(llms)),
+		recovering:          make([]bool, len(llms)),
+		availabilityChanged: make(chan FallbackAvailabilityChangedEvent, eventBuffer),
 	}
 }
 
@@ -663,10 +760,85 @@ func (f *FallbackAdapter) allUnavailable() bool {
 
 func (f *FallbackAdapter) setAvailable(index int, available bool) {
 	f.mu.Lock()
-	defer f.mu.Unlock()
+	changed := f.available[index] != available
 	f.available[index] = available
 	if available {
 		f.recovering[index] = false
+	}
+	f.mu.Unlock()
+	if changed {
+		f.emitAvailabilityChanged(index, available)
+	}
+}
+
+func (f *FallbackAdapter) Label() string {
+	return fmt.Sprintf("FallbackAdapter(%s)", Label(f.llms[0]))
+}
+
+func (f *FallbackAdapter) Model() string {
+	return "FallbackAdapter"
+}
+
+func (f *FallbackAdapter) Provider() string {
+	return "livekit"
+}
+
+func (f *FallbackAdapter) Prewarm() {
+	Prewarm(f.llms[0])
+}
+
+func (f *FallbackAdapter) OnAvailabilityChanged(handler FallbackAvailabilityChangedHandler) func() {
+	if handler == nil {
+		return func() {}
+	}
+	f.mu.Lock()
+	f.nextAvailabilityID++
+	id := f.nextAvailabilityID
+	f.availabilityHandlers = append(f.availabilityHandlers, fallbackAvailabilityHandlerSubscription{
+		id:      id,
+		handler: handler,
+	})
+	f.mu.Unlock()
+
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			f.removeAvailabilityChangedHandler(id)
+		})
+	}
+}
+
+func (f *FallbackAdapter) removeAvailabilityChangedHandler(id uint64) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for i, subscription := range f.availabilityHandlers {
+		if subscription.id == id {
+			f.availabilityHandlers = append(f.availabilityHandlers[:i], f.availabilityHandlers[i+1:]...)
+			return
+		}
+	}
+}
+
+func (f *FallbackAdapter) AvailabilityChangedCh() <-chan FallbackAvailabilityChangedEvent {
+	return f.availabilityChanged
+}
+
+func (f *FallbackAdapter) emitAvailabilityChanged(index int, available bool) {
+	event := FallbackAvailabilityChangedEvent{
+		LLM:       f.llms[index],
+		Index:     index,
+		Available: available,
+	}
+	select {
+	case f.availabilityChanged <- event:
+	default:
+	}
+
+	f.mu.Lock()
+	subscriptions := append([]fallbackAvailabilityHandlerSubscription(nil), f.availabilityHandlers...)
+	f.mu.Unlock()
+	for _, subscription := range subscriptions {
+		subscription.handler(event)
 	}
 }
 
@@ -699,9 +871,13 @@ type fallbackLLMStream struct {
 
 func (s *fallbackLLMStream) markUnavailable(index int, recover bool) {
 	s.adapter.mu.Lock()
+	changed := s.adapter.available[index]
 	s.adapter.available[index] = false
 	if !recover || s.adapter.recovering[index] {
 		s.adapter.mu.Unlock()
+		if changed {
+			s.adapter.emitAvailabilityChanged(index, false)
+		}
 		return
 	}
 	s.adapter.recovering[index] = true
@@ -710,6 +886,9 @@ func (s *fallbackLLMStream) markUnavailable(index int, recover bool) {
 	opts := append([]ChatOption(nil), s.opts...)
 	s.adapter.mu.Unlock()
 
+	if changed {
+		s.adapter.emitAvailabilityChanged(index, false)
+	}
 	go s.adapter.recoverLLM(index, llm, chatCtx, opts)
 }
 
@@ -737,9 +916,13 @@ func (f *FallbackAdapter) recoverLLM(index int, llm LLM, chatCtx *ChatContext, o
 
 func (f *FallbackAdapter) finishRecovery(index int, available bool) {
 	f.mu.Lock()
-	defer f.mu.Unlock()
+	changed := f.available[index] != available
 	f.available[index] = available
 	f.recovering[index] = false
+	f.mu.Unlock()
+	if changed {
+		f.emitAvailabilityChanged(index, available)
+	}
 }
 
 func (s *fallbackLLMStream) tryStart(index int) error {
@@ -779,11 +962,20 @@ func (s *fallbackLLMStream) tryStart(index int) error {
 	if lastErr != nil {
 		return &FallbackAllFailedError{
 			Count:    len(s.adapter.llms),
+			Labels:   s.adapter.labels(),
 			Duration: time.Since(start),
 			Err:      lastErr,
 		}
 	}
 	return lastErr
+}
+
+func (f *FallbackAdapter) labels() []string {
+	labels := make([]string, len(f.llms))
+	for i, llm := range f.llms {
+		labels[i] = Label(llm)
+	}
+	return labels
 }
 
 func (s *fallbackLLMStream) Next() (*ChatChunk, error) {
