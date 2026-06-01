@@ -528,6 +528,14 @@ func consoleLocalJobArgs() (roomName string, participantIdentity string) {
 	return "console-room", "console"
 }
 
+func consoleSessionReportPath(now time.Time) string {
+	return filepath.Join(
+		"console-recordings",
+		"session-"+now.Format("01-02-150405"),
+		"session_report.json",
+	)
+}
+
 func consoleLocalJobOptions(args ConsoleArgs) worker.LocalJobOptions {
 	options := worker.LocalJobOptions{FakeJob: true}
 	if args.Record {
@@ -537,11 +545,7 @@ func consoleLocalJobOptions(args ConsoleArgs) worker.LocalJobOptions {
 			Logs:       true,
 			Transcript: true,
 		}
-		options.SessionReportPath = filepath.Join(
-			"console-recordings",
-			"session-"+time.Now().Format("01-02-150405"),
-			"session_report.json",
-		)
+		options.SessionReportPath = consoleSessionReportPath(time.Now())
 	}
 	return options
 }
@@ -570,8 +574,12 @@ func runConsole(server *worker.AgentServer, argv []string) {
 		printConsoleAudioDevices()
 		return
 	}
+	localJobOptions := consoleLocalJobOptions(args)
 
 	fmt.Println("Starting console mode 🚀")
+	if localJobOptions.SessionReportPath != "" {
+		fmt.Printf("Session recording will be saved to %s\n", filepath.Dir(localJobOptions.SessionReportPath))
+	}
 	fmt.Println("Type your message and press Enter to talk to the agent. Press Ctrl+C to exit.")
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -588,7 +596,7 @@ func runConsole(server *worker.AgentServer, argv []string) {
 
 	go func() {
 		roomName, participantIdentity := consoleLocalJobArgs()
-		if err := server.ExecuteLocalJobWithOptions(ctx, roomName, participantIdentity, consoleLocalJobOptions(args)); err != nil {
+		if err := server.ExecuteLocalJobWithOptions(ctx, roomName, participantIdentity, localJobOptions); err != nil {
 			logger.Logger.Errorw("Console execution error", err)
 			stop()
 		}

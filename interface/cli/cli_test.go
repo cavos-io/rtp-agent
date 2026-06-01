@@ -273,6 +273,16 @@ func TestConsoleLocalJobOptionsEnableRecordingWhenRequested(t *testing.T) {
 	}
 }
 
+func TestConsoleSessionReportPathUsesReferenceDirectory(t *testing.T) {
+	now := time.Date(2026, 6, 1, 9, 8, 7, 0, time.UTC)
+	got := consoleSessionReportPath(now)
+	want := "console-recordings/session-06-01-090807/session_report.json"
+
+	if got != want {
+		t.Fatalf("consoleSessionReportPath() = %q, want %q", got, want)
+	}
+}
+
 func TestConsoleLocalJobOptionsDisableRecordingByDefault(t *testing.T) {
 	options := consoleLocalJobOptions(ConsoleArgs{})
 
