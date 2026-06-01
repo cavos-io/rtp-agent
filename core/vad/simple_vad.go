@@ -1122,7 +1122,12 @@ func (v *SimpleVAD) emitMetrics(metrics *telemetry.VADMetrics) {
 	handlers := append([]VADMetricsHandler(nil), v.handlers...)
 	v.mu.RUnlock()
 	for _, handler := range handlers {
-		go handler(metrics)
+		go func(handler VADMetricsHandler) {
+			defer func() {
+				_ = recover()
+			}()
+			handler(metrics)
+		}(handler)
 	}
 }
 

@@ -146,6 +146,34 @@ func TestSimpleVADMetricsHandlerDoesNotBlockPushFrame(t *testing.T) {
 	}
 }
 
+func TestSimpleVADMetricsHandlerPanicDoesNotStopOtherHandlers(t *testing.T) {
+	detector := NewSimpleVADWithOptions(SimpleVADOptions{UpdateInterval: 1})
+	metricsCh := make(chan *telemetry.VADMetrics, 1)
+	detector.OnMetricsCollected(func(metrics *telemetry.VADMetrics) {
+		panic("metrics handler panic")
+	})
+	detector.OnMetricsCollected(func(metrics *telemetry.VADMetrics) {
+		metricsCh <- metrics
+	})
+
+	stream, err := detector.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	defer stream.Close()
+
+	if err := stream.PushFrame(audioFrame(16000, 160, 6000)); err != nil {
+		t.Fatalf("PushFrame() error = %v", err)
+	}
+	assertEventType(t, stream, VADEventInferenceDone)
+
+	select {
+	case <-metricsCh:
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("timed out waiting for second metrics handler")
+	}
+}
+
 func TestSimpleVADMetricsIdleTimeStartsAtStreamCreation(t *testing.T) {
 	detector := NewSimpleVADWithOptions(SimpleVADOptions{UpdateInterval: 1})
 	metricsCh := make(chan *telemetry.VADMetrics, 1)
