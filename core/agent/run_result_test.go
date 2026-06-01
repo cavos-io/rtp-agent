@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -635,6 +636,29 @@ func TestRunAssertNoMoreEventsReportsRemainingEvents(t *testing.T) {
 
 	if err == nil {
 		t.Fatal("NoMoreEvents error = nil, want error when events remain")
+	}
+}
+
+func TestRunAssertHasErrorIncludesEventDebugContext(t *testing.T) {
+	result := NewRunResult(llm.NewChatContext())
+	now := time.Now()
+	result.RecordItem(&llm.ChatMessage{ID: "msg_1", Role: llm.ChatRoleAssistant, CreatedAt: now})
+	result.RecordItem(&llm.FunctionCall{ID: "fnc_1", CallID: "call_1", Name: "lookup", CreatedAt: now.Add(time.Millisecond)})
+
+	err := result.Expect.NextEvent("message").NoMoreEvents().HasError()
+
+	if err == nil {
+		t.Fatal("HasError error = nil, want remaining event error")
+	}
+	msg := err.Error()
+	for _, want := range []string{
+		"Context around failure:",
+		"   [0] message",
+		">>> [1] function_call",
+	} {
+		if !strings.Contains(msg, want) {
+			t.Fatalf("HasError message = %q, want to contain %q", msg, want)
+		}
 	}
 }
 

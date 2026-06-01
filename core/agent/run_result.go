@@ -659,7 +659,23 @@ func (a *RunAssert) HasError() error {
 	for _, err := range a.errors {
 		msgs = append(msgs, err.Error())
 	}
-	return fmt.Errorf("assertions failed:\\n%s", strings.Join(msgs, "\\n"))
+	message := fmt.Sprintf("assertions failed:\n%s", strings.Join(msgs, "\n"))
+	if events := a.events(); len(events) > 0 {
+		message += "\nContext around failure:\n" + formatRunEvents(events, a.index)
+	}
+	return errors.New(message)
+}
+
+func formatRunEvents(events []RunEvent, selectedIndex int) string {
+	lines := make([]string, 0, len(events))
+	for i, event := range events {
+		prefix := "   "
+		if i == selectedIndex {
+			prefix = ">>>"
+		}
+		lines = append(lines, fmt.Sprintf("%s [%d] %s", prefix, i, event.GetType()))
+	}
+	return strings.Join(lines, "\n")
 }
 
 func (a *RunAssert) Judge(ctx context.Context, evaluator evals.Evaluator, llmInstance llm.LLM) (*RunAssert, error) {
