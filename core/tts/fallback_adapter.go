@@ -8,6 +8,7 @@ import (
 	"sync"
 
 	"github.com/cavos-io/conversation-worker/library/logger"
+	cavosmath "github.com/cavos-io/conversation-worker/library/math"
 	"github.com/cavos-io/conversation-worker/model"
 )
 
@@ -310,6 +311,7 @@ type fallbackChunkedStream struct {
 	activeStream ChunkedStream
 	activeIndex  int
 	retries      map[int]int
+	requestID    string
 
 	eventCh chan *SynthesizedAudio
 	errCh   chan error
@@ -319,13 +321,14 @@ type fallbackChunkedStream struct {
 
 func (f *FallbackAdapter) Synthesize(ctx context.Context, text string) (ChunkedStream, error) {
 	s := &fallbackChunkedStream{
-		adapter: f,
-		ctx:     ctx,
-		text:    text,
-		eventCh: make(chan *SynthesizedAudio, 100),
-		errCh:   make(chan error, 1),
-		closeCh: make(chan struct{}),
-		retries: make(map[int]int),
+		adapter:   f,
+		ctx:       ctx,
+		text:      text,
+		eventCh:   make(chan *SynthesizedAudio, 100),
+		errCh:     make(chan error, 1),
+		closeCh:   make(chan struct{}),
+		retries:   make(map[int]int),
+		requestID: cavosmath.ShortUUID(""),
 	}
 
 	if err := s.tryStartStream(0); err != nil {
@@ -418,6 +421,7 @@ func (s *fallbackChunkedStream) monitorStream() {
 			s.errCh <- err
 			return
 		}
+		ev.RequestID = s.requestID
 
 		audioSent = true
 		select {
@@ -439,6 +443,12 @@ func (s *fallbackChunkedStream) canRetryTTS(index int) bool {
 }
 
 func (s *fallbackChunkedStream) Next() (*SynthesizedAudio, error) {
+	select {
+	case ev := <-s.eventCh:
+		return ev, nil
+	default:
+	}
+
 	select {
 	case ev := <-s.eventCh:
 		return ev, nil
@@ -469,6 +479,7 @@ type fallbackSynthesizeStream struct {
 	activeIndex  int
 	retries      map[int]int
 	inputBuffer  []fallbackSynthesizeInput
+	requestID    string
 
 	eventCh chan *SynthesizedAudio
 	errCh   chan error
@@ -483,12 +494,13 @@ type fallbackSynthesizeInput struct {
 
 func (f *FallbackAdapter) Stream(ctx context.Context) (SynthesizeStream, error) {
 	s := &fallbackSynthesizeStream{
-		adapter: f,
-		ctx:     ctx,
-		eventCh: make(chan *SynthesizedAudio, 100),
-		errCh:   make(chan error, 1),
-		closeCh: make(chan struct{}),
-		retries: make(map[int]int),
+		adapter:   f,
+		ctx:       ctx,
+		eventCh:   make(chan *SynthesizedAudio, 100),
+		errCh:     make(chan error, 1),
+		closeCh:   make(chan struct{}),
+		retries:   make(map[int]int),
+		requestID: cavosmath.ShortUUID(""),
 	}
 
 	if err := s.tryStartStream(0); err != nil {
@@ -614,6 +626,7 @@ func (s *fallbackSynthesizeStream) monitorStream() {
 			s.errCh <- err
 			return
 		}
+		ev.RequestID = s.requestID
 
 		audioSent = true
 		select {
@@ -666,6 +679,12 @@ func (s *fallbackSynthesizeStream) Close() error {
 }
 
 func (s *fallbackSynthesizeStream) Next() (*SynthesizedAudio, error) {
+	select {
+	case ev := <-s.eventCh:
+		return ev, nil
+	default:
+	}
+
 	select {
 	case ev := <-s.eventCh:
 		return ev, nil
