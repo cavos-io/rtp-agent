@@ -38,12 +38,8 @@ components:
   library:
     in: library/**
 
-  model:
-    in: model
-
 commonComponents:
   - library
-  - model
 
 deps:
   cmd:
@@ -78,6 +74,3 @@ deps:
     anyVendorDeps: true
     mayDependOn:
       - library
-
-  model:
-    anyVendorDeps: true

@@ -5,8 +5,8 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/cavos-io/rtp-agent/core/audio/model"
 	"github.com/cavos-io/rtp-agent/core/llm"
-	"github.com/cavos-io/rtp-agent/model"
 )
 
 func TestMultimodalToolExecutionMasksInternalErrors(t *testing.T) {

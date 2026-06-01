@@ -8,8 +8,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/cavos-io/rtp-agent/core/audio/model"
 	"github.com/cavos-io/rtp-agent/core/stt"
-	"github.com/cavos-io/rtp-agent/model"
 )
 
 func TestRtzrSTTDefaultsMatchReference(t *testing.T) {

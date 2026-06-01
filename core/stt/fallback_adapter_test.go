@@ -9,8 +9,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/cavos-io/rtp-agent/core/audio/model"
 	"github.com/cavos-io/rtp-agent/core/vad"
-	"github.com/cavos-io/rtp-agent/model"
 )
 
 func TestFallbackAdapterAggregatesProviderCapabilities(t *testing.T) {

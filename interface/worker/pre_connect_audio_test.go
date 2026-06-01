@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/cavos-io/rtp-agent/model"
+	"github.com/cavos-io/rtp-agent/core/audio/model"
 )
 
 func TestPreConnectAudioPublishFulfillsExistingWaiter(t *testing.T) {
