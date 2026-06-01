@@ -27,6 +27,7 @@ type RunResult struct {
 	finalOutput    any
 	finalOutputSet bool
 	watchedSpeech  map[*SpeechHandle]runResultSpeechWatch
+	lastSpeech     *SpeechHandle
 	mu             sync.Mutex
 }
 
@@ -180,8 +181,8 @@ func (r *RunResult) WatchSpeechHandle(speech *SpeechHandle) bool {
 	removeItemAddedCallback := speech.AddItemAddedCallback(func(item llm.ChatItem) {
 		r.RecordItem(item)
 	})
-	removeDoneCallback := speech.AddDoneCallback(func(*SpeechHandle) {
-		r.markDoneIfNeeded()
+	removeDoneCallback := speech.AddDoneCallback(func(doneSpeech *SpeechHandle) {
+		r.markDoneIfNeeded(doneSpeech)
 	})
 
 	r.mu.Lock()
@@ -203,7 +204,7 @@ func (r *RunResult) WatchSpeechHandle(speech *SpeechHandle) bool {
 	}
 	r.mu.Unlock()
 
-	r.markDoneIfNeeded()
+	r.markDoneIfNeeded(nil)
 	return true
 }
 
@@ -227,16 +228,25 @@ func (r *RunResult) UnwatchSpeechHandle(speech *SpeechHandle) bool {
 	return true
 }
 
-func (r *RunResult) markDoneIfNeeded() {
+func (r *RunResult) markDoneIfNeeded(doneSpeech *SpeechHandle) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
 	if r.done || len(r.watchedSpeech) == 0 {
 		return
 	}
+	if doneSpeech != nil {
+		r.lastSpeech = doneSpeech
+	}
 	for speech := range r.watchedSpeech {
 		if !speech.IsDone() {
 			return
+		}
+	}
+	if r.lastSpeech != nil {
+		if output, ok := r.lastSpeech.RunFinalOutput(); ok {
+			r.finalOutput = output
+			r.finalOutputSet = true
 		}
 	}
 	r.done = true

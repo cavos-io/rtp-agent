@@ -155,6 +155,28 @@ func TestRunResultWatchSpeechHandleMarksDoneWhenSpeechDone(t *testing.T) {
 	}
 }
 
+func TestRunResultFinalOutputUsesLastCompletedSpeechHandle(t *testing.T) {
+	result := NewRunResult(llm.NewChatContext())
+	first := NewSpeechHandle(true, DefaultInputDetails())
+	second := NewSpeechHandle(true, DefaultInputDetails())
+	first.SetRunFinalOutput("first")
+	second.SetRunFinalOutput("second")
+
+	result.WatchSpeechHandle(first)
+	result.WatchSpeechHandle(second)
+
+	first.MarkDone()
+	second.MarkDone()
+
+	output, err := result.FinalOutput()
+	if err != nil {
+		t.Fatalf("FinalOutput error = %v, want nil", err)
+	}
+	if output != "second" {
+		t.Fatalf("FinalOutput = %#v, want second", output)
+	}
+}
+
 func TestRunResultUnwatchSpeechHandleRemovesCallbacks(t *testing.T) {
 	result := NewRunResult(llm.NewChatContext())
 	speech := NewSpeechHandle(true, DefaultInputDetails())
