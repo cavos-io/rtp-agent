@@ -10,11 +10,15 @@ import (
 	"mime/multipart"
 	"net/http"
 	"net/textproto"
+	"net/url"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/cavos-io/rtp-agent/core/audio/model"
 	"github.com/cavos-io/rtp-agent/core/stt"
 	"github.com/cavos-io/rtp-agent/core/tts"
+	"github.com/gorilla/websocket"
 )
 
 const (
@@ -39,6 +43,7 @@ const (
 	defaultSarvamTTSMinBufferSize      = 50
 	defaultSarvamTTSMaxChunkLength     = 150
 	defaultSarvamTTSOutputAudioCodec   = "mp3"
+	sarvamUserAgent                    = "LiveKit Agents Sarvam Plugin/Go"
 )
 
 var (
@@ -184,7 +189,89 @@ func (s *SarvamSTT) Capabilities() stt.STTCapabilities {
 }
 
 func (s *SarvamSTT) Stream(ctx context.Context, language string) (stt.RecognizeStream, error) {
-	return nil, fmt.Errorf("sarvam websocket stt streaming is not implemented")
+	requestLanguage := resolveSarvamSTTLanguage(s, language)
+	if err := validateSarvamSTTOptions(s.model, requestLanguage, s.mode); err != nil {
+		return nil, err
+	}
+	conn, _, err := websocket.DefaultDialer.DialContext(ctx, buildSarvamSTTWebsocketURL(s, language).String(), buildSarvamSTTWebsocketHeaders(s))
+	if err != nil {
+		return nil, fmt.Errorf("failed to dial sarvam stt websocket: %w", err)
+	}
+	if sarvamSTTSupportsPrompt(s.model) && s.prompt != "" {
+		configMessage, err := buildSarvamSTTConfigMessage(s)
+		if err != nil {
+			conn.Close()
+			return nil, err
+		}
+		if err := conn.WriteMessage(websocket.TextMessage, configMessage); err != nil {
+			conn.Close()
+			return nil, err
+		}
+	}
+	streamCtx, cancel := context.WithCancel(ctx)
+	stream := &sarvamSTTStream{
+		conn:       conn,
+		ctx:        streamCtx,
+		cancel:     cancel,
+		sampleRate: s.sampleRate,
+		encoding:   "audio/wav",
+		events:     make(chan *stt.SpeechEvent, 100),
+		errCh:      make(chan error, 1),
+	}
+	go stream.readLoop()
+	return stream, nil
+}
+
+func buildSarvamSTTWebsocketURL(s *SarvamSTT, language string) *url.URL {
+	wsURL, err := url.Parse(strings.TrimRight(s.streamingURL, "/"))
+	if err != nil {
+		return &url.URL{Scheme: "wss", Host: strings.TrimPrefix(s.streamingURL, "wss://")}
+	}
+	query := wsURL.Query()
+	query.Set("language-code", resolveSarvamSTTLanguage(s, language))
+	query.Set("model", s.model)
+	query.Set("vad_signals", "true")
+	query.Set("sample_rate", fmt.Sprintf("%d", s.sampleRate))
+	if sarvamSTTSupportsMode(s.model) {
+		query.Set("mode", s.mode)
+	}
+	wsURL.RawQuery = query.Encode()
+	return wsURL
+}
+
+func buildSarvamSTTWebsocketHeaders(s *SarvamSTT) http.Header {
+	headers := make(http.Header)
+	headers.Set("api-subscription-key", s.apiKey)
+	headers.Set("User-Agent", sarvamUserAgent)
+	return headers
+}
+
+func buildSarvamSTTConfigMessage(s *SarvamSTT) ([]byte, error) {
+	return json.Marshal(map[string]any{
+		"type":   "config",
+		"prompt": s.prompt,
+	})
+}
+
+func buildSarvamSTTAudioMessage(audio []byte, encoding string, sampleRate int) ([]byte, error) {
+	return json.Marshal(map[string]any{
+		"audio": map[string]any{
+			"data":        base64.StdEncoding.EncodeToString(audio),
+			"encoding":    encoding,
+			"sample_rate": sampleRate,
+		},
+	})
+}
+
+func buildSarvamSTTEndOfStreamMessage(encoding string, sampleRate int) ([]byte, error) {
+	return json.Marshal(map[string]any{
+		"type": "end_of_stream",
+		"audio": map[string]any{
+			"data":        "",
+			"encoding":    encoding,
+			"sample_rate": sampleRate,
+		},
+	})
 }
 
 func (s *SarvamSTT) Recognize(ctx context.Context, frames []*model.AudioFrame, language string) (*stt.SpeechEvent, error) {
@@ -333,6 +420,10 @@ func sarvamSTTSupportsMode(model string) bool {
 	return model == "saaras:v3"
 }
 
+func sarvamSTTSupportsPrompt(model string) bool {
+	return strings.HasPrefix(model, "saaras")
+}
+
 func sarvamSTTUsesTranslateEndpoint(model string) bool {
 	return model == "saaras:v2.5"
 }
@@ -356,6 +447,213 @@ func sarvamSTTConfidence(probability float64) float64 {
 		return 1.0
 	}
 	return probability
+}
+
+type sarvamSTTStream struct {
+	conn       *websocket.Conn
+	ctx        context.Context
+	cancel     context.CancelFunc
+	sampleRate int
+	encoding   string
+	events     chan *stt.SpeechEvent
+	errCh      chan error
+	mu         sync.Mutex
+	closed     bool
+}
+
+func (s *sarvamSTTStream) PushFrame(frame *model.AudioFrame) error {
+	if frame == nil || len(frame.Data) == 0 {
+		return nil
+	}
+	sampleRate := s.sampleRate
+	if frame.SampleRate > 0 {
+		sampleRate = int(frame.SampleRate)
+	}
+	message, err := buildSarvamSTTAudioMessage(frame.Data, s.encoding, sampleRate)
+	if err != nil {
+		return err
+	}
+	return s.conn.WriteMessage(websocket.TextMessage, message)
+}
+
+func (s *sarvamSTTStream) Flush() error {
+	message, err := buildSarvamSTTEndOfStreamMessage(s.encoding, s.sampleRate)
+	if err != nil {
+		return err
+	}
+	return s.conn.WriteMessage(websocket.TextMessage, message)
+}
+
+func (s *sarvamSTTStream) Close() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return nil
+	}
+	s.closed = true
+	s.cancel()
+	_ = s.conn.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""), time.Now().Add(time.Second))
+	return s.conn.Close()
+}
+
+func (s *sarvamSTTStream) Next() (*stt.SpeechEvent, error) {
+	select {
+	case event, ok := <-s.events:
+		if !ok {
+			select {
+			case err := <-s.errCh:
+				return nil, err
+			default:
+				return nil, io.EOF
+			}
+		}
+		return event, nil
+	case err := <-s.errCh:
+		return nil, err
+	case <-s.ctx.Done():
+		return nil, s.ctx.Err()
+	}
+}
+
+func (s *sarvamSTTStream) readLoop() {
+	defer close(s.events)
+	for {
+		msgType, payload, err := s.conn.ReadMessage()
+		if err != nil {
+			if !websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway) && err != io.EOF {
+				s.errCh <- err
+			}
+			return
+		}
+		if msgType != websocket.TextMessage {
+			continue
+		}
+		events, err := sarvamSTTEventsFromStreamMessage(payload)
+		if err != nil {
+			s.errCh <- err
+			return
+		}
+		for _, event := range events {
+			s.events <- event
+			if event.Type == stt.SpeechEventEndOfSpeech {
+				_ = s.Flush()
+			}
+		}
+	}
+}
+
+func sarvamSTTEventsFromStreamMessage(payload []byte) ([]*stt.SpeechEvent, error) {
+	var message map[string]any
+	if err := json.Unmarshal(payload, &message); err != nil {
+		return nil, err
+	}
+	messageType, _ := message["type"].(string)
+	switch messageType {
+	case "data":
+		data := sarvamMap(message["data"])
+		transcript, _ := data["transcript"].(string)
+		if transcript == "" {
+			return nil, nil
+		}
+		requestID := sarvamString(data["request_id"])
+		events := []*stt.SpeechEvent{}
+		if metrics := sarvamMap(data["metrics"]); len(metrics) > 0 {
+			events = append(events, &stt.SpeechEvent{
+				Type:      stt.SpeechEventRecognitionUsage,
+				RequestID: requestID,
+				RecognitionUsage: &stt.RecognitionUsage{
+					AudioDuration: sarvamFloat64(metrics["audio_duration"]),
+				},
+			})
+		}
+		events = append(events, &stt.SpeechEvent{
+			Type:      stt.SpeechEventFinalTranscript,
+			RequestID: requestID,
+			Alternatives: []stt.SpeechData{{
+				Text:       transcript,
+				Language:   sarvamString(data["language_code"]),
+				StartTime:  sarvamFloat64(data["speech_start"]),
+				EndTime:    sarvamFloat64(data["speech_end"]),
+				Confidence: sarvamSTTConfidence(sarvamFloat64(data["language_probability"])),
+			}},
+		})
+		return events, nil
+	case "events", "event":
+		data := sarvamMap(message["data"])
+		if sarvamStreamMessageHasError(message) {
+			return nil, sarvamSTTStreamError(message)
+		}
+		switch sarvamString(data["signal_type"]) {
+		case "START_SPEECH":
+			return []*stt.SpeechEvent{{Type: stt.SpeechEventStartOfSpeech}}, nil
+		case "END_SPEECH":
+			return []*stt.SpeechEvent{{Type: stt.SpeechEventEndOfSpeech}}, nil
+		default:
+			return nil, nil
+		}
+	case "error", "errors":
+		return nil, sarvamSTTStreamError(message)
+	default:
+		if sarvamStreamMessageHasError(message) {
+			return nil, sarvamSTTStreamError(message)
+		}
+		return nil, nil
+	}
+}
+
+func sarvamStreamMessageHasError(message map[string]any) bool {
+	if message["error"] != nil {
+		return true
+	}
+	data := sarvamMap(message["data"])
+	return data["error"] != nil || data["event_type"] == "error" || data["event"] == "error"
+}
+
+func sarvamSTTStreamError(message map[string]any) error {
+	data := sarvamMap(message["data"])
+	errorText := sarvamString(message["error"])
+	if errorText == "" {
+		errorText = sarvamString(data["error"])
+	}
+	if errorText == "" {
+		errorText = sarvamString(data["message"])
+	}
+	if errorText == "" {
+		errorText = "unknown sarvam stt stream error"
+	}
+	return fmt.Errorf("sarvam stt stream error: %s", errorText)
+}
+
+func sarvamMap(value any) map[string]any {
+	if mapped, ok := value.(map[string]any); ok {
+		return mapped
+	}
+	return nil
+}
+
+func sarvamString(value any) string {
+	if text, ok := value.(string); ok {
+		return text
+	}
+	return ""
+}
+
+func sarvamFloat64(value any) float64 {
+	switch v := value.(type) {
+	case float64:
+		return v
+	case float32:
+		return float64(v)
+	case int:
+		return float64(v)
+	case int64:
+		return float64(v)
+	case json.Number:
+		f, _ := v.Float64()
+		return f
+	default:
+		return 0
+	}
 }
 
 type SarvamTTS struct {
@@ -535,7 +833,96 @@ func buildSarvamTTSRequest(ctx context.Context, t *SarvamTTS, text string) (*htt
 }
 
 func (t *SarvamTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
-	return nil, fmt.Errorf("sarvam websocket tts streaming is not implemented")
+	conn, _, err := websocket.DefaultDialer.DialContext(ctx, buildSarvamTTSWebsocketURL(t).String(), buildSarvamTTSWebsocketHeaders(t))
+	if err != nil {
+		return nil, fmt.Errorf("failed to dial sarvam tts websocket: %w", err)
+	}
+	configMessage, err := buildSarvamTTSConfigMessage(t)
+	if err != nil {
+		conn.Close()
+		return nil, err
+	}
+	if err := conn.WriteMessage(websocket.TextMessage, configMessage); err != nil {
+		conn.Close()
+		return nil, err
+	}
+	streamCtx, cancel := context.WithCancel(ctx)
+	stream := &sarvamTTSSynthesizeStream{
+		conn:       conn,
+		ctx:        streamCtx,
+		cancel:     cancel,
+		sampleRate: t.sampleRate,
+		events:     make(chan *tts.SynthesizedAudio, 100),
+		errCh:      make(chan error, 1),
+	}
+	go stream.readLoop()
+	return stream, nil
+}
+
+func buildSarvamTTSWebsocketURL(t *SarvamTTS) *url.URL {
+	wsURL, err := url.Parse(strings.TrimRight(t.wsURL, "/"))
+	if err != nil {
+		return &url.URL{Scheme: "wss", Host: strings.TrimPrefix(t.wsURL, "wss://")}
+	}
+	query := wsURL.Query()
+	query.Set("model", t.model)
+	query.Set("send_completion_event", "true")
+	wsURL.RawQuery = query.Encode()
+	return wsURL
+}
+
+func buildSarvamTTSWebsocketHeaders(t *SarvamTTS) http.Header {
+	headers := make(http.Header)
+	headers.Set("api-subscription-key", t.apiKey)
+	headers.Set("User-Agent", sarvamUserAgent)
+	headers.Set("Accept", "*/*")
+	headers.Set("Accept-Encoding", "gzip, deflate, br")
+	return headers
+}
+
+func buildSarvamTTSConfigMessage(t *SarvamTTS) ([]byte, error) {
+	data := sarvamTTSConfigPayload(t)
+	return json.Marshal(map[string]interface{}{
+		"type": "config",
+		"data": data,
+	})
+}
+
+func sarvamTTSConfigPayload(t *SarvamTTS) map[string]interface{} {
+	data := map[string]interface{}{
+		"target_language_code": t.language,
+		"speaker":              t.voice,
+		"pace":                 t.pace,
+		"model":                t.model,
+		"speech_sample_rate":   t.sampleRate,
+		"output_audio_codec":   t.outputAudioCodec,
+	}
+	if t.model == "bulbul:v2" {
+		data["pitch"] = t.pitch
+		data["loudness"] = t.loudness
+		data["enable_preprocessing"] = t.enablePreprocessing
+		if t.enableCachedResponses != nil {
+			data["enable_cached_responses"] = *t.enableCachedResponses
+		}
+	}
+	if t.model == "bulbul:v3" || t.model == "bulbul:v3-beta" {
+		data["temperature"] = t.temperature
+		data["output_audio_bitrate"] = t.outputAudioBitrate
+		data["min_buffer_size"] = t.minBufferSize
+		data["max_chunk_length"] = t.maxChunkLength
+	}
+	return data
+}
+
+func buildSarvamTTSTextMessage(text string) ([]byte, error) {
+	return json.Marshal(map[string]interface{}{
+		"type": "text",
+		"data": map[string]interface{}{"text": text},
+	})
+}
+
+func buildSarvamTTSFlushMessage() ([]byte, error) {
+	return json.Marshal(map[string]interface{}{"type": "flush"})
 }
 
 type sarvamTTSChunkedStream struct {
@@ -593,4 +980,140 @@ func validateSarvamTTSModelSpeaker(model, speaker string) error {
 		return fmt.Errorf("speaker %s is not compatible with model %s", speaker, model)
 	}
 	return nil
+}
+
+type sarvamTTSSynthesizeStream struct {
+	conn       *websocket.Conn
+	ctx        context.Context
+	cancel     context.CancelFunc
+	sampleRate int
+	events     chan *tts.SynthesizedAudio
+	errCh      chan error
+	mu         sync.Mutex
+	closed     bool
+}
+
+func (s *sarvamTTSSynthesizeStream) PushText(text string) error {
+	if text == "" {
+		return nil
+	}
+	message, err := buildSarvamTTSTextMessage(text)
+	if err != nil {
+		return err
+	}
+	return s.conn.WriteMessage(websocket.TextMessage, message)
+}
+
+func (s *sarvamTTSSynthesizeStream) Flush() error {
+	message, err := buildSarvamTTSFlushMessage()
+	if err != nil {
+		return err
+	}
+	return s.conn.WriteMessage(websocket.TextMessage, message)
+}
+
+func (s *sarvamTTSSynthesizeStream) Close() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return nil
+	}
+	s.closed = true
+	s.cancel()
+	_ = s.conn.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""), time.Now().Add(time.Second))
+	return s.conn.Close()
+}
+
+func (s *sarvamTTSSynthesizeStream) Next() (*tts.SynthesizedAudio, error) {
+	select {
+	case audio, ok := <-s.events:
+		if !ok {
+			select {
+			case err := <-s.errCh:
+				return nil, err
+			default:
+				return nil, io.EOF
+			}
+		}
+		return audio, nil
+	case err := <-s.errCh:
+		return nil, err
+	case <-s.ctx.Done():
+		return nil, s.ctx.Err()
+	}
+}
+
+func (s *sarvamTTSSynthesizeStream) readLoop() {
+	defer close(s.events)
+	for {
+		msgType, payload, err := s.conn.ReadMessage()
+		if err != nil {
+			if !websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway) && err != io.EOF {
+				s.errCh <- err
+			}
+			return
+		}
+		if msgType != websocket.TextMessage {
+			continue
+		}
+		audio, done, err := sarvamTTSAudioFromStreamMessage(payload, s.sampleRate)
+		if err != nil {
+			s.errCh <- err
+			return
+		}
+		if audio != nil {
+			s.events <- audio
+		}
+		if done {
+			return
+		}
+	}
+}
+
+func sarvamTTSAudioFromStreamMessage(payload []byte, sampleRate int) (*tts.SynthesizedAudio, bool, error) {
+	var message struct {
+		Type string `json:"type"`
+		Data struct {
+			Audio     string `json:"audio"`
+			EventType string `json:"event_type"`
+			RequestID string `json:"request_id"`
+			Message   string `json:"message"`
+			Code      string `json:"code"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(payload, &message); err != nil {
+		return nil, false, err
+	}
+	switch message.Type {
+	case "audio":
+		if message.Data.Audio == "" {
+			return nil, false, nil
+		}
+		data, err := base64.StdEncoding.DecodeString(message.Data.Audio)
+		if err != nil {
+			return nil, false, err
+		}
+		if len(data) == 0 {
+			return nil, false, nil
+		}
+		return sarvamTTSAudioFrame(data, sampleRate, message.Data.RequestID), false, nil
+	case "event":
+		return nil, message.Data.EventType == "final", nil
+	case "error":
+		return nil, false, fmt.Errorf("sarvam tts stream error: %s", string(payload))
+	default:
+		return nil, false, nil
+	}
+}
+
+func sarvamTTSAudioFrame(data []byte, sampleRate int, requestID string) *tts.SynthesizedAudio {
+	return &tts.SynthesizedAudio{
+		RequestID: requestID,
+		Frame: &model.AudioFrame{
+			Data:              bytes.Clone(data),
+			SampleRate:        uint32(sampleRate),
+			NumChannels:       1,
+			SamplesPerChannel: uint32(len(data) / 2),
+		},
+	}
 }
