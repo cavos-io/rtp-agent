@@ -812,6 +812,52 @@ func TestSimpleVADUsesDeactivationThresholdWhileSpeaking(t *testing.T) {
 	assertCombinedFrames(t, end.Frames, speech, dipAboveDeactivation, silence)
 }
 
+func TestSimpleVADThresholdUpdatePreservesDeactivationThreshold(t *testing.T) {
+	detector := NewSimpleVADWithOptions(SimpleVADOptions{
+		Threshold:             0.05,
+		DeactivationThreshold: 0.05,
+	})
+	stream, err := detector.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	defer stream.Close()
+
+	speech := audioFrame(16000, 160, 6000)
+	if err := stream.PushFrame(speech); err != nil {
+		t.Fatalf("PushFrame() speech error = %v", err)
+	}
+	assertEventType(t, stream, VADEventInferenceDone)
+	assertEventType(t, stream, VADEventStartOfSpeech)
+
+	detector.UpdateOptions(SimpleVADOptions{Threshold: 0.1})
+	if detector.options.DeactivationThreshold != 0.05 {
+		t.Fatalf("detector deactivation threshold = %v, want 0.05", detector.options.DeactivationThreshold)
+	}
+	simpleStream := stream.(*simpleVADStream)
+	if simpleStream.options.DeactivationThreshold != 0.05 {
+		t.Fatalf("stream deactivation threshold = %v, want 0.05", simpleStream.options.DeactivationThreshold)
+	}
+
+	dipAboveOriginalDeactivation := audioFrame(16000, 160, 2200)
+	if err := stream.PushFrame(dipAboveOriginalDeactivation); err != nil {
+		t.Fatalf("PushFrame() dip error = %v", err)
+	}
+	assertEventType(t, stream, VADEventInferenceDone)
+	assertNoQueuedVADEvent(t, stream)
+
+	silence := audioFrame(16000, 160, 0)
+	if err := stream.PushFrame(silence); err != nil {
+		t.Fatalf("PushFrame() silence error = %v", err)
+	}
+	assertEventType(t, stream, VADEventInferenceDone)
+	end := nextVADEvent(t, stream)
+	if end.Type != VADEventEndOfSpeech {
+		t.Fatalf("event type = %s, want %s", end.Type, VADEventEndOfSpeech)
+	}
+	assertCombinedFrames(t, end.Frames, speech, dipAboveOriginalDeactivation, silence)
+}
+
 func TestSimpleVADRejectsInvalidDeactivationThresholdAtStream(t *testing.T) {
 	for _, threshold := range []float64{-0.1, math.NaN(), math.Inf(1)} {
 		detector := NewSimpleVADWithOptions(SimpleVADOptions{
