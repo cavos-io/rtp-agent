@@ -2,10 +2,13 @@ package tts
 
 import (
 	"context"
+	"errors"
 	"io"
 	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/cavos-io/conversation-worker/model"
 )
 
 func TestSynthesizeWithStreamPushesTextAndFlushes(t *testing.T) {
@@ -25,11 +28,29 @@ func TestSynthesizeWithStreamPushesTextAndFlushes(t *testing.T) {
 	}
 }
 
+func TestSynthesizeWithStreamIgnoresEmptyText(t *testing.T) {
+	provider := &fakeStreamingTTS{
+		stream: &fakeSynthesizeStream{},
+	}
+
+	chunked, err := SynthesizeWithStream(context.Background(), provider, "")
+	if err != nil {
+		t.Fatalf("SynthesizeWithStream() error = %v", err)
+	}
+	defer chunked.Close()
+
+	wantCalls := []string{"flush"}
+	if !reflect.DeepEqual(provider.stream.calls, wantCalls) {
+		t.Fatalf("stream calls = %#v, want %#v", provider.stream.calls, wantCalls)
+	}
+}
+
 func TestSynthesizeWithStreamReturnsStreamEvents(t *testing.T) {
-	want := &SynthesizedAudio{RequestID: "req-a"}
+	want := &SynthesizedAudio{RequestID: "req-a", DeltaText: "hello"}
 	provider := &fakeStreamingTTS{
 		stream: &fakeSynthesizeStream{
-			events: []*SynthesizedAudio{want},
+			events:   []*SynthesizedAudio{want},
+			emptyErr: io.EOF,
 		},
 	}
 
@@ -43,8 +64,14 @@ func TestSynthesizeWithStreamReturnsStreamEvents(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Next() error = %v", err)
 	}
-	if got != want {
-		t.Fatalf("Next() = %#v, want %#v", got, want)
+	if got == want {
+		t.Fatal("Next() returned provider audio pointer, want wrapper-owned event")
+	}
+	if got.DeltaText != want.DeltaText {
+		t.Fatalf("DeltaText = %q, want %q", got.DeltaText, want.DeltaText)
+	}
+	if got.RequestID == "" || got.RequestID == want.RequestID {
+		t.Fatalf("RequestID = %q, want wrapper request id", got.RequestID)
 	}
 }
 
@@ -55,6 +82,7 @@ func TestSynthesizeWithStreamSetsStableRequestID(t *testing.T) {
 				{RequestID: "provider-a"},
 				{RequestID: "provider-b"},
 			},
+			emptyErr: io.EOF,
 		},
 	}
 
@@ -83,12 +111,95 @@ func TestSynthesizeWithStreamSetsStableRequestID(t *testing.T) {
 	}
 }
 
+func TestSynthesizeWithStreamMarksLastFrameFinal(t *testing.T) {
+	provider := &fakeStreamingTTS{
+		stream: &fakeSynthesizeStream{
+			events: []*SynthesizedAudio{
+				{Frame: &model.AudioFrame{Data: []byte{1}}},
+				{Frame: &model.AudioFrame{Data: []byte{2}}},
+			},
+			emptyErr: io.EOF,
+		},
+	}
+
+	chunked, err := SynthesizeWithStream(context.Background(), provider, "hello")
+	if err != nil {
+		t.Fatalf("SynthesizeWithStream() error = %v", err)
+	}
+	defer chunked.Close()
+
+	first, err := chunked.Next()
+	if err != nil {
+		t.Fatalf("first Next() error = %v", err)
+	}
+	if first.IsFinal {
+		t.Fatal("first audio IsFinal = true, want false")
+	}
+	second, err := chunked.Next()
+	if err != nil {
+		t.Fatalf("second Next() error = %v", err)
+	}
+	if !second.IsFinal {
+		t.Fatal("second audio IsFinal = false, want true")
+	}
+}
+
+func TestSynthesizeWithStreamDoesNotMutateProviderAudioMetadata(t *testing.T) {
+	providerAudio := &SynthesizedAudio{RequestID: "provider-request"}
+	provider := &fakeStreamingTTS{
+		stream: &fakeSynthesizeStream{
+			events:   []*SynthesizedAudio{providerAudio},
+			emptyErr: io.EOF,
+		},
+	}
+
+	chunked, err := SynthesizeWithStream(context.Background(), provider, "hello")
+	if err != nil {
+		t.Fatalf("SynthesizeWithStream() error = %v", err)
+	}
+	defer chunked.Close()
+
+	got, err := chunked.Next()
+	if err != nil {
+		t.Fatalf("Next() error = %v", err)
+	}
+	if got == providerAudio {
+		t.Fatal("returned provider audio pointer, want wrapper-owned event")
+	}
+	if got.RequestID == "" || got.RequestID == providerAudio.RequestID {
+		t.Fatalf("RequestID = %q, want wrapper request id", got.RequestID)
+	}
+	if providerAudio.RequestID != "provider-request" {
+		t.Fatalf("provider RequestID = %q, want unchanged", providerAudio.RequestID)
+	}
+}
+
 func TestSynthesizeWithStreamErrorsWhenNonEmptyTextProducesNoAudio(t *testing.T) {
 	provider := &fakeStreamingTTS{
 		stream: &fakeSynthesizeStream{emptyErr: io.EOF},
 	}
 
 	chunked, err := SynthesizeWithStream(context.Background(), provider, "hello")
+	if err != nil {
+		t.Fatalf("SynthesizeWithStream() error = %v", err)
+	}
+	defer chunked.Close()
+
+	_, err = chunked.Next()
+	if err == nil {
+		t.Fatal("Next() error = nil, want no-audio error")
+	}
+	if !strings.Contains(err.Error(), "no audio frames") {
+		t.Fatalf("Next() error = %v, want no-audio error", err)
+	}
+}
+
+func TestSynthesizeWithStreamErrorsWhenWhitespaceTextProducesNoAudio(t *testing.T) {
+	provider := &fakeStreamingTTS{
+		stream: &fakeSynthesizeStream{emptyErr: io.EOF},
+	}
+
+	chunked, err := SynthesizeWithStream(context.Background(), provider, "   ")
 	if err != nil {
 		t.Fatalf("SynthesizeWithStream() error = %v", err)
 	}
@@ -117,6 +228,30 @@ func TestSynthesizeWithStreamCloseDelegatesToStream(t *testing.T) {
 	}
 	if !stream.closed {
 		t.Fatal("underlying stream closed = false, want true")
+	}
+}
+
+func TestSynthesizeWithStreamClosesUnderlyingStreamAfterEOF(t *testing.T) {
+	stream := &fakeSynthesizeStream{
+		events:   []*SynthesizedAudio{{DeltaText: "hello"}},
+		emptyErr: io.EOF,
+	}
+	provider := &fakeStreamingTTS{stream: stream}
+
+	chunked, err := SynthesizeWithStream(context.Background(), provider, "hello")
+	if err != nil {
+		t.Fatalf("SynthesizeWithStream() error = %v", err)
+	}
+
+	if _, err := chunked.Next(); err != nil {
+		t.Fatalf("first Next() error = %v", err)
+	}
+	_, err = chunked.Next()
+	if !errors.Is(err, io.EOF) {
+		t.Fatalf("second Next() error = %v, want io.EOF", err)
+	}
+	if !stream.closed {
+		t.Fatal("underlying stream closed = false, want true after EOF")
 	}
 }
 

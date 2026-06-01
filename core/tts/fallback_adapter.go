@@ -386,7 +386,8 @@ func (s *fallbackChunkedStream) monitorStream() {
 		ev, err := stream.Next()
 		if err != nil {
 			if errors.Is(err, io.EOF) || audioSent {
-				if errors.Is(err, io.EOF) && !audioSent && strings.TrimSpace(s.text) != "" {
+				_ = stream.Close()
+				if errors.Is(err, io.EOF) && !audioSent && s.text != "" {
 					s.errCh <- fmt.Errorf("no audio frames were pushed for text: %s", s.text)
 					return
 				}
@@ -426,6 +427,7 @@ func (s *fallbackChunkedStream) monitorStream() {
 			s.errCh <- err
 			return
 		}
+		ev = cloneSynthesizedAudio(ev)
 		ev.RequestID = s.requestID
 
 		audioSent = true
@@ -595,7 +597,8 @@ func (s *fallbackSynthesizeStream) monitorStream() {
 		ev, err := stream.Next()
 		if err != nil {
 			if errors.Is(err, io.EOF) || audioSent {
-				if errors.Is(err, io.EOF) && !audioSent && strings.TrimSpace(s.pushedText()) != "" {
+				_ = stream.Close()
+				if errors.Is(err, io.EOF) && !audioSent && s.pushedText() != "" {
 					s.errCh <- fmt.Errorf("no audio frames were pushed for text: %s", s.pushedText())
 					return
 				}
@@ -635,6 +638,7 @@ func (s *fallbackSynthesizeStream) monitorStream() {
 			s.errCh <- err
 			return
 		}
+		ev = cloneSynthesizedAudio(ev)
 		ev.RequestID = s.requestID
 
 		audioSent = true
@@ -671,6 +675,9 @@ func (s *fallbackSynthesizeStream) PushText(text string) error {
 	defer s.mu.Unlock()
 	if s.closed {
 		return fmt.Errorf("stream closed")
+	}
+	if text == "" {
+		return nil
 	}
 	s.inputBuffer = append(s.inputBuffer, fallbackSynthesizeInput{text: text})
 	return s.activeStream.PushText(text)

@@ -154,6 +154,31 @@ func TestFallbackChunkedStreamErrorsWhenNonEmptyTextProducesNoAudio(t *testing.T
 	}
 }
 
+func TestFallbackChunkedStreamErrorsWhenWhitespaceTextProducesNoAudio(t *testing.T) {
+	adapter := NewFallbackAdapter([]TTS{
+		&metadataTTS{
+			label:       "primary",
+			sampleRate:  24000,
+			numChannels: 1,
+			chunked:     &metadataChunkedStream{},
+		},
+	})
+
+	stream, err := adapter.Synthesize(context.Background(), "   ")
+	if err != nil {
+		t.Fatalf("Synthesize returned error: %v", err)
+	}
+	defer stream.Close()
+
+	_, err = stream.Next()
+	if err == nil {
+		t.Fatal("Next error = nil, want no-audio error")
+	}
+	if !strings.Contains(err.Error(), "no audio frames") {
+		t.Fatalf("Next error = %v, want no-audio error", err)
+	}
+}
+
 func TestFallbackSynthesizeStreamResamplesProviderAudioToAdapterSampleRate(t *testing.T) {
 	adapter := NewFallbackAdapterWithOptions([]TTS{
 		&metadataTTS{
@@ -235,6 +260,97 @@ func TestFallbackSynthesizeStreamSetsStableRequestID(t *testing.T) {
 	}
 }
 
+func TestFallbackSynthesizeStreamIgnoresEmptyText(t *testing.T) {
+	providerStream := &metadataSynthesizeStream{}
+	adapter := NewFallbackAdapter([]TTS{
+		&metadataTTS{
+			label:        "primary",
+			sampleRate:   24000,
+			numChannels:  1,
+			capabilities: TTSCapabilities{Streaming: true},
+			stream:       providerStream,
+		},
+	})
+
+	stream, err := adapter.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+	defer stream.Close()
+
+	if err := stream.PushText(""); err != nil {
+		t.Fatalf("PushText returned error: %v", err)
+	}
+	if len(providerStream.calls) != 0 {
+		t.Fatalf("provider stream calls = %#v, want no empty push", providerStream.calls)
+	}
+	if len(stream.(*fallbackSynthesizeStream).inputBuffer) != 0 {
+		t.Fatalf("input buffer = %#v, want no empty input buffered", stream.(*fallbackSynthesizeStream).inputBuffer)
+	}
+}
+
+func TestFallbackStreamsDoNotMutateProviderAudioMetadata(t *testing.T) {
+	chunkedAudio := &SynthesizedAudio{RequestID: "chunked-provider", Frame: &model.AudioFrame{Data: []byte{1}}}
+	chunkedAdapter := NewFallbackAdapter([]TTS{
+		&metadataTTS{
+			label:       "chunked",
+			sampleRate:  24000,
+			numChannels: 1,
+			chunked:     &metadataChunkedStream{events: []*SynthesizedAudio{chunkedAudio}},
+		},
+	})
+	chunked, err := chunkedAdapter.Synthesize(context.Background(), "hello")
+	if err != nil {
+		t.Fatalf("Synthesize returned error: %v", err)
+	}
+	defer chunked.Close()
+	gotChunked, err := chunked.Next()
+	if err != nil {
+		t.Fatalf("chunked Next returned error: %v", err)
+	}
+	if gotChunked == chunkedAudio {
+		t.Fatal("chunked returned provider audio pointer, want wrapper-owned event")
+	}
+	if gotChunked.RequestID == "" || gotChunked.RequestID == chunkedAudio.RequestID {
+		t.Fatalf("chunked RequestID = %q, want wrapper request id", gotChunked.RequestID)
+	}
+	if chunkedAudio.RequestID != "chunked-provider" {
+		t.Fatalf("chunked provider RequestID = %q, want unchanged", chunkedAudio.RequestID)
+	}
+
+	streamAudio := &SynthesizedAudio{RequestID: "stream-provider", Frame: &model.AudioFrame{Data: []byte{2}}}
+	streamAdapter := NewFallbackAdapter([]TTS{
+		&metadataTTS{
+			label:        "stream",
+			sampleRate:   24000,
+			numChannels:  1,
+			capabilities: TTSCapabilities{Streaming: true},
+			stream:       &metadataSynthesizeStream{events: []*SynthesizedAudio{streamAudio}},
+		},
+	})
+	stream, err := streamAdapter.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+	defer stream.Close()
+	if err := stream.PushText("hello"); err != nil {
+		t.Fatalf("PushText returned error: %v", err)
+	}
+	gotStream, err := stream.Next()
+	if err != nil {
+		t.Fatalf("stream Next returned error: %v", err)
+	}
+	if gotStream == streamAudio {
+		t.Fatal("stream returned provider audio pointer, want wrapper-owned event")
+	}
+	if gotStream.RequestID == "" || gotStream.RequestID == streamAudio.RequestID {
+		t.Fatalf("stream RequestID = %q, want wrapper request id", gotStream.RequestID)
+	}
+	if streamAudio.RequestID != "stream-provider" {
+		t.Fatalf("stream provider RequestID = %q, want unchanged", streamAudio.RequestID)
+	}
+}
+
 func TestFallbackSynthesizeStreamErrorsWhenNonEmptyTextProducesNoAudio(t *testing.T) {
 	adapter := NewFallbackAdapter([]TTS{
 		&metadataTTS{
@@ -264,7 +380,39 @@ func TestFallbackSynthesizeStreamErrorsWhenNonEmptyTextProducesNoAudio(t *testin
 	}
 }
 
+func TestFallbackSynthesizeStreamErrorsWhenWhitespaceTextProducesNoAudio(t *testing.T) {
+	adapter := NewFallbackAdapter([]TTS{
+		&metadataTTS{
+			label:        "primary",
+			sampleRate:   24000,
+			numChannels:  1,
+			capabilities: TTSCapabilities{Streaming: true},
+			stream:       &metadataSynthesizeStream{},
+		},
+	})
+
+	stream, err := adapter.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+	defer stream.Close()
+	if err := stream.PushText("   "); err != nil {
+		t.Fatalf("PushText returned error: %v", err)
+	}
+
+	_, err = stream.Next()
+	if err == nil {
+		t.Fatal("Next error = nil, want no-audio error")
+	}
+	if !strings.Contains(err.Error(), "no audio frames") {
+		t.Fatalf("Next error = %v, want no-audio error", err)
+	}
+}
+
 func TestFallbackChunkedStreamReturnsEOFWhenProviderCompletes(t *testing.T) {
+	firstStream := &metadataChunkedStream{
+		events: []*SynthesizedAudio{{Frame: &model.AudioFrame{Data: []byte{1}}}},
+	}
 	second := &metadataTTS{
 		label:       "second",
 		sampleRate:  24000,
@@ -278,9 +426,7 @@ func TestFallbackChunkedStreamReturnsEOFWhenProviderCompletes(t *testing.T) {
 			label:       "first",
 			sampleRate:  24000,
 			numChannels: 1,
-			chunked: &metadataChunkedStream{
-				events: []*SynthesizedAudio{{Frame: &model.AudioFrame{Data: []byte{1}}}},
-			},
+			chunked:     firstStream,
 		},
 		second,
 	})
@@ -305,6 +451,9 @@ func TestFallbackChunkedStreamReturnsEOFWhenProviderCompletes(t *testing.T) {
 	}
 	if second.synthesizeCalls != 0 {
 		t.Fatalf("fallback synthesize calls = %d, want 0", second.synthesizeCalls)
+	}
+	if !firstStream.closed {
+		t.Fatal("provider chunked stream closed = false, want true after EOF")
 	}
 }
 
@@ -476,6 +625,9 @@ func TestFallbackChunkedStreamRestoresPrimaryAfterRecovery(t *testing.T) {
 }
 
 func TestFallbackSynthesizeStreamReturnsEOFWhenProviderCompletes(t *testing.T) {
+	firstStream := &metadataSynthesizeStream{
+		events: []*SynthesizedAudio{{Frame: &model.AudioFrame{Data: []byte{1}}}},
+	}
 	second := &metadataTTS{
 		label:        "second",
 		sampleRate:   24000,
@@ -491,9 +643,7 @@ func TestFallbackSynthesizeStreamReturnsEOFWhenProviderCompletes(t *testing.T) {
 			sampleRate:   24000,
 			numChannels:  1,
 			capabilities: TTSCapabilities{Streaming: true},
-			stream: &metadataSynthesizeStream{
-				events: []*SynthesizedAudio{{Frame: &model.AudioFrame{Data: []byte{1}}}},
-			},
+			stream:       firstStream,
 		},
 		second,
 	})
@@ -521,6 +671,9 @@ func TestFallbackSynthesizeStreamReturnsEOFWhenProviderCompletes(t *testing.T) {
 	}
 	if second.streamCalls != 0 {
 		t.Fatalf("fallback stream calls = %d, want 0", second.streamCalls)
+	}
+	if !firstStream.closed {
+		t.Fatal("provider synthesize stream closed = false, want true after EOF")
 	}
 }
 
@@ -988,6 +1141,7 @@ type metadataChunkedStream struct {
 	events []*SynthesizedAudio
 	index  int
 	err    error
+	closed bool
 }
 
 func (m *metadataChunkedStream) Next() (*SynthesizedAudio, error) {
@@ -1003,6 +1157,7 @@ func (m *metadataChunkedStream) Next() (*SynthesizedAudio, error) {
 }
 
 func (m *metadataChunkedStream) Close() error {
+	m.closed = true
 	return nil
 }
 
@@ -1011,6 +1166,7 @@ type metadataSynthesizeStream struct {
 	index  int
 	err    error
 	calls  []string
+	closed bool
 }
 
 func (m *metadataSynthesizeStream) PushText(text string) error {
@@ -1024,6 +1180,7 @@ func (m *metadataSynthesizeStream) Flush() error {
 }
 
 func (m *metadataSynthesizeStream) Close() error {
+	m.closed = true
 	return nil
 }
 

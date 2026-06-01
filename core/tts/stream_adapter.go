@@ -43,15 +43,16 @@ func (a *StreamAdapter) Synthesize(ctx context.Context, text string) (ChunkedStr
 }
 
 type streamAdapterWrapper struct {
-	adapter *StreamAdapter
-	ctx     context.Context
-	cancel  context.CancelFunc
+	adapter   *StreamAdapter
+	ctx       context.Context
+	cancel    context.CancelFunc
 	requestID string
-	eventCh chan *SynthesizedAudio
-	errCh   chan error
-	inputCh chan streamAdapterInput
-	mu      sync.Mutex
-	closed  bool
+	eventCh   chan *SynthesizedAudio
+	errCh     chan error
+	inputCh   chan streamAdapterInput
+	mu        sync.Mutex
+	active    ChunkedStream
+	closed    bool
 }
 
 type streamAdapterInput struct {
@@ -123,7 +124,11 @@ func (w *streamAdapterWrapper) synthesize(text string, segmentID string) error {
 	if err != nil {
 		return err
 	}
-	defer stream.Close()
+	w.setActiveStream(stream)
+	defer func() {
+		w.clearActiveStream(stream)
+		stream.Close()
+	}()
 
 	var pending *SynthesizedAudio
 	for {
@@ -131,6 +136,7 @@ func (w *streamAdapterWrapper) synthesize(text string, segmentID string) error {
 		if err != nil {
 			if errors.Is(err, io.EOF) {
 				if pending != nil {
+					pending = cloneSynthesizedAudio(pending)
 					pending.SegmentID = segmentID
 					pending.RequestID = w.requestID
 					pending.IsFinal = true
@@ -143,6 +149,7 @@ func (w *streamAdapterWrapper) synthesize(text string, segmentID string) error {
 			return err
 		}
 		if pending != nil {
+			pending = cloneSynthesizedAudio(pending)
 			pending.SegmentID = segmentID
 			pending.RequestID = w.requestID
 			w.eventCh <- pending
@@ -155,6 +162,20 @@ func (w *streamAdapterWrapper) sendErr(err error) {
 	select {
 	case w.errCh <- err:
 	default:
+	}
+}
+
+func (w *streamAdapterWrapper) setActiveStream(stream ChunkedStream) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.active = stream
+}
+
+func (w *streamAdapterWrapper) clearActiveStream(stream ChunkedStream) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.active == stream {
+		w.active = nil
 	}
 }
 
@@ -180,13 +201,18 @@ func (w *streamAdapterWrapper) Flush() error {
 
 func (w *streamAdapterWrapper) Close() error {
 	w.mu.Lock()
-	defer w.mu.Unlock()
 	if w.closed {
+		w.mu.Unlock()
 		return nil
 	}
 	w.closed = true
+	active := w.active
 	w.cancel()
 	close(w.inputCh)
+	w.mu.Unlock()
+	if active != nil {
+		return active.Close()
+	}
 	return nil
 }
 

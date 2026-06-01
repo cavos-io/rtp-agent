@@ -2,6 +2,8 @@ package tts
 
 import (
 	"context"
+	"errors"
+	"io"
 	"reflect"
 	"sync"
 	"testing"
@@ -88,6 +90,48 @@ func TestSentenceStreamPacerAllowsPushAfterFlush(t *testing.T) {
 	}
 }
 
+func TestSentenceStreamPacerReturnsEOFWhenUnderlyingCompletes(t *testing.T) {
+	underlying := newEOFAfterOnePacerStream()
+	pacer := NewSentenceStreamPacerWithOptions(context.Background(), underlying, SentenceStreamPacerOptions{})
+	defer pacer.Close()
+
+	if err := pacer.PushText("Only segment."); err != nil {
+		t.Fatalf("PushText() error = %v", err)
+	}
+	if err := pacer.Flush(); err != nil {
+		t.Fatalf("Flush() error = %v", err)
+	}
+
+	if _, err := pacer.Next(); err != nil {
+		t.Fatalf("first Next() error = %v", err)
+	}
+	if _, err := pacer.Next(); !errors.Is(err, io.EOF) {
+		t.Fatalf("second Next() error = %v, want io.EOF", err)
+	}
+}
+
+func TestSentenceStreamPacerPropagatesUnderlyingError(t *testing.T) {
+	streamErr := errors.New("provider stream failed")
+	underlying := newEOFAfterOnePacerStream()
+	underlying.err = streamErr
+	pacer := NewSentenceStreamPacerWithOptions(context.Background(), underlying, SentenceStreamPacerOptions{})
+	defer pacer.Close()
+
+	if err := pacer.PushText("Only segment."); err != nil {
+		t.Fatalf("PushText() error = %v", err)
+	}
+	if err := pacer.Flush(); err != nil {
+		t.Fatalf("Flush() error = %v", err)
+	}
+
+	if _, err := pacer.Next(); err != nil {
+		t.Fatalf("first Next() error = %v", err)
+	}
+	if _, err := pacer.Next(); !errors.Is(err, streamErr) {
+		t.Fatalf("second Next() error = %v, want %v", err, streamErr)
+	}
+}
+
 type fakePacerStream struct {
 	mu         sync.Mutex
 	cond       *sync.Cond
@@ -165,4 +209,53 @@ func (f *fakePacerStream) waitForPushes(t *testing.T, want []string) bool {
 		time.Sleep(5 * time.Millisecond)
 	}
 	return reflect.DeepEqual(f.pushes(), want)
+}
+
+type eofAfterOnePacerStream struct {
+	ready chan struct{}
+	once  sync.Once
+	index int
+	err   error
+}
+
+func newEOFAfterOnePacerStream() *eofAfterOnePacerStream {
+	return &eofAfterOnePacerStream{
+		ready: make(chan struct{}),
+	}
+}
+
+func (s *eofAfterOnePacerStream) PushText(string) error {
+	s.once.Do(func() {
+		close(s.ready)
+	})
+	return nil
+}
+
+func (s *eofAfterOnePacerStream) Flush() error {
+	return nil
+}
+
+func (s *eofAfterOnePacerStream) Close() error {
+	s.once.Do(func() {
+		close(s.ready)
+	})
+	return nil
+}
+
+func (s *eofAfterOnePacerStream) Next() (*SynthesizedAudio, error) {
+	<-s.ready
+	if s.index > 0 {
+		if s.err != nil {
+			return nil, s.err
+		}
+		return nil, io.EOF
+	}
+	s.index++
+	return &SynthesizedAudio{
+		Frame: &model.AudioFrame{
+			SampleRate:        24000,
+			NumChannels:       1,
+			SamplesPerChannel: 24000,
+		},
+	}, nil
 }

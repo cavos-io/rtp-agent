@@ -39,3 +39,11 @@ type SynthesizeStream interface {
 	Close() error
 	Next() (*SynthesizedAudio, error)
 }
+
+func cloneSynthesizedAudio(audio *SynthesizedAudio) *SynthesizedAudio {
+	if audio == nil {
+		return nil
+	}
+	clone := *audio
+	return &clone
+}
