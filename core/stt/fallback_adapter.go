@@ -529,7 +529,7 @@ func (s *fallbackRecognizeStream) monitorStream() {
 		stream := s.activeStream
 		s.mu.Unlock()
 
-		ev, err := stream.Next()
+		ev, err := s.nextActiveStreamEvent(stream)
 		if err != nil {
 			if errors.Is(err, io.EOF) {
 				_ = stream.Close()
@@ -583,6 +583,35 @@ func (s *fallbackRecognizeStream) monitorStream() {
 		case <-s.closeCh:
 			return
 		}
+	}
+}
+
+func (s *fallbackRecognizeStream) nextActiveStreamEvent(stream RecognizeStream) (*SpeechEvent, error) {
+	if s.adapter.attemptTimeout <= 0 {
+		return stream.Next()
+	}
+
+	type nextResult struct {
+		event *SpeechEvent
+		err   error
+	}
+	resultCh := make(chan nextResult, 1)
+	go func() {
+		event, err := stream.Next()
+		resultCh <- nextResult{event: event, err: err}
+	}()
+
+	timer := time.NewTimer(s.adapter.attemptTimeout)
+	defer timer.Stop()
+
+	select {
+	case result := <-resultCh:
+		return result.event, result.err
+	case <-timer.C:
+		_ = stream.Close()
+		return nil, context.DeadlineExceeded
+	case <-s.closeCh:
+		return nil, context.Canceled
 	}
 }
 

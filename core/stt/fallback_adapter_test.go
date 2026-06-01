@@ -1248,6 +1248,62 @@ func TestFallbackStreamRetriesSameSTTBeforeFallback(t *testing.T) {
 	}
 }
 
+func TestFallbackStreamTimesOutBlockedProvider(t *testing.T) {
+	primaryStream := newBlockingRecognizeStream()
+	fallbackStream := &metadataRecognizeStream{events: []*SpeechEvent{{
+		Type:         SpeechEventFinalTranscript,
+		Alternatives: []SpeechData{{Text: "fallback stream"}},
+	}}}
+	primary := &metadataSTT{
+		label:        "primary",
+		capabilities: STTCapabilities{Streaming: true},
+		streams:      []RecognizeStream{primaryStream},
+	}
+	fallback := &metadataSTT{
+		label:        "fallback",
+		capabilities: STTCapabilities{Streaming: true},
+		stream:       fallbackStream,
+	}
+	adapter := NewFallbackAdapterWithOptions([]STT{primary, fallback}, FallbackAdapterOptions{
+		MaxRetryPerSTT: 0,
+		AttemptTimeout: 20 * time.Millisecond,
+	})
+
+	stream, err := adapter.Stream(context.Background(), "en")
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+	defer stream.Close()
+
+	eventCh := make(chan *SpeechEvent, 1)
+	errCh := make(chan error, 1)
+	go func() {
+		event, err := stream.Next()
+		if err != nil {
+			errCh <- err
+			return
+		}
+		eventCh <- event
+	}()
+
+	select {
+	case event := <-eventCh:
+		if got := event.Alternatives[0].Text; got != "fallback stream" {
+			t.Fatalf("stream text = %q, want fallback stream", got)
+		}
+	case err := <-errCh:
+		t.Fatalf("Next returned error: %v", err)
+	case <-time.After(200 * time.Millisecond):
+		t.Fatal("timed out waiting for fallback stream after blocked provider")
+	}
+	if primary.streamCalls != 2 {
+		t.Fatalf("primary stream calls = %d, want active attempt plus recovery attempt", primary.streamCalls)
+	}
+	if fallback.streamCalls != 1 {
+		t.Fatalf("fallback stream calls = %d, want 1", fallback.streamCalls)
+	}
+}
+
 func TestFallbackStreamReplaysFlushBoundariesOnRetry(t *testing.T) {
 	firstFrame := &model.AudioFrame{Data: []byte("1"), SampleRate: 16000, NumChannels: 1, SamplesPerChannel: 1}
 	secondFrame := &model.AudioFrame{Data: []byte("2"), SampleRate: 16000, NumChannels: 1, SamplesPerChannel: 1}
