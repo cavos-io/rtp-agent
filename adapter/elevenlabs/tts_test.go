@@ -67,6 +67,28 @@ func TestElevenLabsSynthesizeRequestUsesReferenceOptions(t *testing.T) {
 	}
 }
 
+func TestElevenLabsSynthesizeRequestUsesConfiguredBaseURL(t *testing.T) {
+	provider, err := NewElevenLabsTTS("test-key", "voice-1", "",
+		WithElevenLabsBaseURL("https://eleven.example/v1/"),
+	)
+	if err != nil {
+		t.Fatalf("NewElevenLabsTTS() error = %v", err)
+	}
+
+	requestURL, _ := buildElevenLabsSynthesizeRequest(provider, "hello")
+	parsed, err := url.Parse(requestURL)
+	if err != nil {
+		t.Fatalf("parse url: %v", err)
+	}
+
+	if parsed.Scheme != "https" || parsed.Host != "eleven.example" {
+		t.Fatalf("url = %q, want configured host", requestURL)
+	}
+	if parsed.Path != "/v1/text-to-speech/voice-1" {
+		t.Fatalf("path = %q, want configured base URL with synthesize path", parsed.Path)
+	}
+}
+
 func TestElevenLabsStreamURLUsesReferenceOptions(t *testing.T) {
 	provider, err := NewElevenLabsTTS("test-key", "", "")
 	if err != nil {
@@ -87,6 +109,28 @@ func TestElevenLabsStreamURLUsesReferenceOptions(t *testing.T) {
 	}
 	if parsed.Query().Get("output_format") != "mp3_22050_32" {
 		t.Fatalf("output_format = %q, want mp3_22050_32", parsed.Query().Get("output_format"))
+	}
+}
+
+func TestElevenLabsStreamURLUsesConfiguredBaseURL(t *testing.T) {
+	provider, err := NewElevenLabsTTS("test-key", "voice-1", "",
+		WithElevenLabsBaseURL("https://eleven.example/v1/"),
+	)
+	if err != nil {
+		t.Fatalf("NewElevenLabsTTS() error = %v", err)
+	}
+
+	streamURL := buildElevenLabsStreamURL(provider)
+	parsed, err := url.Parse(streamURL)
+	if err != nil {
+		t.Fatalf("parse stream url: %v", err)
+	}
+
+	if parsed.Scheme != "wss" || parsed.Host != "eleven.example" {
+		t.Fatalf("stream url = %q, want configured websocket host", streamURL)
+	}
+	if parsed.Path != "/v1/text-to-speech/voice-1/stream-input" {
+		t.Fatalf("path = %q, want configured base URL with stream path", parsed.Path)
 	}
 }
 
