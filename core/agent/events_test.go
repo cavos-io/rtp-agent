@@ -136,3 +136,38 @@ func TestFunctionToolsExecutedEventReplyAndHandoffFlagsCanBeCanceled(t *testing.
 		t.Fatal("HasAgentHandoff() = true, want false after CancelAgentHandoff")
 	}
 }
+
+func TestAgentFalseInterruptionEventIsTypedAndTimestamped(t *testing.T) {
+	before := time.Now()
+	ev := NewAgentFalseInterruptionEvent(true)
+
+	var event Event = ev
+	if event.GetType() != "agent_false_interruption" {
+		t.Fatalf("GetType() = %q, want agent_false_interruption", event.GetType())
+	}
+	if !ev.Resumed {
+		t.Fatal("Resumed = false, want true")
+	}
+	if ev.CreatedAt.IsZero() || ev.CreatedAt.Before(before) {
+		t.Fatalf("CreatedAt = %v, want timestamp after %v", ev.CreatedAt, before)
+	}
+}
+
+func TestAgentFalseInterruptionEventPreservesDeprecatedCompatibilityFields(t *testing.T) {
+	msg := &llm.ChatMessage{ID: "msg_1", Role: llm.ChatRoleAssistant}
+	instructions := "continue from the apology"
+
+	ev := &AgentFalseInterruptionEvent{
+		Resumed:           false,
+		Message:           msg,
+		ExtraInstructions: instructions,
+		CreatedAt:         time.Now(),
+	}
+
+	if ev.Message != msg {
+		t.Fatalf("Message = %#v, want original message", ev.Message)
+	}
+	if ev.ExtraInstructions != instructions {
+		t.Fatalf("ExtraInstructions = %q, want %q", ev.ExtraInstructions, instructions)
+	}
+}

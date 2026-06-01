@@ -36,6 +36,22 @@ type ConversationItemAddedEvent struct {
 
 func (e *ConversationItemAddedEvent) GetType() string { return "conversation_item_added" }
 
+type AgentFalseInterruptionEvent struct {
+	Resumed           bool
+	CreatedAt         time.Time
+	Message           *llm.ChatMessage
+	ExtraInstructions string
+}
+
+func NewAgentFalseInterruptionEvent(resumed bool) *AgentFalseInterruptionEvent {
+	return &AgentFalseInterruptionEvent{
+		Resumed:   resumed,
+		CreatedAt: time.Now(),
+	}
+}
+
+func (e *AgentFalseInterruptionEvent) GetType() string { return "agent_false_interruption" }
+
 type FunctionToolsExecutedEvent struct {
 	FunctionCalls       []*llm.FunctionCall
 	FunctionCallOutputs []*llm.FunctionCallOutput
