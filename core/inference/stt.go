@@ -121,17 +121,25 @@ func (s *STT) Stream(ctx context.Context, language string) (stt.RecognizeStream,
 
 type inferenceSTTStream struct {
 	stt             *STT
-	conn            *websocket.Conn
+	conn            inferenceWebsocketConn
 	ctx             context.Context
 	cancel          context.CancelFunc
 	audioCh         chan *model.AudioFrame
 	eventCh         chan *stt.SpeechEvent
 	mu              sync.Mutex
 	closed          bool
+	inputEnded      bool
+	rateGuard       stt.SampleRateGuard
 	speaking        bool
 	audioDuration   float64
 	startTimeOffset float64
 	startTime       float64
+}
+
+type inferenceWebsocketConn interface {
+	WriteJSON(v interface{}) error
+	ReadMessage() (messageType int, p []byte, err error)
+	Close() error
 }
 
 func (s *inferenceSTTStream) StartTimeOffset() float64 {
@@ -156,6 +164,12 @@ func (s *inferenceSTTStream) PushFrame(frame *model.AudioFrame) error {
 	if s.closed {
 		return fmt.Errorf("stream closed")
 	}
+	if s.inputEnded {
+		return fmt.Errorf("stream input ended")
+	}
+	if err := s.rateGuard.Check(frame); err != nil {
+		return err
+	}
 	s.audioDuration += float64(frame.SamplesPerChannel) / float64(frame.SampleRate)
 	s.audioCh <- frame
 	return nil
@@ -167,7 +181,28 @@ func (s *inferenceSTTStream) Flush() error {
 	if s.closed {
 		return fmt.Errorf("stream closed")
 	}
+	if s.inputEnded {
+		return fmt.Errorf("stream input ended")
+	}
 
+	return s.flushLocked()
+}
+
+func (s *inferenceSTTStream) EndInput() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return fmt.Errorf("stream closed")
+	}
+	if s.inputEnded {
+		return fmt.Errorf("stream input ended")
+	}
+	s.inputEnded = true
+
+	return s.flushLocked()
+}
+
+func (s *inferenceSTTStream) flushLocked() error {
 	endPkt := map[string]interface{}{
 		"type": "session.finalize",
 	}

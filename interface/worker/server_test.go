@@ -441,6 +441,38 @@ func TestUpdateOptionsMergesConfiguredValuesBeforeRun(t *testing.T) {
 	}
 }
 
+func TestUpdateOptionsPreservesExplicitZeroResourceValues(t *testing.T) {
+	server := NewAgentServer(WorkerOptions{
+		LoadThreshold:    0.5,
+		JobMemoryWarnMB:  250,
+		JobMemoryLimitMB: 512,
+		NumIdleProcesses: 2,
+	})
+
+	err := server.UpdateOptions(WorkerOptions{
+		LoadThresholdSet:    true,
+		JobMemoryWarnMBSet:  true,
+		JobMemoryLimitMBSet: true,
+		NumIdleProcessesSet: true,
+	})
+	if err != nil {
+		t.Fatalf("UpdateOptions() error = %v", err)
+	}
+
+	if server.Options.LoadThreshold != 0 {
+		t.Fatalf("LoadThreshold = %v, want explicit zero", server.Options.LoadThreshold)
+	}
+	if server.Options.JobMemoryWarnMB != 0 {
+		t.Fatalf("JobMemoryWarnMB = %v, want explicit zero", server.Options.JobMemoryWarnMB)
+	}
+	if server.Options.JobMemoryLimitMB != 0 {
+		t.Fatalf("JobMemoryLimitMB = %v, want explicit zero", server.Options.JobMemoryLimitMB)
+	}
+	if server.Options.NumIdleProcesses != 0 {
+		t.Fatalf("NumIdleProcesses = %d, want explicit zero", server.Options.NumIdleProcesses)
+	}
+}
+
 func TestUpdateOptionsMarksExplicitAgentNameAsNotEnvironment(t *testing.T) {
 	t.Setenv("LIVEKIT_AGENT_NAME", "env-agent")
 	server := NewAgentServer(WorkerOptions{})
@@ -667,8 +699,11 @@ func TestHandleRegisterNotifiesWorkerRegisteredHandlers(t *testing.T) {
 
 func TestAgentServerIDReturnsRegisteredWorkerID(t *testing.T) {
 	server := NewAgentServer(WorkerOptions{})
-	if server.ID() != "" {
-		t.Fatalf("ID() before registration = %q, want empty", server.ID())
+	if server.ID() != "unregistered" {
+		t.Fatalf("ID() before registration = %q, want unregistered", server.ID())
+	}
+	if server.WorkerInfo().CloudAgents {
+		t.Fatal("WorkerInfo().CloudAgents = true, want false for unregistered worker without token")
 	}
 
 	server.handleMessage(context.Background(), &livekit.ServerMessage{
@@ -1470,6 +1505,13 @@ func TestAvailabilityResponseAcceptsWithDefaultIdentity(t *testing.T) {
 	}
 	if availability.ParticipantIdentity != "agent-job_abc123" {
 		t.Fatalf("availability.ParticipantIdentity = %q, want default identity", availability.ParticipantIdentity)
+	}
+	agentName, ok := availability.ParticipantAttributes["lk.agent.name"]
+	if !ok {
+		t.Fatal("availability.ParticipantAttributes missing lk.agent.name")
+	}
+	if agentName != "" {
+		t.Fatalf("availability.ParticipantAttributes[lk.agent.name] = %q, want empty string", agentName)
 	}
 }
 
@@ -2281,7 +2323,7 @@ func TestValidateRunPreconditionsNormalizesCloudLoadOptions(t *testing.T) {
 	}
 }
 
-func TestValidateRunPreconditionsRejectsFiniteLoadThresholdAboveOne(t *testing.T) {
+func TestValidateRunPreconditionsAllowsFiniteLoadThresholdAboveOne(t *testing.T) {
 	server := NewAgentServer(WorkerOptions{
 		WSRL:          "wss://livekit.example",
 		APIKey:        "key",
@@ -2293,11 +2335,14 @@ func TestValidateRunPreconditionsRejectsFiniteLoadThresholdAboveOne(t *testing.T
 	}
 
 	err := server.validateRunPreconditions()
-	if err == nil {
-		t.Fatal("validateRunPreconditions() error = nil, want invalid load threshold error")
+	if err != nil {
+		t.Fatalf("validateRunPreconditions() error = %v, want nil for reference warning-only behavior", err)
 	}
-	if !strings.Contains(err.Error(), "load_threshold in prod env must be less than 1") {
-		t.Fatalf("validateRunPreconditions() error = %q, want load threshold message", err.Error())
+	if server.Options.LoadThreshold != 1.2 {
+		t.Fatalf("LoadThreshold = %v, want explicit threshold preserved after validation", server.Options.LoadThreshold)
+	}
+	if server.Options.DevMode {
+		t.Fatal("DevMode = true, want production validation case")
 	}
 }
 
@@ -2483,6 +2528,27 @@ func TestRTCSessionRejectsSecondRegistration(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "only supports registering one rtc_session") {
 		t.Fatalf("second RTCSession() error = %q, want duplicate registration message", err.Error())
+	}
+}
+
+func TestRTCSessionLoadsAgentNameFromEnvironmentAtRegistration(t *testing.T) {
+	t.Setenv("LIVEKIT_AGENT_NAME", "")
+	server := NewAgentServer(WorkerOptions{})
+	t.Setenv("LIVEKIT_AGENT_NAME", "late-env-agent")
+
+	if err := server.RTCSession(func(ctx *JobContext) error { return nil }, nil, nil); err != nil {
+		t.Fatalf("RTCSession() error = %v", err)
+	}
+
+	if server.Options.AgentName != "late-env-agent" {
+		t.Fatalf("AgentName = %q, want late env agent", server.Options.AgentName)
+	}
+	if !server.Options.AgentNameIsEnv {
+		t.Fatal("AgentNameIsEnv = false, want true when env is loaded at registration")
+	}
+	register := server.registerWorkerRequest().GetRegister()
+	if register.GetAgentName() != "late-env-agent" {
+		t.Fatalf("register.AgentName = %q, want late env agent", register.GetAgentName())
 	}
 }
 

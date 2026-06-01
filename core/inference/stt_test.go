@@ -1,9 +1,11 @@
 package inference
 
 import (
+	"io"
 	"testing"
 
 	"github.com/cavos-io/conversation-worker/core/stt"
+	"github.com/cavos-io/conversation-worker/model"
 )
 
 func TestInferenceSTTFinalTranscriptEmitsStructuredRecognitionUsage(t *testing.T) {
@@ -144,4 +146,70 @@ func TestInferenceSTTAppliesStartTimeOffsetToTranscriptAndWords(t *testing.T) {
 	if data.Words[0].StartTimeOffset != 10.0 {
 		t.Fatalf("word StartTimeOffset = %v, want 10.0", data.Words[0].StartTimeOffset)
 	}
+}
+
+func TestInferenceSTTStreamRejectsMismatchedSampleRates(t *testing.T) {
+	stream := &inferenceSTTStream{
+		audioCh: make(chan *model.AudioFrame, 2),
+	}
+
+	if err := stream.PushFrame(&model.AudioFrame{Data: []byte("first"), SampleRate: 16000, NumChannels: 1, SamplesPerChannel: 1}); err != nil {
+		t.Fatalf("PushFrame(first) returned error: %v", err)
+	}
+	if err := stream.PushFrame(&model.AudioFrame{Data: []byte("second"), SampleRate: 8000, NumChannels: 1, SamplesPerChannel: 1}); err == nil {
+		t.Fatal("PushFrame(second) returned nil, want sample-rate mismatch error")
+	}
+	if got := len(stream.audioCh); got != 1 {
+		t.Fatalf("audio frames forwarded = %d, want 1", got)
+	}
+}
+
+func TestInferenceSTTStreamEndInputFinalizesAndRejectsMoreInput(t *testing.T) {
+	var _ stt.InputEnding = (*inferenceSTTStream)(nil)
+
+	conn := &fakeInferenceWebsocketConn{}
+
+	stream := &inferenceSTTStream{
+		conn:    conn,
+		audioCh: make(chan *model.AudioFrame, 2),
+		eventCh: make(chan *stt.SpeechEvent, 1),
+	}
+
+	if err := stream.EndInput(); err != nil {
+		t.Fatalf("EndInput returned error: %v", err)
+	}
+
+	if len(conn.writes) != 1 {
+		t.Fatalf("writes = %d, want 1", len(conn.writes))
+	}
+	if conn.writes[0]["type"] != "session.finalize" {
+		t.Fatalf("finalize message type = %v, want session.finalize", conn.writes[0]["type"])
+	}
+
+	if err := stream.PushFrame(&model.AudioFrame{Data: []byte("late"), SampleRate: 16000, NumChannels: 1, SamplesPerChannel: 1}); err == nil {
+		t.Fatal("PushFrame after EndInput returned nil, want error")
+	}
+	if err := stream.Flush(); err == nil {
+		t.Fatal("Flush after EndInput returned nil, want error")
+	}
+}
+
+type fakeInferenceWebsocketConn struct {
+	writes []map[string]interface{}
+	closed bool
+}
+
+func (f *fakeInferenceWebsocketConn) WriteJSON(v interface{}) error {
+	msg, _ := v.(map[string]interface{})
+	f.writes = append(f.writes, msg)
+	return nil
+}
+
+func (f *fakeInferenceWebsocketConn) ReadMessage() (int, []byte, error) {
+	return 0, nil, io.EOF
+}
+
+func (f *fakeInferenceWebsocketConn) Close() error {
+	f.closed = true
+	return nil
 }

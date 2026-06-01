@@ -609,6 +609,53 @@ func TestFallbackStreamReplaysFlushBoundariesOnRetry(t *testing.T) {
 	}
 }
 
+func TestFallbackStreamPropagatesTimingAnchorsOnRetry(t *testing.T) {
+	primaryFailure := &blockingFailRecognizeStream{
+		err:     errors.New("primary stream failed"),
+		release: make(chan struct{}),
+	}
+	recovered := &metadataRecognizeStream{events: []*SpeechEvent{{
+		Type:         SpeechEventFinalTranscript,
+		Alternatives: []SpeechData{{Text: "primary recovered"}},
+	}}}
+	primary := &metadataSTT{
+		label:        "primary",
+		capabilities: STTCapabilities{Streaming: true},
+		streams: []RecognizeStream{
+			primaryFailure,
+			recovered,
+		},
+	}
+	adapter := NewFallbackAdapterWithOptions([]STT{primary}, FallbackAdapterOptions{
+		MaxRetryPerSTT: 1,
+	})
+
+	stream, err := adapter.Stream(context.Background(), "en")
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+	defer stream.Close()
+
+	timing, ok := stream.(StreamTiming)
+	if !ok {
+		t.Fatal("fallback stream does not implement StreamTiming")
+	}
+	timing.SetStartTimeOffset(3.25)
+	timing.SetStartTime(42.5)
+
+	close(primaryFailure.release)
+
+	if _, err := stream.Next(); err != nil {
+		t.Fatalf("Next returned error: %v", err)
+	}
+	if recovered.startTimeOffset != 3.25 {
+		t.Fatalf("recovered StartTimeOffset = %v, want 3.25", recovered.startTimeOffset)
+	}
+	if recovered.startTime != 42.5 {
+		t.Fatalf("recovered StartTime = %v, want 42.5", recovered.startTime)
+	}
+}
+
 func TestFallbackStreamRejectsMismatchedSampleRates(t *testing.T) {
 	inner := &metadataRecognizeStream{events: []*SpeechEvent{{Type: SpeechEventFinalTranscript}}}
 	adapter := NewFallbackAdapter([]STT{
@@ -860,10 +907,12 @@ func waitForProviderAvailable(t *testing.T, adapter *FallbackAdapter, index int)
 }
 
 type metadataRecognizeStream struct {
-	events []*SpeechEvent
-	index  int
-	err    error
-	calls  []string
+	events          []*SpeechEvent
+	index           int
+	err             error
+	calls           []string
+	startTimeOffset float64
+	startTime       float64
 }
 
 func (m *metadataRecognizeStream) PushFrame(frame *model.AudioFrame) error {
@@ -890,6 +939,22 @@ func (m *metadataRecognizeStream) Next() (*SpeechEvent, error) {
 		return nil, m.err
 	}
 	return nil, io.EOF
+}
+
+func (m *metadataRecognizeStream) StartTimeOffset() float64 {
+	return m.startTimeOffset
+}
+
+func (m *metadataRecognizeStream) SetStartTimeOffset(offset float64) {
+	m.startTimeOffset = offset
+}
+
+func (m *metadataRecognizeStream) StartTime() float64 {
+	return m.startTime
+}
+
+func (m *metadataRecognizeStream) SetStartTime(startTime float64) {
+	m.startTime = startTime
 }
 
 type blockingFailRecognizeStream struct {

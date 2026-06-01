@@ -115,10 +115,15 @@ type WorkerOptions struct {
 	PrometheusPort                  int
 	PrometheusMultiprocDir          string
 	LoadThreshold                   float64
+	LoadThresholdSet                bool
 	JobMemoryWarnMB                 float64
+	JobMemoryWarnMBSet              bool
 	JobMemoryLimitMB                float64
+	JobMemoryLimitMBSet             bool
 	NumIdleProcesses                int
+	NumIdleProcessesSet             bool
 	DrainTimeoutSeconds             int
+	DrainTimeoutSecondsSet          bool
 	SessionEndTimeoutSeconds        float64
 	ShutdownProcessTimeoutSeconds   float64
 	InitializeProcessTimeoutSeconds float64
@@ -158,6 +163,7 @@ func NewAgentServer(opts WorkerOptions) *AgentServer {
 		activeJobs:     make(map[string]*JobContext),
 		pendingAccepts: make(map[string]JobAcceptArguments),
 		pendingTimers:  make(map[string]*time.Timer),
+		workerID:       "unregistered",
 	}
 }
 
@@ -496,20 +502,25 @@ func mergeWorkerOptions(current WorkerOptions, next WorkerOptions) WorkerOptions
 	if next.LogLevel != "" {
 		current.LogLevel = next.LogLevel
 	}
-	if next.LoadThreshold != 0 {
+	if next.LoadThresholdSet || next.LoadThreshold != 0 {
 		current.LoadThreshold = next.LoadThreshold
+		current.LoadThresholdSet = true
 	}
-	if next.JobMemoryWarnMB != 0 {
+	if next.JobMemoryWarnMBSet || next.JobMemoryWarnMB != 0 {
 		current.JobMemoryWarnMB = next.JobMemoryWarnMB
+		current.JobMemoryWarnMBSet = true
 	}
-	if next.JobMemoryLimitMB != 0 {
+	if next.JobMemoryLimitMBSet || next.JobMemoryLimitMB != 0 {
 		current.JobMemoryLimitMB = next.JobMemoryLimitMB
+		current.JobMemoryLimitMBSet = true
 	}
-	if next.NumIdleProcesses != 0 {
+	if next.NumIdleProcessesSet || next.NumIdleProcesses != 0 {
 		current.NumIdleProcesses = next.NumIdleProcesses
+		current.NumIdleProcessesSet = true
 	}
-	if next.DrainTimeoutSeconds != 0 {
+	if next.DrainTimeoutSecondsSet || next.DrainTimeoutSeconds != 0 {
 		current.DrainTimeoutSeconds = next.DrainTimeoutSeconds
+		current.DrainTimeoutSecondsSet = next.DrainTimeoutSecondsSet
 	}
 	if next.SessionEndTimeoutSeconds != 0 {
 		current.SessionEndTimeoutSeconds = next.SessionEndTimeoutSeconds
@@ -539,10 +550,10 @@ func resolveWorkerOptions(opts WorkerOptions) WorkerOptions {
 	if opts.MaxRetry == 0 {
 		opts.MaxRetry = defaultMaxRetry
 	}
-	if opts.JobMemoryWarnMB == 0 {
+	if opts.JobMemoryWarnMB == 0 && !opts.JobMemoryWarnMBSet {
 		opts.JobMemoryWarnMB = defaultJobMemoryWarn
 	}
-	if opts.DrainTimeoutSeconds == 0 {
+	if opts.DrainTimeoutSeconds == 0 && !opts.DrainTimeoutSecondsSet {
 		opts.DrainTimeoutSeconds = defaultDrainTimeout
 	}
 	if opts.SessionEndTimeoutSeconds == 0 {
@@ -568,14 +579,14 @@ func resolveWorkerOptions(opts WorkerOptions) WorkerOptions {
 	if opts.Port == 0 && !opts.DevMode {
 		opts.Port = defaultProdHTTPPort
 	}
-	if opts.LoadThreshold == 0 {
+	if opts.LoadThreshold == 0 && !opts.LoadThresholdSet {
 		if opts.DevMode {
 			opts.LoadThreshold = math.Inf(1)
 		} else {
 			opts.LoadThreshold = defaultLoadThreshold
 		}
 	}
-	if opts.NumIdleProcesses == 0 && !opts.DevMode {
+	if opts.NumIdleProcesses == 0 && !opts.DevMode && !opts.NumIdleProcessesSet {
 		opts.NumIdleProcesses = defaultNumIdleProcesses()
 	}
 	if opts.Permissions == nil {
@@ -794,9 +805,7 @@ func availabilityResponseForAccept(req *livekit.AvailabilityRequest, args JobAcc
 		args.Identity = agentIdentityForJobID(req.Job.Id)
 	}
 	attributes := make(map[string]string, len(args.Attributes)+1)
-	if agentName != "" {
-		attributes[participantAttributeAgentName] = agentName
-	}
+	attributes[participantAttributeAgentName] = agentName
 	for key, value := range args.Attributes {
 		attributes[key] = value
 	}
@@ -907,6 +916,14 @@ func (s *AgentServer) RTCSession(
 	s.entrypointFnc = entrypoint
 	s.requestFnc = request
 	s.sessionEndFnc = sessionEnd
+	if s.Options.AgentName == "" {
+		if agentName := os.Getenv("LIVEKIT_AGENT_NAME"); agentName != "" {
+			s.Options.AgentName = agentName
+			s.Options.AgentNameIsEnv = true
+		} else {
+			s.Options.AgentNameIsEnv = false
+		}
+	}
 	return nil
 }
 
@@ -1047,7 +1064,7 @@ func (s *AgentServer) validateRunPreconditions() error {
 		s.Options.LoadThreshold = defaultLoadThreshold
 	}
 	if s.Options.LoadThreshold > 1 && !math.IsInf(s.Options.LoadThreshold, 1) && !s.Options.DevMode {
-		return fmt.Errorf("load_threshold in prod env must be less than 1, current value: %v", s.Options.LoadThreshold)
+		logger.Logger.Warnw("load_threshold in prod env should be less than 1", nil, "currentValue", s.Options.LoadThreshold)
 	}
 	if !validWorkerLogLevel(s.Options.LogLevel) {
 		return fmt.Errorf("invalid log_level %q, valid levels: CRITICAL, DEBUG, ERROR, INFO, TRACE, WARN", s.Options.LogLevel)

@@ -39,9 +39,9 @@ WORKTREES=(
 is_clean() {
   local path="$1"
 
-  if [[ -n "$(git -C "$path" status --porcelain)" ]]; then
+  if [[ -n "$(git -C "$path" status --porcelain --untracked-files=no)" ]]; then
     echo "Dirty worktree detected: $path"
-    git -C "$path" status --short
+    git -C "$path" status --short --untracked-files=no
     return 1
   fi
 }
@@ -128,9 +128,9 @@ EOF
     exit 1
   fi
 
-  if [[ -n "$(git -C "$path" status --porcelain)" ]]; then
+  if [[ -n "$(git -C "$path" status --porcelain --untracked-files=no)" ]]; then
     echo "Worktree is still dirty after Codex attempt: $path"
-    git -C "$path" status --short
+    git -C "$path" status --short --untracked-files=no
     exit 1
   fi
 }

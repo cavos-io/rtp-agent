@@ -285,6 +285,28 @@ func TestApplyDevModeEnvForReferenceSubcommands(t *testing.T) {
 	}
 }
 
+func TestApplyDevReloadCompatibilityDisablesReloadOnITerm(t *testing.T) {
+	t.Setenv("TERM_PROGRAM", "iTerm.app")
+	args := CliArgs{DevMode: true, Reload: true}
+
+	applyDevReloadCompatibility(&args)
+
+	if args.Reload {
+		t.Fatal("Reload = true, want false on iTerm.app")
+	}
+}
+
+func TestApplyDevReloadCompatibilityLeavesReloadOnOtherTerminals(t *testing.T) {
+	t.Setenv("TERM_PROGRAM", "xterm-256color")
+	args := CliArgs{DevMode: true, Reload: true}
+
+	applyDevReloadCompatibility(&args)
+
+	if !args.Reload {
+		t.Fatal("Reload = false, want true outside iTerm.app")
+	}
+}
+
 func TestRunConsoleListDevicesReturnsBeforeStartingConsole(t *testing.T) {
 	oldPrint := printConsoleAudioDevices
 	defer func() { printConsoleAudioDevices = oldPrint }()
@@ -464,6 +486,19 @@ func TestApplyWorkerArgsUpdatesServerOptions(t *testing.T) {
 	}
 	if server.Options.DrainTimeoutSeconds != 15 {
 		t.Fatalf("DrainTimeoutSeconds = %d, want 15", server.Options.DrainTimeoutSeconds)
+	}
+}
+
+func TestApplyWorkerArgsPreservesExplicitZeroDrainTimeout(t *testing.T) {
+	server := worker.NewAgentServer(worker.WorkerOptions{DrainTimeoutSeconds: 30})
+	drainTimeout := 0
+
+	if err := applyWorkerArgs(server, CliArgs{}, &drainTimeout); err != nil {
+		t.Fatalf("applyWorkerArgs() error = %v", err)
+	}
+
+	if server.Options.DrainTimeoutSeconds != 0 {
+		t.Fatalf("DrainTimeoutSeconds = %d, want explicit zero", server.Options.DrainTimeoutSeconds)
 	}
 }
 
