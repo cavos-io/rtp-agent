@@ -1661,6 +1661,26 @@ func TestWorkerStatusMessageUsesSingleLoadSample(t *testing.T) {
 	}
 }
 
+func TestWorkerStatusMessageSkipsFakeJobsInJobCount(t *testing.T) {
+	server := NewAgentServer(WorkerOptions{})
+	realCtx := NewJobContext(&livekit.Job{Id: "job-real"}, "", "", "")
+	fakeCtx := NewJobContext(&livekit.Job{Id: "job-fake"}, "", "", "")
+	fakeCtx.fakeJob = true
+	server.mu.Lock()
+	server.activeJobs[realCtx.Job.Id] = realCtx
+	server.activeJobs[fakeCtx.Job.Id] = fakeCtx
+	server.mu.Unlock()
+
+	msg := server.workerStatusMessage(livekit.WorkerStatus_WS_AVAILABLE)
+	update := msg.GetUpdateWorker()
+	if update == nil {
+		t.Fatal("update worker message is nil")
+	}
+	if update.JobCount != 1 {
+		t.Fatalf("UpdateWorker.JobCount = %d, want only non-fake jobs", update.JobCount)
+	}
+}
+
 func TestDrainingWorkerStatusMessageReportsFullWithoutLoad(t *testing.T) {
 	server := NewAgentServer(WorkerOptions{
 		LoadFunc: func(*AgentServer) float64 {

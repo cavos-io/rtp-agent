@@ -1045,7 +1045,14 @@ func (s *AgentServer) inflightJobCount() int {
 func (s *AgentServer) activeJobCount() int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return len(s.activeJobs)
+	count := 0
+	for _, jobCtx := range s.activeJobs {
+		if jobCtx == nil || jobCtx.IsFakeJob() {
+			continue
+		}
+		count++
+	}
+	return count
 }
 
 func (s *AgentServer) currentLoad() float64 {
