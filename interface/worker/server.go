@@ -92,6 +92,7 @@ type WorkerInfo struct {
 type LocalJobOptions struct {
 	FakeJob  bool
 	RoomInfo *livekit.Room
+	Token    string
 }
 
 type WorkerOptions struct {
@@ -1537,7 +1538,7 @@ func (s *AgentServer) ExecuteLocalJobWithOptions(ctx context.Context, roomName s
 	if !options.FakeJob && options.RoomInfo == nil {
 		return fmt.Errorf("room info is required for non-fake local jobs")
 	}
-	if !options.FakeJob && participantIdentity == "" {
+	if !options.FakeJob && participantIdentity == "" && options.Token == "" {
 		return fmt.Errorf("agent identity is required for non-fake local jobs")
 	}
 	jobCtx := newLocalJobContextWithOptions(roomName, participantIdentity, s.Options, options)
@@ -1612,6 +1613,12 @@ func newLocalJobContext(roomName string, participantIdentity string, opts Worker
 
 func newLocalJobContextWithOptions(roomName string, participantIdentity string, opts WorkerOptions, options LocalJobOptions) *JobContext {
 	opts = resolveWorkerOptions(opts)
+	token := options.Token
+	if token != "" {
+		if verifier, err := auth.ParseAPIToken(token); err == nil {
+			participantIdentity = verifier.Identity()
+		}
+	}
 	jobIDPrefix := "job-"
 	if options.FakeJob {
 		jobIDPrefix = "mock-job-"
@@ -1634,8 +1641,10 @@ func newLocalJobContextWithOptions(roomName string, participantIdentity string, 
 	jobCtx := NewJobContext(job, opts.WSRL, opts.APIKey, opts.APISecret)
 	jobCtx.AcceptArguments = JobAcceptArguments{Identity: participantIdentity}
 	jobCtx.fakeJob = options.FakeJob
-	if opts.APIKey != "" && opts.APISecret != "" {
-		token, err := auth.NewAccessToken(opts.APIKey, opts.APISecret).
+	if token != "" {
+		jobCtx.token = token
+	} else if opts.APIKey != "" && opts.APISecret != "" {
+		generatedToken, err := auth.NewAccessToken(opts.APIKey, opts.APISecret).
 			SetIdentity(participantIdentity).
 			SetKind(livekit.ParticipantInfo_AGENT).
 			SetVideoGrant(&auth.VideoGrant{
@@ -1646,7 +1655,7 @@ func newLocalJobContextWithOptions(roomName string, participantIdentity string, 
 			SetValidFor(time.Hour).
 			ToJWT()
 		if err == nil {
-			jobCtx.token = token
+			jobCtx.token = generatedToken
 		}
 	}
 	return jobCtx

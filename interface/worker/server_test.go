@@ -2785,6 +2785,64 @@ func TestExecuteLocalJobWithOptionsCanRunReferenceConnectJob(t *testing.T) {
 	}
 }
 
+func TestExecuteLocalJobWithOptionsUsesTokenIdentity(t *testing.T) {
+	server := NewAgentServer(WorkerOptions{APIKey: "api-key", APISecret: "api-secret"})
+	startedCh := make(chan *JobContext, 1)
+	roomInfo := &livekit.Room{Sid: "RM_existing", Name: "room-a"}
+	token, err := auth.NewAccessToken("api-key", "api-secret").
+		SetIdentity("agent-token").
+		SetVideoGrant(&auth.VideoGrant{RoomJoin: true, Room: "room-a", Agent: true}).
+		ToJWT()
+	if err != nil {
+		t.Fatalf("ToJWT() error = %v", err)
+	}
+
+	if err := server.RTCSession(
+		func(ctx *JobContext) error {
+			startedCh <- ctx
+			return nil
+		},
+		nil,
+		nil,
+	); err != nil {
+		t.Fatalf("RTCSession() error = %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	doneCh := make(chan error, 1)
+	go func() {
+		doneCh <- server.ExecuteLocalJobWithOptions(ctx, "room-a", "", LocalJobOptions{
+			FakeJob:  false,
+			RoomInfo: roomInfo,
+			Token:    token,
+		})
+	}()
+
+	var jobCtx *JobContext
+	select {
+	case jobCtx = <-startedCh:
+	case <-time.After(time.Second):
+		t.Fatal("local token job entrypoint did not run")
+	}
+
+	if jobCtx.ParticipantIdentity() != "agent-token" {
+		t.Fatalf("ParticipantIdentity() = %q, want token identity", jobCtx.ParticipantIdentity())
+	}
+	if jobCtx.token != token {
+		t.Fatal("local token job did not preserve provided token")
+	}
+
+	cancel()
+	select {
+	case err := <-doneCh:
+		if err != nil {
+			t.Fatalf("ExecuteLocalJobWithOptions() error = %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("ExecuteLocalJobWithOptions() did not return after context cancellation")
+	}
+}
+
 func TestExecuteLocalJobWithOptionsRejectsNonFakeWithoutRoomInfo(t *testing.T) {
 	server := NewAgentServer(WorkerOptions{})
 
