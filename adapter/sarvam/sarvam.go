@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/textproto"
 	"net/url"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -209,12 +210,13 @@ func (s *SarvamSTT) Stream(ctx context.Context, language string) (stt.RecognizeS
 		}
 	}
 	streamCtx, cancel := context.WithCancel(ctx)
-	stream := &sarvamSTTStream{
+	stream := &sarvamSTTRecognizeStream{
 		conn:       conn,
 		ctx:        streamCtx,
 		cancel:     cancel,
-		sampleRate: s.sampleRate,
+		language:   requestLanguage,
 		encoding:   "audio/wav",
+		sampleRate: s.sampleRate,
 		events:     make(chan *stt.SpeechEvent, 100),
 		errCh:      make(chan error, 1),
 	}
@@ -231,7 +233,9 @@ func buildSarvamSTTWebsocketURL(s *SarvamSTT, language string) *url.URL {
 	query.Set("language-code", resolveSarvamSTTLanguage(s, language))
 	query.Set("model", s.model)
 	query.Set("vad_signals", "true")
-	query.Set("sample_rate", fmt.Sprintf("%d", s.sampleRate))
+	if s.sampleRate > 0 {
+		query.Set("sample_rate", strconv.Itoa(s.sampleRate))
+	}
 	if sarvamSTTSupportsMode(s.model) {
 		query.Set("mode", s.mode)
 	}
@@ -253,12 +257,21 @@ func buildSarvamSTTConfigMessage(s *SarvamSTT) ([]byte, error) {
 	})
 }
 
-func buildSarvamSTTAudioMessage(audio []byte, encoding string, sampleRate int) ([]byte, error) {
+func buildSarvamSTTAudioMessage(frame *model.AudioFrame, encoding string) ([]byte, error) {
+	if frame == nil {
+		return json.Marshal(map[string]any{
+			"audio": map[string]any{
+				"data":        "",
+				"encoding":    encoding,
+				"sample_rate": 0,
+			},
+		})
+	}
 	return json.Marshal(map[string]any{
 		"audio": map[string]any{
-			"data":        base64.StdEncoding.EncodeToString(audio),
+			"data":        base64.StdEncoding.EncodeToString(frame.Data),
 			"encoding":    encoding,
-			"sample_rate": sampleRate,
+			"sample_rate": int(frame.SampleRate),
 		},
 	})
 }
@@ -449,19 +462,20 @@ func sarvamSTTConfidence(probability float64) float64 {
 	return probability
 }
 
-type sarvamSTTStream struct {
+type sarvamSTTRecognizeStream struct {
 	conn       *websocket.Conn
 	ctx        context.Context
 	cancel     context.CancelFunc
-	sampleRate int
+	language   string
 	encoding   string
+	sampleRate int
 	events     chan *stt.SpeechEvent
 	errCh      chan error
 	mu         sync.Mutex
 	closed     bool
 }
 
-func (s *sarvamSTTStream) PushFrame(frame *model.AudioFrame) error {
+func (s *sarvamSTTRecognizeStream) PushFrame(frame *model.AudioFrame) error {
 	if frame == nil || len(frame.Data) == 0 {
 		return nil
 	}
@@ -469,14 +483,28 @@ func (s *sarvamSTTStream) PushFrame(frame *model.AudioFrame) error {
 	if frame.SampleRate > 0 {
 		sampleRate = int(frame.SampleRate)
 	}
-	message, err := buildSarvamSTTAudioMessage(frame.Data, s.encoding, sampleRate)
-	if err != nil {
-		return err
+	chunkBytes := sarvamSTTChunkBytes(sampleRate)
+	for start := 0; start < len(frame.Data); start += chunkBytes {
+		end := start + chunkBytes
+		if end > len(frame.Data) {
+			end = len(frame.Data)
+		}
+		chunk := *frame
+		chunk.Data = frame.Data[start:end]
+		chunk.SampleRate = uint32(sampleRate)
+		chunk.SamplesPerChannel = uint32(len(chunk.Data) / 2)
+		message, err := buildSarvamSTTAudioMessage(&chunk, s.encoding)
+		if err != nil {
+			return err
+		}
+		if err := s.conn.WriteMessage(websocket.TextMessage, message); err != nil {
+			return err
+		}
 	}
-	return s.conn.WriteMessage(websocket.TextMessage, message)
+	return nil
 }
 
-func (s *sarvamSTTStream) Flush() error {
+func (s *sarvamSTTRecognizeStream) Flush() error {
 	message, err := buildSarvamSTTEndOfStreamMessage(s.encoding, s.sampleRate)
 	if err != nil {
 		return err
@@ -484,7 +512,7 @@ func (s *sarvamSTTStream) Flush() error {
 	return s.conn.WriteMessage(websocket.TextMessage, message)
 }
 
-func (s *sarvamSTTStream) Close() error {
+func (s *sarvamSTTRecognizeStream) Close() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.closed {
@@ -496,7 +524,7 @@ func (s *sarvamSTTStream) Close() error {
 	return s.conn.Close()
 }
 
-func (s *sarvamSTTStream) Next() (*stt.SpeechEvent, error) {
+func (s *sarvamSTTRecognizeStream) Next() (*stt.SpeechEvent, error) {
 	select {
 	case event, ok := <-s.events:
 		if !ok {
@@ -515,7 +543,7 @@ func (s *sarvamSTTStream) Next() (*stt.SpeechEvent, error) {
 	}
 }
 
-func (s *sarvamSTTStream) readLoop() {
+func (s *sarvamSTTRecognizeStream) readLoop() {
 	defer close(s.events)
 	for {
 		msgType, payload, err := s.conn.ReadMessage()
@@ -528,7 +556,7 @@ func (s *sarvamSTTStream) readLoop() {
 		if msgType != websocket.TextMessage {
 			continue
 		}
-		events, err := sarvamSTTEventsFromStreamMessage(payload)
+		events, err := sarvamSTTEventsFromStreamMessage(payload, s.language)
 		if err != nil {
 			s.errCh <- err
 			return
@@ -542,7 +570,18 @@ func (s *sarvamSTTStream) readLoop() {
 	}
 }
 
-func sarvamSTTEventsFromStreamMessage(payload []byte) ([]*stt.SpeechEvent, error) {
+func sarvamSTTChunkBytes(sampleRate int) int {
+	if sampleRate <= 0 {
+		sampleRate = defaultSarvamSTTSampleRate
+	}
+	samplesPerChunk := sampleRate * 50 / 1000
+	if samplesPerChunk < 1 {
+		samplesPerChunk = 1
+	}
+	return samplesPerChunk * 2
+}
+
+func sarvamSTTEventsFromStreamMessage(payload []byte, defaultLanguage string) ([]*stt.SpeechEvent, error) {
 	var message map[string]any
 	if err := json.Unmarshal(payload, &message); err != nil {
 		return nil, err
@@ -571,7 +610,7 @@ func sarvamSTTEventsFromStreamMessage(payload []byte) ([]*stt.SpeechEvent, error
 			RequestID: requestID,
 			Alternatives: []stt.SpeechData{{
 				Text:       transcript,
-				Language:   sarvamString(data["language_code"]),
+				Language:   sarvamSTTStreamLanguage(data, defaultLanguage),
 				StartTime:  sarvamFloat64(data["speech_start"]),
 				EndTime:    sarvamFloat64(data["speech_end"]),
 				Confidence: sarvamSTTConfidence(sarvamFloat64(data["language_probability"])),
@@ -636,6 +675,13 @@ func sarvamString(value any) string {
 		return text
 	}
 	return ""
+}
+
+func sarvamSTTStreamLanguage(data map[string]any, defaultLanguage string) string {
+	if language := sarvamString(data["language_code"]); language != "" {
+		return language
+	}
+	return defaultLanguage
 }
 
 func sarvamFloat64(value any) float64 {
