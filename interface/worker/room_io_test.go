@@ -138,6 +138,42 @@ func TestRoomIODefaultTextInputInterruptsBeforeGenerateReply(t *testing.T) {
 	}
 }
 
+func TestRoomIOHandleAgentStateChangedPublishesReferenceAttribute(t *testing.T) {
+	var got map[string]string
+	rio := &RoomIO{
+		agentStatePublisher: func(attrs map[string]string) {
+			got = attrs
+		},
+		agentStatePublishEnabled: func() bool {
+			return true
+		},
+	}
+
+	rio.handleAgentStateChanged(agent.AgentStateChangedEvent{NewState: agent.AgentStateThinking})
+
+	if got[RoomIOAgentStateAttribute] != string(agent.AgentStateThinking) {
+		t.Fatalf("published agent state attributes = %#v, want %s=%s", got, RoomIOAgentStateAttribute, agent.AgentStateThinking)
+	}
+}
+
+func TestRoomIOHandleAgentStateChangedSkipsWhenRoomDisconnected(t *testing.T) {
+	called := false
+	rio := &RoomIO{
+		agentStatePublisher: func(map[string]string) {
+			called = true
+		},
+		agentStatePublishEnabled: func() bool {
+			return false
+		},
+	}
+
+	rio.handleAgentStateChanged(agent.AgentStateChangedEvent{NewState: agent.AgentStateSpeaking})
+
+	if called {
+		t.Fatal("agent state publisher was called while room was disconnected")
+	}
+}
+
 func TestRoomIOHandleChatTextInputDispatchesConfiguredCallback(t *testing.T) {
 	session := &agent.AgentSession{}
 	var gotSession *agent.AgentSession

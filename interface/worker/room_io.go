@@ -115,6 +115,7 @@ type RoomOptions struct {
 
 const RoomIOChatTopic = "lk.chat"
 const RoomIOPublishOnBehalfAttribute = "lk.publish_on_behalf"
+const RoomIOAgentStateAttribute = "lk.agent.state"
 
 type TextInputEvent struct {
 	Text                string
@@ -146,6 +147,10 @@ type RoomIO struct {
 	textInput       TextInputCallback
 
 	participantAvailable bool
+
+	agentStateCancel         context.CancelFunc
+	agentStatePublisher      func(map[string]string)
+	agentStatePublishEnabled func() bool
 }
 
 func NewRoomIO(room *lksdk.Room, session *agent.AgentSession, opts RoomOptions) *RoomIO {
@@ -168,6 +173,9 @@ func NewRoomIO(room *lksdk.Room, session *agent.AgentSession, opts RoomOptions) 
 		preConnectAudio: preConnectAudio,
 		textInput:       roomIOTextInputCallback(opts),
 	}
+	rio.agentStatePublisher = rio.publishLocalParticipantAttributes
+	rio.agentStatePublishEnabled = rio.roomConnected
+	rio.startAgentStateListener()
 
 	if !opts.DisableTextInput {
 		rio.registerTextInput()
@@ -179,6 +187,24 @@ func NewRoomIO(room *lksdk.Room, session *agent.AgentSession, opts RoomOptions) 
 	session.Assistant.PublishAudio = rio.PublishAudio
 
 	return rio
+}
+
+func (rio *RoomIO) startAgentStateListener() {
+	if rio == nil || rio.AgentSession == nil || rio.AgentSession.AgentStateChangedCh == nil {
+		return
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	rio.agentStateCancel = cancel
+	go func() {
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case ev := <-rio.AgentSession.AgentStateChangedCh:
+				rio.handleAgentStateChanged(ev)
+			}
+		}
+	}()
 }
 
 func roomIOPreConnectAudioTimeout(opts RoomOptions) time.Duration {
@@ -203,6 +229,29 @@ func roomIODefaultTextInput(ctx context.Context, responder roomIOTextResponder, 
 	}
 	_, err := responder.GenerateReply(ctx, text)
 	return err
+}
+
+func (rio *RoomIO) handleAgentStateChanged(ev agent.AgentStateChangedEvent) {
+	if rio == nil || rio.agentStatePublisher == nil {
+		return
+	}
+	if rio.agentStatePublishEnabled != nil && !rio.agentStatePublishEnabled() {
+		return
+	}
+	rio.agentStatePublisher(map[string]string{
+		RoomIOAgentStateAttribute: string(ev.NewState),
+	})
+}
+
+func (rio *RoomIO) roomConnected() bool {
+	return rio != nil && rio.Room != nil && rio.Room.ConnectionState() == lksdk.ConnectionStateConnected
+}
+
+func (rio *RoomIO) publishLocalParticipantAttributes(attrs map[string]string) {
+	if rio == nil || rio.Room == nil || rio.Room.LocalParticipant == nil {
+		return
+	}
+	rio.Room.LocalParticipant.SetAttributes(attrs)
 }
 
 func (rio *RoomIO) SetParticipant(participantIdentity string) {
@@ -537,6 +586,9 @@ func (rio *RoomIO) Close() error {
 	rio.mu.Lock()
 	defer rio.mu.Unlock()
 	rio.closed = true
+	if rio.agentStateCancel != nil {
+		rio.agentStateCancel()
+	}
 	if rio.decoder != nil {
 		rio.decoder.Close()
 	}
