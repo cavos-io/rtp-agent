@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -10,10 +11,18 @@ import (
 	"github.com/cavos-io/conversation-worker/core/llm"
 )
 
+var (
+	ErrRunResultNotDone       = errors.New("run result is not done")
+	ErrRunResultNoFinalOutput = errors.New("run result has no final output")
+)
+
 type RunResult struct {
-	ChatCtx *llm.ChatContext
-	Expect  *RunAssert
-	events  []RunEvent
+	ChatCtx        *llm.ChatContext
+	Expect         *RunAssert
+	events         []RunEvent
+	done           bool
+	finalOutput    any
+	finalOutputSet bool
 }
 
 func NewRunResult(chatCtx *llm.ChatContext) *RunResult {
@@ -22,6 +31,29 @@ func NewRunResult(chatCtx *llm.ChatContext) *RunResult {
 		Expect:  &RunAssert{ChatCtx: chatCtx},
 		events:  make([]RunEvent, 0),
 	}
+}
+
+func (r *RunResult) Done() bool {
+	return r.done
+}
+
+func (r *RunResult) MarkDone() {
+	r.done = true
+}
+
+func (r *RunResult) SetFinalOutput(output any) {
+	r.finalOutput = output
+	r.finalOutputSet = true
+}
+
+func (r *RunResult) FinalOutput() (any, error) {
+	if !r.done {
+		return nil, ErrRunResultNotDone
+	}
+	if !r.finalOutputSet {
+		return nil, ErrRunResultNoFinalOutput
+	}
+	return r.finalOutput, nil
 }
 
 type RunEvent interface {

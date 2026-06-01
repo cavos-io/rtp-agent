@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"errors"
 	"testing"
 	"time"
 
@@ -75,5 +76,44 @@ func TestRunResultEventsReturnsCopy(t *testing.T) {
 
 	if result.Events()[0] == nil {
 		t.Fatal("Events returned mutable backing storage")
+	}
+}
+
+func TestRunResultFinalOutputRequiresDone(t *testing.T) {
+	result := NewRunResult(llm.NewChatContext())
+
+	_, err := result.FinalOutput()
+
+	if !errors.Is(err, ErrRunResultNotDone) {
+		t.Fatalf("FinalOutput error = %v, want ErrRunResultNotDone", err)
+	}
+}
+
+func TestRunResultFinalOutputRequiresOutput(t *testing.T) {
+	result := NewRunResult(llm.NewChatContext())
+	result.MarkDone()
+
+	_, err := result.FinalOutput()
+
+	if !errors.Is(err, ErrRunResultNoFinalOutput) {
+		t.Fatalf("FinalOutput error = %v, want ErrRunResultNoFinalOutput", err)
+	}
+}
+
+func TestRunResultFinalOutputReturnsValueAfterDone(t *testing.T) {
+	result := NewRunResult(llm.NewChatContext())
+	result.SetFinalOutput("done")
+	result.MarkDone()
+
+	output, err := result.FinalOutput()
+
+	if err != nil {
+		t.Fatalf("FinalOutput error = %v, want nil", err)
+	}
+	if output != "done" {
+		t.Fatalf("FinalOutput = %#v, want done", output)
+	}
+	if !result.Done() {
+		t.Fatal("Done() = false, want true after MarkDone")
 	}
 }
