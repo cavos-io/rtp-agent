@@ -51,6 +51,7 @@ type streamAdapterWrapper struct {
 	errCh     chan error
 	inputCh   chan streamAdapterInput
 	mu        sync.Mutex
+	active    ChunkedStream
 	closed    bool
 }
 
@@ -123,7 +124,11 @@ func (w *streamAdapterWrapper) synthesize(text string, segmentID string) error {
 	if err != nil {
 		return err
 	}
-	defer stream.Close()
+	w.setActiveStream(stream)
+	defer func() {
+		w.clearActiveStream(stream)
+		stream.Close()
+	}()
 
 	var pending *SynthesizedAudio
 	for {
@@ -160,6 +165,20 @@ func (w *streamAdapterWrapper) sendErr(err error) {
 	}
 }
 
+func (w *streamAdapterWrapper) setActiveStream(stream ChunkedStream) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.active = stream
+}
+
+func (w *streamAdapterWrapper) clearActiveStream(stream ChunkedStream) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.active == stream {
+		w.active = nil
+	}
+}
+
 func (w *streamAdapterWrapper) PushText(text string) error {
 	w.mu.Lock()
 	defer w.mu.Unlock()
@@ -182,13 +201,18 @@ func (w *streamAdapterWrapper) Flush() error {
 
 func (w *streamAdapterWrapper) Close() error {
 	w.mu.Lock()
-	defer w.mu.Unlock()
 	if w.closed {
+		w.mu.Unlock()
 		return nil
 	}
 	w.closed = true
+	active := w.active
 	w.cancel()
 	close(w.inputCh)
+	w.mu.Unlock()
+	if active != nil {
+		return active.Close()
+	}
 	return nil
 }
 

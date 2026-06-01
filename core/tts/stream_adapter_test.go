@@ -276,6 +276,33 @@ func TestStreamAdapterCloseIsIdempotent(t *testing.T) {
 	}
 }
 
+func TestStreamAdapterCloseClosesActiveChunkedStream(t *testing.T) {
+	chunked := newBlockingStreamAdapterChunkedStream()
+	stream, err := NewStreamAdapter(&fakeStreamAdapterTTS{
+		chunked: chunked,
+	}).Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+
+	if err := stream.PushText("blocked synthesis"); err != nil {
+		t.Fatalf("PushText returned error: %v", err)
+	}
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush returned error: %v", err)
+	}
+	if !chunked.waitForNext(t) {
+		t.Fatal("chunked stream Next was not entered")
+	}
+
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close returned error: %v", err)
+	}
+	if !chunked.waitForClose(t) {
+		t.Fatal("chunked stream Close was not called")
+	}
+}
+
 func TestStreamAdapterRejectsInputAfterClose(t *testing.T) {
 	stream, err := NewStreamAdapter(&fakeStreamAdapterTTS{}).Stream(context.Background())
 	if err != nil {
@@ -352,6 +379,7 @@ type fakeStreamAdapterTTS struct {
 	synthesizeErr error
 	streamErr     error
 	events        []*SynthesizedAudio
+	chunked       ChunkedStream
 	empty         bool
 }
 
@@ -375,6 +403,9 @@ func (f *fakeStreamAdapterTTS) Synthesize(_ context.Context, text string) (Chunk
 	f.texts = append(f.texts, text)
 	if f.synthesizeErr != nil {
 		return nil, f.synthesizeErr
+	}
+	if f.chunked != nil {
+		return f.chunked, nil
 	}
 	events := f.events
 	if len(events) == 0 && !f.empty {
@@ -412,4 +443,55 @@ func (f *fakeStreamAdapterChunkedStream) Next() (*SynthesizedAudio, error) {
 
 func (f *fakeStreamAdapterChunkedStream) Close() error {
 	return nil
+}
+
+type blockingStreamAdapterChunkedStream struct {
+	nextCh  chan struct{}
+	closeCh chan struct{}
+}
+
+func newBlockingStreamAdapterChunkedStream() *blockingStreamAdapterChunkedStream {
+	return &blockingStreamAdapterChunkedStream{
+		nextCh:  make(chan struct{}),
+		closeCh: make(chan struct{}),
+	}
+}
+
+func (b *blockingStreamAdapterChunkedStream) Next() (*SynthesizedAudio, error) {
+	select {
+	case <-b.nextCh:
+	default:
+		close(b.nextCh)
+	}
+	<-b.closeCh
+	return nil, io.EOF
+}
+
+func (b *blockingStreamAdapterChunkedStream) Close() error {
+	select {
+	case <-b.closeCh:
+	default:
+		close(b.closeCh)
+	}
+	return nil
+}
+
+func (b *blockingStreamAdapterChunkedStream) waitForNext(t *testing.T) bool {
+	t.Helper()
+	select {
+	case <-b.nextCh:
+		return true
+	case <-time.After(100 * time.Millisecond):
+		return false
+	}
+}
+
+func (b *blockingStreamAdapterChunkedStream) waitForClose(t *testing.T) bool {
+	t.Helper()
+	select {
+	case <-b.closeCh:
+		return true
+	case <-time.After(100 * time.Millisecond):
+		return false
+	}
 }
