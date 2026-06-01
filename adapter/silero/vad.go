@@ -2,6 +2,7 @@ package silero
 
 import (
 	"context"
+	"fmt"
 	"sync"
 
 	"github.com/cavos-io/conversation-worker/core/vad"
@@ -151,6 +152,12 @@ func (v *SileroVAD) UpdateOptions(options VADOptions) {
 }
 
 func (v *SileroVAD) Stream(ctx context.Context) (vad.VADStream, error) {
+	v.mu.RLock()
+	options := v.options
+	v.mu.RUnlock()
+	if err := validateVADOptions(options); err != nil {
+		return nil, err
+	}
 	return v.inner.Stream(ctx)
 }
 
@@ -193,6 +200,16 @@ func mergeVADOptions(current, updates VADOptions) VADOptions {
 		current.SampleRate = updates.SampleRate
 	}
 	return current
+}
+
+func validateVADOptions(options VADOptions) error {
+	if options.SampleRate != 8000 && options.SampleRate != 16000 {
+		return fmt.Errorf("silero VAD only supports 8KHz and 16KHz sample rates")
+	}
+	if options.DeactivationThreshold <= 0 {
+		return fmt.Errorf("deactivation_threshold must be greater than 0")
+	}
+	return nil
 }
 
 func (v *SileroVAD) emitMetrics(metrics *telemetry.VADMetrics) {

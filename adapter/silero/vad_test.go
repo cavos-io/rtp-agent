@@ -3,6 +3,7 @@ package silero
 import (
 	"bytes"
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -105,6 +106,26 @@ func TestSileroVADDerivesInitialDeactivationThreshold(t *testing.T) {
 	).options
 	if options.DeactivationThreshold != 0.2 {
 		t.Fatalf("DeactivationThreshold with explicit option = %v, want 0.2", options.DeactivationThreshold)
+	}
+}
+
+func TestSileroVADStreamRejectsUnsupportedSampleRate(t *testing.T) {
+	detector := NewSileroVAD(WithSampleRate(44100))
+
+	if _, err := detector.Stream(context.Background()); err == nil {
+		t.Fatal("Stream() error = nil, want unsupported sample rate error")
+	} else if !strings.Contains(err.Error(), "8KHz and 16KHz") {
+		t.Fatalf("Stream() error = %q, want supported sample rate message", err.Error())
+	}
+}
+
+func TestSileroVADStreamRejectsInvalidDeactivationThreshold(t *testing.T) {
+	detector := NewSileroVAD(WithDeactivationThreshold(-0.1))
+
+	if _, err := detector.Stream(context.Background()); err == nil {
+		t.Fatal("Stream() error = nil, want invalid deactivation threshold error")
+	} else if !strings.Contains(err.Error(), "deactivation_threshold must be greater than 0") {
+		t.Fatalf("Stream() error = %q, want deactivation threshold message", err.Error())
 	}
 }
 
