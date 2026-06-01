@@ -61,6 +61,10 @@ type ChatContextCopyOptions struct {
 	Tools               []interface{}
 }
 
+type ChatContextUpsertOptions struct {
+	AllowTypeMismatch bool
+}
+
 func (c *ChatContext) Copy(options ...ChatContextCopyOptions) *ChatContext {
 	var opts ChatContextCopyOptions
 	if len(options) > 0 {
@@ -144,6 +148,24 @@ func (c *ChatContext) IndexByID(itemID string) *int {
 			return &i
 		}
 	}
+	return nil
+}
+
+func (c *ChatContext) UpsertItem(item ChatItem, options ...ChatContextUpsertOptions) error {
+	var opts ChatContextUpsertOptions
+	if len(options) > 0 {
+		opts = options[0]
+	}
+
+	idx := c.IndexByID(item.GetID())
+	if idx == nil {
+		c.Items = append(c.Items, item)
+		return nil
+	}
+	if !opts.AllowTypeMismatch && item.GetType() != c.Items[*idx].GetType() {
+		return fmt.Errorf("item type mismatch: %s != %s", item.GetType(), c.Items[*idx].GetType())
+	}
+	c.Items[*idx] = item
 	return nil
 }
 

@@ -393,6 +393,83 @@ func TestChatContextInsertOrdersItemsByCreatedAt(t *testing.T) {
 	}
 }
 
+func TestChatContextUpsertItemReplacesExistingItemByID(t *testing.T) {
+	ctx := NewChatContext()
+	ctx.Items = []ChatItem{
+		&ChatMessage{ID: "first", Role: ChatRoleUser, Content: []ChatContent{{Text: "old"}}},
+		&ChatMessage{ID: "second", Role: ChatRoleAssistant, Content: []ChatContent{{Text: "kept"}}},
+	}
+	updated := &ChatMessage{ID: "first", Role: ChatRoleUser, Content: []ChatContent{{Text: "new"}}}
+
+	if err := ctx.UpsertItem(updated); err != nil {
+		t.Fatalf("UpsertItem() error = %v", err)
+	}
+
+	if len(ctx.Items) != 2 {
+		t.Fatalf("len(items) = %d, want 2", len(ctx.Items))
+	}
+	if ctx.Items[0] != updated {
+		t.Fatalf("items[0] = %#v, want updated item", ctx.Items[0])
+	}
+	if got, want := itemIDs(ctx.Items), "first,second"; got != want {
+		t.Fatalf("items = %q, want %q", got, want)
+	}
+}
+
+func TestChatContextUpsertItemAppendsMissingItem(t *testing.T) {
+	ctx := NewChatContext()
+	ctx.Items = []ChatItem{
+		&ChatMessage{ID: "first", Role: ChatRoleUser, Content: []ChatContent{{Text: "old"}}},
+	}
+	inserted := &FunctionCall{ID: "call", CallID: "call_lookup", Name: "lookup", Arguments: "{}"}
+
+	if err := ctx.UpsertItem(inserted); err != nil {
+		t.Fatalf("UpsertItem() error = %v", err)
+	}
+
+	if got, want := itemIDs(ctx.Items), "first,call"; got != want {
+		t.Fatalf("items = %q, want %q", got, want)
+	}
+	if ctx.Items[1] != inserted {
+		t.Fatalf("items[1] = %#v, want inserted item", ctx.Items[1])
+	}
+}
+
+func TestChatContextUpsertItemRejectsTypeMismatchByDefault(t *testing.T) {
+	ctx := NewChatContext()
+	ctx.Items = []ChatItem{
+		&ChatMessage{ID: "item", Role: ChatRoleUser, Content: []ChatContent{{Text: "old"}}},
+	}
+
+	err := ctx.UpsertItem(&FunctionCall{ID: "item", CallID: "call_lookup", Name: "lookup"})
+
+	if err == nil {
+		t.Fatal("UpsertItem() error = nil, want type mismatch error")
+	}
+	if got, want := itemIDs(ctx.Items), "item"; got != want {
+		t.Fatalf("items = %q, want %q", got, want)
+	}
+	if _, ok := ctx.Items[0].(*ChatMessage); !ok {
+		t.Fatalf("items[0] = %T, want original *ChatMessage", ctx.Items[0])
+	}
+}
+
+func TestChatContextUpsertItemCanAllowTypeMismatch(t *testing.T) {
+	ctx := NewChatContext()
+	ctx.Items = []ChatItem{
+		&ChatMessage{ID: "item", Role: ChatRoleUser, Content: []ChatContent{{Text: "old"}}},
+	}
+	replacement := &FunctionCall{ID: "item", CallID: "call_lookup", Name: "lookup"}
+
+	if err := ctx.UpsertItem(replacement, ChatContextUpsertOptions{AllowTypeMismatch: true}); err != nil {
+		t.Fatalf("UpsertItem() error = %v", err)
+	}
+
+	if ctx.Items[0] != replacement {
+		t.Fatalf("items[0] = %#v, want replacement function call", ctx.Items[0])
+	}
+}
+
 func TestChatContextLookupByID(t *testing.T) {
 	ctx := NewChatContext()
 	ctx.Items = []ChatItem{
