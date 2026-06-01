@@ -105,15 +105,41 @@ func (s *awsSTTStream) readLoop() {
 				s.events <- &stt.SpeechEvent{
 					Type: eventType,
 					Alternatives: []stt.SpeechData{
-						{
-							Text:       aws.ToString(alt.Transcript),
-							Confidence: 1.0, // Confidence not uniformly provided at top level
-						},
+						awsSpeechDataFromAlternative(alt),
 					},
 				}
 			}
 		}
 	}
+}
+
+func awsSpeechDataFromAlternative(alt types.Alternative) stt.SpeechData {
+	return stt.SpeechData{
+		Text:       aws.ToString(alt.Transcript),
+		Confidence: 1.0, // Confidence is not uniformly provided at the top level.
+		Words:      awsTimedStrings(alt.Items),
+	}
+}
+
+func awsTimedStrings(items []types.Item) []stt.TimedString {
+	if len(items) == 0 {
+		return nil
+	}
+
+	words := make([]stt.TimedString, 0, len(items))
+	for _, item := range items {
+		if item.Type != types.ItemTypePronunciation {
+			continue
+		}
+		words = append(words, stt.TimedString{
+			Text:       aws.ToString(item.Content),
+			StartTime:  item.StartTime,
+			EndTime:    item.EndTime,
+			Confidence: aws.ToFloat64(item.Confidence),
+			SpeakerID:  aws.ToString(item.Speaker),
+		})
+	}
+	return words
 }
 
 func (s *awsSTTStream) PushFrame(frame *model.AudioFrame) error {

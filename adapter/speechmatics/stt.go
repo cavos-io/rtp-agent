@@ -35,7 +35,7 @@ func (s *SpeechmaticsSTT) Stream(ctx context.Context, language string) (stt.Reco
 	if language == "" {
 		language = "en"
 	}
-	
+
 	// Speechmatics API websocket URL
 	u := url.URL{Scheme: "wss", Host: "en.rt.speechmatics.com", Path: "/v2"}
 
@@ -57,12 +57,12 @@ func (s *SpeechmaticsSTT) Stream(ctx context.Context, language string) (stt.Reco
 	initMsg := map[string]interface{}{
 		"message": "StartRecognition",
 		"audio_format": map[string]interface{}{
-			"type": "raw",
-			"encoding": "pcm_s16le",
+			"type":        "raw",
+			"encoding":    "pcm_s16le",
 			"sample_rate": 16000,
 		},
 		"transcription_config": map[string]interface{}{
-			"language": language,
+			"language":        language,
 			"enable_partials": true,
 		},
 	}
@@ -89,7 +89,7 @@ func (s *SpeechmaticsSTT) Recognize(ctx context.Context, frames []*model.AudioFr
 	writer := multipart.NewWriter(body)
 	part, _ := writer.CreateFormFile("data_file", "audio.wav")
 	part.Write(buf.Bytes())
-	
+
 	config := map[string]interface{}{
 		"type": "transcription",
 		"transcription_config": map[string]interface{}{
@@ -135,7 +135,7 @@ type speechmaticsSTTStream struct {
 }
 
 type smResponse struct {
-	Message string `json:"message"`
+	Message  string `json:"message"`
 	Metadata struct {
 		Transcript string  `json:"transcript"`
 		StartTime  float64 `json:"start_time"`
@@ -143,7 +143,7 @@ type smResponse struct {
 	} `json:"metadata"`
 	Results []struct {
 		Alternatives []struct {
-			Content string `json:"content"`
+			Content    string  `json:"content"`
 			Confidence float64 `json:"confidence"`
 		} `json:"alternatives"`
 		Type      string  `json:"type"`
@@ -169,60 +169,8 @@ func (s *speechmaticsSTTStream) readLoop() {
 		}
 
 		if resp.Message == "AddPartialTranscript" || resp.Message == "AddTranscript" {
-			eventType := stt.SpeechEventInterimTranscript
-			if resp.Message == "AddTranscript" {
-				eventType = stt.SpeechEventFinalTranscript
-			}
-
-			// Concatenate all word alternatives
-			transcript := ""
-			var totalConfidence float64
-			var minStart, maxEnd float64
-			hasWords := false
-
-			for _, result := range resp.Results {
-				if len(result.Alternatives) > 0 {
-					alt := result.Alternatives[0]
-					if result.Type == "word" {
-						transcript += alt.Content + " "
-					} else if result.Type == "punctuation" {
-						transcript = transcript[:len(transcript)-1] + alt.Content + " "
-					}
-					
-					totalConfidence += alt.Confidence
-					
-					if !hasWords {
-						minStart = result.StartTime
-						hasWords = true
-					}
-					maxEnd = result.EndTime
-				}
-			}
-
-			if hasWords {
-				s.events <- &stt.SpeechEvent{
-					Type: eventType,
-					Alternatives: []stt.SpeechData{
-						{
-							Text:       transcript[:len(transcript)-1], // trim trailing space
-							Confidence: totalConfidence / float64(len(resp.Results)),
-							StartTime:  minStart,
-							EndTime:    maxEnd,
-						},
-					},
-				}
-			} else if resp.Metadata.Transcript != "" {
-				s.events <- &stt.SpeechEvent{
-					Type: eventType,
-					Alternatives: []stt.SpeechData{
-						{
-							Text:       resp.Metadata.Transcript,
-							Confidence: 1.0,
-							StartTime:  resp.Metadata.StartTime,
-							EndTime:    resp.Metadata.EndTime,
-						},
-					},
-				}
+			if event := speechmaticsTranscriptEvent(resp); event != nil {
+				s.events <- event
 			}
 		} else if resp.Message == "EndOfTranscript" {
 			return
@@ -230,6 +178,82 @@ func (s *speechmaticsSTTStream) readLoop() {
 			s.errCh <- fmt.Errorf("speechmatics error: %s", string(message))
 			return
 		}
+	}
+}
+
+func speechmaticsTranscriptEvent(resp smResponse) *stt.SpeechEvent {
+	eventType := stt.SpeechEventInterimTranscript
+	if resp.Message == "AddTranscript" {
+		eventType = stt.SpeechEventFinalTranscript
+	}
+
+	transcript := ""
+	var totalConfidence float64
+	var minStart, maxEnd float64
+	hasTiming := false
+	var words []stt.TimedString
+
+	for _, result := range resp.Results {
+		if len(result.Alternatives) == 0 {
+			continue
+		}
+		alt := result.Alternatives[0]
+		switch result.Type {
+		case "word":
+			transcript += alt.Content + " "
+			words = append(words, stt.TimedString{
+				Text:       alt.Content,
+				StartTime:  result.StartTime,
+				EndTime:    result.EndTime,
+				Confidence: alt.Confidence,
+			})
+		case "punctuation":
+			if transcript != "" {
+				transcript = transcript[:len(transcript)-1] + alt.Content + " "
+			} else {
+				transcript = alt.Content + " "
+			}
+		}
+
+		totalConfidence += alt.Confidence
+		if !hasTiming {
+			minStart = result.StartTime
+			hasTiming = true
+		}
+		maxEnd = result.EndTime
+	}
+
+	if hasTiming {
+		if transcript != "" {
+			transcript = transcript[:len(transcript)-1]
+		}
+		return &stt.SpeechEvent{
+			Type: eventType,
+			Alternatives: []stt.SpeechData{
+				{
+					Text:       transcript,
+					Confidence: totalConfidence / float64(len(resp.Results)),
+					StartTime:  minStart,
+					EndTime:    maxEnd,
+					Words:      words,
+				},
+			},
+		}
+	}
+
+	if resp.Metadata.Transcript == "" {
+		return nil
+	}
+	return &stt.SpeechEvent{
+		Type: eventType,
+		Alternatives: []stt.SpeechData{
+			{
+				Text:       resp.Metadata.Transcript,
+				Confidence: 1.0,
+				StartTime:  resp.Metadata.StartTime,
+				EndTime:    resp.Metadata.EndTime,
+			},
+		},
 	}
 }
 

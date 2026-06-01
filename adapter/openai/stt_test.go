@@ -1,0 +1,63 @@
+package openai
+
+import (
+	"encoding/json"
+	"math"
+	"strings"
+	"testing"
+
+	"github.com/cavos-io/conversation-worker/core/stt"
+	goopenai "github.com/sashabaranov/go-openai"
+)
+
+func TestOpenAIAudioRequestAsksForWordTimestamps(t *testing.T) {
+	req := openAIAudioRequest("whisper-1", strings.NewReader("audio"), "en")
+
+	if req.Model != "whisper-1" {
+		t.Fatalf("model = %q, want whisper-1", req.Model)
+	}
+	if req.Language != "en" {
+		t.Fatalf("language = %q, want en", req.Language)
+	}
+	if req.Format != goopenai.AudioResponseFormatVerboseJSON {
+		t.Fatalf("format = %q, want verbose_json", req.Format)
+	}
+	if len(req.TimestampGranularities) != 1 || req.TimestampGranularities[0] != goopenai.TranscriptionTimestampGranularityWord {
+		t.Fatalf("timestamp granularities = %#v, want word", req.TimestampGranularities)
+	}
+}
+
+func TestOpenAISpeechEventPreservesWordTimestamps(t *testing.T) {
+	var resp goopenai.AudioResponse
+	if err := json.Unmarshal([]byte(`{
+		"text": "hello world",
+		"words": [
+			{"word": "hello", "start": 0.1, "end": 0.3},
+			{"word": "world", "start": 0.4, "end": 0.8}
+		]
+	}`), &resp); err != nil {
+		t.Fatal(err)
+	}
+
+	event := openAISpeechEvent(resp)
+	if event.Type != stt.SpeechEventFinalTranscript {
+		t.Fatalf("event type = %v, want %v", event.Type, stt.SpeechEventFinalTranscript)
+	}
+	if len(event.Alternatives) != 1 {
+		t.Fatalf("alternatives = %d, want 1", len(event.Alternatives))
+	}
+
+	alt := event.Alternatives[0]
+	if alt.Text != "hello world" {
+		t.Fatalf("text = %q, want hello world", alt.Text)
+	}
+	if len(alt.Words) != 2 {
+		t.Fatalf("words = %d, want 2", len(alt.Words))
+	}
+	if got := alt.Words[0]; got.Text != "hello" || math.Abs(got.StartTime-0.1) > 0.000001 || math.Abs(got.EndTime-0.3) > 0.000001 {
+		t.Fatalf("first word = %+v, want hello timing", got)
+	}
+	if got := alt.Words[1]; got.Text != "world" || math.Abs(got.StartTime-0.4) > 0.000001 || math.Abs(got.EndTime-0.8) > 0.000001 {
+		t.Fatalf("second word = %+v, want world timing", got)
+	}
+}

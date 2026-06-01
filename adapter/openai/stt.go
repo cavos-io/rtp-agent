@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"io"
 
 	"github.com/cavos-io/conversation-worker/core/stt"
 	"github.com/cavos-io/conversation-worker/model"
@@ -43,24 +44,57 @@ func (s *OpenAISTT) Recognize(ctx context.Context, frames []*model.AudioFrame, l
 		buf.Write(f.Data)
 	}
 
-	req := openai.AudioRequest{
-		Model:    s.model,
-		FilePath: "audio.wav", // Static filename required by API
-		Reader:   bytes.NewReader(buf.Bytes()),
-		Language: language,
-	}
+	req := openAIAudioRequest(s.model, bytes.NewReader(buf.Bytes()), language)
 
 	resp, err := s.client.CreateTranscription(ctx, req)
 	if err != nil {
 		return nil, err
 	}
 
+	return openAISpeechEvent(resp), nil
+}
+
+func openAIAudioRequest(model string, reader io.Reader, language string) openai.AudioRequest {
+	return openai.AudioRequest{
+		Model:    model,
+		FilePath: "audio.wav", // Static filename required by API when Reader is used.
+		Reader:   reader,
+		Language: language,
+		Format:   openai.AudioResponseFormatVerboseJSON,
+		TimestampGranularities: []openai.TranscriptionTimestampGranularity{
+			openai.TranscriptionTimestampGranularityWord,
+		},
+	}
+}
+
+func openAISpeechEvent(resp openai.AudioResponse) *stt.SpeechEvent {
 	return &stt.SpeechEvent{
 		Type: stt.SpeechEventFinalTranscript,
 		Alternatives: []stt.SpeechData{
 			{
-				Text: resp.Text,
+				Text:  resp.Text,
+				Words: openAITimedStrings(resp.Words),
 			},
 		},
-	}, nil
+	}
+}
+
+func openAITimedStrings(words []struct {
+	Word  string  `json:"word"`
+	Start float64 `json:"start"`
+	End   float64 `json:"end"`
+}) []stt.TimedString {
+	if len(words) == 0 {
+		return nil
+	}
+
+	timed := make([]stt.TimedString, 0, len(words))
+	for _, word := range words {
+		timed = append(timed, stt.TimedString{
+			Text:      word.Word,
+			StartTime: word.Start,
+			EndTime:   word.End,
+		})
+	}
+	return timed
 }
