@@ -158,8 +158,58 @@ func repairFunctionArguments(value string) string {
 	}
 	out = singleQuotedStringPattern.ReplaceAllString(out, `"$1"`)
 	out = unquotedObjectKeyPattern.ReplaceAllString(out, `${1}"${2}"${3}`)
+	out = closeUnbalancedJSONContainers(out)
 	out = trailingCommaPattern.ReplaceAllString(out, "$1")
 	return strings.TrimSpace(out)
+}
+
+func closeUnbalancedJSONContainers(value string) string {
+	stack := make([]byte, 0)
+	inString := false
+	escaped := false
+
+	for i := 0; i < len(value); i++ {
+		ch := value[i]
+		if inString {
+			if escaped {
+				escaped = false
+				continue
+			}
+			if ch == '\\' {
+				escaped = true
+				continue
+			}
+			if ch == '"' {
+				inString = false
+			}
+			continue
+		}
+
+		switch ch {
+		case '"':
+			inString = true
+		case '{':
+			stack = append(stack, '}')
+		case '[':
+			stack = append(stack, ']')
+		case '}', ']':
+			if len(stack) == 0 || stack[len(stack)-1] != ch {
+				return value
+			}
+			stack = stack[:len(stack)-1]
+		}
+	}
+
+	if inString || len(stack) == 0 {
+		return value
+	}
+	var b strings.Builder
+	b.Grow(len(value) + len(stack))
+	b.WriteString(value)
+	for i := len(stack) - 1; i >= 0; i-- {
+		b.WriteByte(stack[i])
+	}
+	return b.String()
 }
 
 func cleanRepairedFunctionArguments(value any) any {

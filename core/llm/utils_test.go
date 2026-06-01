@@ -85,6 +85,21 @@ func TestParseFunctionArgumentsRepairsTrailingCommas(t *testing.T) {
 	}
 }
 
+func TestParseFunctionArgumentsRepairsMissingClosingDelimiter(t *testing.T) {
+	args, err := ParseFunctionArguments(`{"city":"Paris","tags":["metro","food"]`)
+	if err != nil {
+		t.Fatalf("ParseFunctionArguments() error = %v", err)
+	}
+
+	if args["city"] != "Paris" {
+		t.Fatalf("city = %#v, want Paris", args["city"])
+	}
+	tags, ok := args["tags"].([]any)
+	if !ok || len(tags) != 2 || tags[0] != "metro" || tags[1] != "food" {
+		t.Fatalf("tags = %#v, want metro and food", args["tags"])
+	}
+}
+
 func TestParseFunctionArgumentsRepairsUnquotedObjectKeys(t *testing.T) {
 	args, err := ParseFunctionArguments(`{city:"Paris",limit:3}`)
 	if err != nil {
