@@ -34,6 +34,26 @@ func TestGenerateStrictJSONSchemaRequiresOmitEmptyFieldsAsNullable(t *testing.T)
 	}
 }
 
+func TestGenerateStrictJSONSchemaRemovesDefaultsAndMarksFieldNullable(t *testing.T) {
+	type request struct {
+		Limit int `json:"limit" jsonschema:"maximum results" default:"10"`
+	}
+
+	schema := GenerateStrictJSONSchema(reflect.TypeOf(request{}))
+
+	props := schema["properties"].(map[string]interface{})
+	limit, ok := props["limit"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("limit property = %#v, want map", props["limit"])
+	}
+	if _, ok := limit["default"]; ok {
+		t.Fatalf("limit default = %#v, want strict schema to omit defaults", limit["default"])
+	}
+	if !reflect.DeepEqual(limit["type"], []string{"integer", "null"}) {
+		t.Fatalf("limit type = %#v, want nullable integer for defaulted field", limit["type"])
+	}
+}
+
 func TestGenerateStrictJSONSchemaSkipsUnexportedFields(t *testing.T) {
 	type request struct {
 		Query  string `json:"query"`
