@@ -15,7 +15,9 @@ type ToolContext struct {
 
 func NewToolContext(tools []interface{}) *ToolContext {
 	ctx := &ToolContext{}
-	ctx.UpdateTools(tools)
+	if err := ctx.UpdateTools(tools); err != nil {
+		panic(err)
+	}
 	return ctx
 }
 
