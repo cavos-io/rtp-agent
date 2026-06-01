@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"os/exec"
+	"strings"
 	"sync"
 	"sync/atomic"
 )
@@ -49,10 +50,10 @@ type MCPServerStdio struct {
 	Env     map[string]string
 	Cwd     string
 
-	cmd     *exec.Cmd
-	stdin   io.WriteCloser
-	stdout  io.ReadCloser
-	
+	cmd    *exec.Cmd
+	stdin  io.WriteCloser
+	stdout io.ReadCloser
+
 	msgID   atomic.Int64
 	pending map[int64]chan *jsonRPCResponse
 	mu      sync.Mutex
@@ -85,6 +86,30 @@ type jsonRPCError struct {
 	Message string `json:"message"`
 }
 
+type mcpToolContent struct {
+	Type string `json:"type"`
+	Text string `json:"text"`
+	raw  json.RawMessage
+}
+
+func (c *mcpToolContent) UnmarshalJSON(data []byte) error {
+	type alias mcpToolContent
+	var decoded alias
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		return err
+	}
+	*c = mcpToolContent(decoded)
+	c.raw = append(c.raw[:0], data...)
+	return nil
+}
+
+func (c mcpToolContent) visibleText() string {
+	if c.Type == "text" {
+		return c.Text
+	}
+	return string(c.raw)
+}
+
 func (s *MCPServerStdio) Initialize(ctx context.Context) error {
 	s.cmd = exec.CommandContext(ctx, s.Command, s.Args...)
 	s.cmd.Dir = s.Cwd
@@ -112,7 +137,7 @@ func (s *MCPServerStdio) Initialize(ctx context.Context) error {
 		},
 		"capabilities": map[string]interface{}{},
 	}
-	
+
 	_, err = s.sendRequest(ctx, "initialize", params)
 	if err != nil {
 		return fmt.Errorf("initialize failed: %w", err)
@@ -269,11 +294,8 @@ func (t *mcpProxyTool) Execute(ctx context.Context, args string) (string, error)
 	}
 
 	var result struct {
-		Content []struct {
-			Type string `json:"type"`
-			Text string `json:"text"`
-		} `json:"content"`
-		IsError bool `json:"isError"`
+		Content []mcpToolContent `json:"content"`
+		IsError bool             `json:"isError"`
 	}
 
 	if err := json.Unmarshal(resp.Result, &result); err != nil {
@@ -281,13 +303,17 @@ func (t *mcpProxyTool) Execute(ctx context.Context, args string) (string, error)
 	}
 
 	if result.IsError {
-		return "", fmt.Errorf("tool error")
+		parts := make([]string, 0, len(result.Content))
+		for _, part := range result.Content {
+			parts = append(parts, part.visibleText())
+		}
+		return "", NewToolError(strings.Join(parts, "\n"))
 	}
 
-	if len(result.Content) > 0 {
-		return result.Content[0].Text, nil
+	if len(result.Content) == 0 {
+		return "", NewToolError(fmt.Sprintf("Tool %q completed without producing a result.", t.name))
 	}
-	return "", nil
+	return result.Content[0].Text, nil
 }
 
 func (t *mcpProxyTool) ParseFunctionTools(format string) (map[string]interface{}, error) {

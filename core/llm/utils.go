@@ -141,10 +141,11 @@ func MakeFunctionCallOutput(fncCall FunctionCall, output any, exception error) F
 		return FunctionCallResult{
 			FncCall: fncCall,
 			FncCallOut: &FunctionCallOutput{
-				CallID:  fncCall.CallID,
-				Name:    fncCall.Name,
-				Output:  toolErr.Message,
-				IsError: true,
+				CallID:    fncCall.CallID,
+				Name:      fncCall.Name,
+				Output:    toolErr.Message,
+				IsError:   true,
+				CreatedAt: time.Now(),
 			},
 			RawOutput: output,
 			RawError:  exception,
@@ -164,10 +165,11 @@ func MakeFunctionCallOutput(fncCall FunctionCall, output any, exception error) F
 		return FunctionCallResult{
 			FncCall: fncCall,
 			FncCallOut: &FunctionCallOutput{
-				CallID:  fncCall.CallID,
-				Name:    fncCall.Name,
-				Output:  "An internal error occurred",
-				IsError: true,
+				CallID:    fncCall.CallID,
+				Name:      fncCall.Name,
+				Output:    "An internal error occurred",
+				IsError:   true,
+				CreatedAt: time.Now(),
 			},
 			RawOutput: output,
 			RawError:  exception,
@@ -189,10 +191,11 @@ func MakeFunctionCallOutput(fncCall FunctionCall, output any, exception error) F
 	return FunctionCallResult{
 		FncCall: fncCall,
 		FncCallOut: &FunctionCallOutput{
-			CallID:  fncCall.CallID,
-			Name:    fncCall.Name,
-			Output:  outputString,
-			IsError: false,
+			CallID:    fncCall.CallID,
+			Name:      fncCall.Name,
+			Output:    outputString,
+			IsError:   false,
+			CreatedAt: time.Now(),
 		},
 		RawOutput: output,
 	}
