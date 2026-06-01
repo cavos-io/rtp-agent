@@ -237,6 +237,26 @@ func applyOpenAIExtraParams(req *openai.ChatCompletionRequest, params map[string
 			if v := asStreamOptions(value); v != nil {
 				req.StreamOptions = v
 			}
+		case "service_tier":
+			if v, ok := value.(string); ok {
+				req.ServiceTier = openai.ServiceTier(v)
+			}
+		case "verbosity":
+			if v, ok := value.(string); ok {
+				req.Verbosity = v
+			}
+		case "safety_identifier":
+			if v, ok := value.(string); ok {
+				req.SafetyIdentifier = v
+			}
+		case "chat_template_kwargs":
+			if v, ok := value.(map[string]any); ok {
+				req.ChatTemplateKwargs = v
+			}
+		case "prediction":
+			if v := asPrediction(value); v != nil {
+				req.Prediction = v
+			}
 		}
 	}
 }
@@ -334,6 +354,24 @@ func asStreamOptions(value any) *openai.StreamOptions {
 		options.IncludeUsage = includeUsage
 	}
 	return options
+}
+
+func asPrediction(value any) *openai.Prediction {
+	predictionMap, ok := value.(map[string]any)
+	if !ok {
+		return nil
+	}
+	prediction := &openai.Prediction{}
+	if content, ok := predictionMap["content"].(string); ok {
+		prediction.Content = content
+	}
+	if predictionType, ok := predictionMap["type"].(string); ok {
+		prediction.Type = predictionType
+	}
+	if prediction.Content == "" && prediction.Type == "" {
+		return nil
+	}
+	return prediction
 }
 
 func buildOpenAIChatMessages(chatCtx *llm.ChatContext) []openai.ChatCompletionMessage {
@@ -554,15 +592,25 @@ func (s *openaiStream) Next() (*llm.ChatChunk, error) {
 	}
 
 	if resp.Usage != nil {
-		chunk.Usage = &llm.CompletionUsage{
-			CompletionTokens:   resp.Usage.CompletionTokens,
-			PromptTokens:       resp.Usage.PromptTokens,
-			PromptCachedTokens: resp.Usage.PromptTokensDetails.CachedTokens,
-			TotalTokens:        resp.Usage.TotalTokens,
-		}
+		chunk.Usage = openAICompletionUsage(resp.Usage)
 	}
 
 	return chunk, nil
+}
+
+func openAICompletionUsage(usage *openai.Usage) *llm.CompletionUsage {
+	if usage == nil {
+		return nil
+	}
+	result := &llm.CompletionUsage{
+		CompletionTokens: usage.CompletionTokens,
+		PromptTokens:     usage.PromptTokens,
+		TotalTokens:      usage.TotalTokens,
+	}
+	if usage.PromptTokensDetails != nil {
+		result.PromptCachedTokens = usage.PromptTokensDetails.CachedTokens
+	}
+	return result
 }
 
 func (s *openaiStream) Close() error {

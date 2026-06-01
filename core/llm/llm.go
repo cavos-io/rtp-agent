@@ -315,10 +315,13 @@ func (c *ChatContext) Append(item ChatItem) {
 }
 
 type CompletionUsage struct {
-	CompletionTokens   int
-	PromptTokens       int
-	PromptCachedTokens int
-	TotalTokens        int
+	CompletionTokens    int
+	PromptTokens        int
+	PromptCachedTokens  int
+	CacheCreationTokens int
+	CacheReadTokens     int
+	TotalTokens         int
+	ServiceTier         string
 }
 
 type ChoiceDelta struct {
@@ -340,6 +343,13 @@ type ChatChunk struct {
 	ID    string
 	Delta *ChoiceDelta
 	Usage *CompletionUsage
+}
+
+type CollectedResponse struct {
+	Text      string
+	ToolCalls []FunctionToolCall
+	Usage     *CompletionUsage
+	Extra     map[string]any
 }
 
 type Tool interface {

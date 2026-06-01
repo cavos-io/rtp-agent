@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"sync"
+	"time"
 
 	"github.com/cavos-io/conversation-worker/core/vad"
 	"github.com/cavos-io/conversation-worker/library/logger"
@@ -24,6 +25,24 @@ type FallbackAdapter struct {
 
 type FallbackAdapterOptions struct {
 	MaxRetryPerSTT int
+}
+
+type FallbackAllFailedError struct {
+	Count    int
+	Labels   []string
+	Duration time.Duration
+	Err      error
+}
+
+func (e *FallbackAllFailedError) Error() string {
+	if e.Err == nil {
+		return fmt.Sprintf("all STTs failed (%v) after %s", e.Labels, e.Duration)
+	}
+	return fmt.Sprintf("all STTs failed (%v) after %s: %v", e.Labels, e.Duration, e.Err)
+}
+
+func (e *FallbackAllFailedError) Unwrap() error {
+	return e.Err
 }
 
 func NewFallbackAdapter(stts []STT) *FallbackAdapter {
@@ -105,6 +124,7 @@ func (f *FallbackAdapter) Capabilities() STTCapabilities {
 }
 
 func (f *FallbackAdapter) Recognize(ctx context.Context, frames []*model.AudioFrame, language string) (*SpeechEvent, error) {
+	startedAt := time.Now()
 	var lastErr error
 	allFailed := f.allUnavailable()
 	for i, stt := range f.stts {
@@ -128,7 +148,20 @@ func (f *FallbackAdapter) Recognize(ctx context.Context, frames []*model.AudioFr
 		f.setAvailable(i, false)
 		f.tryRecover(ctx, i, frames, language)
 	}
-	return nil, fmt.Errorf("all STTs failed, last error: %w", lastErr)
+	return nil, &FallbackAllFailedError{
+		Count:    len(f.stts),
+		Labels:   f.labels(),
+		Duration: time.Since(startedAt),
+		Err:      lastErr,
+	}
+}
+
+func (f *FallbackAdapter) labels() []string {
+	labels := make([]string, len(f.stts))
+	for i, stt := range f.stts {
+		labels[i] = stt.Label()
+	}
+	return labels
 }
 
 func (f *FallbackAdapter) tryRecover(ctx context.Context, index int, frames []*model.AudioFrame, language string) {
@@ -274,6 +307,8 @@ type fallbackRecognizeStream struct {
 	startOffset  float64
 	startTime    float64
 	recoveries   []RecognizeStream
+	startedAt    time.Time
+	lastErr      error
 
 	eventCh chan *SpeechEvent
 	errCh   chan error
@@ -297,6 +332,7 @@ func (f *FallbackAdapter) Stream(ctx context.Context, language string) (Recogniz
 		closeCh:     make(chan struct{}),
 		inputBuffer: make([]fallbackRecognizeInput, 0),
 		retries:     make(map[int]int),
+		startedAt:   time.Now(),
 	}
 
 	if err := s.tryStartStream(0); err != nil {
@@ -351,7 +387,16 @@ func (s *fallbackRecognizeStream) tryStartStream(index int) error {
 	if lastErr != nil {
 		return lastErr
 	}
-	return fmt.Errorf("all fallback STTs exhausted")
+	return s.allFailedError(s.lastErr)
+}
+
+func (s *fallbackRecognizeStream) allFailedError(err error) error {
+	return &FallbackAllFailedError{
+		Count:    len(s.adapter.stts),
+		Labels:   s.adapter.labels(),
+		Duration: time.Since(s.startedAt),
+		Err:      err,
+	}
 }
 
 func (s *fallbackRecognizeStream) replayBufferedFrames(stream RecognizeStream) error {
@@ -367,7 +412,7 @@ func (s *fallbackRecognizeStream) StartTimeOffset() float64 {
 func (s *fallbackRecognizeStream) SetStartTimeOffset(offset float64) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.startOffset = offset
+	s.startOffset = nonNegativeStreamTime(offset)
 	s.applyTiming(s.activeStream)
 }
 
@@ -380,7 +425,7 @@ func (s *fallbackRecognizeStream) StartTime() float64 {
 func (s *fallbackRecognizeStream) SetStartTime(startTime float64) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.startTime = startTime
+	s.startTime = nonNegativeStreamTime(startTime)
 	s.applyTiming(s.activeStream)
 }
 
@@ -389,8 +434,8 @@ func (s *fallbackRecognizeStream) applyTiming(stream RecognizeStream) {
 	if !ok {
 		return
 	}
-	timing.SetStartTimeOffset(s.startOffset)
-	timing.SetStartTime(s.startTime)
+	SetStreamStartTimeOffset(timing, s.startOffset)
+	SetStreamStartTime(timing, s.startTime)
 }
 
 func replayFallbackInputs(stream RecognizeStream, inputs []fallbackRecognizeInput) error {
@@ -450,6 +495,7 @@ func (s *fallbackRecognizeStream) monitorStream() {
 			// Try fallback
 			logger.Logger.Warnw("STT stream failed, attempting fallback", err, "failed_stt", s.adapter.stts[s.activeIndex].Label())
 			stream.Close()
+			s.lastErr = err
 
 			nextIndex := s.activeIndex + 1
 			if s.canRetrySTT(s.activeIndex) {
@@ -615,13 +661,21 @@ func (s *fallbackRecognizeStream) EndInput() error {
 
 func (s *fallbackRecognizeStream) Close() error {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	if s.closed {
+		s.mu.Unlock()
 		return nil
 	}
 	s.closed = true
+	activeStream := s.activeStream
+	recoveries := append([]RecognizeStream(nil), s.recoveries...)
+	s.recoveries = nil
 	close(s.closeCh)
-	return s.activeStream.Close()
+	s.mu.Unlock()
+
+	for _, recovery := range recoveries {
+		_ = recovery.Close()
+	}
+	return activeStream.Close()
 }
 
 func (s *fallbackRecognizeStream) Next() (*SpeechEvent, error) {

@@ -1,12 +1,14 @@
 package anthropic
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/json"
 	"io"
 	"net/http"
+	"strings"
 	"testing"
 
 	"github.com/cavos-io/conversation-worker/core/llm"
@@ -101,6 +103,26 @@ func TestBuildAnthropicMessagesFiltersUnmatchedToolItems(t *testing.T) {
 		t.Fatalf("role = %q, want user", messages[0].Role)
 	}
 	assertAnthropicTextBlock(t, messages[0].Content, 0, "hello")
+}
+
+func TestAnthropicStreamMapsCacheUsageMetadata(t *testing.T) {
+	stream := &anthropicStream{
+		reader: bufio.NewReader(strings.NewReader(`data: {"type":"message_start","message":{"id":"msg_1","usage":{"input_tokens":11,"cache_creation_input_tokens":3,"cache_read_input_tokens":5}}}` + "\n\n")),
+	}
+
+	chunk, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next() error = %v", err)
+	}
+	if chunk.ID != "msg_1" {
+		t.Fatalf("chunk ID = %q, want msg_1", chunk.ID)
+	}
+	if chunk.Usage == nil {
+		t.Fatal("Usage = nil, want usage metadata")
+	}
+	if chunk.Usage.PromptTokens != 11 || chunk.Usage.CacheCreationTokens != 3 || chunk.Usage.CacheReadTokens != 5 {
+		t.Fatalf("Usage = %#v, want prompt and cache token counts", chunk.Usage)
+	}
 }
 
 func TestAnthropicChatUsesStrictToolInputSchema(t *testing.T) {

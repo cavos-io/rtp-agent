@@ -6,8 +6,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"regexp"
+	"io"
 	"reflect"
+	"regexp"
 	"strings"
 	"time"
 )
@@ -306,6 +307,52 @@ func MakeFunctionCallOutput(fncCall FunctionCall, output any, exception error) F
 		},
 		RawOutput: output,
 	}
+}
+
+func CollectStream(stream LLMStream) (*CollectedResponse, error) {
+	if stream == nil {
+		return nil, fmt.Errorf("llm stream is nil")
+	}
+	defer stream.Close()
+
+	var textParts []string
+	var toolCalls []FunctionToolCall
+	var usage *CompletionUsage
+	extra := make(map[string]any)
+
+	for {
+		chunk, err := stream.Next()
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		if err != nil {
+			return nil, err
+		}
+		if chunk == nil {
+			continue
+		}
+		if chunk.Delta != nil {
+			if chunk.Delta.Content != "" {
+				textParts = append(textParts, chunk.Delta.Content)
+			}
+			if len(chunk.Delta.ToolCalls) > 0 {
+				toolCalls = append(toolCalls, chunk.Delta.ToolCalls...)
+			}
+			for key, value := range chunk.Delta.Extra {
+				extra[key] = value
+			}
+		}
+		if chunk.Usage != nil {
+			usage = chunk.Usage
+		}
+	}
+
+	return &CollectedResponse{
+		Text:      strings.TrimSpace(strings.Join(textParts, "")),
+		ToolCalls: toolCalls,
+		Usage:     usage,
+		Extra:     extra,
+	}, nil
 }
 
 func ExecuteFunctionCall(ctx context.Context, toolCall *FunctionToolCall, toolCtx *ToolContext) FunctionCallResult {

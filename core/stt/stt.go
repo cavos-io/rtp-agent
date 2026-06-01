@@ -96,6 +96,21 @@ type StreamTiming interface {
 	SetStartTime(startTime float64)
 }
 
+func SetStreamStartTimeOffset(stream StreamTiming, offset float64) {
+	stream.SetStartTimeOffset(nonNegativeStreamTime(offset))
+}
+
+func SetStreamStartTime(stream StreamTiming, startTime float64) {
+	stream.SetStartTime(nonNegativeStreamTime(startTime))
+}
+
+func nonNegativeStreamTime(value float64) float64 {
+	if value < 0 {
+		return 0
+	}
+	return value
+}
+
 type InputEnding interface {
 	EndInput() error
 }

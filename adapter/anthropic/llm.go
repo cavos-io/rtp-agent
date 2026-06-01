@@ -434,8 +434,10 @@ func (s *anthropicStream) Next() (*llm.ChatChunk, error) {
 			Message struct {
 				ID    string `json:"id"`
 				Usage struct {
-					InputTokens  int `json:"input_tokens"`
-					OutputTokens int `json:"output_tokens"`
+					InputTokens              int `json:"input_tokens"`
+					OutputTokens             int `json:"output_tokens"`
+					CacheCreationInputTokens int `json:"cache_creation_input_tokens"`
+					CacheReadInputTokens     int `json:"cache_read_input_tokens"`
 				} `json:"usage"`
 			} `json:"message"`
 
@@ -468,7 +470,9 @@ func (s *anthropicStream) Next() (*llm.ChatChunk, error) {
 			return &llm.ChatChunk{
 				ID: event.Message.ID,
 				Usage: &llm.CompletionUsage{
-					PromptTokens: event.Message.Usage.InputTokens,
+					PromptTokens:        event.Message.Usage.InputTokens,
+					CacheCreationTokens: event.Message.Usage.CacheCreationInputTokens,
+					CacheReadTokens:     event.Message.Usage.CacheReadInputTokens,
 				},
 			}, nil
 

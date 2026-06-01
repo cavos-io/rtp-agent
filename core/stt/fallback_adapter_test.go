@@ -208,6 +208,62 @@ func TestFallbackStreamRetriesNextProviderBeforeEvents(t *testing.T) {
 	}
 }
 
+func TestFallbackStreamReturnsAllFailedErrorWhenProvidersExhausted(t *testing.T) {
+	primaryErr := errors.New("primary stream failed")
+	fallbackErr := errors.New("fallback stream failed")
+	adapter := NewFallbackAdapterWithOptions([]STT{
+		&metadataSTT{
+			label:        "primary",
+			capabilities: STTCapabilities{Streaming: true},
+			streams: []RecognizeStream{
+				&metadataRecognizeStream{err: primaryErr},
+				&metadataRecognizeStream{events: []*SpeechEvent{{
+					Type:         SpeechEventFinalTranscript,
+					Alternatives: []SpeechData{{Text: "primary recovered"}},
+				}}},
+			},
+		},
+		&metadataSTT{
+			label:        "fallback",
+			capabilities: STTCapabilities{Streaming: true},
+			streams: []RecognizeStream{
+				&metadataRecognizeStream{err: fallbackErr},
+				&metadataRecognizeStream{events: []*SpeechEvent{{
+					Type:         SpeechEventFinalTranscript,
+					Alternatives: []SpeechData{{Text: "fallback recovered"}},
+				}}},
+			},
+		},
+	}, FallbackAdapterOptions{MaxRetryPerSTT: 0})
+
+	stream, err := adapter.Stream(context.Background(), "en")
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+	defer stream.Close()
+
+	_, err = stream.Next()
+	if err == nil {
+		t.Fatal("Next error = nil, want all STTs failed error")
+	}
+	if !errors.Is(err, fallbackErr) {
+		t.Fatalf("Next error = %v, want to wrap final provider stream error", err)
+	}
+	var allFailed *FallbackAllFailedError
+	if !errors.As(err, &allFailed) {
+		t.Fatalf("Next error = %T, want *FallbackAllFailedError", err)
+	}
+	if allFailed.Count != 2 {
+		t.Fatalf("all failed Count = %d, want 2", allFailed.Count)
+	}
+	if strings.Join(allFailed.Labels, ",") != "primary,fallback" {
+		t.Fatalf("all failed Labels = %#v, want primary/fallback", allFailed.Labels)
+	}
+	if allFailed.Duration <= 0 {
+		t.Fatalf("all failed Duration = %s, want positive duration", allFailed.Duration)
+	}
+}
+
 func TestFallbackAdapterRetriesSameSTTBeforeFallback(t *testing.T) {
 	firstErr := errors.New("primary recognize failed")
 	primary := &metadataSTT{
@@ -243,6 +299,47 @@ func TestFallbackAdapterRetriesSameSTTBeforeFallback(t *testing.T) {
 	}
 	if fallback.recognizeCalls != 0 {
 		t.Fatalf("fallback recognize calls = %d, want 0", fallback.recognizeCalls)
+	}
+}
+
+func TestFallbackAdapterReturnsAllFailedErrorWhenProvidersExhausted(t *testing.T) {
+	primaryErr := errors.New("primary recognize failed")
+	fallbackErr := errors.New("fallback recognize failed")
+	adapter := NewFallbackAdapterWithOptions([]STT{
+		&metadataSTT{
+			label:         "primary",
+			capabilities:  STTCapabilities{Streaming: true},
+			recognizeErrs: []error{primaryErr},
+		},
+		&metadataSTT{
+			label:         "fallback",
+			capabilities:  STTCapabilities{Streaming: true},
+			recognizeErrs: []error{fallbackErr},
+		},
+	}, FallbackAdapterOptions{MaxRetryPerSTT: 0})
+
+	_, err := adapter.Recognize(context.Background(), nil, "en")
+	if err == nil {
+		t.Fatal("Recognize error = nil, want all STTs failed error")
+	}
+	if !errors.Is(err, fallbackErr) {
+		t.Fatalf("Recognize error = %v, want to wrap final provider error", err)
+	}
+	var allFailed *FallbackAllFailedError
+	if !errors.As(err, &allFailed) {
+		t.Fatalf("Recognize error = %T, want *FallbackAllFailedError", err)
+	}
+	if allFailed.Count != 2 {
+		t.Fatalf("all failed Count = %d, want 2", allFailed.Count)
+	}
+	if strings.Join(allFailed.Labels, ",") != "primary,fallback" {
+		t.Fatalf("all failed Labels = %#v, want primary/fallback", allFailed.Labels)
+	}
+	if allFailed.Duration <= 0 {
+		t.Fatalf("all failed Duration = %s, want positive duration", allFailed.Duration)
+	}
+	if !strings.Contains(err.Error(), "all STTs failed") {
+		t.Fatalf("Recognize error = %q, want all STTs failed message", err)
 	}
 }
 
@@ -574,6 +671,56 @@ func TestFallbackStreamForwardsNewInputToRecoveringProvider(t *testing.T) {
 	close(recovery.release)
 }
 
+func TestFallbackStreamCloseClosesRecoveringProvider(t *testing.T) {
+	firstFrame := &model.AudioFrame{Data: []byte("1"), SampleRate: 16000, NumChannels: 1, SamplesPerChannel: 1}
+	primaryFailure := &blockingFailRecognizeStream{
+		err:     errors.New("primary stream failed"),
+		release: make(chan struct{}),
+	}
+	recovery := &liveRecoveryStream{
+		release: make(chan struct{}),
+		event: &SpeechEvent{
+			Type:         SpeechEventFinalTranscript,
+			Alternatives: []SpeechData{{Text: "primary recovered"}},
+		},
+	}
+	primary := &metadataSTT{
+		label:        "primary",
+		capabilities: STTCapabilities{Streaming: true},
+		streams: []RecognizeStream{
+			primaryFailure,
+			recovery,
+		},
+	}
+	fallback := &metadataSTT{
+		label:        "fallback",
+		capabilities: STTCapabilities{Streaming: true},
+		stream: &metadataRecognizeStream{events: []*SpeechEvent{{
+			Type:         SpeechEventFinalTranscript,
+			Alternatives: []SpeechData{{Text: "fallback stream"}},
+		}}},
+	}
+	adapter := NewFallbackAdapterWithOptions([]STT{primary, fallback}, FallbackAdapterOptions{
+		MaxRetryPerSTT: 0,
+	})
+
+	stream, err := adapter.Stream(context.Background(), "en")
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+	if err := stream.PushFrame(firstFrame); err != nil {
+		t.Fatalf("PushFrame returned error: %v", err)
+	}
+	close(primaryFailure.release)
+	waitForStreamCalls(t, primary, 2)
+
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close returned error: %v", err)
+	}
+	waitForRecoveryClosed(t, recovery)
+	close(recovery.release)
+}
+
 func TestFallbackStreamRetriesSameSTTBeforeFallback(t *testing.T) {
 	firstErr := errors.New("primary stream failed")
 	primary := &metadataSTT{
@@ -719,6 +866,15 @@ func TestFallbackStreamPropagatesTimingAnchorsOnRetry(t *testing.T) {
 	}
 	if recovered.startTime != 42.5 {
 		t.Fatalf("recovered StartTime = %v, want 42.5", recovered.startTime)
+	}
+
+	timing.SetStartTimeOffset(-1)
+	timing.SetStartTime(-2)
+	if timing.StartTimeOffset() < 0 {
+		t.Fatalf("negative StartTimeOffset was stored: %v", timing.StartTimeOffset())
+	}
+	if timing.StartTime() < 0 {
+		t.Fatalf("negative StartTime was stored: %v", timing.StartTime())
 	}
 }
 
@@ -1145,6 +1301,28 @@ func waitForRecoveryCall(t *testing.T, stream *liveRecoveryStream, want string) 
 		select {
 		case <-deadline:
 			t.Fatalf("recovery calls = %#v, want %s", calls, want)
+		case <-ticker.C:
+		}
+	}
+}
+
+func waitForRecoveryClosed(t *testing.T, stream *liveRecoveryStream) {
+	t.Helper()
+	deadline := time.After(200 * time.Millisecond)
+	ticker := time.NewTicker(time.Millisecond)
+	defer ticker.Stop()
+
+	for {
+		stream.mu.Lock()
+		closed := stream.closed
+		stream.mu.Unlock()
+		if closed {
+			return
+		}
+
+		select {
+		case <-deadline:
+			t.Fatal("recovery stream was not closed")
 		case <-ticker.C:
 		}
 	}
