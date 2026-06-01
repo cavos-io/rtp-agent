@@ -71,6 +71,26 @@ func TestGenerateStrictJSONSchemaIncludesEnumTagValues(t *testing.T) {
 	}
 }
 
+func TestGenerateStrictJSONSchemaIncludesNullInNullableEnum(t *testing.T) {
+	type request struct {
+		Status string `json:"status,omitempty" enum:"open,closed"`
+	}
+
+	schema := GenerateStrictJSONSchema(reflect.TypeOf(request{}))
+
+	props := schema["properties"].(map[string]interface{})
+	status, ok := props["status"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("status property = %#v, want map", props["status"])
+	}
+	if !reflect.DeepEqual(status["type"], []string{"string", "null"}) {
+		t.Fatalf("status type = %#v, want nullable string", status["type"])
+	}
+	if !reflect.DeepEqual(status["enum"], []any{"open", "closed", nil}) {
+		t.Fatalf("status enum = %#v, want open/closed/null", status["enum"])
+	}
+}
+
 func TestGenerateStrictJSONSchemaSkipsUnexportedFields(t *testing.T) {
 	type request struct {
 		Query  string `json:"query"`
