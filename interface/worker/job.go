@@ -150,12 +150,20 @@ type JobContext struct {
 }
 
 func NewJobContext(job *livekit.Job, url string, apiKey string, apiSecret string) *JobContext {
+	report := agent.NewSessionReport()
+	if job != nil {
+		report.JobID = job.GetId()
+		if room := job.GetRoom(); room != nil {
+			report.RoomID = room.GetSid()
+			report.Room = room.GetName()
+		}
+	}
 	return &JobContext{
 		Job:       job,
 		url:       url,
 		apiKey:    apiKey,
 		apiSecret: apiSecret,
-		Report:    agent.NewSessionReport(),
+		Report:    report,
 	}
 }
 

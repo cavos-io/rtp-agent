@@ -70,6 +70,31 @@ func TestJobContextShutdownRunsCallbacksOnce(t *testing.T) {
 	}
 }
 
+func TestNewJobContextInitializesSessionReportMetadata(t *testing.T) {
+	ctx := NewJobContext(
+		&livekit.Job{
+			Id: "job_report",
+			Room: &livekit.Room{
+				Sid:  "RM_report",
+				Name: "room-report",
+			},
+		},
+		"wss://livekit.example",
+		"key",
+		"secret",
+	)
+
+	if ctx.Report.JobID != "job_report" {
+		t.Fatalf("Report.JobID = %q, want job_report", ctx.Report.JobID)
+	}
+	if ctx.Report.RoomID != "RM_report" {
+		t.Fatalf("Report.RoomID = %q, want RM_report", ctx.Report.RoomID)
+	}
+	if ctx.Report.Room != "room-report" {
+		t.Fatalf("Report.Room = %q, want room-report", ctx.Report.Room)
+	}
+}
+
 func TestJobContextConnectInfoUsesAcceptedParticipantFields(t *testing.T) {
 	ctx := NewJobContext(
 		&livekit.Job{Id: "job_connect_info", Room: &livekit.Room{Name: "room-a"}},
