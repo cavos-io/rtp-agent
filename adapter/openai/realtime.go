@@ -795,6 +795,13 @@ func (s *realtimeSession) closeRealtimeGeneration() {
 		return
 	}
 	for _, msg := range s.generation.messages {
+		if msg.modalities == nil {
+			msg.modalities = []string{"audio", "text"}
+			select {
+			case msg.modalitiesCh <- msg.modalities:
+			default:
+			}
+		}
 		s.closeRealtimeMessageStreams(msg)
 		close(msg.modalitiesCh)
 	}

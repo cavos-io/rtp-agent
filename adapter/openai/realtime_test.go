@@ -544,6 +544,45 @@ func TestRealtimeSessionClosesGenerationStreamsWhenResponseDone(t *testing.T) {
 	}
 }
 
+func TestRealtimeSessionResolvesDefaultModalitiesWhenResponseDone(t *testing.T) {
+	session := &realtimeSession{}
+	created := session.trackRealtimeEvent(llm.RealtimeEvent{
+		Type:       llm.RealtimeEventTypeGenerationCreated,
+		Generation: &llm.GenerationCreatedEvent{},
+	})
+	session.trackOpenAIRealtimeEvent(map[string]any{
+		"type": "response.output_item.added",
+		"item": map[string]any{
+			"id":   "msg_123",
+			"type": "message",
+		},
+	})
+
+	var msg llm.MessageGeneration
+	select {
+	case msg = <-created.Generation.MessageCh:
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("timed out waiting for message generation")
+	}
+
+	session.trackOpenAIRealtimeEvent(map[string]any{
+		"type":     "response.done",
+		"response": map[string]any{"id": "resp_123"},
+	})
+
+	select {
+	case modalities, ok := <-msg.ModalitiesCh:
+		if !ok {
+			t.Fatal("ModalitiesCh closed before default modalities, want default modalities")
+		}
+		if len(modalities) != 2 || modalities[0] != "audio" || modalities[1] != "text" {
+			t.Fatalf("modalities = %#v, want default audio and text", modalities)
+		}
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("timed out waiting for default modalities")
+	}
+}
+
 func TestRealtimeSessionRoutesOutputFunctionCallsToGenerationStream(t *testing.T) {
 	session := &realtimeSession{}
 	created := session.trackRealtimeEvent(llm.RealtimeEvent{
