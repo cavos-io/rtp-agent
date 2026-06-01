@@ -50,6 +50,9 @@ func PerformLLMInference(ctx context.Context, l llm.LLM, chatCtx *llm.ChatContex
 					data.TextCh <- chunk.Delta.Content
 				}
 				for _, fc := range chunk.Delta.ToolCalls {
+					if fc.Type != "" && fc.Type != "function" {
+						continue
+					}
 					f := fc
 					data.FunctionCh <- &f
 				}
