@@ -1039,7 +1039,7 @@ func (s *AgentServer) drain(ctx context.Context) error {
 func (s *AgentServer) inflightJobCount() int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return len(s.activeJobs) + len(s.pendingAccepts)
+	return len(s.activeJobs) + len(s.pendingAccepts) + s.reservedSlots
 }
 
 func (s *AgentServer) activeJobCount() int {

@@ -3480,6 +3480,61 @@ func TestDrainWaitsForActiveJobs(t *testing.T) {
 	}
 }
 
+func TestDrainWaitsForInFlightAvailabilityRequest(t *testing.T) {
+	server := NewAgentServer(WorkerOptions{})
+	requestStarted := make(chan struct{})
+	releaseRequest := make(chan struct{})
+	server.workerMessageSink = func(msg *livekit.WorkerMessage) error {
+		return nil
+	}
+	server.requestFnc = func(req *JobRequest) error {
+		close(requestStarted)
+		<-releaseRequest
+		return nil
+	}
+
+	server.handleAvailability(context.Background(), &livekit.AvailabilityRequest{
+		Job: &livekit.Job{Id: "job_drain_request"},
+	})
+
+	select {
+	case <-requestStarted:
+	case <-time.After(time.Second):
+		t.Fatal("request callback did not start")
+	}
+
+	doneCh := make(chan error, 1)
+	go func() {
+		doneCh <- server.Drain(context.Background())
+	}()
+
+	drainingDeadline := time.After(time.Second)
+	for !server.Draining() {
+		select {
+		case <-drainingDeadline:
+			t.Fatal("server.Draining() = false, want true")
+		default:
+			time.Sleep(time.Millisecond)
+		}
+	}
+
+	select {
+	case err := <-doneCh:
+		t.Fatalf("Drain() returned before in-flight request finished: %v", err)
+	default:
+	}
+
+	close(releaseRequest)
+	select {
+	case err := <-doneCh:
+		if err != nil {
+			t.Fatalf("Drain() error = %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Drain() did not return after in-flight request finished")
+	}
+}
+
 func TestDrainWithTimeoutReturnsContextDeadline(t *testing.T) {
 	server := NewAgentServer(WorkerOptions{DrainTimeoutSeconds: 1800})
 	jobCtx := NewJobContext(&livekit.Job{Id: "job_drain_timeout"}, "", "", "")
