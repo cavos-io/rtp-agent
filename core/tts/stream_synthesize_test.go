@@ -48,6 +48,41 @@ func TestSynthesizeWithStreamReturnsStreamEvents(t *testing.T) {
 	}
 }
 
+func TestSynthesizeWithStreamSetsStableRequestID(t *testing.T) {
+	provider := &fakeStreamingTTS{
+		stream: &fakeSynthesizeStream{
+			events: []*SynthesizedAudio{
+				{RequestID: "provider-a"},
+				{RequestID: "provider-b"},
+			},
+		},
+	}
+
+	chunked, err := SynthesizeWithStream(context.Background(), provider, "hello")
+	if err != nil {
+		t.Fatalf("SynthesizeWithStream() error = %v", err)
+	}
+	defer chunked.Close()
+
+	first, err := chunked.Next()
+	if err != nil {
+		t.Fatalf("first Next() error = %v", err)
+	}
+	second, err := chunked.Next()
+	if err != nil {
+		t.Fatalf("second Next() error = %v", err)
+	}
+	if first.RequestID == "" {
+		t.Fatal("first RequestID is empty")
+	}
+	if second.RequestID != first.RequestID {
+		t.Fatalf("second RequestID = %q, want stable request id %q", second.RequestID, first.RequestID)
+	}
+	if first.RequestID == "provider-a" || second.RequestID == "provider-b" {
+		t.Fatalf("RequestID forwarded provider ids: first=%q second=%q", first.RequestID, second.RequestID)
+	}
+}
+
 func TestSynthesizeWithStreamErrorsWhenNonEmptyTextProducesNoAudio(t *testing.T) {
 	provider := &fakeStreamingTTS{
 		stream: &fakeSynthesizeStream{emptyErr: io.EOF},
