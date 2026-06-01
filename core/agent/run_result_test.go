@@ -2,6 +2,7 @@ package agent
 
 import (
 	"errors"
+	"reflect"
 	"testing"
 	"time"
 
@@ -192,6 +193,40 @@ func TestRunResultFinalOutputReturnsSpeechFinalOutputError(t *testing.T) {
 	}
 	if output != nil {
 		t.Fatalf("FinalOutput output = %#v, want nil when final output is error", output)
+	}
+}
+
+func TestRunResultFinalOutputRejectsUnexpectedType(t *testing.T) {
+	result := NewRunResultWithOutputType(llm.NewChatContext(), reflect.TypeOf(""))
+	speech := NewSpeechHandle(true, DefaultInputDetails())
+	speech.SetRunFinalOutput(42)
+
+	result.WatchSpeechHandle(speech)
+	speech.MarkDone()
+
+	output, err := result.FinalOutput()
+	if !errors.Is(err, ErrRunResultFinalOutputType) {
+		t.Fatalf("FinalOutput error = %v, want ErrRunResultFinalOutputType", err)
+	}
+	if output != nil {
+		t.Fatalf("FinalOutput output = %#v, want nil on type mismatch", output)
+	}
+}
+
+func TestRunResultFinalOutputAcceptsExpectedType(t *testing.T) {
+	result := NewRunResultWithOutputType(llm.NewChatContext(), reflect.TypeOf(""))
+	speech := NewSpeechHandle(true, DefaultInputDetails())
+	speech.SetRunFinalOutput("done")
+
+	result.WatchSpeechHandle(speech)
+	speech.MarkDone()
+
+	output, err := result.FinalOutput()
+	if err != nil {
+		t.Fatalf("FinalOutput error = %v, want nil", err)
+	}
+	if output != "done" {
+		t.Fatalf("FinalOutput = %#v, want done", output)
 	}
 }
 

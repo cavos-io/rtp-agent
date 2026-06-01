@@ -15,21 +15,23 @@ import (
 )
 
 var (
-	ErrRunResultNotDone       = errors.New("run result is not done")
-	ErrRunResultNoFinalOutput = errors.New("run result has no final output")
+	ErrRunResultNotDone         = errors.New("run result is not done")
+	ErrRunResultNoFinalOutput   = errors.New("run result has no final output")
+	ErrRunResultFinalOutputType = errors.New("run result final output type mismatch")
 )
 
 type RunResult struct {
-	ChatCtx        *llm.ChatContext
-	Expect         *RunAssert
-	events         []RunEvent
-	done           bool
-	finalOutput    any
-	finalOutputErr error
-	finalOutputSet bool
-	watchedSpeech  map[*SpeechHandle]runResultSpeechWatch
-	lastSpeech     *SpeechHandle
-	mu             sync.Mutex
+	ChatCtx         *llm.ChatContext
+	Expect          *RunAssert
+	events          []RunEvent
+	done            bool
+	finalOutput     any
+	finalOutputErr  error
+	finalOutputSet  bool
+	finalOutputType reflect.Type
+	watchedSpeech   map[*SpeechHandle]runResultSpeechWatch
+	lastSpeech      *SpeechHandle
+	mu              sync.Mutex
 }
 
 type runResultSpeechWatch struct {
@@ -38,10 +40,15 @@ type runResultSpeechWatch struct {
 }
 
 func NewRunResult(chatCtx *llm.ChatContext) *RunResult {
+	return NewRunResultWithOutputType(chatCtx, nil)
+}
+
+func NewRunResultWithOutputType(chatCtx *llm.ChatContext, outputType reflect.Type) *RunResult {
 	result := &RunResult{
-		ChatCtx:       chatCtx,
-		events:        make([]RunEvent, 0),
-		watchedSpeech: make(map[*SpeechHandle]runResultSpeechWatch),
+		ChatCtx:         chatCtx,
+		events:          make([]RunEvent, 0),
+		finalOutputType: outputType,
+		watchedSpeech:   make(map[*SpeechHandle]runResultSpeechWatch),
 	}
 	result.Expect = &RunAssert{ChatCtx: chatCtx, result: result}
 	return result
@@ -251,6 +258,8 @@ func (r *RunResult) markDoneIfNeeded(doneSpeech *SpeechHandle) {
 		if output, ok := r.lastSpeech.RunFinalOutput(); ok {
 			if err, ok := output.(error); ok {
 				r.finalOutputErr = err
+			} else if r.finalOutputType != nil && reflect.TypeOf(output) != r.finalOutputType {
+				r.finalOutputErr = fmt.Errorf("%w: expected %s, got %T", ErrRunResultFinalOutputType, r.finalOutputType, output)
 			} else {
 				r.finalOutput = output
 			}
