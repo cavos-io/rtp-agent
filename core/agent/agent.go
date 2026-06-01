@@ -81,6 +81,34 @@ func (a *Agent) UpdateTools(ctx context.Context, tools []llm.Tool) error {
 	return nil
 }
 
+func (a *Agent) UpdateChatContext(ctx context.Context, chatCtx *llm.ChatContext, excludeInvalidFunctionCalls ...bool) error {
+	excludeInvalid := true
+	if len(excludeInvalidFunctionCalls) > 0 {
+		excludeInvalid = excludeInvalidFunctionCalls[0]
+	}
+	if chatCtx == nil {
+		a.ChatCtx = llm.NewChatContext()
+		return nil
+	}
+	if !excludeInvalid {
+		a.ChatCtx = chatCtx.Copy()
+		return nil
+	}
+
+	a.ChatCtx = chatCtx.Copy(llm.ChatContextCopyOptions{
+		Tools: agentToolsAsInterfaces(a.Tools),
+	})
+	return nil
+}
+
+func agentToolsAsInterfaces(tools []llm.Tool) []interface{} {
+	converted := make([]interface{}, 0, len(tools))
+	for _, tool := range tools {
+		converted = append(converted, tool)
+	}
+	return converted
+}
+
 func (a *Agent) Start(session *AgentSession, agentIntf AgentInterface) *AgentActivity {
 	a.activity = NewAgentActivity(agentIntf, session)
 	a.activity.Start()
