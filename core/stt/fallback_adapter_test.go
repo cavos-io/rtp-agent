@@ -508,6 +508,72 @@ func TestFallbackStreamRecoversFailedProviderInBackground(t *testing.T) {
 	}
 }
 
+func TestFallbackStreamForwardsNewInputToRecoveringProvider(t *testing.T) {
+	firstFrame := &model.AudioFrame{Data: []byte("1"), SampleRate: 16000, NumChannels: 1, SamplesPerChannel: 1}
+	secondFrame := &model.AudioFrame{Data: []byte("2"), SampleRate: 16000, NumChannels: 1, SamplesPerChannel: 1}
+	primaryFailure := &blockingFailRecognizeStream{
+		err:     errors.New("primary stream failed"),
+		release: make(chan struct{}),
+	}
+	recovery := &liveRecoveryStream{
+		release: make(chan struct{}),
+		event: &SpeechEvent{
+			Type:         SpeechEventFinalTranscript,
+			Alternatives: []SpeechData{{Text: "primary recovered"}},
+		},
+	}
+	primary := &metadataSTT{
+		label:        "primary",
+		capabilities: STTCapabilities{Streaming: true},
+		streams: []RecognizeStream{
+			primaryFailure,
+			recovery,
+		},
+	}
+	fallback := &metadataSTT{
+		label:        "fallback",
+		capabilities: STTCapabilities{Streaming: true},
+		stream: &metadataRecognizeStream{events: []*SpeechEvent{{
+			Type:         SpeechEventFinalTranscript,
+			Alternatives: []SpeechData{{Text: "fallback stream"}},
+		}}},
+	}
+	adapter := NewFallbackAdapterWithOptions([]STT{primary, fallback}, FallbackAdapterOptions{
+		MaxRetryPerSTT: 0,
+	})
+
+	stream, err := adapter.Stream(context.Background(), "en")
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+	defer stream.Close()
+
+	if err := stream.PushFrame(firstFrame); err != nil {
+		t.Fatalf("PushFrame(first) returned error: %v", err)
+	}
+	close(primaryFailure.release)
+	waitForStreamCalls(t, primary, 2)
+	waitForRecoveryCall(t, recovery, "push:1")
+
+	if err := stream.PushFrame(secondFrame); err != nil {
+		t.Fatalf("PushFrame(second) returned error: %v", err)
+	}
+	waitForRecoveryCall(t, recovery, "push:2")
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush returned error: %v", err)
+	}
+	waitForRecoveryCall(t, recovery, "flush")
+	ending, ok := stream.(InputEnding)
+	if !ok {
+		t.Fatal("stream does not implement InputEnding")
+	}
+	if err := ending.EndInput(); err != nil {
+		t.Fatalf("EndInput returned error: %v", err)
+	}
+	waitForRecoveryCall(t, recovery, "end_input")
+	close(recovery.release)
+}
+
 func TestFallbackStreamRetriesSameSTTBeforeFallback(t *testing.T) {
 	firstErr := errors.New("primary stream failed")
 	primary := &metadataSTT{
@@ -1011,4 +1077,75 @@ func (s *blockingFailRecognizeStream) Close() error {
 func (s *blockingFailRecognizeStream) Next() (*SpeechEvent, error) {
 	<-s.release
 	return nil, s.err
+}
+
+type liveRecoveryStream struct {
+	mu      sync.Mutex
+	calls   []string
+	release chan struct{}
+	event   *SpeechEvent
+	closed  bool
+}
+
+func (s *liveRecoveryStream) PushFrame(frame *model.AudioFrame) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.calls = append(s.calls, "push:"+string(frame.Data))
+	return nil
+}
+
+func (s *liveRecoveryStream) Flush() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.calls = append(s.calls, "flush")
+	return nil
+}
+
+func (s *liveRecoveryStream) EndInput() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.calls = append(s.calls, "end_input")
+	return nil
+}
+
+func (s *liveRecoveryStream) Close() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.closed = true
+	return nil
+}
+
+func (s *liveRecoveryStream) Next() (*SpeechEvent, error) {
+	<-s.release
+	if s.event != nil {
+		event := s.event
+		s.event = nil
+		return event, nil
+	}
+	return nil, io.EOF
+}
+
+func waitForRecoveryCall(t *testing.T, stream *liveRecoveryStream, want string) {
+	t.Helper()
+	deadline := time.After(200 * time.Millisecond)
+	ticker := time.NewTicker(time.Millisecond)
+	defer ticker.Stop()
+
+	for {
+		stream.mu.Lock()
+		for _, call := range stream.calls {
+			if call == want {
+				stream.mu.Unlock()
+				return
+			}
+		}
+		calls := append([]string(nil), stream.calls...)
+		stream.mu.Unlock()
+
+		select {
+		case <-deadline:
+			t.Fatalf("recovery calls = %#v, want %s", calls, want)
+		case <-ticker.C:
+		}
+	}
 }

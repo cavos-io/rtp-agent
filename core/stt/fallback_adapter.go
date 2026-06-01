@@ -273,6 +273,7 @@ type fallbackRecognizeStream struct {
 	inputEnded   bool
 	startOffset  float64
 	startTime    float64
+	recoveries   []RecognizeStream
 
 	eventCh chan *SpeechEvent
 	errCh   chan error
@@ -456,7 +457,7 @@ func (s *fallbackRecognizeStream) monitorStream() {
 				nextIndex = s.activeIndex
 			} else {
 				s.adapter.setAvailable(s.activeIndex, false)
-				s.adapter.tryRecoverStream(s.ctx, s.activeIndex, s.language, cloneFallbackInputs(s.inputBuffer))
+				s.tryRecoverStream(s.activeIndex, cloneFallbackInputs(s.inputBuffer))
 			}
 
 			if fbErr := s.tryStartStream(nextIndex); fbErr != nil {
@@ -494,6 +495,57 @@ func (s *fallbackRecognizeStream) canRetrySTT(index int) bool {
 	return s.retries[index] < s.adapter.maxRetryPerSTT
 }
 
+func (s *fallbackRecognizeStream) tryRecoverStream(index int, inputs []fallbackRecognizeInput) {
+	if !s.adapter.markRecoveringStream(index) {
+		return
+	}
+	recoveryCtx := context.WithoutCancel(s.ctx)
+
+	go func() {
+		defer s.adapter.clearRecoveringStream(index)
+
+		stt := s.adapter.stts[index]
+		stream, err := stt.Stream(recoveryCtx, s.language)
+		if err != nil {
+			return
+		}
+		defer stream.Close()
+
+		s.mu.Lock()
+		s.recoveries = append(s.recoveries, stream)
+		s.mu.Unlock()
+		defer s.removeRecovery(stream)
+
+		if err := replayFallbackInputs(stream, inputs); err != nil {
+			return
+		}
+
+		for {
+			ev, err := stream.Next()
+			if err != nil {
+				return
+			}
+			if ev.Type != SpeechEventFinalTranscript || len(ev.Alternatives) == 0 || ev.Alternatives[0].Text == "" {
+				continue
+			}
+			s.adapter.setAvailable(index, true)
+			logger.Logger.Infow("Recovered STT stream provider", "stt", stt.Label())
+			return
+		}
+	}()
+}
+
+func (s *fallbackRecognizeStream) removeRecovery(stream RecognizeStream) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for i, recovery := range s.recoveries {
+		if recovery == stream {
+			s.recoveries = append(s.recoveries[:i], s.recoveries[i+1:]...)
+			return
+		}
+	}
+}
+
 func (s *fallbackRecognizeStream) PushFrame(frame *model.AudioFrame) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -515,6 +567,9 @@ func (s *fallbackRecognizeStream) PushFrame(frame *model.AudioFrame) error {
 		s.inputBuffer = s.inputBuffer[len(s.inputBuffer)-3000:]
 	}
 
+	for _, recovery := range s.recoveries {
+		_ = recovery.PushFrame(frame)
+	}
 	return s.activeStream.PushFrame(frame)
 }
 
@@ -528,6 +583,9 @@ func (s *fallbackRecognizeStream) Flush() error {
 		return fmt.Errorf("stream input ended")
 	}
 	s.inputBuffer = append(s.inputBuffer, fallbackRecognizeInput{flush: true})
+	for _, recovery := range s.recoveries {
+		_ = recovery.Flush()
+	}
 	return s.activeStream.Flush()
 }
 
@@ -542,6 +600,13 @@ func (s *fallbackRecognizeStream) EndInput() error {
 	}
 	s.inputEnded = true
 	s.inputBuffer = append(s.inputBuffer, fallbackRecognizeInput{end: true})
+	for _, recovery := range s.recoveries {
+		if ending, ok := recovery.(InputEnding); ok {
+			_ = ending.EndInput()
+		} else {
+			_ = recovery.Flush()
+		}
+	}
 	if ending, ok := s.activeStream.(InputEnding); ok {
 		return ending.EndInput()
 	}
