@@ -1604,6 +1604,10 @@ func (s *AgentServer) ExecuteLocalJobWithOptions(ctx context.Context, roomName s
 	}
 	jobCtx := newLocalJobContextWithOptions(roomName, participantIdentity, s.Options, options)
 	jobCtx.WorkerID = s.workerID
+	shutdownCh := make(chan struct{})
+	_ = jobCtx.AddShutdownCallback(func() {
+		close(shutdownCh)
+	})
 
 	// For local execution, we want to connect immediately
 	// For basic parity, we just trigger the entrypoint directly.
@@ -1620,8 +1624,11 @@ func (s *AgentServer) ExecuteLocalJobWithOptions(ctx context.Context, roomName s
 		}()
 	}
 
-	// Block until context is done for local execution
-	<-ctx.Done()
+	// Block until the local job is canceled or the job context shuts down.
+	select {
+	case <-ctx.Done():
+	case <-shutdownCh:
+	}
 	s.finishJob(jobCtx)
 	if options.SessionReportPath != "" {
 		return saveSessionReport(options.SessionReportPath, jobCtx.Report)

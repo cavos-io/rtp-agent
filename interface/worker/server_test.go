@@ -3405,6 +3405,66 @@ func TestExecuteLocalJobCleansUpAndRunsSessionEnd(t *testing.T) {
 	}
 }
 
+func TestExecuteLocalJobReturnsWhenJobContextShutsDown(t *testing.T) {
+	server := NewAgentServer(WorkerOptions{})
+	startedCh := make(chan *JobContext, 1)
+	sessionEndCh := make(chan *JobContext, 1)
+
+	if err := server.RTCSession(
+		func(ctx *JobContext) error {
+			startedCh <- ctx
+			ctx.Shutdown("entrypoint_done")
+			return nil
+		},
+		nil,
+		func(ctx *JobContext) error {
+			sessionEndCh <- ctx
+			return nil
+		},
+	); err != nil {
+		t.Fatalf("RTCSession() error = %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	doneCh := make(chan error, 1)
+	go func() {
+		doneCh <- server.ExecuteLocalJob(ctx, "room-a", "agent-local")
+	}()
+
+	var jobCtx *JobContext
+	select {
+	case jobCtx = <-startedCh:
+	case <-time.After(time.Second):
+		t.Fatal("local job entrypoint did not run")
+	}
+
+	select {
+	case err := <-doneCh:
+		if err != nil {
+			t.Fatalf("ExecuteLocalJob() error = %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("ExecuteLocalJob() did not return after job context shutdown")
+	}
+
+	select {
+	case endedCtx := <-sessionEndCh:
+		if endedCtx != jobCtx {
+			t.Fatal("session end callback received a different job context")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("session end callback did not run")
+	}
+
+	server.mu.Lock()
+	_, exists := server.activeJobs[jobCtx.Job.Id]
+	server.mu.Unlock()
+	if exists {
+		t.Fatal("local job remained in activeJobs after shutdown")
+	}
+}
+
 func TestFinishJobTimesOutSessionEndCallback(t *testing.T) {
 	server := NewAgentServer(WorkerOptions{SessionEndTimeoutSeconds: 0.01})
 	blockCh := make(chan struct{})
