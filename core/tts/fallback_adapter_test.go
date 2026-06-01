@@ -472,10 +472,11 @@ func TestFallbackSynthesizeStreamRestoresPrimaryAfterRecovery(t *testing.T) {
 		t.Fatalf("first audio data = %q, want fallback", got)
 	}
 
-	waitForFallbackCondition(t, func() bool {
-		return primary.streamCalls >= 2
-	})
 	wantRecoveryCalls := []string{"push:hello", "flush"}
+	wantRecoveryCallLog := strings.Join(wantRecoveryCalls, ",")
+	waitForFallbackCondition(t, func() bool {
+		return strings.Join(recovery.calls, ",") == wantRecoveryCallLog
+	})
 	if strings.Join(recovery.calls, ",") != strings.Join(wantRecoveryCalls, ",") {
 		t.Fatalf("recovery stream calls = %#v, want %#v", recovery.calls, wantRecoveryCalls)
 	}

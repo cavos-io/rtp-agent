@@ -121,16 +121,25 @@ func (w *streamAdapterWrapper) synthesize(text string, segmentID string) error {
 	}
 	defer stream.Close()
 
+	var pending *SynthesizedAudio
 	for {
 		audio, err := stream.Next()
 		if err != nil {
 			if errors.Is(err, io.EOF) {
+				if pending != nil {
+					pending.SegmentID = segmentID
+					pending.IsFinal = true
+					w.eventCh <- pending
+				}
 				return nil
 			}
 			return err
 		}
-		audio.SegmentID = segmentID
-		w.eventCh <- audio
+		if pending != nil {
+			pending.SegmentID = segmentID
+			w.eventCh <- pending
+		}
+		pending = audio
 	}
 }
 
