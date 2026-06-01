@@ -160,6 +160,7 @@ func (w *streamAdapterWrapper) synthesize(text string, segmentID string) error {
 				pending.DeltaText = text
 				transcriptPending = false
 			}
+			pending.IsFinal = false
 			w.eventCh <- pending
 		}
 		pending = audio

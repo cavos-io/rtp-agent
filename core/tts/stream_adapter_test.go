@@ -129,6 +129,36 @@ func TestStreamAdapterMarksLastFrameInSegmentFinal(t *testing.T) {
 	}
 }
 
+func TestStreamAdapterClearsProviderFinalBeforeLastFrame(t *testing.T) {
+	provider := &fakeStreamAdapterTTS{
+		events: []*SynthesizedAudio{
+			{IsFinal: true, Frame: &model.AudioFrame{Data: []byte{1}, SampleRate: 24000, NumChannels: 1, SamplesPerChannel: 1}},
+			{Frame: &model.AudioFrame{Data: []byte{2}, SampleRate: 24000, NumChannels: 1, SamplesPerChannel: 1}},
+		},
+	}
+	stream, err := NewStreamAdapter(provider).Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+	defer stream.Close()
+
+	if err := stream.PushText("final owned by adapter"); err != nil {
+		t.Fatalf("PushText returned error: %v", err)
+	}
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush returned error: %v", err)
+	}
+
+	first := nextStreamAdapterAudio(t, stream)
+	if first.IsFinal {
+		t.Fatal("first audio IsFinal = true, want adapter to clear provider final before last frame")
+	}
+	second := nextStreamAdapterAudio(t, stream)
+	if !second.IsFinal {
+		t.Fatal("second audio IsFinal = false, want adapter-owned final marker")
+	}
+}
+
 func TestStreamAdapterStampsTranscriptText(t *testing.T) {
 	provider := &fakeStreamAdapterTTS{
 		events: []*SynthesizedAudio{
