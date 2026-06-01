@@ -3,6 +3,7 @@ package openai
 import (
 	"math"
 	"testing"
+	"time"
 
 	"github.com/cavos-io/rtp-agent/core/llm"
 )
@@ -282,6 +283,60 @@ func TestRealtimeEventMapsResponseCreated(t *testing.T) {
 	}
 	if ev.Generation.ResponseID != "resp_123" || !ev.Generation.UserInitiated {
 		t.Fatalf("Generation = %#v, want user-initiated response", ev.Generation)
+	}
+}
+
+func TestRealtimeSessionRoutesOutputMessageTextDeltasToGenerationStream(t *testing.T) {
+	session := &realtimeSession{}
+	created := session.trackRealtimeEvent(llm.RealtimeEvent{
+		Type: llm.RealtimeEventTypeGenerationCreated,
+		Generation: &llm.GenerationCreatedEvent{
+			ResponseID: "resp_123",
+		},
+	})
+	if created.Generation == nil {
+		t.Fatal("Generation = nil, want generation payload")
+	}
+	if created.Generation.MessageCh == nil || created.Generation.FunctionCh == nil {
+		t.Fatalf("generation channels = %#v/%#v, want message and function streams", created.Generation.MessageCh, created.Generation.FunctionCh)
+	}
+
+	if ev, ok := session.trackOpenAIRealtimeEvent(map[string]any{
+		"type": "response.output_item.added",
+		"item": map[string]any{
+			"id":   "msg_123",
+			"type": "message",
+		},
+	}); ok {
+		t.Fatalf("trackOpenAIRealtimeEvent = %#v, true; want side effect only", ev)
+	}
+
+	var msg llm.MessageGeneration
+	select {
+	case msg = <-created.Generation.MessageCh:
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("timed out waiting for message generation")
+	}
+	if msg.MessageID != "msg_123" {
+		t.Fatalf("MessageID = %q, want msg_123", msg.MessageID)
+	}
+	if msg.TextCh == nil || msg.AudioCh == nil || msg.ModalitiesCh == nil {
+		t.Fatalf("message channels = %#v/%#v/%#v, want text, audio, and modalities streams", msg.TextCh, msg.AudioCh, msg.ModalitiesCh)
+	}
+
+	session.trackRealtimeEvent(llm.RealtimeEvent{
+		Type:   llm.RealtimeEventTypeText,
+		ItemID: "msg_123",
+		Text:   "hello",
+	})
+
+	select {
+	case text := <-msg.TextCh:
+		if text != "hello" {
+			t.Fatalf("text delta = %q, want hello", text)
+		}
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("timed out waiting for text delta")
 	}
 }
 

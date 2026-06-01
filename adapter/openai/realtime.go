@@ -57,11 +57,24 @@ type realtimeSession struct {
 	eventCh          chan llm.RealtimeEvent
 	remote           *llm.RemoteChatContext
 	inputTranscripts map[inputTranscriptKey]string
+	generation       *realtimeGeneration
 }
 
 type inputTranscriptKey struct {
 	itemID       string
 	contentIndex int
+}
+
+type realtimeGeneration struct {
+	messageCh  chan llm.MessageGeneration
+	functionCh chan *llm.FunctionCall
+	messages   map[string]*realtimeMessageGeneration
+}
+
+type realtimeMessageGeneration struct {
+	textCh       chan string
+	audioCh      chan *model.AudioFrame
+	modalitiesCh chan []string
 }
 
 func (m *RealtimeModel) Session() (llm.RealtimeSession, error) {
@@ -592,6 +605,30 @@ func (s *realtimeSession) eventLoop() {
 func (s *realtimeSession) trackOpenAIRealtimeEvent(ev map[string]any) (llm.RealtimeEvent, bool) {
 	evType, _ := ev["type"].(string)
 	switch evType {
+	case "response.output_item.added":
+		item, _ := ev["item"].(map[string]any)
+		itemID, _ := item["id"].(string)
+		itemType, _ := item["type"].(string)
+		if itemID == "" || itemType != "message" || s.generation == nil {
+			return llm.RealtimeEvent{}, false
+		}
+		msg := &realtimeMessageGeneration{
+			textCh:       make(chan string, 100),
+			audioCh:      make(chan *model.AudioFrame, 100),
+			modalitiesCh: make(chan []string, 1),
+		}
+		s.generation.messages[itemID] = msg
+		message := llm.MessageGeneration{
+			MessageID:    itemID,
+			TextCh:       msg.textCh,
+			AudioCh:      msg.audioCh,
+			ModalitiesCh: msg.modalitiesCh,
+		}
+		select {
+		case s.generation.messageCh <- message:
+		default:
+			logger.Logger.Warnw("dropping OpenAI realtime message generation for full stream", nil, "item_id", itemID)
+		}
 	case "conversation.item.deleted":
 		itemID, _ := ev["item_id"].(string)
 		if itemID == "" {
@@ -626,6 +663,13 @@ func (s *realtimeSession) trackOpenAIRealtimeEvent(ev map[string]any) (llm.Realt
 }
 
 func (s *realtimeSession) trackRealtimeEvent(ev llm.RealtimeEvent) llm.RealtimeEvent {
+	if ev.Type == llm.RealtimeEventTypeGenerationCreated {
+		return s.trackRealtimeGenerationCreated(ev)
+	}
+	if ev.Type == llm.RealtimeEventTypeText {
+		s.trackRealtimeText(ev)
+		return ev
+	}
 	if ev.Type == llm.RealtimeEventTypeRemoteItemAdded {
 		s.trackRealtimeRemoteItemAdded(ev)
 		return ev
@@ -634,6 +678,51 @@ func (s *realtimeSession) trackRealtimeEvent(ev llm.RealtimeEvent) llm.RealtimeE
 		return s.trackRealtimeInputTranscription(ev)
 	}
 	return ev
+}
+
+func (s *realtimeSession) trackRealtimeGenerationCreated(ev llm.RealtimeEvent) llm.RealtimeEvent {
+	if ev.Generation == nil {
+		return ev
+	}
+	generation := &realtimeGeneration{
+		messageCh:  make(chan llm.MessageGeneration, 100),
+		functionCh: make(chan *llm.FunctionCall, 100),
+		messages:   make(map[string]*realtimeMessageGeneration),
+	}
+	s.closeRealtimeGeneration()
+	s.generation = generation
+	ev.Generation.MessageCh = generation.messageCh
+	ev.Generation.FunctionCh = generation.functionCh
+	return ev
+}
+
+func (s *realtimeSession) trackRealtimeText(ev llm.RealtimeEvent) {
+	if s.generation == nil || ev.ItemID == "" {
+		return
+	}
+	msg := s.generation.messages[ev.ItemID]
+	if msg == nil {
+		return
+	}
+	select {
+	case msg.textCh <- ev.Text:
+	default:
+		logger.Logger.Warnw("dropping OpenAI realtime text delta for full message stream", nil, "item_id", ev.ItemID)
+	}
+}
+
+func (s *realtimeSession) closeRealtimeGeneration() {
+	if s.generation == nil {
+		return
+	}
+	for _, msg := range s.generation.messages {
+		close(msg.textCh)
+		close(msg.audioCh)
+		close(msg.modalitiesCh)
+	}
+	close(s.generation.messageCh)
+	close(s.generation.functionCh)
+	s.generation = nil
 }
 
 func (s *realtimeSession) trackRealtimeRemoteItemAdded(ev llm.RealtimeEvent) {
