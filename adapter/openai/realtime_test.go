@@ -172,9 +172,10 @@ func TestRealtimeEventMapsInputAudioTranscriptionCompleted(t *testing.T) {
 
 func TestRealtimeEventMapsInputAudioTranscriptionDelta(t *testing.T) {
 	ev, ok := openAIRealtimeEvent(map[string]any{
-		"type":    "conversation.item.input_audio_transcription.delta",
-		"item_id": "item_123",
-		"delta":   "hel",
+		"type":          "conversation.item.input_audio_transcription.delta",
+		"item_id":       "item_123",
+		"content_index": 2,
+		"delta":         "hel",
 	})
 	if !ok {
 		t.Fatal("openAIRealtimeEvent returned ok=false, want transcription delta event")
@@ -187,6 +188,9 @@ func TestRealtimeEventMapsInputAudioTranscriptionDelta(t *testing.T) {
 	}
 	if ev.InputTranscription.ItemID != "item_123" || ev.InputTranscription.Transcript != "hel" || ev.InputTranscription.IsFinal {
 		t.Fatalf("InputTranscription = %#v, want non-final delta transcript", ev.InputTranscription)
+	}
+	if ev.InputTranscription.ContentIndex != 2 {
+		t.Fatalf("ContentIndex = %d, want 2", ev.InputTranscription.ContentIndex)
 	}
 	if ev.InputTranscription.Confidence != nil {
 		t.Fatalf("Confidence = %#v, want nil for delta", ev.InputTranscription.Confidence)
@@ -395,6 +399,45 @@ func TestRealtimeSessionAccumulatesInputAudioTranscriptionDeltas(t *testing.T) {
 	})
 	if next.InputTranscription.Transcript != "new" {
 		t.Fatalf("next transcript = %q, want new after final clears accumulator", next.InputTranscription.Transcript)
+	}
+}
+
+func TestRealtimeSessionAccumulatesInputAudioTranscriptionByContentIndex(t *testing.T) {
+	session := &realtimeSession{}
+
+	session.trackRealtimeEvent(llm.RealtimeEvent{
+		Type: llm.RealtimeEventTypeInputAudioTranscriptionCompleted,
+		InputTranscription: &llm.InputTranscriptionCompleted{
+			ItemID:       "item_123",
+			ContentIndex: 0,
+			Transcript:   "hel",
+			IsFinal:      false,
+		},
+	})
+	otherContent := session.trackRealtimeEvent(llm.RealtimeEvent{
+		Type: llm.RealtimeEventTypeInputAudioTranscriptionCompleted,
+		InputTranscription: &llm.InputTranscriptionCompleted{
+			ItemID:       "item_123",
+			ContentIndex: 1,
+			Transcript:   "oth",
+			IsFinal:      false,
+		},
+	})
+	firstContent := session.trackRealtimeEvent(llm.RealtimeEvent{
+		Type: llm.RealtimeEventTypeInputAudioTranscriptionCompleted,
+		InputTranscription: &llm.InputTranscriptionCompleted{
+			ItemID:       "item_123",
+			ContentIndex: 0,
+			Transcript:   "lo",
+			IsFinal:      false,
+		},
+	})
+
+	if otherContent.InputTranscription.Transcript != "oth" {
+		t.Fatalf("other content transcript = %q, want oth", otherContent.InputTranscription.Transcript)
+	}
+	if firstContent.InputTranscription.Transcript != "hello" {
+		t.Fatalf("first content transcript = %q, want hello", firstContent.InputTranscription.Transcript)
 	}
 }
 

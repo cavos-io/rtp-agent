@@ -531,10 +531,11 @@ type RemoteItemAddedEvent struct {
 }
 
 type InputTranscriptionCompleted struct {
-	ItemID     string
-	Transcript string
-	IsFinal    bool
-	Confidence *float64
+	ItemID       string
+	ContentIndex int
+	Transcript   string
+	IsFinal      bool
+	Confidence   *float64
 }
 
 type RealtimeEvent struct {

@@ -90,10 +90,11 @@ func TestRealtimeEventCanCarryInputAudioTranscription(t *testing.T) {
 	ev := RealtimeEvent{
 		Type: RealtimeEventTypeInputAudioTranscriptionCompleted,
 		InputTranscription: &InputTranscriptionCompleted{
-			ItemID:     "item_123",
-			Transcript: "hello",
-			IsFinal:    true,
-			Confidence: &confidence,
+			ItemID:       "item_123",
+			ContentIndex: 2,
+			Transcript:   "hello",
+			IsFinal:      true,
+			Confidence:   &confidence,
 		},
 	}
 
@@ -102,6 +103,9 @@ func TestRealtimeEventCanCarryInputAudioTranscription(t *testing.T) {
 	}
 	if ev.InputTranscription.ItemID != "item_123" || ev.InputTranscription.Transcript != "hello" || !ev.InputTranscription.IsFinal {
 		t.Fatalf("InputTranscription = %#v, want final item transcript", ev.InputTranscription)
+	}
+	if ev.InputTranscription.ContentIndex != 2 {
+		t.Fatalf("ContentIndex = %d, want 2", ev.InputTranscription.ContentIndex)
 	}
 	if ev.InputTranscription.Confidence == nil || *ev.InputTranscription.Confidence != confidence {
 		t.Fatalf("Confidence = %#v, want %.2f", ev.InputTranscription.Confidence, confidence)
