@@ -292,6 +292,36 @@ func (a *RunAssert) ContainsMessage(role llm.ChatRole, content string) *RunAsser
 	return a
 }
 
+func (a *RunAssert) ContainsFunctionCallOutput(output string, isError bool) *RunAssert {
+	found := false
+	for _, event := range a.events() {
+		outputEvent, ok := event.(*FunctionCallOutputEvent)
+		if ok && outputEvent.Item.Output == output && outputEvent.Item.IsError == isError {
+			found = true
+			break
+		}
+	}
+	if !found {
+		a.errors = append(a.errors, fmt.Errorf("expected function call output %q with is_error=%t, but not found", output, isError))
+	}
+	return a
+}
+
+func (a *RunAssert) ContainsAgentHandoff(newAgent *Agent) *RunAssert {
+	found := false
+	for _, event := range a.events() {
+		handoffEvent, ok := event.(*AgentHandoffEvent)
+		if ok && handoffEvent.NewAgent == newAgent {
+			found = true
+			break
+		}
+	}
+	if !found {
+		a.errors = append(a.errors, errors.New("expected agent handoff, but not found"))
+	}
+	return a
+}
+
 func (a *RunAssert) HasError() error {
 	if len(a.errors) == 0 {
 		return nil

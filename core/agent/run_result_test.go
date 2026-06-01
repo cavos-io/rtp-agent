@@ -210,3 +210,34 @@ func TestRunAssertUsesRecordedEventsForFunctionCalls(t *testing.T) {
 		t.Fatalf("IsFunctionCall returned error = %v, want nil for recorded event", err)
 	}
 }
+
+func TestRunAssertUsesRecordedEventsForFunctionCallOutputs(t *testing.T) {
+	result := NewRunResult(llm.NewChatContext())
+	output := &llm.FunctionCallOutput{
+		ID:        "out_1",
+		CallID:    "call_1",
+		Name:      "lookup",
+		Output:    "done",
+		IsError:   true,
+		CreatedAt: time.Now(),
+	}
+
+	result.RecordItem(output)
+
+	if err := result.Expect.ContainsFunctionCallOutput("done", true).HasError(); err != nil {
+		t.Fatalf("ContainsFunctionCallOutput returned error = %v, want nil for recorded event", err)
+	}
+}
+
+func TestRunAssertUsesRecordedEventsForAgentHandoffs(t *testing.T) {
+	result := NewRunResult(llm.NewChatContext())
+	handoff := &llm.AgentHandoff{ID: "handoff_1", NewAgentID: "agent_2", CreatedAt: time.Now()}
+	oldAgent := NewAgent("old")
+	newAgent := NewAgent("new")
+
+	result.RecordAgentHandoff(handoff, oldAgent, newAgent)
+
+	if err := result.Expect.ContainsAgentHandoff(newAgent).HasError(); err != nil {
+		t.Fatalf("ContainsAgentHandoff returned error = %v, want nil for recorded event", err)
+	}
+}
