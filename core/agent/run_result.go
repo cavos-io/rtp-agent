@@ -327,6 +327,21 @@ func (a *RunAssert) ContainsMessage(role llm.ChatRole, content string) *RunAsser
 	return a
 }
 
+func (a *RunAssert) ContainsMessageRole(role llm.ChatRole) *RunAssert {
+	found := false
+	for _, event := range a.events() {
+		msgEvent, ok := event.(*ChatMessageEvent)
+		if ok && msgEvent.Item.Role == role {
+			found = true
+			break
+		}
+	}
+	if !found {
+		a.errors = append(a.errors, fmt.Errorf("expected message from %s, but not found", role))
+	}
+	return a
+}
+
 func (a *RunAssert) ContainsFunctionCallOutput(output string, isError bool) *RunAssert {
 	found := false
 	for _, event := range a.events() {

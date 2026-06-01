@@ -195,6 +195,39 @@ func TestRunAssertUsesRecordedEventsForMessages(t *testing.T) {
 	}
 }
 
+func TestRunAssertUsesRecordedEventsForMessageRole(t *testing.T) {
+	result := NewRunResult(llm.NewChatContext())
+	message := &llm.ChatMessage{
+		ID:        "msg_1",
+		Role:      llm.ChatRoleAssistant,
+		Content:   []llm.ChatContent{{Text: "any content"}},
+		CreatedAt: time.Now(),
+	}
+
+	result.RecordItem(message)
+
+	if err := result.Expect.ContainsMessageRole(llm.ChatRoleAssistant).HasError(); err != nil {
+		t.Fatalf("ContainsMessageRole returned error = %v, want nil for recorded role", err)
+	}
+}
+
+func TestRunAssertReportsMissingMessageRole(t *testing.T) {
+	result := NewRunResult(llm.NewChatContext())
+	message := &llm.ChatMessage{
+		ID:        "msg_1",
+		Role:      llm.ChatRoleAssistant,
+		Content:   []llm.ChatContent{{Text: "any content"}},
+		CreatedAt: time.Now(),
+	}
+
+	result.RecordItem(message)
+
+	err := result.Expect.ContainsMessageRole(llm.ChatRoleUser).HasError()
+	if err == nil {
+		t.Fatal("ContainsMessageRole error = nil, want missing role error")
+	}
+}
+
 func TestRunAssertUsesRecordedEventsForFunctionCalls(t *testing.T) {
 	result := NewRunResult(llm.NewChatContext())
 	functionCall := &llm.FunctionCall{
