@@ -346,6 +346,19 @@ func (a *RunAssert) NextEvent(eventType ...string) *RunAssert {
 	return a
 }
 
+func (a *RunAssert) SkipNextEventIf(eventType string) bool {
+	events := a.events()
+	if a.index >= len(events) {
+		return false
+	}
+	if events[a.index].GetType() != eventType {
+		return false
+	}
+
+	a.index++
+	return true
+}
+
 func (a *RunAssert) SkipNext(count int) *RunAssert {
 	if count < 0 {
 		a.errors = append(a.errors, fmt.Errorf("cannot skip negative event count %d", count))

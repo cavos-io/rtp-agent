@@ -303,3 +303,35 @@ func TestRunAssertNextEventReportsMissingType(t *testing.T) {
 		t.Fatal("NextEvent error = nil, want error when type is not found")
 	}
 }
+
+func TestRunAssertSkipNextEventIfConsumesMatchingCurrentEvent(t *testing.T) {
+	result := NewRunResult(llm.NewChatContext())
+	result.RecordItem(&llm.ChatMessage{ID: "msg_1", Role: llm.ChatRoleAssistant, CreatedAt: time.Now()})
+
+	if ok := result.Expect.SkipNextEventIf("message"); !ok {
+		t.Fatal("SkipNextEventIf returned false, want true for matching current event")
+	}
+	if err := result.Expect.NoMoreEvents().HasError(); err != nil {
+		t.Fatalf("NoMoreEvents returned error = %v, want nil after consuming matching event", err)
+	}
+}
+
+func TestRunAssertSkipNextEventIfLeavesNonMatchingCurrentEvent(t *testing.T) {
+	result := NewRunResult(llm.NewChatContext())
+	result.RecordItem(&llm.ChatMessage{ID: "msg_1", Role: llm.ChatRoleAssistant, CreatedAt: time.Now()})
+
+	if ok := result.Expect.SkipNextEventIf("function_call"); ok {
+		t.Fatal("SkipNextEventIf returned true, want false for non-matching current event")
+	}
+	if err := result.Expect.NextEvent("message").NoMoreEvents().HasError(); err != nil {
+		t.Fatalf("NextEvent returned error = %v, want message to remain after non-match", err)
+	}
+}
+
+func TestRunAssertSkipNextEventIfReturnsFalseWhenNoEventsRemain(t *testing.T) {
+	result := NewRunResult(llm.NewChatContext())
+
+	if ok := result.Expect.SkipNextEventIf("message"); ok {
+		t.Fatal("SkipNextEventIf returned true, want false when no events remain")
+	}
+}
