@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"math"
 	"strings"
 	"testing"
 	"time"
@@ -120,6 +121,24 @@ func TestSimpleVADUpdateOptionsAppliesToActiveStream(t *testing.T) {
 	assertEventType(t, stream, VADEventStartOfSpeech)
 }
 
+func TestNewSimpleVADWithAllowsExplicitZeroThreshold(t *testing.T) {
+	detector := NewSimpleVADWith(
+		WithThreshold(0),
+		WithMinSpeechDuration(0),
+	)
+	stream, err := detector.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	defer stream.Close()
+
+	if err := stream.PushFrame(audioFrame(16000, 160, 0)); err != nil {
+		t.Fatalf("PushFrame() error = %v", err)
+	}
+	assertEventType(t, stream, VADEventInferenceDone)
+	assertEventType(t, stream, VADEventStartOfSpeech)
+}
+
 func TestSimpleVADUpdateOptionsWithAllowsZeroMinSpeechDuration(t *testing.T) {
 	detector := NewSimpleVADWithOptions(SimpleVADOptions{
 		Threshold:         0.05,
@@ -208,6 +227,189 @@ func TestSimpleVADUpdateOptionsWithIgnoresInvalidProbabilitySmoothingAlpha(t *te
 	simpleStream := stream.(*simpleVADStream)
 	if simpleStream.options.ProbabilitySmoothingAlpha != 0.35 {
 		t.Fatalf("stream smoothing alpha = %v, want 0.35", simpleStream.options.ProbabilitySmoothingAlpha)
+	}
+}
+
+func TestSimpleVADRejectsInvalidUpdateIntervalAtStream(t *testing.T) {
+	for _, interval := range []float64{-1, math.NaN(), math.Inf(1)} {
+		detector := NewSimpleVADWithOptions(SimpleVADOptions{UpdateInterval: interval})
+
+		stream, err := detector.Stream(context.Background())
+		if err == nil {
+			if stream != nil {
+				_ = stream.Close()
+			}
+			t.Fatalf("Stream() with update interval %v error = nil, want invalid update interval error", interval)
+		}
+		if !strings.Contains(err.Error(), "update interval must be greater than 0") {
+			t.Fatalf("Stream() with update interval %v error = %q, want update interval message", interval, err.Error())
+		}
+		if len(detector.streams) != 0 {
+			t.Fatalf("registered streams after invalid update interval = %d, want 0", len(detector.streams))
+		}
+	}
+}
+
+func TestSimpleVADUpdateOptionsWithIgnoresInvalidUpdateInterval(t *testing.T) {
+	detector := NewSimpleVADWithOptions(SimpleVADOptions{UpdateInterval: 0.5})
+	stream, err := detector.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	defer stream.Close()
+
+	detector.UpdateOptionsWith(WithUpdateInterval(0))
+	if detector.Capabilities().UpdateInterval != 0.5 {
+		t.Fatalf("Capabilities().UpdateInterval = %v, want 0.5", detector.Capabilities().UpdateInterval)
+	}
+	simpleStream := stream.(*simpleVADStream)
+	if simpleStream.options.UpdateInterval != 0.5 {
+		t.Fatalf("stream update interval = %v, want 0.5", simpleStream.options.UpdateInterval)
+	}
+}
+
+func TestSimpleVADRejectsInvalidWindowDurationAtStream(t *testing.T) {
+	for _, duration := range []float64{-1, math.NaN(), math.Inf(1)} {
+		detector := NewSimpleVADWithOptions(SimpleVADOptions{WindowDuration: duration})
+
+		stream, err := detector.Stream(context.Background())
+		if err == nil {
+			if stream != nil {
+				_ = stream.Close()
+			}
+			t.Fatalf("Stream() with window duration %v error = nil, want invalid window duration error", duration)
+		}
+		if !strings.Contains(err.Error(), "window duration must be greater than or equal to 0") {
+			t.Fatalf("Stream() with window duration %v error = %q, want window duration message", duration, err.Error())
+		}
+		if len(detector.streams) != 0 {
+			t.Fatalf("registered streams after invalid window duration = %d, want 0", len(detector.streams))
+		}
+	}
+}
+
+func TestSimpleVADUpdateOptionsWithIgnoresInvalidWindowDuration(t *testing.T) {
+	detector := NewSimpleVADWithOptions(SimpleVADOptions{WindowDuration: 0.032})
+	stream, err := detector.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	defer stream.Close()
+
+	detector.UpdateOptionsWith(WithWindowDuration(math.Inf(1)))
+	if detector.options.WindowDuration != 0.032 {
+		t.Fatalf("detector window duration = %v, want 0.032", detector.options.WindowDuration)
+	}
+	simpleStream := stream.(*simpleVADStream)
+	if simpleStream.options.WindowDuration != 0.032 {
+		t.Fatalf("stream window duration = %v, want 0.032", simpleStream.options.WindowDuration)
+	}
+}
+
+func TestSimpleVADRejectsInvalidThresholdAtStream(t *testing.T) {
+	for _, threshold := range []float64{-1, math.NaN(), math.Inf(1)} {
+		detector := NewSimpleVADWithOptions(SimpleVADOptions{
+			Threshold:             threshold,
+			DeactivationThreshold: 0.05,
+		})
+
+		stream, err := detector.Stream(context.Background())
+		if err == nil {
+			if stream != nil {
+				_ = stream.Close()
+			}
+			t.Fatalf("Stream() with threshold %v error = nil, want invalid threshold error", threshold)
+		}
+		if !strings.Contains(err.Error(), "threshold must be greater than or equal to 0") {
+			t.Fatalf("Stream() with threshold %v error = %q, want threshold message", threshold, err.Error())
+		}
+		if len(detector.streams) != 0 {
+			t.Fatalf("registered streams after invalid threshold = %d, want 0", len(detector.streams))
+		}
+	}
+}
+
+func TestSimpleVADUpdateOptionsWithIgnoresInvalidThreshold(t *testing.T) {
+	detector := NewSimpleVADWithOptions(SimpleVADOptions{Threshold: 0.05})
+	stream, err := detector.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	defer stream.Close()
+
+	detector.UpdateOptionsWith(WithThreshold(math.NaN()))
+	if detector.options.Threshold != 0.05 {
+		t.Fatalf("detector threshold = %v, want 0.05", detector.options.Threshold)
+	}
+	simpleStream := stream.(*simpleVADStream)
+	if simpleStream.options.Threshold != 0.05 {
+		t.Fatalf("stream threshold = %v, want 0.05", simpleStream.options.Threshold)
+	}
+}
+
+func TestSimpleVADRejectsInvalidTimingDurationsAtStream(t *testing.T) {
+	tests := []struct {
+		name    string
+		options SimpleVADOptions
+		want    string
+	}{
+		{
+			name:    "min speech duration",
+			options: SimpleVADOptions{MinSpeechDuration: math.NaN()},
+			want:    "min speech duration must be greater than or equal to 0",
+		},
+		{
+			name:    "min silence duration",
+			options: SimpleVADOptions{MinSilenceDuration: math.Inf(1)},
+			want:    "min silence duration must be greater than or equal to 0",
+		},
+		{
+			name:    "prefix padding duration",
+			options: SimpleVADOptions{PrefixPaddingDuration: -0.1},
+			want:    "prefix padding duration must be greater than or equal to 0",
+		},
+		{
+			name:    "max buffered speech duration",
+			options: SimpleVADOptions{MaxBufferedSpeechDuration: math.Inf(1)},
+			want:    "max buffered speech duration must be greater than or equal to 0",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			detector := NewSimpleVADWithOptions(tt.options)
+
+			stream, err := detector.Stream(context.Background())
+			if err == nil {
+				if stream != nil {
+					_ = stream.Close()
+				}
+				t.Fatal("Stream() error = nil, want invalid timing duration error")
+			}
+			if !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("Stream() error = %q, want %q", err.Error(), tt.want)
+			}
+			if len(detector.streams) != 0 {
+				t.Fatalf("registered streams after invalid timing duration = %d, want 0", len(detector.streams))
+			}
+		})
+	}
+}
+
+func TestSimpleVADUpdateOptionsWithIgnoresInvalidTimingDuration(t *testing.T) {
+	detector := NewSimpleVADWithOptions(SimpleVADOptions{MinSpeechDuration: 0.02})
+	stream, err := detector.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	defer stream.Close()
+
+	detector.UpdateOptionsWith(WithMinSpeechDuration(math.NaN()))
+	if detector.options.MinSpeechDuration != 0.02 {
+		t.Fatalf("detector min speech duration = %v, want 0.02", detector.options.MinSpeechDuration)
+	}
+	simpleStream := stream.(*simpleVADStream)
+	if simpleStream.options.MinSpeechDuration != 0.02 {
+		t.Fatalf("stream min speech duration = %v, want 0.02", simpleStream.options.MinSpeechDuration)
 	}
 }
 
@@ -610,6 +812,96 @@ func TestSimpleVADUsesDeactivationThresholdWhileSpeaking(t *testing.T) {
 	assertCombinedFrames(t, end.Frames, speech, dipAboveDeactivation, silence)
 }
 
+func TestSimpleVADThresholdUpdatePreservesDeactivationThreshold(t *testing.T) {
+	detector := NewSimpleVADWithOptions(SimpleVADOptions{
+		Threshold:             0.05,
+		DeactivationThreshold: 0.05,
+	})
+	stream, err := detector.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	defer stream.Close()
+
+	speech := audioFrame(16000, 160, 6000)
+	if err := stream.PushFrame(speech); err != nil {
+		t.Fatalf("PushFrame() speech error = %v", err)
+	}
+	assertEventType(t, stream, VADEventInferenceDone)
+	assertEventType(t, stream, VADEventStartOfSpeech)
+
+	detector.UpdateOptions(SimpleVADOptions{Threshold: 0.1})
+	if detector.options.DeactivationThreshold != 0.05 {
+		t.Fatalf("detector deactivation threshold = %v, want 0.05", detector.options.DeactivationThreshold)
+	}
+	simpleStream := stream.(*simpleVADStream)
+	if simpleStream.options.DeactivationThreshold != 0.05 {
+		t.Fatalf("stream deactivation threshold = %v, want 0.05", simpleStream.options.DeactivationThreshold)
+	}
+
+	dipAboveOriginalDeactivation := audioFrame(16000, 160, 2200)
+	if err := stream.PushFrame(dipAboveOriginalDeactivation); err != nil {
+		t.Fatalf("PushFrame() dip error = %v", err)
+	}
+	assertEventType(t, stream, VADEventInferenceDone)
+	assertNoQueuedVADEvent(t, stream)
+
+	silence := audioFrame(16000, 160, 0)
+	if err := stream.PushFrame(silence); err != nil {
+		t.Fatalf("PushFrame() silence error = %v", err)
+	}
+	assertEventType(t, stream, VADEventInferenceDone)
+	end := nextVADEvent(t, stream)
+	if end.Type != VADEventEndOfSpeech {
+		t.Fatalf("event type = %s, want %s", end.Type, VADEventEndOfSpeech)
+	}
+	assertCombinedFrames(t, end.Frames, speech, dipAboveOriginalDeactivation, silence)
+}
+
+func TestSimpleVADRejectsInvalidDeactivationThresholdAtStream(t *testing.T) {
+	for _, threshold := range []float64{-0.1, math.NaN(), math.Inf(1)} {
+		detector := NewSimpleVADWithOptions(SimpleVADOptions{
+			Threshold:             0.05,
+			DeactivationThreshold: threshold,
+		})
+
+		stream, err := detector.Stream(context.Background())
+		if err == nil {
+			if stream != nil {
+				_ = stream.Close()
+			}
+			t.Fatalf("Stream() with deactivation threshold %v error = nil, want invalid threshold error", threshold)
+		}
+		if !strings.Contains(err.Error(), "deactivation threshold must be greater than or equal to 0") {
+			t.Fatalf("Stream() with deactivation threshold %v error = %q, want deactivation threshold message", threshold, err.Error())
+		}
+		if len(detector.streams) != 0 {
+			t.Fatalf("registered streams after invalid deactivation threshold = %d, want 0", len(detector.streams))
+		}
+	}
+}
+
+func TestSimpleVADUpdateOptionsWithIgnoresInvalidDeactivationThreshold(t *testing.T) {
+	detector := NewSimpleVADWithOptions(SimpleVADOptions{
+		Threshold:             0.1,
+		DeactivationThreshold: 0.05,
+	})
+	stream, err := detector.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	defer stream.Close()
+
+	detector.UpdateOptionsWith(WithDeactivationThreshold(-0.1))
+	if detector.options.DeactivationThreshold != 0.05 {
+		t.Fatalf("detector deactivation threshold = %v, want 0.05", detector.options.DeactivationThreshold)
+	}
+	simpleStream := stream.(*simpleVADStream)
+	if simpleStream.options.DeactivationThreshold != 0.05 {
+		t.Fatalf("stream deactivation threshold = %v, want 0.05", simpleStream.options.DeactivationThreshold)
+	}
+}
+
 func TestSimpleVADProbabilitySmoothingDelaysSpeechEnd(t *testing.T) {
 	stream, err := NewSimpleVADWithOptions(SimpleVADOptions{
 		Threshold:                 0.05,
@@ -643,7 +935,7 @@ func TestSimpleVADProbabilitySmoothingDelaysSpeechEnd(t *testing.T) {
 }
 
 func TestSimpleVADRejectsInvalidProbabilitySmoothingAlpha(t *testing.T) {
-	for _, alpha := range []float64{-0.1, 1.1, 2} {
+	for _, alpha := range []float64{-0.1, 1.1, 2, math.NaN(), math.Inf(1)} {
 		detector := NewSimpleVADWithOptions(SimpleVADOptions{
 			Threshold:                 0.05,
 			ProbabilitySmoothingAlpha: alpha,
@@ -1301,9 +1593,18 @@ func TestSimpleVADEndInputFlushesAndRejectsMoreInput(t *testing.T) {
 	}
 	if err := stream.PushFrame(audioFrame(16000, 160, 6000)); err == nil {
 		t.Fatal("PushFrame() after EndInput() error = nil, want error")
+	} else if !strings.Contains(err.Error(), "input ended") {
+		t.Fatalf("PushFrame() after EndInput() error = %q, want input ended", err.Error())
 	}
 	if err := stream.Flush(); err == nil {
 		t.Fatal("Flush() after EndInput() error = nil, want error")
+	} else if !strings.Contains(err.Error(), "input ended") {
+		t.Fatalf("Flush() after EndInput() error = %q, want input ended", err.Error())
+	}
+	if err := stream.EndInput(); err == nil {
+		t.Fatal("second EndInput() error = nil, want error")
+	} else if !strings.Contains(err.Error(), "input ended") {
+		t.Fatalf("second EndInput() error = %q, want input ended", err.Error())
 	}
 }
 

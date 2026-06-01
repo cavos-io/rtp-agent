@@ -3,6 +3,7 @@ package silero
 import (
 	"context"
 	"fmt"
+	"math"
 	"sync"
 
 	"github.com/cavos-io/rtp-agent/core/vad"
@@ -63,6 +64,10 @@ func WithPrefixPaddingDuration(d float64) VADOption {
 	return func(o *VADOptions) {
 		o.PrefixPaddingDuration = d
 	}
+}
+
+func WithPaddingDuration(d float64) VADOption {
+	return WithPrefixPaddingDuration(d)
 }
 
 func WithMaxBufferedSpeech(d float64) VADOption {
@@ -176,20 +181,35 @@ func (v *SileroVAD) OnMetricsCollected(handler vad.VADMetricsHandler) {
 
 func (v *SileroVAD) UpdateOptions(options VADOptions) {
 	v.mu.Lock()
-	v.options = mergeVADOptions(v.options, options)
-	merged := v.options
+	options.SampleRate = 0
+	options.UpdateInterval = 0
+	merged := mergeVADOptions(v.options, options)
+	if err := validateVADOptions(merged); err != nil {
+		v.mu.Unlock()
+		return
+	}
+	v.options = merged
 	v.mu.Unlock()
 	v.inner.UpdateOptions(simpleOptionsFromSilero(merged))
 }
 
 func (v *SileroVAD) UpdateOptionsWith(opts ...VADOption) {
 	v.mu.Lock()
+	merged := v.options
+	sampleRate := merged.SampleRate
+	updateInterval := merged.UpdateInterval
 	for _, opt := range opts {
 		if opt != nil {
-			opt(&v.options)
+			opt(&merged)
 		}
 	}
-	merged := v.options
+	merged.SampleRate = sampleRate
+	merged.UpdateInterval = updateInterval
+	if err := validateVADOptions(merged); err != nil {
+		v.mu.Unlock()
+		return
+	}
+	v.options = merged
 	v.mu.Unlock()
 	v.inner.UpdateOptionsWith(simpleUpdateOptionsFromSilero(merged)...)
 }
@@ -269,7 +289,22 @@ func validateVADOptions(options VADOptions) error {
 	if options.SampleRate != 8000 && options.SampleRate != 16000 {
 		return fmt.Errorf("silero VAD only supports 8KHz and 16KHz sample rates")
 	}
-	if options.DeactivationThreshold <= 0 {
+	if math.IsNaN(options.ActivationThreshold) || math.IsInf(options.ActivationThreshold, 0) || options.ActivationThreshold < 0 {
+		return fmt.Errorf("activation_threshold must be greater than or equal to 0")
+	}
+	if math.IsNaN(options.MinSpeechDuration) || math.IsInf(options.MinSpeechDuration, 0) || options.MinSpeechDuration < 0 {
+		return fmt.Errorf("min_speech_duration must be greater than or equal to 0")
+	}
+	if math.IsNaN(options.MinSilenceDuration) || math.IsInf(options.MinSilenceDuration, 0) || options.MinSilenceDuration < 0 {
+		return fmt.Errorf("min_silence_duration must be greater than or equal to 0")
+	}
+	if math.IsNaN(options.PrefixPaddingDuration) || math.IsInf(options.PrefixPaddingDuration, 0) || options.PrefixPaddingDuration < 0 {
+		return fmt.Errorf("prefix_padding_duration must be greater than or equal to 0")
+	}
+	if math.IsNaN(options.MaxBufferedSpeech) || math.IsInf(options.MaxBufferedSpeech, 0) || options.MaxBufferedSpeech < 0 {
+		return fmt.Errorf("max_buffered_speech must be greater than or equal to 0")
+	}
+	if math.IsNaN(options.DeactivationThreshold) || math.IsInf(options.DeactivationThreshold, 0) || options.DeactivationThreshold <= 0 {
 		return fmt.Errorf("deactivation_threshold must be greater than 0")
 	}
 	return nil

@@ -33,6 +33,7 @@ type SimpleVADOptions struct {
 	ProbabilitySmoothingAlpha float64
 
 	maxBufferedSpeechDurationSet bool
+	deactivationThresholdSet     bool
 }
 
 type SimpleVADOption func(*SimpleVADOptions)
@@ -71,6 +72,7 @@ func WithMaxBufferedSpeechDuration(duration float64) SimpleVADOption {
 func WithDeactivationThreshold(threshold float64) SimpleVADOption {
 	return func(o *SimpleVADOptions) {
 		o.DeactivationThreshold = threshold
+		o.deactivationThresholdSet = true
 	}
 }
 
@@ -105,6 +107,23 @@ func NewSimpleVAD(threshold float64) *SimpleVAD {
 	return NewSimpleVADWithOptions(SimpleVADOptions{Threshold: threshold})
 }
 
+func NewSimpleVADWith(opts ...SimpleVADOption) *SimpleVAD {
+	options := SimpleVADOptions{
+		Threshold:             0.05,
+		DeactivationThreshold: 0.05,
+		UpdateInterval:        1,
+	}
+	for _, opt := range opts {
+		if opt != nil {
+			opt(&options)
+		}
+	}
+	if !options.deactivationThresholdSet {
+		options.DeactivationThreshold = options.Threshold
+	}
+	return newSimpleVADWithResolvedOptions(options)
+}
+
 func NewSimpleVADWithOptions(options SimpleVADOptions) *SimpleVAD {
 	if options.Threshold == 0 {
 		options.Threshold = 0.05
@@ -115,6 +134,10 @@ func NewSimpleVADWithOptions(options SimpleVADOptions) *SimpleVAD {
 	if options.UpdateInterval == 0 {
 		options.UpdateInterval = 1
 	}
+	return newSimpleVADWithResolvedOptions(options)
+}
+
+func newSimpleVADWithResolvedOptions(options SimpleVADOptions) *SimpleVAD {
 	return &SimpleVAD{
 		options: options,
 		streams: make(map[*simpleVADStream]struct{}),
@@ -212,7 +235,31 @@ func (v *SimpleVAD) Stream(ctx context.Context) (VADStream, error) {
 }
 
 func validateSimpleVADOptions(options SimpleVADOptions) error {
-	if options.ProbabilitySmoothingAlpha < 0 || options.ProbabilitySmoothingAlpha > 1 {
+	if math.IsNaN(options.UpdateInterval) || math.IsInf(options.UpdateInterval, 0) || options.UpdateInterval <= 0 {
+		return errors.New("update interval must be greater than 0")
+	}
+	if math.IsNaN(options.WindowDuration) || math.IsInf(options.WindowDuration, 0) || options.WindowDuration < 0 {
+		return errors.New("window duration must be greater than or equal to 0")
+	}
+	if math.IsNaN(options.Threshold) || math.IsInf(options.Threshold, 0) || options.Threshold < 0 {
+		return errors.New("threshold must be greater than or equal to 0")
+	}
+	if math.IsNaN(options.MinSpeechDuration) || math.IsInf(options.MinSpeechDuration, 0) || options.MinSpeechDuration < 0 {
+		return errors.New("min speech duration must be greater than or equal to 0")
+	}
+	if math.IsNaN(options.MinSilenceDuration) || math.IsInf(options.MinSilenceDuration, 0) || options.MinSilenceDuration < 0 {
+		return errors.New("min silence duration must be greater than or equal to 0")
+	}
+	if math.IsNaN(options.PrefixPaddingDuration) || math.IsInf(options.PrefixPaddingDuration, 0) || options.PrefixPaddingDuration < 0 {
+		return errors.New("prefix padding duration must be greater than or equal to 0")
+	}
+	if math.IsNaN(options.MaxBufferedSpeechDuration) || math.IsInf(options.MaxBufferedSpeechDuration, 0) || options.MaxBufferedSpeechDuration < 0 {
+		return errors.New("max buffered speech duration must be greater than or equal to 0")
+	}
+	if math.IsNaN(options.DeactivationThreshold) || math.IsInf(options.DeactivationThreshold, 0) || options.DeactivationThreshold < 0 {
+		return errors.New("deactivation threshold must be greater than or equal to 0")
+	}
+	if math.IsNaN(options.ProbabilitySmoothingAlpha) || math.IsInf(options.ProbabilitySmoothingAlpha, 0) || options.ProbabilitySmoothingAlpha < 0 || options.ProbabilitySmoothingAlpha > 1 {
 		return errors.New("probability smoothing alpha must be in [0, 1]")
 	}
 	return nil
@@ -278,11 +325,11 @@ func (s *simpleVADStream) setOptions(options SimpleVADOptions) {
 func (s *simpleVADStream) PushFrame(frame *model.AudioFrame) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.closed {
-		return errors.New("vad stream closed")
-	}
 	if s.inputEnded {
 		return errors.New("vad stream input ended")
+	}
+	if s.closed {
+		return errors.New("vad stream closed")
 	}
 	if frame == nil {
 		return errors.New("vad frame nil")
@@ -457,11 +504,11 @@ func (s *simpleVADStream) collectInferenceMetrics(inferenceDuration float64) {
 func (s *simpleVADStream) Flush() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.closed {
-		return errors.New("vad stream closed")
-	}
 	if s.inputEnded {
 		return errors.New("vad stream input ended")
+	}
+	if s.closed {
+		return errors.New("vad stream closed")
 	}
 	s.resetState()
 	return nil
@@ -470,11 +517,11 @@ func (s *simpleVADStream) Flush() error {
 func (s *simpleVADStream) EndInput() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.closed {
-		return errors.New("vad stream closed")
-	}
 	if s.inputEnded {
 		return errors.New("vad stream input ended")
+	}
+	if s.closed {
+		return errors.New("vad stream closed")
 	}
 	s.resetState()
 	s.inputEnded = true
@@ -957,8 +1004,6 @@ func mergeSimpleVADOptions(current, updates SimpleVADOptions) SimpleVADOptions {
 	}
 	if updates.DeactivationThreshold != 0 {
 		current.DeactivationThreshold = updates.DeactivationThreshold
-	} else if updates.Threshold != 0 {
-		current.DeactivationThreshold = updates.Threshold
 	}
 	if updates.UpdateInterval != 0 {
 		current.UpdateInterval = updates.UpdateInterval
