@@ -89,11 +89,14 @@ func (w *streamAdapterWrapper) run() {
 		for {
 			select {
 			case <-w.ctx.Done():
-				tokenizer.Flush()
-				tokenizer.Close()
+				tokenizer.AClose()
 				return
 			case input, ok := <-w.inputCh:
 				if !ok {
+					if w.isClosed() {
+						tokenizer.AClose()
+						return
+					}
 					tokenizer.Flush()
 					tokenizer.Close()
 					return
@@ -221,6 +224,12 @@ func (w *streamAdapterWrapper) clearActiveStream(stream ChunkedStream) {
 	if w.active == stream {
 		w.active = nil
 	}
+}
+
+func (w *streamAdapterWrapper) isClosed() bool {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.closed
 }
 
 func (w *streamAdapterWrapper) PushText(text string) error {

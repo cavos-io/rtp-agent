@@ -431,6 +431,30 @@ func TestStreamAdapterCloseClosesActiveChunkedStream(t *testing.T) {
 	}
 }
 
+func TestStreamAdapterCloseDoesNotSynthesizeBufferedText(t *testing.T) {
+	provider := &fakeStreamAdapterTTS{}
+	stream, err := NewStreamAdapter(provider).Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+
+	if err := stream.PushText("buffered but not flushed"); err != nil {
+		t.Fatalf("PushText returned error: %v", err)
+	}
+	time.Sleep(10 * time.Millisecond)
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close returned error: %v", err)
+	}
+
+	err = nextStreamAdapterError(stream)
+	if !errors.Is(err, io.EOF) && !errors.Is(err, context.Canceled) {
+		t.Fatalf("Next error = %v, want closed stream", err)
+	}
+	if got := provider.texts; len(got) != 0 {
+		t.Fatalf("synthesized texts after Close = %#v, want none", got)
+	}
+}
+
 func TestStreamAdapterEndsInputWhenSupported(t *testing.T) {
 	provider := &fakeStreamAdapterTTS{}
 	stream, err := NewStreamAdapter(provider).Stream(context.Background())
