@@ -61,3 +61,11 @@ func TestOpenAISpeechEventPreservesWordTimestamps(t *testing.T) {
 		t.Fatalf("second word = %+v, want world timing", got)
 	}
 }
+
+func TestOpenAISTTCapabilitiesAdvertiseWordAlignment(t *testing.T) {
+	provider := NewOpenAISTT("test-key", "whisper-1")
+
+	if got := provider.Capabilities().AlignedTranscript; got != "word" {
+		t.Fatalf("AlignedTranscript = %q, want word", got)
+	}
+}

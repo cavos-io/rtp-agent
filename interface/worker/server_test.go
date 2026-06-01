@@ -246,6 +246,22 @@ func TestWorkerHTTPHandlerReportsHealthOK(t *testing.T) {
 	}
 }
 
+func TestWorkerHTTPHandlerReportsConnectionFailure(t *testing.T) {
+	server := NewAgentServer(WorkerOptions{})
+	server.setConnectionFailed(true)
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	rec := httptest.NewRecorder()
+
+	server.workerHTTPHandler().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("health status = %d, want 503", rec.Code)
+	}
+	if strings.TrimSpace(rec.Body.String()) != "failed to connect to livekit" {
+		t.Fatalf("health body = %q, want failed connection message", rec.Body.String())
+	}
+}
+
 func TestWorkerHTTPHandlerReportsWorkerMetadata(t *testing.T) {
 	server := NewAgentServer(WorkerOptions{
 		AgentName: "sales-agent",

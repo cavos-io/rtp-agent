@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/cavos-io/conversation-worker/interface/worker"
 	"github.com/cavos-io/conversation-worker/interface/worker/ipc"
 	"github.com/livekit/protocol/livekit"
 )
@@ -214,6 +215,132 @@ func TestCliArgsCarriesReferenceReloadState(t *testing.T) {
 	}
 	if args.ReloadCount != 2 {
 		t.Fatalf("ReloadCount = %d, want 2", args.ReloadCount)
+	}
+}
+
+func TestParseWorkerArgsSupportsReferenceStartOptions(t *testing.T) {
+	args, drainTimeout, err := parseWorkerArgs([]string{
+		"worker", "start",
+		"--log-level", "warn",
+		"--url", "wss://livekit.example",
+		"--api-key", "api-key",
+		"--api-secret", "api-secret",
+		"--drain-timeout", "42",
+	}, false)
+	if err != nil {
+		t.Fatalf("parseWorkerArgs() error = %v", err)
+	}
+
+	if args.LogLevel != "WARN" {
+		t.Fatalf("LogLevel = %q, want WARN", args.LogLevel)
+	}
+	if args.URL != "wss://livekit.example" {
+		t.Fatalf("URL = %q, want wss://livekit.example", args.URL)
+	}
+	if args.APIKey != "api-key" {
+		t.Fatalf("APIKey = %q, want api-key", args.APIKey)
+	}
+	if args.APISecret != "api-secret" {
+		t.Fatalf("APISecret = %q, want api-secret", args.APISecret)
+	}
+	if args.DevMode {
+		t.Fatal("DevMode = true, want false for start")
+	}
+	if args.Reload {
+		t.Fatal("Reload = true, want false for start")
+	}
+	if drainTimeout == nil || *drainTimeout != 42 {
+		t.Fatalf("drainTimeout = %v, want 42", drainTimeout)
+	}
+}
+
+func TestParseWorkerArgsSupportsReferenceDevOptions(t *testing.T) {
+	args, drainTimeout, err := parseWorkerArgs([]string{
+		"worker", "dev",
+		"--log-level", "trace",
+		"--url", "wss://dev.example",
+		"--api-key", "dev-key",
+		"--api-secret", "dev-secret",
+		"--no-reload",
+	}, true)
+	if err != nil {
+		t.Fatalf("parseWorkerArgs() error = %v", err)
+	}
+
+	if args.LogLevel != "TRACE" {
+		t.Fatalf("LogLevel = %q, want TRACE", args.LogLevel)
+	}
+	if args.URL != "wss://dev.example" {
+		t.Fatalf("URL = %q, want wss://dev.example", args.URL)
+	}
+	if args.APIKey != "dev-key" {
+		t.Fatalf("APIKey = %q, want dev-key", args.APIKey)
+	}
+	if args.APISecret != "dev-secret" {
+		t.Fatalf("APISecret = %q, want dev-secret", args.APISecret)
+	}
+	if !args.DevMode {
+		t.Fatal("DevMode = false, want true for dev")
+	}
+	if args.Reload {
+		t.Fatal("Reload = true, want false after --no-reload")
+	}
+	if drainTimeout != nil {
+		t.Fatalf("drainTimeout = %v, want nil for dev", drainTimeout)
+	}
+}
+
+func TestApplyWorkerArgsUpdatesServerOptions(t *testing.T) {
+	server := worker.NewAgentServer(worker.WorkerOptions{})
+	args := CliArgs{
+		LogLevel:  "ERROR",
+		URL:       "wss://livekit.example",
+		APIKey:    "api-key",
+		APISecret: "api-secret",
+		DevMode:   true,
+	}
+	drainTimeout := 15
+
+	if err := applyWorkerArgs(server, args, &drainTimeout); err != nil {
+		t.Fatalf("applyWorkerArgs() error = %v", err)
+	}
+
+	if server.Options.LogLevel != "ERROR" {
+		t.Fatalf("LogLevel = %q, want ERROR", server.Options.LogLevel)
+	}
+	if server.Options.WSURL != "wss://livekit.example" || server.Options.WSRL != "wss://livekit.example" {
+		t.Fatalf("WSURL/WSRL = %q/%q, want URL applied", server.Options.WSURL, server.Options.WSRL)
+	}
+	if server.Options.APIKey != "api-key" {
+		t.Fatalf("APIKey = %q, want api-key", server.Options.APIKey)
+	}
+	if server.Options.APISecret != "api-secret" {
+		t.Fatalf("APISecret = %q, want api-secret", server.Options.APISecret)
+	}
+	if !server.Options.DevMode {
+		t.Fatal("DevMode = false, want true")
+	}
+	if server.Options.DrainTimeoutSeconds != 15 {
+		t.Fatalf("DrainTimeoutSeconds = %d, want 15", server.Options.DrainTimeoutSeconds)
+	}
+}
+
+func TestStartArgsForDevReloadForwardsReferenceConnectionOptions(t *testing.T) {
+	got := startArgsForDevReload(CliArgs{
+		LogLevel:  "TRACE",
+		URL:       "wss://livekit.example",
+		APIKey:    "api-key",
+		APISecret: "api-secret",
+	})
+	want := []string{
+		"--log-level", "TRACE",
+		"--url", "wss://livekit.example",
+		"--api-key", "api-key",
+		"--api-secret", "api-secret",
+	}
+
+	if strings.Join(got, "\x00") != strings.Join(want, "\x00") {
+		t.Fatalf("startArgsForDevReload() = %#v, want %#v", got, want)
 	}
 }
 

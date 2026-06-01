@@ -36,7 +36,7 @@ func NewGoogleSTT(credentialsFile string) (*GoogleSTT, error) {
 
 func (s *GoogleSTT) Label() string { return "google.STT" }
 func (s *GoogleSTT) Capabilities() stt.STTCapabilities {
-	return stt.STTCapabilities{Streaming: true, InterimResults: true, Diarization: false, OfflineRecognize: true}
+	return stt.STTCapabilities{Streaming: true, InterimResults: true, Diarization: false, AlignedTranscript: "word", OfflineRecognize: true}
 }
 
 func (s *GoogleSTT) Stream(ctx context.Context, language string) (stt.RecognizeStream, error) {

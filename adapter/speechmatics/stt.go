@@ -28,7 +28,7 @@ func NewSpeechmaticsSTT(apiKey string) *SpeechmaticsSTT {
 
 func (s *SpeechmaticsSTT) Label() string { return "speechmatics.STT" }
 func (s *SpeechmaticsSTT) Capabilities() stt.STTCapabilities {
-	return stt.STTCapabilities{Streaming: true, InterimResults: true, Diarization: false, OfflineRecognize: true}
+	return stt.STTCapabilities{Streaming: true, InterimResults: true, Diarization: false, AlignedTranscript: "word", OfflineRecognize: true}
 }
 
 func (s *SpeechmaticsSTT) Stream(ctx context.Context, language string) (stt.RecognizeStream, error) {

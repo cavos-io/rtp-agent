@@ -126,6 +126,53 @@ func TestAssemblyAIRecognizeReturnsTranscriptError(t *testing.T) {
 	}
 }
 
+func TestAssemblyAIRealtimeTranscriptEventPreservesWordTimings(t *testing.T) {
+	resp := aaiResponse{
+		MessageType: "FinalTranscript",
+		Text:        "hello realtime",
+		Confidence:  0.92,
+		Words: []assemblyAIWord{
+			{Text: "hello", Start: 100, End: 300, Confidence: 0.95},
+			{Text: "realtime", Start: 350, End: 800, Confidence: 0.9},
+		},
+	}
+
+	event := assemblyAIRealtimeTranscriptEvent(resp)
+	if event == nil {
+		t.Fatal("expected realtime transcript event")
+	}
+	if event.Type != stt.SpeechEventFinalTranscript {
+		t.Fatalf("event.Type = %s, want final transcript", event.Type)
+	}
+	if len(event.Alternatives) != 1 {
+		t.Fatalf("alternatives = %d, want 1", len(event.Alternatives))
+	}
+	alt := event.Alternatives[0]
+	if alt.Text != "hello realtime" {
+		t.Fatalf("text = %q, want hello realtime", alt.Text)
+	}
+	if alt.Confidence != 0.92 {
+		t.Fatalf("confidence = %v, want 0.92", alt.Confidence)
+	}
+	if len(alt.Words) != 2 {
+		t.Fatalf("words = %#v, want two timed words", alt.Words)
+	}
+	if got := alt.Words[0]; got.Text != "hello" || got.StartTime != 0.1 || got.EndTime != 0.3 || got.Confidence != 0.95 {
+		t.Fatalf("first word = %#v, want converted AssemblyAI realtime word timing", got)
+	}
+	if got := alt.Words[1]; got.Text != "realtime" || got.StartTime != 0.35 || got.EndTime != 0.8 || got.Confidence != 0.9 {
+		t.Fatalf("second word = %#v, want converted AssemblyAI realtime word timing", got)
+	}
+}
+
+func TestAssemblyAISTTCapabilitiesAdvertiseWordAlignment(t *testing.T) {
+	provider := NewAssemblyAISTT("test-key")
+
+	if got := provider.Capabilities().AlignedTranscript; got != "word" {
+		t.Fatalf("AlignedTranscript = %q, want word", got)
+	}
+}
+
 func writeJSON(t *testing.T, w http.ResponseWriter, value any) {
 	t.Helper()
 	w.Header().Set("Content-Type", "application/json")

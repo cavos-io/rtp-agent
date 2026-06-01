@@ -69,3 +69,11 @@ func TestSpeechmaticsTranscriptEventPreservesWordTimings(t *testing.T) {
 		t.Fatalf("second word = %#v, want preserved word timing", words[1])
 	}
 }
+
+func TestSpeechmaticsSTTCapabilitiesAdvertiseWordAlignment(t *testing.T) {
+	provider := NewSpeechmaticsSTT("test-key")
+
+	if got := provider.Capabilities().AlignedTranscript; got != "word" {
+		t.Fatalf("AlignedTranscript = %q, want word", got)
+	}
+}

@@ -51,3 +51,11 @@ func TestAWSSpeechDataFromAlternativePreservesPronunciationItems(t *testing.T) {
 		t.Fatalf("second word = %+v, want world timing with speaker", got)
 	}
 }
+
+func TestAWSSTTCapabilitiesAdvertiseWordAlignment(t *testing.T) {
+	provider := &AWSSTT{}
+
+	if got := provider.Capabilities().AlignedTranscript; got != "word" {
+		t.Fatalf("AlignedTranscript = %q, want word", got)
+	}
+}

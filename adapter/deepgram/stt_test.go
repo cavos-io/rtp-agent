@@ -98,3 +98,11 @@ func TestDeepgramRecognizeSpeechEventPreservesAlternativeWords(t *testing.T) {
 		t.Fatalf("second word = %+v, want offline timing with speaker 0", got)
 	}
 }
+
+func TestDeepgramSTTCapabilitiesAdvertiseWordAlignment(t *testing.T) {
+	provider := NewDeepgramSTT("test-key", "nova-2")
+
+	if got := provider.Capabilities().AlignedTranscript; got != "word" {
+		t.Fatalf("AlignedTranscript = %q, want word", got)
+	}
+}

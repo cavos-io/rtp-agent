@@ -78,3 +78,11 @@ func TestGoogleSpeechDataFromAlternativeToleratesMissingWordTimes(t *testing.T) 
 		t.Fatalf("word = %+v, want hello with zero-valued missing times", got)
 	}
 }
+
+func TestGoogleSTTCapabilitiesAdvertiseWordAlignment(t *testing.T) {
+	provider := &GoogleSTT{}
+
+	if got := provider.Capabilities().AlignedTranscript; got != "word" {
+		t.Fatalf("AlignedTranscript = %q, want word", got)
+	}
+}
