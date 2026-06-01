@@ -192,11 +192,129 @@ func TestFallbackAdapterCanUnsubscribeMetricsCollected(t *testing.T) {
 	unsubscribe()
 
 	primary.EmitMetricsCollected(&telemetry.TTSMetrics{RequestID: "primary-req"})
+	adapter.EmitMetricsCollected(&telemetry.TTSMetrics{RequestID: "adapter-req"})
 
 	select {
 	case requestID := <-metricsCh:
 		t.Fatalf("received metrics after unsubscribe: %q", requestID)
 	case <-time.After(50 * time.Millisecond):
+	}
+}
+
+func TestFallbackAdapterEmitsChunkedMetricsAfterFinalAudio(t *testing.T) {
+	adapter := NewFallbackAdapter([]TTS{
+		&metadataTTS{
+			label:       "primary",
+			sampleRate:  24000,
+			numChannels: 1,
+			chunked: &metadataChunkedStream{events: []*SynthesizedAudio{{
+				Frame: &model.AudioFrame{Data: []byte{1, 0, 2, 0}, SampleRate: 24000, NumChannels: 1, SamplesPerChannel: 2},
+			}}},
+		},
+	})
+	metricsCh := make(chan *telemetry.TTSMetrics, 1)
+	adapter.OnMetricsCollected(func(metrics *telemetry.TTSMetrics) {
+		if !metrics.Streamed {
+			metricsCh <- metrics
+		}
+	})
+
+	stream, err := adapter.Synthesize(context.Background(), "hello")
+	if err != nil {
+		t.Fatalf("Synthesize returned error: %v", err)
+	}
+	defer stream.Close()
+
+	audio, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next returned error: %v", err)
+	}
+	if !audio.IsFinal {
+		t.Fatal("audio IsFinal = false, want final")
+	}
+
+	select {
+	case got := <-metricsCh:
+		if got.Label != adapter.Label() {
+			t.Fatalf("metrics Label = %q, want %q", got.Label, adapter.Label())
+		}
+		if got.RequestID != audio.RequestID {
+			t.Fatalf("metrics RequestID = %q, want %q", got.RequestID, audio.RequestID)
+		}
+		if got.CharactersCount != len("hello") {
+			t.Fatalf("metrics CharactersCount = %d, want %d", got.CharactersCount, len("hello"))
+		}
+		if got.AudioDuration <= 0 {
+			t.Fatalf("metrics AudioDuration = %f, want > 0", got.AudioDuration)
+		}
+		if got.Metadata == nil || got.Metadata.ModelName != "FallbackAdapter" || got.Metadata.ModelProvider != "livekit" {
+			t.Fatalf("metrics Metadata = %#v, want fallback metadata", got.Metadata)
+		}
+	default:
+		t.Fatal("fallback adapter did not emit chunked metrics")
+	}
+}
+
+func TestFallbackAdapterEmitsStreamedMetricsAfterFinalAudio(t *testing.T) {
+	adapter := NewFallbackAdapter([]TTS{
+		&metadataTTS{
+			label:        "primary",
+			sampleRate:   24000,
+			numChannels:  1,
+			capabilities: TTSCapabilities{Streaming: true},
+			stream: &metadataSynthesizeStream{events: []*SynthesizedAudio{{
+				Frame:   &model.AudioFrame{Data: []byte{1, 0, 2, 0}, SampleRate: 24000, NumChannels: 1, SamplesPerChannel: 2},
+				IsFinal: true,
+			}}},
+		},
+	})
+	metricsCh := make(chan *telemetry.TTSMetrics, 1)
+	adapter.OnMetricsCollected(func(metrics *telemetry.TTSMetrics) {
+		if metrics.Streamed {
+			metricsCh <- metrics
+		}
+	})
+
+	stream, err := adapter.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+	defer stream.Close()
+
+	if err := stream.PushText("hello"); err != nil {
+		t.Fatalf("PushText returned error: %v", err)
+	}
+	if err := EndSynthesizeStreamInput(stream); err != nil {
+		t.Fatalf("EndSynthesizeStreamInput returned error: %v", err)
+	}
+
+	audio, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next returned error: %v", err)
+	}
+	if !audio.IsFinal {
+		t.Fatal("audio IsFinal = false, want final")
+	}
+
+	select {
+	case got := <-metricsCh:
+		if got.Label != adapter.Label() {
+			t.Fatalf("metrics Label = %q, want %q", got.Label, adapter.Label())
+		}
+		if got.RequestID != audio.RequestID {
+			t.Fatalf("metrics RequestID = %q, want %q", got.RequestID, audio.RequestID)
+		}
+		if got.SegmentID != audio.SegmentID {
+			t.Fatalf("metrics SegmentID = %q, want %q", got.SegmentID, audio.SegmentID)
+		}
+		if got.CharactersCount != len("hello") {
+			t.Fatalf("metrics CharactersCount = %d, want %d", got.CharactersCount, len("hello"))
+		}
+		if got.AudioDuration <= 0 {
+			t.Fatalf("metrics AudioDuration = %f, want > 0", got.AudioDuration)
+		}
+	default:
+		t.Fatal("fallback adapter did not emit streamed metrics")
 	}
 }
 
