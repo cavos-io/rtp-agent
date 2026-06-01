@@ -1404,6 +1404,32 @@ func TestSimpleVADRequiresMinimumSpeechDurationBeforeStart(t *testing.T) {
 	assertCombinedFrames(t, start.Frames, firstSpeech, secondSpeech, thirdSpeech)
 }
 
+func TestSimpleVADPreStartSpeechIncrementsSilenceDuration(t *testing.T) {
+	stream, err := NewSimpleVADWithOptions(SimpleVADOptions{
+		Threshold:         0.05,
+		MinSpeechDuration: 0.03,
+	}).Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	defer stream.Close()
+
+	for i := range 3 {
+		if err := stream.PushFrame(audioFrame(16000, 160, 6000)); err != nil {
+			t.Fatalf("PushFrame() error = %v", err)
+		}
+		inference := nextVADEvent(t, stream)
+		if inference.Type != VADEventInferenceDone {
+			t.Fatalf("event %d type = %s, want %s", i, inference.Type, VADEventInferenceDone)
+		}
+		wantSilenceDuration := float64(i+1) * 0.01
+		if inference.SilenceDuration != wantSilenceDuration {
+			t.Fatalf("event %d SilenceDuration = %v, want %v", i, inference.SilenceDuration, wantSilenceDuration)
+		}
+	}
+	assertEventType(t, stream, VADEventStartOfSpeech)
+}
+
 func TestSimpleVADDropsSpeechShorterThanMinimumDuration(t *testing.T) {
 	stream, err := NewSimpleVADWithOptions(SimpleVADOptions{
 		Threshold:         0.05,

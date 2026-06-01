@@ -450,6 +450,7 @@ func (s *simpleVADStream) processFrame(frame *model.AudioFrame, duration float64
 		s.accumulatedSilenceDuration = 0
 
 		if !s.speaking {
+			s.silenceDuration += duration
 			s.pendingSpeechFrames = append(s.pendingSpeechFrames, frame)
 			if s.accumulatedSpeechDuration >= s.options.MinSpeechDuration {
 				s.speaking = true
