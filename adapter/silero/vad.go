@@ -289,6 +289,9 @@ func validateVADOptions(options VADOptions) error {
 	if options.SampleRate != 8000 && options.SampleRate != 16000 {
 		return fmt.Errorf("silero VAD only supports 8KHz and 16KHz sample rates")
 	}
+	if math.IsNaN(options.ActivationThreshold) || math.IsInf(options.ActivationThreshold, 0) || options.ActivationThreshold < 0 {
+		return fmt.Errorf("activation_threshold must be greater than or equal to 0")
+	}
 	if math.IsNaN(options.DeactivationThreshold) || math.IsInf(options.DeactivationThreshold, 0) || options.DeactivationThreshold <= 0 {
 		return fmt.Errorf("deactivation_threshold must be greater than 0")
 	}
