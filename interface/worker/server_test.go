@@ -3143,6 +3143,87 @@ func TestExecuteLocalJobRecordsRegisteredWorkerID(t *testing.T) {
 	}
 }
 
+func TestExecuteLocalJobLaunchesThroughThreadExecutor(t *testing.T) {
+	oldFactory := newLocalJobExecutor
+	launchedCh := make(chan ipc.RunningJobInfo, 1)
+	releaseEntrypoint := make(chan struct{})
+	releaseOnce := make(chan struct{})
+	newLocalJobExecutor = func(id string, entrypoint func() error) ipc.JobExecutor {
+		return &localJobExecutorStub{
+			id: id,
+			launch: func(info ipc.RunningJobInfo) error {
+				launchedCh <- info
+				go func() {
+					<-releaseEntrypoint
+					_ = entrypoint()
+				}()
+				return nil
+			},
+		}
+	}
+	t.Cleanup(func() {
+		newLocalJobExecutor = oldFactory
+		select {
+		case <-releaseOnce:
+		default:
+			close(releaseOnce)
+			close(releaseEntrypoint)
+		}
+	})
+
+	server := NewAgentServer(WorkerOptions{WSRL: "wss://local.example"})
+	server.workerID = "worker-a"
+	entrypointCh := make(chan *JobContext, 1)
+	server.entrypointFnc = func(ctx *JobContext) error {
+		entrypointCh <- ctx
+		return nil
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	doneCh := make(chan error, 1)
+	go func() {
+		doneCh <- server.ExecuteLocalJob(ctx, "room-a", "agent-local")
+	}()
+
+	var launched ipc.RunningJobInfo
+	select {
+	case launched = <-launchedCh:
+	case <-time.After(time.Second):
+		cancel()
+		t.Fatal("local job was not launched through executor")
+	}
+	if launched.WorkerID != "worker-a" {
+		cancel()
+		t.Fatalf("RunningJobInfo.WorkerID = %q, want worker-a", launched.WorkerID)
+	}
+	if launched.URL != "wss://local.example" {
+		cancel()
+		t.Fatalf("RunningJobInfo.URL = %q, want local worker URL", launched.URL)
+	}
+	if launched.AcceptArguments.Identity != "agent-local" {
+		cancel()
+		t.Fatalf("RunningJobInfo.AcceptArguments.Identity = %q, want agent-local", launched.AcceptArguments.Identity)
+	}
+
+	close(releaseOnce)
+	close(releaseEntrypoint)
+	select {
+	case <-entrypointCh:
+	case <-time.After(time.Second):
+		cancel()
+		t.Fatal("local executor did not run entrypoint")
+	}
+	cancel()
+	select {
+	case err := <-doneCh:
+		if err != nil {
+			t.Fatalf("ExecuteLocalJob() error = %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("ExecuteLocalJob() did not return")
+	}
+}
+
 func TestExecuteLocalJobRejectsMissingRTCSession(t *testing.T) {
 	server := NewAgentServer(WorkerOptions{})
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
@@ -4065,4 +4146,53 @@ func markJobAccepted(t *testing.T, server *AgentServer, job *livekit.Job) {
 	t.Helper()
 
 	server.storePendingAccept(job.Id, JobAcceptArguments{})
+}
+
+type localJobExecutorStub struct {
+	id      string
+	info    *ipc.RunningJobInfo
+	launch  func(ipc.RunningJobInfo) error
+	close   func(context.Context) error
+	started bool
+	status  ipc.JobStatus
+}
+
+func (e *localJobExecutorStub) ID() string { return e.id }
+
+func (e *localJobExecutorStub) Status() ipc.JobStatus {
+	if e.status == "" {
+		return ipc.JobStatusRunning
+	}
+	return e.status
+}
+
+func (e *localJobExecutorStub) Started() bool { return e.started }
+
+func (e *localJobExecutorStub) Job() *livekit.Job {
+	if e.info == nil {
+		return nil
+	}
+	return e.info.Job
+}
+
+func (e *localJobExecutorStub) RunningJob() *ipc.RunningJobInfo { return e.info }
+
+func (e *localJobExecutorStub) LaunchJob(ctx context.Context, job *livekit.Job) error {
+	return e.LaunchRunningJob(ctx, ipc.RunningJobInfo{Job: job})
+}
+
+func (e *localJobExecutorStub) LaunchRunningJob(_ context.Context, info ipc.RunningJobInfo) error {
+	e.started = true
+	e.info = &info
+	if e.launch != nil {
+		return e.launch(info)
+	}
+	return nil
+}
+
+func (e *localJobExecutorStub) Close(ctx context.Context) error {
+	if e.close != nil {
+		return e.close(ctx)
+	}
+	return nil
 }

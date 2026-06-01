@@ -61,6 +61,46 @@ func TestNewAgentSessionInitializesUsageCollector(t *testing.T) {
 	}
 }
 
+func TestNewAgentSessionAppliesReferenceOptionDefaults(t *testing.T) {
+	agent := NewAgent("test")
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+
+	opts := session.Options
+	if !opts.AllowInterruptions {
+		t.Fatal("AllowInterruptions = false, want default true")
+	}
+	if !opts.DiscardAudioIfUninterruptible {
+		t.Fatal("DiscardAudioIfUninterruptible = false, want default true")
+	}
+	if opts.MinInterruptionDuration != 0.5 {
+		t.Fatalf("MinInterruptionDuration = %v, want 0.5", opts.MinInterruptionDuration)
+	}
+	if opts.MinInterruptionWords != 0 {
+		t.Fatalf("MinInterruptionWords = %d, want 0", opts.MinInterruptionWords)
+	}
+	if opts.MinEndpointingDelay != 0.5 {
+		t.Fatalf("MinEndpointingDelay = %v, want 0.5", opts.MinEndpointingDelay)
+	}
+	if opts.MaxEndpointingDelay != 3.0 {
+		t.Fatalf("MaxEndpointingDelay = %v, want 3.0", opts.MaxEndpointingDelay)
+	}
+	if opts.FalseInterruptionTimeout != 2.0 {
+		t.Fatalf("FalseInterruptionTimeout = %v, want 2.0", opts.FalseInterruptionTimeout)
+	}
+	if !opts.ResumeFalseInterruption {
+		t.Fatal("ResumeFalseInterruption = false, want default true")
+	}
+	if opts.UserAwayTimeout != 15.0 {
+		t.Fatalf("UserAwayTimeout = %v, want 15.0", opts.UserAwayTimeout)
+	}
+	if !opts.PreemptiveGeneration {
+		t.Fatal("PreemptiveGeneration = false, want default true")
+	}
+	if opts.AECWarmupDuration != 3.0 {
+		t.Fatalf("AECWarmupDuration = %v, want 3.0", opts.AECWarmupDuration)
+	}
+}
+
 func TestAgentSessionGenerateReplyEmitsSpeechCreatedEvent(t *testing.T) {
 	agent := NewAgent("test")
 	session := NewAgentSession(agent, nil, AgentSessionOptions{AllowInterruptions: true})
@@ -91,6 +131,167 @@ func TestAgentSessionGenerateReplyEmitsSpeechCreatedEvent(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("SpeechCreatedEvents did not receive generate reply speech")
+	}
+}
+
+func TestAgentSessionSayReturnsScheduledSpeechHandle(t *testing.T) {
+	agent := NewAgent("test")
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	session.activity = NewAgentActivity(agent, session)
+
+	handle, err := session.Say(context.Background(), "hello")
+
+	if err != nil {
+		t.Fatalf("Say error = %v, want nil", err)
+	}
+	if handle == nil {
+		t.Fatal("Say handle = nil, want speech handle")
+	}
+	if !handle.IsScheduled() {
+		t.Fatal("Say returned unscheduled handle")
+	}
+	if !handle.AllowInterruptions {
+		t.Fatal("handle.AllowInterruptions = false, want session default true")
+	}
+	if got, want := handle.InputDetails.Modality, "text"; got != want {
+		t.Fatalf("handle.InputDetails.Modality = %q, want %q", got, want)
+	}
+}
+
+func TestAgentSessionSayEmitsSpeechCreatedEvent(t *testing.T) {
+	agent := NewAgent("test")
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	session.activity = NewAgentActivity(agent, session)
+	before := time.Now()
+
+	handle, err := session.Say(context.Background(), "hello")
+
+	if err != nil {
+		t.Fatalf("Say error = %v, want nil", err)
+	}
+	select {
+	case ev := <-session.SpeechCreatedEvents():
+		if ev.GetType() != "speech_created" {
+			t.Fatalf("event type = %q, want speech_created", ev.GetType())
+		}
+		if ev.SpeechHandle != handle {
+			t.Fatalf("SpeechHandle = %#v, want returned handle", ev.SpeechHandle)
+		}
+		if !ev.UserInitiated {
+			t.Fatal("UserInitiated = false, want true for Say")
+		}
+		if ev.Source != "say" {
+			t.Fatalf("Source = %q, want say", ev.Source)
+		}
+		if ev.CreatedAt.Before(before) || ev.CreatedAt.IsZero() {
+			t.Fatalf("CreatedAt = %v, want timestamp after %v", ev.CreatedAt, before)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("SpeechCreatedEvents did not receive say speech")
+	}
+}
+
+func TestAgentSessionSayAddsAssistantTextToChatContextByDefault(t *testing.T) {
+	agent := NewAgent("test")
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	session.activity = NewAgentActivity(agent, session)
+
+	if _, err := session.Say(context.Background(), "hello from agent"); err != nil {
+		t.Fatalf("Say error = %v, want nil", err)
+	}
+
+	if len(session.ChatCtx.Items) != 1 {
+		t.Fatalf("ChatCtx.Items length = %d, want 1", len(session.ChatCtx.Items))
+	}
+	msg, ok := session.ChatCtx.Items[0].(*llm.ChatMessage)
+	if !ok {
+		t.Fatalf("ChatCtx item type = %T, want *llm.ChatMessage", session.ChatCtx.Items[0])
+	}
+	if msg.Role != llm.ChatRoleAssistant || msg.TextContent() != "hello from agent" {
+		t.Fatalf("ChatCtx message = %#v, want assistant message with text", msg)
+	}
+	select {
+	case ev := <-session.ConversationItemAddedEvents():
+		if ev.Item != msg {
+			t.Fatalf("ConversationItemAdded item = %#v, want committed assistant message", ev.Item)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("ConversationItemAddedEvents did not receive say text")
+	}
+}
+
+func TestAgentSessionSayOptionsOverrideInterruptionsAndChatContext(t *testing.T) {
+	agent := NewAgent("test")
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	session.activity = NewAgentActivity(agent, session)
+	allowInterruptions := false
+	addToChatContext := false
+
+	handle, err := session.SayWithOptions(context.Background(), SayOptions{
+		Text:               "private aside",
+		AllowInterruptions: &allowInterruptions,
+		AddToChatContext:   &addToChatContext,
+	})
+
+	if err != nil {
+		t.Fatalf("SayWithOptions error = %v, want nil", err)
+	}
+	if handle.AllowInterruptions {
+		t.Fatal("handle.AllowInterruptions = true, want per-call false override")
+	}
+	if len(session.ChatCtx.Items) != 0 {
+		t.Fatalf("ChatCtx.Items length = %d, want 0 when AddToChatContext is false", len(session.ChatCtx.Items))
+	}
+	select {
+	case ev := <-session.ConversationItemAddedEvents():
+		t.Fatalf("ConversationItemAdded event = %#v, want none when AddToChatContext is false", ev)
+	default:
+	}
+}
+
+func TestAgentSessionSayWatchesActiveRunState(t *testing.T) {
+	agent := NewAgent("test")
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	session.activity = NewAgentActivity(agent, session)
+	result := NewRunResult(session.ChatCtx)
+	session.runState = result
+
+	handle, err := session.SayWithOptions(context.Background(), SayOptions{
+		Text: "hello",
+	})
+	if err != nil {
+		t.Fatalf("SayWithOptions error = %v, want nil", err)
+	}
+	if result.Done() {
+		t.Fatal("run result marked done before watched say speech completed")
+	}
+
+	handle.MarkDone()
+
+	if !result.Done() {
+		t.Fatal("run result not marked done after say speech completed")
+	}
+}
+
+func TestAgentSessionGenerateReplyWatchesActiveRunState(t *testing.T) {
+	agent := NewAgent("test")
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	session.activity = NewAgentActivity(agent, session)
+	result := NewRunResult(session.ChatCtx)
+	session.runState = result
+
+	handle, err := session.GenerateReply(context.Background(), "hello")
+	if err != nil {
+		t.Fatalf("GenerateReply error = %v, want nil", err)
+	}
+	if result.Done() {
+		t.Fatal("run result marked done before watched generated speech completed")
+	}
+
+	handle.MarkDone()
+
+	if !result.Done() {
+		t.Fatal("run result not marked done after generated speech completed")
 	}
 }
 
@@ -721,6 +922,50 @@ func TestAgentSessionUpdateUserStateEmitsTypedTimestampedEvent(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("UpdateUserState did not emit an event")
+	}
+}
+
+func TestAgentSessionMarksUserAwayAfterIdleTimeout(t *testing.T) {
+	agent := NewAgent("test")
+	session := NewAgentSession(agent, nil, AgentSessionOptions{UserAwayTimeout: 0.01})
+
+	session.UpdateAgentState(AgentStateListening)
+
+	select {
+	case ev := <-session.UserStateChangedCh:
+		if ev.OldState != UserStateListening || ev.NewState != UserStateAway {
+			t.Fatalf("event states = %q -> %q, want listening -> away", ev.OldState, ev.NewState)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("UserStateChangedCh did not receive away event")
+	}
+	if session.UserState != UserStateAway {
+		t.Fatalf("UserState = %q, want away", session.UserState)
+	}
+}
+
+func TestAgentSessionCancelsUserAwayTimerWhenUserSpeaks(t *testing.T) {
+	agent := NewAgent("test")
+	session := NewAgentSession(agent, nil, AgentSessionOptions{UserAwayTimeout: 0.02})
+
+	session.UpdateAgentState(AgentStateListening)
+	session.UpdateUserState(UserStateSpeaking)
+
+	select {
+	case ev := <-session.UserStateChangedCh:
+		if ev.NewState != UserStateSpeaking {
+			t.Fatalf("first user state event = %q, want speaking", ev.NewState)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("UserStateChangedCh did not receive speaking event")
+	}
+	select {
+	case ev := <-session.UserStateChangedCh:
+		t.Fatalf("unexpected user state event after speaking = %q -> %q", ev.OldState, ev.NewState)
+	case <-time.After(60 * time.Millisecond):
+	}
+	if session.UserState != UserStateSpeaking {
+		t.Fatalf("UserState = %q, want speaking", session.UserState)
 	}
 }
 

@@ -60,6 +60,12 @@ type GenerateReplyOptions struct {
 	InputModality      string
 }
 
+type SayOptions struct {
+	Text               string
+	AllowInterruptions *bool
+	AddToChatContext   *bool
+}
+
 type RunOptions struct {
 	UserInput          string
 	AllowInterruptions *bool
@@ -85,10 +91,11 @@ type AgentSession struct {
 	UserState  UserState
 	AgentState AgentState
 
-	mu       sync.Mutex
-	activity *AgentActivity
-	started  bool
-	runState *RunResult
+	mu            sync.Mutex
+	activity      *AgentActivity
+	started       bool
+	runState      *RunResult
+	userAwayTimer *time.Timer
 
 	// Event channels
 	AgentStateChangedCh chan AgentStateChangedEvent
@@ -172,9 +179,7 @@ type UserStateChangedEvent struct {
 func (e *UserStateChangedEvent) GetType() string { return "user_state_changed" }
 
 func NewAgentSession(agent AgentInterface, room *lksdk.Room, opts AgentSessionOptions) *AgentSession {
-	if opts.MaxToolSteps == 0 {
-		opts.MaxToolSteps = 3
-	}
+	opts = withAgentSessionOptionDefaults(opts)
 	baseAgent := agent.GetAgent()
 	return &AgentSession{
 		Agent:               agent,
@@ -203,6 +208,35 @@ func NewAgentSession(agent AgentInterface, room *lksdk.Room, opts AgentSessionOp
 		errorCh:             make(chan ErrorEvent, 10),
 		sipDTMFCh:           make(chan SipDTMFEvent, 10),
 	}
+}
+
+func withAgentSessionOptionDefaults(opts AgentSessionOptions) AgentSessionOptions {
+	opts.AllowInterruptions = true
+	opts.DiscardAudioIfUninterruptible = true
+	if opts.MinInterruptionDuration == 0 {
+		opts.MinInterruptionDuration = 0.5
+	}
+	if opts.MinEndpointingDelay == 0 {
+		opts.MinEndpointingDelay = 0.5
+	}
+	if opts.MaxEndpointingDelay == 0 {
+		opts.MaxEndpointingDelay = 3.0
+	}
+	if opts.MaxToolSteps == 0 {
+		opts.MaxToolSteps = 3
+	}
+	if opts.UserAwayTimeout == 0 {
+		opts.UserAwayTimeout = 15.0
+	}
+	if opts.FalseInterruptionTimeout == 0 {
+		opts.FalseInterruptionTimeout = 2.0
+	}
+	opts.ResumeFalseInterruption = true
+	opts.PreemptiveGeneration = true
+	if opts.AECWarmupDuration == 0 {
+		opts.AECWarmupDuration = 3.0
+	}
+	return opts
 }
 
 func (s *AgentSession) UserInputTranscribedEvents() <-chan UserInputTranscribedEvent {
@@ -624,6 +658,10 @@ func (s *AgentSession) UpdateAgentState(state AgentState) {
 	s.mu.Unlock()
 
 	if oldState != state {
+		s.updateUserAwayTimer()
+	}
+
+	if oldState != state {
 		logger.Logger.Debugw("Agent state changed", "old", oldState, "new", state)
 		select {
 		case s.AgentStateChangedCh <- AgentStateChangedEvent{
@@ -644,6 +682,10 @@ func (s *AgentSession) UpdateUserState(state UserState) {
 	s.mu.Unlock()
 
 	if oldState != state {
+		s.updateUserAwayTimer()
+	}
+
+	if oldState != state {
 		logger.Logger.Debugw("User state changed", "old", oldState, "new", state)
 		select {
 		case s.UserStateChangedCh <- UserStateChangedEvent{
@@ -657,10 +699,46 @@ func (s *AgentSession) UpdateUserState(state UserState) {
 	}
 }
 
+func (s *AgentSession) updateUserAwayTimer() {
+	s.mu.Lock()
+	if s.userAwayTimer != nil {
+		s.userAwayTimer.Stop()
+		s.userAwayTimer = nil
+	}
+	shouldStart := s.Options.UserAwayTimeout > 0 &&
+		s.AgentState == AgentStateListening &&
+		s.UserState == UserStateListening
+	timeout := s.Options.UserAwayTimeout
+	s.mu.Unlock()
+
+	if !shouldStart {
+		return
+	}
+
+	timer := time.AfterFunc(time.Duration(timeout*float64(time.Second)), func() {
+		s.UpdateUserState(UserStateAway)
+	})
+
+	s.mu.Lock()
+	if s.AgentState == AgentStateListening && s.UserState == UserStateListening && s.userAwayTimer == nil {
+		s.userAwayTimer = timer
+		s.mu.Unlock()
+		return
+	}
+	s.mu.Unlock()
+	timer.Stop()
+}
+
 func (s *AgentSession) GenerateReply(ctx context.Context, userInput string) (*SpeechHandle, error) {
 	return s.GenerateReplyWithOptions(ctx, GenerateReplyOptions{
 		UserInput:     userInput,
 		InputModality: "text",
+	})
+}
+
+func (s *AgentSession) Say(ctx context.Context, text string) (*SpeechHandle, error) {
+	return s.SayWithOptions(ctx, SayOptions{
+		Text: text,
 	})
 }
 
@@ -744,7 +822,66 @@ func (s *AgentSession) GenerateReplyWithOptions(ctx context.Context, opts Genera
 	if userMessage != nil {
 		s.EmitConversationItemAdded(userMessage)
 	}
+	s.watchActiveRunSpeechHandle(handle)
 	return handle, nil
+}
+
+func (s *AgentSession) SayWithOptions(ctx context.Context, opts SayOptions) (*SpeechHandle, error) {
+	s.mu.Lock()
+	activity := s.activity
+	s.mu.Unlock()
+
+	if activity == nil {
+		return nil, ErrAgentSessionNotRunning
+	}
+
+	logger.Logger.Infow("Saying text", "text", opts.Text)
+
+	allowInterruptions := s.Options.AllowInterruptions
+	if opts.AllowInterruptions != nil {
+		allowInterruptions = *opts.AllowInterruptions
+	}
+	addToChatContext := true
+	if opts.AddToChatContext != nil {
+		addToChatContext = *opts.AddToChatContext
+	}
+
+	handle := NewSpeechHandle(allowInterruptions, InputDetails{Modality: "text"})
+	s.EmitSpeechCreated(SpeechCreatedEvent{
+		UserInitiated: true,
+		Source:        "say",
+		SpeechHandle:  handle,
+	})
+
+	var assistantMessage *llm.ChatMessage
+	if addToChatContext && opts.Text != "" {
+		assistantMessage = &llm.ChatMessage{
+			Role: llm.ChatRoleAssistant,
+			Content: []llm.ChatContent{
+				{Text: opts.Text},
+			},
+			CreatedAt: time.Now(),
+		}
+	}
+
+	if err := activity.ScheduleSpeech(handle, SpeechPriorityNormal, false); err != nil {
+		return nil, err
+	}
+	if assistantMessage != nil {
+		s.EmitConversationItemAdded(assistantMessage)
+		handle.AddChatItems(assistantMessage)
+	}
+	s.watchActiveRunSpeechHandle(handle)
+	return handle, nil
+}
+
+func (s *AgentSession) watchActiveRunSpeechHandle(handle *SpeechHandle) {
+	s.mu.Lock()
+	runState := s.runState
+	s.mu.Unlock()
+	if runState != nil {
+		runState.WatchSpeechHandle(handle)
+	}
 }
 
 func (s *AgentSession) Interrupt(force bool) error {
@@ -800,6 +937,10 @@ func (s *AgentSession) Stop(ctx context.Context) error {
 	s.started = false
 	s.UserState = UserStateListening
 	s.AgentState = AgentStateInitializing
+	if s.userAwayTimer != nil {
+		s.userAwayTimer.Stop()
+		s.userAwayTimer = nil
+	}
 	s.mu.Unlock()
 
 	if activity != nil {

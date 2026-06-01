@@ -55,6 +55,10 @@ const (
 
 var localEntrypointCloseWait = 15 * time.Second
 
+var newLocalJobExecutor = func(id string, entrypoint func() error) workeripc.JobExecutor {
+	return workeripc.NewThreadJobExecutor(id, entrypoint)
+}
+
 var assignmentTimeout = 7500 * time.Millisecond
 
 var uploadSessionReport = agent.UploadSessionReport
@@ -1632,28 +1636,33 @@ func (s *AgentServer) ExecuteLocalJobWithOptions(ctx context.Context, roomName s
 	})
 	entrypointDone := make(chan struct{})
 
-	// For local execution, we want to connect immediately
-	// For basic parity, we just trigger the entrypoint directly.
-
 	s.mu.Lock()
 	s.activeJobs[jobCtx.Job.Id] = jobCtx
 	s.mu.Unlock()
 
-	if s.entrypointFnc != nil {
-		go func() {
-			defer func() {
-				defer close(entrypointDone)
-				if recovered := recover(); recovered != nil {
-					logger.Logger.Errorw("Local job entrypoint panicked", fmt.Errorf("%v", recovered), "jobId", jobCtx.Job.Id)
-					jobCtx.Shutdown("job crashed")
-				}
-			}()
-			if err := s.entrypointFnc(jobCtx); err != nil {
-				logger.Logger.Errorw("Local job entrypoint failed", err, "jobId", jobCtx.Job.Id)
-				jobCtx.Shutdown("job failed")
+	executor := newLocalJobExecutor("local_"+jobCtx.Job.Id, func() error {
+		defer func() {
+			if recovered := recover(); recovered != nil {
+				logger.Logger.Errorw("Local job entrypoint panicked", fmt.Errorf("%v", recovered), "jobId", jobCtx.Job.Id)
+				jobCtx.Shutdown("job crashed")
+				panic(recovered)
 			}
 		}()
+		if err := s.entrypointFnc(jobCtx); err != nil {
+			logger.Logger.Errorw("Local job entrypoint failed", err, "jobId", jobCtx.Job.Id)
+			jobCtx.Shutdown("job failed")
+			return err
+		}
+		return nil
+	})
+	if err := executor.LaunchRunningJob(ctx, runningJobInfoFromContext(jobCtx)); err != nil {
+		s.finishJob(jobCtx)
+		return err
 	}
+	go func() {
+		_ = executor.Close(context.Background())
+		close(entrypointDone)
+	}()
 
 	// Block until the local job is canceled or the job context shuts down.
 	select {
