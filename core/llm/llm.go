@@ -472,10 +472,15 @@ type RealtimeModel interface {
 	Close() error
 }
 
+type RealtimeSessionOptions struct {
+	ToolChoice ToolChoice
+}
+
 type RealtimeSession interface {
 	UpdateInstructions(instructions string) error
 	UpdateChatContext(chatCtx *ChatContext) error
 	UpdateTools(tools []Tool) error
+	UpdateOptions(options RealtimeSessionOptions) error
 	Interrupt() error
 	Close() error
 	EventCh() <-chan RealtimeEvent

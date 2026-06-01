@@ -97,6 +97,8 @@ func (f *fakeRealtimeSession) UpdateChatContext(chatCtx *llm.ChatContext) error 
 
 func (f *fakeRealtimeSession) UpdateTools([]llm.Tool) error { return nil }
 
+func (f *fakeRealtimeSession) UpdateOptions(llm.RealtimeSessionOptions) error { return nil }
+
 func (f *fakeRealtimeSession) Interrupt() error { return nil }
 
 func (f *fakeRealtimeSession) Close() error { return nil }

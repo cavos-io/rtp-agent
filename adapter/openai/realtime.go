@@ -118,6 +118,48 @@ func (s *realtimeSession) UpdateTools(tools []llm.Tool) error {
 	return s.sendMsg(msg)
 }
 
+func (s *realtimeSession) UpdateOptions(options llm.RealtimeSessionOptions) error {
+	return s.sendMsg(openAIRealtimeUpdateOptionsMessage(options))
+}
+
+func openAIRealtimeUpdateOptionsMessage(options llm.RealtimeSessionOptions) map[string]any {
+	session := make(map[string]any)
+	if toolChoice := openAIRealtimeToolChoice(options.ToolChoice); toolChoice != nil {
+		session["tool_choice"] = toolChoice
+	}
+	return map[string]any{
+		"type":    "session.update",
+		"session": session,
+	}
+}
+
+func openAIRealtimeToolChoice(choice llm.ToolChoice) any {
+	switch tc := choice.(type) {
+	case nil:
+		return nil
+	case string:
+		return tc
+	case map[string]any:
+		if tc["type"] != "function" {
+			return nil
+		}
+		function, ok := tc["function"].(map[string]any)
+		if !ok {
+			return nil
+		}
+		name, ok := function["name"].(string)
+		if !ok || name == "" {
+			return nil
+		}
+		return map[string]any{
+			"type": "function",
+			"name": name,
+		}
+	default:
+		return nil
+	}
+}
+
 func (s *realtimeSession) Interrupt() error {
 	msg := map[string]any{
 		"type": "response.cancel",

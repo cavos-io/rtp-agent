@@ -1,6 +1,10 @@
 package openai
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/cavos-io/rtp-agent/core/llm"
+)
 
 func TestRealtimeModelCapabilitiesMatchReference(t *testing.T) {
 	model := NewRealtimeModel("test-key", "")
@@ -18,5 +22,23 @@ func TestRealtimeModelCapabilitiesMatchReference(t *testing.T) {
 	}
 	if !capabilities.PerResponseToolChoice {
 		t.Fatal("PerResponseToolChoice = false, want true")
+	}
+}
+
+func TestRealtimeUpdateOptionsMessageMapsNamedToolChoice(t *testing.T) {
+	msg := openAIRealtimeUpdateOptionsMessage(llm.RealtimeSessionOptions{
+		ToolChoice: map[string]any{
+			"type":     "function",
+			"function": map[string]any{"name": "lookup"},
+		},
+	})
+
+	if msg["type"] != "session.update" {
+		t.Fatalf("message type = %#v, want session.update", msg["type"])
+	}
+	session := msg["session"].(map[string]any)
+	choice := session["tool_choice"].(map[string]any)
+	if choice["type"] != "function" || choice["name"] != "lookup" {
+		t.Fatalf("tool_choice = %#v, want realtime named function", choice)
 	}
 }

@@ -21,3 +21,16 @@ func TestRealtimeCapabilitiesExposeReferenceFlags(t *testing.T) {
 		t.Fatalf("capabilities missing reference flags: %#v", capabilities)
 	}
 }
+
+func TestRealtimeSessionOptionsExposeToolChoice(t *testing.T) {
+	options := RealtimeSessionOptions{
+		ToolChoice: map[string]any{
+			"type":     "function",
+			"function": map[string]any{"name": "lookup"},
+		},
+	}
+
+	if options.ToolChoice == nil {
+		t.Fatal("ToolChoice = nil, want named tool choice")
+	}
+}
