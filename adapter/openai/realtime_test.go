@@ -176,6 +176,26 @@ func TestRealtimeEventMapsInputAudioTranscriptionDelta(t *testing.T) {
 	}
 }
 
+func TestRealtimeEventMapsOutputAudioTranscriptDelta(t *testing.T) {
+	for _, eventType := range []string{
+		"response.output_audio_transcript.delta",
+		"response.audio_transcript.delta",
+	} {
+		t.Run(eventType, func(t *testing.T) {
+			ev, ok := openAIRealtimeEvent(map[string]any{
+				"type":  eventType,
+				"delta": "hello",
+			})
+			if !ok {
+				t.Fatal("openAIRealtimeEvent returned ok=false, want text event")
+			}
+			if ev.Type != llm.RealtimeEventTypeText || ev.Text != "hello" {
+				t.Fatalf("event = %#v, want text delta hello", ev)
+			}
+		})
+	}
+}
+
 func TestRealtimeEventMapsResponseCreated(t *testing.T) {
 	ev, ok := openAIRealtimeEvent(map[string]any{
 		"type": "response.created",

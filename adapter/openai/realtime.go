@@ -541,6 +541,13 @@ func openAIRealtimeEvent(ev map[string]any) (llm.RealtimeEvent, bool) {
 				Text: delta,
 			}, true
 		}
+	case "response.output_audio_transcript.delta", "response.audio_transcript.delta":
+		if delta, ok := ev["delta"].(string); ok {
+			return llm.RealtimeEvent{
+				Type: llm.RealtimeEventTypeText,
+				Text: delta,
+			}, true
+		}
 	case "response.audio.delta":
 		if delta, ok := ev["delta"].(string); ok {
 			return llm.RealtimeEvent{
