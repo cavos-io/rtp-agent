@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"sync"
 	"time"
 
@@ -16,6 +17,8 @@ type Event interface {
 	GetType() string
 }
 
+var ErrFunctionToolEventLengthMismatch = errors.New("function calls and outputs must have the same length")
+
 type UserInputTranscribedEvent struct {
 	Language   string
 	Transcript string
@@ -26,12 +29,101 @@ type UserInputTranscribedEvent struct {
 
 func (e *UserInputTranscribedEvent) GetType() string { return "user_input_transcribed" }
 
+type UserTurnExceededEvent struct {
+	Transcript            string
+	AccumulatedTranscript string
+	AccumulatedWordCount  int
+	Duration              time.Duration
+	CreatedAt             time.Time
+}
+
+func NewUserTurnExceededEvent(transcript string, accumulatedTranscript string, accumulatedWordCount int, duration time.Duration) *UserTurnExceededEvent {
+	return &UserTurnExceededEvent{
+		Transcript:            transcript,
+		AccumulatedTranscript: accumulatedTranscript,
+		AccumulatedWordCount:  accumulatedWordCount,
+		Duration:              duration,
+		CreatedAt:             time.Now(),
+	}
+}
+
+func (e *UserTurnExceededEvent) GetType() string { return "user_turn_exceeded" }
+
 type ConversationItemAddedEvent struct {
 	Item      llm.ChatItem
 	CreatedAt time.Time
 }
 
 func (e *ConversationItemAddedEvent) GetType() string { return "conversation_item_added" }
+
+type AgentFalseInterruptionEvent struct {
+	Resumed           bool
+	CreatedAt         time.Time
+	Message           *llm.ChatMessage
+	ExtraInstructions string
+}
+
+func NewAgentFalseInterruptionEvent(resumed bool) *AgentFalseInterruptionEvent {
+	return &AgentFalseInterruptionEvent{
+		Resumed:   resumed,
+		CreatedAt: time.Now(),
+	}
+}
+
+func (e *AgentFalseInterruptionEvent) GetType() string { return "agent_false_interruption" }
+
+type FunctionToolsExecutedEvent struct {
+	FunctionCalls       []*llm.FunctionCall
+	FunctionCallOutputs []*llm.FunctionCallOutput
+	CreatedAt           time.Time
+	ReplyRequired       bool
+	HandoffRequired     bool
+}
+
+type FunctionToolExecutionPair struct {
+	FunctionCall       *llm.FunctionCall
+	FunctionCallOutput *llm.FunctionCallOutput
+}
+
+func NewFunctionToolsExecutedEvent(calls []*llm.FunctionCall, outputs []*llm.FunctionCallOutput) (*FunctionToolsExecutedEvent, error) {
+	if len(calls) != len(outputs) {
+		return nil, ErrFunctionToolEventLengthMismatch
+	}
+	return &FunctionToolsExecutedEvent{
+		FunctionCalls:       calls,
+		FunctionCallOutputs: outputs,
+		CreatedAt:           time.Now(),
+	}, nil
+}
+
+func (e *FunctionToolsExecutedEvent) GetType() string { return "function_tools_executed" }
+
+func (e *FunctionToolsExecutedEvent) Zipped() []FunctionToolExecutionPair {
+	pairs := make([]FunctionToolExecutionPair, len(e.FunctionCalls))
+	for i := range e.FunctionCalls {
+		pairs[i] = FunctionToolExecutionPair{
+			FunctionCall:       e.FunctionCalls[i],
+			FunctionCallOutput: e.FunctionCallOutputs[i],
+		}
+	}
+	return pairs
+}
+
+func (e *FunctionToolsExecutedEvent) CancelToolReply() {
+	e.ReplyRequired = false
+}
+
+func (e *FunctionToolsExecutedEvent) CancelAgentHandoff() {
+	e.HandoffRequired = false
+}
+
+func (e *FunctionToolsExecutedEvent) HasToolReply() bool {
+	return e.ReplyRequired
+}
+
+func (e *FunctionToolsExecutedEvent) HasAgentHandoff() bool {
+	return e.HandoffRequired
+}
 
 type MetricsCollectedEvent struct {
 	Metrics   telemetry.AgentMetrics
@@ -56,6 +148,7 @@ const (
 	CloseReasonJobShutdown             CloseReason = "job_shutdown"
 	CloseReasonParticipantDisconnected CloseReason = "participant_disconnected"
 	CloseReasonUserInitiated           CloseReason = "user_initiated"
+	CloseReasonTaskCompleted           CloseReason = "task_completed"
 )
 
 type CloseEvent struct {
@@ -67,18 +160,40 @@ type CloseEvent struct {
 func (e *CloseEvent) GetType() string { return "close" }
 
 type RunContext struct {
-	Session      *AgentSession
-	SpeechHandle *SpeechHandle
-	FunctionCall *llm.FunctionCall
+	Session          *AgentSession
+	SpeechHandle     *SpeechHandle
+	FunctionCall     *llm.FunctionCall
+	initialStepIndex int
+}
+
+func NewRunContext(session *AgentSession, speechHandle *SpeechHandle, functionCall *llm.FunctionCall) *RunContext {
+	initialStepIndex := -1
+	if speechHandle != nil {
+		initialStepIndex = speechHandle.NumSteps() - 1
+	}
+	return &RunContext{
+		Session:          session,
+		SpeechHandle:     speechHandle,
+		FunctionCall:     functionCall,
+		initialStepIndex: initialStepIndex,
+	}
+}
+
+func (r *RunContext) DisallowInterruptions() error {
+	if r == nil || r.SpeechHandle == nil {
+		return nil
+	}
+	return r.SpeechHandle.SetAllowInterruptions(false)
 }
 
 func (r *RunContext) WaitForPlayout(ctx context.Context) error {
-	if r.Session != nil && r.Session.Assistant != nil {
-		if r.SpeechHandle != nil {
-			return r.SpeechHandle.Wait(ctx)
-		}
+	if r == nil || r.SpeechHandle == nil {
+		return nil
 	}
-	return nil
+	if r.initialStepIndex >= 0 {
+		return r.SpeechHandle.WaitForGeneration(ctx, r.initialStepIndex)
+	}
+	return r.SpeechHandle.Wait(ctx)
 }
 
 type contextKey string
@@ -171,4 +286,3 @@ func (d *ClientEventsDispatcher) DispatchUserState(state UserState) {
 		State: stateStr,
 	})
 }
-

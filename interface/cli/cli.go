@@ -567,10 +567,10 @@ func runConsole(server *worker.AgentServer, argv []string) {
 					// or we can just rely on the entrypoint to handle console input if we set a callback.
 					// Since Go's type system requires knowing the type, we define an interface here.
 					type ReplyGenerator interface {
-						GenerateReply(ctx context.Context, userInput string) error
+						GenerateReply(ctx context.Context, userInput string) (*agent.SpeechHandle, error)
 					}
 					if rg, ok := session.(ReplyGenerator); ok {
-						if err := rg.GenerateReply(context.Background(), input); err != nil {
+						if _, err := rg.GenerateReply(context.Background(), input); err != nil {
 							logger.Logger.Errorw("Failed to generate reply", err)
 						}
 					} else {

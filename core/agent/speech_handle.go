@@ -226,6 +226,13 @@ func (s *SpeechHandle) GenerationID() string {
 	return s.ID + "_" + strconv.Itoa(s.numSteps)
 }
 
+func (s *SpeechHandle) NumSteps() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	return s.numSteps
+}
+
 func (s *SpeechHandle) ParentGenerationID() string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
