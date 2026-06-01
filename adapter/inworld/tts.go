@@ -15,37 +15,45 @@ import (
 
 	"github.com/cavos-io/rtp-agent/core/audio/model"
 	"github.com/cavos-io/rtp-agent/core/tts"
+	cavosmath "github.com/cavos-io/rtp-agent/library/math"
 	"github.com/gorilla/websocket"
 )
 
 const (
-	defaultInworldBaseURL                  = "https://api.inworld.ai"
-	defaultInworldWebsocketURL             = "wss://api.inworld.ai"
-	defaultInworldModel                    = "inworld-tts-1.5-max"
-	defaultInworldVoice                    = "Ashley"
-	defaultInworldEncoding                 = "PCM"
-	defaultInworldBitRate                  = 64000
-	defaultInworldSampleRate               = 24000
-	defaultInworldSpeakingRate             = 1.0
-	defaultInworldTemperature              = 1.0
-	defaultInworldBufferCharThreshold      = 120
-	defaultInworldMaxBufferDelayMillis     = 3000
-	defaultInworldTimestampTransportPolicy = "ASYNC"
+	inworldPluginVersion                     = "1.5.15"
+	inworldUserAgent                         = "livekit-agents-py/" + inworldPluginVersion
+	defaultInworldBaseURL                    = "https://api.inworld.ai/"
+	defaultInworldWebsocketURL               = "wss://api.inworld.ai/"
+	defaultInworldModel                      = "inworld-tts-1.5-max"
+	defaultInworldVoice                      = "Ashley"
+	defaultInworldEncoding                   = "PCM"
+	defaultInworldBitRate                    = 64000
+	defaultInworldSampleRate                 = 24000
+	defaultInworldSpeakingRate               = 1.0
+	defaultInworldTemperature                = 1.0
+	defaultInworldTimestampTransportStrategy = "ASYNC"
+	defaultInworldBufferCharThreshold        = 120
+	defaultInworldMaxBufferDelayMS           = 3000
 )
 
 type InworldTTS struct {
-	apiKey              string
-	baseURL             string
-	wsURL               string
-	model               string
-	voice               string
-	encoding            string
-	bitRate             int
-	sampleRate          int
-	speakingRate        float64
-	temperature         float64
-	bufferCharThreshold int
-	maxBufferDelayMS    int
+	apiKey                     string
+	baseURL                    string
+	wsURL                      string
+	voice                      string
+	model                      string
+	encoding                   string
+	bitRate                    int
+	sampleRate                 int
+	speakingRate               float64
+	temperature                float64
+	language                   string
+	timestampType              string
+	textNormalization          string
+	deliveryMode               string
+	timestampTransportStrategy string
+	bufferCharThreshold        int
+	maxBufferDelayMS           int
 }
 
 type InworldTTSOption func(*InworldTTS)
@@ -53,7 +61,7 @@ type InworldTTSOption func(*InworldTTS)
 func WithInworldTTSBaseURL(baseURL string) InworldTTSOption {
 	return func(t *InworldTTS) {
 		if baseURL != "" {
-			t.baseURL = strings.TrimRight(baseURL, "/")
+			t.baseURL = ensureTrailingSlash(baseURL)
 		}
 	}
 }
@@ -61,7 +69,15 @@ func WithInworldTTSBaseURL(baseURL string) InworldTTSOption {
 func WithInworldTTSWebsocketURL(wsURL string) InworldTTSOption {
 	return func(t *InworldTTS) {
 		if wsURL != "" {
-			t.wsURL = strings.TrimRight(wsURL, "/")
+			t.wsURL = ensureTrailingSlash(wsURL)
+		}
+	}
+}
+
+func WithInworldTTSVoice(voice string) InworldTTSOption {
+	return func(t *InworldTTS) {
+		if voice != "" {
+			t.voice = voice
 		}
 	}
 }
@@ -100,30 +116,90 @@ func WithInworldTTSSampleRate(sampleRate int) InworldTTSOption {
 
 func WithInworldTTSSpeakingRate(speakingRate float64) InworldTTSOption {
 	return func(t *InworldTTS) {
-		t.speakingRate = speakingRate
+		if speakingRate > 0 {
+			t.speakingRate = speakingRate
+		}
 	}
 }
 
 func WithInworldTTSTemperature(temperature float64) InworldTTSOption {
 	return func(t *InworldTTS) {
-		t.temperature = temperature
+		if temperature > 0 {
+			t.temperature = temperature
+		}
+	}
+}
+
+func WithInworldTTSLanguage(language string) InworldTTSOption {
+	return func(t *InworldTTS) {
+		t.language = language
+	}
+}
+
+func WithInworldTTSTimestampType(timestampType string) InworldTTSOption {
+	return func(t *InworldTTS) {
+		t.timestampType = timestampType
+	}
+}
+
+func WithInworldTTSTextNormalization(enabled bool) InworldTTSOption {
+	return func(t *InworldTTS) {
+		if enabled {
+			t.textNormalization = "ON"
+		} else {
+			t.textNormalization = "OFF"
+		}
+	}
+}
+
+func WithInworldTTSDeliveryMode(deliveryMode string) InworldTTSOption {
+	return func(t *InworldTTS) {
+		t.deliveryMode = deliveryMode
+	}
+}
+
+func WithInworldTTSTimestampTransportStrategy(strategy string) InworldTTSOption {
+	return func(t *InworldTTS) {
+		if strategy != "" {
+			t.timestampTransportStrategy = strategy
+		}
+	}
+}
+
+func WithInworldTTSBufferCharThreshold(threshold int) InworldTTSOption {
+	return func(t *InworldTTS) {
+		if threshold > 0 {
+			t.bufferCharThreshold = threshold
+		}
+	}
+}
+
+func WithInworldTTSMaxBufferDelayMS(delayMS int) InworldTTSOption {
+	return func(t *InworldTTS) {
+		if delayMS > 0 {
+			t.maxBufferDelayMS = delayMS
+		}
 	}
 }
 
 func NewInworldTTS(apiKey string, voice string, opts ...InworldTTSOption) *InworldTTS {
 	provider := &InworldTTS{
-		apiKey:              apiKey,
-		baseURL:             defaultInworldBaseURL,
-		wsURL:               defaultInworldWebsocketURL,
-		model:               defaultInworldModel,
-		voice:               voice,
-		encoding:            defaultInworldEncoding,
-		bitRate:             defaultInworldBitRate,
-		sampleRate:          defaultInworldSampleRate,
-		speakingRate:        defaultInworldSpeakingRate,
-		temperature:         defaultInworldTemperature,
-		bufferCharThreshold: defaultInworldBufferCharThreshold,
-		maxBufferDelayMS:    defaultInworldMaxBufferDelayMillis,
+		apiKey:                     apiKey,
+		baseURL:                    defaultInworldBaseURL,
+		wsURL:                      defaultInworldWebsocketURL,
+		voice:                      voice,
+		model:                      defaultInworldModel,
+		encoding:                   defaultInworldEncoding,
+		bitRate:                    defaultInworldBitRate,
+		sampleRate:                 defaultInworldSampleRate,
+		speakingRate:               defaultInworldSpeakingRate,
+		temperature:                defaultInworldTemperature,
+		timestampTransportStrategy: defaultInworldTimestampTransportStrategy,
+		bufferCharThreshold:        defaultInworldBufferCharThreshold,
+		maxBufferDelayMS:           defaultInworldMaxBufferDelayMS,
+	}
+	if provider.voice == "" {
+		provider.voice = defaultInworldVoice
 	}
 	for _, opt := range opts {
 		opt(provider)
@@ -135,9 +211,14 @@ func NewInworldTTS(apiKey string, voice string, opts ...InworldTTSOption) *Inwor
 }
 
 func (t *InworldTTS) Label() string { return "inworld.TTS" }
+
 func (t *InworldTTS) Capabilities() tts.TTSCapabilities {
-	return tts.TTSCapabilities{Streaming: true, AlignedTranscript: false}
+	return tts.TTSCapabilities{
+		Streaming:         true,
+		AlignedTranscript: t.timestampType != "" && t.timestampType != "TIMESTAMP_TYPE_UNSPECIFIED",
+	}
 }
+
 func (t *InworldTTS) SampleRate() int  { return t.sampleRate }
 func (t *InworldTTS) NumChannels() int { return 1 }
 
@@ -146,7 +227,6 @@ func (t *InworldTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedSt
 	if err != nil {
 		return nil, err
 	}
-
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		return nil, err
@@ -160,31 +240,22 @@ func (t *InworldTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedSt
 }
 
 func buildInworldTTSRequest(ctx context.Context, t *InworldTTS, text string) (*http.Request, error) {
-	audioConfig := map[string]any{
-		"audioEncoding":   t.encoding,
-		"bitrate":         t.bitRate,
-		"sampleRateHertz": t.sampleRate,
-		"temperature":     t.temperature,
-		"speakingRate":    t.speakingRate,
-	}
-	body := map[string]any{
-		"text":                       text,
-		"voiceId":                    t.voice,
-		"modelId":                    t.model,
-		"audioConfig":                audioConfig,
-		"timestampTransportStrategy": defaultInworldTimestampTransportPolicy,
-	}
-	jsonBody, err := json.Marshal(body)
+	payload := inworldTTSBasePayload(t)
+	payload["text"] = text
+	body, err := json.Marshal(payload)
 	if err != nil {
 		return nil, err
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimRight(t.baseURL, "/")+"/tts/v1/voice:stream", bytes.NewBuffer(jsonBody))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimRight(t.baseURL, "/")+"/tts/v1/voice:stream", bytes.NewReader(body))
 	if err != nil {
 		return nil, err
+	}
+	for key, values := range buildInworldTTSHeaders(t) {
+		for _, value := range values {
+			req.Header.Add(key, value)
+		}
 	}
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Basic "+t.apiKey)
-	req.Header.Set("X-User-Agent", "livekit-agents-go")
 	return req, nil
 }
 
@@ -193,80 +264,107 @@ func (t *InworldTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to dial inworld tts websocket: %w", err)
 	}
-	contextID := fmt.Sprintf("ctx-%d", time.Now().UnixNano())
-	createPayload, err := buildInworldTTSCreateContextMessage(t, contextID)
-	if err != nil {
-		conn.Close()
-		return nil, err
-	}
-	if err := conn.WriteMessage(websocket.TextMessage, createPayload); err != nil {
-		conn.Close()
-		return nil, err
-	}
 	streamCtx, cancel := context.WithCancel(ctx)
-	return &inworldTTSSynthesizeStream{
+	stream := &inworldTTSSynthesizeStream{
 		conn:       conn,
 		ctx:        streamCtx,
 		cancel:     cancel,
-		contextID:  contextID,
+		provider:   t,
+		contextID:  cavosmath.ShortUUID(""),
+		events:     make(chan *tts.SynthesizedAudio, 100),
+		errCh:      make(chan error, 1),
 		sampleRate: t.sampleRate,
-	}, nil
+	}
+	createMessage, err := buildInworldTTSCreateMessage(t, stream.contextID)
+	if err != nil {
+		_ = conn.Close()
+		cancel()
+		return nil, err
+	}
+	if err := conn.WriteMessage(websocket.TextMessage, createMessage); err != nil {
+		_ = conn.Close()
+		cancel()
+		return nil, err
+	}
+	go stream.readLoop()
+	return stream, nil
 }
 
 func buildInworldTTSWebsocketURL(t *InworldTTS) string {
 	return strings.TrimRight(t.wsURL, "/") + "/tts/v1/voice:streamBidirectional"
 }
 
-func buildInworldTTSWebsocketHeaders(t *InworldTTS) http.Header {
-	headers := make(http.Header)
+func buildInworldTTSHeaders(t *InworldTTS) http.Header {
+	headers := http.Header{}
 	headers.Set("Authorization", "Basic "+t.apiKey)
-	headers.Set("X-User-Agent", "livekit-agents-go")
-	headers.Set("X-Request-Id", fmt.Sprintf("req-%d", time.Now().UnixNano()))
+	headers.Set("X-User-Agent", inworldUserAgent)
+	headers.Set("X-Request-Id", cavosmath.ShortUUID(""))
 	return headers
 }
 
-func buildInworldTTSCreateContextMessage(t *InworldTTS, contextID string) ([]byte, error) {
-	return json.Marshal(map[string]any{
+func buildInworldTTSWebsocketHeaders(t *InworldTTS) http.Header {
+	return buildInworldTTSHeaders(t)
+}
+
+func buildInworldTTSCreateMessage(t *InworldTTS, contextID string) ([]byte, error) {
+	create := inworldTTSBasePayload(t)
+	delete(create, "text")
+	create["bufferCharThreshold"] = t.bufferCharThreshold
+	create["maxBufferDelayMs"] = t.maxBufferDelayMS
+	create["autoMode"] = true
+	return json.Marshal(map[string]interface{}{
+		"create":    create,
 		"contextId": contextID,
-		"create": map[string]any{
-			"voiceId": t.voice,
-			"modelId": t.model,
-			"audioConfig": map[string]any{
-				"audioEncoding":   t.encoding,
-				"sampleRateHertz": t.sampleRate,
-				"bitrate":         t.bitRate,
-				"speakingRate":    t.speakingRate,
-			},
-			"temperature":                t.temperature,
-			"bufferCharThreshold":        t.bufferCharThreshold,
-			"maxBufferDelayMs":           t.maxBufferDelayMS,
-			"timestampTransportStrategy": defaultInworldTimestampTransportPolicy,
-			"autoMode":                   true,
-		},
 	})
 }
 
-func buildInworldTTSSendTextMessage(contextID, text string) ([]byte, error) {
-	return json.Marshal(map[string]any{
+func buildInworldTTSSendTextMessage(contextID string, text string) ([]byte, error) {
+	return json.Marshal(map[string]interface{}{
+		"send_text": map[string]interface{}{"text": text},
 		"contextId": contextID,
-		"send_text": map[string]any{
-			"text": text,
+	})
+}
+
+func buildInworldTTSFlushMessage(contextID string) ([]byte, error) {
+	return json.Marshal(map[string]interface{}{
+		"flush_context": map[string]interface{}{},
+		"contextId":     contextID,
+	})
+}
+
+func buildInworldTTSCloseMessage(contextID string) ([]byte, error) {
+	return json.Marshal(map[string]interface{}{
+		"close_context": map[string]interface{}{},
+		"contextId":     contextID,
+	})
+}
+
+func inworldTTSBasePayload(t *InworldTTS) map[string]interface{} {
+	payload := map[string]interface{}{
+		"voiceId": t.voice,
+		"modelId": t.model,
+		"audioConfig": map[string]interface{}{
+			"audioEncoding":   t.encoding,
+			"sampleRateHertz": t.sampleRate,
+			"bitrate":         t.bitRate,
+			"speakingRate":    t.speakingRate,
 		},
-	})
-}
-
-func buildInworldTTSFlushContextMessage(contextID string) ([]byte, error) {
-	return json.Marshal(map[string]any{
-		"contextId":     contextID,
-		"flush_context": map[string]any{},
-	})
-}
-
-func buildInworldTTSCloseContextMessage(contextID string) ([]byte, error) {
-	return json.Marshal(map[string]any{
-		"contextId":     contextID,
-		"close_context": map[string]any{},
-	})
+		"temperature":                t.temperature,
+		"timestampTransportStrategy": t.timestampTransportStrategy,
+	}
+	if t.language != "" {
+		payload["language"] = t.language
+	}
+	if t.timestampType != "" {
+		payload["timestampType"] = t.timestampType
+	}
+	if t.textNormalization != "" {
+		payload["applyTextNormalization"] = t.textNormalization
+	}
+	if t.deliveryMode != "" {
+		payload["deliveryMode"] = t.deliveryMode
+	}
+	return payload
 }
 
 type inworldTTSChunkedStream struct {
@@ -280,7 +378,11 @@ func (s *inworldTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 		s.scanner = bufio.NewScanner(s.resp.Body)
 	}
 	for s.scanner.Scan() {
-		audio, done, err := inworldAudioFromWebsocketMessage(s.scanner.Bytes(), s.sampleRate)
+		line := bytes.TrimSpace(s.scanner.Bytes())
+		if len(line) == 0 {
+			continue
+		}
+		audio, done, err := inworldTTSAudioFromResponseLine(line, s.sampleRate)
 		if err != nil {
 			return nil, err
 		}
@@ -301,52 +403,14 @@ func (s *inworldTTSChunkedStream) Close() error {
 	return s.resp.Body.Close()
 }
 
-type inworldTTSWebsocketChunkedStream struct {
-	conn       *websocket.Conn
-	sampleRate int
-}
-
-func (s *inworldTTSWebsocketChunkedStream) Next() (*tts.SynthesizedAudio, error) {
-	if s.conn == nil {
-		return nil, io.EOF
-	}
-	for {
-		msgType, payload, err := s.conn.ReadMessage()
-		if err != nil {
-			if websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway) || err == io.EOF {
-				return nil, io.EOF
-			}
-			return nil, err
-		}
-		if msgType != websocket.TextMessage {
-			continue
-		}
-		audio, done, err := inworldAudioFromWebsocketMessage(payload, s.sampleRate)
-		if err != nil {
-			return nil, err
-		}
-		if done {
-			return nil, io.EOF
-		}
-		if audio != nil {
-			return audio, nil
-		}
-	}
-}
-
-func (s *inworldTTSWebsocketChunkedStream) Close() error {
-	if s.conn == nil {
-		return nil
-	}
-	_ = s.conn.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""), time.Now().Add(time.Second))
-	return s.conn.Close()
-}
-
 type inworldTTSSynthesizeStream struct {
 	conn        *websocket.Conn
 	ctx         context.Context
 	cancel      context.CancelFunc
+	provider    *InworldTTS
 	contextID   string
+	events      chan *tts.SynthesizedAudio
+	errCh       chan error
 	sampleRate  int
 	pendingText bytes.Buffer
 	mu          sync.Mutex
@@ -359,6 +423,9 @@ func (s *inworldTTSSynthesizeStream) PushText(text string) error {
 	if text == "" {
 		return nil
 	}
+	if s.closed {
+		return fmt.Errorf("inworld tts stream is closed")
+	}
 	_, err := s.pendingText.WriteString(text)
 	return err
 }
@@ -366,25 +433,28 @@ func (s *inworldTTSSynthesizeStream) PushText(text string) error {
 func (s *inworldTTSSynthesizeStream) Flush() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.closed {
+		return fmt.Errorf("inworld tts stream is closed")
+	}
 	text := strings.TrimSpace(s.pendingText.String())
 	s.pendingText.Reset()
 	if s.conn == nil {
 		return nil
 	}
 	if text != "" {
-		payload, err := buildInworldTTSSendTextMessage(s.contextID, text)
+		message, err := buildInworldTTSSendTextMessage(s.contextID, text)
 		if err != nil {
 			return err
 		}
-		if err := s.conn.WriteMessage(websocket.TextMessage, payload); err != nil {
+		if err := s.conn.WriteMessage(websocket.TextMessage, message); err != nil {
 			return err
 		}
 	}
-	flushPayload, err := buildInworldTTSFlushContextMessage(s.contextID)
+	message, err := buildInworldTTSFlushMessage(s.contextID)
 	if err != nil {
 		return err
 	}
-	return s.conn.WriteMessage(websocket.TextMessage, flushPayload)
+	return s.conn.WriteMessage(websocket.TextMessage, message)
 }
 
 func (s *inworldTTSSynthesizeStream) Close() error {
@@ -394,82 +464,142 @@ func (s *inworldTTSSynthesizeStream) Close() error {
 		return nil
 	}
 	s.closed = true
-	if s.cancel != nil {
-		s.cancel()
-	}
-	if s.conn == nil {
-		return nil
-	}
-	if s.contextID != "" {
-		if closePayload, err := buildInworldTTSCloseContextMessage(s.contextID); err == nil {
-			_ = s.conn.WriteMessage(websocket.TextMessage, closePayload)
-		}
+	s.cancel()
+	if message, err := buildInworldTTSCloseMessage(s.contextID); err == nil {
+		_ = s.conn.WriteMessage(websocket.TextMessage, message)
 	}
 	_ = s.conn.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""), time.Now().Add(time.Second))
 	return s.conn.Close()
 }
 
 func (s *inworldTTSSynthesizeStream) Next() (*tts.SynthesizedAudio, error) {
-	if s.ctx != nil {
-		select {
-		case <-s.ctx.Done():
-			return nil, s.ctx.Err()
-		default:
+	select {
+	case event, ok := <-s.events:
+		if !ok {
+			select {
+			case err := <-s.errCh:
+				return nil, err
+			default:
+				return nil, io.EOF
+			}
 		}
+		return event, nil
+	case err := <-s.errCh:
+		return nil, err
+	case <-s.ctx.Done():
+		return nil, s.ctx.Err()
 	}
-	return (&inworldTTSWebsocketChunkedStream{conn: s.conn, sampleRate: s.sampleRate}).Next()
 }
 
-func inworldAudioFromWebsocketMessage(payload []byte, sampleRate int) (*tts.SynthesizedAudio, bool, error) {
+func (s *inworldTTSSynthesizeStream) readLoop() {
+	defer close(s.events)
+	for {
+		msgType, payload, err := s.conn.ReadMessage()
+		if err != nil {
+			if !websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway) && err != io.EOF {
+				s.errCh <- err
+			}
+			return
+		}
+		if msgType != websocket.TextMessage {
+			continue
+		}
+		audio, done, err := inworldTTSAudioFromWebsocketMessage(payload, s.contextID, s.sampleRate)
+		if err != nil {
+			s.errCh <- err
+			return
+		}
+		if audio != nil {
+			s.events <- audio
+		}
+		if done {
+			return
+		}
+	}
+}
+
+func inworldTTSAudioFromResponseLine(payload []byte, sampleRate int) (*tts.SynthesizedAudio, bool, error) {
 	var message struct {
-		Error struct {
+		Result struct {
+			AudioContent string `json:"audioContent"`
+		} `json:"result"`
+		Error *struct {
 			Code    int    `json:"code"`
 			Message string `json:"message"`
 		} `json:"error"`
-		Result struct {
-			ContextID     string         `json:"contextId"`
-			ContextClosed map[string]any `json:"contextClosed"`
-			Status        struct {
-				Code    int    `json:"code"`
-				Message string `json:"message"`
-			} `json:"status"`
-			AudioChunk struct {
-				AudioContent string `json:"audioContent"`
-			} `json:"audioChunk"`
-		} `json:"result"`
 	}
 	if err := json.Unmarshal(payload, &message); err != nil {
 		return nil, false, err
 	}
-	if message.Error.Code != 0 || message.Error.Message != "" {
-		if message.Error.Message == "" {
-			message.Error.Message = "unknown error"
-		}
+	if message.Error != nil {
 		return nil, false, fmt.Errorf("inworld tts error: %s", message.Error.Message)
 	}
-	if message.Result.Status.Code != 0 {
-		if message.Result.Status.Message == "" {
-			message.Result.Status.Message = "unknown error"
-		}
+	if message.Result.AudioContent == "" {
+		return nil, false, nil
+	}
+	audio, err := base64.StdEncoding.DecodeString(message.Result.AudioContent)
+	if err != nil {
+		return nil, false, err
+	}
+	return inworldTTSAudioFrame(audio, sampleRate), false, nil
+}
+
+func inworldTTSAudioFromWebsocketMessage(payload []byte, contextID string, sampleRate int) (*tts.SynthesizedAudio, bool, error) {
+	var message struct {
+		Result struct {
+			ContextID  string `json:"contextId"`
+			AudioChunk *struct {
+				AudioContent string `json:"audioContent"`
+			} `json:"audioChunk"`
+			ContextClosed map[string]interface{} `json:"contextClosed"`
+			Status        *struct {
+				Code    int    `json:"code"`
+				Message string `json:"message"`
+			} `json:"status"`
+		} `json:"result"`
+		Error *struct {
+			Code    int    `json:"code"`
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal(payload, &message); err != nil {
+		return nil, false, err
+	}
+	if message.Error != nil {
+		return nil, false, fmt.Errorf("inworld tts error: %s", message.Error.Message)
+	}
+	if message.Result.Status != nil && message.Result.Status.Code != 0 {
 		return nil, false, fmt.Errorf("inworld tts error: %s", message.Result.Status.Message)
+	}
+	if message.Result.ContextID != "" && message.Result.ContextID != contextID {
+		return nil, false, nil
 	}
 	if message.Result.ContextClosed != nil {
 		return nil, true, nil
 	}
-	if message.Result.AudioChunk.AudioContent == "" {
+	if message.Result.AudioChunk == nil || message.Result.AudioChunk.AudioContent == "" {
 		return nil, false, nil
 	}
 	audio, err := base64.StdEncoding.DecodeString(message.Result.AudioChunk.AudioContent)
 	if err != nil {
 		return nil, false, err
 	}
+	frame := inworldTTSAudioFrame(audio, sampleRate)
+	frame.SegmentID = message.Result.ContextID
+	return frame, false, nil
+}
+
+func inworldTTSAudioFrame(audio []byte, sampleRate int) *tts.SynthesizedAudio {
 	return &tts.SynthesizedAudio{
-		SegmentID: message.Result.ContextID,
 		Frame: &model.AudioFrame{
 			Data:              bytes.Clone(audio),
 			SampleRate:        uint32(sampleRate),
 			NumChannels:       1,
 			SamplesPerChannel: uint32(len(audio) / 2),
 		},
-	}, false, nil
+	}
+}
+
+func ensureTrailingSlash(value string) string {
+	return strings.TrimRight(value, "/") + "/"
 }
