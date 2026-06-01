@@ -7,49 +7,101 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 
 	"github.com/cavos-io/conversation-worker/core/tts"
 	"github.com/cavos-io/conversation-worker/model"
 )
 
+const (
+	defaultSpitchBaseURL      = "https://api.spitch.ai"
+	defaultSpitchVoice        = "lina"
+	defaultSpitchLanguage     = "en"
+	defaultSpitchOutputFormat = "mp3"
+	defaultSpitchSampleRate   = 24000
+)
+
 type SpitchTTS struct {
-	apiKey string
-	voice  string
+	apiKey       string
+	baseURL      string
+	voice        string
+	language     string
+	outputFormat string
+	sampleRate   int
 }
 
-func NewSpitchTTS(apiKey string, voice string) *SpitchTTS {
-	if voice == "" {
-		voice = "default_voice"
+type SpitchTTSOption func(*SpitchTTS)
+
+func WithSpitchTTSBaseURL(baseURL string) SpitchTTSOption {
+	return func(t *SpitchTTS) {
+		if baseURL != "" {
+			t.baseURL = strings.TrimRight(baseURL, "/")
+		}
 	}
-	return &SpitchTTS{
-		apiKey: apiKey,
-		voice:  voice,
+}
+
+func WithSpitchTTSVoice(voice string) SpitchTTSOption {
+	return func(t *SpitchTTS) {
+		if voice != "" {
+			t.voice = voice
+		}
 	}
+}
+
+func WithSpitchTTSLanguage(language string) SpitchTTSOption {
+	return func(t *SpitchTTS) {
+		if language != "" {
+			t.language = language
+		}
+	}
+}
+
+func WithSpitchTTSOutputFormat(outputFormat string) SpitchTTSOption {
+	return func(t *SpitchTTS) {
+		if outputFormat != "" {
+			t.outputFormat = outputFormat
+		}
+	}
+}
+
+func WithSpitchTTSSampleRate(sampleRate int) SpitchTTSOption {
+	return func(t *SpitchTTS) {
+		if sampleRate > 0 {
+			t.sampleRate = sampleRate
+		}
+	}
+}
+
+func NewSpitchTTS(apiKey string, voice string, opts ...SpitchTTSOption) *SpitchTTS {
+	provider := &SpitchTTS{
+		apiKey:       apiKey,
+		baseURL:      defaultSpitchBaseURL,
+		voice:        voice,
+		language:     defaultSpitchLanguage,
+		outputFormat: defaultSpitchOutputFormat,
+		sampleRate:   defaultSpitchSampleRate,
+	}
+	for _, opt := range opts {
+		opt(provider)
+	}
+	if provider.voice == "" {
+		provider.voice = defaultSpitchVoice
+	}
+	return provider
 }
 
 func (t *SpitchTTS) Label() string { return "spitch.TTS" }
 func (t *SpitchTTS) Capabilities() tts.TTSCapabilities {
 	return tts.TTSCapabilities{Streaming: false, AlignedTranscript: false}
 }
-func (t *SpitchTTS) SampleRate() int { return 24000 }
+func (t *SpitchTTS) SampleRate() int  { return t.sampleRate }
 func (t *SpitchTTS) NumChannels() int { return 1 }
 
 func (t *SpitchTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStream, error) {
-	url := "https://api.spitch.ai/tts/v1/synthesize"
-
-	reqBody := map[string]interface{}{
-		"text":  text,
-		"voice": t.voice,
-	}
-
-	jsonBody, _ := json.Marshal(reqBody)
-	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewBuffer(jsonBody))
+	req, err := buildSpitchTTSRequest(ctx, t, text)
 	if err != nil {
 		return nil, err
 	}
-
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+t.apiKey)
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
@@ -63,8 +115,30 @@ func (t *SpitchTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStr
 	}
 
 	return &spitchTTSChunkedStream{
-		resp: resp,
+		resp:       resp,
+		sampleRate: t.sampleRate,
 	}, nil
+}
+
+func buildSpitchTTSRequest(ctx context.Context, t *SpitchTTS, text string) (*http.Request, error) {
+	reqBody := map[string]interface{}{
+		"text":     text,
+		"language": t.language,
+		"voice":    t.voice,
+		"format":   t.outputFormat,
+	}
+
+	jsonBody, err := json.Marshal(reqBody)
+	if err != nil {
+		return nil, err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimRight(t.baseURL, "/")+"/tts/v1/synthesize", bytes.NewBuffer(jsonBody))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+t.apiKey)
+	return req, nil
 }
 
 func (t *SpitchTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
@@ -72,7 +146,8 @@ func (t *SpitchTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
 }
 
 type spitchTTSChunkedStream struct {
-	resp *http.Response
+	resp       *http.Response
+	sampleRate int
 }
 
 func (s *spitchTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
@@ -88,7 +163,7 @@ func (s *spitchTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 	return &tts.SynthesizedAudio{
 		Frame: &model.AudioFrame{
 			Data:              buf[:n],
-			SampleRate:        24000,
+			SampleRate:        uint32(s.sampleRate),
 			NumChannels:       1,
 			SamplesPerChannel: uint32(n / 2),
 		},
