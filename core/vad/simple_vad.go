@@ -29,6 +29,8 @@ type SimpleVADOptions struct {
 	UpdateInterval            float64
 	SampleRate                uint32
 	WindowDuration            float64
+
+	maxBufferedSpeechDurationSet bool
 }
 
 type SimpleVADOption func(*SimpleVADOptions)
@@ -60,6 +62,7 @@ func WithPrefixPaddingDuration(duration float64) SimpleVADOption {
 func WithMaxBufferedSpeechDuration(duration float64) SimpleVADOption {
 	return func(o *SimpleVADOptions) {
 		o.MaxBufferedSpeechDuration = duration
+		o.maxBufferedSpeechDurationSet = true
 	}
 }
 
@@ -621,8 +624,8 @@ func (s *simpleVADStream) startSpeechFrames() []*model.AudioFrame {
 	frames := make([]*model.AudioFrame, 0, len(s.prefixFrames)+len(s.pendingSpeechFrames))
 	frames = append(frames, s.prefixFrames...)
 	frames = append(frames, s.pendingSpeechFrames...)
-	bufferLimit := s.maxBufferedDurationLimit()
-	if bufferLimit <= 0 {
+	bufferLimit, limitSet := s.maxBufferedDurationLimit()
+	if !limitSet {
 		return frames
 	}
 
@@ -644,8 +647,8 @@ func (s *simpleVADStream) startSpeechFrames() []*model.AudioFrame {
 }
 
 func (s *simpleVADStream) appendSpeechFrame(frame *model.AudioFrame, duration float64) {
-	bufferLimit := s.maxBufferedDurationLimit()
-	if bufferLimit > 0 && s.bufferedSpeechDuration+duration > bufferLimit {
+	bufferLimit, limitSet := s.maxBufferedDurationLimit()
+	if limitSet && s.bufferedSpeechDuration+duration > bufferLimit {
 		remaining := bufferLimit - s.bufferedSpeechDuration
 		if remaining > 0 {
 			partial := trimFrameEnd(frame, remaining)
@@ -659,8 +662,8 @@ func (s *simpleVADStream) appendSpeechFrame(frame *model.AudioFrame, duration fl
 }
 
 func (s *simpleVADStream) trimSpeechFrames() {
-	bufferLimit := s.maxBufferedDurationLimit()
-	if bufferLimit <= 0 {
+	bufferLimit, limitSet := s.maxBufferedDurationLimit()
+	if !limitSet {
 		s.bufferedSpeechDuration = framesDuration(s.speechFrames)
 		return
 	}
@@ -685,11 +688,11 @@ func (s *simpleVADStream) trimSpeechFrames() {
 	s.bufferedSpeechDuration = buffered
 }
 
-func (s *simpleVADStream) maxBufferedDurationLimit() float64 {
-	if s.options.MaxBufferedSpeechDuration <= 0 {
-		return 0
+func (s *simpleVADStream) maxBufferedDurationLimit() (float64, bool) {
+	if s.options.MaxBufferedSpeechDuration <= 0 && !s.options.maxBufferedSpeechDurationSet {
+		return 0, false
 	}
-	return s.options.MaxBufferedSpeechDuration + s.options.PrefixPaddingDuration
+	return max(s.options.MaxBufferedSpeechDuration+s.options.PrefixPaddingDuration, 0), true
 }
 
 func (s *simpleVADStream) appendPrefixFrame(frame *model.AudioFrame, duration float64) {
@@ -891,6 +894,7 @@ func mergeSimpleVADOptions(current, updates SimpleVADOptions) SimpleVADOptions {
 	}
 	if updates.MaxBufferedSpeechDuration != 0 {
 		current.MaxBufferedSpeechDuration = updates.MaxBufferedSpeechDuration
+		current.maxBufferedSpeechDurationSet = true
 	}
 	if updates.DeactivationThreshold != 0 {
 		current.DeactivationThreshold = updates.DeactivationThreshold
