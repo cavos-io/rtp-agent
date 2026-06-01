@@ -81,3 +81,237 @@ func TestRealtimeGenerateReplyMessageMapsPerResponseOptions(t *testing.T) {
 		t.Fatalf("tools = %#v, want lookup tool", tools)
 	}
 }
+
+func TestRealtimeTruncateMessageMapsAudioModality(t *testing.T) {
+	msg := openAIRealtimeTruncateMessage(llm.RealtimeTruncateOptions{
+		MessageID:      "msg_123",
+		Modalities:     []string{"text", "audio"},
+		AudioEndMillis: 1500,
+	})
+
+	if msg["type"] != "conversation.item.truncate" {
+		t.Fatalf("message type = %#v, want conversation.item.truncate", msg["type"])
+	}
+	if msg["item_id"] != "msg_123" {
+		t.Fatalf("item_id = %#v, want msg_123", msg["item_id"])
+	}
+	if msg["content_index"] != 0 {
+		t.Fatalf("content_index = %#v, want 0", msg["content_index"])
+	}
+	if msg["audio_end_ms"] != 1500 {
+		t.Fatalf("audio_end_ms = %#v, want 1500", msg["audio_end_ms"])
+	}
+}
+
+func TestRealtimeVideoMessageMapsImageContent(t *testing.T) {
+	msg, err := openAIRealtimeVideoMessage(&llm.ImageContent{
+		Image:    "data:image/png;base64,aW1hZ2U=",
+		MimeType: "image/png",
+	})
+	if err != nil {
+		t.Fatalf("openAIRealtimeVideoMessage error = %v, want nil", err)
+	}
+
+	if msg["type"] != "conversation.item.create" {
+		t.Fatalf("message type = %#v, want conversation.item.create", msg["type"])
+	}
+	item := msg["item"].(map[string]any)
+	if item["type"] != "message" || item["role"] != "user" {
+		t.Fatalf("item = %#v, want user message", item)
+	}
+	content := item["content"].([]map[string]any)
+	if len(content) != 1 || content[0]["type"] != "input_image" {
+		t.Fatalf("content = %#v, want one input_image part", content)
+	}
+	if content[0]["image_url"] != "data:image/png;base64,aW1hZ2U=" {
+		t.Fatalf("image_url = %#v, want data URL", content[0]["image_url"])
+	}
+}
+
+func TestRealtimeEventMapsInputAudioTranscriptionCompleted(t *testing.T) {
+	confidence := 0.87
+	ev, ok := openAIRealtimeEvent(map[string]any{
+		"type":       "conversation.item.input_audio_transcription.completed",
+		"item_id":    "item_123",
+		"transcript": "hello",
+		"confidence": confidence,
+	})
+	if !ok {
+		t.Fatal("openAIRealtimeEvent returned ok=false, want transcription event")
+	}
+	if ev.Type != llm.RealtimeEventTypeInputAudioTranscriptionCompleted {
+		t.Fatalf("event type = %q, want input audio transcription", ev.Type)
+	}
+	if ev.InputTranscription == nil {
+		t.Fatal("InputTranscription = nil, want transcription payload")
+	}
+	if ev.InputTranscription.ItemID != "item_123" || ev.InputTranscription.Transcript != "hello" || !ev.InputTranscription.IsFinal {
+		t.Fatalf("InputTranscription = %#v, want final item transcript", ev.InputTranscription)
+	}
+	if ev.InputTranscription.Confidence == nil || *ev.InputTranscription.Confidence != confidence {
+		t.Fatalf("Confidence = %#v, want %.2f", ev.InputTranscription.Confidence, confidence)
+	}
+}
+
+func TestRealtimeEventMapsInputAudioTranscriptionDelta(t *testing.T) {
+	ev, ok := openAIRealtimeEvent(map[string]any{
+		"type":    "conversation.item.input_audio_transcription.delta",
+		"item_id": "item_123",
+		"delta":   "hel",
+	})
+	if !ok {
+		t.Fatal("openAIRealtimeEvent returned ok=false, want transcription delta event")
+	}
+	if ev.Type != llm.RealtimeEventTypeInputAudioTranscriptionCompleted {
+		t.Fatalf("event type = %q, want input audio transcription", ev.Type)
+	}
+	if ev.InputTranscription == nil {
+		t.Fatal("InputTranscription = nil, want transcription payload")
+	}
+	if ev.InputTranscription.ItemID != "item_123" || ev.InputTranscription.Transcript != "hel" || ev.InputTranscription.IsFinal {
+		t.Fatalf("InputTranscription = %#v, want non-final delta transcript", ev.InputTranscription)
+	}
+	if ev.InputTranscription.Confidence != nil {
+		t.Fatalf("Confidence = %#v, want nil for delta", ev.InputTranscription.Confidence)
+	}
+}
+
+func TestRealtimeEventMapsResponseCreated(t *testing.T) {
+	ev, ok := openAIRealtimeEvent(map[string]any{
+		"type": "response.created",
+		"response": map[string]any{
+			"id":       "resp_123",
+			"metadata": map[string]any{"client_event_id": "response_create_123"},
+		},
+	})
+	if !ok {
+		t.Fatal("openAIRealtimeEvent returned ok=false, want generation-created event")
+	}
+	if ev.Type != llm.RealtimeEventTypeGenerationCreated {
+		t.Fatalf("event type = %q, want generation created", ev.Type)
+	}
+	if ev.Generation == nil {
+		t.Fatal("Generation = nil, want generation-created payload")
+	}
+	if ev.Generation.ResponseID != "resp_123" || !ev.Generation.UserInitiated {
+		t.Fatalf("Generation = %#v, want user-initiated response", ev.Generation)
+	}
+}
+
+func TestRealtimeEventMapsConversationItemAddedMessage(t *testing.T) {
+	ev, ok := openAIRealtimeEvent(map[string]any{
+		"type":             "conversation.item.added",
+		"previous_item_id": "prev_123",
+		"item": map[string]any{
+			"id":   "msg_123",
+			"type": "message",
+			"role": "user",
+			"content": []any{
+				map[string]any{"type": "input_text", "text": "hello"},
+			},
+		},
+	})
+	if !ok {
+		t.Fatal("openAIRealtimeEvent returned ok=false, want remote item event")
+	}
+	if ev.Type != llm.RealtimeEventTypeRemoteItemAdded {
+		t.Fatalf("event type = %q, want remote item added", ev.Type)
+	}
+	if ev.RemoteItem == nil {
+		t.Fatal("RemoteItem = nil, want remote item payload")
+	}
+	if ev.RemoteItem.PreviousItemID != "prev_123" {
+		t.Fatalf("PreviousItemID = %q, want prev_123", ev.RemoteItem.PreviousItemID)
+	}
+	msg, ok := ev.RemoteItem.Item.(*llm.ChatMessage)
+	if !ok {
+		t.Fatalf("RemoteItem.Item = %T, want *llm.ChatMessage", ev.RemoteItem.Item)
+	}
+	if msg.ID != "msg_123" || msg.Role != llm.ChatRoleUser || msg.TextContent() != "hello" {
+		t.Fatalf("message = %#v, want user text message", msg)
+	}
+}
+
+func TestRealtimeEventMapsConversationItemAddedFunctionCall(t *testing.T) {
+	ev, ok := openAIRealtimeEvent(map[string]any{
+		"type": "conversation.item.added",
+		"item": map[string]any{
+			"id":        "fc_123",
+			"type":      "function_call",
+			"call_id":   "call_123",
+			"name":      "lookup",
+			"arguments": `{"query":"hello"}`,
+		},
+	})
+	if !ok {
+		t.Fatal("openAIRealtimeEvent returned ok=false, want remote function call event")
+	}
+	if ev.Type != llm.RealtimeEventTypeRemoteItemAdded {
+		t.Fatalf("event type = %q, want remote item added", ev.Type)
+	}
+	call, ok := ev.RemoteItem.Item.(*llm.FunctionCall)
+	if !ok {
+		t.Fatalf("RemoteItem.Item = %T, want *llm.FunctionCall", ev.RemoteItem.Item)
+	}
+	if call.ID != "fc_123" || call.CallID != "call_123" || call.Name != "lookup" || call.Arguments != `{"query":"hello"}` {
+		t.Fatalf("function call = %#v, want OpenAI function call item", call)
+	}
+}
+
+func TestRealtimeEventMapsResponseDoneMetrics(t *testing.T) {
+	ev, ok := openAIRealtimeEvent(map[string]any{
+		"type": "response.done",
+		"response": map[string]any{
+			"id":     "resp_123",
+			"status": "cancelled",
+			"usage": map[string]any{
+				"input_tokens":  11.0,
+				"output_tokens": 7.0,
+				"total_tokens":  18.0,
+				"input_token_details": map[string]any{
+					"audio_tokens":  3.0,
+					"text_tokens":   4.0,
+					"image_tokens":  1.0,
+					"cached_tokens": 2.0,
+					"cached_tokens_details": map[string]any{
+						"text_tokens":  1.0,
+						"audio_tokens": 1.0,
+						"image_tokens": 0.0,
+					},
+				},
+				"output_token_details": map[string]any{
+					"text_tokens":  5.0,
+					"audio_tokens": 2.0,
+					"image_tokens": 0.0,
+				},
+			},
+		},
+	})
+	if !ok {
+		t.Fatal("openAIRealtimeEvent returned ok=false, want metrics event")
+	}
+	if ev.Type != llm.RealtimeEventTypeMetricsCollected {
+		t.Fatalf("event type = %q, want metrics collected", ev.Type)
+	}
+	if ev.Metrics == nil {
+		t.Fatal("Metrics = nil, want realtime metrics payload")
+	}
+	if ev.Metrics.RequestID != "resp_123" || !ev.Metrics.Cancelled {
+		t.Fatalf("metrics identity = %#v, want cancelled response metrics", ev.Metrics)
+	}
+	if ev.Metrics.InputTokens != 11 || ev.Metrics.OutputTokens != 7 || ev.Metrics.TotalTokens != 18 {
+		t.Fatalf("token totals = %#v, want 11/7/18", ev.Metrics)
+	}
+	if ev.Metrics.InputTokenDetails.AudioTokens != 3 || ev.Metrics.InputTokenDetails.TextTokens != 4 || ev.Metrics.InputTokenDetails.ImageTokens != 1 || ev.Metrics.InputTokenDetails.CachedTokens != 2 {
+		t.Fatalf("input details = %#v, want audio/text/image/cached usage", ev.Metrics.InputTokenDetails)
+	}
+	if ev.Metrics.InputTokenDetails.CachedTokensDetails == nil {
+		t.Fatal("CachedTokensDetails = nil, want cached token breakdown")
+	}
+	if ev.Metrics.InputTokenDetails.CachedTokensDetails.TextTokens != 1 || ev.Metrics.InputTokenDetails.CachedTokensDetails.AudioTokens != 1 {
+		t.Fatalf("cached details = %#v, want text/audio cached usage", ev.Metrics.InputTokenDetails.CachedTokensDetails)
+	}
+	if ev.Metrics.OutputTokenDetails.TextTokens != 5 || ev.Metrics.OutputTokenDetails.AudioTokens != 2 {
+		t.Fatalf("output details = %#v, want text/audio output usage", ev.Metrics.OutputTokenDetails)
+	}
+}

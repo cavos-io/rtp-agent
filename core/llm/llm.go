@@ -10,6 +10,7 @@ import (
 
 	"github.com/cavos-io/rtp-agent/core/audio/model"
 	"github.com/cavos-io/rtp-agent/library/telemetry"
+	"github.com/cavos-io/rtp-agent/library/utils/images"
 )
 
 type ChatRole string
@@ -482,16 +483,24 @@ type RealtimeGenerateReplyOptions struct {
 	Tools        []Tool
 }
 
+type RealtimeTruncateOptions struct {
+	MessageID      string
+	Modalities     []string
+	AudioEndMillis int
+}
+
 type RealtimeSession interface {
 	UpdateInstructions(instructions string) error
 	UpdateChatContext(chatCtx *ChatContext) error
 	UpdateTools(tools []Tool) error
 	UpdateOptions(options RealtimeSessionOptions) error
 	GenerateReply(options RealtimeGenerateReplyOptions) error
+	Truncate(options RealtimeTruncateOptions) error
 	Interrupt() error
 	Close() error
 	EventCh() <-chan RealtimeEvent
 	PushAudio(frame *model.AudioFrame) error
+	PushVideo(frame *images.VideoFrame) error
 	CommitAudio() error
 	ClearAudio() error
 }
@@ -499,20 +508,45 @@ type RealtimeSession interface {
 type RealtimeEventType string
 
 const (
-	RealtimeEventTypeAudio         RealtimeEventType = "audio"
-	RealtimeEventTypeText          RealtimeEventType = "text"
-	RealtimeEventTypeFunctionCall  RealtimeEventType = "function_call"
-	RealtimeEventTypeSpeechStarted RealtimeEventType = "speech_started"
-	RealtimeEventTypeSpeechStopped RealtimeEventType = "speech_stopped"
-	RealtimeEventTypeError         RealtimeEventType = "error"
+	RealtimeEventTypeAudio                            RealtimeEventType = "audio"
+	RealtimeEventTypeText                             RealtimeEventType = "text"
+	RealtimeEventTypeFunctionCall                     RealtimeEventType = "function_call"
+	RealtimeEventTypeSpeechStarted                    RealtimeEventType = "speech_started"
+	RealtimeEventTypeSpeechStopped                    RealtimeEventType = "speech_stopped"
+	RealtimeEventTypeInputAudioTranscriptionCompleted RealtimeEventType = "input_audio_transcription_completed"
+	RealtimeEventTypeGenerationCreated                RealtimeEventType = "generation_created"
+	RealtimeEventTypeRemoteItemAdded                  RealtimeEventType = "remote_item_added"
+	RealtimeEventTypeMetricsCollected                 RealtimeEventType = "metrics_collected"
+	RealtimeEventTypeError                            RealtimeEventType = "error"
 )
 
+type GenerationCreatedEvent struct {
+	ResponseID    string
+	UserInitiated bool
+}
+
+type RemoteItemAddedEvent struct {
+	PreviousItemID string
+	Item           ChatItem
+}
+
+type InputTranscriptionCompleted struct {
+	ItemID     string
+	Transcript string
+	IsFinal    bool
+	Confidence *float64
+}
+
 type RealtimeEvent struct {
-	Type     RealtimeEventType
-	Data     []byte // For audio frames
-	Text     string // For text deltas
-	Function *FunctionToolCall
-	Error    error
+	Type               RealtimeEventType
+	Data               []byte // For audio frames
+	Text               string // For text deltas
+	Function           *FunctionToolCall
+	Generation         *GenerationCreatedEvent
+	RemoteItem         *RemoteItemAddedEvent
+	InputTranscription *InputTranscriptionCompleted
+	Metrics            *telemetry.RealtimeModelMetrics
+	Error              error
 }
 
 // Fallback Adapter

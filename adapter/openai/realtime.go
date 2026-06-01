@@ -11,6 +11,8 @@ import (
 	"github.com/cavos-io/rtp-agent/core/audio/model"
 	"github.com/cavos-io/rtp-agent/core/llm"
 	"github.com/cavos-io/rtp-agent/library/logger"
+	"github.com/cavos-io/rtp-agent/library/telemetry"
+	"github.com/cavos-io/rtp-agent/library/utils/images"
 	"github.com/gorilla/websocket"
 )
 
@@ -183,6 +185,49 @@ func (s *realtimeSession) PushAudio(frame *model.AudioFrame) error {
 	return s.sendMsg(msg)
 }
 
+func (s *realtimeSession) PushVideo(frame *images.VideoFrame) error {
+	if frame == nil || len(frame.Data) == 0 {
+		return nil
+	}
+	data, err := images.Encode(frame, images.NewEncodeOptions())
+	if err != nil {
+		return err
+	}
+	image := &llm.ImageContent{
+		Image:    fmt.Sprintf("data:image/jpeg;base64,%s", base64.StdEncoding.EncodeToString(data)),
+		MimeType: "image/jpeg",
+	}
+	msg, err := openAIRealtimeVideoMessage(image)
+	if err != nil {
+		return err
+	}
+	return s.sendMsg(msg)
+}
+
+func openAIRealtimeVideoMessage(image *llm.ImageContent) (map[string]any, error) {
+	img, err := llm.SerializeImage(image)
+	if err != nil {
+		return nil, err
+	}
+	if img.ExternalURL != "" {
+		return nil, fmt.Errorf("openai realtime input_image does not support external image URLs")
+	}
+	url := fmt.Sprintf("data:%s;base64,%s", img.MIMEType, base64.StdEncoding.EncodeToString(img.DataBytes))
+	return map[string]any{
+		"type": "conversation.item.create",
+		"item": map[string]any{
+			"type": "message",
+			"role": "user",
+			"content": []map[string]any{
+				{
+					"type":      "input_image",
+					"image_url": url,
+				},
+			},
+		},
+	}, nil
+}
+
 func (s *realtimeSession) GenerateReply(options llm.RealtimeGenerateReplyOptions) error {
 	return s.sendMsg(openAIRealtimeGenerateReplyMessage(options))
 }
@@ -203,6 +248,31 @@ func openAIRealtimeGenerateReplyMessage(options llm.RealtimeGenerateReplyOptions
 		"type":     "response.create",
 		"response": response,
 	}
+}
+
+func (s *realtimeSession) Truncate(options llm.RealtimeTruncateOptions) error {
+	if !realtimeModalitiesInclude(options.Modalities, "audio") {
+		return nil
+	}
+	return s.sendMsg(openAIRealtimeTruncateMessage(options))
+}
+
+func openAIRealtimeTruncateMessage(options llm.RealtimeTruncateOptions) map[string]any {
+	return map[string]any{
+		"type":          "conversation.item.truncate",
+		"content_index": 0,
+		"item_id":       options.MessageID,
+		"audio_end_ms":  options.AudioEndMillis,
+	}
+}
+
+func realtimeModalitiesInclude(modalities []string, target string) bool {
+	for _, modality := range modalities {
+		if modality == target {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *realtimeSession) CommitAudio() error {
@@ -261,47 +331,283 @@ func (s *realtimeSession) eventLoop() {
 				continue
 			}
 
-			evType, _ := ev["type"].(string)
-			switch evType {
-			case "error":
+			realtimeEvent, ok := openAIRealtimeEvent(ev)
+			if !ok {
+				continue
+			}
+			if realtimeEvent.Type == llm.RealtimeEventTypeError {
 				logger.Logger.Errorw("OpenAI realtime error", nil, "payload", string(msg))
-				s.eventCh <- llm.RealtimeEvent{
-					Type:  llm.RealtimeEventTypeError,
-					Error: fmt.Errorf("openai error: %s", string(msg)),
-				}
-			case "response.text.delta":
-				if delta, ok := ev["delta"].(string); ok {
-					s.eventCh <- llm.RealtimeEvent{
-						Type: llm.RealtimeEventTypeText,
-						Text: delta,
-					}
-				}
-			case "response.audio.delta":
-				if delta, ok := ev["delta"].(string); ok {
-					s.eventCh <- llm.RealtimeEvent{
-						Type: llm.RealtimeEventTypeAudio,
-						Data: []byte(delta), // base64 encoded audio
-					}
-				}
-			case "response.function_call_arguments.delta":
-				if name, ok := ev["name"].(string); ok {
-					if args, ok2 := ev["delta"].(string); ok2 {
-						callID, _ := ev["call_id"].(string)
-						s.eventCh <- llm.RealtimeEvent{
-							Type: llm.RealtimeEventTypeFunctionCall,
-							Function: &llm.FunctionToolCall{
-								CallID:    callID,
-								Name:      name,
-								Arguments: args,
-							},
-						}
-					}
-				}
-			case "input_audio_buffer.speech_started":
-				s.eventCh <- llm.RealtimeEvent{Type: llm.RealtimeEventTypeSpeechStarted}
-			case "input_audio_buffer.speech_stopped":
-				s.eventCh <- llm.RealtimeEvent{Type: llm.RealtimeEventTypeSpeechStopped}
+			}
+			s.eventCh <- realtimeEvent
+		}
+	}
+}
+
+func openAIRealtimeEvent(ev map[string]any) (llm.RealtimeEvent, bool) {
+	evType, _ := ev["type"].(string)
+	switch evType {
+	case "error":
+		return llm.RealtimeEvent{
+			Type:  llm.RealtimeEventTypeError,
+			Error: fmt.Errorf("openai error: %v", ev),
+		}, true
+	case "response.text.delta":
+		if delta, ok := ev["delta"].(string); ok {
+			return llm.RealtimeEvent{
+				Type: llm.RealtimeEventTypeText,
+				Text: delta,
+			}, true
+		}
+	case "response.audio.delta":
+		if delta, ok := ev["delta"].(string); ok {
+			return llm.RealtimeEvent{
+				Type: llm.RealtimeEventTypeAudio,
+				Data: []byte(delta), // base64 encoded audio
+			}, true
+		}
+	case "response.function_call_arguments.delta":
+		if name, ok := ev["name"].(string); ok {
+			if args, ok2 := ev["delta"].(string); ok2 {
+				callID, _ := ev["call_id"].(string)
+				return llm.RealtimeEvent{
+					Type: llm.RealtimeEventTypeFunctionCall,
+					Function: &llm.FunctionToolCall{
+						CallID:    callID,
+						Name:      name,
+						Arguments: args,
+					},
+				}, true
+			}
+		}
+	case "conversation.item.input_audio_transcription.completed":
+		itemID, _ := ev["item_id"].(string)
+		transcript, _ := ev["transcript"].(string)
+		if itemID == "" && transcript == "" {
+			return llm.RealtimeEvent{}, false
+		}
+		return llm.RealtimeEvent{
+			Type: llm.RealtimeEventTypeInputAudioTranscriptionCompleted,
+			InputTranscription: &llm.InputTranscriptionCompleted{
+				ItemID:     itemID,
+				Transcript: transcript,
+				IsFinal:    true,
+				Confidence: openAIRealtimeFloatPtr(ev["confidence"]),
+			},
+		}, true
+	case "conversation.item.input_audio_transcription.delta":
+		itemID, _ := ev["item_id"].(string)
+		delta, _ := ev["delta"].(string)
+		if itemID == "" && delta == "" {
+			return llm.RealtimeEvent{}, false
+		}
+		return llm.RealtimeEvent{
+			Type: llm.RealtimeEventTypeInputAudioTranscriptionCompleted,
+			InputTranscription: &llm.InputTranscriptionCompleted{
+				ItemID:     itemID,
+				Transcript: delta,
+				IsFinal:    false,
+			},
+		}, true
+	case "response.created":
+		response, _ := ev["response"].(map[string]any)
+		responseID, _ := response["id"].(string)
+		if responseID == "" {
+			return llm.RealtimeEvent{}, false
+		}
+		_, userInitiated := openAIRealtimeResponseClientEventID(response)
+		return llm.RealtimeEvent{
+			Type: llm.RealtimeEventTypeGenerationCreated,
+			Generation: &llm.GenerationCreatedEvent{
+				ResponseID:    responseID,
+				UserInitiated: userInitiated,
+			},
+		}, true
+	case "conversation.item.added", "conversation.item.created":
+		item, ok := ev["item"].(map[string]any)
+		if !ok {
+			return llm.RealtimeEvent{}, false
+		}
+		chatItem, err := openAIRealtimeChatItem(item)
+		if err != nil {
+			return llm.RealtimeEvent{}, false
+		}
+		previousItemID, _ := ev["previous_item_id"].(string)
+		return llm.RealtimeEvent{
+			Type: llm.RealtimeEventTypeRemoteItemAdded,
+			RemoteItem: &llm.RemoteItemAddedEvent{
+				PreviousItemID: previousItemID,
+				Item:           chatItem,
+			},
+		}, true
+	case "response.done":
+		response, _ := ev["response"].(map[string]any)
+		metrics, ok := openAIRealtimeMetrics(response)
+		if !ok {
+			return llm.RealtimeEvent{}, false
+		}
+		return llm.RealtimeEvent{
+			Type:    llm.RealtimeEventTypeMetricsCollected,
+			Metrics: metrics,
+		}, true
+	case "input_audio_buffer.speech_started":
+		return llm.RealtimeEvent{Type: llm.RealtimeEventTypeSpeechStarted}, true
+	case "input_audio_buffer.speech_stopped":
+		return llm.RealtimeEvent{Type: llm.RealtimeEventTypeSpeechStopped}, true
+	}
+	return llm.RealtimeEvent{}, false
+}
+
+func openAIRealtimeMetrics(response map[string]any) (*telemetry.RealtimeModelMetrics, bool) {
+	requestID, _ := response["id"].(string)
+	if requestID == "" {
+		return nil, false
+	}
+	usage, _ := response["usage"].(map[string]any)
+	inputDetails, _ := usage["input_token_details"].(map[string]any)
+	outputDetails, _ := usage["output_token_details"].(map[string]any)
+	cachedDetails, _ := inputDetails["cached_tokens_details"].(map[string]any)
+	status, _ := response["status"].(string)
+	return &telemetry.RealtimeModelMetrics{
+		RequestID:       requestID,
+		Cancelled:       status == "cancelled",
+		InputTokens:     openAIRealtimeInt(usage["input_tokens"]),
+		OutputTokens:    openAIRealtimeInt(usage["output_tokens"]),
+		TotalTokens:     openAIRealtimeInt(usage["total_tokens"]),
+		TokensPerSecond: openAIRealtimeFloat(usage["tokens_per_second"]),
+		InputTokenDetails: telemetry.InputTokenDetails{
+			AudioTokens:  openAIRealtimeInt(inputDetails["audio_tokens"]),
+			TextTokens:   openAIRealtimeInt(inputDetails["text_tokens"]),
+			ImageTokens:  openAIRealtimeInt(inputDetails["image_tokens"]),
+			CachedTokens: openAIRealtimeInt(inputDetails["cached_tokens"]),
+			CachedTokensDetails: &telemetry.CachedTokenDetails{
+				TextTokens:  openAIRealtimeInt(cachedDetails["text_tokens"]),
+				AudioTokens: openAIRealtimeInt(cachedDetails["audio_tokens"]),
+				ImageTokens: openAIRealtimeInt(cachedDetails["image_tokens"]),
+			},
+		},
+		OutputTokenDetails: telemetry.OutputTokenDetails{
+			TextTokens:  openAIRealtimeInt(outputDetails["text_tokens"]),
+			AudioTokens: openAIRealtimeInt(outputDetails["audio_tokens"]),
+			ImageTokens: openAIRealtimeInt(outputDetails["image_tokens"]),
+		},
+	}, true
+}
+
+func openAIRealtimeChatItem(item map[string]any) (llm.ChatItem, error) {
+	itemType, _ := item["type"].(string)
+	switch itemType {
+	case "message":
+		return openAIRealtimeChatMessage(item)
+	case "function_call":
+		return openAIRealtimeFunctionCall(item)
+	default:
+		return nil, fmt.Errorf("unsupported realtime item type %q", itemType)
+	}
+}
+
+func openAIRealtimeFunctionCall(item map[string]any) (*llm.FunctionCall, error) {
+	id, _ := item["id"].(string)
+	callID, _ := item["call_id"].(string)
+	name, _ := item["name"].(string)
+	arguments, _ := item["arguments"].(string)
+	if id == "" || callID == "" || name == "" {
+		return nil, fmt.Errorf("malformed realtime function call item")
+	}
+	return &llm.FunctionCall{
+		ID:        id,
+		CallID:    callID,
+		Name:      name,
+		Arguments: arguments,
+	}, nil
+}
+
+func openAIRealtimeChatMessage(item map[string]any) (*llm.ChatMessage, error) {
+	id, _ := item["id"].(string)
+	roleRaw, _ := item["role"].(string)
+	role := llm.ChatRole(roleRaw)
+	switch role {
+	case llm.ChatRoleSystem, llm.ChatRoleDeveloper, llm.ChatRoleUser, llm.ChatRoleAssistant:
+	default:
+		return nil, fmt.Errorf("unsupported realtime message role %q", roleRaw)
+	}
+	contents, _ := item["content"].([]any)
+	return &llm.ChatMessage{
+		ID:      id,
+		Role:    role,
+		Content: openAIRealtimeChatContent(contents),
+	}, nil
+}
+
+func openAIRealtimeChatContent(contents []any) []llm.ChatContent {
+	out := make([]llm.ChatContent, 0, len(contents))
+	for _, content := range contents {
+		part, ok := content.(map[string]any)
+		if !ok {
+			continue
+		}
+		partType, _ := part["type"].(string)
+		switch partType {
+		case "input_text", "output_text":
+			if text, _ := part["text"].(string); text != "" {
+				out = append(out, llm.ChatContent{Text: text})
+			}
+		case "input_image":
+			if imageURL, _ := part["image_url"].(string); imageURL != "" {
+				out = append(out, llm.ChatContent{
+					Image: &llm.ImageContent{Image: imageURL},
+				})
+			}
+		case "input_audio":
+			if transcript, _ := part["transcript"].(string); transcript != "" {
+				out = append(out, llm.ChatContent{Text: transcript})
 			}
 		}
 	}
+	return out
+}
+
+func openAIRealtimeFloatPtr(v any) *float64 {
+	switch value := v.(type) {
+	case float64:
+		return &value
+	case float32:
+		f := float64(value)
+		return &f
+	default:
+		return nil
+	}
+}
+
+func openAIRealtimeFloat(v any) float64 {
+	switch value := v.(type) {
+	case float64:
+		return value
+	case float32:
+		return float64(value)
+	case int:
+		return float64(value)
+	case int64:
+		return float64(value)
+	case json.Number:
+		f, _ := value.Float64()
+		return f
+	default:
+		return 0
+	}
+}
+
+func openAIRealtimeInt(v any) int {
+	return int(openAIRealtimeFloat(v))
+}
+
+func openAIRealtimeResponseClientEventID(response map[string]any) (string, bool) {
+	metadata, ok := response["metadata"].(map[string]any)
+	if !ok {
+		return "", false
+	}
+	clientEventID, ok := metadata["client_event_id"].(string)
+	if !ok || clientEventID == "" {
+		return "", false
+	}
+	return clientEventID, true
 }
