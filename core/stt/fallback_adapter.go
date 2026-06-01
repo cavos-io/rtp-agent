@@ -315,6 +315,7 @@ func (s *fallbackRecognizeStream) tryStartStream(index int) error {
 	allFailed := s.adapter.allUnavailable()
 	for i := index; i < len(s.adapter.stts); i++ {
 		if !allFailed && !s.adapter.isAvailable(i) {
+			s.tryRecoverStream(i)
 			continue
 		}
 		for {
