@@ -40,12 +40,13 @@ func endSynthesizeStreamInput(stream SynthesizeStream) error {
 }
 
 type chunkedStreamFromSynthesizeStream struct {
-	stream    SynthesizeStream
-	text      string
-	requestID string
-	pending   *SynthesizedAudio
-	audioSeen bool
-	closed    bool
+	stream      SynthesizeStream
+	text        string
+	requestID   string
+	pending     *SynthesizedAudio
+	pendingTail bool
+	audioSeen   bool
+	closed      bool
 }
 
 func (s *chunkedStreamFromSynthesizeStream) Next() (*SynthesizedAudio, error) {
@@ -70,15 +71,34 @@ func (s *chunkedStreamFromSynthesizeStream) Next() (*SynthesizedAudio, error) {
 		}
 		s.audioSeen = true
 		if s.pending != nil {
-			pending := cloneSynthesizedAudio(s.pending)
-			pending.RequestID = s.requestID
-			pending.SegmentID = ""
-			pending.IsFinal = false
-			s.pending = audio
-			return pending, nil
+			combined, combineErr := combineAudioFrames(s.pending.Frame, audio.Frame)
+			if s.pendingTail && combineErr == nil {
+				audio = cloneSynthesizedAudio(audio)
+				audio.Frame = combined
+			} else {
+				pending := s.stampAudio(s.pending, false)
+				s.pending = audio
+				s.pendingTail = false
+				return pending, nil
+			}
 		}
-		s.pending = audio
+		head, tail, ok := splitSynthesizedAudioTail(audio)
+		if ok {
+			s.pending = tail
+			s.pendingTail = true
+			return s.stampAudio(head, false), nil
+		}
+		s.pending = tail
+		s.pendingTail = false
 	}
+}
+
+func (s *chunkedStreamFromSynthesizeStream) stampAudio(audio *SynthesizedAudio, isFinal bool) *SynthesizedAudio {
+	audio = cloneSynthesizedAudio(audio)
+	audio.RequestID = s.requestID
+	audio.SegmentID = ""
+	audio.IsFinal = isFinal
+	return audio
 }
 
 func (s *chunkedStreamFromSynthesizeStream) Close() error {

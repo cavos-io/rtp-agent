@@ -38,8 +38,9 @@ type SentenceStreamPacer struct {
 	lastAudioTime     time.Time
 	audioErr          error
 
-	closed    bool
-	inputDone bool
+	closed              bool
+	inputDone           bool
+	underlyingInputDone bool
 }
 
 type pacerInput struct {
@@ -214,7 +215,7 @@ func (p *SentenceStreamPacer) flushPendingSentences(pending *[]string, firstSent
 		}
 	}
 	if endInput {
-		_ = endSynthesizeStreamInput(p.underlying)
+		p.endUnderlyingInput()
 		return
 	}
 	p.underlying.Flush()
@@ -380,6 +381,18 @@ func (p *SentenceStreamPacer) isInputDone() bool {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	return p.inputDone
+}
+
+func (p *SentenceStreamPacer) endUnderlyingInput() {
+	p.mu.Lock()
+	if p.underlyingInputDone {
+		p.mu.Unlock()
+		return
+	}
+	p.underlyingInputDone = true
+	p.mu.Unlock()
+
+	_ = endSynthesizeStreamInput(p.underlying)
 }
 
 func (p *SentenceStreamPacer) Next() (*SynthesizedAudio, error) {

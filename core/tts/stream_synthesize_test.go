@@ -7,6 +7,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/cavos-io/rtp-agent/core/audio/model"
 )
@@ -195,6 +196,34 @@ func TestSynthesizeWithStreamMarksLastFrameFinal(t *testing.T) {
 	}
 }
 
+func TestSynthesizeWithStreamEmitsLongFrameHeadBeforeProviderEOF(t *testing.T) {
+	frame := &model.AudioFrame{
+		Data:              make([]byte, 24000*2),
+		SampleRate:        24000,
+		NumChannels:       1,
+		SamplesPerChannel: 24000,
+	}
+	stream := newOneFrameThenBlockingSynthesizeStream(frame)
+	provider := &blockingStreamingTTS{stream: stream}
+
+	chunked, err := SynthesizeWithStream(context.Background(), provider, "hello")
+	if err != nil {
+		t.Fatalf("SynthesizeWithStream() error = %v", err)
+	}
+	defer chunked.Close()
+
+	audio, err := nextChunkedAudioWithTimeout(chunked)
+	if err != nil {
+		t.Fatalf("Next() error = %v", err)
+	}
+	if audio.IsFinal {
+		t.Fatal("first audio IsFinal = true, want non-final head before provider EOF")
+	}
+	if got, want := audio.Frame.SamplesPerChannel, uint32(23760); got != want {
+		t.Fatalf("head SamplesPerChannel = %d, want %d", got, want)
+	}
+}
+
 func TestSynthesizeWithStreamClearsProviderFinalBeforeLastFrame(t *testing.T) {
 	provider := &fakeStreamingTTS{
 		stream: &fakeSynthesizeStream{
@@ -351,6 +380,23 @@ func (f *fakeStreamingTTS) Stream(context.Context) (SynthesizeStream, error) {
 	return f.stream, nil
 }
 
+type blockingStreamingTTS struct {
+	stream SynthesizeStream
+}
+
+func (f *blockingStreamingTTS) Label() string { return "blocking" }
+func (f *blockingStreamingTTS) Capabilities() TTSCapabilities {
+	return TTSCapabilities{Streaming: true}
+}
+func (f *blockingStreamingTTS) SampleRate() int  { return 24000 }
+func (f *blockingStreamingTTS) NumChannels() int { return 1 }
+func (f *blockingStreamingTTS) Synthesize(context.Context, string) (ChunkedStream, error) {
+	return nil, nil
+}
+func (f *blockingStreamingTTS) Stream(context.Context) (SynthesizeStream, error) {
+	return f.stream, nil
+}
+
 type endInputStreamingTTS struct {
 	stream *endInputSynthesizeStream
 }
@@ -400,6 +446,67 @@ func (f *fakeSynthesizeStream) Next() (*SynthesizedAudio, error) {
 	ev := f.events[0]
 	f.events = f.events[1:]
 	return ev, nil
+}
+
+type oneFrameThenBlockingSynthesizeStream struct {
+	frame   *model.AudioFrame
+	closeCh chan struct{}
+	closed  bool
+	index   int
+}
+
+func newOneFrameThenBlockingSynthesizeStream(frame *model.AudioFrame) *oneFrameThenBlockingSynthesizeStream {
+	return &oneFrameThenBlockingSynthesizeStream{
+		frame:   frame,
+		closeCh: make(chan struct{}),
+	}
+}
+
+func (s *oneFrameThenBlockingSynthesizeStream) PushText(string) error {
+	return nil
+}
+
+func (s *oneFrameThenBlockingSynthesizeStream) Flush() error {
+	return nil
+}
+
+func (s *oneFrameThenBlockingSynthesizeStream) Close() error {
+	if !s.closed {
+		s.closed = true
+		close(s.closeCh)
+	}
+	return nil
+}
+
+func (s *oneFrameThenBlockingSynthesizeStream) Next() (*SynthesizedAudio, error) {
+	if s.index == 0 {
+		s.index++
+		return &SynthesizedAudio{Frame: s.frame}, nil
+	}
+	<-s.closeCh
+	return nil, io.EOF
+}
+
+func nextChunkedAudioWithTimeout(stream ChunkedStream) (*SynthesizedAudio, error) {
+	audioCh := make(chan *SynthesizedAudio, 1)
+	errCh := make(chan error, 1)
+	go func() {
+		audio, err := stream.Next()
+		if err != nil {
+			errCh <- err
+			return
+		}
+		audioCh <- audio
+	}()
+
+	select {
+	case audio := <-audioCh:
+		return audio, nil
+	case err := <-errCh:
+		return nil, err
+	case <-time.After(100 * time.Millisecond):
+		return nil, context.DeadlineExceeded
+	}
 }
 
 type endInputSynthesizeStream struct {

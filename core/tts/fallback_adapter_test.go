@@ -744,6 +744,34 @@ func TestFallbackChunkedStreamMarksLastFrameFinal(t *testing.T) {
 	}
 }
 
+func TestFallbackChunkedStreamEmitsLongFrameHeadBeforeProviderEOF(t *testing.T) {
+	adapter := NewFallbackAdapter([]TTS{
+		&metadataTTS{
+			label:       "primary",
+			sampleRate:  24000,
+			numChannels: 1,
+			chunked:     newOneFrameThenBlockingChunkedStream(fallbackTestFrame(24000, 1, 24000)),
+		},
+	})
+
+	stream, err := adapter.Synthesize(context.Background(), "hello")
+	if err != nil {
+		t.Fatalf("Synthesize returned error: %v", err)
+	}
+	defer stream.Close()
+
+	audio, err := nextChunkedAudioWithTimeout(stream)
+	if err != nil {
+		t.Fatalf("Next error = %v", err)
+	}
+	if audio.IsFinal {
+		t.Fatal("first audio IsFinal = true, want non-final head before provider EOF")
+	}
+	if got, want := audio.Frame.SamplesPerChannel, uint32(23760); got != want {
+		t.Fatalf("head SamplesPerChannel = %d, want %d", got, want)
+	}
+}
+
 func TestFallbackChunkedStreamClearsProviderFinalBeforeLastFrame(t *testing.T) {
 	adapter := NewFallbackAdapter([]TTS{
 		&metadataTTS{
@@ -1062,6 +1090,35 @@ func TestFallbackSynthesizeStreamMarksLastFrameFinal(t *testing.T) {
 	}
 	if !second.IsFinal {
 		t.Fatal("second audio IsFinal = false, want true")
+	}
+}
+
+func TestFallbackSynthesizeStreamEmitsLongFrameHeadBeforeProviderEOF(t *testing.T) {
+	adapter := NewFallbackAdapter([]TTS{
+		&metadataTTS{
+			label:        "primary",
+			sampleRate:   24000,
+			numChannels:  1,
+			capabilities: TTSCapabilities{Streaming: true},
+			stream:       newOneFrameThenBlockingSynthesizeStream(fallbackTestFrame(24000, 1, 24000)),
+		},
+	})
+
+	stream, err := adapter.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+	defer stream.Close()
+	if err := stream.PushText("hello"); err != nil {
+		t.Fatalf("PushText returned error: %v", err)
+	}
+
+	audio := nextStreamAdapterAudio(t, stream)
+	if audio.IsFinal {
+		t.Fatal("first audio IsFinal = true, want non-final head before provider EOF")
+	}
+	if got, want := audio.Frame.SamplesPerChannel, uint32(23760); got != want {
+		t.Fatalf("head SamplesPerChannel = %d, want %d", got, want)
 	}
 }
 
