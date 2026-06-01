@@ -454,8 +454,47 @@ func (s *simpleVADStream) appendPrefixFrame(frame *model.AudioFrame, duration fl
 
 func (s *simpleVADStream) trimPrefixFrames() {
 	for s.prefixDuration > s.options.PrefixPaddingDuration && len(s.prefixFrames) > 0 {
-		s.prefixDuration -= frameDuration(s.prefixFrames[0])
+		excess := s.prefixDuration - s.options.PrefixPaddingDuration
+		first := s.prefixFrames[0]
+		firstDuration := frameDuration(first)
+		if excess < firstDuration {
+			trimmed := trimFrameStart(first, excess)
+			s.prefixDuration -= firstDuration - frameDuration(trimmed)
+			s.prefixFrames[0] = trimmed
+			return
+		}
+		s.prefixDuration -= firstDuration
 		s.prefixFrames = s.prefixFrames[1:]
+	}
+}
+
+func trimFrameStart(frame *model.AudioFrame, duration float64) *model.AudioFrame {
+	if duration <= 0 || frame.SampleRate == 0 || frame.NumChannels == 0 {
+		return frame
+	}
+
+	samplesToTrim := uint32(duration * float64(frame.SampleRate))
+	if samplesToTrim == 0 {
+		return frame
+	}
+	if samplesToTrim >= frame.SamplesPerChannel {
+		return &model.AudioFrame{
+			SampleRate:  frame.SampleRate,
+			NumChannels: frame.NumChannels,
+		}
+	}
+
+	bytesPerSample := len(frame.Data) / int(frame.SamplesPerChannel) / int(frame.NumChannels)
+	if bytesPerSample <= 0 {
+		return frame
+	}
+	byteOffset := int(samplesToTrim) * int(frame.NumChannels) * bytesPerSample
+	data := append([]byte(nil), frame.Data[byteOffset:]...)
+	return &model.AudioFrame{
+		Data:              data,
+		SampleRate:        frame.SampleRate,
+		NumChannels:       frame.NumChannels,
+		SamplesPerChannel: frame.SamplesPerChannel - samplesToTrim,
 	}
 }
 
