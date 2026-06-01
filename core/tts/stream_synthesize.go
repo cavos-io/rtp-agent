@@ -82,6 +82,7 @@ func (s *chunkedStreamFromSynthesizeStream) Next() (*SynthesizedAudio, error) {
 					pending.SegmentID = ""
 					pending.IsFinal = true
 					s.pending = nil
+					s.emitMetrics()
 					return pending, nil
 				}
 				if !s.audioSeen && strings.TrimSpace(s.text) != "" {
