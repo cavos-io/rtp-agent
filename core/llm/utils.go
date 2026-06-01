@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"regexp"
 	"reflect"
 	"strings"
 	"time"
@@ -21,6 +22,13 @@ const (
 	thinkTagStart = "<think>"
 	thinkTagEnd   = "</think>"
 )
+
+var templateTokenPatterns = []*regexp.Regexp{
+	regexp.MustCompile(`<\|[^<>|]{0,40}\|>`),
+	regexp.MustCompile(`<\|[^<>a-zA-Z0-9_]{0,10}`),
+	regexp.MustCompile(`[^<>a-zA-Z0-9_]{0,10}\|>`),
+	regexp.MustCompile(`<(?:start|end)_of_turn>`),
+}
 
 type SerializedImage struct {
 	InferenceDetail string
@@ -107,7 +115,13 @@ func StripThinkingTokens(content string, thinking *bool) (string, bool) {
 func ParseFunctionArguments(jsonArguments string) (map[string]any, error) {
 	var value any
 	if err := json.Unmarshal([]byte(jsonArguments), &value); err != nil {
-		return nil, fmt.Errorf("could not parse function arguments as JSON: %w", err)
+		stripped := stripTemplateTokens(jsonArguments)
+		if stripped == jsonArguments {
+			return nil, fmt.Errorf("could not parse function arguments as JSON: %w", err)
+		}
+		if retryErr := json.Unmarshal([]byte(stripped), &value); retryErr != nil {
+			return nil, fmt.Errorf("could not parse function arguments as JSON: %w", err)
+		}
 	}
 
 	for {
@@ -128,6 +142,14 @@ func ParseFunctionArguments(jsonArguments string) (map[string]any, error) {
 		return nil, fmt.Errorf("expected object from function arguments, got %T", value)
 	}
 	return args, nil
+}
+
+func stripTemplateTokens(value string) string {
+	out := value
+	for _, pattern := range templateTokenPatterns {
+		out = pattern.ReplaceAllString(out, "")
+	}
+	return strings.TrimSpace(out)
 }
 
 func MakeFunctionCallOutput(fncCall FunctionCall, output any, exception error) FunctionCallResult {

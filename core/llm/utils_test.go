@@ -48,6 +48,17 @@ func TestParseFunctionArgumentsUnwrapsNestedJSONString(t *testing.T) {
 	}
 }
 
+func TestParseFunctionArgumentsRepairsLeakedTemplateTokens(t *testing.T) {
+	args, err := ParseFunctionArguments(`{"city":"Paris"}<|im_end|>`)
+	if err != nil {
+		t.Fatalf("ParseFunctionArguments() error = %v", err)
+	}
+
+	if args["city"] != "Paris" {
+		t.Fatalf("args = %#v, want repaired city", args)
+	}
+}
+
 func TestParseFunctionArgumentsTreatsNullAsEmptyObject(t *testing.T) {
 	args, err := ParseFunctionArguments(`null`)
 	if err != nil {
