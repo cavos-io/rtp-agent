@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"testing"
 
+	"github.com/cavos-io/rtp-agent/core/tts"
 	"github.com/vmihailenco/msgpack/v5"
 )
 
@@ -33,6 +34,9 @@ func TestFishAudioTTSDefaultsMatchReference(t *testing.T) {
 	}
 	if provider.chunkLength != 100 {
 		t.Fatalf("chunk length = %d, want 100", provider.chunkLength)
+	}
+	if !provider.Capabilities().Streaming {
+		t.Fatalf("streaming = false, want true")
 	}
 }
 
@@ -143,6 +147,93 @@ func TestFishAudioTTSChunkedStreamUsesConfiguredSampleRate(t *testing.T) {
 	}
 }
 
+func TestFishAudioTTSWebsocketURLAndHeadersMatchReference(t *testing.T) {
+	provider := NewFishAudioTTS("test-key", "", WithFishAudioTTSBaseURL("https://fish.example"))
+
+	if got := buildFishAudioTTSWebsocketURL(provider); got != "wss://fish.example/v1/tts/live" {
+		t.Fatalf("websocket URL = %q, want live websocket URL", got)
+	}
+	headers := buildFishAudioTTSWebsocketHeaders(provider)
+	if headers.Get("Authorization") != "Bearer test-key" {
+		t.Fatalf("Authorization = %q, want bearer token", headers.Get("Authorization"))
+	}
+	if headers.Get("model") != "s2-pro" {
+		t.Fatalf("model = %q, want s2-pro", headers.Get("model"))
+	}
+	if headers.Get("User-Agent") == "" {
+		t.Fatal("User-Agent missing")
+	}
+}
+
+func TestFishAudioTTSStreamMessagesMatchReference(t *testing.T) {
+	provider := NewFishAudioTTS("test-key", "")
+
+	start, err := buildFishAudioTTSStartMessage(provider)
+	if err != nil {
+		t.Fatalf("start message: %v", err)
+	}
+	var startPayload map[string]any
+	if err := msgpack.Unmarshal(start, &startPayload); err != nil {
+		t.Fatalf("decode start: %v", err)
+	}
+	if startPayload["event"] != "start" {
+		t.Fatalf("start event = %#v, want start", startPayload["event"])
+	}
+	request := startPayload["request"].(map[string]any)
+	assertFishPayload(t, request, "text", "")
+	assertFishPayload(t, request, "reference_id", "933563129e564b19a115bedd57b7406a")
+
+	text, err := buildFishAudioTTSTextMessage("hello")
+	if err != nil {
+		t.Fatalf("text message: %v", err)
+	}
+	var textPayload map[string]any
+	if err := msgpack.Unmarshal(text, &textPayload); err != nil {
+		t.Fatalf("decode text: %v", err)
+	}
+	if textPayload["event"] != "text" || textPayload["text"] != "hello " {
+		t.Fatalf("text payload = %+v, want text event with trailing space", textPayload)
+	}
+
+	flush, _ := buildFishAudioTTSSimpleEvent("flush")
+	stop, _ := buildFishAudioTTSSimpleEvent("stop")
+	assertFishEvent(t, flush, "flush")
+	assertFishEvent(t, stop, "stop")
+}
+
+func TestFishAudioTTSAudioFromStreamMessage(t *testing.T) {
+	audio, done, err := fishAudioTTSAudioFromStreamMessage(mustFishMessage(t, map[string]any{
+		"event": "audio",
+		"audio": []byte{1, 2, 3, 4},
+	}), 24000)
+	if err != nil {
+		t.Fatalf("audio from message: %v", err)
+	}
+	if done {
+		t.Fatal("done = true for audio event")
+	}
+	if audio == nil || string(audio.Frame.Data) != string([]byte{1, 2, 3, 4}) {
+		t.Fatalf("audio = %+v, want decoded frame", audio)
+	}
+	if audio.Frame.SampleRate != 24000 || audio.Frame.NumChannels != 1 {
+		t.Fatalf("frame = %+v, want 24 kHz mono", audio.Frame)
+	}
+
+	finished, done, err := fishAudioTTSAudioFromStreamMessage(mustFishMessage(t, map[string]any{
+		"event": "finish",
+	}), 24000)
+	if err != nil {
+		t.Fatalf("finish event: %v", err)
+	}
+	if finished != nil || !done {
+		t.Fatalf("finished=%+v done=%v, want done with no audio", finished, done)
+	}
+}
+
+func TestFishAudioTTSImplementsStreamingInterface(t *testing.T) {
+	var _ tts.TTS = NewFishAudioTTS("test-key", "")
+}
+
 func assertFishPayload(t *testing.T, payload map[string]any, key string, want string) {
 	t.Helper()
 	if got := payload[key]; got != want {
@@ -175,4 +266,24 @@ func fishPayloadInt(value any) int {
 	default:
 		return 0
 	}
+}
+
+func assertFishEvent(t *testing.T, encoded []byte, want string) {
+	t.Helper()
+	var payload map[string]any
+	if err := msgpack.Unmarshal(encoded, &payload); err != nil {
+		t.Fatalf("decode event: %v", err)
+	}
+	if payload["event"] != want {
+		t.Fatalf("event = %#v, want %q", payload["event"], want)
+	}
+}
+
+func mustFishMessage(t *testing.T, message map[string]any) []byte {
+	t.Helper()
+	encoded, err := msgpack.Marshal(message)
+	if err != nil {
+		t.Fatalf("marshal message: %v", err)
+	}
+	return encoded
 }
