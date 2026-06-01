@@ -156,45 +156,54 @@ func buildBasetenTTSRequest(ctx context.Context, t *BasetenTTS, text string) (*h
 
 func (t *BasetenTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
 	if !t.Capabilities().Streaming {
-		return nil, fmt.Errorf("baseten tts streaming requires a websocket model endpoint")
+		return nil, fmt.Errorf("baseten websocket tts streaming requires a ws:// or wss:// endpoint")
 	}
-	conn, _, err := websocket.DefaultDialer.DialContext(ctx, t.modelEndpoint, buildBasetenTTSHeaders(t))
+	conn, _, err := websocket.DefaultDialer.DialContext(ctx, t.modelEndpoint, buildBasetenTTSWebsocketHeaders(t))
 	if err != nil {
 		return nil, fmt.Errorf("failed to dial baseten tts websocket: %w", err)
 	}
-	if err := writeBasetenTTSWebsocketJSON(conn, buildBasetenTTSStreamSetup(t)); err != nil {
+	startMessage, err := buildBasetenTTSStartMessage(t)
+	if err != nil {
+		conn.Close()
+		return nil, err
+	}
+	if err := conn.WriteMessage(websocket.TextMessage, startMessage); err != nil {
 		conn.Close()
 		return nil, err
 	}
 	streamCtx, cancel := context.WithCancel(ctx)
-	return &basetenTTSSynthesizeStream{
+	stream := &basetenTTSSynthesizeStream{
 		conn:       conn,
 		ctx:        streamCtx,
 		cancel:     cancel,
 		sampleRate: t.sampleRate,
-	}, nil
+		events:     make(chan *tts.SynthesizedAudio, 100),
+		errCh:      make(chan error, 1),
+	}
+	go stream.readLoop()
+	return stream, nil
 }
 
-func buildBasetenTTSHeaders(t *BasetenTTS) http.Header {
+func buildBasetenTTSWebsocketHeaders(t *BasetenTTS) http.Header {
 	headers := make(http.Header)
 	headers.Set("Authorization", "Api-Key "+t.apiKey)
 	return headers
 }
 
-func buildBasetenTTSStreamSetup(t *BasetenTTS) map[string]any {
-	return map[string]any{
+func buildBasetenTTSStartMessage(t *BasetenTTS) ([]byte, error) {
+	return json.Marshal(map[string]interface{}{
 		"voice":       t.voice,
 		"max_tokens":  t.maxTokens,
 		"buffer_size": t.bufferSize,
-	}
+	})
 }
 
-func writeBasetenTTSWebsocketJSON(conn *websocket.Conn, message map[string]any) error {
-	payload, err := json.Marshal(message)
-	if err != nil {
-		return err
-	}
-	return conn.WriteMessage(websocket.TextMessage, payload)
+func buildBasetenTTSTextMessage(text string) ([]byte, error) {
+	return []byte(text), nil
+}
+
+func buildBasetenTTSEndMessage() ([]byte, error) {
+	return []byte(basetenTTSEndSentinel), nil
 }
 
 type basetenTTSChunkedStream struct {
@@ -233,6 +242,8 @@ type basetenTTSSynthesizeStream struct {
 	ctx        context.Context
 	cancel     context.CancelFunc
 	sampleRate int
+	events     chan *tts.SynthesizedAudio
+	errCh      chan error
 	mu         sync.Mutex
 	closed     bool
 }
@@ -241,7 +252,11 @@ func (s *basetenTTSSynthesizeStream) PushText(text string) error {
 	if text == "" {
 		return nil
 	}
-	return s.conn.WriteMessage(websocket.TextMessage, []byte(text))
+	message, err := buildBasetenTTSTextMessage(text)
+	if err != nil {
+		return err
+	}
+	return s.conn.WriteMessage(websocket.TextMessage, message)
 }
 
 func (s *basetenTTSSynthesizeStream) Flush() error {
@@ -256,39 +271,66 @@ func (s *basetenTTSSynthesizeStream) Close() error {
 	}
 	s.closed = true
 	s.cancel()
-	_ = s.conn.WriteMessage(websocket.TextMessage, []byte(basetenTTSEndSentinel))
+	if endMessage, err := buildBasetenTTSEndMessage(); err == nil {
+		_ = s.conn.WriteMessage(websocket.TextMessage, endMessage)
+	}
 	_ = s.conn.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""), time.Now().Add(time.Second))
 	return s.conn.Close()
 }
 
 func (s *basetenTTSSynthesizeStream) Next() (*tts.SynthesizedAudio, error) {
 	select {
+	case audio, ok := <-s.events:
+		if !ok {
+			select {
+			case err := <-s.errCh:
+				return nil, err
+			default:
+				return nil, io.EOF
+			}
+		}
+		return audio, nil
+	case err := <-s.errCh:
+		return nil, err
 	case <-s.ctx.Done():
 		return nil, s.ctx.Err()
-	default:
 	}
+}
+
+func (s *basetenTTSSynthesizeStream) readLoop() {
+	defer close(s.events)
 	for {
 		msgType, payload, err := s.conn.ReadMessage()
 		if err != nil {
-			if websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway) || err == io.EOF {
-				return nil, io.EOF
+			if !websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway) && err != io.EOF {
+				s.errCh <- err
 			}
-			return nil, err
+			return
 		}
 		if msgType != websocket.BinaryMessage {
 			continue
 		}
-		return basetenTTSAudioFrame(payload, s.sampleRate), nil
+		audio, err := basetenTTSAudioFromStreamMessage(payload, s.sampleRate)
+		if err != nil {
+			s.errCh <- err
+			return
+		}
+		if audio != nil {
+			s.events <- audio
+		}
 	}
 }
 
-func basetenTTSAudioFrame(audio []byte, sampleRate int) *tts.SynthesizedAudio {
+func basetenTTSAudioFromStreamMessage(payload []byte, sampleRate int) (*tts.SynthesizedAudio, error) {
+	if len(payload) == 0 {
+		return nil, nil
+	}
 	return &tts.SynthesizedAudio{
 		Frame: &model.AudioFrame{
-			Data:              bytes.Clone(audio),
+			Data:              bytes.Clone(payload),
 			SampleRate:        uint32(sampleRate),
 			NumChannels:       1,
-			SamplesPerChannel: uint32(len(audio) / 2),
+			SamplesPerChannel: uint32(len(payload) / 2),
 		},
-	}
+	}, nil
 }

@@ -20,9 +20,9 @@ import (
 )
 
 const (
-	defaultSTTLanguage   = "en-IN"
-	defaultSTTSampleRate = 16000
-	sttStreamChunkBytes  = 1024
+	defaultSTTLanguage       = "en-IN"
+	defaultSTTSampleRate     = 16000
+	gnaniSTTStreamChunkBytes = 1024
 )
 
 type STT struct {
@@ -91,44 +91,42 @@ func (s *STT) Capabilities() stt.STTCapabilities {
 }
 
 func (s *STT) Stream(ctx context.Context, language string) (stt.RecognizeStream, error) {
-	conn, _, err := websocket.DefaultDialer.DialContext(ctx, buildSTTWebsocketURL(s), buildSTTWebsocketHeaders(s, language))
+	conn, _, err := websocket.DefaultDialer.DialContext(ctx, buildGnaniSTTWebsocketURL(s).String(), buildGnaniSTTWebsocketHeaders(s, language))
 	if err != nil {
 		return nil, fmt.Errorf("failed to dial gnani stt websocket: %w", err)
 	}
 	streamCtx, cancel := context.WithCancel(ctx)
-	stream := &sttStream{
-		conn:       conn,
-		ctx:        streamCtx,
-		cancel:     cancel,
-		language:   resolveSTTLanguage(s, language),
-		sampleRate: s.sampleRate,
-		chunkBytes: sttStreamChunkBytes,
-		events:     make(chan *stt.SpeechEvent, 100),
-		errCh:      make(chan error, 1),
+	stream := &gnaniSTTStream{
+		conn:     conn,
+		ctx:      streamCtx,
+		cancel:   cancel,
+		language: resolveSTTLanguage(s, language),
+		chunker:  newGnaniSTTAudioChunker(),
+		events:   make(chan *stt.SpeechEvent, 100),
+		errCh:    make(chan error, 1),
 	}
 	go stream.readLoop()
 	return stream, nil
 }
 
-func buildSTTWebsocketURL(s *STT) string {
-	u, err := url.Parse(strings.TrimRight(s.baseURL, "/"))
+func buildGnaniSTTWebsocketURL(s *STT) *url.URL {
+	baseURL := strings.TrimRight(s.baseURL, "/")
+	switch {
+	case strings.HasPrefix(baseURL, "https://"):
+		baseURL = "wss://" + strings.TrimPrefix(baseURL, "https://")
+	case strings.HasPrefix(baseURL, "http://"):
+		baseURL = "ws://" + strings.TrimPrefix(baseURL, "http://")
+	case !strings.HasPrefix(baseURL, "wss://") && !strings.HasPrefix(baseURL, "ws://"):
+		baseURL = "wss://" + baseURL
+	}
+	wsURL, err := url.Parse(baseURL + "/stt/v3/stream")
 	if err != nil {
-		return strings.TrimRight(s.baseURL, "/") + "/stt/v3/stream"
+		return &url.URL{Scheme: "wss", Host: strings.TrimPrefix(baseURL, "wss://"), Path: "/stt/v3/stream"}
 	}
-	switch u.Scheme {
-	case "https":
-		u.Scheme = "wss"
-	case "http":
-		u.Scheme = "ws"
-	case "":
-		u.Scheme = "wss"
-	}
-	u.Path = strings.TrimRight(u.Path, "/") + "/stt/v3/stream"
-	u.RawQuery = ""
-	return u.String()
+	return wsURL
 }
 
-func buildSTTWebsocketHeaders(s *STT, language string) http.Header {
+func buildGnaniSTTWebsocketHeaders(s *STT, language string) http.Header {
 	headers := make(http.Header)
 	headers.Set("x-api-key-id", s.apiKey)
 	headers.Set("lang_code", resolveSTTLanguage(s, language))
@@ -224,22 +222,33 @@ func resolveSTTLanguage(s *STT, language string) string {
 	return s.language
 }
 
-type sttStream struct {
-	conn         *websocket.Conn
-	ctx          context.Context
-	cancel       context.CancelFunc
-	language     string
-	sampleRate   int
-	chunkBytes   int
-	pendingAudio []byte
-	events       chan *stt.SpeechEvent
-	errCh        chan error
-	mu           sync.Mutex
-	closed       bool
+func textprotoMIMEHeader(values map[string]string) textproto.MIMEHeader {
+	header := make(textproto.MIMEHeader, len(values))
+	for key, value := range values {
+		header.Set(key, value)
+	}
+	return header
 }
 
-func (s *sttStream) PushFrame(frame *model.AudioFrame) error {
-	for _, chunk := range s.chunksForFrame(frame) {
+type gnaniSTTStream struct {
+	conn     *websocket.Conn
+	ctx      context.Context
+	cancel   context.CancelFunc
+	language string
+	chunker  *gnaniSTTAudioChunker
+	events   chan *stt.SpeechEvent
+	errCh    chan error
+	mu       sync.Mutex
+	closed   bool
+}
+
+func (s *gnaniSTTStream) PushFrame(frame *model.AudioFrame) error {
+	if frame == nil || len(frame.Data) == 0 {
+		return nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, chunk := range s.chunker.Push(frame.Data) {
 		if err := s.conn.WriteMessage(websocket.BinaryMessage, chunk); err != nil {
 			return err
 		}
@@ -247,16 +256,13 @@ func (s *sttStream) PushFrame(frame *model.AudioFrame) error {
 	return nil
 }
 
-func (s *sttStream) Flush() error {
-	for _, chunk := range s.flushPendingAudio() {
-		if err := s.conn.WriteMessage(websocket.BinaryMessage, chunk); err != nil {
-			return err
-		}
-	}
-	return nil
+func (s *gnaniSTTStream) Flush() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.writeBufferedChunksLocked()
 }
 
-func (s *sttStream) Close() error {
+func (s *gnaniSTTStream) Close() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.closed {
@@ -264,12 +270,12 @@ func (s *sttStream) Close() error {
 	}
 	s.closed = true
 	s.cancel()
-	_ = s.Flush()
+	_ = s.writeBufferedChunksLocked()
 	_ = s.conn.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""), time.Now().Add(time.Second))
 	return s.conn.Close()
 }
 
-func (s *sttStream) Next() (*stt.SpeechEvent, error) {
+func (s *gnaniSTTStream) Next() (*stt.SpeechEvent, error) {
 	select {
 	case event, ok := <-s.events:
 		if !ok {
@@ -288,34 +294,7 @@ func (s *sttStream) Next() (*stt.SpeechEvent, error) {
 	}
 }
 
-func (s *sttStream) chunksForFrame(frame *model.AudioFrame) [][]byte {
-	if frame == nil || len(frame.Data) == 0 {
-		return nil
-	}
-	chunkBytes := s.chunkBytes
-	if chunkBytes <= 0 {
-		chunkBytes = sttStreamChunkBytes
-	}
-	s.pendingAudio = append(s.pendingAudio, frame.Data...)
-	chunks := make([][]byte, 0, len(s.pendingAudio)/chunkBytes)
-	for len(s.pendingAudio) >= chunkBytes {
-		chunk := bytes.Clone(s.pendingAudio[:chunkBytes])
-		chunks = append(chunks, chunk)
-		s.pendingAudio = s.pendingAudio[chunkBytes:]
-	}
-	return chunks
-}
-
-func (s *sttStream) flushPendingAudio() [][]byte {
-	if len(s.pendingAudio) == 0 {
-		return nil
-	}
-	chunk := bytes.Clone(s.pendingAudio)
-	s.pendingAudio = nil
-	return [][]byte{chunk}
-}
-
-func (s *sttStream) readLoop() {
+func (s *gnaniSTTStream) readLoop() {
 	defer close(s.events)
 	for {
 		msgType, payload, err := s.conn.ReadMessage()
@@ -328,18 +307,60 @@ func (s *sttStream) readLoop() {
 		if msgType != websocket.TextMessage {
 			continue
 		}
-		event, err := sttEventFromWebsocketMessage(payload, s.language)
+		events, err := gnaniSTTEventsFromStreamMessage(payload, s.language)
 		if err != nil {
 			s.errCh <- err
 			return
 		}
-		if event != nil {
+		for _, event := range events {
 			s.events <- event
 		}
 	}
 }
 
-func sttEventFromWebsocketMessage(payload []byte, language string) (*stt.SpeechEvent, error) {
+func (s *gnaniSTTStream) writeBufferedChunksLocked() error {
+	for _, chunk := range s.chunker.Flush() {
+		if err := s.conn.WriteMessage(websocket.BinaryMessage, chunk); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+type gnaniSTTAudioChunker struct {
+	buffer []byte
+}
+
+func newGnaniSTTAudioChunker() *gnaniSTTAudioChunker {
+	return &gnaniSTTAudioChunker{}
+}
+
+func (c *gnaniSTTAudioChunker) Push(audio []byte) [][]byte {
+	if len(audio) == 0 {
+		return nil
+	}
+	c.buffer = append(c.buffer, audio...)
+	var chunks [][]byte
+	for len(c.buffer) >= gnaniSTTStreamChunkBytes {
+		chunk := make([]byte, gnaniSTTStreamChunkBytes)
+		copy(chunk, c.buffer[:gnaniSTTStreamChunkBytes])
+		chunks = append(chunks, chunk)
+		c.buffer = c.buffer[gnaniSTTStreamChunkBytes:]
+	}
+	return chunks
+}
+
+func (c *gnaniSTTAudioChunker) Flush() [][]byte {
+	if len(c.buffer) == 0 {
+		return nil
+	}
+	chunk := make([]byte, len(c.buffer))
+	copy(chunk, c.buffer)
+	c.buffer = c.buffer[:0]
+	return [][]byte{chunk}
+}
+
+func gnaniSTTEventsFromStreamMessage(payload []byte, defaultLanguage string) ([]*stt.SpeechEvent, error) {
 	var message struct {
 		Type      string `json:"type"`
 		Text      string `json:"text"`
@@ -354,35 +375,25 @@ func sttEventFromWebsocketMessage(payload []byte, language string) (*stt.SpeechE
 		if message.Text == "" {
 			return nil, nil
 		}
-		return &stt.SpeechEvent{
+		return []*stt.SpeechEvent{{
 			Type:      stt.SpeechEventFinalTranscript,
 			RequestID: message.SegmentID,
 			Alternatives: []stt.SpeechData{{
-				Language:   language,
+				Language:   defaultLanguage,
 				Text:       message.Text,
 				Confidence: 1.0,
 			}},
-		}, nil
+		}}, nil
 	case "speech_start", "vad_start":
-		return &stt.SpeechEvent{Type: stt.SpeechEventStartOfSpeech}, nil
+		return []*stt.SpeechEvent{{Type: stt.SpeechEventStartOfSpeech}}, nil
 	case "speech_end", "vad_end":
-		return &stt.SpeechEvent{Type: stt.SpeechEventEndOfSpeech}, nil
-	case "processing", "connected", "":
-		return nil, nil
+		return []*stt.SpeechEvent{{Type: stt.SpeechEventEndOfSpeech}}, nil
 	case "error":
 		if message.Message == "" {
-			message.Message = "unknown gnani stt stream error"
+			message.Message = string(payload)
 		}
 		return nil, fmt.Errorf("gnani stt stream error: %s", message.Message)
 	default:
 		return nil, nil
 	}
-}
-
-func textprotoMIMEHeader(values map[string]string) textproto.MIMEHeader {
-	header := make(textproto.MIMEHeader, len(values))
-	for key, value := range values {
-		header.Set(key, value)
-	}
-	return header
 }

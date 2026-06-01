@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/cavos-io/rtp-agent/core/tts"
 	"github.com/gorilla/websocket"
 )
 
@@ -210,6 +211,72 @@ func TestBasetenTTSStreamReturnsBinaryAudioFrames(t *testing.T) {
 	if err != io.EOF {
 		t.Fatalf("second next err = %v, want EOF", err)
 	}
+}
+
+func TestBasetenTTSStreamingOptionsMatchReference(t *testing.T) {
+	provider := NewBasetenTTS("test-key", "",
+		WithBasetenTTSModelEndpoint("wss://model.example/websocket"),
+		WithBasetenTTSVoice("emma"),
+		WithBasetenTTSMaxTokens(123),
+		WithBasetenTTSBufferSize(4),
+	)
+
+	if !provider.Capabilities().Streaming {
+		t.Fatal("streaming = false for websocket endpoint")
+	}
+
+	headers := buildBasetenTTSWebsocketHeaders(provider)
+	if headers.Get("Authorization") != "Api-Key test-key" {
+		t.Fatalf("Authorization = %q, want Api-Key header", headers.Get("Authorization"))
+	}
+
+	payload, err := buildBasetenTTSStartMessage(provider)
+	if err != nil {
+		t.Fatalf("build start message: %v", err)
+	}
+	var start map[string]any
+	if err := json.Unmarshal(payload, &start); err != nil {
+		t.Fatalf("decode start message: %v", err)
+	}
+	assertBasetenPayload(t, start, "voice", "emma")
+	if start["max_tokens"] != float64(123) || start["buffer_size"] != float64(4) {
+		t.Fatalf("start message = %+v, want max_tokens and buffer_size", start)
+	}
+}
+
+func TestBasetenTTSStreamMessagesMatchReference(t *testing.T) {
+	text, err := buildBasetenTTSTextMessage("hello")
+	if err != nil {
+		t.Fatalf("text message: %v", err)
+	}
+	if string(text) != "hello" {
+		t.Fatalf("text message = %q, want raw text", string(text))
+	}
+
+	end, err := buildBasetenTTSEndMessage()
+	if err != nil {
+		t.Fatalf("end message: %v", err)
+	}
+	if string(end) != "__END__" {
+		t.Fatalf("end message = %q, want sentinel", string(end))
+	}
+}
+
+func TestBasetenTTSAudioFromStreamMessage(t *testing.T) {
+	audio, err := basetenTTSAudioFromStreamMessage([]byte{1, 2, 3, 4}, 24000)
+	if err != nil {
+		t.Fatalf("audio from stream message: %v", err)
+	}
+	if audio == nil || string(audio.Frame.Data) != string([]byte{1, 2, 3, 4}) {
+		t.Fatalf("audio = %+v, want raw binary audio frame", audio)
+	}
+	if audio.Frame.SampleRate != 24000 || audio.Frame.NumChannels != 1 {
+		t.Fatalf("frame = %+v, want 24 kHz mono", audio.Frame)
+	}
+}
+
+func TestBasetenTTSImplementsStreamingInterface(t *testing.T) {
+	var _ tts.TTS = NewBasetenTTS("test-key", "", WithBasetenTTSModelEndpoint("wss://model.example/websocket"))
 }
 
 func assertBasetenPayload(t *testing.T, payload map[string]any, key string, want any) {
