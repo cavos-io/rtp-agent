@@ -9,10 +9,17 @@ import (
 )
 
 func TestGoogleRecognitionConfigRequestsWordDetails(t *testing.T) {
-	config := googleRecognitionConfig("id-ID")
+	provider := newGoogleSTTWithClient(nil)
+	config := googleRecognitionConfig(provider, "id-ID")
 
 	if config.LanguageCode != "id-ID" {
 		t.Fatalf("language = %q, want id-ID", config.LanguageCode)
+	}
+	if config.Model != "latest_long" {
+		t.Fatalf("model = %q, want latest_long", config.Model)
+	}
+	if !config.EnableAutomaticPunctuation {
+		t.Fatal("expected automatic punctuation to be enabled")
 	}
 	if !config.EnableWordTimeOffsets {
 		t.Fatal("expected word time offsets to be enabled")
@@ -84,5 +91,29 @@ func TestGoogleSTTCapabilitiesAdvertiseWordAlignment(t *testing.T) {
 
 	if got := provider.Capabilities().AlignedTranscript; got != "word" {
 		t.Fatalf("AlignedTranscript = %q, want word", got)
+	}
+}
+
+func TestGoogleRecognitionConfigUsesProviderOptions(t *testing.T) {
+	provider := newGoogleSTTWithClient(nil,
+		WithGoogleSTTModel("command_and_search"),
+		WithGoogleSTTPunctuate(false),
+		WithGoogleSTTSampleRate(8000),
+		WithGoogleSTTProfanityFilter(true),
+	)
+
+	config := googleRecognitionConfig(provider, "en-US")
+
+	if config.Model != "command_and_search" {
+		t.Fatalf("model = %q, want command_and_search", config.Model)
+	}
+	if config.EnableAutomaticPunctuation {
+		t.Fatal("automatic punctuation = true, want false")
+	}
+	if config.SampleRateHertz != 8000 {
+		t.Fatalf("sample rate = %d, want 8000", config.SampleRateHertz)
+	}
+	if !config.ProfanityFilter {
+		t.Fatal("profanity filter = false, want true")
 	}
 }
