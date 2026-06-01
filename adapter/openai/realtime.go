@@ -569,6 +569,23 @@ func openAIRealtimeEvent(ev map[string]any) (llm.RealtimeEvent, bool) {
 				}, true
 			}
 		}
+	case "response.output_item.done":
+		item, _ := ev["item"].(map[string]any)
+		if itemType, _ := item["type"].(string); itemType != "function_call" {
+			return llm.RealtimeEvent{}, false
+		}
+		call, err := openAIRealtimeFunctionCall(item)
+		if err != nil {
+			return llm.RealtimeEvent{}, false
+		}
+		return llm.RealtimeEvent{
+			Type: llm.RealtimeEventTypeFunctionCall,
+			Function: &llm.FunctionToolCall{
+				CallID:    call.CallID,
+				Name:      call.Name,
+				Arguments: call.Arguments,
+			},
+		}, true
 	case "conversation.item.input_audio_transcription.completed":
 		itemID, _ := ev["item_id"].(string)
 		transcript, _ := ev["transcript"].(string)

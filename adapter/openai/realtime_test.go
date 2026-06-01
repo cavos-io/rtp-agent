@@ -302,6 +302,31 @@ func TestRealtimeEventMapsConversationItemAddedFunctionCall(t *testing.T) {
 	}
 }
 
+func TestRealtimeEventMapsOutputItemDoneFunctionCall(t *testing.T) {
+	ev, ok := openAIRealtimeEvent(map[string]any{
+		"type": "response.output_item.done",
+		"item": map[string]any{
+			"id":        "fc_123",
+			"type":      "function_call",
+			"call_id":   "call_123",
+			"name":      "lookup",
+			"arguments": `{"query":"hello"}`,
+		},
+	})
+	if !ok {
+		t.Fatal("openAIRealtimeEvent returned ok=false, want completed function call event")
+	}
+	if ev.Type != llm.RealtimeEventTypeFunctionCall {
+		t.Fatalf("event type = %q, want function call", ev.Type)
+	}
+	if ev.Function == nil {
+		t.Fatal("Function = nil, want completed function call")
+	}
+	if ev.Function.CallID != "call_123" || ev.Function.Name != "lookup" || ev.Function.Arguments != `{"query":"hello"}` {
+		t.Fatalf("Function = %#v, want completed OpenAI function call", ev.Function)
+	}
+}
+
 func TestRealtimeEventMapsConversationItemAddedFunctionCallOutput(t *testing.T) {
 	ev, ok := openAIRealtimeEvent(map[string]any{
 		"type": "conversation.item.added",
