@@ -269,6 +269,7 @@ type fallbackRecognizeStream struct {
 	activeIndex  int
 	retries      map[int]int
 	inputBuffer  []fallbackRecognizeInput
+	rateGuard    SampleRateGuard
 
 	eventCh chan *SpeechEvent
 	errCh   chan error
@@ -449,6 +450,9 @@ func (s *fallbackRecognizeStream) PushFrame(frame *model.AudioFrame) error {
 
 	if s.closed {
 		return fmt.Errorf("stream closed")
+	}
+	if err := s.rateGuard.Check(frame); err != nil {
+		return err
 	}
 
 	s.inputBuffer = append(s.inputBuffer, fallbackRecognizeInput{frame: frame})

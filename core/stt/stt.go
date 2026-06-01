@@ -2,6 +2,7 @@ package stt
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/cavos-io/conversation-worker/model"
 )
@@ -90,4 +91,22 @@ type StreamTiming interface {
 	SetStartTimeOffset(offset float64)
 	StartTime() float64
 	SetStartTime(startTime float64)
+}
+
+type SampleRateGuard struct {
+	sampleRate uint32
+}
+
+func (g *SampleRateGuard) Check(frame *model.AudioFrame) error {
+	if frame == nil {
+		return nil
+	}
+	if g.sampleRate == 0 {
+		g.sampleRate = frame.SampleRate
+		return nil
+	}
+	if g.sampleRate != frame.SampleRate {
+		return fmt.Errorf("stt stream sample rate changed from %d to %d", g.sampleRate, frame.SampleRate)
+	}
+	return nil
 }
