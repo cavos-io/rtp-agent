@@ -34,3 +34,21 @@ func TestRealtimeSessionOptionsExposeToolChoice(t *testing.T) {
 		t.Fatal("ToolChoice = nil, want named tool choice")
 	}
 }
+
+func TestRealtimeGenerateReplyOptionsExposePerResponseOverrides(t *testing.T) {
+	options := RealtimeGenerateReplyOptions{
+		Instructions: "answer briefly",
+		ToolChoice:   "none",
+		Tools:        []Tool{},
+	}
+
+	if options.Instructions != "answer briefly" {
+		t.Fatalf("Instructions = %q, want answer briefly", options.Instructions)
+	}
+	if options.ToolChoice == nil {
+		t.Fatal("ToolChoice = nil, want per-response override")
+	}
+	if options.Tools == nil {
+		t.Fatal("Tools = nil, want explicit per-response tools")
+	}
+}

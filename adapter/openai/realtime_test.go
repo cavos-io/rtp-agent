@@ -54,3 +54,30 @@ func TestRealtimeAudioBufferMessages(t *testing.T) {
 		t.Fatalf("clear message type = %#v, want input_audio_buffer.clear", clear["type"])
 	}
 }
+
+func TestRealtimeGenerateReplyMessageMapsPerResponseOptions(t *testing.T) {
+	msg := openAIRealtimeGenerateReplyMessage(llm.RealtimeGenerateReplyOptions{
+		Instructions: "answer briefly",
+		ToolChoice: map[string]any{
+			"type":     "function",
+			"function": map[string]any{"name": "lookup"},
+		},
+		Tools: []llm.Tool{requestTestTool{}},
+	})
+
+	if msg["type"] != "response.create" {
+		t.Fatalf("message type = %#v, want response.create", msg["type"])
+	}
+	response := msg["response"].(map[string]any)
+	if response["instructions"] != "answer briefly" {
+		t.Fatalf("instructions = %#v, want answer briefly", response["instructions"])
+	}
+	choice := response["tool_choice"].(map[string]any)
+	if choice["type"] != "function" || choice["name"] != "lookup" {
+		t.Fatalf("tool_choice = %#v, want realtime named function", choice)
+	}
+	tools := response["tools"].([]map[string]any)
+	if len(tools) != 1 || tools[0]["name"] != "lookup" {
+		t.Fatalf("tools = %#v, want lookup tool", tools)
+	}
+}

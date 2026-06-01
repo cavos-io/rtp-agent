@@ -99,6 +99,16 @@ func (s *realtimeSession) UpdateChatContext(chatCtx *llm.ChatContext) error {
 }
 
 func (s *realtimeSession) UpdateTools(tools []llm.Tool) error {
+	msg := map[string]any{
+		"type": "session.update",
+		"session": map[string]any{
+			"tools": openAIRealtimeTools(tools),
+		},
+	}
+	return s.sendMsg(msg)
+}
+
+func openAIRealtimeTools(tools []llm.Tool) []map[string]any {
 	var oaTools []map[string]any
 	for _, t := range tools {
 		oaTools = append(oaTools, map[string]any{
@@ -108,14 +118,7 @@ func (s *realtimeSession) UpdateTools(tools []llm.Tool) error {
 			"parameters":  t.Parameters(),
 		})
 	}
-
-	msg := map[string]any{
-		"type": "session.update",
-		"session": map[string]any{
-			"tools": oaTools,
-		},
-	}
-	return s.sendMsg(msg)
+	return oaTools
 }
 
 func (s *realtimeSession) UpdateOptions(options llm.RealtimeSessionOptions) error {
@@ -178,6 +181,28 @@ func (s *realtimeSession) PushAudio(frame *model.AudioFrame) error {
 		"audio": b64Audio,
 	}
 	return s.sendMsg(msg)
+}
+
+func (s *realtimeSession) GenerateReply(options llm.RealtimeGenerateReplyOptions) error {
+	return s.sendMsg(openAIRealtimeGenerateReplyMessage(options))
+}
+
+func openAIRealtimeGenerateReplyMessage(options llm.RealtimeGenerateReplyOptions) map[string]any {
+	response := make(map[string]any)
+	if options.Instructions != "" {
+		response["instructions"] = options.Instructions
+	}
+	if toolChoice := openAIRealtimeToolChoice(options.ToolChoice); toolChoice != nil {
+		response["tool_choice"] = toolChoice
+	}
+	if options.Tools != nil {
+		response["tools"] = openAIRealtimeTools(options.Tools)
+	}
+
+	return map[string]any{
+		"type":     "response.create",
+		"response": response,
+	}
 }
 
 func (s *realtimeSession) CommitAudio() error {
