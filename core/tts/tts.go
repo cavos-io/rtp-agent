@@ -7,11 +7,21 @@ import (
 )
 
 type SynthesizedAudio struct {
-	Frame     *model.AudioFrame
-	RequestID string
-	IsFinal   bool
-	SegmentID string
-	DeltaText string
+	Frame           *model.AudioFrame
+	RequestID       string
+	IsFinal         bool
+	SegmentID       string
+	DeltaText       string
+	TimedTranscript []TimedString
+}
+
+type TimedString struct {
+	Text            string
+	StartTime       float64
+	EndTime         float64
+	Confidence      float64
+	StartTimeOffset float64
+	SpeakerID       string
 }
 
 type TTSCapabilities struct {
@@ -100,5 +110,6 @@ func cloneSynthesizedAudio(audio *SynthesizedAudio) *SynthesizedAudio {
 		return nil
 	}
 	clone := *audio
+	clone.TimedTranscript = append([]TimedString(nil), audio.TimedTranscript...)
 	return &clone
 }
