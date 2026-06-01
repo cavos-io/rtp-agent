@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"os/signal"
+	"strconv"
 	"strings"
 	"syscall"
 
@@ -137,8 +138,32 @@ func RunApp(server *worker.AgentServer) {
 
 	switch os.Args[1] {
 	case "start":
+		args, drainTimeout, err := parseWorkerArgs(os.Args, false)
+		if err != nil {
+			fmt.Println(err)
+			printUsage()
+			os.Exit(1)
+		}
+		if err := applyWorkerArgs(server, args, drainTimeout); err != nil {
+			logger.Logger.Errorw("Failed to apply worker options", err)
+			os.Exit(1)
+		}
 		runWorker(server, false)
 	case "dev":
+		args, drainTimeout, err := parseWorkerArgs(os.Args, true)
+		if err != nil {
+			fmt.Println(err)
+			printUsage()
+			os.Exit(1)
+		}
+		if err := applyWorkerArgs(server, args, drainTimeout); err != nil {
+			logger.Logger.Errorw("Failed to apply worker options", err)
+			os.Exit(1)
+		}
+		if !args.Reload {
+			runWorker(server, true)
+			return
+		}
 		if err := RunWithDevMode(os.Args); err != nil {
 			logger.Logger.Errorw("Dev mode error", err)
 			os.Exit(1)
@@ -153,6 +178,83 @@ func RunApp(server *worker.AgentServer) {
 		printUsage()
 		os.Exit(1)
 	}
+}
+
+func parseWorkerArgs(argv []string, devMode bool) (CliArgs, *int, error) {
+	args := CliArgs{DevMode: devMode, Reload: devMode}
+	var drainTimeout *int
+	for i := 2; i < len(argv); i++ {
+		switch argv[i] {
+		case "--log-level":
+			i++
+			if i >= len(argv) {
+				return CliArgs{}, nil, fmt.Errorf("missing value for --log-level")
+			}
+			logLevel := strings.ToUpper(argv[i])
+			if !validConsoleLogLevel(logLevel) {
+				return CliArgs{}, nil, fmt.Errorf("unknown log level %q", argv[i])
+			}
+			args.LogLevel = logLevel
+		case "--url":
+			i++
+			if i >= len(argv) {
+				return CliArgs{}, nil, fmt.Errorf("missing value for --url")
+			}
+			args.URL = argv[i]
+		case "--api-key":
+			i++
+			if i >= len(argv) {
+				return CliArgs{}, nil, fmt.Errorf("missing value for --api-key")
+			}
+			args.APIKey = argv[i]
+		case "--api-secret":
+			i++
+			if i >= len(argv) {
+				return CliArgs{}, nil, fmt.Errorf("missing value for --api-secret")
+			}
+			args.APISecret = argv[i]
+		case "--drain-timeout":
+			if devMode {
+				return CliArgs{}, nil, fmt.Errorf("--drain-timeout is only supported by start")
+			}
+			i++
+			if i >= len(argv) {
+				return CliArgs{}, nil, fmt.Errorf("missing value for --drain-timeout")
+			}
+			value, err := strconv.Atoi(argv[i])
+			if err != nil || value < 0 {
+				return CliArgs{}, nil, fmt.Errorf("invalid --drain-timeout %q", argv[i])
+			}
+			drainTimeout = &value
+		case "--reload":
+			if !devMode {
+				return CliArgs{}, nil, fmt.Errorf("--reload is only supported by dev")
+			}
+			args.Reload = true
+		case "--no-reload":
+			if !devMode {
+				return CliArgs{}, nil, fmt.Errorf("--no-reload is only supported by dev")
+			}
+			args.Reload = false
+		default:
+			return CliArgs{}, nil, fmt.Errorf("unknown worker option %q", argv[i])
+		}
+	}
+	return args, drainTimeout, nil
+}
+
+func applyWorkerArgs(server *worker.AgentServer, args CliArgs, drainTimeout *int) error {
+	opts := worker.WorkerOptions{
+		LogLevel:  args.LogLevel,
+		WSURL:     args.URL,
+		APIKey:    args.APIKey,
+		APISecret: args.APISecret,
+		DevMode:   args.DevMode,
+	}
+	if drainTimeout != nil {
+		opts.DrainTimeoutSeconds = *drainTimeout
+	}
+	return server.UpdateOptions(opts)
 }
 
 func applyDevModeEnv(argv []string) error {

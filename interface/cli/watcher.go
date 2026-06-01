@@ -344,6 +344,10 @@ func (w *Watcher) watchLoop() {
 func RunWithDevMode(args []string) error {
 	var cmd *exec.Cmd
 	var mu sync.Mutex
+	cliArgs, _, err := parseWorkerArgs(args, true)
+	if err != nil {
+		return err
+	}
 
 	startCmd := func() {
 		mu.Lock()
@@ -359,6 +363,7 @@ func RunWithDevMode(args []string) error {
 
 		// Build the args for `go run`
 		goArgs := []string{"run", "cmd/main.go", "start"} // Assuming standard layout
+		goArgs = append(goArgs, startArgsForDevReload(cliArgs)...)
 
 		cmd = exec.Command("go", goArgs...)
 		cmd.Stdout = os.Stdout
@@ -387,4 +392,21 @@ func RunWithDevMode(args []string) error {
 
 	// Wait forever
 	select {}
+}
+
+func startArgsForDevReload(args CliArgs) []string {
+	startArgs := make([]string, 0, 8)
+	if args.LogLevel != "" {
+		startArgs = append(startArgs, "--log-level", args.LogLevel)
+	}
+	if args.URL != "" {
+		startArgs = append(startArgs, "--url", args.URL)
+	}
+	if args.APIKey != "" {
+		startArgs = append(startArgs, "--api-key", args.APIKey)
+	}
+	if args.APISecret != "" {
+		startArgs = append(startArgs, "--api-secret", args.APISecret)
+	}
+	return startArgs
 }
