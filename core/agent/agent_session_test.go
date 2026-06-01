@@ -130,3 +130,51 @@ func TestAgentSessionInterruptDelegatesToActivity(t *testing.T) {
 func testTimeout() <-chan time.Time {
 	return time.After(time.Second)
 }
+
+func TestAgentSessionUpdateAgentStateEmitsTypedTimestampedEvent(t *testing.T) {
+	agent := NewAgent("test")
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	before := time.Now()
+
+	session.UpdateAgentState(AgentStateThinking)
+
+	select {
+	case ev := <-session.AgentStateChangedCh:
+		var event Event = &ev
+		if event.GetType() != "agent_state_changed" {
+			t.Fatalf("event type = %q, want agent_state_changed", event.GetType())
+		}
+		if ev.OldState != "" || ev.NewState != AgentStateThinking {
+			t.Fatalf("event states = %q -> %q, want empty -> thinking", ev.OldState, ev.NewState)
+		}
+		if ev.CreatedAt.Before(before) || ev.CreatedAt.IsZero() {
+			t.Fatalf("CreatedAt = %v, want timestamp after %v", ev.CreatedAt, before)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("UpdateAgentState did not emit an event")
+	}
+}
+
+func TestAgentSessionUpdateUserStateEmitsTypedTimestampedEvent(t *testing.T) {
+	agent := NewAgent("test")
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	before := time.Now()
+
+	session.UpdateUserState(UserStateSpeaking)
+
+	select {
+	case ev := <-session.UserStateChangedCh:
+		var event Event = &ev
+		if event.GetType() != "user_state_changed" {
+			t.Fatalf("event type = %q, want user_state_changed", event.GetType())
+		}
+		if ev.OldState != "" || ev.NewState != UserStateSpeaking {
+			t.Fatalf("event states = %q -> %q, want empty -> speaking", ev.OldState, ev.NewState)
+		}
+		if ev.CreatedAt.Before(before) || ev.CreatedAt.IsZero() {
+			t.Fatalf("CreatedAt = %v, want timestamp after %v", ev.CreatedAt, before)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("UpdateUserState did not emit an event")
+	}
+}

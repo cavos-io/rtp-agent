@@ -101,14 +101,20 @@ func (s *AgentSession) OnAudioFrame(ctx context.Context, frame *model.AudioFrame
 }
 
 type AgentStateChangedEvent struct {
-	OldState AgentState
-	NewState AgentState
+	OldState  AgentState
+	NewState  AgentState
+	CreatedAt time.Time
 }
 
+func (e *AgentStateChangedEvent) GetType() string { return "agent_state_changed" }
+
 type UserStateChangedEvent struct {
-	OldState UserState
-	NewState UserState
+	OldState  UserState
+	NewState  UserState
+	CreatedAt time.Time
 }
+
+func (e *UserStateChangedEvent) GetType() string { return "user_state_changed" }
 
 func NewAgentSession(agent AgentInterface, room *lksdk.Room, opts AgentSessionOptions) *AgentSession {
 	baseAgent := agent.GetAgent()
@@ -211,8 +217,9 @@ func (s *AgentSession) UpdateAgentState(state AgentState) {
 		logger.Logger.Debugw("Agent state changed", "old", oldState, "new", state)
 		select {
 		case s.AgentStateChangedCh <- AgentStateChangedEvent{
-			OldState: oldState,
-			NewState: state,
+			OldState:  oldState,
+			NewState:  state,
+			CreatedAt: time.Now(),
 		}:
 		default:
 			// Channel full, ignore
@@ -230,8 +237,9 @@ func (s *AgentSession) UpdateUserState(state UserState) {
 		logger.Logger.Debugw("User state changed", "old", oldState, "new", state)
 		select {
 		case s.UserStateChangedCh <- UserStateChangedEvent{
-			OldState: oldState,
-			NewState: state,
+			OldState:  oldState,
+			NewState:  state,
+			CreatedAt: time.Now(),
 		}:
 		default:
 			// Channel full, ignore
