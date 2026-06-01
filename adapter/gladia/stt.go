@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"os"
 	"sync"
 	"time"
 
@@ -181,6 +182,9 @@ func WithGladiaPreProcessing(audioEnhancer bool, speechThreshold float64) Gladia
 }
 
 func NewGladiaSTT(apiKey string, opts ...GladiaSTTOption) *GladiaSTT {
+	if apiKey == "" {
+		apiKey = os.Getenv("GLADIA_API_KEY")
+	}
 	provider := &GladiaSTT{
 		apiKey:                             apiKey,
 		baseURL:                            defaultGladiaBaseURL,

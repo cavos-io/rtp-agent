@@ -32,6 +32,20 @@ func TestGladiaSTTDefaultsMatchReferenceV2(t *testing.T) {
 	}
 }
 
+func TestGladiaSTTUsesEnvAPIKeyWhenOmitted(t *testing.T) {
+	t.Setenv("GLADIA_API_KEY", "env-key")
+
+	provider := NewGladiaSTT("")
+	if provider.apiKey != "env-key" {
+		t.Fatalf("apiKey = %q, want env key", provider.apiKey)
+	}
+
+	provider = NewGladiaSTT("explicit-key")
+	if provider.apiKey != "explicit-key" {
+		t.Fatalf("apiKey = %q, want explicit key", provider.apiKey)
+	}
+}
+
 func TestBuildGladiaStreamingConfigMatchesReference(t *testing.T) {
 	provider := NewGladiaSTT("test-key",
 		WithGladiaLanguages([]string{"en", "fr"}),
