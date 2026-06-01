@@ -204,6 +204,8 @@ func (m *ChatMessage) TextContent() string {
 	for _, c := range m.Content {
 		if c.Text != "" {
 			parts = append(parts, c.Text)
+		} else if c.Instructions != nil && c.Instructions.String() != "" {
+			parts = append(parts, c.Instructions.String())
 		}
 	}
 	out := ""

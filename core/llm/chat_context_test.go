@@ -235,7 +235,7 @@ func TestChatContextAddMessageAcceptsTextContent(t *testing.T) {
 	}
 }
 
-func TestChatMessageTextContentOnlyIncludesPlainTextContent(t *testing.T) {
+func TestChatMessageTextContentIncludesInstructionsAndPlainText(t *testing.T) {
 	message := &ChatMessage{
 		Role: ChatRoleSystem,
 		Content: []ChatContent{
@@ -246,7 +246,7 @@ func TestChatMessageTextContentOnlyIncludesPlainTextContent(t *testing.T) {
 		},
 	}
 
-	if got, want := message.TextContent(), "plain text"; got != want {
+	if got, want := message.TextContent(), "voice instructions\nplain text"; got != want {
 		t.Fatalf("TextContent() = %q, want %q", got, want)
 	}
 }
