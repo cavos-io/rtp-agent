@@ -264,7 +264,7 @@ type ChatContextMergeOptions struct {
 	ExcludeConfigUpdate bool
 }
 
-func (c *ChatContext) Merge(other *ChatContext, options ...ChatContextMergeOptions) {
+func (c *ChatContext) Merge(other *ChatContext, options ...ChatContextMergeOptions) *ChatContext {
 	var opts ChatContextMergeOptions
 	if len(options) > 0 {
 		opts = options[0]
@@ -291,6 +291,7 @@ func (c *ChatContext) Merge(other *ChatContext, options ...ChatContextMergeOptio
 			existingIDs[item.GetID()] = struct{}{}
 		}
 	}
+	return c
 }
 
 func (c *ChatContext) IsEquivalent(other *ChatContext) bool {
