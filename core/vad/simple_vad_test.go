@@ -268,6 +268,44 @@ func TestSimpleVADUpdateOptionsWithIgnoresInvalidUpdateInterval(t *testing.T) {
 	}
 }
 
+func TestSimpleVADRejectsInvalidWindowDurationAtStream(t *testing.T) {
+	for _, duration := range []float64{-1, math.NaN(), math.Inf(1)} {
+		detector := NewSimpleVADWithOptions(SimpleVADOptions{WindowDuration: duration})
+
+		stream, err := detector.Stream(context.Background())
+		if err == nil {
+			if stream != nil {
+				_ = stream.Close()
+			}
+			t.Fatalf("Stream() with window duration %v error = nil, want invalid window duration error", duration)
+		}
+		if !strings.Contains(err.Error(), "window duration must be greater than or equal to 0") {
+			t.Fatalf("Stream() with window duration %v error = %q, want window duration message", duration, err.Error())
+		}
+		if len(detector.streams) != 0 {
+			t.Fatalf("registered streams after invalid window duration = %d, want 0", len(detector.streams))
+		}
+	}
+}
+
+func TestSimpleVADUpdateOptionsWithIgnoresInvalidWindowDuration(t *testing.T) {
+	detector := NewSimpleVADWithOptions(SimpleVADOptions{WindowDuration: 0.032})
+	stream, err := detector.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	defer stream.Close()
+
+	detector.UpdateOptionsWith(WithWindowDuration(math.Inf(1)))
+	if detector.options.WindowDuration != 0.032 {
+		t.Fatalf("detector window duration = %v, want 0.032", detector.options.WindowDuration)
+	}
+	simpleStream := stream.(*simpleVADStream)
+	if simpleStream.options.WindowDuration != 0.032 {
+		t.Fatalf("stream window duration = %v, want 0.032", simpleStream.options.WindowDuration)
+	}
+}
+
 func TestSimpleVADUpdateOptionsRelaxesMaxBufferedSpeech(t *testing.T) {
 	detector := NewSimpleVADWithOptions(SimpleVADOptions{
 		Threshold:                 0.05,

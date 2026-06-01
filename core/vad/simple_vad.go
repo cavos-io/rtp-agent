@@ -238,6 +238,9 @@ func validateSimpleVADOptions(options SimpleVADOptions) error {
 	if math.IsNaN(options.UpdateInterval) || math.IsInf(options.UpdateInterval, 0) || options.UpdateInterval <= 0 {
 		return errors.New("update interval must be greater than 0")
 	}
+	if math.IsNaN(options.WindowDuration) || math.IsInf(options.WindowDuration, 0) || options.WindowDuration < 0 {
+		return errors.New("window duration must be greater than or equal to 0")
+	}
 	if math.IsNaN(options.DeactivationThreshold) || math.IsInf(options.DeactivationThreshold, 0) || options.DeactivationThreshold < 0 {
 		return errors.New("deactivation threshold must be greater than or equal to 0")
 	}
