@@ -98,6 +98,7 @@ type AgentSession struct {
 	conversationItemCh  chan ConversationItemAddedEvent
 	functionToolsCh     chan FunctionToolsExecutedEvent
 	metricsCollectedCh  chan MetricsCollectedEvent
+	sessionUsageCh      chan SessionUsageUpdatedEvent
 	sipDTMFCh           chan SipDTMFEvent
 	closeCh             chan CloseEvent
 }
@@ -153,6 +154,7 @@ func NewAgentSession(agent AgentInterface, room *lksdk.Room, opts AgentSessionOp
 		conversationItemCh:  make(chan ConversationItemAddedEvent, 10),
 		functionToolsCh:     make(chan FunctionToolsExecutedEvent, 10),
 		metricsCollectedCh:  make(chan MetricsCollectedEvent, 10),
+		sessionUsageCh:      make(chan SessionUsageUpdatedEvent, 10),
 		sipDTMFCh:           make(chan SipDTMFEvent, 10),
 	}
 }
@@ -295,8 +297,10 @@ func (s *AgentSession) EmitMetricsCollected(metrics telemetry.AgentMetrics) {
 	if metrics == nil {
 		return
 	}
+	var usage telemetry.UsageSummary
 	if s.MetricsCollector != nil {
 		s.MetricsCollector.Collect(metrics)
+		usage = s.MetricsCollector.GetSummary()
 	}
 	ch := s.metricsCollectedEvents()
 	ev := MetricsCollectedEvent{
@@ -306,6 +310,9 @@ func (s *AgentSession) EmitMetricsCollected(metrics telemetry.AgentMetrics) {
 	select {
 	case ch <- ev:
 	default:
+	}
+	if s.MetricsCollector != nil {
+		s.EmitSessionUsageUpdated(SessionUsageUpdatedEvent{Usage: usage})
 	}
 }
 
@@ -317,6 +324,31 @@ func (s *AgentSession) metricsCollectedEvents() chan MetricsCollectedEvent {
 		s.metricsCollectedCh = make(chan MetricsCollectedEvent, 10)
 	}
 	return s.metricsCollectedCh
+}
+
+func (s *AgentSession) SessionUsageUpdatedEvents() <-chan SessionUsageUpdatedEvent {
+	return s.sessionUsageUpdatedEvents()
+}
+
+func (s *AgentSession) EmitSessionUsageUpdated(ev SessionUsageUpdatedEvent) {
+	if ev.CreatedAt.IsZero() {
+		ev.CreatedAt = time.Now()
+	}
+	ch := s.sessionUsageUpdatedEvents()
+	select {
+	case ch <- ev:
+	default:
+	}
+}
+
+func (s *AgentSession) sessionUsageUpdatedEvents() chan SessionUsageUpdatedEvent {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.sessionUsageCh == nil {
+		s.sessionUsageCh = make(chan SessionUsageUpdatedEvent, 10)
+	}
+	return s.sessionUsageCh
 }
 
 func (s *AgentSession) SipDTMFEvents() <-chan SipDTMFEvent {
