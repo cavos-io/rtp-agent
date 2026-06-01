@@ -99,6 +99,7 @@ type AgentSession struct {
 	functionToolsCh     chan FunctionToolsExecutedEvent
 	metricsCollectedCh  chan MetricsCollectedEvent
 	sessionUsageCh      chan SessionUsageUpdatedEvent
+	errorCh             chan ErrorEvent
 	sipDTMFCh           chan SipDTMFEvent
 	closeCh             chan CloseEvent
 }
@@ -155,6 +156,7 @@ func NewAgentSession(agent AgentInterface, room *lksdk.Room, opts AgentSessionOp
 		functionToolsCh:     make(chan FunctionToolsExecutedEvent, 10),
 		metricsCollectedCh:  make(chan MetricsCollectedEvent, 10),
 		sessionUsageCh:      make(chan SessionUsageUpdatedEvent, 10),
+		errorCh:             make(chan ErrorEvent, 10),
 		sipDTMFCh:           make(chan SipDTMFEvent, 10),
 	}
 }
@@ -349,6 +351,31 @@ func (s *AgentSession) sessionUsageUpdatedEvents() chan SessionUsageUpdatedEvent
 		s.sessionUsageCh = make(chan SessionUsageUpdatedEvent, 10)
 	}
 	return s.sessionUsageCh
+}
+
+func (s *AgentSession) ErrorEvents() <-chan ErrorEvent {
+	return s.errorEvents()
+}
+
+func (s *AgentSession) EmitError(ev ErrorEvent) {
+	if ev.CreatedAt.IsZero() {
+		ev.CreatedAt = time.Now()
+	}
+	ch := s.errorEvents()
+	select {
+	case ch <- ev:
+	default:
+	}
+}
+
+func (s *AgentSession) errorEvents() chan ErrorEvent {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.errorCh == nil {
+		s.errorCh = make(chan ErrorEvent, 10)
+	}
+	return s.errorCh
 }
 
 func (s *AgentSession) SipDTMFEvents() <-chan SipDTMFEvent {

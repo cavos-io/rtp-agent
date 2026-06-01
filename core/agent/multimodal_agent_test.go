@@ -3,7 +3,9 @@ package agent
 import (
 	"context"
 	"errors"
+	"io"
 	"testing"
+	"time"
 
 	"github.com/cavos-io/rtp-agent/core/audio/model"
 	"github.com/cavos-io/rtp-agent/core/llm"
@@ -73,6 +75,55 @@ func TestMultimodalToolExecutionReportsUnknownFunction(t *testing.T) {
 	}
 }
 
+func TestMultimodalAgentEmitsErrorEventForRealtimeError(t *testing.T) {
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	model := &fakeRealtimeModel{}
+	cause := errors.New("realtime failed")
+	ma := &MultimodalAgent{
+		model:   model,
+		session: session,
+		chatCtx: llm.NewChatContext(),
+	}
+
+	ma.handleRealtimeEvent(llm.RealtimeEvent{
+		Type:  llm.RealtimeEventTypeError,
+		Error: cause,
+	})
+
+	select {
+	case ev := <-session.ErrorEvents():
+		if !errors.Is(ev.Error, cause) {
+			t.Fatalf("Error = %v, want %v", ev.Error, cause)
+		}
+		if ev.Source != model {
+			t.Fatalf("Source = %#v, want realtime model", ev.Source)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("ErrorEvents did not receive realtime error")
+	}
+}
+
+func TestMultimodalAgentDoesNotEmitErrorEventForRealtimeEOF(t *testing.T) {
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	model := &fakeRealtimeModel{}
+	ma := &MultimodalAgent{
+		model:   model,
+		session: session,
+		chatCtx: llm.NewChatContext(),
+	}
+
+	ma.handleRealtimeEvent(llm.RealtimeEvent{
+		Type:  llm.RealtimeEventTypeError,
+		Error: io.EOF,
+	})
+
+	select {
+	case ev := <-session.ErrorEvents():
+		t.Fatalf("unexpected realtime EOF error event: %#v", ev)
+	default:
+	}
+}
+
 func lastFunctionOutput(t *testing.T, chatCtx *llm.ChatContext) *llm.FunctionCallOutput {
 	t.Helper()
 	if len(chatCtx.Items) == 0 {
@@ -84,6 +135,18 @@ func lastFunctionOutput(t *testing.T, chatCtx *llm.ChatContext) *llm.FunctionCal
 	}
 	return output
 }
+
+type fakeRealtimeModel struct{}
+
+func (f *fakeRealtimeModel) Capabilities() llm.RealtimeCapabilities {
+	return llm.RealtimeCapabilities{}
+}
+
+func (f *fakeRealtimeModel) Session() (llm.RealtimeSession, error) {
+	return &fakeRealtimeSession{}, nil
+}
+
+func (f *fakeRealtimeModel) Close() error { return nil }
 
 type fakeRealtimeSession struct {
 	updated *llm.ChatContext

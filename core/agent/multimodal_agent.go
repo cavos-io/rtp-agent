@@ -173,6 +173,12 @@ func (ma *MultimodalAgent) handleRealtimeEvent(ev llm.RealtimeEvent) {
 	case llm.RealtimeEventTypeError:
 		if ev.Error != io.EOF {
 			logger.Logger.Errorw("Realtime stream error", ev.Error)
+			if ma.session != nil && ev.Error != nil {
+				ma.session.EmitError(ErrorEvent{
+					Error:  ev.Error,
+					Source: ma.model,
+				})
+			}
 		}
 	}
 }

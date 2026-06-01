@@ -67,6 +67,34 @@ func TestAgentSessionGenerateReplyEmitsSpeechCreatedEvent(t *testing.T) {
 	}
 }
 
+func TestAgentSessionEmitErrorEmitsTimestampedEvent(t *testing.T) {
+	agent := NewAgent("test")
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	cause := errors.New("provider failed")
+	source := "stt"
+	before := time.Now()
+
+	session.EmitError(ErrorEvent{Error: cause, Source: source})
+
+	select {
+	case ev := <-session.ErrorEvents():
+		if ev.GetType() != "error" {
+			t.Fatalf("event type = %q, want error", ev.GetType())
+		}
+		if !errors.Is(ev.Error, cause) {
+			t.Fatalf("Error = %v, want %v", ev.Error, cause)
+		}
+		if ev.Source != source {
+			t.Fatalf("Source = %#v, want %q", ev.Source, source)
+		}
+		if ev.CreatedAt.Before(before) || ev.CreatedAt.IsZero() {
+			t.Fatalf("CreatedAt = %v, want timestamp after %v", ev.CreatedAt, before)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("ErrorEvents did not receive error event")
+	}
+}
+
 func TestAgentSessionGenerateReplyAddsUserInputToChatContext(t *testing.T) {
 	agent := NewAgent("test")
 	session := NewAgentSession(agent, nil, AgentSessionOptions{})

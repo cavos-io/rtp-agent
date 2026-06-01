@@ -98,6 +98,7 @@ func (va *PipelineAgent) vadLoop(stream vad.VADStream) {
 		if err != nil {
 			if err != io.EOF {
 				logger.Logger.Errorw("VAD stream error", err)
+				va.emitError(err, va.vad)
 			}
 			return
 		}
@@ -128,6 +129,7 @@ func (va *PipelineAgent) sttLoop(stream stt.RecognizeStream) {
 		if err != nil {
 			if err != io.EOF {
 				logger.Logger.Errorw("STT stream error", err)
+				va.emitError(err, va.stt)
 			}
 			return
 		}
@@ -170,6 +172,22 @@ func (va *PipelineAgent) sttLoop(stream stt.RecognizeStream) {
 			go va.generateReply()
 		}
 	}
+}
+
+func (va *PipelineAgent) emitError(err error, source any) {
+	if err == nil {
+		return
+	}
+	va.mu.Lock()
+	session := va.session
+	va.mu.Unlock()
+	if session == nil {
+		return
+	}
+	session.EmitError(ErrorEvent{
+		Error:  err,
+		Source: source,
+	})
 }
 
 func (va *PipelineAgent) generateReply() {
