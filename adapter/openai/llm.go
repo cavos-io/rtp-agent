@@ -94,6 +94,9 @@ func buildOpenAIChatCompletionRequest(model string, chatCtx *llm.ChatContext, op
 			req.ToolChoice = toolChoice
 		}
 	}
+	if responseFormat := buildOpenAIResponseFormat(options.ResponseFormat); responseFormat != nil {
+		req.ResponseFormat = responseFormat
+	}
 
 	applyOpenAIExtraParams(&req, options.ExtraParams)
 	return req
@@ -124,6 +127,43 @@ func buildOpenAIToolChoice(choice llm.ToolChoice) any {
 	default:
 		return nil
 	}
+}
+
+func buildOpenAIResponseFormat(format map[string]any) *openai.ChatCompletionResponseFormat {
+	if len(format) == 0 {
+		return nil
+	}
+	formatType, ok := format["type"].(string)
+	if !ok || formatType == "" {
+		return nil
+	}
+	responseFormat := &openai.ChatCompletionResponseFormat{
+		Type: openai.ChatCompletionResponseFormatType(formatType),
+	}
+	if formatType != string(openai.ChatCompletionResponseFormatTypeJSONSchema) {
+		return responseFormat
+	}
+	jsonSchema, ok := format["json_schema"].(map[string]any)
+	if !ok {
+		return responseFormat
+	}
+	schema := &openai.ChatCompletionResponseFormatJSONSchema{}
+	if name, ok := jsonSchema["name"].(string); ok {
+		schema.Name = name
+	}
+	if description, ok := jsonSchema["description"].(string); ok {
+		schema.Description = description
+	}
+	if strict, ok := jsonSchema["strict"].(bool); ok {
+		schema.Strict = strict
+	}
+	if rawSchema, ok := jsonSchema["schema"]; ok {
+		if data, err := json.Marshal(rawSchema); err == nil {
+			schema.Schema = json.RawMessage(data)
+		}
+	}
+	responseFormat.JSONSchema = schema
+	return responseFormat
 }
 
 func applyOpenAIExtraParams(req *openai.ChatCompletionRequest, params map[string]any) {

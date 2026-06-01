@@ -103,3 +103,36 @@ func TestBuildOpenAIChatCompletionRequestMapsNamedToolChoice(t *testing.T) {
 		t.Fatalf("ToolChoice.Function.Name = %q, want lookup", choice.Function.Name)
 	}
 }
+
+func TestBuildOpenAIChatCompletionRequestMapsResponseFormat(t *testing.T) {
+	req := buildOpenAIChatCompletionRequest("gpt-4o", llm.NewChatContext(), &llm.ChatOptions{
+		ResponseFormat: map[string]any{
+			"type": "json_schema",
+			"json_schema": map[string]any{
+				"name":   "WeatherAnswer",
+				"strict": true,
+				"schema": map[string]any{
+					"type": "object",
+					"properties": map[string]any{
+						"summary": map[string]any{"type": "string"},
+					},
+					"required":             []string{"summary"},
+					"additionalProperties": false,
+				},
+			},
+		},
+	})
+
+	if req.ResponseFormat == nil {
+		t.Fatal("ResponseFormat = nil, want json_schema response format")
+	}
+	if req.ResponseFormat.Type != openaisdk.ChatCompletionResponseFormatTypeJSONSchema {
+		t.Fatalf("ResponseFormat.Type = %q, want json_schema", req.ResponseFormat.Type)
+	}
+	if req.ResponseFormat.JSONSchema == nil {
+		t.Fatal("ResponseFormat.JSONSchema = nil, want schema")
+	}
+	if req.ResponseFormat.JSONSchema.Name != "WeatherAnswer" || !req.ResponseFormat.JSONSchema.Strict {
+		t.Fatalf("ResponseFormat.JSONSchema = %#v, want strict WeatherAnswer", req.ResponseFormat.JSONSchema)
+	}
+}

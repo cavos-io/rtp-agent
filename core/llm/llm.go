@@ -385,6 +385,7 @@ type ChatOptions struct {
 	ToolChoice        ToolChoice
 	ParallelToolCalls bool
 	ExtraParams       map[string]any
+	ResponseFormat    map[string]any
 }
 
 type LLM interface {
@@ -419,6 +420,12 @@ func WithParallelToolCalls(parallel bool) ChatOption {
 func WithExtraParams(params map[string]any) ChatOption {
 	return func(o *ChatOptions) {
 		o.ExtraParams = cloneAnyMap(params)
+	}
+}
+
+func WithResponseFormat(format map[string]any) ChatOption {
+	return func(o *ChatOptions) {
+		o.ResponseFormat = cloneAnyMap(format)
 	}
 }
 
