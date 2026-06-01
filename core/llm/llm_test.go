@@ -123,3 +123,25 @@ func TestRealtimeEventCanCarryGenerationCreated(t *testing.T) {
 		t.Fatalf("Generation = %#v, want user-initiated response", ev.Generation)
 	}
 }
+
+func TestRealtimeEventCanCarryRemoteItemAdded(t *testing.T) {
+	item := &ChatMessage{
+		ID:      "msg_123",
+		Role:    ChatRoleUser,
+		Content: []ChatContent{{Text: "hello"}},
+	}
+	ev := RealtimeEvent{
+		Type: RealtimeEventTypeRemoteItemAdded,
+		RemoteItem: &RemoteItemAddedEvent{
+			PreviousItemID: "prev_123",
+			Item:           item,
+		},
+	}
+
+	if ev.RemoteItem == nil {
+		t.Fatal("RemoteItem = nil, want remote item payload")
+	}
+	if ev.RemoteItem.PreviousItemID != "prev_123" || ev.RemoteItem.Item.GetID() != "msg_123" {
+		t.Fatalf("RemoteItem = %#v, want previous id and chat item", ev.RemoteItem)
+	}
+}

@@ -421,12 +421,84 @@ func openAIRealtimeEvent(ev map[string]any) (llm.RealtimeEvent, bool) {
 				UserInitiated: userInitiated,
 			},
 		}, true
+	case "conversation.item.added", "conversation.item.created":
+		item, ok := ev["item"].(map[string]any)
+		if !ok {
+			return llm.RealtimeEvent{}, false
+		}
+		chatItem, err := openAIRealtimeChatItem(item)
+		if err != nil {
+			return llm.RealtimeEvent{}, false
+		}
+		previousItemID, _ := ev["previous_item_id"].(string)
+		return llm.RealtimeEvent{
+			Type: llm.RealtimeEventTypeRemoteItemAdded,
+			RemoteItem: &llm.RemoteItemAddedEvent{
+				PreviousItemID: previousItemID,
+				Item:           chatItem,
+			},
+		}, true
 	case "input_audio_buffer.speech_started":
 		return llm.RealtimeEvent{Type: llm.RealtimeEventTypeSpeechStarted}, true
 	case "input_audio_buffer.speech_stopped":
 		return llm.RealtimeEvent{Type: llm.RealtimeEventTypeSpeechStopped}, true
 	}
 	return llm.RealtimeEvent{}, false
+}
+
+func openAIRealtimeChatItem(item map[string]any) (llm.ChatItem, error) {
+	itemType, _ := item["type"].(string)
+	switch itemType {
+	case "message":
+		return openAIRealtimeChatMessage(item)
+	default:
+		return nil, fmt.Errorf("unsupported realtime item type %q", itemType)
+	}
+}
+
+func openAIRealtimeChatMessage(item map[string]any) (*llm.ChatMessage, error) {
+	id, _ := item["id"].(string)
+	roleRaw, _ := item["role"].(string)
+	role := llm.ChatRole(roleRaw)
+	switch role {
+	case llm.ChatRoleSystem, llm.ChatRoleDeveloper, llm.ChatRoleUser, llm.ChatRoleAssistant:
+	default:
+		return nil, fmt.Errorf("unsupported realtime message role %q", roleRaw)
+	}
+	contents, _ := item["content"].([]any)
+	return &llm.ChatMessage{
+		ID:      id,
+		Role:    role,
+		Content: openAIRealtimeChatContent(contents),
+	}, nil
+}
+
+func openAIRealtimeChatContent(contents []any) []llm.ChatContent {
+	out := make([]llm.ChatContent, 0, len(contents))
+	for _, content := range contents {
+		part, ok := content.(map[string]any)
+		if !ok {
+			continue
+		}
+		partType, _ := part["type"].(string)
+		switch partType {
+		case "input_text", "output_text":
+			if text, _ := part["text"].(string); text != "" {
+				out = append(out, llm.ChatContent{Text: text})
+			}
+		case "input_image":
+			if imageURL, _ := part["image_url"].(string); imageURL != "" {
+				out = append(out, llm.ChatContent{
+					Image: &llm.ImageContent{Image: imageURL},
+				})
+			}
+		case "input_audio":
+			if transcript, _ := part["transcript"].(string); transcript != "" {
+				out = append(out, llm.ChatContent{Text: transcript})
+			}
+		}
+	}
+	return out
 }
 
 func openAIRealtimeFloatPtr(v any) *float64 {

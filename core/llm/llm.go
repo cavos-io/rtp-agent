@@ -515,12 +515,18 @@ const (
 	RealtimeEventTypeSpeechStopped                    RealtimeEventType = "speech_stopped"
 	RealtimeEventTypeInputAudioTranscriptionCompleted RealtimeEventType = "input_audio_transcription_completed"
 	RealtimeEventTypeGenerationCreated                RealtimeEventType = "generation_created"
+	RealtimeEventTypeRemoteItemAdded                  RealtimeEventType = "remote_item_added"
 	RealtimeEventTypeError                            RealtimeEventType = "error"
 )
 
 type GenerationCreatedEvent struct {
 	ResponseID    string
 	UserInitiated bool
+}
+
+type RemoteItemAddedEvent struct {
+	PreviousItemID string
+	Item           ChatItem
 }
 
 type InputTranscriptionCompleted struct {
@@ -536,6 +542,7 @@ type RealtimeEvent struct {
 	Text               string // For text deltas
 	Function           *FunctionToolCall
 	Generation         *GenerationCreatedEvent
+	RemoteItem         *RemoteItemAddedEvent
 	InputTranscription *InputTranscriptionCompleted
 	Error              error
 }

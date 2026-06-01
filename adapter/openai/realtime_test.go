@@ -197,3 +197,37 @@ func TestRealtimeEventMapsResponseCreated(t *testing.T) {
 		t.Fatalf("Generation = %#v, want user-initiated response", ev.Generation)
 	}
 }
+
+func TestRealtimeEventMapsConversationItemAddedMessage(t *testing.T) {
+	ev, ok := openAIRealtimeEvent(map[string]any{
+		"type":             "conversation.item.added",
+		"previous_item_id": "prev_123",
+		"item": map[string]any{
+			"id":   "msg_123",
+			"type": "message",
+			"role": "user",
+			"content": []any{
+				map[string]any{"type": "input_text", "text": "hello"},
+			},
+		},
+	})
+	if !ok {
+		t.Fatal("openAIRealtimeEvent returned ok=false, want remote item event")
+	}
+	if ev.Type != llm.RealtimeEventTypeRemoteItemAdded {
+		t.Fatalf("event type = %q, want remote item added", ev.Type)
+	}
+	if ev.RemoteItem == nil {
+		t.Fatal("RemoteItem = nil, want remote item payload")
+	}
+	if ev.RemoteItem.PreviousItemID != "prev_123" {
+		t.Fatalf("PreviousItemID = %q, want prev_123", ev.RemoteItem.PreviousItemID)
+	}
+	msg, ok := ev.RemoteItem.Item.(*llm.ChatMessage)
+	if !ok {
+		t.Fatalf("RemoteItem.Item = %T, want *llm.ChatMessage", ev.RemoteItem.Item)
+	}
+	if msg.ID != "msg_123" || msg.Role != llm.ChatRoleUser || msg.TextContent() != "hello" {
+		t.Fatalf("message = %#v, want user text message", msg)
+	}
+}
