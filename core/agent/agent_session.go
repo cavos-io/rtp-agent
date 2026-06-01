@@ -97,6 +97,7 @@ type AgentSession struct {
 	speechCreatedCh     chan SpeechCreatedEvent
 	conversationItemCh  chan ConversationItemAddedEvent
 	functionToolsCh     chan FunctionToolsExecutedEvent
+	metricsCollectedCh  chan MetricsCollectedEvent
 	sipDTMFCh           chan SipDTMFEvent
 	closeCh             chan CloseEvent
 }
@@ -151,6 +152,7 @@ func NewAgentSession(agent AgentInterface, room *lksdk.Room, opts AgentSessionOp
 		speechCreatedCh:     make(chan SpeechCreatedEvent, 10),
 		conversationItemCh:  make(chan ConversationItemAddedEvent, 10),
 		functionToolsCh:     make(chan FunctionToolsExecutedEvent, 10),
+		metricsCollectedCh:  make(chan MetricsCollectedEvent, 10),
 		sipDTMFCh:           make(chan SipDTMFEvent, 10),
 	}
 }
@@ -283,6 +285,38 @@ func (s *AgentSession) functionToolsExecutedEvents() chan FunctionToolsExecutedE
 		s.functionToolsCh = make(chan FunctionToolsExecutedEvent, 10)
 	}
 	return s.functionToolsCh
+}
+
+func (s *AgentSession) MetricsCollectedEvents() <-chan MetricsCollectedEvent {
+	return s.metricsCollectedEvents()
+}
+
+func (s *AgentSession) EmitMetricsCollected(metrics telemetry.AgentMetrics) {
+	if metrics == nil {
+		return
+	}
+	if s.MetricsCollector != nil {
+		s.MetricsCollector.Collect(metrics)
+	}
+	ch := s.metricsCollectedEvents()
+	ev := MetricsCollectedEvent{
+		Metrics:   metrics,
+		CreatedAt: time.Now(),
+	}
+	select {
+	case ch <- ev:
+	default:
+	}
+}
+
+func (s *AgentSession) metricsCollectedEvents() chan MetricsCollectedEvent {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.metricsCollectedCh == nil {
+		s.metricsCollectedCh = make(chan MetricsCollectedEvent, 10)
+	}
+	return s.metricsCollectedCh
 }
 
 func (s *AgentSession) SipDTMFEvents() <-chan SipDTMFEvent {
