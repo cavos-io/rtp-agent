@@ -136,12 +136,19 @@ func (va *PipelineAgent) sttLoop(stream stt.RecognizeStream) {
 			transcript := ev.Alternatives[0].Text
 			logger.Logger.Infow("Final transcript", "text", transcript)
 
-			va.chatCtx.Append(&llm.ChatMessage{
+			msg := &llm.ChatMessage{
 				Role: llm.ChatRoleUser,
 				Content: []llm.ChatContent{
 					{Text: transcript},
 				},
-			})
+			}
+			va.chatCtx.Append(msg)
+			va.mu.Lock()
+			session := va.session
+			va.mu.Unlock()
+			if session != nil {
+				session.EmitConversationItemAdded(msg)
+			}
 
 			go va.generateReply()
 		}
@@ -181,8 +188,6 @@ func (va *PipelineAgent) generateReply() {
 			return
 		}
 
-		toolOutCh := PerformToolExecutions(ctx, genData.FunctionCh, toolCtx)
-
 		// Start TTS in parallel with LLM text
 		ttsGen, err := PerformTTSInference(ctx, va.tts, genData.TextCh)
 		if err != nil {
@@ -216,6 +221,8 @@ func (va *PipelineAgent) generateReply() {
 		if len(genData.GeneratedFunctions) > 0 {
 			session.UpdateAgentState(AgentStateThinking)
 		}
+
+		toolOutCh := PerformToolExecutions(ctx, genData.FunctionCh, toolCtx)
 
 		// Wait for tool executions to complete and collect results
 		var executedTools bool

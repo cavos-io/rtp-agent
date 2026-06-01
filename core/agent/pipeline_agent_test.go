@@ -9,7 +9,9 @@ import (
 	"time"
 
 	"github.com/cavos-io/rtp-agent/core/llm"
+	"github.com/cavos-io/rtp-agent/core/stt"
 	"github.com/cavos-io/rtp-agent/core/tts"
+	"github.com/cavos-io/rtp-agent/model"
 )
 
 func TestPipelineAgentGenerateReplyAddsAssistantMessageWithExtra(t *testing.T) {
@@ -80,6 +82,40 @@ func TestPipelineAgentEmitsConversationItemAddedForAssistantMessage(t *testing.T
 		}
 	case <-time.After(time.Second):
 		t.Fatal("ConversationItemAddedEvents did not receive assistant message")
+	}
+}
+
+func TestPipelineAgentEmitsConversationItemAddedForUserTranscript(t *testing.T) {
+	chatCtx := llm.NewChatContext()
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	agent := NewPipelineAgent(nil, nil, &fakeGenerationLLM{
+		stream: &fakeGenerationLLMStream{},
+	}, &fakePipelineTTS{}, chatCtx)
+	agent.session = session
+	agent.ctx = context.Background()
+	stream := &fakePipelineRecognizeStream{
+		events: []*stt.SpeechEvent{{
+			Type:         stt.SpeechEventFinalTranscript,
+			Alternatives: []stt.SpeechData{{Text: "hello from user"}},
+		}},
+	}
+
+	agent.sttLoop(stream)
+
+	select {
+	case ev := <-session.ConversationItemAddedEvents():
+		msg, ok := ev.Item.(*llm.ChatMessage)
+		if !ok {
+			t.Fatalf("event item = %T, want *llm.ChatMessage", ev.Item)
+		}
+		if msg.Role != llm.ChatRoleUser || msg.TextContent() != "hello from user" {
+			t.Fatalf("event message = %#v, want user transcript", msg)
+		}
+		if len(chatCtx.Items) == 0 || chatCtx.Items[0] != msg {
+			t.Fatalf("event item was not the committed user chat item")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("ConversationItemAddedEvents did not receive user transcript")
 	}
 }
 
@@ -298,4 +334,24 @@ func currentAgentState(session *AgentSession) AgentState {
 	session.mu.Lock()
 	defer session.mu.Unlock()
 	return session.AgentState
+}
+
+type fakePipelineRecognizeStream struct {
+	events []*stt.SpeechEvent
+	index  int
+}
+
+func (f *fakePipelineRecognizeStream) PushFrame(*model.AudioFrame) error { return nil }
+
+func (f *fakePipelineRecognizeStream) Flush() error { return nil }
+
+func (f *fakePipelineRecognizeStream) Close() error { return nil }
+
+func (f *fakePipelineRecognizeStream) Next() (*stt.SpeechEvent, error) {
+	if f.index >= len(f.events) {
+		return nil, io.EOF
+	}
+	ev := f.events[f.index]
+	f.index++
+	return ev, nil
 }
