@@ -38,17 +38,18 @@ const (
 	WorkerTypeRoom      WorkerType = "room"
 	WorkerTypePublisher WorkerType = "publisher"
 
-	defaultWorkerVersion  = "1.0.0"
-	defaultMaxRetry       = 16
-	defaultJobMemoryWarn  = 500
-	defaultDrainTimeout   = 1800
-	defaultSessionEnd     = 300
-	defaultProcessTimeout = 10
-	defaultLoadThreshold  = 0.7
-	defaultProdLogLevel   = "INFO"
-	defaultDevLogLevel    = "DEBUG"
-	defaultProdHTTPPort   = 8081
-	defaultDevHTTPPort    = 0
+	defaultWorkerVersion     = "1.0.0"
+	defaultMaxRetry          = 16
+	defaultJobMemoryWarn     = 500
+	defaultDrainTimeout      = 1800
+	defaultSessionEnd        = 300
+	defaultProcessTimeout    = 10
+	localEntrypointCloseWait = 15 * time.Second
+	defaultLoadThreshold     = 0.7
+	defaultProdLogLevel      = "INFO"
+	defaultDevLogLevel       = "DEBUG"
+	defaultProdHTTPPort      = 8081
+	defaultDevHTTPPort       = 0
 
 	participantAttributeAgentName = "lk.agent.name"
 )
@@ -357,19 +358,25 @@ func (s *AgentServer) launchReloadedJob(ctx context.Context, jobCtx *JobContext)
 
 	go func() {
 		status := livekit.JobStatus_JS_SUCCESS
+		defer func() {
+			if recovered := recover(); recovered != nil {
+				logger.Logger.Errorw("Reloaded job entrypoint panicked", fmt.Errorf("%v", recovered), "jobId", jobCtx.JobID())
+				status = livekit.JobStatus_JS_FAILED
+			}
+			select {
+			case <-ctx.Done():
+				logger.Logger.Debugw("reload job status skipped after context cancellation", "jobId", jobCtx.JobID())
+			default:
+				if err := s.sendWorkerMessage(jobStatusMessage(jobCtx.JobID(), status)); err != nil {
+					logger.Logger.Errorw("failed to update reloaded job status", err, "jobId", jobCtx.JobID())
+				}
+			}
+			s.finishJob(jobCtx)
+		}()
 		if err := s.entrypointFnc(jobCtx); err != nil {
 			logger.Logger.Errorw("Reloaded job entrypoint failed", err, "jobId", jobCtx.JobID())
 			status = livekit.JobStatus_JS_FAILED
 		}
-		select {
-		case <-ctx.Done():
-			logger.Logger.Debugw("reload job status skipped after context cancellation", "jobId", jobCtx.JobID())
-		default:
-			if err := s.sendWorkerMessage(jobStatusMessage(jobCtx.JobID(), status)); err != nil {
-				logger.Logger.Errorw("failed to update reloaded job status", err, "jobId", jobCtx.JobID())
-			}
-		}
-		s.finishJob(jobCtx)
 	}()
 }
 
@@ -1625,6 +1632,7 @@ func (s *AgentServer) ExecuteLocalJobWithOptions(ctx context.Context, roomName s
 	_ = jobCtx.AddShutdownCallback(func() {
 		close(shutdownCh)
 	})
+	entrypointDone := make(chan struct{})
 
 	// For local execution, we want to connect immediately
 	// For basic parity, we just trigger the entrypoint directly.
@@ -1636,6 +1644,7 @@ func (s *AgentServer) ExecuteLocalJobWithOptions(ctx context.Context, roomName s
 	if s.entrypointFnc != nil {
 		go func() {
 			defer func() {
+				defer close(entrypointDone)
 				if recovered := recover(); recovered != nil {
 					logger.Logger.Errorw("Local job entrypoint panicked", fmt.Errorf("%v", recovered), "jobId", jobCtx.Job.Id)
 					jobCtx.Shutdown("job crashed")
@@ -1651,6 +1660,8 @@ func (s *AgentServer) ExecuteLocalJobWithOptions(ctx context.Context, roomName s
 	// Block until the local job is canceled or the job context shuts down.
 	select {
 	case <-ctx.Done():
+		jobCtx.Shutdown("")
+		waitForLocalEntrypoint(entrypointDone)
 	case <-shutdownCh:
 	}
 	s.finishJob(jobCtx)
@@ -1658,6 +1669,16 @@ func (s *AgentServer) ExecuteLocalJobWithOptions(ctx context.Context, roomName s
 		return saveSessionReport(options.SessionReportPath, jobCtx.Report)
 	}
 	return nil
+}
+
+func waitForLocalEntrypoint(done <-chan struct{}) {
+	timer := time.NewTimer(localEntrypointCloseWait)
+	defer timer.Stop()
+	select {
+	case <-done:
+	case <-timer.C:
+		logger.Logger.Warnw("local job entrypoint did not exit in time", nil)
+	}
 }
 
 func (s *AgentServer) finishJob(jobCtx *JobContext) {

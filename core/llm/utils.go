@@ -355,6 +355,43 @@ func CollectStream(stream LLMStream) (*CollectedResponse, error) {
 	}, nil
 }
 
+type TextStream struct {
+	stream LLMStream
+	closed bool
+}
+
+func NewTextStream(stream LLMStream) (*TextStream, error) {
+	if stream == nil {
+		return nil, fmt.Errorf("llm stream is nil")
+	}
+	return &TextStream{stream: stream}, nil
+}
+
+func (s *TextStream) Next() (string, error) {
+	if s == nil || s.stream == nil {
+		return "", fmt.Errorf("llm text stream is nil")
+	}
+	for {
+		chunk, err := s.stream.Next()
+		if err != nil {
+			_ = s.Close()
+			return "", err
+		}
+		if chunk == nil || chunk.Delta == nil || chunk.Delta.Content == "" {
+			continue
+		}
+		return chunk.Delta.Content, nil
+	}
+}
+
+func (s *TextStream) Close() error {
+	if s == nil || s.stream == nil || s.closed {
+		return nil
+	}
+	s.closed = true
+	return s.stream.Close()
+}
+
 func ExecuteFunctionCall(ctx context.Context, toolCall *FunctionToolCall, toolCtx *ToolContext) FunctionCallResult {
 	args := toolCall.Arguments
 	if args == "" {

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"sync"
 	"time"
 
@@ -154,12 +155,17 @@ func (p *ProcPool) ActiveJobs() []RunningJobInfo {
 		if runningJob == nil {
 			continue
 		}
-		jobs = append(jobs, *runningJob)
+		jobs = append(jobs, cloneRunningJobInfo(*runningJob))
 	}
 	p.mu.Unlock()
 
 	p.emitMany(ProcPoolEventProcessClosed, closedExecutors)
 	return jobs
+}
+
+func cloneRunningJobInfo(info RunningJobInfo) RunningJobInfo {
+	info.AcceptArguments.Attributes = maps.Clone(info.AcceptArguments.Attributes)
+	return info
 }
 
 func (p *ProcPool) SetCloseTimeout(timeout time.Duration) {

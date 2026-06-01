@@ -247,6 +247,65 @@ func TestProcessJobExecutorCloseWaitsForProcessExit(t *testing.T) {
 	}
 }
 
+func TestProcessJobExecutorCloseRespectsContextWhenKillBlocks(t *testing.T) {
+	oldCommandContext := processCommandContext
+	oldKill := processKill
+	processCommandContext = func(ctx context.Context, name string, args ...string) *exec.Cmd {
+		return exec.CommandContext(ctx, "sleep", "10")
+	}
+	killStarted := make(chan struct{})
+	releaseKill := make(chan struct{})
+	processKill = func(*os.Process) error {
+		close(killStarted)
+		<-releaseKill
+		return nil
+	}
+	defer func() {
+		processCommandContext = oldCommandContext
+		processKill = oldKill
+		close(releaseKill)
+	}()
+
+	executor := NewProcessJobExecutor("exec-process-close-blocked-kill")
+	if err := executor.LaunchJob(context.Background(), &livekit.Job{Id: "job-process-close-blocked-kill"}); err != nil {
+		t.Fatalf("LaunchJob() error = %v", err)
+	}
+	waitForProcessExecutorCommand(t, executor)
+	defer func() {
+		executor.mu.Lock()
+		cmd := executor.cmd
+		executor.mu.Unlock()
+		if cmd != nil && cmd.Process != nil {
+			_ = oldKill(cmd.Process)
+		}
+	}()
+
+	closeCtx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
+	defer cancel()
+	closeDone := make(chan error, 1)
+	go func() {
+		closeDone <- executor.Close(closeCtx)
+	}()
+
+	select {
+	case <-killStarted:
+	case <-time.After(time.Second):
+		t.Fatal("process kill did not start")
+	}
+
+	select {
+	case err := <-closeDone:
+		if !errors.Is(err, context.DeadlineExceeded) {
+			t.Fatalf("Close() error = %v, want context deadline exceeded", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Close() did not return after context deadline while process kill was blocked")
+	}
+	if got := executor.Status(); got != JobStatusFailed {
+		t.Fatalf("Status() after close kill timeout = %q, want %q", got, JobStatusFailed)
+	}
+}
+
 func TestProcessJobExecutorLaunchExecutableFailureDoesNotStart(t *testing.T) {
 	oldExecutable := processExecutable
 	processExecutable = func() (string, error) {

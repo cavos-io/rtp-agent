@@ -404,6 +404,73 @@ func TestCollectStreamRejectsNilStream(t *testing.T) {
 	}
 }
 
+func TestTextStreamYieldsOnlyTextDeltasAndCloses(t *testing.T) {
+	stream := &fakeCollectStream{events: []fakeCollectEvent{
+		{chunk: &ChatChunk{Delta: &ChoiceDelta{Content: "hello"}}},
+		{chunk: &ChatChunk{Delta: &ChoiceDelta{ToolCalls: []FunctionToolCall{{Name: "lookup"}}}}},
+		{chunk: &ChatChunk{Usage: &CompletionUsage{TotalTokens: 2}}},
+		{chunk: &ChatChunk{Delta: &ChoiceDelta{Content: " world"}}},
+	}}
+	textStream, err := NewTextStream(stream)
+	if err != nil {
+		t.Fatalf("NewTextStream() error = %v", err)
+	}
+
+	first, err := textStream.Next()
+	if err != nil {
+		t.Fatalf("first Next() error = %v", err)
+	}
+	if first != "hello" {
+		t.Fatalf("first text = %q, want hello", first)
+	}
+	second, err := textStream.Next()
+	if err != nil {
+		t.Fatalf("second Next() error = %v", err)
+	}
+	if second != " world" {
+		t.Fatalf("second text = %q, want world delta", second)
+	}
+	if _, err := textStream.Next(); !errors.Is(err, io.EOF) {
+		t.Fatalf("final Next() error = %v, want EOF", err)
+	}
+	if !stream.closed {
+		t.Fatal("stream was not closed")
+	}
+}
+
+func TestTextStreamClosesAndReturnsStreamError(t *testing.T) {
+	streamErr := errors.New("stream failed")
+	stream := &fakeCollectStream{events: []fakeCollectEvent{
+		{chunk: &ChatChunk{Delta: &ChoiceDelta{Content: "hello"}}},
+		{err: streamErr},
+	}}
+	textStream, err := NewTextStream(stream)
+	if err != nil {
+		t.Fatalf("NewTextStream() error = %v", err)
+	}
+
+	if text, err := textStream.Next(); err != nil || text != "hello" {
+		t.Fatalf("first Next() = (%q, %v), want hello nil", text, err)
+	}
+	if _, err := textStream.Next(); !errors.Is(err, streamErr) {
+		t.Fatalf("second Next() error = %v, want stream failure", err)
+	}
+	if !stream.closed {
+		t.Fatal("stream was not closed after error")
+	}
+}
+
+func TestNewTextStreamRejectsNilStream(t *testing.T) {
+	textStream, err := NewTextStream(nil)
+
+	if err == nil {
+		t.Fatal("NewTextStream(nil) error = nil, want error")
+	}
+	if textStream != nil {
+		t.Fatalf("NewTextStream(nil) stream = %#v, want nil", textStream)
+	}
+}
+
 type recordingTool struct {
 	name   string
 	args   string

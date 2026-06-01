@@ -804,7 +804,13 @@ func TestWatcherStoresActiveJobsForCurrentReload(t *testing.T) {
 		t.Fatalf("reloadJobsResponse() stale jobs len = %d, want 0", len(got.Jobs))
 	}
 
-	currentJobs := []ipc.RunningJobInfo{{Job: &livekit.Job{Id: "job-current"}, Token: "current-token"}}
+	currentJobs := []ipc.RunningJobInfo{{
+		Job:   &livekit.Job{Id: "job-current"},
+		Token: "current-token",
+		AcceptArguments: ipc.JobAcceptArguments{
+			Attributes: map[string]string{"tier": "gold"},
+		},
+	}}
 	if !watcher.recordActiveJobsResponse(ipc.ActiveJobsResponse{Jobs: currentJobs, ReloadCount: 2}) {
 		t.Fatal("recordActiveJobsResponse() rejected current reload count")
 	}
@@ -823,6 +829,11 @@ func TestWatcherStoresActiveJobsForCurrentReload(t *testing.T) {
 	resp.Jobs[0].Token = "mutated"
 	if got := watcher.reloadJobsResponse(); got.Jobs[0].Token != "current-token" {
 		t.Fatalf("mutating ReloadJobsResponse changed stored token to %q", got.Jobs[0].Token)
+	}
+
+	resp.Jobs[0].AcceptArguments.Attributes["tier"] = "platinum"
+	if got := watcher.reloadJobsResponse(); got.Jobs[0].AcceptArguments.Attributes["tier"] != "gold" {
+		t.Fatalf("mutating ReloadJobsResponse attributes changed stored tier to %q", got.Jobs[0].AcceptArguments.Attributes["tier"])
 	}
 }
 

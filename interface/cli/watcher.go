@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"maps"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -163,7 +164,7 @@ func (w *Watcher) recordActiveJobsResponse(resp ipc.ActiveJobsResponse) bool {
 	if w.cliArgs != nil && resp.ReloadCount != w.cliArgs.ReloadCount {
 		return false
 	}
-	w.activeJobs = append([]ipc.RunningJobInfo(nil), resp.Jobs...)
+	w.activeJobs = cloneRunningJobs(resp.Jobs)
 	if w.reloadJobs != nil {
 		close(w.reloadJobs)
 		w.reloadJobs = nil
@@ -179,9 +180,18 @@ func (w *Watcher) reloadJobsResponse() ipc.ReloadJobsResponse {
 		reloadCount = w.cliArgs.ReloadCount
 	}
 	return ipc.ReloadJobsResponse{
-		Jobs:        append([]ipc.RunningJobInfo(nil), w.activeJobs...),
+		Jobs:        cloneRunningJobs(w.activeJobs),
 		ReloadCount: reloadCount,
 	}
+}
+
+func cloneRunningJobs(jobs []ipc.RunningJobInfo) []ipc.RunningJobInfo {
+	cloned := make([]ipc.RunningJobInfo, len(jobs))
+	for i, job := range jobs {
+		job.AcceptArguments.Attributes = maps.Clone(job.AcceptArguments.Attributes)
+		cloned[i] = job
+	}
+	return cloned
 }
 
 func (w *Watcher) setReloadIPC(out io.Writer) {

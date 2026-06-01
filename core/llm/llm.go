@@ -591,6 +591,7 @@ const (
 	RealtimeEventTypeSpeechStopped                    RealtimeEventType = "speech_stopped"
 	RealtimeEventTypeInputAudioTranscriptionCompleted RealtimeEventType = "input_audio_transcription_completed"
 	RealtimeEventTypeGenerationCreated                RealtimeEventType = "generation_created"
+	RealtimeEventTypeSessionReconnected               RealtimeEventType = "session_reconnected"
 	RealtimeEventTypeRemoteItemAdded                  RealtimeEventType = "remote_item_added"
 	RealtimeEventTypeMetricsCollected                 RealtimeEventType = "metrics_collected"
 	RealtimeEventTypeError                            RealtimeEventType = "error"
@@ -615,6 +616,8 @@ type RemoteItemAddedEvent struct {
 	Item           ChatItem
 }
 
+type RealtimeSessionReconnectedEvent struct{}
+
 type InputTranscriptionCompleted struct {
 	ItemID       string
 	ContentIndex int
@@ -636,6 +639,7 @@ type RealtimeEvent struct {
 	Function           *FunctionToolCall
 	Generation         *GenerationCreatedEvent
 	RemoteItem         *RemoteItemAddedEvent
+	Reconnect          *RealtimeSessionReconnectedEvent
 	InputTranscription *InputTranscriptionCompleted
 	SpeechStopped      *InputSpeechStoppedEvent
 	Metrics            *telemetry.RealtimeModelMetrics
