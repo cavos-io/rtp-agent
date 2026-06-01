@@ -638,6 +638,41 @@ func TestSimpleVADUpdateOptionsRelaxesMaxBufferedSpeech(t *testing.T) {
 	assertCombinedFrames(t, end.Frames, firstSpeech, thirdSpeech, silence)
 }
 
+func TestSimpleVADUpdateOptionsDoesNotRecoverDroppedPendingSpeech(t *testing.T) {
+	detector := NewSimpleVADWithOptions(SimpleVADOptions{
+		Threshold:                 0.05,
+		MinSpeechDuration:         0.04,
+		MaxBufferedSpeechDuration: 0.02,
+	})
+	stream, err := detector.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	defer stream.Close()
+
+	firstSpeech := audioFrame(16000, 160, 6000)
+	secondSpeech := audioFrame(16000, 160, 7000)
+	droppedSpeech := audioFrame(16000, 160, 8000)
+	fourthSpeech := audioFrame(16000, 160, 9000)
+	for _, frame := range []*model.AudioFrame{firstSpeech, secondSpeech, droppedSpeech} {
+		if err := stream.PushFrame(frame); err != nil {
+			t.Fatalf("PushFrame() speech error = %v", err)
+		}
+		assertEventType(t, stream, VADEventInferenceDone)
+	}
+
+	detector.UpdateOptions(SimpleVADOptions{MaxBufferedSpeechDuration: 0.04})
+	if err := stream.PushFrame(fourthSpeech); err != nil {
+		t.Fatalf("PushFrame() fourth speech error = %v", err)
+	}
+	assertEventType(t, stream, VADEventInferenceDone)
+	start := nextVADEvent(t, stream)
+	if start.Type != VADEventStartOfSpeech {
+		t.Fatalf("event type = %s, want %s", start.Type, VADEventStartOfSpeech)
+	}
+	assertCombinedFrames(t, start.Frames, firstSpeech, secondSpeech, fourthSpeech)
+}
+
 func TestSimpleVADUpdateOptionsShrinksBufferedSpeech(t *testing.T) {
 	detector := NewSimpleVADWithOptions(SimpleVADOptions{
 		Threshold:                 0.05,
@@ -1402,6 +1437,66 @@ func TestSimpleVADRequiresMinimumSpeechDurationBeforeStart(t *testing.T) {
 		t.Fatalf("SpeechDuration = %v, want 0.03", start.SpeechDuration)
 	}
 	assertCombinedFrames(t, start.Frames, firstSpeech, secondSpeech, thirdSpeech)
+}
+
+func TestSimpleVADPreStartSpeechIncrementsSilenceDuration(t *testing.T) {
+	stream, err := NewSimpleVADWithOptions(SimpleVADOptions{
+		Threshold:         0.05,
+		MinSpeechDuration: 0.03,
+	}).Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	defer stream.Close()
+
+	for i := range 3 {
+		if err := stream.PushFrame(audioFrame(16000, 160, 6000)); err != nil {
+			t.Fatalf("PushFrame() error = %v", err)
+		}
+		inference := nextVADEvent(t, stream)
+		if inference.Type != VADEventInferenceDone {
+			t.Fatalf("event %d type = %s, want %s", i, inference.Type, VADEventInferenceDone)
+		}
+		wantSilenceDuration := float64(i+1) * 0.01
+		if inference.SilenceDuration != wantSilenceDuration {
+			t.Fatalf("event %d SilenceDuration = %v, want %v", i, inference.SilenceDuration, wantSilenceDuration)
+		}
+	}
+	assertEventType(t, stream, VADEventStartOfSpeech)
+}
+
+func TestSimpleVADShortSpeechSilenceInferenceUsesPreTransitionThresholds(t *testing.T) {
+	stream, err := NewSimpleVADWithOptions(SimpleVADOptions{
+		Threshold:         0.05,
+		MinSpeechDuration: 0.03,
+	}).Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	defer stream.Close()
+
+	if err := stream.PushFrame(audioFrame(16000, 160, 6000)); err != nil {
+		t.Fatalf("PushFrame() speech error = %v", err)
+	}
+	if err := stream.PushFrame(audioFrame(16000, 160, 0)); err != nil {
+		t.Fatalf("PushFrame() silence error = %v", err)
+	}
+
+	assertEventType(t, stream, VADEventInferenceDone)
+	inference := nextVADEvent(t, stream)
+	if inference.Type != VADEventInferenceDone {
+		t.Fatalf("event type = %s, want %s", inference.Type, VADEventInferenceDone)
+	}
+	if inference.SilenceDuration != 0.02 {
+		t.Fatalf("SilenceDuration = %v, want 0.02", inference.SilenceDuration)
+	}
+	if inference.RawAccumulatedSpeech != 0.01 {
+		t.Fatalf("RawAccumulatedSpeech = %v, want 0.01", inference.RawAccumulatedSpeech)
+	}
+	if inference.RawAccumulatedSilence != 0 {
+		t.Fatalf("RawAccumulatedSilence = %v, want 0", inference.RawAccumulatedSilence)
+	}
+	assertNoVADEvent(t, stream)
 }
 
 func TestSimpleVADDropsSpeechShorterThanMinimumDuration(t *testing.T) {

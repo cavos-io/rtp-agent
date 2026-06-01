@@ -132,6 +132,13 @@ type MetricsCollectedEvent struct {
 
 func (e *MetricsCollectedEvent) GetType() string { return "metrics_collected" }
 
+type SessionUsageUpdatedEvent struct {
+	Usage     telemetry.UsageSummary
+	CreatedAt time.Time
+}
+
+func (e *SessionUsageUpdatedEvent) GetType() string { return "session_usage_updated" }
+
 type ErrorEvent struct {
 	Error     error
 	Source    any

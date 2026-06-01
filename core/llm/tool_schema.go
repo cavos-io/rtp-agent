@@ -67,6 +67,9 @@ func GenerateStrictJSONSchema(t reflect.Type) map[string]interface{} {
 		propSchema := goTypeToJSONSchema(field.Type, desc)
 		if enumValues := jsonSchemaEnumValues(field.Tag.Get("enum")); len(enumValues) > 0 {
 			propSchema["enum"] = enumValues
+			if schemaTypeIncludesNull(propSchema) {
+				markSchemaEnumNullable(propSchema)
+			}
 		}
 
 		props[name] = propSchema
@@ -98,19 +101,48 @@ func jsonSchemaEnumValues(tag string) []any {
 	return values
 }
 
+func schemaTypeIncludesNull(schema map[string]interface{}) bool {
+	typeArr, ok := schema["type"].([]string)
+	if !ok {
+		return false
+	}
+	for _, t := range typeArr {
+		if t == "null" {
+			return true
+		}
+	}
+	return false
+}
+
 func markSchemaNullable(schema map[string]interface{}) {
 	if typeArr, ok := schema["type"].([]string); ok {
 		for _, t := range typeArr {
 			if t == "null" {
+				markSchemaEnumNullable(schema)
 				return
 			}
 		}
 		schema["type"] = append(typeArr, "null")
+		markSchemaEnumNullable(schema)
 		return
 	}
 	if typeStr, ok := schema["type"].(string); ok && typeStr != "null" {
 		schema["type"] = []string{typeStr, "null"}
+		markSchemaEnumNullable(schema)
 	}
+}
+
+func markSchemaEnumNullable(schema map[string]interface{}) {
+	enumValues, ok := schema["enum"].([]any)
+	if !ok {
+		return
+	}
+	for _, value := range enumValues {
+		if value == nil {
+			return
+		}
+	}
+	schema["enum"] = append(enumValues, nil)
 }
 
 func appendRequiredField(required []string, name string) []string {

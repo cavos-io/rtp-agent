@@ -72,8 +72,8 @@ For each parity task:
 Common verification commands:
 
 ```sh
-go test ./...
-go build ./...
+scripts/go-test-all.sh
+scripts/go-build-all.sh
 go-arch-lint check
 go-arch-lint mapping
 ```

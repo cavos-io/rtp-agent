@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/cavos-io/rtp-agent/core/llm"
+	"github.com/cavos-io/rtp-agent/library/telemetry"
 )
 
 func TestAgentSessionGenerateReplyReturnsScheduledSpeechHandle(t *testing.T) {
@@ -302,5 +303,50 @@ func TestAgentSessionUpdateUserStateEmitsTypedTimestampedEvent(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("UpdateUserState did not emit an event")
+	}
+}
+
+func TestAgentSessionEmitMetricsCollectedCollectsUsageAndEmitsEvent(t *testing.T) {
+	agent := NewAgent("test")
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	session.MetricsCollector = telemetry.NewUsageCollector()
+	metrics := &telemetry.LLMMetrics{
+		PromptTokens:     7,
+		CompletionTokens: 11,
+	}
+	before := time.Now()
+
+	session.EmitMetricsCollected(metrics)
+
+	if got := session.MetricsCollector.GetSummary(); got.LLMPromptTokens != 7 || got.LLMCompletionTokens != 11 {
+		t.Fatalf("usage summary = %#v, want prompt=7 completion=11", got)
+	}
+	select {
+	case ev := <-session.MetricsCollectedEvents():
+		if ev.GetType() != "metrics_collected" {
+			t.Fatalf("event type = %q, want metrics_collected", ev.GetType())
+		}
+		if ev.Metrics != metrics {
+			t.Fatalf("Metrics = %#v, want original metrics", ev.Metrics)
+		}
+		if ev.CreatedAt.Before(before) || ev.CreatedAt.IsZero() {
+			t.Fatalf("CreatedAt = %v, want timestamp after %v", ev.CreatedAt, before)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("MetricsCollectedEvents did not receive event")
+	}
+	select {
+	case ev := <-session.SessionUsageUpdatedEvents():
+		if ev.GetType() != "session_usage_updated" {
+			t.Fatalf("event type = %q, want session_usage_updated", ev.GetType())
+		}
+		if ev.Usage.LLMPromptTokens != 7 || ev.Usage.LLMCompletionTokens != 11 {
+			t.Fatalf("usage event summary = %#v, want prompt=7 completion=11", ev.Usage)
+		}
+		if ev.CreatedAt.Before(before) || ev.CreatedAt.IsZero() {
+			t.Fatalf("usage event CreatedAt = %v, want timestamp after %v", ev.CreatedAt, before)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("SessionUsageUpdatedEvents did not receive event")
 	}
 }
