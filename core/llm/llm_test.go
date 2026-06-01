@@ -3,6 +3,7 @@ package llm
 import (
 	"testing"
 
+	"github.com/cavos-io/rtp-agent/core/audio/model"
 	"github.com/cavos-io/rtp-agent/library/telemetry"
 	"github.com/cavos-io/rtp-agent/library/utils/images"
 )
@@ -134,9 +135,22 @@ func TestRealtimeEventCanCarryOutputItemMetadata(t *testing.T) {
 }
 
 func TestRealtimeEventCanCarryGenerationCreated(t *testing.T) {
+	messageCh := make(chan MessageGeneration, 1)
+	functionCh := make(chan *FunctionCall, 1)
+	textCh := make(chan string, 1)
+	audioCh := make(chan *model.AudioFrame, 1)
+	modalitiesCh := make(chan []string, 1)
+	messageCh <- MessageGeneration{
+		MessageID:    "msg_123",
+		TextCh:       textCh,
+		AudioCh:      audioCh,
+		ModalitiesCh: modalitiesCh,
+	}
 	ev := RealtimeEvent{
 		Type: RealtimeEventTypeGenerationCreated,
 		Generation: &GenerationCreatedEvent{
+			MessageCh:     messageCh,
+			FunctionCh:    functionCh,
 			ResponseID:    "resp_123",
 			UserInitiated: true,
 		},
@@ -147,6 +161,13 @@ func TestRealtimeEventCanCarryGenerationCreated(t *testing.T) {
 	}
 	if ev.Generation.ResponseID != "resp_123" || !ev.Generation.UserInitiated {
 		t.Fatalf("Generation = %#v, want user-initiated response", ev.Generation)
+	}
+	msg := <-ev.Generation.MessageCh
+	if msg.MessageID != "msg_123" || msg.TextCh != (<-chan string)(textCh) || msg.AudioCh != (<-chan *model.AudioFrame)(audioCh) || msg.ModalitiesCh != (<-chan []string)(modalitiesCh) {
+		t.Fatalf("MessageGeneration = %#v, want stream channels", msg)
+	}
+	if ev.Generation.FunctionCh != (<-chan *FunctionCall)(functionCh) {
+		t.Fatalf("FunctionCh = %#v, want provided function stream", ev.Generation.FunctionCh)
 	}
 }
 
