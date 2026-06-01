@@ -141,6 +141,27 @@ func TestRoomIOHandleChatTextInputDispatchesConfiguredCallback(t *testing.T) {
 	}
 }
 
+func TestRoomIOHandleChatTextInputIgnoresUnlinkedParticipant(t *testing.T) {
+	session := &agent.AgentSession{}
+	called := false
+	rio := &RoomIO{
+		AgentSession: session,
+		Options: RoomOptions{
+			ParticipantIdentity: "linked-user",
+		},
+		textInput: func(context.Context, *agent.AgentSession, TextInputEvent) error {
+			called = true
+			return nil
+		},
+	}
+
+	rio.handleChatTextInput(context.Background(), "ignored", lksdk.TextStreamInfo{}, "other-user")
+
+	if called {
+		t.Fatal("text input callback was called for unlinked participant")
+	}
+}
+
 func TestRoomIOCloseUnregistersPreConnectAudioHandler(t *testing.T) {
 	room := lksdk.NewRoom(nil)
 	rio := NewRoomIO(room, &agent.AgentSession{}, RoomOptions{})

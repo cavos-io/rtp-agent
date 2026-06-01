@@ -108,6 +108,7 @@ type RoomOptions struct {
 	DisablePreConnectAudio bool
 	DisableTextInput       bool
 	TextInputCallback      TextInputCallback
+	ParticipantIdentity    string
 }
 
 const RoomIOChatTopic = "lk.chat"
@@ -231,6 +232,9 @@ func (rio *RoomIO) onChatTextStream(reader *lksdk.TextStreamReader, participantI
 
 func (rio *RoomIO) handleChatTextInput(ctx context.Context, text string, info lksdk.TextStreamInfo, participantIdentity string) {
 	if rio == nil || rio.AgentSession == nil || rio.textInput == nil {
+		return
+	}
+	if rio.Options.ParticipantIdentity != "" && participantIdentity != rio.Options.ParticipantIdentity {
 		return
 	}
 	_ = rio.textInput(ctx, rio.AgentSession, TextInputEvent{
