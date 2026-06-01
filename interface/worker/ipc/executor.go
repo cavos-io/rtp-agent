@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"strings"
@@ -37,6 +38,8 @@ type JobExecutor interface {
 var processExecutable = os.Executable
 var processCommandContext = exec.CommandContext
 var processPingInterval = 2 * time.Second
+var processPingTimeout = 60 * time.Second
+var processNow = time.Now
 var processSignal = func(process *os.Process, signal os.Signal) error {
 	return process.Signal(signal)
 }
@@ -158,7 +161,8 @@ type ProcessJobExecutor struct {
 	runningJob *RunningJobInfo
 	done       chan struct{}
 
-	lastPong time.Time
+	lastPong   time.Time
+	pingWriter io.Writer
 }
 
 func NewProcessJobExecutor(id string) *ProcessJobExecutor {
@@ -197,6 +201,12 @@ func (e *ProcessJobExecutor) RunningJob() *RunningJobInfo {
 
 func (e *ProcessJobExecutor) LaunchJob(ctx context.Context, job *livekit.Job) error {
 	return e.LaunchRunningJob(ctx, RunningJobInfo{Job: job})
+}
+
+func (e *ProcessJobExecutor) HandlePong(PongResponse) {
+	e.mu.Lock()
+	e.lastPong = processNow()
+	e.mu.Unlock()
 }
 
 func (e *ProcessJobExecutor) LaunchRunningJob(ctx context.Context, info RunningJobInfo) error {
@@ -315,18 +325,17 @@ func (e *ProcessJobExecutor) pingTask(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
+			var killProcess *os.Process
+			var pingWriter io.Writer
+			var pingTimestamp int64
+
 			e.mu.Lock()
 			if e.status != JobStatusRunning {
 				e.mu.Unlock()
 				return
 			}
 
-			// In a full implementation, we would send a ping message via a pipe
-			// and wait for a pong.
-			// For basic parity, we'll check if the process is still alive.
-			var killProcess *os.Process
 			if e.cmd != nil && e.cmd.Process != nil {
-				// check if process exists
 				if err := processSignal(e.cmd.Process, syscall.Signal(0)); err != nil {
 					logger.Logger.Warnw("Job process unresponsive", err, "exec_id", e.id)
 					e.status = JobStatusFailed
@@ -336,7 +345,46 @@ func (e *ProcessJobExecutor) pingTask(ctx context.Context) {
 					return
 				}
 			}
+			if e.pingWriter != nil {
+				now := processNow()
+				if !e.lastPong.IsZero() && now.Sub(e.lastPong) > processPingTimeout {
+					logger.Logger.Warnw("Job process missed pong timeout", nil, "exec_id", e.id)
+					e.status = JobStatusFailed
+					if e.cmd != nil {
+						killProcess = e.cmd.Process
+					}
+					e.mu.Unlock()
+					if killProcess != nil {
+						_ = processKill(killProcess)
+					}
+					return
+				}
+				pingWriter = e.pingWriter
+				pingTimestamp = now.UnixMilli()
+			}
 			e.mu.Unlock()
+
+			if pingWriter != nil {
+				msg, err := NewMessage(&PingRequest{Timestamp: pingTimestamp})
+				if err == nil {
+					err = WriteMessage(pingWriter, msg)
+				}
+				if err != nil {
+					logger.Logger.Warnw("Job process ping failed", err, "exec_id", e.id)
+					e.mu.Lock()
+					if e.status == JobStatusRunning {
+						e.status = JobStatusFailed
+					}
+					if e.cmd != nil {
+						killProcess = e.cmd.Process
+					}
+					e.mu.Unlock()
+					if killProcess != nil {
+						_ = processKill(killProcess)
+					}
+					return
+				}
+			}
 		}
 	}
 }

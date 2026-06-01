@@ -228,12 +228,16 @@ func (v *SimpleVAD) Stream(ctx context.Context) (VADStream, error) {
 		vad:          v,
 		ctx:          ctx,
 		options:      options,
+		done:         make(chan struct{}),
 		eventNotify:  make(chan struct{}, 1),
 		lastActivity: time.Now(),
 	}
 	v.mu.Lock()
 	v.streams[stream] = struct{}{}
 	v.mu.Unlock()
+	if ctx.Done() != nil {
+		go stream.unregisterOnContextCancel()
+	}
 	return stream, nil
 }
 
@@ -301,6 +305,8 @@ type simpleVADStream struct {
 	eventNotify                chan struct{}
 	eventMu                    sync.Mutex
 	mu                         sync.Mutex
+	done                       chan struct{}
+	doneOnce                   sync.Once
 }
 
 func (s *simpleVADStream) updateOptions(options SimpleVADOptions) {
@@ -575,6 +581,7 @@ func (s *simpleVADStream) EndInput() error {
 	s.inputEnded = true
 	s.closed = true
 	s.closeEvents(false)
+	s.markDone()
 	s.vad.unregisterStream(s)
 	return nil
 }
@@ -589,8 +596,23 @@ func (s *simpleVADStream) Close() error {
 	s.inputEnded = true
 	s.closed = true
 	s.closeEvents(true)
+	s.markDone()
 	s.vad.unregisterStream(s)
 	return nil
+}
+
+func (s *simpleVADStream) unregisterOnContextCancel() {
+	select {
+	case <-s.ctx.Done():
+		s.vad.unregisterStream(s)
+	case <-s.done:
+	}
+}
+
+func (s *simpleVADStream) markDone() {
+	s.doneOnce.Do(func() {
+		close(s.done)
+	})
 }
 
 func (s *simpleVADStream) contextErr() error {

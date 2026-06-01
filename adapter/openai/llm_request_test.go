@@ -53,6 +53,27 @@ func TestOpenAIChatAppliesConnectOptionsTimeoutToRequestContext(t *testing.T) {
 	}
 }
 
+func TestOpenAIChatAppliesDefaultConnectOptionsTimeoutToRequestContext(t *testing.T) {
+	sentinelErr := errors.New("stop after context capture")
+	capture := &captureDeadlineHTTPClient{err: sentinelErr}
+	config := openaisdk.DefaultConfig("test-key")
+	config.HTTPClient = capture
+	model := NewOpenAILLMWithConfig(config)
+	model.model = "gpt-4o"
+
+	_, err := model.Chat(context.Background(), llm.NewChatContext())
+
+	if !errors.Is(err, sentinelErr) {
+		t.Fatalf("Chat error = %v, want sentinel HTTP client error", err)
+	}
+	if !capture.hasDeadline {
+		t.Fatal("request context has no deadline, want default connect timeout deadline")
+	}
+	if capture.remaining <= 0 || capture.remaining > llm.DefaultAPIConnectOptions().Timeout {
+		t.Fatalf("request context deadline remaining = %v, want bounded by default connect timeout", capture.remaining)
+	}
+}
+
 func TestBuildOpenAIChatCompletionRequestAppliesExtraParams(t *testing.T) {
 	req := buildOpenAIChatCompletionRequest("gpt-4o", llm.NewChatContext(), &llm.ChatOptions{
 		ParallelToolCalls: true,

@@ -70,6 +70,29 @@ func TestWithConnectOptionsStoresOptions(t *testing.T) {
 	}
 }
 
+func TestChatOptionsEffectiveConnectOptionsDefaultsWhenUnset(t *testing.T) {
+	options := &ChatOptions{}
+
+	got, err := options.EffectiveConnectOptions()
+	if err != nil {
+		t.Fatalf("EffectiveConnectOptions() error = %v, want nil", err)
+	}
+	want := DefaultAPIConnectOptions()
+	if got != want {
+		t.Fatalf("EffectiveConnectOptions() = %#v, want default %#v", got, want)
+	}
+}
+
+func TestChatOptionsEffectiveConnectOptionsValidatesConfiguredOptions(t *testing.T) {
+	options := &ChatOptions{
+		ConnectOptions: &APIConnectOptions{Timeout: -time.Nanosecond},
+	}
+
+	if _, err := options.EffectiveConnectOptions(); err == nil {
+		t.Fatal("EffectiveConnectOptions() error = nil, want invalid connect options error")
+	}
+}
+
 func TestWithExtraParamsStoresClone(t *testing.T) {
 	params := map[string]any{
 		"temperature": 0.7,

@@ -2,6 +2,7 @@ package stt
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -72,6 +73,29 @@ func TestSpeechEventCarriesReferenceUsageAndSpeechStartTime(t *testing.T) {
 	}
 	if event.SpeechStartTime == nil || *event.SpeechStartTime != 42.5 {
 		t.Fatalf("SpeechStartTime = %v, want 42.5", event.SpeechStartTime)
+	}
+}
+
+func TestSTTErrorCarriesReferenceErrorPayload(t *testing.T) {
+	underlying := errors.New("provider disconnected")
+	before := time.Now()
+	sttErr := NewSTTError("provider.STT", underlying, true)
+	after := time.Now()
+
+	if sttErr.Type != STTErrorType {
+		t.Fatalf("Type = %q, want %q", sttErr.Type, STTErrorType)
+	}
+	if sttErr.Label != "provider.STT" {
+		t.Fatalf("Label = %q, want provider.STT", sttErr.Label)
+	}
+	if !sttErr.Recoverable {
+		t.Fatal("Recoverable = false, want true")
+	}
+	if !errors.Is(sttErr, underlying) {
+		t.Fatal("STTError does not unwrap the underlying error")
+	}
+	if sttErr.Timestamp.Before(before) || sttErr.Timestamp.After(after) {
+		t.Fatalf("Timestamp = %s, want between %s and %s", sttErr.Timestamp, before, after)
 	}
 }
 

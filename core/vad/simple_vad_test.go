@@ -257,6 +257,34 @@ func TestSimpleVADCloseEndsIterationAfterContextCancel(t *testing.T) {
 	}
 }
 
+func TestSimpleVADContextCancelUnregistersStream(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	detector := NewSimpleVAD(0.05)
+	stream, err := detector.Stream(ctx)
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	defer stream.Close()
+	registeredStreams := func() int {
+		detector.mu.RLock()
+		defer detector.mu.RUnlock()
+		return len(detector.streams)
+	}
+
+	if got := registeredStreams(); got != 1 {
+		t.Fatalf("registered streams before cancel = %d, want 1", got)
+	}
+	cancel()
+
+	deadline := time.Now().Add(time.Second)
+	for registeredStreams() != 0 && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	if got := registeredStreams(); got != 0 {
+		t.Fatalf("registered streams after context cancel = %d, want 0", got)
+	}
+}
+
 func TestSimpleVADEndInputDrainsQueuedEvents(t *testing.T) {
 	stream, err := NewSimpleVAD(0.05).Stream(context.Background())
 	if err != nil {
@@ -390,6 +418,40 @@ func TestSimpleVADUpdateOptionsWithAllowsZeroMinSilenceDuration(t *testing.T) {
 		t.Fatalf("event type = %s, want %s", end.Type, VADEventEndOfSpeech)
 	}
 	assertCombinedFrames(t, end.Frames, speech, silence)
+}
+
+func TestSimpleVADUpdateOptionsWithAllowsZeroPrefixPadding(t *testing.T) {
+	detector := NewSimpleVADWithOptions(SimpleVADOptions{
+		Threshold:             0.05,
+		MinSpeechDuration:     0.02,
+		PrefixPaddingDuration: 0.02,
+	})
+	stream, err := detector.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	defer stream.Close()
+
+	prefix := audioFrame(16000, 160, 0)
+	if err := stream.PushFrame(prefix); err != nil {
+		t.Fatalf("PushFrame() prefix error = %v", err)
+	}
+	assertEventType(t, stream, VADEventInferenceDone)
+
+	detector.UpdateOptionsWith(WithPrefixPaddingDuration(0))
+	firstSpeech := audioFrame(16000, 160, 6000)
+	secondSpeech := audioFrame(16000, 160, 7000)
+	for _, frame := range []*model.AudioFrame{firstSpeech, secondSpeech} {
+		if err := stream.PushFrame(frame); err != nil {
+			t.Fatalf("PushFrame() speech error = %v", err)
+		}
+		assertEventType(t, stream, VADEventInferenceDone)
+	}
+	start := nextVADEvent(t, stream)
+	if start.Type != VADEventStartOfSpeech {
+		t.Fatalf("event type = %s, want %s", start.Type, VADEventStartOfSpeech)
+	}
+	assertCombinedFrames(t, start.Frames, firstSpeech, secondSpeech)
 }
 
 func TestSimpleVADUpdateOptionsWithAllowsZeroMaxBufferedSpeech(t *testing.T) {
@@ -1227,6 +1289,44 @@ func TestSimpleVADUpdateOptionsWithIgnoresInvalidDeactivationThreshold(t *testin
 	if simpleStream.options.DeactivationThreshold != 0.05 {
 		t.Fatalf("stream deactivation threshold = %v, want 0.05", simpleStream.options.DeactivationThreshold)
 	}
+}
+
+func TestSimpleVADUpdateOptionsWithAllowsZeroDeactivationThreshold(t *testing.T) {
+	detector := NewSimpleVADWithOptions(SimpleVADOptions{
+		Threshold:             0.1,
+		DeactivationThreshold: 0.05,
+	})
+	stream, err := detector.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	defer stream.Close()
+
+	speech := audioFrame(16000, 160, 6000)
+	if err := stream.PushFrame(speech); err != nil {
+		t.Fatalf("PushFrame() speech error = %v", err)
+	}
+	assertEventType(t, stream, VADEventInferenceDone)
+	assertEventType(t, stream, VADEventStartOfSpeech)
+
+	detector.UpdateOptionsWith(WithDeactivationThreshold(0))
+	dipAboveZero := audioFrame(16000, 160, 1200)
+	if err := stream.PushFrame(dipAboveZero); err != nil {
+		t.Fatalf("PushFrame() dip error = %v", err)
+	}
+	assertEventType(t, stream, VADEventInferenceDone)
+	assertNoQueuedVADEvent(t, stream)
+
+	silence := audioFrame(16000, 160, 0)
+	if err := stream.PushFrame(silence); err != nil {
+		t.Fatalf("PushFrame() silence error = %v", err)
+	}
+	assertEventType(t, stream, VADEventInferenceDone)
+	end := nextVADEvent(t, stream)
+	if end.Type != VADEventEndOfSpeech {
+		t.Fatalf("event type = %s, want %s", end.Type, VADEventEndOfSpeech)
+	}
+	assertCombinedFrames(t, end.Frames, speech, dipAboveZero, silence)
 }
 
 func TestSimpleVADProbabilitySmoothingDelaysSpeechEnd(t *testing.T) {

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/http"
 	"reflect"
 	"strings"
 	"sync"
@@ -363,6 +364,115 @@ type LLMError struct {
 	Recoverable bool
 }
 
+type APIError struct {
+	Message   string
+	Body      any
+	Retryable bool
+}
+
+func NewAPIError(message string, body any, retryable bool) *APIError {
+	return &APIError{
+		Message:   message,
+		Body:      body,
+		Retryable: retryable,
+	}
+}
+
+func (e *APIError) Error() string {
+	if e == nil {
+		return ""
+	}
+	return e.Message
+}
+
+type APIStatusError struct {
+	*APIError
+	StatusCode int
+	RequestID  string
+}
+
+func NewAPIStatusError(message string, statusCode int, requestID string, body any) *APIStatusError {
+	return NewAPIStatusErrorWithRetryable(message, statusCode, requestID, body, apiStatusDefaultRetryable(statusCode))
+}
+
+func NewAPIStatusErrorWithRetryable(message string, statusCode int, requestID string, body any, retryable bool) *APIStatusError {
+	return &APIStatusError{
+		APIError:   NewAPIError(message, body, retryable),
+		StatusCode: statusCode,
+		RequestID:  requestID,
+	}
+}
+
+func CreateAPIErrorFromHTTP(message string, statusCode int, requestID string, body any) *APIStatusError {
+	reason := http.StatusText(statusCode)
+	if reason == "" {
+		reason = fmt.Sprintf("HTTP %d", statusCode)
+	}
+	display := fmt.Sprintf("%s (%d)", reason, statusCode)
+	if message != "" && message != reason {
+		display = fmt.Sprintf("%s (%d %s)", message, statusCode, reason)
+	}
+	return NewAPIStatusError(display, statusCode, requestID, body)
+}
+
+func (e *APIStatusError) Unwrap() error {
+	if e == nil {
+		return nil
+	}
+	return e.APIError
+}
+
+func apiStatusDefaultRetryable(statusCode int) bool {
+	if statusCode >= 400 && statusCode < 500 {
+		return statusCode == 408 || statusCode == 429 || statusCode == 499
+	}
+	return true
+}
+
+type APIConnectionError struct {
+	*APIError
+}
+
+func NewAPIConnectionError(message string) *APIConnectionError {
+	return NewAPIConnectionErrorWithRetryable(message, true)
+}
+
+func NewAPIConnectionErrorWithRetryable(message string, retryable bool) *APIConnectionError {
+	if message == "" {
+		message = "Connection error."
+	}
+	return &APIConnectionError{APIError: NewAPIError(message, nil, retryable)}
+}
+
+func (e *APIConnectionError) Unwrap() error {
+	if e == nil {
+		return nil
+	}
+	return e.APIError
+}
+
+type APITimeoutError struct {
+	*APIConnectionError
+}
+
+func NewAPITimeoutError(message string) *APITimeoutError {
+	return NewAPITimeoutErrorWithRetryable(message, true)
+}
+
+func NewAPITimeoutErrorWithRetryable(message string, retryable bool) *APITimeoutError {
+	if message == "" {
+		message = "Request timed out."
+	}
+	return &APITimeoutError{APIConnectionError: NewAPIConnectionErrorWithRetryable(message, retryable)}
+}
+
+func (e *APITimeoutError) Unwrap() error {
+	if e == nil {
+		return nil
+	}
+	return e.APIConnectionError
+}
+
 func NewLLMError(label string, err error, recoverable bool) *LLMError {
 	return &LLMError{
 		Type:        "llm_error",
@@ -466,6 +576,16 @@ func (o APIConnectOptions) IntervalForRetry(numRetries int) time.Duration {
 		return 100 * time.Millisecond
 	}
 	return o.RetryInterval
+}
+
+func (o *ChatOptions) EffectiveConnectOptions() (APIConnectOptions, error) {
+	if o == nil || o.ConnectOptions == nil {
+		return DefaultAPIConnectOptions(), nil
+	}
+	if err := o.ConnectOptions.Validate(); err != nil {
+		return APIConnectOptions{}, err
+	}
+	return *o.ConnectOptions, nil
 }
 
 type LLM interface {
@@ -875,17 +995,35 @@ type FallbackAllFailedError struct {
 	Labels   []string
 	Duration time.Duration
 	Err      error
+	APIError *APIConnectionError
 }
 
 func (e *FallbackAllFailedError) Error() string {
-	if e.Err == nil {
-		return fmt.Sprintf("all LLMs failed (%v) after %s", e.Labels, e.Duration)
+	if e.APIError != nil {
+		if e.Err == nil {
+			return e.APIError.Error()
+		}
+		return fmt.Sprintf("%s: %v", e.APIError.Error(), e.Err)
 	}
-	return fmt.Sprintf("all LLMs failed (%v) after %s: %v", e.Labels, e.Duration, e.Err)
+	message := fallbackAllFailedMessage(e.Labels, e.Duration)
+	if e.Err == nil {
+		return message
+	}
+	return fmt.Sprintf("%s: %v", message, e.Err)
 }
 
 func (e *FallbackAllFailedError) Unwrap() error {
-	return e.Err
+	if e.APIError == nil {
+		return e.Err
+	}
+	if e.Err == nil {
+		return e.APIError
+	}
+	return errors.Join(e.APIError, e.Err)
+}
+
+func fallbackAllFailedMessage(labels []string, duration time.Duration) string {
+	return fmt.Sprintf("all LLMs failed (%v) after %s", labels, duration)
 }
 
 const (
@@ -1140,6 +1278,9 @@ func (s *fallbackLLMStream) tryStart(index int) error {
 				return nil
 			}
 			cancel()
+			if !isRetryableLLMError(err) {
+				return err
+			}
 			lastErr = err
 			if !s.canRetryLLM(i) {
 				s.markUnavailable(i, true)
@@ -1152,11 +1293,14 @@ func (s *fallbackLLMStream) tryStart(index int) error {
 		}
 	}
 	if lastErr != nil {
+		labels := s.adapter.labels()
+		duration := time.Since(start)
 		return &FallbackAllFailedError{
 			Count:    len(s.adapter.llms),
-			Labels:   s.adapter.labels(),
-			Duration: time.Since(start),
+			Labels:   labels,
+			Duration: duration,
 			Err:      lastErr,
+			APIError: NewAPIConnectionError(fallbackAllFailedMessage(labels, duration)),
 		}
 	}
 	return lastErr
@@ -1180,6 +1324,10 @@ func (s *fallbackLLMStream) Next() (*ChatChunk, error) {
 			return chunk, nil
 		}
 		if errors.Is(err, io.EOF) {
+			return nil, err
+		}
+		if !isRetryableLLMError(err) {
+			s.markUnavailable(s.activeIndex, false)
 			return nil, err
 		}
 		if s.outputSent && !s.adapter.retryOnChunkSent {
@@ -1216,6 +1364,14 @@ func (s *fallbackLLMStream) canRetryLLM(index int) bool {
 		s.retries = make(map[int]int)
 	}
 	return s.retries[index] < s.adapter.maxRetryPerLLM
+}
+
+func isRetryableLLMError(err error) bool {
+	var apiErr *APIError
+	if errors.As(err, &apiErr) {
+		return apiErr.Retryable
+	}
+	return true
 }
 
 func (f *FallbackAdapter) attemptOptions(opts []ChatOption) []ChatOption {

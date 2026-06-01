@@ -421,11 +421,37 @@ func TestFallbackAdapterReturnsAllFailedErrorWhenProvidersExhausted(t *testing.T
 	if !errors.As(err, &allFailed) {
 		t.Fatalf("Chat error type = %T, want FallbackAllFailedError", err)
 	}
+	var connectionErr *APIConnectionError
+	if !errors.As(err, &connectionErr) {
+		t.Fatalf("Chat error type = %T, want APIConnectionError", err)
+	}
+	if !connectionErr.Retryable {
+		t.Fatal("APIConnectionError retryable = false, want true")
+	}
 	if got, want := strings.Join(allFailed.Labels, ","), "primary.LLM,fallback.LLM"; got != want {
 		t.Fatalf("FallbackAllFailedError.Labels = %q, want %q", got, want)
 	}
 	if !strings.Contains(err.Error(), "primary.LLM") || !strings.Contains(err.Error(), "fallback.LLM") {
 		t.Fatalf("Chat error = %q, want exhausted provider labels", err)
+	}
+}
+
+func TestFallbackAdapterDoesNotFallbackOnNonRetryableAPIError(t *testing.T) {
+	primaryErr := NewAPIStatusError("bad request", 400, "req_123", nil)
+	fallback := &fakeFallbackLLM{stream: &fakeFallbackStream{events: []fakeFallbackEvent{
+		{chunk: &ChatChunk{Delta: &ChoiceDelta{Content: "fallback"}}},
+	}}}
+	adapter := NewFallbackAdapter([]LLM{
+		&fakeFallbackLLM{err: primaryErr},
+		fallback,
+	})
+
+	_, err := adapter.Chat(context.Background(), NewChatContext())
+	if !errors.Is(err, primaryErr) {
+		t.Fatalf("Chat error = %v, want non-retryable API error", err)
+	}
+	if fallback.calls != 0 {
+		t.Fatalf("fallback calls = %d, want 0 for non-retryable API error", fallback.calls)
 	}
 }
 

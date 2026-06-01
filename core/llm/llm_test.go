@@ -3,6 +3,7 @@ package llm
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"testing"
 
@@ -74,6 +75,109 @@ func TestLLMErrorCarriesReferenceFields(t *testing.T) {
 	}
 	if !errors.Is(err, cause) {
 		t.Fatal("errors.Is() = false, want wrapped cause")
+	}
+}
+
+func TestAPIErrorCarriesMessageBodyAndRetryable(t *testing.T) {
+	err := NewAPIError("provider failed", map[string]any{"code": "overloaded"}, true)
+
+	if err.Error() != "provider failed" {
+		t.Fatalf("Error() = %q, want provider failed", err.Error())
+	}
+	if err.Message != "provider failed" {
+		t.Fatalf("Message = %q, want provider failed", err.Message)
+	}
+	if err.Body == nil {
+		t.Fatal("Body = nil, want response body")
+	}
+	if !err.Retryable {
+		t.Fatal("Retryable = false, want true")
+	}
+}
+
+func TestAPIStatusErrorDefaultsRetryabilityLikeReference(t *testing.T) {
+	tests := []struct {
+		status    int
+		retryable bool
+	}{
+		{status: 400, retryable: false},
+		{status: 401, retryable: false},
+		{status: 408, retryable: true},
+		{status: 429, retryable: true},
+		{status: 499, retryable: true},
+		{status: 500, retryable: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(fmt.Sprintf("%d", tt.status), func(t *testing.T) {
+			err := NewAPIStatusError("request failed", tt.status, "req_123", nil)
+
+			if err.StatusCode != tt.status {
+				t.Fatalf("StatusCode = %d, want %d", err.StatusCode, tt.status)
+			}
+			if err.RequestID != "req_123" {
+				t.Fatalf("RequestID = %q, want req_123", err.RequestID)
+			}
+			if err.Retryable != tt.retryable {
+				t.Fatalf("Retryable = %t, want %t", err.Retryable, tt.retryable)
+			}
+		})
+	}
+}
+
+func TestCreateAPIErrorFromHTTPFormatsReferenceMessage(t *testing.T) {
+	err := CreateAPIErrorFromHTTP("quota exceeded", 429, "req_123", map[string]any{"type": "rate_limit"})
+
+	if err.Message != "quota exceeded (429 Too Many Requests)" {
+		t.Fatalf("Message = %q, want message with status reason", err.Message)
+	}
+	if err.StatusCode != 429 || err.RequestID != "req_123" {
+		t.Fatalf("status metadata = %#v, want 429 req_123", err)
+	}
+	if err.Body == nil {
+		t.Fatal("Body = nil, want response body")
+	}
+	if !err.Retryable {
+		t.Fatal("Retryable = false, want 429 retryable")
+	}
+}
+
+func TestCreateAPIErrorFromHTTPUsesReasonWhenMessageEmptyOrSame(t *testing.T) {
+	tests := []struct {
+		name    string
+		message string
+		status  int
+		want    string
+	}{
+		{name: "empty", message: "", status: 404, want: "Not Found (404)"},
+		{name: "same as reason", message: "Not Found", status: 404, want: "Not Found (404)"},
+		{name: "unknown", message: "", status: 599, want: "HTTP 599 (599)"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := CreateAPIErrorFromHTTP(tt.message, tt.status, "", nil)
+			if err.Message != tt.want {
+				t.Fatalf("Message = %q, want %q", err.Message, tt.want)
+			}
+		})
+	}
+}
+
+func TestAPIConnectionAndTimeoutErrorsAreRetryable(t *testing.T) {
+	connectionErr := NewAPIConnectionError("")
+	if connectionErr.Message != "Connection error." || !connectionErr.Retryable {
+		t.Fatalf("connection error = %#v, want default retryable connection error", connectionErr)
+	}
+
+	timeoutErr := NewAPITimeoutError("")
+	if timeoutErr.Message != "Request timed out." || !timeoutErr.Retryable {
+		t.Fatalf("timeout error = %#v, want default retryable timeout error", timeoutErr)
+	}
+
+	var apiErr *APIError
+	if !errors.As(timeoutErr, &apiErr) {
+		t.Fatalf("errors.As() failed for %T", timeoutErr)
 	}
 }
 

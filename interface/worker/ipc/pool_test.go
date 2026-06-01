@@ -132,7 +132,11 @@ func TestProcPoolActiveJobsReturnsRunningAssignments(t *testing.T) {
 		t.Fatal("mutating ActiveJobs() result changed stored running job")
 	}
 
-	activeJobs[0].AcceptArguments.Attributes["tier"] = "platinum"
+	for i := range activeJobs {
+		if activeJobs[i].Job.GetId() == "job-a" {
+			activeJobs[i].AcceptArguments.Attributes["tier"] = "platinum"
+		}
+	}
 	refreshed := pool.ActiveJobs()
 	for _, info := range refreshed {
 		if info.Job.GetId() == "job-a" && info.AcceptArguments.Attributes["tier"] != "gold" {

@@ -1,9 +1,11 @@
 package ipc
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"os"
 	"os/exec"
 	"strings"
@@ -375,6 +377,126 @@ func TestProcessJobExecutorPingMarksFailedWhenProcessMissing(t *testing.T) {
 				}
 			}
 		}
+	}
+}
+
+func TestProcessJobExecutorPingWritesPingRequest(t *testing.T) {
+	oldPingInterval := processPingInterval
+	oldProcessSignal := processSignal
+	oldNow := processNow
+	processPingInterval = time.Millisecond
+	processSignal = func(*os.Process, os.Signal) error { return nil }
+	now := time.UnixMilli(12345)
+	processNow = func() time.Time { return now }
+	defer func() {
+		processPingInterval = oldPingInterval
+		processSignal = oldProcessSignal
+		processNow = oldNow
+	}()
+
+	var output bytes.Buffer
+	executor := NewProcessJobExecutor("exec-ping-write")
+	executor.mu.Lock()
+	executor.status = JobStatusRunning
+	executor.cmd = &exec.Cmd{Process: &os.Process{Pid: 12345}}
+	executor.pingWriter = &output
+	executor.lastPong = now
+	executor.mu.Unlock()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go executor.pingTask(ctx)
+
+	deadline := time.After(time.Second)
+	for output.Len() == 0 {
+		select {
+		case <-deadline:
+			t.Fatal("ping task did not write a ping request")
+		default:
+			time.Sleep(time.Millisecond)
+		}
+	}
+	cancel()
+
+	msg, err := ReadMessage(&output)
+	if err != nil {
+		t.Fatalf("ReadMessage ping: %v", err)
+	}
+	if msg.Type != MessageTypePingRequest {
+		t.Fatalf("ping message Type = %q, want %q", msg.Type, MessageTypePingRequest)
+	}
+	payload, err := DecodePayload(msg)
+	if err != nil {
+		t.Fatalf("DecodePayload ping: %v", err)
+	}
+	ping, ok := payload.(*PingRequest)
+	if !ok {
+		t.Fatalf("ping payload = %T, want *PingRequest", payload)
+	}
+	if ping.Timestamp != 12345 {
+		t.Fatalf("PingRequest.Timestamp = %d, want 12345", ping.Timestamp)
+	}
+}
+
+func TestProcessJobExecutorPingTimeoutKillsProcessWhenPongMissing(t *testing.T) {
+	oldPingInterval := processPingInterval
+	oldPingTimeout := processPingTimeout
+	oldProcessSignal := processSignal
+	oldKill := processKill
+	oldNow := processNow
+	processPingInterval = time.Millisecond
+	processPingTimeout = time.Millisecond
+	processSignal = func(*os.Process, os.Signal) error { return nil }
+	now := time.Unix(10, 0)
+	processNow = func() time.Time { return now }
+	killed := make(chan struct{}, 1)
+	processKill = func(*os.Process) error {
+		killed <- struct{}{}
+		return nil
+	}
+	defer func() {
+		processPingInterval = oldPingInterval
+		processPingTimeout = oldPingTimeout
+		processSignal = oldProcessSignal
+		processKill = oldKill
+		processNow = oldNow
+	}()
+
+	executor := NewProcessJobExecutor("exec-ping-timeout")
+	executor.mu.Lock()
+	executor.status = JobStatusRunning
+	executor.cmd = &exec.Cmd{Process: &os.Process{Pid: 12345}}
+	executor.pingWriter = io.Discard
+	executor.lastPong = now.Add(-time.Second)
+	executor.mu.Unlock()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go executor.pingTask(ctx)
+
+	select {
+	case <-killed:
+	case <-time.After(time.Second):
+		t.Fatal("process was not killed after pong timeout")
+	}
+	if got := executor.Status(); got != JobStatusFailed {
+		t.Fatalf("Status() = %q, want %q", got, JobStatusFailed)
+	}
+}
+
+func TestProcessJobExecutorPongResetsPingTimeout(t *testing.T) {
+	oldNow := processNow
+	now := time.Unix(20, 0)
+	processNow = func() time.Time { return now }
+	defer func() { processNow = oldNow }()
+
+	executor := NewProcessJobExecutor("exec-pong")
+	executor.lastPong = now.Add(-time.Hour)
+
+	executor.HandlePong(PongResponse{Timestamp: 123})
+
+	if !executor.lastPong.Equal(now) {
+		t.Fatalf("lastPong = %v, want %v", executor.lastPong, now)
 	}
 }
 
