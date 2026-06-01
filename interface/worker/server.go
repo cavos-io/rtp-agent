@@ -38,21 +38,22 @@ const (
 	WorkerTypeRoom      WorkerType = "room"
 	WorkerTypePublisher WorkerType = "publisher"
 
-	defaultWorkerVersion     = "1.0.0"
-	defaultMaxRetry          = 16
-	defaultJobMemoryWarn     = 500
-	defaultDrainTimeout      = 1800
-	defaultSessionEnd        = 300
-	defaultProcessTimeout    = 10
-	localEntrypointCloseWait = 15 * time.Second
-	defaultLoadThreshold     = 0.7
-	defaultProdLogLevel      = "INFO"
-	defaultDevLogLevel       = "DEBUG"
-	defaultProdHTTPPort      = 8081
-	defaultDevHTTPPort       = 0
+	defaultWorkerVersion  = "1.0.0"
+	defaultMaxRetry       = 16
+	defaultJobMemoryWarn  = 500
+	defaultDrainTimeout   = 1800
+	defaultSessionEnd     = 300
+	defaultProcessTimeout = 10
+	defaultLoadThreshold  = 0.7
+	defaultProdLogLevel   = "INFO"
+	defaultDevLogLevel    = "DEBUG"
+	defaultProdHTTPPort   = 8081
+	defaultDevHTTPPort    = 0
 
 	participantAttributeAgentName = "lk.agent.name"
 )
+
+var localEntrypointCloseWait = 15 * time.Second
 
 var assignmentTimeout = 7500 * time.Millisecond
 
