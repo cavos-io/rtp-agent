@@ -43,6 +43,7 @@ type ThreadJobExecutor struct {
 	job        *livekit.Job
 	runningJob *RunningJobInfo
 	started    bool
+	done       chan struct{}
 }
 
 func NewThreadJobExecutor(id string, entrypoint func() error) *ThreadJobExecutor {
@@ -94,6 +95,7 @@ func (e *ThreadJobExecutor) LaunchRunningJob(ctx context.Context, info RunningJo
 	e.job = info.Job
 	e.runningJob = &info
 	e.started = true
+	e.done = make(chan struct{})
 	e.status = JobStatusRunning
 	e.mu.Unlock()
 
@@ -106,6 +108,7 @@ func (e *ThreadJobExecutor) LaunchRunningJob(ctx context.Context, info RunningJo
 			}
 			e.mu.Lock()
 			e.status = status
+			close(e.done)
 			e.mu.Unlock()
 		}()
 
@@ -119,8 +122,20 @@ func (e *ThreadJobExecutor) LaunchRunningJob(ctx context.Context, info RunningJo
 }
 
 func (e *ThreadJobExecutor) Close(ctx context.Context) error {
-	// Goroutines cannot be killed externally, must be handled via context in entrypoint
-	return nil
+	e.mu.Lock()
+	done := e.done
+	started := e.started
+	e.mu.Unlock()
+	if !started || done == nil {
+		return nil
+	}
+
+	select {
+	case <-done:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
 
 type ProcessJobExecutor struct {
