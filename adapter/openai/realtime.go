@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"math"
 	"net/http"
 	"sync"
 
@@ -716,7 +717,7 @@ func openAIRealtimeEvent(ev map[string]any) (llm.RealtimeEvent, bool) {
 				ItemID:     itemID,
 				Transcript: transcript,
 				IsFinal:    true,
-				Confidence: openAIRealtimeFloatPtr(ev["confidence"]),
+				Confidence: openAIRealtimeConfidenceFromLogprobs(ev["logprobs"]),
 			},
 		}, true
 	case "conversation.item.input_audio_transcription.delta":
@@ -908,16 +909,22 @@ func openAIRealtimeChatContent(contents []any) []llm.ChatContent {
 	return out
 }
 
-func openAIRealtimeFloatPtr(v any) *float64 {
-	switch value := v.(type) {
-	case float64:
-		return &value
-	case float32:
-		f := float64(value)
-		return &f
-	default:
+func openAIRealtimeConfidenceFromLogprobs(v any) *float64 {
+	logprobs, ok := v.([]any)
+	if !ok || len(logprobs) == 0 {
 		return nil
 	}
+	total := 0.0
+	for _, item := range logprobs {
+		entry, ok := item.(map[string]any)
+		if !ok {
+			return nil
+		}
+		logprob := openAIRealtimeFloat(entry["logprob"])
+		total += logprob
+	}
+	confidence := math.Exp(total / float64(len(logprobs)))
+	return &confidence
 }
 
 func openAIRealtimeFloat(v any) float64 {

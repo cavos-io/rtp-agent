@@ -1,6 +1,7 @@
 package openai
 
 import (
+	"math"
 	"testing"
 
 	"github.com/cavos-io/rtp-agent/core/llm"
@@ -129,12 +130,14 @@ func TestRealtimeVideoMessageMapsImageContent(t *testing.T) {
 }
 
 func TestRealtimeEventMapsInputAudioTranscriptionCompleted(t *testing.T) {
-	confidence := 0.87
 	ev, ok := openAIRealtimeEvent(map[string]any{
 		"type":       "conversation.item.input_audio_transcription.completed",
 		"item_id":    "item_123",
 		"transcript": "hello",
-		"confidence": confidence,
+		"logprobs": []any{
+			map[string]any{"logprob": math.Log(0.81)},
+			map[string]any{"logprob": math.Log(0.49)},
+		},
 	})
 	if !ok {
 		t.Fatal("openAIRealtimeEvent returned ok=false, want transcription event")
@@ -148,8 +151,22 @@ func TestRealtimeEventMapsInputAudioTranscriptionCompleted(t *testing.T) {
 	if ev.InputTranscription.ItemID != "item_123" || ev.InputTranscription.Transcript != "hello" || !ev.InputTranscription.IsFinal {
 		t.Fatalf("InputTranscription = %#v, want final item transcript", ev.InputTranscription)
 	}
-	if ev.InputTranscription.Confidence == nil || *ev.InputTranscription.Confidence != confidence {
-		t.Fatalf("Confidence = %#v, want %.2f", ev.InputTranscription.Confidence, confidence)
+	wantConfidence := 0.63
+	if ev.InputTranscription.Confidence == nil || math.Abs(*ev.InputTranscription.Confidence-wantConfidence) > 1e-9 {
+		t.Fatalf("Confidence = %#v, want %.2f", ev.InputTranscription.Confidence, wantConfidence)
+	}
+
+	ev, ok = openAIRealtimeEvent(map[string]any{
+		"type":       "conversation.item.input_audio_transcription.completed",
+		"item_id":    "item_123",
+		"transcript": "hello",
+		"logprobs":   []any{},
+	})
+	if !ok {
+		t.Fatal("openAIRealtimeEvent empty logprobs returned ok=false, want transcription event")
+	}
+	if ev.InputTranscription.Confidence != nil {
+		t.Fatalf("Confidence = %#v, want nil for empty logprobs", ev.InputTranscription.Confidence)
 	}
 }
 
