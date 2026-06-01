@@ -235,6 +235,22 @@ func TestChatContextAddMessageAcceptsTextContent(t *testing.T) {
 	}
 }
 
+func TestChatMessageTextContentOnlyIncludesPlainTextContent(t *testing.T) {
+	message := &ChatMessage{
+		Role: ChatRoleSystem,
+		Content: []ChatContent{
+			{Instructions: NewInstructions("voice instructions", "text instructions")},
+			{Text: "plain text"},
+			{Image: &ImageContent{Image: "https://example.com/image.jpg"}},
+			{Audio: &AudioContent{Transcript: "spoken words"}},
+		},
+	}
+
+	if got, want := message.TextContent(), "plain text"; got != want {
+		t.Fatalf("TextContent() = %q, want %q", got, want)
+	}
+}
+
 func TestInstructionsPreserveVariantsAndSelectModality(t *testing.T) {
 	instructions := NewInstructions("speak plainly", "write tersely")
 
