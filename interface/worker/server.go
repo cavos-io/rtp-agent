@@ -1598,10 +1598,7 @@ func (s *AgentServer) handleTermination(req *livekit.JobTermination) {
 	s.mu.Unlock()
 
 	if exists {
-		s.runSessionEnd(jobCtx)
-
-		jobCtx.Shutdown("")
-		s.uploadJobSessionReport(jobCtx)
+		s.finishJob(jobCtx)
 	}
 }
 
@@ -1684,6 +1681,13 @@ func waitForLocalEntrypoint(done <-chan struct{}) {
 
 func (s *AgentServer) finishJob(jobCtx *JobContext) {
 	if jobCtx == nil || jobCtx.Job == nil {
+		return
+	}
+	finalized := false
+	jobCtx.finishOnce.Do(func() {
+		finalized = true
+	})
+	if !finalized {
 		return
 	}
 

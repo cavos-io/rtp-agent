@@ -3993,6 +3993,47 @@ func TestHandleTerminationRunsJobShutdownCallbacks(t *testing.T) {
 	}
 }
 
+func TestHandleTerminationFinalizesAssignedJobOnce(t *testing.T) {
+	server := NewAgentServer(WorkerOptions{})
+	sentCh := make(chan *livekit.WorkerMessage, 2)
+	server.workerMessageSink = func(msg *livekit.WorkerMessage) error {
+		sentCh <- msg
+		return nil
+	}
+	sessionEndCh := make(chan struct{}, 2)
+	server.sessionEndFnc = func(*JobContext) error {
+		sessionEndCh <- struct{}{}
+		return nil
+	}
+	releaseEntrypoint := make(chan struct{})
+	server.entrypointFnc = func(*JobContext) error {
+		<-releaseEntrypoint
+		return nil
+	}
+
+	job := &livekit.Job{Id: "job_termination_once", Room: &livekit.Room{Name: "room-a"}}
+	markJobAccepted(t, server, job)
+	server.handleAssignment(context.Background(), &livekit.JobAssignment{Job: job})
+
+	assertJobStatusMessage(t, receiveWorkerMessage(t, sentCh), "job_termination_once", livekit.JobStatus_JS_RUNNING)
+	server.handleTermination(&livekit.JobTermination{JobId: job.Id})
+
+	select {
+	case <-sessionEndCh:
+	case <-time.After(time.Second):
+		t.Fatal("session end callback did not run on termination")
+	}
+
+	close(releaseEntrypoint)
+	assertJobStatusMessage(t, receiveWorkerMessage(t, sentCh), "job_termination_once", livekit.JobStatus_JS_SUCCESS)
+
+	select {
+	case <-sessionEndCh:
+		t.Fatal("session end callback ran more than once")
+	case <-time.After(20 * time.Millisecond):
+	}
+}
+
 func receiveWorkerMessage(t *testing.T, receivedCh <-chan *livekit.WorkerMessage) *livekit.WorkerMessage {
 	t.Helper()
 
