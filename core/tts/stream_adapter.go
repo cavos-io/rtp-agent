@@ -101,6 +101,7 @@ type streamAdapterWrapper struct {
 	errCh     chan error
 	inputCh   chan streamAdapterInput
 	flushCh   chan struct{}
+	doneCh    chan struct{}
 	mu        sync.Mutex
 	active    ChunkedStream
 	closed    bool
@@ -137,6 +138,7 @@ func (a *StreamAdapter) Stream(ctx context.Context) (SynthesizeStream, error) {
 		errCh:     make(chan error, 1),
 		inputCh:   make(chan streamAdapterInput, 100),
 		flushCh:   make(chan struct{}, 100),
+		doneCh:    make(chan struct{}),
 		metrics:   make(map[string]*streamAdapterSegmentMetrics),
 	}
 
@@ -145,6 +147,7 @@ func (a *StreamAdapter) Stream(ctx context.Context) (SynthesizeStream, error) {
 }
 
 func (w *streamAdapterWrapper) run() {
+	defer close(w.doneCh)
 	defer close(w.eventCh)
 
 	tokenizer := newRetainFormatSentenceStream("en")
@@ -187,6 +190,10 @@ func (w *streamAdapterWrapper) run() {
 		}
 		if tok.Token != "" {
 			if err := w.synthesize(tok.Token, tok.SegmentID); err != nil {
+				if w.isClosed() {
+					w.markDone(nil)
+					return
+				}
 				w.markDone(err)
 				w.sendErr(err)
 				return
@@ -459,10 +466,12 @@ func (w *streamAdapterWrapper) Close() error {
 	}
 	w.mu.Unlock()
 	w.markDone(nil)
+	var err error
 	if active != nil {
-		return active.Close()
+		err = active.Close()
 	}
-	return nil
+	<-w.doneCh
+	return err
 }
 
 func (w *streamAdapterWrapper) Next() (*SynthesizedAudio, error) {

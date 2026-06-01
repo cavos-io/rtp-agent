@@ -843,6 +843,41 @@ func TestStreamAdapterCloseClosesActiveChunkedStream(t *testing.T) {
 	}
 }
 
+func TestStreamAdapterCloseWaitsForRunLoop(t *testing.T) {
+	chunked := newReleasableStreamAdapterChunkedStream()
+	stream, err := NewStreamAdapter(&fakeStreamAdapterTTS{
+		chunked: chunked,
+	}).Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+
+	if err := stream.PushText("blocked synthesis"); err != nil {
+		t.Fatalf("PushText returned error: %v", err)
+	}
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush returned error: %v", err)
+	}
+	chunked.waitForNext(t)
+
+	closeDone := make(chan error, 1)
+	go func() {
+		closeDone <- stream.Close()
+	}()
+
+	chunked.waitForClose(t)
+	select {
+	case err := <-closeDone:
+		t.Fatalf("Close returned before run loop exited: %v", err)
+	default:
+	}
+
+	chunked.release()
+	if err := receiveStreamAdapterCloseResult(t, closeDone); err != nil {
+		t.Fatalf("Close returned error = %v", err)
+	}
+}
+
 func TestStreamAdapterCloseDoesNotSynthesizeBufferedText(t *testing.T) {
 	provider := &fakeStreamAdapterTTS{}
 	stream, err := NewStreamAdapter(provider).Stream(context.Background())
@@ -1113,6 +1148,73 @@ func (b *blockingStreamAdapterChunkedStream) waitForClose(t *testing.T) bool {
 		return true
 	case <-time.After(streamAdapterTestTimeout):
 		return false
+	}
+}
+
+type releasableStreamAdapterChunkedStream struct {
+	nextCh    chan struct{}
+	closeCh   chan struct{}
+	releaseCh chan struct{}
+}
+
+func newReleasableStreamAdapterChunkedStream() *releasableStreamAdapterChunkedStream {
+	return &releasableStreamAdapterChunkedStream{
+		nextCh:    make(chan struct{}),
+		closeCh:   make(chan struct{}),
+		releaseCh: make(chan struct{}),
+	}
+}
+
+func (s *releasableStreamAdapterChunkedStream) Next() (*SynthesizedAudio, error) {
+	select {
+	case <-s.nextCh:
+	default:
+		close(s.nextCh)
+	}
+	<-s.closeCh
+	<-s.releaseCh
+	return nil, io.EOF
+}
+
+func (s *releasableStreamAdapterChunkedStream) Close() error {
+	select {
+	case <-s.closeCh:
+	default:
+		close(s.closeCh)
+	}
+	return nil
+}
+
+func (s *releasableStreamAdapterChunkedStream) waitForNext(t *testing.T) {
+	t.Helper()
+	select {
+	case <-s.nextCh:
+	case <-time.After(streamAdapterTestTimeout):
+		t.Fatal("chunked stream Next was not entered")
+	}
+}
+
+func (s *releasableStreamAdapterChunkedStream) waitForClose(t *testing.T) {
+	t.Helper()
+	select {
+	case <-s.closeCh:
+	case <-time.After(streamAdapterTestTimeout):
+		t.Fatal("chunked stream Close was not called")
+	}
+}
+
+func (s *releasableStreamAdapterChunkedStream) release() {
+	close(s.releaseCh)
+}
+
+func receiveStreamAdapterCloseResult(t *testing.T, results <-chan error) error {
+	t.Helper()
+	select {
+	case err := <-results:
+		return err
+	case <-time.After(streamAdapterTestTimeout):
+		t.Fatal("timed out waiting for Close to return")
+		return nil
 	}
 }
 

@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"os"
 	"strings"
 	"sync"
 
@@ -26,6 +27,7 @@ type CartesiaTTS struct {
 	apiKey              string
 	baseURL             string
 	voiceID             string
+	voiceEmbedding      []float64
 	model               string
 	language            string
 	encoding            string
@@ -45,6 +47,43 @@ func WithCartesiaBaseURL(baseURL string) CartesiaTTSOption {
 		if baseURL != "" {
 			t.baseURL = strings.TrimRight(baseURL, "/")
 		}
+	}
+}
+
+func WithCartesiaLanguage(language string) CartesiaTTSOption {
+	return func(t *CartesiaTTS) {
+		t.language = language
+	}
+}
+
+func WithCartesiaAudioFormat(encoding string, sampleRate int) CartesiaTTSOption {
+	return func(t *CartesiaTTS) {
+		if encoding != "" {
+			t.encoding = encoding
+		}
+		if sampleRate > 0 {
+			t.sampleRate = sampleRate
+		}
+	}
+}
+
+func WithCartesiaAPIVersion(apiVersion string) CartesiaTTSOption {
+	return func(t *CartesiaTTS) {
+		if apiVersion != "" {
+			t.apiVersion = apiVersion
+		}
+	}
+}
+
+func WithCartesiaWordTimestamps(wordTimestamps bool) CartesiaTTSOption {
+	return func(t *CartesiaTTS) {
+		t.wordTimestamps = wordTimestamps
+	}
+}
+
+func WithCartesiaVoiceEmbedding(embedding []float64) CartesiaTTSOption {
+	return func(t *CartesiaTTS) {
+		t.voiceEmbedding = append([]float64(nil), embedding...)
 	}
 }
 
@@ -73,6 +112,9 @@ func WithCartesiaPronunciationDictID(id string) CartesiaTTSOption {
 }
 
 func NewCartesiaTTS(apiKey string, voiceID string, model string, opts ...CartesiaTTSOption) *CartesiaTTS {
+	if apiKey == "" {
+		apiKey = os.Getenv("CARTESIA_API_KEY")
+	}
 	if voiceID == "" {
 		voiceID = "f786b574-daa5-4673-aa0c-cbe3e8534c02"
 	}
@@ -98,7 +140,7 @@ func NewCartesiaTTS(apiKey string, voiceID string, model string, opts ...Cartesi
 
 func (t *CartesiaTTS) Label() string { return "cartesia.TTS" }
 func (t *CartesiaTTS) Capabilities() tts.TTSCapabilities {
-	return tts.TTSCapabilities{Streaming: true, AlignedTranscript: false}
+	return tts.TTSCapabilities{Streaming: true, AlignedTranscript: t.wordTimestamps}
 }
 func (t *CartesiaTTS) SampleRate() int  { return t.sampleRate }
 func (t *CartesiaTTS) NumChannels() int { return 1 }
@@ -143,12 +185,19 @@ func buildCartesiaSynthesizeRequest(t *CartesiaTTS, text string) (string, []byte
 }
 
 func buildCartesiaOptions(t *CartesiaTTS, streaming bool) map[string]interface{} {
+	voice := map[string]interface{}{
+		"mode": "id",
+		"id":   t.voiceID,
+	}
+	if len(t.voiceEmbedding) > 0 {
+		voice = map[string]interface{}{
+			"mode":      "embedding",
+			"embedding": append([]float64(nil), t.voiceEmbedding...),
+		}
+	}
 	options := map[string]interface{}{
 		"model_id": t.model,
-		"voice": map[string]interface{}{
-			"mode": "id",
-			"id":   t.voiceID,
-		},
+		"voice":    voice,
 		"output_format": map[string]interface{}{
 			"container":   "raw",
 			"encoding":    t.encoding,
