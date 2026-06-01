@@ -139,6 +139,7 @@ type AgentServer struct {
 	prometheusServer   *telemetry.HttpServer
 	workerMessageSink  func(*livekit.WorkerMessage) error
 	workerID           string
+	connectionFailed   bool
 	startedHandlers    []WorkerStartedHandler
 	registeredHandlers []WorkerRegisteredHandler
 
@@ -184,6 +185,18 @@ func (s *AgentServer) WorkerInfo() WorkerInfo {
 		HTTPPort:    httpPort,
 		CloudAgents: s.Options.WorkerToken != "",
 	}
+}
+
+func (s *AgentServer) setConnectionFailed(failed bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.connectionFailed = failed
+}
+
+func (s *AgentServer) hasConnectionFailed() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.connectionFailed
 }
 
 func (s *AgentServer) ActiveJobs() []*JobContext {
@@ -610,6 +623,10 @@ func (s *AgentServer) workerHTTPHandler() http.Handler {
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/" {
 			http.NotFound(w, r)
+			return
+		}
+		if s.hasConnectionFailed() {
+			http.Error(w, "failed to connect to livekit", http.StatusServiceUnavailable)
 			return
 		}
 		w.WriteHeader(http.StatusOK)
@@ -1223,10 +1240,12 @@ func (s *AgentServer) connectWorkerWebSocket(ctx context.Context, dialer *websoc
 	for {
 		conn, res, err := workerDialContext(ctx, dialer, agentURL, headers)
 		if err == nil {
+			s.setConnectionFailed(false)
 			return conn, res, nil
 		}
 
 		if retryCount >= s.Options.MaxRetry {
+			s.setConnectionFailed(true)
 			return nil, nil, fmt.Errorf("failed to connect to LiveKit after %d attempts %s: %w", retryCount, agentURL, err)
 		}
 
