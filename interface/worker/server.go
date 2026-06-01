@@ -119,6 +119,7 @@ type WorkerOptions struct {
 	JobMemoryLimitMB                float64
 	NumIdleProcesses                int
 	DrainTimeoutSeconds             int
+	DrainTimeoutSecondsSet          bool
 	SessionEndTimeoutSeconds        float64
 	ShutdownProcessTimeoutSeconds   float64
 	InitializeProcessTimeoutSeconds float64
@@ -509,8 +510,9 @@ func mergeWorkerOptions(current WorkerOptions, next WorkerOptions) WorkerOptions
 	if next.NumIdleProcesses != 0 {
 		current.NumIdleProcesses = next.NumIdleProcesses
 	}
-	if next.DrainTimeoutSeconds != 0 {
+	if next.DrainTimeoutSecondsSet || next.DrainTimeoutSeconds != 0 {
 		current.DrainTimeoutSeconds = next.DrainTimeoutSeconds
+		current.DrainTimeoutSecondsSet = next.DrainTimeoutSecondsSet
 	}
 	if next.SessionEndTimeoutSeconds != 0 {
 		current.SessionEndTimeoutSeconds = next.SessionEndTimeoutSeconds
@@ -543,7 +545,7 @@ func resolveWorkerOptions(opts WorkerOptions) WorkerOptions {
 	if opts.JobMemoryWarnMB == 0 {
 		opts.JobMemoryWarnMB = defaultJobMemoryWarn
 	}
-	if opts.DrainTimeoutSeconds == 0 {
+	if opts.DrainTimeoutSeconds == 0 && !opts.DrainTimeoutSecondsSet {
 		opts.DrainTimeoutSeconds = defaultDrainTimeout
 	}
 	if opts.SessionEndTimeoutSeconds == 0 {

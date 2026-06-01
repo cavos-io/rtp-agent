@@ -273,6 +273,7 @@ func applyWorkerArgs(server *worker.AgentServer, args CliArgs, drainTimeout *int
 	}
 	if drainTimeout != nil {
 		opts.DrainTimeoutSeconds = *drainTimeout
+		opts.DrainTimeoutSecondsSet = true
 	}
 	return server.UpdateOptions(opts)
 }

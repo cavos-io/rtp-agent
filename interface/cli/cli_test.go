@@ -489,6 +489,19 @@ func TestApplyWorkerArgsUpdatesServerOptions(t *testing.T) {
 	}
 }
 
+func TestApplyWorkerArgsPreservesExplicitZeroDrainTimeout(t *testing.T) {
+	server := worker.NewAgentServer(worker.WorkerOptions{DrainTimeoutSeconds: 30})
+	drainTimeout := 0
+
+	if err := applyWorkerArgs(server, CliArgs{}, &drainTimeout); err != nil {
+		t.Fatalf("applyWorkerArgs() error = %v", err)
+	}
+
+	if server.Options.DrainTimeoutSeconds != 0 {
+		t.Fatalf("DrainTimeoutSeconds = %d, want explicit zero", server.Options.DrainTimeoutSeconds)
+	}
+}
+
 func TestApplyWorkerArgsUsesDevDefaultLogLevel(t *testing.T) {
 	server := worker.NewAgentServer(worker.WorkerOptions{})
 
