@@ -208,7 +208,7 @@ func (f *FallbackAdapter) tryRecoverStream(index int, inputs []fallbackSynthesiz
 				return
 			}
 		}
-		if err := stream.Flush(); err != nil {
+		if err := endSynthesizeStreamInput(stream); err != nil {
 			f.mu.Lock()
 			f.status[index].recovering = false
 			f.mu.Unlock()

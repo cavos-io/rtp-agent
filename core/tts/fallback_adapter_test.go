@@ -1213,6 +1213,37 @@ func TestFallbackSynthesizeStreamRestoresPrimaryAfterRecovery(t *testing.T) {
 	}
 }
 
+func TestFallbackSynthesizeRecoveryEndsInputWhenSupported(t *testing.T) {
+	recovery := &endInputSynthesizeStream{events: []*SynthesizedAudio{{
+		Frame: &model.AudioFrame{Data: []byte("primary recovery probe")},
+	}}}
+	primary := &metadataTTS{
+		label:        "primary",
+		sampleRate:   24000,
+		numChannels:  1,
+		capabilities: TTSCapabilities{Streaming: true},
+		stream:       recovery,
+	}
+	adapter := NewFallbackAdapter([]TTS{primary})
+	adapter.status[0].available = false
+
+	adapter.tryRecoverStream(0, []fallbackSynthesizeInput{{text: "hello"}})
+
+	waitForFallbackCondition(t, func() bool {
+		adapter.mu.Lock()
+		defer adapter.mu.Unlock()
+		return !adapter.status[0].recovering
+	})
+
+	wantCalls := []string{"push:hello", "end_input"}
+	if strings.Join(recovery.calls, ",") != strings.Join(wantCalls, ",") {
+		t.Fatalf("recovery stream calls = %#v, want %#v", recovery.calls, wantCalls)
+	}
+	if !adapter.status[0].available {
+		t.Fatal("provider available = false after audio recovery probe, want true")
+	}
+}
+
 func TestFallbackSynthesizeStreamWrapsNonStreamingProvider(t *testing.T) {
 	adapter := NewFallbackAdapter([]TTS{
 		&metadataTTS{
