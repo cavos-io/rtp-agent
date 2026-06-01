@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"errors"
+	"sort"
 	"sync"
 	"time"
 
@@ -102,6 +103,109 @@ func (a *AgentActivity) Interrupt(force bool) error {
 	}
 
 	return nil
+}
+
+func (a *AgentActivity) UpdateInstructions(ctx context.Context, instructions string) error {
+	a.Agent.Instructions = instructions
+	configUpdate := &llm.AgentConfigUpdate{
+		Instructions: &instructions,
+		CreatedAt:    time.Now(),
+	}
+	if a.Agent.ChatCtx == nil {
+		a.Agent.ChatCtx = llm.NewChatContext()
+	}
+	a.Agent.ChatCtx.Insert(configUpdate)
+	if a.Session != nil {
+		if a.Session.ChatCtx == nil {
+			a.Session.ChatCtx = llm.NewChatContext()
+		}
+		a.Session.ChatCtx.Insert(configUpdate)
+	}
+	return nil
+}
+
+func (a *AgentActivity) UpdateTools(ctx context.Context, tools []llm.Tool) error {
+	oldToolNames := agentToolNameSet(a.Agent.Tools)
+	newToolNames := agentToolNameSet(tools)
+	toolsAdded, toolsRemoved := agentToolDiff(oldToolNames, newToolNames)
+
+	a.Agent.Tools = dedupeAgentToolsByID(tools)
+	if len(toolsAdded) > 0 || len(toolsRemoved) > 0 {
+		configUpdate := &llm.AgentConfigUpdate{
+			ToolsAdded:   toolsAdded,
+			ToolsRemoved: toolsRemoved,
+			CreatedAt:    time.Now(),
+		}
+		if a.Agent.ChatCtx == nil {
+			a.Agent.ChatCtx = llm.NewChatContext()
+		}
+		a.Agent.ChatCtx.Insert(configUpdate)
+		if a.Session != nil {
+			if a.Session.ChatCtx == nil {
+				a.Session.ChatCtx = llm.NewChatContext()
+			}
+			a.Session.ChatCtx.Insert(configUpdate)
+		}
+	}
+	return a.UpdateChatContext(ctx, a.Agent.ChatCtx)
+}
+
+func (a *AgentActivity) UpdateChatContext(ctx context.Context, chatCtx *llm.ChatContext, excludeInvalidFunctionCalls ...bool) error {
+	excludeInvalid := true
+	if len(excludeInvalidFunctionCalls) > 0 {
+		excludeInvalid = excludeInvalidFunctionCalls[0]
+	}
+	if chatCtx == nil {
+		a.Agent.ChatCtx = llm.NewChatContext()
+		return nil
+	}
+	if !excludeInvalid {
+		a.Agent.ChatCtx = chatCtx.Copy()
+		return nil
+	}
+	a.Agent.ChatCtx = chatCtx.Copy(llm.ChatContextCopyOptions{
+		Tools: a.chatContextTools(),
+	})
+	return nil
+}
+
+func (a *AgentActivity) chatContextTools() []interface{} {
+	tools := make([]interface{}, 0, len(a.Agent.Tools))
+	if a.Session != nil {
+		for _, tool := range a.Session.Tools {
+			tools = append(tools, tool)
+		}
+	}
+	for _, tool := range a.Agent.Tools {
+		tools = append(tools, tool)
+	}
+	return tools
+}
+
+func agentToolNameSet(tools []llm.Tool) map[string]struct{} {
+	names := make(map[string]struct{}, len(tools))
+	for _, tool := range tools {
+		names[tool.Name()] = struct{}{}
+	}
+	return names
+}
+
+func agentToolDiff(oldToolNames map[string]struct{}, newToolNames map[string]struct{}) ([]string, []string) {
+	added := make([]string, 0)
+	for name := range newToolNames {
+		if _, ok := oldToolNames[name]; !ok {
+			added = append(added, name)
+		}
+	}
+	removed := make([]string, 0)
+	for name := range oldToolNames {
+		if _, ok := newToolNames[name]; !ok {
+			removed = append(removed, name)
+		}
+	}
+	sort.Strings(added)
+	sort.Strings(removed)
+	return added, removed
 }
 
 func (a *AgentActivity) ScheduleSpeech(speech *SpeechHandle, priority int, force bool) error {
