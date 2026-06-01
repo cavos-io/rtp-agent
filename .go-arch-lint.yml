@@ -8,6 +8,7 @@ allow:
 exclude:
   - .codex
   - .git
+  - .tmp
   - docs
   - refs
   - resources
