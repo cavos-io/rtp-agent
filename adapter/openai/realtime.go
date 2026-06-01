@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"math"
 	"net/http"
 	"sync"
 
@@ -55,7 +56,12 @@ type realtimeSession struct {
 	mu               sync.Mutex
 	eventCh          chan llm.RealtimeEvent
 	remote           *llm.RemoteChatContext
-	inputTranscripts map[string]string
+	inputTranscripts map[inputTranscriptKey]string
+}
+
+type inputTranscriptKey struct {
+	itemID       string
+	contentIndex int
 }
 
 func (m *RealtimeModel) Session() (llm.RealtimeSession, error) {
@@ -446,10 +452,26 @@ func openAIRealtimeGenerateReplyMessage(options llm.RealtimeGenerateReplyOptions
 }
 
 func (s *realtimeSession) Truncate(options llm.RealtimeTruncateOptions) error {
-	if !realtimeModalitiesInclude(options.Modalities, "audio") {
+	if realtimeModalitiesInclude(options.Modalities, "audio") {
+		return s.sendMsg(openAIRealtimeTruncateMessage(options))
+	}
+	if options.AudioTranscript == nil {
 		return nil
 	}
-	return s.sendMsg(openAIRealtimeTruncateMessage(options))
+	if s.remote == nil {
+		s.remote = llm.NewRemoteChatContext()
+	}
+	msgs, err := openAIRealtimeTruncateTranscriptUpdateMessages(s.remote.ToChatCtx(), options)
+	if err != nil {
+		return err
+	}
+	for _, msg := range msgs {
+		if err := s.sendMsg(msg); err != nil {
+			return err
+		}
+	}
+	s.remote = openAIRealtimeRemoteSnapshot(openAIRealtimeTruncatedTranscriptChatContext(s.remote.ToChatCtx(), options))
+	return nil
 }
 
 func openAIRealtimeTruncateMessage(options llm.RealtimeTruncateOptions) map[string]any {
@@ -468,6 +490,30 @@ func realtimeModalitiesInclude(modalities []string, target string) bool {
 		}
 	}
 	return false
+}
+
+func openAIRealtimeTruncateTranscriptUpdateMessages(oldCtx *llm.ChatContext, options llm.RealtimeTruncateOptions) ([]map[string]any, error) {
+	newCtx := openAIRealtimeTruncatedTranscriptChatContext(oldCtx, options)
+	return openAIRealtimeChatContextUpdateMessages(oldCtx, newCtx)
+}
+
+func openAIRealtimeTruncatedTranscriptChatContext(oldCtx *llm.ChatContext, options llm.RealtimeTruncateOptions) *llm.ChatContext {
+	newCtx := openAIRealtimeSyncedChatContext(oldCtx)
+	if options.AudioTranscript == nil {
+		return newCtx
+	}
+	idx := newCtx.IndexByID(options.MessageID)
+	if idx == nil {
+		return newCtx
+	}
+	msg, ok := newCtx.Items[*idx].(*llm.ChatMessage)
+	if !ok {
+		return newCtx
+	}
+	updated := *msg
+	updated.Content = []llm.ChatContent{{Text: *options.AudioTranscript}}
+	newCtx.Items[*idx] = &updated
+	return newCtx
 }
 
 func (s *realtimeSession) CommitAudio() error {
@@ -526,9 +572,12 @@ func (s *realtimeSession) eventLoop() {
 				continue
 			}
 
-			s.trackOpenAIRealtimeEvent(ev)
+			trackedEvent, trackedOK := s.trackOpenAIRealtimeEvent(ev)
 			realtimeEvent, ok := openAIRealtimeEvent(ev)
 			if !ok {
+				if trackedOK {
+					s.eventCh <- trackedEvent
+				}
 				continue
 			}
 			if realtimeEvent.Type == llm.RealtimeEventTypeError {
@@ -540,21 +589,40 @@ func (s *realtimeSession) eventLoop() {
 	}
 }
 
-func (s *realtimeSession) trackOpenAIRealtimeEvent(ev map[string]any) {
+func (s *realtimeSession) trackOpenAIRealtimeEvent(ev map[string]any) (llm.RealtimeEvent, bool) {
 	evType, _ := ev["type"].(string)
-	if evType != "conversation.item.deleted" {
-		return
+	switch evType {
+	case "conversation.item.deleted":
+		itemID, _ := ev["item_id"].(string)
+		if itemID == "" {
+			return llm.RealtimeEvent{}, false
+		}
+		if s.remote == nil {
+			s.remote = llm.NewRemoteChatContext()
+		}
+		if err := s.remote.Delete(itemID); err != nil {
+			logger.Logger.Warnw("failed to track OpenAI realtime deleted item", err, "item_id", itemID)
+		}
+		s.clearRealtimeInputTranscripts(itemID)
+	case "conversation.item.input_audio_transcription.failed":
+		itemID, _ := ev["item_id"].(string)
+		contentIndex := openAIRealtimeInt(ev["content_index"])
+		logger.Logger.Errorw("OpenAI realtime input audio transcription failed", nil, "item_id", itemID, "error", ev["error"])
+		partial, ok := s.clearRealtimeInputTranscript(itemID, contentIndex)
+		if !ok {
+			return llm.RealtimeEvent{}, false
+		}
+		return llm.RealtimeEvent{
+			Type: llm.RealtimeEventTypeInputAudioTranscriptionCompleted,
+			InputTranscription: &llm.InputTranscriptionCompleted{
+				ItemID:       itemID,
+				ContentIndex: contentIndex,
+				Transcript:   partial,
+				IsFinal:      true,
+			},
+		}, true
 	}
-	itemID, _ := ev["item_id"].(string)
-	if itemID == "" {
-		return
-	}
-	if s.remote == nil {
-		s.remote = llm.NewRemoteChatContext()
-	}
-	if err := s.remote.Delete(itemID); err != nil {
-		logger.Logger.Warnw("failed to track OpenAI realtime deleted item", err, "item_id", itemID)
-	}
+	return llm.RealtimeEvent{}, false
 }
 
 func (s *realtimeSession) trackRealtimeEvent(ev llm.RealtimeEvent) llm.RealtimeEvent {
@@ -591,15 +659,14 @@ func (s *realtimeSession) trackRealtimeInputTranscription(ev llm.RealtimeEvent) 
 	}
 	if !transcription.IsFinal {
 		if s.inputTranscripts == nil {
-			s.inputTranscripts = make(map[string]string)
+			s.inputTranscripts = make(map[inputTranscriptKey]string)
 		}
-		s.inputTranscripts[transcription.ItemID] += transcription.Transcript
-		transcription.Transcript = s.inputTranscripts[transcription.ItemID]
+		key := inputTranscriptKey{itemID: transcription.ItemID, contentIndex: transcription.ContentIndex}
+		s.inputTranscripts[key] += transcription.Transcript
+		transcription.Transcript = s.inputTranscripts[key]
 		return ev
 	}
-	if s.inputTranscripts != nil {
-		delete(s.inputTranscripts, transcription.ItemID)
-	}
+	s.clearRealtimeInputTranscript(transcription.ItemID, transcription.ContentIndex)
 	if s.remote == nil {
 		return ev
 	}
@@ -614,6 +681,27 @@ func (s *realtimeSession) trackRealtimeInputTranscription(ev llm.RealtimeEvent) 
 	return ev
 }
 
+func (s *realtimeSession) clearRealtimeInputTranscript(itemID string, contentIndex int) (string, bool) {
+	if itemID == "" || s.inputTranscripts == nil {
+		return "", false
+	}
+	key := inputTranscriptKey{itemID: itemID, contentIndex: contentIndex}
+	transcript, ok := s.inputTranscripts[key]
+	delete(s.inputTranscripts, key)
+	return transcript, ok
+}
+
+func (s *realtimeSession) clearRealtimeInputTranscripts(itemID string) {
+	if itemID == "" || s.inputTranscripts == nil {
+		return
+	}
+	for key := range s.inputTranscripts {
+		if key.itemID == itemID {
+			delete(s.inputTranscripts, key)
+		}
+	}
+}
+
 func openAIRealtimeEvent(ev map[string]any) (llm.RealtimeEvent, bool) {
 	evType, _ := ev["type"].(string)
 	switch evType {
@@ -625,15 +713,19 @@ func openAIRealtimeEvent(ev map[string]any) (llm.RealtimeEvent, bool) {
 	case "response.output_text.delta", "response.text.delta":
 		if delta, ok := ev["delta"].(string); ok {
 			return llm.RealtimeEvent{
-				Type: llm.RealtimeEventTypeText,
-				Text: delta,
+				Type:         llm.RealtimeEventTypeText,
+				ItemID:       openAIRealtimeString(ev["item_id"]),
+				ContentIndex: openAIRealtimeInt(ev["content_index"]),
+				Text:         delta,
 			}, true
 		}
 	case "response.output_audio_transcript.delta", "response.audio_transcript.delta":
 		if delta, ok := ev["delta"].(string); ok {
 			return llm.RealtimeEvent{
-				Type: llm.RealtimeEventTypeText,
-				Text: delta,
+				Type:         llm.RealtimeEventTypeText,
+				ItemID:       openAIRealtimeString(ev["item_id"]),
+				ContentIndex: openAIRealtimeInt(ev["content_index"]),
+				Text:         delta,
 			}, true
 		}
 	case "response.output_audio.delta", "response.audio.delta":
@@ -643,8 +735,10 @@ func openAIRealtimeEvent(ev map[string]any) (llm.RealtimeEvent, bool) {
 				return llm.RealtimeEvent{}, false
 			}
 			return llm.RealtimeEvent{
-				Type: llm.RealtimeEventTypeAudio,
-				Data: data,
+				Type:         llm.RealtimeEventTypeAudio,
+				ItemID:       openAIRealtimeString(ev["item_id"]),
+				ContentIndex: openAIRealtimeInt(ev["content_index"]),
+				Data:         data,
 			}, true
 		}
 	case "response.function_call_arguments.delta":
@@ -680,6 +774,7 @@ func openAIRealtimeEvent(ev map[string]any) (llm.RealtimeEvent, bool) {
 		}, true
 	case "conversation.item.input_audio_transcription.completed":
 		itemID, _ := ev["item_id"].(string)
+		contentIndex := openAIRealtimeInt(ev["content_index"])
 		transcript, _ := ev["transcript"].(string)
 		if itemID == "" && transcript == "" {
 			return llm.RealtimeEvent{}, false
@@ -687,14 +782,16 @@ func openAIRealtimeEvent(ev map[string]any) (llm.RealtimeEvent, bool) {
 		return llm.RealtimeEvent{
 			Type: llm.RealtimeEventTypeInputAudioTranscriptionCompleted,
 			InputTranscription: &llm.InputTranscriptionCompleted{
-				ItemID:     itemID,
-				Transcript: transcript,
-				IsFinal:    true,
-				Confidence: openAIRealtimeFloatPtr(ev["confidence"]),
+				ItemID:       itemID,
+				ContentIndex: contentIndex,
+				Transcript:   transcript,
+				IsFinal:      true,
+				Confidence:   openAIRealtimeConfidenceFromLogprobs(ev["logprobs"]),
 			},
 		}, true
 	case "conversation.item.input_audio_transcription.delta":
 		itemID, _ := ev["item_id"].(string)
+		contentIndex := openAIRealtimeInt(ev["content_index"])
 		delta, _ := ev["delta"].(string)
 		if itemID == "" && delta == "" {
 			return llm.RealtimeEvent{}, false
@@ -702,9 +799,10 @@ func openAIRealtimeEvent(ev map[string]any) (llm.RealtimeEvent, bool) {
 		return llm.RealtimeEvent{
 			Type: llm.RealtimeEventTypeInputAudioTranscriptionCompleted,
 			InputTranscription: &llm.InputTranscriptionCompleted{
-				ItemID:     itemID,
-				Transcript: delta,
-				IsFinal:    false,
+				ItemID:       itemID,
+				ContentIndex: contentIndex,
+				Transcript:   delta,
+				IsFinal:      false,
 			},
 		}, true
 	case "response.created":
@@ -882,16 +980,22 @@ func openAIRealtimeChatContent(contents []any) []llm.ChatContent {
 	return out
 }
 
-func openAIRealtimeFloatPtr(v any) *float64 {
-	switch value := v.(type) {
-	case float64:
-		return &value
-	case float32:
-		f := float64(value)
-		return &f
-	default:
+func openAIRealtimeConfidenceFromLogprobs(v any) *float64 {
+	logprobs, ok := v.([]any)
+	if !ok || len(logprobs) == 0 {
 		return nil
 	}
+	total := 0.0
+	for _, item := range logprobs {
+		entry, ok := item.(map[string]any)
+		if !ok {
+			return nil
+		}
+		logprob := openAIRealtimeFloat(entry["logprob"])
+		total += logprob
+	}
+	confidence := math.Exp(total / float64(len(logprobs)))
+	return &confidence
 }
 
 func openAIRealtimeFloat(v any) float64 {
@@ -910,6 +1014,11 @@ func openAIRealtimeFloat(v any) float64 {
 	default:
 		return 0
 	}
+}
+
+func openAIRealtimeString(v any) string {
+	value, _ := v.(string)
+	return value
 }
 
 func openAIRealtimeInt(v any) int {

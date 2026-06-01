@@ -4,6 +4,7 @@
 .tmp/
 models/
 refs/
+.tmp/
 
 # Git worktrees
 worktrees/

@@ -59,10 +59,12 @@ func TestRealtimeGenerateReplyOptionsExposePerResponseOverrides(t *testing.T) {
 }
 
 func TestRealtimeTruncateOptionsExposeAudioTruncationFields(t *testing.T) {
+	transcript := "spoken text"
 	options := RealtimeTruncateOptions{
-		MessageID:      "msg_123",
-		Modalities:     []string{"audio"},
-		AudioEndMillis: 1500,
+		MessageID:       "msg_123",
+		Modalities:      []string{"audio"},
+		AudioEndMillis:  1500,
+		AudioTranscript: &transcript,
 	}
 
 	if options.MessageID != "msg_123" {
@@ -73,6 +75,9 @@ func TestRealtimeTruncateOptionsExposeAudioTruncationFields(t *testing.T) {
 	}
 	if options.AudioEndMillis != 1500 {
 		t.Fatalf("AudioEndMillis = %d, want 1500", options.AudioEndMillis)
+	}
+	if options.AudioTranscript == nil || *options.AudioTranscript != "spoken text" {
+		t.Fatalf("AudioTranscript = %#v, want spoken text", options.AudioTranscript)
 	}
 }
 
@@ -90,10 +95,11 @@ func TestRealtimeEventCanCarryInputAudioTranscription(t *testing.T) {
 	ev := RealtimeEvent{
 		Type: RealtimeEventTypeInputAudioTranscriptionCompleted,
 		InputTranscription: &InputTranscriptionCompleted{
-			ItemID:     "item_123",
-			Transcript: "hello",
-			IsFinal:    true,
-			Confidence: &confidence,
+			ItemID:       "item_123",
+			ContentIndex: 2,
+			Transcript:   "hello",
+			IsFinal:      true,
+			Confidence:   &confidence,
 		},
 	}
 
@@ -103,8 +109,27 @@ func TestRealtimeEventCanCarryInputAudioTranscription(t *testing.T) {
 	if ev.InputTranscription.ItemID != "item_123" || ev.InputTranscription.Transcript != "hello" || !ev.InputTranscription.IsFinal {
 		t.Fatalf("InputTranscription = %#v, want final item transcript", ev.InputTranscription)
 	}
+	if ev.InputTranscription.ContentIndex != 2 {
+		t.Fatalf("ContentIndex = %d, want 2", ev.InputTranscription.ContentIndex)
+	}
 	if ev.InputTranscription.Confidence == nil || *ev.InputTranscription.Confidence != confidence {
 		t.Fatalf("Confidence = %#v, want %.2f", ev.InputTranscription.Confidence, confidence)
+	}
+}
+
+func TestRealtimeEventCanCarryOutputItemMetadata(t *testing.T) {
+	ev := RealtimeEvent{
+		Type:         RealtimeEventTypeText,
+		ItemID:       "msg_123",
+		ContentIndex: 2,
+		Text:         "hello",
+	}
+
+	if ev.ItemID != "msg_123" {
+		t.Fatalf("ItemID = %q, want msg_123", ev.ItemID)
+	}
+	if ev.ContentIndex != 2 {
+		t.Fatalf("ContentIndex = %d, want 2", ev.ContentIndex)
 	}
 }
 

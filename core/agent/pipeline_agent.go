@@ -132,8 +132,28 @@ func (va *PipelineAgent) sttLoop(stream stt.RecognizeStream) {
 			return
 		}
 
+		if ev.Type != stt.SpeechEventInterimTranscript && ev.Type != stt.SpeechEventFinalTranscript {
+			continue
+		}
+		if len(ev.Alternatives) == 0 {
+			continue
+		}
+
+		alternative := ev.Alternatives[0]
+		va.mu.Lock()
+		session := va.session
+		va.mu.Unlock()
+		if session != nil {
+			session.EmitUserInputTranscribed(UserInputTranscribedEvent{
+				Language:   alternative.Language,
+				Transcript: alternative.Text,
+				IsFinal:    ev.Type == stt.SpeechEventFinalTranscript,
+				SpeakerID:  alternative.SpeakerID,
+			})
+		}
+
 		if ev.Type == stt.SpeechEventFinalTranscript {
-			transcript := ev.Alternatives[0].Text
+			transcript := alternative.Text
 			logger.Logger.Infow("Final transcript", "text", transcript)
 
 			msg := &llm.ChatMessage{
@@ -143,9 +163,6 @@ func (va *PipelineAgent) sttLoop(stream stt.RecognizeStream) {
 				},
 			}
 			va.chatCtx.Append(msg)
-			va.mu.Lock()
-			session := va.session
-			va.mu.Unlock()
 			if session != nil {
 				session.EmitConversationItemAdded(msg)
 			}

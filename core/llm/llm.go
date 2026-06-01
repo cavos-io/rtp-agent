@@ -484,9 +484,10 @@ type RealtimeGenerateReplyOptions struct {
 }
 
 type RealtimeTruncateOptions struct {
-	MessageID      string
-	Modalities     []string
-	AudioEndMillis int
+	MessageID       string
+	Modalities      []string
+	AudioEndMillis  int
+	AudioTranscript *string
 }
 
 type RealtimeSession interface {
@@ -531,14 +532,17 @@ type RemoteItemAddedEvent struct {
 }
 
 type InputTranscriptionCompleted struct {
-	ItemID     string
-	Transcript string
-	IsFinal    bool
-	Confidence *float64
+	ItemID       string
+	ContentIndex int
+	Transcript   string
+	IsFinal      bool
+	Confidence   *float64
 }
 
 type RealtimeEvent struct {
 	Type               RealtimeEventType
+	ItemID             string
+	ContentIndex       int
 	Data               []byte // For audio frames
 	Text               string // For text deltas
 	Function           *FunctionToolCall

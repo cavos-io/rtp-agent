@@ -93,6 +93,8 @@ type AgentSession struct {
 	// Event channels
 	AgentStateChangedCh chan AgentStateChangedEvent
 	UserStateChangedCh  chan UserStateChangedEvent
+	userInputCh         chan UserInputTranscribedEvent
+	speechCreatedCh     chan SpeechCreatedEvent
 	conversationItemCh  chan ConversationItemAddedEvent
 	functionToolsCh     chan FunctionToolsExecutedEvent
 	sipDTMFCh           chan SipDTMFEvent
@@ -145,10 +147,68 @@ func NewAgentSession(agent AgentInterface, room *lksdk.Room, opts AgentSessionOp
 		Tools:               make([]llm.Tool, 0),
 		AgentStateChangedCh: make(chan AgentStateChangedEvent, 10),
 		UserStateChangedCh:  make(chan UserStateChangedEvent, 10),
+		userInputCh:         make(chan UserInputTranscribedEvent, 10),
+		speechCreatedCh:     make(chan SpeechCreatedEvent, 10),
 		conversationItemCh:  make(chan ConversationItemAddedEvent, 10),
 		functionToolsCh:     make(chan FunctionToolsExecutedEvent, 10),
 		sipDTMFCh:           make(chan SipDTMFEvent, 10),
 	}
+}
+
+func (s *AgentSession) UserInputTranscribedEvents() <-chan UserInputTranscribedEvent {
+	return s.userInputTranscribedEvents()
+}
+
+func (s *AgentSession) EmitUserInputTranscribed(ev UserInputTranscribedEvent) {
+	if ev.CreatedAt.IsZero() {
+		ev.CreatedAt = time.Now()
+	}
+	s.mu.Lock()
+	userState := s.UserState
+	s.mu.Unlock()
+	if ev.IsFinal && userState == UserStateAway {
+		s.UpdateUserState(UserStateListening)
+	}
+	ch := s.userInputTranscribedEvents()
+	select {
+	case ch <- ev:
+	default:
+	}
+}
+
+func (s *AgentSession) userInputTranscribedEvents() chan UserInputTranscribedEvent {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.userInputCh == nil {
+		s.userInputCh = make(chan UserInputTranscribedEvent, 10)
+	}
+	return s.userInputCh
+}
+
+func (s *AgentSession) SpeechCreatedEvents() <-chan SpeechCreatedEvent {
+	return s.speechCreatedEvents()
+}
+
+func (s *AgentSession) EmitSpeechCreated(ev SpeechCreatedEvent) {
+	if ev.CreatedAt.IsZero() {
+		ev.CreatedAt = time.Now()
+	}
+	ch := s.speechCreatedEvents()
+	select {
+	case ch <- ev:
+	default:
+	}
+}
+
+func (s *AgentSession) speechCreatedEvents() chan SpeechCreatedEvent {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.speechCreatedCh == nil {
+		s.speechCreatedCh = make(chan SpeechCreatedEvent, 10)
+	}
+	return s.speechCreatedCh
 }
 
 func (s *AgentSession) ConversationItemAddedEvents() <-chan ConversationItemAddedEvent {
@@ -424,21 +484,29 @@ func (s *AgentSession) GenerateReplyWithOptions(ctx context.Context, opts Genera
 		inputModality = "text"
 	}
 	handle := NewSpeechHandle(allowInterruptions, InputDetails{Modality: inputModality})
+	s.EmitSpeechCreated(SpeechCreatedEvent{
+		UserInitiated: true,
+		Source:        "generate_reply",
+		SpeechHandle:  handle,
+	})
 
-	// Add user message to ChatContext if provided
+	var userMessage *llm.ChatMessage
 	if opts.UserInput != "" {
-		s.ChatCtx.Append(&llm.ChatMessage{
+		userMessage = &llm.ChatMessage{
 			Role: llm.ChatRoleUser,
 			Content: []llm.ChatContent{
 				{Text: opts.UserInput},
 			},
 			CreatedAt: time.Now(),
-		})
+		}
 	}
 
 	// Schedule the speech
 	if err := activity.ScheduleSpeech(handle, SpeechPriorityNormal, false); err != nil {
 		return nil, err
+	}
+	if userMessage != nil {
+		s.EmitConversationItemAdded(userMessage)
 	}
 	return handle, nil
 }

@@ -79,8 +79,8 @@ go-arch-lint mapping
 ```
 
 If Go tries to write module cache files under a read-only home directory, use a
-workspace or `/tmp` cache rather than changing project code to work around the
-environment.
+workspace-local `.tmp` cache rather than changing project code to work around
+the environment.
 
 ## Current Known Drift
 

@@ -24,14 +24,14 @@ repos:
 
       - id: go-test
         name: go test
-        entry: bash -c 'go list ./... | grep -v "/worktrees/" | xargs go test'
+        entry: scripts/go-test-all.sh
         language: system
         pass_filenames: false
         stages: [pre-commit]
 
       - id: go-build
         name: go build
-        entry: bash -c 'go list ./... | grep -v "/worktrees/" | xargs go build'
+        entry: scripts/go-build-all.sh
         language: system
         pass_filenames: false
         stages: [pre-commit]

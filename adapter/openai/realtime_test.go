@@ -1,6 +1,7 @@
 package openai
 
 import (
+	"math"
 	"testing"
 
 	"github.com/cavos-io/rtp-agent/core/llm"
@@ -129,12 +130,14 @@ func TestRealtimeVideoMessageMapsImageContent(t *testing.T) {
 }
 
 func TestRealtimeEventMapsInputAudioTranscriptionCompleted(t *testing.T) {
-	confidence := 0.87
 	ev, ok := openAIRealtimeEvent(map[string]any{
 		"type":       "conversation.item.input_audio_transcription.completed",
 		"item_id":    "item_123",
 		"transcript": "hello",
-		"confidence": confidence,
+		"logprobs": []any{
+			map[string]any{"logprob": math.Log(0.81)},
+			map[string]any{"logprob": math.Log(0.49)},
+		},
 	})
 	if !ok {
 		t.Fatal("openAIRealtimeEvent returned ok=false, want transcription event")
@@ -148,16 +151,31 @@ func TestRealtimeEventMapsInputAudioTranscriptionCompleted(t *testing.T) {
 	if ev.InputTranscription.ItemID != "item_123" || ev.InputTranscription.Transcript != "hello" || !ev.InputTranscription.IsFinal {
 		t.Fatalf("InputTranscription = %#v, want final item transcript", ev.InputTranscription)
 	}
-	if ev.InputTranscription.Confidence == nil || *ev.InputTranscription.Confidence != confidence {
-		t.Fatalf("Confidence = %#v, want %.2f", ev.InputTranscription.Confidence, confidence)
+	wantConfidence := 0.63
+	if ev.InputTranscription.Confidence == nil || math.Abs(*ev.InputTranscription.Confidence-wantConfidence) > 1e-9 {
+		t.Fatalf("Confidence = %#v, want %.2f", ev.InputTranscription.Confidence, wantConfidence)
+	}
+
+	ev, ok = openAIRealtimeEvent(map[string]any{
+		"type":       "conversation.item.input_audio_transcription.completed",
+		"item_id":    "item_123",
+		"transcript": "hello",
+		"logprobs":   []any{},
+	})
+	if !ok {
+		t.Fatal("openAIRealtimeEvent empty logprobs returned ok=false, want transcription event")
+	}
+	if ev.InputTranscription.Confidence != nil {
+		t.Fatalf("Confidence = %#v, want nil for empty logprobs", ev.InputTranscription.Confidence)
 	}
 }
 
 func TestRealtimeEventMapsInputAudioTranscriptionDelta(t *testing.T) {
 	ev, ok := openAIRealtimeEvent(map[string]any{
-		"type":    "conversation.item.input_audio_transcription.delta",
-		"item_id": "item_123",
-		"delta":   "hel",
+		"type":          "conversation.item.input_audio_transcription.delta",
+		"item_id":       "item_123",
+		"content_index": 2,
+		"delta":         "hel",
 	})
 	if !ok {
 		t.Fatal("openAIRealtimeEvent returned ok=false, want transcription delta event")
@@ -171,6 +189,9 @@ func TestRealtimeEventMapsInputAudioTranscriptionDelta(t *testing.T) {
 	if ev.InputTranscription.ItemID != "item_123" || ev.InputTranscription.Transcript != "hel" || ev.InputTranscription.IsFinal {
 		t.Fatalf("InputTranscription = %#v, want non-final delta transcript", ev.InputTranscription)
 	}
+	if ev.InputTranscription.ContentIndex != 2 {
+		t.Fatalf("ContentIndex = %d, want 2", ev.InputTranscription.ContentIndex)
+	}
 	if ev.InputTranscription.Confidence != nil {
 		t.Fatalf("Confidence = %#v, want nil for delta", ev.InputTranscription.Confidence)
 	}
@@ -183,8 +204,10 @@ func TestRealtimeEventMapsOutputAudioTranscriptDelta(t *testing.T) {
 	} {
 		t.Run(eventType, func(t *testing.T) {
 			ev, ok := openAIRealtimeEvent(map[string]any{
-				"type":  eventType,
-				"delta": "hello",
+				"type":          eventType,
+				"item_id":       "msg_123",
+				"content_index": 2,
+				"delta":         "hello",
 			})
 			if !ok {
 				t.Fatal("openAIRealtimeEvent returned ok=false, want text event")
@@ -192,14 +215,19 @@ func TestRealtimeEventMapsOutputAudioTranscriptDelta(t *testing.T) {
 			if ev.Type != llm.RealtimeEventTypeText || ev.Text != "hello" {
 				t.Fatalf("event = %#v, want text delta hello", ev)
 			}
+			if ev.ItemID != "msg_123" || ev.ContentIndex != 2 {
+				t.Fatalf("event metadata = item %q content %d, want msg_123 content 2", ev.ItemID, ev.ContentIndex)
+			}
 		})
 	}
 }
 
 func TestRealtimeEventMapsOutputTextAndAudioAliases(t *testing.T) {
 	textEvent, ok := openAIRealtimeEvent(map[string]any{
-		"type":  "response.output_text.delta",
-		"delta": "hello",
+		"type":          "response.output_text.delta",
+		"item_id":       "msg_123",
+		"content_index": 1,
+		"delta":         "hello",
 	})
 	if !ok {
 		t.Fatal("openAIRealtimeEvent text returned ok=false, want text event")
@@ -207,16 +235,24 @@ func TestRealtimeEventMapsOutputTextAndAudioAliases(t *testing.T) {
 	if textEvent.Type != llm.RealtimeEventTypeText || textEvent.Text != "hello" {
 		t.Fatalf("text event = %#v, want text delta hello", textEvent)
 	}
+	if textEvent.ItemID != "msg_123" || textEvent.ContentIndex != 1 {
+		t.Fatalf("text event metadata = item %q content %d, want msg_123 content 1", textEvent.ItemID, textEvent.ContentIndex)
+	}
 
 	audioEvent, ok := openAIRealtimeEvent(map[string]any{
-		"type":  "response.output_audio.delta",
-		"delta": "aGVsbG8=",
+		"type":          "response.output_audio.delta",
+		"item_id":       "msg_456",
+		"content_index": 3,
+		"delta":         "aGVsbG8=",
 	})
 	if !ok {
 		t.Fatal("openAIRealtimeEvent audio returned ok=false, want audio event")
 	}
 	if audioEvent.Type != llm.RealtimeEventTypeAudio || string(audioEvent.Data) != "hello" {
 		t.Fatalf("audio event = %#v, want decoded audio bytes", audioEvent)
+	}
+	if audioEvent.ItemID != "msg_456" || audioEvent.ContentIndex != 3 {
+		t.Fatalf("audio event metadata = item %q content %d, want msg_456 content 3", audioEvent.ItemID, audioEvent.ContentIndex)
 	}
 
 	if _, ok := openAIRealtimeEvent(map[string]any{
@@ -381,6 +417,45 @@ func TestRealtimeSessionAccumulatesInputAudioTranscriptionDeltas(t *testing.T) {
 	}
 }
 
+func TestRealtimeSessionAccumulatesInputAudioTranscriptionByContentIndex(t *testing.T) {
+	session := &realtimeSession{}
+
+	session.trackRealtimeEvent(llm.RealtimeEvent{
+		Type: llm.RealtimeEventTypeInputAudioTranscriptionCompleted,
+		InputTranscription: &llm.InputTranscriptionCompleted{
+			ItemID:       "item_123",
+			ContentIndex: 0,
+			Transcript:   "hel",
+			IsFinal:      false,
+		},
+	})
+	otherContent := session.trackRealtimeEvent(llm.RealtimeEvent{
+		Type: llm.RealtimeEventTypeInputAudioTranscriptionCompleted,
+		InputTranscription: &llm.InputTranscriptionCompleted{
+			ItemID:       "item_123",
+			ContentIndex: 1,
+			Transcript:   "oth",
+			IsFinal:      false,
+		},
+	})
+	firstContent := session.trackRealtimeEvent(llm.RealtimeEvent{
+		Type: llm.RealtimeEventTypeInputAudioTranscriptionCompleted,
+		InputTranscription: &llm.InputTranscriptionCompleted{
+			ItemID:       "item_123",
+			ContentIndex: 0,
+			Transcript:   "lo",
+			IsFinal:      false,
+		},
+	})
+
+	if otherContent.InputTranscription.Transcript != "oth" {
+		t.Fatalf("other content transcript = %q, want oth", otherContent.InputTranscription.Transcript)
+	}
+	if firstContent.InputTranscription.Transcript != "hello" {
+		t.Fatalf("first content transcript = %q, want hello", firstContent.InputTranscription.Transcript)
+	}
+}
+
 func TestRealtimeSessionUpdatesRemoteItemOnFinalInputAudioTranscription(t *testing.T) {
 	session := &realtimeSession{remote: llm.NewRemoteChatContext()}
 	msg := &llm.ChatMessage{ID: "item_123", Role: llm.ChatRoleUser}
@@ -407,6 +482,63 @@ func TestRealtimeSessionUpdatesRemoteItemOnFinalInputAudioTranscription(t *testi
 	}
 	if tracked.TranscriptConfidence == nil || *tracked.TranscriptConfidence != confidence {
 		t.Fatalf("tracked confidence = %#v, want %.2f", tracked.TranscriptConfidence, confidence)
+	}
+}
+
+func TestRealtimeSessionEmitsFinalPartialTranscriptOnInputAudioTranscriptionFailed(t *testing.T) {
+	session := &realtimeSession{}
+	session.trackRealtimeEvent(llm.RealtimeEvent{
+		Type: llm.RealtimeEventTypeInputAudioTranscriptionCompleted,
+		InputTranscription: &llm.InputTranscriptionCompleted{
+			ItemID:     "item_123",
+			Transcript: "hel",
+			IsFinal:    false,
+		},
+	})
+	session.trackRealtimeEvent(llm.RealtimeEvent{
+		Type: llm.RealtimeEventTypeInputAudioTranscriptionCompleted,
+		InputTranscription: &llm.InputTranscriptionCompleted{
+			ItemID:     "item_123",
+			Transcript: "lo",
+			IsFinal:    false,
+		},
+	})
+
+	ev, ok := session.trackOpenAIRealtimeEvent(map[string]any{
+		"type":    "conversation.item.input_audio_transcription.failed",
+		"item_id": "item_123",
+	})
+	if !ok {
+		t.Fatal("trackOpenAIRealtimeEvent returned ok=false, want final partial event")
+	}
+	if ev.Type != llm.RealtimeEventTypeInputAudioTranscriptionCompleted || ev.InputTranscription == nil {
+		t.Fatalf("event = %#v, want input transcription event", ev)
+	}
+	if ev.InputTranscription.Transcript != "hello" || !ev.InputTranscription.IsFinal {
+		t.Fatalf("InputTranscription = %#v, want final accumulated hello", ev.InputTranscription)
+	}
+
+	next := session.trackRealtimeEvent(llm.RealtimeEvent{
+		Type: llm.RealtimeEventTypeInputAudioTranscriptionCompleted,
+		InputTranscription: &llm.InputTranscriptionCompleted{
+			ItemID:     "item_123",
+			Transcript: "new",
+			IsFinal:    false,
+		},
+	})
+	if next.InputTranscription.Transcript != "new" {
+		t.Fatalf("next transcript = %q, want new after failure clears accumulator", next.InputTranscription.Transcript)
+	}
+}
+
+func TestRealtimeSessionIgnoresInputAudioTranscriptionFailedWithoutPartial(t *testing.T) {
+	session := &realtimeSession{}
+
+	if ev, ok := session.trackOpenAIRealtimeEvent(map[string]any{
+		"type":    "conversation.item.input_audio_transcription.failed",
+		"item_id": "item_123",
+	}); ok {
+		t.Fatalf("trackOpenAIRealtimeEvent = %#v, true; want no event", ev)
 	}
 }
 
@@ -579,6 +711,35 @@ func TestRealtimeChatContextUpdateMessagesDeleteRemovedAndRecreateChangedItems(t
 	content := changed["content"].([]map[string]any)
 	if changed["id"] != "changed" || content[0]["text"] != "new" {
 		t.Fatalf("changed item = %#v, want changed text new", changed)
+	}
+}
+
+func TestRealtimeTruncateTranscriptUpdateMessagesReplacesTextOnlyMessage(t *testing.T) {
+	oldCtx := llm.NewChatContext()
+	oldCtx.AddMessage(llm.ChatMessageArgs{ID: "msg_123", Role: llm.ChatRoleAssistant, Text: "old transcript"})
+	audioTranscript := "forwarded transcript"
+
+	msgs, err := openAIRealtimeTruncateTranscriptUpdateMessages(oldCtx, llm.RealtimeTruncateOptions{
+		MessageID:       "msg_123",
+		Modalities:      []string{"text"},
+		AudioTranscript: &audioTranscript,
+	})
+	if err != nil {
+		t.Fatalf("openAIRealtimeTruncateTranscriptUpdateMessages error = %v, want nil", err)
+	}
+	if len(msgs) != 2 {
+		t.Fatalf("messages len = %d, want delete and recreate changed message", len(msgs))
+	}
+	if msgs[0]["type"] != "conversation.item.delete" || msgs[0]["item_id"] != "msg_123" {
+		t.Fatalf("first message = %#v, want delete msg_123", msgs[0])
+	}
+	if msgs[1]["type"] != "conversation.item.create" || msgs[1]["previous_item_id"] != "root" {
+		t.Fatalf("second message = %#v, want recreate at root", msgs[1])
+	}
+	item := msgs[1]["item"].(map[string]any)
+	content := item["content"].([]map[string]any)
+	if item["id"] != "msg_123" || content[0]["text"] != "forwarded transcript" {
+		t.Fatalf("recreated item = %#v, want forwarded transcript", item)
 	}
 }
 
