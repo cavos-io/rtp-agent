@@ -81,6 +81,22 @@ func TestRunResultEventsReturnsCopy(t *testing.T) {
 	}
 }
 
+func TestRunResultStoresUserInput(t *testing.T) {
+	result := NewRunResultWithUserInput(llm.NewChatContext(), "hello")
+
+	if got := result.UserInput(); got != "hello" {
+		t.Fatalf("UserInput = %q, want hello", got)
+	}
+}
+
+func TestRunResultDefaultUserInputIsEmpty(t *testing.T) {
+	result := NewRunResult(llm.NewChatContext())
+
+	if got := result.UserInput(); got != "" {
+		t.Fatalf("UserInput = %q, want empty", got)
+	}
+}
+
 func TestRunResultFinalOutputRequiresDone(t *testing.T) {
 	result := NewRunResult(llm.NewChatContext())
 

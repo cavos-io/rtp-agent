@@ -23,6 +23,7 @@ var (
 type RunResult struct {
 	ChatCtx         *llm.ChatContext
 	Expect          *RunAssert
+	userInput       string
 	events          []RunEvent
 	done            bool
 	doneCh          chan struct{}
@@ -45,8 +46,17 @@ func NewRunResult(chatCtx *llm.ChatContext) *RunResult {
 }
 
 func NewRunResultWithOutputType(chatCtx *llm.ChatContext, outputType reflect.Type) *RunResult {
+	return newRunResult(chatCtx, "", outputType)
+}
+
+func NewRunResultWithUserInput(chatCtx *llm.ChatContext, userInput string) *RunResult {
+	return newRunResult(chatCtx, userInput, nil)
+}
+
+func newRunResult(chatCtx *llm.ChatContext, userInput string, outputType reflect.Type) *RunResult {
 	result := &RunResult{
 		ChatCtx:         chatCtx,
+		userInput:       userInput,
 		events:          make([]RunEvent, 0),
 		doneCh:          make(chan struct{}),
 		finalOutputType: outputType,
@@ -54,6 +64,13 @@ func NewRunResultWithOutputType(chatCtx *llm.ChatContext, outputType reflect.Typ
 	}
 	result.Expect = &RunAssert{ChatCtx: chatCtx, result: result}
 	return result
+}
+
+func (r *RunResult) UserInput() string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	return r.userInput
 }
 
 func (r *RunResult) Done() bool {
