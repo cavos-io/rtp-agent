@@ -143,6 +143,7 @@ func TestFallbackAdapterRetriesSameLLMBeforeFallback(t *testing.T) {
 	}}}
 	adapter := NewFallbackAdapterWithOptions([]LLM{primary, fallback}, FallbackAdapterOptions{
 		MaxRetryPerLLM: 1,
+		RetryInterval:  time.Nanosecond,
 	})
 
 	stream, err := adapter.Chat(context.Background(), NewChatContext())
@@ -274,6 +275,45 @@ func TestFallbackAdapterWaitsRetryIntervalBeforeSameProviderRetry(t *testing.T) 
 	}
 	if elapsed := callTimes[1].Sub(callTimes[0]); elapsed < 25*time.Millisecond {
 		t.Fatalf("retry interval = %v, want at least 25ms", elapsed)
+	}
+}
+
+func TestFallbackAdapterDefaultsRetryInterval(t *testing.T) {
+	firstErr := errors.New("primary stream failed")
+	var callTimes []time.Time
+	primary := &fakeFallbackLLM{
+		streams: []LLMStream{
+			&fakeFallbackStream{events: []fakeFallbackEvent{{err: firstErr}}},
+			&fakeFallbackStream{events: []fakeFallbackEvent{
+				{chunk: &ChatChunk{Delta: &ChoiceDelta{Content: "primary recovered"}}},
+			}},
+		},
+		onChat: func(context.Context) {
+			callTimes = append(callTimes, time.Now())
+		},
+	}
+	adapter := NewFallbackAdapterWithOptions([]LLM{primary}, FallbackAdapterOptions{
+		MaxRetryPerLLM: 1,
+	})
+
+	stream, err := adapter.Chat(context.Background(), NewChatContext())
+	if err != nil {
+		t.Fatalf("Chat returned error: %v", err)
+	}
+	defer stream.Close()
+
+	chunk, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next returned error: %v", err)
+	}
+	if got := chunk.Delta.Content; got != "primary recovered" {
+		t.Fatalf("chunk content = %q, want primary recovered", got)
+	}
+	if len(callTimes) != 2 {
+		t.Fatalf("callTimes length = %d, want 2", len(callTimes))
+	}
+	if elapsed := callTimes[1].Sub(callTimes[0]); elapsed < 500*time.Millisecond {
+		t.Fatalf("retry interval = %v, want at least default 500ms", elapsed)
 	}
 }
 

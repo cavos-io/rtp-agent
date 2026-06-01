@@ -497,7 +497,10 @@ type FallbackAdapterOptions struct {
 	RetryOnChunkSent bool
 }
 
-const defaultFallbackAttemptTimeout = 5 * time.Second
+const (
+	defaultFallbackAttemptTimeout = 5 * time.Second
+	defaultFallbackRetryInterval  = 500 * time.Millisecond
+)
 
 func NewFallbackAdapter(llms []LLM) *FallbackAdapter {
 	return NewFallbackAdapterWithOptions(llms, FallbackAdapterOptions{})
@@ -511,11 +514,15 @@ func NewFallbackAdapterWithOptions(llms []LLM, options FallbackAdapterOptions) *
 	if attemptTimeout <= 0 {
 		attemptTimeout = defaultFallbackAttemptTimeout
 	}
+	retryInterval := options.RetryInterval
+	if retryInterval <= 0 {
+		retryInterval = defaultFallbackRetryInterval
+	}
 	return &FallbackAdapter{
 		llms:             llms,
 		attemptTimeout:   attemptTimeout,
 		maxRetryPerLLM:   options.MaxRetryPerLLM,
-		retryInterval:    options.RetryInterval,
+		retryInterval:    retryInterval,
 		retryOnChunkSent: options.RetryOnChunkSent,
 		available:        initialAvailability(len(llms)),
 		recovering:       make([]bool, len(llms)),
