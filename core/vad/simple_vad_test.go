@@ -200,6 +200,38 @@ func TestSimpleVADIgnoresMismatchedSampleRateFrames(t *testing.T) {
 	assertEventType(t, stream, VADEventEndOfSpeech)
 }
 
+func TestSimpleVADUsesConfiguredInferenceSampleRateForSampleIndex(t *testing.T) {
+	stream, err := NewSimpleVADWithOptions(SimpleVADOptions{
+		Threshold:  0.05,
+		SampleRate: 8000,
+	}).Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	defer stream.Close()
+
+	if err := stream.PushFrame(audioFrame(16000, 160, 6000)); err != nil {
+		t.Fatalf("PushFrame() error = %v", err)
+	}
+	inference := nextVADEvent(t, stream)
+	if inference.Type != VADEventInferenceDone {
+		t.Fatalf("event type = %s, want %s", inference.Type, VADEventInferenceDone)
+	}
+	if inference.SamplesIndex != 80 {
+		t.Fatalf("SamplesIndex = %d, want 80 at configured 8 kHz inference rate", inference.SamplesIndex)
+	}
+	if inference.Timestamp != 0.01 {
+		t.Fatalf("Timestamp = %v, want 0.01 from input duration", inference.Timestamp)
+	}
+	start := nextVADEvent(t, stream)
+	if start.Type != VADEventStartOfSpeech {
+		t.Fatalf("event type = %s, want %s", start.Type, VADEventStartOfSpeech)
+	}
+	if start.SamplesIndex != 80 {
+		t.Fatalf("start SamplesIndex = %d, want 80", start.SamplesIndex)
+	}
+}
+
 func TestSimpleVADUsesDeactivationThresholdWhileSpeaking(t *testing.T) {
 	stream, err := NewSimpleVADWithOptions(SimpleVADOptions{
 		Threshold:             0.1,

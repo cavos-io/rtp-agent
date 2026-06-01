@@ -170,6 +170,7 @@ func simpleOptionsFromSilero(options VADOptions) vad.SimpleVADOptions {
 		MaxBufferedSpeechDuration: options.MaxBufferedSpeech,
 		DeactivationThreshold:     options.DeactivationThreshold / 10.0,
 		UpdateInterval:            options.UpdateInterval,
+		SampleRate:                uint32(options.SampleRate),
 	}
 }
 

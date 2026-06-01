@@ -27,6 +27,7 @@ type SimpleVADOptions struct {
 	MaxBufferedSpeechDuration float64
 	DeactivationThreshold     float64
 	UpdateInterval            float64
+	SampleRate                uint32
 }
 
 func NewSimpleVAD(threshold float64) *SimpleVAD {
@@ -119,6 +120,7 @@ type simpleVADStream struct {
 	inputEnded                 bool
 	inputSampleRate            uint32
 	samplesIndex               int
+	sampleIndexRemainder       float64
 	timestamp                  float64
 	speechDuration             float64
 	silenceDuration            float64
@@ -164,8 +166,8 @@ func (s *simpleVADStream) PushFrame(frame *model.AudioFrame) error {
 	if s.lastActivity.IsZero() {
 		s.lastActivity = time.Now()
 	}
-	s.samplesIndex += int(frame.SamplesPerChannel)
 	s.timestamp += duration
+	s.samplesIndex += s.sampleIndexAdvance(duration)
 
 	inferenceStart := time.Now()
 	inferenceDuration := time.Since(inferenceStart).Seconds()
@@ -364,7 +366,19 @@ func (s *simpleVADStream) resetSegmentWithPrefixTail(frames []*model.AudioFrame)
 func (s *simpleVADStream) resetState() {
 	s.resetSegment()
 	s.samplesIndex = 0
+	s.sampleIndexRemainder = 0
 	s.timestamp = 0
+}
+
+func (s *simpleVADStream) sampleIndexAdvance(duration float64) int {
+	sampleRate := s.options.SampleRate
+	if sampleRate == 0 {
+		sampleRate = s.inputSampleRate
+	}
+	advance := duration*float64(sampleRate) + s.sampleIndexRemainder
+	whole := int(advance)
+	s.sampleIndexRemainder = advance - float64(whole)
+	return whole
 }
 
 func (s *simpleVADStream) prefixTailFrames(frames []*model.AudioFrame) []*model.AudioFrame {
@@ -667,6 +681,9 @@ func mergeSimpleVADOptions(current, updates SimpleVADOptions) SimpleVADOptions {
 	}
 	if updates.UpdateInterval != 0 {
 		current.UpdateInterval = updates.UpdateInterval
+	}
+	if updates.SampleRate != 0 {
+		current.SampleRate = updates.SampleRate
 	}
 	return current
 }
