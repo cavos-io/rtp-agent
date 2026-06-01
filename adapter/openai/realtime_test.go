@@ -127,3 +127,28 @@ func TestRealtimeVideoMessageMapsImageContent(t *testing.T) {
 		t.Fatalf("image_url = %#v, want data URL", content[0]["image_url"])
 	}
 }
+
+func TestRealtimeEventMapsInputAudioTranscriptionCompleted(t *testing.T) {
+	confidence := 0.87
+	ev, ok := openAIRealtimeEvent(map[string]any{
+		"type":       "conversation.item.input_audio_transcription.completed",
+		"item_id":    "item_123",
+		"transcript": "hello",
+		"confidence": confidence,
+	})
+	if !ok {
+		t.Fatal("openAIRealtimeEvent returned ok=false, want transcription event")
+	}
+	if ev.Type != llm.RealtimeEventTypeInputAudioTranscriptionCompleted {
+		t.Fatalf("event type = %q, want input audio transcription", ev.Type)
+	}
+	if ev.InputTranscription == nil {
+		t.Fatal("InputTranscription = nil, want transcription payload")
+	}
+	if ev.InputTranscription.ItemID != "item_123" || ev.InputTranscription.Transcript != "hello" || !ev.InputTranscription.IsFinal {
+		t.Fatalf("InputTranscription = %#v, want final item transcript", ev.InputTranscription)
+	}
+	if ev.InputTranscription.Confidence == nil || *ev.InputTranscription.Confidence != confidence {
+		t.Fatalf("Confidence = %#v, want %.2f", ev.InputTranscription.Confidence, confidence)
+	}
+}

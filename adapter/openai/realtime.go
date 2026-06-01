@@ -330,47 +330,85 @@ func (s *realtimeSession) eventLoop() {
 				continue
 			}
 
-			evType, _ := ev["type"].(string)
-			switch evType {
-			case "error":
+			realtimeEvent, ok := openAIRealtimeEvent(ev)
+			if !ok {
+				continue
+			}
+			if realtimeEvent.Type == llm.RealtimeEventTypeError {
 				logger.Logger.Errorw("OpenAI realtime error", nil, "payload", string(msg))
-				s.eventCh <- llm.RealtimeEvent{
-					Type:  llm.RealtimeEventTypeError,
-					Error: fmt.Errorf("openai error: %s", string(msg)),
-				}
-			case "response.text.delta":
-				if delta, ok := ev["delta"].(string); ok {
-					s.eventCh <- llm.RealtimeEvent{
-						Type: llm.RealtimeEventTypeText,
-						Text: delta,
-					}
-				}
-			case "response.audio.delta":
-				if delta, ok := ev["delta"].(string); ok {
-					s.eventCh <- llm.RealtimeEvent{
-						Type: llm.RealtimeEventTypeAudio,
-						Data: []byte(delta), // base64 encoded audio
-					}
-				}
-			case "response.function_call_arguments.delta":
-				if name, ok := ev["name"].(string); ok {
-					if args, ok2 := ev["delta"].(string); ok2 {
-						callID, _ := ev["call_id"].(string)
-						s.eventCh <- llm.RealtimeEvent{
-							Type: llm.RealtimeEventTypeFunctionCall,
-							Function: &llm.FunctionToolCall{
-								CallID:    callID,
-								Name:      name,
-								Arguments: args,
-							},
-						}
-					}
-				}
-			case "input_audio_buffer.speech_started":
-				s.eventCh <- llm.RealtimeEvent{Type: llm.RealtimeEventTypeSpeechStarted}
-			case "input_audio_buffer.speech_stopped":
-				s.eventCh <- llm.RealtimeEvent{Type: llm.RealtimeEventTypeSpeechStopped}
+			}
+			s.eventCh <- realtimeEvent
+		}
+	}
+}
+
+func openAIRealtimeEvent(ev map[string]any) (llm.RealtimeEvent, bool) {
+	evType, _ := ev["type"].(string)
+	switch evType {
+	case "error":
+		return llm.RealtimeEvent{
+			Type:  llm.RealtimeEventTypeError,
+			Error: fmt.Errorf("openai error: %v", ev),
+		}, true
+	case "response.text.delta":
+		if delta, ok := ev["delta"].(string); ok {
+			return llm.RealtimeEvent{
+				Type: llm.RealtimeEventTypeText,
+				Text: delta,
+			}, true
+		}
+	case "response.audio.delta":
+		if delta, ok := ev["delta"].(string); ok {
+			return llm.RealtimeEvent{
+				Type: llm.RealtimeEventTypeAudio,
+				Data: []byte(delta), // base64 encoded audio
+			}, true
+		}
+	case "response.function_call_arguments.delta":
+		if name, ok := ev["name"].(string); ok {
+			if args, ok2 := ev["delta"].(string); ok2 {
+				callID, _ := ev["call_id"].(string)
+				return llm.RealtimeEvent{
+					Type: llm.RealtimeEventTypeFunctionCall,
+					Function: &llm.FunctionToolCall{
+						CallID:    callID,
+						Name:      name,
+						Arguments: args,
+					},
+				}, true
 			}
 		}
+	case "conversation.item.input_audio_transcription.completed":
+		itemID, _ := ev["item_id"].(string)
+		transcript, _ := ev["transcript"].(string)
+		if itemID == "" && transcript == "" {
+			return llm.RealtimeEvent{}, false
+		}
+		return llm.RealtimeEvent{
+			Type: llm.RealtimeEventTypeInputAudioTranscriptionCompleted,
+			InputTranscription: &llm.InputTranscriptionCompleted{
+				ItemID:     itemID,
+				Transcript: transcript,
+				IsFinal:    true,
+				Confidence: openAIRealtimeFloatPtr(ev["confidence"]),
+			},
+		}, true
+	case "input_audio_buffer.speech_started":
+		return llm.RealtimeEvent{Type: llm.RealtimeEventTypeSpeechStarted}, true
+	case "input_audio_buffer.speech_stopped":
+		return llm.RealtimeEvent{Type: llm.RealtimeEventTypeSpeechStopped}, true
+	}
+	return llm.RealtimeEvent{}, false
+}
+
+func openAIRealtimeFloatPtr(v any) *float64 {
+	switch value := v.(type) {
+	case float64:
+		return &value
+	case float32:
+		f := float64(value)
+		return &f
+	default:
+		return nil
 	}
 }

@@ -508,20 +508,29 @@ type RealtimeSession interface {
 type RealtimeEventType string
 
 const (
-	RealtimeEventTypeAudio         RealtimeEventType = "audio"
-	RealtimeEventTypeText          RealtimeEventType = "text"
-	RealtimeEventTypeFunctionCall  RealtimeEventType = "function_call"
-	RealtimeEventTypeSpeechStarted RealtimeEventType = "speech_started"
-	RealtimeEventTypeSpeechStopped RealtimeEventType = "speech_stopped"
-	RealtimeEventTypeError         RealtimeEventType = "error"
+	RealtimeEventTypeAudio                            RealtimeEventType = "audio"
+	RealtimeEventTypeText                             RealtimeEventType = "text"
+	RealtimeEventTypeFunctionCall                     RealtimeEventType = "function_call"
+	RealtimeEventTypeSpeechStarted                    RealtimeEventType = "speech_started"
+	RealtimeEventTypeSpeechStopped                    RealtimeEventType = "speech_stopped"
+	RealtimeEventTypeInputAudioTranscriptionCompleted RealtimeEventType = "input_audio_transcription_completed"
+	RealtimeEventTypeError                            RealtimeEventType = "error"
 )
 
+type InputTranscriptionCompleted struct {
+	ItemID     string
+	Transcript string
+	IsFinal    bool
+	Confidence *float64
+}
+
 type RealtimeEvent struct {
-	Type     RealtimeEventType
-	Data     []byte // For audio frames
-	Text     string // For text deltas
-	Function *FunctionToolCall
-	Error    error
+	Type               RealtimeEventType
+	Data               []byte // For audio frames
+	Text               string // For text deltas
+	Function           *FunctionToolCall
+	InputTranscription *InputTranscriptionCompleted
+	Error              error
 }
 
 // Fallback Adapter
