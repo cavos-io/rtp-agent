@@ -3118,6 +3118,20 @@ func TestExecuteLocalJobRecordsRegisteredWorkerID(t *testing.T) {
 	}
 }
 
+func TestExecuteLocalJobRejectsMissingRTCSession(t *testing.T) {
+	server := NewAgentServer(WorkerOptions{})
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
+	defer cancel()
+
+	err := server.ExecuteLocalJob(ctx, "room-a", "agent-local")
+	if err == nil {
+		t.Fatal("ExecuteLocalJob() error = nil, want missing RTC session error")
+	}
+	if !strings.Contains(err.Error(), "No RTC session entrypoint") {
+		t.Fatalf("ExecuteLocalJob() error = %q, want RTC session message", err.Error())
+	}
+}
+
 func TestExecuteLocalJobWithOptionsCanRunReferenceConnectJob(t *testing.T) {
 	server := NewAgentServer(WorkerOptions{})
 	startedCh := make(chan *JobContext, 1)

@@ -1616,6 +1616,9 @@ func (s *AgentServer) ExecuteLocalJobWithOptions(ctx context.Context, roomName s
 	if !options.FakeJob && participantIdentity == "" && options.Token == "" {
 		return fmt.Errorf("agent identity is required for non-fake local jobs")
 	}
+	if s.entrypointFnc == nil {
+		return fmt.Errorf("No RTC session entrypoint has been registered")
+	}
 	jobCtx := newLocalJobContextWithOptions(roomName, participantIdentity, s.Options, options)
 	jobCtx.WorkerID = s.workerID
 	shutdownCh := make(chan struct{})
