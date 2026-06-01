@@ -701,6 +701,35 @@ func (s *AgentSession) Interrupt(force bool) error {
 	return activity.Interrupt(force)
 }
 
+func (s *AgentSession) UpdateAgent(agent AgentInterface) {
+	if agent == nil {
+		return
+	}
+	baseAgent := agent.GetAgent()
+
+	s.mu.Lock()
+	oldActivity := s.activity
+	started := s.started
+	s.Agent = agent
+	s.STT = baseAgent.STT
+	s.VAD = baseAgent.VAD
+	s.LLM = baseAgent.LLM
+	s.TTS = baseAgent.TTS
+	if !started {
+		s.mu.Unlock()
+		return
+	}
+
+	newActivity := NewAgentActivity(agent, s)
+	s.activity = newActivity
+	s.mu.Unlock()
+
+	if oldActivity != nil {
+		oldActivity.Stop()
+	}
+	newActivity.Start()
+}
+
 func (s *AgentSession) Stop(ctx context.Context) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
