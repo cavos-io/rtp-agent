@@ -22,9 +22,24 @@ type SpeechmaticsSTT struct {
 	outputLocale      string
 	includePartials   *bool
 	enableDiarization *bool
+	additionalVocab   []SpeechmaticsAdditionalVocabEntry
+	focusSpeakers     []string
+	ignoreSpeakers    []string
+	focusMode         string
+	knownSpeakers     []SpeechmaticsSpeakerIdentifier
 }
 
 type SpeechmaticsSTTOption func(*SpeechmaticsSTT)
+
+type SpeechmaticsAdditionalVocabEntry struct {
+	Content    string   `json:"content"`
+	SoundsLike []string `json:"sounds_like,omitempty"`
+}
+
+type SpeechmaticsSpeakerIdentifier struct {
+	Label     string `json:"label"`
+	SpeakerID string `json:"speaker_id"`
+}
 
 func WithSpeechmaticsSTTLanguage(language string) SpeechmaticsSTTOption {
 	return func(s *SpeechmaticsSTT) {
@@ -74,12 +89,35 @@ func WithSpeechmaticsSTTEnableDiarization(enabled bool) SpeechmaticsSTTOption {
 	}
 }
 
+func WithSpeechmaticsSTTAdditionalVocab(vocab []SpeechmaticsAdditionalVocabEntry) SpeechmaticsSTTOption {
+	return func(s *SpeechmaticsSTT) {
+		s.additionalVocab = vocab
+	}
+}
+
+func WithSpeechmaticsSTTSpeakerFocus(focusSpeakers []string, ignoreSpeakers []string, focusMode string) SpeechmaticsSTTOption {
+	return func(s *SpeechmaticsSTT) {
+		s.focusSpeakers = focusSpeakers
+		s.ignoreSpeakers = ignoreSpeakers
+		if focusMode != "" {
+			s.focusMode = focusMode
+		}
+	}
+}
+
+func WithSpeechmaticsSTTKnownSpeakers(speakers []SpeechmaticsSpeakerIdentifier) SpeechmaticsSTTOption {
+	return func(s *SpeechmaticsSTT) {
+		s.knownSpeakers = speakers
+	}
+}
+
 func NewSpeechmaticsSTT(apiKey string, opts ...SpeechmaticsSTTOption) *SpeechmaticsSTT {
 	provider := &SpeechmaticsSTT{
 		apiKey:        apiKey,
 		language:      "en",
 		sampleRate:    16000,
 		audioEncoding: "pcm_s16le",
+		focusMode:     "retain",
 	}
 	for _, opt := range opts {
 		opt(provider)
@@ -150,6 +188,19 @@ func buildSpeechmaticsSTTStartMessage(s *SpeechmaticsSTT, language string) map[s
 		} else {
 			config["diarization"] = "none"
 		}
+	}
+	if len(s.additionalVocab) > 0 {
+		config["additional_vocab"] = s.additionalVocab
+	}
+	if len(s.focusSpeakers) > 0 || len(s.ignoreSpeakers) > 0 || s.focusMode != "" {
+		config["speaker_config"] = map[string]interface{}{
+			"focus_speakers":  s.focusSpeakers,
+			"ignore_speakers": s.ignoreSpeakers,
+			"focus_mode":      s.focusMode,
+		}
+	}
+	if len(s.knownSpeakers) > 0 {
+		config["known_speakers"] = s.knownSpeakers
 	}
 	return map[string]interface{}{
 		"message": "StartRecognition",

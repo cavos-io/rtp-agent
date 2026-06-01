@@ -144,6 +144,41 @@ func TestSpeechmaticsSTTStartMessageUsesReferenceOptions(t *testing.T) {
 	}
 }
 
+func TestSpeechmaticsSTTStartMessageUsesVocabularyAndSpeakerOptions(t *testing.T) {
+	provider := NewSpeechmaticsSTT("test-key",
+		WithSpeechmaticsSTTAdditionalVocab([]SpeechmaticsAdditionalVocabEntry{
+			{Content: "LiveKit", SoundsLike: []string{"live kit"}},
+			{Content: "Cavos"},
+		}),
+		WithSpeechmaticsSTTSpeakerFocus([]string{"agent"}, []string{"customer"}, "ignore"),
+		WithSpeechmaticsSTTKnownSpeakers([]SpeechmaticsSpeakerIdentifier{
+			{Label: "agent", SpeakerID: "spk-1"},
+		}),
+	)
+
+	message := buildSpeechmaticsSTTStartMessage(provider, "")
+	config := message["transcription_config"].(map[string]interface{})
+
+	vocab := config["additional_vocab"].([]SpeechmaticsAdditionalVocabEntry)
+	if len(vocab) != 2 || vocab[0].Content != "LiveKit" || vocab[0].SoundsLike[0] != "live kit" {
+		t.Fatalf("additional_vocab = %#v, want LiveKit sounds-like entry", vocab)
+	}
+	speakerConfig := config["speaker_config"].(map[string]interface{})
+	if got := speakerConfig["focus_speakers"].([]string); len(got) != 1 || got[0] != "agent" {
+		t.Fatalf("focus_speakers = %#v, want agent", got)
+	}
+	if got := speakerConfig["ignore_speakers"].([]string); len(got) != 1 || got[0] != "customer" {
+		t.Fatalf("ignore_speakers = %#v, want customer", got)
+	}
+	if speakerConfig["focus_mode"] != "ignore" {
+		t.Fatalf("focus_mode = %#v, want ignore", speakerConfig["focus_mode"])
+	}
+	knownSpeakers := config["known_speakers"].([]SpeechmaticsSpeakerIdentifier)
+	if len(knownSpeakers) != 1 || knownSpeakers[0].Label != "agent" || knownSpeakers[0].SpeakerID != "spk-1" {
+		t.Fatalf("known_speakers = %#v, want agent speaker id", knownSpeakers)
+	}
+}
+
 func assertSpeechmaticsConfig(t *testing.T, config map[string]interface{}, key string, want interface{}) {
 	t.Helper()
 	if got := config[key]; got != want {
