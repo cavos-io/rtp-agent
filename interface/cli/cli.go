@@ -357,6 +357,10 @@ func runWorkerLifecycle(ctx context.Context, server workerLifecycle, devMode boo
 		return nil
 	}
 	if err := server.Drain(context.Background()); err != nil {
+		if errors.Is(err, context.DeadlineExceeded) {
+			logger.Logger.Warnw("drain timed out, forcing shutdown", err)
+			return nil
+		}
 		return err
 	}
 	return nil
