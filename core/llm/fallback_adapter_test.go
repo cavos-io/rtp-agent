@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"strings"
 	"testing"
 	"time"
 )
@@ -337,6 +338,26 @@ func TestFallbackAdapterDoesNotRetryCleanEOF(t *testing.T) {
 	}
 	if second.calls != 0 {
 		t.Fatalf("fallback LLM calls = %d, want 0", second.calls)
+	}
+}
+
+func TestFallbackAdapterReturnsAllFailedErrorWhenProvidersExhausted(t *testing.T) {
+	firstErr := errors.New("primary unavailable")
+	secondErr := errors.New("fallback unavailable")
+	adapter := NewFallbackAdapter([]LLM{
+		&fakeFallbackLLM{err: firstErr},
+		&fakeFallbackLLM{err: secondErr},
+	})
+
+	_, err := adapter.Chat(context.Background(), NewChatContext())
+	if err == nil {
+		t.Fatal("Chat error = nil, want all LLMs failed error")
+	}
+	if !errors.Is(err, secondErr) {
+		t.Fatalf("Chat error = %v, want to wrap final provider error", err)
+	}
+	if !strings.Contains(err.Error(), "all LLMs failed") {
+		t.Fatalf("Chat error = %q, want all LLMs failed message", err)
 	}
 }
 

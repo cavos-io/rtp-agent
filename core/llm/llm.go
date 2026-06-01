@@ -497,6 +497,23 @@ type FallbackAdapterOptions struct {
 	RetryOnChunkSent bool
 }
 
+type FallbackAllFailedError struct {
+	Count    int
+	Duration time.Duration
+	Err      error
+}
+
+func (e *FallbackAllFailedError) Error() string {
+	if e.Err == nil {
+		return fmt.Sprintf("all LLMs failed (%d providers) after %s", e.Count, e.Duration)
+	}
+	return fmt.Sprintf("all LLMs failed (%d providers) after %s: %v", e.Count, e.Duration, e.Err)
+}
+
+func (e *FallbackAllFailedError) Unwrap() error {
+	return e.Err
+}
+
 const (
 	defaultFallbackAttemptTimeout = 5 * time.Second
 	defaultFallbackRetryInterval  = 500 * time.Millisecond
@@ -639,6 +656,7 @@ func (s *fallbackLLMStream) tryStart(index int) error {
 	if s.retries == nil {
 		s.retries = make(map[int]int)
 	}
+	start := time.Now()
 	var lastErr error
 	allUnavailable := s.adapter.allUnavailable()
 	for i := index; i < len(s.adapter.llms); i++ {
@@ -666,6 +684,13 @@ func (s *fallbackLLMStream) tryStart(index int) error {
 			if err := s.adapter.waitRetryInterval(s.ctx); err != nil {
 				return err
 			}
+		}
+	}
+	if lastErr != nil {
+		return &FallbackAllFailedError{
+			Count:    len(s.adapter.llms),
+			Duration: time.Since(start),
+			Err:      lastErr,
 		}
 	}
 	return lastErr
