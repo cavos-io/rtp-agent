@@ -79,7 +79,8 @@ func TestProcPoolGetByJobIDFindsRunningExecutor(t *testing.T) {
 func TestProcPoolActiveJobsReturnsRunningAssignments(t *testing.T) {
 	runningA := RunningJobInfo{
 		AcceptArguments: JobAcceptArguments{
-			Identity: "agent-job-a",
+			Identity:   "agent-job-a",
+			Attributes: map[string]string{"tier": "gold"},
 		},
 		Job:      &livekit.Job{Id: "job-a"},
 		URL:      "wss://livekit.example",
@@ -129,6 +130,14 @@ func TestProcPoolActiveJobsReturnsRunningAssignments(t *testing.T) {
 	activeJobs[0].Token = "mutated"
 	if got := pool.ActiveJobs(); got[0].Token == "mutated" {
 		t.Fatal("mutating ActiveJobs() result changed stored running job")
+	}
+
+	activeJobs[0].AcceptArguments.Attributes["tier"] = "platinum"
+	refreshed := pool.ActiveJobs()
+	for _, info := range refreshed {
+		if info.Job.GetId() == "job-a" && info.AcceptArguments.Attributes["tier"] != "gold" {
+			t.Fatalf("mutating ActiveJobs() attributes changed stored running job to %q, want gold", info.AcceptArguments.Attributes["tier"])
+		}
 	}
 }
 
