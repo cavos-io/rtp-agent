@@ -569,6 +569,15 @@ func (s *AgentSession) CloseEvents() <-chan CloseEvent {
 }
 
 func (s *AgentSession) CloseSoon(reason CloseReason) {
+	s.mu.Lock()
+	started := s.started
+	activity := s.activity
+	agent := s.Agent
+	s.mu.Unlock()
+	if !started && activity == nil && agent != nil {
+		return
+	}
+
 	ch := s.closeEvents()
 	select {
 	case ch <- CloseEvent{Reason: reason, CreatedAt: time.Now()}:

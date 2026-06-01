@@ -618,6 +618,19 @@ func TestAgentSessionShutdownClosesWithUserInitiatedReason(t *testing.T) {
 	}
 }
 
+func TestAgentSessionShutdownDoesNotCloseUnstartedSession(t *testing.T) {
+	agent := NewAgent("test")
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+
+	session.Shutdown()
+
+	select {
+	case ev := <-session.CloseEvents():
+		t.Fatalf("unexpected close event for unstarted session: %#v", ev)
+	default:
+	}
+}
+
 func TestAgentSessionStopResetsSessionStates(t *testing.T) {
 	agent := NewAgent("test")
 	session := NewAgentSession(agent, nil, AgentSessionOptions{})
