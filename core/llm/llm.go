@@ -514,8 +514,14 @@ const (
 	RealtimeEventTypeSpeechStarted                    RealtimeEventType = "speech_started"
 	RealtimeEventTypeSpeechStopped                    RealtimeEventType = "speech_stopped"
 	RealtimeEventTypeInputAudioTranscriptionCompleted RealtimeEventType = "input_audio_transcription_completed"
+	RealtimeEventTypeGenerationCreated                RealtimeEventType = "generation_created"
 	RealtimeEventTypeError                            RealtimeEventType = "error"
 )
+
+type GenerationCreatedEvent struct {
+	ResponseID    string
+	UserInitiated bool
+}
 
 type InputTranscriptionCompleted struct {
 	ItemID     string
@@ -529,6 +535,7 @@ type RealtimeEvent struct {
 	Data               []byte // For audio frames
 	Text               string // For text deltas
 	Function           *FunctionToolCall
+	Generation         *GenerationCreatedEvent
 	InputTranscription *InputTranscriptionCompleted
 	Error              error
 }

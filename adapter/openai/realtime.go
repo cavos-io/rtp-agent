@@ -407,6 +407,20 @@ func openAIRealtimeEvent(ev map[string]any) (llm.RealtimeEvent, bool) {
 				IsFinal:    false,
 			},
 		}, true
+	case "response.created":
+		response, _ := ev["response"].(map[string]any)
+		responseID, _ := response["id"].(string)
+		if responseID == "" {
+			return llm.RealtimeEvent{}, false
+		}
+		_, userInitiated := openAIRealtimeResponseClientEventID(response)
+		return llm.RealtimeEvent{
+			Type: llm.RealtimeEventTypeGenerationCreated,
+			Generation: &llm.GenerationCreatedEvent{
+				ResponseID:    responseID,
+				UserInitiated: userInitiated,
+			},
+		}, true
 	case "input_audio_buffer.speech_started":
 		return llm.RealtimeEvent{Type: llm.RealtimeEventTypeSpeechStarted}, true
 	case "input_audio_buffer.speech_stopped":
@@ -425,4 +439,16 @@ func openAIRealtimeFloatPtr(v any) *float64 {
 	default:
 		return nil
 	}
+}
+
+func openAIRealtimeResponseClientEventID(response map[string]any) (string, bool) {
+	metadata, ok := response["metadata"].(map[string]any)
+	if !ok {
+		return "", false
+	}
+	clientEventID, ok := metadata["client_event_id"].(string)
+	if !ok || clientEventID == "" {
+		return "", false
+	}
+	return clientEventID, true
 }

@@ -175,3 +175,25 @@ func TestRealtimeEventMapsInputAudioTranscriptionDelta(t *testing.T) {
 		t.Fatalf("Confidence = %#v, want nil for delta", ev.InputTranscription.Confidence)
 	}
 }
+
+func TestRealtimeEventMapsResponseCreated(t *testing.T) {
+	ev, ok := openAIRealtimeEvent(map[string]any{
+		"type": "response.created",
+		"response": map[string]any{
+			"id":       "resp_123",
+			"metadata": map[string]any{"client_event_id": "response_create_123"},
+		},
+	})
+	if !ok {
+		t.Fatal("openAIRealtimeEvent returned ok=false, want generation-created event")
+	}
+	if ev.Type != llm.RealtimeEventTypeGenerationCreated {
+		t.Fatalf("event type = %q, want generation created", ev.Type)
+	}
+	if ev.Generation == nil {
+		t.Fatal("Generation = nil, want generation-created payload")
+	}
+	if ev.Generation.ResponseID != "resp_123" || !ev.Generation.UserInitiated {
+		t.Fatalf("Generation = %#v, want user-initiated response", ev.Generation)
+	}
+}

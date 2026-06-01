@@ -106,3 +106,20 @@ func TestRealtimeEventCanCarryInputAudioTranscription(t *testing.T) {
 		t.Fatalf("Confidence = %#v, want %.2f", ev.InputTranscription.Confidence, confidence)
 	}
 }
+
+func TestRealtimeEventCanCarryGenerationCreated(t *testing.T) {
+	ev := RealtimeEvent{
+		Type: RealtimeEventTypeGenerationCreated,
+		Generation: &GenerationCreatedEvent{
+			ResponseID:    "resp_123",
+			UserInitiated: true,
+		},
+	}
+
+	if ev.Generation == nil {
+		t.Fatal("Generation = nil, want generation-created payload")
+	}
+	if ev.Generation.ResponseID != "resp_123" || !ev.Generation.UserInitiated {
+		t.Fatalf("Generation = %#v, want user-initiated response", ev.Generation)
+	}
+}
