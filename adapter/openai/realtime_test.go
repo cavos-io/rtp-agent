@@ -176,6 +176,57 @@ func TestRealtimeEventMapsInputAudioTranscriptionDelta(t *testing.T) {
 	}
 }
 
+func TestRealtimeEventMapsOutputAudioTranscriptDelta(t *testing.T) {
+	for _, eventType := range []string{
+		"response.output_audio_transcript.delta",
+		"response.audio_transcript.delta",
+	} {
+		t.Run(eventType, func(t *testing.T) {
+			ev, ok := openAIRealtimeEvent(map[string]any{
+				"type":  eventType,
+				"delta": "hello",
+			})
+			if !ok {
+				t.Fatal("openAIRealtimeEvent returned ok=false, want text event")
+			}
+			if ev.Type != llm.RealtimeEventTypeText || ev.Text != "hello" {
+				t.Fatalf("event = %#v, want text delta hello", ev)
+			}
+		})
+	}
+}
+
+func TestRealtimeEventMapsOutputTextAndAudioAliases(t *testing.T) {
+	textEvent, ok := openAIRealtimeEvent(map[string]any{
+		"type":  "response.output_text.delta",
+		"delta": "hello",
+	})
+	if !ok {
+		t.Fatal("openAIRealtimeEvent text returned ok=false, want text event")
+	}
+	if textEvent.Type != llm.RealtimeEventTypeText || textEvent.Text != "hello" {
+		t.Fatalf("text event = %#v, want text delta hello", textEvent)
+	}
+
+	audioEvent, ok := openAIRealtimeEvent(map[string]any{
+		"type":  "response.output_audio.delta",
+		"delta": "aGVsbG8=",
+	})
+	if !ok {
+		t.Fatal("openAIRealtimeEvent audio returned ok=false, want audio event")
+	}
+	if audioEvent.Type != llm.RealtimeEventTypeAudio || string(audioEvent.Data) != "hello" {
+		t.Fatalf("audio event = %#v, want decoded audio bytes", audioEvent)
+	}
+
+	if _, ok := openAIRealtimeEvent(map[string]any{
+		"type":  "response.output_audio.delta",
+		"delta": "not-base64",
+	}); ok {
+		t.Fatal("openAIRealtimeEvent invalid audio returned ok=true, want false")
+	}
+}
+
 func TestRealtimeEventMapsResponseCreated(t *testing.T) {
 	ev, ok := openAIRealtimeEvent(map[string]any{
 		"type": "response.created",
@@ -232,6 +283,133 @@ func TestRealtimeEventMapsConversationItemAddedMessage(t *testing.T) {
 	}
 }
 
+func TestRealtimeSessionTracksRemoteItemAddedEvents(t *testing.T) {
+	session := &realtimeSession{remote: llm.NewRemoteChatContext()}
+	root := &llm.ChatMessage{ID: "root", Role: llm.ChatRoleUser, Content: []llm.ChatContent{{Text: "root"}}}
+	session.remote.Insert(nil, root)
+
+	ev := llm.RealtimeEvent{
+		Type: llm.RealtimeEventTypeRemoteItemAdded,
+		RemoteItem: &llm.RemoteItemAddedEvent{
+			PreviousItemID: "root",
+			Item: &llm.ChatMessage{
+				ID:      "remote_123",
+				Role:    llm.ChatRoleAssistant,
+				Content: []llm.ChatContent{{Text: "hello"}},
+			},
+		},
+	}
+
+	session.trackRealtimeEvent(ev)
+
+	item := session.remote.Get("remote_123")
+	msg, ok := item.(*llm.ChatMessage)
+	if !ok {
+		t.Fatalf("tracked item = %T, want *llm.ChatMessage", item)
+	}
+	if msg.TextContent() != "hello" {
+		t.Fatalf("tracked message text = %q, want hello", msg.TextContent())
+	}
+}
+
+func TestRealtimeSessionTracksRemoteItemDeletedEvents(t *testing.T) {
+	session := &realtimeSession{remote: llm.NewRemoteChatContext()}
+	root := &llm.ChatMessage{ID: "root", Role: llm.ChatRoleUser, Content: []llm.ChatContent{{Text: "root"}}}
+	removed := &llm.ChatMessage{ID: "removed", Role: llm.ChatRoleAssistant, Content: []llm.ChatContent{{Text: "removed"}}}
+	session.remote.Insert(nil, root)
+	previousID := root.ID
+	session.remote.Insert(&previousID, removed)
+
+	session.trackOpenAIRealtimeEvent(map[string]any{
+		"type":    "conversation.item.deleted",
+		"item_id": "removed",
+	})
+
+	if item := session.remote.Get("removed"); item != nil {
+		t.Fatalf("deleted item = %#v, want nil", item)
+	}
+	if item := session.remote.Get("root"); item == nil {
+		t.Fatal("root item missing after deleting another item")
+	}
+}
+
+func TestRealtimeSessionAccumulatesInputAudioTranscriptionDeltas(t *testing.T) {
+	session := &realtimeSession{}
+
+	first := session.trackRealtimeEvent(llm.RealtimeEvent{
+		Type: llm.RealtimeEventTypeInputAudioTranscriptionCompleted,
+		InputTranscription: &llm.InputTranscriptionCompleted{
+			ItemID:     "item_123",
+			Transcript: "hel",
+			IsFinal:    false,
+		},
+	})
+	second := session.trackRealtimeEvent(llm.RealtimeEvent{
+		Type: llm.RealtimeEventTypeInputAudioTranscriptionCompleted,
+		InputTranscription: &llm.InputTranscriptionCompleted{
+			ItemID:     "item_123",
+			Transcript: "lo",
+			IsFinal:    false,
+		},
+	})
+
+	if first.InputTranscription.Transcript != "hel" {
+		t.Fatalf("first transcript = %q, want hel", first.InputTranscription.Transcript)
+	}
+	if second.InputTranscription.Transcript != "hello" {
+		t.Fatalf("second transcript = %q, want accumulated hello", second.InputTranscription.Transcript)
+	}
+
+	session.trackRealtimeEvent(llm.RealtimeEvent{
+		Type: llm.RealtimeEventTypeInputAudioTranscriptionCompleted,
+		InputTranscription: &llm.InputTranscriptionCompleted{
+			ItemID:     "item_123",
+			Transcript: "hello",
+			IsFinal:    true,
+		},
+	})
+	next := session.trackRealtimeEvent(llm.RealtimeEvent{
+		Type: llm.RealtimeEventTypeInputAudioTranscriptionCompleted,
+		InputTranscription: &llm.InputTranscriptionCompleted{
+			ItemID:     "item_123",
+			Transcript: "new",
+			IsFinal:    false,
+		},
+	})
+	if next.InputTranscription.Transcript != "new" {
+		t.Fatalf("next transcript = %q, want new after final clears accumulator", next.InputTranscription.Transcript)
+	}
+}
+
+func TestRealtimeSessionUpdatesRemoteItemOnFinalInputAudioTranscription(t *testing.T) {
+	session := &realtimeSession{remote: llm.NewRemoteChatContext()}
+	msg := &llm.ChatMessage{ID: "item_123", Role: llm.ChatRoleUser}
+	session.remote.Insert(nil, msg)
+	confidence := 0.82
+
+	session.trackRealtimeEvent(llm.RealtimeEvent{
+		Type: llm.RealtimeEventTypeInputAudioTranscriptionCompleted,
+		InputTranscription: &llm.InputTranscriptionCompleted{
+			ItemID:     "item_123",
+			Transcript: "hello",
+			IsFinal:    true,
+			Confidence: &confidence,
+		},
+	})
+
+	item := session.remote.Get("item_123")
+	tracked, ok := item.(*llm.ChatMessage)
+	if !ok {
+		t.Fatalf("tracked item = %T, want *llm.ChatMessage", item)
+	}
+	if tracked.TextContent() != "hello" {
+		t.Fatalf("tracked message text = %q, want hello", tracked.TextContent())
+	}
+	if tracked.TranscriptConfidence == nil || *tracked.TranscriptConfidence != confidence {
+		t.Fatalf("tracked confidence = %#v, want %.2f", tracked.TranscriptConfidence, confidence)
+	}
+}
+
 func TestRealtimeEventMapsConversationItemAddedFunctionCall(t *testing.T) {
 	ev, ok := openAIRealtimeEvent(map[string]any{
 		"type": "conversation.item.added",
@@ -255,6 +433,152 @@ func TestRealtimeEventMapsConversationItemAddedFunctionCall(t *testing.T) {
 	}
 	if call.ID != "fc_123" || call.CallID != "call_123" || call.Name != "lookup" || call.Arguments != `{"query":"hello"}` {
 		t.Fatalf("function call = %#v, want OpenAI function call item", call)
+	}
+}
+
+func TestRealtimeEventMapsOutputItemDoneFunctionCall(t *testing.T) {
+	ev, ok := openAIRealtimeEvent(map[string]any{
+		"type": "response.output_item.done",
+		"item": map[string]any{
+			"id":        "fc_123",
+			"type":      "function_call",
+			"call_id":   "call_123",
+			"name":      "lookup",
+			"arguments": `{"query":"hello"}`,
+		},
+	})
+	if !ok {
+		t.Fatal("openAIRealtimeEvent returned ok=false, want completed function call event")
+	}
+	if ev.Type != llm.RealtimeEventTypeFunctionCall {
+		t.Fatalf("event type = %q, want function call", ev.Type)
+	}
+	if ev.Function == nil {
+		t.Fatal("Function = nil, want completed function call")
+	}
+	if ev.Function.CallID != "call_123" || ev.Function.Name != "lookup" || ev.Function.Arguments != `{"query":"hello"}` {
+		t.Fatalf("Function = %#v, want completed OpenAI function call", ev.Function)
+	}
+}
+
+func TestRealtimeEventMapsConversationItemAddedFunctionCallOutput(t *testing.T) {
+	ev, ok := openAIRealtimeEvent(map[string]any{
+		"type": "conversation.item.added",
+		"item": map[string]any{
+			"id":      "out_123",
+			"type":    "function_call_output",
+			"call_id": "call_123",
+			"output":  "Paris",
+		},
+	})
+	if !ok {
+		t.Fatal("openAIRealtimeEvent returned ok=false, want remote function output event")
+	}
+	if ev.Type != llm.RealtimeEventTypeRemoteItemAdded {
+		t.Fatalf("event type = %q, want remote item added", ev.Type)
+	}
+	output, ok := ev.RemoteItem.Item.(*llm.FunctionCallOutput)
+	if !ok {
+		t.Fatalf("RemoteItem.Item = %T, want *llm.FunctionCallOutput", ev.RemoteItem.Item)
+	}
+	if output.ID != "out_123" || output.CallID != "call_123" || output.Output != "Paris" || output.IsError {
+		t.Fatalf("function output = %#v, want successful OpenAI function output item", output)
+	}
+}
+
+func TestRealtimeChatContextCreateMessagesMapUserTextMessage(t *testing.T) {
+	chatCtx := llm.NewChatContext()
+	chatCtx.AddMessage(llm.ChatMessageArgs{
+		ID:   "msg_123",
+		Role: llm.ChatRoleUser,
+		Text: "hello",
+	})
+
+	msgs, err := openAIRealtimeChatContextCreateMessages(chatCtx)
+	if err != nil {
+		t.Fatalf("openAIRealtimeChatContextCreateMessages error = %v, want nil", err)
+	}
+	if len(msgs) != 1 {
+		t.Fatalf("messages len = %d, want 1", len(msgs))
+	}
+	msg := msgs[0]
+	if msg["type"] != "conversation.item.create" {
+		t.Fatalf("message type = %#v, want conversation.item.create", msg["type"])
+	}
+	if msg["previous_item_id"] != "root" {
+		t.Fatalf("previous_item_id = %#v, want root", msg["previous_item_id"])
+	}
+	item := msg["item"].(map[string]any)
+	if item["id"] != "msg_123" || item["type"] != "message" || item["role"] != "user" {
+		t.Fatalf("item = %#v, want user message item", item)
+	}
+	content := item["content"].([]map[string]any)
+	if len(content) != 1 || content[0]["type"] != "input_text" || content[0]["text"] != "hello" {
+		t.Fatalf("content = %#v, want input text hello", content)
+	}
+}
+
+func TestRealtimeChatContextCreateMessagesSkipAgentMetadataItems(t *testing.T) {
+	chatCtx := llm.NewChatContext()
+	chatCtx.Append(&llm.AgentHandoff{ID: "handoff", NewAgentID: "next"})
+	chatCtx.Append(&llm.AgentConfigUpdate{ID: "config"})
+	chatCtx.AddMessage(llm.ChatMessageArgs{
+		ID:   "msg_123",
+		Role: llm.ChatRoleUser,
+		Text: "hello",
+	})
+
+	msgs, err := openAIRealtimeChatContextCreateMessages(chatCtx)
+	if err != nil {
+		t.Fatalf("openAIRealtimeChatContextCreateMessages error = %v, want nil", err)
+	}
+	if len(msgs) != 1 {
+		t.Fatalf("messages len = %d, want only user message", len(msgs))
+	}
+	item := msgs[0]["item"].(map[string]any)
+	if item["id"] != "msg_123" {
+		t.Fatalf("item = %#v, want user message only", item)
+	}
+}
+
+func TestRealtimeChatContextUpdateMessagesDeleteRemovedAndRecreateChangedItems(t *testing.T) {
+	oldCtx := llm.NewChatContext()
+	oldCtx.AddMessage(llm.ChatMessageArgs{ID: "keep", Role: llm.ChatRoleUser, Text: "keep"})
+	oldCtx.AddMessage(llm.ChatMessageArgs{ID: "changed", Role: llm.ChatRoleAssistant, Text: "old"})
+	oldCtx.AddMessage(llm.ChatMessageArgs{ID: "removed", Role: llm.ChatRoleUser, Text: "remove"})
+
+	newCtx := llm.NewChatContext()
+	newCtx.AddMessage(llm.ChatMessageArgs{ID: "keep", Role: llm.ChatRoleUser, Text: "keep"})
+	newCtx.AddMessage(llm.ChatMessageArgs{ID: "changed", Role: llm.ChatRoleAssistant, Text: "new"})
+	newCtx.AddMessage(llm.ChatMessageArgs{ID: "created", Role: llm.ChatRoleUser, Text: "create"})
+
+	msgs, err := openAIRealtimeChatContextUpdateMessages(oldCtx, newCtx)
+	if err != nil {
+		t.Fatalf("openAIRealtimeChatContextUpdateMessages error = %v, want nil", err)
+	}
+	if len(msgs) != 4 {
+		t.Fatalf("messages len = %d, want delete removed, create created, delete changed, create changed", len(msgs))
+	}
+	if msgs[0]["type"] != "conversation.item.delete" || msgs[0]["item_id"] != "removed" {
+		t.Fatalf("first message = %#v, want delete removed", msgs[0])
+	}
+	if msgs[1]["type"] != "conversation.item.create" || msgs[1]["previous_item_id"] != "changed" {
+		t.Fatalf("second message = %#v, want create after changed", msgs[1])
+	}
+	created := msgs[1]["item"].(map[string]any)
+	if created["id"] != "created" {
+		t.Fatalf("created item = %#v, want created", created)
+	}
+	if msgs[2]["type"] != "conversation.item.delete" || msgs[2]["item_id"] != "changed" {
+		t.Fatalf("third message = %#v, want delete changed", msgs[2])
+	}
+	if msgs[3]["type"] != "conversation.item.create" || msgs[3]["previous_item_id"] != "keep" {
+		t.Fatalf("fourth message = %#v, want recreate changed after keep", msgs[3])
+	}
+	changed := msgs[3]["item"].(map[string]any)
+	content := changed["content"].([]map[string]any)
+	if changed["id"] != "changed" || content[0]["text"] != "new" {
+		t.Fatalf("changed item = %#v, want changed text new", changed)
 	}
 }
 

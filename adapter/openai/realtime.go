@@ -49,11 +49,13 @@ func (m *RealtimeModel) Capabilities() llm.RealtimeCapabilities {
 }
 
 type realtimeSession struct {
-	conn    *websocket.Conn
-	ctx     context.Context
-	cancel  context.CancelFunc
-	mu      sync.Mutex
-	eventCh chan llm.RealtimeEvent
+	conn             *websocket.Conn
+	ctx              context.Context
+	cancel           context.CancelFunc
+	mu               sync.Mutex
+	eventCh          chan llm.RealtimeEvent
+	remote           *llm.RemoteChatContext
+	inputTranscripts map[string]string
 }
 
 func (m *RealtimeModel) Session() (llm.RealtimeSession, error) {
@@ -74,6 +76,7 @@ func (m *RealtimeModel) Session() (llm.RealtimeSession, error) {
 		ctx:     ctx,
 		cancel:  cancel,
 		eventCh: make(chan llm.RealtimeEvent, 100),
+		remote:  llm.NewRemoteChatContext(),
 	}
 
 	go s.eventLoop()
@@ -96,7 +99,20 @@ func (s *realtimeSession) UpdateInstructions(instructions string) error {
 }
 
 func (s *realtimeSession) UpdateChatContext(chatCtx *llm.ChatContext) error {
-	// Send existing context to OpenAI
+	if s.remote == nil {
+		s.remote = llm.NewRemoteChatContext()
+	}
+	syncedChatCtx := openAIRealtimeSyncedChatContext(chatCtx)
+	msgs, err := openAIRealtimeChatContextUpdateMessages(s.remote.ToChatCtx(), syncedChatCtx)
+	if err != nil {
+		return err
+	}
+	for _, msg := range msgs {
+		if err := s.sendMsg(msg); err != nil {
+			return err
+		}
+	}
+	s.remote = openAIRealtimeRemoteSnapshot(syncedChatCtx)
 	return nil
 }
 
@@ -121,6 +137,185 @@ func openAIRealtimeTools(tools []llm.Tool) []map[string]any {
 		})
 	}
 	return oaTools
+}
+
+func openAIRealtimeChatContextCreateMessages(chatCtx *llm.ChatContext) ([]map[string]any, error) {
+	return openAIRealtimeChatContextUpdateMessages(llm.NewChatContext(), openAIRealtimeSyncedChatContext(chatCtx))
+}
+
+func openAIRealtimeChatContextUpdateMessages(oldCtx, newCtx *llm.ChatContext) ([]map[string]any, error) {
+	if oldCtx == nil {
+		oldCtx = llm.NewChatContext()
+	}
+	if newCtx == nil {
+		newCtx = llm.NewChatContext()
+	}
+	diff := llm.ComputeChatCtxDiff(oldCtx, newCtx)
+	msgs := make([]map[string]any, 0, len(diff.ToRemove)+len(diff.ToCreate)+len(diff.ToUpdate)*2)
+	for _, itemID := range diff.ToRemove {
+		msgs = append(msgs, openAIRealtimeDeleteChatItemMessage(itemID))
+	}
+	for _, item := range diff.ToCreate {
+		msg, err := openAIRealtimeCreateChatItemMessage(newCtx, item[0], item[1])
+		if err != nil {
+			return nil, err
+		}
+		msgs = append(msgs, msg)
+	}
+	for _, item := range diff.ToUpdate {
+		if item[1] == nil {
+			continue
+		}
+		msgs = append(msgs, openAIRealtimeDeleteChatItemMessage(*item[1]))
+		msg, err := openAIRealtimeCreateChatItemMessage(newCtx, item[0], item[1])
+		if err != nil {
+			return nil, err
+		}
+		msgs = append(msgs, msg)
+	}
+	return msgs, nil
+}
+
+func openAIRealtimeSyncedChatContext(chatCtx *llm.ChatContext) *llm.ChatContext {
+	if chatCtx == nil {
+		return llm.NewChatContext()
+	}
+	return chatCtx.Copy(llm.ChatContextCopyOptions{
+		ExcludeHandoff:      true,
+		ExcludeConfigUpdate: true,
+	})
+}
+
+func openAIRealtimeRemoteSnapshot(chatCtx *llm.ChatContext) *llm.RemoteChatContext {
+	remote := llm.NewRemoteChatContext()
+	if chatCtx == nil {
+		return remote
+	}
+	var previous *string
+	for _, item := range chatCtx.Items {
+		if err := remote.Insert(previous, item); err != nil {
+			return remote
+		}
+		itemID := item.GetID()
+		previous = &itemID
+	}
+	return remote
+}
+
+func openAIRealtimeDeleteChatItemMessage(itemID string) map[string]any {
+	return map[string]any{
+		"type":    "conversation.item.delete",
+		"item_id": itemID,
+	}
+}
+
+func openAIRealtimeCreateChatItemMessage(chatCtx *llm.ChatContext, previousItemID *string, itemID *string) (map[string]any, error) {
+	if itemID == nil {
+		return nil, fmt.Errorf("missing realtime chat item id")
+	}
+	item := chatCtx.GetByID(*itemID)
+	if item == nil {
+		return nil, fmt.Errorf("realtime chat item %q not found", *itemID)
+	}
+	openAIItem, err := openAIRealtimeChatItemMessage(item)
+	if err != nil {
+		return nil, err
+	}
+	previous := any("root")
+	if previousItemID != nil {
+		previous = *previousItemID
+	}
+	return map[string]any{
+		"type":             "conversation.item.create",
+		"previous_item_id": previous,
+		"item":             openAIItem,
+	}, nil
+}
+
+func openAIRealtimeChatItemMessage(item llm.ChatItem) (map[string]any, error) {
+	switch it := item.(type) {
+	case *llm.ChatMessage:
+		content, err := openAIRealtimeChatMessageContent(it)
+		if err != nil {
+			return nil, err
+		}
+		return map[string]any{
+			"id":      it.ID,
+			"type":    "message",
+			"role":    string(openAIRealtimeMessageRole(it.Role)),
+			"content": content,
+		}, nil
+	case *llm.FunctionCall:
+		return map[string]any{
+			"id":        it.ID,
+			"type":      "function_call",
+			"call_id":   it.CallID,
+			"name":      it.Name,
+			"arguments": it.Arguments,
+		}, nil
+	case *llm.FunctionCallOutput:
+		return map[string]any{
+			"id":      it.ID,
+			"type":    "function_call_output",
+			"call_id": it.CallID,
+			"output":  it.Output,
+		}, nil
+	default:
+		return nil, fmt.Errorf("unsupported realtime chat item %T", item)
+	}
+}
+
+func openAIRealtimeMessageRole(role llm.ChatRole) llm.ChatRole {
+	if role == llm.ChatRoleDeveloper {
+		return llm.ChatRoleSystem
+	}
+	return role
+}
+
+func openAIRealtimeChatMessageContent(msg *llm.ChatMessage) ([]map[string]any, error) {
+	content := make([]map[string]any, 0, len(msg.Content))
+	for _, part := range msg.Content {
+		if part.Text != "" {
+			partType := "input_text"
+			if msg.Role == llm.ChatRoleAssistant {
+				partType = "output_text"
+			}
+			content = append(content, map[string]any{
+				"type": partType,
+				"text": part.Text,
+			})
+		}
+		if part.Image != nil {
+			imagePart, err := openAIRealtimeImageContent(part.Image)
+			if err != nil {
+				return nil, err
+			}
+			if imagePart != nil {
+				content = append(content, imagePart)
+			}
+		}
+		if part.Audio != nil && part.Audio.Transcript != "" {
+			content = append(content, map[string]any{
+				"type":       "input_audio",
+				"transcript": part.Audio.Transcript,
+			})
+		}
+	}
+	return content, nil
+}
+
+func openAIRealtimeImageContent(image *llm.ImageContent) (map[string]any, error) {
+	img, err := llm.SerializeImage(image)
+	if err != nil {
+		return nil, err
+	}
+	if img.ExternalURL != "" {
+		return nil, nil
+	}
+	return map[string]any{
+		"type":      "input_image",
+		"image_url": fmt.Sprintf("data:%s;base64,%s", img.MIMEType, base64.StdEncoding.EncodeToString(img.DataBytes)),
+	}, nil
 }
 
 func (s *realtimeSession) UpdateOptions(options llm.RealtimeSessionOptions) error {
@@ -331,6 +526,7 @@ func (s *realtimeSession) eventLoop() {
 				continue
 			}
 
+			s.trackOpenAIRealtimeEvent(ev)
 			realtimeEvent, ok := openAIRealtimeEvent(ev)
 			if !ok {
 				continue
@@ -338,9 +534,84 @@ func (s *realtimeSession) eventLoop() {
 			if realtimeEvent.Type == llm.RealtimeEventTypeError {
 				logger.Logger.Errorw("OpenAI realtime error", nil, "payload", string(msg))
 			}
+			realtimeEvent = s.trackRealtimeEvent(realtimeEvent)
 			s.eventCh <- realtimeEvent
 		}
 	}
+}
+
+func (s *realtimeSession) trackOpenAIRealtimeEvent(ev map[string]any) {
+	evType, _ := ev["type"].(string)
+	if evType != "conversation.item.deleted" {
+		return
+	}
+	itemID, _ := ev["item_id"].(string)
+	if itemID == "" {
+		return
+	}
+	if s.remote == nil {
+		s.remote = llm.NewRemoteChatContext()
+	}
+	if err := s.remote.Delete(itemID); err != nil {
+		logger.Logger.Warnw("failed to track OpenAI realtime deleted item", err, "item_id", itemID)
+	}
+}
+
+func (s *realtimeSession) trackRealtimeEvent(ev llm.RealtimeEvent) llm.RealtimeEvent {
+	if ev.Type == llm.RealtimeEventTypeRemoteItemAdded {
+		s.trackRealtimeRemoteItemAdded(ev)
+		return ev
+	}
+	if ev.Type == llm.RealtimeEventTypeInputAudioTranscriptionCompleted {
+		return s.trackRealtimeInputTranscription(ev)
+	}
+	return ev
+}
+
+func (s *realtimeSession) trackRealtimeRemoteItemAdded(ev llm.RealtimeEvent) {
+	if ev.RemoteItem == nil || ev.RemoteItem.Item == nil {
+		return
+	}
+	if s.remote == nil {
+		s.remote = llm.NewRemoteChatContext()
+	}
+	var previousItemID *string
+	if ev.RemoteItem.PreviousItemID != "" {
+		previousItemID = &ev.RemoteItem.PreviousItemID
+	}
+	if err := s.remote.Insert(previousItemID, ev.RemoteItem.Item); err != nil {
+		logger.Logger.Warnw("failed to track OpenAI realtime remote item", err, "item_id", ev.RemoteItem.Item.GetID())
+	}
+}
+
+func (s *realtimeSession) trackRealtimeInputTranscription(ev llm.RealtimeEvent) llm.RealtimeEvent {
+	transcription := ev.InputTranscription
+	if transcription == nil || transcription.ItemID == "" {
+		return ev
+	}
+	if !transcription.IsFinal {
+		if s.inputTranscripts == nil {
+			s.inputTranscripts = make(map[string]string)
+		}
+		s.inputTranscripts[transcription.ItemID] += transcription.Transcript
+		transcription.Transcript = s.inputTranscripts[transcription.ItemID]
+		return ev
+	}
+	if s.inputTranscripts != nil {
+		delete(s.inputTranscripts, transcription.ItemID)
+	}
+	if s.remote == nil {
+		return ev
+	}
+	msg, ok := s.remote.Get(transcription.ItemID).(*llm.ChatMessage)
+	if !ok {
+		return ev
+	}
+	if transcription.Transcript != "" {
+		msg.Content = append(msg.Content, llm.ChatContent{Text: transcription.Transcript})
+	}
+	msg.TranscriptConfidence = transcription.Confidence
+	return ev
 }
 
 func openAIRealtimeEvent(ev map[string]any) (llm.RealtimeEvent, bool) {
@@ -351,18 +622,29 @@ func openAIRealtimeEvent(ev map[string]any) (llm.RealtimeEvent, bool) {
 			Type:  llm.RealtimeEventTypeError,
 			Error: fmt.Errorf("openai error: %v", ev),
 		}, true
-	case "response.text.delta":
+	case "response.output_text.delta", "response.text.delta":
 		if delta, ok := ev["delta"].(string); ok {
 			return llm.RealtimeEvent{
 				Type: llm.RealtimeEventTypeText,
 				Text: delta,
 			}, true
 		}
-	case "response.audio.delta":
+	case "response.output_audio_transcript.delta", "response.audio_transcript.delta":
 		if delta, ok := ev["delta"].(string); ok {
 			return llm.RealtimeEvent{
+				Type: llm.RealtimeEventTypeText,
+				Text: delta,
+			}, true
+		}
+	case "response.output_audio.delta", "response.audio.delta":
+		if delta, ok := ev["delta"].(string); ok {
+			data, err := base64.StdEncoding.DecodeString(delta)
+			if err != nil {
+				return llm.RealtimeEvent{}, false
+			}
+			return llm.RealtimeEvent{
 				Type: llm.RealtimeEventTypeAudio,
-				Data: []byte(delta), // base64 encoded audio
+				Data: data,
 			}, true
 		}
 	case "response.function_call_arguments.delta":
@@ -379,6 +661,23 @@ func openAIRealtimeEvent(ev map[string]any) (llm.RealtimeEvent, bool) {
 				}, true
 			}
 		}
+	case "response.output_item.done":
+		item, _ := ev["item"].(map[string]any)
+		if itemType, _ := item["type"].(string); itemType != "function_call" {
+			return llm.RealtimeEvent{}, false
+		}
+		call, err := openAIRealtimeFunctionCall(item)
+		if err != nil {
+			return llm.RealtimeEvent{}, false
+		}
+		return llm.RealtimeEvent{
+			Type: llm.RealtimeEventTypeFunctionCall,
+			Function: &llm.FunctionToolCall{
+				CallID:    call.CallID,
+				Name:      call.Name,
+				Arguments: call.Arguments,
+			},
+		}, true
 	case "conversation.item.input_audio_transcription.completed":
 		itemID, _ := ev["item_id"].(string)
 		transcript, _ := ev["transcript"].(string)
@@ -500,9 +799,26 @@ func openAIRealtimeChatItem(item map[string]any) (llm.ChatItem, error) {
 		return openAIRealtimeChatMessage(item)
 	case "function_call":
 		return openAIRealtimeFunctionCall(item)
+	case "function_call_output":
+		return openAIRealtimeFunctionCallOutput(item)
 	default:
 		return nil, fmt.Errorf("unsupported realtime item type %q", itemType)
 	}
+}
+
+func openAIRealtimeFunctionCallOutput(item map[string]any) (*llm.FunctionCallOutput, error) {
+	id, _ := item["id"].(string)
+	callID, _ := item["call_id"].(string)
+	output, _ := item["output"].(string)
+	if id == "" || callID == "" {
+		return nil, fmt.Errorf("malformed realtime function call output item")
+	}
+	return &llm.FunctionCallOutput{
+		ID:      id,
+		CallID:  callID,
+		Output:  output,
+		IsError: false,
+	}, nil
 }
 
 func openAIRealtimeFunctionCall(item map[string]any) (*llm.FunctionCall, error) {
