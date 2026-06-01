@@ -525,6 +525,7 @@ func (s *realtimeSession) eventLoop() {
 				continue
 			}
 
+			s.trackOpenAIRealtimeEvent(ev)
 			realtimeEvent, ok := openAIRealtimeEvent(ev)
 			if !ok {
 				continue
@@ -535,6 +536,23 @@ func (s *realtimeSession) eventLoop() {
 			s.trackRealtimeEvent(realtimeEvent)
 			s.eventCh <- realtimeEvent
 		}
+	}
+}
+
+func (s *realtimeSession) trackOpenAIRealtimeEvent(ev map[string]any) {
+	evType, _ := ev["type"].(string)
+	if evType != "conversation.item.deleted" {
+		return
+	}
+	itemID, _ := ev["item_id"].(string)
+	if itemID == "" {
+		return
+	}
+	if s.remote == nil {
+		s.remote = llm.NewRemoteChatContext()
+	}
+	if err := s.remote.Delete(itemID); err != nil {
+		logger.Logger.Warnw("failed to track OpenAI realtime deleted item", err, "item_id", itemID)
 	}
 }
 

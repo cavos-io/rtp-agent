@@ -305,6 +305,27 @@ func TestRealtimeSessionTracksRemoteItemAddedEvents(t *testing.T) {
 	}
 }
 
+func TestRealtimeSessionTracksRemoteItemDeletedEvents(t *testing.T) {
+	session := &realtimeSession{remote: llm.NewRemoteChatContext()}
+	root := &llm.ChatMessage{ID: "root", Role: llm.ChatRoleUser, Content: []llm.ChatContent{{Text: "root"}}}
+	removed := &llm.ChatMessage{ID: "removed", Role: llm.ChatRoleAssistant, Content: []llm.ChatContent{{Text: "removed"}}}
+	session.remote.Insert(nil, root)
+	previousID := root.ID
+	session.remote.Insert(&previousID, removed)
+
+	session.trackOpenAIRealtimeEvent(map[string]any{
+		"type":    "conversation.item.deleted",
+		"item_id": "removed",
+	})
+
+	if item := session.remote.Get("removed"); item != nil {
+		t.Fatalf("deleted item = %#v, want nil", item)
+	}
+	if item := session.remote.Get("root"); item == nil {
+		t.Fatal("root item missing after deleting another item")
+	}
+}
+
 func TestRealtimeEventMapsConversationItemAddedFunctionCall(t *testing.T) {
 	ev, ok := openAIRealtimeEvent(map[string]any{
 		"type": "conversation.item.added",
