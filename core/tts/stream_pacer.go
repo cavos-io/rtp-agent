@@ -29,6 +29,7 @@ type SentenceStreamPacer struct {
 	sentenceCh chan pacerSentence
 	audioCh    chan *SynthesizedAudio
 
+	sendMu            sync.Mutex
 	mu                sync.Mutex
 	yieldedAudioTime  time.Duration
 	playbackStartTime time.Time
@@ -37,7 +38,8 @@ type SentenceStreamPacer struct {
 	lastAudioTime     time.Time
 	audioErr          error
 
-	closed bool
+	closed    bool
+	inputDone bool
 }
 
 type pacerInput struct {
@@ -144,16 +146,16 @@ func (p *SentenceStreamPacer) paceLoop() {
 			return
 		case sentence, ok := <-p.sentenceCh:
 			if !ok {
-				p.flushPendingSentences(&pending, &firstSentence)
+				p.flushPendingSentences(&pending, &firstSentence, p.isInputDone())
 				return
 			}
 			if sentence.flush {
-				p.flushPendingSentences(&pending, &firstSentence)
+				p.flushPendingSentences(&pending, &firstSentence, false)
 				continue
 			}
 			pending = append(pending, sentence.text)
 			if p.drainAvailableSentences(&pending) {
-				p.flushPendingSentences(&pending, &firstSentence)
+				p.flushPendingSentences(&pending, &firstSentence, p.isInputDone())
 				continue
 			}
 
@@ -202,7 +204,7 @@ func (p *SentenceStreamPacer) remainingAudioLocked() time.Duration {
 	return 0
 }
 
-func (p *SentenceStreamPacer) flushPendingSentences(pending *[]string, firstSentence *bool) {
+func (p *SentenceStreamPacer) flushPendingSentences(pending *[]string, firstSentence *bool, endInput bool) {
 	for len(*pending) > 0 {
 		if !p.waitUntilReadyToSend(*firstSentence) {
 			return
@@ -210,6 +212,10 @@ func (p *SentenceStreamPacer) flushPendingSentences(pending *[]string, firstSent
 		if err := p.pushBatch(pending, firstSentence); err != nil {
 			return
 		}
+	}
+	if endInput {
+		_ = endSynthesizeStreamInput(p.underlying)
+		return
 	}
 	p.underlying.Flush()
 }
@@ -295,10 +301,17 @@ func (p *SentenceStreamPacer) audioLoop() {
 }
 
 func (p *SentenceStreamPacer) PushText(text string) error {
+	p.sendMu.Lock()
+	defer p.sendMu.Unlock()
+
 	p.mu.Lock()
 	if p.closed {
 		p.mu.Unlock()
 		return fmt.Errorf("pacer closed")
+	}
+	if p.inputDone {
+		p.mu.Unlock()
+		return nil
 	}
 	p.mu.Unlock()
 
@@ -307,10 +320,17 @@ func (p *SentenceStreamPacer) PushText(text string) error {
 }
 
 func (p *SentenceStreamPacer) Flush() error {
+	p.sendMu.Lock()
+	defer p.sendMu.Unlock()
+
 	p.mu.Lock()
 	if p.closed {
 		p.mu.Unlock()
 		return fmt.Errorf("pacer closed")
+	}
+	if p.inputDone {
+		p.mu.Unlock()
+		return nil
 	}
 	p.mu.Unlock()
 
@@ -318,16 +338,48 @@ func (p *SentenceStreamPacer) Flush() error {
 	return nil
 }
 
+func (p *SentenceStreamPacer) EndInput() error {
+	p.sendMu.Lock()
+	defer p.sendMu.Unlock()
+
+	p.mu.Lock()
+	if p.closed {
+		p.mu.Unlock()
+		return fmt.Errorf("pacer closed")
+	}
+	if p.inputDone {
+		p.mu.Unlock()
+		return nil
+	}
+	p.inputDone = true
+	close(p.textCh)
+	p.mu.Unlock()
+	return nil
+}
+
 func (p *SentenceStreamPacer) Close() error {
+	p.sendMu.Lock()
+	defer p.sendMu.Unlock()
+
 	p.mu.Lock()
 	if p.closed {
 		p.mu.Unlock()
 		return nil
 	}
 	p.closed = true
+	if !p.inputDone {
+		p.inputDone = true
+		close(p.textCh)
+	}
 	p.mu.Unlock()
 	p.cancel()
 	return p.underlying.Close()
+}
+
+func (p *SentenceStreamPacer) isInputDone() bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.inputDone
 }
 
 func (p *SentenceStreamPacer) Next() (*SynthesizedAudio, error) {
