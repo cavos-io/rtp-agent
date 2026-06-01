@@ -52,6 +52,15 @@ func TestNewAgentSessionInitializesAgentStateInitializing(t *testing.T) {
 	}
 }
 
+func TestNewAgentSessionInitializesUsageCollector(t *testing.T) {
+	agent := NewAgent("test")
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+
+	if session.MetricsCollector == nil {
+		t.Fatal("MetricsCollector = nil, want default usage collector")
+	}
+}
+
 func TestAgentSessionGenerateReplyEmitsSpeechCreatedEvent(t *testing.T) {
 	agent := NewAgent("test")
 	session := NewAgentSession(agent, nil, AgentSessionOptions{AllowInterruptions: true})
@@ -729,7 +738,6 @@ func receiveAgentStateChangedEvent(t *testing.T, session *AgentSession) AgentSta
 func TestAgentSessionEmitMetricsCollectedCollectsUsageAndEmitsEvent(t *testing.T) {
 	agent := NewAgent("test")
 	session := NewAgentSession(agent, nil, AgentSessionOptions{})
-	session.MetricsCollector = telemetry.NewUsageCollector()
 	metrics := &telemetry.LLMMetrics{
 		PromptTokens:     7,
 		CompletionTokens: 11,
@@ -768,5 +776,20 @@ func TestAgentSessionEmitMetricsCollectedCollectsUsageAndEmitsEvent(t *testing.T
 		}
 	case <-time.After(time.Second):
 		t.Fatal("SessionUsageUpdatedEvents did not receive event")
+	}
+}
+
+func TestAgentSessionUsageReturnsCollectedSummary(t *testing.T) {
+	agent := NewAgent("test")
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+
+	session.EmitMetricsCollected(&telemetry.LLMMetrics{
+		PromptTokens:     3,
+		CompletionTokens: 5,
+	})
+
+	usage := session.Usage()
+	if usage.LLMPromptTokens != 3 || usage.LLMCompletionTokens != 5 {
+		t.Fatalf("Usage = %#v, want prompt=3 completion=5", usage)
 	}
 }

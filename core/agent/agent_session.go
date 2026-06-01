@@ -183,6 +183,7 @@ func NewAgentSession(agent AgentInterface, room *lksdk.Room, opts AgentSessionOp
 		Options:             opts,
 		ChatCtx:             llm.NewChatContext(),
 		Tools:               make([]llm.Tool, 0),
+		MetricsCollector:    telemetry.NewUsageCollector(),
 		UserState:           UserStateListening,
 		AgentState:          AgentStateInitializing,
 		AgentStateChangedCh: make(chan AgentStateChangedEvent, 10),
@@ -435,6 +436,13 @@ func (s *AgentSession) EmitMetricsCollected(metrics telemetry.AgentMetrics) {
 	if s.MetricsCollector != nil {
 		s.EmitSessionUsageUpdated(SessionUsageUpdatedEvent{Usage: usage})
 	}
+}
+
+func (s *AgentSession) Usage() telemetry.UsageSummary {
+	if s.MetricsCollector == nil {
+		return telemetry.UsageSummary{}
+	}
+	return s.MetricsCollector.GetSummary()
 }
 
 func (s *AgentSession) metricsCollectedEvents() chan MetricsCollectedEvent {
