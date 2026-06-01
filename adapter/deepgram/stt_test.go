@@ -134,6 +134,20 @@ func TestDeepgramSTTDefaultsMatchReference(t *testing.T) {
 	}
 }
 
+func TestDeepgramSTTUsesEnvAPIKeyWhenOmitted(t *testing.T) {
+	t.Setenv("DEEPGRAM_API_KEY", "env-key")
+
+	provider := NewDeepgramSTT("", "")
+	if provider.apiKey != "env-key" {
+		t.Fatalf("apiKey = %q, want env key", provider.apiKey)
+	}
+
+	provider = NewDeepgramSTT("explicit-key", "")
+	if provider.apiKey != "explicit-key" {
+		t.Fatalf("apiKey = %q, want explicit key", provider.apiKey)
+	}
+}
+
 func TestDeepgramStreamURLUsesReferenceOptions(t *testing.T) {
 	provider := NewDeepgramSTT("test-key", "")
 

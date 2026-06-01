@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"os"
 	"strconv"
 	"strings"
 	"sync"
@@ -165,6 +166,9 @@ func WithDeepgramSTTTags(tags []string) DeepgramSTTOption {
 }
 
 func NewDeepgramSTT(apiKey string, model string, opts ...DeepgramSTTOption) *DeepgramSTT {
+	if apiKey == "" {
+		apiKey = os.Getenv("DEEPGRAM_API_KEY")
+	}
 	if model == "" {
 		model = "nova-3"
 	}
