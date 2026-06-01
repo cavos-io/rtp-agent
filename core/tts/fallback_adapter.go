@@ -142,6 +142,29 @@ func (f *FallbackAdapter) removeAvailabilityChangedHandler(id uint64) {
 	}
 }
 
+func (f *FallbackAdapter) OnMetricsCollected(handler TTSMetricsHandler) func() {
+	if handler == nil {
+		return func() {}
+	}
+	unsubscribes := make([]func(), 0, len(f.ttss))
+	for _, tts := range f.ttss {
+		collector, ok := tts.(metricsCollectorTTS)
+		if !ok {
+			continue
+		}
+		unsubscribes = append(unsubscribes, collector.OnMetricsCollected(handler))
+	}
+
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			for _, unsubscribe := range unsubscribes {
+				unsubscribe()
+			}
+		})
+	}
+}
+
 func (f *FallbackAdapter) Capabilities() TTSCapabilities {
 	return f.capabilities
 }

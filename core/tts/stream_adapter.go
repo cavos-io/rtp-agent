@@ -38,6 +38,13 @@ func (a *StreamAdapter) Prewarm() {
 	Prewarm(a.tts)
 }
 
+func (a *StreamAdapter) OnMetricsCollected(handler TTSMetricsHandler) func() {
+	if collector, ok := a.tts.(metricsCollectorTTS); ok {
+		return collector.OnMetricsCollected(handler)
+	}
+	return func() {}
+}
+
 func (a *StreamAdapter) Capabilities() TTSCapabilities {
 	return TTSCapabilities{Streaming: true, AlignedTranscript: true}
 }
