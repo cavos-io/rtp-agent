@@ -238,6 +238,10 @@ func buildElevenLabsStreamURL(t *ElevenLabsTTS) string {
 		q.Set("language_code", t.language)
 	}
 	q.Set("enable_ssml_parsing", strconv.FormatBool(t.enableSSMLParsing))
+	q.Set("enable_logging", "true")
+	q.Set("inactivity_timeout", "300")
+	q.Set("apply_text_normalization", "auto")
+	q.Set("sync_alignment", "true")
 	parsed.RawQuery = q.Encode()
 	return parsed.String()
 }

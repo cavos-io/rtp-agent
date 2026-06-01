@@ -122,6 +122,18 @@ func TestElevenLabsStreamURLUsesReferenceOptions(t *testing.T) {
 	if parsed.Query().Get("enable_ssml_parsing") != "true" {
 		t.Fatalf("enable_ssml_parsing = %q, want true", parsed.Query().Get("enable_ssml_parsing"))
 	}
+	if parsed.Query().Get("enable_logging") != "true" {
+		t.Fatalf("enable_logging = %q, want true", parsed.Query().Get("enable_logging"))
+	}
+	if parsed.Query().Get("inactivity_timeout") != "300" {
+		t.Fatalf("inactivity_timeout = %q, want 300", parsed.Query().Get("inactivity_timeout"))
+	}
+	if parsed.Query().Get("apply_text_normalization") != "auto" {
+		t.Fatalf("apply_text_normalization = %q, want auto", parsed.Query().Get("apply_text_normalization"))
+	}
+	if parsed.Query().Get("sync_alignment") != "true" {
+		t.Fatalf("sync_alignment = %q, want true", parsed.Query().Get("sync_alignment"))
+	}
 }
 
 func TestElevenLabsStreamURLUsesConfiguredBaseURL(t *testing.T) {
