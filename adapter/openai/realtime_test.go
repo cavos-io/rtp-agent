@@ -315,6 +315,47 @@ func TestRealtimeChatContextCreateMessagesMapUserTextMessage(t *testing.T) {
 	}
 }
 
+func TestRealtimeChatContextUpdateMessagesDeleteRemovedAndRecreateChangedItems(t *testing.T) {
+	oldCtx := llm.NewChatContext()
+	oldCtx.AddMessage(llm.ChatMessageArgs{ID: "keep", Role: llm.ChatRoleUser, Text: "keep"})
+	oldCtx.AddMessage(llm.ChatMessageArgs{ID: "changed", Role: llm.ChatRoleAssistant, Text: "old"})
+	oldCtx.AddMessage(llm.ChatMessageArgs{ID: "removed", Role: llm.ChatRoleUser, Text: "remove"})
+
+	newCtx := llm.NewChatContext()
+	newCtx.AddMessage(llm.ChatMessageArgs{ID: "keep", Role: llm.ChatRoleUser, Text: "keep"})
+	newCtx.AddMessage(llm.ChatMessageArgs{ID: "changed", Role: llm.ChatRoleAssistant, Text: "new"})
+	newCtx.AddMessage(llm.ChatMessageArgs{ID: "created", Role: llm.ChatRoleUser, Text: "create"})
+
+	msgs, err := openAIRealtimeChatContextUpdateMessages(oldCtx, newCtx)
+	if err != nil {
+		t.Fatalf("openAIRealtimeChatContextUpdateMessages error = %v, want nil", err)
+	}
+	if len(msgs) != 4 {
+		t.Fatalf("messages len = %d, want delete removed, create created, delete changed, create changed", len(msgs))
+	}
+	if msgs[0]["type"] != "conversation.item.delete" || msgs[0]["item_id"] != "removed" {
+		t.Fatalf("first message = %#v, want delete removed", msgs[0])
+	}
+	if msgs[1]["type"] != "conversation.item.create" || msgs[1]["previous_item_id"] != "changed" {
+		t.Fatalf("second message = %#v, want create after changed", msgs[1])
+	}
+	created := msgs[1]["item"].(map[string]any)
+	if created["id"] != "created" {
+		t.Fatalf("created item = %#v, want created", created)
+	}
+	if msgs[2]["type"] != "conversation.item.delete" || msgs[2]["item_id"] != "changed" {
+		t.Fatalf("third message = %#v, want delete changed", msgs[2])
+	}
+	if msgs[3]["type"] != "conversation.item.create" || msgs[3]["previous_item_id"] != "keep" {
+		t.Fatalf("fourth message = %#v, want recreate changed after keep", msgs[3])
+	}
+	changed := msgs[3]["item"].(map[string]any)
+	content := changed["content"].([]map[string]any)
+	if changed["id"] != "changed" || content[0]["text"] != "new" {
+		t.Fatalf("changed item = %#v, want changed text new", changed)
+	}
+}
+
 func TestRealtimeEventMapsResponseDoneMetrics(t *testing.T) {
 	ev, ok := openAIRealtimeEvent(map[string]any{
 		"type": "response.done",

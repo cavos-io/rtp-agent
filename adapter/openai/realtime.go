@@ -54,6 +54,7 @@ type realtimeSession struct {
 	cancel  context.CancelFunc
 	mu      sync.Mutex
 	eventCh chan llm.RealtimeEvent
+	remote  *llm.RemoteChatContext
 }
 
 func (m *RealtimeModel) Session() (llm.RealtimeSession, error) {
@@ -74,6 +75,7 @@ func (m *RealtimeModel) Session() (llm.RealtimeSession, error) {
 		ctx:     ctx,
 		cancel:  cancel,
 		eventCh: make(chan llm.RealtimeEvent, 100),
+		remote:  llm.NewRemoteChatContext(),
 	}
 
 	go s.eventLoop()
@@ -96,7 +98,10 @@ func (s *realtimeSession) UpdateInstructions(instructions string) error {
 }
 
 func (s *realtimeSession) UpdateChatContext(chatCtx *llm.ChatContext) error {
-	msgs, err := openAIRealtimeChatContextCreateMessages(chatCtx)
+	if s.remote == nil {
+		s.remote = llm.NewRemoteChatContext()
+	}
+	msgs, err := openAIRealtimeChatContextUpdateMessages(s.remote.ToChatCtx(), chatCtx)
 	if err != nil {
 		return err
 	}
@@ -105,6 +110,7 @@ func (s *realtimeSession) UpdateChatContext(chatCtx *llm.ChatContext) error {
 			return err
 		}
 	}
+	s.remote = openAIRealtimeRemoteSnapshot(chatCtx)
 	return nil
 }
 
@@ -132,24 +138,86 @@ func openAIRealtimeTools(tools []llm.Tool) []map[string]any {
 }
 
 func openAIRealtimeChatContextCreateMessages(chatCtx *llm.ChatContext) ([]map[string]any, error) {
-	if chatCtx == nil {
-		return nil, nil
+	return openAIRealtimeChatContextUpdateMessages(llm.NewChatContext(), chatCtx)
+}
+
+func openAIRealtimeChatContextUpdateMessages(oldCtx, newCtx *llm.ChatContext) ([]map[string]any, error) {
+	if oldCtx == nil {
+		oldCtx = llm.NewChatContext()
 	}
-	msgs := make([]map[string]any, 0, len(chatCtx.Items))
-	var previousItemID any = "root"
-	for _, item := range chatCtx.Items {
-		openAIItem, err := openAIRealtimeChatItemMessage(item)
+	if newCtx == nil {
+		newCtx = llm.NewChatContext()
+	}
+	diff := llm.ComputeChatCtxDiff(oldCtx, newCtx)
+	msgs := make([]map[string]any, 0, len(diff.ToRemove)+len(diff.ToCreate)+len(diff.ToUpdate)*2)
+	for _, itemID := range diff.ToRemove {
+		msgs = append(msgs, openAIRealtimeDeleteChatItemMessage(itemID))
+	}
+	for _, item := range diff.ToCreate {
+		msg, err := openAIRealtimeCreateChatItemMessage(newCtx, item[0], item[1])
 		if err != nil {
 			return nil, err
 		}
-		msgs = append(msgs, map[string]any{
-			"type":             "conversation.item.create",
-			"previous_item_id": previousItemID,
-			"item":             openAIItem,
-		})
-		previousItemID = item.GetID()
+		msgs = append(msgs, msg)
+	}
+	for _, item := range diff.ToUpdate {
+		if item[1] == nil {
+			continue
+		}
+		msgs = append(msgs, openAIRealtimeDeleteChatItemMessage(*item[1]))
+		msg, err := openAIRealtimeCreateChatItemMessage(newCtx, item[0], item[1])
+		if err != nil {
+			return nil, err
+		}
+		msgs = append(msgs, msg)
 	}
 	return msgs, nil
+}
+
+func openAIRealtimeRemoteSnapshot(chatCtx *llm.ChatContext) *llm.RemoteChatContext {
+	remote := llm.NewRemoteChatContext()
+	if chatCtx == nil {
+		return remote
+	}
+	var previous *string
+	for _, item := range chatCtx.Items {
+		if err := remote.Insert(previous, item); err != nil {
+			return remote
+		}
+		itemID := item.GetID()
+		previous = &itemID
+	}
+	return remote
+}
+
+func openAIRealtimeDeleteChatItemMessage(itemID string) map[string]any {
+	return map[string]any{
+		"type":    "conversation.item.delete",
+		"item_id": itemID,
+	}
+}
+
+func openAIRealtimeCreateChatItemMessage(chatCtx *llm.ChatContext, previousItemID *string, itemID *string) (map[string]any, error) {
+	if itemID == nil {
+		return nil, fmt.Errorf("missing realtime chat item id")
+	}
+	item := chatCtx.GetByID(*itemID)
+	if item == nil {
+		return nil, fmt.Errorf("realtime chat item %q not found", *itemID)
+	}
+	openAIItem, err := openAIRealtimeChatItemMessage(item)
+	if err != nil {
+		return nil, err
+	}
+	previous := any("root")
+	if previousItemID != nil {
+		previous = *previousItemID
+	}
+	return map[string]any{
+		"type":             "conversation.item.create",
+		"previous_item_id": previous,
+		"item":             openAIItem,
+	}, nil
 }
 
 func openAIRealtimeChatItemMessage(item llm.ChatItem) (map[string]any, error) {
