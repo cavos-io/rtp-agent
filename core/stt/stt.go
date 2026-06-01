@@ -3,6 +3,7 @@ package stt
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/cavos-io/conversation-worker/model"
 )
@@ -109,6 +110,10 @@ func nonNegativeStreamTime(value float64) float64 {
 		return 0
 	}
 	return value
+}
+
+func streamStartTimeNow() float64 {
+	return float64(time.Now().UnixNano()) / float64(time.Second)
 }
 
 type InputEnding interface {

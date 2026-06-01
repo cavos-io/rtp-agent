@@ -79,9 +79,10 @@ func newFallbackAdapter(stts []STT, vad vad.VAD, options FallbackAdapterOptions)
 	}
 
 	capabilities := STTCapabilities{
-		Streaming:      true,
-		InterimResults: true,
-		Diarization:    true,
+		Streaming:        true,
+		InterimResults:   true,
+		Diarization:      true,
+		OfflineRecognize: true,
 	}
 	if len(wrapped) > 0 {
 		capabilities.AlignedTranscript = wrapped[0].Capabilities().AlignedTranscript
@@ -94,7 +95,6 @@ func newFallbackAdapter(stts []STT, vad vad.VAD, options FallbackAdapterOptions)
 		if sttCapabilities.AlignedTranscript == "" {
 			capabilities.AlignedTranscript = ""
 		}
-		capabilities.OfflineRecognize = capabilities.OfflineRecognize || sttCapabilities.OfflineRecognize
 	}
 
 	return &FallbackAdapter{
@@ -235,41 +235,6 @@ func (f *FallbackAdapter) clearRecovering(index int) {
 	f.recovering[index] = false
 }
 
-func (f *FallbackAdapter) tryRecoverStream(ctx context.Context, index int, language string, inputs []fallbackRecognizeInput) {
-	if !f.markRecoveringStream(index) {
-		return
-	}
-	recoveryCtx := context.WithoutCancel(ctx)
-
-	go func() {
-		defer f.clearRecoveringStream(index)
-
-		stt := f.stts[index]
-		stream, err := stt.Stream(recoveryCtx, language)
-		if err != nil {
-			return
-		}
-		defer stream.Close()
-
-		if err := replayFallbackInputs(stream, inputs); err != nil {
-			return
-		}
-
-		for {
-			ev, err := stream.Next()
-			if err != nil {
-				return
-			}
-			if ev.Type != SpeechEventFinalTranscript || len(ev.Alternatives) == 0 || ev.Alternatives[0].Text == "" {
-				continue
-			}
-			f.setAvailable(index, true)
-			logger.Logger.Infow("Recovered STT stream provider", "stt", stt.Label())
-			return
-		}
-	}()
-}
-
 func (f *FallbackAdapter) markRecoveringStream(index int) bool {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -333,6 +298,7 @@ func (f *FallbackAdapter) Stream(ctx context.Context, language string) (Recogniz
 		inputBuffer: make([]fallbackRecognizeInput, 0),
 		retries:     make(map[int]int),
 		startedAt:   time.Now(),
+		startTime:   streamStartTimeNow(),
 	}
 
 	if err := s.tryStartStream(0); err != nil {
@@ -385,7 +351,7 @@ func (s *fallbackRecognizeStream) tryStartStream(index int) error {
 	}
 
 	if lastErr != nil {
-		return lastErr
+		return s.allFailedError(lastErr)
 	}
 	return s.allFailedError(s.lastErr)
 }
@@ -463,12 +429,6 @@ func replayFallbackInputs(stream RecognizeStream, inputs []fallbackRecognizeInpu
 	return nil
 }
 
-func cloneFallbackInputs(inputs []fallbackRecognizeInput) []fallbackRecognizeInput {
-	cloned := make([]fallbackRecognizeInput, len(inputs))
-	copy(cloned, inputs)
-	return cloned
-}
-
 func (s *fallbackRecognizeStream) monitorStream() {
 	for {
 		s.mu.Lock()
@@ -503,7 +463,7 @@ func (s *fallbackRecognizeStream) monitorStream() {
 				nextIndex = s.activeIndex
 			} else {
 				s.adapter.setAvailable(s.activeIndex, false)
-				s.tryRecoverStream(s.activeIndex, cloneFallbackInputs(s.inputBuffer))
+				s.tryRecoverStream(s.activeIndex)
 			}
 
 			if fbErr := s.tryStartStream(nextIndex); fbErr != nil {
@@ -541,7 +501,7 @@ func (s *fallbackRecognizeStream) canRetrySTT(index int) bool {
 	return s.retries[index] < s.adapter.maxRetryPerSTT
 }
 
-func (s *fallbackRecognizeStream) tryRecoverStream(index int, inputs []fallbackRecognizeInput) {
+func (s *fallbackRecognizeStream) tryRecoverStream(index int) {
 	if !s.adapter.markRecoveringStream(index) {
 		return
 	}
@@ -561,10 +521,6 @@ func (s *fallbackRecognizeStream) tryRecoverStream(index int, inputs []fallbackR
 		s.recoveries = append(s.recoveries, stream)
 		s.mu.Unlock()
 		defer s.removeRecovery(stream)
-
-		if err := replayFallbackInputs(stream, inputs); err != nil {
-			return
-		}
 
 		for {
 			ev, err := stream.Next()
@@ -645,18 +601,22 @@ func (s *fallbackRecognizeStream) EndInput() error {
 		return fmt.Errorf("stream input ended")
 	}
 	s.inputEnded = true
-	s.inputBuffer = append(s.inputBuffer, fallbackRecognizeInput{end: true})
+	s.inputBuffer = append(s.inputBuffer, fallbackRecognizeInput{flush: true}, fallbackRecognizeInput{end: true})
 	for _, recovery := range s.recoveries {
+		_ = recovery.Flush()
 		if ending, ok := recovery.(InputEnding); ok {
 			_ = ending.EndInput()
 		} else {
-			_ = recovery.Flush()
+			continue
 		}
+	}
+	if err := s.activeStream.Flush(); err != nil {
+		return err
 	}
 	if ending, ok := s.activeStream.(InputEnding); ok {
 		return ending.EndInput()
 	}
-	return s.activeStream.Flush()
+	return nil
 }
 
 func (s *fallbackRecognizeStream) Close() error {

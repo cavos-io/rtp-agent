@@ -516,6 +516,7 @@ type fallbackSynthesizeStream struct {
 	retries      map[int]int
 	inputBuffer  []fallbackSynthesizeInput
 	requestID    string
+	segmentID    string
 
 	eventCh chan *SynthesizedAudio
 	errCh   chan error
@@ -537,6 +538,7 @@ func (f *FallbackAdapter) Stream(ctx context.Context) (SynthesizeStream, error) 
 		closeCh:   make(chan struct{}),
 		retries:   make(map[int]int),
 		requestID: cavosmath.ShortUUID(""),
+		segmentID: cavosmath.ShortUUID(""),
 	}
 
 	if err := s.tryStartStream(0); err != nil {
@@ -679,6 +681,7 @@ func (s *fallbackSynthesizeStream) monitorStream() {
 		}
 		ev = cloneSynthesizedAudio(ev)
 		ev.RequestID = s.requestID
+		ev.SegmentID = s.segmentID
 
 		audioSent = true
 		if ev.IsFinal {

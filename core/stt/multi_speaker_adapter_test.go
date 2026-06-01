@@ -72,6 +72,37 @@ func TestPrimarySpeakerDetectorSuppressesFormattedBackgroundText(t *testing.T) {
 	}
 }
 
+func TestPrimarySpeakerDetectorTreatsSilentRMSAsValidData(t *testing.T) {
+	detector := newPrimarySpeakerDetector(
+		true,
+		false,
+		"{text}",
+		"{text}",
+		DefaultPrimarySpeakerDetectionOptions(),
+	)
+	detector.rmsBuffer = []float64{0, 0, 0}
+	detector.pushedDuration = 0.3
+
+	event := detector.onSttEvent(&SpeechEvent{
+		Type: SpeechEventFinalTranscript,
+		Alternatives: []SpeechData{{
+			Text:      "quiet",
+			SpeakerID: "speaker-a",
+			StartTime: 0,
+			EndTime:   0.3,
+		}},
+	})
+	if event == nil {
+		t.Fatal("event = nil, want final transcript")
+	}
+	if detector.primarySpeaker != "speaker-a" {
+		t.Fatalf("primarySpeaker = %q, want speaker-a", detector.primarySpeaker)
+	}
+	if event.Alternatives[0].IsPrimarySpeaker == nil || !*event.Alternatives[0].IsPrimarySpeaker {
+		t.Fatalf("IsPrimarySpeaker = %#v, want true", event.Alternatives[0].IsPrimarySpeaker)
+	}
+}
+
 func TestPrimarySpeakerDetectorPushAudioInitializesByteStream(t *testing.T) {
 	detector := newPrimarySpeakerDetector(
 		true,
@@ -262,6 +293,32 @@ func TestMultiSpeakerAdapterWrapperPropagatesTimingAnchors(t *testing.T) {
 	}
 }
 
+func TestMultiSpeakerAdapterStreamSeedsStartTime(t *testing.T) {
+	inner := &fakeMultiSpeakerStream{nextErr: io.EOF}
+	adapter, err := NewMultiSpeakerAdapter(&metadataSTT{
+		label:        "diarized",
+		capabilities: STTCapabilities{Streaming: true, Diarization: true},
+		stream:       inner,
+	}, true, false, "{text}", "{text}", nil)
+	if err != nil {
+		t.Fatalf("NewMultiSpeakerAdapter returned error: %v", err)
+	}
+
+	before := time.Now()
+	stream, err := adapter.Stream(context.Background(), "en")
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+	after := time.Now()
+	defer stream.Close()
+
+	timing, ok := stream.(StreamTiming)
+	if !ok {
+		t.Fatal("stream does not implement StreamTiming")
+	}
+	assertStreamStartTimeSeeded(t, timing, before, after)
+}
+
 func TestMultiSpeakerAdapterWrapperEndInputFlushesAndRejectsMoreInput(t *testing.T) {
 	inner := &fakeMultiSpeakerStream{nextErr: io.EOF}
 	wrapper := &multiSpeakerAdapterWrapper{
@@ -312,8 +369,12 @@ func TestMultiSpeakerAdapterWrapperForwardsEndInput(t *testing.T) {
 	case <-time.After(100 * time.Millisecond):
 		t.Fatal("timed out waiting for inner EndInput")
 	}
-	if !reflect.DeepEqual(inner.calls, []string{"end_input"}) {
-		t.Fatalf("inner calls = %#v, want end_input", inner.calls)
+	want := []string{"flush", "end_input"}
+	if len(inner.calls) != len(want) {
+		t.Fatalf("inner call count = %d, want %d: %#v", len(inner.calls), len(want), inner.calls)
+	}
+	if !reflect.DeepEqual(inner.calls, want) {
+		t.Fatalf("inner calls = %#v, want %#v", inner.calls, want)
 	}
 }
 

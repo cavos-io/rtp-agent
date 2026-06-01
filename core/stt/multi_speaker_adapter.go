@@ -94,14 +94,15 @@ func (a *MultiSpeakerAdapter) Stream(ctx context.Context, language string) (Reco
 
 	ctx, cancel := context.WithCancel(ctx)
 	w := &multiSpeakerAdapterWrapper{
-		adapter:  a,
-		inner:    innerStream,
-		ctx:      ctx,
-		cancel:   cancel,
-		detector: newPrimarySpeakerDetector(a.detectPrimarySpeaker, a.suppressBackgroundSpeaker, a.primaryFormat, a.backgroundFormat, a.opt),
-		eventCh:  make(chan *SpeechEvent, 100),
-		errCh:    make(chan error, 1),
-		inputCh:  make(chan multiSpeakerInput, 100),
+		adapter:   a,
+		inner:     innerStream,
+		ctx:       ctx,
+		cancel:    cancel,
+		detector:  newPrimarySpeakerDetector(a.detectPrimarySpeaker, a.suppressBackgroundSpeaker, a.primaryFormat, a.backgroundFormat, a.opt),
+		eventCh:   make(chan *SpeechEvent, 100),
+		errCh:     make(chan error, 1),
+		inputCh:   make(chan multiSpeakerInput, 100),
+		startTime: streamStartTimeNow(),
 	}
 
 	go w.run()
@@ -283,12 +284,14 @@ func (w *multiSpeakerAdapterWrapper) run() {
 					continue
 				}
 				if input.end {
+					if err := w.inner.Flush(); err != nil {
+						w.sendErr(err)
+						return
+					}
 					if ending, ok := w.inner.(InputEnding); ok {
 						if err := ending.EndInput(); err != nil {
 							w.sendErr(err)
 						}
-					} else if err := w.inner.Flush(); err != nil {
-						w.sendErr(err)
 					}
 					return
 				}
@@ -398,9 +401,9 @@ func (d *primarySpeakerDetector) computeRms(frame *model.AudioFrame) float64 {
 	return math.Sqrt(mean)
 }
 
-func (d *primarySpeakerDetector) getRmsForTimerange(startTime float64, endTime float64) float64 {
+func (d *primarySpeakerDetector) getRmsForTimerange(startTime float64, endTime float64) (float64, bool) {
 	if len(d.rmsBuffer) == 0 {
-		return 0.0
+		return 0.0, false
 	}
 
 	start := int((d.pushedDuration - startTime) / d.frameSize)
@@ -409,14 +412,14 @@ func (d *primarySpeakerDetector) getRmsForTimerange(startTime float64, endTime f
 	endIdx := len(d.rmsBuffer) - end
 
 	if endIdx < 0 || startIdx >= len(d.rmsBuffer) {
-		return 0.0
+		return 0.0, false
 	}
 	if startIdx < 0 {
 		startIdx = 0
 	}
 
 	if endIdx-startIdx < d.opt.MinRMSSamples {
-		return 0.0
+		return 0.0, false
 	}
 
 	slice := make([]float64, endIdx-startIdx)
@@ -438,7 +441,7 @@ func (d *primarySpeakerDetector) getRmsForTimerange(startTime float64, endTime f
 		median = slice[n/2]
 	}
 
-	return median
+	return median, true
 }
 
 func (d *primarySpeakerDetector) updatePrimarySpeaker(sd *SpeechData) {
@@ -447,8 +450,8 @@ func (d *primarySpeakerDetector) updatePrimarySpeaker(sd *SpeechData) {
 		return
 	}
 
-	rms := d.getRmsForTimerange(sd.StartTime, sd.EndTime)
-	if rms == 0.0 {
+	rms, ok := d.getRmsForTimerange(sd.StartTime, sd.EndTime)
+	if !ok {
 		return
 	}
 

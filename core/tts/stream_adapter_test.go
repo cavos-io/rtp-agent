@@ -129,6 +129,36 @@ func TestStreamAdapterMarksLastFrameInSegmentFinal(t *testing.T) {
 	}
 }
 
+func TestStreamAdapterStampsTranscriptText(t *testing.T) {
+	provider := &fakeStreamAdapterTTS{
+		events: []*SynthesizedAudio{
+			{Frame: &model.AudioFrame{Data: []byte{1}, SampleRate: 24000, NumChannels: 1, SamplesPerChannel: 1}},
+			{Frame: &model.AudioFrame{Data: []byte{2}, SampleRate: 24000, NumChannels: 1, SamplesPerChannel: 1}},
+		},
+	}
+	stream, err := NewStreamAdapter(provider).Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+	defer stream.Close()
+
+	if err := stream.PushText("transcript segment"); err != nil {
+		t.Fatalf("PushText returned error: %v", err)
+	}
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush returned error: %v", err)
+	}
+
+	first := nextStreamAdapterAudio(t, stream)
+	if first.DeltaText != "transcript segment" {
+		t.Fatalf("first DeltaText = %q, want tokenizer text", first.DeltaText)
+	}
+	second := nextStreamAdapterAudio(t, stream)
+	if second.DeltaText != "" {
+		t.Fatalf("second DeltaText = %q, want no repeated transcript", second.DeltaText)
+	}
+}
+
 func TestStreamAdapterSetsStableRequestID(t *testing.T) {
 	provider := &fakeStreamAdapterTTS{
 		events: []*SynthesizedAudio{

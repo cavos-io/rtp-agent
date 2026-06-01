@@ -44,6 +44,48 @@ func TestFallbackAdapterAggregatesProviderCapabilities(t *testing.T) {
 	}
 }
 
+func TestFallbackAdapterAlwaysAdvertisesOfflineRecognize(t *testing.T) {
+	adapter := NewFallbackAdapter([]STT{
+		&metadataSTT{label: "primary", capabilities: STTCapabilities{
+			Streaming:        true,
+			OfflineRecognize: false,
+		}},
+		&metadataSTT{label: "fallback", capabilities: STTCapabilities{
+			Streaming:        true,
+			OfflineRecognize: false,
+		}},
+	})
+
+	if !adapter.Capabilities().OfflineRecognize {
+		t.Fatal("OfflineRecognize = false, want true because FallbackAdapter exposes Recognize")
+	}
+}
+
+func TestFallbackStreamSeedsStartTime(t *testing.T) {
+	inner := &metadataRecognizeStream{events: []*SpeechEvent{{Type: SpeechEventFinalTranscript}}}
+	adapter := NewFallbackAdapter([]STT{
+		&metadataSTT{
+			label:        "primary",
+			capabilities: STTCapabilities{Streaming: true},
+			stream:       inner,
+		},
+	})
+
+	before := time.Now()
+	stream, err := adapter.Stream(context.Background(), "en")
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+	after := time.Now()
+	defer stream.Close()
+
+	timing, ok := stream.(StreamTiming)
+	if !ok {
+		t.Fatal("stream does not implement StreamTiming")
+	}
+	assertStreamStartTimeSeeded(t, timing, before, after)
+}
+
 func TestFallbackAdapterAggregatesAlignedTranscriptGranularity(t *testing.T) {
 	adapter := NewFallbackAdapter([]STT{
 		&metadataSTT{label: "primary", capabilities: STTCapabilities{
@@ -252,6 +294,44 @@ func TestFallbackStreamReturnsAllFailedErrorWhenProvidersExhausted(t *testing.T)
 	var allFailed *FallbackAllFailedError
 	if !errors.As(err, &allFailed) {
 		t.Fatalf("Next error = %T, want *FallbackAllFailedError", err)
+	}
+	if allFailed.Count != 2 {
+		t.Fatalf("all failed Count = %d, want 2", allFailed.Count)
+	}
+	if strings.Join(allFailed.Labels, ",") != "primary,fallback" {
+		t.Fatalf("all failed Labels = %#v, want primary/fallback", allFailed.Labels)
+	}
+	if allFailed.Duration <= 0 {
+		t.Fatalf("all failed Duration = %s, want positive duration", allFailed.Duration)
+	}
+}
+
+func TestFallbackStreamStartReturnsAllFailedErrorWhenProvidersExhausted(t *testing.T) {
+	primaryErr := errors.New("primary stream start failed")
+	fallbackErr := errors.New("fallback stream start failed")
+	adapter := NewFallbackAdapterWithOptions([]STT{
+		&metadataSTT{
+			label:        "primary",
+			capabilities: STTCapabilities{Streaming: true},
+			streamErrs:   []error{primaryErr},
+		},
+		&metadataSTT{
+			label:        "fallback",
+			capabilities: STTCapabilities{Streaming: true},
+			streamErrs:   []error{fallbackErr},
+		},
+	}, FallbackAdapterOptions{MaxRetryPerSTT: 0})
+
+	_, err := adapter.Stream(context.Background(), "en")
+	if err == nil {
+		t.Fatal("Stream error = nil, want all STTs failed error")
+	}
+	if !errors.Is(err, fallbackErr) {
+		t.Fatalf("Stream error = %v, want to wrap final provider start error", err)
+	}
+	var allFailed *FallbackAllFailedError
+	if !errors.As(err, &allFailed) {
+		t.Fatalf("Stream error = %T, want *FallbackAllFailedError", err)
 	}
 	if allFailed.Count != 2 {
 		t.Fatalf("all failed Count = %d, want 2", allFailed.Count)
@@ -605,7 +685,7 @@ func TestFallbackStreamRecoversFailedProviderInBackground(t *testing.T) {
 	}
 }
 
-func TestFallbackStreamForwardsNewInputToRecoveringProvider(t *testing.T) {
+func TestFallbackStreamForwardsOnlyNewInputToRecoveringProvider(t *testing.T) {
 	firstFrame := &model.AudioFrame{Data: []byte("1"), SampleRate: 16000, NumChannels: 1, SamplesPerChannel: 1}
 	secondFrame := &model.AudioFrame{Data: []byte("2"), SampleRate: 16000, NumChannels: 1, SamplesPerChannel: 1}
 	primaryFailure := &blockingFailRecognizeStream{
@@ -650,7 +730,7 @@ func TestFallbackStreamForwardsNewInputToRecoveringProvider(t *testing.T) {
 	}
 	close(primaryFailure.release)
 	waitForStreamCalls(t, primary, 2)
-	waitForRecoveryCall(t, recovery, "push:1")
+	assertNoRecoveryCall(t, recovery, "push:1")
 
 	if err := stream.PushFrame(secondFrame); err != nil {
 		t.Fatalf("PushFrame(second) returned error: %v", err)
@@ -939,7 +1019,10 @@ func TestFallbackStreamEndInputFlushesAndRejectsMoreInput(t *testing.T) {
 		t.Fatal("Flush after EndInput returned nil, want error")
 	}
 
-	want := []string{"push:first", "end_input"}
+	want := []string{"push:first", "flush", "end_input"}
+	if len(inner.calls) != len(want) {
+		t.Fatalf("inner call count = %d, want %d: %#v", len(inner.calls), len(want), inner.calls)
+	}
 	if strings.Join(inner.calls, ",") != strings.Join(want, ",") {
 		t.Fatalf("inner calls = %#v, want %#v", inner.calls, want)
 	}
@@ -969,8 +1052,12 @@ func TestFallbackStreamForwardsEndInput(t *testing.T) {
 		t.Fatalf("EndInput returned error: %v", err)
 	}
 
-	if strings.Join(inner.calls, ",") != "end_input" {
-		t.Fatalf("inner calls = %#v, want end_input", inner.calls)
+	want := "flush,end_input"
+	if len(inner.calls) != 2 {
+		t.Fatalf("inner call count = %d, want 2: %#v", len(inner.calls), inner.calls)
+	}
+	if strings.Join(inner.calls, ",") != want {
+		t.Fatalf("inner calls = %#v, want flush,end_input", inner.calls)
 	}
 }
 
@@ -980,6 +1067,7 @@ type metadataSTT struct {
 	capabilities     STTCapabilities
 	stream           RecognizeStream
 	streams          []RecognizeStream
+	streamErrs       []error
 	streamCalls      int
 	recognizeResult  *SpeechEvent
 	recognizeResults []*SpeechEvent
@@ -999,6 +1087,13 @@ func (m *metadataSTT) Stream(context.Context, string) (RecognizeStream, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.streamCalls++
+	if len(m.streamErrs) > 0 {
+		err := m.streamErrs[0]
+		m.streamErrs = m.streamErrs[1:]
+		if err != nil {
+			return nil, err
+		}
+	}
 	if len(m.streams) > 0 {
 		stream := m.streams[0]
 		m.streams = m.streams[1:]
@@ -1301,6 +1396,30 @@ func waitForRecoveryCall(t *testing.T, stream *liveRecoveryStream, want string) 
 		select {
 		case <-deadline:
 			t.Fatalf("recovery calls = %#v, want %s", calls, want)
+		case <-ticker.C:
+		}
+	}
+}
+
+func assertNoRecoveryCall(t *testing.T, stream *liveRecoveryStream, unwanted string) {
+	t.Helper()
+	deadline := time.After(20 * time.Millisecond)
+	ticker := time.NewTicker(time.Millisecond)
+	defer ticker.Stop()
+
+	for {
+		stream.mu.Lock()
+		calls := append([]string(nil), stream.calls...)
+		stream.mu.Unlock()
+		for _, call := range calls {
+			if call == unwanted {
+				t.Fatalf("recovery calls = %#v, did not want %s", calls, unwanted)
+			}
+		}
+
+		select {
+		case <-deadline:
+			return
 		case <-ticker.C:
 		}
 	}
