@@ -257,3 +257,61 @@ func TestRealtimeEventMapsConversationItemAddedFunctionCall(t *testing.T) {
 		t.Fatalf("function call = %#v, want OpenAI function call item", call)
 	}
 }
+
+func TestRealtimeEventMapsResponseDoneMetrics(t *testing.T) {
+	ev, ok := openAIRealtimeEvent(map[string]any{
+		"type": "response.done",
+		"response": map[string]any{
+			"id":     "resp_123",
+			"status": "cancelled",
+			"usage": map[string]any{
+				"input_tokens":  11.0,
+				"output_tokens": 7.0,
+				"total_tokens":  18.0,
+				"input_token_details": map[string]any{
+					"audio_tokens":  3.0,
+					"text_tokens":   4.0,
+					"image_tokens":  1.0,
+					"cached_tokens": 2.0,
+					"cached_tokens_details": map[string]any{
+						"text_tokens":  1.0,
+						"audio_tokens": 1.0,
+						"image_tokens": 0.0,
+					},
+				},
+				"output_token_details": map[string]any{
+					"text_tokens":  5.0,
+					"audio_tokens": 2.0,
+					"image_tokens": 0.0,
+				},
+			},
+		},
+	})
+	if !ok {
+		t.Fatal("openAIRealtimeEvent returned ok=false, want metrics event")
+	}
+	if ev.Type != llm.RealtimeEventTypeMetricsCollected {
+		t.Fatalf("event type = %q, want metrics collected", ev.Type)
+	}
+	if ev.Metrics == nil {
+		t.Fatal("Metrics = nil, want realtime metrics payload")
+	}
+	if ev.Metrics.RequestID != "resp_123" || !ev.Metrics.Cancelled {
+		t.Fatalf("metrics identity = %#v, want cancelled response metrics", ev.Metrics)
+	}
+	if ev.Metrics.InputTokens != 11 || ev.Metrics.OutputTokens != 7 || ev.Metrics.TotalTokens != 18 {
+		t.Fatalf("token totals = %#v, want 11/7/18", ev.Metrics)
+	}
+	if ev.Metrics.InputTokenDetails.AudioTokens != 3 || ev.Metrics.InputTokenDetails.TextTokens != 4 || ev.Metrics.InputTokenDetails.ImageTokens != 1 || ev.Metrics.InputTokenDetails.CachedTokens != 2 {
+		t.Fatalf("input details = %#v, want audio/text/image/cached usage", ev.Metrics.InputTokenDetails)
+	}
+	if ev.Metrics.InputTokenDetails.CachedTokensDetails == nil {
+		t.Fatal("CachedTokensDetails = nil, want cached token breakdown")
+	}
+	if ev.Metrics.InputTokenDetails.CachedTokensDetails.TextTokens != 1 || ev.Metrics.InputTokenDetails.CachedTokensDetails.AudioTokens != 1 {
+		t.Fatalf("cached details = %#v, want text/audio cached usage", ev.Metrics.InputTokenDetails.CachedTokensDetails)
+	}
+	if ev.Metrics.OutputTokenDetails.TextTokens != 5 || ev.Metrics.OutputTokenDetails.AudioTokens != 2 {
+		t.Fatalf("output details = %#v, want text/audio output usage", ev.Metrics.OutputTokenDetails)
+	}
+}

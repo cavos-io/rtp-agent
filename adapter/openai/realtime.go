@@ -11,6 +11,7 @@ import (
 	"github.com/cavos-io/rtp-agent/core/audio/model"
 	"github.com/cavos-io/rtp-agent/core/llm"
 	"github.com/cavos-io/rtp-agent/library/logger"
+	"github.com/cavos-io/rtp-agent/library/telemetry"
 	"github.com/cavos-io/rtp-agent/library/utils/images"
 	"github.com/gorilla/websocket"
 )
@@ -438,12 +439,58 @@ func openAIRealtimeEvent(ev map[string]any) (llm.RealtimeEvent, bool) {
 				Item:           chatItem,
 			},
 		}, true
+	case "response.done":
+		response, _ := ev["response"].(map[string]any)
+		metrics, ok := openAIRealtimeMetrics(response)
+		if !ok {
+			return llm.RealtimeEvent{}, false
+		}
+		return llm.RealtimeEvent{
+			Type:    llm.RealtimeEventTypeMetricsCollected,
+			Metrics: metrics,
+		}, true
 	case "input_audio_buffer.speech_started":
 		return llm.RealtimeEvent{Type: llm.RealtimeEventTypeSpeechStarted}, true
 	case "input_audio_buffer.speech_stopped":
 		return llm.RealtimeEvent{Type: llm.RealtimeEventTypeSpeechStopped}, true
 	}
 	return llm.RealtimeEvent{}, false
+}
+
+func openAIRealtimeMetrics(response map[string]any) (*telemetry.RealtimeModelMetrics, bool) {
+	requestID, _ := response["id"].(string)
+	if requestID == "" {
+		return nil, false
+	}
+	usage, _ := response["usage"].(map[string]any)
+	inputDetails, _ := usage["input_token_details"].(map[string]any)
+	outputDetails, _ := usage["output_token_details"].(map[string]any)
+	cachedDetails, _ := inputDetails["cached_tokens_details"].(map[string]any)
+	status, _ := response["status"].(string)
+	return &telemetry.RealtimeModelMetrics{
+		RequestID:       requestID,
+		Cancelled:       status == "cancelled",
+		InputTokens:     openAIRealtimeInt(usage["input_tokens"]),
+		OutputTokens:    openAIRealtimeInt(usage["output_tokens"]),
+		TotalTokens:     openAIRealtimeInt(usage["total_tokens"]),
+		TokensPerSecond: openAIRealtimeFloat(usage["tokens_per_second"]),
+		InputTokenDetails: telemetry.InputTokenDetails{
+			AudioTokens:  openAIRealtimeInt(inputDetails["audio_tokens"]),
+			TextTokens:   openAIRealtimeInt(inputDetails["text_tokens"]),
+			ImageTokens:  openAIRealtimeInt(inputDetails["image_tokens"]),
+			CachedTokens: openAIRealtimeInt(inputDetails["cached_tokens"]),
+			CachedTokensDetails: &telemetry.CachedTokenDetails{
+				TextTokens:  openAIRealtimeInt(cachedDetails["text_tokens"]),
+				AudioTokens: openAIRealtimeInt(cachedDetails["audio_tokens"]),
+				ImageTokens: openAIRealtimeInt(cachedDetails["image_tokens"]),
+			},
+		},
+		OutputTokenDetails: telemetry.OutputTokenDetails{
+			TextTokens:  openAIRealtimeInt(outputDetails["text_tokens"]),
+			AudioTokens: openAIRealtimeInt(outputDetails["audio_tokens"]),
+			ImageTokens: openAIRealtimeInt(outputDetails["image_tokens"]),
+		},
+	}, true
 }
 
 func openAIRealtimeChatItem(item map[string]any) (llm.ChatItem, error) {
@@ -529,6 +576,28 @@ func openAIRealtimeFloatPtr(v any) *float64 {
 	default:
 		return nil
 	}
+}
+
+func openAIRealtimeFloat(v any) float64 {
+	switch value := v.(type) {
+	case float64:
+		return value
+	case float32:
+		return float64(value)
+	case int:
+		return float64(value)
+	case int64:
+		return float64(value)
+	case json.Number:
+		f, _ := value.Float64()
+		return f
+	default:
+		return 0
+	}
+}
+
+func openAIRealtimeInt(v any) int {
+	return int(openAIRealtimeFloat(v))
 }
 
 func openAIRealtimeResponseClientEventID(response map[string]any) (string, bool) {

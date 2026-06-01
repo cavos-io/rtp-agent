@@ -516,6 +516,7 @@ const (
 	RealtimeEventTypeInputAudioTranscriptionCompleted RealtimeEventType = "input_audio_transcription_completed"
 	RealtimeEventTypeGenerationCreated                RealtimeEventType = "generation_created"
 	RealtimeEventTypeRemoteItemAdded                  RealtimeEventType = "remote_item_added"
+	RealtimeEventTypeMetricsCollected                 RealtimeEventType = "metrics_collected"
 	RealtimeEventTypeError                            RealtimeEventType = "error"
 )
 
@@ -544,6 +545,7 @@ type RealtimeEvent struct {
 	Generation         *GenerationCreatedEvent
 	RemoteItem         *RemoteItemAddedEvent
 	InputTranscription *InputTranscriptionCompleted
+	Metrics            *telemetry.RealtimeModelMetrics
 	Error              error
 }
 

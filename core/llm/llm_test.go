@@ -3,6 +3,7 @@ package llm
 import (
 	"testing"
 
+	"github.com/cavos-io/rtp-agent/library/telemetry"
 	"github.com/cavos-io/rtp-agent/library/utils/images"
 )
 
@@ -143,5 +144,24 @@ func TestRealtimeEventCanCarryRemoteItemAdded(t *testing.T) {
 	}
 	if ev.RemoteItem.PreviousItemID != "prev_123" || ev.RemoteItem.Item.GetID() != "msg_123" {
 		t.Fatalf("RemoteItem = %#v, want previous id and chat item", ev.RemoteItem)
+	}
+}
+
+func TestRealtimeEventCanCarryMetricsCollected(t *testing.T) {
+	ev := RealtimeEvent{
+		Type: RealtimeEventTypeMetricsCollected,
+		Metrics: &telemetry.RealtimeModelMetrics{
+			RequestID:    "resp_123",
+			InputTokens:  11,
+			OutputTokens: 7,
+			TotalTokens:  18,
+		},
+	}
+
+	if ev.Metrics == nil {
+		t.Fatal("Metrics = nil, want realtime metrics payload")
+	}
+	if ev.Metrics.RequestID != "resp_123" || ev.Metrics.InputTokens != 11 || ev.Metrics.OutputTokens != 7 || ev.Metrics.TotalTokens != 18 {
+		t.Fatalf("Metrics = %#v, want realtime token usage", ev.Metrics)
 	}
 }
