@@ -61,6 +61,40 @@ func TestNewAgentSessionInitializesUsageCollector(t *testing.T) {
 	}
 }
 
+func TestAgentSessionUserdataRequiresValue(t *testing.T) {
+	agent := NewAgent("test")
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+
+	value, err := session.Userdata()
+
+	if value != nil {
+		t.Fatalf("Userdata value = %#v, want nil when unset", value)
+	}
+	if !errors.Is(err, ErrAgentSessionUserdataNotSet) {
+		t.Fatalf("Userdata error = %v, want ErrAgentSessionUserdataNotSet", err)
+	}
+}
+
+func TestAgentSessionUserdataCanBeSet(t *testing.T) {
+	agent := NewAgent("test")
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	want := map[string]string{"customer_id": "cust_123"}
+
+	session.SetUserdata(want)
+	value, err := session.Userdata()
+
+	if err != nil {
+		t.Fatalf("Userdata error = %v, want nil", err)
+	}
+	got, ok := value.(map[string]string)
+	if !ok {
+		t.Fatalf("Userdata value = %T, want map[string]string", value)
+	}
+	if got["customer_id"] != want["customer_id"] {
+		t.Fatalf("Userdata customer_id = %q, want %q", got["customer_id"], want["customer_id"])
+	}
+}
+
 func TestNewAgentSessionAppliesReferenceOptionDefaults(t *testing.T) {
 	agent := NewAgent("test")
 	session := NewAgentSession(agent, nil, AgentSessionOptions{})

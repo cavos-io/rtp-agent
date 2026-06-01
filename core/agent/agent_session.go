@@ -57,8 +57,9 @@ type AgentSessionUpdateOptions struct {
 }
 
 var (
-	ErrAgentSessionNotRunning = errors.New("agent session is not running")
-	ErrAgentSessionNestedRun  = errors.New("nested agent session runs are not supported")
+	ErrAgentSessionNotRunning     = errors.New("agent session is not running")
+	ErrAgentSessionNestedRun      = errors.New("nested agent session runs are not supported")
+	ErrAgentSessionUserdataNotSet = errors.New("agent session userdata is not set")
 )
 
 type GenerateReplyOptions struct {
@@ -108,6 +109,8 @@ type AgentSession struct {
 	started       bool
 	runState      *RunResult
 	userAwayTimer *time.Timer
+	userdata      any
+	userdataSet   bool
 
 	// Event channels
 	AgentStateChangedCh chan AgentStateChangedEvent
@@ -153,6 +156,24 @@ func (s *AgentSession) CurrentSpeech() *SpeechHandle {
 	activity.queueMu.Lock()
 	defer activity.queueMu.Unlock()
 	return activity.currentSpeech
+}
+
+func (s *AgentSession) Userdata() (any, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if !s.userdataSet {
+		return nil, ErrAgentSessionUserdataNotSet
+	}
+	return s.userdata, nil
+}
+
+func (s *AgentSession) SetUserdata(value any) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	s.userdata = value
+	s.userdataSet = true
 }
 
 func (s *AgentSession) CurrentAgent() (AgentInterface, error) {
