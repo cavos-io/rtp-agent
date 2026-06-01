@@ -60,3 +60,30 @@ func TestGenerateStrictJSONSchemaKeepsOptionalNestedStructNullable(t *testing.T)
 		t.Fatalf("filters required = %#v, want status required", filtersSchema["required"])
 	}
 }
+
+func TestGenerateStrictJSONSchemaKeepsPointerNestedStructNullable(t *testing.T) {
+	type location struct {
+		City string `json:"city"`
+	}
+	type request struct {
+		Location *location `json:"location"`
+	}
+
+	schema := GenerateStrictJSONSchema(reflect.TypeOf(request{}))
+
+	props := schema["properties"].(map[string]interface{})
+	locationSchema, ok := props["location"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("location property = %#v, want map", props["location"])
+	}
+	if !reflect.DeepEqual(locationSchema["type"], []string{"object", "null"}) {
+		t.Fatalf("location type = %#v, want nullable object for pointer field", locationSchema["type"])
+	}
+	if locationSchema["additionalProperties"] != false {
+		t.Fatalf("location additionalProperties = %#v, want false", locationSchema["additionalProperties"])
+	}
+	nestedRequired, ok := locationSchema["required"].([]string)
+	if !ok || !reflect.DeepEqual(nestedRequired, []string{"city"}) {
+		t.Fatalf("location required = %#v, want city required", locationSchema["required"])
+	}
+}
