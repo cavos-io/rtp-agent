@@ -9,13 +9,17 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/cavos-io/rtp-agent/core/audio/model"
 	"github.com/cavos-io/rtp-agent/core/tts"
+	"github.com/gorilla/websocket"
 )
 
 const (
 	resembleRESTAPIURL        = "https://f.cluster.resemble.ai/synthesize"
+	resembleWebsocketURL      = "wss://websocket.cluster.resemble.ai/stream"
 	defaultResembleVoiceUUID  = "55592656"
 	defaultResembleSampleRate = 44100
 )
@@ -68,7 +72,7 @@ func NewResembleTTS(apiKey string, voice string, opts ...ResembleTTSOption) *Res
 
 func (t *ResembleTTS) Label() string { return "resemble.TTS" }
 func (t *ResembleTTS) Capabilities() tts.TTSCapabilities {
-	return tts.TTSCapabilities{Streaming: false, AlignedTranscript: false}
+	return tts.TTSCapabilities{Streaming: true, AlignedTranscript: false}
 }
 func (t *ResembleTTS) SampleRate() int  { return t.sampleRate }
 func (t *ResembleTTS) NumChannels() int { return 1 }
@@ -122,7 +126,46 @@ func buildResembleTTSRequest(ctx context.Context, t *ResembleTTS, text string) (
 }
 
 func (t *ResembleTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
-	return nil, fmt.Errorf("resemble streaming tts not natively supported by basic rest api")
+	conn, _, err := websocket.DefaultDialer.DialContext(ctx, buildResembleTTSWebsocketURL(), buildResembleTTSWebsocketHeaders(t))
+	if err != nil {
+		return nil, fmt.Errorf("failed to dial resemble tts websocket: %w", err)
+	}
+	streamCtx, cancel := context.WithCancel(ctx)
+	stream := &resembleTTSSynthesizeStream{
+		conn:     conn,
+		ctx:      streamCtx,
+		cancel:   cancel,
+		provider: t,
+		events:   make(chan *tts.SynthesizedAudio, 100),
+		errCh:    make(chan error, 1),
+	}
+	go stream.readLoop()
+	return stream, nil
+}
+
+func buildResembleTTSWebsocketURL() string {
+	return resembleWebsocketURL
+}
+
+func buildResembleTTSWebsocketHeaders(t *ResembleTTS) http.Header {
+	header := http.Header{}
+	header.Set("Authorization", "Bearer "+t.apiKey)
+	return header
+}
+
+func buildResembleTTSWebsocketMessage(t *ResembleTTS, text string, requestID int) ([]byte, error) {
+	message := map[string]interface{}{
+		"voice_uuid":    t.voice,
+		"data":          text,
+		"request_id":    requestID,
+		"sample_rate":   t.sampleRate,
+		"precision":     "PCM_16",
+		"output_format": "mp3",
+	}
+	if t.model != "" {
+		message["model"] = t.model
+	}
+	return json.Marshal(message)
 }
 
 type resembleTTSChunkedStream struct {
@@ -169,4 +212,153 @@ func (s *resembleTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 
 func (s *resembleTTSChunkedStream) Close() error {
 	return s.resp.Body.Close()
+}
+
+type resembleTTSSynthesizeStream struct {
+	conn      *websocket.Conn
+	ctx       context.Context
+	cancel    context.CancelFunc
+	provider  *ResembleTTS
+	events    chan *tts.SynthesizedAudio
+	errCh     chan error
+	mu        sync.Mutex
+	closed    bool
+	requestID int
+	lastID    int
+	flushed   bool
+}
+
+func (s *resembleTTSSynthesizeStream) PushText(text string) error {
+	if text == "" {
+		return nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return fmt.Errorf("resemble tts stream is closed")
+	}
+	s.requestID++
+	s.lastID = s.requestID
+	message, err := buildResembleTTSWebsocketMessage(s.provider, text, s.requestID)
+	if err != nil {
+		return err
+	}
+	return s.conn.WriteMessage(websocket.TextMessage, message)
+}
+
+func (s *resembleTTSSynthesizeStream) Flush() error {
+	s.mu.Lock()
+	s.flushed = true
+	s.mu.Unlock()
+	return nil
+}
+
+func (s *resembleTTSSynthesizeStream) Close() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return nil
+	}
+	s.closed = true
+	s.cancel()
+	_ = s.conn.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""), time.Now().Add(time.Second))
+	return s.conn.Close()
+}
+
+func (s *resembleTTSSynthesizeStream) Next() (*tts.SynthesizedAudio, error) {
+	select {
+	case audio, ok := <-s.events:
+		if !ok {
+			select {
+			case err := <-s.errCh:
+				return nil, err
+			default:
+				return nil, io.EOF
+			}
+		}
+		return audio, nil
+	case err := <-s.errCh:
+		return nil, err
+	case <-s.ctx.Done():
+		return nil, s.ctx.Err()
+	}
+}
+
+func (s *resembleTTSSynthesizeStream) readLoop() {
+	defer close(s.events)
+	for {
+		msgType, payload, err := s.conn.ReadMessage()
+		if err != nil {
+			if !websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway) && err != io.EOF {
+				s.errCh <- err
+			}
+			return
+		}
+		if msgType != websocket.TextMessage {
+			continue
+		}
+		audio, done, requestID, err := resembleTTSAudioFromWebsocketMessage(payload, s.provider.sampleRate)
+		if err != nil {
+			s.errCh <- err
+			return
+		}
+		if audio != nil {
+			s.events <- audio
+		}
+		if done && s.shouldStopAfterAudioEnd(requestID) {
+			return
+		}
+	}
+}
+
+func (s *resembleTTSSynthesizeStream) shouldStopAfterAudioEnd(requestID int) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.flushed && requestID >= s.lastID
+}
+
+func resembleTTSAudioFromWebsocketMessage(payload []byte, sampleRate int) (*tts.SynthesizedAudio, bool, int, error) {
+	var message struct {
+		Type         string `json:"type"`
+		AudioContent string `json:"audio_content"`
+		RequestID    int    `json:"request_id"`
+		Message      string `json:"message"`
+	}
+	if err := json.Unmarshal(payload, &message); err != nil {
+		return nil, false, 0, err
+	}
+	switch message.Type {
+	case "audio":
+		if message.AudioContent == "" {
+			return nil, false, message.RequestID, nil
+		}
+		audio, err := base64.StdEncoding.DecodeString(message.AudioContent)
+		if err != nil {
+			return nil, false, message.RequestID, err
+		}
+		if len(audio) == 0 {
+			return nil, false, message.RequestID, nil
+		}
+		return resembleTTSAudioFrame(audio, sampleRate), false, message.RequestID, nil
+	case "audio_end":
+		return nil, true, message.RequestID, nil
+	case "error":
+		if message.Message == "" {
+			message.Message = string(payload)
+		}
+		return nil, false, message.RequestID, fmt.Errorf("resemble tts stream error: %s", message.Message)
+	default:
+		return nil, false, message.RequestID, nil
+	}
+}
+
+func resembleTTSAudioFrame(audio []byte, sampleRate int) *tts.SynthesizedAudio {
+	return &tts.SynthesizedAudio{
+		Frame: &model.AudioFrame{
+			Data:              bytes.Clone(audio),
+			SampleRate:        uint32(sampleRate),
+			NumChannels:       1,
+			SamplesPerChannel: uint32(len(audio) / 2),
+		},
+	}
 }

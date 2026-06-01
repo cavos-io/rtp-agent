@@ -27,6 +27,9 @@ func TestRimeTTSDefaultsMatchReference(t *testing.T) {
 	if provider.sampleRate != 22050 {
 		t.Fatalf("sample rate = %d, want 22050", provider.sampleRate)
 	}
+	if provider.Capabilities().Streaming {
+		t.Fatal("streaming = true, want false for default HTTP mode")
+	}
 }
 
 func TestRimeTTSSynthesizeRequestUsesReferenceDefaults(t *testing.T) {
@@ -115,6 +118,130 @@ func TestRimeTTSChunkedStreamUsesConfiguredSampleRate(t *testing.T) {
 	if audio.Frame.SampleRate != 24000 {
 		t.Fatalf("sample rate = %d, want 24000", audio.Frame.SampleRate)
 	}
+}
+
+func TestRimeTTSWebsocketModeMatchesReference(t *testing.T) {
+	provider := NewRimeTTS("test-key", "", WithRimeTTSWebsocket(true))
+
+	if provider.baseURL != "wss://users-ws.rime.ai" {
+		t.Fatalf("base URL = %q, want reference websocket base URL", provider.baseURL)
+	}
+	if !provider.Capabilities().Streaming {
+		t.Fatal("streaming = false, want true for websocket mode")
+	}
+	if !provider.Capabilities().AlignedTranscript {
+		t.Fatal("aligned transcript = false, want true for websocket mode")
+	}
+}
+
+func TestRimeTTSInfersWebsocketModeFromBaseURL(t *testing.T) {
+	provider := NewRimeTTS("test-key", "", WithRimeTTSBaseURL("wss://rime.example"))
+
+	if !provider.Capabilities().Streaming {
+		t.Fatal("streaming = false, want true for ws base URL")
+	}
+}
+
+func TestRimeTTSWebsocketURLAndHeadersMatchReference(t *testing.T) {
+	provider := NewRimeTTS("test-key", "",
+		WithRimeTTSWebsocket(true),
+		WithRimeTTSModel("coda"),
+		WithRimeTTSSampleRate(24000),
+		WithRimeTTSLang("spa"),
+		WithRimeTTSTimeScaleFactor(1.2),
+		WithRimeTTSSegment("immediate"),
+	)
+
+	u := buildRimeTTSWebsocketURL(provider)
+	if got := u.Scheme + "://" + u.Host + u.Path; got != "wss://users-ws.rime.ai/ws3" {
+		t.Fatalf("websocket URL base = %q, want reference ws3 endpoint", got)
+	}
+	query := u.Query()
+	assertRimePayload(t, queryMap(query), "speaker", "lyra")
+	assertRimePayload(t, queryMap(query), "modelId", "coda")
+	assertRimePayload(t, queryMap(query), "audioFormat", "pcm")
+	assertRimePayload(t, queryMap(query), "samplingRate", "24000")
+	assertRimePayload(t, queryMap(query), "segment", "immediate")
+	assertRimePayload(t, queryMap(query), "lang", "spa")
+	assertRimePayload(t, queryMap(query), "timeScaleFactor", "1.2")
+
+	headers := buildRimeTTSWebsocketHeaders(provider)
+	if got := headers.Get("Authorization"); got != "Bearer test-key" {
+		t.Fatalf("Authorization = %q, want bearer token", got)
+	}
+}
+
+func TestRimeTTSWebsocketMessagesMatchReference(t *testing.T) {
+	textMessage, err := buildRimeTTSTextMessage("ctx-1", "hello")
+	if err != nil {
+		t.Fatalf("build text message: %v", err)
+	}
+	var textPayload map[string]any
+	if err := json.Unmarshal(textMessage, &textPayload); err != nil {
+		t.Fatalf("decode text message: %v", err)
+	}
+	assertRimePayload(t, textPayload, "text", "hello ")
+	assertRimePayload(t, textPayload, "contextId", "ctx-1")
+
+	flushMessage, err := buildRimeTTSFlushMessage("ctx-1")
+	if err != nil {
+		t.Fatalf("build flush message: %v", err)
+	}
+	var flushPayload map[string]any
+	if err := json.Unmarshal(flushMessage, &flushPayload); err != nil {
+		t.Fatalf("decode flush message: %v", err)
+	}
+	assertRimePayload(t, flushPayload, "operation", "flush")
+	assertRimePayload(t, flushPayload, "contextId", "ctx-1")
+}
+
+func TestRimeTTSAudioFromWebsocketMessage(t *testing.T) {
+	audio, done, transcript, err := rimeTTSAudioFromWebsocketMessage([]byte(`{"type":"chunk","data":"AQIDBA=="}`), 24000)
+	if err != nil {
+		t.Fatalf("audio from websocket message: %v", err)
+	}
+	if done {
+		t.Fatal("done = true for chunk message")
+	}
+	if transcript != "" {
+		t.Fatalf("transcript = %q, want empty for audio chunk", transcript)
+	}
+	if audio == nil || string(audio.Frame.Data) != string([]byte{1, 2, 3, 4}) {
+		t.Fatalf("audio = %+v, want decoded audio frame", audio)
+	}
+	if audio.Frame.SampleRate != 24000 || audio.Frame.NumChannels != 1 {
+		t.Fatalf("frame = %+v, want 24000 Hz mono", audio.Frame)
+	}
+
+	_, done, transcript, err = rimeTTSAudioFromWebsocketMessage([]byte(`{"type":"timestamps","word_timestamps":{"words":["hi"],"start":[0.1],"end":[0.2]}}`), 24000)
+	if err != nil {
+		t.Fatalf("timestamps message: %v", err)
+	}
+	if done || transcript != "hi " {
+		t.Fatalf("done=%v transcript=%q, want aligned transcript delta", done, transcript)
+	}
+
+	finished, done, transcript, err := rimeTTSAudioFromWebsocketMessage([]byte(`{"type":"done"}`), 24000)
+	if err != nil {
+		t.Fatalf("done message: %v", err)
+	}
+	if finished != nil || !done || transcript != "" {
+		t.Fatalf("finished=%+v done=%v transcript=%q, want done", finished, done, transcript)
+	}
+
+	if _, _, _, err := rimeTTSAudioFromWebsocketMessage([]byte(`{"type":"error","message":"bad text"}`), 24000); err == nil {
+		t.Fatal("error message returned nil error, want stream error")
+	}
+}
+
+func queryMap(values map[string][]string) map[string]any {
+	out := make(map[string]any, len(values))
+	for key, value := range values {
+		if len(value) > 0 {
+			out[key] = value[0]
+		}
+	}
+	return out
 }
 
 func assertRimePayload(t *testing.T, payload map[string]any, key string, want string) {
