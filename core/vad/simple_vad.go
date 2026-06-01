@@ -117,6 +117,7 @@ type simpleVADStream struct {
 	speaking                   bool
 	closed                     bool
 	inputEnded                 bool
+	inputSampleRate            uint32
 	samplesIndex               int
 	timestamp                  float64
 	speechDuration             float64
@@ -153,6 +154,11 @@ func (s *simpleVADStream) PushFrame(frame *model.AudioFrame) error {
 	}
 	if s.inputEnded {
 		return errors.New("vad stream input ended")
+	}
+	if s.inputSampleRate == 0 {
+		s.inputSampleRate = frame.SampleRate
+	} else if frame.SampleRate != s.inputSampleRate {
+		return nil
 	}
 
 	probability := frameRMS(frame)

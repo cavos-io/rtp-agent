@@ -131,6 +131,69 @@ func TestSimpleVADUpdateOptionsRelaxesMaxBufferedSpeech(t *testing.T) {
 	}
 }
 
+func TestSimpleVADIgnoresMismatchedSampleRateFrames(t *testing.T) {
+	stream, err := NewSimpleVAD(0.05).Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	defer stream.Close()
+
+	if err := stream.PushFrame(audioFrame(16000, 160, 6000)); err != nil {
+		t.Fatalf("PushFrame() first frame error = %v", err)
+	}
+	assertEventType(t, stream, VADEventInferenceDone)
+	assertEventType(t, stream, VADEventStartOfSpeech)
+
+	if err := stream.PushFrame(audioFrame(8000, 80, 0)); err != nil {
+		t.Fatalf("PushFrame() mismatched sample rate error = %v", err)
+	}
+
+	matchingSilence := audioFrame(16000, 160, 0)
+	if err := stream.PushFrame(matchingSilence); err != nil {
+		t.Fatalf("PushFrame() matching silence error = %v", err)
+	}
+	inference := nextVADEvent(t, stream)
+	if inference.Type != VADEventInferenceDone {
+		t.Fatalf("event type = %s, want %s", inference.Type, VADEventInferenceDone)
+	}
+	if len(inference.Frames) != 1 || inference.Frames[0] != matchingSilence {
+		t.Fatalf("inference frames = %#v, want matching sample-rate frame", inference.Frames)
+	}
+	assertEventType(t, stream, VADEventEndOfSpeech)
+}
+
+func TestSimpleVADUsesDeactivationThresholdWhileSpeaking(t *testing.T) {
+	stream, err := NewSimpleVADWithOptions(SimpleVADOptions{
+		Threshold:             0.1,
+		DeactivationThreshold: 0.05,
+	}).Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	defer stream.Close()
+
+	speech := audioFrame(16000, 160, 6000)
+	dipAboveDeactivation := audioFrame(16000, 160, 2200)
+	silence := audioFrame(16000, 160, 0)
+	for _, frame := range []*model.AudioFrame{speech, dipAboveDeactivation, silence} {
+		if err := stream.PushFrame(frame); err != nil {
+			t.Fatalf("PushFrame() error = %v", err)
+		}
+	}
+
+	assertEventType(t, stream, VADEventInferenceDone)
+	assertEventType(t, stream, VADEventStartOfSpeech)
+	assertEventType(t, stream, VADEventInferenceDone)
+	assertEventType(t, stream, VADEventInferenceDone)
+	end := nextVADEvent(t, stream)
+	if end.Type != VADEventEndOfSpeech {
+		t.Fatalf("event type = %s, want %s", end.Type, VADEventEndOfSpeech)
+	}
+	if len(end.Frames) != 2 || end.Frames[0] != speech || end.Frames[1] != dipAboveDeactivation {
+		t.Fatalf("end frames = %#v, want speech plus hysteresis frame", end.Frames)
+	}
+}
+
 func TestSimpleVADEmitsInferenceBeforeSpeechTransition(t *testing.T) {
 	stream, err := NewSimpleVAD(0.05).Stream(context.Background())
 	if err != nil {
