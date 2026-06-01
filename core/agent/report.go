@@ -28,10 +28,29 @@ type SessionReport struct {
 	Timestamp               float64             `json:"timestamp"`
 }
 
-func NewSessionReport() *SessionReport {
-	return &SessionReport{
+func NewSessionReport(sessions ...*AgentSession) *SessionReport {
+	report := &SessionReport{
 		Events:      make([]any, 0),
 		ChatHistory: llm.NewChatContext(),
 		Timestamp:   float64(time.Now().UnixNano()) / 1e9,
 	}
+	if len(sessions) == 0 || sessions[0] == nil {
+		return report
+	}
+
+	session := sessions[0]
+	session.mu.Lock()
+	report.Options = session.Options
+	if session.ChatCtx != nil {
+		report.ChatHistory = session.ChatCtx.Copy()
+	}
+	session.mu.Unlock()
+
+	events := session.RecordedEvents()
+	report.Events = make([]any, len(events))
+	for i, ev := range events {
+		report.Events[i] = ev
+	}
+
+	return report
 }
