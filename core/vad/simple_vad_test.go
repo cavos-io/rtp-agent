@@ -673,6 +673,34 @@ func TestSimpleVADUpdateOptionsDoesNotRecoverDroppedPendingSpeech(t *testing.T) 
 	assertCombinedFrames(t, start.Frames, firstSpeech, secondSpeech, fourthSpeech)
 }
 
+func TestSimpleVADLimitsPendingSpeechAtSampleBoundary(t *testing.T) {
+	stream, err := NewSimpleVADWithOptions(SimpleVADOptions{
+		Threshold:                 0.05,
+		MinSpeechDuration:         0.03,
+		MaxBufferedSpeechDuration: 0.025,
+	}).Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	defer stream.Close()
+
+	firstSpeech := audioFrame(16000, 160, 6000)
+	secondSpeech := audioFrame(16000, 160, 7000)
+	thirdSpeech := audioFrame(16000, 160, 8000)
+	for _, frame := range []*model.AudioFrame{firstSpeech, secondSpeech, thirdSpeech} {
+		if err := stream.PushFrame(frame); err != nil {
+			t.Fatalf("PushFrame() speech error = %v", err)
+		}
+		assertEventType(t, stream, VADEventInferenceDone)
+	}
+
+	start := nextVADEvent(t, stream)
+	if start.Type != VADEventStartOfSpeech {
+		t.Fatalf("event type = %s, want %s", start.Type, VADEventStartOfSpeech)
+	}
+	assertCombinedFrames(t, start.Frames, firstSpeech, secondSpeech, audioFrame(16000, 80, 8000))
+}
+
 func TestSimpleVADUpdateOptionsShrinksBufferedSpeech(t *testing.T) {
 	detector := NewSimpleVADWithOptions(SimpleVADOptions{
 		Threshold:                 0.05,
