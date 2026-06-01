@@ -244,6 +244,7 @@ func (s *MCPServerStdio) Close() error {
 	s.InvalidateCache()
 	if s.stdin != nil {
 		s.stdin.Close()
+		s.stdin = nil
 	}
 	if s.cmd != nil && s.cmd.Process != nil {
 		return s.cmd.Process.Kill()
@@ -345,6 +346,10 @@ func (t *mcpProxyTool) Execute(ctx context.Context, args string) (string, error)
 	var parsedArgs map[string]interface{}
 	if err := json.Unmarshal([]byte(args), &parsedArgs); err != nil {
 		return "", err
+	}
+
+	if t.server == nil || t.server.stdin == nil {
+		return "", NewToolError("Tool invocation failed: internal service is unavailable. Please check that the MCPServer is still running.")
 	}
 
 	resp, err := t.server.sendRequest(ctx, "tools/call", map[string]interface{}{
