@@ -110,17 +110,18 @@ func (a *MultiSpeakerAdapter) Stream(ctx context.Context, language string) (Reco
 }
 
 type multiSpeakerAdapterWrapper struct {
-	adapter   *MultiSpeakerAdapter
-	inner     RecognizeStream
-	ctx       context.Context
-	cancel    context.CancelFunc
-	detector  *primarySpeakerDetector
-	eventCh   chan *SpeechEvent
-	errCh     chan error
-	inputCh   chan multiSpeakerInput
-	mu        sync.Mutex
-	closed    bool
-	rateGuard SampleRateGuard
+	adapter    *MultiSpeakerAdapter
+	inner      RecognizeStream
+	ctx        context.Context
+	cancel     context.CancelFunc
+	detector   *primarySpeakerDetector
+	eventCh    chan *SpeechEvent
+	errCh      chan error
+	inputCh    chan multiSpeakerInput
+	mu         sync.Mutex
+	closed     bool
+	rateGuard  SampleRateGuard
+	inputEnded bool
 }
 
 type multiSpeakerInput struct {
@@ -133,6 +134,9 @@ func (w *multiSpeakerAdapterWrapper) PushFrame(frame *model.AudioFrame) error {
 	defer w.mu.Unlock()
 	if w.closed {
 		return fmt.Errorf("stream closed")
+	}
+	if w.inputEnded {
+		return fmt.Errorf("stream input ended")
 	}
 	if err := w.rateGuard.Check(frame); err != nil {
 		return err
@@ -147,6 +151,23 @@ func (w *multiSpeakerAdapterWrapper) Flush() error {
 	if w.closed {
 		return fmt.Errorf("stream closed")
 	}
+	if w.inputEnded {
+		return fmt.Errorf("stream input ended")
+	}
+	w.inputCh <- multiSpeakerInput{flush: true}
+	return nil
+}
+
+func (w *multiSpeakerAdapterWrapper) EndInput() error {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.closed {
+		return fmt.Errorf("stream closed")
+	}
+	if w.inputEnded {
+		return fmt.Errorf("stream input ended")
+	}
+	w.inputEnded = true
 	w.inputCh <- multiSpeakerInput{flush: true}
 	return nil
 }

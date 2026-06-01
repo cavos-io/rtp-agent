@@ -188,6 +188,35 @@ func TestMultiSpeakerAdapterWrapperRejectsMismatchedSampleRates(t *testing.T) {
 	}
 }
 
+func TestMultiSpeakerAdapterWrapperEndInputFlushesAndRejectsMoreInput(t *testing.T) {
+	inner := &fakeMultiSpeakerStream{nextErr: io.EOF}
+	wrapper := &multiSpeakerAdapterWrapper{
+		inner:    inner,
+		ctx:      context.Background(),
+		detector: newPrimarySpeakerDetector(false, false, "{text}", "{text}", DefaultPrimarySpeakerDetectionOptions()),
+		eventCh:  make(chan *SpeechEvent, 1),
+		errCh:    make(chan error, 1),
+		inputCh:  make(chan multiSpeakerInput, 2),
+	}
+
+	if err := wrapper.PushFrame(&model.AudioFrame{Data: []byte("first"), SampleRate: 16000, NumChannels: 1, SamplesPerChannel: 1}); err != nil {
+		t.Fatalf("PushFrame returned error: %v", err)
+	}
+	ending, ok := any(wrapper).(InputEnding)
+	if !ok {
+		t.Fatal("wrapper does not implement InputEnding")
+	}
+	if err := ending.EndInput(); err != nil {
+		t.Fatalf("EndInput returned error: %v", err)
+	}
+	if err := wrapper.PushFrame(&model.AudioFrame{Data: []byte("late"), SampleRate: 16000, NumChannels: 1, SamplesPerChannel: 1}); err == nil {
+		t.Fatal("PushFrame after EndInput returned nil, want error")
+	}
+	if err := wrapper.Flush(); err == nil {
+		t.Fatal("Flush after EndInput returned nil, want error")
+	}
+}
+
 type fakeMultiSpeakerStream struct {
 	nextErr   error
 	calls     []string

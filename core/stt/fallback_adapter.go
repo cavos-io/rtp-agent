@@ -270,6 +270,7 @@ type fallbackRecognizeStream struct {
 	retries      map[int]int
 	inputBuffer  []fallbackRecognizeInput
 	rateGuard    SampleRateGuard
+	inputEnded   bool
 
 	eventCh chan *SpeechEvent
 	errCh   chan error
@@ -451,6 +452,9 @@ func (s *fallbackRecognizeStream) PushFrame(frame *model.AudioFrame) error {
 	if s.closed {
 		return fmt.Errorf("stream closed")
 	}
+	if s.inputEnded {
+		return fmt.Errorf("stream input ended")
+	}
 	if err := s.rateGuard.Check(frame); err != nil {
 		return err
 	}
@@ -471,6 +475,23 @@ func (s *fallbackRecognizeStream) Flush() error {
 	if s.closed {
 		return fmt.Errorf("stream closed")
 	}
+	if s.inputEnded {
+		return fmt.Errorf("stream input ended")
+	}
+	s.inputBuffer = append(s.inputBuffer, fallbackRecognizeInput{flush: true})
+	return s.activeStream.Flush()
+}
+
+func (s *fallbackRecognizeStream) EndInput() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return fmt.Errorf("stream closed")
+	}
+	if s.inputEnded {
+		return fmt.Errorf("stream input ended")
+	}
+	s.inputEnded = true
 	s.inputBuffer = append(s.inputBuffer, fallbackRecognizeInput{flush: true})
 	return s.activeStream.Flush()
 }
