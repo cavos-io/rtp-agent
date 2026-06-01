@@ -17,14 +17,14 @@ var (
 	imagePattern = regexp.MustCompile(`!\[([^\]]*)\]\([^)]*\)`)
 	// links: keep text part [text](url) -> text
 	linkPattern = regexp.MustCompile(`\[([^\]]*)\]\([^)]*\)`)
-	// bold: remove asterisks from **text**
-	boldPattern = regexp.MustCompile(`\*\*([^*]+?)\*\*`)
-	// italic: remove asterisks from *text*
-	italicPattern = regexp.MustCompile(`\*([^*]+?)\*`)
-	// bold with underscores: remove underscores from __text__
-	boldUnderPattern = regexp.MustCompile(`\b__([^_]+?)__\b`)
-	// italic with underscores: remove underscores from _text_
-	italicUnderPattern = regexp.MustCompile(`\b_([^_]+?)_\b`)
+	// bold: remove asterisks from **text** while preserving literal asterisks in words/expressions
+	boldPattern = regexp.MustCompile(`(^|[^\w*])\*\*([^\s*][^*\n]*?[^\s*])\*\*($|[^\w*])`)
+	// italic: remove asterisks from *text* while preserving literal asterisks in words/expressions
+	italicPattern = regexp.MustCompile(`(^|[^\w*])\*([^\s*][^*\n]*?[^\s*])\*($|[^\w*])`)
+	// bold with underscores: remove underscores from __text__ while preserving intra-word underscores
+	boldUnderPattern = regexp.MustCompile(`(^|\W)__([^_]+?)__($|\W)`)
+	// italic with underscores: remove underscores from _text_ while preserving intra-word underscores
+	italicUnderPattern = regexp.MustCompile(`(^|\W)_([^_]+?)_($|\W)`)
 	// code blocks: remove ``` from ```text```
 	codeBlockPattern = regexp.MustCompile("(?s)```.*?```")
 	// inline code: remove ` from `text`
@@ -49,19 +49,15 @@ func FilterMarkdown(text string) string {
 	// Inline patterns
 	text = imagePattern.ReplaceAllString(text, "$1")
 	text = linkPattern.ReplaceAllString(text, "$1")
-	text = boldPattern.ReplaceAllString(text, "$1")
-	text = italicPattern.ReplaceAllString(text, "$1")
-	text = boldUnderPattern.ReplaceAllString(text, "$1")
-	text = italicUnderPattern.ReplaceAllString(text, "$1")
+	text = boldPattern.ReplaceAllString(text, "$1$2$3")
+	text = italicPattern.ReplaceAllString(text, "$1$2$3")
+	text = boldUnderPattern.ReplaceAllString(text, "$1$2$3")
+	text = italicUnderPattern.ReplaceAllString(text, "$1$2$3")
 	text = codeBlockPattern.ReplaceAllString(text, "")
 	text = inlineCodePattern.ReplaceAllString(text, "$1")
 	text = strikePattern.ReplaceAllString(text, "")
 
 	// Final cleanup
-	text = strings.ReplaceAll(text, "**", "")
-	text = strings.ReplaceAll(text, "*", "")
-	text = strings.ReplaceAll(text, "__", "")
-	text = strings.ReplaceAll(text, "_", "")
 	text = strings.ReplaceAll(text, "~~", "")
 	text = strings.ReplaceAll(text, "`", "")
 

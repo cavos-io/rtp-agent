@@ -10,3 +10,12 @@ func TestFilterMarkdownRemovesInlineFormatting(t *testing.T) {
 		t.Fatalf("FilterMarkdown() = %q, want %q", got, want)
 	}
 }
+
+func TestFilterMarkdownPreservesLiteralPunctuationInsideWords(t *testing.T) {
+	input := "Use snake_case and calculate 2*3, not __strong__ or **bold**."
+	want := "Use snake_case and calculate 2*3, not strong or bold."
+
+	if got := FilterMarkdown(input); got != want {
+		t.Fatalf("FilterMarkdown() = %q, want %q", got, want)
+	}
+}
