@@ -101,6 +101,8 @@ func (f *fakeRealtimeSession) UpdateOptions(llm.RealtimeSessionOptions) error { 
 
 func (f *fakeRealtimeSession) GenerateReply(llm.RealtimeGenerateReplyOptions) error { return nil }
 
+func (f *fakeRealtimeSession) Truncate(llm.RealtimeTruncateOptions) error { return nil }
+
 func (f *fakeRealtimeSession) Interrupt() error { return nil }
 
 func (f *fakeRealtimeSession) Close() error { return nil }

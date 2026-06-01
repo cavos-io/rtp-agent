@@ -205,6 +205,31 @@ func openAIRealtimeGenerateReplyMessage(options llm.RealtimeGenerateReplyOptions
 	}
 }
 
+func (s *realtimeSession) Truncate(options llm.RealtimeTruncateOptions) error {
+	if !realtimeModalitiesInclude(options.Modalities, "audio") {
+		return nil
+	}
+	return s.sendMsg(openAIRealtimeTruncateMessage(options))
+}
+
+func openAIRealtimeTruncateMessage(options llm.RealtimeTruncateOptions) map[string]any {
+	return map[string]any{
+		"type":          "conversation.item.truncate",
+		"content_index": 0,
+		"item_id":       options.MessageID,
+		"audio_end_ms":  options.AudioEndMillis,
+	}
+}
+
+func realtimeModalitiesInclude(modalities []string, target string) bool {
+	for _, modality := range modalities {
+		if modality == target {
+			return true
+		}
+	}
+	return false
+}
+
 func (s *realtimeSession) CommitAudio() error {
 	return s.sendMsg(openAIRealtimeCommitAudioMessage())
 }

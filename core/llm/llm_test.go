@@ -52,3 +52,21 @@ func TestRealtimeGenerateReplyOptionsExposePerResponseOverrides(t *testing.T) {
 		t.Fatal("Tools = nil, want explicit per-response tools")
 	}
 }
+
+func TestRealtimeTruncateOptionsExposeAudioTruncationFields(t *testing.T) {
+	options := RealtimeTruncateOptions{
+		MessageID:      "msg_123",
+		Modalities:     []string{"audio"},
+		AudioEndMillis: 1500,
+	}
+
+	if options.MessageID != "msg_123" {
+		t.Fatalf("MessageID = %q, want msg_123", options.MessageID)
+	}
+	if len(options.Modalities) != 1 || options.Modalities[0] != "audio" {
+		t.Fatalf("Modalities = %#v, want audio", options.Modalities)
+	}
+	if options.AudioEndMillis != 1500 {
+		t.Fatalf("AudioEndMillis = %d, want 1500", options.AudioEndMillis)
+	}
+}

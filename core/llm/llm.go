@@ -482,12 +482,19 @@ type RealtimeGenerateReplyOptions struct {
 	Tools        []Tool
 }
 
+type RealtimeTruncateOptions struct {
+	MessageID      string
+	Modalities     []string
+	AudioEndMillis int
+}
+
 type RealtimeSession interface {
 	UpdateInstructions(instructions string) error
 	UpdateChatContext(chatCtx *ChatContext) error
 	UpdateTools(tools []Tool) error
 	UpdateOptions(options RealtimeSessionOptions) error
 	GenerateReply(options RealtimeGenerateReplyOptions) error
+	Truncate(options RealtimeTruncateOptions) error
 	Interrupt() error
 	Close() error
 	EventCh() <-chan RealtimeEvent

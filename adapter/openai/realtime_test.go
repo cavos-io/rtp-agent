@@ -81,3 +81,24 @@ func TestRealtimeGenerateReplyMessageMapsPerResponseOptions(t *testing.T) {
 		t.Fatalf("tools = %#v, want lookup tool", tools)
 	}
 }
+
+func TestRealtimeTruncateMessageMapsAudioModality(t *testing.T) {
+	msg := openAIRealtimeTruncateMessage(llm.RealtimeTruncateOptions{
+		MessageID:      "msg_123",
+		Modalities:     []string{"text", "audio"},
+		AudioEndMillis: 1500,
+	})
+
+	if msg["type"] != "conversation.item.truncate" {
+		t.Fatalf("message type = %#v, want conversation.item.truncate", msg["type"])
+	}
+	if msg["item_id"] != "msg_123" {
+		t.Fatalf("item_id = %#v, want msg_123", msg["item_id"])
+	}
+	if msg["content_index"] != 0 {
+		t.Fatalf("content_index = %#v, want 0", msg["content_index"])
+	}
+	if msg["audio_end_ms"] != 1500 {
+		t.Fatalf("audio_end_ms = %#v, want 1500", msg["audio_end_ms"])
+	}
+}
