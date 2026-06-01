@@ -357,6 +357,58 @@ func TestAgentSessionEmitErrorEmitsTimestampedEvent(t *testing.T) {
 	}
 }
 
+func TestAgentSessionRecordsEmittedEvents(t *testing.T) {
+	agent := NewAgent("test")
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	cause := errors.New("provider failed")
+
+	session.EmitError(ErrorEvent{Error: cause, Source: "llm"})
+
+	events := session.RecordedEvents()
+	if len(events) != 1 {
+		t.Fatalf("RecordedEvents length = %d, want 1", len(events))
+	}
+	ev, ok := events[0].(*ErrorEvent)
+	if !ok {
+		t.Fatalf("RecordedEvents[0] = %T, want *ErrorEvent", events[0])
+	}
+	if !errors.Is(ev.Error, cause) || ev.Source != "llm" {
+		t.Fatalf("recorded error event = %#v, want original error/source", ev)
+	}
+}
+
+func TestAgentSessionRecordedEventsReturnsCopy(t *testing.T) {
+	agent := NewAgent("test")
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	session.EmitError(ErrorEvent{Error: errors.New("failed"), Source: "llm"})
+
+	events := session.RecordedEvents()
+	events[0] = nil
+
+	if session.RecordedEvents()[0] == nil {
+		t.Fatal("RecordedEvents returned mutable backing storage")
+	}
+}
+
+func TestAgentSessionRecordsStateChangedEvents(t *testing.T) {
+	agent := NewAgent("test")
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+
+	session.UpdateAgentState(AgentStateThinking)
+	session.UpdateUserState(UserStateSpeaking)
+
+	events := session.RecordedEvents()
+	if len(events) != 2 {
+		t.Fatalf("RecordedEvents length = %d, want 2", len(events))
+	}
+	if ev, ok := events[0].(*AgentStateChangedEvent); !ok || ev.NewState != AgentStateThinking {
+		t.Fatalf("RecordedEvents[0] = %#v, want agent state changed to thinking", events[0])
+	}
+	if ev, ok := events[1].(*UserStateChangedEvent); !ok || ev.NewState != UserStateSpeaking {
+		t.Fatalf("RecordedEvents[1] = %#v, want user state changed to speaking", events[1])
+	}
+}
+
 func TestAgentSessionEmitAgentFalseInterruptionEmitsTimestampedEvent(t *testing.T) {
 	agent := NewAgent("test")
 	session := NewAgentSession(agent, nil, AgentSessionOptions{})
