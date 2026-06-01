@@ -2711,6 +2711,23 @@ func TestExecuteLocalJobWithOptionsRejectsNonFakeWithoutRoomInfo(t *testing.T) {
 	}
 }
 
+func TestExecuteLocalJobWithOptionsRejectsNonFakeWithoutAgentIdentity(t *testing.T) {
+	server := NewAgentServer(WorkerOptions{})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	err := server.ExecuteLocalJobWithOptions(ctx, "room-a", "", LocalJobOptions{
+		FakeJob:  false,
+		RoomInfo: &livekit.Room{Sid: "RM_existing", Name: "room-a"},
+	})
+	if err == nil {
+		t.Fatal("ExecuteLocalJobWithOptions() error = nil, want missing agent identity error")
+	}
+	if !strings.Contains(err.Error(), "agent identity is required") {
+		t.Fatalf("ExecuteLocalJobWithOptions() error = %q, want agent identity requirement", err.Error())
+	}
+}
+
 func TestExecuteLocalJobCleansUpAndRunsSessionEnd(t *testing.T) {
 	server := NewAgentServer(WorkerOptions{})
 	startedCh := make(chan *JobContext, 1)

@@ -1516,6 +1516,9 @@ func (s *AgentServer) ExecuteLocalJobWithOptions(ctx context.Context, roomName s
 	if !options.FakeJob && options.RoomInfo == nil {
 		return fmt.Errorf("room info is required for non-fake local jobs")
 	}
+	if !options.FakeJob && participantIdentity == "" {
+		return fmt.Errorf("agent identity is required for non-fake local jobs")
+	}
 	jobCtx := newLocalJobContextWithOptions(roomName, participantIdentity, s.Options, options)
 	jobCtx.WorkerID = s.workerID
 
