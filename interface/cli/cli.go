@@ -189,7 +189,10 @@ func RunApp(server *worker.AgentServer) {
 	case "console":
 		runConsole(server, os.Args)
 	case "download-files":
-		runDownloadFiles()
+		if err := runDownloadFiles(); err != nil {
+			logger.Logger.Errorw("Download files failed", err)
+			os.Exit(1)
+		}
 	default:
 		printUsage()
 		os.Exit(1)
@@ -309,16 +312,21 @@ func printUsage() {
 	fmt.Println("  download-files  Download required files for all registered plugins")
 }
 
-func runDownloadFiles() {
-	plugins := agent.RegisteredPlugins()
+func runDownloadFiles() error {
+	return runDownloadFilesForPlugins(agent.RegisteredPlugins())
+}
+
+func runDownloadFilesForPlugins(plugins []agent.Plugin) error {
 	fmt.Printf("Downloading files for %d registered plugins...\n", len(plugins))
 	for _, p := range plugins {
 		fmt.Printf("Downloading for %s (%s)...\n", p.Title(), p.Package())
 		if err := p.DownloadFiles(); err != nil {
 			logger.Logger.Errorw("Failed to download files", err, "plugin", p.Title())
+			return fmt.Errorf("download files for %s: %w", p.Package(), err)
 		}
 	}
 	fmt.Println("Finished downloading files.")
+	return nil
 }
 
 func runWorker(server *worker.AgentServer, devMode bool) {
