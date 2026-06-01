@@ -145,6 +145,7 @@ func formatConsoleAudioDevices(devices []consoleAudioDevice, defaultInput, defau
 }
 
 func RunApp(server *worker.AgentServer) {
+	DiscoverPlugins()
 	if len(os.Args) < 2 {
 		printUsage()
 		os.Exit(1)
