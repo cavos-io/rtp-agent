@@ -5,8 +5,11 @@ import (
 	"errors"
 	"io"
 	"testing"
+	"time"
 
 	"github.com/cavos-io/rtp-agent/core/llm"
+	"github.com/cavos-io/rtp-agent/core/tts"
+	"github.com/cavos-io/rtp-agent/model"
 )
 
 func TestPerformLLMInferenceIgnoresNonFunctionToolCalls(t *testing.T) {
@@ -116,6 +119,36 @@ func TestPerformToolExecutionsSuppressesOutputForStopResponse(t *testing.T) {
 	}
 }
 
+func TestPerformTTSInferenceEndsStreamInput(t *testing.T) {
+	providerStream := newEndInputGenerationTTSStream()
+	provider := &fakeGenerationTTS{stream: providerStream}
+	textCh := make(chan string, 1)
+	textCh <- "hello"
+	close(textCh)
+
+	data, err := PerformTTSInference(context.Background(), provider, textCh)
+	if err != nil {
+		t.Fatalf("PerformTTSInference error = %v", err)
+	}
+
+	select {
+	case frame, ok := <-data.AudioCh:
+		if !ok {
+			t.Fatal("AudioCh closed before audio, want audio after EndInput")
+		}
+		if string(frame.Data) != "audio" {
+			t.Fatalf("audio data = %q, want audio", frame.Data)
+		}
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("timed out waiting for TTS audio after input end")
+	}
+
+	wantCalls := []string{"push:hello", "end_input"}
+	if got := providerStream.calls; len(got) != len(wantCalls) || got[0] != wantCalls[0] || got[1] != wantCalls[1] {
+		t.Fatalf("stream calls = %#v, want %#v", got, wantCalls)
+	}
+}
+
 func executeOneToolCall(t *testing.T, tool llm.Tool) ToolExecutionOutput {
 	t.Helper()
 
@@ -189,6 +222,82 @@ func (f *fakeGenerationLLMStream) Next() (*llm.ChatChunk, error) {
 }
 
 func (f *fakeGenerationLLMStream) Close() error { return nil }
+
+type fakeGenerationTTS struct {
+	stream tts.SynthesizeStream
+}
+
+func (f *fakeGenerationTTS) Label() string { return "fake-generation-tts" }
+
+func (f *fakeGenerationTTS) Capabilities() tts.TTSCapabilities {
+	return tts.TTSCapabilities{Streaming: true}
+}
+
+func (f *fakeGenerationTTS) SampleRate() int { return 24000 }
+
+func (f *fakeGenerationTTS) NumChannels() int { return 1 }
+
+func (f *fakeGenerationTTS) Synthesize(context.Context, string) (tts.ChunkedStream, error) {
+	return nil, nil
+}
+
+func (f *fakeGenerationTTS) Stream(context.Context) (tts.SynthesizeStream, error) {
+	return f.stream, nil
+}
+
+type endInputGenerationTTSStream struct {
+	calls   []string
+	ended   chan struct{}
+	closed  bool
+	emitted bool
+}
+
+func newEndInputGenerationTTSStream() *endInputGenerationTTSStream {
+	return &endInputGenerationTTSStream{
+		ended: make(chan struct{}),
+	}
+}
+
+func (s *endInputGenerationTTSStream) PushText(text string) error {
+	s.calls = append(s.calls, "push:"+text)
+	return nil
+}
+
+func (s *endInputGenerationTTSStream) Flush() error {
+	s.calls = append(s.calls, "flush")
+	return nil
+}
+
+func (s *endInputGenerationTTSStream) EndInput() error {
+	s.calls = append(s.calls, "end_input")
+	select {
+	case <-s.ended:
+	default:
+		close(s.ended)
+	}
+	return nil
+}
+
+func (s *endInputGenerationTTSStream) Close() error {
+	s.closed = true
+	select {
+	case <-s.ended:
+	default:
+		close(s.ended)
+	}
+	return nil
+}
+
+func (s *endInputGenerationTTSStream) Next() (*tts.SynthesizedAudio, error) {
+	<-s.ended
+	if s.emitted || s.closed {
+		return nil, io.EOF
+	}
+	s.emitted = true
+	return &tts.SynthesizedAudio{
+		Frame: &model.AudioFrame{Data: []byte("audio")},
+	}, nil
+}
 
 func drainFunctionCalls(ch <-chan *llm.FunctionToolCall) []*llm.FunctionToolCall {
 	calls := make([]*llm.FunctionToolCall, 0)

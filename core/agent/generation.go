@@ -106,7 +106,7 @@ func PerformTTSInference(ctx context.Context, t tts.TTS, textCh <-chan string) (
 				_ = stream.PushText(filteredText)
 			}
 		}
-		_ = stream.Flush()
+		_ = tts.EndSynthesizeStreamInput(stream)
 
 		for {
 			audio, err := stream.Next()

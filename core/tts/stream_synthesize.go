@@ -33,6 +33,10 @@ type inputEndingSynthesizeStream interface {
 }
 
 func endSynthesizeStreamInput(stream SynthesizeStream) error {
+	return EndSynthesizeStreamInput(stream)
+}
+
+func EndSynthesizeStreamInput(stream SynthesizeStream) error {
 	if ending, ok := stream.(inputEndingSynthesizeStream); ok {
 		return ending.EndInput()
 	}
