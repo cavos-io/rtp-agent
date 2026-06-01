@@ -442,6 +442,8 @@ func (s *fallbackRecognizeStream) monitorStream() {
 		ev, err := stream.Next()
 		if err != nil {
 			if errors.Is(err, io.EOF) {
+				_ = stream.Close()
+				s.markClosed()
 				s.errCh <- io.EOF
 				return
 			}
@@ -467,6 +469,7 @@ func (s *fallbackRecognizeStream) monitorStream() {
 			}
 
 			if fbErr := s.tryStartStream(nextIndex); fbErr != nil {
+				s.closed = true
 				s.errCh <- fbErr
 				s.mu.Unlock()
 				return
@@ -491,6 +494,12 @@ func (s *fallbackRecognizeStream) monitorStream() {
 	}
 }
 
+func (s *fallbackRecognizeStream) markClosed() {
+	s.mu.Lock()
+	s.closed = true
+	s.mu.Unlock()
+}
+
 func (s *fallbackRecognizeStream) canRetrySTT(index int) bool {
 	if s.adapter.maxRetryPerSTT <= 0 {
 		return false
@@ -506,20 +515,18 @@ func (s *fallbackRecognizeStream) tryRecoverStream(index int) {
 		return
 	}
 	recoveryCtx := context.WithoutCancel(s.ctx)
+	stt := s.adapter.stts[index]
+	stream, err := stt.Stream(recoveryCtx, s.language)
+	if err != nil {
+		s.adapter.clearRecoveringStream(index)
+		return
+	}
+
+	s.recoveries = append(s.recoveries, stream)
 
 	go func() {
 		defer s.adapter.clearRecoveringStream(index)
-
-		stt := s.adapter.stts[index]
-		stream, err := stt.Stream(recoveryCtx, s.language)
-		if err != nil {
-			return
-		}
 		defer stream.Close()
-
-		s.mu.Lock()
-		s.recoveries = append(s.recoveries, stream)
-		s.mu.Unlock()
 		defer s.removeRecovery(stream)
 
 		for {

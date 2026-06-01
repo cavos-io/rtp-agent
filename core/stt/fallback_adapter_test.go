@@ -218,6 +218,38 @@ func TestFallbackStreamReturnsEOFWhenProviderCompletes(t *testing.T) {
 	}
 }
 
+func TestFallbackStreamRejectsInputAfterProviderCompletes(t *testing.T) {
+	inner := &metadataRecognizeStream{
+		events: []*SpeechEvent{{Type: SpeechEventFinalTranscript}},
+	}
+	adapter := NewFallbackAdapter([]STT{
+		&metadataSTT{
+			label:        "primary",
+			capabilities: STTCapabilities{Streaming: true},
+			stream:       inner,
+		},
+	})
+
+	stream, err := adapter.Stream(context.Background(), "en")
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+	defer stream.Close()
+
+	if _, err := stream.Next(); err != nil {
+		t.Fatalf("first Next returned error: %v", err)
+	}
+	_, err = stream.Next()
+	if !errors.Is(err, io.EOF) {
+		t.Fatalf("second Next error = %v, want io.EOF", err)
+	}
+
+	err = stream.PushFrame(&model.AudioFrame{Data: []byte("late"), SampleRate: 16000, NumChannels: 1, SamplesPerChannel: 1})
+	if err == nil {
+		t.Fatal("PushFrame after provider completion returned nil, want error")
+	}
+}
+
 func TestFallbackStreamRetriesNextProviderBeforeEvents(t *testing.T) {
 	firstErr := errors.New("primary stream failed")
 	second := &metadataSTT{
@@ -710,10 +742,7 @@ func TestFallbackStreamForwardsOnlyNewInputToRecoveringProvider(t *testing.T) {
 	fallback := &metadataSTT{
 		label:        "fallback",
 		capabilities: STTCapabilities{Streaming: true},
-		stream: &metadataRecognizeStream{events: []*SpeechEvent{{
-			Type:         SpeechEventFinalTranscript,
-			Alternatives: []SpeechData{{Text: "fallback stream"}},
-		}}},
+		stream:       newBlockingRecognizeStream(),
 	}
 	adapter := NewFallbackAdapterWithOptions([]STT{primary, fallback}, FallbackAdapterOptions{
 		MaxRetryPerSTT: 0,
@@ -775,10 +804,7 @@ func TestFallbackStreamCloseClosesRecoveringProvider(t *testing.T) {
 	fallback := &metadataSTT{
 		label:        "fallback",
 		capabilities: STTCapabilities{Streaming: true},
-		stream: &metadataRecognizeStream{events: []*SpeechEvent{{
-			Type:         SpeechEventFinalTranscript,
-			Alternatives: []SpeechData{{Text: "fallback stream"}},
-		}}},
+		stream:       newBlockingRecognizeStream(),
 	}
 	adapter := NewFallbackAdapterWithOptions([]STT{primary, fallback}, FallbackAdapterOptions{
 		MaxRetryPerSTT: 0,
@@ -1328,6 +1354,35 @@ func (s *blockingFailRecognizeStream) Close() error {
 func (s *blockingFailRecognizeStream) Next() (*SpeechEvent, error) {
 	<-s.release
 	return nil, s.err
+}
+
+type blockingRecognizeStream struct {
+	closeOnce sync.Once
+	closeCh   chan struct{}
+}
+
+func newBlockingRecognizeStream() *blockingRecognizeStream {
+	return &blockingRecognizeStream{closeCh: make(chan struct{})}
+}
+
+func (s *blockingRecognizeStream) PushFrame(*model.AudioFrame) error {
+	return nil
+}
+
+func (s *blockingRecognizeStream) Flush() error {
+	return nil
+}
+
+func (s *blockingRecognizeStream) Close() error {
+	s.closeOnce.Do(func() {
+		close(s.closeCh)
+	})
+	return nil
+}
+
+func (s *blockingRecognizeStream) Next() (*SpeechEvent, error) {
+	<-s.closeCh
+	return nil, io.EOF
 }
 
 type liveRecoveryStream struct {
