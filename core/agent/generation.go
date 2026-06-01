@@ -15,13 +15,15 @@ type LLMGenerationData struct {
 	FunctionCh         chan *llm.FunctionToolCall
 	GeneratedText      string
 	GeneratedFunctions []llm.FunctionToolCall
+	GeneratedExtra     map[string]any
 	TTFT               time.Duration
 }
 
 func PerformLLMInference(ctx context.Context, l llm.LLM, chatCtx *llm.ChatContext, tools []llm.Tool) (*LLMGenerationData, error) {
 	data := &LLMGenerationData{
-		TextCh:     make(chan string, 100),
-		FunctionCh: make(chan *llm.FunctionToolCall, 10),
+		TextCh:         make(chan string, 100),
+		FunctionCh:     make(chan *llm.FunctionToolCall, 10),
+		GeneratedExtra: make(map[string]any),
 	}
 
 	stream, err := l.Chat(ctx, chatCtx, llm.WithTools(tools))
@@ -46,6 +48,9 @@ func PerformLLMInference(ctx context.Context, l llm.LLM, chatCtx *llm.ChatContex
 			}
 
 			if chunk.Delta != nil {
+				for key, value := range chunk.Delta.Extra {
+					data.GeneratedExtra[key] = value
+				}
 				if chunk.Delta.Content != "" {
 					data.GeneratedText += chunk.Delta.Content
 					data.TextCh <- chunk.Delta.Content

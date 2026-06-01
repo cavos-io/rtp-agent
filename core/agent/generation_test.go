@@ -41,6 +41,39 @@ func TestPerformLLMInferenceIgnoresNonFunctionToolCalls(t *testing.T) {
 	}
 }
 
+func TestPerformLLMInferenceTracksGeneratedExtra(t *testing.T) {
+	l := &fakeGenerationLLM{
+		stream: &fakeGenerationLLMStream{
+			chunks: []*llm.ChatChunk{
+				{Delta: &llm.ChoiceDelta{Extra: map[string]any{
+					"trace_id": "first",
+					"score":    1,
+				}}},
+				{Delta: &llm.ChoiceDelta{Extra: map[string]any{
+					"trace_id": "second",
+					"model":    "test-model",
+				}}},
+			},
+		},
+	}
+
+	data, err := PerformLLMInference(context.Background(), l, llm.NewChatContext(), nil)
+	if err != nil {
+		t.Fatalf("PerformLLMInference error = %v, want nil", err)
+	}
+
+	drainStrings(data.TextCh)
+	if got := data.GeneratedExtra["trace_id"]; got != "second" {
+		t.Fatalf("GeneratedExtra[trace_id] = %#v, want second", got)
+	}
+	if got := data.GeneratedExtra["score"]; got != 1 {
+		t.Fatalf("GeneratedExtra[score] = %#v, want 1", got)
+	}
+	if got := data.GeneratedExtra["model"]; got != "test-model" {
+		t.Fatalf("GeneratedExtra[model] = %#v, want test-model", got)
+	}
+}
+
 func TestPerformToolExecutionsUsesToolErrorMessage(t *testing.T) {
 	output := executeOneToolCall(t, &fakeGenerationTool{
 		name: "lookup",
@@ -151,4 +184,12 @@ func drainFunctionCalls(ch <-chan *llm.FunctionToolCall) []*llm.FunctionToolCall
 		calls = append(calls, call)
 	}
 	return calls
+}
+
+func drainStrings(ch <-chan string) []string {
+	values := make([]string, 0)
+	for value := range ch {
+		values = append(values, value)
+	}
+	return values
 }
