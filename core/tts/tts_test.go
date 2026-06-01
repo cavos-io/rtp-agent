@@ -72,6 +72,70 @@ func TestTTSMetricsEmitterIgnoresNilHandler(t *testing.T) {
 	emitter.EmitMetricsCollected(&telemetry.TTSMetrics{Label: "tts"})
 }
 
+func TestTTSErrorEmitterEmitsToHandlers(t *testing.T) {
+	var emitter ErrorEmitter
+	cause := context.Canceled
+	received := make(chan TTSError, 1)
+
+	unsubscribe := emitter.OnError(func(err TTSError) {
+		received <- err
+	})
+	defer unsubscribe()
+
+	emitter.EmitError(TTSError{
+		Label:       "tts",
+		Err:         cause,
+		Recoverable: true,
+	})
+
+	select {
+	case got := <-received:
+		if got.Type != TTSErrorType {
+			t.Fatalf("Type = %q, want %q", got.Type, TTSErrorType)
+		}
+		if got.Label != "tts" {
+			t.Fatalf("Label = %q, want tts", got.Label)
+		}
+		if got.Err != cause {
+			t.Fatalf("Err = %v, want %v", got.Err, cause)
+		}
+		if !got.Recoverable {
+			t.Fatal("Recoverable = false, want true")
+		}
+		if got.Timestamp.IsZero() {
+			t.Fatal("Timestamp is zero")
+		}
+	default:
+		t.Fatal("error handler was not called")
+	}
+}
+
+func TestTTSErrorEmitterCanUnsubscribe(t *testing.T) {
+	var emitter ErrorEmitter
+	received := make(chan TTSError, 1)
+	unsubscribe := emitter.OnError(func(err TTSError) {
+		received <- err
+	})
+	unsubscribe()
+	unsubscribe()
+
+	emitter.EmitError(TTSError{Label: "tts", Err: context.Canceled})
+
+	select {
+	case err := <-received:
+		t.Fatalf("received error after unsubscribe: %#v", err)
+	default:
+	}
+}
+
+func TestTTSErrorEmitterIgnoresNilHandler(t *testing.T) {
+	var emitter ErrorEmitter
+	unsubscribe := emitter.OnError(nil)
+	unsubscribe()
+
+	emitter.EmitError(TTSError{Label: "tts", Err: context.Canceled})
+}
+
 type metadataDefaultsTTS struct{}
 
 func (m *metadataDefaultsTTS) Label() string {

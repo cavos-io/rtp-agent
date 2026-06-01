@@ -105,6 +105,32 @@ func TestStreamAdapterForwardsMetricsCollected(t *testing.T) {
 	}
 }
 
+func TestStreamAdapterForwardsErrorEvents(t *testing.T) {
+	provider := &fakeStreamAdapterTTS{}
+	adapter := NewStreamAdapter(provider)
+	errCh := make(chan TTSError, 1)
+
+	unsubscribe := adapter.OnError(func(err TTSError) {
+		errCh <- err
+	})
+	defer unsubscribe()
+
+	cause := errors.New("provider failed")
+	provider.EmitError(TTSError{Label: "provider", Err: cause, Recoverable: true})
+
+	select {
+	case got := <-errCh:
+		if got.Err != cause {
+			t.Fatalf("Err = %v, want %v", got.Err, cause)
+		}
+		if !got.Recoverable {
+			t.Fatal("Recoverable = false, want true")
+		}
+	default:
+		t.Fatal("error handler was not called")
+	}
+}
+
 func TestStreamAdapterPreservesInternalNewlinesForSynthesis(t *testing.T) {
 	provider := &fakeStreamAdapterTTS{}
 	stream, err := NewStreamAdapter(provider).Stream(context.Background())
@@ -666,6 +692,7 @@ func nextStreamAdapterAudio(t *testing.T, stream SynthesizeStream) *SynthesizedA
 
 type fakeStreamAdapterTTS struct {
 	MetricsEmitter
+	ErrorEmitter
 
 	texts         []string
 	model         string

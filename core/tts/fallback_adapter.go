@@ -165,6 +165,29 @@ func (f *FallbackAdapter) OnMetricsCollected(handler TTSMetricsHandler) func() {
 	}
 }
 
+func (f *FallbackAdapter) OnError(handler TTSErrorHandler) func() {
+	if handler == nil {
+		return func() {}
+	}
+	unsubscribes := make([]func(), 0, len(f.ttss))
+	for _, tts := range f.ttss {
+		collector, ok := tts.(errorCollectorTTS)
+		if !ok {
+			continue
+		}
+		unsubscribes = append(unsubscribes, collector.OnError(handler))
+	}
+
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			for _, unsubscribe := range unsubscribes {
+				unsubscribe()
+			}
+		})
+	}
+}
+
 func (f *FallbackAdapter) Capabilities() TTSCapabilities {
 	return f.capabilities
 }
