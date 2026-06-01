@@ -24,8 +24,8 @@ type SentenceStreamPacer struct {
 	ctx    context.Context
 	cancel context.CancelFunc
 
-	textCh     chan string
-	sentenceCh chan string
+	textCh     chan pacerInput
+	sentenceCh chan pacerSentence
 	audioCh    chan *SynthesizedAudio
 
 	mu                sync.Mutex
@@ -36,6 +36,16 @@ type SentenceStreamPacer struct {
 	lastAudioTime     time.Time
 
 	closed bool
+}
+
+type pacerInput struct {
+	text  string
+	flush bool
+}
+
+type pacerSentence struct {
+	text  string
+	flush bool
 }
 
 type SentenceStreamPacerOptions struct {
@@ -65,8 +75,8 @@ func NewSentenceStreamPacerWithOptions(ctx context.Context, underlying Synthesiz
 		maxTextLength:     opts.MaxTextLength,
 		ctx:               pacerCtx,
 		cancel:            cancel,
-		textCh:            make(chan string, 100),
-		sentenceCh:        make(chan string, 100),
+		textCh:            make(chan pacerInput, 100),
+		sentenceCh:        make(chan pacerSentence, 100),
 		audioCh:           make(chan *SynthesizedAudio, 100),
 	}
 
@@ -85,12 +95,19 @@ func (p *SentenceStreamPacer) tokenizeLoop() {
 		select {
 		case <-p.ctx.Done():
 			return
-		case text, ok := <-p.textCh:
+		case input, ok := <-p.textCh:
 			if !ok {
 				p.sendTokenizedSentences(buffer)
 				return
 			}
+			if input.flush {
+				p.sendTokenizedSentences(buffer)
+				buffer = ""
+				p.sentenceCh <- pacerSentence{flush: true}
+				continue
+			}
 
+			text := input.text
 			buffer += text
 			if len(buffer) < 10 {
 				continue
@@ -109,7 +126,7 @@ func (p *SentenceStreamPacer) sendTokenizedSentences(text string) bool {
 	}
 	for _, sentence := range sentences {
 		if sentence != "" {
-			p.sentenceCh <- sentence
+			p.sentenceCh <- pacerSentence{text: sentence}
 		}
 	}
 	return true
@@ -125,19 +142,18 @@ func (p *SentenceStreamPacer) paceLoop() {
 			return
 		case sentence, ok := <-p.sentenceCh:
 			if !ok {
-				for len(pending) > 0 {
-					if !p.waitUntilReadyToSend(firstSentence) {
-						return
-					}
-					if err := p.pushBatch(&pending, &firstSentence); err != nil {
-						return
-					}
-				}
-				p.underlying.Flush()
+				p.flushPendingSentences(&pending, &firstSentence)
 				return
 			}
-			pending = append(pending, sentence)
-			p.drainAvailableSentences(&pending)
+			if sentence.flush {
+				p.flushPendingSentences(&pending, &firstSentence)
+				continue
+			}
+			pending = append(pending, sentence.text)
+			if p.drainAvailableSentences(&pending) {
+				p.flushPendingSentences(&pending, &firstSentence)
+				continue
+			}
 
 			if !p.waitUntilReadyToSend(firstSentence) {
 				return
@@ -184,16 +200,31 @@ func (p *SentenceStreamPacer) remainingAudioLocked() time.Duration {
 	return 0
 }
 
-func (p *SentenceStreamPacer) drainAvailableSentences(pending *[]string) {
+func (p *SentenceStreamPacer) flushPendingSentences(pending *[]string, firstSentence *bool) {
+	for len(*pending) > 0 {
+		if !p.waitUntilReadyToSend(*firstSentence) {
+			return
+		}
+		if err := p.pushBatch(pending, firstSentence); err != nil {
+			return
+		}
+	}
+	p.underlying.Flush()
+}
+
+func (p *SentenceStreamPacer) drainAvailableSentences(pending *[]string) bool {
 	for {
 		select {
 		case sentence, ok := <-p.sentenceCh:
 			if !ok {
-				return
+				return true
 			}
-			*pending = append(*pending, sentence)
+			if sentence.flush {
+				return true
+			}
+			*pending = append(*pending, sentence.text)
 		default:
-			return
+			return false
 		}
 	}
 }
@@ -266,7 +297,7 @@ func (p *SentenceStreamPacer) PushText(text string) error {
 	}
 	p.mu.Unlock()
 
-	p.textCh <- text
+	p.textCh <- pacerInput{text: text}
 	return nil
 }
 
@@ -276,14 +307,20 @@ func (p *SentenceStreamPacer) Flush() error {
 		p.mu.Unlock()
 		return fmt.Errorf("pacer closed")
 	}
-	p.closed = true
 	p.mu.Unlock()
 
-	close(p.textCh)
+	p.textCh <- pacerInput{flush: true}
 	return nil
 }
 
 func (p *SentenceStreamPacer) Close() error {
+	p.mu.Lock()
+	if p.closed {
+		p.mu.Unlock()
+		return nil
+	}
+	p.closed = true
+	p.mu.Unlock()
 	p.cancel()
 	return p.underlying.Close()
 }
