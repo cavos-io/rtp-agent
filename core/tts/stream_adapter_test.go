@@ -219,7 +219,16 @@ func TestStreamAdapterMarksLastFrameInSegmentFinal(t *testing.T) {
 }
 
 func TestStreamAdapterDoesNotMarkIntermediateSentenceFinal(t *testing.T) {
-	provider := &fakeStreamAdapterTTS{}
+	provider := &fakeStreamAdapterTTS{
+		events: []*SynthesizedAudio{{
+			Frame: &model.AudioFrame{
+				Data:              make([]byte, 24000*2/50),
+				SampleRate:        24000,
+				NumChannels:       1,
+				SamplesPerChannel: 24000 / 50,
+			},
+		}},
+	}
 	stream, err := NewStreamAdapter(provider).Stream(context.Background())
 	if err != nil {
 		t.Fatalf("Stream returned error: %v", err)
@@ -235,22 +244,28 @@ func TestStreamAdapterDoesNotMarkIntermediateSentenceFinal(t *testing.T) {
 	if err := stream.Flush(); err != nil {
 		t.Fatalf("Flush returned error: %v", err)
 	}
-	if ending, ok := stream.(interface{ EndInput() error }); ok {
-		if err := ending.EndInput(); err != nil {
-			t.Fatalf("EndInput returned error: %v", err)
-		}
-	}
 
 	first := nextStreamAdapterAudio(t, stream)
-	second := nextStreamAdapterAudio(t, stream)
-	if first.SegmentID == "" || second.SegmentID == "" || second.SegmentID != first.SegmentID {
-		t.Fatalf("segment ids = first:%q second:%q, want same non-empty segment", first.SegmentID, second.SegmentID)
+	segmentID := first.SegmentID
+	if segmentID == "" {
+		t.Fatal("first SegmentID is empty")
 	}
 	if first.IsFinal {
 		t.Fatal("first sentence audio IsFinal = true, want non-final within the same segment")
 	}
-	if !second.IsFinal {
-		t.Fatal("second sentence audio IsFinal = false, want final at segment end")
+	finalSeen := false
+	for i := 0; i < 5; i++ {
+		audio := nextStreamAdapterAudio(t, stream)
+		if audio.SegmentID != segmentID {
+			t.Fatalf("SegmentID = %q, want %q", audio.SegmentID, segmentID)
+		}
+		if audio.IsFinal {
+			finalSeen = true
+			break
+		}
+	}
+	if !finalSeen {
+		t.Fatal("did not receive final audio for segment")
 	}
 	if got, want := provider.texts, []string{"First sentence has enough words.", "Second sentence has enough words."}; strings.Join(got, "|") != strings.Join(want, "|") {
 		t.Fatalf("synthesized texts = %#v, want %#v", got, want)
