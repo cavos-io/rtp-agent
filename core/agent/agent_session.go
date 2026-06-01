@@ -60,6 +60,12 @@ type GenerateReplyOptions struct {
 	InputModality      string
 }
 
+type SayOptions struct {
+	Text               string
+	AllowInterruptions *bool
+	AddToChatContext   *bool
+}
+
 type RunOptions struct {
 	UserInput          string
 	AllowInterruptions *bool
@@ -691,6 +697,12 @@ func (s *AgentSession) GenerateReply(ctx context.Context, userInput string) (*Sp
 	})
 }
 
+func (s *AgentSession) Say(ctx context.Context, text string) (*SpeechHandle, error) {
+	return s.SayWithOptions(ctx, SayOptions{
+		Text: text,
+	})
+}
+
 func (s *AgentSession) Run(ctx context.Context, userInput string) (*RunResult, error) {
 	return s.RunWithOptions(ctx, RunOptions{
 		UserInput:     userInput,
@@ -770,6 +782,54 @@ func (s *AgentSession) GenerateReplyWithOptions(ctx context.Context, opts Genera
 	}
 	if userMessage != nil {
 		s.EmitConversationItemAdded(userMessage)
+	}
+	return handle, nil
+}
+
+func (s *AgentSession) SayWithOptions(ctx context.Context, opts SayOptions) (*SpeechHandle, error) {
+	s.mu.Lock()
+	activity := s.activity
+	s.mu.Unlock()
+
+	if activity == nil {
+		return nil, ErrAgentSessionNotRunning
+	}
+
+	logger.Logger.Infow("Saying text", "text", opts.Text)
+
+	allowInterruptions := s.Options.AllowInterruptions
+	if opts.AllowInterruptions != nil {
+		allowInterruptions = *opts.AllowInterruptions
+	}
+	addToChatContext := true
+	if opts.AddToChatContext != nil {
+		addToChatContext = *opts.AddToChatContext
+	}
+
+	handle := NewSpeechHandle(allowInterruptions, InputDetails{Modality: "text"})
+	s.EmitSpeechCreated(SpeechCreatedEvent{
+		UserInitiated: true,
+		Source:        "say",
+		SpeechHandle:  handle,
+	})
+
+	var assistantMessage *llm.ChatMessage
+	if addToChatContext && opts.Text != "" {
+		assistantMessage = &llm.ChatMessage{
+			Role: llm.ChatRoleAssistant,
+			Content: []llm.ChatContent{
+				{Text: opts.Text},
+			},
+			CreatedAt: time.Now(),
+		}
+	}
+
+	if err := activity.ScheduleSpeech(handle, SpeechPriorityNormal, false); err != nil {
+		return nil, err
+	}
+	if assistantMessage != nil {
+		s.EmitConversationItemAdded(assistantMessage)
+		handle.AddChatItems(assistantMessage)
 	}
 	return handle, nil
 }

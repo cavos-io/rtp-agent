@@ -134,6 +134,121 @@ func TestAgentSessionGenerateReplyEmitsSpeechCreatedEvent(t *testing.T) {
 	}
 }
 
+func TestAgentSessionSayReturnsScheduledSpeechHandle(t *testing.T) {
+	agent := NewAgent("test")
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	session.activity = NewAgentActivity(agent, session)
+
+	handle, err := session.Say(context.Background(), "hello")
+
+	if err != nil {
+		t.Fatalf("Say error = %v, want nil", err)
+	}
+	if handle == nil {
+		t.Fatal("Say handle = nil, want speech handle")
+	}
+	if !handle.IsScheduled() {
+		t.Fatal("Say returned unscheduled handle")
+	}
+	if !handle.AllowInterruptions {
+		t.Fatal("handle.AllowInterruptions = false, want session default true")
+	}
+	if got, want := handle.InputDetails.Modality, "text"; got != want {
+		t.Fatalf("handle.InputDetails.Modality = %q, want %q", got, want)
+	}
+}
+
+func TestAgentSessionSayEmitsSpeechCreatedEvent(t *testing.T) {
+	agent := NewAgent("test")
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	session.activity = NewAgentActivity(agent, session)
+	before := time.Now()
+
+	handle, err := session.Say(context.Background(), "hello")
+
+	if err != nil {
+		t.Fatalf("Say error = %v, want nil", err)
+	}
+	select {
+	case ev := <-session.SpeechCreatedEvents():
+		if ev.GetType() != "speech_created" {
+			t.Fatalf("event type = %q, want speech_created", ev.GetType())
+		}
+		if ev.SpeechHandle != handle {
+			t.Fatalf("SpeechHandle = %#v, want returned handle", ev.SpeechHandle)
+		}
+		if !ev.UserInitiated {
+			t.Fatal("UserInitiated = false, want true for Say")
+		}
+		if ev.Source != "say" {
+			t.Fatalf("Source = %q, want say", ev.Source)
+		}
+		if ev.CreatedAt.Before(before) || ev.CreatedAt.IsZero() {
+			t.Fatalf("CreatedAt = %v, want timestamp after %v", ev.CreatedAt, before)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("SpeechCreatedEvents did not receive say speech")
+	}
+}
+
+func TestAgentSessionSayAddsAssistantTextToChatContextByDefault(t *testing.T) {
+	agent := NewAgent("test")
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	session.activity = NewAgentActivity(agent, session)
+
+	if _, err := session.Say(context.Background(), "hello from agent"); err != nil {
+		t.Fatalf("Say error = %v, want nil", err)
+	}
+
+	if len(session.ChatCtx.Items) != 1 {
+		t.Fatalf("ChatCtx.Items length = %d, want 1", len(session.ChatCtx.Items))
+	}
+	msg, ok := session.ChatCtx.Items[0].(*llm.ChatMessage)
+	if !ok {
+		t.Fatalf("ChatCtx item type = %T, want *llm.ChatMessage", session.ChatCtx.Items[0])
+	}
+	if msg.Role != llm.ChatRoleAssistant || msg.TextContent() != "hello from agent" {
+		t.Fatalf("ChatCtx message = %#v, want assistant message with text", msg)
+	}
+	select {
+	case ev := <-session.ConversationItemAddedEvents():
+		if ev.Item != msg {
+			t.Fatalf("ConversationItemAdded item = %#v, want committed assistant message", ev.Item)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("ConversationItemAddedEvents did not receive say text")
+	}
+}
+
+func TestAgentSessionSayOptionsOverrideInterruptionsAndChatContext(t *testing.T) {
+	agent := NewAgent("test")
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	session.activity = NewAgentActivity(agent, session)
+	allowInterruptions := false
+	addToChatContext := false
+
+	handle, err := session.SayWithOptions(context.Background(), SayOptions{
+		Text:               "private aside",
+		AllowInterruptions: &allowInterruptions,
+		AddToChatContext:   &addToChatContext,
+	})
+
+	if err != nil {
+		t.Fatalf("SayWithOptions error = %v, want nil", err)
+	}
+	if handle.AllowInterruptions {
+		t.Fatal("handle.AllowInterruptions = true, want per-call false override")
+	}
+	if len(session.ChatCtx.Items) != 0 {
+		t.Fatalf("ChatCtx.Items length = %d, want 0 when AddToChatContext is false", len(session.ChatCtx.Items))
+	}
+	select {
+	case ev := <-session.ConversationItemAddedEvents():
+		t.Fatalf("ConversationItemAdded event = %#v, want none when AddToChatContext is false", ev)
+	default:
+	}
+}
+
 func TestAgentSessionEmitErrorEmitsTimestampedEvent(t *testing.T) {
 	agent := NewAgent("test")
 	session := NewAgentSession(agent, nil, AgentSessionOptions{})
