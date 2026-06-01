@@ -3456,6 +3456,59 @@ func TestExecuteLocalJobCleansUpAndRunsSessionEnd(t *testing.T) {
 	}
 }
 
+func TestExecuteLocalJobCleansUpWhenEntrypointPanics(t *testing.T) {
+	server := NewAgentServer(WorkerOptions{})
+	startedCh := make(chan *JobContext, 1)
+	sessionEndCh := make(chan *JobContext, 1)
+
+	if err := server.RTCSession(
+		func(ctx *JobContext) error {
+			startedCh <- ctx
+			panic("entrypoint panic")
+		},
+		nil,
+		func(ctx *JobContext) error {
+			sessionEndCh <- ctx
+			return nil
+		},
+	); err != nil {
+		t.Fatalf("RTCSession() error = %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	doneCh := make(chan error, 1)
+	go func() {
+		doneCh <- server.ExecuteLocalJob(ctx, "room-a", "agent-local")
+	}()
+
+	var jobCtx *JobContext
+	select {
+	case jobCtx = <-startedCh:
+	case <-time.After(time.Second):
+		t.Fatal("local job entrypoint did not run")
+	}
+
+	cancel()
+
+	select {
+	case err := <-doneCh:
+		if err != nil {
+			t.Fatalf("ExecuteLocalJob() error = %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("ExecuteLocalJob() did not return after entrypoint panic")
+	}
+
+	select {
+	case endedCtx := <-sessionEndCh:
+		if endedCtx != jobCtx {
+			t.Fatal("session end callback received a different job context")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("session end callback did not run after entrypoint panic")
+	}
+}
+
 func TestExecuteLocalJobReturnsWhenJobContextShutsDown(t *testing.T) {
 	server := NewAgentServer(WorkerOptions{})
 	startedCh := make(chan *JobContext, 1)
