@@ -861,6 +861,46 @@ func TestFallbackAdapterRecoverySurvivesCallerContextCancellation(t *testing.T) 
 	}
 }
 
+func TestFallbackAdapterCloseCancelsRecognizeRecovery(t *testing.T) {
+	primary := &closeCancelRecoverySTT{
+		recoveryStarted:  make(chan struct{}, 1),
+		recoveryCanceled: make(chan struct{}, 1),
+	}
+	fallback := &metadataSTT{
+		label:        "fallback",
+		capabilities: STTCapabilities{Streaming: true},
+		recognizeResult: &SpeechEvent{
+			Type:         SpeechEventFinalTranscript,
+			Alternatives: []SpeechData{{Text: "fallback"}},
+		},
+	}
+	adapter := NewFallbackAdapterWithOptions([]STT{primary, fallback}, FallbackAdapterOptions{
+		MaxRetryPerSTT: 0,
+	})
+
+	event, err := adapter.Recognize(context.Background(), nil, "en")
+	if err != nil {
+		t.Fatalf("Recognize returned error: %v", err)
+	}
+	if got := event.Alternatives[0].Text; got != "fallback" {
+		t.Fatalf("recognized text = %q, want fallback", got)
+	}
+
+	select {
+	case <-primary.recoveryStarted:
+	case <-time.After(200 * time.Millisecond):
+		t.Fatal("timed out waiting for recovery attempt")
+	}
+	if err := adapter.Close(); err != nil {
+		t.Fatalf("Close returned error: %v", err)
+	}
+	select {
+	case <-primary.recoveryCanceled:
+	case <-time.After(200 * time.Millisecond):
+		t.Fatal("timed out waiting for recovery cancellation")
+	}
+}
+
 func TestFallbackStreamSkipsUnavailableSTTFromRecognizeFailure(t *testing.T) {
 	primaryErr := errors.New("primary recognize failed")
 	primary := &metadataSTT{
@@ -1685,6 +1725,45 @@ func (s *blockingContextSTT) wasCanceled() bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.canceled
+}
+
+type closeCancelRecoverySTT struct {
+	mu               sync.Mutex
+	calls            int
+	recoveryStarted  chan struct{}
+	recoveryCanceled chan struct{}
+}
+
+func (s *closeCancelRecoverySTT) Label() string {
+	return "close-cancel-primary"
+}
+
+func (s *closeCancelRecoverySTT) Capabilities() STTCapabilities {
+	return STTCapabilities{Streaming: true}
+}
+
+func (s *closeCancelRecoverySTT) Stream(context.Context, string) (RecognizeStream, error) {
+	return nil, errors.New("stream unsupported")
+}
+
+func (s *closeCancelRecoverySTT) Recognize(ctx context.Context, _ []*model.AudioFrame, _ string) (*SpeechEvent, error) {
+	s.mu.Lock()
+	s.calls++
+	call := s.calls
+	s.mu.Unlock()
+	if call == 1 {
+		return nil, errors.New("primary failed")
+	}
+	select {
+	case s.recoveryStarted <- struct{}{}:
+	default:
+	}
+	<-ctx.Done()
+	select {
+	case s.recoveryCanceled <- struct{}{}:
+	default:
+	}
+	return nil, ctx.Err()
 }
 
 func waitForRecognizeCalls(t *testing.T, stt *metadataSTT, want int) {

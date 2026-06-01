@@ -22,6 +22,7 @@ type FallbackAdapter struct {
 	mu                   sync.Mutex
 	available            []bool
 	recovering           []bool
+	recoveryCancels      []context.CancelFunc
 	recoveringStream     []bool
 	availabilityHandlers []availabilityHandlerSubscription
 	nextAvailabilityID   uint64
@@ -126,6 +127,7 @@ func newFallbackAdapter(stts []STT, vad vad.VAD, options FallbackAdapterOptions)
 		retryInterval:    options.RetryInterval,
 		available:        initialAvailability(len(wrapped)),
 		recovering:       make([]bool, len(wrapped)),
+		recoveryCancels:  make([]context.CancelFunc, len(wrapped)),
 		recoveringStream: make([]bool, len(wrapped)),
 	}
 }
@@ -156,6 +158,22 @@ func (f *FallbackAdapter) Prewarm() {
 
 func (f *FallbackAdapter) Capabilities() STTCapabilities {
 	return f.capabilities
+}
+
+func (f *FallbackAdapter) Close() error {
+	f.mu.Lock()
+	cancels := append([]context.CancelFunc(nil), f.recoveryCancels...)
+	for i := range f.recoveryCancels {
+		f.recoveryCancels[i] = nil
+	}
+	f.mu.Unlock()
+
+	for _, cancel := range cancels {
+		if cancel != nil {
+			cancel()
+		}
+	}
+	return nil
 }
 
 func (f *FallbackAdapter) OnAvailabilityChanged(handler AvailabilityChangedHandler) func() {
@@ -239,9 +257,12 @@ func (f *FallbackAdapter) tryRecover(ctx context.Context, index int, frames []*m
 	if !f.markRecovering(index) {
 		return
 	}
-	recoveryCtx := context.WithoutCancel(ctx)
+	recoveryCtx, cancel := context.WithCancel(context.WithoutCancel(ctx))
+	f.setRecoveryCancel(index, cancel)
 
 	go func() {
+		defer cancel()
+		defer f.setRecoveryCancel(index, nil)
 		defer f.clearRecovering(index)
 
 		stt := f.stts[index]
@@ -258,6 +279,15 @@ func (f *FallbackAdapter) tryRecover(ctx context.Context, index int, frames []*m
 			}
 		}
 	}()
+}
+
+func (f *FallbackAdapter) setRecoveryCancel(index int, cancel context.CancelFunc) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if index < 0 || index >= len(f.recoveryCancels) {
+		return
+	}
+	f.recoveryCancels[index] = cancel
 }
 
 func (f *FallbackAdapter) waitRetryInterval(ctx context.Context) error {
