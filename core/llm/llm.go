@@ -645,21 +645,30 @@ type RealtimeEvent struct {
 // Fallback Adapter
 
 type FallbackAdapter struct {
-	llms                []LLM
-	attemptTimeout      time.Duration
-	maxRetryPerLLM      int
-	retryInterval       time.Duration
-	retryOnChunkSent    bool
-	mu                  sync.Mutex
-	available           []bool
-	recovering          []bool
-	availabilityChanged chan FallbackAvailabilityChangedEvent
+	llms                 []LLM
+	attemptTimeout       time.Duration
+	maxRetryPerLLM       int
+	retryInterval        time.Duration
+	retryOnChunkSent     bool
+	mu                   sync.Mutex
+	available            []bool
+	recovering           []bool
+	availabilityChanged  chan FallbackAvailabilityChangedEvent
+	availabilityHandlers []fallbackAvailabilityHandlerSubscription
+	nextAvailabilityID   uint64
 }
 
 type FallbackAvailabilityChangedEvent struct {
 	LLM       LLM
 	Index     int
 	Available bool
+}
+
+type FallbackAvailabilityChangedHandler func(FallbackAvailabilityChangedEvent)
+
+type fallbackAvailabilityHandlerSubscription struct {
+	id      uint64
+	handler FallbackAvailabilityChangedHandler
 }
 
 type FallbackAdapterOptions struct {
@@ -777,6 +786,38 @@ func (f *FallbackAdapter) Prewarm() {
 	Prewarm(f.llms[0])
 }
 
+func (f *FallbackAdapter) OnAvailabilityChanged(handler FallbackAvailabilityChangedHandler) func() {
+	if handler == nil {
+		return func() {}
+	}
+	f.mu.Lock()
+	f.nextAvailabilityID++
+	id := f.nextAvailabilityID
+	f.availabilityHandlers = append(f.availabilityHandlers, fallbackAvailabilityHandlerSubscription{
+		id:      id,
+		handler: handler,
+	})
+	f.mu.Unlock()
+
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			f.removeAvailabilityChangedHandler(id)
+		})
+	}
+}
+
+func (f *FallbackAdapter) removeAvailabilityChangedHandler(id uint64) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for i, subscription := range f.availabilityHandlers {
+		if subscription.id == id {
+			f.availabilityHandlers = append(f.availabilityHandlers[:i], f.availabilityHandlers[i+1:]...)
+			return
+		}
+	}
+}
+
 func (f *FallbackAdapter) AvailabilityChangedCh() <-chan FallbackAvailabilityChangedEvent {
 	return f.availabilityChanged
 }
@@ -790,6 +831,13 @@ func (f *FallbackAdapter) emitAvailabilityChanged(index int, available bool) {
 	select {
 	case f.availabilityChanged <- event:
 	default:
+	}
+
+	f.mu.Lock()
+	subscriptions := append([]fallbackAvailabilityHandlerSubscription(nil), f.availabilityHandlers...)
+	f.mu.Unlock()
+	for _, subscription := range subscriptions {
+		subscription.handler(event)
 	}
 }
 
