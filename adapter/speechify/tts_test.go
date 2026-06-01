@@ -69,6 +69,18 @@ func TestSpeechifyTTSSynthesizeRequestUsesReferencePayload(t *testing.T) {
 	}
 }
 
+func TestSpeechifyTTSAuthorizationHeaderPreservesBearerToken(t *testing.T) {
+	provider := NewSpeechifyTTS("Bearer existing-token", "")
+
+	req, err := buildSpeechifyTTSRequest(context.Background(), provider, "hello")
+	if err != nil {
+		t.Fatalf("build request: %v", err)
+	}
+	if got := req.Header.Get("Authorization"); got != "Bearer existing-token" {
+		t.Fatalf("authorization = %q, want existing bearer token without duplicate prefix", got)
+	}
+}
+
 func TestSpeechifyTTSOptionsMatchReference(t *testing.T) {
 	provider := NewSpeechifyTTS("test-key", "",
 		WithSpeechifyTTSBaseURL("https://speechify.example/v1"),
