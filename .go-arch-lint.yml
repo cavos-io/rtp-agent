@@ -31,11 +31,6 @@ components:
     in:
       - core/**
 
-  # Current compatibility boundary: this package is named under core, but
-  # constructs OpenAI-backed inference helpers directly.
-  core_inference:
-    in: core/inference
-
   library:
     in: library/**
 
@@ -64,12 +59,6 @@ deps:
     anyVendorDeps: true
     mayDependOn:
       - core
-
-  core_inference:
-    anyVendorDeps: true
-    mayDependOn:
-      - core
-      - adapter
 
   library:
     anyVendorDeps: true

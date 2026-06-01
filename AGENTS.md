@@ -89,8 +89,9 @@ the environment.
 - Several LiveKit reference areas already have partial Go equivalents. Treat
   existing Go code as the starting point and close behavioral gaps
   incrementally.
-- `core/inference` is a compatibility boundary that may depend on adapters per
-  `.go-arch-lint.yml`; avoid expanding that exception without a clear reason.
+- `core/inference` is a compatibility boundary, but it must still follow the
+  core dependency rules in `.go-arch-lint.yml`. Keep provider-specific inference
+  client details in adapters.
 
 ## Documentation Hygiene
 
