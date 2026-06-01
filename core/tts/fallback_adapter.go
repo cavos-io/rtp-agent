@@ -155,11 +155,16 @@ func (f *FallbackAdapter) tryRecoverChunked(index int, text string) {
 }
 
 func (f *FallbackAdapter) tryRecoverStream(index int, inputs []fallbackSynthesizeInput) {
-	if len(inputs) == 0 {
+	replay := make([]string, 0, len(inputs))
+	for _, input := range inputs {
+		if input.flush || input.text == "" {
+			continue
+		}
+		replay = append(replay, input.text)
+	}
+	if len(replay) == 0 {
 		return
 	}
-
-	replay := append([]fallbackSynthesizeInput(nil), inputs...)
 
 	f.mu.Lock()
 	if f.status[index].recovering {
@@ -180,30 +185,19 @@ func (f *FallbackAdapter) tryRecoverStream(index int, inputs []fallbackSynthesiz
 		}
 		defer stream.Close()
 
-		for _, input := range replay {
-			if input.flush {
-				if err := stream.Flush(); err != nil {
-					f.mu.Lock()
-					f.status[index].recovering = false
-					f.mu.Unlock()
-					return
-				}
-				continue
-			}
-			if err := stream.PushText(input.text); err != nil {
+		for _, text := range replay {
+			if err := stream.PushText(text); err != nil {
 				f.mu.Lock()
 				f.status[index].recovering = false
 				f.mu.Unlock()
 				return
 			}
 		}
-		if !replay[len(replay)-1].flush {
-			if err := stream.Flush(); err != nil {
-				f.mu.Lock()
-				f.status[index].recovering = false
-				f.mu.Unlock()
-				return
-			}
+		if err := stream.Flush(); err != nil {
+			f.mu.Lock()
+			f.status[index].recovering = false
+			f.mu.Unlock()
+			return
 		}
 
 		for {

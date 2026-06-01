@@ -1207,6 +1207,28 @@ func TestFallbackSynthesizeStreamReplaysFlushBoundariesOnRetry(t *testing.T) {
 	}
 }
 
+func TestFallbackSynthesizeRecoveryIgnoresFlushOnlyInput(t *testing.T) {
+	primary := &notifyStreamTTS{
+		metadataTTS: metadataTTS{
+			label:        "primary",
+			sampleRate:   24000,
+			numChannels:  1,
+			capabilities: TTSCapabilities{Streaming: true},
+			stream:       &metadataSynthesizeStream{},
+		},
+		streamCalled: make(chan struct{}, 1),
+	}
+	adapter := NewFallbackAdapter([]TTS{primary})
+
+	adapter.tryRecoverStream(0, []fallbackSynthesizeInput{{flush: true}})
+
+	select {
+	case <-primary.streamCalled:
+		t.Fatal("recovery stream started for flush-only input, want no recovery")
+	case <-time.After(50 * time.Millisecond):
+	}
+}
+
 func waitForFallbackCondition(t *testing.T, condition func() bool) {
 	t.Helper()
 
@@ -1243,6 +1265,19 @@ type metadataTTS struct {
 	streamErr       error
 	synthesizeCalls int
 	streamCalls     int
+}
+
+type notifyStreamTTS struct {
+	metadataTTS
+	streamCalled chan struct{}
+}
+
+func (n *notifyStreamTTS) Stream(ctx context.Context) (SynthesizeStream, error) {
+	select {
+	case n.streamCalled <- struct{}{}:
+	default:
+	}
+	return n.metadataTTS.Stream(ctx)
 }
 
 func (m *metadataTTS) Label() string {
