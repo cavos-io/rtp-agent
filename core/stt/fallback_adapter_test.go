@@ -537,6 +537,45 @@ func TestFallbackAdapterRetriesSameSTTBeforeFallback(t *testing.T) {
 	}
 }
 
+func TestFallbackAdapterTimesOutBlockedRecognizeAttempt(t *testing.T) {
+	primary := &blockingContextSTT{
+		label:        "primary",
+		capabilities: STTCapabilities{Streaming: true},
+		started:      make(chan struct{}, 1),
+	}
+	fallback := &metadataSTT{
+		label:        "fallback",
+		capabilities: STTCapabilities{Streaming: true},
+		recognizeResult: &SpeechEvent{
+			Type:         SpeechEventFinalTranscript,
+			Alternatives: []SpeechData{{Text: "fallback"}},
+		},
+	}
+	adapter := NewFallbackAdapterWithOptions([]STT{primary, fallback}, FallbackAdapterOptions{
+		MaxRetryPerSTT: 0,
+		AttemptTimeout: 20 * time.Millisecond,
+	})
+
+	event, err := adapter.Recognize(context.Background(), nil, "en")
+	if err != nil {
+		t.Fatalf("Recognize returned error: %v", err)
+	}
+	if got := event.Alternatives[0].Text; got != "fallback" {
+		t.Fatalf("recognized text = %q, want fallback", got)
+	}
+	select {
+	case <-primary.started:
+	default:
+		t.Fatal("primary recognize was not attempted")
+	}
+	if !primary.wasCanceled() {
+		t.Fatal("primary recognize context was not canceled after attempt timeout")
+	}
+	if adapter.isAvailable(0) {
+		t.Fatal("primary provider is still available after timed-out attempt")
+	}
+}
+
 func TestFallbackAdapterReturnsAllFailedErrorWhenProvidersExhausted(t *testing.T) {
 	primaryErr := errors.New("primary recognize failed")
 	fallbackErr := errors.New("fallback recognize failed")
@@ -1484,6 +1523,44 @@ func (m *metadataSTT) Recognize(context.Context, []*model.AudioFrame, string) (*
 		return event, err
 	}
 	return m.recognizeResult, nil
+}
+
+type blockingContextSTT struct {
+	mu           sync.Mutex
+	label        string
+	capabilities STTCapabilities
+	started      chan struct{}
+	canceled     bool
+}
+
+func (s *blockingContextSTT) Label() string {
+	return s.label
+}
+
+func (s *blockingContextSTT) Capabilities() STTCapabilities {
+	return s.capabilities
+}
+
+func (s *blockingContextSTT) Stream(context.Context, string) (RecognizeStream, error) {
+	return nil, errors.New("stream unsupported")
+}
+
+func (s *blockingContextSTT) Recognize(ctx context.Context, _ []*model.AudioFrame, _ string) (*SpeechEvent, error) {
+	select {
+	case s.started <- struct{}{}:
+	default:
+	}
+	<-ctx.Done()
+	s.mu.Lock()
+	s.canceled = true
+	s.mu.Unlock()
+	return nil, ctx.Err()
+}
+
+func (s *blockingContextSTT) wasCanceled() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.canceled
 }
 
 func waitForRecognizeCalls(t *testing.T, stt *metadataSTT, want int) {

@@ -17,6 +17,7 @@ type FallbackAdapter struct {
 	stts                 []STT
 	capabilities         STTCapabilities
 	maxRetryPerSTT       int
+	attemptTimeout       time.Duration
 	mu                   sync.Mutex
 	available            []bool
 	recovering           []bool
@@ -27,6 +28,7 @@ type FallbackAdapter struct {
 
 type FallbackAdapterOptions struct {
 	MaxRetryPerSTT int
+	AttemptTimeout time.Duration
 }
 
 type AvailabilityChangedEvent struct {
@@ -79,6 +81,9 @@ func newFallbackAdapter(stts []STT, vad vad.VAD, options FallbackAdapterOptions)
 	if len(stts) == 0 {
 		panic("FallbackAdapter requires at least one STT")
 	}
+	if options.AttemptTimeout <= 0 {
+		options.AttemptTimeout = 10 * time.Second
+	}
 
 	wrapped := make([]STT, len(stts))
 	for i, stt := range stts {
@@ -115,6 +120,7 @@ func newFallbackAdapter(stts []STT, vad vad.VAD, options FallbackAdapterOptions)
 		stts:             wrapped,
 		capabilities:     capabilities,
 		maxRetryPerSTT:   options.MaxRetryPerSTT,
+		attemptTimeout:   options.AttemptTimeout,
 		available:        initialAvailability(len(wrapped)),
 		recovering:       make([]bool, len(wrapped)),
 		recoveringStream: make([]bool, len(wrapped)),
@@ -193,7 +199,7 @@ func (f *FallbackAdapter) Recognize(ctx context.Context, frames []*model.AudioFr
 			logger.Logger.Infow("Falling back to next STT", "stt", stt.Label(), "previous_error", lastErr)
 		}
 		for attempt := 0; attempt <= f.maxRetryPerSTT; attempt++ {
-			res, err := stt.Recognize(ctx, frames, language)
+			res, err := f.recognizeAttempt(ctx, stt, frames, language)
 			if err == nil {
 				f.setAvailable(i, true)
 				return res, nil
@@ -233,13 +239,23 @@ func (f *FallbackAdapter) tryRecover(ctx context.Context, index int, frames []*m
 
 		stt := f.stts[index]
 		for attempt := 0; attempt <= f.maxRetryPerSTT; attempt++ {
-			if _, err := stt.Recognize(recoveryCtx, frames, language); err == nil {
+			if _, err := f.recognizeAttempt(recoveryCtx, stt, frames, language); err == nil {
 				f.setAvailable(index, true)
 				logger.Logger.Infow("Recovered STT provider", "stt", stt.Label())
 				return
 			}
 		}
 	}()
+}
+
+func (f *FallbackAdapter) recognizeAttempt(ctx context.Context, stt STT, frames []*model.AudioFrame, language string) (*SpeechEvent, error) {
+	attemptCtx := ctx
+	var cancel context.CancelFunc
+	if f.attemptTimeout > 0 {
+		attemptCtx, cancel = context.WithTimeout(ctx, f.attemptTimeout)
+		defer cancel()
+	}
+	return stt.Recognize(attemptCtx, frames, language)
 }
 
 func (f *FallbackAdapter) allUnavailable() bool {
