@@ -4,7 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"os"
+	"path/filepath"
 	"testing"
+	"time"
 )
 
 func TestMCPProxyToolReturnsVisibleToolErrorContent(t *testing.T) {
@@ -136,6 +139,43 @@ func TestMCPServerStdioCachesListedToolsUntilInvalidated(t *testing.T) {
 	}
 	if len(reloadedTools) != 1 || reloadedTools[0].Name() != "second" {
 		t.Fatalf("reloaded tools = %#v, want second tool", reloadedTools)
+	}
+}
+
+func TestMCPServerStdioInitializePassesEnvAndCwd(t *testing.T) {
+	tmpDir := t.TempDir()
+	scriptPath := filepath.Join(tmpDir, "mcp-env-cwd-test.sh")
+	script := `#!/bin/sh
+if [ "$MCP_TEST_TOKEN" != "expected-token" ]; then
+  exit 2
+fi
+if [ "$(pwd)" != "$MCP_TEST_CWD" ]; then
+  exit 3
+fi
+while IFS= read -r line; do
+  case "$line" in
+    *'"id":1'*)
+      printf '{"jsonrpc":"2.0","id":1,"result":{}}\n'
+      ;;
+  esac
+done
+`
+	if err := os.WriteFile(scriptPath, []byte(script), 0o755); err != nil {
+		t.Fatalf("write helper script: %v", err)
+	}
+
+	server := NewMCPServerStdio("sh", []string{scriptPath})
+	server.Cwd = tmpDir
+	server.Env = map[string]string{
+		"MCP_TEST_TOKEN": "expected-token",
+		"MCP_TEST_CWD":   tmpDir,
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	defer server.Close()
+
+	if err := server.Initialize(ctx); err != nil {
+		t.Fatalf("Initialize() error = %v", err)
 	}
 }
 
