@@ -67,18 +67,40 @@ type CloseEvent struct {
 func (e *CloseEvent) GetType() string { return "close" }
 
 type RunContext struct {
-	Session      *AgentSession
-	SpeechHandle *SpeechHandle
-	FunctionCall *llm.FunctionCall
+	Session          *AgentSession
+	SpeechHandle     *SpeechHandle
+	FunctionCall     *llm.FunctionCall
+	initialStepIndex int
+}
+
+func NewRunContext(session *AgentSession, speechHandle *SpeechHandle, functionCall *llm.FunctionCall) *RunContext {
+	initialStepIndex := -1
+	if speechHandle != nil {
+		initialStepIndex = speechHandle.NumSteps() - 1
+	}
+	return &RunContext{
+		Session:          session,
+		SpeechHandle:     speechHandle,
+		FunctionCall:     functionCall,
+		initialStepIndex: initialStepIndex,
+	}
+}
+
+func (r *RunContext) DisallowInterruptions() error {
+	if r == nil || r.SpeechHandle == nil {
+		return nil
+	}
+	return r.SpeechHandle.SetAllowInterruptions(false)
 }
 
 func (r *RunContext) WaitForPlayout(ctx context.Context) error {
-	if r.Session != nil && r.Session.Assistant != nil {
-		if r.SpeechHandle != nil {
-			return r.SpeechHandle.Wait(ctx)
-		}
+	if r == nil || r.SpeechHandle == nil {
+		return nil
 	}
-	return nil
+	if r.initialStepIndex >= 0 {
+		return r.SpeechHandle.WaitForGeneration(ctx, r.initialStepIndex)
+	}
+	return r.SpeechHandle.Wait(ctx)
 }
 
 type contextKey string
@@ -171,4 +193,3 @@ func (d *ClientEventsDispatcher) DispatchUserState(state UserState) {
 		State: stateStr,
 	})
 }
-
