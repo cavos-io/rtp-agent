@@ -2,6 +2,7 @@ package llm
 
 import (
 	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"strings"
 )
@@ -90,6 +91,32 @@ func StripThinkingTokens(content string, thinking *bool) (string, bool) {
 		return content[idx+len(thinkTagStart):], true
 	}
 	return content, true
+}
+
+func ParseFunctionArguments(jsonArguments string) (map[string]any, error) {
+	var value any
+	if err := json.Unmarshal([]byte(jsonArguments), &value); err != nil {
+		return nil, fmt.Errorf("could not parse function arguments as JSON: %w", err)
+	}
+
+	for {
+		nested, ok := value.(string)
+		if !ok {
+			break
+		}
+		if err := json.Unmarshal([]byte(nested), &value); err != nil {
+			return nil, fmt.Errorf("function arguments decoded to a non-JSON string: %.200s", nested)
+		}
+	}
+
+	if value == nil {
+		return map[string]any{}, nil
+	}
+	args, ok := value.(map[string]any)
+	if !ok {
+		return nil, fmt.Errorf("expected object from function arguments, got %T", value)
+	}
+	return args, nil
 }
 
 func ComputeChatCtxDiff(oldCtx, newCtx *ChatContext) *DiffOps {
