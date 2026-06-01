@@ -54,6 +54,8 @@ const (
 
 var assignmentTimeout = 7500 * time.Millisecond
 
+var uploadSessionReport = agent.UploadSessionReport
+
 const workerStatusUpdateInterval = 2500 * time.Millisecond
 
 var workerDialContext = func(ctx context.Context, dialer *websocket.Dialer, url string, headers http.Header) (*websocket.Conn, *http.Response, error) {
@@ -1545,21 +1547,7 @@ func (s *AgentServer) handleTermination(req *livekit.JobTermination) {
 		s.runSessionEnd(jobCtx)
 
 		jobCtx.Shutdown("")
-
-		if jobCtx.Report != nil {
-			go func() {
-				err := agent.UploadSessionReport(
-					s.Options.WSRL,
-					s.Options.APIKey,
-					s.Options.APISecret,
-					s.Options.AgentName,
-					jobCtx.Report,
-				)
-				if err != nil {
-					logger.Logger.Errorw("failed to upload session report", err, "jobId", req.JobId)
-				}
-			}()
-		}
+		s.uploadJobSessionReport(jobCtx)
 	}
 }
 
@@ -1621,6 +1609,34 @@ func (s *AgentServer) finishJob(jobCtx *JobContext) {
 	s.runSessionEnd(jobCtx)
 
 	jobCtx.Shutdown("")
+	s.uploadJobSessionReport(jobCtx)
+}
+
+func (s *AgentServer) uploadJobSessionReport(jobCtx *JobContext) {
+	if !shouldUploadJobSessionReport(jobCtx) {
+		return
+	}
+	go func() {
+		err := uploadSessionReport(
+			jobCtx.url,
+			s.Options.APIKey,
+			s.Options.APISecret,
+			s.Options.AgentName,
+			jobCtx.Report,
+		)
+		if err != nil {
+			logger.Logger.Errorw("failed to upload session report", err, "jobId", jobCtx.Job.GetId())
+		}
+	}()
+}
+
+func shouldUploadJobSessionReport(jobCtx *JobContext) bool {
+	if jobCtx == nil || jobCtx.Job == nil || jobCtx.IsFakeJob() || jobCtx.Report == nil {
+		return false
+	}
+	report := jobCtx.Report
+	hasAudio := report.RecordingOptions.Audio && report.AudioRecordingPath != nil && report.AudioRecordingStartedAt != nil
+	return report.RecordingOptions.Transcript || hasAudio
 }
 
 func (s *AgentServer) runSessionEnd(jobCtx *JobContext) {

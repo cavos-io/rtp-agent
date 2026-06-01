@@ -2294,6 +2294,79 @@ func TestAssignmentReportsSuccessWhenEntrypointCompletes(t *testing.T) {
 	}
 }
 
+func TestAssignmentCompletionUploadsRecordedSessionReport(t *testing.T) {
+	oldUpload := uploadSessionReport
+	uploadCh := make(chan struct {
+		cloudURL string
+		apiKey   string
+		secret   string
+		agent    string
+		report   *agent.SessionReport
+	}, 1)
+	uploadSessionReport = func(cloudURL string, apiKey string, apiSecret string, agentName string, report *agent.SessionReport) error {
+		uploadCh <- struct {
+			cloudURL string
+			apiKey   string
+			secret   string
+			agent    string
+			report   *agent.SessionReport
+		}{
+			cloudURL: cloudURL,
+			apiKey:   apiKey,
+			secret:   apiSecret,
+			agent:    agentName,
+			report:   report,
+		}
+		return nil
+	}
+	defer func() { uploadSessionReport = oldUpload }()
+
+	server := NewAgentServer(WorkerOptions{
+		APIKey:    "api-key",
+		APISecret: "api-secret",
+		AgentName: "support-agent",
+	})
+	sentCh := make(chan *livekit.WorkerMessage, 2)
+	server.workerMessageSink = func(msg *livekit.WorkerMessage) error {
+		sentCh <- msg
+		return nil
+	}
+	server.entrypointFnc = func(ctx *JobContext) error {
+		ctx.Report.Room = ctx.Job.GetRoom().GetName()
+		return nil
+	}
+
+	assignmentURL := "wss://tenant.livekit.cloud"
+	job := &livekit.Job{
+		Id:              "job_upload_report",
+		Room:            &livekit.Room{Name: "room-a"},
+		EnableRecording: true,
+	}
+	markJobAccepted(t, server, job)
+	server.handleAssignment(context.Background(), &livekit.JobAssignment{
+		Job: job,
+		Url: &assignmentURL,
+	})
+
+	assertJobStatusMessage(t, receiveWorkerMessage(t, sentCh), "job_upload_report", livekit.JobStatus_JS_RUNNING)
+	assertJobStatusMessage(t, receiveWorkerMessage(t, sentCh), "job_upload_report", livekit.JobStatus_JS_SUCCESS)
+
+	select {
+	case upload := <-uploadCh:
+		if upload.cloudURL != assignmentURL {
+			t.Fatalf("upload cloudURL = %q, want assignment URL", upload.cloudURL)
+		}
+		if upload.apiKey != "api-key" || upload.secret != "api-secret" || upload.agent != "support-agent" {
+			t.Fatalf("upload credentials = (%q, %q, %q), want server credentials", upload.apiKey, upload.secret, upload.agent)
+		}
+		if upload.report.Room != "room-a" {
+			t.Fatalf("uploaded report Room = %q, want room-a", upload.report.Room)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("recorded assignment did not upload session report")
+	}
+}
+
 func TestAssignmentReportsFailureWhenEntrypointFails(t *testing.T) {
 	server := NewAgentServer(WorkerOptions{})
 	sentCh := make(chan *livekit.WorkerMessage, 2)
