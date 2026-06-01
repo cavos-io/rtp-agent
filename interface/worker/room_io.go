@@ -245,8 +245,7 @@ func (rio *RoomIO) handleChatTextInput(ctx context.Context, text string, info lk
 	if rio == nil || rio.AgentSession == nil || rio.textInput == nil {
 		return
 	}
-	linkedParticipant := rio.participantIdentity()
-	if linkedParticipant != "" && participantIdentity != linkedParticipant {
+	if !rio.shouldHandleParticipant(participantIdentity) {
 		return
 	}
 	if rio.Room != nil && participantIdentity != "" && rio.Room.GetParticipantByIdentity(participantIdentity) == nil {
@@ -263,6 +262,11 @@ func (rio *RoomIO) participantIdentity() string {
 	rio.mu.Lock()
 	defer rio.mu.Unlock()
 	return rio.Options.ParticipantIdentity
+}
+
+func (rio *RoomIO) shouldHandleParticipant(participantIdentity string) bool {
+	linkedParticipant := rio.participantIdentity()
+	return linkedParticipant == "" || participantIdentity == linkedParticipant
 }
 
 func (rio *RoomIO) Start(ctx context.Context) error {
@@ -296,6 +300,9 @@ func (rio *RoomIO) audioTrackPublicationOptions() *lksdk.TrackPublicationOptions
 }
 
 func (rio *RoomIO) onTrackSubscribed(track *webrtc.TrackRemote, publication *lksdk.RemoteTrackPublication, rp *lksdk.RemoteParticipant) {
+	if rp != nil && !rio.shouldHandleParticipant(rp.Identity()) {
+		return
+	}
 	if track.Kind() == webrtc.RTPCodecTypeAudio {
 		go rio.handleAudioTrack(track)
 	}

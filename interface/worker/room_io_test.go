@@ -230,6 +230,25 @@ func TestRoomIOUnsetParticipantClearsTextInputFilter(t *testing.T) {
 	}
 }
 
+func TestRoomIOShouldHandleParticipantMatchesLinkedParticipant(t *testing.T) {
+	rio := &RoomIO{Options: RoomOptions{ParticipantIdentity: "caller-a"}}
+
+	if !rio.shouldHandleParticipant("caller-a") {
+		t.Fatal("shouldHandleParticipant(caller-a) = false, want true for linked participant")
+	}
+	if rio.shouldHandleParticipant("caller-b") {
+		t.Fatal("shouldHandleParticipant(caller-b) = true, want false for non-linked participant")
+	}
+}
+
+func TestRoomIOShouldHandleParticipantAllowsAnyWhenUnset(t *testing.T) {
+	rio := &RoomIO{}
+
+	if !rio.shouldHandleParticipant("caller-b") {
+		t.Fatal("shouldHandleParticipant(caller-b) = false, want true when participant is unset")
+	}
+}
+
 func TestRoomIOCloseUnregistersPreConnectAudioHandler(t *testing.T) {
 	room := lksdk.NewRoom(nil)
 	rio := NewRoomIO(room, &agent.AgentSession{}, RoomOptions{})
