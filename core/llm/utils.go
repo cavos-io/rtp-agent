@@ -30,6 +30,8 @@ var templateTokenPatterns = []*regexp.Regexp{
 	regexp.MustCompile(`<(?:start|end)_of_turn>`),
 }
 
+var trailingCommaPattern = regexp.MustCompile(`,\s*([}\]])`)
+
 type SerializedImage struct {
 	InferenceDetail string
 	MIMEType        string
@@ -115,11 +117,11 @@ func StripThinkingTokens(content string, thinking *bool) (string, bool) {
 func ParseFunctionArguments(jsonArguments string) (map[string]any, error) {
 	var value any
 	if err := json.Unmarshal([]byte(jsonArguments), &value); err != nil {
-		stripped := stripTemplateTokens(jsonArguments)
-		if stripped == jsonArguments {
+		repaired := repairFunctionArguments(jsonArguments)
+		if repaired == jsonArguments {
 			return nil, fmt.Errorf("could not parse function arguments as JSON: %w", err)
 		}
-		if retryErr := json.Unmarshal([]byte(stripped), &value); retryErr != nil {
+		if retryErr := json.Unmarshal([]byte(repaired), &value); retryErr != nil {
 			return nil, fmt.Errorf("could not parse function arguments as JSON: %w", err)
 		}
 	}
@@ -144,11 +146,12 @@ func ParseFunctionArguments(jsonArguments string) (map[string]any, error) {
 	return args, nil
 }
 
-func stripTemplateTokens(value string) string {
+func repairFunctionArguments(value string) string {
 	out := value
 	for _, pattern := range templateTokenPatterns {
 		out = pattern.ReplaceAllString(out, "")
 	}
+	out = trailingCommaPattern.ReplaceAllString(out, "$1")
 	return strings.TrimSpace(out)
 }
 
