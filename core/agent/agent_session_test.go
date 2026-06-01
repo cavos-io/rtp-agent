@@ -373,6 +373,31 @@ func TestAgentSessionStopResetsSessionStates(t *testing.T) {
 	}
 }
 
+func TestAgentSessionStopAllowsOnExitSessionCallbacks(t *testing.T) {
+	agent := &sessionCallbackAgent{Agent: NewAgent("test")}
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	agent.session = session
+	session.activity = NewAgentActivity(agent, session)
+	session.started = true
+
+	done := make(chan error, 1)
+	go func() {
+		done <- session.Stop(context.Background())
+	}()
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("Stop error = %v, want nil", err)
+		}
+	case <-testTimeout():
+		t.Fatal("Stop deadlocked while OnExit called back into session")
+	}
+	if !agent.exited {
+		t.Fatal("OnExit was not called")
+	}
+}
+
 func TestAgentSessionCurrentSpeechReturnsNilWithoutActivity(t *testing.T) {
 	agent := NewAgent("test")
 	session := NewAgentSession(agent, nil, AgentSessionOptions{})
@@ -536,6 +561,17 @@ func (a *trackingAgent) OnEnter() {
 
 func (a *trackingAgent) OnExit() {
 	a.exited++
+}
+
+type sessionCallbackAgent struct {
+	*Agent
+	session *AgentSession
+	exited  bool
+}
+
+func (a *sessionCallbackAgent) OnExit() {
+	a.exited = true
+	a.session.UpdateUserState(UserStateSpeaking)
 }
 
 func TestAgentSessionUpdateAgentStateEmitsTypedTimestampedEvent(t *testing.T) {

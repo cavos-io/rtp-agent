@@ -766,18 +766,20 @@ func (s *AgentSession) UpdateAgent(agent AgentInterface) {
 
 func (s *AgentSession) Stop(ctx context.Context) error {
 	s.mu.Lock()
-	defer s.mu.Unlock()
-
 	if !s.started {
+		s.mu.Unlock()
 		return nil
 	}
 
-	if s.activity != nil {
-		s.activity.Stop()
-	}
+	activity := s.activity
 	s.activity = nil
 	s.started = false
 	s.UserState = UserStateListening
 	s.AgentState = AgentStateInitializing
+	s.mu.Unlock()
+
+	if activity != nil {
+		activity.Stop()
+	}
 	return nil
 }
