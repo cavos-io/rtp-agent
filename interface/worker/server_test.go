@@ -2913,6 +2913,27 @@ func TestRunStartsConfiguredPrometheusServerBeforeDial(t *testing.T) {
 	_ = server.Run(context.Background())
 }
 
+func TestRunRejectsAlreadyStartedServer(t *testing.T) {
+	server := NewAgentServer(WorkerOptions{
+		WSRL:      "wss://run.example",
+		APIKey:    "run-key",
+		APISecret: "run-secret",
+		DevMode:   true,
+	})
+	if err := server.RTCSession(func(ctx *JobContext) error { return nil }, nil, nil); err != nil {
+		t.Fatalf("RTCSession() error = %v", err)
+	}
+	server.httpServer = &http.Server{}
+
+	err := server.Run(context.Background())
+	if err == nil {
+		t.Fatal("Run() error = nil, want already running error")
+	}
+	if !strings.Contains(err.Error(), "already running") {
+		t.Fatalf("Run() error = %q, want already running message", err.Error())
+	}
+}
+
 func TestRunWorkerMessageLoopReturnsPromptlyWhenContextCanceled(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

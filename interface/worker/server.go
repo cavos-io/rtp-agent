@@ -162,6 +162,7 @@ type AgentServer struct {
 	pendingTimers      map[string]*time.Timer
 	reservedSlots      int
 	draining           bool
+	running            bool
 	mu                 sync.Mutex
 	conn               *websocket.Conn
 	httpServer         *http.Server
@@ -481,7 +482,23 @@ func (s *AgentServer) UpdateOptions(opts WorkerOptions) error {
 }
 
 func (s *AgentServer) started() bool {
-	return s.conn != nil || s.httpServer != nil
+	return s.running || s.conn != nil || s.httpServer != nil
+}
+
+func (s *AgentServer) beginRun() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.started() {
+		return fmt.Errorf("worker is already running")
+	}
+	s.running = true
+	return nil
+}
+
+func (s *AgentServer) finishRun() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.running = false
 }
 
 func mergeWorkerOptions(current WorkerOptions, next WorkerOptions) WorkerOptions {
@@ -1171,6 +1188,11 @@ func (s *AgentServer) validateRunPreconditions() error {
 }
 
 func (s *AgentServer) Run(ctx context.Context) error {
+	if err := s.beginRun(); err != nil {
+		return err
+	}
+	defer s.finishRun()
+
 	if err := s.validateRunPreconditions(); err != nil {
 		return err
 	}
@@ -1246,8 +1268,17 @@ func (s *AgentServer) Run(ctx context.Context) error {
 		return err
 	}
 	_ = res
+	s.mu.Lock()
 	s.conn = conn
-	defer conn.Close()
+	s.mu.Unlock()
+	defer func() {
+		_ = conn.Close()
+		s.mu.Lock()
+		if s.conn == conn {
+			s.conn = nil
+		}
+		s.mu.Unlock()
+	}()
 
 	logger.Logger.Infow("Connected to LiveKit Server", "url", s.Options.WSRL)
 
