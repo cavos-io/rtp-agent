@@ -196,6 +196,30 @@ func TestRealtimeEventMapsOutputAudioTranscriptDelta(t *testing.T) {
 	}
 }
 
+func TestRealtimeEventMapsOutputTextAndAudioAliases(t *testing.T) {
+	textEvent, ok := openAIRealtimeEvent(map[string]any{
+		"type":  "response.output_text.delta",
+		"delta": "hello",
+	})
+	if !ok {
+		t.Fatal("openAIRealtimeEvent text returned ok=false, want text event")
+	}
+	if textEvent.Type != llm.RealtimeEventTypeText || textEvent.Text != "hello" {
+		t.Fatalf("text event = %#v, want text delta hello", textEvent)
+	}
+
+	audioEvent, ok := openAIRealtimeEvent(map[string]any{
+		"type":  "response.output_audio.delta",
+		"delta": "base64-audio",
+	})
+	if !ok {
+		t.Fatal("openAIRealtimeEvent audio returned ok=false, want audio event")
+	}
+	if audioEvent.Type != llm.RealtimeEventTypeAudio || string(audioEvent.Data) != "base64-audio" {
+		t.Fatalf("audio event = %#v, want audio delta", audioEvent)
+	}
+}
+
 func TestRealtimeEventMapsResponseCreated(t *testing.T) {
 	ev, ok := openAIRealtimeEvent(map[string]any{
 		"type": "response.created",
