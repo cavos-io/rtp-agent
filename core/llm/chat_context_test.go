@@ -1641,6 +1641,31 @@ func TestChatContextToAWSProviderFormatIncludesInlineDataURLImage(t *testing.T) 
 	}
 }
 
+func TestChatContextToAWSProviderFormatRejectsExternalImageURL(t *testing.T) {
+	ctx := NewChatContext()
+	ctx.Items = []ChatItem{
+		&ChatMessage{
+			ID:   "user",
+			Role: ChatRoleUser,
+			Content: []ChatContent{{Image: &ImageContent{
+				Image: "https://example.com/image.jpg",
+			}}},
+		},
+	}
+
+	messages, extra, err := ctx.ToProviderFormatE("aws")
+
+	if err == nil {
+		t.Fatal("ToProviderFormatE(aws) error = nil, want external image URL error")
+	}
+	if messages != nil || extra != nil {
+		t.Fatalf("ToProviderFormatE(aws) messages=%#v extra=%#v, want nil outputs on error", messages, extra)
+	}
+	if !strings.Contains(err.Error(), "external image URLs are not supported by AWS") {
+		t.Fatalf("ToProviderFormatE(aws) error = %q, want AWS external image URL error", err)
+	}
+}
+
 func TestChatContextToMistralProviderFormatMapsEntriesAndInstructions(t *testing.T) {
 	ctx := NewChatContext()
 	ctx.Items = []ChatItem{

@@ -923,6 +923,9 @@ func (c *ChatContext) ToProviderFormatE(format string, options ...ChatContextPro
 		return messages, extra, nil
 	}
 	if format == "aws" {
+		if err := validateAWSProviderImages(c.Items); err != nil {
+			return nil, nil, err
+		}
 		messages, extra := c.toAWSProviderFormat(opts)
 		return messages, extra, nil
 	}
@@ -1735,6 +1738,28 @@ func awsImageContent(image *ImageContent) map[string]any {
 			},
 		},
 	}
+}
+
+func validateAWSProviderImages(items []ChatItem) error {
+	for _, item := range items {
+		msg, ok := item.(*ChatMessage)
+		if !ok {
+			continue
+		}
+		for _, content := range msg.Content {
+			if content.Image == nil {
+				continue
+			}
+			image, err := SerializeImage(content.Image)
+			if err != nil {
+				return err
+			}
+			if image.ExternalURL != "" {
+				return fmt.Errorf("external image URLs are not supported by AWS Bedrock")
+			}
+		}
+	}
+	return nil
 }
 
 func openAIToolOutput(toolOutput *FunctionCallOutput) map[string]any {
