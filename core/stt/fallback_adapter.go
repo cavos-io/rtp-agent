@@ -307,6 +307,8 @@ type fallbackRecognizeStream struct {
 	startOffset  float64
 	startTime    float64
 	recoveries   []RecognizeStream
+	startedAt    time.Time
+	lastErr      error
 
 	eventCh chan *SpeechEvent
 	errCh   chan error
@@ -330,6 +332,7 @@ func (f *FallbackAdapter) Stream(ctx context.Context, language string) (Recogniz
 		closeCh:     make(chan struct{}),
 		inputBuffer: make([]fallbackRecognizeInput, 0),
 		retries:     make(map[int]int),
+		startedAt:   time.Now(),
 	}
 
 	if err := s.tryStartStream(0); err != nil {
@@ -384,7 +387,16 @@ func (s *fallbackRecognizeStream) tryStartStream(index int) error {
 	if lastErr != nil {
 		return lastErr
 	}
-	return fmt.Errorf("all fallback STTs exhausted")
+	return s.allFailedError(s.lastErr)
+}
+
+func (s *fallbackRecognizeStream) allFailedError(err error) error {
+	return &FallbackAllFailedError{
+		Count:    len(s.adapter.stts),
+		Labels:   s.adapter.labels(),
+		Duration: time.Since(s.startedAt),
+		Err:      err,
+	}
 }
 
 func (s *fallbackRecognizeStream) replayBufferedFrames(stream RecognizeStream) error {
@@ -483,6 +495,7 @@ func (s *fallbackRecognizeStream) monitorStream() {
 			// Try fallback
 			logger.Logger.Warnw("STT stream failed, attempting fallback", err, "failed_stt", s.adapter.stts[s.activeIndex].Label())
 			stream.Close()
+			s.lastErr = err
 
 			nextIndex := s.activeIndex + 1
 			if s.canRetrySTT(s.activeIndex) {

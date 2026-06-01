@@ -208,6 +208,62 @@ func TestFallbackStreamRetriesNextProviderBeforeEvents(t *testing.T) {
 	}
 }
 
+func TestFallbackStreamReturnsAllFailedErrorWhenProvidersExhausted(t *testing.T) {
+	primaryErr := errors.New("primary stream failed")
+	fallbackErr := errors.New("fallback stream failed")
+	adapter := NewFallbackAdapterWithOptions([]STT{
+		&metadataSTT{
+			label:        "primary",
+			capabilities: STTCapabilities{Streaming: true},
+			streams: []RecognizeStream{
+				&metadataRecognizeStream{err: primaryErr},
+				&metadataRecognizeStream{events: []*SpeechEvent{{
+					Type:         SpeechEventFinalTranscript,
+					Alternatives: []SpeechData{{Text: "primary recovered"}},
+				}}},
+			},
+		},
+		&metadataSTT{
+			label:        "fallback",
+			capabilities: STTCapabilities{Streaming: true},
+			streams: []RecognizeStream{
+				&metadataRecognizeStream{err: fallbackErr},
+				&metadataRecognizeStream{events: []*SpeechEvent{{
+					Type:         SpeechEventFinalTranscript,
+					Alternatives: []SpeechData{{Text: "fallback recovered"}},
+				}}},
+			},
+		},
+	}, FallbackAdapterOptions{MaxRetryPerSTT: 0})
+
+	stream, err := adapter.Stream(context.Background(), "en")
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+	defer stream.Close()
+
+	_, err = stream.Next()
+	if err == nil {
+		t.Fatal("Next error = nil, want all STTs failed error")
+	}
+	if !errors.Is(err, fallbackErr) {
+		t.Fatalf("Next error = %v, want to wrap final provider stream error", err)
+	}
+	var allFailed *FallbackAllFailedError
+	if !errors.As(err, &allFailed) {
+		t.Fatalf("Next error = %T, want *FallbackAllFailedError", err)
+	}
+	if allFailed.Count != 2 {
+		t.Fatalf("all failed Count = %d, want 2", allFailed.Count)
+	}
+	if strings.Join(allFailed.Labels, ",") != "primary,fallback" {
+		t.Fatalf("all failed Labels = %#v, want primary/fallback", allFailed.Labels)
+	}
+	if allFailed.Duration <= 0 {
+		t.Fatalf("all failed Duration = %s, want positive duration", allFailed.Duration)
+	}
+}
+
 func TestFallbackAdapterRetriesSameSTTBeforeFallback(t *testing.T) {
 	firstErr := errors.New("primary recognize failed")
 	primary := &metadataSTT{
