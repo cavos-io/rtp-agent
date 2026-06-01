@@ -1039,6 +1039,33 @@ func TestChatContextUnmarshalJSONRestoresTypedItems(t *testing.T) {
 	}
 }
 
+func TestChatContextUnmarshalJSONAcceptsAgentConfigInstructionObject(t *testing.T) {
+	data := []byte(`{
+		"items": [{
+			"id": "config",
+			"type": "agent_config_update",
+			"instructions": {
+				"type": "instructions",
+				"audio": "speak plainly",
+				"text": "write tersely"
+			}
+		}]
+	}`)
+
+	var ctx ChatContext
+	if err := json.Unmarshal(data, &ctx); err != nil {
+		t.Fatalf("UnmarshalJSON() error = %v", err)
+	}
+
+	config, ok := ctx.Items[0].(*AgentConfigUpdate)
+	if !ok {
+		t.Fatalf("item[0] = %T, want *AgentConfigUpdate", ctx.Items[0])
+	}
+	if config.Instructions == nil || *config.Instructions != "speak plainly" {
+		t.Fatalf("Instructions = %#v, want audio instruction text", config.Instructions)
+	}
+}
+
 func TestChatContextImageContentDefaultsInferenceDetail(t *testing.T) {
 	data := []byte(`{
 		"items": [{
