@@ -28,6 +28,7 @@ type SimpleVADOptions struct {
 	DeactivationThreshold     float64
 	UpdateInterval            float64
 	SampleRate                uint32
+	WindowDuration            float64
 }
 
 func NewSimpleVAD(threshold float64) *SimpleVAD {
@@ -131,6 +132,8 @@ type simpleVADStream struct {
 	pendingSpeechFrames        []*model.AudioFrame
 	speechFrames               []*model.AudioFrame
 	bufferedSpeechDuration     float64
+	windowFrames               []*model.AudioFrame
+	windowBufferedSamples      uint32
 	lastActivity               time.Time
 	metricsInferenceDuration   float64
 	metricsInferenceCount      int
@@ -161,6 +164,21 @@ func (s *simpleVADStream) PushFrame(frame *model.AudioFrame) error {
 	}
 	frame = cloneFrame(frame)
 
+	windowSamples := s.windowSamples()
+	if windowSamples == 0 {
+		s.processFrame(frame)
+		return nil
+	}
+
+	s.windowFrames = append(s.windowFrames, frame)
+	s.windowBufferedSamples += frame.SamplesPerChannel
+	for s.windowBufferedSamples >= windowSamples {
+		s.processFrame(s.takeWindowFrame(windowSamples))
+	}
+	return nil
+}
+
+func (s *simpleVADStream) processFrame(frame *model.AudioFrame) {
 	probability := frameRMS(frame)
 	duration := frameDuration(frame)
 	if s.lastActivity.IsZero() {
@@ -252,8 +270,6 @@ func (s *simpleVADStream) PushFrame(frame *model.AudioFrame) error {
 			s.pendingSpeechFrames = nil
 		}
 	}
-
-	return nil
 }
 
 func (s *simpleVADStream) collectInferenceMetrics(inferenceDuration float64) {
@@ -365,9 +381,46 @@ func (s *simpleVADStream) resetSegmentWithPrefixTail(frames []*model.AudioFrame)
 
 func (s *simpleVADStream) resetState() {
 	s.resetSegment()
+	s.windowFrames = nil
+	s.windowBufferedSamples = 0
 	s.samplesIndex = 0
 	s.sampleIndexRemainder = 0
 	s.timestamp = 0
+}
+
+func (s *simpleVADStream) windowSamples() uint32 {
+	if s.options.WindowDuration <= 0 || s.inputSampleRate == 0 {
+		return 0
+	}
+	samples := uint32(s.options.WindowDuration * float64(s.inputSampleRate))
+	if samples == 0 {
+		return 0
+	}
+	return samples
+}
+
+func (s *simpleVADStream) takeWindowFrame(samples uint32) *model.AudioFrame {
+	var taken []*model.AudioFrame
+	remaining := samples
+	for remaining > 0 && len(s.windowFrames) > 0 {
+		frame := s.windowFrames[0]
+		if frame.SamplesPerChannel <= remaining {
+			taken = append(taken, frame)
+			remaining -= frame.SamplesPerChannel
+			s.windowFrames = s.windowFrames[1:]
+			continue
+		}
+
+		taken = append(taken, trimFrameEndSamples(frame, remaining))
+		s.windowFrames[0] = trimFrameStartSamples(frame, remaining)
+		remaining = 0
+	}
+	s.windowBufferedSamples -= samples - remaining
+	frames := combineFrames(taken)
+	if len(frames) == 0 {
+		return &model.AudioFrame{SampleRate: s.inputSampleRate, NumChannels: 1}
+	}
+	return frames[0]
 }
 
 func (s *simpleVADStream) sampleIndexAdvance(duration float64) int {
@@ -513,6 +566,19 @@ func trimFrameStart(frame *model.AudioFrame, duration float64) *model.AudioFrame
 	}
 
 	samplesToTrim := uint32(duration * float64(frame.SampleRate))
+	return trimFrameStartSamples(frame, samplesToTrim)
+}
+
+func trimFrameEnd(frame *model.AudioFrame, duration float64) *model.AudioFrame {
+	if duration <= 0 || frame.SampleRate == 0 || frame.NumChannels == 0 {
+		return frame
+	}
+
+	samplesToKeep := uint32(duration * float64(frame.SampleRate))
+	return trimFrameEndSamples(frame, samplesToKeep)
+}
+
+func trimFrameStartSamples(frame *model.AudioFrame, samplesToTrim uint32) *model.AudioFrame {
 	if samplesToTrim == 0 {
 		return frame
 	}
@@ -537,12 +603,7 @@ func trimFrameStart(frame *model.AudioFrame, duration float64) *model.AudioFrame
 	}
 }
 
-func trimFrameEnd(frame *model.AudioFrame, duration float64) *model.AudioFrame {
-	if duration <= 0 || frame.SampleRate == 0 || frame.NumChannels == 0 {
-		return frame
-	}
-
-	samplesToKeep := uint32(duration * float64(frame.SampleRate))
+func trimFrameEndSamples(frame *model.AudioFrame, samplesToKeep uint32) *model.AudioFrame {
 	if samplesToKeep >= frame.SamplesPerChannel {
 		return frame
 	}
@@ -684,6 +745,9 @@ func mergeSimpleVADOptions(current, updates SimpleVADOptions) SimpleVADOptions {
 	}
 	if updates.SampleRate != 0 {
 		current.SampleRate = updates.SampleRate
+	}
+	if updates.WindowDuration != 0 {
+		current.WindowDuration = updates.WindowDuration
 	}
 	return current
 }

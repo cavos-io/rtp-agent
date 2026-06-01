@@ -232,6 +232,97 @@ func TestSimpleVADUsesConfiguredInferenceSampleRateForSampleIndex(t *testing.T) 
 	}
 }
 
+func TestSimpleVADWindowDurationBuffersUntilWindowComplete(t *testing.T) {
+	stream, err := NewSimpleVADWithOptions(SimpleVADOptions{
+		Threshold:      0.05,
+		WindowDuration: 0.032,
+	}).Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	defer stream.Close()
+
+	firstPartial := audioFrame(16000, 160, 6000)
+	secondPartial := audioFrame(16000, 352, 6000)
+	if err := stream.PushFrame(firstPartial); err != nil {
+		t.Fatalf("PushFrame() first partial error = %v", err)
+	}
+	if err := stream.PushFrame(secondPartial); err != nil {
+		t.Fatalf("PushFrame() second partial error = %v", err)
+	}
+
+	inference := nextVADEvent(t, stream)
+	if inference.Type != VADEventInferenceDone {
+		t.Fatalf("event type = %s, want %s", inference.Type, VADEventInferenceDone)
+	}
+	if inference.SamplesIndex != 512 {
+		t.Fatalf("SamplesIndex = %d, want 512", inference.SamplesIndex)
+	}
+	if inference.Timestamp != 0.032 {
+		t.Fatalf("Timestamp = %v, want 0.032", inference.Timestamp)
+	}
+	assertCombinedFrames(t, inference.Frames, firstPartial, secondPartial)
+
+	start := nextVADEvent(t, stream)
+	if start.Type != VADEventStartOfSpeech {
+		t.Fatalf("event type = %s, want %s", start.Type, VADEventStartOfSpeech)
+	}
+	if start.SamplesIndex != 512 {
+		t.Fatalf("start SamplesIndex = %d, want 512", start.SamplesIndex)
+	}
+	if start.SpeechDuration != 0.032 {
+		t.Fatalf("SpeechDuration = %v, want 0.032", start.SpeechDuration)
+	}
+	assertCombinedFrames(t, start.Frames, firstPartial, secondPartial)
+}
+
+func TestSimpleVADWindowDurationPreservesLeftoverSamples(t *testing.T) {
+	stream, err := NewSimpleVADWithOptions(SimpleVADOptions{
+		Threshold:         0.05,
+		MinSpeechDuration: 0.064,
+		WindowDuration:    0.032,
+	}).Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	defer stream.Close()
+
+	firstPush := audioFrame(16000, 800, 6000)
+	secondPush := audioFrame(16000, 224, 6000)
+	if err := stream.PushFrame(firstPush); err != nil {
+		t.Fatalf("PushFrame() first push error = %v", err)
+	}
+	firstInference := nextVADEvent(t, stream)
+	if firstInference.Type != VADEventInferenceDone {
+		t.Fatalf("event type = %s, want %s", firstInference.Type, VADEventInferenceDone)
+	}
+	if firstInference.SamplesIndex != 512 {
+		t.Fatalf("SamplesIndex = %d, want 512", firstInference.SamplesIndex)
+	}
+	assertCombinedFrames(t, firstInference.Frames, audioFrame(16000, 512, 6000))
+
+	if err := stream.PushFrame(secondPush); err != nil {
+		t.Fatalf("PushFrame() second push error = %v", err)
+	}
+	secondInference := nextVADEvent(t, stream)
+	if secondInference.Type != VADEventInferenceDone {
+		t.Fatalf("event type = %s, want %s", secondInference.Type, VADEventInferenceDone)
+	}
+	if secondInference.SamplesIndex != 1024 {
+		t.Fatalf("SamplesIndex = %d, want 1024", secondInference.SamplesIndex)
+	}
+	assertCombinedFrames(t, secondInference.Frames, audioFrame(16000, 288, 6000), secondPush)
+
+	start := nextVADEvent(t, stream)
+	if start.Type != VADEventStartOfSpeech {
+		t.Fatalf("event type = %s, want %s", start.Type, VADEventStartOfSpeech)
+	}
+	if start.SpeechDuration != 0.064 {
+		t.Fatalf("SpeechDuration = %v, want 0.064", start.SpeechDuration)
+	}
+	assertCombinedFrames(t, start.Frames, audioFrame(16000, 512, 6000), audioFrame(16000, 288, 6000), secondPush)
+}
+
 func TestSimpleVADUsesDeactivationThresholdWhileSpeaking(t *testing.T) {
 	stream, err := NewSimpleVADWithOptions(SimpleVADOptions{
 		Threshold:             0.1,
