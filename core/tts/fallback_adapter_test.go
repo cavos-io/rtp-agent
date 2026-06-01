@@ -57,6 +57,108 @@ func TestFallbackAdapterPrewarmsPrimaryProviderOnly(t *testing.T) {
 	}
 }
 
+func TestFallbackAdapterEmitsAvailabilityChanges(t *testing.T) {
+	streamErr := errors.New("primary unavailable")
+	primary := &metadataTTS{
+		label:       "primary",
+		sampleRate:  24000,
+		numChannels: 1,
+		chunkedStreams: []ChunkedStream{
+			&metadataChunkedStream{err: streamErr},
+			&metadataChunkedStream{events: []*SynthesizedAudio{{
+				Frame: &model.AudioFrame{Data: []byte("primary recovery probe")},
+			}}},
+		},
+	}
+	fallback := &metadataTTS{
+		label:       "fallback",
+		sampleRate:  24000,
+		numChannels: 1,
+		chunked: &metadataChunkedStream{events: []*SynthesizedAudio{{
+			Frame: &model.AudioFrame{Data: []byte("fallback")},
+		}}},
+	}
+	adapter := NewFallbackAdapterWithOptions([]TTS{primary, fallback}, FallbackAdapterOptions{
+		DisableRetries: true,
+	})
+	changes := make(chan AvailabilityChangedEvent, 2)
+	adapter.OnAvailabilityChanged(func(event AvailabilityChangedEvent) {
+		changes <- event
+	})
+
+	stream, err := adapter.Synthesize(context.Background(), "hello")
+	if err != nil {
+		t.Fatalf("Synthesize returned error: %v", err)
+	}
+	defer stream.Close()
+
+	audio, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next returned error: %v", err)
+	}
+	if got := string(audio.Frame.Data); got != "fallback" {
+		t.Fatalf("audio data = %q, want fallback", got)
+	}
+
+	unavailable := receiveTTSAvailabilityChange(t, changes)
+	if unavailable.TTS != primary {
+		t.Fatalf("unavailable TTS = %v, want primary", unavailable.TTS.Label())
+	}
+	if unavailable.Available {
+		t.Fatal("unavailable event Available = true, want false")
+	}
+
+	available := receiveTTSAvailabilityChange(t, changes)
+	if available.TTS != primary {
+		t.Fatalf("available TTS = %v, want primary", available.TTS.Label())
+	}
+	if !available.Available {
+		t.Fatal("available event Available = false, want true")
+	}
+}
+
+func TestFallbackAdapterCanUnsubscribeAvailabilityChanges(t *testing.T) {
+	streamErr := errors.New("primary unavailable")
+	primary := &metadataTTS{
+		label:       "primary",
+		sampleRate:  24000,
+		numChannels: 1,
+		chunked:     &metadataChunkedStream{err: streamErr},
+	}
+	fallback := &metadataTTS{
+		label:       "fallback",
+		sampleRate:  24000,
+		numChannels: 1,
+		chunked: &metadataChunkedStream{events: []*SynthesizedAudio{{
+			Frame: &model.AudioFrame{Data: []byte("fallback")},
+		}}},
+	}
+	adapter := NewFallbackAdapterWithOptions([]TTS{primary, fallback}, FallbackAdapterOptions{
+		DisableRetries: true,
+	})
+	changes := make(chan AvailabilityChangedEvent, 2)
+	unsubscribe := adapter.OnAvailabilityChanged(func(event AvailabilityChangedEvent) {
+		changes <- event
+	})
+	unsubscribe()
+
+	stream, err := adapter.Synthesize(context.Background(), "hello")
+	if err != nil {
+		t.Fatalf("Synthesize returned error: %v", err)
+	}
+	defer stream.Close()
+
+	if _, err := stream.Next(); err != nil {
+		t.Fatalf("Next returned error: %v", err)
+	}
+
+	select {
+	case event := <-changes:
+		t.Fatalf("received availability change after unsubscribe: %#v", event)
+	case <-time.After(50 * time.Millisecond):
+	}
+}
+
 func TestFallbackAdapterUsesConfiguredSampleRate(t *testing.T) {
 	adapter := NewFallbackAdapterWithOptions([]TTS{
 		&metadataTTS{label: "low", sampleRate: 16000, numChannels: 1, capabilities: TTSCapabilities{}},
@@ -1890,6 +1992,17 @@ func waitForFallbackCondition(t *testing.T, condition func() bool) {
 	}
 	if !condition() {
 		t.Fatal("condition was not met before deadline")
+	}
+}
+
+func receiveTTSAvailabilityChange(t *testing.T, changes <-chan AvailabilityChangedEvent) AvailabilityChangedEvent {
+	t.Helper()
+	select {
+	case event := <-changes:
+		return event
+	case <-time.After(200 * time.Millisecond):
+		t.Fatal("timed out waiting for availability change")
+		return AvailabilityChangedEvent{}
 	}
 }
 
