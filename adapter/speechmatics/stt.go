@@ -1,13 +1,10 @@
 package speechmatics
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	"io"
-	"mime/multipart"
-	"net/http"
 	"net/url"
 	"sync"
 
@@ -28,7 +25,7 @@ func NewSpeechmaticsSTT(apiKey string) *SpeechmaticsSTT {
 
 func (s *SpeechmaticsSTT) Label() string { return "speechmatics.STT" }
 func (s *SpeechmaticsSTT) Capabilities() stt.STTCapabilities {
-	return stt.STTCapabilities{Streaming: true, InterimResults: true, Diarization: false, AlignedTranscript: "word", OfflineRecognize: true}
+	return stt.STTCapabilities{Streaming: true, InterimResults: true, Diarization: true, AlignedTranscript: "chunk", OfflineRecognize: false}
 }
 
 func (s *SpeechmaticsSTT) Stream(ctx context.Context, language string) (stt.RecognizeStream, error) {
@@ -78,52 +75,7 @@ func (s *SpeechmaticsSTT) Stream(ctx context.Context, language string) (stt.Reco
 }
 
 func (s *SpeechmaticsSTT) Recognize(ctx context.Context, frames []*model.AudioFrame, language string) (*stt.SpeechEvent, error) {
-	url := "https://asr.api.speechmatics.com/v2/jobs"
-
-	var buf bytes.Buffer
-	for _, f := range frames {
-		buf.Write(f.Data)
-	}
-
-	body := &bytes.Buffer{}
-	writer := multipart.NewWriter(body)
-	part, _ := writer.CreateFormFile("data_file", "audio.wav")
-	part.Write(buf.Bytes())
-
-	config := map[string]interface{}{
-		"type": "transcription",
-		"transcription_config": map[string]interface{}{
-			"language": "en",
-		},
-	}
-	if language != "" {
-		config["transcription_config"].(map[string]interface{})["language"] = language
-	}
-	configBytes, _ := json.Marshal(config)
-	writer.WriteField("config", string(configBytes))
-	writer.Close()
-
-	req, _ := http.NewRequestWithContext(ctx, "POST", url, body)
-	req.Header.Set("Authorization", "Bearer "+s.apiKey)
-	req.Header.Set("Content-Type", writer.FormDataContentType())
-
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-
-	var result struct {
-		ID string `json:"id"`
-	}
-	json.NewDecoder(resp.Body).Decode(&result)
-
-	return &stt.SpeechEvent{
-		Type: stt.SpeechEventFinalTranscript,
-		Alternatives: []stt.SpeechData{
-			{Text: fmt.Sprintf("[Speechmatics Job ID: %s]", result.ID)},
-		},
-	}, nil
+	return nil, fmt.Errorf("speechmatics offline recognize is not implemented")
 }
 
 type speechmaticsSTTStream struct {

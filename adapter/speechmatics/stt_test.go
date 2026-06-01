@@ -1,6 +1,8 @@
 package speechmatics
 
 import (
+	"context"
+	"strings"
 	"testing"
 
 	"github.com/cavos-io/conversation-worker/core/stt"
@@ -70,10 +72,35 @@ func TestSpeechmaticsTranscriptEventPreservesWordTimings(t *testing.T) {
 	}
 }
 
-func TestSpeechmaticsSTTCapabilitiesAdvertiseWordAlignment(t *testing.T) {
+func TestSpeechmaticsSTTCapabilitiesMatchReference(t *testing.T) {
+	provider := NewSpeechmaticsSTT("test-key")
+	capabilities := provider.Capabilities()
+
+	if !capabilities.Streaming {
+		t.Fatal("Streaming = false, want true")
+	}
+	if !capabilities.InterimResults {
+		t.Fatal("InterimResults = false, want true")
+	}
+	if !capabilities.Diarization {
+		t.Fatal("Diarization = false, want true")
+	}
+	if capabilities.AlignedTranscript != "chunk" {
+		t.Fatalf("AlignedTranscript = %q, want chunk", capabilities.AlignedTranscript)
+	}
+	if capabilities.OfflineRecognize {
+		t.Fatal("OfflineRecognize = true, want false")
+	}
+}
+
+func TestSpeechmaticsSTTRecognizeMatchesReferenceUnsupportedOffline(t *testing.T) {
 	provider := NewSpeechmaticsSTT("test-key")
 
-	if got := provider.Capabilities().AlignedTranscript; got != "word" {
-		t.Fatalf("AlignedTranscript = %q, want word", got)
+	_, err := provider.Recognize(context.Background(), nil, "")
+	if err == nil {
+		t.Fatal("Recognize returned nil error, want unsupported offline recognition")
+	}
+	if !strings.Contains(err.Error(), "not implemented") {
+		t.Fatalf("Recognize error = %q, want not implemented", err.Error())
 	}
 }

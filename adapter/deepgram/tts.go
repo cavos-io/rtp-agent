@@ -16,33 +16,46 @@ import (
 )
 
 type DeepgramTTS struct {
-	apiKey string
-	model  string
+	apiKey     string
+	model      string
+	encoding   string
+	sampleRate int
+	mipOptOut  bool
 }
 
-func NewDeepgramTTS(apiKey string, model string) *DeepgramTTS {
+type DeepgramTTSOption func(*DeepgramTTS)
+
+func WithDeepgramTTSMipOptOut(mipOptOut bool) DeepgramTTSOption {
+	return func(t *DeepgramTTS) {
+		t.mipOptOut = mipOptOut
+	}
+}
+
+func NewDeepgramTTS(apiKey string, model string, opts ...DeepgramTTSOption) *DeepgramTTS {
 	if model == "" {
-		model = "aura-asteria-en"
+		model = "aura-2-andromeda-en"
 	}
-	return &DeepgramTTS{
-		apiKey: apiKey,
-		model:  model,
+	provider := &DeepgramTTS{
+		apiKey:     apiKey,
+		model:      model,
+		encoding:   "linear16",
+		sampleRate: 24000,
 	}
+	for _, opt := range opts {
+		opt(provider)
+	}
+	return provider
 }
 
 func (t *DeepgramTTS) Label() string { return "deepgram.TTS" }
 func (t *DeepgramTTS) Capabilities() tts.TTSCapabilities {
 	return tts.TTSCapabilities{Streaming: true, AlignedTranscript: false}
 }
-func (t *DeepgramTTS) SampleRate() int { return 48000 }
+func (t *DeepgramTTS) SampleRate() int  { return t.sampleRate }
 func (t *DeepgramTTS) NumChannels() int { return 1 }
 
 func (t *DeepgramTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStream, error) {
-	u := fmt.Sprintf("https://api.deepgram.com/v1/speak?model=%s&encoding=linear16&sample_rate=48000", t.model)
-	body := map[string]interface{}{
-		"text": text,
-	}
-	jsonBody, _ := json.Marshal(body)
+	u, jsonBody := buildDeepgramTTSSynthesizeRequest(t, text)
 
 	req, err := http.NewRequestWithContext(ctx, "POST", u, bytes.NewBuffer(jsonBody))
 	if err != nil {
@@ -64,30 +77,39 @@ func (t *DeepgramTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedS
 	}
 
 	return &deepgramTTSChunkedStream{
-		resp: resp,
+		resp:       resp,
+		sampleRate: t.sampleRate,
 	}, nil
 }
 
-func (t *DeepgramTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
-	u := url.URL{Scheme: "wss", Host: "api.deepgram.com", Path: "/v1/speak"}
+func buildDeepgramTTSSynthesizeRequest(t *DeepgramTTS, text string) (string, []byte) {
+	u := deepgramTTSBaseURL(t, false)
 	q := u.Query()
 	q.Set("model", t.model)
-	q.Set("encoding", "linear16")
-	q.Set("sample_rate", "48000")
+	q.Set("encoding", t.encoding)
+	q.Set("sample_rate", fmt.Sprintf("%d", t.sampleRate))
+	q.Set("container", "none")
+	q.Set("mip_opt_out", fmt.Sprintf("%t", t.mipOptOut))
 	u.RawQuery = q.Encode()
+	body := map[string]interface{}{"text": text}
+	jsonBody, _ := json.Marshal(body)
+	return u.String(), jsonBody
+}
 
+func (t *DeepgramTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
 	header := make(map[string][]string)
 	header["Authorization"] = []string{"Token " + t.apiKey}
 
-	conn, _, err := websocket.DefaultDialer.DialContext(ctx, u.String(), header)
+	conn, _, err := websocket.DefaultDialer.DialContext(ctx, buildDeepgramTTSStreamURL(t), header)
 	if err != nil {
 		return nil, err
 	}
 
 	stream := &deepgramTTSStream{
-		conn:   conn,
-		audio:  make(chan *tts.SynthesizedAudio, 10),
-		errCh:  make(chan error, 1),
+		conn:       conn,
+		audio:      make(chan *tts.SynthesizedAudio, 10),
+		errCh:      make(chan error, 1),
+		sampleRate: t.sampleRate,
 	}
 
 	go stream.readLoop()
@@ -95,8 +117,28 @@ func (t *DeepgramTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) 
 	return stream, nil
 }
 
+func buildDeepgramTTSStreamURL(t *DeepgramTTS) string {
+	u := deepgramTTSBaseURL(t, true)
+	q := u.Query()
+	q.Set("model", t.model)
+	q.Set("encoding", t.encoding)
+	q.Set("sample_rate", fmt.Sprintf("%d", t.sampleRate))
+	q.Set("mip_opt_out", fmt.Sprintf("%t", t.mipOptOut))
+	u.RawQuery = q.Encode()
+	return u.String()
+}
+
+func deepgramTTSBaseURL(t *DeepgramTTS, websocketURL bool) url.URL {
+	scheme := "https"
+	if websocketURL {
+		scheme = "wss"
+	}
+	return url.URL{Scheme: scheme, Host: "api.deepgram.com", Path: "/v1/speak"}
+}
+
 type deepgramTTSChunkedStream struct {
-	resp *http.Response
+	resp       *http.Response
+	sampleRate int
 }
 
 func (s *deepgramTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
@@ -112,7 +154,7 @@ func (s *deepgramTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 	return &tts.SynthesizedAudio{
 		Frame: &model.AudioFrame{
 			Data:              buf[:n],
-			SampleRate:        48000,
+			SampleRate:        uint32(s.sampleRate),
 			NumChannels:       1,
 			SamplesPerChannel: uint32(n / 2),
 		},
@@ -129,6 +171,8 @@ type deepgramTTSStream struct {
 	errCh  chan error
 	mu     sync.Mutex
 	closed bool
+
+	sampleRate int
 }
 
 func (s *deepgramTTSStream) readLoop() {
@@ -146,7 +190,7 @@ func (s *deepgramTTSStream) readLoop() {
 			s.audio <- &tts.SynthesizedAudio{
 				Frame: &model.AudioFrame{
 					Data:              message,
-					SampleRate:        48000,
+					SampleRate:        uint32(s.sampleRate),
 					NumChannels:       1,
 					SamplesPerChannel: uint32(len(message) / 2),
 				},
