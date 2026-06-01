@@ -154,7 +154,7 @@ func TestFallbackChunkedStreamErrorsWhenNonEmptyTextProducesNoAudio(t *testing.T
 	}
 }
 
-func TestFallbackChunkedStreamErrorsWhenWhitespaceTextProducesNoAudio(t *testing.T) {
+func TestFallbackChunkedStreamReturnsEOFWhenWhitespaceTextProducesNoAudio(t *testing.T) {
 	adapter := NewFallbackAdapter([]TTS{
 		&metadataTTS{
 			label:       "primary",
@@ -171,11 +171,8 @@ func TestFallbackChunkedStreamErrorsWhenWhitespaceTextProducesNoAudio(t *testing
 	defer stream.Close()
 
 	_, err = stream.Next()
-	if err == nil {
-		t.Fatal("Next error = nil, want no-audio error")
-	}
-	if !strings.Contains(err.Error(), "no audio frames") {
-		t.Fatalf("Next error = %v, want no-audio error", err)
+	if !errors.Is(err, io.EOF) {
+		t.Fatalf("Next error = %v, want io.EOF", err)
 	}
 }
 
@@ -380,7 +377,7 @@ func TestFallbackSynthesizeStreamErrorsWhenNonEmptyTextProducesNoAudio(t *testin
 	}
 }
 
-func TestFallbackSynthesizeStreamErrorsWhenWhitespaceTextProducesNoAudio(t *testing.T) {
+func TestFallbackSynthesizeStreamReturnsEOFWhenWhitespaceTextProducesNoAudio(t *testing.T) {
 	adapter := NewFallbackAdapter([]TTS{
 		&metadataTTS{
 			label:        "primary",
@@ -401,11 +398,8 @@ func TestFallbackSynthesizeStreamErrorsWhenWhitespaceTextProducesNoAudio(t *test
 	}
 
 	_, err = stream.Next()
-	if err == nil {
-		t.Fatal("Next error = nil, want no-audio error")
-	}
-	if !strings.Contains(err.Error(), "no audio frames") {
-		t.Fatalf("Next error = %v, want no-audio error", err)
+	if !errors.Is(err, io.EOF) {
+		t.Fatalf("Next error = %v, want io.EOF", err)
 	}
 }
 
