@@ -105,6 +105,89 @@ func TestStreamAdapterForwardsMetricsCollected(t *testing.T) {
 	}
 }
 
+func TestStreamAdapterEmitsStreamedMetricsForFinalSegment(t *testing.T) {
+	provider := &fakeStreamAdapterTTS{
+		events: []*SynthesizedAudio{{
+			Frame: &model.AudioFrame{
+				Data:              []byte{1, 0, 2, 0},
+				SampleRate:        24000,
+				NumChannels:       1,
+				SamplesPerChannel: 2,
+			},
+		}},
+	}
+	adapter := NewStreamAdapter(provider)
+	metricsCh := make(chan *telemetry.TTSMetrics, 1)
+	adapter.OnMetricsCollected(func(metrics *telemetry.TTSMetrics) {
+		if metrics.Streamed {
+			metricsCh <- metrics
+		}
+	})
+
+	stream, err := adapter.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+	defer stream.Close()
+
+	if err := stream.PushText("hello world."); err != nil {
+		t.Fatalf("PushText returned error: %v", err)
+	}
+	if err := EndSynthesizeStreamInput(stream); err != nil {
+		t.Fatalf("EndSynthesizeStreamInput returned error: %v", err)
+	}
+
+	audio := nextStreamAdapterAudio(t, stream)
+	if !audio.IsFinal {
+		t.Fatal("audio IsFinal = false, want final segment")
+	}
+
+	select {
+	case got := <-metricsCh:
+		if got.Label != adapter.Label() {
+			t.Fatalf("metrics Label = %q, want %q", got.Label, adapter.Label())
+		}
+		if got.RequestID != audio.RequestID {
+			t.Fatalf("metrics RequestID = %q, want %q", got.RequestID, audio.RequestID)
+		}
+		if got.SegmentID != audio.SegmentID {
+			t.Fatalf("metrics SegmentID = %q, want %q", got.SegmentID, audio.SegmentID)
+		}
+		if got.CharactersCount != len("hello world.") {
+			t.Fatalf("metrics CharactersCount = %d, want %d", got.CharactersCount, len("hello world."))
+		}
+		if got.AudioDuration <= 0 {
+			t.Fatalf("metrics AudioDuration = %f, want > 0", got.AudioDuration)
+		}
+		if got.Metadata == nil || got.Metadata.ModelName != "unknown" || got.Metadata.ModelProvider != "unknown" {
+			t.Fatalf("metrics Metadata = %#v, want unknown model/provider", got.Metadata)
+		}
+	default:
+		t.Fatal("stream adapter did not emit streamed metrics")
+	}
+}
+
+func TestStreamAdapterMetricsUnsubscribeRemovesLocalAndProviderHandlers(t *testing.T) {
+	provider := &fakeStreamAdapterTTS{}
+	adapter := NewStreamAdapter(provider)
+	metricsCh := make(chan *telemetry.TTSMetrics, 2)
+
+	unsubscribe := adapter.OnMetricsCollected(func(metrics *telemetry.TTSMetrics) {
+		metricsCh <- metrics
+	})
+	unsubscribe()
+	unsubscribe()
+
+	provider.EmitMetricsCollected(&telemetry.TTSMetrics{RequestID: "provider"})
+	adapter.EmitMetricsCollected(&telemetry.TTSMetrics{RequestID: "adapter"})
+
+	select {
+	case got := <-metricsCh:
+		t.Fatalf("metrics handler called after unsubscribe: %#v", got)
+	default:
+	}
+}
+
 func TestStreamAdapterForwardsErrorEvents(t *testing.T) {
 	provider := &fakeStreamAdapterTTS{}
 	adapter := NewStreamAdapter(provider)
