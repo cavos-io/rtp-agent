@@ -133,6 +133,7 @@ type JobContext struct {
 	shutdownCallbacks      []func(string)
 	shutdownOnce           sync.Once
 	participantEntrypoints []participantEntrypointRegistration
+	availableParticipants  []*livekit.ParticipantInfo
 
 	apiKey    string
 	apiSecret string
@@ -320,7 +321,12 @@ func (c *JobContext) roomCallbackWithEntrypoints(cb *lksdk.RoomCallback, autoSub
 }
 
 func (c *JobContext) participantAvailable(participant remoteParticipantView) {
-	c.scheduleParticipantEntrypoints(participantInfoFromRemoteParticipant(participant))
+	info := participantInfoFromRemoteParticipant(participant)
+	if info == nil {
+		return
+	}
+	c.availableParticipants = append(c.availableParticipants, info)
+	c.scheduleParticipantEntrypoints(info)
 }
 
 func (c *JobContext) participantsAvailable(participants []remoteParticipantView) {
@@ -379,11 +385,22 @@ func (c *JobContext) AddParticipantEntrypoint(entrypoint ParticipantEntrypoint, 
 	if len(kinds) == 0 {
 		kinds = defaultParticipantEntrypointKinds
 	}
-	c.participantEntrypoints = append(c.participantEntrypoints, participantEntrypointRegistration{
+	registration := participantEntrypointRegistration{
 		entrypoint: entrypoint,
 		kinds:      append([]livekit.ParticipantInfo_Kind(nil), kinds...),
-	})
+	}
+	c.participantEntrypoints = append(c.participantEntrypoints, registration)
+	c.scheduleParticipantEntrypointForExistingParticipants(registration)
 	return nil
+}
+
+func (c *JobContext) scheduleParticipantEntrypointForExistingParticipants(registration participantEntrypointRegistration) {
+	for _, participant := range c.availableParticipants {
+		if !participantEntrypointMatchesKind(registration.kinds, participant.Kind) {
+			continue
+		}
+		go registration.entrypoint(c, participant)
+	}
 }
 
 func (c *JobContext) WaitForParticipant(
