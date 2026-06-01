@@ -81,6 +81,17 @@ func TestParseFunctionArgumentsRepairsUnquotedObjectKeys(t *testing.T) {
 	}
 }
 
+func TestParseFunctionArgumentsRepairsSingleQuotedValues(t *testing.T) {
+	args, err := ParseFunctionArguments(`{'city':'Paris','country':'FR'}`)
+	if err != nil {
+		t.Fatalf("ParseFunctionArguments() error = %v", err)
+	}
+
+	if args["city"] != "Paris" || args["country"] != "FR" {
+		t.Fatalf("args = %#v, want repaired city and country", args)
+	}
+}
+
 func TestParseFunctionArgumentsTreatsNullAsEmptyObject(t *testing.T) {
 	args, err := ParseFunctionArguments(`null`)
 	if err != nil {
