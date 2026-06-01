@@ -13,11 +13,15 @@ type MistralLLM struct {
 
 func NewMistralLLM(apiKey string, model string) *MistralLLM {
 	if model == "" {
-		model = "mistral-large-latest"
+		model = "ministral-8b-latest"
 	}
 	return &MistralLLM{
 		inner: openai.NewOpenAILLMWithBaseURL(apiKey, model, "https://api.mistral.ai/v1"),
 	}
+}
+
+func (l *MistralLLM) Model() string {
+	return l.inner.Model()
 }
 
 func (l *MistralLLM) Chat(ctx context.Context, chatCtx *llm.ChatContext, opts ...llm.ChatOption) (llm.LLMStream, error) {
