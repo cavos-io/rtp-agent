@@ -11,7 +11,8 @@ import (
 )
 
 func TestOpenAIAudioRequestAsksForWordTimestamps(t *testing.T) {
-	req := openAIAudioRequest("whisper-1", strings.NewReader("audio"), "en")
+	provider := NewOpenAISTT("test-key", "whisper-1")
+	req := openAIAudioRequest(provider, strings.NewReader("audio"), "en")
 
 	if req.Model != "whisper-1" {
 		t.Fatalf("model = %q, want whisper-1", req.Model)
@@ -67,5 +68,47 @@ func TestOpenAISTTCapabilitiesAdvertiseWordAlignment(t *testing.T) {
 
 	if got := provider.Capabilities().AlignedTranscript; got != "word" {
 		t.Fatalf("AlignedTranscript = %q, want word", got)
+	}
+}
+
+func TestOpenAISTTDefaultsMatchReference(t *testing.T) {
+	provider := NewOpenAISTT("test-key", "")
+
+	if provider.model != "gpt-4o-mini-transcribe" {
+		t.Fatalf("model = %q, want gpt-4o-mini-transcribe", provider.model)
+	}
+	if provider.language != "en" {
+		t.Fatalf("language = %q, want en", provider.language)
+	}
+}
+
+func TestOpenAIAudioRequestUsesProviderOptions(t *testing.T) {
+	provider := NewOpenAISTT("test-key", "whisper-1",
+		WithOpenAISTTLanguage("id"),
+		WithOpenAISTTPrompt("domain words"),
+	)
+
+	req := openAIAudioRequest(provider, strings.NewReader("audio"), "")
+
+	if req.Model != "whisper-1" {
+		t.Fatalf("model = %q, want whisper-1", req.Model)
+	}
+	if req.Language != "id" {
+		t.Fatalf("language = %q, want id", req.Language)
+	}
+	if req.Prompt != "domain words" {
+		t.Fatalf("prompt = %q, want domain words", req.Prompt)
+	}
+}
+
+func TestOpenAISTTDetectLanguageOmitsLanguage(t *testing.T) {
+	provider := NewOpenAISTT("test-key", "",
+		WithOpenAISTTDetectLanguage(true),
+	)
+
+	req := openAIAudioRequest(provider, strings.NewReader("audio"), "")
+
+	if req.Language != "" {
+		t.Fatalf("language = %q, want empty for language detection", req.Language)
 	}
 }
