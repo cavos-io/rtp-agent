@@ -2,6 +2,7 @@ package worker
 
 import (
 	"context"
+	"reflect"
 	"testing"
 	"time"
 
@@ -178,6 +179,54 @@ func TestRoomIOHandleChatTextInputIgnoresUnknownParticipant(t *testing.T) {
 
 	if called {
 		t.Fatal("text input callback was called for unknown participant")
+	}
+}
+
+func TestRoomIOSetParticipantSwitchesTextInputFilter(t *testing.T) {
+	session := &agent.AgentSession{}
+	var calls []string
+	rio := &RoomIO{
+		AgentSession: session,
+		Options: RoomOptions{
+			ParticipantIdentity: "caller-a",
+		},
+		textInput: func(_ context.Context, _ *agent.AgentSession, ev TextInputEvent) error {
+			calls = append(calls, ev.ParticipantIdentity)
+			return nil
+		},
+	}
+
+	rio.handleChatTextInput(context.Background(), "ignored", lksdk.TextStreamInfo{}, "caller-b")
+	rio.SetParticipant("caller-b")
+	rio.handleChatTextInput(context.Background(), "accepted", lksdk.TextStreamInfo{}, "caller-b")
+	rio.handleChatTextInput(context.Background(), "ignored", lksdk.TextStreamInfo{}, "caller-a")
+
+	want := []string{"caller-b"}
+	if !reflect.DeepEqual(calls, want) {
+		t.Fatalf("text input calls = %#v, want %#v", calls, want)
+	}
+}
+
+func TestRoomIOUnsetParticipantClearsTextInputFilter(t *testing.T) {
+	session := &agent.AgentSession{}
+	var calls []string
+	rio := &RoomIO{
+		AgentSession: session,
+		Options: RoomOptions{
+			ParticipantIdentity: "caller-a",
+		},
+		textInput: func(_ context.Context, _ *agent.AgentSession, ev TextInputEvent) error {
+			calls = append(calls, ev.ParticipantIdentity)
+			return nil
+		},
+	}
+
+	rio.UnsetParticipant()
+	rio.handleChatTextInput(context.Background(), "accepted", lksdk.TextStreamInfo{}, "caller-b")
+
+	want := []string{"caller-b"}
+	if !reflect.DeepEqual(calls, want) {
+		t.Fatalf("text input calls = %#v, want %#v", calls, want)
 	}
 }
 

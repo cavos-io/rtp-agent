@@ -183,8 +183,19 @@ func roomIOTextInputCallback(opts RoomOptions) TextInputCallback {
 		return opts.TextInputCallback
 	}
 	return func(ctx context.Context, session *agent.AgentSession, ev TextInputEvent) error {
-		return session.GenerateReply(ctx, ev.Text)
+		_, err := session.GenerateReply(ctx, ev.Text)
+		return err
 	}
+}
+
+func (rio *RoomIO) SetParticipant(participantIdentity string) {
+	rio.mu.Lock()
+	defer rio.mu.Unlock()
+	rio.Options.ParticipantIdentity = participantIdentity
+}
+
+func (rio *RoomIO) UnsetParticipant() {
+	rio.SetParticipant("")
 }
 
 func (rio *RoomIO) registerTextInput() {
@@ -234,7 +245,8 @@ func (rio *RoomIO) handleChatTextInput(ctx context.Context, text string, info lk
 	if rio == nil || rio.AgentSession == nil || rio.textInput == nil {
 		return
 	}
-	if rio.Options.ParticipantIdentity != "" && participantIdentity != rio.Options.ParticipantIdentity {
+	linkedParticipant := rio.participantIdentity()
+	if linkedParticipant != "" && participantIdentity != linkedParticipant {
 		return
 	}
 	if rio.Room != nil && participantIdentity != "" && rio.Room.GetParticipantByIdentity(participantIdentity) == nil {
@@ -245,6 +257,12 @@ func (rio *RoomIO) handleChatTextInput(ctx context.Context, text string, info lk
 		Info:                info,
 		ParticipantIdentity: participantIdentity,
 	})
+}
+
+func (rio *RoomIO) participantIdentity() string {
+	rio.mu.Lock()
+	defer rio.mu.Unlock()
+	return rio.Options.ParticipantIdentity
 }
 
 func (rio *RoomIO) Start(ctx context.Context) error {
