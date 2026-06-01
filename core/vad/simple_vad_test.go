@@ -211,6 +211,42 @@ func TestSimpleVADUpdateOptionsWithIgnoresInvalidProbabilitySmoothingAlpha(t *te
 	}
 }
 
+func TestSimpleVADRejectsInvalidUpdateIntervalAtStream(t *testing.T) {
+	detector := NewSimpleVADWithOptions(SimpleVADOptions{UpdateInterval: -1})
+
+	stream, err := detector.Stream(context.Background())
+	if err == nil {
+		if stream != nil {
+			_ = stream.Close()
+		}
+		t.Fatal("Stream() error = nil, want invalid update interval error")
+	}
+	if !strings.Contains(err.Error(), "update interval must be greater than 0") {
+		t.Fatalf("Stream() error = %q, want update interval message", err.Error())
+	}
+	if len(detector.streams) != 0 {
+		t.Fatalf("registered streams after invalid update interval = %d, want 0", len(detector.streams))
+	}
+}
+
+func TestSimpleVADUpdateOptionsWithIgnoresInvalidUpdateInterval(t *testing.T) {
+	detector := NewSimpleVADWithOptions(SimpleVADOptions{UpdateInterval: 0.5})
+	stream, err := detector.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	defer stream.Close()
+
+	detector.UpdateOptionsWith(WithUpdateInterval(0))
+	if detector.Capabilities().UpdateInterval != 0.5 {
+		t.Fatalf("Capabilities().UpdateInterval = %v, want 0.5", detector.Capabilities().UpdateInterval)
+	}
+	simpleStream := stream.(*simpleVADStream)
+	if simpleStream.options.UpdateInterval != 0.5 {
+		t.Fatalf("stream update interval = %v, want 0.5", simpleStream.options.UpdateInterval)
+	}
+}
+
 func TestSimpleVADUpdateOptionsRelaxesMaxBufferedSpeech(t *testing.T) {
 	detector := NewSimpleVADWithOptions(SimpleVADOptions{
 		Threshold:                 0.05,
