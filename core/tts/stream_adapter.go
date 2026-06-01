@@ -53,6 +53,9 @@ type streamAdapterWrapper struct {
 	mu        sync.Mutex
 	active    ChunkedStream
 	closed    bool
+	inputDone bool
+	started   bool
+	flushed   bool
 }
 
 type streamAdapterInput struct {
@@ -79,7 +82,7 @@ func (a *StreamAdapter) Stream(ctx context.Context) (SynthesizeStream, error) {
 func (w *streamAdapterWrapper) run() {
 	defer close(w.eventCh)
 
-	tokenizer := tokenize.NewBasicSentenceTokenizer().Stream("en")
+	tokenizer := newRetainFormatSentenceStream("en")
 
 	// Stream text to tokenizer
 	go func() {
@@ -120,7 +123,12 @@ func (w *streamAdapterWrapper) run() {
 }
 
 func (w *streamAdapterWrapper) synthesize(text string, segmentID string) error {
-	stream, err := w.adapter.tts.Synthesize(w.ctx, text)
+	synthText := strings.TrimSpace(text)
+	if synthText == "" {
+		return nil
+	}
+
+	stream, err := w.adapter.tts.Synthesize(w.ctx, synthText)
 	if err != nil {
 		return err
 	}
@@ -145,8 +153,8 @@ func (w *streamAdapterWrapper) synthesize(text string, segmentID string) error {
 					}
 					pending.IsFinal = true
 					w.eventCh <- pending
-				} else if strings.TrimSpace(text) != "" {
-					return fmt.Errorf("no audio frames were pushed for text: %s", text)
+				} else {
+					return fmt.Errorf("no audio frames were pushed for text: %s", synthText)
 				}
 				return nil
 			}
@@ -165,6 +173,17 @@ func (w *streamAdapterWrapper) synthesize(text string, segmentID string) error {
 		}
 		pending = audio
 	}
+}
+
+func newRetainFormatSentenceStream(language string) tokenize.SentenceStream {
+	return tokenize.NewBufferedTokenStream(func(s string) []string {
+		res := tokenize.SplitSentences(s, 20, true)
+		tokens := make([]string, len(res))
+		for i, r := range res {
+			tokens[i] = r.Token
+		}
+		return tokens
+	}, 20, 10)
 }
 
 func (w *streamAdapterWrapper) sendErr(err error) {
@@ -194,6 +213,13 @@ func (w *streamAdapterWrapper) PushText(text string) error {
 	if w.closed {
 		return fmt.Errorf("stream closed")
 	}
+	if w.inputDone {
+		return nil
+	}
+	if text == "" || w.flushed {
+		return nil
+	}
+	w.started = true
 	w.inputCh <- streamAdapterInput{text: text}
 	return nil
 }
@@ -204,7 +230,27 @@ func (w *streamAdapterWrapper) Flush() error {
 	if w.closed {
 		return fmt.Errorf("stream closed")
 	}
+	if w.inputDone {
+		return nil
+	}
+	if w.started {
+		w.flushed = true
+	}
 	w.inputCh <- streamAdapterInput{flush: true}
+	return nil
+}
+
+func (w *streamAdapterWrapper) EndInput() error {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.closed {
+		return fmt.Errorf("stream closed")
+	}
+	if w.inputDone {
+		return nil
+	}
+	w.inputDone = true
+	close(w.inputCh)
 	return nil
 }
 
@@ -217,7 +263,10 @@ func (w *streamAdapterWrapper) Close() error {
 	w.closed = true
 	active := w.active
 	w.cancel()
-	close(w.inputCh)
+	if !w.inputDone {
+		w.inputDone = true
+		close(w.inputCh)
+	}
 	w.mu.Unlock()
 	if active != nil {
 		return active.Close()

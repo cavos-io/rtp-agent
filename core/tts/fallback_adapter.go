@@ -144,13 +144,21 @@ func (f *FallbackAdapter) tryRecoverChunked(index int, text string) {
 		}
 		defer stream.Close()
 
+		audioSent := false
 		for {
 			_, err := stream.Next()
 			if err == nil {
+				audioSent = true
 				continue
 			}
 			if errors.Is(err, io.EOF) {
-				f.markAvailable(index)
+				if audioSent || strings.TrimSpace(text) == "" {
+					f.markAvailable(index)
+				} else {
+					f.mu.Lock()
+					f.status[index].recovering = false
+					f.mu.Unlock()
+				}
 				return
 			}
 			f.mu.Lock()
@@ -200,20 +208,28 @@ func (f *FallbackAdapter) tryRecoverStream(index int, inputs []fallbackSynthesiz
 				return
 			}
 		}
-		if err := stream.Flush(); err != nil {
+		if err := endSynthesizeStreamInput(stream); err != nil {
 			f.mu.Lock()
 			f.status[index].recovering = false
 			f.mu.Unlock()
 			return
 		}
 
+		audioSent := false
 		for {
 			_, err := stream.Next()
 			if err == nil {
+				audioSent = true
 				continue
 			}
 			if errors.Is(err, io.EOF) {
-				f.markAvailable(index)
+				if audioSent || strings.TrimSpace(strings.Join(replay, "")) == "" {
+					f.markAvailable(index)
+				} else {
+					f.mu.Lock()
+					f.status[index].recovering = false
+					f.mu.Unlock()
+				}
 				return
 			}
 			f.mu.Lock()
@@ -506,10 +522,13 @@ type fallbackSynthesizeStream struct {
 	requestID    string
 	segmentID    string
 
-	eventCh chan *SynthesizedAudio
-	errCh   chan error
-	closeCh chan struct{}
-	closed  bool
+	eventCh   chan *SynthesizedAudio
+	errCh     chan error
+	closeCh   chan struct{}
+	closed    bool
+	inputDone bool
+	started   bool
+	flushed   bool
 }
 
 type fallbackSynthesizeInput struct {
@@ -722,9 +741,13 @@ func (s *fallbackSynthesizeStream) PushText(text string) error {
 	if s.closed {
 		return fmt.Errorf("stream closed")
 	}
-	if text == "" {
+	if s.inputDone {
 		return nil
 	}
+	if text == "" || s.flushed {
+		return nil
+	}
+	s.started = true
 	s.inputBuffer = append(s.inputBuffer, fallbackSynthesizeInput{text: text})
 	return s.activeStream.PushText(text)
 }
@@ -735,8 +758,31 @@ func (s *fallbackSynthesizeStream) Flush() error {
 	if s.closed {
 		return fmt.Errorf("stream closed")
 	}
+	if s.inputDone {
+		return nil
+	}
+	if s.started {
+		s.flushed = true
+	}
 	s.inputBuffer = append(s.inputBuffer, fallbackSynthesizeInput{flush: true})
 	return s.activeStream.Flush()
+}
+
+func (s *fallbackSynthesizeStream) EndInput() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return fmt.Errorf("stream closed")
+	}
+	if s.inputDone {
+		return nil
+	}
+	s.inputDone = true
+	if s.started {
+		s.flushed = true
+	}
+	s.inputBuffer = append(s.inputBuffer, fallbackSynthesizeInput{flush: true})
+	return endSynthesizeStreamInput(s.activeStream)
 }
 
 func (s *fallbackSynthesizeStream) Close() error {

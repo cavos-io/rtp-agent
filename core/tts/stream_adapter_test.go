@@ -53,7 +53,29 @@ func TestStreamAdapterFlushSynthesizesBufferedText(t *testing.T) {
 	}
 }
 
-func TestStreamAdapterPropagatesTokenizerSegmentID(t *testing.T) {
+func TestStreamAdapterPreservesInternalNewlinesForSynthesis(t *testing.T) {
+	provider := &fakeStreamAdapterTTS{}
+	stream, err := NewStreamAdapter(provider).Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+	defer stream.Close()
+
+	if err := stream.PushText("first line\nsecond line"); err != nil {
+		t.Fatalf("PushText returned error: %v", err)
+	}
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush returned error: %v", err)
+	}
+
+	_ = nextStreamAdapterAudio(t, stream)
+
+	if got := provider.texts; len(got) != 1 || got[0] != "first line\nsecond line" {
+		t.Fatalf("synthesized texts = %#v, want internal newline preserved", got)
+	}
+}
+
+func TestStreamAdapterPropagatesTokenizerSegmentIDWithinSegment(t *testing.T) {
 	provider := &fakeStreamAdapterTTS{
 		events: []*SynthesizedAudio{
 			{Frame: &model.AudioFrame{Data: []byte{1}, SampleRate: 24000, NumChannels: 1, SamplesPerChannel: 1}},
@@ -82,6 +104,23 @@ func TestStreamAdapterPropagatesTokenizerSegmentID(t *testing.T) {
 	if second.SegmentID != firstSegmentID {
 		t.Fatalf("second SegmentID = %q, want first segment id %q", second.SegmentID, firstSegmentID)
 	}
+}
+
+func TestStreamAdapterIgnoresPushAfterFirstFlush(t *testing.T) {
+	provider := &fakeStreamAdapterTTS{}
+	stream, err := NewStreamAdapter(provider).Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+	defer stream.Close()
+
+	if err := stream.PushText("first segment"); err != nil {
+		t.Fatalf("PushText(first) returned error: %v", err)
+	}
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush(first) returned error: %v", err)
+	}
+	_ = nextStreamAdapterAudio(t, stream)
 
 	if err := stream.PushText("second segment"); err != nil {
 		t.Fatalf("PushText(second) returned error: %v", err)
@@ -89,13 +128,10 @@ func TestStreamAdapterPropagatesTokenizerSegmentID(t *testing.T) {
 	if err := stream.Flush(); err != nil {
 		t.Fatalf("Flush(second) returned error: %v", err)
 	}
+	time.Sleep(25 * time.Millisecond)
 
-	third := nextStreamAdapterAudio(t, stream)
-	if third.SegmentID == "" {
-		t.Fatal("third SegmentID is empty")
-	}
-	if third.SegmentID == firstSegmentID {
-		t.Fatalf("third SegmentID = %q, want new segment id after flush", third.SegmentID)
+	if got := provider.texts; len(got) != 1 || got[0] != "first segment" {
+		t.Fatalf("synthesized texts = %#v, want only first segment", got)
 	}
 }
 
@@ -360,6 +396,38 @@ func TestStreamAdapterCloseClosesActiveChunkedStream(t *testing.T) {
 	}
 	if !chunked.waitForClose(t) {
 		t.Fatal("chunked stream Close was not called")
+	}
+}
+
+func TestStreamAdapterEndsInputWhenSupported(t *testing.T) {
+	provider := &fakeStreamAdapterTTS{}
+	stream, err := NewStreamAdapter(provider).Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+	defer stream.Close()
+
+	ending, ok := stream.(inputEndingSynthesizeStream)
+	if !ok {
+		t.Fatal("StreamAdapter stream does not implement EndInput")
+	}
+	if err := stream.PushText("hello without punctuation"); err != nil {
+		t.Fatalf("PushText returned error: %v", err)
+	}
+	if err := ending.EndInput(); err != nil {
+		t.Fatalf("EndInput returned error: %v", err)
+	}
+
+	audio := nextStreamAdapterAudio(t, stream)
+	if audio.Frame == nil {
+		t.Fatal("audio frame is nil")
+	}
+	err = nextStreamAdapterError(stream)
+	if !errors.Is(err, io.EOF) {
+		t.Fatalf("Next error = %v, want io.EOF after EndInput drains", err)
+	}
+	if got := provider.texts; len(got) != 1 || got[0] != "hello without punctuation" {
+		t.Fatalf("synthesized texts = %#v, want ended input text", got)
 	}
 }
 

@@ -108,6 +108,8 @@ type RoomOptions struct {
 	DisablePreConnectAudio   bool
 	DisableTextInput         bool
 	DisableCloseOnDisconnect bool
+	DeleteRoomOnClose        bool
+	DeleteRoom               func(context.Context, string) error
 	TextInputCallback        TextInputCallback
 	ParticipantIdentity      string
 	ParticipantKinds         []lksdk.ParticipantKind
@@ -115,6 +117,8 @@ type RoomOptions struct {
 
 const RoomIOChatTopic = "lk.chat"
 const RoomIOPublishOnBehalfAttribute = "lk.publish_on_behalf"
+const RoomIOAgentStateAttribute = "lk.agent.state"
+const RoomIOSimulatorAttribute = "lk.simulator"
 
 type TextInputEvent struct {
 	Text                string
@@ -138,14 +142,23 @@ type RoomIO struct {
 	mu     sync.Mutex
 	closed bool
 
-	audioTrack *lksdk.LocalTrack
-	decoder    AudioDecoder
-	encoder    AudioEncoder
+	audioTrack    *lksdk.LocalTrack
+	decoder       AudioDecoder
+	encoder       AudioEncoder
+	audioDisabled bool
 
 	preConnectAudio *PreConnectAudioHandler
 	textInput       TextInputCallback
 
 	participantAvailable bool
+
+	agentStateCancel         context.CancelFunc
+	agentStatePublisher      func(map[string]string)
+	agentStatePublishEnabled func() bool
+
+	sessionCloseCancel context.CancelFunc
+	deletingRoom       bool
+	roomName           func() string
 }
 
 func NewRoomIO(room *lksdk.Room, session *agent.AgentSession, opts RoomOptions) *RoomIO {
@@ -168,6 +181,11 @@ func NewRoomIO(room *lksdk.Room, session *agent.AgentSession, opts RoomOptions) 
 		preConnectAudio: preConnectAudio,
 		textInput:       roomIOTextInputCallback(opts),
 	}
+	rio.agentStatePublisher = rio.publishLocalParticipantAttributes
+	rio.agentStatePublishEnabled = rio.roomConnected
+	rio.roomName = rio.liveKitRoomName
+	rio.startAgentStateListener()
+	rio.startSessionCloseListener()
 
 	if !opts.DisableTextInput {
 		rio.registerTextInput()
@@ -179,6 +197,49 @@ func NewRoomIO(room *lksdk.Room, session *agent.AgentSession, opts RoomOptions) 
 	session.Assistant.PublishAudio = rio.PublishAudio
 
 	return rio
+}
+
+func (rio *RoomIO) startAgentStateListener() {
+	if rio == nil || rio.AgentSession == nil || rio.AgentSession.AgentStateChangedCh == nil {
+		return
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	rio.agentStateCancel = cancel
+	go func() {
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case ev, ok := <-rio.AgentSession.AgentStateChangedCh:
+				if !ok {
+					return
+				}
+				rio.handleAgentStateChanged(ev)
+			}
+		}
+	}()
+}
+
+func (rio *RoomIO) startSessionCloseListener() {
+	if rio == nil || rio.AgentSession == nil {
+		return
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	rio.sessionCloseCancel = cancel
+	closeEvents := rio.AgentSession.CloseEvents()
+	go func() {
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case ev, ok := <-closeEvents:
+				if !ok {
+					return
+				}
+				rio.handleAgentSessionClose(ev)
+			}
+		}
+	}()
 }
 
 func roomIOPreConnectAudioTimeout(opts RoomOptions) time.Duration {
@@ -203,6 +264,100 @@ func roomIODefaultTextInput(ctx context.Context, responder roomIOTextResponder, 
 	}
 	_, err := responder.GenerateReply(ctx, text)
 	return err
+}
+
+func (rio *RoomIO) handleAgentStateChanged(ev agent.AgentStateChangedEvent) {
+	if rio == nil || rio.agentStatePublisher == nil {
+		return
+	}
+	if rio.agentStatePublishEnabled != nil && !rio.agentStatePublishEnabled() {
+		return
+	}
+	rio.agentStatePublisher(map[string]string{
+		RoomIOAgentStateAttribute: string(ev.NewState),
+	})
+}
+
+func (rio *RoomIO) roomConnected() bool {
+	return rio != nil && rio.Room != nil && rio.Room.ConnectionState() == lksdk.ConnectionStateConnected
+}
+
+func (rio *RoomIO) publishLocalParticipantAttributes(attrs map[string]string) {
+	if rio == nil || rio.Room == nil || rio.Room.LocalParticipant == nil {
+		return
+	}
+	rio.Room.LocalParticipant.SetAttributes(attrs)
+}
+
+func (rio *RoomIO) handleAgentSessionClose(ev agent.CloseEvent) {
+	if rio == nil || !rio.Options.DeleteRoomOnClose || rio.Options.DeleteRoom == nil {
+		return
+	}
+	rio.mu.Lock()
+	if rio.deletingRoom {
+		rio.mu.Unlock()
+		return
+	}
+	rio.deletingRoom = true
+	rio.mu.Unlock()
+	defer func() {
+		rio.mu.Lock()
+		rio.deletingRoom = false
+		rio.mu.Unlock()
+	}()
+
+	roomName := ""
+	if rio.roomName != nil {
+		roomName = rio.roomName()
+	}
+	if err := rio.Options.DeleteRoom(context.Background(), roomName); err != nil {
+		logger.Logger.Warnw("failed to delete room on agent session close", err, "room", roomName, "reason", ev.Reason)
+	}
+}
+
+func (rio *RoomIO) liveKitRoomName() string {
+	if rio == nil || rio.Room == nil {
+		return ""
+	}
+	return rio.Room.Name()
+}
+
+func (rio *RoomIO) isDeletingRoom() bool {
+	if rio == nil {
+		return false
+	}
+	rio.mu.Lock()
+	defer rio.mu.Unlock()
+	return rio.deletingRoom
+}
+
+func (rio *RoomIO) isAudioDisabled() bool {
+	if rio == nil {
+		return false
+	}
+	rio.mu.Lock()
+	defer rio.mu.Unlock()
+	return rio.audioDisabled
+}
+
+func (rio *RoomIO) disableAudioIOForSimulator() {
+	if rio == nil {
+		return
+	}
+	rio.mu.Lock()
+	if rio.audioDisabled {
+		rio.mu.Unlock()
+		return
+	}
+	rio.audioDisabled = true
+	preConnectAudio := rio.preConnectAudio
+	rio.preConnectAudio = nil
+	rio.audioTrack = nil
+	rio.mu.Unlock()
+
+	if preConnectAudio != nil {
+		preConnectAudio.Close()
+	}
 }
 
 func (rio *RoomIO) SetParticipant(participantIdentity string) {
@@ -321,6 +476,9 @@ func (rio *RoomIO) handleParticipantConnected(identity string, kind lksdk.Partic
 		return false
 	}
 	rio.setParticipant(identity, true)
+	if attributes[RoomIOSimulatorAttribute] == "true" {
+		rio.disableAudioIOForSimulator()
+	}
 	return true
 }
 
@@ -380,6 +538,9 @@ func (rio *RoomIO) onTrackSubscribed(track *webrtc.TrackRemote, publication *lks
 	if rp != nil && !rio.shouldAcceptParticipant(rp.Identity(), rp.Kind(), rp.Attributes(), rio.localParticipantIdentity()) {
 		return
 	}
+	if rio.isAudioDisabled() {
+		return
+	}
 	if track.Kind() == webrtc.RTPCodecTypeAudio {
 		go rio.handleAudioTrack(track)
 	}
@@ -423,6 +584,9 @@ func (rio *RoomIO) handleParticipantDisconnected(participantIdentity string, rea
 	if rio.AgentSession == nil || rio.Options.DisableCloseOnDisconnect {
 		return
 	}
+	if rio.isDeletingRoom() {
+		return
+	}
 	if !roomIOCloseOnDisconnectReason(reason) {
 		return
 	}
@@ -441,6 +605,9 @@ func roomIOCloseOnDisconnectReason(reason livekit.DisconnectReason) bool {
 }
 
 func (rio *RoomIO) handleAudioTrack(track *webrtc.TrackRemote) {
+	if rio.isAudioDisabled() {
+		return
+	}
 	// First, check for and flush any pre-connect audio buffered
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
@@ -461,6 +628,10 @@ func (rio *RoomIO) handleAudioTrack(track *webrtc.TrackRemote) {
 	for {
 		rio.mu.Lock()
 		if rio.closed {
+			rio.mu.Unlock()
+			return
+		}
+		if rio.audioDisabled {
 			rio.mu.Unlock()
 			return
 		}
@@ -504,6 +675,9 @@ func (rio *RoomIO) handleAudioTrack(track *webrtc.TrackRemote) {
 }
 
 func (rio *RoomIO) PublishAudio(frame *model.AudioFrame) error {
+	if rio.isAudioDisabled() {
+		return nil
+	}
 	if rio.Recorder != nil {
 		rio.Recorder.RecordOutput(frame)
 	}
@@ -537,6 +711,12 @@ func (rio *RoomIO) Close() error {
 	rio.mu.Lock()
 	defer rio.mu.Unlock()
 	rio.closed = true
+	if rio.agentStateCancel != nil {
+		rio.agentStateCancel()
+	}
+	if rio.sessionCloseCancel != nil {
+		rio.sessionCloseCancel()
+	}
 	if rio.decoder != nil {
 		rio.decoder.Close()
 	}

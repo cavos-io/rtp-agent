@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -423,6 +424,50 @@ func TestFallbackSynthesizeStreamSetsStableSegmentID(t *testing.T) {
 	}
 }
 
+func TestFallbackSynthesizeStreamIgnoresPushAfterFirstFlush(t *testing.T) {
+	providerStream := &metadataSynthesizeStream{
+		events: []*SynthesizedAudio{{Frame: &model.AudioFrame{Data: []byte{1}}}},
+	}
+	adapter := NewFallbackAdapter([]TTS{
+		&metadataTTS{
+			label:        "primary",
+			sampleRate:   24000,
+			numChannels:  1,
+			capabilities: TTSCapabilities{Streaming: true},
+			stream:       providerStream,
+		},
+	})
+
+	stream, err := adapter.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+	defer stream.Close()
+
+	if err := stream.PushText("first segment"); err != nil {
+		t.Fatalf("PushText(first) returned error: %v", err)
+	}
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush(first) returned error: %v", err)
+	}
+	if _, err := stream.Next(); err != nil {
+		t.Fatalf("Next returned error: %v", err)
+	}
+
+	if err := stream.PushText("second segment"); err != nil {
+		t.Fatalf("PushText(second) returned error: %v", err)
+	}
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush(second) returned error: %v", err)
+	}
+	time.Sleep(25 * time.Millisecond)
+
+	wantCalls := []string{"push:first segment", "flush", "flush"}
+	if strings.Join(providerStream.calls, ",") != strings.Join(wantCalls, ",") {
+		t.Fatalf("provider stream calls = %#v, want %#v", providerStream.calls, wantCalls)
+	}
+}
+
 func TestFallbackSynthesizeStreamIgnoresEmptyText(t *testing.T) {
 	providerStream := &metadataSynthesizeStream{}
 	adapter := NewFallbackAdapter([]TTS{
@@ -449,6 +494,51 @@ func TestFallbackSynthesizeStreamIgnoresEmptyText(t *testing.T) {
 	}
 	if len(stream.(*fallbackSynthesizeStream).inputBuffer) != 0 {
 		t.Fatalf("input buffer = %#v, want no empty input buffered", stream.(*fallbackSynthesizeStream).inputBuffer)
+	}
+}
+
+func TestFallbackSynthesizeStreamEndsInputWhenSupported(t *testing.T) {
+	providerStream := &blockingEndInputSynthesizeStream{
+		events: []*SynthesizedAudio{{Frame: &model.AudioFrame{Data: []byte{1}}}},
+		ended:  make(chan struct{}),
+	}
+	adapter := NewFallbackAdapter([]TTS{
+		&metadataTTS{
+			label:        "primary",
+			sampleRate:   24000,
+			numChannels:  1,
+			capabilities: TTSCapabilities{Streaming: true},
+			stream:       providerStream,
+		},
+	})
+
+	stream, err := adapter.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+	defer stream.Close()
+
+	ending, ok := stream.(inputEndingSynthesizeStream)
+	if !ok {
+		t.Fatal("FallbackAdapter stream does not implement EndInput")
+	}
+	if err := stream.PushText("hello"); err != nil {
+		t.Fatalf("PushText returned error: %v", err)
+	}
+	if err := ending.EndInput(); err != nil {
+		t.Fatalf("EndInput returned error: %v", err)
+	}
+
+	audio, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next returned error: %v", err)
+	}
+	if audio.Frame == nil {
+		t.Fatal("audio frame is nil")
+	}
+	wantCalls := []string{"push:hello", "end_input"}
+	if strings.Join(providerStream.calls, ",") != strings.Join(wantCalls, ",") {
+		t.Fatalf("provider stream calls = %#v, want %#v", providerStream.calls, wantCalls)
 	}
 }
 
@@ -858,6 +948,29 @@ func TestFallbackChunkedStreamRestoresPrimaryAfterRecovery(t *testing.T) {
 	}
 }
 
+func TestFallbackChunkedRecoveryKeepsProviderUnavailableWhenReplayProducesNoAudio(t *testing.T) {
+	primary := &metadataTTS{
+		label:       "primary",
+		sampleRate:  24000,
+		numChannels: 1,
+		chunked:     &metadataChunkedStream{},
+	}
+	adapter := NewFallbackAdapter([]TTS{primary})
+	adapter.status[0].available = false
+
+	adapter.tryRecoverChunked(0, "hello")
+
+	waitForFallbackCondition(t, func() bool {
+		adapter.mu.Lock()
+		defer adapter.mu.Unlock()
+		return !adapter.status[0].recovering
+	})
+
+	if adapter.status[0].available {
+		t.Fatal("provider available = true after no-audio recovery probe, want false")
+	}
+}
+
 func TestFallbackSynthesizeStreamReturnsEOFWhenProviderCompletes(t *testing.T) {
 	firstStream := &metadataSynthesizeStream{
 		events: []*SynthesizedAudio{{Frame: &model.AudioFrame{Data: []byte{1}}}},
@@ -1146,6 +1259,37 @@ func TestFallbackSynthesizeStreamRestoresPrimaryAfterRecovery(t *testing.T) {
 	}
 }
 
+func TestFallbackSynthesizeRecoveryEndsInputWhenSupported(t *testing.T) {
+	recovery := &endInputSynthesizeStream{events: []*SynthesizedAudio{{
+		Frame: &model.AudioFrame{Data: []byte("primary recovery probe")},
+	}}}
+	primary := &metadataTTS{
+		label:        "primary",
+		sampleRate:   24000,
+		numChannels:  1,
+		capabilities: TTSCapabilities{Streaming: true},
+		stream:       recovery,
+	}
+	adapter := NewFallbackAdapter([]TTS{primary})
+	adapter.status[0].available = false
+
+	adapter.tryRecoverStream(0, []fallbackSynthesizeInput{{text: "hello"}})
+
+	waitForFallbackCondition(t, func() bool {
+		adapter.mu.Lock()
+		defer adapter.mu.Unlock()
+		return !adapter.status[0].recovering
+	})
+
+	wantCalls := []string{"push:hello", "end_input"}
+	if strings.Join(recovery.calls, ",") != strings.Join(wantCalls, ",") {
+		t.Fatalf("recovery stream calls = %#v, want %#v", recovery.calls, wantCalls)
+	}
+	if !adapter.status[0].available {
+		t.Fatal("provider available = false after audio recovery probe, want true")
+	}
+}
+
 func TestFallbackSynthesizeStreamWrapsNonStreamingProvider(t *testing.T) {
 	adapter := NewFallbackAdapter([]TTS{
 		&metadataTTS{
@@ -1278,7 +1422,7 @@ func TestFallbackSynthesizeStreamRetriesSameTTSBeforeFallback(t *testing.T) {
 	}
 }
 
-func TestFallbackSynthesizeStreamReplaysOnlyTextOnRetry(t *testing.T) {
+func TestFallbackSynthesizeStreamReplaysOnlyFirstSegmentTextOnRetry(t *testing.T) {
 	primaryFailure := &blockingFailSynthesizeStream{
 		err:     errors.New("primary stream failed"),
 		release: make(chan struct{}),
@@ -1326,7 +1470,7 @@ func TestFallbackSynthesizeStreamReplaysOnlyTextOnRetry(t *testing.T) {
 		t.Fatalf("audio data = %q, want primary recovered", got)
 	}
 
-	wantCalls := []string{"push:hello", "push:world"}
+	wantCalls := []string{"push:hello"}
 	if len(recovered.calls) != len(wantCalls) {
 		t.Fatalf("replayed stream call count = %d, want %d", len(recovered.calls), len(wantCalls))
 	}
@@ -1354,6 +1498,30 @@ func TestFallbackSynthesizeRecoveryIgnoresFlushOnlyInput(t *testing.T) {
 	case <-primary.streamCalled:
 		t.Fatal("recovery stream started for flush-only input, want no recovery")
 	case <-time.After(50 * time.Millisecond):
+	}
+}
+
+func TestFallbackSynthesizeRecoveryKeepsProviderUnavailableWhenReplayProducesNoAudio(t *testing.T) {
+	primary := &metadataTTS{
+		label:        "primary",
+		sampleRate:   24000,
+		numChannels:  1,
+		capabilities: TTSCapabilities{Streaming: true},
+		stream:       &metadataSynthesizeStream{},
+	}
+	adapter := NewFallbackAdapter([]TTS{primary})
+	adapter.status[0].available = false
+
+	adapter.tryRecoverStream(0, []fallbackSynthesizeInput{{text: "hello"}})
+
+	waitForFallbackCondition(t, func() bool {
+		adapter.mu.Lock()
+		defer adapter.mu.Unlock()
+		return !adapter.status[0].recovering
+	})
+
+	if adapter.status[0].available {
+		t.Fatal("provider available = true after no-audio recovery probe, want false")
 	}
 }
 
@@ -1529,4 +1697,46 @@ func (s *blockingFailSynthesizeStream) Close() error {
 func (s *blockingFailSynthesizeStream) Next() (*SynthesizedAudio, error) {
 	<-s.release
 	return nil, s.err
+}
+
+type blockingEndInputSynthesizeStream struct {
+	events  []*SynthesizedAudio
+	calls   []string
+	ended   chan struct{}
+	endOnce sync.Once
+}
+
+func (s *blockingEndInputSynthesizeStream) PushText(text string) error {
+	s.calls = append(s.calls, "push:"+text)
+	return nil
+}
+
+func (s *blockingEndInputSynthesizeStream) Flush() error {
+	s.calls = append(s.calls, "flush")
+	return nil
+}
+
+func (s *blockingEndInputSynthesizeStream) EndInput() error {
+	s.calls = append(s.calls, "end_input")
+	s.endOnce.Do(func() {
+		close(s.ended)
+	})
+	return nil
+}
+
+func (s *blockingEndInputSynthesizeStream) Close() error {
+	s.endOnce.Do(func() {
+		close(s.ended)
+	})
+	return nil
+}
+
+func (s *blockingEndInputSynthesizeStream) Next() (*SynthesizedAudio, error) {
+	<-s.ended
+	if len(s.events) == 0 {
+		return nil, io.EOF
+	}
+	ev := s.events[0]
+	s.events = s.events[1:]
+	return ev, nil
 }

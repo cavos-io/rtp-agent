@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/cavos-io/rtp-agent/core/agent"
+	"github.com/cavos-io/rtp-agent/model"
 	"github.com/livekit/protocol/livekit"
 	lksdk "github.com/livekit/server-sdk-go/v2"
 )
@@ -135,6 +136,88 @@ func TestRoomIODefaultTextInputInterruptsBeforeGenerateReply(t *testing.T) {
 	want := []string{"interrupt", "generate:hello"}
 	if !reflect.DeepEqual(responder.calls, want) {
 		t.Fatalf("calls = %#v, want %#v", responder.calls, want)
+	}
+}
+
+func TestRoomIOHandleAgentStateChangedPublishesReferenceAttribute(t *testing.T) {
+	var got map[string]string
+	rio := &RoomIO{
+		agentStatePublisher: func(attrs map[string]string) {
+			got = attrs
+		},
+		agentStatePublishEnabled: func() bool {
+			return true
+		},
+	}
+
+	rio.handleAgentStateChanged(agent.AgentStateChangedEvent{NewState: agent.AgentStateThinking})
+
+	if got[RoomIOAgentStateAttribute] != string(agent.AgentStateThinking) {
+		t.Fatalf("published agent state attributes = %#v, want %s=%s", got, RoomIOAgentStateAttribute, agent.AgentStateThinking)
+	}
+}
+
+func TestRoomIOHandleAgentStateChangedSkipsWhenRoomDisconnected(t *testing.T) {
+	called := false
+	rio := &RoomIO{
+		agentStatePublisher: func(map[string]string) {
+			called = true
+		},
+		agentStatePublishEnabled: func() bool {
+			return false
+		},
+	}
+
+	rio.handleAgentStateChanged(agent.AgentStateChangedEvent{NewState: agent.AgentStateSpeaking})
+
+	if called {
+		t.Fatal("agent state publisher was called while room was disconnected")
+	}
+}
+
+func TestRoomIOHandleAgentSessionCloseDeletesRoomWhenEnabled(t *testing.T) {
+	var gotRoomName string
+	calls := 0
+	rio := &RoomIO{
+		Options: RoomOptions{
+			DeleteRoomOnClose: true,
+			DeleteRoom: func(_ context.Context, roomName string) error {
+				calls++
+				gotRoomName = roomName
+				return nil
+			},
+		},
+		roomName: func() string {
+			return "room-a"
+		},
+	}
+
+	rio.handleAgentSessionClose(agent.CloseEvent{Reason: agent.CloseReasonParticipantDisconnected})
+	rio.handleAgentSessionClose(agent.CloseEvent{Reason: agent.CloseReasonParticipantDisconnected})
+
+	if calls != 2 {
+		t.Fatalf("DeleteRoom calls = %d, want 2", calls)
+	}
+	if gotRoomName != "room-a" {
+		t.Fatalf("DeleteRoom roomName = %q, want room-a", gotRoomName)
+	}
+}
+
+func TestRoomIOHandleAgentSessionCloseSkipsRoomDeleteWhenDisabled(t *testing.T) {
+	called := false
+	rio := &RoomIO{
+		Options: RoomOptions{
+			DeleteRoom: func(context.Context, string) error {
+				called = true
+				return nil
+			},
+		},
+	}
+
+	rio.handleAgentSessionClose(agent.CloseEvent{Reason: agent.CloseReasonParticipantDisconnected})
+
+	if called {
+		t.Fatal("DeleteRoom was called when DeleteRoomOnClose was disabled")
 	}
 }
 
@@ -349,6 +432,44 @@ func TestRoomIOHandleParticipantConnectedLinksFirstAcceptedParticipant(t *testin
 	}
 }
 
+func TestRoomIOHandleParticipantConnectedDisablesAudioForSimulator(t *testing.T) {
+	recorder := NewRecorderIO(&agent.AgentSession{})
+	recorder.started = true
+	rio := &RoomIO{
+		Recorder:        recorder,
+		preConnectAudio: &PreConnectAudioHandler{},
+	}
+
+	if !rio.handleParticipantConnected(
+		"caller-a",
+		lksdk.ParticipantStandard,
+		map[string]string{RoomIOSimulatorAttribute: "true"},
+		"agent-local",
+	) {
+		t.Fatal("handleParticipantConnected(simulator) = false, want true")
+	}
+
+	if got := rio.participantIdentity(); got != "caller-a" {
+		t.Fatalf("participantIdentity() = %q, want caller-a", got)
+	}
+	if rio.preConnectAudio != nil {
+		t.Fatal("preConnectAudio = non-nil, want disabled for simulator participant")
+	}
+
+	frame := &model.AudioFrame{
+		Data:              []byte{0, 0},
+		SampleRate:        48000,
+		NumChannels:       1,
+		SamplesPerChannel: 1,
+	}
+	if err := rio.PublishAudio(frame); err != nil {
+		t.Fatalf("PublishAudio(simulator) error = %v", err)
+	}
+	if recorder.OutputStartTime != nil {
+		t.Fatal("recorder output was recorded after simulator disabled audio output")
+	}
+}
+
 func TestRoomIOHandleParticipantConnectedSkipsUnacceptedParticipant(t *testing.T) {
 	rio := &RoomIO{}
 
@@ -458,6 +579,28 @@ func TestRoomIOHandleParticipantDisconnectedIgnoresNonCloseReasons(t *testing.T)
 	select {
 	case ev := <-session.CloseEvents():
 		t.Fatalf("unexpected close event: %#v", ev)
+	default:
+	}
+}
+
+func TestRoomIOHandleParticipantDisconnectedSkipsCloseWhileDeletingRoom(t *testing.T) {
+	session := &agent.AgentSession{}
+	rio := &RoomIO{
+		AgentSession: session,
+		Options: RoomOptions{
+			ParticipantIdentity: "caller-a",
+		},
+		deletingRoom: true,
+	}
+	if !rio.handleParticipantConnected("caller-a", lksdk.ParticipantStandard, nil, "agent-local") {
+		t.Fatal("handleParticipantConnected(caller-a) = false, want true")
+	}
+
+	rio.handleParticipantDisconnected("caller-a", livekit.DisconnectReason_CLIENT_INITIATED)
+
+	select {
+	case ev := <-session.CloseEvents():
+		t.Fatalf("unexpected close event while deleting room: %#v", ev)
 	default:
 	}
 }
