@@ -425,20 +425,23 @@ func (s *AgentSession) GenerateReplyWithOptions(ctx context.Context, opts Genera
 	}
 	handle := NewSpeechHandle(allowInterruptions, InputDetails{Modality: inputModality})
 
-	// Add user message to ChatContext if provided
+	var userMessage *llm.ChatMessage
 	if opts.UserInput != "" {
-		s.ChatCtx.Append(&llm.ChatMessage{
+		userMessage = &llm.ChatMessage{
 			Role: llm.ChatRoleUser,
 			Content: []llm.ChatContent{
 				{Text: opts.UserInput},
 			},
 			CreatedAt: time.Now(),
-		})
+		}
 	}
 
 	// Schedule the speech
 	if err := activity.ScheduleSpeech(handle, SpeechPriorityNormal, false); err != nil {
 		return nil, err
+	}
+	if userMessage != nil {
+		s.EmitConversationItemAdded(userMessage)
 	}
 	return handle, nil
 }

@@ -52,6 +52,14 @@ func TestAgentSessionGenerateReplyAddsUserInputToChatContext(t *testing.T) {
 	if msg.Role != llm.ChatRoleUser || msg.TextContent() != "hello" {
 		t.Fatalf("ChatCtx message = %#v, want user message with text hello", msg)
 	}
+	select {
+	case ev := <-session.ConversationItemAddedEvents():
+		if ev.Item != msg {
+			t.Fatalf("ConversationItemAdded item = %#v, want committed user message", ev.Item)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("ConversationItemAddedEvents did not receive generated user input")
+	}
 }
 
 func TestAgentSessionGenerateReplyOptionsOverrideInterruptionsAndInputModality(t *testing.T) {
