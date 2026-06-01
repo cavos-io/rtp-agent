@@ -377,6 +377,41 @@ func TestAgentSessionEmitUserTurnExceededEmitsTimestampedEvent(t *testing.T) {
 	}
 }
 
+func TestAgentSessionEmitUserTurnExceededDispatchesAgentHook(t *testing.T) {
+	agent := NewAgent("test")
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	session.activity = NewAgentActivity(agent, session)
+
+	session.EmitUserTurnExceeded(UserTurnExceededEvent{Transcript: "extended user turn"})
+
+	deadline := time.After(time.Second)
+	ticker := time.NewTicker(time.Millisecond)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-deadline:
+			t.Fatal("user turn exceeded hook did not schedule cut-in speech")
+		case <-ticker.C:
+			session.activity.queueMu.Lock()
+			var handle *SpeechHandle
+			if len(session.activity.speechQueue) > 0 {
+				handle = session.activity.speechQueue[0].speech
+			}
+			session.activity.queueMu.Unlock()
+			if handle == nil {
+				continue
+			}
+			if handle.AllowInterruptions {
+				t.Fatal("handle.AllowInterruptions = true, want false for exceeded-turn cut-in")
+			}
+			if handle.Generation.ToolChoice != "none" {
+				t.Fatalf("ToolChoice = %#v, want none", handle.Generation.ToolChoice)
+			}
+			return
+		}
+	}
+}
+
 func TestAgentSessionEmitOverlappingSpeechEmitsTimestampedEvent(t *testing.T) {
 	agent := NewAgent("test")
 	session := NewAgentSession(agent, nil, AgentSessionOptions{})

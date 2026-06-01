@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"errors"
 	"sync"
 
 	"github.com/cavos-io/rtp-agent/core/llm"
@@ -27,6 +28,7 @@ type AgentInterface interface {
 	OnEnter()
 	OnExit()
 	OnUserTurnCompleted(ctx context.Context, chatCtx *llm.ChatContext, newMsg *llm.ChatMessage) error
+	OnUserTurnExceeded(ctx context.Context, ev UserTurnExceededEvent) error
 	GetAgent() *Agent
 	GetActivity() *AgentActivity
 }
@@ -148,18 +150,38 @@ func (a *Agent) OnUserTurnCompleted(ctx context.Context, chatCtx *llm.ChatContex
 	return nil
 }
 
+const defaultUserTurnExceededInstructions = "The user has been speaking too long without giving a chance to reply. Politely cut in with a short reply or notice. Keep it short since the user cannot interrupt it."
+
+func (a *Agent) OnUserTurnExceeded(ctx context.Context, ev UserTurnExceededEvent) error {
+	if a.activity == nil || a.activity.Session == nil {
+		return ErrAgentSessionNotRunning
+	}
+	allowInterruptions := false
+	_, err := a.activity.Session.GenerateReplyWithOptions(ctx, GenerateReplyOptions{
+		UserInput:          ev.Transcript,
+		Instructions:       defaultUserTurnExceededInstructions,
+		AllowInterruptions: &allowInterruptions,
+		ToolChoice:         "none",
+		InputModality:      "text",
+	})
+	return err
+}
+
 // AgentTask represents a sub-agent execution that returns a result
 type AgentTask[T any] struct {
 	Agent
-	Result       chan T
-	Err          chan error
-	completeOnce sync.Once
-	doneCh       chan struct{}
+	Result    chan T
+	Err       chan error
+	doneCh    chan struct{}
+	mu        sync.Mutex
+	completed bool
 }
 
 type TaskWaiter interface {
 	WaitAny(ctx context.Context) (any, error)
 }
+
+var ErrAgentTaskAlreadyDone = errors.New("agent task is already done")
 
 func NewAgentTask[T any](instructions string) *AgentTask[T] {
 	baseAgent := NewAgent(instructions)
@@ -171,18 +193,30 @@ func NewAgentTask[T any](instructions string) *AgentTask[T] {
 	}
 }
 
-func (t *AgentTask[T]) Complete(result T) {
-	t.completeOnce.Do(func() {
-		t.Result <- result
-		close(t.doneCh)
-	})
+func (t *AgentTask[T]) Complete(result T) error {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	if t.completed {
+		return ErrAgentTaskAlreadyDone
+	}
+	t.completed = true
+	t.Result <- result
+	close(t.doneCh)
+	return nil
 }
 
-func (t *AgentTask[T]) Fail(err error) {
-	t.completeOnce.Do(func() {
-		t.Err <- err
-		close(t.doneCh)
-	})
+func (t *AgentTask[T]) Fail(err error) error {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	if t.completed {
+		return ErrAgentTaskAlreadyDone
+	}
+	t.completed = true
+	t.Err <- err
+	close(t.doneCh)
+	return nil
 }
 
 func (t *AgentTask[T]) Done() bool {
@@ -195,10 +229,13 @@ func (t *AgentTask[T]) Done() bool {
 }
 
 func (t *AgentTask[T]) Cancel() {
+	if t.Done() {
+		return
+	}
 	if t.activity != nil {
 		_ = t.activity.Interrupt(true)
 	}
-	t.Fail(llm.NewToolError("AgentTask " + t.ID + " is cancelled"))
+	_ = t.Fail(llm.NewToolError("AgentTask " + t.ID + " is cancelled"))
 }
 
 func (t *AgentTask[T]) WaitAny(ctx context.Context) (any, error) {

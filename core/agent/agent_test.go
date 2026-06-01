@@ -266,20 +266,53 @@ func TestAgentUpdateChatContextWhileRunningReplacesInstructionMessage(t *testing
 	}
 }
 
+func TestAgentOnUserTurnExceededGeneratesNonInterruptibleCutIn(t *testing.T) {
+	agent := NewAgent("help")
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	session.activity = NewAgentActivity(agent, session)
+	agent.activity = session.activity
+	ev := UserTurnExceededEvent{Transcript: "I have been talking for too long"}
+
+	if err := agent.OnUserTurnExceeded(context.Background(), ev); err != nil {
+		t.Fatalf("OnUserTurnExceeded error = %v, want nil", err)
+	}
+
+	if len(session.activity.speechQueue) != 1 {
+		t.Fatalf("speech queue length = %d, want 1", len(session.activity.speechQueue))
+	}
+	handle := session.activity.speechQueue[0].speech
+	if handle.AllowInterruptions {
+		t.Fatal("handle.AllowInterruptions = true, want false for default exceeded-turn cut-in")
+	}
+	if handle.Generation.ToolChoice != "none" {
+		t.Fatalf("ToolChoice = %#v, want none", handle.Generation.ToolChoice)
+	}
+	if handle.Generation.Instructions == nil {
+		t.Fatal("Generation.Instructions = nil, want default exceeded-turn instructions")
+	}
+	if got := handle.Generation.Instructions.AsModality("text").String(); got == "" {
+		t.Fatal("Generation.Instructions text is empty, want default exceeded-turn instructions")
+	}
+	if len(session.ChatCtx.Items) != 1 {
+		t.Fatalf("session ChatCtx items = %d, want exceeded transcript committed", len(session.ChatCtx.Items))
+	}
+	msg, ok := session.ChatCtx.Items[0].(*llm.ChatMessage)
+	if !ok {
+		t.Fatalf("session ChatCtx item = %T, want *llm.ChatMessage", session.ChatCtx.Items[0])
+	}
+	if msg.Role != llm.ChatRoleUser || msg.TextContent() != ev.Transcript {
+		t.Fatalf("session ChatCtx message role/text = %s/%q, want user/%q", msg.Role, msg.TextContent(), ev.Transcript)
+	}
+}
+
 func TestAgentTaskCompleteIsOneTime(t *testing.T) {
 	task := NewAgentTask[string]("collect data")
-	task.Complete("first")
+	if err := task.Complete("first"); err != nil {
+		t.Fatalf("Complete(first) error = %v, want nil", err)
+	}
 
-	returned := make(chan struct{})
-	go func() {
-		task.Complete("second")
-		close(returned)
-	}()
-
-	select {
-	case <-returned:
-	case <-time.After(50 * time.Millisecond):
-		t.Fatal("second Complete blocked, want no-op after task completion")
+	if err := task.Complete("second"); !errors.Is(err, ErrAgentTaskAlreadyDone) {
+		t.Fatalf("Complete(second) error = %v, want ErrAgentTaskAlreadyDone", err)
 	}
 
 	got, err := task.WaitAny(context.Background())
@@ -294,23 +327,58 @@ func TestAgentTaskCompleteIsOneTime(t *testing.T) {
 func TestAgentTaskFailIsOneTime(t *testing.T) {
 	task := NewAgentTask[string]("collect data")
 	firstErr := errors.New("first failure")
-	task.Fail(firstErr)
+	if err := task.Fail(firstErr); err != nil {
+		t.Fatalf("Fail(first) error = %v, want nil", err)
+	}
 
-	returned := make(chan struct{})
-	go func() {
-		task.Fail(errors.New("second failure"))
-		close(returned)
-	}()
-
-	select {
-	case <-returned:
-	case <-time.After(50 * time.Millisecond):
-		t.Fatal("second Fail blocked, want no-op after task failure")
+	if err := task.Fail(errors.New("second failure")); !errors.Is(err, ErrAgentTaskAlreadyDone) {
+		t.Fatalf("Fail(second) error = %v, want ErrAgentTaskAlreadyDone", err)
 	}
 
 	got, err := task.WaitAny(context.Background())
 	if err != firstErr {
 		t.Fatalf("WaitAny error = %v, want %v", err, firstErr)
+	}
+	if got != nil {
+		t.Fatalf("WaitAny result = %v, want nil", got)
+	}
+}
+
+func TestAgentTaskFailAfterCompleteReturnsAlreadyDone(t *testing.T) {
+	task := NewAgentTask[string]("collect data")
+	if err := task.Complete("done"); err != nil {
+		t.Fatalf("Complete error = %v, want nil", err)
+	}
+
+	err := task.Fail(errors.New("late failure"))
+
+	if !errors.Is(err, ErrAgentTaskAlreadyDone) {
+		t.Fatalf("Fail after Complete error = %v, want ErrAgentTaskAlreadyDone", err)
+	}
+	got, waitErr := task.WaitAny(context.Background())
+	if waitErr != nil {
+		t.Fatalf("WaitAny error = %v, want nil", waitErr)
+	}
+	if got != "done" {
+		t.Fatalf("WaitAny result = %v, want done", got)
+	}
+}
+
+func TestAgentTaskCompleteAfterFailReturnsAlreadyDone(t *testing.T) {
+	task := NewAgentTask[string]("collect data")
+	firstErr := errors.New("failed")
+	if err := task.Fail(firstErr); err != nil {
+		t.Fatalf("Fail error = %v, want nil", err)
+	}
+
+	err := task.Complete("late result")
+
+	if !errors.Is(err, ErrAgentTaskAlreadyDone) {
+		t.Fatalf("Complete after Fail error = %v, want ErrAgentTaskAlreadyDone", err)
+	}
+	got, waitErr := task.WaitAny(context.Background())
+	if waitErr != firstErr {
+		t.Fatalf("WaitAny error = %v, want %v", waitErr, firstErr)
 	}
 	if got != nil {
 		t.Fatalf("WaitAny result = %v, want nil", got)
@@ -323,7 +391,9 @@ func TestAgentTaskDoneReflectsCompletion(t *testing.T) {
 		t.Fatal("Done() = true, want false before completion")
 	}
 
-	task.Complete("done")
+	if err := task.Complete("done"); err != nil {
+		t.Fatalf("Complete error = %v, want nil", err)
+	}
 
 	if !task.Done() {
 		t.Fatal("Done() = false, want true after Complete")
@@ -332,7 +402,9 @@ func TestAgentTaskDoneReflectsCompletion(t *testing.T) {
 
 func TestAgentTaskDoneReflectsFailure(t *testing.T) {
 	task := NewAgentTask[string]("collect data")
-	task.Fail(errors.New("failed"))
+	if err := task.Fail(errors.New("failed")); err != nil {
+		t.Fatalf("Fail error = %v, want nil", err)
+	}
 
 	if !task.Done() {
 		t.Fatal("Done() = false, want true after Fail")
@@ -363,7 +435,9 @@ func TestAgentTaskCancelFailsWithToolError(t *testing.T) {
 
 func TestAgentTaskCancelAfterCompleteDoesNotOverrideResult(t *testing.T) {
 	task := NewAgentTask[string]("collect data")
-	task.Complete("done")
+	if err := task.Complete("done"); err != nil {
+		t.Fatalf("Complete error = %v, want nil", err)
+	}
 
 	task.Cancel()
 

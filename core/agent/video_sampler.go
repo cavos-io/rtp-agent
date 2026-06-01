@@ -12,7 +12,8 @@ import (
 // only when the user is speaking, to reduce LLM context token usage.
 type VoiceActivityVideoSampler struct {
 	agentSession *AgentSession
-	sampleRate   float64 // Frames per second
+	speakingFPS  float64
+	silentFPS    float64
 	encodeOpts   images.EncodeOptions
 
 	mu       sync.Mutex
@@ -21,12 +22,17 @@ type VoiceActivityVideoSampler struct {
 }
 
 func NewVoiceActivityVideoSampler(session *AgentSession, sampleRate float64, opts images.EncodeOptions) *VoiceActivityVideoSampler {
-	if sampleRate <= 0 {
-		sampleRate = 1.0
+	return NewVoiceActivityVideoSamplerWithRates(session, sampleRate, 0.3, opts)
+}
+
+func NewVoiceActivityVideoSamplerWithRates(session *AgentSession, speakingFPS float64, silentFPS float64, opts images.EncodeOptions) *VoiceActivityVideoSampler {
+	if speakingFPS <= 0 {
+		speakingFPS = 1.0
 	}
 	return &VoiceActivityVideoSampler{
 		agentSession: session,
-		sampleRate:   sampleRate,
+		speakingFPS:  speakingFPS,
+		silentFPS:    silentFPS,
 		encodeOpts:   opts,
 	}
 }
@@ -43,14 +49,22 @@ func (s *VoiceActivityVideoSampler) OnVideoFrame(ctx context.Context, frame *ima
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	if !s.speaking {
+	targetFPS := s.silentFPS
+	if s.speaking {
+		targetFPS = s.speakingFPS
+	}
+	if targetFPS == 0 {
 		return false
 	}
 
 	now := time.Now()
+	if s.lastTime.IsZero() {
+		s.lastTime = now
+		return true
+	}
 	elapsed := now.Sub(s.lastTime)
 
-	interval := time.Duration(float64(time.Second) / s.sampleRate)
+	interval := time.Duration(float64(time.Second) / targetFPS)
 
 	if elapsed >= interval {
 		s.lastTime = now

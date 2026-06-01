@@ -355,10 +355,16 @@ func (s *AgentSession) EmitUserTurnExceeded(ev UserTurnExceededEvent) {
 	if ev.CreatedAt.IsZero() {
 		ev.CreatedAt = time.Now()
 	}
+	s.mu.Lock()
+	activity := s.activity
+	s.mu.Unlock()
 	ch := s.userTurnExceededEvents()
 	select {
 	case ch <- ev:
 	default:
+	}
+	if activity != nil {
+		activity.OnUserTurnExceeded(ev)
 	}
 }
 
