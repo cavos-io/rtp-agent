@@ -98,15 +98,21 @@ func (e *ThreadJobExecutor) LaunchRunningJob(ctx context.Context, info RunningJo
 	e.mu.Unlock()
 
 	go func() {
-		err := e.entrypoint()
-		e.mu.Lock()
-		if err != nil {
+		status := JobStatusSuccess
+		defer func() {
+			if recovered := recover(); recovered != nil {
+				logger.Logger.Errorw("Job entrypoint panicked", fmt.Errorf("%v", recovered), "job_id", info.Job.GetId())
+				status = JobStatusFailed
+			}
+			e.mu.Lock()
+			e.status = status
+			e.mu.Unlock()
+		}()
+
+		if err := e.entrypoint(); err != nil {
 			logger.Logger.Errorw("Job entrypoint failed", err, "job_id", info.Job.GetId())
-			e.status = JobStatusFailed
-		} else {
-			e.status = JobStatusSuccess
+			status = JobStatusFailed
 		}
-		e.mu.Unlock()
 	}()
 
 	return nil
