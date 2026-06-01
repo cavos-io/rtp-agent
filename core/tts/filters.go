@@ -29,8 +29,8 @@ var (
 	codeBlockPattern = regexp.MustCompile("`{3,4}\\S*")
 	// inline code: remove ` from `text`
 	inlineCodePattern = regexp.MustCompile("`([^`]+?)`")
-	// strikethrough: remove ~~text~~
-	strikePattern = regexp.MustCompile(`~~([^~]*?)~~`)
+	// strikethrough: remove ~~text~~ only when text is tight against tildes
+	strikePattern = regexp.MustCompile(`~~([^\s~][^~]*?[^\s~])~~`)
 
 	// Emoji block ranges
 	emojiPattern = regexp.MustCompile(`[\x{1F000}-\x{1FBFF}]|[\x{2600}-\x{26FF}]|[\x{2700}-\x{27BF}]|[\x{2B00}-\x{2BFF}]|[\x{FE00}-\x{FE0F}]|\x{200D}|\x{20E3}`)
@@ -58,7 +58,6 @@ func FilterMarkdown(text string) string {
 	text = strikePattern.ReplaceAllString(text, "")
 
 	// Final cleanup
-	text = strings.ReplaceAll(text, "~~", "")
 	text = strings.ReplaceAll(text, "`", "")
 
 	return strings.TrimSpace(text)

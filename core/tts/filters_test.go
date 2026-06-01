@@ -28,3 +28,12 @@ func TestFilterMarkdownRemovesCodeFencesWithoutDroppingCode(t *testing.T) {
 		t.Fatalf("FilterMarkdown() = %q, want %q", got, want)
 	}
 }
+
+func TestFilterMarkdownPreservesLooseTildes(t *testing.T) {
+	input := "Remove ~~deleted~~ but keep ~~ spaced ~~ and approx ~10."
+	want := "Remove  but keep ~~ spaced ~~ and approx ~10."
+
+	if got := FilterMarkdown(input); got != want {
+		t.Fatalf("FilterMarkdown() = %q, want %q", got, want)
+	}
+}
