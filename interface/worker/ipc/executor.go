@@ -352,6 +352,12 @@ func (e *ProcessJobExecutor) Close(ctx context.Context) error {
 	}
 
 	if cmd != nil && cmd.Process != nil {
+		e.mu.Lock()
+		if e.status == JobStatusRunning {
+			e.status = JobStatusFailed
+		}
+		e.mu.Unlock()
+
 		killDone := make(chan error, 1)
 		go func() {
 			killDone <- processKill(cmd.Process)

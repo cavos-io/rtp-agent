@@ -301,6 +301,9 @@ func TestProcessJobExecutorCloseRespectsContextWhenKillBlocks(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("Close() did not return after context deadline while process kill was blocked")
 	}
+	if got := executor.Status(); got != JobStatusFailed {
+		t.Fatalf("Status() after close kill timeout = %q, want %q", got, JobStatusFailed)
+	}
 }
 
 func TestProcessJobExecutorLaunchExecutableFailureDoesNotStart(t *testing.T) {
