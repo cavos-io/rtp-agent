@@ -14,17 +14,31 @@ import (
 )
 
 type FallbackAdapter struct {
-	stts             []STT
-	capabilities     STTCapabilities
-	maxRetryPerSTT   int
-	mu               sync.Mutex
-	available        []bool
-	recovering       []bool
-	recoveringStream []bool
+	stts                 []STT
+	capabilities         STTCapabilities
+	maxRetryPerSTT       int
+	mu                   sync.Mutex
+	available            []bool
+	recovering           []bool
+	recoveringStream     []bool
+	availabilityHandlers []availabilityHandlerSubscription
+	nextAvailabilityID   uint64
 }
 
 type FallbackAdapterOptions struct {
 	MaxRetryPerSTT int
+}
+
+type AvailabilityChangedEvent struct {
+	STT       STT
+	Available bool
+}
+
+type AvailabilityChangedHandler func(AvailabilityChangedEvent)
+
+type availabilityHandlerSubscription struct {
+	id      uint64
+	handler AvailabilityChangedHandler
 }
 
 type FallbackAllFailedError struct {
@@ -123,6 +137,38 @@ func (f *FallbackAdapter) Capabilities() STTCapabilities {
 	return f.capabilities
 }
 
+func (f *FallbackAdapter) OnAvailabilityChanged(handler AvailabilityChangedHandler) func() {
+	if handler == nil {
+		return func() {}
+	}
+	f.mu.Lock()
+	f.nextAvailabilityID++
+	id := f.nextAvailabilityID
+	f.availabilityHandlers = append(f.availabilityHandlers, availabilityHandlerSubscription{
+		id:      id,
+		handler: handler,
+	})
+	f.mu.Unlock()
+
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			f.removeAvailabilityChangedHandler(id)
+		})
+	}
+}
+
+func (f *FallbackAdapter) removeAvailabilityChangedHandler(id uint64) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for i, subscription := range f.availabilityHandlers {
+		if subscription.id == id {
+			f.availabilityHandlers = append(f.availabilityHandlers[:i], f.availabilityHandlers[i+1:]...)
+			return
+		}
+	}
+}
+
 func (f *FallbackAdapter) Recognize(ctx context.Context, frames []*model.AudioFrame, language string) (*SpeechEvent, error) {
 	startedAt := time.Now()
 	var lastErr error
@@ -206,11 +252,22 @@ func (f *FallbackAdapter) isAvailable(index int) bool {
 
 func (f *FallbackAdapter) setAvailable(index int, available bool) {
 	f.mu.Lock()
-	defer f.mu.Unlock()
 	if index < 0 || index >= len(f.available) {
+		f.mu.Unlock()
+		return
+	}
+	if f.available[index] == available {
+		f.mu.Unlock()
 		return
 	}
 	f.available[index] = available
+	event := AvailabilityChangedEvent{STT: f.stts[index], Available: available}
+	subscriptions := append([]availabilityHandlerSubscription(nil), f.availabilityHandlers...)
+	f.mu.Unlock()
+
+	for _, subscription := range subscriptions {
+		subscription.handler(event)
+	}
 }
 
 func (f *FallbackAdapter) markRecovering(index int) bool {

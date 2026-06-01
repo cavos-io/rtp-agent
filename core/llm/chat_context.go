@@ -523,18 +523,22 @@ func chatItemFromJSON(data []byte) (ChatItem, error) {
 		}, nil
 	case "agent_config_update":
 		var item struct {
-			ID           string   `json:"id"`
-			Instructions *string  `json:"instructions"`
-			ToolsAdded   []string `json:"tools_added"`
-			ToolsRemoved []string `json:"tools_removed"`
-			CreatedAt    *float64 `json:"created_at"`
+			ID           string          `json:"id"`
+			Instructions json.RawMessage `json:"instructions"`
+			ToolsAdded   []string        `json:"tools_added"`
+			ToolsRemoved []string        `json:"tools_removed"`
+			CreatedAt    *float64        `json:"created_at"`
 		}
 		if err := json.Unmarshal(data, &item); err != nil {
 			return nil, err
 		}
+		instructions, err := agentConfigInstructionsFromJSON(item.Instructions)
+		if err != nil {
+			return nil, err
+		}
 		return &AgentConfigUpdate{
 			ID:           itemIDOrDefault(item.ID),
-			Instructions: item.Instructions,
+			Instructions: instructions,
 			ToolsAdded:   item.ToolsAdded,
 			ToolsRemoved: item.ToolsRemoved,
 			CreatedAt:    chatItemCreatedAtOrDefault(item.CreatedAt),
@@ -542,6 +546,25 @@ func chatItemFromJSON(data []byte) (ChatItem, error) {
 	default:
 		return nil, fmt.Errorf("unsupported chat item type %q", discriminator.Type)
 	}
+}
+
+func agentConfigInstructionsFromJSON(data json.RawMessage) (*string, error) {
+	if len(data) == 0 || string(data) == "null" {
+		return nil, nil
+	}
+	var text string
+	if err := json.Unmarshal(data, &text); err == nil {
+		return &text, nil
+	}
+	content, err := chatContentFromJSON(data)
+	if err != nil {
+		return nil, err
+	}
+	if content.Instructions == nil {
+		return nil, fmt.Errorf("agent_config_update instructions must be a string or instructions object")
+	}
+	text = content.Instructions.String()
+	return &text, nil
 }
 
 func chatMessageFromJSON(data []byte) (*ChatMessage, error) {

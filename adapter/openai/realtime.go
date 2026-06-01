@@ -647,10 +647,25 @@ func (s *realtimeSession) trackOpenAIRealtimeEvent(ev map[string]any) (llm.Realt
 		item, _ := ev["item"].(map[string]any)
 		itemID, _ := item["id"].(string)
 		itemType, _ := item["type"].(string)
-		if itemID == "" || itemType != "message" || s.generation == nil {
+		if itemID == "" || s.generation == nil {
 			return llm.RealtimeEvent{}, false
 		}
-		s.closeRealtimeMessageStreams(s.generation.messages[itemID])
+		switch itemType {
+		case "message":
+			s.closeRealtimeMessageStreams(s.generation.messages[itemID])
+		case "function_call":
+			call, err := openAIRealtimeFunctionCall(item)
+			if err != nil {
+				return llm.RealtimeEvent{}, false
+			}
+			select {
+			case s.generation.functionCh <- call:
+			default:
+				logger.Logger.Warnw("dropping OpenAI realtime function call for full stream", nil, "item_id", itemID)
+			}
+		}
+	case "response.done":
+		s.closeRealtimeGeneration()
 	case "conversation.item.deleted":
 		itemID, _ := ev["item_id"].(string)
 		if itemID == "" {
@@ -780,6 +795,13 @@ func (s *realtimeSession) closeRealtimeGeneration() {
 		return
 	}
 	for _, msg := range s.generation.messages {
+		if msg.modalities == nil {
+			msg.modalities = []string{"audio", "text"}
+			select {
+			case msg.modalitiesCh <- msg.modalities:
+			default:
+			}
+		}
 		s.closeRealtimeMessageStreams(msg)
 		close(msg.modalitiesCh)
 	}

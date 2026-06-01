@@ -452,7 +452,7 @@ func TestFallbackSynthesizeStreamSetsStableSegmentID(t *testing.T) {
 	}
 }
 
-func TestFallbackSynthesizeStreamIgnoresPushAfterFirstFlush(t *testing.T) {
+func TestFallbackSynthesizeStreamForwardsPushAfterFlush(t *testing.T) {
 	providerStream := &metadataSynthesizeStream{
 		events: []*SynthesizedAudio{{Frame: &model.AudioFrame{Data: []byte{1}}}},
 	}
@@ -490,9 +490,12 @@ func TestFallbackSynthesizeStreamIgnoresPushAfterFirstFlush(t *testing.T) {
 	}
 	time.Sleep(25 * time.Millisecond)
 
-	wantCalls := []string{"push:first segment", "flush", "flush"}
+	wantCalls := []string{"push:first segment", "flush", "push:second segment", "flush"}
 	if strings.Join(providerStream.calls, ",") != strings.Join(wantCalls, ",") {
 		t.Fatalf("provider stream calls = %#v, want %#v", providerStream.calls, wantCalls)
+	}
+	if stream.(*fallbackSynthesizeStream).inputBuffer[2].text != "second segment" {
+		t.Fatalf("input buffer = %#v, want second segment buffered after flush", stream.(*fallbackSynthesizeStream).inputBuffer)
 	}
 }
 
@@ -1720,7 +1723,7 @@ func TestFallbackSynthesizeStreamEndsInputOnRetryAfterEndInput(t *testing.T) {
 	}
 }
 
-func TestFallbackSynthesizeStreamReplaysOnlyFirstSegmentInputOnRetry(t *testing.T) {
+func TestFallbackSynthesizeStreamReplaysPostFlushInputOnRetry(t *testing.T) {
 	primaryFailure := &blockingFailSynthesizeStream{
 		err:     errors.New("primary stream failed"),
 		release: make(chan struct{}),
@@ -1768,7 +1771,7 @@ func TestFallbackSynthesizeStreamReplaysOnlyFirstSegmentInputOnRetry(t *testing.
 		t.Fatalf("audio data = %q, want primary recovered", got)
 	}
 
-	wantCalls := []string{"push:hello", "flush"}
+	wantCalls := []string{"push:hello", "flush", "push:world"}
 	if len(recovered.calls) != len(wantCalls) {
 		t.Fatalf("replayed stream call count = %d, want %d", len(recovered.calls), len(wantCalls))
 	}

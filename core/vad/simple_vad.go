@@ -580,6 +580,7 @@ func (s *simpleVADStream) Close() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.closed {
+		s.closeEvents(true)
 		return nil
 	}
 	s.inputEnded = true
@@ -646,6 +647,12 @@ func (s *simpleVADStream) closeEvents(dropQueued bool) {
 	s.eventMu.Lock()
 	defer s.eventMu.Unlock()
 	if s.eventClosed {
+		if dropQueued {
+			for i := range s.eventQueue {
+				s.eventQueue[i] = nil
+			}
+			s.eventQueue = nil
+		}
 		return
 	}
 	if dropQueued {

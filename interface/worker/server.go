@@ -1560,14 +1560,21 @@ func (s *AgentServer) handleAssignment(ctx context.Context, req *livekit.JobAssi
 	if s.entrypointFnc != nil {
 		go func() {
 			status := livekit.JobStatus_JS_SUCCESS
+			defer func() {
+				if recovered := recover(); recovered != nil {
+					logger.Logger.Errorw("Job entrypoint panicked", fmt.Errorf("%v", recovered), "jobId", req.Job.Id)
+					status = livekit.JobStatus_JS_FAILED
+				}
+				if err := s.sendWorkerMessage(jobStatusMessage(req.Job.Id, status)); err != nil {
+					logger.Logger.Errorw("failed to update job status", err, "jobId", req.Job.Id)
+				}
+				s.finishJob(jobCtx)
+			}()
+
 			if err := s.entrypointFnc(jobCtx); err != nil {
 				logger.Logger.Errorw("Job entrypoint failed", err, "jobId", req.Job.Id)
 				status = livekit.JobStatus_JS_FAILED
 			}
-			if err := s.sendWorkerMessage(jobStatusMessage(req.Job.Id, status)); err != nil {
-				logger.Logger.Errorw("failed to update job status", err, "jobId", req.Job.Id)
-			}
-			s.finishJob(jobCtx)
 		}()
 	}
 }
@@ -1625,6 +1632,11 @@ func (s *AgentServer) ExecuteLocalJobWithOptions(ctx context.Context, roomName s
 
 	if s.entrypointFnc != nil {
 		go func() {
+			defer func() {
+				if recovered := recover(); recovered != nil {
+					logger.Logger.Errorw("Local job entrypoint panicked", fmt.Errorf("%v", recovered), "jobId", jobCtx.Job.Id)
+				}
+			}()
 			if err := s.entrypointFnc(jobCtx); err != nil {
 				logger.Logger.Errorw("Local job entrypoint failed", err, "jobId", jobCtx.Job.Id)
 			}

@@ -71,28 +71,35 @@ func (p *ProcPool) LaunchJob(ctx context.Context, job *livekit.Job) error {
 }
 
 func (p *ProcPool) LaunchRunningJob(ctx context.Context, info RunningJobInfo) error {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-
-	if p.closed {
-		return ErrProcPoolClosed
-	}
-
 	var lastErr error
 	for attempt := 0; attempt < maxLaunchAttempts; attempt++ {
-		p.pruneFinishedExecutorsLocked()
+		p.mu.Lock()
+		if p.closed {
+			p.mu.Unlock()
+			return ErrProcPoolClosed
+		}
+
+		closedExecutors := p.pruneFinishedExecutorsLocked()
 		if len(p.executors) >= p.maxProcesses {
+			p.mu.Unlock()
+			p.emitMany(ProcPoolEventProcessClosed, closedExecutors)
 			return fmt.Errorf("proc pool exhausted, max capacity reached")
 		}
 
 		id := "exec_" + uuid.NewString()[:8]
 		executor := p.executorFactory(id)
 		p.executors[id] = executor
+		p.mu.Unlock()
+
+		p.emitMany(ProcPoolEventProcessClosed, closedExecutors)
 		p.emit(ProcPoolEventProcessCreated, executor)
 
 		err := executor.LaunchRunningJob(ctx, info)
 		if err != nil {
+			p.mu.Lock()
 			delete(p.executors, id)
+			p.mu.Unlock()
+
 			closeCtx, cancel := p.closeContext()
 			_ = executor.Close(closeCtx)
 			cancel()
@@ -111,32 +118,35 @@ func (p *ProcPool) LaunchRunningJob(ctx context.Context, info RunningJobInfo) er
 	return lastErr
 }
 
-func (p *ProcPool) pruneFinishedExecutorsLocked() {
+func (p *ProcPool) pruneFinishedExecutorsLocked() []JobExecutor {
+	closedExecutors := make([]JobExecutor, 0)
 	for id, executor := range p.executors {
 		if !executor.Started() || executor.Status() == JobStatusRunning {
 			continue
 		}
 		delete(p.executors, id)
-		p.emit(ProcPoolEventProcessClosed, executor)
+		closedExecutors = append(closedExecutors, executor)
 	}
+	return closedExecutors
 }
 
 func (p *ProcPool) GetExecutors() []JobExecutor {
 	p.mu.Lock()
-	defer p.mu.Unlock()
-	p.pruneFinishedExecutorsLocked()
+	closedExecutors := p.pruneFinishedExecutorsLocked()
 
 	executors := make([]JobExecutor, 0, len(p.executors))
 	for _, e := range p.executors {
 		executors = append(executors, e)
 	}
+	p.mu.Unlock()
+
+	p.emitMany(ProcPoolEventProcessClosed, closedExecutors)
 	return executors
 }
 
 func (p *ProcPool) ActiveJobs() []RunningJobInfo {
 	p.mu.Lock()
-	defer p.mu.Unlock()
-	p.pruneFinishedExecutorsLocked()
+	closedExecutors := p.pruneFinishedExecutorsLocked()
 
 	jobs := make([]RunningJobInfo, 0, len(p.executors))
 	for _, executor := range p.executors {
@@ -146,6 +156,9 @@ func (p *ProcPool) ActiveJobs() []RunningJobInfo {
 		}
 		jobs = append(jobs, *runningJob)
 	}
+	p.mu.Unlock()
+
+	p.emitMany(ProcPoolEventProcessClosed, closedExecutors)
 	return jobs
 }
 
@@ -178,36 +191,51 @@ func (p *ProcPool) TargetIdleProcesses() int {
 
 func (p *ProcPool) GetByJobID(jobID string) JobExecutor {
 	p.mu.Lock()
-	defer p.mu.Unlock()
-	p.pruneFinishedExecutorsLocked()
+	closedExecutors := p.pruneFinishedExecutorsLocked()
 
 	for _, executor := range p.executors {
 		job := executor.Job()
 		if job != nil && job.Id == jobID {
+			p.mu.Unlock()
+			p.emitMany(ProcPoolEventProcessClosed, closedExecutors)
 			return executor
 		}
 	}
+	p.mu.Unlock()
+
+	p.emitMany(ProcPoolEventProcessClosed, closedExecutors)
 	return nil
 }
 
 func (p *ProcPool) Close() error {
 	p.mu.Lock()
-	defer p.mu.Unlock()
-
 	p.closed = true
-	ctx, cancel := p.closeContext()
-	defer cancel()
 
+	executors := make([]JobExecutor, 0, len(p.executors))
 	for _, e := range p.executors {
+		executors = append(executors, e)
+	}
+	p.executors = make(map[string]JobExecutor)
+	closeTimeout := p.closeTimeout
+	p.mu.Unlock()
+
+	ctx, cancel := closeContext(closeTimeout)
+	defer cancel()
+	for _, e := range executors {
 		_ = e.Close(ctx)
 		p.emit(ProcPoolEventProcessClosed, e)
 	}
-	p.executors = make(map[string]JobExecutor)
 	return nil
 }
 
 func (p *ProcPool) closeContext() (context.Context, context.CancelFunc) {
+	p.mu.Lock()
 	closeTimeout := p.closeTimeout
+	p.mu.Unlock()
+	return closeContext(closeTimeout)
+}
+
+func closeContext(closeTimeout time.Duration) (context.Context, context.CancelFunc) {
 	if closeTimeout <= 0 {
 		closeTimeout = 5 * time.Second
 	}
@@ -225,7 +253,20 @@ func clampInt(value int, min int, max int) int {
 }
 
 func (p *ProcPool) emit(event ProcPoolEvent, executor JobExecutor) {
-	for _, handler := range p.handlers[event] {
+	if executor == nil {
+		return
+	}
+
+	p.mu.Lock()
+	handlers := append([]func(JobExecutor){}, p.handlers[event]...)
+	p.mu.Unlock()
+	for _, handler := range handlers {
 		handler(executor)
+	}
+}
+
+func (p *ProcPool) emitMany(event ProcPoolEvent, executors []JobExecutor) {
+	for _, executor := range executors {
+		p.emit(event, executor)
 	}
 }

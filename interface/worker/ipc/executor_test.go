@@ -3,6 +3,7 @@ package ipc
 import (
 	"context"
 	"encoding/json"
+	"os/exec"
 	"strings"
 	"testing"
 	"time"
@@ -31,6 +32,39 @@ func TestThreadJobExecutorMarksPanicFailed(t *testing.T) {
 				return
 			}
 		}
+	}
+}
+
+func TestThreadJobExecutorCloseWaitsForEntrypoint(t *testing.T) {
+	release := make(chan struct{})
+	executor := NewThreadJobExecutor("exec-close", func() error {
+		<-release
+		return nil
+	})
+
+	if err := executor.LaunchJob(context.Background(), &livekit.Job{Id: "job-close"}); err != nil {
+		t.Fatalf("LaunchJob() error = %v", err)
+	}
+
+	closeDone := make(chan error, 1)
+	go func() {
+		closeDone <- executor.Close(context.Background())
+	}()
+
+	select {
+	case err := <-closeDone:
+		t.Fatalf("Close() returned before entrypoint completed: %v", err)
+	case <-time.After(25 * time.Millisecond):
+	}
+
+	close(release)
+	select {
+	case err := <-closeDone:
+		if err != nil {
+			t.Fatalf("Close() error = %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Close() did not return after entrypoint completed")
 	}
 }
 
@@ -187,6 +221,49 @@ func TestRunningJobInfoFromEnvFallsBackToLegacyJobJSON(t *testing.T) {
 	}
 	if running.AcceptArguments.Identity != "" {
 		t.Fatalf("identity = %q, want empty fallback", running.AcceptArguments.Identity)
+	}
+}
+
+func TestProcessJobExecutorCloseWaitsForProcessExit(t *testing.T) {
+	oldCommandContext := processCommandContext
+	processCommandContext = func(ctx context.Context, name string, args ...string) *exec.Cmd {
+		return exec.CommandContext(ctx, "sleep", "10")
+	}
+	defer func() { processCommandContext = oldCommandContext }()
+
+	executor := NewProcessJobExecutor("exec-process-close")
+	if err := executor.LaunchJob(context.Background(), &livekit.Job{Id: "job-process-close"}); err != nil {
+		t.Fatalf("LaunchJob() error = %v", err)
+	}
+	waitForProcessExecutorCommand(t, executor)
+
+	if err := executor.Close(context.Background()); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+	if got := executor.Status(); got != JobStatusFailed {
+		t.Fatalf("Status() after Close = %q, want %q", got, JobStatusFailed)
+	}
+}
+
+func waitForProcessExecutorCommand(t *testing.T, executor *ProcessJobExecutor) {
+	t.Helper()
+
+	deadline := time.After(time.Second)
+	ticker := time.NewTicker(time.Millisecond)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-deadline:
+			t.Fatal("process executor command was not started")
+		case <-ticker.C:
+			executor.mu.Lock()
+			started := executor.cmd != nil && executor.cmd.Process != nil
+			executor.mu.Unlock()
+			if started {
+				return
+			}
+		}
 	}
 }
 
