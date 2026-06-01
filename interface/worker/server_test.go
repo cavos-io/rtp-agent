@@ -2638,6 +2638,55 @@ func TestExecuteLocalJobRecordsRegisteredWorkerID(t *testing.T) {
 	}
 }
 
+func TestExecuteLocalJobWithOptionsCanRunReferenceConnectJob(t *testing.T) {
+	server := NewAgentServer(WorkerOptions{})
+	startedCh := make(chan *JobContext, 1)
+
+	if err := server.RTCSession(
+		func(ctx *JobContext) error {
+			startedCh <- ctx
+			return nil
+		},
+		nil,
+		nil,
+	); err != nil {
+		t.Fatalf("RTCSession() error = %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	doneCh := make(chan error, 1)
+	go func() {
+		doneCh <- server.ExecuteLocalJobWithOptions(ctx, "room-a", "agent-connect", LocalJobOptions{FakeJob: false})
+	}()
+
+	var jobCtx *JobContext
+	select {
+	case jobCtx = <-startedCh:
+	case <-time.After(time.Second):
+		t.Fatal("local connect job entrypoint did not run")
+	}
+
+	if jobCtx.IsFakeJob() {
+		t.Fatal("local connect job IsFakeJob() = true, want false")
+	}
+	if !strings.HasPrefix(jobCtx.Job.Id, "job-") {
+		t.Fatalf("local connect job ID = %q, want job- prefix", jobCtx.Job.Id)
+	}
+	if jobCtx.ParticipantIdentity() != "agent-connect" {
+		t.Fatalf("ParticipantIdentity() = %q, want agent-connect", jobCtx.ParticipantIdentity())
+	}
+
+	cancel()
+	select {
+	case err := <-doneCh:
+		if err != nil {
+			t.Fatalf("ExecuteLocalJobWithOptions() error = %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("ExecuteLocalJobWithOptions() did not return after context cancellation")
+	}
+}
+
 func TestExecuteLocalJobCleansUpAndRunsSessionEnd(t *testing.T) {
 	server := NewAgentServer(WorkerOptions{})
 	startedCh := make(chan *JobContext, 1)

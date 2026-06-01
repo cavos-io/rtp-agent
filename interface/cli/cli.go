@@ -322,7 +322,12 @@ func runConnect(server *worker.AgentServer) {
 
 	logger.Logger.Infow("Starting connect mode", "room", args.RoomName, "participant", args.ParticipantIdentity)
 
-	if err := server.ExecuteLocalJob(ctx, args.RoomName, args.ParticipantIdentity); err != nil {
+	if err := server.ExecuteLocalJobWithOptions(
+		ctx,
+		args.RoomName,
+		args.ParticipantIdentity,
+		worker.LocalJobOptions{FakeJob: false},
+	); err != nil {
 		logger.Logger.Errorw("Connect error", err)
 		os.Exit(1)
 	}
