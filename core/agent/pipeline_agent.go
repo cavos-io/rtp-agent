@@ -36,6 +36,7 @@ type pipelineReplyOptions struct {
 	Instructions string
 	ToolChoice   llm.ToolChoice
 	Tools        []string
+	ChatCtx      *llm.ChatContext
 }
 
 func NewPipelineAgent(
@@ -232,8 +233,13 @@ func (va *PipelineAgent) generateReplyWithOptions(opts pipelineReplyOptions) {
 	toolSteps := 0
 	for {
 		inferenceCtx := va.chatCtx
+		if opts.ChatCtx != nil {
+			inferenceCtx = opts.ChatCtx.Copy()
+		}
 		if opts.Instructions != "" {
-			inferenceCtx = va.chatCtx.Copy()
+			if inferenceCtx == va.chatCtx {
+				inferenceCtx = va.chatCtx.Copy()
+			}
 			inferenceCtx.Items = append([]llm.ChatItem{&llm.ChatMessage{
 				Role:    llm.ChatRoleSystem,
 				Content: []llm.ChatContent{{Text: opts.Instructions}},

@@ -3,7 +3,9 @@ package openai
 import (
 	"context"
 	"errors"
+	"io"
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 
@@ -42,8 +44,9 @@ func TestOpenAIChatAppliesConnectOptionsTimeoutToRequestContext(t *testing.T) {
 		llm.WithConnectOptions(llm.APIConnectOptions{Timeout: 75 * time.Millisecond}),
 	)
 
-	if !errors.Is(err, sentinelErr) {
-		t.Fatalf("Chat error = %v, want sentinel HTTP client error", err)
+	var connectionErr *llm.APIConnectionError
+	if !errors.As(err, &connectionErr) {
+		t.Fatalf("Chat error = %T %v, want APIConnectionError", err, err)
 	}
 	if !capture.hasDeadline {
 		t.Fatal("request context has no deadline, want connect options timeout deadline")
@@ -63,8 +66,9 @@ func TestOpenAIChatAppliesDefaultConnectOptionsTimeoutToRequestContext(t *testin
 
 	_, err := model.Chat(context.Background(), llm.NewChatContext())
 
-	if !errors.Is(err, sentinelErr) {
-		t.Fatalf("Chat error = %v, want sentinel HTTP client error", err)
+	var connectionErr *llm.APIConnectionError
+	if !errors.As(err, &connectionErr) {
+		t.Fatalf("Chat error = %T %v, want APIConnectionError", err, err)
 	}
 	if !capture.hasDeadline {
 		t.Fatal("request context has no deadline, want default connect timeout deadline")
@@ -160,9 +164,12 @@ func TestBuildOpenAIChatCompletionRequestAppliesExtraParams(t *testing.T) {
 }
 
 type captureDeadlineHTTPClient struct {
-	err         error
-	hasDeadline bool
-	remaining   time.Duration
+	err          error
+	hasDeadline  bool
+	remaining    time.Duration
+	statusCode   int
+	responseBody string
+	header       http.Header
 }
 
 func (c *captureDeadlineHTTPClient) Do(req *http.Request) (*http.Response, error) {
@@ -171,7 +178,72 @@ func (c *captureDeadlineHTTPClient) Do(req *http.Request) (*http.Response, error
 	if ok {
 		c.remaining = time.Until(deadline)
 	}
-	return nil, c.err
+	if c.err != nil {
+		return nil, c.err
+	}
+	statusCode := c.statusCode
+	if statusCode == 0 {
+		statusCode = http.StatusOK
+	}
+	header := c.header
+	if header == nil {
+		header = make(http.Header)
+	}
+	return &http.Response{
+		StatusCode: statusCode,
+		Status:     http.StatusText(statusCode),
+		Body:       io.NopCloser(strings.NewReader(c.responseBody)),
+		Header:     header,
+		Request:    req,
+	}, nil
+}
+
+func TestOpenAIChatReturnsAPIStatusErrorOnHTTPError(t *testing.T) {
+	capture := &captureDeadlineHTTPClient{
+		statusCode:   http.StatusTooManyRequests,
+		responseBody: `{"error":{"message":"rate limit","type":"rate_limit","code":"rate_limit"}}`,
+	}
+	config := openaisdk.DefaultConfig("test-key")
+	config.HTTPClient = capture
+	model := NewOpenAILLMWithConfig(config)
+	model.model = "gpt-4o"
+
+	_, err := model.Chat(context.Background(), llm.NewChatContext())
+
+	var statusErr *llm.APIStatusError
+	if !errors.As(err, &statusErr) {
+		t.Fatalf("Chat error = %T %v, want APIStatusError", err, err)
+	}
+	if statusErr.Message != "rate limit (429 Too Many Requests)" {
+		t.Fatalf("Message = %q, want formatted rate limit message", statusErr.Message)
+	}
+	if statusErr.StatusCode != http.StatusTooManyRequests {
+		t.Fatalf("StatusCode = %d, want 429", statusErr.StatusCode)
+	}
+	if !statusErr.Retryable {
+		t.Fatal("Retryable = false, want 429 retryable")
+	}
+}
+
+func TestOpenAIChatReturnsAPITimeoutErrorOnTransportDeadline(t *testing.T) {
+	capture := &captureDeadlineHTTPClient{err: context.DeadlineExceeded}
+	config := openaisdk.DefaultConfig("test-key")
+	config.HTTPClient = capture
+	model := NewOpenAILLMWithConfig(config)
+	model.model = "gpt-4o"
+
+	_, err := model.Chat(context.Background(), llm.NewChatContext())
+
+	var timeoutErr *llm.APITimeoutError
+	if !errors.As(err, &timeoutErr) {
+		t.Fatalf("Chat error = %T %v, want APITimeoutError", err, err)
+	}
+	if timeoutErr.Message != "Request timed out." {
+		t.Fatalf("Message = %q, want default timeout message", timeoutErr.Message)
+	}
+	if !timeoutErr.Retryable {
+		t.Fatal("Retryable = false, want timeout errors retryable")
+	}
 }
 
 func TestBuildOpenAIChatCompletionRequestMarksToolsStrict(t *testing.T) {

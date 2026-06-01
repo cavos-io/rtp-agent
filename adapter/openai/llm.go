@@ -6,6 +6,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/url"
+	"strings"
 
 	"github.com/cavos-io/rtp-agent/core/llm"
 	"github.com/sashabaranov/go-openai"
@@ -68,13 +70,40 @@ func (l *OpenAILLM) Chat(ctx context.Context, chatCtx *llm.ChatContext, opts ...
 		if cancel != nil {
 			cancel()
 		}
-		return nil, err
+		return nil, mapOpenAIError(err)
 	}
 
 	return &openaiStream{
 		stream: stream,
 		cancel: cancel,
 	}, nil
+}
+
+func mapOpenAIError(err error) error {
+	if err == nil {
+		return nil
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return llm.NewAPITimeoutError("")
+	}
+	var apiErr *openai.APIError
+	if errors.As(err, &apiErr) && apiErr.HTTPStatusCode != 0 {
+		return llm.CreateAPIErrorFromHTTP(apiErr.Message, apiErr.HTTPStatusCode, "", apiErr)
+	}
+	var requestErr *openai.RequestError
+	if errors.As(err, &requestErr) && requestErr.HTTPStatusCode != 0 {
+		message := strings.TrimSpace(string(requestErr.Body))
+		return llm.CreateAPIErrorFromHTTP(message, requestErr.HTTPStatusCode, "", message)
+	}
+	return llm.NewAPIConnectionError(openAIConnectionErrorMessage(err))
+}
+
+func openAIConnectionErrorMessage(err error) string {
+	var urlErr *url.Error
+	if errors.As(err, &urlErr) && urlErr.Err != nil {
+		return urlErr.Err.Error()
+	}
+	return err.Error()
 }
 
 func buildOpenAIChatCompletionRequest(model string, chatCtx *llm.ChatContext, options *llm.ChatOptions) openai.ChatCompletionRequest {

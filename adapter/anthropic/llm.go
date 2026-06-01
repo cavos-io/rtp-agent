@@ -6,9 +6,11 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 
 	"github.com/cavos-io/rtp-agent/core/llm"
@@ -116,7 +118,10 @@ func (l *AnthropicLLM) Chat(ctx context.Context, chatCtx *llm.ChatContext, opts 
 		if cancel != nil {
 			cancel()
 		}
-		return nil, err
+		if errors.Is(err, context.DeadlineExceeded) {
+			return nil, llm.NewAPITimeoutError("")
+		}
+		return nil, llm.NewAPIConnectionError(anthropicConnectionErrorMessage(err))
 	}
 
 	if resp.StatusCode != http.StatusOK {
@@ -134,6 +139,14 @@ func (l *AnthropicLLM) Chat(ctx context.Context, chatCtx *llm.ChatContext, opts 
 		reader: bufio.NewReader(resp.Body),
 		cancel: cancel,
 	}, nil
+}
+
+func anthropicConnectionErrorMessage(err error) string {
+	var urlErr *url.Error
+	if errors.As(err, &urlErr) && urlErr.Err != nil {
+		return urlErr.Err.Error()
+	}
+	return err.Error()
 }
 
 func applyAnthropicExtraParams(body map[string]any, params map[string]any) {

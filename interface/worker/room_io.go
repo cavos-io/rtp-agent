@@ -301,19 +301,23 @@ func (rio *RoomIO) handleAgentSessionClose(ev agent.CloseEvent) {
 	}
 	rio.deletingRoom = true
 	rio.mu.Unlock()
-	defer func() {
-		rio.mu.Lock()
-		rio.deletingRoom = false
-		rio.mu.Unlock()
-	}()
 
 	roomName := ""
 	if rio.roomName != nil {
 		roomName = rio.roomName()
 	}
-	if err := rio.Options.DeleteRoom(context.Background(), roomName); err != nil {
-		logger.Logger.Warnw("failed to delete room on agent session close", err, "room", roomName, "reason", ev.Reason)
-	}
+	deleteRoom := rio.Options.DeleteRoom
+	reason := ev.Reason
+	go func() {
+		defer func() {
+			rio.mu.Lock()
+			rio.deletingRoom = false
+			rio.mu.Unlock()
+		}()
+		if err := deleteRoom(context.Background(), roomName); err != nil {
+			logger.Logger.Warnw("failed to delete room on agent session close", err, "room", roomName, "reason", reason)
+		}
+	}()
 }
 
 func (rio *RoomIO) liveKitRoomName() string {

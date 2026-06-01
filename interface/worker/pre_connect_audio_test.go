@@ -61,6 +61,27 @@ func TestPreConnectAudioLatePublishAfterTimeoutIsNotReused(t *testing.T) {
 	}
 }
 
+func TestPreConnectAudioStaleBufferReturnsEmptyFrames(t *testing.T) {
+	handler := NewPreConnectAudioHandler(nil, time.Second)
+	handler.publishBuffer("track-stale", &PreConnectAudioBuffer{
+		Timestamp: time.Now().Add(-2 * time.Second),
+		Frames: []*model.AudioFrame{{
+			Data:              []byte{1, 2, 3, 4},
+			SampleRate:        24000,
+			NumChannels:       1,
+			SamplesPerChannel: 2,
+		}},
+	})
+
+	frames := handler.WaitForData(context.Background(), "track-stale")
+	if frames == nil {
+		t.Fatal("WaitForData() stale frames = nil, want empty slice")
+	}
+	if len(frames) != 0 {
+		t.Fatalf("WaitForData() stale frames len = %d, want 0", len(frames))
+	}
+}
+
 func waitForPreConnectBufferWaiter(t *testing.T, handler *PreConnectAudioHandler, trackID string) {
 	t.Helper()
 

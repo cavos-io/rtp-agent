@@ -628,6 +628,17 @@ func TestRunWorkerLifecyclePropagatesDrainErrors(t *testing.T) {
 	}
 }
 
+func TestRunWorkerLifecycleTreatsDrainTimeoutAsWarning(t *testing.T) {
+	runner := &fakeWorkerLifecycle{runErr: context.Canceled, drainErr: context.DeadlineExceeded}
+
+	if err := runWorkerLifecycle(context.Background(), runner, false); err != nil {
+		t.Fatalf("runWorkerLifecycle() error = %v, want nil for drain timeout", err)
+	}
+	if runner.drainCalls != 1 {
+		t.Fatalf("drainCalls = %d, want 1", runner.drainCalls)
+	}
+}
+
 func TestApplyWorkerArgsUsesDevDefaultLogLevel(t *testing.T) {
 	server := worker.NewAgentServer(worker.WorkerOptions{})
 

@@ -34,6 +34,8 @@ type SpeechGenerationOptions struct {
 	Instructions *llm.Instructions
 	ToolChoice   llm.ToolChoice
 	Tools        []string
+	ChatCtx      *llm.ChatContext
+	UserMessage  *llm.ChatMessage
 }
 
 func DefaultInputDetails() InputDetails {

@@ -63,9 +63,11 @@ var (
 
 type GenerateReplyOptions struct {
 	UserInput          string
+	UserMessage        *llm.ChatMessage
 	Instructions       string
 	ToolChoice         llm.ToolChoice
 	Tools              []string
+	ChatCtx            *llm.ChatContext
 	AllowInterruptions *bool
 	InputModality      string
 }
@@ -846,6 +848,12 @@ func (s *AgentSession) GenerateReplyWithOptions(ctx context.Context, opts Genera
 	if len(opts.Tools) > 0 {
 		handle.Generation.Tools = append([]string(nil), opts.Tools...)
 	}
+	if opts.ChatCtx != nil {
+		handle.Generation.ChatCtx = opts.ChatCtx.Copy()
+	}
+	if opts.UserMessage != nil {
+		handle.Generation.UserMessage = opts.UserMessage
+	}
 	s.EmitSpeechCreated(SpeechCreatedEvent{
 		UserInitiated: true,
 		Source:        "generate_reply",
@@ -853,7 +861,9 @@ func (s *AgentSession) GenerateReplyWithOptions(ctx context.Context, opts Genera
 	})
 
 	var userMessage *llm.ChatMessage
-	if opts.UserInput != "" {
+	if opts.UserMessage != nil {
+		userMessage = opts.UserMessage
+	} else if opts.UserInput != "" {
 		userMessage = &llm.ChatMessage{
 			Role: llm.ChatRoleUser,
 			Content: []llm.ChatContent{
