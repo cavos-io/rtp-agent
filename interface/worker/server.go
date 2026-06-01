@@ -320,6 +320,9 @@ func (s *AgentServer) ReloadRunningJobs(ctx context.Context, jobs []workeripc.Ru
 			jobURL = info.URL
 		}
 		jobCtx := NewJobContext(info.Job, jobURL, s.Options.APIKey, s.Options.APISecret)
+		if info.Job.GetEnableRecording() {
+			jobCtx.Report.RecordingOptions = allRecordingOptions()
+		}
 		jobCtx.token = info.Token
 		jobCtx.WorkerID = info.WorkerID
 		jobCtx.AcceptArguments = JobAcceptArguments{

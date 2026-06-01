@@ -1265,6 +1265,60 @@ func TestAgentServerReloadRunningJobsLaunchesRefreshedJobs(t *testing.T) {
 	}
 }
 
+func TestAgentServerReloadRunningJobsPreservesRecordingOptions(t *testing.T) {
+	originalToken, err := auth.NewAccessToken("api-key", "api-secret").
+		SetIdentity("agent-a").
+		SetVideoGrant(&auth.VideoGrant{RoomJoin: true, Room: "room-a", Agent: true}).
+		ToJWT()
+	if err != nil {
+		t.Fatalf("ToJWT() error = %v", err)
+	}
+
+	server := NewAgentServer(WorkerOptions{
+		WSRL:      "wss://new-livekit.example",
+		APIKey:    "api-key",
+		APISecret: "api-secret",
+	})
+	entrypointCh := make(chan *JobContext, 1)
+	releaseEntrypoint := make(chan struct{})
+	if err := server.RTCSession(func(ctx *JobContext) error {
+		entrypointCh <- ctx
+		<-releaseEntrypoint
+		return nil
+	}, nil, nil); err != nil {
+		t.Fatalf("RTCSession() error = %v", err)
+	}
+	t.Cleanup(func() {
+		close(releaseEntrypoint)
+	})
+
+	job := &livekit.Job{
+		Id:              "job-recording-reload",
+		Room:            &livekit.Room{Name: "room-a"},
+		EnableRecording: true,
+	}
+	err = server.ReloadRunningJobs(context.Background(), []ipc.RunningJobInfo{
+		{
+			AcceptArguments: ipc.JobAcceptArguments{Identity: "agent-a"},
+			Job:             job,
+			URL:             "wss://old-livekit.example",
+			Token:           originalToken,
+		},
+	}, time.Date(2026, 5, 31, 14, 0, 0, 0, time.UTC))
+	if err != nil {
+		t.Fatalf("ReloadRunningJobs() error = %v", err)
+	}
+
+	select {
+	case launched := <-entrypointCh:
+		if launched.Report.RecordingOptions != (agent.RecordingOptions{Audio: true, Traces: true, Logs: true, Transcript: true}) {
+			t.Fatalf("RecordingOptions = %#v, want all enabled", launched.Report.RecordingOptions)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("reloaded job entrypoint was not invoked")
+	}
+}
+
 func TestAgentServerHandleReloadMessageReportsAndReloadsJobs(t *testing.T) {
 	originalToken, err := auth.NewAccessToken("api-key", "api-secret").
 		SetIdentity("agent-a").
