@@ -172,6 +172,9 @@ type UserStateChangedEvent struct {
 func (e *UserStateChangedEvent) GetType() string { return "user_state_changed" }
 
 func NewAgentSession(agent AgentInterface, room *lksdk.Room, opts AgentSessionOptions) *AgentSession {
+	if opts.MaxToolSteps == 0 {
+		opts.MaxToolSteps = 3
+	}
 	baseAgent := agent.GetAgent()
 	return &AgentSession{
 		Agent:               agent,

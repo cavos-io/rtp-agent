@@ -324,6 +324,41 @@ func TestPipelineAgentForcesNoToolsAfterMaxToolSteps(t *testing.T) {
 	}
 }
 
+func TestPipelineAgentDefaultsMaxToolStepsToThree(t *testing.T) {
+	chatCtx := llm.NewChatContext()
+	l := &fakeGenerationLLM{
+		streams: []llm.LLMStream{
+			toolCallStream("call_lookup_1"),
+			toolCallStream("call_lookup_2"),
+			toolCallStream("call_lookup_3"),
+			&fakeGenerationLLMStream{
+				chunks: []*llm.ChatChunk{
+					{Delta: &llm.ChoiceDelta{Content: "final answer"}},
+				},
+			},
+		},
+	}
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	session.Tools = []llm.Tool{&fakeGenerationTool{name: "lookup", result: "done"}}
+	agent := NewPipelineAgent(nil, nil, l, &fakePipelineTTS{}, chatCtx)
+	agent.session = session
+	agent.ctx = context.Background()
+
+	agent.generateReply()
+
+	if len(l.calls) != 4 {
+		t.Fatalf("LLM Chat calls = %d, want 4", len(l.calls))
+	}
+	for i := 0; i < 3; i++ {
+		if l.calls[i].ToolChoice != nil {
+			t.Fatalf("call %d ToolChoice = %#v, want nil", i+1, l.calls[i].ToolChoice)
+		}
+	}
+	if l.calls[3].ToolChoice != "none" {
+		t.Fatalf("fourth ToolChoice = %#v, want none after default max tool steps", l.calls[3].ToolChoice)
+	}
+}
+
 func TestPipelineAgentEmitsFunctionToolsExecutedEvent(t *testing.T) {
 	chatCtx := llm.NewChatContext()
 	l := &fakeGenerationLLM{
@@ -380,6 +415,21 @@ func TestPipelineAgentEmitsFunctionToolsExecutedEvent(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("FunctionToolsExecutedEvents did not receive event")
+	}
+}
+
+func toolCallStream(callID string) *fakeGenerationLLMStream {
+	return &fakeGenerationLLMStream{
+		chunks: []*llm.ChatChunk{
+			{Delta: &llm.ChoiceDelta{
+				ToolCalls: []llm.FunctionToolCall{{
+					Type:      "function",
+					Name:      "lookup",
+					CallID:    callID,
+					Arguments: `{}`,
+				}},
+			}},
+		},
 	}
 }
 
