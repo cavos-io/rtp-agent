@@ -84,3 +84,10 @@ type RecognizeStream interface {
 	Close() error
 	Next() (*SpeechEvent, error)
 }
+
+type StreamTiming interface {
+	StartTimeOffset() float64
+	SetStartTimeOffset(offset float64)
+	StartTime() float64
+	SetStartTime(startTime float64)
+}

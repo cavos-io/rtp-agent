@@ -68,3 +68,39 @@ func TestSpeechEventCarriesReferenceUsageAndSpeechStartTime(t *testing.T) {
 		t.Fatalf("SpeechStartTime = %v, want 42.5", event.SpeechStartTime)
 	}
 }
+
+func TestStreamTimingInterfaceCapturesReferenceTimingAnchors(t *testing.T) {
+	var _ StreamTiming = (*fakeStreamTiming)(nil)
+
+	stream := &fakeStreamTiming{}
+	stream.SetStartTimeOffset(2.5)
+	stream.SetStartTime(42.0)
+
+	if stream.StartTimeOffset() != 2.5 {
+		t.Fatalf("StartTimeOffset = %v, want 2.5", stream.StartTimeOffset())
+	}
+	if stream.StartTime() != 42.0 {
+		t.Fatalf("StartTime = %v, want 42.0", stream.StartTime())
+	}
+}
+
+type fakeStreamTiming struct {
+	startTimeOffset float64
+	startTime       float64
+}
+
+func (f *fakeStreamTiming) StartTimeOffset() float64 {
+	return f.startTimeOffset
+}
+
+func (f *fakeStreamTiming) SetStartTimeOffset(offset float64) {
+	f.startTimeOffset = offset
+}
+
+func (f *fakeStreamTiming) StartTime() float64 {
+	return f.startTime
+}
+
+func (f *fakeStreamTiming) SetStartTime(startTime float64) {
+	f.startTime = startTime
+}
