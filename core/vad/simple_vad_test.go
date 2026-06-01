@@ -323,6 +323,35 @@ func TestSimpleVADWindowDurationPreservesLeftoverSamples(t *testing.T) {
 	assertCombinedFrames(t, start.Frames, audioFrame(16000, 512, 6000), audioFrame(16000, 288, 6000), secondPush)
 }
 
+func TestSimpleVADWindowDurationLargePushDoesNotBlock(t *testing.T) {
+	stream, err := NewSimpleVADWithOptions(SimpleVADOptions{
+		Threshold:      0.05,
+		WindowDuration: 0.032,
+	}).Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+
+	done := make(chan error, 1)
+	go func() {
+		done <- stream.PushFrame(audioFrame(16000, 512*12, 0))
+	}()
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("PushFrame() error = %v", err)
+		}
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("PushFrame() blocked while queuing windowed inference events")
+	}
+	defer stream.Close()
+
+	for range 12 {
+		assertEventType(t, stream, VADEventInferenceDone)
+	}
+}
+
 func TestSimpleVADUsesDeactivationThresholdWhileSpeaking(t *testing.T) {
 	stream, err := NewSimpleVADWithOptions(SimpleVADOptions{
 		Threshold:             0.1,

@@ -100,10 +100,10 @@ func (v *SimpleVAD) Stream(ctx context.Context) (VADStream, error) {
 	options := v.options
 	v.mu.RUnlock()
 	stream := &simpleVADStream{
-		vad:     v,
-		ctx:     ctx,
-		options: options,
-		events:  make(chan *VADEvent, 10),
+		vad:         v,
+		ctx:         ctx,
+		options:     options,
+		eventNotify: make(chan struct{}, 1),
 	}
 	v.mu.Lock()
 	v.streams[stream] = struct{}{}
@@ -115,7 +115,6 @@ type simpleVADStream struct {
 	vad                        *SimpleVAD
 	ctx                        context.Context
 	options                    SimpleVADOptions
-	events                     chan *VADEvent
 	speaking                   bool
 	closed                     bool
 	inputEnded                 bool
@@ -137,6 +136,10 @@ type simpleVADStream struct {
 	lastActivity               time.Time
 	metricsInferenceDuration   float64
 	metricsInferenceCount      int
+	eventQueue                 []*VADEvent
+	eventClosed                bool
+	eventNotify                chan struct{}
+	eventMu                    sync.Mutex
 	mu                         sync.Mutex
 }
 
@@ -196,7 +199,7 @@ func (s *simpleVADStream) processFrame(frame *model.AudioFrame) {
 	} else {
 		inferenceSilenceDuration += duration
 	}
-	s.events <- &VADEvent{
+	s.enqueueEvent(&VADEvent{
 		Type:                  VADEventInferenceDone,
 		SamplesIndex:          s.samplesIndex,
 		Timestamp:             s.timestamp,
@@ -208,7 +211,7 @@ func (s *simpleVADStream) processFrame(frame *model.AudioFrame) {
 		Speaking:              s.speaking,
 		RawAccumulatedSpeech:  s.accumulatedSpeechDuration,
 		RawAccumulatedSilence: s.accumulatedSilenceDuration,
-	}
+	})
 	s.collectInferenceMetrics(inferenceDuration)
 
 	if probability >= s.options.Threshold || (s.speaking && probability > s.options.DeactivationThreshold) {
@@ -224,14 +227,14 @@ func (s *simpleVADStream) processFrame(frame *model.AudioFrame) {
 				startFrames := s.startSpeechFrames()
 				s.speechFrames = append([]*model.AudioFrame(nil), startFrames...)
 				s.bufferedSpeechDuration = framesDuration(startFrames)
-				s.events <- &VADEvent{
+				s.enqueueEvent(&VADEvent{
 					Type:           VADEventStartOfSpeech,
 					SamplesIndex:   s.samplesIndex,
 					Timestamp:      s.timestamp,
 					SpeechDuration: s.speechDuration,
 					Frames:         combineFrames(startFrames),
 					Speaking:       true,
-				}
+				})
 				s.lastActivity = time.Now()
 			}
 		} else {
@@ -249,7 +252,7 @@ func (s *simpleVADStream) processFrame(frame *model.AudioFrame) {
 			if s.accumulatedSilenceDuration >= s.options.MinSilenceDuration {
 				s.speaking = false
 				frames := append([]*model.AudioFrame(nil), s.speechFrames...)
-				s.events <- &VADEvent{
+				s.enqueueEvent(&VADEvent{
 					Type:            VADEventEndOfSpeech,
 					SamplesIndex:    s.samplesIndex,
 					Timestamp:       s.timestamp,
@@ -257,7 +260,7 @@ func (s *simpleVADStream) processFrame(frame *model.AudioFrame) {
 					SilenceDuration: s.silenceDuration,
 					Frames:          combineFrames(frames),
 					Speaking:        false,
-				}
+				})
 				s.lastActivity = time.Now()
 				s.resetSegmentWithPrefixTail(frames)
 			}
@@ -329,7 +332,7 @@ func (s *simpleVADStream) EndInput() error {
 	s.resetState()
 	s.inputEnded = true
 	s.closed = true
-	close(s.events)
+	s.closeEvents()
 	s.vad.unregisterStream(s)
 	return nil
 }
@@ -341,20 +344,61 @@ func (s *simpleVADStream) Close() error {
 		return nil
 	}
 	s.closed = true
-	close(s.events)
+	s.closeEvents()
 	s.vad.unregisterStream(s)
 	return nil
 }
 
 func (s *simpleVADStream) Next() (*VADEvent, error) {
-	select {
-	case <-s.ctx.Done():
-		return nil, s.ctx.Err()
-	case ev, ok := <-s.events:
-		if !ok {
+	for {
+		s.eventMu.Lock()
+		if len(s.eventQueue) > 0 {
+			ev := s.eventQueue[0]
+			copy(s.eventQueue, s.eventQueue[1:])
+			s.eventQueue[len(s.eventQueue)-1] = nil
+			s.eventQueue = s.eventQueue[:len(s.eventQueue)-1]
+			s.eventMu.Unlock()
+			return ev, nil
+		}
+		if s.eventClosed {
+			s.eventMu.Unlock()
 			return nil, io.EOF
 		}
-		return ev, nil
+		notify := s.eventNotify
+		s.eventMu.Unlock()
+
+		select {
+		case <-s.ctx.Done():
+			return nil, s.ctx.Err()
+		case <-notify:
+		}
+	}
+}
+
+func (s *simpleVADStream) enqueueEvent(event *VADEvent) {
+	s.eventMu.Lock()
+	defer s.eventMu.Unlock()
+	if s.eventClosed {
+		return
+	}
+	s.eventQueue = append(s.eventQueue, event)
+	s.notifyEventsLocked()
+}
+
+func (s *simpleVADStream) closeEvents() {
+	s.eventMu.Lock()
+	defer s.eventMu.Unlock()
+	if s.eventClosed {
+		return
+	}
+	s.eventClosed = true
+	s.notifyEventsLocked()
+}
+
+func (s *simpleVADStream) notifyEventsLocked() {
+	select {
+	case s.eventNotify <- struct{}{}:
+	default:
 	}
 }
 
