@@ -313,6 +313,7 @@ func (s *simpleVADStream) updateOptions(options SimpleVADOptions) {
 	s.options = merged
 	s.trimSpeechFrames()
 	s.trimPrefixFrames()
+	s.trimPendingSpeechFrames()
 }
 
 func (s *simpleVADStream) setOptions(options SimpleVADOptions) {
@@ -324,6 +325,7 @@ func (s *simpleVADStream) setOptions(options SimpleVADOptions) {
 	s.options = options
 	s.trimSpeechFrames()
 	s.trimPrefixFrames()
+	s.trimPendingSpeechFrames()
 }
 
 func (s *simpleVADStream) PushFrame(frame *model.AudioFrame) error {
@@ -451,7 +453,7 @@ func (s *simpleVADStream) processFrame(frame *model.AudioFrame, duration float64
 
 		if !s.speaking {
 			s.silenceDuration += duration
-			s.pendingSpeechFrames = append(s.pendingSpeechFrames, frame)
+			s.appendPendingSpeechFrame(frame, duration)
 			if s.accumulatedSpeechDuration >= s.options.MinSpeechDuration {
 				s.speaking = true
 				s.speechDuration = s.accumulatedSpeechDuration
@@ -867,6 +869,50 @@ func (s *simpleVADStream) trimSpeechFrames() {
 	}
 	s.speechFrames = limited
 	s.bufferedSpeechDuration = buffered
+}
+
+func (s *simpleVADStream) appendPendingSpeechFrame(frame *model.AudioFrame, duration float64) {
+	bufferLimit, limitSet := s.maxBufferedDurationLimit()
+	if limitSet {
+		buffered := s.prefixDuration + framesDuration(s.pendingSpeechFrames)
+		if buffered+duration > bufferLimit {
+			remaining := bufferLimit - buffered
+			if remaining > 0 {
+				s.pendingSpeechFrames = append(s.pendingSpeechFrames, trimFrameEnd(frame, remaining))
+			}
+			return
+		}
+	}
+	s.pendingSpeechFrames = append(s.pendingSpeechFrames, frame)
+}
+
+func (s *simpleVADStream) trimPendingSpeechFrames() {
+	bufferLimit, limitSet := s.maxBufferedDurationLimit()
+	if !limitSet {
+		return
+	}
+
+	remaining := bufferLimit - s.prefixDuration
+	if remaining <= 0 {
+		s.pendingSpeechFrames = nil
+		return
+	}
+
+	var buffered float64
+	limited := s.pendingSpeechFrames[:0]
+	for _, frame := range s.pendingSpeechFrames {
+		duration := frameDuration(frame)
+		if buffered+duration > remaining {
+			partialDuration := remaining - buffered
+			if partialDuration > 0 {
+				limited = append(limited, trimFrameEnd(frame, partialDuration))
+			}
+			break
+		}
+		limited = append(limited, frame)
+		buffered += duration
+	}
+	s.pendingSpeechFrames = limited
 }
 
 func (s *simpleVADStream) maxBufferedDurationLimit() (float64, bool) {
