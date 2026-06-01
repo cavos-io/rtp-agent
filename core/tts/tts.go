@@ -69,6 +69,14 @@ type ChunkedStream interface {
 	Close() error
 }
 
+type DoneStream interface {
+	Done() bool
+}
+
+type ExceptionStream interface {
+	Exception() error
+}
+
 type SynthesizeStream interface {
 	PushText(text string) error
 	Flush() error

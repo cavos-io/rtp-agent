@@ -570,6 +570,94 @@ func TestSynthesizeWithStreamEmitsErrorOnStreamFailure(t *testing.T) {
 	}
 }
 
+func TestSynthesizeWithStreamReportsDoneAndExceptionAfterFailure(t *testing.T) {
+	wantErr := errors.New("provider failed")
+	provider := &fakeStreamingTTS{
+		stream: &fakeSynthesizeStream{emptyErr: wantErr},
+	}
+
+	chunked, err := SynthesizeWithStream(context.Background(), provider, "hello")
+	if err != nil {
+		t.Fatalf("SynthesizeWithStream() error = %v", err)
+	}
+	defer chunked.Close()
+
+	doneStream, ok := chunked.(DoneStream)
+	if !ok {
+		t.Fatal("chunked stream does not implement DoneStream")
+	}
+	exceptionStream, ok := chunked.(ExceptionStream)
+	if !ok {
+		t.Fatal("chunked stream does not implement ExceptionStream")
+	}
+	if doneStream.Done() {
+		t.Fatal("Done() = true before stream failure")
+	}
+	if err := exceptionStream.Exception(); err != nil {
+		t.Fatalf("Exception() before failure = %v, want nil", err)
+	}
+
+	_, err = chunked.Next()
+	if !errors.Is(err, wantErr) {
+		t.Fatalf("Next() error = %v, want %v", err, wantErr)
+	}
+	if !doneStream.Done() {
+		t.Fatal("Done() = false after stream failure")
+	}
+	if err := exceptionStream.Exception(); !errors.Is(err, wantErr) {
+		t.Fatalf("Exception() after failure = %v, want %v", err, wantErr)
+	}
+}
+
+func TestSynthesizeWithStreamReportsDoneAfterFinalTail(t *testing.T) {
+	provider := &fakeStreamingTTS{
+		stream: &fakeSynthesizeStream{
+			events: []*SynthesizedAudio{{Frame: &model.AudioFrame{
+				Data:              make([]byte, 24000*2),
+				SampleRate:        24000,
+				NumChannels:       1,
+				SamplesPerChannel: 24000,
+			}}},
+			emptyErr: io.EOF,
+		},
+	}
+
+	chunked, err := SynthesizeWithStream(context.Background(), provider, "hello")
+	if err != nil {
+		t.Fatalf("SynthesizeWithStream() error = %v", err)
+	}
+	defer chunked.Close()
+
+	doneStream, ok := chunked.(DoneStream)
+	if !ok {
+		t.Fatal("chunked stream does not implement DoneStream")
+	}
+	exceptionStream, ok := chunked.(ExceptionStream)
+	if !ok {
+		t.Fatal("chunked stream does not implement ExceptionStream")
+	}
+
+	if _, err := chunked.Next(); err != nil {
+		t.Fatalf("first Next() error = %v", err)
+	}
+	if doneStream.Done() {
+		t.Fatal("Done() = true before final tail")
+	}
+	tail, err := chunked.Next()
+	if err != nil {
+		t.Fatalf("second Next() error = %v", err)
+	}
+	if !tail.IsFinal {
+		t.Fatal("second audio IsFinal = false, want final tail")
+	}
+	if !doneStream.Done() {
+		t.Fatal("Done() = false after final tail")
+	}
+	if err := exceptionStream.Exception(); err != nil {
+		t.Fatalf("Exception() after final tail = %v, want nil", err)
+	}
+}
+
 type fakeStreamingTTS struct {
 	ErrorEmitter
 	MetricsEmitter

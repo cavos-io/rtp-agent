@@ -68,6 +68,8 @@ type chunkedStreamFromSynthesizeStream struct {
 	ttfb        float64
 	ttfbSet     bool
 	audioDur    float64
+	done        bool
+	exception   error
 }
 
 func (s *chunkedStreamFromSynthesizeStream) Next() (*SynthesizedAudio, error) {
@@ -82,17 +84,21 @@ func (s *chunkedStreamFromSynthesizeStream) Next() (*SynthesizedAudio, error) {
 					pending.SegmentID = ""
 					pending.IsFinal = true
 					s.pending = nil
+					s.markDone(nil)
 					s.emitMetrics()
 					return pending, nil
 				}
 				if !s.audioSeen && strings.TrimSpace(s.text) != "" {
 					err := fmt.Errorf("no audio frames were pushed for text: %s", s.text)
+					s.markDone(err)
 					s.emitError(err)
 					return nil, err
 				}
+				s.markDone(nil)
 				s.emitMetrics()
 			}
 			if !errors.Is(err, io.EOF) {
+				s.markDone(err)
 				s.emitError(err)
 			}
 			return nil, err
@@ -185,7 +191,23 @@ func (s *chunkedStreamFromSynthesizeStream) Close() error {
 		return nil
 	}
 	s.closed = true
+	s.markDone(nil)
 	return s.stream.Close()
+}
+
+func (s *chunkedStreamFromSynthesizeStream) Done() bool {
+	return s.done
+}
+
+func (s *chunkedStreamFromSynthesizeStream) Exception() error {
+	return s.exception
+}
+
+func (s *chunkedStreamFromSynthesizeStream) markDone(err error) {
+	s.done = true
+	if err != nil && !errors.Is(err, io.EOF) {
+		s.exception = err
+	}
 }
 
 func audioFrameDurationSeconds(frame *model.AudioFrame) float64 {
