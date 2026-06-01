@@ -478,6 +478,7 @@ func (s *simpleVADStream) processFrame(frame *model.AudioFrame, duration float64
 		s.accumulatedSpeechDuration = 0
 
 		if s.speaking {
+			s.speechDuration += duration
 			s.silenceDuration = s.accumulatedSilenceDuration
 			s.appendSpeechFrame(frame, duration)
 			if s.accumulatedSilenceDuration >= s.options.MinSilenceDuration {
@@ -487,7 +488,7 @@ func (s *simpleVADStream) processFrame(frame *model.AudioFrame, duration float64
 					Type:            VADEventEndOfSpeech,
 					SamplesIndex:    s.samplesIndex,
 					Timestamp:       s.timestamp,
-					SpeechDuration:  s.speechDuration,
+					SpeechDuration:  normalizeDuration(max(s.speechDuration-s.silenceDuration, 0)),
 					SilenceDuration: s.silenceDuration,
 					Frames:          combineFrames(frames),
 					Speaking:        false,
@@ -987,6 +988,10 @@ func framesDuration(frames []*model.AudioFrame) float64 {
 		duration += frameDuration(frame)
 	}
 	return duration
+}
+
+func normalizeDuration(duration float64) float64 {
+	return math.Round(duration*1e12) / 1e12
 }
 
 func combineFrames(frames []*model.AudioFrame) []*model.AudioFrame {

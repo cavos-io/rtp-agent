@@ -1475,6 +1475,55 @@ func TestSimpleVADRequiresMinimumSilenceDurationBeforeEnd(t *testing.T) {
 	assertCombinedFrames(t, end.Frames, speech, firstSilence, secondSilence, thirdSilence)
 }
 
+func TestSimpleVADCountsShortInternalSilenceAsSpeechDuration(t *testing.T) {
+	stream, err := NewSimpleVADWithOptions(SimpleVADOptions{
+		Threshold:          0.05,
+		MinSilenceDuration: 0.03,
+	}).Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	defer stream.Close()
+
+	firstSpeech := audioFrame(16000, 160, 6000)
+	internalSilence := audioFrame(16000, 160, 0)
+	secondSpeech := audioFrame(16000, 160, 6000)
+	firstTrailingSilence := audioFrame(16000, 160, 0)
+	secondTrailingSilence := audioFrame(16000, 160, 0)
+	thirdTrailingSilence := audioFrame(16000, 160, 0)
+	for _, frame := range []*model.AudioFrame{
+		firstSpeech,
+		internalSilence,
+		secondSpeech,
+		firstTrailingSilence,
+		secondTrailingSilence,
+		thirdTrailingSilence,
+	} {
+		if err := stream.PushFrame(frame); err != nil {
+			t.Fatalf("PushFrame() error = %v", err)
+		}
+	}
+
+	assertEventType(t, stream, VADEventInferenceDone)
+	assertEventType(t, stream, VADEventStartOfSpeech)
+	assertEventType(t, stream, VADEventInferenceDone)
+	assertEventType(t, stream, VADEventInferenceDone)
+	for range 3 {
+		assertEventType(t, stream, VADEventInferenceDone)
+	}
+	end := nextVADEvent(t, stream)
+	if end.Type != VADEventEndOfSpeech {
+		t.Fatalf("event type = %s, want %s", end.Type, VADEventEndOfSpeech)
+	}
+	if end.SpeechDuration != 0.03 {
+		t.Fatalf("SpeechDuration = %v, want 0.03 including short internal silence", end.SpeechDuration)
+	}
+	if end.SilenceDuration != 0.03 {
+		t.Fatalf("SilenceDuration = %v, want 0.03", end.SilenceDuration)
+	}
+	assertCombinedFrames(t, end.Frames, firstSpeech, internalSilence, secondSpeech, firstTrailingSilence, secondTrailingSilence, thirdTrailingSilence)
+}
+
 func TestSimpleVADRetainsTrailingPrefixAfterEndOfSpeech(t *testing.T) {
 	stream, err := NewSimpleVADWithOptions(SimpleVADOptions{
 		Threshold:             0.05,
