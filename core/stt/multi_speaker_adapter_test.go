@@ -72,6 +72,37 @@ func TestPrimarySpeakerDetectorSuppressesFormattedBackgroundText(t *testing.T) {
 	}
 }
 
+func TestPrimarySpeakerDetectorTreatsSilentRMSAsValidData(t *testing.T) {
+	detector := newPrimarySpeakerDetector(
+		true,
+		false,
+		"{text}",
+		"{text}",
+		DefaultPrimarySpeakerDetectionOptions(),
+	)
+	detector.rmsBuffer = []float64{0, 0, 0}
+	detector.pushedDuration = 0.3
+
+	event := detector.onSttEvent(&SpeechEvent{
+		Type: SpeechEventFinalTranscript,
+		Alternatives: []SpeechData{{
+			Text:      "quiet",
+			SpeakerID: "speaker-a",
+			StartTime: 0,
+			EndTime:   0.3,
+		}},
+	})
+	if event == nil {
+		t.Fatal("event = nil, want final transcript")
+	}
+	if detector.primarySpeaker != "speaker-a" {
+		t.Fatalf("primarySpeaker = %q, want speaker-a", detector.primarySpeaker)
+	}
+	if event.Alternatives[0].IsPrimarySpeaker == nil || !*event.Alternatives[0].IsPrimarySpeaker {
+		t.Fatalf("IsPrimarySpeaker = %#v, want true", event.Alternatives[0].IsPrimarySpeaker)
+	}
+}
+
 func TestPrimarySpeakerDetectorPushAudioInitializesByteStream(t *testing.T) {
 	detector := newPrimarySpeakerDetector(
 		true,
