@@ -329,6 +329,54 @@ func TestChatContextToProviderFormatEReturnsErrorForUnsupportedFormat(t *testing
 	}
 }
 
+func TestGoogleProviderFormatInjectsThoughtSignatures(t *testing.T) {
+	ctx := NewChatContext()
+	ctx.Items = []ChatItem{
+		&ChatMessage{ID: "assistant", Role: ChatRoleAssistant, Content: []ChatContent{{Text: "checking"}}},
+		&FunctionCall{ID: "assistant/tool", CallID: "call_lookup", Name: "lookup", Arguments: `{"city":"Paris"}`},
+		&FunctionCallOutput{ID: "output", CallID: "call_lookup", Name: "lookup", Output: "Paris"},
+	}
+
+	turns, _ := ctx.ToProviderFormat("google", ChatContextProviderFormatOptions{
+		ThoughtSignatures: map[string][]byte{"call_lookup": []byte("signature")},
+	})
+
+	if len(turns) == 0 {
+		t.Fatal("len(turns) = 0, want model turn with function_call")
+	}
+	parts := turns[0]["parts"].([]map[string]any)
+	if len(parts) < 2 {
+		t.Fatalf("model parts = %#v, want function_call part", parts)
+	}
+	if got, ok := parts[1]["thought_signature"].([]byte); !ok || string(got) != "signature" {
+		t.Fatalf("thought_signature = %#v, want signature bytes", parts[1]["thought_signature"])
+	}
+}
+
+func TestAnthropicProviderFormatCanInjectTrailingUserMessage(t *testing.T) {
+	ctx := NewChatContext()
+	ctx.Items = []ChatItem{
+		&ChatMessage{ID: "user", Role: ChatRoleUser, Content: []ChatContent{{Text: "hello"}}},
+		&ChatMessage{ID: "assistant", Role: ChatRoleAssistant, Content: []ChatContent{{Text: "hi"}}},
+	}
+
+	messages, _ := ctx.ToProviderFormat("anthropic", ChatContextProviderFormatOptions{
+		InjectTrailingUserMessage: boolPtr(true),
+	})
+
+	if len(messages) != 3 {
+		t.Fatalf("len(messages) = %d, want 3: %#v", len(messages), messages)
+	}
+	trailing := messages[2]
+	if trailing["role"] != "user" {
+		t.Fatalf("trailing message = %#v, want user role", trailing)
+	}
+	content := trailing["content"].([]map[string]any)
+	if len(content) != 1 || content[0]["type"] != "text" || content[0]["text"] != " " {
+		t.Fatalf("trailing content = %#v, want single blank text item", content)
+	}
+}
+
 func TestChatContextInsertOrdersItemsByCreatedAt(t *testing.T) {
 	ctx := NewChatContext()
 	ctx.Items = []ChatItem{

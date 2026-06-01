@@ -22,7 +22,9 @@ type ChatContextDictOptions struct {
 }
 
 type ChatContextProviderFormatOptions struct {
-	InjectDummyUserMessage *bool
+	InjectDummyUserMessage    *bool
+	InjectTrailingUserMessage *bool
+	ThoughtSignatures         map[string][]byte
 }
 
 func (o ChatContextProviderFormatOptions) injectDummyUserMessage() bool {
@@ -30,6 +32,13 @@ func (o ChatContextProviderFormatOptions) injectDummyUserMessage() bool {
 		return true
 	}
 	return *o.InjectDummyUserMessage
+}
+
+func (o ChatContextProviderFormatOptions) injectTrailingUserMessage() bool {
+	if o.InjectTrailingUserMessage == nil {
+		return false
+	}
+	return *o.InjectTrailingUserMessage
 }
 
 type ChatMessageArgs struct {
@@ -939,7 +948,7 @@ func (c *ChatContext) toGoogleProviderFormat(opts ChatContextProviderFormatOptio
 				flush()
 				currentRole = role
 			}
-			parts = append(parts, googleItemParts(item)...)
+			parts = append(parts, googleItemParts(item, opts)...)
 		}
 	}
 	flush()
@@ -997,6 +1006,13 @@ func (c *ChatContext) toAnthropicProviderFormat(opts ChatContextProviderFormatOp
 			"role":    "user",
 			"content": []map[string]any{{"text": "(empty)", "type": "text"}},
 		}}, messages...)
+	}
+
+	if opts.injectTrailingUserMessage() && len(messages) > 0 && messages[len(messages)-1]["role"] == "assistant" {
+		messages = append(messages, map[string]any{
+			"role":    "user",
+			"content": []map[string]any{{"text": " ", "type": "text"}},
+		})
 	}
 
 	return messages, map[string]any{"system_messages": systemMessages}
@@ -1460,7 +1476,7 @@ func googleItemRole(item ChatItem) string {
 	}
 }
 
-func googleItemParts(item ChatItem) []map[string]any {
+func googleItemParts(item ChatItem, opts ChatContextProviderFormatOptions) []map[string]any {
 	switch it := item.(type) {
 	case *ChatMessage:
 		parts := make([]map[string]any, 0, len(it.Content))
@@ -1480,13 +1496,19 @@ func googleItemParts(item ChatItem) []map[string]any {
 		if it.Arguments != "" {
 			_ = json.Unmarshal([]byte(it.Arguments), &args)
 		}
-		return []map[string]any{{
+		part := map[string]any{
 			"function_call": map[string]any{
 				"id":   it.CallID,
 				"name": it.Name,
 				"args": args,
 			},
-		}}
+		}
+		if opts.ThoughtSignatures != nil {
+			if signature, ok := opts.ThoughtSignatures[it.CallID]; ok {
+				part["thought_signature"] = signature
+			}
+		}
+		return []map[string]any{part}
 	case *FunctionCallOutput:
 		responseKey := "output"
 		if it.IsError {
