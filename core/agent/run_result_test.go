@@ -403,6 +403,35 @@ func TestRunAssertSkipNextEventIfLeavesNonMatchingCurrentEvent(t *testing.T) {
 	}
 }
 
+func TestRunAssertSkipNextEventIfConsumesMatchingMessageRole(t *testing.T) {
+	result := NewRunResult(llm.NewChatContext())
+	result.RecordItem(&llm.ChatMessage{ID: "msg_1", Role: llm.ChatRoleAssistant, CreatedAt: time.Now()})
+
+	if ok := result.Expect.SkipNextEventIf("message", RunEventCriteria{Role: llm.ChatRoleAssistant}); !ok {
+		t.Fatal("SkipNextEventIf returned false, want true for matching message role")
+	}
+	if err := result.Expect.NoMoreEvents().HasError(); err != nil {
+		t.Fatalf("NoMoreEvents returned error = %v, want nil after consuming matching role", err)
+	}
+}
+
+func TestRunAssertSkipNextEventIfLeavesNonMatchingFunctionCallName(t *testing.T) {
+	result := NewRunResult(llm.NewChatContext())
+	result.RecordItem(&llm.FunctionCall{
+		ID:        "fnc_1",
+		CallID:    "call_1",
+		Name:      "lookup",
+		CreatedAt: time.Now(),
+	})
+
+	if ok := result.Expect.SkipNextEventIf("function_call", RunEventCriteria{Name: "search"}); ok {
+		t.Fatal("SkipNextEventIf returned true, want false for non-matching function call name")
+	}
+	if err := result.Expect.NextEvent("function_call").NoMoreEvents().HasError(); err != nil {
+		t.Fatalf("NextEvent returned error = %v, want function call to remain after non-match", err)
+	}
+}
+
 func TestRunAssertSkipNextEventIfReturnsFalseWhenNoEventsRemain(t *testing.T) {
 	result := NewRunResult(llm.NewChatContext())
 

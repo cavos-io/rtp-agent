@@ -265,6 +265,15 @@ type RunAssert struct {
 	index   int
 }
 
+type RunEventCriteria struct {
+	Role      llm.ChatRole
+	Name      string
+	Arguments map[string]any
+	Output    string
+	IsError   *bool
+	NewAgent  *Agent
+}
+
 func (a *RunAssert) IsFunctionCall(name string) *RunAssert {
 	return a.IsFunctionCallWithArguments(name, nil)
 }
@@ -395,17 +404,48 @@ func (a *RunAssert) NextEvent(eventType ...string) *RunAssert {
 	return a
 }
 
-func (a *RunAssert) SkipNextEventIf(eventType string) bool {
+func (a *RunAssert) SkipNextEventIf(eventType string, criteria ...RunEventCriteria) bool {
 	events := a.events()
 	if a.index >= len(events) {
 		return false
 	}
-	if events[a.index].GetType() != eventType {
+	event := events[a.index]
+	if event.GetType() != eventType {
+		return false
+	}
+	if len(criteria) > 0 && !eventMatchesCriteria(event, criteria[0]) {
 		return false
 	}
 
 	a.index++
 	return true
+}
+
+func eventMatchesCriteria(event RunEvent, criteria RunEventCriteria) bool {
+	switch event := event.(type) {
+	case *ChatMessageEvent:
+		return criteria.Role == "" || event.Item.Role == criteria.Role
+	case *FunctionCallEvent:
+		if criteria.Name != "" && event.Item.Name != criteria.Name {
+			return false
+		}
+		if len(criteria.Arguments) > 0 {
+			return assertFunctionCallArguments(event.Item.Arguments, criteria.Arguments) == nil
+		}
+		return true
+	case *FunctionCallOutputEvent:
+		if criteria.Output != "" && event.Item.Output != criteria.Output {
+			return false
+		}
+		if criteria.IsError != nil && event.Item.IsError != *criteria.IsError {
+			return false
+		}
+		return true
+	case *AgentHandoffEvent:
+		return criteria.NewAgent == nil || event.NewAgent == criteria.NewAgent
+	default:
+		return true
+	}
 }
 
 func (a *RunAssert) SkipNext(count int) *RunAssert {
