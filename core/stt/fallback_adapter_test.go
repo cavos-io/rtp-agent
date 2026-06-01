@@ -1460,6 +1460,53 @@ func TestFallbackStreamTimesOutBlockedProvider(t *testing.T) {
 	}
 }
 
+func TestFallbackStreamTimesOutBlockedRecoveryProvider(t *testing.T) {
+	primaryFailure := &blockingFailRecognizeStream{
+		err:     errors.New("primary stream failed"),
+		release: make(chan struct{}),
+	}
+	recovery := newBlockingRecognizeStream()
+	primary := &metadataSTT{
+		label:        "primary",
+		capabilities: STTCapabilities{Streaming: true},
+		streams: []RecognizeStream{
+			primaryFailure,
+			recovery,
+		},
+	}
+	fallback := &metadataSTT{
+		label:        "fallback",
+		capabilities: STTCapabilities{Streaming: true},
+		stream:       newHeartbeatRecognizeStream(5 * time.Millisecond),
+	}
+	adapter := NewFallbackAdapterWithOptions([]STT{primary, fallback}, FallbackAdapterOptions{
+		MaxRetryPerSTT: 0,
+		AttemptTimeout: 20 * time.Millisecond,
+	})
+
+	stream, err := adapter.Stream(context.Background(), "en")
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+	defer stream.Close()
+
+	nextErr := make(chan error, 1)
+	go func() {
+		_, err := stream.Next()
+		nextErr <- err
+	}()
+
+	close(primaryFailure.release)
+	waitForStreamCalls(t, primary, 2)
+	waitForBlockingStreamClosed(t, recovery)
+	adapter.mu.Lock()
+	recovering := adapter.recoveringStream[0]
+	adapter.mu.Unlock()
+	if recovering {
+		t.Fatal("primary provider is still marked as recovering after recovery timeout")
+	}
+}
+
 func TestFallbackStreamReplaysFlushBoundariesOnRetry(t *testing.T) {
 	firstFrame := &model.AudioFrame{Data: []byte("1"), SampleRate: 16000, NumChannels: 1, SamplesPerChannel: 1}
 	secondFrame := &model.AudioFrame{Data: []byte("2"), SampleRate: 16000, NumChannels: 1, SamplesPerChannel: 1}
@@ -2074,6 +2121,45 @@ func (s *blockingRecognizeStream) Next() (*SpeechEvent, error) {
 	return nil, io.EOF
 }
 
+type heartbeatRecognizeStream struct {
+	interval  time.Duration
+	closeOnce sync.Once
+	closeCh   chan struct{}
+}
+
+func newHeartbeatRecognizeStream(interval time.Duration) *heartbeatRecognizeStream {
+	return &heartbeatRecognizeStream{interval: interval, closeCh: make(chan struct{})}
+}
+
+func (s *heartbeatRecognizeStream) PushFrame(*model.AudioFrame) error {
+	return nil
+}
+
+func (s *heartbeatRecognizeStream) Flush() error {
+	return nil
+}
+
+func (s *heartbeatRecognizeStream) Close() error {
+	s.closeOnce.Do(func() {
+		close(s.closeCh)
+	})
+	return nil
+}
+
+func (s *heartbeatRecognizeStream) Next() (*SpeechEvent, error) {
+	timer := time.NewTimer(s.interval)
+	defer timer.Stop()
+	select {
+	case <-timer.C:
+		return &SpeechEvent{
+			Type:         SpeechEventFinalTranscript,
+			Alternatives: []SpeechData{{Text: "heartbeat"}},
+		}, nil
+	case <-s.closeCh:
+		return nil, io.EOF
+	}
+}
+
 type liveRecoveryStream struct {
 	mu      sync.Mutex
 	calls   []string
@@ -2188,5 +2274,14 @@ func waitForRecoveryClosed(t *testing.T, stream *liveRecoveryStream) {
 			t.Fatal("recovery stream was not closed")
 		case <-ticker.C:
 		}
+	}
+}
+
+func waitForBlockingStreamClosed(t *testing.T, stream *blockingRecognizeStream) {
+	t.Helper()
+	select {
+	case <-stream.closeCh:
+	case <-time.After(200 * time.Millisecond):
+		t.Fatal("blocking stream was not closed")
 	}
 }

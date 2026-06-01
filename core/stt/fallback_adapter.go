@@ -737,7 +737,7 @@ func (s *fallbackRecognizeStream) tryRecoverStream(index int) {
 		defer s.removeRecovery(stream)
 
 		for {
-			ev, err := stream.Next()
+			ev, err := s.nextRecoveryStreamEvent(stream)
 			if err != nil {
 				return
 			}
@@ -749,6 +749,33 @@ func (s *fallbackRecognizeStream) tryRecoverStream(index int) {
 			return
 		}
 	}()
+}
+
+func (s *fallbackRecognizeStream) nextRecoveryStreamEvent(stream RecognizeStream) (*SpeechEvent, error) {
+	if s.adapter.attemptTimeout <= 0 {
+		return stream.Next()
+	}
+
+	type nextResult struct {
+		event *SpeechEvent
+		err   error
+	}
+	resultCh := make(chan nextResult, 1)
+	go func() {
+		event, err := stream.Next()
+		resultCh <- nextResult{event: event, err: err}
+	}()
+
+	timer := time.NewTimer(s.adapter.attemptTimeout)
+	defer timer.Stop()
+
+	select {
+	case result := <-resultCh:
+		return result.event, result.err
+	case <-timer.C:
+		_ = stream.Close()
+		return nil, context.DeadlineExceeded
+	}
 }
 
 func (f *FallbackAdapter) setRecoveryStream(index int, stream RecognizeStream) {
