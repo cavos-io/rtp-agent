@@ -744,10 +744,10 @@ func (s *fallbackRecognizeStream) tryRecoverStream(index int) {
 	s.recoveries = append(s.recoveries, stream)
 
 	go func() {
-		defer s.adapter.clearRecoveringStream(index)
-		defer s.adapter.setRecoveryStream(index, nil)
 		defer stream.Close()
 		defer s.removeRecovery(stream)
+		defer s.adapter.setRecoveryStream(index, nil)
+		defer s.adapter.clearRecoveringStream(index)
 
 		for {
 			ev, err := s.nextRecoveryStreamEvent(stream)

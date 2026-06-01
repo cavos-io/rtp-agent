@@ -21,51 +21,51 @@ const (
 )
 
 type SpeechData struct {
-	Language         string
-	Text             string
-	StartTime        float64
-	EndTime          float64
-	Confidence       float64
-	SpeakerID        string
-	IsPrimarySpeaker *bool
-	Words            []TimedString
-	SourceLanguages  []string
-	SourceTexts      []string
-	TargetLanguages  []string
-	TargetTexts      []string
-	Metadata         map[string]any
+	Language         string         `json:"language"`
+	Text             string         `json:"text"`
+	StartTime        float64        `json:"start_time"`
+	EndTime          float64        `json:"end_time"`
+	Confidence       float64        `json:"confidence"`
+	SpeakerID        string         `json:"speaker_id"`
+	IsPrimarySpeaker *bool          `json:"is_primary_speaker"`
+	Words            []TimedString  `json:"words"`
+	SourceLanguages  []string       `json:"source_languages"`
+	SourceTexts      []string       `json:"source_texts"`
+	TargetLanguages  []string       `json:"target_languages"`
+	TargetTexts      []string       `json:"target_texts"`
+	Metadata         map[string]any `json:"metadata"`
 }
 
 type RecognitionUsage struct {
-	AudioDuration float64
-	InputTokens   int
-	OutputTokens  int
+	AudioDuration float64 `json:"audio_duration"`
+	InputTokens   int     `json:"input_tokens"`
+	OutputTokens  int     `json:"output_tokens"`
 }
 
 type TimedString struct {
-	Text            string
-	StartTime       float64
-	EndTime         float64
-	Confidence      float64
-	StartTimeOffset float64
-	SpeakerID       string
+	Text            string  `json:"text"`
+	StartTime       float64 `json:"start_time"`
+	EndTime         float64 `json:"end_time"`
+	Confidence      float64 `json:"confidence"`
+	StartTimeOffset float64 `json:"start_time_offset"`
+	SpeakerID       string  `json:"speaker_id"`
 }
 
 type SpeechEvent struct {
-	Type             SpeechEventType
-	RequestID        string
-	Alternatives     []SpeechData
-	RecognitionUsage *RecognitionUsage
-	SpeechStartTime  *float64
-	Interrupted      bool
+	Type             SpeechEventType   `json:"type"`
+	RequestID        string            `json:"request_id"`
+	Alternatives     []SpeechData      `json:"alternatives"`
+	RecognitionUsage *RecognitionUsage `json:"recognition_usage"`
+	SpeechStartTime  *float64          `json:"speech_start_time"`
+	Interrupted      bool              `json:"interrupted"`
 }
 
 type STTCapabilities struct {
-	Streaming         bool
-	InterimResults    bool
-	Diarization       bool
-	AlignedTranscript string
-	OfflineRecognize  bool
+	Streaming         bool   `json:"streaming"`
+	InterimResults    bool   `json:"interim_results"`
+	Diarization       bool   `json:"diarization"`
+	AlignedTranscript string `json:"aligned_transcript"`
+	OfflineRecognize  bool   `json:"offline_recognize"`
 }
 
 const STTErrorType = "stt_error"

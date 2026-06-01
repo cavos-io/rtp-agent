@@ -77,6 +77,111 @@ func TestSpeechEventCarriesReferenceUsageAndSpeechStartTime(t *testing.T) {
 	}
 }
 
+func TestSpeechEventMarshalJSONMatchesReferenceFieldNames(t *testing.T) {
+	isPrimary := true
+	speechStartTime := 12.5
+	event := SpeechEvent{
+		Type:      SpeechEventRecognitionUsage,
+		RequestID: "req-1",
+		Alternatives: []SpeechData{{
+			Language:         "en",
+			Text:             "hello",
+			StartTime:        1.0,
+			EndTime:          2.0,
+			Confidence:       0.9,
+			SpeakerID:        "speaker-a",
+			IsPrimarySpeaker: &isPrimary,
+			Words: []TimedString{{
+				Text:            "hello",
+				StartTime:       1.0,
+				EndTime:         2.0,
+				Confidence:      0.9,
+				StartTimeOffset: 0.25,
+				SpeakerID:       "speaker-a",
+			}},
+			SourceLanguages: []string{"en-US"},
+			SourceTexts:     []string{"hello"},
+			TargetLanguages: []string{"es"},
+			TargetTexts:     []string{"hola"},
+			Metadata:        map[string]any{"provider": "test"},
+		}},
+		RecognitionUsage: &RecognitionUsage{AudioDuration: 1.25, InputTokens: 3, OutputTokens: 5},
+		SpeechStartTime:  &speechStartTime,
+	}
+
+	data, err := json.Marshal(event)
+	if err != nil {
+		t.Fatalf("Marshal SpeechEvent returned error: %v", err)
+	}
+
+	var payload map[string]any
+	if err := json.Unmarshal(data, &payload); err != nil {
+		t.Fatalf("Unmarshal SpeechEvent payload returned error: %v", err)
+	}
+	if payload["request_id"] != "req-1" {
+		t.Fatalf("request_id = %v, want req-1; payload %s", payload["request_id"], data)
+	}
+	if payload["recognition_usage"] == nil {
+		t.Fatalf("recognition_usage missing from payload: %s", data)
+	}
+	if payload["speech_start_time"] != 12.5 {
+		t.Fatalf("speech_start_time = %v, want 12.5", payload["speech_start_time"])
+	}
+	if _, ok := payload["RequestID"]; ok {
+		t.Fatalf("CamelCase RequestID serialized in payload: %s", data)
+	}
+
+	alternatives := payload["alternatives"].([]any)
+	alternative := alternatives[0].(map[string]any)
+	if alternative["start_time"] != 1.0 || alternative["end_time"] != 2.0 {
+		t.Fatalf("alternative timing = (%v, %v), want snake_case start/end", alternative["start_time"], alternative["end_time"])
+	}
+	if alternative["speaker_id"] != "speaker-a" {
+		t.Fatalf("speaker_id = %v, want speaker-a", alternative["speaker_id"])
+	}
+	if alternative["is_primary_speaker"] != true {
+		t.Fatalf("is_primary_speaker = %v, want true", alternative["is_primary_speaker"])
+	}
+	if _, ok := alternative["StartTime"]; ok {
+		t.Fatalf("CamelCase StartTime serialized in alternative: %s", data)
+	}
+
+	words := alternative["words"].([]any)
+	word := words[0].(map[string]any)
+	if word["start_time_offset"] != 0.25 {
+		t.Fatalf("word start_time_offset = %v, want 0.25", word["start_time_offset"])
+	}
+	if word["speaker_id"] != "speaker-a" {
+		t.Fatalf("word speaker_id = %v, want speaker-a", word["speaker_id"])
+	}
+}
+
+func TestSTTCapabilitiesMarshalJSONMatchesReferenceFieldNames(t *testing.T) {
+	data, err := json.Marshal(STTCapabilities{
+		Streaming:         true,
+		InterimResults:    true,
+		Diarization:       true,
+		AlignedTranscript: "word",
+		OfflineRecognize:  true,
+	})
+	if err != nil {
+		t.Fatalf("Marshal STTCapabilities returned error: %v", err)
+	}
+
+	var payload map[string]any
+	if err := json.Unmarshal(data, &payload); err != nil {
+		t.Fatalf("Unmarshal STTCapabilities payload returned error: %v", err)
+	}
+	for _, key := range []string{"streaming", "interim_results", "diarization", "aligned_transcript", "offline_recognize"} {
+		if _, ok := payload[key]; !ok {
+			t.Fatalf("%s missing from payload: %s", key, data)
+		}
+	}
+	if _, ok := payload["InterimResults"]; ok {
+		t.Fatalf("CamelCase InterimResults serialized in payload: %s", data)
+	}
+}
+
 func TestSTTErrorCarriesReferenceErrorPayload(t *testing.T) {
 	underlying := errors.New("provider disconnected")
 	before := time.Now()
