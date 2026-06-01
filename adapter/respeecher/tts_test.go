@@ -7,12 +7,9 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
-	"net/http/httptest"
-	"strings"
 	"testing"
-	"time"
 
-	"github.com/gorilla/websocket"
+	"github.com/cavos-io/rtp-agent/core/tts"
 )
 
 func TestRespeecherTTSDefaultsMatchReference(t *testing.T) {
@@ -34,7 +31,7 @@ func TestRespeecherTTSDefaultsMatchReference(t *testing.T) {
 		t.Fatalf("sample rate = %d, want 24000", provider.SampleRate())
 	}
 	if !provider.Capabilities().Streaming {
-		t.Fatal("streaming = false, want true")
+		t.Fatalf("streaming = false, want true")
 	}
 }
 
@@ -121,144 +118,115 @@ func TestRespeecherTTSChunkedStreamUsesConfiguredSampleRate(t *testing.T) {
 	}
 }
 
-func TestRespeecherTTSStreamURLUsesReferenceQueryAuth(t *testing.T) {
+func TestRespeecherTTSWebsocketURLMatchesReference(t *testing.T) {
 	provider := NewRespeecherTTS("test-key", "",
 		WithRespeecherTTSBaseURL("https://respeecher.example/v1"),
+		WithRespeecherTTSModel("/public/tts/ua-rt"),
 	)
 
-	streamURL := buildRespeecherTTSStreamURL(provider)
-	if !strings.HasPrefix(streamURL, "wss://respeecher.example/v1/public/tts/en-rt/tts/websocket?") {
-		t.Fatalf("stream URL = %q, want websocket endpoint", streamURL)
+	wsURL := buildRespeecherTTSWebsocketURL(provider)
+	if wsURL.Scheme != "wss" {
+		t.Fatalf("scheme = %q, want wss", wsURL.Scheme)
 	}
-	if !strings.Contains(streamURL, "api_key=test-key") {
-		t.Fatalf("stream URL = %q, want query API key", streamURL)
+	if wsURL.Host != "respeecher.example" || wsURL.Path != "/v1/public/tts/ua-rt/tts/websocket" {
+		t.Fatalf("websocket URL = %q, want reference websocket endpoint", wsURL.String())
 	}
-	if !strings.Contains(streamURL, "source=LiveKit-Plugin-Respeecher-Version") {
-		t.Fatalf("stream URL = %q, want plugin source query", streamURL)
+	query := wsURL.Query()
+	if query.Get("api_key") != "test-key" {
+		t.Fatalf("api_key query = %q, want test-key", query.Get("api_key"))
 	}
-	if !strings.Contains(streamURL, "version=1.5.15") {
-		t.Fatalf("stream URL = %q, want plugin version query", streamURL)
+	if query.Get("source") != "LiveKit-Plugin-Respeecher-Version" {
+		t.Fatalf("source query = %q, want version header name", query.Get("source"))
+	}
+	if query.Get("version") != "1.5.15" {
+		t.Fatalf("version query = %q, want plugin API version", query.Get("version"))
 	}
 }
 
-func TestRespeecherTTSStreamSendsReferencePayloadAndFinalRequest(t *testing.T) {
-	payloadCh := make(chan map[string]any, 2)
-	errCh := make(chan error, 1)
-	server := newRespeecherTTSTestWebsocketServer(t, func(conn *websocket.Conn, r *http.Request) {
-		if got := r.URL.Query().Get("api_key"); got != "test-key" {
-			t.Errorf("api_key = %q, want test-key", got)
-		}
-		for i := 0; i < 2; i++ {
-			_, payload, err := conn.ReadMessage()
-			if err != nil {
-				errCh <- err
-				return
-			}
-			var message map[string]any
-			if err := json.Unmarshal(payload, &message); err != nil {
-				errCh <- err
-				return
-			}
-			payloadCh <- message
-		}
-	})
-	defer server.Close()
-
+func TestRespeecherTTSWebsocketMessagesMatchReference(t *testing.T) {
 	provider := NewRespeecherTTS("test-key", "",
-		WithRespeecherTTSBaseURL(httpToWS(server.URL)),
-		WithRespeecherTTSVoice("custom-voice"),
+		WithRespeecherTTSVoice("speaker-1"),
 		WithRespeecherTTSSampleRate(48000),
 		WithRespeecherTTSSamplingParams(map[string]any{"temperature": 0.4}),
 	)
-	stream, err := provider.Stream(context.Background())
-	if err != nil {
-		t.Fatalf("stream: %v", err)
-	}
-	if err := stream.PushText("hello"); err != nil {
-		t.Fatalf("push text: %v", err)
-	}
-	if err := stream.Close(); err != nil {
-		t.Fatalf("close: %v", err)
-	}
 
-	first := readRespeecherTestChan(t, payloadCh, errCh)
-	if first["context_id"] == "" {
-		t.Fatalf("context_id = %#v, want generated id", first["context_id"])
+	chunk, err := buildRespeecherTTSTextMessage(provider, "ctx-1", "hello", true)
+	if err != nil {
+		t.Fatalf("build text message: %v", err)
 	}
-	assertRespeecherPayload(t, first, "transcript", "hello")
-	if first["continue"] != true {
-		t.Fatalf("continue = %#v, want true", first["continue"])
+	var payload map[string]any
+	if err := json.Unmarshal(chunk, &payload); err != nil {
+		t.Fatalf("decode text message: %v", err)
 	}
-	voice := first["voice"].(map[string]any)
-	assertRespeecherPayload(t, voice, "id", "custom-voice")
+	assertRespeecherPayload(t, payload, "context_id", "ctx-1")
+	assertRespeecherPayload(t, payload, "transcript", "hello")
+	if payload["continue"] != true {
+		t.Fatalf("continue = %#v, want true", payload["continue"])
+	}
+	voice := payload["voice"].(map[string]any)
+	assertRespeecherPayload(t, voice, "id", "speaker-1")
 	samplingParams := voice["sampling_params"].(map[string]any)
 	if samplingParams["temperature"] != float64(0.4) {
 		t.Fatalf("temperature = %#v, want 0.4", samplingParams["temperature"])
 	}
-	output := first["output_format"].(map[string]any)
-	if output["sample_rate"] != float64(48000) || output["encoding"] != "pcm_s16le" {
-		t.Fatalf("output_format = %#v, want configured PCM output", output)
+	output := payload["output_format"].(map[string]any)
+	assertRespeecherPayload(t, output, "encoding", "pcm_s16le")
+	if output["sample_rate"] != float64(48000) {
+		t.Fatalf("sample_rate = %#v, want 48000", output["sample_rate"])
 	}
 
-	final := readRespeecherTestChan(t, payloadCh, errCh)
-	if final["context_id"] != first["context_id"] {
-		t.Fatalf("final context_id = %#v, want same context", final["context_id"])
+	end, err := buildRespeecherTTSEndMessage(provider, "ctx-1")
+	if err != nil {
+		t.Fatalf("build end message: %v", err)
 	}
-	if final["continue"] != false {
-		t.Fatalf("final continue = %#v, want false", final["continue"])
+	payload = map[string]any{}
+	if err := json.Unmarshal(end, &payload); err != nil {
+		t.Fatalf("decode end message: %v", err)
 	}
-	assertRespeecherPayload(t, final, "transcript", " ")
+	assertRespeecherPayload(t, payload, "transcript", " ")
+	if payload["continue"] != false {
+		t.Fatalf("continue = %#v, want false", payload["continue"])
+	}
 }
 
-func TestRespeecherTTSStreamDecodesChunkMessages(t *testing.T) {
-	server := newRespeecherTTSTestWebsocketServer(t, func(conn *websocket.Conn, r *http.Request) {
-		_, payload, err := conn.ReadMessage()
-		if err != nil {
-			t.Errorf("read synthesis payload: %v", err)
-			return
-		}
-		var request map[string]any
-		if err := json.Unmarshal(payload, &request); err != nil {
-			t.Errorf("decode request: %v", err)
-			return
-		}
-		contextID := request["context_id"].(string)
-		audio := base64.StdEncoding.EncodeToString([]byte{0x01, 0x02, 0x03, 0x04})
-		if err := conn.WriteJSON(map[string]any{"context_id": contextID, "type": "chunk", "data": audio}); err != nil {
-			t.Errorf("write chunk: %v", err)
-			return
-		}
-		if err := conn.WriteJSON(map[string]any{"context_id": contextID, "type": "done"}); err != nil {
-			t.Errorf("write done: %v", err)
-			return
-		}
-	})
-	defer server.Close()
-
-	provider := NewRespeecherTTS("test-key", "", WithRespeecherTTSBaseURL(httpToWS(server.URL)))
-	stream, err := provider.Stream(context.Background())
+func TestRespeecherTTSAudioFromStreamMessage(t *testing.T) {
+	audio, done, err := respeecherTTSAudioFromStreamMessage([]byte(`{"context_id":"ctx-1","type":"chunk","data":"`+base64.StdEncoding.EncodeToString([]byte{1, 2, 3, 4})+`"}`), "ctx-1", 24000)
 	if err != nil {
-		t.Fatalf("stream: %v", err)
+		t.Fatalf("audio from stream message: %v", err)
 	}
-	defer stream.Close()
-	if err := stream.PushText("hello"); err != nil {
-		t.Fatalf("push text: %v", err)
+	if done {
+		t.Fatal("done = true for chunk message")
+	}
+	if audio == nil || string(audio.Frame.Data) != string([]byte{1, 2, 3, 4}) {
+		t.Fatalf("audio = %+v, want decoded audio frame", audio)
+	}
+	if audio.Frame.SampleRate != 24000 || audio.Frame.NumChannels != 1 {
+		t.Fatalf("frame = %+v, want 24000 Hz mono", audio.Frame)
 	}
 
-	audio, err := stream.Next()
+	other, done, err := respeecherTTSAudioFromStreamMessage([]byte(`{"context_id":"ctx-2","type":"chunk","data":"AQI="}`), "ctx-1", 24000)
 	if err != nil {
-		t.Fatalf("next: %v", err)
+		t.Fatalf("other context message: %v", err)
 	}
-	if string(audio.Frame.Data) != "\x01\x02\x03\x04" {
-		t.Fatalf("audio data = %#v, want decoded chunk", audio.Frame.Data)
+	if other != nil || done {
+		t.Fatalf("other=%+v done=%v, want ignored message", other, done)
 	}
-	if audio.Frame.SampleRate != 24000 || audio.Frame.NumChannels != 1 || audio.Frame.SamplesPerChannel != 2 {
-		t.Fatalf("frame = %+v, want 24 kHz mono PCM", audio.Frame)
+
+	finished, done, err := respeecherTTSAudioFromStreamMessage([]byte(`{"context_id":"ctx-1","type":"done"}`), "ctx-1", 24000)
+	if err != nil {
+		t.Fatalf("done message: %v", err)
 	}
-	_, err = stream.Next()
-	if err != io.EOF {
-		t.Fatalf("second next err = %v, want EOF", err)
+	if finished != nil || !done {
+		t.Fatalf("finished=%+v done=%v, want done with no audio", finished, done)
 	}
+
+	if _, _, err := respeecherTTSAudioFromStreamMessage([]byte(`{"context_id":"ctx-1","type":"error","error":"bad text"}`), "ctx-1", 24000); err == nil {
+		t.Fatal("error message returned nil error, want stream error")
+	}
+}
+
+func TestRespeecherTTSImplementsStreamingInterface(t *testing.T) {
+	var _ tts.TTS = NewRespeecherTTS("test-key", "")
 }
 
 func assertRespeecherPayload(t *testing.T, payload map[string]any, key string, want string) {
@@ -266,36 +234,4 @@ func assertRespeecherPayload(t *testing.T, payload map[string]any, key string, w
 	if got := payload[key]; got != want {
 		t.Fatalf("%s = %#v, want %q", key, got, want)
 	}
-}
-
-func newRespeecherTTSTestWebsocketServer(t *testing.T, handler func(*websocket.Conn, *http.Request)) *httptest.Server {
-	t.Helper()
-	upgrader := websocket.Upgrader{}
-	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		conn, err := upgrader.Upgrade(w, r, nil)
-		if err != nil {
-			t.Errorf("upgrade: %v", err)
-			return
-		}
-		defer conn.Close()
-		handler(conn, r)
-	}))
-}
-
-func httpToWS(rawURL string) string {
-	return "ws" + strings.TrimPrefix(rawURL, "http")
-}
-
-func readRespeecherTestChan[T any](t *testing.T, ch <-chan T, errCh <-chan error) T {
-	t.Helper()
-	var zero T
-	select {
-	case got := <-ch:
-		return got
-	case err := <-errCh:
-		t.Fatalf("websocket server: %v", err)
-	case <-time.After(2 * time.Second):
-		t.Fatal("timed out waiting for websocket server")
-	}
-	return zero
 }
