@@ -37,14 +37,16 @@ var (
 
 	completeLinksPattern  = regexp.MustCompile(`\[[^\]]*\]\([^)]*\)`)
 	completeImagesPattern = regexp.MustCompile(`!\[[^\]]*\]\([^)]*\)`)
+	inlineSplitTokens     = " ,.?!;，。？！；"
 )
 
 type TextTransformBuffer struct {
-	buffer string
+	buffer          string
+	bufferIsNewline bool
 }
 
 func NewTextTransformBuffer() *TextTransformBuffer {
-	return &TextTransformBuffer{}
+	return &TextTransformBuffer{bufferIsNewline: true}
 }
 
 func (b *TextTransformBuffer) Push(text string) []string {
@@ -52,10 +54,36 @@ func (b *TextTransformBuffer) Push(text string) []string {
 		return nil
 	}
 	b.buffer += text
-	if hasIncompleteMarkdownPattern(b.buffer) {
-		return nil
+
+	if strings.Contains(b.buffer, "\n") {
+		lines := strings.Split(b.buffer, "\n")
+		b.buffer = lines[len(lines)-1]
+
+		out := make([]string, 0, len(lines)-1)
+		for i, line := range lines[:len(lines)-1] {
+			isNewline := true
+			if i == 0 {
+				isNewline = b.bufferIsNewline
+			}
+			out = appendTransformedText(out, line+"\n", isNewline, false)
+		}
+		b.bufferIsNewline = true
+		return out
 	}
-	return b.flush()
+
+	lastSplitPos := strings.LastIndexAny(b.buffer, inlineSplitTokens)
+	if lastSplitPos >= 1 {
+		processable := b.buffer[:lastSplitPos]
+		rest := b.buffer[lastSplitPos:]
+		if !hasIncompleteMarkdownPattern(processable) {
+			b.buffer = rest
+			out := appendTransformedText(nil, processable, b.bufferIsNewline, false)
+			b.bufferIsNewline = false
+			return out
+		}
+	}
+
+	return nil
 }
 
 func (b *TextTransformBuffer) Flush() []string {
@@ -67,10 +95,20 @@ func FilterMarkdown(text string) string {
 		return ""
 	}
 
-	// Line patterns
-	text = headerPattern.ReplaceAllString(text, "")
-	text = listPattern.ReplaceAllString(text, "")
-	text = quotePattern.ReplaceAllString(text, "")
+	text = filterMarkdown(text, true, true)
+	return text
+}
+
+func filterMarkdown(text string, applyLinePatterns bool, trim bool) string {
+	if text == "" {
+		return ""
+	}
+
+	if applyLinePatterns {
+		text = headerPattern.ReplaceAllString(text, "")
+		text = listPattern.ReplaceAllString(text, "")
+		text = quotePattern.ReplaceAllString(text, "")
+	}
 
 	// Inline patterns
 	text = imagePattern.ReplaceAllString(text, "$1")
@@ -86,7 +124,10 @@ func FilterMarkdown(text string) string {
 	// Final cleanup
 	text = strings.ReplaceAll(text, "`", "")
 
-	return strings.TrimSpace(text)
+	if trim {
+		return strings.TrimSpace(text)
+	}
+	return text
 }
 
 func FilterEmoji(text string) string {
@@ -99,16 +140,31 @@ func ApplyTextTransforms(text string) string {
 	return text
 }
 
+func applyTextTransforms(text string, applyLinePatterns bool, trim bool) string {
+	text = filterMarkdown(text, applyLinePatterns, trim)
+	text = FilterEmoji(text)
+	return text
+}
+
 func (b *TextTransformBuffer) flush() []string {
 	if b.buffer == "" {
 		return nil
 	}
-	text := ApplyTextTransforms(b.buffer)
+	text := applyTextTransforms(b.buffer, b.bufferIsNewline, false)
 	b.buffer = ""
+	b.bufferIsNewline = true
 	if text == "" {
 		return nil
 	}
 	return []string{text}
+}
+
+func appendTransformedText(out []string, text string, applyLinePatterns bool, trim bool) []string {
+	text = applyTextTransforms(text, applyLinePatterns, trim)
+	if text == "" {
+		return out
+	}
+	return append(out, text)
 }
 
 func hasIncompleteMarkdownPattern(buffer string) bool {

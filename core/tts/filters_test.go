@@ -1,6 +1,9 @@
 package tts
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestFilterMarkdownRemovesInlineFormatting(t *testing.T) {
 	input := "# Greeting\n\nThis is **bold**, *italic*, __strong__, and _emphasis_.\n- [Link](https://example.com)\n![Alt text](image.png)"
@@ -63,4 +66,46 @@ func TestFilterMarkdownRemovesSingleCharacterStrikethrough(t *testing.T) {
 	if got := FilterMarkdown(input); got != want {
 		t.Fatalf("FilterMarkdown() = %q, want %q", got, want)
 	}
+}
+
+func TestTextTransformBufferYieldsBeforeTrailingSplitToken(t *testing.T) {
+	buffer := NewTextTransformBuffer()
+
+	if got, want := buffer.Push("Hello, "), []string{"Hello,"}; !equalStringSlices(got, want) {
+		t.Fatalf("Push() = %#v, want %#v", got, want)
+	}
+	if got := buffer.Push("world"); len(got) != 0 {
+		t.Fatalf("Push() = %#v, want no output before flush", got)
+	}
+	if got, want := buffer.Flush(), []string{" world"}; !equalStringSlices(got, want) {
+		t.Fatalf("Flush() = %#v, want %#v", got, want)
+	}
+}
+
+func TestTextTransformBufferFiltersMarkdownAcrossChunks(t *testing.T) {
+	buffer := NewTextTransformBuffer()
+
+	chunks := append(buffer.Push("Say **bo"), buffer.Push("ld** now")...)
+	chunks = append(chunks, buffer.Flush()...)
+
+	if got, want := strings.Join(chunks, ""), "Say bold now"; got != want {
+		t.Fatalf("joined output = %q, want %q; chunks = %#v", got, want, chunks)
+	}
+	for _, chunk := range chunks {
+		if strings.Contains(chunk, "**") {
+			t.Fatalf("chunk %q leaked markdown markers; chunks = %#v", chunk, chunks)
+		}
+	}
+}
+
+func equalStringSlices(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }

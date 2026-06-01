@@ -56,6 +56,8 @@ type streamAdapterWrapper struct {
 	inputDone bool
 	started   bool
 	flushed   bool
+
+	segmentPending *SynthesizedAudio
 }
 
 type streamAdapterInput struct {
@@ -89,18 +91,22 @@ func (w *streamAdapterWrapper) run() {
 		for {
 			select {
 			case <-w.ctx.Done():
-				tokenizer.Flush()
-				tokenizer.Close()
+				tokenizer.AClose()
 				return
 			case input, ok := <-w.inputCh:
 				if !ok {
+					if w.isClosed() {
+						tokenizer.AClose()
+						return
+					}
 					tokenizer.Flush()
 					tokenizer.Close()
 					return
 				}
 				if input.flush {
 					tokenizer.Flush()
-					continue
+					tokenizer.Close()
+					return
 				}
 				tokenizer.PushText(input.text)
 			}
@@ -120,6 +126,7 @@ func (w *streamAdapterWrapper) run() {
 			}
 		}
 	}
+	w.flushSegmentPending(true)
 }
 
 func (w *streamAdapterWrapper) synthesize(text string, segmentID string) error {
@@ -127,6 +134,8 @@ func (w *streamAdapterWrapper) synthesize(text string, segmentID string) error {
 	if synthText == "" {
 		return nil
 	}
+
+	w.flushSegmentPending(false)
 
 	stream, err := w.adapter.tts.Synthesize(w.ctx, synthText)
 	if err != nil {
@@ -146,7 +155,7 @@ func (w *streamAdapterWrapper) synthesize(text string, segmentID string) error {
 		if err != nil {
 			if errors.Is(err, io.EOF) {
 				if pending != nil {
-					w.sendSynthesizedAudio(pending, text, segmentID, true, transcriptPending)
+					w.setSegmentPending(pending, text, segmentID, transcriptPending)
 				} else {
 					return fmt.Errorf("no audio frames were pushed for text: %s", synthText)
 				}
@@ -178,6 +187,27 @@ func (w *streamAdapterWrapper) synthesize(text string, segmentID string) error {
 		pending = tail
 		pendingTail = false
 	}
+}
+
+func (w *streamAdapterWrapper) setSegmentPending(audio *SynthesizedAudio, text string, segmentID string, includeTranscript bool) {
+	audio = cloneSynthesizedAudio(audio)
+	audio.SegmentID = segmentID
+	audio.RequestID = w.requestID
+	audio.IsFinal = false
+	if includeTranscript {
+		audio.DeltaText = text
+	}
+	w.segmentPending = audio
+}
+
+func (w *streamAdapterWrapper) flushSegmentPending(isFinal bool) {
+	if w.segmentPending == nil {
+		return
+	}
+	audio := cloneSynthesizedAudio(w.segmentPending)
+	audio.IsFinal = isFinal
+	w.segmentPending = nil
+	w.eventCh <- audio
 }
 
 func (w *streamAdapterWrapper) sendSynthesizedAudio(audio *SynthesizedAudio, text string, segmentID string, isFinal bool, includeTranscript bool) {
@@ -221,6 +251,12 @@ func (w *streamAdapterWrapper) clearActiveStream(stream ChunkedStream) {
 	if w.active == stream {
 		w.active = nil
 	}
+}
+
+func (w *streamAdapterWrapper) isClosed() bool {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.closed
 }
 
 func (w *streamAdapterWrapper) PushText(text string) error {

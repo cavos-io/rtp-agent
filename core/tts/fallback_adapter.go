@@ -390,7 +390,7 @@ func (s *fallbackChunkedStream) tryStartStream(index int) error {
 }
 
 func (s *fallbackChunkedStream) monitorStream() {
-	audioSent := false
+	outputSent := false
 	var pending *SynthesizedAudio
 	pendingTail := false
 	for {
@@ -404,9 +404,9 @@ func (s *fallbackChunkedStream) monitorStream() {
 
 		ev, err := stream.Next()
 		if err != nil {
-			if errors.Is(err, io.EOF) || audioSent {
+			if errors.Is(err, io.EOF) || outputSent {
 				_ = stream.Close()
-				if errors.Is(err, io.EOF) && !audioSent && strings.TrimSpace(s.text) != "" {
+				if errors.Is(err, io.EOF) && !outputSent && pending == nil && strings.TrimSpace(s.text) != "" {
 					s.errCh <- fmt.Errorf("no audio frames were pushed for text: %s", s.text)
 					return
 				}
@@ -415,6 +415,7 @@ func (s *fallbackChunkedStream) monitorStream() {
 					pending.IsFinal = true
 					select {
 					case s.eventCh <- pending:
+						outputSent = true
 					case <-s.closeCh:
 						return
 					}
@@ -431,6 +432,8 @@ func (s *fallbackChunkedStream) monitorStream() {
 
 			logger.Logger.Warnw("TTS synthesize stream failed, attempting fallback", err, "failed_tts", s.adapter.ttss[s.activeIndex].Label())
 			stream.Close()
+			pending = nil
+			pendingTail = false
 
 			nextIndex := s.activeIndex + 1
 			if s.canRetryTTS(s.activeIndex) {
@@ -459,7 +462,6 @@ func (s *fallbackChunkedStream) monitorStream() {
 		ev.RequestID = s.requestID
 		ev.SegmentID = ""
 
-		audioSent = true
 		if pending != nil {
 			combined, combineErr := combineAudioFrames(pending.Frame, ev.Frame)
 			if pendingTail && combineErr == nil {
@@ -470,6 +472,7 @@ func (s *fallbackChunkedStream) monitorStream() {
 				pending.IsFinal = false
 				select {
 				case s.eventCh <- pending:
+					outputSent = true
 				case <-s.closeCh:
 					return
 				}
@@ -483,6 +486,7 @@ func (s *fallbackChunkedStream) monitorStream() {
 			head.IsFinal = false
 			select {
 			case s.eventCh <- head:
+				outputSent = true
 			case <-s.closeCh:
 				return
 			}
@@ -651,7 +655,7 @@ func (s *fallbackSynthesizeStream) replayBufferedText(stream SynthesizeStream) e
 }
 
 func (s *fallbackSynthesizeStream) monitorStream() {
-	audioSent := false
+	outputSent := false
 	var pending *SynthesizedAudio
 	pendingTail := false
 	for {
@@ -665,9 +669,9 @@ func (s *fallbackSynthesizeStream) monitorStream() {
 
 		ev, err := stream.Next()
 		if err != nil {
-			if errors.Is(err, io.EOF) || audioSent {
+			if errors.Is(err, io.EOF) || outputSent {
 				_ = stream.Close()
-				if errors.Is(err, io.EOF) && !audioSent && strings.TrimSpace(s.pushedText()) != "" {
+				if errors.Is(err, io.EOF) && !outputSent && pending == nil && strings.TrimSpace(s.pushedText()) != "" {
 					s.errCh <- fmt.Errorf("no audio frames were pushed for text: %s", s.pushedText())
 					return
 				}
@@ -676,6 +680,7 @@ func (s *fallbackSynthesizeStream) monitorStream() {
 					pending.IsFinal = true
 					select {
 					case s.eventCh <- pending:
+						outputSent = true
 					case <-s.closeCh:
 						return
 					}
@@ -692,6 +697,8 @@ func (s *fallbackSynthesizeStream) monitorStream() {
 
 			logger.Logger.Warnw("TTS stream failed, attempting fallback", err, "failed_tts", s.adapter.ttss[s.activeIndex].Label())
 			stream.Close()
+			pending = nil
+			pendingTail = false
 
 			nextIndex := s.activeIndex + 1
 			if s.canRetryTTS(s.activeIndex) {
@@ -721,7 +728,6 @@ func (s *fallbackSynthesizeStream) monitorStream() {
 		ev.SegmentID = s.segmentID
 
 		providerFinal := ev.IsFinal
-		audioSent = true
 		if pending != nil {
 			combined, combineErr := combineAudioFrames(pending.Frame, ev.Frame)
 			if pendingTail && combineErr == nil {
@@ -732,6 +738,7 @@ func (s *fallbackSynthesizeStream) monitorStream() {
 				pending.IsFinal = false
 				select {
 				case s.eventCh <- pending:
+					outputSent = true
 				case <-s.closeCh:
 					return
 				}
@@ -746,6 +753,7 @@ func (s *fallbackSynthesizeStream) monitorStream() {
 				head.IsFinal = false
 				select {
 				case s.eventCh <- head:
+					outputSent = true
 				case <-s.closeCh:
 					return
 				}
@@ -757,6 +765,7 @@ func (s *fallbackSynthesizeStream) monitorStream() {
 			ev.IsFinal = true
 			select {
 			case s.eventCh <- ev:
+				outputSent = true
 			case <-s.closeCh:
 				return
 			}
@@ -771,6 +780,7 @@ func (s *fallbackSynthesizeStream) monitorStream() {
 			head.IsFinal = false
 			select {
 			case s.eventCh <- head:
+				outputSent = true
 			case <-s.closeCh:
 				return
 			}
