@@ -268,18 +268,12 @@ func TestAgentUpdateChatContextWhileRunningReplacesInstructionMessage(t *testing
 
 func TestAgentTaskCompleteIsOneTime(t *testing.T) {
 	task := NewAgentTask[string]("collect data")
-	task.Complete("first")
+	if err := task.Complete("first"); err != nil {
+		t.Fatalf("Complete(first) error = %v, want nil", err)
+	}
 
-	returned := make(chan struct{})
-	go func() {
-		task.Complete("second")
-		close(returned)
-	}()
-
-	select {
-	case <-returned:
-	case <-time.After(50 * time.Millisecond):
-		t.Fatal("second Complete blocked, want no-op after task completion")
+	if err := task.Complete("second"); !errors.Is(err, ErrAgentTaskAlreadyDone) {
+		t.Fatalf("Complete(second) error = %v, want ErrAgentTaskAlreadyDone", err)
 	}
 
 	got, err := task.WaitAny(context.Background())
@@ -294,23 +288,58 @@ func TestAgentTaskCompleteIsOneTime(t *testing.T) {
 func TestAgentTaskFailIsOneTime(t *testing.T) {
 	task := NewAgentTask[string]("collect data")
 	firstErr := errors.New("first failure")
-	task.Fail(firstErr)
+	if err := task.Fail(firstErr); err != nil {
+		t.Fatalf("Fail(first) error = %v, want nil", err)
+	}
 
-	returned := make(chan struct{})
-	go func() {
-		task.Fail(errors.New("second failure"))
-		close(returned)
-	}()
-
-	select {
-	case <-returned:
-	case <-time.After(50 * time.Millisecond):
-		t.Fatal("second Fail blocked, want no-op after task failure")
+	if err := task.Fail(errors.New("second failure")); !errors.Is(err, ErrAgentTaskAlreadyDone) {
+		t.Fatalf("Fail(second) error = %v, want ErrAgentTaskAlreadyDone", err)
 	}
 
 	got, err := task.WaitAny(context.Background())
 	if err != firstErr {
 		t.Fatalf("WaitAny error = %v, want %v", err, firstErr)
+	}
+	if got != nil {
+		t.Fatalf("WaitAny result = %v, want nil", got)
+	}
+}
+
+func TestAgentTaskFailAfterCompleteReturnsAlreadyDone(t *testing.T) {
+	task := NewAgentTask[string]("collect data")
+	if err := task.Complete("done"); err != nil {
+		t.Fatalf("Complete error = %v, want nil", err)
+	}
+
+	err := task.Fail(errors.New("late failure"))
+
+	if !errors.Is(err, ErrAgentTaskAlreadyDone) {
+		t.Fatalf("Fail after Complete error = %v, want ErrAgentTaskAlreadyDone", err)
+	}
+	got, waitErr := task.WaitAny(context.Background())
+	if waitErr != nil {
+		t.Fatalf("WaitAny error = %v, want nil", waitErr)
+	}
+	if got != "done" {
+		t.Fatalf("WaitAny result = %v, want done", got)
+	}
+}
+
+func TestAgentTaskCompleteAfterFailReturnsAlreadyDone(t *testing.T) {
+	task := NewAgentTask[string]("collect data")
+	firstErr := errors.New("failed")
+	if err := task.Fail(firstErr); err != nil {
+		t.Fatalf("Fail error = %v, want nil", err)
+	}
+
+	err := task.Complete("late result")
+
+	if !errors.Is(err, ErrAgentTaskAlreadyDone) {
+		t.Fatalf("Complete after Fail error = %v, want ErrAgentTaskAlreadyDone", err)
+	}
+	got, waitErr := task.WaitAny(context.Background())
+	if waitErr != firstErr {
+		t.Fatalf("WaitAny error = %v, want %v", waitErr, firstErr)
 	}
 	if got != nil {
 		t.Fatalf("WaitAny result = %v, want nil", got)
@@ -323,7 +352,9 @@ func TestAgentTaskDoneReflectsCompletion(t *testing.T) {
 		t.Fatal("Done() = true, want false before completion")
 	}
 
-	task.Complete("done")
+	if err := task.Complete("done"); err != nil {
+		t.Fatalf("Complete error = %v, want nil", err)
+	}
 
 	if !task.Done() {
 		t.Fatal("Done() = false, want true after Complete")
@@ -332,7 +363,9 @@ func TestAgentTaskDoneReflectsCompletion(t *testing.T) {
 
 func TestAgentTaskDoneReflectsFailure(t *testing.T) {
 	task := NewAgentTask[string]("collect data")
-	task.Fail(errors.New("failed"))
+	if err := task.Fail(errors.New("failed")); err != nil {
+		t.Fatalf("Fail error = %v, want nil", err)
+	}
 
 	if !task.Done() {
 		t.Fatal("Done() = false, want true after Fail")
@@ -363,7 +396,9 @@ func TestAgentTaskCancelFailsWithToolError(t *testing.T) {
 
 func TestAgentTaskCancelAfterCompleteDoesNotOverrideResult(t *testing.T) {
 	task := NewAgentTask[string]("collect data")
-	task.Complete("done")
+	if err := task.Complete("done"); err != nil {
+		t.Fatalf("Complete error = %v, want nil", err)
+	}
 
 	task.Cancel()
 
