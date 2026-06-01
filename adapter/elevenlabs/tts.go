@@ -121,7 +121,7 @@ func (t *ElevenLabsTTS) Synthesize(ctx context.Context, text string) (tts.Chunke
 }
 
 func buildElevenLabsSynthesizeRequest(t *ElevenLabsTTS, text string) (string, []byte) {
-	apiURL := fmt.Sprintf("%s/text-to-speech/%s?output_format=%s", strings.TrimRight(t.baseURL, "/"), t.voiceID, url.QueryEscape(t.encoding))
+	apiURL := fmt.Sprintf("%s/text-to-speech/%s/stream?model_id=%s&output_format=%s", strings.TrimRight(t.baseURL, "/"), t.voiceID, url.QueryEscape(t.modelID), url.QueryEscape(t.encoding))
 	body := map[string]interface{}{
 		"text":     text,
 		"model_id": t.modelID,

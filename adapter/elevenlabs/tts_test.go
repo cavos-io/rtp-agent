@@ -42,8 +42,11 @@ func TestElevenLabsSynthesizeRequestUsesReferenceOptions(t *testing.T) {
 		t.Fatalf("parse url: %v", err)
 	}
 
-	if parsed.Path != "/v1/text-to-speech/hpp4J3VqNfWAUOO0d1Us" {
-		t.Fatalf("path = %q, want default voice path", parsed.Path)
+	if parsed.Path != "/v1/text-to-speech/hpp4J3VqNfWAUOO0d1Us/stream" {
+		t.Fatalf("path = %q, want default voice stream path", parsed.Path)
+	}
+	if parsed.Query().Get("model_id") != "eleven_turbo_v2_5" {
+		t.Fatalf("model_id = %q, want eleven_turbo_v2_5", parsed.Query().Get("model_id"))
 	}
 	if parsed.Query().Get("output_format") != "mp3_22050_32" {
 		t.Fatalf("output_format = %q, want mp3_22050_32", parsed.Query().Get("output_format"))
@@ -84,8 +87,8 @@ func TestElevenLabsSynthesizeRequestUsesConfiguredBaseURL(t *testing.T) {
 	if parsed.Scheme != "https" || parsed.Host != "eleven.example" {
 		t.Fatalf("url = %q, want configured host", requestURL)
 	}
-	if parsed.Path != "/v1/text-to-speech/voice-1" {
-		t.Fatalf("path = %q, want configured base URL with synthesize path", parsed.Path)
+	if parsed.Path != "/v1/text-to-speech/voice-1/stream" {
+		t.Fatalf("path = %q, want configured base URL with stream synthesize path", parsed.Path)
 	}
 }
 
