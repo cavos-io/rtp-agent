@@ -159,7 +159,7 @@ func (s *AgentSession) EmitConversationItemAdded(item llm.ChatItem) {
 	if item == nil {
 		return
 	}
-	s.insertConversationItem(item)
+	s.insertChatItem(item)
 	ch := s.conversationItemAddedEvents()
 	select {
 	case ch <- ConversationItemAddedEvent{Item: item, CreatedAt: time.Now()}:
@@ -177,7 +177,7 @@ func (s *AgentSession) conversationItemAddedEvents() chan ConversationItemAddedE
 	return s.conversationItemCh
 }
 
-func (s *AgentSession) insertConversationItem(item llm.ChatItem) {
+func (s *AgentSession) insertChatItem(item llm.ChatItem) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -200,6 +200,14 @@ func (s *AgentSession) FunctionToolsExecutedEvents() <-chan FunctionToolsExecute
 }
 
 func (s *AgentSession) EmitFunctionToolsExecuted(ev FunctionToolsExecutedEvent) {
+	for _, call := range ev.FunctionCalls {
+		s.insertChatItem(call)
+	}
+	for _, output := range ev.FunctionCallOutputs {
+		if output != nil {
+			s.insertChatItem(output)
+		}
+	}
 	ch := s.functionToolsExecutedEvents()
 	select {
 	case ch <- ev:
