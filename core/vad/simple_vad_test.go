@@ -1524,6 +1524,41 @@ func TestSimpleVADCountsShortInternalSilenceAsSpeechDuration(t *testing.T) {
 	assertCombinedFrames(t, end.Frames, firstSpeech, internalSilence, secondSpeech, firstTrailingSilence, secondTrailingSilence, thirdTrailingSilence)
 }
 
+func TestSimpleVADContinuesSilenceDurationAfterEndOfSpeech(t *testing.T) {
+	stream, err := NewSimpleVADWithOptions(SimpleVADOptions{
+		Threshold:          0.05,
+		MinSilenceDuration: 0.01,
+	}).Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	defer stream.Close()
+
+	speech := audioFrame(16000, 160, 6000)
+	firstSilence := audioFrame(16000, 160, 0)
+	secondSilence := audioFrame(16000, 160, 0)
+	for _, frame := range []*model.AudioFrame{speech, firstSilence, secondSilence} {
+		if err := stream.PushFrame(frame); err != nil {
+			t.Fatalf("PushFrame() error = %v", err)
+		}
+	}
+
+	assertEventType(t, stream, VADEventInferenceDone)
+	assertEventType(t, stream, VADEventStartOfSpeech)
+	assertEventType(t, stream, VADEventInferenceDone)
+	assertEventType(t, stream, VADEventEndOfSpeech)
+	inference := nextVADEvent(t, stream)
+	if inference.Type != VADEventInferenceDone {
+		t.Fatalf("event type = %s, want %s", inference.Type, VADEventInferenceDone)
+	}
+	if inference.SilenceDuration != 0.02 {
+		t.Fatalf("SilenceDuration after end = %v, want 0.02", inference.SilenceDuration)
+	}
+	if inference.RawAccumulatedSilence != 0.01 {
+		t.Fatalf("RawAccumulatedSilence after end = %v, want 0.01", inference.RawAccumulatedSilence)
+	}
+}
+
 func TestSimpleVADRetainsTrailingPrefixAfterEndOfSpeech(t *testing.T) {
 	stream, err := NewSimpleVADWithOptions(SimpleVADOptions{
 		Threshold:             0.05,

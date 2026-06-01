@@ -680,7 +680,11 @@ func (s *simpleVADStream) resetSegment() {
 
 func (s *simpleVADStream) resetSegmentWithPrefixTail(frames []*model.AudioFrame) {
 	prefixFrames := s.prefixTailFrames(frames)
+	silenceDuration := s.silenceDuration
+	accumulatedSilenceDuration := s.accumulatedSilenceDuration
 	s.resetSegment()
+	s.silenceDuration = silenceDuration
+	s.accumulatedSilenceDuration = accumulatedSilenceDuration
 	for _, frame := range prefixFrames {
 		s.appendPrefixFrame(frame, frameDuration(frame))
 	}
