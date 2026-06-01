@@ -101,6 +101,19 @@ func TestSonioxSTTOptionsBuildReferenceConfig(t *testing.T) {
 	}
 }
 
+func TestSonioxSTTTwoWayTranslationBuildsReferenceConfig(t *testing.T) {
+	provider := NewSonioxSTT("test-key",
+		WithSonioxTwoWayTranslation("en", "es"),
+	)
+
+	config := buildSonioxConfig(provider)
+
+	translation := config["translation"].(map[string]string)
+	if translation["type"] != "two_way" || translation["language_a"] != "en" || translation["language_b"] != "es" {
+		t.Fatalf("translation = %#v, want two-way en/es", translation)
+	}
+}
+
 func TestSonioxSTTInitialConfigJSONOmitsNilOptionalFields(t *testing.T) {
 	provider := NewSonioxSTT("test-key")
 

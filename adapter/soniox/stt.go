@@ -131,6 +131,14 @@ func WithSonioxOneWayTranslation(targetLanguage string) SonioxSTTOption {
 	}
 }
 
+func WithSonioxTwoWayTranslation(languageA string, languageB string) SonioxSTTOption {
+	return func(s *SonioxSTT) {
+		if languageA != "" && languageB != "" {
+			s.translation = map[string]string{"type": "two_way", "language_a": languageA, "language_b": languageB}
+		}
+	}
+}
+
 func NewSonioxSTT(apiKey string, opts ...SonioxSTTOption) *SonioxSTT {
 	provider := &SonioxSTT{
 		apiKey:                       apiKey,
