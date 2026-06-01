@@ -132,6 +132,32 @@ func TestMakeFunctionCallOutputStringifiesValidOutputs(t *testing.T) {
 	}
 }
 
+func TestMakeFunctionCallOutputTimestampsCreatedOutputs(t *testing.T) {
+	call := FunctionCall{CallID: "call_lookup", Name: "lookup", Arguments: "{}"}
+	tests := []struct {
+		name      string
+		output    any
+		exception error
+	}{
+		{name: "success", output: "Paris"},
+		{name: "tool error", exception: NewToolError("visible failure")},
+		{name: "internal error", exception: errors.New("database failure")},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := MakeFunctionCallOutput(call, tt.output, tt.exception)
+
+			if result.FncCallOut == nil {
+				t.Fatal("FncCallOut = nil, want created output")
+			}
+			if result.FncCallOut.CreatedAt.IsZero() {
+				t.Fatal("CreatedAt is zero, want generated timestamp")
+			}
+		})
+	}
+}
+
 func TestMakeFunctionCallOutputDropsInvalidStructuredOutputs(t *testing.T) {
 	call := FunctionCall{CallID: "call_lookup", Name: "lookup", Arguments: "{}"}
 	output := map[string]any{"bad": func() {}}
