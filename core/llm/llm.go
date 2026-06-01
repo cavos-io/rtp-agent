@@ -548,6 +548,26 @@ type RealtimeModel interface {
 	Close() error
 }
 
+type RealtimeError struct {
+	Message string
+	Err     error
+}
+
+func NewRealtimeError(message string, err error) RealtimeError {
+	return RealtimeError{Message: message, Err: err}
+}
+
+func (e RealtimeError) Error() string {
+	if e.Err == nil {
+		return e.Message
+	}
+	return fmt.Sprintf("%s: %v", e.Message, e.Err)
+}
+
+func (e RealtimeError) Unwrap() error {
+	return e.Err
+}
+
 type labelProviderRealtimeModel interface {
 	Label() string
 }

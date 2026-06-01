@@ -2,6 +2,7 @@ package llm
 
 import (
 	"context"
+	"errors"
 	"io"
 	"testing"
 
@@ -81,6 +82,33 @@ func TestRealtimeModelMetadataUsesProviderOverrides(t *testing.T) {
 	}
 	if got := RealtimeProvider(model); got != "provider-a" {
 		t.Fatalf("RealtimeProvider() = %q, want provider-a", got)
+	}
+}
+
+func TestRealtimeErrorCarriesMessageAndCause(t *testing.T) {
+	cause := errors.New("timeout")
+	err := NewRealtimeError("update chat context failed", cause)
+
+	if err.Error() != "update chat context failed: timeout" {
+		t.Fatalf("Error() = %q, want wrapped message", err.Error())
+	}
+	if !errors.Is(err, cause) {
+		t.Fatal("errors.Is() = false, want wrapped cause")
+	}
+	var realtimeErr RealtimeError
+	if !errors.As(err, &realtimeErr) {
+		t.Fatalf("errors.As() failed for %T", err)
+	}
+}
+
+func TestRealtimeErrorCanCarryMessageOnly(t *testing.T) {
+	err := NewRealtimeError("generation timed out", nil)
+
+	if err.Error() != "generation timed out" {
+		t.Fatalf("Error() = %q, want message only", err.Error())
+	}
+	if errors.Unwrap(err) != nil {
+		t.Fatalf("Unwrap() = %v, want nil", errors.Unwrap(err))
 	}
 }
 
