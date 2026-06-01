@@ -214,6 +214,72 @@ func TestStreamAdapterForwardsErrorEvents(t *testing.T) {
 	}
 }
 
+func TestStreamAdapterEmitsErrorOnStreamFailure(t *testing.T) {
+	wantErr := errors.New("provider failed")
+	provider := &fakeStreamAdapterTTS{streamErr: wantErr}
+	adapter := NewStreamAdapter(provider)
+	errCh := make(chan TTSError, 1)
+	adapter.OnError(func(err TTSError) {
+		errCh <- err
+	})
+
+	stream, err := adapter.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+	defer stream.Close()
+
+	if err := stream.PushText("hello."); err != nil {
+		t.Fatalf("PushText returned error: %v", err)
+	}
+	if err := EndSynthesizeStreamInput(stream); err != nil {
+		t.Fatalf("EndSynthesizeStreamInput returned error: %v", err)
+	}
+	_, err = stream.Next()
+	if !errors.Is(err, wantErr) {
+		t.Fatalf("Next error = %v, want %v", err, wantErr)
+	}
+
+	select {
+	case got := <-errCh:
+		if got.Type != TTSErrorType {
+			t.Fatalf("error Type = %q, want %q", got.Type, TTSErrorType)
+		}
+		if got.Label != adapter.Label() {
+			t.Fatalf("error Label = %q, want %q", got.Label, adapter.Label())
+		}
+		if !errors.Is(got.Err, wantErr) {
+			t.Fatalf("emitted error = %v, want %v", got.Err, wantErr)
+		}
+		if got.Recoverable {
+			t.Fatal("Recoverable = true, want false")
+		}
+	default:
+		t.Fatal("stream adapter did not emit TTS error")
+	}
+}
+
+func TestStreamAdapterErrorUnsubscribeRemovesLocalAndProviderHandlers(t *testing.T) {
+	provider := &fakeStreamAdapterTTS{}
+	adapter := NewStreamAdapter(provider)
+	errCh := make(chan TTSError, 2)
+
+	unsubscribe := adapter.OnError(func(err TTSError) {
+		errCh <- err
+	})
+	unsubscribe()
+	unsubscribe()
+
+	provider.EmitError(TTSError{Label: "provider", Err: errors.New("provider")})
+	adapter.EmitError(TTSError{Label: "adapter", Err: errors.New("adapter")})
+
+	select {
+	case got := <-errCh:
+		t.Fatalf("error handler called after unsubscribe: %#v", got)
+	default:
+	}
+}
+
 func TestStreamAdapterStreamReportsDoneAndExceptionAfterFailure(t *testing.T) {
 	wantErr := errors.New("provider failed")
 	provider := &fakeStreamAdapterTTS{

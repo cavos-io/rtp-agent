@@ -16,6 +16,7 @@ import (
 
 type StreamAdapter struct {
 	MetricsEmitter
+	ErrorEmitter
 	tts TTS
 }
 
@@ -57,10 +58,18 @@ func (a *StreamAdapter) OnMetricsCollected(handler TTSMetricsHandler) func() {
 }
 
 func (a *StreamAdapter) OnError(handler TTSErrorHandler) func() {
+	unsubscribes := []func(){a.ErrorEmitter.OnError(handler)}
 	if collector, ok := a.tts.(errorCollectorTTS); ok {
-		return collector.OnError(handler)
+		unsubscribes = append(unsubscribes, collector.OnError(handler))
 	}
-	return func() {}
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			for _, unsubscribe := range unsubscribes {
+				unsubscribe()
+			}
+		})
+	}
 }
 
 func (a *StreamAdapter) Capabilities() TTSCapabilities {
@@ -360,6 +369,7 @@ func newRetainFormatSentenceStream(language string) tokenize.SentenceStream {
 }
 
 func (w *streamAdapterWrapper) sendErr(err error) {
+	emitTTSError(w.adapter, err, false)
 	select {
 	case w.errCh <- err:
 	default:
