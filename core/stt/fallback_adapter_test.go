@@ -62,6 +62,20 @@ func TestFallbackAdapterDefaultConstructorsUseReferenceRetryInterval(t *testing.
 	}
 }
 
+func TestDefaultFallbackAdapterOptionsMatchReferenceDefaults(t *testing.T) {
+	options := DefaultFallbackAdapterOptions()
+
+	if options.MaxRetryPerSTT != 1 {
+		t.Fatalf("MaxRetryPerSTT = %d, want 1", options.MaxRetryPerSTT)
+	}
+	if options.AttemptTimeout != 10*time.Second {
+		t.Fatalf("AttemptTimeout = %s, want 10s", options.AttemptTimeout)
+	}
+	if options.RetryInterval != 5*time.Second {
+		t.Fatalf("RetryInterval = %s, want 5s", options.RetryInterval)
+	}
+}
+
 func TestFallbackAdapterAlwaysAdvertisesOfflineRecognize(t *testing.T) {
 	adapter := NewFallbackAdapter([]STT{
 		&metadataSTT{label: "primary", capabilities: STTCapabilities{

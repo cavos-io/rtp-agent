@@ -40,6 +40,14 @@ type FallbackAdapterOptions struct {
 	RetryInterval  time.Duration
 }
 
+func DefaultFallbackAdapterOptions() FallbackAdapterOptions {
+	return FallbackAdapterOptions{
+		MaxRetryPerSTT: 1,
+		AttemptTimeout: defaultFallbackAttemptTimeout,
+		RetryInterval:  defaultFallbackRetryInterval,
+	}
+}
+
 type AvailabilityChangedEvent struct {
 	STT       STT
 	Available bool
@@ -71,10 +79,7 @@ func (e *FallbackAllFailedError) Unwrap() error {
 }
 
 func NewFallbackAdapter(stts []STT) *FallbackAdapter {
-	return NewFallbackAdapterWithOptions(stts, FallbackAdapterOptions{
-		MaxRetryPerSTT: 1,
-		RetryInterval:  defaultFallbackRetryInterval,
-	})
+	return NewFallbackAdapterWithOptions(stts, DefaultFallbackAdapterOptions())
 }
 
 func NewFallbackAdapterWithOptions(stts []STT, options FallbackAdapterOptions) *FallbackAdapter {
@@ -82,10 +87,7 @@ func NewFallbackAdapterWithOptions(stts []STT, options FallbackAdapterOptions) *
 }
 
 func NewFallbackAdapterWithVAD(stts []STT, vad vad.VAD) *FallbackAdapter {
-	return newFallbackAdapter(stts, vad, FallbackAdapterOptions{
-		MaxRetryPerSTT: 1,
-		RetryInterval:  defaultFallbackRetryInterval,
-	})
+	return newFallbackAdapter(stts, vad, DefaultFallbackAdapterOptions())
 }
 
 func NewFallbackAdapterWithVADAndOptions(stts []STT, vad vad.VAD, options FallbackAdapterOptions) *FallbackAdapter {
