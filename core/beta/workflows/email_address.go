@@ -62,7 +62,7 @@ func NewGetEmailTask(requireConfirmation bool) *GetEmailTask {
 func (t *GetEmailTask) OnEnter() {
 	if activity := t.Agent.GetActivity(); activity != nil {
 		if session := activity.Session; session != nil {
-			_ = session.GenerateReply(context.Background(), "Please tell me your email address.")
+			_, _ = session.GenerateReply(context.Background(), "Please tell me your email address.")
 		}
 	}
 }
@@ -71,7 +71,7 @@ type updateEmailTool struct {
 	task *GetEmailTask
 }
 
-func (t *updateEmailTool) ID() string { return "update_email_address" }
+func (t *updateEmailTool) ID() string   { return "update_email_address" }
 func (t *updateEmailTool) Name() string { return "update_email_address" }
 func (t *updateEmailTool) Description() string {
 	return "Update the email address provided by the user."
@@ -113,7 +113,7 @@ type confirmEmailTool struct {
 	task *GetEmailTask
 }
 
-func (t *confirmEmailTool) ID() string { return "confirm_email_address" }
+func (t *confirmEmailTool) ID() string   { return "confirm_email_address" }
 func (t *confirmEmailTool) Name() string { return "confirm_email_address" }
 func (t *confirmEmailTool) Description() string {
 	return "Validates/confirms the email address provided by the user."
@@ -139,7 +139,7 @@ type declineEmailCaptureTool struct {
 	task *GetEmailTask
 }
 
-func (t *declineEmailCaptureTool) ID() string { return "decline_email_capture" }
+func (t *declineEmailCaptureTool) ID() string   { return "decline_email_capture" }
 func (t *declineEmailCaptureTool) Name() string { return "decline_email_capture" }
 func (t *declineEmailCaptureTool) Description() string {
 	return "Handles the case when the user explicitly declines to provide an email address."

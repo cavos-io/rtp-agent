@@ -146,7 +146,7 @@ func (t *GetDtmfTask) generateDtmfReply() {
 
 	if activity := t.Agent.GetActivity(); activity != nil {
 		if session := activity.Session; session != nil {
-			_ = session.GenerateReply(context.Background(), buildDtmfConfirmationInstructions(dtmfStr))
+			_, _ = session.GenerateReply(context.Background(), buildDtmfConfirmationInstructions(dtmfStr))
 		}
 	}
 }

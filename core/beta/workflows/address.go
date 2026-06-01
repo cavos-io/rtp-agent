@@ -65,7 +65,7 @@ func NewGetAddressTask(requireConfirmation bool) *GetAddressTask {
 func (t *GetAddressTask) OnEnter() {
 	if activity := t.Agent.GetActivity(); activity != nil {
 		if session := activity.Session; session != nil {
-			_ = session.GenerateReply(context.Background(), "Please tell me your address.")
+			_, _ = session.GenerateReply(context.Background(), "Please tell me your address.")
 		}
 	}
 }
@@ -74,7 +74,7 @@ type updateAddressTool struct {
 	task *GetAddressTask
 }
 
-func (t *updateAddressTool) ID() string { return "update_address" }
+func (t *updateAddressTool) ID() string   { return "update_address" }
 func (t *updateAddressTool) Name() string { return "update_address" }
 func (t *updateAddressTool) Description() string {
 	return "Update the address provided by the user."
@@ -123,7 +123,7 @@ type confirmAddressTool struct {
 	task *GetAddressTask
 }
 
-func (t *confirmAddressTool) ID() string { return "confirm_address" }
+func (t *confirmAddressTool) ID() string   { return "confirm_address" }
 func (t *confirmAddressTool) Name() string { return "confirm_address" }
 func (t *confirmAddressTool) Description() string {
 	return "Call this tool when the user confirms that the address is correct."
@@ -149,7 +149,7 @@ type declineAddressCaptureTool struct {
 	task *GetAddressTask
 }
 
-func (t *declineAddressCaptureTool) ID() string { return "decline_address_capture" }
+func (t *declineAddressCaptureTool) ID() string   { return "decline_address_capture" }
 func (t *declineAddressCaptureTool) Name() string { return "decline_address_capture" }
 func (t *declineAddressCaptureTool) Description() string {
 	return "Handles the case when the user explicitly declines to provide an address."
