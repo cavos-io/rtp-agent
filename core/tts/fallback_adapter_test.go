@@ -1771,23 +1771,26 @@ func TestFallbackSynthesizeStreamReplaysPostFlushInputOnRetry(t *testing.T) {
 		t.Fatalf("audio data = %q, want primary recovered", got)
 	}
 
-	wantCalls := []string{"push:hello", "flush", "push:world"}
+	wantCalls := []string{"push:hello", "push:world"}
 	if len(recovered.calls) != len(wantCalls) {
 		t.Fatalf("replayed stream call count = %d, want %d", len(recovered.calls), len(wantCalls))
 	}
 	if strings.Join(recovered.calls, ",") != strings.Join(wantCalls, ",") {
-		t.Fatalf("replayed stream calls = %#v, want %#v", recovered.calls, wantCalls)
+		t.Fatalf("replayed stream calls = %#v, want text replay without flush: %#v", recovered.calls, wantCalls)
+	}
+	if strings.Contains(strings.Join(recovered.calls, ","), "flush") {
+		t.Fatalf("replayed stream calls = %#v, want no replayed flush", recovered.calls)
 	}
 }
 
-func TestFallbackSynthesizeStreamReplaysFlushOnRetry(t *testing.T) {
+func TestFallbackSynthesizeStreamSkipsFlushReplayOnRetry(t *testing.T) {
 	primaryFailure := &blockingFailSynthesizeStream{
 		err:     errors.New("primary stream failed"),
 		release: make(chan struct{}),
 	}
-	recovered := newFlushGatedSynthesizeStream(&SynthesizedAudio{
+	recovered := &metadataSynthesizeStream{events: []*SynthesizedAudio{{
 		Frame: &model.AudioFrame{Data: []byte("primary recovered")},
-	})
+	}}}
 	primary := &metadataTTS{
 		label:        "primary",
 		sampleRate:   24000,
@@ -1820,9 +1823,12 @@ func TestFallbackSynthesizeStreamReplaysFlushOnRetry(t *testing.T) {
 	if got := string(audio.Frame.Data); got != "primary recovered" {
 		t.Fatalf("audio data = %q, want primary recovered", got)
 	}
-	wantCalls := []string{"push:hello", "flush"}
+	wantCalls := []string{"push:hello"}
 	if strings.Join(recovered.calls, ",") != strings.Join(wantCalls, ",") {
-		t.Fatalf("replayed stream calls = %#v, want %#v", recovered.calls, wantCalls)
+		t.Fatalf("replayed stream calls = %#v, want text replay without flush: %#v", recovered.calls, wantCalls)
+	}
+	if strings.Contains(strings.Join(recovered.calls, ","), "flush") {
+		t.Fatalf("replayed stream calls = %#v, want no replayed flush", recovered.calls)
 	}
 }
 

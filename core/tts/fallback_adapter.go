@@ -648,9 +648,6 @@ func (s *fallbackSynthesizeStream) startProviderStream(tts TTS) (SynthesizeStrea
 func (s *fallbackSynthesizeStream) replayBufferedText(stream SynthesizeStream) error {
 	for _, input := range s.inputBuffer {
 		if input.flush {
-			if err := stream.Flush(); err != nil {
-				return err
-			}
 			continue
 		}
 		if input.text == "" {
