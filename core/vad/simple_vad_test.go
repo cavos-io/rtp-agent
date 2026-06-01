@@ -241,6 +241,22 @@ func TestSimpleVADContextCancelStopsIterationBeforeQueuedEvents(t *testing.T) {
 	}
 }
 
+func TestSimpleVADCloseEndsIterationAfterContextCancel(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	stream, err := NewSimpleVAD(0.05).Stream(ctx)
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+
+	cancel()
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close() after context cancel error = %v", err)
+	}
+	if _, err := stream.Next(); !errors.Is(err, io.EOF) {
+		t.Fatalf("Next() after Close() and context cancel error = %v, want io.EOF", err)
+	}
+}
+
 func TestNewSimpleVADWithAllowsExplicitZeroThreshold(t *testing.T) {
 	detector := NewSimpleVADWith(
 		WithThreshold(0),
