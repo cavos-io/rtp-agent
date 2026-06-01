@@ -415,6 +415,48 @@ func TestSimpleVADUpdateOptionsWithAllowsZeroThreshold(t *testing.T) {
 	assertEventType(t, stream, VADEventStartOfSpeech)
 }
 
+func TestSimpleVADUpdateOptionsAllowsZeroThreshold(t *testing.T) {
+	detector := NewSimpleVADWithOptions(SimpleVADOptions{
+		Threshold:         0.05,
+		MinSpeechDuration: 0,
+	})
+	stream, err := detector.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	defer stream.Close()
+
+	var updates SimpleVADOptions
+	WithThreshold(0)(&updates)
+	detector.UpdateOptions(updates)
+	if err := stream.PushFrame(audioFrame(16000, 160, 0)); err != nil {
+		t.Fatalf("PushFrame() error = %v", err)
+	}
+	assertEventType(t, stream, VADEventInferenceDone)
+	assertEventType(t, stream, VADEventStartOfSpeech)
+}
+
+func TestSimpleVADUpdateOptionsAllowsZeroMinSpeechDuration(t *testing.T) {
+	detector := NewSimpleVADWithOptions(SimpleVADOptions{
+		Threshold:         0.05,
+		MinSpeechDuration: 0.02,
+	})
+	stream, err := detector.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	defer stream.Close()
+
+	var updates SimpleVADOptions
+	WithMinSpeechDuration(0)(&updates)
+	detector.UpdateOptions(updates)
+	if err := stream.PushFrame(audioFrame(16000, 160, 6000)); err != nil {
+		t.Fatalf("PushFrame() error = %v", err)
+	}
+	assertEventType(t, stream, VADEventInferenceDone)
+	assertEventType(t, stream, VADEventStartOfSpeech)
+}
+
 func TestSimpleVADUpdateOptionsWithAllowsZeroMinSpeechDuration(t *testing.T) {
 	detector := NewSimpleVADWithOptions(SimpleVADOptions{
 		Threshold:         0.05,
@@ -463,6 +505,42 @@ func TestSimpleVADUpdateOptionsWithAllowsZeroMinSilenceDuration(t *testing.T) {
 		t.Fatalf("event type = %s, want %s", end.Type, VADEventEndOfSpeech)
 	}
 	assertCombinedFrames(t, end.Frames, speech, silence)
+}
+
+func TestSimpleVADUpdateOptionsAllowsZeroPrefixPadding(t *testing.T) {
+	detector := NewSimpleVADWithOptions(SimpleVADOptions{
+		Threshold:             0.05,
+		MinSpeechDuration:     0.02,
+		PrefixPaddingDuration: 0.02,
+	})
+	stream, err := detector.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	defer stream.Close()
+
+	prefix := audioFrame(16000, 160, 0)
+	if err := stream.PushFrame(prefix); err != nil {
+		t.Fatalf("PushFrame() prefix error = %v", err)
+	}
+	assertEventType(t, stream, VADEventInferenceDone)
+
+	var updates SimpleVADOptions
+	WithPrefixPaddingDuration(0)(&updates)
+	detector.UpdateOptions(updates)
+	firstSpeech := audioFrame(16000, 160, 6000)
+	secondSpeech := audioFrame(16000, 160, 7000)
+	for _, frame := range []*model.AudioFrame{firstSpeech, secondSpeech} {
+		if err := stream.PushFrame(frame); err != nil {
+			t.Fatalf("PushFrame() speech error = %v", err)
+		}
+		assertEventType(t, stream, VADEventInferenceDone)
+	}
+	start := nextVADEvent(t, stream)
+	if start.Type != VADEventStartOfSpeech {
+		t.Fatalf("event type = %s, want %s", start.Type, VADEventStartOfSpeech)
+	}
+	assertCombinedFrames(t, start.Frames, firstSpeech, secondSpeech)
 }
 
 func TestSimpleVADUpdateOptionsWithAllowsZeroPrefixPadding(t *testing.T) {

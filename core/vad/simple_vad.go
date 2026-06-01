@@ -32,8 +32,15 @@ type SimpleVADOptions struct {
 	WindowDuration            float64
 	ProbabilitySmoothingAlpha float64
 
+	thresholdSet                 bool
+	minSpeechDurationSet         bool
+	minSilenceDurationSet        bool
+	prefixPaddingDurationSet     bool
 	maxBufferedSpeechDurationSet bool
 	deactivationThresholdSet     bool
+	sampleRateSet                bool
+	windowDurationSet            bool
+	probabilitySmoothingAlphaSet bool
 }
 
 type SimpleVADOption func(*SimpleVADOptions)
@@ -41,24 +48,28 @@ type SimpleVADOption func(*SimpleVADOptions)
 func WithThreshold(threshold float64) SimpleVADOption {
 	return func(o *SimpleVADOptions) {
 		o.Threshold = threshold
+		o.thresholdSet = true
 	}
 }
 
 func WithMinSpeechDuration(duration float64) SimpleVADOption {
 	return func(o *SimpleVADOptions) {
 		o.MinSpeechDuration = duration
+		o.minSpeechDurationSet = true
 	}
 }
 
 func WithMinSilenceDuration(duration float64) SimpleVADOption {
 	return func(o *SimpleVADOptions) {
 		o.MinSilenceDuration = duration
+		o.minSilenceDurationSet = true
 	}
 }
 
 func WithPrefixPaddingDuration(duration float64) SimpleVADOption {
 	return func(o *SimpleVADOptions) {
 		o.PrefixPaddingDuration = duration
+		o.prefixPaddingDurationSet = true
 	}
 }
 
@@ -85,18 +96,21 @@ func WithUpdateInterval(interval float64) SimpleVADOption {
 func WithSampleRate(sampleRate uint32) SimpleVADOption {
 	return func(o *SimpleVADOptions) {
 		o.SampleRate = sampleRate
+		o.sampleRateSet = true
 	}
 }
 
 func WithWindowDuration(duration float64) SimpleVADOption {
 	return func(o *SimpleVADOptions) {
 		o.WindowDuration = duration
+		o.windowDurationSet = true
 	}
 }
 
 func WithProbabilitySmoothingAlpha(alpha float64) SimpleVADOption {
 	return func(o *SimpleVADOptions) {
 		o.ProbabilitySmoothingAlpha = alpha
+		o.probabilitySmoothingAlphaSet = true
 	}
 }
 
@@ -125,10 +139,10 @@ func NewSimpleVADWith(opts ...SimpleVADOption) *SimpleVAD {
 }
 
 func NewSimpleVADWithOptions(options SimpleVADOptions) *SimpleVAD {
-	if options.Threshold == 0 {
+	if options.Threshold == 0 && !options.thresholdSet {
 		options.Threshold = 0.05
 	}
-	if options.DeactivationThreshold == 0 {
+	if options.DeactivationThreshold == 0 && !options.deactivationThresholdSet {
 		options.DeactivationThreshold = options.Threshold
 	}
 	if options.UpdateInterval == 0 {
@@ -1141,36 +1155,44 @@ func (v *SimpleVAD) unregisterStream(stream *simpleVADStream) {
 }
 
 func mergeSimpleVADOptions(current, updates SimpleVADOptions) SimpleVADOptions {
-	if updates.Threshold != 0 {
+	if updates.Threshold != 0 || updates.thresholdSet {
 		current.Threshold = updates.Threshold
+		current.thresholdSet = updates.thresholdSet
 	}
-	if updates.MinSpeechDuration != 0 {
+	if updates.MinSpeechDuration != 0 || updates.minSpeechDurationSet {
 		current.MinSpeechDuration = updates.MinSpeechDuration
+		current.minSpeechDurationSet = updates.minSpeechDurationSet
 	}
-	if updates.MinSilenceDuration != 0 {
+	if updates.MinSilenceDuration != 0 || updates.minSilenceDurationSet {
 		current.MinSilenceDuration = updates.MinSilenceDuration
+		current.minSilenceDurationSet = updates.minSilenceDurationSet
 	}
-	if updates.PrefixPaddingDuration != 0 {
+	if updates.PrefixPaddingDuration != 0 || updates.prefixPaddingDurationSet {
 		current.PrefixPaddingDuration = updates.PrefixPaddingDuration
+		current.prefixPaddingDurationSet = updates.prefixPaddingDurationSet
 	}
-	if updates.MaxBufferedSpeechDuration != 0 {
+	if updates.MaxBufferedSpeechDuration != 0 || updates.maxBufferedSpeechDurationSet {
 		current.MaxBufferedSpeechDuration = updates.MaxBufferedSpeechDuration
-		current.maxBufferedSpeechDurationSet = true
+		current.maxBufferedSpeechDurationSet = updates.maxBufferedSpeechDurationSet || updates.MaxBufferedSpeechDuration != 0
 	}
-	if updates.DeactivationThreshold != 0 {
+	if updates.DeactivationThreshold != 0 || updates.deactivationThresholdSet {
 		current.DeactivationThreshold = updates.DeactivationThreshold
+		current.deactivationThresholdSet = updates.deactivationThresholdSet
 	}
 	if updates.UpdateInterval != 0 {
 		current.UpdateInterval = updates.UpdateInterval
 	}
-	if updates.SampleRate != 0 {
+	if updates.SampleRate != 0 || updates.sampleRateSet {
 		current.SampleRate = updates.SampleRate
+		current.sampleRateSet = updates.sampleRateSet
 	}
-	if updates.WindowDuration != 0 {
+	if updates.WindowDuration != 0 || updates.windowDurationSet {
 		current.WindowDuration = updates.WindowDuration
+		current.windowDurationSet = updates.windowDurationSet
 	}
-	if updates.ProbabilitySmoothingAlpha != 0 {
+	if updates.ProbabilitySmoothingAlpha != 0 || updates.probabilitySmoothingAlphaSet {
 		current.ProbabilitySmoothingAlpha = updates.ProbabilitySmoothingAlpha
+		current.probabilitySmoothingAlphaSet = updates.probabilitySmoothingAlphaSet
 	}
 	return current
 }

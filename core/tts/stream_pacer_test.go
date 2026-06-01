@@ -162,6 +162,40 @@ func TestSentenceStreamPacerPropagatesUnderlyingError(t *testing.T) {
 	}
 }
 
+func TestSentenceStreamPacerCloseWaitsForAudioLoop(t *testing.T) {
+	underlying := newBlockingClosePacerStream()
+	pacer := NewSentenceStreamPacerWithOptions(context.Background(), underlying, SentenceStreamPacerOptions{})
+
+	if !underlying.waitForNext(t) {
+		t.Fatal("underlying Next() was not called")
+	}
+
+	closeDone := make(chan error, 1)
+	go func() {
+		closeDone <- pacer.Close()
+	}()
+
+	if !underlying.waitForClose(t) {
+		t.Fatal("underlying Close() was not called")
+	}
+
+	select {
+	case err := <-closeDone:
+		t.Fatalf("Close() returned before audio loop exited, err = %v", err)
+	case <-time.After(25 * time.Millisecond):
+	}
+
+	underlying.releaseNext()
+	select {
+	case err := <-closeDone:
+		if err != nil {
+			t.Fatalf("Close() error = %v", err)
+		}
+	case <-time.After(200 * time.Millisecond):
+		t.Fatal("Close() did not return after audio loop exited")
+	}
+}
+
 type fakePacerStream struct {
 	mu         sync.Mutex
 	cond       *sync.Cond
@@ -363,4 +397,70 @@ func (s *eofAfterOnePacerStream) Next() (*SynthesizedAudio, error) {
 			SamplesPerChannel: 24000,
 		},
 	}, nil
+}
+
+type blockingClosePacerStream struct {
+	nextCalled chan struct{}
+	closeSeen  chan struct{}
+	release    chan struct{}
+	nextOnce   sync.Once
+	closeOnce  sync.Once
+}
+
+func newBlockingClosePacerStream() *blockingClosePacerStream {
+	return &blockingClosePacerStream{
+		nextCalled: make(chan struct{}),
+		closeSeen:  make(chan struct{}),
+		release:    make(chan struct{}),
+	}
+}
+
+func (s *blockingClosePacerStream) PushText(string) error {
+	return nil
+}
+
+func (s *blockingClosePacerStream) Flush() error {
+	return nil
+}
+
+func (s *blockingClosePacerStream) Close() error {
+	s.closeOnce.Do(func() {
+		close(s.closeSeen)
+	})
+	return nil
+}
+
+func (s *blockingClosePacerStream) Next() (*SynthesizedAudio, error) {
+	s.nextOnce.Do(func() {
+		close(s.nextCalled)
+	})
+	<-s.closeSeen
+	<-s.release
+	return nil, context.Canceled
+}
+
+func (s *blockingClosePacerStream) waitForNext(t *testing.T) bool {
+	t.Helper()
+
+	select {
+	case <-s.nextCalled:
+		return true
+	case <-time.After(200 * time.Millisecond):
+		return false
+	}
+}
+
+func (s *blockingClosePacerStream) waitForClose(t *testing.T) bool {
+	t.Helper()
+
+	select {
+	case <-s.closeSeen:
+		return true
+	case <-time.After(200 * time.Millisecond):
+		return false
+	}
+}
+
+func (s *blockingClosePacerStream) releaseNext() {
+	close(s.release)
 }

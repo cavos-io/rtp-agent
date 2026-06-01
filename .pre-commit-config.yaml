@@ -1,20 +1,6 @@
 repos:
   - repo: local
     hooks:
-      - id: check-go-test-additions
-        name: Check Go test additions
-        entry: scripts/check-go-test-additions.sh
-        language: system
-        pass_filenames: false
-        stages: [pre-commit]
-
-      - id: check-go-test-weakening
-        name: Check Go test weakening
-        entry: scripts/check-go-test-weakening.sh
-        language: system
-        pass_filenames: false
-        stages: [pre-commit]
-
       - id: go-test-targeted
         name: go test targeted staged packages
         entry: scripts/go-test-targeted.sh
@@ -36,6 +22,13 @@ repos:
         pass_filenames: false
         stages: [pre-commit]
 
+      - id: check-go-test-integrity
+        name: Check Go test integrity
+        entry: ./scripts/check-test-integrity.sh
+        language: system
+        pass_filenames: false
+        stages: [pre-commit]
+
       - id: go-arch-lint-check
         name: go-arch-lint check
         entry: go-arch-lint check
@@ -50,11 +43,12 @@ repos:
         pass_filenames: false
         stages: [pre-commit]
 
-      - id: check-test-additions-than-deletions
-        name: Check *_test.go additions > deletions
-        entry: scripts/check-test-additions-than-deletions.sh
+      - id: go-deadcode-related
+        name: go staticcheck/deadcode on related staged files
+        entry: scripts/check-deadcode.sh
         language: system
         pass_filenames: false
+        types_or: [go]
         stages: [pre-commit]
 
       - id: go-test-all
