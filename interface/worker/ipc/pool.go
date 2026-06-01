@@ -135,6 +135,7 @@ func (p *ProcPool) GetExecutors() []JobExecutor {
 func (p *ProcPool) ActiveJobs() []RunningJobInfo {
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	p.pruneFinishedExecutorsLocked()
 
 	jobs := make([]RunningJobInfo, 0, len(p.executors))
 	for _, executor := range p.executors {
@@ -177,6 +178,7 @@ func (p *ProcPool) TargetIdleProcesses() int {
 func (p *ProcPool) GetByJobID(jobID string) JobExecutor {
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	p.pruneFinishedExecutorsLocked()
 
 	for _, executor := range p.executors {
 		job := executor.Job()

@@ -13,6 +13,7 @@ type fakeJobExecutor struct {
 	id         string
 	job        *livekit.Job
 	runningJob *RunningJobInfo
+	status     JobStatus
 	launchErr  error
 	closeCtx   context.Context
 	closeCalls int
@@ -21,7 +22,12 @@ type fakeJobExecutor struct {
 
 func (e *fakeJobExecutor) ID() string { return e.id }
 
-func (e *fakeJobExecutor) Status() JobStatus { return JobStatusRunning }
+func (e *fakeJobExecutor) Status() JobStatus {
+	if e.status != "" {
+		return e.status
+	}
+	return JobStatusRunning
+}
 
 func (e *fakeJobExecutor) Started() bool { return e.job != nil }
 
@@ -123,6 +129,26 @@ func TestProcPoolActiveJobsReturnsRunningAssignments(t *testing.T) {
 	activeJobs[0].Token = "mutated"
 	if got := pool.ActiveJobs(); got[0].Token == "mutated" {
 		t.Fatal("mutating ActiveJobs() result changed stored running job")
+	}
+}
+
+func TestProcPoolActiveJobsSkipsCompletedExecutors(t *testing.T) {
+	completed := RunningJobInfo{Job: &livekit.Job{Id: "job-done"}}
+	running := RunningJobInfo{Job: &livekit.Job{Id: "job-running"}}
+	pool := &ProcPool{
+		executors: map[string]JobExecutor{
+			"done":    &fakeJobExecutor{id: "done", job: completed.Job, runningJob: &completed, status: JobStatusSuccess},
+			"running": &fakeJobExecutor{id: "running", job: running.Job, runningJob: &running, status: JobStatusRunning},
+		},
+	}
+
+	activeJobs := pool.ActiveJobs()
+
+	if len(activeJobs) != 1 {
+		t.Fatalf("ActiveJobs() len = %d, want only running job", len(activeJobs))
+	}
+	if activeJobs[0].Job.GetId() != "job-running" {
+		t.Fatalf("ActiveJobs()[0].Job.Id = %q, want job-running", activeJobs[0].Job.GetId())
 	}
 }
 
