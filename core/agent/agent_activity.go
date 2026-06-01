@@ -15,6 +15,8 @@ import (
 
 var ErrSpeechSchedulingPaused = errors.New("speech scheduling is paused")
 
+const agentInstructionsMessageID = "lk.agent_task.instructions"
+
 type EndOfTurnInfo struct {
 	SkipReply            bool
 	NewTranscript        string
@@ -121,6 +123,9 @@ func (a *AgentActivity) UpdateInstructions(ctx context.Context, instructions str
 		}
 		a.Session.ChatCtx.Insert(configUpdate)
 	}
+	if err := updateAgentInstructionsMessage(a.Agent.ChatCtx, instructions, true); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -206,6 +211,35 @@ func agentToolDiff(oldToolNames map[string]struct{}, newToolNames map[string]str
 	sort.Strings(added)
 	sort.Strings(removed)
 	return added, removed
+}
+
+func updateAgentInstructionsMessage(chatCtx *llm.ChatContext, instructions string, addIfMissing bool) error {
+	if chatCtx == nil {
+		return nil
+	}
+	idx := chatCtx.IndexByID(agentInstructionsMessageID)
+	if idx != nil {
+		existing, ok := chatCtx.Items[*idx].(*llm.ChatMessage)
+		if !ok {
+			return errors.New("expected instructions chat item to be a message")
+		}
+		chatCtx.Items[*idx] = &llm.ChatMessage{
+			ID:        agentInstructionsMessageID,
+			Role:      llm.ChatRoleSystem,
+			Content:   []llm.ChatContent{{Text: instructions}},
+			CreatedAt: existing.CreatedAt,
+		}
+		return nil
+	}
+	if addIfMissing {
+		msg := &llm.ChatMessage{
+			ID:      agentInstructionsMessageID,
+			Role:    llm.ChatRoleSystem,
+			Content: []llm.ChatContent{{Text: instructions}},
+		}
+		chatCtx.Items = append([]llm.ChatItem{msg}, chatCtx.Items...)
+	}
+	return nil
 }
 
 func (a *AgentActivity) ScheduleSpeech(speech *SpeechHandle, priority int, force bool) error {

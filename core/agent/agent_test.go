@@ -123,6 +123,65 @@ func TestAgentUpdateInstructionsWhileRunningRecordsConfigUpdate(t *testing.T) {
 	assertLastInstructionUpdate(t, session.ChatCtx, "new")
 }
 
+func TestAgentUpdateInstructionsWhileRunningAddsInstructionMessage(t *testing.T) {
+	agent := NewAgent("old")
+	agent.ChatCtx.Append(&llm.ChatMessage{ID: "user", Role: llm.ChatRoleUser, Content: []llm.ChatContent{{Text: "hello"}}})
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	agent.activity = NewAgentActivity(agent, session)
+
+	if err := agent.UpdateInstructions(context.Background(), "new"); err != nil {
+		t.Fatalf("UpdateInstructions error = %v, want nil", err)
+	}
+
+	if len(agent.ChatCtx.Items) < 2 {
+		t.Fatalf("chat items = %d, want at least instruction and existing user message", len(agent.ChatCtx.Items))
+	}
+	msg, ok := agent.ChatCtx.Items[0].(*llm.ChatMessage)
+	if !ok {
+		t.Fatalf("first item = %T, want *llm.ChatMessage", agent.ChatCtx.Items[0])
+	}
+	if msg.ID != agentInstructionsMessageID || msg.Role != llm.ChatRoleSystem || msg.TextContent() != "new" {
+		t.Fatalf("instruction message = %#v, want system instructions with new text", msg)
+	}
+}
+
+func TestAgentUpdateInstructionsWhileRunningReplacesInstructionMessage(t *testing.T) {
+	agent := NewAgent("old")
+	createdAt := time.Unix(10, 0)
+	agent.ChatCtx.Append(&llm.ChatMessage{
+		ID:        agentInstructionsMessageID,
+		Role:      llm.ChatRoleSystem,
+		Content:   []llm.ChatContent{{Text: "old"}},
+		CreatedAt: createdAt,
+	})
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	agent.activity = NewAgentActivity(agent, session)
+
+	if err := agent.UpdateInstructions(context.Background(), "new"); err != nil {
+		t.Fatalf("UpdateInstructions error = %v, want nil", err)
+	}
+
+	instructionCount := 0
+	var msg *llm.ChatMessage
+	for _, item := range agent.ChatCtx.Items {
+		if item.GetID() != agentInstructionsMessageID {
+			continue
+		}
+		instructionCount++
+		var ok bool
+		msg, ok = item.(*llm.ChatMessage)
+		if !ok {
+			t.Fatalf("instruction item = %T, want *llm.ChatMessage", item)
+		}
+	}
+	if instructionCount != 1 {
+		t.Fatalf("instruction message count = %d, want 1", instructionCount)
+	}
+	if msg.TextContent() != "new" || !msg.CreatedAt.Equal(createdAt) {
+		t.Fatalf("instruction message text/createdAt = %q/%v, want new/%v", msg.TextContent(), msg.CreatedAt, createdAt)
+	}
+}
+
 func TestAgentUpdateToolsWhileRunningRecordsToolDiffAndFiltersWithSessionTools(t *testing.T) {
 	agent := NewAgent("help")
 	agent.Tools = []llm.Tool{&agentTestTool{id: "lookup", name: "lookup"}}
