@@ -363,6 +363,103 @@ type LLMError struct {
 	Recoverable bool
 }
 
+type APIError struct {
+	Message   string
+	Body      any
+	Retryable bool
+}
+
+func NewAPIError(message string, body any, retryable bool) *APIError {
+	return &APIError{
+		Message:   message,
+		Body:      body,
+		Retryable: retryable,
+	}
+}
+
+func (e *APIError) Error() string {
+	if e == nil {
+		return ""
+	}
+	return e.Message
+}
+
+type APIStatusError struct {
+	*APIError
+	StatusCode int
+	RequestID  string
+}
+
+func NewAPIStatusError(message string, statusCode int, requestID string, body any) *APIStatusError {
+	return NewAPIStatusErrorWithRetryable(message, statusCode, requestID, body, apiStatusDefaultRetryable(statusCode))
+}
+
+func NewAPIStatusErrorWithRetryable(message string, statusCode int, requestID string, body any, retryable bool) *APIStatusError {
+	return &APIStatusError{
+		APIError:   NewAPIError(message, body, retryable),
+		StatusCode: statusCode,
+		RequestID:  requestID,
+	}
+}
+
+func (e *APIStatusError) Unwrap() error {
+	if e == nil {
+		return nil
+	}
+	return e.APIError
+}
+
+func apiStatusDefaultRetryable(statusCode int) bool {
+	if statusCode >= 400 && statusCode < 500 {
+		return statusCode == 408 || statusCode == 429 || statusCode == 499
+	}
+	return true
+}
+
+type APIConnectionError struct {
+	*APIError
+}
+
+func NewAPIConnectionError(message string) *APIConnectionError {
+	return NewAPIConnectionErrorWithRetryable(message, true)
+}
+
+func NewAPIConnectionErrorWithRetryable(message string, retryable bool) *APIConnectionError {
+	if message == "" {
+		message = "Connection error."
+	}
+	return &APIConnectionError{APIError: NewAPIError(message, nil, retryable)}
+}
+
+func (e *APIConnectionError) Unwrap() error {
+	if e == nil {
+		return nil
+	}
+	return e.APIError
+}
+
+type APITimeoutError struct {
+	*APIConnectionError
+}
+
+func NewAPITimeoutError(message string) *APITimeoutError {
+	return NewAPITimeoutErrorWithRetryable(message, true)
+}
+
+func NewAPITimeoutErrorWithRetryable(message string, retryable bool) *APITimeoutError {
+	if message == "" {
+		message = "Request timed out."
+	}
+	return &APITimeoutError{APIConnectionError: NewAPIConnectionErrorWithRetryable(message, retryable)}
+}
+
+func (e *APITimeoutError) Unwrap() error {
+	if e == nil {
+		return nil
+	}
+	return e.APIConnectionError
+}
+
 func NewLLMError(label string, err error, recoverable bool) *LLMError {
 	return &LLMError{
 		Type:        "llm_error",
