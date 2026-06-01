@@ -17,6 +17,7 @@ import (
 
 type FallbackAdapter struct {
 	MetricsEmitter
+	ErrorEmitter
 
 	ttss                 []TTS
 	capabilities         TTSCapabilities
@@ -174,7 +175,8 @@ func (f *FallbackAdapter) OnError(handler TTSErrorHandler) func() {
 	if handler == nil {
 		return func() {}
 	}
-	unsubscribes := make([]func(), 0, len(f.ttss))
+	unsubscribes := make([]func(), 0, len(f.ttss)+1)
+	unsubscribes = append(unsubscribes, f.ErrorEmitter.OnError(handler))
 	for _, tts := range f.ttss {
 		collector, ok := tts.(errorCollectorTTS)
 		if !ok {
@@ -558,6 +560,7 @@ func (s *fallbackChunkedStream) monitorStream() {
 				if errors.Is(err, io.EOF) && !outputSent && pending == nil && strings.TrimSpace(s.text) != "" {
 					err := fmt.Errorf("no audio frames were pushed for text: %s", s.text)
 					s.markDone(err)
+					emitTTSError(s.adapter, err, false)
 					s.errCh <- err
 					return
 				}
@@ -599,6 +602,7 @@ func (s *fallbackChunkedStream) monitorStream() {
 
 			if fbErr := s.tryStartStream(nextIndex); fbErr != nil {
 				s.markDoneLocked(fbErr)
+				emitTTSError(s.adapter, fbErr, false)
 				s.errCh <- fbErr
 				s.mu.Unlock()
 				return
@@ -646,6 +650,7 @@ func (s *fallbackChunkedStream) monitorStream() {
 
 			if fbErr := s.tryStartStream(nextIndex); fbErr != nil {
 				s.markDoneLocked(fbErr)
+				emitTTSError(s.adapter, fbErr, false)
 				s.errCh <- fbErr
 				s.mu.Unlock()
 				return
@@ -939,6 +944,7 @@ func (s *fallbackSynthesizeStream) monitorStream() {
 				if errors.Is(err, io.EOF) && !outputSent && pending == nil && strings.TrimSpace(s.pushedText()) != "" {
 					err := fmt.Errorf("no audio frames were pushed for text: %s", s.pushedText())
 					s.markDone(err)
+					emitTTSError(s.adapter, err, false)
 					s.errCh <- err
 					return
 				}
@@ -980,6 +986,7 @@ func (s *fallbackSynthesizeStream) monitorStream() {
 
 			if fbErr := s.tryStartStream(nextIndex); fbErr != nil {
 				s.markDoneLocked(fbErr)
+				emitTTSError(s.adapter, fbErr, false)
 				s.errCh <- fbErr
 				s.mu.Unlock()
 				return
@@ -1027,6 +1034,7 @@ func (s *fallbackSynthesizeStream) monitorStream() {
 
 			if fbErr := s.tryStartStream(nextIndex); fbErr != nil {
 				s.markDoneLocked(fbErr)
+				emitTTSError(s.adapter, fbErr, false)
 				s.errCh <- fbErr
 				s.mu.Unlock()
 				return

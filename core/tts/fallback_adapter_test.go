@@ -358,6 +358,117 @@ func TestFallbackAdapterCanUnsubscribeErrorEvents(t *testing.T) {
 	}
 }
 
+func TestFallbackAdapterEmitsErrorOnChunkedFailure(t *testing.T) {
+	providerErr := errors.New("provider failed")
+	adapter := NewFallbackAdapter([]TTS{
+		&metadataTTS{label: "primary", sampleRate: 24000, numChannels: 1, chunked: &metadataChunkedStream{err: providerErr}},
+	})
+	errCh := make(chan TTSError, 1)
+	adapter.OnError(func(err TTSError) {
+		errCh <- err
+	})
+
+	stream, err := adapter.Synthesize(context.Background(), "hello")
+	if err != nil {
+		t.Fatalf("Synthesize returned error: %v", err)
+	}
+	defer stream.Close()
+
+	_, err = stream.Next()
+	if err == nil {
+		t.Fatal("Next error = nil, want terminal fallback error")
+	}
+	wantErr := err
+
+	select {
+	case got := <-errCh:
+		if got.Type != TTSErrorType {
+			t.Fatalf("error Type = %q, want %q", got.Type, TTSErrorType)
+		}
+		if got.Label != adapter.Label() {
+			t.Fatalf("error Label = %q, want %q", got.Label, adapter.Label())
+		}
+		if !errors.Is(got.Err, wantErr) {
+			t.Fatalf("emitted error = %v, want %v", got.Err, wantErr)
+		}
+		if got.Recoverable {
+			t.Fatal("Recoverable = true, want false")
+		}
+	default:
+		t.Fatal("fallback adapter did not emit chunked TTS error")
+	}
+}
+
+func TestFallbackAdapterEmitsErrorOnStreamFailure(t *testing.T) {
+	providerErr := errors.New("provider failed")
+	adapter := NewFallbackAdapter([]TTS{
+		&metadataTTS{
+			label:        "primary",
+			sampleRate:   24000,
+			numChannels:  1,
+			capabilities: TTSCapabilities{Streaming: true},
+			stream:       &metadataSynthesizeStream{err: providerErr},
+		},
+	})
+	errCh := make(chan TTSError, 1)
+	adapter.OnError(func(err TTSError) {
+		errCh <- err
+	})
+
+	stream, err := adapter.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+	defer stream.Close()
+
+	if err := stream.PushText("hello"); err != nil {
+		t.Fatalf("PushText returned error: %v", err)
+	}
+	if err := EndSynthesizeStreamInput(stream); err != nil {
+		t.Fatalf("EndSynthesizeStreamInput returned error: %v", err)
+	}
+	_, err = stream.Next()
+	if err == nil {
+		t.Fatal("Next error = nil, want terminal fallback error")
+	}
+	wantErr := err
+
+	select {
+	case got := <-errCh:
+		if got.Label != adapter.Label() {
+			t.Fatalf("error Label = %q, want %q", got.Label, adapter.Label())
+		}
+		if !errors.Is(got.Err, wantErr) {
+			t.Fatalf("emitted error = %v, want %v", got.Err, wantErr)
+		}
+		if got.Recoverable {
+			t.Fatal("Recoverable = true, want false")
+		}
+	default:
+		t.Fatal("fallback adapter did not emit streamed TTS error")
+	}
+}
+
+func TestFallbackAdapterErrorUnsubscribeRemovesLocalAndProviderHandlers(t *testing.T) {
+	primary := &metadataTTS{label: "primary", sampleRate: 24000, numChannels: 1}
+	adapter := NewFallbackAdapter([]TTS{primary})
+	errCh := make(chan TTSError, 2)
+	unsubscribe := adapter.OnError(func(err TTSError) {
+		errCh <- err
+	})
+	unsubscribe()
+	unsubscribe()
+
+	primary.EmitError(TTSError{Label: "primary", Err: errors.New("primary failed")})
+	adapter.EmitError(TTSError{Label: "adapter", Err: errors.New("adapter failed")})
+
+	select {
+	case got := <-errCh:
+		t.Fatalf("received error after unsubscribe: %#v", got)
+	default:
+	}
+}
+
 func TestFallbackAdapterUsesConfiguredSampleRate(t *testing.T) {
 	adapter := NewFallbackAdapterWithOptions([]TTS{
 		&metadataTTS{label: "low", sampleRate: 16000, numChannels: 1, capabilities: TTSCapabilities{}},
