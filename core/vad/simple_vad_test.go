@@ -342,6 +342,37 @@ func TestSimpleVADUpdateOptionsWithAllowsZeroMinSpeechDuration(t *testing.T) {
 	assertEventType(t, stream, VADEventStartOfSpeech)
 }
 
+func TestSimpleVADUpdateOptionsWithAllowsZeroMinSilenceDuration(t *testing.T) {
+	detector := NewSimpleVADWithOptions(SimpleVADOptions{
+		Threshold:          0.05,
+		MinSilenceDuration: 0.03,
+	})
+	stream, err := detector.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	defer stream.Close()
+
+	speech := audioFrame(16000, 160, 6000)
+	if err := stream.PushFrame(speech); err != nil {
+		t.Fatalf("PushFrame() speech error = %v", err)
+	}
+	assertEventType(t, stream, VADEventInferenceDone)
+	assertEventType(t, stream, VADEventStartOfSpeech)
+
+	detector.UpdateOptionsWith(WithMinSilenceDuration(0))
+	silence := audioFrame(16000, 160, 0)
+	if err := stream.PushFrame(silence); err != nil {
+		t.Fatalf("PushFrame() silence error = %v", err)
+	}
+	assertEventType(t, stream, VADEventInferenceDone)
+	end := nextVADEvent(t, stream)
+	if end.Type != VADEventEndOfSpeech {
+		t.Fatalf("event type = %s, want %s", end.Type, VADEventEndOfSpeech)
+	}
+	assertCombinedFrames(t, end.Frames, speech, silence)
+}
+
 func TestSimpleVADUpdateOptionsWithAllowsZeroMaxBufferedSpeech(t *testing.T) {
 	detector := NewSimpleVADWithOptions(SimpleVADOptions{
 		Threshold:                 0.05,
