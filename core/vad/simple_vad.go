@@ -374,14 +374,22 @@ func (s *simpleVADStream) prefixTailFrames(frames []*model.AudioFrame) []*model.
 	var duration float64
 	start := len(frames)
 	for start > 0 {
-		frameDuration := frameDuration(frames[start-1])
-		if duration+frameDuration > s.options.PrefixPaddingDuration {
+		currentFrameDuration := frameDuration(frames[start-1])
+		if duration+currentFrameDuration > s.options.PrefixPaddingDuration {
 			break
 		}
-		duration += frameDuration
+		duration += currentFrameDuration
 		start--
 	}
-	return append([]*model.AudioFrame(nil), frames[start:]...)
+
+	tail := append([]*model.AudioFrame(nil), frames[start:]...)
+	remaining := s.options.PrefixPaddingDuration - duration
+	if remaining > 0 && start > 0 {
+		frame := frames[start-1]
+		trimmed := trimFrameStart(frame, frameDuration(frame)-remaining)
+		tail = append([]*model.AudioFrame{trimmed}, tail...)
+	}
+	return tail
 }
 
 func (s *simpleVADStream) startSpeechFrames() []*model.AudioFrame {

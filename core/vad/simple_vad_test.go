@@ -529,6 +529,52 @@ func TestSimpleVADRetainsTrailingPrefixAfterEndOfSpeech(t *testing.T) {
 	assertCombinedFrames(t, start.Frames, firstSilence, secondSilence, nextFirstSpeech, nextSecondSpeech)
 }
 
+func TestSimpleVADRetainsTrailingPrefixAfterEndOfSpeechAtSampleBoundary(t *testing.T) {
+	stream, err := NewSimpleVADWithOptions(SimpleVADOptions{
+		Threshold:             0.05,
+		MinSpeechDuration:     0.02,
+		MinSilenceDuration:    0.02,
+		PrefixPaddingDuration: 0.015,
+	}).Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	defer stream.Close()
+
+	firstSpeech := audioFrame(16000, 160, 6000)
+	secondSpeech := audioFrame(16000, 160, 6000)
+	firstSilence := audioFrame(16000, 160, 100)
+	secondSilence := audioFrame(16000, 160, 200)
+	nextFirstSpeech := audioFrame(16000, 160, 6000)
+	nextSecondSpeech := audioFrame(16000, 160, 6000)
+	for _, frame := range []*model.AudioFrame{
+		firstSpeech,
+		secondSpeech,
+		firstSilence,
+		secondSilence,
+		nextFirstSpeech,
+		nextSecondSpeech,
+	} {
+		if err := stream.PushFrame(frame); err != nil {
+			t.Fatalf("PushFrame() error = %v", err)
+		}
+	}
+
+	assertEventType(t, stream, VADEventInferenceDone)
+	assertEventType(t, stream, VADEventInferenceDone)
+	assertEventType(t, stream, VADEventStartOfSpeech)
+	assertEventType(t, stream, VADEventInferenceDone)
+	assertEventType(t, stream, VADEventInferenceDone)
+	assertEventType(t, stream, VADEventEndOfSpeech)
+	assertEventType(t, stream, VADEventInferenceDone)
+	assertEventType(t, stream, VADEventInferenceDone)
+	start := nextVADEvent(t, stream)
+	if start.Type != VADEventStartOfSpeech {
+		t.Fatalf("event type = %s, want %s", start.Type, VADEventStartOfSpeech)
+	}
+	assertCombinedFrames(t, start.Frames, audioFrame(16000, 80, 100), secondSilence, nextFirstSpeech, nextSecondSpeech)
+}
+
 func TestSimpleVADStartOfSpeechIncludesPrefixPaddingFrames(t *testing.T) {
 	stream, err := NewSimpleVADWithOptions(SimpleVADOptions{
 		Threshold:             0.05,
