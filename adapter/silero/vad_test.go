@@ -92,6 +92,30 @@ func TestSileroVADMetadataAndMetrics(t *testing.T) {
 	}
 }
 
+func TestSileroVADUpdateOptionsAppliesToActiveStream(t *testing.T) {
+	detector := NewSileroVAD(
+		WithMinSpeechDuration(0.03),
+		WithActivationThreshold(0.5),
+	)
+	stream, err := detector.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	defer stream.Close()
+
+	if err := stream.PushFrame(testAudioFrame(16000, 160, 6000)); err != nil {
+		t.Fatalf("PushFrame() error = %v", err)
+	}
+	assertSileroVADEventType(t, stream, vad.VADEventInferenceDone)
+
+	detector.UpdateOptions(VADOptions{MinSpeechDuration: 0.01})
+	if err := stream.PushFrame(testAudioFrame(16000, 160, 6000)); err != nil {
+		t.Fatalf("PushFrame() after UpdateOptions() error = %v", err)
+	}
+	assertSileroVADEventType(t, stream, vad.VADEventInferenceDone)
+	assertSileroVADEventType(t, stream, vad.VADEventStartOfSpeech)
+}
+
 func TestSileroFallbackHonorsBufferingOptions(t *testing.T) {
 	detector := NewSileroVAD(
 		WithPrefixPaddingDuration(0.02),

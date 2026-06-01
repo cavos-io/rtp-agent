@@ -16,6 +16,7 @@ type SimpleVAD struct {
 	options  SimpleVADOptions
 	mu       sync.RWMutex
 	handlers []VADMetricsHandler
+	streams  map[*simpleVADStream]struct{}
 }
 
 type SimpleVADOptions struct {
@@ -45,7 +46,10 @@ func NewSimpleVADWithOptions(options SimpleVADOptions) *SimpleVAD {
 	if options.UpdateInterval == 0 {
 		options.UpdateInterval = 1
 	}
-	return &SimpleVAD{options: options}
+	return &SimpleVAD{
+		options: options,
+		streams: make(map[*simpleVADStream]struct{}),
+	}
 }
 
 func (v *SimpleVAD) Label() string {
@@ -61,6 +65,8 @@ func (v *SimpleVAD) Provider() string {
 }
 
 func (v *SimpleVAD) Capabilities() VADCapabilities {
+	v.mu.RLock()
+	defer v.mu.RUnlock()
 	return VADCapabilities{UpdateInterval: v.options.UpdateInterval}
 }
 
@@ -73,13 +79,34 @@ func (v *SimpleVAD) OnMetricsCollected(handler VADMetricsHandler) {
 	v.handlers = append(v.handlers, handler)
 }
 
+func (v *SimpleVAD) UpdateOptions(options SimpleVADOptions) {
+	v.mu.Lock()
+	v.options = mergeSimpleVADOptions(v.options, options)
+	streams := make([]*simpleVADStream, 0, len(v.streams))
+	for stream := range v.streams {
+		streams = append(streams, stream)
+	}
+	v.mu.Unlock()
+
+	for _, stream := range streams {
+		stream.updateOptions(options)
+	}
+}
+
 func (v *SimpleVAD) Stream(ctx context.Context) (VADStream, error) {
-	return &simpleVADStream{
+	v.mu.RLock()
+	options := v.options
+	v.mu.RUnlock()
+	stream := &simpleVADStream{
 		vad:     v,
 		ctx:     ctx,
-		options: v.options,
+		options: options,
 		events:  make(chan *VADEvent, 10),
-	}, nil
+	}
+	v.mu.Lock()
+	v.streams[stream] = struct{}{}
+	v.mu.Unlock()
+	return stream, nil
 }
 
 type simpleVADStream struct {
@@ -105,6 +132,17 @@ type simpleVADStream struct {
 	metricsInferenceDuration   float64
 	metricsInferenceCount      int
 	mu                         sync.Mutex
+}
+
+func (s *simpleVADStream) updateOptions(options SimpleVADOptions) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	oldMaxBufferedSpeech := s.options.MaxBufferedSpeechDuration
+	s.options = mergeSimpleVADOptions(s.options, options)
+	if s.options.MaxBufferedSpeechDuration > oldMaxBufferedSpeech {
+		s.bufferedSpeechDuration = framesDuration(s.speechFrames)
+	}
+	s.trimPrefixFrames()
 }
 
 func (s *simpleVADStream) PushFrame(frame *model.AudioFrame) error {
@@ -266,6 +304,7 @@ func (s *simpleVADStream) EndInput() error {
 	s.inputEnded = true
 	s.closed = true
 	close(s.events)
+	s.vad.unregisterStream(s)
 	return nil
 }
 
@@ -277,6 +316,7 @@ func (s *simpleVADStream) Close() error {
 	}
 	s.closed = true
 	close(s.events)
+	s.vad.unregisterStream(s)
 	return nil
 }
 
@@ -341,6 +381,10 @@ func (s *simpleVADStream) appendPrefixFrame(frame *model.AudioFrame, duration fl
 	}
 	s.prefixFrames = append(s.prefixFrames, frame)
 	s.prefixDuration += duration
+	s.trimPrefixFrames()
+}
+
+func (s *simpleVADStream) trimPrefixFrames() {
 	for s.prefixDuration > s.options.PrefixPaddingDuration && len(s.prefixFrames) > 0 {
 		s.prefixDuration -= frameDuration(s.prefixFrames[0])
 		s.prefixFrames = s.prefixFrames[1:]
@@ -387,4 +431,37 @@ func (v *SimpleVAD) emitMetrics(metrics *telemetry.VADMetrics) {
 	for _, handler := range handlers {
 		handler(metrics)
 	}
+}
+
+func (v *SimpleVAD) unregisterStream(stream *simpleVADStream) {
+	v.mu.Lock()
+	delete(v.streams, stream)
+	v.mu.Unlock()
+}
+
+func mergeSimpleVADOptions(current, updates SimpleVADOptions) SimpleVADOptions {
+	if updates.Threshold != 0 {
+		current.Threshold = updates.Threshold
+	}
+	if updates.MinSpeechDuration != 0 {
+		current.MinSpeechDuration = updates.MinSpeechDuration
+	}
+	if updates.MinSilenceDuration != 0 {
+		current.MinSilenceDuration = updates.MinSilenceDuration
+	}
+	if updates.PrefixPaddingDuration != 0 {
+		current.PrefixPaddingDuration = updates.PrefixPaddingDuration
+	}
+	if updates.MaxBufferedSpeechDuration != 0 {
+		current.MaxBufferedSpeechDuration = updates.MaxBufferedSpeechDuration
+	}
+	if updates.DeactivationThreshold != 0 {
+		current.DeactivationThreshold = updates.DeactivationThreshold
+	} else if updates.Threshold != 0 {
+		current.DeactivationThreshold = updates.Threshold
+	}
+	if updates.UpdateInterval != 0 {
+		current.UpdateInterval = updates.UpdateInterval
+	}
+	return current
 }
