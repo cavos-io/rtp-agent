@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"path/filepath"
 	"runtime"
 	"sort"
 	"strings"
@@ -727,12 +728,30 @@ func (s *AgentServer) configurePrometheusMultiprocDir() error {
 		if dir := os.Getenv("PROMETHEUS_MULTIPROC_DIR"); dir != "" {
 			s.Options.PrometheusMultiprocDir = dir
 		}
+	}
+	if s.Options.PrometheusMultiprocDir == "" {
 		return nil
 	}
 	if err := os.MkdirAll(s.Options.PrometheusMultiprocDir, 0o755); err != nil {
 		return err
 	}
-	return os.Setenv("PROMETHEUS_MULTIPROC_DIR", s.Options.PrometheusMultiprocDir)
+	if err := os.Setenv("PROMETHEUS_MULTIPROC_DIR", s.Options.PrometheusMultiprocDir); err != nil {
+		return err
+	}
+	entries, err := os.ReadDir(s.Options.PrometheusMultiprocDir)
+	if err != nil {
+		return err
+	}
+	for _, entry := range entries {
+		if !entry.Type().IsRegular() {
+			continue
+		}
+		path := filepath.Join(s.Options.PrometheusMultiprocDir, entry.Name())
+		if err := os.Remove(path); err != nil {
+			logger.Logger.Warnw("failed to remove Prometheus multiprocess file", err, "path", path)
+		}
+	}
+	return nil
 }
 
 func liveKitDevModeEnabled(value string) bool {

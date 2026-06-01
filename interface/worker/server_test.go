@@ -405,6 +405,33 @@ func TestConfigurePrometheusMultiprocDirSetsEnvironment(t *testing.T) {
 	}
 }
 
+func TestConfigurePrometheusMultiprocDirCleansExistingMetricFiles(t *testing.T) {
+	dir := t.TempDir()
+	staleFile := dir + "/stale.db"
+	if err := os.WriteFile(staleFile, []byte("old metrics"), 0o644); err != nil {
+		t.Fatalf("write stale metric file: %v", err)
+	}
+	nestedDir := dir + "/nested"
+	if err := os.Mkdir(nestedDir, 0o755); err != nil {
+		t.Fatalf("create nested directory: %v", err)
+	}
+	t.Setenv("PROMETHEUS_MULTIPROC_DIR", dir)
+	server := NewAgentServer(WorkerOptions{})
+
+	if err := server.configurePrometheusMultiprocDir(); err != nil {
+		t.Fatalf("configurePrometheusMultiprocDir() error = %v", err)
+	}
+	if server.Options.PrometheusMultiprocDir != dir {
+		t.Fatalf("PrometheusMultiprocDir = %q, want env dir %q", server.Options.PrometheusMultiprocDir, dir)
+	}
+	if _, err := os.Stat(staleFile); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("stale metric file stat error = %v, want not exist", err)
+	}
+	if _, err := os.Stat(nestedDir); err != nil {
+		t.Fatalf("nested directory stat error = %v, want preserved directory", err)
+	}
+}
+
 func freeTCPPort(t *testing.T) int {
 	t.Helper()
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
