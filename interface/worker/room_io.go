@@ -320,6 +320,15 @@ func (rio *RoomIO) liveKitRoomName() string {
 	return rio.Room.Name()
 }
 
+func (rio *RoomIO) isDeletingRoom() bool {
+	if rio == nil {
+		return false
+	}
+	rio.mu.Lock()
+	defer rio.mu.Unlock()
+	return rio.deletingRoom
+}
+
 func (rio *RoomIO) SetParticipant(participantIdentity string) {
 	rio.setParticipant(participantIdentity, false)
 }
@@ -536,6 +545,9 @@ func (rio *RoomIO) handleParticipantDisconnected(participantIdentity string, rea
 	}
 	rio.setParticipant(linkedParticipant, false)
 	if rio.AgentSession == nil || rio.Options.DisableCloseOnDisconnect {
+		return
+	}
+	if rio.isDeletingRoom() {
 		return
 	}
 	if !roomIOCloseOnDisconnectReason(reason) {
