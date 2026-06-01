@@ -27,6 +27,7 @@ type CartesiaTTS struct {
 	apiKey              string
 	baseURL             string
 	voiceID             string
+	voiceEmbedding      []float64
 	model               string
 	language            string
 	encoding            string
@@ -77,6 +78,12 @@ func WithCartesiaAPIVersion(apiVersion string) CartesiaTTSOption {
 func WithCartesiaWordTimestamps(wordTimestamps bool) CartesiaTTSOption {
 	return func(t *CartesiaTTS) {
 		t.wordTimestamps = wordTimestamps
+	}
+}
+
+func WithCartesiaVoiceEmbedding(embedding []float64) CartesiaTTSOption {
+	return func(t *CartesiaTTS) {
+		t.voiceEmbedding = append([]float64(nil), embedding...)
 	}
 }
 
@@ -178,12 +185,19 @@ func buildCartesiaSynthesizeRequest(t *CartesiaTTS, text string) (string, []byte
 }
 
 func buildCartesiaOptions(t *CartesiaTTS, streaming bool) map[string]interface{} {
+	voice := map[string]interface{}{
+		"mode": "id",
+		"id":   t.voiceID,
+	}
+	if len(t.voiceEmbedding) > 0 {
+		voice = map[string]interface{}{
+			"mode":      "embedding",
+			"embedding": append([]float64(nil), t.voiceEmbedding...),
+		}
+	}
 	options := map[string]interface{}{
 		"model_id": t.model,
-		"voice": map[string]interface{}{
-			"mode": "id",
-			"id":   t.voiceID,
-		},
+		"voice":    voice,
 		"output_format": map[string]interface{}{
 			"container":   "raw",
 			"encoding":    t.encoding,

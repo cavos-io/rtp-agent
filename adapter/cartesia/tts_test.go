@@ -121,6 +121,33 @@ func TestCartesiaSynthesizeRequestUsesReferenceOptions(t *testing.T) {
 	}
 }
 
+func TestCartesiaSynthesizeRequestSupportsVoiceEmbedding(t *testing.T) {
+	provider := NewCartesiaTTS("test-key", "voice-id", "",
+		WithCartesiaVoiceEmbedding([]float64{0.1, 0.2, 0.3}),
+	)
+
+	_, body, err := buildCartesiaSynthesizeRequest(provider, "hello")
+	if err != nil {
+		t.Fatalf("build request: %v", err)
+	}
+
+	var payload map[string]any
+	if err := json.Unmarshal(body, &payload); err != nil {
+		t.Fatalf("unmarshal body: %v", err)
+	}
+	voice := payload["voice"].(map[string]any)
+	if voice["mode"] != "embedding" {
+		t.Fatalf("voice mode = %#v, want embedding", voice["mode"])
+	}
+	if _, ok := voice["id"]; ok {
+		t.Fatalf("voice id = %#v, want omitted for embedding voice", voice["id"])
+	}
+	embedding := voice["embedding"].([]any)
+	if len(embedding) != 3 || embedding[0] != 0.1 || embedding[1] != 0.2 || embedding[2] != 0.3 {
+		t.Fatalf("embedding = %+v, want configured vector", embedding)
+	}
+}
+
 func TestCartesiaSynthesizeRequestUsesConfiguredBaseURL(t *testing.T) {
 	provider := NewCartesiaTTS("test-key", "", "",
 		WithCartesiaBaseURL("https://cartesia.example"),
