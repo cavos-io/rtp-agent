@@ -514,6 +514,36 @@ func (a *RunAssert) EventAt(index int, eventType string, criteria ...RunEventCri
 	return a
 }
 
+func (a *RunAssert) ContainsEventInRange(start int, end int, eventType string, criteria ...RunEventCriteria) *RunAssert {
+	events := a.events()
+	resolvedStart := resolveRunEventIndex(start, len(events))
+	resolvedEnd := resolveRunEventIndex(end, len(events))
+	if resolvedStart < 0 || resolvedEnd < 0 || resolvedStart > resolvedEnd || resolvedEnd > len(events) {
+		a.errors = append(a.errors, fmt.Errorf("invalid event range [%d:%d] for %d event(s)", start, end, len(events)))
+		return a
+	}
+
+	for _, event := range events[resolvedStart:resolvedEnd] {
+		if eventType != "" && event.GetType() != eventType {
+			continue
+		}
+		if len(criteria) > 0 && !eventMatchesCriteria(event, criteria[0]) {
+			continue
+		}
+		return a
+	}
+
+	a.errors = append(a.errors, fmt.Errorf("expected event of type %s matching criteria in range [%d:%d]", eventType, start, end))
+	return a
+}
+
+func resolveRunEventIndex(index int, length int) int {
+	if index < 0 {
+		return index + length
+	}
+	return index
+}
+
 func (a *RunAssert) NextMessage(role llm.ChatRole) *RunAssert {
 	event, ok := a.nextEvent("message")
 	if !ok {
