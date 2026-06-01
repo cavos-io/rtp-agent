@@ -31,11 +31,13 @@ type chunkedStreamFromSynthesizeStream struct {
 	text      string
 	requestID string
 	audioSeen bool
+	closed    bool
 }
 
 func (s *chunkedStreamFromSynthesizeStream) Next() (*SynthesizedAudio, error) {
 	audio, err := s.stream.Next()
 	if err != nil {
+		_ = s.Close()
 		if errors.Is(err, io.EOF) && !s.audioSeen && strings.TrimSpace(s.text) != "" {
 			return nil, fmt.Errorf("no audio frames were pushed for text: %s", s.text)
 		}
@@ -48,5 +50,9 @@ func (s *chunkedStreamFromSynthesizeStream) Next() (*SynthesizedAudio, error) {
 }
 
 func (s *chunkedStreamFromSynthesizeStream) Close() error {
+	if s.closed {
+		return nil
+	}
+	s.closed = true
 	return s.stream.Close()
 }

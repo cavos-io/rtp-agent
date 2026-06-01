@@ -2,6 +2,7 @@ package tts
 
 import (
 	"context"
+	"errors"
 	"io"
 	"reflect"
 	"strings"
@@ -152,6 +153,30 @@ func TestSynthesizeWithStreamCloseDelegatesToStream(t *testing.T) {
 	}
 	if !stream.closed {
 		t.Fatal("underlying stream closed = false, want true")
+	}
+}
+
+func TestSynthesizeWithStreamClosesUnderlyingStreamAfterEOF(t *testing.T) {
+	stream := &fakeSynthesizeStream{
+		events:   []*SynthesizedAudio{{DeltaText: "hello"}},
+		emptyErr: io.EOF,
+	}
+	provider := &fakeStreamingTTS{stream: stream}
+
+	chunked, err := SynthesizeWithStream(context.Background(), provider, "hello")
+	if err != nil {
+		t.Fatalf("SynthesizeWithStream() error = %v", err)
+	}
+
+	if _, err := chunked.Next(); err != nil {
+		t.Fatalf("first Next() error = %v", err)
+	}
+	_, err = chunked.Next()
+	if !errors.Is(err, io.EOF) {
+		t.Fatalf("second Next() error = %v, want io.EOF", err)
+	}
+	if !stream.closed {
+		t.Fatal("underlying stream closed = false, want true after EOF")
 	}
 }
 
