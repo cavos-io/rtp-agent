@@ -10,16 +10,24 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/cavos-io/rtp-agent/core/llm"
 )
 
 type captureRoundTripper struct {
-	body map[string]any
+	body        map[string]any
+	hasDeadline bool
+	remaining   time.Duration
 }
 
 func (rt *captureRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
 	defer req.Body.Close()
+	deadline, ok := req.Context().Deadline()
+	rt.hasDeadline = ok
+	if ok {
+		rt.remaining = time.Until(deadline)
+	}
 	if err := json.NewDecoder(req.Body).Decode(&rt.body); err != nil {
 		return nil, err
 	}
@@ -48,6 +56,34 @@ func (anthropicRequestTestTool) Parameters() map[string]any {
 }
 func (anthropicRequestTestTool) Execute(context.Context, string) (string, error) {
 	return "", nil
+}
+
+func TestAnthropicChatAppliesConnectOptionsTimeoutToRequestContext(t *testing.T) {
+	transport := &captureRoundTripper{}
+	originalTransport := http.DefaultTransport
+	http.DefaultTransport = transport
+	t.Cleanup(func() { http.DefaultTransport = originalTransport })
+
+	model, err := NewAnthropicLLM("test-key", "claude-test")
+	if err != nil {
+		t.Fatalf("NewAnthropicLLM() error = %v", err)
+	}
+	stream, err := model.Chat(
+		context.Background(),
+		llm.NewChatContext(),
+		llm.WithConnectOptions(llm.APIConnectOptions{Timeout: 75 * time.Millisecond}),
+	)
+	if err != nil {
+		t.Fatalf("Chat() error = %v", err)
+	}
+	_ = stream.Close()
+
+	if !transport.hasDeadline {
+		t.Fatal("request context has no deadline, want connect options timeout deadline")
+	}
+	if transport.remaining <= 0 || transport.remaining > 75*time.Millisecond {
+		t.Fatalf("request context deadline remaining = %v, want bounded by connect timeout", transport.remaining)
+	}
 }
 
 func TestBuildAnthropicMessagesGroupsToolCallsWithResults(t *testing.T) {

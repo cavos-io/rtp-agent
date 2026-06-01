@@ -52,6 +52,16 @@ func (l *AnthropicLLM) Chat(ctx context.Context, chatCtx *llm.ChatContext, opts 
 		opt(options)
 	}
 
+	var cancel context.CancelFunc
+	if options.ConnectOptions != nil {
+		if err := options.ConnectOptions.Validate(); err != nil {
+			return nil, err
+		}
+		if options.ConnectOptions.Timeout > 0 {
+			ctx, cancel = context.WithTimeout(ctx, options.ConnectOptions.Timeout)
+		}
+	}
+
 	messages, system := buildAnthropicMessages(chatCtx)
 
 	body := map[string]interface{}{
@@ -104,18 +114,25 @@ func (l *AnthropicLLM) Chat(ctx context.Context, chatCtx *llm.ChatContext, opts 
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
+		if cancel != nil {
+			cancel()
+		}
 		return nil, err
 	}
 
 	if resp.StatusCode != http.StatusOK {
 		respBody, _ := io.ReadAll(resp.Body)
 		resp.Body.Close()
+		if cancel != nil {
+			cancel()
+		}
 		return nil, fmt.Errorf("anthropic error: %s", string(respBody))
 	}
 
 	return &anthropicStream{
 		resp:   resp,
 		reader: bufio.NewReader(resp.Body),
+		cancel: cancel,
 	}, nil
 }
 
@@ -164,6 +181,7 @@ func buildAnthropicToolChoice(choice llm.ToolChoice, parallelToolCalls bool) map
 type anthropicStream struct {
 	resp   *http.Response
 	reader *bufio.Reader
+	cancel context.CancelFunc
 
 	// internal states for tracking tool calls over multiple chunks
 	toolCallID string
@@ -533,5 +551,10 @@ func (s *anthropicStream) Next() (*llm.ChatChunk, error) {
 }
 
 func (s *anthropicStream) Close() error {
-	return s.resp.Body.Close()
+	err := s.resp.Body.Close()
+	if s.cancel != nil {
+		s.cancel()
+		s.cancel = nil
+	}
+	return err
 }
