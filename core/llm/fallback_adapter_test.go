@@ -202,6 +202,41 @@ func TestFallbackAdapterAppliesAttemptTimeoutToProviderCall(t *testing.T) {
 	}
 }
 
+func TestFallbackAdapterDefaultsAttemptTimeout(t *testing.T) {
+	primaryErr := errors.New("primary failed")
+	primary := &fakeFallbackLLM{
+		err: primaryErr,
+		onChat: func(ctx context.Context) {
+			deadline, ok := ctx.Deadline()
+			if !ok {
+				t.Fatal("provider context has no deadline, want default attempt timeout deadline")
+			}
+			remaining := time.Until(deadline)
+			if remaining <= 0 || remaining > 6*time.Second {
+				t.Fatalf("provider context deadline remaining = %v, want default attempt timeout near 5s", remaining)
+			}
+		},
+	}
+	fallback := &fakeFallbackLLM{stream: &fakeFallbackStream{events: []fakeFallbackEvent{
+		{chunk: &ChatChunk{Delta: &ChoiceDelta{Content: "fallback"}}},
+	}}}
+	adapter := NewFallbackAdapter([]LLM{primary, fallback})
+
+	stream, err := adapter.Chat(context.Background(), NewChatContext())
+	if err != nil {
+		t.Fatalf("Chat returned error: %v", err)
+	}
+	defer stream.Close()
+
+	chunk, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next returned error: %v", err)
+	}
+	if got := chunk.Delta.Content; got != "fallback" {
+		t.Fatalf("chunk content = %q, want fallback", got)
+	}
+}
+
 func TestFallbackAdapterWaitsRetryIntervalBeforeSameProviderRetry(t *testing.T) {
 	firstErr := errors.New("primary stream failed")
 	var callTimes []time.Time
