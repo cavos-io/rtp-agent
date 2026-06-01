@@ -143,6 +143,9 @@ func TestPerformTTSInferenceEndsStreamInput(t *testing.T) {
 		if string(frame.Data) != "audio" {
 			t.Fatalf("audio data = %q, want audio", frame.Data)
 		}
+		if frame.SampleRate != 24000 || frame.NumChannels != 1 || frame.SamplesPerChannel != 2 {
+			t.Fatalf("audio format = %d/%d/%d, want 24000/1/2", frame.SampleRate, frame.NumChannels, frame.SamplesPerChannel)
+		}
 	case <-time.After(100 * time.Millisecond):
 		t.Fatal("timed out waiting for TTS audio after input end")
 	}
