@@ -32,6 +32,25 @@ func TestMCPProxyToolReturnsVisibleToolErrorContent(t *testing.T) {
 	}
 }
 
+func TestMCPProxyToolTreatsEmptyResultAsToolError(t *testing.T) {
+	server := NewMCPServerStdio("", nil)
+	server.stdin = &fakeMCPWriteCloser{
+		server: server,
+		result: json.RawMessage(`{"content": [], "isError": false}`),
+	}
+	tool := &mcpProxyTool{server: server, name: "lookup"}
+
+	_, err := tool.Execute(context.Background(), `{}`)
+
+	var toolErr ToolError
+	if !errors.As(err, &toolErr) {
+		t.Fatalf("error = %T %v, want ToolError", err, err)
+	}
+	if toolErr.Message == "" {
+		t.Fatal("ToolError message is empty, want explanation for empty MCP result")
+	}
+}
+
 type fakeMCPWriteCloser struct {
 	server *MCPServerStdio
 	result json.RawMessage

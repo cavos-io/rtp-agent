@@ -310,10 +310,10 @@ func (t *mcpProxyTool) Execute(ctx context.Context, args string) (string, error)
 		return "", NewToolError(strings.Join(parts, "\n"))
 	}
 
-	if len(result.Content) > 0 {
-		return result.Content[0].Text, nil
+	if len(result.Content) == 0 {
+		return "", NewToolError(fmt.Sprintf("Tool %q completed without producing a result.", t.name))
 	}
-	return "", nil
+	return result.Content[0].Text, nil
 }
 
 func (t *mcpProxyTool) ParseFunctionTools(format string) (map[string]interface{}, error) {
