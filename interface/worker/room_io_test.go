@@ -195,6 +195,20 @@ func TestRoomIOCloseUnregistersPreConnectAudioHandler(t *testing.T) {
 	}
 }
 
+func TestRoomIOCloseStopsRecorder(t *testing.T) {
+	recorder := NewRecorderIO(&agent.AgentSession{})
+	recorder.started = true
+	rio := &RoomIO{Recorder: recorder}
+
+	if err := rio.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+
+	if !recorder.closed {
+		t.Fatal("recorder.closed = false, want RoomIO.Close to stop recorder")
+	}
+}
+
 func TestRoomIOCallbackForwardsSipDTMFToSession(t *testing.T) {
 	session := &agent.AgentSession{}
 	rio := &RoomIO{AgentSession: session}

@@ -389,6 +389,11 @@ func (rio *RoomIO) Close() error {
 	if rio.preConnectAudio != nil {
 		rio.preConnectAudio.Close()
 	}
+	if rio.Recorder != nil {
+		if err := rio.Recorder.Stop(); err != nil {
+			return err
+		}
+	}
 	if rio.Room != nil && !rio.Options.DisableTextInput {
 		rio.Room.UnregisterTextStreamHandler(RoomIOChatTopic)
 	}
