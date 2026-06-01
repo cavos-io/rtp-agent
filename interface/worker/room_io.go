@@ -215,6 +215,7 @@ func (rio *RoomIO) registerTextInput() {
 
 func (rio *RoomIO) GetCallback() *lksdk.RoomCallback {
 	cb := lksdk.NewRoomCallback()
+	cb.OnParticipantConnected = rio.onParticipantConnected
 	cb.OnTrackSubscribed = rio.onTrackSubscribed
 	cb.OnParticipantDisconnected = rio.onParticipantDisconnected
 	cb.OnDataPacket = rio.onDataPacket
@@ -283,6 +284,17 @@ func (rio *RoomIO) shouldAcceptParticipant(identity string, kind lksdk.Participa
 	return participantKindAllowed(kind, rio.participantKinds())
 }
 
+func (rio *RoomIO) handleParticipantConnected(identity string, kind lksdk.ParticipantKind, attributes map[string]string, localIdentity string) bool {
+	if rio == nil || rio.participantIdentity() != "" {
+		return false
+	}
+	if !rio.shouldAcceptParticipant(identity, kind, attributes, localIdentity) {
+		return false
+	}
+	rio.SetParticipant(identity)
+	return true
+}
+
 func (rio *RoomIO) participantKinds() []lksdk.ParticipantKind {
 	rio.mu.Lock()
 	defer rio.mu.Unlock()
@@ -349,6 +361,18 @@ func (rio *RoomIO) localParticipantIdentity() string {
 		return ""
 	}
 	return rio.Room.LocalParticipant.Identity()
+}
+
+func (rio *RoomIO) onParticipantConnected(participant *lksdk.RemoteParticipant) {
+	if participant == nil {
+		return
+	}
+	rio.handleParticipantConnected(
+		participant.Identity(),
+		participant.Kind(),
+		participant.Attributes(),
+		rio.localParticipantIdentity(),
+	)
 }
 
 func (rio *RoomIO) onParticipantDisconnected(participant *lksdk.RemoteParticipant) {

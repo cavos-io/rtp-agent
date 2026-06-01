@@ -308,6 +308,36 @@ func TestRoomIOShouldAcceptParticipantSkipsPublishOnBehalfWhenUnlinked(t *testin
 	}
 }
 
+func TestRoomIOHandleParticipantConnectedLinksFirstAcceptedParticipant(t *testing.T) {
+	rio := &RoomIO{}
+
+	if !rio.handleParticipantConnected("caller-a", lksdk.ParticipantStandard, nil, "agent-local") {
+		t.Fatal("handleParticipantConnected(caller-a) = false, want true for first accepted participant")
+	}
+	if got := rio.participantIdentity(); got != "caller-a" {
+		t.Fatalf("participantIdentity() = %q, want caller-a", got)
+	}
+	if rio.shouldHandleParticipant("caller-b") {
+		t.Fatal("shouldHandleParticipant(caller-b) = true, want false after linking first participant")
+	}
+}
+
+func TestRoomIOHandleParticipantConnectedSkipsUnacceptedParticipant(t *testing.T) {
+	rio := &RoomIO{}
+
+	if rio.handleParticipantConnected(
+		"agent-output",
+		lksdk.ParticipantStandard,
+		map[string]string{RoomIOPublishOnBehalfAttribute: "agent-local"},
+		"agent-local",
+	) {
+		t.Fatal("handleParticipantConnected(publish-on-behalf) = true, want false")
+	}
+	if got := rio.participantIdentity(); got != "" {
+		t.Fatalf("participantIdentity() = %q, want empty", got)
+	}
+}
+
 func TestRoomIOHandleParticipantDisconnectedClosesSessionForLinkedParticipant(t *testing.T) {
 	session := &agent.AgentSession{}
 	rio := &RoomIO{
