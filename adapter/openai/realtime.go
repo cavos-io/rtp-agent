@@ -500,9 +500,26 @@ func openAIRealtimeChatItem(item map[string]any) (llm.ChatItem, error) {
 		return openAIRealtimeChatMessage(item)
 	case "function_call":
 		return openAIRealtimeFunctionCall(item)
+	case "function_call_output":
+		return openAIRealtimeFunctionCallOutput(item)
 	default:
 		return nil, fmt.Errorf("unsupported realtime item type %q", itemType)
 	}
+}
+
+func openAIRealtimeFunctionCallOutput(item map[string]any) (*llm.FunctionCallOutput, error) {
+	id, _ := item["id"].(string)
+	callID, _ := item["call_id"].(string)
+	output, _ := item["output"].(string)
+	if id == "" || callID == "" {
+		return nil, fmt.Errorf("malformed realtime function call output item")
+	}
+	return &llm.FunctionCallOutput{
+		ID:      id,
+		CallID:  callID,
+		Output:  output,
+		IsError: false,
+	}, nil
 }
 
 func openAIRealtimeFunctionCall(item map[string]any) (*llm.FunctionCall, error) {
