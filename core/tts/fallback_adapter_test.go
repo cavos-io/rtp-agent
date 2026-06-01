@@ -29,6 +29,19 @@ func TestFallbackAdapterAggregatesProviderMetadata(t *testing.T) {
 	}
 }
 
+func TestFallbackAdapterReportsModelProvider(t *testing.T) {
+	adapter := NewFallbackAdapter([]TTS{
+		&metadataTTS{label: "primary", sampleRate: 24000, numChannels: 1},
+	})
+
+	if got := adapter.Model(); got != "FallbackAdapter" {
+		t.Fatalf("Model = %q, want FallbackAdapter", got)
+	}
+	if got := adapter.Provider(); got != "livekit" {
+		t.Fatalf("Provider = %q, want livekit", got)
+	}
+}
+
 func TestFallbackAdapterUsesConfiguredSampleRate(t *testing.T) {
 	adapter := NewFallbackAdapterWithOptions([]TTS{
 		&metadataTTS{label: "low", sampleRate: 16000, numChannels: 1, capabilities: TTSCapabilities{}},

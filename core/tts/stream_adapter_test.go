@@ -54,6 +54,21 @@ func TestStreamAdapterFlushSynthesizesBufferedText(t *testing.T) {
 	}
 }
 
+func TestStreamAdapterForwardsModelProvider(t *testing.T) {
+	provider := &fakeStreamAdapterTTS{
+		model:    "voice-model",
+		provider: "voice-provider",
+	}
+	adapter := NewStreamAdapter(provider)
+
+	if got := adapter.Model(); got != "voice-model" {
+		t.Fatalf("Model = %q, want wrapped TTS model", got)
+	}
+	if got := adapter.Provider(); got != "voice-provider" {
+		t.Fatalf("Provider = %q, want wrapped TTS provider", got)
+	}
+}
+
 func TestStreamAdapterPreservesInternalNewlinesForSynthesis(t *testing.T) {
 	provider := &fakeStreamAdapterTTS{}
 	stream, err := NewStreamAdapter(provider).Stream(context.Background())
@@ -594,6 +609,8 @@ func nextStreamAdapterAudio(t *testing.T, stream SynthesizeStream) *SynthesizedA
 
 type fakeStreamAdapterTTS struct {
 	texts         []string
+	model         string
+	provider      string
 	synthesizeErr error
 	streamErr     error
 	events        []*SynthesizedAudio
@@ -603,6 +620,14 @@ type fakeStreamAdapterTTS struct {
 
 func (f *fakeStreamAdapterTTS) Label() string {
 	return "fake-tts"
+}
+
+func (f *fakeStreamAdapterTTS) Model() string {
+	return f.model
+}
+
+func (f *fakeStreamAdapterTTS) Provider() string {
+	return f.provider
 }
 
 func (f *fakeStreamAdapterTTS) Capabilities() TTSCapabilities {

@@ -26,6 +26,14 @@ func (a *StreamAdapter) Label() string {
 	return fmt.Sprintf("StreamAdapter(%s)", a.tts.Label())
 }
 
+func (a *StreamAdapter) Model() string {
+	return Model(a.tts)
+}
+
+func (a *StreamAdapter) Provider() string {
+	return Provider(a.tts)
+}
+
 func (a *StreamAdapter) Capabilities() TTSCapabilities {
 	return TTSCapabilities{Streaming: true, AlignedTranscript: true}
 }

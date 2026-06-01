@@ -28,6 +28,32 @@ type TTS interface {
 	Stream(ctx context.Context) (SynthesizeStream, error)
 }
 
+type modelProviderTTS interface {
+	Model() string
+}
+
+type providerProviderTTS interface {
+	Provider() string
+}
+
+func Model(t TTS) string {
+	if provider, ok := t.(modelProviderTTS); ok {
+		if model := provider.Model(); model != "" {
+			return model
+		}
+	}
+	return "unknown"
+}
+
+func Provider(t TTS) string {
+	if provider, ok := t.(providerProviderTTS); ok {
+		if name := provider.Provider(); name != "" {
+			return name
+		}
+	}
+	return "unknown"
+}
+
 type ChunkedStream interface {
 	Next() (*SynthesizedAudio, error)
 	Close() error
