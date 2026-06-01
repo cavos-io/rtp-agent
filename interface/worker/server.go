@@ -90,7 +90,8 @@ type WorkerInfo struct {
 }
 
 type LocalJobOptions struct {
-	FakeJob bool
+	FakeJob  bool
+	RoomInfo *livekit.Room
 }
 
 type WorkerOptions struct {
@@ -1512,6 +1513,9 @@ func (s *AgentServer) ExecuteLocalJob(ctx context.Context, roomName string, part
 }
 
 func (s *AgentServer) ExecuteLocalJobWithOptions(ctx context.Context, roomName string, participantIdentity string, options LocalJobOptions) error {
+	if !options.FakeJob && options.RoomInfo == nil {
+		return fmt.Errorf("room info is required for non-fake local jobs")
+	}
 	jobCtx := newLocalJobContextWithOptions(roomName, participantIdentity, s.Options, options)
 	jobCtx.WorkerID = s.workerID
 
@@ -1595,6 +1599,9 @@ func newLocalJobContextWithOptions(roomName string, participantIdentity string, 
 			Sid:  mathutil.ShortUUID("SRM_"),
 		},
 		Type: livekit.JobType_JT_ROOM,
+	}
+	if options.RoomInfo != nil {
+		job.Room = options.RoomInfo
 	}
 
 	if participantIdentity == "" {

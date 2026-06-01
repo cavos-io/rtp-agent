@@ -2641,6 +2641,10 @@ func TestExecuteLocalJobRecordsRegisteredWorkerID(t *testing.T) {
 func TestExecuteLocalJobWithOptionsCanRunReferenceConnectJob(t *testing.T) {
 	server := NewAgentServer(WorkerOptions{})
 	startedCh := make(chan *JobContext, 1)
+	roomInfo := &livekit.Room{
+		Sid:  "RM_existing",
+		Name: "room-a",
+	}
 
 	if err := server.RTCSession(
 		func(ctx *JobContext) error {
@@ -2656,7 +2660,10 @@ func TestExecuteLocalJobWithOptionsCanRunReferenceConnectJob(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	doneCh := make(chan error, 1)
 	go func() {
-		doneCh <- server.ExecuteLocalJobWithOptions(ctx, "room-a", "agent-connect", LocalJobOptions{FakeJob: false})
+		doneCh <- server.ExecuteLocalJobWithOptions(ctx, "room-a", "agent-connect", LocalJobOptions{
+			FakeJob:  false,
+			RoomInfo: roomInfo,
+		})
 	}()
 
 	var jobCtx *JobContext
@@ -2672,6 +2679,9 @@ func TestExecuteLocalJobWithOptionsCanRunReferenceConnectJob(t *testing.T) {
 	if !strings.HasPrefix(jobCtx.Job.Id, "job-") {
 		t.Fatalf("local connect job ID = %q, want job- prefix", jobCtx.Job.Id)
 	}
+	if jobCtx.Job.Room != roomInfo {
+		t.Fatalf("local connect job room = %#v, want provided LiveKit room info", jobCtx.Job.Room)
+	}
 	if jobCtx.ParticipantIdentity() != "agent-connect" {
 		t.Fatalf("ParticipantIdentity() = %q, want agent-connect", jobCtx.ParticipantIdentity())
 	}
@@ -2684,6 +2694,20 @@ func TestExecuteLocalJobWithOptionsCanRunReferenceConnectJob(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("ExecuteLocalJobWithOptions() did not return after context cancellation")
+	}
+}
+
+func TestExecuteLocalJobWithOptionsRejectsNonFakeWithoutRoomInfo(t *testing.T) {
+	server := NewAgentServer(WorkerOptions{})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	err := server.ExecuteLocalJobWithOptions(ctx, "room-a", "agent-connect", LocalJobOptions{FakeJob: false})
+	if err == nil {
+		t.Fatal("ExecuteLocalJobWithOptions() error = nil, want missing room info error")
+	}
+	if !strings.Contains(err.Error(), "room info is required") {
+		t.Fatalf("ExecuteLocalJobWithOptions() error = %q, want room info requirement", err.Error())
 	}
 }
 

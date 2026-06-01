@@ -17,6 +17,8 @@ import (
 	"github.com/cavos-io/conversation-worker/interface/worker"
 	"github.com/cavos-io/conversation-worker/library/logger"
 	"github.com/gordonklaus/portaudio"
+	"github.com/livekit/protocol/livekit"
+	lksdk "github.com/livekit/server-sdk-go/v2"
 )
 
 type CliArgs struct {
@@ -38,6 +40,11 @@ type ConnectArgs struct {
 	URL                 string
 	APIKey              string
 	APISecret           string
+}
+
+type liveKitRoomService interface {
+	ListRooms(context.Context, *livekit.ListRoomsRequest) (*livekit.ListRoomsResponse, error)
+	CreateRoom(context.Context, *livekit.CreateRoomRequest) (*livekit.Room, error)
 }
 
 type ConsoleMode string
@@ -70,6 +77,10 @@ var printConsoleAudioDevices = func() {
 		return
 	}
 	fmt.Print(formatConsoleAudioDevices(devices, defaultInput, defaultOutput))
+}
+
+var newLiveKitRoomService = func(url, apiKey, apiSecret string) liveKitRoomService {
+	return lksdk.NewRoomServiceClient(url, apiKey, apiSecret)
 }
 
 var consoleAudioDevices = func() ([]consoleAudioDevice, int, int, error) {
@@ -322,15 +333,32 @@ func runConnect(server *worker.AgentServer) {
 
 	logger.Logger.Infow("Starting connect mode", "room", args.RoomName, "participant", args.ParticipantIdentity)
 
+	roomInfo, err := ensureConnectRoom(ctx, newLiveKitRoomService(server.Options.WSRL, server.Options.APIKey, server.Options.APISecret), args.RoomName)
+	if err != nil {
+		logger.Logger.Errorw("Connect room lookup error", err)
+		os.Exit(1)
+	}
+
 	if err := server.ExecuteLocalJobWithOptions(
 		ctx,
 		args.RoomName,
 		args.ParticipantIdentity,
-		worker.LocalJobOptions{FakeJob: false},
+		worker.LocalJobOptions{FakeJob: false, RoomInfo: roomInfo},
 	); err != nil {
 		logger.Logger.Errorw("Connect error", err)
 		os.Exit(1)
 	}
+}
+
+func ensureConnectRoom(ctx context.Context, roomService liveKitRoomService, roomName string) (*livekit.Room, error) {
+	resp, err := roomService.ListRooms(ctx, &livekit.ListRoomsRequest{Names: []string{roomName}})
+	if err != nil {
+		return nil, err
+	}
+	if len(resp.Rooms) > 0 {
+		return resp.Rooms[0], nil
+	}
+	return roomService.CreateRoom(ctx, &livekit.CreateRoomRequest{Name: roomName})
 }
 
 func parseConnectArgs(argv []string) (ConnectArgs, error) {

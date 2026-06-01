@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bytes"
+	"context"
 	"io"
 	"os"
 	"strings"
@@ -12,6 +13,22 @@ import (
 	"github.com/cavos-io/conversation-worker/interface/worker/ipc"
 	"github.com/livekit/protocol/livekit"
 )
+
+type fakeLiveKitRoomService struct {
+	listNames    []string
+	listRooms    []*livekit.Room
+	createdRooms []string
+}
+
+func (s *fakeLiveKitRoomService) ListRooms(_ context.Context, req *livekit.ListRoomsRequest) (*livekit.ListRoomsResponse, error) {
+	s.listNames = append([]string(nil), req.Names...)
+	return &livekit.ListRoomsResponse{Rooms: s.listRooms}, nil
+}
+
+func (s *fakeLiveKitRoomService) CreateRoom(_ context.Context, req *livekit.CreateRoomRequest) (*livekit.Room, error) {
+	s.createdRooms = append(s.createdRooms, req.Name)
+	return &livekit.Room{Sid: "RM_created", Name: req.Name}, nil
+}
 
 func TestParseConnectArgsUsesProvidedIdentity(t *testing.T) {
 	args, err := parseConnectArgs([]string{"worker", "connect", "room-a", "agent-custom"})
@@ -133,6 +150,43 @@ func TestApplyConnectArgsUpdatesServerOptions(t *testing.T) {
 	}
 	if !server.Options.DevMode {
 		t.Fatal("DevMode = false, want true for connect")
+	}
+}
+
+func TestEnsureConnectRoomUsesExistingLiveKitRoom(t *testing.T) {
+	service := &fakeLiveKitRoomService{
+		listRooms: []*livekit.Room{{Sid: "RM_existing", Name: "room-a"}},
+	}
+
+	room, err := ensureConnectRoom(context.Background(), service, "room-a")
+	if err != nil {
+		t.Fatalf("ensureConnectRoom() error = %v", err)
+	}
+
+	if room.GetSid() != "RM_existing" {
+		t.Fatalf("room SID = %q, want RM_existing", room.GetSid())
+	}
+	if strings.Join(service.listNames, ",") != "room-a" {
+		t.Fatalf("ListRooms names = %#v, want room-a", service.listNames)
+	}
+	if len(service.createdRooms) != 0 {
+		t.Fatalf("CreateRoom calls = %#v, want none", service.createdRooms)
+	}
+}
+
+func TestEnsureConnectRoomCreatesMissingLiveKitRoom(t *testing.T) {
+	service := &fakeLiveKitRoomService{}
+
+	room, err := ensureConnectRoom(context.Background(), service, "room-a")
+	if err != nil {
+		t.Fatalf("ensureConnectRoom() error = %v", err)
+	}
+
+	if room.GetSid() != "RM_created" || room.GetName() != "room-a" {
+		t.Fatalf("created room = %#v, want room-a with RM_created SID", room)
+	}
+	if strings.Join(service.createdRooms, ",") != "room-a" {
+		t.Fatalf("CreateRoom names = %#v, want room-a", service.createdRooms)
 	}
 }
 
