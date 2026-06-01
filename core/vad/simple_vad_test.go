@@ -1402,9 +1402,18 @@ func TestSimpleVADEndInputFlushesAndRejectsMoreInput(t *testing.T) {
 	}
 	if err := stream.PushFrame(audioFrame(16000, 160, 6000)); err == nil {
 		t.Fatal("PushFrame() after EndInput() error = nil, want error")
+	} else if !strings.Contains(err.Error(), "input ended") {
+		t.Fatalf("PushFrame() after EndInput() error = %q, want input ended", err.Error())
 	}
 	if err := stream.Flush(); err == nil {
 		t.Fatal("Flush() after EndInput() error = nil, want error")
+	} else if !strings.Contains(err.Error(), "input ended") {
+		t.Fatalf("Flush() after EndInput() error = %q, want input ended", err.Error())
+	}
+	if err := stream.EndInput(); err == nil {
+		t.Fatal("second EndInput() error = nil, want error")
+	} else if !strings.Contains(err.Error(), "input ended") {
+		t.Fatalf("second EndInput() error = %q, want input ended", err.Error())
 	}
 }
 

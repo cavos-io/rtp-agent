@@ -307,11 +307,11 @@ func (s *simpleVADStream) setOptions(options SimpleVADOptions) {
 func (s *simpleVADStream) PushFrame(frame *model.AudioFrame) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.closed {
-		return errors.New("vad stream closed")
-	}
 	if s.inputEnded {
 		return errors.New("vad stream input ended")
+	}
+	if s.closed {
+		return errors.New("vad stream closed")
 	}
 	if frame == nil {
 		return errors.New("vad frame nil")
@@ -486,11 +486,11 @@ func (s *simpleVADStream) collectInferenceMetrics(inferenceDuration float64) {
 func (s *simpleVADStream) Flush() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.closed {
-		return errors.New("vad stream closed")
-	}
 	if s.inputEnded {
 		return errors.New("vad stream input ended")
+	}
+	if s.closed {
+		return errors.New("vad stream closed")
 	}
 	s.resetState()
 	return nil
@@ -499,11 +499,11 @@ func (s *simpleVADStream) Flush() error {
 func (s *simpleVADStream) EndInput() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.closed {
-		return errors.New("vad stream closed")
-	}
 	if s.inputEnded {
 		return errors.New("vad stream input ended")
+	}
+	if s.closed {
+		return errors.New("vad stream closed")
 	}
 	s.resetState()
 	s.inputEnded = true
