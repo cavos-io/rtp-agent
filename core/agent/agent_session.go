@@ -523,6 +523,10 @@ func (s *AgentSession) CloseSoon(reason CloseReason) {
 	_ = s.Stop(context.Background())
 }
 
+func (s *AgentSession) Shutdown() {
+	s.CloseSoon(CloseReasonUserInitiated)
+}
+
 func (s *AgentSession) closeEvents() chan CloseEvent {
 	s.mu.Lock()
 	defer s.mu.Unlock()

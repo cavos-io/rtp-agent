@@ -353,6 +353,32 @@ func TestAgentSessionCloseSoonStopsRunningSession(t *testing.T) {
 	}
 }
 
+func TestAgentSessionShutdownClosesWithUserInitiatedReason(t *testing.T) {
+	agent := NewAgent("test")
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	session.activity = NewAgentActivity(agent, session)
+	session.started = true
+
+	session.Shutdown()
+
+	select {
+	case ev := <-session.CloseEvents():
+		if ev.Reason != CloseReasonUserInitiated {
+			t.Fatalf("CloseEvent.Reason = %q, want user_initiated", ev.Reason)
+		}
+	default:
+		t.Fatal("Shutdown did not emit close event")
+	}
+
+	handle, err := session.GenerateReply(context.Background(), "hello")
+	if handle != nil {
+		t.Fatalf("GenerateReply handle after Shutdown = %#v, want nil", handle)
+	}
+	if !errors.Is(err, ErrAgentSessionNotRunning) {
+		t.Fatalf("GenerateReply error after Shutdown = %v, want ErrAgentSessionNotRunning", err)
+	}
+}
+
 func TestAgentSessionStopResetsSessionStates(t *testing.T) {
 	agent := NewAgent("test")
 	session := NewAgentSession(agent, nil, AgentSessionOptions{})
