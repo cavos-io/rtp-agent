@@ -86,6 +86,30 @@ func TestAnthropicChatAppliesConnectOptionsTimeoutToRequestContext(t *testing.T)
 	}
 }
 
+func TestAnthropicChatAppliesDefaultConnectOptionsTimeoutToRequestContext(t *testing.T) {
+	transport := &captureRoundTripper{}
+	originalTransport := http.DefaultTransport
+	http.DefaultTransport = transport
+	t.Cleanup(func() { http.DefaultTransport = originalTransport })
+
+	model, err := NewAnthropicLLM("test-key", "claude-test")
+	if err != nil {
+		t.Fatalf("NewAnthropicLLM() error = %v", err)
+	}
+	stream, err := model.Chat(context.Background(), llm.NewChatContext())
+	if err != nil {
+		t.Fatalf("Chat() error = %v", err)
+	}
+	_ = stream.Close()
+
+	if !transport.hasDeadline {
+		t.Fatal("request context has no deadline, want default connect timeout deadline")
+	}
+	if transport.remaining <= 0 || transport.remaining > llm.DefaultAPIConnectOptions().Timeout {
+		t.Fatalf("request context deadline remaining = %v, want bounded by default connect timeout", transport.remaining)
+	}
+}
+
 func TestBuildAnthropicMessagesGroupsToolCallsWithResults(t *testing.T) {
 	ctx := llm.NewChatContext()
 	groupID := "assistant-turn"

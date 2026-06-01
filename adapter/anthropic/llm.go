@@ -52,14 +52,13 @@ func (l *AnthropicLLM) Chat(ctx context.Context, chatCtx *llm.ChatContext, opts 
 		opt(options)
 	}
 
+	connectOptions, err := options.EffectiveConnectOptions()
+	if err != nil {
+		return nil, err
+	}
 	var cancel context.CancelFunc
-	if options.ConnectOptions != nil {
-		if err := options.ConnectOptions.Validate(); err != nil {
-			return nil, err
-		}
-		if options.ConnectOptions.Timeout > 0 {
-			ctx, cancel = context.WithTimeout(ctx, options.ConnectOptions.Timeout)
-		}
+	if connectOptions.Timeout > 0 {
+		ctx, cancel = context.WithTimeout(ctx, connectOptions.Timeout)
 	}
 
 	messages, system := buildAnthropicMessages(chatCtx)

@@ -468,6 +468,16 @@ func (o APIConnectOptions) IntervalForRetry(numRetries int) time.Duration {
 	return o.RetryInterval
 }
 
+func (o *ChatOptions) EffectiveConnectOptions() (APIConnectOptions, error) {
+	if o == nil || o.ConnectOptions == nil {
+		return DefaultAPIConnectOptions(), nil
+	}
+	if err := o.ConnectOptions.Validate(); err != nil {
+		return APIConnectOptions{}, err
+	}
+	return *o.ConnectOptions, nil
+}
+
 type LLM interface {
 	Chat(ctx context.Context, chatCtx *ChatContext, opts ...ChatOption) (LLMStream, error)
 }
