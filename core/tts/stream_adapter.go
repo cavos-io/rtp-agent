@@ -45,6 +45,13 @@ func (a *StreamAdapter) OnMetricsCollected(handler TTSMetricsHandler) func() {
 	return func() {}
 }
 
+func (a *StreamAdapter) OnError(handler TTSErrorHandler) func() {
+	if collector, ok := a.tts.(errorCollectorTTS); ok {
+		return collector.OnError(handler)
+	}
+	return func() {}
+}
+
 func (a *StreamAdapter) Capabilities() TTSCapabilities {
 	return TTSCapabilities{Streaming: true, AlignedTranscript: true}
 }

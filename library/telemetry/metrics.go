@@ -46,18 +46,22 @@ type STTMetrics struct {
 func (m *STTMetrics) GetType() string { return "stt_metrics" }
 
 type TTSMetrics struct {
-	Label           string
-	RequestID       string
-	Timestamp       time.Time
-	TTFB            float64
-	Duration        float64
-	AudioDuration   float64
-	Cancelled       bool
-	CharactersCount int
-	Streamed        bool
-	SegmentID       string
-	SpeechID        string
-	Metadata        *Metadata
+	Label            string
+	RequestID        string
+	Timestamp        time.Time
+	TTFB             float64
+	Duration         float64
+	AudioDuration    float64
+	Cancelled        bool
+	CharactersCount  int
+	InputTokens      int
+	OutputTokens     int
+	Streamed         bool
+	SegmentID        string
+	SpeechID         string
+	AcquireTime      float64
+	ConnectionReused bool
+	Metadata         *Metadata
 }
 
 func (m *TTSMetrics) GetType() string { return "tts_metrics" }
@@ -202,7 +206,7 @@ type MetricLabels struct {
 
 type MetricRegistry struct {
 	usageCollectors map[string]*UsageCollector
-	mu             sync.Mutex
+	mu              sync.Mutex
 }
 
 func NewMetricRegistry() *MetricRegistry {

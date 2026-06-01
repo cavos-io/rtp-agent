@@ -23,6 +23,10 @@ type metricsCollectorTTS interface {
 	OnMetricsCollected(TTSMetricsHandler) func()
 }
 
+type metricsEmitterTTS interface {
+	EmitMetricsCollected(*telemetry.TTSMetrics)
+}
+
 func (e *MetricsEmitter) OnMetricsCollected(handler TTSMetricsHandler) func() {
 	if handler == nil {
 		return func() {}

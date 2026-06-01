@@ -200,6 +200,46 @@ func TestFallbackAdapterCanUnsubscribeMetricsCollected(t *testing.T) {
 	}
 }
 
+func TestFallbackAdapterForwardsErrorEvents(t *testing.T) {
+	primary := &metadataTTS{label: "primary", sampleRate: 24000, numChannels: 1}
+	secondary := &metadataTTS{label: "secondary", sampleRate: 24000, numChannels: 1}
+	adapter := NewFallbackAdapter([]TTS{primary, secondary})
+	errCh := make(chan string, 2)
+
+	unsubscribe := adapter.OnError(func(err TTSError) {
+		errCh <- err.Label
+	})
+	defer unsubscribe()
+
+	primary.EmitError(TTSError{Label: "primary", Err: errors.New("primary failed")})
+	secondary.EmitError(TTSError{Label: "secondary", Err: errors.New("secondary failed")})
+
+	first := receiveTTSErrorLabel(t, errCh)
+	second := receiveTTSErrorLabel(t, errCh)
+	if strings.Join([]string{first, second}, ",") != "primary,secondary" {
+		t.Fatalf("error labels = %q, %q; want primary then secondary", first, second)
+	}
+}
+
+func TestFallbackAdapterCanUnsubscribeErrorEvents(t *testing.T) {
+	primary := &metadataTTS{label: "primary", sampleRate: 24000, numChannels: 1}
+	adapter := NewFallbackAdapter([]TTS{primary})
+	errCh := make(chan string, 1)
+	unsubscribe := adapter.OnError(func(err TTSError) {
+		errCh <- err.Label
+	})
+	unsubscribe()
+	unsubscribe()
+
+	primary.EmitError(TTSError{Label: "primary", Err: errors.New("primary failed")})
+
+	select {
+	case label := <-errCh:
+		t.Fatalf("received error after unsubscribe: %q", label)
+	case <-time.After(50 * time.Millisecond):
+	}
+}
+
 func TestFallbackAdapterUsesConfiguredSampleRate(t *testing.T) {
 	adapter := NewFallbackAdapterWithOptions([]TTS{
 		&metadataTTS{label: "low", sampleRate: 16000, numChannels: 1, capabilities: TTSCapabilities{}},
@@ -2286,6 +2326,17 @@ func receiveTTSMetricRequestID(t *testing.T, metrics <-chan string) string {
 	}
 }
 
+func receiveTTSErrorLabel(t *testing.T, errs <-chan string) string {
+	t.Helper()
+	select {
+	case label := <-errs:
+		return label
+	case <-time.After(200 * time.Millisecond):
+		t.Fatal("timed out waiting for TTS error")
+		return ""
+	}
+}
+
 func fallbackTestFrame(sampleRate uint32, channels uint32, samplesPerChannel uint32) *model.AudioFrame {
 	return &model.AudioFrame{
 		Data:              make([]byte, int(samplesPerChannel*channels*2)),
@@ -2297,6 +2348,7 @@ func fallbackTestFrame(sampleRate uint32, channels uint32, samplesPerChannel uin
 
 type metadataTTS struct {
 	MetricsEmitter
+	ErrorEmitter
 
 	label           string
 	sampleRate      int
