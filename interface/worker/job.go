@@ -47,6 +47,11 @@ type participantEntrypointRegistration struct {
 	kinds      []livekit.ParticipantInfo_Kind
 }
 
+type participantEntrypointTaskKey struct {
+	identity   string
+	entrypoint uintptr
+}
+
 type remoteParticipantView interface {
 	SID() string
 	Identity() string
@@ -134,6 +139,8 @@ type JobContext struct {
 	shutdownOnce           sync.Once
 	participantEntrypoints []participantEntrypointRegistration
 	availableParticipants  []*livekit.ParticipantInfo
+	participantTasks       map[participantEntrypointTaskKey]struct{}
+	participantTasksMu     sync.Mutex
 
 	apiKey    string
 	apiSecret string
@@ -325,8 +332,18 @@ func (c *JobContext) participantAvailable(participant remoteParticipantView) {
 	if info == nil {
 		return
 	}
-	c.availableParticipants = append(c.availableParticipants, info)
+	c.rememberAvailableParticipant(info)
 	c.scheduleParticipantEntrypoints(info)
+}
+
+func (c *JobContext) rememberAvailableParticipant(info *livekit.ParticipantInfo) {
+	for i, participant := range c.availableParticipants {
+		if participant.Identity == info.Identity {
+			c.availableParticipants[i] = info
+			return
+		}
+	}
+	c.availableParticipants = append(c.availableParticipants, info)
 }
 
 func (c *JobContext) participantsAvailable(participants []remoteParticipantView) {
@@ -399,7 +416,7 @@ func (c *JobContext) scheduleParticipantEntrypointForExistingParticipants(regist
 		if !participantEntrypointMatchesKind(registration.kinds, participant.Kind) {
 			continue
 		}
-		go registration.entrypoint(c, participant)
+		c.scheduleParticipantEntrypoint(registration, participant)
 	}
 }
 
@@ -443,8 +460,38 @@ func (c *JobContext) scheduleParticipantEntrypoints(participant *livekit.Partici
 		if !participantEntrypointMatchesKind(registered.kinds, participant.Kind) {
 			continue
 		}
-		go registered.entrypoint(c, participant)
+		c.scheduleParticipantEntrypoint(registered, participant)
 	}
+}
+
+func (c *JobContext) scheduleParticipantEntrypoint(registration participantEntrypointRegistration, participant *livekit.ParticipantInfo) {
+	if participant == nil {
+		return
+	}
+	key := participantEntrypointTaskKey{
+		identity:   participant.Identity,
+		entrypoint: reflect.ValueOf(registration.entrypoint).Pointer(),
+	}
+	c.participantTasksMu.Lock()
+	if c.participantTasks == nil {
+		c.participantTasks = make(map[participantEntrypointTaskKey]struct{})
+	}
+	if _, ok := c.participantTasks[key]; ok {
+		c.participantTasksMu.Unlock()
+		logger.Logger.Warnw("participant entrypoint already running for participant", nil, "participant", participant.Identity)
+		return
+	}
+	c.participantTasks[key] = struct{}{}
+	c.participantTasksMu.Unlock()
+
+	go func() {
+		defer func() {
+			c.participantTasksMu.Lock()
+			delete(c.participantTasks, key)
+			c.participantTasksMu.Unlock()
+		}()
+		registration.entrypoint(c, participant)
+	}()
 }
 
 func participantEntrypointMatchesKind(kinds []livekit.ParticipantInfo_Kind, kind livekit.ParticipantInfo_Kind) bool {

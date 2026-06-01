@@ -11,6 +11,20 @@ import (
 	lksdk "github.com/livekit/server-sdk-go/v2"
 )
 
+type fakeRoomIOTextResponder struct {
+	calls []string
+}
+
+func (f *fakeRoomIOTextResponder) Interrupt(force bool) error {
+	f.calls = append(f.calls, "interrupt")
+	return nil
+}
+
+func (f *fakeRoomIOTextResponder) GenerateReply(ctx context.Context, userInput string) (*agent.SpeechHandle, error) {
+	f.calls = append(f.calls, "generate:"+userInput)
+	return agent.NewSpeechHandle(true, agent.DefaultInputDetails()), nil
+}
+
 func TestRoomIOAudioTrackPublicationOptionsUseReferenceDefaults(t *testing.T) {
 	rio := &RoomIO{}
 
@@ -108,6 +122,19 @@ func TestRoomIOCloseUnregistersChatTextHandler(t *testing.T) {
 	err := room.RegisterTextStreamHandler(RoomIOChatTopic, func(*lksdk.TextStreamReader, string) {})
 	if err != nil {
 		t.Fatalf("RegisterTextStreamHandler after RoomIO.Close() error = %v, want nil", err)
+	}
+}
+
+func TestRoomIODefaultTextInputInterruptsBeforeGenerateReply(t *testing.T) {
+	responder := &fakeRoomIOTextResponder{}
+
+	if err := roomIODefaultTextInput(context.Background(), responder, "hello"); err != nil {
+		t.Fatalf("roomIODefaultTextInput() error = %v", err)
+	}
+
+	want := []string{"interrupt", "generate:hello"}
+	if !reflect.DeepEqual(responder.calls, want) {
+		t.Fatalf("calls = %#v, want %#v", responder.calls, want)
 	}
 }
 
@@ -346,6 +373,9 @@ func TestRoomIOHandleParticipantDisconnectedClosesSessionForLinkedParticipant(t 
 			ParticipantIdentity: "caller-a",
 		},
 	}
+	if !rio.handleParticipantConnected("caller-a", lksdk.ParticipantStandard, nil, "agent-local") {
+		t.Fatal("handleParticipantConnected(caller-a) = false, want true")
+	}
 
 	rio.handleParticipantDisconnected("caller-a", livekit.DisconnectReason_CLIENT_INITIATED)
 
@@ -356,6 +386,24 @@ func TestRoomIOHandleParticipantDisconnectedClosesSessionForLinkedParticipant(t 
 		}
 	default:
 		t.Fatal("session did not receive participant-disconnected close event")
+	}
+}
+
+func TestRoomIOHandleParticipantDisconnectedIgnoresUnavailableConfiguredParticipant(t *testing.T) {
+	session := &agent.AgentSession{}
+	rio := &RoomIO{
+		AgentSession: session,
+		Options: RoomOptions{
+			ParticipantIdentity: "caller-a",
+		},
+	}
+
+	rio.handleParticipantDisconnected("caller-a", livekit.DisconnectReason_CLIENT_INITIATED)
+
+	select {
+	case ev := <-session.CloseEvents():
+		t.Fatalf("unexpected close event before participant was linked: %#v", ev)
+	default:
 	}
 }
 
@@ -411,6 +459,23 @@ func TestRoomIOHandleParticipantDisconnectedIgnoresNonCloseReasons(t *testing.T)
 	case ev := <-session.CloseEvents():
 		t.Fatalf("unexpected close event: %#v", ev)
 	default:
+	}
+}
+
+func TestRoomIOHandleParticipantDisconnectedAllowsLinkedParticipantReconnect(t *testing.T) {
+	rio := &RoomIO{}
+
+	if !rio.handleParticipantConnected("caller-a", lksdk.ParticipantStandard, nil, "agent-local") {
+		t.Fatal("handleParticipantConnected(caller-a) = false, want true for initial participant")
+	}
+
+	rio.handleParticipantDisconnected("caller-a", livekit.DisconnectReason_DUPLICATE_IDENTITY)
+
+	if !rio.handleParticipantConnected("caller-a", lksdk.ParticipantStandard, nil, "agent-local") {
+		t.Fatal("handleParticipantConnected(caller-a reconnect) = false, want true after linked participant disconnect")
+	}
+	if got := rio.participantIdentity(); got != "caller-a" {
+		t.Fatalf("participantIdentity() = %q, want caller-a", got)
 	}
 }
 

@@ -533,7 +533,7 @@ func mergeWorkerOptions(current WorkerOptions, next WorkerOptions) WorkerOptions
 	}
 	if next.DrainTimeoutSecondsSet || next.DrainTimeoutSeconds != 0 {
 		current.DrainTimeoutSeconds = next.DrainTimeoutSeconds
-		current.DrainTimeoutSecondsSet = next.DrainTimeoutSecondsSet
+		current.DrainTimeoutSecondsSet = true
 	}
 	if next.SessionEndTimeoutSecondsSet || next.SessionEndTimeoutSeconds != 0 {
 		current.SessionEndTimeoutSeconds = next.SessionEndTimeoutSeconds

@@ -35,8 +35,14 @@ func TestBuildOpenAIChatCompletionRequestAppliesExtraParams(t *testing.T) {
 			"frequency_penalty":     0.2,
 			"n":                     2,
 			"max_completion_tokens": 128,
+			"logit_bias":            map[string]any{"42": 7.0},
 			"reasoning_effort":      "low",
 			"metadata":              map[string]any{"trace": "abc"},
+			"seed":                  42,
+			"stop":                  []string{"END"},
+			"user":                  "caller-123",
+			"store":                 true,
+			"stream_options":        map[string]any{"include_usage": true},
 		},
 	})
 
@@ -58,11 +64,29 @@ func TestBuildOpenAIChatCompletionRequestAppliesExtraParams(t *testing.T) {
 	if req.MaxCompletionTokens != 128 {
 		t.Fatalf("MaxCompletionTokens = %d, want 128", req.MaxCompletionTokens)
 	}
+	if req.LogitBias["42"] != 7 {
+		t.Fatalf("LogitBias = %#v, want token 42 bias 7", req.LogitBias)
+	}
 	if req.ReasoningEffort != "low" {
 		t.Fatalf("ReasoningEffort = %q, want low", req.ReasoningEffort)
 	}
 	if req.Metadata["trace"] != "abc" {
 		t.Fatalf("Metadata[trace] = %q, want abc", req.Metadata["trace"])
+	}
+	if req.Seed == nil || *req.Seed != 42 {
+		t.Fatalf("Seed = %#v, want 42", req.Seed)
+	}
+	if len(req.Stop) != 1 || req.Stop[0] != "END" {
+		t.Fatalf("Stop = %#v, want END", req.Stop)
+	}
+	if req.User != "caller-123" {
+		t.Fatalf("User = %q, want caller-123", req.User)
+	}
+	if !req.Store {
+		t.Fatal("Store = false, want true")
+	}
+	if req.StreamOptions == nil || !req.StreamOptions.IncludeUsage {
+		t.Fatalf("StreamOptions = %#v, want include_usage", req.StreamOptions)
 	}
 }
 
@@ -101,5 +125,38 @@ func TestBuildOpenAIChatCompletionRequestMapsNamedToolChoice(t *testing.T) {
 	}
 	if choice.Function.Name != "lookup" {
 		t.Fatalf("ToolChoice.Function.Name = %q, want lookup", choice.Function.Name)
+	}
+}
+
+func TestBuildOpenAIChatCompletionRequestMapsResponseFormat(t *testing.T) {
+	req := buildOpenAIChatCompletionRequest("gpt-4o", llm.NewChatContext(), &llm.ChatOptions{
+		ResponseFormat: map[string]any{
+			"type": "json_schema",
+			"json_schema": map[string]any{
+				"name":   "WeatherAnswer",
+				"strict": true,
+				"schema": map[string]any{
+					"type": "object",
+					"properties": map[string]any{
+						"summary": map[string]any{"type": "string"},
+					},
+					"required":             []string{"summary"},
+					"additionalProperties": false,
+				},
+			},
+		},
+	})
+
+	if req.ResponseFormat == nil {
+		t.Fatal("ResponseFormat = nil, want json_schema response format")
+	}
+	if req.ResponseFormat.Type != openaisdk.ChatCompletionResponseFormatTypeJSONSchema {
+		t.Fatalf("ResponseFormat.Type = %q, want json_schema", req.ResponseFormat.Type)
+	}
+	if req.ResponseFormat.JSONSchema == nil {
+		t.Fatal("ResponseFormat.JSONSchema = nil, want schema")
+	}
+	if req.ResponseFormat.JSONSchema.Name != "WeatherAnswer" || !req.ResponseFormat.JSONSchema.Strict {
+		t.Fatalf("ResponseFormat.JSONSchema = %#v, want strict WeatherAnswer", req.ResponseFormat.JSONSchema)
 	}
 }

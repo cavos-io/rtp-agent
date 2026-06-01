@@ -94,6 +94,9 @@ func buildOpenAIChatCompletionRequest(model string, chatCtx *llm.ChatContext, op
 			req.ToolChoice = toolChoice
 		}
 	}
+	if responseFormat := buildOpenAIResponseFormat(options.ResponseFormat); responseFormat != nil {
+		req.ResponseFormat = responseFormat
+	}
 
 	applyOpenAIExtraParams(&req, options.ExtraParams)
 	return req
@@ -124,6 +127,43 @@ func buildOpenAIToolChoice(choice llm.ToolChoice) any {
 	default:
 		return nil
 	}
+}
+
+func buildOpenAIResponseFormat(format map[string]any) *openai.ChatCompletionResponseFormat {
+	if len(format) == 0 {
+		return nil
+	}
+	formatType, ok := format["type"].(string)
+	if !ok || formatType == "" {
+		return nil
+	}
+	responseFormat := &openai.ChatCompletionResponseFormat{
+		Type: openai.ChatCompletionResponseFormatType(formatType),
+	}
+	if formatType != string(openai.ChatCompletionResponseFormatTypeJSONSchema) {
+		return responseFormat
+	}
+	jsonSchema, ok := format["json_schema"].(map[string]any)
+	if !ok {
+		return responseFormat
+	}
+	schema := &openai.ChatCompletionResponseFormatJSONSchema{}
+	if name, ok := jsonSchema["name"].(string); ok {
+		schema.Name = name
+	}
+	if description, ok := jsonSchema["description"].(string); ok {
+		schema.Description = description
+	}
+	if strict, ok := jsonSchema["strict"].(bool); ok {
+		schema.Strict = strict
+	}
+	if rawSchema, ok := jsonSchema["schema"]; ok {
+		if data, err := json.Marshal(rawSchema); err == nil {
+			schema.Schema = json.RawMessage(data)
+		}
+	}
+	responseFormat.JSONSchema = schema
+	return responseFormat
 }
 
 func applyOpenAIExtraParams(req *openai.ChatCompletionRequest, params map[string]any) {
@@ -158,7 +198,7 @@ func applyOpenAIExtraParams(req *openai.ChatCompletionRequest, params map[string
 				req.MaxCompletionTokens = v
 			}
 		case "logit_bias":
-			if v, ok := value.(map[string]int); ok {
+			if v := asIntMap(value); v != nil {
 				req.LogitBias = v
 			}
 		case "logprobs":
@@ -176,6 +216,26 @@ func applyOpenAIExtraParams(req *openai.ChatCompletionRequest, params map[string
 		case "metadata":
 			if v := asStringMap(value); v != nil {
 				req.Metadata = v
+			}
+		case "seed":
+			if v, ok := asInt(value); ok {
+				req.Seed = &v
+			}
+		case "stop":
+			if v := asStringSlice(value); v != nil {
+				req.Stop = v
+			}
+		case "user":
+			if v, ok := value.(string); ok {
+				req.User = v
+			}
+		case "store":
+			if v, ok := value.(bool); ok {
+				req.Store = v
+			}
+		case "stream_options":
+			if v := asStreamOptions(value); v != nil {
+				req.StreamOptions = v
 			}
 		}
 	}
@@ -209,6 +269,25 @@ func asInt(value any) (int, bool) {
 	}
 }
 
+func asIntMap(value any) map[string]int {
+	switch v := value.(type) {
+	case map[string]int:
+		return v
+	case map[string]any:
+		out := make(map[string]int, len(v))
+		for key, val := range v {
+			intVal, ok := asInt(val)
+			if !ok {
+				return nil
+			}
+			out[key] = intVal
+		}
+		return out
+	default:
+		return nil
+	}
+}
+
 func asStringMap(value any) map[string]string {
 	switch v := value.(type) {
 	case map[string]string:
@@ -222,6 +301,39 @@ func asStringMap(value any) map[string]string {
 	default:
 		return nil
 	}
+}
+
+func asStringSlice(value any) []string {
+	switch v := value.(type) {
+	case string:
+		return []string{v}
+	case []string:
+		return v
+	case []any:
+		out := make([]string, 0, len(v))
+		for _, item := range v {
+			str, ok := item.(string)
+			if !ok {
+				return nil
+			}
+			out = append(out, str)
+		}
+		return out
+	default:
+		return nil
+	}
+}
+
+func asStreamOptions(value any) *openai.StreamOptions {
+	optionsMap, ok := value.(map[string]any)
+	if !ok {
+		return nil
+	}
+	options := &openai.StreamOptions{}
+	if includeUsage, ok := optionsMap["include_usage"].(bool); ok {
+		options.IncludeUsage = includeUsage
+	}
+	return options
 }
 
 func buildOpenAIChatMessages(chatCtx *llm.ChatContext) []openai.ChatCompletionMessage {

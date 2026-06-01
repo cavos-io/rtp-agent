@@ -1530,11 +1530,53 @@ func openAIExtraContent(extra map[string]any) map[string]any {
 	}
 	filtered := make(map[string]any)
 	for _, key := range []string{"google", "livekit", "xai"} {
-		if value, ok := extra[key]; ok && value != nil {
+		if value, ok := extra[key]; ok && openAIExtraContentValue(value) {
 			filtered[key] = value
 		}
 	}
 	return filtered
+}
+
+func openAIExtraContentValue(value any) bool {
+	if value == nil {
+		return false
+	}
+	switch v := value.(type) {
+	case bool:
+		return v
+	case string:
+		return v != ""
+	case int:
+		return v != 0
+	case int8:
+		return v != 0
+	case int16:
+		return v != 0
+	case int32:
+		return v != 0
+	case int64:
+		return v != 0
+	case uint:
+		return v != 0
+	case uint8:
+		return v != 0
+	case uint16:
+		return v != 0
+	case uint32:
+		return v != 0
+	case uint64:
+		return v != 0
+	case float32:
+		return v != 0
+	case float64:
+		return v != 0
+	}
+	rv := reflect.ValueOf(value)
+	switch rv.Kind() {
+	case reflect.Array, reflect.Map, reflect.Slice:
+		return rv.Len() > 0
+	}
+	return true
 }
 
 func googleItemRole(item ChatItem) string {

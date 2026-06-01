@@ -1367,6 +1367,45 @@ func TestChatContextToOpenAIProviderFormatForwardsReferenceExtraContent(t *testi
 	}
 }
 
+func TestChatContextToOpenAIProviderFormatSkipsEmptyReferenceExtraContent(t *testing.T) {
+	ctx := NewChatContext()
+	ctx.Items = []ChatItem{
+		&ChatMessage{
+			ID:      "user",
+			Role:    ChatRoleUser,
+			Content: []ChatContent{{Text: "hello"}},
+			Extra: map[string]any{
+				"google":  false,
+				"livekit": "",
+				"xai":     map[string]any{},
+			},
+		},
+		&ChatMessage{ID: "assistant", Role: ChatRoleAssistant, Content: []ChatContent{{Text: "checking"}}},
+		&FunctionCall{
+			ID:        "assistant/tool",
+			CallID:    "call_lookup",
+			Name:      "lookup",
+			Arguments: `{}`,
+			Extra: map[string]any{
+				"google":  []any{},
+				"livekit": 0,
+				"xai":     nil,
+			},
+		},
+		&FunctionCallOutput{ID: "output", CallID: "call_lookup", Name: "lookup", Output: "ok"},
+	}
+
+	messages, _ := ctx.ToProviderFormat("openai")
+
+	if _, ok := messages[0]["extra_content"]; ok {
+		t.Fatalf("user extra_content = %#v, want omitted", messages[0]["extra_content"])
+	}
+	toolCalls := messages[1]["tool_calls"].([]map[string]any)
+	if _, ok := toolCalls[0]["extra_content"]; ok {
+		t.Fatalf("tool extra_content = %#v, want omitted", toolCalls[0]["extra_content"])
+	}
+}
+
 func TestChatContextToOpenAIResponsesProviderFormat(t *testing.T) {
 	ctx := NewChatContext()
 	ctx.Items = []ChatItem{

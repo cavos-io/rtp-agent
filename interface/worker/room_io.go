@@ -124,6 +124,11 @@ type TextInputEvent struct {
 
 type TextInputCallback func(context.Context, *agent.AgentSession, TextInputEvent) error
 
+type roomIOTextResponder interface {
+	Interrupt(force bool) error
+	GenerateReply(ctx context.Context, userInput string) (*agent.SpeechHandle, error)
+}
+
 type RoomIO struct {
 	Room         *lksdk.Room
 	AgentSession *agent.AgentSession
@@ -139,6 +144,8 @@ type RoomIO struct {
 
 	preConnectAudio *PreConnectAudioHandler
 	textInput       TextInputCallback
+
+	participantAvailable bool
 }
 
 func NewRoomIO(room *lksdk.Room, session *agent.AgentSession, opts RoomOptions) *RoomIO {
@@ -186,15 +193,27 @@ func roomIOTextInputCallback(opts RoomOptions) TextInputCallback {
 		return opts.TextInputCallback
 	}
 	return func(ctx context.Context, session *agent.AgentSession, ev TextInputEvent) error {
-		_, err := session.GenerateReply(ctx, ev.Text)
-		return err
+		return roomIODefaultTextInput(ctx, session, ev.Text)
 	}
 }
 
+func roomIODefaultTextInput(ctx context.Context, responder roomIOTextResponder, text string) error {
+	if err := responder.Interrupt(false); err != nil {
+		return err
+	}
+	_, err := responder.GenerateReply(ctx, text)
+	return err
+}
+
 func (rio *RoomIO) SetParticipant(participantIdentity string) {
+	rio.setParticipant(participantIdentity, false)
+}
+
+func (rio *RoomIO) setParticipant(participantIdentity string, available bool) {
 	rio.mu.Lock()
 	defer rio.mu.Unlock()
 	rio.Options.ParticipantIdentity = participantIdentity
+	rio.participantAvailable = available
 }
 
 func (rio *RoomIO) UnsetParticipant() {
@@ -269,6 +288,12 @@ func (rio *RoomIO) participantIdentity() string {
 	return rio.Options.ParticipantIdentity
 }
 
+func (rio *RoomIO) participantState() (string, bool) {
+	rio.mu.Lock()
+	defer rio.mu.Unlock()
+	return rio.Options.ParticipantIdentity, rio.participantAvailable
+}
+
 func (rio *RoomIO) shouldHandleParticipant(participantIdentity string) bool {
 	linkedParticipant := rio.participantIdentity()
 	return linkedParticipant == "" || participantIdentity == linkedParticipant
@@ -285,13 +310,17 @@ func (rio *RoomIO) shouldAcceptParticipant(identity string, kind lksdk.Participa
 }
 
 func (rio *RoomIO) handleParticipantConnected(identity string, kind lksdk.ParticipantKind, attributes map[string]string, localIdentity string) bool {
-	if rio == nil || rio.participantIdentity() != "" {
+	if rio == nil {
+		return false
+	}
+	linkedParticipant, available := rio.participantState()
+	if linkedParticipant != "" && (identity != linkedParticipant || available) {
 		return false
 	}
 	if !rio.shouldAcceptParticipant(identity, kind, attributes, localIdentity) {
 		return false
 	}
-	rio.SetParticipant(identity)
+	rio.setParticipant(identity, true)
 	return true
 }
 
@@ -383,11 +412,15 @@ func (rio *RoomIO) onParticipantDisconnected(participant *lksdk.RemoteParticipan
 }
 
 func (rio *RoomIO) handleParticipantDisconnected(participantIdentity string, reason livekit.DisconnectReason) {
-	if rio == nil || rio.AgentSession == nil || rio.Options.DisableCloseOnDisconnect {
+	if rio == nil {
 		return
 	}
-	linkedParticipant := rio.participantIdentity()
-	if linkedParticipant == "" || participantIdentity != linkedParticipant {
+	linkedParticipant, available := rio.participantState()
+	if linkedParticipant == "" || participantIdentity != linkedParticipant || !available {
+		return
+	}
+	rio.setParticipant(linkedParticipant, false)
+	if rio.AgentSession == nil || rio.Options.DisableCloseOnDisconnect {
 		return
 	}
 	if !roomIOCloseOnDisconnectReason(reason) {
