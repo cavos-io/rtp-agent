@@ -323,6 +323,29 @@ func (a *RunAssert) ContainsAgentHandoff(newAgent *Agent) *RunAssert {
 	return a
 }
 
+func (a *RunAssert) NextEvent(eventType ...string) *RunAssert {
+	expectedType := ""
+	if len(eventType) > 0 {
+		expectedType = eventType[0]
+	}
+
+	events := a.events()
+	for a.index < len(events) {
+		event := events[a.index]
+		a.index++
+		if expectedType == "" || event.GetType() == expectedType {
+			return a
+		}
+	}
+
+	if expectedType == "" {
+		a.errors = append(a.errors, errors.New("expected another event, but none left"))
+	} else {
+		a.errors = append(a.errors, fmt.Errorf("expected another event of type %s, but none found", expectedType))
+	}
+	return a
+}
+
 func (a *RunAssert) SkipNext(count int) *RunAssert {
 	if count < 0 {
 		a.errors = append(a.errors, fmt.Errorf("cannot skip negative event count %d", count))

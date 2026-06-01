@@ -272,3 +272,34 @@ func TestRunAssertSkipNextReportsOutOfRange(t *testing.T) {
 		t.Fatal("SkipNext error = nil, want error when skipping past available events")
 	}
 }
+
+func TestRunAssertNextEventAdvancesToNextRecordedEvent(t *testing.T) {
+	result := NewRunResult(llm.NewChatContext())
+	result.RecordItem(&llm.ChatMessage{ID: "msg_1", Role: llm.ChatRoleAssistant, CreatedAt: time.Now()})
+
+	if err := result.Expect.NextEvent().NoMoreEvents().HasError(); err != nil {
+		t.Fatalf("NextEvent returned error = %v, want nil after advancing past one event", err)
+	}
+}
+
+func TestRunAssertNextEventFiltersByType(t *testing.T) {
+	result := NewRunResult(llm.NewChatContext())
+	now := time.Now()
+	result.RecordItem(&llm.ChatMessage{ID: "msg_1", Role: llm.ChatRoleAssistant, CreatedAt: now})
+	result.RecordItem(&llm.FunctionCall{ID: "fnc_1", CallID: "call_1", Name: "lookup", CreatedAt: now.Add(time.Millisecond)})
+
+	if err := result.Expect.NextEvent("function_call").NoMoreEvents().HasError(); err != nil {
+		t.Fatalf("NextEvent returned error = %v, want nil after finding function_call", err)
+	}
+}
+
+func TestRunAssertNextEventReportsMissingType(t *testing.T) {
+	result := NewRunResult(llm.NewChatContext())
+	result.RecordItem(&llm.ChatMessage{ID: "msg_1", Role: llm.ChatRoleAssistant, CreatedAt: time.Now()})
+
+	err := result.Expect.NextEvent("function_call").HasError()
+
+	if err == nil {
+		t.Fatal("NextEvent error = nil, want error when type is not found")
+	}
+}
