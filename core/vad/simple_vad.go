@@ -598,6 +598,20 @@ func (s *simpleVADStream) contextErr() error {
 func (s *simpleVADStream) Next() (*VADEvent, error) {
 	for {
 		s.eventMu.Lock()
+		if len(s.eventQueue) > 0 {
+			if !s.eventClosed {
+				if err := s.contextErr(); err != nil {
+					s.eventMu.Unlock()
+					return nil, err
+				}
+			}
+			ev := s.eventQueue[0]
+			copy(s.eventQueue, s.eventQueue[1:])
+			s.eventQueue[len(s.eventQueue)-1] = nil
+			s.eventQueue = s.eventQueue[:len(s.eventQueue)-1]
+			s.eventMu.Unlock()
+			return ev, nil
+		}
 		if s.eventClosed {
 			s.eventMu.Unlock()
 			return nil, io.EOF
@@ -605,14 +619,6 @@ func (s *simpleVADStream) Next() (*VADEvent, error) {
 		if err := s.contextErr(); err != nil {
 			s.eventMu.Unlock()
 			return nil, err
-		}
-		if len(s.eventQueue) > 0 {
-			ev := s.eventQueue[0]
-			copy(s.eventQueue, s.eventQueue[1:])
-			s.eventQueue[len(s.eventQueue)-1] = nil
-			s.eventQueue = s.eventQueue[:len(s.eventQueue)-1]
-			s.eventMu.Unlock()
-			return ev, nil
 		}
 		notify := s.eventNotify
 		s.eventMu.Unlock()
