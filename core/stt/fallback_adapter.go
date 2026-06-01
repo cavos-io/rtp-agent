@@ -135,13 +135,14 @@ func (f *FallbackAdapter) tryRecover(ctx context.Context, index int, frames []*m
 	if !f.markRecovering(index) {
 		return
 	}
+	recoveryCtx := context.WithoutCancel(ctx)
 
 	go func() {
 		defer f.clearRecovering(index)
 
 		stt := f.stts[index]
 		for attempt := 0; attempt <= f.maxRetryPerSTT; attempt++ {
-			if _, err := stt.Recognize(ctx, frames, language); err == nil {
+			if _, err := stt.Recognize(recoveryCtx, frames, language); err == nil {
 				f.setAvailable(index, true)
 				logger.Logger.Infow("Recovered STT provider", "stt", stt.Label())
 				return
@@ -205,12 +206,13 @@ func (f *FallbackAdapter) tryRecoverStream(ctx context.Context, index int, langu
 	if !f.markRecoveringStream(index) {
 		return
 	}
+	recoveryCtx := context.WithoutCancel(ctx)
 
 	go func() {
 		defer f.clearRecoveringStream(index)
 
 		stt := f.stts[index]
-		stream, err := stt.Stream(ctx, language)
+		stream, err := stt.Stream(recoveryCtx, language)
 		if err != nil {
 			return
 		}
