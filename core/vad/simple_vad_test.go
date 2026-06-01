@@ -667,6 +667,50 @@ func TestSimpleVADUsesDeactivationThresholdWhileSpeaking(t *testing.T) {
 	assertCombinedFrames(t, end.Frames, speech, dipAboveDeactivation, silence)
 }
 
+func TestSimpleVADRejectsInvalidDeactivationThresholdAtStream(t *testing.T) {
+	for _, threshold := range []float64{-0.1, math.NaN(), math.Inf(1)} {
+		detector := NewSimpleVADWithOptions(SimpleVADOptions{
+			Threshold:             0.05,
+			DeactivationThreshold: threshold,
+		})
+
+		stream, err := detector.Stream(context.Background())
+		if err == nil {
+			if stream != nil {
+				_ = stream.Close()
+			}
+			t.Fatalf("Stream() with deactivation threshold %v error = nil, want invalid threshold error", threshold)
+		}
+		if !strings.Contains(err.Error(), "deactivation threshold must be greater than or equal to 0") {
+			t.Fatalf("Stream() with deactivation threshold %v error = %q, want deactivation threshold message", threshold, err.Error())
+		}
+		if len(detector.streams) != 0 {
+			t.Fatalf("registered streams after invalid deactivation threshold = %d, want 0", len(detector.streams))
+		}
+	}
+}
+
+func TestSimpleVADUpdateOptionsWithIgnoresInvalidDeactivationThreshold(t *testing.T) {
+	detector := NewSimpleVADWithOptions(SimpleVADOptions{
+		Threshold:             0.1,
+		DeactivationThreshold: 0.05,
+	})
+	stream, err := detector.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	defer stream.Close()
+
+	detector.UpdateOptionsWith(WithDeactivationThreshold(-0.1))
+	if detector.options.DeactivationThreshold != 0.05 {
+		t.Fatalf("detector deactivation threshold = %v, want 0.05", detector.options.DeactivationThreshold)
+	}
+	simpleStream := stream.(*simpleVADStream)
+	if simpleStream.options.DeactivationThreshold != 0.05 {
+		t.Fatalf("stream deactivation threshold = %v, want 0.05", simpleStream.options.DeactivationThreshold)
+	}
+}
+
 func TestSimpleVADProbabilitySmoothingDelaysSpeechEnd(t *testing.T) {
 	stream, err := NewSimpleVADWithOptions(SimpleVADOptions{
 		Threshold:                 0.05,
