@@ -1093,6 +1093,38 @@ func TestFallbackSynthesizeStreamMarksLastFrameFinal(t *testing.T) {
 	}
 }
 
+func TestFallbackSynthesizeStreamReturnsEOFAfterProviderFinal(t *testing.T) {
+	adapter := NewFallbackAdapter([]TTS{
+		&metadataTTS{
+			label:        "primary",
+			sampleRate:   24000,
+			numChannels:  1,
+			capabilities: TTSCapabilities{Streaming: true},
+			stream:       newFinalFrameThenBlockingSynthesizeStream(&model.AudioFrame{Data: []byte{1}}),
+		},
+	})
+
+	stream, err := adapter.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+	defer stream.Close()
+	if err := stream.PushText("hello"); err != nil {
+		t.Fatalf("PushText returned error: %v", err)
+	}
+
+	first, err := stream.Next()
+	if err != nil {
+		t.Fatalf("first Next returned error: %v", err)
+	}
+	if !first.IsFinal {
+		t.Fatal("first audio IsFinal = false, want provider final marker preserved")
+	}
+	if err := nextStreamAdapterError(stream); !errors.Is(err, io.EOF) {
+		t.Fatalf("second Next error = %v, want io.EOF after provider final", err)
+	}
+}
+
 func TestFallbackSynthesizeStreamEmitsLongFrameHeadBeforeProviderEOF(t *testing.T) {
 	adapter := NewFallbackAdapter([]TTS{
 		&metadataTTS{
@@ -1874,4 +1906,43 @@ func (s *blockingEndInputSynthesizeStream) Next() (*SynthesizedAudio, error) {
 	ev := s.events[0]
 	s.events = s.events[1:]
 	return ev, nil
+}
+
+type finalFrameThenBlockingSynthesizeStream struct {
+	frame   *model.AudioFrame
+	closeCh chan struct{}
+	closed  bool
+	index   int
+}
+
+func newFinalFrameThenBlockingSynthesizeStream(frame *model.AudioFrame) *finalFrameThenBlockingSynthesizeStream {
+	return &finalFrameThenBlockingSynthesizeStream{
+		frame:   frame,
+		closeCh: make(chan struct{}),
+	}
+}
+
+func (s *finalFrameThenBlockingSynthesizeStream) PushText(string) error {
+	return nil
+}
+
+func (s *finalFrameThenBlockingSynthesizeStream) Flush() error {
+	return nil
+}
+
+func (s *finalFrameThenBlockingSynthesizeStream) Close() error {
+	if !s.closed {
+		s.closed = true
+		close(s.closeCh)
+	}
+	return nil
+}
+
+func (s *finalFrameThenBlockingSynthesizeStream) Next() (*SynthesizedAudio, error) {
+	if s.index == 0 {
+		s.index++
+		return &SynthesizedAudio{IsFinal: true, Frame: s.frame}, nil
+	}
+	<-s.closeCh
+	return nil, io.EOF
 }

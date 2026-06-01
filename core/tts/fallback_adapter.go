@@ -714,29 +714,16 @@ func (s *fallbackSynthesizeStream) monitorStream() {
 		ev.RequestID = s.requestID
 		ev.SegmentID = s.segmentID
 
+		providerFinal := ev.IsFinal
 		audioSent = true
-		if ev.IsFinal {
-			if pending != nil {
-				select {
-				case s.eventCh <- pending:
-				case <-s.closeCh:
-					return
-				}
-			}
-			pending = nil
-			select {
-			case s.eventCh <- ev:
-			case <-s.closeCh:
-				return
-			}
-			continue
-		}
 		if pending != nil {
 			combined, combineErr := combineAudioFrames(pending.Frame, ev.Frame)
 			if pendingTail && combineErr == nil {
 				ev = cloneSynthesizedAudio(ev)
 				ev.Frame = combined
 			} else {
+				pending = cloneSynthesizedAudio(pending)
+				pending.IsFinal = false
 				select {
 				case s.eventCh <- pending:
 				case <-s.closeCh:
@@ -744,6 +731,32 @@ func (s *fallbackSynthesizeStream) monitorStream() {
 				}
 				pendingTail = false
 			}
+		}
+		if providerFinal {
+			head, tail, ok := splitSynthesizedAudioTail(ev)
+			if ok {
+				head.RequestID = s.requestID
+				head.SegmentID = s.segmentID
+				head.IsFinal = false
+				select {
+				case s.eventCh <- head:
+				case <-s.closeCh:
+					return
+				}
+				ev = tail
+			}
+			ev = cloneSynthesizedAudio(ev)
+			ev.RequestID = s.requestID
+			ev.SegmentID = s.segmentID
+			ev.IsFinal = true
+			select {
+			case s.eventCh <- ev:
+			case <-s.closeCh:
+				return
+			}
+			_ = stream.Close()
+			s.errCh <- io.EOF
+			return
 		}
 		head, tail, ok := splitSynthesizedAudioTail(ev)
 		if ok {
