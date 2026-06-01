@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync"
 
+	cavosmath "github.com/cavos-io/conversation-worker/library/math"
 	"github.com/cavos-io/conversation-worker/library/tokenize"
 )
 
@@ -45,6 +46,7 @@ type streamAdapterWrapper struct {
 	adapter *StreamAdapter
 	ctx     context.Context
 	cancel  context.CancelFunc
+	requestID string
 	eventCh chan *SynthesizedAudio
 	errCh   chan error
 	inputCh chan streamAdapterInput
@@ -60,12 +62,13 @@ type streamAdapterInput struct {
 func (a *StreamAdapter) Stream(ctx context.Context) (SynthesizeStream, error) {
 	ctx, cancel := context.WithCancel(ctx)
 	w := &streamAdapterWrapper{
-		adapter: a,
-		ctx:     ctx,
-		cancel:  cancel,
-		eventCh: make(chan *SynthesizedAudio, 100),
-		errCh:   make(chan error, 1),
-		inputCh: make(chan streamAdapterInput, 100),
+		adapter:   a,
+		ctx:       ctx,
+		cancel:    cancel,
+		requestID: cavosmath.ShortUUID(""),
+		eventCh:   make(chan *SynthesizedAudio, 100),
+		errCh:     make(chan error, 1),
+		inputCh:   make(chan streamAdapterInput, 100),
 	}
 
 	go w.run()
@@ -129,6 +132,7 @@ func (w *streamAdapterWrapper) synthesize(text string, segmentID string) error {
 			if errors.Is(err, io.EOF) {
 				if pending != nil {
 					pending.SegmentID = segmentID
+					pending.RequestID = w.requestID
 					pending.IsFinal = true
 					w.eventCh <- pending
 				} else if strings.TrimSpace(text) != "" {
@@ -140,6 +144,7 @@ func (w *streamAdapterWrapper) synthesize(text string, segmentID string) error {
 		}
 		if pending != nil {
 			pending.SegmentID = segmentID
+			pending.RequestID = w.requestID
 			w.eventCh <- pending
 		}
 		pending = audio
