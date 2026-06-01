@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -70,6 +71,14 @@ func WithCartesiaSTTSampleRate(sampleRate int) CartesiaSTTOption {
 	}
 }
 
+func WithCartesiaSTTEncoding(encoding string) CartesiaSTTOption {
+	return func(s *CartesiaSTT) {
+		if encoding != "" {
+			s.encoding = encoding
+		}
+	}
+}
+
 func WithCartesiaSTTAudioChunkDurationMS(durationMS int) CartesiaSTTOption {
 	return func(s *CartesiaSTT) {
 		if durationMS > 0 {
@@ -79,6 +88,9 @@ func WithCartesiaSTTAudioChunkDurationMS(durationMS int) CartesiaSTTOption {
 }
 
 func NewCartesiaSTT(apiKey string, opts ...CartesiaSTTOption) *CartesiaSTT {
+	if apiKey == "" {
+		apiKey = os.Getenv("CARTESIA_API_KEY")
+	}
 	provider := &CartesiaSTT{
 		apiKey:               apiKey,
 		wsBaseURL:            cartesiaSTTBaseURLToWSBaseURL(defaultCartesiaSTTBaseURL),

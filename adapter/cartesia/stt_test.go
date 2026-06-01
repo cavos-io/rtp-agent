@@ -41,6 +41,31 @@ func TestCartesiaSTTDefaultsMatchReference(t *testing.T) {
 	}
 }
 
+func TestCartesiaSTTConstructorOptionsMatchReference(t *testing.T) {
+	t.Setenv("CARTESIA_API_KEY", "env-key")
+
+	provider := NewCartesiaSTT("",
+		WithCartesiaSTTEncoding("pcm_mulaw"),
+	)
+	if provider.apiKey != "env-key" {
+		t.Fatalf("apiKey = %q, want env key", provider.apiKey)
+	}
+	if provider.encoding != "pcm_mulaw" {
+		t.Fatalf("encoding = %q, want configured encoding", provider.encoding)
+	}
+
+	streamURL, err := url.Parse(buildCartesiaSTTStreamURL(provider))
+	if err != nil {
+		t.Fatalf("parse stream url: %v", err)
+	}
+	assertCartesiaQuery(t, streamURL.Query(), "encoding", "pcm_mulaw")
+
+	provider = NewCartesiaSTT("explicit-key")
+	if provider.apiKey != "explicit-key" {
+		t.Fatalf("apiKey = %q, want explicit key", provider.apiKey)
+	}
+}
+
 func TestCartesiaSTTNonEnglishDefaultsToWhisperReference(t *testing.T) {
 	provider := NewCartesiaSTT("test-key", WithCartesiaSTTLanguage("es"))
 
