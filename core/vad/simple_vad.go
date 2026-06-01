@@ -15,10 +15,12 @@ type SimpleVAD struct {
 }
 
 type SimpleVADOptions struct {
-	Threshold             float64
-	MinSpeechDuration     float64
-	MinSilenceDuration    float64
-	DeactivationThreshold float64
+	Threshold                 float64
+	MinSpeechDuration         float64
+	MinSilenceDuration        float64
+	PrefixPaddingDuration     float64
+	MaxBufferedSpeechDuration float64
+	DeactivationThreshold     float64
 }
 
 func NewSimpleVAD(threshold float64) *SimpleVAD {
@@ -59,8 +61,11 @@ type simpleVADStream struct {
 	silenceDuration            float64
 	accumulatedSpeechDuration  float64
 	accumulatedSilenceDuration float64
+	prefixFrames               []*model.AudioFrame
+	prefixDuration             float64
 	pendingSpeechFrames        []*model.AudioFrame
 	speechFrames               []*model.AudioFrame
+	bufferedSpeechDuration     float64
 	mu                         sync.Mutex
 }
 
@@ -109,20 +114,22 @@ func (s *simpleVADStream) PushFrame(frame *model.AudioFrame) error {
 				s.speaking = true
 				s.speechDuration = s.accumulatedSpeechDuration
 				s.silenceDuration = 0
-				s.speechFrames = append([]*model.AudioFrame(nil), s.pendingSpeechFrames...)
+				startFrames := s.startSpeechFrames()
+				s.speechFrames = append([]*model.AudioFrame(nil), startFrames...)
+				s.bufferedSpeechDuration = framesDuration(startFrames)
 				s.events <- &VADEvent{
 					Type:           VADEventStartOfSpeech,
 					SamplesIndex:   s.samplesIndex,
 					Timestamp:      s.timestamp,
 					SpeechDuration: s.speechDuration,
-					Frames:         append([]*model.AudioFrame(nil), s.pendingSpeechFrames...),
+					Frames:         startFrames,
 					Speaking:       true,
 				}
 			}
 		} else {
 			s.speechDuration += duration
 			s.silenceDuration = 0
-			s.speechFrames = append(s.speechFrames, frame)
+			s.appendSpeechFrame(frame, duration)
 		}
 	} else {
 		s.accumulatedSilenceDuration += duration
@@ -146,6 +153,7 @@ func (s *simpleVADStream) PushFrame(frame *model.AudioFrame) error {
 			}
 		} else {
 			s.silenceDuration += duration
+			s.appendPrefixFrame(frame, duration)
 			s.pendingSpeechFrames = nil
 		}
 	}
@@ -211,8 +219,53 @@ func (s *simpleVADStream) resetSegment() {
 	s.silenceDuration = 0
 	s.accumulatedSpeechDuration = 0
 	s.accumulatedSilenceDuration = 0
+	s.prefixDuration = 0
+	s.prefixFrames = nil
 	s.pendingSpeechFrames = nil
 	s.speechFrames = nil
+	s.bufferedSpeechDuration = 0
+}
+
+func (s *simpleVADStream) startSpeechFrames() []*model.AudioFrame {
+	frames := make([]*model.AudioFrame, 0, len(s.prefixFrames)+len(s.pendingSpeechFrames))
+	frames = append(frames, s.prefixFrames...)
+	frames = append(frames, s.pendingSpeechFrames...)
+	if s.options.MaxBufferedSpeechDuration <= 0 {
+		return frames
+	}
+
+	var buffered float64
+	limited := frames[:0]
+	for _, frame := range frames {
+		duration := frameDuration(frame)
+		if buffered+duration > s.options.MaxBufferedSpeechDuration {
+			break
+		}
+		limited = append(limited, frame)
+		buffered += duration
+	}
+	return append([]*model.AudioFrame(nil), limited...)
+}
+
+func (s *simpleVADStream) appendSpeechFrame(frame *model.AudioFrame, duration float64) {
+	if s.options.MaxBufferedSpeechDuration > 0 &&
+		s.bufferedSpeechDuration+duration > s.options.MaxBufferedSpeechDuration {
+		return
+	}
+	s.speechFrames = append(s.speechFrames, frame)
+	s.bufferedSpeechDuration += duration
+}
+
+func (s *simpleVADStream) appendPrefixFrame(frame *model.AudioFrame, duration float64) {
+	if s.options.PrefixPaddingDuration <= 0 {
+		return
+	}
+	s.prefixFrames = append(s.prefixFrames, frame)
+	s.prefixDuration += duration
+	for s.prefixDuration > s.options.PrefixPaddingDuration && len(s.prefixFrames) > 0 {
+		s.prefixDuration -= frameDuration(s.prefixFrames[0])
+		s.prefixFrames = s.prefixFrames[1:]
+	}
 }
 
 func frameRMS(frame *model.AudioFrame) float64 {
@@ -238,4 +291,12 @@ func frameDuration(frame *model.AudioFrame) float64 {
 		return 0
 	}
 	return float64(frame.SamplesPerChannel) / float64(frame.SampleRate)
+}
+
+func framesDuration(frames []*model.AudioFrame) float64 {
+	var duration float64
+	for _, frame := range frames {
+		duration += frameDuration(frame)
+	}
+	return duration
 }
