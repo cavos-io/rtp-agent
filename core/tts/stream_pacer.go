@@ -32,6 +32,8 @@ type SentenceStreamPacer struct {
 	yieldedAudioTime  time.Duration
 	playbackStartTime time.Time
 	playbackStarted   bool
+	generationStarted bool
+	lastAudioTime     time.Time
 
 	closed bool
 }
@@ -124,6 +126,9 @@ func (p *SentenceStreamPacer) paceLoop() {
 		case sentence, ok := <-p.sentenceCh:
 			if !ok {
 				for len(pending) > 0 {
+					if !p.waitUntilReadyToSend(firstSentence) {
+						return
+					}
 					if err := p.pushBatch(&pending, &firstSentence); err != nil {
 						return
 					}
@@ -134,28 +139,8 @@ func (p *SentenceStreamPacer) paceLoop() {
 			pending = append(pending, sentence)
 			p.drainAvailableSentences(&pending)
 
-			// Wait until buffer is low enough
-			for {
-				p.mu.Lock()
-				var remaining time.Duration
-				if p.playbackStarted {
-					elapsed := time.Since(p.playbackStartTime)
-					if p.yieldedAudioTime > elapsed {
-						remaining = p.yieldedAudioTime - elapsed
-					}
-				}
-				p.mu.Unlock()
-
-				if remaining <= p.minRemainingAudio {
-					break
-				}
-
-				// Sleep a bit before checking again
-				select {
-				case <-p.ctx.Done():
-					return
-				case <-time.After(200 * time.Millisecond):
-				}
+			if !p.waitUntilReadyToSend(firstSentence) {
+				return
 			}
 
 			if err := p.pushBatch(&pending, &firstSentence); err != nil {
@@ -163,6 +148,40 @@ func (p *SentenceStreamPacer) paceLoop() {
 			}
 		}
 	}
+}
+
+func (p *SentenceStreamPacer) waitUntilReadyToSend(firstSentence bool) bool {
+	if firstSentence {
+		return true
+	}
+
+	for {
+		p.mu.Lock()
+		remaining := p.remainingAudioLocked()
+		generationStopped := p.generationStarted && !p.lastAudioTime.IsZero() && time.Since(p.lastAudioTime) >= 100*time.Millisecond
+		p.mu.Unlock()
+
+		if generationStopped && remaining <= p.minRemainingAudio {
+			return true
+		}
+
+		select {
+		case <-p.ctx.Done():
+			return false
+		case <-time.After(50 * time.Millisecond):
+		}
+	}
+}
+
+func (p *SentenceStreamPacer) remainingAudioLocked() time.Duration {
+	if !p.playbackStarted {
+		return 0
+	}
+	elapsed := time.Since(p.playbackStartTime)
+	if p.yieldedAudioTime > elapsed {
+		return p.yieldedAudioTime - elapsed
+	}
+	return 0
 }
 
 func (p *SentenceStreamPacer) drainAvailableSentences(pending *[]string) {
@@ -201,6 +220,10 @@ func (p *SentenceStreamPacer) pushBatch(pending *[]string, firstSentence *bool) 
 
 	text := strings.Join(batch, " ")
 	logger.Logger.Debugw("Pacer pushing text to TTS", "text", text)
+	p.mu.Lock()
+	p.generationStarted = false
+	p.lastAudioTime = time.Time{}
+	p.mu.Unlock()
 	return p.underlying.PushText(text)
 }
 
@@ -214,9 +237,11 @@ func (p *SentenceStreamPacer) audioLoop() {
 		}
 
 		p.mu.Lock()
+		p.generationStarted = true
+		p.lastAudioTime = time.Now()
 		if !p.playbackStarted {
 			p.playbackStarted = true
-			p.playbackStartTime = time.Now()
+			p.playbackStartTime = p.lastAudioTime
 		}
 
 		if audio.Frame != nil && audio.Frame.SampleRate > 0 {

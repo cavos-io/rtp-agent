@@ -34,12 +34,38 @@ func TestSentenceStreamPacerBatchesQueuedSentencesByMaxTextLength(t *testing.T) 
 	}
 }
 
+func TestSentenceStreamPacerWaitsForGenerationProgressBeforeDrainingFlush(t *testing.T) {
+	underlying := newFakePacerStream()
+	underlying.blockAudio = true
+	pacer := NewSentenceStreamPacerWithOptions(context.Background(), underlying, SentenceStreamPacerOptions{
+		MinRemainingAudio: 20 * time.Second,
+		MaxTextLength:     80,
+	})
+	defer pacer.Close()
+
+	if err := pacer.PushText("First complete sentence. Second complete sentence. Third complete sentence."); err != nil {
+		t.Fatalf("PushText() error = %v", err)
+	}
+	if err := pacer.Flush(); err != nil {
+		t.Fatalf("Flush() error = %v", err)
+	}
+
+	if !underlying.waitForPushes(t, []string{"First complete sentence."}) {
+		t.Fatalf("pushed text = %#v, want only first sentence before generation progresses", underlying.pushes())
+	}
+	time.Sleep(120 * time.Millisecond)
+	if got := underlying.pushes(); !reflect.DeepEqual(got, []string{"First complete sentence."}) {
+		t.Fatalf("pushed text = %#v, want no additional text before generation progresses", got)
+	}
+}
+
 type fakePacerStream struct {
-	mu        sync.Mutex
-	cond      *sync.Cond
-	closed    bool
-	nextIndex int
-	texts     []string
+	mu         sync.Mutex
+	cond       *sync.Cond
+	closed     bool
+	blockAudio bool
+	nextIndex  int
+	texts      []string
 }
 
 func newFakePacerStream() *fakePacerStream {
@@ -72,6 +98,12 @@ func (f *fakePacerStream) Next() (*SynthesizedAudio, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	for !f.closed && f.nextIndex >= len(f.texts) {
+		f.cond.Wait()
+	}
+	if f.closed {
+		return nil, context.Canceled
+	}
+	for !f.closed && f.blockAudio {
 		f.cond.Wait()
 	}
 	if f.closed {
