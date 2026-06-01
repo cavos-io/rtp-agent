@@ -242,6 +242,9 @@ func (s *simpleVADStream) PushFrame(frame *model.AudioFrame) error {
 			}
 		} else {
 			s.silenceDuration += duration
+			for _, pending := range s.pendingSpeechFrames {
+				s.appendPrefixFrame(pending, frameDuration(pending))
+			}
 			s.appendPrefixFrame(frame, duration)
 			s.pendingSpeechFrames = nil
 		}
