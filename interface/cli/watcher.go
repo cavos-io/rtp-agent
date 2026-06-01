@@ -377,7 +377,7 @@ func RunWithDevMode(args []string) error {
 	}
 
 	var w *Watcher
-	w = NewWatcher([]string{"./"}, func() {
+	w = newDevModeWatcher(&cliArgs, func() {
 		logger.Logger.Infow("Triggering rebuild and restart")
 		startCmd()
 		w.Reloaded()
@@ -392,6 +392,10 @@ func RunWithDevMode(args []string) error {
 
 	// Wait forever
 	select {}
+}
+
+func newDevModeWatcher(cliArgs *CliArgs, onChange func()) *Watcher {
+	return NewWatcher([]string{"./"}, onChange, cliArgs)
 }
 
 func startArgsForDevReload(args CliArgs) []string {

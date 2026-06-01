@@ -678,6 +678,28 @@ func TestWatcherTriggerReloadKeepsReloadingUntilReloaded(t *testing.T) {
 	}
 }
 
+func TestDevModeWatcherSharesCliReloadState(t *testing.T) {
+	args := &CliArgs{ReloadCount: 4}
+	calls := 0
+	watcher := newDevModeWatcher(args, func() {
+		calls++
+	})
+	watcher.activeJobsTimeout = time.Nanosecond
+
+	if !watcher.triggerReload() {
+		t.Fatal("triggerReload() = false, want true")
+	}
+	if calls != 1 {
+		t.Fatalf("onChange calls = %d, want 1", calls)
+	}
+	if args.ReloadCount != 5 {
+		t.Fatalf("ReloadCount = %d, want 5", args.ReloadCount)
+	}
+	if resp := watcher.reloadJobsResponse(); resp.ReloadCount != 5 {
+		t.Fatalf("ReloadJobsResponse.ReloadCount = %d, want 5", resp.ReloadCount)
+	}
+}
+
 func TestWatcherTriggerReloadRequestsActiveJobsBeforeRestart(t *testing.T) {
 	args := &CliArgs{ReloadCount: 3}
 	var output bytes.Buffer
