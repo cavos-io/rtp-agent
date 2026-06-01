@@ -53,6 +53,7 @@ type streamAdapterWrapper struct {
 	mu        sync.Mutex
 	active    ChunkedStream
 	closed    bool
+	inputDone bool
 	started   bool
 	flushed   bool
 }
@@ -212,6 +213,9 @@ func (w *streamAdapterWrapper) PushText(text string) error {
 	if w.closed {
 		return fmt.Errorf("stream closed")
 	}
+	if w.inputDone {
+		return nil
+	}
 	if text == "" || w.flushed {
 		return nil
 	}
@@ -226,10 +230,27 @@ func (w *streamAdapterWrapper) Flush() error {
 	if w.closed {
 		return fmt.Errorf("stream closed")
 	}
+	if w.inputDone {
+		return nil
+	}
 	if w.started {
 		w.flushed = true
 	}
 	w.inputCh <- streamAdapterInput{flush: true}
+	return nil
+}
+
+func (w *streamAdapterWrapper) EndInput() error {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.closed {
+		return fmt.Errorf("stream closed")
+	}
+	if w.inputDone {
+		return nil
+	}
+	w.inputDone = true
+	close(w.inputCh)
 	return nil
 }
 
@@ -242,7 +263,10 @@ func (w *streamAdapterWrapper) Close() error {
 	w.closed = true
 	active := w.active
 	w.cancel()
-	close(w.inputCh)
+	if !w.inputDone {
+		w.inputDone = true
+		close(w.inputCh)
+	}
 	w.mu.Unlock()
 	if active != nil {
 		return active.Close()

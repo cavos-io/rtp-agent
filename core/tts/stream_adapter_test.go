@@ -399,6 +399,38 @@ func TestStreamAdapterCloseClosesActiveChunkedStream(t *testing.T) {
 	}
 }
 
+func TestStreamAdapterEndsInputWhenSupported(t *testing.T) {
+	provider := &fakeStreamAdapterTTS{}
+	stream, err := NewStreamAdapter(provider).Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+	defer stream.Close()
+
+	ending, ok := stream.(inputEndingSynthesizeStream)
+	if !ok {
+		t.Fatal("StreamAdapter stream does not implement EndInput")
+	}
+	if err := stream.PushText("hello without punctuation"); err != nil {
+		t.Fatalf("PushText returned error: %v", err)
+	}
+	if err := ending.EndInput(); err != nil {
+		t.Fatalf("EndInput returned error: %v", err)
+	}
+
+	audio := nextStreamAdapterAudio(t, stream)
+	if audio.Frame == nil {
+		t.Fatal("audio frame is nil")
+	}
+	err = nextStreamAdapterError(stream)
+	if !errors.Is(err, io.EOF) {
+		t.Fatalf("Next error = %v, want io.EOF after EndInput drains", err)
+	}
+	if got := provider.texts; len(got) != 1 || got[0] != "hello without punctuation" {
+		t.Fatalf("synthesized texts = %#v, want ended input text", got)
+	}
+}
+
 func TestStreamAdapterRejectsInputAfterClose(t *testing.T) {
 	stream, err := NewStreamAdapter(&fakeStreamAdapterTTS{}).Stream(context.Background())
 	if err != nil {
