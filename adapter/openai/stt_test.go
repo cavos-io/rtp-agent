@@ -1,11 +1,13 @@
 package openai
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"math"
 	"strings"
 	"testing"
 
+	"github.com/cavos-io/rtp-agent/core/audio/model"
 	"github.com/cavos-io/rtp-agent/core/stt"
 	goopenai "github.com/sashabaranov/go-openai"
 )
@@ -80,6 +82,9 @@ func TestOpenAISTTDefaultsMatchReference(t *testing.T) {
 	if provider.language != "en" {
 		t.Fatalf("language = %q, want en", provider.language)
 	}
+	if provider.Capabilities().Streaming {
+		t.Fatalf("streaming = true by default, want opt-in realtime streaming")
+	}
 }
 
 func TestOpenAIAudioRequestUsesProviderOptions(t *testing.T) {
@@ -110,5 +115,150 @@ func TestOpenAISTTDetectLanguageOmitsLanguage(t *testing.T) {
 
 	if req.Language != "" {
 		t.Fatalf("language = %q, want empty for language detection", req.Language)
+	}
+}
+
+func TestOpenAIRealtimeSTTCapabilitiesAndWebsocketRequestMatchReference(t *testing.T) {
+	provider := NewOpenAISTT("test-key", "gpt-4o-mini-transcribe",
+		WithOpenAISTTRealtime(true),
+		WithOpenAISTTBaseURL("https://openai.example/v1/"),
+		WithOpenAISTTLanguage("id"),
+		WithOpenAISTTPrompt("domain words"),
+	)
+
+	caps := provider.Capabilities()
+	if !caps.Streaming || !caps.InterimResults || caps.AlignedTranscript != "word" {
+		t.Fatalf("capabilities = %+v, want realtime streaming/interim with existing word alignment", caps)
+	}
+
+	wsURL := buildOpenAIRealtimeSTTWebsocketURL(provider)
+	if wsURL.Scheme != "wss" || wsURL.Host != "openai.example" || wsURL.Path != "/v1/realtime" {
+		t.Fatalf("websocket URL = %q, want realtime endpoint", wsURL.String())
+	}
+	if wsURL.Query().Get("intent") != "transcription" {
+		t.Fatalf("intent query = %q, want transcription", wsURL.Query().Get("intent"))
+	}
+
+	headers := buildOpenAIRealtimeSTTHeaders(provider)
+	if headers.Get("Authorization") != "Bearer test-key" {
+		t.Fatalf("authorization = %q, want bearer token", headers.Get("Authorization"))
+	}
+	if headers.Get("User-Agent") != "LiveKit Agents" {
+		t.Fatalf("user-agent = %q, want reference user agent", headers.Get("User-Agent"))
+	}
+}
+
+func TestOpenAIRealtimeSTTSessionUpdateMatchesReference(t *testing.T) {
+	provider := NewOpenAISTT("test-key", "gpt-4o-mini-transcribe",
+		WithOpenAISTTRealtime(true),
+		WithOpenAISTTLanguage("id"),
+		WithOpenAISTTPrompt("domain words"),
+	)
+
+	payload, err := buildOpenAIRealtimeSTTSessionUpdate(provider)
+	if err != nil {
+		t.Fatalf("build session update: %v", err)
+	}
+	var message map[string]any
+	if err := json.Unmarshal(payload, &message); err != nil {
+		t.Fatalf("decode session update: %v", err)
+	}
+	if message["type"] != "session.update" {
+		t.Fatalf("type = %#v, want session.update", message["type"])
+	}
+	session := message["session"].(map[string]any)
+	if session["type"] != "transcription" {
+		t.Fatalf("session type = %#v, want transcription", session["type"])
+	}
+	audio := session["audio"].(map[string]any)
+	input := audio["input"].(map[string]any)
+	format := input["format"].(map[string]any)
+	if format["type"] != "audio/pcm" || format["rate"] != float64(24000) {
+		t.Fatalf("format = %+v, want 24 kHz PCM", format)
+	}
+	transcription := input["transcription"].(map[string]any)
+	if transcription["model"] != "gpt-4o-mini-transcribe" || transcription["language"] != "id" || transcription["prompt"] != "domain words" {
+		t.Fatalf("transcription = %+v, want model/language/prompt", transcription)
+	}
+	if input["turn_detection"] == nil {
+		t.Fatalf("turn_detection missing")
+	}
+}
+
+func TestOpenAIRealtimeSTTStreamMessagesMatchReference(t *testing.T) {
+	frame := &model.AudioFrame{
+		Data:              []byte{1, 2, 3, 4},
+		SampleRate:        24000,
+		NumChannels:       1,
+		SamplesPerChannel: 2,
+	}
+	payload, err := buildOpenAIRealtimeSTTAudioAppendMessage(frame)
+	if err != nil {
+		t.Fatalf("build audio append: %v", err)
+	}
+	var message map[string]any
+	if err := json.Unmarshal(payload, &message); err != nil {
+		t.Fatalf("decode audio append: %v", err)
+	}
+	if message["type"] != "input_audio_buffer.append" {
+		t.Fatalf("type = %#v, want input_audio_buffer.append", message["type"])
+	}
+	wantAudio := base64.StdEncoding.EncodeToString(frame.Data)
+	if message["audio"] != wantAudio {
+		t.Fatalf("audio = %#v, want base64 frame", message["audio"])
+	}
+
+	commit, err := buildOpenAIRealtimeSTTCommitMessage()
+	if err != nil {
+		t.Fatalf("build commit: %v", err)
+	}
+	var commitMessage map[string]any
+	if err := json.Unmarshal(commit, &commitMessage); err != nil {
+		t.Fatalf("decode commit: %v", err)
+	}
+	if commitMessage["type"] != "input_audio_buffer.commit" {
+		t.Fatalf("commit type = %#v, want input_audio_buffer.commit", commitMessage["type"])
+	}
+}
+
+func TestOpenAIRealtimeSTTEventsFromMessages(t *testing.T) {
+	state := &openAIRealtimeSTTMessageState{language: "id"}
+
+	events, err := openAIRealtimeSTTEventsFromMessage([]byte(`{"type":"input_audio_buffer.speech_started","item_id":"item-1","audio_start_ms":100}`), state)
+	if err != nil {
+		t.Fatalf("speech started: %v", err)
+	}
+	if len(events) != 0 {
+		t.Fatalf("events = %+v, want timing-only speech start", events)
+	}
+
+	events, err = openAIRealtimeSTTEventsFromMessage([]byte(`{"type":"conversation.item.input_audio_transcription.delta","item_id":"item-1","delta":"hel"}`), state)
+	if err != nil {
+		t.Fatalf("delta: %v", err)
+	}
+	if len(events) != 1 || events[0].Type != stt.SpeechEventInterimTranscript || events[0].Alternatives[0].Text != "hel" {
+		t.Fatalf("events = %+v, want interim transcript", events)
+	}
+
+	events, err = openAIRealtimeSTTEventsFromMessage([]byte(`{"type":"input_audio_buffer.speech_stopped","item_id":"item-1","audio_end_ms":900}`), state)
+	if err != nil {
+		t.Fatalf("speech stopped: %v", err)
+	}
+	if len(events) != 0 {
+		t.Fatalf("events = %+v, want timing-only speech stop", events)
+	}
+
+	events, err = openAIRealtimeSTTEventsFromMessage([]byte(`{"type":"conversation.item.input_audio_transcription.completed","item_id":"item-1","transcript":"hello","usage":{"input_tokens":3,"output_tokens":0}}`), state)
+	if err != nil {
+		t.Fatalf("completed: %v", err)
+	}
+	if len(events) != 2 {
+		t.Fatalf("events = %+v, want final transcript and usage", events)
+	}
+	if events[0].Type != stt.SpeechEventFinalTranscript || events[0].Alternatives[0].Text != "hello" {
+		t.Fatalf("final event = %+v, want transcript", events[0])
+	}
+	if events[1].Type != stt.SpeechEventRecognitionUsage || events[1].RecognitionUsage.AudioDuration != 0.8 || events[1].RecognitionUsage.InputTokens != 3 {
+		t.Fatalf("usage event = %+v, want duration and tokens", events[1])
 	}
 }
