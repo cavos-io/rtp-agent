@@ -117,6 +117,17 @@ func (ma *MultimodalAgent) handleRealtimeEvent(ev llm.RealtimeEvent) {
 		// Text delta received, we could pipe this to transcript synchronizer
 		_ = ev.Text
 
+	case llm.RealtimeEventTypeGenerationCreated:
+		if ev.Generation == nil || ev.Generation.UserInitiated || ma.session == nil {
+			return
+		}
+		handle := NewSpeechHandle(ma.session.Options.AllowInterruptions, DefaultInputDetails())
+		ma.session.EmitSpeechCreated(SpeechCreatedEvent{
+			UserInitiated: false,
+			Source:        "generate_reply",
+			SpeechHandle:  handle,
+		})
+
 	case llm.RealtimeEventTypeInputAudioTranscriptionCompleted:
 		if ev.InputTranscription == nil || ma.session == nil {
 			return

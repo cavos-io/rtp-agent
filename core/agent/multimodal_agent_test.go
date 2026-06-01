@@ -125,6 +125,62 @@ func TestMultimodalAgentDoesNotEmitErrorEventForRealtimeEOF(t *testing.T) {
 	}
 }
 
+func TestMultimodalAgentEmitsSpeechCreatedForServerGeneration(t *testing.T) {
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{AllowInterruptions: true})
+	ma := &MultimodalAgent{session: session}
+
+	ma.handleRealtimeEvent(llm.RealtimeEvent{
+		Type: llm.RealtimeEventTypeGenerationCreated,
+		Generation: &llm.GenerationCreatedEvent{
+			ResponseID:    "response_1",
+			UserInitiated: false,
+		},
+	})
+
+	select {
+	case ev := <-session.SpeechCreatedEvents():
+		if ev.GetType() != "speech_created" {
+			t.Fatalf("event type = %q, want speech_created", ev.GetType())
+		}
+		if ev.UserInitiated {
+			t.Fatal("UserInitiated = true, want false for server realtime generation")
+		}
+		if ev.Source != "generate_reply" {
+			t.Fatalf("Source = %q, want generate_reply", ev.Source)
+		}
+		if ev.SpeechHandle == nil {
+			t.Fatal("SpeechHandle = nil, want handle for server realtime generation")
+		}
+		if !ev.SpeechHandle.AllowInterruptions {
+			t.Fatal("SpeechHandle.AllowInterruptions = false, want session default true")
+		}
+		if ev.SpeechHandle.InputDetails.Modality != "audio" {
+			t.Fatalf("SpeechHandle.InputDetails.Modality = %q, want audio", ev.SpeechHandle.InputDetails.Modality)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("SpeechCreatedEvents did not receive server realtime generation")
+	}
+}
+
+func TestMultimodalAgentSkipsSpeechCreatedForUserInitiatedGeneration(t *testing.T) {
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	ma := &MultimodalAgent{session: session}
+
+	ma.handleRealtimeEvent(llm.RealtimeEvent{
+		Type: llm.RealtimeEventTypeGenerationCreated,
+		Generation: &llm.GenerationCreatedEvent{
+			ResponseID:    "response_1",
+			UserInitiated: true,
+		},
+	})
+
+	select {
+	case ev := <-session.SpeechCreatedEvents():
+		t.Fatalf("unexpected speech_created event for user-initiated realtime generation: %#v", ev)
+	default:
+	}
+}
+
 func TestMultimodalAgentEmitsFinalInputTranscriptionAndCommitsUserMessage(t *testing.T) {
 	chatCtx := llm.NewChatContext()
 	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
