@@ -93,6 +93,7 @@ type AgentSession struct {
 	// Event channels
 	AgentStateChangedCh chan AgentStateChangedEvent
 	UserStateChangedCh  chan UserStateChangedEvent
+	speechCreatedCh     chan SpeechCreatedEvent
 	conversationItemCh  chan ConversationItemAddedEvent
 	functionToolsCh     chan FunctionToolsExecutedEvent
 	sipDTMFCh           chan SipDTMFEvent
@@ -145,10 +146,36 @@ func NewAgentSession(agent AgentInterface, room *lksdk.Room, opts AgentSessionOp
 		Tools:               make([]llm.Tool, 0),
 		AgentStateChangedCh: make(chan AgentStateChangedEvent, 10),
 		UserStateChangedCh:  make(chan UserStateChangedEvent, 10),
+		speechCreatedCh:     make(chan SpeechCreatedEvent, 10),
 		conversationItemCh:  make(chan ConversationItemAddedEvent, 10),
 		functionToolsCh:     make(chan FunctionToolsExecutedEvent, 10),
 		sipDTMFCh:           make(chan SipDTMFEvent, 10),
 	}
+}
+
+func (s *AgentSession) SpeechCreatedEvents() <-chan SpeechCreatedEvent {
+	return s.speechCreatedEvents()
+}
+
+func (s *AgentSession) EmitSpeechCreated(ev SpeechCreatedEvent) {
+	if ev.CreatedAt.IsZero() {
+		ev.CreatedAt = time.Now()
+	}
+	ch := s.speechCreatedEvents()
+	select {
+	case ch <- ev:
+	default:
+	}
+}
+
+func (s *AgentSession) speechCreatedEvents() chan SpeechCreatedEvent {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.speechCreatedCh == nil {
+		s.speechCreatedCh = make(chan SpeechCreatedEvent, 10)
+	}
+	return s.speechCreatedCh
 }
 
 func (s *AgentSession) ConversationItemAddedEvents() <-chan ConversationItemAddedEvent {
@@ -424,6 +451,11 @@ func (s *AgentSession) GenerateReplyWithOptions(ctx context.Context, opts Genera
 		inputModality = "text"
 	}
 	handle := NewSpeechHandle(allowInterruptions, InputDetails{Modality: inputModality})
+	s.EmitSpeechCreated(SpeechCreatedEvent{
+		UserInitiated: true,
+		Source:        "generate_reply",
+		SpeechHandle:  handle,
+	})
 
 	var userMessage *llm.ChatMessage
 	if opts.UserInput != "" {

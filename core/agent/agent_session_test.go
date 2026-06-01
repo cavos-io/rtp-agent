@@ -33,6 +33,39 @@ func TestAgentSessionGenerateReplyReturnsScheduledSpeechHandle(t *testing.T) {
 	}
 }
 
+func TestAgentSessionGenerateReplyEmitsSpeechCreatedEvent(t *testing.T) {
+	agent := NewAgent("test")
+	session := NewAgentSession(agent, nil, AgentSessionOptions{AllowInterruptions: true})
+	session.activity = NewAgentActivity(agent, session)
+	before := time.Now()
+
+	handle, err := session.GenerateReply(context.Background(), "hello")
+
+	if err != nil {
+		t.Fatalf("GenerateReply error = %v, want nil", err)
+	}
+	select {
+	case ev := <-session.SpeechCreatedEvents():
+		if ev.GetType() != "speech_created" {
+			t.Fatalf("event type = %q, want speech_created", ev.GetType())
+		}
+		if ev.SpeechHandle != handle {
+			t.Fatalf("SpeechHandle = %#v, want returned handle", ev.SpeechHandle)
+		}
+		if !ev.UserInitiated {
+			t.Fatal("UserInitiated = false, want true for GenerateReply")
+		}
+		if ev.Source != "generate_reply" {
+			t.Fatalf("Source = %q, want generate_reply", ev.Source)
+		}
+		if ev.CreatedAt.Before(before) || ev.CreatedAt.IsZero() {
+			t.Fatalf("CreatedAt = %v, want timestamp after %v", ev.CreatedAt, before)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("SpeechCreatedEvents did not receive generate reply speech")
+	}
+}
+
 func TestAgentSessionGenerateReplyAddsUserInputToChatContext(t *testing.T) {
 	agent := NewAgent("test")
 	session := NewAgentSession(agent, nil, AgentSessionOptions{})
