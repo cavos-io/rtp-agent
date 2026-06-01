@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/cavos-io/conversation-worker/core/agent"
+	"github.com/cavos-io/conversation-worker/library/logger"
 	"github.com/cavos-io/conversation-worker/model"
 	"github.com/hraban/opus"
 	"github.com/livekit/protocol/livekit"
@@ -105,7 +106,20 @@ type RoomOptions struct {
 	AudioTrackName         string
 	PreConnectAudioTimeout time.Duration
 	DisablePreConnectAudio bool
+	DisableTextInput       bool
+	TextInputCallback      TextInputCallback
+	ParticipantIdentity    string
 }
+
+const RoomIOChatTopic = "lk.chat"
+
+type TextInputEvent struct {
+	Text                string
+	Info                lksdk.TextStreamInfo
+	ParticipantIdentity string
+}
+
+type TextInputCallback func(context.Context, *agent.AgentSession, TextInputEvent) error
 
 type RoomIO struct {
 	Room         *lksdk.Room
@@ -121,6 +135,7 @@ type RoomIO struct {
 	encoder    AudioEncoder
 
 	preConnectAudio *PreConnectAudioHandler
+	textInput       TextInputCallback
 }
 
 func NewRoomIO(room *lksdk.Room, session *agent.AgentSession, opts RoomOptions) *RoomIO {
@@ -141,6 +156,11 @@ func NewRoomIO(room *lksdk.Room, session *agent.AgentSession, opts RoomOptions) 
 		encoder:         enc,
 		Recorder:        NewRecorderIO(session),
 		preConnectAudio: preConnectAudio,
+		textInput:       roomIOTextInputCallback(opts),
+	}
+
+	if !opts.DisableTextInput {
+		rio.registerTextInput()
 	}
 
 	if session.Assistant == nil {
@@ -156,6 +176,27 @@ func roomIOPreConnectAudioTimeout(opts RoomOptions) time.Duration {
 		return opts.PreConnectAudioTimeout
 	}
 	return 3 * time.Second
+}
+
+func roomIOTextInputCallback(opts RoomOptions) TextInputCallback {
+	if opts.TextInputCallback != nil {
+		return opts.TextInputCallback
+	}
+	return func(ctx context.Context, session *agent.AgentSession, ev TextInputEvent) error {
+		return session.GenerateReply(ctx, ev.Text)
+	}
+}
+
+func (rio *RoomIO) registerTextInput() {
+	if rio.Room == nil {
+		return
+	}
+	defer func() {
+		if recover() != nil {
+			logger.Logger.Warnw("failed to register room text input handler", nil)
+		}
+	}()
+	_ = rio.Room.RegisterTextStreamHandler(RoomIOChatTopic, rio.onChatTextStream)
 }
 
 func (rio *RoomIO) GetCallback() *lksdk.RoomCallback {
@@ -177,6 +218,32 @@ func (rio *RoomIO) onDataPacket(data lksdk.DataPacket, params lksdk.DataReceiveP
 		Digit:          dtmf.Digit,
 		Code:           dtmf.Code,
 		SenderIdentity: params.SenderIdentity,
+	})
+}
+
+func (rio *RoomIO) onChatTextStream(reader *lksdk.TextStreamReader, participantIdentity string) {
+	if rio == nil || rio.AgentSession == nil || rio.textInput == nil {
+		return
+	}
+	go func() {
+		rio.handleChatTextInput(context.Background(), reader.ReadAll(), reader.Info, participantIdentity)
+	}()
+}
+
+func (rio *RoomIO) handleChatTextInput(ctx context.Context, text string, info lksdk.TextStreamInfo, participantIdentity string) {
+	if rio == nil || rio.AgentSession == nil || rio.textInput == nil {
+		return
+	}
+	if rio.Options.ParticipantIdentity != "" && participantIdentity != rio.Options.ParticipantIdentity {
+		return
+	}
+	if rio.Room != nil && participantIdentity != "" && rio.Room.GetParticipantByIdentity(participantIdentity) == nil {
+		return
+	}
+	_ = rio.textInput(ctx, rio.AgentSession, TextInputEvent{
+		Text:                text,
+		Info:                info,
+		ParticipantIdentity: participantIdentity,
 	})
 }
 
@@ -321,6 +388,14 @@ func (rio *RoomIO) Close() error {
 	}
 	if rio.preConnectAudio != nil {
 		rio.preConnectAudio.Close()
+	}
+	if rio.Recorder != nil {
+		if err := rio.Recorder.Stop(); err != nil {
+			return err
+		}
+	}
+	if rio.Room != nil && !rio.Options.DisableTextInput {
+		rio.Room.UnregisterTextStreamHandler(RoomIOChatTopic)
 	}
 	return nil
 }

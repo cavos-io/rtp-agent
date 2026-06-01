@@ -1,6 +1,7 @@
 package worker
 
 import (
+	"context"
 	"testing"
 	"time"
 
@@ -73,6 +74,113 @@ func TestNewRoomIOCanDisablePreConnectAudio(t *testing.T) {
 	}
 }
 
+func TestNewRoomIORegistersReferenceChatTextHandler(t *testing.T) {
+	room := lksdk.NewRoom(nil)
+	_ = NewRoomIO(room, &agent.AgentSession{}, RoomOptions{})
+
+	err := room.RegisterTextStreamHandler(RoomIOChatTopic, func(*lksdk.TextStreamReader, string) {})
+	if err == nil {
+		t.Fatal("RegisterTextStreamHandler(lk.chat) error = nil, want already registered")
+	}
+}
+
+func TestNewRoomIOCanDisableTextInput(t *testing.T) {
+	room := lksdk.NewRoom(nil)
+	_ = NewRoomIO(room, &agent.AgentSession{}, RoomOptions{
+		DisableTextInput: true,
+	})
+
+	err := room.RegisterTextStreamHandler(RoomIOChatTopic, func(*lksdk.TextStreamReader, string) {})
+	if err != nil {
+		t.Fatalf("RegisterTextStreamHandler(lk.chat) error = %v, want nil when disabled", err)
+	}
+}
+
+func TestRoomIOCloseUnregistersChatTextHandler(t *testing.T) {
+	room := lksdk.NewRoom(nil)
+	rio := NewRoomIO(room, &agent.AgentSession{}, RoomOptions{})
+
+	if err := rio.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+
+	err := room.RegisterTextStreamHandler(RoomIOChatTopic, func(*lksdk.TextStreamReader, string) {})
+	if err != nil {
+		t.Fatalf("RegisterTextStreamHandler after RoomIO.Close() error = %v, want nil", err)
+	}
+}
+
+func TestRoomIOHandleChatTextInputDispatchesConfiguredCallback(t *testing.T) {
+	session := &agent.AgentSession{}
+	var gotSession *agent.AgentSession
+	var gotEvent TextInputEvent
+	called := false
+	rio := &RoomIO{
+		AgentSession: session,
+		textInput: func(_ context.Context, sess *agent.AgentSession, ev TextInputEvent) error {
+			called = true
+			gotSession = sess
+			gotEvent = ev
+			return nil
+		},
+	}
+
+	rio.handleChatTextInput(context.Background(), "hello from chat", lksdk.TextStreamInfo{}, "caller")
+
+	if !called {
+		t.Fatal("text input callback was not called")
+	}
+	if gotSession != session {
+		t.Fatal("text input callback received a different session")
+	}
+	if gotEvent.Text != "hello from chat" {
+		t.Fatalf("TextInputEvent.Text = %q, want hello from chat", gotEvent.Text)
+	}
+	if gotEvent.ParticipantIdentity != "caller" {
+		t.Fatalf("TextInputEvent.ParticipantIdentity = %q, want caller", gotEvent.ParticipantIdentity)
+	}
+}
+
+func TestRoomIOHandleChatTextInputIgnoresUnlinkedParticipant(t *testing.T) {
+	session := &agent.AgentSession{}
+	called := false
+	rio := &RoomIO{
+		AgentSession: session,
+		Options: RoomOptions{
+			ParticipantIdentity: "linked-user",
+		},
+		textInput: func(context.Context, *agent.AgentSession, TextInputEvent) error {
+			called = true
+			return nil
+		},
+	}
+
+	rio.handleChatTextInput(context.Background(), "ignored", lksdk.TextStreamInfo{}, "other-user")
+
+	if called {
+		t.Fatal("text input callback was called for unlinked participant")
+	}
+}
+
+func TestRoomIOHandleChatTextInputIgnoresUnknownParticipant(t *testing.T) {
+	session := &agent.AgentSession{}
+	called := false
+	rio := &RoomIO{
+		Room:         lksdk.NewRoom(nil),
+		AgentSession: session,
+		textInput: func(context.Context, *agent.AgentSession, TextInputEvent) error {
+			called = true
+			return nil
+		},
+	}
+
+	rio.handleChatTextInput(context.Background(), "ignored", lksdk.TextStreamInfo{}, "missing-user")
+
+	if called {
+		t.Fatal("text input callback was called for unknown participant")
+	}
+}
+
 func TestRoomIOCloseUnregistersPreConnectAudioHandler(t *testing.T) {
 	room := lksdk.NewRoom(nil)
 	rio := NewRoomIO(room, &agent.AgentSession{}, RoomOptions{})
@@ -84,6 +192,20 @@ func TestRoomIOCloseUnregistersPreConnectAudioHandler(t *testing.T) {
 	err := room.RegisterByteStreamHandler(PreConnectAudioBufferStream, func(*lksdk.ByteStreamReader, string) {})
 	if err != nil {
 		t.Fatalf("RegisterByteStreamHandler after RoomIO.Close() error = %v, want nil", err)
+	}
+}
+
+func TestRoomIOCloseStopsRecorder(t *testing.T) {
+	recorder := NewRecorderIO(&agent.AgentSession{})
+	recorder.started = true
+	rio := &RoomIO{Recorder: recorder}
+
+	if err := rio.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+
+	if !recorder.closed {
+		t.Fatal("recorder.closed = false, want RoomIO.Close to stop recorder")
 	}
 }
 

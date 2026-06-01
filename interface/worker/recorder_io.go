@@ -46,6 +46,46 @@ func NewRecorderIO(session *agent.AgentSession) *RecorderIO {
 	}
 }
 
+func (r *RecorderIO) RecordingStartedAt() *time.Time {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return earliestRecordingStart(r.InputStartTime, r.OutputStartTime)
+}
+
+func (r *RecorderIO) PopulateSessionReport(report *agent.SessionReport) {
+	if report == nil {
+		return
+	}
+
+	r.mu.Lock()
+	outPath := r.outPath
+	startedAt := earliestRecordingStart(r.InputStartTime, r.OutputStartTime)
+	r.mu.Unlock()
+
+	if outPath != "" {
+		report.AudioRecordingPath = &outPath
+	}
+	if startedAt != nil {
+		startedAtSeconds := float64(startedAt.UnixNano()) / 1e9
+		report.AudioRecordingStartedAt = &startedAtSeconds
+		duration := report.Timestamp - startedAtSeconds
+		report.Duration = &duration
+	}
+}
+
+func earliestRecordingStart(inputStart, outputStart *time.Time) *time.Time {
+	if inputStart == nil {
+		return outputStart
+	}
+	if outputStart == nil {
+		return inputStart
+	}
+	if outputStart.Before(*inputStart) {
+		return outputStart
+	}
+	return inputStart
+}
+
 func (r *RecorderIO) Start(outputPath string, sampleRate int) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -229,7 +269,7 @@ func (r *RecorderIO) flush(sampleRate int) {
 			},
 			Payload: opusBuf[:n],
 		}
-		
+
 		r.sequenceNumber++
 		r.timestamp += uint32(chunkSamples)
 

@@ -89,6 +89,11 @@ type WorkerInfo struct {
 	CloudAgents bool
 }
 
+type LocalJobOptions struct {
+	FakeJob  bool
+	RoomInfo *livekit.Room
+}
+
 type WorkerOptions struct {
 	AgentName      string
 	AgentNameIsEnv bool
@@ -1504,7 +1509,17 @@ func (s *AgentServer) handleTermination(req *livekit.JobTermination) {
 
 // ExecuteLocalJob runs a job locally without connecting to the worker service, useful for the CLI console
 func (s *AgentServer) ExecuteLocalJob(ctx context.Context, roomName string, participantIdentity string) error {
-	jobCtx := newLocalJobContext(roomName, participantIdentity, s.Options)
+	return s.ExecuteLocalJobWithOptions(ctx, roomName, participantIdentity, LocalJobOptions{FakeJob: true})
+}
+
+func (s *AgentServer) ExecuteLocalJobWithOptions(ctx context.Context, roomName string, participantIdentity string, options LocalJobOptions) error {
+	if !options.FakeJob && options.RoomInfo == nil {
+		return fmt.Errorf("room info is required for non-fake local jobs")
+	}
+	if !options.FakeJob && participantIdentity == "" {
+		return fmt.Errorf("agent identity is required for non-fake local jobs")
+	}
+	jobCtx := newLocalJobContextWithOptions(roomName, participantIdentity, s.Options, options)
 	jobCtx.WorkerID = s.workerID
 
 	// For local execution, we want to connect immediately
@@ -1571,14 +1586,25 @@ func (s *AgentServer) runSessionEnd(jobCtx *JobContext) {
 }
 
 func newLocalJobContext(roomName string, participantIdentity string, opts WorkerOptions) *JobContext {
+	return newLocalJobContextWithOptions(roomName, participantIdentity, opts, LocalJobOptions{FakeJob: true})
+}
+
+func newLocalJobContextWithOptions(roomName string, participantIdentity string, opts WorkerOptions, options LocalJobOptions) *JobContext {
 	opts = resolveWorkerOptions(opts)
+	jobIDPrefix := "job-"
+	if options.FakeJob {
+		jobIDPrefix = "mock-job-"
+	}
 	job := &livekit.Job{
-		Id: mathutil.ShortUUID("mock-job-"),
+		Id: mathutil.ShortUUID(jobIDPrefix),
 		Room: &livekit.Room{
 			Name: roomName,
 			Sid:  mathutil.ShortUUID("SRM_"),
 		},
 		Type: livekit.JobType_JT_ROOM,
+	}
+	if options.RoomInfo != nil {
+		job.Room = options.RoomInfo
 	}
 
 	if participantIdentity == "" {
@@ -1586,7 +1612,7 @@ func newLocalJobContext(roomName string, participantIdentity string, opts Worker
 	}
 	jobCtx := NewJobContext(job, opts.WSRL, opts.APIKey, opts.APISecret)
 	jobCtx.AcceptArguments = JobAcceptArguments{Identity: participantIdentity}
-	jobCtx.fakeJob = true
+	jobCtx.fakeJob = options.FakeJob
 	if opts.APIKey != "" && opts.APISecret != "" {
 		token, err := auth.NewAccessToken(opts.APIKey, opts.APISecret).
 			SetIdentity(participantIdentity).
