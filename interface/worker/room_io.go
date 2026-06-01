@@ -109,9 +109,11 @@ type RoomOptions struct {
 	DisableTextInput       bool
 	TextInputCallback      TextInputCallback
 	ParticipantIdentity    string
+	ParticipantKinds       []lksdk.ParticipantKind
 }
 
 const RoomIOChatTopic = "lk.chat"
+const RoomIOPublishOnBehalfAttribute = "lk.publish_on_behalf"
 
 type TextInputEvent struct {
 	Text                string
@@ -269,6 +271,38 @@ func (rio *RoomIO) shouldHandleParticipant(participantIdentity string) bool {
 	return linkedParticipant == "" || participantIdentity == linkedParticipant
 }
 
+func (rio *RoomIO) shouldAcceptParticipant(identity string, kind lksdk.ParticipantKind, attributes map[string]string, localIdentity string) bool {
+	if !rio.shouldHandleParticipant(identity) {
+		return false
+	}
+	if rio.participantIdentity() == "" && localIdentity != "" && attributes[RoomIOPublishOnBehalfAttribute] == localIdentity {
+		return false
+	}
+	return participantKindAllowed(kind, rio.participantKinds())
+}
+
+func (rio *RoomIO) participantKinds() []lksdk.ParticipantKind {
+	rio.mu.Lock()
+	defer rio.mu.Unlock()
+	return append([]lksdk.ParticipantKind(nil), rio.Options.ParticipantKinds...)
+}
+
+func participantKindAllowed(kind lksdk.ParticipantKind, allowed []lksdk.ParticipantKind) bool {
+	if len(allowed) == 0 {
+		allowed = []lksdk.ParticipantKind{
+			lksdk.ParticipantConnector,
+			lksdk.ParticipantSIP,
+			lksdk.ParticipantStandard,
+		}
+	}
+	for _, accepted := range allowed {
+		if kind == accepted {
+			return true
+		}
+	}
+	return false
+}
+
 func (rio *RoomIO) Start(ctx context.Context) error {
 	track, err := lksdk.NewLocalSampleTrack(webrtc.RTPCodecCapability{
 		MimeType:  webrtc.MimeTypeOpus,
@@ -300,12 +334,19 @@ func (rio *RoomIO) audioTrackPublicationOptions() *lksdk.TrackPublicationOptions
 }
 
 func (rio *RoomIO) onTrackSubscribed(track *webrtc.TrackRemote, publication *lksdk.RemoteTrackPublication, rp *lksdk.RemoteParticipant) {
-	if rp != nil && !rio.shouldHandleParticipant(rp.Identity()) {
+	if rp != nil && !rio.shouldAcceptParticipant(rp.Identity(), rp.Kind(), rp.Attributes(), rio.localParticipantIdentity()) {
 		return
 	}
 	if track.Kind() == webrtc.RTPCodecTypeAudio {
 		go rio.handleAudioTrack(track)
 	}
+}
+
+func (rio *RoomIO) localParticipantIdentity() string {
+	if rio.Room == nil || rio.Room.LocalParticipant == nil {
+		return ""
+	}
+	return rio.Room.LocalParticipant.Identity()
 }
 
 func (rio *RoomIO) handleAudioTrack(track *webrtc.TrackRemote) {

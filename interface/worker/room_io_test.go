@@ -249,6 +249,65 @@ func TestRoomIOShouldHandleParticipantAllowsAnyWhenUnset(t *testing.T) {
 	}
 }
 
+func TestRoomIOShouldAcceptParticipantUsesReferenceDefaultKinds(t *testing.T) {
+	rio := &RoomIO{}
+
+	tests := []struct {
+		name string
+		kind lksdk.ParticipantKind
+		want bool
+	}{
+		{"standard", lksdk.ParticipantStandard, true},
+		{"sip", lksdk.ParticipantSIP, true},
+		{"connector", lksdk.ParticipantConnector, true},
+		{"agent", lksdk.ParticipantAgent, false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := rio.shouldAcceptParticipant("caller", tt.kind, nil, "agent-local"); got != tt.want {
+				t.Fatalf("shouldAcceptParticipant(%s) = %v, want %v", tt.name, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestRoomIOShouldAcceptParticipantUsesConfiguredKinds(t *testing.T) {
+	rio := &RoomIO{Options: RoomOptions{
+		ParticipantKinds: []lksdk.ParticipantKind{lksdk.ParticipantAgent},
+	}}
+
+	if !rio.shouldAcceptParticipant("agent-a", lksdk.ParticipantAgent, nil, "agent-local") {
+		t.Fatal("shouldAcceptParticipant(agent) = false, want true for configured kind")
+	}
+	if rio.shouldAcceptParticipant("caller-a", lksdk.ParticipantSIP, nil, "agent-local") {
+		t.Fatal("shouldAcceptParticipant(sip) = true, want false when SIP is not configured")
+	}
+}
+
+func TestRoomIOShouldAcceptParticipantSkipsPublishOnBehalfWhenUnlinked(t *testing.T) {
+	rio := &RoomIO{}
+
+	if rio.shouldAcceptParticipant(
+		"agent-output",
+		lksdk.ParticipantStandard,
+		map[string]string{RoomIOPublishOnBehalfAttribute: "agent-local"},
+		"agent-local",
+	) {
+		t.Fatal("shouldAcceptParticipant(publish-on-behalf) = true, want false when participant is unlinked")
+	}
+
+	rio.SetParticipant("agent-output")
+	if !rio.shouldAcceptParticipant(
+		"agent-output",
+		lksdk.ParticipantStandard,
+		map[string]string{RoomIOPublishOnBehalfAttribute: "agent-local"},
+		"agent-local",
+	) {
+		t.Fatal("shouldAcceptParticipant(linked publish-on-behalf) = false, want true for explicit linked participant")
+	}
+}
+
 func TestRoomIOCloseUnregistersPreConnectAudioHandler(t *testing.T) {
 	room := lksdk.NewRoom(nil)
 	rio := NewRoomIO(room, &agent.AgentSession{}, RoomOptions{})
