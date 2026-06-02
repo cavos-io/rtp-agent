@@ -13,6 +13,7 @@ import (
 	"github.com/cavos-io/rtp-agent/adapter/assemblyai"
 	"github.com/cavos-io/rtp-agent/adapter/asyncai"
 	adapteraws "github.com/cavos-io/rtp-agent/adapter/aws"
+	"github.com/cavos-io/rtp-agent/adapter/azure"
 	"github.com/cavos-io/rtp-agent/adapter/openai"
 	"github.com/cavos-io/rtp-agent/core/agent"
 	"github.com/cavos-io/rtp-agent/core/llm"
@@ -25,6 +26,7 @@ const (
 	providerAssemblyAI = "assemblyai"
 	providerAsyncAI    = "asyncai"
 	providerAWS        = "aws"
+	providerAzure      = "azure"
 	providerOpenAI     = "openai"
 	providerLiveKit    = "livekit"
 )
@@ -302,6 +304,12 @@ func configureProviders(cfg AppConfig, a *agent.Agent) (llm.RealtimeModel, error
 			return nil, err
 		}
 		a.STT = provider
+	case providerAzure:
+		provider, err := azure.NewAzureSTT("", "")
+		if err != nil {
+			return nil, err
+		}
+		a.STT = provider
 	case providerAssemblyAI:
 		sttOpts := []assemblyai.AssemblyAISTTOption{}
 		if cfg.STTBaseURL != "" {
@@ -396,6 +404,12 @@ func configureProviders(cfg AppConfig, a *agent.Agent) (llm.RealtimeModel, error
 			ttsOpts = append(ttsOpts, adapteraws.WithAWSTTSSampleRate(*cfg.TTSSampleRate))
 		}
 		provider, err := adapteraws.NewAWSTTS(context.Background(), cfg.AWSRegion, cfg.TTSVoice, ttsOpts...)
+		if err != nil {
+			return nil, err
+		}
+		a.TTS = provider
+	case providerAzure:
+		provider, err := azure.NewAzureTTS("", "", cfg.TTSVoice)
 		if err != nil {
 			return nil, err
 		}

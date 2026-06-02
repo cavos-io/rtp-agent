@@ -133,6 +133,31 @@ func TestDefaultConfigFromEnvSelectsAWSProviders(t *testing.T) {
 	}
 }
 
+func TestDefaultConfigFromEnvSelectsAzureSpeechProviders(t *testing.T) {
+	t.Setenv("AZURE_SPEECH_KEY", "test-azure-key")
+	t.Setenv("AZURE_SPEECH_REGION", "eastus")
+	t.Setenv("RTP_AGENT_STT_PROVIDER", "azure")
+	t.Setenv("RTP_AGENT_TTS_PROVIDER", "azure")
+	t.Setenv("RTP_AGENT_TTS_VOICE", "en-US-AvaNeural")
+
+	app, err := NewApp(DefaultConfigFromEnv())
+	if err != nil {
+		t.Fatalf("NewApp() error = %v", err)
+	}
+	if app.Session == nil {
+		t.Fatal("Session is nil")
+	}
+	if got := app.Session.STT.Label(); got != "azure.STT" {
+		t.Fatalf("STT label = %q, want azure.STT", got)
+	}
+	if got := app.Session.TTS.Label(); got != "azure.TTS" {
+		t.Fatalf("TTS label = %q, want azure.TTS", got)
+	}
+	if got := app.Session.TTS.SampleRate(); got != 24000 {
+		t.Fatalf("TTS sample rate = %d, want 24000", got)
+	}
+}
+
 func TestDefaultConfigFromEnvSelectsLiveKitInferenceLLM(t *testing.T) {
 	t.Setenv("LIVEKIT_API_KEY", "test-livekit-key")
 	t.Setenv("LIVEKIT_API_SECRET", "test-livekit-secret")
