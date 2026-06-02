@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"os"
 	"strconv"
 	"strings"
 	"sync"
@@ -162,6 +163,9 @@ func WithAssemblyAISTTDomain(domain string) AssemblyAISTTOption {
 }
 
 func NewAssemblyAISTT(apiKey string, opts ...AssemblyAISTTOption) *AssemblyAISTT {
+	if apiKey == "" {
+		apiKey = os.Getenv("ASSEMBLYAI_API_KEY")
+	}
 	provider := &AssemblyAISTT{
 		apiKey:         apiKey,
 		baseURL:        defaultAssemblyAIBaseURL,
@@ -185,6 +189,10 @@ func (s *AssemblyAISTT) Capabilities() stt.STTCapabilities {
 }
 
 func (s *AssemblyAISTT) Stream(ctx context.Context, language string) (stt.RecognizeStream, error) {
+	if err := s.validateStreamConfig(); err != nil {
+		return nil, err
+	}
+
 	header := make(http.Header)
 	header.Set("Authorization", s.apiKey)
 	header.Set("Content-Type", "application/json")
@@ -208,6 +216,24 @@ func (s *AssemblyAISTT) Stream(ctx context.Context, language string) (stt.Recogn
 
 func (s *AssemblyAISTT) Recognize(ctx context.Context, frames []*model.AudioFrame, language string) (*stt.SpeechEvent, error) {
 	return nil, fmt.Errorf("assemblyai offline recognize is not implemented")
+}
+
+func (s *AssemblyAISTT) validateStreamConfig() error {
+	if s.apiKey == "" {
+		return fmt.Errorf("AssemblyAI API key is required. Pass one in via the apiKey parameter, or set it as the ASSEMBLYAI_API_KEY environment variable")
+	}
+	if s.speechModel != "u3-rt-pro" {
+		if s.prompt != "" {
+			return fmt.Errorf("the prompt parameter is only supported with the u3-rt-pro model")
+		}
+		if s.continuousPartials != nil {
+			return fmt.Errorf("the continuous_partials parameter is only supported with the u3-rt-pro model")
+		}
+		if s.interruptionDelay != nil {
+			return fmt.Errorf("the interruption_delay parameter is only supported with the u3-rt-pro model")
+		}
+	}
+	return nil
 }
 
 func buildAssemblyAIStreamURL(s *AssemblyAISTT) string {

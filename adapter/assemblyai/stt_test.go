@@ -28,6 +28,70 @@ func TestAssemblyAISTTDefaultsMatchReference(t *testing.T) {
 	if provider.minTurnSilence == nil || *provider.minTurnSilence != 100 {
 		t.Fatalf("min turn silence = %v, want 100", provider.minTurnSilence)
 	}
+	if provider.Label() != "assemblyai.STT" {
+		t.Fatalf("Label() = %q, want assemblyai.STT", provider.Label())
+	}
+}
+
+func TestAssemblyAISTTFallsBackToEnvironmentAPIKey(t *testing.T) {
+	t.Setenv("ASSEMBLYAI_API_KEY", "env-key")
+
+	provider := NewAssemblyAISTT("")
+
+	if provider.apiKey != "env-key" {
+		t.Fatalf("apiKey = %q, want env key", provider.apiKey)
+	}
+}
+
+func TestAssemblyAISTTStreamRequiresAPIKeyBeforeDial(t *testing.T) {
+	t.Setenv("ASSEMBLYAI_API_KEY", "")
+	provider := NewAssemblyAISTT("")
+
+	_, err := provider.Stream(context.Background(), "")
+
+	if err == nil || !strings.Contains(err.Error(), "ASSEMBLYAI_API_KEY") {
+		t.Fatalf("Stream error = %v, want missing API key error", err)
+	}
+}
+
+func TestAssemblyAISTTStreamRejectsU3OnlyOptionsForDefaultModel(t *testing.T) {
+	cases := []struct {
+		name    string
+		option  AssemblyAISTTOption
+		wantErr string
+	}{
+		{name: "prompt", option: WithAssemblyAISTTPrompt("agent vocabulary"), wantErr: "prompt parameter is only supported"},
+		{name: "continuous partials", option: WithAssemblyAISTTContinuousPartials(true), wantErr: "continuous_partials parameter is only supported"},
+		{name: "interruption delay", option: WithAssemblyAISTTInterruptionDelay(250), wantErr: "interruption_delay parameter is only supported"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			provider := NewAssemblyAISTT("test-key", tc.option)
+
+			_, err := provider.Stream(context.Background(), "")
+
+			if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+				t.Fatalf("Stream error = %v, want containing %q", err, tc.wantErr)
+			}
+		})
+	}
+}
+
+func TestAssemblyAISTTStreamAllowsU3OnlyOptionsForU3RealtimeModel(t *testing.T) {
+	provider := NewAssemblyAISTT("test-key",
+		WithAssemblyAISTTBaseURL("://bad-url"),
+		WithAssemblyAISTTModel("u3-rt-pro"),
+		WithAssemblyAISTTPrompt("agent vocabulary"),
+		WithAssemblyAISTTContinuousPartials(false),
+		WithAssemblyAISTTInterruptionDelay(250),
+	)
+
+	_, err := provider.Stream(context.Background(), "")
+
+	if err == nil || strings.Contains(err.Error(), "only supported") {
+		t.Fatalf("Stream error = %v, want dial/build error after config validation", err)
+	}
 }
 
 func TestAssemblyAIStreamURLUsesReferenceDefaults(t *testing.T) {
