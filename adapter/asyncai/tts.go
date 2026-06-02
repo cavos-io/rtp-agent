@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/url"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -23,6 +24,7 @@ const (
 	defaultAsyncAITTSEncoding   = "pcm_s16le"
 	defaultAsyncAITTSVoice      = "e0f39dc4-f691-4e78-bba5-5c636692cc04"
 	defaultAsyncAITTSSampleRate = 32000
+	asyncAIAPIKeyEnv            = "ASYNCAI_API_KEY"
 	asyncAIAPIVersion           = "v1"
 	asyncAITTSNumChannels       = 1
 )
@@ -88,6 +90,9 @@ func WithAsyncAITTSSampleRate(sampleRate int) AsyncAITTSOption {
 }
 
 func NewAsyncAITTS(apiKey string, voice string, opts ...AsyncAITTSOption) *AsyncAITTS {
+	if apiKey == "" {
+		apiKey = os.Getenv(asyncAIAPIKeyEnv)
+	}
 	provider := &AsyncAITTS{
 		apiKey:     apiKey,
 		baseURL:    defaultAsyncAITTSBaseURL,
@@ -117,6 +122,9 @@ func (t *AsyncAITTS) Synthesize(ctx context.Context, text string) (tts.ChunkedSt
 }
 
 func (t *AsyncAITTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
+	if err := t.validateStreamConfig(); err != nil {
+		return nil, err
+	}
 	conn, _, err := websocket.DefaultDialer.DialContext(ctx, buildAsyncAITTSWebsocketURL(t), nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to dial asyncai tts websocket: %w", err)
@@ -138,6 +146,13 @@ func (t *AsyncAITTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
 		contextID:  fmt.Sprintf("ctx-%d", time.Now().UnixNano()),
 		sampleRate: t.sampleRate,
 	}, nil
+}
+
+func (t *AsyncAITTS) validateStreamConfig() error {
+	if t.apiKey == "" {
+		return fmt.Errorf("AsyncAI API key is required, either as argument or set ASYNCAI_API_KEY environment variable")
+	}
+	return nil
 }
 
 func buildAsyncAITTSWebsocketURL(t *AsyncAITTS) string {

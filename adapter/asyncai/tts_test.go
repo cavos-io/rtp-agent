@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/url"
 	"strings"
@@ -30,8 +31,38 @@ func TestAsyncAITTSDefaultsMatchReference(t *testing.T) {
 	if provider.sampleRate != 32000 {
 		t.Fatalf("sample rate = %d, want 32000", provider.sampleRate)
 	}
+	if provider.Label() != "asyncai.TTS" {
+		t.Fatalf("label = %q, want asyncai.TTS", provider.Label())
+	}
+	if provider.SampleRate() != 32000 {
+		t.Fatalf("SampleRate = %d, want 32000", provider.SampleRate())
+	}
+	if provider.NumChannels() != 1 {
+		t.Fatalf("NumChannels = %d, want 1", provider.NumChannels())
+	}
 	if !provider.Capabilities().Streaming {
 		t.Fatal("streaming = false, want reference streaming support")
+	}
+}
+
+func TestAsyncAITTSFallsBackToEnvironmentAPIKey(t *testing.T) {
+	t.Setenv(asyncAIAPIKeyEnv, "env-key")
+
+	provider := NewAsyncAITTS("", "")
+
+	if provider.apiKey != "env-key" {
+		t.Fatalf("api key = %q, want env-key", provider.apiKey)
+	}
+}
+
+func TestAsyncAITTSStreamRequiresAPIKeyBeforeDial(t *testing.T) {
+	t.Setenv(asyncAIAPIKeyEnv, "")
+	provider := NewAsyncAITTS("", "")
+
+	_, err := provider.Stream(context.Background())
+
+	if err == nil || !strings.Contains(err.Error(), "ASYNCAI_API_KEY") {
+		t.Fatalf("Stream error = %v, want API key error", err)
 	}
 }
 
@@ -191,5 +222,28 @@ func TestAsyncAITTSEmptyStreamNextEOF(t *testing.T) {
 	}
 	if err := stream.Close(); err != nil {
 		t.Fatalf("Close err = %v, want nil without websocket", err)
+	}
+}
+
+func TestAsyncAITTSStreamCloseWithoutWebsocket(t *testing.T) {
+	stream := &asyncAITTSStream{}
+
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close err = %v, want nil without websocket", err)
+	}
+	if err := stream.Close(); err != nil {
+		t.Fatalf("second Close err = %v, want nil without websocket", err)
+	}
+}
+
+func TestAsyncAITTSStreamNextReturnsContextError(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	stream := &asyncAITTSStream{ctx: ctx}
+
+	_, err := stream.Next()
+
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("Next err = %v, want context canceled", err)
 	}
 }
