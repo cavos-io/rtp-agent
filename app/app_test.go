@@ -1583,6 +1583,24 @@ func TestDefaultConfigFromEnvAddsXAIProviderTools(t *testing.T) {
 	}
 }
 
+func TestDefaultConfigFromEnvAddsEndCallTool(t *testing.T) {
+	t.Setenv("RTP_AGENT_TOOLS", "end_call")
+
+	app, err := NewApp(DefaultConfigFromEnv())
+	if err != nil {
+		t.Fatalf("NewApp() error = %v", err)
+	}
+	if app.Agent == nil {
+		t.Fatal("Agent is nil")
+	}
+	if len(app.Agent.Tools) != 1 {
+		t.Fatalf("len(Agent.Tools) = %d, want 1", len(app.Agent.Tools))
+	}
+	if got := app.Agent.Tools[0].Name(); got != "end_call" {
+		t.Fatalf("tool[0].Name() = %q, want end_call", got)
+	}
+}
+
 func TestDefaultConfigFromEnvAddsAnthropicComputerTool(t *testing.T) {
 	t.Setenv("ANTHROPIC_API_KEY", "test-anthropic-key")
 	t.Setenv("RTP_AGENT_LLM_PROVIDER", "anthropic")

@@ -75,6 +75,7 @@ import (
 	"github.com/cavos-io/rtp-agent/adapter/upliftai"
 	"github.com/cavos-io/rtp-agent/adapter/xai"
 	"github.com/cavos-io/rtp-agent/core/agent"
+	betatools "github.com/cavos-io/rtp-agent/core/beta/tools"
 	"github.com/cavos-io/rtp-agent/core/inference"
 	"github.com/cavos-io/rtp-agent/core/llm"
 	coretts "github.com/cavos-io/rtp-agent/core/tts"
@@ -406,6 +407,7 @@ type AppConfig struct {
 
 	LiveKitInferenceAPIKey    string
 	LiveKitInferenceAPISecret string
+	AppTools                  []string
 }
 
 type App struct {
@@ -668,6 +670,7 @@ func DefaultConfigFromEnv() AppConfig {
 		XAIFileSearchVectorStoreIDs:             splitEnvList("RTP_AGENT_XAI_FILE_SEARCH_VECTOR_STORE_IDS"),
 		XAIFileSearchMaxResults:                 getenvOptionalInt("RTP_AGENT_XAI_FILE_SEARCH_MAX_RESULTS"),
 		GoogleCredentialsFile:                   firstEnv("RTP_AGENT_GOOGLE_CREDENTIALS_FILE", "GOOGLE_APPLICATION_CREDENTIALS"),
+		AppTools:                                splitEnvList("RTP_AGENT_TOOLS"),
 	}
 }
 
@@ -702,6 +705,9 @@ func NewApp(cfg AppConfig) (*App, error) {
 	}
 
 	session := agent.NewAgentSession(baseAgent, nil, agentSessionOptionsFromConfig(cfg))
+	if err := configureAppTools(cfg, baseAgent, session); err != nil {
+		return nil, err
+	}
 
 	opts := cfg.WorkerOptions
 	if opts.AgentName == "" {
@@ -3037,6 +3043,23 @@ func anthropicProviderTools(cfg AppConfig) []llm.Tool {
 		}
 	}
 	return tools
+}
+
+func configureAppTools(cfg AppConfig, a *agent.Agent, session *agent.AgentSession) error {
+	if len(cfg.AppTools) == 0 {
+		return nil
+	}
+	tools := make([]llm.Tool, 0, len(cfg.AppTools))
+	for _, tool := range cfg.AppTools {
+		switch normalizeProvider(tool) {
+		case "end_call", "endcall":
+			tools = append(tools, betatools.NewSessionEndCallTool(session, betatools.EndCallToolOptions{}))
+		default:
+			return fmt.Errorf("unsupported RTP_AGENT_TOOLS value %q", tool)
+		}
+	}
+	a.Tools = append(a.Tools, tools...)
+	return nil
 }
 
 func xaiProviderTools(cfg AppConfig) []llm.Tool {

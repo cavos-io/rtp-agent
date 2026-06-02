@@ -35,6 +35,24 @@ func NewEndCallTool(shutter Shutter, opts EndCallToolOptions) *EndCallTool {
 	}
 }
 
+func NewSessionEndCallTool(session *agent.AgentSession, opts EndCallToolOptions) *EndCallTool {
+	return NewEndCallTool(&agentSessionShutter{session: session}, opts)
+}
+
+type agentSessionShutter struct {
+	session *agent.AgentSession
+}
+
+func (s *agentSessionShutter) Shutdown(reason string) {
+	if s.session != nil {
+		s.session.Shutdown()
+	}
+}
+
+func (s *agentSessionShutter) DeleteRoom(ctx context.Context) error {
+	return nil
+}
+
 func (t *EndCallTool) ID() string {
 	return "end_call"
 }
