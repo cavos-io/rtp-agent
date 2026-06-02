@@ -769,7 +769,14 @@ func (a *App) runSession(ctx *worker.JobContext) error {
 			}
 		}
 	}
-	return a.Session.Start(context.Background())
+	sessionCtx := context.Background()
+	if ctx != nil {
+		info := ctx.AvatarStartInfo()
+		if info.LiveKitURL != "" && info.LiveKitToken != "" {
+			sessionCtx = agent.ContextWithAvatarStartInfo(sessionCtx, info)
+		}
+	}
+	return a.Session.Start(sessionCtx)
 }
 
 func configureAvatar(cfg AppConfig, a *agent.Agent) error {

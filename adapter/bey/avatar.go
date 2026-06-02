@@ -1,11 +1,14 @@
 package bey
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
+	"strings"
 
 	"github.com/cavos-io/rtp-agent/core/agent"
 )
@@ -52,6 +55,11 @@ func NewBeyAvatar(apiKey string) (*BeyAvatar, error) {
 }
 
 func (a *BeyAvatar) Start(ctx context.Context) error {
+	if info, ok := agent.AvatarStartInfoFromContext(ctx); ok && info.LiveKitURL != "" && info.LiveKitToken != "" {
+		if err := a.createSession(ctx, info); err != nil {
+			return err
+		}
+	}
 	a.started = true
 	return nil
 }
@@ -67,6 +75,29 @@ func (a *BeyAvatar) Provider() string {
 
 func (a *BeyAvatar) AvatarIdentity() string {
 	return a.avatarIdentity
+}
+
+func (a *BeyAvatar) createSession(ctx context.Context, info agent.AvatarStartInfo) error {
+	endpoint, headers, body, err := buildBeySessionRequest(a, info.LiveKitURL, info.LiveKitToken)
+	if err != nil {
+		return err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
+	if err != nil {
+		return err
+	}
+	req.Header = headers
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
+		respBody, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("bey session creation failed: %s: %s", resp.Status, strings.TrimSpace(string(respBody)))
+	}
+	return nil
 }
 
 func buildBeySessionRequest(a *BeyAvatar, livekitURL, livekitToken string) (string, http.Header, []byte, error) {

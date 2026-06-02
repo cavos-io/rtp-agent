@@ -13,3 +13,19 @@ type AvatarProvider interface {
 	Start(ctx context.Context) error
 	UpdateState(state AvatarState) error
 }
+
+type AvatarStartInfo struct {
+	LiveKitURL   string
+	LiveKitToken string
+}
+
+type avatarStartInfoContextKey struct{}
+
+func ContextWithAvatarStartInfo(ctx context.Context, info AvatarStartInfo) context.Context {
+	return context.WithValue(ctx, avatarStartInfoContextKey{}, info)
+}
+
+func AvatarStartInfoFromContext(ctx context.Context) (AvatarStartInfo, bool) {
+	info, ok := ctx.Value(avatarStartInfoContextKey{}).(AvatarStartInfo)
+	return info, ok
+}
