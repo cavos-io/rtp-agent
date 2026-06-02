@@ -49,6 +49,44 @@ func TestWarmTransferLifecycleCleansHumanAgentSession(t *testing.T) {
 	}
 }
 
+func TestWarmTransferOnEnterDialsHumanAgentSIPParticipant(t *testing.T) {
+	task := NewWarmTransferTask("+15550100", "trunk_123", nil, "")
+	task.SipNumber = "+15550999"
+	task.SipHeaders = map[string]string{"X-Trace": "trace-a"}
+	jobCtx := &fakeWarmTransferJobContext{room: &livekit.Room{Name: "caller-room"}}
+	session := agent.NewAgentSession(task, nil, agent.AgentSessionOptions{})
+	session.SetJobContext(jobCtx)
+	task.Agent.Start(session, task)
+	defer task.Agent.GetActivity().Stop()
+
+	task.OnEnter()
+
+	if jobCtx.createSIPRequest == nil {
+		t.Fatal("OnEnter did not create SIP participant")
+	}
+	if jobCtx.createSIPRequest.RoomName != "caller-room-human-agent" {
+		t.Fatalf("CreateSIPParticipant RoomName = %q, want caller-room-human-agent", jobCtx.createSIPRequest.RoomName)
+	}
+	if jobCtx.createSIPRequest.ParticipantIdentity != "human-agent-sip" {
+		t.Fatalf("CreateSIPParticipant ParticipantIdentity = %q, want human-agent-sip", jobCtx.createSIPRequest.ParticipantIdentity)
+	}
+	if jobCtx.createSIPRequest.SipTrunkId != "trunk_123" {
+		t.Fatalf("CreateSIPParticipant SipTrunkId = %q, want trunk_123", jobCtx.createSIPRequest.SipTrunkId)
+	}
+	if jobCtx.createSIPRequest.SipCallTo != "+15550100" {
+		t.Fatalf("CreateSIPParticipant SipCallTo = %q, want +15550100", jobCtx.createSIPRequest.SipCallTo)
+	}
+	if !jobCtx.createSIPRequest.WaitUntilAnswered {
+		t.Fatal("CreateSIPParticipant WaitUntilAnswered = false, want true")
+	}
+	if jobCtx.createSIPRequest.SipNumber != "+15550999" {
+		t.Fatalf("CreateSIPParticipant SipNumber = %q, want +15550999", jobCtx.createSIPRequest.SipNumber)
+	}
+	if jobCtx.createSIPRequest.Headers["X-Trace"] != "trace-a" {
+		t.Fatalf("CreateSIPParticipant Headers = %#v, want X-Trace", jobCtx.createSIPRequest.Headers)
+	}
+}
+
 func TestConnectToCallerCompletesWarmTransfer(t *testing.T) {
 	task := NewWarmTransferTask("+15550100", "trunk_123", nil, "")
 	task.humanAgentSess = agent.NewAgentSession(agent.NewAgent("human"), nil, agent.AgentSessionOptions{})
@@ -86,8 +124,9 @@ func TestConnectToCallerCompletesWarmTransfer(t *testing.T) {
 }
 
 type fakeWarmTransferJobContext struct {
-	room        *livekit.Room
-	moveRequest *livekit.MoveParticipantRequest
+	room             *livekit.Room
+	moveRequest      *livekit.MoveParticipantRequest
+	createSIPRequest *livekit.CreateSIPParticipantRequest
 }
 
 func (f *fakeWarmTransferJobContext) RoomInfo() *livekit.Room {
@@ -101,6 +140,11 @@ func (f *fakeWarmTransferJobContext) MoveParticipant(_ context.Context, room str
 		DestinationRoom: destinationRoom,
 	}
 	return nil
+}
+
+func (f *fakeWarmTransferJobContext) CreateSIPParticipant(_ context.Context, req *livekit.CreateSIPParticipantRequest) (*livekit.SIPParticipantInfo, error) {
+	f.createSIPRequest = req
+	return &livekit.SIPParticipantInfo{}, nil
 }
 
 func TestWarmTransferToolsCompleteAndFailTask(t *testing.T) {
