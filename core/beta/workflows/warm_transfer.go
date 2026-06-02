@@ -64,6 +64,7 @@ type WarmTransferTask struct {
 
 type warmTransferJobContext interface {
 	RoomInfo() *livekit.Room
+	CreateSIPParticipant(ctx context.Context, req *livekit.CreateSIPParticipantRequest) (*livekit.SIPParticipantInfo, error)
 	MoveParticipant(ctx context.Context, room string, identity string, destinationRoom string) error
 }
 
@@ -124,8 +125,24 @@ func (t *WarmTransferTask) OnEnter() {
 		Volume: 0.8,
 	}, nil)
 
-	// We'll need the room from the session to start background audio
-	// This part is tricky without a fully linked session/activity
+	jobCtx, err := t.jobContext()
+	if err != nil {
+		t.Fail(err)
+		return
+	}
+	callerRoomName := t.callerRoomName(jobCtx)
+	_, err = jobCtx.CreateSIPParticipant(context.Background(), &livekit.CreateSIPParticipantRequest{
+		RoomName:            t.humanAgentRoomName(callerRoomName),
+		ParticipantIdentity: t.humanAgentIdentity,
+		SipTrunkId:          t.SipTrunkID,
+		SipCallTo:           t.TargetPhoneNumber,
+		WaitUntilAnswered:   true,
+		SipNumber:           t.SipNumber,
+		Headers:             t.SipHeaders,
+	})
+	if err != nil {
+		t.Fail(err)
+	}
 }
 
 func (t *WarmTransferTask) OnExit() {

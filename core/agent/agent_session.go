@@ -56,6 +56,7 @@ type AgentSessionOptions struct {
 	WordTokenizer                 tokenize.WordTokenizer
 	PreemptiveGeneration          bool
 	AECWarmupDuration             float64
+	SessionCloseTranscriptTimeout float64
 	TurnDetection                 TurnDetectionMode
 	IVRDetection                  bool
 	IVRSilenceDuration            time.Duration
@@ -401,6 +402,9 @@ func withAgentSessionOptionDefaults(opts AgentSessionOptions) AgentSessionOption
 	opts.PreemptiveGeneration = true
 	if opts.AECWarmupDuration == 0 {
 		opts.AECWarmupDuration = 3.0
+	}
+	if opts.SessionCloseTranscriptTimeout == 0 {
+		opts.SessionCloseTranscriptTimeout = 2.0
 	}
 	return opts
 }
@@ -818,7 +822,7 @@ func (s *AgentSession) CloseSoon(reason CloseReason) {
 	case ch <- ev:
 	default:
 	}
-	_ = s.Stop(context.Background())
+	_ = s.stop(context.Background(), reason != CloseReasonError)
 }
 
 func (s *AgentSession) Shutdown(drain ...bool) {
@@ -1268,6 +1272,10 @@ func (s *AgentSession) UpdateAgent(agent AgentInterface) {
 }
 
 func (s *AgentSession) Stop(ctx context.Context) error {
+	return s.stop(ctx, true)
+}
+
+func (s *AgentSession) stop(ctx context.Context, commitPendingUserTurn bool) error {
 	s.mu.Lock()
 	if !s.started {
 		s.mu.Unlock()
@@ -1291,11 +1299,30 @@ func (s *AgentSession) Stop(ctx context.Context) error {
 	if ivrActivity != nil {
 		ivrActivity.Stop()
 	}
+	var stopErr error
 	if activity != nil {
+		if commitPendingUserTurn {
+			commitCtx := ctx
+			var cancel context.CancelFunc
+			if commitCtx == nil {
+				commitCtx = context.Background()
+			}
+			if timeout := s.Options.SessionCloseTranscriptTimeout; timeout > 0 {
+				commitCtx, cancel = context.WithTimeout(commitCtx, time.Duration(timeout*float64(time.Second)))
+			}
+			if _, err := activity.CommitUserTurn(commitCtx, CommitUserTurnOptions{
+				TranscriptTimeout: time.Duration(s.Options.SessionCloseTranscriptTimeout * float64(time.Second)),
+			}); err != nil {
+				stopErr = err
+			}
+			if cancel != nil {
+				cancel()
+			}
+		}
 		activity.Stop()
 	}
 	if backgroundAudio != nil {
 		_ = backgroundAudio.Close()
 	}
-	return nil
+	return stopErr
 }

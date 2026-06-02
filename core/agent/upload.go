@@ -2,6 +2,7 @@ package agent
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -10,15 +11,22 @@ import (
 	"net/textproto"
 	"net/url"
 	"os"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/cavos-io/rtp-agent/library/logger"
+	"github.com/cavos-io/rtp-agent/library/telemetry"
 	"github.com/cavos-io/rtp-agent/library/utils"
 	"github.com/livekit/protocol/auth"
 	"github.com/livekit/protocol/livekit"
+	"google.golang.org/genproto/googleapis/rpc/errdetails"
+	statuspb "google.golang.org/genproto/googleapis/rpc/status"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
+
+var recordUploadTelemetryEvent = telemetry.RecordChatEvent
 
 func UploadSessionReport(
 	cloudURL string,
@@ -27,16 +35,16 @@ func UploadSessionReport(
 	agentName string,
 	report *SessionReport,
 ) error {
-	u, err := url.Parse(cloudURL)
+	observabilityURL, err := observabilityURLFromLiveKitURL(cloudURL)
 	if err != nil {
-		return fmt.Errorf("failed to parse cloud URL: %w", err)
+		return err
 	}
-
-	if !utils.IsCloud(cloudURL) {
-		// Not a cloud URL, skip
+	if observabilityURL == "" {
 		logger.Logger.Infow("Not a cloud URL, skipping upload", "url", cloudURL)
 		return nil
 	}
+
+	emitUploadTelemetryEvents(context.Background(), agentName, report)
 
 	hasAudio := report.RecordingOptions.Audio && report.AudioRecordingPath != nil && report.AudioRecordingStartedAt != nil
 	if !report.RecordingOptions.Transcript && !hasAudio {
@@ -119,26 +127,137 @@ func UploadSessionReport(
 		return fmt.Errorf("failed to close multipart writer: %w", err)
 	}
 
-	req, err := http.NewRequest("POST", fmt.Sprintf("https://%s/observability/recordings/v0", u.Host), &b)
-	if err != nil {
-		return fmt.Errorf("failed to create request: %w", err)
-	}
-
-	req.Header.Set("Authorization", "Bearer "+jwt)
-	req.Header.Set("Content-Type", w.FormDataContentType())
-
 	client := &http.Client{Timeout: 30 * time.Second}
-	resp, err := client.Do(req)
-	if err != nil {
-		return fmt.Errorf("failed to execute upload request: %w", err)
-	}
-	defer resp.Body.Close()
+	uploadURL := fmt.Sprintf("%s/observability/recordings/v0", observabilityURL)
+	payload := b.Bytes()
+	for attempt := 0; attempt <= maxRecordingUploadRetries; attempt++ {
+		req, err := http.NewRequest("POST", uploadURL, bytes.NewReader(payload))
+		if err != nil {
+			return fmt.Errorf("failed to create request: %w", err)
+		}
+		req.Header.Set("Authorization", "Bearer "+jwt)
+		req.Header.Set("Content-Type", w.FormDataContentType())
 
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		resp, err := client.Do(req)
+		if err != nil {
+			return fmt.Errorf("failed to execute upload request: %w", err)
+		}
+		if resp.StatusCode < 400 {
+			resp.Body.Close()
+			logger.Logger.Debugw("Successfully uploaded session report to LiveKit Cloud")
+			return nil
+		}
+
 		bodyBytes, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("upload failed with status %d: %s", resp.StatusCode, string(bodyBytes))
+		retryDelay, retryable := recordingUploadRetryDelay(resp, bodyBytes)
+		resp.Body.Close()
+		if !retryable || attempt == maxRecordingUploadRetries {
+			return fmt.Errorf("upload failed with status %d: %s", resp.StatusCode, string(bodyBytes))
+		}
+		if retryDelay > 0 {
+			time.Sleep(retryDelay)
+		}
 	}
 
-	logger.Logger.Debugw("Successfully uploaded session report to LiveKit Cloud")
 	return nil
+}
+
+const maxRecordingUploadRetries = 3
+
+func emitUploadTelemetryEvents(ctx context.Context, agentName string, report *SessionReport) {
+	if report == nil {
+		return
+	}
+
+	if hasUploadRecordingOption(report.RecordingOptions) {
+		attrs := map[string]interface{}{
+			"agent_name":               agentName,
+			"sdk_version":              report.SDKVersion,
+			"session.report_timestamp": report.Timestamp,
+			"session.options":          sessionReportOptionsToDict(report.Options),
+		}
+		if report.Tagger != nil {
+			attrs["session.tags"] = report.Tagger.Tags()
+		}
+		if report.Usage != nil {
+			attrs["usage"] = usageSummaryToDict(report.Usage)
+		}
+		recordUploadTelemetryEvent(ctx, "session_report", "session report", attrs)
+	}
+
+	if report.Tagger == nil {
+		return
+	}
+	for _, evaluation := range report.Tagger.Evaluations() {
+		recordUploadTelemetryEvent(ctx, "evaluation", "evaluation", map[string]interface{}{
+			"evaluation": evaluation,
+		})
+	}
+	if outcome := report.Tagger.Outcome(); outcome != "" {
+		outcomeData := map[string]any{"outcome": outcome}
+		if reason := report.Tagger.OutcomeReason(); reason != "" {
+			outcomeData["reason"] = reason
+		}
+		recordUploadTelemetryEvent(ctx, "outcome", "outcome", map[string]interface{}{
+			"outcome": outcomeData,
+		})
+	}
+}
+
+func hasUploadRecordingOption(options RecordingOptions) bool {
+	return options.Audio || options.Traces || options.Logs || options.Transcript
+}
+
+func observabilityURLFromLiveKitURL(liveKitURL string) (string, error) {
+	if override := os.Getenv("LIVEKIT_OBSERVABILITY_URL"); override != "" {
+		return strings.TrimRight(override, "/"), nil
+	}
+
+	u, err := url.Parse(liveKitURL)
+	if err != nil {
+		return "", fmt.Errorf("failed to parse cloud URL: %w", err)
+	}
+	if !utils.IsCloud(liveKitURL) || u.Host == "" {
+		return "", nil
+	}
+	return "https://" + u.Host, nil
+}
+
+func recordingUploadRetryDelay(resp *http.Response, body []byte) (time.Duration, bool) {
+	if resp == nil {
+		return 0, false
+	}
+	value := resp.Header.Get("Retry-After")
+	if value != "" {
+		if seconds, err := strconv.Atoi(value); err == nil {
+			if seconds < 0 {
+				return 0, false
+			}
+			return time.Duration(seconds) * time.Second, true
+		}
+		retryAt, err := http.ParseTime(value)
+		if err != nil {
+			return 0, false
+		}
+		delay := time.Until(retryAt)
+		if delay < 0 {
+			delay = 0
+		}
+		return delay, true
+	}
+
+	var status statuspb.Status
+	if err := proto.Unmarshal(body, &status); err != nil {
+		return 0, false
+	}
+	for _, detail := range status.GetDetails() {
+		var retryInfo errdetails.RetryInfo
+		if detail.UnmarshalTo(&retryInfo) == nil {
+			if retryInfo.GetRetryDelay() == nil {
+				return 0, true
+			}
+			return retryInfo.GetRetryDelay().AsDuration(), true
+		}
+	}
+	return 0, false
 }

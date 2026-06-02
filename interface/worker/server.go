@@ -2087,9 +2087,18 @@ func shouldUploadJobSessionReport(jobCtx *JobContext) bool {
 	if jobCtx == nil || jobCtx.Job == nil || jobCtx.IsFakeJob() || jobCtx.Report == nil {
 		return false
 	}
-	report := jobCtx.Report
-	hasAudio := report.RecordingOptions.Audio && report.AudioRecordingPath != nil && report.AudioRecordingStartedAt != nil
-	return report.RecordingOptions.Transcript || hasAudio
+	return hasSessionRecordingOption(jobCtx.Report.RecordingOptions) || hasSessionEvaluationReport(jobCtx.Report)
+}
+
+func hasSessionRecordingOption(options agent.RecordingOptions) bool {
+	return options.Audio || options.Traces || options.Logs || options.Transcript
+}
+
+func hasSessionEvaluationReport(report *agent.SessionReport) bool {
+	if report == nil || report.Tagger == nil {
+		return false
+	}
+	return report.Tagger.Outcome() != "" || len(report.Tagger.Evaluations()) > 0
 }
 
 func (s *AgentServer) runSessionEnd(jobCtx *JobContext) {

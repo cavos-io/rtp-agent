@@ -329,6 +329,9 @@ func TestNewAgentSessionAppliesReferenceOptionDefaults(t *testing.T) {
 	if opts.AECWarmupDuration != 3.0 {
 		t.Fatalf("AECWarmupDuration = %v, want 3.0", opts.AECWarmupDuration)
 	}
+	if opts.SessionCloseTranscriptTimeout != 2.0 {
+		t.Fatalf("SessionCloseTranscriptTimeout = %v, want 2.0", opts.SessionCloseTranscriptTimeout)
+	}
 }
 
 func TestAgentSessionGenerateReplyEmitsSpeechCreatedEvent(t *testing.T) {
@@ -1439,6 +1442,28 @@ func TestAgentSessionCommitUserTurnDelegatesToActivity(t *testing.T) {
 		}
 	case <-testTimeout():
 		t.Fatal("OnUserTurnCompleted was not called")
+	}
+}
+
+func TestAgentSessionCloseSoonCommitsPendingUserTurn(t *testing.T) {
+	agent := &turnCompletedAgent{Agent: NewAgent("test"), turns: make(chan *llm.ChatMessage, 1)}
+	agent.TurnDetection = TurnDetectionModeManual
+	session := NewAgentSession(agent, nil, AgentSessionOptions{SessionCloseTranscriptTimeout: 0.25})
+	session.activity = NewAgentActivity(agent, session)
+	session.started = true
+	session.activity.OnFinalTranscript(&stt.SpeechEvent{
+		Alternatives: []stt.SpeechData{{Text: "closing turn"}},
+	})
+
+	session.CloseSoon(CloseReasonUserInitiated)
+
+	select {
+	case msg := <-agent.turns:
+		if msg.TextContent() != "closing turn" {
+			t.Fatalf("turn message text = %q, want closing turn", msg.TextContent())
+		}
+	case <-testTimeout():
+		t.Fatal("OnUserTurnCompleted was not called before close")
 	}
 }
 

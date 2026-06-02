@@ -1103,6 +1103,34 @@ func TestJobContextCreateSIPParticipantRequestPreservesExplicitName(t *testing.T
 	}
 }
 
+func TestJobContextCreateSIPParticipantUsesProvidedRequest(t *testing.T) {
+	ctx := NewJobContext(
+		&livekit.Job{Id: "job_sip", Room: &livekit.Room{Name: "caller-room"}},
+		"",
+		"",
+		"",
+	)
+	sip := &fakeJobSIPAPI{}
+	ctx.api = &JobAPI{SIP: sip}
+	req := &livekit.CreateSIPParticipantRequest{
+		RoomName:            "caller-room-human-agent",
+		ParticipantIdentity: "human-agent-sip",
+		SipTrunkId:          "trunk_123",
+		SipCallTo:           "+15550100",
+		WaitUntilAnswered:   true,
+		SipNumber:           "+15550999",
+		Headers:             map[string]string{"X-Trace": "trace-a"},
+		Dtmf:                "123#",
+	}
+
+	if _, err := ctx.CreateSIPParticipant(context.Background(), req); err != nil {
+		t.Fatalf("CreateSIPParticipant() error = %v", err)
+	}
+	if sip.createRequest != req {
+		t.Fatalf("CreateSIPParticipant() request = %#v, want provided request", sip.createRequest)
+	}
+}
+
 func TestJobContextTransferSIPParticipantRequestMatchesReferenceFields(t *testing.T) {
 	ctx := NewJobContext(
 		&livekit.Job{Id: "job_sip_transfer", Room: &livekit.Room{Name: "room-a"}},
@@ -1156,10 +1184,12 @@ func TestJobContextTransferSIPParticipantDefaultsWithoutPlayDialtoneAndAllowsOve
 }
 
 type fakeJobSIPAPI struct {
+	createRequest   *livekit.CreateSIPParticipantRequest
 	transferRequest *livekit.TransferSIPParticipantRequest
 }
 
-func (f *fakeJobSIPAPI) CreateSIPParticipant(context.Context, *livekit.CreateSIPParticipantRequest) (*livekit.SIPParticipantInfo, error) {
+func (f *fakeJobSIPAPI) CreateSIPParticipant(_ context.Context, req *livekit.CreateSIPParticipantRequest) (*livekit.SIPParticipantInfo, error) {
+	f.createRequest = req
 	return &livekit.SIPParticipantInfo{}, nil
 }
 
