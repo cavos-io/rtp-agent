@@ -3,12 +3,19 @@ package app
 import (
 	"context"
 	"fmt"
+	"io"
 	"reflect"
 	"testing"
 	"time"
 
+	"github.com/cavos-io/rtp-agent/core/agent"
+	"github.com/cavos-io/rtp-agent/core/audio/model"
 	"github.com/cavos-io/rtp-agent/core/llm"
+	"github.com/cavos-io/rtp-agent/core/stt"
 	"github.com/cavos-io/rtp-agent/core/tts"
+	"github.com/cavos-io/rtp-agent/core/vad"
+	"github.com/cavos-io/rtp-agent/interface/worker"
+	lksdk "github.com/livekit/server-sdk-go/v2"
 )
 
 func TestDefaultConfigFromEnvSelectsOpenAIProviders(t *testing.T) {
@@ -275,6 +282,28 @@ func TestDefaultConfigFromEnvSelectsAssemblyAISTT(t *testing.T) {
 	}
 	if caps := app.Session.STT.Capabilities(); !caps.Diarization {
 		t.Fatalf("STT Capabilities().Diarization = false, want true")
+	}
+}
+
+func TestDefaultConfigFromEnvWrapsSTTWithMultiSpeakerAdapter(t *testing.T) {
+	t.Setenv("ASSEMBLYAI_API_KEY", "test-assemblyai-key")
+	t.Setenv("RTP_AGENT_STT_PROVIDER", "assemblyai")
+	t.Setenv("RTP_AGENT_STT_SPEAKER_LABELS", "true")
+	t.Setenv("RTP_AGENT_STT_MULTI_SPEAKER", "true")
+
+	app, err := NewApp(DefaultConfigFromEnv())
+	if err != nil {
+		t.Fatalf("NewApp() error = %v", err)
+	}
+	if app.Session == nil || app.Session.STT == nil {
+		t.Fatal("Session STT is nil")
+	}
+	wrapped, ok := app.Session.STT.(*stt.MultiSpeakerAdapter)
+	if !ok {
+		t.Fatalf("Session STT = %T, want *stt.MultiSpeakerAdapter", app.Session.STT)
+	}
+	if caps := wrapped.Capabilities(); !caps.Streaming || !caps.Diarization {
+		t.Fatalf("wrapped STT capabilities = %+v, want streaming diarization", caps)
 	}
 }
 
@@ -1576,6 +1605,40 @@ func TestDefaultConfigFromEnvAddsXAIProviderTools(t *testing.T) {
 	}
 }
 
+func TestDefaultConfigFromEnvAddsEndCallTool(t *testing.T) {
+	t.Setenv("RTP_AGENT_TOOLS", "end_call")
+
+	app, err := NewApp(DefaultConfigFromEnv())
+	if err != nil {
+		t.Fatalf("NewApp() error = %v", err)
+	}
+	if app.Agent == nil {
+		t.Fatal("Agent is nil")
+	}
+	if len(app.Agent.Tools) != 1 {
+		t.Fatalf("len(Agent.Tools) = %d, want 1", len(app.Agent.Tools))
+	}
+	if got := app.Agent.Tools[0].Name(); got != "end_call" {
+		t.Fatalf("tool[0].Name() = %q, want end_call", got)
+	}
+}
+
+func TestConfigureRoomToolsAddsSendDTMFTool(t *testing.T) {
+	baseAgent := agent.NewAgent("test")
+	publisher := &fakeAppDtmfPublisher{}
+
+	err := configureRoomTools(AppConfig{AppTools: []string{"send_dtmf"}}, baseAgent, publisher)
+	if err != nil {
+		t.Fatalf("configureRoomTools() error = %v", err)
+	}
+	if len(baseAgent.Tools) != 1 {
+		t.Fatalf("len(Agent.Tools) = %d, want 1", len(baseAgent.Tools))
+	}
+	if got := baseAgent.Tools[0].Name(); got != "send_dtmf_events" {
+		t.Fatalf("tool[0].Name() = %q, want send_dtmf_events", got)
+	}
+}
+
 func TestDefaultConfigFromEnvAddsAnthropicComputerTool(t *testing.T) {
 	t.Setenv("ANTHROPIC_API_KEY", "test-anthropic-key")
 	t.Setenv("RTP_AGENT_LLM_PROVIDER", "anthropic")
@@ -1917,6 +1980,75 @@ func TestDefaultConfigFromEnvConfiguresTTSStreamPacer(t *testing.T) {
 	}
 }
 
+func TestDefaultConfigFromEnvConfiguresBackgroundAudio(t *testing.T) {
+	t.Setenv("RTP_AGENT_BACKGROUND_AUDIO_AMBIENT", "city-ambience.ogg")
+	t.Setenv("RTP_AGENT_BACKGROUND_AUDIO_THINKING", "/tmp/thinking.wav")
+
+	app, err := NewApp(DefaultConfigFromEnv())
+	if err != nil {
+		t.Fatalf("NewApp() error = %v", err)
+	}
+	if app.Session == nil {
+		t.Fatal("Session is nil")
+	}
+	if app.Session.Options.BackgroundAudio == nil {
+		t.Fatal("Session BackgroundAudio is nil")
+	}
+	if _, ok := backgroundAudioSource("city-ambience.ogg").(agent.BuiltinAudioClip); !ok {
+		t.Fatalf("backgroundAudioSource(city-ambience.ogg) = %T, want BuiltinAudioClip", backgroundAudioSource("city-ambience.ogg"))
+	}
+	if got := backgroundAudioSource("/tmp/thinking.wav"); got != "/tmp/thinking.wav" {
+		t.Fatalf("backgroundAudioSource(/tmp/thinking.wav) = %#v, want path string", got)
+	}
+}
+
+func TestRunSessionConnectsRoomIOToSession(t *testing.T) {
+	baseAgent := agent.NewAgent("test")
+	baseAgent.VAD = &fakeAppVAD{}
+	baseAgent.STT = &fakeAppSTT{}
+	baseAgent.LLM = &fakeAppLLM{}
+	baseAgent.TTS = &fakeAppTTS{}
+	session := agent.NewAgentSession(baseAgent, nil, agent.AgentSessionOptions{})
+	app := &App{
+		Session:     session,
+		Server:      worker.NewAgentServer(worker.WorkerOptions{}),
+		RoomOptions: worker.RoomOptions{DisablePreConnectAudio: true, DisableTextInput: true},
+	}
+	jobCtx := &worker.JobContext{Room: lksdk.NewRoom(nil)}
+
+	if err := app.runSession(jobCtx); err != nil {
+		t.Fatalf("runSession() error = %v", err)
+	}
+
+	if app.RoomIO == nil {
+		t.Fatal("RoomIO is nil")
+	}
+	if session.Room != jobCtx.Room {
+		t.Fatal("session Room was not set from job context")
+	}
+	if session.Assistant == nil || session.Assistant.PublishAudio == nil {
+		t.Fatal("session assistant PublishAudio was not connected to RoomIO")
+	}
+}
+
+func TestDefaultConfigFromEnvConfiguresLLMTurnDetector(t *testing.T) {
+	t.Setenv("OPENAI_API_KEY", "test-openai-key")
+	t.Setenv("RTP_AGENT_LLM_PROVIDER", "openai")
+	t.Setenv("RTP_AGENT_LLM_MODEL", "gpt-4o-mini")
+	t.Setenv("RTP_AGENT_TURN_DETECTOR_PROVIDER", "llm")
+
+	app, err := NewApp(DefaultConfigFromEnv())
+	if err != nil {
+		t.Fatalf("NewApp() error = %v", err)
+	}
+	if app.Agent == nil {
+		t.Fatal("Agent is nil")
+	}
+	if got := fmt.Sprintf("%T", app.Agent.TurnDetector); got != "*agent.LLMTurnDetector" {
+		t.Fatalf("TurnDetector type = %q, want *agent.LLMTurnDetector", got)
+	}
+}
+
 func TestDefaultConfigFromEnvSelectsAnthropicLLM(t *testing.T) {
 	t.Setenv("ANTHROPIC_API_KEY", "test-anthropic-key")
 	t.Setenv("RTP_AGENT_LLM_PROVIDER", "anthropic")
@@ -1953,4 +2085,86 @@ func TestInitRegistersWorkerEntrypoint(t *testing.T) {
 	if err.Error() != "ws_url is required, or set LIVEKIT_URL environment variable" {
 		t.Fatalf("Run() error = %q, want missing ws_url after registered entrypoint", err.Error())
 	}
+}
+
+type fakeAppVAD struct{}
+
+func (f *fakeAppVAD) Label() string { return "fake-vad" }
+func (f *fakeAppVAD) Model() string { return "fake-vad" }
+func (f *fakeAppVAD) Provider() string {
+	return "fake"
+}
+func (f *fakeAppVAD) Capabilities() vad.VADCapabilities        { return vad.VADCapabilities{} }
+func (f *fakeAppVAD) OnMetricsCollected(vad.VADMetricsHandler) {}
+func (f *fakeAppVAD) Stream(context.Context) (vad.VADStream, error) {
+	return &fakeAppVADStream{}, nil
+}
+
+type fakeAppVADStream struct{}
+
+func (f *fakeAppVADStream) PushFrame(*model.AudioFrame) error { return nil }
+func (f *fakeAppVADStream) Flush() error                      { return nil }
+func (f *fakeAppVADStream) EndInput() error                   { return nil }
+func (f *fakeAppVADStream) Close() error                      { return nil }
+func (f *fakeAppVADStream) Next() (*vad.VADEvent, error)      { return nil, io.EOF }
+
+type fakeAppSTT struct{}
+
+func (f *fakeAppSTT) Label() string { return "fake-stt" }
+func (f *fakeAppSTT) Capabilities() stt.STTCapabilities {
+	return stt.STTCapabilities{Streaming: true}
+}
+func (f *fakeAppSTT) Stream(context.Context, string) (stt.RecognizeStream, error) {
+	return &fakeAppSTTStream{}, nil
+}
+func (f *fakeAppSTT) Recognize(context.Context, []*model.AudioFrame, string) (*stt.SpeechEvent, error) {
+	return nil, nil
+}
+
+type fakeAppSTTStream struct{}
+
+func (f *fakeAppSTTStream) PushFrame(*model.AudioFrame) error { return nil }
+func (f *fakeAppSTTStream) Flush() error                      { return nil }
+func (f *fakeAppSTTStream) Close() error                      { return nil }
+func (f *fakeAppSTTStream) Next() (*stt.SpeechEvent, error)   { return nil, io.EOF }
+
+type fakeAppLLM struct{}
+
+func (f *fakeAppLLM) Chat(context.Context, *llm.ChatContext, ...llm.ChatOption) (llm.LLMStream, error) {
+	return &fakeAppLLMStream{}, nil
+}
+
+type fakeAppLLMStream struct{}
+
+func (f *fakeAppLLMStream) Next() (*llm.ChatChunk, error) { return nil, io.EOF }
+func (f *fakeAppLLMStream) Close() error                  { return nil }
+
+type fakeAppTTS struct{}
+
+func (f *fakeAppTTS) Label() string { return "fake-tts" }
+func (f *fakeAppTTS) Capabilities() tts.TTSCapabilities {
+	return tts.TTSCapabilities{Streaming: true}
+}
+func (f *fakeAppTTS) SampleRate() int  { return 24000 }
+func (f *fakeAppTTS) NumChannels() int { return 1 }
+func (f *fakeAppTTS) Synthesize(context.Context, string) (tts.ChunkedStream, error) {
+	return nil, nil
+}
+func (f *fakeAppTTS) Stream(context.Context) (tts.SynthesizeStream, error) {
+	return &fakeAppTTSStream{}, nil
+}
+
+type fakeAppTTSStream struct{}
+
+func (f *fakeAppTTSStream) PushText(string) error { return nil }
+func (f *fakeAppTTSStream) Flush() error          { return nil }
+func (f *fakeAppTTSStream) Close() error          { return nil }
+func (f *fakeAppTTSStream) Next() (*tts.SynthesizedAudio, error) {
+	return nil, io.EOF
+}
+
+type fakeAppDtmfPublisher struct{}
+
+func (f *fakeAppDtmfPublisher) PublishDTMF(code int32, digit string) error {
+	return nil
 }

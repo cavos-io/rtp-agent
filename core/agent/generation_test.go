@@ -228,6 +228,37 @@ func TestPerformTTSInferenceUsesSentenceStreamPacerWhenEnabled(t *testing.T) {
 	}
 }
 
+func TestPerformToolExecutionsProvidesRunContext(t *testing.T) {
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	tool := &runContextRecordingTool{}
+	toolCtx := llm.NewToolContext([]interface{}{tool})
+	functionCh := make(chan *llm.FunctionToolCall, 1)
+	functionCh <- &llm.FunctionToolCall{
+		Name:      tool.Name(),
+		CallID:    "call_lookup",
+		Arguments: `{}`,
+	}
+	close(functionCh)
+
+	outputs := PerformToolExecutions(context.Background(), functionCh, toolCtx, WithToolExecutionSession(session))
+	output, ok := <-outputs
+	if !ok {
+		t.Fatal("PerformToolExecutions closed without output")
+	}
+	if output.RawError != nil {
+		t.Fatalf("RawError = %v, want nil", output.RawError)
+	}
+	if tool.runContext == nil {
+		t.Fatal("tool run context is nil")
+	}
+	if tool.runContext.Session != session {
+		t.Fatal("tool run context Session was not set")
+	}
+	if tool.runContext.FunctionCall == nil || tool.runContext.FunctionCall.CallID != "call_lookup" {
+		t.Fatalf("tool run context FunctionCall = %#v, want call_lookup", tool.runContext.FunctionCall)
+	}
+}
+
 func executeOneToolCall(t *testing.T, tool llm.Tool) ToolExecutionOutput {
 	t.Helper()
 
@@ -264,6 +295,23 @@ func (f *fakeGenerationTool) Parameters() map[string]any { return nil }
 
 func (f *fakeGenerationTool) Execute(context.Context, string) (string, error) {
 	return f.result, f.err
+}
+
+type runContextRecordingTool struct {
+	runContext *RunContext
+}
+
+func (r *runContextRecordingTool) ID() string { return "lookup" }
+
+func (r *runContextRecordingTool) Name() string { return "lookup" }
+
+func (r *runContextRecordingTool) Description() string { return "" }
+
+func (r *runContextRecordingTool) Parameters() map[string]any { return nil }
+
+func (r *runContextRecordingTool) Execute(ctx context.Context, args string) (string, error) {
+	r.runContext = GetRunContext(ctx)
+	return "ok", nil
 }
 
 type fakeGenerationLLM struct {

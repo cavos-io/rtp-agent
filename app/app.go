@@ -75,11 +75,14 @@ import (
 	"github.com/cavos-io/rtp-agent/adapter/upliftai"
 	"github.com/cavos-io/rtp-agent/adapter/xai"
 	"github.com/cavos-io/rtp-agent/core/agent"
+	betatools "github.com/cavos-io/rtp-agent/core/beta/tools"
 	"github.com/cavos-io/rtp-agent/core/inference"
 	"github.com/cavos-io/rtp-agent/core/llm"
+	corestt "github.com/cavos-io/rtp-agent/core/stt"
 	coretts "github.com/cavos-io/rtp-agent/core/tts"
 	"github.com/cavos-io/rtp-agent/interface/worker"
 	"github.com/cavos-io/rtp-agent/library/tokenize"
+	lksdk "github.com/livekit/server-sdk-go/v2"
 	goopenai "github.com/sashabaranov/go-openai"
 )
 
@@ -175,6 +178,7 @@ type AppConfig struct {
 	STTNoDelay                              *bool
 	STTEndpointingMS                        *int
 	STTDiarization                          *bool
+	STTMultiSpeaker                         *bool
 	STTFillerWords                          *bool
 	STTVADEvents                            *bool
 	STTNumerals                             *bool
@@ -274,6 +278,9 @@ type AppConfig struct {
 	VADUpdateInterval                       *float64
 	VADSampleRate                           *int
 	AvatarProvider                          string
+	TurnDetectorProvider                    string
+	BackgroundAudioAmbient                  string
+	BackgroundAudioThinking                 string
 	TTSProvider                             string
 	TTSModel                                string
 	TTSVoice                                string
@@ -402,6 +409,7 @@ type AppConfig struct {
 
 	LiveKitInferenceAPIKey    string
 	LiveKitInferenceAPISecret string
+	AppTools                  []string
 }
 
 type App struct {
@@ -409,6 +417,9 @@ type App struct {
 	Agent         *agent.Agent
 	Session       *agent.AgentSession
 	RealtimeModel llm.RealtimeModel
+	RoomIO        *worker.RoomIO
+	RoomOptions   worker.RoomOptions
+	Config        AppConfig
 }
 
 func DefaultConfigFromEnv() AppConfig {
@@ -437,6 +448,7 @@ func DefaultConfigFromEnv() AppConfig {
 		STTNoDelay:                              getenvOptionalBool("RTP_AGENT_STT_NO_DELAY"),
 		STTEndpointingMS:                        getenvOptionalInt("RTP_AGENT_STT_ENDPOINTING_MS"),
 		STTDiarization:                          getenvOptionalBool("RTP_AGENT_STT_DIARIZATION"),
+		STTMultiSpeaker:                         getenvOptionalBool("RTP_AGENT_STT_MULTI_SPEAKER"),
 		STTFillerWords:                          getenvOptionalBool("RTP_AGENT_STT_FILLER_WORDS"),
 		STTVADEvents:                            getenvOptionalBool("RTP_AGENT_STT_VAD_EVENTS"),
 		STTNumerals:                             getenvOptionalBool("RTP_AGENT_STT_NUMERALS"),
@@ -536,6 +548,9 @@ func DefaultConfigFromEnv() AppConfig {
 		VADUpdateInterval:                       getenvOptionalFloat("RTP_AGENT_VAD_UPDATE_INTERVAL"),
 		VADSampleRate:                           getenvOptionalInt("RTP_AGENT_VAD_SAMPLE_RATE"),
 		AvatarProvider:                          normalizedEnv("RTP_AGENT_AVATAR_PROVIDER"),
+		TurnDetectorProvider:                    normalizedEnv("RTP_AGENT_TURN_DETECTOR_PROVIDER"),
+		BackgroundAudioAmbient:                  os.Getenv("RTP_AGENT_BACKGROUND_AUDIO_AMBIENT"),
+		BackgroundAudioThinking:                 os.Getenv("RTP_AGENT_BACKGROUND_AUDIO_THINKING"),
 		TTSProvider:                             normalizedEnv("RTP_AGENT_TTS_PROVIDER"),
 		TTSModel:                                os.Getenv("RTP_AGENT_TTS_MODEL"),
 		TTSVoice:                                os.Getenv("RTP_AGENT_TTS_VOICE"),
@@ -659,6 +674,7 @@ func DefaultConfigFromEnv() AppConfig {
 		XAIFileSearchVectorStoreIDs:             splitEnvList("RTP_AGENT_XAI_FILE_SEARCH_VECTOR_STORE_IDS"),
 		XAIFileSearchMaxResults:                 getenvOptionalInt("RTP_AGENT_XAI_FILE_SEARCH_MAX_RESULTS"),
 		GoogleCredentialsFile:                   firstEnv("RTP_AGENT_GOOGLE_CREDENTIALS_FILE", "GOOGLE_APPLICATION_CREDENTIALS"),
+		AppTools:                                splitEnvList("RTP_AGENT_TOOLS"),
 	}
 }
 
@@ -676,6 +692,12 @@ func NewApp(cfg AppConfig) (*App, error) {
 	if err != nil {
 		return nil, err
 	}
+	if err := configureSTTAdapters(cfg, baseAgent); err != nil {
+		return nil, err
+	}
+	if err := configureTurnDetector(cfg, baseAgent); err != nil {
+		return nil, err
+	}
 	if normalizeProvider(cfg.LLMProvider) == providerXAI {
 		baseAgent.Tools = append(baseAgent.Tools, xaiProviderTools(cfg)...)
 	}
@@ -690,6 +712,9 @@ func NewApp(cfg AppConfig) (*App, error) {
 	}
 
 	session := agent.NewAgentSession(baseAgent, nil, agentSessionOptionsFromConfig(cfg))
+	if err := configureAppTools(cfg, baseAgent, session); err != nil {
+		return nil, err
+	}
 
 	opts := cfg.WorkerOptions
 	if opts.AgentName == "" {
@@ -705,6 +730,7 @@ func NewApp(cfg AppConfig) (*App, error) {
 		Agent:         baseAgent,
 		Session:       session,
 		RealtimeModel: realtimeModel,
+		Config:        cfg,
 	}
 	if err := server.RTCSession(app.runSession, nil, nil); err != nil {
 		return nil, err
@@ -719,6 +745,26 @@ func (a *App) runSession(ctx *worker.JobContext) error {
 	a.Server.SetConsoleSession(a.Session)
 	if a.Session.STT == nil && a.Session.LLM == nil && a.Session.TTS == nil && a.RealtimeModel == nil {
 		return nil
+	}
+	if ctx != nil {
+		if ctx.Room == nil {
+			if err := ctx.Connect(context.Background(), nil); err != nil {
+				return err
+			}
+		}
+		if ctx.Room != nil {
+			a.Session.Room = ctx.Room
+			roomIO := worker.NewRoomIO(ctx.Room, a.Session, a.RoomOptions)
+			a.RoomIO = roomIO
+			if err := configureRoomTools(a.Config, a.Agent, roomIO); err != nil {
+				return err
+			}
+			if ctx.Room.LocalParticipant != nil && ctx.Room.ConnectionState() == lksdk.ConnectionStateConnected {
+				if err := roomIO.Start(context.Background()); err != nil {
+					return err
+				}
+			}
+		}
 	}
 	return a.Session.Start(context.Background())
 }
@@ -818,6 +864,36 @@ func configureVAD(cfg AppConfig, a *agent.Agent) error {
 	default:
 		return fmt.Errorf("unsupported RTP_AGENT_VAD_PROVIDER %q", cfg.VADProvider)
 	}
+}
+
+func configureTurnDetector(cfg AppConfig, a *agent.Agent) error {
+	switch normalizeProvider(cfg.TurnDetectorProvider) {
+	case "":
+		return nil
+	case "llm":
+		if a.LLM == nil {
+			return fmt.Errorf("RTP_AGENT_TURN_DETECTOR_PROVIDER=llm requires RTP_AGENT_LLM_PROVIDER")
+		}
+		a.TurnDetector = agent.NewLLMTurnDetector(a.LLM)
+		return nil
+	default:
+		return fmt.Errorf("unsupported RTP_AGENT_TURN_DETECTOR_PROVIDER %q", cfg.TurnDetectorProvider)
+	}
+}
+
+func configureSTTAdapters(cfg AppConfig, a *agent.Agent) error {
+	if cfg.STTMultiSpeaker == nil || !*cfg.STTMultiSpeaker {
+		return nil
+	}
+	if a.STT == nil {
+		return fmt.Errorf("RTP_AGENT_STT_MULTI_SPEAKER=true requires RTP_AGENT_STT_PROVIDER")
+	}
+	adapter, err := corestt.NewDefaultMultiSpeakerAdapter(a.STT)
+	if err != nil {
+		return err
+	}
+	a.STT = adapter
+	return nil
 }
 
 func configureProviders(cfg AppConfig, a *agent.Agent) (llm.RealtimeModel, error) {
@@ -2621,7 +2697,36 @@ func agentSessionOptionsFromConfig(cfg AppConfig) agent.AgentSessionOptions {
 		}
 		opts.TTSStreamPacer = &pacer
 	}
+	if cfg.BackgroundAudioAmbient != "" || cfg.BackgroundAudioThinking != "" {
+		opts.BackgroundAudio = agent.NewBackgroundAudioPlayer(
+			backgroundAudioSource(cfg.BackgroundAudioAmbient),
+			backgroundAudioSource(cfg.BackgroundAudioThinking),
+		)
+	}
 	return opts
+}
+
+func backgroundAudioSource(value string) interface{} {
+	switch strings.TrimSpace(value) {
+	case "":
+		return nil
+	case string(agent.CityAmbience):
+		return agent.CityAmbience
+	case string(agent.ForestAmbience):
+		return agent.ForestAmbience
+	case string(agent.OfficeAmbience):
+		return agent.OfficeAmbience
+	case string(agent.CrowdedRoom):
+		return agent.CrowdedRoom
+	case string(agent.KeyboardTyping):
+		return agent.KeyboardTyping
+	case string(agent.KeyboardTyping2):
+		return agent.KeyboardTyping2
+	case string(agent.HoldMusic):
+		return agent.HoldMusic
+	default:
+		return value
+	}
 }
 
 func ttsSentenceTokenizer(cfg AppConfig) (tokenize.SentenceTokenizer, error) {
@@ -2964,6 +3069,64 @@ func anthropicProviderTools(cfg AppConfig) []llm.Tool {
 		}
 	}
 	return tools
+}
+
+func configureAppTools(cfg AppConfig, a *agent.Agent, session *agent.AgentSession) error {
+	if len(cfg.AppTools) == 0 {
+		return nil
+	}
+	tools := make([]llm.Tool, 0, len(cfg.AppTools))
+	for _, tool := range cfg.AppTools {
+		switch normalizeProvider(tool) {
+		case "end_call", "endcall":
+			tools = append(tools, betatools.NewSessionEndCallTool(session, betatools.EndCallToolOptions{}))
+		case "send_dtmf", "send_dtmf_events", "senddtmf":
+			continue
+		default:
+			return fmt.Errorf("unsupported RTP_AGENT_TOOLS value %q", tool)
+		}
+	}
+	a.Tools = append(a.Tools, tools...)
+	return nil
+}
+
+func configureRoomTools(cfg AppConfig, a *agent.Agent, publisher betatools.DtmfPublisher) error {
+	if len(cfg.AppTools) == 0 {
+		return nil
+	}
+	tools := make([]llm.Tool, 0, len(cfg.AppTools))
+	for _, tool := range cfg.AppTools {
+		switch normalizeProvider(tool) {
+		case "send_dtmf", "send_dtmf_events", "senddtmf":
+			tools = append(tools, betatools.NewSendDTMFTool(publisher))
+		case "end_call", "endcall":
+			continue
+		default:
+			return fmt.Errorf("unsupported RTP_AGENT_TOOLS value %q", tool)
+		}
+	}
+	a.Tools = appendMissingToolsByID(a.Tools, tools...)
+	return nil
+}
+
+func appendMissingToolsByID(existing []llm.Tool, additions ...llm.Tool) []llm.Tool {
+	seen := make(map[string]struct{}, len(existing)+len(additions))
+	for _, tool := range existing {
+		if tool != nil {
+			seen[tool.ID()] = struct{}{}
+		}
+	}
+	for _, tool := range additions {
+		if tool == nil {
+			continue
+		}
+		if _, ok := seen[tool.ID()]; ok {
+			continue
+		}
+		existing = append(existing, tool)
+		seen[tool.ID()] = struct{}{}
+	}
+	return existing
 }
 
 func xaiProviderTools(cfg AppConfig) []llm.Tool {
