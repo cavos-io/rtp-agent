@@ -59,13 +59,17 @@ func TestAgentSessionStartConfiguresTTSStreamPacer(t *testing.T) {
 	if session.Assistant == nil {
 		t.Fatal("Assistant is nil")
 	}
-	if session.Assistant.ttsStreamPacer == nil {
+	pipeline, ok := session.Assistant.(*PipelineAgent)
+	if !ok {
+		t.Fatalf("Assistant = %T, want *PipelineAgent", session.Assistant)
+	}
+	if pipeline.ttsStreamPacer == nil {
 		t.Fatal("Assistant ttsStreamPacer is nil")
 	}
-	if got := session.Assistant.ttsStreamPacer.MinRemainingAudio; got != 25*time.Millisecond {
+	if got := pipeline.ttsStreamPacer.MinRemainingAudio; got != 25*time.Millisecond {
 		t.Fatalf("MinRemainingAudio = %v, want 25ms", got)
 	}
-	if got := session.Assistant.ttsStreamPacer.MaxTextLength; got != 42 {
+	if got := pipeline.ttsStreamPacer.MaxTextLength; got != 42 {
 		t.Fatalf("MaxTextLength = %d, want 42", got)
 	}
 }

@@ -54,6 +54,9 @@ func TestDefaultConfigFromEnvSelectsOpenAIProviders(t *testing.T) {
 	if got := llm.RealtimeModelName(app.RealtimeModel); got != "gpt-realtime-test" {
 		t.Fatalf("Realtime model = %q, want gpt-realtime-test", got)
 	}
+	if _, ok := app.Session.Assistant.(*agent.MultimodalAgent); !ok {
+		t.Fatalf("Session assistant = %T, want *agent.MultimodalAgent", app.Session.Assistant)
+	}
 }
 
 func TestDefaultConfigFromEnvSelectsPerplexityLLM(t *testing.T) {
@@ -2026,7 +2029,11 @@ func TestRunSessionConnectsRoomIOToSession(t *testing.T) {
 	if session.Room != jobCtx.Room {
 		t.Fatal("session Room was not set from job context")
 	}
-	if session.Assistant == nil || session.Assistant.PublishAudio == nil {
+	pipeline, ok := session.Assistant.(*agent.PipelineAgent)
+	if !ok {
+		t.Fatalf("session assistant = %T, want *agent.PipelineAgent", session.Assistant)
+	}
+	if pipeline.PublishAudio == nil {
 		t.Fatal("session assistant PublishAudio was not connected to RoomIO")
 	}
 }

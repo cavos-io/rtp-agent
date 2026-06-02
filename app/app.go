@@ -712,6 +712,9 @@ func NewApp(cfg AppConfig) (*App, error) {
 	}
 
 	session := agent.NewAgentSession(baseAgent, nil, agentSessionOptionsFromConfig(cfg))
+	if realtimeModel != nil {
+		session.Assistant = agent.NewMultimodalAgent(realtimeModel, session.ChatCtx)
+	}
 	if err := configureAppTools(cfg, baseAgent, session); err != nil {
 		return nil, err
 	}
