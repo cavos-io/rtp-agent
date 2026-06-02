@@ -20,6 +20,8 @@ import (
 	"github.com/cavos-io/rtp-agent/library/utils"
 	"github.com/livekit/protocol/auth"
 	"github.com/livekit/protocol/livekit"
+	"google.golang.org/genproto/googleapis/rpc/errdetails"
+	statuspb "google.golang.org/genproto/googleapis/rpc/status"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
@@ -147,7 +149,7 @@ func UploadSessionReport(
 		}
 
 		bodyBytes, _ := io.ReadAll(resp.Body)
-		retryDelay, retryable := recordingUploadRetryDelay(resp)
+		retryDelay, retryable := recordingUploadRetryDelay(resp, bodyBytes)
 		resp.Body.Close()
 		if !retryable || attempt == maxRecordingUploadRetries {
 			return fmt.Errorf("upload failed with status %d: %s", resp.StatusCode, string(bodyBytes))
@@ -221,27 +223,41 @@ func observabilityURLFromLiveKitURL(liveKitURL string) (string, error) {
 	return "https://" + u.Host, nil
 }
 
-func recordingUploadRetryDelay(resp *http.Response) (time.Duration, bool) {
+func recordingUploadRetryDelay(resp *http.Response, body []byte) (time.Duration, bool) {
 	if resp == nil {
 		return 0, false
 	}
 	value := resp.Header.Get("Retry-After")
-	if value == "" {
-		return 0, false
-	}
-	if seconds, err := strconv.Atoi(value); err == nil {
-		if seconds < 0 {
+	if value != "" {
+		if seconds, err := strconv.Atoi(value); err == nil {
+			if seconds < 0 {
+				return 0, false
+			}
+			return time.Duration(seconds) * time.Second, true
+		}
+		retryAt, err := http.ParseTime(value)
+		if err != nil {
 			return 0, false
 		}
-		return time.Duration(seconds) * time.Second, true
+		delay := time.Until(retryAt)
+		if delay < 0 {
+			delay = 0
+		}
+		return delay, true
 	}
-	retryAt, err := http.ParseTime(value)
-	if err != nil {
+
+	var status statuspb.Status
+	if err := proto.Unmarshal(body, &status); err != nil {
 		return 0, false
 	}
-	delay := time.Until(retryAt)
-	if delay < 0 {
-		delay = 0
+	for _, detail := range status.GetDetails() {
+		var retryInfo errdetails.RetryInfo
+		if detail.UnmarshalTo(&retryInfo) == nil {
+			if retryInfo.GetRetryDelay() == nil {
+				return 0, true
+			}
+			return retryInfo.GetRetryDelay().AsDuration(), true
+		}
 	}
-	return delay, true
+	return 0, false
 }

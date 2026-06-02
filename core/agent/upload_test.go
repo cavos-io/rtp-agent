@@ -6,6 +6,12 @@ import (
 	"net/http/httptest"
 	"sync/atomic"
 	"testing"
+
+	"google.golang.org/genproto/googleapis/rpc/errdetails"
+	statuspb "google.golang.org/genproto/googleapis/rpc/status"
+	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/anypb"
+	"google.golang.org/protobuf/types/known/durationpb"
 )
 
 func TestUploadSessionReportUsesObservabilityURLEnvOverride(t *testing.T) {
@@ -51,6 +57,40 @@ func TestUploadSessionReportRetriesRetryableRecordingUpload(t *testing.T) {
 	report := NewSessionReport()
 	report.RecordingOptions = RecordingOptions{Transcript: true}
 	report.RoomID = "RM_retry"
+
+	if err := UploadSessionReport("wss://tenant.livekit.cloud", "key", "secret", "agent-a", report); err != nil {
+		t.Fatalf("UploadSessionReport() error = %v", err)
+	}
+	if got := atomic.LoadInt32(&attempts); got != 2 {
+		t.Fatalf("upload attempts = %d, want 2", got)
+	}
+}
+
+func TestUploadSessionReportRetriesProtobufRetryInfo(t *testing.T) {
+	retryInfo, err := anypb.New(&errdetails.RetryInfo{RetryDelay: durationpb.New(0)})
+	if err != nil {
+		t.Fatalf("Create RetryInfo detail: %v", err)
+	}
+	body, err := proto.Marshal(&statuspb.Status{Details: []*anypb.Any{retryInfo}})
+	if err != nil {
+		t.Fatalf("Marshal Status: %v", err)
+	}
+
+	var attempts int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if atomic.AddInt32(&attempts, 1) == 1 {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			_, _ = w.Write(body)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+	t.Setenv("LIVEKIT_OBSERVABILITY_URL", server.URL)
+
+	report := NewSessionReport()
+	report.RecordingOptions = RecordingOptions{Transcript: true}
+	report.RoomID = "RM_retry_proto"
 
 	if err := UploadSessionReport("wss://tenant.livekit.cloud", "key", "secret", "agent-a", report); err != nil {
 		t.Fatalf("UploadSessionReport() error = %v", err)
