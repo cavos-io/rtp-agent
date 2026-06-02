@@ -344,6 +344,7 @@ func TestWorkerHTTPHandlerReportsConnectionFailure(t *testing.T) {
 }
 
 func TestWorkerHTTPHandlerReportsWorkerMetadata(t *testing.T) {
+	t.Setenv("LIVEKIT_REMOTE_EOT_URL", "https://hosted.example")
 	server := NewAgentServer(WorkerOptions{
 		AgentName: "sales-agent",
 		LoadFunc:  func(*AgentServer) float64 { return 0.42 },
@@ -367,6 +368,7 @@ func TestWorkerHTTPHandlerReportsWorkerMetadata(t *testing.T) {
 		`"active_jobs":1`,
 		`"project_type":"go"`,
 		`"node_name":"`,
+		`"hosted":true`,
 	} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("/worker response missing %s in %s", want, body)

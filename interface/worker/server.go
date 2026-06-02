@@ -793,6 +793,7 @@ type workerMetadataResponse struct {
 	SDKVersion     string  `json:"sdk_version"`
 	ProjectType    string  `json:"project_type"`
 	NodeName       string  `json:"node_name"`
+	Hosted         bool    `json:"hosted"`
 }
 
 func (s *AgentServer) workerHTTPHandler() http.Handler {
@@ -819,6 +820,7 @@ func (s *AgentServer) workerHTTPHandler() http.Handler {
 			SDKVersion:     s.Options.Version,
 			ProjectType:    "go",
 			NodeName:       utils.NodeName(),
+			Hosted:         utils.IsHosted(),
 		}
 		w.Header().Set("Content-Type", "application/json")
 		if err := json.NewEncoder(w).Encode(body); err != nil {
