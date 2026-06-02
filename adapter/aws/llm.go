@@ -3,6 +3,7 @@ package aws
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -13,20 +14,22 @@ import (
 	"github.com/cavos-io/rtp-agent/core/llm"
 )
 
+const (
+	defaultAWSRegion   = "us-east-1"
+	defaultAWSLLMModel = "amazon.nova-2-lite-v1:0"
+)
+
 type AWSLLM struct {
 	client *bedrockruntime.Client
 	model  string
 }
 
 func NewAWSLLM(ctx context.Context, region string, model string) (*AWSLLM, error) {
-	if model == "" {
-		model = "anthropic.claude-3-haiku-20240307-v1:0"
-	}
+	model = awsLLMModelOrDefault(model)
+	region = awsRegionOrDefault(region)
 
 	opts := []func(*config.LoadOptions) error{}
-	if region != "" {
-		opts = append(opts, config.WithRegion(region))
-	}
+	opts = append(opts, config.WithRegion(region))
 
 	cfg, err := config.LoadDefaultConfig(ctx, opts...)
 	if err != nil {
@@ -39,7 +42,31 @@ func NewAWSLLM(ctx context.Context, region string, model string) (*AWSLLM, error
 	}, nil
 }
 
+func awsLLMModelOrDefault(model string) string {
+	if model == "" {
+		return defaultAWSLLMModel
+	}
+	return model
+}
+
+func awsRegionOrDefault(region string) string {
+	if region == "" {
+		return defaultAWSRegion
+	}
+	return region
+}
+
+func (l *AWSLLM) Label() string { return "aws.LLM" }
+func (l *AWSLLM) Model() string { return l.model }
+func (l *AWSLLM) Provider() string {
+	return "AWS Bedrock"
+}
+
 func (l *AWSLLM) Chat(ctx context.Context, chatCtx *llm.ChatContext, opts ...llm.ChatOption) (llm.LLMStream, error) {
+	if l.client == nil {
+		return nil, fmt.Errorf("aws bedrock client is not configured")
+	}
+
 	options := &llm.ChatOptions{}
 	for _, opt := range opts {
 		opt(options)
@@ -447,6 +474,10 @@ func (s *awsLLMStream) Next() (*llm.ChatChunk, error) {
 }
 
 func (s *awsLLMStream) Close() error {
+	if s.stream == nil {
+		s.closed = true
+		return nil
+	}
 	s.stream.Close()
 	s.closed = true
 	return nil

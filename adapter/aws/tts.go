@@ -100,6 +100,10 @@ func newAWSTTSWithClient(client *polly.Client, voice string, opts ...AWSTTSOptio
 }
 
 func (t *AWSTTS) Label() string { return "aws.TTS" }
+func (t *AWSTTS) Model() string { return string(t.engine) }
+func (t *AWSTTS) Provider() string {
+	return "Amazon Polly"
+}
 func (t *AWSTTS) Capabilities() tts.TTSCapabilities {
 	return tts.TTSCapabilities{Streaming: false, AlignedTranscript: false}
 }
@@ -107,6 +111,9 @@ func (t *AWSTTS) SampleRate() int  { return t.sampleRate }
 func (t *AWSTTS) NumChannels() int { return 1 }
 
 func (t *AWSTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStream, error) {
+	if t.client == nil {
+		return nil, fmt.Errorf("aws polly client is not configured")
+	}
 	out, err := t.client.SynthesizeSpeech(ctx, buildAWSSynthesizeSpeechInput(t, text))
 	if err != nil {
 		return nil, err
@@ -169,5 +176,8 @@ func (s *awsTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 }
 
 func (s *awsTTSChunkedStream) Close() error {
+	if s.stream == nil {
+		return nil
+	}
 	return s.stream.Close()
 }
