@@ -370,6 +370,126 @@ func TestAgentSessionUpdateOptionsAffectsActiveTurnDetection(t *testing.T) {
 	}
 }
 
+func TestAgentActivityClearUserTurnDropsPendingManualTranscript(t *testing.T) {
+	agent := &turnCompletedAgent{Agent: NewAgent("test"), turns: make(chan *llm.ChatMessage, 1)}
+	agent.TurnDetection = TurnDetectionModeManual
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	activity := NewAgentActivity(agent, session)
+	defer activity.Stop()
+
+	activity.OnFinalTranscript(&stt.SpeechEvent{
+		Alternatives: []stt.SpeechData{{Text: "discard me", Confidence: 0.8}},
+	})
+	activity.ClearUserTurn()
+
+	transcript, err := activity.CommitUserTurn(context.Background(), CommitUserTurnOptions{})
+	if err != nil {
+		t.Fatalf("CommitUserTurn error = %v, want nil", err)
+	}
+	if transcript != "" {
+		t.Fatalf("CommitUserTurn transcript = %q, want empty after ClearUserTurn", transcript)
+	}
+	select {
+	case msg := <-agent.turns:
+		t.Fatalf("OnUserTurnCompleted called after cleared turn with %q", msg.TextContent())
+	case <-time.After(20 * time.Millisecond):
+	}
+}
+
+func TestAgentActivityCommitUserTurnCompletesPendingManualTranscript(t *testing.T) {
+	agent := &turnCompletedAgent{Agent: NewAgent("test"), turns: make(chan *llm.ChatMessage, 1)}
+	agent.TurnDetection = TurnDetectionModeManual
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	activity := NewAgentActivity(agent, session)
+	defer activity.Stop()
+
+	activity.OnFinalTranscript(&stt.SpeechEvent{
+		Alternatives: []stt.SpeechData{{Text: "manual turn", Confidence: 0.9}},
+	})
+
+	transcript, err := activity.CommitUserTurn(context.Background(), CommitUserTurnOptions{})
+	if err != nil {
+		t.Fatalf("CommitUserTurn error = %v, want nil", err)
+	}
+	if transcript != "manual turn" {
+		t.Fatalf("CommitUserTurn transcript = %q, want manual turn", transcript)
+	}
+	select {
+	case msg := <-agent.turns:
+		if msg.TextContent() != "manual turn" {
+			t.Fatalf("turn message text = %q, want manual turn", msg.TextContent())
+		}
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("OnUserTurnCompleted was not called for manual commit")
+	}
+}
+
+func TestAgentActivityAutomaticTurnCompletionConsumesPendingTranscript(t *testing.T) {
+	agent := &turnCompletedAgent{Agent: NewAgent("test"), turns: make(chan *llm.ChatMessage, 2)}
+	agent.TurnDetection = TurnDetectionModeSTT
+	session := NewAgentSession(agent, nil, AgentSessionOptions{MinEndpointingDelay: 0.01})
+	activity := NewAgentActivity(agent, session)
+	defer activity.Stop()
+
+	activity.OnFinalTranscript(&stt.SpeechEvent{
+		Alternatives: []stt.SpeechData{{Text: "automatic turn", Confidence: 0.9}},
+	})
+
+	select {
+	case msg := <-agent.turns:
+		if msg.TextContent() != "automatic turn" {
+			t.Fatalf("turn message text = %q, want automatic turn", msg.TextContent())
+		}
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("OnUserTurnCompleted was not called for automatic STT turn")
+	}
+
+	transcript, err := activity.CommitUserTurn(context.Background(), CommitUserTurnOptions{})
+	if err != nil {
+		t.Fatalf("CommitUserTurn error = %v, want nil", err)
+	}
+	if transcript != "" {
+		t.Fatalf("CommitUserTurn transcript = %q, want empty after automatic completion", transcript)
+	}
+	select {
+	case msg := <-agent.turns:
+		t.Fatalf("CommitUserTurn duplicated completed turn with %q", msg.TextContent())
+	case <-time.After(20 * time.Millisecond):
+	}
+}
+
+func TestAgentActivityCommitUserTurnSkipReplyAddsUserMessageWithoutCallback(t *testing.T) {
+	agent := &turnCompletedAgent{Agent: NewAgent("test"), turns: make(chan *llm.ChatMessage, 1)}
+	agent.TurnDetection = TurnDetectionModeManual
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	activity := NewAgentActivity(agent, session)
+	defer activity.Stop()
+
+	activity.OnFinalTranscript(&stt.SpeechEvent{
+		Alternatives: []stt.SpeechData{{Text: "store only", Confidence: 0.7}},
+	})
+
+	transcript, err := activity.CommitUserTurn(context.Background(), CommitUserTurnOptions{SkipReply: true})
+	if err != nil {
+		t.Fatalf("CommitUserTurn error = %v, want nil", err)
+	}
+	if transcript != "store only" {
+		t.Fatalf("CommitUserTurn transcript = %q, want store only", transcript)
+	}
+	select {
+	case msg := <-agent.turns:
+		t.Fatalf("OnUserTurnCompleted called despite SkipReply with %q", msg.TextContent())
+	case <-time.After(20 * time.Millisecond):
+	}
+	if len(agent.ChatCtx.Items) != 1 {
+		t.Fatalf("agent chat context has %d items, want committed user message", len(agent.ChatCtx.Items))
+	}
+	msg, ok := agent.ChatCtx.Items[0].(*llm.ChatMessage)
+	if !ok || msg.Role != llm.ChatRoleUser || msg.TextContent() != "store only" {
+		t.Fatalf("committed chat item = %#v, want user message", agent.ChatCtx.Items[0])
+	}
+}
+
 type turnCompletedAgent struct {
 	*Agent
 	turns chan *llm.ChatMessage
