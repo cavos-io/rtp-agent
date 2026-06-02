@@ -131,6 +131,7 @@ type AgentSession struct {
 	AgentStateChangedCh chan AgentStateChangedEvent
 	UserStateChangedCh  chan UserStateChangedEvent
 	userInputCh         chan UserInputTranscribedEvent
+	agentOutputCh       chan AgentOutputTranscribedEvent
 	speechCreatedCh     chan SpeechCreatedEvent
 	falseInterruptionCh chan AgentFalseInterruptionEvent
 	userTurnExceededCh  chan UserTurnExceededEvent
@@ -360,6 +361,32 @@ func (s *AgentSession) userInputTranscribedEvents() chan UserInputTranscribedEve
 		s.userInputCh = make(chan UserInputTranscribedEvent, 10)
 	}
 	return s.userInputCh
+}
+
+func (s *AgentSession) AgentOutputTranscribedEvents() <-chan AgentOutputTranscribedEvent {
+	return s.agentOutputTranscribedEvents()
+}
+
+func (s *AgentSession) EmitAgentOutputTranscribed(ev AgentOutputTranscribedEvent) {
+	if ev.CreatedAt.IsZero() {
+		ev.CreatedAt = time.Now()
+	}
+	s.recordEvent(&ev)
+	ch := s.agentOutputTranscribedEvents()
+	select {
+	case ch <- ev:
+	default:
+	}
+}
+
+func (s *AgentSession) agentOutputTranscribedEvents() chan AgentOutputTranscribedEvent {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.agentOutputCh == nil {
+		s.agentOutputCh = make(chan AgentOutputTranscribedEvent, 10)
+	}
+	return s.agentOutputCh
 }
 
 func (s *AgentSession) SpeechCreatedEvents() <-chan SpeechCreatedEvent {

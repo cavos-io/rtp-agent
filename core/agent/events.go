@@ -29,6 +29,15 @@ type UserInputTranscribedEvent struct {
 
 func (e *UserInputTranscribedEvent) GetType() string { return "user_input_transcribed" }
 
+type AgentOutputTranscribedEvent struct {
+	Language   string
+	Transcript string
+	IsFinal    bool
+	CreatedAt  time.Time
+}
+
+func (e *AgentOutputTranscribedEvent) GetType() string { return "agent_output_transcribed" }
+
 type UserTurnExceededEvent struct {
 	Transcript            string
 	AccumulatedTranscript string

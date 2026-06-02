@@ -268,25 +268,35 @@ func (va *PipelineAgent) generateReplyWithOptions(opts pipelineReplyOptions) {
 		}
 
 		// Start TTS in parallel with LLM text
+		transcriptSync := NewTranscriptSynchronizer(0)
+		transcriptionDone := va.forwardAgentOutputTranscription(session, transcriptSync)
+		ttsTextCh := va.forwardTextToTranscriptSynchronizer(ctx, genData.TextCh, transcriptSync)
 		ttsOpts := []TTSInferenceOption{}
 		if va.ttsStreamPacer != nil {
 			ttsOpts = append(ttsOpts, WithTTSStreamPacer(*va.ttsStreamPacer))
 		}
-		ttsGen, err := PerformTTSInference(ctx, va.tts, genData.TextCh, ttsOpts...)
+		ttsGen, err := PerformTTSInference(ctx, va.tts, ttsTextCh, ttsOpts...)
 		if err != nil {
+			transcriptSync.Close()
+			<-transcriptionDone
 			logger.Logger.Errorw("TTS inference failed", err)
 		} else {
 			session.UpdateAgentState(AgentStateSpeaking)
 			for frame := range ttsGen.AudioCh {
 				select {
 				case <-ctx.Done():
+					transcriptSync.Close()
+					<-transcriptionDone
 					return
 				default:
+					transcriptSync.PushAudio(frame)
 					if va.PublishAudio != nil {
 						_ = va.PublishAudio(frame)
 					}
 				}
 			}
+			transcriptSync.Close()
+			<-transcriptionDone
 		}
 
 		if genData.GeneratedText != "" {
@@ -344,6 +354,38 @@ func (va *PipelineAgent) generateReplyWithOptions(opts pipelineReplyOptions) {
 		toolSteps++
 		// Loop back to LLM with tool outputs
 	}
+}
+
+func (va *PipelineAgent) forwardTextToTranscriptSynchronizer(ctx context.Context, textCh <-chan string, syncer *TranscriptSynchronizer) <-chan string {
+	out := make(chan string, 100)
+	go func() {
+		defer close(out)
+		for text := range textCh {
+			syncer.PushText(text)
+			select {
+			case out <- text:
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
+	return out
+}
+
+func (va *PipelineAgent) forwardAgentOutputTranscription(session *AgentSession, syncer *TranscriptSynchronizer) <-chan struct{} {
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for text := range syncer.EventCh() {
+			if text == "" {
+				continue
+			}
+			session.EmitAgentOutputTranscribed(AgentOutputTranscribedEvent{
+				Transcript: text,
+			})
+		}
+	}()
+	return done
 }
 
 func resolveToolsByID(tools []llm.Tool, ids []string) ([]llm.Tool, error) {

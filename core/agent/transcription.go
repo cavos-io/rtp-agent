@@ -11,14 +11,6 @@ import (
 	"github.com/cavos-io/rtp-agent/core/audio/model"
 )
 
-type TranscriptionFilter struct {
-	SpeakingRate float64
-}
-
-func NewTranscriptionFilter() *TranscriptionFilter {
-	return &TranscriptionFilter{}
-}
-
 // TranscriptSynchronizer drip-feeds text to match the playout speed of audio.
 type TranscriptSynchronizer struct {
 	ctx    context.Context
@@ -103,8 +95,6 @@ func (s *TranscriptSynchronizer) Close() {
 	s.mu.Unlock()
 
 	s.cancel()
-	close(s.textCh)
-	close(s.audioCh)
 }
 
 func countSyllables(text string) int {

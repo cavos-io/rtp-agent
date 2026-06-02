@@ -240,6 +240,43 @@ func TestPipelineAgentEmitsConversationItemAddedForAssistantMessage(t *testing.T
 	}
 }
 
+func TestPipelineAgentEmitsSynchronizedAgentOutputTranscription(t *testing.T) {
+	chatCtx := llm.NewChatContext()
+	l := &fakeGenerationLLM{
+		stream: &fakeGenerationLLMStream{
+			chunks: []*llm.ChatChunk{
+				{Delta: &llm.ChoiceDelta{Content: "hello "}},
+				{Delta: &llm.ChoiceDelta{Content: "world"}},
+			},
+		},
+	}
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	agent := NewPipelineAgent(nil, nil, l, &fakePipelineTTS{
+		stream: &fakePipelineTTSStream{
+			frames: []*model.AudioFrame{{
+				Data:              make([]byte, 4000),
+				SampleRate:        1000,
+				NumChannels:       1,
+				SamplesPerChannel: 2000,
+			}},
+		},
+	}, chatCtx)
+	agent.session = session
+	agent.ctx = context.Background()
+	events := session.AgentOutputTranscribedEvents()
+
+	agent.generateReply()
+
+	select {
+	case ev := <-events:
+		if ev.Transcript == "" || !strings.Contains(ev.Transcript, "hello") {
+			t.Fatalf("agent output transcript = %#v, want generated assistant text", ev)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("AgentOutputTranscribedEvents did not receive assistant transcript")
+	}
+}
+
 func TestPipelineAgentEmitsConversationItemAddedForUserTranscript(t *testing.T) {
 	chatCtx := llm.NewChatContext()
 	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
@@ -612,7 +649,9 @@ func (f *fakePipelineTTS) Stream(context.Context) (tts.SynthesizeStream, error) 
 }
 
 type fakePipelineTTSStream struct {
-	text strings.Builder
+	text   strings.Builder
+	frames []*model.AudioFrame
+	next   int
 }
 
 func (f *fakePipelineTTSStream) PushText(text string) error {
@@ -625,6 +664,11 @@ func (f *fakePipelineTTSStream) Flush() error { return nil }
 func (f *fakePipelineTTSStream) Close() error { return nil }
 
 func (f *fakePipelineTTSStream) Next() (*tts.SynthesizedAudio, error) {
+	if f.next < len(f.frames) {
+		frame := f.frames[f.next]
+		f.next++
+		return &tts.SynthesizedAudio{Frame: frame}, nil
+	}
 	return nil, io.EOF
 }
 
