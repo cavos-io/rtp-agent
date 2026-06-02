@@ -21,6 +21,7 @@ import (
 	"github.com/cavos-io/rtp-agent/adapter/clova"
 	"github.com/cavos-io/rtp-agent/adapter/deepgram"
 	"github.com/cavos-io/rtp-agent/adapter/elevenlabs"
+	"github.com/cavos-io/rtp-agent/adapter/fal"
 	"github.com/cavos-io/rtp-agent/adapter/fishaudio"
 	adaptergoogle "github.com/cavos-io/rtp-agent/adapter/google"
 	"github.com/cavos-io/rtp-agent/adapter/groq"
@@ -44,6 +45,7 @@ const (
 	providerClova      = "clova"
 	providerDeepgram   = "deepgram"
 	providerElevenLabs = "elevenlabs"
+	providerFal        = "fal"
 	providerFishAudio  = "fishaudio"
 	providerGoogle     = "google"
 	providerGroq       = "groq"
@@ -82,6 +84,9 @@ type AppConfig struct {
 	STTKeywords                     []deepgram.DeepgramKeyword
 	STTRedact                       []string
 	STTTags                         []string
+	STTTask                         string
+	STTChunkLevel                   string
+	STTVersion                      string
 	STTPrompt                       string
 	STTBaseURL                      string
 	STTSampleRate                   *int
@@ -153,6 +158,7 @@ type AppConfig struct {
 	ClovaSTTInvokeURL string
 	ClovaClientID     string
 	ClovaClientSecret string
+	FalAPIKey         string
 	FishAudioAPIKey   string
 
 	GoogleCredentialsFile string
@@ -198,6 +204,9 @@ func DefaultConfigFromEnv() AppConfig {
 		STTKeywords:                     splitEnvDeepgramKeywords("RTP_AGENT_STT_KEYWORDS"),
 		STTRedact:                       splitEnvList("RTP_AGENT_STT_REDACT"),
 		STTTags:                         splitEnvList("RTP_AGENT_STT_TAGS"),
+		STTTask:                         os.Getenv("RTP_AGENT_STT_TASK"),
+		STTChunkLevel:                   os.Getenv("RTP_AGENT_STT_CHUNK_LEVEL"),
+		STTVersion:                      os.Getenv("RTP_AGENT_STT_VERSION"),
 		STTPrompt:                       os.Getenv("RTP_AGENT_STT_PROMPT"),
 		STTBaseURL:                      os.Getenv("RTP_AGENT_STT_BASE_URL"),
 		STTSampleRate:                   getenvOptionalInt("RTP_AGENT_STT_SAMPLE_RATE"),
@@ -268,6 +277,7 @@ func DefaultConfigFromEnv() AppConfig {
 		ClovaSTTInvokeURL:               os.Getenv("CLOVA_STT_INVOKE_URL"),
 		ClovaClientID:                   os.Getenv("CLOVA_CLIENT_ID"),
 		ClovaClientSecret:               os.Getenv("CLOVA_CLIENT_SECRET"),
+		FalAPIKey:                       firstEnv("FAL_KEY", "FAL_API_KEY"),
 		FishAudioAPIKey:                 firstEnv("FISHAUDIO_API_KEY", "FISH_AUDIO_API_KEY"),
 		GoogleCredentialsFile:           firstEnv("RTP_AGENT_GOOGLE_CREDENTIALS_FILE", "GOOGLE_APPLICATION_CREDENTIALS"),
 	}
@@ -347,6 +357,8 @@ func configureProviders(cfg AppConfig, a *agent.Agent) (llm.RealtimeModel, error
 		a.LLM = groq.NewGroqLLM(cfg.GroqAPIKey, cfg.LLMModel)
 	case providerCerebras:
 		a.LLM = cerebras.NewCerebrasLLM(cfg.CerebrasAPIKey, cfg.LLMModel)
+	case providerFal:
+		a.LLM = fal.NewFalLLM(cfg.FalAPIKey, cfg.LLMModel)
 	case providerAnthropic:
 		llmOpts := []anthropic.AnthropicOption{}
 		if cfg.LLMBaseURL != "" {
@@ -608,6 +620,21 @@ func configureProviders(cfg AppConfig, a *agent.Agent) (llm.RealtimeModel, error
 			sttOpts = append(sttOpts, deepgram.WithDeepgramSTTTags(cfg.STTTags))
 		}
 		a.STT = deepgram.NewDeepgramSTT("", cfg.STTModel, sttOpts...)
+	case providerFal:
+		sttOpts := []fal.FalSTTOption{}
+		if cfg.STTLanguage != "" {
+			sttOpts = append(sttOpts, fal.WithFalSTTLanguage(cfg.STTLanguage))
+		}
+		if cfg.STTTask != "" {
+			sttOpts = append(sttOpts, fal.WithFalSTTTask(cfg.STTTask))
+		}
+		if cfg.STTChunkLevel != "" {
+			sttOpts = append(sttOpts, fal.WithFalSTTChunkLevel(cfg.STTChunkLevel))
+		}
+		if cfg.STTVersion != "" {
+			sttOpts = append(sttOpts, fal.WithFalSTTVersion(cfg.STTVersion))
+		}
+		a.STT = fal.NewFalSTT(cfg.FalAPIKey, sttOpts...)
 	case providerAssemblyAI:
 		sttOpts := []assemblyai.AssemblyAISTTOption{}
 		if cfg.STTBaseURL != "" {

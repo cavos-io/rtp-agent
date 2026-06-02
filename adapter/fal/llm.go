@@ -23,6 +23,11 @@ func NewFalLLM(apiKey string, model string) *FalLLM {
 	}
 }
 
+func (l *FalLLM) Model() string { return l.model }
+func (l *FalLLM) Provider() string {
+	return "fal"
+}
+
 func (l *FalLLM) Chat(ctx context.Context, chatCtx *llm.ChatContext, opts ...llm.ChatOption) (llm.LLMStream, error) {
 	// Fal generally acts as a proxy for various open-source LLMs.
 	// This is a basic implementation for a typical chat completions endpoint.

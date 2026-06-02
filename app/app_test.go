@@ -324,6 +324,37 @@ func TestDefaultConfigFromEnvSelectsFishAudioTTS(t *testing.T) {
 	}
 }
 
+func TestDefaultConfigFromEnvSelectsFalProviders(t *testing.T) {
+	t.Setenv("FAL_KEY", "test-fal-key")
+	t.Setenv("RTP_AGENT_LLM_PROVIDER", "fal")
+	t.Setenv("RTP_AGENT_LLM_MODEL", "fal-ai/llm-test")
+	t.Setenv("RTP_AGENT_STT_PROVIDER", "fal")
+	t.Setenv("RTP_AGENT_STT_LANGUAGE", "en")
+	t.Setenv("RTP_AGENT_STT_TASK", "translate")
+	t.Setenv("RTP_AGENT_STT_CHUNK_LEVEL", "word")
+	t.Setenv("RTP_AGENT_STT_VERSION", "3")
+
+	app, err := NewApp(DefaultConfigFromEnv())
+	if err != nil {
+		t.Fatalf("NewApp() error = %v", err)
+	}
+	if app.Session == nil {
+		t.Fatal("Session is nil")
+	}
+	if got := llm.Provider(app.Session.LLM); got != "fal" {
+		t.Fatalf("LLM provider = %q, want fal", got)
+	}
+	if got := llm.Model(app.Session.LLM); got != "fal-ai/llm-test" {
+		t.Fatalf("LLM model = %q, want fal-ai/llm-test", got)
+	}
+	if got := app.Session.STT.Label(); got != "fal.STT" {
+		t.Fatalf("STT label = %q, want fal.STT", got)
+	}
+	if caps := app.Session.STT.Capabilities(); caps.Streaming || !caps.OfflineRecognize {
+		t.Fatalf("STT capabilities = %+v, want offline recognize only", caps)
+	}
+}
+
 func TestDefaultConfigFromEnvSelectsAWSProviders(t *testing.T) {
 	t.Setenv("AWS_REGION", "us-west-2")
 	t.Setenv("RTP_AGENT_LLM_PROVIDER", "aws")
