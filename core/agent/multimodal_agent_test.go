@@ -67,6 +67,17 @@ func TestMultimodalAgentStartsRealtimeSessionAndAcceptsAudio(t *testing.T) {
 	cancel()
 }
 
+func TestMultimodalAgentPushesVideoToRealtimeSession(t *testing.T) {
+	rtSession := &fakeRealtimeSession{}
+	ma := &MultimodalAgent{rtSession: rtSession}
+
+	ma.OnVideoFrame(context.Background(), &images.VideoFrame{})
+
+	if rtSession.videoFrames != 1 {
+		t.Fatalf("videoFrames = %d, want realtime video push", rtSession.videoFrames)
+	}
+}
+
 func TestMultimodalToolExecutionSuppressesStopResponse(t *testing.T) {
 	chatCtx := llm.NewChatContext()
 	ma := &MultimodalAgent{
@@ -387,7 +398,8 @@ func (f *fakeRealtimeModel) Session() (llm.RealtimeSession, error) {
 func (f *fakeRealtimeModel) Close() error { return nil }
 
 type fakeRealtimeSession struct {
-	updated *llm.ChatContext
+	updated     *llm.ChatContext
+	videoFrames int
 }
 
 func (f *fakeRealtimeSession) UpdateInstructions(string) error { return nil }
@@ -417,7 +429,10 @@ func (f *fakeRealtimeSession) EventCh() <-chan llm.RealtimeEvent {
 
 func (f *fakeRealtimeSession) PushAudio(*model.AudioFrame) error { return nil }
 
-func (f *fakeRealtimeSession) PushVideo(*images.VideoFrame) error { return nil }
+func (f *fakeRealtimeSession) PushVideo(*images.VideoFrame) error {
+	f.videoFrames++
+	return nil
+}
 
 func (f *fakeRealtimeSession) CommitAudio() error { return nil }
 

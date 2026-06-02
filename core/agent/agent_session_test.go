@@ -12,6 +12,7 @@ import (
 	"github.com/cavos-io/rtp-agent/core/stt"
 	"github.com/cavos-io/rtp-agent/core/tts"
 	"github.com/cavos-io/rtp-agent/library/telemetry"
+	"github.com/cavos-io/rtp-agent/library/utils/images"
 )
 
 func TestAgentSessionGenerateReplyReturnsScheduledSpeechHandle(t *testing.T) {
@@ -123,12 +124,34 @@ func TestAgentSessionIVRDetectionGeneratesReplyAfterSilence(t *testing.T) {
 	}
 }
 
+func TestAgentSessionOnVideoFrameSamplesAndForwardsToVideoAssistant(t *testing.T) {
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	assistant := &fakeVideoSessionAssistant{}
+	session.Assistant = assistant
+
+	frame := &images.VideoFrame{}
+	session.OnVideoFrame(context.Background(), frame)
+
+	if assistant.videoFrames != 1 {
+		t.Fatalf("videoFrames = %d, want first sampled frame forwarded", assistant.videoFrames)
+	}
+}
+
 type fakeSessionAssistant struct{}
 
 func (f *fakeSessionAssistant) Start(context.Context, *AgentSession) error { return nil }
 func (f *fakeSessionAssistant) OnAudioFrame(context.Context, *model.AudioFrame) {
 }
 func (f *fakeSessionAssistant) SetPublishAudio(func(frame *model.AudioFrame) error) {
+}
+
+type fakeVideoSessionAssistant struct {
+	fakeSessionAssistant
+	videoFrames int
+}
+
+func (f *fakeVideoSessionAssistant) OnVideoFrame(ctx context.Context, frame *images.VideoFrame) {
+	f.videoFrames++
 }
 
 func TestAgentSessionStartStartsConfiguredAvatar(t *testing.T) {

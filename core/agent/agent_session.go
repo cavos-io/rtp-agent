@@ -15,6 +15,7 @@ import (
 	"github.com/cavos-io/rtp-agent/library/logger"
 	"github.com/cavos-io/rtp-agent/library/telemetry"
 	"github.com/cavos-io/rtp-agent/library/tokenize"
+	"github.com/cavos-io/rtp-agent/library/utils/images"
 	lksdk "github.com/livekit/server-sdk-go/v2"
 )
 
@@ -54,6 +55,7 @@ type AgentSessionOptions struct {
 	TurnDetection                 TurnDetectionMode
 	IVRDetection                  bool
 	IVRSilenceDuration            time.Duration
+	VideoSampler                  *VoiceActivityVideoSampler
 }
 
 type AgentSessionUpdateOptions struct {
@@ -104,6 +106,10 @@ type SessionAssistant interface {
 	SetPublishAudio(func(frame *model.AudioFrame) error)
 }
 
+type videoSessionAssistant interface {
+	OnVideoFrame(ctx context.Context, frame *images.VideoFrame)
+}
+
 type AgentSession struct {
 	Options AgentSessionOptions
 
@@ -131,6 +137,7 @@ type AgentSession struct {
 	userdataSet    bool
 	recordedEvents []Event
 	ivrActivity    *IVRActivity
+	videoSampler   *VoiceActivityVideoSampler
 
 	// Event channels
 	AgentStateChangedCh chan AgentStateChangedEvent
@@ -163,6 +170,23 @@ func (s *AgentSession) OnAudioFrame(ctx context.Context, frame *model.AudioFrame
 
 	if assistant != nil {
 		assistant.OnAudioFrame(ctx, frame)
+	}
+}
+
+func (s *AgentSession) OnVideoFrame(ctx context.Context, frame *images.VideoFrame) {
+	if frame == nil {
+		return
+	}
+	s.mu.Lock()
+	assistant := s.Assistant
+	sampler := s.videoSampler
+	s.mu.Unlock()
+
+	if sampler != nil && !sampler.OnVideoFrame(ctx, frame) {
+		return
+	}
+	if videoAssistant, ok := assistant.(videoSessionAssistant); ok {
+		videoAssistant.OnVideoFrame(ctx, frame)
 	}
 }
 
@@ -291,7 +315,7 @@ func (s *AgentSession) userStateChangedEvents() chan UserStateChangedEvent {
 func NewAgentSession(agent AgentInterface, room *lksdk.Room, opts AgentSessionOptions) *AgentSession {
 	opts = withAgentSessionOptionDefaults(opts)
 	baseAgent := agent.GetAgent()
-	return &AgentSession{
+	session := &AgentSession{
 		Agent:               agent,
 		Room:                room,
 		STT:                 baseAgent.STT,
@@ -318,6 +342,12 @@ func NewAgentSession(agent AgentInterface, room *lksdk.Room, opts AgentSessionOp
 		errorCh:             make(chan ErrorEvent, 10),
 		sipDTMFCh:           make(chan SipDTMFEvent, 10),
 	}
+	if opts.VideoSampler != nil {
+		session.videoSampler = opts.VideoSampler
+	} else {
+		session.videoSampler = NewVoiceActivityVideoSampler(session, 1.0, images.EncodeOptions{})
+	}
+	return session
 }
 
 func withAgentSessionOptionDefaults(opts AgentSessionOptions) AgentSessionOptions {
@@ -910,7 +940,12 @@ func (s *AgentSession) UpdateUserState(state UserState) {
 	s.mu.Lock()
 	oldState := s.UserState
 	s.UserState = state
+	videoSampler := s.videoSampler
 	s.mu.Unlock()
+
+	if videoSampler != nil {
+		videoSampler.SetSpeaking(state == UserStateSpeaking)
+	}
 
 	if oldState != state {
 		s.updateUserAwayTimer()
