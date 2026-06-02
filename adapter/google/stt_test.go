@@ -1,10 +1,17 @@
 package google
 
 import (
+	"context"
+	"errors"
+	"io"
 	"math"
 	"testing"
 
 	"cloud.google.com/go/speech/apiv1/speechpb"
+	"github.com/cavos-io/rtp-agent/core/audio/model"
+	"github.com/cavos-io/rtp-agent/core/stt"
+	"github.com/googleapis/gax-go/v2"
+	"google.golang.org/grpc/metadata"
 	"google.golang.org/protobuf/types/known/durationpb"
 )
 
@@ -42,11 +49,11 @@ func TestGoogleSpeechDataFromAlternativePreservesWords(t *testing.T) {
 				SpeakerLabel: "agent",
 			},
 			{
-				Word:       "world",
-				StartTime:  durationpb.New(400000000),
-				EndTime:    durationpb.New(800000000),
-				Confidence: 0.83,
-				SpeakerTag: 2,
+				Word:         "world",
+				StartTime:    durationpb.New(400000000),
+				EndTime:      durationpb.New(800000000),
+				Confidence:   0.83,
+				SpeakerLabel: "speaker-2",
 			},
 		},
 	}
@@ -64,8 +71,26 @@ func TestGoogleSpeechDataFromAlternativePreservesWords(t *testing.T) {
 	if got := data.Words[0]; got.Text != "hello" || got.StartTime != 0.1 || got.EndTime != 0.3 || math.Abs(got.Confidence-0.91) > 0.000001 || got.SpeakerID != "agent" {
 		t.Fatalf("first word = %+v, want hello timing with speaker label", got)
 	}
-	if got := data.Words[1]; got.Text != "world" || got.StartTime != 0.4 || got.EndTime != 0.8 || math.Abs(got.Confidence-0.83) > 0.000001 || got.SpeakerID != "2" {
-		t.Fatalf("second word = %+v, want world timing with speaker tag", got)
+	if got := data.Words[1]; got.Text != "world" || got.StartTime != 0.4 || got.EndTime != 0.8 || math.Abs(got.Confidence-0.83) > 0.000001 || got.SpeakerID != "speaker-2" {
+		t.Fatalf("second word = %+v, want world timing with speaker label", got)
+	}
+}
+
+func TestGoogleClientOptionsFromCredentialsFile(t *testing.T) {
+	emptyOpts, err := googleClientOptionsFromCredentialsFile("")
+	if err != nil {
+		t.Fatalf("empty credentials returned error: %v", err)
+	}
+	if len(emptyOpts) != 0 {
+		t.Fatalf("empty credentials options = %d, want 0", len(emptyOpts))
+	}
+
+	fileOpts, err := googleClientOptionsFromCredentialsFile("/path/to/service-account.json")
+	if err != nil {
+		t.Fatalf("credentials file returned error: %v", err)
+	}
+	if len(fileOpts) != 1 {
+		t.Fatalf("credentials file options = %d, want 1", len(fileOpts))
 	}
 }
 
@@ -98,6 +123,7 @@ func TestGoogleRecognitionConfigUsesProviderOptions(t *testing.T) {
 	provider := newGoogleSTTWithClient(nil,
 		WithGoogleSTTModel("command_and_search"),
 		WithGoogleSTTPunctuate(false),
+		WithGoogleSTTSpokenPunctuation(true),
 		WithGoogleSTTSampleRate(8000),
 		WithGoogleSTTProfanityFilter(true),
 	)
@@ -113,7 +139,167 @@ func TestGoogleRecognitionConfigUsesProviderOptions(t *testing.T) {
 	if config.SampleRateHertz != 8000 {
 		t.Fatalf("sample rate = %d, want 8000", config.SampleRateHertz)
 	}
+	if config.EnableSpokenPunctuation == nil || !config.EnableSpokenPunctuation.Value {
+		t.Fatalf("spoken punctuation = %v, want true", config.EnableSpokenPunctuation)
+	}
 	if !config.ProfanityFilter {
 		t.Fatal("profanity filter = false, want true")
 	}
 }
+
+func TestNewGoogleSTTRejectsMissingCredentialsFile(t *testing.T) {
+	_, err := NewGoogleSTT("/definitely/missing/google-credentials.json")
+	if err == nil {
+		t.Fatal("NewGoogleSTT returned nil error, want missing credentials error")
+	}
+}
+
+func TestGoogleSTTLabel(t *testing.T) {
+	provider := &GoogleSTT{}
+	if got := provider.Label(); got != "google.STT" {
+		t.Fatalf("Label = %q, want google.STT", got)
+	}
+}
+
+func TestGoogleSTTRecognizeSendsAudioAndMapsFinalEvent(t *testing.T) {
+	client := &fakeGoogleSpeechClient{
+		recognizeResponse: &speechpb.RecognizeResponse{
+			Results: []*speechpb.SpeechRecognitionResult{{
+				Alternatives: []*speechpb.SpeechRecognitionAlternative{{
+					Transcript: "hello",
+				}},
+			}},
+		},
+	}
+	provider := newGoogleSTTWithClient(client)
+
+	event, err := provider.Recognize(context.Background(), []*model.AudioFrame{
+		{Data: []byte("one")},
+		{Data: []byte("two")},
+	}, "")
+	if err != nil {
+		t.Fatalf("Recognize returned error: %v", err)
+	}
+
+	if client.recognizeRequest == nil {
+		t.Fatal("Recognize did not call client")
+	}
+	if got := string(client.recognizeRequest.GetAudio().GetContent()); got != "onetwo" {
+		t.Fatalf("audio content = %q, want onetwo", got)
+	}
+	if got := client.recognizeRequest.GetConfig().GetLanguageCode(); got != "en-US" {
+		t.Fatalf("language = %q, want en-US", got)
+	}
+	if event.Type != stt.SpeechEventFinalTranscript || len(event.Alternatives) != 1 || event.Alternatives[0].Text != "hello" {
+		t.Fatalf("event = %#v, want final hello transcript", event)
+	}
+}
+
+func TestGoogleSTTStreamSendsConfigAndEmitsEvents(t *testing.T) {
+	streamClient := &fakeGoogleStreamingRecognizeClient{
+		responses: []*speechpb.StreamingRecognizeResponse{{
+			Results: []*speechpb.StreamingRecognitionResult{{
+				IsFinal: true,
+				Alternatives: []*speechpb.SpeechRecognitionAlternative{{
+					Transcript: "streamed",
+				}},
+			}},
+		}},
+	}
+	provider := newGoogleSTTWithClient(&fakeGoogleSpeechClient{stream: streamClient})
+
+	stream, err := provider.Stream(context.Background(), "id-ID")
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+	if len(streamClient.sent) != 1 {
+		t.Fatalf("initial sends = %d, want 1", len(streamClient.sent))
+	}
+	config := streamClient.sent[0].GetStreamingConfig()
+	if config == nil || config.GetConfig().GetLanguageCode() != "id-ID" || !config.GetInterimResults() {
+		t.Fatalf("streaming config = %#v, want id-ID interim config", config)
+	}
+
+	event, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next returned error: %v", err)
+	}
+	if event.Type != stt.SpeechEventFinalTranscript || event.Alternatives[0].Text != "streamed" {
+		t.Fatalf("event = %#v, want final streamed transcript", event)
+	}
+
+	if err := stream.PushFrame(&model.AudioFrame{Data: []byte("pcm")}); err != nil {
+		t.Fatalf("PushFrame returned error: %v", err)
+	}
+	if len(streamClient.sent) != 2 || string(streamClient.sent[1].GetAudioContent()) != "pcm" {
+		t.Fatalf("audio sends = %#v, want pcm audio request", streamClient.sent)
+	}
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush returned error: %v", err)
+	}
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close returned error: %v", err)
+	}
+	if !streamClient.closed {
+		t.Fatal("Close did not close streaming client")
+	}
+}
+
+func TestGoogleSTTStreamPropagatesClientErrors(t *testing.T) {
+	wantErr := errors.New("stream error")
+	provider := newGoogleSTTWithClient(&fakeGoogleSpeechClient{streamErr: wantErr})
+
+	_, err := provider.Stream(context.Background(), "")
+	if !errors.Is(err, wantErr) {
+		t.Fatalf("Stream error = %v, want %v", err, wantErr)
+	}
+}
+
+type fakeGoogleSpeechClient struct {
+	stream            speechpb.Speech_StreamingRecognizeClient
+	streamErr         error
+	recognizeRequest  *speechpb.RecognizeRequest
+	recognizeResponse *speechpb.RecognizeResponse
+	recognizeErr      error
+}
+
+func (c *fakeGoogleSpeechClient) StreamingRecognize(ctx context.Context, opts ...gax.CallOption) (speechpb.Speech_StreamingRecognizeClient, error) {
+	return c.stream, c.streamErr
+}
+
+func (c *fakeGoogleSpeechClient) Recognize(ctx context.Context, req *speechpb.RecognizeRequest, opts ...gax.CallOption) (*speechpb.RecognizeResponse, error) {
+	c.recognizeRequest = req
+	return c.recognizeResponse, c.recognizeErr
+}
+
+type fakeGoogleStreamingRecognizeClient struct {
+	sent      []*speechpb.StreamingRecognizeRequest
+	responses []*speechpb.StreamingRecognizeResponse
+	recvIndex int
+	closed    bool
+}
+
+func (c *fakeGoogleStreamingRecognizeClient) Send(req *speechpb.StreamingRecognizeRequest) error {
+	c.sent = append(c.sent, req)
+	return nil
+}
+
+func (c *fakeGoogleStreamingRecognizeClient) Recv() (*speechpb.StreamingRecognizeResponse, error) {
+	if c.recvIndex >= len(c.responses) {
+		return nil, io.EOF
+	}
+	resp := c.responses[c.recvIndex]
+	c.recvIndex++
+	return resp, nil
+}
+
+func (c *fakeGoogleStreamingRecognizeClient) CloseSend() error {
+	c.closed = true
+	return nil
+}
+
+func (c *fakeGoogleStreamingRecognizeClient) Header() (metadata.MD, error) { return nil, nil }
+func (c *fakeGoogleStreamingRecognizeClient) Trailer() metadata.MD         { return nil }
+func (c *fakeGoogleStreamingRecognizeClient) Context() context.Context     { return context.Background() }
+func (c *fakeGoogleStreamingRecognizeClient) SendMsg(m any) error          { return nil }
+func (c *fakeGoogleStreamingRecognizeClient) RecvMsg(m any) error          { return nil }

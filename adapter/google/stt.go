@@ -4,18 +4,17 @@ import (
 	"bytes"
 	"context"
 	"io"
-	"strconv"
 
 	speech "cloud.google.com/go/speech/apiv1"
 	"cloud.google.com/go/speech/apiv1/speechpb"
 	"github.com/cavos-io/rtp-agent/core/audio/model"
 	"github.com/cavos-io/rtp-agent/core/stt"
-	"google.golang.org/api/option"
+	"github.com/googleapis/gax-go/v2"
 	"google.golang.org/protobuf/types/known/wrapperspb"
 )
 
 type GoogleSTT struct {
-	client               *speech.Client
+	client               googleSpeechClient
 	model                string
 	punctuate            bool
 	spokenPunctuation    bool
@@ -23,6 +22,11 @@ type GoogleSTT struct {
 	sampleRate           int32
 	enableWordTimeOffset bool
 	enableWordConfidence bool
+}
+
+type googleSpeechClient interface {
+	StreamingRecognize(ctx context.Context, opts ...gax.CallOption) (speechpb.Speech_StreamingRecognizeClient, error)
+	Recognize(ctx context.Context, req *speechpb.RecognizeRequest, opts ...gax.CallOption) (*speechpb.RecognizeResponse, error)
 }
 
 type GoogleSTTOption func(*GoogleSTT)
@@ -65,9 +69,9 @@ func WithGoogleSTTSampleRate(sampleRate int32) GoogleSTTOption {
 // or by providing a path to a credentials JSON file.
 func NewGoogleSTT(credentialsFile string, providerOpts ...GoogleSTTOption) (*GoogleSTT, error) {
 	ctx := context.Background()
-	var clientOpts []option.ClientOption
-	if credentialsFile != "" {
-		clientOpts = append(clientOpts, option.WithCredentialsFile(credentialsFile))
+	clientOpts, err := googleClientOptionsFromCredentialsFile(credentialsFile)
+	if err != nil {
+		return nil, err
 	}
 
 	client, err := speech.NewClient(ctx, clientOpts...)
@@ -78,7 +82,7 @@ func NewGoogleSTT(credentialsFile string, providerOpts ...GoogleSTTOption) (*Goo
 	return newGoogleSTTWithClient(client, providerOpts...), nil
 }
 
-func newGoogleSTTWithClient(client *speech.Client, opts ...GoogleSTTOption) *GoogleSTT {
+func newGoogleSTTWithClient(client googleSpeechClient, opts ...GoogleSTTOption) *GoogleSTT {
 	provider := &GoogleSTT{
 		client:               client,
 		model:                "latest_long",
@@ -212,13 +216,7 @@ func googleTimedStrings(words []*speechpb.WordInfo) []stt.TimedString {
 }
 
 func googleSpeakerID(word *speechpb.WordInfo) string {
-	if label := word.GetSpeakerLabel(); label != "" {
-		return label
-	}
-	if tag := word.GetSpeakerTag(); tag != 0 {
-		return strconv.Itoa(int(tag))
-	}
-	return ""
+	return word.GetSpeakerLabel()
 }
 
 type googleSTTStream struct {

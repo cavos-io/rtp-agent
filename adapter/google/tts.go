@@ -9,22 +9,26 @@ import (
 	"cloud.google.com/go/texttospeech/apiv1/texttospeechpb"
 	"github.com/cavos-io/rtp-agent/core/audio/model"
 	"github.com/cavos-io/rtp-agent/core/tts"
-	"google.golang.org/api/option"
+	"github.com/googleapis/gax-go/v2"
 )
 
 type GoogleTTS struct {
-	client *texttospeech.Client
+	client googleTTSClient
 	voice  *texttospeechpb.VoiceSelectionParams
 	audio  *texttospeechpb.AudioConfig
+}
+
+type googleTTSClient interface {
+	SynthesizeSpeech(ctx context.Context, req *texttospeechpb.SynthesizeSpeechRequest, opts ...gax.CallOption) (*texttospeechpb.SynthesizeSpeechResponse, error)
 }
 
 // NewGoogleTTS creates a new TTS client using Application Default Credentials,
 // or by providing a path to a credentials JSON file.
 func NewGoogleTTS(credentialsFile string) (*GoogleTTS, error) {
 	ctx := context.Background()
-	var opts []option.ClientOption
-	if credentialsFile != "" {
-		opts = append(opts, option.WithCredentialsFile(credentialsFile))
+	opts, err := googleClientOptionsFromCredentialsFile(credentialsFile)
+	if err != nil {
+		return nil, err
 	}
 
 	client, err := texttospeech.NewClient(ctx, opts...)
@@ -32,6 +36,10 @@ func NewGoogleTTS(credentialsFile string) (*GoogleTTS, error) {
 		return nil, err
 	}
 
+	return newGoogleTTSWithClient(client), nil
+}
+
+func newGoogleTTSWithClient(client googleTTSClient) *GoogleTTS {
 	return &GoogleTTS{
 		client: client,
 		voice: &texttospeechpb.VoiceSelectionParams{
@@ -42,7 +50,7 @@ func NewGoogleTTS(credentialsFile string) (*GoogleTTS, error) {
 			AudioEncoding:   texttospeechpb.AudioEncoding_LINEAR16,
 			SampleRateHertz: 24000,
 		},
-	}, nil
+	}
 }
 
 func (t *GoogleTTS) Label() string { return "google.TTS" }
