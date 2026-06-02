@@ -16,6 +16,7 @@ func LogMetrics(metrics AgentMetrics) {
 			}
 		}
 		logger.Logger.Infow("LLM metrics",
+			"type", m.GetType(),
 			"ttft", m.TTFT,
 			"prompt_tokens", m.PromptTokens,
 			"prompt_cached_tokens", m.PromptCachedTokens,
@@ -42,6 +43,7 @@ func LogMetrics(metrics AgentMetrics) {
 		}
 
 		logger.Logger.Infow("RealtimeModel metrics",
+			"type", m.GetType(),
 			"ttft", m.TTFT,
 			"input_tokens", m.InputTokens,
 			"cached_input_tokens", m.InputTokenDetails.CachedTokens,
@@ -67,6 +69,7 @@ func LogMetrics(metrics AgentMetrics) {
 			}
 		}
 		logger.Logger.Infow("TTS metrics",
+			"type", m.GetType(),
 			"ttfb", m.TTFB,
 			"audio_duration", m.AudioDuration,
 			"metadata", metadata,
@@ -79,6 +82,7 @@ func LogMetrics(metrics AgentMetrics) {
 			}
 		}
 		logger.Logger.Infow("EOU metrics",
+			"type", m.GetType(),
 			"end_of_utterance_delay", m.EndOfUtteranceDelay,
 			"transcription_delay", m.TranscriptionDelay,
 			"metadata", metadata,
@@ -91,6 +95,7 @@ func LogMetrics(metrics AgentMetrics) {
 			}
 		}
 		logger.Logger.Infow("STT metrics",
+			"type", m.GetType(),
 			"audio_duration", m.AudioDuration,
 			"metadata", metadata,
 		)

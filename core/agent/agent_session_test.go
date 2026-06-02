@@ -1712,6 +1712,9 @@ func TestAgentSessionEmitMetricsCollectedCollectsUsageAndEmitsEvent(t *testing.T
 	if !recorder.hasInfo("LLM metrics") {
 		t.Fatalf("logged info messages = %#v, want LLM metrics log", recorder.infoMessages)
 	}
+	if got := recorder.infoValue("LLM metrics", "type"); got != "llm_metrics" {
+		t.Fatalf("logged LLM metrics type = %#v, want llm_metrics", got)
+	}
 }
 
 func TestAgentSessionUsageReturnsCollectedSummary(t *testing.T) {
@@ -1731,11 +1734,24 @@ func TestAgentSessionUsageReturnsCollectedSummary(t *testing.T) {
 
 type recordingLogger struct {
 	infoMessages []string
+	infoFields   map[string]map[string]any
 }
 
 func (l *recordingLogger) Debugw(msg string, keysAndValues ...any) {}
 func (l *recordingLogger) Infow(msg string, keysAndValues ...any) {
 	l.infoMessages = append(l.infoMessages, msg)
+	if l.infoFields == nil {
+		l.infoFields = make(map[string]map[string]any)
+	}
+	fields := make(map[string]any)
+	for i := 0; i+1 < len(keysAndValues); i += 2 {
+		key, ok := keysAndValues[i].(string)
+		if !ok {
+			continue
+		}
+		fields[key] = keysAndValues[i+1]
+	}
+	l.infoFields[msg] = fields
 }
 func (l *recordingLogger) Warnw(msg string, err error, keysAndValues ...any)  {}
 func (l *recordingLogger) Errorw(msg string, err error, keysAndValues ...any) {}
@@ -1771,6 +1787,13 @@ func (l *recordingLogger) hasInfo(msg string) bool {
 		}
 	}
 	return false
+}
+
+func (l *recordingLogger) infoValue(msg, key string) any {
+	if l.infoFields == nil {
+		return nil
+	}
+	return l.infoFields[msg][key]
 }
 
 type fakeAvatarProvider struct {
