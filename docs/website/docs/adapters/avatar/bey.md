@@ -36,28 +36,21 @@ import (
 	"os"
 
 	"github.com/cavos-io/rtp-agent/adapter/bey"
-	"github.com/cavos-io/rtp-agent/core/agent"
 )
 
 func main() {
 	ctx := context.Background()
 
 	// Initialize the Bey Avatar adapter
-	avatarProvider, err := bey.NewProvider(
+	avatarProvider, err := bey.NewBeyAvatar(
 		os.Getenv("BEY_API_KEY"),
 	)
 	if err != nil {
 		log.Fatalf("failed to initialize bey adapter: %v", err)
 	}
 
-	// Create and configure the RTP agent session
-	session := agent.NewSession(
-		agent.WithAvatar(avatarProvider),
-	)
-
-	// Start the session
-	if err := session.Start(ctx); err != nil {
-		log.Fatalf("session failed: %v", err)
+	if err := avatarProvider.Start(ctx); err != nil {
+		log.Fatalf("avatar session failed: %v", err)
 	}
 }
 ```
