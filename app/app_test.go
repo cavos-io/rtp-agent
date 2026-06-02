@@ -956,6 +956,49 @@ func TestDefaultConfigFromEnvSelectsRtzrSTT(t *testing.T) {
 	}
 }
 
+func TestDefaultConfigFromEnvSelectsSimplismartProviders(t *testing.T) {
+	t.Setenv("SIMPLISMART_API_KEY", "test-simplismart-key")
+	t.Setenv("RTP_AGENT_LLM_PROVIDER", "simplismart")
+	t.Setenv("RTP_AGENT_LLM_MODEL", "simplismart-chat")
+	t.Setenv("RTP_AGENT_STT_PROVIDER", "simplismart")
+	t.Setenv("RTP_AGENT_STT_BASE_URL", "https://simplismart.example/predict")
+	t.Setenv("RTP_AGENT_STT_MODEL", "openai/whisper-large-v3-turbo")
+	t.Setenv("RTP_AGENT_STT_LANGUAGE", "en")
+	t.Setenv("RTP_AGENT_STT_TASK", "transcribe")
+	t.Setenv("RTP_AGENT_STT_INTERIM_RESULTS", "true")
+	t.Setenv("RTP_AGENT_STT_INCLUDE_TIMESTAMPS", "false")
+	t.Setenv("RTP_AGENT_STT_KEYTERMS_PROMPT", "livekit,agents")
+	t.Setenv("RTP_AGENT_STT_MAX_SPEAKERS", "2")
+	t.Setenv("RTP_AGENT_TTS_PROVIDER", "simplismart")
+	t.Setenv("RTP_AGENT_TTS_VOICE", "default_voice")
+
+	app, err := NewApp(DefaultConfigFromEnv())
+	if err != nil {
+		t.Fatalf("NewApp() error = %v", err)
+	}
+	if app.Session == nil {
+		t.Fatal("Session is nil")
+	}
+	if app.Session.LLM == nil {
+		t.Fatal("Session LLM is nil")
+	}
+	if got := app.Session.STT.Label(); got != "simplismart.STT" {
+		t.Fatalf("STT label = %q, want simplismart.STT", got)
+	}
+	if caps := app.Session.STT.Capabilities(); !caps.Streaming || caps.InterimResults || !caps.Diarization || caps.AlignedTranscript != "word" || !caps.OfflineRecognize {
+		t.Fatalf("STT capabilities = %+v, want streaming diarization word-aligned offline", caps)
+	}
+	if got := app.Session.TTS.Label(); got != "simplismart.TTS" {
+		t.Fatalf("TTS label = %q, want simplismart.TTS", got)
+	}
+	if got := app.Session.TTS.SampleRate(); got != 24000 {
+		t.Fatalf("TTS sample rate = %d, want 24000", got)
+	}
+	if caps := app.Session.TTS.Capabilities(); caps.Streaming || caps.AlignedTranscript {
+		t.Fatalf("TTS capabilities = %+v, want non-streaming without aligned transcript", caps)
+	}
+}
+
 func TestDefaultConfigFromEnvSelectsSLNGSpeechProviders(t *testing.T) {
 	t.Setenv("SLNG_API_KEY", "test-slng-key")
 	t.Setenv("RTP_AGENT_STT_PROVIDER", "slng")

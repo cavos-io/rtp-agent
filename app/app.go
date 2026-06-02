@@ -42,6 +42,7 @@ import (
 	"github.com/cavos-io/rtp-agent/adapter/rime"
 	"github.com/cavos-io/rtp-agent/adapter/rtzr"
 	"github.com/cavos-io/rtp-agent/adapter/sarvam"
+	"github.com/cavos-io/rtp-agent/adapter/simplismart"
 	"github.com/cavos-io/rtp-agent/adapter/slng"
 	"github.com/cavos-io/rtp-agent/core/agent"
 	"github.com/cavos-io/rtp-agent/core/llm"
@@ -50,41 +51,42 @@ import (
 )
 
 const (
-	providerAnthropic  = "anthropic"
-	providerAssemblyAI = "assemblyai"
-	providerAsyncAI    = "asyncai"
-	providerAWS        = "aws"
-	providerAzure      = "azure"
-	providerBaseten    = "baseten"
-	providerCambai     = "cambai"
-	providerCartesia   = "cartesia"
-	providerCerebras   = "cerebras"
-	providerClova      = "clova"
-	providerDeepgram   = "deepgram"
-	providerElevenLabs = "elevenlabs"
-	providerFal        = "fal"
-	providerFireworks  = "fireworks"
-	providerFishAudio  = "fishaudio"
-	providerGladia     = "gladia"
-	providerGnani      = "gnani"
-	providerGoogle     = "google"
-	providerGradium    = "gradium"
-	providerGroq       = "groq"
-	providerHume       = "hume"
-	providerInworld    = "inworld"
-	providerLMNT       = "lmnt"
-	providerMinimax    = "minimax"
-	providerMistralAI  = "mistralai"
-	providerMurf       = "murf"
-	providerNeuphonic  = "neuphonic"
-	providerOpenAI     = "openai"
-	providerResemble   = "resemble"
-	providerRespeecher = "respeecher"
-	providerRime       = "rime"
-	providerRtzr       = "rtzr"
-	providerSarvam     = "sarvam"
-	providerSLNG       = "slng"
-	providerLiveKit    = "livekit"
+	providerAnthropic   = "anthropic"
+	providerAssemblyAI  = "assemblyai"
+	providerAsyncAI     = "asyncai"
+	providerAWS         = "aws"
+	providerAzure       = "azure"
+	providerBaseten     = "baseten"
+	providerCambai      = "cambai"
+	providerCartesia    = "cartesia"
+	providerCerebras    = "cerebras"
+	providerClova       = "clova"
+	providerDeepgram    = "deepgram"
+	providerElevenLabs  = "elevenlabs"
+	providerFal         = "fal"
+	providerFireworks   = "fireworks"
+	providerFishAudio   = "fishaudio"
+	providerGladia      = "gladia"
+	providerGnani       = "gnani"
+	providerGoogle      = "google"
+	providerGradium     = "gradium"
+	providerGroq        = "groq"
+	providerHume        = "hume"
+	providerInworld     = "inworld"
+	providerLMNT        = "lmnt"
+	providerMinimax     = "minimax"
+	providerMistralAI   = "mistralai"
+	providerMurf        = "murf"
+	providerNeuphonic   = "neuphonic"
+	providerOpenAI      = "openai"
+	providerResemble    = "resemble"
+	providerRespeecher  = "respeecher"
+	providerRime        = "rime"
+	providerRtzr        = "rtzr"
+	providerSarvam      = "sarvam"
+	providerSimplismart = "simplismart"
+	providerSLNG        = "slng"
+	providerLiveKit     = "livekit"
 )
 
 type AppConfig struct {
@@ -278,6 +280,7 @@ type AppConfig struct {
 	RtzrClientSecret  string
 	RtzrAccessToken   string
 	SarvamAPIKey      string
+	SimplismartAPIKey string
 	SLNGAPIKey        string
 
 	GoogleCredentialsFile string
@@ -482,6 +485,7 @@ func DefaultConfigFromEnv() AppConfig {
 		RtzrClientSecret:                        os.Getenv("RTZR_CLIENT_SECRET"),
 		RtzrAccessToken:                         os.Getenv("RTZR_ACCESS_TOKEN"),
 		SarvamAPIKey:                            os.Getenv("SARVAM_API_KEY"),
+		SimplismartAPIKey:                       os.Getenv("SIMPLISMART_API_KEY"),
 		SLNGAPIKey:                              os.Getenv("SLNG_API_KEY"),
 		GoogleCredentialsFile:                   firstEnv("RTP_AGENT_GOOGLE_CREDENTIALS_FILE", "GOOGLE_APPLICATION_CREDENTIALS"),
 	}
@@ -585,6 +589,8 @@ func configureProviders(cfg AppConfig, a *agent.Agent) (llm.RealtimeModel, error
 			return nil, fmt.Errorf("invalid sarvam LLM configuration")
 		}
 		a.LLM = provider
+	case providerSimplismart:
+		a.LLM = simplismart.NewSimplismartLLM(cfg.SimplismartAPIKey, cfg.LLMModel)
 	case providerCerebras:
 		a.LLM = cerebras.NewCerebrasLLM(cfg.CerebrasAPIKey, cfg.LLMModel)
 	case providerFal:
@@ -1214,6 +1220,33 @@ func configureProviders(cfg AppConfig, a *agent.Agent) (llm.RealtimeModel, error
 			sttOpts = append(sttOpts, rtzr.WithRtzrKeywords(cfg.STTKeytermsPrompt))
 		}
 		a.STT = rtzr.NewRtzrSTT(cfg.RtzrClientID, sttOpts...)
+	case providerSimplismart:
+		sttOpts := []simplismart.SimplismartSTTOption{}
+		if cfg.STTBaseURL != "" {
+			sttOpts = append(sttOpts, simplismart.WithSimplismartSTTBaseURL(cfg.STTBaseURL))
+		}
+		if cfg.STTInterimResults != nil {
+			sttOpts = append(sttOpts, simplismart.WithSimplismartSTTStreaming(*cfg.STTInterimResults))
+		}
+		if cfg.STTModel != "" {
+			sttOpts = append(sttOpts, simplismart.WithSimplismartSTTModel(cfg.STTModel))
+		}
+		if cfg.STTLanguage != "" {
+			sttOpts = append(sttOpts, simplismart.WithSimplismartSTTLanguage(cfg.STTLanguage))
+		}
+		if cfg.STTTask != "" {
+			sttOpts = append(sttOpts, simplismart.WithSimplismartSTTTask(cfg.STTTask))
+		}
+		if cfg.STTIncludeTimestamps != nil {
+			sttOpts = append(sttOpts, simplismart.WithSimplismartSTTWithoutTimestamps(!*cfg.STTIncludeTimestamps))
+		}
+		if len(cfg.STTKeytermsPrompt) > 0 {
+			sttOpts = append(sttOpts, simplismart.WithSimplismartSTTHotwords(strings.Join(cfg.STTKeytermsPrompt, ",")))
+		}
+		if cfg.STTMaxSpeakers != nil {
+			sttOpts = append(sttOpts, simplismart.WithSimplismartSTTNumSpeakers(*cfg.STTMaxSpeakers))
+		}
+		a.STT = simplismart.NewSimplismartSTT(cfg.SimplismartAPIKey, sttOpts...)
 	case providerAssemblyAI:
 		sttOpts := []assemblyai.AssemblyAISTTOption{}
 		if cfg.STTBaseURL != "" {
@@ -1829,6 +1862,8 @@ func configureProviders(cfg AppConfig, a *agent.Agent) (llm.RealtimeModel, error
 			ttsOpts = append(ttsOpts, sarvam.WithSarvamTTSOutputAudioCodec(cfg.TTSEncoding))
 		}
 		a.TTS = sarvam.NewSarvamTTS(cfg.SarvamAPIKey, "", ttsOpts...)
+	case providerSimplismart:
+		a.TTS = simplismart.NewSimplismartTTS(cfg.SimplismartAPIKey, cfg.TTSVoice)
 	case providerSLNG:
 		ttsOpts := []slng.TTSOption{}
 		if cfg.TTSModel != "" {
