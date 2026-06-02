@@ -388,7 +388,7 @@ func (s *AgentSession) AgentFalseInterruptionEvents() <-chan AgentFalseInterrupt
 
 func (s *AgentSession) EmitAgentFalseInterruption(ev AgentFalseInterruptionEvent) {
 	if ev.CreatedAt.IsZero() {
-		ev.CreatedAt = time.Now()
+		ev.CreatedAt = NewAgentFalseInterruptionEvent(ev.Resumed).CreatedAt
 	}
 	s.recordEvent(&ev)
 	ch := s.agentFalseInterruptionEvents()
@@ -414,7 +414,12 @@ func (s *AgentSession) UserTurnExceededEvents() <-chan UserTurnExceededEvent {
 
 func (s *AgentSession) EmitUserTurnExceeded(ev UserTurnExceededEvent) {
 	if ev.CreatedAt.IsZero() {
-		ev.CreatedAt = time.Now()
+		ev.CreatedAt = NewUserTurnExceededEvent(
+			ev.Transcript,
+			ev.AccumulatedTranscript,
+			ev.AccumulatedWordCount,
+			ev.Duration,
+		).CreatedAt
 	}
 	s.recordEvent(&ev)
 	s.mu.Lock()
@@ -627,7 +632,7 @@ func (s *AgentSession) ErrorEvents() <-chan ErrorEvent {
 
 func (s *AgentSession) EmitError(ev ErrorEvent) {
 	if ev.CreatedAt.IsZero() {
-		ev.CreatedAt = time.Now()
+		ev.CreatedAt = NewErrorEvent(ev.Error, ev.Source).CreatedAt
 	}
 	s.recordEvent(&ev)
 	ch := s.errorEvents()
@@ -733,6 +738,7 @@ func (s *AgentSession) Start(ctx context.Context) error {
 	assistant := s.Assistant
 	assistant.ttsStreamPacer = s.Options.TTSStreamPacer
 	agent := s.Agent
+	avatar := agent.GetAgent().Avatar
 	backgroundAudio := s.Options.BackgroundAudio
 	room := s.Room
 	hasMetricsCollector := s.MetricsCollector != nil
@@ -742,6 +748,14 @@ func (s *AgentSession) Start(ctx context.Context) error {
 
 	if backgroundAudio != nil && room != nil {
 		if err := backgroundAudio.Start(room, s); err != nil {
+			return err
+		}
+	}
+	if avatar != nil {
+		if err := avatar.Start(ctx); err != nil {
+			if backgroundAudio != nil {
+				_ = backgroundAudio.Close()
+			}
 			return err
 		}
 	}

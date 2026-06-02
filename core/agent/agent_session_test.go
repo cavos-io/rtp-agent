@@ -70,6 +70,49 @@ func TestAgentSessionStartConfiguresTTSStreamPacer(t *testing.T) {
 	}
 }
 
+func TestAgentSessionStartStartsConfiguredAvatar(t *testing.T) {
+	baseAgent := NewAgent("test")
+	baseAgent.VAD = &fakePipelineVAD{}
+	baseAgent.STT = &fakePipelineSTT{}
+	baseAgent.LLM = &fakeGenerationLLM{stream: &fakeGenerationLLMStream{}}
+	baseAgent.TTS = &fakePipelineTTS{}
+	avatar := &fakeAvatarProvider{}
+	baseAgent.Avatar = avatar
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	session := NewAgentSession(baseAgent, nil, AgentSessionOptions{})
+
+	if err := session.Start(ctx); err != nil {
+		t.Fatalf("Start error = %v", err)
+	}
+
+	if avatar.startCalls != 1 {
+		t.Fatalf("avatar startCalls = %d, want 1", avatar.startCalls)
+	}
+}
+
+func TestAgentSessionStartReturnsAvatarStartError(t *testing.T) {
+	errAvatar := errors.New("avatar start failed")
+	baseAgent := NewAgent("test")
+	baseAgent.VAD = &fakePipelineVAD{}
+	baseAgent.STT = &fakePipelineSTT{}
+	baseAgent.LLM = &fakeGenerationLLM{stream: &fakeGenerationLLMStream{}}
+	baseAgent.TTS = &fakePipelineTTS{}
+	baseAgent.Avatar = &fakeAvatarProvider{startErr: errAvatar}
+
+	session := NewAgentSession(baseAgent, nil, AgentSessionOptions{})
+
+	err := session.Start(context.Background())
+
+	if !errors.Is(err, errAvatar) {
+		t.Fatalf("Start error = %v, want avatar error", err)
+	}
+	if session.started {
+		t.Fatal("session started after avatar start error")
+	}
+}
+
 func TestAgentSessionBackgroundAudioLifecycleWithoutRoom(t *testing.T) {
 	player := NewBackgroundAudioPlayer(nil, nil)
 	baseAgent := NewAgent("test")
@@ -1563,4 +1606,20 @@ func TestAgentSessionUsageReturnsCollectedSummary(t *testing.T) {
 	if usage.LLMPromptTokens != 3 || usage.LLMCompletionTokens != 5 {
 		t.Fatalf("Usage = %#v, want prompt=3 completion=5", usage)
 	}
+}
+
+type fakeAvatarProvider struct {
+	startCalls int
+	startErr   error
+	state      AvatarState
+}
+
+func (f *fakeAvatarProvider) Start(ctx context.Context) error {
+	f.startCalls++
+	return f.startErr
+}
+
+func (f *fakeAvatarProvider) UpdateState(state AvatarState) error {
+	f.state = state
+	return nil
 }

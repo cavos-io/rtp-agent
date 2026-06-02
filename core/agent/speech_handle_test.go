@@ -9,6 +9,14 @@ import (
 	"github.com/cavos-io/rtp-agent/core/llm"
 )
 
+func TestNewSpeechHandleDefaultsZeroInputDetails(t *testing.T) {
+	speech := NewSpeechHandle(true, InputDetails{})
+
+	if speech.InputDetails != DefaultInputDetails() {
+		t.Fatalf("InputDetails = %#v, want default %#v", speech.InputDetails, DefaultInputDetails())
+	}
+}
+
 func TestSpeechHandleInterruptDisallowedReturnsError(t *testing.T) {
 	speech := NewSpeechHandle(false, DefaultInputDetails())
 
