@@ -33,6 +33,7 @@ import (
 	"github.com/cavos-io/rtp-agent/adapter/hume"
 	"github.com/cavos-io/rtp-agent/adapter/inworld"
 	"github.com/cavos-io/rtp-agent/adapter/langchain"
+	"github.com/cavos-io/rtp-agent/adapter/lemonslice"
 	"github.com/cavos-io/rtp-agent/adapter/lmnt"
 	"github.com/cavos-io/rtp-agent/adapter/minimal"
 	"github.com/cavos-io/rtp-agent/adapter/minimax"
@@ -91,6 +92,7 @@ const (
 	providerHume         = "hume"
 	providerInworld      = "inworld"
 	providerLangChain    = "langchain"
+	providerLemonSlice   = "lemonslice"
 	providerLMNT         = "lmnt"
 	providerMinimal      = "minimal"
 	providerMinimax      = "minimax"
@@ -318,6 +320,7 @@ type AppConfig struct {
 	HumeAPIKey                  string
 	InworldAPIKey               string
 	LangChainAPIKey             string
+	LemonSliceAPIKey            string
 	LMNTAPIKey                  string
 	MinimalAPIKey               string
 	MinimaxAPIKey               string
@@ -558,6 +561,7 @@ func DefaultConfigFromEnv() AppConfig {
 		HumeAPIKey:                              os.Getenv("HUME_API_KEY"),
 		InworldAPIKey:                           os.Getenv("INWORLD_API_KEY"),
 		LangChainAPIKey:                         os.Getenv("LANGCHAIN_API_KEY"),
+		LemonSliceAPIKey:                        os.Getenv("LEMONSLICE_API_KEY"),
 		LMNTAPIKey:                              os.Getenv("LMNT_API_KEY"),
 		MinimalAPIKey:                           os.Getenv("MINIMAL_API_KEY"),
 		MinimaxAPIKey:                           os.Getenv("MINIMAX_API_KEY"),
@@ -729,6 +733,8 @@ func configureProviders(cfg AppConfig, a *agent.Agent) (llm.RealtimeModel, error
 		a.LLM = inworld.NewInworldLLM(cfg.InworldAPIKey, cfg.LLMModel)
 	case providerLangChain:
 		a.LLM = langchain.NewLangchainLLM(cfg.LangChainAPIKey, cfg.LLMModel)
+	case providerLemonSlice:
+		a.LLM = lemonslice.NewLemonSliceLLM(cfg.LemonSliceAPIKey, cfg.LLMModel)
 	case providerMinimal:
 		a.LLM = minimal.NewMinimalLLM(cfg.MinimalAPIKey, cfg.LLMModel)
 	case providerMinimax:
