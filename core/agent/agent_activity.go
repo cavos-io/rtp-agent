@@ -287,11 +287,25 @@ func (a *AgentActivity) UpdateInstructions(ctx context.Context, instructions str
 }
 
 func (a *AgentActivity) UpdateTools(ctx context.Context, tools []llm.Tool) error {
+	oldToolCtx := llm.EmptyToolContext()
+	if err := oldToolCtx.UpdateTools(agentToolsAsInterfaces(a.Agent.Tools)); err != nil {
+		return err
+	}
+	dedupedTools := dedupeAgentToolsByID(tools)
+	newToolCtx := llm.EmptyToolContext()
+	if err := newToolCtx.UpdateTools(agentToolsAsInterfaces(dedupedTools)); err != nil {
+		return err
+	}
 	oldToolNames := agentToolNameSet(a.Agent.Tools)
-	newToolNames := agentToolNameSet(tools)
+	newToolNames := agentToolNameSet(dedupedTools)
 	toolsAdded, toolsRemoved := agentToolDiff(oldToolNames, newToolNames)
+	if !oldToolCtx.Equal(newToolCtx) && len(toolsAdded) == 0 && len(toolsRemoved) == 0 {
+		replaced := agentToolNamesIntersection(oldToolNames, newToolNames)
+		toolsAdded = replaced
+		toolsRemoved = replaced
+	}
 
-	a.Agent.Tools = dedupeAgentToolsByID(tools)
+	a.Agent.Tools = dedupedTools
 	if len(toolsAdded) > 0 || len(toolsRemoved) > 0 {
 		configUpdate := &llm.AgentConfigUpdate{
 			ToolsAdded:   toolsAdded,
@@ -371,6 +385,17 @@ func agentToolDiff(oldToolNames map[string]struct{}, newToolNames map[string]str
 	sort.Strings(added)
 	sort.Strings(removed)
 	return added, removed
+}
+
+func agentToolNamesIntersection(left map[string]struct{}, right map[string]struct{}) []string {
+	names := make([]string, 0)
+	for name := range left {
+		if _, ok := right[name]; ok {
+			names = append(names, name)
+		}
+	}
+	sort.Strings(names)
+	return names
 }
 
 func sortedAgentToolNames(tools []interface{}) []string {

@@ -214,6 +214,26 @@ func TestAgentUpdateToolsWhileRunningRecordsToolDiffAndFiltersWithSessionTools(t
 	assertLastToolUpdate(t, session.ChatCtx)
 }
 
+func TestAgentUpdateToolsWhileRunningRecordsSameNameReplacement(t *testing.T) {
+	agent := NewAgent("help")
+	agent.Tools = []llm.Tool{&agentTestTool{id: "primary_lookup", name: "lookup"}}
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	agent.activity = NewAgentActivity(agent, session)
+
+	if err := agent.UpdateTools(context.Background(), []llm.Tool{&agentTestTool{id: "backup_lookup", name: "lookup"}}); err != nil {
+		t.Fatalf("UpdateTools error = %v, want nil", err)
+	}
+
+	config := assertLastToolUpdate(t, agent.ChatCtx)
+	if !stringSlicesEqual(config.ToolsAdded, []string{"lookup"}) {
+		t.Fatalf("ToolsAdded = %q, want replacement lookup", config.ToolsAdded)
+	}
+	if !stringSlicesEqual(config.ToolsRemoved, []string{"lookup"}) {
+		t.Fatalf("ToolsRemoved = %q, want replacement lookup", config.ToolsRemoved)
+	}
+	assertLastToolUpdate(t, session.ChatCtx)
+}
+
 func TestAgentUpdateChatContextWhileRunningAddsInstructionMessage(t *testing.T) {
 	agent := NewAgent("be helpful")
 	session := NewAgentSession(agent, nil, AgentSessionOptions{})
