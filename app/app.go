@@ -6,6 +6,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"time"
 
 	awspollytypes "github.com/aws/aws-sdk-go-v2/service/polly/types"
 	awstranscribetypes "github.com/aws/aws-sdk-go-v2/service/transcribestreaming/types"
@@ -76,6 +77,7 @@ import (
 	"github.com/cavos-io/rtp-agent/core/agent"
 	"github.com/cavos-io/rtp-agent/core/inference"
 	"github.com/cavos-io/rtp-agent/core/llm"
+	coretts "github.com/cavos-io/rtp-agent/core/tts"
 	"github.com/cavos-io/rtp-agent/interface/worker"
 	"github.com/cavos-io/rtp-agent/library/tokenize"
 	goopenai "github.com/sashabaranov/go-openai"
@@ -318,6 +320,9 @@ type AppConfig struct {
 	TTSTokenizerLanguage                    string
 	TTSTokenizerMinSentenceLen              *int
 	TTSTokenizerStreamContextLen            *int
+	TTSStreamPacerEnabled                   bool
+	TTSStreamPacerMinRemainingAudioMS       *int
+	TTSStreamPacerMaxTextLength             *int
 	TTSTimestampTransportStrategy           string
 	TTSBufferCharThreshold                  *int
 	TTSMaxBufferDelayMS                     *int
@@ -577,6 +582,9 @@ func DefaultConfigFromEnv() AppConfig {
 		TTSTokenizerLanguage:                    os.Getenv("RTP_AGENT_TTS_TOKENIZER_LANGUAGE"),
 		TTSTokenizerMinSentenceLen:              getenvOptionalInt("RTP_AGENT_TTS_TOKENIZER_MIN_SENTENCE_LEN"),
 		TTSTokenizerStreamContextLen:            getenvOptionalInt("RTP_AGENT_TTS_TOKENIZER_STREAM_CONTEXT_LEN"),
+		TTSStreamPacerEnabled:                   getenvBool("RTP_AGENT_TTS_STREAM_PACER_ENABLED"),
+		TTSStreamPacerMinRemainingAudioMS:       getenvOptionalInt("RTP_AGENT_TTS_STREAM_PACER_MIN_REMAINING_AUDIO_MS"),
+		TTSStreamPacerMaxTextLength:             getenvOptionalInt("RTP_AGENT_TTS_STREAM_PACER_MAX_TEXT_LENGTH"),
 		TTSTimestampTransportStrategy:           os.Getenv("RTP_AGENT_TTS_TIMESTAMP_TRANSPORT_STRATEGY"),
 		TTSBufferCharThreshold:                  getenvOptionalInt("RTP_AGENT_TTS_BUFFER_CHAR_THRESHOLD"),
 		TTSMaxBufferDelayMS:                     getenvOptionalInt("RTP_AGENT_TTS_MAX_BUFFER_DELAY_MS"),
@@ -681,7 +689,7 @@ func NewApp(cfg AppConfig) (*App, error) {
 		return nil, err
 	}
 
-	session := agent.NewAgentSession(baseAgent, nil, agent.AgentSessionOptions{})
+	session := agent.NewAgentSession(baseAgent, nil, agentSessionOptionsFromConfig(cfg))
 
 	opts := cfg.WorkerOptions
 	if opts.AgentName == "" {
@@ -2599,6 +2607,21 @@ func normalizedEnv(name string) string {
 
 func normalizeProvider(provider string) string {
 	return strings.ToLower(strings.TrimSpace(provider))
+}
+
+func agentSessionOptionsFromConfig(cfg AppConfig) agent.AgentSessionOptions {
+	opts := agent.AgentSessionOptions{}
+	if cfg.TTSStreamPacerEnabled {
+		pacer := coretts.SentenceStreamPacerOptions{}
+		if cfg.TTSStreamPacerMinRemainingAudioMS != nil {
+			pacer.MinRemainingAudio = time.Duration(*cfg.TTSStreamPacerMinRemainingAudioMS) * time.Millisecond
+		}
+		if cfg.TTSStreamPacerMaxTextLength != nil {
+			pacer.MaxTextLength = *cfg.TTSStreamPacerMaxTextLength
+		}
+		opts.TTSStreamPacer = &pacer
+	}
+	return opts
 }
 
 func ttsSentenceTokenizer(cfg AppConfig) (tokenize.SentenceTokenizer, error) {

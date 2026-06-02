@@ -84,14 +84,38 @@ type TTSGenerationData struct {
 	TTFB    time.Duration
 }
 
-func PerformTTSInference(ctx context.Context, t tts.TTS, textCh <-chan string) (*TTSGenerationData, error) {
+type TTSInferenceOptions struct {
+	StreamPacer *tts.SentenceStreamPacerOptions
+}
+
+type TTSInferenceOption func(*TTSInferenceOptions)
+
+func WithTTSStreamPacer(opts tts.SentenceStreamPacerOptions) TTSInferenceOption {
+	return func(options *TTSInferenceOptions) {
+		options.StreamPacer = &opts
+	}
+}
+
+func PerformTTSInference(ctx context.Context, t tts.TTS, textCh <-chan string, opts ...TTSInferenceOption) (*TTSGenerationData, error) {
 	data := &TTSGenerationData{
 		AudioCh: make(chan *model.AudioFrame, 100),
+	}
+
+	var options TTSInferenceOptions
+	for _, opt := range opts {
+		opt(&options)
 	}
 
 	stream, err := t.Stream(ctx)
 	if err != nil {
 		return nil, err
+	}
+	if options.StreamPacer != nil {
+		if options.StreamPacer.MaxTextLength == 0 {
+			stream = tts.NewSentenceStreamPacer(ctx, stream, options.StreamPacer.MinRemainingAudio)
+		} else {
+			stream = tts.NewSentenceStreamPacerWithOptions(ctx, stream, *options.StreamPacer)
+		}
 	}
 
 	go func() {

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"reflect"
 	"testing"
+	"time"
 
 	"github.com/cavos-io/rtp-agent/core/llm"
 	"github.com/cavos-io/rtp-agent/core/tts"
@@ -1890,6 +1891,29 @@ func TestDefaultConfigFromEnvSelectsLiveKitTTSTokenizer(t *testing.T) {
 				t.Fatalf("sentenceTokenizer type = %q, want %s", got, tc.wantTypeName)
 			}
 		})
+	}
+}
+
+func TestDefaultConfigFromEnvConfiguresTTSStreamPacer(t *testing.T) {
+	t.Setenv("RTP_AGENT_TTS_STREAM_PACER_ENABLED", "true")
+	t.Setenv("RTP_AGENT_TTS_STREAM_PACER_MIN_REMAINING_AUDIO_MS", "250")
+	t.Setenv("RTP_AGENT_TTS_STREAM_PACER_MAX_TEXT_LENGTH", "120")
+
+	app, err := NewApp(DefaultConfigFromEnv())
+	if err != nil {
+		t.Fatalf("NewApp() error = %v", err)
+	}
+	if app.Session == nil {
+		t.Fatal("Session is nil")
+	}
+	if app.Session.Options.TTSStreamPacer == nil {
+		t.Fatal("Session TTSStreamPacer is nil")
+	}
+	if got := app.Session.Options.TTSStreamPacer.MinRemainingAudio; got != 250*time.Millisecond {
+		t.Fatalf("MinRemainingAudio = %v, want 250ms", got)
+	}
+	if got := app.Session.Options.TTSStreamPacer.MaxTextLength; got != 120 {
+		t.Fatalf("MaxTextLength = %d, want 120", got)
 	}
 }
 
