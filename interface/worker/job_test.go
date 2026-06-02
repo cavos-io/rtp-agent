@@ -2,6 +2,7 @@ package worker
 
 import (
 	"context"
+	"errors"
 	"os"
 	"os/exec"
 	"reflect"
@@ -1150,6 +1151,44 @@ func (f *fakeJobSIPAPI) CreateSIPParticipant(context.Context, *livekit.CreateSIP
 func (f *fakeJobSIPAPI) TransferSIPParticipant(_ context.Context, req *livekit.TransferSIPParticipantRequest) (*emptypb.Empty, error) {
 	f.transferRequest = req
 	return &emptypb.Empty{}, nil
+}
+
+func TestJobContextDeleteRoomIgnoresAPIError(t *testing.T) {
+	ctx := NewJobContext(
+		&livekit.Job{Id: "job_delete_room", Room: &livekit.Room{Name: "room-a"}},
+		"",
+		"",
+		"",
+	)
+	roomAPI := &fakeJobRoomServiceAPI{err: errors.New("server disconnected")}
+	ctx.api = &JobAPI{RoomService: roomAPI}
+
+	resp, err := ctx.DeleteRoom(context.Background(), "")
+	if err != nil {
+		t.Fatalf("DeleteRoom() error = %v, want nil for best-effort reference behavior", err)
+	}
+	if resp == nil {
+		t.Fatal("DeleteRoom() response = nil, want empty response")
+	}
+	if roomAPI.request == nil {
+		t.Fatal("DeleteRoom() did not call room service API")
+	}
+	if roomAPI.request.Room != "room-a" {
+		t.Fatalf("DeleteRoom() room = %q, want room-a", roomAPI.request.Room)
+	}
+}
+
+type fakeJobRoomServiceAPI struct {
+	err     error
+	request *livekit.DeleteRoomRequest
+}
+
+func (f *fakeJobRoomServiceAPI) DeleteRoom(_ context.Context, req *livekit.DeleteRoomRequest) (*livekit.DeleteRoomResponse, error) {
+	f.request = req
+	if f.err != nil {
+		return nil, f.err
+	}
+	return &livekit.DeleteRoomResponse{}, nil
 }
 
 func TestTransferSIPParticipantIdentityAcceptsString(t *testing.T) {

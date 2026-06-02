@@ -778,9 +778,14 @@ func (c *JobContext) DeleteRoom(ctx context.Context, roomName string) (*livekit.
 	if roomName == "" {
 		roomName = c.Job.Room.Name
 	}
-	return c.API().RoomService.DeleteRoom(ctx, &livekit.DeleteRoomRequest{
+	resp, err := c.API().RoomService.DeleteRoom(ctx, &livekit.DeleteRoomRequest{
 		Room: roomName,
 	})
+	if err != nil {
+		logger.Logger.Warnw("error while deleting room", err)
+		return &livekit.DeleteRoomResponse{}, nil
+	}
+	return resp, nil
 }
 
 // AddSIPParticipant adds a SIP participant to the room.
