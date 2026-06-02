@@ -576,6 +576,26 @@ func (a *AgentActivity) OnEndOfSpeech(ev *vad.VADEvent) {
 	}
 }
 
+func (a *AgentActivity) OnInterimTranscript(ev *stt.SpeechEvent) {
+	if a.Session == nil {
+		return
+	}
+	transcript := ""
+	language := ""
+	speakerID := ""
+	if ev != nil && len(ev.Alternatives) > 0 {
+		transcript = ev.Alternatives[0].Text
+		language = ev.Alternatives[0].Language
+		speakerID = ev.Alternatives[0].SpeakerID
+	}
+	a.Session.EmitUserInputTranscribed(UserInputTranscribedEvent{
+		Language:   language,
+		Transcript: transcript,
+		IsFinal:    false,
+		SpeakerID:  speakerID,
+	})
+}
+
 func (a *AgentActivity) OnFinalTranscript(ev *stt.SpeechEvent) {
 	a.sttEOSReceived = true
 	transcript := ""
@@ -588,7 +608,6 @@ func (a *AgentActivity) OnFinalTranscript(ev *stt.SpeechEvent) {
 		language = ev.Alternatives[0].Language
 		speakerID = ev.Alternatives[0].SpeakerID
 	}
-
 	if a.Session != nil {
 		a.Session.EmitUserInputTranscribed(UserInputTranscribedEvent{
 			Language:   language,

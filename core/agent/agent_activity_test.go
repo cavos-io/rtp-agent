@@ -490,6 +490,32 @@ func TestAgentActivityOnFinalTranscriptEmitsUserInputTranscribed(t *testing.T) {
 	}
 }
 
+func TestAgentActivityOnInterimTranscriptEmitsUserInputTranscribed(t *testing.T) {
+	agent := NewAgent("test")
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	activity := NewAgentActivity(agent, session)
+
+	activity.OnInterimTranscript(&stt.SpeechEvent{
+		Alternatives: []stt.SpeechData{{
+			Language:  "en",
+			Text:      "interim transcript",
+			SpeakerID: "speaker-1",
+		}},
+	})
+
+	select {
+	case ev := <-session.UserInputTranscribedEvents():
+		if ev.Transcript != "interim transcript" || ev.IsFinal {
+			t.Fatalf("event transcript/final = %q/%v, want interim transcript/false", ev.Transcript, ev.IsFinal)
+		}
+		if ev.Language != "en" || ev.SpeakerID != "speaker-1" {
+			t.Fatalf("event language/speaker = %q/%q, want en/speaker-1", ev.Language, ev.SpeakerID)
+		}
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("UserInputTranscribedEvents did not receive interim transcript")
+	}
+}
+
 func TestAgentActivityClearUserTurnDropsPendingManualTranscript(t *testing.T) {
 	agent := &turnCompletedAgent{Agent: NewAgent("test"), turns: make(chan *llm.ChatMessage, 1)}
 	agent.TurnDetection = TurnDetectionModeManual
