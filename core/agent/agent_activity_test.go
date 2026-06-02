@@ -478,6 +478,64 @@ func TestAgentActivityCommitUserTurnCompletesPendingManualTranscript(t *testing.
 	}
 }
 
+func TestAgentActivityCommitUserTurnGeneratesReplyWhenLLMConfigured(t *testing.T) {
+	agent := NewAgent("test")
+	agent.TurnDetection = TurnDetectionModeManual
+	agent.LLM = &fakeGenerationLLM{stream: &fakeGenerationLLMStream{}}
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	activity := NewAgentActivity(agent, session)
+	agent.activity = activity
+	session.activity = activity
+
+	activity.OnFinalTranscript(&stt.SpeechEvent{
+		Alternatives: []stt.SpeechData{{Text: "reply to me", Confidence: 0.9}},
+	})
+
+	transcript, err := activity.CommitUserTurn(context.Background(), CommitUserTurnOptions{})
+	if err != nil {
+		t.Fatalf("CommitUserTurn error = %v, want nil", err)
+	}
+	if transcript != "reply to me" {
+		t.Fatalf("CommitUserTurn transcript = %q, want reply to me", transcript)
+	}
+	select {
+	case ev := <-session.SpeechCreatedEvents():
+		if ev.Source != "generate_reply" {
+			t.Fatalf("SpeechCreated source = %q, want generate_reply", ev.Source)
+		}
+		if ev.SpeechHandle.Generation.UserMessage == nil || ev.SpeechHandle.Generation.UserMessage.TextContent() != "reply to me" {
+			t.Fatalf("generation user message = %#v, want committed transcript", ev.SpeechHandle.Generation.UserMessage)
+		}
+		if ev.SpeechHandle.InputDetails.Modality != "audio" {
+			t.Fatalf("generation modality = %q, want audio", ev.SpeechHandle.InputDetails.Modality)
+		}
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("CommitUserTurn did not generate a reply")
+	}
+}
+
+func TestAgentActivityCommitUserTurnSkipsReplyWhenLLMMissing(t *testing.T) {
+	agent := NewAgent("test")
+	agent.TurnDetection = TurnDetectionModeManual
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	activity := NewAgentActivity(agent, session)
+	agent.activity = activity
+	session.activity = activity
+
+	activity.OnFinalTranscript(&stt.SpeechEvent{
+		Alternatives: []stt.SpeechData{{Text: "no llm"}},
+	})
+
+	if _, err := activity.CommitUserTurn(context.Background(), CommitUserTurnOptions{}); err != nil {
+		t.Fatalf("CommitUserTurn error = %v, want nil", err)
+	}
+	select {
+	case ev := <-session.SpeechCreatedEvents():
+		t.Fatalf("unexpected SpeechCreated event without LLM: %#v", ev)
+	case <-time.After(20 * time.Millisecond):
+	}
+}
+
 func TestAgentActivityAutomaticTurnCompletionConsumesPendingTranscript(t *testing.T) {
 	agent := &turnCompletedAgent{Agent: NewAgent("test"), turns: make(chan *llm.ChatMessage, 2)}
 	agent.TurnDetection = TurnDetectionModeSTT

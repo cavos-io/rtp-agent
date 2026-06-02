@@ -583,30 +583,60 @@ func (a *AgentActivity) CommitUserTurn(ctx context.Context, opts CommitUserTurnO
 		return "", nil
 	}
 
-	newMsg := &llm.ChatMessage{
-		Role:                 llm.ChatRoleUser,
-		Content:              []llm.ChatContent{{Text: transcript}},
-		TranscriptConfidence: &confidence,
-		CreatedAt:            time.Now(),
-	}
-	if opts.SkipReply {
-		if a.Agent.ChatCtx == nil {
-			a.Agent.ChatCtx = llm.NewChatContext()
-		}
-		a.Agent.ChatCtx.Append(newMsg)
-		if a.Session != nil {
-			a.Session.EmitConversationItemAdded(newMsg)
-		}
-		return transcript, nil
-	}
-
 	if ctx == nil {
 		ctx = a.ctx
 	}
-	if err := a.AgentIntf.OnUserTurnCompleted(ctx, a.Agent.ChatCtx, newMsg); err != nil {
+	if _, err := a.completeUserTurn(ctx, EndOfTurnInfo{
+		SkipReply:            opts.SkipReply,
+		NewTranscript:        transcript,
+		TranscriptConfidence: confidence,
+	}); err != nil {
 		return transcript, err
 	}
 	return transcript, nil
+}
+
+func (a *AgentActivity) completeUserTurn(ctx context.Context, info EndOfTurnInfo) (*SpeechHandle, error) {
+	confidence := info.TranscriptConfidence
+	newMsg := &llm.ChatMessage{
+		Role:                 llm.ChatRoleUser,
+		Content:              []llm.ChatContent{{Text: info.NewTranscript}},
+		TranscriptConfidence: &confidence,
+		CreatedAt:            time.Now(),
+	}
+	if info.SkipReply {
+		a.commitUserMessage(newMsg)
+		return nil, nil
+	}
+
+	chatCtx := llm.NewChatContext()
+	if a.Agent.ChatCtx != nil {
+		chatCtx = a.Agent.ChatCtx.Copy()
+	}
+	if err := a.AgentIntf.OnUserTurnCompleted(ctx, chatCtx, newMsg); err != nil {
+		return nil, err
+	}
+	if a.Agent.LLM == nil || a.Session == nil {
+		return nil, nil
+	}
+	return a.Session.GenerateReplyWithOptions(ctx, GenerateReplyOptions{
+		UserMessage:   newMsg,
+		ChatCtx:       chatCtx,
+		InputModality: "audio",
+	})
+}
+
+func (a *AgentActivity) commitUserMessage(msg *llm.ChatMessage) {
+	if msg == nil || msg.TextContent() == "" {
+		return
+	}
+	if a.Agent.ChatCtx == nil {
+		a.Agent.ChatCtx = llm.NewChatContext()
+	}
+	a.Agent.ChatCtx.Append(msg)
+	if a.Session != nil {
+		a.Session.EmitConversationItemAdded(msg)
+	}
 }
 
 func (a *AgentActivity) clearPendingUserTurn() {
@@ -672,11 +702,9 @@ func (a *AgentActivity) runEOUDetection(info EndOfTurnInfo) {
 			// EOU detected
 			logger.Logger.Infow("EOU detected, completing user turn")
 			a.clearPendingUserTurn()
-			newMsg := &llm.ChatMessage{
-				Role:    llm.ChatRoleUser,
-				Content: []llm.ChatContent{{Text: info.NewTranscript}},
+			if _, err := a.completeUserTurn(a.ctx, info); err != nil {
+				logger.Logger.Errorw("user turn completion failed", err)
 			}
-			a.AgentIntf.OnUserTurnCompleted(a.ctx, a.Agent.ChatCtx, newMsg)
 		}
 	}()
 }
