@@ -148,6 +148,26 @@ func TestPerformLLMInferenceRecordsLLMSpan(t *testing.T) {
 	}
 }
 
+func TestLLMToolSpanAttributesIncludeToolContextGroups(t *testing.T) {
+	lookup := &fakeGenerationTool{name: "lookup"}
+	search := &fakeGenerationTool{name: "search"}
+	providerTool := &fakeGenerationProviderTool{fakeGenerationTool: fakeGenerationTool{name: "provider"}}
+	toolset := &fakeGenerationToolset{id: "tools", tools: []llm.Tool{search}}
+	toolCtx := llm.NewToolContext([]interface{}{lookup, providerTool, toolset})
+
+	attrs := spanAttributeValues(llmToolSpanAttributes(toolCtx))
+
+	if got := attrs[telemetry.AttrFunctionTools].AsStringSlice(); strings.Join(got, ",") != "lookup,search" {
+		t.Fatalf("function tools attr = %v, want lookup/search", got)
+	}
+	if got := attrs[telemetry.AttrProviderTools].AsStringSlice(); len(got) != 1 || got[0] != "fakeGenerationProviderTool" {
+		t.Fatalf("provider tools attr = %v, want fakeGenerationProviderTool", got)
+	}
+	if got := attrs[telemetry.AttrToolSets].AsStringSlice(); len(got) != 1 || got[0] != "fakeGenerationToolset" {
+		t.Fatalf("toolsets attr = %v, want fakeGenerationToolset", got)
+	}
+}
+
 func TestPerformToolExecutionsUsesToolErrorMessage(t *testing.T) {
 	output := executeOneToolCall(t, &fakeGenerationTool{
 		name: "lookup",
@@ -370,6 +390,35 @@ func TestPerformToolExecutionsProvidesRunContext(t *testing.T) {
 	}
 }
 
+func TestPerformToolExecutionsSnapshotsToolContext(t *testing.T) {
+	original := &fakeGenerationTool{name: "lookup", result: "original"}
+	replacement := &fakeGenerationTool{name: "lookup", result: "replacement"}
+	toolCtx := llm.NewToolContext([]interface{}{original})
+	functionCh := make(chan *llm.FunctionToolCall)
+
+	outputs := PerformToolExecutions(context.Background(), functionCh, toolCtx)
+	if err := toolCtx.UpdateTools([]interface{}{replacement}); err != nil {
+		t.Fatalf("UpdateTools() error = %v", err)
+	}
+	functionCh <- &llm.FunctionToolCall{
+		Name:      "lookup",
+		CallID:    "call_lookup",
+		Arguments: `{}`,
+	}
+	close(functionCh)
+
+	output, ok := <-outputs
+	if !ok {
+		t.Fatal("PerformToolExecutions closed without output")
+	}
+	if output.RawError != nil {
+		t.Fatalf("RawError = %v, want nil", output.RawError)
+	}
+	if output.RawOutput != "original" {
+		t.Fatalf("RawOutput = %v, want original snapshot result", output.RawOutput)
+	}
+}
+
 func executeOneToolCall(t *testing.T, tool llm.Tool) ToolExecutionOutput {
 	t.Helper()
 
@@ -398,6 +447,14 @@ func spanAttributes(attrs []attribute.KeyValue) map[string]string {
 	return values
 }
 
+func spanAttributeValues(attrs []attribute.KeyValue) map[string]attribute.Value {
+	values := make(map[string]attribute.Value, len(attrs))
+	for _, attr := range attrs {
+		values[string(attr.Key)] = attr.Value
+	}
+	return values
+}
+
 type fakeGenerationTool struct {
 	name   string
 	result string
@@ -415,6 +472,21 @@ func (f *fakeGenerationTool) Parameters() map[string]any { return nil }
 func (f *fakeGenerationTool) Execute(context.Context, string) (string, error) {
 	return f.result, f.err
 }
+
+type fakeGenerationProviderTool struct {
+	fakeGenerationTool
+}
+
+func (f *fakeGenerationProviderTool) IsProviderTool() bool { return true }
+
+type fakeGenerationToolset struct {
+	id    string
+	tools []llm.Tool
+}
+
+func (f *fakeGenerationToolset) ID() string { return f.id }
+
+func (f *fakeGenerationToolset) Tools() []llm.Tool { return f.tools }
 
 type runContextRecordingTool struct {
 	runContext *RunContext

@@ -186,6 +186,33 @@ func TestDefaultWorkerLoadFunctionUsesMovingAverage(t *testing.T) {
 	}
 }
 
+func TestDefaultWorkerLoadFunctionResetsAverageOnInvalidSample(t *testing.T) {
+	oldSampler := defaultWorkerLoadSample
+	oldCalc := defaultWorkerLoadCalc
+	samples := []float64{0.8, math.NaN(), 0.2}
+	defaultWorkerLoadSample = func() float64 {
+		sample := samples[0]
+		samples = samples[1:]
+		return sample
+	}
+	defaultWorkerLoadCalc = nil
+	t.Cleanup(func() {
+		defaultWorkerLoadSample = oldSampler
+		defaultWorkerLoadCalc = oldCalc
+	})
+
+	server := NewAgentServer(WorkerOptions{})
+	if got := server.currentLoad(); math.Abs(got-0.8) > 1e-9 {
+		t.Fatalf("first load = %v, want first sample 0.8", got)
+	}
+	if got := server.currentLoad(); got != 0 {
+		t.Fatalf("invalid load = %v, want reset zero", got)
+	}
+	if got := server.currentLoad(); math.Abs(got-0.2) > 1e-9 {
+		t.Fatalf("load after reset = %v, want fresh sample 0.2", got)
+	}
+}
+
 func TestNewAgentServerPreservesExplicitZeroInitializeProcessTimeout(t *testing.T) {
 	server := NewAgentServer(WorkerOptions{InitializeProcessTimeoutSecondsSet: true})
 
@@ -339,6 +366,7 @@ func TestWorkerHTTPHandlerReportsWorkerMetadata(t *testing.T) {
 		`"worker_load":0.42`,
 		`"active_jobs":1`,
 		`"project_type":"go"`,
+		`"node_name":"`,
 	} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("/worker response missing %s in %s", want, body)

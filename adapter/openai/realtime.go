@@ -13,6 +13,7 @@ import (
 	"github.com/cavos-io/rtp-agent/core/llm"
 	"github.com/cavos-io/rtp-agent/library/logger"
 	"github.com/cavos-io/rtp-agent/library/telemetry"
+	"github.com/cavos-io/rtp-agent/library/utils"
 	"github.com/cavos-io/rtp-agent/library/utils/images"
 	"github.com/gorilla/websocket"
 )
@@ -68,13 +69,21 @@ type realtimeSession struct {
 	mu               sync.Mutex
 	eventCh          chan llm.RealtimeEvent
 	remote           *llm.RemoteChatContext
-	inputTranscripts map[inputTranscriptKey]string
+	inputTranscripts *utils.BoundedDict[inputTranscriptKey, realtimeInputTranscript]
 	generation       *realtimeGeneration
 }
+
+const maxRealtimeInputTranscripts = 1024
 
 type inputTranscriptKey struct {
 	itemID       string
 	contentIndex int
+}
+
+type realtimeInputTranscript struct {
+	itemID       string
+	contentIndex int
+	transcript   string
 }
 
 type realtimeGeneration struct {
@@ -859,11 +868,16 @@ func (s *realtimeSession) trackRealtimeInputTranscription(ev llm.RealtimeEvent) 
 	}
 	if !transcription.IsFinal {
 		if s.inputTranscripts == nil {
-			s.inputTranscripts = make(map[inputTranscriptKey]string)
+			s.inputTranscripts = utils.NewBoundedDict[inputTranscriptKey, realtimeInputTranscript](maxRealtimeInputTranscripts)
 		}
 		key := inputTranscriptKey{itemID: transcription.ItemID, contentIndex: transcription.ContentIndex}
-		s.inputTranscripts[key] += transcription.Transcript
-		transcription.Transcript = s.inputTranscripts[key]
+		accumulated := s.inputTranscripts.SetOrUpdate(key, func() realtimeInputTranscript {
+			return realtimeInputTranscript{itemID: transcription.ItemID, contentIndex: transcription.ContentIndex}
+		}, func(value realtimeInputTranscript) realtimeInputTranscript {
+			value.transcript += transcription.Transcript
+			return value
+		})
+		transcription.Transcript = accumulated.transcript
 		return ev
 	}
 	s.clearRealtimeInputTranscript(transcription.ItemID, transcription.ContentIndex)
@@ -885,19 +899,22 @@ func (s *realtimeSession) clearRealtimeInputTranscript(itemID string, contentInd
 	if itemID == "" || s.inputTranscripts == nil {
 		return "", false
 	}
-	key := inputTranscriptKey{itemID: itemID, contentIndex: contentIndex}
-	transcript, ok := s.inputTranscripts[key]
-	delete(s.inputTranscripts, key)
-	return transcript, ok
+	_, partial, ok := s.inputTranscripts.PopIf(func(value realtimeInputTranscript) bool {
+		return value.itemID == itemID && value.contentIndex == contentIndex
+	})
+	return partial.transcript, ok
 }
 
 func (s *realtimeSession) clearRealtimeInputTranscripts(itemID string) {
 	if itemID == "" || s.inputTranscripts == nil {
 		return
 	}
-	for key := range s.inputTranscripts {
-		if key.itemID == itemID {
-			delete(s.inputTranscripts, key)
+	for {
+		_, _, ok := s.inputTranscripts.PopIf(func(value realtimeInputTranscript) bool {
+			return value.itemID == itemID
+		})
+		if !ok {
+			return
 		}
 	}
 }

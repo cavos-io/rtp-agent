@@ -10,10 +10,10 @@ import (
 	"net/textproto"
 	"net/url"
 	"os"
-	"strings"
 	"time"
 
 	"github.com/cavos-io/rtp-agent/library/logger"
+	"github.com/cavos-io/rtp-agent/library/utils"
 	"github.com/livekit/protocol/auth"
 	"github.com/livekit/protocol/livekit"
 	"google.golang.org/protobuf/proto"
@@ -32,7 +32,7 @@ func UploadSessionReport(
 		return fmt.Errorf("failed to parse cloud URL: %w", err)
 	}
 
-	if !strings.HasSuffix(u.Host, ".livekit.cloud") && !strings.HasSuffix(u.Host, ".livekit.run") {
+	if !utils.IsCloud(cloudURL) {
 		// Not a cloud URL, skip
 		logger.Logger.Infow("Not a cloud URL, skipping upload", "url", cloudURL)
 		return nil

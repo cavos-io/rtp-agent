@@ -25,6 +25,7 @@ import (
 	"github.com/cavos-io/rtp-agent/library/logger"
 	mathutil "github.com/cavos-io/rtp-agent/library/math"
 	"github.com/cavos-io/rtp-agent/library/telemetry"
+	"github.com/cavos-io/rtp-agent/library/utils"
 	"github.com/go-jose/go-jose/v3"
 	"github.com/go-jose/go-jose/v3/jwt"
 	"github.com/gorilla/websocket"
@@ -695,7 +696,7 @@ func mergeWorkerOptions(current WorkerOptions, next WorkerOptions) WorkerOptions
 
 func resolveWorkerOptions(opts WorkerOptions) WorkerOptions {
 	if !opts.DevMode {
-		opts.DevMode = liveKitDevModeEnabled(os.Getenv("LIVEKIT_DEV_MODE"))
+		opts.DevMode = utils.IsDevMode()
 	}
 	if opts.WorkerType == "" {
 		opts.WorkerType = WorkerTypeRoom
@@ -791,6 +792,7 @@ type workerMetadataResponse struct {
 	ActiveJobs     int     `json:"active_jobs"`
 	SDKVersion     string  `json:"sdk_version"`
 	ProjectType    string  `json:"project_type"`
+	NodeName       string  `json:"node_name"`
 }
 
 func (s *AgentServer) workerHTTPHandler() http.Handler {
@@ -816,6 +818,7 @@ func (s *AgentServer) workerHTTPHandler() http.Handler {
 			ActiveJobs:     s.activeJobCount(),
 			SDKVersion:     s.Options.Version,
 			ProjectType:    "go",
+			NodeName:       utils.NodeName(),
 		}
 		w.Header().Set("Content-Type", "application/json")
 		if err := json.NewEncoder(w).Encode(body); err != nil {
@@ -899,15 +902,6 @@ func (s *AgentServer) configurePrometheusMultiprocDir() error {
 	return nil
 }
 
-func liveKitDevModeEnabled(value string) bool {
-	switch strings.ToLower(strings.TrimSpace(value)) {
-	case "1", "true", "t", "yes", "y", "on":
-		return true
-	default:
-		return false
-	}
-}
-
 func validWorkerLogLevel(logLevel string) bool {
 	switch strings.ToUpper(strings.TrimSpace(logLevel)) {
 	case "TRACE", "DEBUG", "INFO", "WARN", "ERROR", "CRITICAL":
@@ -947,7 +941,8 @@ func (c *workerLoadCalculator) Load() float64 {
 
 	sample := c.sample()
 	if sample < 0 || math.IsNaN(sample) || math.IsInf(sample, 0) {
-		sample = 0
+		c.average.Reset()
+		return 0
 	}
 	c.average.AddSample(sample)
 	return c.average.GetAvg()

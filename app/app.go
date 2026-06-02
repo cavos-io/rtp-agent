@@ -84,8 +84,11 @@ import (
 	corestt "github.com/cavos-io/rtp-agent/core/stt"
 	coretts "github.com/cavos-io/rtp-agent/core/tts"
 	"github.com/cavos-io/rtp-agent/interface/worker"
+	logutil "github.com/cavos-io/rtp-agent/library/logger"
 	"github.com/cavos-io/rtp-agent/library/plugin"
+	"github.com/cavos-io/rtp-agent/library/telemetry"
 	"github.com/cavos-io/rtp-agent/library/tokenize"
+	livekitlogger "github.com/livekit/protocol/logger"
 	lksdk "github.com/livekit/server-sdk-go/v2"
 	goopenai "github.com/sashabaranov/go-openai"
 )
@@ -93,6 +96,11 @@ import (
 func init() {
 	plugin.RegisterPluginMetadata(slng.PluginTitle, slng.PluginVersion, slng.PluginPackage)
 }
+
+var (
+	appInitLoggerProvider     = telemetry.InitLoggerProvider
+	appShutdownLoggerProvider = telemetry.ShutdownLoggerProvider
+)
 
 const (
 	providerAnam         = "anam"
@@ -160,8 +168,13 @@ const (
 )
 
 type AppConfig struct {
-	WorkerOptions worker.WorkerOptions
-	Instructions  string
+	WorkerOptions   worker.WorkerOptions
+	Logger          livekitlogger.Logger
+	MetricsRegistry *telemetry.MetricRegistry
+	Instructions    string
+
+	TelemetryLogsEndpoint string
+	TelemetryLogsHeaders  map[string]string
 
 	InitialChatContext                      map[string]any
 	AWSRegion                               string
@@ -456,15 +469,17 @@ type MCPHTTPServerConfig struct {
 }
 
 type App struct {
-	Server        *worker.AgentServer
-	Agent         *agent.Agent
-	Session       *agent.AgentSession
-	RealtimeModel llm.RealtimeModel
-	Evaluator     *evals.JudgeGroup
-	MCPServers    []llm.MCPServer
-	RoomIO        *worker.RoomIO
-	RoomOptions   worker.RoomOptions
-	Config        AppConfig
+	Server          *worker.AgentServer
+	Agent           *agent.Agent
+	Session         *agent.AgentSession
+	RealtimeModel   llm.RealtimeModel
+	Evaluator       *evals.JudgeGroup
+	MCPServers      []llm.MCPServer
+	MetricsRegistry *telemetry.MetricRegistry
+	RoomIO          *worker.RoomIO
+	RoomOptions     worker.RoomOptions
+	Config          AppConfig
+	telemetryLogs   bool
 }
 
 type EvaluationSummary struct {
@@ -479,6 +494,8 @@ type EvaluationSummary struct {
 func DefaultConfigFromEnv() AppConfig {
 	return AppConfig{
 		Instructions:                            getenvDefault("RTP_AGENT_INSTRUCTIONS", "You are a helpful realtime voice agent."),
+		TelemetryLogsEndpoint:                   os.Getenv("RTP_AGENT_OTLP_LOGS_ENDPOINT"),
+		TelemetryLogsHeaders:                    splitEnvStringMap("RTP_AGENT_OTLP_LOGS_HEADERS"),
 		InitialChatContext:                      jsonEnvMap("RTP_AGENT_CHAT_CONTEXT_JSON"),
 		AWSRegion:                               firstEnv("RTP_AGENT_AWS_REGION", "AWS_REGION"),
 		LLMProvider:                             normalizedEnv("RTP_AGENT_LLM_PROVIDER"),
@@ -758,6 +775,14 @@ func Init(cfg AppConfig) (*App, error) {
 }
 
 func NewApp(cfg AppConfig) (*App, error) {
+	if cfg.Logger != nil {
+		logutil.SetLogger(cfg.Logger)
+	}
+	metricsRegistry := cfg.MetricsRegistry
+	if metricsRegistry == nil {
+		metricsRegistry = telemetry.NewMetricRegistry()
+	}
+
 	baseAgent := agent.NewAgent(cfg.Instructions)
 	if baseAgent.Instructions == "" {
 		baseAgent.Instructions = "You are a helpful realtime voice agent."
@@ -830,22 +855,43 @@ func NewApp(cfg AppConfig) (*App, error) {
 	if opts.WorkerType == "" {
 		opts.WorkerType = worker.WorkerTypeRoom
 	}
+	session.MetricsCollector = metricsRegistry.GetUsageCollector(telemetry.MetricLabels{AgentName: opts.AgentName})
 	server := worker.NewAgentServer(opts)
 
 	app := &App{
-		Server:        server,
-		Agent:         sessionAgent.GetAgent(),
-		Session:       session,
-		RealtimeModel: realtimeModel,
-		Evaluator:     evaluator,
-		MCPServers:    mcpServers,
-		Config:        cfg,
+		Server:          server,
+		Agent:           sessionAgent.GetAgent(),
+		Session:         session,
+		RealtimeModel:   realtimeModel,
+		Evaluator:       evaluator,
+		MCPServers:      mcpServers,
+		MetricsRegistry: metricsRegistry,
+		Config:          cfg,
+	}
+	if cfg.TelemetryLogsEndpoint != "" {
+		if err := appInitLoggerProvider(context.Background(), cfg.TelemetryLogsEndpoint, cfg.TelemetryLogsHeaders); err != nil {
+			app.closeMCPServers()
+			return nil, err
+		}
+		app.telemetryLogs = true
 	}
 	if err := server.RTCSession(app.runSession, nil, nil); err != nil {
-		app.closeMCPServers()
+		_ = app.Close(context.Background())
 		return nil, err
 	}
 	return app, nil
+}
+
+func (a *App) Close(ctx context.Context) error {
+	if a == nil {
+		return nil
+	}
+	a.closeMCPServers()
+	if a.telemetryLogs {
+		a.telemetryLogs = false
+		return appShutdownLoggerProvider(ctx)
+	}
+	return nil
 }
 
 func (a *App) EvaluateSession(ctx context.Context, reference *llm.ChatContext) (*EvaluationSummary, error) {
@@ -1064,6 +1110,7 @@ func (a *App) runSession(ctx *worker.JobContext) error {
 		return fmt.Errorf("agent session is not configured")
 	}
 	defer a.closeMCPServers()
+	a.configureMetricsCollector(ctx)
 	a.Server.SetConsoleSession(a.Session)
 	if a.Session.STT == nil && a.Session.LLM == nil && a.Session.TTS == nil && a.RealtimeModel == nil {
 		return nil
@@ -1096,6 +1143,20 @@ func (a *App) runSession(ctx *worker.JobContext) error {
 		}
 	}
 	return a.Session.Start(sessionCtx)
+}
+
+func (a *App) configureMetricsCollector(ctx *worker.JobContext) {
+	if a == nil || a.Session == nil || a.Server == nil || a.MetricsRegistry == nil {
+		return
+	}
+	labels := telemetry.MetricLabels{AgentName: a.Server.Options.AgentName}
+	if ctx != nil && ctx.Job != nil {
+		if room := ctx.Job.GetRoom(); room != nil {
+			labels.RoomName = room.GetName()
+		}
+		labels.ParticipantIdentity = ctx.ParticipantIdentity()
+	}
+	a.Session.MetricsCollector = a.MetricsRegistry.GetUsageCollector(labels)
 }
 
 func (a *App) closeMCPServers() {
@@ -3354,6 +3415,8 @@ func wordTokenizerFromConfig(cfg AppConfig) (tokenize.WordTokenizer, error) {
 		return nil, nil
 	}
 	switch provider {
+	case "basic":
+		return tokenize.NewBasicWordTokenizer(), nil
 	case "blingfire":
 		return blingfire.NewWordTokenizer(cfg.WordTokenizerLanguage), nil
 	default:
@@ -3400,6 +3463,8 @@ func ttsSentenceTokenizer(cfg AppConfig) (tokenize.SentenceTokenizer, error) {
 	}
 
 	switch provider {
+	case "advanced":
+		return tokenize.NewAdvancedSentenceTokenizer(), nil
 	case "blingfire":
 		return blingfire.NewSentenceTokenizer(cfg.TTSTokenizerLanguage, minSentenceLen, streamContextLen), nil
 	case "nltk":

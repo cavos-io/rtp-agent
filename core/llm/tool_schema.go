@@ -3,6 +3,8 @@ package llm
 import (
 	"reflect"
 	"strings"
+
+	"github.com/cavos-io/rtp-agent/library/utils"
 )
 
 // GenerateStrictJSONSchema inspects a Go function or struct to generate
@@ -34,8 +36,8 @@ func GenerateStrictJSONSchema(t reflect.Type) map[string]interface{} {
 			continue
 		}
 
-		// Get JSON tag, default to field name lowercase
-		name := strings.ToLower(field.Name)
+		// Get JSON tag, default to Go field name converted to snake_case.
+		name := utils.CamelToSnakeCase(field.Name)
 		jsonTag := field.Tag.Get("json")
 		jsonParts := []string{""}
 		if jsonTag != "" {

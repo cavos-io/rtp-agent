@@ -22,7 +22,11 @@ import (
 	"github.com/cavos-io/rtp-agent/core/tts"
 	"github.com/cavos-io/rtp-agent/core/vad"
 	"github.com/cavos-io/rtp-agent/interface/worker"
+	logutil "github.com/cavos-io/rtp-agent/library/logger"
 	"github.com/cavos-io/rtp-agent/library/plugin"
+	"github.com/cavos-io/rtp-agent/library/telemetry"
+	"github.com/livekit/protocol/livekit"
+	livekitlogger "github.com/livekit/protocol/logger"
 	lksdk "github.com/livekit/server-sdk-go/v2"
 )
 
@@ -40,6 +44,124 @@ func TestAppRegistersSLNGPluginMetadata(t *testing.T) {
 		return
 	}
 	t.Fatal("SLNG plugin metadata was not registered")
+}
+
+func TestNewAppInstallsConfiguredLogger(t *testing.T) {
+	previous := logutil.Logger
+	t.Cleanup(func() { logutil.Logger = previous })
+
+	recorder := &appRecordingLogger{}
+	app, err := NewApp(AppConfig{Logger: recorder})
+	if err != nil {
+		t.Fatalf("NewApp() error = %v", err)
+	}
+	if app == nil {
+		t.Fatal("NewApp() returned nil app")
+	}
+	if logutil.Logger != recorder {
+		t.Fatal("NewApp() did not install configured logger")
+	}
+}
+
+func TestNewAppUsesConfiguredMetricsRegistry(t *testing.T) {
+	registry := telemetry.NewMetricRegistry()
+	app, err := NewApp(AppConfig{
+		WorkerOptions:   worker.WorkerOptions{AgentName: "metrics-agent"},
+		MetricsRegistry: registry,
+	})
+	if err != nil {
+		t.Fatalf("NewApp() error = %v", err)
+	}
+	want := registry.GetUsageCollector(telemetry.MetricLabels{AgentName: "metrics-agent"})
+	if app.Session.MetricsCollector != want {
+		t.Fatal("Session MetricsCollector was not allocated from configured registry")
+	}
+}
+
+func TestDefaultConfigFromEnvConfiguresTelemetryLogs(t *testing.T) {
+	t.Setenv("RTP_AGENT_OTLP_LOGS_ENDPOINT", "otel.example:4318")
+	t.Setenv("RTP_AGENT_OTLP_LOGS_HEADERS", "Authorization=Bearer token,X-Scope=agent")
+
+	cfg := DefaultConfigFromEnv()
+
+	if cfg.TelemetryLogsEndpoint != "otel.example:4318" {
+		t.Fatalf("TelemetryLogsEndpoint = %q, want otel.example:4318", cfg.TelemetryLogsEndpoint)
+	}
+	if got := cfg.TelemetryLogsHeaders["Authorization"]; got != "Bearer token" {
+		t.Fatalf("TelemetryLogsHeaders[Authorization] = %q, want Bearer token", got)
+	}
+	if got := cfg.TelemetryLogsHeaders["X-Scope"]; got != "agent" {
+		t.Fatalf("TelemetryLogsHeaders[X-Scope] = %q, want agent", got)
+	}
+}
+
+func TestNewAppInitializesAndClosesTelemetryLogs(t *testing.T) {
+	var initializedEndpoint string
+	var initializedHeaders map[string]string
+	var shutdownCalled bool
+	oldInit := appInitLoggerProvider
+	oldShutdown := appShutdownLoggerProvider
+	appInitLoggerProvider = func(ctx context.Context, endpoint string, headers map[string]string) error {
+		initializedEndpoint = endpoint
+		initializedHeaders = headers
+		return nil
+	}
+	appShutdownLoggerProvider = func(ctx context.Context) error {
+		shutdownCalled = true
+		return nil
+	}
+	t.Cleanup(func() {
+		appInitLoggerProvider = oldInit
+		appShutdownLoggerProvider = oldShutdown
+	})
+
+	app, err := NewApp(AppConfig{
+		TelemetryLogsEndpoint: "otel.example:4318",
+		TelemetryLogsHeaders:  map[string]string{"Authorization": "Bearer token"},
+	})
+	if err != nil {
+		t.Fatalf("NewApp() error = %v", err)
+	}
+	if initializedEndpoint != "otel.example:4318" {
+		t.Fatalf("initialized endpoint = %q, want otel.example:4318", initializedEndpoint)
+	}
+	if initializedHeaders["Authorization"] != "Bearer token" {
+		t.Fatalf("initialized headers = %#v, want Authorization header", initializedHeaders)
+	}
+	if err := app.Close(context.Background()); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+	if !shutdownCalled {
+		t.Fatal("Close() did not shut down telemetry log provider")
+	}
+}
+
+func TestRunSessionUsesJobMetricLabels(t *testing.T) {
+	registry := telemetry.NewMetricRegistry()
+	app, err := NewApp(AppConfig{
+		WorkerOptions:   worker.WorkerOptions{AgentName: "metrics-agent"},
+		MetricsRegistry: registry,
+	})
+	if err != nil {
+		t.Fatalf("NewApp() error = %v", err)
+	}
+
+	jobCtx := worker.NewJobContext(&livekit.Job{
+		Id:   "job_metrics",
+		Room: &livekit.Room{Name: "metrics-room"},
+	}, "", "", "")
+	if err := app.runSession(jobCtx); err != nil {
+		t.Fatalf("runSession() error = %v", err)
+	}
+
+	want := registry.GetUsageCollector(telemetry.MetricLabels{
+		AgentName:           "metrics-agent",
+		RoomName:            "metrics-room",
+		ParticipantIdentity: "agent-job_metrics",
+	})
+	if app.Session.MetricsCollector != want {
+		t.Fatal("Session MetricsCollector was not allocated from job metric labels")
+	}
 }
 
 func TestDefaultConfigFromEnvSelectsOpenAIProviders(t *testing.T) {
@@ -2355,6 +2477,7 @@ func TestDefaultConfigFromEnvSelectsLiveKitTTSTokenizer(t *testing.T) {
 		provider     string
 		wantTypeName string
 	}{
+		{name: "advanced", provider: "advanced", wantTypeName: "*tokenize.AdvancedSentenceTokenizer"},
 		{name: "blingfire", provider: "blingfire", wantTypeName: "*blingfire.SentenceTokenizer"},
 		{name: "nltk", provider: "nltk", wantTypeName: "*nltk.SentenceTokenizer"},
 	}
@@ -2388,20 +2511,33 @@ func TestDefaultConfigFromEnvSelectsLiveKitTTSTokenizer(t *testing.T) {
 }
 
 func TestDefaultConfigFromEnvSelectsWordTokenizer(t *testing.T) {
-	t.Setenv("RTP_AGENT_WORD_TOKENIZER_PROVIDER", "blingfire")
+	cases := []struct {
+		name         string
+		provider     string
+		wantTypeName string
+	}{
+		{name: "basic", provider: "basic", wantTypeName: "*tokenize.BasicWordTokenizer"},
+		{name: "blingfire", provider: "blingfire", wantTypeName: "*blingfire.WordTokenizer"},
+	}
 
-	app, err := NewApp(DefaultConfigFromEnv())
-	if err != nil {
-		t.Fatalf("NewApp() error = %v", err)
-	}
-	if app.Session == nil {
-		t.Fatal("Session is nil")
-	}
-	if app.Session.Options.WordTokenizer == nil {
-		t.Fatal("WordTokenizer is nil")
-	}
-	if got := reflect.TypeOf(app.Session.Options.WordTokenizer).String(); got != "*blingfire.WordTokenizer" {
-		t.Fatalf("WordTokenizer type = %q, want *blingfire.WordTokenizer", got)
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("RTP_AGENT_WORD_TOKENIZER_PROVIDER", tc.provider)
+
+			app, err := NewApp(DefaultConfigFromEnv())
+			if err != nil {
+				t.Fatalf("NewApp() error = %v", err)
+			}
+			if app.Session == nil {
+				t.Fatal("Session is nil")
+			}
+			if app.Session.Options.WordTokenizer == nil {
+				t.Fatal("WordTokenizer is nil")
+			}
+			if got := reflect.TypeOf(app.Session.Options.WordTokenizer).String(); got != tc.wantTypeName {
+				t.Fatalf("WordTokenizer type = %q, want %s", got, tc.wantTypeName)
+			}
+		})
 	}
 }
 
@@ -2642,4 +2778,35 @@ type fakeAppDtmfPublisher struct{}
 
 func (f *fakeAppDtmfPublisher) PublishDTMF(code int32, digit string) error {
 	return nil
+}
+
+type appRecordingLogger struct{}
+
+func (l *appRecordingLogger) Debugw(msg string, keysAndValues ...any)            {}
+func (l *appRecordingLogger) Infow(msg string, keysAndValues ...any)             {}
+func (l *appRecordingLogger) Warnw(msg string, err error, keysAndValues ...any)  {}
+func (l *appRecordingLogger) Errorw(msg string, err error, keysAndValues ...any) {}
+func (l *appRecordingLogger) WithValues(keysAndValues ...any) livekitlogger.Logger {
+	return l
+}
+func (l *appRecordingLogger) WithUnlikelyValues(keysAndValues ...any) livekitlogger.UnlikelyLogger {
+	return livekitlogger.GetDiscardLogger().WithUnlikelyValues(keysAndValues...)
+}
+func (l *appRecordingLogger) WithName(name string) livekitlogger.Logger {
+	return l
+}
+func (l *appRecordingLogger) WithComponent(component string) livekitlogger.Logger {
+	return l
+}
+func (l *appRecordingLogger) WithCallDepth(depth int) livekitlogger.Logger {
+	return l
+}
+func (l *appRecordingLogger) WithItemSampler() livekitlogger.Logger {
+	return l
+}
+func (l *appRecordingLogger) WithoutSampler() livekitlogger.Logger {
+	return l
+}
+func (l *appRecordingLogger) WithDeferredValues() (livekitlogger.Logger, livekitlogger.DeferredFieldResolver) {
+	return livekitlogger.GetDiscardLogger().WithDeferredValues()
 }

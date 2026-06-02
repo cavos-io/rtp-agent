@@ -756,11 +756,7 @@ func (s *simpleVADStream) smoothProbability(probability float64) (float64, error
 		return probability, nil
 	}
 	if s.probabilityFilter == nil {
-		filter, err := lkmath.NewExpFilterWithOptions(s.options.ProbabilitySmoothingAlpha, lkmath.ExpFilterOptions{})
-		if err != nil {
-			return 0, err
-		}
-		s.probabilityFilter = filter
+		s.probabilityFilter = lkmath.NewExpFilter(s.options.ProbabilitySmoothingAlpha, -1)
 	}
 	return s.probabilityFilter.Apply(1, probability), nil
 }

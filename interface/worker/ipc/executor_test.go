@@ -417,14 +417,17 @@ func TestProcessJobExecutorPingWritesPingRequest(t *testing.T) {
 	oldPingInterval := processPingInterval
 	oldProcessSignal := processSignal
 	oldNow := processNow
+	oldTimeMS := processTimeMS
 	processPingInterval = time.Millisecond
 	processSignal = func(*os.Process, os.Signal) error { return nil }
 	now := time.UnixMilli(12345)
 	processNow = func() time.Time { return now }
+	processTimeMS = func() int64 { return 67890 }
 	defer func() {
 		processPingInterval = oldPingInterval
 		processSignal = oldProcessSignal
 		processNow = oldNow
+		processTimeMS = oldTimeMS
 	}()
 
 	var output bytes.Buffer
@@ -466,8 +469,8 @@ func TestProcessJobExecutorPingWritesPingRequest(t *testing.T) {
 	if !ok {
 		t.Fatalf("ping payload = %T, want *PingRequest", payload)
 	}
-	if ping.Timestamp != 12345 {
-		t.Fatalf("PingRequest.Timestamp = %d, want 12345", ping.Timestamp)
+	if ping.Timestamp != 67890 {
+		t.Fatalf("PingRequest.Timestamp = %d, want 67890", ping.Timestamp)
 	}
 }
 

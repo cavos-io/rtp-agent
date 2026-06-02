@@ -130,10 +130,12 @@ func (p *ConnectionPool[T]) Prewarm(ctx context.Context) {
 	p.mu.Unlock()
 
 	go func() {
-		conn, err := p.Get(ctx, timeout)
 		p.mu.Lock()
 		defer p.mu.Unlock()
 		p.prewarming = false
+
+		var conn T
+		conn, err := p.connectLocked(ctx, timeout)
 		if err == nil {
 			p.available[conn] = struct{}{}
 		}

@@ -34,6 +34,29 @@ func TestGenerateStrictJSONSchemaRequiresOmitEmptyFieldsAsNullable(t *testing.T)
 	}
 }
 
+func TestGenerateStrictJSONSchemaUsesSnakeCaseForUntaggedFields(t *testing.T) {
+	type request struct {
+		HTTPServerID string
+	}
+
+	schema := GenerateStrictJSONSchema(reflect.TypeOf(request{}))
+
+	props, ok := schema["properties"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("properties = %#v, want map", schema["properties"])
+	}
+	if _, ok := props["http_server_id"]; !ok {
+		t.Fatalf("properties keys = %#v, want http_server_id", props)
+	}
+	required, ok := schema["required"].([]string)
+	if !ok {
+		t.Fatalf("required = %#v, want []string", schema["required"])
+	}
+	if !reflect.DeepEqual(required, []string{"http_server_id"}) {
+		t.Fatalf("required = %#v, want http_server_id", required)
+	}
+}
+
 func TestGenerateStrictJSONSchemaRemovesDefaultsAndMarksFieldNullable(t *testing.T) {
 	type request struct {
 		Limit int `json:"limit" jsonschema:"maximum results" default:"10"`
