@@ -154,6 +154,36 @@ func TestNewAgentServerUsesReferenceWorkerDefaults(t *testing.T) {
 	if server.Options.Port != 8081 {
 		t.Fatalf("Port = %d, want reference production default 8081", server.Options.Port)
 	}
+	if server.Options.LoadFunc == nil {
+		t.Fatal("LoadFunc = nil, want reference default CPU load function")
+	}
+}
+
+func TestDefaultWorkerLoadFunctionUsesMovingAverage(t *testing.T) {
+	oldSampler := defaultWorkerLoadSample
+	oldCalc := defaultWorkerLoadCalc
+	samples := []float64{0.2, 0.4, 0.6}
+	defaultWorkerLoadSample = func() float64 {
+		sample := samples[0]
+		samples = samples[1:]
+		return sample
+	}
+	defaultWorkerLoadCalc = nil
+	t.Cleanup(func() {
+		defaultWorkerLoadSample = oldSampler
+		defaultWorkerLoadCalc = oldCalc
+	})
+
+	server := NewAgentServer(WorkerOptions{})
+	if got := server.currentLoad(); math.Abs(got-0.2) > 1e-9 {
+		t.Fatalf("first load = %v, want first sample 0.2", got)
+	}
+	if got := server.currentLoad(); math.Abs(got-0.3) > 1e-9 {
+		t.Fatalf("second load = %v, want average 0.3", got)
+	}
+	if got := server.currentLoad(); math.Abs(got-0.4) > 1e-9 {
+		t.Fatalf("third load = %v, want average 0.4", got)
+	}
 }
 
 func TestNewAgentServerPreservesExplicitZeroInitializeProcessTimeout(t *testing.T) {

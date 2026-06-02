@@ -15,6 +15,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -75,6 +76,14 @@ var assignmentTimeout = 7500 * time.Millisecond
 var uploadSessionReport = agent.UploadSessionReport
 
 const workerStatusUpdateInterval = 2500 * time.Millisecond
+
+var defaultWorkerLoadMu sync.Mutex
+
+var defaultWorkerLoadCalc *workerLoadCalculator
+
+var defaultSystemCPUSampler = newSystemCPUSampler()
+
+var defaultWorkerLoadSample = defaultSystemCPUSampler.Sample
 
 var workerDialContext = func(ctx context.Context, dialer *websocket.Dialer, url string, headers http.Header) (*websocket.Conn, *http.Response, error) {
 	return dialer.DialContext(ctx, url, headers)
@@ -736,6 +745,9 @@ func resolveWorkerOptions(opts WorkerOptions) WorkerOptions {
 	if opts.NumIdleProcesses == 0 && !opts.DevMode && !opts.NumIdleProcessesSet {
 		opts.NumIdleProcesses = defaultNumIdleProcesses()
 	}
+	if opts.LoadFunc == nil && !opts.DevMode {
+		opts.LoadFunc = defaultWorkerLoadFunc
+	}
 	if opts.Permissions == nil {
 		permissions := resolveWorkerPermissions(nil)
 		opts.Permissions = &permissions
@@ -911,6 +923,102 @@ func defaultNumIdleProcesses() int {
 		return 4
 	}
 	return cpus
+}
+
+type workerLoadCalculator struct {
+	mu      sync.Mutex
+	average *mathutil.MovingAverage
+	sample  func() float64
+}
+
+func newWorkerLoadCalculator(sample func() float64) *workerLoadCalculator {
+	if sample == nil {
+		sample = func() float64 { return 0 }
+	}
+	return &workerLoadCalculator{
+		average: mathutil.NewMovingAverage(5),
+		sample:  sample,
+	}
+}
+
+func (c *workerLoadCalculator) Load() float64 {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	sample := c.sample()
+	if sample < 0 || math.IsNaN(sample) || math.IsInf(sample, 0) {
+		sample = 0
+	}
+	c.average.AddSample(sample)
+	return c.average.GetAvg()
+}
+
+func defaultWorkerLoadFunc(*AgentServer) float64 {
+	defaultWorkerLoadMu.Lock()
+	if defaultWorkerLoadCalc == nil {
+		defaultWorkerLoadCalc = newWorkerLoadCalculator(defaultWorkerLoadSample)
+	}
+	calc := defaultWorkerLoadCalc
+	defaultWorkerLoadMu.Unlock()
+	return calc.Load()
+}
+
+type systemCPUSampler struct {
+	mu    sync.Mutex
+	total uint64
+	idle  uint64
+}
+
+func newSystemCPUSampler() *systemCPUSampler {
+	return &systemCPUSampler{}
+}
+
+func (s *systemCPUSampler) Sample() float64 {
+	idle, total, err := readSystemCPUTimes()
+	if err != nil {
+		return 0
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	prevIdle, prevTotal := s.idle, s.total
+	s.idle, s.total = idle, total
+	if prevTotal == 0 || total <= prevTotal {
+		return 0
+	}
+	totalDelta := total - prevTotal
+	idleDelta := uint64(0)
+	if idle > prevIdle {
+		idleDelta = idle - prevIdle
+	}
+	if idleDelta >= totalDelta {
+		return 0
+	}
+	return float64(totalDelta-idleDelta) / float64(totalDelta)
+}
+
+func readSystemCPUTimes() (idle uint64, total uint64, err error) {
+	data, err := os.ReadFile("/proc/stat")
+	if err != nil {
+		return 0, 0, err
+	}
+	line, _, _ := strings.Cut(string(data), "\n")
+	fields := strings.Fields(line)
+	if len(fields) < 5 || fields[0] != "cpu" {
+		return 0, 0, fmt.Errorf("unexpected /proc/stat cpu line")
+	}
+	for i, field := range fields[1:] {
+		value, err := strconv.ParseUint(field, 10, 64)
+		if err != nil {
+			return 0, 0, err
+		}
+		total += value
+		if i == 3 || i == 4 {
+			idle += value
+		}
+	}
+	return idle, total, nil
 }
 
 func resolveWorkerPermissions(permissions *WorkerPermissions) WorkerPermissions {
