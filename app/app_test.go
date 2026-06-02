@@ -754,6 +754,34 @@ func TestDefaultConfigFromEnvSelectsLMNTTTS(t *testing.T) {
 	}
 }
 
+func TestDefaultConfigFromEnvSelectsNeuphonicTTS(t *testing.T) {
+	t.Setenv("NEUPHONIC_API_KEY", "test-neuphonic-key")
+	t.Setenv("RTP_AGENT_TTS_PROVIDER", "neuphonic")
+	t.Setenv("RTP_AGENT_TTS_BASE_URL", "https://neuphonic.example")
+	t.Setenv("RTP_AGENT_TTS_VOICE", "voice-id")
+	t.Setenv("RTP_AGENT_TTS_LANGUAGE", "en")
+	t.Setenv("RTP_AGENT_TTS_ENCODING", "pcm_linear")
+	t.Setenv("RTP_AGENT_TTS_SAMPLE_RATE", "44100")
+	t.Setenv("RTP_AGENT_TTS_SPEED", "1.1")
+
+	app, err := NewApp(DefaultConfigFromEnv())
+	if err != nil {
+		t.Fatalf("NewApp() error = %v", err)
+	}
+	if app.Session == nil || app.Session.TTS == nil {
+		t.Fatal("Session TTS is nil")
+	}
+	if got := app.Session.TTS.Label(); got != "neuphonic.TTS" {
+		t.Fatalf("TTS label = %q, want neuphonic.TTS", got)
+	}
+	if got := app.Session.TTS.SampleRate(); got != 44100 {
+		t.Fatalf("TTS sample rate = %d, want 44100", got)
+	}
+	if caps := app.Session.TTS.Capabilities(); !caps.Streaming || caps.AlignedTranscript {
+		t.Fatalf("TTS capabilities = %+v, want streaming without aligned transcript", caps)
+	}
+}
+
 func TestDefaultConfigFromEnvSelectsSLNGSpeechProviders(t *testing.T) {
 	t.Setenv("SLNG_API_KEY", "test-slng-key")
 	t.Setenv("RTP_AGENT_STT_PROVIDER", "slng")

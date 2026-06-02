@@ -35,6 +35,7 @@ import (
 	"github.com/cavos-io/rtp-agent/adapter/minimax"
 	"github.com/cavos-io/rtp-agent/adapter/mistralai"
 	"github.com/cavos-io/rtp-agent/adapter/murf"
+	"github.com/cavos-io/rtp-agent/adapter/neuphonic"
 	"github.com/cavos-io/rtp-agent/adapter/openai"
 	"github.com/cavos-io/rtp-agent/adapter/slng"
 	"github.com/cavos-io/rtp-agent/core/agent"
@@ -70,6 +71,7 @@ const (
 	providerMinimax    = "minimax"
 	providerMistralAI  = "mistralai"
 	providerMurf       = "murf"
+	providerNeuphonic  = "neuphonic"
 	providerOpenAI     = "openai"
 	providerSLNG       = "slng"
 	providerLiveKit    = "livekit"
@@ -245,6 +247,7 @@ type AppConfig struct {
 	MinimaxAPIKey     string
 	MistralAPIKey     string
 	MurfAPIKey        string
+	NeuphonicAPIKey   string
 	SLNGAPIKey        string
 
 	GoogleCredentialsFile string
@@ -428,6 +431,7 @@ func DefaultConfigFromEnv() AppConfig {
 		MinimaxAPIKey:                           os.Getenv("MINIMAX_API_KEY"),
 		MistralAPIKey:                           os.Getenv("MISTRAL_API_KEY"),
 		MurfAPIKey:                              os.Getenv("MURF_API_KEY"),
+		NeuphonicAPIKey:                         os.Getenv("NEUPHONIC_API_KEY"),
 		SLNGAPIKey:                              os.Getenv("SLNG_API_KEY"),
 		GoogleCredentialsFile:                   firstEnv("RTP_AGENT_GOOGLE_CREDENTIALS_FILE", "GOOGLE_APPLICATION_CREDENTIALS"),
 	}
@@ -1521,6 +1525,27 @@ func configureProviders(cfg AppConfig, a *agent.Agent) (llm.RealtimeModel, error
 			ttsOpts = append(ttsOpts, lmnt.WithLMNTTTSTopP(*cfg.TTSTopP))
 		}
 		a.TTS = lmnt.NewLMNTTTS(cfg.LMNTAPIKey, "", ttsOpts...)
+	case providerNeuphonic:
+		ttsOpts := []neuphonic.NeuphonicTTSOption{}
+		if cfg.TTSBaseURL != "" {
+			ttsOpts = append(ttsOpts, neuphonic.WithNeuphonicTTSBaseURL(cfg.TTSBaseURL))
+		}
+		if cfg.TTSVoice != "" {
+			ttsOpts = append(ttsOpts, neuphonic.WithNeuphonicTTSVoice(cfg.TTSVoice))
+		}
+		if cfg.TTSLanguage != "" {
+			ttsOpts = append(ttsOpts, neuphonic.WithNeuphonicTTSLangCode(cfg.TTSLanguage))
+		}
+		if cfg.TTSEncoding != "" {
+			ttsOpts = append(ttsOpts, neuphonic.WithNeuphonicTTSEncoding(cfg.TTSEncoding))
+		}
+		if cfg.TTSSampleRate != nil {
+			ttsOpts = append(ttsOpts, neuphonic.WithNeuphonicTTSSampleRate(*cfg.TTSSampleRate))
+		}
+		if cfg.TTSSpeed != 0 {
+			ttsOpts = append(ttsOpts, neuphonic.WithNeuphonicTTSSpeed(cfg.TTSSpeed))
+		}
+		a.TTS = neuphonic.NewNeuphonicTTS(cfg.NeuphonicAPIKey, "", ttsOpts...)
 	case providerSLNG:
 		ttsOpts := []slng.TTSOption{}
 		if cfg.TTSModel != "" {
