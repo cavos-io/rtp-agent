@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/cavos-io/rtp-agent/core/audio"
 	"github.com/cavos-io/rtp-agent/core/audio/model"
 	"github.com/cavos-io/rtp-agent/core/stt"
 	"github.com/cavos-io/rtp-agent/library/logger"
@@ -170,7 +171,7 @@ func (s *inferenceSTTStream) PushFrame(frame *model.AudioFrame) error {
 	if err := s.rateGuard.Check(frame); err != nil {
 		return err
 	}
-	s.audioDuration += float64(frame.SamplesPerChannel) / float64(frame.SampleRate)
+	s.audioDuration += audio.CalculateFrameDuration(frame)
 	s.audioCh <- frame
 	return nil
 }

@@ -415,7 +415,7 @@ func newPrimarySpeakerDetector(detectPrimary bool, suppressBackground bool, prim
 }
 
 func (d *primarySpeakerDetector) pushAudio(frame *model.AudioFrame) {
-	duration := float64(frame.SamplesPerChannel) / float64(frame.SampleRate)
+	duration := audio.CalculateFrameDuration(frame)
 	if !d.detectPrimary {
 		d.pushedDuration += duration
 		return
@@ -431,9 +431,8 @@ func (d *primarySpeakerDetector) pushAudio(frame *model.AudioFrame) {
 	for _, f := range frames {
 		rms := d.computeRms(f)
 		d.rmsBuffer = append(d.rmsBuffer, rms)
-		fduration := float64(f.SamplesPerChannel) / float64(f.SampleRate)
-		d.pushedDuration += fduration
 	}
+	d.pushedDuration += audio.CalculateAudioDuration(frames)
 
 	if d.maxRmsSize > 0 && len(d.rmsBuffer) > d.maxRmsSize {
 		d.rmsBuffer = d.rmsBuffer[len(d.rmsBuffer)-d.maxRmsSize:]
