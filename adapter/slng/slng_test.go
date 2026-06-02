@@ -11,6 +11,18 @@ import (
 	"github.com/cavos-io/rtp-agent/core/tts"
 )
 
+func TestSLNGPluginMetadataMatchesReference(t *testing.T) {
+	if PluginTitle != "livekit.plugins.slng" {
+		t.Fatalf("plugin title = %q, want livekit.plugins.slng", PluginTitle)
+	}
+	if PluginVersion != "1.5.15" {
+		t.Fatalf("plugin version = %q, want reference version", PluginVersion)
+	}
+	if PluginPackage != "livekit.plugins.slng" {
+		t.Fatalf("plugin package = %q, want livekit.plugins.slng", PluginPackage)
+	}
+}
+
 func TestSLNGDefaultEndpointsMatchReference(t *testing.T) {
 	sttProvider := NewSTT("test-key")
 	if sttProvider.endpoint != "wss://api.slng.ai/v1/stt/deepgram/nova:3" {

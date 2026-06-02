@@ -9,6 +9,10 @@ import (
 
 	"github.com/cavos-io/rtp-agent/core/audio/model"
 	"github.com/cavos-io/rtp-agent/core/vad"
+	"github.com/cavos-io/rtp-agent/library/telemetry"
+	"go.opentelemetry.io/otel/attribute"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
+	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 )
 
 func TestStreamAdapterPropagatesVADStartError(t *testing.T) {
@@ -103,6 +107,45 @@ func TestStreamAdapterReturnsEOFWhenVADCompletes(t *testing.T) {
 	_, err = stream.Next()
 	if !errors.Is(err, io.EOF) {
 		t.Fatalf("Next error = %v, want io.EOF", err)
+	}
+}
+
+func TestStreamAdapterRecordsSTTStreamSpan(t *testing.T) {
+	recorder := tracetest.NewSpanRecorder()
+	provider := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(recorder))
+	oldTracer := telemetry.Tracer
+	telemetry.Tracer = provider.Tracer("test")
+	t.Cleanup(func() {
+		telemetry.Tracer = oldTracer
+		_ = provider.Shutdown(context.Background())
+	})
+
+	stream, err := NewStreamAdapter(
+		&fakeStreamAdapterSTT{model: "speech-model", provider: "speech-provider"},
+		&fakeStreamAdapterVAD{stream: &fakeStreamAdapterVADStream{nextErr: io.EOF}},
+	).Stream(context.Background(), "en")
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+
+	_, err = stream.Next()
+	if !errors.Is(err, io.EOF) {
+		t.Fatalf("Next error = %v, want EOF", err)
+	}
+
+	spans := recorder.Ended()
+	if len(spans) != 1 {
+		t.Fatalf("ended spans = %d, want 1", len(spans))
+	}
+	if spans[0].Name() != "stt_stream" {
+		t.Fatalf("span name = %q, want stt_stream", spans[0].Name())
+	}
+	attrs := streamAdapterSpanAttributes(spans[0].Attributes())
+	if attrs[telemetry.AttrGenAIRequestModel] != "speech-model" {
+		t.Fatalf("span model attr = %q, want speech-model", attrs[telemetry.AttrGenAIRequestModel])
+	}
+	if attrs[telemetry.AttrGenAIProviderName] != "speech-provider" {
+		t.Fatalf("span provider attr = %q, want speech-provider", attrs[telemetry.AttrGenAIProviderName])
 	}
 }
 
@@ -525,16 +568,34 @@ func TestStreamAdapterDoesNotReadNextVADEventBeforeFinalTranscript(t *testing.T)
 	}
 }
 
+func streamAdapterSpanAttributes(attrs []attribute.KeyValue) map[string]string {
+	values := make(map[string]string, len(attrs))
+	for _, attr := range attrs {
+		values[string(attr.Key)] = attr.Value.AsString()
+	}
+	return values
+}
+
 type fakeStreamAdapterSTT struct {
 	recognizeErr     error
 	recognizeResult  *SpeechEvent
 	recognizeStarted chan struct{}
 	releaseRecognize chan struct{}
 	recognizeFrames  []*model.AudioFrame
+	model            string
+	provider         string
 }
 
 func (f *fakeStreamAdapterSTT) Label() string {
 	return "fake-stt"
+}
+
+func (f *fakeStreamAdapterSTT) Model() string {
+	return f.model
+}
+
+func (f *fakeStreamAdapterSTT) Provider() string {
+	return f.provider
 }
 
 func (f *fakeStreamAdapterSTT) Capabilities() STTCapabilities {

@@ -11,6 +11,9 @@ import (
 
 	"github.com/cavos-io/rtp-agent/core/audio/model"
 	"github.com/cavos-io/rtp-agent/library/telemetry"
+	"go.opentelemetry.io/otel/attribute"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
+	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 )
 
 func TestSynthesizeWithStreamPushesTextAndFlushes(t *testing.T) {
@@ -81,6 +84,47 @@ func TestSynthesizeWithStreamIgnoresEmptyTextWhenEndingInput(t *testing.T) {
 	wantCalls := []string{"end_input"}
 	if !reflect.DeepEqual(stream.calls, wantCalls) {
 		t.Fatalf("stream calls = %#v, want %#v", stream.calls, wantCalls)
+	}
+}
+
+func TestSynthesizeWithStreamRecordsTTSStreamSpan(t *testing.T) {
+	recorder := tracetest.NewSpanRecorder()
+	provider := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(recorder))
+	oldTracer := telemetry.Tracer
+	telemetry.Tracer = provider.Tracer("test")
+	t.Cleanup(func() {
+		telemetry.Tracer = oldTracer
+		_ = provider.Shutdown(context.Background())
+	})
+
+	ttsProvider := &fakeStreamingTTS{
+		model:    "voice-model",
+		provider: "voice-provider",
+		stream:   &fakeSynthesizeStream{emptyErr: io.EOF},
+	}
+
+	chunked, err := SynthesizeWithStream(context.Background(), ttsProvider, "")
+	if err != nil {
+		t.Fatalf("SynthesizeWithStream() error = %v, want nil", err)
+	}
+	_, err = chunked.Next()
+	if !errors.Is(err, io.EOF) {
+		t.Fatalf("Next() error = %v, want EOF", err)
+	}
+
+	spans := recorder.Ended()
+	if len(spans) != 1 {
+		t.Fatalf("ended spans = %d, want 1", len(spans))
+	}
+	if spans[0].Name() != "tts_stream" {
+		t.Fatalf("span name = %q, want tts_stream", spans[0].Name())
+	}
+	attrs := spanAttributes(spans[0].Attributes())
+	if attrs[telemetry.AttrGenAIRequestModel] != "voice-model" {
+		t.Fatalf("span model attr = %q, want voice-model", attrs[telemetry.AttrGenAIRequestModel])
+	}
+	if attrs[telemetry.AttrGenAIProviderName] != "voice-provider" {
+		t.Fatalf("span provider attr = %q, want voice-provider", attrs[telemetry.AttrGenAIProviderName])
 	}
 }
 
@@ -671,16 +715,28 @@ func TestSynthesizeWithStreamReportsDoneAfterFinalTail(t *testing.T) {
 	}
 }
 
+func spanAttributes(attrs []attribute.KeyValue) map[string]string {
+	values := make(map[string]string, len(attrs))
+	for _, attr := range attrs {
+		values[string(attr.Key)] = attr.Value.AsString()
+	}
+	return values
+}
+
 type fakeStreamingTTS struct {
 	ErrorEmitter
 	MetricsEmitter
-	stream *fakeSynthesizeStream
+	stream   *fakeSynthesizeStream
+	model    string
+	provider string
 }
 
 func (f *fakeStreamingTTS) Label() string                 { return "fake" }
 func (f *fakeStreamingTTS) Capabilities() TTSCapabilities { return TTSCapabilities{Streaming: true} }
 func (f *fakeStreamingTTS) SampleRate() int               { return 24000 }
 func (f *fakeStreamingTTS) NumChannels() int              { return 1 }
+func (f *fakeStreamingTTS) Model() string                 { return f.model }
+func (f *fakeStreamingTTS) Provider() string              { return f.provider }
 func (f *fakeStreamingTTS) Synthesize(context.Context, string) (ChunkedStream, error) {
 	return nil, nil
 }

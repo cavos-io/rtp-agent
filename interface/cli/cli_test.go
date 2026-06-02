@@ -3,6 +3,7 @@ package cli
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"net"
@@ -15,6 +16,7 @@ import (
 	"github.com/cavos-io/rtp-agent/core/agent"
 	"github.com/cavos-io/rtp-agent/interface/worker"
 	"github.com/cavos-io/rtp-agent/interface/worker/ipc"
+	"github.com/cavos-io/rtp-agent/library/plugin"
 	"github.com/livekit/protocol/livekit"
 )
 
@@ -38,6 +40,18 @@ type fakeLiveKitRoomService struct {
 	listNames    []string
 	listRooms    []*livekit.Room
 	createdRooms []string
+}
+
+type fakeProcessJobRunner struct {
+	calls int
+	info  ipc.RunningJobInfo
+	err   error
+}
+
+func (r *fakeProcessJobRunner) ExecuteRunningJob(_ context.Context, info ipc.RunningJobInfo) error {
+	r.calls++
+	r.info = info
+	return r.err
 }
 
 func (s *fakeLiveKitRoomService) ListRooms(_ context.Context, req *livekit.ListRoomsRequest) (*livekit.ListRoomsResponse, error) {
@@ -448,7 +462,7 @@ func TestRunEvalRequiresConfiguredRunner(t *testing.T) {
 
 func TestRunDownloadFilesForPluginsReturnsPluginError(t *testing.T) {
 	errBoom := errors.New("download failed")
-	plugins := []agent.Plugin{
+	plugins := []plugin.Plugin{
 		&fakePlugin{title: "ok", packageName: "plugin-ok"},
 		&fakePlugin{title: "bad", packageName: "plugin-bad", err: errBoom},
 	}
@@ -663,6 +677,59 @@ func TestRunWorkerLifecycleTreatsDrainTimeoutAsWarning(t *testing.T) {
 	}
 	if runner.drainCalls != 1 {
 		t.Fatalf("drainCalls = %d, want 1", runner.drainCalls)
+	}
+}
+
+func TestRunProcessJobFromEnvExecutesEnvRunningJob(t *testing.T) {
+	info := ipc.RunningJobInfo{
+		AcceptArguments: ipc.JobAcceptArguments{Identity: "agent-process"},
+		Job:             &livekit.Job{Id: "job-process", Room: &livekit.Room{Name: "room-a"}},
+		URL:             "wss://livekit.example",
+		Token:           "room-token",
+		WorkerID:        "worker-a",
+		FakeJob:         true,
+	}
+	data, err := json.Marshal(info)
+	if err != nil {
+		t.Fatalf("Marshal RunningJobInfo: %v", err)
+	}
+	runner := &fakeProcessJobRunner{}
+
+	handled, err := runProcessJobFromEnv(context.Background(), runner, map[string]string{
+		"LIVEKIT_AGENT_RUNNING_JOB_JSON": string(data),
+	})
+	if err != nil {
+		t.Fatalf("runProcessJobFromEnv() error = %v", err)
+	}
+	if !handled {
+		t.Fatal("runProcessJobFromEnv() handled = false, want true")
+	}
+	if runner.calls != 1 {
+		t.Fatalf("ExecuteRunningJob calls = %d, want 1", runner.calls)
+	}
+	if runner.info.Job.GetId() != "job-process" {
+		t.Fatalf("running job id = %q, want job-process", runner.info.Job.GetId())
+	}
+	if runner.info.AcceptArguments.Identity != "agent-process" {
+		t.Fatalf("identity = %q, want agent-process", runner.info.AcceptArguments.Identity)
+	}
+	if runner.info.URL != "wss://livekit.example" || runner.info.Token != "room-token" || runner.info.WorkerID != "worker-a" || !runner.info.FakeJob {
+		t.Fatalf("running job info = %#v, want preserved assignment", runner.info)
+	}
+}
+
+func TestRunProcessJobFromEnvSkipsWhenNoProcessJobEnv(t *testing.T) {
+	runner := &fakeProcessJobRunner{}
+
+	handled, err := runProcessJobFromEnv(context.Background(), runner, map[string]string{})
+	if err != nil {
+		t.Fatalf("runProcessJobFromEnv() error = %v", err)
+	}
+	if handled {
+		t.Fatal("runProcessJobFromEnv() handled = true, want false")
+	}
+	if runner.calls != 0 {
+		t.Fatalf("ExecuteRunningJob calls = %d, want 0", runner.calls)
 	}
 }
 

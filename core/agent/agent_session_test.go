@@ -11,8 +11,10 @@ import (
 	"github.com/cavos-io/rtp-agent/core/llm"
 	"github.com/cavos-io/rtp-agent/core/stt"
 	"github.com/cavos-io/rtp-agent/core/tts"
+	logutil "github.com/cavos-io/rtp-agent/library/logger"
 	"github.com/cavos-io/rtp-agent/library/telemetry"
 	"github.com/cavos-io/rtp-agent/library/utils/images"
+	livekitlogger "github.com/livekit/protocol/logger"
 )
 
 func TestAgentSessionGenerateReplyReturnsScheduledSpeechHandle(t *testing.T) {
@@ -1664,6 +1666,10 @@ func receiveAgentStateChangedEvent(t *testing.T, session *AgentSession) AgentSta
 func TestAgentSessionEmitMetricsCollectedCollectsUsageAndEmitsEvent(t *testing.T) {
 	agent := NewAgent("test")
 	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	recorder := &recordingLogger{}
+	oldLogger := logutil.Logger
+	logutil.SetLogger(recorder)
+	t.Cleanup(func() { logutil.SetLogger(oldLogger) })
 	metrics := &telemetry.LLMMetrics{
 		PromptTokens:     7,
 		CompletionTokens: 11,
@@ -1703,6 +1709,12 @@ func TestAgentSessionEmitMetricsCollectedCollectsUsageAndEmitsEvent(t *testing.T
 	case <-time.After(time.Second):
 		t.Fatal("SessionUsageUpdatedEvents did not receive event")
 	}
+	if !recorder.hasInfo("LLM metrics") {
+		t.Fatalf("logged info messages = %#v, want LLM metrics log", recorder.infoMessages)
+	}
+	if got := recorder.infoValue("LLM metrics", "type"); got != "llm_metrics" {
+		t.Fatalf("logged LLM metrics type = %#v, want llm_metrics", got)
+	}
 }
 
 func TestAgentSessionUsageReturnsCollectedSummary(t *testing.T) {
@@ -1718,6 +1730,70 @@ func TestAgentSessionUsageReturnsCollectedSummary(t *testing.T) {
 	if usage.LLMPromptTokens != 3 || usage.LLMCompletionTokens != 5 {
 		t.Fatalf("Usage = %#v, want prompt=3 completion=5", usage)
 	}
+}
+
+type recordingLogger struct {
+	infoMessages []string
+	infoFields   map[string]map[string]any
+}
+
+func (l *recordingLogger) Debugw(msg string, keysAndValues ...any) {}
+func (l *recordingLogger) Infow(msg string, keysAndValues ...any) {
+	l.infoMessages = append(l.infoMessages, msg)
+	if l.infoFields == nil {
+		l.infoFields = make(map[string]map[string]any)
+	}
+	fields := make(map[string]any)
+	for i := 0; i+1 < len(keysAndValues); i += 2 {
+		key, ok := keysAndValues[i].(string)
+		if !ok {
+			continue
+		}
+		fields[key] = keysAndValues[i+1]
+	}
+	l.infoFields[msg] = fields
+}
+func (l *recordingLogger) Warnw(msg string, err error, keysAndValues ...any)  {}
+func (l *recordingLogger) Errorw(msg string, err error, keysAndValues ...any) {}
+func (l *recordingLogger) WithValues(keysAndValues ...any) livekitlogger.Logger {
+	return l
+}
+func (l *recordingLogger) WithUnlikelyValues(keysAndValues ...any) livekitlogger.UnlikelyLogger {
+	return livekitlogger.GetDiscardLogger().WithUnlikelyValues(keysAndValues...)
+}
+func (l *recordingLogger) WithName(name string) livekitlogger.Logger {
+	return l
+}
+func (l *recordingLogger) WithComponent(component string) livekitlogger.Logger {
+	return l
+}
+func (l *recordingLogger) WithCallDepth(depth int) livekitlogger.Logger {
+	return l
+}
+func (l *recordingLogger) WithItemSampler() livekitlogger.Logger {
+	return l
+}
+func (l *recordingLogger) WithoutSampler() livekitlogger.Logger {
+	return l
+}
+func (l *recordingLogger) WithDeferredValues() (livekitlogger.Logger, livekitlogger.DeferredFieldResolver) {
+	return livekitlogger.GetDiscardLogger().WithDeferredValues()
+}
+
+func (l *recordingLogger) hasInfo(msg string) bool {
+	for _, logged := range l.infoMessages {
+		if logged == msg {
+			return true
+		}
+	}
+	return false
+}
+
+func (l *recordingLogger) infoValue(msg, key string) any {
+	if l.infoFields == nil {
+		return nil
+	}
+	return l.infoFields[msg][key]
 }
 
 type fakeAvatarProvider struct {

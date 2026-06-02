@@ -410,7 +410,7 @@ func resolveToolsByID(tools []llm.Tool, ids []string) ([]llm.Tool, error) {
 	for _, tool := range tools {
 		toolItems = append(toolItems, tool)
 	}
-	toolCtx := &llm.ToolContext{}
+	toolCtx := llm.EmptyToolContext()
 	if err := toolCtx.UpdateTools(toolItems); err != nil {
 		return nil, err
 	}

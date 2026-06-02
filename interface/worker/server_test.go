@@ -154,6 +154,36 @@ func TestNewAgentServerUsesReferenceWorkerDefaults(t *testing.T) {
 	if server.Options.Port != 8081 {
 		t.Fatalf("Port = %d, want reference production default 8081", server.Options.Port)
 	}
+	if server.Options.LoadFunc == nil {
+		t.Fatal("LoadFunc = nil, want reference default CPU load function")
+	}
+}
+
+func TestDefaultWorkerLoadFunctionUsesMovingAverage(t *testing.T) {
+	oldSampler := defaultWorkerLoadSample
+	oldCalc := defaultWorkerLoadCalc
+	samples := []float64{0.2, 0.4, 0.6}
+	defaultWorkerLoadSample = func() float64 {
+		sample := samples[0]
+		samples = samples[1:]
+		return sample
+	}
+	defaultWorkerLoadCalc = nil
+	t.Cleanup(func() {
+		defaultWorkerLoadSample = oldSampler
+		defaultWorkerLoadCalc = oldCalc
+	})
+
+	server := NewAgentServer(WorkerOptions{})
+	if got := server.currentLoad(); math.Abs(got-0.2) > 1e-9 {
+		t.Fatalf("first load = %v, want first sample 0.2", got)
+	}
+	if got := server.currentLoad(); math.Abs(got-0.3) > 1e-9 {
+		t.Fatalf("second load = %v, want average 0.3", got)
+	}
+	if got := server.currentLoad(); math.Abs(got-0.4) > 1e-9 {
+		t.Fatalf("third load = %v, want average 0.4", got)
+	}
 }
 
 func TestNewAgentServerPreservesExplicitZeroInitializeProcessTimeout(t *testing.T) {
@@ -1350,6 +1380,64 @@ func TestAgentServerReloadRunningJobsPreservesRecordingOptions(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("reloaded job entrypoint was not invoked")
+	}
+}
+
+func TestAgentServerExecuteRunningJobUsesProvidedAssignment(t *testing.T) {
+	server := NewAgentServer(WorkerOptions{APIKey: "api-key", APISecret: "api-secret"})
+	startedCh := make(chan *JobContext, 1)
+	server.entrypointFnc = func(ctx *JobContext) error {
+		startedCh <- ctx
+		return nil
+	}
+
+	info := ipc.RunningJobInfo{
+		AcceptArguments: ipc.JobAcceptArguments{
+			Name:       "support",
+			Identity:   "agent-job-process",
+			Metadata:   `{"tier":"gold"}`,
+			Attributes: map[string]string{"tier": "gold"},
+		},
+		Job:      &livekit.Job{Id: "job-process", Room: &livekit.Room{Name: "room-process"}},
+		URL:      "wss://process.example",
+		Token:    "room-token",
+		WorkerID: "worker-process",
+		FakeJob:  true,
+	}
+
+	if err := server.ExecuteRunningJob(context.Background(), info); err != nil {
+		t.Fatalf("ExecuteRunningJob() error = %v", err)
+	}
+
+	var jobCtx *JobContext
+	select {
+	case jobCtx = <-startedCh:
+	case <-time.After(time.Second):
+		t.Fatal("running job entrypoint was not invoked")
+	}
+	if jobCtx.Job != info.Job {
+		t.Fatal("running job did not preserve Job pointer")
+	}
+	if jobCtx.AcceptArguments.Identity != "agent-job-process" {
+		t.Fatalf("identity = %q, want agent-job-process", jobCtx.AcceptArguments.Identity)
+	}
+	if jobCtx.AcceptArguments.Attributes["tier"] != "gold" {
+		t.Fatalf("tier = %q, want gold", jobCtx.AcceptArguments.Attributes["tier"])
+	}
+	if jobCtx.WorkerID != "worker-process" {
+		t.Fatalf("WorkerID = %q, want worker-process", jobCtx.WorkerID)
+	}
+	if jobCtx.url != "wss://process.example" {
+		t.Fatalf("url = %q, want process URL", jobCtx.url)
+	}
+	if jobCtx.token != "room-token" {
+		t.Fatalf("token = %q, want room-token", jobCtx.token)
+	}
+	if !jobCtx.fakeJob {
+		t.Fatal("fakeJob = false, want true")
+	}
+	if got := server.ActiveRunningJobs(); len(got) != 0 {
+		t.Fatalf("ActiveRunningJobs() len after completion = %d, want 0", len(got))
 	}
 }
 
