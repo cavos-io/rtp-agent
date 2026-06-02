@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -85,14 +86,23 @@ func WithBasetenTTSBufferSize(bufferSize int) BasetenTTSOption {
 	}
 }
 
-func NewBasetenTTS(apiKey string, model string, opts ...BasetenTTSOption) *BasetenTTS {
-	endpoint := model
-	if endpoint == "" {
-		endpoint = "xtts-v2"
+func NewBasetenTTS(apiKey string, model string, opts ...BasetenTTSOption) (*BasetenTTS, error) {
+	if apiKey == "" {
+		apiKey = os.Getenv(basetenAPIKeyEnv)
 	}
-	if !strings.HasPrefix(endpoint, "http://") && !strings.HasPrefix(endpoint, "https://") &&
-		!strings.HasPrefix(endpoint, "ws://") && !strings.HasPrefix(endpoint, "wss://") {
-		endpoint = fmt.Sprintf("https://model-%s.api.baseten.co/environments/production/predict", endpoint)
+	if apiKey == "" {
+		return nil, fmt.Errorf("BASETEN_API_KEY is required, either as argument or set BASETEN_API_KEY environment variable")
+	}
+
+	endpoint := ""
+	if model != "" {
+		endpoint = model
+		if !strings.HasPrefix(endpoint, "http://") && !strings.HasPrefix(endpoint, "https://") &&
+			!strings.HasPrefix(endpoint, "ws://") && !strings.HasPrefix(endpoint, "wss://") {
+			endpoint = fmt.Sprintf("https://model-%s.api.baseten.co/environments/production/predict", endpoint)
+		}
+	} else if envEndpoint := os.Getenv(basetenModelEndpointEnv); envEndpoint != "" {
+		endpoint = envEndpoint
 	}
 	provider := &BasetenTTS{
 		apiKey:        apiKey,
@@ -107,10 +117,17 @@ func NewBasetenTTS(apiKey string, model string, opts ...BasetenTTSOption) *Baset
 	for _, opt := range opts {
 		opt(provider)
 	}
-	return provider
+	if provider.modelEndpoint == "" {
+		return nil, fmt.Errorf("BASETEN_MODEL_ENDPOINT is required, provide model_endpoint or set BASETEN_MODEL_ENDPOINT environment variable")
+	}
+	return provider, nil
 }
 
 func (t *BasetenTTS) Label() string { return "baseten.TTS" }
+func (t *BasetenTTS) Model() string { return "unknown" }
+func (t *BasetenTTS) Provider() string {
+	return "Baseten"
+}
 func (t *BasetenTTS) Capabilities() tts.TTSCapabilities {
 	return tts.TTSCapabilities{Streaming: strings.HasPrefix(t.modelEndpoint, "ws://") || strings.HasPrefix(t.modelEndpoint, "wss://"), AlignedTranscript: false}
 }
@@ -214,23 +231,23 @@ type basetenTTSChunkedStream struct {
 func (s *basetenTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 	buf := make([]byte, 4096)
 	n, err := s.body.Read(buf)
+	if n > 0 {
+		return &tts.SynthesizedAudio{
+			Frame: &model.AudioFrame{
+				Data:              buf[:n],
+				SampleRate:        uint32(s.sampleRate),
+				NumChannels:       1,
+				SamplesPerChannel: uint32(n / 2),
+			},
+		}, nil
+	}
 	if err != nil {
 		if err == io.EOF {
 			return nil, io.EOF
 		}
 		return nil, err
 	}
-	if n == 0 {
-		return nil, io.EOF
-	}
-	return &tts.SynthesizedAudio{
-		Frame: &model.AudioFrame{
-			Data:              buf[:n],
-			SampleRate:        uint32(s.sampleRate),
-			NumChannels:       1,
-			SamplesPerChannel: uint32(n / 2),
-		},
-	}, nil
+	return nil, io.EOF
 }
 
 func (s *basetenTTSChunkedStream) Close() error {

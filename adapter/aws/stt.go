@@ -14,7 +14,7 @@ import (
 )
 
 type AWSSTT struct {
-	client                            *transcribestreaming.Client
+	client                            awsSTTClient
 	sampleRate                        int32
 	encoding                          types.MediaEncoding
 	language                          types.LanguageCode
@@ -38,6 +38,29 @@ type AWSSTT struct {
 
 type AWSSTTOption func(*AWSSTT)
 
+type awsSTTClient interface {
+	StartStreamTranscription(ctx context.Context, input *transcribestreaming.StartStreamTranscriptionInput) (awsSTTEventStream, error)
+}
+
+type awsSTTSDKClient struct {
+	client *transcribestreaming.Client
+}
+
+func (c awsSTTSDKClient) StartStreamTranscription(ctx context.Context, input *transcribestreaming.StartStreamTranscriptionInput) (awsSTTEventStream, error) {
+	out, err := c.client.StartStreamTranscription(ctx, input)
+	if err != nil {
+		return nil, err
+	}
+	return out.GetStream(), nil
+}
+
+type awsSTTEventStream interface {
+	Send(context.Context, types.AudioStream) error
+	Events() <-chan types.TranscriptResultStream
+	Close() error
+	Err() error
+}
+
 func WithAWSSTTSampleRate(sampleRate int32) AWSSTTOption {
 	return func(s *AWSSTT) {
 		if sampleRate > 0 {
@@ -52,9 +75,41 @@ func WithAWSSTTVocabularyName(name string) AWSSTTOption {
 	}
 }
 
+func WithAWSSTTSessionID(sessionID string) AWSSTTOption {
+	return func(s *AWSSTT) {
+		s.sessionID = sessionID
+	}
+}
+
+func WithAWSSTTVocabularyFilterMethod(method types.VocabularyFilterMethod) AWSSTTOption {
+	return func(s *AWSSTT) {
+		s.vocabularyFilterMethod = method
+	}
+}
+
+func WithAWSSTTVocabularyFilterName(name string) AWSSTTOption {
+	return func(s *AWSSTT) {
+		s.vocabularyFilterName = name
+	}
+}
+
 func WithAWSSTTShowSpeakerLabel(show bool) AWSSTTOption {
 	return func(s *AWSSTT) {
 		s.showSpeakerLabel = show
+	}
+}
+
+func WithAWSSTTEnableChannelIdentification(enable bool) AWSSTTOption {
+	return func(s *AWSSTT) {
+		s.enableChannelIdentification = enable
+	}
+}
+
+func WithAWSSTTNumberOfChannels(channels int32) AWSSTTOption {
+	return func(s *AWSSTT) {
+		if channels > 0 {
+			s.numberOfChannels = channels
+		}
 	}
 }
 
@@ -79,9 +134,12 @@ func WithAWSSTTLanguageModelName(name string) AWSSTTOption {
 func WithAWSSTTIdentifyLanguage(identify bool) AWSSTTOption {
 	return func(s *AWSSTT) {
 		s.identifyLanguage = identify
-		if identify {
-			s.identifyMultipleLanguages = false
-		}
+	}
+}
+
+func WithAWSSTTIdentifyMultipleLanguages(identify bool) AWSSTTOption {
+	return func(s *AWSSTT) {
+		s.identifyMultipleLanguages = identify
 	}
 }
 
@@ -97,7 +155,23 @@ func WithAWSSTTPreferredLanguage(language types.LanguageCode) AWSSTTOption {
 	}
 }
 
+func WithAWSSTTVocabularyNames(names string) AWSSTTOption {
+	return func(s *AWSSTT) {
+		s.vocabularyNames = names
+	}
+}
+
+func WithAWSSTTVocabularyFilterNames(names string) AWSSTTOption {
+	return func(s *AWSSTT) {
+		s.vocabularyFilterNames = names
+	}
+}
+
 func NewAWSSTT(ctx context.Context, region string, providerOpts ...AWSSTTOption) (*AWSSTT, error) {
+	if _, err := newAWSSTTWithClient(nil, providerOpts...); err != nil {
+		return nil, err
+	}
+
 	opts := []func(*config.LoadOptions) error{}
 	if region != "" {
 		opts = append(opts, config.WithRegion(region))
@@ -108,10 +182,10 @@ func NewAWSSTT(ctx context.Context, region string, providerOpts ...AWSSTTOption)
 		return nil, err
 	}
 
-	return newAWSSTTWithClient(transcribestreaming.NewFromConfig(cfg), providerOpts...), nil
+	return newAWSSTTWithClient(awsSTTSDKClient{client: transcribestreaming.NewFromConfig(cfg)}, providerOpts...)
 }
 
-func newAWSSTTWithClient(client *transcribestreaming.Client, opts ...AWSSTTOption) *AWSSTT {
+func newAWSSTTWithClient(client awsSTTClient, opts ...AWSSTTOption) (*AWSSTT, error) {
 	provider := &AWSSTT{
 		client:     client,
 		sampleRate: 24000,
@@ -121,7 +195,10 @@ func newAWSSTTWithClient(client *transcribestreaming.Client, opts ...AWSSTTOptio
 	for _, opt := range opts {
 		opt(provider)
 	}
-	return provider
+	if provider.identifyLanguage && provider.identifyMultipleLanguages {
+		return nil, fmt.Errorf("identify_language and identify_multiple_languages are mutually exclusive. Set only one to true")
+	}
+	return provider, nil
 }
 
 func (s *AWSSTT) Label() string { return "aws.STT" }
@@ -133,13 +210,13 @@ func (s *AWSSTT) Stream(ctx context.Context, language string) (stt.RecognizeStre
 	if language == "" {
 		language = "en-US"
 	}
-	out, err := s.client.StartStreamTranscription(ctx, buildAWSStartStreamTranscriptionInput(s, language))
+	stream, err := s.client.StartStreamTranscription(ctx, buildAWSStartStreamTranscriptionInput(s, language))
 	if err != nil {
 		return nil, err
 	}
 
 	gs := &awsSTTStream{
-		stream: out.GetStream(),
+		stream: stream,
 		events: make(chan *stt.SpeechEvent, 10),
 		errCh:  make(chan error, 1),
 	}
@@ -210,7 +287,7 @@ func (s *AWSSTT) Recognize(ctx context.Context, frames []*model.AudioFrame, lang
 }
 
 type awsSTTStream struct {
-	stream *transcribestreaming.StartStreamTranscriptionEventStream
+	stream awsSTTEventStream
 	events chan *stt.SpeechEvent
 	errCh  chan error
 	closed bool
