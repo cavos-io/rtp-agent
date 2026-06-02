@@ -165,6 +165,7 @@ type AppConfig struct {
 	LLMExtraBody                            map[string]any
 	LLMFallbackProviders                    []string
 	STTProvider                             string
+	STTFallbackProviders                    []string
 	STTModel                                string
 	STTLanguage                             string
 	STTEncoding                             string
@@ -459,6 +460,7 @@ func DefaultConfigFromEnv() AppConfig {
 		LLMExtraBody:                            splitEnvMap("RTP_AGENT_LLM_JSON_CONFIG"),
 		LLMFallbackProviders:                    splitEnvList("RTP_AGENT_LLM_FALLBACK_PROVIDERS"),
 		STTProvider:                             normalizedEnv("RTP_AGENT_STT_PROVIDER"),
+		STTFallbackProviders:                    splitEnvList("RTP_AGENT_STT_FALLBACK_PROVIDERS"),
 		STTModel:                                os.Getenv("RTP_AGENT_STT_MODEL"),
 		STTLanguage:                             os.Getenv("RTP_AGENT_STT_LANGUAGE"),
 		STTEncoding:                             os.Getenv("RTP_AGENT_STT_ENCODING"),
@@ -728,6 +730,9 @@ func NewApp(cfg AppConfig) (*App, error) {
 		baseAgent.Instructions = "You are a helpful realtime voice agent."
 	}
 
+	if err := configureVAD(cfg, baseAgent); err != nil {
+		return nil, err
+	}
 	realtimeModel, err := configureProviders(cfg, baseAgent)
 	if err != nil {
 		return nil, err
@@ -745,9 +750,6 @@ func NewApp(cfg AppConfig) (*App, error) {
 		baseAgent.Tools = append(baseAgent.Tools, anthropicProviderTools(cfg)...)
 	}
 	if err := configureAvatar(cfg, baseAgent); err != nil {
-		return nil, err
-	}
-	if err := configureVAD(cfg, baseAgent); err != nil {
 		return nil, err
 	}
 	sessionAgent, err := workflowAgentFromConfig(cfg, baseAgent)
@@ -1204,6 +1206,116 @@ func fallbackLLMFromProvider(cfg AppConfig, provider string) (llm.LLM, error) {
 		return openai.NewLiveKitInferenceLLM(cfg.LLMModel, cfg.LiveKitInferenceAPIKey, cfg.LiveKitInferenceAPISecret)
 	default:
 		return nil, fmt.Errorf("unsupported RTP_AGENT_LLM_FALLBACK_PROVIDERS entry %q", provider)
+	}
+}
+
+func configureSTTFallbacks(cfg AppConfig, a *agent.Agent) error {
+	if len(cfg.STTFallbackProviders) == 0 {
+		return nil
+	}
+	if a.STT == nil {
+		return fmt.Errorf("RTP_AGENT_STT_FALLBACK_PROVIDERS requires RTP_AGENT_STT_PROVIDER")
+	}
+	stts := make([]corestt.STT, 0, len(cfg.STTFallbackProviders)+1)
+	stts = append(stts, a.STT)
+	for _, provider := range cfg.STTFallbackProviders {
+		fallback, err := fallbackSTTFromProvider(cfg, provider)
+		if err != nil {
+			return err
+		}
+		stts = append(stts, fallback)
+	}
+	if a.VAD != nil {
+		a.STT = corestt.NewFallbackAdapterWithVAD(stts, a.VAD)
+		return nil
+	}
+	a.STT = corestt.NewFallbackAdapter(stts)
+	return nil
+}
+
+func fallbackSTTFromProvider(cfg AppConfig, provider string) (corestt.STT, error) {
+	switch normalizeProvider(provider) {
+	case providerDeepgram:
+		sttOpts := []deepgram.DeepgramSTTOption{}
+		if cfg.STTBaseURL != "" {
+			sttOpts = append(sttOpts, deepgram.WithDeepgramSTTBaseURL(cfg.STTBaseURL))
+		}
+		if cfg.STTInterimResults != nil {
+			sttOpts = append(sttOpts, deepgram.WithDeepgramSTTInterimResults(*cfg.STTInterimResults))
+		}
+		if cfg.STTDiarization != nil {
+			sttOpts = append(sttOpts, deepgram.WithDeepgramSTTDiarization(*cfg.STTDiarization))
+		}
+		if cfg.STTSampleRate != nil {
+			sttOpts = append(sttOpts, deepgram.WithDeepgramSTTSampleRate(*cfg.STTSampleRate))
+		}
+		if cfg.STTNumberOfChannels != nil {
+			sttOpts = append(sttOpts, deepgram.WithDeepgramSTTNumChannels(*cfg.STTNumberOfChannels))
+		}
+		return deepgram.NewDeepgramSTT("", cfg.STTModel, sttOpts...), nil
+	case providerOpenAI:
+		sttOpts := []openai.OpenAISTTOption{openai.WithOpenAISTTRealtime(true)}
+		if cfg.STTLanguage != "" {
+			sttOpts = append(sttOpts, openai.WithOpenAISTTLanguage(cfg.STTLanguage))
+		}
+		if cfg.STTDetectLanguage {
+			sttOpts = append(sttOpts, openai.WithOpenAISTTDetectLanguage(true))
+		}
+		if cfg.STTPrompt != "" {
+			sttOpts = append(sttOpts, openai.WithOpenAISTTPrompt(cfg.STTPrompt))
+		}
+		if cfg.STTBaseURL != "" {
+			sttOpts = append(sttOpts, openai.WithOpenAISTTBaseURL(cfg.STTBaseURL))
+		}
+		return openai.NewOpenAISTT(cfg.OpenAIAPIKey, cfg.STTModel, sttOpts...)
+	case providerElevenLabs:
+		sttOpts := []elevenlabs.ElevenLabsSTTOption{}
+		if cfg.STTBaseURL != "" {
+			sttOpts = append(sttOpts, elevenlabs.WithElevenLabsSTTBaseURL(cfg.STTBaseURL))
+		}
+		if cfg.STTModel != "" {
+			sttOpts = append(sttOpts, elevenlabs.WithElevenLabsSTTModel(cfg.STTModel))
+		}
+		if cfg.STTLanguage != "" {
+			sttOpts = append(sttOpts, elevenlabs.WithElevenLabsSTTLanguage(cfg.STTLanguage))
+		}
+		if cfg.STTTagAudioEvents != nil {
+			sttOpts = append(sttOpts, elevenlabs.WithElevenLabsSTTTagAudioEvents(*cfg.STTTagAudioEvents))
+		}
+		if cfg.STTIncludeTimestamps != nil {
+			sttOpts = append(sttOpts, elevenlabs.WithElevenLabsSTTIncludeTimestamps(*cfg.STTIncludeTimestamps))
+		}
+		if cfg.STTSampleRate != nil {
+			sttOpts = append(sttOpts, elevenlabs.WithElevenLabsSTTSampleRate(*cfg.STTSampleRate))
+		}
+		return elevenlabs.NewElevenLabsSTT(cfg.ElevenLabsAPIKey, sttOpts...), nil
+	case providerSLNG:
+		sttOpts := []slng.STTOption{}
+		if cfg.STTModel != "" {
+			sttOpts = append(sttOpts, slng.WithSTTModel(cfg.STTModel))
+		}
+		if cfg.STTBaseURL != "" {
+			if strings.HasPrefix(cfg.STTBaseURL, "ws://") || strings.HasPrefix(cfg.STTBaseURL, "wss://") || strings.HasPrefix(cfg.STTBaseURL, "http://") || strings.HasPrefix(cfg.STTBaseURL, "https://") {
+				sttOpts = append(sttOpts, slng.WithSTTEndpoint(cfg.STTBaseURL))
+			} else {
+				sttOpts = append(sttOpts, slng.WithSTTBaseURL(cfg.STTBaseURL))
+			}
+		}
+		if cfg.STTRegion != "" {
+			sttOpts = append(sttOpts, slng.WithSTTRegionOverride(cfg.STTRegion))
+		}
+		if cfg.STTEncoding != "" {
+			sttOpts = append(sttOpts, slng.WithSTTEncoding(cfg.STTEncoding))
+		}
+		if cfg.STTLanguage != "" {
+			sttOpts = append(sttOpts, slng.WithSTTLanguage(cfg.STTLanguage))
+		}
+		if cfg.STTInterimResults != nil {
+			sttOpts = append(sttOpts, slng.WithSTTPartialTranscripts(*cfg.STTInterimResults))
+		}
+		return slng.NewSTT(cfg.SLNGAPIKey, sttOpts...), nil
+	default:
+		return nil, fmt.Errorf("unsupported RTP_AGENT_STT_FALLBACK_PROVIDERS entry %q", provider)
 	}
 }
 
@@ -2191,6 +2303,9 @@ func configureProviders(cfg AppConfig, a *agent.Agent) (llm.RealtimeModel, error
 		a.STT = inference.NewSTT(cfg.STTModel, cfg.LiveKitInferenceAPIKey, cfg.LiveKitInferenceAPISecret)
 	default:
 		return nil, fmt.Errorf("unsupported RTP_AGENT_STT_PROVIDER %q", cfg.STTProvider)
+	}
+	if err := configureSTTFallbacks(cfg, a); err != nil {
+		return nil, err
 	}
 
 	switch normalizeProvider(cfg.TTSProvider) {
