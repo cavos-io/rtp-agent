@@ -705,6 +705,78 @@ func TestAgentActivityCommitUserTurnInterruptsCurrentSpeechBeforeReply(t *testin
 	}
 }
 
+func TestAgentActivityCompleteUserTurnWaitsForPreviousHook(t *testing.T) {
+	agent := &blockingTurnAgent{
+		Agent:   NewAgent("test"),
+		started: make(chan *llm.ChatMessage, 2),
+		release: make(chan struct{}),
+	}
+	agent.TurnDetection = TurnDetectionModeManual
+	agent.LLM = &fakeGenerationLLM{stream: &fakeGenerationLLMStream{}}
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	activity := NewAgentActivity(agent, session)
+	agent.activity = activity
+	session.activity = activity
+
+	firstDone := make(chan error, 1)
+	go func() {
+		_, err := activity.completeUserTurn(context.Background(), EndOfTurnInfo{
+			NewTranscript:        "first turn",
+			TranscriptConfidence: 0.9,
+		})
+		firstDone <- err
+	}()
+	select {
+	case msg := <-agent.started:
+		if msg.TextContent() != "first turn" {
+			t.Fatalf("first hook message = %q, want first turn", msg.TextContent())
+		}
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("first user turn hook did not start")
+	}
+
+	secondDone := make(chan error, 1)
+	go func() {
+		_, err := activity.completeUserTurn(context.Background(), EndOfTurnInfo{
+			NewTranscript:        "second turn",
+			TranscriptConfidence: 0.9,
+		})
+		secondDone <- err
+	}()
+	select {
+	case msg := <-agent.started:
+		close(agent.release)
+		t.Fatalf("second hook started before first completed with %q", msg.TextContent())
+	case <-time.After(20 * time.Millisecond):
+	}
+
+	close(agent.release)
+	select {
+	case err := <-firstDone:
+		if err != nil {
+			t.Fatalf("first completeUserTurn error = %v, want nil", err)
+		}
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("first completeUserTurn did not finish after release")
+	}
+	select {
+	case msg := <-agent.started:
+		if msg.TextContent() != "second turn" {
+			t.Fatalf("second hook message = %q, want second turn", msg.TextContent())
+		}
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("second user turn hook did not start after first completed")
+	}
+	select {
+	case err := <-secondDone:
+		if err != nil {
+			t.Fatalf("second completeUserTurn error = %v, want nil", err)
+		}
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("second completeUserTurn did not finish")
+	}
+}
+
 func TestAgentActivityCompleteUserTurnSkipsShortInterruptions(t *testing.T) {
 	agent := &turnCompletedAgent{Agent: NewAgent("test"), turns: make(chan *llm.ChatMessage, 1)}
 	agent.TurnDetection = TurnDetectionModeSTT
@@ -1024,6 +1096,22 @@ type errorTurnAgent struct {
 func (a *errorTurnAgent) OnUserTurnCompleted(ctx context.Context, chatCtx *llm.ChatContext, newMsg *llm.ChatMessage) error {
 	a.turns <- newMsg
 	return a.err
+}
+
+type blockingTurnAgent struct {
+	*Agent
+	started chan *llm.ChatMessage
+	release chan struct{}
+}
+
+func (a *blockingTurnAgent) OnUserTurnCompleted(ctx context.Context, chatCtx *llm.ChatContext, newMsg *llm.ChatMessage) error {
+	a.started <- newMsg
+	select {
+	case <-a.release:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
 
 type turnDetectorFunc func(context.Context, *llm.ChatContext) (float64, error)

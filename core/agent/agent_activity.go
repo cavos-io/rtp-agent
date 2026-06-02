@@ -49,6 +49,7 @@ type AgentActivity struct {
 	speaking       bool
 
 	userTurnMu                   sync.Mutex
+	userTurnCompletionMu         sync.Mutex
 	pendingUserTranscript        string
 	pendingTranscriptConfidence  float64
 	pendingUserTranscriptPresent bool
@@ -601,6 +602,9 @@ func (a *AgentActivity) CommitUserTurn(ctx context.Context, opts CommitUserTurnO
 }
 
 func (a *AgentActivity) completeUserTurn(ctx context.Context, info EndOfTurnInfo) (*SpeechHandle, error) {
+	a.userTurnCompletionMu.Lock()
+	defer a.userTurnCompletionMu.Unlock()
+
 	confidence := info.TranscriptConfidence
 	newMsg := &llm.ChatMessage{
 		Role:                 llm.ChatRoleUser,
