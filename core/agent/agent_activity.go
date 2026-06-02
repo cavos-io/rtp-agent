@@ -49,6 +49,10 @@ type AgentActivity struct {
 	speaking       bool
 
 	userTurnMu                   sync.Mutex
+	userTurnUpdatedCh            chan struct{}
+	pendingInterimTranscript     string
+	pendingInterimLanguage       string
+	pendingInterimSpeakerID      string
 	userTurnCompletionMu         sync.Mutex
 	pendingUserTranscript        string
 	pendingTranscriptConfidence  float64
@@ -67,13 +71,14 @@ type AgentActivity struct {
 func NewAgentActivity(agentIntf AgentInterface, session *AgentSession) *AgentActivity {
 	ctx, cancel := context.WithCancel(context.Background())
 	activity := &AgentActivity{
-		AgentIntf:      agentIntf,
-		Agent:          agentIntf.GetAgent(),
-		Session:        session,
-		speechQueue:    make([]scheduledSpeech, 0),
-		queueUpdatedCh: make(chan struct{}, 1),
-		ctx:            ctx,
-		cancel:         cancel,
+		AgentIntf:         agentIntf,
+		Agent:             agentIntf.GetAgent(),
+		Session:           session,
+		speechQueue:       make([]scheduledSpeech, 0),
+		queueUpdatedCh:    make(chan struct{}, 1),
+		userTurnUpdatedCh: make(chan struct{}, 1),
+		ctx:               ctx,
+		cancel:            cancel,
 	}
 	activity.Agent.activity = activity
 	return activity
@@ -613,6 +618,12 @@ func (a *AgentActivity) OnInterimTranscript(ev *stt.SpeechEvent) {
 		language = ev.Alternatives[0].Language
 		speakerID = ev.Alternatives[0].SpeakerID
 	}
+	a.userTurnMu.Lock()
+	a.pendingInterimTranscript = transcript
+	a.pendingInterimLanguage = language
+	a.pendingInterimSpeakerID = speakerID
+	a.userTurnMu.Unlock()
+
 	a.Session.EmitUserInputTranscribed(UserInputTranscribedEvent{
 		Language:   language,
 		Transcript: transcript,
@@ -646,7 +657,11 @@ func (a *AgentActivity) OnFinalTranscript(ev *stt.SpeechEvent) {
 	a.pendingUserTranscript = transcript
 	a.pendingTranscriptConfidence = confidence
 	a.pendingUserTranscriptPresent = true
+	a.pendingInterimTranscript = ""
+	a.pendingInterimLanguage = ""
+	a.pendingInterimSpeakerID = ""
 	a.userTurnMu.Unlock()
+	a.notifyUserTurnUpdated()
 
 	if a.turnDetectionMode() == TurnDetectionModeSTT {
 		a.runEOUDetection(EndOfTurnInfo{
@@ -678,21 +693,65 @@ func (a *AgentActivity) CommitUserTurn(ctx context.Context, opts CommitUserTurnO
 	}
 	a.eouMu.Unlock()
 
+	if ctx == nil {
+		ctx = a.ctx
+	}
+	if opts.TranscriptTimeout > 0 {
+		deadline := time.NewTimer(opts.TranscriptTimeout)
+		defer deadline.Stop()
+		for {
+			a.userTurnMu.Lock()
+			present := a.pendingUserTranscriptPresent
+			hasInterim := a.pendingInterimTranscript != ""
+			ch := a.userTurnUpdatedCh
+			a.userTurnMu.Unlock()
+			if present || !hasInterim {
+				break
+			}
+			select {
+			case <-ch:
+			case <-deadline.C:
+				goto collect
+			case <-ctx.Done():
+				return "", ctx.Err()
+			}
+		}
+	}
+
+collect:
 	a.userTurnMu.Lock()
 	transcript := a.pendingUserTranscript
 	confidence := a.pendingTranscriptConfidence
 	present := a.pendingUserTranscriptPresent
+	fallbackLanguage := ""
+	fallbackSpeakerID := ""
+	fallbackFinal := false
+	if !present && a.pendingInterimTranscript != "" {
+		transcript = a.pendingInterimTranscript
+		fallbackLanguage = a.pendingInterimLanguage
+		fallbackSpeakerID = a.pendingInterimSpeakerID
+		present = true
+		fallbackFinal = true
+	}
 	a.pendingUserTranscript = ""
 	a.pendingTranscriptConfidence = 0
 	a.pendingUserTranscriptPresent = false
+	a.pendingInterimTranscript = ""
+	a.pendingInterimLanguage = ""
+	a.pendingInterimSpeakerID = ""
 	a.userTurnMu.Unlock()
 
 	if !present || transcript == "" {
 		return "", nil
 	}
 
-	if ctx == nil {
-		ctx = a.ctx
+	if fallbackFinal && a.Session != nil {
+		a.Session.EmitUserInputTranscribed(UserInputTranscribedEvent{
+			Language:   fallbackLanguage,
+			Transcript: transcript,
+			IsFinal:    true,
+			SpeakerID:  fallbackSpeakerID,
+		})
 	}
 	if _, err := a.completeUserTurn(ctx, EndOfTurnInfo{
 		SkipReply:            opts.SkipReply,
@@ -851,6 +910,22 @@ func (a *AgentActivity) clearPendingUserTurn() {
 	a.pendingUserTranscript = ""
 	a.pendingTranscriptConfidence = 0
 	a.pendingUserTranscriptPresent = false
+	a.pendingInterimTranscript = ""
+	a.pendingInterimLanguage = ""
+	a.pendingInterimSpeakerID = ""
+}
+
+func (a *AgentActivity) notifyUserTurnUpdated() {
+	a.userTurnMu.Lock()
+	ch := a.userTurnUpdatedCh
+	a.userTurnMu.Unlock()
+	if ch == nil {
+		return
+	}
+	select {
+	case ch <- struct{}{}:
+	default:
+	}
 }
 
 func (a *AgentActivity) turnDetectionMode() TurnDetectionMode {
