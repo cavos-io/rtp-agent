@@ -3,6 +3,8 @@ package bey
 import (
 	"context"
 	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 
@@ -89,6 +91,55 @@ func TestBeyAvatarStartAndUpdateState(t *testing.T) {
 	}
 	if avatar.state != agent.AvatarStateSpeaking {
 		t.Fatalf("state = %q, want speaking", avatar.state)
+	}
+}
+
+func TestBeyAvatarStartCreatesSessionWhenLiveKitInfoIsPresent(t *testing.T) {
+	var sawRequest bool
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		sawRequest = true
+		if r.URL.Path != "/v1/session" {
+			t.Fatalf("path = %q, want session endpoint", r.URL.Path)
+		}
+		if r.Header.Get("x-api-key") != "test-key" {
+			t.Fatalf("x-api-key = %q, want API key", r.Header.Get("x-api-key"))
+		}
+
+		var payload map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Fatalf("request body is not valid JSON: %v", err)
+		}
+		if payload["avatar_id"] != defaultBeyAvatarID {
+			t.Fatalf("avatar_id = %#v, want reference avatar", payload["avatar_id"])
+		}
+		if payload["livekit_url"] != "wss://livekit.example" {
+			t.Fatalf("livekit_url = %#v, want LiveKit URL", payload["livekit_url"])
+		}
+		if payload["livekit_token"] != "livekit-token" {
+			t.Fatalf("livekit_token = %#v, want LiveKit token", payload["livekit_token"])
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+	t.Setenv(beyAPIURLEnv, server.URL)
+
+	avatar, err := NewBeyAvatar("test-key")
+	if err != nil {
+		t.Fatalf("NewBeyAvatar error = %v", err)
+	}
+	ctx := agent.ContextWithAvatarStartInfo(context.Background(), agent.AvatarStartInfo{
+		LiveKitURL:   "wss://livekit.example",
+		LiveKitToken: "livekit-token",
+	})
+
+	if err := avatar.Start(ctx); err != nil {
+		t.Fatalf("Start error = %v", err)
+	}
+	if !avatar.started {
+		t.Fatal("started = false, want true")
+	}
+	if !sawRequest {
+		t.Fatal("Start did not create a Bey session")
 	}
 }
 

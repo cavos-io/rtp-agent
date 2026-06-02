@@ -1,10 +1,15 @@
 package anam
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"io"
+	"net/http"
 	"os"
+	"strings"
 
 	"github.com/cavos-io/rtp-agent/core/agent"
 )
@@ -62,6 +67,11 @@ func (a *AnamAvatar) Start(ctx context.Context) error {
 	if a.apiKey == "" {
 		return errors.New("ANAM_API_KEY must be set by arguments or environment variables")
 	}
+	if info, ok := agent.AvatarStartInfoFromContext(ctx); ok && info.LiveKitURL != "" && info.LiveKitToken != "" {
+		if err := a.createSession(ctx, info); err != nil {
+			return err
+		}
+	}
 	a.started = true
 	return nil
 }
@@ -77,6 +87,30 @@ func (a *AnamAvatar) Provider() string {
 
 func (a *AnamAvatar) AvatarIdentity() string {
 	return a.avatarIdentity
+}
+
+func (a *AnamAvatar) createSession(ctx context.Context, info agent.AvatarStartInfo) error {
+	endpoint, headers, body, err := buildAnamSessionTokenRequest(a.apiKey, a.personaConfig, info.LiveKitURL, info.LiveKitToken)
+	if err != nil {
+		return err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimRight(a.apiURL, "/")+endpoint, bytes.NewReader(body))
+	if err != nil {
+		return err
+	}
+	for key, value := range headers {
+		req.Header.Set(key, value)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
+		respBody, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("anam session creation failed: %s: %s", resp.Status, strings.TrimSpace(string(respBody)))
+	}
+	return nil
 }
 
 func buildAnamSessionTokenRequest(apiKey string, personaConfig PersonaConfig, livekitURL, livekitToken string) (string, map[string]string, []byte, error) {

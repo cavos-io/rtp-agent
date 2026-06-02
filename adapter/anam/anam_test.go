@@ -3,6 +3,8 @@ package anam
 import (
 	"context"
 	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 
@@ -70,6 +72,58 @@ func TestAnamAvatarStartAndUpdateState(t *testing.T) {
 	}
 	if avatar.state != agent.AvatarStateSpeaking {
 		t.Fatalf("state = %q, want speaking", avatar.state)
+	}
+}
+
+func TestAnamAvatarStartCreatesSessionWhenLiveKitInfoIsPresent(t *testing.T) {
+	persona := PersonaConfig{
+		Name:        "Support agent",
+		AvatarID:    "avatar-123",
+		AvatarModel: "anam-model",
+	}
+	var sawRequest bool
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		sawRequest = true
+		if r.URL.Path != "/v1/auth/session-token" {
+			t.Fatalf("path = %q, want session-token endpoint", r.URL.Path)
+		}
+		if r.Header.Get("Authorization") != "Bearer explicit-key" {
+			t.Fatalf("Authorization = %q, want bearer API key", r.Header.Get("Authorization"))
+		}
+		if r.Header.Get("Content-Type") != "application/json" {
+			t.Fatalf("Content-Type = %q, want application/json", r.Header.Get("Content-Type"))
+		}
+
+		var payload map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Fatalf("request body is not valid JSON: %v", err)
+		}
+		environment := payload["environment"].(map[string]any)
+		if environment["livekitUrl"] != "wss://livekit.example" {
+			t.Fatalf("environment.livekitUrl = %v, want LiveKit URL", environment["livekitUrl"])
+		}
+		if environment["livekitToken"] != "livekit-token" {
+			t.Fatalf("environment.livekitToken = %v, want LiveKit token", environment["livekitToken"])
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+	t.Setenv(anamAPIURLEnv, server.URL)
+
+	avatar := NewAnamAvatar("explicit-key", persona)
+	ctx := agent.ContextWithAvatarStartInfo(context.Background(), agent.AvatarStartInfo{
+		LiveKitURL:   "wss://livekit.example",
+		LiveKitToken: "livekit-token",
+	})
+
+	if err := avatar.Start(ctx); err != nil {
+		t.Fatalf("Start returned error: %v", err)
+	}
+	if !avatar.started {
+		t.Fatal("started = false, want true")
+	}
+	if !sawRequest {
+		t.Fatal("Start did not create an Anam session")
 	}
 }
 

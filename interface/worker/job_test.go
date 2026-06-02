@@ -145,6 +145,20 @@ func TestNewJobContextAttachesTaggerToSessionReport(t *testing.T) {
 	}
 }
 
+func TestJobContextAvatarStartInfoExposesLiveKitConnection(t *testing.T) {
+	ctx := NewJobContext(&livekit.Job{Id: "job_avatar"}, "wss://livekit.example", "key", "secret")
+	ctx.token = "room-token"
+
+	info := ctx.AvatarStartInfo()
+
+	if info.LiveKitURL != "wss://livekit.example" {
+		t.Fatalf("LiveKitURL = %q, want job URL", info.LiveKitURL)
+	}
+	if info.LiveKitToken != "room-token" {
+		t.Fatalf("LiveKitToken = %q, want job token", info.LiveKitToken)
+	}
+}
+
 func TestJobContextConnectInfoUsesAcceptedParticipantFields(t *testing.T) {
 	ctx := NewJobContext(
 		&livekit.Job{Id: "job_connect_info", Room: &livekit.Room{Name: "room-a"}},

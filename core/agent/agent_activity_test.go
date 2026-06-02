@@ -9,6 +9,7 @@ import (
 	"github.com/cavos-io/rtp-agent/core/llm"
 	"github.com/cavos-io/rtp-agent/core/stt"
 	"github.com/cavos-io/rtp-agent/library/telemetry"
+	"github.com/cavos-io/rtp-agent/library/tokenize"
 )
 
 func TestAgentActivityScheduleSpeechProcessesHighestPriorityFirst(t *testing.T) {
@@ -920,6 +921,48 @@ func TestAgentActivityCompleteUserTurnSkipsShortInterruptions(t *testing.T) {
 	}
 }
 
+func TestAgentActivityShortInterruptionUsesConfiguredWordTokenizer(t *testing.T) {
+	agent := &turnCompletedAgent{Agent: NewAgent("test"), turns: make(chan *llm.ChatMessage, 1)}
+	agent.TurnDetection = TurnDetectionModeSTT
+	agent.STT = &fakePipelineSTT{}
+	agent.LLM = &fakeGenerationLLM{stream: &fakeGenerationLLMStream{}}
+	session := NewAgentSession(agent, nil, AgentSessionOptions{
+		MinInterruptionWords: 2,
+		WordTokenizer:        fixedWordTokenizer{tokens: []string{"single"}},
+	})
+	activity := NewAgentActivity(agent, session)
+	agent.activity = activity
+	session.activity = activity
+	current := NewSpeechHandle(true, DefaultInputDetails())
+	activity.currentSpeech = current
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := activity.completeUserTurn(context.Background(), EndOfTurnInfo{
+			NewTranscript:        "two words",
+			TranscriptConfidence: 0.9,
+		})
+		done <- err
+	}()
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("completeUserTurn error = %v, want nil", err)
+		}
+	case <-time.After(20 * time.Millisecond):
+		if current.IsInterrupted() {
+			current.MarkDone()
+			<-done
+			t.Fatal("current speech was interrupted despite tokenizer reporting one word")
+		}
+		t.Fatal("completeUserTurn did not return for tokenizer-short interruption")
+	}
+	if current.IsInterrupted() {
+		t.Fatal("current speech interrupted despite tokenizer reporting one word")
+	}
+}
+
 func TestAgentActivityCommitUserTurnSkipsWhenSchedulingPaused(t *testing.T) {
 	agent := &turnCompletedAgent{Agent: NewAgent("test"), turns: make(chan *llm.ChatMessage, 1)}
 	agent.TurnDetection = TurnDetectionModeManual
@@ -1329,4 +1372,18 @@ func waitForInterrupted(t *testing.T, speech *SpeechHandle) {
 			}
 		}
 	}
+}
+
+type fixedWordTokenizer struct {
+	tokens []string
+}
+
+func (f fixedWordTokenizer) Tokenize(string, string) []string {
+	return append([]string(nil), f.tokens...)
+}
+
+func (f fixedWordTokenizer) Stream(string) tokenize.WordStream {
+	return tokenize.NewBufferedTokenStream(func(string) []string {
+		return append([]string(nil), f.tokens...)
+	}, 1, 1)
 }

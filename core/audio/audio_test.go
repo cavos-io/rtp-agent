@@ -79,7 +79,7 @@ func TestAudioByteStreamClearResetsProgressiveSize(t *testing.T) {
 	}
 }
 
-func TestSilenceFrameHelpersMatchReferenceShape(t *testing.T) {
+func TestSilenceFrameMatchesReferenceShape(t *testing.T) {
 	frame := SilenceFrame(0.02, 16000, 2)
 	if frame.SampleRate != 16000 || frame.NumChannels != 2 || frame.SamplesPerChannel != 320 {
 		t.Fatalf("SilenceFrame shape = rate %d channels %d samples %d", frame.SampleRate, frame.NumChannels, frame.SamplesPerChannel)
@@ -88,12 +88,28 @@ func TestSilenceFrameHelpersMatchReferenceShape(t *testing.T) {
 		t.Fatalf("SilenceFrame data bytes = %d, want %d", len(frame.Data), 320*2*2)
 	}
 
-	like := SilenceFrameLike(frame)
-	if like.SampleRate != frame.SampleRate || like.NumChannels != frame.NumChannels || like.SamplesPerChannel != frame.SamplesPerChannel {
-		t.Fatalf("SilenceFrameLike shape = %#v, want %#v", like, frame)
+	if got := CalculateAudioDuration([]*AudioFrame{frame}); got != 0.02 {
+		t.Fatalf("CalculateAudioDuration() = %v, want 0.02", got)
 	}
-	if got := CalculateAudioDuration([]*AudioFrame{frame, like}); got != 0.04 {
-		t.Fatalf("CalculateAudioDuration() = %v, want 0.04", got)
+}
+
+func TestSilenceFrameAllowsZeroDuration(t *testing.T) {
+	frame := SilenceFrame(0, 16000, 1)
+
+	if frame.SampleRate != 16000 {
+		t.Fatalf("SampleRate = %d, want 16000", frame.SampleRate)
+	}
+	if frame.NumChannels != 1 {
+		t.Fatalf("NumChannels = %d, want 1", frame.NumChannels)
+	}
+	if frame.SamplesPerChannel != 0 {
+		t.Fatalf("SamplesPerChannel = %d, want 0", frame.SamplesPerChannel)
+	}
+	if len(frame.Data) != 0 {
+		t.Fatalf("Data bytes = %d, want 0", len(frame.Data))
+	}
+	if got := CalculateFrameDuration(frame); got != 0 {
+		t.Fatalf("CalculateFrameDuration() = %v, want 0", got)
 	}
 }
 

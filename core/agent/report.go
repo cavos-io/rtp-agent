@@ -128,6 +128,8 @@ func sessionReportEventToDict(ev any) map[string]any {
 	switch e := ev.(type) {
 	case *UserInputTranscribedEvent:
 		return map[string]any{"type": e.GetType(), "transcript": e.Transcript, "is_final": e.IsFinal, "speaker_id": e.SpeakerID, "language": e.Language, "created_at": timeToUnixSeconds(e.CreatedAt)}
+	case *AgentOutputTranscribedEvent:
+		return map[string]any{"type": e.GetType(), "transcript": e.Transcript, "is_final": e.IsFinal, "language": e.Language, "created_at": timeToUnixSeconds(e.CreatedAt)}
 	case *UserStateChangedEvent:
 		return map[string]any{"type": e.GetType(), "old_state": e.OldState, "new_state": e.NewState, "created_at": timeToUnixSeconds(e.CreatedAt)}
 	case *AgentStateChangedEvent:

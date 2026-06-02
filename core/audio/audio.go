@@ -127,18 +127,6 @@ func SilenceFrame(duration float64, sampleRate uint32, numChannels uint32) *mode
 	}
 }
 
-func SilenceFrameLike(frame *model.AudioFrame) *model.AudioFrame {
-	if frame == nil {
-		return nil
-	}
-	return &model.AudioFrame{
-		Data:              make([]byte, frame.SamplesPerChannel*frame.NumChannels*2),
-		SampleRate:        frame.SampleRate,
-		NumChannels:       frame.NumChannels,
-		SamplesPerChannel: frame.SamplesPerChannel,
-	}
-}
-
 func CalculateAudioDuration(frames []*model.AudioFrame) float64 {
 	var duration float64
 	for _, frame := range frames {

@@ -76,6 +76,7 @@ import (
 	"github.com/cavos-io/rtp-agent/adapter/xai"
 	"github.com/cavos-io/rtp-agent/core/agent"
 	betatools "github.com/cavos-io/rtp-agent/core/beta/tools"
+	"github.com/cavos-io/rtp-agent/core/beta/workflows"
 	"github.com/cavos-io/rtp-agent/core/inference"
 	"github.com/cavos-io/rtp-agent/core/llm"
 	corestt "github.com/cavos-io/rtp-agent/core/stt"
@@ -327,6 +328,8 @@ type AppConfig struct {
 	TTSTokenizerLanguage                    string
 	TTSTokenizerMinSentenceLen              *int
 	TTSTokenizerStreamContextLen            *int
+	WordTokenizerProvider                   string
+	WordTokenizerLanguage                   string
 	TTSStreamPacerEnabled                   bool
 	TTSStreamPacerMinRemainingAudioMS       *int
 	TTSStreamPacerMaxTextLength             *int
@@ -407,9 +410,13 @@ type AppConfig struct {
 
 	GoogleCredentialsFile string
 
-	LiveKitInferenceAPIKey    string
-	LiveKitInferenceAPISecret string
-	AppTools                  []string
+	LiveKitInferenceAPIKey      string
+	LiveKitInferenceAPISecret   string
+	AppTools                    []string
+	WorkflowTask                string
+	WorkflowRequireConfirmation bool
+	WorkflowDtmfNumDigits       *int
+	WorkflowDtmfAskConfirmation *bool
 }
 
 type App struct {
@@ -597,6 +604,8 @@ func DefaultConfigFromEnv() AppConfig {
 		TTSTokenizerLanguage:                    os.Getenv("RTP_AGENT_TTS_TOKENIZER_LANGUAGE"),
 		TTSTokenizerMinSentenceLen:              getenvOptionalInt("RTP_AGENT_TTS_TOKENIZER_MIN_SENTENCE_LEN"),
 		TTSTokenizerStreamContextLen:            getenvOptionalInt("RTP_AGENT_TTS_TOKENIZER_STREAM_CONTEXT_LEN"),
+		WordTokenizerProvider:                   normalizedEnv("RTP_AGENT_WORD_TOKENIZER_PROVIDER"),
+		WordTokenizerLanguage:                   os.Getenv("RTP_AGENT_WORD_TOKENIZER_LANGUAGE"),
 		TTSStreamPacerEnabled:                   getenvBool("RTP_AGENT_TTS_STREAM_PACER_ENABLED"),
 		TTSStreamPacerMinRemainingAudioMS:       getenvOptionalInt("RTP_AGENT_TTS_STREAM_PACER_MIN_REMAINING_AUDIO_MS"),
 		TTSStreamPacerMaxTextLength:             getenvOptionalInt("RTP_AGENT_TTS_STREAM_PACER_MAX_TEXT_LENGTH"),
@@ -675,6 +684,10 @@ func DefaultConfigFromEnv() AppConfig {
 		XAIFileSearchMaxResults:                 getenvOptionalInt("RTP_AGENT_XAI_FILE_SEARCH_MAX_RESULTS"),
 		GoogleCredentialsFile:                   firstEnv("RTP_AGENT_GOOGLE_CREDENTIALS_FILE", "GOOGLE_APPLICATION_CREDENTIALS"),
 		AppTools:                                splitEnvList("RTP_AGENT_TOOLS"),
+		WorkflowTask:                            normalizedEnv("RTP_AGENT_WORKFLOW_TASK"),
+		WorkflowRequireConfirmation:             getenvBool("RTP_AGENT_WORKFLOW_REQUIRE_CONFIRMATION"),
+		WorkflowDtmfNumDigits:                   getenvOptionalInt("RTP_AGENT_WORKFLOW_DTMF_NUM_DIGITS"),
+		WorkflowDtmfAskConfirmation:             getenvOptionalBool("RTP_AGENT_WORKFLOW_DTMF_ASK_CONFIRMATION"),
 	}
 }
 
@@ -710,12 +723,20 @@ func NewApp(cfg AppConfig) (*App, error) {
 	if err := configureVAD(cfg, baseAgent); err != nil {
 		return nil, err
 	}
+	sessionAgent, err := workflowAgentFromConfig(cfg, baseAgent)
+	if err != nil {
+		return nil, err
+	}
 
-	session := agent.NewAgentSession(baseAgent, nil, agentSessionOptionsFromConfig(cfg))
+	sessionOptions, err := agentSessionOptionsFromConfig(cfg)
+	if err != nil {
+		return nil, err
+	}
+	session := agent.NewAgentSession(sessionAgent, nil, sessionOptions)
 	if realtimeModel != nil {
 		session.Assistant = agent.NewMultimodalAgent(realtimeModel, session.ChatCtx)
 	}
-	if err := configureAppTools(cfg, baseAgent, session); err != nil {
+	if err := configureAppTools(cfg, sessionAgent.GetAgent(), session); err != nil {
 		return nil, err
 	}
 
@@ -730,7 +751,7 @@ func NewApp(cfg AppConfig) (*App, error) {
 
 	app := &App{
 		Server:        server,
-		Agent:         baseAgent,
+		Agent:         sessionAgent.GetAgent(),
 		Session:       session,
 		RealtimeModel: realtimeModel,
 		Config:        cfg,
@@ -739,6 +760,55 @@ func NewApp(cfg AppConfig) (*App, error) {
 		return nil, err
 	}
 	return app, nil
+}
+
+func workflowAgentFromConfig(cfg AppConfig, baseAgent *agent.Agent) (agent.AgentInterface, error) {
+	task := normalizeProvider(cfg.WorkflowTask)
+	if task == "" {
+		return baseAgent, nil
+	}
+
+	var selected agent.AgentInterface
+	switch task {
+	case "address", "get_address":
+		selected = workflows.NewGetAddressTask(cfg.WorkflowRequireConfirmation)
+	case "email", "get_email":
+		selected = workflows.NewGetEmailTask(cfg.WorkflowRequireConfirmation)
+	case "dtmf", "get_dtmf":
+		numDigits := 1
+		if cfg.WorkflowDtmfNumDigits != nil {
+			numDigits = *cfg.WorkflowDtmfNumDigits
+		}
+		askConfirmation := cfg.WorkflowRequireConfirmation
+		if cfg.WorkflowDtmfAskConfirmation != nil {
+			askConfirmation = *cfg.WorkflowDtmfAskConfirmation
+		}
+		selected = workflows.NewGetDtmfTask(numDigits, askConfirmation)
+	default:
+		return nil, fmt.Errorf("unsupported RTP_AGENT_WORKFLOW_TASK %q", cfg.WorkflowTask)
+	}
+	copyAgentRuntime(selected.GetAgent(), baseAgent)
+	return selected, nil
+}
+
+func copyAgentRuntime(dst *agent.Agent, src *agent.Agent) {
+	if dst == nil || src == nil {
+		return
+	}
+	dst.ChatCtx = src.ChatCtx
+	dst.TurnDetection = src.TurnDetection
+	dst.TurnDetector = src.TurnDetector
+	dst.Avatar = src.Avatar
+	dst.STT = src.STT
+	dst.VAD = src.VAD
+	dst.LLM = src.LLM
+	dst.TTS = src.TTS
+	dst.AllowInterruptions = src.AllowInterruptions
+	dst.MinConsecutiveSpeechDelay = src.MinConsecutiveSpeechDelay
+	dst.UseTTSAlignedTranscript = src.UseTTSAlignedTranscript
+	dst.MinEndpointingDelay = src.MinEndpointingDelay
+	dst.MaxEndpointingDelay = src.MaxEndpointingDelay
+	dst.Tools = append(src.Tools, dst.Tools...)
 }
 
 func (a *App) runSession(ctx *worker.JobContext) error {
@@ -769,7 +839,14 @@ func (a *App) runSession(ctx *worker.JobContext) error {
 			}
 		}
 	}
-	return a.Session.Start(context.Background())
+	sessionCtx := context.Background()
+	if ctx != nil {
+		info := ctx.AvatarStartInfo()
+		if info.LiveKitURL != "" && info.LiveKitToken != "" {
+			sessionCtx = agent.ContextWithAvatarStartInfo(sessionCtx, info)
+		}
+	}
+	return a.Session.Start(sessionCtx)
 }
 
 func configureAvatar(cfg AppConfig, a *agent.Agent) error {
@@ -2688,7 +2765,7 @@ func normalizeProvider(provider string) string {
 	return strings.ToLower(strings.TrimSpace(provider))
 }
 
-func agentSessionOptionsFromConfig(cfg AppConfig) agent.AgentSessionOptions {
+func agentSessionOptionsFromConfig(cfg AppConfig) (agent.AgentSessionOptions, error) {
 	opts := agent.AgentSessionOptions{}
 	if cfg.TTSStreamPacerEnabled {
 		pacer := coretts.SentenceStreamPacerOptions{}
@@ -2706,7 +2783,25 @@ func agentSessionOptionsFromConfig(cfg AppConfig) agent.AgentSessionOptions {
 			backgroundAudioSource(cfg.BackgroundAudioThinking),
 		)
 	}
-	return opts
+	wordTokenizer, err := wordTokenizerFromConfig(cfg)
+	if err != nil {
+		return opts, err
+	}
+	opts.WordTokenizer = wordTokenizer
+	return opts, nil
+}
+
+func wordTokenizerFromConfig(cfg AppConfig) (tokenize.WordTokenizer, error) {
+	provider := normalizeProvider(cfg.WordTokenizerProvider)
+	if provider == "" {
+		return nil, nil
+	}
+	switch provider {
+	case "blingfire":
+		return blingfire.NewWordTokenizer(cfg.WordTokenizerLanguage), nil
+	default:
+		return nil, fmt.Errorf("unsupported RTP_AGENT_WORD_TOKENIZER_PROVIDER %q", cfg.WordTokenizerProvider)
+	}
 }
 
 func backgroundAudioSource(value string) interface{} {

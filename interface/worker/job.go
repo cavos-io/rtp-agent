@@ -213,6 +213,13 @@ func (c *JobContext) IsFakeJob() bool {
 	return c.fakeJob
 }
 
+func (c *JobContext) AvatarStartInfo() agent.AvatarStartInfo {
+	return agent.AvatarStartInfo{
+		LiveKitURL:   c.url,
+		LiveKitToken: c.token,
+	}
+}
+
 func (c *JobContext) RoomInfo() *livekit.Room {
 	if c.Job == nil {
 		return nil
