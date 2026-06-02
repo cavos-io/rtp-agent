@@ -864,6 +864,66 @@ func TestDefaultConfigFromEnvSelectsRimeTTS(t *testing.T) {
 	}
 }
 
+func TestDefaultConfigFromEnvSelectsSarvamProviders(t *testing.T) {
+	t.Setenv("SARVAM_API_KEY", "test-sarvam-key")
+	t.Setenv("RTP_AGENT_LLM_PROVIDER", "sarvam")
+	t.Setenv("RTP_AGENT_LLM_MODEL", "sarvam-30b")
+	t.Setenv("RTP_AGENT_LLM_BASE_URL", "https://sarvam.example/v1")
+	t.Setenv("RTP_AGENT_STT_PROVIDER", "sarvam")
+	t.Setenv("RTP_AGENT_STT_BASE_URL", "https://sarvam.example/speech-to-text")
+	t.Setenv("RTP_AGENT_STT_STREAMING_URL", "wss://sarvam.example/speech-to-text/ws")
+	t.Setenv("RTP_AGENT_STT_MODEL", "saarika:v2.5")
+	t.Setenv("RTP_AGENT_STT_LANGUAGE", "hi-IN")
+	t.Setenv("RTP_AGENT_STT_TASK", "transcribe")
+	t.Setenv("RTP_AGENT_STT_PROMPT", "domain words")
+	t.Setenv("RTP_AGENT_STT_SAMPLE_RATE", "16000")
+	t.Setenv("RTP_AGENT_STT_VAD_EVENTS", "true")
+	t.Setenv("RTP_AGENT_STT_VAD_FLUSH", "true")
+	t.Setenv("RTP_AGENT_TTS_PROVIDER", "sarvam")
+	t.Setenv("RTP_AGENT_TTS_BASE_URL", "https://sarvam.example/text-to-speech")
+	t.Setenv("RTP_AGENT_TTS_WEBSOCKET_URL", "wss://sarvam.example/text-to-speech/ws")
+	t.Setenv("RTP_AGENT_TTS_MODEL", "bulbul:v2")
+	t.Setenv("RTP_AGENT_TTS_VOICE", "anushka")
+	t.Setenv("RTP_AGENT_TTS_LANGUAGE", "hi-IN")
+	t.Setenv("RTP_AGENT_TTS_SAMPLE_RATE", "22050")
+	t.Setenv("RTP_AGENT_TTS_TEMPERATURE", "0.4")
+	t.Setenv("RTP_AGENT_TTS_SPEED", "1.1")
+	t.Setenv("RTP_AGENT_TTS_PITCH", "2")
+	t.Setenv("RTP_AGENT_TTS_BIT_RATE", "128000")
+	t.Setenv("RTP_AGENT_TTS_BUFFER_SIZE", "20")
+	t.Setenv("RTP_AGENT_TTS_CHUNK_LENGTH", "120")
+	t.Setenv("RTP_AGENT_TTS_ENHANCE_NAMED_ENTITIES", "true")
+	t.Setenv("RTP_AGENT_TTS_INSTANT_MODE", "false")
+	t.Setenv("RTP_AGENT_TTS_PRONUNCIATION_DICT_ID", "dict-1")
+	t.Setenv("RTP_AGENT_TTS_ENCODING", "wav")
+
+	app, err := NewApp(DefaultConfigFromEnv())
+	if err != nil {
+		t.Fatalf("NewApp() error = %v", err)
+	}
+	if app.Session == nil {
+		t.Fatal("Session is nil")
+	}
+	if app.Session.LLM == nil {
+		t.Fatal("Session LLM is nil")
+	}
+	if got := app.Session.STT.Label(); got != "sarvam.STT" {
+		t.Fatalf("STT label = %q, want sarvam.STT", got)
+	}
+	if caps := app.Session.STT.Capabilities(); !caps.Streaming || !caps.InterimResults || !caps.OfflineRecognize {
+		t.Fatalf("STT capabilities = %+v, want streaming interim offline", caps)
+	}
+	if got := app.Session.TTS.Label(); got != "sarvam.TTS" {
+		t.Fatalf("TTS label = %q, want sarvam.TTS", got)
+	}
+	if got := app.Session.TTS.SampleRate(); got != 22050 {
+		t.Fatalf("TTS sample rate = %d, want 22050", got)
+	}
+	if caps := app.Session.TTS.Capabilities(); !caps.Streaming || caps.AlignedTranscript {
+		t.Fatalf("TTS capabilities = %+v, want streaming without aligned transcript", caps)
+	}
+}
+
 func TestDefaultConfigFromEnvSelectsSLNGSpeechProviders(t *testing.T) {
 	t.Setenv("SLNG_API_KEY", "test-slng-key")
 	t.Setenv("RTP_AGENT_STT_PROVIDER", "slng")
