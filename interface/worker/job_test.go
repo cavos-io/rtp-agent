@@ -918,6 +918,21 @@ func TestJobContextRoomInfoReturnsJobRoom(t *testing.T) {
 	}
 }
 
+func TestJobContextAgentReturnsRoomLocalParticipant(t *testing.T) {
+	room := lksdk.NewRoom(nil)
+	ctx := NewJobContext(&livekit.Job{Id: "job_agent"}, "", "", "")
+	ctx.Room = room
+
+	if got := ctx.Agent(); got != room.LocalParticipant {
+		t.Fatal("Agent() did not return room local participant")
+	}
+
+	ctx.Room = nil
+	if got := ctx.Agent(); got != nil {
+		t.Fatalf("Agent() with nil room = %#v, want nil", got)
+	}
+}
+
 func TestJobContextJobIDReturnsCurrentJobID(t *testing.T) {
 	ctx := NewJobContext(&livekit.Job{Id: "job-a"}, "", "", "")
 	if got := ctx.JobID(); got != "job-a" {

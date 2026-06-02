@@ -418,6 +418,13 @@ func (c *JobContext) PublisherInfo() *livekit.ParticipantInfo {
 	return c.Job.Participant
 }
 
+func (c *JobContext) Agent() *lksdk.LocalParticipant {
+	if c == nil || c.Room == nil {
+		return nil
+	}
+	return c.Room.LocalParticipant
+}
+
 func (c *JobContext) connectInfo() lksdk.ConnectInfo {
 	return lksdk.ConnectInfo{
 		APIKey:                c.apiKey,
