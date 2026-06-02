@@ -37,6 +37,7 @@ import (
 	"github.com/cavos-io/rtp-agent/adapter/murf"
 	"github.com/cavos-io/rtp-agent/adapter/neuphonic"
 	"github.com/cavos-io/rtp-agent/adapter/openai"
+	"github.com/cavos-io/rtp-agent/adapter/resemble"
 	"github.com/cavos-io/rtp-agent/adapter/slng"
 	"github.com/cavos-io/rtp-agent/core/agent"
 	"github.com/cavos-io/rtp-agent/core/llm"
@@ -73,6 +74,7 @@ const (
 	providerMurf       = "murf"
 	providerNeuphonic  = "neuphonic"
 	providerOpenAI     = "openai"
+	providerResemble   = "resemble"
 	providerSLNG       = "slng"
 	providerLiveKit    = "livekit"
 )
@@ -248,6 +250,7 @@ type AppConfig struct {
 	MistralAPIKey     string
 	MurfAPIKey        string
 	NeuphonicAPIKey   string
+	ResembleAPIKey    string
 	SLNGAPIKey        string
 
 	GoogleCredentialsFile string
@@ -432,6 +435,7 @@ func DefaultConfigFromEnv() AppConfig {
 		MistralAPIKey:                           os.Getenv("MISTRAL_API_KEY"),
 		MurfAPIKey:                              os.Getenv("MURF_API_KEY"),
 		NeuphonicAPIKey:                         os.Getenv("NEUPHONIC_API_KEY"),
+		ResembleAPIKey:                          os.Getenv("RESEMBLE_API_KEY"),
 		SLNGAPIKey:                              os.Getenv("SLNG_API_KEY"),
 		GoogleCredentialsFile:                   firstEnv("RTP_AGENT_GOOGLE_CREDENTIALS_FILE", "GOOGLE_APPLICATION_CREDENTIALS"),
 	}
@@ -1546,6 +1550,18 @@ func configureProviders(cfg AppConfig, a *agent.Agent) (llm.RealtimeModel, error
 			ttsOpts = append(ttsOpts, neuphonic.WithNeuphonicTTSSpeed(cfg.TTSSpeed))
 		}
 		a.TTS = neuphonic.NewNeuphonicTTS(cfg.NeuphonicAPIKey, "", ttsOpts...)
+	case providerResemble:
+		ttsOpts := []resemble.ResembleTTSOption{}
+		if cfg.TTSModel != "" {
+			ttsOpts = append(ttsOpts, resemble.WithResembleTTSModel(cfg.TTSModel))
+		}
+		if cfg.TTSVoice != "" {
+			ttsOpts = append(ttsOpts, resemble.WithResembleTTSVoice(cfg.TTSVoice))
+		}
+		if cfg.TTSSampleRate != nil {
+			ttsOpts = append(ttsOpts, resemble.WithResembleTTSSampleRate(*cfg.TTSSampleRate))
+		}
+		a.TTS = resemble.NewResembleTTS(cfg.ResembleAPIKey, "", ttsOpts...)
 	case providerSLNG:
 		ttsOpts := []slng.TTSOption{}
 		if cfg.TTSModel != "" {

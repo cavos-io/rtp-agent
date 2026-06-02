@@ -782,6 +782,31 @@ func TestDefaultConfigFromEnvSelectsNeuphonicTTS(t *testing.T) {
 	}
 }
 
+func TestDefaultConfigFromEnvSelectsResembleTTS(t *testing.T) {
+	t.Setenv("RESEMBLE_API_KEY", "test-resemble-key")
+	t.Setenv("RTP_AGENT_TTS_PROVIDER", "resemble")
+	t.Setenv("RTP_AGENT_TTS_MODEL", "chatterbox-turbo")
+	t.Setenv("RTP_AGENT_TTS_VOICE", "voice-uuid")
+	t.Setenv("RTP_AGENT_TTS_SAMPLE_RATE", "24000")
+
+	app, err := NewApp(DefaultConfigFromEnv())
+	if err != nil {
+		t.Fatalf("NewApp() error = %v", err)
+	}
+	if app.Session == nil || app.Session.TTS == nil {
+		t.Fatal("Session TTS is nil")
+	}
+	if got := app.Session.TTS.Label(); got != "resemble.TTS" {
+		t.Fatalf("TTS label = %q, want resemble.TTS", got)
+	}
+	if got := app.Session.TTS.SampleRate(); got != 24000 {
+		t.Fatalf("TTS sample rate = %d, want 24000", got)
+	}
+	if caps := app.Session.TTS.Capabilities(); !caps.Streaming || caps.AlignedTranscript {
+		t.Fatalf("TTS capabilities = %+v, want streaming without aligned transcript", caps)
+	}
+}
+
 func TestDefaultConfigFromEnvSelectsSLNGSpeechProviders(t *testing.T) {
 	t.Setenv("SLNG_API_KEY", "test-slng-key")
 	t.Setenv("RTP_AGENT_STT_PROVIDER", "slng")
