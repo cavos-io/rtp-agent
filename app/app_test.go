@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"reflect"
 	"testing"
 	"time"
@@ -2696,6 +2697,41 @@ func TestRunSessionWiresRoomDeleteToJobContext(t *testing.T) {
 	}
 	if err := app.RoomIO.Options.DeleteRoom(context.Background(), "room-a"); err != nil {
 		t.Fatalf("RoomIO DeleteRoom() error = %v, want best-effort nil", err)
+	}
+}
+
+func TestRunSessionStartsAudioRecorderForRecordedJob(t *testing.T) {
+	baseAgent := agent.NewAgent("test")
+	baseAgent.VAD = &fakeAppVAD{}
+	baseAgent.STT = &fakeAppSTT{}
+	baseAgent.LLM = &fakeAppLLM{}
+	baseAgent.TTS = &fakeAppTTS{}
+	session := agent.NewAgentSession(baseAgent, nil, agent.AgentSessionOptions{})
+	app := &App{
+		Session:     session,
+		Server:      worker.NewAgentServer(worker.WorkerOptions{}),
+		RoomOptions: worker.RoomOptions{DisablePreConnectAudio: true, DisableTextInput: true},
+	}
+	jobCtx := worker.NewJobContext(&livekit.Job{Id: "job_record_audio", Room: &livekit.Room{Name: "room-a"}}, "", "", "")
+	jobCtx.Room = lksdk.NewRoom(nil)
+	sessionDir := t.TempDir()
+	jobCtx.SetSessionDirectory(sessionDir)
+	jobCtx.Report.RecordingOptions.Audio = true
+
+	if err := app.runSession(jobCtx); err != nil {
+		t.Fatalf("runSession() error = %v", err)
+	}
+	t.Cleanup(func() {
+		if app.RoomIO != nil && app.RoomIO.Recorder != nil {
+			_ = app.RoomIO.Recorder.Stop()
+		}
+	})
+
+	if jobCtx.Report.AudioRecordingPath == nil {
+		t.Fatal("AudioRecordingPath = nil, want recorder output path")
+	}
+	if got, want := *jobCtx.Report.AudioRecordingPath, filepath.Join(sessionDir, "audio.ogg"); got != want {
+		t.Fatalf("AudioRecordingPath = %q, want %q", got, want)
 	}
 }
 

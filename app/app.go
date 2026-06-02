@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -1143,6 +1144,9 @@ func (a *App) runSession(ctx *worker.JobContext) error {
 			}
 			roomIO := worker.NewRoomIO(ctx.Room, a.Session, roomOptions)
 			a.RoomIO = roomIO
+			if err := a.startAudioRecorder(ctx, roomIO); err != nil {
+				return err
+			}
 			if err := configureRoomTools(a.Config, a.Agent, roomIO); err != nil {
 				return err
 			}
@@ -1164,11 +1168,29 @@ func (a *App) runSession(ctx *worker.JobContext) error {
 		return err
 	}
 	if ctx != nil {
+		a.populateRecorderSessionReport(ctx)
 		if _, err := ctx.MakeSessionReport(a.Session); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+func (a *App) startAudioRecorder(ctx *worker.JobContext, roomIO *worker.RoomIO) error {
+	if ctx == nil || roomIO == nil || roomIO.Recorder == nil || ctx.Report == nil {
+		return nil
+	}
+	if !ctx.Report.RecordingOptions.Audio || ctx.SessionDirectory() == "" {
+		return nil
+	}
+	return roomIO.Recorder.Start(filepath.Join(ctx.SessionDirectory(), "audio.ogg"), 48000)
+}
+
+func (a *App) populateRecorderSessionReport(ctx *worker.JobContext) {
+	if ctx == nil || ctx.Report == nil || a == nil || a.RoomIO == nil || a.RoomIO.Recorder == nil {
+		return
+	}
+	a.RoomIO.Recorder.PopulateSessionReport(ctx.Report)
 }
 
 func (a *App) configureMetricsCollector(ctx *worker.JobContext) {
