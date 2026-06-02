@@ -98,6 +98,41 @@ func TestDefaultConfigFromEnvSelectsAsyncAITTS(t *testing.T) {
 	}
 }
 
+func TestDefaultConfigFromEnvSelectsAWSProviders(t *testing.T) {
+	t.Setenv("AWS_REGION", "us-west-2")
+	t.Setenv("RTP_AGENT_LLM_PROVIDER", "aws")
+	t.Setenv("RTP_AGENT_LLM_MODEL", "amazon.nova-test")
+	t.Setenv("RTP_AGENT_STT_PROVIDER", "aws")
+	t.Setenv("RTP_AGENT_STT_SAMPLE_RATE", "16000")
+	t.Setenv("RTP_AGENT_STT_LANGUAGE", "en-US")
+	t.Setenv("RTP_AGENT_STT_SPEAKER_LABELS", "true")
+	t.Setenv("RTP_AGENT_TTS_PROVIDER", "aws")
+	t.Setenv("RTP_AGENT_TTS_VOICE", "Joanna")
+	t.Setenv("RTP_AGENT_TTS_MODEL", "standard")
+	t.Setenv("RTP_AGENT_TTS_LANGUAGE", "en-US")
+	t.Setenv("RTP_AGENT_TTS_SAMPLE_RATE", "22050")
+
+	app, err := NewApp(DefaultConfigFromEnv())
+	if err != nil {
+		t.Fatalf("NewApp() error = %v", err)
+	}
+	if app.Session == nil {
+		t.Fatal("Session is nil")
+	}
+	if got := llm.Provider(app.Session.LLM); got != "AWS Bedrock" {
+		t.Fatalf("LLM provider = %q, want AWS Bedrock", got)
+	}
+	if got := app.Session.STT.Label(); got != "aws.STT" {
+		t.Fatalf("STT label = %q, want aws.STT", got)
+	}
+	if got := app.Session.TTS.Label(); got != "aws.TTS" {
+		t.Fatalf("TTS label = %q, want aws.TTS", got)
+	}
+	if got := app.Session.TTS.SampleRate(); got != 22050 {
+		t.Fatalf("TTS sample rate = %d, want 22050", got)
+	}
+}
+
 func TestDefaultConfigFromEnvSelectsLiveKitInferenceLLM(t *testing.T) {
 	t.Setenv("LIVEKIT_API_KEY", "test-livekit-key")
 	t.Setenv("LIVEKIT_API_SECRET", "test-livekit-secret")

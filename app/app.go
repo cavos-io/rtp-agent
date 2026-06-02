@@ -7,9 +7,12 @@ import (
 	"strconv"
 	"strings"
 
+	awspollytypes "github.com/aws/aws-sdk-go-v2/service/polly/types"
+	awstranscribetypes "github.com/aws/aws-sdk-go-v2/service/transcribestreaming/types"
 	"github.com/cavos-io/rtp-agent/adapter/anthropic"
 	"github.com/cavos-io/rtp-agent/adapter/assemblyai"
 	"github.com/cavos-io/rtp-agent/adapter/asyncai"
+	adapteraws "github.com/cavos-io/rtp-agent/adapter/aws"
 	"github.com/cavos-io/rtp-agent/adapter/openai"
 	"github.com/cavos-io/rtp-agent/core/agent"
 	"github.com/cavos-io/rtp-agent/core/llm"
@@ -21,6 +24,7 @@ const (
 	providerAnthropic  = "anthropic"
 	providerAssemblyAI = "assemblyai"
 	providerAsyncAI    = "asyncai"
+	providerAWS        = "aws"
 	providerOpenAI     = "openai"
 	providerLiveKit    = "livekit"
 )
@@ -29,6 +33,7 @@ type AppConfig struct {
 	WorkerOptions worker.WorkerOptions
 	Instructions  string
 
+	AWSRegion                       string
 	LLMProvider                     string
 	LLMModel                        string
 	LLMBaseURL                      string
@@ -51,6 +56,21 @@ type AppConfig struct {
 	STTSpeakerLabels                *bool
 	STTMaxSpeakers                  *int
 	STTDomain                       string
+	STTVocabularyName               string
+	STTSessionID                    string
+	STTVocabularyFilterMethod       string
+	STTVocabularyFilterName         string
+	STTEnableChannelIdentification  *bool
+	STTNumberOfChannels             *int
+	STTEnablePartialStabilization   *bool
+	STTPartialResultsStability      string
+	STTLanguageModelName            string
+	STTIdentifyLanguage             *bool
+	STTIdentifyMultipleLanguages    *bool
+	STTLanguageOptions              string
+	STTPreferredLanguage            string
+	STTVocabularyNames              string
+	STTVocabularyFilterNames        string
 	TTSProvider                     string
 	TTSModel                        string
 	TTSVoice                        string
@@ -61,6 +81,7 @@ type AppConfig struct {
 	TTSInstructions                 string
 	TTSResponseFormat               string
 	TTSBaseURL                      string
+	TTSTextType                     string
 	RealtimeProvider                string
 	RealtimeModel                   string
 
@@ -81,6 +102,7 @@ type App struct {
 func DefaultConfigFromEnv() AppConfig {
 	return AppConfig{
 		Instructions:                    getenvDefault("RTP_AGENT_INSTRUCTIONS", "You are a helpful realtime voice agent."),
+		AWSRegion:                       firstEnv("RTP_AGENT_AWS_REGION", "AWS_REGION"),
 		LLMProvider:                     normalizedEnv("RTP_AGENT_LLM_PROVIDER"),
 		LLMModel:                        os.Getenv("RTP_AGENT_LLM_MODEL"),
 		LLMBaseURL:                      os.Getenv("RTP_AGENT_LLM_BASE_URL"),
@@ -103,6 +125,21 @@ func DefaultConfigFromEnv() AppConfig {
 		STTSpeakerLabels:                getenvOptionalBool("RTP_AGENT_STT_SPEAKER_LABELS"),
 		STTMaxSpeakers:                  getenvOptionalInt("RTP_AGENT_STT_MAX_SPEAKERS"),
 		STTDomain:                       os.Getenv("RTP_AGENT_STT_DOMAIN"),
+		STTVocabularyName:               os.Getenv("RTP_AGENT_STT_VOCABULARY_NAME"),
+		STTSessionID:                    os.Getenv("RTP_AGENT_STT_SESSION_ID"),
+		STTVocabularyFilterMethod:       os.Getenv("RTP_AGENT_STT_VOCABULARY_FILTER_METHOD"),
+		STTVocabularyFilterName:         os.Getenv("RTP_AGENT_STT_VOCABULARY_FILTER_NAME"),
+		STTEnableChannelIdentification:  getenvOptionalBool("RTP_AGENT_STT_ENABLE_CHANNEL_IDENTIFICATION"),
+		STTNumberOfChannels:             getenvOptionalInt("RTP_AGENT_STT_NUMBER_OF_CHANNELS"),
+		STTEnablePartialStabilization:   getenvOptionalBool("RTP_AGENT_STT_ENABLE_PARTIAL_RESULTS_STABILIZATION"),
+		STTPartialResultsStability:      os.Getenv("RTP_AGENT_STT_PARTIAL_RESULTS_STABILITY"),
+		STTLanguageModelName:            os.Getenv("RTP_AGENT_STT_LANGUAGE_MODEL_NAME"),
+		STTIdentifyLanguage:             getenvOptionalBool("RTP_AGENT_STT_IDENTIFY_LANGUAGE"),
+		STTIdentifyMultipleLanguages:    getenvOptionalBool("RTP_AGENT_STT_IDENTIFY_MULTIPLE_LANGUAGES"),
+		STTLanguageOptions:              os.Getenv("RTP_AGENT_STT_LANGUAGE_OPTIONS"),
+		STTPreferredLanguage:            os.Getenv("RTP_AGENT_STT_PREFERRED_LANGUAGE"),
+		STTVocabularyNames:              os.Getenv("RTP_AGENT_STT_VOCABULARY_NAMES"),
+		STTVocabularyFilterNames:        os.Getenv("RTP_AGENT_STT_VOCABULARY_FILTER_NAMES"),
 		TTSProvider:                     normalizedEnv("RTP_AGENT_TTS_PROVIDER"),
 		TTSModel:                        os.Getenv("RTP_AGENT_TTS_MODEL"),
 		TTSVoice:                        os.Getenv("RTP_AGENT_TTS_VOICE"),
@@ -113,6 +150,7 @@ func DefaultConfigFromEnv() AppConfig {
 		TTSInstructions:                 os.Getenv("RTP_AGENT_TTS_INSTRUCTIONS"),
 		TTSResponseFormat:               os.Getenv("RTP_AGENT_TTS_RESPONSE_FORMAT"),
 		TTSBaseURL:                      os.Getenv("RTP_AGENT_TTS_BASE_URL"),
+		TTSTextType:                     os.Getenv("RTP_AGENT_TTS_TEXT_TYPE"),
 		RealtimeProvider:                normalizedEnv("RTP_AGENT_REALTIME_PROVIDER"),
 		RealtimeModel:                   os.Getenv("RTP_AGENT_REALTIME_MODEL"),
 		OpenAIAPIKey:                    os.Getenv("OPENAI_API_KEY"),
@@ -172,6 +210,12 @@ func (a *App) runSession(ctx *worker.JobContext) error {
 func configureProviders(cfg AppConfig, a *agent.Agent) (llm.RealtimeModel, error) {
 	switch normalizeProvider(cfg.LLMProvider) {
 	case "":
+	case providerAWS:
+		provider, err := adapteraws.NewAWSLLM(context.Background(), cfg.AWSRegion, cfg.LLMModel)
+		if err != nil {
+			return nil, err
+		}
+		a.LLM = provider
 	case providerAnthropic:
 		llmOpts := []anthropic.AnthropicOption{}
 		if cfg.LLMBaseURL != "" {
@@ -200,6 +244,64 @@ func configureProviders(cfg AppConfig, a *agent.Agent) (llm.RealtimeModel, error
 
 	switch normalizeProvider(cfg.STTProvider) {
 	case "":
+	case providerAWS:
+		sttOpts := []adapteraws.AWSSTTOption{}
+		if cfg.STTSampleRate != nil {
+			sttOpts = append(sttOpts, adapteraws.WithAWSSTTSampleRate(int32(*cfg.STTSampleRate)))
+		}
+		if cfg.STTVocabularyName != "" {
+			sttOpts = append(sttOpts, adapteraws.WithAWSSTTVocabularyName(cfg.STTVocabularyName))
+		}
+		if cfg.STTSessionID != "" {
+			sttOpts = append(sttOpts, adapteraws.WithAWSSTTSessionID(cfg.STTSessionID))
+		}
+		if cfg.STTVocabularyFilterMethod != "" {
+			sttOpts = append(sttOpts, adapteraws.WithAWSSTTVocabularyFilterMethod(awstranscribetypes.VocabularyFilterMethod(cfg.STTVocabularyFilterMethod)))
+		}
+		if cfg.STTVocabularyFilterName != "" {
+			sttOpts = append(sttOpts, adapteraws.WithAWSSTTVocabularyFilterName(cfg.STTVocabularyFilterName))
+		}
+		if cfg.STTSpeakerLabels != nil {
+			sttOpts = append(sttOpts, adapteraws.WithAWSSTTShowSpeakerLabel(*cfg.STTSpeakerLabels))
+		}
+		if cfg.STTEnableChannelIdentification != nil {
+			sttOpts = append(sttOpts, adapteraws.WithAWSSTTEnableChannelIdentification(*cfg.STTEnableChannelIdentification))
+		}
+		if cfg.STTNumberOfChannels != nil {
+			sttOpts = append(sttOpts, adapteraws.WithAWSSTTNumberOfChannels(int32(*cfg.STTNumberOfChannels)))
+		}
+		if cfg.STTEnablePartialStabilization != nil {
+			sttOpts = append(sttOpts, adapteraws.WithAWSSTTEnablePartialResultsStabilization(*cfg.STTEnablePartialStabilization))
+		}
+		if cfg.STTPartialResultsStability != "" {
+			sttOpts = append(sttOpts, adapteraws.WithAWSSTTPartialResultsStability(awstranscribetypes.PartialResultsStability(cfg.STTPartialResultsStability)))
+		}
+		if cfg.STTLanguageModelName != "" {
+			sttOpts = append(sttOpts, adapteraws.WithAWSSTTLanguageModelName(cfg.STTLanguageModelName))
+		}
+		if cfg.STTIdentifyLanguage != nil {
+			sttOpts = append(sttOpts, adapteraws.WithAWSSTTIdentifyLanguage(*cfg.STTIdentifyLanguage))
+		}
+		if cfg.STTIdentifyMultipleLanguages != nil {
+			sttOpts = append(sttOpts, adapteraws.WithAWSSTTIdentifyMultipleLanguages(*cfg.STTIdentifyMultipleLanguages))
+		}
+		if cfg.STTLanguageOptions != "" {
+			sttOpts = append(sttOpts, adapteraws.WithAWSSTTLanguageOptions(cfg.STTLanguageOptions))
+		}
+		if cfg.STTPreferredLanguage != "" {
+			sttOpts = append(sttOpts, adapteraws.WithAWSSTTPreferredLanguage(awstranscribetypes.LanguageCode(cfg.STTPreferredLanguage)))
+		}
+		if cfg.STTVocabularyNames != "" {
+			sttOpts = append(sttOpts, adapteraws.WithAWSSTTVocabularyNames(cfg.STTVocabularyNames))
+		}
+		if cfg.STTVocabularyFilterNames != "" {
+			sttOpts = append(sttOpts, adapteraws.WithAWSSTTVocabularyFilterNames(cfg.STTVocabularyFilterNames))
+		}
+		provider, err := adapteraws.NewAWSSTT(context.Background(), cfg.AWSRegion, sttOpts...)
+		if err != nil {
+			return nil, err
+		}
+		a.STT = provider
 	case providerAssemblyAI:
 		sttOpts := []assemblyai.AssemblyAISTTOption{}
 		if cfg.STTBaseURL != "" {
@@ -276,6 +378,28 @@ func configureProviders(cfg AppConfig, a *agent.Agent) (llm.RealtimeModel, error
 
 	switch normalizeProvider(cfg.TTSProvider) {
 	case "":
+	case providerAWS:
+		ttsOpts := []adapteraws.AWSTTSOption{}
+		if cfg.TTSVoice != "" {
+			ttsOpts = append(ttsOpts, adapteraws.WithAWSTTSVoice(awspollytypes.VoiceId(cfg.TTSVoice)))
+		}
+		if cfg.TTSModel != "" {
+			ttsOpts = append(ttsOpts, adapteraws.WithAWSTTSEngine(awspollytypes.Engine(cfg.TTSModel)))
+		}
+		if cfg.TTSTextType != "" {
+			ttsOpts = append(ttsOpts, adapteraws.WithAWSTTSTextType(awspollytypes.TextType(cfg.TTSTextType)))
+		}
+		if cfg.TTSLanguage != "" {
+			ttsOpts = append(ttsOpts, adapteraws.WithAWSTTSLanguage(awspollytypes.LanguageCode(cfg.TTSLanguage)))
+		}
+		if cfg.TTSSampleRate != nil {
+			ttsOpts = append(ttsOpts, adapteraws.WithAWSTTSSampleRate(*cfg.TTSSampleRate))
+		}
+		provider, err := adapteraws.NewAWSTTS(context.Background(), cfg.AWSRegion, cfg.TTSVoice, ttsOpts...)
+		if err != nil {
+			return nil, err
+		}
+		a.TTS = provider
 	case providerAsyncAI:
 		ttsOpts := []asyncai.AsyncAITTSOption{}
 		if cfg.TTSBaseURL != "" {
@@ -349,6 +473,15 @@ func getenvDefault(name, fallback string) string {
 		return value
 	}
 	return fallback
+}
+
+func firstEnv(names ...string) string {
+	for _, name := range names {
+		if value := os.Getenv(name); value != "" {
+			return value
+		}
+	}
+	return ""
 }
 
 func getenvBool(name string) bool {
