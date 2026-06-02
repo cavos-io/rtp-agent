@@ -295,6 +295,35 @@ func TestDefaultConfigFromEnvSelectsDeepgramSpeechProviders(t *testing.T) {
 	}
 }
 
+func TestDefaultConfigFromEnvSelectsFishAudioTTS(t *testing.T) {
+	t.Setenv("FISHAUDIO_API_KEY", "test-fishaudio-key")
+	t.Setenv("RTP_AGENT_TTS_PROVIDER", "fishaudio")
+	t.Setenv("RTP_AGENT_TTS_MODEL", "s2-pro")
+	t.Setenv("RTP_AGENT_TTS_VOICE", "voice-test")
+	t.Setenv("RTP_AGENT_TTS_BASE_URL", "https://fishaudio.example")
+	t.Setenv("RTP_AGENT_TTS_RESPONSE_FORMAT", "opus")
+	t.Setenv("RTP_AGENT_TTS_SAMPLE_RATE", "48000")
+	t.Setenv("RTP_AGENT_TTS_LATENCY_MODE", "balanced")
+	t.Setenv("RTP_AGENT_TTS_CHUNK_LENGTH", "120")
+
+	app, err := NewApp(DefaultConfigFromEnv())
+	if err != nil {
+		t.Fatalf("NewApp() error = %v", err)
+	}
+	if app.Session == nil || app.Session.TTS == nil {
+		t.Fatal("Session TTS is nil")
+	}
+	if got := app.Session.TTS.Label(); got != "fishaudio.TTS" {
+		t.Fatalf("TTS label = %q, want fishaudio.TTS", got)
+	}
+	if got := app.Session.TTS.SampleRate(); got != 48000 {
+		t.Fatalf("TTS sample rate = %d, want 48000", got)
+	}
+	if caps := app.Session.TTS.Capabilities(); !caps.Streaming {
+		t.Fatalf("TTS capabilities = %+v, want streaming", caps)
+	}
+}
+
 func TestDefaultConfigFromEnvSelectsAWSProviders(t *testing.T) {
 	t.Setenv("AWS_REGION", "us-west-2")
 	t.Setenv("RTP_AGENT_LLM_PROVIDER", "aws")

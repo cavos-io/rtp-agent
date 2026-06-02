@@ -21,6 +21,7 @@ import (
 	"github.com/cavos-io/rtp-agent/adapter/clova"
 	"github.com/cavos-io/rtp-agent/adapter/deepgram"
 	"github.com/cavos-io/rtp-agent/adapter/elevenlabs"
+	"github.com/cavos-io/rtp-agent/adapter/fishaudio"
 	adaptergoogle "github.com/cavos-io/rtp-agent/adapter/google"
 	"github.com/cavos-io/rtp-agent/adapter/groq"
 	"github.com/cavos-io/rtp-agent/adapter/openai"
@@ -43,6 +44,7 @@ const (
 	providerClova      = "clova"
 	providerDeepgram   = "deepgram"
 	providerElevenLabs = "elevenlabs"
+	providerFishAudio  = "fishaudio"
 	providerGoogle     = "google"
 	providerGroq       = "groq"
 	providerOpenAI     = "openai"
@@ -132,6 +134,8 @@ type AppConfig struct {
 	TTSVolume                       *float64
 	TTSPronunciationDictID          string
 	TTSMIPOptOut                    *bool
+	TTSLatencyMode                  string
+	TTSChunkLength                  *int
 	TTSInstructions                 string
 	TTSResponseFormat               string
 	TTSBaseURL                      string
@@ -149,6 +153,7 @@ type AppConfig struct {
 	ClovaSTTInvokeURL string
 	ClovaClientID     string
 	ClovaClientSecret string
+	FishAudioAPIKey   string
 
 	GoogleCredentialsFile string
 
@@ -245,6 +250,8 @@ func DefaultConfigFromEnv() AppConfig {
 		TTSVolume:                       getenvOptionalFloat("RTP_AGENT_TTS_VOLUME"),
 		TTSPronunciationDictID:          os.Getenv("RTP_AGENT_TTS_PRONUNCIATION_DICT_ID"),
 		TTSMIPOptOut:                    getenvOptionalBool("RTP_AGENT_TTS_MIP_OPT_OUT"),
+		TTSLatencyMode:                  os.Getenv("RTP_AGENT_TTS_LATENCY_MODE"),
+		TTSChunkLength:                  getenvOptionalInt("RTP_AGENT_TTS_CHUNK_LENGTH"),
 		TTSInstructions:                 os.Getenv("RTP_AGENT_TTS_INSTRUCTIONS"),
 		TTSResponseFormat:               os.Getenv("RTP_AGENT_TTS_RESPONSE_FORMAT"),
 		TTSBaseURL:                      os.Getenv("RTP_AGENT_TTS_BASE_URL"),
@@ -261,6 +268,7 @@ func DefaultConfigFromEnv() AppConfig {
 		ClovaSTTInvokeURL:               os.Getenv("CLOVA_STT_INVOKE_URL"),
 		ClovaClientID:                   os.Getenv("CLOVA_CLIENT_ID"),
 		ClovaClientSecret:               os.Getenv("CLOVA_CLIENT_SECRET"),
+		FishAudioAPIKey:                 firstEnv("FISHAUDIO_API_KEY", "FISH_AUDIO_API_KEY"),
 		GoogleCredentialsFile:           firstEnv("RTP_AGENT_GOOGLE_CREDENTIALS_FILE", "GOOGLE_APPLICATION_CREDENTIALS"),
 	}
 }
@@ -821,6 +829,30 @@ func configureProviders(cfg AppConfig, a *agent.Agent) (llm.RealtimeModel, error
 			ttsOpts = append(ttsOpts, deepgram.WithDeepgramTTSAudioFormat(cfg.TTSEncoding, sampleRate))
 		}
 		a.TTS = deepgram.NewDeepgramTTS("", cfg.TTSModel, ttsOpts...)
+	case providerFishAudio:
+		ttsOpts := []fishaudio.FishAudioTTSOption{}
+		if cfg.TTSBaseURL != "" {
+			ttsOpts = append(ttsOpts, fishaudio.WithFishAudioTTSBaseURL(cfg.TTSBaseURL))
+		}
+		if cfg.TTSModel != "" {
+			ttsOpts = append(ttsOpts, fishaudio.WithFishAudioTTSModel(cfg.TTSModel))
+		}
+		if cfg.TTSVoice != "" {
+			ttsOpts = append(ttsOpts, fishaudio.WithFishAudioTTSVoice(cfg.TTSVoice))
+		}
+		if cfg.TTSResponseFormat != "" {
+			ttsOpts = append(ttsOpts, fishaudio.WithFishAudioTTSOutputFormat(cfg.TTSResponseFormat))
+		}
+		if cfg.TTSSampleRate != nil {
+			ttsOpts = append(ttsOpts, fishaudio.WithFishAudioTTSSampleRate(*cfg.TTSSampleRate))
+		}
+		if cfg.TTSLatencyMode != "" {
+			ttsOpts = append(ttsOpts, fishaudio.WithFishAudioTTSLatencyMode(cfg.TTSLatencyMode))
+		}
+		if cfg.TTSChunkLength != nil {
+			ttsOpts = append(ttsOpts, fishaudio.WithFishAudioTTSChunkLength(*cfg.TTSChunkLength))
+		}
+		a.TTS = fishaudio.NewFishAudioTTS(cfg.FishAudioAPIKey, cfg.TTSVoice, ttsOpts...)
 	case providerCambai:
 		ttsOpts := []cambai.CambaiTTSOption{}
 		if cfg.TTSBaseURL != "" {
