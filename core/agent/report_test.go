@@ -272,6 +272,32 @@ func TestSessionReportToDictIncludesSessionCloseTranscriptTimeout(t *testing.T) 
 	}
 }
 
+func TestSessionReportToDictIncludesExistingSessionOptions(t *testing.T) {
+	report := NewSessionReport()
+	report.Options.UseTTSAlignedTranscript = true
+	report.Options.AECWarmupDuration = 1.5
+	report.Options.IVRDetection = true
+	report.Options.TurnDetection = TurnDetectionModeManual
+
+	data := report.ToDict()
+	options, ok := data["options"].(map[string]any)
+	if !ok {
+		t.Fatalf("options = %T, want map[string]any", data["options"])
+	}
+	if options["use_tts_aligned_transcript"] != true {
+		t.Fatalf("use_tts_aligned_transcript = %#v, want true", options["use_tts_aligned_transcript"])
+	}
+	if options["aec_warmup_duration"] != 1.5 {
+		t.Fatalf("aec_warmup_duration = %#v, want 1.5", options["aec_warmup_duration"])
+	}
+	if options["ivr_detection"] != true {
+		t.Fatalf("ivr_detection = %#v, want true", options["ivr_detection"])
+	}
+	if options["turn_detection"] != TurnDetectionModeManual {
+		t.Fatalf("turn_detection = %#v, want manual", options["turn_detection"])
+	}
+}
+
 type reportMetadataLLM struct {
 	model    string
 	provider string
