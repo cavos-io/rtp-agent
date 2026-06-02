@@ -144,7 +144,11 @@ func (va *PipelineAgent) sttLoop(stream stt.RecognizeStream) {
 		if err != nil {
 			if err != io.EOF {
 				logger.Logger.Errorw("STT stream error", err)
-				va.emitError(err, va.stt)
+				label := "stt"
+				if va.stt != nil {
+					label = va.stt.Label()
+				}
+				va.emitError(stt.NewSTTError(label, err, false), va.stt)
 			}
 			return
 		}

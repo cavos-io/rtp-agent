@@ -424,6 +424,13 @@ func TestPipelineAgentEmitsErrorEventForSTTStreamError(t *testing.T) {
 		if !errors.Is(ev.Error, cause) {
 			t.Fatalf("Error = %v, want %v", ev.Error, cause)
 		}
+		var sttErr *stt.STTError
+		if !errors.As(ev.Error, &sttErr) {
+			t.Fatalf("Error = %T, want *stt.STTError", ev.Error)
+		}
+		if sttErr.Label != "fake-stt" || sttErr.Recoverable {
+			t.Fatalf("STTError = %#v, want fake-stt unrecoverable error", sttErr)
+		}
 		if ev.Source != source {
 			t.Fatalf("Source = %#v, want STT source", ev.Source)
 		}
