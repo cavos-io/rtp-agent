@@ -152,7 +152,7 @@ func (s *GradiumSTT) Stream(ctx context.Context, language string) (stt.Recognize
 }
 
 func (s *GradiumSTT) Recognize(ctx context.Context, frames []*model.AudioFrame, language string) (*stt.SpeechEvent, error) {
-	return nil, fmt.Errorf("Not implemented")
+	return nil, fmt.Errorf("not implemented")
 }
 
 func buildGradiumSTTHeaders(s *GradiumSTT) http.Header {
