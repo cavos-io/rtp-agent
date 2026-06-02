@@ -565,6 +565,56 @@ func TestAgentActivityCompleteUserTurnEmitsEOUMetricsForGeneratedReply(t *testin
 	}
 }
 
+func TestAgentActivityCompleteUserTurnAddsMetricsToGeneratedUserMessage(t *testing.T) {
+	agent := NewAgent("test")
+	agent.TurnDetection = TurnDetectionModeManual
+	agent.LLM = &fakeGenerationLLM{stream: &fakeGenerationLLMStream{}}
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	activity := NewAgentActivity(agent, session)
+	agent.activity = activity
+	session.activity = activity
+
+	started := 1.25
+	stopped := 2.5
+	_, err := activity.completeUserTurn(context.Background(), EndOfTurnInfo{
+		NewTranscript:        "message metrics",
+		TranscriptConfidence: 0.9,
+		EndOfTurnDelay:       0.12,
+		TranscriptionDelay:   0.34,
+		StartedSpeakingAt:    &started,
+		StoppedSpeakingAt:    &stopped,
+	})
+	if err != nil {
+		t.Fatalf("completeUserTurn error = %v, want nil", err)
+	}
+
+	select {
+	case ev := <-session.SpeechCreatedEvents():
+		msg := ev.SpeechHandle.Generation.UserMessage
+		if msg == nil {
+			t.Fatal("generation user message = nil, want committed user turn")
+		}
+		if msg.Metrics["started_speaking_at"] != started {
+			t.Fatalf("user message started_speaking_at = %#v, want %v", msg.Metrics["started_speaking_at"], started)
+		}
+		if msg.Metrics["stopped_speaking_at"] != stopped {
+			t.Fatalf("user message stopped_speaking_at = %#v, want %v", msg.Metrics["stopped_speaking_at"], stopped)
+		}
+		if msg.Metrics["end_of_turn_delay"] != 0.12 {
+			t.Fatalf("user message end_of_turn_delay = %#v, want 0.12", msg.Metrics["end_of_turn_delay"])
+		}
+		if msg.Metrics["transcription_delay"] != 0.34 {
+			t.Fatalf("user message transcription_delay = %#v, want 0.34", msg.Metrics["transcription_delay"])
+		}
+		hookDelay, ok := msg.Metrics["on_user_turn_completed_delay"].(float64)
+		if !ok || hookDelay < 0 {
+			t.Fatalf("user message on_user_turn_completed_delay = %#v, want non-negative float64", msg.Metrics["on_user_turn_completed_delay"])
+		}
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("completeUserTurn did not generate a reply")
+	}
+}
+
 func TestAgentActivityCommitUserTurnSkipsWhenCurrentSpeechCannotBeInterrupted(t *testing.T) {
 	agent := &turnCompletedAgent{Agent: NewAgent("test"), turns: make(chan *llm.ChatMessage, 1)}
 	agent.TurnDetection = TurnDetectionModeManual

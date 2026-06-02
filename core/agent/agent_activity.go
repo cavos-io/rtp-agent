@@ -650,6 +650,7 @@ func (a *AgentActivity) completeUserTurn(ctx context.Context, info EndOfTurnInfo
 		return nil, nil
 	}
 	hookDelay := time.Since(hookStart).Seconds()
+	newMsg.Metrics = metricsReportFromEndOfTurn(info, hookDelay)
 	if a.Agent.LLM == nil || a.Session == nil {
 		return nil, nil
 	}
@@ -693,6 +694,20 @@ func (a *AgentActivity) shouldSkipShortInterruption(currentSpeech *SpeechHandle,
 	}
 	words := tokenize.SplitWords(transcript, true, true, false)
 	return len(words) < a.Session.Options.MinInterruptionWords
+}
+
+func metricsReportFromEndOfTurn(info EndOfTurnInfo, onUserTurnCompletedDelay float64) map[string]any {
+	metrics := make(map[string]any)
+	if info.StartedSpeakingAt != nil {
+		metrics["started_speaking_at"] = *info.StartedSpeakingAt
+	}
+	if info.StoppedSpeakingAt != nil {
+		metrics["stopped_speaking_at"] = *info.StoppedSpeakingAt
+	}
+	metrics["transcription_delay"] = info.TranscriptionDelay
+	metrics["end_of_turn_delay"] = info.EndOfTurnDelay
+	metrics["on_user_turn_completed_delay"] = onUserTurnCompletedDelay
+	return metrics
 }
 
 func (a *AgentActivity) commitUserMessage(msg *llm.ChatMessage) {
