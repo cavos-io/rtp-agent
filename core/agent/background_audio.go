@@ -10,9 +10,9 @@ import (
 	"sync"
 	"time"
 
+	"github.com/cavos-io/rtp-agent/core/audio"
 	"github.com/cavos-io/rtp-agent/core/audio/model"
 	"github.com/cavos-io/rtp-agent/library/logger"
-	"github.com/hajimehoshi/go-mp3"
 	"github.com/jfreymuth/oggvorbis"
 	lksdk "github.com/livekit/server-sdk-go/v2"
 	"github.com/pion/webrtc/v4"
@@ -428,6 +428,31 @@ func readAudioFramesFromFile(path string, loop bool, stopCh <-chan struct{}) <-c
 			case <-stopCh:
 				return
 			default:
+				ext := filepath.Ext(path)
+				switch ext {
+				case ".pcm", ".raw", ".mp3", "":
+					frames, err := audio.AudioFramesFromFile(path, audio.AudioFramesFromFileOptions{})
+					if err != nil {
+						logger.Logger.Errorw("failed to read audio file", err, "path", path)
+						return
+					}
+					for _, frame := range frames {
+						select {
+						case <-stopCh:
+							return
+						case out <- frame:
+						}
+					}
+					if !loop {
+						return
+					}
+					continue
+				case ".ogg":
+				default:
+					logger.Logger.Warnw("unsupported audio format for background audio", nil, "path", path)
+					return
+				}
+
 				file, err := os.Open(path)
 				if err != nil {
 					logger.Logger.Errorw("failed to open audio file", err, "path", path)
@@ -435,7 +460,6 @@ func readAudioFramesFromFile(path string, loop bool, stopCh <-chan struct{}) <-c
 				}
 				defer file.Close()
 
-				var reader io.Reader = file
 				var sampleRate uint32
 
 				switch filepath.Ext(path) {
@@ -478,35 +502,6 @@ func readAudioFramesFromFile(path string, loop bool, stopCh <-chan struct{}) <-c
 							SamplesPerChannel: uint32(n),
 						}
 					}
-
-				case ".mp3":
-					decoder, err := mp3.NewDecoder(file)
-					if err != nil {
-						logger.Logger.Errorw("failed to create mp3 decoder", err)
-						return
-					}
-					sampleRate = uint32(decoder.SampleRate())
-					reader = decoder
-
-					buf := make([]byte, 4096)
-					for {
-						n, err := reader.Read(buf)
-						if err == io.EOF {
-							break
-						} else if err != nil {
-							logger.Logger.Errorw("error reading mp3 file", err)
-							return
-						}
-						out <- &model.AudioFrame{
-							Data:              buf[:n],
-							SampleRate:        sampleRate,
-							NumChannels:       2,
-							SamplesPerChannel: uint32(n / 4), // 2 channels, 16-bit
-						}
-					}
-				default:
-					logger.Logger.Warnw("unsupported audio format for background audio", nil, "path", path)
-					return
 				}
 
 				if !loop {
