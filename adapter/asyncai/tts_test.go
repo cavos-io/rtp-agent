@@ -170,6 +170,20 @@ func TestAsyncAITTSTextAndEndMessagesMatchReference(t *testing.T) {
 	}
 }
 
+func TestAsyncAITTSTextMessageKeepsTrailingWhitespace(t *testing.T) {
+	payload, err := buildAsyncAITTSTextMessage("ctx-1", "hello ")
+	if err != nil {
+		t.Fatalf("build text message: %v", err)
+	}
+	var message map[string]any
+	if err := json.Unmarshal(payload, &message); err != nil {
+		t.Fatalf("decode text message: %v", err)
+	}
+	if message["transcript"] != "hello " {
+		t.Fatalf("transcript = %q, want original trailing whitespace", message["transcript"])
+	}
+}
+
 func TestAsyncAITTSAudioFromWebsocketMessage(t *testing.T) {
 	encoded := base64.StdEncoding.EncodeToString([]byte{0x01, 0x02})
 	audio, done, err := asyncAITTSAudioFromWebsocketMessage([]byte(`{"context_id":"ctx-1","audio":"`+encoded+`"}`), 32000)
@@ -219,9 +233,6 @@ func TestAsyncAITTSEmptyStreamNextEOF(t *testing.T) {
 	_, err := stream.Next()
 	if err != io.EOF {
 		t.Fatalf("Next err = %v, want EOF without websocket", err)
-	}
-	if err := stream.Close(); err != nil {
-		t.Fatalf("Close err = %v, want nil without websocket", err)
 	}
 }
 

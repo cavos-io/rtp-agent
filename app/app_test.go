@@ -70,6 +70,34 @@ func TestDefaultConfigFromEnvSelectsAssemblyAISTT(t *testing.T) {
 	}
 }
 
+func TestDefaultConfigFromEnvSelectsAsyncAITTS(t *testing.T) {
+	t.Setenv("ASYNCAI_API_KEY", "test-asyncai-key")
+	t.Setenv("RTP_AGENT_TTS_PROVIDER", "asyncai")
+	t.Setenv("RTP_AGENT_TTS_MODEL", "async_test_model")
+	t.Setenv("RTP_AGENT_TTS_VOICE", "voice-test")
+	t.Setenv("RTP_AGENT_TTS_BASE_URL", "https://async.example/")
+	t.Setenv("RTP_AGENT_TTS_LANGUAGE", "en")
+	t.Setenv("RTP_AGENT_TTS_ENCODING", "pcm_mulaw")
+	t.Setenv("RTP_AGENT_TTS_SAMPLE_RATE", "8000")
+
+	app, err := NewApp(DefaultConfigFromEnv())
+	if err != nil {
+		t.Fatalf("NewApp() error = %v", err)
+	}
+	if app.Session == nil || app.Session.TTS == nil {
+		t.Fatal("Session TTS is nil")
+	}
+	if got := app.Session.TTS.Label(); got != "asyncai.TTS" {
+		t.Fatalf("TTS label = %q, want asyncai.TTS", got)
+	}
+	if got := app.Session.TTS.SampleRate(); got != 8000 {
+		t.Fatalf("TTS sample rate = %d, want 8000", got)
+	}
+	if caps := app.Session.TTS.Capabilities(); !caps.Streaming {
+		t.Fatalf("TTS Capabilities().Streaming = false, want true")
+	}
+}
+
 func TestDefaultConfigFromEnvSelectsLiveKitInferenceLLM(t *testing.T) {
 	t.Setenv("LIVEKIT_API_KEY", "test-livekit-key")
 	t.Setenv("LIVEKIT_API_SECRET", "test-livekit-secret")

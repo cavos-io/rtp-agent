@@ -9,6 +9,7 @@ import (
 
 	"github.com/cavos-io/rtp-agent/adapter/anthropic"
 	"github.com/cavos-io/rtp-agent/adapter/assemblyai"
+	"github.com/cavos-io/rtp-agent/adapter/asyncai"
 	"github.com/cavos-io/rtp-agent/adapter/openai"
 	"github.com/cavos-io/rtp-agent/core/agent"
 	"github.com/cavos-io/rtp-agent/core/llm"
@@ -19,6 +20,7 @@ import (
 const (
 	providerAnthropic  = "anthropic"
 	providerAssemblyAI = "assemblyai"
+	providerAsyncAI    = "asyncai"
 	providerOpenAI     = "openai"
 	providerLiveKit    = "livekit"
 )
@@ -52,6 +54,9 @@ type AppConfig struct {
 	TTSProvider                     string
 	TTSModel                        string
 	TTSVoice                        string
+	TTSLanguage                     string
+	TTSEncoding                     string
+	TTSSampleRate                   *int
 	TTSSpeed                        float64
 	TTSInstructions                 string
 	TTSResponseFormat               string
@@ -101,6 +106,9 @@ func DefaultConfigFromEnv() AppConfig {
 		TTSProvider:                     normalizedEnv("RTP_AGENT_TTS_PROVIDER"),
 		TTSModel:                        os.Getenv("RTP_AGENT_TTS_MODEL"),
 		TTSVoice:                        os.Getenv("RTP_AGENT_TTS_VOICE"),
+		TTSLanguage:                     os.Getenv("RTP_AGENT_TTS_LANGUAGE"),
+		TTSEncoding:                     os.Getenv("RTP_AGENT_TTS_ENCODING"),
+		TTSSampleRate:                   getenvOptionalInt("RTP_AGENT_TTS_SAMPLE_RATE"),
 		TTSSpeed:                        getenvFloat("RTP_AGENT_TTS_SPEED"),
 		TTSInstructions:                 os.Getenv("RTP_AGENT_TTS_INSTRUCTIONS"),
 		TTSResponseFormat:               os.Getenv("RTP_AGENT_TTS_RESPONSE_FORMAT"),
@@ -268,6 +276,27 @@ func configureProviders(cfg AppConfig, a *agent.Agent) (llm.RealtimeModel, error
 
 	switch normalizeProvider(cfg.TTSProvider) {
 	case "":
+	case providerAsyncAI:
+		ttsOpts := []asyncai.AsyncAITTSOption{}
+		if cfg.TTSBaseURL != "" {
+			ttsOpts = append(ttsOpts, asyncai.WithAsyncAITTSBaseURL(cfg.TTSBaseURL))
+		}
+		if cfg.TTSModel != "" {
+			ttsOpts = append(ttsOpts, asyncai.WithAsyncAITTSModel(cfg.TTSModel))
+		}
+		if cfg.TTSVoice != "" {
+			ttsOpts = append(ttsOpts, asyncai.WithAsyncAITTSVoice(cfg.TTSVoice))
+		}
+		if cfg.TTSLanguage != "" {
+			ttsOpts = append(ttsOpts, asyncai.WithAsyncAITTSLanguage(cfg.TTSLanguage))
+		}
+		if cfg.TTSEncoding != "" {
+			ttsOpts = append(ttsOpts, asyncai.WithAsyncAITTSEncoding(cfg.TTSEncoding))
+		}
+		if cfg.TTSSampleRate != nil {
+			ttsOpts = append(ttsOpts, asyncai.WithAsyncAITTSSampleRate(*cfg.TTSSampleRate))
+		}
+		a.TTS = asyncai.NewAsyncAITTS(os.Getenv("ASYNCAI_API_KEY"), cfg.TTSVoice, ttsOpts...)
 	case providerOpenAI:
 		ttsOpts := []openai.OpenAITTSOption{}
 		if cfg.TTSModel != "" {
