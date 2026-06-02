@@ -13,6 +13,15 @@ import (
 	openaisdk "github.com/sashabaranov/go-openai"
 )
 
+func mustNewOpenAILLMWithConfig(t *testing.T, config openaisdk.ClientConfig, model string) *OpenAILLM {
+	t.Helper()
+	provider, err := newOpenAILLMWithConfigAndModel(config, model)
+	if err != nil {
+		t.Fatalf("newOpenAILLMWithConfigAndModel error = %v", err)
+	}
+	return provider
+}
+
 type requestTestTool struct{}
 
 func (requestTestTool) ID() string          { return "lookup" }
@@ -81,8 +90,7 @@ func TestOpenAIChatAppliesConnectOptionsTimeoutToRequestContext(t *testing.T) {
 	capture := &captureDeadlineHTTPClient{err: sentinelErr}
 	config := openaisdk.DefaultConfig("test-key")
 	config.HTTPClient = capture
-	model := NewOpenAILLMWithConfig(config)
-	model.model = "gpt-4o"
+	model := mustNewOpenAILLMWithConfig(t, config, "gpt-4o")
 
 	_, err := model.Chat(
 		context.Background(),
@@ -109,8 +117,7 @@ func TestOpenAIChatAppliesDefaultConnectOptionsTimeoutToRequestContext(t *testin
 	}
 	config := openaisdk.DefaultConfig("test-key")
 	config.HTTPClient = capture
-	model := NewOpenAILLMWithConfig(config)
-	model.model = "gpt-4o"
+	model := mustNewOpenAILLMWithConfig(t, config, "gpt-4o")
 
 	_, err := model.Chat(context.Background(), llm.NewChatContext())
 
@@ -261,8 +268,7 @@ func TestOpenAIChatReturnsAPIStatusErrorOnHTTPError(t *testing.T) {
 	}
 	config := openaisdk.DefaultConfig("test-key")
 	config.HTTPClient = capture
-	model := NewOpenAILLMWithConfig(config)
-	model.model = "gpt-4o"
+	model := mustNewOpenAILLMWithConfig(t, config, "gpt-4o")
 
 	_, err := model.Chat(
 		context.Background(),
@@ -289,8 +295,7 @@ func TestOpenAIChatReturnsAPITimeoutErrorOnTransportDeadline(t *testing.T) {
 	capture := &captureDeadlineHTTPClient{err: context.DeadlineExceeded}
 	config := openaisdk.DefaultConfig("test-key")
 	config.HTTPClient = capture
-	model := NewOpenAILLMWithConfig(config)
-	model.model = "gpt-4o"
+	model := mustNewOpenAILLMWithConfig(t, config, "gpt-4o")
 
 	_, err := model.Chat(
 		context.Background(),
@@ -317,8 +322,7 @@ func TestOpenAIChatRetriesRetryableSetupAPIError(t *testing.T) {
 	}}
 	config := openaisdk.DefaultConfig("test-key")
 	config.HTTPClient = capture
-	model := NewOpenAILLMWithConfig(config)
-	model.model = "gpt-4o"
+	model := mustNewOpenAILLMWithConfig(t, config, "gpt-4o")
 
 	stream, err := model.Chat(
 		context.Background(),
@@ -341,8 +345,7 @@ func TestOpenAIChatDoesNotRetryNonRetryableSetupAPIError(t *testing.T) {
 	}}
 	config := openaisdk.DefaultConfig("test-key")
 	config.HTTPClient = capture
-	model := NewOpenAILLMWithConfig(config)
-	model.model = "gpt-4o"
+	model := mustNewOpenAILLMWithConfig(t, config, "gpt-4o")
 
 	_, err := model.Chat(
 		context.Background(),
@@ -365,8 +368,7 @@ func TestOpenAIStreamReturnsAPIErrorOnErrorEvent(t *testing.T) {
 	}}
 	config := openaisdk.DefaultConfig("test-key")
 	config.HTTPClient = capture
-	model := NewOpenAILLMWithConfig(config)
-	model.model = "gpt-4o"
+	model := mustNewOpenAILLMWithConfig(t, config, "gpt-4o")
 
 	stream, err := model.Chat(
 		context.Background(),

@@ -83,6 +83,19 @@ func anthropicTestResponse(statusCode int, body string) *http.Response {
 	}
 }
 
+func TestAnthropicLLMMetadataMatchesReference(t *testing.T) {
+	model, err := NewAnthropicLLM("test-key", "")
+	if err != nil {
+		t.Fatalf("NewAnthropicLLM() error = %v", err)
+	}
+	if got := model.Model(); got != defaultAnthropicMode {
+		t.Fatalf("Model() = %q, want %q", got, defaultAnthropicMode)
+	}
+	if got := model.Provider(); got != "anthropic" {
+		t.Fatalf("Provider() = %q, want anthropic", got)
+	}
+}
+
 func TestAnthropicChatReturnsAPITimeoutErrorOnTransportDeadline(t *testing.T) {
 	transport := &captureRoundTripper{err: context.DeadlineExceeded}
 	originalTransport := http.DefaultTransport

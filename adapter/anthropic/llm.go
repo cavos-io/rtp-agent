@@ -64,6 +64,14 @@ func NewAnthropicLLM(apiKey string, model string, opts ...AnthropicOption) (*Ant
 	return llm, nil
 }
 
+func (l *AnthropicLLM) Model() string {
+	return l.model
+}
+
+func (l *AnthropicLLM) Provider() string {
+	return "anthropic"
+}
+
 type anthropicMessage struct {
 	Role    string                  `json:"role"`
 	Content []anthropicContentBlock `json:"content"`

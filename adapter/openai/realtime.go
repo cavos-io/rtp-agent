@@ -34,6 +34,18 @@ func NewRealtimeModel(apiKey, model string) *RealtimeModel {
 	}
 }
 
+func (m *RealtimeModel) Model() string {
+	return m.model
+}
+
+func (m *RealtimeModel) Provider() string {
+	return "openai"
+}
+
+func (m *RealtimeModel) Close() error {
+	return nil
+}
+
 func (m *RealtimeModel) Capabilities() llm.RealtimeCapabilities {
 	return llm.RealtimeCapabilities{
 		MessageTruncation:       true,
@@ -120,11 +132,16 @@ func (s *realtimeSession) UpdateInstructions(instructions string) error {
 }
 
 func (s *realtimeSession) UpdateChatContext(chatCtx *llm.ChatContext) error {
-	if s.remote == nil {
-		s.remote = llm.NewRemoteChatContext()
-	}
 	syncedChatCtx := openAIRealtimeSyncedChatContext(chatCtx)
-	msgs, err := openAIRealtimeChatContextUpdateMessages(s.remote.ToChatCtx(), syncedChatCtx)
+	var (
+		msgs []map[string]any
+		err  error
+	)
+	if s.remote == nil {
+		msgs, err = openAIRealtimeChatContextCreateMessages(syncedChatCtx)
+	} else {
+		msgs, err = openAIRealtimeChatContextUpdateMessages(s.remote.ToChatCtx(), syncedChatCtx)
+	}
 	if err != nil {
 		return err
 	}
