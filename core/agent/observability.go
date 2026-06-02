@@ -66,6 +66,32 @@ func (t *Tagger) OutcomeReason() string {
 	return t.outcomeReason
 }
 
+func (t *Tagger) Outcome() string {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if _, ok := t.tags["lk.success"]; ok {
+		return "success"
+	}
+	if _, ok := t.tags["lk.fail"]; ok {
+		return "fail"
+	}
+	return ""
+}
+
+func (t *Tagger) Evaluations() []map[string]any {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	evaluations := make([]map[string]any, len(t.evaluationResults))
+	for i, evaluation := range t.evaluationResults {
+		cp := make(map[string]any, len(evaluation))
+		for key, value := range evaluation {
+			cp[key] = value
+		}
+		evaluations[i] = cp
+	}
+	return evaluations
+}
+
 func (t *Tagger) Evaluation(result *EvaluationResult) {
 	t.mu.Lock()
 	defer t.mu.Unlock()

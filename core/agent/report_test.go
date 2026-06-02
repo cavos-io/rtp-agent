@@ -146,6 +146,39 @@ func TestSessionReportToDictSkipsMetricsCollectedEvents(t *testing.T) {
 	}
 }
 
+func TestSessionReportToDictIncludesTaggerMetadata(t *testing.T) {
+	report := NewSessionReport()
+	tagger := NewTagger()
+	tagger.Add("language:en")
+	tagger.Success("completed")
+	tagger.Evaluation(&EvaluationResult{Judgments: map[string]string{"helpfulness": "pass"}})
+	report.Tagger = tagger
+
+	data := report.ToDict()
+
+	tags, ok := data["tags"].([]string)
+	if !ok {
+		t.Fatalf("tags = %T, want []string", data["tags"])
+	}
+	if !stringSliceContains(tags, "language:en") || !stringSliceContains(tags, "lk.success") {
+		t.Fatalf("tags = %#v, want language and success tags", tags)
+	}
+	outcome, ok := data["outcome"].(map[string]any)
+	if !ok {
+		t.Fatalf("outcome = %T, want map", data["outcome"])
+	}
+	if outcome["outcome"] != "success" || outcome["reason"] != "completed" {
+		t.Fatalf("outcome = %#v, want success with reason", outcome)
+	}
+	evaluations, ok := data["evaluations"].([]map[string]any)
+	if !ok || len(evaluations) != 1 {
+		t.Fatalf("evaluations = %#v, want one evaluation", data["evaluations"])
+	}
+	if evaluations[0]["name"] != "helpfulness" || evaluations[0]["verdict"] != "pass" {
+		t.Fatalf("evaluation = %#v, want helpfulness pass", evaluations[0])
+	}
+}
+
 func TestSessionReportToDictUsesAbsoluteAudioRecordingPath(t *testing.T) {
 	path := filepath.Join(".tmp", "session.ogg")
 	want, err := filepath.Abs(path)
@@ -160,6 +193,15 @@ func TestSessionReportToDictUsesAbsoluteAudioRecordingPath(t *testing.T) {
 	if data["audio_recording_path"] != want {
 		t.Fatalf("audio_recording_path = %#v, want %q", data["audio_recording_path"], want)
 	}
+}
+
+func stringSliceContains(values []string, want string) bool {
+	for _, value := range values {
+		if value == want {
+			return true
+		}
+	}
+	return false
 }
 
 func TestSessionReportToDictUsesReferencePreemptiveGenerationShape(t *testing.T) {
