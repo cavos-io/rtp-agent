@@ -48,6 +48,9 @@ type AgentSessionOptions struct {
 	MinConsecutiveSpeechDelay     float64
 	UseTTSAlignedTranscript       bool
 	TTSStreamPacer                *tts.SentenceStreamPacerOptions
+	LLMParallelToolCalls          *bool
+	LLMExtraParams                map[string]any
+	LLMResponseFormat             map[string]any
 	BackgroundAudio               *BackgroundAudioPlayer
 	WordTokenizer                 tokenize.WordTokenizer
 	PreemptiveGeneration          bool

@@ -1854,6 +1854,26 @@ func TestDefaultConfigFromEnvWrapsLLMFallbackProviders(t *testing.T) {
 	}
 }
 
+func TestDefaultConfigFromEnvConfiguresLLMChatOptions(t *testing.T) {
+	t.Setenv("RTP_AGENT_LLM_PARALLEL_TOOL_CALLS", "true")
+	t.Setenv("RTP_AGENT_LLM_JSON_CONFIG", "temperature=0.2")
+	t.Setenv("RTP_AGENT_LLM_RESPONSE_FORMAT", "type=json_object")
+
+	app, err := NewApp(DefaultConfigFromEnv())
+	if err != nil {
+		t.Fatalf("NewApp() error = %v", err)
+	}
+	if app.Session.Options.LLMParallelToolCalls == nil || !*app.Session.Options.LLMParallelToolCalls {
+		t.Fatalf("LLMParallelToolCalls = %#v, want true", app.Session.Options.LLMParallelToolCalls)
+	}
+	if got := app.Session.Options.LLMExtraParams["temperature"]; got != 0.2 {
+		t.Fatalf("LLMExtraParams[temperature] = %#v, want 0.2", got)
+	}
+	if got := app.Session.Options.LLMResponseFormat["type"]; got != "json_object" {
+		t.Fatalf("LLMResponseFormat[type] = %#v, want json_object", got)
+	}
+}
+
 func TestDefaultConfigFromEnvWrapsSTTFallbackProviders(t *testing.T) {
 	t.Setenv("RTP_AGENT_STT_PROVIDER", "deepgram")
 	t.Setenv("RTP_AGENT_STT_FALLBACK_PROVIDERS", "slng")

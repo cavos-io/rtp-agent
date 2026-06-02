@@ -165,6 +165,8 @@ type AppConfig struct {
 	LLMExtraHeaders                         map[string]string
 	LLMExtraBody                            map[string]any
 	LLMFallbackProviders                    []string
+	LLMParallelToolCalls                    *bool
+	LLMResponseFormat                       map[string]any
 	STTProvider                             string
 	STTFallbackProviders                    []string
 	STTModel                                string
@@ -470,6 +472,8 @@ func DefaultConfigFromEnv() AppConfig {
 		LLMExtraHeaders:                         splitEnvStringMap("RTP_AGENT_LLM_EXTRA_HEADERS"),
 		LLMExtraBody:                            splitEnvMap("RTP_AGENT_LLM_JSON_CONFIG"),
 		LLMFallbackProviders:                    splitEnvList("RTP_AGENT_LLM_FALLBACK_PROVIDERS"),
+		LLMParallelToolCalls:                    getenvOptionalBool("RTP_AGENT_LLM_PARALLEL_TOOL_CALLS"),
+		LLMResponseFormat:                       splitEnvMap("RTP_AGENT_LLM_RESPONSE_FORMAT"),
 		STTProvider:                             normalizedEnv("RTP_AGENT_STT_PROVIDER"),
 		STTFallbackProviders:                    splitEnvList("RTP_AGENT_STT_FALLBACK_PROVIDERS"),
 		STTModel:                                os.Getenv("RTP_AGENT_STT_MODEL"),
@@ -3296,6 +3300,9 @@ func agentSessionOptionsFromConfig(cfg AppConfig) (agent.AgentSessionOptions, er
 		}
 		opts.TTSStreamPacer = &pacer
 	}
+	opts.LLMParallelToolCalls = cfg.LLMParallelToolCalls
+	opts.LLMExtraParams = cfg.LLMExtraBody
+	opts.LLMResponseFormat = cfg.LLMResponseFormat
 	if cfg.BackgroundAudioAmbient != "" || cfg.BackgroundAudioThinking != "" {
 		opts.BackgroundAudio = agent.NewBackgroundAudioPlayer(
 			backgroundAudioSource(cfg.BackgroundAudioAmbient),

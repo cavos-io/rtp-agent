@@ -260,6 +260,15 @@ func (va *PipelineAgent) generateReplyWithOptions(opts pipelineReplyOptions) {
 		if session.Options.MaxToolSteps > 0 && toolSteps >= session.Options.MaxToolSteps {
 			chatOptions = append(chatOptions, llm.WithToolChoice("none"))
 		}
+		if session.Options.LLMParallelToolCalls != nil {
+			chatOptions = append(chatOptions, llm.WithParallelToolCalls(*session.Options.LLMParallelToolCalls))
+		}
+		if len(session.Options.LLMExtraParams) > 0 {
+			chatOptions = append(chatOptions, llm.WithExtraParams(session.Options.LLMExtraParams))
+		}
+		if len(session.Options.LLMResponseFormat) > 0 {
+			chatOptions = append(chatOptions, llm.WithResponseFormat(session.Options.LLMResponseFormat))
+		}
 		genData, err := PerformLLMInference(ctx, va.LLM, inferenceCtx, selectedTools, chatOptions...)
 		if err != nil {
 			logger.Logger.Errorw("LLM inference failed", err)
