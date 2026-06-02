@@ -2564,6 +2564,21 @@ func TestDefaultConfigFromEnvConfiguresTTSStreamPacer(t *testing.T) {
 	}
 }
 
+func TestDefaultConfigFromEnvConfiguresTTSTextReplacements(t *testing.T) {
+	t.Setenv("RTP_AGENT_TTS_TEXT_REPLACEMENTS", "OpenAI=Open A I,world=there")
+
+	app, err := NewApp(DefaultConfigFromEnv())
+	if err != nil {
+		t.Fatalf("NewApp() error = %v", err)
+	}
+	if got := app.Config.TTSTextReplacements["OpenAI"]; got != "Open A I" {
+		t.Fatalf("Config.TTSTextReplacements[OpenAI] = %q, want Open A I", got)
+	}
+	if got := app.Session.Options.TTSTextReplacements["world"]; got != "there" {
+		t.Fatalf("Session.Options.TTSTextReplacements[world] = %q, want there", got)
+	}
+}
+
 func TestDefaultConfigFromEnvConfiguresBackgroundAudio(t *testing.T) {
 	t.Setenv("RTP_AGENT_BACKGROUND_AUDIO_AMBIENT", "city-ambience.ogg")
 	t.Setenv("RTP_AGENT_BACKGROUND_AUDIO_THINKING", "/tmp/thinking.wav")
