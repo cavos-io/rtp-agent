@@ -11,6 +11,7 @@ import (
 	"github.com/cavos-io/rtp-agent/core/audio/model"
 	"github.com/cavos-io/rtp-agent/core/llm"
 	"github.com/cavos-io/rtp-agent/library/logger"
+	"github.com/cavos-io/rtp-agent/library/utils/images"
 )
 
 type MultimodalAgent struct {
@@ -255,5 +256,17 @@ func (ma *MultimodalAgent) OnAudioFrame(ctx context.Context, frame *model.AudioF
 	select {
 	case ma.audioInCh <- frame:
 	default:
+	}
+}
+
+func (ma *MultimodalAgent) OnVideoFrame(ctx context.Context, frame *images.VideoFrame) {
+	ma.mu.Lock()
+	rtSession := ma.rtSession
+	ma.mu.Unlock()
+	if rtSession == nil {
+		return
+	}
+	if err := rtSession.PushVideo(frame); err != nil {
+		logger.Logger.Errorw("failed to push video to multimodal session", err)
 	}
 }

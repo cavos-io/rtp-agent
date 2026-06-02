@@ -171,6 +171,46 @@ func TestPipelineAgentGenerateReplyWithToolChoicePassesChatOption(t *testing.T) 
 	}
 }
 
+func TestPipelineAgentGenerateReplyPassesSessionLLMChatOptions(t *testing.T) {
+	chatCtx := llm.NewChatContext()
+	l := &fakeGenerationLLM{
+		stream: &fakeGenerationLLMStream{
+			chunks: []*llm.ChatChunk{
+				{Delta: &llm.ChoiceDelta{Content: "configured"}},
+			},
+		},
+	}
+	parallel := true
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{
+		LLMParallelToolCalls: &parallel,
+		LLMExtraParams: map[string]any{
+			"temperature": 0.2,
+		},
+		LLMResponseFormat: map[string]any{
+			"type": "json_object",
+		},
+	})
+	agent := NewPipelineAgent(nil, nil, l, &fakePipelineTTS{}, chatCtx)
+	agent.session = session
+	agent.ctx = context.Background()
+
+	agent.generateReplyWithOptions(pipelineReplyOptions{})
+
+	if len(l.calls) != 1 {
+		t.Fatalf("LLM Chat calls = %d, want 1", len(l.calls))
+	}
+	call := l.calls[0]
+	if !call.ParallelToolCalls {
+		t.Fatal("ParallelToolCalls = false, want true")
+	}
+	if call.ExtraParams["temperature"] != 0.2 {
+		t.Fatalf("ExtraParams = %#v, want temperature", call.ExtraParams)
+	}
+	if call.ResponseFormat["type"] != "json_object" {
+		t.Fatalf("ResponseFormat = %#v, want json_object", call.ResponseFormat)
+	}
+}
+
 func TestPipelineAgentGenerateReplyWithToolsFiltersChatOptions(t *testing.T) {
 	chatCtx := llm.NewChatContext()
 	l := &fakeGenerationLLM{

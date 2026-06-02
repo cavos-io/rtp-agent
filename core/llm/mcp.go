@@ -131,7 +131,7 @@ func serializeMCPToolContent(content []mcpToolContent) (string, error) {
 }
 
 func (s *MCPServerStdio) Initialize(ctx context.Context) error {
-	s.cmd = exec.CommandContext(ctx, s.Command, s.Args...)
+	s.cmd = exec.CommandContext(context.Background(), s.Command, s.Args...)
 	s.cmd.Dir = s.Cwd
 	if len(s.Env) > 0 {
 		env := os.Environ()

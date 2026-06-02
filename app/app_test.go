@@ -1,9 +1,12 @@
 package app
 
 import (
+	"bufio"
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
+	"os"
 	"reflect"
 	"testing"
 	"time"
@@ -1610,6 +1613,73 @@ func TestDefaultConfigFromEnvAddsXAIProviderTools(t *testing.T) {
 	}
 }
 
+func TestDefaultConfigFromEnvAddsMCPStdioTools(t *testing.T) {
+	servers := []MCPStdioServerConfig{{
+		Command: os.Args[0],
+		Args:    []string{"-test.run=TestMCPStdioHelperProcess"},
+		Env:     map[string]string{"GO_WANT_MCP_HELPER": "1"},
+	}}
+	encoded, err := json.Marshal(servers)
+	if err != nil {
+		t.Fatalf("marshal MCP config: %v", err)
+	}
+	t.Setenv("RTP_AGENT_MCP_STDIO_SERVERS", string(encoded))
+
+	app, err := NewApp(DefaultConfigFromEnv())
+	if err != nil {
+		t.Fatalf("NewApp() error = %v", err)
+	}
+	defer app.closeMCPServers()
+	if len(app.Agent.Tools) != 1 {
+		t.Fatalf("len(Agent.Tools) = %d, want 1 MCP tool", len(app.Agent.Tools))
+	}
+	if got := app.Agent.Tools[0].Name(); got != "lookup" {
+		t.Fatalf("tool name = %q, want lookup", got)
+	}
+}
+
+func TestMCPStdioHelperProcess(t *testing.T) {
+	if os.Getenv("GO_WANT_MCP_HELPER") != "1" {
+		return
+	}
+	scanner := bufio.NewScanner(os.Stdin)
+	encoder := json.NewEncoder(os.Stdout)
+	for scanner.Scan() {
+		var request struct {
+			ID     int64  `json:"id"`
+			Method string `json:"method"`
+		}
+		if err := json.Unmarshal(scanner.Bytes(), &request); err != nil || request.ID == 0 {
+			continue
+		}
+		switch request.Method {
+		case "initialize":
+			_ = encoder.Encode(map[string]any{
+				"jsonrpc": "2.0",
+				"id":      request.ID,
+				"result": map[string]any{
+					"protocolVersion": "2024-11-05",
+					"capabilities":    map[string]any{},
+					"serverInfo":      map[string]any{"name": "fake", "version": "1"},
+				},
+			})
+		case "tools/list":
+			_ = encoder.Encode(map[string]any{
+				"jsonrpc": "2.0",
+				"id":      request.ID,
+				"result": map[string]any{
+					"tools": []map[string]any{{
+						"name":        "lookup",
+						"description": "Look up information",
+						"inputSchema": map[string]any{"type": "object", "properties": map[string]any{}},
+					}},
+				},
+			})
+		}
+	}
+	os.Exit(0)
+}
+
 func TestDefaultConfigFromEnvAddsEndCallTool(t *testing.T) {
 	t.Setenv("RTP_AGENT_TOOLS", "end_call")
 
@@ -1767,6 +1837,86 @@ func TestDefaultConfigFromEnvConfiguresEvaluationJudges(t *testing.T) {
 		if got := app.Evaluator.Judges[i].Name(); got != want {
 			t.Fatalf("Evaluator.Judges[%d].Name() = %q, want %q", i, got, want)
 		}
+	}
+}
+
+func TestDefaultConfigFromEnvWrapsLLMFallbackProviders(t *testing.T) {
+	t.Setenv("RTP_AGENT_LLM_PROVIDER", "minimal")
+	t.Setenv("RTP_AGENT_LLM_FALLBACK_PROVIDERS", "openai")
+	t.Setenv("OPENAI_API_KEY", "test-openai-key")
+
+	app, err := NewApp(DefaultConfigFromEnv())
+	if err != nil {
+		t.Fatalf("NewApp() error = %v", err)
+	}
+	if got := llm.Label(app.Agent.LLM); got != "FallbackAdapter(minimal.MinimalLLM)" {
+		t.Fatalf("LLM label = %q, want fallback adapter around primary minimal LLM", got)
+	}
+}
+
+func TestDefaultConfigFromEnvConfiguresLLMChatOptions(t *testing.T) {
+	t.Setenv("RTP_AGENT_LLM_PARALLEL_TOOL_CALLS", "true")
+	t.Setenv("RTP_AGENT_LLM_JSON_CONFIG", "temperature=0.2")
+	t.Setenv("RTP_AGENT_LLM_RESPONSE_FORMAT", "type=json_object")
+
+	app, err := NewApp(DefaultConfigFromEnv())
+	if err != nil {
+		t.Fatalf("NewApp() error = %v", err)
+	}
+	if app.Session.Options.LLMParallelToolCalls == nil || !*app.Session.Options.LLMParallelToolCalls {
+		t.Fatalf("LLMParallelToolCalls = %#v, want true", app.Session.Options.LLMParallelToolCalls)
+	}
+	if got := app.Session.Options.LLMExtraParams["temperature"]; got != 0.2 {
+		t.Fatalf("LLMExtraParams[temperature] = %#v, want 0.2", got)
+	}
+	if got := app.Session.Options.LLMResponseFormat["type"]; got != "json_object" {
+		t.Fatalf("LLMResponseFormat[type] = %#v, want json_object", got)
+	}
+}
+
+func TestDefaultConfigFromEnvWrapsSTTFallbackProviders(t *testing.T) {
+	t.Setenv("RTP_AGENT_STT_PROVIDER", "deepgram")
+	t.Setenv("RTP_AGENT_STT_FALLBACK_PROVIDERS", "slng")
+	t.Setenv("SLNG_API_KEY", "test-slng-key")
+
+	app, err := NewApp(DefaultConfigFromEnv())
+	if err != nil {
+		t.Fatalf("NewApp() error = %v", err)
+	}
+	if got := app.Session.STT.Label(); got != "FallbackAdapter(deepgram.STT)" {
+		t.Fatalf("STT label = %q, want fallback adapter around primary deepgram STT", got)
+	}
+}
+
+func TestDefaultConfigFromEnvWrapsNonStreamingSTTFallbackWithVAD(t *testing.T) {
+	t.Setenv("RTP_AGENT_STT_PROVIDER", "deepgram")
+	t.Setenv("RTP_AGENT_STT_FALLBACK_PROVIDERS", "elevenlabs")
+	t.Setenv("RTP_AGENT_VAD_PROVIDER", "silero")
+	t.Setenv("ELEVENLABS_API_KEY", "test-elevenlabs-key")
+
+	app, err := NewApp(DefaultConfigFromEnv())
+	if err != nil {
+		t.Fatalf("NewApp() error = %v", err)
+	}
+	if got := app.Session.STT.Label(); got != "FallbackAdapter(deepgram.STT)" {
+		t.Fatalf("STT label = %q, want fallback adapter around primary deepgram STT", got)
+	}
+	if app.Session.VAD == nil {
+		t.Fatal("Session VAD is nil")
+	}
+}
+
+func TestDefaultConfigFromEnvWrapsTTSFallbackProviders(t *testing.T) {
+	t.Setenv("RTP_AGENT_TTS_PROVIDER", "openai")
+	t.Setenv("RTP_AGENT_TTS_FALLBACK_PROVIDERS", "cartesia")
+	t.Setenv("OPENAI_API_KEY", "test-openai-key")
+
+	app, err := NewApp(DefaultConfigFromEnv())
+	if err != nil {
+		t.Fatalf("NewApp() error = %v", err)
+	}
+	if got := app.Session.TTS.Label(); got != "FallbackAdapter(openai.TTS)" {
+		t.Fatalf("TTS label = %q, want fallback adapter around primary openai TTS", got)
 	}
 }
 

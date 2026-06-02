@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"strconv"
@@ -163,7 +164,11 @@ type AppConfig struct {
 	LLMBaseURL                              string
 	LLMExtraHeaders                         map[string]string
 	LLMExtraBody                            map[string]any
+	LLMFallbackProviders                    []string
+	LLMParallelToolCalls                    *bool
+	LLMResponseFormat                       map[string]any
 	STTProvider                             string
+	STTFallbackProviders                    []string
 	STTModel                                string
 	STTLanguage                             string
 	STTEncoding                             string
@@ -284,6 +289,7 @@ type AppConfig struct {
 	BackgroundAudioAmbient                  string
 	BackgroundAudioThinking                 string
 	TTSProvider                             string
+	TTSFallbackProviders                    []string
 	TTSModel                                string
 	TTSVoice                                string
 	TTSRefAudio                             string
@@ -414,6 +420,7 @@ type AppConfig struct {
 	LiveKitInferenceAPIKey                string
 	LiveKitInferenceAPISecret             string
 	AppTools                              []string
+	MCPStdioServers                       []MCPStdioServerConfig
 	IVRDetection                          bool
 	IVRSilenceDurationSeconds             *float64
 	WorkflowTask                          string
@@ -427,12 +434,20 @@ type AppConfig struct {
 	EvalJudges                            []string
 }
 
+type MCPStdioServerConfig struct {
+	Command string            `json:"command"`
+	Args    []string          `json:"args"`
+	Env     map[string]string `json:"env"`
+	Cwd     string            `json:"cwd"`
+}
+
 type App struct {
 	Server        *worker.AgentServer
 	Agent         *agent.Agent
 	Session       *agent.AgentSession
 	RealtimeModel llm.RealtimeModel
 	Evaluator     *evals.JudgeGroup
+	MCPServers    []llm.MCPServer
 	RoomIO        *worker.RoomIO
 	RoomOptions   worker.RoomOptions
 	Config        AppConfig
@@ -456,7 +471,11 @@ func DefaultConfigFromEnv() AppConfig {
 		LLMBaseURL:                              os.Getenv("RTP_AGENT_LLM_BASE_URL"),
 		LLMExtraHeaders:                         splitEnvStringMap("RTP_AGENT_LLM_EXTRA_HEADERS"),
 		LLMExtraBody:                            splitEnvMap("RTP_AGENT_LLM_JSON_CONFIG"),
+		LLMFallbackProviders:                    splitEnvList("RTP_AGENT_LLM_FALLBACK_PROVIDERS"),
+		LLMParallelToolCalls:                    getenvOptionalBool("RTP_AGENT_LLM_PARALLEL_TOOL_CALLS"),
+		LLMResponseFormat:                       splitEnvMap("RTP_AGENT_LLM_RESPONSE_FORMAT"),
 		STTProvider:                             normalizedEnv("RTP_AGENT_STT_PROVIDER"),
+		STTFallbackProviders:                    splitEnvList("RTP_AGENT_STT_FALLBACK_PROVIDERS"),
 		STTModel:                                os.Getenv("RTP_AGENT_STT_MODEL"),
 		STTLanguage:                             os.Getenv("RTP_AGENT_STT_LANGUAGE"),
 		STTEncoding:                             os.Getenv("RTP_AGENT_STT_ENCODING"),
@@ -577,6 +596,7 @@ func DefaultConfigFromEnv() AppConfig {
 		BackgroundAudioAmbient:                  os.Getenv("RTP_AGENT_BACKGROUND_AUDIO_AMBIENT"),
 		BackgroundAudioThinking:                 os.Getenv("RTP_AGENT_BACKGROUND_AUDIO_THINKING"),
 		TTSProvider:                             normalizedEnv("RTP_AGENT_TTS_PROVIDER"),
+		TTSFallbackProviders:                    splitEnvList("RTP_AGENT_TTS_FALLBACK_PROVIDERS"),
 		TTSModel:                                os.Getenv("RTP_AGENT_TTS_MODEL"),
 		TTSVoice:                                os.Getenv("RTP_AGENT_TTS_VOICE"),
 		TTSRefAudio:                             os.Getenv("RTP_AGENT_TTS_REF_AUDIO"),
@@ -702,6 +722,7 @@ func DefaultConfigFromEnv() AppConfig {
 		XAIFileSearchMaxResults:                 getenvOptionalInt("RTP_AGENT_XAI_FILE_SEARCH_MAX_RESULTS"),
 		GoogleCredentialsFile:                   firstEnv("RTP_AGENT_GOOGLE_CREDENTIALS_FILE", "GOOGLE_APPLICATION_CREDENTIALS"),
 		AppTools:                                splitEnvList("RTP_AGENT_TOOLS"),
+		MCPStdioServers:                         mcpStdioServersFromEnv("RTP_AGENT_MCP_STDIO_SERVERS"),
 		IVRDetection:                            getenvBool("RTP_AGENT_IVR_DETECTION"),
 		IVRSilenceDurationSeconds:               getenvOptionalFloat("RTP_AGENT_IVR_SILENCE_DURATION_SECONDS"),
 		WorkflowTask:                            normalizedEnv("RTP_AGENT_WORKFLOW_TASK"),
@@ -726,6 +747,9 @@ func NewApp(cfg AppConfig) (*App, error) {
 		baseAgent.Instructions = "You are a helpful realtime voice agent."
 	}
 
+	if err := configureVAD(cfg, baseAgent); err != nil {
+		return nil, err
+	}
 	realtimeModel, err := configureProviders(cfg, baseAgent)
 	if err != nil {
 		return nil, err
@@ -745,9 +769,6 @@ func NewApp(cfg AppConfig) (*App, error) {
 	if err := configureAvatar(cfg, baseAgent); err != nil {
 		return nil, err
 	}
-	if err := configureVAD(cfg, baseAgent); err != nil {
-		return nil, err
-	}
 	sessionAgent, err := workflowAgentFromConfig(cfg, baseAgent)
 	if err != nil {
 		return nil, err
@@ -761,11 +782,17 @@ func NewApp(cfg AppConfig) (*App, error) {
 	if realtimeModel != nil {
 		session.Assistant = agent.NewMultimodalAgent(realtimeModel, session.ChatCtx)
 	}
+	mcpServers, err := configureMCPTools(context.Background(), cfg, sessionAgent.GetAgent())
+	if err != nil {
+		return nil, err
+	}
 	if err := configureAppTools(cfg, sessionAgent.GetAgent(), session); err != nil {
+		closeMCPServers(mcpServers)
 		return nil, err
 	}
 	evaluator, err := evaluatorFromConfig(cfg, session.LLM)
 	if err != nil {
+		closeMCPServers(mcpServers)
 		return nil, err
 	}
 
@@ -784,9 +811,11 @@ func NewApp(cfg AppConfig) (*App, error) {
 		Session:       session,
 		RealtimeModel: realtimeModel,
 		Evaluator:     evaluator,
+		MCPServers:    mcpServers,
 		Config:        cfg,
 	}
 	if err := server.RTCSession(app.runSession, nil, nil); err != nil {
+		app.closeMCPServers()
 		return nil, err
 	}
 	return app, nil
@@ -1007,6 +1036,7 @@ func (a *App) runSession(ctx *worker.JobContext) error {
 	if a.Session == nil {
 		return fmt.Errorf("agent session is not configured")
 	}
+	defer a.closeMCPServers()
 	a.Server.SetConsoleSession(a.Session)
 	if a.Session.STT == nil && a.Session.LLM == nil && a.Session.TTS == nil && a.RealtimeModel == nil {
 		return nil
@@ -1039,6 +1069,22 @@ func (a *App) runSession(ctx *worker.JobContext) error {
 		}
 	}
 	return a.Session.Start(sessionCtx)
+}
+
+func (a *App) closeMCPServers() {
+	if a == nil {
+		return
+	}
+	closeMCPServers(a.MCPServers)
+	a.MCPServers = nil
+}
+
+func closeMCPServers(servers []llm.MCPServer) {
+	for _, server := range servers {
+		if server != nil {
+			_ = server.Close()
+		}
+	}
 }
 
 func configureAvatar(cfg AppConfig, a *agent.Agent) error {
@@ -1168,6 +1214,282 @@ func configureSTTAdapters(cfg AppConfig, a *agent.Agent) error {
 	return nil
 }
 
+func configureLLMFallbacks(cfg AppConfig, a *agent.Agent) error {
+	if len(cfg.LLMFallbackProviders) == 0 {
+		return nil
+	}
+	if a.LLM == nil {
+		return fmt.Errorf("RTP_AGENT_LLM_FALLBACK_PROVIDERS requires RTP_AGENT_LLM_PROVIDER")
+	}
+	llms := make([]llm.LLM, 0, len(cfg.LLMFallbackProviders)+1)
+	llms = append(llms, a.LLM)
+	for _, provider := range cfg.LLMFallbackProviders {
+		fallback, err := fallbackLLMFromProvider(cfg, provider)
+		if err != nil {
+			return err
+		}
+		llms = append(llms, fallback)
+	}
+	a.LLM = llm.NewFallbackAdapter(llms)
+	return nil
+}
+
+func fallbackLLMFromProvider(cfg AppConfig, provider string) (llm.LLM, error) {
+	switch normalizeProvider(provider) {
+	case providerMinimal:
+		return minimal.NewMinimalLLM(cfg.MinimalAPIKey, cfg.LLMModel), nil
+	case providerOpenAI:
+		return openai.NewOpenAILLM(cfg.OpenAIAPIKey, cfg.LLMModel)
+	case providerGroq:
+		return groq.NewGroqLLM(cfg.GroqAPIKey, cfg.LLMModel), nil
+	case providerXAI:
+		return xai.NewXaiLLM(cfg.XAIAPIKey, cfg.LLMModel), nil
+	case providerLiveKit:
+		return openai.NewLiveKitInferenceLLM(cfg.LLMModel, cfg.LiveKitInferenceAPIKey, cfg.LiveKitInferenceAPISecret)
+	default:
+		return nil, fmt.Errorf("unsupported RTP_AGENT_LLM_FALLBACK_PROVIDERS entry %q", provider)
+	}
+}
+
+func configureSTTFallbacks(cfg AppConfig, a *agent.Agent) error {
+	if len(cfg.STTFallbackProviders) == 0 {
+		return nil
+	}
+	if a.STT == nil {
+		return fmt.Errorf("RTP_AGENT_STT_FALLBACK_PROVIDERS requires RTP_AGENT_STT_PROVIDER")
+	}
+	stts := make([]corestt.STT, 0, len(cfg.STTFallbackProviders)+1)
+	stts = append(stts, a.STT)
+	for _, provider := range cfg.STTFallbackProviders {
+		fallback, err := fallbackSTTFromProvider(cfg, provider)
+		if err != nil {
+			return err
+		}
+		stts = append(stts, fallback)
+	}
+	if a.VAD != nil {
+		a.STT = corestt.NewFallbackAdapterWithVAD(stts, a.VAD)
+		return nil
+	}
+	a.STT = corestt.NewFallbackAdapter(stts)
+	return nil
+}
+
+func fallbackSTTFromProvider(cfg AppConfig, provider string) (corestt.STT, error) {
+	switch normalizeProvider(provider) {
+	case providerDeepgram:
+		sttOpts := []deepgram.DeepgramSTTOption{}
+		if cfg.STTBaseURL != "" {
+			sttOpts = append(sttOpts, deepgram.WithDeepgramSTTBaseURL(cfg.STTBaseURL))
+		}
+		if cfg.STTInterimResults != nil {
+			sttOpts = append(sttOpts, deepgram.WithDeepgramSTTInterimResults(*cfg.STTInterimResults))
+		}
+		if cfg.STTDiarization != nil {
+			sttOpts = append(sttOpts, deepgram.WithDeepgramSTTDiarization(*cfg.STTDiarization))
+		}
+		if cfg.STTSampleRate != nil {
+			sttOpts = append(sttOpts, deepgram.WithDeepgramSTTSampleRate(*cfg.STTSampleRate))
+		}
+		if cfg.STTNumberOfChannels != nil {
+			sttOpts = append(sttOpts, deepgram.WithDeepgramSTTNumChannels(*cfg.STTNumberOfChannels))
+		}
+		return deepgram.NewDeepgramSTT("", cfg.STTModel, sttOpts...), nil
+	case providerOpenAI:
+		sttOpts := []openai.OpenAISTTOption{openai.WithOpenAISTTRealtime(true)}
+		if cfg.STTLanguage != "" {
+			sttOpts = append(sttOpts, openai.WithOpenAISTTLanguage(cfg.STTLanguage))
+		}
+		if cfg.STTDetectLanguage {
+			sttOpts = append(sttOpts, openai.WithOpenAISTTDetectLanguage(true))
+		}
+		if cfg.STTPrompt != "" {
+			sttOpts = append(sttOpts, openai.WithOpenAISTTPrompt(cfg.STTPrompt))
+		}
+		if cfg.STTBaseURL != "" {
+			sttOpts = append(sttOpts, openai.WithOpenAISTTBaseURL(cfg.STTBaseURL))
+		}
+		return openai.NewOpenAISTT(cfg.OpenAIAPIKey, cfg.STTModel, sttOpts...)
+	case providerElevenLabs:
+		sttOpts := []elevenlabs.ElevenLabsSTTOption{}
+		if cfg.STTBaseURL != "" {
+			sttOpts = append(sttOpts, elevenlabs.WithElevenLabsSTTBaseURL(cfg.STTBaseURL))
+		}
+		if cfg.STTModel != "" {
+			sttOpts = append(sttOpts, elevenlabs.WithElevenLabsSTTModel(cfg.STTModel))
+		}
+		if cfg.STTLanguage != "" {
+			sttOpts = append(sttOpts, elevenlabs.WithElevenLabsSTTLanguage(cfg.STTLanguage))
+		}
+		if cfg.STTTagAudioEvents != nil {
+			sttOpts = append(sttOpts, elevenlabs.WithElevenLabsSTTTagAudioEvents(*cfg.STTTagAudioEvents))
+		}
+		if cfg.STTIncludeTimestamps != nil {
+			sttOpts = append(sttOpts, elevenlabs.WithElevenLabsSTTIncludeTimestamps(*cfg.STTIncludeTimestamps))
+		}
+		if cfg.STTSampleRate != nil {
+			sttOpts = append(sttOpts, elevenlabs.WithElevenLabsSTTSampleRate(*cfg.STTSampleRate))
+		}
+		return elevenlabs.NewElevenLabsSTT(cfg.ElevenLabsAPIKey, sttOpts...), nil
+	case providerSLNG:
+		sttOpts := []slng.STTOption{}
+		if cfg.STTModel != "" {
+			sttOpts = append(sttOpts, slng.WithSTTModel(cfg.STTModel))
+		}
+		if cfg.STTBaseURL != "" {
+			if strings.HasPrefix(cfg.STTBaseURL, "ws://") || strings.HasPrefix(cfg.STTBaseURL, "wss://") || strings.HasPrefix(cfg.STTBaseURL, "http://") || strings.HasPrefix(cfg.STTBaseURL, "https://") {
+				sttOpts = append(sttOpts, slng.WithSTTEndpoint(cfg.STTBaseURL))
+			} else {
+				sttOpts = append(sttOpts, slng.WithSTTBaseURL(cfg.STTBaseURL))
+			}
+		}
+		if cfg.STTRegion != "" {
+			sttOpts = append(sttOpts, slng.WithSTTRegionOverride(cfg.STTRegion))
+		}
+		if cfg.STTEncoding != "" {
+			sttOpts = append(sttOpts, slng.WithSTTEncoding(cfg.STTEncoding))
+		}
+		if cfg.STTLanguage != "" {
+			sttOpts = append(sttOpts, slng.WithSTTLanguage(cfg.STTLanguage))
+		}
+		if cfg.STTInterimResults != nil {
+			sttOpts = append(sttOpts, slng.WithSTTPartialTranscripts(*cfg.STTInterimResults))
+		}
+		return slng.NewSTT(cfg.SLNGAPIKey, sttOpts...), nil
+	default:
+		return nil, fmt.Errorf("unsupported RTP_AGENT_STT_FALLBACK_PROVIDERS entry %q", provider)
+	}
+}
+
+func configureTTSFallbacks(cfg AppConfig, a *agent.Agent) error {
+	if len(cfg.TTSFallbackProviders) == 0 {
+		return nil
+	}
+	if a.TTS == nil {
+		return fmt.Errorf("RTP_AGENT_TTS_FALLBACK_PROVIDERS requires RTP_AGENT_TTS_PROVIDER")
+	}
+	ttss := make([]coretts.TTS, 0, len(cfg.TTSFallbackProviders)+1)
+	ttss = append(ttss, a.TTS)
+	for _, provider := range cfg.TTSFallbackProviders {
+		fallback, err := fallbackTTSFromProvider(cfg, provider)
+		if err != nil {
+			return err
+		}
+		ttss = append(ttss, fallback)
+	}
+	a.TTS = coretts.NewFallbackAdapter(ttss)
+	return nil
+}
+
+func fallbackTTSFromProvider(cfg AppConfig, provider string) (coretts.TTS, error) {
+	switch normalizeProvider(provider) {
+	case providerOpenAI:
+		ttsOpts := []openai.OpenAITTSOption{}
+		if cfg.TTSModel != "" {
+			ttsOpts = append(ttsOpts, openai.WithOpenAITTSModel(goopenai.SpeechModel(cfg.TTSModel)))
+		}
+		if cfg.TTSVoice != "" {
+			ttsOpts = append(ttsOpts, openai.WithOpenAITTSVoice(goopenai.SpeechVoice(cfg.TTSVoice)))
+		}
+		if cfg.TTSSpeed != 0 {
+			ttsOpts = append(ttsOpts, openai.WithOpenAITTSSpeed(cfg.TTSSpeed))
+		}
+		if cfg.TTSInstructions != "" {
+			ttsOpts = append(ttsOpts, openai.WithOpenAITTSInstructions(cfg.TTSInstructions))
+		}
+		if cfg.TTSResponseFormat != "" {
+			ttsOpts = append(ttsOpts, openai.WithOpenAITTSResponseFormat(goopenai.SpeechResponseFormat(cfg.TTSResponseFormat)))
+		}
+		if cfg.TTSBaseURL != "" {
+			ttsOpts = append(ttsOpts, openai.WithOpenAITTSBaseURL(cfg.TTSBaseURL))
+		}
+		return openai.NewOpenAITTS(cfg.OpenAIAPIKey, "", "", ttsOpts...)
+	case providerCartesia:
+		ttsOpts := []cartesia.CartesiaTTSOption{}
+		if cfg.TTSBaseURL != "" {
+			ttsOpts = append(ttsOpts, cartesia.WithCartesiaBaseURL(cfg.TTSBaseURL))
+		}
+		if cfg.TTSLanguage != "" {
+			ttsOpts = append(ttsOpts, cartesia.WithCartesiaLanguage(cfg.TTSLanguage))
+		}
+		if cfg.TTSEncoding != "" || cfg.TTSSampleRate != nil {
+			sampleRate := 0
+			if cfg.TTSSampleRate != nil {
+				sampleRate = *cfg.TTSSampleRate
+			}
+			ttsOpts = append(ttsOpts, cartesia.WithCartesiaAudioFormat(cfg.TTSEncoding, sampleRate))
+		}
+		if cfg.TTSAPIVersion != "" {
+			ttsOpts = append(ttsOpts, cartesia.WithCartesiaAPIVersion(cfg.TTSAPIVersion))
+		}
+		if cfg.TTSWordTimestamps != nil {
+			ttsOpts = append(ttsOpts, cartesia.WithCartesiaWordTimestamps(*cfg.TTSWordTimestamps))
+		}
+		return cartesia.NewCartesiaTTS("", cfg.TTSVoice, cfg.TTSModel, ttsOpts...), nil
+	case providerDeepgram:
+		ttsOpts := []deepgram.DeepgramTTSOption{}
+		if cfg.TTSBaseURL != "" {
+			ttsOpts = append(ttsOpts, deepgram.WithDeepgramTTSBaseURL(cfg.TTSBaseURL))
+		}
+		if cfg.TTSMIPOptOut != nil {
+			ttsOpts = append(ttsOpts, deepgram.WithDeepgramTTSMipOptOut(*cfg.TTSMIPOptOut))
+		}
+		if cfg.TTSEncoding != "" || cfg.TTSSampleRate != nil {
+			sampleRate := 0
+			if cfg.TTSSampleRate != nil {
+				sampleRate = *cfg.TTSSampleRate
+			}
+			ttsOpts = append(ttsOpts, deepgram.WithDeepgramTTSAudioFormat(cfg.TTSEncoding, sampleRate))
+		}
+		return deepgram.NewDeepgramTTS("", cfg.TTSModel, ttsOpts...), nil
+	case providerElevenLabs:
+		ttsOpts := []elevenlabs.ElevenLabsTTSOption{}
+		if cfg.TTSBaseURL != "" {
+			ttsOpts = append(ttsOpts, elevenlabs.WithElevenLabsBaseURL(cfg.TTSBaseURL))
+		}
+		if cfg.TTSLanguage != "" {
+			ttsOpts = append(ttsOpts, elevenlabs.WithElevenLabsLanguage(cfg.TTSLanguage))
+		}
+		if cfg.TTSEnableSSMLParsing != nil {
+			ttsOpts = append(ttsOpts, elevenlabs.WithElevenLabsEnableSSMLParsing(*cfg.TTSEnableSSMLParsing))
+		}
+		if cfg.TTSEncoding != "" {
+			ttsOpts = append(ttsOpts, elevenlabs.WithElevenLabsEncoding(cfg.TTSEncoding))
+		}
+		return elevenlabs.NewElevenLabsTTS(cfg.ElevenLabsAPIKey, cfg.TTSVoice, cfg.TTSModel, ttsOpts...)
+	case providerSLNG:
+		ttsOpts := []slng.TTSOption{}
+		if cfg.TTSModel != "" {
+			ttsOpts = append(ttsOpts, slng.WithTTSModel(cfg.TTSModel))
+		}
+		if cfg.TTSBaseURL != "" {
+			if strings.HasPrefix(cfg.TTSBaseURL, "ws://") || strings.HasPrefix(cfg.TTSBaseURL, "wss://") || strings.HasPrefix(cfg.TTSBaseURL, "http://") || strings.HasPrefix(cfg.TTSBaseURL, "https://") {
+				ttsOpts = append(ttsOpts, slng.WithTTSEndpoint(cfg.TTSBaseURL))
+			} else {
+				ttsOpts = append(ttsOpts, slng.WithTTSBaseURL(cfg.TTSBaseURL))
+			}
+		}
+		if cfg.TTSRegion != "" {
+			ttsOpts = append(ttsOpts, slng.WithTTSRegionOverride(cfg.TTSRegion))
+		}
+		if cfg.TTSVoice != "" {
+			ttsOpts = append(ttsOpts, slng.WithTTSVoice(cfg.TTSVoice))
+		}
+		if cfg.TTSLanguage != "" {
+			ttsOpts = append(ttsOpts, slng.WithTTSLanguage(cfg.TTSLanguage))
+		}
+		if cfg.TTSSampleRate != nil {
+			ttsOpts = append(ttsOpts, slng.WithTTSSampleRate(*cfg.TTSSampleRate))
+		}
+		if cfg.TTSSpeed != 0 {
+			ttsOpts = append(ttsOpts, slng.WithTTSSpeed(cfg.TTSSpeed))
+		}
+		return slng.NewTTS(cfg.SLNGAPIKey, ttsOpts...), nil
+	default:
+		return nil, fmt.Errorf("unsupported RTP_AGENT_TTS_FALLBACK_PROVIDERS entry %q", provider)
+	}
+}
+
 func configureProviders(cfg AppConfig, a *agent.Agent) (llm.RealtimeModel, error) {
 	switch normalizeProvider(cfg.LLMProvider) {
 	case "":
@@ -1273,6 +1595,9 @@ func configureProviders(cfg AppConfig, a *agent.Agent) (llm.RealtimeModel, error
 		a.LLM = provider
 	default:
 		return nil, fmt.Errorf("unsupported RTP_AGENT_LLM_PROVIDER %q", cfg.LLMProvider)
+	}
+	if err := configureLLMFallbacks(cfg, a); err != nil {
+		return nil, err
 	}
 
 	switch normalizeProvider(cfg.STTProvider) {
@@ -2150,6 +2475,9 @@ func configureProviders(cfg AppConfig, a *agent.Agent) (llm.RealtimeModel, error
 	default:
 		return nil, fmt.Errorf("unsupported RTP_AGENT_STT_PROVIDER %q", cfg.STTProvider)
 	}
+	if err := configureSTTFallbacks(cfg, a); err != nil {
+		return nil, err
+	}
 
 	switch normalizeProvider(cfg.TTSProvider) {
 	case "":
@@ -2938,6 +3266,9 @@ func configureProviders(cfg AppConfig, a *agent.Agent) (llm.RealtimeModel, error
 	default:
 		return nil, fmt.Errorf("unsupported RTP_AGENT_TTS_PROVIDER %q", cfg.TTSProvider)
 	}
+	if err := configureTTSFallbacks(cfg, a); err != nil {
+		return nil, err
+	}
 
 	switch normalizeProvider(cfg.RealtimeProvider) {
 	case "":
@@ -2969,6 +3300,9 @@ func agentSessionOptionsFromConfig(cfg AppConfig) (agent.AgentSessionOptions, er
 		}
 		opts.TTSStreamPacer = &pacer
 	}
+	opts.LLMParallelToolCalls = cfg.LLMParallelToolCalls
+	opts.LLMExtraParams = cfg.LLMExtraBody
+	opts.LLMResponseFormat = cfg.LLMResponseFormat
 	if cfg.BackgroundAudioAmbient != "" || cfg.BackgroundAudioThinking != "" {
 		opts.BackgroundAudio = agent.NewBackgroundAudioPlayer(
 			backgroundAudioSource(cfg.BackgroundAudioAmbient),
@@ -3119,6 +3453,18 @@ func splitEnvList(name string) []string {
 		return nil
 	}
 	return splitStringList(raw)
+}
+
+func mcpStdioServersFromEnv(name string) []MCPStdioServerConfig {
+	raw := os.Getenv(name)
+	if strings.TrimSpace(raw) == "" {
+		return nil
+	}
+	var servers []MCPStdioServerConfig
+	if err := json.Unmarshal([]byte(raw), &servers); err != nil {
+		return nil
+	}
+	return servers
 }
 
 func splitStringList(raw string) []string {
@@ -3382,6 +3728,49 @@ func configureAppTools(cfg AppConfig, a *agent.Agent, session *agent.AgentSessio
 	}
 	a.Tools = append(a.Tools, tools...)
 	return nil
+}
+
+func configureMCPTools(ctx context.Context, cfg AppConfig, a *agent.Agent) ([]llm.MCPServer, error) {
+	if len(cfg.MCPStdioServers) == 0 {
+		return nil, nil
+	}
+	if a == nil {
+		return nil, fmt.Errorf("MCP stdio tools require an agent")
+	}
+
+	servers := make([]llm.MCPServer, 0, len(cfg.MCPStdioServers))
+	for _, serverConfig := range cfg.MCPStdioServers {
+		command := strings.TrimSpace(serverConfig.Command)
+		if command == "" {
+			closeMCPServers(servers)
+			return nil, fmt.Errorf("RTP_AGENT_MCP_STDIO_SERVERS entry requires command")
+		}
+		server := llm.NewMCPServerStdio(command, serverConfig.Args)
+		server.Env = serverConfig.Env
+		server.Cwd = serverConfig.Cwd
+
+		initCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+		err := server.Initialize(initCtx)
+		cancel()
+		if err != nil {
+			_ = server.Close()
+			closeMCPServers(servers)
+			return nil, err
+		}
+
+		listCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+		tools, err := server.ListTools(listCtx)
+		cancel()
+		if err != nil {
+			_ = server.Close()
+			closeMCPServers(servers)
+			return nil, err
+		}
+
+		a.Tools = appendMissingToolsByID(a.Tools, tools...)
+		servers = append(servers, server)
+	}
+	return servers, nil
 }
 
 func configureRoomTools(cfg AppConfig, a *agent.Agent, publisher betatools.DtmfPublisher) error {

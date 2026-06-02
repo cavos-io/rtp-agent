@@ -88,7 +88,7 @@ func NewFallbackAdapterWithOptions(stts []STT, options FallbackAdapterOptions) *
 }
 
 func NewFallbackAdapterWithVAD(stts []STT, vad vad.VAD) *FallbackAdapter {
-	return newFallbackAdapter(stts, vad, DefaultFallbackAdapterOptions())
+	return NewFallbackAdapterWithVADAndOptions(stts, vad, DefaultFallbackAdapterOptions())
 }
 
 func NewFallbackAdapterWithVADAndOptions(stts []STT, vad vad.VAD, options FallbackAdapterOptions) *FallbackAdapter {
