@@ -999,6 +999,56 @@ func TestDefaultConfigFromEnvSelectsSimplismartProviders(t *testing.T) {
 	}
 }
 
+func TestDefaultConfigFromEnvSelectsSmallestAISpeechProviders(t *testing.T) {
+	t.Setenv("SMALLESTAI_API_KEY", "test-smallestai-key")
+	t.Setenv("RTP_AGENT_LLM_PROVIDER", "smallestai")
+	t.Setenv("RTP_AGENT_LLM_MODEL", "smallestai-chat")
+	t.Setenv("RTP_AGENT_STT_PROVIDER", "smallestai")
+	t.Setenv("RTP_AGENT_STT_BASE_URL", "https://smallest.example/waves/v1")
+	t.Setenv("RTP_AGENT_STT_MODEL", "pulse")
+	t.Setenv("RTP_AGENT_STT_LANGUAGE", "en")
+	t.Setenv("RTP_AGENT_STT_SAMPLE_RATE", "16000")
+	t.Setenv("RTP_AGENT_STT_ENCODING", "linear16")
+	t.Setenv("RTP_AGENT_STT_WORD_TIMESTAMPS", "true")
+	t.Setenv("RTP_AGENT_STT_DIARIZATION", "true")
+	t.Setenv("RTP_AGENT_STT_ENDPOINTING_MS", "500")
+	t.Setenv("RTP_AGENT_TTS_PROVIDER", "smallestai")
+	t.Setenv("RTP_AGENT_TTS_BASE_URL", "https://smallest.example/waves/v1")
+	t.Setenv("RTP_AGENT_TTS_WEBSOCKET_URL", "wss://smallest.example/waves/v1/tts/live")
+	t.Setenv("RTP_AGENT_TTS_MODEL", "lightning_v3.1_pro")
+	t.Setenv("RTP_AGENT_TTS_VOICE", "meher")
+	t.Setenv("RTP_AGENT_TTS_SAMPLE_RATE", "24000")
+	t.Setenv("RTP_AGENT_TTS_SPEED", "1.1")
+	t.Setenv("RTP_AGENT_TTS_LANGUAGE", "en")
+	t.Setenv("RTP_AGENT_TTS_RESPONSE_FORMAT", "pcm")
+
+	app, err := NewApp(DefaultConfigFromEnv())
+	if err != nil {
+		t.Fatalf("NewApp() error = %v", err)
+	}
+	if app.Session == nil {
+		t.Fatal("Session is nil")
+	}
+	if app.Session.LLM == nil {
+		t.Fatal("Session LLM is nil")
+	}
+	if got := app.Session.STT.Label(); got != "smallestai.STT" {
+		t.Fatalf("STT label = %q, want smallestai.STT", got)
+	}
+	if caps := app.Session.STT.Capabilities(); !caps.Streaming || !caps.InterimResults || !caps.Diarization || caps.AlignedTranscript != "word" || !caps.OfflineRecognize {
+		t.Fatalf("STT capabilities = %+v, want streaming diarization word-aligned offline", caps)
+	}
+	if got := app.Session.TTS.Label(); got != "smallestai.TTS" {
+		t.Fatalf("TTS label = %q, want smallestai.TTS", got)
+	}
+	if got := app.Session.TTS.SampleRate(); got != 24000 {
+		t.Fatalf("TTS sample rate = %d, want 24000", got)
+	}
+	if caps := app.Session.TTS.Capabilities(); !caps.Streaming || caps.AlignedTranscript {
+		t.Fatalf("TTS capabilities = %+v, want streaming without aligned transcript", caps)
+	}
+}
+
 func TestDefaultConfigFromEnvSelectsSLNGSpeechProviders(t *testing.T) {
 	t.Setenv("SLNG_API_KEY", "test-slng-key")
 	t.Setenv("RTP_AGENT_STT_PROVIDER", "slng")

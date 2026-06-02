@@ -44,6 +44,7 @@ import (
 	"github.com/cavos-io/rtp-agent/adapter/sarvam"
 	"github.com/cavos-io/rtp-agent/adapter/simplismart"
 	"github.com/cavos-io/rtp-agent/adapter/slng"
+	"github.com/cavos-io/rtp-agent/adapter/smallestai"
 	"github.com/cavos-io/rtp-agent/core/agent"
 	"github.com/cavos-io/rtp-agent/core/llm"
 	"github.com/cavos-io/rtp-agent/interface/worker"
@@ -86,6 +87,7 @@ const (
 	providerSarvam      = "sarvam"
 	providerSimplismart = "simplismart"
 	providerSLNG        = "slng"
+	providerSmallestAI  = "smallestai"
 	providerLiveKit     = "livekit"
 )
 
@@ -110,6 +112,7 @@ type AppConfig struct {
 	STTProfanityFilter                      *bool
 	STTTagAudioEvents                       *bool
 	STTIncludeTimestamps                    *bool
+	STTWordTimestamps                       *bool
 	STTInterimResults                       *bool
 	STTSmartFormat                          *bool
 	STTNoDelay                              *bool
@@ -281,6 +284,7 @@ type AppConfig struct {
 	RtzrAccessToken   string
 	SarvamAPIKey      string
 	SimplismartAPIKey string
+	SmallestAIAPIKey  string
 	SLNGAPIKey        string
 
 	GoogleCredentialsFile string
@@ -316,6 +320,7 @@ func DefaultConfigFromEnv() AppConfig {
 		STTProfanityFilter:                      getenvOptionalBool("RTP_AGENT_STT_PROFANITY_FILTER"),
 		STTTagAudioEvents:                       getenvOptionalBool("RTP_AGENT_STT_TAG_AUDIO_EVENTS"),
 		STTIncludeTimestamps:                    getenvOptionalBool("RTP_AGENT_STT_INCLUDE_TIMESTAMPS"),
+		STTWordTimestamps:                       getenvOptionalBool("RTP_AGENT_STT_WORD_TIMESTAMPS"),
 		STTInterimResults:                       getenvOptionalBool("RTP_AGENT_STT_INTERIM_RESULTS"),
 		STTSmartFormat:                          getenvOptionalBool("RTP_AGENT_STT_SMART_FORMAT"),
 		STTNoDelay:                              getenvOptionalBool("RTP_AGENT_STT_NO_DELAY"),
@@ -486,6 +491,7 @@ func DefaultConfigFromEnv() AppConfig {
 		RtzrAccessToken:                         os.Getenv("RTZR_ACCESS_TOKEN"),
 		SarvamAPIKey:                            os.Getenv("SARVAM_API_KEY"),
 		SimplismartAPIKey:                       os.Getenv("SIMPLISMART_API_KEY"),
+		SmallestAIAPIKey:                        os.Getenv("SMALLESTAI_API_KEY"),
 		SLNGAPIKey:                              os.Getenv("SLNG_API_KEY"),
 		GoogleCredentialsFile:                   firstEnv("RTP_AGENT_GOOGLE_CREDENTIALS_FILE", "GOOGLE_APPLICATION_CREDENTIALS"),
 	}
@@ -591,6 +597,8 @@ func configureProviders(cfg AppConfig, a *agent.Agent) (llm.RealtimeModel, error
 		a.LLM = provider
 	case providerSimplismart:
 		a.LLM = simplismart.NewSimplismartLLM(cfg.SimplismartAPIKey, cfg.LLMModel)
+	case providerSmallestAI:
+		a.LLM = smallestai.NewSmallestAILLM(cfg.SmallestAIAPIKey, cfg.LLMModel)
 	case providerCerebras:
 		a.LLM = cerebras.NewCerebrasLLM(cfg.CerebrasAPIKey, cfg.LLMModel)
 	case providerFal:
@@ -1247,6 +1255,33 @@ func configureProviders(cfg AppConfig, a *agent.Agent) (llm.RealtimeModel, error
 			sttOpts = append(sttOpts, simplismart.WithSimplismartSTTNumSpeakers(*cfg.STTMaxSpeakers))
 		}
 		a.STT = simplismart.NewSimplismartSTT(cfg.SimplismartAPIKey, sttOpts...)
+	case providerSmallestAI:
+		sttOpts := []smallestai.SmallestAISTTOption{}
+		if cfg.STTBaseURL != "" {
+			sttOpts = append(sttOpts, smallestai.WithSmallestAISTTBaseURL(cfg.STTBaseURL))
+		}
+		if cfg.STTModel != "" {
+			sttOpts = append(sttOpts, smallestai.WithSmallestAISTTModel(cfg.STTModel))
+		}
+		if cfg.STTLanguage != "" {
+			sttOpts = append(sttOpts, smallestai.WithSmallestAISTTLanguage(cfg.STTLanguage))
+		}
+		if cfg.STTSampleRate != nil {
+			sttOpts = append(sttOpts, smallestai.WithSmallestAISTTSampleRate(*cfg.STTSampleRate))
+		}
+		if cfg.STTEncoding != "" {
+			sttOpts = append(sttOpts, smallestai.WithSmallestAISTTEncoding(cfg.STTEncoding))
+		}
+		if cfg.STTWordTimestamps != nil {
+			sttOpts = append(sttOpts, smallestai.WithSmallestAISTTWordTimestamps(*cfg.STTWordTimestamps))
+		}
+		if cfg.STTDiarization != nil {
+			sttOpts = append(sttOpts, smallestai.WithSmallestAISTTDiarize(*cfg.STTDiarization))
+		}
+		if cfg.STTEndpointingMS != nil {
+			sttOpts = append(sttOpts, smallestai.WithSmallestAISTTEOUTimeoutMS(*cfg.STTEndpointingMS))
+		}
+		a.STT = smallestai.NewSmallestAISTT(cfg.SmallestAIAPIKey, sttOpts...)
 	case providerAssemblyAI:
 		sttOpts := []assemblyai.AssemblyAISTTOption{}
 		if cfg.STTBaseURL != "" {
@@ -1864,6 +1899,33 @@ func configureProviders(cfg AppConfig, a *agent.Agent) (llm.RealtimeModel, error
 		a.TTS = sarvam.NewSarvamTTS(cfg.SarvamAPIKey, "", ttsOpts...)
 	case providerSimplismart:
 		a.TTS = simplismart.NewSimplismartTTS(cfg.SimplismartAPIKey, cfg.TTSVoice)
+	case providerSmallestAI:
+		ttsOpts := []smallestai.SmallestAITTSOption{}
+		if cfg.TTSBaseURL != "" {
+			ttsOpts = append(ttsOpts, smallestai.WithSmallestAITTSBaseURL(cfg.TTSBaseURL))
+		}
+		if cfg.TTSWebsocketURL != "" {
+			ttsOpts = append(ttsOpts, smallestai.WithSmallestAITTSWebsocketURL(cfg.TTSWebsocketURL))
+		}
+		if cfg.TTSModel != "" {
+			ttsOpts = append(ttsOpts, smallestai.WithSmallestAITTSModel(cfg.TTSModel))
+		}
+		if cfg.TTSVoice != "" {
+			ttsOpts = append(ttsOpts, smallestai.WithSmallestAITTSVoice(cfg.TTSVoice))
+		}
+		if cfg.TTSSampleRate != nil {
+			ttsOpts = append(ttsOpts, smallestai.WithSmallestAITTSSampleRate(*cfg.TTSSampleRate))
+		}
+		if cfg.TTSSpeed != 0 {
+			ttsOpts = append(ttsOpts, smallestai.WithSmallestAITTSSpeed(cfg.TTSSpeed))
+		}
+		if cfg.TTSLanguage != "" {
+			ttsOpts = append(ttsOpts, smallestai.WithSmallestAITTSLanguage(cfg.TTSLanguage))
+		}
+		if cfg.TTSResponseFormat != "" {
+			ttsOpts = append(ttsOpts, smallestai.WithSmallestAITTSOutputFormat(cfg.TTSResponseFormat))
+		}
+		a.TTS = smallestai.NewSmallestAITTS(cfg.SmallestAIAPIKey, "", ttsOpts...)
 	case providerSLNG:
 		ttsOpts := []slng.TTSOption{}
 		if cfg.TTSModel != "" {
