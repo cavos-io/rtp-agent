@@ -10,6 +10,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"os"
 	"strings"
 	"time"
 
@@ -17,22 +18,50 @@ import (
 )
 
 type AnthropicLLM struct {
-	apiKey string
-	model  string
+	apiKey  string
+	model   string
+	baseURL string
 }
 
 type anthropicToolSpecProvider interface {
 	AnthropicToolSpec() map[string]interface{}
 }
 
-func NewAnthropicLLM(apiKey string, model string) (*AnthropicLLM, error) {
-	if model == "" {
-		model = "claude-sonnet-4-6"
+const (
+	anthropicAPIKeyEnv   = "ANTHROPIC_API_KEY"
+	defaultAnthropicURL  = "https://api.anthropic.com"
+	defaultAnthropicMode = "claude-sonnet-4-6"
+)
+
+type AnthropicOption func(*AnthropicLLM)
+
+func WithAnthropicBaseURL(baseURL string) AnthropicOption {
+	return func(l *AnthropicLLM) {
+		if baseURL != "" {
+			l.baseURL = strings.TrimRight(baseURL, "/")
+		}
 	}
-	return &AnthropicLLM{
-		apiKey: apiKey,
-		model:  model,
-	}, nil
+}
+
+func NewAnthropicLLM(apiKey string, model string, opts ...AnthropicOption) (*AnthropicLLM, error) {
+	if model == "" {
+		model = defaultAnthropicMode
+	}
+	if apiKey == "" {
+		apiKey = os.Getenv(anthropicAPIKeyEnv)
+	}
+	if apiKey == "" {
+		return nil, errors.New("anthropic API key is required, either as argument or set ANTHROPIC_API_KEY environment variable")
+	}
+	llm := &AnthropicLLM{
+		apiKey:  apiKey,
+		model:   model,
+		baseURL: defaultAnthropicURL,
+	}
+	for _, opt := range opts {
+		opt(llm)
+	}
+	return llm, nil
 }
 
 type anthropicMessage struct {
@@ -134,7 +163,7 @@ func (l *AnthropicLLM) Chat(ctx context.Context, chatCtx *llm.ChatContext, opts 
 }
 
 func (l *AnthropicLLM) startAnthropicStream(ctx context.Context, jsonBody []byte) (*http.Response, error) {
-	req, err := http.NewRequestWithContext(ctx, "POST", "https://api.anthropic.com/v1/messages", bytes.NewBuffer(jsonBody))
+	req, err := http.NewRequestWithContext(ctx, "POST", l.baseURL+"/v1/messages", bytes.NewBuffer(jsonBody))
 	if err != nil {
 		return nil, err
 	}

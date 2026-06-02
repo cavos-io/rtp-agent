@@ -6,11 +6,21 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"strings"
 	"testing"
 )
 
+type cambaiRoundTripperFunc func(*http.Request) (*http.Response, error)
+
+func (f cambaiRoundTripperFunc) RoundTrip(req *http.Request) (*http.Response, error) {
+	return f(req)
+}
+
 func TestCambaiTTSDefaultsMatchReference(t *testing.T) {
-	provider := NewCambaiTTS("test-key", "")
+	provider, err := NewCambaiTTS("test-key", "")
+	if err != nil {
+		t.Fatalf("NewCambaiTTS error = %v", err)
+	}
 
 	if provider.baseURL != "https://client.camb.ai/apis" {
 		t.Fatalf("base URL = %q, want reference base URL", provider.baseURL)
@@ -30,10 +40,28 @@ func TestCambaiTTSDefaultsMatchReference(t *testing.T) {
 	if provider.SampleRate() != 22050 {
 		t.Fatalf("sample rate = %d, want mars-flash sample rate", provider.SampleRate())
 	}
+	if provider.Label() != "cambai.TTS" {
+		t.Fatalf("Label = %q, want cambai.TTS", provider.Label())
+	}
+	if provider.Model() != "mars-flash" {
+		t.Fatalf("Model = %q, want mars-flash", provider.Model())
+	}
+	if provider.Provider() != "Camb.ai" {
+		t.Fatalf("Provider = %q, want Camb.ai", provider.Provider())
+	}
+	if provider.NumChannels() != 1 {
+		t.Fatalf("NumChannels = %d, want 1", provider.NumChannels())
+	}
+	if provider.Capabilities().Streaming {
+		t.Fatal("Streaming = true, want false")
+	}
 }
 
 func TestCambaiTTSSynthesizeRequestUsesReferencePayload(t *testing.T) {
-	provider := NewCambaiTTS("test-key", "")
+	provider, err := NewCambaiTTS("test-key", "")
+	if err != nil {
+		t.Fatalf("NewCambaiTTS error = %v", err)
+	}
 
 	req, err := buildCambaiTTSRequest(context.Background(), provider, "hello")
 	if err != nil {
@@ -70,8 +98,31 @@ func TestCambaiTTSSynthesizeRequestUsesReferencePayload(t *testing.T) {
 	}
 }
 
+func TestCambaiTTSFallsBackToEnvironmentAPIKey(t *testing.T) {
+	t.Setenv(cambaiAPIKeyEnv, "env-key")
+
+	provider, err := NewCambaiTTS("", "")
+	if err != nil {
+		t.Fatalf("NewCambaiTTS error = %v, want nil from env key", err)
+	}
+
+	if provider.apiKey != "env-key" {
+		t.Fatalf("apiKey = %q, want env-key", provider.apiKey)
+	}
+}
+
+func TestCambaiTTSRequiresAPIKey(t *testing.T) {
+	t.Setenv(cambaiAPIKeyEnv, "")
+
+	_, err := NewCambaiTTS("", "")
+
+	if err == nil || !strings.Contains(err.Error(), "CAMB_API_KEY") {
+		t.Fatalf("NewCambaiTTS error = %v, want API key error", err)
+	}
+}
+
 func TestCambaiTTSOptionsMatchReference(t *testing.T) {
-	provider := NewCambaiTTS("test-key", "",
+	provider, err := NewCambaiTTS("test-key", "",
 		WithCambaiTTSBaseURL("https://cambai.example/apis/"),
 		WithCambaiTTSVoiceID(42),
 		WithCambaiTTSLanguage("fr-fr"),
@@ -80,6 +131,9 @@ func TestCambaiTTSOptionsMatchReference(t *testing.T) {
 		WithCambaiTTSUserInstructions("warm and concise"),
 		WithCambaiTTSEnhanceNamedEntities(true),
 	)
+	if err != nil {
+		t.Fatalf("NewCambaiTTS error = %v", err)
+	}
 
 	req, err := buildCambaiTTSRequest(context.Background(), provider, "bonjour")
 	if err != nil {
@@ -109,6 +163,53 @@ func TestCambaiTTSOptionsMatchReference(t *testing.T) {
 	assertCambaiPayload(t, outputConfig, "format", "wav")
 }
 
+func TestCambaiTTSSynthesizeUsesConfiguredClient(t *testing.T) {
+	provider, err := NewCambaiTTS("test-key", "", WithCambaiTTSModel("mars-pro"))
+	if err != nil {
+		t.Fatalf("NewCambaiTTS error = %v", err)
+	}
+	provider.httpClient = &http.Client{
+		Transport: cambaiRoundTripperFunc(func(req *http.Request) (*http.Response, error) {
+			if req.Header.Get("x-api-key") != "test-key" {
+				t.Fatalf("x-api-key = %q, want test-key", req.Header.Get("x-api-key"))
+			}
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Body:       io.NopCloser(bytes.NewReader([]byte{0x01, 0x02})),
+				Header:     make(http.Header),
+				Request:    req,
+			}, nil
+		}),
+	}
+
+	stream, err := provider.Synthesize(context.Background(), "hello")
+	if err != nil {
+		t.Fatalf("Synthesize error = %v", err)
+	}
+	defer stream.Close()
+
+	audio, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next error = %v", err)
+	}
+	if audio.Frame.SampleRate != 48000 {
+		t.Fatalf("sample rate = %d, want mars-pro sample rate", audio.Frame.SampleRate)
+	}
+}
+
+func TestCambaiTTSStreamReportsUnsupported(t *testing.T) {
+	provider, err := NewCambaiTTS("test-key", "")
+	if err != nil {
+		t.Fatalf("NewCambaiTTS error = %v", err)
+	}
+
+	_, err = provider.Stream(context.Background())
+
+	if err == nil || !strings.Contains(err.Error(), "not natively supported") {
+		t.Fatalf("Stream error = %v, want unsupported streaming error", err)
+	}
+}
+
 func TestCambaiTTSChunkedStreamUsesConfiguredSampleRate(t *testing.T) {
 	stream := &cambaiTTSChunkedStream{
 		resp:       &http.Response{Body: io.NopCloser(bytes.NewReader([]byte{0x01, 0x02}))},
@@ -121,6 +222,9 @@ func TestCambaiTTSChunkedStreamUsesConfiguredSampleRate(t *testing.T) {
 	}
 	if audio.Frame.SampleRate != 48000 {
 		t.Fatalf("sample rate = %d, want configured sample rate", audio.Frame.SampleRate)
+	}
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close error = %v", err)
 	}
 }
 

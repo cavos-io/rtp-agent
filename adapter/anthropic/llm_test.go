@@ -18,6 +18,8 @@ import (
 
 type captureRoundTripper struct {
 	body         map[string]any
+	reqURL       string
+	headers      http.Header
 	hasDeadline  bool
 	remaining    time.Duration
 	statusCode   int
@@ -28,6 +30,8 @@ type captureRoundTripper struct {
 
 func (rt *captureRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
 	defer req.Body.Close()
+	rt.reqURL = req.URL.String()
+	rt.headers = req.Header.Clone()
 	deadline, ok := req.Context().Deadline()
 	rt.hasDeadline = ok
 	if ok {
@@ -561,6 +565,56 @@ func TestAnthropicDefaultsMatchReference(t *testing.T) {
 
 	if model.model != "claude-sonnet-4-6" {
 		t.Fatalf("model = %q, want claude-sonnet-4-6", model.model)
+	}
+}
+
+func TestNewAnthropicLLMFallsBackToEnvironmentAPIKey(t *testing.T) {
+	t.Setenv(anthropicAPIKeyEnv, "env-key")
+
+	model, err := NewAnthropicLLM("", "claude-test")
+	if err != nil {
+		t.Fatalf("NewAnthropicLLM() error = %v, want nil from env key", err)
+	}
+
+	if model.apiKey != "env-key" {
+		t.Fatalf("apiKey = %q, want env key", model.apiKey)
+	}
+}
+
+func TestNewAnthropicLLMRequiresAPIKey(t *testing.T) {
+	t.Setenv(anthropicAPIKeyEnv, "")
+
+	_, err := NewAnthropicLLM("", "claude-test")
+
+	if err == nil || !strings.Contains(err.Error(), "ANTHROPIC_API_KEY") {
+		t.Fatalf("NewAnthropicLLM() error = %v, want API key error", err)
+	}
+}
+
+func TestAnthropicChatUsesConfiguredBaseURLAndHeaders(t *testing.T) {
+	transport := &captureRoundTripper{}
+	originalTransport := http.DefaultTransport
+	http.DefaultTransport = transport
+	t.Cleanup(func() { http.DefaultTransport = originalTransport })
+
+	model, err := NewAnthropicLLM("test-key", "claude-test", WithAnthropicBaseURL("https://anthropic.local/api/"))
+	if err != nil {
+		t.Fatalf("NewAnthropicLLM() error = %v", err)
+	}
+	stream, err := model.Chat(context.Background(), llm.NewChatContext())
+	if err != nil {
+		t.Fatalf("Chat() error = %v", err)
+	}
+	_ = stream.Close()
+
+	if transport.reqURL != "https://anthropic.local/api/v1/messages" {
+		t.Fatalf("request URL = %q, want configured base URL", transport.reqURL)
+	}
+	if transport.headers.Get("x-api-key") != "test-key" {
+		t.Fatalf("x-api-key = %q, want test-key", transport.headers.Get("x-api-key"))
+	}
+	if transport.headers.Get("anthropic-version") != "2023-06-01" {
+		t.Fatalf("anthropic-version = %q, want reference version", transport.headers.Get("anthropic-version"))
 	}
 }
 

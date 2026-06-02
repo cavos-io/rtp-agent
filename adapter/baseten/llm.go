@@ -2,22 +2,47 @@ package baseten
 
 import (
 	"context"
+	"fmt"
+	"os"
 
 	"github.com/cavos-io/rtp-agent/adapter/openai"
 	"github.com/cavos-io/rtp-agent/core/llm"
 )
 
+const (
+	basetenAPIKeyEnv       = "BASETEN_API_KEY"
+	defaultBasetenLLMModel = "meta-llama/Llama-4-Maverick-17B-128E-Instruct"
+	defaultBasetenLLMURL   = "https://inference.baseten.co/v1"
+)
+
 type BasetenLLM struct {
-	inner *openai.OpenAILLM
+	inner   *openai.OpenAILLM
+	baseURL string
 }
 
-func NewBasetenLLM(apiKey string, model string) *BasetenLLM {
+func NewBasetenLLM(apiKey string, model string) (*BasetenLLM, error) {
+	return newBasetenLLMWithBaseURL(apiKey, model, defaultBasetenLLMURL)
+}
+
+func newBasetenLLMWithBaseURL(apiKey string, model string, baseURL string) (*BasetenLLM, error) {
+	if apiKey == "" {
+		apiKey = os.Getenv(basetenAPIKeyEnv)
+	}
+	if apiKey == "" {
+		return nil, fmt.Errorf("BASETEN_API_KEY is required, either as argument or set BASETEN_API_KEY environment variable")
+	}
 	if model == "" {
-		model = "baseten-llama-3"
+		model = defaultBasetenLLMModel
 	}
 	return &BasetenLLM{
-		inner: openai.NewOpenAILLMWithBaseURL(apiKey, model, "https://bridge.baseten.co/v1"),
-	}
+		inner:   openai.NewOpenAILLMWithBaseURL(apiKey, model, baseURL),
+		baseURL: baseURL,
+	}, nil
+}
+
+func (l *BasetenLLM) Model() string { return l.inner.Model() }
+func (l *BasetenLLM) Provider() string {
+	return "Baseten"
 }
 
 func (l *BasetenLLM) Chat(ctx context.Context, chatCtx *llm.ChatContext, opts ...llm.ChatOption) (llm.LLMStream, error) {

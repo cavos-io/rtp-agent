@@ -1,10 +1,13 @@
 package blingfire
 
 import (
+	"regexp"
 	"strings"
 
 	"github.com/cavos-io/rtp-agent/library/tokenize"
 )
+
+var sentenceNewlineRE = regexp.MustCompile(`\s*\n+\s*`)
 
 type SentenceTokenizer struct {
 	Language         string
@@ -36,6 +39,7 @@ func (t *SentenceTokenizer) Tokenize(text string, language string) []string {
 	var buff string
 
 	for _, sentence := range sentences {
+		sentence = sentenceNewlineRE.ReplaceAllString(sentence, " ")
 		buff += sentence + " "
 		if len(buff)-1 >= t.MinSentenceLen {
 			newSentences = append(newSentences, strings.TrimRight(buff, " "))

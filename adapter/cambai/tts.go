@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"strconv"
 	"strings"
 
@@ -20,6 +21,7 @@ const (
 	defaultCambaiLanguage     = "en-us"
 	defaultCambaiModel        = "mars-flash"
 	defaultCambaiOutputFormat = "pcm_s16le"
+	cambaiAPIKeyEnv           = "CAMB_API_KEY"
 )
 
 var cambaiModelSampleRates = map[string]int{
@@ -38,6 +40,7 @@ type CambaiTTS struct {
 	userInstructions     string
 	enhanceNamedEntities bool
 	sampleRate           int
+	httpClient           *http.Client
 }
 
 type CambaiTTSOption func(*CambaiTTS)
@@ -95,7 +98,13 @@ func WithCambaiTTSEnhanceNamedEntities(enabled bool) CambaiTTSOption {
 	}
 }
 
-func NewCambaiTTS(apiKey string, voice string, opts ...CambaiTTSOption) *CambaiTTS {
+func NewCambaiTTS(apiKey string, voice string, opts ...CambaiTTSOption) (*CambaiTTS, error) {
+	if apiKey == "" {
+		apiKey = os.Getenv(cambaiAPIKeyEnv)
+	}
+	if apiKey == "" {
+		return nil, fmt.Errorf("camb.ai API key must be provided via api_key parameter or CAMB_API_KEY environment variable")
+	}
 	provider := &CambaiTTS{
 		apiKey:       apiKey,
 		baseURL:      defaultCambaiBaseURL,
@@ -104,6 +113,7 @@ func NewCambaiTTS(apiKey string, voice string, opts ...CambaiTTSOption) *CambaiT
 		model:        defaultCambaiModel,
 		outputFormat: defaultCambaiOutputFormat,
 		sampleRate:   cambaiSampleRateForModel(defaultCambaiModel),
+		httpClient:   http.DefaultClient,
 	}
 	if voice != "" {
 		if voiceID, err := strconv.Atoi(voice); err == nil && voiceID > 0 {
@@ -113,10 +123,14 @@ func NewCambaiTTS(apiKey string, voice string, opts ...CambaiTTSOption) *CambaiT
 	for _, opt := range opts {
 		opt(provider)
 	}
-	return provider
+	return provider, nil
 }
 
 func (t *CambaiTTS) Label() string { return "cambai.TTS" }
+func (t *CambaiTTS) Model() string { return t.model }
+func (t *CambaiTTS) Provider() string {
+	return "Camb.ai"
+}
 func (t *CambaiTTS) Capabilities() tts.TTSCapabilities {
 	return tts.TTSCapabilities{Streaming: false, AlignedTranscript: false}
 }
@@ -129,7 +143,11 @@ func (t *CambaiTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStr
 		return nil, err
 	}
 
-	resp, err := http.DefaultClient.Do(req)
+	client := t.httpClient
+	if client == nil {
+		client = http.DefaultClient
+	}
+	resp, err := client.Do(req)
 	if err != nil {
 		return nil, err
 	}
