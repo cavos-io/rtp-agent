@@ -119,7 +119,7 @@ func TestMultimodalToolExecutionReportsUnknownFunction(t *testing.T) {
 
 func TestMultimodalAgentEmitsErrorEventForRealtimeError(t *testing.T) {
 	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
-	model := &fakeRealtimeModel{}
+	model := &fakeRealtimeModel{label: "test.RealtimeModel"}
 	cause := errors.New("realtime failed")
 	ma := &MultimodalAgent{
 		model:   model,
@@ -134,8 +134,15 @@ func TestMultimodalAgentEmitsErrorEventForRealtimeError(t *testing.T) {
 
 	select {
 	case ev := <-session.ErrorEvents():
-		if !errors.Is(ev.Error, cause) {
-			t.Fatalf("Error = %v, want %v", ev.Error, cause)
+		rtErr, ok := ev.Error.(*llm.RealtimeModelError)
+		if !ok {
+			t.Fatalf("Error = %T, want *llm.RealtimeModelError", ev.Error)
+		}
+		if !errors.Is(rtErr, cause) {
+			t.Fatalf("RealtimeModelError unwrap = %v, want %v", rtErr, cause)
+		}
+		if rtErr.Label != "test.RealtimeModel" || rtErr.Recoverable {
+			t.Fatalf("RealtimeModelError = %#v, want label test.RealtimeModel recoverable false", rtErr)
 		}
 		if ev.Source != model {
 			t.Fatalf("Source = %#v, want realtime model", ev.Source)
@@ -385,7 +392,11 @@ func lastFunctionOutput(t *testing.T, chatCtx *llm.ChatContext) *llm.FunctionCal
 	return output
 }
 
-type fakeRealtimeModel struct{}
+type fakeRealtimeModel struct {
+	label    string
+	model    string
+	provider string
+}
 
 func (f *fakeRealtimeModel) Capabilities() llm.RealtimeCapabilities {
 	return llm.RealtimeCapabilities{}
@@ -396,6 +407,12 @@ func (f *fakeRealtimeModel) Session() (llm.RealtimeSession, error) {
 }
 
 func (f *fakeRealtimeModel) Close() error { return nil }
+
+func (f *fakeRealtimeModel) Label() string { return f.label }
+
+func (f *fakeRealtimeModel) Model() string { return f.model }
+
+func (f *fakeRealtimeModel) Provider() string { return f.provider }
 
 type fakeRealtimeSession struct {
 	updated     *llm.ChatContext

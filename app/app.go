@@ -792,6 +792,7 @@ func NewApp(cfg AppConfig) (*App, error) {
 		session.ChatCtx = baseAgent.ChatCtx.Copy()
 	}
 	if realtimeModel != nil {
+		session.RealtimeModel = realtimeModel
 		session.Assistant = agent.NewMultimodalAgent(realtimeModel, session.ChatCtx)
 	}
 	mcpServers, err := configureMCPTools(context.Background(), cfg, sessionAgent.GetAgent())

@@ -165,6 +165,23 @@ func TestSessionReportToDictIncludesLLMMetadata(t *testing.T) {
 	}
 }
 
+func TestSessionReportToDictIncludesRealtimeModelMetadata(t *testing.T) {
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	session.RealtimeModel = &reportMetadataRealtimeModel{
+		model:    "gpt-realtime",
+		provider: "openai",
+	}
+
+	data := NewSessionReport(session).ToDict()
+
+	if data["realtime_model"] != "gpt-realtime" {
+		t.Fatalf("realtime_model = %#v, want gpt-realtime", data["realtime_model"])
+	}
+	if data["realtime_provider"] != "openai" {
+		t.Fatalf("realtime_provider = %#v, want openai", data["realtime_provider"])
+	}
+}
+
 func TestSessionReportToDictIncludesTaggerMetadata(t *testing.T) {
 	report := NewSessionReport()
 	tagger := NewTagger()
@@ -253,3 +270,22 @@ func (l *reportMetadataLLM) Chat(context.Context, *llm.ChatContext, ...llm.ChatO
 func (l *reportMetadataLLM) Model() string { return l.model }
 
 func (l *reportMetadataLLM) Provider() string { return l.provider }
+
+type reportMetadataRealtimeModel struct {
+	model    string
+	provider string
+}
+
+func (m *reportMetadataRealtimeModel) Capabilities() llm.RealtimeCapabilities {
+	return llm.RealtimeCapabilities{}
+}
+
+func (m *reportMetadataRealtimeModel) Session() (llm.RealtimeSession, error) {
+	return nil, errors.New("session should not be called")
+}
+
+func (m *reportMetadataRealtimeModel) Close() error { return nil }
+
+func (m *reportMetadataRealtimeModel) Model() string { return m.model }
+
+func (m *reportMetadataRealtimeModel) Provider() string { return m.provider }

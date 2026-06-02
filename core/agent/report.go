@@ -34,6 +34,8 @@ type SessionReport struct {
 	StartedAt               *float64                `json:"started_at,omitempty"`
 	LLMModel                string                  `json:"llm_model,omitempty"`
 	LLMProvider             string                  `json:"llm_provider,omitempty"`
+	RealtimeModel           string                  `json:"realtime_model,omitempty"`
+	RealtimeProvider        string                  `json:"realtime_provider,omitempty"`
 	Timestamp               float64                 `json:"timestamp"`
 	Usage                   *telemetry.UsageSummary `json:"usage,omitempty"`
 	SDKVersion              string                  `json:"sdk_version"`
@@ -64,6 +66,10 @@ func NewSessionReport(sessions ...*AgentSession) *SessionReport {
 	if session.LLM != nil {
 		report.LLMModel = llm.Model(session.LLM)
 		report.LLMProvider = llm.Provider(session.LLM)
+	}
+	if session.RealtimeModel != nil {
+		report.RealtimeModel = llm.RealtimeModelName(session.RealtimeModel)
+		report.RealtimeProvider = llm.RealtimeProvider(session.RealtimeModel)
 	}
 	session.mu.Unlock()
 
@@ -109,6 +115,12 @@ func (r *SessionReport) ToDict() map[string]any {
 	}
 	if r.LLMProvider != "" && r.LLMProvider != "unknown" {
 		out["llm_provider"] = r.LLMProvider
+	}
+	if r.RealtimeModel != "" && r.RealtimeModel != "unknown" {
+		out["realtime_model"] = r.RealtimeModel
+	}
+	if r.RealtimeProvider != "" && r.RealtimeProvider != "unknown" {
+		out["realtime_provider"] = r.RealtimeProvider
 	}
 	addTaggerReportFields(out, r.Tagger)
 	return out
