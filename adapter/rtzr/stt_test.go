@@ -4,12 +4,15 @@ import (
 	"context"
 	"io"
 	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/cavos-io/rtp-agent/core/audio/model"
 	"github.com/cavos-io/rtp-agent/core/stt"
+	"github.com/gorilla/websocket"
 )
 
 func TestRtzrSTTDefaultsMatchReference(t *testing.T) {
@@ -47,6 +50,9 @@ func TestRtzrSTTDefaultsMatchReference(t *testing.T) {
 	}
 	if provider.usePunctuation {
 		t.Fatal("use punctuation = true, want false")
+	}
+	if provider.Label() != "rtzr.STT" {
+		t.Fatalf("label = %q, want rtzr.STT", provider.Label())
 	}
 
 	caps := provider.Capabilities()
@@ -87,6 +93,46 @@ func TestRtzrBuildAuthRequestMatchesReference(t *testing.T) {
 	}
 	if values.Get("client_secret") != "client-secret" {
 		t.Fatalf("client_secret = %q, want client-secret", values.Get("client_secret"))
+	}
+}
+
+func TestRtzrTokenUsesCustomAPIBaseAndCachesResult(t *testing.T) {
+	requests := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		if r.URL.Path != "/v1/authenticate" {
+			t.Fatalf("auth path = %q, want /v1/authenticate", r.URL.Path)
+		}
+		if r.Header.Get("Content-Type") != "application/x-www-form-urlencoded" {
+			t.Fatalf("content type = %q, want form encoding", r.Header.Get("Content-Type"))
+		}
+		if err := r.ParseForm(); err != nil {
+			t.Fatalf("ParseForm returned error: %v", err)
+		}
+		if r.Form.Get("client_id") != "client-id" || r.Form.Get("client_secret") != "client-secret" {
+			t.Fatalf("form = %v, want client credentials", r.Form)
+		}
+		_, _ = w.Write([]byte(`{"access_token":"token-1"}`))
+	}))
+	defer server.Close()
+
+	provider := NewRtzrSTT("client-id",
+		WithRtzrClientSecret("client-secret"),
+		WithRtzrAPIBase(server.URL),
+	)
+	token, err := provider.token(context.Background())
+	if err != nil {
+		t.Fatalf("token returned error: %v", err)
+	}
+	if token != "token-1" {
+		t.Fatalf("token = %q, want token-1", token)
+	}
+	cached, err := provider.token(context.Background())
+	if err != nil {
+		t.Fatalf("cached token returned error: %v", err)
+	}
+	if cached != "token-1" || requests != 1 {
+		t.Fatalf("cached token = %q requests=%d, want token-1 with one request", cached, requests)
 	}
 }
 
@@ -133,8 +179,118 @@ func TestRtzrSTTRecognizeMatchesReferenceUnsupportedOffline(t *testing.T) {
 	if err == nil {
 		t.Fatal("Recognize returned nil error, want unsupported offline recognition")
 	}
-	if !strings.Contains(err.Error(), "Single-shot recognition is not supported") {
+	if !strings.Contains(err.Error(), "single-shot recognition is not supported") {
 		t.Fatalf("Recognize error = %q, want reference unsupported error", err.Error())
+	}
+}
+
+func TestRtzrSTTStreamSendsAudioFlushAndCloseMessages(t *testing.T) {
+	upgrader := websocket.Upgrader{}
+	queryCh := make(chan url.Values, 1)
+	authCh := make(chan string, 1)
+	audioCh := make(chan []byte, 1)
+	flushCh := make(chan string, 1)
+	closeCh := make(chan string, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		queryCh <- r.URL.Query()
+		authCh <- r.Header.Get("Authorization")
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Errorf("Upgrade returned error: %v", err)
+			return
+		}
+		defer conn.Close()
+
+		if err := conn.WriteMessage(websocket.TextMessage, []byte(`{"start_at":0,"duration":100,"final":false,"alternatives":[{"text":"hello"}]}`)); err != nil {
+			t.Errorf("write transcript event: %v", err)
+			return
+		}
+
+		msgType, audioPayload, err := conn.ReadMessage()
+		if err != nil {
+			t.Errorf("read audio: %v", err)
+			return
+		}
+		if msgType != websocket.BinaryMessage {
+			t.Errorf("audio message type = %d, want binary", msgType)
+			return
+		}
+		audioCh <- audioPayload
+
+		msgType, flushPayload, err := conn.ReadMessage()
+		if err != nil {
+			t.Errorf("read flush: %v", err)
+			return
+		}
+		if msgType != websocket.TextMessage {
+			t.Errorf("flush message type = %d, want text", msgType)
+			return
+		}
+		flushCh <- string(flushPayload)
+
+		msgType, closePayload, err := conn.ReadMessage()
+		if err != nil {
+			t.Errorf("read close: %v", err)
+			return
+		}
+		if msgType != websocket.TextMessage {
+			t.Errorf("close message type = %d, want text", msgType)
+			return
+		}
+		closeCh <- string(closePayload)
+	}))
+	defer server.Close()
+
+	wsBase := "ws" + strings.TrimPrefix(server.URL, "http")
+	provider := NewRtzrSTT("client-id",
+		WithRtzrAccessToken("access-token"),
+		WithRtzrWSBase(wsBase),
+	)
+	stream, err := provider.Stream(context.Background(), "en")
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+
+	query := receiveRtzrQuery(t, queryCh)
+	if query.Get("model_name") != defaultModelName || query.Get("sample_rate") != "8000" {
+		t.Fatalf("stream query = %v, want default model/sample rate", query)
+	}
+	if got := receiveRtzrString(t, authCh, "auth header"); got != "bearer access-token" {
+		t.Fatalf("Authorization = %q, want bearer access-token", got)
+	}
+
+	event, err := stream.Next()
+	if err != nil {
+		t.Fatalf("first Next returned error: %v", err)
+	}
+	if event.Type != stt.SpeechEventStartOfSpeech {
+		t.Fatalf("first event = %v, want start of speech", event.Type)
+	}
+	event, err = stream.Next()
+	if err != nil {
+		t.Fatalf("second Next returned error: %v", err)
+	}
+	if event.Type != stt.SpeechEventInterimTranscript || event.Alternatives[0].Text != "hello" {
+		t.Fatalf("second event = %#v, want interim hello", event)
+	}
+
+	if err := stream.PushFrame(&model.AudioFrame{Data: []byte{0x01, 0x02}}); err != nil {
+		t.Fatalf("PushFrame returned error: %v", err)
+	}
+	if got := receiveRtzrBytes(t, audioCh); string(got) != "\x01\x02" {
+		t.Fatalf("audio = %v, want pcm bytes", got)
+	}
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush returned error: %v", err)
+	}
+	if got := receiveRtzrString(t, flushCh, "flush"); got != "EOS" {
+		t.Fatalf("flush = %q, want EOS", got)
+	}
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close returned error: %v", err)
+	}
+	if got := receiveRtzrString(t, closeCh, "close"); got != "EOS" {
+		t.Fatalf("close = %q, want EOS", got)
 	}
 }
 
@@ -201,6 +357,39 @@ func assertRtzrQuery(t *testing.T, query url.Values, key string, want string) {
 	t.Helper()
 	if got := query.Get(key); got != want {
 		t.Fatalf("%s = %q, want %q", key, got, want)
+	}
+}
+
+func receiveRtzrQuery(t *testing.T, ch <-chan url.Values) url.Values {
+	t.Helper()
+	select {
+	case query := <-ch:
+		return query
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for stream query")
+		return nil
+	}
+}
+
+func receiveRtzrBytes(t *testing.T, ch <-chan []byte) []byte {
+	t.Helper()
+	select {
+	case payload := <-ch:
+		return payload
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for audio payload")
+		return nil
+	}
+}
+
+func receiveRtzrString(t *testing.T, ch <-chan string, label string) string {
+	t.Helper()
+	select {
+	case value := <-ch:
+		return value
+	case <-time.After(time.Second):
+		t.Fatalf("timed out waiting for %s", label)
+		return ""
 	}
 }
 

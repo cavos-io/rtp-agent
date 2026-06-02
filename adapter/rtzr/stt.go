@@ -200,7 +200,7 @@ func (s *RtzrSTT) Stream(ctx context.Context, language string) (stt.RecognizeStr
 }
 
 func (s *RtzrSTT) Recognize(ctx context.Context, frames []*model.AudioFrame, language string) (*stt.SpeechEvent, error) {
-	return nil, fmt.Errorf("Single-shot recognition is not supported; use stream")
+	return nil, fmt.Errorf("single-shot recognition is not supported; use stream")
 }
 
 func (s *RtzrSTT) token(ctx context.Context) (string, error) {

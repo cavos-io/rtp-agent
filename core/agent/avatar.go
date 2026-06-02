@@ -51,7 +51,7 @@ func (io *DataStreamIO) SendAvatarData(ctx context.Context, data []byte) error {
 
 	topic := "avatar_data"
 	// Send via LiveKit Data Channel
-	err := io.room.LocalParticipant.PublishData(data, lksdk.WithDataPublishReliable(true), lksdk.WithDataPublishTopic(topic))
+	err := io.room.LocalParticipant.PublishDataPacket(lksdk.UserData(data), lksdk.WithDataPublishReliable(true), lksdk.WithDataPublishTopic(topic))
 	if err != nil {
 		return fmt.Errorf("failed to publish avatar data: %w", err)
 	}

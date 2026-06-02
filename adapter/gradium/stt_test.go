@@ -4,11 +4,15 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/cavos-io/rtp-agent/core/audio/model"
 	"github.com/cavos-io/rtp-agent/core/stt"
+	"github.com/gorilla/websocket"
 )
 
 func TestGradiumSTTDefaultsMatchReference(t *testing.T) {
@@ -40,6 +44,9 @@ func TestGradiumSTTDefaultsMatchReference(t *testing.T) {
 	}
 	if provider.language != "en" {
 		t.Fatalf("language = %q, want en", provider.language)
+	}
+	if provider.Label() != "gradium.STT" {
+		t.Fatalf("label = %q, want gradium.STT", provider.Label())
 	}
 
 	caps := provider.Capabilities()
@@ -117,8 +124,99 @@ func TestGradiumSTTRecognizeMatchesReferenceUnsupportedOffline(t *testing.T) {
 	if err == nil {
 		t.Fatal("Recognize returned nil error, want unsupported offline recognition")
 	}
-	if !strings.Contains(err.Error(), "Not implemented") {
+	if !strings.Contains(err.Error(), "not implemented") {
 		t.Fatalf("Recognize error = %q, want reference unsupported error", err.Error())
+	}
+}
+
+func TestGradiumSTTStreamSendsSetupAudioAndCloseMessages(t *testing.T) {
+	upgrader := websocket.Upgrader{}
+	setupCh := make(chan map[string]any, 1)
+	audioCh := make(chan map[string]any, 1)
+	closeCh := make(chan map[string]any, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Errorf("Upgrade returned error: %v", err)
+			return
+		}
+		defer conn.Close()
+
+		_, setupPayload, err := conn.ReadMessage()
+		if err != nil {
+			t.Errorf("read setup: %v", err)
+			return
+		}
+		setupCh <- decodeGradiumMessage(t, setupPayload)
+
+		if err := conn.WriteMessage(websocket.TextMessage, []byte(`{"type":"text","text":"hello","start_s":0}`)); err != nil {
+			t.Errorf("write text event: %v", err)
+			return
+		}
+
+		_, audioPayload, err := conn.ReadMessage()
+		if err != nil {
+			t.Errorf("read audio: %v", err)
+			return
+		}
+		audioCh <- decodeGradiumMessage(t, audioPayload)
+
+		_, closePayload, err := conn.ReadMessage()
+		if err != nil {
+			t.Errorf("read close: %v", err)
+			return
+		}
+		closeCh <- decodeGradiumMessage(t, closePayload)
+	}))
+	defer server.Close()
+
+	endpoint := "ws" + strings.TrimPrefix(server.URL, "http")
+	provider := NewGradiumSTT("test-key", WithGradiumSTTModelEndpoint(endpoint))
+	stream, err := provider.Stream(context.Background(), "id")
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+
+	setup := receiveGradiumMessage(t, setupCh, "setup")
+	if setup["type"] != "setup" {
+		t.Fatalf("setup = %#v, want setup message", setup)
+	}
+	config := setup["json_config"].(map[string]any)
+	if config["language"] != "id" {
+		t.Fatalf("setup language = %#v, want id", config["language"])
+	}
+
+	event, err := stream.Next()
+	if err != nil {
+		t.Fatalf("first Next returned error: %v", err)
+	}
+	if event.Type != stt.SpeechEventStartOfSpeech {
+		t.Fatalf("first event = %v, want start of speech", event.Type)
+	}
+	event, err = stream.Next()
+	if err != nil {
+		t.Fatalf("second Next returned error: %v", err)
+	}
+	if event.Type != stt.SpeechEventInterimTranscript || event.Alternatives[0].Text != "hello" {
+		t.Fatalf("second event = %#v, want interim hello", event)
+	}
+
+	if err := stream.PushFrame(&model.AudioFrame{Data: []byte{0x01, 0x02}}); err != nil {
+		t.Fatalf("PushFrame returned error: %v", err)
+	}
+	audio := receiveGradiumMessage(t, audioCh, "audio")
+	if audio["type"] != "audio" || audio["audio"] != base64.StdEncoding.EncodeToString([]byte{0x01, 0x02}) {
+		t.Fatalf("audio = %#v, want base64 audio message", audio)
+	}
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush returned error: %v", err)
+	}
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close returned error: %v", err)
+	}
+	closeMsg := receiveGradiumMessage(t, closeCh, "close")
+	if closeMsg["terminate_session"] != true {
+		t.Fatalf("close = %#v, want terminate session", closeMsg)
 	}
 }
 
@@ -171,6 +269,26 @@ func assertGradiumSTTSetup(t *testing.T, payload map[string]any, key string, wan
 	if got := payload[key]; got != want {
 		encoded, _ := json.Marshal(payload)
 		t.Fatalf("%s = %#v, want %q in %s", key, got, want, encoded)
+	}
+}
+
+func decodeGradiumMessage(t *testing.T, payload []byte) map[string]any {
+	t.Helper()
+	var message map[string]any
+	if err := json.Unmarshal(payload, &message); err != nil {
+		t.Fatalf("decode websocket payload %q: %v", string(payload), err)
+	}
+	return message
+}
+
+func receiveGradiumMessage(t *testing.T, ch <-chan map[string]any, label string) map[string]any {
+	t.Helper()
+	select {
+	case message := <-ch:
+		return message
+	case <-time.After(time.Second):
+		t.Fatalf("timed out waiting for %s message", label)
+		return nil
 	}
 }
 

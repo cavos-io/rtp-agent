@@ -14,7 +14,6 @@ import (
 )
 
 type MultimodalAgent struct {
-	agent   *Agent
 	model   llm.RealtimeModel
 	session *AgentSession
 	chatCtx *llm.ChatContext
