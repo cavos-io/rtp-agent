@@ -2669,6 +2669,36 @@ func TestRunSessionConnectsRoomIOToSession(t *testing.T) {
 	}
 }
 
+func TestRunSessionWiresRoomDeleteToJobContext(t *testing.T) {
+	baseAgent := agent.NewAgent("test")
+	baseAgent.VAD = &fakeAppVAD{}
+	baseAgent.STT = &fakeAppSTT{}
+	baseAgent.LLM = &fakeAppLLM{}
+	baseAgent.TTS = &fakeAppTTS{}
+	session := agent.NewAgentSession(baseAgent, nil, agent.AgentSessionOptions{})
+	app := &App{
+		Session:     session,
+		Server:      worker.NewAgentServer(worker.WorkerOptions{}),
+		RoomOptions: worker.RoomOptions{DisablePreConnectAudio: true, DisableTextInput: true},
+	}
+	jobCtx := worker.NewJobContext(&livekit.Job{Id: "job_delete_room", Room: &livekit.Room{Name: "room-a"}}, "", "", "")
+	jobCtx.Room = lksdk.NewRoom(nil)
+
+	if err := app.runSession(jobCtx); err != nil {
+		t.Fatalf("runSession() error = %v", err)
+	}
+
+	if app.RoomIO == nil {
+		t.Fatal("RoomIO is nil")
+	}
+	if app.RoomIO.Options.DeleteRoom == nil {
+		t.Fatal("RoomIO DeleteRoom option = nil, want JobContext.DeleteRoom wiring")
+	}
+	if err := app.RoomIO.Options.DeleteRoom(context.Background(), "room-a"); err != nil {
+		t.Fatalf("RoomIO DeleteRoom() error = %v, want best-effort nil", err)
+	}
+}
+
 func TestDefaultConfigFromEnvConfiguresLLMTurnDetector(t *testing.T) {
 	t.Setenv("OPENAI_API_KEY", "test-openai-key")
 	t.Setenv("RTP_AGENT_LLM_PROVIDER", "openai")
