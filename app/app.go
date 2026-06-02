@@ -682,6 +682,18 @@ func configureAvatar(cfg AppConfig, a *agent.Agent) error {
 	case providerAnam:
 		a.Avatar = anam.NewAnamAvatar(cfg.AnamAPIKey)
 		return nil
+	case providerHedra:
+		a.Avatar = hedra.NewHedraAvatar(cfg.HedraAPIKey)
+		return nil
+	case providerLemonSlice:
+		a.Avatar = lemonslice.NewLemonsliceAvatar(cfg.LemonSliceAPIKey)
+		return nil
+	case providerSimli:
+		a.Avatar = simli.NewSimliAvatar(cfg.SimliAPIKey)
+		return nil
+	case providerTrugen:
+		a.Avatar = trugen.NewTrugenAvatar(cfg.TrugenAPIKey)
+		return nil
 	default:
 		return fmt.Errorf("unsupported RTP_AGENT_AVATAR_PROVIDER %q", cfg.AvatarProvider)
 	}

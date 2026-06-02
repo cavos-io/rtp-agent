@@ -1607,22 +1607,39 @@ func TestDefaultConfigFromEnvAddsAnthropicComputerTool(t *testing.T) {
 	}
 }
 
-func TestDefaultConfigFromEnvSelectsAnamAvatarProvider(t *testing.T) {
-	t.Setenv("ANAM_API_KEY", "test-anam-key")
-	t.Setenv("RTP_AGENT_AVATAR_PROVIDER", "anam")
+func TestDefaultConfigFromEnvSelectsAvatarProvider(t *testing.T) {
+	cases := []struct {
+		name       string
+		provider   string
+		keyEnv     string
+		wantAvatar string
+	}{
+		{name: "anam", provider: "anam", keyEnv: "ANAM_API_KEY", wantAvatar: "*anam.AnamAvatar"},
+		{name: "hedra", provider: "hedra", keyEnv: "HEDRA_API_KEY", wantAvatar: "*hedra.HedraAvatar"},
+		{name: "lemonslice", provider: "lemonslice", keyEnv: "LEMONSLICE_API_KEY", wantAvatar: "*lemonslice.LemonsliceAvatar"},
+		{name: "simli", provider: "simli", keyEnv: "SIMLI_API_KEY", wantAvatar: "*simli.SimliAvatar"},
+		{name: "trugen", provider: "trugen", keyEnv: "TRUGEN_API_KEY", wantAvatar: "*trugen.TrugenAvatar"},
+	}
 
-	app, err := NewApp(DefaultConfigFromEnv())
-	if err != nil {
-		t.Fatalf("NewApp() error = %v", err)
-	}
-	if app.Agent == nil {
-		t.Fatal("Agent is nil")
-	}
-	if app.Agent.Avatar == nil {
-		t.Fatal("Agent Avatar is nil")
-	}
-	if got := fmt.Sprintf("%T", app.Agent.Avatar); got != "*anam.AnamAvatar" {
-		t.Fatalf("Agent Avatar type = %q, want *anam.AnamAvatar", got)
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv(tc.keyEnv, "test-avatar-key")
+			t.Setenv("RTP_AGENT_AVATAR_PROVIDER", tc.provider)
+
+			app, err := NewApp(DefaultConfigFromEnv())
+			if err != nil {
+				t.Fatalf("NewApp() error = %v", err)
+			}
+			if app.Agent == nil {
+				t.Fatal("Agent is nil")
+			}
+			if app.Agent.Avatar == nil {
+				t.Fatal("Agent Avatar is nil")
+			}
+			if got := fmt.Sprintf("%T", app.Agent.Avatar); got != tc.wantAvatar {
+				t.Fatalf("Agent Avatar type = %q, want %s", got, tc.wantAvatar)
+			}
+		})
 	}
 }
 
