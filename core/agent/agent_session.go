@@ -94,6 +94,12 @@ type CommitUserTurnOptions struct {
 	SkipReply         bool
 }
 
+type SessionAssistant interface {
+	Start(ctx context.Context, s *AgentSession) error
+	OnAudioFrame(ctx context.Context, frame *model.AudioFrame)
+	SetPublishAudio(func(frame *model.AudioFrame) error)
+}
+
 type AgentSession struct {
 	Options AgentSessionOptions
 
@@ -104,7 +110,7 @@ type AgentSession struct {
 	LLM       llm.LLM
 	TTS       tts.TTS
 	Tools     []llm.Tool
-	Assistant *PipelineAgent
+	Assistant SessionAssistant
 	Room      *lksdk.Room
 
 	MetricsCollector *telemetry.UsageCollector
@@ -736,7 +742,9 @@ func (s *AgentSession) Start(ctx context.Context) error {
 		s.Assistant = NewPipelineAgent(s.VAD, s.STT, s.LLM, s.TTS, s.ChatCtx)
 	}
 	assistant := s.Assistant
-	assistant.ttsStreamPacer = s.Options.TTSStreamPacer
+	if pipeline, ok := assistant.(*PipelineAgent); ok {
+		pipeline.ttsStreamPacer = s.Options.TTSStreamPacer
+	}
 	agent := s.Agent
 	avatar := agent.GetAgent().Avatar
 	backgroundAudio := s.Options.BackgroundAudio
@@ -913,7 +921,7 @@ func (s *AgentSession) RunWithOptions(ctx context.Context, opts RunOptions) (*Ru
 		s.mu.Unlock()
 		return nil, ErrAgentSessionNestedRun
 	}
-	result := newRunResult(s.ChatCtx, opts.UserInput, opts.OutputType)
+	result := newRunResultFromOptions(s.ChatCtx, opts.UserInput, opts.OutputType)
 	s.runState = result
 	s.mu.Unlock()
 

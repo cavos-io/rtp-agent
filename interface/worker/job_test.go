@@ -119,6 +119,32 @@ func TestNewJobContextInitializesSessionReportMetadata(t *testing.T) {
 	}
 }
 
+func TestNewJobContextAttachesTaggerToSessionReport(t *testing.T) {
+	ctx := NewJobContext(
+		&livekit.Job{Id: "job_tagger"},
+		"wss://livekit.example",
+		"key",
+		"secret",
+	)
+
+	if ctx.Tagger == nil {
+		t.Fatal("Tagger = nil, want job tagger")
+	}
+	if ctx.Report == nil || ctx.Report.Tagger != ctx.Tagger {
+		t.Fatal("Report Tagger does not reference job tagger")
+	}
+
+	ctx.Tagger.Fail("caller hung up")
+	data := ctx.Report.ToDict()
+	outcome, ok := data["outcome"].(map[string]any)
+	if !ok {
+		t.Fatalf("outcome = %T, want map", data["outcome"])
+	}
+	if outcome["outcome"] != "fail" || outcome["reason"] != "caller hung up" {
+		t.Fatalf("outcome = %#v, want fail reason", outcome)
+	}
+}
+
 func TestJobContextConnectInfoUsesAcceptedParticipantFields(t *testing.T) {
 	ctx := NewJobContext(
 		&livekit.Job{Id: "job_connect_info", Room: &livekit.Room{Name: "room-a"}},

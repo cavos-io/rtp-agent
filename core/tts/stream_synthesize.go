@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/cavos-io/rtp-agent/core/audio"
 	"github.com/cavos-io/rtp-agent/core/audio/model"
 	cavosmath "github.com/cavos-io/rtp-agent/library/math"
 	"github.com/cavos-io/rtp-agent/library/telemetry"
@@ -213,8 +214,5 @@ func (s *chunkedStreamFromSynthesizeStream) markDone(err error) {
 }
 
 func audioFrameDurationSeconds(frame *model.AudioFrame) float64 {
-	if frame == nil || frame.SampleRate == 0 {
-		return 0
-	}
-	return float64(frame.SamplesPerChannel) / float64(frame.SampleRate)
+	return audio.CalculateFrameDuration(frame)
 }

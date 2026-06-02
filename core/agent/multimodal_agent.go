@@ -64,6 +64,12 @@ func (ma *MultimodalAgent) Start(ctx context.Context, s *AgentSession) error {
 	return nil
 }
 
+func (ma *MultimodalAgent) SetPublishAudio(publish func(frame *model.AudioFrame) error) {
+	ma.mu.Lock()
+	defer ma.mu.Unlock()
+	ma.PublishAudio = publish
+}
+
 func (ma *MultimodalAgent) run(ctx context.Context) {
 	logger.Logger.Infow("MultimodalAgent started")
 

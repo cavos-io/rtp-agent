@@ -133,6 +133,7 @@ type JobContext struct {
 	Job                    *livekit.Job
 	Room                   *lksdk.Room
 	Report                 *agent.SessionReport
+	Tagger                 *agent.Tagger
 	AcceptArguments        JobAcceptArguments
 	WorkerID               string
 	shutdownCallbacks      []func(string)
@@ -152,6 +153,8 @@ type JobContext struct {
 
 func NewJobContext(job *livekit.Job, url string, apiKey string, apiSecret string) *JobContext {
 	report := agent.NewSessionReport()
+	tagger := agent.NewTagger()
+	report.Tagger = tagger
 	if job != nil {
 		report.JobID = job.GetId()
 		if room := job.GetRoom(); room != nil {
@@ -165,6 +168,7 @@ func NewJobContext(job *livekit.Job, url string, apiKey string, apiSecret string
 		apiKey:    apiKey,
 		apiSecret: apiSecret,
 		Report:    report,
+		Tagger:    tagger,
 	}
 }
 

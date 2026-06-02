@@ -72,6 +72,12 @@ func (va *PipelineAgent) Start(ctx context.Context, s *AgentSession) error {
 	return nil
 }
 
+func (va *PipelineAgent) SetPublishAudio(publish func(frame *model.AudioFrame) error) {
+	va.mu.Lock()
+	defer va.mu.Unlock()
+	va.PublishAudio = publish
+}
+
 func (va *PipelineAgent) run(ctx context.Context) {
 	logger.Logger.Infow("PipelineAgent started")
 

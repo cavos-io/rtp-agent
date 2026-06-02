@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"path/filepath"
+	"sort"
 	"time"
 
 	"github.com/cavos-io/rtp-agent/core/llm"
@@ -34,6 +35,7 @@ type SessionReport struct {
 	Timestamp               float64                 `json:"timestamp"`
 	Usage                   *telemetry.UsageSummary `json:"usage,omitempty"`
 	SDKVersion              string                  `json:"sdk_version"`
+	Tagger                  *Tagger                 `json:"-"`
 }
 
 func NewSessionReport(sessions ...*AgentSession) *SessionReport {
@@ -83,7 +85,7 @@ func (r *SessionReport) ToDict() map[string]any {
 		chatHistory = r.ChatHistory.ToDict(llm.ChatContextDictOptions{IncludeTimestamp: true})
 	}
 
-	return map[string]any{
+	out := map[string]any{
 		"job_id":                     r.JobID,
 		"room_id":                    r.RoomID,
 		"room":                       r.Room,
@@ -96,6 +98,8 @@ func (r *SessionReport) ToDict() map[string]any {
 		"usage":                      usageSummaryToDict(r.Usage),
 		"sdk_version":                r.SDKVersion,
 	}
+	addTaggerReportFields(out, r.Tagger)
+	return out
 }
 
 func (r *SessionReport) MarshalJSON() ([]byte, error) {
@@ -247,4 +251,25 @@ func usageSummaryToDict(usage *telemetry.UsageSummary) any {
 	addFloat("tts_audio_duration", usage.TTSAudioDuration)
 	addFloat("stt_audio_duration", usage.STTAudioDuration)
 	return []map[string]any{out}
+}
+
+func addTaggerReportFields(out map[string]any, tagger *Tagger) {
+	if tagger == nil {
+		return
+	}
+	tags := tagger.Tags()
+	if len(tags) > 0 {
+		sort.Strings(tags)
+		out["tags"] = tags
+	}
+	if outcome := tagger.Outcome(); outcome != "" {
+		outcomeData := map[string]any{"outcome": outcome}
+		if reason := tagger.OutcomeReason(); reason != "" {
+			outcomeData["reason"] = reason
+		}
+		out["outcome"] = outcomeData
+	}
+	if evaluations := tagger.Evaluations(); len(evaluations) > 0 {
+		out["evaluations"] = evaluations
+	}
 }

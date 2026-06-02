@@ -551,7 +551,7 @@ func (a *AgentActivity) nextSpeechIndexLocked() int {
 	return best
 }
 
-// Event callbacks from RecognitionHooks
+// Event callbacks from the active audio pipeline.
 func (a *AgentActivity) OnStartOfSpeech(ev *vad.VADEvent) {
 	a.speaking = true
 	a.sttEOSReceived = false

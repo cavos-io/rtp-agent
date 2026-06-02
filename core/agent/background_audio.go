@@ -382,8 +382,8 @@ func (p *BackgroundAudioPlayer) runMixerTask(track *lksdk.LocalSampleTrack) {
 			p.mu.Unlock()
 
 			if len(streams) == 0 {
-				silence := make([]byte, 48000*2*20/1000)
-				track.WriteSample(media.Sample{Data: silence, Duration: 20 * time.Millisecond}, &lksdk.SampleWriteOptions{})
+				silence := audio.SilenceFrame(0.02, 48000, 1)
+				track.WriteSample(media.Sample{Data: silence.Data, Duration: 20 * time.Millisecond}, &lksdk.SampleWriteOptions{})
 				continue
 			}
 

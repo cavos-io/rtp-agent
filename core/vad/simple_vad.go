@@ -116,9 +116,9 @@ func WithProbabilitySmoothingAlpha(alpha float64) SimpleVADOption {
 
 func NewSimpleVAD(threshold float64) *SimpleVAD {
 	if threshold == 0 {
-		threshold = 0.05
+		return NewSimpleVADWith()
 	}
-	return NewSimpleVADWithOptions(SimpleVADOptions{Threshold: threshold})
+	return NewSimpleVADWith(WithThreshold(threshold))
 }
 
 func NewSimpleVADWith(opts ...SimpleVADOption) *SimpleVAD {
