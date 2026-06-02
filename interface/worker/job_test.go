@@ -245,6 +245,24 @@ func TestJobContextAvatarStartInfoExposesLiveKitConnection(t *testing.T) {
 	}
 }
 
+func TestJobContextAPIReturnsCachedLiveKitClients(t *testing.T) {
+	ctx := NewJobContext(&livekit.Job{Id: "job_api"}, "wss://livekit.example", "key", "secret")
+
+	api := ctx.API()
+	if api == nil {
+		t.Fatal("API() = nil, want LiveKit API clients")
+	}
+	if api.RoomService == nil {
+		t.Fatal("API().RoomService = nil, want room service client")
+	}
+	if api.SIP == nil {
+		t.Fatal("API().SIP = nil, want SIP client")
+	}
+	if again := ctx.API(); again != api {
+		t.Fatal("API() did not return cached API clients")
+	}
+}
+
 func TestJobContextConnectInfoUsesAcceptedParticipantFields(t *testing.T) {
 	ctx := NewJobContext(
 		&livekit.Job{Id: "job_connect_info", Room: &livekit.Room{Name: "room-a"}},

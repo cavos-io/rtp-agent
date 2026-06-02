@@ -95,6 +95,18 @@ func (p *JobProcess) HTTPProxy() string {
 	return p.httpProxy
 }
 
+type JobAPI struct {
+	RoomService *lksdk.RoomServiceClient
+	SIP         *lksdk.SIPClient
+}
+
+func NewJobAPI(url string, apiKey string, apiSecret string) *JobAPI {
+	return &JobAPI{
+		RoomService: lksdk.NewRoomServiceClient(url, apiKey, apiSecret),
+		SIP:         lksdk.NewSIPClient(url, apiKey, apiSecret),
+	}
+}
+
 type AutoSubscribe string
 
 const (
@@ -216,6 +228,7 @@ type JobContext struct {
 	participantTasks       map[participantEntrypointTaskKey]struct{}
 	participantTasksMu     sync.Mutex
 
+	api       *JobAPI
 	apiKey    string
 	apiSecret string
 	url       string
@@ -247,6 +260,16 @@ func NewJobContext(job *livekit.Job, url string, apiKey string, apiSecret string
 			"room":   report.Room,
 		},
 	}
+}
+
+func (c *JobContext) API() *JobAPI {
+	if c == nil {
+		return nil
+	}
+	if c.api == nil {
+		c.api = NewJobAPI(c.url, c.apiKey, c.apiSecret)
+	}
+	return c.api
 }
 
 func (c *JobContext) ParticipantIdentity() string {
@@ -745,8 +768,7 @@ func (c *JobContext) DeleteRoom(ctx context.Context, roomName string) (*livekit.
 	if roomName == "" {
 		roomName = c.Job.Room.Name
 	}
-	client := lksdk.NewRoomServiceClient(c.url, c.apiKey, c.apiSecret)
-	return client.DeleteRoom(ctx, &livekit.DeleteRoomRequest{
+	return c.API().RoomService.DeleteRoom(ctx, &livekit.DeleteRoomRequest{
 		Room: roomName,
 	})
 }
@@ -761,8 +783,7 @@ func (c *JobContext) AddSIPParticipant(ctx context.Context, callTo string, trunk
 	if len(names) > 0 {
 		name = names[0]
 	}
-	client := lksdk.NewSIPClient(c.url, c.apiKey, c.apiSecret)
-	return client.CreateSIPParticipant(ctx, c.createSIPParticipantRequest(callTo, trunkID, identity, name))
+	return c.API().SIP.CreateSIPParticipant(ctx, c.createSIPParticipantRequest(callTo, trunkID, identity, name))
 }
 
 func (c *JobContext) createSIPParticipantRequest(callTo string, trunkID string, identity string, name string) *livekit.CreateSIPParticipantRequest {
@@ -796,8 +817,7 @@ func (c *JobContext) TransferSIPParticipantByParticipant(ctx context.Context, pa
 	if len(playDialtones) > 0 {
 		playDialtone = playDialtones[0]
 	}
-	client := lksdk.NewSIPClient(c.url, c.apiKey, c.apiSecret)
-	_, err = client.TransferSIPParticipant(ctx, c.transferSIPParticipantRequest(identity, transferTo, playDialtone))
+	_, err = c.API().SIP.TransferSIPParticipant(ctx, c.transferSIPParticipantRequest(identity, transferTo, playDialtone))
 	return err
 }
 
