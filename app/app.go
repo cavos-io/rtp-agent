@@ -35,6 +35,7 @@ import (
 	"github.com/cavos-io/rtp-agent/adapter/mistralai"
 	"github.com/cavos-io/rtp-agent/adapter/murf"
 	"github.com/cavos-io/rtp-agent/adapter/openai"
+	"github.com/cavos-io/rtp-agent/adapter/slng"
 	"github.com/cavos-io/rtp-agent/core/agent"
 	"github.com/cavos-io/rtp-agent/core/llm"
 	"github.com/cavos-io/rtp-agent/interface/worker"
@@ -68,6 +69,7 @@ const (
 	providerMistralAI  = "mistralai"
 	providerMurf       = "murf"
 	providerOpenAI     = "openai"
+	providerSLNG       = "slng"
 	providerLiveKit    = "livekit"
 )
 
@@ -166,6 +168,8 @@ type AppConfig struct {
 	STTVoiceProfile                         *bool
 	STTVoiceProfileTopN                     *int
 	STTMinEndOfTurnSilenceWhenConfident     *int
+	STTMinSpeakers                          *int
+	STTModelOptions                         map[string]any
 	TTSProvider                             string
 	TTSModel                                string
 	TTSVoice                                string
@@ -211,6 +215,8 @@ type AppConfig struct {
 	TTSMaxBufferDelayMS                     *int
 	TTSContextGenerationID                  string
 	TTSContextUtterances                    []hume.HumeTTSUtterance
+	TTSRegion                               string
+	TTSModelOptions                         map[string]any
 	RealtimeProvider                        string
 	RealtimeModel                           string
 
@@ -235,6 +241,7 @@ type AppConfig struct {
 	MinimaxAPIKey     string
 	MistralAPIKey     string
 	MurfAPIKey        string
+	SLNGAPIKey        string
 
 	GoogleCredentialsFile string
 
@@ -343,6 +350,8 @@ func DefaultConfigFromEnv() AppConfig {
 		STTVoiceProfile:                         getenvOptionalBool("RTP_AGENT_STT_VOICE_PROFILE"),
 		STTVoiceProfileTopN:                     getenvOptionalInt("RTP_AGENT_STT_VOICE_PROFILE_TOP_N"),
 		STTMinEndOfTurnSilenceWhenConfident:     getenvOptionalInt("RTP_AGENT_STT_MIN_END_OF_TURN_SILENCE_WHEN_CONFIDENT"),
+		STTMinSpeakers:                          getenvOptionalInt("RTP_AGENT_STT_MIN_SPEAKERS"),
+		STTModelOptions:                         splitEnvMap("RTP_AGENT_STT_MODEL_OPTIONS"),
 		TTSProvider:                             normalizedEnv("RTP_AGENT_TTS_PROVIDER"),
 		TTSModel:                                os.Getenv("RTP_AGENT_TTS_MODEL"),
 		TTSVoice:                                os.Getenv("RTP_AGENT_TTS_VOICE"),
@@ -388,6 +397,8 @@ func DefaultConfigFromEnv() AppConfig {
 		TTSMaxBufferDelayMS:                     getenvOptionalInt("RTP_AGENT_TTS_MAX_BUFFER_DELAY_MS"),
 		TTSContextGenerationID:                  os.Getenv("RTP_AGENT_TTS_CONTEXT_GENERATION_ID"),
 		TTSContextUtterances:                    splitEnvHumeTTSUtterances("RTP_AGENT_TTS_CONTEXT_UTTERANCES"),
+		TTSRegion:                               os.Getenv("RTP_AGENT_TTS_REGION"),
+		TTSModelOptions:                         splitEnvMap("RTP_AGENT_TTS_MODEL_OPTIONS"),
 		RealtimeProvider:                        normalizedEnv("RTP_AGENT_REALTIME_PROVIDER"),
 		RealtimeModel:                           os.Getenv("RTP_AGENT_REALTIME_MODEL"),
 		OpenAIAPIKey:                            os.Getenv("OPENAI_API_KEY"),
@@ -411,6 +422,7 @@ func DefaultConfigFromEnv() AppConfig {
 		MinimaxAPIKey:                           os.Getenv("MINIMAX_API_KEY"),
 		MistralAPIKey:                           os.Getenv("MISTRAL_API_KEY"),
 		MurfAPIKey:                              os.Getenv("MURF_API_KEY"),
+		SLNGAPIKey:                              os.Getenv("SLNG_API_KEY"),
 		GoogleCredentialsFile:                   firstEnv("RTP_AGENT_GOOGLE_CREDENTIALS_FILE", "GOOGLE_APPLICATION_CREDENTIALS"),
 	}
 }
@@ -978,6 +990,45 @@ func configureProviders(cfg AppConfig, a *agent.Agent) (llm.RealtimeModel, error
 			sttOpts = append(sttOpts, mistralai.WithMistralAISTTContextBias(cfg.STTKeytermsPrompt))
 		}
 		a.STT = mistralai.NewMistralAISTT(cfg.MistralAPIKey, sttOpts...)
+	case providerSLNG:
+		sttOpts := []slng.STTOption{}
+		if cfg.STTModel != "" {
+			sttOpts = append(sttOpts, slng.WithSTTModel(cfg.STTModel))
+		}
+		if cfg.STTBaseURL != "" {
+			if strings.HasPrefix(cfg.STTBaseURL, "ws://") || strings.HasPrefix(cfg.STTBaseURL, "wss://") || strings.HasPrefix(cfg.STTBaseURL, "http://") || strings.HasPrefix(cfg.STTBaseURL, "https://") {
+				sttOpts = append(sttOpts, slng.WithSTTEndpoint(cfg.STTBaseURL))
+			} else {
+				sttOpts = append(sttOpts, slng.WithSTTBaseURL(cfg.STTBaseURL))
+			}
+		}
+		if cfg.STTRegion != "" {
+			sttOpts = append(sttOpts, slng.WithSTTRegionOverride(cfg.STTRegion))
+		}
+		if cfg.STTEncoding != "" {
+			sttOpts = append(sttOpts, slng.WithSTTEncoding(cfg.STTEncoding))
+		}
+		if cfg.STTLanguage != "" {
+			sttOpts = append(sttOpts, slng.WithSTTLanguage(cfg.STTLanguage))
+		}
+		if cfg.STTInterimResults != nil {
+			sttOpts = append(sttOpts, slng.WithSTTPartialTranscripts(*cfg.STTInterimResults))
+		}
+		if cfg.STTDiarization != nil {
+			minSpeakers := 0
+			if cfg.STTMinSpeakers != nil {
+				minSpeakers = *cfg.STTMinSpeakers
+			}
+			maxSpeakers := 0
+			if cfg.STTMaxSpeakers != nil {
+				maxSpeakers = *cfg.STTMaxSpeakers
+			}
+			sttOpts = append(sttOpts, slng.WithSTTDiarization(*cfg.STTDiarization, minSpeakers, maxSpeakers))
+		}
+		if len(cfg.STTModelOptions) > 0 {
+			sttOpts = append(sttOpts, slng.WithSTTModelOptions(cfg.STTModelOptions))
+		}
+		a.STT = slng.NewSTT(cfg.SLNGAPIKey, sttOpts...)
 	case providerAssemblyAI:
 		sttOpts := []assemblyai.AssemblyAISTTOption{}
 		if cfg.STTBaseURL != "" {
@@ -1440,6 +1491,37 @@ func configureProviders(cfg AppConfig, a *agent.Agent) (llm.RealtimeModel, error
 			ttsOpts = append(ttsOpts, murf.WithMurfTTSSampleRate(*cfg.TTSSampleRate))
 		}
 		a.TTS = murf.NewMurfTTS(cfg.MurfAPIKey, cfg.TTSVoice, ttsOpts...)
+	case providerSLNG:
+		ttsOpts := []slng.TTSOption{}
+		if cfg.TTSModel != "" {
+			ttsOpts = append(ttsOpts, slng.WithTTSModel(cfg.TTSModel))
+		}
+		if cfg.TTSBaseURL != "" {
+			if strings.HasPrefix(cfg.TTSBaseURL, "ws://") || strings.HasPrefix(cfg.TTSBaseURL, "wss://") || strings.HasPrefix(cfg.TTSBaseURL, "http://") || strings.HasPrefix(cfg.TTSBaseURL, "https://") {
+				ttsOpts = append(ttsOpts, slng.WithTTSEndpoint(cfg.TTSBaseURL))
+			} else {
+				ttsOpts = append(ttsOpts, slng.WithTTSBaseURL(cfg.TTSBaseURL))
+			}
+		}
+		if cfg.TTSRegion != "" {
+			ttsOpts = append(ttsOpts, slng.WithTTSRegionOverride(cfg.TTSRegion))
+		}
+		if cfg.TTSVoice != "" {
+			ttsOpts = append(ttsOpts, slng.WithTTSVoice(cfg.TTSVoice))
+		}
+		if cfg.TTSLanguage != "" {
+			ttsOpts = append(ttsOpts, slng.WithTTSLanguage(cfg.TTSLanguage))
+		}
+		if cfg.TTSSampleRate != nil {
+			ttsOpts = append(ttsOpts, slng.WithTTSSampleRate(*cfg.TTSSampleRate))
+		}
+		if cfg.TTSSpeed != 0 {
+			ttsOpts = append(ttsOpts, slng.WithTTSSpeed(cfg.TTSSpeed))
+		}
+		if len(cfg.TTSModelOptions) > 0 {
+			ttsOpts = append(ttsOpts, slng.WithTTSModelOptions(cfg.TTSModelOptions))
+		}
+		a.TTS = slng.NewTTS(cfg.SLNGAPIKey, ttsOpts...)
 	case providerCambai:
 		ttsOpts := []cambai.CambaiTTSOption{}
 		if cfg.TTSBaseURL != "" {
