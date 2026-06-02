@@ -2,6 +2,7 @@ package agent
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -13,12 +14,15 @@ import (
 	"time"
 
 	"github.com/cavos-io/rtp-agent/library/logger"
+	"github.com/cavos-io/rtp-agent/library/telemetry"
 	"github.com/cavos-io/rtp-agent/library/utils"
 	"github.com/livekit/protocol/auth"
 	"github.com/livekit/protocol/livekit"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
+
+var recordUploadTelemetryEvent = telemetry.RecordChatEvent
 
 func UploadSessionReport(
 	cloudURL string,
@@ -37,6 +41,8 @@ func UploadSessionReport(
 		logger.Logger.Infow("Not a cloud URL, skipping upload", "url", cloudURL)
 		return nil
 	}
+
+	emitUploadTelemetryEvents(context.Background(), agentName, report)
 
 	hasAudio := report.RecordingOptions.Audio && report.AudioRecordingPath != nil && report.AudioRecordingStartedAt != nil
 	if !report.RecordingOptions.Transcript && !hasAudio {
@@ -141,4 +147,48 @@ func UploadSessionReport(
 
 	logger.Logger.Debugw("Successfully uploaded session report to LiveKit Cloud")
 	return nil
+}
+
+func emitUploadTelemetryEvents(ctx context.Context, agentName string, report *SessionReport) {
+	if report == nil {
+		return
+	}
+
+	if hasUploadRecordingOption(report.RecordingOptions) {
+		attrs := map[string]interface{}{
+			"agent_name":               agentName,
+			"sdk_version":              report.SDKVersion,
+			"session.report_timestamp": report.Timestamp,
+			"session.options":          sessionReportOptionsToDict(report.Options),
+		}
+		if report.Tagger != nil {
+			attrs["session.tags"] = report.Tagger.Tags()
+		}
+		if report.Usage != nil {
+			attrs["usage"] = usageSummaryToDict(report.Usage)
+		}
+		recordUploadTelemetryEvent(ctx, "session_report", "session report", attrs)
+	}
+
+	if report.Tagger == nil {
+		return
+	}
+	for _, evaluation := range report.Tagger.Evaluations() {
+		recordUploadTelemetryEvent(ctx, "evaluation", "evaluation", map[string]interface{}{
+			"evaluation": evaluation,
+		})
+	}
+	if outcome := report.Tagger.Outcome(); outcome != "" {
+		outcomeData := map[string]any{"outcome": outcome}
+		if reason := report.Tagger.OutcomeReason(); reason != "" {
+			outcomeData["reason"] = reason
+		}
+		recordUploadTelemetryEvent(ctx, "outcome", "outcome", map[string]interface{}{
+			"outcome": outcomeData,
+		})
+	}
+}
+
+func hasUploadRecordingOption(options RecordingOptions) bool {
+	return options.Audio || options.Traces || options.Logs || options.Transcript
 }
