@@ -86,6 +86,7 @@ import (
 	"github.com/cavos-io/rtp-agent/interface/worker"
 	logutil "github.com/cavos-io/rtp-agent/library/logger"
 	"github.com/cavos-io/rtp-agent/library/plugin"
+	"github.com/cavos-io/rtp-agent/library/telemetry"
 	"github.com/cavos-io/rtp-agent/library/tokenize"
 	livekitlogger "github.com/livekit/protocol/logger"
 	lksdk "github.com/livekit/server-sdk-go/v2"
@@ -162,9 +163,10 @@ const (
 )
 
 type AppConfig struct {
-	WorkerOptions worker.WorkerOptions
-	Logger        livekitlogger.Logger
-	Instructions  string
+	WorkerOptions   worker.WorkerOptions
+	Logger          livekitlogger.Logger
+	MetricsRegistry *telemetry.MetricRegistry
+	Instructions    string
 
 	InitialChatContext                      map[string]any
 	AWSRegion                               string
@@ -459,15 +461,16 @@ type MCPHTTPServerConfig struct {
 }
 
 type App struct {
-	Server        *worker.AgentServer
-	Agent         *agent.Agent
-	Session       *agent.AgentSession
-	RealtimeModel llm.RealtimeModel
-	Evaluator     *evals.JudgeGroup
-	MCPServers    []llm.MCPServer
-	RoomIO        *worker.RoomIO
-	RoomOptions   worker.RoomOptions
-	Config        AppConfig
+	Server          *worker.AgentServer
+	Agent           *agent.Agent
+	Session         *agent.AgentSession
+	RealtimeModel   llm.RealtimeModel
+	Evaluator       *evals.JudgeGroup
+	MCPServers      []llm.MCPServer
+	MetricsRegistry *telemetry.MetricRegistry
+	RoomIO          *worker.RoomIO
+	RoomOptions     worker.RoomOptions
+	Config          AppConfig
 }
 
 type EvaluationSummary struct {
@@ -764,6 +767,10 @@ func NewApp(cfg AppConfig) (*App, error) {
 	if cfg.Logger != nil {
 		logutil.SetLogger(cfg.Logger)
 	}
+	metricsRegistry := cfg.MetricsRegistry
+	if metricsRegistry == nil {
+		metricsRegistry = telemetry.NewMetricRegistry()
+	}
 
 	baseAgent := agent.NewAgent(cfg.Instructions)
 	if baseAgent.Instructions == "" {
@@ -837,16 +844,18 @@ func NewApp(cfg AppConfig) (*App, error) {
 	if opts.WorkerType == "" {
 		opts.WorkerType = worker.WorkerTypeRoom
 	}
+	session.MetricsCollector = metricsRegistry.GetUsageCollector(telemetry.MetricLabels{AgentName: opts.AgentName})
 	server := worker.NewAgentServer(opts)
 
 	app := &App{
-		Server:        server,
-		Agent:         sessionAgent.GetAgent(),
-		Session:       session,
-		RealtimeModel: realtimeModel,
-		Evaluator:     evaluator,
-		MCPServers:    mcpServers,
-		Config:        cfg,
+		Server:          server,
+		Agent:           sessionAgent.GetAgent(),
+		Session:         session,
+		RealtimeModel:   realtimeModel,
+		Evaluator:       evaluator,
+		MCPServers:      mcpServers,
+		MetricsRegistry: metricsRegistry,
+		Config:          cfg,
 	}
 	if err := server.RTCSession(app.runSession, nil, nil); err != nil {
 		app.closeMCPServers()
@@ -1071,6 +1080,7 @@ func (a *App) runSession(ctx *worker.JobContext) error {
 		return fmt.Errorf("agent session is not configured")
 	}
 	defer a.closeMCPServers()
+	a.configureMetricsCollector(ctx)
 	a.Server.SetConsoleSession(a.Session)
 	if a.Session.STT == nil && a.Session.LLM == nil && a.Session.TTS == nil && a.RealtimeModel == nil {
 		return nil
@@ -1103,6 +1113,20 @@ func (a *App) runSession(ctx *worker.JobContext) error {
 		}
 	}
 	return a.Session.Start(sessionCtx)
+}
+
+func (a *App) configureMetricsCollector(ctx *worker.JobContext) {
+	if a == nil || a.Session == nil || a.Server == nil || a.MetricsRegistry == nil {
+		return
+	}
+	labels := telemetry.MetricLabels{AgentName: a.Server.Options.AgentName}
+	if ctx != nil && ctx.Job != nil {
+		if room := ctx.Job.GetRoom(); room != nil {
+			labels.RoomName = room.GetName()
+		}
+		labels.ParticipantIdentity = ctx.ParticipantIdentity()
+	}
+	a.Session.MetricsCollector = a.MetricsRegistry.GetUsageCollector(labels)
 }
 
 func (a *App) closeMCPServers() {

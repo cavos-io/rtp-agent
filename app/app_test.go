@@ -24,6 +24,8 @@ import (
 	"github.com/cavos-io/rtp-agent/interface/worker"
 	logutil "github.com/cavos-io/rtp-agent/library/logger"
 	"github.com/cavos-io/rtp-agent/library/plugin"
+	"github.com/cavos-io/rtp-agent/library/telemetry"
+	"github.com/livekit/protocol/livekit"
 	livekitlogger "github.com/livekit/protocol/logger"
 	lksdk "github.com/livekit/server-sdk-go/v2"
 )
@@ -58,6 +60,49 @@ func TestNewAppInstallsConfiguredLogger(t *testing.T) {
 	}
 	if logutil.Logger != recorder {
 		t.Fatal("NewApp() did not install configured logger")
+	}
+}
+
+func TestNewAppUsesConfiguredMetricsRegistry(t *testing.T) {
+	registry := telemetry.NewMetricRegistry()
+	app, err := NewApp(AppConfig{
+		WorkerOptions:   worker.WorkerOptions{AgentName: "metrics-agent"},
+		MetricsRegistry: registry,
+	})
+	if err != nil {
+		t.Fatalf("NewApp() error = %v", err)
+	}
+	want := registry.GetUsageCollector(telemetry.MetricLabels{AgentName: "metrics-agent"})
+	if app.Session.MetricsCollector != want {
+		t.Fatal("Session MetricsCollector was not allocated from configured registry")
+	}
+}
+
+func TestRunSessionUsesJobMetricLabels(t *testing.T) {
+	registry := telemetry.NewMetricRegistry()
+	app, err := NewApp(AppConfig{
+		WorkerOptions:   worker.WorkerOptions{AgentName: "metrics-agent"},
+		MetricsRegistry: registry,
+	})
+	if err != nil {
+		t.Fatalf("NewApp() error = %v", err)
+	}
+
+	jobCtx := worker.NewJobContext(&livekit.Job{
+		Id:   "job_metrics",
+		Room: &livekit.Room{Name: "metrics-room"},
+	}, "", "", "")
+	if err := app.runSession(jobCtx); err != nil {
+		t.Fatalf("runSession() error = %v", err)
+	}
+
+	want := registry.GetUsageCollector(telemetry.MetricLabels{
+		AgentName:           "metrics-agent",
+		RoomName:            "metrics-room",
+		ParticipantIdentity: "agent-job_metrics",
+	})
+	if app.Session.MetricsCollector != want {
+		t.Fatal("Session MetricsCollector was not allocated from job metric labels")
 	}
 }
 
