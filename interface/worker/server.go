@@ -59,6 +59,17 @@ var newLocalJobExecutor = func(id string, entrypoint func() error) workeripc.Job
 	return workeripc.NewThreadJobExecutor(id, entrypoint)
 }
 
+type localJobPool interface {
+	LaunchRunningJob(ctx context.Context, info workeripc.RunningJobInfo) error
+	GetByJobID(jobID string) workeripc.JobExecutor
+	SetCloseTimeout(timeout time.Duration)
+	Close() error
+}
+
+var newLocalProcPool = func(maxProcesses int, executorType workeripc.ExecutorType, entrypoint func() error) localJobPool {
+	return workeripc.NewProcPool(maxProcesses, executorType, entrypoint)
+}
+
 var assignmentTimeout = 7500 * time.Millisecond
 
 var uploadSessionReport = agent.UploadSessionReport
@@ -1769,7 +1780,7 @@ func (s *AgentServer) ExecuteLocalJobWithOptions(ctx context.Context, roomName s
 	s.activeJobs[jobCtx.Job.Id] = jobCtx
 	s.mu.Unlock()
 
-	executor := newLocalJobExecutor("local_"+jobCtx.Job.Id, func() error {
+	entrypoint := func() error {
 		defer func() {
 			if recovered := recover(); recovered != nil {
 				logger.Logger.Errorw("Local job entrypoint panicked", fmt.Errorf("%v", recovered), "jobId", jobCtx.Job.Id)
@@ -1783,15 +1794,11 @@ func (s *AgentServer) ExecuteLocalJobWithOptions(ctx context.Context, roomName s
 			return err
 		}
 		return nil
-	})
-	if err := executor.LaunchRunningJob(ctx, runningJobInfoFromContext(jobCtx)); err != nil {
+	}
+	if err := s.launchLocalJobExecutor(ctx, jobCtx, entrypoint, entrypointDone); err != nil {
 		s.finishJob(jobCtx)
 		return err
 	}
-	go func() {
-		_ = executor.Close(context.Background())
-		close(entrypointDone)
-	}()
 
 	// Block until the local job is canceled or the job context shuts down.
 	select {
@@ -1804,6 +1811,35 @@ func (s *AgentServer) ExecuteLocalJobWithOptions(ctx context.Context, roomName s
 	if options.SessionReportPath != "" {
 		return saveSessionReport(options.SessionReportPath, jobCtx.Report)
 	}
+	return nil
+}
+
+func (s *AgentServer) launchLocalJobExecutor(ctx context.Context, jobCtx *JobContext, entrypoint func() error, entrypointDone chan<- struct{}) error {
+	info := runningJobInfoFromContext(jobCtx)
+	if s.Options.NumIdleProcessesSet && s.Options.NumIdleProcesses > 0 {
+		pool := newLocalProcPool(s.Options.NumIdleProcesses, workeripc.ExecutorTypeThread, entrypoint)
+		pool.SetCloseTimeout(time.Duration(s.Options.ShutdownProcessTimeoutSeconds * float64(time.Second)))
+		if err := pool.LaunchRunningJob(ctx, info); err != nil {
+			return err
+		}
+		go func() {
+			if executor := pool.GetByJobID(jobCtx.Job.Id); executor != nil {
+				_ = executor.Close(context.Background())
+			}
+			_ = pool.Close()
+			close(entrypointDone)
+		}()
+		return nil
+	}
+
+	executor := newLocalJobExecutor("local_"+jobCtx.Job.Id, entrypoint)
+	if err := executor.LaunchRunningJob(ctx, info); err != nil {
+		return err
+	}
+	go func() {
+		_ = executor.Close(context.Background())
+		close(entrypointDone)
+	}()
 	return nil
 }
 
