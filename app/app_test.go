@@ -295,6 +295,143 @@ func TestDefaultConfigFromEnvSelectsDeepgramSpeechProviders(t *testing.T) {
 	}
 }
 
+func TestDefaultConfigFromEnvSelectsFishAudioTTS(t *testing.T) {
+	t.Setenv("FISHAUDIO_API_KEY", "test-fishaudio-key")
+	t.Setenv("RTP_AGENT_TTS_PROVIDER", "fishaudio")
+	t.Setenv("RTP_AGENT_TTS_MODEL", "s2-pro")
+	t.Setenv("RTP_AGENT_TTS_VOICE", "voice-test")
+	t.Setenv("RTP_AGENT_TTS_BASE_URL", "https://fishaudio.example")
+	t.Setenv("RTP_AGENT_TTS_RESPONSE_FORMAT", "opus")
+	t.Setenv("RTP_AGENT_TTS_SAMPLE_RATE", "48000")
+	t.Setenv("RTP_AGENT_TTS_LATENCY_MODE", "balanced")
+	t.Setenv("RTP_AGENT_TTS_CHUNK_LENGTH", "120")
+
+	app, err := NewApp(DefaultConfigFromEnv())
+	if err != nil {
+		t.Fatalf("NewApp() error = %v", err)
+	}
+	if app.Session == nil || app.Session.TTS == nil {
+		t.Fatal("Session TTS is nil")
+	}
+	if got := app.Session.TTS.Label(); got != "fishaudio.TTS" {
+		t.Fatalf("TTS label = %q, want fishaudio.TTS", got)
+	}
+	if got := app.Session.TTS.SampleRate(); got != 48000 {
+		t.Fatalf("TTS sample rate = %d, want 48000", got)
+	}
+	if caps := app.Session.TTS.Capabilities(); !caps.Streaming {
+		t.Fatalf("TTS capabilities = %+v, want streaming", caps)
+	}
+}
+
+func TestDefaultConfigFromEnvSelectsFalProviders(t *testing.T) {
+	t.Setenv("FAL_KEY", "test-fal-key")
+	t.Setenv("RTP_AGENT_LLM_PROVIDER", "fal")
+	t.Setenv("RTP_AGENT_LLM_MODEL", "fal-ai/llm-test")
+	t.Setenv("RTP_AGENT_STT_PROVIDER", "fal")
+	t.Setenv("RTP_AGENT_STT_LANGUAGE", "en")
+	t.Setenv("RTP_AGENT_STT_TASK", "translate")
+	t.Setenv("RTP_AGENT_STT_CHUNK_LEVEL", "word")
+	t.Setenv("RTP_AGENT_STT_VERSION", "3")
+
+	app, err := NewApp(DefaultConfigFromEnv())
+	if err != nil {
+		t.Fatalf("NewApp() error = %v", err)
+	}
+	if app.Session == nil {
+		t.Fatal("Session is nil")
+	}
+	if got := llm.Provider(app.Session.LLM); got != "fal" {
+		t.Fatalf("LLM provider = %q, want fal", got)
+	}
+	if got := llm.Model(app.Session.LLM); got != "fal-ai/llm-test" {
+		t.Fatalf("LLM model = %q, want fal-ai/llm-test", got)
+	}
+	if got := app.Session.STT.Label(); got != "fal.STT" {
+		t.Fatalf("STT label = %q, want fal.STT", got)
+	}
+	if caps := app.Session.STT.Capabilities(); caps.Streaming || !caps.OfflineRecognize {
+		t.Fatalf("STT capabilities = %+v, want offline recognize only", caps)
+	}
+}
+
+func TestDefaultConfigFromEnvSelectsFireworksProviders(t *testing.T) {
+	t.Setenv("FIREWORKS_API_KEY", "test-fireworks-key")
+	t.Setenv("RTP_AGENT_LLM_PROVIDER", "fireworks")
+	t.Setenv("RTP_AGENT_LLM_MODEL", "accounts/fireworks/models/firefunction-test")
+	t.Setenv("RTP_AGENT_STT_PROVIDER", "fireworks")
+	t.Setenv("RTP_AGENT_STT_MODEL", "whisper-test")
+	t.Setenv("RTP_AGENT_STT_BASE_URL", "wss://fireworks.example/v1")
+	t.Setenv("RTP_AGENT_STT_LANGUAGE", "en")
+	t.Setenv("RTP_AGENT_STT_PROMPT", "domain prompt")
+	t.Setenv("RTP_AGENT_STT_TEMPERATURE", "0.2")
+	t.Setenv("RTP_AGENT_STT_SKIP_VAD", "true")
+	t.Setenv("RTP_AGENT_STT_TEXT_TIMEOUT_SECONDS", "2.5")
+	t.Setenv("RTP_AGENT_STT_TIMESTAMP_GRANULARITIES", "word,segment")
+
+	app, err := NewApp(DefaultConfigFromEnv())
+	if err != nil {
+		t.Fatalf("NewApp() error = %v", err)
+	}
+	if app.Session == nil {
+		t.Fatal("Session is nil")
+	}
+	if got := llm.Provider(app.Session.LLM); got != "fireworks" {
+		t.Fatalf("LLM provider = %q, want fireworks", got)
+	}
+	if got := llm.Model(app.Session.LLM); got != "accounts/fireworks/models/firefunction-test" {
+		t.Fatalf("LLM model = %q, want accounts/fireworks/models/firefunction-test", got)
+	}
+	if got := app.Session.STT.Label(); got != "fireworks.STT" {
+		t.Fatalf("STT label = %q, want fireworks.STT", got)
+	}
+	if caps := app.Session.STT.Capabilities(); !caps.Streaming || !caps.InterimResults || caps.OfflineRecognize {
+		t.Fatalf("STT capabilities = %+v, want streaming interim-only", caps)
+	}
+}
+
+func TestDefaultConfigFromEnvSelectsGladiaSTT(t *testing.T) {
+	t.Setenv("GLADIA_API_KEY", "test-gladia-key")
+	t.Setenv("RTP_AGENT_STT_PROVIDER", "gladia")
+	t.Setenv("RTP_AGENT_STT_MODEL", "solaria-1")
+	t.Setenv("RTP_AGENT_STT_BASE_URL", "https://gladia.example/v2/live")
+	t.Setenv("RTP_AGENT_STT_LANGUAGE_OPTIONS", "en,fr")
+	t.Setenv("RTP_AGENT_STT_CODE_SWITCHING", "true")
+	t.Setenv("RTP_AGENT_STT_INTERIM_RESULTS", "false")
+	t.Setenv("RTP_AGENT_STT_SAMPLE_RATE", "16000")
+	t.Setenv("RTP_AGENT_STT_BIT_DEPTH", "16")
+	t.Setenv("RTP_AGENT_STT_NUMBER_OF_CHANNELS", "1")
+	t.Setenv("RTP_AGENT_STT_ENCODING", "wav/pcm")
+	t.Setenv("RTP_AGENT_STT_ENDPOINTING_SECONDS", "0.1")
+	t.Setenv("RTP_AGENT_STT_MAX_DURATION_WITHOUT_ENDPOINTING_SECONDS", "4")
+	t.Setenv("RTP_AGENT_STT_REGION", "eu-west")
+	t.Setenv("RTP_AGENT_STT_CUSTOM_VOCABULARY", "LiveKit,Agents")
+	t.Setenv("RTP_AGENT_STT_CUSTOM_SPELLING", "livekit=live kit|live-kit")
+	t.Setenv("RTP_AGENT_STT_TRANSLATION_TARGET_LANGUAGES", "es,de")
+	t.Setenv("RTP_AGENT_STT_TRANSLATION_MODEL", "base")
+	t.Setenv("RTP_AGENT_STT_TRANSLATION_MATCH_ORIGINAL_UTTERANCES", "true")
+	t.Setenv("RTP_AGENT_STT_TRANSLATION_LIPSYNC", "true")
+	t.Setenv("RTP_AGENT_STT_TRANSLATION_CONTEXT_ADAPTATION", "true")
+	t.Setenv("RTP_AGENT_STT_TRANSLATION_CONTEXT", "support call")
+	t.Setenv("RTP_AGENT_STT_TRANSLATION_INFORMAL", "true")
+	t.Setenv("RTP_AGENT_STT_PRE_PROCESSING_AUDIO_ENHANCER", "true")
+	t.Setenv("RTP_AGENT_STT_PRE_PROCESSING_SPEECH_THRESHOLD", "0.7")
+
+	app, err := NewApp(DefaultConfigFromEnv())
+	if err != nil {
+		t.Fatalf("NewApp() error = %v", err)
+	}
+	if app.Session == nil || app.Session.STT == nil {
+		t.Fatal("Session STT is nil")
+	}
+	if got := app.Session.STT.Label(); got != "gladia.STT" {
+		t.Fatalf("STT label = %q, want gladia.STT", got)
+	}
+	if caps := app.Session.STT.Capabilities(); !caps.Streaming || caps.InterimResults || caps.AlignedTranscript != "word" {
+		t.Fatalf("STT capabilities = %+v, want streaming word-aligned without interim results", caps)
+	}
+}
+
 func TestDefaultConfigFromEnvSelectsAWSProviders(t *testing.T) {
 	t.Setenv("AWS_REGION", "us-west-2")
 	t.Setenv("RTP_AGENT_LLM_PROVIDER", "aws")
