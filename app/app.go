@@ -15,6 +15,7 @@ import (
 	adapteraws "github.com/cavos-io/rtp-agent/adapter/aws"
 	"github.com/cavos-io/rtp-agent/adapter/azure"
 	"github.com/cavos-io/rtp-agent/adapter/baseten"
+	"github.com/cavos-io/rtp-agent/adapter/cambai"
 	adaptergoogle "github.com/cavos-io/rtp-agent/adapter/google"
 	"github.com/cavos-io/rtp-agent/adapter/openai"
 	"github.com/cavos-io/rtp-agent/core/agent"
@@ -30,6 +31,7 @@ const (
 	providerAWS        = "aws"
 	providerAzure      = "azure"
 	providerBaseten    = "baseten"
+	providerCambai     = "cambai"
 	providerGoogle     = "google"
 	providerOpenAI     = "openai"
 	providerLiveKit    = "livekit"
@@ -93,6 +95,7 @@ type AppConfig struct {
 	TTSTemperature                  *float64
 	TTSMaxTokens                    *int
 	TTSBufferSize                   *int
+	TTSEnhanceNamedEntities         *bool
 	TTSInstructions                 string
 	TTSResponseFormat               string
 	TTSBaseURL                      string
@@ -174,6 +177,7 @@ func DefaultConfigFromEnv() AppConfig {
 		TTSTemperature:                  getenvOptionalFloat("RTP_AGENT_TTS_TEMPERATURE"),
 		TTSMaxTokens:                    getenvOptionalInt("RTP_AGENT_TTS_MAX_TOKENS"),
 		TTSBufferSize:                   getenvOptionalInt("RTP_AGENT_TTS_BUFFER_SIZE"),
+		TTSEnhanceNamedEntities:         getenvOptionalBool("RTP_AGENT_TTS_ENHANCE_NAMED_ENTITIES"),
 		TTSInstructions:                 os.Getenv("RTP_AGENT_TTS_INSTRUCTIONS"),
 		TTSResponseFormat:               os.Getenv("RTP_AGENT_TTS_RESPONSE_FORMAT"),
 		TTSBaseURL:                      os.Getenv("RTP_AGENT_TTS_BASE_URL"),
@@ -530,6 +534,36 @@ func configureProviders(cfg AppConfig, a *agent.Agent) (llm.RealtimeModel, error
 		a.TTS = provider
 	case providerGoogle:
 		provider, err := adaptergoogle.NewGoogleTTS(cfg.GoogleCredentialsFile)
+		if err != nil {
+			return nil, err
+		}
+		a.TTS = provider
+	case providerCambai:
+		ttsOpts := []cambai.CambaiTTSOption{}
+		if cfg.TTSBaseURL != "" {
+			ttsOpts = append(ttsOpts, cambai.WithCambaiTTSBaseURL(cfg.TTSBaseURL))
+		}
+		if cfg.TTSVoice != "" {
+			if voiceID, err := strconv.Atoi(cfg.TTSVoice); err == nil {
+				ttsOpts = append(ttsOpts, cambai.WithCambaiTTSVoiceID(voiceID))
+			}
+		}
+		if cfg.TTSModel != "" {
+			ttsOpts = append(ttsOpts, cambai.WithCambaiTTSModel(cfg.TTSModel))
+		}
+		if cfg.TTSLanguage != "" {
+			ttsOpts = append(ttsOpts, cambai.WithCambaiTTSLanguage(cfg.TTSLanguage))
+		}
+		if cfg.TTSEncoding != "" {
+			ttsOpts = append(ttsOpts, cambai.WithCambaiTTSOutputFormat(cfg.TTSEncoding))
+		}
+		if cfg.TTSInstructions != "" {
+			ttsOpts = append(ttsOpts, cambai.WithCambaiTTSUserInstructions(cfg.TTSInstructions))
+		}
+		if cfg.TTSEnhanceNamedEntities != nil {
+			ttsOpts = append(ttsOpts, cambai.WithCambaiTTSEnhanceNamedEntities(*cfg.TTSEnhanceNamedEntities))
+		}
+		provider, err := cambai.NewCambaiTTS("", "", ttsOpts...)
 		if err != nil {
 			return nil, err
 		}

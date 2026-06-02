@@ -98,6 +98,32 @@ func TestDefaultConfigFromEnvSelectsAsyncAITTS(t *testing.T) {
 	}
 }
 
+func TestDefaultConfigFromEnvSelectsCambaiTTS(t *testing.T) {
+	t.Setenv("CAMB_API_KEY", "test-cambai-key")
+	t.Setenv("RTP_AGENT_TTS_PROVIDER", "cambai")
+	t.Setenv("RTP_AGENT_TTS_MODEL", "mars-pro")
+	t.Setenv("RTP_AGENT_TTS_VOICE", "123")
+	t.Setenv("RTP_AGENT_TTS_LANGUAGE", "en-us")
+	t.Setenv("RTP_AGENT_TTS_ENCODING", "pcm_s16le")
+	t.Setenv("RTP_AGENT_TTS_BASE_URL", "https://cambai.example/apis")
+	t.Setenv("RTP_AGENT_TTS_INSTRUCTIONS", "speak clearly")
+	t.Setenv("RTP_AGENT_TTS_ENHANCE_NAMED_ENTITIES", "true")
+
+	app, err := NewApp(DefaultConfigFromEnv())
+	if err != nil {
+		t.Fatalf("NewApp() error = %v", err)
+	}
+	if app.Session == nil || app.Session.TTS == nil {
+		t.Fatal("Session TTS is nil")
+	}
+	if got := app.Session.TTS.Label(); got != "cambai.TTS" {
+		t.Fatalf("TTS label = %q, want cambai.TTS", got)
+	}
+	if got := app.Session.TTS.SampleRate(); got != 48000 {
+		t.Fatalf("TTS sample rate = %d, want 48000", got)
+	}
+}
+
 func TestDefaultConfigFromEnvSelectsAWSProviders(t *testing.T) {
 	t.Setenv("AWS_REGION", "us-west-2")
 	t.Setenv("RTP_AGENT_LLM_PROVIDER", "aws")
