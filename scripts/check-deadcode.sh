@@ -30,7 +30,7 @@ deadcode_out="$tmpdir/deadcode.out"
 set +e
 staticcheck ./... >"$staticcheck_out" 2>&1
 staticcheck_status=$?
-deadcode -test ./... >"$deadcode_out" 2>&1
+deadcode ./... >"$deadcode_out" 2>&1
 deadcode_status=$?
 set -e
 
