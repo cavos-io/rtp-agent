@@ -614,6 +614,44 @@ func TestDefaultConfigFromEnvSelectsHumeProviders(t *testing.T) {
 	}
 }
 
+func TestDefaultConfigFromEnvSelectsMinimaxProviders(t *testing.T) {
+	t.Setenv("MINIMAX_API_KEY", "test-minimax-key")
+	t.Setenv("RTP_AGENT_LLM_PROVIDER", "minimax")
+	t.Setenv("RTP_AGENT_LLM_MODEL", "abab-test")
+	t.Setenv("RTP_AGENT_TTS_PROVIDER", "minimax")
+	t.Setenv("RTP_AGENT_TTS_BASE_URL", "https://minimax.example")
+	t.Setenv("RTP_AGENT_TTS_MODEL", "speech-test")
+	t.Setenv("RTP_AGENT_TTS_VOICE", "voice-test")
+	t.Setenv("RTP_AGENT_TTS_SAMPLE_RATE", "32000")
+	t.Setenv("RTP_AGENT_TTS_BIT_RATE", "96000")
+	t.Setenv("RTP_AGENT_TTS_RESPONSE_FORMAT", "pcm")
+	t.Setenv("RTP_AGENT_TTS_EMOTION", "happy")
+	t.Setenv("RTP_AGENT_TTS_SPEED", "1.2")
+	t.Setenv("RTP_AGENT_TTS_VOLUME", "0.9")
+	t.Setenv("RTP_AGENT_TTS_PITCH", "2")
+	t.Setenv("RTP_AGENT_TTS_TEXT_NORMALIZATION", "true")
+
+	app, err := NewApp(DefaultConfigFromEnv())
+	if err != nil {
+		t.Fatalf("NewApp() error = %v", err)
+	}
+	if app.Session == nil {
+		t.Fatal("Session is nil")
+	}
+	if app.Session.LLM == nil {
+		t.Fatal("Session LLM is nil")
+	}
+	if got := app.Session.TTS.Label(); got != "minimax.TTS" {
+		t.Fatalf("TTS label = %q, want minimax.TTS", got)
+	}
+	if got := app.Session.TTS.SampleRate(); got != 32000 {
+		t.Fatalf("TTS sample rate = %d, want 32000", got)
+	}
+	if caps := app.Session.TTS.Capabilities(); !caps.Streaming || caps.AlignedTranscript {
+		t.Fatalf("TTS capabilities = %+v, want streaming without aligned transcript", caps)
+	}
+}
+
 func TestDefaultConfigFromEnvSelectsAWSProviders(t *testing.T) {
 	t.Setenv("AWS_REGION", "us-west-2")
 	t.Setenv("RTP_AGENT_LLM_PROVIDER", "aws")
