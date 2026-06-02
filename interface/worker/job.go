@@ -205,6 +205,7 @@ type JobContext struct {
 	AcceptArguments        JobAcceptArguments
 	WorkerID               string
 	process                *JobProcess
+	primarySession         *agent.AgentSession
 	shutdownCallbacks      []func(string)
 	shutdownOnce           sync.Once
 	finishOnce             sync.Once
@@ -288,6 +289,51 @@ func (c *JobContext) Proc() *JobProcess {
 		c.process = NewJobProcess(JobExecutorTypeThread, nil, "")
 	}
 	return c.process
+}
+
+func (c *JobContext) SetPrimarySession(session *agent.AgentSession) {
+	c.primarySession = session
+}
+
+func (c *JobContext) PrimarySession() (*agent.AgentSession, error) {
+	if c.primarySession == nil {
+		return nil, fmt.Errorf("no primary AgentSession was started for this job")
+	}
+	return c.primarySession, nil
+}
+
+func (c *JobContext) MakeSessionReport(sessions ...*agent.AgentSession) (*agent.SessionReport, error) {
+	var session *agent.AgentSession
+	if len(sessions) > 0 {
+		session = sessions[0]
+	} else {
+		var err error
+		session, err = c.PrimarySession()
+		if err != nil {
+			return nil, err
+		}
+	}
+	if session == nil {
+		return nil, fmt.Errorf("cannot prepare report, no AgentSession was found")
+	}
+
+	report := agent.NewSessionReport(session)
+	if c.Job != nil {
+		report.JobID = c.Job.GetId()
+		if room := c.Job.GetRoom(); room != nil {
+			report.RoomID = room.GetSid()
+			report.Room = room.GetName()
+		}
+	}
+	if c.Report != nil {
+		report.RecordingOptions = c.Report.RecordingOptions
+		report.AudioRecordingPath = c.Report.AudioRecordingPath
+		report.AudioRecordingStartedAt = c.Report.AudioRecordingStartedAt
+		report.Duration = c.Report.Duration
+	}
+	report.Tagger = c.Tagger
+	c.Report = report
+	return report, nil
 }
 
 func (c *JobContext) AvatarStartInfo() agent.AvatarStartInfo {

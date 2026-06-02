@@ -2175,6 +2175,41 @@ func TestEvaluateSessionReturnsEvaluationSummary(t *testing.T) {
 	}
 }
 
+func TestRunSessionRegistersPrimarySessionOnJobContext(t *testing.T) {
+	baseAgent := agent.NewAgent("test")
+	session := agent.NewAgentSession(baseAgent, nil, agent.AgentSessionOptions{})
+	server := worker.NewAgentServer(worker.WorkerOptions{AgentName: "support-agent"})
+	application := &App{
+		Server:          server,
+		Agent:           baseAgent,
+		Session:         session,
+		MetricsRegistry: telemetry.NewMetricRegistry(),
+	}
+	ctx := worker.NewJobContext(
+		&livekit.Job{
+			Id: "job_primary_session",
+			Room: &livekit.Room{
+				Sid:  "RM_primary",
+				Name: "room-primary",
+			},
+		},
+		"wss://livekit.example",
+		"key",
+		"secret",
+	)
+
+	if err := application.runSession(ctx); err != nil {
+		t.Fatalf("runSession() error = %v", err)
+	}
+	primary, err := ctx.PrimarySession()
+	if err != nil {
+		t.Fatalf("PrimarySession() error = %v", err)
+	}
+	if primary != session {
+		t.Fatal("PrimarySession() did not return app session")
+	}
+}
+
 func TestConfigureRoomToolsAddsSendDTMFTool(t *testing.T) {
 	baseAgent := agent.NewAgent("test")
 	publisher := &fakeAppDtmfPublisher{}

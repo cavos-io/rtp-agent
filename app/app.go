@@ -1112,9 +1112,17 @@ func (a *App) runSession(ctx *worker.JobContext) error {
 		return fmt.Errorf("agent session is not configured")
 	}
 	defer a.closeMCPServers()
+	if ctx != nil {
+		ctx.SetPrimarySession(a.Session)
+	}
 	a.configureMetricsCollector(ctx)
 	a.Server.SetConsoleSession(a.Session)
 	if a.Session.STT == nil && a.Session.LLM == nil && a.Session.TTS == nil && a.RealtimeModel == nil {
+		if ctx != nil {
+			if _, err := ctx.MakeSessionReport(a.Session); err != nil {
+				return err
+			}
+		}
 		return nil
 	}
 	if ctx != nil {
@@ -1144,7 +1152,15 @@ func (a *App) runSession(ctx *worker.JobContext) error {
 			sessionCtx = agent.ContextWithAvatarStartInfo(sessionCtx, info)
 		}
 	}
-	return a.Session.Start(sessionCtx)
+	if err := a.Session.Start(sessionCtx); err != nil {
+		return err
+	}
+	if ctx != nil {
+		if _, err := ctx.MakeSessionReport(a.Session); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (a *App) configureMetricsCollector(ctx *worker.JobContext) {

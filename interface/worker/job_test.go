@@ -9,6 +9,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/cavos-io/rtp-agent/core/agent"
+	"github.com/cavos-io/rtp-agent/core/llm"
 	workeripc "github.com/cavos-io/rtp-agent/interface/worker/ipc"
 	"github.com/livekit/protocol/auth"
 	"github.com/livekit/protocol/livekit"
@@ -143,6 +145,60 @@ func TestNewJobContextAttachesTaggerToSessionReport(t *testing.T) {
 	}
 	if outcome["outcome"] != "fail" || outcome["reason"] != "caller hung up" {
 		t.Fatalf("outcome = %#v, want fail reason", outcome)
+	}
+}
+
+func TestJobContextPrimarySessionRequiresRegisteredSession(t *testing.T) {
+	ctx := NewJobContext(&livekit.Job{Id: "job_no_session"}, "", "", "")
+
+	if _, err := ctx.PrimarySession(); err == nil {
+		t.Fatal("PrimarySession() error = nil, want missing primary session error")
+	}
+}
+
+func TestJobContextMakeSessionReportUsesPrimarySession(t *testing.T) {
+	ctx := NewJobContext(
+		&livekit.Job{
+			Id: "job_session_report",
+			Room: &livekit.Room{
+				Sid:  "RM_session",
+				Name: "room-session",
+			},
+		},
+		"wss://livekit.example",
+		"key",
+		"secret",
+	)
+	baseAgent := agent.NewAgent("test")
+	session := agent.NewAgentSession(baseAgent, nil, agent.AgentSessionOptions{AllowInterruptions: false})
+	session.ChatCtx.Append(&llm.ChatMessage{
+		Role:    llm.ChatRoleUser,
+		Content: []llm.ChatContent{{Text: "hello"}},
+	})
+
+	ctx.SetPrimarySession(session)
+	report, err := ctx.MakeSessionReport()
+	if err != nil {
+		t.Fatalf("MakeSessionReport() error = %v", err)
+	}
+
+	if report.JobID != "job_session_report" {
+		t.Fatalf("report JobID = %q, want job_session_report", report.JobID)
+	}
+	if report.RoomID != "RM_session" || report.Room != "room-session" {
+		t.Fatalf("report room = %q/%q, want RM_session/room-session", report.RoomID, report.Room)
+	}
+	if report.ChatHistory == session.ChatCtx {
+		t.Fatal("report ChatHistory aliases session ChatCtx, want copy")
+	}
+	if got := len(report.ChatHistory.Items); got != 1 {
+		t.Fatalf("report chat history items = %d, want 1", got)
+	}
+	if report.Tagger != ctx.Tagger {
+		t.Fatal("report Tagger does not preserve job tagger")
+	}
+	if ctx.Report != report {
+		t.Fatal("JobContext Report was not updated to generated session report")
 	}
 }
 
