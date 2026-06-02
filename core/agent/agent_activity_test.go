@@ -1056,6 +1056,24 @@ func TestAgentActivityCommitUserTurnSkipReplyAddsUserMessageWithoutCallback(t *t
 	}
 }
 
+func TestAgentActivityUserTurnExceededSkipsWhenAgentStartsSpeaking(t *testing.T) {
+	agent := &countingExceededAgent{Agent: NewAgent("test"), calls: make(chan UserTurnExceededEvent, 1)}
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	activity := NewAgentActivity(agent, session)
+	agent.activity = activity
+	session.activity = activity
+	activity.currentSpeech = NewSpeechHandle(true, DefaultInputDetails())
+
+	activity.OnUserTurnExceeded(UserTurnExceededEvent{Transcript: "still speaking"})
+	session.UpdateAgentState(AgentStateSpeaking)
+
+	select {
+	case ev := <-agent.calls:
+		t.Fatalf("OnUserTurnExceeded called after agent started speaking: %#v", ev)
+	case <-time.After(50 * time.Millisecond):
+	}
+}
+
 type turnCompletedAgent struct {
 	*Agent
 	turns chan *llm.ChatMessage
@@ -1096,6 +1114,16 @@ type errorTurnAgent struct {
 func (a *errorTurnAgent) OnUserTurnCompleted(ctx context.Context, chatCtx *llm.ChatContext, newMsg *llm.ChatMessage) error {
 	a.turns <- newMsg
 	return a.err
+}
+
+type countingExceededAgent struct {
+	*Agent
+	calls chan UserTurnExceededEvent
+}
+
+func (a *countingExceededAgent) OnUserTurnExceeded(ctx context.Context, ev UserTurnExceededEvent) error {
+	a.calls <- ev
+	return nil
 }
 
 type blockingTurnAgent struct {

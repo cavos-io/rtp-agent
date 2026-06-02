@@ -212,10 +212,56 @@ func (a *AgentActivity) OnUserTurnExceeded(ev UserTurnExceededEvent) {
 			a.userTurnExceededMu.Unlock()
 		}()
 
+		shouldRun, err := a.waitForUserTurnExceededCallback(a.ctx)
+		if err != nil {
+			logger.Logger.Errorw("user turn exceeded wait failed", err)
+			return
+		}
+		if !shouldRun {
+			return
+		}
+		a.queueMu.Lock()
+		schedulingPaused = a.schedulingPaused || a.schedulingDraining
+		a.queueMu.Unlock()
+		if schedulingPaused {
+			return
+		}
 		if err := a.AgentIntf.OnUserTurnExceeded(a.ctx, ev); err != nil {
 			logger.Logger.Errorw("error in OnUserTurnExceeded callback", err)
 		}
 	}()
+}
+
+func (a *AgentActivity) waitForUserTurnExceededCallback(ctx context.Context) (bool, error) {
+	if a.Session == nil {
+		return true, nil
+	}
+	if a.Session.AgentState == AgentStateSpeaking {
+		return false, nil
+	}
+	if len(a.activeSpeechHandles()) == 0 {
+		return true, nil
+	}
+
+	ticker := time.NewTicker(time.Millisecond)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return false, ctx.Err()
+		case ev := <-a.Session.AgentStateChangedCh:
+			if ev.NewState == AgentStateSpeaking {
+				return false, nil
+			}
+		case <-ticker.C:
+			if a.Session.AgentState == AgentStateSpeaking {
+				return false, nil
+			}
+			if len(a.activeSpeechHandles()) == 0 {
+				return true, nil
+			}
+		}
+	}
 }
 
 func (a *AgentActivity) UpdateInstructions(ctx context.Context, instructions string) error {
