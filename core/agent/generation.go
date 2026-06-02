@@ -2,6 +2,8 @@ package agent
 
 import (
 	"context"
+	"reflect"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -10,6 +12,7 @@ import (
 	"github.com/cavos-io/rtp-agent/core/llm"
 	"github.com/cavos-io/rtp-agent/core/tts"
 	"github.com/cavos-io/rtp-agent/library/telemetry"
+	"go.opentelemetry.io/otel/attribute"
 )
 
 type LLMGenerationData struct {
@@ -39,9 +42,11 @@ func PerformLLMInference(
 	for _, tool := range tools {
 		toolItems = append(toolItems, tool)
 	}
-	chatOptions = append(chatOptions, llm.WithTools(llm.NewToolContext(toolItems).Flatten()))
+	toolCtx := llm.NewToolContext(toolItems)
+	chatOptions = append(chatOptions, llm.WithTools(toolCtx.Flatten()))
 	chatOptions = append(chatOptions, options...)
 	ctx, span := telemetry.NewLLMSpan(ctx, llm.Model(l), llm.Provider(l))
+	span.SetAttributes(llmToolSpanAttributes(toolCtx)...)
 	stream, err := l.Chat(ctx, chatCtx, chatOptions...)
 	if err != nil {
 		span.End()
@@ -86,6 +91,48 @@ func PerformLLMInference(
 	}()
 
 	return data, nil
+}
+
+func llmToolSpanAttributes(toolCtx *llm.ToolContext) []attribute.KeyValue {
+	if toolCtx == nil {
+		return nil
+	}
+
+	functionTools := toolCtx.FunctionTools()
+	functionToolNames := make([]string, 0, len(functionTools))
+	for name := range functionTools {
+		functionToolNames = append(functionToolNames, name)
+	}
+	sort.Strings(functionToolNames)
+
+	providerTools := toolCtx.ProviderTools()
+	providerToolTypes := make([]string, 0, len(providerTools))
+	for _, tool := range providerTools {
+		providerToolTypes = append(providerToolTypes, typeName(tool))
+	}
+
+	toolsets := toolCtx.Toolsets()
+	toolsetTypes := make([]string, 0, len(toolsets))
+	for _, toolset := range toolsets {
+		toolsetTypes = append(toolsetTypes, typeName(toolset))
+	}
+
+	return []attribute.KeyValue{
+		attribute.StringSlice(telemetry.AttrFunctionTools, functionToolNames),
+		attribute.StringSlice(telemetry.AttrProviderTools, providerToolTypes),
+		attribute.StringSlice(telemetry.AttrToolSets, toolsetTypes),
+	}
+}
+
+func typeName(v any) string {
+	t := reflect.TypeOf(v)
+	for t != nil && t.Kind() == reflect.Ptr {
+		t = t.Elem()
+	}
+	if t == nil {
+		return ""
+	}
+	return t.Name()
 }
 
 type TTSGenerationData struct {
