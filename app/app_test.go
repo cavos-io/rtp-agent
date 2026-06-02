@@ -285,6 +285,28 @@ func TestDefaultConfigFromEnvSelectsAssemblyAISTT(t *testing.T) {
 	}
 }
 
+func TestDefaultConfigFromEnvWrapsSTTWithMultiSpeakerAdapter(t *testing.T) {
+	t.Setenv("ASSEMBLYAI_API_KEY", "test-assemblyai-key")
+	t.Setenv("RTP_AGENT_STT_PROVIDER", "assemblyai")
+	t.Setenv("RTP_AGENT_STT_SPEAKER_LABELS", "true")
+	t.Setenv("RTP_AGENT_STT_MULTI_SPEAKER", "true")
+
+	app, err := NewApp(DefaultConfigFromEnv())
+	if err != nil {
+		t.Fatalf("NewApp() error = %v", err)
+	}
+	if app.Session == nil || app.Session.STT == nil {
+		t.Fatal("Session STT is nil")
+	}
+	wrapped, ok := app.Session.STT.(*stt.MultiSpeakerAdapter)
+	if !ok {
+		t.Fatalf("Session STT = %T, want *stt.MultiSpeakerAdapter", app.Session.STT)
+	}
+	if caps := wrapped.Capabilities(); !caps.Streaming || !caps.Diarization {
+		t.Fatalf("wrapped STT capabilities = %+v, want streaming diarization", caps)
+	}
+}
+
 func TestDefaultConfigFromEnvSelectsAsyncAITTS(t *testing.T) {
 	t.Setenv("ASYNCAI_API_KEY", "test-asyncai-key")
 	t.Setenv("RTP_AGENT_TTS_PROVIDER", "asyncai")

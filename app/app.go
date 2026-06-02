@@ -78,6 +78,7 @@ import (
 	betatools "github.com/cavos-io/rtp-agent/core/beta/tools"
 	"github.com/cavos-io/rtp-agent/core/inference"
 	"github.com/cavos-io/rtp-agent/core/llm"
+	corestt "github.com/cavos-io/rtp-agent/core/stt"
 	coretts "github.com/cavos-io/rtp-agent/core/tts"
 	"github.com/cavos-io/rtp-agent/interface/worker"
 	"github.com/cavos-io/rtp-agent/library/tokenize"
@@ -177,6 +178,7 @@ type AppConfig struct {
 	STTNoDelay                              *bool
 	STTEndpointingMS                        *int
 	STTDiarization                          *bool
+	STTMultiSpeaker                         *bool
 	STTFillerWords                          *bool
 	STTVADEvents                            *bool
 	STTNumerals                             *bool
@@ -445,6 +447,7 @@ func DefaultConfigFromEnv() AppConfig {
 		STTNoDelay:                              getenvOptionalBool("RTP_AGENT_STT_NO_DELAY"),
 		STTEndpointingMS:                        getenvOptionalInt("RTP_AGENT_STT_ENDPOINTING_MS"),
 		STTDiarization:                          getenvOptionalBool("RTP_AGENT_STT_DIARIZATION"),
+		STTMultiSpeaker:                         getenvOptionalBool("RTP_AGENT_STT_MULTI_SPEAKER"),
 		STTFillerWords:                          getenvOptionalBool("RTP_AGENT_STT_FILLER_WORDS"),
 		STTVADEvents:                            getenvOptionalBool("RTP_AGENT_STT_VAD_EVENTS"),
 		STTNumerals:                             getenvOptionalBool("RTP_AGENT_STT_NUMERALS"),
@@ -688,6 +691,9 @@ func NewApp(cfg AppConfig) (*App, error) {
 	if err != nil {
 		return nil, err
 	}
+	if err := configureSTTAdapters(cfg, baseAgent); err != nil {
+		return nil, err
+	}
 	if err := configureTurnDetector(cfg, baseAgent); err != nil {
 		return nil, err
 	}
@@ -868,6 +874,21 @@ func configureTurnDetector(cfg AppConfig, a *agent.Agent) error {
 	default:
 		return fmt.Errorf("unsupported RTP_AGENT_TURN_DETECTOR_PROVIDER %q", cfg.TurnDetectorProvider)
 	}
+}
+
+func configureSTTAdapters(cfg AppConfig, a *agent.Agent) error {
+	if cfg.STTMultiSpeaker == nil || !*cfg.STTMultiSpeaker {
+		return nil
+	}
+	if a.STT == nil {
+		return fmt.Errorf("RTP_AGENT_STT_MULTI_SPEAKER=true requires RTP_AGENT_STT_PROVIDER")
+	}
+	adapter, err := corestt.NewDefaultMultiSpeakerAdapter(a.STT)
+	if err != nil {
+		return err
+	}
+	a.STT = adapter
+	return nil
 }
 
 func configureProviders(cfg AppConfig, a *agent.Agent) (llm.RealtimeModel, error) {
