@@ -18,6 +18,7 @@ import (
 	"github.com/cavos-io/rtp-agent/adapter/cambai"
 	"github.com/cavos-io/rtp-agent/adapter/cartesia"
 	"github.com/cavos-io/rtp-agent/adapter/cerebras"
+	"github.com/cavos-io/rtp-agent/adapter/clova"
 	"github.com/cavos-io/rtp-agent/adapter/elevenlabs"
 	adaptergoogle "github.com/cavos-io/rtp-agent/adapter/google"
 	"github.com/cavos-io/rtp-agent/adapter/groq"
@@ -38,6 +39,7 @@ const (
 	providerCambai     = "cambai"
 	providerCartesia   = "cartesia"
 	providerCerebras   = "cerebras"
+	providerClova      = "clova"
 	providerElevenLabs = "elevenlabs"
 	providerGoogle     = "google"
 	providerGroq       = "groq"
@@ -122,12 +124,16 @@ type AppConfig struct {
 	RealtimeProvider                string
 	RealtimeModel                   string
 
-	OpenAIAPIKey     string
-	AnthropicAPIKey  string
-	GoogleAPIKey     string
-	ElevenLabsAPIKey string
-	GroqAPIKey       string
-	CerebrasAPIKey   string
+	OpenAIAPIKey      string
+	AnthropicAPIKey   string
+	GoogleAPIKey      string
+	ElevenLabsAPIKey  string
+	GroqAPIKey        string
+	CerebrasAPIKey    string
+	ClovaSTTSecret    string
+	ClovaSTTInvokeURL string
+	ClovaClientID     string
+	ClovaClientSecret string
 
 	GoogleCredentialsFile string
 
@@ -223,6 +229,10 @@ func DefaultConfigFromEnv() AppConfig {
 		ElevenLabsAPIKey:                firstEnv("ELEVENLABS_API_KEY", "ELEVEN_API_KEY"),
 		GroqAPIKey:                      os.Getenv("GROQ_API_KEY"),
 		CerebrasAPIKey:                  os.Getenv("CEREBRAS_API_KEY"),
+		ClovaSTTSecret:                  os.Getenv("CLOVA_STT_SECRET"),
+		ClovaSTTInvokeURL:               os.Getenv("CLOVA_STT_INVOKE_URL"),
+		ClovaClientID:                   os.Getenv("CLOVA_CLIENT_ID"),
+		ClovaClientSecret:               os.Getenv("CLOVA_CLIENT_SECRET"),
 		GoogleCredentialsFile:           firstEnv("RTP_AGENT_GOOGLE_CREDENTIALS_FILE", "GOOGLE_APPLICATION_CREDENTIALS"),
 	}
 }
@@ -496,6 +506,15 @@ func configureProviders(cfg AppConfig, a *agent.Agent) (llm.RealtimeModel, error
 			sttOpts = append(sttOpts, cartesia.WithCartesiaSTTAudioChunkDurationMS(*cfg.STTAudioChunkDurationMS))
 		}
 		a.STT = cartesia.NewCartesiaSTT("", sttOpts...)
+	case providerClova:
+		sttOpts := []clova.ClovaSTTOption{}
+		if cfg.STTLanguage != "" {
+			sttOpts = append(sttOpts, clova.WithClovaSTTLanguage(cfg.STTLanguage))
+		}
+		if cfg.STTVADThreshold != nil {
+			sttOpts = append(sttOpts, clova.WithClovaSTTThreshold(*cfg.STTVADThreshold))
+		}
+		a.STT = clova.NewClovaSTT(cfg.ClovaSTTSecret, cfg.ClovaSTTInvokeURL, sttOpts...)
 	case providerAssemblyAI:
 		sttOpts := []assemblyai.AssemblyAISTTOption{}
 		if cfg.STTBaseURL != "" {
@@ -699,6 +718,8 @@ func configureProviders(cfg AppConfig, a *agent.Agent) (llm.RealtimeModel, error
 			ttsOpts = append(ttsOpts, cartesia.WithCartesiaPronunciationDictID(cfg.TTSPronunciationDictID))
 		}
 		a.TTS = cartesia.NewCartesiaTTS("", cfg.TTSVoice, cfg.TTSModel, ttsOpts...)
+	case providerClova:
+		a.TTS = clova.NewClovaTTS(cfg.ClovaClientID, cfg.ClovaClientSecret, cfg.TTSVoice)
 	case providerCambai:
 		ttsOpts := []cambai.CambaiTTSOption{}
 		if cfg.TTSBaseURL != "" {
