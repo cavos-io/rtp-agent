@@ -11,6 +11,7 @@ import (
 	"net/textproto"
 	"net/url"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -124,29 +125,42 @@ func UploadSessionReport(
 		return fmt.Errorf("failed to close multipart writer: %w", err)
 	}
 
-	req, err := http.NewRequest("POST", fmt.Sprintf("%s/observability/recordings/v0", observabilityURL), &b)
-	if err != nil {
-		return fmt.Errorf("failed to create request: %w", err)
-	}
-
-	req.Header.Set("Authorization", "Bearer "+jwt)
-	req.Header.Set("Content-Type", w.FormDataContentType())
-
 	client := &http.Client{Timeout: 30 * time.Second}
-	resp, err := client.Do(req)
-	if err != nil {
-		return fmt.Errorf("failed to execute upload request: %w", err)
-	}
-	defer resp.Body.Close()
+	uploadURL := fmt.Sprintf("%s/observability/recordings/v0", observabilityURL)
+	payload := b.Bytes()
+	for attempt := 0; attempt <= maxRecordingUploadRetries; attempt++ {
+		req, err := http.NewRequest("POST", uploadURL, bytes.NewReader(payload))
+		if err != nil {
+			return fmt.Errorf("failed to create request: %w", err)
+		}
+		req.Header.Set("Authorization", "Bearer "+jwt)
+		req.Header.Set("Content-Type", w.FormDataContentType())
 
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		resp, err := client.Do(req)
+		if err != nil {
+			return fmt.Errorf("failed to execute upload request: %w", err)
+		}
+		if resp.StatusCode < 400 {
+			resp.Body.Close()
+			logger.Logger.Debugw("Successfully uploaded session report to LiveKit Cloud")
+			return nil
+		}
+
 		bodyBytes, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("upload failed with status %d: %s", resp.StatusCode, string(bodyBytes))
+		retryDelay, retryable := recordingUploadRetryDelay(resp)
+		resp.Body.Close()
+		if !retryable || attempt == maxRecordingUploadRetries {
+			return fmt.Errorf("upload failed with status %d: %s", resp.StatusCode, string(bodyBytes))
+		}
+		if retryDelay > 0 {
+			time.Sleep(retryDelay)
+		}
 	}
 
-	logger.Logger.Debugw("Successfully uploaded session report to LiveKit Cloud")
 	return nil
 }
+
+const maxRecordingUploadRetries = 3
 
 func emitUploadTelemetryEvents(ctx context.Context, agentName string, report *SessionReport) {
 	if report == nil {
@@ -205,4 +219,29 @@ func observabilityURLFromLiveKitURL(liveKitURL string) (string, error) {
 		return "", nil
 	}
 	return "https://" + u.Host, nil
+}
+
+func recordingUploadRetryDelay(resp *http.Response) (time.Duration, bool) {
+	if resp == nil {
+		return 0, false
+	}
+	value := resp.Header.Get("Retry-After")
+	if value == "" {
+		return 0, false
+	}
+	if seconds, err := strconv.Atoi(value); err == nil {
+		if seconds < 0 {
+			return 0, false
+		}
+		return time.Duration(seconds) * time.Second, true
+	}
+	retryAt, err := http.ParseTime(value)
+	if err != nil {
+		return 0, false
+	}
+	delay := time.Until(retryAt)
+	if delay < 0 {
+		delay = 0
+	}
+	return delay, true
 }
