@@ -355,6 +355,41 @@ func TestDefaultConfigFromEnvSelectsFalProviders(t *testing.T) {
 	}
 }
 
+func TestDefaultConfigFromEnvSelectsFireworksProviders(t *testing.T) {
+	t.Setenv("FIREWORKS_API_KEY", "test-fireworks-key")
+	t.Setenv("RTP_AGENT_LLM_PROVIDER", "fireworks")
+	t.Setenv("RTP_AGENT_LLM_MODEL", "accounts/fireworks/models/firefunction-test")
+	t.Setenv("RTP_AGENT_STT_PROVIDER", "fireworks")
+	t.Setenv("RTP_AGENT_STT_MODEL", "whisper-test")
+	t.Setenv("RTP_AGENT_STT_BASE_URL", "wss://fireworks.example/v1")
+	t.Setenv("RTP_AGENT_STT_LANGUAGE", "en")
+	t.Setenv("RTP_AGENT_STT_PROMPT", "domain prompt")
+	t.Setenv("RTP_AGENT_STT_TEMPERATURE", "0.2")
+	t.Setenv("RTP_AGENT_STT_SKIP_VAD", "true")
+	t.Setenv("RTP_AGENT_STT_TEXT_TIMEOUT_SECONDS", "2.5")
+	t.Setenv("RTP_AGENT_STT_TIMESTAMP_GRANULARITIES", "word,segment")
+
+	app, err := NewApp(DefaultConfigFromEnv())
+	if err != nil {
+		t.Fatalf("NewApp() error = %v", err)
+	}
+	if app.Session == nil {
+		t.Fatal("Session is nil")
+	}
+	if got := llm.Provider(app.Session.LLM); got != "fireworks" {
+		t.Fatalf("LLM provider = %q, want fireworks", got)
+	}
+	if got := llm.Model(app.Session.LLM); got != "accounts/fireworks/models/firefunction-test" {
+		t.Fatalf("LLM model = %q, want accounts/fireworks/models/firefunction-test", got)
+	}
+	if got := app.Session.STT.Label(); got != "fireworks.STT" {
+		t.Fatalf("STT label = %q, want fireworks.STT", got)
+	}
+	if caps := app.Session.STT.Capabilities(); !caps.Streaming || !caps.InterimResults || caps.OfflineRecognize {
+		t.Fatalf("STT capabilities = %+v, want streaming interim-only", caps)
+	}
+}
+
 func TestDefaultConfigFromEnvSelectsAWSProviders(t *testing.T) {
 	t.Setenv("AWS_REGION", "us-west-2")
 	t.Setenv("RTP_AGENT_LLM_PROVIDER", "aws")

@@ -20,6 +20,11 @@ func NewFireworksLLM(apiKey string, model string) *FireworksLLM {
 	}
 }
 
+func (l *FireworksLLM) Model() string { return l.inner.Model() }
+func (l *FireworksLLM) Provider() string {
+	return "fireworks"
+}
+
 func (l *FireworksLLM) Chat(ctx context.Context, chatCtx *llm.ChatContext, opts ...llm.ChatOption) (llm.LLMStream, error) {
 	return l.inner.Chat(ctx, chatCtx, opts...)
 }
