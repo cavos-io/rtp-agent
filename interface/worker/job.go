@@ -823,7 +823,7 @@ func (c *JobContext) TransferSIPParticipantByParticipant(ctx context.Context, pa
 	if err != nil {
 		return err
 	}
-	playDialtone := true
+	playDialtone := false
 	if len(playDialtones) > 0 {
 		playDialtone = playDialtones[0]
 	}

@@ -1111,7 +1111,7 @@ func TestJobContextTransferSIPParticipantRequestMatchesReferenceFields(t *testin
 	}
 }
 
-func TestJobContextTransferSIPParticipantDefaultsPlayDialtone(t *testing.T) {
+func TestJobContextTransferSIPParticipantDefaultsWithoutPlayDialtoneAndAllowsOverride(t *testing.T) {
 	ctx := NewJobContext(
 		&livekit.Job{Id: "job_sip_transfer", Room: &livekit.Room{Name: "room-a"}},
 		"",
@@ -1127,8 +1127,15 @@ func TestJobContextTransferSIPParticipantDefaultsPlayDialtone(t *testing.T) {
 	if sip.transferRequest == nil {
 		t.Fatal("TransferSIPParticipant() did not call SIP transfer API")
 	}
+	if sip.transferRequest.PlayDialtone {
+		t.Fatal("TransferSIPParticipant() default PlayDialtone = true, want false")
+	}
+
+	if err := ctx.TransferSIPParticipant(context.Background(), "caller-a", "+15557654321", true); err != nil {
+		t.Fatalf("TransferSIPParticipant(true) error = %v", err)
+	}
 	if !sip.transferRequest.PlayDialtone {
-		t.Fatal("TransferSIPParticipant() default PlayDialtone = false, want true")
+		t.Fatal("TransferSIPParticipant(true) PlayDialtone = false, want true")
 	}
 }
 
