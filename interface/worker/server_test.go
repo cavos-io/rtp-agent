@@ -366,6 +366,7 @@ func TestWorkerHTTPHandlerReportsWorkerMetadata(t *testing.T) {
 		`"worker_load":0.42`,
 		`"active_jobs":1`,
 		`"project_type":"go"`,
+		`"node_name":"`,
 	} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("/worker response missing %s in %s", want, body)
