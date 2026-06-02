@@ -79,6 +79,33 @@ func TestDefaultConfigFromEnvSelectsNvidiaLLM(t *testing.T) {
 	}
 }
 
+func TestDefaultConfigFromEnvSelectsUpliftAIProviders(t *testing.T) {
+	t.Setenv("UPLIFTAI_API_KEY", "test-upliftai-key")
+	t.Setenv("RTP_AGENT_LLM_PROVIDER", "upliftai")
+	t.Setenv("RTP_AGENT_TTS_PROVIDER", "upliftai")
+	t.Setenv("RTP_AGENT_TTS_VOICE", "bright")
+
+	app, err := NewApp(DefaultConfigFromEnv())
+	if err != nil {
+		t.Fatalf("NewApp() error = %v", err)
+	}
+	if app.Session == nil {
+		t.Fatal("Session is nil")
+	}
+	if got := llm.Label(app.Session.LLM); got != "upliftai.UpliftAILLM" {
+		t.Fatalf("LLM label = %q, want upliftai.UpliftAILLM", got)
+	}
+	if got := app.Session.TTS.Label(); got != "upliftai.TTS" {
+		t.Fatalf("TTS label = %q, want upliftai.TTS", got)
+	}
+	if got := app.Session.TTS.SampleRate(); got != 24000 {
+		t.Fatalf("TTS sample rate = %d, want 24000", got)
+	}
+	if caps := app.Session.TTS.Capabilities(); caps.Streaming || caps.AlignedTranscript {
+		t.Fatalf("TTS capabilities = %+v, want non-streaming without aligned transcript", caps)
+	}
+}
+
 func TestDefaultConfigFromEnvSelectsAssemblyAISTT(t *testing.T) {
 	t.Setenv("ASSEMBLYAI_API_KEY", "test-assemblyai-key")
 	t.Setenv("RTP_AGENT_STT_PROVIDER", "assemblyai")

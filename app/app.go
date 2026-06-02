@@ -52,6 +52,7 @@ import (
 	"github.com/cavos-io/rtp-agent/adapter/speechmatics"
 	"github.com/cavos-io/rtp-agent/adapter/spitch"
 	"github.com/cavos-io/rtp-agent/adapter/telnyx"
+	"github.com/cavos-io/rtp-agent/adapter/upliftai"
 	"github.com/cavos-io/rtp-agent/adapter/xai"
 	"github.com/cavos-io/rtp-agent/core/agent"
 	"github.com/cavos-io/rtp-agent/core/llm"
@@ -103,6 +104,7 @@ const (
 	providerSpeechmatics = "speechmatics"
 	providerSpitch       = "spitch"
 	providerTelnyx       = "telnyx"
+	providerUpliftAI     = "upliftai"
 	providerXAI          = "xai"
 	providerLiveKit      = "livekit"
 )
@@ -314,6 +316,7 @@ type AppConfig struct {
 	SpeechmaticsAPIKey          string
 	SpitchAPIKey                string
 	TelnyxAPIKey                string
+	UpliftAIAPIKey              string
 	XAIAPIKey                   string
 	XAITools                    []string
 	XAIAllowedXHandles          []string
@@ -538,6 +541,7 @@ func DefaultConfigFromEnv() AppConfig {
 		SpeechmaticsAPIKey:                      os.Getenv("SPEECHMATICS_API_KEY"),
 		SpitchAPIKey:                            os.Getenv("SPITCH_API_KEY"),
 		TelnyxAPIKey:                            os.Getenv("TELNYX_API_KEY"),
+		UpliftAIAPIKey:                          os.Getenv("UPLIFTAI_API_KEY"),
 		XAIAPIKey:                               os.Getenv("XAI_API_KEY"),
 		XAITools:                                splitEnvList("RTP_AGENT_XAI_TOOLS"),
 		XAIAllowedXHandles:                      splitEnvList("RTP_AGENT_XAI_ALLOWED_X_HANDLES"),
@@ -654,6 +658,8 @@ func configureProviders(cfg AppConfig, a *agent.Agent) (llm.RealtimeModel, error
 		a.LLM = smallestai.NewSmallestAILLM(cfg.SmallestAIAPIKey, cfg.LLMModel)
 	case providerTelnyx:
 		a.LLM = telnyx.NewTelnyxLLM(cfg.TelnyxAPIKey, cfg.LLMModel)
+	case providerUpliftAI:
+		a.LLM = upliftai.NewUpliftAILLM(cfg.UpliftAIAPIKey, cfg.LLMModel)
 	case providerXAI:
 		a.LLM = xai.NewXaiLLM(cfg.XAIAPIKey, cfg.LLMModel)
 	case providerCerebras:
@@ -2220,6 +2226,8 @@ func configureProviders(cfg AppConfig, a *agent.Agent) (llm.RealtimeModel, error
 			ttsOpts = append(ttsOpts, telnyx.WithTelnyxTTSBaseURL(cfg.TTSBaseURL))
 		}
 		a.TTS = telnyx.NewTelnyxTTS(cfg.TelnyxAPIKey, cfg.TTSVoice, ttsOpts...)
+	case providerUpliftAI:
+		a.TTS = upliftai.NewUpliftAITTS(cfg.UpliftAIAPIKey, cfg.TTSVoice)
 	case providerXAI:
 		ttsOpts := []xai.XaiTTSOption{}
 		if cfg.TTSWebsocketURL != "" {
