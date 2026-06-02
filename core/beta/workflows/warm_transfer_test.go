@@ -7,7 +7,7 @@ import (
 
 	"github.com/cavos-io/rtp-agent/core/agent"
 	"github.com/cavos-io/rtp-agent/core/llm"
-	lksdk "github.com/livekit/server-sdk-go/v2"
+	"github.com/livekit/protocol/livekit"
 )
 
 func TestNewWarmTransferTaskBuildsInstructionsAndTools(t *testing.T) {
@@ -51,11 +51,28 @@ func TestWarmTransferLifecycleCleansHumanAgentSession(t *testing.T) {
 
 func TestConnectToCallerCompletesWarmTransfer(t *testing.T) {
 	task := NewWarmTransferTask("+15550100", "trunk_123", nil, "")
-	task.callerRoom = &lksdk.Room{}
 	task.humanAgentSess = agent.NewAgentSession(agent.NewAgent("human"), nil, agent.AgentSessionOptions{})
+	jobCtx := &fakeWarmTransferJobContext{room: &livekit.Room{Name: "caller-room"}}
+	session := agent.NewAgentSession(task, nil, agent.AgentSessionOptions{})
+	session.SetJobContext(jobCtx)
+	task.Agent.Start(session, task)
+	defer task.Agent.GetActivity().Stop()
 
 	if err := task.ConnectToCaller(); err != nil {
 		t.Fatalf("ConnectToCaller returned error: %v", err)
+	}
+
+	if jobCtx.moveRequest == nil {
+		t.Fatal("ConnectToCaller did not move human participant")
+	}
+	if jobCtx.moveRequest.Room != "caller-room-human-agent" {
+		t.Fatalf("MoveParticipant room = %q, want caller-room-human-agent", jobCtx.moveRequest.Room)
+	}
+	if jobCtx.moveRequest.Identity != "human-agent-sip" {
+		t.Fatalf("MoveParticipant identity = %q, want human-agent-sip", jobCtx.moveRequest.Identity)
+	}
+	if jobCtx.moveRequest.DestinationRoom != "caller-room" {
+		t.Fatalf("MoveParticipant destination = %q, want caller-room", jobCtx.moveRequest.DestinationRoom)
 	}
 
 	result, err := task.WaitAny(context.Background())
@@ -68,8 +85,32 @@ func TestConnectToCallerCompletesWarmTransfer(t *testing.T) {
 	}
 }
 
+type fakeWarmTransferJobContext struct {
+	room        *livekit.Room
+	moveRequest *livekit.MoveParticipantRequest
+}
+
+func (f *fakeWarmTransferJobContext) RoomInfo() *livekit.Room {
+	return f.room
+}
+
+func (f *fakeWarmTransferJobContext) MoveParticipant(_ context.Context, room string, identity string, destinationRoom string) error {
+	f.moveRequest = &livekit.MoveParticipantRequest{
+		Room:            room,
+		Identity:        identity,
+		DestinationRoom: destinationRoom,
+	}
+	return nil
+}
+
 func TestWarmTransferToolsCompleteAndFailTask(t *testing.T) {
 	connectTask := NewWarmTransferTask("+15550100", "trunk_123", nil, "")
+	connectTask.humanAgentSess = agent.NewAgentSession(agent.NewAgent("human"), nil, agent.AgentSessionOptions{})
+	connectJobCtx := &fakeWarmTransferJobContext{room: &livekit.Room{Name: "caller-room"}}
+	connectSession := agent.NewAgentSession(connectTask, nil, agent.AgentSessionOptions{})
+	connectSession.SetJobContext(connectJobCtx)
+	connectTask.Agent.Start(connectSession, connectTask)
+	defer connectTask.Agent.GetActivity().Stop()
 	connect := &connectToCallerTool{task: connectTask}
 	if connect.ID() != "connect_to_caller" || connect.Name() != "connect_to_caller" || connect.Description() == "" {
 		t.Fatalf("connect tool metadata is incomplete")
@@ -79,6 +120,9 @@ func TestWarmTransferToolsCompleteAndFailTask(t *testing.T) {
 	}
 	if out, err := connect.Execute(context.Background(), `{}`); err != nil || out != "Connected to caller." {
 		t.Fatalf("connect Execute = %q/%v, want connected output", out, err)
+	}
+	if connectJobCtx.moveRequest == nil {
+		t.Fatal("connect Execute did not move participant")
 	}
 
 	declineTask := NewWarmTransferTask("+15550100", "trunk_123", nil, "")

@@ -399,6 +399,8 @@ func TestPerformTTSInferenceUsesSentenceStreamPacerWhenEnabled(t *testing.T) {
 
 func TestPerformToolExecutionsProvidesRunContext(t *testing.T) {
 	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	jobCtx := struct{ jobID string }{jobID: "job-a"}
+	session.SetJobContext(jobCtx)
 	tool := &runContextRecordingTool{}
 	toolCtx := llm.NewToolContext([]interface{}{tool})
 	functionCh := make(chan *llm.FunctionToolCall, 1)
@@ -425,6 +427,9 @@ func TestPerformToolExecutionsProvidesRunContext(t *testing.T) {
 	}
 	if tool.runContext.FunctionCall == nil || tool.runContext.FunctionCall.CallID != "call_lookup" {
 		t.Fatalf("tool run context FunctionCall = %#v, want call_lookup", tool.runContext.FunctionCall)
+	}
+	if got, err := tool.runContext.JobContext(); err != nil || got != jobCtx {
+		t.Fatalf("tool run context JobContext() = %#v, %v; want %#v, nil", got, err, jobCtx)
 	}
 }
 

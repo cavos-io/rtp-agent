@@ -296,6 +296,22 @@ func runningJobInfoFromContext(jobCtx *JobContext) workeripc.RunningJobInfo {
 	}
 }
 
+func jobLogValues(jobCtx *JobContext, values ...any) []any {
+	if jobCtx == nil {
+		return values
+	}
+	fields := jobCtx.LogContextFields()
+	logValues := make([]any, 0, len(values)+len(fields)*2)
+	logValues = append(logValues, values...)
+	for key, value := range fields {
+		if key == "" || value == nil {
+			continue
+		}
+		logValues = append(logValues, key, value)
+	}
+	return logValues
+}
+
 func refreshRunningJobTokenForReload(info workeripc.RunningJobInfo, apiSecret string, now time.Time) (workeripc.RunningJobInfo, error) {
 	if apiSecret == "" {
 		return workeripc.RunningJobInfo{}, fmt.Errorf("api_secret is required to reload jobs")
@@ -1863,6 +1879,7 @@ func (s *AgentServer) handleAssignment(ctx context.Context, req *livekit.JobAssi
 
 	jobCtx.WorkerID = s.workerID
 	jobCtx.AcceptArguments = args
+	jobCtx.LogContextFields()["worker_id"] = jobCtx.WorkerID
 	delete(s.pendingAccepts, req.Job.Id)
 	if timer, ok := s.pendingTimers[req.Job.Id]; ok {
 		timer.Stop()
@@ -1880,17 +1897,17 @@ func (s *AgentServer) handleAssignment(ctx context.Context, req *livekit.JobAssi
 			status := livekit.JobStatus_JS_SUCCESS
 			defer func() {
 				if recovered := recover(); recovered != nil {
-					logger.Logger.Errorw("Job entrypoint panicked", fmt.Errorf("%v", recovered), "jobId", req.Job.Id)
+					logger.Logger.Errorw("Job entrypoint panicked", fmt.Errorf("%v", recovered), jobLogValues(jobCtx, "jobId", req.Job.Id)...)
 					status = livekit.JobStatus_JS_FAILED
 				}
 				if err := s.sendWorkerMessage(jobStatusMessage(req.Job.Id, status)); err != nil {
-					logger.Logger.Errorw("failed to update job status", err, "jobId", req.Job.Id)
+					logger.Logger.Errorw("failed to update job status", err, jobLogValues(jobCtx, "jobId", req.Job.Id)...)
 				}
 				s.finishJob(jobCtx)
 			}()
 
 			if err := s.entrypointFnc(jobCtx); err != nil {
-				logger.Logger.Errorw("Job entrypoint failed", err, "jobId", req.Job.Id)
+				logger.Logger.Errorw("Job entrypoint failed", err, jobLogValues(jobCtx, "jobId", req.Job.Id)...)
 				status = livekit.JobStatus_JS_FAILED
 			}
 		}()
@@ -1939,6 +1956,7 @@ func (s *AgentServer) ExecuteLocalJobWithOptions(ctx context.Context, roomName s
 		jobCtx = newLocalJobContext(roomName, participantIdentity, s.Options)
 	}
 	jobCtx.WorkerID = s.workerID
+	jobCtx.LogContextFields()["worker_id"] = jobCtx.WorkerID
 	shutdownCh := make(chan struct{})
 	_ = jobCtx.AddShutdownCallback(func() {
 		close(shutdownCh)
@@ -1952,13 +1970,13 @@ func (s *AgentServer) ExecuteLocalJobWithOptions(ctx context.Context, roomName s
 	entrypoint := func() error {
 		defer func() {
 			if recovered := recover(); recovered != nil {
-				logger.Logger.Errorw("Local job entrypoint panicked", fmt.Errorf("%v", recovered), "jobId", jobCtx.Job.Id)
+				logger.Logger.Errorw("Local job entrypoint panicked", fmt.Errorf("%v", recovered), jobLogValues(jobCtx, "jobId", jobCtx.Job.Id)...)
 				jobCtx.Shutdown("job crashed")
 				panic(recovered)
 			}
 		}()
 		if err := s.entrypointFnc(jobCtx); err != nil {
-			logger.Logger.Errorw("Local job entrypoint failed", err, "jobId", jobCtx.Job.Id)
+			logger.Logger.Errorw("Local job entrypoint failed", err, jobLogValues(jobCtx, "jobId", jobCtx.Job.Id)...)
 			jobCtx.Shutdown("job failed")
 			return err
 		}
@@ -2060,7 +2078,7 @@ func (s *AgentServer) uploadJobSessionReport(jobCtx *JobContext) {
 			jobCtx.Report,
 		)
 		if err != nil {
-			logger.Logger.Errorw("failed to upload session report", err, "jobId", jobCtx.Job.GetId())
+			logger.Logger.Errorw("failed to upload session report", err, jobLogValues(jobCtx, "jobId", jobCtx.Job.GetId())...)
 		}
 	}()
 }
@@ -2087,7 +2105,7 @@ func (s *AgentServer) runSessionEnd(jobCtx *JobContext) {
 
 	if timeout <= 0 {
 		if err := <-doneCh; err != nil {
-			logger.Logger.Errorw("Session end callback failed", err, "jobId", jobCtx.Job.Id)
+			logger.Logger.Errorw("Session end callback failed", err, jobLogValues(jobCtx, "jobId", jobCtx.Job.Id)...)
 		}
 		return
 	}
@@ -2095,10 +2113,10 @@ func (s *AgentServer) runSessionEnd(jobCtx *JobContext) {
 	select {
 	case err := <-doneCh:
 		if err != nil {
-			logger.Logger.Errorw("Session end callback failed", err, "jobId", jobCtx.Job.Id)
+			logger.Logger.Errorw("Session end callback failed", err, jobLogValues(jobCtx, "jobId", jobCtx.Job.Id)...)
 		}
 	case <-time.After(timeout):
-		logger.Logger.Errorw("Session end callback timed out", nil, "jobId", jobCtx.Job.Id, "timeout", timeout)
+		logger.Logger.Errorw("Session end callback timed out", nil, jobLogValues(jobCtx, "jobId", jobCtx.Job.Id, "timeout", timeout)...)
 	}
 }
 

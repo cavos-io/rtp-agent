@@ -2556,6 +2556,50 @@ func TestAssignmentRecordsRegisteredWorkerID(t *testing.T) {
 	}
 }
 
+func TestAssignmentInitializesJobLogContextFields(t *testing.T) {
+	server := NewAgentServer(WorkerOptions{})
+	startedCh := make(chan *JobContext, 1)
+	server.workerMessageSink = func(msg *livekit.WorkerMessage) error {
+		return nil
+	}
+	server.entrypointFnc = func(ctx *JobContext) error {
+		startedCh <- ctx
+		return nil
+	}
+
+	server.handleMessage(context.Background(), &livekit.ServerMessage{
+		Message: &livekit.ServerMessage_Register{
+			Register: &livekit.RegisterWorkerResponse{WorkerId: "worker-log"},
+		},
+	})
+
+	job := &livekit.Job{
+		Id: "job_log_fields",
+		Room: &livekit.Room{
+			Sid:  "RM_log",
+			Name: "room-log",
+		},
+	}
+	markJobAccepted(t, server, job)
+	server.handleAssignment(context.Background(), &livekit.JobAssignment{Job: job})
+
+	select {
+	case jobCtx := <-startedCh:
+		fields := jobCtx.LogContextFields()
+		if fields["job_id"] != "job_log_fields" {
+			t.Fatalf("log job_id = %#v, want job_log_fields", fields["job_id"])
+		}
+		if fields["worker_id"] != "worker-log" {
+			t.Fatalf("log worker_id = %#v, want worker-log", fields["worker_id"])
+		}
+		if fields["room"] != "room-log" {
+			t.Fatalf("log room = %#v, want room-log", fields["room"])
+		}
+	case <-time.After(time.Second):
+		t.Fatal("assignment entrypoint did not run")
+	}
+}
+
 func TestAssignmentEnablesRecordingOptionsWhenRequested(t *testing.T) {
 	server := NewAgentServer(WorkerOptions{})
 	startedCh := make(chan *JobContext, 1)

@@ -1114,6 +1114,7 @@ func (a *App) runSession(ctx *worker.JobContext) error {
 	defer a.closeMCPServers()
 	if ctx != nil {
 		ctx.SetPrimarySession(a.Session)
+		a.Session.SetJobContext(ctx)
 	}
 	a.configureMetricsCollector(ctx)
 	a.Server.SetConsoleSession(a.Session)
@@ -1133,7 +1134,14 @@ func (a *App) runSession(ctx *worker.JobContext) error {
 		}
 		if ctx.Room != nil {
 			a.Session.Room = ctx.Room
-			roomIO := worker.NewRoomIO(ctx.Room, a.Session, a.RoomOptions)
+			roomOptions := a.RoomOptions
+			if roomOptions.DeleteRoom == nil {
+				roomOptions.DeleteRoom = func(deleteCtx context.Context, roomName string) error {
+					_, err := ctx.DeleteRoom(deleteCtx, roomName)
+					return err
+				}
+			}
+			roomIO := worker.NewRoomIO(ctx.Room, a.Session, roomOptions)
 			a.RoomIO = roomIO
 			if err := configureRoomTools(a.Config, a.Agent, roomIO); err != nil {
 				return err

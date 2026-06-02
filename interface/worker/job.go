@@ -16,6 +16,7 @@ import (
 	"github.com/livekit/protocol/auth"
 	"github.com/livekit/protocol/livekit"
 	lksdk "github.com/livekit/server-sdk-go/v2"
+	"google.golang.org/protobuf/types/known/emptypb"
 )
 
 type JobAcceptArguments struct {
@@ -93,6 +94,28 @@ func (p *JobProcess) HTTPProxy() string {
 		return ""
 	}
 	return p.httpProxy
+}
+
+type JobRoomServiceAPI interface {
+	DeleteRoom(context.Context, *livekit.DeleteRoomRequest) (*livekit.DeleteRoomResponse, error)
+	MoveParticipant(context.Context, *livekit.MoveParticipantRequest) (*livekit.MoveParticipantResponse, error)
+}
+
+type JobSIPAPI interface {
+	CreateSIPParticipant(context.Context, *livekit.CreateSIPParticipantRequest) (*livekit.SIPParticipantInfo, error)
+	TransferSIPParticipant(context.Context, *livekit.TransferSIPParticipantRequest) (*emptypb.Empty, error)
+}
+
+type JobAPI struct {
+	RoomService JobRoomServiceAPI
+	SIP         JobSIPAPI
+}
+
+func NewJobAPI(url string, apiKey string, apiSecret string) *JobAPI {
+	return &JobAPI{
+		RoomService: lksdk.NewRoomServiceClient(url, apiKey, apiSecret),
+		SIP:         lksdk.NewSIPClient(url, apiKey, apiSecret),
+	}
 }
 
 type AutoSubscribe string
@@ -207,6 +230,7 @@ type JobContext struct {
 	process                *JobProcess
 	primarySession         *agent.AgentSession
 	sessionDirectory       string
+	logContextFields       map[string]any
 	shutdownCallbacks      []func(string)
 	shutdownOnce           sync.Once
 	finishOnce             sync.Once
@@ -215,6 +239,7 @@ type JobContext struct {
 	participantTasks       map[participantEntrypointTaskKey]struct{}
 	participantTasksMu     sync.Mutex
 
+	api       *JobAPI
 	apiKey    string
 	apiSecret string
 	url       string
@@ -241,7 +266,21 @@ func NewJobContext(job *livekit.Job, url string, apiKey string, apiSecret string
 		Report:    report,
 		Tagger:    tagger,
 		process:   NewJobProcess(JobExecutorTypeThread, nil, ""),
+		logContextFields: map[string]any{
+			"job_id": report.JobID,
+			"room":   report.Room,
+		},
 	}
+}
+
+func (c *JobContext) API() *JobAPI {
+	if c == nil {
+		return nil
+	}
+	if c.api == nil {
+		c.api = NewJobAPI(c.url, c.apiKey, c.apiSecret)
+	}
+	return c.api
 }
 
 func (c *JobContext) ParticipantIdentity() string {
@@ -291,6 +330,20 @@ func (c *JobContext) SetSessionDirectory(path string) {
 
 func (c *JobContext) SessionDirectory() string {
 	return c.sessionDirectory
+}
+
+func (c *JobContext) LogContextFields() map[string]any {
+	if c.logContextFields == nil {
+		c.logContextFields = make(map[string]any)
+	}
+	return c.logContextFields
+}
+
+func (c *JobContext) SetLogContextFields(fields map[string]any) {
+	c.logContextFields = fields
+	if c.logContextFields == nil {
+		c.logContextFields = make(map[string]any)
+	}
 }
 
 func (c *JobContext) Proc() *JobProcess {
@@ -364,6 +417,13 @@ func (c *JobContext) PublisherInfo() *livekit.ParticipantInfo {
 		return nil
 	}
 	return c.Job.Participant
+}
+
+func (c *JobContext) Agent() *lksdk.LocalParticipant {
+	if c == nil || c.Room == nil {
+		return nil
+	}
+	return c.Room.LocalParticipant
 }
 
 func (c *JobContext) connectInfo() lksdk.ConnectInfo {
@@ -726,10 +786,30 @@ func (c *JobContext) DeleteRoom(ctx context.Context, roomName string) (*livekit.
 	if roomName == "" {
 		roomName = c.Job.Room.Name
 	}
-	client := lksdk.NewRoomServiceClient(c.url, c.apiKey, c.apiSecret)
-	return client.DeleteRoom(ctx, &livekit.DeleteRoomRequest{
+	resp, err := c.API().RoomService.DeleteRoom(ctx, &livekit.DeleteRoomRequest{
 		Room: roomName,
 	})
+	if err != nil {
+		logger.Logger.Warnw("error while deleting room", err)
+		return &livekit.DeleteRoomResponse{}, nil
+	}
+	return resp, nil
+}
+
+func (c *JobContext) MoveParticipant(ctx context.Context, room string, identity string, destinationRoom string) error {
+	if c.IsFakeJob() {
+		logger.Logger.Warnw("job context MoveParticipant is skipped for fake jobs", nil)
+		return nil
+	}
+	if destinationRoom == "" {
+		destinationRoom = c.Job.Room.Name
+	}
+	_, err := c.API().RoomService.MoveParticipant(ctx, &livekit.MoveParticipantRequest{
+		Room:            room,
+		Identity:        identity,
+		DestinationRoom: destinationRoom,
+	})
+	return err
 }
 
 // AddSIPParticipant adds a SIP participant to the room.
@@ -742,8 +822,7 @@ func (c *JobContext) AddSIPParticipant(ctx context.Context, callTo string, trunk
 	if len(names) > 0 {
 		name = names[0]
 	}
-	client := lksdk.NewSIPClient(c.url, c.apiKey, c.apiSecret)
-	return client.CreateSIPParticipant(ctx, c.createSIPParticipantRequest(callTo, trunkID, identity, name))
+	return c.API().SIP.CreateSIPParticipant(ctx, c.createSIPParticipantRequest(callTo, trunkID, identity, name))
 }
 
 func (c *JobContext) createSIPParticipantRequest(callTo string, trunkID string, identity string, name string) *livekit.CreateSIPParticipantRequest {
@@ -777,8 +856,7 @@ func (c *JobContext) TransferSIPParticipantByParticipant(ctx context.Context, pa
 	if len(playDialtones) > 0 {
 		playDialtone = playDialtones[0]
 	}
-	client := lksdk.NewSIPClient(c.url, c.apiKey, c.apiSecret)
-	_, err = client.TransferSIPParticipant(ctx, c.transferSIPParticipantRequest(identity, transferTo, playDialtone))
+	_, err = c.API().SIP.TransferSIPParticipant(ctx, c.transferSIPParticipantRequest(identity, transferTo, playDialtone))
 	return err
 }
 

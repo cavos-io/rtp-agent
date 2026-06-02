@@ -10,6 +10,7 @@ import (
 	"github.com/cavos-io/rtp-agent/core/agent"
 	"github.com/cavos-io/rtp-agent/core/llm"
 	"github.com/cavos-io/rtp-agent/library/logger"
+	"github.com/livekit/protocol/livekit"
 	lksdk "github.com/livekit/server-sdk-go/v2"
 )
 
@@ -59,6 +60,11 @@ type WarmTransferTask struct {
 	holdAudioHandle *agent.PlayHandle
 
 	mu sync.Mutex
+}
+
+type warmTransferJobContext interface {
+	RoomInfo() *livekit.Room
+	MoveParticipant(ctx context.Context, room string, identity string, destinationRoom string) error
 }
 
 func NewWarmTransferTask(targetPhone string, trunkId string, chatCtx *llm.ChatContext, extraInstructions string) *WarmTransferTask {
@@ -148,17 +154,56 @@ func (t *WarmTransferTask) ConnectToCaller() error {
 		"human_agent_session_ready", t.humanAgentSess != nil,
 	)
 
-	// In Python:
-	// await job_ctx.api.room.move_participant(
-	//    api.MoveParticipantRequest(
-	//        room=human_agent_room.name,
-	//        identity=self._human_agent_identity,
-	//        destination_room=self._caller_room.name,
-	//    )
-	// )
+	jobCtx, err := t.jobContext()
+	if err != nil {
+		return err
+	}
+	destinationRoom := t.callerRoomName(jobCtx)
+	humanAgentRoom := t.humanAgentRoomName(destinationRoom)
+	if err := jobCtx.MoveParticipant(context.Background(), humanAgentRoom, t.humanAgentIdentity, destinationRoom); err != nil {
+		return err
+	}
 
 	t.Complete(&WarmTransferResult{HumanAgentIdentity: t.humanAgentIdentity})
 	return nil
+}
+
+func (t *WarmTransferTask) jobContext() (warmTransferJobContext, error) {
+	activity := t.Agent.GetActivity()
+	if activity == nil || activity.Session == nil {
+		return nil, fmt.Errorf("warm transfer job context requires an active session")
+	}
+	value, err := activity.Session.JobContext()
+	if err != nil {
+		return nil, err
+	}
+	jobCtx, ok := value.(warmTransferJobContext)
+	if !ok {
+		return nil, fmt.Errorf("job context does not support participant moves")
+	}
+	return jobCtx, nil
+}
+
+func (t *WarmTransferTask) callerRoomName(jobCtx warmTransferJobContext) string {
+	if t.callerRoom != nil && t.callerRoom.Name() != "" {
+		return t.callerRoom.Name()
+	}
+	if jobCtx != nil {
+		if room := jobCtx.RoomInfo(); room != nil {
+			return room.GetName()
+		}
+	}
+	return ""
+}
+
+func (t *WarmTransferTask) humanAgentRoomName(callerRoomName string) string {
+	if t.humanAgentSess != nil && t.humanAgentSess.Room != nil && t.humanAgentSess.Room.Name() != "" {
+		return t.humanAgentSess.Room.Name()
+	}
+	if callerRoomName != "" {
+		return callerRoomName + "-human-agent"
+	}
+	return ""
 }
 
 type connectToCallerTool struct {

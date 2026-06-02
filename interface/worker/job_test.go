@@ -2,6 +2,7 @@ package worker
 
 import (
 	"context"
+	"errors"
 	"os"
 	"os/exec"
 	"reflect"
@@ -15,6 +16,7 @@ import (
 	"github.com/livekit/protocol/auth"
 	"github.com/livekit/protocol/livekit"
 	lksdk "github.com/livekit/server-sdk-go/v2"
+	"google.golang.org/protobuf/types/known/emptypb"
 )
 
 func TestJobContextShutdownRunsCallbacks(t *testing.T) {
@@ -213,6 +215,24 @@ func TestJobContextSessionDirectoryCanBeConfigured(t *testing.T) {
 	}
 }
 
+func TestJobContextLogContextFieldsAreMutableAndReplaceable(t *testing.T) {
+	ctx := NewJobContext(&livekit.Job{Id: "job_log_fields"}, "", "", "")
+
+	ctx.LogContextFields()["trace_id"] = "trace-a"
+	if got := ctx.LogContextFields()["trace_id"]; got != "trace-a" {
+		t.Fatalf("LogContextFields()[trace_id] = %#v, want trace-a", got)
+	}
+
+	replacement := map[string]any{"request_id": "req-a"}
+	ctx.SetLogContextFields(replacement)
+	if got := ctx.LogContextFields()["request_id"]; got != "req-a" {
+		t.Fatalf("LogContextFields()[request_id] = %#v, want req-a", got)
+	}
+	if _, ok := ctx.LogContextFields()["trace_id"]; ok {
+		t.Fatal("SetLogContextFields did not replace previous fields")
+	}
+}
+
 func TestJobContextAvatarStartInfoExposesLiveKitConnection(t *testing.T) {
 	ctx := NewJobContext(&livekit.Job{Id: "job_avatar"}, "wss://livekit.example", "key", "secret")
 	ctx.token = "room-token"
@@ -224,6 +244,24 @@ func TestJobContextAvatarStartInfoExposesLiveKitConnection(t *testing.T) {
 	}
 	if info.LiveKitToken != "room-token" {
 		t.Fatalf("LiveKitToken = %q, want job token", info.LiveKitToken)
+	}
+}
+
+func TestJobContextAPIReturnsCachedLiveKitClients(t *testing.T) {
+	ctx := NewJobContext(&livekit.Job{Id: "job_api"}, "wss://livekit.example", "key", "secret")
+
+	api := ctx.API()
+	if api == nil {
+		t.Fatal("API() = nil, want LiveKit API clients")
+	}
+	if api.RoomService == nil {
+		t.Fatal("API().RoomService = nil, want room service client")
+	}
+	if api.SIP == nil {
+		t.Fatal("API().SIP = nil, want SIP client")
+	}
+	if again := ctx.API(); again != api {
+		t.Fatal("API() did not return cached API clients")
 	}
 }
 
@@ -880,6 +918,21 @@ func TestJobContextRoomInfoReturnsJobRoom(t *testing.T) {
 	}
 }
 
+func TestJobContextAgentReturnsRoomLocalParticipant(t *testing.T) {
+	room := lksdk.NewRoom(nil)
+	ctx := NewJobContext(&livekit.Job{Id: "job_agent"}, "", "", "")
+	ctx.Room = room
+
+	if got := ctx.Agent(); got != room.LocalParticipant {
+		t.Fatal("Agent() did not return room local participant")
+	}
+
+	ctx.Room = nil
+	if got := ctx.Agent(); got != nil {
+		t.Fatalf("Agent() with nil room = %#v, want nil", got)
+	}
+}
+
 func TestJobContextJobIDReturnsCurrentJobID(t *testing.T) {
 	ctx := NewJobContext(&livekit.Job{Id: "job-a"}, "", "", "")
 	if got := ctx.JobID(); got != "job-a" {
@@ -1072,6 +1125,121 @@ func TestJobContextTransferSIPParticipantRequestMatchesReferenceFields(t *testin
 	if !req.PlayDialtone {
 		t.Fatal("TransferSIPParticipantRequest.PlayDialtone = false, want true")
 	}
+}
+
+func TestJobContextTransferSIPParticipantDefaultsWithoutPlayDialtoneAndAllowsOverride(t *testing.T) {
+	ctx := NewJobContext(
+		&livekit.Job{Id: "job_sip_transfer", Room: &livekit.Room{Name: "room-a"}},
+		"",
+		"",
+		"",
+	)
+	sip := &fakeJobSIPAPI{}
+	ctx.api = &JobAPI{SIP: sip}
+
+	if err := ctx.TransferSIPParticipant(context.Background(), "caller-a", "+15557654321"); err != nil {
+		t.Fatalf("TransferSIPParticipant() error = %v", err)
+	}
+	if sip.transferRequest == nil {
+		t.Fatal("TransferSIPParticipant() did not call SIP transfer API")
+	}
+	if sip.transferRequest.PlayDialtone {
+		t.Fatal("TransferSIPParticipant() default PlayDialtone = true, want false")
+	}
+
+	if err := ctx.TransferSIPParticipant(context.Background(), "caller-a", "+15557654321", true); err != nil {
+		t.Fatalf("TransferSIPParticipant(true) error = %v", err)
+	}
+	if !sip.transferRequest.PlayDialtone {
+		t.Fatal("TransferSIPParticipant(true) PlayDialtone = false, want true")
+	}
+}
+
+type fakeJobSIPAPI struct {
+	transferRequest *livekit.TransferSIPParticipantRequest
+}
+
+func (f *fakeJobSIPAPI) CreateSIPParticipant(context.Context, *livekit.CreateSIPParticipantRequest) (*livekit.SIPParticipantInfo, error) {
+	return &livekit.SIPParticipantInfo{}, nil
+}
+
+func (f *fakeJobSIPAPI) TransferSIPParticipant(_ context.Context, req *livekit.TransferSIPParticipantRequest) (*emptypb.Empty, error) {
+	f.transferRequest = req
+	return &emptypb.Empty{}, nil
+}
+
+func TestJobContextDeleteRoomIgnoresAPIError(t *testing.T) {
+	ctx := NewJobContext(
+		&livekit.Job{Id: "job_delete_room", Room: &livekit.Room{Name: "room-a"}},
+		"",
+		"",
+		"",
+	)
+	roomAPI := &fakeJobRoomServiceAPI{err: errors.New("server disconnected")}
+	ctx.api = &JobAPI{RoomService: roomAPI}
+
+	resp, err := ctx.DeleteRoom(context.Background(), "")
+	if err != nil {
+		t.Fatalf("DeleteRoom() error = %v, want nil for best-effort reference behavior", err)
+	}
+	if resp == nil {
+		t.Fatal("DeleteRoom() response = nil, want empty response")
+	}
+	if roomAPI.request == nil {
+		t.Fatal("DeleteRoom() did not call room service API")
+	}
+	if roomAPI.request.Room != "room-a" {
+		t.Fatalf("DeleteRoom() room = %q, want room-a", roomAPI.request.Room)
+	}
+}
+
+func TestJobContextMoveParticipantBuildsReferenceRequest(t *testing.T) {
+	ctx := NewJobContext(
+		&livekit.Job{Id: "job_move_participant", Room: &livekit.Room{Name: "caller-room"}},
+		"",
+		"",
+		"",
+	)
+	roomAPI := &fakeJobRoomServiceAPI{}
+	ctx.api = &JobAPI{RoomService: roomAPI}
+
+	if err := ctx.MoveParticipant(context.Background(), "human-room", "human-agent-sip", "caller-room"); err != nil {
+		t.Fatalf("MoveParticipant() error = %v", err)
+	}
+	if roomAPI.moveRequest == nil {
+		t.Fatal("MoveParticipant() did not call room service API")
+	}
+	if roomAPI.moveRequest.Room != "human-room" {
+		t.Fatalf("MoveParticipantRequest.Room = %q, want human-room", roomAPI.moveRequest.Room)
+	}
+	if roomAPI.moveRequest.Identity != "human-agent-sip" {
+		t.Fatalf("MoveParticipantRequest.Identity = %q, want human-agent-sip", roomAPI.moveRequest.Identity)
+	}
+	if roomAPI.moveRequest.DestinationRoom != "caller-room" {
+		t.Fatalf("MoveParticipantRequest.DestinationRoom = %q, want caller-room", roomAPI.moveRequest.DestinationRoom)
+	}
+}
+
+type fakeJobRoomServiceAPI struct {
+	err         error
+	request     *livekit.DeleteRoomRequest
+	moveRequest *livekit.MoveParticipantRequest
+}
+
+func (f *fakeJobRoomServiceAPI) DeleteRoom(_ context.Context, req *livekit.DeleteRoomRequest) (*livekit.DeleteRoomResponse, error) {
+	f.request = req
+	if f.err != nil {
+		return nil, f.err
+	}
+	return &livekit.DeleteRoomResponse{}, nil
+}
+
+func (f *fakeJobRoomServiceAPI) MoveParticipant(_ context.Context, req *livekit.MoveParticipantRequest) (*livekit.MoveParticipantResponse, error) {
+	f.moveRequest = req
+	if f.err != nil {
+		return nil, f.err
+	}
+	return &livekit.MoveParticipantResponse{}, nil
 }
 
 func TestTransferSIPParticipantIdentityAcceptsString(t *testing.T) {
