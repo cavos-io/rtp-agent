@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -25,6 +26,7 @@ const (
 	defaultBasetenSTTVADThreshold            = 0.5
 	defaultBasetenSTTVADMinSilenceMS         = 300
 	defaultBasetenSTTVADSpeechPadMS          = 30
+	basetenModelEndpointEnv                  = "BASETEN_MODEL_ENDPOINT"
 )
 
 type BasetenSTT struct {
@@ -50,7 +52,7 @@ func WithBasetenSTTModelEndpoint(endpoint string) BasetenSTTOption {
 	return func(s *BasetenSTT) {
 		if endpoint != "" {
 			s.modelEndpoint = endpoint
-			s.endpointPriority = 3
+			s.endpointPriority = 4
 		}
 	}
 }
@@ -102,18 +104,30 @@ func WithBasetenSTTVADThreshold(threshold float64) BasetenSTTOption {
 	}
 }
 
-func NewBasetenSTT(apiKey string, model string, opts ...BasetenSTTOption) *BasetenSTT {
-	endpoint := model
-	if endpoint == "" {
-		endpoint = "whisper-v3"
+func NewBasetenSTT(apiKey string, model string, opts ...BasetenSTTOption) (*BasetenSTT, error) {
+	if apiKey == "" {
+		apiKey = os.Getenv(basetenAPIKeyEnv)
 	}
-	if !strings.HasPrefix(endpoint, "ws://") && !strings.HasPrefix(endpoint, "wss://") {
-		endpoint = fmt.Sprintf("wss://model-%s.api.baseten.co/environments/production/websocket", endpoint)
+	if apiKey == "" {
+		return nil, fmt.Errorf("BASETEN_API_KEY is required, either as argument or set BASETEN_API_KEY environment variable")
+	}
+
+	endpoint := ""
+	endpointPriority := 0
+	if model != "" {
+		endpoint = model
+		if !strings.HasPrefix(endpoint, "ws://") && !strings.HasPrefix(endpoint, "wss://") {
+			endpoint = fmt.Sprintf("wss://model-%s.api.baseten.co/environments/production/websocket", endpoint)
+		}
+		endpointPriority = 3
+	} else if envEndpoint := os.Getenv(basetenModelEndpointEnv); envEndpoint != "" {
+		endpoint = envEndpoint
+		endpointPriority = 1
 	}
 	provider := &BasetenSTT{
 		apiKey:                     apiKey,
 		modelEndpoint:              endpoint,
-		endpointPriority:           1,
+		endpointPriority:           endpointPriority,
 		sampleRate:                 defaultBasetenSTTSampleRate,
 		bufferSizeSeconds:          defaultBasetenSTTBufferSizeSeconds,
 		encoding:                   defaultBasetenSTTEncoding,
@@ -129,10 +143,17 @@ func NewBasetenSTT(apiKey string, model string, opts ...BasetenSTTOption) *Baset
 	for _, opt := range opts {
 		opt(provider)
 	}
-	return provider
+	if provider.modelEndpoint == "" {
+		return nil, fmt.Errorf("BASETEN_MODEL_ENDPOINT is required, provide model_endpoint, model_id, chain_id, or set BASETEN_MODEL_ENDPOINT environment variable")
+	}
+	return provider, nil
 }
 
 func (s *BasetenSTT) Label() string { return "baseten.STT" }
+func (s *BasetenSTT) Model() string { return "unknown" }
+func (s *BasetenSTT) Provider() string {
+	return "Baseten"
+}
 func (s *BasetenSTT) Capabilities() stt.STTCapabilities {
 	return stt.STTCapabilities{
 		Streaming:         true,

@@ -3,14 +3,21 @@ package baseten
 import (
 	"context"
 	"encoding/json"
+	"io"
+	"net"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/cavos-io/rtp-agent/core/audio/model"
 	"github.com/cavos-io/rtp-agent/core/stt"
+	"github.com/gorilla/websocket"
 )
 
 func TestBasetenSTTDefaultsMatchReferenceOptions(t *testing.T) {
-	provider := NewBasetenSTT("test-key", "model-id")
+	provider := mustNewBasetenSTT(t, "test-key", "model-id")
 
 	if provider.modelEndpoint != "wss://model-model-id.api.baseten.co/environments/production/websocket" {
 		t.Fatalf("endpoint = %q, want generated truss websocket endpoint", provider.modelEndpoint)
@@ -30,6 +37,12 @@ func TestBasetenSTTDefaultsMatchReferenceOptions(t *testing.T) {
 	if !provider.enablePartialTranscripts || !provider.showWordTimestamps {
 		t.Fatalf("partial=%v word timestamps=%v, want both true", provider.enablePartialTranscripts, provider.showWordTimestamps)
 	}
+	if provider.Label() != "baseten.STT" {
+		t.Fatalf("Label = %q, want baseten.STT", provider.Label())
+	}
+	if provider.Provider() != "Baseten" || provider.Model() != "unknown" {
+		t.Fatalf("metadata = %q/%q, want Baseten/unknown", provider.Provider(), provider.Model())
+	}
 
 	caps := provider.Capabilities()
 	if !caps.Streaming || !caps.InterimResults || caps.OfflineRecognize || caps.AlignedTranscript != "word" {
@@ -38,7 +51,7 @@ func TestBasetenSTTDefaultsMatchReferenceOptions(t *testing.T) {
 }
 
 func TestBasetenSTTEndpointOptionsMatchReferencePriority(t *testing.T) {
-	explicit := NewBasetenSTT("test-key", "ignored",
+	explicit := mustNewBasetenSTT(t, "test-key", "ignored",
 		WithBasetenSTTModelEndpoint("wss://explicit.example/websocket"),
 		WithBasetenSTTChainID("chain-1"),
 	)
@@ -46,7 +59,14 @@ func TestBasetenSTTEndpointOptionsMatchReferencePriority(t *testing.T) {
 		t.Fatalf("explicit endpoint = %q, want highest priority endpoint", explicit.modelEndpoint)
 	}
 
-	chain := NewBasetenSTT("test-key", "",
+	model := mustNewBasetenSTT(t, "test-key", "model-1",
+		WithBasetenSTTChainID("chain-1"),
+	)
+	if model.modelEndpoint != "wss://model-model-1.api.baseten.co/environments/production/websocket" {
+		t.Fatalf("model endpoint = %q, want model to outrank chain", model.modelEndpoint)
+	}
+
+	chain := mustNewBasetenSTT(t, "test-key", "",
 		WithBasetenSTTChainID("chain-1"),
 	)
 	if chain.modelEndpoint != "wss://chain-chain-1.api.baseten.co/environments/production/websocket" {
@@ -54,10 +74,44 @@ func TestBasetenSTTEndpointOptionsMatchReferencePriority(t *testing.T) {
 	}
 }
 
+func TestNewBasetenSTTFallsBackToEnvironment(t *testing.T) {
+	t.Setenv(basetenAPIKeyEnv, "env-key")
+	t.Setenv(basetenModelEndpointEnv, "wss://env.example/websocket")
+
+	provider, err := NewBasetenSTT("", "")
+	if err != nil {
+		t.Fatalf("NewBasetenSTT error = %v, want env fallback", err)
+	}
+
+	if provider.apiKey != "env-key" {
+		t.Fatalf("api key = %q, want env key", provider.apiKey)
+	}
+	if provider.modelEndpoint != "wss://env.example/websocket" {
+		t.Fatalf("endpoint = %q, want env endpoint", provider.modelEndpoint)
+	}
+}
+
+func TestNewBasetenSTTRequiresAPIKeyAndEndpoint(t *testing.T) {
+	t.Setenv(basetenAPIKeyEnv, "")
+	t.Setenv(basetenModelEndpointEnv, "")
+
+	_, err := NewBasetenSTT("", "model-id")
+	if err == nil || !strings.Contains(err.Error(), "BASETEN_API_KEY") {
+		t.Fatalf("missing key error = %v, want API key error", err)
+	}
+
+	_, err = NewBasetenSTT("test-key", "")
+	if err == nil || !strings.Contains(err.Error(), "BASETEN_MODEL_ENDPOINT") {
+		t.Fatalf("missing endpoint error = %v, want endpoint error", err)
+	}
+}
+
 func TestBuildBasetenSTTMetadataMatchesReferenceSchema(t *testing.T) {
-	provider := NewBasetenSTT("test-key", "model-id",
+	provider := mustNewBasetenSTT(t, "test-key", "model-id",
 		WithBasetenSTTLanguage("auto"),
 		WithBasetenSTTEncoding("pcm_mulaw"),
+		WithBasetenSTTSampleRate(8000),
+		WithBasetenSTTBufferSizeSeconds(0.064),
 		WithBasetenSTTVADThreshold(0.7),
 	)
 
@@ -76,8 +130,11 @@ func TestBuildBasetenSTTMetadataMatchesReferenceSchema(t *testing.T) {
 		t.Fatalf("whisper params = %+v, want language and timestamps", whisper)
 	}
 	streaming := decoded["streaming_params"].(map[string]any)
-	if streaming["encoding"] != "pcm_mulaw" || streaming["sample_rate"] != float64(16000) {
+	if streaming["encoding"] != "pcm_mulaw" || streaming["sample_rate"] != float64(8000) {
 		t.Fatalf("streaming params = %+v, want encoding and sample rate", streaming)
+	}
+	if streaming["partial_transcript_interval_s"] != float64(1.0) {
+		t.Fatalf("streaming params = %+v, want partial transcript interval", streaming)
 	}
 	if streaming["enable_partial_transcripts"] != true || streaming["final_transcript_max_duration_s"] != float64(30) {
 		t.Fatalf("streaming params = %+v, want partial and final duration defaults", streaming)
@@ -122,10 +179,158 @@ func TestBasetenSTTTranscriptEventsMapReferenceMessages(t *testing.T) {
 }
 
 func TestBasetenSTTRecognizeIsUnsupportedLikeReference(t *testing.T) {
-	_, err := NewBasetenSTT("test-key", "model-id").Recognize(context.Background(), nil, "")
+	provider := mustNewBasetenSTT(t, "test-key", "model-id")
+
+	_, err := provider.Recognize(context.Background(), nil, "")
+
 	if err == nil || !strings.Contains(err.Error(), "does not support offline recognize") {
 		t.Fatalf("error = %v, want offline recognize unsupported", err)
 	}
+}
+
+func TestBasetenSTTStreamSendsReferenceMetadataAndAudio(t *testing.T) {
+	metadataCh := make(chan map[string]any, 1)
+	audioCh := make(chan []byte, 1)
+	terminateCh := make(chan string, 1)
+	errCh := make(chan error, 1)
+	server := newBasetenSTTTestWebsocketServer(t, func(conn *websocket.Conn, r *http.Request) {
+		if got := r.Header.Get("Authorization"); got != "Api-Key test-key" {
+			t.Errorf("Authorization = %q, want Api-Key header", got)
+		}
+		_, metadataPayload, err := conn.ReadMessage()
+		if err != nil {
+			errCh <- err
+			return
+		}
+		var metadata map[string]any
+		if err := json.Unmarshal(metadataPayload, &metadata); err != nil {
+			errCh <- err
+			return
+		}
+		metadataCh <- metadata
+		msgType, audioPayload, err := conn.ReadMessage()
+		if err != nil {
+			errCh <- err
+			return
+		}
+		if msgType != websocket.BinaryMessage {
+			t.Errorf("audio message type = %d, want binary", msgType)
+		}
+		audioCh <- append([]byte(nil), audioPayload...)
+		_, terminatePayload, err := conn.ReadMessage()
+		if err != nil {
+			errCh <- err
+			return
+		}
+		terminateCh <- string(terminatePayload)
+	})
+	defer server.Close()
+
+	provider := mustNewBasetenSTT(t, "test-key", "",
+		WithBasetenSTTModelEndpoint(httpToWS(server.URL)),
+		WithBasetenSTTLanguage("auto"),
+		WithBasetenSTTSampleRate(8000),
+	)
+	stream, err := provider.Stream(context.Background(), "es")
+	if err != nil {
+		t.Fatalf("Stream error = %v", err)
+	}
+	if err := stream.PushFrame(&model.AudioFrame{Data: []byte("pcm")}); err != nil {
+		t.Fatalf("PushFrame error = %v", err)
+	}
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush error = %v", err)
+	}
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close error = %v", err)
+	}
+
+	metadata := readBasetenTestChan(t, metadataCh, errCh)
+	whisper := metadata["whisper_params"].(map[string]any)
+	assertBasetenPayload(t, whisper, "audio_language", "es")
+	streaming := metadata["streaming_params"].(map[string]any)
+	assertBasetenPayload(t, streaming, "sample_rate", float64(8000))
+	if got := readBasetenTestChan(t, audioCh, errCh); string(got) != "pcm" {
+		t.Fatalf("audio payload = %q, want pcm", string(got))
+	}
+	if got := readBasetenTestChan(t, terminateCh, errCh); got != `{"terminate_session":true}` {
+		t.Fatalf("terminate payload = %q, want terminate_session", got)
+	}
+}
+
+func TestBasetenSTTStreamMapsWebsocketTranscripts(t *testing.T) {
+	server := newBasetenSTTTestWebsocketServer(t, func(conn *websocket.Conn, r *http.Request) {
+		if _, _, err := conn.ReadMessage(); err != nil {
+			t.Errorf("read metadata: %v", err)
+			return
+		}
+		if err := conn.WriteMessage(websocket.TextMessage, []byte(`{
+			"type":"transcription",
+			"is_final":true,
+			"language_code":"en",
+			"transcript":"hello"
+		}`)); err != nil {
+			t.Errorf("write transcript: %v", err)
+			return
+		}
+		_ = conn.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""), time.Now().Add(time.Second))
+	})
+	defer server.Close()
+
+	provider := mustNewBasetenSTT(t, "test-key", "", WithBasetenSTTModelEndpoint(httpToWS(server.URL)))
+	stream, err := provider.Stream(context.Background(), "")
+	if err != nil {
+		t.Fatalf("Stream error = %v", err)
+	}
+	defer stream.Close()
+
+	event, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next error = %v, want transcript", err)
+	}
+	assertBasetenSTTEvent(t, []*stt.SpeechEvent{event}, 0, stt.SpeechEventFinalTranscript, "hello")
+
+	_, err = stream.Next()
+	if err != io.EOF {
+		t.Fatalf("second Next error = %v, want EOF", err)
+	}
+}
+
+func TestBasetenSTTStreamDialErrorReturnsFailure(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	addr := listener.Addr().String()
+	listener.Close()
+
+	provider := mustNewBasetenSTT(t, "test-key", "", WithBasetenSTTModelEndpoint("ws://"+addr))
+	if _, err := provider.Stream(context.Background(), ""); err == nil {
+		t.Fatal("Stream error = nil, want dial failure")
+	}
+}
+
+func mustNewBasetenSTT(t *testing.T, apiKey string, model string, opts ...BasetenSTTOption) *BasetenSTT {
+	t.Helper()
+	provider, err := NewBasetenSTT(apiKey, model, opts...)
+	if err != nil {
+		t.Fatalf("NewBasetenSTT error = %v", err)
+	}
+	return provider
+}
+
+func newBasetenSTTTestWebsocketServer(t *testing.T, handler func(*websocket.Conn, *http.Request)) *httptest.Server {
+	t.Helper()
+	upgrader := websocket.Upgrader{}
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Errorf("upgrade: %v", err)
+			return
+		}
+		defer conn.Close()
+		handler(conn, r)
+	}))
 }
 
 func assertBasetenSTTEvent(t *testing.T, events []*stt.SpeechEvent, index int, eventType stt.SpeechEventType, text string) {
