@@ -3,7 +3,9 @@ package aws
 import (
 	"context"
 	"encoding/base64"
+	"io"
 	"reflect"
+	"strings"
 	"testing"
 
 	awstypes "github.com/aws/aws-sdk-go-v2/service/bedrockruntime/types"
@@ -26,6 +28,70 @@ func (awsRequestTestTool) Parameters() map[string]any {
 }
 func (awsRequestTestTool) Execute(context.Context, string) (string, error) {
 	return "", nil
+}
+
+func TestAWSLLMDefaultsMatchReference(t *testing.T) {
+	provider := &AWSLLM{model: defaultAWSLLMModel}
+
+	if got := awsLLMModelOrDefault(""); got != "amazon.nova-2-lite-v1:0" {
+		t.Fatalf("default model = %q, want reference default model", got)
+	}
+	if got := awsLLMModelOrDefault("custom-model"); got != "custom-model" {
+		t.Fatalf("explicit model = %q, want custom-model", got)
+	}
+	if provider.Label() != "aws.LLM" {
+		t.Fatalf("Label = %q, want aws.LLM", provider.Label())
+	}
+	if provider.Model() != "amazon.nova-2-lite-v1:0" {
+		t.Fatalf("Model = %q, want reference default model", provider.Model())
+	}
+	if provider.Provider() != "AWS Bedrock" {
+		t.Fatalf("Provider = %q, want AWS Bedrock", provider.Provider())
+	}
+}
+
+func TestNewAWSLLMUsesReferenceDefaults(t *testing.T) {
+	provider, err := NewAWSLLM(context.Background(), "", "")
+	if err != nil {
+		t.Fatalf("NewAWSLLM error = %v, want nil with default region/model", err)
+	}
+	if provider.Model() != "amazon.nova-2-lite-v1:0" {
+		t.Fatalf("Model = %q, want reference default model", provider.Model())
+	}
+}
+
+func TestAWSRegionDefaultMatchesReference(t *testing.T) {
+	if got := awsRegionOrDefault(""); got != "us-east-1" {
+		t.Fatalf("default region = %q, want us-east-1", got)
+	}
+	if got := awsRegionOrDefault("ap-southeast-1"); got != "ap-southeast-1" {
+		t.Fatalf("explicit region = %q, want ap-southeast-1", got)
+	}
+}
+
+func TestAWSLLMChatRequiresConfiguredClient(t *testing.T) {
+	provider := &AWSLLM{model: defaultAWSLLMModel}
+	ctx := llm.NewChatContext()
+	ctx.Items = []llm.ChatItem{
+		&llm.ChatMessage{ID: "user", Role: llm.ChatRoleUser, Content: []llm.ChatContent{{Text: "hello"}}},
+	}
+
+	_, err := provider.Chat(context.Background(), ctx)
+
+	if err == nil || !strings.Contains(err.Error(), "client is not configured") {
+		t.Fatalf("Chat error = %v, want configured-client error", err)
+	}
+}
+
+func TestAWSLLMStreamClosedState(t *testing.T) {
+	stream := &awsLLMStream{closed: true}
+
+	if _, err := stream.Next(); err != io.EOF {
+		t.Fatalf("Next err = %v, want EOF when closed", err)
+	}
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close err = %v, want nil without event stream", err)
+	}
 }
 
 func TestBuildAWSMessagesGroupsToolCallsWithOutputs(t *testing.T) {
