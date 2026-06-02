@@ -17,8 +17,10 @@ import (
 	"time"
 
 	"github.com/cavos-io/rtp-agent/core/agent"
+	consoleui "github.com/cavos-io/rtp-agent/interface/cli/console"
 	"github.com/cavos-io/rtp-agent/interface/worker"
 	"github.com/cavos-io/rtp-agent/library/logger"
+	tea "github.com/charmbracelet/bubbletea"
 	"github.com/gordonklaus/portaudio"
 	"github.com/livekit/protocol/livekit"
 	lksdk "github.com/livekit/server-sdk-go/v2"
@@ -600,6 +602,28 @@ func consoleInputIsEmpty(input string) bool {
 	return strings.TrimSpace(input) == ""
 }
 
+func startConsoleAudioUI(ctx context.Context, args ConsoleArgs) (func(), error) {
+	if args.Mode == ConsoleModeText {
+		return func() {}, nil
+	}
+
+	audioIO := consoleui.NewAudioIO()
+	audioIO.SetDevices(args.InputDevice, args.OutputDevice)
+	if err := audioIO.Start(ctx); err != nil {
+		return nil, err
+	}
+
+	go func() {
+		if _, err := tea.NewProgram(consoleui.NewConsoleModel(ctx, audioIO)).Run(); err != nil {
+			logger.Logger.Errorw("Console UI error", err)
+		}
+	}()
+
+	return func() {
+		_ = audioIO.Stop()
+	}, nil
+}
+
 func runConsole(server *worker.AgentServer, argv []string) {
 	args, err := parseConsoleArgs(argv)
 	if err != nil {
@@ -621,6 +645,14 @@ func runConsole(server *worker.AgentServer, argv []string) {
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+
+	stopAudio, err := startConsoleAudioUI(ctx, args)
+	if err != nil {
+		logger.Logger.Errorw("Console audio startup error", err)
+		stop()
+		return
+	}
+	defer stopAudio()
 
 	logger.Logger.Infow(
 		"Starting console local job",

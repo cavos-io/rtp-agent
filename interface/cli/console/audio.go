@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/cavos-io/rtp-agent/core/audio"
 	"github.com/cavos-io/rtp-agent/core/audio/model"
 	"github.com/gordonklaus/portaudio"
 )
@@ -261,11 +262,11 @@ func (a *AudioIO) PushFrame(frame *model.AudioFrame) {
 		return
 	}
 
-	// Convert bytes back to int16 (assuming 16-bit PCM little endian)
-	pcm := make([]int16, len(frame.Data)/2)
-	for i := 0; i < len(pcm); i++ {
-		pcm[i] = int16(frame.Data[i*2]) | (int16(frame.Data[i*2+1]) << 8)
+	buffer := audio.NewAudioArrayBuffer(int(frame.SamplesPerChannel), frame.SampleRate)
+	if _, err := buffer.PushFrame(frame); err != nil {
+		return
 	}
+	pcm := buffer.Read()
 
 	a.mu.Lock()
 	a.speakerBuffer = append(a.speakerBuffer, pcm...)

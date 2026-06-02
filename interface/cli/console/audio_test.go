@@ -156,6 +156,33 @@ func TestAudioIOClearOutputBufferDropsQueuedSpeakerAudio(t *testing.T) {
 	}
 }
 
+func TestAudioIOPushFrameDownmixesMultichannelAudio(t *testing.T) {
+	audioIO := NewAudioIO()
+	audioIO.PushFrame(&model.AudioFrame{
+		Data: []byte{
+			10, 0, 30, 0,
+			20, 0, 40, 0,
+		},
+		SampleRate:        24000,
+		NumChannels:       2,
+		SamplesPerChannel: 2,
+	})
+
+	audioIO.mu.Lock()
+	got := append([]int16(nil), audioIO.speakerBuffer...)
+	audioIO.mu.Unlock()
+
+	want := []int16{20, 30}
+	if len(got) != len(want) {
+		t.Fatalf("speakerBuffer len = %d, want %d (%v)", len(got), len(want), got)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("speakerBuffer = %v, want %v", got, want)
+		}
+	}
+}
+
 func TestAudioIOOutputPausePreservesQueuedSpeakerAudio(t *testing.T) {
 	audioIO := NewAudioIO()
 	if audioIO.OutputPaused() {
