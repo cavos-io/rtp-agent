@@ -11,6 +11,7 @@ import (
 	"github.com/cavos-io/rtp-agent/core/stt"
 	"github.com/cavos-io/rtp-agent/core/vad"
 	"github.com/cavos-io/rtp-agent/library/logger"
+	"github.com/cavos-io/rtp-agent/library/telemetry"
 )
 
 var ErrSpeechSchedulingPaused = errors.New("speech scheduling is paused")
@@ -21,6 +22,8 @@ type EndOfTurnInfo struct {
 	SkipReply            bool
 	NewTranscript        string
 	TranscriptConfidence float64
+	EndOfTurnDelay       float64
+	TranscriptionDelay   float64
 	StartedSpeakingAt    *float64
 	StoppedSpeakingAt    *float64
 }
@@ -633,6 +636,7 @@ func (a *AgentActivity) completeUserTurn(ctx context.Context, info EndOfTurnInfo
 	if a.Agent.ChatCtx != nil {
 		chatCtx = a.Agent.ChatCtx.Copy()
 	}
+	hookStart := time.Now()
 	if err := a.AgentIntf.OnUserTurnCompleted(ctx, chatCtx, newMsg); err != nil {
 		var stopResponse llm.StopResponse
 		if errors.As(err, &stopResponse) {
@@ -641,6 +645,7 @@ func (a *AgentActivity) completeUserTurn(ctx context.Context, info EndOfTurnInfo
 		logger.Logger.Errorw("error occurred during on_user_turn_completed", err)
 		return nil, nil
 	}
+	hookDelay := time.Since(hookStart).Seconds()
 	if a.Agent.LLM == nil || a.Session == nil {
 		return nil, nil
 	}
@@ -651,11 +656,22 @@ func (a *AgentActivity) completeUserTurn(ctx context.Context, info EndOfTurnInfo
 		logger.Logger.Warnw("skipping reply to user input, speech scheduling is paused", nil, "userInput", info.NewTranscript)
 		return nil, nil
 	}
-	return a.Session.GenerateReplyWithOptions(ctx, GenerateReplyOptions{
+	handle, err := a.Session.GenerateReplyWithOptions(ctx, GenerateReplyOptions{
 		UserMessage:   newMsg,
 		ChatCtx:       chatCtx,
 		InputModality: "audio",
 	})
+	if err != nil {
+		return nil, err
+	}
+	a.Session.EmitMetricsCollected(&telemetry.EOUMetrics{
+		Timestamp:                time.Now(),
+		EndOfUtteranceDelay:      info.EndOfTurnDelay,
+		TranscriptionDelay:       info.TranscriptionDelay,
+		OnUserTurnCompletedDelay: hookDelay,
+		SpeechID:                 handle.ID,
+	})
+	return handle, nil
 }
 
 func (a *AgentActivity) commitUserMessage(msg *llm.ChatMessage) {

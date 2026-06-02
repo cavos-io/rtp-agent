@@ -8,6 +8,7 @@ import (
 
 	"github.com/cavos-io/rtp-agent/core/llm"
 	"github.com/cavos-io/rtp-agent/core/stt"
+	"github.com/cavos-io/rtp-agent/library/telemetry"
 )
 
 func TestAgentActivityScheduleSpeechProcessesHighestPriorityFirst(t *testing.T) {
@@ -511,6 +512,56 @@ func TestAgentActivityCommitUserTurnGeneratesReplyWhenLLMConfigured(t *testing.T
 		}
 	case <-time.After(100 * time.Millisecond):
 		t.Fatal("CommitUserTurn did not generate a reply")
+	}
+}
+
+func TestAgentActivityCompleteUserTurnEmitsEOUMetricsForGeneratedReply(t *testing.T) {
+	agent := NewAgent("test")
+	agent.TurnDetection = TurnDetectionModeManual
+	agent.LLM = &fakeGenerationLLM{stream: &fakeGenerationLLMStream{}}
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	activity := NewAgentActivity(agent, session)
+	agent.activity = activity
+	session.activity = activity
+
+	_, err := activity.completeUserTurn(context.Background(), EndOfTurnInfo{
+		NewTranscript:        "metrics turn",
+		TranscriptConfidence: 0.9,
+		EndOfTurnDelay:       0.12,
+		TranscriptionDelay:   0.34,
+	})
+	if err != nil {
+		t.Fatalf("completeUserTurn error = %v, want nil", err)
+	}
+
+	var speechID string
+	select {
+	case ev := <-session.SpeechCreatedEvents():
+		speechID = ev.SpeechHandle.ID
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("completeUserTurn did not generate a reply")
+	}
+
+	select {
+	case ev := <-session.MetricsCollectedEvents():
+		metrics, ok := ev.Metrics.(*telemetry.EOUMetrics)
+		if !ok {
+			t.Fatalf("metrics = %T, want *telemetry.EOUMetrics", ev.Metrics)
+		}
+		if metrics.SpeechID != speechID {
+			t.Fatalf("EOUMetrics SpeechID = %q, want generated speech %q", metrics.SpeechID, speechID)
+		}
+		if metrics.EndOfUtteranceDelay != 0.12 {
+			t.Fatalf("EOUMetrics EndOfUtteranceDelay = %v, want 0.12", metrics.EndOfUtteranceDelay)
+		}
+		if metrics.TranscriptionDelay != 0.34 {
+			t.Fatalf("EOUMetrics TranscriptionDelay = %v, want 0.34", metrics.TranscriptionDelay)
+		}
+		if metrics.OnUserTurnCompletedDelay < 0 {
+			t.Fatalf("EOUMetrics OnUserTurnCompletedDelay = %v, want non-negative", metrics.OnUserTurnCompletedDelay)
+		}
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("MetricsCollectedEvents did not receive EOU metrics")
 	}
 }
 
