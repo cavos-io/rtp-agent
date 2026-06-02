@@ -460,6 +460,36 @@ func TestAgentActivityIgnoresVADTurnDetectionWithoutVAD(t *testing.T) {
 	}
 }
 
+func TestAgentActivityOnFinalTranscriptEmitsUserInputTranscribed(t *testing.T) {
+	agent := NewAgent("test")
+	agent.TurnDetection = TurnDetectionModeManual
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	activity := NewAgentActivity(agent, session)
+
+	activity.OnFinalTranscript(&stt.SpeechEvent{
+		Alternatives: []stt.SpeechData{{
+			Language:  "en",
+			Text:      "final transcript",
+			SpeakerID: "speaker-1",
+		}},
+	})
+
+	select {
+	case ev := <-session.UserInputTranscribedEvents():
+		if ev.GetType() != "user_input_transcribed" {
+			t.Fatalf("event type = %q, want user_input_transcribed", ev.GetType())
+		}
+		if ev.Transcript != "final transcript" || !ev.IsFinal {
+			t.Fatalf("event transcript/final = %q/%v, want final transcript/true", ev.Transcript, ev.IsFinal)
+		}
+		if ev.Language != "en" || ev.SpeakerID != "speaker-1" {
+			t.Fatalf("event language/speaker = %q/%q, want en/speaker-1", ev.Language, ev.SpeakerID)
+		}
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("UserInputTranscribedEvents did not receive final transcript")
+	}
+}
+
 func TestAgentActivityClearUserTurnDropsPendingManualTranscript(t *testing.T) {
 	agent := &turnCompletedAgent{Agent: NewAgent("test"), turns: make(chan *llm.ChatMessage, 1)}
 	agent.TurnDetection = TurnDetectionModeManual

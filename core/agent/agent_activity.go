@@ -580,9 +580,22 @@ func (a *AgentActivity) OnFinalTranscript(ev *stt.SpeechEvent) {
 	a.sttEOSReceived = true
 	transcript := ""
 	confidence := 0.0
+	language := ""
+	speakerID := ""
 	if len(ev.Alternatives) > 0 {
 		transcript = ev.Alternatives[0].Text
 		confidence = ev.Alternatives[0].Confidence
+		language = ev.Alternatives[0].Language
+		speakerID = ev.Alternatives[0].SpeakerID
+	}
+
+	if a.Session != nil {
+		a.Session.EmitUserInputTranscribed(UserInputTranscribedEvent{
+			Language:   language,
+			Transcript: transcript,
+			IsFinal:    true,
+			SpeakerID:  speakerID,
+		})
 	}
 
 	a.userTurnMu.Lock()
