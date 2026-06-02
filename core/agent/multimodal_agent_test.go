@@ -78,6 +78,37 @@ func TestMultimodalAgentPushesVideoToRealtimeSession(t *testing.T) {
 	}
 }
 
+func TestMultimodalAgentEmitsRealtimeErrorWhenVideoPushFails(t *testing.T) {
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	cause := errors.New("push video failed")
+	rtSession := &fakeRealtimeSession{pushVideoErr: cause}
+	ma := &MultimodalAgent{
+		session:   session,
+		rtSession: rtSession,
+	}
+
+	ma.OnVideoFrame(context.Background(), &images.VideoFrame{})
+
+	select {
+	case ev := <-session.ErrorEvents():
+		rtErr, ok := ev.Error.(llm.RealtimeError)
+		if !ok {
+			t.Fatalf("Error = %T, want llm.RealtimeError", ev.Error)
+		}
+		if !errors.Is(rtErr, cause) {
+			t.Fatalf("RealtimeError unwrap = %v, want %v", rtErr, cause)
+		}
+		if rtErr.Message != "failed to push video to realtime session" {
+			t.Fatalf("RealtimeError message = %q", rtErr.Message)
+		}
+		if ev.Source != rtSession {
+			t.Fatalf("Source = %#v, want realtime session", ev.Source)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("ErrorEvents did not receive realtime push video error")
+	}
+}
+
 func TestMultimodalToolExecutionSuppressesStopResponse(t *testing.T) {
 	chatCtx := llm.NewChatContext()
 	ma := &MultimodalAgent{
@@ -415,8 +446,9 @@ func (f *fakeRealtimeModel) Model() string { return f.model }
 func (f *fakeRealtimeModel) Provider() string { return f.provider }
 
 type fakeRealtimeSession struct {
-	updated     *llm.ChatContext
-	videoFrames int
+	updated      *llm.ChatContext
+	videoFrames  int
+	pushVideoErr error
 }
 
 func (f *fakeRealtimeSession) UpdateInstructions(string) error { return nil }
@@ -448,7 +480,7 @@ func (f *fakeRealtimeSession) PushAudio(*model.AudioFrame) error { return nil }
 
 func (f *fakeRealtimeSession) PushVideo(*images.VideoFrame) error {
 	f.videoFrames++
-	return nil
+	return f.pushVideoErr
 }
 
 func (f *fakeRealtimeSession) CommitAudio() error { return nil }
