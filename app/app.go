@@ -3354,6 +3354,8 @@ func wordTokenizerFromConfig(cfg AppConfig) (tokenize.WordTokenizer, error) {
 		return nil, nil
 	}
 	switch provider {
+	case "basic":
+		return tokenize.NewBasicWordTokenizer(), nil
 	case "blingfire":
 		return blingfire.NewWordTokenizer(cfg.WordTokenizerLanguage), nil
 	default:
@@ -3400,6 +3402,8 @@ func ttsSentenceTokenizer(cfg AppConfig) (tokenize.SentenceTokenizer, error) {
 	}
 
 	switch provider {
+	case "advanced":
+		return tokenize.NewAdvancedSentenceTokenizer(), nil
 	case "blingfire":
 		return blingfire.NewSentenceTokenizer(cfg.TTSTokenizerLanguage, minSentenceLen, streamContextLen), nil
 	case "nltk":

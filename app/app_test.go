@@ -2355,6 +2355,7 @@ func TestDefaultConfigFromEnvSelectsLiveKitTTSTokenizer(t *testing.T) {
 		provider     string
 		wantTypeName string
 	}{
+		{name: "advanced", provider: "advanced", wantTypeName: "*tokenize.AdvancedSentenceTokenizer"},
 		{name: "blingfire", provider: "blingfire", wantTypeName: "*blingfire.SentenceTokenizer"},
 		{name: "nltk", provider: "nltk", wantTypeName: "*nltk.SentenceTokenizer"},
 	}
@@ -2388,20 +2389,33 @@ func TestDefaultConfigFromEnvSelectsLiveKitTTSTokenizer(t *testing.T) {
 }
 
 func TestDefaultConfigFromEnvSelectsWordTokenizer(t *testing.T) {
-	t.Setenv("RTP_AGENT_WORD_TOKENIZER_PROVIDER", "blingfire")
+	cases := []struct {
+		name         string
+		provider     string
+		wantTypeName string
+	}{
+		{name: "basic", provider: "basic", wantTypeName: "*tokenize.BasicWordTokenizer"},
+		{name: "blingfire", provider: "blingfire", wantTypeName: "*blingfire.WordTokenizer"},
+	}
 
-	app, err := NewApp(DefaultConfigFromEnv())
-	if err != nil {
-		t.Fatalf("NewApp() error = %v", err)
-	}
-	if app.Session == nil {
-		t.Fatal("Session is nil")
-	}
-	if app.Session.Options.WordTokenizer == nil {
-		t.Fatal("WordTokenizer is nil")
-	}
-	if got := reflect.TypeOf(app.Session.Options.WordTokenizer).String(); got != "*blingfire.WordTokenizer" {
-		t.Fatalf("WordTokenizer type = %q, want *blingfire.WordTokenizer", got)
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("RTP_AGENT_WORD_TOKENIZER_PROVIDER", tc.provider)
+
+			app, err := NewApp(DefaultConfigFromEnv())
+			if err != nil {
+				t.Fatalf("NewApp() error = %v", err)
+			}
+			if app.Session == nil {
+				t.Fatal("Session is nil")
+			}
+			if app.Session.Options.WordTokenizer == nil {
+				t.Fatal("WordTokenizer is nil")
+			}
+			if got := reflect.TypeOf(app.Session.Options.WordTokenizer).String(); got != tc.wantTypeName {
+				t.Fatalf("WordTokenizer type = %q, want %s", got, tc.wantTypeName)
+			}
+		})
 	}
 }
 
