@@ -119,6 +119,22 @@ func TestRunContextUserdataRequiresSession(t *testing.T) {
 	}
 }
 
+func TestRunContextJobContextReturnsSessionJobContext(t *testing.T) {
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	jobCtx := struct{ jobID string }{jobID: "job-a"}
+	session.SetJobContext(jobCtx)
+	runCtx := NewRunContext(session, nil, &llm.FunctionCall{Name: "lookup"})
+
+	value, err := runCtx.JobContext()
+
+	if err != nil {
+		t.Fatalf("JobContext error = %v, want nil", err)
+	}
+	if value != jobCtx {
+		t.Fatalf("JobContext value = %#v, want %#v", value, jobCtx)
+	}
+}
+
 func TestFunctionToolsExecutedEventPairsCallsAndOutputs(t *testing.T) {
 	callA := &llm.FunctionCall{CallID: "call_a", Name: "lookup"}
 	callB := &llm.FunctionCall{CallID: "call_b", Name: "notify"}

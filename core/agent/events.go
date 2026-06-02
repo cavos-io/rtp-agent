@@ -251,6 +251,13 @@ func (r *RunContext) Userdata() (any, error) {
 	return r.Session.Userdata()
 }
 
+func (r *RunContext) JobContext() (any, error) {
+	if r == nil || r.Session == nil {
+		return nil, ErrAgentSessionJobContextNotSet
+	}
+	return r.Session.JobContext()
+}
+
 type contextKey string
 
 const runContextKey contextKey = "run_context"

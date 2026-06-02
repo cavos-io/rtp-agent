@@ -2699,6 +2699,28 @@ func TestRunSessionWiresRoomDeleteToJobContext(t *testing.T) {
 	}
 }
 
+func TestRunSessionInstallsJobContextOnSession(t *testing.T) {
+	baseAgent := agent.NewAgent("test")
+	session := agent.NewAgentSession(baseAgent, nil, agent.AgentSessionOptions{})
+	app := &App{
+		Session: session,
+		Server:  worker.NewAgentServer(worker.WorkerOptions{}),
+	}
+	jobCtx := worker.NewJobContext(&livekit.Job{Id: "job_run_context", Room: &livekit.Room{Name: "room-a"}}, "", "", "")
+
+	if err := app.runSession(jobCtx); err != nil {
+		t.Fatalf("runSession() error = %v", err)
+	}
+
+	value, err := session.JobContext()
+	if err != nil {
+		t.Fatalf("session JobContext() error = %v, want nil", err)
+	}
+	if value != jobCtx {
+		t.Fatalf("session JobContext() = %#v, want active job context", value)
+	}
+}
+
 func TestDefaultConfigFromEnvConfiguresLLMTurnDetector(t *testing.T) {
 	t.Setenv("OPENAI_API_KEY", "test-openai-key")
 	t.Setenv("RTP_AGENT_LLM_PROVIDER", "openai")

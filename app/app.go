@@ -1114,6 +1114,7 @@ func (a *App) runSession(ctx *worker.JobContext) error {
 	defer a.closeMCPServers()
 	if ctx != nil {
 		ctx.SetPrimarySession(a.Session)
+		a.Session.SetJobContext(ctx)
 	}
 	a.configureMetricsCollector(ctx)
 	a.Server.SetConsoleSession(a.Session)

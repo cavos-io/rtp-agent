@@ -69,9 +69,10 @@ type AgentSessionUpdateOptions struct {
 }
 
 var (
-	ErrAgentSessionNotRunning     = errors.New("agent session is not running")
-	ErrAgentSessionNestedRun      = errors.New("nested agent session runs are not supported")
-	ErrAgentSessionUserdataNotSet = errors.New("agent session userdata is not set")
+	ErrAgentSessionNotRunning       = errors.New("agent session is not running")
+	ErrAgentSessionNestedRun        = errors.New("nested agent session runs are not supported")
+	ErrAgentSessionUserdataNotSet   = errors.New("agent session userdata is not set")
+	ErrAgentSessionJobContextNotSet = errors.New("agent session job context is not set")
 )
 
 type GenerateReplyOptions struct {
@@ -140,6 +141,8 @@ type AgentSession struct {
 	userAwayTimer  *time.Timer
 	userdata       any
 	userdataSet    bool
+	jobContext     any
+	jobContextSet  bool
 	recordedEvents []Event
 	ivrActivity    *IVRActivity
 	videoSampler   *VoiceActivityVideoSampler
@@ -224,6 +227,24 @@ func (s *AgentSession) SetUserdata(value any) {
 
 	s.userdata = value
 	s.userdataSet = true
+}
+
+func (s *AgentSession) JobContext() (any, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if !s.jobContextSet {
+		return nil, ErrAgentSessionJobContextNotSet
+	}
+	return s.jobContext, nil
+}
+
+func (s *AgentSession) SetJobContext(value any) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	s.jobContext = value
+	s.jobContextSet = true
 }
 
 func (s *AgentSession) RecordedEvents() []Event {
