@@ -2,7 +2,10 @@ package app
 
 import (
 	"context"
+	"fmt"
+	"reflect"
 	"testing"
+	"time"
 
 	"github.com/cavos-io/rtp-agent/core/llm"
 	"github.com/cavos-io/rtp-agent/core/tts"
@@ -79,6 +82,102 @@ func TestDefaultConfigFromEnvSelectsNvidiaLLM(t *testing.T) {
 	}
 }
 
+func TestDefaultConfigFromEnvSelectsLangChainLLM(t *testing.T) {
+	t.Setenv("LANGCHAIN_API_KEY", "test-langchain-key")
+	t.Setenv("RTP_AGENT_LLM_PROVIDER", "langchain")
+
+	app, err := NewApp(DefaultConfigFromEnv())
+	if err != nil {
+		t.Fatalf("NewApp() error = %v", err)
+	}
+	if app.Session == nil || app.Session.LLM == nil {
+		t.Fatal("Session LLM is nil")
+	}
+	if got := llm.Label(app.Session.LLM); got != "langchain.LangchainLLM" {
+		t.Fatalf("LLM label = %q, want langchain.LangchainLLM", got)
+	}
+}
+
+func TestDefaultConfigFromEnvSelectsMinimalLLM(t *testing.T) {
+	t.Setenv("MINIMAL_API_KEY", "test-minimal-key")
+	t.Setenv("RTP_AGENT_LLM_PROVIDER", "minimal")
+
+	app, err := NewApp(DefaultConfigFromEnv())
+	if err != nil {
+		t.Fatalf("NewApp() error = %v", err)
+	}
+	if app.Session == nil || app.Session.LLM == nil {
+		t.Fatal("Session LLM is nil")
+	}
+	if got := llm.Label(app.Session.LLM); got != "minimal.MinimalLLM" {
+		t.Fatalf("LLM label = %q, want minimal.MinimalLLM", got)
+	}
+}
+
+func TestDefaultConfigFromEnvSelectsSimliLLM(t *testing.T) {
+	t.Setenv("SIMLI_API_KEY", "test-simli-key")
+	t.Setenv("RTP_AGENT_LLM_PROVIDER", "simli")
+
+	app, err := NewApp(DefaultConfigFromEnv())
+	if err != nil {
+		t.Fatalf("NewApp() error = %v", err)
+	}
+	if app.Session == nil || app.Session.LLM == nil {
+		t.Fatal("Session LLM is nil")
+	}
+	if got := llm.Label(app.Session.LLM); got != "simli.SimliLLM" {
+		t.Fatalf("LLM label = %q, want simli.SimliLLM", got)
+	}
+}
+
+func TestDefaultConfigFromEnvSelectsHedraLLM(t *testing.T) {
+	t.Setenv("HEDRA_API_KEY", "test-hedra-key")
+	t.Setenv("RTP_AGENT_LLM_PROVIDER", "hedra")
+
+	app, err := NewApp(DefaultConfigFromEnv())
+	if err != nil {
+		t.Fatalf("NewApp() error = %v", err)
+	}
+	if app.Session == nil || app.Session.LLM == nil {
+		t.Fatal("Session LLM is nil")
+	}
+	if got := llm.Label(app.Session.LLM); got != "hedra.HedraLLM" {
+		t.Fatalf("LLM label = %q, want hedra.HedraLLM", got)
+	}
+}
+
+func TestDefaultConfigFromEnvSelectsLemonSliceLLM(t *testing.T) {
+	t.Setenv("LEMONSLICE_API_KEY", "test-lemonslice-key")
+	t.Setenv("RTP_AGENT_LLM_PROVIDER", "lemonslice")
+
+	app, err := NewApp(DefaultConfigFromEnv())
+	if err != nil {
+		t.Fatalf("NewApp() error = %v", err)
+	}
+	if app.Session == nil || app.Session.LLM == nil {
+		t.Fatal("Session LLM is nil")
+	}
+	if got := llm.Label(app.Session.LLM); got != "lemonslice.LemonSliceLLM" {
+		t.Fatalf("LLM label = %q, want lemonslice.LemonSliceLLM", got)
+	}
+}
+
+func TestDefaultConfigFromEnvSelectsTrugenLLM(t *testing.T) {
+	t.Setenv("TRUGEN_API_KEY", "test-trugen-key")
+	t.Setenv("RTP_AGENT_LLM_PROVIDER", "trugen")
+
+	app, err := NewApp(DefaultConfigFromEnv())
+	if err != nil {
+		t.Fatalf("NewApp() error = %v", err)
+	}
+	if app.Session == nil || app.Session.LLM == nil {
+		t.Fatal("Session LLM is nil")
+	}
+	if got := llm.Label(app.Session.LLM); got != "trugen.TrugenLLM" {
+		t.Fatalf("LLM label = %q, want trugen.TrugenLLM", got)
+	}
+}
+
 func TestDefaultConfigFromEnvSelectsUpliftAIProviders(t *testing.T) {
 	t.Setenv("UPLIFTAI_API_KEY", "test-upliftai-key")
 	t.Setenv("RTP_AGENT_LLM_PROVIDER", "upliftai")
@@ -97,6 +196,29 @@ func TestDefaultConfigFromEnvSelectsUpliftAIProviders(t *testing.T) {
 	}
 	if got := app.Session.TTS.Label(); got != "upliftai.TTS" {
 		t.Fatalf("TTS label = %q, want upliftai.TTS", got)
+	}
+	if got := app.Session.TTS.SampleRate(); got != 24000 {
+		t.Fatalf("TTS sample rate = %d, want 24000", got)
+	}
+	if caps := app.Session.TTS.Capabilities(); caps.Streaming || caps.AlignedTranscript {
+		t.Fatalf("TTS capabilities = %+v, want non-streaming without aligned transcript", caps)
+	}
+}
+
+func TestDefaultConfigFromEnvSelectsUltravoxTTS(t *testing.T) {
+	t.Setenv("ULTRAVOX_API_KEY", "test-ultravox-key")
+	t.Setenv("RTP_AGENT_TTS_PROVIDER", "ultravox")
+	t.Setenv("RTP_AGENT_TTS_VOICE", "alloy")
+
+	app, err := NewApp(DefaultConfigFromEnv())
+	if err != nil {
+		t.Fatalf("NewApp() error = %v", err)
+	}
+	if app.Session == nil || app.Session.TTS == nil {
+		t.Fatal("Session TTS is nil")
+	}
+	if got := app.Session.TTS.Label(); got != "ultravox.TTS" {
+		t.Fatalf("TTS label = %q, want ultravox.TTS", got)
 	}
 	if got := app.Session.TTS.SampleRate(); got != 24000 {
 		t.Fatalf("TTS sample rate = %d, want 24000", got)
@@ -1454,6 +1576,82 @@ func TestDefaultConfigFromEnvAddsXAIProviderTools(t *testing.T) {
 	}
 }
 
+func TestDefaultConfigFromEnvAddsAnthropicComputerTool(t *testing.T) {
+	t.Setenv("ANTHROPIC_API_KEY", "test-anthropic-key")
+	t.Setenv("RTP_AGENT_LLM_PROVIDER", "anthropic")
+	t.Setenv("RTP_AGENT_ANTHROPIC_TOOLS", "computer")
+	t.Setenv("RTP_AGENT_ANTHROPIC_COMPUTER_WIDTH", "1280")
+	t.Setenv("RTP_AGENT_ANTHROPIC_COMPUTER_HEIGHT", "720")
+
+	app, err := NewApp(DefaultConfigFromEnv())
+	if err != nil {
+		t.Fatalf("NewApp() error = %v", err)
+	}
+	if app.Agent == nil {
+		t.Fatal("Agent is nil")
+	}
+	if len(app.Agent.Tools) != 1 {
+		t.Fatalf("len(Agent.Tools) = %d, want 1", len(app.Agent.Tools))
+	}
+	tool := app.Agent.Tools[0]
+	if tool.ID() != "computer" || tool.Name() != "computer_use" {
+		t.Fatalf("tool identity = %q/%q, want computer/computer_use", tool.ID(), tool.Name())
+	}
+	if specProvider, ok := tool.(interface {
+		AnthropicToolSpec() map[string]interface{}
+	}); ok {
+		spec := specProvider.AnthropicToolSpec()
+		if spec["display_width_px"] != 1280 || spec["display_height_px"] != 720 {
+			t.Fatalf("computer display spec = %#v, want 1280x720", spec)
+		}
+	} else {
+		t.Fatal("computer tool does not expose AnthropicToolSpec")
+	}
+}
+
+func TestDefaultConfigFromEnvSelectsAvatarProvider(t *testing.T) {
+	cases := []struct {
+		name       string
+		provider   string
+		keyEnv     string
+		wantAvatar string
+	}{
+		{name: "anam", provider: "anam", keyEnv: "ANAM_API_KEY", wantAvatar: "*anam.AnamAvatar"},
+		{name: "avatario", provider: "avatario", keyEnv: "AVATARIO_API_KEY", wantAvatar: "*avatario.AvatarioAvatar"},
+		{name: "avatartalk", provider: "avatartalk", keyEnv: "AVATARTALK_API_KEY", wantAvatar: "*avatartalk.AvatartalkAvatar"},
+		{name: "bey", provider: "bey", keyEnv: "BEY_API_KEY", wantAvatar: "*bey.BeyAvatar"},
+		{name: "bithuman", provider: "bithuman", keyEnv: "BITHUMAN_API_KEY", wantAvatar: "*bithuman.BithumanAvatar"},
+		{name: "hedra", provider: "hedra", keyEnv: "HEDRA_API_KEY", wantAvatar: "*hedra.HedraAvatar"},
+		{name: "keyframe", provider: "keyframe", keyEnv: "KEYFRAME_API_KEY", wantAvatar: "*keyframe.KeyframeAgent"},
+		{name: "lemonslice", provider: "lemonslice", keyEnv: "LEMONSLICE_API_KEY", wantAvatar: "*lemonslice.LemonsliceAvatar"},
+		{name: "liveavatar", provider: "liveavatar", keyEnv: "LIVEAVATAR_API_KEY", wantAvatar: "*liveavatar.LiveAvatar"},
+		{name: "simli", provider: "simli", keyEnv: "SIMLI_API_KEY", wantAvatar: "*simli.SimliAvatar"},
+		{name: "tavus", provider: "tavus", keyEnv: "TAVUS_API_KEY", wantAvatar: "*tavus.TavusAvatar"},
+		{name: "trugen", provider: "trugen", keyEnv: "TRUGEN_API_KEY", wantAvatar: "*trugen.TrugenAvatar"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv(tc.keyEnv, "test-avatar-key")
+			t.Setenv("RTP_AGENT_AVATAR_PROVIDER", tc.provider)
+
+			app, err := NewApp(DefaultConfigFromEnv())
+			if err != nil {
+				t.Fatalf("NewApp() error = %v", err)
+			}
+			if app.Agent == nil {
+				t.Fatal("Agent is nil")
+			}
+			if app.Agent.Avatar == nil {
+				t.Fatal("Agent Avatar is nil")
+			}
+			if got := fmt.Sprintf("%T", app.Agent.Avatar); got != tc.wantAvatar {
+				t.Fatalf("Agent Avatar type = %q, want %s", got, tc.wantAvatar)
+			}
+		})
+	}
+}
+
 func TestDefaultConfigFromEnvSelectsAWSProviders(t *testing.T) {
 	t.Setenv("AWS_REGION", "us-west-2")
 	t.Setenv("RTP_AGENT_LLM_PROVIDER", "aws")
@@ -1629,6 +1827,10 @@ func TestDefaultConfigFromEnvSelectsLiveKitInferenceLLM(t *testing.T) {
 	t.Setenv("LIVEKIT_API_SECRET", "test-livekit-secret")
 	t.Setenv("RTP_AGENT_LLM_PROVIDER", "livekit")
 	t.Setenv("RTP_AGENT_LLM_MODEL", "openai/gpt-4.1-mini")
+	t.Setenv("RTP_AGENT_STT_PROVIDER", "livekit")
+	t.Setenv("RTP_AGENT_STT_MODEL", "deepgram/nova-3")
+	t.Setenv("RTP_AGENT_TTS_PROVIDER", "livekit")
+	t.Setenv("RTP_AGENT_TTS_MODEL", "cartesia/sonic-3")
 
 	app, err := NewApp(DefaultConfigFromEnv())
 	if err != nil {
@@ -1639,6 +1841,79 @@ func TestDefaultConfigFromEnvSelectsLiveKitInferenceLLM(t *testing.T) {
 	}
 	if got := llm.Provider(app.Session.LLM); got != "livekit" {
 		t.Fatalf("LLM provider = %q, want livekit", got)
+	}
+	if app.Session.STT == nil {
+		t.Fatal("Session STT is nil")
+	}
+	if got := app.Session.STT.Label(); got != "livekit.STT" {
+		t.Fatalf("STT label = %q, want livekit.STT", got)
+	}
+	if app.Session.TTS == nil {
+		t.Fatal("Session TTS is nil")
+	}
+	if got := app.Session.TTS.Label(); got != "livekit.TTS" {
+		t.Fatalf("TTS label = %q, want livekit.TTS", got)
+	}
+}
+
+func TestDefaultConfigFromEnvSelectsLiveKitTTSTokenizer(t *testing.T) {
+	cases := []struct {
+		name         string
+		provider     string
+		wantTypeName string
+	}{
+		{name: "blingfire", provider: "blingfire", wantTypeName: "*blingfire.SentenceTokenizer"},
+		{name: "nltk", provider: "nltk", wantTypeName: "*nltk.SentenceTokenizer"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("LIVEKIT_API_KEY", "test-livekit-key")
+			t.Setenv("LIVEKIT_API_SECRET", "test-livekit-secret")
+			t.Setenv("RTP_AGENT_TTS_PROVIDER", "livekit")
+			t.Setenv("RTP_AGENT_TTS_TOKENIZER_PROVIDER", tc.provider)
+
+			app, err := NewApp(DefaultConfigFromEnv())
+			if err != nil {
+				t.Fatalf("NewApp() error = %v", err)
+			}
+			if app.Session == nil || app.Session.TTS == nil {
+				t.Fatal("Session TTS is nil")
+			}
+			field := reflect.ValueOf(app.Session.TTS).Elem().FieldByName("sentenceTokenizer")
+			if !field.IsValid() {
+				t.Fatal("livekit TTS sentenceTokenizer field is missing")
+			}
+			if field.IsNil() {
+				t.Fatal("livekit TTS sentenceTokenizer is nil")
+			}
+			if got := field.Elem().Type().String(); got != tc.wantTypeName {
+				t.Fatalf("sentenceTokenizer type = %q, want %s", got, tc.wantTypeName)
+			}
+		})
+	}
+}
+
+func TestDefaultConfigFromEnvConfiguresTTSStreamPacer(t *testing.T) {
+	t.Setenv("RTP_AGENT_TTS_STREAM_PACER_ENABLED", "true")
+	t.Setenv("RTP_AGENT_TTS_STREAM_PACER_MIN_REMAINING_AUDIO_MS", "250")
+	t.Setenv("RTP_AGENT_TTS_STREAM_PACER_MAX_TEXT_LENGTH", "120")
+
+	app, err := NewApp(DefaultConfigFromEnv())
+	if err != nil {
+		t.Fatalf("NewApp() error = %v", err)
+	}
+	if app.Session == nil {
+		t.Fatal("Session is nil")
+	}
+	if app.Session.Options.TTSStreamPacer == nil {
+		t.Fatal("Session TTSStreamPacer is nil")
+	}
+	if got := app.Session.Options.TTSStreamPacer.MinRemainingAudio; got != 250*time.Millisecond {
+		t.Fatalf("MinRemainingAudio = %v, want 250ms", got)
+	}
+	if got := app.Session.Options.TTSStreamPacer.MaxTextLength; got != 120 {
+		t.Fatalf("MaxTextLength = %d, want 120", got)
 	}
 }
 

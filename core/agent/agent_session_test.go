@@ -8,6 +8,7 @@ import (
 
 	"github.com/cavos-io/rtp-agent/core/llm"
 	"github.com/cavos-io/rtp-agent/core/stt"
+	"github.com/cavos-io/rtp-agent/core/tts"
 	"github.com/cavos-io/rtp-agent/library/telemetry"
 )
 
@@ -32,6 +33,40 @@ func TestAgentSessionGenerateReplyReturnsScheduledSpeechHandle(t *testing.T) {
 	}
 	if got, want := handle.InputDetails.Modality, "text"; got != want {
 		t.Fatalf("handle.InputDetails.Modality = %q, want %q", got, want)
+	}
+}
+
+func TestAgentSessionStartConfiguresTTSStreamPacer(t *testing.T) {
+	baseAgent := NewAgent("test")
+	baseAgent.VAD = &fakePipelineVAD{}
+	baseAgent.STT = &fakePipelineSTT{}
+	baseAgent.LLM = &fakeGenerationLLM{stream: &fakeGenerationLLMStream{}}
+	baseAgent.TTS = &fakePipelineTTS{}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	session := NewAgentSession(baseAgent, nil, AgentSessionOptions{
+		TTSStreamPacer: &tts.SentenceStreamPacerOptions{
+			MinRemainingAudio: 25 * time.Millisecond,
+			MaxTextLength:     42,
+		},
+	})
+
+	if err := session.Start(ctx); err != nil {
+		t.Fatalf("Start error = %v", err)
+	}
+
+	if session.Assistant == nil {
+		t.Fatal("Assistant is nil")
+	}
+	if session.Assistant.ttsStreamPacer == nil {
+		t.Fatal("Assistant ttsStreamPacer is nil")
+	}
+	if got := session.Assistant.ttsStreamPacer.MinRemainingAudio; got != 25*time.Millisecond {
+		t.Fatalf("MinRemainingAudio = %v, want 25ms", got)
+	}
+	if got := session.Assistant.ttsStreamPacer.MaxTextLength; got != 42 {
+		t.Fatalf("MaxTextLength = %d, want 42", got)
 	}
 }
 

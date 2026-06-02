@@ -21,6 +21,8 @@ type PipelineAgent struct {
 	tts     tts.TTS
 	chatCtx *llm.ChatContext
 
+	ttsStreamPacer *tts.SentenceStreamPacerOptions
+
 	audioInCh chan *model.AudioFrame
 	mu        sync.Mutex
 	session   *AgentSession
@@ -260,7 +262,11 @@ func (va *PipelineAgent) generateReplyWithOptions(opts pipelineReplyOptions) {
 		}
 
 		// Start TTS in parallel with LLM text
-		ttsGen, err := PerformTTSInference(ctx, va.tts, genData.TextCh)
+		ttsOpts := []TTSInferenceOption{}
+		if va.ttsStreamPacer != nil {
+			ttsOpts = append(ttsOpts, WithTTSStreamPacer(*va.ttsStreamPacer))
+		}
+		ttsGen, err := PerformTTSInference(ctx, va.tts, genData.TextCh, ttsOpts...)
 		if err != nil {
 			logger.Logger.Errorw("TTS inference failed", err)
 		} else {

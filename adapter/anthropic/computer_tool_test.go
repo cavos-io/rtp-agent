@@ -10,7 +10,8 @@ import (
 )
 
 func TestComputerToolExposesComputerUseTool(t *testing.T) {
-	toolset := NewComputerTool(browser.NewPageActions(), 1024, 768)
+	actions := browser.NewPageActions()
+	toolset := NewComputerTool(actions, 1024, 768)
 
 	tools := toolset.Tools()
 	if len(tools) != 1 {
@@ -27,8 +28,19 @@ func TestComputerToolExposesComputerUseTool(t *testing.T) {
 	if params["type"] != "object" {
 		t.Fatalf("Parameters type = %#v, want object", params["type"])
 	}
-	if out, err := tool.Execute(context.Background(), `{"action":"screenshot"}`); err != nil || out != "Action dispatched" {
-		t.Fatalf("Execute = %q/%v, want dispatch acknowledgement", out, err)
+	out, err := tool.Execute(context.Background(), `{"action":"left_click","coordinate":[10,20]}`)
+	if err != nil {
+		t.Fatalf("Execute error = %v, want nil", err)
+	}
+	if !strings.Contains(out, "(no frame available yet)") {
+		t.Fatalf("Execute output = %q, want no-frame content", out)
+	}
+	events := actions.Events()
+	if len(events) != 3 {
+		t.Fatalf("len(events) = %d, want mouse move/down/up", len(events))
+	}
+	if events[0].Type != "mouse_move" || events[0].X != 10 || events[0].Y != 20 {
+		t.Fatalf("event[0] = %#v, want mouse_move at 10,20", events[0])
 	}
 }
 

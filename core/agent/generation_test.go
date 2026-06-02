@@ -189,6 +189,45 @@ func TestPerformTTSInferenceFiltersMarkdownAcrossChunks(t *testing.T) {
 	}
 }
 
+func TestPerformTTSInferenceUsesSentenceStreamPacerWhenEnabled(t *testing.T) {
+	providerStream := newPacedGenerationTTSStream()
+	provider := &fakeGenerationTTS{stream: providerStream}
+	textCh := make(chan string, 2)
+	textCh <- "This is the first sentence. "
+	textCh <- "This is the second sentence."
+	close(textCh)
+
+	data, err := PerformTTSInference(
+		context.Background(),
+		provider,
+		textCh,
+		WithTTSStreamPacer(tts.SentenceStreamPacerOptions{
+			MinRemainingAudio: time.Nanosecond,
+			MaxTextLength:     100,
+		}),
+	)
+	if err != nil {
+		t.Fatalf("PerformTTSInference error = %v", err)
+	}
+
+	for range data.AudioCh {
+	}
+
+	got := providerStream.calls
+	if len(got) < 3 {
+		t.Fatalf("stream calls = %#v, want at least first sentence, second sentence, end input", got)
+	}
+	if got[0] != "push:This is the first sentence." {
+		t.Fatalf("first stream call = %q, want first complete sentence; calls = %#v", got[0], got)
+	}
+	if got[len(got)-1] != "end_input" {
+		t.Fatalf("last stream call = %q, want end_input; calls = %#v", got[len(got)-1], got)
+	}
+	if !strings.Contains(strings.Join(got[1:len(got)-1], " "), "This is the second sentence") {
+		t.Fatalf("stream calls = %#v, want second sentence before end_input", got)
+	}
+}
+
 func executeOneToolCall(t *testing.T, tool llm.Tool) ToolExecutionOutput {
 	t.Helper()
 
@@ -342,6 +381,62 @@ func (s *endInputGenerationTTSStream) Next() (*tts.SynthesizedAudio, error) {
 			SampleRate:        24000,
 			NumChannels:       1,
 			SamplesPerChannel: 2,
+		},
+	}, nil
+}
+
+type pacedGenerationTTSStream struct {
+	calls  []string
+	events chan string
+	ended  bool
+	closed bool
+}
+
+func newPacedGenerationTTSStream() *pacedGenerationTTSStream {
+	return &pacedGenerationTTSStream{
+		events: make(chan string, 10),
+	}
+}
+
+func (s *pacedGenerationTTSStream) PushText(text string) error {
+	s.calls = append(s.calls, "push:"+text)
+	s.events <- "audio"
+	return nil
+}
+
+func (s *pacedGenerationTTSStream) Flush() error {
+	s.calls = append(s.calls, "flush")
+	return nil
+}
+
+func (s *pacedGenerationTTSStream) EndInput() error {
+	s.calls = append(s.calls, "end_input")
+	s.ended = true
+	close(s.events)
+	return nil
+}
+
+func (s *pacedGenerationTTSStream) Close() error {
+	if !s.closed {
+		s.closed = true
+		if !s.ended {
+			close(s.events)
+		}
+	}
+	return nil
+}
+
+func (s *pacedGenerationTTSStream) Next() (*tts.SynthesizedAudio, error) {
+	_, ok := <-s.events
+	if !ok {
+		return nil, io.EOF
+	}
+	return &tts.SynthesizedAudio{
+		Frame: &model.AudioFrame{
+			Data:              []byte("audio"),
+			SampleRate:        24000,
+			NumChannels:       1,
+			SamplesPerChannel: 1,
 		},
 	}, nil
 }

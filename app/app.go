@@ -6,15 +6,23 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"time"
 
 	awspollytypes "github.com/aws/aws-sdk-go-v2/service/polly/types"
 	awstranscribetypes "github.com/aws/aws-sdk-go-v2/service/transcribestreaming/types"
+	"github.com/cavos-io/rtp-agent/adapter/anam"
 	"github.com/cavos-io/rtp-agent/adapter/anthropic"
 	"github.com/cavos-io/rtp-agent/adapter/assemblyai"
 	"github.com/cavos-io/rtp-agent/adapter/asyncai"
+	"github.com/cavos-io/rtp-agent/adapter/avatario"
+	"github.com/cavos-io/rtp-agent/adapter/avatartalk"
 	adapteraws "github.com/cavos-io/rtp-agent/adapter/aws"
 	"github.com/cavos-io/rtp-agent/adapter/azure"
 	"github.com/cavos-io/rtp-agent/adapter/baseten"
+	"github.com/cavos-io/rtp-agent/adapter/bey"
+	"github.com/cavos-io/rtp-agent/adapter/bithuman"
+	"github.com/cavos-io/rtp-agent/adapter/blingfire"
+	"github.com/cavos-io/rtp-agent/adapter/browser"
 	"github.com/cavos-io/rtp-agent/adapter/cambai"
 	"github.com/cavos-io/rtp-agent/adapter/cartesia"
 	"github.com/cavos-io/rtp-agent/adapter/cerebras"
@@ -29,13 +37,20 @@ import (
 	adaptergoogle "github.com/cavos-io/rtp-agent/adapter/google"
 	"github.com/cavos-io/rtp-agent/adapter/gradium"
 	"github.com/cavos-io/rtp-agent/adapter/groq"
+	"github.com/cavos-io/rtp-agent/adapter/hedra"
 	"github.com/cavos-io/rtp-agent/adapter/hume"
 	"github.com/cavos-io/rtp-agent/adapter/inworld"
+	"github.com/cavos-io/rtp-agent/adapter/keyframe"
+	"github.com/cavos-io/rtp-agent/adapter/langchain"
+	"github.com/cavos-io/rtp-agent/adapter/lemonslice"
+	"github.com/cavos-io/rtp-agent/adapter/liveavatar"
 	"github.com/cavos-io/rtp-agent/adapter/lmnt"
+	"github.com/cavos-io/rtp-agent/adapter/minimal"
 	"github.com/cavos-io/rtp-agent/adapter/minimax"
 	"github.com/cavos-io/rtp-agent/adapter/mistralai"
 	"github.com/cavos-io/rtp-agent/adapter/murf"
 	"github.com/cavos-io/rtp-agent/adapter/neuphonic"
+	"github.com/cavos-io/rtp-agent/adapter/nltk"
 	"github.com/cavos-io/rtp-agent/adapter/nvidia"
 	"github.com/cavos-io/rtp-agent/adapter/openai"
 	"github.com/cavos-io/rtp-agent/adapter/perplexity"
@@ -45,6 +60,7 @@ import (
 	"github.com/cavos-io/rtp-agent/adapter/rtzr"
 	"github.com/cavos-io/rtp-agent/adapter/sarvam"
 	"github.com/cavos-io/rtp-agent/adapter/silero"
+	"github.com/cavos-io/rtp-agent/adapter/simli"
 	"github.com/cavos-io/rtp-agent/adapter/simplismart"
 	"github.com/cavos-io/rtp-agent/adapter/slng"
 	"github.com/cavos-io/rtp-agent/adapter/smallestai"
@@ -52,22 +68,33 @@ import (
 	"github.com/cavos-io/rtp-agent/adapter/speechify"
 	"github.com/cavos-io/rtp-agent/adapter/speechmatics"
 	"github.com/cavos-io/rtp-agent/adapter/spitch"
+	"github.com/cavos-io/rtp-agent/adapter/tavus"
 	"github.com/cavos-io/rtp-agent/adapter/telnyx"
+	"github.com/cavos-io/rtp-agent/adapter/trugen"
+	"github.com/cavos-io/rtp-agent/adapter/ultravox"
 	"github.com/cavos-io/rtp-agent/adapter/upliftai"
 	"github.com/cavos-io/rtp-agent/adapter/xai"
 	"github.com/cavos-io/rtp-agent/core/agent"
+	"github.com/cavos-io/rtp-agent/core/inference"
 	"github.com/cavos-io/rtp-agent/core/llm"
+	coretts "github.com/cavos-io/rtp-agent/core/tts"
 	"github.com/cavos-io/rtp-agent/interface/worker"
+	"github.com/cavos-io/rtp-agent/library/tokenize"
 	goopenai "github.com/sashabaranov/go-openai"
 )
 
 const (
+	providerAnam         = "anam"
 	providerAnthropic    = "anthropic"
 	providerAssemblyAI   = "assemblyai"
 	providerAsyncAI      = "asyncai"
+	providerAvatario     = "avatario"
+	providerAvatarTalk   = "avatartalk"
 	providerAWS          = "aws"
 	providerAzure        = "azure"
 	providerBaseten      = "baseten"
+	providerBey          = "bey"
+	providerBitHuman     = "bithuman"
 	providerCambai       = "cambai"
 	providerCartesia     = "cartesia"
 	providerCerebras     = "cerebras"
@@ -82,9 +109,15 @@ const (
 	providerGoogle       = "google"
 	providerGradium      = "gradium"
 	providerGroq         = "groq"
+	providerHedra        = "hedra"
 	providerHume         = "hume"
 	providerInworld      = "inworld"
+	providerKeyframe     = "keyframe"
+	providerLangChain    = "langchain"
+	providerLemonSlice   = "lemonslice"
+	providerLiveAvatar   = "liveavatar"
 	providerLMNT         = "lmnt"
+	providerMinimal      = "minimal"
 	providerMinimax      = "minimax"
 	providerMistralAI    = "mistralai"
 	providerMurf         = "murf"
@@ -98,6 +131,7 @@ const (
 	providerRtzr         = "rtzr"
 	providerSarvam       = "sarvam"
 	providerSilero       = "silero"
+	providerSimli        = "simli"
 	providerSimplismart  = "simplismart"
 	providerSLNG         = "slng"
 	providerSmallestAI   = "smallestai"
@@ -105,7 +139,10 @@ const (
 	providerSpeechify    = "speechify"
 	providerSpeechmatics = "speechmatics"
 	providerSpitch       = "spitch"
+	providerTavus        = "tavus"
 	providerTelnyx       = "telnyx"
+	providerTrugen       = "trugen"
+	providerUltravox     = "ultravox"
 	providerUpliftAI     = "upliftai"
 	providerXAI          = "xai"
 	providerLiveKit      = "livekit"
@@ -236,6 +273,7 @@ type AppConfig struct {
 	VADDeactivationThreshold                *float64
 	VADUpdateInterval                       *float64
 	VADSampleRate                           *int
+	AvatarProvider                          string
 	TTSProvider                             string
 	TTSModel                                string
 	TTSVoice                                string
@@ -278,6 +316,13 @@ type AppConfig struct {
 	TTSLoudnessNormalization                *bool
 	TTSTextNormalization                    *bool
 	TTSDeliveryMode                         string
+	TTSTokenizerProvider                    string
+	TTSTokenizerLanguage                    string
+	TTSTokenizerMinSentenceLen              *int
+	TTSTokenizerStreamContextLen            *int
+	TTSStreamPacerEnabled                   bool
+	TTSStreamPacerMinRemainingAudioMS       *int
+	TTSStreamPacerMaxTextLength             *int
 	TTSTimestampTransportStrategy           string
 	TTSBufferCharThreshold                  *int
 	TTSMaxBufferDelayMS                     *int
@@ -289,7 +334,12 @@ type AppConfig struct {
 	RealtimeModel                           string
 
 	OpenAIAPIKey                string
+	AnamAPIKey                  string
 	AnthropicAPIKey             string
+	AvatarioAPIKey              string
+	AvatarTalkAPIKey            string
+	BeyAPIKey                   string
+	BitHumanAPIKey              string
 	GoogleAPIKey                string
 	ElevenLabsAPIKey            string
 	GroqAPIKey                  string
@@ -304,9 +354,15 @@ type AppConfig struct {
 	GladiaAPIKey                string
 	GnaniAPIKey                 string
 	GradiumAPIKey               string
+	HedraAPIKey                 string
 	HumeAPIKey                  string
 	InworldAPIKey               string
+	KeyframeAPIKey              string
+	LangChainAPIKey             string
+	LemonSliceAPIKey            string
+	LiveAvatarAPIKey            string
 	LMNTAPIKey                  string
+	MinimalAPIKey               string
 	MinimaxAPIKey               string
 	MistralAPIKey               string
 	MurfAPIKey                  string
@@ -320,6 +376,7 @@ type AppConfig struct {
 	RtzrClientSecret            string
 	RtzrAccessToken             string
 	SarvamAPIKey                string
+	SimliAPIKey                 string
 	SimplismartAPIKey           string
 	SmallestAIAPIKey            string
 	SLNGAPIKey                  string
@@ -327,9 +384,15 @@ type AppConfig struct {
 	SpeechifyAPIKey             string
 	SpeechmaticsAPIKey          string
 	SpitchAPIKey                string
+	TavusAPIKey                 string
 	TelnyxAPIKey                string
+	TrugenAPIKey                string
+	UltravoxAPIKey              string
 	UpliftAIAPIKey              string
 	XAIAPIKey                   string
+	AnthropicTools              []string
+	AnthropicComputerWidth      *int
+	AnthropicComputerHeight     *int
 	XAITools                    []string
 	XAIAllowedXHandles          []string
 	XAIFileSearchVectorStoreIDs []string
@@ -472,6 +535,7 @@ func DefaultConfigFromEnv() AppConfig {
 		VADDeactivationThreshold:                getenvOptionalFloat("RTP_AGENT_VAD_DEACTIVATION_THRESHOLD"),
 		VADUpdateInterval:                       getenvOptionalFloat("RTP_AGENT_VAD_UPDATE_INTERVAL"),
 		VADSampleRate:                           getenvOptionalInt("RTP_AGENT_VAD_SAMPLE_RATE"),
+		AvatarProvider:                          normalizedEnv("RTP_AGENT_AVATAR_PROVIDER"),
 		TTSProvider:                             normalizedEnv("RTP_AGENT_TTS_PROVIDER"),
 		TTSModel:                                os.Getenv("RTP_AGENT_TTS_MODEL"),
 		TTSVoice:                                os.Getenv("RTP_AGENT_TTS_VOICE"),
@@ -514,6 +578,13 @@ func DefaultConfigFromEnv() AppConfig {
 		TTSLoudnessNormalization:                getenvOptionalBool("RTP_AGENT_TTS_LOUDNESS_NORMALIZATION"),
 		TTSTextNormalization:                    getenvOptionalBool("RTP_AGENT_TTS_TEXT_NORMALIZATION"),
 		TTSDeliveryMode:                         os.Getenv("RTP_AGENT_TTS_DELIVERY_MODE"),
+		TTSTokenizerProvider:                    normalizedEnv("RTP_AGENT_TTS_TOKENIZER_PROVIDER"),
+		TTSTokenizerLanguage:                    os.Getenv("RTP_AGENT_TTS_TOKENIZER_LANGUAGE"),
+		TTSTokenizerMinSentenceLen:              getenvOptionalInt("RTP_AGENT_TTS_TOKENIZER_MIN_SENTENCE_LEN"),
+		TTSTokenizerStreamContextLen:            getenvOptionalInt("RTP_AGENT_TTS_TOKENIZER_STREAM_CONTEXT_LEN"),
+		TTSStreamPacerEnabled:                   getenvBool("RTP_AGENT_TTS_STREAM_PACER_ENABLED"),
+		TTSStreamPacerMinRemainingAudioMS:       getenvOptionalInt("RTP_AGENT_TTS_STREAM_PACER_MIN_REMAINING_AUDIO_MS"),
+		TTSStreamPacerMaxTextLength:             getenvOptionalInt("RTP_AGENT_TTS_STREAM_PACER_MAX_TEXT_LENGTH"),
 		TTSTimestampTransportStrategy:           os.Getenv("RTP_AGENT_TTS_TIMESTAMP_TRANSPORT_STRATEGY"),
 		TTSBufferCharThreshold:                  getenvOptionalInt("RTP_AGENT_TTS_BUFFER_CHAR_THRESHOLD"),
 		TTSMaxBufferDelayMS:                     getenvOptionalInt("RTP_AGENT_TTS_MAX_BUFFER_DELAY_MS"),
@@ -524,7 +595,12 @@ func DefaultConfigFromEnv() AppConfig {
 		RealtimeProvider:                        normalizedEnv("RTP_AGENT_REALTIME_PROVIDER"),
 		RealtimeModel:                           os.Getenv("RTP_AGENT_REALTIME_MODEL"),
 		OpenAIAPIKey:                            os.Getenv("OPENAI_API_KEY"),
+		AnamAPIKey:                              os.Getenv("ANAM_API_KEY"),
 		AnthropicAPIKey:                         os.Getenv("ANTHROPIC_API_KEY"),
+		AvatarioAPIKey:                          os.Getenv("AVATARIO_API_KEY"),
+		AvatarTalkAPIKey:                        os.Getenv("AVATARTALK_API_KEY"),
+		BeyAPIKey:                               os.Getenv("BEY_API_KEY"),
+		BitHumanAPIKey:                          os.Getenv("BITHUMAN_API_KEY"),
 		GoogleAPIKey:                            os.Getenv("GOOGLE_API_KEY"),
 		ElevenLabsAPIKey:                        firstEnv("ELEVENLABS_API_KEY", "ELEVEN_API_KEY"),
 		GroqAPIKey:                              os.Getenv("GROQ_API_KEY"),
@@ -539,9 +615,15 @@ func DefaultConfigFromEnv() AppConfig {
 		GladiaAPIKey:                            os.Getenv("GLADIA_API_KEY"),
 		GnaniAPIKey:                             os.Getenv("GNANI_API_KEY"),
 		GradiumAPIKey:                           os.Getenv("GRADIUM_API_KEY"),
+		HedraAPIKey:                             os.Getenv("HEDRA_API_KEY"),
 		HumeAPIKey:                              os.Getenv("HUME_API_KEY"),
 		InworldAPIKey:                           os.Getenv("INWORLD_API_KEY"),
+		KeyframeAPIKey:                          os.Getenv("KEYFRAME_API_KEY"),
+		LangChainAPIKey:                         os.Getenv("LANGCHAIN_API_KEY"),
+		LemonSliceAPIKey:                        os.Getenv("LEMONSLICE_API_KEY"),
+		LiveAvatarAPIKey:                        os.Getenv("LIVEAVATAR_API_KEY"),
 		LMNTAPIKey:                              os.Getenv("LMNT_API_KEY"),
+		MinimalAPIKey:                           os.Getenv("MINIMAL_API_KEY"),
 		MinimaxAPIKey:                           os.Getenv("MINIMAX_API_KEY"),
 		MistralAPIKey:                           os.Getenv("MISTRAL_API_KEY"),
 		MurfAPIKey:                              os.Getenv("MURF_API_KEY"),
@@ -555,6 +637,7 @@ func DefaultConfigFromEnv() AppConfig {
 		RtzrClientSecret:                        os.Getenv("RTZR_CLIENT_SECRET"),
 		RtzrAccessToken:                         os.Getenv("RTZR_ACCESS_TOKEN"),
 		SarvamAPIKey:                            os.Getenv("SARVAM_API_KEY"),
+		SimliAPIKey:                             os.Getenv("SIMLI_API_KEY"),
 		SimplismartAPIKey:                       os.Getenv("SIMPLISMART_API_KEY"),
 		SmallestAIAPIKey:                        os.Getenv("SMALLESTAI_API_KEY"),
 		SLNGAPIKey:                              os.Getenv("SLNG_API_KEY"),
@@ -562,9 +645,15 @@ func DefaultConfigFromEnv() AppConfig {
 		SpeechifyAPIKey:                         os.Getenv("SPEECHIFY_API_KEY"),
 		SpeechmaticsAPIKey:                      os.Getenv("SPEECHMATICS_API_KEY"),
 		SpitchAPIKey:                            os.Getenv("SPITCH_API_KEY"),
+		TavusAPIKey:                             os.Getenv("TAVUS_API_KEY"),
 		TelnyxAPIKey:                            os.Getenv("TELNYX_API_KEY"),
+		TrugenAPIKey:                            os.Getenv("TRUGEN_API_KEY"),
+		UltravoxAPIKey:                          os.Getenv("ULTRAVOX_API_KEY"),
 		UpliftAIAPIKey:                          os.Getenv("UPLIFTAI_API_KEY"),
 		XAIAPIKey:                               os.Getenv("XAI_API_KEY"),
+		AnthropicTools:                          splitEnvList("RTP_AGENT_ANTHROPIC_TOOLS"),
+		AnthropicComputerWidth:                  getenvOptionalInt("RTP_AGENT_ANTHROPIC_COMPUTER_WIDTH"),
+		AnthropicComputerHeight:                 getenvOptionalInt("RTP_AGENT_ANTHROPIC_COMPUTER_HEIGHT"),
 		XAITools:                                splitEnvList("RTP_AGENT_XAI_TOOLS"),
 		XAIAllowedXHandles:                      splitEnvList("RTP_AGENT_XAI_ALLOWED_X_HANDLES"),
 		XAIFileSearchVectorStoreIDs:             splitEnvList("RTP_AGENT_XAI_FILE_SEARCH_VECTOR_STORE_IDS"),
@@ -590,11 +679,17 @@ func NewApp(cfg AppConfig) (*App, error) {
 	if normalizeProvider(cfg.LLMProvider) == providerXAI {
 		baseAgent.Tools = append(baseAgent.Tools, xaiProviderTools(cfg)...)
 	}
+	if normalizeProvider(cfg.LLMProvider) == providerAnthropic {
+		baseAgent.Tools = append(baseAgent.Tools, anthropicProviderTools(cfg)...)
+	}
+	if err := configureAvatar(cfg, baseAgent); err != nil {
+		return nil, err
+	}
 	if err := configureVAD(cfg, baseAgent); err != nil {
 		return nil, err
 	}
 
-	session := agent.NewAgentSession(baseAgent, nil, agent.AgentSessionOptions{})
+	session := agent.NewAgentSession(baseAgent, nil, agentSessionOptionsFromConfig(cfg))
 
 	opts := cfg.WorkerOptions
 	if opts.AgentName == "" {
@@ -626,6 +721,55 @@ func (a *App) runSession(ctx *worker.JobContext) error {
 		return nil
 	}
 	return a.Session.Start(context.Background())
+}
+
+func configureAvatar(cfg AppConfig, a *agent.Agent) error {
+	switch normalizeProvider(cfg.AvatarProvider) {
+	case "":
+		return nil
+	case providerAnam:
+		a.Avatar = anam.NewAnamAvatar(cfg.AnamAPIKey)
+		return nil
+	case providerAvatario:
+		a.Avatar = avatario.NewAvatarioAvatar(cfg.AvatarioAPIKey)
+		return nil
+	case providerAvatarTalk:
+		a.Avatar = avatartalk.NewAvatartalkAvatar(cfg.AvatarTalkAPIKey)
+		return nil
+	case providerBey:
+		avatar, err := bey.NewBeyAvatar(cfg.BeyAPIKey)
+		if err != nil {
+			return err
+		}
+		a.Avatar = avatar
+		return nil
+	case providerBitHuman:
+		a.Avatar = bithuman.NewBithumanAvatar(cfg.BitHumanAPIKey)
+		return nil
+	case providerHedra:
+		a.Avatar = hedra.NewHedraAvatar(cfg.HedraAPIKey)
+		return nil
+	case providerKeyframe:
+		a.Avatar = keyframe.NewKeyframeAgent(cfg.KeyframeAPIKey)
+		return nil
+	case providerLemonSlice:
+		a.Avatar = lemonslice.NewLemonsliceAvatar(cfg.LemonSliceAPIKey)
+		return nil
+	case providerLiveAvatar:
+		a.Avatar = liveavatar.NewLiveAvatar(cfg.LiveAvatarAPIKey)
+		return nil
+	case providerSimli:
+		a.Avatar = simli.NewSimliAvatar(cfg.SimliAPIKey)
+		return nil
+	case providerTavus:
+		a.Avatar = tavus.NewTavusAvatar(cfg.TavusAPIKey)
+		return nil
+	case providerTrugen:
+		a.Avatar = trugen.NewTrugenAvatar(cfg.TrugenAPIKey)
+		return nil
+	default:
+		return fmt.Errorf("unsupported RTP_AGENT_AVATAR_PROVIDER %q", cfg.AvatarProvider)
+	}
 }
 
 func configureVAD(cfg AppConfig, a *agent.Agent) error {
@@ -701,10 +845,18 @@ func configureProviders(cfg AppConfig, a *agent.Agent) (llm.RealtimeModel, error
 		a.LLM = gradium.NewGradiumLLM(cfg.GradiumAPIKey, cfg.LLMModel)
 	case providerGroq:
 		a.LLM = groq.NewGroqLLM(cfg.GroqAPIKey, cfg.LLMModel)
+	case providerHedra:
+		a.LLM = hedra.NewHedraLLM(cfg.HedraAPIKey, cfg.LLMModel)
 	case providerHume:
 		a.LLM = hume.NewHumeLLM(cfg.HumeAPIKey, cfg.LLMModel)
 	case providerInworld:
 		a.LLM = inworld.NewInworldLLM(cfg.InworldAPIKey, cfg.LLMModel)
+	case providerLangChain:
+		a.LLM = langchain.NewLangchainLLM(cfg.LangChainAPIKey, cfg.LLMModel)
+	case providerLemonSlice:
+		a.LLM = lemonslice.NewLemonSliceLLM(cfg.LemonSliceAPIKey, cfg.LLMModel)
+	case providerMinimal:
+		a.LLM = minimal.NewMinimalLLM(cfg.MinimalAPIKey, cfg.LLMModel)
 	case providerMinimax:
 		a.LLM = minimax.NewMinimaxLLM(cfg.MinimaxAPIKey, cfg.LLMModel)
 	case providerMistralAI:
@@ -725,12 +877,16 @@ func configureProviders(cfg AppConfig, a *agent.Agent) (llm.RealtimeModel, error
 			return nil, fmt.Errorf("invalid sarvam LLM configuration")
 		}
 		a.LLM = provider
+	case providerSimli:
+		a.LLM = simli.NewSimliLLM(cfg.SimliAPIKey, cfg.LLMModel)
 	case providerSimplismart:
 		a.LLM = simplismart.NewSimplismartLLM(cfg.SimplismartAPIKey, cfg.LLMModel)
 	case providerSmallestAI:
 		a.LLM = smallestai.NewSmallestAILLM(cfg.SmallestAIAPIKey, cfg.LLMModel)
 	case providerTelnyx:
 		a.LLM = telnyx.NewTelnyxLLM(cfg.TelnyxAPIKey, cfg.LLMModel)
+	case providerTrugen:
+		a.LLM = trugen.NewTrugenLLM(cfg.TrugenAPIKey, cfg.LLMModel)
 	case providerUpliftAI:
 		a.LLM = upliftai.NewUpliftAILLM(cfg.UpliftAIAPIKey, cfg.LLMModel)
 	case providerXAI:
@@ -1641,6 +1797,8 @@ func configureProviders(cfg AppConfig, a *agent.Agent) (llm.RealtimeModel, error
 			return nil, err
 		}
 		a.STT = provider
+	case providerLiveKit:
+		a.STT = inference.NewSTT(cfg.STTModel, cfg.LiveKitInferenceAPIKey, cfg.LiveKitInferenceAPISecret)
 	default:
 		return nil, fmt.Errorf("unsupported RTP_AGENT_STT_PROVIDER %q", cfg.STTProvider)
 	}
@@ -2299,6 +2457,8 @@ func configureProviders(cfg AppConfig, a *agent.Agent) (llm.RealtimeModel, error
 			ttsOpts = append(ttsOpts, telnyx.WithTelnyxTTSBaseURL(cfg.TTSBaseURL))
 		}
 		a.TTS = telnyx.NewTelnyxTTS(cfg.TelnyxAPIKey, cfg.TTSVoice, ttsOpts...)
+	case providerUltravox:
+		a.TTS = ultravox.NewUltravoxTTS(cfg.UltravoxAPIKey, cfg.TTSVoice)
 	case providerUpliftAI:
 		a.TTS = upliftai.NewUpliftAITTS(cfg.UpliftAIAPIKey, cfg.TTSVoice)
 	case providerXAI:
@@ -2417,6 +2577,16 @@ func configureProviders(cfg AppConfig, a *agent.Agent) (llm.RealtimeModel, error
 			return nil, err
 		}
 		a.TTS = provider
+	case providerLiveKit:
+		ttsOpts := []inference.TTSOption{}
+		tokenizer, err := ttsSentenceTokenizer(cfg)
+		if err != nil {
+			return nil, err
+		}
+		if tokenizer != nil {
+			ttsOpts = append(ttsOpts, inference.WithSentenceTokenizer(tokenizer))
+		}
+		a.TTS = inference.NewTTS(cfg.TTSModel, cfg.LiveKitInferenceAPIKey, cfg.LiveKitInferenceAPISecret, ttsOpts...)
 	default:
 		return nil, fmt.Errorf("unsupported RTP_AGENT_TTS_PROVIDER %q", cfg.TTSProvider)
 	}
@@ -2437,6 +2607,46 @@ func normalizedEnv(name string) string {
 
 func normalizeProvider(provider string) string {
 	return strings.ToLower(strings.TrimSpace(provider))
+}
+
+func agentSessionOptionsFromConfig(cfg AppConfig) agent.AgentSessionOptions {
+	opts := agent.AgentSessionOptions{}
+	if cfg.TTSStreamPacerEnabled {
+		pacer := coretts.SentenceStreamPacerOptions{}
+		if cfg.TTSStreamPacerMinRemainingAudioMS != nil {
+			pacer.MinRemainingAudio = time.Duration(*cfg.TTSStreamPacerMinRemainingAudioMS) * time.Millisecond
+		}
+		if cfg.TTSStreamPacerMaxTextLength != nil {
+			pacer.MaxTextLength = *cfg.TTSStreamPacerMaxTextLength
+		}
+		opts.TTSStreamPacer = &pacer
+	}
+	return opts
+}
+
+func ttsSentenceTokenizer(cfg AppConfig) (tokenize.SentenceTokenizer, error) {
+	provider := normalizeProvider(cfg.TTSTokenizerProvider)
+	if provider == "" {
+		return nil, nil
+	}
+
+	minSentenceLen := 0
+	if cfg.TTSTokenizerMinSentenceLen != nil {
+		minSentenceLen = *cfg.TTSTokenizerMinSentenceLen
+	}
+	streamContextLen := 0
+	if cfg.TTSTokenizerStreamContextLen != nil {
+		streamContextLen = *cfg.TTSTokenizerStreamContextLen
+	}
+
+	switch provider {
+	case "blingfire":
+		return blingfire.NewSentenceTokenizer(cfg.TTSTokenizerLanguage, minSentenceLen, streamContextLen), nil
+	case "nltk":
+		return nltk.NewSentenceTokenizer(cfg.TTSTokenizerLanguage, minSentenceLen, streamContextLen), nil
+	default:
+		return nil, fmt.Errorf("unsupported RTP_AGENT_TTS_TOKENIZER_PROVIDER %q", cfg.TTSTokenizerProvider)
+	}
 }
 
 func getenvDefault(name, fallback string) string {
@@ -2734,6 +2944,26 @@ func speechmaticsPunctuationOverrides(options map[string]any) map[string]interfa
 		return nil
 	}
 	return map[string]interface{}{"permitted_marks": marks}
+}
+
+func anthropicProviderTools(cfg AppConfig) []llm.Tool {
+	tools := make([]llm.Tool, 0, len(cfg.AnthropicTools))
+	for _, tool := range cfg.AnthropicTools {
+		switch normalizeProvider(tool) {
+		case "computer", "computer_use", "computeruse":
+			width := 1024
+			if cfg.AnthropicComputerWidth != nil {
+				width = *cfg.AnthropicComputerWidth
+			}
+			height := 768
+			if cfg.AnthropicComputerHeight != nil {
+				height = *cfg.AnthropicComputerHeight
+			}
+			computer := anthropic.NewComputerTool(browser.NewPageActions(), width, height)
+			tools = append(tools, computer.Tools()...)
+		}
+	}
+	return tools
 }
 
 func xaiProviderTools(cfg AppConfig) []llm.Tool {

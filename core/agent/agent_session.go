@@ -45,6 +45,7 @@ type AgentSessionOptions struct {
 	ResumeFalseInterruption       bool
 	MinConsecutiveSpeechDelay     float64
 	UseTTSAlignedTranscript       bool
+	TTSStreamPacer                *tts.SentenceStreamPacerOptions
 	PreemptiveGeneration          bool
 	AECWarmupDuration             float64
 	TurnDetection                 TurnDetectionMode
@@ -729,6 +730,7 @@ func (s *AgentSession) Start(ctx context.Context) error {
 		s.Assistant = NewPipelineAgent(s.VAD, s.STT, s.LLM, s.TTS, s.ChatCtx)
 	}
 	assistant := s.Assistant
+	assistant.ttsStreamPacer = s.Options.TTSStreamPacer
 	agent := s.Agent
 	hasMetricsCollector := s.MetricsCollector != nil
 	s.mu.Unlock()
