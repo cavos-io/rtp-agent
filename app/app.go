@@ -84,8 +84,10 @@ import (
 	corestt "github.com/cavos-io/rtp-agent/core/stt"
 	coretts "github.com/cavos-io/rtp-agent/core/tts"
 	"github.com/cavos-io/rtp-agent/interface/worker"
+	logutil "github.com/cavos-io/rtp-agent/library/logger"
 	"github.com/cavos-io/rtp-agent/library/plugin"
 	"github.com/cavos-io/rtp-agent/library/tokenize"
+	livekitlogger "github.com/livekit/protocol/logger"
 	lksdk "github.com/livekit/server-sdk-go/v2"
 	goopenai "github.com/sashabaranov/go-openai"
 )
@@ -161,6 +163,7 @@ const (
 
 type AppConfig struct {
 	WorkerOptions worker.WorkerOptions
+	Logger        livekitlogger.Logger
 	Instructions  string
 
 	InitialChatContext                      map[string]any
@@ -758,6 +761,10 @@ func Init(cfg AppConfig) (*App, error) {
 }
 
 func NewApp(cfg AppConfig) (*App, error) {
+	if cfg.Logger != nil {
+		logutil.SetLogger(cfg.Logger)
+	}
+
 	baseAgent := agent.NewAgent(cfg.Instructions)
 	if baseAgent.Instructions == "" {
 		baseAgent.Instructions = "You are a helpful realtime voice agent."

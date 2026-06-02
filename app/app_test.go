@@ -22,7 +22,9 @@ import (
 	"github.com/cavos-io/rtp-agent/core/tts"
 	"github.com/cavos-io/rtp-agent/core/vad"
 	"github.com/cavos-io/rtp-agent/interface/worker"
+	logutil "github.com/cavos-io/rtp-agent/library/logger"
 	"github.com/cavos-io/rtp-agent/library/plugin"
+	livekitlogger "github.com/livekit/protocol/logger"
 	lksdk "github.com/livekit/server-sdk-go/v2"
 )
 
@@ -40,6 +42,23 @@ func TestAppRegistersSLNGPluginMetadata(t *testing.T) {
 		return
 	}
 	t.Fatal("SLNG plugin metadata was not registered")
+}
+
+func TestNewAppInstallsConfiguredLogger(t *testing.T) {
+	previous := logutil.Logger
+	t.Cleanup(func() { logutil.Logger = previous })
+
+	recorder := &appRecordingLogger{}
+	app, err := NewApp(AppConfig{Logger: recorder})
+	if err != nil {
+		t.Fatalf("NewApp() error = %v", err)
+	}
+	if app == nil {
+		t.Fatal("NewApp() returned nil app")
+	}
+	if logutil.Logger != recorder {
+		t.Fatal("NewApp() did not install configured logger")
+	}
 }
 
 func TestDefaultConfigFromEnvSelectsOpenAIProviders(t *testing.T) {
@@ -2656,4 +2675,35 @@ type fakeAppDtmfPublisher struct{}
 
 func (f *fakeAppDtmfPublisher) PublishDTMF(code int32, digit string) error {
 	return nil
+}
+
+type appRecordingLogger struct{}
+
+func (l *appRecordingLogger) Debugw(msg string, keysAndValues ...any)            {}
+func (l *appRecordingLogger) Infow(msg string, keysAndValues ...any)             {}
+func (l *appRecordingLogger) Warnw(msg string, err error, keysAndValues ...any)  {}
+func (l *appRecordingLogger) Errorw(msg string, err error, keysAndValues ...any) {}
+func (l *appRecordingLogger) WithValues(keysAndValues ...any) livekitlogger.Logger {
+	return l
+}
+func (l *appRecordingLogger) WithUnlikelyValues(keysAndValues ...any) livekitlogger.UnlikelyLogger {
+	return livekitlogger.GetDiscardLogger().WithUnlikelyValues(keysAndValues...)
+}
+func (l *appRecordingLogger) WithName(name string) livekitlogger.Logger {
+	return l
+}
+func (l *appRecordingLogger) WithComponent(component string) livekitlogger.Logger {
+	return l
+}
+func (l *appRecordingLogger) WithCallDepth(depth int) livekitlogger.Logger {
+	return l
+}
+func (l *appRecordingLogger) WithItemSampler() livekitlogger.Logger {
+	return l
+}
+func (l *appRecordingLogger) WithoutSampler() livekitlogger.Logger {
+	return l
+}
+func (l *appRecordingLogger) WithDeferredValues() (livekitlogger.Logger, livekitlogger.DeferredFieldResolver) {
+	return livekitlogger.GetDiscardLogger().WithDeferredValues()
 }
