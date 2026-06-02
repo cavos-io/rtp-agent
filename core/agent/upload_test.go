@@ -2,8 +2,37 @@ package agent
 
 import (
 	"context"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 )
+
+func TestUploadSessionReportUsesObservabilityURLEnvOverride(t *testing.T) {
+	requestCh := make(chan string, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requestCh <- r.URL.Path
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+	t.Setenv("LIVEKIT_OBSERVABILITY_URL", server.URL)
+
+	report := NewSessionReport()
+	report.RecordingOptions = RecordingOptions{Transcript: true}
+	report.RoomID = "RM_test"
+
+	if err := UploadSessionReport("ws://localhost:7880", "key", "secret", "agent-a", report); err != nil {
+		t.Fatalf("UploadSessionReport() error = %v", err)
+	}
+
+	select {
+	case path := <-requestCh:
+		if path != "/observability/recordings/v0" {
+			t.Fatalf("upload path = %q, want /observability/recordings/v0", path)
+		}
+	default:
+		t.Fatal("UploadSessionReport did not POST to observability URL override")
+	}
+}
 
 func TestUploadSessionReportRecordsLogsOnlySessionReport(t *testing.T) {
 	oldRecord := recordUploadTelemetryEvent

@@ -11,6 +11,7 @@ import (
 	"net/textproto"
 	"net/url"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/cavos-io/rtp-agent/library/logger"
@@ -31,13 +32,11 @@ func UploadSessionReport(
 	agentName string,
 	report *SessionReport,
 ) error {
-	u, err := url.Parse(cloudURL)
+	observabilityURL, err := observabilityURLFromLiveKitURL(cloudURL)
 	if err != nil {
-		return fmt.Errorf("failed to parse cloud URL: %w", err)
+		return err
 	}
-
-	if !utils.IsCloud(cloudURL) {
-		// Not a cloud URL, skip
+	if observabilityURL == "" {
 		logger.Logger.Infow("Not a cloud URL, skipping upload", "url", cloudURL)
 		return nil
 	}
@@ -125,7 +124,7 @@ func UploadSessionReport(
 		return fmt.Errorf("failed to close multipart writer: %w", err)
 	}
 
-	req, err := http.NewRequest("POST", fmt.Sprintf("https://%s/observability/recordings/v0", u.Host), &b)
+	req, err := http.NewRequest("POST", fmt.Sprintf("%s/observability/recordings/v0", observabilityURL), &b)
 	if err != nil {
 		return fmt.Errorf("failed to create request: %w", err)
 	}
@@ -191,4 +190,19 @@ func emitUploadTelemetryEvents(ctx context.Context, agentName string, report *Se
 
 func hasUploadRecordingOption(options RecordingOptions) bool {
 	return options.Audio || options.Traces || options.Logs || options.Transcript
+}
+
+func observabilityURLFromLiveKitURL(liveKitURL string) (string, error) {
+	if override := os.Getenv("LIVEKIT_OBSERVABILITY_URL"); override != "" {
+		return strings.TrimRight(override, "/"), nil
+	}
+
+	u, err := url.Parse(liveKitURL)
+	if err != nil {
+		return "", fmt.Errorf("failed to parse cloud URL: %w", err)
+	}
+	if !utils.IsCloud(liveKitURL) || u.Host == "" {
+		return "", nil
+	}
+	return "https://" + u.Host, nil
 }
