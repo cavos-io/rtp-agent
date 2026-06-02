@@ -27,6 +27,7 @@ import (
 	"github.com/cavos-io/rtp-agent/adapter/gladia"
 	"github.com/cavos-io/rtp-agent/adapter/gnani"
 	adaptergoogle "github.com/cavos-io/rtp-agent/adapter/google"
+	"github.com/cavos-io/rtp-agent/adapter/gradium"
 	"github.com/cavos-io/rtp-agent/adapter/groq"
 	"github.com/cavos-io/rtp-agent/adapter/openai"
 	"github.com/cavos-io/rtp-agent/core/agent"
@@ -54,6 +55,7 @@ const (
 	providerGladia     = "gladia"
 	providerGnani      = "gnani"
 	providerGoogle     = "google"
+	providerGradium    = "gradium"
 	providerGroq       = "groq"
 	providerOpenAI     = "openai"
 	providerLiveKit    = "livekit"
@@ -149,9 +151,12 @@ type AppConfig struct {
 	STTVocabularyFilterNames                string
 	STTOrganizationID                       string
 	STTUserID                               string
+	STTVADBucket                            *int
+	STTVADFlush                             *bool
 	TTSProvider                             string
 	TTSModel                                string
 	TTSVoice                                string
+	TTSVoiceID                              string
 	TTSLanguage                             string
 	TTSEncoding                             string
 	TTSSampleRate                           *int
@@ -176,6 +181,7 @@ type AppConfig struct {
 	TTSTextType                             string
 	TTSNumberOfChannels                     *int
 	TTSSampleWidth                          *int
+	TTSJSONConfig                           map[string]any
 	RealtimeProvider                        string
 	RealtimeModel                           string
 
@@ -194,6 +200,7 @@ type AppConfig struct {
 	FishAudioAPIKey   string
 	GladiaAPIKey      string
 	GnaniAPIKey       string
+	GradiumAPIKey     string
 
 	GoogleCredentialsFile string
 
@@ -297,9 +304,12 @@ func DefaultConfigFromEnv() AppConfig {
 		STTVocabularyFilterNames:                os.Getenv("RTP_AGENT_STT_VOCABULARY_FILTER_NAMES"),
 		STTOrganizationID:                       os.Getenv("RTP_AGENT_STT_ORGANIZATION_ID"),
 		STTUserID:                               os.Getenv("RTP_AGENT_STT_USER_ID"),
+		STTVADBucket:                            getenvOptionalInt("RTP_AGENT_STT_VAD_BUCKET"),
+		STTVADFlush:                             getenvOptionalBool("RTP_AGENT_STT_VAD_FLUSH"),
 		TTSProvider:                             normalizedEnv("RTP_AGENT_TTS_PROVIDER"),
 		TTSModel:                                os.Getenv("RTP_AGENT_TTS_MODEL"),
 		TTSVoice:                                os.Getenv("RTP_AGENT_TTS_VOICE"),
+		TTSVoiceID:                              os.Getenv("RTP_AGENT_TTS_VOICE_ID"),
 		TTSLanguage:                             os.Getenv("RTP_AGENT_TTS_LANGUAGE"),
 		TTSEncoding:                             os.Getenv("RTP_AGENT_TTS_ENCODING"),
 		TTSSampleRate:                           getenvOptionalInt("RTP_AGENT_TTS_SAMPLE_RATE"),
@@ -324,6 +334,7 @@ func DefaultConfigFromEnv() AppConfig {
 		TTSTextType:                             os.Getenv("RTP_AGENT_TTS_TEXT_TYPE"),
 		TTSNumberOfChannels:                     getenvOptionalInt("RTP_AGENT_TTS_NUMBER_OF_CHANNELS"),
 		TTSSampleWidth:                          getenvOptionalInt("RTP_AGENT_TTS_SAMPLE_WIDTH"),
+		TTSJSONConfig:                           splitEnvMap("RTP_AGENT_TTS_JSON_CONFIG"),
 		RealtimeProvider:                        normalizedEnv("RTP_AGENT_REALTIME_PROVIDER"),
 		RealtimeModel:                           os.Getenv("RTP_AGENT_REALTIME_MODEL"),
 		OpenAIAPIKey:                            os.Getenv("OPENAI_API_KEY"),
@@ -341,6 +352,7 @@ func DefaultConfigFromEnv() AppConfig {
 		FishAudioAPIKey:                         firstEnv("FISHAUDIO_API_KEY", "FISH_AUDIO_API_KEY"),
 		GladiaAPIKey:                            os.Getenv("GLADIA_API_KEY"),
 		GnaniAPIKey:                             os.Getenv("GNANI_API_KEY"),
+		GradiumAPIKey:                           os.Getenv("GRADIUM_API_KEY"),
 		GoogleCredentialsFile:                   firstEnv("RTP_AGENT_GOOGLE_CREDENTIALS_FILE", "GOOGLE_APPLICATION_CREDENTIALS"),
 	}
 }
@@ -415,6 +427,8 @@ func configureProviders(cfg AppConfig, a *agent.Agent) (llm.RealtimeModel, error
 			return nil, err
 		}
 		a.LLM = provider
+	case providerGradium:
+		a.LLM = gradium.NewGradiumLLM(cfg.GradiumAPIKey, cfg.LLMModel)
 	case providerGroq:
 		a.LLM = groq.NewGroqLLM(cfg.GroqAPIKey, cfg.LLMModel)
 	case providerCerebras:
@@ -826,6 +840,30 @@ func configureProviders(cfg AppConfig, a *agent.Agent) (llm.RealtimeModel, error
 			sttOpts = append(sttOpts, gnani.WithSTTUserID(cfg.STTUserID))
 		}
 		a.STT = gnani.NewSTT(cfg.GnaniAPIKey, sttOpts...)
+	case providerGradium:
+		sttOpts := []gradium.GradiumSTTOption{}
+		if cfg.STTBaseURL != "" {
+			sttOpts = append(sttOpts, gradium.WithGradiumSTTModelEndpoint(cfg.STTBaseURL))
+		}
+		if cfg.STTModel != "" {
+			sttOpts = append(sttOpts, gradium.WithGradiumSTTModelName(cfg.STTModel))
+		}
+		if cfg.STTLanguage != "" {
+			sttOpts = append(sttOpts, gradium.WithGradiumSTTLanguage(cfg.STTLanguage))
+		}
+		if cfg.STTTemperature != nil {
+			sttOpts = append(sttOpts, gradium.WithGradiumSTTTemperature(*cfg.STTTemperature))
+		}
+		if cfg.STTVADBucket != nil {
+			sttOpts = append(sttOpts, gradium.WithGradiumSTTVADBucket(cfg.STTVADBucket))
+		}
+		if cfg.STTVADFlush != nil {
+			sttOpts = append(sttOpts, gradium.WithGradiumSTTVADFlush(*cfg.STTVADFlush))
+		}
+		if cfg.STTBufferSizeSeconds != nil {
+			sttOpts = append(sttOpts, gradium.WithGradiumSTTBufferSizeSeconds(*cfg.STTBufferSizeSeconds))
+		}
+		a.STT = gradium.NewGradiumSTT(cfg.GradiumAPIKey, sttOpts...)
 	case providerAssemblyAI:
 		sttOpts := []assemblyai.AssemblyAISTTOption{}
 		if cfg.STTBaseURL != "" {
@@ -1101,6 +1139,24 @@ func configureProviders(cfg AppConfig, a *agent.Agent) (llm.RealtimeModel, error
 			ttsOpts = append(ttsOpts, gnani.WithLanguage(cfg.TTSLanguage))
 		}
 		a.TTS = gnani.NewTTS(cfg.GnaniAPIKey, ttsOpts...)
+	case providerGradium:
+		ttsOpts := []gradium.GradiumTTSOption{}
+		if cfg.TTSBaseURL != "" {
+			ttsOpts = append(ttsOpts, gradium.WithGradiumTTSModelEndpoint(cfg.TTSBaseURL))
+		}
+		if cfg.TTSModel != "" {
+			ttsOpts = append(ttsOpts, gradium.WithGradiumTTSModelName(cfg.TTSModel))
+		}
+		if cfg.TTSVoiceID != "" {
+			ttsOpts = append(ttsOpts, gradium.WithGradiumTTSVoiceID(cfg.TTSVoiceID))
+		}
+		if cfg.TTSPronunciationDictID != "" {
+			ttsOpts = append(ttsOpts, gradium.WithGradiumTTSPronunciationID(cfg.TTSPronunciationDictID))
+		}
+		if len(cfg.TTSJSONConfig) > 0 {
+			ttsOpts = append(ttsOpts, gradium.WithGradiumTTSJSONConfig(cfg.TTSJSONConfig))
+		}
+		a.TTS = gradium.NewGradiumTTS(cfg.GradiumAPIKey, cfg.TTSVoice, ttsOpts...)
 	case providerCambai:
 		ttsOpts := []cambai.CambaiTTSOption{}
 		if cfg.TTSBaseURL != "" {

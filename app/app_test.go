@@ -472,6 +472,50 @@ func TestDefaultConfigFromEnvSelectsGnaniSpeechProviders(t *testing.T) {
 	}
 }
 
+func TestDefaultConfigFromEnvSelectsGradiumProviders(t *testing.T) {
+	t.Setenv("GRADIUM_API_KEY", "test-gradium-key")
+	t.Setenv("RTP_AGENT_LLM_PROVIDER", "gradium")
+	t.Setenv("RTP_AGENT_LLM_MODEL", "gradium-llm-test")
+	t.Setenv("RTP_AGENT_STT_PROVIDER", "gradium")
+	t.Setenv("RTP_AGENT_STT_BASE_URL", "wss://gradium.example/asr")
+	t.Setenv("RTP_AGENT_STT_MODEL", "asr-test")
+	t.Setenv("RTP_AGENT_STT_LANGUAGE", "en")
+	t.Setenv("RTP_AGENT_STT_TEMPERATURE", "0.3")
+	t.Setenv("RTP_AGENT_STT_BUFFER_SIZE_SECONDS", "0.12")
+	t.Setenv("RTP_AGENT_STT_VAD_BUCKET", "3")
+	t.Setenv("RTP_AGENT_STT_VAD_FLUSH", "false")
+	t.Setenv("RTP_AGENT_TTS_PROVIDER", "gradium")
+	t.Setenv("RTP_AGENT_TTS_BASE_URL", "wss://gradium.example/tts")
+	t.Setenv("RTP_AGENT_TTS_MODEL", "tts-test")
+	t.Setenv("RTP_AGENT_TTS_VOICE", "voice-test")
+	t.Setenv("RTP_AGENT_TTS_VOICE_ID", "voice-id-test")
+	t.Setenv("RTP_AGENT_TTS_PRONUNCIATION_DICT_ID", "pronunciation-test")
+	t.Setenv("RTP_AGENT_TTS_JSON_CONFIG", "style=clear,pace=1.2")
+
+	app, err := NewApp(DefaultConfigFromEnv())
+	if err != nil {
+		t.Fatalf("NewApp() error = %v", err)
+	}
+	if app.Session == nil {
+		t.Fatal("Session is nil")
+	}
+	if app.Session.LLM == nil {
+		t.Fatal("Session LLM is nil")
+	}
+	if got := app.Session.STT.Label(); got != "gradium.STT" {
+		t.Fatalf("STT label = %q, want gradium.STT", got)
+	}
+	if caps := app.Session.STT.Capabilities(); !caps.Streaming || !caps.InterimResults || caps.OfflineRecognize {
+		t.Fatalf("STT capabilities = %+v, want streaming interim-only", caps)
+	}
+	if got := app.Session.TTS.Label(); got != "gradium.TTS" {
+		t.Fatalf("TTS label = %q, want gradium.TTS", got)
+	}
+	if got := app.Session.TTS.SampleRate(); got != 48000 {
+		t.Fatalf("TTS sample rate = %d, want 48000", got)
+	}
+}
+
 func TestDefaultConfigFromEnvSelectsAWSProviders(t *testing.T) {
 	t.Setenv("AWS_REGION", "us-west-2")
 	t.Setenv("RTP_AGENT_LLM_PROVIDER", "aws")

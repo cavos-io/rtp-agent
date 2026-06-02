@@ -4,11 +4,7 @@ import (
 	"bytes"
 	"encoding/base64"
 	"encoding/json"
-	"io"
-	"net/http"
 	"testing"
-
-	"github.com/cavos-io/rtp-agent/core/tts"
 )
 
 func TestGradiumTTSDefaultsMatchReference(t *testing.T) {
@@ -70,6 +66,44 @@ func TestGradiumTTSOptionsBuildReferenceSetupAndHeaders(t *testing.T) {
 	}
 }
 
+func TestGradiumTTSSetupOmitsUnsetOptionalFields(t *testing.T) {
+	provider := NewGradiumTTS("test-key", "",
+		WithGradiumTTSModelEndpoint("wss://gradium.example/tts/"),
+		WithGradiumTTSVoiceID(""),
+		WithGradiumTTSPronunciationID(""),
+	)
+
+	if provider.modelEndpoint != "wss://gradium.example/tts" {
+		t.Fatalf("model endpoint = %q, want trimmed endpoint", provider.modelEndpoint)
+	}
+	setup, err := buildGradiumTTSSetup(provider)
+	if err != nil {
+		t.Fatalf("build setup: %v", err)
+	}
+	if _, ok := setup["voice"]; ok {
+		t.Fatalf("voice present in setup: %#v", setup)
+	}
+	if _, ok := setup["voice_id"]; ok {
+		t.Fatalf("voice_id present in setup: %#v", setup)
+	}
+	if _, ok := setup["pronunciation_id"]; ok {
+		t.Fatalf("pronunciation_id present in setup: %#v", setup)
+	}
+}
+
+func TestGradiumTTSSetupRejectsInvalidJSONConfig(t *testing.T) {
+	provider := NewGradiumTTS("test-key", "Ava",
+		WithGradiumTTSJSONConfig(map[string]any{"bad": func() {}}),
+	)
+
+	if _, err := buildGradiumTTSSetup(provider); err == nil {
+		t.Fatal("build setup error = nil, want invalid json config error")
+	}
+	if setup := mustBuildGradiumTTSSetup(provider); len(setup) != 0 {
+		t.Fatalf("must setup = %#v, want empty setup on json config error", setup)
+	}
+}
+
 func TestGradiumTTSTextAndEndMessagesMatchReference(t *testing.T) {
 	textMessage := buildGradiumTTSTextMessage("hello")
 	assertGradiumSetup(t, textMessage, "type", "text")
@@ -77,21 +111,6 @@ func TestGradiumTTSTextAndEndMessagesMatchReference(t *testing.T) {
 
 	endMessage := buildGradiumTTSEndMessage()
 	assertGradiumSetup(t, endMessage, "type", "end_of_stream")
-}
-
-func TestGradiumTTSChunkedStreamUsesConfiguredSampleRate(t *testing.T) {
-	stream := &gradiumTTSChunkedStream{
-		resp:       &http.Response{Body: io.NopCloser(bytes.NewReader([]byte{0x01, 0x02}))},
-		sampleRate: 48000,
-	}
-
-	audio, err := stream.Next()
-	if err != nil {
-		t.Fatalf("Next returned error: %v", err)
-	}
-	if audio.Frame.SampleRate != 48000 {
-		t.Fatalf("sample rate = %d, want 48000", audio.Frame.SampleRate)
-	}
 }
 
 func TestGradiumTTSWebsocketMessageMapsAudioAndEnd(t *testing.T) {
@@ -122,5 +141,3 @@ func assertGradiumSetup(t *testing.T, payload map[string]any, key string, want s
 		t.Fatalf("%s = %#v, want %q in %s", key, got, want, encoded)
 	}
 }
-
-var _ tts.ChunkedStream = (*gradiumTTSChunkedStream)(nil)

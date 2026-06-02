@@ -190,27 +190,6 @@ func (t *GradiumTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
 	}, nil
 }
 
-type gradiumTTSChunkedStream struct {
-	resp       *http.Response
-	sampleRate int
-}
-
-func (s *gradiumTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
-	buf := make([]byte, 4096)
-	n, err := s.resp.Body.Read(buf)
-	if err != nil {
-		if err == io.EOF {
-			return nil, io.EOF
-		}
-		return nil, err
-	}
-	return gradiumTTSAudioFrame(buf[:n], s.sampleRate), nil
-}
-
-func (s *gradiumTTSChunkedStream) Close() error {
-	return s.resp.Body.Close()
-}
-
 type gradiumTTSWebsocketChunkedStream struct {
 	conn       *websocket.Conn
 	sampleRate int
