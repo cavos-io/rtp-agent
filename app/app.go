@@ -16,6 +16,7 @@ import (
 	"github.com/cavos-io/rtp-agent/adapter/azure"
 	"github.com/cavos-io/rtp-agent/adapter/baseten"
 	"github.com/cavos-io/rtp-agent/adapter/cambai"
+	"github.com/cavos-io/rtp-agent/adapter/elevenlabs"
 	adaptergoogle "github.com/cavos-io/rtp-agent/adapter/google"
 	"github.com/cavos-io/rtp-agent/adapter/openai"
 	"github.com/cavos-io/rtp-agent/core/agent"
@@ -32,6 +33,7 @@ const (
 	providerAzure      = "azure"
 	providerBaseten    = "baseten"
 	providerCambai     = "cambai"
+	providerElevenLabs = "elevenlabs"
 	providerGoogle     = "google"
 	providerOpenAI     = "openai"
 	providerLiveKit    = "livekit"
@@ -54,6 +56,8 @@ type AppConfig struct {
 	STTPunctuate                    *bool
 	STTSpokenPunctuation            *bool
 	STTProfanityFilter              *bool
+	STTTagAudioEvents               *bool
+	STTIncludeTimestamps            *bool
 	STTPrompt                       string
 	STTBaseURL                      string
 	STTSampleRate                   *int
@@ -67,6 +71,7 @@ type AppConfig struct {
 	STTInterruptionDelay            *int
 	STTKeytermsPrompt               []string
 	STTVADThreshold                 *float64
+	STTVADSilenceThresholdSeconds   *float64
 	STTSpeakerLabels                *bool
 	STTMaxSpeakers                  *int
 	STTDomain                       string
@@ -96,6 +101,7 @@ type AppConfig struct {
 	TTSMaxTokens                    *int
 	TTSBufferSize                   *int
 	TTSEnhanceNamedEntities         *bool
+	TTSEnableSSMLParsing            *bool
 	TTSInstructions                 string
 	TTSResponseFormat               string
 	TTSBaseURL                      string
@@ -103,9 +109,10 @@ type AppConfig struct {
 	RealtimeProvider                string
 	RealtimeModel                   string
 
-	OpenAIAPIKey    string
-	AnthropicAPIKey string
-	GoogleAPIKey    string
+	OpenAIAPIKey     string
+	AnthropicAPIKey  string
+	GoogleAPIKey     string
+	ElevenLabsAPIKey string
 
 	GoogleCredentialsFile string
 
@@ -136,6 +143,8 @@ func DefaultConfigFromEnv() AppConfig {
 		STTPunctuate:                    getenvOptionalBool("RTP_AGENT_STT_PUNCTUATE"),
 		STTSpokenPunctuation:            getenvOptionalBool("RTP_AGENT_STT_SPOKEN_PUNCTUATION"),
 		STTProfanityFilter:              getenvOptionalBool("RTP_AGENT_STT_PROFANITY_FILTER"),
+		STTTagAudioEvents:               getenvOptionalBool("RTP_AGENT_STT_TAG_AUDIO_EVENTS"),
+		STTIncludeTimestamps:            getenvOptionalBool("RTP_AGENT_STT_INCLUDE_TIMESTAMPS"),
 		STTPrompt:                       os.Getenv("RTP_AGENT_STT_PROMPT"),
 		STTBaseURL:                      os.Getenv("RTP_AGENT_STT_BASE_URL"),
 		STTSampleRate:                   getenvOptionalInt("RTP_AGENT_STT_SAMPLE_RATE"),
@@ -149,6 +158,7 @@ func DefaultConfigFromEnv() AppConfig {
 		STTInterruptionDelay:            getenvOptionalInt("RTP_AGENT_STT_INTERRUPTION_DELAY"),
 		STTKeytermsPrompt:               splitEnvList("RTP_AGENT_STT_KEYTERMS_PROMPT"),
 		STTVADThreshold:                 getenvOptionalFloat("RTP_AGENT_STT_VAD_THRESHOLD"),
+		STTVADSilenceThresholdSeconds:   getenvOptionalFloat("RTP_AGENT_STT_VAD_SILENCE_THRESHOLD_SECONDS"),
 		STTSpeakerLabels:                getenvOptionalBool("RTP_AGENT_STT_SPEAKER_LABELS"),
 		STTMaxSpeakers:                  getenvOptionalInt("RTP_AGENT_STT_MAX_SPEAKERS"),
 		STTDomain:                       os.Getenv("RTP_AGENT_STT_DOMAIN"),
@@ -178,6 +188,7 @@ func DefaultConfigFromEnv() AppConfig {
 		TTSMaxTokens:                    getenvOptionalInt("RTP_AGENT_TTS_MAX_TOKENS"),
 		TTSBufferSize:                   getenvOptionalInt("RTP_AGENT_TTS_BUFFER_SIZE"),
 		TTSEnhanceNamedEntities:         getenvOptionalBool("RTP_AGENT_TTS_ENHANCE_NAMED_ENTITIES"),
+		TTSEnableSSMLParsing:            getenvOptionalBool("RTP_AGENT_TTS_ENABLE_SSML_PARSING"),
 		TTSInstructions:                 os.Getenv("RTP_AGENT_TTS_INSTRUCTIONS"),
 		TTSResponseFormat:               os.Getenv("RTP_AGENT_TTS_RESPONSE_FORMAT"),
 		TTSBaseURL:                      os.Getenv("RTP_AGENT_TTS_BASE_URL"),
@@ -187,6 +198,7 @@ func DefaultConfigFromEnv() AppConfig {
 		OpenAIAPIKey:                    os.Getenv("OPENAI_API_KEY"),
 		AnthropicAPIKey:                 os.Getenv("ANTHROPIC_API_KEY"),
 		GoogleAPIKey:                    os.Getenv("GOOGLE_API_KEY"),
+		ElevenLabsAPIKey:                firstEnv("ELEVENLABS_API_KEY", "ELEVEN_API_KEY"),
 		GoogleCredentialsFile:           firstEnv("RTP_AGENT_GOOGLE_CREDENTIALS_FILE", "GOOGLE_APPLICATION_CREDENTIALS"),
 	}
 }
@@ -403,6 +415,38 @@ func configureProviders(cfg AppConfig, a *agent.Agent) (llm.RealtimeModel, error
 			return nil, err
 		}
 		a.STT = provider
+	case providerElevenLabs:
+		sttOpts := []elevenlabs.ElevenLabsSTTOption{}
+		if cfg.STTBaseURL != "" {
+			sttOpts = append(sttOpts, elevenlabs.WithElevenLabsSTTBaseURL(cfg.STTBaseURL))
+		}
+		if cfg.STTModel != "" {
+			sttOpts = append(sttOpts, elevenlabs.WithElevenLabsSTTModel(cfg.STTModel))
+		}
+		if cfg.STTLanguage != "" {
+			sttOpts = append(sttOpts, elevenlabs.WithElevenLabsSTTLanguage(cfg.STTLanguage))
+		}
+		if cfg.STTTagAudioEvents != nil {
+			sttOpts = append(sttOpts, elevenlabs.WithElevenLabsSTTTagAudioEvents(*cfg.STTTagAudioEvents))
+		}
+		if cfg.STTIncludeTimestamps != nil {
+			sttOpts = append(sttOpts, elevenlabs.WithElevenLabsSTTIncludeTimestamps(*cfg.STTIncludeTimestamps))
+		}
+		if cfg.STTSampleRate != nil {
+			sttOpts = append(sttOpts, elevenlabs.WithElevenLabsSTTSampleRate(*cfg.STTSampleRate))
+		}
+		if cfg.STTVADThreshold != nil || cfg.STTVADSilenceThresholdSeconds != nil {
+			sttOpts = append(sttOpts, elevenlabs.WithElevenLabsSTTServerVAD(elevenlabs.ElevenLabsVADOptions{
+				VADSilenceThresholdSecs: cfg.STTVADSilenceThresholdSeconds,
+				VADThreshold:            cfg.STTVADThreshold,
+				MinSpeechDurationMS:     cfg.STTMinTurnSilence,
+				MinSilenceDurationMS:    cfg.STTMaxTurnSilence,
+			}))
+		}
+		if len(cfg.STTKeytermsPrompt) > 0 {
+			sttOpts = append(sttOpts, elevenlabs.WithElevenLabsSTTKeyterms(cfg.STTKeytermsPrompt))
+		}
+		a.STT = elevenlabs.NewElevenLabsSTT(cfg.ElevenLabsAPIKey, sttOpts...)
 	case providerAssemblyAI:
 		sttOpts := []assemblyai.AssemblyAISTTOption{}
 		if cfg.STTBaseURL != "" {
@@ -534,6 +578,25 @@ func configureProviders(cfg AppConfig, a *agent.Agent) (llm.RealtimeModel, error
 		a.TTS = provider
 	case providerGoogle:
 		provider, err := adaptergoogle.NewGoogleTTS(cfg.GoogleCredentialsFile)
+		if err != nil {
+			return nil, err
+		}
+		a.TTS = provider
+	case providerElevenLabs:
+		ttsOpts := []elevenlabs.ElevenLabsTTSOption{}
+		if cfg.TTSBaseURL != "" {
+			ttsOpts = append(ttsOpts, elevenlabs.WithElevenLabsBaseURL(cfg.TTSBaseURL))
+		}
+		if cfg.TTSLanguage != "" {
+			ttsOpts = append(ttsOpts, elevenlabs.WithElevenLabsLanguage(cfg.TTSLanguage))
+		}
+		if cfg.TTSEnableSSMLParsing != nil {
+			ttsOpts = append(ttsOpts, elevenlabs.WithElevenLabsEnableSSMLParsing(*cfg.TTSEnableSSMLParsing))
+		}
+		if cfg.TTSEncoding != "" {
+			ttsOpts = append(ttsOpts, elevenlabs.WithElevenLabsEncoding(cfg.TTSEncoding))
+		}
+		provider, err := elevenlabs.NewElevenLabsTTS(cfg.ElevenLabsAPIKey, cfg.TTSVoice, cfg.TTSModel, ttsOpts...)
 		if err != nil {
 			return nil, err
 		}
