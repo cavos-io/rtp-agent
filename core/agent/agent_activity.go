@@ -639,6 +639,13 @@ func (a *AgentActivity) completeUserTurn(ctx context.Context, info EndOfTurnInfo
 	if a.Agent.LLM == nil || a.Session == nil {
 		return nil, nil
 	}
+	a.queueMu.Lock()
+	schedulingPaused = a.schedulingPaused || a.schedulingDraining
+	a.queueMu.Unlock()
+	if schedulingPaused {
+		logger.Logger.Warnw("skipping reply to user input, speech scheduling is paused", nil, "userInput", info.NewTranscript)
+		return nil, nil
+	}
 	return a.Session.GenerateReplyWithOptions(ctx, GenerateReplyOptions{
 		UserMessage:   newMsg,
 		ChatCtx:       chatCtx,

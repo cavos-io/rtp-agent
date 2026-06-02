@@ -634,6 +634,44 @@ func TestAgentActivityCommitUserTurnSkipsWhenSchedulingPaused(t *testing.T) {
 	}
 }
 
+func TestAgentActivityCommitUserTurnSkipsReplyWhenHookPausesScheduling(t *testing.T) {
+	agent := &pausingTurnAgent{
+		Agent: NewAgent("test"),
+		turns: make(chan *llm.ChatMessage, 1),
+	}
+	agent.TurnDetection = TurnDetectionModeManual
+	agent.LLM = &fakeGenerationLLM{stream: &fakeGenerationLLMStream{}}
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	activity := NewAgentActivity(agent, session)
+	agent.activity = activity
+	session.activity = activity
+
+	activity.OnFinalTranscript(&stt.SpeechEvent{
+		Alternatives: []stt.SpeechData{{Text: "pause after hook"}},
+	})
+
+	transcript, err := activity.CommitUserTurn(context.Background(), CommitUserTurnOptions{})
+	if err != nil {
+		t.Fatalf("CommitUserTurn error = %v, want nil", err)
+	}
+	if transcript != "pause after hook" {
+		t.Fatalf("CommitUserTurn transcript = %q, want pause after hook", transcript)
+	}
+	select {
+	case msg := <-agent.turns:
+		if msg.TextContent() != "pause after hook" {
+			t.Fatalf("OnUserTurnCompleted message = %q, want pause after hook", msg.TextContent())
+		}
+	default:
+		t.Fatal("OnUserTurnCompleted was not called")
+	}
+	select {
+	case ev := <-session.SpeechCreatedEvents():
+		t.Fatalf("reply generated after hook paused scheduling: %#v", ev)
+	case <-time.After(20 * time.Millisecond):
+	}
+}
+
 func TestAgentActivityCommitUserTurnSkipsReplyWhenLLMMissing(t *testing.T) {
 	agent := NewAgent("test")
 	agent.TurnDetection = TurnDetectionModeManual
@@ -729,6 +767,17 @@ type turnCompletedAgent struct {
 
 func (a *turnCompletedAgent) OnUserTurnCompleted(ctx context.Context, chatCtx *llm.ChatContext, newMsg *llm.ChatMessage) error {
 	a.turns <- newMsg
+	return nil
+}
+
+type pausingTurnAgent struct {
+	*Agent
+	turns chan *llm.ChatMessage
+}
+
+func (a *pausingTurnAgent) OnUserTurnCompleted(ctx context.Context, chatCtx *llm.ChatContext, newMsg *llm.ChatMessage) error {
+	a.turns <- newMsg
+	a.activity.schedulingPaused = true
 	return nil
 }
 
