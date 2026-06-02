@@ -40,6 +40,7 @@ import (
 	"github.com/cavos-io/rtp-agent/adapter/resemble"
 	"github.com/cavos-io/rtp-agent/adapter/respeecher"
 	"github.com/cavos-io/rtp-agent/adapter/rime"
+	"github.com/cavos-io/rtp-agent/adapter/rtzr"
 	"github.com/cavos-io/rtp-agent/adapter/sarvam"
 	"github.com/cavos-io/rtp-agent/adapter/slng"
 	"github.com/cavos-io/rtp-agent/core/agent"
@@ -80,6 +81,7 @@ const (
 	providerResemble   = "resemble"
 	providerRespeecher = "respeecher"
 	providerRime       = "rime"
+	providerRtzr       = "rtzr"
 	providerSarvam     = "sarvam"
 	providerSLNG       = "slng"
 	providerLiveKit    = "livekit"
@@ -272,6 +274,9 @@ type AppConfig struct {
 	ResembleAPIKey    string
 	RespeecherAPIKey  string
 	RimeAPIKey        string
+	RtzrClientID      string
+	RtzrClientSecret  string
+	RtzrAccessToken   string
 	SarvamAPIKey      string
 	SLNGAPIKey        string
 
@@ -473,6 +478,9 @@ func DefaultConfigFromEnv() AppConfig {
 		ResembleAPIKey:                          os.Getenv("RESEMBLE_API_KEY"),
 		RespeecherAPIKey:                        os.Getenv("RESPEECHER_API_KEY"),
 		RimeAPIKey:                              os.Getenv("RIME_API_KEY"),
+		RtzrClientID:                            os.Getenv("RTZR_CLIENT_ID"),
+		RtzrClientSecret:                        os.Getenv("RTZR_CLIENT_SECRET"),
+		RtzrAccessToken:                         os.Getenv("RTZR_ACCESS_TOKEN"),
 		SarvamAPIKey:                            os.Getenv("SARVAM_API_KEY"),
 		SLNGAPIKey:                              os.Getenv("SLNG_API_KEY"),
 		GoogleCredentialsFile:                   firstEnv("RTP_AGENT_GOOGLE_CREDENTIALS_FILE", "GOOGLE_APPLICATION_CREDENTIALS"),
@@ -1164,6 +1172,48 @@ func configureProviders(cfg AppConfig, a *agent.Agent) (llm.RealtimeModel, error
 			return nil, fmt.Errorf("invalid sarvam STT configuration")
 		}
 		a.STT = provider
+	case providerRtzr:
+		sttOpts := []rtzr.RtzrSTTOption{}
+		if cfg.RtzrClientSecret != "" {
+			sttOpts = append(sttOpts, rtzr.WithRtzrClientSecret(cfg.RtzrClientSecret))
+		}
+		if cfg.RtzrAccessToken != "" {
+			sttOpts = append(sttOpts, rtzr.WithRtzrAccessToken(cfg.RtzrAccessToken))
+		}
+		if cfg.STTBaseURL != "" {
+			sttOpts = append(sttOpts, rtzr.WithRtzrAPIBase(cfg.STTBaseURL))
+		}
+		if cfg.STTStreamingURL != "" {
+			sttOpts = append(sttOpts, rtzr.WithRtzrWSBase(cfg.STTStreamingURL))
+		}
+		if cfg.STTModel != "" {
+			sttOpts = append(sttOpts, rtzr.WithRtzrModel(cfg.STTModel))
+		}
+		if cfg.STTLanguage != "" {
+			sttOpts = append(sttOpts, rtzr.WithRtzrLanguage(cfg.STTLanguage))
+		}
+		if cfg.STTSampleRate != nil {
+			sttOpts = append(sttOpts, rtzr.WithRtzrSampleRate(*cfg.STTSampleRate))
+		}
+		if cfg.STTDomain != "" {
+			sttOpts = append(sttOpts, rtzr.WithRtzrDomain(cfg.STTDomain))
+		}
+		if cfg.STTEndpointingSeconds != nil {
+			sttOpts = append(sttOpts, rtzr.WithRtzrEPDTime(*cfg.STTEndpointingSeconds))
+		}
+		if cfg.STTVADThreshold != nil {
+			sttOpts = append(sttOpts, rtzr.WithRtzrNoiseThreshold(*cfg.STTVADThreshold))
+		}
+		if cfg.STTEndOfTurnConfidenceThreshold != nil {
+			sttOpts = append(sttOpts, rtzr.WithRtzrActiveThreshold(*cfg.STTEndOfTurnConfidenceThreshold))
+		}
+		if cfg.STTPunctuate != nil {
+			sttOpts = append(sttOpts, rtzr.WithRtzrUsePunctuation(*cfg.STTPunctuate))
+		}
+		if len(cfg.STTKeytermsPrompt) > 0 {
+			sttOpts = append(sttOpts, rtzr.WithRtzrKeywords(cfg.STTKeytermsPrompt))
+		}
+		a.STT = rtzr.NewRtzrSTT(cfg.RtzrClientID, sttOpts...)
 	case providerAssemblyAI:
 		sttOpts := []assemblyai.AssemblyAISTTOption{}
 		if cfg.STTBaseURL != "" {

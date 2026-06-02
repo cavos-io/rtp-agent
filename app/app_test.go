@@ -924,6 +924,38 @@ func TestDefaultConfigFromEnvSelectsSarvamProviders(t *testing.T) {
 	}
 }
 
+func TestDefaultConfigFromEnvSelectsRtzrSTT(t *testing.T) {
+	t.Setenv("RTZR_CLIENT_ID", "client-id")
+	t.Setenv("RTZR_CLIENT_SECRET", "client-secret")
+	t.Setenv("RTZR_ACCESS_TOKEN", "access-token")
+	t.Setenv("RTP_AGENT_STT_PROVIDER", "rtzr")
+	t.Setenv("RTP_AGENT_STT_BASE_URL", "https://rtzr.example")
+	t.Setenv("RTP_AGENT_STT_STREAMING_URL", "wss://rtzr.example")
+	t.Setenv("RTP_AGENT_STT_MODEL", "sommers_ko")
+	t.Setenv("RTP_AGENT_STT_LANGUAGE", "ko")
+	t.Setenv("RTP_AGENT_STT_SAMPLE_RATE", "16000")
+	t.Setenv("RTP_AGENT_STT_DOMAIN", "CALL")
+	t.Setenv("RTP_AGENT_STT_ENDPOINTING_SECONDS", "0.7")
+	t.Setenv("RTP_AGENT_STT_VAD_THRESHOLD", "0.6")
+	t.Setenv("RTP_AGENT_STT_END_OF_TURN_CONFIDENCE_THRESHOLD", "0.8")
+	t.Setenv("RTP_AGENT_STT_PUNCTUATE", "true")
+	t.Setenv("RTP_AGENT_STT_KEYTERMS_PROMPT", "livekit,agents")
+
+	app, err := NewApp(DefaultConfigFromEnv())
+	if err != nil {
+		t.Fatalf("NewApp() error = %v", err)
+	}
+	if app.Session == nil || app.Session.STT == nil {
+		t.Fatal("Session STT is nil")
+	}
+	if got := app.Session.STT.Label(); got != "rtzr.STT" {
+		t.Fatalf("STT label = %q, want rtzr.STT", got)
+	}
+	if caps := app.Session.STT.Capabilities(); !caps.Streaming || !caps.InterimResults || caps.OfflineRecognize {
+		t.Fatalf("STT capabilities = %+v, want streaming interim without offline recognize", caps)
+	}
+}
+
 func TestDefaultConfigFromEnvSelectsSLNGSpeechProviders(t *testing.T) {
 	t.Setenv("SLNG_API_KEY", "test-slng-key")
 	t.Setenv("RTP_AGENT_STT_PROVIDER", "slng")
