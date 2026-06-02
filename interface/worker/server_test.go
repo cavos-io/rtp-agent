@@ -1628,6 +1628,65 @@ func TestAgentServerRunReloadIPCSessionRequestsThenProcessesMessages(t *testing.
 	}
 }
 
+func TestAgentServerStartReloadIPCSessionFromEnvDialsUnixSocket(t *testing.T) {
+	socketPath := tempWorkerUnixSocketPath(t)
+	listener, err := net.Listen("unix", socketPath)
+	if err != nil {
+		t.Fatalf("Listen unix: %v", err)
+	}
+	defer listener.Close()
+	t.Setenv("RTP_AGENT_RELOAD_IPC", socketPath)
+
+	server := NewAgentServer(WorkerOptions{})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	server.startReloadIPCSessionFromEnv(ctx)
+
+	connCh := make(chan net.Conn, 1)
+	errCh := make(chan error, 1)
+	go func() {
+		conn, err := listener.Accept()
+		if err != nil {
+			errCh <- err
+			return
+		}
+		connCh <- conn
+	}()
+
+	var conn net.Conn
+	select {
+	case conn = <-connCh:
+	case err := <-errCh:
+		t.Fatalf("Accept reload IPC connection: %v", err)
+	case <-time.After(time.Second):
+		t.Fatal("worker did not dial reload IPC socket")
+	}
+	defer conn.Close()
+
+	if err := conn.SetReadDeadline(time.Now().Add(time.Second)); err != nil {
+		t.Fatalf("SetReadDeadline: %v", err)
+	}
+	msg, err := ipc.ReadMessage(conn)
+	if err != nil {
+		t.Fatalf("ReadMessage initial reload request: %v", err)
+	}
+	if msg.Type != ipc.MessageTypeReloadJobsRequest {
+		t.Fatalf("initial request Type = %q, want %q", msg.Type, ipc.MessageTypeReloadJobsRequest)
+	}
+}
+
+func tempWorkerUnixSocketPath(t *testing.T) string {
+	t.Helper()
+	dir, err := os.MkdirTemp("/tmp", "rtp-agent-reload-test-*")
+	if err != nil {
+		t.Fatalf("MkdirTemp /tmp: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = os.RemoveAll(dir)
+	})
+	return filepath.Join(dir, "reload.sock")
+}
+
 func mustWorkerIPCMessage(t *testing.T, payload any) ipc.Message {
 	t.Helper()
 	msg, err := ipc.NewMessage(payload)

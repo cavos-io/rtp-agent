@@ -477,13 +477,13 @@ func (s *AgentServer) startReloadIPCSessionFromEnv(ctx context.Context) {
 		return
 	}
 	go func() {
-		file, err := os.OpenFile(path, os.O_RDWR, 0)
+		conn, err := net.Dial("unix", path)
 		if err != nil {
-			logger.Logger.Errorw("failed to open reload IPC", err, "path", path)
+			logger.Logger.Errorw("failed to connect reload IPC", err, "path", path)
 			return
 		}
-		defer file.Close()
-		if err := s.runReloadIPCSession(ctx, file, 0, time.Now()); err != nil && !errors.Is(err, context.Canceled) {
+		defer conn.Close()
+		if err := s.runReloadIPCSession(ctx, conn, 0, time.Now()); err != nil && !errors.Is(err, context.Canceled) {
 			logger.Logger.Errorw("reload IPC session failed", err, "path", path)
 		}
 	}()
