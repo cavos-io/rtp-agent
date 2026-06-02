@@ -638,7 +638,8 @@ func (a *AgentActivity) completeUserTurn(ctx context.Context, info EndOfTurnInfo
 		if errors.As(err, &stopResponse) {
 			return nil, nil
 		}
-		return nil, err
+		logger.Logger.Errorw("error occurred during on_user_turn_completed", err)
+		return nil, nil
 	}
 	if a.Agent.LLM == nil || a.Session == nil {
 		return nil, nil

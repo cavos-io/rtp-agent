@@ -710,6 +710,45 @@ func TestAgentActivityCommitUserTurnStopResponseSkipsReply(t *testing.T) {
 	}
 }
 
+func TestAgentActivityCommitUserTurnHookErrorSkipsReply(t *testing.T) {
+	agent := &errorTurnAgent{
+		Agent: NewAgent("test"),
+		turns: make(chan *llm.ChatMessage, 1),
+		err:   errors.New("hook failed"),
+	}
+	agent.TurnDetection = TurnDetectionModeManual
+	agent.LLM = &fakeGenerationLLM{stream: &fakeGenerationLLMStream{}}
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	activity := NewAgentActivity(agent, session)
+	agent.activity = activity
+	session.activity = activity
+
+	activity.OnFinalTranscript(&stt.SpeechEvent{
+		Alternatives: []stt.SpeechData{{Text: "hook error"}},
+	})
+
+	transcript, err := activity.CommitUserTurn(context.Background(), CommitUserTurnOptions{})
+	if err != nil {
+		t.Fatalf("CommitUserTurn error = %v, want nil for hook error", err)
+	}
+	if transcript != "hook error" {
+		t.Fatalf("CommitUserTurn transcript = %q, want hook error", transcript)
+	}
+	select {
+	case msg := <-agent.turns:
+		if msg.TextContent() != "hook error" {
+			t.Fatalf("OnUserTurnCompleted message = %q, want hook error", msg.TextContent())
+		}
+	default:
+		t.Fatal("OnUserTurnCompleted was not called")
+	}
+	select {
+	case ev := <-session.SpeechCreatedEvents():
+		t.Fatalf("reply generated after hook error: %#v", ev)
+	case <-time.After(20 * time.Millisecond):
+	}
+}
+
 func TestAgentActivityCommitUserTurnSkipsReplyWhenLLMMissing(t *testing.T) {
 	agent := NewAgent("test")
 	agent.TurnDetection = TurnDetectionModeManual
@@ -827,6 +866,17 @@ type stopResponseTurnAgent struct {
 func (a *stopResponseTurnAgent) OnUserTurnCompleted(ctx context.Context, chatCtx *llm.ChatContext, newMsg *llm.ChatMessage) error {
 	a.turns <- newMsg
 	return llm.StopResponse{}
+}
+
+type errorTurnAgent struct {
+	*Agent
+	turns chan *llm.ChatMessage
+	err   error
+}
+
+func (a *errorTurnAgent) OnUserTurnCompleted(ctx context.Context, chatCtx *llm.ChatContext, newMsg *llm.ChatMessage) error {
+	a.turns <- newMsg
+	return a.err
 }
 
 type turnDetectorFunc func(context.Context, *llm.ChatContext) (float64, error)
