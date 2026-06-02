@@ -56,6 +56,64 @@ func (c *ComputerTool) Execute(ctx context.Context, action string, args map[stri
 			return nil, err
 		}
 		c.actions.DoubleClick(x, y)
+	case "triple_click":
+		x, y, err := requireCoordinate(args, "coordinate")
+		if err != nil {
+			return nil, err
+		}
+		c.actions.TripleClick(x, y)
+	case "middle_click":
+		x, y, err := requireCoordinate(args, "coordinate")
+		if err != nil {
+			return nil, err
+		}
+		c.actions.MiddleClick(x, y)
+	case "mouse_move":
+		x, y, err := requireCoordinate(args, "coordinate")
+		if err != nil {
+			return nil, err
+		}
+		c.actions.MouseMove(x, y)
+	case "left_click_drag":
+		sx, sy, err := requireCoordinate(args, "start_coordinate")
+		if err != nil {
+			return nil, err
+		}
+		ex, ey, err := requireCoordinate(args, "coordinate")
+		if err != nil {
+			return nil, err
+		}
+		c.actions.LeftClickDrag(sx, sy, ex, ey)
+	case "left_mouse_down":
+		x, y, err := requireCoordinate(args, "coordinate")
+		if err != nil {
+			return nil, err
+		}
+		c.actions.LeftMouseDown(x, y)
+	case "left_mouse_up":
+		x, y, err := requireCoordinate(args, "coordinate")
+		if err != nil {
+			return nil, err
+		}
+		c.actions.LeftMouseUp(x, y)
+	case "scroll":
+		x, y, err := requireCoordinate(args, "coordinate")
+		if err != nil {
+			return nil, err
+		}
+		direction, _ := args["scroll_direction"].(string)
+		if direction == "" {
+			direction = "down"
+		}
+		amount := 3
+		if rawAmount, ok := args["scroll_amount"]; ok {
+			parsedAmount, err := requireInt(rawAmount, "scroll_amount")
+			if err != nil {
+				return nil, err
+			}
+			amount = parsedAmount
+		}
+		c.actions.Scroll(x, y, direction, amount)
 	case "type":
 		text, ok := args["text"].(string)
 		if !ok {
@@ -68,6 +126,20 @@ func (c *ComputerTool) Execute(ctx context.Context, action string, args map[stri
 			return nil, fmt.Errorf("missing required argument: 'text'")
 		}
 		c.actions.Key(text)
+	case "hold_key":
+		text, ok := args["text"].(string)
+		if !ok {
+			return nil, fmt.Errorf("missing required argument: 'text'")
+		}
+		duration := 0.5
+		if rawDuration, ok := args["duration"]; ok {
+			parsedDuration, err := requireFloat(rawDuration, "duration")
+			if err != nil {
+				return nil, err
+			}
+			duration = parsedDuration
+		}
+		c.actions.HoldKey(text, duration)
 	case "wait":
 		c.actions.Wait()
 	default:
@@ -103,6 +175,25 @@ func requireCoordinate(args map[string]interface{}, key string) (int, int, error
 	}
 
 	return int(x), int(y), nil
+}
+
+func requireInt(val interface{}, key string) (int, error) {
+	num, err := requireFloat(val, key)
+	if err != nil {
+		return 0, err
+	}
+	return int(num), nil
+}
+
+func requireFloat(val interface{}, key string) (float64, error) {
+	switch v := val.(type) {
+	case float64:
+		return v, nil
+	case int:
+		return float64(v), nil
+	default:
+		return 0, fmt.Errorf("%s must be a number", key)
+	}
 }
 
 func screenshotContent(frame []byte) []map[string]interface{} {
