@@ -9,6 +9,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/cavos-io/rtp-agent/core/agent"
+	"github.com/cavos-io/rtp-agent/core/llm"
+	workeripc "github.com/cavos-io/rtp-agent/interface/worker/ipc"
 	"github.com/livekit/protocol/auth"
 	"github.com/livekit/protocol/livekit"
 	lksdk "github.com/livekit/server-sdk-go/v2"
@@ -145,6 +148,71 @@ func TestNewJobContextAttachesTaggerToSessionReport(t *testing.T) {
 	}
 }
 
+func TestJobContextPrimarySessionRequiresRegisteredSession(t *testing.T) {
+	ctx := NewJobContext(&livekit.Job{Id: "job_no_session"}, "", "", "")
+
+	if _, err := ctx.PrimarySession(); err == nil {
+		t.Fatal("PrimarySession() error = nil, want missing primary session error")
+	}
+}
+
+func TestJobContextMakeSessionReportUsesPrimarySession(t *testing.T) {
+	ctx := NewJobContext(
+		&livekit.Job{
+			Id: "job_session_report",
+			Room: &livekit.Room{
+				Sid:  "RM_session",
+				Name: "room-session",
+			},
+		},
+		"wss://livekit.example",
+		"key",
+		"secret",
+	)
+	baseAgent := agent.NewAgent("test")
+	session := agent.NewAgentSession(baseAgent, nil, agent.AgentSessionOptions{AllowInterruptions: false})
+	session.ChatCtx.Append(&llm.ChatMessage{
+		Role:    llm.ChatRoleUser,
+		Content: []llm.ChatContent{{Text: "hello"}},
+	})
+
+	ctx.SetPrimarySession(session)
+	report, err := ctx.MakeSessionReport()
+	if err != nil {
+		t.Fatalf("MakeSessionReport() error = %v", err)
+	}
+
+	if report.JobID != "job_session_report" {
+		t.Fatalf("report JobID = %q, want job_session_report", report.JobID)
+	}
+	if report.RoomID != "RM_session" || report.Room != "room-session" {
+		t.Fatalf("report room = %q/%q, want RM_session/room-session", report.RoomID, report.Room)
+	}
+	if report.ChatHistory == session.ChatCtx {
+		t.Fatal("report ChatHistory aliases session ChatCtx, want copy")
+	}
+	if got := len(report.ChatHistory.Items); got != 1 {
+		t.Fatalf("report chat history items = %d, want 1", got)
+	}
+	if report.Tagger != ctx.Tagger {
+		t.Fatal("report Tagger does not preserve job tagger")
+	}
+	if ctx.Report != report {
+		t.Fatal("JobContext Report was not updated to generated session report")
+	}
+}
+
+func TestJobContextSessionDirectoryCanBeConfigured(t *testing.T) {
+	ctx := NewJobContext(&livekit.Job{Id: "job_session_dir"}, "", "", "")
+	dir := t.TempDir()
+
+	ctx.SetSessionDirectory(dir)
+
+	if got := ctx.SessionDirectory(); got != dir {
+		t.Fatalf("SessionDirectory() = %q, want configured directory", got)
+	}
+}
+
 func TestJobContextAvatarStartInfoExposesLiveKitConnection(t *testing.T) {
 	ctx := NewJobContext(&livekit.Job{Id: "job_avatar"}, "wss://livekit.example", "key", "secret")
 	ctx.token = "room-token"
@@ -200,6 +268,42 @@ func TestJobContextConnectInfoUsesAcceptedParticipantFields(t *testing.T) {
 	}
 	if info.ParticipantKind != lksdk.ParticipantAgent {
 		t.Fatalf("ConnectInfo.ParticipantKind = %v, want ParticipantAgent", info.ParticipantKind)
+	}
+}
+
+func TestJobContextProcExposesReferenceProcessState(t *testing.T) {
+	ctx := NewJobContext(&livekit.Job{Id: "job_proc"}, "", "", "")
+	ctx.process = NewJobProcess(JobExecutorTypeThread, "args", "https://proxy.example")
+
+	proc := ctx.Proc()
+
+	if proc.ExecutorType() != workeripc.ExecutorTypeThread {
+		t.Fatalf("ExecutorType() = %q, want thread", proc.ExecutorType())
+	}
+	if proc.PID() != os.Getpid() {
+		t.Fatalf("PID() = %d, want current pid %d", proc.PID(), os.Getpid())
+	}
+	if proc.UserArguments() != "args" {
+		t.Fatalf("UserArguments() = %#v, want args", proc.UserArguments())
+	}
+	if proc.HTTPProxy() != "https://proxy.example" {
+		t.Fatalf("HTTPProxy() = %q, want proxy URL", proc.HTTPProxy())
+	}
+
+	proc.Userdata()["attempt"] = 1
+	if ctx.Proc().Userdata()["attempt"] != 1 {
+		t.Fatal("Userdata() did not preserve mutable process state")
+	}
+}
+
+func TestNewJobContextInitializesDefaultProc(t *testing.T) {
+	ctx := NewJobContext(&livekit.Job{Id: "job_default_proc"}, "", "", "")
+
+	if ctx.Proc() == nil {
+		t.Fatal("Proc() = nil, want default job process")
+	}
+	if ctx.Proc().ExecutorType() != JobExecutorTypeThread {
+		t.Fatalf("default ExecutorType() = %q, want thread", ctx.Proc().ExecutorType())
 	}
 }
 
@@ -696,6 +800,57 @@ func TestJobContextWaitForParticipantConnectsBeforeWaiting(t *testing.T) {
 	}
 	if strings.Contains(err.Error(), "room is nil") {
 		t.Fatalf("WaitForParticipant() error = %q, want Connect error before utility wait", err)
+	}
+}
+
+func TestJobContextWaitForAgentConnectsBeforeWaiting(t *testing.T) {
+	ctx := NewJobContext(
+		&livekit.Job{Id: "job_wait_agent_connect", Room: &livekit.Room{Name: "room-a"}},
+		"://invalid-url",
+		"key",
+		"secret",
+	)
+
+	_, err := ctx.WaitForAgent(context.Background(), "agent-a")
+	if err == nil {
+		t.Fatal("WaitForAgent() error = nil, want connection error")
+	}
+	if strings.Contains(err.Error(), "room is nil") {
+		t.Fatalf("WaitForAgent() error = %q, want Connect error before utility wait", err)
+	}
+}
+
+func TestJobContextWaitForTrackPublicationConnectsBeforeWaiting(t *testing.T) {
+	ctx := NewJobContext(
+		&livekit.Job{Id: "job_wait_track_connect", Room: &livekit.Room{Name: "room-a"}},
+		"://invalid-url",
+		"key",
+		"secret",
+	)
+
+	_, err := ctx.WaitForTrackPublication(context.Background(), "caller-a", livekit.TrackType_AUDIO)
+	if err == nil {
+		t.Fatal("WaitForTrackPublication() error = nil, want connection error")
+	}
+	if strings.Contains(err.Error(), "room is nil") {
+		t.Fatalf("WaitForTrackPublication() error = %q, want Connect error before utility wait", err)
+	}
+}
+
+func TestJobContextWaitForParticipantAttributeConnectsBeforeWaiting(t *testing.T) {
+	ctx := NewJobContext(
+		&livekit.Job{Id: "job_wait_attribute_connect", Room: &livekit.Room{Name: "room-a"}},
+		"://invalid-url",
+		"key",
+		"secret",
+	)
+
+	err := ctx.WaitForParticipantAttribute(context.Background(), "caller-a", "status", "ready")
+	if err == nil {
+		t.Fatal("WaitForParticipantAttribute() error = nil, want connection error")
+	}
+	if strings.Contains(err.Error(), "room is nil") {
+		t.Fatalf("WaitForParticipantAttribute() error = %q, want Connect error before utility wait", err)
 	}
 }
 

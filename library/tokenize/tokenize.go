@@ -52,10 +52,12 @@ func NewBasicSentenceTokenizer() *BasicSentenceTokenizer {
 }
 
 func (t *BasicSentenceTokenizer) Tokenize(text string, language string) []string {
-	res := SplitSentences(text, 20, false)
-	tokens := make([]string, len(res))
-	for i, r := range res {
-		tokens[i] = r.Token
+	paragraphs := TokenizeParagraphs(text)
+	tokens := make([]string, 0, len(paragraphs))
+	for _, paragraph := range paragraphs {
+		for _, sentence := range SplitSentences(paragraph, 20, false) {
+			tokens = append(tokens, sentence.Token)
+		}
 	}
 	return tokens
 }

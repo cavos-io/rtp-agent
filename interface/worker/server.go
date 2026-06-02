@@ -126,6 +126,7 @@ type LocalJobOptions struct {
 	Token             string
 	RecordingOptions  agent.RecordingOptions
 	SessionReportPath string
+	SessionDirectory  string
 }
 
 type WorkerOptions struct {
@@ -147,6 +148,7 @@ type WorkerOptions struct {
 	WorkerToken                        string
 	HTTPProxy                          string
 	HTTPProxySet                       bool
+	UserArguments                      any
 	DevMode                            bool
 	LogLevel                           string
 	PrometheusPort                     int
@@ -643,6 +645,9 @@ func mergeWorkerOptions(current WorkerOptions, next WorkerOptions) WorkerOptions
 		current.HTTPProxy = next.HTTPProxy
 		current.HTTPProxySet = true
 	}
+	if next.UserArguments != nil {
+		current.UserArguments = next.UserArguments
+	}
 	if next.PrometheusPortSet || next.PrometheusPort != 0 {
 		current.PrometheusPort = next.PrometheusPort
 		current.PrometheusPortSet = true
@@ -793,6 +798,7 @@ type workerMetadataResponse struct {
 	SDKVersion     string  `json:"sdk_version"`
 	ProjectType    string  `json:"project_type"`
 	NodeName       string  `json:"node_name"`
+	Hosted         bool    `json:"hosted"`
 }
 
 func (s *AgentServer) workerHTTPHandler() http.Handler {
@@ -819,6 +825,7 @@ func (s *AgentServer) workerHTTPHandler() http.Handler {
 			SDKVersion:     s.Options.Version,
 			ProjectType:    "go",
 			NodeName:       utils.NodeName(),
+			Hosted:         utils.IsHosted(),
 		}
 		w.Header().Set("Content-Type", "application/json")
 		if err := json.NewEncoder(w).Encode(body); err != nil {
@@ -1840,6 +1847,7 @@ func (s *AgentServer) handleAssignment(ctx context.Context, req *livekit.JobAssi
 		jobURL = req.GetUrl()
 	}
 	jobCtx := NewJobContext(req.Job, jobURL, s.Options.APIKey, s.Options.APISecret)
+	jobCtx.process = NewJobProcess(JobExecutorTypeThread, s.Options.UserArguments, s.Options.HTTPProxy)
 	if req.Job.GetEnableRecording() {
 		jobCtx.Report.RecordingOptions = allRecordingOptions()
 	}
@@ -1971,6 +1979,9 @@ func (s *AgentServer) ExecuteLocalJobWithOptions(ctx context.Context, roomName s
 	s.finishJob(jobCtx)
 	if options.SessionReportPath != "" {
 		return saveSessionReport(options.SessionReportPath, jobCtx.Report)
+	}
+	if jobCtx.SessionDirectory() != "" {
+		return saveSessionReport(filepath.Join(jobCtx.SessionDirectory(), "session_report.json"), jobCtx.Report)
 	}
 	return nil
 }
@@ -2152,6 +2163,8 @@ func newLocalJobContextWithOptions(roomName string, participantIdentity string, 
 	jobCtx.AcceptArguments = JobAcceptArguments{Identity: participantIdentity}
 	jobCtx.fakeJob = options.FakeJob
 	jobCtx.Report.RecordingOptions = options.RecordingOptions
+	jobCtx.SetSessionDirectory(options.SessionDirectory)
+	jobCtx.process = NewJobProcess(JobExecutorTypeThread, opts.UserArguments, opts.HTTPProxy)
 	if token != "" {
 		jobCtx.token = token
 	} else if opts.APIKey != "" && opts.APISecret != "" {

@@ -4,10 +4,12 @@ import (
 	"context"
 	"fmt"
 	"maps"
+	"os"
 	"reflect"
 	"sync"
 
 	"github.com/cavos-io/rtp-agent/core/agent"
+	workeripc "github.com/cavos-io/rtp-agent/interface/worker/ipc"
 	"github.com/cavos-io/rtp-agent/library/logger"
 	"github.com/cavos-io/rtp-agent/library/utils"
 	"github.com/go-jose/go-jose/v3/jwt"
@@ -25,6 +27,72 @@ type JobAcceptArguments struct {
 
 type JobRejectArguments struct {
 	Terminate bool
+}
+
+type JobExecutorType = workeripc.ExecutorType
+
+const (
+	JobExecutorTypeThread  JobExecutorType = workeripc.ExecutorTypeThread
+	JobExecutorTypeProcess JobExecutorType = workeripc.ExecutorTypeProcess
+)
+
+type JobProcess struct {
+	executorType  JobExecutorType
+	pid           int
+	userdata      map[any]any
+	userArguments any
+	httpProxy     string
+}
+
+func NewJobProcess(executorType JobExecutorType, userArguments any, httpProxy string) *JobProcess {
+	if executorType == "" {
+		executorType = JobExecutorTypeThread
+	}
+	return &JobProcess{
+		executorType:  executorType,
+		pid:           os.Getpid(),
+		userdata:      make(map[any]any),
+		userArguments: userArguments,
+		httpProxy:     httpProxy,
+	}
+}
+
+func (p *JobProcess) ExecutorType() JobExecutorType {
+	if p == nil {
+		return ""
+	}
+	return p.executorType
+}
+
+func (p *JobProcess) PID() int {
+	if p == nil {
+		return 0
+	}
+	return p.pid
+}
+
+func (p *JobProcess) Userdata() map[any]any {
+	if p == nil {
+		return nil
+	}
+	if p.userdata == nil {
+		p.userdata = make(map[any]any)
+	}
+	return p.userdata
+}
+
+func (p *JobProcess) UserArguments() any {
+	if p == nil {
+		return nil
+	}
+	return p.userArguments
+}
+
+func (p *JobProcess) HTTPProxy() string {
+	if p == nil {
+		return ""
+	}
+	return p.httpProxy
 }
 
 type AutoSubscribe string
@@ -136,6 +204,9 @@ type JobContext struct {
 	Tagger                 *agent.Tagger
 	AcceptArguments        JobAcceptArguments
 	WorkerID               string
+	process                *JobProcess
+	primarySession         *agent.AgentSession
+	sessionDirectory       string
 	shutdownCallbacks      []func(string)
 	shutdownOnce           sync.Once
 	finishOnce             sync.Once
@@ -169,6 +240,7 @@ func NewJobContext(job *livekit.Job, url string, apiKey string, apiSecret string
 		apiSecret: apiSecret,
 		Report:    report,
 		Tagger:    tagger,
+		process:   NewJobProcess(JobExecutorTypeThread, nil, ""),
 	}
 }
 
@@ -211,6 +283,66 @@ func (c *JobContext) JobID() string {
 
 func (c *JobContext) IsFakeJob() bool {
 	return c.fakeJob
+}
+
+func (c *JobContext) SetSessionDirectory(path string) {
+	c.sessionDirectory = path
+}
+
+func (c *JobContext) SessionDirectory() string {
+	return c.sessionDirectory
+}
+
+func (c *JobContext) Proc() *JobProcess {
+	if c.process == nil {
+		c.process = NewJobProcess(JobExecutorTypeThread, nil, "")
+	}
+	return c.process
+}
+
+func (c *JobContext) SetPrimarySession(session *agent.AgentSession) {
+	c.primarySession = session
+}
+
+func (c *JobContext) PrimarySession() (*agent.AgentSession, error) {
+	if c.primarySession == nil {
+		return nil, fmt.Errorf("no primary AgentSession was started for this job")
+	}
+	return c.primarySession, nil
+}
+
+func (c *JobContext) MakeSessionReport(sessions ...*agent.AgentSession) (*agent.SessionReport, error) {
+	var session *agent.AgentSession
+	if len(sessions) > 0 {
+		session = sessions[0]
+	} else {
+		var err error
+		session, err = c.PrimarySession()
+		if err != nil {
+			return nil, err
+		}
+	}
+	if session == nil {
+		return nil, fmt.Errorf("cannot prepare report, no AgentSession was found")
+	}
+
+	report := agent.NewSessionReport(session)
+	if c.Job != nil {
+		report.JobID = c.Job.GetId()
+		if room := c.Job.GetRoom(); room != nil {
+			report.RoomID = room.GetSid()
+			report.Room = room.GetName()
+		}
+	}
+	if c.Report != nil {
+		report.RecordingOptions = c.Report.RecordingOptions
+		report.AudioRecordingPath = c.Report.AudioRecordingPath
+		report.AudioRecordingStartedAt = c.Report.AudioRecordingStartedAt
+		report.Duration = c.Report.Duration
+	}
+	report.Tagger = c.Tagger
+	c.Report = report
+	return report, nil
 }
 
 func (c *JobContext) AvatarStartInfo() agent.AvatarStartInfo {
@@ -445,12 +577,60 @@ func (c *JobContext) WaitForParticipant(
 	identity string,
 	kinds ...livekit.ParticipantInfo_Kind,
 ) (*lksdk.RemoteParticipant, error) {
-	if c.Room == nil {
-		if err := c.Connect(ctx, nil); err != nil {
-			return nil, err
-		}
+	if err := c.ensureRoomConnected(ctx); err != nil {
+		return nil, err
 	}
 	return utils.WaitForParticipant(ctx, c.Room, identity, defaultParticipantWaitKinds(kinds)...)
+}
+
+func (c *JobContext) WaitForAgent(
+	ctx context.Context,
+	agentName ...string,
+) (*lksdk.RemoteParticipant, error) {
+	if err := c.ensureRoomConnected(ctx); err != nil {
+		return nil, err
+	}
+	return utils.WaitForAgent(ctx, c.Room, agentName...)
+}
+
+func (c *JobContext) WaitForTrackPublication(
+	ctx context.Context,
+	identity string,
+	kinds ...livekit.TrackType,
+) (*lksdk.RemoteTrackPublication, error) {
+	if err := c.ensureRoomConnected(ctx); err != nil {
+		return nil, err
+	}
+	return utils.WaitForTrackPublication(ctx, c.Room, identity, kinds...)
+}
+
+func (c *JobContext) WaitForTrackPublicationWithOptions(
+	ctx context.Context,
+	options utils.TrackPublicationWaitOptions,
+) (*lksdk.RemoteTrackPublication, error) {
+	if err := c.ensureRoomConnected(ctx); err != nil {
+		return nil, err
+	}
+	return utils.WaitForTrackPublicationWithOptions(ctx, c.Room, options)
+}
+
+func (c *JobContext) WaitForParticipantAttribute(
+	ctx context.Context,
+	identity string,
+	attribute string,
+	value string,
+) error {
+	if err := c.ensureRoomConnected(ctx); err != nil {
+		return err
+	}
+	return utils.WaitForParticipantAttribute(ctx, c.Room, identity, attribute, value)
+}
+
+func (c *JobContext) ensureRoomConnected(ctx context.Context) error {
+	if c.Room != nil {
+		return nil
+	}
+	return c.Connect(ctx, nil)
 }
 
 func defaultParticipantWaitKinds(kinds []livekit.ParticipantInfo_Kind) []livekit.ParticipantInfo_Kind {

@@ -12,6 +12,7 @@ import (
 	"github.com/cavos-io/rtp-agent/core/llm"
 	"github.com/cavos-io/rtp-agent/core/tts"
 	"github.com/cavos-io/rtp-agent/library/telemetry"
+	"github.com/cavos-io/rtp-agent/library/tokenize"
 	"go.opentelemetry.io/otel/attribute"
 )
 
@@ -141,7 +142,8 @@ type TTSGenerationData struct {
 }
 
 type TTSInferenceOptions struct {
-	StreamPacer *tts.SentenceStreamPacerOptions
+	StreamPacer      *tts.SentenceStreamPacerOptions
+	TextReplacements map[string]string
 }
 
 type TTSInferenceOption func(*TTSInferenceOptions)
@@ -149,6 +151,12 @@ type TTSInferenceOption func(*TTSInferenceOptions)
 func WithTTSStreamPacer(opts tts.SentenceStreamPacerOptions) TTSInferenceOption {
 	return func(options *TTSInferenceOptions) {
 		options.StreamPacer = &opts
+	}
+}
+
+func WithTTSTextReplacements(replacements map[string]string) TTSInferenceOption {
+	return func(options *TTSInferenceOptions) {
+		options.TextReplacements = replacements
 	}
 }
 
@@ -170,7 +178,7 @@ func PerformTTSInference(ctx context.Context, t tts.TTS, textCh <-chan string, o
 			for chunk := range textCh {
 				text.WriteString(chunk)
 			}
-			transformedText := strings.TrimSpace(tts.ApplyTextTransforms(text.String()))
+			transformedText := strings.TrimSpace(applyTTSTextReplacements(tts.ApplyTextTransforms(text.String()), options.TextReplacements))
 			if transformedText == "" {
 				return
 			}
@@ -211,10 +219,12 @@ func PerformTTSInference(ctx context.Context, t tts.TTS, textCh <-chan string, o
 
 		for text := range textCh {
 			for _, filteredText := range transformBuffer.Push(text) {
+				filteredText = applyTTSTextReplacements(filteredText, options.TextReplacements)
 				_ = stream.PushText(filteredText)
 			}
 		}
 		for _, filteredText := range transformBuffer.Flush() {
+			filteredText = applyTTSTextReplacements(filteredText, options.TextReplacements)
 			_ = stream.PushText(filteredText)
 		}
 		_ = tts.EndSynthesizeStreamInput(stream)
@@ -232,6 +242,10 @@ func PerformTTSInference(ctx context.Context, t tts.TTS, textCh <-chan string, o
 	}()
 
 	return data, nil
+}
+
+func applyTTSTextReplacements(text string, replacements map[string]string) string {
+	return tokenize.ReplaceWords(text, replacements)
 }
 
 type ToolExecutionOutput struct {

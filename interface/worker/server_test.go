@@ -344,6 +344,7 @@ func TestWorkerHTTPHandlerReportsConnectionFailure(t *testing.T) {
 }
 
 func TestWorkerHTTPHandlerReportsWorkerMetadata(t *testing.T) {
+	t.Setenv("LIVEKIT_REMOTE_EOT_URL", "https://hosted.example")
 	server := NewAgentServer(WorkerOptions{
 		AgentName: "sales-agent",
 		LoadFunc:  func(*AgentServer) float64 { return 0.42 },
@@ -367,6 +368,7 @@ func TestWorkerHTTPHandlerReportsWorkerMetadata(t *testing.T) {
 		`"active_jobs":1`,
 		`"project_type":"go"`,
 		`"node_name":"`,
+		`"hosted":true`,
 	} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("/worker response missing %s in %s", want, body)
@@ -3505,6 +3507,62 @@ func TestExecuteLocalJobLaunchesThroughThreadExecutor(t *testing.T) {
 	}
 }
 
+func TestExecuteLocalJobExposesProcessContextToEntrypoint(t *testing.T) {
+	server := NewAgentServer(WorkerOptions{
+		WSRL:          "wss://local.example",
+		HTTPProxy:     "https://proxy.example",
+		HTTPProxySet:  true,
+		UserArguments: "user-args",
+	})
+	entrypointCh := make(chan *JobContext, 1)
+	server.entrypointFnc = func(ctx *JobContext) error {
+		ctx.Proc().Userdata()["seen"] = true
+		entrypointCh <- ctx
+		return nil
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	doneCh := make(chan error, 1)
+	go func() {
+		doneCh <- server.ExecuteLocalJob(ctx, "room-a", "agent-local")
+	}()
+
+	var jobCtx *JobContext
+	select {
+	case jobCtx = <-entrypointCh:
+	case <-time.After(time.Second):
+		cancel()
+		t.Fatal("local job entrypoint did not run")
+	}
+
+	if jobCtx.Proc().ExecutorType() != JobExecutorTypeThread {
+		cancel()
+		t.Fatalf("ExecutorType() = %q, want thread", jobCtx.Proc().ExecutorType())
+	}
+	if jobCtx.Proc().HTTPProxy() != "https://proxy.example" {
+		cancel()
+		t.Fatalf("HTTPProxy() = %q, want configured proxy", jobCtx.Proc().HTTPProxy())
+	}
+	if jobCtx.Proc().UserArguments() != "user-args" {
+		cancel()
+		t.Fatalf("UserArguments() = %#v, want configured user arguments", jobCtx.Proc().UserArguments())
+	}
+	if jobCtx.Proc().Userdata()["seen"] != true {
+		cancel()
+		t.Fatal("Userdata() did not keep entrypoint process state")
+	}
+
+	cancel()
+	select {
+	case err := <-doneCh:
+		if err != nil {
+			t.Fatalf("ExecuteLocalJob() error = %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("ExecuteLocalJob() did not return after context cancellation")
+	}
+}
+
 func TestExecuteLocalJobWithExplicitIdleProcessesLaunchesThroughProcPool(t *testing.T) {
 	oldPoolFactory := newLocalProcPool
 	launchedCh := make(chan ipc.RunningJobInfo, 1)
@@ -3867,6 +3925,70 @@ func TestExecuteLocalJobWithOptionsSavesSessionReport(t *testing.T) {
 	}
 	if report.JobID == "" {
 		t.Fatal("saved report JobID is empty")
+	}
+	if report.Room != "room-a" {
+		t.Fatalf("saved report Room = %q, want room-a", report.Room)
+	}
+}
+
+func TestExecuteLocalJobWithOptionsSavesSessionReportInSessionDirectory(t *testing.T) {
+	server := NewAgentServer(WorkerOptions{})
+	startedCh := make(chan *JobContext, 1)
+	sessionDir := t.TempDir()
+
+	if err := server.RTCSession(
+		func(ctx *JobContext) error {
+			startedCh <- ctx
+			return nil
+		},
+		nil,
+		func(ctx *JobContext) error {
+			ctx.Report.JobID = ctx.Job.GetId()
+			ctx.Report.Room = ctx.Job.GetRoom().GetName()
+			return nil
+		},
+	); err != nil {
+		t.Fatalf("RTCSession() error = %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	doneCh := make(chan error, 1)
+	go func() {
+		doneCh <- server.ExecuteLocalJobWithOptions(ctx, "room-a", "agent-local", LocalJobOptions{
+			FakeJob:          true,
+			SessionDirectory: sessionDir,
+		})
+	}()
+
+	var jobCtx *JobContext
+	select {
+	case jobCtx = <-startedCh:
+	case <-time.After(time.Second):
+		t.Fatal("local job entrypoint did not run")
+	}
+	if jobCtx.SessionDirectory() != sessionDir {
+		cancel()
+		t.Fatalf("SessionDirectory() = %q, want configured directory", jobCtx.SessionDirectory())
+	}
+
+	cancel()
+	select {
+	case err := <-doneCh:
+		if err != nil {
+			t.Fatalf("ExecuteLocalJobWithOptions() error = %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("ExecuteLocalJobWithOptions() did not return after context cancellation")
+	}
+
+	reportPath := filepath.Join(sessionDir, "session_report.json")
+	reportBytes, err := os.ReadFile(reportPath)
+	if err != nil {
+		t.Fatalf("ReadFile(%q): %v", reportPath, err)
+	}
+	var report agent.SessionReport
+	if err := json.Unmarshal(reportBytes, &report); err != nil {
+		t.Fatalf("Unmarshal report: %v", err)
 	}
 	if report.Room != "room-a" {
 		t.Fatalf("saved report Room = %q, want room-a", report.Room)

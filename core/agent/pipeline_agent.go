@@ -292,6 +292,9 @@ func (va *PipelineAgent) generateReplyWithOptions(opts pipelineReplyOptions) {
 		if va.ttsStreamPacer != nil {
 			ttsOpts = append(ttsOpts, WithTTSStreamPacer(*va.ttsStreamPacer))
 		}
+		if len(session.Options.TTSTextReplacements) > 0 {
+			ttsOpts = append(ttsOpts, WithTTSTextReplacements(session.Options.TTSTextReplacements))
+		}
 		ttsGen, err := PerformTTSInference(ctx, va.tts, ttsTextCh, ttsOpts...)
 		if err != nil {
 			transcriptSync.Close()

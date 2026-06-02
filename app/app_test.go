@@ -2175,6 +2175,41 @@ func TestEvaluateSessionReturnsEvaluationSummary(t *testing.T) {
 	}
 }
 
+func TestRunSessionRegistersPrimarySessionOnJobContext(t *testing.T) {
+	baseAgent := agent.NewAgent("test")
+	session := agent.NewAgentSession(baseAgent, nil, agent.AgentSessionOptions{})
+	server := worker.NewAgentServer(worker.WorkerOptions{AgentName: "support-agent"})
+	application := &App{
+		Server:          server,
+		Agent:           baseAgent,
+		Session:         session,
+		MetricsRegistry: telemetry.NewMetricRegistry(),
+	}
+	ctx := worker.NewJobContext(
+		&livekit.Job{
+			Id: "job_primary_session",
+			Room: &livekit.Room{
+				Sid:  "RM_primary",
+				Name: "room-primary",
+			},
+		},
+		"wss://livekit.example",
+		"key",
+		"secret",
+	)
+
+	if err := application.runSession(ctx); err != nil {
+		t.Fatalf("runSession() error = %v", err)
+	}
+	primary, err := ctx.PrimarySession()
+	if err != nil {
+		t.Fatalf("PrimarySession() error = %v", err)
+	}
+	if primary != session {
+		t.Fatal("PrimarySession() did not return app session")
+	}
+}
+
 func TestConfigureRoomToolsAddsSendDTMFTool(t *testing.T) {
 	baseAgent := agent.NewAgent("test")
 	publisher := &fakeAppDtmfPublisher{}
@@ -2561,6 +2596,21 @@ func TestDefaultConfigFromEnvConfiguresTTSStreamPacer(t *testing.T) {
 	}
 	if got := app.Session.Options.TTSStreamPacer.MaxTextLength; got != 120 {
 		t.Fatalf("MaxTextLength = %d, want 120", got)
+	}
+}
+
+func TestDefaultConfigFromEnvConfiguresTTSTextReplacements(t *testing.T) {
+	t.Setenv("RTP_AGENT_TTS_TEXT_REPLACEMENTS", "OpenAI=Open A I,world=there")
+
+	app, err := NewApp(DefaultConfigFromEnv())
+	if err != nil {
+		t.Fatalf("NewApp() error = %v", err)
+	}
+	if got := app.Config.TTSTextReplacements["OpenAI"]; got != "Open A I" {
+		t.Fatalf("Config.TTSTextReplacements[OpenAI] = %q, want Open A I", got)
+	}
+	if got := app.Session.Options.TTSTextReplacements["world"]; got != "there" {
+		t.Fatalf("Session.Options.TTSTextReplacements[world] = %q, want there", got)
 	}
 }
 

@@ -354,6 +354,7 @@ type AppConfig struct {
 	TTSTokenizerLanguage                    string
 	TTSTokenizerMinSentenceLen              *int
 	TTSTokenizerStreamContextLen            *int
+	TTSTextReplacements                     map[string]string
 	WordTokenizerProvider                   string
 	WordTokenizerLanguage                   string
 	TTSStreamPacerEnabled                   bool
@@ -674,6 +675,7 @@ func DefaultConfigFromEnv() AppConfig {
 		TTSTokenizerLanguage:                    os.Getenv("RTP_AGENT_TTS_TOKENIZER_LANGUAGE"),
 		TTSTokenizerMinSentenceLen:              getenvOptionalInt("RTP_AGENT_TTS_TOKENIZER_MIN_SENTENCE_LEN"),
 		TTSTokenizerStreamContextLen:            getenvOptionalInt("RTP_AGENT_TTS_TOKENIZER_STREAM_CONTEXT_LEN"),
+		TTSTextReplacements:                     splitEnvStringMap("RTP_AGENT_TTS_TEXT_REPLACEMENTS"),
 		WordTokenizerProvider:                   normalizedEnv("RTP_AGENT_WORD_TOKENIZER_PROVIDER"),
 		WordTokenizerLanguage:                   os.Getenv("RTP_AGENT_WORD_TOKENIZER_LANGUAGE"),
 		TTSStreamPacerEnabled:                   getenvBool("RTP_AGENT_TTS_STREAM_PACER_ENABLED"),
@@ -1110,9 +1112,17 @@ func (a *App) runSession(ctx *worker.JobContext) error {
 		return fmt.Errorf("agent session is not configured")
 	}
 	defer a.closeMCPServers()
+	if ctx != nil {
+		ctx.SetPrimarySession(a.Session)
+	}
 	a.configureMetricsCollector(ctx)
 	a.Server.SetConsoleSession(a.Session)
 	if a.Session.STT == nil && a.Session.LLM == nil && a.Session.TTS == nil && a.RealtimeModel == nil {
+		if ctx != nil {
+			if _, err := ctx.MakeSessionReport(a.Session); err != nil {
+				return err
+			}
+		}
 		return nil
 	}
 	if ctx != nil {
@@ -1142,7 +1152,15 @@ func (a *App) runSession(ctx *worker.JobContext) error {
 			sessionCtx = agent.ContextWithAvatarStartInfo(sessionCtx, info)
 		}
 	}
-	return a.Session.Start(sessionCtx)
+	if err := a.Session.Start(sessionCtx); err != nil {
+		return err
+	}
+	if ctx != nil {
+		if _, err := ctx.MakeSessionReport(a.Session); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (a *App) configureMetricsCollector(ctx *worker.JobContext) {
@@ -3388,6 +3406,7 @@ func agentSessionOptionsFromConfig(cfg AppConfig) (agent.AgentSessionOptions, er
 		}
 		opts.TTSStreamPacer = &pacer
 	}
+	opts.TTSTextReplacements = cfg.TTSTextReplacements
 	opts.LLMParallelToolCalls = cfg.LLMParallelToolCalls
 	opts.LLMExtraParams = cfg.LLMExtraBody
 	opts.LLMResponseFormat = cfg.LLMResponseFormat
