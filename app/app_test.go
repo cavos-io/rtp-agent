@@ -1255,6 +1255,46 @@ func TestDefaultConfigFromEnvSelectsSpitchSpeechProviders(t *testing.T) {
 	}
 }
 
+func TestDefaultConfigFromEnvSelectsTelnyxProviders(t *testing.T) {
+	t.Setenv("TELNYX_API_KEY", "test-telnyx-key")
+	t.Setenv("RTP_AGENT_LLM_PROVIDER", "telnyx")
+	t.Setenv("RTP_AGENT_LLM_MODEL", "telnyx-chat")
+	t.Setenv("RTP_AGENT_STT_PROVIDER", "telnyx")
+	t.Setenv("RTP_AGENT_STT_BASE_URL", "wss://telnyx.example/transcription")
+	t.Setenv("RTP_AGENT_STT_LANGUAGE", "es")
+	t.Setenv("RTP_AGENT_STT_MODEL", "deepgram")
+	t.Setenv("RTP_AGENT_STT_SAMPLE_RATE", "8000")
+	t.Setenv("RTP_AGENT_TTS_PROVIDER", "telnyx")
+	t.Setenv("RTP_AGENT_TTS_BASE_URL", "wss://telnyx.example/speech")
+	t.Setenv("RTP_AGENT_TTS_VOICE", "Telnyx.NaturalHD.astra")
+
+	app, err := NewApp(DefaultConfigFromEnv())
+	if err != nil {
+		t.Fatalf("NewApp() error = %v", err)
+	}
+	if app.Session == nil {
+		t.Fatal("Session is nil")
+	}
+	if app.Session.LLM == nil {
+		t.Fatal("Session LLM is nil")
+	}
+	if got := app.Session.STT.Label(); got != "telnyx.STT" {
+		t.Fatalf("STT label = %q, want telnyx.STT", got)
+	}
+	if caps := app.Session.STT.Capabilities(); !caps.Streaming || !caps.InterimResults || caps.Diarization || !caps.OfflineRecognize {
+		t.Fatalf("STT capabilities = %+v, want streaming interim offline recognize without diarization", caps)
+	}
+	if got := app.Session.TTS.Label(); got != "telnyx.TTS" {
+		t.Fatalf("TTS label = %q, want telnyx.TTS", got)
+	}
+	if got := app.Session.TTS.SampleRate(); got != 16000 {
+		t.Fatalf("TTS sample rate = %d, want 16000", got)
+	}
+	if caps := app.Session.TTS.Capabilities(); !caps.Streaming || caps.AlignedTranscript {
+		t.Fatalf("TTS capabilities = %+v, want streaming without aligned transcript", caps)
+	}
+}
+
 func TestDefaultConfigFromEnvSelectsAWSProviders(t *testing.T) {
 	t.Setenv("AWS_REGION", "us-west-2")
 	t.Setenv("RTP_AGENT_LLM_PROVIDER", "aws")
