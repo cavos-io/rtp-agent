@@ -34,7 +34,11 @@ func PerformLLMInference(
 	}
 
 	chatOptions := make([]llm.ChatOption, 0, len(options)+1)
-	chatOptions = append(chatOptions, llm.WithTools(tools))
+	toolItems := make([]interface{}, 0, len(tools))
+	for _, tool := range tools {
+		toolItems = append(toolItems, tool)
+	}
+	chatOptions = append(chatOptions, llm.WithTools(llm.NewToolContext(toolItems).Flatten()))
 	chatOptions = append(chatOptions, options...)
 	stream, err := l.Chat(ctx, chatCtx, chatOptions...)
 	if err != nil {
