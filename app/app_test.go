@@ -46,6 +46,23 @@ func TestDefaultConfigFromEnvSelectsOpenAIProviders(t *testing.T) {
 	}
 }
 
+func TestDefaultConfigFromEnvSelectsPerplexityLLM(t *testing.T) {
+	t.Setenv("PERPLEXITY_API_KEY", "test-perplexity-key")
+	t.Setenv("RTP_AGENT_LLM_PROVIDER", "perplexity")
+	t.Setenv("RTP_AGENT_LLM_MODEL", "sonar")
+
+	app, err := NewApp(DefaultConfigFromEnv())
+	if err != nil {
+		t.Fatalf("NewApp() error = %v", err)
+	}
+	if app.Session == nil || app.Session.LLM == nil {
+		t.Fatal("Session LLM is nil")
+	}
+	if got := llm.Model(app.Session.LLM); got != "sonar" {
+		t.Fatalf("LLM model = %q, want sonar", got)
+	}
+}
+
 func TestDefaultConfigFromEnvSelectsAssemblyAISTT(t *testing.T) {
 	t.Setenv("ASSEMBLYAI_API_KEY", "test-assemblyai-key")
 	t.Setenv("RTP_AGENT_STT_PROVIDER", "assemblyai")

@@ -37,6 +37,7 @@ import (
 	"github.com/cavos-io/rtp-agent/adapter/murf"
 	"github.com/cavos-io/rtp-agent/adapter/neuphonic"
 	"github.com/cavos-io/rtp-agent/adapter/openai"
+	"github.com/cavos-io/rtp-agent/adapter/perplexity"
 	"github.com/cavos-io/rtp-agent/adapter/resemble"
 	"github.com/cavos-io/rtp-agent/adapter/respeecher"
 	"github.com/cavos-io/rtp-agent/adapter/rime"
@@ -86,6 +87,7 @@ const (
 	providerMurf         = "murf"
 	providerNeuphonic    = "neuphonic"
 	providerOpenAI       = "openai"
+	providerPerplexity   = "perplexity"
 	providerResemble     = "resemble"
 	providerRespeecher   = "respeecher"
 	providerRime         = "rime"
@@ -293,6 +295,7 @@ type AppConfig struct {
 	MistralAPIKey               string
 	MurfAPIKey                  string
 	NeuphonicAPIKey             string
+	PerplexityAPIKey            string
 	ResembleAPIKey              string
 	RespeecherAPIKey            string
 	RimeAPIKey                  string
@@ -515,6 +518,7 @@ func DefaultConfigFromEnv() AppConfig {
 		MistralAPIKey:                           os.Getenv("MISTRAL_API_KEY"),
 		MurfAPIKey:                              os.Getenv("MURF_API_KEY"),
 		NeuphonicAPIKey:                         os.Getenv("NEUPHONIC_API_KEY"),
+		PerplexityAPIKey:                        os.Getenv("PERPLEXITY_API_KEY"),
 		ResembleAPIKey:                          os.Getenv("RESEMBLE_API_KEY"),
 		RespeecherAPIKey:                        os.Getenv("RESPEECHER_API_KEY"),
 		RimeAPIKey:                              os.Getenv("RIME_API_KEY"),
@@ -670,6 +674,8 @@ func configureProviders(cfg AppConfig, a *agent.Agent) (llm.RealtimeModel, error
 			return nil, err
 		}
 		a.LLM = provider
+	case providerPerplexity:
+		a.LLM = perplexity.NewPerplexityLLM(cfg.PerplexityAPIKey, cfg.LLMModel)
 	case providerLiveKit:
 		provider, err := openai.NewLiveKitInferenceLLM(cfg.LLMModel, cfg.LiveKitInferenceAPIKey, cfg.LiveKitInferenceAPISecret)
 		if err != nil {
