@@ -12,6 +12,7 @@ import (
 	"github.com/cavos-io/rtp-agent/core/vad"
 	"github.com/cavos-io/rtp-agent/library/logger"
 	"github.com/cavos-io/rtp-agent/library/telemetry"
+	"github.com/cavos-io/rtp-agent/library/tokenize"
 )
 
 var ErrSpeechSchedulingPaused = errors.New("speech scheduling is paused")
@@ -619,6 +620,9 @@ func (a *AgentActivity) completeUserTurn(ctx context.Context, info EndOfTurnInfo
 		logger.Logger.Warnw("skipping reply to user input, current speech generation cannot be interrupted", nil, "userInput", info.NewTranscript)
 		return nil, nil
 	}
+	if a.shouldSkipShortInterruption(currentSpeech, info.NewTranscript) {
+		return nil, nil
+	}
 	if currentSpeech != nil && !currentSpeech.IsInterrupted() && !currentSpeech.IsDone() {
 		if err := currentSpeech.Interrupt(false); err != nil {
 			return nil, err
@@ -672,6 +676,23 @@ func (a *AgentActivity) completeUserTurn(ctx context.Context, info EndOfTurnInfo
 		SpeechID:                 handle.ID,
 	})
 	return handle, nil
+}
+
+func (a *AgentActivity) shouldSkipShortInterruption(currentSpeech *SpeechHandle, transcript string) bool {
+	if currentSpeech == nil || !currentSpeech.AllowInterruptions || currentSpeech.IsInterrupted() || currentSpeech.IsDone() {
+		return false
+	}
+	if a.Session == nil || a.Session.Options.MinInterruptionWords <= 0 {
+		return false
+	}
+	if a.turnDetectionMode() == TurnDetectionModeManual {
+		return false
+	}
+	if a.Agent.STT == nil && a.Session.STT == nil {
+		return false
+	}
+	words := tokenize.SplitWords(transcript, true, true, false)
+	return len(words) < a.Session.Options.MinInterruptionWords
 }
 
 func (a *AgentActivity) commitUserMessage(msg *llm.ChatMessage) {

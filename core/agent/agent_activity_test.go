@@ -655,6 +655,52 @@ func TestAgentActivityCommitUserTurnInterruptsCurrentSpeechBeforeReply(t *testin
 	}
 }
 
+func TestAgentActivityCompleteUserTurnSkipsShortInterruptions(t *testing.T) {
+	agent := &turnCompletedAgent{Agent: NewAgent("test"), turns: make(chan *llm.ChatMessage, 1)}
+	agent.TurnDetection = TurnDetectionModeSTT
+	agent.STT = &fakePipelineSTT{}
+	agent.LLM = &fakeGenerationLLM{stream: &fakeGenerationLLMStream{}}
+	session := NewAgentSession(agent, nil, AgentSessionOptions{MinInterruptionWords: 2})
+	activity := NewAgentActivity(agent, session)
+	agent.activity = activity
+	session.activity = activity
+	current := NewSpeechHandle(true, DefaultInputDetails())
+	activity.currentSpeech = current
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := activity.completeUserTurn(context.Background(), EndOfTurnInfo{
+			NewTranscript:        "hi",
+			TranscriptConfidence: 0.9,
+		})
+		done <- err
+	}()
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("completeUserTurn error = %v, want nil", err)
+		}
+	case <-time.After(20 * time.Millisecond):
+		if current.IsInterrupted() {
+			current.MarkDone()
+			<-done
+			t.Fatal("current speech was interrupted for transcript below MinInterruptionWords")
+		}
+		t.Fatal("completeUserTurn did not return for transcript below MinInterruptionWords")
+	}
+	if current.IsInterrupted() {
+		t.Fatal("current speech interrupted for transcript below MinInterruptionWords")
+	}
+	select {
+	case msg := <-agent.turns:
+		t.Fatalf("OnUserTurnCompleted called for short interruption with %q", msg.TextContent())
+	case ev := <-session.SpeechCreatedEvents():
+		t.Fatalf("reply generated for short interruption: %#v", ev)
+	case <-time.After(20 * time.Millisecond):
+	}
+}
+
 func TestAgentActivityCommitUserTurnSkipsWhenSchedulingPaused(t *testing.T) {
 	agent := &turnCompletedAgent{Agent: NewAgent("test"), turns: make(chan *llm.ChatMessage, 1)}
 	agent.TurnDetection = TurnDetectionModeManual
