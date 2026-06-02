@@ -368,6 +368,64 @@ func (s *AgentServer) ReloadRunningJobs(ctx context.Context, jobs []workeripc.Ru
 	return nil
 }
 
+func (s *AgentServer) ExecuteRunningJob(ctx context.Context, info workeripc.RunningJobInfo) error {
+	if info.Job == nil {
+		return fmt.Errorf("running job info must include a job")
+	}
+	if s.entrypointFnc == nil {
+		return fmt.Errorf("no RTC session entrypoint has been registered")
+	}
+
+	jobURL := info.URL
+	if s.Options.WSRL != "" {
+		jobURL = s.Options.WSRL
+	}
+	jobCtx := NewJobContext(info.Job, jobURL, s.Options.APIKey, s.Options.APISecret)
+	if info.Job.GetEnableRecording() {
+		jobCtx.Report.RecordingOptions = allRecordingOptions()
+	}
+	jobCtx.token = info.Token
+	jobCtx.WorkerID = info.WorkerID
+	jobCtx.AcceptArguments = JobAcceptArguments{
+		Name:       info.AcceptArguments.Name,
+		Identity:   info.AcceptArguments.Identity,
+		Metadata:   info.AcceptArguments.Metadata,
+		Attributes: info.AcceptArguments.Attributes,
+	}
+	jobCtx.fakeJob = info.FakeJob
+	if jobCtx.WorkerID == "" {
+		jobCtx.WorkerID = s.workerID
+	}
+
+	s.mu.Lock()
+	s.activeJobs[info.Job.Id] = jobCtx
+	s.mu.Unlock()
+
+	doneCh := make(chan error, 1)
+	go func() {
+		defer func() {
+			if recovered := recover(); recovered != nil {
+				logger.Logger.Errorw("Running job entrypoint panicked", fmt.Errorf("%v", recovered), "jobId", info.Job.Id)
+				doneCh <- fmt.Errorf("running job entrypoint panicked: %v", recovered)
+			}
+		}()
+		doneCh <- s.entrypointFnc(jobCtx)
+	}()
+
+	select {
+	case err := <-doneCh:
+		if err != nil {
+			logger.Logger.Errorw("Running job entrypoint failed", err, "jobId", info.Job.Id)
+		}
+		s.finishJob(jobCtx)
+		return err
+	case <-ctx.Done():
+		jobCtx.Shutdown("")
+		s.finishJob(jobCtx)
+		return ctx.Err()
+	}
+}
+
 func (s *AgentServer) launchReloadedJob(ctx context.Context, jobCtx *JobContext) {
 	if s.entrypointFnc == nil {
 		return

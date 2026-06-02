@@ -19,6 +19,7 @@ import (
 	"github.com/cavos-io/rtp-agent/core/agent"
 	consoleui "github.com/cavos-io/rtp-agent/interface/cli/console"
 	"github.com/cavos-io/rtp-agent/interface/worker"
+	workeripc "github.com/cavos-io/rtp-agent/interface/worker/ipc"
 	"github.com/cavos-io/rtp-agent/library/logger"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/gordonklaus/portaudio"
@@ -174,6 +175,15 @@ func RunApp(server *worker.AgentServer, evalRunners ...EvalRunner) {
 		if err := applyWorkerArgs(server, args, drainTimeout); err != nil {
 			logger.Logger.Errorw("Failed to apply worker options", err)
 			os.Exit(1)
+		}
+		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+		defer stop()
+		if handled, err := runProcessJobFromEnv(ctx, server, currentEnvMap()); handled {
+			if err != nil && !errors.Is(err, context.Canceled) {
+				logger.Logger.Errorw("Process job error", err)
+				os.Exit(1)
+			}
+			return
 		}
 		runWorker(server, false)
 	case "dev":
@@ -373,6 +383,32 @@ func runWorker(server *worker.AgentServer, devMode bool) {
 type workerLifecycle interface {
 	Run(context.Context) error
 	Drain(context.Context) error
+}
+
+type processJobRunner interface {
+	ExecuteRunningJob(context.Context, workeripc.RunningJobInfo) error
+}
+
+func runProcessJobFromEnv(ctx context.Context, runner processJobRunner, env map[string]string) (bool, error) {
+	if env["LIVEKIT_AGENT_RUNNING_JOB_JSON"] == "" && env["LIVEKIT_AGENT_JOB_JSON"] == "" {
+		return false, nil
+	}
+	info, err := workeripc.RunningJobInfoFromEnv(env)
+	if err != nil {
+		return true, err
+	}
+	return true, runner.ExecuteRunningJob(ctx, info)
+}
+
+func currentEnvMap() map[string]string {
+	env := make(map[string]string)
+	for _, item := range os.Environ() {
+		key, value, ok := strings.Cut(item, "=")
+		if ok {
+			env[key] = value
+		}
+	}
+	return env
 }
 
 func runWorkerLifecycle(ctx context.Context, server workerLifecycle, devMode bool) error {
