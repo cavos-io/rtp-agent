@@ -1445,6 +1445,28 @@ func TestAgentSessionCommitUserTurnDelegatesToActivity(t *testing.T) {
 	}
 }
 
+func TestAgentSessionCloseSoonCommitsPendingUserTurn(t *testing.T) {
+	agent := &turnCompletedAgent{Agent: NewAgent("test"), turns: make(chan *llm.ChatMessage, 1)}
+	agent.TurnDetection = TurnDetectionModeManual
+	session := NewAgentSession(agent, nil, AgentSessionOptions{SessionCloseTranscriptTimeout: 0.25})
+	session.activity = NewAgentActivity(agent, session)
+	session.started = true
+	session.activity.OnFinalTranscript(&stt.SpeechEvent{
+		Alternatives: []stt.SpeechData{{Text: "closing turn"}},
+	})
+
+	session.CloseSoon(CloseReasonUserInitiated)
+
+	select {
+	case msg := <-agent.turns:
+		if msg.TextContent() != "closing turn" {
+			t.Fatalf("turn message text = %q, want closing turn", msg.TextContent())
+		}
+	case <-testTimeout():
+		t.Fatal("OnUserTurnCompleted was not called before close")
+	}
+}
+
 func TestAgentSessionUpdateAgentBeforeStartSwapsAgentOnly(t *testing.T) {
 	initial := &trackingAgent{Agent: NewAgent("initial")}
 	next := &trackingAgent{Agent: NewAgent("next")}
