@@ -29,6 +29,7 @@ import (
 	adaptergoogle "github.com/cavos-io/rtp-agent/adapter/google"
 	"github.com/cavos-io/rtp-agent/adapter/gradium"
 	"github.com/cavos-io/rtp-agent/adapter/groq"
+	"github.com/cavos-io/rtp-agent/adapter/inworld"
 	"github.com/cavos-io/rtp-agent/adapter/openai"
 	"github.com/cavos-io/rtp-agent/core/agent"
 	"github.com/cavos-io/rtp-agent/core/llm"
@@ -57,6 +58,7 @@ const (
 	providerGoogle     = "google"
 	providerGradium    = "gradium"
 	providerGroq       = "groq"
+	providerInworld    = "inworld"
 	providerOpenAI     = "openai"
 	providerLiveKit    = "livekit"
 )
@@ -153,6 +155,9 @@ type AppConfig struct {
 	STTUserID                               string
 	STTVADBucket                            *int
 	STTVADFlush                             *bool
+	STTVoiceProfile                         *bool
+	STTVoiceProfileTopN                     *int
+	STTMinEndOfTurnSilenceWhenConfident     *int
 	TTSProvider                             string
 	TTSModel                                string
 	TTSVoice                                string
@@ -178,10 +183,19 @@ type AppConfig struct {
 	TTSInstructions                         string
 	TTSResponseFormat                       string
 	TTSBaseURL                              string
+	TTSWebsocketURL                         string
 	TTSTextType                             string
 	TTSNumberOfChannels                     *int
 	TTSSampleWidth                          *int
 	TTSJSONConfig                           map[string]any
+	TTSBitRate                              *int
+	TTSSpeakingRate                         *float64
+	TTSTimestampType                        string
+	TTSTextNormalization                    *bool
+	TTSDeliveryMode                         string
+	TTSTimestampTransportStrategy           string
+	TTSBufferCharThreshold                  *int
+	TTSMaxBufferDelayMS                     *int
 	RealtimeProvider                        string
 	RealtimeModel                           string
 
@@ -201,6 +215,7 @@ type AppConfig struct {
 	GladiaAPIKey      string
 	GnaniAPIKey       string
 	GradiumAPIKey     string
+	InworldAPIKey     string
 
 	GoogleCredentialsFile string
 
@@ -306,6 +321,9 @@ func DefaultConfigFromEnv() AppConfig {
 		STTUserID:                               os.Getenv("RTP_AGENT_STT_USER_ID"),
 		STTVADBucket:                            getenvOptionalInt("RTP_AGENT_STT_VAD_BUCKET"),
 		STTVADFlush:                             getenvOptionalBool("RTP_AGENT_STT_VAD_FLUSH"),
+		STTVoiceProfile:                         getenvOptionalBool("RTP_AGENT_STT_VOICE_PROFILE"),
+		STTVoiceProfileTopN:                     getenvOptionalInt("RTP_AGENT_STT_VOICE_PROFILE_TOP_N"),
+		STTMinEndOfTurnSilenceWhenConfident:     getenvOptionalInt("RTP_AGENT_STT_MIN_END_OF_TURN_SILENCE_WHEN_CONFIDENT"),
 		TTSProvider:                             normalizedEnv("RTP_AGENT_TTS_PROVIDER"),
 		TTSModel:                                os.Getenv("RTP_AGENT_TTS_MODEL"),
 		TTSVoice:                                os.Getenv("RTP_AGENT_TTS_VOICE"),
@@ -331,10 +349,19 @@ func DefaultConfigFromEnv() AppConfig {
 		TTSInstructions:                         os.Getenv("RTP_AGENT_TTS_INSTRUCTIONS"),
 		TTSResponseFormat:                       os.Getenv("RTP_AGENT_TTS_RESPONSE_FORMAT"),
 		TTSBaseURL:                              os.Getenv("RTP_AGENT_TTS_BASE_URL"),
+		TTSWebsocketURL:                         os.Getenv("RTP_AGENT_TTS_WEBSOCKET_URL"),
 		TTSTextType:                             os.Getenv("RTP_AGENT_TTS_TEXT_TYPE"),
 		TTSNumberOfChannels:                     getenvOptionalInt("RTP_AGENT_TTS_NUMBER_OF_CHANNELS"),
 		TTSSampleWidth:                          getenvOptionalInt("RTP_AGENT_TTS_SAMPLE_WIDTH"),
 		TTSJSONConfig:                           splitEnvMap("RTP_AGENT_TTS_JSON_CONFIG"),
+		TTSBitRate:                              getenvOptionalInt("RTP_AGENT_TTS_BIT_RATE"),
+		TTSSpeakingRate:                         getenvOptionalFloat("RTP_AGENT_TTS_SPEAKING_RATE"),
+		TTSTimestampType:                        os.Getenv("RTP_AGENT_TTS_TIMESTAMP_TYPE"),
+		TTSTextNormalization:                    getenvOptionalBool("RTP_AGENT_TTS_TEXT_NORMALIZATION"),
+		TTSDeliveryMode:                         os.Getenv("RTP_AGENT_TTS_DELIVERY_MODE"),
+		TTSTimestampTransportStrategy:           os.Getenv("RTP_AGENT_TTS_TIMESTAMP_TRANSPORT_STRATEGY"),
+		TTSBufferCharThreshold:                  getenvOptionalInt("RTP_AGENT_TTS_BUFFER_CHAR_THRESHOLD"),
+		TTSMaxBufferDelayMS:                     getenvOptionalInt("RTP_AGENT_TTS_MAX_BUFFER_DELAY_MS"),
 		RealtimeProvider:                        normalizedEnv("RTP_AGENT_REALTIME_PROVIDER"),
 		RealtimeModel:                           os.Getenv("RTP_AGENT_REALTIME_MODEL"),
 		OpenAIAPIKey:                            os.Getenv("OPENAI_API_KEY"),
@@ -353,6 +380,7 @@ func DefaultConfigFromEnv() AppConfig {
 		GladiaAPIKey:                            os.Getenv("GLADIA_API_KEY"),
 		GnaniAPIKey:                             os.Getenv("GNANI_API_KEY"),
 		GradiumAPIKey:                           os.Getenv("GRADIUM_API_KEY"),
+		InworldAPIKey:                           os.Getenv("INWORLD_API_KEY"),
 		GoogleCredentialsFile:                   firstEnv("RTP_AGENT_GOOGLE_CREDENTIALS_FILE", "GOOGLE_APPLICATION_CREDENTIALS"),
 	}
 }
@@ -431,6 +459,8 @@ func configureProviders(cfg AppConfig, a *agent.Agent) (llm.RealtimeModel, error
 		a.LLM = gradium.NewGradiumLLM(cfg.GradiumAPIKey, cfg.LLMModel)
 	case providerGroq:
 		a.LLM = groq.NewGroqLLM(cfg.GroqAPIKey, cfg.LLMModel)
+	case providerInworld:
+		a.LLM = inworld.NewInworldLLM(cfg.InworldAPIKey, cfg.LLMModel)
 	case providerCerebras:
 		a.LLM = cerebras.NewCerebrasLLM(cfg.CerebrasAPIKey, cfg.LLMModel)
 	case providerFal:
@@ -864,6 +894,39 @@ func configureProviders(cfg AppConfig, a *agent.Agent) (llm.RealtimeModel, error
 			sttOpts = append(sttOpts, gradium.WithGradiumSTTBufferSizeSeconds(*cfg.STTBufferSizeSeconds))
 		}
 		a.STT = gradium.NewGradiumSTT(cfg.GradiumAPIKey, sttOpts...)
+	case providerInworld:
+		sttOpts := []inworld.InworldSTTOption{}
+		if cfg.STTBaseURL != "" {
+			sttOpts = append(sttOpts, inworld.WithInworldSTTBaseURL(cfg.STTBaseURL))
+		}
+		if cfg.STTModel != "" {
+			sttOpts = append(sttOpts, inworld.WithInworldSTTModel(cfg.STTModel))
+		}
+		if cfg.STTLanguage != "" {
+			sttOpts = append(sttOpts, inworld.WithInworldSTTLanguage(cfg.STTLanguage))
+		}
+		if cfg.STTSampleRate != nil {
+			sttOpts = append(sttOpts, inworld.WithInworldSTTSampleRate(*cfg.STTSampleRate))
+		}
+		if cfg.STTNumberOfChannels != nil {
+			sttOpts = append(sttOpts, inworld.WithInworldSTTNumChannels(*cfg.STTNumberOfChannels))
+		}
+		if cfg.STTVoiceProfile != nil {
+			sttOpts = append(sttOpts, inworld.WithInworldSTTVoiceProfile(*cfg.STTVoiceProfile))
+		}
+		if cfg.STTVoiceProfileTopN != nil {
+			sttOpts = append(sttOpts, inworld.WithInworldSTTVoiceProfileTopN(*cfg.STTVoiceProfileTopN))
+		}
+		if cfg.STTVADThreshold != nil {
+			sttOpts = append(sttOpts, inworld.WithInworldSTTVADThreshold(*cfg.STTVADThreshold))
+		}
+		if cfg.STTMinEndOfTurnSilenceWhenConfident != nil {
+			sttOpts = append(sttOpts, inworld.WithInworldSTTMinEndOfTurnSilenceWhenConfident(*cfg.STTMinEndOfTurnSilenceWhenConfident))
+		}
+		if cfg.STTEndOfTurnConfidenceThreshold != nil {
+			sttOpts = append(sttOpts, inworld.WithInworldSTTEndOfTurnConfidenceThreshold(*cfg.STTEndOfTurnConfidenceThreshold))
+		}
+		a.STT = inworld.NewInworldSTT(cfg.InworldAPIKey, sttOpts...)
 	case providerAssemblyAI:
 		sttOpts := []assemblyai.AssemblyAISTTOption{}
 		if cfg.STTBaseURL != "" {
@@ -1157,6 +1220,57 @@ func configureProviders(cfg AppConfig, a *agent.Agent) (llm.RealtimeModel, error
 			ttsOpts = append(ttsOpts, gradium.WithGradiumTTSJSONConfig(cfg.TTSJSONConfig))
 		}
 		a.TTS = gradium.NewGradiumTTS(cfg.GradiumAPIKey, cfg.TTSVoice, ttsOpts...)
+	case providerInworld:
+		ttsOpts := []inworld.InworldTTSOption{}
+		if cfg.TTSBaseURL != "" {
+			ttsOpts = append(ttsOpts, inworld.WithInworldTTSBaseURL(cfg.TTSBaseURL))
+		}
+		if cfg.TTSWebsocketURL != "" {
+			ttsOpts = append(ttsOpts, inworld.WithInworldTTSWebsocketURL(cfg.TTSWebsocketURL))
+		}
+		if cfg.TTSVoice != "" {
+			ttsOpts = append(ttsOpts, inworld.WithInworldTTSVoice(cfg.TTSVoice))
+		}
+		if cfg.TTSModel != "" {
+			ttsOpts = append(ttsOpts, inworld.WithInworldTTSModel(cfg.TTSModel))
+		}
+		if cfg.TTSEncoding != "" {
+			ttsOpts = append(ttsOpts, inworld.WithInworldTTSEncoding(cfg.TTSEncoding))
+		}
+		if cfg.TTSBitRate != nil {
+			ttsOpts = append(ttsOpts, inworld.WithInworldTTSBitRate(*cfg.TTSBitRate))
+		}
+		if cfg.TTSSampleRate != nil {
+			ttsOpts = append(ttsOpts, inworld.WithInworldTTSSampleRate(*cfg.TTSSampleRate))
+		}
+		if cfg.TTSSpeakingRate != nil {
+			ttsOpts = append(ttsOpts, inworld.WithInworldTTSSpeakingRate(*cfg.TTSSpeakingRate))
+		}
+		if cfg.TTSTemperature != nil {
+			ttsOpts = append(ttsOpts, inworld.WithInworldTTSTemperature(*cfg.TTSTemperature))
+		}
+		if cfg.TTSLanguage != "" {
+			ttsOpts = append(ttsOpts, inworld.WithInworldTTSLanguage(cfg.TTSLanguage))
+		}
+		if cfg.TTSTimestampType != "" {
+			ttsOpts = append(ttsOpts, inworld.WithInworldTTSTimestampType(cfg.TTSTimestampType))
+		}
+		if cfg.TTSTextNormalization != nil {
+			ttsOpts = append(ttsOpts, inworld.WithInworldTTSTextNormalization(*cfg.TTSTextNormalization))
+		}
+		if cfg.TTSDeliveryMode != "" {
+			ttsOpts = append(ttsOpts, inworld.WithInworldTTSDeliveryMode(cfg.TTSDeliveryMode))
+		}
+		if cfg.TTSTimestampTransportStrategy != "" {
+			ttsOpts = append(ttsOpts, inworld.WithInworldTTSTimestampTransportStrategy(cfg.TTSTimestampTransportStrategy))
+		}
+		if cfg.TTSBufferCharThreshold != nil {
+			ttsOpts = append(ttsOpts, inworld.WithInworldTTSBufferCharThreshold(*cfg.TTSBufferCharThreshold))
+		}
+		if cfg.TTSMaxBufferDelayMS != nil {
+			ttsOpts = append(ttsOpts, inworld.WithInworldTTSMaxBufferDelayMS(*cfg.TTSMaxBufferDelayMS))
+		}
+		a.TTS = inworld.NewInworldTTS(cfg.InworldAPIKey, cfg.TTSVoice, ttsOpts...)
 	case providerCambai:
 		ttsOpts := []cambai.CambaiTTSOption{}
 		if cfg.TTSBaseURL != "" {

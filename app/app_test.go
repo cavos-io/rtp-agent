@@ -516,6 +516,66 @@ func TestDefaultConfigFromEnvSelectsGradiumProviders(t *testing.T) {
 	}
 }
 
+func TestDefaultConfigFromEnvSelectsInworldProviders(t *testing.T) {
+	t.Setenv("INWORLD_API_KEY", "test-inworld-key")
+	t.Setenv("RTP_AGENT_LLM_PROVIDER", "inworld")
+	t.Setenv("RTP_AGENT_LLM_MODEL", "inworld-llm-test")
+	t.Setenv("RTP_AGENT_STT_PROVIDER", "inworld")
+	t.Setenv("RTP_AGENT_STT_BASE_URL", "https://inworld.example/")
+	t.Setenv("RTP_AGENT_STT_MODEL", "inworld-stt-test")
+	t.Setenv("RTP_AGENT_STT_LANGUAGE", "en-US")
+	t.Setenv("RTP_AGENT_STT_SAMPLE_RATE", "16000")
+	t.Setenv("RTP_AGENT_STT_NUMBER_OF_CHANNELS", "1")
+	t.Setenv("RTP_AGENT_STT_VOICE_PROFILE", "false")
+	t.Setenv("RTP_AGENT_STT_VOICE_PROFILE_TOP_N", "2")
+	t.Setenv("RTP_AGENT_STT_VAD_THRESHOLD", "0.4")
+	t.Setenv("RTP_AGENT_STT_MIN_END_OF_TURN_SILENCE_WHEN_CONFIDENT", "180")
+	t.Setenv("RTP_AGENT_STT_END_OF_TURN_CONFIDENCE_THRESHOLD", "0.45")
+	t.Setenv("RTP_AGENT_TTS_PROVIDER", "inworld")
+	t.Setenv("RTP_AGENT_TTS_BASE_URL", "https://inworld.example/")
+	t.Setenv("RTP_AGENT_TTS_WEBSOCKET_URL", "wss://inworld.example/")
+	t.Setenv("RTP_AGENT_TTS_MODEL", "inworld-tts-test")
+	t.Setenv("RTP_AGENT_TTS_VOICE", "Ashley")
+	t.Setenv("RTP_AGENT_TTS_ENCODING", "PCM")
+	t.Setenv("RTP_AGENT_TTS_BIT_RATE", "64000")
+	t.Setenv("RTP_AGENT_TTS_SAMPLE_RATE", "22050")
+	t.Setenv("RTP_AGENT_TTS_SPEAKING_RATE", "1.1")
+	t.Setenv("RTP_AGENT_TTS_TEMPERATURE", "0.8")
+	t.Setenv("RTP_AGENT_TTS_LANGUAGE", "en-US")
+	t.Setenv("RTP_AGENT_TTS_TIMESTAMP_TYPE", "WORD")
+	t.Setenv("RTP_AGENT_TTS_TEXT_NORMALIZATION", "true")
+	t.Setenv("RTP_AGENT_TTS_DELIVERY_MODE", "STREAM")
+	t.Setenv("RTP_AGENT_TTS_TIMESTAMP_TRANSPORT_STRATEGY", "ASYNC")
+	t.Setenv("RTP_AGENT_TTS_BUFFER_CHAR_THRESHOLD", "90")
+	t.Setenv("RTP_AGENT_TTS_MAX_BUFFER_DELAY_MS", "1200")
+
+	app, err := NewApp(DefaultConfigFromEnv())
+	if err != nil {
+		t.Fatalf("NewApp() error = %v", err)
+	}
+	if app.Session == nil {
+		t.Fatal("Session is nil")
+	}
+	if app.Session.LLM == nil {
+		t.Fatal("Session LLM is nil")
+	}
+	if got := app.Session.STT.Label(); got != "inworld.STT" {
+		t.Fatalf("STT label = %q, want inworld.STT", got)
+	}
+	if caps := app.Session.STT.Capabilities(); !caps.Streaming || !caps.InterimResults || caps.OfflineRecognize {
+		t.Fatalf("STT capabilities = %+v, want streaming interim-only", caps)
+	}
+	if got := app.Session.TTS.Label(); got != "inworld.TTS" {
+		t.Fatalf("TTS label = %q, want inworld.TTS", got)
+	}
+	if got := app.Session.TTS.SampleRate(); got != 22050 {
+		t.Fatalf("TTS sample rate = %d, want 22050", got)
+	}
+	if caps := app.Session.TTS.Capabilities(); !caps.Streaming || !caps.AlignedTranscript {
+		t.Fatalf("TTS capabilities = %+v, want streaming aligned transcript", caps)
+	}
+}
+
 func TestDefaultConfigFromEnvSelectsAWSProviders(t *testing.T) {
 	t.Setenv("AWS_REGION", "us-west-2")
 	t.Setenv("RTP_AGENT_LLM_PROVIDER", "aws")
