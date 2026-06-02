@@ -30,7 +30,10 @@ func TestSarvamLLMDefaultsMatchReference(t *testing.T) {
 
 func TestSarvamLLMRejectsUnsupportedModel(t *testing.T) {
 	_, err := NewSarvamLLMWithError("test-key", "not-sarvam")
-	if err == nil || !strings.Contains(err.Error(), "Unsupported Sarvam model") {
+	if err == nil {
+		t.Fatal("NewSarvamLLMWithError returned nil error, want unsupported model error")
+	}
+	if !strings.Contains(err.Error(), "unsupported Sarvam model") {
 		t.Fatalf("error = %v, want unsupported model error", err)
 	}
 }
