@@ -15,6 +15,7 @@ import (
 	"github.com/cavos-io/rtp-agent/core/tts"
 	"github.com/cavos-io/rtp-agent/library/logger"
 	"github.com/cavos-io/rtp-agent/library/tokenize"
+	"github.com/cavos-io/rtp-agent/library/utils"
 	"github.com/gorilla/websocket"
 )
 
@@ -25,6 +26,8 @@ type TTS struct {
 	apiSecret         string
 	baseURL           string
 	sentenceTokenizer tokenize.SentenceTokenizer
+	connPoolMu        sync.Mutex
+	connPool          *utils.ConnectionPool[*websocket.Conn]
 }
 
 type TTSOption func(*TTS)
@@ -77,7 +80,55 @@ func (t *TTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStream, e
 	return tts.SynthesizeWithStream(ctx, t, text)
 }
 
+func (t *TTS) Prewarm() {
+	t.connectionPool().Prewarm(context.Background())
+}
+
 func (t *TTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
+	conn, err := t.connectionPool().Get(ctx, 0)
+	if err != nil {
+		return nil, err
+	}
+
+	ctx, cancel := context.WithCancel(ctx)
+	tokenizer := t.sentenceTokenizer
+	if tokenizer == nil {
+		tokenizer = tokenize.NewBasicSentenceTokenizer()
+	}
+
+	stream := &inferenceTTSStream{
+		tts:       t,
+		conn:      conn,
+		connPool:  t.connectionPool(),
+		ctx:       ctx,
+		cancel:    cancel,
+		tokenizer: tokenizer.Stream("en"),
+		eventCh:   make(chan *tts.SynthesizedAudio, 100),
+	}
+
+	go stream.run()
+
+	return stream, nil
+}
+
+func (t *TTS) connectionPool() *utils.ConnectionPool[*websocket.Conn] {
+	t.connPoolMu.Lock()
+	defer t.connPoolMu.Unlock()
+
+	if t.connPool == nil {
+		t.connPool = utils.NewConnectionPool[*websocket.Conn](utils.ConnectionPoolOptions[*websocket.Conn]{
+			MaxSessionDuration: time.Minute,
+			Connect:            t.connectTTSWebsocket,
+			Close: func(ctx context.Context, conn *websocket.Conn) error {
+				_ = conn.Close()
+				return nil
+			},
+		})
+	}
+	return t.connPool
+}
+
+func (t *TTS) connectTTSWebsocket(ctx context.Context) (*websocket.Conn, error) {
 	token, err := CreateAccessToken(t.apiKey, t.apiSecret, time.Hour)
 	if err != nil {
 		return nil, err
@@ -102,7 +153,7 @@ func (t *TTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
 	header := http.Header{}
 	header.Add("Authorization", "Bearer "+token)
 
-	conn, _, err := websocket.DefaultDialer.Dial(wsURL.String(), header)
+	conn, _, err := websocket.DefaultDialer.DialContext(ctx, wsURL.String(), header)
 	if err != nil {
 		return nil, fmt.Errorf("failed to connect to LiveKit Inference TTS: %w", err)
 	}
@@ -123,29 +174,13 @@ func (t *TTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
 		return nil, err
 	}
 
-	ctx, cancel := context.WithCancel(ctx)
-	tokenizer := t.sentenceTokenizer
-	if tokenizer == nil {
-		tokenizer = tokenize.NewBasicSentenceTokenizer()
-	}
-
-	stream := &inferenceTTSStream{
-		tts:       t,
-		conn:      conn,
-		ctx:       ctx,
-		cancel:    cancel,
-		tokenizer: tokenizer.Stream("en"),
-		eventCh:   make(chan *tts.SynthesizedAudio, 100),
-	}
-
-	go stream.run()
-
-	return stream, nil
+	return conn, nil
 }
 
 type inferenceTTSStream struct {
 	tts       *TTS
 	conn      *websocket.Conn
+	connPool  *utils.ConnectionPool[*websocket.Conn]
 	ctx       context.Context
 	cancel    context.CancelFunc
 	tokenizer tokenize.SentenceStream
@@ -186,6 +221,9 @@ func (s *inferenceTTSStream) Close() error {
 	s.closed = true
 	s.cancel()
 	s.tokenizer.Close()
+	if s.connPool != nil {
+		s.connPool.Remove(s.conn)
+	}
 	s.conn.Close()
 	close(s.eventCh)
 	return nil
