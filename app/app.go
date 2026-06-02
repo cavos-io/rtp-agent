@@ -53,6 +53,7 @@ import (
 	"github.com/cavos-io/rtp-agent/adapter/speechmatics"
 	"github.com/cavos-io/rtp-agent/adapter/spitch"
 	"github.com/cavos-io/rtp-agent/adapter/telnyx"
+	"github.com/cavos-io/rtp-agent/adapter/ultravox"
 	"github.com/cavos-io/rtp-agent/adapter/upliftai"
 	"github.com/cavos-io/rtp-agent/adapter/xai"
 	"github.com/cavos-io/rtp-agent/core/agent"
@@ -106,6 +107,7 @@ const (
 	providerSpeechmatics = "speechmatics"
 	providerSpitch       = "spitch"
 	providerTelnyx       = "telnyx"
+	providerUltravox     = "ultravox"
 	providerUpliftAI     = "upliftai"
 	providerXAI          = "xai"
 	providerLiveKit      = "livekit"
@@ -328,6 +330,7 @@ type AppConfig struct {
 	SpeechmaticsAPIKey          string
 	SpitchAPIKey                string
 	TelnyxAPIKey                string
+	UltravoxAPIKey              string
 	UpliftAIAPIKey              string
 	XAIAPIKey                   string
 	XAITools                    []string
@@ -563,6 +566,7 @@ func DefaultConfigFromEnv() AppConfig {
 		SpeechmaticsAPIKey:                      os.Getenv("SPEECHMATICS_API_KEY"),
 		SpitchAPIKey:                            os.Getenv("SPITCH_API_KEY"),
 		TelnyxAPIKey:                            os.Getenv("TELNYX_API_KEY"),
+		UltravoxAPIKey:                          os.Getenv("ULTRAVOX_API_KEY"),
 		UpliftAIAPIKey:                          os.Getenv("UPLIFTAI_API_KEY"),
 		XAIAPIKey:                               os.Getenv("XAI_API_KEY"),
 		XAITools:                                splitEnvList("RTP_AGENT_XAI_TOOLS"),
@@ -2299,6 +2303,8 @@ func configureProviders(cfg AppConfig, a *agent.Agent) (llm.RealtimeModel, error
 			ttsOpts = append(ttsOpts, telnyx.WithTelnyxTTSBaseURL(cfg.TTSBaseURL))
 		}
 		a.TTS = telnyx.NewTelnyxTTS(cfg.TelnyxAPIKey, cfg.TTSVoice, ttsOpts...)
+	case providerUltravox:
+		a.TTS = ultravox.NewUltravoxTTS(cfg.UltravoxAPIKey, cfg.TTSVoice)
 	case providerUpliftAI:
 		a.TTS = upliftai.NewUpliftAITTS(cfg.UpliftAIAPIKey, cfg.TTSVoice)
 	case providerXAI:

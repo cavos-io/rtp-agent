@@ -106,6 +106,29 @@ func TestDefaultConfigFromEnvSelectsUpliftAIProviders(t *testing.T) {
 	}
 }
 
+func TestDefaultConfigFromEnvSelectsUltravoxTTS(t *testing.T) {
+	t.Setenv("ULTRAVOX_API_KEY", "test-ultravox-key")
+	t.Setenv("RTP_AGENT_TTS_PROVIDER", "ultravox")
+	t.Setenv("RTP_AGENT_TTS_VOICE", "alloy")
+
+	app, err := NewApp(DefaultConfigFromEnv())
+	if err != nil {
+		t.Fatalf("NewApp() error = %v", err)
+	}
+	if app.Session == nil || app.Session.TTS == nil {
+		t.Fatal("Session TTS is nil")
+	}
+	if got := app.Session.TTS.Label(); got != "ultravox.TTS" {
+		t.Fatalf("TTS label = %q, want ultravox.TTS", got)
+	}
+	if got := app.Session.TTS.SampleRate(); got != 24000 {
+		t.Fatalf("TTS sample rate = %d, want 24000", got)
+	}
+	if caps := app.Session.TTS.Capabilities(); caps.Streaming || caps.AlignedTranscript {
+		t.Fatalf("TTS capabilities = %+v, want non-streaming without aligned transcript", caps)
+	}
+}
+
 func TestDefaultConfigFromEnvSelectsSileroVAD(t *testing.T) {
 	t.Setenv("RTP_AGENT_VAD_PROVIDER", "silero")
 	t.Setenv("RTP_AGENT_VAD_SAMPLE_RATE", "8000")
