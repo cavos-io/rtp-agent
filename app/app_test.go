@@ -158,6 +158,46 @@ func TestDefaultConfigFromEnvSelectsAzureSpeechProviders(t *testing.T) {
 	}
 }
 
+func TestDefaultConfigFromEnvSelectsBasetenProviders(t *testing.T) {
+	t.Setenv("BASETEN_API_KEY", "test-baseten-key")
+	t.Setenv("RTP_AGENT_LLM_PROVIDER", "baseten")
+	t.Setenv("RTP_AGENT_LLM_MODEL", "llama-test")
+	t.Setenv("RTP_AGENT_STT_PROVIDER", "baseten")
+	t.Setenv("RTP_AGENT_STT_MODEL", "stt-test")
+	t.Setenv("RTP_AGENT_STT_LANGUAGE", "en")
+	t.Setenv("RTP_AGENT_STT_ENCODING", "pcm_s16le")
+	t.Setenv("RTP_AGENT_STT_SAMPLE_RATE", "16000")
+	t.Setenv("RTP_AGENT_STT_BUFFER_SIZE_SECONDS", "0.064")
+	t.Setenv("RTP_AGENT_STT_VAD_THRESHOLD", "0.7")
+	t.Setenv("RTP_AGENT_TTS_PROVIDER", "baseten")
+	t.Setenv("RTP_AGENT_TTS_MODEL", "tts-test")
+	t.Setenv("RTP_AGENT_TTS_VOICE", "tara")
+	t.Setenv("RTP_AGENT_TTS_LANGUAGE", "en")
+	t.Setenv("RTP_AGENT_TTS_TEMPERATURE", "0.6")
+	t.Setenv("RTP_AGENT_TTS_MAX_TOKENS", "2000")
+	t.Setenv("RTP_AGENT_TTS_BUFFER_SIZE", "10")
+
+	app, err := NewApp(DefaultConfigFromEnv())
+	if err != nil {
+		t.Fatalf("NewApp() error = %v", err)
+	}
+	if app.Session == nil {
+		t.Fatal("Session is nil")
+	}
+	if got := llm.Provider(app.Session.LLM); got != "Baseten" {
+		t.Fatalf("LLM provider = %q, want Baseten", got)
+	}
+	if got := app.Session.STT.Label(); got != "baseten.STT" {
+		t.Fatalf("STT label = %q, want baseten.STT", got)
+	}
+	if got := app.Session.TTS.Label(); got != "baseten.TTS" {
+		t.Fatalf("TTS label = %q, want baseten.TTS", got)
+	}
+	if got := app.Session.TTS.SampleRate(); got != 24000 {
+		t.Fatalf("TTS sample rate = %d, want 24000", got)
+	}
+}
+
 func TestDefaultConfigFromEnvSelectsLiveKitInferenceLLM(t *testing.T) {
 	t.Setenv("LIVEKIT_API_KEY", "test-livekit-key")
 	t.Setenv("LIVEKIT_API_SECRET", "test-livekit-secret")

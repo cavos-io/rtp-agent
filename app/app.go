@@ -14,6 +14,7 @@ import (
 	"github.com/cavos-io/rtp-agent/adapter/asyncai"
 	adapteraws "github.com/cavos-io/rtp-agent/adapter/aws"
 	"github.com/cavos-io/rtp-agent/adapter/azure"
+	"github.com/cavos-io/rtp-agent/adapter/baseten"
 	"github.com/cavos-io/rtp-agent/adapter/openai"
 	"github.com/cavos-io/rtp-agent/core/agent"
 	"github.com/cavos-io/rtp-agent/core/llm"
@@ -27,6 +28,7 @@ const (
 	providerAsyncAI    = "asyncai"
 	providerAWS        = "aws"
 	providerAzure      = "azure"
+	providerBaseten    = "baseten"
 	providerOpenAI     = "openai"
 	providerLiveKit    = "livekit"
 )
@@ -42,10 +44,13 @@ type AppConfig struct {
 	STTProvider                     string
 	STTModel                        string
 	STTLanguage                     string
+	STTEncoding                     string
+	STTChainID                      string
 	STTDetectLanguage               bool
 	STTPrompt                       string
 	STTBaseURL                      string
 	STTSampleRate                   *int
+	STTBufferSizeSeconds            *float64
 	STTMinTurnSilence               *int
 	STTMaxTurnSilence               *int
 	STTEndOfTurnConfidenceThreshold *float64
@@ -80,6 +85,9 @@ type AppConfig struct {
 	TTSEncoding                     string
 	TTSSampleRate                   *int
 	TTSSpeed                        float64
+	TTSTemperature                  *float64
+	TTSMaxTokens                    *int
+	TTSBufferSize                   *int
 	TTSInstructions                 string
 	TTSResponseFormat               string
 	TTSBaseURL                      string
@@ -111,10 +119,13 @@ func DefaultConfigFromEnv() AppConfig {
 		STTProvider:                     normalizedEnv("RTP_AGENT_STT_PROVIDER"),
 		STTModel:                        os.Getenv("RTP_AGENT_STT_MODEL"),
 		STTLanguage:                     os.Getenv("RTP_AGENT_STT_LANGUAGE"),
+		STTEncoding:                     os.Getenv("RTP_AGENT_STT_ENCODING"),
+		STTChainID:                      os.Getenv("RTP_AGENT_STT_CHAIN_ID"),
 		STTDetectLanguage:               getenvBool("RTP_AGENT_STT_DETECT_LANGUAGE"),
 		STTPrompt:                       os.Getenv("RTP_AGENT_STT_PROMPT"),
 		STTBaseURL:                      os.Getenv("RTP_AGENT_STT_BASE_URL"),
 		STTSampleRate:                   getenvOptionalInt("RTP_AGENT_STT_SAMPLE_RATE"),
+		STTBufferSizeSeconds:            getenvOptionalFloat("RTP_AGENT_STT_BUFFER_SIZE_SECONDS"),
 		STTMinTurnSilence:               getenvOptionalInt("RTP_AGENT_STT_MIN_TURN_SILENCE"),
 		STTMaxTurnSilence:               getenvOptionalInt("RTP_AGENT_STT_MAX_TURN_SILENCE"),
 		STTEndOfTurnConfidenceThreshold: getenvOptionalFloat("RTP_AGENT_STT_END_OF_TURN_CONFIDENCE_THRESHOLD"),
@@ -149,6 +160,9 @@ func DefaultConfigFromEnv() AppConfig {
 		TTSEncoding:                     os.Getenv("RTP_AGENT_TTS_ENCODING"),
 		TTSSampleRate:                   getenvOptionalInt("RTP_AGENT_TTS_SAMPLE_RATE"),
 		TTSSpeed:                        getenvFloat("RTP_AGENT_TTS_SPEED"),
+		TTSTemperature:                  getenvOptionalFloat("RTP_AGENT_TTS_TEMPERATURE"),
+		TTSMaxTokens:                    getenvOptionalInt("RTP_AGENT_TTS_MAX_TOKENS"),
+		TTSBufferSize:                   getenvOptionalInt("RTP_AGENT_TTS_BUFFER_SIZE"),
 		TTSInstructions:                 os.Getenv("RTP_AGENT_TTS_INSTRUCTIONS"),
 		TTSResponseFormat:               os.Getenv("RTP_AGENT_TTS_RESPONSE_FORMAT"),
 		TTSBaseURL:                      os.Getenv("RTP_AGENT_TTS_BASE_URL"),
@@ -214,6 +228,12 @@ func configureProviders(cfg AppConfig, a *agent.Agent) (llm.RealtimeModel, error
 	case "":
 	case providerAWS:
 		provider, err := adapteraws.NewAWSLLM(context.Background(), cfg.AWSRegion, cfg.LLMModel)
+		if err != nil {
+			return nil, err
+		}
+		a.LLM = provider
+	case providerBaseten:
+		provider, err := baseten.NewBasetenLLM("", cfg.LLMModel)
 		if err != nil {
 			return nil, err
 		}
@@ -306,6 +326,34 @@ func configureProviders(cfg AppConfig, a *agent.Agent) (llm.RealtimeModel, error
 		a.STT = provider
 	case providerAzure:
 		provider, err := azure.NewAzureSTT("", "")
+		if err != nil {
+			return nil, err
+		}
+		a.STT = provider
+	case providerBaseten:
+		sttOpts := []baseten.BasetenSTTOption{}
+		if cfg.STTBaseURL != "" {
+			sttOpts = append(sttOpts, baseten.WithBasetenSTTModelEndpoint(cfg.STTBaseURL))
+		}
+		if cfg.STTChainID != "" {
+			sttOpts = append(sttOpts, baseten.WithBasetenSTTChainID(cfg.STTChainID))
+		}
+		if cfg.STTLanguage != "" {
+			sttOpts = append(sttOpts, baseten.WithBasetenSTTLanguage(cfg.STTLanguage))
+		}
+		if cfg.STTEncoding != "" {
+			sttOpts = append(sttOpts, baseten.WithBasetenSTTEncoding(cfg.STTEncoding))
+		}
+		if cfg.STTSampleRate != nil {
+			sttOpts = append(sttOpts, baseten.WithBasetenSTTSampleRate(*cfg.STTSampleRate))
+		}
+		if cfg.STTBufferSizeSeconds != nil {
+			sttOpts = append(sttOpts, baseten.WithBasetenSTTBufferSizeSeconds(*cfg.STTBufferSizeSeconds))
+		}
+		if cfg.STTVADThreshold != nil {
+			sttOpts = append(sttOpts, baseten.WithBasetenSTTVADThreshold(*cfg.STTVADThreshold))
+		}
+		provider, err := baseten.NewBasetenSTT("", cfg.STTModel, sttOpts...)
 		if err != nil {
 			return nil, err
 		}
@@ -410,6 +458,31 @@ func configureProviders(cfg AppConfig, a *agent.Agent) (llm.RealtimeModel, error
 		a.TTS = provider
 	case providerAzure:
 		provider, err := azure.NewAzureTTS("", "", cfg.TTSVoice)
+		if err != nil {
+			return nil, err
+		}
+		a.TTS = provider
+	case providerBaseten:
+		ttsOpts := []baseten.BasetenTTSOption{}
+		if cfg.TTSBaseURL != "" {
+			ttsOpts = append(ttsOpts, baseten.WithBasetenTTSModelEndpoint(cfg.TTSBaseURL))
+		}
+		if cfg.TTSVoice != "" {
+			ttsOpts = append(ttsOpts, baseten.WithBasetenTTSVoice(cfg.TTSVoice))
+		}
+		if cfg.TTSLanguage != "" {
+			ttsOpts = append(ttsOpts, baseten.WithBasetenTTSLanguage(cfg.TTSLanguage))
+		}
+		if cfg.TTSTemperature != nil {
+			ttsOpts = append(ttsOpts, baseten.WithBasetenTTSTemperature(*cfg.TTSTemperature))
+		}
+		if cfg.TTSMaxTokens != nil {
+			ttsOpts = append(ttsOpts, baseten.WithBasetenTTSMaxTokens(*cfg.TTSMaxTokens))
+		}
+		if cfg.TTSBufferSize != nil {
+			ttsOpts = append(ttsOpts, baseten.WithBasetenTTSBufferSize(*cfg.TTSBufferSize))
+		}
+		provider, err := baseten.NewBasetenTTS("", cfg.TTSModel, ttsOpts...)
 		if err != nil {
 			return nil, err
 		}
