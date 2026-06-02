@@ -1975,6 +1975,24 @@ func TestRunSessionConnectsRoomIOToSession(t *testing.T) {
 	}
 }
 
+func TestDefaultConfigFromEnvConfiguresLLMTurnDetector(t *testing.T) {
+	t.Setenv("OPENAI_API_KEY", "test-openai-key")
+	t.Setenv("RTP_AGENT_LLM_PROVIDER", "openai")
+	t.Setenv("RTP_AGENT_LLM_MODEL", "gpt-4o-mini")
+	t.Setenv("RTP_AGENT_TURN_DETECTOR_PROVIDER", "llm")
+
+	app, err := NewApp(DefaultConfigFromEnv())
+	if err != nil {
+		t.Fatalf("NewApp() error = %v", err)
+	}
+	if app.Agent == nil {
+		t.Fatal("Agent is nil")
+	}
+	if got := fmt.Sprintf("%T", app.Agent.TurnDetector); got != "*agent.LLMTurnDetector" {
+		t.Fatalf("TurnDetector type = %q, want *agent.LLMTurnDetector", got)
+	}
+}
+
 func TestDefaultConfigFromEnvSelectsAnthropicLLM(t *testing.T) {
 	t.Setenv("ANTHROPIC_API_KEY", "test-anthropic-key")
 	t.Setenv("RTP_AGENT_LLM_PROVIDER", "anthropic")

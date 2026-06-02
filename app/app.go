@@ -275,6 +275,7 @@ type AppConfig struct {
 	VADUpdateInterval                       *float64
 	VADSampleRate                           *int
 	AvatarProvider                          string
+	TurnDetectorProvider                    string
 	BackgroundAudioAmbient                  string
 	BackgroundAudioThinking                 string
 	TTSProvider                             string
@@ -541,6 +542,7 @@ func DefaultConfigFromEnv() AppConfig {
 		VADUpdateInterval:                       getenvOptionalFloat("RTP_AGENT_VAD_UPDATE_INTERVAL"),
 		VADSampleRate:                           getenvOptionalInt("RTP_AGENT_VAD_SAMPLE_RATE"),
 		AvatarProvider:                          normalizedEnv("RTP_AGENT_AVATAR_PROVIDER"),
+		TurnDetectorProvider:                    normalizedEnv("RTP_AGENT_TURN_DETECTOR_PROVIDER"),
 		BackgroundAudioAmbient:                  os.Getenv("RTP_AGENT_BACKGROUND_AUDIO_AMBIENT"),
 		BackgroundAudioThinking:                 os.Getenv("RTP_AGENT_BACKGROUND_AUDIO_THINKING"),
 		TTSProvider:                             normalizedEnv("RTP_AGENT_TTS_PROVIDER"),
@@ -681,6 +683,9 @@ func NewApp(cfg AppConfig) (*App, error) {
 
 	realtimeModel, err := configureProviders(cfg, baseAgent)
 	if err != nil {
+		return nil, err
+	}
+	if err := configureTurnDetector(cfg, baseAgent); err != nil {
 		return nil, err
 	}
 	if normalizeProvider(cfg.LLMProvider) == providerXAI {
@@ -841,6 +846,21 @@ func configureVAD(cfg AppConfig, a *agent.Agent) error {
 		return nil
 	default:
 		return fmt.Errorf("unsupported RTP_AGENT_VAD_PROVIDER %q", cfg.VADProvider)
+	}
+}
+
+func configureTurnDetector(cfg AppConfig, a *agent.Agent) error {
+	switch normalizeProvider(cfg.TurnDetectorProvider) {
+	case "":
+		return nil
+	case "llm":
+		if a.LLM == nil {
+			return fmt.Errorf("RTP_AGENT_TURN_DETECTOR_PROVIDER=llm requires RTP_AGENT_LLM_PROVIDER")
+		}
+		a.TurnDetector = agent.NewLLMTurnDetector(a.LLM)
+		return nil
+	default:
+		return fmt.Errorf("unsupported RTP_AGENT_TURN_DETECTOR_PROVIDER %q", cfg.TurnDetectorProvider)
 	}
 }
 
