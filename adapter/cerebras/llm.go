@@ -31,6 +31,10 @@ func (l *CerebrasLLM) Model() string {
 	return l.inner.Model()
 }
 
+func (l *CerebrasLLM) Provider() string {
+	return "cerebras"
+}
+
 func (l *CerebrasLLM) BaseURL() string {
 	return l.baseURL
 }
