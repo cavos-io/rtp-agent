@@ -36,17 +36,25 @@ import (
 	"github.com/cavos-io/rtp-agent/adapter/mistralai"
 	"github.com/cavos-io/rtp-agent/adapter/murf"
 	"github.com/cavos-io/rtp-agent/adapter/neuphonic"
+	"github.com/cavos-io/rtp-agent/adapter/nvidia"
 	"github.com/cavos-io/rtp-agent/adapter/openai"
+	"github.com/cavos-io/rtp-agent/adapter/perplexity"
 	"github.com/cavos-io/rtp-agent/adapter/resemble"
 	"github.com/cavos-io/rtp-agent/adapter/respeecher"
 	"github.com/cavos-io/rtp-agent/adapter/rime"
 	"github.com/cavos-io/rtp-agent/adapter/rtzr"
 	"github.com/cavos-io/rtp-agent/adapter/sarvam"
+	"github.com/cavos-io/rtp-agent/adapter/silero"
 	"github.com/cavos-io/rtp-agent/adapter/simplismart"
 	"github.com/cavos-io/rtp-agent/adapter/slng"
 	"github.com/cavos-io/rtp-agent/adapter/smallestai"
 	"github.com/cavos-io/rtp-agent/adapter/soniox"
 	"github.com/cavos-io/rtp-agent/adapter/speechify"
+	"github.com/cavos-io/rtp-agent/adapter/speechmatics"
+	"github.com/cavos-io/rtp-agent/adapter/spitch"
+	"github.com/cavos-io/rtp-agent/adapter/telnyx"
+	"github.com/cavos-io/rtp-agent/adapter/upliftai"
+	"github.com/cavos-io/rtp-agent/adapter/xai"
 	"github.com/cavos-io/rtp-agent/core/agent"
 	"github.com/cavos-io/rtp-agent/core/llm"
 	"github.com/cavos-io/rtp-agent/interface/worker"
@@ -54,45 +62,53 @@ import (
 )
 
 const (
-	providerAnthropic   = "anthropic"
-	providerAssemblyAI  = "assemblyai"
-	providerAsyncAI     = "asyncai"
-	providerAWS         = "aws"
-	providerAzure       = "azure"
-	providerBaseten     = "baseten"
-	providerCambai      = "cambai"
-	providerCartesia    = "cartesia"
-	providerCerebras    = "cerebras"
-	providerClova       = "clova"
-	providerDeepgram    = "deepgram"
-	providerElevenLabs  = "elevenlabs"
-	providerFal         = "fal"
-	providerFireworks   = "fireworks"
-	providerFishAudio   = "fishaudio"
-	providerGladia      = "gladia"
-	providerGnani       = "gnani"
-	providerGoogle      = "google"
-	providerGradium     = "gradium"
-	providerGroq        = "groq"
-	providerHume        = "hume"
-	providerInworld     = "inworld"
-	providerLMNT        = "lmnt"
-	providerMinimax     = "minimax"
-	providerMistralAI   = "mistralai"
-	providerMurf        = "murf"
-	providerNeuphonic   = "neuphonic"
-	providerOpenAI      = "openai"
-	providerResemble    = "resemble"
-	providerRespeecher  = "respeecher"
-	providerRime        = "rime"
-	providerRtzr        = "rtzr"
-	providerSarvam      = "sarvam"
-	providerSimplismart = "simplismart"
-	providerSLNG        = "slng"
-	providerSmallestAI  = "smallestai"
-	providerSoniox      = "soniox"
-	providerSpeechify   = "speechify"
-	providerLiveKit     = "livekit"
+	providerAnthropic    = "anthropic"
+	providerAssemblyAI   = "assemblyai"
+	providerAsyncAI      = "asyncai"
+	providerAWS          = "aws"
+	providerAzure        = "azure"
+	providerBaseten      = "baseten"
+	providerCambai       = "cambai"
+	providerCartesia     = "cartesia"
+	providerCerebras     = "cerebras"
+	providerClova        = "clova"
+	providerDeepgram     = "deepgram"
+	providerElevenLabs   = "elevenlabs"
+	providerFal          = "fal"
+	providerFireworks    = "fireworks"
+	providerFishAudio    = "fishaudio"
+	providerGladia       = "gladia"
+	providerGnani        = "gnani"
+	providerGoogle       = "google"
+	providerGradium      = "gradium"
+	providerGroq         = "groq"
+	providerHume         = "hume"
+	providerInworld      = "inworld"
+	providerLMNT         = "lmnt"
+	providerMinimax      = "minimax"
+	providerMistralAI    = "mistralai"
+	providerMurf         = "murf"
+	providerNeuphonic    = "neuphonic"
+	providerNvidia       = "nvidia"
+	providerOpenAI       = "openai"
+	providerPerplexity   = "perplexity"
+	providerResemble     = "resemble"
+	providerRespeecher   = "respeecher"
+	providerRime         = "rime"
+	providerRtzr         = "rtzr"
+	providerSarvam       = "sarvam"
+	providerSilero       = "silero"
+	providerSimplismart  = "simplismart"
+	providerSLNG         = "slng"
+	providerSmallestAI   = "smallestai"
+	providerSoniox       = "soniox"
+	providerSpeechify    = "speechify"
+	providerSpeechmatics = "speechmatics"
+	providerSpitch       = "spitch"
+	providerTelnyx       = "telnyx"
+	providerUpliftAI     = "upliftai"
+	providerXAI          = "xai"
+	providerLiveKit      = "livekit"
 )
 
 type AppConfig struct {
@@ -147,6 +163,8 @@ type AppConfig struct {
 	STTTranslationTargetLanguages           []string
 	STTTranslationSourceLanguages           []string
 	STTTranslationModel                     string
+	STTOutputLocale                         string
+	STTOperatingPoint                       string
 	STTTranslationMatchOriginalUtterances   *bool
 	STTTranslationLipsync                   *bool
 	STTTranslationContextAdaptation         *bool
@@ -207,6 +225,17 @@ type AppConfig struct {
 	STTInterruptMinSpeechFrames             *int
 	STTPreSpeechPadFrames                   *int
 	STTNumInitialIgnoredFrames              *int
+	STTPreferCurrentSpeaker                 *bool
+	VADProvider                             string
+	VADMinSpeechDuration                    *float64
+	VADMinSilenceDuration                   *float64
+	VADPrefixPaddingDuration                *float64
+	VADPaddingDuration                      *float64
+	VADMaxBufferedSpeech                    *float64
+	VADActivationThreshold                  *float64
+	VADDeactivationThreshold                *float64
+	VADUpdateInterval                       *float64
+	VADSampleRate                           *int
 	TTSProvider                             string
 	TTSModel                                string
 	TTSVoice                                string
@@ -259,41 +288,52 @@ type AppConfig struct {
 	RealtimeProvider                        string
 	RealtimeModel                           string
 
-	OpenAIAPIKey      string
-	AnthropicAPIKey   string
-	GoogleAPIKey      string
-	ElevenLabsAPIKey  string
-	GroqAPIKey        string
-	CerebrasAPIKey    string
-	ClovaSTTSecret    string
-	ClovaSTTInvokeURL string
-	ClovaClientID     string
-	ClovaClientSecret string
-	FalAPIKey         string
-	FireworksAPIKey   string
-	FishAudioAPIKey   string
-	GladiaAPIKey      string
-	GnaniAPIKey       string
-	GradiumAPIKey     string
-	HumeAPIKey        string
-	InworldAPIKey     string
-	LMNTAPIKey        string
-	MinimaxAPIKey     string
-	MistralAPIKey     string
-	MurfAPIKey        string
-	NeuphonicAPIKey   string
-	ResembleAPIKey    string
-	RespeecherAPIKey  string
-	RimeAPIKey        string
-	RtzrClientID      string
-	RtzrClientSecret  string
-	RtzrAccessToken   string
-	SarvamAPIKey      string
-	SimplismartAPIKey string
-	SmallestAIAPIKey  string
-	SLNGAPIKey        string
-	SonioxAPIKey      string
-	SpeechifyAPIKey   string
+	OpenAIAPIKey                string
+	AnthropicAPIKey             string
+	GoogleAPIKey                string
+	ElevenLabsAPIKey            string
+	GroqAPIKey                  string
+	CerebrasAPIKey              string
+	ClovaSTTSecret              string
+	ClovaSTTInvokeURL           string
+	ClovaClientID               string
+	ClovaClientSecret           string
+	FalAPIKey                   string
+	FireworksAPIKey             string
+	FishAudioAPIKey             string
+	GladiaAPIKey                string
+	GnaniAPIKey                 string
+	GradiumAPIKey               string
+	HumeAPIKey                  string
+	InworldAPIKey               string
+	LMNTAPIKey                  string
+	MinimaxAPIKey               string
+	MistralAPIKey               string
+	MurfAPIKey                  string
+	NeuphonicAPIKey             string
+	NvidiaAPIKey                string
+	PerplexityAPIKey            string
+	ResembleAPIKey              string
+	RespeecherAPIKey            string
+	RimeAPIKey                  string
+	RtzrClientID                string
+	RtzrClientSecret            string
+	RtzrAccessToken             string
+	SarvamAPIKey                string
+	SimplismartAPIKey           string
+	SmallestAIAPIKey            string
+	SLNGAPIKey                  string
+	SonioxAPIKey                string
+	SpeechifyAPIKey             string
+	SpeechmaticsAPIKey          string
+	SpitchAPIKey                string
+	TelnyxAPIKey                string
+	UpliftAIAPIKey              string
+	XAIAPIKey                   string
+	XAITools                    []string
+	XAIAllowedXHandles          []string
+	XAIFileSearchVectorStoreIDs []string
+	XAIFileSearchMaxResults     *int
 
 	GoogleCredentialsFile string
 
@@ -359,6 +399,8 @@ func DefaultConfigFromEnv() AppConfig {
 		STTTranslationTargetLanguages:           splitEnvList("RTP_AGENT_STT_TRANSLATION_TARGET_LANGUAGES"),
 		STTTranslationSourceLanguages:           splitEnvList("RTP_AGENT_STT_TRANSLATION_SOURCE_LANGUAGES"),
 		STTTranslationModel:                     os.Getenv("RTP_AGENT_STT_TRANSLATION_MODEL"),
+		STTOutputLocale:                         os.Getenv("RTP_AGENT_STT_OUTPUT_LOCALE"),
+		STTOperatingPoint:                       os.Getenv("RTP_AGENT_STT_OPERATING_POINT"),
 		STTTranslationMatchOriginalUtterances:   getenvOptionalBool("RTP_AGENT_STT_TRANSLATION_MATCH_ORIGINAL_UTTERANCES"),
 		STTTranslationLipsync:                   getenvOptionalBool("RTP_AGENT_STT_TRANSLATION_LIPSYNC"),
 		STTTranslationContextAdaptation:         getenvOptionalBool("RTP_AGENT_STT_TRANSLATION_CONTEXT_ADAPTATION"),
@@ -419,6 +461,17 @@ func DefaultConfigFromEnv() AppConfig {
 		STTInterruptMinSpeechFrames:             getenvOptionalInt("RTP_AGENT_STT_INTERRUPT_MIN_SPEECH_FRAMES"),
 		STTPreSpeechPadFrames:                   getenvOptionalInt("RTP_AGENT_STT_PRE_SPEECH_PAD_FRAMES"),
 		STTNumInitialIgnoredFrames:              getenvOptionalInt("RTP_AGENT_STT_NUM_INITIAL_IGNORED_FRAMES"),
+		STTPreferCurrentSpeaker:                 getenvOptionalBool("RTP_AGENT_STT_PREFER_CURRENT_SPEAKER"),
+		VADProvider:                             normalizedEnv("RTP_AGENT_VAD_PROVIDER"),
+		VADMinSpeechDuration:                    getenvOptionalFloat("RTP_AGENT_VAD_MIN_SPEECH_DURATION"),
+		VADMinSilenceDuration:                   getenvOptionalFloat("RTP_AGENT_VAD_MIN_SILENCE_DURATION"),
+		VADPrefixPaddingDuration:                getenvOptionalFloat("RTP_AGENT_VAD_PREFIX_PADDING_DURATION"),
+		VADPaddingDuration:                      getenvOptionalFloat("RTP_AGENT_VAD_PADDING_DURATION"),
+		VADMaxBufferedSpeech:                    getenvOptionalFloat("RTP_AGENT_VAD_MAX_BUFFERED_SPEECH"),
+		VADActivationThreshold:                  getenvOptionalFloat("RTP_AGENT_VAD_ACTIVATION_THRESHOLD"),
+		VADDeactivationThreshold:                getenvOptionalFloat("RTP_AGENT_VAD_DEACTIVATION_THRESHOLD"),
+		VADUpdateInterval:                       getenvOptionalFloat("RTP_AGENT_VAD_UPDATE_INTERVAL"),
+		VADSampleRate:                           getenvOptionalInt("RTP_AGENT_VAD_SAMPLE_RATE"),
 		TTSProvider:                             normalizedEnv("RTP_AGENT_TTS_PROVIDER"),
 		TTSModel:                                os.Getenv("RTP_AGENT_TTS_MODEL"),
 		TTSVoice:                                os.Getenv("RTP_AGENT_TTS_VOICE"),
@@ -493,6 +546,8 @@ func DefaultConfigFromEnv() AppConfig {
 		MistralAPIKey:                           os.Getenv("MISTRAL_API_KEY"),
 		MurfAPIKey:                              os.Getenv("MURF_API_KEY"),
 		NeuphonicAPIKey:                         os.Getenv("NEUPHONIC_API_KEY"),
+		NvidiaAPIKey:                            os.Getenv("NVIDIA_API_KEY"),
+		PerplexityAPIKey:                        os.Getenv("PERPLEXITY_API_KEY"),
 		ResembleAPIKey:                          os.Getenv("RESEMBLE_API_KEY"),
 		RespeecherAPIKey:                        os.Getenv("RESPEECHER_API_KEY"),
 		RimeAPIKey:                              os.Getenv("RIME_API_KEY"),
@@ -505,6 +560,15 @@ func DefaultConfigFromEnv() AppConfig {
 		SLNGAPIKey:                              os.Getenv("SLNG_API_KEY"),
 		SonioxAPIKey:                            os.Getenv("SONIOX_API_KEY"),
 		SpeechifyAPIKey:                         os.Getenv("SPEECHIFY_API_KEY"),
+		SpeechmaticsAPIKey:                      os.Getenv("SPEECHMATICS_API_KEY"),
+		SpitchAPIKey:                            os.Getenv("SPITCH_API_KEY"),
+		TelnyxAPIKey:                            os.Getenv("TELNYX_API_KEY"),
+		UpliftAIAPIKey:                          os.Getenv("UPLIFTAI_API_KEY"),
+		XAIAPIKey:                               os.Getenv("XAI_API_KEY"),
+		XAITools:                                splitEnvList("RTP_AGENT_XAI_TOOLS"),
+		XAIAllowedXHandles:                      splitEnvList("RTP_AGENT_XAI_ALLOWED_X_HANDLES"),
+		XAIFileSearchVectorStoreIDs:             splitEnvList("RTP_AGENT_XAI_FILE_SEARCH_VECTOR_STORE_IDS"),
+		XAIFileSearchMaxResults:                 getenvOptionalInt("RTP_AGENT_XAI_FILE_SEARCH_MAX_RESULTS"),
 		GoogleCredentialsFile:                   firstEnv("RTP_AGENT_GOOGLE_CREDENTIALS_FILE", "GOOGLE_APPLICATION_CREDENTIALS"),
 	}
 }
@@ -521,6 +585,12 @@ func NewApp(cfg AppConfig) (*App, error) {
 
 	realtimeModel, err := configureProviders(cfg, baseAgent)
 	if err != nil {
+		return nil, err
+	}
+	if normalizeProvider(cfg.LLMProvider) == providerXAI {
+		baseAgent.Tools = append(baseAgent.Tools, xaiProviderTools(cfg)...)
+	}
+	if err := configureVAD(cfg, baseAgent); err != nil {
 		return nil, err
 	}
 
@@ -556,6 +626,54 @@ func (a *App) runSession(ctx *worker.JobContext) error {
 		return nil
 	}
 	return a.Session.Start(context.Background())
+}
+
+func configureVAD(cfg AppConfig, a *agent.Agent) error {
+	switch normalizeProvider(cfg.VADProvider) {
+	case "":
+		return nil
+	case providerSilero:
+		vadOpts := []silero.VADOption{}
+		if cfg.VADMinSpeechDuration != nil {
+			vadOpts = append(vadOpts, silero.WithMinSpeechDuration(*cfg.VADMinSpeechDuration))
+		}
+		if cfg.VADMinSilenceDuration != nil {
+			vadOpts = append(vadOpts, silero.WithMinSilenceDuration(*cfg.VADMinSilenceDuration))
+		}
+		if cfg.VADPrefixPaddingDuration != nil {
+			vadOpts = append(vadOpts, silero.WithPrefixPaddingDuration(*cfg.VADPrefixPaddingDuration))
+		}
+		if cfg.VADPaddingDuration != nil {
+			vadOpts = append(vadOpts, silero.WithPaddingDuration(*cfg.VADPaddingDuration))
+		}
+		if cfg.VADMaxBufferedSpeech != nil {
+			vadOpts = append(vadOpts, silero.WithMaxBufferedSpeech(*cfg.VADMaxBufferedSpeech))
+		}
+		if cfg.VADActivationThreshold != nil {
+			vadOpts = append(vadOpts, silero.WithActivationThreshold(*cfg.VADActivationThreshold))
+		}
+		if cfg.VADDeactivationThreshold != nil {
+			vadOpts = append(vadOpts, silero.WithDeactivationThreshold(*cfg.VADDeactivationThreshold))
+		}
+		if cfg.VADSampleRate != nil {
+			vadOpts = append(vadOpts, silero.WithSampleRate(*cfg.VADSampleRate))
+		}
+		if cfg.VADUpdateInterval != nil {
+			vadOpts = append(vadOpts, silero.WithUpdateInterval(*cfg.VADUpdateInterval))
+		}
+		if len(vadOpts) == 0 {
+			a.VAD = silero.NewSileroVAD()
+			return nil
+		}
+		detector, err := silero.NewSileroVADWithOptions(vadOpts...)
+		if err != nil {
+			return err
+		}
+		a.VAD = detector
+		return nil
+	default:
+		return fmt.Errorf("unsupported RTP_AGENT_VAD_PROVIDER %q", cfg.VADProvider)
+	}
 }
 
 func configureProviders(cfg AppConfig, a *agent.Agent) (llm.RealtimeModel, error) {
@@ -611,6 +729,12 @@ func configureProviders(cfg AppConfig, a *agent.Agent) (llm.RealtimeModel, error
 		a.LLM = simplismart.NewSimplismartLLM(cfg.SimplismartAPIKey, cfg.LLMModel)
 	case providerSmallestAI:
 		a.LLM = smallestai.NewSmallestAILLM(cfg.SmallestAIAPIKey, cfg.LLMModel)
+	case providerTelnyx:
+		a.LLM = telnyx.NewTelnyxLLM(cfg.TelnyxAPIKey, cfg.LLMModel)
+	case providerUpliftAI:
+		a.LLM = upliftai.NewUpliftAILLM(cfg.UpliftAIAPIKey, cfg.LLMModel)
+	case providerXAI:
+		a.LLM = xai.NewXaiLLM(cfg.XAIAPIKey, cfg.LLMModel)
 	case providerCerebras:
 		a.LLM = cerebras.NewCerebrasLLM(cfg.CerebrasAPIKey, cfg.LLMModel)
 	case providerFal:
@@ -633,6 +757,10 @@ func configureProviders(cfg AppConfig, a *agent.Agent) (llm.RealtimeModel, error
 			return nil, err
 		}
 		a.LLM = provider
+	case providerNvidia:
+		a.LLM = nvidia.NewNvidiaLLM(cfg.NvidiaAPIKey, cfg.LLMModel)
+	case providerPerplexity:
+		a.LLM = perplexity.NewPerplexityLLM(cfg.PerplexityAPIKey, cfg.LLMModel)
 	case providerLiveKit:
 		provider, err := openai.NewLiveKitInferenceLLM(cfg.LLMModel, cfg.LiveKitInferenceAPIKey, cfg.LiveKitInferenceAPISecret)
 		if err != nil {
@@ -1339,6 +1467,110 @@ func configureProviders(cfg AppConfig, a *agent.Agent) (llm.RealtimeModel, error
 			sttOpts = append(sttOpts, soniox.WithSonioxOneWayTranslation(cfg.STTTranslationTargetLanguages[0]))
 		}
 		a.STT = soniox.NewSonioxSTT(cfg.SonioxAPIKey, sttOpts...)
+	case providerSpeechmatics:
+		sttOpts := []speechmatics.SpeechmaticsSTTOption{}
+		if cfg.STTLanguage != "" {
+			sttOpts = append(sttOpts, speechmatics.WithSpeechmaticsSTTLanguage(cfg.STTLanguage))
+		}
+		if cfg.STTBaseURL != "" {
+			sttOpts = append(sttOpts, speechmatics.WithSpeechmaticsSTTBaseURL(cfg.STTBaseURL))
+		}
+		if cfg.STTSampleRate != nil {
+			sttOpts = append(sttOpts, speechmatics.WithSpeechmaticsSTTSampleRate(*cfg.STTSampleRate))
+		}
+		if cfg.STTEncoding != "" {
+			sttOpts = append(sttOpts, speechmatics.WithSpeechmaticsSTTAudioEncoding(cfg.STTEncoding))
+		}
+		if cfg.STTDomain != "" {
+			sttOpts = append(sttOpts, speechmatics.WithSpeechmaticsSTTDomain(cfg.STTDomain))
+		}
+		if cfg.STTOutputLocale != "" {
+			sttOpts = append(sttOpts, speechmatics.WithSpeechmaticsSTTOutputLocale(cfg.STTOutputLocale))
+		}
+		if cfg.STTInterimResults != nil {
+			sttOpts = append(sttOpts, speechmatics.WithSpeechmaticsSTTIncludePartials(*cfg.STTInterimResults))
+		}
+		if cfg.STTDiarization != nil {
+			sttOpts = append(sttOpts, speechmatics.WithSpeechmaticsSTTEnableDiarization(*cfg.STTDiarization))
+		}
+		if len(cfg.STTKeytermsPrompt) > 0 {
+			sttOpts = append(sttOpts, speechmatics.WithSpeechmaticsSTTAdditionalVocab(speechmaticsAdditionalVocab(cfg.STTKeytermsPrompt)))
+		}
+		focusSpeakers := modelOptionStringList(cfg.STTModelOptions, "focus_speakers")
+		ignoreSpeakers := modelOptionStringList(cfg.STTModelOptions, "ignore_speakers")
+		focusMode := modelOptionString(cfg.STTModelOptions, "focus_mode")
+		if len(focusSpeakers) > 0 || len(ignoreSpeakers) > 0 || focusMode != "" {
+			sttOpts = append(sttOpts, speechmatics.WithSpeechmaticsSTTSpeakerFocus(focusSpeakers, ignoreSpeakers, focusMode))
+		}
+		if speakers := speechmaticsKnownSpeakers(modelOptionString(cfg.STTModelOptions, "known_speakers")); len(speakers) > 0 {
+			sttOpts = append(sttOpts, speechmatics.WithSpeechmaticsSTTKnownSpeakers(speakers))
+		}
+		if cfg.STTOperatingPoint != "" {
+			sttOpts = append(sttOpts, speechmatics.WithSpeechmaticsSTTOperatingPoint(cfg.STTOperatingPoint))
+		}
+		if cfg.STTTextTimeoutSeconds != nil {
+			sttOpts = append(sttOpts, speechmatics.WithSpeechmaticsSTTMaxDelay(*cfg.STTTextTimeoutSeconds))
+		}
+		if cfg.STTVADSilenceThresholdSeconds != nil {
+			sttOpts = append(sttOpts, speechmatics.WithSpeechmaticsSTTEndOfUtteranceSilenceTrigger(*cfg.STTVADSilenceThresholdSeconds))
+		}
+		if cfg.STTMaxDurationWithoutEndpointingSeconds != nil {
+			sttOpts = append(sttOpts, speechmatics.WithSpeechmaticsSTTEndOfUtteranceMaxDelay(*cfg.STTMaxDurationWithoutEndpointingSeconds))
+		}
+		if overrides := speechmaticsPunctuationOverrides(cfg.STTModelOptions); len(overrides) > 0 {
+			sttOpts = append(sttOpts, speechmatics.WithSpeechmaticsSTTPunctuationOverrides(overrides))
+		}
+		if sensitivity := modelOptionFloat(cfg.STTModelOptions, "speaker_sensitivity"); sensitivity != nil {
+			sttOpts = append(sttOpts, speechmatics.WithSpeechmaticsSTTSpeakerSensitivity(*sensitivity))
+		}
+		if cfg.STTMaxSpeakers != nil {
+			sttOpts = append(sttOpts, speechmatics.WithSpeechmaticsSTTMaxSpeakers(*cfg.STTMaxSpeakers))
+		}
+		if cfg.STTPreferCurrentSpeaker != nil {
+			sttOpts = append(sttOpts, speechmatics.WithSpeechmaticsSTTPreferCurrentSpeaker(*cfg.STTPreferCurrentSpeaker))
+		}
+		a.STT = speechmatics.NewSpeechmaticsSTT(cfg.SpeechmaticsAPIKey, sttOpts...)
+	case providerSpitch:
+		a.STT = spitch.NewSpitchSTT(cfg.SpitchAPIKey)
+	case providerTelnyx:
+		sttOpts := []telnyx.TelnyxSTTOption{}
+		if cfg.STTBaseURL != "" {
+			sttOpts = append(sttOpts, telnyx.WithTelnyxSTTBaseURL(cfg.STTBaseURL))
+		}
+		if cfg.STTLanguage != "" {
+			sttOpts = append(sttOpts, telnyx.WithTelnyxSTTLanguage(cfg.STTLanguage))
+		}
+		if cfg.STTModel != "" {
+			sttOpts = append(sttOpts, telnyx.WithTelnyxSTTTranscriptionEngine(cfg.STTModel))
+		}
+		if cfg.STTSampleRate != nil {
+			sttOpts = append(sttOpts, telnyx.WithTelnyxSTTSampleRate(*cfg.STTSampleRate))
+		}
+		a.STT = telnyx.NewTelnyxSTT(cfg.TelnyxAPIKey, sttOpts...)
+	case providerXAI:
+		sttOpts := []xai.XaiSTTOption{}
+		if cfg.STTBaseURL != "" {
+			sttOpts = append(sttOpts, xai.WithXaiSTTRestURL(cfg.STTBaseURL))
+		}
+		if cfg.STTStreamingURL != "" {
+			sttOpts = append(sttOpts, xai.WithXaiSTTWebsocketURL(cfg.STTStreamingURL))
+		}
+		if cfg.STTSampleRate != nil {
+			sttOpts = append(sttOpts, xai.WithXaiSTTSampleRate(*cfg.STTSampleRate))
+		}
+		if cfg.STTLanguage != "" {
+			sttOpts = append(sttOpts, xai.WithXaiSTTLanguage(cfg.STTLanguage))
+		}
+		if cfg.STTInterimResults != nil {
+			sttOpts = append(sttOpts, xai.WithXaiSTTInterimResults(*cfg.STTInterimResults))
+		}
+		if cfg.STTDiarization != nil {
+			sttOpts = append(sttOpts, xai.WithXaiSTTDiarization(*cfg.STTDiarization))
+		}
+		if cfg.STTEndpointingMS != nil {
+			sttOpts = append(sttOpts, xai.WithXaiSTTEndpointing(*cfg.STTEndpointingMS))
+		}
+		a.STT = xai.NewXaiSTT(cfg.XAIAPIKey, sttOpts...)
 	case providerAssemblyAI:
 		sttOpts := []assemblyai.AssemblyAISTTOption{}
 		if cfg.STTBaseURL != "" {
@@ -2031,6 +2263,53 @@ func configureProviders(cfg AppConfig, a *agent.Agent) (llm.RealtimeModel, error
 			ttsOpts = append(ttsOpts, speechify.WithSpeechifyTTSTextNormalization(*cfg.TTSTextNormalization))
 		}
 		a.TTS = speechify.NewSpeechifyTTS(cfg.SpeechifyAPIKey, cfg.TTSVoice, ttsOpts...)
+	case providerSpeechmatics:
+		ttsOpts := []speechmatics.SpeechmaticsTTSOption{}
+		if cfg.TTSVoice != "" {
+			ttsOpts = append(ttsOpts, speechmatics.WithSpeechmaticsTTSVoice(cfg.TTSVoice))
+		}
+		if cfg.TTSSampleRate != nil {
+			ttsOpts = append(ttsOpts, speechmatics.WithSpeechmaticsTTSSampleRate(*cfg.TTSSampleRate))
+		}
+		if cfg.TTSBaseURL != "" {
+			ttsOpts = append(ttsOpts, speechmatics.WithSpeechmaticsTTSBaseURL(cfg.TTSBaseURL))
+		}
+		a.TTS = speechmatics.NewSpeechmaticsTTS(cfg.SpeechmaticsAPIKey, ttsOpts...)
+	case providerSpitch:
+		ttsOpts := []spitch.SpitchTTSOption{}
+		if cfg.TTSBaseURL != "" {
+			ttsOpts = append(ttsOpts, spitch.WithSpitchTTSBaseURL(cfg.TTSBaseURL))
+		}
+		if cfg.TTSVoice != "" {
+			ttsOpts = append(ttsOpts, spitch.WithSpitchTTSVoice(cfg.TTSVoice))
+		}
+		if cfg.TTSLanguage != "" {
+			ttsOpts = append(ttsOpts, spitch.WithSpitchTTSLanguage(cfg.TTSLanguage))
+		}
+		if cfg.TTSResponseFormat != "" {
+			ttsOpts = append(ttsOpts, spitch.WithSpitchTTSOutputFormat(cfg.TTSResponseFormat))
+		}
+		if cfg.TTSSampleRate != nil {
+			ttsOpts = append(ttsOpts, spitch.WithSpitchTTSSampleRate(*cfg.TTSSampleRate))
+		}
+		a.TTS = spitch.NewSpitchTTS(cfg.SpitchAPIKey, cfg.TTSVoice, ttsOpts...)
+	case providerTelnyx:
+		ttsOpts := []telnyx.TelnyxTTSOption{}
+		if cfg.TTSBaseURL != "" {
+			ttsOpts = append(ttsOpts, telnyx.WithTelnyxTTSBaseURL(cfg.TTSBaseURL))
+		}
+		a.TTS = telnyx.NewTelnyxTTS(cfg.TelnyxAPIKey, cfg.TTSVoice, ttsOpts...)
+	case providerUpliftAI:
+		a.TTS = upliftai.NewUpliftAITTS(cfg.UpliftAIAPIKey, cfg.TTSVoice)
+	case providerXAI:
+		ttsOpts := []xai.XaiTTSOption{}
+		if cfg.TTSWebsocketURL != "" {
+			ttsOpts = append(ttsOpts, xai.WithXaiTTSWebsocketURL(cfg.TTSWebsocketURL))
+		}
+		if cfg.TTSLanguage != "" {
+			ttsOpts = append(ttsOpts, xai.WithXaiTTSLanguage(cfg.TTSLanguage))
+		}
+		a.TTS = xai.NewXaiTTS(cfg.XAIAPIKey, cfg.TTSVoice, ttsOpts...)
 	case providerSLNG:
 		ttsOpts := []slng.TTSOption{}
 		if cfg.TTSModel != "" {
@@ -2327,6 +2606,25 @@ func modelOptionBool(options map[string]any, key string) *bool {
 	}
 }
 
+func modelOptionFloat(options map[string]any, key string) *float64 {
+	value, ok := options[key]
+	if !ok {
+		return nil
+	}
+	switch typed := value.(type) {
+	case float64:
+		return &typed
+	case string:
+		parsed, err := strconv.ParseFloat(strings.TrimSpace(typed), 64)
+		if err != nil {
+			return nil
+		}
+		return &parsed
+	default:
+		return nil
+	}
+}
+
 func modelOptionStringList(options map[string]any, key string) []string {
 	raw := modelOptionString(options, key)
 	if raw == "" {
@@ -2391,6 +2689,85 @@ func sonioxContextTranslationTerms(raw string) []soniox.SonioxContextTranslation
 		}
 	}
 	return terms
+}
+
+func speechmaticsAdditionalVocab(values []string) []speechmatics.SpeechmaticsAdditionalVocabEntry {
+	entries := make([]speechmatics.SpeechmaticsAdditionalVocabEntry, 0, len(values))
+	for _, value := range values {
+		content, soundsLike, _ := strings.Cut(value, ":")
+		content = strings.TrimSpace(content)
+		if content == "" {
+			continue
+		}
+		entry := speechmatics.SpeechmaticsAdditionalVocabEntry{Content: content}
+		if soundsLike != "" {
+			entry.SoundsLike = splitPipeList(soundsLike)
+		}
+		entries = append(entries, entry)
+	}
+	return entries
+}
+
+func speechmaticsKnownSpeakers(raw string) []speechmatics.SpeechmaticsSpeakerIdentifier {
+	if raw == "" {
+		return nil
+	}
+	parts := strings.Split(raw, "|")
+	speakers := make([]speechmatics.SpeechmaticsSpeakerIdentifier, 0, len(parts))
+	for _, part := range parts {
+		label, speakerID, ok := strings.Cut(part, ":")
+		if !ok {
+			continue
+		}
+		label = strings.TrimSpace(label)
+		speakerID = strings.TrimSpace(speakerID)
+		if label != "" && speakerID != "" {
+			speakers = append(speakers, speechmatics.SpeechmaticsSpeakerIdentifier{Label: label, SpeakerID: speakerID})
+		}
+	}
+	return speakers
+}
+
+func speechmaticsPunctuationOverrides(options map[string]any) map[string]interface{} {
+	marks := modelOptionStringList(options, "permitted_marks")
+	if len(marks) == 0 {
+		return nil
+	}
+	return map[string]interface{}{"permitted_marks": marks}
+}
+
+func xaiProviderTools(cfg AppConfig) []llm.Tool {
+	tools := make([]llm.Tool, 0, len(cfg.XAITools))
+	for _, tool := range cfg.XAITools {
+		switch normalizeProvider(tool) {
+		case "web_search", "websearch", "xai_web_search":
+			tools = append(tools, &xai.WebSearchTool{})
+		case "x_search", "xsearch", "xai_x_search":
+			tools = append(tools, &xai.XSearchTool{AllowedHandles: cfg.XAIAllowedXHandles})
+		case "file_search", "filesearch", "xai_file_search":
+			item := &xai.FileSearchTool{VectorStoreIDs: cfg.XAIFileSearchVectorStoreIDs}
+			if cfg.XAIFileSearchMaxResults != nil {
+				item.MaxNumResults = *cfg.XAIFileSearchMaxResults
+			}
+			tools = append(tools, item)
+		}
+	}
+	return tools
+}
+
+func splitPipeList(raw string) []string {
+	if raw == "" {
+		return nil
+	}
+	parts := strings.Split(raw, "|")
+	values := make([]string, 0, len(parts))
+	for _, part := range parts {
+		value := strings.TrimSpace(part)
+		if value != "" {
+			values = append(values, value)
+		}
+	}
+	return values
 }
 
 func splitEnvFloatList(name string) []float64 {
