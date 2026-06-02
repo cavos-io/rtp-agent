@@ -113,7 +113,7 @@ func (t *AsyncAITTS) SampleRate() int  { return t.sampleRate }
 func (t *AsyncAITTS) NumChannels() int { return asyncAITTSNumChannels }
 
 func (t *AsyncAITTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStream, error) {
-	return nil, fmt.Errorf("AsyncAI TTS supports streaming only; use tts.stream().")
+	return nil, fmt.Errorf("asyncai tts supports streaming only; use tts.stream()")
 }
 
 func (t *AsyncAITTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
