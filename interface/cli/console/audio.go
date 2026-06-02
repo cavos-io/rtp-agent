@@ -266,7 +266,11 @@ func (a *AudioIO) PushFrame(frame *model.AudioFrame) {
 	if _, err := buffer.PushFrame(frame); err != nil {
 		return
 	}
+	if buffer.Len() == 0 {
+		return
+	}
 	pcm := buffer.Read()
+	buffer.Reset()
 
 	a.mu.Lock()
 	a.speakerBuffer = append(a.speakerBuffer, pcm...)
