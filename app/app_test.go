@@ -1615,7 +1615,12 @@ func TestDefaultConfigFromEnvSelectsAvatarProvider(t *testing.T) {
 		wantAvatar string
 	}{
 		{name: "anam", provider: "anam", keyEnv: "ANAM_API_KEY", wantAvatar: "*anam.AnamAvatar"},
+		{name: "avatario", provider: "avatario", keyEnv: "AVATARIO_API_KEY", wantAvatar: "*avatario.AvatarioAvatar"},
+		{name: "avatartalk", provider: "avatartalk", keyEnv: "AVATARTALK_API_KEY", wantAvatar: "*avatartalk.AvatartalkAvatar"},
+		{name: "bey", provider: "bey", keyEnv: "BEY_API_KEY", wantAvatar: "*bey.BeyAvatar"},
+		{name: "bithuman", provider: "bithuman", keyEnv: "BITHUMAN_API_KEY", wantAvatar: "*bithuman.BithumanAvatar"},
 		{name: "hedra", provider: "hedra", keyEnv: "HEDRA_API_KEY", wantAvatar: "*hedra.HedraAvatar"},
+		{name: "keyframe", provider: "keyframe", keyEnv: "KEYFRAME_API_KEY", wantAvatar: "*keyframe.KeyframeAgent"},
 		{name: "lemonslice", provider: "lemonslice", keyEnv: "LEMONSLICE_API_KEY", wantAvatar: "*lemonslice.LemonsliceAvatar"},
 		{name: "simli", provider: "simli", keyEnv: "SIMLI_API_KEY", wantAvatar: "*simli.SimliAvatar"},
 		{name: "trugen", provider: "trugen", keyEnv: "TRUGEN_API_KEY", wantAvatar: "*trugen.TrugenAvatar"},

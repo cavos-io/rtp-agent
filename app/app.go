@@ -13,9 +13,13 @@ import (
 	"github.com/cavos-io/rtp-agent/adapter/anthropic"
 	"github.com/cavos-io/rtp-agent/adapter/assemblyai"
 	"github.com/cavos-io/rtp-agent/adapter/asyncai"
+	"github.com/cavos-io/rtp-agent/adapter/avatario"
+	"github.com/cavos-io/rtp-agent/adapter/avatartalk"
 	adapteraws "github.com/cavos-io/rtp-agent/adapter/aws"
 	"github.com/cavos-io/rtp-agent/adapter/azure"
 	"github.com/cavos-io/rtp-agent/adapter/baseten"
+	"github.com/cavos-io/rtp-agent/adapter/bey"
+	"github.com/cavos-io/rtp-agent/adapter/bithuman"
 	"github.com/cavos-io/rtp-agent/adapter/browser"
 	"github.com/cavos-io/rtp-agent/adapter/cambai"
 	"github.com/cavos-io/rtp-agent/adapter/cartesia"
@@ -34,6 +38,7 @@ import (
 	"github.com/cavos-io/rtp-agent/adapter/hedra"
 	"github.com/cavos-io/rtp-agent/adapter/hume"
 	"github.com/cavos-io/rtp-agent/adapter/inworld"
+	"github.com/cavos-io/rtp-agent/adapter/keyframe"
 	"github.com/cavos-io/rtp-agent/adapter/langchain"
 	"github.com/cavos-io/rtp-agent/adapter/lemonslice"
 	"github.com/cavos-io/rtp-agent/adapter/lmnt"
@@ -75,9 +80,13 @@ const (
 	providerAnthropic    = "anthropic"
 	providerAssemblyAI   = "assemblyai"
 	providerAsyncAI      = "asyncai"
+	providerAvatario     = "avatario"
+	providerAvatarTalk   = "avatartalk"
 	providerAWS          = "aws"
 	providerAzure        = "azure"
 	providerBaseten      = "baseten"
+	providerBey          = "bey"
+	providerBitHuman     = "bithuman"
 	providerCambai       = "cambai"
 	providerCartesia     = "cartesia"
 	providerCerebras     = "cerebras"
@@ -95,6 +104,7 @@ const (
 	providerHedra        = "hedra"
 	providerHume         = "hume"
 	providerInworld      = "inworld"
+	providerKeyframe     = "keyframe"
 	providerLangChain    = "langchain"
 	providerLemonSlice   = "lemonslice"
 	providerLMNT         = "lmnt"
@@ -309,6 +319,10 @@ type AppConfig struct {
 	OpenAIAPIKey                string
 	AnamAPIKey                  string
 	AnthropicAPIKey             string
+	AvatarioAPIKey              string
+	AvatarTalkAPIKey            string
+	BeyAPIKey                   string
+	BitHumanAPIKey              string
 	GoogleAPIKey                string
 	ElevenLabsAPIKey            string
 	GroqAPIKey                  string
@@ -326,6 +340,7 @@ type AppConfig struct {
 	HedraAPIKey                 string
 	HumeAPIKey                  string
 	InworldAPIKey               string
+	KeyframeAPIKey              string
 	LangChainAPIKey             string
 	LemonSliceAPIKey            string
 	LMNTAPIKey                  string
@@ -556,6 +571,10 @@ func DefaultConfigFromEnv() AppConfig {
 		OpenAIAPIKey:                            os.Getenv("OPENAI_API_KEY"),
 		AnamAPIKey:                              os.Getenv("ANAM_API_KEY"),
 		AnthropicAPIKey:                         os.Getenv("ANTHROPIC_API_KEY"),
+		AvatarioAPIKey:                          os.Getenv("AVATARIO_API_KEY"),
+		AvatarTalkAPIKey:                        os.Getenv("AVATARTALK_API_KEY"),
+		BeyAPIKey:                               os.Getenv("BEY_API_KEY"),
+		BitHumanAPIKey:                          os.Getenv("BITHUMAN_API_KEY"),
 		GoogleAPIKey:                            os.Getenv("GOOGLE_API_KEY"),
 		ElevenLabsAPIKey:                        firstEnv("ELEVENLABS_API_KEY", "ELEVEN_API_KEY"),
 		GroqAPIKey:                              os.Getenv("GROQ_API_KEY"),
@@ -573,6 +592,7 @@ func DefaultConfigFromEnv() AppConfig {
 		HedraAPIKey:                             os.Getenv("HEDRA_API_KEY"),
 		HumeAPIKey:                              os.Getenv("HUME_API_KEY"),
 		InworldAPIKey:                           os.Getenv("INWORLD_API_KEY"),
+		KeyframeAPIKey:                          os.Getenv("KEYFRAME_API_KEY"),
 		LangChainAPIKey:                         os.Getenv("LANGCHAIN_API_KEY"),
 		LemonSliceAPIKey:                        os.Getenv("LEMONSLICE_API_KEY"),
 		LMNTAPIKey:                              os.Getenv("LMNT_API_KEY"),
@@ -682,8 +702,27 @@ func configureAvatar(cfg AppConfig, a *agent.Agent) error {
 	case providerAnam:
 		a.Avatar = anam.NewAnamAvatar(cfg.AnamAPIKey)
 		return nil
+	case providerAvatario:
+		a.Avatar = avatario.NewAvatarioAvatar(cfg.AvatarioAPIKey)
+		return nil
+	case providerAvatarTalk:
+		a.Avatar = avatartalk.NewAvatartalkAvatar(cfg.AvatarTalkAPIKey)
+		return nil
+	case providerBey:
+		avatar, err := bey.NewBeyAvatar(cfg.BeyAPIKey)
+		if err != nil {
+			return err
+		}
+		a.Avatar = avatar
+		return nil
+	case providerBitHuman:
+		a.Avatar = bithuman.NewBithumanAvatar(cfg.BitHumanAPIKey)
+		return nil
 	case providerHedra:
 		a.Avatar = hedra.NewHedraAvatar(cfg.HedraAPIKey)
+		return nil
+	case providerKeyframe:
+		a.Avatar = keyframe.NewKeyframeAgent(cfg.KeyframeAPIKey)
 		return nil
 	case providerLemonSlice:
 		a.Avatar = lemonslice.NewLemonsliceAvatar(cfg.LemonSliceAPIKey)
