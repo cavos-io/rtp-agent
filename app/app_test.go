@@ -285,6 +285,36 @@ func TestDefaultConfigFromEnvSelectsGoogleLLM(t *testing.T) {
 	}
 }
 
+func TestDefaultConfigFromEnvSelectsGroqProviders(t *testing.T) {
+	t.Setenv("GROQ_API_KEY", "test-groq-key")
+	t.Setenv("RTP_AGENT_LLM_PROVIDER", "groq")
+	t.Setenv("RTP_AGENT_LLM_MODEL", "llama3-70b-8192")
+	t.Setenv("RTP_AGENT_TTS_PROVIDER", "groq")
+	t.Setenv("RTP_AGENT_TTS_MODEL", "canopylabs/orpheus-v1-english")
+	t.Setenv("RTP_AGENT_TTS_VOICE", "autumn")
+	t.Setenv("RTP_AGENT_TTS_BASE_URL", "https://groq.example/openai/v1")
+
+	app, err := NewApp(DefaultConfigFromEnv())
+	if err != nil {
+		t.Fatalf("NewApp() error = %v", err)
+	}
+	if app.Session == nil {
+		t.Fatal("Session is nil")
+	}
+	if got := llm.Provider(app.Session.LLM); got != "groq" {
+		t.Fatalf("LLM provider = %q, want groq", got)
+	}
+	if got := llm.Model(app.Session.LLM); got != "llama3-70b-8192" {
+		t.Fatalf("LLM model = %q, want llama3-70b-8192", got)
+	}
+	if got := app.Session.TTS.Label(); got != "groq.TTS" {
+		t.Fatalf("TTS label = %q, want groq.TTS", got)
+	}
+	if got := app.Session.TTS.SampleRate(); got != 48000 {
+		t.Fatalf("TTS sample rate = %d, want 48000", got)
+	}
+}
+
 func TestDefaultConfigFromEnvSelectsLiveKitInferenceLLM(t *testing.T) {
 	t.Setenv("LIVEKIT_API_KEY", "test-livekit-key")
 	t.Setenv("LIVEKIT_API_SECRET", "test-livekit-secret")

@@ -18,6 +18,7 @@ import (
 	"github.com/cavos-io/rtp-agent/adapter/cambai"
 	"github.com/cavos-io/rtp-agent/adapter/elevenlabs"
 	adaptergoogle "github.com/cavos-io/rtp-agent/adapter/google"
+	"github.com/cavos-io/rtp-agent/adapter/groq"
 	"github.com/cavos-io/rtp-agent/adapter/openai"
 	"github.com/cavos-io/rtp-agent/core/agent"
 	"github.com/cavos-io/rtp-agent/core/llm"
@@ -35,6 +36,7 @@ const (
 	providerCambai     = "cambai"
 	providerElevenLabs = "elevenlabs"
 	providerGoogle     = "google"
+	providerGroq       = "groq"
 	providerOpenAI     = "openai"
 	providerLiveKit    = "livekit"
 )
@@ -113,6 +115,7 @@ type AppConfig struct {
 	AnthropicAPIKey  string
 	GoogleAPIKey     string
 	ElevenLabsAPIKey string
+	GroqAPIKey       string
 
 	GoogleCredentialsFile string
 
@@ -199,6 +202,7 @@ func DefaultConfigFromEnv() AppConfig {
 		AnthropicAPIKey:                 os.Getenv("ANTHROPIC_API_KEY"),
 		GoogleAPIKey:                    os.Getenv("GOOGLE_API_KEY"),
 		ElevenLabsAPIKey:                firstEnv("ELEVENLABS_API_KEY", "ELEVEN_API_KEY"),
+		GroqAPIKey:                      os.Getenv("GROQ_API_KEY"),
 		GoogleCredentialsFile:           firstEnv("RTP_AGENT_GOOGLE_CREDENTIALS_FILE", "GOOGLE_APPLICATION_CREDENTIALS"),
 	}
 }
@@ -273,6 +277,8 @@ func configureProviders(cfg AppConfig, a *agent.Agent) (llm.RealtimeModel, error
 			return nil, err
 		}
 		a.LLM = provider
+	case providerGroq:
+		a.LLM = groq.NewGroqLLM(cfg.GroqAPIKey, cfg.LLMModel)
 	case providerAnthropic:
 		llmOpts := []anthropic.AnthropicOption{}
 		if cfg.LLMBaseURL != "" {
@@ -601,6 +607,18 @@ func configureProviders(cfg AppConfig, a *agent.Agent) (llm.RealtimeModel, error
 			return nil, err
 		}
 		a.TTS = provider
+	case providerGroq:
+		ttsOpts := []groq.GroqTTSOption{}
+		if cfg.TTSBaseURL != "" {
+			ttsOpts = append(ttsOpts, groq.WithGroqTTSBaseURL(cfg.TTSBaseURL))
+		}
+		if cfg.TTSModel != "" {
+			ttsOpts = append(ttsOpts, groq.WithGroqTTSModel(cfg.TTSModel))
+		}
+		if cfg.TTSVoice != "" {
+			ttsOpts = append(ttsOpts, groq.WithGroqTTSVoice(cfg.TTSVoice))
+		}
+		a.TTS = groq.NewGroqTTS(cfg.GroqAPIKey, cfg.TTSVoice, ttsOpts...)
 	case providerCambai:
 		ttsOpts := []cambai.CambaiTTSOption{}
 		if cfg.TTSBaseURL != "" {
