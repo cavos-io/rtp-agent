@@ -1677,6 +1677,34 @@ func TestDefaultConfigFromEnvSelectsEmailWorkflowAgent(t *testing.T) {
 	}
 }
 
+func TestDefaultConfigFromEnvSelectsWarmTransferWorkflowAgent(t *testing.T) {
+	t.Setenv("RTP_AGENT_WORKFLOW_TASK", "warm_transfer")
+	t.Setenv("RTP_AGENT_WORKFLOW_WARM_TRANSFER_SIP_CALL_TO", "+15550100")
+	t.Setenv("RTP_AGENT_WORKFLOW_WARM_TRANSFER_SIP_TRUNK_ID", "trunk_123")
+	t.Setenv("RTP_AGENT_WORKFLOW_WARM_TRANSFER_EXTRA_INSTRUCTIONS", "\nKeep the handoff concise.")
+
+	app, err := NewApp(DefaultConfigFromEnv())
+	if err != nil {
+		t.Fatalf("NewApp() error = %v", err)
+	}
+	task, ok := app.Session.Agent.(*workflows.WarmTransferTask)
+	if !ok {
+		t.Fatalf("Session.Agent = %T, want *workflows.WarmTransferTask", app.Session.Agent)
+	}
+	if task.TargetPhoneNumber != "+15550100" {
+		t.Fatalf("TargetPhoneNumber = %q, want +15550100", task.TargetPhoneNumber)
+	}
+	if task.SipTrunkID != "trunk_123" {
+		t.Fatalf("SipTrunkID = %q, want trunk_123", task.SipTrunkID)
+	}
+	if app.Agent != task.GetAgent() {
+		t.Fatal("App.Agent does not point at selected warm transfer agent")
+	}
+	if len(app.Agent.Tools) != 3 {
+		t.Fatalf("workflow tools = %d, want connect/decline/voicemail tools", len(app.Agent.Tools))
+	}
+}
+
 func TestDefaultConfigFromEnvEnablesIVRDetection(t *testing.T) {
 	t.Setenv("RTP_AGENT_IVR_DETECTION", "true")
 	t.Setenv("RTP_AGENT_IVR_SILENCE_DURATION_SECONDS", "0.25")

@@ -410,15 +410,18 @@ type AppConfig struct {
 
 	GoogleCredentialsFile string
 
-	LiveKitInferenceAPIKey      string
-	LiveKitInferenceAPISecret   string
-	AppTools                    []string
-	IVRDetection                bool
-	IVRSilenceDurationSeconds   *float64
-	WorkflowTask                string
-	WorkflowRequireConfirmation bool
-	WorkflowDtmfNumDigits       *int
-	WorkflowDtmfAskConfirmation *bool
+	LiveKitInferenceAPIKey                string
+	LiveKitInferenceAPISecret             string
+	AppTools                              []string
+	IVRDetection                          bool
+	IVRSilenceDurationSeconds             *float64
+	WorkflowTask                          string
+	WorkflowRequireConfirmation           bool
+	WorkflowDtmfNumDigits                 *int
+	WorkflowDtmfAskConfirmation           *bool
+	WorkflowWarmTransferSipCallTo         string
+	WorkflowWarmTransferSipTrunkID        string
+	WorkflowWarmTransferExtraInstructions string
 }
 
 type App struct {
@@ -692,6 +695,9 @@ func DefaultConfigFromEnv() AppConfig {
 		WorkflowRequireConfirmation:             getenvBool("RTP_AGENT_WORKFLOW_REQUIRE_CONFIRMATION"),
 		WorkflowDtmfNumDigits:                   getenvOptionalInt("RTP_AGENT_WORKFLOW_DTMF_NUM_DIGITS"),
 		WorkflowDtmfAskConfirmation:             getenvOptionalBool("RTP_AGENT_WORKFLOW_DTMF_ASK_CONFIRMATION"),
+		WorkflowWarmTransferSipCallTo:           os.Getenv("RTP_AGENT_WORKFLOW_WARM_TRANSFER_SIP_CALL_TO"),
+		WorkflowWarmTransferSipTrunkID:          os.Getenv("RTP_AGENT_WORKFLOW_WARM_TRANSFER_SIP_TRUNK_ID"),
+		WorkflowWarmTransferExtraInstructions:   os.Getenv("RTP_AGENT_WORKFLOW_WARM_TRANSFER_EXTRA_INSTRUCTIONS"),
 	}
 }
 
@@ -788,6 +794,17 @@ func workflowAgentFromConfig(cfg AppConfig, baseAgent *agent.Agent) (agent.Agent
 			askConfirmation = *cfg.WorkflowDtmfAskConfirmation
 		}
 		selected = workflows.NewGetDtmfTask(numDigits, askConfirmation)
+	case "warm_transfer", "warm-transfer":
+		sipCallTo := strings.TrimSpace(cfg.WorkflowWarmTransferSipCallTo)
+		if sipCallTo == "" {
+			return nil, fmt.Errorf("RTP_AGENT_WORKFLOW_WARM_TRANSFER_SIP_CALL_TO is required for warm_transfer workflow")
+		}
+		selected = workflows.NewWarmTransferTask(
+			sipCallTo,
+			strings.TrimSpace(cfg.WorkflowWarmTransferSipTrunkID),
+			baseAgent.ChatCtx,
+			cfg.WorkflowWarmTransferExtraInstructions,
+		)
 	default:
 		return nil, fmt.Errorf("unsupported RTP_AGENT_WORKFLOW_TASK %q", cfg.WorkflowTask)
 	}
