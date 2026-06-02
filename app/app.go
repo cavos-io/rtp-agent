@@ -15,6 +15,7 @@ import (
 	adapteraws "github.com/cavos-io/rtp-agent/adapter/aws"
 	"github.com/cavos-io/rtp-agent/adapter/azure"
 	"github.com/cavos-io/rtp-agent/adapter/baseten"
+	"github.com/cavos-io/rtp-agent/adapter/browser"
 	"github.com/cavos-io/rtp-agent/adapter/cambai"
 	"github.com/cavos-io/rtp-agent/adapter/cartesia"
 	"github.com/cavos-io/rtp-agent/adapter/cerebras"
@@ -351,6 +352,9 @@ type AppConfig struct {
 	UltravoxAPIKey              string
 	UpliftAIAPIKey              string
 	XAIAPIKey                   string
+	AnthropicTools              []string
+	AnthropicComputerWidth      *int
+	AnthropicComputerHeight     *int
 	XAITools                    []string
 	XAIAllowedXHandles          []string
 	XAIFileSearchVectorStoreIDs []string
@@ -593,6 +597,9 @@ func DefaultConfigFromEnv() AppConfig {
 		UltravoxAPIKey:                          os.Getenv("ULTRAVOX_API_KEY"),
 		UpliftAIAPIKey:                          os.Getenv("UPLIFTAI_API_KEY"),
 		XAIAPIKey:                               os.Getenv("XAI_API_KEY"),
+		AnthropicTools:                          splitEnvList("RTP_AGENT_ANTHROPIC_TOOLS"),
+		AnthropicComputerWidth:                  getenvOptionalInt("RTP_AGENT_ANTHROPIC_COMPUTER_WIDTH"),
+		AnthropicComputerHeight:                 getenvOptionalInt("RTP_AGENT_ANTHROPIC_COMPUTER_HEIGHT"),
 		XAITools:                                splitEnvList("RTP_AGENT_XAI_TOOLS"),
 		XAIAllowedXHandles:                      splitEnvList("RTP_AGENT_XAI_ALLOWED_X_HANDLES"),
 		XAIFileSearchVectorStoreIDs:             splitEnvList("RTP_AGENT_XAI_FILE_SEARCH_VECTOR_STORE_IDS"),
@@ -617,6 +624,9 @@ func NewApp(cfg AppConfig) (*App, error) {
 	}
 	if normalizeProvider(cfg.LLMProvider) == providerXAI {
 		baseAgent.Tools = append(baseAgent.Tools, xaiProviderTools(cfg)...)
+	}
+	if normalizeProvider(cfg.LLMProvider) == providerAnthropic {
+		baseAgent.Tools = append(baseAgent.Tools, anthropicProviderTools(cfg)...)
 	}
 	if err := configureVAD(cfg, baseAgent); err != nil {
 		return nil, err
@@ -2776,6 +2786,26 @@ func speechmaticsPunctuationOverrides(options map[string]any) map[string]interfa
 		return nil
 	}
 	return map[string]interface{}{"permitted_marks": marks}
+}
+
+func anthropicProviderTools(cfg AppConfig) []llm.Tool {
+	tools := make([]llm.Tool, 0, len(cfg.AnthropicTools))
+	for _, tool := range cfg.AnthropicTools {
+		switch normalizeProvider(tool) {
+		case "computer", "computer_use", "computeruse":
+			width := 1024
+			if cfg.AnthropicComputerWidth != nil {
+				width = *cfg.AnthropicComputerWidth
+			}
+			height := 768
+			if cfg.AnthropicComputerHeight != nil {
+				height = *cfg.AnthropicComputerHeight
+			}
+			computer := anthropic.NewComputerTool(browser.NewPageActions(), width, height)
+			tools = append(tools, computer.Tools()...)
+		}
+	}
+	return tools
 }
 
 func xaiProviderTools(cfg AppConfig) []llm.Tool {

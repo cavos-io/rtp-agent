@@ -1573,6 +1573,39 @@ func TestDefaultConfigFromEnvAddsXAIProviderTools(t *testing.T) {
 	}
 }
 
+func TestDefaultConfigFromEnvAddsAnthropicComputerTool(t *testing.T) {
+	t.Setenv("ANTHROPIC_API_KEY", "test-anthropic-key")
+	t.Setenv("RTP_AGENT_LLM_PROVIDER", "anthropic")
+	t.Setenv("RTP_AGENT_ANTHROPIC_TOOLS", "computer")
+	t.Setenv("RTP_AGENT_ANTHROPIC_COMPUTER_WIDTH", "1280")
+	t.Setenv("RTP_AGENT_ANTHROPIC_COMPUTER_HEIGHT", "720")
+
+	app, err := NewApp(DefaultConfigFromEnv())
+	if err != nil {
+		t.Fatalf("NewApp() error = %v", err)
+	}
+	if app.Agent == nil {
+		t.Fatal("Agent is nil")
+	}
+	if len(app.Agent.Tools) != 1 {
+		t.Fatalf("len(Agent.Tools) = %d, want 1", len(app.Agent.Tools))
+	}
+	tool := app.Agent.Tools[0]
+	if tool.ID() != "computer" || tool.Name() != "computer_use" {
+		t.Fatalf("tool identity = %q/%q, want computer/computer_use", tool.ID(), tool.Name())
+	}
+	if specProvider, ok := tool.(interface {
+		AnthropicToolSpec() map[string]interface{}
+	}); ok {
+		spec := specProvider.AnthropicToolSpec()
+		if spec["display_width_px"] != 1280 || spec["display_height_px"] != 720 {
+			t.Fatalf("computer display spec = %#v, want 1280x720", spec)
+		}
+	} else {
+		t.Fatal("computer tool does not expose AnthropicToolSpec")
+	}
+}
+
 func TestDefaultConfigFromEnvSelectsAWSProviders(t *testing.T) {
 	t.Setenv("AWS_REGION", "us-west-2")
 	t.Setenv("RTP_AGENT_LLM_PROVIDER", "aws")

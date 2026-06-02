@@ -21,12 +21,13 @@ type ComputerTool struct {
 }
 
 func NewComputerTool(actions *browser.PageActions, width int, height int) *ComputerTool {
-	return &ComputerTool{
+	toolset := &ComputerTool{
 		actions: actions,
 		width:   width,
 		height:  height,
-		tool:    newComputerUseTool(width, height),
 	}
+	toolset.tool = newComputerUseTool(toolset, width, height)
+	return toolset
 }
 
 func (c *ComputerTool) Tools() []llm.Tool {
@@ -211,12 +212,13 @@ func screenshotContent(frame []byte) []map[string]interface{} {
 }
 
 type computerUseTool struct {
-	width  int
-	height int
+	dispatcher *ComputerTool
+	width      int
+	height     int
 }
 
-func newComputerUseTool(width, height int) llm.Tool {
-	return &computerUseTool{width: width, height: height}
+func newComputerUseTool(dispatcher *ComputerTool, width, height int) llm.Tool {
+	return &computerUseTool{dispatcher: dispatcher, width: width, height: height}
 }
 
 func (t *computerUseTool) ID() string {
@@ -255,10 +257,20 @@ func (t *computerUseTool) Parameters() map[string]any {
 
 func (t *computerUseTool) Execute(ctx context.Context, args string) (string, error) {
 	var parsedArgs map[string]interface{}
-	json.Unmarshal([]byte(args), &parsedArgs)
-
-	// The computer tool relies on the external dispatch handler for actual execution,
-	// typically intercepting the command before it reaches this basic Execute call,
-	// or calling Execute on the Toolset directly.
-	return "Action dispatched", nil
+	if err := json.Unmarshal([]byte(args), &parsedArgs); err != nil {
+		return "", err
+	}
+	action, ok := parsedArgs["action"].(string)
+	if !ok || action == "" {
+		return "", fmt.Errorf("missing required argument: 'action'")
+	}
+	content, err := t.dispatcher.Execute(ctx, action, parsedArgs)
+	if err != nil {
+		return "", err
+	}
+	encoded, err := json.Marshal(content)
+	if err != nil {
+		return "", err
+	}
+	return string(encoded), nil
 }
