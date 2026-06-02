@@ -31,6 +31,7 @@ import (
 	"github.com/cavos-io/rtp-agent/adapter/groq"
 	"github.com/cavos-io/rtp-agent/adapter/hume"
 	"github.com/cavos-io/rtp-agent/adapter/inworld"
+	"github.com/cavos-io/rtp-agent/adapter/lmnt"
 	"github.com/cavos-io/rtp-agent/adapter/minimax"
 	"github.com/cavos-io/rtp-agent/adapter/mistralai"
 	"github.com/cavos-io/rtp-agent/adapter/murf"
@@ -65,6 +66,7 @@ const (
 	providerGroq       = "groq"
 	providerHume       = "hume"
 	providerInworld    = "inworld"
+	providerLMNT       = "lmnt"
 	providerMinimax    = "minimax"
 	providerMistralAI  = "mistralai"
 	providerMurf       = "murf"
@@ -181,6 +183,7 @@ type AppConfig struct {
 	TTSSampleRate                           *int
 	TTSSpeed                                float64
 	TTSTemperature                          *float64
+	TTSTopP                                 *float64
 	TTSMaxTokens                            *int
 	TTSBufferSize                           *int
 	TTSEnhanceNamedEntities                 *bool
@@ -238,6 +241,7 @@ type AppConfig struct {
 	GradiumAPIKey     string
 	HumeAPIKey        string
 	InworldAPIKey     string
+	LMNTAPIKey        string
 	MinimaxAPIKey     string
 	MistralAPIKey     string
 	MurfAPIKey        string
@@ -363,6 +367,7 @@ func DefaultConfigFromEnv() AppConfig {
 		TTSSampleRate:                           getenvOptionalInt("RTP_AGENT_TTS_SAMPLE_RATE"),
 		TTSSpeed:                                getenvFloat("RTP_AGENT_TTS_SPEED"),
 		TTSTemperature:                          getenvOptionalFloat("RTP_AGENT_TTS_TEMPERATURE"),
+		TTSTopP:                                 getenvOptionalFloat("RTP_AGENT_TTS_TOP_P"),
 		TTSMaxTokens:                            getenvOptionalInt("RTP_AGENT_TTS_MAX_TOKENS"),
 		TTSBufferSize:                           getenvOptionalInt("RTP_AGENT_TTS_BUFFER_SIZE"),
 		TTSEnhanceNamedEntities:                 getenvOptionalBool("RTP_AGENT_TTS_ENHANCE_NAMED_ENTITIES"),
@@ -419,6 +424,7 @@ func DefaultConfigFromEnv() AppConfig {
 		GradiumAPIKey:                           os.Getenv("GRADIUM_API_KEY"),
 		HumeAPIKey:                              os.Getenv("HUME_API_KEY"),
 		InworldAPIKey:                           os.Getenv("INWORLD_API_KEY"),
+		LMNTAPIKey:                              os.Getenv("LMNT_API_KEY"),
 		MinimaxAPIKey:                           os.Getenv("MINIMAX_API_KEY"),
 		MistralAPIKey:                           os.Getenv("MISTRAL_API_KEY"),
 		MurfAPIKey:                              os.Getenv("MURF_API_KEY"),
@@ -1491,6 +1497,30 @@ func configureProviders(cfg AppConfig, a *agent.Agent) (llm.RealtimeModel, error
 			ttsOpts = append(ttsOpts, murf.WithMurfTTSSampleRate(*cfg.TTSSampleRate))
 		}
 		a.TTS = murf.NewMurfTTS(cfg.MurfAPIKey, cfg.TTSVoice, ttsOpts...)
+	case providerLMNT:
+		ttsOpts := []lmnt.LMNTTTSOption{}
+		if cfg.TTSModel != "" {
+			ttsOpts = append(ttsOpts, lmnt.WithLMNTTTSModel(cfg.TTSModel))
+		}
+		if cfg.TTSVoice != "" {
+			ttsOpts = append(ttsOpts, lmnt.WithLMNTTTSVoice(cfg.TTSVoice))
+		}
+		if cfg.TTSLanguage != "" {
+			ttsOpts = append(ttsOpts, lmnt.WithLMNTTTSLanguage(cfg.TTSLanguage))
+		}
+		if cfg.TTSResponseFormat != "" {
+			ttsOpts = append(ttsOpts, lmnt.WithLMNTTTSFormat(cfg.TTSResponseFormat))
+		}
+		if cfg.TTSSampleRate != nil {
+			ttsOpts = append(ttsOpts, lmnt.WithLMNTTTSSampleRate(*cfg.TTSSampleRate))
+		}
+		if cfg.TTSTemperature != nil {
+			ttsOpts = append(ttsOpts, lmnt.WithLMNTTTSTemperature(*cfg.TTSTemperature))
+		}
+		if cfg.TTSTopP != nil {
+			ttsOpts = append(ttsOpts, lmnt.WithLMNTTTSTopP(*cfg.TTSTopP))
+		}
+		a.TTS = lmnt.NewLMNTTTS(cfg.LMNTAPIKey, "", ttsOpts...)
 	case providerSLNG:
 		ttsOpts := []slng.TTSOption{}
 		if cfg.TTSModel != "" {
