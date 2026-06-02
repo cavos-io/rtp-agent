@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	workeripc "github.com/cavos-io/rtp-agent/interface/worker/ipc"
 	"github.com/livekit/protocol/auth"
 	"github.com/livekit/protocol/livekit"
 	lksdk "github.com/livekit/server-sdk-go/v2"
@@ -200,6 +201,42 @@ func TestJobContextConnectInfoUsesAcceptedParticipantFields(t *testing.T) {
 	}
 	if info.ParticipantKind != lksdk.ParticipantAgent {
 		t.Fatalf("ConnectInfo.ParticipantKind = %v, want ParticipantAgent", info.ParticipantKind)
+	}
+}
+
+func TestJobContextProcExposesReferenceProcessState(t *testing.T) {
+	ctx := NewJobContext(&livekit.Job{Id: "job_proc"}, "", "", "")
+	ctx.process = NewJobProcess(JobExecutorTypeThread, "args", "https://proxy.example")
+
+	proc := ctx.Proc()
+
+	if proc.ExecutorType() != workeripc.ExecutorTypeThread {
+		t.Fatalf("ExecutorType() = %q, want thread", proc.ExecutorType())
+	}
+	if proc.PID() != os.Getpid() {
+		t.Fatalf("PID() = %d, want current pid %d", proc.PID(), os.Getpid())
+	}
+	if proc.UserArguments() != "args" {
+		t.Fatalf("UserArguments() = %#v, want args", proc.UserArguments())
+	}
+	if proc.HTTPProxy() != "https://proxy.example" {
+		t.Fatalf("HTTPProxy() = %q, want proxy URL", proc.HTTPProxy())
+	}
+
+	proc.Userdata()["attempt"] = 1
+	if ctx.Proc().Userdata()["attempt"] != 1 {
+		t.Fatal("Userdata() did not preserve mutable process state")
+	}
+}
+
+func TestNewJobContextInitializesDefaultProc(t *testing.T) {
+	ctx := NewJobContext(&livekit.Job{Id: "job_default_proc"}, "", "", "")
+
+	if ctx.Proc() == nil {
+		t.Fatal("Proc() = nil, want default job process")
+	}
+	if ctx.Proc().ExecutorType() != JobExecutorTypeThread {
+		t.Fatalf("default ExecutorType() = %q, want thread", ctx.Proc().ExecutorType())
 	}
 }
 

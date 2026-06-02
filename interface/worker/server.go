@@ -147,6 +147,7 @@ type WorkerOptions struct {
 	WorkerToken                        string
 	HTTPProxy                          string
 	HTTPProxySet                       bool
+	UserArguments                      any
 	DevMode                            bool
 	LogLevel                           string
 	PrometheusPort                     int
@@ -642,6 +643,9 @@ func mergeWorkerOptions(current WorkerOptions, next WorkerOptions) WorkerOptions
 	if next.HTTPProxySet || next.HTTPProxy != "" {
 		current.HTTPProxy = next.HTTPProxy
 		current.HTTPProxySet = true
+	}
+	if next.UserArguments != nil {
+		current.UserArguments = next.UserArguments
 	}
 	if next.PrometheusPortSet || next.PrometheusPort != 0 {
 		current.PrometheusPort = next.PrometheusPort
@@ -1842,6 +1846,7 @@ func (s *AgentServer) handleAssignment(ctx context.Context, req *livekit.JobAssi
 		jobURL = req.GetUrl()
 	}
 	jobCtx := NewJobContext(req.Job, jobURL, s.Options.APIKey, s.Options.APISecret)
+	jobCtx.process = NewJobProcess(JobExecutorTypeThread, s.Options.UserArguments, s.Options.HTTPProxy)
 	if req.Job.GetEnableRecording() {
 		jobCtx.Report.RecordingOptions = allRecordingOptions()
 	}
@@ -2154,6 +2159,7 @@ func newLocalJobContextWithOptions(roomName string, participantIdentity string, 
 	jobCtx.AcceptArguments = JobAcceptArguments{Identity: participantIdentity}
 	jobCtx.fakeJob = options.FakeJob
 	jobCtx.Report.RecordingOptions = options.RecordingOptions
+	jobCtx.process = NewJobProcess(JobExecutorTypeThread, opts.UserArguments, opts.HTTPProxy)
 	if token != "" {
 		jobCtx.token = token
 	} else if opts.APIKey != "" && opts.APISecret != "" {

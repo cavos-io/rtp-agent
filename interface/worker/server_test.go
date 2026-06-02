@@ -3507,6 +3507,62 @@ func TestExecuteLocalJobLaunchesThroughThreadExecutor(t *testing.T) {
 	}
 }
 
+func TestExecuteLocalJobExposesProcessContextToEntrypoint(t *testing.T) {
+	server := NewAgentServer(WorkerOptions{
+		WSRL:          "wss://local.example",
+		HTTPProxy:     "https://proxy.example",
+		HTTPProxySet:  true,
+		UserArguments: "user-args",
+	})
+	entrypointCh := make(chan *JobContext, 1)
+	server.entrypointFnc = func(ctx *JobContext) error {
+		ctx.Proc().Userdata()["seen"] = true
+		entrypointCh <- ctx
+		return nil
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	doneCh := make(chan error, 1)
+	go func() {
+		doneCh <- server.ExecuteLocalJob(ctx, "room-a", "agent-local")
+	}()
+
+	var jobCtx *JobContext
+	select {
+	case jobCtx = <-entrypointCh:
+	case <-time.After(time.Second):
+		cancel()
+		t.Fatal("local job entrypoint did not run")
+	}
+
+	if jobCtx.Proc().ExecutorType() != JobExecutorTypeThread {
+		cancel()
+		t.Fatalf("ExecutorType() = %q, want thread", jobCtx.Proc().ExecutorType())
+	}
+	if jobCtx.Proc().HTTPProxy() != "https://proxy.example" {
+		cancel()
+		t.Fatalf("HTTPProxy() = %q, want configured proxy", jobCtx.Proc().HTTPProxy())
+	}
+	if jobCtx.Proc().UserArguments() != "user-args" {
+		cancel()
+		t.Fatalf("UserArguments() = %#v, want configured user arguments", jobCtx.Proc().UserArguments())
+	}
+	if jobCtx.Proc().Userdata()["seen"] != true {
+		cancel()
+		t.Fatal("Userdata() did not keep entrypoint process state")
+	}
+
+	cancel()
+	select {
+	case err := <-doneCh:
+		if err != nil {
+			t.Fatalf("ExecuteLocalJob() error = %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("ExecuteLocalJob() did not return after context cancellation")
+	}
+}
+
 func TestExecuteLocalJobWithExplicitIdleProcessesLaunchesThroughProcPool(t *testing.T) {
 	oldPoolFactory := newLocalProcPool
 	launchedCh := make(chan ipc.RunningJobInfo, 1)

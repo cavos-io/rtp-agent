@@ -4,10 +4,12 @@ import (
 	"context"
 	"fmt"
 	"maps"
+	"os"
 	"reflect"
 	"sync"
 
 	"github.com/cavos-io/rtp-agent/core/agent"
+	workeripc "github.com/cavos-io/rtp-agent/interface/worker/ipc"
 	"github.com/cavos-io/rtp-agent/library/logger"
 	"github.com/cavos-io/rtp-agent/library/utils"
 	"github.com/go-jose/go-jose/v3/jwt"
@@ -25,6 +27,72 @@ type JobAcceptArguments struct {
 
 type JobRejectArguments struct {
 	Terminate bool
+}
+
+type JobExecutorType = workeripc.ExecutorType
+
+const (
+	JobExecutorTypeThread  JobExecutorType = workeripc.ExecutorTypeThread
+	JobExecutorTypeProcess JobExecutorType = workeripc.ExecutorTypeProcess
+)
+
+type JobProcess struct {
+	executorType  JobExecutorType
+	pid           int
+	userdata      map[any]any
+	userArguments any
+	httpProxy     string
+}
+
+func NewJobProcess(executorType JobExecutorType, userArguments any, httpProxy string) *JobProcess {
+	if executorType == "" {
+		executorType = JobExecutorTypeThread
+	}
+	return &JobProcess{
+		executorType:  executorType,
+		pid:           os.Getpid(),
+		userdata:      make(map[any]any),
+		userArguments: userArguments,
+		httpProxy:     httpProxy,
+	}
+}
+
+func (p *JobProcess) ExecutorType() JobExecutorType {
+	if p == nil {
+		return ""
+	}
+	return p.executorType
+}
+
+func (p *JobProcess) PID() int {
+	if p == nil {
+		return 0
+	}
+	return p.pid
+}
+
+func (p *JobProcess) Userdata() map[any]any {
+	if p == nil {
+		return nil
+	}
+	if p.userdata == nil {
+		p.userdata = make(map[any]any)
+	}
+	return p.userdata
+}
+
+func (p *JobProcess) UserArguments() any {
+	if p == nil {
+		return nil
+	}
+	return p.userArguments
+}
+
+func (p *JobProcess) HTTPProxy() string {
+	if p == nil {
+		return ""
+	}
+	return p.httpProxy
 }
 
 type AutoSubscribe string
@@ -136,6 +204,7 @@ type JobContext struct {
 	Tagger                 *agent.Tagger
 	AcceptArguments        JobAcceptArguments
 	WorkerID               string
+	process                *JobProcess
 	shutdownCallbacks      []func(string)
 	shutdownOnce           sync.Once
 	finishOnce             sync.Once
@@ -169,6 +238,7 @@ func NewJobContext(job *livekit.Job, url string, apiKey string, apiSecret string
 		apiSecret: apiSecret,
 		Report:    report,
 		Tagger:    tagger,
+		process:   NewJobProcess(JobExecutorTypeThread, nil, ""),
 	}
 }
 
@@ -211,6 +281,13 @@ func (c *JobContext) JobID() string {
 
 func (c *JobContext) IsFakeJob() bool {
 	return c.fakeJob
+}
+
+func (c *JobContext) Proc() *JobProcess {
+	if c.process == nil {
+		c.process = NewJobProcess(JobExecutorTypeThread, nil, "")
+	}
+	return c.process
 }
 
 func (c *JobContext) AvatarStartInfo() agent.AvatarStartInfo {
