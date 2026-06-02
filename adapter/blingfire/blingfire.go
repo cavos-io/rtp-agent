@@ -20,8 +20,8 @@ func TextToSentences(text string) []string {
 // TextToSentencesWithOffsets splits text into sentences and returns their offsets.
 func TextToSentencesWithOffsets(text string) ([]string, []Offset) {
 	// Mimic python's nltk/blingfire splits
-	re := regexp.MustCompile(`(?P<sentence>.*?[.!?]+(?:\s+|$))`)
-	
+	re := regexp.MustCompile(`(?s).*?[.!?]+(?:\s+|$)`)
+
 	var sentences []string
 	var offsets []Offset
 
@@ -72,15 +72,15 @@ func TextToWords(text string) []string {
 func TextToWordsWithOffsets(text string) ([]string, []Offset) {
 	re := regexp.MustCompile(`\S+`)
 	matches := re.FindAllStringIndex(text, -1)
-	
+
 	var words []string
 	var offsets []Offset
-	
+
 	for _, match := range matches {
 		start, end := match[0], match[1]
 		words = append(words, text[start:end])
 		offsets = append(offsets, Offset{Start: start, End: end})
 	}
-	
+
 	return words, offsets
 }
