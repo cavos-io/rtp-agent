@@ -272,6 +272,10 @@ func (va *PipelineAgent) generateReplyWithOptions(opts pipelineReplyOptions) {
 		genData, err := PerformLLMInference(ctx, va.LLM, inferenceCtx, selectedTools, chatOptions...)
 		if err != nil {
 			logger.Logger.Errorw("LLM inference failed", err)
+			session.EmitError(ErrorEvent{
+				Error:  llm.NewLLMError(llm.Label(va.LLM), err, false),
+				Source: va.LLM,
+			})
 			session.UpdateAgentState(AgentStateIdle)
 			return
 		}

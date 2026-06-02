@@ -460,6 +460,39 @@ func TestPipelineAgentEmitsErrorEventForVADStreamError(t *testing.T) {
 	}
 }
 
+func TestPipelineAgentEmitsLLMErrorEventForChatFailure(t *testing.T) {
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	cause := errors.New("llm chat failed")
+	l := &failingPipelineLLM{
+		label: "test.LLM",
+		err:   cause,
+	}
+	agent := NewPipelineAgent(nil, nil, l, &fakePipelineTTS{}, llm.NewChatContext())
+	agent.session = session
+	agent.ctx = context.Background()
+
+	agent.generateReply()
+
+	select {
+	case ev := <-session.ErrorEvents():
+		llmErr, ok := ev.Error.(*llm.LLMError)
+		if !ok {
+			t.Fatalf("Error = %T, want *llm.LLMError", ev.Error)
+		}
+		if !errors.Is(llmErr, cause) {
+			t.Fatalf("LLMError unwrap = %v, want %v", llmErr, cause)
+		}
+		if llmErr.Label != "test.LLM" || llmErr.Recoverable {
+			t.Fatalf("LLMError = %#v, want label test.LLM recoverable false", llmErr)
+		}
+		if ev.Source != l {
+			t.Fatalf("Source = %#v, want LLM source", ev.Source)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("ErrorEvents did not receive LLM error")
+	}
+}
+
 func TestPipelineAgentReturnsToThinkingWhileExecutingTools(t *testing.T) {
 	chatCtx := llm.NewChatContext()
 	l := &fakeGenerationLLM{
@@ -687,6 +720,17 @@ func (f *fakePipelineTTS) Stream(context.Context) (tts.SynthesizeStream, error) 
 	}
 	return f.stream, nil
 }
+
+type failingPipelineLLM struct {
+	label string
+	err   error
+}
+
+func (f *failingPipelineLLM) Chat(context.Context, *llm.ChatContext, ...llm.ChatOption) (llm.LLMStream, error) {
+	return nil, f.err
+}
+
+func (f *failingPipelineLLM) Label() string { return f.label }
 
 type fakePipelineTTSStream struct {
 	text   strings.Builder
