@@ -322,27 +322,36 @@ func TestJobContextAddParticipantEntrypointStoresKinds(t *testing.T) {
 
 func TestJobContextRunParticipantEntrypointsFiltersKinds(t *testing.T) {
 	ctx := NewJobContext(&livekit.Job{Id: "job_participant_run"}, "", "", "")
-	var calls []string
+	calls := make(chan string, 2)
 
 	if err := ctx.AddParticipantEntrypoint(func(_ *JobContext, p *livekit.ParticipantInfo) {
-		calls = append(calls, "standard:"+p.Identity)
+		calls <- "standard:" + p.Identity
 	}, livekit.ParticipantInfo_STANDARD); err != nil {
 		t.Fatalf("AddParticipantEntrypoint(standard) error = %v", err)
 	}
 	if err := ctx.AddParticipantEntrypoint(func(_ *JobContext, p *livekit.ParticipantInfo) {
-		calls = append(calls, "sip:"+p.Identity)
+		calls <- "sip:" + p.Identity
 	}, livekit.ParticipantInfo_SIP); err != nil {
 		t.Fatalf("AddParticipantEntrypoint(sip) error = %v", err)
 	}
 
-	ctx.runParticipantEntrypoints(&livekit.ParticipantInfo{
+	ctx.scheduleParticipantEntrypoints(&livekit.ParticipantInfo{
 		Identity: "caller",
 		Kind:     livekit.ParticipantInfo_SIP,
 	})
 
-	want := []string{"sip:caller"}
-	if !reflect.DeepEqual(calls, want) {
-		t.Fatalf("participant entrypoint calls = %#v, want %#v", calls, want)
+	select {
+	case got := <-calls:
+		if got != "sip:caller" {
+			t.Fatalf("participant entrypoint call = %q, want sip:caller", got)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("participant entrypoint was not called")
+	}
+	select {
+	case got := <-calls:
+		t.Fatalf("unexpected participant entrypoint call %q", got)
+	case <-time.After(20 * time.Millisecond):
 	}
 }
 
@@ -367,25 +376,34 @@ func TestJobContextAddParticipantEntrypointDefaultsReferenceKinds(t *testing.T) 
 
 func TestJobContextRunDefaultParticipantEntrypointsSkipsAgentParticipants(t *testing.T) {
 	ctx := NewJobContext(&livekit.Job{Id: "job_participant_run_default"}, "", "", "")
-	var calls []string
+	calls := make(chan string, 2)
 
 	if err := ctx.AddParticipantEntrypoint(func(_ *JobContext, p *livekit.ParticipantInfo) {
-		calls = append(calls, p.Identity)
+		calls <- p.Identity
 	}); err != nil {
 		t.Fatalf("AddParticipantEntrypoint() error = %v", err)
 	}
-	ctx.runParticipantEntrypoints(&livekit.ParticipantInfo{
+	ctx.scheduleParticipantEntrypoints(&livekit.ParticipantInfo{
 		Identity: "agent-a",
 		Kind:     livekit.ParticipantInfo_AGENT,
 	})
-	ctx.runParticipantEntrypoints(&livekit.ParticipantInfo{
+	ctx.scheduleParticipantEntrypoints(&livekit.ParticipantInfo{
 		Identity: "caller",
 		Kind:     livekit.ParticipantInfo_SIP,
 	})
 
-	want := []string{"caller"}
-	if !reflect.DeepEqual(calls, want) {
-		t.Fatalf("participant entrypoint calls = %#v, want %#v", calls, want)
+	select {
+	case got := <-calls:
+		if got != "caller" {
+			t.Fatalf("participant entrypoint call = %q, want caller", got)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("participant entrypoint was not called")
+	}
+	select {
+	case got := <-calls:
+		t.Fatalf("unexpected participant entrypoint call %q", got)
+	case <-time.After(20 * time.Millisecond):
 	}
 }
 

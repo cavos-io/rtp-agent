@@ -460,18 +460,6 @@ func defaultParticipantWaitKinds(kinds []livekit.ParticipantInfo_Kind) []livekit
 	return defaultParticipantEntrypointKinds
 }
 
-func (c *JobContext) runParticipantEntrypoints(participant *livekit.ParticipantInfo) {
-	if participant == nil {
-		return
-	}
-	for _, registered := range c.participantEntrypoints {
-		if !participantEntrypointMatchesKind(registered.kinds, participant.Kind) {
-			continue
-		}
-		registered.entrypoint(c, participant)
-	}
-}
-
 func (c *JobContext) scheduleParticipantEntrypoints(participant *livekit.ParticipantInfo) {
 	if participant == nil {
 		return
