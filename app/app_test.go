@@ -245,6 +245,56 @@ func TestDefaultConfigFromEnvSelectsClovaSpeechProviders(t *testing.T) {
 	}
 }
 
+func TestDefaultConfigFromEnvSelectsDeepgramSpeechProviders(t *testing.T) {
+	t.Setenv("DEEPGRAM_API_KEY", "test-deepgram-key")
+	t.Setenv("RTP_AGENT_STT_PROVIDER", "deepgram")
+	t.Setenv("RTP_AGENT_STT_MODEL", "nova-3")
+	t.Setenv("RTP_AGENT_STT_BASE_URL", "https://deepgram.example/v1/listen")
+	t.Setenv("RTP_AGENT_STT_SAMPLE_RATE", "16000")
+	t.Setenv("RTP_AGENT_STT_NUMBER_OF_CHANNELS", "2")
+	t.Setenv("RTP_AGENT_STT_INTERIM_RESULTS", "true")
+	t.Setenv("RTP_AGENT_STT_PUNCTUATE", "true")
+	t.Setenv("RTP_AGENT_STT_SMART_FORMAT", "true")
+	t.Setenv("RTP_AGENT_STT_NO_DELAY", "true")
+	t.Setenv("RTP_AGENT_STT_ENDPOINTING_MS", "75")
+	t.Setenv("RTP_AGENT_STT_DIARIZATION", "true")
+	t.Setenv("RTP_AGENT_STT_FILLER_WORDS", "true")
+	t.Setenv("RTP_AGENT_STT_VAD_EVENTS", "true")
+	t.Setenv("RTP_AGENT_STT_PROFANITY_FILTER", "true")
+	t.Setenv("RTP_AGENT_STT_NUMERALS", "true")
+	t.Setenv("RTP_AGENT_STT_MIP_OPT_OUT", "true")
+	t.Setenv("RTP_AGENT_STT_KEYWORDS", "agent:1.5,voice")
+	t.Setenv("RTP_AGENT_STT_KEYTERMS_PROMPT", "alpha,beta")
+	t.Setenv("RTP_AGENT_STT_REDACT", "pci,ssn")
+	t.Setenv("RTP_AGENT_STT_TAGS", "test,app")
+	t.Setenv("RTP_AGENT_TTS_PROVIDER", "deepgram")
+	t.Setenv("RTP_AGENT_TTS_MODEL", "aura-2-andromeda-en")
+	t.Setenv("RTP_AGENT_TTS_BASE_URL", "https://deepgram.example/v1/speak")
+	t.Setenv("RTP_AGENT_TTS_ENCODING", "linear16")
+	t.Setenv("RTP_AGENT_TTS_SAMPLE_RATE", "32000")
+	t.Setenv("RTP_AGENT_TTS_MIP_OPT_OUT", "true")
+
+	app, err := NewApp(DefaultConfigFromEnv())
+	if err != nil {
+		t.Fatalf("NewApp() error = %v", err)
+	}
+	if app.Session == nil {
+		t.Fatal("Session is nil")
+	}
+	if got := app.Session.STT.Label(); got != "deepgram.STT" {
+		t.Fatalf("STT label = %q, want deepgram.STT", got)
+	}
+	if caps := app.Session.STT.Capabilities(); !caps.Streaming || !caps.Diarization || !caps.OfflineRecognize {
+		t.Fatalf("STT capabilities = %+v, want streaming diarization offline recognize", caps)
+	}
+	if got := app.Session.TTS.Label(); got != "deepgram.TTS" {
+		t.Fatalf("TTS label = %q, want deepgram.TTS", got)
+	}
+	if got := app.Session.TTS.SampleRate(); got != 32000 {
+		t.Fatalf("TTS sample rate = %d, want 32000", got)
+	}
+}
+
 func TestDefaultConfigFromEnvSelectsAWSProviders(t *testing.T) {
 	t.Setenv("AWS_REGION", "us-west-2")
 	t.Setenv("RTP_AGENT_LLM_PROVIDER", "aws")

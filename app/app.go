@@ -19,6 +19,7 @@ import (
 	"github.com/cavos-io/rtp-agent/adapter/cartesia"
 	"github.com/cavos-io/rtp-agent/adapter/cerebras"
 	"github.com/cavos-io/rtp-agent/adapter/clova"
+	"github.com/cavos-io/rtp-agent/adapter/deepgram"
 	"github.com/cavos-io/rtp-agent/adapter/elevenlabs"
 	adaptergoogle "github.com/cavos-io/rtp-agent/adapter/google"
 	"github.com/cavos-io/rtp-agent/adapter/groq"
@@ -40,6 +41,7 @@ const (
 	providerCartesia   = "cartesia"
 	providerCerebras   = "cerebras"
 	providerClova      = "clova"
+	providerDeepgram   = "deepgram"
 	providerElevenLabs = "elevenlabs"
 	providerGoogle     = "google"
 	providerGroq       = "groq"
@@ -66,6 +68,18 @@ type AppConfig struct {
 	STTProfanityFilter              *bool
 	STTTagAudioEvents               *bool
 	STTIncludeTimestamps            *bool
+	STTInterimResults               *bool
+	STTSmartFormat                  *bool
+	STTNoDelay                      *bool
+	STTEndpointingMS                *int
+	STTDiarization                  *bool
+	STTFillerWords                  *bool
+	STTVADEvents                    *bool
+	STTNumerals                     *bool
+	STTMIPOptOut                    *bool
+	STTKeywords                     []deepgram.DeepgramKeyword
+	STTRedact                       []string
+	STTTags                         []string
 	STTPrompt                       string
 	STTBaseURL                      string
 	STTSampleRate                   *int
@@ -117,6 +131,7 @@ type AppConfig struct {
 	TTSEmotion                      string
 	TTSVolume                       *float64
 	TTSPronunciationDictID          string
+	TTSMIPOptOut                    *bool
 	TTSInstructions                 string
 	TTSResponseFormat               string
 	TTSBaseURL                      string
@@ -166,6 +181,18 @@ func DefaultConfigFromEnv() AppConfig {
 		STTProfanityFilter:              getenvOptionalBool("RTP_AGENT_STT_PROFANITY_FILTER"),
 		STTTagAudioEvents:               getenvOptionalBool("RTP_AGENT_STT_TAG_AUDIO_EVENTS"),
 		STTIncludeTimestamps:            getenvOptionalBool("RTP_AGENT_STT_INCLUDE_TIMESTAMPS"),
+		STTInterimResults:               getenvOptionalBool("RTP_AGENT_STT_INTERIM_RESULTS"),
+		STTSmartFormat:                  getenvOptionalBool("RTP_AGENT_STT_SMART_FORMAT"),
+		STTNoDelay:                      getenvOptionalBool("RTP_AGENT_STT_NO_DELAY"),
+		STTEndpointingMS:                getenvOptionalInt("RTP_AGENT_STT_ENDPOINTING_MS"),
+		STTDiarization:                  getenvOptionalBool("RTP_AGENT_STT_DIARIZATION"),
+		STTFillerWords:                  getenvOptionalBool("RTP_AGENT_STT_FILLER_WORDS"),
+		STTVADEvents:                    getenvOptionalBool("RTP_AGENT_STT_VAD_EVENTS"),
+		STTNumerals:                     getenvOptionalBool("RTP_AGENT_STT_NUMERALS"),
+		STTMIPOptOut:                    getenvOptionalBool("RTP_AGENT_STT_MIP_OPT_OUT"),
+		STTKeywords:                     splitEnvDeepgramKeywords("RTP_AGENT_STT_KEYWORDS"),
+		STTRedact:                       splitEnvList("RTP_AGENT_STT_REDACT"),
+		STTTags:                         splitEnvList("RTP_AGENT_STT_TAGS"),
 		STTPrompt:                       os.Getenv("RTP_AGENT_STT_PROMPT"),
 		STTBaseURL:                      os.Getenv("RTP_AGENT_STT_BASE_URL"),
 		STTSampleRate:                   getenvOptionalInt("RTP_AGENT_STT_SAMPLE_RATE"),
@@ -217,6 +244,7 @@ func DefaultConfigFromEnv() AppConfig {
 		TTSEmotion:                      os.Getenv("RTP_AGENT_TTS_EMOTION"),
 		TTSVolume:                       getenvOptionalFloat("RTP_AGENT_TTS_VOLUME"),
 		TTSPronunciationDictID:          os.Getenv("RTP_AGENT_TTS_PRONUNCIATION_DICT_ID"),
+		TTSMIPOptOut:                    getenvOptionalBool("RTP_AGENT_TTS_MIP_OPT_OUT"),
 		TTSInstructions:                 os.Getenv("RTP_AGENT_TTS_INSTRUCTIONS"),
 		TTSResponseFormat:               os.Getenv("RTP_AGENT_TTS_RESPONSE_FORMAT"),
 		TTSBaseURL:                      os.Getenv("RTP_AGENT_TTS_BASE_URL"),
@@ -515,6 +543,63 @@ func configureProviders(cfg AppConfig, a *agent.Agent) (llm.RealtimeModel, error
 			sttOpts = append(sttOpts, clova.WithClovaSTTThreshold(*cfg.STTVADThreshold))
 		}
 		a.STT = clova.NewClovaSTT(cfg.ClovaSTTSecret, cfg.ClovaSTTInvokeURL, sttOpts...)
+	case providerDeepgram:
+		sttOpts := []deepgram.DeepgramSTTOption{}
+		if cfg.STTBaseURL != "" {
+			sttOpts = append(sttOpts, deepgram.WithDeepgramSTTBaseURL(cfg.STTBaseURL))
+		}
+		if cfg.STTInterimResults != nil {
+			sttOpts = append(sttOpts, deepgram.WithDeepgramSTTInterimResults(*cfg.STTInterimResults))
+		}
+		if cfg.STTPunctuate != nil {
+			sttOpts = append(sttOpts, deepgram.WithDeepgramSTTPunctuate(*cfg.STTPunctuate))
+		}
+		if cfg.STTSmartFormat != nil {
+			sttOpts = append(sttOpts, deepgram.WithDeepgramSTTSmartFormat(*cfg.STTSmartFormat))
+		}
+		if cfg.STTNoDelay != nil {
+			sttOpts = append(sttOpts, deepgram.WithDeepgramSTTNoDelay(*cfg.STTNoDelay))
+		}
+		if cfg.STTEndpointingMS != nil {
+			sttOpts = append(sttOpts, deepgram.WithDeepgramSTTEndpointing(*cfg.STTEndpointingMS))
+		}
+		if cfg.STTDiarization != nil {
+			sttOpts = append(sttOpts, deepgram.WithDeepgramSTTDiarization(*cfg.STTDiarization))
+		}
+		if cfg.STTFillerWords != nil {
+			sttOpts = append(sttOpts, deepgram.WithDeepgramSTTFillerWords(*cfg.STTFillerWords))
+		}
+		if cfg.STTSampleRate != nil {
+			sttOpts = append(sttOpts, deepgram.WithDeepgramSTTSampleRate(*cfg.STTSampleRate))
+		}
+		if cfg.STTNumberOfChannels != nil {
+			sttOpts = append(sttOpts, deepgram.WithDeepgramSTTNumChannels(*cfg.STTNumberOfChannels))
+		}
+		if cfg.STTVADEvents != nil {
+			sttOpts = append(sttOpts, deepgram.WithDeepgramSTTVADEvents(*cfg.STTVADEvents))
+		}
+		if cfg.STTProfanityFilter != nil {
+			sttOpts = append(sttOpts, deepgram.WithDeepgramSTTProfanityFilter(*cfg.STTProfanityFilter))
+		}
+		if cfg.STTNumerals != nil {
+			sttOpts = append(sttOpts, deepgram.WithDeepgramSTTNumerals(*cfg.STTNumerals))
+		}
+		if cfg.STTMIPOptOut != nil {
+			sttOpts = append(sttOpts, deepgram.WithDeepgramSTTMipOptOut(*cfg.STTMIPOptOut))
+		}
+		if len(cfg.STTKeywords) > 0 {
+			sttOpts = append(sttOpts, deepgram.WithDeepgramSTTKeywords(cfg.STTKeywords))
+		}
+		if len(cfg.STTKeytermsPrompt) > 0 {
+			sttOpts = append(sttOpts, deepgram.WithDeepgramSTTKeyterms(cfg.STTKeytermsPrompt))
+		}
+		if len(cfg.STTRedact) > 0 {
+			sttOpts = append(sttOpts, deepgram.WithDeepgramSTTRedact(cfg.STTRedact))
+		}
+		if len(cfg.STTTags) > 0 {
+			sttOpts = append(sttOpts, deepgram.WithDeepgramSTTTags(cfg.STTTags))
+		}
+		a.STT = deepgram.NewDeepgramSTT("", cfg.STTModel, sttOpts...)
 	case providerAssemblyAI:
 		sttOpts := []assemblyai.AssemblyAISTTOption{}
 		if cfg.STTBaseURL != "" {
@@ -720,6 +805,22 @@ func configureProviders(cfg AppConfig, a *agent.Agent) (llm.RealtimeModel, error
 		a.TTS = cartesia.NewCartesiaTTS("", cfg.TTSVoice, cfg.TTSModel, ttsOpts...)
 	case providerClova:
 		a.TTS = clova.NewClovaTTS(cfg.ClovaClientID, cfg.ClovaClientSecret, cfg.TTSVoice)
+	case providerDeepgram:
+		ttsOpts := []deepgram.DeepgramTTSOption{}
+		if cfg.TTSBaseURL != "" {
+			ttsOpts = append(ttsOpts, deepgram.WithDeepgramTTSBaseURL(cfg.TTSBaseURL))
+		}
+		if cfg.TTSMIPOptOut != nil {
+			ttsOpts = append(ttsOpts, deepgram.WithDeepgramTTSMipOptOut(*cfg.TTSMIPOptOut))
+		}
+		if cfg.TTSEncoding != "" || cfg.TTSSampleRate != nil {
+			sampleRate := 0
+			if cfg.TTSSampleRate != nil {
+				sampleRate = *cfg.TTSSampleRate
+			}
+			ttsOpts = append(ttsOpts, deepgram.WithDeepgramTTSAudioFormat(cfg.TTSEncoding, sampleRate))
+		}
+		a.TTS = deepgram.NewDeepgramTTS("", cfg.TTSModel, ttsOpts...)
 	case providerCambai:
 		ttsOpts := []cambai.CambaiTTSOption{}
 		if cfg.TTSBaseURL != "" {
@@ -917,4 +1018,30 @@ func splitEnvFloatList(name string) []float64 {
 		}
 	}
 	return values
+}
+
+func splitEnvDeepgramKeywords(name string) []deepgram.DeepgramKeyword {
+	raw := os.Getenv(name)
+	if raw == "" {
+		return nil
+	}
+	parts := strings.Split(raw, ",")
+	keywords := make([]deepgram.DeepgramKeyword, 0, len(parts))
+	for _, part := range parts {
+		rawValue := strings.TrimSpace(part)
+		if rawValue == "" {
+			continue
+		}
+		keyword := deepgram.DeepgramKeyword{Keyword: rawValue}
+		if name, boost, ok := strings.Cut(rawValue, ":"); ok {
+			if parsedBoost, err := strconv.ParseFloat(strings.TrimSpace(boost), 64); err == nil {
+				keyword.Keyword = strings.TrimSpace(name)
+				keyword.Boost = parsedBoost
+			}
+		}
+		if keyword.Keyword != "" {
+			keywords = append(keywords, keyword)
+		}
+	}
+	return keywords
 }
