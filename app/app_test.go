@@ -695,6 +695,282 @@ func TestDefaultConfigFromEnvSelectsMistralAIProviders(t *testing.T) {
 	}
 }
 
+func TestDefaultConfigFromEnvSelectsMurfTTS(t *testing.T) {
+	t.Setenv("MURF_API_KEY", "test-murf-key")
+	t.Setenv("RTP_AGENT_TTS_PROVIDER", "murf")
+	t.Setenv("RTP_AGENT_TTS_BASE_URL", "https://murf.example")
+	t.Setenv("RTP_AGENT_TTS_MODEL", "FALCON")
+	t.Setenv("RTP_AGENT_TTS_VOICE", "en-US-matthew")
+	t.Setenv("RTP_AGENT_TTS_LANGUAGE", "en-US")
+	t.Setenv("RTP_AGENT_TTS_INSTRUCTIONS", "Conversation")
+	t.Setenv("RTP_AGENT_TTS_SPEED", "4")
+	t.Setenv("RTP_AGENT_TTS_PITCH", "2")
+	t.Setenv("RTP_AGENT_TTS_SAMPLE_RATE", "44100")
+
+	app, err := NewApp(DefaultConfigFromEnv())
+	if err != nil {
+		t.Fatalf("NewApp() error = %v", err)
+	}
+	if app.Session == nil || app.Session.TTS == nil {
+		t.Fatal("Session TTS is nil")
+	}
+	if got := app.Session.TTS.Label(); got != "murf.TTS" {
+		t.Fatalf("TTS label = %q, want murf.TTS", got)
+	}
+	if got := app.Session.TTS.SampleRate(); got != 44100 {
+		t.Fatalf("TTS sample rate = %d, want 44100", got)
+	}
+	if caps := app.Session.TTS.Capabilities(); !caps.Streaming || caps.AlignedTranscript {
+		t.Fatalf("TTS capabilities = %+v, want streaming without aligned transcript", caps)
+	}
+}
+
+func TestDefaultConfigFromEnvSelectsLMNTTTS(t *testing.T) {
+	t.Setenv("LMNT_API_KEY", "test-lmnt-key")
+	t.Setenv("RTP_AGENT_TTS_PROVIDER", "lmnt")
+	t.Setenv("RTP_AGENT_TTS_MODEL", "blizzard")
+	t.Setenv("RTP_AGENT_TTS_VOICE", "leah")
+	t.Setenv("RTP_AGENT_TTS_LANGUAGE", "en")
+	t.Setenv("RTP_AGENT_TTS_RESPONSE_FORMAT", "wav")
+	t.Setenv("RTP_AGENT_TTS_SAMPLE_RATE", "48000")
+	t.Setenv("RTP_AGENT_TTS_TEMPERATURE", "0.7")
+	t.Setenv("RTP_AGENT_TTS_TOP_P", "0.9")
+
+	app, err := NewApp(DefaultConfigFromEnv())
+	if err != nil {
+		t.Fatalf("NewApp() error = %v", err)
+	}
+	if app.Session == nil || app.Session.TTS == nil {
+		t.Fatal("Session TTS is nil")
+	}
+	if got := app.Session.TTS.Label(); got != "lmnt.TTS" {
+		t.Fatalf("TTS label = %q, want lmnt.TTS", got)
+	}
+	if got := app.Session.TTS.SampleRate(); got != 48000 {
+		t.Fatalf("TTS sample rate = %d, want 48000", got)
+	}
+	if caps := app.Session.TTS.Capabilities(); caps.Streaming || caps.AlignedTranscript {
+		t.Fatalf("TTS capabilities = %+v, want non-streaming without aligned transcript", caps)
+	}
+}
+
+func TestDefaultConfigFromEnvSelectsNeuphonicTTS(t *testing.T) {
+	t.Setenv("NEUPHONIC_API_KEY", "test-neuphonic-key")
+	t.Setenv("RTP_AGENT_TTS_PROVIDER", "neuphonic")
+	t.Setenv("RTP_AGENT_TTS_BASE_URL", "https://neuphonic.example")
+	t.Setenv("RTP_AGENT_TTS_VOICE", "voice-id")
+	t.Setenv("RTP_AGENT_TTS_LANGUAGE", "en")
+	t.Setenv("RTP_AGENT_TTS_ENCODING", "pcm_linear")
+	t.Setenv("RTP_AGENT_TTS_SAMPLE_RATE", "44100")
+	t.Setenv("RTP_AGENT_TTS_SPEED", "1.1")
+
+	app, err := NewApp(DefaultConfigFromEnv())
+	if err != nil {
+		t.Fatalf("NewApp() error = %v", err)
+	}
+	if app.Session == nil || app.Session.TTS == nil {
+		t.Fatal("Session TTS is nil")
+	}
+	if got := app.Session.TTS.Label(); got != "neuphonic.TTS" {
+		t.Fatalf("TTS label = %q, want neuphonic.TTS", got)
+	}
+	if got := app.Session.TTS.SampleRate(); got != 44100 {
+		t.Fatalf("TTS sample rate = %d, want 44100", got)
+	}
+	if caps := app.Session.TTS.Capabilities(); !caps.Streaming || caps.AlignedTranscript {
+		t.Fatalf("TTS capabilities = %+v, want streaming without aligned transcript", caps)
+	}
+}
+
+func TestDefaultConfigFromEnvSelectsResembleTTS(t *testing.T) {
+	t.Setenv("RESEMBLE_API_KEY", "test-resemble-key")
+	t.Setenv("RTP_AGENT_TTS_PROVIDER", "resemble")
+	t.Setenv("RTP_AGENT_TTS_MODEL", "chatterbox-turbo")
+	t.Setenv("RTP_AGENT_TTS_VOICE", "voice-uuid")
+	t.Setenv("RTP_AGENT_TTS_SAMPLE_RATE", "24000")
+
+	app, err := NewApp(DefaultConfigFromEnv())
+	if err != nil {
+		t.Fatalf("NewApp() error = %v", err)
+	}
+	if app.Session == nil || app.Session.TTS == nil {
+		t.Fatal("Session TTS is nil")
+	}
+	if got := app.Session.TTS.Label(); got != "resemble.TTS" {
+		t.Fatalf("TTS label = %q, want resemble.TTS", got)
+	}
+	if got := app.Session.TTS.SampleRate(); got != 24000 {
+		t.Fatalf("TTS sample rate = %d, want 24000", got)
+	}
+	if caps := app.Session.TTS.Capabilities(); !caps.Streaming || caps.AlignedTranscript {
+		t.Fatalf("TTS capabilities = %+v, want streaming without aligned transcript", caps)
+	}
+}
+
+func TestDefaultConfigFromEnvSelectsRespeecherTTS(t *testing.T) {
+	t.Setenv("RESPEECHER_API_KEY", "test-respeecher-key")
+	t.Setenv("RTP_AGENT_TTS_PROVIDER", "respeecher")
+	t.Setenv("RTP_AGENT_TTS_BASE_URL", "https://respeecher.example/v1")
+	t.Setenv("RTP_AGENT_TTS_MODEL", "/public/tts/ua-rt")
+	t.Setenv("RTP_AGENT_TTS_VOICE", "olesia-conversation")
+	t.Setenv("RTP_AGENT_TTS_SAMPLE_RATE", "48000")
+	t.Setenv("RTP_AGENT_TTS_JSON_CONFIG", "temperature=0.4")
+
+	app, err := NewApp(DefaultConfigFromEnv())
+	if err != nil {
+		t.Fatalf("NewApp() error = %v", err)
+	}
+	if app.Session == nil || app.Session.TTS == nil {
+		t.Fatal("Session TTS is nil")
+	}
+	if got := app.Session.TTS.Label(); got != "respeecher.TTS" {
+		t.Fatalf("TTS label = %q, want respeecher.TTS", got)
+	}
+	if got := app.Session.TTS.SampleRate(); got != 48000 {
+		t.Fatalf("TTS sample rate = %d, want 48000", got)
+	}
+	if caps := app.Session.TTS.Capabilities(); !caps.Streaming || caps.AlignedTranscript {
+		t.Fatalf("TTS capabilities = %+v, want streaming without aligned transcript", caps)
+	}
+}
+
+func TestDefaultConfigFromEnvSelectsRimeTTS(t *testing.T) {
+	t.Setenv("RIME_API_KEY", "test-rime-key")
+	t.Setenv("RTP_AGENT_TTS_PROVIDER", "rime")
+	t.Setenv("RTP_AGENT_TTS_BASE_URL", "https://rime.example/v1/rime-tts")
+	t.Setenv("RTP_AGENT_TTS_WEBSOCKET_URL", "wss://rime.example")
+	t.Setenv("RTP_AGENT_TTS_MODEL", "mist")
+	t.Setenv("RTP_AGENT_TTS_VOICE", "cove")
+	t.Setenv("RTP_AGENT_TTS_LANGUAGE", "eng")
+	t.Setenv("RTP_AGENT_TTS_SAMPLE_RATE", "44100")
+	t.Setenv("RTP_AGENT_TTS_SPEED", "1.1")
+	t.Setenv("RTP_AGENT_TTS_DELIVERY_MODE", "bySentence")
+
+	app, err := NewApp(DefaultConfigFromEnv())
+	if err != nil {
+		t.Fatalf("NewApp() error = %v", err)
+	}
+	if app.Session == nil || app.Session.TTS == nil {
+		t.Fatal("Session TTS is nil")
+	}
+	if got := app.Session.TTS.Label(); got != "rime.TTS" {
+		t.Fatalf("TTS label = %q, want rime.TTS", got)
+	}
+	if got := app.Session.TTS.SampleRate(); got != 44100 {
+		t.Fatalf("TTS sample rate = %d, want 44100", got)
+	}
+	if caps := app.Session.TTS.Capabilities(); !caps.Streaming || !caps.AlignedTranscript {
+		t.Fatalf("TTS capabilities = %+v, want streaming with aligned transcript", caps)
+	}
+}
+
+func TestDefaultConfigFromEnvSelectsSarvamProviders(t *testing.T) {
+	t.Setenv("SARVAM_API_KEY", "test-sarvam-key")
+	t.Setenv("RTP_AGENT_LLM_PROVIDER", "sarvam")
+	t.Setenv("RTP_AGENT_LLM_MODEL", "sarvam-30b")
+	t.Setenv("RTP_AGENT_LLM_BASE_URL", "https://sarvam.example/v1")
+	t.Setenv("RTP_AGENT_STT_PROVIDER", "sarvam")
+	t.Setenv("RTP_AGENT_STT_BASE_URL", "https://sarvam.example/speech-to-text")
+	t.Setenv("RTP_AGENT_STT_STREAMING_URL", "wss://sarvam.example/speech-to-text/ws")
+	t.Setenv("RTP_AGENT_STT_MODEL", "saarika:v2.5")
+	t.Setenv("RTP_AGENT_STT_LANGUAGE", "hi-IN")
+	t.Setenv("RTP_AGENT_STT_TASK", "transcribe")
+	t.Setenv("RTP_AGENT_STT_PROMPT", "domain words")
+	t.Setenv("RTP_AGENT_STT_SAMPLE_RATE", "16000")
+	t.Setenv("RTP_AGENT_STT_VAD_EVENTS", "true")
+	t.Setenv("RTP_AGENT_STT_VAD_FLUSH", "true")
+	t.Setenv("RTP_AGENT_TTS_PROVIDER", "sarvam")
+	t.Setenv("RTP_AGENT_TTS_BASE_URL", "https://sarvam.example/text-to-speech")
+	t.Setenv("RTP_AGENT_TTS_WEBSOCKET_URL", "wss://sarvam.example/text-to-speech/ws")
+	t.Setenv("RTP_AGENT_TTS_MODEL", "bulbul:v2")
+	t.Setenv("RTP_AGENT_TTS_VOICE", "anushka")
+	t.Setenv("RTP_AGENT_TTS_LANGUAGE", "hi-IN")
+	t.Setenv("RTP_AGENT_TTS_SAMPLE_RATE", "22050")
+	t.Setenv("RTP_AGENT_TTS_TEMPERATURE", "0.4")
+	t.Setenv("RTP_AGENT_TTS_SPEED", "1.1")
+	t.Setenv("RTP_AGENT_TTS_PITCH", "2")
+	t.Setenv("RTP_AGENT_TTS_BIT_RATE", "128000")
+	t.Setenv("RTP_AGENT_TTS_BUFFER_SIZE", "20")
+	t.Setenv("RTP_AGENT_TTS_CHUNK_LENGTH", "120")
+	t.Setenv("RTP_AGENT_TTS_ENHANCE_NAMED_ENTITIES", "true")
+	t.Setenv("RTP_AGENT_TTS_INSTANT_MODE", "false")
+	t.Setenv("RTP_AGENT_TTS_PRONUNCIATION_DICT_ID", "dict-1")
+	t.Setenv("RTP_AGENT_TTS_ENCODING", "wav")
+
+	app, err := NewApp(DefaultConfigFromEnv())
+	if err != nil {
+		t.Fatalf("NewApp() error = %v", err)
+	}
+	if app.Session == nil {
+		t.Fatal("Session is nil")
+	}
+	if app.Session.LLM == nil {
+		t.Fatal("Session LLM is nil")
+	}
+	if got := app.Session.STT.Label(); got != "sarvam.STT" {
+		t.Fatalf("STT label = %q, want sarvam.STT", got)
+	}
+	if caps := app.Session.STT.Capabilities(); !caps.Streaming || !caps.InterimResults || !caps.OfflineRecognize {
+		t.Fatalf("STT capabilities = %+v, want streaming interim offline", caps)
+	}
+	if got := app.Session.TTS.Label(); got != "sarvam.TTS" {
+		t.Fatalf("TTS label = %q, want sarvam.TTS", got)
+	}
+	if got := app.Session.TTS.SampleRate(); got != 22050 {
+		t.Fatalf("TTS sample rate = %d, want 22050", got)
+	}
+	if caps := app.Session.TTS.Capabilities(); !caps.Streaming || caps.AlignedTranscript {
+		t.Fatalf("TTS capabilities = %+v, want streaming without aligned transcript", caps)
+	}
+}
+
+func TestDefaultConfigFromEnvSelectsSLNGSpeechProviders(t *testing.T) {
+	t.Setenv("SLNG_API_KEY", "test-slng-key")
+	t.Setenv("RTP_AGENT_STT_PROVIDER", "slng")
+	t.Setenv("RTP_AGENT_STT_BASE_URL", "wss://slng.example/stt")
+	t.Setenv("RTP_AGENT_STT_MODEL", "deepgram/nova:3")
+	t.Setenv("RTP_AGENT_STT_REGION", "us")
+	t.Setenv("RTP_AGENT_STT_ENCODING", "pcm_s16le")
+	t.Setenv("RTP_AGENT_STT_LANGUAGE", "en")
+	t.Setenv("RTP_AGENT_STT_INTERIM_RESULTS", "false")
+	t.Setenv("RTP_AGENT_STT_DIARIZATION", "true")
+	t.Setenv("RTP_AGENT_STT_MIN_SPEAKERS", "1")
+	t.Setenv("RTP_AGENT_STT_MAX_SPEAKERS", "2")
+	t.Setenv("RTP_AGENT_STT_MODEL_OPTIONS", "punctuate=true,tier=enhanced")
+	t.Setenv("RTP_AGENT_TTS_PROVIDER", "slng")
+	t.Setenv("RTP_AGENT_TTS_BASE_URL", "wss://slng.example/tts")
+	t.Setenv("RTP_AGENT_TTS_MODEL", "deepgram/aura:2")
+	t.Setenv("RTP_AGENT_TTS_REGION", "eu")
+	t.Setenv("RTP_AGENT_TTS_VOICE", "athena")
+	t.Setenv("RTP_AGENT_TTS_LANGUAGE", "en")
+	t.Setenv("RTP_AGENT_TTS_SAMPLE_RATE", "32000")
+	t.Setenv("RTP_AGENT_TTS_SPEED", "1.2")
+	t.Setenv("RTP_AGENT_TTS_MODEL_OPTIONS", "encoding=linear16")
+
+	app, err := NewApp(DefaultConfigFromEnv())
+	if err != nil {
+		t.Fatalf("NewApp() error = %v", err)
+	}
+	if app.Session == nil {
+		t.Fatal("Session is nil")
+	}
+	if got := app.Session.STT.Label(); got != "slng.STT" {
+		t.Fatalf("STT label = %q, want slng.STT", got)
+	}
+	if caps := app.Session.STT.Capabilities(); !caps.Streaming || !caps.Diarization {
+		t.Fatalf("STT capabilities = %+v, want streaming diarization", caps)
+	}
+	if got := app.Session.TTS.Label(); got != "slng.TTS" {
+		t.Fatalf("TTS label = %q, want slng.TTS", got)
+	}
+	if got := app.Session.TTS.SampleRate(); got != 32000 {
+		t.Fatalf("TTS sample rate = %d, want 32000", got)
+	}
+	if caps := app.Session.TTS.Capabilities(); !caps.Streaming || caps.AlignedTranscript {
+		t.Fatalf("TTS capabilities = %+v, want streaming without aligned transcript", caps)
+	}
+}
+
 func TestDefaultConfigFromEnvSelectsAWSProviders(t *testing.T) {
 	t.Setenv("AWS_REGION", "us-west-2")
 	t.Setenv("RTP_AGENT_LLM_PROVIDER", "aws")
