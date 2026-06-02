@@ -16,6 +16,7 @@ import (
 	"github.com/cavos-io/rtp-agent/adapter/azure"
 	"github.com/cavos-io/rtp-agent/adapter/baseten"
 	"github.com/cavos-io/rtp-agent/adapter/cambai"
+	"github.com/cavos-io/rtp-agent/adapter/cartesia"
 	"github.com/cavos-io/rtp-agent/adapter/elevenlabs"
 	adaptergoogle "github.com/cavos-io/rtp-agent/adapter/google"
 	"github.com/cavos-io/rtp-agent/adapter/groq"
@@ -34,6 +35,7 @@ const (
 	providerAzure      = "azure"
 	providerBaseten    = "baseten"
 	providerCambai     = "cambai"
+	providerCartesia   = "cartesia"
 	providerElevenLabs = "elevenlabs"
 	providerGoogle     = "google"
 	providerGroq       = "groq"
@@ -64,6 +66,7 @@ type AppConfig struct {
 	STTBaseURL                      string
 	STTSampleRate                   *int
 	STTBufferSizeSeconds            *float64
+	STTAudioChunkDurationMS         *int
 	STTMinTurnSilence               *int
 	STTMaxTurnSilence               *int
 	STTEndOfTurnConfidenceThreshold *float64
@@ -104,6 +107,12 @@ type AppConfig struct {
 	TTSBufferSize                   *int
 	TTSEnhanceNamedEntities         *bool
 	TTSEnableSSMLParsing            *bool
+	TTSAPIVersion                   string
+	TTSWordTimestamps               *bool
+	TTSVoiceEmbedding               []float64
+	TTSEmotion                      string
+	TTSVolume                       *float64
+	TTSPronunciationDictID          string
 	TTSInstructions                 string
 	TTSResponseFormat               string
 	TTSBaseURL                      string
@@ -152,6 +161,7 @@ func DefaultConfigFromEnv() AppConfig {
 		STTBaseURL:                      os.Getenv("RTP_AGENT_STT_BASE_URL"),
 		STTSampleRate:                   getenvOptionalInt("RTP_AGENT_STT_SAMPLE_RATE"),
 		STTBufferSizeSeconds:            getenvOptionalFloat("RTP_AGENT_STT_BUFFER_SIZE_SECONDS"),
+		STTAudioChunkDurationMS:         getenvOptionalInt("RTP_AGENT_STT_AUDIO_CHUNK_DURATION_MS"),
 		STTMinTurnSilence:               getenvOptionalInt("RTP_AGENT_STT_MIN_TURN_SILENCE"),
 		STTMaxTurnSilence:               getenvOptionalInt("RTP_AGENT_STT_MAX_TURN_SILENCE"),
 		STTEndOfTurnConfidenceThreshold: getenvOptionalFloat("RTP_AGENT_STT_END_OF_TURN_CONFIDENCE_THRESHOLD"),
@@ -192,6 +202,12 @@ func DefaultConfigFromEnv() AppConfig {
 		TTSBufferSize:                   getenvOptionalInt("RTP_AGENT_TTS_BUFFER_SIZE"),
 		TTSEnhanceNamedEntities:         getenvOptionalBool("RTP_AGENT_TTS_ENHANCE_NAMED_ENTITIES"),
 		TTSEnableSSMLParsing:            getenvOptionalBool("RTP_AGENT_TTS_ENABLE_SSML_PARSING"),
+		TTSAPIVersion:                   os.Getenv("RTP_AGENT_TTS_API_VERSION"),
+		TTSWordTimestamps:               getenvOptionalBool("RTP_AGENT_TTS_WORD_TIMESTAMPS"),
+		TTSVoiceEmbedding:               splitEnvFloatList("RTP_AGENT_TTS_VOICE_EMBEDDING"),
+		TTSEmotion:                      os.Getenv("RTP_AGENT_TTS_EMOTION"),
+		TTSVolume:                       getenvOptionalFloat("RTP_AGENT_TTS_VOLUME"),
+		TTSPronunciationDictID:          os.Getenv("RTP_AGENT_TTS_PRONUNCIATION_DICT_ID"),
 		TTSInstructions:                 os.Getenv("RTP_AGENT_TTS_INSTRUCTIONS"),
 		TTSResponseFormat:               os.Getenv("RTP_AGENT_TTS_RESPONSE_FORMAT"),
 		TTSBaseURL:                      os.Getenv("RTP_AGENT_TTS_BASE_URL"),
@@ -453,6 +469,27 @@ func configureProviders(cfg AppConfig, a *agent.Agent) (llm.RealtimeModel, error
 			sttOpts = append(sttOpts, elevenlabs.WithElevenLabsSTTKeyterms(cfg.STTKeytermsPrompt))
 		}
 		a.STT = elevenlabs.NewElevenLabsSTT(cfg.ElevenLabsAPIKey, sttOpts...)
+	case providerCartesia:
+		sttOpts := []cartesia.CartesiaSTTOption{}
+		if cfg.STTBaseURL != "" {
+			sttOpts = append(sttOpts, cartesia.WithCartesiaSTTBaseURL(cfg.STTBaseURL))
+		}
+		if cfg.STTModel != "" {
+			sttOpts = append(sttOpts, cartesia.WithCartesiaSTTModel(cfg.STTModel))
+		}
+		if cfg.STTLanguage != "" {
+			sttOpts = append(sttOpts, cartesia.WithCartesiaSTTLanguage(cfg.STTLanguage))
+		}
+		if cfg.STTSampleRate != nil {
+			sttOpts = append(sttOpts, cartesia.WithCartesiaSTTSampleRate(*cfg.STTSampleRate))
+		}
+		if cfg.STTEncoding != "" {
+			sttOpts = append(sttOpts, cartesia.WithCartesiaSTTEncoding(cfg.STTEncoding))
+		}
+		if cfg.STTAudioChunkDurationMS != nil {
+			sttOpts = append(sttOpts, cartesia.WithCartesiaSTTAudioChunkDurationMS(*cfg.STTAudioChunkDurationMS))
+		}
+		a.STT = cartesia.NewCartesiaSTT("", sttOpts...)
 	case providerAssemblyAI:
 		sttOpts := []assemblyai.AssemblyAISTTOption{}
 		if cfg.STTBaseURL != "" {
@@ -619,6 +656,43 @@ func configureProviders(cfg AppConfig, a *agent.Agent) (llm.RealtimeModel, error
 			ttsOpts = append(ttsOpts, groq.WithGroqTTSVoice(cfg.TTSVoice))
 		}
 		a.TTS = groq.NewGroqTTS(cfg.GroqAPIKey, cfg.TTSVoice, ttsOpts...)
+	case providerCartesia:
+		ttsOpts := []cartesia.CartesiaTTSOption{}
+		if cfg.TTSBaseURL != "" {
+			ttsOpts = append(ttsOpts, cartesia.WithCartesiaBaseURL(cfg.TTSBaseURL))
+		}
+		if cfg.TTSLanguage != "" {
+			ttsOpts = append(ttsOpts, cartesia.WithCartesiaLanguage(cfg.TTSLanguage))
+		}
+		if cfg.TTSEncoding != "" || cfg.TTSSampleRate != nil {
+			sampleRate := 0
+			if cfg.TTSSampleRate != nil {
+				sampleRate = *cfg.TTSSampleRate
+			}
+			ttsOpts = append(ttsOpts, cartesia.WithCartesiaAudioFormat(cfg.TTSEncoding, sampleRate))
+		}
+		if cfg.TTSAPIVersion != "" {
+			ttsOpts = append(ttsOpts, cartesia.WithCartesiaAPIVersion(cfg.TTSAPIVersion))
+		}
+		if cfg.TTSWordTimestamps != nil {
+			ttsOpts = append(ttsOpts, cartesia.WithCartesiaWordTimestamps(*cfg.TTSWordTimestamps))
+		}
+		if len(cfg.TTSVoiceEmbedding) > 0 {
+			ttsOpts = append(ttsOpts, cartesia.WithCartesiaVoiceEmbedding(cfg.TTSVoiceEmbedding))
+		}
+		if cfg.TTSSpeed != 0 {
+			ttsOpts = append(ttsOpts, cartesia.WithCartesiaSpeed(cfg.TTSSpeed))
+		}
+		if cfg.TTSEmotion != "" {
+			ttsOpts = append(ttsOpts, cartesia.WithCartesiaEmotion(cfg.TTSEmotion))
+		}
+		if cfg.TTSVolume != nil {
+			ttsOpts = append(ttsOpts, cartesia.WithCartesiaVolume(*cfg.TTSVolume))
+		}
+		if cfg.TTSPronunciationDictID != "" {
+			ttsOpts = append(ttsOpts, cartesia.WithCartesiaPronunciationDictID(cfg.TTSPronunciationDictID))
+		}
+		a.TTS = cartesia.NewCartesiaTTS("", cfg.TTSVoice, cfg.TTSModel, ttsOpts...)
 	case providerCambai:
 		ttsOpts := []cambai.CambaiTTSOption{}
 		if cfg.TTSBaseURL != "" {
@@ -792,6 +866,26 @@ func splitEnvList(name string) []string {
 	for _, part := range parts {
 		value := strings.TrimSpace(part)
 		if value != "" {
+			values = append(values, value)
+		}
+	}
+	return values
+}
+
+func splitEnvFloatList(name string) []float64 {
+	raw := os.Getenv(name)
+	if raw == "" {
+		return nil
+	}
+	parts := strings.Split(raw, ",")
+	values := make([]float64, 0, len(parts))
+	for _, part := range parts {
+		rawValue := strings.TrimSpace(part)
+		if rawValue == "" {
+			continue
+		}
+		value, err := strconv.ParseFloat(rawValue, 64)
+		if err == nil {
 			values = append(values, value)
 		}
 	}

@@ -165,6 +165,54 @@ func TestDefaultConfigFromEnvSelectsElevenLabsSpeechProviders(t *testing.T) {
 	}
 }
 
+func TestDefaultConfigFromEnvSelectsCartesiaSpeechProviders(t *testing.T) {
+	t.Setenv("CARTESIA_API_KEY", "test-cartesia-key")
+	t.Setenv("RTP_AGENT_STT_PROVIDER", "cartesia")
+	t.Setenv("RTP_AGENT_STT_MODEL", "ink-2")
+	t.Setenv("RTP_AGENT_STT_LANGUAGE", "en")
+	t.Setenv("RTP_AGENT_STT_BASE_URL", "https://cartesia.example")
+	t.Setenv("RTP_AGENT_STT_SAMPLE_RATE", "16000")
+	t.Setenv("RTP_AGENT_STT_ENCODING", "pcm_s16le")
+	t.Setenv("RTP_AGENT_STT_AUDIO_CHUNK_DURATION_MS", "120")
+	t.Setenv("RTP_AGENT_TTS_PROVIDER", "cartesia")
+	t.Setenv("RTP_AGENT_TTS_MODEL", "sonic-3")
+	t.Setenv("RTP_AGENT_TTS_VOICE", "voice-test")
+	t.Setenv("RTP_AGENT_TTS_LANGUAGE", "en")
+	t.Setenv("RTP_AGENT_TTS_ENCODING", "pcm_s16le")
+	t.Setenv("RTP_AGENT_TTS_SAMPLE_RATE", "44100")
+	t.Setenv("RTP_AGENT_TTS_BASE_URL", "https://cartesia.example")
+	t.Setenv("RTP_AGENT_TTS_API_VERSION", "2025-04-16")
+	t.Setenv("RTP_AGENT_TTS_WORD_TIMESTAMPS", "false")
+	t.Setenv("RTP_AGENT_TTS_VOICE_EMBEDDING", "0.1,0.2")
+	t.Setenv("RTP_AGENT_TTS_SPEED", "1.1")
+	t.Setenv("RTP_AGENT_TTS_EMOTION", "positivity")
+	t.Setenv("RTP_AGENT_TTS_VOLUME", "0.8")
+	t.Setenv("RTP_AGENT_TTS_PRONUNCIATION_DICT_ID", "dict-test")
+
+	app, err := NewApp(DefaultConfigFromEnv())
+	if err != nil {
+		t.Fatalf("NewApp() error = %v", err)
+	}
+	if app.Session == nil {
+		t.Fatal("Session is nil")
+	}
+	if got := app.Session.STT.Label(); got != "cartesia.STT" {
+		t.Fatalf("STT label = %q, want cartesia.STT", got)
+	}
+	if caps := app.Session.STT.Capabilities(); !caps.Streaming || !caps.InterimResults {
+		t.Fatalf("STT capabilities = %+v, want streaming interim results", caps)
+	}
+	if got := app.Session.TTS.Label(); got != "cartesia.TTS" {
+		t.Fatalf("TTS label = %q, want cartesia.TTS", got)
+	}
+	if got := app.Session.TTS.SampleRate(); got != 44100 {
+		t.Fatalf("TTS sample rate = %d, want 44100", got)
+	}
+	if caps := app.Session.TTS.Capabilities(); !caps.Streaming || caps.AlignedTranscript {
+		t.Fatalf("TTS capabilities = %+v, want streaming without aligned transcript", caps)
+	}
+}
+
 func TestDefaultConfigFromEnvSelectsAWSProviders(t *testing.T) {
 	t.Setenv("AWS_REGION", "us-west-2")
 	t.Setenv("RTP_AGENT_LLM_PROVIDER", "aws")
