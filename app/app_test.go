@@ -46,6 +46,30 @@ func TestDefaultConfigFromEnvSelectsOpenAIProviders(t *testing.T) {
 	}
 }
 
+func TestDefaultConfigFromEnvSelectsAssemblyAISTT(t *testing.T) {
+	t.Setenv("ASSEMBLYAI_API_KEY", "test-assemblyai-key")
+	t.Setenv("RTP_AGENT_STT_PROVIDER", "assemblyai")
+	t.Setenv("RTP_AGENT_STT_MODEL", "u3-pro")
+	t.Setenv("RTP_AGENT_STT_BASE_URL", "wss://streaming.eu.assemblyai.com/")
+	t.Setenv("RTP_AGENT_STT_SAMPLE_RATE", "8000")
+	t.Setenv("RTP_AGENT_STT_SPEAKER_LABELS", "true")
+	t.Setenv("RTP_AGENT_STT_MAX_SPEAKERS", "2")
+
+	app, err := NewApp(DefaultConfigFromEnv())
+	if err != nil {
+		t.Fatalf("NewApp() error = %v", err)
+	}
+	if app.Session == nil || app.Session.STT == nil {
+		t.Fatal("Session STT is nil")
+	}
+	if got := app.Session.STT.Label(); got != "assemblyai.STT" {
+		t.Fatalf("STT label = %q, want assemblyai.STT", got)
+	}
+	if caps := app.Session.STT.Capabilities(); !caps.Diarization {
+		t.Fatalf("STT Capabilities().Diarization = false, want true")
+	}
+}
+
 func TestDefaultConfigFromEnvSelectsLiveKitInferenceLLM(t *testing.T) {
 	t.Setenv("LIVEKIT_API_KEY", "test-livekit-key")
 	t.Setenv("LIVEKIT_API_SECRET", "test-livekit-secret")
