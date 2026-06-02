@@ -137,15 +137,20 @@ func TestSonioxTTSAudioFromMessageReportsProviderError(t *testing.T) {
 	}
 }
 
-func TestSonioxAudioFormatToMIMEType(t *testing.T) {
-	if got := sonioxTTSAudioFormatToMIMEType("pcm_s16le"); got != "audio/pcm" {
-		t.Fatalf("pcm MIME = %q, want audio/pcm", got)
+func TestSonioxTTSAudioFrameClonesAudioData(t *testing.T) {
+	input := []byte{0x01, 0x02, 0x03, 0x04}
+
+	audio := sonioxTTSAudioFrame(input, 16000)
+	input[0] = 0xff
+
+	if audio == nil || audio.Frame == nil {
+		t.Fatalf("audio = %#v, want frame", audio)
 	}
-	if got := sonioxTTSAudioFormatToMIMEType("mp3"); got != "audio/mpeg" {
-		t.Fatalf("mp3 MIME = %q, want audio/mpeg", got)
+	if audio.Frame.Data[0] != 0x01 {
+		t.Fatalf("frame data was mutated with input: %#v", audio.Frame.Data)
 	}
-	if got := sonioxTTSAudioFormatToMIMEType("opus"); got != "audio/opus" {
-		t.Fatalf("opus MIME = %q, want audio/opus", got)
+	if audio.Frame.SampleRate != 16000 {
+		t.Fatalf("sample rate = %d, want 16000", audio.Frame.SampleRate)
 	}
 }
 

@@ -40,8 +40,13 @@ import (
 	"github.com/cavos-io/rtp-agent/adapter/resemble"
 	"github.com/cavos-io/rtp-agent/adapter/respeecher"
 	"github.com/cavos-io/rtp-agent/adapter/rime"
+	"github.com/cavos-io/rtp-agent/adapter/rtzr"
 	"github.com/cavos-io/rtp-agent/adapter/sarvam"
+	"github.com/cavos-io/rtp-agent/adapter/simplismart"
 	"github.com/cavos-io/rtp-agent/adapter/slng"
+	"github.com/cavos-io/rtp-agent/adapter/smallestai"
+	"github.com/cavos-io/rtp-agent/adapter/soniox"
+	"github.com/cavos-io/rtp-agent/adapter/speechify"
 	"github.com/cavos-io/rtp-agent/core/agent"
 	"github.com/cavos-io/rtp-agent/core/llm"
 	"github.com/cavos-io/rtp-agent/interface/worker"
@@ -49,40 +54,45 @@ import (
 )
 
 const (
-	providerAnthropic  = "anthropic"
-	providerAssemblyAI = "assemblyai"
-	providerAsyncAI    = "asyncai"
-	providerAWS        = "aws"
-	providerAzure      = "azure"
-	providerBaseten    = "baseten"
-	providerCambai     = "cambai"
-	providerCartesia   = "cartesia"
-	providerCerebras   = "cerebras"
-	providerClova      = "clova"
-	providerDeepgram   = "deepgram"
-	providerElevenLabs = "elevenlabs"
-	providerFal        = "fal"
-	providerFireworks  = "fireworks"
-	providerFishAudio  = "fishaudio"
-	providerGladia     = "gladia"
-	providerGnani      = "gnani"
-	providerGoogle     = "google"
-	providerGradium    = "gradium"
-	providerGroq       = "groq"
-	providerHume       = "hume"
-	providerInworld    = "inworld"
-	providerLMNT       = "lmnt"
-	providerMinimax    = "minimax"
-	providerMistralAI  = "mistralai"
-	providerMurf       = "murf"
-	providerNeuphonic  = "neuphonic"
-	providerOpenAI     = "openai"
-	providerResemble   = "resemble"
-	providerRespeecher = "respeecher"
-	providerRime       = "rime"
-	providerSarvam     = "sarvam"
-	providerSLNG       = "slng"
-	providerLiveKit    = "livekit"
+	providerAnthropic   = "anthropic"
+	providerAssemblyAI  = "assemblyai"
+	providerAsyncAI     = "asyncai"
+	providerAWS         = "aws"
+	providerAzure       = "azure"
+	providerBaseten     = "baseten"
+	providerCambai      = "cambai"
+	providerCartesia    = "cartesia"
+	providerCerebras    = "cerebras"
+	providerClova       = "clova"
+	providerDeepgram    = "deepgram"
+	providerElevenLabs  = "elevenlabs"
+	providerFal         = "fal"
+	providerFireworks   = "fireworks"
+	providerFishAudio   = "fishaudio"
+	providerGladia      = "gladia"
+	providerGnani       = "gnani"
+	providerGoogle      = "google"
+	providerGradium     = "gradium"
+	providerGroq        = "groq"
+	providerHume        = "hume"
+	providerInworld     = "inworld"
+	providerLMNT        = "lmnt"
+	providerMinimax     = "minimax"
+	providerMistralAI   = "mistralai"
+	providerMurf        = "murf"
+	providerNeuphonic   = "neuphonic"
+	providerOpenAI      = "openai"
+	providerResemble    = "resemble"
+	providerRespeecher  = "respeecher"
+	providerRime        = "rime"
+	providerRtzr        = "rtzr"
+	providerSarvam      = "sarvam"
+	providerSimplismart = "simplismart"
+	providerSLNG        = "slng"
+	providerSmallestAI  = "smallestai"
+	providerSoniox      = "soniox"
+	providerSpeechify   = "speechify"
+	providerLiveKit     = "livekit"
 )
 
 type AppConfig struct {
@@ -106,6 +116,7 @@ type AppConfig struct {
 	STTProfanityFilter                      *bool
 	STTTagAudioEvents                       *bool
 	STTIncludeTimestamps                    *bool
+	STTWordTimestamps                       *bool
 	STTInterimResults                       *bool
 	STTSmartFormat                          *bool
 	STTNoDelay                              *bool
@@ -134,6 +145,7 @@ type AppConfig struct {
 	STTCustomVocabulary                     []any
 	STTCustomSpelling                       map[string][]string
 	STTTranslationTargetLanguages           []string
+	STTTranslationSourceLanguages           []string
 	STTTranslationModel                     string
 	STTTranslationMatchOriginalUtterances   *bool
 	STTTranslationLipsync                   *bool
@@ -234,6 +246,7 @@ type AppConfig struct {
 	TTSInstantMode                          *bool
 	TTSPitch                                *int
 	TTSTimestampType                        string
+	TTSLoudnessNormalization                *bool
 	TTSTextNormalization                    *bool
 	TTSDeliveryMode                         string
 	TTSTimestampTransportStrategy           string
@@ -272,8 +285,15 @@ type AppConfig struct {
 	ResembleAPIKey    string
 	RespeecherAPIKey  string
 	RimeAPIKey        string
+	RtzrClientID      string
+	RtzrClientSecret  string
+	RtzrAccessToken   string
 	SarvamAPIKey      string
+	SimplismartAPIKey string
+	SmallestAIAPIKey  string
 	SLNGAPIKey        string
+	SonioxAPIKey      string
+	SpeechifyAPIKey   string
 
 	GoogleCredentialsFile string
 
@@ -308,6 +328,7 @@ func DefaultConfigFromEnv() AppConfig {
 		STTProfanityFilter:                      getenvOptionalBool("RTP_AGENT_STT_PROFANITY_FILTER"),
 		STTTagAudioEvents:                       getenvOptionalBool("RTP_AGENT_STT_TAG_AUDIO_EVENTS"),
 		STTIncludeTimestamps:                    getenvOptionalBool("RTP_AGENT_STT_INCLUDE_TIMESTAMPS"),
+		STTWordTimestamps:                       getenvOptionalBool("RTP_AGENT_STT_WORD_TIMESTAMPS"),
 		STTInterimResults:                       getenvOptionalBool("RTP_AGENT_STT_INTERIM_RESULTS"),
 		STTSmartFormat:                          getenvOptionalBool("RTP_AGENT_STT_SMART_FORMAT"),
 		STTNoDelay:                              getenvOptionalBool("RTP_AGENT_STT_NO_DELAY"),
@@ -336,6 +357,7 @@ func DefaultConfigFromEnv() AppConfig {
 		STTCustomVocabulary:                     splitEnvAnyList("RTP_AGENT_STT_CUSTOM_VOCABULARY"),
 		STTCustomSpelling:                       splitEnvStringSliceMap("RTP_AGENT_STT_CUSTOM_SPELLING"),
 		STTTranslationTargetLanguages:           splitEnvList("RTP_AGENT_STT_TRANSLATION_TARGET_LANGUAGES"),
+		STTTranslationSourceLanguages:           splitEnvList("RTP_AGENT_STT_TRANSLATION_SOURCE_LANGUAGES"),
 		STTTranslationModel:                     os.Getenv("RTP_AGENT_STT_TRANSLATION_MODEL"),
 		STTTranslationMatchOriginalUtterances:   getenvOptionalBool("RTP_AGENT_STT_TRANSLATION_MATCH_ORIGINAL_UTTERANCES"),
 		STTTranslationLipsync:                   getenvOptionalBool("RTP_AGENT_STT_TRANSLATION_LIPSYNC"),
@@ -436,6 +458,7 @@ func DefaultConfigFromEnv() AppConfig {
 		TTSInstantMode:                          getenvOptionalBool("RTP_AGENT_TTS_INSTANT_MODE"),
 		TTSPitch:                                getenvOptionalInt("RTP_AGENT_TTS_PITCH"),
 		TTSTimestampType:                        os.Getenv("RTP_AGENT_TTS_TIMESTAMP_TYPE"),
+		TTSLoudnessNormalization:                getenvOptionalBool("RTP_AGENT_TTS_LOUDNESS_NORMALIZATION"),
 		TTSTextNormalization:                    getenvOptionalBool("RTP_AGENT_TTS_TEXT_NORMALIZATION"),
 		TTSDeliveryMode:                         os.Getenv("RTP_AGENT_TTS_DELIVERY_MODE"),
 		TTSTimestampTransportStrategy:           os.Getenv("RTP_AGENT_TTS_TIMESTAMP_TRANSPORT_STRATEGY"),
@@ -473,8 +496,15 @@ func DefaultConfigFromEnv() AppConfig {
 		ResembleAPIKey:                          os.Getenv("RESEMBLE_API_KEY"),
 		RespeecherAPIKey:                        os.Getenv("RESPEECHER_API_KEY"),
 		RimeAPIKey:                              os.Getenv("RIME_API_KEY"),
+		RtzrClientID:                            os.Getenv("RTZR_CLIENT_ID"),
+		RtzrClientSecret:                        os.Getenv("RTZR_CLIENT_SECRET"),
+		RtzrAccessToken:                         os.Getenv("RTZR_ACCESS_TOKEN"),
 		SarvamAPIKey:                            os.Getenv("SARVAM_API_KEY"),
+		SimplismartAPIKey:                       os.Getenv("SIMPLISMART_API_KEY"),
+		SmallestAIAPIKey:                        os.Getenv("SMALLESTAI_API_KEY"),
 		SLNGAPIKey:                              os.Getenv("SLNG_API_KEY"),
+		SonioxAPIKey:                            os.Getenv("SONIOX_API_KEY"),
+		SpeechifyAPIKey:                         os.Getenv("SPEECHIFY_API_KEY"),
 		GoogleCredentialsFile:                   firstEnv("RTP_AGENT_GOOGLE_CREDENTIALS_FILE", "GOOGLE_APPLICATION_CREDENTIALS"),
 	}
 }
@@ -577,6 +607,10 @@ func configureProviders(cfg AppConfig, a *agent.Agent) (llm.RealtimeModel, error
 			return nil, fmt.Errorf("invalid sarvam LLM configuration")
 		}
 		a.LLM = provider
+	case providerSimplismart:
+		a.LLM = simplismart.NewSimplismartLLM(cfg.SimplismartAPIKey, cfg.LLMModel)
+	case providerSmallestAI:
+		a.LLM = smallestai.NewSmallestAILLM(cfg.SmallestAIAPIKey, cfg.LLMModel)
 	case providerCerebras:
 		a.LLM = cerebras.NewCerebrasLLM(cfg.CerebrasAPIKey, cfg.LLMModel)
 	case providerFal:
@@ -1164,6 +1198,147 @@ func configureProviders(cfg AppConfig, a *agent.Agent) (llm.RealtimeModel, error
 			return nil, fmt.Errorf("invalid sarvam STT configuration")
 		}
 		a.STT = provider
+	case providerRtzr:
+		sttOpts := []rtzr.RtzrSTTOption{}
+		if cfg.RtzrClientSecret != "" {
+			sttOpts = append(sttOpts, rtzr.WithRtzrClientSecret(cfg.RtzrClientSecret))
+		}
+		if cfg.RtzrAccessToken != "" {
+			sttOpts = append(sttOpts, rtzr.WithRtzrAccessToken(cfg.RtzrAccessToken))
+		}
+		if cfg.STTBaseURL != "" {
+			sttOpts = append(sttOpts, rtzr.WithRtzrAPIBase(cfg.STTBaseURL))
+		}
+		if cfg.STTStreamingURL != "" {
+			sttOpts = append(sttOpts, rtzr.WithRtzrWSBase(cfg.STTStreamingURL))
+		}
+		if cfg.STTModel != "" {
+			sttOpts = append(sttOpts, rtzr.WithRtzrModel(cfg.STTModel))
+		}
+		if cfg.STTLanguage != "" {
+			sttOpts = append(sttOpts, rtzr.WithRtzrLanguage(cfg.STTLanguage))
+		}
+		if cfg.STTSampleRate != nil {
+			sttOpts = append(sttOpts, rtzr.WithRtzrSampleRate(*cfg.STTSampleRate))
+		}
+		if cfg.STTDomain != "" {
+			sttOpts = append(sttOpts, rtzr.WithRtzrDomain(cfg.STTDomain))
+		}
+		if cfg.STTEndpointingSeconds != nil {
+			sttOpts = append(sttOpts, rtzr.WithRtzrEPDTime(*cfg.STTEndpointingSeconds))
+		}
+		if cfg.STTVADThreshold != nil {
+			sttOpts = append(sttOpts, rtzr.WithRtzrNoiseThreshold(*cfg.STTVADThreshold))
+		}
+		if cfg.STTEndOfTurnConfidenceThreshold != nil {
+			sttOpts = append(sttOpts, rtzr.WithRtzrActiveThreshold(*cfg.STTEndOfTurnConfidenceThreshold))
+		}
+		if cfg.STTPunctuate != nil {
+			sttOpts = append(sttOpts, rtzr.WithRtzrUsePunctuation(*cfg.STTPunctuate))
+		}
+		if len(cfg.STTKeytermsPrompt) > 0 {
+			sttOpts = append(sttOpts, rtzr.WithRtzrKeywords(cfg.STTKeytermsPrompt))
+		}
+		a.STT = rtzr.NewRtzrSTT(cfg.RtzrClientID, sttOpts...)
+	case providerSimplismart:
+		sttOpts := []simplismart.SimplismartSTTOption{}
+		if cfg.STTBaseURL != "" {
+			sttOpts = append(sttOpts, simplismart.WithSimplismartSTTBaseURL(cfg.STTBaseURL))
+		}
+		if cfg.STTInterimResults != nil {
+			sttOpts = append(sttOpts, simplismart.WithSimplismartSTTStreaming(*cfg.STTInterimResults))
+		}
+		if cfg.STTModel != "" {
+			sttOpts = append(sttOpts, simplismart.WithSimplismartSTTModel(cfg.STTModel))
+		}
+		if cfg.STTLanguage != "" {
+			sttOpts = append(sttOpts, simplismart.WithSimplismartSTTLanguage(cfg.STTLanguage))
+		}
+		if cfg.STTTask != "" {
+			sttOpts = append(sttOpts, simplismart.WithSimplismartSTTTask(cfg.STTTask))
+		}
+		if cfg.STTIncludeTimestamps != nil {
+			sttOpts = append(sttOpts, simplismart.WithSimplismartSTTWithoutTimestamps(!*cfg.STTIncludeTimestamps))
+		}
+		if len(cfg.STTKeytermsPrompt) > 0 {
+			sttOpts = append(sttOpts, simplismart.WithSimplismartSTTHotwords(strings.Join(cfg.STTKeytermsPrompt, ",")))
+		}
+		if cfg.STTMaxSpeakers != nil {
+			sttOpts = append(sttOpts, simplismart.WithSimplismartSTTNumSpeakers(*cfg.STTMaxSpeakers))
+		}
+		a.STT = simplismart.NewSimplismartSTT(cfg.SimplismartAPIKey, sttOpts...)
+	case providerSmallestAI:
+		sttOpts := []smallestai.SmallestAISTTOption{}
+		if cfg.STTBaseURL != "" {
+			sttOpts = append(sttOpts, smallestai.WithSmallestAISTTBaseURL(cfg.STTBaseURL))
+		}
+		if cfg.STTModel != "" {
+			sttOpts = append(sttOpts, smallestai.WithSmallestAISTTModel(cfg.STTModel))
+		}
+		if cfg.STTLanguage != "" {
+			sttOpts = append(sttOpts, smallestai.WithSmallestAISTTLanguage(cfg.STTLanguage))
+		}
+		if cfg.STTSampleRate != nil {
+			sttOpts = append(sttOpts, smallestai.WithSmallestAISTTSampleRate(*cfg.STTSampleRate))
+		}
+		if cfg.STTEncoding != "" {
+			sttOpts = append(sttOpts, smallestai.WithSmallestAISTTEncoding(cfg.STTEncoding))
+		}
+		if cfg.STTWordTimestamps != nil {
+			sttOpts = append(sttOpts, smallestai.WithSmallestAISTTWordTimestamps(*cfg.STTWordTimestamps))
+		}
+		if cfg.STTDiarization != nil {
+			sttOpts = append(sttOpts, smallestai.WithSmallestAISTTDiarize(*cfg.STTDiarization))
+		}
+		if cfg.STTEndpointingMS != nil {
+			sttOpts = append(sttOpts, smallestai.WithSmallestAISTTEOUTimeoutMS(*cfg.STTEndpointingMS))
+		}
+		a.STT = smallestai.NewSmallestAISTT(cfg.SmallestAIAPIKey, sttOpts...)
+	case providerSoniox:
+		sttOpts := []soniox.SonioxSTTOption{}
+		if cfg.STTBaseURL != "" {
+			sttOpts = append(sttOpts, soniox.WithSonioxBaseURL(cfg.STTBaseURL))
+		}
+		if cfg.STTModel != "" {
+			sttOpts = append(sttOpts, soniox.WithSonioxModel(cfg.STTModel))
+		}
+		if cfg.STTLanguageOptions != "" {
+			sttOpts = append(sttOpts, soniox.WithSonioxLanguageHints(splitStringList(cfg.STTLanguageOptions)))
+		} else if cfg.STTLanguage != "" {
+			sttOpts = append(sttOpts, soniox.WithSonioxLanguageHints([]string{cfg.STTLanguage}))
+		}
+		if strict := modelOptionBool(cfg.STTModelOptions, "language_hints_strict"); strict != nil {
+			sttOpts = append(sttOpts, soniox.WithSonioxLanguageHintsStrict(*strict))
+		}
+		if cfg.STTNumberOfChannels != nil {
+			sttOpts = append(sttOpts, soniox.WithSonioxNumChannels(*cfg.STTNumberOfChannels))
+		}
+		if cfg.STTSampleRate != nil {
+			sttOpts = append(sttOpts, soniox.WithSonioxSampleRate(*cfg.STTSampleRate))
+		}
+		if cfg.STTDiarization != nil {
+			sttOpts = append(sttOpts, soniox.WithSonioxSpeakerDiarization(*cfg.STTDiarization))
+		}
+		if cfg.STTLanguageDetection != nil {
+			sttOpts = append(sttOpts, soniox.WithSonioxLanguageIdentification(*cfg.STTLanguageDetection))
+		}
+		if cfg.STTEndpointingMS != nil {
+			sttOpts = append(sttOpts, soniox.WithSonioxMaxEndpointDelayMS(*cfg.STTEndpointingMS))
+		}
+		if cfg.STTSessionID != "" {
+			sttOpts = append(sttOpts, soniox.WithSonioxClientReferenceID(cfg.STTSessionID))
+		}
+		if context, ok := sonioxContextObjectFromModelOptions(cfg.STTModelOptions); ok {
+			sttOpts = append(sttOpts, soniox.WithSonioxContextObject(context))
+		} else if cfg.STTPrompt != "" {
+			sttOpts = append(sttOpts, soniox.WithSonioxContextText(cfg.STTPrompt))
+		}
+		if len(cfg.STTTranslationSourceLanguages) > 0 && len(cfg.STTTranslationTargetLanguages) > 0 {
+			sttOpts = append(sttOpts, soniox.WithSonioxTwoWayTranslation(cfg.STTTranslationSourceLanguages[0], cfg.STTTranslationTargetLanguages[0]))
+		} else if len(cfg.STTTranslationTargetLanguages) > 0 {
+			sttOpts = append(sttOpts, soniox.WithSonioxOneWayTranslation(cfg.STTTranslationTargetLanguages[0]))
+		}
+		a.STT = soniox.NewSonioxSTT(cfg.SonioxAPIKey, sttOpts...)
 	case providerAssemblyAI:
 		sttOpts := []assemblyai.AssemblyAISTTOption{}
 		if cfg.STTBaseURL != "" {
@@ -1779,6 +1954,83 @@ func configureProviders(cfg AppConfig, a *agent.Agent) (llm.RealtimeModel, error
 			ttsOpts = append(ttsOpts, sarvam.WithSarvamTTSOutputAudioCodec(cfg.TTSEncoding))
 		}
 		a.TTS = sarvam.NewSarvamTTS(cfg.SarvamAPIKey, "", ttsOpts...)
+	case providerSimplismart:
+		a.TTS = simplismart.NewSimplismartTTS(cfg.SimplismartAPIKey, cfg.TTSVoice)
+	case providerSmallestAI:
+		ttsOpts := []smallestai.SmallestAITTSOption{}
+		if cfg.TTSBaseURL != "" {
+			ttsOpts = append(ttsOpts, smallestai.WithSmallestAITTSBaseURL(cfg.TTSBaseURL))
+		}
+		if cfg.TTSWebsocketURL != "" {
+			ttsOpts = append(ttsOpts, smallestai.WithSmallestAITTSWebsocketURL(cfg.TTSWebsocketURL))
+		}
+		if cfg.TTSModel != "" {
+			ttsOpts = append(ttsOpts, smallestai.WithSmallestAITTSModel(cfg.TTSModel))
+		}
+		if cfg.TTSVoice != "" {
+			ttsOpts = append(ttsOpts, smallestai.WithSmallestAITTSVoice(cfg.TTSVoice))
+		}
+		if cfg.TTSSampleRate != nil {
+			ttsOpts = append(ttsOpts, smallestai.WithSmallestAITTSSampleRate(*cfg.TTSSampleRate))
+		}
+		if cfg.TTSSpeed != 0 {
+			ttsOpts = append(ttsOpts, smallestai.WithSmallestAITTSSpeed(cfg.TTSSpeed))
+		}
+		if cfg.TTSLanguage != "" {
+			ttsOpts = append(ttsOpts, smallestai.WithSmallestAITTSLanguage(cfg.TTSLanguage))
+		}
+		if cfg.TTSResponseFormat != "" {
+			ttsOpts = append(ttsOpts, smallestai.WithSmallestAITTSOutputFormat(cfg.TTSResponseFormat))
+		}
+		a.TTS = smallestai.NewSmallestAITTS(cfg.SmallestAIAPIKey, "", ttsOpts...)
+	case providerSoniox:
+		ttsOpts := []soniox.SonioxTTSOption{}
+		if cfg.TTSWebsocketURL != "" {
+			ttsOpts = append(ttsOpts, soniox.WithSonioxTTSWebsocketURL(cfg.TTSWebsocketURL))
+		}
+		if cfg.TTSModel != "" {
+			ttsOpts = append(ttsOpts, soniox.WithSonioxTTSModel(cfg.TTSModel))
+		}
+		if cfg.TTSLanguage != "" {
+			ttsOpts = append(ttsOpts, soniox.WithSonioxTTSLanguage(cfg.TTSLanguage))
+		}
+		if cfg.TTSVoice != "" {
+			ttsOpts = append(ttsOpts, soniox.WithSonioxTTSVoice(cfg.TTSVoice))
+		}
+		if cfg.TTSEncoding != "" {
+			ttsOpts = append(ttsOpts, soniox.WithSonioxTTSAudioFormat(cfg.TTSEncoding))
+		}
+		if cfg.TTSSampleRate != nil {
+			ttsOpts = append(ttsOpts, soniox.WithSonioxTTSSampleRate(*cfg.TTSSampleRate))
+		}
+		if cfg.TTSBitRate != nil {
+			ttsOpts = append(ttsOpts, soniox.WithSonioxTTSBitrate(*cfg.TTSBitRate))
+		}
+		a.TTS = soniox.NewSonioxTTS(cfg.SonioxAPIKey, ttsOpts...)
+	case providerSpeechify:
+		ttsOpts := []speechify.SpeechifyTTSOption{}
+		if cfg.TTSBaseURL != "" {
+			ttsOpts = append(ttsOpts, speechify.WithSpeechifyTTSBaseURL(cfg.TTSBaseURL))
+		}
+		if cfg.TTSVoice != "" {
+			ttsOpts = append(ttsOpts, speechify.WithSpeechifyTTSVoice(cfg.TTSVoice))
+		}
+		if cfg.TTSEncoding != "" {
+			ttsOpts = append(ttsOpts, speechify.WithSpeechifyTTSEncoding(cfg.TTSEncoding))
+		}
+		if cfg.TTSLanguage != "" {
+			ttsOpts = append(ttsOpts, speechify.WithSpeechifyTTSLanguage(cfg.TTSLanguage))
+		}
+		if cfg.TTSModel != "" {
+			ttsOpts = append(ttsOpts, speechify.WithSpeechifyTTSModel(cfg.TTSModel))
+		}
+		if cfg.TTSLoudnessNormalization != nil {
+			ttsOpts = append(ttsOpts, speechify.WithSpeechifyTTSLoudnessNormalization(*cfg.TTSLoudnessNormalization))
+		}
+		if cfg.TTSTextNormalization != nil {
+			ttsOpts = append(ttsOpts, speechify.WithSpeechifyTTSTextNormalization(*cfg.TTSTextNormalization))
+		}
+		a.TTS = speechify.NewSpeechifyTTS(cfg.SpeechifyAPIKey, cfg.TTSVoice, ttsOpts...)
 	case providerSLNG:
 		ttsOpts := []slng.TTSOption{}
 		if cfg.TTSModel != "" {
@@ -2039,6 +2291,106 @@ func splitEnvStringSliceMap(name string) map[string][]string {
 
 func boolValue(value *bool) bool {
 	return value != nil && *value
+}
+
+func modelOptionString(options map[string]any, key string) string {
+	value, ok := options[key]
+	if !ok {
+		return ""
+	}
+	text, ok := value.(string)
+	if !ok {
+		return ""
+	}
+	return strings.TrimSpace(text)
+}
+
+func modelOptionBool(options map[string]any, key string) *bool {
+	value, ok := options[key]
+	if !ok {
+		return nil
+	}
+	switch typed := value.(type) {
+	case bool:
+		return &typed
+	case string:
+		parsed, err := strconv.ParseBool(strings.TrimSpace(typed))
+		if err != nil {
+			return nil
+		}
+		return &parsed
+	case float64:
+		parsed := typed != 0
+		return &parsed
+	default:
+		return nil
+	}
+}
+
+func modelOptionStringList(options map[string]any, key string) []string {
+	raw := modelOptionString(options, key)
+	if raw == "" {
+		return nil
+	}
+	parts := strings.Split(raw, "|")
+	values := make([]string, 0, len(parts))
+	for _, part := range parts {
+		value := strings.TrimSpace(part)
+		if value != "" {
+			values = append(values, value)
+		}
+	}
+	return values
+}
+
+func sonioxContextObjectFromModelOptions(options map[string]any) (soniox.SonioxContextObject, bool) {
+	var context soniox.SonioxContextObject
+	context.Text = modelOptionString(options, "context_text")
+	context.Terms = modelOptionStringList(options, "context_terms")
+	context.General = sonioxContextGeneralItems(modelOptionString(options, "context_general"))
+	context.TranslationTerms = sonioxContextTranslationTerms(modelOptionString(options, "context_translation_terms"))
+	ok := context.Text != "" || len(context.Terms) > 0 || len(context.General) > 0 || len(context.TranslationTerms) > 0
+	return context, ok
+}
+
+func sonioxContextGeneralItems(raw string) []soniox.SonioxContextGeneralItem {
+	if raw == "" {
+		return nil
+	}
+	parts := strings.Split(raw, "|")
+	items := make([]soniox.SonioxContextGeneralItem, 0, len(parts))
+	for _, part := range parts {
+		key, value, ok := strings.Cut(part, ":")
+		if !ok {
+			continue
+		}
+		key = strings.TrimSpace(key)
+		value = strings.TrimSpace(value)
+		if key != "" && value != "" {
+			items = append(items, soniox.SonioxContextGeneralItem{Key: key, Value: value})
+		}
+	}
+	return items
+}
+
+func sonioxContextTranslationTerms(raw string) []soniox.SonioxContextTranslationTerm {
+	if raw == "" {
+		return nil
+	}
+	parts := strings.Split(raw, "|")
+	terms := make([]soniox.SonioxContextTranslationTerm, 0, len(parts))
+	for _, part := range parts {
+		source, target, ok := strings.Cut(part, ":")
+		if !ok {
+			continue
+		}
+		source = strings.TrimSpace(source)
+		target = strings.TrimSpace(target)
+		if source != "" && target != "" {
+			terms = append(terms, soniox.SonioxContextTranslationTerm{Source: source, Target: target})
+		}
+	}
+	return terms
 }
 
 func splitEnvFloatList(name string) []float64 {

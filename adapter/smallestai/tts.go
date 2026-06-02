@@ -286,14 +286,6 @@ func (s *smallestaiTTSWebsocketChunkedStream) Next() (*tts.SynthesizedAudio, err
 	}
 }
 
-func (s *smallestaiTTSWebsocketChunkedStream) Close() error {
-	if s.conn == nil {
-		return nil
-	}
-	_ = s.conn.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""), time.Now().Add(time.Second))
-	return s.conn.Close()
-}
-
 type smallestaiTTSSynthesizeStream struct {
 	provider    *SmallestAITTS
 	conn        *websocket.Conn
@@ -354,8 +346,7 @@ func (s *smallestaiTTSSynthesizeStream) Close() error {
 	if s.conn == nil {
 		return nil
 	}
-	_ = s.conn.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""), time.Now().Add(time.Second))
-	return s.conn.Close()
+	return closeSmallestAIWebsocket(s.conn)
 }
 
 func (s *smallestaiTTSSynthesizeStream) Next() (*tts.SynthesizedAudio, error) {
@@ -367,6 +358,14 @@ func (s *smallestaiTTSSynthesizeStream) Next() (*tts.SynthesizedAudio, error) {
 		}
 	}
 	return (&smallestaiTTSWebsocketChunkedStream{conn: s.conn, sampleRate: s.sampleRate, segmentID: s.segmentID}).Next()
+}
+
+func closeSmallestAIWebsocket(conn *websocket.Conn) error {
+	if conn == nil {
+		return nil
+	}
+	_ = conn.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""), time.Now().Add(time.Second))
+	return conn.Close()
 }
 
 func smallestAITTSAudioFromWebsocketMessage(payload []byte, sampleRate int, segmentID string) (*tts.SynthesizedAudio, bool, error) {
