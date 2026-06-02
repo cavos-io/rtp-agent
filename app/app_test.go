@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"fmt"
+	"reflect"
 	"testing"
 
 	"github.com/cavos-io/rtp-agent/core/llm"
@@ -1851,6 +1852,44 @@ func TestDefaultConfigFromEnvSelectsLiveKitInferenceLLM(t *testing.T) {
 	}
 	if got := app.Session.TTS.Label(); got != "livekit.TTS" {
 		t.Fatalf("TTS label = %q, want livekit.TTS", got)
+	}
+}
+
+func TestDefaultConfigFromEnvSelectsLiveKitTTSTokenizer(t *testing.T) {
+	cases := []struct {
+		name         string
+		provider     string
+		wantTypeName string
+	}{
+		{name: "blingfire", provider: "blingfire", wantTypeName: "*blingfire.SentenceTokenizer"},
+		{name: "nltk", provider: "nltk", wantTypeName: "*nltk.SentenceTokenizer"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("LIVEKIT_API_KEY", "test-livekit-key")
+			t.Setenv("LIVEKIT_API_SECRET", "test-livekit-secret")
+			t.Setenv("RTP_AGENT_TTS_PROVIDER", "livekit")
+			t.Setenv("RTP_AGENT_TTS_TOKENIZER_PROVIDER", tc.provider)
+
+			app, err := NewApp(DefaultConfigFromEnv())
+			if err != nil {
+				t.Fatalf("NewApp() error = %v", err)
+			}
+			if app.Session == nil || app.Session.TTS == nil {
+				t.Fatal("Session TTS is nil")
+			}
+			field := reflect.ValueOf(app.Session.TTS).Elem().FieldByName("sentenceTokenizer")
+			if !field.IsValid() {
+				t.Fatal("livekit TTS sentenceTokenizer field is missing")
+			}
+			if field.IsNil() {
+				t.Fatal("livekit TTS sentenceTokenizer is nil")
+			}
+			if got := field.Elem().Type().String(); got != tc.wantTypeName {
+				t.Fatalf("sentenceTokenizer type = %q, want %s", got, tc.wantTypeName)
+			}
+		})
 	}
 }
 

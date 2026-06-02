@@ -19,23 +19,36 @@ import (
 )
 
 type TTS struct {
-	model     string
-	voice     string
-	apiKey    string
-	apiSecret string
-	baseURL   string
+	model             string
+	voice             string
+	apiKey            string
+	apiSecret         string
+	baseURL           string
+	sentenceTokenizer tokenize.SentenceTokenizer
 }
 
-func NewTTS(model string, apiKey, apiSecret string) *TTS {
+type TTSOption func(*TTS)
+
+func WithSentenceTokenizer(tokenizer tokenize.SentenceTokenizer) TTSOption {
+	return func(t *TTS) {
+		t.sentenceTokenizer = tokenizer
+	}
+}
+
+func NewTTS(model string, apiKey, apiSecret string, opts ...TTSOption) *TTS {
 	if model == "" {
 		model = "cartesia/sonic-3"
 	}
-	return &TTS{
+	t := &TTS{
 		model:     model,
 		apiKey:    apiKey,
 		apiSecret: apiSecret,
 		baseURL:   "wss://agent-gateway.livekit.cloud/v1",
 	}
+	for _, opt := range opts {
+		opt(t)
+	}
+	return t
 }
 
 type FallbackModel struct {
@@ -111,12 +124,17 @@ func (t *TTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
 	}
 
 	ctx, cancel := context.WithCancel(ctx)
+	tokenizer := t.sentenceTokenizer
+	if tokenizer == nil {
+		tokenizer = tokenize.NewBasicSentenceTokenizer()
+	}
+
 	stream := &inferenceTTSStream{
 		tts:       t,
 		conn:      conn,
 		ctx:       ctx,
 		cancel:    cancel,
-		tokenizer: tokenize.NewBasicSentenceTokenizer().Stream("en"),
+		tokenizer: tokenizer.Stream("en"),
 		eventCh:   make(chan *tts.SynthesizedAudio, 100),
 	}
 

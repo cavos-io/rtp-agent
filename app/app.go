@@ -20,6 +20,7 @@ import (
 	"github.com/cavos-io/rtp-agent/adapter/baseten"
 	"github.com/cavos-io/rtp-agent/adapter/bey"
 	"github.com/cavos-io/rtp-agent/adapter/bithuman"
+	"github.com/cavos-io/rtp-agent/adapter/blingfire"
 	"github.com/cavos-io/rtp-agent/adapter/browser"
 	"github.com/cavos-io/rtp-agent/adapter/cambai"
 	"github.com/cavos-io/rtp-agent/adapter/cartesia"
@@ -48,6 +49,7 @@ import (
 	"github.com/cavos-io/rtp-agent/adapter/mistralai"
 	"github.com/cavos-io/rtp-agent/adapter/murf"
 	"github.com/cavos-io/rtp-agent/adapter/neuphonic"
+	"github.com/cavos-io/rtp-agent/adapter/nltk"
 	"github.com/cavos-io/rtp-agent/adapter/nvidia"
 	"github.com/cavos-io/rtp-agent/adapter/openai"
 	"github.com/cavos-io/rtp-agent/adapter/perplexity"
@@ -75,6 +77,7 @@ import (
 	"github.com/cavos-io/rtp-agent/core/inference"
 	"github.com/cavos-io/rtp-agent/core/llm"
 	"github.com/cavos-io/rtp-agent/interface/worker"
+	"github.com/cavos-io/rtp-agent/library/tokenize"
 	goopenai "github.com/sashabaranov/go-openai"
 )
 
@@ -311,6 +314,10 @@ type AppConfig struct {
 	TTSLoudnessNormalization                *bool
 	TTSTextNormalization                    *bool
 	TTSDeliveryMode                         string
+	TTSTokenizerProvider                    string
+	TTSTokenizerLanguage                    string
+	TTSTokenizerMinSentenceLen              *int
+	TTSTokenizerStreamContextLen            *int
 	TTSTimestampTransportStrategy           string
 	TTSBufferCharThreshold                  *int
 	TTSMaxBufferDelayMS                     *int
@@ -566,6 +573,10 @@ func DefaultConfigFromEnv() AppConfig {
 		TTSLoudnessNormalization:                getenvOptionalBool("RTP_AGENT_TTS_LOUDNESS_NORMALIZATION"),
 		TTSTextNormalization:                    getenvOptionalBool("RTP_AGENT_TTS_TEXT_NORMALIZATION"),
 		TTSDeliveryMode:                         os.Getenv("RTP_AGENT_TTS_DELIVERY_MODE"),
+		TTSTokenizerProvider:                    normalizedEnv("RTP_AGENT_TTS_TOKENIZER_PROVIDER"),
+		TTSTokenizerLanguage:                    os.Getenv("RTP_AGENT_TTS_TOKENIZER_LANGUAGE"),
+		TTSTokenizerMinSentenceLen:              getenvOptionalInt("RTP_AGENT_TTS_TOKENIZER_MIN_SENTENCE_LEN"),
+		TTSTokenizerStreamContextLen:            getenvOptionalInt("RTP_AGENT_TTS_TOKENIZER_STREAM_CONTEXT_LEN"),
 		TTSTimestampTransportStrategy:           os.Getenv("RTP_AGENT_TTS_TIMESTAMP_TRANSPORT_STRATEGY"),
 		TTSBufferCharThreshold:                  getenvOptionalInt("RTP_AGENT_TTS_BUFFER_CHAR_THRESHOLD"),
 		TTSMaxBufferDelayMS:                     getenvOptionalInt("RTP_AGENT_TTS_MAX_BUFFER_DELAY_MS"),
@@ -2559,7 +2570,15 @@ func configureProviders(cfg AppConfig, a *agent.Agent) (llm.RealtimeModel, error
 		}
 		a.TTS = provider
 	case providerLiveKit:
-		a.TTS = inference.NewTTS(cfg.TTSModel, cfg.LiveKitInferenceAPIKey, cfg.LiveKitInferenceAPISecret)
+		ttsOpts := []inference.TTSOption{}
+		tokenizer, err := ttsSentenceTokenizer(cfg)
+		if err != nil {
+			return nil, err
+		}
+		if tokenizer != nil {
+			ttsOpts = append(ttsOpts, inference.WithSentenceTokenizer(tokenizer))
+		}
+		a.TTS = inference.NewTTS(cfg.TTSModel, cfg.LiveKitInferenceAPIKey, cfg.LiveKitInferenceAPISecret, ttsOpts...)
 	default:
 		return nil, fmt.Errorf("unsupported RTP_AGENT_TTS_PROVIDER %q", cfg.TTSProvider)
 	}
@@ -2580,6 +2599,31 @@ func normalizedEnv(name string) string {
 
 func normalizeProvider(provider string) string {
 	return strings.ToLower(strings.TrimSpace(provider))
+}
+
+func ttsSentenceTokenizer(cfg AppConfig) (tokenize.SentenceTokenizer, error) {
+	provider := normalizeProvider(cfg.TTSTokenizerProvider)
+	if provider == "" {
+		return nil, nil
+	}
+
+	minSentenceLen := 0
+	if cfg.TTSTokenizerMinSentenceLen != nil {
+		minSentenceLen = *cfg.TTSTokenizerMinSentenceLen
+	}
+	streamContextLen := 0
+	if cfg.TTSTokenizerStreamContextLen != nil {
+		streamContextLen = *cfg.TTSTokenizerStreamContextLen
+	}
+
+	switch provider {
+	case "blingfire":
+		return blingfire.NewSentenceTokenizer(cfg.TTSTokenizerLanguage, minSentenceLen, streamContextLen), nil
+	case "nltk":
+		return nltk.NewSentenceTokenizer(cfg.TTSTokenizerLanguage, minSentenceLen, streamContextLen), nil
+	default:
+		return nil, fmt.Errorf("unsupported RTP_AGENT_TTS_TOKENIZER_PROVIDER %q", cfg.TTSTokenizerProvider)
+	}
 }
 
 func getenvDefault(name, fallback string) string {
