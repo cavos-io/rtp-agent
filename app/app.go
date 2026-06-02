@@ -38,6 +38,7 @@ import (
 	"github.com/cavos-io/rtp-agent/adapter/neuphonic"
 	"github.com/cavos-io/rtp-agent/adapter/openai"
 	"github.com/cavos-io/rtp-agent/adapter/resemble"
+	"github.com/cavos-io/rtp-agent/adapter/respeecher"
 	"github.com/cavos-io/rtp-agent/adapter/slng"
 	"github.com/cavos-io/rtp-agent/core/agent"
 	"github.com/cavos-io/rtp-agent/core/llm"
@@ -75,6 +76,7 @@ const (
 	providerNeuphonic  = "neuphonic"
 	providerOpenAI     = "openai"
 	providerResemble   = "resemble"
+	providerRespeecher = "respeecher"
 	providerSLNG       = "slng"
 	providerLiveKit    = "livekit"
 )
@@ -251,6 +253,7 @@ type AppConfig struct {
 	MurfAPIKey        string
 	NeuphonicAPIKey   string
 	ResembleAPIKey    string
+	RespeecherAPIKey  string
 	SLNGAPIKey        string
 
 	GoogleCredentialsFile string
@@ -436,6 +439,7 @@ func DefaultConfigFromEnv() AppConfig {
 		MurfAPIKey:                              os.Getenv("MURF_API_KEY"),
 		NeuphonicAPIKey:                         os.Getenv("NEUPHONIC_API_KEY"),
 		ResembleAPIKey:                          os.Getenv("RESEMBLE_API_KEY"),
+		RespeecherAPIKey:                        os.Getenv("RESPEECHER_API_KEY"),
 		SLNGAPIKey:                              os.Getenv("SLNG_API_KEY"),
 		GoogleCredentialsFile:                   firstEnv("RTP_AGENT_GOOGLE_CREDENTIALS_FILE", "GOOGLE_APPLICATION_CREDENTIALS"),
 	}
@@ -1562,6 +1566,24 @@ func configureProviders(cfg AppConfig, a *agent.Agent) (llm.RealtimeModel, error
 			ttsOpts = append(ttsOpts, resemble.WithResembleTTSSampleRate(*cfg.TTSSampleRate))
 		}
 		a.TTS = resemble.NewResembleTTS(cfg.ResembleAPIKey, "", ttsOpts...)
+	case providerRespeecher:
+		ttsOpts := []respeecher.RespeecherTTSOption{}
+		if cfg.TTSBaseURL != "" {
+			ttsOpts = append(ttsOpts, respeecher.WithRespeecherTTSBaseURL(cfg.TTSBaseURL))
+		}
+		if cfg.TTSModel != "" {
+			ttsOpts = append(ttsOpts, respeecher.WithRespeecherTTSModel(cfg.TTSModel))
+		}
+		if cfg.TTSVoice != "" {
+			ttsOpts = append(ttsOpts, respeecher.WithRespeecherTTSVoice(cfg.TTSVoice))
+		}
+		if cfg.TTSSampleRate != nil {
+			ttsOpts = append(ttsOpts, respeecher.WithRespeecherTTSSampleRate(*cfg.TTSSampleRate))
+		}
+		if len(cfg.TTSJSONConfig) > 0 {
+			ttsOpts = append(ttsOpts, respeecher.WithRespeecherTTSSamplingParams(cfg.TTSJSONConfig))
+		}
+		a.TTS = respeecher.NewRespeecherTTS(cfg.RespeecherAPIKey, "", ttsOpts...)
 	case providerSLNG:
 		ttsOpts := []slng.TTSOption{}
 		if cfg.TTSModel != "" {

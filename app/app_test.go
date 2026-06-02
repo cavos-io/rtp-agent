@@ -807,6 +807,33 @@ func TestDefaultConfigFromEnvSelectsResembleTTS(t *testing.T) {
 	}
 }
 
+func TestDefaultConfigFromEnvSelectsRespeecherTTS(t *testing.T) {
+	t.Setenv("RESPEECHER_API_KEY", "test-respeecher-key")
+	t.Setenv("RTP_AGENT_TTS_PROVIDER", "respeecher")
+	t.Setenv("RTP_AGENT_TTS_BASE_URL", "https://respeecher.example/v1")
+	t.Setenv("RTP_AGENT_TTS_MODEL", "/public/tts/ua-rt")
+	t.Setenv("RTP_AGENT_TTS_VOICE", "olesia-conversation")
+	t.Setenv("RTP_AGENT_TTS_SAMPLE_RATE", "48000")
+	t.Setenv("RTP_AGENT_TTS_JSON_CONFIG", "temperature=0.4")
+
+	app, err := NewApp(DefaultConfigFromEnv())
+	if err != nil {
+		t.Fatalf("NewApp() error = %v", err)
+	}
+	if app.Session == nil || app.Session.TTS == nil {
+		t.Fatal("Session TTS is nil")
+	}
+	if got := app.Session.TTS.Label(); got != "respeecher.TTS" {
+		t.Fatalf("TTS label = %q, want respeecher.TTS", got)
+	}
+	if got := app.Session.TTS.SampleRate(); got != 48000 {
+		t.Fatalf("TTS sample rate = %d, want 48000", got)
+	}
+	if caps := app.Session.TTS.Capabilities(); !caps.Streaming || caps.AlignedTranscript {
+		t.Fatalf("TTS capabilities = %+v, want streaming without aligned transcript", caps)
+	}
+}
+
 func TestDefaultConfigFromEnvSelectsSLNGSpeechProviders(t *testing.T) {
 	t.Setenv("SLNG_API_KEY", "test-slng-key")
 	t.Setenv("RTP_AGENT_STT_PROVIDER", "slng")
