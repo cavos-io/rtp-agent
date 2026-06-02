@@ -77,6 +77,7 @@ import (
 	"github.com/cavos-io/rtp-agent/core/agent"
 	betatools "github.com/cavos-io/rtp-agent/core/beta/tools"
 	"github.com/cavos-io/rtp-agent/core/beta/workflows"
+	"github.com/cavos-io/rtp-agent/core/evals"
 	"github.com/cavos-io/rtp-agent/core/inference"
 	"github.com/cavos-io/rtp-agent/core/llm"
 	corestt "github.com/cavos-io/rtp-agent/core/stt"
@@ -423,6 +424,7 @@ type AppConfig struct {
 	WorkflowWarmTransferSipTrunkID        string
 	WorkflowWarmTransferExtraInstructions string
 	WorkflowTaskGroupTasks                []string
+	EvalJudges                            []string
 }
 
 type App struct {
@@ -430,9 +432,19 @@ type App struct {
 	Agent         *agent.Agent
 	Session       *agent.AgentSession
 	RealtimeModel llm.RealtimeModel
+	Evaluator     *evals.JudgeGroup
 	RoomIO        *worker.RoomIO
 	RoomOptions   worker.RoomOptions
 	Config        AppConfig
+}
+
+type EvaluationSummary struct {
+	Result         *evals.EvaluationResult
+	Score          float64
+	AllPassed      bool
+	AnyPassed      bool
+	MajorityPassed bool
+	NoneFailed     bool
 }
 
 func DefaultConfigFromEnv() AppConfig {
@@ -700,6 +712,7 @@ func DefaultConfigFromEnv() AppConfig {
 		WorkflowWarmTransferSipTrunkID:          os.Getenv("RTP_AGENT_WORKFLOW_WARM_TRANSFER_SIP_TRUNK_ID"),
 		WorkflowWarmTransferExtraInstructions:   os.Getenv("RTP_AGENT_WORKFLOW_WARM_TRANSFER_EXTRA_INSTRUCTIONS"),
 		WorkflowTaskGroupTasks:                  splitEnvList("RTP_AGENT_WORKFLOW_TASK_GROUP_TASKS"),
+		EvalJudges:                              splitEnvList("RTP_AGENT_EVAL_JUDGES"),
 	}
 }
 
@@ -751,6 +764,10 @@ func NewApp(cfg AppConfig) (*App, error) {
 	if err := configureAppTools(cfg, sessionAgent.GetAgent(), session); err != nil {
 		return nil, err
 	}
+	evaluator, err := evaluatorFromConfig(cfg, session.LLM)
+	if err != nil {
+		return nil, err
+	}
 
 	opts := cfg.WorkerOptions
 	if opts.AgentName == "" {
@@ -766,12 +783,41 @@ func NewApp(cfg AppConfig) (*App, error) {
 		Agent:         sessionAgent.GetAgent(),
 		Session:       session,
 		RealtimeModel: realtimeModel,
+		Evaluator:     evaluator,
 		Config:        cfg,
 	}
 	if err := server.RTCSession(app.runSession, nil, nil); err != nil {
 		return nil, err
 	}
 	return app, nil
+}
+
+func (a *App) EvaluateSession(ctx context.Context, reference *llm.ChatContext) (*EvaluationSummary, error) {
+	if a == nil || a.Evaluator == nil {
+		return nil, fmt.Errorf("evaluation is not configured")
+	}
+	if a.Session == nil {
+		return nil, fmt.Errorf("agent session is not configured")
+	}
+	result, err := a.Evaluator.Evaluate(ctx, a.Session.ChatCtx, reference)
+	if err != nil {
+		return nil, err
+	}
+	return evaluationSummaryFromResult(result), nil
+}
+
+func evaluationSummaryFromResult(result *evals.EvaluationResult) *EvaluationSummary {
+	if result == nil {
+		result = &evals.EvaluationResult{}
+	}
+	return &EvaluationSummary{
+		Result:         result,
+		Score:          result.Score(),
+		AllPassed:      result.AllPassed(),
+		AnyPassed:      result.AnyPassed(),
+		MajorityPassed: result.MajorityPassed(),
+		NoneFailed:     result.NoneFailed(),
+	}
 }
 
 func workflowAgentFromConfig(cfg AppConfig, baseAgent *agent.Agent) (agent.AgentInterface, error) {
@@ -896,6 +942,44 @@ func workflowTaskFactoryFromName(cfg AppConfig, baseAgent *agent.Agent, taskName
 		}, nil
 	default:
 		return workflows.FactoryInfo{}, fmt.Errorf("unsupported RTP_AGENT_WORKFLOW_TASK_GROUP_TASKS entry %q", taskName)
+	}
+}
+
+func evaluatorFromConfig(cfg AppConfig, evaluatorLLM llm.LLM) (*evals.JudgeGroup, error) {
+	if len(cfg.EvalJudges) == 0 {
+		return nil, nil
+	}
+	judges := make([]evals.Evaluator, 0, len(cfg.EvalJudges))
+	for _, judgeName := range cfg.EvalJudges {
+		judge, err := evalJudgeFromName(judgeName, evaluatorLLM)
+		if err != nil {
+			return nil, err
+		}
+		judges = append(judges, judge)
+	}
+	return evals.NewJudgeGroup(evaluatorLLM, judges), nil
+}
+
+func evalJudgeFromName(name string, evaluatorLLM llm.LLM) (evals.Evaluator, error) {
+	switch normalizeProvider(name) {
+	case "task_completion", "task-completion":
+		return evals.TaskCompletionJudge(evaluatorLLM), nil
+	case "accuracy":
+		return evals.AccuracyJudge(evaluatorLLM), nil
+	case "relevancy", "relevance":
+		return evals.RelevancyJudge(evaluatorLLM), nil
+	case "safety":
+		return evals.SafetyJudge(evaluatorLLM), nil
+	case "coherence":
+		return evals.CoherenceJudge(evaluatorLLM), nil
+	case "conciseness":
+		return evals.ConcisenessJudge(evaluatorLLM), nil
+	case "handoff":
+		return evals.HandoffJudge(evaluatorLLM), nil
+	case "tool_use", "tool-use":
+		return evals.ToolUseJudge(evaluatorLLM), nil
+	default:
+		return nil, fmt.Errorf("unsupported RTP_AGENT_EVAL_JUDGES entry %q", name)
 	}
 }
 

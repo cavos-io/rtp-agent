@@ -11,6 +11,7 @@ import (
 	"github.com/cavos-io/rtp-agent/core/agent"
 	"github.com/cavos-io/rtp-agent/core/audio/model"
 	"github.com/cavos-io/rtp-agent/core/beta/workflows"
+	"github.com/cavos-io/rtp-agent/core/evals"
 	"github.com/cavos-io/rtp-agent/core/llm"
 	"github.com/cavos-io/rtp-agent/core/stt"
 	"github.com/cavos-io/rtp-agent/core/tts"
@@ -1748,6 +1749,56 @@ func TestDefaultConfigFromEnvEnablesIVRDetection(t *testing.T) {
 	}
 }
 
+func TestDefaultConfigFromEnvConfiguresEvaluationJudges(t *testing.T) {
+	t.Setenv("RTP_AGENT_EVAL_JUDGES", "task_completion,accuracy,safety")
+
+	app, err := NewApp(DefaultConfigFromEnv())
+	if err != nil {
+		t.Fatalf("NewApp() error = %v", err)
+	}
+	if app.Evaluator == nil {
+		t.Fatal("Evaluator = nil, want configured judge group")
+	}
+	if len(app.Evaluator.Judges) != 3 {
+		t.Fatalf("Evaluator.Judges = %d, want 3", len(app.Evaluator.Judges))
+	}
+	wantNames := []string{"task_completion", "accuracy", "safety"}
+	for i, want := range wantNames {
+		if got := app.Evaluator.Judges[i].Name(); got != want {
+			t.Fatalf("Evaluator.Judges[%d].Name() = %q, want %q", i, got, want)
+		}
+	}
+}
+
+func TestEvaluateSessionReturnsEvaluationSummary(t *testing.T) {
+	baseAgent := agent.NewAgent("test")
+	session := agent.NewAgentSession(baseAgent, nil, agent.AgentSessionOptions{})
+	session.ChatCtx.Append(&llm.ChatMessage{
+		Role:    llm.ChatRoleUser,
+		Content: []llm.ChatContent{{Text: "hello"}},
+	})
+	evaluatorLLM := &fakeEvalLLM{
+		stream: &fakeEvalLLMStream{chunks: []*llm.ChatChunk{{
+			Delta: &llm.ChoiceDelta{ToolCalls: []llm.FunctionToolCall{{
+				Name:      "submit_verdict",
+				Arguments: `{"verdict":"pass","reasoning":"met the criteria"}`,
+			}}},
+		}}},
+	}
+	app := &App{
+		Session:   session,
+		Evaluator: evals.NewJudgeGroup(evaluatorLLM, []evals.Evaluator{evals.AccuracyJudge(evaluatorLLM)}),
+	}
+
+	summary, err := app.EvaluateSession(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("EvaluateSession() error = %v", err)
+	}
+	if summary.Score != 1 || !summary.AllPassed || !summary.AnyPassed || !summary.MajorityPassed || !summary.NoneFailed {
+		t.Fatalf("summary = %+v, want passing evaluation summary", summary)
+	}
+}
+
 func TestConfigureRoomToolsAddsSendDTMFTool(t *testing.T) {
 	baseAgent := agent.NewAgent("test")
 	publisher := &fakeAppDtmfPublisher{}
@@ -2285,6 +2336,29 @@ type fakeAppLLMStream struct{}
 
 func (f *fakeAppLLMStream) Next() (*llm.ChatChunk, error) { return nil, io.EOF }
 func (f *fakeAppLLMStream) Close() error                  { return nil }
+
+type fakeEvalLLM struct {
+	stream llm.LLMStream
+}
+
+func (f *fakeEvalLLM) Chat(context.Context, *llm.ChatContext, ...llm.ChatOption) (llm.LLMStream, error) {
+	return f.stream, nil
+}
+
+type fakeEvalLLMStream struct {
+	chunks []*llm.ChatChunk
+	index  int
+}
+
+func (f *fakeEvalLLMStream) Next() (*llm.ChatChunk, error) {
+	if f.index >= len(f.chunks) {
+		return nil, io.EOF
+	}
+	chunk := f.chunks[f.index]
+	f.index++
+	return chunk, nil
+}
+func (f *fakeEvalLLMStream) Close() error { return nil }
 
 type fakeAppTTS struct{}
 

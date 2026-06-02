@@ -419,6 +419,31 @@ func TestConsoleInputIsEmptyTreatsWhitespaceAsEmpty(t *testing.T) {
 	}
 }
 
+func TestRunEvalWritesRunnerSummary(t *testing.T) {
+	var out bytes.Buffer
+	called := false
+	err := runEval(func(ctx context.Context) (string, error) {
+		called = true
+		return "score=1.00 all_passed=true\n", nil
+	}, &out)
+	if err != nil {
+		t.Fatalf("runEval() error = %v", err)
+	}
+	if !called {
+		t.Fatal("runner was not called")
+	}
+	if got := out.String(); got != "score=1.00 all_passed=true\n" {
+		t.Fatalf("output = %q, want evaluation summary", got)
+	}
+}
+
+func TestRunEvalRequiresConfiguredRunner(t *testing.T) {
+	var out bytes.Buffer
+	if err := runEval(nil, &out); err == nil {
+		t.Fatal("runEval(nil) error = nil, want missing runner error")
+	}
+}
+
 func TestRunDownloadFilesForPluginsReturnsPluginError(t *testing.T) {
 	errBoom := errors.New("download failed")
 	plugins := []agent.Plugin{
