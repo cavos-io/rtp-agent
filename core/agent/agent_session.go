@@ -46,6 +46,7 @@ type AgentSessionOptions struct {
 	MinConsecutiveSpeechDelay     float64
 	UseTTSAlignedTranscript       bool
 	TTSStreamPacer                *tts.SentenceStreamPacerOptions
+	BackgroundAudio               *BackgroundAudioPlayer
 	PreemptiveGeneration          bool
 	AECWarmupDuration             float64
 	TurnDetection                 TurnDetectionMode
@@ -732,12 +733,22 @@ func (s *AgentSession) Start(ctx context.Context) error {
 	assistant := s.Assistant
 	assistant.ttsStreamPacer = s.Options.TTSStreamPacer
 	agent := s.Agent
+	backgroundAudio := s.Options.BackgroundAudio
+	room := s.Room
 	hasMetricsCollector := s.MetricsCollector != nil
 	s.mu.Unlock()
 
 	s.UpdateAgentState(AgentStateInitializing)
 
+	if backgroundAudio != nil && room != nil {
+		if err := backgroundAudio.Start(room, s); err != nil {
+			return err
+		}
+	}
 	if err := assistant.Start(ctx, s); err != nil {
+		if backgroundAudio != nil {
+			_ = backgroundAudio.Close()
+		}
 		return err
 	}
 
@@ -780,9 +791,13 @@ func (s *AgentSession) UpdateAgentState(state AgentState) {
 	s.mu.Lock()
 	oldState := s.AgentState
 	s.AgentState = state
+	backgroundAudio := s.Options.BackgroundAudio
 	s.mu.Unlock()
 
 	if oldState != state {
+		if backgroundAudio != nil {
+			backgroundAudio.AgentStateChanged(state)
+		}
 		s.updateUserAwayTimer()
 	}
 
@@ -1117,10 +1132,14 @@ func (s *AgentSession) Stop(ctx context.Context) error {
 		s.userAwayTimer.Stop()
 		s.userAwayTimer = nil
 	}
+	backgroundAudio := s.Options.BackgroundAudio
 	s.mu.Unlock()
 
 	if activity != nil {
 		activity.Stop()
+	}
+	if backgroundAudio != nil {
+		_ = backgroundAudio.Close()
 	}
 	return nil
 }

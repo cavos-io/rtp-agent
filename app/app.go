@@ -274,6 +274,8 @@ type AppConfig struct {
 	VADUpdateInterval                       *float64
 	VADSampleRate                           *int
 	AvatarProvider                          string
+	BackgroundAudioAmbient                  string
+	BackgroundAudioThinking                 string
 	TTSProvider                             string
 	TTSModel                                string
 	TTSVoice                                string
@@ -536,6 +538,8 @@ func DefaultConfigFromEnv() AppConfig {
 		VADUpdateInterval:                       getenvOptionalFloat("RTP_AGENT_VAD_UPDATE_INTERVAL"),
 		VADSampleRate:                           getenvOptionalInt("RTP_AGENT_VAD_SAMPLE_RATE"),
 		AvatarProvider:                          normalizedEnv("RTP_AGENT_AVATAR_PROVIDER"),
+		BackgroundAudioAmbient:                  os.Getenv("RTP_AGENT_BACKGROUND_AUDIO_AMBIENT"),
+		BackgroundAudioThinking:                 os.Getenv("RTP_AGENT_BACKGROUND_AUDIO_THINKING"),
 		TTSProvider:                             normalizedEnv("RTP_AGENT_TTS_PROVIDER"),
 		TTSModel:                                os.Getenv("RTP_AGENT_TTS_MODEL"),
 		TTSVoice:                                os.Getenv("RTP_AGENT_TTS_VOICE"),
@@ -2621,7 +2625,36 @@ func agentSessionOptionsFromConfig(cfg AppConfig) agent.AgentSessionOptions {
 		}
 		opts.TTSStreamPacer = &pacer
 	}
+	if cfg.BackgroundAudioAmbient != "" || cfg.BackgroundAudioThinking != "" {
+		opts.BackgroundAudio = agent.NewBackgroundAudioPlayer(
+			backgroundAudioSource(cfg.BackgroundAudioAmbient),
+			backgroundAudioSource(cfg.BackgroundAudioThinking),
+		)
+	}
 	return opts
+}
+
+func backgroundAudioSource(value string) interface{} {
+	switch strings.TrimSpace(value) {
+	case "":
+		return nil
+	case string(agent.CityAmbience):
+		return agent.CityAmbience
+	case string(agent.ForestAmbience):
+		return agent.ForestAmbience
+	case string(agent.OfficeAmbience):
+		return agent.OfficeAmbience
+	case string(agent.CrowdedRoom):
+		return agent.CrowdedRoom
+	case string(agent.KeyboardTyping):
+		return agent.KeyboardTyping
+	case string(agent.KeyboardTyping2):
+		return agent.KeyboardTyping2
+	case string(agent.HoldMusic):
+		return agent.HoldMusic
+	default:
+		return value
+	}
 }
 
 func ttsSentenceTokenizer(cfg AppConfig) (tokenize.SentenceTokenizer, error) {

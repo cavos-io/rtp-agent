@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/cavos-io/rtp-agent/core/agent"
 	"github.com/cavos-io/rtp-agent/core/llm"
 	"github.com/cavos-io/rtp-agent/core/tts"
 )
@@ -1914,6 +1915,28 @@ func TestDefaultConfigFromEnvConfiguresTTSStreamPacer(t *testing.T) {
 	}
 	if got := app.Session.Options.TTSStreamPacer.MaxTextLength; got != 120 {
 		t.Fatalf("MaxTextLength = %d, want 120", got)
+	}
+}
+
+func TestDefaultConfigFromEnvConfiguresBackgroundAudio(t *testing.T) {
+	t.Setenv("RTP_AGENT_BACKGROUND_AUDIO_AMBIENT", "city-ambience.ogg")
+	t.Setenv("RTP_AGENT_BACKGROUND_AUDIO_THINKING", "/tmp/thinking.wav")
+
+	app, err := NewApp(DefaultConfigFromEnv())
+	if err != nil {
+		t.Fatalf("NewApp() error = %v", err)
+	}
+	if app.Session == nil {
+		t.Fatal("Session is nil")
+	}
+	if app.Session.Options.BackgroundAudio == nil {
+		t.Fatal("Session BackgroundAudio is nil")
+	}
+	if _, ok := backgroundAudioSource("city-ambience.ogg").(agent.BuiltinAudioClip); !ok {
+		t.Fatalf("backgroundAudioSource(city-ambience.ogg) = %T, want BuiltinAudioClip", backgroundAudioSource("city-ambience.ogg"))
+	}
+	if got := backgroundAudioSource("/tmp/thinking.wav"); got != "/tmp/thinking.wav" {
+		t.Fatalf("backgroundAudioSource(/tmp/thinking.wav) = %#v, want path string", got)
 	}
 }
 

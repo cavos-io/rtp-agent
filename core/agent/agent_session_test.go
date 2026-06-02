@@ -70,6 +70,37 @@ func TestAgentSessionStartConfiguresTTSStreamPacer(t *testing.T) {
 	}
 }
 
+func TestAgentSessionBackgroundAudioLifecycleWithoutRoom(t *testing.T) {
+	player := NewBackgroundAudioPlayer(nil, nil)
+	baseAgent := NewAgent("test")
+	baseAgent.VAD = &fakePipelineVAD{}
+	baseAgent.STT = &fakePipelineSTT{}
+	baseAgent.LLM = &fakeGenerationLLM{stream: &fakeGenerationLLMStream{}}
+	baseAgent.TTS = &fakePipelineTTS{}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	session := NewAgentSession(baseAgent, nil, AgentSessionOptions{
+		BackgroundAudio: player,
+	})
+
+	if err := session.Start(ctx); err != nil {
+		t.Fatalf("Start error = %v", err)
+	}
+	if player.mixerTaskCancel != nil {
+		t.Fatal("background audio started without a room")
+	}
+
+	session.UpdateAgentState(AgentStateSpeaking)
+	if got := player.targetVolume; got != 0.2 {
+		t.Fatalf("targetVolume after speaking = %v, want ducked volume 0.2", got)
+	}
+
+	if err := session.Stop(context.Background()); err != nil {
+		t.Fatalf("Stop error = %v", err)
+	}
+}
+
 func TestNewAgentSessionInitializesUserStateListening(t *testing.T) {
 	agent := NewAgent("test")
 	session := NewAgentSession(agent, nil, AgentSessionOptions{})
