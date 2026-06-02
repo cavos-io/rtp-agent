@@ -672,6 +672,44 @@ func TestAgentActivityCommitUserTurnSkipsReplyWhenHookPausesScheduling(t *testin
 	}
 }
 
+func TestAgentActivityCommitUserTurnStopResponseSkipsReply(t *testing.T) {
+	agent := &stopResponseTurnAgent{
+		Agent: NewAgent("test"),
+		turns: make(chan *llm.ChatMessage, 1),
+	}
+	agent.TurnDetection = TurnDetectionModeManual
+	agent.LLM = &fakeGenerationLLM{stream: &fakeGenerationLLMStream{}}
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	activity := NewAgentActivity(agent, session)
+	agent.activity = activity
+	session.activity = activity
+
+	activity.OnFinalTranscript(&stt.SpeechEvent{
+		Alternatives: []stt.SpeechData{{Text: "stop response"}},
+	})
+
+	transcript, err := activity.CommitUserTurn(context.Background(), CommitUserTurnOptions{})
+	if err != nil {
+		t.Fatalf("CommitUserTurn error = %v, want nil for StopResponse", err)
+	}
+	if transcript != "stop response" {
+		t.Fatalf("CommitUserTurn transcript = %q, want stop response", transcript)
+	}
+	select {
+	case msg := <-agent.turns:
+		if msg.TextContent() != "stop response" {
+			t.Fatalf("OnUserTurnCompleted message = %q, want stop response", msg.TextContent())
+		}
+	default:
+		t.Fatal("OnUserTurnCompleted was not called")
+	}
+	select {
+	case ev := <-session.SpeechCreatedEvents():
+		t.Fatalf("reply generated after StopResponse: %#v", ev)
+	case <-time.After(20 * time.Millisecond):
+	}
+}
+
 func TestAgentActivityCommitUserTurnSkipsReplyWhenLLMMissing(t *testing.T) {
 	agent := NewAgent("test")
 	agent.TurnDetection = TurnDetectionModeManual
@@ -779,6 +817,16 @@ func (a *pausingTurnAgent) OnUserTurnCompleted(ctx context.Context, chatCtx *llm
 	a.turns <- newMsg
 	a.activity.schedulingPaused = true
 	return nil
+}
+
+type stopResponseTurnAgent struct {
+	*Agent
+	turns chan *llm.ChatMessage
+}
+
+func (a *stopResponseTurnAgent) OnUserTurnCompleted(ctx context.Context, chatCtx *llm.ChatContext, newMsg *llm.ChatMessage) error {
+	a.turns <- newMsg
+	return llm.StopResponse{}
 }
 
 type turnDetectorFunc func(context.Context, *llm.ChatContext) (float64, error)

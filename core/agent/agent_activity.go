@@ -634,6 +634,10 @@ func (a *AgentActivity) completeUserTurn(ctx context.Context, info EndOfTurnInfo
 		chatCtx = a.Agent.ChatCtx.Copy()
 	}
 	if err := a.AgentIntf.OnUserTurnCompleted(ctx, chatCtx, newMsg); err != nil {
+		var stopResponse llm.StopResponse
+		if errors.As(err, &stopResponse) {
+			return nil, nil
+		}
 		return nil, err
 	}
 	if a.Agent.LLM == nil || a.Session == nil {
