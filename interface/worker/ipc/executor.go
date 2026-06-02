@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/cavos-io/rtp-agent/library/logger"
+	mathutil "github.com/cavos-io/rtp-agent/library/math"
 	"github.com/livekit/protocol/livekit"
 )
 
@@ -40,6 +41,7 @@ var processCommandContext = exec.CommandContext
 var processPingInterval = 2 * time.Second
 var processPingTimeout = 60 * time.Second
 var processNow = time.Now
+var processTimeMS = mathutil.TimeMS
 var processSignal = func(process *os.Process, signal os.Signal) error {
 	return process.Signal(signal)
 }
@@ -360,7 +362,7 @@ func (e *ProcessJobExecutor) pingTask(ctx context.Context) {
 					return
 				}
 				pingWriter = e.pingWriter
-				pingTimestamp = now.UnixMilli()
+				pingTimestamp = processTimeMS()
 			}
 			e.mu.Unlock()
 
