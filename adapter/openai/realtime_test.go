@@ -1,11 +1,18 @@
 package openai
 
 import (
+	"encoding/base64"
+	"encoding/json"
 	"math"
+	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
+	audiomodel "github.com/cavos-io/rtp-agent/core/audio/model"
 	"github.com/cavos-io/rtp-agent/core/llm"
+	"github.com/gorilla/websocket"
 )
 
 func TestRealtimeModelCapabilitiesMatchReference(t *testing.T) {
@@ -24,6 +31,153 @@ func TestRealtimeModelCapabilitiesMatchReference(t *testing.T) {
 	}
 	if !capabilities.PerResponseToolChoice {
 		t.Fatal("PerResponseToolChoice = false, want true")
+	}
+}
+
+func TestRealtimeSessionSendsProtocolMessages(t *testing.T) {
+	upgrader := websocket.Upgrader{}
+	messages := make(chan string, 32)
+	connected := make(chan *http.Request, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Errorf("Upgrade error = %v", err)
+			return
+		}
+		connected <- r
+		if err := conn.WriteMessage(websocket.TextMessage, []byte(`{"type":"input_audio_buffer.speech_stopped"}`)); err != nil {
+			t.Errorf("WriteMessage event error = %v", err)
+			return
+		}
+		for {
+			_, msg, err := conn.ReadMessage()
+			if err != nil {
+				return
+			}
+			messages <- string(msg)
+		}
+	}))
+	defer server.Close()
+
+	realtimeURL := "ws" + strings.TrimPrefix(server.URL, "http")
+	realtimeModel := NewRealtimeModel("test-key", "gpt-realtime")
+	realtimeModel.baseURL = realtimeURL
+
+	session, err := realtimeModel.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	defer session.Close()
+
+	req := <-connected
+	if req.URL.Query().Get("model") != "gpt-realtime" {
+		t.Fatalf("model query = %q, want gpt-realtime", req.URL.Query().Get("model"))
+	}
+	if req.Header.Get("Authorization") != "Bearer test-key" {
+		t.Fatalf("Authorization = %q, want bearer key", req.Header.Get("Authorization"))
+	}
+	if req.Header.Get("OpenAI-Beta") != "realtime=v1" {
+		t.Fatalf("OpenAI-Beta = %q, want realtime=v1", req.Header.Get("OpenAI-Beta"))
+	}
+
+	select {
+	case ev := <-session.EventCh():
+		if ev.Type != llm.RealtimeEventTypeSpeechStopped {
+			t.Fatalf("event = %#v, want speech stopped", ev)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for realtime event")
+	}
+
+	if err := session.UpdateInstructions("answer briefly"); err != nil {
+		t.Fatalf("UpdateInstructions error = %v", err)
+	}
+	assertRealtimeMessage(t, <-messages, "session.update", "answer briefly")
+
+	if err := session.UpdateTools([]llm.Tool{requestTestTool{}}); err != nil {
+		t.Fatalf("UpdateTools error = %v", err)
+	}
+	assertRealtimeMessage(t, <-messages, "session.update", "lookup")
+
+	chatCtx := llm.NewChatContext()
+	chatCtx.Items = []llm.ChatItem{
+		&llm.ChatMessage{ID: "user-1", Role: llm.ChatRoleUser, Content: []llm.ChatContent{{Text: "hello"}}},
+	}
+	if err := session.UpdateChatContext(chatCtx); err != nil {
+		t.Fatalf("UpdateChatContext error = %v", err)
+	}
+	assertRealtimeMessage(t, <-messages, "conversation.item.create", "user-1")
+
+	if err := session.UpdateOptions(llm.RealtimeSessionOptions{ToolChoice: "auto"}); err != nil {
+		t.Fatalf("UpdateOptions error = %v", err)
+	}
+	assertRealtimeMessage(t, <-messages, "session.update", "auto")
+
+	if err := session.Interrupt(); err != nil {
+		t.Fatalf("Interrupt error = %v", err)
+	}
+	assertRealtimeMessage(t, <-messages, "response.cancel", "")
+
+	if err := session.PushAudio(&audiomodel.AudioFrame{Data: []byte{1, 2, 3, 4}}); err != nil {
+		t.Fatalf("PushAudio error = %v", err)
+	}
+	assertRealtimeMessage(t, <-messages, "input_audio_buffer.append", base64.StdEncoding.EncodeToString([]byte{1, 2, 3, 4}))
+
+	if err := session.PushVideo(nil); err != nil {
+		t.Fatalf("PushVideo nil error = %v", err)
+	}
+
+	if err := session.GenerateReply(llm.RealtimeGenerateReplyOptions{Instructions: "go", ToolChoice: "auto"}); err != nil {
+		t.Fatalf("GenerateReply error = %v", err)
+	}
+	assertRealtimeMessage(t, <-messages, "response.create", "go")
+
+	if err := session.Truncate(llm.RealtimeTruncateOptions{
+		MessageID:      "user-1",
+		Modalities:     []string{"audio"},
+		AudioEndMillis: 120,
+	}); err != nil {
+		t.Fatalf("Truncate audio error = %v", err)
+	}
+	assertRealtimeMessage(t, <-messages, "conversation.item.truncate", "user-1")
+
+	transcript := "trimmed transcript"
+	if err := session.Truncate(llm.RealtimeTruncateOptions{
+		MessageID:       "user-1",
+		Modalities:      []string{"text"},
+		AudioTranscript: &transcript,
+	}); err != nil {
+		t.Fatalf("Truncate transcript error = %v", err)
+	}
+	assertRealtimeMessage(t, <-messages, "conversation.item.delete", "user-1")
+	assertRealtimeMessage(t, <-messages, "conversation.item.create", "trimmed transcript")
+
+	if err := session.CommitAudio(); err != nil {
+		t.Fatalf("CommitAudio error = %v", err)
+	}
+	assertRealtimeMessage(t, <-messages, "input_audio_buffer.commit", "")
+
+	if err := session.ClearAudio(); err != nil {
+		t.Fatalf("ClearAudio error = %v", err)
+	}
+	assertRealtimeMessage(t, <-messages, "input_audio_buffer.clear", "")
+
+	if err := session.Close(); err != nil {
+		t.Fatalf("Close error = %v", err)
+	}
+}
+
+func assertRealtimeMessage(t *testing.T, raw string, wantType string, wantContains string) {
+	t.Helper()
+	var msg map[string]any
+	if err := json.Unmarshal([]byte(raw), &msg); err != nil {
+		t.Fatalf("message %q is not JSON: %v", raw, err)
+	}
+	if msg["type"] != wantType {
+		t.Fatalf("message type = %#v, want %s; raw=%s", msg["type"], wantType, raw)
+	}
+	if wantContains != "" && !strings.Contains(raw, wantContains) {
+		t.Fatalf("message %s does not contain %q", raw, wantContains)
 	}
 }
 
