@@ -31,6 +31,7 @@ import (
 	"github.com/cavos-io/rtp-agent/adapter/groq"
 	"github.com/cavos-io/rtp-agent/adapter/hume"
 	"github.com/cavos-io/rtp-agent/adapter/inworld"
+	"github.com/cavos-io/rtp-agent/adapter/langchain"
 	"github.com/cavos-io/rtp-agent/adapter/lmnt"
 	"github.com/cavos-io/rtp-agent/adapter/minimax"
 	"github.com/cavos-io/rtp-agent/adapter/mistralai"
@@ -85,6 +86,7 @@ const (
 	providerGroq         = "groq"
 	providerHume         = "hume"
 	providerInworld      = "inworld"
+	providerLangChain    = "langchain"
 	providerLMNT         = "lmnt"
 	providerMinimax      = "minimax"
 	providerMistralAI    = "mistralai"
@@ -308,6 +310,7 @@ type AppConfig struct {
 	GradiumAPIKey               string
 	HumeAPIKey                  string
 	InworldAPIKey               string
+	LangChainAPIKey             string
 	LMNTAPIKey                  string
 	MinimaxAPIKey               string
 	MistralAPIKey               string
@@ -544,6 +547,7 @@ func DefaultConfigFromEnv() AppConfig {
 		GradiumAPIKey:                           os.Getenv("GRADIUM_API_KEY"),
 		HumeAPIKey:                              os.Getenv("HUME_API_KEY"),
 		InworldAPIKey:                           os.Getenv("INWORLD_API_KEY"),
+		LangChainAPIKey:                         os.Getenv("LANGCHAIN_API_KEY"),
 		LMNTAPIKey:                              os.Getenv("LMNT_API_KEY"),
 		MinimaxAPIKey:                           os.Getenv("MINIMAX_API_KEY"),
 		MistralAPIKey:                           os.Getenv("MISTRAL_API_KEY"),
@@ -709,6 +713,8 @@ func configureProviders(cfg AppConfig, a *agent.Agent) (llm.RealtimeModel, error
 		a.LLM = hume.NewHumeLLM(cfg.HumeAPIKey, cfg.LLMModel)
 	case providerInworld:
 		a.LLM = inworld.NewInworldLLM(cfg.InworldAPIKey, cfg.LLMModel)
+	case providerLangChain:
+		a.LLM = langchain.NewLangchainLLM(cfg.LangChainAPIKey, cfg.LLMModel)
 	case providerMinimax:
 		a.LLM = minimax.NewMinimaxLLM(cfg.MinimaxAPIKey, cfg.LLMModel)
 	case providerMistralAI:
