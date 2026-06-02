@@ -738,6 +738,7 @@ func (s *AgentSession) Start(ctx context.Context) error {
 	assistant := s.Assistant
 	assistant.ttsStreamPacer = s.Options.TTSStreamPacer
 	agent := s.Agent
+	avatar := agent.GetAgent().Avatar
 	backgroundAudio := s.Options.BackgroundAudio
 	room := s.Room
 	hasMetricsCollector := s.MetricsCollector != nil
@@ -747,6 +748,14 @@ func (s *AgentSession) Start(ctx context.Context) error {
 
 	if backgroundAudio != nil && room != nil {
 		if err := backgroundAudio.Start(room, s); err != nil {
+			return err
+		}
+	}
+	if avatar != nil {
+		if err := avatar.Start(ctx); err != nil {
+			if backgroundAudio != nil {
+				_ = backgroundAudio.Close()
+			}
 			return err
 		}
 	}
