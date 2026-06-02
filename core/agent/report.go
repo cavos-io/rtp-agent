@@ -3,6 +3,7 @@ package agent
 import (
 	"encoding/json"
 	"fmt"
+	"path/filepath"
 	"time"
 
 	"github.com/cavos-io/rtp-agent/core/llm"
@@ -87,7 +88,7 @@ func (r *SessionReport) ToDict() map[string]any {
 		"room_id":                    r.RoomID,
 		"room":                       r.Room,
 		"events":                     events,
-		"audio_recording_path":       optionalString(r.AudioRecordingPath),
+		"audio_recording_path":       audioRecordingPathToDict(r.AudioRecordingPath),
 		"audio_recording_started_at": optionalFloat64(r.AudioRecordingStartedAt),
 		"options":                    sessionReportOptionsToDict(r.Options),
 		"chat_history":               chatHistory,
@@ -115,7 +116,7 @@ func sessionReportOptionsToDict(opts AgentSessionOptions) map[string]any {
 		"max_tool_steps":                   opts.MaxToolSteps,
 		"user_away_timeout":                opts.UserAwayTimeout,
 		"min_consecutive_speech_delay":     opts.MinConsecutiveSpeechDelay,
-		"preemptive_generation":            opts.PreemptiveGeneration,
+		"preemptive_generation":            map[string]any{"enabled": opts.PreemptiveGeneration},
 	}
 }
 
@@ -186,11 +187,15 @@ func timeToUnixSeconds(t time.Time) float64 {
 	return float64(t.UnixNano()) / 1e9
 }
 
-func optionalString(value *string) any {
+func audioRecordingPathToDict(value *string) any {
 	if value == nil {
 		return nil
 	}
-	return *value
+	absPath, err := filepath.Abs(*value)
+	if err != nil {
+		return *value
+	}
+	return absPath
 }
 
 func optionalFloat64(value *float64) any {

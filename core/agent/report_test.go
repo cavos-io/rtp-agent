@@ -3,6 +3,7 @@ package agent
 import (
 	"encoding/json"
 	"errors"
+	"path/filepath"
 	"testing"
 
 	"github.com/cavos-io/rtp-agent/core/llm"
@@ -142,5 +143,39 @@ func TestSessionReportToDictSkipsMetricsCollectedEvents(t *testing.T) {
 		if eventMap["type"] == "metrics_collected" {
 			t.Fatalf("encoded events contained metrics_collected: %#v", encodedEvents)
 		}
+	}
+}
+
+func TestSessionReportToDictUsesAbsoluteAudioRecordingPath(t *testing.T) {
+	path := filepath.Join(".tmp", "session.ogg")
+	want, err := filepath.Abs(path)
+	if err != nil {
+		t.Fatalf("Abs(%q): %v", path, err)
+	}
+	report := NewSessionReport()
+	report.AudioRecordingPath = &path
+
+	data := report.ToDict()
+
+	if data["audio_recording_path"] != want {
+		t.Fatalf("audio_recording_path = %#v, want %q", data["audio_recording_path"], want)
+	}
+}
+
+func TestSessionReportToDictUsesReferencePreemptiveGenerationShape(t *testing.T) {
+	report := NewSessionReport()
+	report.Options.PreemptiveGeneration = true
+
+	data := report.ToDict()
+	options, ok := data["options"].(map[string]any)
+	if !ok {
+		t.Fatalf("options = %T, want map[string]any", data["options"])
+	}
+	preemptive, ok := options["preemptive_generation"].(map[string]any)
+	if !ok {
+		t.Fatalf("preemptive_generation = %T, want map[string]any", options["preemptive_generation"])
+	}
+	if preemptive["enabled"] != true {
+		t.Fatalf("preemptive_generation enabled = %#v, want true", preemptive["enabled"])
 	}
 }
