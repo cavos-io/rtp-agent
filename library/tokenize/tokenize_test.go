@@ -1,6 +1,9 @@
 package tokenize
 
-import "testing"
+import (
+	"reflect"
+	"testing"
+)
 
 func TestSplitSentencesPreservesDecimalNumbers(t *testing.T) {
 	tokens := NewBasicSentenceTokenizer().Tokenize("Version 1.5 is ready. Next sentence.", "")
@@ -82,6 +85,15 @@ func TestSplitParagraphsSplitsOnBlankLinesAndTracksOffsets(t *testing.T) {
 		if tokens[i].Token != want[i].Token || tokens[i].Start != want[i].Start || tokens[i].End != want[i].End {
 			t.Fatalf("tokens[%d] = %#v, want %#v", i, tokens[i], want[i])
 		}
+	}
+}
+
+func TestBasicSentenceTokenizerSplitsBlankLineParagraphsWithoutPunctuation(t *testing.T) {
+	tokens := NewBasicSentenceTokenizer().Tokenize("First paragraph without punctuation\n\nSecond paragraph without punctuation", "")
+	want := []string{"First paragraph without punctuation", "Second paragraph without punctuation"}
+
+	if !reflect.DeepEqual(tokens, want) {
+		t.Fatalf("Tokenize() = %#v, want %#v", tokens, want)
 	}
 }
 
