@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"strings"
 	"sync"
 	"time"
 
@@ -352,16 +351,6 @@ func sonioxTTSAudioFrame(audio []byte, sampleRate int) *tts.SynthesizedAudio {
 			SamplesPerChannel: uint32(len(audio) / 2),
 		},
 	}
-}
-
-func sonioxTTSAudioFormatToMIMEType(audioFormat string) string {
-	if strings.HasPrefix(audioFormat, "pcm") {
-		return "audio/pcm"
-	}
-	if audioFormat == "mp3" {
-		return "audio/mpeg"
-	}
-	return "audio/" + audioFormat
 }
 
 func shortSonioxTTSStreamID() string {
