@@ -33,6 +33,7 @@ import (
 	"github.com/cavos-io/rtp-agent/adapter/inworld"
 	"github.com/cavos-io/rtp-agent/adapter/langchain"
 	"github.com/cavos-io/rtp-agent/adapter/lmnt"
+	"github.com/cavos-io/rtp-agent/adapter/minimal"
 	"github.com/cavos-io/rtp-agent/adapter/minimax"
 	"github.com/cavos-io/rtp-agent/adapter/mistralai"
 	"github.com/cavos-io/rtp-agent/adapter/murf"
@@ -88,6 +89,7 @@ const (
 	providerInworld      = "inworld"
 	providerLangChain    = "langchain"
 	providerLMNT         = "lmnt"
+	providerMinimal      = "minimal"
 	providerMinimax      = "minimax"
 	providerMistralAI    = "mistralai"
 	providerMurf         = "murf"
@@ -312,6 +314,7 @@ type AppConfig struct {
 	InworldAPIKey               string
 	LangChainAPIKey             string
 	LMNTAPIKey                  string
+	MinimalAPIKey               string
 	MinimaxAPIKey               string
 	MistralAPIKey               string
 	MurfAPIKey                  string
@@ -549,6 +552,7 @@ func DefaultConfigFromEnv() AppConfig {
 		InworldAPIKey:                           os.Getenv("INWORLD_API_KEY"),
 		LangChainAPIKey:                         os.Getenv("LANGCHAIN_API_KEY"),
 		LMNTAPIKey:                              os.Getenv("LMNT_API_KEY"),
+		MinimalAPIKey:                           os.Getenv("MINIMAL_API_KEY"),
 		MinimaxAPIKey:                           os.Getenv("MINIMAX_API_KEY"),
 		MistralAPIKey:                           os.Getenv("MISTRAL_API_KEY"),
 		MurfAPIKey:                              os.Getenv("MURF_API_KEY"),
@@ -715,6 +719,8 @@ func configureProviders(cfg AppConfig, a *agent.Agent) (llm.RealtimeModel, error
 		a.LLM = inworld.NewInworldLLM(cfg.InworldAPIKey, cfg.LLMModel)
 	case providerLangChain:
 		a.LLM = langchain.NewLangchainLLM(cfg.LangChainAPIKey, cfg.LLMModel)
+	case providerMinimal:
+		a.LLM = minimal.NewMinimalLLM(cfg.MinimalAPIKey, cfg.LLMModel)
 	case providerMinimax:
 		a.LLM = minimax.NewMinimaxLLM(cfg.MinimaxAPIKey, cfg.LLMModel)
 	case providerMistralAI:
