@@ -34,6 +34,11 @@ func NewGoogleLLM(apiKey string, model string) (*GoogleLLM, error) {
 	}, nil
 }
 
+func (l *GoogleLLM) Model() string { return l.model }
+func (l *GoogleLLM) Provider() string {
+	return "google"
+}
+
 func (l *GoogleLLM) Chat(ctx context.Context, chatCtx *llm.ChatContext, opts ...llm.ChatOption) (llm.LLMStream, error) {
 	options := &llm.ChatOptions{}
 	for _, opt := range opts {

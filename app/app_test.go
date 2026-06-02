@@ -198,6 +198,26 @@ func TestDefaultConfigFromEnvSelectsBasetenProviders(t *testing.T) {
 	}
 }
 
+func TestDefaultConfigFromEnvSelectsGoogleLLM(t *testing.T) {
+	t.Setenv("GOOGLE_API_KEY", "test-google-key")
+	t.Setenv("RTP_AGENT_LLM_PROVIDER", "google")
+	t.Setenv("RTP_AGENT_LLM_MODEL", "gemini-test")
+
+	app, err := NewApp(DefaultConfigFromEnv())
+	if err != nil {
+		t.Fatalf("NewApp() error = %v", err)
+	}
+	if app.Session == nil || app.Session.LLM == nil {
+		t.Fatal("Session LLM is nil")
+	}
+	if got := llm.Provider(app.Session.LLM); got != "google" {
+		t.Fatalf("LLM provider = %q, want google", got)
+	}
+	if got := llm.Model(app.Session.LLM); got != "gemini-test" {
+		t.Fatalf("LLM model = %q, want gemini-test", got)
+	}
+}
+
 func TestDefaultConfigFromEnvSelectsLiveKitInferenceLLM(t *testing.T) {
 	t.Setenv("LIVEKIT_API_KEY", "test-livekit-key")
 	t.Setenv("LIVEKIT_API_SECRET", "test-livekit-secret")

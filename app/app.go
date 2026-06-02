@@ -15,6 +15,7 @@ import (
 	adapteraws "github.com/cavos-io/rtp-agent/adapter/aws"
 	"github.com/cavos-io/rtp-agent/adapter/azure"
 	"github.com/cavos-io/rtp-agent/adapter/baseten"
+	adaptergoogle "github.com/cavos-io/rtp-agent/adapter/google"
 	"github.com/cavos-io/rtp-agent/adapter/openai"
 	"github.com/cavos-io/rtp-agent/core/agent"
 	"github.com/cavos-io/rtp-agent/core/llm"
@@ -29,6 +30,7 @@ const (
 	providerAWS        = "aws"
 	providerAzure      = "azure"
 	providerBaseten    = "baseten"
+	providerGoogle     = "google"
 	providerOpenAI     = "openai"
 	providerLiveKit    = "livekit"
 )
@@ -47,6 +49,9 @@ type AppConfig struct {
 	STTEncoding                     string
 	STTChainID                      string
 	STTDetectLanguage               bool
+	STTPunctuate                    *bool
+	STTSpokenPunctuation            *bool
+	STTProfanityFilter              *bool
 	STTPrompt                       string
 	STTBaseURL                      string
 	STTSampleRate                   *int
@@ -97,6 +102,9 @@ type AppConfig struct {
 
 	OpenAIAPIKey    string
 	AnthropicAPIKey string
+	GoogleAPIKey    string
+
+	GoogleCredentialsFile string
 
 	LiveKitInferenceAPIKey    string
 	LiveKitInferenceAPISecret string
@@ -122,6 +130,9 @@ func DefaultConfigFromEnv() AppConfig {
 		STTEncoding:                     os.Getenv("RTP_AGENT_STT_ENCODING"),
 		STTChainID:                      os.Getenv("RTP_AGENT_STT_CHAIN_ID"),
 		STTDetectLanguage:               getenvBool("RTP_AGENT_STT_DETECT_LANGUAGE"),
+		STTPunctuate:                    getenvOptionalBool("RTP_AGENT_STT_PUNCTUATE"),
+		STTSpokenPunctuation:            getenvOptionalBool("RTP_AGENT_STT_SPOKEN_PUNCTUATION"),
+		STTProfanityFilter:              getenvOptionalBool("RTP_AGENT_STT_PROFANITY_FILTER"),
 		STTPrompt:                       os.Getenv("RTP_AGENT_STT_PROMPT"),
 		STTBaseURL:                      os.Getenv("RTP_AGENT_STT_BASE_URL"),
 		STTSampleRate:                   getenvOptionalInt("RTP_AGENT_STT_SAMPLE_RATE"),
@@ -171,6 +182,8 @@ func DefaultConfigFromEnv() AppConfig {
 		RealtimeModel:                   os.Getenv("RTP_AGENT_REALTIME_MODEL"),
 		OpenAIAPIKey:                    os.Getenv("OPENAI_API_KEY"),
 		AnthropicAPIKey:                 os.Getenv("ANTHROPIC_API_KEY"),
+		GoogleAPIKey:                    os.Getenv("GOOGLE_API_KEY"),
+		GoogleCredentialsFile:           firstEnv("RTP_AGENT_GOOGLE_CREDENTIALS_FILE", "GOOGLE_APPLICATION_CREDENTIALS"),
 	}
 }
 
@@ -234,6 +247,12 @@ func configureProviders(cfg AppConfig, a *agent.Agent) (llm.RealtimeModel, error
 		a.LLM = provider
 	case providerBaseten:
 		provider, err := baseten.NewBasetenLLM("", cfg.LLMModel)
+		if err != nil {
+			return nil, err
+		}
+		a.LLM = provider
+	case providerGoogle:
+		provider, err := adaptergoogle.NewGoogleLLM(cfg.GoogleAPIKey, cfg.LLMModel)
 		if err != nil {
 			return nil, err
 		}
@@ -354,6 +373,28 @@ func configureProviders(cfg AppConfig, a *agent.Agent) (llm.RealtimeModel, error
 			sttOpts = append(sttOpts, baseten.WithBasetenSTTVADThreshold(*cfg.STTVADThreshold))
 		}
 		provider, err := baseten.NewBasetenSTT("", cfg.STTModel, sttOpts...)
+		if err != nil {
+			return nil, err
+		}
+		a.STT = provider
+	case providerGoogle:
+		sttOpts := []adaptergoogle.GoogleSTTOption{}
+		if cfg.STTModel != "" {
+			sttOpts = append(sttOpts, adaptergoogle.WithGoogleSTTModel(cfg.STTModel))
+		}
+		if cfg.STTSampleRate != nil {
+			sttOpts = append(sttOpts, adaptergoogle.WithGoogleSTTSampleRate(int32(*cfg.STTSampleRate)))
+		}
+		if cfg.STTPunctuate != nil {
+			sttOpts = append(sttOpts, adaptergoogle.WithGoogleSTTPunctuate(*cfg.STTPunctuate))
+		}
+		if cfg.STTSpokenPunctuation != nil {
+			sttOpts = append(sttOpts, adaptergoogle.WithGoogleSTTSpokenPunctuation(*cfg.STTSpokenPunctuation))
+		}
+		if cfg.STTProfanityFilter != nil {
+			sttOpts = append(sttOpts, adaptergoogle.WithGoogleSTTProfanityFilter(*cfg.STTProfanityFilter))
+		}
+		provider, err := adaptergoogle.NewGoogleSTT(cfg.GoogleCredentialsFile, sttOpts...)
 		if err != nil {
 			return nil, err
 		}
@@ -483,6 +524,12 @@ func configureProviders(cfg AppConfig, a *agent.Agent) (llm.RealtimeModel, error
 			ttsOpts = append(ttsOpts, baseten.WithBasetenTTSBufferSize(*cfg.TTSBufferSize))
 		}
 		provider, err := baseten.NewBasetenTTS("", cfg.TTSModel, ttsOpts...)
+		if err != nil {
+			return nil, err
+		}
+		a.TTS = provider
+	case providerGoogle:
+		provider, err := adaptergoogle.NewGoogleTTS(cfg.GoogleCredentialsFile)
 		if err != nil {
 			return nil, err
 		}
