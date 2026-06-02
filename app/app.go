@@ -41,6 +41,7 @@ import (
 	"github.com/cavos-io/rtp-agent/adapter/keyframe"
 	"github.com/cavos-io/rtp-agent/adapter/langchain"
 	"github.com/cavos-io/rtp-agent/adapter/lemonslice"
+	"github.com/cavos-io/rtp-agent/adapter/liveavatar"
 	"github.com/cavos-io/rtp-agent/adapter/lmnt"
 	"github.com/cavos-io/rtp-agent/adapter/minimal"
 	"github.com/cavos-io/rtp-agent/adapter/minimax"
@@ -64,6 +65,7 @@ import (
 	"github.com/cavos-io/rtp-agent/adapter/speechify"
 	"github.com/cavos-io/rtp-agent/adapter/speechmatics"
 	"github.com/cavos-io/rtp-agent/adapter/spitch"
+	"github.com/cavos-io/rtp-agent/adapter/tavus"
 	"github.com/cavos-io/rtp-agent/adapter/telnyx"
 	"github.com/cavos-io/rtp-agent/adapter/trugen"
 	"github.com/cavos-io/rtp-agent/adapter/ultravox"
@@ -107,6 +109,7 @@ const (
 	providerKeyframe     = "keyframe"
 	providerLangChain    = "langchain"
 	providerLemonSlice   = "lemonslice"
+	providerLiveAvatar   = "liveavatar"
 	providerLMNT         = "lmnt"
 	providerMinimal      = "minimal"
 	providerMinimax      = "minimax"
@@ -130,6 +133,7 @@ const (
 	providerSpeechify    = "speechify"
 	providerSpeechmatics = "speechmatics"
 	providerSpitch       = "spitch"
+	providerTavus        = "tavus"
 	providerTelnyx       = "telnyx"
 	providerTrugen       = "trugen"
 	providerUltravox     = "ultravox"
@@ -343,6 +347,7 @@ type AppConfig struct {
 	KeyframeAPIKey              string
 	LangChainAPIKey             string
 	LemonSliceAPIKey            string
+	LiveAvatarAPIKey            string
 	LMNTAPIKey                  string
 	MinimalAPIKey               string
 	MinimaxAPIKey               string
@@ -366,6 +371,7 @@ type AppConfig struct {
 	SpeechifyAPIKey             string
 	SpeechmaticsAPIKey          string
 	SpitchAPIKey                string
+	TavusAPIKey                 string
 	TelnyxAPIKey                string
 	TrugenAPIKey                string
 	UltravoxAPIKey              string
@@ -595,6 +601,7 @@ func DefaultConfigFromEnv() AppConfig {
 		KeyframeAPIKey:                          os.Getenv("KEYFRAME_API_KEY"),
 		LangChainAPIKey:                         os.Getenv("LANGCHAIN_API_KEY"),
 		LemonSliceAPIKey:                        os.Getenv("LEMONSLICE_API_KEY"),
+		LiveAvatarAPIKey:                        os.Getenv("LIVEAVATAR_API_KEY"),
 		LMNTAPIKey:                              os.Getenv("LMNT_API_KEY"),
 		MinimalAPIKey:                           os.Getenv("MINIMAL_API_KEY"),
 		MinimaxAPIKey:                           os.Getenv("MINIMAX_API_KEY"),
@@ -618,6 +625,7 @@ func DefaultConfigFromEnv() AppConfig {
 		SpeechifyAPIKey:                         os.Getenv("SPEECHIFY_API_KEY"),
 		SpeechmaticsAPIKey:                      os.Getenv("SPEECHMATICS_API_KEY"),
 		SpitchAPIKey:                            os.Getenv("SPITCH_API_KEY"),
+		TavusAPIKey:                             os.Getenv("TAVUS_API_KEY"),
 		TelnyxAPIKey:                            os.Getenv("TELNYX_API_KEY"),
 		TrugenAPIKey:                            os.Getenv("TRUGEN_API_KEY"),
 		UltravoxAPIKey:                          os.Getenv("ULTRAVOX_API_KEY"),
@@ -727,8 +735,14 @@ func configureAvatar(cfg AppConfig, a *agent.Agent) error {
 	case providerLemonSlice:
 		a.Avatar = lemonslice.NewLemonsliceAvatar(cfg.LemonSliceAPIKey)
 		return nil
+	case providerLiveAvatar:
+		a.Avatar = liveavatar.NewLiveAvatar(cfg.LiveAvatarAPIKey)
+		return nil
 	case providerSimli:
 		a.Avatar = simli.NewSimliAvatar(cfg.SimliAPIKey)
+		return nil
+	case providerTavus:
+		a.Avatar = tavus.NewTavusAvatar(cfg.TavusAPIKey)
 		return nil
 	case providerTrugen:
 		a.Avatar = trugen.NewTrugenAvatar(cfg.TrugenAPIKey)
