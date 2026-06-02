@@ -44,6 +44,7 @@ import (
 	"github.com/cavos-io/rtp-agent/adapter/rime"
 	"github.com/cavos-io/rtp-agent/adapter/rtzr"
 	"github.com/cavos-io/rtp-agent/adapter/sarvam"
+	"github.com/cavos-io/rtp-agent/adapter/silero"
 	"github.com/cavos-io/rtp-agent/adapter/simplismart"
 	"github.com/cavos-io/rtp-agent/adapter/slng"
 	"github.com/cavos-io/rtp-agent/adapter/smallestai"
@@ -96,6 +97,7 @@ const (
 	providerRime         = "rime"
 	providerRtzr         = "rtzr"
 	providerSarvam       = "sarvam"
+	providerSilero       = "silero"
 	providerSimplismart  = "simplismart"
 	providerSLNG         = "slng"
 	providerSmallestAI   = "smallestai"
@@ -224,6 +226,16 @@ type AppConfig struct {
 	STTPreSpeechPadFrames                   *int
 	STTNumInitialIgnoredFrames              *int
 	STTPreferCurrentSpeaker                 *bool
+	VADProvider                             string
+	VADMinSpeechDuration                    *float64
+	VADMinSilenceDuration                   *float64
+	VADPrefixPaddingDuration                *float64
+	VADPaddingDuration                      *float64
+	VADMaxBufferedSpeech                    *float64
+	VADActivationThreshold                  *float64
+	VADDeactivationThreshold                *float64
+	VADUpdateInterval                       *float64
+	VADSampleRate                           *int
 	TTSProvider                             string
 	TTSModel                                string
 	TTSVoice                                string
@@ -450,6 +462,16 @@ func DefaultConfigFromEnv() AppConfig {
 		STTPreSpeechPadFrames:                   getenvOptionalInt("RTP_AGENT_STT_PRE_SPEECH_PAD_FRAMES"),
 		STTNumInitialIgnoredFrames:              getenvOptionalInt("RTP_AGENT_STT_NUM_INITIAL_IGNORED_FRAMES"),
 		STTPreferCurrentSpeaker:                 getenvOptionalBool("RTP_AGENT_STT_PREFER_CURRENT_SPEAKER"),
+		VADProvider:                             normalizedEnv("RTP_AGENT_VAD_PROVIDER"),
+		VADMinSpeechDuration:                    getenvOptionalFloat("RTP_AGENT_VAD_MIN_SPEECH_DURATION"),
+		VADMinSilenceDuration:                   getenvOptionalFloat("RTP_AGENT_VAD_MIN_SILENCE_DURATION"),
+		VADPrefixPaddingDuration:                getenvOptionalFloat("RTP_AGENT_VAD_PREFIX_PADDING_DURATION"),
+		VADPaddingDuration:                      getenvOptionalFloat("RTP_AGENT_VAD_PADDING_DURATION"),
+		VADMaxBufferedSpeech:                    getenvOptionalFloat("RTP_AGENT_VAD_MAX_BUFFERED_SPEECH"),
+		VADActivationThreshold:                  getenvOptionalFloat("RTP_AGENT_VAD_ACTIVATION_THRESHOLD"),
+		VADDeactivationThreshold:                getenvOptionalFloat("RTP_AGENT_VAD_DEACTIVATION_THRESHOLD"),
+		VADUpdateInterval:                       getenvOptionalFloat("RTP_AGENT_VAD_UPDATE_INTERVAL"),
+		VADSampleRate:                           getenvOptionalInt("RTP_AGENT_VAD_SAMPLE_RATE"),
 		TTSProvider:                             normalizedEnv("RTP_AGENT_TTS_PROVIDER"),
 		TTSModel:                                os.Getenv("RTP_AGENT_TTS_MODEL"),
 		TTSVoice:                                os.Getenv("RTP_AGENT_TTS_VOICE"),
@@ -568,6 +590,9 @@ func NewApp(cfg AppConfig) (*App, error) {
 	if normalizeProvider(cfg.LLMProvider) == providerXAI {
 		baseAgent.Tools = append(baseAgent.Tools, xaiProviderTools(cfg)...)
 	}
+	if err := configureVAD(cfg, baseAgent); err != nil {
+		return nil, err
+	}
 
 	session := agent.NewAgentSession(baseAgent, nil, agent.AgentSessionOptions{})
 
@@ -601,6 +626,54 @@ func (a *App) runSession(ctx *worker.JobContext) error {
 		return nil
 	}
 	return a.Session.Start(context.Background())
+}
+
+func configureVAD(cfg AppConfig, a *agent.Agent) error {
+	switch normalizeProvider(cfg.VADProvider) {
+	case "":
+		return nil
+	case providerSilero:
+		vadOpts := []silero.VADOption{}
+		if cfg.VADMinSpeechDuration != nil {
+			vadOpts = append(vadOpts, silero.WithMinSpeechDuration(*cfg.VADMinSpeechDuration))
+		}
+		if cfg.VADMinSilenceDuration != nil {
+			vadOpts = append(vadOpts, silero.WithMinSilenceDuration(*cfg.VADMinSilenceDuration))
+		}
+		if cfg.VADPrefixPaddingDuration != nil {
+			vadOpts = append(vadOpts, silero.WithPrefixPaddingDuration(*cfg.VADPrefixPaddingDuration))
+		}
+		if cfg.VADPaddingDuration != nil {
+			vadOpts = append(vadOpts, silero.WithPaddingDuration(*cfg.VADPaddingDuration))
+		}
+		if cfg.VADMaxBufferedSpeech != nil {
+			vadOpts = append(vadOpts, silero.WithMaxBufferedSpeech(*cfg.VADMaxBufferedSpeech))
+		}
+		if cfg.VADActivationThreshold != nil {
+			vadOpts = append(vadOpts, silero.WithActivationThreshold(*cfg.VADActivationThreshold))
+		}
+		if cfg.VADDeactivationThreshold != nil {
+			vadOpts = append(vadOpts, silero.WithDeactivationThreshold(*cfg.VADDeactivationThreshold))
+		}
+		if cfg.VADSampleRate != nil {
+			vadOpts = append(vadOpts, silero.WithSampleRate(*cfg.VADSampleRate))
+		}
+		if cfg.VADUpdateInterval != nil {
+			vadOpts = append(vadOpts, silero.WithUpdateInterval(*cfg.VADUpdateInterval))
+		}
+		if len(vadOpts) == 0 {
+			a.VAD = silero.NewSileroVAD()
+			return nil
+		}
+		detector, err := silero.NewSileroVADWithOptions(vadOpts...)
+		if err != nil {
+			return err
+		}
+		a.VAD = detector
+		return nil
+	default:
+		return fmt.Errorf("unsupported RTP_AGENT_VAD_PROVIDER %q", cfg.VADProvider)
+	}
 }
 
 func configureProviders(cfg AppConfig, a *agent.Agent) (llm.RealtimeModel, error) {

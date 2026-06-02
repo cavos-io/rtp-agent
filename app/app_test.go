@@ -106,6 +106,32 @@ func TestDefaultConfigFromEnvSelectsUpliftAIProviders(t *testing.T) {
 	}
 }
 
+func TestDefaultConfigFromEnvSelectsSileroVAD(t *testing.T) {
+	t.Setenv("RTP_AGENT_VAD_PROVIDER", "silero")
+	t.Setenv("RTP_AGENT_VAD_SAMPLE_RATE", "8000")
+	t.Setenv("RTP_AGENT_VAD_MIN_SPEECH_DURATION", "0.08")
+	t.Setenv("RTP_AGENT_VAD_MIN_SILENCE_DURATION", "0.2")
+	t.Setenv("RTP_AGENT_VAD_PREFIX_PADDING_DURATION", "0.1")
+	t.Setenv("RTP_AGENT_VAD_MAX_BUFFERED_SPEECH", "2.5")
+	t.Setenv("RTP_AGENT_VAD_ACTIVATION_THRESHOLD", "0.7")
+	t.Setenv("RTP_AGENT_VAD_DEACTIVATION_THRESHOLD", "0.4")
+	t.Setenv("RTP_AGENT_VAD_UPDATE_INTERVAL", "0.064")
+
+	app, err := NewApp(DefaultConfigFromEnv())
+	if err != nil {
+		t.Fatalf("NewApp() error = %v", err)
+	}
+	if app.Session == nil || app.Session.VAD == nil {
+		t.Fatal("Session VAD is nil")
+	}
+	if got := app.Session.VAD.Label(); got != "silero.VAD" {
+		t.Fatalf("VAD label = %q, want silero.VAD", got)
+	}
+	if caps := app.Session.VAD.Capabilities(); caps.UpdateInterval != 0.064 {
+		t.Fatalf("VAD capabilities = %+v, want update interval 0.064", caps)
+	}
+}
+
 func TestDefaultConfigFromEnvSelectsAssemblyAISTT(t *testing.T) {
 	t.Setenv("ASSEMBLYAI_API_KEY", "test-assemblyai-key")
 	t.Setenv("RTP_AGENT_STT_PROVIDER", "assemblyai")

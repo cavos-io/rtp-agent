@@ -103,6 +103,12 @@ func WithSampleRate(r int) VADOption {
 	}
 }
 
+func WithUpdateInterval(d float64) VADOption {
+	return func(o *VADOptions) {
+		o.UpdateInterval = d
+	}
+}
+
 func NewSileroVAD(opts ...VADOption) *SileroVAD {
 	options := buildVADOptions(opts...)
 	if !options.deactivationThresholdSet {
