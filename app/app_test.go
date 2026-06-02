@@ -432,6 +432,46 @@ func TestDefaultConfigFromEnvSelectsGladiaSTT(t *testing.T) {
 	}
 }
 
+func TestDefaultConfigFromEnvSelectsGnaniSpeechProviders(t *testing.T) {
+	t.Setenv("GNANI_API_KEY", "test-gnani-key")
+	t.Setenv("RTP_AGENT_STT_PROVIDER", "gnani")
+	t.Setenv("RTP_AGENT_STT_BASE_URL", "https://gnani.example")
+	t.Setenv("RTP_AGENT_STT_LANGUAGE", "en-IN")
+	t.Setenv("RTP_AGENT_STT_SAMPLE_RATE", "16000")
+	t.Setenv("RTP_AGENT_STT_ORGANIZATION_ID", "org-test")
+	t.Setenv("RTP_AGENT_STT_USER_ID", "user-test")
+	t.Setenv("RTP_AGENT_TTS_PROVIDER", "gnani")
+	t.Setenv("RTP_AGENT_TTS_BASE_URL", "https://gnani.example")
+	t.Setenv("RTP_AGENT_TTS_VOICE", "Karan")
+	t.Setenv("RTP_AGENT_TTS_MODEL", "vachana-voice-v3")
+	t.Setenv("RTP_AGENT_TTS_SAMPLE_RATE", "22050")
+	t.Setenv("RTP_AGENT_TTS_ENCODING", "linear_pcm")
+	t.Setenv("RTP_AGENT_TTS_RESPONSE_FORMAT", "wav")
+	t.Setenv("RTP_AGENT_TTS_NUMBER_OF_CHANNELS", "1")
+	t.Setenv("RTP_AGENT_TTS_SAMPLE_WIDTH", "2")
+	t.Setenv("RTP_AGENT_TTS_LANGUAGE", "hi")
+
+	app, err := NewApp(DefaultConfigFromEnv())
+	if err != nil {
+		t.Fatalf("NewApp() error = %v", err)
+	}
+	if app.Session == nil {
+		t.Fatal("Session is nil")
+	}
+	if got := app.Session.STT.Label(); got != "gnani.STT" {
+		t.Fatalf("STT label = %q, want gnani.STT", got)
+	}
+	if caps := app.Session.STT.Capabilities(); !caps.Streaming || !caps.OfflineRecognize {
+		t.Fatalf("STT capabilities = %+v, want streaming with offline recognize", caps)
+	}
+	if got := app.Session.TTS.Label(); got != "gnani.TTS" {
+		t.Fatalf("TTS label = %q, want gnani.TTS", got)
+	}
+	if got := app.Session.TTS.SampleRate(); got != 22050 {
+		t.Fatalf("TTS sample rate = %d, want 22050", got)
+	}
+}
+
 func TestDefaultConfigFromEnvSelectsAWSProviders(t *testing.T) {
 	t.Setenv("AWS_REGION", "us-west-2")
 	t.Setenv("RTP_AGENT_LLM_PROVIDER", "aws")

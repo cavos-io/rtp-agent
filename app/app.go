@@ -25,6 +25,7 @@ import (
 	"github.com/cavos-io/rtp-agent/adapter/fireworksai"
 	"github.com/cavos-io/rtp-agent/adapter/fishaudio"
 	"github.com/cavos-io/rtp-agent/adapter/gladia"
+	"github.com/cavos-io/rtp-agent/adapter/gnani"
 	adaptergoogle "github.com/cavos-io/rtp-agent/adapter/google"
 	"github.com/cavos-io/rtp-agent/adapter/groq"
 	"github.com/cavos-io/rtp-agent/adapter/openai"
@@ -51,6 +52,7 @@ const (
 	providerFireworks  = "fireworks"
 	providerFishAudio  = "fishaudio"
 	providerGladia     = "gladia"
+	providerGnani      = "gnani"
 	providerGoogle     = "google"
 	providerGroq       = "groq"
 	providerOpenAI     = "openai"
@@ -145,6 +147,8 @@ type AppConfig struct {
 	STTPreferredLanguage                    string
 	STTVocabularyNames                      string
 	STTVocabularyFilterNames                string
+	STTOrganizationID                       string
+	STTUserID                               string
 	TTSProvider                             string
 	TTSModel                                string
 	TTSVoice                                string
@@ -170,6 +174,8 @@ type AppConfig struct {
 	TTSResponseFormat                       string
 	TTSBaseURL                              string
 	TTSTextType                             string
+	TTSNumberOfChannels                     *int
+	TTSSampleWidth                          *int
 	RealtimeProvider                        string
 	RealtimeModel                           string
 
@@ -187,6 +193,7 @@ type AppConfig struct {
 	FireworksAPIKey   string
 	FishAudioAPIKey   string
 	GladiaAPIKey      string
+	GnaniAPIKey       string
 
 	GoogleCredentialsFile string
 
@@ -288,6 +295,8 @@ func DefaultConfigFromEnv() AppConfig {
 		STTPreferredLanguage:                    os.Getenv("RTP_AGENT_STT_PREFERRED_LANGUAGE"),
 		STTVocabularyNames:                      os.Getenv("RTP_AGENT_STT_VOCABULARY_NAMES"),
 		STTVocabularyFilterNames:                os.Getenv("RTP_AGENT_STT_VOCABULARY_FILTER_NAMES"),
+		STTOrganizationID:                       os.Getenv("RTP_AGENT_STT_ORGANIZATION_ID"),
+		STTUserID:                               os.Getenv("RTP_AGENT_STT_USER_ID"),
 		TTSProvider:                             normalizedEnv("RTP_AGENT_TTS_PROVIDER"),
 		TTSModel:                                os.Getenv("RTP_AGENT_TTS_MODEL"),
 		TTSVoice:                                os.Getenv("RTP_AGENT_TTS_VOICE"),
@@ -313,6 +322,8 @@ func DefaultConfigFromEnv() AppConfig {
 		TTSResponseFormat:                       os.Getenv("RTP_AGENT_TTS_RESPONSE_FORMAT"),
 		TTSBaseURL:                              os.Getenv("RTP_AGENT_TTS_BASE_URL"),
 		TTSTextType:                             os.Getenv("RTP_AGENT_TTS_TEXT_TYPE"),
+		TTSNumberOfChannels:                     getenvOptionalInt("RTP_AGENT_TTS_NUMBER_OF_CHANNELS"),
+		TTSSampleWidth:                          getenvOptionalInt("RTP_AGENT_TTS_SAMPLE_WIDTH"),
 		RealtimeProvider:                        normalizedEnv("RTP_AGENT_REALTIME_PROVIDER"),
 		RealtimeModel:                           os.Getenv("RTP_AGENT_REALTIME_MODEL"),
 		OpenAIAPIKey:                            os.Getenv("OPENAI_API_KEY"),
@@ -329,6 +340,7 @@ func DefaultConfigFromEnv() AppConfig {
 		FireworksAPIKey:                         os.Getenv("FIREWORKS_API_KEY"),
 		FishAudioAPIKey:                         firstEnv("FISHAUDIO_API_KEY", "FISH_AUDIO_API_KEY"),
 		GladiaAPIKey:                            os.Getenv("GLADIA_API_KEY"),
+		GnaniAPIKey:                             os.Getenv("GNANI_API_KEY"),
 		GoogleCredentialsFile:                   firstEnv("RTP_AGENT_GOOGLE_CREDENTIALS_FILE", "GOOGLE_APPLICATION_CREDENTIALS"),
 	}
 }
@@ -796,6 +808,24 @@ func configureProviders(cfg AppConfig, a *agent.Agent) (llm.RealtimeModel, error
 			sttOpts = append(sttOpts, gladia.WithGladiaPreProcessing(boolValue(cfg.STTPreProcessingAudioEnhancer), speechThreshold))
 		}
 		a.STT = gladia.NewGladiaSTT(cfg.GladiaAPIKey, sttOpts...)
+	case providerGnani:
+		sttOpts := []gnani.STTOption{}
+		if cfg.STTBaseURL != "" {
+			sttOpts = append(sttOpts, gnani.WithSTTBaseURL(cfg.STTBaseURL))
+		}
+		if cfg.STTLanguage != "" {
+			sttOpts = append(sttOpts, gnani.WithSTTLanguage(cfg.STTLanguage))
+		}
+		if cfg.STTSampleRate != nil {
+			sttOpts = append(sttOpts, gnani.WithSTTSampleRate(*cfg.STTSampleRate))
+		}
+		if cfg.STTOrganizationID != "" {
+			sttOpts = append(sttOpts, gnani.WithSTTOrganizationID(cfg.STTOrganizationID))
+		}
+		if cfg.STTUserID != "" {
+			sttOpts = append(sttOpts, gnani.WithSTTUserID(cfg.STTUserID))
+		}
+		a.STT = gnani.NewSTT(cfg.GnaniAPIKey, sttOpts...)
 	case providerAssemblyAI:
 		sttOpts := []assemblyai.AssemblyAISTTOption{}
 		if cfg.STTBaseURL != "" {
@@ -1041,6 +1071,36 @@ func configureProviders(cfg AppConfig, a *agent.Agent) (llm.RealtimeModel, error
 			ttsOpts = append(ttsOpts, fishaudio.WithFishAudioTTSChunkLength(*cfg.TTSChunkLength))
 		}
 		a.TTS = fishaudio.NewFishAudioTTS(cfg.FishAudioAPIKey, cfg.TTSVoice, ttsOpts...)
+	case providerGnani:
+		ttsOpts := []gnani.Option{}
+		if cfg.TTSBaseURL != "" {
+			ttsOpts = append(ttsOpts, gnani.WithBaseURL(cfg.TTSBaseURL))
+		}
+		if cfg.TTSVoice != "" {
+			ttsOpts = append(ttsOpts, gnani.WithVoice(cfg.TTSVoice))
+		}
+		if cfg.TTSModel != "" {
+			ttsOpts = append(ttsOpts, gnani.WithModel(cfg.TTSModel))
+		}
+		if cfg.TTSSampleRate != nil {
+			ttsOpts = append(ttsOpts, gnani.WithSampleRate(*cfg.TTSSampleRate))
+		}
+		if cfg.TTSEncoding != "" {
+			ttsOpts = append(ttsOpts, gnani.WithEncoding(cfg.TTSEncoding))
+		}
+		if cfg.TTSResponseFormat != "" {
+			ttsOpts = append(ttsOpts, gnani.WithContainer(cfg.TTSResponseFormat))
+		}
+		if cfg.TTSNumberOfChannels != nil {
+			ttsOpts = append(ttsOpts, gnani.WithNumChannels(*cfg.TTSNumberOfChannels))
+		}
+		if cfg.TTSSampleWidth != nil {
+			ttsOpts = append(ttsOpts, gnani.WithSampleWidth(*cfg.TTSSampleWidth))
+		}
+		if cfg.TTSLanguage != "" {
+			ttsOpts = append(ttsOpts, gnani.WithLanguage(cfg.TTSLanguage))
+		}
+		a.TTS = gnani.NewTTS(cfg.GnaniAPIKey, ttsOpts...)
 	case providerCambai:
 		ttsOpts := []cambai.CambaiTTSOption{}
 		if cfg.TTSBaseURL != "" {
