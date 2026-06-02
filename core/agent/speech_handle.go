@@ -68,6 +68,9 @@ type SpeechHandle struct {
 }
 
 func NewSpeechHandle(allowInterruptions bool, inputDetails InputDetails) *SpeechHandle {
+	if inputDetails.Modality == "" {
+		inputDetails = DefaultInputDetails()
+	}
 	return &SpeechHandle{
 		ID:                 "speech_" + uuid.NewString()[:12],
 		AllowInterruptions: allowInterruptions,
