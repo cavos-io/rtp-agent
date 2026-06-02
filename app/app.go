@@ -47,6 +47,7 @@ import (
 	"github.com/cavos-io/rtp-agent/adapter/rtzr"
 	"github.com/cavos-io/rtp-agent/adapter/sarvam"
 	"github.com/cavos-io/rtp-agent/adapter/silero"
+	"github.com/cavos-io/rtp-agent/adapter/simli"
 	"github.com/cavos-io/rtp-agent/adapter/simplismart"
 	"github.com/cavos-io/rtp-agent/adapter/slng"
 	"github.com/cavos-io/rtp-agent/adapter/smallestai"
@@ -103,6 +104,7 @@ const (
 	providerRtzr         = "rtzr"
 	providerSarvam       = "sarvam"
 	providerSilero       = "silero"
+	providerSimli        = "simli"
 	providerSimplismart  = "simplismart"
 	providerSLNG         = "slng"
 	providerSmallestAI   = "smallestai"
@@ -328,6 +330,7 @@ type AppConfig struct {
 	RtzrClientSecret            string
 	RtzrAccessToken             string
 	SarvamAPIKey                string
+	SimliAPIKey                 string
 	SimplismartAPIKey           string
 	SmallestAIAPIKey            string
 	SLNGAPIKey                  string
@@ -566,6 +569,7 @@ func DefaultConfigFromEnv() AppConfig {
 		RtzrClientSecret:                        os.Getenv("RTZR_CLIENT_SECRET"),
 		RtzrAccessToken:                         os.Getenv("RTZR_ACCESS_TOKEN"),
 		SarvamAPIKey:                            os.Getenv("SARVAM_API_KEY"),
+		SimliAPIKey:                             os.Getenv("SIMLI_API_KEY"),
 		SimplismartAPIKey:                       os.Getenv("SIMPLISMART_API_KEY"),
 		SmallestAIAPIKey:                        os.Getenv("SMALLESTAI_API_KEY"),
 		SLNGAPIKey:                              os.Getenv("SLNG_API_KEY"),
@@ -741,6 +745,8 @@ func configureProviders(cfg AppConfig, a *agent.Agent) (llm.RealtimeModel, error
 			return nil, fmt.Errorf("invalid sarvam LLM configuration")
 		}
 		a.LLM = provider
+	case providerSimli:
+		a.LLM = simli.NewSimliLLM(cfg.SimliAPIKey, cfg.LLMModel)
 	case providerSimplismart:
 		a.LLM = simplismart.NewSimplismartLLM(cfg.SimplismartAPIKey, cfg.LLMModel)
 	case providerSmallestAI:
