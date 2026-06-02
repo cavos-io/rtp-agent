@@ -63,6 +63,22 @@ func TestDefaultConfigFromEnvSelectsPerplexityLLM(t *testing.T) {
 	}
 }
 
+func TestDefaultConfigFromEnvSelectsNvidiaLLM(t *testing.T) {
+	t.Setenv("NVIDIA_API_KEY", "test-nvidia-key")
+	t.Setenv("RTP_AGENT_LLM_PROVIDER", "nvidia")
+
+	app, err := NewApp(DefaultConfigFromEnv())
+	if err != nil {
+		t.Fatalf("NewApp() error = %v", err)
+	}
+	if app.Session == nil || app.Session.LLM == nil {
+		t.Fatal("Session LLM is nil")
+	}
+	if got := llm.Label(app.Session.LLM); got != "nvidia.NvidiaLLM" {
+		t.Fatalf("LLM label = %q, want nvidia.NvidiaLLM", got)
+	}
+}
+
 func TestDefaultConfigFromEnvSelectsAssemblyAISTT(t *testing.T) {
 	t.Setenv("ASSEMBLYAI_API_KEY", "test-assemblyai-key")
 	t.Setenv("RTP_AGENT_STT_PROVIDER", "assemblyai")
