@@ -16,6 +16,7 @@ import (
 	"github.com/livekit/protocol/auth"
 	"github.com/livekit/protocol/livekit"
 	lksdk "github.com/livekit/server-sdk-go/v2"
+	"google.golang.org/protobuf/types/known/emptypb"
 )
 
 type JobAcceptArguments struct {
@@ -95,9 +96,18 @@ func (p *JobProcess) HTTPProxy() string {
 	return p.httpProxy
 }
 
+type JobRoomServiceAPI interface {
+	DeleteRoom(context.Context, *livekit.DeleteRoomRequest) (*livekit.DeleteRoomResponse, error)
+}
+
+type JobSIPAPI interface {
+	CreateSIPParticipant(context.Context, *livekit.CreateSIPParticipantRequest) (*livekit.SIPParticipantInfo, error)
+	TransferSIPParticipant(context.Context, *livekit.TransferSIPParticipantRequest) (*emptypb.Empty, error)
+}
+
 type JobAPI struct {
-	RoomService *lksdk.RoomServiceClient
-	SIP         *lksdk.SIPClient
+	RoomService JobRoomServiceAPI
+	SIP         JobSIPAPI
 }
 
 func NewJobAPI(url string, apiKey string, apiSecret string) *JobAPI {
@@ -813,7 +823,7 @@ func (c *JobContext) TransferSIPParticipantByParticipant(ctx context.Context, pa
 	if err != nil {
 		return err
 	}
-	playDialtone := false
+	playDialtone := true
 	if len(playDialtones) > 0 {
 		playDialtone = playDialtones[0]
 	}

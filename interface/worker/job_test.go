@@ -15,6 +15,7 @@ import (
 	"github.com/livekit/protocol/auth"
 	"github.com/livekit/protocol/livekit"
 	lksdk "github.com/livekit/server-sdk-go/v2"
+	"google.golang.org/protobuf/types/known/emptypb"
 )
 
 func TestJobContextShutdownRunsCallbacks(t *testing.T) {
@@ -1108,6 +1109,40 @@ func TestJobContextTransferSIPParticipantRequestMatchesReferenceFields(t *testin
 	if !req.PlayDialtone {
 		t.Fatal("TransferSIPParticipantRequest.PlayDialtone = false, want true")
 	}
+}
+
+func TestJobContextTransferSIPParticipantDefaultsPlayDialtone(t *testing.T) {
+	ctx := NewJobContext(
+		&livekit.Job{Id: "job_sip_transfer", Room: &livekit.Room{Name: "room-a"}},
+		"",
+		"",
+		"",
+	)
+	sip := &fakeJobSIPAPI{}
+	ctx.api = &JobAPI{SIP: sip}
+
+	if err := ctx.TransferSIPParticipant(context.Background(), "caller-a", "+15557654321"); err != nil {
+		t.Fatalf("TransferSIPParticipant() error = %v", err)
+	}
+	if sip.transferRequest == nil {
+		t.Fatal("TransferSIPParticipant() did not call SIP transfer API")
+	}
+	if !sip.transferRequest.PlayDialtone {
+		t.Fatal("TransferSIPParticipant() default PlayDialtone = false, want true")
+	}
+}
+
+type fakeJobSIPAPI struct {
+	transferRequest *livekit.TransferSIPParticipantRequest
+}
+
+func (f *fakeJobSIPAPI) CreateSIPParticipant(context.Context, *livekit.CreateSIPParticipantRequest) (*livekit.SIPParticipantInfo, error) {
+	return &livekit.SIPParticipantInfo{}, nil
+}
+
+func (f *fakeJobSIPAPI) TransferSIPParticipant(_ context.Context, req *livekit.TransferSIPParticipantRequest) (*emptypb.Empty, error) {
+	f.transferRequest = req
+	return &emptypb.Empty{}, nil
 }
 
 func TestTransferSIPParticipantIdentityAcceptsString(t *testing.T) {
