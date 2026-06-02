@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"strings"
 	"sync"
 	"time"
 
@@ -104,6 +105,34 @@ func PerformTTSInference(ctx context.Context, t tts.TTS, textCh <-chan string, o
 	var options TTSInferenceOptions
 	for _, opt := range opts {
 		opt(&options)
+	}
+
+	if !t.Capabilities().Streaming {
+		go func() {
+			defer close(data.AudioCh)
+
+			var text strings.Builder
+			for chunk := range textCh {
+				text.WriteString(chunk)
+			}
+			transformedText := strings.TrimSpace(tts.ApplyTextTransforms(text.String()))
+			if transformedText == "" {
+				return
+			}
+
+			startTime := time.Now()
+			stream, err := t.Synthesize(ctx, transformedText)
+			if err != nil {
+				return
+			}
+			frame, err := tts.Collect(stream)
+			if err != nil || frame == nil {
+				return
+			}
+			data.TTFB = time.Since(startTime)
+			data.AudioCh <- frame
+		}()
+		return data, nil
 	}
 
 	stream, err := t.Stream(ctx)

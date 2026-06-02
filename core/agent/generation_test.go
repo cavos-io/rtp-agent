@@ -189,6 +189,47 @@ func TestPerformTTSInferenceFiltersMarkdownAcrossChunks(t *testing.T) {
 	}
 }
 
+func TestPerformTTSInferenceUsesSynthesizeForNonStreamingTTS(t *testing.T) {
+	provider := &fakeGenerationChunkedTTS{
+		stream: &fakeGenerationChunkedStream{
+			frames: []*model.AudioFrame{
+				{
+					Data:              []byte("chunked"),
+					SampleRate:        24000,
+					NumChannels:       1,
+					SamplesPerChannel: 3,
+				},
+			},
+		},
+	}
+	textCh := make(chan string, 2)
+	textCh <- "Say **he"
+	textCh <- "llo** 😊"
+	close(textCh)
+
+	data, err := PerformTTSInference(context.Background(), provider, textCh)
+	if err != nil {
+		t.Fatalf("PerformTTSInference error = %v", err)
+	}
+
+	frame, ok := <-data.AudioCh
+	if !ok {
+		t.Fatal("AudioCh closed before audio, want synthesized audio frame")
+	}
+	if string(frame.Data) != "chunked" {
+		t.Fatalf("audio data = %q, want chunked", frame.Data)
+	}
+	if provider.synthesizeText != "Say hello" {
+		t.Fatalf("synthesize text = %q, want transformed text", provider.synthesizeText)
+	}
+	if !provider.stream.closed {
+		t.Fatal("chunked stream was not closed")
+	}
+	if _, ok := <-data.AudioCh; ok {
+		t.Fatal("AudioCh produced extra frame")
+	}
+}
+
 func TestPerformTTSInferenceUsesSentenceStreamPacerWhenEnabled(t *testing.T) {
 	providerStream := newPacedGenerationTTSStream()
 	provider := &fakeGenerationTTS{stream: providerStream}
@@ -372,6 +413,50 @@ func (f *fakeGenerationTTS) Synthesize(context.Context, string) (tts.ChunkedStre
 
 func (f *fakeGenerationTTS) Stream(context.Context) (tts.SynthesizeStream, error) {
 	return f.stream, nil
+}
+
+type fakeGenerationChunkedTTS struct {
+	stream         *fakeGenerationChunkedStream
+	synthesizeText string
+}
+
+func (f *fakeGenerationChunkedTTS) Label() string { return "fake-generation-chunked-tts" }
+
+func (f *fakeGenerationChunkedTTS) Capabilities() tts.TTSCapabilities {
+	return tts.TTSCapabilities{Streaming: false}
+}
+
+func (f *fakeGenerationChunkedTTS) SampleRate() int { return 24000 }
+
+func (f *fakeGenerationChunkedTTS) NumChannels() int { return 1 }
+
+func (f *fakeGenerationChunkedTTS) Synthesize(_ context.Context, text string) (tts.ChunkedStream, error) {
+	f.synthesizeText = text
+	return f.stream, nil
+}
+
+func (f *fakeGenerationChunkedTTS) Stream(context.Context) (tts.SynthesizeStream, error) {
+	return nil, errors.New("stream should not be called")
+}
+
+type fakeGenerationChunkedStream struct {
+	frames []*model.AudioFrame
+	index  int
+	closed bool
+}
+
+func (s *fakeGenerationChunkedStream) Next() (*tts.SynthesizedAudio, error) {
+	if s.index >= len(s.frames) {
+		return nil, io.EOF
+	}
+	frame := s.frames[s.index]
+	s.index++
+	return &tts.SynthesizedAudio{Frame: frame}, nil
+}
+
+func (s *fakeGenerationChunkedStream) Close() error {
+	s.closed = true
+	return nil
 }
 
 type endInputGenerationTTSStream struct {
