@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"maps"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -31,6 +32,19 @@ type Watcher struct {
 	reloadJobs chan struct{}
 
 	activeJobsTimeout time.Duration
+}
+
+type reloadIPCServer struct {
+	net.Listener
+	path string
+}
+
+func (s *reloadIPCServer) Close() error {
+	err := s.Listener.Close()
+	if removeErr := os.Remove(s.path); err == nil && removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) {
+		err = removeErr
+	}
+	return err
 }
 
 func NewWatcher(paths []string, onChange func(), cliArgs ...*CliArgs) *Watcher {
@@ -85,19 +99,6 @@ func (w *Watcher) Stop() error {
 		return w.watcher.Close()
 	}
 	return nil
-}
-
-func (w *Watcher) beginReload() bool {
-	w.mu.Lock()
-	defer w.mu.Unlock()
-	if w.reloading {
-		return false
-	}
-	w.reloading = true
-	if w.cliArgs != nil {
-		w.cliArgs.ReloadCount++
-	}
-	return true
 }
 
 func (w *Watcher) markReloading() bool {
@@ -299,6 +300,40 @@ func (w *Watcher) runReloadIPCSession(rw io.ReadWriter) error {
 	return w.processReloadIPCMessages(rw, rw)
 }
 
+func (w *Watcher) startReloadIPCServer(ctx context.Context, path string) (io.Closer, error) {
+	if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return nil, err
+	}
+	listener, err := net.Listen("unix", path)
+	if err != nil {
+		return nil, err
+	}
+	server := &reloadIPCServer{Listener: listener, path: path}
+	go func() {
+		<-ctx.Done()
+		_ = server.Close()
+	}()
+	go func() {
+		for {
+			conn, err := listener.Accept()
+			if err != nil {
+				if ctx.Err() != nil || errors.Is(err, net.ErrClosed) {
+					return
+				}
+				logger.Logger.Warnw("reload IPC accept failed", err)
+				return
+			}
+			go func() {
+				defer conn.Close()
+				if err := w.runReloadIPCSession(conn); err != nil {
+					logger.Logger.Warnw("reload IPC session failed", err)
+				}
+			}()
+		}
+	}()
+	return server, nil
+}
+
 func (w *Watcher) triggerReload() bool {
 	if w.onChange == nil {
 		return false
@@ -358,6 +393,17 @@ func RunWithDevMode(args []string) error {
 	if err != nil {
 		return err
 	}
+	reloadDir, err := os.MkdirTemp("/tmp", "rtp-agent-reload-*")
+	if err != nil {
+		reloadDir, err = os.MkdirTemp("", "rtp-agent-reload-*")
+	}
+	if err != nil {
+		return err
+	}
+	defer os.RemoveAll(reloadDir)
+	reloadIPCPath := filepath.Join(reloadDir, "reload.sock")
+	reloadCtx, stopReloadIPC := context.WithCancel(context.Background())
+	defer stopReloadIPC()
 
 	startCmd := func() {
 		mu.Lock()
@@ -379,6 +425,7 @@ func RunWithDevMode(args []string) error {
 		cmd.Stdout = os.Stdout
 		cmd.Stderr = os.Stderr
 		cmd.Stdin = os.Stdin
+		cmd.Env = append(os.Environ(), "RTP_AGENT_RELOAD_IPC="+reloadIPCPath)
 
 		err := cmd.Start()
 		if err != nil {
@@ -386,12 +433,15 @@ func RunWithDevMode(args []string) error {
 		}
 	}
 
-	var w *Watcher
-	w = newDevModeWatcher(&cliArgs, func() {
+	w := newDevModeWatcher(&cliArgs, func() {
 		logger.Logger.Infow("Triggering rebuild and restart")
 		startCmd()
-		w.Reloaded()
 	})
+	reloadIPC, err := w.startReloadIPCServer(reloadCtx, reloadIPCPath)
+	if err != nil {
+		return err
+	}
+	defer reloadIPC.Close()
 
 	if err := w.Start(); err != nil {
 		return err

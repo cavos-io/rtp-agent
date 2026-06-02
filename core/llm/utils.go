@@ -397,6 +397,30 @@ func ExecuteFunctionCall(ctx context.Context, toolCall *FunctionToolCall, toolCt
 	if args == "" {
 		args = "{}"
 	}
+	parsedArgs, err := ParseFunctionArguments(args)
+	if err != nil {
+		fncCall := FunctionCall{
+			CallID:    toolCall.CallID,
+			Name:      toolCall.Name,
+			Arguments: args,
+			Extra:     toolCall.Extra,
+			CreatedAt: time.Now(),
+		}
+		return MakeFunctionCallOutput(fncCall, nil, err)
+	}
+	encodedArgs, err := json.Marshal(parsedArgs)
+	if err != nil {
+		fncCall := FunctionCall{
+			CallID:    toolCall.CallID,
+			Name:      toolCall.Name,
+			Arguments: args,
+			Extra:     toolCall.Extra,
+			CreatedAt: time.Now(),
+		}
+		return MakeFunctionCallOutput(fncCall, nil, err)
+	}
+	args = string(encodedArgs)
+
 	fncCall := FunctionCall{
 		CallID:    toolCall.CallID,
 		Name:      toolCall.Name,

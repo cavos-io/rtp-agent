@@ -78,6 +78,32 @@ func TestPerformLLMInferenceTracksGeneratedExtra(t *testing.T) {
 	}
 }
 
+func TestPerformLLMInferenceFlattensToolsBeforeChat(t *testing.T) {
+	l := &fakeGenerationLLM{
+		stream: &fakeGenerationLLMStream{},
+	}
+	tools := []llm.Tool{
+		&fakeGenerationTool{name: "zebra"},
+		&fakeGenerationTool{name: "alpha"},
+	}
+
+	data, err := PerformLLMInference(context.Background(), l, llm.NewChatContext(), tools)
+	if err != nil {
+		t.Fatalf("PerformLLMInference error = %v, want nil", err)
+	}
+	drainStrings(data.TextCh)
+	if len(l.calls) != 1 {
+		t.Fatalf("len(Chat calls) = %d, want 1", len(l.calls))
+	}
+	gotTools := l.calls[0].Tools
+	if len(gotTools) != 2 {
+		t.Fatalf("len(Chat tools) = %d, want 2", len(gotTools))
+	}
+	if gotTools[0].Name() != "alpha" || gotTools[1].Name() != "zebra" {
+		t.Fatalf("Chat tools = [%s, %s], want flattened alpha/zebra order", gotTools[0].Name(), gotTools[1].Name())
+	}
+}
+
 func TestPerformToolExecutionsUsesToolErrorMessage(t *testing.T) {
 	output := executeOneToolCall(t, &fakeGenerationTool{
 		name: "lookup",

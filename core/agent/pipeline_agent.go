@@ -144,7 +144,11 @@ func (va *PipelineAgent) sttLoop(stream stt.RecognizeStream) {
 		if err != nil {
 			if err != io.EOF {
 				logger.Logger.Errorw("STT stream error", err)
-				va.emitError(err, va.stt)
+				label := "stt"
+				if va.stt != nil {
+					label = va.stt.Label()
+				}
+				va.emitError(stt.NewSTTError(label, err, false), va.stt)
 			}
 			return
 		}
@@ -402,13 +406,30 @@ func (va *PipelineAgent) forwardAgentOutputTranscription(session *AgentSession, 
 }
 
 func resolveToolsByID(tools []llm.Tool, ids []string) ([]llm.Tool, error) {
+	toolItems := make([]interface{}, 0, len(tools))
+	for _, tool := range tools {
+		toolItems = append(toolItems, tool)
+	}
+	toolCtx := &llm.ToolContext{}
+	if err := toolCtx.UpdateTools(toolItems); err != nil {
+		return nil, err
+	}
+
 	if len(ids) == 0 {
-		return tools, nil
+		return toolCtx.Flatten(), nil
 	}
 
 	byID := make(map[string]llm.Tool, len(tools))
 	available := make([]string, 0, len(tools))
-	for _, tool := range tools {
+	for _, tool := range toolCtx.FunctionTools() {
+		id := tool.ID()
+		if id == "" {
+			id = tool.Name()
+		}
+		byID[id] = tool
+		available = append(available, id)
+	}
+	for _, tool := range toolCtx.ProviderTools() {
 		id := tool.ID()
 		if id == "" {
 			id = tool.Name()

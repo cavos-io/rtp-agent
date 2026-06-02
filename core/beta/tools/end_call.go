@@ -3,8 +3,10 @@ package tools
 import (
 	"context"
 	"fmt"
+	"reflect"
 
 	"github.com/cavos-io/rtp-agent/core/agent"
+	"github.com/cavos-io/rtp-agent/core/llm"
 )
 
 type Shutter interface {
@@ -83,11 +85,10 @@ func (t *EndCallTool) Description() string {
 	return desc
 }
 
+type endCallArgs struct{}
+
 func (t *EndCallTool) Parameters() map[string]any {
-	return map[string]any{
-		"type":       "object",
-		"properties": map[string]any{},
-	}
+	return llm.GenerateStrictJSONSchema(reflect.TypeOf(endCallArgs{}))
 }
 
 func (t *EndCallTool) Execute(ctx context.Context, args string) (string, error) {

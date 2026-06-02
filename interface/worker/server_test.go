@@ -1628,6 +1628,65 @@ func TestAgentServerRunReloadIPCSessionRequestsThenProcessesMessages(t *testing.
 	}
 }
 
+func TestAgentServerStartReloadIPCSessionFromEnvDialsUnixSocket(t *testing.T) {
+	socketPath := tempWorkerUnixSocketPath(t)
+	listener, err := net.Listen("unix", socketPath)
+	if err != nil {
+		t.Fatalf("Listen unix: %v", err)
+	}
+	defer listener.Close()
+	t.Setenv("RTP_AGENT_RELOAD_IPC", socketPath)
+
+	server := NewAgentServer(WorkerOptions{})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	server.startReloadIPCSessionFromEnv(ctx)
+
+	connCh := make(chan net.Conn, 1)
+	errCh := make(chan error, 1)
+	go func() {
+		conn, err := listener.Accept()
+		if err != nil {
+			errCh <- err
+			return
+		}
+		connCh <- conn
+	}()
+
+	var conn net.Conn
+	select {
+	case conn = <-connCh:
+	case err := <-errCh:
+		t.Fatalf("Accept reload IPC connection: %v", err)
+	case <-time.After(time.Second):
+		t.Fatal("worker did not dial reload IPC socket")
+	}
+	defer conn.Close()
+
+	if err := conn.SetReadDeadline(time.Now().Add(time.Second)); err != nil {
+		t.Fatalf("SetReadDeadline: %v", err)
+	}
+	msg, err := ipc.ReadMessage(conn)
+	if err != nil {
+		t.Fatalf("ReadMessage initial reload request: %v", err)
+	}
+	if msg.Type != ipc.MessageTypeReloadJobsRequest {
+		t.Fatalf("initial request Type = %q, want %q", msg.Type, ipc.MessageTypeReloadJobsRequest)
+	}
+}
+
+func tempWorkerUnixSocketPath(t *testing.T) string {
+	t.Helper()
+	dir, err := os.MkdirTemp("/tmp", "rtp-agent-reload-test-*")
+	if err != nil {
+		t.Fatalf("MkdirTemp /tmp: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = os.RemoveAll(dir)
+	})
+	return filepath.Join(dir, "reload.sock")
+}
+
 func mustWorkerIPCMessage(t *testing.T, payload any) ipc.Message {
 	t.Helper()
 	msg, err := ipc.NewMessage(payload)
@@ -3330,6 +3389,131 @@ func TestExecuteLocalJobLaunchesThroughThreadExecutor(t *testing.T) {
 	}
 }
 
+func TestExecuteLocalJobWithExplicitIdleProcessesLaunchesThroughProcPool(t *testing.T) {
+	oldPoolFactory := newLocalProcPool
+	launchedCh := make(chan ipc.RunningJobInfo, 1)
+	releaseEntrypoint := make(chan struct{})
+	entrypointReturned := make(chan struct{})
+	releaseOnce := make(chan struct{})
+	var capturedMaxProcesses int
+	var capturedExecutorType ipc.ExecutorType
+	var capturedCloseTimeout time.Duration
+	newLocalProcPool = func(maxProcesses int, executorType ipc.ExecutorType, entrypoint func() error) localJobPool {
+		capturedMaxProcesses = maxProcesses
+		capturedExecutorType = executorType
+		return &localJobPoolStub{
+			launch: func(info ipc.RunningJobInfo) error {
+				launchedCh <- info
+				go func() {
+					<-releaseEntrypoint
+					_ = entrypoint()
+					close(entrypointReturned)
+				}()
+				return nil
+			},
+			getByJobID: func(jobID string) ipc.JobExecutor {
+				return &localJobExecutorStub{
+					id:      "pool-executor",
+					info:    &ipc.RunningJobInfo{Job: &livekit.Job{Id: jobID}},
+					started: true,
+					close: func(ctx context.Context) error {
+						select {
+						case <-entrypointReturned:
+							return nil
+						case <-ctx.Done():
+							return ctx.Err()
+						}
+					},
+				}
+			},
+			setCloseTimeout: func(timeout time.Duration) {
+				capturedCloseTimeout = timeout
+			},
+		}
+	}
+	t.Cleanup(func() {
+		newLocalProcPool = oldPoolFactory
+		select {
+		case <-releaseOnce:
+		default:
+			close(releaseOnce)
+			close(releaseEntrypoint)
+		}
+	})
+
+	server := NewAgentServer(WorkerOptions{
+		WSRL:                             "wss://local.example",
+		NumIdleProcesses:                 2,
+		NumIdleProcessesSet:              true,
+		ShutdownProcessTimeoutSeconds:    3,
+		ShutdownProcessTimeoutSecondsSet: true,
+	})
+	server.workerID = "worker-pool"
+	entrypointCh := make(chan *JobContext, 1)
+	server.entrypointFnc = func(ctx *JobContext) error {
+		entrypointCh <- ctx
+		return nil
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	doneCh := make(chan error, 1)
+	go func() {
+		doneCh <- server.ExecuteLocalJob(ctx, "room-pool", "agent-pool")
+	}()
+
+	var launched ipc.RunningJobInfo
+	select {
+	case launched = <-launchedCh:
+	case <-time.After(time.Second):
+		cancel()
+		t.Fatal("local job was not launched through proc pool")
+	}
+	if capturedMaxProcesses != 2 {
+		cancel()
+		t.Fatalf("proc pool max processes = %d, want 2", capturedMaxProcesses)
+	}
+	if capturedExecutorType != ipc.ExecutorTypeThread {
+		cancel()
+		t.Fatalf("proc pool executor type = %q, want thread", capturedExecutorType)
+	}
+	if capturedCloseTimeout != 3*time.Second {
+		cancel()
+		t.Fatalf("proc pool close timeout = %v, want 3s", capturedCloseTimeout)
+	}
+	if launched.WorkerID != "worker-pool" || launched.URL != "wss://local.example" {
+		cancel()
+		t.Fatalf("RunningJobInfo worker/url = %q/%q, want worker-pool/wss://local.example", launched.WorkerID, launched.URL)
+	}
+
+	select {
+	case <-entrypointCh:
+		t.Fatal("entrypoint ran before proc pool release")
+	default:
+	}
+	close(releaseOnce)
+	close(releaseEntrypoint)
+	select {
+	case jobCtx := <-entrypointCh:
+		if jobCtx.Job.Id != launched.Job.Id {
+			cancel()
+			t.Fatalf("entrypoint job ID = %q, want launched job %q", jobCtx.Job.Id, launched.Job.Id)
+		}
+	case <-time.After(time.Second):
+		cancel()
+		t.Fatal("local job entrypoint did not run")
+	}
+
+	cancel()
+	select {
+	case err := <-doneCh:
+		if err != nil {
+			t.Fatalf("ExecuteLocalJob() error = %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("ExecuteLocalJob() did not return after context cancellation")
+	}
+}
+
 func TestExecuteLocalJobRejectsMissingRTCSession(t *testing.T) {
 	server := NewAgentServer(WorkerOptions{})
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
@@ -4292,6 +4476,40 @@ func (e *localJobExecutorStub) LaunchRunningJob(_ context.Context, info ipc.Runn
 	e.info = &info
 	if e.launch != nil {
 		return e.launch(info)
+	}
+	return nil
+}
+
+type localJobPoolStub struct {
+	launch          func(ipc.RunningJobInfo) error
+	getByJobID      func(string) ipc.JobExecutor
+	setCloseTimeout func(time.Duration)
+	close           func() error
+}
+
+func (p *localJobPoolStub) LaunchRunningJob(_ context.Context, info ipc.RunningJobInfo) error {
+	if p.launch != nil {
+		return p.launch(info)
+	}
+	return nil
+}
+
+func (p *localJobPoolStub) GetByJobID(jobID string) ipc.JobExecutor {
+	if p.getByJobID != nil {
+		return p.getByJobID(jobID)
+	}
+	return nil
+}
+
+func (p *localJobPoolStub) SetCloseTimeout(timeout time.Duration) {
+	if p.setCloseTimeout != nil {
+		p.setCloseTimeout(timeout)
+	}
+}
+
+func (p *localJobPoolStub) Close() error {
+	if p.close != nil {
+		return p.close()
 	}
 	return nil
 }

@@ -5,7 +5,9 @@ import (
 	"context"
 	"errors"
 	"io"
+	"net"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -695,41 +697,6 @@ func TestStartArgsForDevReloadForwardsReferenceConnectionOptions(t *testing.T) {
 	}
 }
 
-func TestWatcherReloadStateIgnoresOverlappingReloads(t *testing.T) {
-	watcher := NewWatcher(nil, nil)
-
-	if !watcher.beginReload() {
-		t.Fatal("first beginReload() = false, want true")
-	}
-	if watcher.beginReload() {
-		t.Fatal("second beginReload() = true, want false while reload is active")
-	}
-
-	watcher.Reloaded()
-	if !watcher.beginReload() {
-		t.Fatal("beginReload() after Reloaded() = false, want true")
-	}
-}
-
-func TestWatcherBeginReloadIncrementsCliReloadCount(t *testing.T) {
-	args := &CliArgs{ReloadCount: 2}
-	watcher := NewWatcher(nil, nil, args)
-
-	if !watcher.beginReload() {
-		t.Fatal("beginReload() = false, want true")
-	}
-	if args.ReloadCount != 3 {
-		t.Fatalf("ReloadCount after beginReload() = %d, want 3", args.ReloadCount)
-	}
-
-	if watcher.beginReload() {
-		t.Fatal("overlapping beginReload() = true, want false")
-	}
-	if args.ReloadCount != 3 {
-		t.Fatalf("ReloadCount after overlapping beginReload() = %d, want unchanged 3", args.ReloadCount)
-	}
-}
-
 func TestWatcherTriggerReloadKeepsReloadingUntilReloaded(t *testing.T) {
 	args := &CliArgs{}
 	calls := 0
@@ -876,6 +843,34 @@ func TestWatcherTriggerReloadWaitsForActiveJobsBeforeRestart(t *testing.T) {
 	}
 }
 
+func TestWatcherTriggerReloadRequestsActiveJobsBeforeIncrementingReloadCount(t *testing.T) {
+	args := &CliArgs{ReloadCount: 3}
+	var output bytes.Buffer
+	watcher := NewWatcher(nil, func() {
+		if args.ReloadCount != 4 {
+			t.Fatalf("ReloadCount during restart = %d, want 4", args.ReloadCount)
+		}
+	}, args)
+	watcher.reloadIPC = writerFunc(func(p []byte) (int, error) {
+		if args.ReloadCount != 3 {
+			t.Fatalf("ReloadCount while requesting active jobs = %d, want 3", args.ReloadCount)
+		}
+		return output.Write(p)
+	})
+	watcher.activeJobsTimeout = time.Nanosecond
+
+	if !watcher.triggerReload() {
+		t.Fatal("triggerReload() = false, want true")
+	}
+	msg, err := ipc.ReadMessage(&output)
+	if err != nil {
+		t.Fatalf("ReadMessage ActiveJobsRequest: %v", err)
+	}
+	if msg.Type != ipc.MessageTypeActiveJobsRequest {
+		t.Fatalf("request Type = %q, want %q", msg.Type, ipc.MessageTypeActiveJobsRequest)
+	}
+}
+
 func TestWatcherStoresActiveJobsForCurrentReload(t *testing.T) {
 	args := &CliArgs{ReloadCount: 2}
 	watcher := NewWatcher(nil, nil, args)
@@ -952,7 +947,7 @@ func TestWatcherHandleReloadMessageRespondsWithActiveJobs(t *testing.T) {
 		t.Fatalf("ReloadJobsResponse.Jobs = %#v, want current job", reloadResp.Jobs)
 	}
 
-	watcher.beginReload()
+	watcher.reloading = true
 	if !watcher.reloading {
 		t.Fatal("watcher.reloading = false, want active reload before Reloaded")
 	}
@@ -1102,9 +1097,7 @@ func TestWatcherProcessReloadIPCMessagesUntilEOF(t *testing.T) {
 func TestWatcherRunReloadIPCSessionRequestsThenProcessesMessages(t *testing.T) {
 	args := &CliArgs{ReloadCount: 7}
 	watcher := NewWatcher(nil, nil, args)
-	if !watcher.beginReload() {
-		t.Fatal("beginReload() = false, want active reload")
-	}
+	watcher.reloading = true
 
 	peerReader, watcherWriter := io.Pipe()
 	watcherReader, peerWriter := io.Pipe()
@@ -1215,9 +1208,7 @@ func TestWatcherRunReloadIPCSessionHandlesTriggerReloadRequests(t *testing.T) {
 
 func TestWatcherRunReloadIPCSessionClearsReloadingOnClose(t *testing.T) {
 	watcher := NewWatcher(nil, nil)
-	if !watcher.beginReload() {
-		t.Fatal("beginReload() = false, want active reload")
-	}
+	watcher.reloading = true
 
 	peerReader, watcherWriter := io.Pipe()
 	watcherReader, peerWriter := io.Pipe()
@@ -1254,6 +1245,52 @@ func TestWatcherRunReloadIPCSessionClearsReloadingOnClose(t *testing.T) {
 	if watcher.reloading {
 		t.Fatal("watcher.reloading = true, want false after reload IPC close")
 	}
+}
+
+func TestWatcherStartReloadIPCServerRunsSessionForChildConnection(t *testing.T) {
+	args := &CliArgs{ReloadCount: 11}
+	watcher := NewWatcher(nil, nil, args)
+	socketPath := tempUnixSocketPath(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	closer, err := watcher.startReloadIPCServer(ctx, socketPath)
+	if err != nil {
+		t.Fatalf("startReloadIPCServer() error = %v", err)
+	}
+	defer closer.Close()
+
+	conn, err := net.Dial("unix", socketPath)
+	if err != nil {
+		t.Fatalf("dial reload IPC socket: %v", err)
+	}
+	defer conn.Close()
+
+	msg := readIPCMessageWithin(t, conn, time.Second, "initial reload jobs request")
+	if msg.Type != ipc.MessageTypeReloadJobsRequest {
+		t.Fatalf("initial request Type = %q, want %q", msg.Type, ipc.MessageTypeReloadJobsRequest)
+	}
+	if err := ipc.WriteMessage(conn, mustIPCMessage(t, &ipc.Reloaded{})); err != nil {
+		t.Fatalf("WriteMessage Reloaded: %v", err)
+	}
+}
+
+type writerFunc func([]byte) (int, error)
+
+func (f writerFunc) Write(p []byte) (int, error) {
+	return f(p)
+}
+
+func tempUnixSocketPath(t *testing.T) string {
+	t.Helper()
+	dir, err := os.MkdirTemp("/tmp", "rtp-agent-reload-test-*")
+	if err != nil {
+		t.Fatalf("MkdirTemp /tmp: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = os.RemoveAll(dir)
+	})
+	return filepath.Join(dir, "reload.sock")
 }
 
 func mustIPCMessage(t *testing.T, payload any) ipc.Message {

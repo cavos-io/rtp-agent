@@ -3,7 +3,9 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"strings"
 
 	"github.com/cavos-io/rtp-agent/core/llm"
@@ -72,17 +74,23 @@ Respond ONLY with a JSON object in this format:
 	if err != nil {
 		return 0.0, fmt.Errorf("LLM turn detection failed: %w", err)
 	}
-	defer stream.Close()
+
+	textStream, err := llm.NewTextStream(stream)
+	if err != nil {
+		return 0.0, fmt.Errorf("LLM turn detection text stream failed: %w", err)
+	}
+	defer textStream.Close()
 
 	var responseText string
 	for {
-		chunk, err := stream.Next()
-		if err != nil {
+		text, err := textStream.Next()
+		if errors.Is(err, io.EOF) {
 			break
 		}
-		if chunk.Delta != nil && chunk.Delta.Content != "" {
-			responseText += chunk.Delta.Content
+		if err != nil {
+			return 0.0, fmt.Errorf("LLM turn detection stream failed: %w", err)
 		}
+		responseText += text
 	}
 
 	// Clean up markdown block if present

@@ -244,6 +244,72 @@ func TestPipelineAgentGenerateReplyWithToolsFiltersChatOptions(t *testing.T) {
 	}
 }
 
+func TestPipelineAgentGenerateReplyWithToolsFiltersProviderTools(t *testing.T) {
+	chatCtx := llm.NewChatContext()
+	l := &fakeGenerationLLM{
+		stream: &fakeGenerationLLMStream{
+			chunks: []*llm.ChatChunk{
+				{Delta: &llm.ChoiceDelta{Content: "provider tool only"}},
+			},
+		},
+	}
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	providerTool := &fakeProviderGenerationTool{fakeGenerationTool: fakeGenerationTool{name: "web_search"}}
+	session.Tools = []llm.Tool{
+		&fakeGenerationTool{name: "lookup"},
+		providerTool,
+	}
+	agent := NewPipelineAgent(nil, nil, l, &fakePipelineTTS{}, chatCtx)
+	agent.session = session
+	agent.ctx = context.Background()
+
+	agent.generateReplyWithOptions(pipelineReplyOptions{
+		Tools: []string{"web_search"},
+	})
+
+	if len(l.calls) != 1 {
+		t.Fatalf("LLM Chat calls = %d, want 1", len(l.calls))
+	}
+	if len(l.calls[0].Tools) != 1 || l.calls[0].Tools[0] != providerTool {
+		t.Fatalf("LLM tools = %#v, want only provider tool", l.calls[0].Tools)
+	}
+}
+
+func TestPipelineAgentGenerateReplyWithToolsRejectsDuplicateFunctionNames(t *testing.T) {
+	chatCtx := llm.NewChatContext()
+	l := &fakeGenerationLLM{
+		stream: &fakeGenerationLLMStream{
+			chunks: []*llm.ChatChunk{
+				{Delta: &llm.ChoiceDelta{Content: "should not run"}},
+			},
+		},
+	}
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	session.Tools = []llm.Tool{
+		&fakeIDGenerationTool{id: "primary_lookup", name: "lookup"},
+		&fakeIDGenerationTool{id: "backup_lookup", name: "lookup"},
+	}
+	agent := NewPipelineAgent(nil, nil, l, &fakePipelineTTS{}, chatCtx)
+	agent.session = session
+	agent.ctx = context.Background()
+
+	agent.generateReplyWithOptions(pipelineReplyOptions{
+		Tools: []string{"primary_lookup"},
+	})
+
+	if len(l.calls) != 0 {
+		t.Fatalf("LLM Chat calls = %d, want no call when tools have duplicate function names", len(l.calls))
+	}
+	select {
+	case ev := <-session.ErrorEvents():
+		if ev.Error == nil || !strings.Contains(ev.Error.Error(), "duplicate function name: lookup") {
+			t.Fatalf("Error = %v, want duplicate function name error", ev.Error)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("ErrorEvents did not receive duplicate function name error")
+	}
+}
+
 func TestPipelineAgentEmitsConversationItemAddedForAssistantMessage(t *testing.T) {
 	chatCtx := llm.NewChatContext()
 	l := &fakeGenerationLLM{
@@ -423,6 +489,13 @@ func TestPipelineAgentEmitsErrorEventForSTTStreamError(t *testing.T) {
 	case ev := <-session.ErrorEvents():
 		if !errors.Is(ev.Error, cause) {
 			t.Fatalf("Error = %v, want %v", ev.Error, cause)
+		}
+		var sttErr *stt.STTError
+		if !errors.As(ev.Error, &sttErr) {
+			t.Fatalf("Error = %T, want *stt.STTError", ev.Error)
+		}
+		if sttErr.Label != "fake-stt" || sttErr.Recoverable {
+			t.Fatalf("STTError = %#v, want fake-stt unrecoverable error", sttErr)
 		}
 		if ev.Source != source {
 			t.Fatalf("Source = %#v, want STT source", ev.Source)
@@ -731,6 +804,29 @@ func (f *failingPipelineLLM) Chat(context.Context, *llm.ChatContext, ...llm.Chat
 }
 
 func (f *failingPipelineLLM) Label() string { return f.label }
+
+type fakeProviderGenerationTool struct {
+	fakeGenerationTool
+}
+
+func (f *fakeProviderGenerationTool) IsProviderTool() bool { return true }
+
+type fakeIDGenerationTool struct {
+	id   string
+	name string
+}
+
+func (f *fakeIDGenerationTool) ID() string { return f.id }
+
+func (f *fakeIDGenerationTool) Name() string { return f.name }
+
+func (f *fakeIDGenerationTool) Description() string { return "" }
+
+func (f *fakeIDGenerationTool) Parameters() map[string]any { return nil }
+
+func (f *fakeIDGenerationTool) Execute(context.Context, string) (string, error) {
+	return "", nil
+}
 
 type fakePipelineTTSStream struct {
 	text   strings.Builder
