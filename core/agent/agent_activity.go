@@ -783,13 +783,25 @@ func (a *AgentActivity) clearPendingUserTurn() {
 }
 
 func (a *AgentActivity) turnDetectionMode() TurnDetectionMode {
+	mode := ""
 	if a.Agent.TurnDetection != "" {
-		return a.Agent.TurnDetection
+		mode = string(a.Agent.TurnDetection)
+	} else if a.Session != nil {
+		mode = string(a.Session.Options.TurnDetection)
 	}
-	if a.Session != nil {
-		return a.Session.Options.TurnDetection
+	switch TurnDetectionMode(mode) {
+	case TurnDetectionModeSTT:
+		if (a.Agent == nil || a.Agent.STT == nil) && (a.Session == nil || a.Session.STT == nil) {
+			logger.Logger.Warnw("turn_detection is set to stt, but no STT model is provided", nil)
+			return ""
+		}
+	case TurnDetectionModeVAD:
+		if (a.Agent == nil || a.Agent.VAD == nil) && (a.Session == nil || a.Session.VAD == nil) {
+			logger.Logger.Warnw("turn_detection is set to vad, but no VAD model is provided", nil)
+			return ""
+		}
 	}
-	return ""
+	return TurnDetectionMode(mode)
 }
 
 func (a *AgentActivity) runEOUDetection(info EndOfTurnInfo) {

@@ -395,6 +395,7 @@ func TestAgentSessionUpdateOptionsAffectsActiveEndpointingDelay(t *testing.T) {
 
 func TestAgentSessionUpdateOptionsAffectsActiveTurnDetection(t *testing.T) {
 	agent := &turnCompletedAgent{Agent: NewAgent("test"), turns: make(chan *llm.ChatMessage, 1)}
+	agent.STT = &fakePipelineSTT{}
 	session := NewAgentSession(agent, nil, AgentSessionOptions{MinEndpointingDelay: 0.01})
 	activity := NewAgentActivity(agent, session)
 	defer activity.Stop()
@@ -422,6 +423,40 @@ func TestAgentSessionUpdateOptionsAffectsActiveTurnDetection(t *testing.T) {
 		}
 	case <-time.After(100 * time.Millisecond):
 		t.Fatal("OnUserTurnCompleted was not called after session turn detection update")
+	}
+}
+
+func TestAgentActivityIgnoresSTTTurnDetectionWithoutSTT(t *testing.T) {
+	agent := &turnCompletedAgent{Agent: NewAgent("test"), turns: make(chan *llm.ChatMessage, 1)}
+	agent.TurnDetection = TurnDetectionModeSTT
+	session := NewAgentSession(agent, nil, AgentSessionOptions{MinEndpointingDelay: 0.01})
+	activity := NewAgentActivity(agent, session)
+	defer activity.Stop()
+
+	activity.OnFinalTranscript(&stt.SpeechEvent{
+		Alternatives: []stt.SpeechData{{Text: "missing stt should not complete", Confidence: 0.9}},
+	})
+
+	select {
+	case msg := <-agent.turns:
+		t.Fatalf("OnUserTurnCompleted called without STT configured with %q", msg.TextContent())
+	case <-time.After(20 * time.Millisecond):
+	}
+}
+
+func TestAgentActivityIgnoresVADTurnDetectionWithoutVAD(t *testing.T) {
+	agent := &turnCompletedAgent{Agent: NewAgent("test"), turns: make(chan *llm.ChatMessage, 1)}
+	agent.TurnDetection = TurnDetectionModeVAD
+	session := NewAgentSession(agent, nil, AgentSessionOptions{MinEndpointingDelay: 0.01})
+	activity := NewAgentActivity(agent, session)
+	defer activity.Stop()
+
+	activity.OnEndOfSpeech(nil)
+
+	select {
+	case msg := <-agent.turns:
+		t.Fatalf("OnUserTurnCompleted called without VAD configured with %q", msg.TextContent())
+	case <-time.After(20 * time.Millisecond):
 	}
 }
 
@@ -993,6 +1028,7 @@ func TestAgentActivityCommitUserTurnSkipsReplyWhenLLMMissing(t *testing.T) {
 func TestAgentActivityAutomaticTurnCompletionConsumesPendingTranscript(t *testing.T) {
 	agent := &turnCompletedAgent{Agent: NewAgent("test"), turns: make(chan *llm.ChatMessage, 2)}
 	agent.TurnDetection = TurnDetectionModeSTT
+	agent.STT = &fakePipelineSTT{}
 	session := NewAgentSession(agent, nil, AgentSessionOptions{MinEndpointingDelay: 0.01})
 	activity := NewAgentActivity(agent, session)
 	defer activity.Stop()
