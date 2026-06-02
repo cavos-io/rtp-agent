@@ -24,6 +24,7 @@ import (
 	"github.com/cavos-io/rtp-agent/adapter/fal"
 	"github.com/cavos-io/rtp-agent/adapter/fireworksai"
 	"github.com/cavos-io/rtp-agent/adapter/fishaudio"
+	"github.com/cavos-io/rtp-agent/adapter/gladia"
 	adaptergoogle "github.com/cavos-io/rtp-agent/adapter/google"
 	"github.com/cavos-io/rtp-agent/adapter/groq"
 	"github.com/cavos-io/rtp-agent/adapter/openai"
@@ -49,6 +50,7 @@ const (
 	providerFal        = "fal"
 	providerFireworks  = "fireworks"
 	providerFishAudio  = "fishaudio"
+	providerGladia     = "gladia"
 	providerGoogle     = "google"
 	providerGroq       = "groq"
 	providerOpenAI     = "openai"
@@ -59,101 +61,117 @@ type AppConfig struct {
 	WorkerOptions worker.WorkerOptions
 	Instructions  string
 
-	AWSRegion                       string
-	LLMProvider                     string
-	LLMModel                        string
-	LLMBaseURL                      string
-	STTProvider                     string
-	STTModel                        string
-	STTLanguage                     string
-	STTEncoding                     string
-	STTChainID                      string
-	STTDetectLanguage               bool
-	STTPunctuate                    *bool
-	STTSpokenPunctuation            *bool
-	STTProfanityFilter              *bool
-	STTTagAudioEvents               *bool
-	STTIncludeTimestamps            *bool
-	STTInterimResults               *bool
-	STTSmartFormat                  *bool
-	STTNoDelay                      *bool
-	STTEndpointingMS                *int
-	STTDiarization                  *bool
-	STTFillerWords                  *bool
-	STTVADEvents                    *bool
-	STTNumerals                     *bool
-	STTMIPOptOut                    *bool
-	STTKeywords                     []deepgram.DeepgramKeyword
-	STTRedact                       []string
-	STTTags                         []string
-	STTTask                         string
-	STTChunkLevel                   string
-	STTVersion                      string
-	STTTemperature                  *float64
-	STTSkipVAD                      *bool
-	STTVADKwargs                    map[string]any
-	STTTextTimeoutSeconds           *float64
-	STTTimestampGranularities       []string
-	STTPrompt                       string
-	STTBaseURL                      string
-	STTSampleRate                   *int
-	STTBufferSizeSeconds            *float64
-	STTAudioChunkDurationMS         *int
-	STTMinTurnSilence               *int
-	STTMaxTurnSilence               *int
-	STTEndOfTurnConfidenceThreshold *float64
-	STTFormatTurns                  *bool
-	STTLanguageDetection            *bool
-	STTContinuousPartials           *bool
-	STTInterruptionDelay            *int
-	STTKeytermsPrompt               []string
-	STTVADThreshold                 *float64
-	STTVADSilenceThresholdSeconds   *float64
-	STTSpeakerLabels                *bool
-	STTMaxSpeakers                  *int
-	STTDomain                       string
-	STTVocabularyName               string
-	STTSessionID                    string
-	STTVocabularyFilterMethod       string
-	STTVocabularyFilterName         string
-	STTEnableChannelIdentification  *bool
-	STTNumberOfChannels             *int
-	STTEnablePartialStabilization   *bool
-	STTPartialResultsStability      string
-	STTLanguageModelName            string
-	STTIdentifyLanguage             *bool
-	STTIdentifyMultipleLanguages    *bool
-	STTLanguageOptions              string
-	STTPreferredLanguage            string
-	STTVocabularyNames              string
-	STTVocabularyFilterNames        string
-	TTSProvider                     string
-	TTSModel                        string
-	TTSVoice                        string
-	TTSLanguage                     string
-	TTSEncoding                     string
-	TTSSampleRate                   *int
-	TTSSpeed                        float64
-	TTSTemperature                  *float64
-	TTSMaxTokens                    *int
-	TTSBufferSize                   *int
-	TTSEnhanceNamedEntities         *bool
-	TTSEnableSSMLParsing            *bool
-	TTSAPIVersion                   string
-	TTSWordTimestamps               *bool
-	TTSVoiceEmbedding               []float64
-	TTSEmotion                      string
-	TTSVolume                       *float64
-	TTSPronunciationDictID          string
-	TTSMIPOptOut                    *bool
-	TTSLatencyMode                  string
-	TTSChunkLength                  *int
-	TTSInstructions                 string
-	TTSResponseFormat               string
-	TTSBaseURL                      string
-	TTSTextType                     string
-	RealtimeProvider                string
-	RealtimeModel                   string
+	AWSRegion                               string
+	LLMProvider                             string
+	LLMModel                                string
+	LLMBaseURL                              string
+	STTProvider                             string
+	STTModel                                string
+	STTLanguage                             string
+	STTEncoding                             string
+	STTChainID                              string
+	STTDetectLanguage                       bool
+	STTPunctuate                            *bool
+	STTSpokenPunctuation                    *bool
+	STTProfanityFilter                      *bool
+	STTTagAudioEvents                       *bool
+	STTIncludeTimestamps                    *bool
+	STTInterimResults                       *bool
+	STTSmartFormat                          *bool
+	STTNoDelay                              *bool
+	STTEndpointingMS                        *int
+	STTDiarization                          *bool
+	STTFillerWords                          *bool
+	STTVADEvents                            *bool
+	STTNumerals                             *bool
+	STTMIPOptOut                            *bool
+	STTKeywords                             []deepgram.DeepgramKeyword
+	STTRedact                               []string
+	STTTags                                 []string
+	STTTask                                 string
+	STTChunkLevel                           string
+	STTVersion                              string
+	STTTemperature                          *float64
+	STTSkipVAD                              *bool
+	STTVADKwargs                            map[string]any
+	STTTextTimeoutSeconds                   *float64
+	STTTimestampGranularities               []string
+	STTCodeSwitching                        *bool
+	STTBitDepth                             *int
+	STTEndpointingSeconds                   *float64
+	STTMaxDurationWithoutEndpointingSeconds *float64
+	STTRegion                               string
+	STTCustomVocabulary                     []any
+	STTCustomSpelling                       map[string][]string
+	STTTranslationTargetLanguages           []string
+	STTTranslationModel                     string
+	STTTranslationMatchOriginalUtterances   *bool
+	STTTranslationLipsync                   *bool
+	STTTranslationContextAdaptation         *bool
+	STTTranslationContext                   string
+	STTTranslationInformal                  *bool
+	STTPreProcessingAudioEnhancer           *bool
+	STTPreProcessingSpeechThreshold         *float64
+	STTPrompt                               string
+	STTBaseURL                              string
+	STTSampleRate                           *int
+	STTBufferSizeSeconds                    *float64
+	STTAudioChunkDurationMS                 *int
+	STTMinTurnSilence                       *int
+	STTMaxTurnSilence                       *int
+	STTEndOfTurnConfidenceThreshold         *float64
+	STTFormatTurns                          *bool
+	STTLanguageDetection                    *bool
+	STTContinuousPartials                   *bool
+	STTInterruptionDelay                    *int
+	STTKeytermsPrompt                       []string
+	STTVADThreshold                         *float64
+	STTVADSilenceThresholdSeconds           *float64
+	STTSpeakerLabels                        *bool
+	STTMaxSpeakers                          *int
+	STTDomain                               string
+	STTVocabularyName                       string
+	STTSessionID                            string
+	STTVocabularyFilterMethod               string
+	STTVocabularyFilterName                 string
+	STTEnableChannelIdentification          *bool
+	STTNumberOfChannels                     *int
+	STTEnablePartialStabilization           *bool
+	STTPartialResultsStability              string
+	STTLanguageModelName                    string
+	STTIdentifyLanguage                     *bool
+	STTIdentifyMultipleLanguages            *bool
+	STTLanguageOptions                      string
+	STTPreferredLanguage                    string
+	STTVocabularyNames                      string
+	STTVocabularyFilterNames                string
+	TTSProvider                             string
+	TTSModel                                string
+	TTSVoice                                string
+	TTSLanguage                             string
+	TTSEncoding                             string
+	TTSSampleRate                           *int
+	TTSSpeed                                float64
+	TTSTemperature                          *float64
+	TTSMaxTokens                            *int
+	TTSBufferSize                           *int
+	TTSEnhanceNamedEntities                 *bool
+	TTSEnableSSMLParsing                    *bool
+	TTSAPIVersion                           string
+	TTSWordTimestamps                       *bool
+	TTSVoiceEmbedding                       []float64
+	TTSEmotion                              string
+	TTSVolume                               *float64
+	TTSPronunciationDictID                  string
+	TTSMIPOptOut                            *bool
+	TTSLatencyMode                          string
+	TTSChunkLength                          *int
+	TTSInstructions                         string
+	TTSResponseFormat                       string
+	TTSBaseURL                              string
+	TTSTextType                             string
+	RealtimeProvider                        string
+	RealtimeModel                           string
 
 	OpenAIAPIKey      string
 	AnthropicAPIKey   string
@@ -168,6 +186,7 @@ type AppConfig struct {
 	FalAPIKey         string
 	FireworksAPIKey   string
 	FishAudioAPIKey   string
+	GladiaAPIKey      string
 
 	GoogleCredentialsFile string
 
@@ -184,116 +203,133 @@ type App struct {
 
 func DefaultConfigFromEnv() AppConfig {
 	return AppConfig{
-		Instructions:                    getenvDefault("RTP_AGENT_INSTRUCTIONS", "You are a helpful realtime voice agent."),
-		AWSRegion:                       firstEnv("RTP_AGENT_AWS_REGION", "AWS_REGION"),
-		LLMProvider:                     normalizedEnv("RTP_AGENT_LLM_PROVIDER"),
-		LLMModel:                        os.Getenv("RTP_AGENT_LLM_MODEL"),
-		LLMBaseURL:                      os.Getenv("RTP_AGENT_LLM_BASE_URL"),
-		STTProvider:                     normalizedEnv("RTP_AGENT_STT_PROVIDER"),
-		STTModel:                        os.Getenv("RTP_AGENT_STT_MODEL"),
-		STTLanguage:                     os.Getenv("RTP_AGENT_STT_LANGUAGE"),
-		STTEncoding:                     os.Getenv("RTP_AGENT_STT_ENCODING"),
-		STTChainID:                      os.Getenv("RTP_AGENT_STT_CHAIN_ID"),
-		STTDetectLanguage:               getenvBool("RTP_AGENT_STT_DETECT_LANGUAGE"),
-		STTPunctuate:                    getenvOptionalBool("RTP_AGENT_STT_PUNCTUATE"),
-		STTSpokenPunctuation:            getenvOptionalBool("RTP_AGENT_STT_SPOKEN_PUNCTUATION"),
-		STTProfanityFilter:              getenvOptionalBool("RTP_AGENT_STT_PROFANITY_FILTER"),
-		STTTagAudioEvents:               getenvOptionalBool("RTP_AGENT_STT_TAG_AUDIO_EVENTS"),
-		STTIncludeTimestamps:            getenvOptionalBool("RTP_AGENT_STT_INCLUDE_TIMESTAMPS"),
-		STTInterimResults:               getenvOptionalBool("RTP_AGENT_STT_INTERIM_RESULTS"),
-		STTSmartFormat:                  getenvOptionalBool("RTP_AGENT_STT_SMART_FORMAT"),
-		STTNoDelay:                      getenvOptionalBool("RTP_AGENT_STT_NO_DELAY"),
-		STTEndpointingMS:                getenvOptionalInt("RTP_AGENT_STT_ENDPOINTING_MS"),
-		STTDiarization:                  getenvOptionalBool("RTP_AGENT_STT_DIARIZATION"),
-		STTFillerWords:                  getenvOptionalBool("RTP_AGENT_STT_FILLER_WORDS"),
-		STTVADEvents:                    getenvOptionalBool("RTP_AGENT_STT_VAD_EVENTS"),
-		STTNumerals:                     getenvOptionalBool("RTP_AGENT_STT_NUMERALS"),
-		STTMIPOptOut:                    getenvOptionalBool("RTP_AGENT_STT_MIP_OPT_OUT"),
-		STTKeywords:                     splitEnvDeepgramKeywords("RTP_AGENT_STT_KEYWORDS"),
-		STTRedact:                       splitEnvList("RTP_AGENT_STT_REDACT"),
-		STTTags:                         splitEnvList("RTP_AGENT_STT_TAGS"),
-		STTTask:                         os.Getenv("RTP_AGENT_STT_TASK"),
-		STTChunkLevel:                   os.Getenv("RTP_AGENT_STT_CHUNK_LEVEL"),
-		STTVersion:                      os.Getenv("RTP_AGENT_STT_VERSION"),
-		STTTemperature:                  getenvOptionalFloat("RTP_AGENT_STT_TEMPERATURE"),
-		STTSkipVAD:                      getenvOptionalBool("RTP_AGENT_STT_SKIP_VAD"),
-		STTVADKwargs:                    splitEnvMap("RTP_AGENT_STT_VAD_KWARGS"),
-		STTTextTimeoutSeconds:           getenvOptionalFloat("RTP_AGENT_STT_TEXT_TIMEOUT_SECONDS"),
-		STTTimestampGranularities:       splitEnvList("RTP_AGENT_STT_TIMESTAMP_GRANULARITIES"),
-		STTPrompt:                       os.Getenv("RTP_AGENT_STT_PROMPT"),
-		STTBaseURL:                      os.Getenv("RTP_AGENT_STT_BASE_URL"),
-		STTSampleRate:                   getenvOptionalInt("RTP_AGENT_STT_SAMPLE_RATE"),
-		STTBufferSizeSeconds:            getenvOptionalFloat("RTP_AGENT_STT_BUFFER_SIZE_SECONDS"),
-		STTAudioChunkDurationMS:         getenvOptionalInt("RTP_AGENT_STT_AUDIO_CHUNK_DURATION_MS"),
-		STTMinTurnSilence:               getenvOptionalInt("RTP_AGENT_STT_MIN_TURN_SILENCE"),
-		STTMaxTurnSilence:               getenvOptionalInt("RTP_AGENT_STT_MAX_TURN_SILENCE"),
-		STTEndOfTurnConfidenceThreshold: getenvOptionalFloat("RTP_AGENT_STT_END_OF_TURN_CONFIDENCE_THRESHOLD"),
-		STTFormatTurns:                  getenvOptionalBool("RTP_AGENT_STT_FORMAT_TURNS"),
-		STTLanguageDetection:            getenvOptionalBool("RTP_AGENT_STT_LANGUAGE_DETECTION"),
-		STTContinuousPartials:           getenvOptionalBool("RTP_AGENT_STT_CONTINUOUS_PARTIALS"),
-		STTInterruptionDelay:            getenvOptionalInt("RTP_AGENT_STT_INTERRUPTION_DELAY"),
-		STTKeytermsPrompt:               splitEnvList("RTP_AGENT_STT_KEYTERMS_PROMPT"),
-		STTVADThreshold:                 getenvOptionalFloat("RTP_AGENT_STT_VAD_THRESHOLD"),
-		STTVADSilenceThresholdSeconds:   getenvOptionalFloat("RTP_AGENT_STT_VAD_SILENCE_THRESHOLD_SECONDS"),
-		STTSpeakerLabels:                getenvOptionalBool("RTP_AGENT_STT_SPEAKER_LABELS"),
-		STTMaxSpeakers:                  getenvOptionalInt("RTP_AGENT_STT_MAX_SPEAKERS"),
-		STTDomain:                       os.Getenv("RTP_AGENT_STT_DOMAIN"),
-		STTVocabularyName:               os.Getenv("RTP_AGENT_STT_VOCABULARY_NAME"),
-		STTSessionID:                    os.Getenv("RTP_AGENT_STT_SESSION_ID"),
-		STTVocabularyFilterMethod:       os.Getenv("RTP_AGENT_STT_VOCABULARY_FILTER_METHOD"),
-		STTVocabularyFilterName:         os.Getenv("RTP_AGENT_STT_VOCABULARY_FILTER_NAME"),
-		STTEnableChannelIdentification:  getenvOptionalBool("RTP_AGENT_STT_ENABLE_CHANNEL_IDENTIFICATION"),
-		STTNumberOfChannels:             getenvOptionalInt("RTP_AGENT_STT_NUMBER_OF_CHANNELS"),
-		STTEnablePartialStabilization:   getenvOptionalBool("RTP_AGENT_STT_ENABLE_PARTIAL_RESULTS_STABILIZATION"),
-		STTPartialResultsStability:      os.Getenv("RTP_AGENT_STT_PARTIAL_RESULTS_STABILITY"),
-		STTLanguageModelName:            os.Getenv("RTP_AGENT_STT_LANGUAGE_MODEL_NAME"),
-		STTIdentifyLanguage:             getenvOptionalBool("RTP_AGENT_STT_IDENTIFY_LANGUAGE"),
-		STTIdentifyMultipleLanguages:    getenvOptionalBool("RTP_AGENT_STT_IDENTIFY_MULTIPLE_LANGUAGES"),
-		STTLanguageOptions:              os.Getenv("RTP_AGENT_STT_LANGUAGE_OPTIONS"),
-		STTPreferredLanguage:            os.Getenv("RTP_AGENT_STT_PREFERRED_LANGUAGE"),
-		STTVocabularyNames:              os.Getenv("RTP_AGENT_STT_VOCABULARY_NAMES"),
-		STTVocabularyFilterNames:        os.Getenv("RTP_AGENT_STT_VOCABULARY_FILTER_NAMES"),
-		TTSProvider:                     normalizedEnv("RTP_AGENT_TTS_PROVIDER"),
-		TTSModel:                        os.Getenv("RTP_AGENT_TTS_MODEL"),
-		TTSVoice:                        os.Getenv("RTP_AGENT_TTS_VOICE"),
-		TTSLanguage:                     os.Getenv("RTP_AGENT_TTS_LANGUAGE"),
-		TTSEncoding:                     os.Getenv("RTP_AGENT_TTS_ENCODING"),
-		TTSSampleRate:                   getenvOptionalInt("RTP_AGENT_TTS_SAMPLE_RATE"),
-		TTSSpeed:                        getenvFloat("RTP_AGENT_TTS_SPEED"),
-		TTSTemperature:                  getenvOptionalFloat("RTP_AGENT_TTS_TEMPERATURE"),
-		TTSMaxTokens:                    getenvOptionalInt("RTP_AGENT_TTS_MAX_TOKENS"),
-		TTSBufferSize:                   getenvOptionalInt("RTP_AGENT_TTS_BUFFER_SIZE"),
-		TTSEnhanceNamedEntities:         getenvOptionalBool("RTP_AGENT_TTS_ENHANCE_NAMED_ENTITIES"),
-		TTSEnableSSMLParsing:            getenvOptionalBool("RTP_AGENT_TTS_ENABLE_SSML_PARSING"),
-		TTSAPIVersion:                   os.Getenv("RTP_AGENT_TTS_API_VERSION"),
-		TTSWordTimestamps:               getenvOptionalBool("RTP_AGENT_TTS_WORD_TIMESTAMPS"),
-		TTSVoiceEmbedding:               splitEnvFloatList("RTP_AGENT_TTS_VOICE_EMBEDDING"),
-		TTSEmotion:                      os.Getenv("RTP_AGENT_TTS_EMOTION"),
-		TTSVolume:                       getenvOptionalFloat("RTP_AGENT_TTS_VOLUME"),
-		TTSPronunciationDictID:          os.Getenv("RTP_AGENT_TTS_PRONUNCIATION_DICT_ID"),
-		TTSMIPOptOut:                    getenvOptionalBool("RTP_AGENT_TTS_MIP_OPT_OUT"),
-		TTSLatencyMode:                  os.Getenv("RTP_AGENT_TTS_LATENCY_MODE"),
-		TTSChunkLength:                  getenvOptionalInt("RTP_AGENT_TTS_CHUNK_LENGTH"),
-		TTSInstructions:                 os.Getenv("RTP_AGENT_TTS_INSTRUCTIONS"),
-		TTSResponseFormat:               os.Getenv("RTP_AGENT_TTS_RESPONSE_FORMAT"),
-		TTSBaseURL:                      os.Getenv("RTP_AGENT_TTS_BASE_URL"),
-		TTSTextType:                     os.Getenv("RTP_AGENT_TTS_TEXT_TYPE"),
-		RealtimeProvider:                normalizedEnv("RTP_AGENT_REALTIME_PROVIDER"),
-		RealtimeModel:                   os.Getenv("RTP_AGENT_REALTIME_MODEL"),
-		OpenAIAPIKey:                    os.Getenv("OPENAI_API_KEY"),
-		AnthropicAPIKey:                 os.Getenv("ANTHROPIC_API_KEY"),
-		GoogleAPIKey:                    os.Getenv("GOOGLE_API_KEY"),
-		ElevenLabsAPIKey:                firstEnv("ELEVENLABS_API_KEY", "ELEVEN_API_KEY"),
-		GroqAPIKey:                      os.Getenv("GROQ_API_KEY"),
-		CerebrasAPIKey:                  os.Getenv("CEREBRAS_API_KEY"),
-		ClovaSTTSecret:                  os.Getenv("CLOVA_STT_SECRET"),
-		ClovaSTTInvokeURL:               os.Getenv("CLOVA_STT_INVOKE_URL"),
-		ClovaClientID:                   os.Getenv("CLOVA_CLIENT_ID"),
-		ClovaClientSecret:               os.Getenv("CLOVA_CLIENT_SECRET"),
-		FalAPIKey:                       firstEnv("FAL_KEY", "FAL_API_KEY"),
-		FireworksAPIKey:                 os.Getenv("FIREWORKS_API_KEY"),
-		FishAudioAPIKey:                 firstEnv("FISHAUDIO_API_KEY", "FISH_AUDIO_API_KEY"),
-		GoogleCredentialsFile:           firstEnv("RTP_AGENT_GOOGLE_CREDENTIALS_FILE", "GOOGLE_APPLICATION_CREDENTIALS"),
+		Instructions:                            getenvDefault("RTP_AGENT_INSTRUCTIONS", "You are a helpful realtime voice agent."),
+		AWSRegion:                               firstEnv("RTP_AGENT_AWS_REGION", "AWS_REGION"),
+		LLMProvider:                             normalizedEnv("RTP_AGENT_LLM_PROVIDER"),
+		LLMModel:                                os.Getenv("RTP_AGENT_LLM_MODEL"),
+		LLMBaseURL:                              os.Getenv("RTP_AGENT_LLM_BASE_URL"),
+		STTProvider:                             normalizedEnv("RTP_AGENT_STT_PROVIDER"),
+		STTModel:                                os.Getenv("RTP_AGENT_STT_MODEL"),
+		STTLanguage:                             os.Getenv("RTP_AGENT_STT_LANGUAGE"),
+		STTEncoding:                             os.Getenv("RTP_AGENT_STT_ENCODING"),
+		STTChainID:                              os.Getenv("RTP_AGENT_STT_CHAIN_ID"),
+		STTDetectLanguage:                       getenvBool("RTP_AGENT_STT_DETECT_LANGUAGE"),
+		STTPunctuate:                            getenvOptionalBool("RTP_AGENT_STT_PUNCTUATE"),
+		STTSpokenPunctuation:                    getenvOptionalBool("RTP_AGENT_STT_SPOKEN_PUNCTUATION"),
+		STTProfanityFilter:                      getenvOptionalBool("RTP_AGENT_STT_PROFANITY_FILTER"),
+		STTTagAudioEvents:                       getenvOptionalBool("RTP_AGENT_STT_TAG_AUDIO_EVENTS"),
+		STTIncludeTimestamps:                    getenvOptionalBool("RTP_AGENT_STT_INCLUDE_TIMESTAMPS"),
+		STTInterimResults:                       getenvOptionalBool("RTP_AGENT_STT_INTERIM_RESULTS"),
+		STTSmartFormat:                          getenvOptionalBool("RTP_AGENT_STT_SMART_FORMAT"),
+		STTNoDelay:                              getenvOptionalBool("RTP_AGENT_STT_NO_DELAY"),
+		STTEndpointingMS:                        getenvOptionalInt("RTP_AGENT_STT_ENDPOINTING_MS"),
+		STTDiarization:                          getenvOptionalBool("RTP_AGENT_STT_DIARIZATION"),
+		STTFillerWords:                          getenvOptionalBool("RTP_AGENT_STT_FILLER_WORDS"),
+		STTVADEvents:                            getenvOptionalBool("RTP_AGENT_STT_VAD_EVENTS"),
+		STTNumerals:                             getenvOptionalBool("RTP_AGENT_STT_NUMERALS"),
+		STTMIPOptOut:                            getenvOptionalBool("RTP_AGENT_STT_MIP_OPT_OUT"),
+		STTKeywords:                             splitEnvDeepgramKeywords("RTP_AGENT_STT_KEYWORDS"),
+		STTRedact:                               splitEnvList("RTP_AGENT_STT_REDACT"),
+		STTTags:                                 splitEnvList("RTP_AGENT_STT_TAGS"),
+		STTTask:                                 os.Getenv("RTP_AGENT_STT_TASK"),
+		STTChunkLevel:                           os.Getenv("RTP_AGENT_STT_CHUNK_LEVEL"),
+		STTVersion:                              os.Getenv("RTP_AGENT_STT_VERSION"),
+		STTTemperature:                          getenvOptionalFloat("RTP_AGENT_STT_TEMPERATURE"),
+		STTSkipVAD:                              getenvOptionalBool("RTP_AGENT_STT_SKIP_VAD"),
+		STTVADKwargs:                            splitEnvMap("RTP_AGENT_STT_VAD_KWARGS"),
+		STTTextTimeoutSeconds:                   getenvOptionalFloat("RTP_AGENT_STT_TEXT_TIMEOUT_SECONDS"),
+		STTTimestampGranularities:               splitEnvList("RTP_AGENT_STT_TIMESTAMP_GRANULARITIES"),
+		STTCodeSwitching:                        getenvOptionalBool("RTP_AGENT_STT_CODE_SWITCHING"),
+		STTBitDepth:                             getenvOptionalInt("RTP_AGENT_STT_BIT_DEPTH"),
+		STTEndpointingSeconds:                   getenvOptionalFloat("RTP_AGENT_STT_ENDPOINTING_SECONDS"),
+		STTMaxDurationWithoutEndpointingSeconds: getenvOptionalFloat("RTP_AGENT_STT_MAX_DURATION_WITHOUT_ENDPOINTING_SECONDS"),
+		STTRegion:                               os.Getenv("RTP_AGENT_STT_REGION"),
+		STTCustomVocabulary:                     splitEnvAnyList("RTP_AGENT_STT_CUSTOM_VOCABULARY"),
+		STTCustomSpelling:                       splitEnvStringSliceMap("RTP_AGENT_STT_CUSTOM_SPELLING"),
+		STTTranslationTargetLanguages:           splitEnvList("RTP_AGENT_STT_TRANSLATION_TARGET_LANGUAGES"),
+		STTTranslationModel:                     os.Getenv("RTP_AGENT_STT_TRANSLATION_MODEL"),
+		STTTranslationMatchOriginalUtterances:   getenvOptionalBool("RTP_AGENT_STT_TRANSLATION_MATCH_ORIGINAL_UTTERANCES"),
+		STTTranslationLipsync:                   getenvOptionalBool("RTP_AGENT_STT_TRANSLATION_LIPSYNC"),
+		STTTranslationContextAdaptation:         getenvOptionalBool("RTP_AGENT_STT_TRANSLATION_CONTEXT_ADAPTATION"),
+		STTTranslationContext:                   os.Getenv("RTP_AGENT_STT_TRANSLATION_CONTEXT"),
+		STTTranslationInformal:                  getenvOptionalBool("RTP_AGENT_STT_TRANSLATION_INFORMAL"),
+		STTPreProcessingAudioEnhancer:           getenvOptionalBool("RTP_AGENT_STT_PRE_PROCESSING_AUDIO_ENHANCER"),
+		STTPreProcessingSpeechThreshold:         getenvOptionalFloat("RTP_AGENT_STT_PRE_PROCESSING_SPEECH_THRESHOLD"),
+		STTPrompt:                               os.Getenv("RTP_AGENT_STT_PROMPT"),
+		STTBaseURL:                              os.Getenv("RTP_AGENT_STT_BASE_URL"),
+		STTSampleRate:                           getenvOptionalInt("RTP_AGENT_STT_SAMPLE_RATE"),
+		STTBufferSizeSeconds:                    getenvOptionalFloat("RTP_AGENT_STT_BUFFER_SIZE_SECONDS"),
+		STTAudioChunkDurationMS:                 getenvOptionalInt("RTP_AGENT_STT_AUDIO_CHUNK_DURATION_MS"),
+		STTMinTurnSilence:                       getenvOptionalInt("RTP_AGENT_STT_MIN_TURN_SILENCE"),
+		STTMaxTurnSilence:                       getenvOptionalInt("RTP_AGENT_STT_MAX_TURN_SILENCE"),
+		STTEndOfTurnConfidenceThreshold:         getenvOptionalFloat("RTP_AGENT_STT_END_OF_TURN_CONFIDENCE_THRESHOLD"),
+		STTFormatTurns:                          getenvOptionalBool("RTP_AGENT_STT_FORMAT_TURNS"),
+		STTLanguageDetection:                    getenvOptionalBool("RTP_AGENT_STT_LANGUAGE_DETECTION"),
+		STTContinuousPartials:                   getenvOptionalBool("RTP_AGENT_STT_CONTINUOUS_PARTIALS"),
+		STTInterruptionDelay:                    getenvOptionalInt("RTP_AGENT_STT_INTERRUPTION_DELAY"),
+		STTKeytermsPrompt:                       splitEnvList("RTP_AGENT_STT_KEYTERMS_PROMPT"),
+		STTVADThreshold:                         getenvOptionalFloat("RTP_AGENT_STT_VAD_THRESHOLD"),
+		STTVADSilenceThresholdSeconds:           getenvOptionalFloat("RTP_AGENT_STT_VAD_SILENCE_THRESHOLD_SECONDS"),
+		STTSpeakerLabels:                        getenvOptionalBool("RTP_AGENT_STT_SPEAKER_LABELS"),
+		STTMaxSpeakers:                          getenvOptionalInt("RTP_AGENT_STT_MAX_SPEAKERS"),
+		STTDomain:                               os.Getenv("RTP_AGENT_STT_DOMAIN"),
+		STTVocabularyName:                       os.Getenv("RTP_AGENT_STT_VOCABULARY_NAME"),
+		STTSessionID:                            os.Getenv("RTP_AGENT_STT_SESSION_ID"),
+		STTVocabularyFilterMethod:               os.Getenv("RTP_AGENT_STT_VOCABULARY_FILTER_METHOD"),
+		STTVocabularyFilterName:                 os.Getenv("RTP_AGENT_STT_VOCABULARY_FILTER_NAME"),
+		STTEnableChannelIdentification:          getenvOptionalBool("RTP_AGENT_STT_ENABLE_CHANNEL_IDENTIFICATION"),
+		STTNumberOfChannels:                     getenvOptionalInt("RTP_AGENT_STT_NUMBER_OF_CHANNELS"),
+		STTEnablePartialStabilization:           getenvOptionalBool("RTP_AGENT_STT_ENABLE_PARTIAL_RESULTS_STABILIZATION"),
+		STTPartialResultsStability:              os.Getenv("RTP_AGENT_STT_PARTIAL_RESULTS_STABILITY"),
+		STTLanguageModelName:                    os.Getenv("RTP_AGENT_STT_LANGUAGE_MODEL_NAME"),
+		STTIdentifyLanguage:                     getenvOptionalBool("RTP_AGENT_STT_IDENTIFY_LANGUAGE"),
+		STTIdentifyMultipleLanguages:            getenvOptionalBool("RTP_AGENT_STT_IDENTIFY_MULTIPLE_LANGUAGES"),
+		STTLanguageOptions:                      os.Getenv("RTP_AGENT_STT_LANGUAGE_OPTIONS"),
+		STTPreferredLanguage:                    os.Getenv("RTP_AGENT_STT_PREFERRED_LANGUAGE"),
+		STTVocabularyNames:                      os.Getenv("RTP_AGENT_STT_VOCABULARY_NAMES"),
+		STTVocabularyFilterNames:                os.Getenv("RTP_AGENT_STT_VOCABULARY_FILTER_NAMES"),
+		TTSProvider:                             normalizedEnv("RTP_AGENT_TTS_PROVIDER"),
+		TTSModel:                                os.Getenv("RTP_AGENT_TTS_MODEL"),
+		TTSVoice:                                os.Getenv("RTP_AGENT_TTS_VOICE"),
+		TTSLanguage:                             os.Getenv("RTP_AGENT_TTS_LANGUAGE"),
+		TTSEncoding:                             os.Getenv("RTP_AGENT_TTS_ENCODING"),
+		TTSSampleRate:                           getenvOptionalInt("RTP_AGENT_TTS_SAMPLE_RATE"),
+		TTSSpeed:                                getenvFloat("RTP_AGENT_TTS_SPEED"),
+		TTSTemperature:                          getenvOptionalFloat("RTP_AGENT_TTS_TEMPERATURE"),
+		TTSMaxTokens:                            getenvOptionalInt("RTP_AGENT_TTS_MAX_TOKENS"),
+		TTSBufferSize:                           getenvOptionalInt("RTP_AGENT_TTS_BUFFER_SIZE"),
+		TTSEnhanceNamedEntities:                 getenvOptionalBool("RTP_AGENT_TTS_ENHANCE_NAMED_ENTITIES"),
+		TTSEnableSSMLParsing:                    getenvOptionalBool("RTP_AGENT_TTS_ENABLE_SSML_PARSING"),
+		TTSAPIVersion:                           os.Getenv("RTP_AGENT_TTS_API_VERSION"),
+		TTSWordTimestamps:                       getenvOptionalBool("RTP_AGENT_TTS_WORD_TIMESTAMPS"),
+		TTSVoiceEmbedding:                       splitEnvFloatList("RTP_AGENT_TTS_VOICE_EMBEDDING"),
+		TTSEmotion:                              os.Getenv("RTP_AGENT_TTS_EMOTION"),
+		TTSVolume:                               getenvOptionalFloat("RTP_AGENT_TTS_VOLUME"),
+		TTSPronunciationDictID:                  os.Getenv("RTP_AGENT_TTS_PRONUNCIATION_DICT_ID"),
+		TTSMIPOptOut:                            getenvOptionalBool("RTP_AGENT_TTS_MIP_OPT_OUT"),
+		TTSLatencyMode:                          os.Getenv("RTP_AGENT_TTS_LATENCY_MODE"),
+		TTSChunkLength:                          getenvOptionalInt("RTP_AGENT_TTS_CHUNK_LENGTH"),
+		TTSInstructions:                         os.Getenv("RTP_AGENT_TTS_INSTRUCTIONS"),
+		TTSResponseFormat:                       os.Getenv("RTP_AGENT_TTS_RESPONSE_FORMAT"),
+		TTSBaseURL:                              os.Getenv("RTP_AGENT_TTS_BASE_URL"),
+		TTSTextType:                             os.Getenv("RTP_AGENT_TTS_TEXT_TYPE"),
+		RealtimeProvider:                        normalizedEnv("RTP_AGENT_REALTIME_PROVIDER"),
+		RealtimeModel:                           os.Getenv("RTP_AGENT_REALTIME_MODEL"),
+		OpenAIAPIKey:                            os.Getenv("OPENAI_API_KEY"),
+		AnthropicAPIKey:                         os.Getenv("ANTHROPIC_API_KEY"),
+		GoogleAPIKey:                            os.Getenv("GOOGLE_API_KEY"),
+		ElevenLabsAPIKey:                        firstEnv("ELEVENLABS_API_KEY", "ELEVEN_API_KEY"),
+		GroqAPIKey:                              os.Getenv("GROQ_API_KEY"),
+		CerebrasAPIKey:                          os.Getenv("CEREBRAS_API_KEY"),
+		ClovaSTTSecret:                          os.Getenv("CLOVA_STT_SECRET"),
+		ClovaSTTInvokeURL:                       os.Getenv("CLOVA_STT_INVOKE_URL"),
+		ClovaClientID:                           os.Getenv("CLOVA_CLIENT_ID"),
+		ClovaClientSecret:                       os.Getenv("CLOVA_CLIENT_SECRET"),
+		FalAPIKey:                               firstEnv("FAL_KEY", "FAL_API_KEY"),
+		FireworksAPIKey:                         os.Getenv("FIREWORKS_API_KEY"),
+		FishAudioAPIKey:                         firstEnv("FISHAUDIO_API_KEY", "FISH_AUDIO_API_KEY"),
+		GladiaAPIKey:                            os.Getenv("GLADIA_API_KEY"),
+		GoogleCredentialsFile:                   firstEnv("RTP_AGENT_GOOGLE_CREDENTIALS_FILE", "GOOGLE_APPLICATION_CREDENTIALS"),
 	}
 }
 
@@ -681,6 +717,85 @@ func configureProviders(cfg AppConfig, a *agent.Agent) (llm.RealtimeModel, error
 			sttOpts = append(sttOpts, fireworksai.WithFireworksTimestampGranularities(cfg.STTTimestampGranularities))
 		}
 		a.STT = fireworksai.NewFireworksSTT(cfg.FireworksAPIKey, sttOpts...)
+	case providerGladia:
+		sttOpts := []gladia.GladiaSTTOption{}
+		if cfg.STTBaseURL != "" {
+			sttOpts = append(sttOpts, gladia.WithGladiaBaseURL(cfg.STTBaseURL))
+		}
+		if cfg.STTModel != "" {
+			sttOpts = append(sttOpts, gladia.WithGladiaModel(cfg.STTModel))
+		}
+		if cfg.STTInterimResults != nil {
+			sttOpts = append(sttOpts, gladia.WithGladiaInterimResults(*cfg.STTInterimResults))
+		}
+		if cfg.STTLanguageOptions != "" {
+			sttOpts = append(sttOpts, gladia.WithGladiaLanguages(splitStringList(cfg.STTLanguageOptions)))
+		}
+		if cfg.STTCodeSwitching != nil {
+			sttOpts = append(sttOpts, gladia.WithGladiaCodeSwitching(*cfg.STTCodeSwitching))
+		}
+		sampleRate := 0
+		if cfg.STTSampleRate != nil {
+			sampleRate = *cfg.STTSampleRate
+		}
+		bitDepth := 0
+		if cfg.STTBitDepth != nil {
+			bitDepth = *cfg.STTBitDepth
+		}
+		channels := 0
+		if cfg.STTNumberOfChannels != nil {
+			channels = *cfg.STTNumberOfChannels
+		}
+		if sampleRate != 0 || bitDepth != 0 || channels != 0 || cfg.STTEncoding != "" {
+			sttOpts = append(sttOpts, gladia.WithGladiaAudioFormat(sampleRate, bitDepth, channels, cfg.STTEncoding))
+		}
+		if cfg.STTEndpointingSeconds != nil || cfg.STTMaxDurationWithoutEndpointingSeconds != nil {
+			endpointing := -1.0
+			if cfg.STTEndpointingSeconds != nil {
+				endpointing = *cfg.STTEndpointingSeconds
+			}
+			maxDuration := 0.0
+			if cfg.STTMaxDurationWithoutEndpointingSeconds != nil {
+				maxDuration = *cfg.STTMaxDurationWithoutEndpointingSeconds
+			}
+			sttOpts = append(sttOpts, gladia.WithGladiaEndpointing(endpointing, maxDuration))
+		}
+		if cfg.STTRegion != "" {
+			sttOpts = append(sttOpts, gladia.WithGladiaRegion(cfg.STTRegion))
+		}
+		if len(cfg.STTCustomVocabulary) > 0 {
+			sttOpts = append(sttOpts, gladia.WithGladiaCustomVocabulary(cfg.STTCustomVocabulary))
+		}
+		if len(cfg.STTCustomSpelling) > 0 {
+			sttOpts = append(sttOpts, gladia.WithGladiaCustomSpelling(cfg.STTCustomSpelling))
+		}
+		if len(cfg.STTTranslationTargetLanguages) > 0 {
+			matchOriginal := boolValue(cfg.STTTranslationMatchOriginalUtterances)
+			lipsync := boolValue(cfg.STTTranslationLipsync)
+			contextAdaptation := boolValue(cfg.STTTranslationContextAdaptation)
+			informal := boolValue(cfg.STTTranslationInformal)
+			if cfg.STTTranslationModel != "" || cfg.STTTranslationContext != "" || matchOriginal || lipsync || contextAdaptation || informal {
+				sttOpts = append(sttOpts, gladia.WithGladiaTranslationConfig(
+					cfg.STTTranslationTargetLanguages,
+					cfg.STTTranslationModel,
+					matchOriginal,
+					lipsync,
+					contextAdaptation,
+					cfg.STTTranslationContext,
+					informal,
+				))
+			} else {
+				sttOpts = append(sttOpts, gladia.WithGladiaTranslation(cfg.STTTranslationTargetLanguages))
+			}
+		}
+		if cfg.STTPreProcessingAudioEnhancer != nil || cfg.STTPreProcessingSpeechThreshold != nil {
+			speechThreshold := 0.0
+			if cfg.STTPreProcessingSpeechThreshold != nil {
+				speechThreshold = *cfg.STTPreProcessingSpeechThreshold
+			}
+			sttOpts = append(sttOpts, gladia.WithGladiaPreProcessing(boolValue(cfg.STTPreProcessingAudioEnhancer), speechThreshold))
+		}
+		a.STT = gladia.NewGladiaSTT(cfg.GladiaAPIKey, sttOpts...)
 	case providerAssemblyAI:
 		sttOpts := []assemblyai.AssemblyAISTTOption{}
 		if cfg.STTBaseURL != "" {
@@ -1094,6 +1209,10 @@ func splitEnvList(name string) []string {
 	if raw == "" {
 		return nil
 	}
+	return splitStringList(raw)
+}
+
+func splitStringList(raw string) []string {
 	parts := strings.Split(raw, ",")
 	values := make([]string, 0, len(parts))
 	for _, part := range parts {
@@ -1103,6 +1222,54 @@ func splitEnvList(name string) []string {
 		}
 	}
 	return values
+}
+
+func splitEnvAnyList(name string) []any {
+	values := splitEnvList(name)
+	if len(values) == 0 {
+		return nil
+	}
+	items := make([]any, 0, len(values))
+	for _, value := range values {
+		items = append(items, value)
+	}
+	return items
+}
+
+func splitEnvStringSliceMap(name string) map[string][]string {
+	raw := os.Getenv(name)
+	if raw == "" {
+		return nil
+	}
+	values := map[string][]string{}
+	for _, part := range strings.Split(raw, ",") {
+		key, rawValues, ok := strings.Cut(part, "=")
+		if !ok {
+			continue
+		}
+		key = strings.TrimSpace(key)
+		if key == "" {
+			continue
+		}
+		items := make([]string, 0)
+		for _, value := range strings.Split(rawValues, "|") {
+			value = strings.TrimSpace(value)
+			if value != "" {
+				items = append(items, value)
+			}
+		}
+		if len(items) > 0 {
+			values[key] = items
+		}
+	}
+	if len(values) == 0 {
+		return nil
+	}
+	return values
+}
+
+func boolValue(value *bool) bool {
+	return value != nil && *value
 }
 
 func splitEnvFloatList(name string) []float64 {

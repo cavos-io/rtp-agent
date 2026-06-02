@@ -390,6 +390,48 @@ func TestDefaultConfigFromEnvSelectsFireworksProviders(t *testing.T) {
 	}
 }
 
+func TestDefaultConfigFromEnvSelectsGladiaSTT(t *testing.T) {
+	t.Setenv("GLADIA_API_KEY", "test-gladia-key")
+	t.Setenv("RTP_AGENT_STT_PROVIDER", "gladia")
+	t.Setenv("RTP_AGENT_STT_MODEL", "solaria-1")
+	t.Setenv("RTP_AGENT_STT_BASE_URL", "https://gladia.example/v2/live")
+	t.Setenv("RTP_AGENT_STT_LANGUAGE_OPTIONS", "en,fr")
+	t.Setenv("RTP_AGENT_STT_CODE_SWITCHING", "true")
+	t.Setenv("RTP_AGENT_STT_INTERIM_RESULTS", "false")
+	t.Setenv("RTP_AGENT_STT_SAMPLE_RATE", "16000")
+	t.Setenv("RTP_AGENT_STT_BIT_DEPTH", "16")
+	t.Setenv("RTP_AGENT_STT_NUMBER_OF_CHANNELS", "1")
+	t.Setenv("RTP_AGENT_STT_ENCODING", "wav/pcm")
+	t.Setenv("RTP_AGENT_STT_ENDPOINTING_SECONDS", "0.1")
+	t.Setenv("RTP_AGENT_STT_MAX_DURATION_WITHOUT_ENDPOINTING_SECONDS", "4")
+	t.Setenv("RTP_AGENT_STT_REGION", "eu-west")
+	t.Setenv("RTP_AGENT_STT_CUSTOM_VOCABULARY", "LiveKit,Agents")
+	t.Setenv("RTP_AGENT_STT_CUSTOM_SPELLING", "livekit=live kit|live-kit")
+	t.Setenv("RTP_AGENT_STT_TRANSLATION_TARGET_LANGUAGES", "es,de")
+	t.Setenv("RTP_AGENT_STT_TRANSLATION_MODEL", "base")
+	t.Setenv("RTP_AGENT_STT_TRANSLATION_MATCH_ORIGINAL_UTTERANCES", "true")
+	t.Setenv("RTP_AGENT_STT_TRANSLATION_LIPSYNC", "true")
+	t.Setenv("RTP_AGENT_STT_TRANSLATION_CONTEXT_ADAPTATION", "true")
+	t.Setenv("RTP_AGENT_STT_TRANSLATION_CONTEXT", "support call")
+	t.Setenv("RTP_AGENT_STT_TRANSLATION_INFORMAL", "true")
+	t.Setenv("RTP_AGENT_STT_PRE_PROCESSING_AUDIO_ENHANCER", "true")
+	t.Setenv("RTP_AGENT_STT_PRE_PROCESSING_SPEECH_THRESHOLD", "0.7")
+
+	app, err := NewApp(DefaultConfigFromEnv())
+	if err != nil {
+		t.Fatalf("NewApp() error = %v", err)
+	}
+	if app.Session == nil || app.Session.STT == nil {
+		t.Fatal("Session STT is nil")
+	}
+	if got := app.Session.STT.Label(); got != "gladia.STT" {
+		t.Fatalf("STT label = %q, want gladia.STT", got)
+	}
+	if caps := app.Session.STT.Capabilities(); !caps.Streaming || caps.InterimResults || caps.AlignedTranscript != "word" {
+		t.Fatalf("STT capabilities = %+v, want streaming word-aligned without interim results", caps)
+	}
+}
+
 func TestDefaultConfigFromEnvSelectsAWSProviders(t *testing.T) {
 	t.Setenv("AWS_REGION", "us-west-2")
 	t.Setenv("RTP_AGENT_LLM_PROVIDER", "aws")
