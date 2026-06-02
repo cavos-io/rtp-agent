@@ -514,6 +514,36 @@ func TestAgentActivityCommitUserTurnGeneratesReplyWhenLLMConfigured(t *testing.T
 	}
 }
 
+func TestAgentActivityCommitUserTurnSkipsWhenCurrentSpeechCannotBeInterrupted(t *testing.T) {
+	agent := &turnCompletedAgent{Agent: NewAgent("test"), turns: make(chan *llm.ChatMessage, 1)}
+	agent.TurnDetection = TurnDetectionModeManual
+	agent.LLM = &fakeGenerationLLM{stream: &fakeGenerationLLMStream{}}
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	activity := NewAgentActivity(agent, session)
+	agent.activity = activity
+	session.activity = activity
+	activity.currentSpeech = NewSpeechHandle(false, DefaultInputDetails())
+
+	activity.OnFinalTranscript(&stt.SpeechEvent{
+		Alternatives: []stt.SpeechData{{Text: "do not interrupt"}},
+	})
+
+	transcript, err := activity.CommitUserTurn(context.Background(), CommitUserTurnOptions{})
+	if err != nil {
+		t.Fatalf("CommitUserTurn error = %v, want nil", err)
+	}
+	if transcript != "do not interrupt" {
+		t.Fatalf("CommitUserTurn transcript = %q, want do not interrupt", transcript)
+	}
+	select {
+	case msg := <-agent.turns:
+		t.Fatalf("OnUserTurnCompleted called for non-interruptible current speech with %q", msg.TextContent())
+	case ev := <-session.SpeechCreatedEvents():
+		t.Fatalf("reply generated for non-interruptible current speech: %#v", ev)
+	case <-time.After(20 * time.Millisecond):
+	}
+}
+
 func TestAgentActivityCommitUserTurnSkipsReplyWhenLLMMissing(t *testing.T) {
 	agent := NewAgent("test")
 	agent.TurnDetection = TurnDetectionModeManual
