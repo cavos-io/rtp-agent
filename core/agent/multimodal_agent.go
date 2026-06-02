@@ -236,7 +236,7 @@ func (ma *MultimodalAgent) handleRealtimeEvent(ev llm.RealtimeEvent) {
 			logger.Logger.Errorw("Realtime stream error", ev.Error)
 			if ma.session != nil && ev.Error != nil {
 				ma.session.EmitError(ErrorEvent{
-					Error:  ev.Error,
+					Error:  llm.NewRealtimeModelError(llm.RealtimeLabel(ma.model), ev.Error, false),
 					Source: ma.model,
 				})
 			}
@@ -262,11 +262,18 @@ func (ma *MultimodalAgent) OnAudioFrame(ctx context.Context, frame *model.AudioF
 func (ma *MultimodalAgent) OnVideoFrame(ctx context.Context, frame *images.VideoFrame) {
 	ma.mu.Lock()
 	rtSession := ma.rtSession
+	session := ma.session
 	ma.mu.Unlock()
 	if rtSession == nil {
 		return
 	}
 	if err := rtSession.PushVideo(frame); err != nil {
 		logger.Logger.Errorw("failed to push video to multimodal session", err)
+		if session != nil {
+			session.EmitError(ErrorEvent{
+				Error:  llm.NewRealtimeError("failed to push video to realtime session", err),
+				Source: rtSession,
+			})
+		}
 	}
 }

@@ -32,6 +32,10 @@ type SessionReport struct {
 	AudioRecordingStartedAt *float64                `json:"audio_recording_started_at,omitempty"`
 	Duration                *float64                `json:"duration,omitempty"`
 	StartedAt               *float64                `json:"started_at,omitempty"`
+	LLMModel                string                  `json:"llm_model,omitempty"`
+	LLMProvider             string                  `json:"llm_provider,omitempty"`
+	RealtimeModel           string                  `json:"realtime_model,omitempty"`
+	RealtimeProvider        string                  `json:"realtime_provider,omitempty"`
 	Timestamp               float64                 `json:"timestamp"`
 	Usage                   *telemetry.UsageSummary `json:"usage,omitempty"`
 	SDKVersion              string                  `json:"sdk_version"`
@@ -58,6 +62,14 @@ func NewSessionReport(sessions ...*AgentSession) *SessionReport {
 	usage := session.Usage()
 	if !usageSummaryIsZero(usage) {
 		report.Usage = &usage
+	}
+	if session.LLM != nil {
+		report.LLMModel = llm.Model(session.LLM)
+		report.LLMProvider = llm.Provider(session.LLM)
+	}
+	if session.RealtimeModel != nil {
+		report.RealtimeModel = llm.RealtimeModelName(session.RealtimeModel)
+		report.RealtimeProvider = llm.RealtimeProvider(session.RealtimeModel)
 	}
 	session.mu.Unlock()
 
@@ -97,6 +109,18 @@ func (r *SessionReport) ToDict() map[string]any {
 		"timestamp":                  r.Timestamp,
 		"usage":                      usageSummaryToDict(r.Usage),
 		"sdk_version":                r.SDKVersion,
+	}
+	if r.LLMModel != "" && r.LLMModel != "unknown" {
+		out["llm_model"] = r.LLMModel
+	}
+	if r.LLMProvider != "" && r.LLMProvider != "unknown" {
+		out["llm_provider"] = r.LLMProvider
+	}
+	if r.RealtimeModel != "" && r.RealtimeModel != "unknown" {
+		out["realtime_model"] = r.RealtimeModel
+	}
+	if r.RealtimeProvider != "" && r.RealtimeProvider != "unknown" {
+		out["realtime_provider"] = r.RealtimeProvider
 	}
 	addTaggerReportFields(out, r.Tagger)
 	return out

@@ -116,15 +116,16 @@ type videoSessionAssistant interface {
 type AgentSession struct {
 	Options AgentSessionOptions
 
-	ChatCtx   *llm.ChatContext
-	Agent     AgentInterface
-	STT       stt.STT
-	VAD       vad.VAD
-	LLM       llm.LLM
-	TTS       tts.TTS
-	Tools     []llm.Tool
-	Assistant SessionAssistant
-	Room      *lksdk.Room
+	ChatCtx       *llm.ChatContext
+	Agent         AgentInterface
+	STT           stt.STT
+	VAD           vad.VAD
+	LLM           llm.LLM
+	TTS           tts.TTS
+	RealtimeModel llm.RealtimeModel
+	Tools         []llm.Tool
+	Assistant     SessionAssistant
+	Room          *lksdk.Room
 
 	MetricsCollector *telemetry.UsageCollector
 

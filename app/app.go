@@ -158,6 +158,7 @@ type AppConfig struct {
 	WorkerOptions worker.WorkerOptions
 	Instructions  string
 
+	InitialChatContext                      map[string]any
 	AWSRegion                               string
 	LLMProvider                             string
 	LLMModel                                string
@@ -421,6 +422,7 @@ type AppConfig struct {
 	LiveKitInferenceAPISecret             string
 	AppTools                              []string
 	MCPStdioServers                       []MCPStdioServerConfig
+	MCPHTTPServers                        []MCPHTTPServerConfig
 	IVRDetection                          bool
 	IVRSilenceDurationSeconds             *float64
 	WorkflowTask                          string
@@ -439,6 +441,13 @@ type MCPStdioServerConfig struct {
 	Args    []string          `json:"args"`
 	Env     map[string]string `json:"env"`
 	Cwd     string            `json:"cwd"`
+}
+
+type MCPHTTPServerConfig struct {
+	URL           string            `json:"url"`
+	TransportType string            `json:"transportType"`
+	AllowedTools  []string          `json:"allowedTools"`
+	Headers       map[string]string `json:"headers"`
 }
 
 type App struct {
@@ -465,6 +474,7 @@ type EvaluationSummary struct {
 func DefaultConfigFromEnv() AppConfig {
 	return AppConfig{
 		Instructions:                            getenvDefault("RTP_AGENT_INSTRUCTIONS", "You are a helpful realtime voice agent."),
+		InitialChatContext:                      jsonEnvMap("RTP_AGENT_CHAT_CONTEXT_JSON"),
 		AWSRegion:                               firstEnv("RTP_AGENT_AWS_REGION", "AWS_REGION"),
 		LLMProvider:                             normalizedEnv("RTP_AGENT_LLM_PROVIDER"),
 		LLMModel:                                os.Getenv("RTP_AGENT_LLM_MODEL"),
@@ -723,6 +733,7 @@ func DefaultConfigFromEnv() AppConfig {
 		GoogleCredentialsFile:                   firstEnv("RTP_AGENT_GOOGLE_CREDENTIALS_FILE", "GOOGLE_APPLICATION_CREDENTIALS"),
 		AppTools:                                splitEnvList("RTP_AGENT_TOOLS"),
 		MCPStdioServers:                         mcpStdioServersFromEnv("RTP_AGENT_MCP_STDIO_SERVERS"),
+		MCPHTTPServers:                          mcpHTTPServersFromEnv("RTP_AGENT_MCP_HTTP_SERVERS"),
 		IVRDetection:                            getenvBool("RTP_AGENT_IVR_DETECTION"),
 		IVRSilenceDurationSeconds:               getenvOptionalFloat("RTP_AGENT_IVR_SILENCE_DURATION_SECONDS"),
 		WorkflowTask:                            normalizedEnv("RTP_AGENT_WORKFLOW_TASK"),
@@ -745,6 +756,13 @@ func NewApp(cfg AppConfig) (*App, error) {
 	baseAgent := agent.NewAgent(cfg.Instructions)
 	if baseAgent.Instructions == "" {
 		baseAgent.Instructions = "You are a helpful realtime voice agent."
+	}
+	if len(cfg.InitialChatContext) > 0 {
+		chatCtx, err := llm.ChatContextFromDict(cfg.InitialChatContext)
+		if err != nil {
+			return nil, fmt.Errorf("invalid RTP_AGENT_CHAT_CONTEXT_JSON: %w", err)
+		}
+		baseAgent.ChatCtx = chatCtx
 	}
 
 	if err := configureVAD(cfg, baseAgent); err != nil {
@@ -779,7 +797,11 @@ func NewApp(cfg AppConfig) (*App, error) {
 		return nil, err
 	}
 	session := agent.NewAgentSession(sessionAgent, nil, sessionOptions)
+	if baseAgent.ChatCtx != nil {
+		session.ChatCtx = baseAgent.ChatCtx.Copy()
+	}
 	if realtimeModel != nil {
+		session.RealtimeModel = realtimeModel
 		session.Assistant = agent.NewMultimodalAgent(realtimeModel, session.ChatCtx)
 	}
 	mcpServers, err := configureMCPTools(context.Background(), cfg, sessionAgent.GetAgent())
@@ -3467,6 +3489,30 @@ func mcpStdioServersFromEnv(name string) []MCPStdioServerConfig {
 	return servers
 }
 
+func mcpHTTPServersFromEnv(name string) []MCPHTTPServerConfig {
+	raw := os.Getenv(name)
+	if strings.TrimSpace(raw) == "" {
+		return nil
+	}
+	var servers []MCPHTTPServerConfig
+	if err := json.Unmarshal([]byte(raw), &servers); err != nil {
+		return nil
+	}
+	return servers
+}
+
+func jsonEnvMap(name string) map[string]any {
+	raw := os.Getenv(name)
+	if strings.TrimSpace(raw) == "" {
+		return nil
+	}
+	var values map[string]any
+	if err := json.Unmarshal([]byte(raw), &values); err != nil {
+		return nil
+	}
+	return values
+}
+
 func splitStringList(raw string) []string {
 	parts := strings.Split(raw, ",")
 	values := make([]string, 0, len(parts))
@@ -3731,14 +3777,14 @@ func configureAppTools(cfg AppConfig, a *agent.Agent, session *agent.AgentSessio
 }
 
 func configureMCPTools(ctx context.Context, cfg AppConfig, a *agent.Agent) ([]llm.MCPServer, error) {
-	if len(cfg.MCPStdioServers) == 0 {
+	if len(cfg.MCPStdioServers) == 0 && len(cfg.MCPHTTPServers) == 0 {
 		return nil, nil
 	}
 	if a == nil {
-		return nil, fmt.Errorf("MCP stdio tools require an agent")
+		return nil, fmt.Errorf("MCP tools require an agent")
 	}
 
-	servers := make([]llm.MCPServer, 0, len(cfg.MCPStdioServers))
+	servers := make([]llm.MCPServer, 0, len(cfg.MCPStdioServers)+len(cfg.MCPHTTPServers))
 	for _, serverConfig := range cfg.MCPStdioServers {
 		command := strings.TrimSpace(serverConfig.Command)
 		if command == "" {
@@ -3748,6 +3794,38 @@ func configureMCPTools(ctx context.Context, cfg AppConfig, a *agent.Agent) ([]ll
 		server := llm.NewMCPServerStdio(command, serverConfig.Args)
 		server.Env = serverConfig.Env
 		server.Cwd = serverConfig.Cwd
+
+		initCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+		err := server.Initialize(initCtx)
+		cancel()
+		if err != nil {
+			_ = server.Close()
+			closeMCPServers(servers)
+			return nil, err
+		}
+
+		listCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+		tools, err := server.ListTools(listCtx)
+		cancel()
+		if err != nil {
+			_ = server.Close()
+			closeMCPServers(servers)
+			return nil, err
+		}
+
+		a.Tools = appendMissingToolsByID(a.Tools, tools...)
+		servers = append(servers, server)
+	}
+	for _, serverConfig := range cfg.MCPHTTPServers {
+		url := strings.TrimSpace(serverConfig.URL)
+		if url == "" {
+			closeMCPServers(servers)
+			return nil, fmt.Errorf("RTP_AGENT_MCP_HTTP_SERVERS entry requires url")
+		}
+		server := llm.NewMCPServerHTTP(url)
+		server.TransportType = serverConfig.TransportType
+		server.AllowedTools = serverConfig.AllowedTools
+		server.Headers = serverConfig.Headers
 
 		initCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 		err := server.Initialize(initCtx)
