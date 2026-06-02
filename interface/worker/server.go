@@ -939,7 +939,8 @@ func (c *workerLoadCalculator) Load() float64 {
 
 	sample := c.sample()
 	if sample < 0 || math.IsNaN(sample) || math.IsInf(sample, 0) {
-		sample = 0
+		c.average.Reset()
+		return 0
 	}
 	c.average.AddSample(sample)
 	return c.average.GetAvg()
