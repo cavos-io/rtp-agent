@@ -57,7 +57,6 @@ func (s *BufferedTokenStream) PushText(text string) error {
 		}
 
 		tok := tokens[0]
-		tokens = tokens[1:]
 
 		s.outBuf += tok
 		if len(s.outBuf) >= s.minTokenLen {

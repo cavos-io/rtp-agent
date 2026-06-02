@@ -3,6 +3,7 @@ package tokenize
 import (
 	"errors"
 	"io"
+	"strings"
 	"testing"
 	"time"
 )
@@ -50,6 +51,48 @@ func TestBufferedTokenStreamNextReturnsIOEOFWhenClosed(t *testing.T) {
 	_, err := stream.Next()
 	if !errors.Is(err, io.EOF) {
 		t.Fatalf("Next error = %v, want io.EOF", err)
+	}
+}
+
+func TestBufferedTokenStreamKeepsLastTokenAsContext(t *testing.T) {
+	stream := NewBufferedTokenStream(strings.Fields, 1, 1)
+
+	if err := stream.PushText("one two three"); err != nil {
+		t.Fatalf("PushText returned error: %v", err)
+	}
+
+	first, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next returned error for first token: %v", err)
+	}
+	if first.Token != "one" {
+		t.Fatalf("first token = %q, want one", first.Token)
+	}
+
+	second, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next returned error for second token: %v", err)
+	}
+	if second.Token != "two" {
+		t.Fatalf("second token = %q, want two", second.Token)
+	}
+
+	select {
+	case token := <-stream.eventCh:
+		t.Fatalf("unexpected buffered token before flush: %q", token.Token)
+	default:
+	}
+
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush returned error: %v", err)
+	}
+
+	third, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next returned error for flushed token: %v", err)
+	}
+	if third.Token != "three" {
+		t.Fatalf("third token = %q, want three", third.Token)
 	}
 }
 
