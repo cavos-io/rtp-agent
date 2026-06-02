@@ -158,6 +158,7 @@ type AppConfig struct {
 	WorkerOptions worker.WorkerOptions
 	Instructions  string
 
+	InitialChatContext                      map[string]any
 	AWSRegion                               string
 	LLMProvider                             string
 	LLMModel                                string
@@ -465,6 +466,7 @@ type EvaluationSummary struct {
 func DefaultConfigFromEnv() AppConfig {
 	return AppConfig{
 		Instructions:                            getenvDefault("RTP_AGENT_INSTRUCTIONS", "You are a helpful realtime voice agent."),
+		InitialChatContext:                      jsonEnvMap("RTP_AGENT_CHAT_CONTEXT_JSON"),
 		AWSRegion:                               firstEnv("RTP_AGENT_AWS_REGION", "AWS_REGION"),
 		LLMProvider:                             normalizedEnv("RTP_AGENT_LLM_PROVIDER"),
 		LLMModel:                                os.Getenv("RTP_AGENT_LLM_MODEL"),
@@ -746,6 +748,13 @@ func NewApp(cfg AppConfig) (*App, error) {
 	if baseAgent.Instructions == "" {
 		baseAgent.Instructions = "You are a helpful realtime voice agent."
 	}
+	if len(cfg.InitialChatContext) > 0 {
+		chatCtx, err := llm.ChatContextFromDict(cfg.InitialChatContext)
+		if err != nil {
+			return nil, fmt.Errorf("invalid RTP_AGENT_CHAT_CONTEXT_JSON: %w", err)
+		}
+		baseAgent.ChatCtx = chatCtx
+	}
 
 	if err := configureVAD(cfg, baseAgent); err != nil {
 		return nil, err
@@ -779,6 +788,9 @@ func NewApp(cfg AppConfig) (*App, error) {
 		return nil, err
 	}
 	session := agent.NewAgentSession(sessionAgent, nil, sessionOptions)
+	if baseAgent.ChatCtx != nil {
+		session.ChatCtx = baseAgent.ChatCtx.Copy()
+	}
 	if realtimeModel != nil {
 		session.Assistant = agent.NewMultimodalAgent(realtimeModel, session.ChatCtx)
 	}
@@ -3465,6 +3477,18 @@ func mcpStdioServersFromEnv(name string) []MCPStdioServerConfig {
 		return nil
 	}
 	return servers
+}
+
+func jsonEnvMap(name string) map[string]any {
+	raw := os.Getenv(name)
+	if strings.TrimSpace(raw) == "" {
+		return nil
+	}
+	var values map[string]any
+	if err := json.Unmarshal([]byte(raw), &values); err != nil {
+		return nil
+	}
+	return values
 }
 
 func splitStringList(raw string) []string {

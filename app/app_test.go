@@ -1874,6 +1874,23 @@ func TestDefaultConfigFromEnvConfiguresLLMChatOptions(t *testing.T) {
 	}
 }
 
+func TestDefaultConfigFromEnvRestoresInitialChatContext(t *testing.T) {
+	t.Setenv("RTP_AGENT_CHAT_CONTEXT_JSON", `{"items":[{"id":"seed-user","type":"message","role":"user","content":["hello from history"]}]}`)
+
+	app, err := NewApp(DefaultConfigFromEnv())
+	if err != nil {
+		t.Fatalf("NewApp() error = %v", err)
+	}
+
+	for _, item := range app.Session.ChatCtx.Items {
+		message, ok := item.(*llm.ChatMessage)
+		if ok && message.ID == "seed-user" && message.TextContent() == "hello from history" {
+			return
+		}
+	}
+	t.Fatalf("session chat context items = %#v, want restored seed-user message", app.Session.ChatCtx.Items)
+}
+
 func TestDefaultConfigFromEnvWrapsSTTFallbackProviders(t *testing.T) {
 	t.Setenv("RTP_AGENT_STT_PROVIDER", "deepgram")
 	t.Setenv("RTP_AGENT_STT_FALLBACK_PROVIDERS", "slng")
