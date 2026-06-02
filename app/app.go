@@ -29,6 +29,7 @@ import (
 	adaptergoogle "github.com/cavos-io/rtp-agent/adapter/google"
 	"github.com/cavos-io/rtp-agent/adapter/gradium"
 	"github.com/cavos-io/rtp-agent/adapter/groq"
+	"github.com/cavos-io/rtp-agent/adapter/hedra"
 	"github.com/cavos-io/rtp-agent/adapter/hume"
 	"github.com/cavos-io/rtp-agent/adapter/inworld"
 	"github.com/cavos-io/rtp-agent/adapter/langchain"
@@ -86,6 +87,7 @@ const (
 	providerGoogle       = "google"
 	providerGradium      = "gradium"
 	providerGroq         = "groq"
+	providerHedra        = "hedra"
 	providerHume         = "hume"
 	providerInworld      = "inworld"
 	providerLangChain    = "langchain"
@@ -312,6 +314,7 @@ type AppConfig struct {
 	GladiaAPIKey                string
 	GnaniAPIKey                 string
 	GradiumAPIKey               string
+	HedraAPIKey                 string
 	HumeAPIKey                  string
 	InworldAPIKey               string
 	LangChainAPIKey             string
@@ -551,6 +554,7 @@ func DefaultConfigFromEnv() AppConfig {
 		GladiaAPIKey:                            os.Getenv("GLADIA_API_KEY"),
 		GnaniAPIKey:                             os.Getenv("GNANI_API_KEY"),
 		GradiumAPIKey:                           os.Getenv("GRADIUM_API_KEY"),
+		HedraAPIKey:                             os.Getenv("HEDRA_API_KEY"),
 		HumeAPIKey:                              os.Getenv("HUME_API_KEY"),
 		InworldAPIKey:                           os.Getenv("INWORLD_API_KEY"),
 		LangChainAPIKey:                         os.Getenv("LANGCHAIN_API_KEY"),
@@ -717,6 +721,8 @@ func configureProviders(cfg AppConfig, a *agent.Agent) (llm.RealtimeModel, error
 		a.LLM = gradium.NewGradiumLLM(cfg.GradiumAPIKey, cfg.LLMModel)
 	case providerGroq:
 		a.LLM = groq.NewGroqLLM(cfg.GroqAPIKey, cfg.LLMModel)
+	case providerHedra:
+		a.LLM = hedra.NewHedraLLM(cfg.HedraAPIKey, cfg.LLMModel)
 	case providerHume:
 		a.LLM = hume.NewHumeLLM(cfg.HumeAPIKey, cfg.LLMModel)
 	case providerInworld:

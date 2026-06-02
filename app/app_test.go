@@ -127,6 +127,22 @@ func TestDefaultConfigFromEnvSelectsSimliLLM(t *testing.T) {
 	}
 }
 
+func TestDefaultConfigFromEnvSelectsHedraLLM(t *testing.T) {
+	t.Setenv("HEDRA_API_KEY", "test-hedra-key")
+	t.Setenv("RTP_AGENT_LLM_PROVIDER", "hedra")
+
+	app, err := NewApp(DefaultConfigFromEnv())
+	if err != nil {
+		t.Fatalf("NewApp() error = %v", err)
+	}
+	if app.Session == nil || app.Session.LLM == nil {
+		t.Fatal("Session LLM is nil")
+	}
+	if got := llm.Label(app.Session.LLM); got != "hedra.HedraLLM" {
+		t.Fatalf("LLM label = %q, want hedra.HedraLLM", got)
+	}
+}
+
 func TestDefaultConfigFromEnvSelectsUpliftAIProviders(t *testing.T) {
 	t.Setenv("UPLIFTAI_API_KEY", "test-upliftai-key")
 	t.Setenv("RTP_AGENT_LLM_PROVIDER", "upliftai")
