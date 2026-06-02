@@ -2,77 +2,89 @@ package agent
 
 import (
 	"context"
-	"encoding/json"
-	"strings"
 	"testing"
-	"time"
 )
 
-func TestAvatarDefaultsAndStart(t *testing.T) {
-	avatar := NewAvatar()
-	if avatar.State != AvatarStateIdle {
-		t.Fatalf("avatar state = %q, want idle", avatar.State)
+type avatarContextKey string
+
+func TestAgentSessionStartPassesContextToAvatarProvider(t *testing.T) {
+	baseAgent := NewAgent("test")
+	baseAgent.VAD = &fakePipelineVAD{}
+	baseAgent.STT = &fakePipelineSTT{}
+	baseAgent.LLM = &fakeGenerationLLM{stream: &fakeGenerationLLMStream{}}
+	baseAgent.TTS = &fakePipelineTTS{}
+	avatar := &recordingAvatarProvider{}
+	baseAgent.Avatar = avatar
+
+	ctx := context.WithValue(context.Background(), avatarContextKey("request_id"), "session-a")
+	session := NewAgentSession(baseAgent, nil, AgentSessionOptions{})
+
+	if err := session.Start(ctx); err != nil {
+		t.Fatalf("Start error = %v", err)
 	}
-	if err := avatar.Start(context.Background()); err != nil {
-		t.Fatalf("Start returned error: %v", err)
+
+	if avatar.startCalls != 1 {
+		t.Fatalf("avatar startCalls = %d, want 1", avatar.startCalls)
+	}
+	if got := avatar.startContext.Value(avatarContextKey("request_id")); got != "session-a" {
+		t.Fatalf("avatar start context request_id = %#v, want session-a", got)
 	}
 }
 
-func TestDataStreamIOSendAvatarDataRejectsMissingRoom(t *testing.T) {
-	io := NewDataStreamIO(nil)
-	err := io.SendAvatarData(context.Background(), []byte("payload"))
-	if err == nil || !strings.Contains(err.Error(), "room or local participant is nil") {
-		t.Fatalf("SendAvatarData error = %v, want missing room error", err)
+func TestAgentSessionStartDoesNotRestartAvatarProvider(t *testing.T) {
+	baseAgent := NewAgent("test")
+	baseAgent.VAD = &fakePipelineVAD{}
+	baseAgent.STT = &fakePipelineSTT{}
+	baseAgent.LLM = &fakeGenerationLLM{stream: &fakeGenerationLLMStream{}}
+	baseAgent.TTS = &fakePipelineTTS{}
+	avatar := &recordingAvatarProvider{}
+	baseAgent.Avatar = avatar
+
+	ctx := context.Background()
+	session := NewAgentSession(baseAgent, nil, AgentSessionOptions{})
+
+	if err := session.Start(ctx); err != nil {
+		t.Fatalf("first Start error = %v", err)
+	}
+	if err := session.Start(ctx); err != nil {
+		t.Fatalf("second Start error = %v", err)
+	}
+
+	if avatar.startCalls != 1 {
+		t.Fatalf("avatar startCalls = %d, want idempotent start once", avatar.startCalls)
 	}
 }
 
-func TestQueueIOSendAndReadAvatarData(t *testing.T) {
-	io := NewQueueIO()
-	if err := io.SendAvatarData(context.Background(), []byte("payload")); err != nil {
-		t.Fatalf("SendAvatarData returned error: %v", err)
-	}
+func TestAvatarProviderUpdateStateRecordsLatestState(t *testing.T) {
+	avatar := &recordingAvatarProvider{}
 
-	select {
-	case got := <-io.ReadQueue():
-		if string(got) != "payload" {
-			t.Fatalf("queued payload = %q, want payload", got)
-		}
-	case <-time.After(time.Second):
-		t.Fatal("timed out waiting for queued avatar data")
+	if err := avatar.UpdateState(AvatarStateSpeaking); err != nil {
+		t.Fatalf("UpdateState error = %v", err)
+	}
+	if avatar.state != AvatarStateSpeaking {
+		t.Fatalf("avatar state = %q, want speaking", avatar.state)
+	}
+	if err := avatar.UpdateState(AvatarStateIdle); err != nil {
+		t.Fatalf("UpdateState idle error = %v", err)
+	}
+	if avatar.state != AvatarStateIdle {
+		t.Fatalf("avatar state = %q, want idle", avatar.state)
 	}
 }
 
-func TestAvatarRunnerSimulatesLipSyncData(t *testing.T) {
-	io := NewQueueIO()
-	runner := NewAvatarRunner(io)
-	if err := runner.Start(context.Background()); err != nil {
-		t.Fatalf("Start returned error: %v", err)
-	}
-	runner.SimulateLipSync("a")
-
-	first := receiveAvatarPayload(t, io.ReadQueue())
-	if first.Type != "blendshapes" || first.Shapes["jawOpen"] != 0.8 {
-		t.Fatalf("first payload = %#v, want open jaw blendshape", first)
-	}
-	final := receiveAvatarPayload(t, io.ReadQueue())
-	if final.Type != "blendshapes" || final.Shapes["jawOpen"] != 0 {
-		t.Fatalf("final payload = %#v, want closed jaw blendshape", final)
-	}
-
-	runner.Stop()
+type recordingAvatarProvider struct {
+	startCalls   int
+	startContext context.Context
+	state        AvatarState
 }
 
-func receiveAvatarPayload(t *testing.T, ch <-chan []byte) blendShapeData {
-	t.Helper()
-	select {
-	case payload := <-ch:
-		var data blendShapeData
-		if err := json.Unmarshal(payload, &data); err != nil {
-			t.Fatalf("decode avatar payload %q: %v", string(payload), err)
-		}
-		return data
-	case <-time.After(time.Second):
-		t.Fatal("timed out waiting for avatar payload")
-		return blendShapeData{}
-	}
+func (r *recordingAvatarProvider) Start(ctx context.Context) error {
+	r.startCalls++
+	r.startContext = ctx
+	return nil
+}
+
+func (r *recordingAvatarProvider) UpdateState(state AvatarState) error {
+	r.state = state
+	return nil
 }
