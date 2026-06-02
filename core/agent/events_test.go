@@ -311,3 +311,28 @@ func TestErrorEventIsTypedAndTimestamped(t *testing.T) {
 		t.Fatalf("CreatedAt = %v, want timestamp after %v", ev.CreatedAt, before)
 	}
 }
+
+func TestRunContextRoundTrip(t *testing.T) {
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	runCtx := NewRunContext(session, nil, nil)
+
+	ctx := WithRunContext(context.Background(), runCtx)
+	if got := GetRunContext(ctx); got != runCtx {
+		t.Fatalf("GetRunContext = %#v, want original run context", got)
+	}
+	if got := GetRunContext(context.Background()); got != nil {
+		t.Fatalf("GetRunContext without value = %#v, want nil", got)
+	}
+}
+
+func TestClientEventsDispatcherNoopsWithoutRoom(t *testing.T) {
+	dispatcher := NewClientEventsDispatcher(nil)
+
+	dispatcher.DispatchAgentState(AgentStateIdle)
+	dispatcher.DispatchAgentState(AgentStateThinking)
+	dispatcher.DispatchAgentState(AgentStateSpeaking)
+	dispatcher.DispatchAgentState(AgentState("unknown"))
+	dispatcher.DispatchUserState(UserStateListening)
+	dispatcher.DispatchUserState(UserStateSpeaking)
+	dispatcher.DispatchUserState(UserState("unknown"))
+}

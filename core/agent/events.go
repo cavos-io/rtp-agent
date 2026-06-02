@@ -289,7 +289,7 @@ func (d *ClientEventsDispatcher) dispatchData(payload ClientEventPayload) {
 	}
 
 	// Publish to the "lk-agent-state" topic which the frontend UI components listen to
-	err = d.room.LocalParticipant.PublishData(b, lksdk.WithDataPublishReliable(true), lksdk.WithDataPublishTopic("lk-agent-state"))
+	err = d.room.LocalParticipant.PublishDataPacket(lksdk.UserData(b), lksdk.WithDataPublishReliable(true), lksdk.WithDataPublishTopic("lk-agent-state"))
 	if err != nil {
 		logger.Logger.Errorw("Failed to publish client event data", err)
 	}
