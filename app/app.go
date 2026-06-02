@@ -80,6 +80,7 @@ import (
 	coretts "github.com/cavos-io/rtp-agent/core/tts"
 	"github.com/cavos-io/rtp-agent/interface/worker"
 	"github.com/cavos-io/rtp-agent/library/tokenize"
+	lksdk "github.com/livekit/server-sdk-go/v2"
 	goopenai "github.com/sashabaranov/go-openai"
 )
 
@@ -411,6 +412,8 @@ type App struct {
 	Agent         *agent.Agent
 	Session       *agent.AgentSession
 	RealtimeModel llm.RealtimeModel
+	RoomIO        *worker.RoomIO
+	RoomOptions   worker.RoomOptions
 }
 
 func DefaultConfigFromEnv() AppConfig {
@@ -723,6 +726,23 @@ func (a *App) runSession(ctx *worker.JobContext) error {
 	a.Server.SetConsoleSession(a.Session)
 	if a.Session.STT == nil && a.Session.LLM == nil && a.Session.TTS == nil && a.RealtimeModel == nil {
 		return nil
+	}
+	if ctx != nil {
+		if ctx.Room == nil {
+			if err := ctx.Connect(context.Background(), nil); err != nil {
+				return err
+			}
+		}
+		if ctx.Room != nil {
+			a.Session.Room = ctx.Room
+			roomIO := worker.NewRoomIO(ctx.Room, a.Session, a.RoomOptions)
+			a.RoomIO = roomIO
+			if ctx.Room.LocalParticipant != nil && ctx.Room.ConnectionState() == lksdk.ConnectionStateConnected {
+				if err := roomIO.Start(context.Background()); err != nil {
+					return err
+				}
+			}
+		}
 	}
 	return a.Session.Start(context.Background())
 }

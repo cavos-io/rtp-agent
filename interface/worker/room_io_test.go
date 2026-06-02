@@ -141,6 +141,7 @@ func TestRoomIODefaultTextInputInterruptsBeforeGenerateReply(t *testing.T) {
 
 func TestRoomIOHandleAgentStateChangedPublishesReferenceAttribute(t *testing.T) {
 	var got map[string]string
+	dispatcher := &fakeClientEventsDispatcher{}
 	rio := &RoomIO{
 		agentStatePublisher: func(attrs map[string]string) {
 			got = attrs
@@ -148,6 +149,7 @@ func TestRoomIOHandleAgentStateChangedPublishesReferenceAttribute(t *testing.T) 
 		agentStatePublishEnabled: func() bool {
 			return true
 		},
+		clientEvents: dispatcher,
 	}
 
 	rio.handleAgentStateChanged(agent.AgentStateChangedEvent{NewState: agent.AgentStateThinking})
@@ -155,10 +157,14 @@ func TestRoomIOHandleAgentStateChangedPublishesReferenceAttribute(t *testing.T) 
 	if got[RoomIOAgentStateAttribute] != string(agent.AgentStateThinking) {
 		t.Fatalf("published agent state attributes = %#v, want %s=%s", got, RoomIOAgentStateAttribute, agent.AgentStateThinking)
 	}
+	if len(dispatcher.agentStates) != 1 || dispatcher.agentStates[0] != agent.AgentStateThinking {
+		t.Fatalf("dispatched agent states = %#v, want thinking", dispatcher.agentStates)
+	}
 }
 
 func TestRoomIOHandleAgentStateChangedSkipsWhenRoomDisconnected(t *testing.T) {
 	called := false
+	dispatcher := &fakeClientEventsDispatcher{}
 	rio := &RoomIO{
 		agentStatePublisher: func(map[string]string) {
 			called = true
@@ -166,12 +172,32 @@ func TestRoomIOHandleAgentStateChangedSkipsWhenRoomDisconnected(t *testing.T) {
 		agentStatePublishEnabled: func() bool {
 			return false
 		},
+		clientEvents: dispatcher,
 	}
 
 	rio.handleAgentStateChanged(agent.AgentStateChangedEvent{NewState: agent.AgentStateSpeaking})
 
 	if called {
 		t.Fatal("agent state publisher was called while room was disconnected")
+	}
+	if len(dispatcher.agentStates) != 0 {
+		t.Fatalf("dispatched agent states = %#v, want none while disconnected", dispatcher.agentStates)
+	}
+}
+
+func TestRoomIOHandleUserStateChangedDispatchesClientEvent(t *testing.T) {
+	dispatcher := &fakeClientEventsDispatcher{}
+	rio := &RoomIO{
+		agentStatePublishEnabled: func() bool {
+			return true
+		},
+		clientEvents: dispatcher,
+	}
+
+	rio.handleUserStateChanged(agent.UserStateChangedEvent{NewState: agent.UserStateSpeaking})
+
+	if len(dispatcher.userStates) != 1 || dispatcher.userStates[0] != agent.UserStateSpeaking {
+		t.Fatalf("dispatched user states = %#v, want speaking", dispatcher.userStates)
 	}
 }
 
@@ -859,4 +885,17 @@ func TestRoomIOCallbackForwardsSipDTMFToSession(t *testing.T) {
 	default:
 		t.Fatal("session did not receive SIP DTMF event")
 	}
+}
+
+type fakeClientEventsDispatcher struct {
+	agentStates []agent.AgentState
+	userStates  []agent.UserState
+}
+
+func (f *fakeClientEventsDispatcher) DispatchAgentState(state agent.AgentState) {
+	f.agentStates = append(f.agentStates, state)
+}
+
+func (f *fakeClientEventsDispatcher) DispatchUserState(state agent.UserState) {
+	f.userStates = append(f.userStates, state)
 }

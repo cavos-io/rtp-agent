@@ -134,6 +134,11 @@ type roomIOTextResponder interface {
 	GenerateReply(ctx context.Context, userInput string) (*agent.SpeechHandle, error)
 }
 
+type roomIOClientEvents interface {
+	DispatchAgentState(agent.AgentState)
+	DispatchUserState(agent.UserState)
+}
+
 type RoomIO struct {
 	Room         *lksdk.Room
 	AgentSession *agent.AgentSession
@@ -157,6 +162,8 @@ type RoomIO struct {
 	agentStateCancel         context.CancelFunc
 	agentStatePublisher      func(map[string]string)
 	agentStatePublishEnabled func() bool
+	userStateCancel          context.CancelFunc
+	clientEvents             roomIOClientEvents
 
 	sessionCloseCancel context.CancelFunc
 	deletingRoom       bool
@@ -186,8 +193,10 @@ func NewRoomIO(room *lksdk.Room, session *agent.AgentSession, opts RoomOptions) 
 	}
 	rio.agentStatePublisher = rio.publishLocalParticipantAttributes
 	rio.agentStatePublishEnabled = rio.roomConnected
+	rio.clientEvents = agent.NewClientEventsDispatcher(room)
 	rio.roomName = rio.liveKitRoomName
 	rio.startAgentStateListener()
+	rio.startUserStateListener()
 	rio.startSessionCloseListener()
 
 	if !opts.DisableTextInput {
@@ -218,6 +227,27 @@ func (rio *RoomIO) startAgentStateListener() {
 					return
 				}
 				rio.handleAgentStateChanged(ev)
+			}
+		}
+	}()
+}
+
+func (rio *RoomIO) startUserStateListener() {
+	if rio == nil || rio.AgentSession == nil || rio.AgentSession.UserStateChangedCh == nil {
+		return
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	rio.userStateCancel = cancel
+	go func() {
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case ev, ok := <-rio.AgentSession.UserStateChangedCh:
+				if !ok {
+					return
+				}
+				rio.handleUserStateChanged(ev)
 			}
 		}
 	}()
@@ -279,6 +309,19 @@ func (rio *RoomIO) handleAgentStateChanged(ev agent.AgentStateChangedEvent) {
 	rio.agentStatePublisher(map[string]string{
 		RoomIOAgentStateAttribute: string(ev.NewState),
 	})
+	if rio.clientEvents != nil {
+		rio.clientEvents.DispatchAgentState(ev.NewState)
+	}
+}
+
+func (rio *RoomIO) handleUserStateChanged(ev agent.UserStateChangedEvent) {
+	if rio == nil || rio.clientEvents == nil {
+		return
+	}
+	if rio.agentStatePublishEnabled != nil && !rio.agentStatePublishEnabled() {
+		return
+	}
+	rio.clientEvents.DispatchUserState(ev.NewState)
 }
 
 func (rio *RoomIO) roomConnected() bool {
@@ -766,6 +809,9 @@ func (rio *RoomIO) Close() error {
 	rio.closed = true
 	if rio.agentStateCancel != nil {
 		rio.agentStateCancel()
+	}
+	if rio.userStateCancel != nil {
+		rio.userStateCancel()
 	}
 	if rio.sessionCloseCancel != nil {
 		rio.sessionCloseCancel()
