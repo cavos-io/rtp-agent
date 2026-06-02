@@ -98,6 +98,7 @@ func (p *JobProcess) HTTPProxy() string {
 
 type JobRoomServiceAPI interface {
 	DeleteRoom(context.Context, *livekit.DeleteRoomRequest) (*livekit.DeleteRoomResponse, error)
+	MoveParticipant(context.Context, *livekit.MoveParticipantRequest) (*livekit.MoveParticipantResponse, error)
 }
 
 type JobSIPAPI interface {
@@ -793,6 +794,22 @@ func (c *JobContext) DeleteRoom(ctx context.Context, roomName string) (*livekit.
 		return &livekit.DeleteRoomResponse{}, nil
 	}
 	return resp, nil
+}
+
+func (c *JobContext) MoveParticipant(ctx context.Context, room string, identity string, destinationRoom string) error {
+	if c.IsFakeJob() {
+		logger.Logger.Warnw("job context MoveParticipant is skipped for fake jobs", nil)
+		return nil
+	}
+	if destinationRoom == "" {
+		destinationRoom = c.Job.Room.Name
+	}
+	_, err := c.API().RoomService.MoveParticipant(ctx, &livekit.MoveParticipantRequest{
+		Room:            room,
+		Identity:        identity,
+		DestinationRoom: destinationRoom,
+	})
+	return err
 }
 
 // AddSIPParticipant adds a SIP participant to the room.

@@ -1193,9 +1193,37 @@ func TestJobContextDeleteRoomIgnoresAPIError(t *testing.T) {
 	}
 }
 
+func TestJobContextMoveParticipantBuildsReferenceRequest(t *testing.T) {
+	ctx := NewJobContext(
+		&livekit.Job{Id: "job_move_participant", Room: &livekit.Room{Name: "caller-room"}},
+		"",
+		"",
+		"",
+	)
+	roomAPI := &fakeJobRoomServiceAPI{}
+	ctx.api = &JobAPI{RoomService: roomAPI}
+
+	if err := ctx.MoveParticipant(context.Background(), "human-room", "human-agent-sip", "caller-room"); err != nil {
+		t.Fatalf("MoveParticipant() error = %v", err)
+	}
+	if roomAPI.moveRequest == nil {
+		t.Fatal("MoveParticipant() did not call room service API")
+	}
+	if roomAPI.moveRequest.Room != "human-room" {
+		t.Fatalf("MoveParticipantRequest.Room = %q, want human-room", roomAPI.moveRequest.Room)
+	}
+	if roomAPI.moveRequest.Identity != "human-agent-sip" {
+		t.Fatalf("MoveParticipantRequest.Identity = %q, want human-agent-sip", roomAPI.moveRequest.Identity)
+	}
+	if roomAPI.moveRequest.DestinationRoom != "caller-room" {
+		t.Fatalf("MoveParticipantRequest.DestinationRoom = %q, want caller-room", roomAPI.moveRequest.DestinationRoom)
+	}
+}
+
 type fakeJobRoomServiceAPI struct {
-	err     error
-	request *livekit.DeleteRoomRequest
+	err         error
+	request     *livekit.DeleteRoomRequest
+	moveRequest *livekit.MoveParticipantRequest
 }
 
 func (f *fakeJobRoomServiceAPI) DeleteRoom(_ context.Context, req *livekit.DeleteRoomRequest) (*livekit.DeleteRoomResponse, error) {
@@ -1204,6 +1232,14 @@ func (f *fakeJobRoomServiceAPI) DeleteRoom(_ context.Context, req *livekit.Delet
 		return nil, f.err
 	}
 	return &livekit.DeleteRoomResponse{}, nil
+}
+
+func (f *fakeJobRoomServiceAPI) MoveParticipant(_ context.Context, req *livekit.MoveParticipantRequest) (*livekit.MoveParticipantResponse, error) {
+	f.moveRequest = req
+	if f.err != nil {
+		return nil, f.err
+	}
+	return &livekit.MoveParticipantResponse{}, nil
 }
 
 func TestTransferSIPParticipantIdentityAcceptsString(t *testing.T) {
