@@ -544,6 +544,66 @@ func TestAgentActivityCommitUserTurnSkipsWhenCurrentSpeechCannotBeInterrupted(t 
 	}
 }
 
+func TestAgentActivityCommitUserTurnInterruptsCurrentSpeechBeforeReply(t *testing.T) {
+	agent := &turnCompletedAgent{Agent: NewAgent("test"), turns: make(chan *llm.ChatMessage, 1)}
+	agent.TurnDetection = TurnDetectionModeManual
+	agent.LLM = &fakeGenerationLLM{stream: &fakeGenerationLLMStream{}}
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	activity := NewAgentActivity(agent, session)
+	agent.activity = activity
+	session.activity = activity
+	current := NewSpeechHandle(true, DefaultInputDetails())
+	activity.currentSpeech = current
+
+	activity.OnFinalTranscript(&stt.SpeechEvent{
+		Alternatives: []stt.SpeechData{{Text: "interrupt and reply"}},
+	})
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := activity.CommitUserTurn(context.Background(), CommitUserTurnOptions{})
+		done <- err
+	}()
+
+	waitForInterrupted(t, current)
+	select {
+	case err := <-done:
+		t.Fatalf("CommitUserTurn returned before current speech completed: %v", err)
+	case msg := <-agent.turns:
+		t.Fatalf("OnUserTurnCompleted called before current speech completed with %q", msg.TextContent())
+	case ev := <-session.SpeechCreatedEvents():
+		t.Fatalf("reply generated before current speech completed: %#v", ev)
+	case <-time.After(20 * time.Millisecond):
+	}
+
+	current.MarkDone()
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("CommitUserTurn error = %v, want nil", err)
+		}
+	case <-testTimeout():
+		t.Fatal("CommitUserTurn did not return after current speech completed")
+	}
+	select {
+	case msg := <-agent.turns:
+		if msg.TextContent() != "interrupt and reply" {
+			t.Fatalf("OnUserTurnCompleted message = %q, want interrupt and reply", msg.TextContent())
+		}
+	default:
+		t.Fatal("OnUserTurnCompleted was not called after current speech completed")
+	}
+	select {
+	case ev := <-session.SpeechCreatedEvents():
+		if ev.SpeechHandle.Generation.UserMessage == nil || ev.SpeechHandle.Generation.UserMessage.TextContent() != "interrupt and reply" {
+			t.Fatalf("reply user message = %#v, want committed user turn", ev.SpeechHandle.Generation.UserMessage)
+		}
+	default:
+		t.Fatal("reply was not generated after current speech completed")
+	}
+}
+
 func TestAgentActivityCommitUserTurnSkipsReplyWhenLLMMissing(t *testing.T) {
 	agent := NewAgent("test")
 	agent.TurnDetection = TurnDetectionModeManual

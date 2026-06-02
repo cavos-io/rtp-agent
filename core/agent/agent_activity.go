@@ -615,6 +615,14 @@ func (a *AgentActivity) completeUserTurn(ctx context.Context, info EndOfTurnInfo
 		logger.Logger.Warnw("skipping reply to user input, current speech generation cannot be interrupted", nil, "userInput", info.NewTranscript)
 		return nil, nil
 	}
+	if currentSpeech != nil && !currentSpeech.IsInterrupted() && !currentSpeech.IsDone() {
+		if err := currentSpeech.Interrupt(false); err != nil {
+			return nil, err
+		}
+		if err := currentSpeech.Wait(ctx); err != nil {
+			return nil, err
+		}
+	}
 
 	chatCtx := llm.NewChatContext()
 	if a.Agent.ChatCtx != nil {
