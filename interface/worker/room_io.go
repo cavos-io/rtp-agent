@@ -468,6 +468,16 @@ func (rio *RoomIO) onDataPacket(data lksdk.DataPacket, params lksdk.DataReceiveP
 	})
 }
 
+func (rio *RoomIO) PublishDTMF(code int32, digit string) error {
+	if rio == nil || rio.Room == nil || rio.Room.LocalParticipant == nil {
+		return errors.New("room local participant not available")
+	}
+	return rio.Room.LocalParticipant.PublishDataPacket(&livekit.SipDTMF{
+		Code:  uint32(code),
+		Digit: digit,
+	}, lksdk.WithDataPublishReliable(true))
+}
+
 func (rio *RoomIO) onChatTextStream(reader *lksdk.TextStreamReader, participantIdentity string) {
 	if rio == nil || rio.AgentSession == nil || rio.textInput == nil {
 		return

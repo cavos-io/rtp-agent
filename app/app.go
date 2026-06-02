@@ -419,6 +419,7 @@ type App struct {
 	RealtimeModel llm.RealtimeModel
 	RoomIO        *worker.RoomIO
 	RoomOptions   worker.RoomOptions
+	Config        AppConfig
 }
 
 func DefaultConfigFromEnv() AppConfig {
@@ -729,6 +730,7 @@ func NewApp(cfg AppConfig) (*App, error) {
 		Agent:         baseAgent,
 		Session:       session,
 		RealtimeModel: realtimeModel,
+		Config:        cfg,
 	}
 	if err := server.RTCSession(app.runSession, nil, nil); err != nil {
 		return nil, err
@@ -754,6 +756,9 @@ func (a *App) runSession(ctx *worker.JobContext) error {
 			a.Session.Room = ctx.Room
 			roomIO := worker.NewRoomIO(ctx.Room, a.Session, a.RoomOptions)
 			a.RoomIO = roomIO
+			if err := configureRoomTools(a.Config, a.Agent, roomIO); err != nil {
+				return err
+			}
 			if ctx.Room.LocalParticipant != nil && ctx.Room.ConnectionState() == lksdk.ConnectionStateConnected {
 				if err := roomIO.Start(context.Background()); err != nil {
 					return err
@@ -3075,12 +3080,53 @@ func configureAppTools(cfg AppConfig, a *agent.Agent, session *agent.AgentSessio
 		switch normalizeProvider(tool) {
 		case "end_call", "endcall":
 			tools = append(tools, betatools.NewSessionEndCallTool(session, betatools.EndCallToolOptions{}))
+		case "send_dtmf", "send_dtmf_events", "senddtmf":
+			continue
 		default:
 			return fmt.Errorf("unsupported RTP_AGENT_TOOLS value %q", tool)
 		}
 	}
 	a.Tools = append(a.Tools, tools...)
 	return nil
+}
+
+func configureRoomTools(cfg AppConfig, a *agent.Agent, publisher betatools.DtmfPublisher) error {
+	if len(cfg.AppTools) == 0 {
+		return nil
+	}
+	tools := make([]llm.Tool, 0, len(cfg.AppTools))
+	for _, tool := range cfg.AppTools {
+		switch normalizeProvider(tool) {
+		case "send_dtmf", "send_dtmf_events", "senddtmf":
+			tools = append(tools, betatools.NewSendDTMFTool(publisher))
+		case "end_call", "endcall":
+			continue
+		default:
+			return fmt.Errorf("unsupported RTP_AGENT_TOOLS value %q", tool)
+		}
+	}
+	a.Tools = appendMissingToolsByID(a.Tools, tools...)
+	return nil
+}
+
+func appendMissingToolsByID(existing []llm.Tool, additions ...llm.Tool) []llm.Tool {
+	seen := make(map[string]struct{}, len(existing)+len(additions))
+	for _, tool := range existing {
+		if tool != nil {
+			seen[tool.ID()] = struct{}{}
+		}
+	}
+	for _, tool := range additions {
+		if tool == nil {
+			continue
+		}
+		if _, ok := seen[tool.ID()]; ok {
+			continue
+		}
+		existing = append(existing, tool)
+		seen[tool.ID()] = struct{}{}
+	}
+	return existing
 }
 
 func xaiProviderTools(cfg AppConfig) []llm.Tool {

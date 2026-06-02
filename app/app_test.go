@@ -1623,6 +1623,22 @@ func TestDefaultConfigFromEnvAddsEndCallTool(t *testing.T) {
 	}
 }
 
+func TestConfigureRoomToolsAddsSendDTMFTool(t *testing.T) {
+	baseAgent := agent.NewAgent("test")
+	publisher := &fakeAppDtmfPublisher{}
+
+	err := configureRoomTools(AppConfig{AppTools: []string{"send_dtmf"}}, baseAgent, publisher)
+	if err != nil {
+		t.Fatalf("configureRoomTools() error = %v", err)
+	}
+	if len(baseAgent.Tools) != 1 {
+		t.Fatalf("len(Agent.Tools) = %d, want 1", len(baseAgent.Tools))
+	}
+	if got := baseAgent.Tools[0].Name(); got != "send_dtmf_events" {
+		t.Fatalf("tool[0].Name() = %q, want send_dtmf_events", got)
+	}
+}
+
 func TestDefaultConfigFromEnvAddsAnthropicComputerTool(t *testing.T) {
 	t.Setenv("ANTHROPIC_API_KEY", "test-anthropic-key")
 	t.Setenv("RTP_AGENT_LLM_PROVIDER", "anthropic")
@@ -2145,4 +2161,10 @@ func (f *fakeAppTTSStream) Flush() error          { return nil }
 func (f *fakeAppTTSStream) Close() error          { return nil }
 func (f *fakeAppTTSStream) Next() (*tts.SynthesizedAudio, error) {
 	return nil, io.EOF
+}
+
+type fakeAppDtmfPublisher struct{}
+
+func (f *fakeAppDtmfPublisher) PublishDTMF(code int32, digit string) error {
+	return nil
 }
