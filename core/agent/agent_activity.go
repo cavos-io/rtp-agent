@@ -11,6 +11,8 @@ import (
 	"github.com/cavos-io/rtp-agent/core/stt"
 	"github.com/cavos-io/rtp-agent/core/vad"
 	"github.com/cavos-io/rtp-agent/library/logger"
+	"github.com/cavos-io/rtp-agent/library/telemetry"
+	"github.com/cavos-io/rtp-agent/library/tokenize"
 )
 
 var ErrSpeechSchedulingPaused = errors.New("speech scheduling is paused")
@@ -21,6 +23,8 @@ type EndOfTurnInfo struct {
 	SkipReply            bool
 	NewTranscript        string
 	TranscriptConfidence float64
+	EndOfTurnDelay       float64
+	TranscriptionDelay   float64
 	StartedSpeakingAt    *float64
 	StoppedSpeakingAt    *float64
 }
@@ -45,6 +49,7 @@ type AgentActivity struct {
 	speaking       bool
 
 	userTurnMu                   sync.Mutex
+	userTurnCompletionMu         sync.Mutex
 	pendingUserTranscript        string
 	pendingTranscriptConfidence  float64
 	pendingUserTranscriptPresent bool
@@ -207,10 +212,56 @@ func (a *AgentActivity) OnUserTurnExceeded(ev UserTurnExceededEvent) {
 			a.userTurnExceededMu.Unlock()
 		}()
 
+		shouldRun, err := a.waitForUserTurnExceededCallback(a.ctx)
+		if err != nil {
+			logger.Logger.Errorw("user turn exceeded wait failed", err)
+			return
+		}
+		if !shouldRun {
+			return
+		}
+		a.queueMu.Lock()
+		schedulingPaused = a.schedulingPaused || a.schedulingDraining
+		a.queueMu.Unlock()
+		if schedulingPaused {
+			return
+		}
 		if err := a.AgentIntf.OnUserTurnExceeded(a.ctx, ev); err != nil {
 			logger.Logger.Errorw("error in OnUserTurnExceeded callback", err)
 		}
 	}()
+}
+
+func (a *AgentActivity) waitForUserTurnExceededCallback(ctx context.Context) (bool, error) {
+	if a.Session == nil {
+		return true, nil
+	}
+	if a.Session.AgentState == AgentStateSpeaking {
+		return false, nil
+	}
+	if len(a.activeSpeechHandles()) == 0 {
+		return true, nil
+	}
+
+	ticker := time.NewTicker(time.Millisecond)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return false, ctx.Err()
+		case ev := <-a.Session.AgentStateChangedCh:
+			if ev.NewState == AgentStateSpeaking {
+				return false, nil
+			}
+		case <-ticker.C:
+			if a.Session.AgentState == AgentStateSpeaking {
+				return false, nil
+			}
+			if len(a.activeSpeechHandles()) == 0 {
+				return true, nil
+			}
+		}
+	}
 }
 
 func (a *AgentActivity) UpdateInstructions(ctx context.Context, instructions string) error {
@@ -525,13 +576,45 @@ func (a *AgentActivity) OnEndOfSpeech(ev *vad.VADEvent) {
 	}
 }
 
+func (a *AgentActivity) OnInterimTranscript(ev *stt.SpeechEvent) {
+	if a.Session == nil {
+		return
+	}
+	transcript := ""
+	language := ""
+	speakerID := ""
+	if ev != nil && len(ev.Alternatives) > 0 {
+		transcript = ev.Alternatives[0].Text
+		language = ev.Alternatives[0].Language
+		speakerID = ev.Alternatives[0].SpeakerID
+	}
+	a.Session.EmitUserInputTranscribed(UserInputTranscribedEvent{
+		Language:   language,
+		Transcript: transcript,
+		IsFinal:    false,
+		SpeakerID:  speakerID,
+	})
+}
+
 func (a *AgentActivity) OnFinalTranscript(ev *stt.SpeechEvent) {
 	a.sttEOSReceived = true
 	transcript := ""
 	confidence := 0.0
+	language := ""
+	speakerID := ""
 	if len(ev.Alternatives) > 0 {
 		transcript = ev.Alternatives[0].Text
 		confidence = ev.Alternatives[0].Confidence
+		language = ev.Alternatives[0].Language
+		speakerID = ev.Alternatives[0].SpeakerID
+	}
+	if a.Session != nil {
+		a.Session.EmitUserInputTranscribed(UserInputTranscribedEvent{
+			Language:   language,
+			Transcript: transcript,
+			IsFinal:    true,
+			SpeakerID:  speakerID,
+		})
 	}
 
 	a.userTurnMu.Lock()
@@ -583,30 +666,152 @@ func (a *AgentActivity) CommitUserTurn(ctx context.Context, opts CommitUserTurnO
 		return "", nil
 	}
 
-	newMsg := &llm.ChatMessage{
-		Role:                 llm.ChatRoleUser,
-		Content:              []llm.ChatContent{{Text: transcript}},
-		TranscriptConfidence: &confidence,
-		CreatedAt:            time.Now(),
-	}
-	if opts.SkipReply {
-		if a.Agent.ChatCtx == nil {
-			a.Agent.ChatCtx = llm.NewChatContext()
-		}
-		a.Agent.ChatCtx.Append(newMsg)
-		if a.Session != nil {
-			a.Session.EmitConversationItemAdded(newMsg)
-		}
-		return transcript, nil
-	}
-
 	if ctx == nil {
 		ctx = a.ctx
 	}
-	if err := a.AgentIntf.OnUserTurnCompleted(ctx, a.Agent.ChatCtx, newMsg); err != nil {
+	if _, err := a.completeUserTurn(ctx, EndOfTurnInfo{
+		SkipReply:            opts.SkipReply,
+		NewTranscript:        transcript,
+		TranscriptConfidence: confidence,
+	}); err != nil {
 		return transcript, err
 	}
 	return transcript, nil
+}
+
+func (a *AgentActivity) completeUserTurn(ctx context.Context, info EndOfTurnInfo) (*SpeechHandle, error) {
+	a.userTurnCompletionMu.Lock()
+	defer a.userTurnCompletionMu.Unlock()
+
+	confidence := info.TranscriptConfidence
+	newMsg := &llm.ChatMessage{
+		Role:                 llm.ChatRoleUser,
+		Content:              []llm.ChatContent{{Text: info.NewTranscript}},
+		TranscriptConfidence: &confidence,
+		CreatedAt:            time.Now(),
+	}
+	if info.SkipReply {
+		a.commitUserMessage(newMsg)
+		return nil, nil
+	}
+	a.queueMu.Lock()
+	currentSpeech := a.currentSpeech
+	schedulingPaused := a.schedulingPaused || a.schedulingDraining
+	a.queueMu.Unlock()
+	if currentSpeech != nil && !currentSpeech.AllowInterruptions && !currentSpeech.IsInterrupted() && !currentSpeech.IsDone() {
+		logger.Logger.Warnw("skipping reply to user input, current speech generation cannot be interrupted", nil, "userInput", info.NewTranscript)
+		return nil, nil
+	}
+	if a.shouldSkipShortInterruption(currentSpeech, info.NewTranscript) {
+		return nil, nil
+	}
+	if currentSpeech != nil && !currentSpeech.IsInterrupted() && !currentSpeech.IsDone() {
+		if err := currentSpeech.Interrupt(false); err != nil {
+			return nil, err
+		}
+		if err := currentSpeech.Wait(ctx); err != nil {
+			return nil, err
+		}
+	}
+	if schedulingPaused {
+		logger.Logger.Warnw("skipping on_user_turn_completed, speech scheduling is paused", nil, "userInput", info.NewTranscript)
+		return nil, nil
+	}
+
+	chatCtx := llm.NewChatContext()
+	if a.Agent.ChatCtx != nil {
+		chatCtx = a.Agent.ChatCtx.Copy()
+	}
+	hookStart := time.Now()
+	if err := a.AgentIntf.OnUserTurnCompleted(ctx, chatCtx, newMsg); err != nil {
+		var stopResponse llm.StopResponse
+		if errors.As(err, &stopResponse) {
+			return nil, nil
+		}
+		logger.Logger.Errorw("error occurred during on_user_turn_completed", err)
+		return nil, nil
+	}
+	hookDelay := time.Since(hookStart).Seconds()
+	newMsg.Metrics = metricsReportFromEndOfTurn(info, hookDelay)
+	if a.Agent.LLM == nil || a.Session == nil {
+		return nil, nil
+	}
+	a.queueMu.Lock()
+	schedulingPaused = a.schedulingPaused || a.schedulingDraining
+	a.queueMu.Unlock()
+	if schedulingPaused {
+		logger.Logger.Warnw("skipping reply to user input, speech scheduling is paused", nil, "userInput", info.NewTranscript)
+		return nil, nil
+	}
+	handle, err := a.Session.GenerateReplyWithOptions(ctx, GenerateReplyOptions{
+		UserMessage:   newMsg,
+		ChatCtx:       chatCtx,
+		InputModality: "audio",
+	})
+	if err != nil {
+		return nil, err
+	}
+	mode := a.turnDetectionMode()
+	metadata := (*telemetry.Metadata)(nil)
+	if mode != "" {
+		metadata = &telemetry.Metadata{
+			ModelName:     "unknown",
+			ModelProvider: string(mode),
+		}
+	}
+	a.Session.EmitMetricsCollected(&telemetry.EOUMetrics{
+		Timestamp:                time.Now(),
+		EndOfUtteranceDelay:      info.EndOfTurnDelay,
+		TranscriptionDelay:       info.TranscriptionDelay,
+		OnUserTurnCompletedDelay: hookDelay,
+		SpeechID:                 handle.ID,
+		Metadata:                 metadata,
+	})
+	return handle, nil
+}
+
+func (a *AgentActivity) shouldSkipShortInterruption(currentSpeech *SpeechHandle, transcript string) bool {
+	if currentSpeech == nil || !currentSpeech.AllowInterruptions || currentSpeech.IsInterrupted() || currentSpeech.IsDone() {
+		return false
+	}
+	if a.Session == nil || a.Session.Options.MinInterruptionWords <= 0 {
+		return false
+	}
+	if a.turnDetectionMode() == TurnDetectionModeManual {
+		return false
+	}
+	if a.Agent.STT == nil && a.Session.STT == nil {
+		return false
+	}
+	words := tokenize.SplitWords(transcript, true, true, false)
+	return len(words) < a.Session.Options.MinInterruptionWords
+}
+
+func metricsReportFromEndOfTurn(info EndOfTurnInfo, onUserTurnCompletedDelay float64) map[string]any {
+	metrics := make(map[string]any)
+	if info.StartedSpeakingAt != nil {
+		metrics["started_speaking_at"] = *info.StartedSpeakingAt
+	}
+	if info.StoppedSpeakingAt != nil {
+		metrics["stopped_speaking_at"] = *info.StoppedSpeakingAt
+	}
+	metrics["transcription_delay"] = info.TranscriptionDelay
+	metrics["end_of_turn_delay"] = info.EndOfTurnDelay
+	metrics["on_user_turn_completed_delay"] = onUserTurnCompletedDelay
+	return metrics
+}
+
+func (a *AgentActivity) commitUserMessage(msg *llm.ChatMessage) {
+	if msg == nil || msg.TextContent() == "" {
+		return
+	}
+	if a.Agent.ChatCtx == nil {
+		a.Agent.ChatCtx = llm.NewChatContext()
+	}
+	a.Agent.ChatCtx.Append(msg)
+	if a.Session != nil {
+		a.Session.EmitConversationItemAdded(msg)
+	}
 }
 
 func (a *AgentActivity) clearPendingUserTurn() {
@@ -619,13 +824,25 @@ func (a *AgentActivity) clearPendingUserTurn() {
 }
 
 func (a *AgentActivity) turnDetectionMode() TurnDetectionMode {
+	mode := ""
 	if a.Agent.TurnDetection != "" {
-		return a.Agent.TurnDetection
+		mode = string(a.Agent.TurnDetection)
+	} else if a.Session != nil {
+		mode = string(a.Session.Options.TurnDetection)
 	}
-	if a.Session != nil {
-		return a.Session.Options.TurnDetection
+	switch TurnDetectionMode(mode) {
+	case TurnDetectionModeSTT:
+		if (a.Agent == nil || a.Agent.STT == nil) && (a.Session == nil || a.Session.STT == nil) {
+			logger.Logger.Warnw("turn_detection is set to stt, but no STT model is provided", nil)
+			return ""
+		}
+	case TurnDetectionModeVAD:
+		if (a.Agent == nil || a.Agent.VAD == nil) && (a.Session == nil || a.Session.VAD == nil) {
+			logger.Logger.Warnw("turn_detection is set to vad, but no VAD model is provided", nil)
+			return ""
+		}
 	}
-	return ""
+	return TurnDetectionMode(mode)
 }
 
 func (a *AgentActivity) runEOUDetection(info EndOfTurnInfo) {
@@ -672,11 +889,9 @@ func (a *AgentActivity) runEOUDetection(info EndOfTurnInfo) {
 			// EOU detected
 			logger.Logger.Infow("EOU detected, completing user turn")
 			a.clearPendingUserTurn()
-			newMsg := &llm.ChatMessage{
-				Role:    llm.ChatRoleUser,
-				Content: []llm.ChatContent{{Text: info.NewTranscript}},
+			if _, err := a.completeUserTurn(a.ctx, info); err != nil {
+				logger.Logger.Errorw("user turn completion failed", err)
 			}
-			a.AgentIntf.OnUserTurnCompleted(a.ctx, a.Agent.ChatCtx, newMsg)
 		}
 	}()
 }
