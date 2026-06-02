@@ -295,6 +295,27 @@ func TestExecuteFunctionCallDefaultsEmptyArgumentsAndReturnsOutput(t *testing.T)
 	}
 }
 
+func TestExecuteFunctionCallRepairsMalformedArgumentsBeforeExecutingTool(t *testing.T) {
+	tool := &recordingTool{name: "lookup", result: "Paris"}
+	toolCtx := NewToolContext([]interface{}{tool})
+
+	result := ExecuteFunctionCall(context.Background(), &FunctionToolCall{
+		Name:      "lookup",
+		CallID:    "call_lookup",
+		Arguments: `{city:"Paris",limit:3,}`,
+	}, toolCtx)
+
+	if tool.args != `{"city":"Paris","limit":3}` {
+		t.Fatalf("tool args = %q, want repaired JSON object", tool.args)
+	}
+	if result.FncCall.Arguments != `{"city":"Paris","limit":3}` {
+		t.Fatalf("FncCall.Arguments = %q, want repaired JSON object", result.FncCall.Arguments)
+	}
+	if result.FncCallOut == nil || result.FncCallOut.IsError || result.FncCallOut.Output != "Paris" {
+		t.Fatalf("FncCallOut = %#v, want successful Paris output", result.FncCallOut)
+	}
+}
+
 func TestExecuteFunctionCallNormalizesToolError(t *testing.T) {
 	tool := &recordingTool{name: "lookup", err: NewToolError("visible failure")}
 	toolCtx := NewToolContext([]interface{}{tool})
