@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"strconv"
@@ -417,6 +418,7 @@ type AppConfig struct {
 	LiveKitInferenceAPIKey                string
 	LiveKitInferenceAPISecret             string
 	AppTools                              []string
+	MCPStdioServers                       []MCPStdioServerConfig
 	IVRDetection                          bool
 	IVRSilenceDurationSeconds             *float64
 	WorkflowTask                          string
@@ -430,12 +432,20 @@ type AppConfig struct {
 	EvalJudges                            []string
 }
 
+type MCPStdioServerConfig struct {
+	Command string            `json:"command"`
+	Args    []string          `json:"args"`
+	Env     map[string]string `json:"env"`
+	Cwd     string            `json:"cwd"`
+}
+
 type App struct {
 	Server        *worker.AgentServer
 	Agent         *agent.Agent
 	Session       *agent.AgentSession
 	RealtimeModel llm.RealtimeModel
 	Evaluator     *evals.JudgeGroup
+	MCPServers    []llm.MCPServer
 	RoomIO        *worker.RoomIO
 	RoomOptions   worker.RoomOptions
 	Config        AppConfig
@@ -708,6 +718,7 @@ func DefaultConfigFromEnv() AppConfig {
 		XAIFileSearchMaxResults:                 getenvOptionalInt("RTP_AGENT_XAI_FILE_SEARCH_MAX_RESULTS"),
 		GoogleCredentialsFile:                   firstEnv("RTP_AGENT_GOOGLE_CREDENTIALS_FILE", "GOOGLE_APPLICATION_CREDENTIALS"),
 		AppTools:                                splitEnvList("RTP_AGENT_TOOLS"),
+		MCPStdioServers:                         mcpStdioServersFromEnv("RTP_AGENT_MCP_STDIO_SERVERS"),
 		IVRDetection:                            getenvBool("RTP_AGENT_IVR_DETECTION"),
 		IVRSilenceDurationSeconds:               getenvOptionalFloat("RTP_AGENT_IVR_SILENCE_DURATION_SECONDS"),
 		WorkflowTask:                            normalizedEnv("RTP_AGENT_WORKFLOW_TASK"),
@@ -767,11 +778,17 @@ func NewApp(cfg AppConfig) (*App, error) {
 	if realtimeModel != nil {
 		session.Assistant = agent.NewMultimodalAgent(realtimeModel, session.ChatCtx)
 	}
+	mcpServers, err := configureMCPTools(context.Background(), cfg, sessionAgent.GetAgent())
+	if err != nil {
+		return nil, err
+	}
 	if err := configureAppTools(cfg, sessionAgent.GetAgent(), session); err != nil {
+		closeMCPServers(mcpServers)
 		return nil, err
 	}
 	evaluator, err := evaluatorFromConfig(cfg, session.LLM)
 	if err != nil {
+		closeMCPServers(mcpServers)
 		return nil, err
 	}
 
@@ -790,9 +807,11 @@ func NewApp(cfg AppConfig) (*App, error) {
 		Session:       session,
 		RealtimeModel: realtimeModel,
 		Evaluator:     evaluator,
+		MCPServers:    mcpServers,
 		Config:        cfg,
 	}
 	if err := server.RTCSession(app.runSession, nil, nil); err != nil {
+		app.closeMCPServers()
 		return nil, err
 	}
 	return app, nil
@@ -1013,6 +1032,7 @@ func (a *App) runSession(ctx *worker.JobContext) error {
 	if a.Session == nil {
 		return fmt.Errorf("agent session is not configured")
 	}
+	defer a.closeMCPServers()
 	a.Server.SetConsoleSession(a.Session)
 	if a.Session.STT == nil && a.Session.LLM == nil && a.Session.TTS == nil && a.RealtimeModel == nil {
 		return nil
@@ -1045,6 +1065,22 @@ func (a *App) runSession(ctx *worker.JobContext) error {
 		}
 	}
 	return a.Session.Start(sessionCtx)
+}
+
+func (a *App) closeMCPServers() {
+	if a == nil {
+		return
+	}
+	closeMCPServers(a.MCPServers)
+	a.MCPServers = nil
+}
+
+func closeMCPServers(servers []llm.MCPServer) {
+	for _, server := range servers {
+		if server != nil {
+			_ = server.Close()
+		}
+	}
 }
 
 func configureAvatar(cfg AppConfig, a *agent.Agent) error {
@@ -3412,6 +3448,18 @@ func splitEnvList(name string) []string {
 	return splitStringList(raw)
 }
 
+func mcpStdioServersFromEnv(name string) []MCPStdioServerConfig {
+	raw := os.Getenv(name)
+	if strings.TrimSpace(raw) == "" {
+		return nil
+	}
+	var servers []MCPStdioServerConfig
+	if err := json.Unmarshal([]byte(raw), &servers); err != nil {
+		return nil
+	}
+	return servers
+}
+
 func splitStringList(raw string) []string {
 	parts := strings.Split(raw, ",")
 	values := make([]string, 0, len(parts))
@@ -3673,6 +3721,49 @@ func configureAppTools(cfg AppConfig, a *agent.Agent, session *agent.AgentSessio
 	}
 	a.Tools = append(a.Tools, tools...)
 	return nil
+}
+
+func configureMCPTools(ctx context.Context, cfg AppConfig, a *agent.Agent) ([]llm.MCPServer, error) {
+	if len(cfg.MCPStdioServers) == 0 {
+		return nil, nil
+	}
+	if a == nil {
+		return nil, fmt.Errorf("MCP stdio tools require an agent")
+	}
+
+	servers := make([]llm.MCPServer, 0, len(cfg.MCPStdioServers))
+	for _, serverConfig := range cfg.MCPStdioServers {
+		command := strings.TrimSpace(serverConfig.Command)
+		if command == "" {
+			closeMCPServers(servers)
+			return nil, fmt.Errorf("RTP_AGENT_MCP_STDIO_SERVERS entry requires command")
+		}
+		server := llm.NewMCPServerStdio(command, serverConfig.Args)
+		server.Env = serverConfig.Env
+		server.Cwd = serverConfig.Cwd
+
+		initCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+		err := server.Initialize(initCtx)
+		cancel()
+		if err != nil {
+			_ = server.Close()
+			closeMCPServers(servers)
+			return nil, err
+		}
+
+		listCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+		tools, err := server.ListTools(listCtx)
+		cancel()
+		if err != nil {
+			_ = server.Close()
+			closeMCPServers(servers)
+			return nil, err
+		}
+
+		a.Tools = appendMissingToolsByID(a.Tools, tools...)
+		servers = append(servers, server)
+	}
+	return servers, nil
 }
 
 func configureRoomTools(cfg AppConfig, a *agent.Agent, publisher betatools.DtmfPublisher) error {
