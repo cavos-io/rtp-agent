@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"reflect"
 	"testing"
@@ -1638,6 +1640,57 @@ func TestDefaultConfigFromEnvAddsMCPStdioTools(t *testing.T) {
 	}
 }
 
+func TestDefaultConfigFromEnvAddsMCPHTTPTools(t *testing.T) {
+	httpServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got := r.Header.Get("Authorization"); got != "Bearer token" {
+			t.Fatalf("Authorization header = %q, want bearer token", got)
+		}
+		var req appMCPJSONRPCRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			t.Fatalf("decode MCP request: %v", err)
+		}
+		switch req.Method {
+		case "initialize":
+			writeAppMCPHTTPResponse(t, w, req.ID, map[string]any{"protocolVersion": "2024-11-05"})
+		case "initialized":
+			w.WriteHeader(http.StatusAccepted)
+		case "tools/list":
+			writeAppMCPHTTPResponse(t, w, req.ID, map[string]any{
+				"tools": []map[string]any{
+					{"name": "lookup", "description": "lookup tool", "inputSchema": map[string]any{"type": "object"}},
+				},
+			})
+		default:
+			t.Fatalf("unexpected MCP method %q", req.Method)
+		}
+	}))
+	defer httpServer.Close()
+
+	servers := []map[string]any{{
+		"url":           httpServer.URL,
+		"transportType": "streamable_http",
+		"allowedTools":  []string{"lookup"},
+		"headers":       map[string]string{"Authorization": "Bearer token"},
+	}}
+	encoded, err := json.Marshal(servers)
+	if err != nil {
+		t.Fatalf("marshal MCP HTTP config: %v", err)
+	}
+	t.Setenv("RTP_AGENT_MCP_HTTP_SERVERS", string(encoded))
+
+	app, err := NewApp(DefaultConfigFromEnv())
+	if err != nil {
+		t.Fatalf("NewApp() error = %v", err)
+	}
+	defer app.closeMCPServers()
+	if len(app.Agent.Tools) != 1 {
+		t.Fatalf("len(Agent.Tools) = %d, want 1 MCP HTTP tool", len(app.Agent.Tools))
+	}
+	if got := app.Agent.Tools[0].Name(); got != "lookup" {
+		t.Fatalf("tool name = %q, want lookup", got)
+	}
+}
+
 func TestMCPStdioHelperProcess(t *testing.T) {
 	if os.Getenv("GO_WANT_MCP_HELPER") != "1" {
 		return
@@ -1695,6 +1748,23 @@ func TestDefaultConfigFromEnvAddsEndCallTool(t *testing.T) {
 	}
 	if got := app.Agent.Tools[0].Name(); got != "end_call" {
 		t.Fatalf("tool[0].Name() = %q, want end_call", got)
+	}
+}
+
+type appMCPJSONRPCRequest struct {
+	ID     int64  `json:"id"`
+	Method string `json:"method"`
+}
+
+func writeAppMCPHTTPResponse(t *testing.T, w http.ResponseWriter, id int64, result any) {
+	t.Helper()
+	w.Header().Set("Content-Type", "application/json")
+	if err := json.NewEncoder(w).Encode(map[string]any{
+		"jsonrpc": "2.0",
+		"id":      id,
+		"result":  result,
+	}); err != nil {
+		t.Fatalf("encode MCP response: %v", err)
 	}
 }
 

@@ -422,6 +422,7 @@ type AppConfig struct {
 	LiveKitInferenceAPISecret             string
 	AppTools                              []string
 	MCPStdioServers                       []MCPStdioServerConfig
+	MCPHTTPServers                        []MCPHTTPServerConfig
 	IVRDetection                          bool
 	IVRSilenceDurationSeconds             *float64
 	WorkflowTask                          string
@@ -440,6 +441,13 @@ type MCPStdioServerConfig struct {
 	Args    []string          `json:"args"`
 	Env     map[string]string `json:"env"`
 	Cwd     string            `json:"cwd"`
+}
+
+type MCPHTTPServerConfig struct {
+	URL           string            `json:"url"`
+	TransportType string            `json:"transportType"`
+	AllowedTools  []string          `json:"allowedTools"`
+	Headers       map[string]string `json:"headers"`
 }
 
 type App struct {
@@ -725,6 +733,7 @@ func DefaultConfigFromEnv() AppConfig {
 		GoogleCredentialsFile:                   firstEnv("RTP_AGENT_GOOGLE_CREDENTIALS_FILE", "GOOGLE_APPLICATION_CREDENTIALS"),
 		AppTools:                                splitEnvList("RTP_AGENT_TOOLS"),
 		MCPStdioServers:                         mcpStdioServersFromEnv("RTP_AGENT_MCP_STDIO_SERVERS"),
+		MCPHTTPServers:                          mcpHTTPServersFromEnv("RTP_AGENT_MCP_HTTP_SERVERS"),
 		IVRDetection:                            getenvBool("RTP_AGENT_IVR_DETECTION"),
 		IVRSilenceDurationSeconds:               getenvOptionalFloat("RTP_AGENT_IVR_SILENCE_DURATION_SECONDS"),
 		WorkflowTask:                            normalizedEnv("RTP_AGENT_WORKFLOW_TASK"),
@@ -3480,6 +3489,18 @@ func mcpStdioServersFromEnv(name string) []MCPStdioServerConfig {
 	return servers
 }
 
+func mcpHTTPServersFromEnv(name string) []MCPHTTPServerConfig {
+	raw := os.Getenv(name)
+	if strings.TrimSpace(raw) == "" {
+		return nil
+	}
+	var servers []MCPHTTPServerConfig
+	if err := json.Unmarshal([]byte(raw), &servers); err != nil {
+		return nil
+	}
+	return servers
+}
+
 func jsonEnvMap(name string) map[string]any {
 	raw := os.Getenv(name)
 	if strings.TrimSpace(raw) == "" {
@@ -3756,14 +3777,14 @@ func configureAppTools(cfg AppConfig, a *agent.Agent, session *agent.AgentSessio
 }
 
 func configureMCPTools(ctx context.Context, cfg AppConfig, a *agent.Agent) ([]llm.MCPServer, error) {
-	if len(cfg.MCPStdioServers) == 0 {
+	if len(cfg.MCPStdioServers) == 0 && len(cfg.MCPHTTPServers) == 0 {
 		return nil, nil
 	}
 	if a == nil {
-		return nil, fmt.Errorf("MCP stdio tools require an agent")
+		return nil, fmt.Errorf("MCP tools require an agent")
 	}
 
-	servers := make([]llm.MCPServer, 0, len(cfg.MCPStdioServers))
+	servers := make([]llm.MCPServer, 0, len(cfg.MCPStdioServers)+len(cfg.MCPHTTPServers))
 	for _, serverConfig := range cfg.MCPStdioServers {
 		command := strings.TrimSpace(serverConfig.Command)
 		if command == "" {
@@ -3773,6 +3794,38 @@ func configureMCPTools(ctx context.Context, cfg AppConfig, a *agent.Agent) ([]ll
 		server := llm.NewMCPServerStdio(command, serverConfig.Args)
 		server.Env = serverConfig.Env
 		server.Cwd = serverConfig.Cwd
+
+		initCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+		err := server.Initialize(initCtx)
+		cancel()
+		if err != nil {
+			_ = server.Close()
+			closeMCPServers(servers)
+			return nil, err
+		}
+
+		listCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+		tools, err := server.ListTools(listCtx)
+		cancel()
+		if err != nil {
+			_ = server.Close()
+			closeMCPServers(servers)
+			return nil, err
+		}
+
+		a.Tools = appendMissingToolsByID(a.Tools, tools...)
+		servers = append(servers, server)
+	}
+	for _, serverConfig := range cfg.MCPHTTPServers {
+		url := strings.TrimSpace(serverConfig.URL)
+		if url == "" {
+			closeMCPServers(servers)
+			return nil, fmt.Errorf("RTP_AGENT_MCP_HTTP_SERVERS entry requires url")
+		}
+		server := llm.NewMCPServerHTTP(url)
+		server.TransportType = serverConfig.TransportType
+		server.AllowedTools = serverConfig.AllowedTools
+		server.Headers = serverConfig.Headers
 
 		initCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 		err := server.Initialize(initCtx)

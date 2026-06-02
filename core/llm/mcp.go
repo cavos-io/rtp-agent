@@ -2,10 +2,12 @@ package llm
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	"io"
+	"net/http"
 	"os"
 	"os/exec"
 	"strings"
@@ -19,30 +21,173 @@ type MCPServer interface {
 	Close() error
 }
 
+type mcpRequestSender interface {
+	sendRequest(ctx context.Context, method string, params interface{}) (*jsonRPCResponse, error)
+}
+
+type mcpAvailability interface {
+	available() bool
+}
+
 type MCPServerHTTP struct {
 	URL           string
 	TransportType string
 	AllowedTools  []string
 	Headers       map[string]string
+
+	client      *http.Client
+	msgID       atomic.Int64
+	initialized bool
+	cacheDirty  bool
+	toolsCache  []Tool
+	mu          sync.Mutex
 }
 
 func NewMCPServerHTTP(url string) *MCPServerHTTP {
 	return &MCPServerHTTP{
-		URL: url,
+		URL:        url,
+		client:     http.DefaultClient,
+		cacheDirty: true,
 	}
 }
 
 func (s *MCPServerHTTP) Initialize(ctx context.Context) error {
-	// SSE/HTTP is complex, leaving as unsupported for now, focusing on Stdio
-	return fmt.Errorf("HTTP MCP client not fully supported natively in Go yet")
+	params := map[string]interface{}{
+		"protocolVersion": "2024-11-05",
+		"clientInfo": map[string]interface{}{
+			"name":    "conversation-worker",
+			"version": "1.0.0",
+		},
+		"capabilities": map[string]interface{}{},
+	}
+	if _, err := s.sendRequest(ctx, "initialize", params); err != nil {
+		return fmt.Errorf("initialize failed: %w", err)
+	}
+	if err := s.sendNotification(ctx, "initialized", map[string]interface{}{}); err != nil {
+		return fmt.Errorf("initialized notification failed: %w", err)
+	}
+	s.mu.Lock()
+	s.initialized = true
+	s.mu.Unlock()
+	return nil
 }
 
 func (s *MCPServerHTTP) ListTools(ctx context.Context) ([]Tool, error) {
-	return nil, fmt.Errorf("HTTP MCP client not fully supported natively in Go yet")
+	if tools, ok := s.cachedTools(); ok {
+		return tools, nil
+	}
+
+	resp, err := s.sendRequest(ctx, "tools/list", map[string]interface{}{})
+	if err != nil {
+		return nil, fmt.Errorf("tools/list failed: %w", err)
+	}
+	tools, err := parseMCPTools(resp.Result, s)
+	if err != nil {
+		return nil, err
+	}
+	tools = filterMCPToolsByName(tools, s.AllowedTools)
+	s.setToolsCache(tools)
+	return tools, nil
 }
 
 func (s *MCPServerHTTP) Close() error {
+	s.mu.Lock()
+	s.initialized = false
+	s.cacheDirty = true
+	s.toolsCache = nil
+	s.mu.Unlock()
 	return nil
+}
+
+func (s *MCPServerHTTP) available() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.initialized
+}
+
+func (s *MCPServerHTTP) cachedTools() ([]Tool, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.cacheDirty || s.toolsCache == nil {
+		return nil, false
+	}
+	tools := make([]Tool, len(s.toolsCache))
+	copy(tools, s.toolsCache)
+	return tools, true
+}
+
+func (s *MCPServerHTTP) setToolsCache(tools []Tool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.toolsCache = make([]Tool, len(tools))
+	copy(s.toolsCache, tools)
+	s.cacheDirty = false
+}
+
+func (s *MCPServerHTTP) sendRequest(ctx context.Context, method string, params interface{}) (*jsonRPCResponse, error) {
+	id := s.msgID.Add(1)
+	return s.postJSONRPC(ctx, &jsonRPCRequest{
+		JSONRPC: "2.0",
+		ID:      id,
+		Method:  method,
+		Params:  params,
+	})
+}
+
+func (s *MCPServerHTTP) sendNotification(ctx context.Context, method string, params interface{}) error {
+	req := map[string]interface{}{
+		"jsonrpc": "2.0",
+		"method":  method,
+		"params":  params,
+	}
+	_, err := s.postJSONRPCValue(ctx, req)
+	return err
+}
+
+func (s *MCPServerHTTP) postJSONRPC(ctx context.Context, req *jsonRPCRequest) (*jsonRPCResponse, error) {
+	return s.postJSONRPCValue(ctx, req)
+}
+
+func (s *MCPServerHTTP) postJSONRPCValue(ctx context.Context, value interface{}) (*jsonRPCResponse, error) {
+	body, err := json.Marshal(value)
+	if err != nil {
+		return nil, err
+	}
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, s.URL, bytes.NewReader(body))
+	if err != nil {
+		return nil, err
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+	httpReq.Header.Set("Accept", "application/json")
+	for key, value := range s.Headers {
+		httpReq.Header.Set(key, value)
+	}
+
+	client := s.client
+	if client == nil {
+		client = http.DefaultClient
+	}
+	resp, err := client.Do(httpReq)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode == http.StatusAccepted || resp.StatusCode == http.StatusNoContent {
+		return &jsonRPCResponse{}, nil
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return nil, fmt.Errorf("HTTP MCP request failed with status %d", resp.StatusCode)
+	}
+
+	var decoded jsonRPCResponse
+	if err := json.NewDecoder(resp.Body).Decode(&decoded); err != nil {
+		return nil, err
+	}
+	if decoded.Error != nil {
+		return nil, fmt.Errorf("rpc error %d: %s", decoded.Error.Code, decoded.Error.Message)
+	}
+	return &decoded, nil
 }
 
 type MCPServerStdio struct {
@@ -186,30 +331,10 @@ func (s *MCPServerStdio) ListTools(ctx context.Context) ([]Tool, error) {
 		return nil, fmt.Errorf("tools/list failed: %w", err)
 	}
 
-	var result struct {
-		Tools []struct {
-			Name        string                 `json:"name"`
-			Description string                 `json:"description"`
-			InputSchema map[string]interface{} `json:"inputSchema"`
-			Meta        map[string]interface{} `json:"meta"`
-		} `json:"tools"`
+	tools, err := parseMCPTools(resp.Result, s)
+	if err != nil {
+		return nil, err
 	}
-
-	if err := json.Unmarshal(resp.Result, &result); err != nil {
-		return nil, fmt.Errorf("failed to parse tools/list result: %w", err)
-	}
-
-	var tools []Tool
-	for _, t := range result.Tools {
-		tools = append(tools, &mcpProxyTool{
-			server:      s,
-			name:        t.Name,
-			description: t.Description,
-			parameters:  t.InputSchema,
-			meta:        t.Meta,
-		})
-	}
-
 	s.setToolsCache(tools)
 	return tools, nil
 }
@@ -238,6 +363,10 @@ func (s *MCPServerStdio) setToolsCache(tools []Tool) {
 	s.toolsCache = make([]Tool, len(tools))
 	copy(s.toolsCache, tools)
 	s.cacheDirty = false
+}
+
+func (s *MCPServerStdio) available() bool {
+	return s != nil && s.stdin != nil
 }
 
 func (s *MCPServerStdio) Close() error {
@@ -328,7 +457,7 @@ func (s *MCPServerStdio) readLoop() {
 }
 
 type mcpProxyTool struct {
-	server      *MCPServerStdio
+	server      mcpRequestSender
 	name        string
 	description string
 	parameters  map[string]interface{}
@@ -348,7 +477,10 @@ func (t *mcpProxyTool) Execute(ctx context.Context, args string) (string, error)
 		return "", err
 	}
 
-	if t.server == nil || t.server.stdin == nil {
+	if t.server == nil {
+		return "", NewToolError("Tool invocation failed: internal service is unavailable. Please check that the MCPServer is still running.")
+	}
+	if availability, ok := t.server.(mcpAvailability); ok && !availability.available() {
 		return "", NewToolError("Tool invocation failed: internal service is unavailable. Please check that the MCPServer is still running.")
 	}
 
@@ -381,6 +513,59 @@ func (t *mcpProxyTool) Execute(ctx context.Context, args string) (string, error)
 		return "", NewToolError(fmt.Sprintf("Tool %q completed without producing a result.", t.name))
 	}
 	return serializeMCPToolContent(result.Content)
+}
+
+func parseMCPTools(data json.RawMessage, server mcpRequestSender) ([]Tool, error) {
+	var result struct {
+		Tools []struct {
+			Name        string                 `json:"name"`
+			Description string                 `json:"description"`
+			InputSchema map[string]interface{} `json:"inputSchema"`
+			Meta        map[string]interface{} `json:"meta"`
+		} `json:"tools"`
+	}
+
+	if err := json.Unmarshal(data, &result); err != nil {
+		return nil, fmt.Errorf("failed to parse tools/list result: %w", err)
+	}
+
+	var tools []Tool
+	for _, t := range result.Tools {
+		tools = append(tools, &mcpProxyTool{
+			server:      server,
+			name:        t.Name,
+			description: t.Description,
+			parameters:  t.InputSchema,
+			meta:        t.Meta,
+		})
+	}
+	return tools, nil
+}
+
+func filterMCPToolsByName(tools []Tool, allowed []string) []Tool {
+	if len(allowed) == 0 {
+		return tools
+	}
+	allowedSet := make(map[string]struct{}, len(allowed))
+	for _, name := range allowed {
+		name = strings.TrimSpace(name)
+		if name != "" {
+			allowedSet[name] = struct{}{}
+		}
+	}
+	if len(allowedSet) == 0 {
+		return nil
+	}
+	filtered := make([]Tool, 0, len(tools))
+	for _, tool := range tools {
+		if tool == nil {
+			continue
+		}
+		if _, ok := allowedSet[tool.Name()]; ok {
+			filtered = append(filtered, tool)
+		}
+	}
+	return filtered
 }
 
 func (t *mcpProxyTool) ParseFunctionTools(format string) (map[string]interface{}, error) {

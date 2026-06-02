@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"testing"
@@ -75,23 +77,85 @@ func TestMCPProxyToolReportsUnavailableServer(t *testing.T) {
 	}
 }
 
-func TestMCPServerHTTPReportsUnsupportedNativeClient(t *testing.T) {
-	server := NewMCPServerHTTP("https://example.com/mcp")
+func TestMCPServerHTTPListsAndExecutesTools(t *testing.T) {
+	var sawInitialize bool
+	var sawToolCall bool
+	httpServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got := r.Header.Get("Authorization"); got != "Bearer token" {
+			t.Fatalf("Authorization header = %q, want bearer token", got)
+		}
+		var req jsonRPCRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+
+		switch req.Method {
+		case "initialize":
+			sawInitialize = true
+			writeMCPHTTPResponse(t, w, req.ID, map[string]any{"protocolVersion": "2024-11-05"})
+		case "initialized":
+			w.WriteHeader(http.StatusAccepted)
+		case "tools/list":
+			writeMCPHTTPResponse(t, w, req.ID, map[string]any{
+				"tools": []map[string]any{
+					{"name": "lookup", "description": "lookup tool", "inputSchema": map[string]any{"type": "object"}},
+					{"name": "ignored", "description": "ignored tool", "inputSchema": map[string]any{"type": "object"}},
+				},
+			})
+		case "tools/call":
+			sawToolCall = true
+			writeMCPHTTPResponse(t, w, req.ID, map[string]any{
+				"content": []map[string]any{{"type": "text", "text": "Paris"}},
+				"isError": false,
+			})
+		default:
+			t.Fatalf("unexpected MCP method %q", req.Method)
+		}
+	}))
+	defer httpServer.Close()
+
+	server := NewMCPServerHTTP(httpServer.URL)
 	server.TransportType = "streamable_http"
 	server.AllowedTools = []string{"lookup"}
 	server.Headers = map[string]string{"Authorization": "Bearer token"}
 
-	if server.URL != "https://example.com/mcp" {
+	if server.URL != httpServer.URL {
 		t.Fatalf("URL = %q, want constructor URL", server.URL)
 	}
-	if err := server.Initialize(context.Background()); err == nil {
-		t.Fatal("Initialize() error = nil, want unsupported native client error")
+	if err := server.Initialize(context.Background()); err != nil {
+		t.Fatalf("Initialize() error = %v", err)
 	}
-	if tools, err := server.ListTools(context.Background()); err == nil || tools != nil {
-		t.Fatalf("ListTools() = %#v, %v; want nil tools and unsupported native client error", tools, err)
+	tools, err := server.ListTools(context.Background())
+	if err != nil {
+		t.Fatalf("ListTools() error = %v", err)
+	}
+	if len(tools) != 1 || tools[0].Name() != "lookup" {
+		t.Fatalf("tools = %#v, want only allowed lookup tool", tools)
+	}
+	output, err := tools[0].Execute(context.Background(), `{"city":"Paris"}`)
+	if err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+	if output != `{"text":"Paris","type":"text"}` {
+		t.Fatalf("Execute() output = %q, want serialized MCP content", output)
+	}
+	if !sawInitialize || !sawToolCall {
+		t.Fatalf("sawInitialize=%v sawToolCall=%v, want both", sawInitialize, sawToolCall)
 	}
 	if err := server.Close(); err != nil {
 		t.Fatalf("Close() error = %v", err)
+	}
+}
+
+func writeMCPHTTPResponse(t *testing.T, w http.ResponseWriter, id int64, result any) {
+	t.Helper()
+	w.Header().Set("Content-Type", "application/json")
+	if err := json.NewEncoder(w).Encode(map[string]any{
+		"jsonrpc": "2.0",
+		"id":      id,
+		"result":  result,
+	}); err != nil {
+		t.Fatalf("encode response: %v", err)
 	}
 }
 
