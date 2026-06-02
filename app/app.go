@@ -9,6 +9,7 @@ import (
 
 	awspollytypes "github.com/aws/aws-sdk-go-v2/service/polly/types"
 	awstranscribetypes "github.com/aws/aws-sdk-go-v2/service/transcribestreaming/types"
+	"github.com/cavos-io/rtp-agent/adapter/anam"
 	"github.com/cavos-io/rtp-agent/adapter/anthropic"
 	"github.com/cavos-io/rtp-agent/adapter/assemblyai"
 	"github.com/cavos-io/rtp-agent/adapter/asyncai"
@@ -70,6 +71,7 @@ import (
 )
 
 const (
+	providerAnam         = "anam"
 	providerAnthropic    = "anthropic"
 	providerAssemblyAI   = "assemblyai"
 	providerAsyncAI      = "asyncai"
@@ -251,6 +253,7 @@ type AppConfig struct {
 	VADDeactivationThreshold                *float64
 	VADUpdateInterval                       *float64
 	VADSampleRate                           *int
+	AvatarProvider                          string
 	TTSProvider                             string
 	TTSModel                                string
 	TTSVoice                                string
@@ -304,6 +307,7 @@ type AppConfig struct {
 	RealtimeModel                           string
 
 	OpenAIAPIKey                string
+	AnamAPIKey                  string
 	AnthropicAPIKey             string
 	GoogleAPIKey                string
 	ElevenLabsAPIKey            string
@@ -497,6 +501,7 @@ func DefaultConfigFromEnv() AppConfig {
 		VADDeactivationThreshold:                getenvOptionalFloat("RTP_AGENT_VAD_DEACTIVATION_THRESHOLD"),
 		VADUpdateInterval:                       getenvOptionalFloat("RTP_AGENT_VAD_UPDATE_INTERVAL"),
 		VADSampleRate:                           getenvOptionalInt("RTP_AGENT_VAD_SAMPLE_RATE"),
+		AvatarProvider:                          normalizedEnv("RTP_AGENT_AVATAR_PROVIDER"),
 		TTSProvider:                             normalizedEnv("RTP_AGENT_TTS_PROVIDER"),
 		TTSModel:                                os.Getenv("RTP_AGENT_TTS_MODEL"),
 		TTSVoice:                                os.Getenv("RTP_AGENT_TTS_VOICE"),
@@ -549,6 +554,7 @@ func DefaultConfigFromEnv() AppConfig {
 		RealtimeProvider:                        normalizedEnv("RTP_AGENT_REALTIME_PROVIDER"),
 		RealtimeModel:                           os.Getenv("RTP_AGENT_REALTIME_MODEL"),
 		OpenAIAPIKey:                            os.Getenv("OPENAI_API_KEY"),
+		AnamAPIKey:                              os.Getenv("ANAM_API_KEY"),
 		AnthropicAPIKey:                         os.Getenv("ANTHROPIC_API_KEY"),
 		GoogleAPIKey:                            os.Getenv("GOOGLE_API_KEY"),
 		ElevenLabsAPIKey:                        firstEnv("ELEVENLABS_API_KEY", "ELEVEN_API_KEY"),
@@ -628,6 +634,9 @@ func NewApp(cfg AppConfig) (*App, error) {
 	if normalizeProvider(cfg.LLMProvider) == providerAnthropic {
 		baseAgent.Tools = append(baseAgent.Tools, anthropicProviderTools(cfg)...)
 	}
+	if err := configureAvatar(cfg, baseAgent); err != nil {
+		return nil, err
+	}
 	if err := configureVAD(cfg, baseAgent); err != nil {
 		return nil, err
 	}
@@ -664,6 +673,18 @@ func (a *App) runSession(ctx *worker.JobContext) error {
 		return nil
 	}
 	return a.Session.Start(context.Background())
+}
+
+func configureAvatar(cfg AppConfig, a *agent.Agent) error {
+	switch normalizeProvider(cfg.AvatarProvider) {
+	case "":
+		return nil
+	case providerAnam:
+		a.Avatar = anam.NewAnamAvatar(cfg.AnamAPIKey)
+		return nil
+	default:
+		return fmt.Errorf("unsupported RTP_AGENT_AVATAR_PROVIDER %q", cfg.AvatarProvider)
+	}
 }
 
 func configureVAD(cfg AppConfig, a *agent.Agent) error {

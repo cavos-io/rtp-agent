@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"fmt"
 	"testing"
 
 	"github.com/cavos-io/rtp-agent/core/llm"
@@ -1603,6 +1604,25 @@ func TestDefaultConfigFromEnvAddsAnthropicComputerTool(t *testing.T) {
 		}
 	} else {
 		t.Fatal("computer tool does not expose AnthropicToolSpec")
+	}
+}
+
+func TestDefaultConfigFromEnvSelectsAnamAvatarProvider(t *testing.T) {
+	t.Setenv("ANAM_API_KEY", "test-anam-key")
+	t.Setenv("RTP_AGENT_AVATAR_PROVIDER", "anam")
+
+	app, err := NewApp(DefaultConfigFromEnv())
+	if err != nil {
+		t.Fatalf("NewApp() error = %v", err)
+	}
+	if app.Agent == nil {
+		t.Fatal("Agent is nil")
+	}
+	if app.Agent.Avatar == nil {
+		t.Fatal("Agent Avatar is nil")
+	}
+	if got := fmt.Sprintf("%T", app.Agent.Avatar); got != "*anam.AnamAvatar" {
+		t.Fatalf("Agent Avatar type = %q, want *anam.AnamAvatar", got)
 	}
 }
 

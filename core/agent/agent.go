@@ -41,6 +41,7 @@ type Agent struct {
 
 	TurnDetection TurnDetectionMode
 	TurnDetector  TurnDetector
+	Avatar        AvatarProvider
 	STT           stt.STT
 	VAD           vad.VAD
 	LLM           llm.LLM
