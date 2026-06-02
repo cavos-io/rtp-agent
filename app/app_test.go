@@ -432,6 +432,269 @@ func TestDefaultConfigFromEnvSelectsGladiaSTT(t *testing.T) {
 	}
 }
 
+func TestDefaultConfigFromEnvSelectsGnaniSpeechProviders(t *testing.T) {
+	t.Setenv("GNANI_API_KEY", "test-gnani-key")
+	t.Setenv("RTP_AGENT_STT_PROVIDER", "gnani")
+	t.Setenv("RTP_AGENT_STT_BASE_URL", "https://gnani.example")
+	t.Setenv("RTP_AGENT_STT_LANGUAGE", "en-IN")
+	t.Setenv("RTP_AGENT_STT_SAMPLE_RATE", "16000")
+	t.Setenv("RTP_AGENT_STT_ORGANIZATION_ID", "org-test")
+	t.Setenv("RTP_AGENT_STT_USER_ID", "user-test")
+	t.Setenv("RTP_AGENT_TTS_PROVIDER", "gnani")
+	t.Setenv("RTP_AGENT_TTS_BASE_URL", "https://gnani.example")
+	t.Setenv("RTP_AGENT_TTS_VOICE", "Karan")
+	t.Setenv("RTP_AGENT_TTS_MODEL", "vachana-voice-v3")
+	t.Setenv("RTP_AGENT_TTS_SAMPLE_RATE", "22050")
+	t.Setenv("RTP_AGENT_TTS_ENCODING", "linear_pcm")
+	t.Setenv("RTP_AGENT_TTS_RESPONSE_FORMAT", "wav")
+	t.Setenv("RTP_AGENT_TTS_NUMBER_OF_CHANNELS", "1")
+	t.Setenv("RTP_AGENT_TTS_SAMPLE_WIDTH", "2")
+	t.Setenv("RTP_AGENT_TTS_LANGUAGE", "hi")
+
+	app, err := NewApp(DefaultConfigFromEnv())
+	if err != nil {
+		t.Fatalf("NewApp() error = %v", err)
+	}
+	if app.Session == nil {
+		t.Fatal("Session is nil")
+	}
+	if got := app.Session.STT.Label(); got != "gnani.STT" {
+		t.Fatalf("STT label = %q, want gnani.STT", got)
+	}
+	if caps := app.Session.STT.Capabilities(); !caps.Streaming || !caps.OfflineRecognize {
+		t.Fatalf("STT capabilities = %+v, want streaming with offline recognize", caps)
+	}
+	if got := app.Session.TTS.Label(); got != "gnani.TTS" {
+		t.Fatalf("TTS label = %q, want gnani.TTS", got)
+	}
+	if got := app.Session.TTS.SampleRate(); got != 22050 {
+		t.Fatalf("TTS sample rate = %d, want 22050", got)
+	}
+}
+
+func TestDefaultConfigFromEnvSelectsGradiumProviders(t *testing.T) {
+	t.Setenv("GRADIUM_API_KEY", "test-gradium-key")
+	t.Setenv("RTP_AGENT_LLM_PROVIDER", "gradium")
+	t.Setenv("RTP_AGENT_LLM_MODEL", "gradium-llm-test")
+	t.Setenv("RTP_AGENT_STT_PROVIDER", "gradium")
+	t.Setenv("RTP_AGENT_STT_BASE_URL", "wss://gradium.example/asr")
+	t.Setenv("RTP_AGENT_STT_MODEL", "asr-test")
+	t.Setenv("RTP_AGENT_STT_LANGUAGE", "en")
+	t.Setenv("RTP_AGENT_STT_TEMPERATURE", "0.3")
+	t.Setenv("RTP_AGENT_STT_BUFFER_SIZE_SECONDS", "0.12")
+	t.Setenv("RTP_AGENT_STT_VAD_BUCKET", "3")
+	t.Setenv("RTP_AGENT_STT_VAD_FLUSH", "false")
+	t.Setenv("RTP_AGENT_TTS_PROVIDER", "gradium")
+	t.Setenv("RTP_AGENT_TTS_BASE_URL", "wss://gradium.example/tts")
+	t.Setenv("RTP_AGENT_TTS_MODEL", "tts-test")
+	t.Setenv("RTP_AGENT_TTS_VOICE", "voice-test")
+	t.Setenv("RTP_AGENT_TTS_VOICE_ID", "voice-id-test")
+	t.Setenv("RTP_AGENT_TTS_PRONUNCIATION_DICT_ID", "pronunciation-test")
+	t.Setenv("RTP_AGENT_TTS_JSON_CONFIG", "style=clear,pace=1.2")
+
+	app, err := NewApp(DefaultConfigFromEnv())
+	if err != nil {
+		t.Fatalf("NewApp() error = %v", err)
+	}
+	if app.Session == nil {
+		t.Fatal("Session is nil")
+	}
+	if app.Session.LLM == nil {
+		t.Fatal("Session LLM is nil")
+	}
+	if got := app.Session.STT.Label(); got != "gradium.STT" {
+		t.Fatalf("STT label = %q, want gradium.STT", got)
+	}
+	if caps := app.Session.STT.Capabilities(); !caps.Streaming || !caps.InterimResults || caps.OfflineRecognize {
+		t.Fatalf("STT capabilities = %+v, want streaming interim-only", caps)
+	}
+	if got := app.Session.TTS.Label(); got != "gradium.TTS" {
+		t.Fatalf("TTS label = %q, want gradium.TTS", got)
+	}
+	if got := app.Session.TTS.SampleRate(); got != 48000 {
+		t.Fatalf("TTS sample rate = %d, want 48000", got)
+	}
+}
+
+func TestDefaultConfigFromEnvSelectsInworldProviders(t *testing.T) {
+	t.Setenv("INWORLD_API_KEY", "test-inworld-key")
+	t.Setenv("RTP_AGENT_LLM_PROVIDER", "inworld")
+	t.Setenv("RTP_AGENT_LLM_MODEL", "inworld-llm-test")
+	t.Setenv("RTP_AGENT_STT_PROVIDER", "inworld")
+	t.Setenv("RTP_AGENT_STT_BASE_URL", "https://inworld.example/")
+	t.Setenv("RTP_AGENT_STT_MODEL", "inworld-stt-test")
+	t.Setenv("RTP_AGENT_STT_LANGUAGE", "en-US")
+	t.Setenv("RTP_AGENT_STT_SAMPLE_RATE", "16000")
+	t.Setenv("RTP_AGENT_STT_NUMBER_OF_CHANNELS", "1")
+	t.Setenv("RTP_AGENT_STT_VOICE_PROFILE", "false")
+	t.Setenv("RTP_AGENT_STT_VOICE_PROFILE_TOP_N", "2")
+	t.Setenv("RTP_AGENT_STT_VAD_THRESHOLD", "0.4")
+	t.Setenv("RTP_AGENT_STT_MIN_END_OF_TURN_SILENCE_WHEN_CONFIDENT", "180")
+	t.Setenv("RTP_AGENT_STT_END_OF_TURN_CONFIDENCE_THRESHOLD", "0.45")
+	t.Setenv("RTP_AGENT_TTS_PROVIDER", "inworld")
+	t.Setenv("RTP_AGENT_TTS_BASE_URL", "https://inworld.example/")
+	t.Setenv("RTP_AGENT_TTS_WEBSOCKET_URL", "wss://inworld.example/")
+	t.Setenv("RTP_AGENT_TTS_MODEL", "inworld-tts-test")
+	t.Setenv("RTP_AGENT_TTS_VOICE", "Ashley")
+	t.Setenv("RTP_AGENT_TTS_ENCODING", "PCM")
+	t.Setenv("RTP_AGENT_TTS_BIT_RATE", "64000")
+	t.Setenv("RTP_AGENT_TTS_SAMPLE_RATE", "22050")
+	t.Setenv("RTP_AGENT_TTS_SPEAKING_RATE", "1.1")
+	t.Setenv("RTP_AGENT_TTS_TEMPERATURE", "0.8")
+	t.Setenv("RTP_AGENT_TTS_LANGUAGE", "en-US")
+	t.Setenv("RTP_AGENT_TTS_TIMESTAMP_TYPE", "WORD")
+	t.Setenv("RTP_AGENT_TTS_TEXT_NORMALIZATION", "true")
+	t.Setenv("RTP_AGENT_TTS_DELIVERY_MODE", "STREAM")
+	t.Setenv("RTP_AGENT_TTS_TIMESTAMP_TRANSPORT_STRATEGY", "ASYNC")
+	t.Setenv("RTP_AGENT_TTS_BUFFER_CHAR_THRESHOLD", "90")
+	t.Setenv("RTP_AGENT_TTS_MAX_BUFFER_DELAY_MS", "1200")
+
+	app, err := NewApp(DefaultConfigFromEnv())
+	if err != nil {
+		t.Fatalf("NewApp() error = %v", err)
+	}
+	if app.Session == nil {
+		t.Fatal("Session is nil")
+	}
+	if app.Session.LLM == nil {
+		t.Fatal("Session LLM is nil")
+	}
+	if got := app.Session.STT.Label(); got != "inworld.STT" {
+		t.Fatalf("STT label = %q, want inworld.STT", got)
+	}
+	if caps := app.Session.STT.Capabilities(); !caps.Streaming || !caps.InterimResults || caps.OfflineRecognize {
+		t.Fatalf("STT capabilities = %+v, want streaming interim-only", caps)
+	}
+	if got := app.Session.TTS.Label(); got != "inworld.TTS" {
+		t.Fatalf("TTS label = %q, want inworld.TTS", got)
+	}
+	if got := app.Session.TTS.SampleRate(); got != 22050 {
+		t.Fatalf("TTS sample rate = %d, want 22050", got)
+	}
+	if caps := app.Session.TTS.Capabilities(); !caps.Streaming || !caps.AlignedTranscript {
+		t.Fatalf("TTS capabilities = %+v, want streaming aligned transcript", caps)
+	}
+}
+
+func TestDefaultConfigFromEnvSelectsHumeProviders(t *testing.T) {
+	t.Setenv("HUME_API_KEY", "test-hume-key")
+	t.Setenv("RTP_AGENT_LLM_PROVIDER", "hume")
+	t.Setenv("RTP_AGENT_LLM_MODEL", "hume-evi-test")
+	t.Setenv("RTP_AGENT_TTS_PROVIDER", "hume")
+	t.Setenv("RTP_AGENT_TTS_BASE_URL", "https://hume.example")
+	t.Setenv("RTP_AGENT_TTS_MODEL", "2")
+	t.Setenv("RTP_AGENT_TTS_VOICE", "Ava")
+	t.Setenv("RTP_AGENT_TTS_VOICE_ID", "voice-id-test")
+	t.Setenv("RTP_AGENT_TTS_VOICE_PROVIDER", "HUME_AI")
+	t.Setenv("RTP_AGENT_TTS_INSTRUCTIONS", "warm and calm")
+	t.Setenv("RTP_AGENT_TTS_SPEED", "1.1")
+	t.Setenv("RTP_AGENT_TTS_TRAILING_SILENCE", "0.25")
+	t.Setenv("RTP_AGENT_TTS_INSTANT_MODE", "false")
+	t.Setenv("RTP_AGENT_TTS_RESPONSE_FORMAT", "wav")
+	t.Setenv("RTP_AGENT_TTS_CONTEXT_UTTERANCES", "hello there,how are you")
+
+	app, err := NewApp(DefaultConfigFromEnv())
+	if err != nil {
+		t.Fatalf("NewApp() error = %v", err)
+	}
+	if app.Session == nil {
+		t.Fatal("Session is nil")
+	}
+	if app.Session.LLM == nil {
+		t.Fatal("Session LLM is nil")
+	}
+	if got := app.Session.TTS.Label(); got != "hume.TTS" {
+		t.Fatalf("TTS label = %q, want hume.TTS", got)
+	}
+	if got := app.Session.TTS.SampleRate(); got != 48000 {
+		t.Fatalf("TTS sample rate = %d, want 48000", got)
+	}
+	if caps := app.Session.TTS.Capabilities(); caps.Streaming || caps.AlignedTranscript {
+		t.Fatalf("TTS capabilities = %+v, want non-streaming without aligned transcript", caps)
+	}
+}
+
+func TestDefaultConfigFromEnvSelectsMinimaxProviders(t *testing.T) {
+	t.Setenv("MINIMAX_API_KEY", "test-minimax-key")
+	t.Setenv("RTP_AGENT_LLM_PROVIDER", "minimax")
+	t.Setenv("RTP_AGENT_LLM_MODEL", "abab-test")
+	t.Setenv("RTP_AGENT_TTS_PROVIDER", "minimax")
+	t.Setenv("RTP_AGENT_TTS_BASE_URL", "https://minimax.example")
+	t.Setenv("RTP_AGENT_TTS_MODEL", "speech-test")
+	t.Setenv("RTP_AGENT_TTS_VOICE", "voice-test")
+	t.Setenv("RTP_AGENT_TTS_SAMPLE_RATE", "32000")
+	t.Setenv("RTP_AGENT_TTS_BIT_RATE", "96000")
+	t.Setenv("RTP_AGENT_TTS_RESPONSE_FORMAT", "pcm")
+	t.Setenv("RTP_AGENT_TTS_EMOTION", "happy")
+	t.Setenv("RTP_AGENT_TTS_SPEED", "1.2")
+	t.Setenv("RTP_AGENT_TTS_VOLUME", "0.9")
+	t.Setenv("RTP_AGENT_TTS_PITCH", "2")
+	t.Setenv("RTP_AGENT_TTS_TEXT_NORMALIZATION", "true")
+
+	app, err := NewApp(DefaultConfigFromEnv())
+	if err != nil {
+		t.Fatalf("NewApp() error = %v", err)
+	}
+	if app.Session == nil {
+		t.Fatal("Session is nil")
+	}
+	if app.Session.LLM == nil {
+		t.Fatal("Session LLM is nil")
+	}
+	if got := app.Session.TTS.Label(); got != "minimax.TTS" {
+		t.Fatalf("TTS label = %q, want minimax.TTS", got)
+	}
+	if got := app.Session.TTS.SampleRate(); got != 32000 {
+		t.Fatalf("TTS sample rate = %d, want 32000", got)
+	}
+	if caps := app.Session.TTS.Capabilities(); !caps.Streaming || caps.AlignedTranscript {
+		t.Fatalf("TTS capabilities = %+v, want streaming without aligned transcript", caps)
+	}
+}
+
+func TestDefaultConfigFromEnvSelectsMistralAIProviders(t *testing.T) {
+	t.Setenv("MISTRAL_API_KEY", "test-mistral-key")
+	t.Setenv("RTP_AGENT_LLM_PROVIDER", "mistralai")
+	t.Setenv("RTP_AGENT_LLM_MODEL", "ministral-test")
+	t.Setenv("RTP_AGENT_STT_PROVIDER", "mistralai")
+	t.Setenv("RTP_AGENT_STT_BASE_URL", "https://mistral.example/v1")
+	t.Setenv("RTP_AGENT_STT_MODEL", "voxtral-mini-test")
+	t.Setenv("RTP_AGENT_STT_LANGUAGE", "en")
+	t.Setenv("RTP_AGENT_STT_KEYTERMS_PROMPT", "LiveKit,Agents")
+	t.Setenv("RTP_AGENT_TTS_PROVIDER", "mistralai")
+	t.Setenv("RTP_AGENT_TTS_BASE_URL", "https://mistral.example/v1")
+	t.Setenv("RTP_AGENT_TTS_MODEL", "voxtral-tts-test")
+	t.Setenv("RTP_AGENT_TTS_VOICE", "en_paul_neutral")
+	t.Setenv("RTP_AGENT_TTS_REF_AUDIO", "https://example.com/reference.wav")
+	t.Setenv("RTP_AGENT_TTS_RESPONSE_FORMAT", "pcm")
+
+	app, err := NewApp(DefaultConfigFromEnv())
+	if err != nil {
+		t.Fatalf("NewApp() error = %v", err)
+	}
+	if app.Session == nil {
+		t.Fatal("Session is nil")
+	}
+	if app.Session.LLM == nil {
+		t.Fatal("Session LLM is nil")
+	}
+	if got := app.Session.STT.Label(); got != "mistralai.STT" {
+		t.Fatalf("STT label = %q, want mistralai.STT", got)
+	}
+	if caps := app.Session.STT.Capabilities(); caps.Streaming || !caps.OfflineRecognize {
+		t.Fatalf("STT capabilities = %+v, want offline recognize only", caps)
+	}
+	if got := app.Session.TTS.Label(); got != "mistralai.TTS" {
+		t.Fatalf("TTS label = %q, want mistralai.TTS", got)
+	}
+	if got := app.Session.TTS.SampleRate(); got != 24000 {
+		t.Fatalf("TTS sample rate = %d, want 24000", got)
+	}
+	if caps := app.Session.TTS.Capabilities(); caps.Streaming || caps.AlignedTranscript {
+		t.Fatalf("TTS capabilities = %+v, want non-streaming without aligned transcript", caps)
+	}
+}
+
 func TestDefaultConfigFromEnvSelectsAWSProviders(t *testing.T) {
 	t.Setenv("AWS_REGION", "us-west-2")
 	t.Setenv("RTP_AGENT_LLM_PROVIDER", "aws")

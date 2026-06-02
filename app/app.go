@@ -25,8 +25,14 @@ import (
 	"github.com/cavos-io/rtp-agent/adapter/fireworksai"
 	"github.com/cavos-io/rtp-agent/adapter/fishaudio"
 	"github.com/cavos-io/rtp-agent/adapter/gladia"
+	"github.com/cavos-io/rtp-agent/adapter/gnani"
 	adaptergoogle "github.com/cavos-io/rtp-agent/adapter/google"
+	"github.com/cavos-io/rtp-agent/adapter/gradium"
 	"github.com/cavos-io/rtp-agent/adapter/groq"
+	"github.com/cavos-io/rtp-agent/adapter/hume"
+	"github.com/cavos-io/rtp-agent/adapter/inworld"
+	"github.com/cavos-io/rtp-agent/adapter/minimax"
+	"github.com/cavos-io/rtp-agent/adapter/mistralai"
 	"github.com/cavos-io/rtp-agent/adapter/openai"
 	"github.com/cavos-io/rtp-agent/core/agent"
 	"github.com/cavos-io/rtp-agent/core/llm"
@@ -51,8 +57,14 @@ const (
 	providerFireworks  = "fireworks"
 	providerFishAudio  = "fishaudio"
 	providerGladia     = "gladia"
+	providerGnani      = "gnani"
 	providerGoogle     = "google"
+	providerGradium    = "gradium"
 	providerGroq       = "groq"
+	providerHume       = "hume"
+	providerInworld    = "inworld"
+	providerMinimax    = "minimax"
+	providerMistralAI  = "mistralai"
 	providerOpenAI     = "openai"
 	providerLiveKit    = "livekit"
 )
@@ -145,9 +157,19 @@ type AppConfig struct {
 	STTPreferredLanguage                    string
 	STTVocabularyNames                      string
 	STTVocabularyFilterNames                string
+	STTOrganizationID                       string
+	STTUserID                               string
+	STTVADBucket                            *int
+	STTVADFlush                             *bool
+	STTVoiceProfile                         *bool
+	STTVoiceProfileTopN                     *int
+	STTMinEndOfTurnSilenceWhenConfident     *int
 	TTSProvider                             string
 	TTSModel                                string
 	TTSVoice                                string
+	TTSRefAudio                             string
+	TTSVoiceID                              string
+	TTSVoiceProvider                        string
 	TTSLanguage                             string
 	TTSEncoding                             string
 	TTSSampleRate                           *int
@@ -169,7 +191,24 @@ type AppConfig struct {
 	TTSInstructions                         string
 	TTSResponseFormat                       string
 	TTSBaseURL                              string
+	TTSWebsocketURL                         string
 	TTSTextType                             string
+	TTSNumberOfChannels                     *int
+	TTSSampleWidth                          *int
+	TTSJSONConfig                           map[string]any
+	TTSBitRate                              *int
+	TTSSpeakingRate                         *float64
+	TTSTrailingSilence                      *float64
+	TTSInstantMode                          *bool
+	TTSPitch                                *int
+	TTSTimestampType                        string
+	TTSTextNormalization                    *bool
+	TTSDeliveryMode                         string
+	TTSTimestampTransportStrategy           string
+	TTSBufferCharThreshold                  *int
+	TTSMaxBufferDelayMS                     *int
+	TTSContextGenerationID                  string
+	TTSContextUtterances                    []hume.HumeTTSUtterance
 	RealtimeProvider                        string
 	RealtimeModel                           string
 
@@ -187,6 +226,12 @@ type AppConfig struct {
 	FireworksAPIKey   string
 	FishAudioAPIKey   string
 	GladiaAPIKey      string
+	GnaniAPIKey       string
+	GradiumAPIKey     string
+	HumeAPIKey        string
+	InworldAPIKey     string
+	MinimaxAPIKey     string
+	MistralAPIKey     string
 
 	GoogleCredentialsFile string
 
@@ -288,9 +333,19 @@ func DefaultConfigFromEnv() AppConfig {
 		STTPreferredLanguage:                    os.Getenv("RTP_AGENT_STT_PREFERRED_LANGUAGE"),
 		STTVocabularyNames:                      os.Getenv("RTP_AGENT_STT_VOCABULARY_NAMES"),
 		STTVocabularyFilterNames:                os.Getenv("RTP_AGENT_STT_VOCABULARY_FILTER_NAMES"),
+		STTOrganizationID:                       os.Getenv("RTP_AGENT_STT_ORGANIZATION_ID"),
+		STTUserID:                               os.Getenv("RTP_AGENT_STT_USER_ID"),
+		STTVADBucket:                            getenvOptionalInt("RTP_AGENT_STT_VAD_BUCKET"),
+		STTVADFlush:                             getenvOptionalBool("RTP_AGENT_STT_VAD_FLUSH"),
+		STTVoiceProfile:                         getenvOptionalBool("RTP_AGENT_STT_VOICE_PROFILE"),
+		STTVoiceProfileTopN:                     getenvOptionalInt("RTP_AGENT_STT_VOICE_PROFILE_TOP_N"),
+		STTMinEndOfTurnSilenceWhenConfident:     getenvOptionalInt("RTP_AGENT_STT_MIN_END_OF_TURN_SILENCE_WHEN_CONFIDENT"),
 		TTSProvider:                             normalizedEnv("RTP_AGENT_TTS_PROVIDER"),
 		TTSModel:                                os.Getenv("RTP_AGENT_TTS_MODEL"),
 		TTSVoice:                                os.Getenv("RTP_AGENT_TTS_VOICE"),
+		TTSRefAudio:                             os.Getenv("RTP_AGENT_TTS_REF_AUDIO"),
+		TTSVoiceID:                              os.Getenv("RTP_AGENT_TTS_VOICE_ID"),
+		TTSVoiceProvider:                        os.Getenv("RTP_AGENT_TTS_VOICE_PROVIDER"),
 		TTSLanguage:                             os.Getenv("RTP_AGENT_TTS_LANGUAGE"),
 		TTSEncoding:                             os.Getenv("RTP_AGENT_TTS_ENCODING"),
 		TTSSampleRate:                           getenvOptionalInt("RTP_AGENT_TTS_SAMPLE_RATE"),
@@ -312,7 +367,24 @@ func DefaultConfigFromEnv() AppConfig {
 		TTSInstructions:                         os.Getenv("RTP_AGENT_TTS_INSTRUCTIONS"),
 		TTSResponseFormat:                       os.Getenv("RTP_AGENT_TTS_RESPONSE_FORMAT"),
 		TTSBaseURL:                              os.Getenv("RTP_AGENT_TTS_BASE_URL"),
+		TTSWebsocketURL:                         os.Getenv("RTP_AGENT_TTS_WEBSOCKET_URL"),
 		TTSTextType:                             os.Getenv("RTP_AGENT_TTS_TEXT_TYPE"),
+		TTSNumberOfChannels:                     getenvOptionalInt("RTP_AGENT_TTS_NUMBER_OF_CHANNELS"),
+		TTSSampleWidth:                          getenvOptionalInt("RTP_AGENT_TTS_SAMPLE_WIDTH"),
+		TTSJSONConfig:                           splitEnvMap("RTP_AGENT_TTS_JSON_CONFIG"),
+		TTSBitRate:                              getenvOptionalInt("RTP_AGENT_TTS_BIT_RATE"),
+		TTSSpeakingRate:                         getenvOptionalFloat("RTP_AGENT_TTS_SPEAKING_RATE"),
+		TTSTrailingSilence:                      getenvOptionalFloat("RTP_AGENT_TTS_TRAILING_SILENCE"),
+		TTSInstantMode:                          getenvOptionalBool("RTP_AGENT_TTS_INSTANT_MODE"),
+		TTSPitch:                                getenvOptionalInt("RTP_AGENT_TTS_PITCH"),
+		TTSTimestampType:                        os.Getenv("RTP_AGENT_TTS_TIMESTAMP_TYPE"),
+		TTSTextNormalization:                    getenvOptionalBool("RTP_AGENT_TTS_TEXT_NORMALIZATION"),
+		TTSDeliveryMode:                         os.Getenv("RTP_AGENT_TTS_DELIVERY_MODE"),
+		TTSTimestampTransportStrategy:           os.Getenv("RTP_AGENT_TTS_TIMESTAMP_TRANSPORT_STRATEGY"),
+		TTSBufferCharThreshold:                  getenvOptionalInt("RTP_AGENT_TTS_BUFFER_CHAR_THRESHOLD"),
+		TTSMaxBufferDelayMS:                     getenvOptionalInt("RTP_AGENT_TTS_MAX_BUFFER_DELAY_MS"),
+		TTSContextGenerationID:                  os.Getenv("RTP_AGENT_TTS_CONTEXT_GENERATION_ID"),
+		TTSContextUtterances:                    splitEnvHumeTTSUtterances("RTP_AGENT_TTS_CONTEXT_UTTERANCES"),
 		RealtimeProvider:                        normalizedEnv("RTP_AGENT_REALTIME_PROVIDER"),
 		RealtimeModel:                           os.Getenv("RTP_AGENT_REALTIME_MODEL"),
 		OpenAIAPIKey:                            os.Getenv("OPENAI_API_KEY"),
@@ -329,6 +401,12 @@ func DefaultConfigFromEnv() AppConfig {
 		FireworksAPIKey:                         os.Getenv("FIREWORKS_API_KEY"),
 		FishAudioAPIKey:                         firstEnv("FISHAUDIO_API_KEY", "FISH_AUDIO_API_KEY"),
 		GladiaAPIKey:                            os.Getenv("GLADIA_API_KEY"),
+		GnaniAPIKey:                             os.Getenv("GNANI_API_KEY"),
+		GradiumAPIKey:                           os.Getenv("GRADIUM_API_KEY"),
+		HumeAPIKey:                              os.Getenv("HUME_API_KEY"),
+		InworldAPIKey:                           os.Getenv("INWORLD_API_KEY"),
+		MinimaxAPIKey:                           os.Getenv("MINIMAX_API_KEY"),
+		MistralAPIKey:                           os.Getenv("MISTRAL_API_KEY"),
 		GoogleCredentialsFile:                   firstEnv("RTP_AGENT_GOOGLE_CREDENTIALS_FILE", "GOOGLE_APPLICATION_CREDENTIALS"),
 	}
 }
@@ -403,8 +481,18 @@ func configureProviders(cfg AppConfig, a *agent.Agent) (llm.RealtimeModel, error
 			return nil, err
 		}
 		a.LLM = provider
+	case providerGradium:
+		a.LLM = gradium.NewGradiumLLM(cfg.GradiumAPIKey, cfg.LLMModel)
 	case providerGroq:
 		a.LLM = groq.NewGroqLLM(cfg.GroqAPIKey, cfg.LLMModel)
+	case providerHume:
+		a.LLM = hume.NewHumeLLM(cfg.HumeAPIKey, cfg.LLMModel)
+	case providerInworld:
+		a.LLM = inworld.NewInworldLLM(cfg.InworldAPIKey, cfg.LLMModel)
+	case providerMinimax:
+		a.LLM = minimax.NewMinimaxLLM(cfg.MinimaxAPIKey, cfg.LLMModel)
+	case providerMistralAI:
+		a.LLM = mistralai.NewMistralLLM(cfg.MistralAPIKey, cfg.LLMModel)
 	case providerCerebras:
 		a.LLM = cerebras.NewCerebrasLLM(cfg.CerebrasAPIKey, cfg.LLMModel)
 	case providerFal:
@@ -796,6 +884,96 @@ func configureProviders(cfg AppConfig, a *agent.Agent) (llm.RealtimeModel, error
 			sttOpts = append(sttOpts, gladia.WithGladiaPreProcessing(boolValue(cfg.STTPreProcessingAudioEnhancer), speechThreshold))
 		}
 		a.STT = gladia.NewGladiaSTT(cfg.GladiaAPIKey, sttOpts...)
+	case providerGnani:
+		sttOpts := []gnani.STTOption{}
+		if cfg.STTBaseURL != "" {
+			sttOpts = append(sttOpts, gnani.WithSTTBaseURL(cfg.STTBaseURL))
+		}
+		if cfg.STTLanguage != "" {
+			sttOpts = append(sttOpts, gnani.WithSTTLanguage(cfg.STTLanguage))
+		}
+		if cfg.STTSampleRate != nil {
+			sttOpts = append(sttOpts, gnani.WithSTTSampleRate(*cfg.STTSampleRate))
+		}
+		if cfg.STTOrganizationID != "" {
+			sttOpts = append(sttOpts, gnani.WithSTTOrganizationID(cfg.STTOrganizationID))
+		}
+		if cfg.STTUserID != "" {
+			sttOpts = append(sttOpts, gnani.WithSTTUserID(cfg.STTUserID))
+		}
+		a.STT = gnani.NewSTT(cfg.GnaniAPIKey, sttOpts...)
+	case providerGradium:
+		sttOpts := []gradium.GradiumSTTOption{}
+		if cfg.STTBaseURL != "" {
+			sttOpts = append(sttOpts, gradium.WithGradiumSTTModelEndpoint(cfg.STTBaseURL))
+		}
+		if cfg.STTModel != "" {
+			sttOpts = append(sttOpts, gradium.WithGradiumSTTModelName(cfg.STTModel))
+		}
+		if cfg.STTLanguage != "" {
+			sttOpts = append(sttOpts, gradium.WithGradiumSTTLanguage(cfg.STTLanguage))
+		}
+		if cfg.STTTemperature != nil {
+			sttOpts = append(sttOpts, gradium.WithGradiumSTTTemperature(*cfg.STTTemperature))
+		}
+		if cfg.STTVADBucket != nil {
+			sttOpts = append(sttOpts, gradium.WithGradiumSTTVADBucket(cfg.STTVADBucket))
+		}
+		if cfg.STTVADFlush != nil {
+			sttOpts = append(sttOpts, gradium.WithGradiumSTTVADFlush(*cfg.STTVADFlush))
+		}
+		if cfg.STTBufferSizeSeconds != nil {
+			sttOpts = append(sttOpts, gradium.WithGradiumSTTBufferSizeSeconds(*cfg.STTBufferSizeSeconds))
+		}
+		a.STT = gradium.NewGradiumSTT(cfg.GradiumAPIKey, sttOpts...)
+	case providerInworld:
+		sttOpts := []inworld.InworldSTTOption{}
+		if cfg.STTBaseURL != "" {
+			sttOpts = append(sttOpts, inworld.WithInworldSTTBaseURL(cfg.STTBaseURL))
+		}
+		if cfg.STTModel != "" {
+			sttOpts = append(sttOpts, inworld.WithInworldSTTModel(cfg.STTModel))
+		}
+		if cfg.STTLanguage != "" {
+			sttOpts = append(sttOpts, inworld.WithInworldSTTLanguage(cfg.STTLanguage))
+		}
+		if cfg.STTSampleRate != nil {
+			sttOpts = append(sttOpts, inworld.WithInworldSTTSampleRate(*cfg.STTSampleRate))
+		}
+		if cfg.STTNumberOfChannels != nil {
+			sttOpts = append(sttOpts, inworld.WithInworldSTTNumChannels(*cfg.STTNumberOfChannels))
+		}
+		if cfg.STTVoiceProfile != nil {
+			sttOpts = append(sttOpts, inworld.WithInworldSTTVoiceProfile(*cfg.STTVoiceProfile))
+		}
+		if cfg.STTVoiceProfileTopN != nil {
+			sttOpts = append(sttOpts, inworld.WithInworldSTTVoiceProfileTopN(*cfg.STTVoiceProfileTopN))
+		}
+		if cfg.STTVADThreshold != nil {
+			sttOpts = append(sttOpts, inworld.WithInworldSTTVADThreshold(*cfg.STTVADThreshold))
+		}
+		if cfg.STTMinEndOfTurnSilenceWhenConfident != nil {
+			sttOpts = append(sttOpts, inworld.WithInworldSTTMinEndOfTurnSilenceWhenConfident(*cfg.STTMinEndOfTurnSilenceWhenConfident))
+		}
+		if cfg.STTEndOfTurnConfidenceThreshold != nil {
+			sttOpts = append(sttOpts, inworld.WithInworldSTTEndOfTurnConfidenceThreshold(*cfg.STTEndOfTurnConfidenceThreshold))
+		}
+		a.STT = inworld.NewInworldSTT(cfg.InworldAPIKey, sttOpts...)
+	case providerMistralAI:
+		sttOpts := []mistralai.MistralAISTTOption{}
+		if cfg.STTBaseURL != "" {
+			sttOpts = append(sttOpts, mistralai.WithMistralAISTTBaseURL(cfg.STTBaseURL))
+		}
+		if cfg.STTModel != "" {
+			sttOpts = append(sttOpts, mistralai.WithMistralAISTTModel(cfg.STTModel))
+		}
+		if cfg.STTLanguage != "" {
+			sttOpts = append(sttOpts, mistralai.WithMistralAISTTLanguage(cfg.STTLanguage))
+		}
+		if len(cfg.STTKeytermsPrompt) > 0 {
+			sttOpts = append(sttOpts, mistralai.WithMistralAISTTContextBias(cfg.STTKeytermsPrompt))
+		}
+		a.STT = mistralai.NewMistralAISTT(cfg.MistralAPIKey, sttOpts...)
 	case providerAssemblyAI:
 		sttOpts := []assemblyai.AssemblyAISTTOption{}
 		if cfg.STTBaseURL != "" {
@@ -1041,6 +1219,196 @@ func configureProviders(cfg AppConfig, a *agent.Agent) (llm.RealtimeModel, error
 			ttsOpts = append(ttsOpts, fishaudio.WithFishAudioTTSChunkLength(*cfg.TTSChunkLength))
 		}
 		a.TTS = fishaudio.NewFishAudioTTS(cfg.FishAudioAPIKey, cfg.TTSVoice, ttsOpts...)
+	case providerGnani:
+		ttsOpts := []gnani.Option{}
+		if cfg.TTSBaseURL != "" {
+			ttsOpts = append(ttsOpts, gnani.WithBaseURL(cfg.TTSBaseURL))
+		}
+		if cfg.TTSVoice != "" {
+			ttsOpts = append(ttsOpts, gnani.WithVoice(cfg.TTSVoice))
+		}
+		if cfg.TTSModel != "" {
+			ttsOpts = append(ttsOpts, gnani.WithModel(cfg.TTSModel))
+		}
+		if cfg.TTSSampleRate != nil {
+			ttsOpts = append(ttsOpts, gnani.WithSampleRate(*cfg.TTSSampleRate))
+		}
+		if cfg.TTSEncoding != "" {
+			ttsOpts = append(ttsOpts, gnani.WithEncoding(cfg.TTSEncoding))
+		}
+		if cfg.TTSResponseFormat != "" {
+			ttsOpts = append(ttsOpts, gnani.WithContainer(cfg.TTSResponseFormat))
+		}
+		if cfg.TTSNumberOfChannels != nil {
+			ttsOpts = append(ttsOpts, gnani.WithNumChannels(*cfg.TTSNumberOfChannels))
+		}
+		if cfg.TTSSampleWidth != nil {
+			ttsOpts = append(ttsOpts, gnani.WithSampleWidth(*cfg.TTSSampleWidth))
+		}
+		if cfg.TTSLanguage != "" {
+			ttsOpts = append(ttsOpts, gnani.WithLanguage(cfg.TTSLanguage))
+		}
+		a.TTS = gnani.NewTTS(cfg.GnaniAPIKey, ttsOpts...)
+	case providerGradium:
+		ttsOpts := []gradium.GradiumTTSOption{}
+		if cfg.TTSBaseURL != "" {
+			ttsOpts = append(ttsOpts, gradium.WithGradiumTTSModelEndpoint(cfg.TTSBaseURL))
+		}
+		if cfg.TTSModel != "" {
+			ttsOpts = append(ttsOpts, gradium.WithGradiumTTSModelName(cfg.TTSModel))
+		}
+		if cfg.TTSVoiceID != "" {
+			ttsOpts = append(ttsOpts, gradium.WithGradiumTTSVoiceID(cfg.TTSVoiceID))
+		}
+		if cfg.TTSPronunciationDictID != "" {
+			ttsOpts = append(ttsOpts, gradium.WithGradiumTTSPronunciationID(cfg.TTSPronunciationDictID))
+		}
+		if len(cfg.TTSJSONConfig) > 0 {
+			ttsOpts = append(ttsOpts, gradium.WithGradiumTTSJSONConfig(cfg.TTSJSONConfig))
+		}
+		a.TTS = gradium.NewGradiumTTS(cfg.GradiumAPIKey, cfg.TTSVoice, ttsOpts...)
+	case providerHume:
+		ttsOpts := []hume.HumeTTSOption{}
+		if cfg.TTSBaseURL != "" {
+			ttsOpts = append(ttsOpts, hume.WithHumeTTSBaseURL(cfg.TTSBaseURL))
+		}
+		if cfg.TTSModel != "" {
+			ttsOpts = append(ttsOpts, hume.WithHumeTTSModelVersion(cfg.TTSModel))
+		}
+		if cfg.TTSVoiceID != "" {
+			ttsOpts = append(ttsOpts, hume.WithHumeTTSVoiceID(cfg.TTSVoiceID, cfg.TTSVoiceProvider))
+		} else if cfg.TTSVoice != "" {
+			ttsOpts = append(ttsOpts, hume.WithHumeTTSVoiceName(cfg.TTSVoice, cfg.TTSVoiceProvider))
+		}
+		if cfg.TTSInstructions != "" {
+			ttsOpts = append(ttsOpts, hume.WithHumeTTSDescription(cfg.TTSInstructions))
+		}
+		if cfg.TTSSpeed != 0 {
+			ttsOpts = append(ttsOpts, hume.WithHumeTTSSpeed(cfg.TTSSpeed))
+		}
+		if cfg.TTSTrailingSilence != nil {
+			ttsOpts = append(ttsOpts, hume.WithHumeTTSTrailingSilence(*cfg.TTSTrailingSilence))
+		}
+		if cfg.TTSInstantMode != nil {
+			ttsOpts = append(ttsOpts, hume.WithHumeTTSInstantMode(*cfg.TTSInstantMode))
+		}
+		if cfg.TTSResponseFormat != "" {
+			ttsOpts = append(ttsOpts, hume.WithHumeTTSAudioFormat(cfg.TTSResponseFormat))
+		}
+		if cfg.TTSContextGenerationID != "" {
+			ttsOpts = append(ttsOpts, hume.WithHumeTTSContextGenerationID(cfg.TTSContextGenerationID))
+		} else if len(cfg.TTSContextUtterances) > 0 {
+			ttsOpts = append(ttsOpts, hume.WithHumeTTSContextUtterances(cfg.TTSContextUtterances))
+		}
+		a.TTS = hume.NewHumeTTS(cfg.HumeAPIKey, "", ttsOpts...)
+	case providerInworld:
+		ttsOpts := []inworld.InworldTTSOption{}
+		if cfg.TTSBaseURL != "" {
+			ttsOpts = append(ttsOpts, inworld.WithInworldTTSBaseURL(cfg.TTSBaseURL))
+		}
+		if cfg.TTSWebsocketURL != "" {
+			ttsOpts = append(ttsOpts, inworld.WithInworldTTSWebsocketURL(cfg.TTSWebsocketURL))
+		}
+		if cfg.TTSVoice != "" {
+			ttsOpts = append(ttsOpts, inworld.WithInworldTTSVoice(cfg.TTSVoice))
+		}
+		if cfg.TTSModel != "" {
+			ttsOpts = append(ttsOpts, inworld.WithInworldTTSModel(cfg.TTSModel))
+		}
+		if cfg.TTSEncoding != "" {
+			ttsOpts = append(ttsOpts, inworld.WithInworldTTSEncoding(cfg.TTSEncoding))
+		}
+		if cfg.TTSBitRate != nil {
+			ttsOpts = append(ttsOpts, inworld.WithInworldTTSBitRate(*cfg.TTSBitRate))
+		}
+		if cfg.TTSSampleRate != nil {
+			ttsOpts = append(ttsOpts, inworld.WithInworldTTSSampleRate(*cfg.TTSSampleRate))
+		}
+		if cfg.TTSSpeakingRate != nil {
+			ttsOpts = append(ttsOpts, inworld.WithInworldTTSSpeakingRate(*cfg.TTSSpeakingRate))
+		}
+		if cfg.TTSTemperature != nil {
+			ttsOpts = append(ttsOpts, inworld.WithInworldTTSTemperature(*cfg.TTSTemperature))
+		}
+		if cfg.TTSLanguage != "" {
+			ttsOpts = append(ttsOpts, inworld.WithInworldTTSLanguage(cfg.TTSLanguage))
+		}
+		if cfg.TTSTimestampType != "" {
+			ttsOpts = append(ttsOpts, inworld.WithInworldTTSTimestampType(cfg.TTSTimestampType))
+		}
+		if cfg.TTSTextNormalization != nil {
+			ttsOpts = append(ttsOpts, inworld.WithInworldTTSTextNormalization(*cfg.TTSTextNormalization))
+		}
+		if cfg.TTSDeliveryMode != "" {
+			ttsOpts = append(ttsOpts, inworld.WithInworldTTSDeliveryMode(cfg.TTSDeliveryMode))
+		}
+		if cfg.TTSTimestampTransportStrategy != "" {
+			ttsOpts = append(ttsOpts, inworld.WithInworldTTSTimestampTransportStrategy(cfg.TTSTimestampTransportStrategy))
+		}
+		if cfg.TTSBufferCharThreshold != nil {
+			ttsOpts = append(ttsOpts, inworld.WithInworldTTSBufferCharThreshold(*cfg.TTSBufferCharThreshold))
+		}
+		if cfg.TTSMaxBufferDelayMS != nil {
+			ttsOpts = append(ttsOpts, inworld.WithInworldTTSMaxBufferDelayMS(*cfg.TTSMaxBufferDelayMS))
+		}
+		a.TTS = inworld.NewInworldTTS(cfg.InworldAPIKey, cfg.TTSVoice, ttsOpts...)
+	case providerMinimax:
+		ttsOpts := []minimax.MinimaxTTSOption{}
+		if cfg.TTSBaseURL != "" {
+			ttsOpts = append(ttsOpts, minimax.WithMinimaxTTSBaseURL(cfg.TTSBaseURL))
+		}
+		if cfg.TTSModel != "" {
+			ttsOpts = append(ttsOpts, minimax.WithMinimaxTTSModel(cfg.TTSModel))
+		}
+		if cfg.TTSVoice != "" {
+			ttsOpts = append(ttsOpts, minimax.WithMinimaxTTSVoice(cfg.TTSVoice))
+		}
+		if cfg.TTSSampleRate != nil {
+			ttsOpts = append(ttsOpts, minimax.WithMinimaxTTSSampleRate(*cfg.TTSSampleRate))
+		}
+		if cfg.TTSBitRate != nil {
+			ttsOpts = append(ttsOpts, minimax.WithMinimaxTTSBitrate(*cfg.TTSBitRate))
+		}
+		if cfg.TTSResponseFormat != "" {
+			ttsOpts = append(ttsOpts, minimax.WithMinimaxTTSAudioFormat(cfg.TTSResponseFormat))
+		}
+		if cfg.TTSEmotion != "" {
+			ttsOpts = append(ttsOpts, minimax.WithMinimaxTTSEmotion(cfg.TTSEmotion))
+		}
+		if cfg.TTSSpeed != 0 {
+			ttsOpts = append(ttsOpts, minimax.WithMinimaxTTSSpeed(cfg.TTSSpeed))
+		}
+		if cfg.TTSVolume != nil {
+			ttsOpts = append(ttsOpts, minimax.WithMinimaxTTSVolume(*cfg.TTSVolume))
+		}
+		if cfg.TTSPitch != nil {
+			ttsOpts = append(ttsOpts, minimax.WithMinimaxTTSPitch(*cfg.TTSPitch))
+		}
+		if cfg.TTSTextNormalization != nil {
+			ttsOpts = append(ttsOpts, minimax.WithMinimaxTTSTextNormalization(*cfg.TTSTextNormalization))
+		}
+		a.TTS = minimax.NewMinimaxTTS(cfg.MinimaxAPIKey, cfg.TTSVoice, ttsOpts...)
+	case providerMistralAI:
+		ttsOpts := []mistralai.MistralAITTSOption{}
+		if cfg.TTSBaseURL != "" {
+			ttsOpts = append(ttsOpts, mistralai.WithMistralAITTSBaseURL(cfg.TTSBaseURL))
+		}
+		if cfg.TTSModel != "" {
+			ttsOpts = append(ttsOpts, mistralai.WithMistralAITTSModel(cfg.TTSModel))
+		}
+		if cfg.TTSRefAudio != "" {
+			ttsOpts = append(ttsOpts, mistralai.WithMistralAITTSRefAudio(cfg.TTSRefAudio))
+		} else if cfg.TTSVoice != "" {
+			ttsOpts = append(ttsOpts, mistralai.WithMistralAITTSVoice(cfg.TTSVoice))
+		}
+		if cfg.TTSResponseFormat != "" {
+			ttsOpts = append(ttsOpts, mistralai.WithMistralAITTSResponseFormat(cfg.TTSResponseFormat))
+		}
+		provider, err := mistralai.NewMistralAITTS(cfg.MistralAPIKey, "", ttsOpts...)
+		if err != nil {
+			return nil, err
+		}
+		a.TTS = provider
 	case providerCambai:
 		ttsOpts := []cambai.CambaiTTSOption{}
 		if cfg.TTSBaseURL != "" {
@@ -1290,6 +1658,18 @@ func splitEnvFloatList(name string) []float64 {
 		}
 	}
 	return values
+}
+
+func splitEnvHumeTTSUtterances(name string) []hume.HumeTTSUtterance {
+	values := splitEnvList(name)
+	if len(values) == 0 {
+		return nil
+	}
+	utterances := make([]hume.HumeTTSUtterance, 0, len(values))
+	for _, value := range values {
+		utterances = append(utterances, hume.HumeTTSUtterance{Text: value})
+	}
+	return utterances
 }
 
 func splitEnvDeepgramKeywords(name string) []deepgram.DeepgramKeyword {
