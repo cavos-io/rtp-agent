@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/cavos-io/rtp-agent/core/agent"
+	"github.com/cavos-io/rtp-agent/core/audio"
 	"github.com/cavos-io/rtp-agent/core/audio/model"
 	"github.com/cavos-io/rtp-agent/library/logger"
 	"github.com/hraban/opus"
@@ -805,8 +806,7 @@ func (rio *RoomIO) PublishAudio(frame *model.AudioFrame) error {
 		}
 	}
 
-	// Calculate duration based on sample rate and samples
-	duration := time.Duration(frame.SamplesPerChannel) * time.Second / time.Duration(frame.SampleRate)
+	duration := time.Duration(audio.CalculateFrameDuration(frame) * float64(time.Second))
 
 	return track.WriteSample(media.Sample{
 		Data:     data,
