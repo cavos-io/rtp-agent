@@ -58,6 +58,7 @@ import (
 	"github.com/cavos-io/rtp-agent/adapter/speechmatics"
 	"github.com/cavos-io/rtp-agent/adapter/spitch"
 	"github.com/cavos-io/rtp-agent/adapter/telnyx"
+	"github.com/cavos-io/rtp-agent/adapter/trugen"
 	"github.com/cavos-io/rtp-agent/adapter/ultravox"
 	"github.com/cavos-io/rtp-agent/adapter/upliftai"
 	"github.com/cavos-io/rtp-agent/adapter/xai"
@@ -117,6 +118,7 @@ const (
 	providerSpeechmatics = "speechmatics"
 	providerSpitch       = "spitch"
 	providerTelnyx       = "telnyx"
+	providerTrugen       = "trugen"
 	providerUltravox     = "ultravox"
 	providerUpliftAI     = "upliftai"
 	providerXAI          = "xai"
@@ -345,6 +347,7 @@ type AppConfig struct {
 	SpeechmaticsAPIKey          string
 	SpitchAPIKey                string
 	TelnyxAPIKey                string
+	TrugenAPIKey                string
 	UltravoxAPIKey              string
 	UpliftAIAPIKey              string
 	XAIAPIKey                   string
@@ -586,6 +589,7 @@ func DefaultConfigFromEnv() AppConfig {
 		SpeechmaticsAPIKey:                      os.Getenv("SPEECHMATICS_API_KEY"),
 		SpitchAPIKey:                            os.Getenv("SPITCH_API_KEY"),
 		TelnyxAPIKey:                            os.Getenv("TELNYX_API_KEY"),
+		TrugenAPIKey:                            os.Getenv("TRUGEN_API_KEY"),
 		UltravoxAPIKey:                          os.Getenv("ULTRAVOX_API_KEY"),
 		UpliftAIAPIKey:                          os.Getenv("UPLIFTAI_API_KEY"),
 		XAIAPIKey:                               os.Getenv("XAI_API_KEY"),
@@ -765,6 +769,8 @@ func configureProviders(cfg AppConfig, a *agent.Agent) (llm.RealtimeModel, error
 		a.LLM = smallestai.NewSmallestAILLM(cfg.SmallestAIAPIKey, cfg.LLMModel)
 	case providerTelnyx:
 		a.LLM = telnyx.NewTelnyxLLM(cfg.TelnyxAPIKey, cfg.LLMModel)
+	case providerTrugen:
+		a.LLM = trugen.NewTrugenLLM(cfg.TrugenAPIKey, cfg.LLMModel)
 	case providerUpliftAI:
 		a.LLM = upliftai.NewUpliftAILLM(cfg.UpliftAIAPIKey, cfg.LLMModel)
 	case providerXAI:
