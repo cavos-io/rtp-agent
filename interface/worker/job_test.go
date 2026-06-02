@@ -699,6 +699,57 @@ func TestJobContextWaitForParticipantConnectsBeforeWaiting(t *testing.T) {
 	}
 }
 
+func TestJobContextWaitForAgentConnectsBeforeWaiting(t *testing.T) {
+	ctx := NewJobContext(
+		&livekit.Job{Id: "job_wait_agent_connect", Room: &livekit.Room{Name: "room-a"}},
+		"://invalid-url",
+		"key",
+		"secret",
+	)
+
+	_, err := ctx.WaitForAgent(context.Background(), "agent-a")
+	if err == nil {
+		t.Fatal("WaitForAgent() error = nil, want connection error")
+	}
+	if strings.Contains(err.Error(), "room is nil") {
+		t.Fatalf("WaitForAgent() error = %q, want Connect error before utility wait", err)
+	}
+}
+
+func TestJobContextWaitForTrackPublicationConnectsBeforeWaiting(t *testing.T) {
+	ctx := NewJobContext(
+		&livekit.Job{Id: "job_wait_track_connect", Room: &livekit.Room{Name: "room-a"}},
+		"://invalid-url",
+		"key",
+		"secret",
+	)
+
+	_, err := ctx.WaitForTrackPublication(context.Background(), "caller-a", livekit.TrackType_AUDIO)
+	if err == nil {
+		t.Fatal("WaitForTrackPublication() error = nil, want connection error")
+	}
+	if strings.Contains(err.Error(), "room is nil") {
+		t.Fatalf("WaitForTrackPublication() error = %q, want Connect error before utility wait", err)
+	}
+}
+
+func TestJobContextWaitForParticipantAttributeConnectsBeforeWaiting(t *testing.T) {
+	ctx := NewJobContext(
+		&livekit.Job{Id: "job_wait_attribute_connect", Room: &livekit.Room{Name: "room-a"}},
+		"://invalid-url",
+		"key",
+		"secret",
+	)
+
+	err := ctx.WaitForParticipantAttribute(context.Background(), "caller-a", "status", "ready")
+	if err == nil {
+		t.Fatal("WaitForParticipantAttribute() error = nil, want connection error")
+	}
+	if strings.Contains(err.Error(), "room is nil") {
+		t.Fatalf("WaitForParticipantAttribute() error = %q, want Connect error before utility wait", err)
+	}
+}
+
 func TestJobContextDefaultParticipantWaitKindsMatchReference(t *testing.T) {
 	got := defaultParticipantWaitKinds(nil)
 	want := []livekit.ParticipantInfo_Kind{

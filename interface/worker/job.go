@@ -445,12 +445,60 @@ func (c *JobContext) WaitForParticipant(
 	identity string,
 	kinds ...livekit.ParticipantInfo_Kind,
 ) (*lksdk.RemoteParticipant, error) {
-	if c.Room == nil {
-		if err := c.Connect(ctx, nil); err != nil {
-			return nil, err
-		}
+	if err := c.ensureRoomConnected(ctx); err != nil {
+		return nil, err
 	}
 	return utils.WaitForParticipant(ctx, c.Room, identity, defaultParticipantWaitKinds(kinds)...)
+}
+
+func (c *JobContext) WaitForAgent(
+	ctx context.Context,
+	agentName ...string,
+) (*lksdk.RemoteParticipant, error) {
+	if err := c.ensureRoomConnected(ctx); err != nil {
+		return nil, err
+	}
+	return utils.WaitForAgent(ctx, c.Room, agentName...)
+}
+
+func (c *JobContext) WaitForTrackPublication(
+	ctx context.Context,
+	identity string,
+	kinds ...livekit.TrackType,
+) (*lksdk.RemoteTrackPublication, error) {
+	if err := c.ensureRoomConnected(ctx); err != nil {
+		return nil, err
+	}
+	return utils.WaitForTrackPublication(ctx, c.Room, identity, kinds...)
+}
+
+func (c *JobContext) WaitForTrackPublicationWithOptions(
+	ctx context.Context,
+	options utils.TrackPublicationWaitOptions,
+) (*lksdk.RemoteTrackPublication, error) {
+	if err := c.ensureRoomConnected(ctx); err != nil {
+		return nil, err
+	}
+	return utils.WaitForTrackPublicationWithOptions(ctx, c.Room, options)
+}
+
+func (c *JobContext) WaitForParticipantAttribute(
+	ctx context.Context,
+	identity string,
+	attribute string,
+	value string,
+) error {
+	if err := c.ensureRoomConnected(ctx); err != nil {
+		return err
+	}
+	return utils.WaitForParticipantAttribute(ctx, c.Room, identity, attribute, value)
+}
+
+func (c *JobContext) ensureRoomConnected(ctx context.Context) error {
+	if c.Room != nil {
+		return nil
+	}
+	return c.Connect(ctx, nil)
 }
 
 func defaultParticipantWaitKinds(kinds []livekit.ParticipantInfo_Kind) []livekit.ParticipantInfo_Kind {
