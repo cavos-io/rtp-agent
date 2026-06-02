@@ -26,15 +26,62 @@ if ! flock -n 9; then
   exit 0
 fi
 
-WORKTREES=(
-  "worktrees/interface:ramdhan/feature/interface"
-  "worktrees/core/agent:ramdhan/feature/core-agent"
-  "worktrees/core/llm:ramdhan/feature/core-llm"
-  "worktrees/core/stt:ramdhan/feature/core-stt"
-  "worktrees/core/tts:ramdhan/feature/core-tts"
-  "worktrees/core/vad:ramdhan/feature/core-vad"
-  "worktrees/adapter:ramdhan/feature/adapter"
-)
+WORKTREES=()
+
+discover_worktrees() {
+  echo "Discovering existing feature worktrees..."
+
+  local current_path=""
+  local current_branch=""
+
+  while IFS= read -r line; do
+    case "$line" in
+      worktree\ *)
+        current_path="${line#worktree }"
+        current_branch=""
+        ;;
+      branch\ *)
+        current_branch="${line#branch refs/heads/}"
+
+        # Skip base/main worktree.
+        if [[ "$current_branch" == "$BASE_BRANCH" ]]; then
+          continue
+        fi
+
+        # Only integrate Ramdhan feature branches.
+        if [[ "$current_branch" != ramdhan/feature/* ]]; then
+          echo "Skipping non-feature worktree: $current_path ($current_branch)"
+          continue
+        fi
+
+        # Normalize absolute path to repo-relative path when possible.
+        local rel_path="$current_path"
+        if [[ "$current_path" == "$REPO_ROOT/"* ]]; then
+          rel_path="${current_path#"$REPO_ROOT"/}"
+        fi
+
+        if [[ ! -d "$rel_path" ]]; then
+          echo "Skipping missing worktree path: $rel_path ($current_branch)"
+          continue
+        fi
+
+        WORKTREES+=("$rel_path:$current_branch")
+        ;;
+    esac
+  done < <(git worktree list --porcelain)
+
+  if (( ${#WORKTREES[@]} == 0 )); then
+    echo "No ramdhan/feature/* worktrees found."
+    exit 0
+  fi
+
+  echo "Discovered worktrees:"
+  for item in "${WORKTREES[@]}"; do
+    local path="${item%%:*}"
+    local branch="${item##*:}"
+    echo "  $path ($branch)"
+  done
+}
 
 ACTIVE_WORKTREES=()
 SKIPPED_WORKTREES=()
@@ -176,6 +223,7 @@ echo "Base: $BASE_BRANCH"
 echo "Log:  $LOG_FILE"
 echo "============================================================"
 
+discover_worktrees
 collect_clean_worktrees
 
 git fetch origin
