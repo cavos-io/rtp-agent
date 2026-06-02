@@ -610,6 +610,7 @@ func (a *AgentActivity) completeUserTurn(ctx context.Context, info EndOfTurnInfo
 	}
 	a.queueMu.Lock()
 	currentSpeech := a.currentSpeech
+	schedulingPaused := a.schedulingPaused || a.schedulingDraining
 	a.queueMu.Unlock()
 	if currentSpeech != nil && !currentSpeech.AllowInterruptions && !currentSpeech.IsInterrupted() && !currentSpeech.IsDone() {
 		logger.Logger.Warnw("skipping reply to user input, current speech generation cannot be interrupted", nil, "userInput", info.NewTranscript)
@@ -622,6 +623,10 @@ func (a *AgentActivity) completeUserTurn(ctx context.Context, info EndOfTurnInfo
 		if err := currentSpeech.Wait(ctx); err != nil {
 			return nil, err
 		}
+	}
+	if schedulingPaused {
+		logger.Logger.Warnw("skipping on_user_turn_completed, speech scheduling is paused", nil, "userInput", info.NewTranscript)
+		return nil, nil
 	}
 
 	chatCtx := llm.NewChatContext()
