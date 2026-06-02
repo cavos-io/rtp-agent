@@ -691,7 +691,16 @@ func (s *AgentSession) CloseSoon(reason CloseReason) {
 	_ = s.Stop(context.Background())
 }
 
-func (s *AgentSession) Shutdown() {
+func (s *AgentSession) Shutdown(drain ...bool) {
+	shouldDrain := true
+	if len(drain) > 0 {
+		shouldDrain = drain[0]
+	}
+	if shouldDrain {
+		if err := s.Drain(context.Background()); err != nil && !errors.Is(err, ErrAgentSessionNotRunning) {
+			s.EmitError(ErrorEvent{Error: err, CreatedAt: time.Now()})
+		}
+	}
 	s.CloseSoon(CloseReasonUserInitiated)
 }
 

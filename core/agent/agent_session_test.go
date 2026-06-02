@@ -912,6 +912,72 @@ func TestAgentSessionShutdownClosesWithUserInitiatedReason(t *testing.T) {
 	}
 }
 
+func TestAgentSessionShutdownDrainsByDefaultBeforeClosing(t *testing.T) {
+	agent := NewAgent("test")
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	session.activity = NewAgentActivity(agent, session)
+	session.started = true
+	current := NewSpeechHandle(true, DefaultInputDetails())
+	session.activity.currentSpeech = current
+
+	done := make(chan struct{}, 1)
+	go func() {
+		session.Shutdown()
+		done <- struct{}{}
+	}()
+
+	waitForDraining(t, session.activity)
+	select {
+	case <-session.CloseEvents():
+		t.Fatal("Shutdown emitted close event before active speech drained")
+	case <-done:
+		t.Fatal("Shutdown returned before active speech drained")
+	case <-time.After(20 * time.Millisecond):
+	}
+
+	current.MarkDone()
+
+	select {
+	case <-done:
+	case <-testTimeout():
+		t.Fatal("Shutdown did not return after active speech completed")
+	}
+	select {
+	case ev := <-session.CloseEvents():
+		if ev.Reason != CloseReasonUserInitiated {
+			t.Fatalf("CloseEvent.Reason = %q, want user_initiated", ev.Reason)
+		}
+	default:
+		t.Fatal("Shutdown did not emit close event after draining")
+	}
+	if session.activity != nil {
+		t.Fatalf("session.activity = %#v, want nil after drained shutdown", session.activity)
+	}
+}
+
+func TestAgentSessionShutdownCanSkipDrain(t *testing.T) {
+	agent := NewAgent("test")
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	session.activity = NewAgentActivity(agent, session)
+	session.started = true
+	current := NewSpeechHandle(true, DefaultInputDetails())
+	session.activity.currentSpeech = current
+
+	session.Shutdown(false)
+
+	select {
+	case ev := <-session.CloseEvents():
+		if ev.Reason != CloseReasonUserInitiated {
+			t.Fatalf("CloseEvent.Reason = %q, want user_initiated", ev.Reason)
+		}
+	default:
+		t.Fatal("Shutdown(false) did not emit close event")
+	}
+	if session.activity != nil {
+		t.Fatalf("session.activity = %#v, want nil after non-draining shutdown", session.activity)
+	}
+}
+
 func TestAgentSessionShutdownDoesNotCloseUnstartedSession(t *testing.T) {
 	agent := NewAgent("test")
 	session := NewAgentSession(agent, nil, AgentSessionOptions{})
