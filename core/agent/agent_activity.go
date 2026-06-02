@@ -719,12 +719,21 @@ func (a *AgentActivity) completeUserTurn(ctx context.Context, info EndOfTurnInfo
 	if err != nil {
 		return nil, err
 	}
+	mode := a.turnDetectionMode()
+	metadata := (*telemetry.Metadata)(nil)
+	if mode != "" {
+		metadata = &telemetry.Metadata{
+			ModelName:     "unknown",
+			ModelProvider: string(mode),
+		}
+	}
 	a.Session.EmitMetricsCollected(&telemetry.EOUMetrics{
 		Timestamp:                time.Now(),
 		EndOfUtteranceDelay:      info.EndOfTurnDelay,
 		TranscriptionDelay:       info.TranscriptionDelay,
 		OnUserTurnCompletedDelay: hookDelay,
 		SpeechID:                 handle.ID,
+		Metadata:                 metadata,
 	})
 	return handle, nil
 }

@@ -595,6 +595,12 @@ func TestAgentActivityCompleteUserTurnEmitsEOUMetricsForGeneratedReply(t *testin
 		if metrics.OnUserTurnCompletedDelay < 0 {
 			t.Fatalf("EOUMetrics OnUserTurnCompletedDelay = %v, want non-negative", metrics.OnUserTurnCompletedDelay)
 		}
+		if metrics.Metadata == nil {
+			t.Fatal("EOUMetrics Metadata = nil, want turn detection metadata")
+		}
+		if metrics.Metadata.ModelName != "unknown" || metrics.Metadata.ModelProvider != "manual" {
+			t.Fatalf("EOUMetrics Metadata = %#v, want unknown/manual", metrics.Metadata)
+		}
 	case <-time.After(100 * time.Millisecond):
 		t.Fatal("MetricsCollectedEvents did not receive EOU metrics")
 	}
