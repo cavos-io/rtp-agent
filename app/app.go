@@ -32,6 +32,7 @@ import (
 	"github.com/cavos-io/rtp-agent/adapter/hume"
 	"github.com/cavos-io/rtp-agent/adapter/inworld"
 	"github.com/cavos-io/rtp-agent/adapter/minimax"
+	"github.com/cavos-io/rtp-agent/adapter/mistralai"
 	"github.com/cavos-io/rtp-agent/adapter/openai"
 	"github.com/cavos-io/rtp-agent/core/agent"
 	"github.com/cavos-io/rtp-agent/core/llm"
@@ -63,6 +64,7 @@ const (
 	providerHume       = "hume"
 	providerInworld    = "inworld"
 	providerMinimax    = "minimax"
+	providerMistralAI  = "mistralai"
 	providerOpenAI     = "openai"
 	providerLiveKit    = "livekit"
 )
@@ -165,6 +167,7 @@ type AppConfig struct {
 	TTSProvider                             string
 	TTSModel                                string
 	TTSVoice                                string
+	TTSRefAudio                             string
 	TTSVoiceID                              string
 	TTSVoiceProvider                        string
 	TTSLanguage                             string
@@ -228,6 +231,7 @@ type AppConfig struct {
 	HumeAPIKey        string
 	InworldAPIKey     string
 	MinimaxAPIKey     string
+	MistralAPIKey     string
 
 	GoogleCredentialsFile string
 
@@ -339,6 +343,7 @@ func DefaultConfigFromEnv() AppConfig {
 		TTSProvider:                             normalizedEnv("RTP_AGENT_TTS_PROVIDER"),
 		TTSModel:                                os.Getenv("RTP_AGENT_TTS_MODEL"),
 		TTSVoice:                                os.Getenv("RTP_AGENT_TTS_VOICE"),
+		TTSRefAudio:                             os.Getenv("RTP_AGENT_TTS_REF_AUDIO"),
 		TTSVoiceID:                              os.Getenv("RTP_AGENT_TTS_VOICE_ID"),
 		TTSVoiceProvider:                        os.Getenv("RTP_AGENT_TTS_VOICE_PROVIDER"),
 		TTSLanguage:                             os.Getenv("RTP_AGENT_TTS_LANGUAGE"),
@@ -401,6 +406,7 @@ func DefaultConfigFromEnv() AppConfig {
 		HumeAPIKey:                              os.Getenv("HUME_API_KEY"),
 		InworldAPIKey:                           os.Getenv("INWORLD_API_KEY"),
 		MinimaxAPIKey:                           os.Getenv("MINIMAX_API_KEY"),
+		MistralAPIKey:                           os.Getenv("MISTRAL_API_KEY"),
 		GoogleCredentialsFile:                   firstEnv("RTP_AGENT_GOOGLE_CREDENTIALS_FILE", "GOOGLE_APPLICATION_CREDENTIALS"),
 	}
 }
@@ -485,6 +491,8 @@ func configureProviders(cfg AppConfig, a *agent.Agent) (llm.RealtimeModel, error
 		a.LLM = inworld.NewInworldLLM(cfg.InworldAPIKey, cfg.LLMModel)
 	case providerMinimax:
 		a.LLM = minimax.NewMinimaxLLM(cfg.MinimaxAPIKey, cfg.LLMModel)
+	case providerMistralAI:
+		a.LLM = mistralai.NewMistralLLM(cfg.MistralAPIKey, cfg.LLMModel)
 	case providerCerebras:
 		a.LLM = cerebras.NewCerebrasLLM(cfg.CerebrasAPIKey, cfg.LLMModel)
 	case providerFal:
@@ -951,6 +959,21 @@ func configureProviders(cfg AppConfig, a *agent.Agent) (llm.RealtimeModel, error
 			sttOpts = append(sttOpts, inworld.WithInworldSTTEndOfTurnConfidenceThreshold(*cfg.STTEndOfTurnConfidenceThreshold))
 		}
 		a.STT = inworld.NewInworldSTT(cfg.InworldAPIKey, sttOpts...)
+	case providerMistralAI:
+		sttOpts := []mistralai.MistralAISTTOption{}
+		if cfg.STTBaseURL != "" {
+			sttOpts = append(sttOpts, mistralai.WithMistralAISTTBaseURL(cfg.STTBaseURL))
+		}
+		if cfg.STTModel != "" {
+			sttOpts = append(sttOpts, mistralai.WithMistralAISTTModel(cfg.STTModel))
+		}
+		if cfg.STTLanguage != "" {
+			sttOpts = append(sttOpts, mistralai.WithMistralAISTTLanguage(cfg.STTLanguage))
+		}
+		if len(cfg.STTKeytermsPrompt) > 0 {
+			sttOpts = append(sttOpts, mistralai.WithMistralAISTTContextBias(cfg.STTKeytermsPrompt))
+		}
+		a.STT = mistralai.NewMistralAISTT(cfg.MistralAPIKey, sttOpts...)
 	case providerAssemblyAI:
 		sttOpts := []assemblyai.AssemblyAISTTOption{}
 		if cfg.STTBaseURL != "" {
@@ -1365,6 +1388,27 @@ func configureProviders(cfg AppConfig, a *agent.Agent) (llm.RealtimeModel, error
 			ttsOpts = append(ttsOpts, minimax.WithMinimaxTTSTextNormalization(*cfg.TTSTextNormalization))
 		}
 		a.TTS = minimax.NewMinimaxTTS(cfg.MinimaxAPIKey, cfg.TTSVoice, ttsOpts...)
+	case providerMistralAI:
+		ttsOpts := []mistralai.MistralAITTSOption{}
+		if cfg.TTSBaseURL != "" {
+			ttsOpts = append(ttsOpts, mistralai.WithMistralAITTSBaseURL(cfg.TTSBaseURL))
+		}
+		if cfg.TTSModel != "" {
+			ttsOpts = append(ttsOpts, mistralai.WithMistralAITTSModel(cfg.TTSModel))
+		}
+		if cfg.TTSRefAudio != "" {
+			ttsOpts = append(ttsOpts, mistralai.WithMistralAITTSRefAudio(cfg.TTSRefAudio))
+		} else if cfg.TTSVoice != "" {
+			ttsOpts = append(ttsOpts, mistralai.WithMistralAITTSVoice(cfg.TTSVoice))
+		}
+		if cfg.TTSResponseFormat != "" {
+			ttsOpts = append(ttsOpts, mistralai.WithMistralAITTSResponseFormat(cfg.TTSResponseFormat))
+		}
+		provider, err := mistralai.NewMistralAITTS(cfg.MistralAPIKey, "", ttsOpts...)
+		if err != nil {
+			return nil, err
+		}
+		a.TTS = provider
 	case providerCambai:
 		ttsOpts := []cambai.CambaiTTSOption{}
 		if cfg.TTSBaseURL != "" {

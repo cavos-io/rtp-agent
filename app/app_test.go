@@ -652,6 +652,49 @@ func TestDefaultConfigFromEnvSelectsMinimaxProviders(t *testing.T) {
 	}
 }
 
+func TestDefaultConfigFromEnvSelectsMistralAIProviders(t *testing.T) {
+	t.Setenv("MISTRAL_API_KEY", "test-mistral-key")
+	t.Setenv("RTP_AGENT_LLM_PROVIDER", "mistralai")
+	t.Setenv("RTP_AGENT_LLM_MODEL", "ministral-test")
+	t.Setenv("RTP_AGENT_STT_PROVIDER", "mistralai")
+	t.Setenv("RTP_AGENT_STT_BASE_URL", "https://mistral.example/v1")
+	t.Setenv("RTP_AGENT_STT_MODEL", "voxtral-mini-test")
+	t.Setenv("RTP_AGENT_STT_LANGUAGE", "en")
+	t.Setenv("RTP_AGENT_STT_KEYTERMS_PROMPT", "LiveKit,Agents")
+	t.Setenv("RTP_AGENT_TTS_PROVIDER", "mistralai")
+	t.Setenv("RTP_AGENT_TTS_BASE_URL", "https://mistral.example/v1")
+	t.Setenv("RTP_AGENT_TTS_MODEL", "voxtral-tts-test")
+	t.Setenv("RTP_AGENT_TTS_VOICE", "en_paul_neutral")
+	t.Setenv("RTP_AGENT_TTS_REF_AUDIO", "https://example.com/reference.wav")
+	t.Setenv("RTP_AGENT_TTS_RESPONSE_FORMAT", "pcm")
+
+	app, err := NewApp(DefaultConfigFromEnv())
+	if err != nil {
+		t.Fatalf("NewApp() error = %v", err)
+	}
+	if app.Session == nil {
+		t.Fatal("Session is nil")
+	}
+	if app.Session.LLM == nil {
+		t.Fatal("Session LLM is nil")
+	}
+	if got := app.Session.STT.Label(); got != "mistralai.STT" {
+		t.Fatalf("STT label = %q, want mistralai.STT", got)
+	}
+	if caps := app.Session.STT.Capabilities(); caps.Streaming || !caps.OfflineRecognize {
+		t.Fatalf("STT capabilities = %+v, want offline recognize only", caps)
+	}
+	if got := app.Session.TTS.Label(); got != "mistralai.TTS" {
+		t.Fatalf("TTS label = %q, want mistralai.TTS", got)
+	}
+	if got := app.Session.TTS.SampleRate(); got != 24000 {
+		t.Fatalf("TTS sample rate = %d, want 24000", got)
+	}
+	if caps := app.Session.TTS.Capabilities(); caps.Streaming || caps.AlignedTranscript {
+		t.Fatalf("TTS capabilities = %+v, want non-streaming without aligned transcript", caps)
+	}
+}
+
 func TestDefaultConfigFromEnvSelectsAWSProviders(t *testing.T) {
 	t.Setenv("AWS_REGION", "us-west-2")
 	t.Setenv("RTP_AGENT_LLM_PROVIDER", "aws")
