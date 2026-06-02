@@ -105,6 +105,9 @@ func (t *WarmTransferTask) OnEnter() {
 	defer t.mu.Unlock()
 
 	logger.Logger.Infow("Entering warm transfer task, dialing human agent", "target", t.TargetPhoneNumber)
+	if activity := t.GetActivity(); activity != nil && activity.Session != nil {
+		t.callerRoom = activity.Session.Room
+	}
 
 	// In a full implementation, we would start background audio and dial SIP
 	// self.background_audio = BackgroundAudioPlayer()
@@ -129,13 +132,21 @@ func (t *WarmTransferTask) OnExit() {
 	if t.backgroundAudio != nil {
 		t.backgroundAudio.Close()
 	}
+	if t.humanAgentSess != nil {
+		t.humanAgentSess.Shutdown(false)
+		t.humanAgentSess = nil
+	}
 }
 
 func (t *WarmTransferTask) ConnectToCaller() error {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
-	logger.Logger.Debugw("Connecting human agent to caller")
+	logger.Logger.Debugw(
+		"Connecting human agent to caller",
+		"caller_room_ready", t.callerRoom != nil,
+		"human_agent_session_ready", t.humanAgentSess != nil,
+	)
 
 	// In Python:
 	// await job_ctx.api.room.move_participant(
