@@ -231,6 +231,16 @@ func (t *computerUseTool) Description() string {
 	return "Use a computer to browse the web or interact with applications"
 }
 
+func (t *computerUseTool) AnthropicToolSpec() map[string]interface{} {
+	return map[string]interface{}{
+		"type":              "computer_20251124",
+		"name":              "computer",
+		"display_width_px":  t.width,
+		"display_height_px": t.height,
+		"display_number":    1,
+	}
+}
+
 func (t *computerUseTool) Parameters() map[string]any {
 	return map[string]any{
 		"type": "object",

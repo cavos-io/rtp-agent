@@ -21,6 +21,10 @@ type AnthropicLLM struct {
 	model  string
 }
 
+type anthropicToolSpecProvider interface {
+	AnthropicToolSpec() map[string]interface{}
+}
+
 func NewAnthropicLLM(apiKey string, model string) (*AnthropicLLM, error) {
 	if model == "" {
 		model = "claude-sonnet-4-6"
@@ -80,14 +84,8 @@ func (l *AnthropicLLM) Chat(ctx context.Context, chatCtx *llm.ChatContext, opts 
 	if len(options.Tools) > 0 {
 		tools := make([]map[string]interface{}, 0)
 		for _, tool := range options.Tools {
-			if tool.Name() == "computer_use" {
-				tools = append(tools, map[string]interface{}{
-					"type":              "computer_20241022",
-					"name":              "computer",
-					"display_width_px":  1280,
-					"display_height_px": 720,
-					"display_number":    1,
-				})
+			if providerTool, ok := tool.(anthropicToolSpecProvider); ok {
+				tools = append(tools, providerTool.AnthropicToolSpec())
 			} else {
 				tools = append(tools, map[string]interface{}{
 					"name":         tool.Name(),
