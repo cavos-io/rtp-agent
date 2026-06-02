@@ -286,6 +286,7 @@ type AppConfig struct {
 	BackgroundAudioAmbient                  string
 	BackgroundAudioThinking                 string
 	TTSProvider                             string
+	TTSFallbackProviders                    []string
 	TTSModel                                string
 	TTSVoice                                string
 	TTSRefAudio                             string
@@ -581,6 +582,7 @@ func DefaultConfigFromEnv() AppConfig {
 		BackgroundAudioAmbient:                  os.Getenv("RTP_AGENT_BACKGROUND_AUDIO_AMBIENT"),
 		BackgroundAudioThinking:                 os.Getenv("RTP_AGENT_BACKGROUND_AUDIO_THINKING"),
 		TTSProvider:                             normalizedEnv("RTP_AGENT_TTS_PROVIDER"),
+		TTSFallbackProviders:                    splitEnvList("RTP_AGENT_TTS_FALLBACK_PROVIDERS"),
 		TTSModel:                                os.Getenv("RTP_AGENT_TTS_MODEL"),
 		TTSVoice:                                os.Getenv("RTP_AGENT_TTS_VOICE"),
 		TTSRefAudio:                             os.Getenv("RTP_AGENT_TTS_REF_AUDIO"),
@@ -1316,6 +1318,135 @@ func fallbackSTTFromProvider(cfg AppConfig, provider string) (corestt.STT, error
 		return slng.NewSTT(cfg.SLNGAPIKey, sttOpts...), nil
 	default:
 		return nil, fmt.Errorf("unsupported RTP_AGENT_STT_FALLBACK_PROVIDERS entry %q", provider)
+	}
+}
+
+func configureTTSFallbacks(cfg AppConfig, a *agent.Agent) error {
+	if len(cfg.TTSFallbackProviders) == 0 {
+		return nil
+	}
+	if a.TTS == nil {
+		return fmt.Errorf("RTP_AGENT_TTS_FALLBACK_PROVIDERS requires RTP_AGENT_TTS_PROVIDER")
+	}
+	ttss := make([]coretts.TTS, 0, len(cfg.TTSFallbackProviders)+1)
+	ttss = append(ttss, a.TTS)
+	for _, provider := range cfg.TTSFallbackProviders {
+		fallback, err := fallbackTTSFromProvider(cfg, provider)
+		if err != nil {
+			return err
+		}
+		ttss = append(ttss, fallback)
+	}
+	a.TTS = coretts.NewFallbackAdapter(ttss)
+	return nil
+}
+
+func fallbackTTSFromProvider(cfg AppConfig, provider string) (coretts.TTS, error) {
+	switch normalizeProvider(provider) {
+	case providerOpenAI:
+		ttsOpts := []openai.OpenAITTSOption{}
+		if cfg.TTSModel != "" {
+			ttsOpts = append(ttsOpts, openai.WithOpenAITTSModel(goopenai.SpeechModel(cfg.TTSModel)))
+		}
+		if cfg.TTSVoice != "" {
+			ttsOpts = append(ttsOpts, openai.WithOpenAITTSVoice(goopenai.SpeechVoice(cfg.TTSVoice)))
+		}
+		if cfg.TTSSpeed != 0 {
+			ttsOpts = append(ttsOpts, openai.WithOpenAITTSSpeed(cfg.TTSSpeed))
+		}
+		if cfg.TTSInstructions != "" {
+			ttsOpts = append(ttsOpts, openai.WithOpenAITTSInstructions(cfg.TTSInstructions))
+		}
+		if cfg.TTSResponseFormat != "" {
+			ttsOpts = append(ttsOpts, openai.WithOpenAITTSResponseFormat(goopenai.SpeechResponseFormat(cfg.TTSResponseFormat)))
+		}
+		if cfg.TTSBaseURL != "" {
+			ttsOpts = append(ttsOpts, openai.WithOpenAITTSBaseURL(cfg.TTSBaseURL))
+		}
+		return openai.NewOpenAITTS(cfg.OpenAIAPIKey, "", "", ttsOpts...)
+	case providerCartesia:
+		ttsOpts := []cartesia.CartesiaTTSOption{}
+		if cfg.TTSBaseURL != "" {
+			ttsOpts = append(ttsOpts, cartesia.WithCartesiaBaseURL(cfg.TTSBaseURL))
+		}
+		if cfg.TTSLanguage != "" {
+			ttsOpts = append(ttsOpts, cartesia.WithCartesiaLanguage(cfg.TTSLanguage))
+		}
+		if cfg.TTSEncoding != "" || cfg.TTSSampleRate != nil {
+			sampleRate := 0
+			if cfg.TTSSampleRate != nil {
+				sampleRate = *cfg.TTSSampleRate
+			}
+			ttsOpts = append(ttsOpts, cartesia.WithCartesiaAudioFormat(cfg.TTSEncoding, sampleRate))
+		}
+		if cfg.TTSAPIVersion != "" {
+			ttsOpts = append(ttsOpts, cartesia.WithCartesiaAPIVersion(cfg.TTSAPIVersion))
+		}
+		if cfg.TTSWordTimestamps != nil {
+			ttsOpts = append(ttsOpts, cartesia.WithCartesiaWordTimestamps(*cfg.TTSWordTimestamps))
+		}
+		return cartesia.NewCartesiaTTS("", cfg.TTSVoice, cfg.TTSModel, ttsOpts...), nil
+	case providerDeepgram:
+		ttsOpts := []deepgram.DeepgramTTSOption{}
+		if cfg.TTSBaseURL != "" {
+			ttsOpts = append(ttsOpts, deepgram.WithDeepgramTTSBaseURL(cfg.TTSBaseURL))
+		}
+		if cfg.TTSMIPOptOut != nil {
+			ttsOpts = append(ttsOpts, deepgram.WithDeepgramTTSMipOptOut(*cfg.TTSMIPOptOut))
+		}
+		if cfg.TTSEncoding != "" || cfg.TTSSampleRate != nil {
+			sampleRate := 0
+			if cfg.TTSSampleRate != nil {
+				sampleRate = *cfg.TTSSampleRate
+			}
+			ttsOpts = append(ttsOpts, deepgram.WithDeepgramTTSAudioFormat(cfg.TTSEncoding, sampleRate))
+		}
+		return deepgram.NewDeepgramTTS("", cfg.TTSModel, ttsOpts...), nil
+	case providerElevenLabs:
+		ttsOpts := []elevenlabs.ElevenLabsTTSOption{}
+		if cfg.TTSBaseURL != "" {
+			ttsOpts = append(ttsOpts, elevenlabs.WithElevenLabsBaseURL(cfg.TTSBaseURL))
+		}
+		if cfg.TTSLanguage != "" {
+			ttsOpts = append(ttsOpts, elevenlabs.WithElevenLabsLanguage(cfg.TTSLanguage))
+		}
+		if cfg.TTSEnableSSMLParsing != nil {
+			ttsOpts = append(ttsOpts, elevenlabs.WithElevenLabsEnableSSMLParsing(*cfg.TTSEnableSSMLParsing))
+		}
+		if cfg.TTSEncoding != "" {
+			ttsOpts = append(ttsOpts, elevenlabs.WithElevenLabsEncoding(cfg.TTSEncoding))
+		}
+		return elevenlabs.NewElevenLabsTTS(cfg.ElevenLabsAPIKey, cfg.TTSVoice, cfg.TTSModel, ttsOpts...)
+	case providerSLNG:
+		ttsOpts := []slng.TTSOption{}
+		if cfg.TTSModel != "" {
+			ttsOpts = append(ttsOpts, slng.WithTTSModel(cfg.TTSModel))
+		}
+		if cfg.TTSBaseURL != "" {
+			if strings.HasPrefix(cfg.TTSBaseURL, "ws://") || strings.HasPrefix(cfg.TTSBaseURL, "wss://") || strings.HasPrefix(cfg.TTSBaseURL, "http://") || strings.HasPrefix(cfg.TTSBaseURL, "https://") {
+				ttsOpts = append(ttsOpts, slng.WithTTSEndpoint(cfg.TTSBaseURL))
+			} else {
+				ttsOpts = append(ttsOpts, slng.WithTTSBaseURL(cfg.TTSBaseURL))
+			}
+		}
+		if cfg.TTSRegion != "" {
+			ttsOpts = append(ttsOpts, slng.WithTTSRegionOverride(cfg.TTSRegion))
+		}
+		if cfg.TTSVoice != "" {
+			ttsOpts = append(ttsOpts, slng.WithTTSVoice(cfg.TTSVoice))
+		}
+		if cfg.TTSLanguage != "" {
+			ttsOpts = append(ttsOpts, slng.WithTTSLanguage(cfg.TTSLanguage))
+		}
+		if cfg.TTSSampleRate != nil {
+			ttsOpts = append(ttsOpts, slng.WithTTSSampleRate(*cfg.TTSSampleRate))
+		}
+		if cfg.TTSSpeed != 0 {
+			ttsOpts = append(ttsOpts, slng.WithTTSSpeed(cfg.TTSSpeed))
+		}
+		return slng.NewTTS(cfg.SLNGAPIKey, ttsOpts...), nil
+	default:
+		return nil, fmt.Errorf("unsupported RTP_AGENT_TTS_FALLBACK_PROVIDERS entry %q", provider)
 	}
 }
 
@@ -3094,6 +3225,9 @@ func configureProviders(cfg AppConfig, a *agent.Agent) (llm.RealtimeModel, error
 		a.TTS = inference.NewTTS(cfg.TTSModel, cfg.LiveKitInferenceAPIKey, cfg.LiveKitInferenceAPISecret, ttsOpts...)
 	default:
 		return nil, fmt.Errorf("unsupported RTP_AGENT_TTS_PROVIDER %q", cfg.TTSProvider)
+	}
+	if err := configureTTSFallbacks(cfg, a); err != nil {
+		return nil, err
 	}
 
 	switch normalizeProvider(cfg.RealtimeProvider) {
