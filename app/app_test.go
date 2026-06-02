@@ -10,6 +10,7 @@ import (
 
 	"github.com/cavos-io/rtp-agent/core/agent"
 	"github.com/cavos-io/rtp-agent/core/audio/model"
+	"github.com/cavos-io/rtp-agent/core/beta/workflows"
 	"github.com/cavos-io/rtp-agent/core/llm"
 	"github.com/cavos-io/rtp-agent/core/stt"
 	"github.com/cavos-io/rtp-agent/core/tts"
@@ -1623,6 +1624,56 @@ func TestDefaultConfigFromEnvAddsEndCallTool(t *testing.T) {
 	}
 	if got := app.Agent.Tools[0].Name(); got != "end_call" {
 		t.Fatalf("tool[0].Name() = %q, want end_call", got)
+	}
+}
+
+func TestDefaultConfigFromEnvSelectsDtmfWorkflowAgent(t *testing.T) {
+	t.Setenv("RTP_AGENT_WORKFLOW_TASK", "dtmf")
+	t.Setenv("RTP_AGENT_WORKFLOW_DTMF_NUM_DIGITS", "4")
+	t.Setenv("RTP_AGENT_WORKFLOW_DTMF_ASK_CONFIRMATION", "true")
+
+	app, err := NewApp(DefaultConfigFromEnv())
+	if err != nil {
+		t.Fatalf("NewApp() error = %v", err)
+	}
+	task, ok := app.Session.Agent.(*workflows.GetDtmfTask)
+	if !ok {
+		t.Fatalf("Session.Agent = %T, want *workflows.GetDtmfTask", app.Session.Agent)
+	}
+	if task.NumDigits != 4 {
+		t.Fatalf("NumDigits = %d, want 4", task.NumDigits)
+	}
+	if !task.AskForConfirmation {
+		t.Fatal("AskForConfirmation = false, want true")
+	}
+	if app.Agent != task.GetAgent() {
+		t.Fatal("App.Agent does not point at selected workflow agent")
+	}
+	if len(app.Agent.Tools) != 1 || app.Agent.Tools[0].Name() != "confirm_inputs" {
+		t.Fatalf("workflow tools = %#v, want confirm_inputs", app.Agent.Tools)
+	}
+}
+
+func TestDefaultConfigFromEnvSelectsEmailWorkflowAgent(t *testing.T) {
+	t.Setenv("RTP_AGENT_WORKFLOW_TASK", "email")
+	t.Setenv("RTP_AGENT_WORKFLOW_REQUIRE_CONFIRMATION", "true")
+
+	app, err := NewApp(DefaultConfigFromEnv())
+	if err != nil {
+		t.Fatalf("NewApp() error = %v", err)
+	}
+	task, ok := app.Session.Agent.(*workflows.GetEmailTask)
+	if !ok {
+		t.Fatalf("Session.Agent = %T, want *workflows.GetEmailTask", app.Session.Agent)
+	}
+	if !task.RequireConfirmation {
+		t.Fatal("RequireConfirmation = false, want true")
+	}
+	if app.Agent != task.GetAgent() {
+		t.Fatal("App.Agent does not point at selected workflow agent")
+	}
+	if len(app.Agent.Tools) != 3 {
+		t.Fatalf("workflow tools = %d, want email update/confirm/decline tools", len(app.Agent.Tools))
 	}
 }
 
