@@ -148,11 +148,13 @@ func TestOpenAITTSSynthesizeUsesOpenAISpeechAPI(t *testing.T) {
 	}))
 	defer server.Close()
 
-	config := goopenai.DefaultConfig("test-key")
-	config.BaseURL = server.URL + "/v1"
-	provider, err := NewOpenAITTSWithConfig(config, "", "", WithOpenAITTSSpeed(1.25), WithOpenAITTSResponseFormat(goopenai.SpeechResponseFormatPcm))
+	provider, err := NewOpenAITTS("test-key", "", "",
+		WithOpenAITTSBaseURL(server.URL+"/v1"),
+		WithOpenAITTSSpeed(1.25),
+		WithOpenAITTSResponseFormat(goopenai.SpeechResponseFormatPcm),
+	)
 	if err != nil {
-		t.Fatalf("NewOpenAITTSWithConfig error = %v", err)
+		t.Fatalf("NewOpenAITTS error = %v", err)
 	}
 
 	stream, err := provider.Synthesize(context.Background(), "hello")

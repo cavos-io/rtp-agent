@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strings"
 
 	"github.com/cavos-io/rtp-agent/core/audio/model"
 	"github.com/cavos-io/rtp-agent/core/tts"
@@ -16,6 +17,7 @@ type OpenAITTS struct {
 	apiKey         string
 	model          openai.SpeechModel
 	voice          openai.SpeechVoice
+	baseURL        string
 	speed          float64
 	instructions   string
 	responseFormat openai.SpeechResponseFormat
@@ -57,6 +59,14 @@ func WithOpenAITTSResponseFormat(format openai.SpeechResponseFormat) OpenAITTSOp
 	}
 }
 
+func WithOpenAITTSBaseURL(baseURL string) OpenAITTSOption {
+	return func(t *OpenAITTS) {
+		if baseURL != "" {
+			t.baseURL = strings.TrimRight(baseURL, "/")
+		}
+	}
+}
+
 func NewOpenAITTS(apiKey string, model openai.SpeechModel, voice openai.SpeechVoice, opts ...OpenAITTSOption) (*OpenAITTS, error) {
 	if apiKey == "" {
 		apiKey = os.Getenv(openAIAPIKeyEnv)
@@ -65,10 +75,6 @@ func NewOpenAITTS(apiKey string, model openai.SpeechModel, voice openai.SpeechVo
 		return nil, fmt.Errorf("OPENAI_API_KEY is required, either as argument or set OPENAI_API_KEY environment variable")
 	}
 	return newOpenAITTS(openai.NewClient(apiKey), apiKey, model, voice, opts...), nil
-}
-
-func NewOpenAITTSWithConfig(config openai.ClientConfig, model openai.SpeechModel, voice openai.SpeechVoice, opts ...OpenAITTSOption) (*OpenAITTS, error) {
-	return newOpenAITTS(openai.NewClientWithConfig(config), "", model, voice, opts...), nil
 }
 
 func newOpenAITTS(client *openai.Client, apiKey string, model openai.SpeechModel, voice openai.SpeechVoice, opts ...OpenAITTSOption) *OpenAITTS {
@@ -95,6 +101,11 @@ func newOpenAITTS(client *openai.Client, apiKey string, model openai.SpeechModel
 	if provider.responseFormat == "" {
 		provider.responseFormat = openai.SpeechResponseFormatMp3
 	}
+	if provider.baseURL != "" {
+		config := openai.DefaultConfig(apiKey)
+		config.BaseURL = provider.baseURL
+		provider.client = openai.NewClientWithConfig(config)
+	}
 	return provider
 }
 
@@ -104,7 +115,8 @@ func (t *OpenAITTS) UpdateOptions(opts ...OpenAITTSOption) {
 	}
 }
 
-func (t *OpenAITTS) Label() string { return "openai.TTS" }
+func (t *OpenAITTS) Label() string    { return "openai.TTS" }
+func (t *OpenAITTS) Provider() string { return "openai" }
 func (t *OpenAITTS) Capabilities() tts.TTSCapabilities {
 	return tts.TTSCapabilities{Streaming: false, AlignedTranscript: false}
 }

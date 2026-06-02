@@ -18,6 +18,9 @@ excludeFiles:
   - ".*_test\\.go"
 
 components:
+  app:
+    in: app
+
   cmd:
     in: cmd
 
@@ -41,7 +44,16 @@ deps:
   cmd:
     anyVendorDeps: true
     mayDependOn:
+      - app
       - interface
+
+  app:
+    anyVendorDeps: true
+    mayDependOn:
+      - adapter
+      - core
+      - interface
+      - library
 
   interface:
     anyVendorDeps: true

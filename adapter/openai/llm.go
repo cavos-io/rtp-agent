@@ -33,11 +33,6 @@ func NewOpenAILLM(apiKey string, model string) (*OpenAILLM, error) {
 	return newOpenAILLMWithConfigAndModel(config, model)
 }
 
-func NewOpenAILLMWithConfig(config openai.ClientConfig) *OpenAILLM {
-	model, _ := newOpenAILLMWithConfigAndModel(config, "")
-	return model
-}
-
 func newOpenAILLMWithConfigAndModel(config openai.ClientConfig, model string) (*OpenAILLM, error) {
 	if model == "" {
 		model = defaultOpenAILLMModel
@@ -61,6 +56,10 @@ func NewOpenAILLMWithBaseURL(apiKey string, model string, baseURL string) *OpenA
 
 func (l *OpenAILLM) Model() string {
 	return l.model
+}
+
+func (l *OpenAILLM) Provider() string {
+	return "openai"
 }
 
 func (l *OpenAILLM) Chat(ctx context.Context, chatCtx *llm.ChatContext, opts ...llm.ChatOption) (llm.LLMStream, error) {

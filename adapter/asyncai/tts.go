@@ -242,14 +242,6 @@ func (s *asyncAITTSWebsocketChunkedStream) Next() (*tts.SynthesizedAudio, error)
 	}
 }
 
-func (s *asyncAITTSWebsocketChunkedStream) Close() error {
-	if s.conn == nil {
-		return nil
-	}
-	_ = s.conn.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""), time.Now().Add(time.Second))
-	return s.conn.Close()
-}
-
 type asyncAITTSStream struct {
 	conn        *websocket.Conn
 	ctx         context.Context
