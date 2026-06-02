@@ -921,7 +921,7 @@ func (s *AgentSession) RunWithOptions(ctx context.Context, opts RunOptions) (*Ru
 		s.mu.Unlock()
 		return nil, ErrAgentSessionNestedRun
 	}
-	result := newRunResult(s.ChatCtx, opts.UserInput, opts.OutputType)
+	result := newRunResultFromOptions(s.ChatCtx, opts.UserInput, opts.OutputType)
 	s.runState = result
 	s.mu.Unlock()
 

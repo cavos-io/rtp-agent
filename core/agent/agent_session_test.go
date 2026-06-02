@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"errors"
+	"reflect"
 	"testing"
 	"time"
 
@@ -902,6 +903,34 @@ func TestAgentSessionRunReturnsRunResultWatchingGeneratedSpeech(t *testing.T) {
 	}
 	if ev, ok := events[0].(*ChatMessageEvent); !ok || ev.Item != msg {
 		t.Fatalf("events[0] = %#v, want recorded assistant message", events[0])
+	}
+}
+
+func TestAgentSessionRunWithOptionsPreservesUserInputAndOutputType(t *testing.T) {
+	agent := NewAgent("test")
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	session.activity = NewAgentActivity(agent, session)
+
+	result, err := session.RunWithOptions(context.Background(), RunOptions{
+		UserInput:     "collect name",
+		InputModality: "text",
+		OutputType:    reflect.TypeOf(""),
+	})
+
+	if err != nil {
+		t.Fatalf("RunWithOptions error = %v, want nil", err)
+	}
+	if got := result.UserInput(); got != "collect name" {
+		t.Fatalf("UserInput = %q, want collect name", got)
+	}
+	result.SetFinalOutput(42)
+	result.MarkDone()
+	output, err := result.FinalOutput()
+	if !errors.Is(err, ErrRunResultFinalOutputType) {
+		t.Fatalf("FinalOutput error = %v, want ErrRunResultFinalOutputType", err)
+	}
+	if output != nil {
+		t.Fatalf("FinalOutput output = %#v, want nil on type mismatch", output)
 	}
 }
 

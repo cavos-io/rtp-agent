@@ -42,15 +42,26 @@ type runResultSpeechWatch struct {
 }
 
 func NewRunResult(chatCtx *llm.ChatContext) *RunResult {
-	return NewRunResultWithOutputType(chatCtx, nil)
+	return newRunResult(chatCtx, "", nil)
 }
 
 func NewRunResultWithOutputType(chatCtx *llm.ChatContext, outputType reflect.Type) *RunResult {
-	return newRunResult(chatCtx, "", outputType)
+	result := NewRunResult(chatCtx)
+	result.finalOutputType = outputType
+	return result
 }
 
 func NewRunResultWithUserInput(chatCtx *llm.ChatContext, userInput string) *RunResult {
 	return newRunResult(chatCtx, userInput, nil)
+}
+
+func newRunResultFromOptions(chatCtx *llm.ChatContext, userInput string, outputType reflect.Type) *RunResult {
+	if userInput != "" && outputType == nil {
+		return NewRunResultWithUserInput(chatCtx, userInput)
+	}
+	result := NewRunResultWithOutputType(chatCtx, outputType)
+	result.userInput = userInput
+	return result
 }
 
 func newRunResult(chatCtx *llm.ChatContext, userInput string, outputType reflect.Type) *RunResult {
