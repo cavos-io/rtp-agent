@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/cavos-io/rtp-agent/adapter/browser"
 	"github.com/cavos-io/rtp-agent/core/llm"
 )
 
@@ -478,6 +479,42 @@ func TestAnthropicChatUsesStrictToolInputSchema(t *testing.T) {
 	}
 	if inputSchema["type"] != "object" {
 		t.Fatalf("input_schema type = %#v, want object", inputSchema["type"])
+	}
+}
+
+func TestAnthropicChatUsesProviderComputerToolSpec(t *testing.T) {
+	transport := &captureRoundTripper{}
+	originalTransport := http.DefaultTransport
+	http.DefaultTransport = transport
+	t.Cleanup(func() { http.DefaultTransport = originalTransport })
+
+	model, err := NewAnthropicLLM("test-key", "claude-test")
+	if err != nil {
+		t.Fatalf("NewAnthropicLLM() error = %v", err)
+	}
+	computerTool := NewComputerTool(browser.NewPageActions(), 1440, 900)
+	stream, err := model.Chat(context.Background(), llm.NewChatContext(), llm.WithTools(computerTool.Tools()))
+	if err != nil {
+		t.Fatalf("Chat() error = %v", err)
+	}
+	_ = stream.Close()
+
+	tools, ok := transport.body["tools"].([]any)
+	if !ok || len(tools) != 1 {
+		t.Fatalf("tools = %#v, want one provider tool", transport.body["tools"])
+	}
+	tool, ok := tools[0].(map[string]any)
+	if !ok {
+		t.Fatalf("tool = %#v, want map", tools[0])
+	}
+	if tool["type"] != "computer_20251124" || tool["name"] != "computer" {
+		t.Fatalf("tool identity = %#v, want 20251124 computer provider tool", tool)
+	}
+	if tool["display_width_px"] != float64(1440) || tool["display_height_px"] != float64(900) || tool["display_number"] != float64(1) {
+		t.Fatalf("tool display config = %#v, want 1440x900 display 1", tool)
+	}
+	if _, ok := tool["input_schema"]; ok {
+		t.Fatalf("provider tool has input_schema = %#v, want provider-native schema", tool["input_schema"])
 	}
 }
 
