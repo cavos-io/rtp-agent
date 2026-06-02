@@ -329,6 +329,9 @@ func TestNewAgentSessionAppliesReferenceOptionDefaults(t *testing.T) {
 	if opts.AECWarmupDuration != 3.0 {
 		t.Fatalf("AECWarmupDuration = %v, want 3.0", opts.AECWarmupDuration)
 	}
+	if opts.SessionCloseTranscriptTimeout != 2.0 {
+		t.Fatalf("SessionCloseTranscriptTimeout = %v, want 2.0", opts.SessionCloseTranscriptTimeout)
+	}
 }
 
 func TestAgentSessionGenerateReplyEmitsSpeechCreatedEvent(t *testing.T) {

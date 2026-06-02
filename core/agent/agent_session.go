@@ -56,6 +56,7 @@ type AgentSessionOptions struct {
 	WordTokenizer                 tokenize.WordTokenizer
 	PreemptiveGeneration          bool
 	AECWarmupDuration             float64
+	SessionCloseTranscriptTimeout float64
 	TurnDetection                 TurnDetectionMode
 	IVRDetection                  bool
 	IVRSilenceDuration            time.Duration
@@ -401,6 +402,9 @@ func withAgentSessionOptionDefaults(opts AgentSessionOptions) AgentSessionOption
 	opts.PreemptiveGeneration = true
 	if opts.AECWarmupDuration == 0 {
 		opts.AECWarmupDuration = 3.0
+	}
+	if opts.SessionCloseTranscriptTimeout == 0 {
+		opts.SessionCloseTranscriptTimeout = 2.0
 	}
 	return opts
 }

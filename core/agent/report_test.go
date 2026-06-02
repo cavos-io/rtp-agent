@@ -258,6 +258,20 @@ func TestSessionReportToDictUsesReferencePreemptiveGenerationShape(t *testing.T)
 	}
 }
 
+func TestSessionReportToDictIncludesSessionCloseTranscriptTimeout(t *testing.T) {
+	report := NewSessionReport()
+	report.Options.SessionCloseTranscriptTimeout = 4.5
+
+	data := report.ToDict()
+	options, ok := data["options"].(map[string]any)
+	if !ok {
+		t.Fatalf("options = %T, want map[string]any", data["options"])
+	}
+	if options["session_close_transcript_timeout"] != 4.5 {
+		t.Fatalf("session_close_transcript_timeout = %#v, want 4.5", options["session_close_transcript_timeout"])
+	}
+}
+
 type reportMetadataLLM struct {
 	model    string
 	provider string

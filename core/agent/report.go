@@ -145,6 +145,7 @@ func sessionReportOptionsToDict(opts AgentSessionOptions) map[string]any {
 		"user_away_timeout":                opts.UserAwayTimeout,
 		"min_consecutive_speech_delay":     opts.MinConsecutiveSpeechDelay,
 		"preemptive_generation":            map[string]any{"enabled": opts.PreemptiveGeneration},
+		"session_close_transcript_timeout": opts.SessionCloseTranscriptTimeout,
 	}
 }
 
