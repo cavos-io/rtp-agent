@@ -46,6 +46,7 @@ import (
 	"github.com/cavos-io/rtp-agent/adapter/slng"
 	"github.com/cavos-io/rtp-agent/adapter/smallestai"
 	"github.com/cavos-io/rtp-agent/adapter/soniox"
+	"github.com/cavos-io/rtp-agent/adapter/speechify"
 	"github.com/cavos-io/rtp-agent/core/agent"
 	"github.com/cavos-io/rtp-agent/core/llm"
 	"github.com/cavos-io/rtp-agent/interface/worker"
@@ -90,6 +91,7 @@ const (
 	providerSLNG        = "slng"
 	providerSmallestAI  = "smallestai"
 	providerSoniox      = "soniox"
+	providerSpeechify   = "speechify"
 	providerLiveKit     = "livekit"
 )
 
@@ -244,6 +246,7 @@ type AppConfig struct {
 	TTSInstantMode                          *bool
 	TTSPitch                                *int
 	TTSTimestampType                        string
+	TTSLoudnessNormalization                *bool
 	TTSTextNormalization                    *bool
 	TTSDeliveryMode                         string
 	TTSTimestampTransportStrategy           string
@@ -290,6 +293,7 @@ type AppConfig struct {
 	SmallestAIAPIKey  string
 	SLNGAPIKey        string
 	SonioxAPIKey      string
+	SpeechifyAPIKey   string
 
 	GoogleCredentialsFile string
 
@@ -454,6 +458,7 @@ func DefaultConfigFromEnv() AppConfig {
 		TTSInstantMode:                          getenvOptionalBool("RTP_AGENT_TTS_INSTANT_MODE"),
 		TTSPitch:                                getenvOptionalInt("RTP_AGENT_TTS_PITCH"),
 		TTSTimestampType:                        os.Getenv("RTP_AGENT_TTS_TIMESTAMP_TYPE"),
+		TTSLoudnessNormalization:                getenvOptionalBool("RTP_AGENT_TTS_LOUDNESS_NORMALIZATION"),
 		TTSTextNormalization:                    getenvOptionalBool("RTP_AGENT_TTS_TEXT_NORMALIZATION"),
 		TTSDeliveryMode:                         os.Getenv("RTP_AGENT_TTS_DELIVERY_MODE"),
 		TTSTimestampTransportStrategy:           os.Getenv("RTP_AGENT_TTS_TIMESTAMP_TRANSPORT_STRATEGY"),
@@ -499,6 +504,7 @@ func DefaultConfigFromEnv() AppConfig {
 		SmallestAIAPIKey:                        os.Getenv("SMALLESTAI_API_KEY"),
 		SLNGAPIKey:                              os.Getenv("SLNG_API_KEY"),
 		SonioxAPIKey:                            os.Getenv("SONIOX_API_KEY"),
+		SpeechifyAPIKey:                         os.Getenv("SPEECHIFY_API_KEY"),
 		GoogleCredentialsFile:                   firstEnv("RTP_AGENT_GOOGLE_CREDENTIALS_FILE", "GOOGLE_APPLICATION_CREDENTIALS"),
 	}
 }
@@ -2001,6 +2007,30 @@ func configureProviders(cfg AppConfig, a *agent.Agent) (llm.RealtimeModel, error
 			ttsOpts = append(ttsOpts, soniox.WithSonioxTTSBitrate(*cfg.TTSBitRate))
 		}
 		a.TTS = soniox.NewSonioxTTS(cfg.SonioxAPIKey, ttsOpts...)
+	case providerSpeechify:
+		ttsOpts := []speechify.SpeechifyTTSOption{}
+		if cfg.TTSBaseURL != "" {
+			ttsOpts = append(ttsOpts, speechify.WithSpeechifyTTSBaseURL(cfg.TTSBaseURL))
+		}
+		if cfg.TTSVoice != "" {
+			ttsOpts = append(ttsOpts, speechify.WithSpeechifyTTSVoice(cfg.TTSVoice))
+		}
+		if cfg.TTSEncoding != "" {
+			ttsOpts = append(ttsOpts, speechify.WithSpeechifyTTSEncoding(cfg.TTSEncoding))
+		}
+		if cfg.TTSLanguage != "" {
+			ttsOpts = append(ttsOpts, speechify.WithSpeechifyTTSLanguage(cfg.TTSLanguage))
+		}
+		if cfg.TTSModel != "" {
+			ttsOpts = append(ttsOpts, speechify.WithSpeechifyTTSModel(cfg.TTSModel))
+		}
+		if cfg.TTSLoudnessNormalization != nil {
+			ttsOpts = append(ttsOpts, speechify.WithSpeechifyTTSLoudnessNormalization(*cfg.TTSLoudnessNormalization))
+		}
+		if cfg.TTSTextNormalization != nil {
+			ttsOpts = append(ttsOpts, speechify.WithSpeechifyTTSTextNormalization(*cfg.TTSTextNormalization))
+		}
+		a.TTS = speechify.NewSpeechifyTTS(cfg.SpeechifyAPIKey, cfg.TTSVoice, ttsOpts...)
 	case providerSLNG:
 		ttsOpts := []slng.TTSOption{}
 		if cfg.TTSModel != "" {

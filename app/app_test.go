@@ -1144,6 +1144,35 @@ func TestDefaultConfigFromEnvSelectsSonioxSpeechProviders(t *testing.T) {
 	}
 }
 
+func TestDefaultConfigFromEnvSelectsSpeechifyTTS(t *testing.T) {
+	t.Setenv("SPEECHIFY_API_KEY", "test-speechify-key")
+	t.Setenv("RTP_AGENT_TTS_PROVIDER", "speechify")
+	t.Setenv("RTP_AGENT_TTS_BASE_URL", "https://speechify.example/v1")
+	t.Setenv("RTP_AGENT_TTS_VOICE", "cliff")
+	t.Setenv("RTP_AGENT_TTS_ENCODING", "mp3_48000")
+	t.Setenv("RTP_AGENT_TTS_LANGUAGE", "en-US")
+	t.Setenv("RTP_AGENT_TTS_MODEL", "simba-english")
+	t.Setenv("RTP_AGENT_TTS_LOUDNESS_NORMALIZATION", "true")
+	t.Setenv("RTP_AGENT_TTS_TEXT_NORMALIZATION", "false")
+
+	app, err := NewApp(DefaultConfigFromEnv())
+	if err != nil {
+		t.Fatalf("NewApp() error = %v", err)
+	}
+	if app.Session == nil || app.Session.TTS == nil {
+		t.Fatal("Session TTS is nil")
+	}
+	if got := app.Session.TTS.Label(); got != "speechify.TTS" {
+		t.Fatalf("TTS label = %q, want speechify.TTS", got)
+	}
+	if got := app.Session.TTS.SampleRate(); got != 48000 {
+		t.Fatalf("TTS sample rate = %d, want 48000", got)
+	}
+	if caps := app.Session.TTS.Capabilities(); caps.Streaming || caps.AlignedTranscript {
+		t.Fatalf("TTS capabilities = %+v, want non-streaming without aligned transcript", caps)
+	}
+}
+
 func TestDefaultConfigFromEnvSelectsAWSProviders(t *testing.T) {
 	t.Setenv("AWS_REGION", "us-west-2")
 	t.Setenv("RTP_AGENT_LLM_PROVIDER", "aws")
