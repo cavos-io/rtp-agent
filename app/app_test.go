@@ -1825,6 +1825,10 @@ func TestDefaultConfigFromEnvSelectsLiveKitInferenceLLM(t *testing.T) {
 	t.Setenv("LIVEKIT_API_SECRET", "test-livekit-secret")
 	t.Setenv("RTP_AGENT_LLM_PROVIDER", "livekit")
 	t.Setenv("RTP_AGENT_LLM_MODEL", "openai/gpt-4.1-mini")
+	t.Setenv("RTP_AGENT_STT_PROVIDER", "livekit")
+	t.Setenv("RTP_AGENT_STT_MODEL", "deepgram/nova-3")
+	t.Setenv("RTP_AGENT_TTS_PROVIDER", "livekit")
+	t.Setenv("RTP_AGENT_TTS_MODEL", "cartesia/sonic-3")
 
 	app, err := NewApp(DefaultConfigFromEnv())
 	if err != nil {
@@ -1835,6 +1839,18 @@ func TestDefaultConfigFromEnvSelectsLiveKitInferenceLLM(t *testing.T) {
 	}
 	if got := llm.Provider(app.Session.LLM); got != "livekit" {
 		t.Fatalf("LLM provider = %q, want livekit", got)
+	}
+	if app.Session.STT == nil {
+		t.Fatal("Session STT is nil")
+	}
+	if got := app.Session.STT.Label(); got != "livekit.STT" {
+		t.Fatalf("STT label = %q, want livekit.STT", got)
+	}
+	if app.Session.TTS == nil {
+		t.Fatal("Session TTS is nil")
+	}
+	if got := app.Session.TTS.Label(); got != "livekit.TTS" {
+		t.Fatalf("TTS label = %q, want livekit.TTS", got)
 	}
 }
 
