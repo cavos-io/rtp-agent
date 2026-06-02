@@ -37,6 +37,36 @@ func TestMultimodalToolExecutionMasksInternalErrors(t *testing.T) {
 	}
 }
 
+func TestMultimodalAgentStartsRealtimeSessionAndAcceptsAudio(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	chatCtx := llm.NewChatContext()
+	ma := NewMultimodalAgent(&fakeRealtimeModel{}, chatCtx)
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+
+	if ma.chatCtx != chatCtx {
+		t.Fatalf("chatCtx = %#v, want provided chat context", ma.chatCtx)
+	}
+	if err := ma.Start(ctx, session); err != nil {
+		t.Fatalf("Start returned error: %v", err)
+	}
+	if ma.session != session {
+		t.Fatalf("session = %#v, want started session", ma.session)
+	}
+	if ma.rtSession == nil {
+		t.Fatal("rtSession is nil after Start")
+	}
+
+	ma.OnAudioFrame(context.Background(), &model.AudioFrame{
+		Data:              []byte{0, 1},
+		SampleRate:        24000,
+		NumChannels:       1,
+		SamplesPerChannel: 1,
+	})
+	cancel()
+}
+
 func TestMultimodalToolExecutionSuppressesStopResponse(t *testing.T) {
 	chatCtx := llm.NewChatContext()
 	ma := &MultimodalAgent{
