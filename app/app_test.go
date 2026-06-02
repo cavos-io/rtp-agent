@@ -1295,6 +1295,79 @@ func TestDefaultConfigFromEnvSelectsTelnyxProviders(t *testing.T) {
 	}
 }
 
+func TestDefaultConfigFromEnvSelectsXAIProviders(t *testing.T) {
+	t.Setenv("XAI_API_KEY", "test-xai-key")
+	t.Setenv("RTP_AGENT_LLM_PROVIDER", "xai")
+	t.Setenv("RTP_AGENT_LLM_MODEL", "grok-test")
+	t.Setenv("RTP_AGENT_STT_PROVIDER", "xai")
+	t.Setenv("RTP_AGENT_STT_BASE_URL", "https://xai.example/v1/stt")
+	t.Setenv("RTP_AGENT_STT_STREAMING_URL", "wss://xai.example/v1/stt")
+	t.Setenv("RTP_AGENT_STT_SAMPLE_RATE", "8000")
+	t.Setenv("RTP_AGENT_STT_LANGUAGE", "es")
+	t.Setenv("RTP_AGENT_STT_INTERIM_RESULTS", "false")
+	t.Setenv("RTP_AGENT_STT_DIARIZATION", "true")
+	t.Setenv("RTP_AGENT_STT_ENDPOINTING_MS", "250")
+	t.Setenv("RTP_AGENT_TTS_PROVIDER", "xai")
+	t.Setenv("RTP_AGENT_TTS_WEBSOCKET_URL", "wss://xai.example/v1/tts")
+	t.Setenv("RTP_AGENT_TTS_VOICE", "ara")
+	t.Setenv("RTP_AGENT_TTS_LANGUAGE", "es")
+
+	app, err := NewApp(DefaultConfigFromEnv())
+	if err != nil {
+		t.Fatalf("NewApp() error = %v", err)
+	}
+	if app.Session == nil {
+		t.Fatal("Session is nil")
+	}
+	if app.Session.LLM == nil {
+		t.Fatal("Session LLM is nil")
+	}
+	if got := app.Session.STT.Label(); got != "xai.STT" {
+		t.Fatalf("STT label = %q, want xai.STT", got)
+	}
+	if caps := app.Session.STT.Capabilities(); !caps.Streaming || caps.InterimResults || !caps.Diarization || caps.AlignedTranscript != "word" || !caps.OfflineRecognize {
+		t.Fatalf("STT capabilities = %+v, want streaming diarization word-aligned offline without interim", caps)
+	}
+	if got := app.Session.TTS.Label(); got != "xai.TTS" {
+		t.Fatalf("TTS label = %q, want xai.TTS", got)
+	}
+	if got := app.Session.TTS.SampleRate(); got != 24000 {
+		t.Fatalf("TTS sample rate = %d, want 24000", got)
+	}
+	if caps := app.Session.TTS.Capabilities(); !caps.Streaming || caps.AlignedTranscript {
+		t.Fatalf("TTS capabilities = %+v, want streaming without aligned transcript", caps)
+	}
+}
+
+func TestDefaultConfigFromEnvAddsXAIProviderTools(t *testing.T) {
+	t.Setenv("XAI_API_KEY", "test-xai-key")
+	t.Setenv("RTP_AGENT_LLM_PROVIDER", "xai")
+	t.Setenv("RTP_AGENT_XAI_TOOLS", "web_search,x_search,file_search")
+	t.Setenv("RTP_AGENT_XAI_ALLOWED_X_HANDLES", "cavos_io,livekit")
+	t.Setenv("RTP_AGENT_XAI_FILE_SEARCH_VECTOR_STORE_IDS", "vs_1,vs_2")
+	t.Setenv("RTP_AGENT_XAI_FILE_SEARCH_MAX_RESULTS", "3")
+
+	app, err := NewApp(DefaultConfigFromEnv())
+	if err != nil {
+		t.Fatalf("NewApp() error = %v", err)
+	}
+	if app.Agent == nil {
+		t.Fatal("Agent is nil")
+	}
+	if len(app.Agent.Tools) != 3 {
+		t.Fatalf("len(Agent.Tools) = %d, want 3", len(app.Agent.Tools))
+	}
+	if got := app.Agent.Tools[0].Name(); got != "xai_web_search" {
+		t.Fatalf("tool[0].Name() = %q, want xai_web_search", got)
+	}
+	if got := app.Agent.Tools[1].Name(); got != "xai_x_search" {
+		t.Fatalf("tool[1].Name() = %q, want xai_x_search", got)
+	}
+	if got := app.Agent.Tools[2].Name(); got != "xai_file_search" {
+		t.Fatalf("tool[2].Name() = %q, want xai_file_search", got)
+	}
+}
+
 func TestDefaultConfigFromEnvSelectsAWSProviders(t *testing.T) {
 	t.Setenv("AWS_REGION", "us-west-2")
 	t.Setenv("RTP_AGENT_LLM_PROVIDER", "aws")

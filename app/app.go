@@ -50,6 +50,7 @@ import (
 	"github.com/cavos-io/rtp-agent/adapter/speechmatics"
 	"github.com/cavos-io/rtp-agent/adapter/spitch"
 	"github.com/cavos-io/rtp-agent/adapter/telnyx"
+	"github.com/cavos-io/rtp-agent/adapter/xai"
 	"github.com/cavos-io/rtp-agent/core/agent"
 	"github.com/cavos-io/rtp-agent/core/llm"
 	"github.com/cavos-io/rtp-agent/interface/worker"
@@ -98,6 +99,7 @@ const (
 	providerSpeechmatics = "speechmatics"
 	providerSpitch       = "spitch"
 	providerTelnyx       = "telnyx"
+	providerXAI          = "xai"
 	providerLiveKit      = "livekit"
 )
 
@@ -268,44 +270,49 @@ type AppConfig struct {
 	RealtimeProvider                        string
 	RealtimeModel                           string
 
-	OpenAIAPIKey       string
-	AnthropicAPIKey    string
-	GoogleAPIKey       string
-	ElevenLabsAPIKey   string
-	GroqAPIKey         string
-	CerebrasAPIKey     string
-	ClovaSTTSecret     string
-	ClovaSTTInvokeURL  string
-	ClovaClientID      string
-	ClovaClientSecret  string
-	FalAPIKey          string
-	FireworksAPIKey    string
-	FishAudioAPIKey    string
-	GladiaAPIKey       string
-	GnaniAPIKey        string
-	GradiumAPIKey      string
-	HumeAPIKey         string
-	InworldAPIKey      string
-	LMNTAPIKey         string
-	MinimaxAPIKey      string
-	MistralAPIKey      string
-	MurfAPIKey         string
-	NeuphonicAPIKey    string
-	ResembleAPIKey     string
-	RespeecherAPIKey   string
-	RimeAPIKey         string
-	RtzrClientID       string
-	RtzrClientSecret   string
-	RtzrAccessToken    string
-	SarvamAPIKey       string
-	SimplismartAPIKey  string
-	SmallestAIAPIKey   string
-	SLNGAPIKey         string
-	SonioxAPIKey       string
-	SpeechifyAPIKey    string
-	SpeechmaticsAPIKey string
-	SpitchAPIKey       string
-	TelnyxAPIKey       string
+	OpenAIAPIKey                string
+	AnthropicAPIKey             string
+	GoogleAPIKey                string
+	ElevenLabsAPIKey            string
+	GroqAPIKey                  string
+	CerebrasAPIKey              string
+	ClovaSTTSecret              string
+	ClovaSTTInvokeURL           string
+	ClovaClientID               string
+	ClovaClientSecret           string
+	FalAPIKey                   string
+	FireworksAPIKey             string
+	FishAudioAPIKey             string
+	GladiaAPIKey                string
+	GnaniAPIKey                 string
+	GradiumAPIKey               string
+	HumeAPIKey                  string
+	InworldAPIKey               string
+	LMNTAPIKey                  string
+	MinimaxAPIKey               string
+	MistralAPIKey               string
+	MurfAPIKey                  string
+	NeuphonicAPIKey             string
+	ResembleAPIKey              string
+	RespeecherAPIKey            string
+	RimeAPIKey                  string
+	RtzrClientID                string
+	RtzrClientSecret            string
+	RtzrAccessToken             string
+	SarvamAPIKey                string
+	SimplismartAPIKey           string
+	SmallestAIAPIKey            string
+	SLNGAPIKey                  string
+	SonioxAPIKey                string
+	SpeechifyAPIKey             string
+	SpeechmaticsAPIKey          string
+	SpitchAPIKey                string
+	TelnyxAPIKey                string
+	XAIAPIKey                   string
+	XAITools                    []string
+	XAIAllowedXHandles          []string
+	XAIFileSearchVectorStoreIDs []string
+	XAIFileSearchMaxResults     *int
 
 	GoogleCredentialsFile string
 
@@ -523,6 +530,11 @@ func DefaultConfigFromEnv() AppConfig {
 		SpeechmaticsAPIKey:                      os.Getenv("SPEECHMATICS_API_KEY"),
 		SpitchAPIKey:                            os.Getenv("SPITCH_API_KEY"),
 		TelnyxAPIKey:                            os.Getenv("TELNYX_API_KEY"),
+		XAIAPIKey:                               os.Getenv("XAI_API_KEY"),
+		XAITools:                                splitEnvList("RTP_AGENT_XAI_TOOLS"),
+		XAIAllowedXHandles:                      splitEnvList("RTP_AGENT_XAI_ALLOWED_X_HANDLES"),
+		XAIFileSearchVectorStoreIDs:             splitEnvList("RTP_AGENT_XAI_FILE_SEARCH_VECTOR_STORE_IDS"),
+		XAIFileSearchMaxResults:                 getenvOptionalInt("RTP_AGENT_XAI_FILE_SEARCH_MAX_RESULTS"),
 		GoogleCredentialsFile:                   firstEnv("RTP_AGENT_GOOGLE_CREDENTIALS_FILE", "GOOGLE_APPLICATION_CREDENTIALS"),
 	}
 }
@@ -540,6 +552,9 @@ func NewApp(cfg AppConfig) (*App, error) {
 	realtimeModel, err := configureProviders(cfg, baseAgent)
 	if err != nil {
 		return nil, err
+	}
+	if normalizeProvider(cfg.LLMProvider) == providerXAI {
+		baseAgent.Tools = append(baseAgent.Tools, xaiProviderTools(cfg)...)
 	}
 
 	session := agent.NewAgentSession(baseAgent, nil, agent.AgentSessionOptions{})
@@ -631,6 +646,8 @@ func configureProviders(cfg AppConfig, a *agent.Agent) (llm.RealtimeModel, error
 		a.LLM = smallestai.NewSmallestAILLM(cfg.SmallestAIAPIKey, cfg.LLMModel)
 	case providerTelnyx:
 		a.LLM = telnyx.NewTelnyxLLM(cfg.TelnyxAPIKey, cfg.LLMModel)
+	case providerXAI:
+		a.LLM = xai.NewXaiLLM(cfg.XAIAPIKey, cfg.LLMModel)
 	case providerCerebras:
 		a.LLM = cerebras.NewCerebrasLLM(cfg.CerebrasAPIKey, cfg.LLMModel)
 	case providerFal:
@@ -1439,6 +1456,30 @@ func configureProviders(cfg AppConfig, a *agent.Agent) (llm.RealtimeModel, error
 			sttOpts = append(sttOpts, telnyx.WithTelnyxSTTSampleRate(*cfg.STTSampleRate))
 		}
 		a.STT = telnyx.NewTelnyxSTT(cfg.TelnyxAPIKey, sttOpts...)
+	case providerXAI:
+		sttOpts := []xai.XaiSTTOption{}
+		if cfg.STTBaseURL != "" {
+			sttOpts = append(sttOpts, xai.WithXaiSTTRestURL(cfg.STTBaseURL))
+		}
+		if cfg.STTStreamingURL != "" {
+			sttOpts = append(sttOpts, xai.WithXaiSTTWebsocketURL(cfg.STTStreamingURL))
+		}
+		if cfg.STTSampleRate != nil {
+			sttOpts = append(sttOpts, xai.WithXaiSTTSampleRate(*cfg.STTSampleRate))
+		}
+		if cfg.STTLanguage != "" {
+			sttOpts = append(sttOpts, xai.WithXaiSTTLanguage(cfg.STTLanguage))
+		}
+		if cfg.STTInterimResults != nil {
+			sttOpts = append(sttOpts, xai.WithXaiSTTInterimResults(*cfg.STTInterimResults))
+		}
+		if cfg.STTDiarization != nil {
+			sttOpts = append(sttOpts, xai.WithXaiSTTDiarization(*cfg.STTDiarization))
+		}
+		if cfg.STTEndpointingMS != nil {
+			sttOpts = append(sttOpts, xai.WithXaiSTTEndpointing(*cfg.STTEndpointingMS))
+		}
+		a.STT = xai.NewXaiSTT(cfg.XAIAPIKey, sttOpts...)
 	case providerAssemblyAI:
 		sttOpts := []assemblyai.AssemblyAISTTOption{}
 		if cfg.STTBaseURL != "" {
@@ -2167,6 +2208,15 @@ func configureProviders(cfg AppConfig, a *agent.Agent) (llm.RealtimeModel, error
 			ttsOpts = append(ttsOpts, telnyx.WithTelnyxTTSBaseURL(cfg.TTSBaseURL))
 		}
 		a.TTS = telnyx.NewTelnyxTTS(cfg.TelnyxAPIKey, cfg.TTSVoice, ttsOpts...)
+	case providerXAI:
+		ttsOpts := []xai.XaiTTSOption{}
+		if cfg.TTSWebsocketURL != "" {
+			ttsOpts = append(ttsOpts, xai.WithXaiTTSWebsocketURL(cfg.TTSWebsocketURL))
+		}
+		if cfg.TTSLanguage != "" {
+			ttsOpts = append(ttsOpts, xai.WithXaiTTSLanguage(cfg.TTSLanguage))
+		}
+		a.TTS = xai.NewXaiTTS(cfg.XAIAPIKey, cfg.TTSVoice, ttsOpts...)
 	case providerSLNG:
 		ttsOpts := []slng.TTSOption{}
 		if cfg.TTSModel != "" {
@@ -2591,6 +2641,25 @@ func speechmaticsPunctuationOverrides(options map[string]any) map[string]interfa
 		return nil
 	}
 	return map[string]interface{}{"permitted_marks": marks}
+}
+
+func xaiProviderTools(cfg AppConfig) []llm.Tool {
+	tools := make([]llm.Tool, 0, len(cfg.XAITools))
+	for _, tool := range cfg.XAITools {
+		switch normalizeProvider(tool) {
+		case "web_search", "websearch", "xai_web_search":
+			tools = append(tools, &xai.WebSearchTool{})
+		case "x_search", "xsearch", "xai_x_search":
+			tools = append(tools, &xai.XSearchTool{AllowedHandles: cfg.XAIAllowedXHandles})
+		case "file_search", "filesearch", "xai_file_search":
+			item := &xai.FileSearchTool{VectorStoreIDs: cfg.XAIFileSearchVectorStoreIDs}
+			if cfg.XAIFileSearchMaxResults != nil {
+				item.MaxNumResults = *cfg.XAIFileSearchMaxResults
+			}
+			tools = append(tools, item)
+		}
+	}
+	return tools
 }
 
 func splitPipeList(raw string) []string {
