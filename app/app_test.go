@@ -11,6 +11,7 @@ import (
 	"github.com/cavos-io/rtp-agent/core/agent"
 	"github.com/cavos-io/rtp-agent/core/audio/model"
 	"github.com/cavos-io/rtp-agent/core/beta/workflows"
+	"github.com/cavos-io/rtp-agent/core/evals"
 	"github.com/cavos-io/rtp-agent/core/llm"
 	"github.com/cavos-io/rtp-agent/core/stt"
 	"github.com/cavos-io/rtp-agent/core/tts"
@@ -1677,6 +1678,127 @@ func TestDefaultConfigFromEnvSelectsEmailWorkflowAgent(t *testing.T) {
 	}
 }
 
+func TestDefaultConfigFromEnvSelectsWarmTransferWorkflowAgent(t *testing.T) {
+	t.Setenv("RTP_AGENT_WORKFLOW_TASK", "warm_transfer")
+	t.Setenv("RTP_AGENT_WORKFLOW_WARM_TRANSFER_SIP_CALL_TO", "+15550100")
+	t.Setenv("RTP_AGENT_WORKFLOW_WARM_TRANSFER_SIP_TRUNK_ID", "trunk_123")
+	t.Setenv("RTP_AGENT_WORKFLOW_WARM_TRANSFER_EXTRA_INSTRUCTIONS", "\nKeep the handoff concise.")
+
+	app, err := NewApp(DefaultConfigFromEnv())
+	if err != nil {
+		t.Fatalf("NewApp() error = %v", err)
+	}
+	task, ok := app.Session.Agent.(*workflows.WarmTransferTask)
+	if !ok {
+		t.Fatalf("Session.Agent = %T, want *workflows.WarmTransferTask", app.Session.Agent)
+	}
+	if task.TargetPhoneNumber != "+15550100" {
+		t.Fatalf("TargetPhoneNumber = %q, want +15550100", task.TargetPhoneNumber)
+	}
+	if task.SipTrunkID != "trunk_123" {
+		t.Fatalf("SipTrunkID = %q, want trunk_123", task.SipTrunkID)
+	}
+	if app.Agent != task.GetAgent() {
+		t.Fatal("App.Agent does not point at selected warm transfer agent")
+	}
+	if len(app.Agent.Tools) != 3 {
+		t.Fatalf("workflow tools = %d, want connect/decline/voicemail tools", len(app.Agent.Tools))
+	}
+}
+
+func TestDefaultConfigFromEnvSelectsTaskGroupWorkflowAgent(t *testing.T) {
+	t.Setenv("RTP_AGENT_WORKFLOW_TASK", "task_group")
+	t.Setenv("RTP_AGENT_WORKFLOW_TASK_GROUP_TASKS", "address,email,dtmf")
+	t.Setenv("RTP_AGENT_WORKFLOW_DTMF_NUM_DIGITS", "4")
+
+	app, err := NewApp(DefaultConfigFromEnv())
+	if err != nil {
+		t.Fatalf("NewApp() error = %v", err)
+	}
+	group, ok := app.Session.Agent.(*workflows.TaskGroup)
+	if !ok {
+		t.Fatalf("Session.Agent = %T, want *workflows.TaskGroup", app.Session.Agent)
+	}
+	if app.Agent != group.GetAgent() {
+		t.Fatal("App.Agent does not point at selected task group agent")
+	}
+	if len(group.RegisteredTasks) != 3 {
+		t.Fatalf("RegisteredTasks = %d, want 3", len(group.RegisteredTasks))
+	}
+	wantIDs := []string{"address", "email", "dtmf"}
+	for i, want := range wantIDs {
+		if got := group.RegisteredTasks[i].ID; got != want {
+			t.Fatalf("RegisteredTasks[%d].ID = %q, want %q", i, got, want)
+		}
+	}
+}
+
+func TestDefaultConfigFromEnvEnablesIVRDetection(t *testing.T) {
+	t.Setenv("RTP_AGENT_IVR_DETECTION", "true")
+	t.Setenv("RTP_AGENT_IVR_SILENCE_DURATION_SECONDS", "0.25")
+
+	app, err := NewApp(DefaultConfigFromEnv())
+	if err != nil {
+		t.Fatalf("NewApp() error = %v", err)
+	}
+	if !app.Session.Options.IVRDetection {
+		t.Fatal("IVRDetection = false, want true")
+	}
+	if got := app.Session.Options.IVRSilenceDuration; got != 250*time.Millisecond {
+		t.Fatalf("IVRSilenceDuration = %v, want 250ms", got)
+	}
+}
+
+func TestDefaultConfigFromEnvConfiguresEvaluationJudges(t *testing.T) {
+	t.Setenv("RTP_AGENT_EVAL_JUDGES", "task_completion,accuracy,safety")
+
+	app, err := NewApp(DefaultConfigFromEnv())
+	if err != nil {
+		t.Fatalf("NewApp() error = %v", err)
+	}
+	if app.Evaluator == nil {
+		t.Fatal("Evaluator = nil, want configured judge group")
+	}
+	if len(app.Evaluator.Judges) != 3 {
+		t.Fatalf("Evaluator.Judges = %d, want 3", len(app.Evaluator.Judges))
+	}
+	wantNames := []string{"task_completion", "accuracy", "safety"}
+	for i, want := range wantNames {
+		if got := app.Evaluator.Judges[i].Name(); got != want {
+			t.Fatalf("Evaluator.Judges[%d].Name() = %q, want %q", i, got, want)
+		}
+	}
+}
+
+func TestEvaluateSessionReturnsEvaluationSummary(t *testing.T) {
+	baseAgent := agent.NewAgent("test")
+	session := agent.NewAgentSession(baseAgent, nil, agent.AgentSessionOptions{})
+	session.ChatCtx.Append(&llm.ChatMessage{
+		Role:    llm.ChatRoleUser,
+		Content: []llm.ChatContent{{Text: "hello"}},
+	})
+	evaluatorLLM := &fakeEvalLLM{
+		stream: &fakeEvalLLMStream{chunks: []*llm.ChatChunk{{
+			Delta: &llm.ChoiceDelta{ToolCalls: []llm.FunctionToolCall{{
+				Name:      "submit_verdict",
+				Arguments: `{"verdict":"pass","reasoning":"met the criteria"}`,
+			}}},
+		}}},
+	}
+	app := &App{
+		Session:   session,
+		Evaluator: evals.NewJudgeGroup(evaluatorLLM, []evals.Evaluator{evals.AccuracyJudge(evaluatorLLM)}),
+	}
+
+	summary, err := app.EvaluateSession(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("EvaluateSession() error = %v", err)
+	}
+	if summary.Score != 1 || !summary.AllPassed || !summary.AnyPassed || !summary.MajorityPassed || !summary.NoneFailed {
+		t.Fatalf("summary = %+v, want passing evaluation summary", summary)
+	}
+}
+
 func TestConfigureRoomToolsAddsSendDTMFTool(t *testing.T) {
 	baseAgent := agent.NewAgent("test")
 	publisher := &fakeAppDtmfPublisher{}
@@ -2214,6 +2336,29 @@ type fakeAppLLMStream struct{}
 
 func (f *fakeAppLLMStream) Next() (*llm.ChatChunk, error) { return nil, io.EOF }
 func (f *fakeAppLLMStream) Close() error                  { return nil }
+
+type fakeEvalLLM struct {
+	stream llm.LLMStream
+}
+
+func (f *fakeEvalLLM) Chat(context.Context, *llm.ChatContext, ...llm.ChatOption) (llm.LLMStream, error) {
+	return f.stream, nil
+}
+
+type fakeEvalLLMStream struct {
+	chunks []*llm.ChatChunk
+	index  int
+}
+
+func (f *fakeEvalLLMStream) Next() (*llm.ChatChunk, error) {
+	if f.index >= len(f.chunks) {
+		return nil, io.EOF
+	}
+	chunk := f.chunks[f.index]
+	f.index++
+	return chunk, nil
+}
+func (f *fakeEvalLLMStream) Close() error { return nil }
 
 type fakeAppTTS struct{}
 

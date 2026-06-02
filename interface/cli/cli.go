@@ -68,6 +68,8 @@ type ConsoleArgs struct {
 	LogLevel     string
 }
 
+type EvalRunner func(context.Context) (string, error)
+
 type consoleAudioDevice struct {
 	Index             int
 	Name              string
@@ -146,7 +148,11 @@ func formatConsoleAudioDevices(devices []consoleAudioDevice, defaultInput, defau
 	return b.String()
 }
 
-func RunApp(server *worker.AgentServer) {
+func RunApp(server *worker.AgentServer, evalRunners ...EvalRunner) {
+	var evalRunner EvalRunner
+	if len(evalRunners) > 0 {
+		evalRunner = evalRunners[0]
+	}
 	DiscoverPlugins()
 	if len(os.Args) < 2 {
 		printUsage()
@@ -197,6 +203,11 @@ func RunApp(server *worker.AgentServer) {
 	case "download-files":
 		if err := runDownloadFiles(); err != nil {
 			logger.Logger.Errorw("Download files failed", err)
+			os.Exit(1)
+		}
+	case "eval":
+		if err := runEval(evalRunner, os.Stdout); err != nil {
+			logger.Logger.Errorw("Evaluation failed", err)
 			os.Exit(1)
 		}
 	default:
@@ -316,6 +327,19 @@ func printUsage() {
 	fmt.Println("  connect         Connect to a room and execute a local job")
 	fmt.Println("  console         Run the worker in console mode for interactive testing")
 	fmt.Println("  download-files  Download required files for all registered plugins")
+	fmt.Println("  eval            Run configured evaluation judges against the current session context")
+}
+
+func runEval(runner EvalRunner, out io.Writer) error {
+	if runner == nil {
+		return fmt.Errorf("evaluation runner is not configured")
+	}
+	summary, err := runner(context.Background())
+	if err != nil {
+		return err
+	}
+	_, err = fmt.Fprint(out, summary)
+	return err
 }
 
 func runDownloadFiles() error {

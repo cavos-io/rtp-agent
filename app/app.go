@@ -77,6 +77,7 @@ import (
 	"github.com/cavos-io/rtp-agent/core/agent"
 	betatools "github.com/cavos-io/rtp-agent/core/beta/tools"
 	"github.com/cavos-io/rtp-agent/core/beta/workflows"
+	"github.com/cavos-io/rtp-agent/core/evals"
 	"github.com/cavos-io/rtp-agent/core/inference"
 	"github.com/cavos-io/rtp-agent/core/llm"
 	corestt "github.com/cavos-io/rtp-agent/core/stt"
@@ -410,13 +411,20 @@ type AppConfig struct {
 
 	GoogleCredentialsFile string
 
-	LiveKitInferenceAPIKey      string
-	LiveKitInferenceAPISecret   string
-	AppTools                    []string
-	WorkflowTask                string
-	WorkflowRequireConfirmation bool
-	WorkflowDtmfNumDigits       *int
-	WorkflowDtmfAskConfirmation *bool
+	LiveKitInferenceAPIKey                string
+	LiveKitInferenceAPISecret             string
+	AppTools                              []string
+	IVRDetection                          bool
+	IVRSilenceDurationSeconds             *float64
+	WorkflowTask                          string
+	WorkflowRequireConfirmation           bool
+	WorkflowDtmfNumDigits                 *int
+	WorkflowDtmfAskConfirmation           *bool
+	WorkflowWarmTransferSipCallTo         string
+	WorkflowWarmTransferSipTrunkID        string
+	WorkflowWarmTransferExtraInstructions string
+	WorkflowTaskGroupTasks                []string
+	EvalJudges                            []string
 }
 
 type App struct {
@@ -424,9 +432,19 @@ type App struct {
 	Agent         *agent.Agent
 	Session       *agent.AgentSession
 	RealtimeModel llm.RealtimeModel
+	Evaluator     *evals.JudgeGroup
 	RoomIO        *worker.RoomIO
 	RoomOptions   worker.RoomOptions
 	Config        AppConfig
+}
+
+type EvaluationSummary struct {
+	Result         *evals.EvaluationResult
+	Score          float64
+	AllPassed      bool
+	AnyPassed      bool
+	MajorityPassed bool
+	NoneFailed     bool
 }
 
 func DefaultConfigFromEnv() AppConfig {
@@ -684,10 +702,17 @@ func DefaultConfigFromEnv() AppConfig {
 		XAIFileSearchMaxResults:                 getenvOptionalInt("RTP_AGENT_XAI_FILE_SEARCH_MAX_RESULTS"),
 		GoogleCredentialsFile:                   firstEnv("RTP_AGENT_GOOGLE_CREDENTIALS_FILE", "GOOGLE_APPLICATION_CREDENTIALS"),
 		AppTools:                                splitEnvList("RTP_AGENT_TOOLS"),
+		IVRDetection:                            getenvBool("RTP_AGENT_IVR_DETECTION"),
+		IVRSilenceDurationSeconds:               getenvOptionalFloat("RTP_AGENT_IVR_SILENCE_DURATION_SECONDS"),
 		WorkflowTask:                            normalizedEnv("RTP_AGENT_WORKFLOW_TASK"),
 		WorkflowRequireConfirmation:             getenvBool("RTP_AGENT_WORKFLOW_REQUIRE_CONFIRMATION"),
 		WorkflowDtmfNumDigits:                   getenvOptionalInt("RTP_AGENT_WORKFLOW_DTMF_NUM_DIGITS"),
 		WorkflowDtmfAskConfirmation:             getenvOptionalBool("RTP_AGENT_WORKFLOW_DTMF_ASK_CONFIRMATION"),
+		WorkflowWarmTransferSipCallTo:           os.Getenv("RTP_AGENT_WORKFLOW_WARM_TRANSFER_SIP_CALL_TO"),
+		WorkflowWarmTransferSipTrunkID:          os.Getenv("RTP_AGENT_WORKFLOW_WARM_TRANSFER_SIP_TRUNK_ID"),
+		WorkflowWarmTransferExtraInstructions:   os.Getenv("RTP_AGENT_WORKFLOW_WARM_TRANSFER_EXTRA_INSTRUCTIONS"),
+		WorkflowTaskGroupTasks:                  splitEnvList("RTP_AGENT_WORKFLOW_TASK_GROUP_TASKS"),
+		EvalJudges:                              splitEnvList("RTP_AGENT_EVAL_JUDGES"),
 	}
 }
 
@@ -739,6 +764,10 @@ func NewApp(cfg AppConfig) (*App, error) {
 	if err := configureAppTools(cfg, sessionAgent.GetAgent(), session); err != nil {
 		return nil, err
 	}
+	evaluator, err := evaluatorFromConfig(cfg, session.LLM)
+	if err != nil {
+		return nil, err
+	}
 
 	opts := cfg.WorkerOptions
 	if opts.AgentName == "" {
@@ -754,12 +783,41 @@ func NewApp(cfg AppConfig) (*App, error) {
 		Agent:         sessionAgent.GetAgent(),
 		Session:       session,
 		RealtimeModel: realtimeModel,
+		Evaluator:     evaluator,
 		Config:        cfg,
 	}
 	if err := server.RTCSession(app.runSession, nil, nil); err != nil {
 		return nil, err
 	}
 	return app, nil
+}
+
+func (a *App) EvaluateSession(ctx context.Context, reference *llm.ChatContext) (*EvaluationSummary, error) {
+	if a == nil || a.Evaluator == nil {
+		return nil, fmt.Errorf("evaluation is not configured")
+	}
+	if a.Session == nil {
+		return nil, fmt.Errorf("agent session is not configured")
+	}
+	result, err := a.Evaluator.Evaluate(ctx, a.Session.ChatCtx, reference)
+	if err != nil {
+		return nil, err
+	}
+	return evaluationSummaryFromResult(result), nil
+}
+
+func evaluationSummaryFromResult(result *evals.EvaluationResult) *EvaluationSummary {
+	if result == nil {
+		result = &evals.EvaluationResult{}
+	}
+	return &EvaluationSummary{
+		Result:         result,
+		Score:          result.Score(),
+		AllPassed:      result.AllPassed(),
+		AnyPassed:      result.AnyPassed(),
+		MajorityPassed: result.MajorityPassed(),
+		NoneFailed:     result.NoneFailed(),
+	}
 }
 
 func workflowAgentFromConfig(cfg AppConfig, baseAgent *agent.Agent) (agent.AgentInterface, error) {
@@ -784,11 +842,145 @@ func workflowAgentFromConfig(cfg AppConfig, baseAgent *agent.Agent) (agent.Agent
 			askConfirmation = *cfg.WorkflowDtmfAskConfirmation
 		}
 		selected = workflows.NewGetDtmfTask(numDigits, askConfirmation)
+	case "warm_transfer", "warm-transfer":
+		sipCallTo := strings.TrimSpace(cfg.WorkflowWarmTransferSipCallTo)
+		if sipCallTo == "" {
+			return nil, fmt.Errorf("RTP_AGENT_WORKFLOW_WARM_TRANSFER_SIP_CALL_TO is required for warm_transfer workflow")
+		}
+		selected = workflows.NewWarmTransferTask(
+			sipCallTo,
+			strings.TrimSpace(cfg.WorkflowWarmTransferSipTrunkID),
+			baseAgent.ChatCtx,
+			cfg.WorkflowWarmTransferExtraInstructions,
+		)
+	case "task_group", "task-group":
+		selectedGroup, err := workflowTaskGroupFromConfig(cfg, baseAgent)
+		if err != nil {
+			return nil, err
+		}
+		selected = selectedGroup
 	default:
 		return nil, fmt.Errorf("unsupported RTP_AGENT_WORKFLOW_TASK %q", cfg.WorkflowTask)
 	}
 	copyAgentRuntime(selected.GetAgent(), baseAgent)
 	return selected, nil
+}
+
+func workflowTaskGroupFromConfig(cfg AppConfig, baseAgent *agent.Agent) (*workflows.TaskGroup, error) {
+	if len(cfg.WorkflowTaskGroupTasks) == 0 {
+		return nil, fmt.Errorf("RTP_AGENT_WORKFLOW_TASK_GROUP_TASKS is required for task_group workflow")
+	}
+	group := workflows.NewTaskGroup(true, false)
+	for _, taskName := range cfg.WorkflowTaskGroupTasks {
+		info, err := workflowTaskFactoryFromName(cfg, baseAgent, taskName)
+		if err != nil {
+			return nil, err
+		}
+		group.Add(info.ID, info.Description, info.TaskFactory)
+	}
+	return group, nil
+}
+
+func workflowTaskFactoryFromName(cfg AppConfig, baseAgent *agent.Agent, taskName string) (workflows.FactoryInfo, error) {
+	task := normalizeProvider(taskName)
+	factory := func(taskFactory func() agent.AgentInterface) func() agent.AgentInterface {
+		return func() agent.AgentInterface {
+			selected := taskFactory()
+			copyAgentRuntime(selected.GetAgent(), baseAgent)
+			return selected
+		}
+	}
+	switch task {
+	case "address", "get_address":
+		return workflows.FactoryInfo{
+			ID:          "address",
+			Description: "Collect and confirm the user's mailing address.",
+			TaskFactory: factory(func() agent.AgentInterface {
+				return workflows.NewGetAddressTask(cfg.WorkflowRequireConfirmation)
+			}),
+		}, nil
+	case "email", "get_email":
+		return workflows.FactoryInfo{
+			ID:          "email",
+			Description: "Collect and confirm the user's email address.",
+			TaskFactory: factory(func() agent.AgentInterface {
+				return workflows.NewGetEmailTask(cfg.WorkflowRequireConfirmation)
+			}),
+		}, nil
+	case "dtmf", "get_dtmf":
+		numDigits := 1
+		if cfg.WorkflowDtmfNumDigits != nil {
+			numDigits = *cfg.WorkflowDtmfNumDigits
+		}
+		askConfirmation := cfg.WorkflowRequireConfirmation
+		if cfg.WorkflowDtmfAskConfirmation != nil {
+			askConfirmation = *cfg.WorkflowDtmfAskConfirmation
+		}
+		return workflows.FactoryInfo{
+			ID:          "dtmf",
+			Description: "Collect DTMF inputs from the user.",
+			TaskFactory: factory(func() agent.AgentInterface {
+				return workflows.NewGetDtmfTask(numDigits, askConfirmation)
+			}),
+		}, nil
+	case "warm_transfer", "warm-transfer":
+		sipCallTo := strings.TrimSpace(cfg.WorkflowWarmTransferSipCallTo)
+		if sipCallTo == "" {
+			return workflows.FactoryInfo{}, fmt.Errorf("RTP_AGENT_WORKFLOW_WARM_TRANSFER_SIP_CALL_TO is required for warm_transfer task group entry")
+		}
+		return workflows.FactoryInfo{
+			ID:          "warm_transfer",
+			Description: "Transfer the caller to a human agent by SIP.",
+			TaskFactory: factory(func() agent.AgentInterface {
+				return workflows.NewWarmTransferTask(
+					sipCallTo,
+					strings.TrimSpace(cfg.WorkflowWarmTransferSipTrunkID),
+					baseAgent.ChatCtx,
+					cfg.WorkflowWarmTransferExtraInstructions,
+				)
+			}),
+		}, nil
+	default:
+		return workflows.FactoryInfo{}, fmt.Errorf("unsupported RTP_AGENT_WORKFLOW_TASK_GROUP_TASKS entry %q", taskName)
+	}
+}
+
+func evaluatorFromConfig(cfg AppConfig, evaluatorLLM llm.LLM) (*evals.JudgeGroup, error) {
+	if len(cfg.EvalJudges) == 0 {
+		return nil, nil
+	}
+	judges := make([]evals.Evaluator, 0, len(cfg.EvalJudges))
+	for _, judgeName := range cfg.EvalJudges {
+		judge, err := evalJudgeFromName(judgeName, evaluatorLLM)
+		if err != nil {
+			return nil, err
+		}
+		judges = append(judges, judge)
+	}
+	return evals.NewJudgeGroup(evaluatorLLM, judges), nil
+}
+
+func evalJudgeFromName(name string, evaluatorLLM llm.LLM) (evals.Evaluator, error) {
+	switch normalizeProvider(name) {
+	case "task_completion", "task-completion":
+		return evals.TaskCompletionJudge(evaluatorLLM), nil
+	case "accuracy":
+		return evals.AccuracyJudge(evaluatorLLM), nil
+	case "relevancy", "relevance":
+		return evals.RelevancyJudge(evaluatorLLM), nil
+	case "safety":
+		return evals.SafetyJudge(evaluatorLLM), nil
+	case "coherence":
+		return evals.CoherenceJudge(evaluatorLLM), nil
+	case "conciseness":
+		return evals.ConcisenessJudge(evaluatorLLM), nil
+	case "handoff":
+		return evals.HandoffJudge(evaluatorLLM), nil
+	case "tool_use", "tool-use":
+		return evals.ToolUseJudge(evaluatorLLM), nil
+	default:
+		return nil, fmt.Errorf("unsupported RTP_AGENT_EVAL_JUDGES entry %q", name)
+	}
 }
 
 func copyAgentRuntime(dst *agent.Agent, src *agent.Agent) {
@@ -2782,6 +2974,10 @@ func agentSessionOptionsFromConfig(cfg AppConfig) (agent.AgentSessionOptions, er
 			backgroundAudioSource(cfg.BackgroundAudioAmbient),
 			backgroundAudioSource(cfg.BackgroundAudioThinking),
 		)
+	}
+	opts.IVRDetection = cfg.IVRDetection
+	if cfg.IVRSilenceDurationSeconds != nil {
+		opts.IVRSilenceDuration = time.Duration(*cfg.IVRSilenceDurationSeconds * float64(time.Second))
 	}
 	wordTokenizer, err := wordTokenizerFromConfig(cfg)
 	if err != nil {

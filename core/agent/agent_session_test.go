@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/cavos-io/rtp-agent/core/audio/model"
 	"github.com/cavos-io/rtp-agent/core/llm"
 	"github.com/cavos-io/rtp-agent/core/stt"
 	"github.com/cavos-io/rtp-agent/core/tts"
@@ -73,6 +74,61 @@ func TestAgentSessionStartConfiguresTTSStreamPacer(t *testing.T) {
 	if got := pipeline.ttsStreamPacer.MaxTextLength; got != 42 {
 		t.Fatalf("MaxTextLength = %d, want 42", got)
 	}
+}
+
+func TestAgentSessionStartEnablesIVRDetectionActivity(t *testing.T) {
+	baseAgent := NewAgent("test")
+	session := NewAgentSession(baseAgent, nil, AgentSessionOptions{
+		IVRDetection: true,
+	})
+	session.Assistant = &fakeSessionAssistant{}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	if err := session.Start(ctx); err != nil {
+		t.Fatalf("Start error = %v", err)
+	}
+	defer session.Stop(context.Background())
+
+	if session.ivrActivity == nil {
+		t.Fatal("ivrActivity = nil, want configured IVR activity")
+	}
+}
+
+func TestAgentSessionIVRDetectionGeneratesReplyAfterSilence(t *testing.T) {
+	baseAgent := NewAgent("test")
+	session := NewAgentSession(baseAgent, nil, AgentSessionOptions{
+		IVRDetection:       true,
+		IVRSilenceDuration: 10 * time.Millisecond,
+	})
+	session.Assistant = &fakeSessionAssistant{}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	if err := session.Start(ctx); err != nil {
+		t.Fatalf("Start error = %v", err)
+	}
+	defer session.Stop(context.Background())
+
+	session.UpdateAgentState(AgentStateIdle)
+	session.UpdateUserState(UserStateListening)
+
+	select {
+	case ev := <-session.SpeechCreatedEvents():
+		if ev.Source != "generate_reply" {
+			t.Fatalf("SpeechCreated source = %q, want generate_reply", ev.Source)
+		}
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("timed out waiting for IVR silence generated reply")
+	}
+}
+
+type fakeSessionAssistant struct{}
+
+func (f *fakeSessionAssistant) Start(context.Context, *AgentSession) error { return nil }
+func (f *fakeSessionAssistant) OnAudioFrame(context.Context, *model.AudioFrame) {
+}
+func (f *fakeSessionAssistant) SetPublishAudio(func(frame *model.AudioFrame) error) {
 }
 
 func TestAgentSessionStartStartsConfiguredAvatar(t *testing.T) {

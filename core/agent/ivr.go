@@ -2,139 +2,202 @@ package agent
 
 import (
 	"context"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/cavos-io/rtp-agent/library/logger"
 )
 
-type DtmfEvent struct {
-	Digit string
-	Time  time.Time
-}
-
 type IVRActivity struct {
-	AgentIntf AgentInterface
-	Agent     *Agent
+	Session *AgentSession
 
-	dtmfCh chan DtmfEvent
 	ctx    context.Context
 	cancel context.CancelFunc
 
-	buffer        string
-	lastDigitTime time.Time
-	mu            sync.Mutex
-
-	timeout time.Duration
-	onDigit func(buffer string) (bool, error) // Returns true to continue, false to stop buffering
+	mu                      sync.Mutex
+	maxSilenceDuration      time.Duration
+	currentUserState        UserState
+	currentAgentState       AgentState
+	silenceTimer            *time.Timer
+	lastShouldScheduleCheck bool
+	loopDetector            *ivrLoopDetector
 }
 
-func NewIVRActivity(agentIntf AgentInterface) *IVRActivity {
+func NewIVRActivity(session *AgentSession) *IVRActivity {
 	ctx, cancel := context.WithCancel(context.Background())
+	maxSilenceDuration := session.Options.IVRSilenceDuration
+	if maxSilenceDuration == 0 {
+		maxSilenceDuration = 5 * time.Second
+	}
 	return &IVRActivity{
-		AgentIntf: agentIntf,
-		Agent:     agentIntf.GetAgent(),
-		dtmfCh:    make(chan DtmfEvent, 100),
-		ctx:       ctx,
-		cancel:    cancel,
-		timeout:   5 * time.Second, // Default inter-digit timeout
+		Session:            session,
+		ctx:                ctx,
+		cancel:             cancel,
+		maxSilenceDuration: maxSilenceDuration,
+		currentUserState:   session.UserState,
+		currentAgentState:  session.AgentState,
+		loopDetector:       newIVRLoopDetector(20, 3),
 	}
 }
 
-func (i *IVRActivity) SetDigitCallback(timeout time.Duration, cb func(buffer string) (bool, error)) {
-	i.mu.Lock()
-	defer i.mu.Unlock()
-	i.timeout = timeout
-	i.onDigit = cb
-}
-
 func (i *IVRActivity) Start() {
-	i.AgentIntf.OnEnter()
-	go i.run()
+	go i.watchUserState()
+	go i.watchAgentState()
+	go i.watchUserInputTranscripts()
+	i.scheduleSilenceCheck()
 }
 
 func (i *IVRActivity) Stop() {
 	i.cancel()
-	i.AgentIntf.OnExit()
-}
-
-func (i *IVRActivity) OnDtmf(digit string) {
 	i.mu.Lock()
-	defer i.mu.Unlock()
-
-	if i.ctx.Err() != nil {
-		return
+	if i.silenceTimer != nil {
+		i.silenceTimer.Stop()
+		i.silenceTimer = nil
 	}
-
-	i.dtmfCh <- DtmfEvent{
-		Digit: digit,
-		Time:  time.Now(),
-	}
+	i.mu.Unlock()
 }
 
-func (i *IVRActivity) run() {
-	var timer *time.Timer
-	var timerCh <-chan time.Time
-
+func (i *IVRActivity) watchUserState() {
+	events := i.Session.UserStateChangedEvents()
 	for {
 		select {
 		case <-i.ctx.Done():
-			if timer != nil {
-				timer.Stop()
-			}
 			return
-
-		case ev := <-i.dtmfCh:
+		case ev := <-events:
 			i.mu.Lock()
-			i.buffer += ev.Digit
-			i.lastDigitTime = ev.Time
-			cb := i.onDigit
-			buffer := i.buffer
-			timeout := i.timeout
+			i.currentUserState = ev.NewState
 			i.mu.Unlock()
-
-			logger.Logger.Infow("Received DTMF", "digit", ev.Digit, "buffer", buffer)
-
-			if timer != nil {
-				timer.Stop()
-			}
-			timer = time.NewTimer(timeout)
-			timerCh = timer.C
-
-			if cb != nil {
-				cont, err := cb(buffer)
-				if err != nil {
-					logger.Logger.Errorw("IVR digit callback error", err)
-				}
-				if !cont {
-					// Stop buffering, assume input is complete
-					i.mu.Lock()
-					i.buffer = ""
-					i.mu.Unlock()
-					if timer != nil {
-						timer.Stop()
-						timerCh = nil
-					}
-				}
-			}
-
-		case <-timerCh:
-			// Timeout elapsed without new digits
-			i.mu.Lock()
-			buffer := i.buffer
-			i.buffer = ""
-			cb := i.onDigit
-			i.mu.Unlock()
-
-			if buffer != "" {
-				logger.Logger.Infow("IVR timeout reached", "final_buffer", buffer)
-				// You can trigger a different callback here if needed,
-				// or re-trigger the onDigit with a special flag
-				if cb != nil {
-					_, _ = cb(buffer)
-				}
-			}
-			timerCh = nil
+			i.scheduleSilenceCheck()
 		}
 	}
+}
+
+func (i *IVRActivity) watchAgentState() {
+	events := i.Session.AgentStateChangedEvents()
+	for {
+		select {
+		case <-i.ctx.Done():
+			return
+		case ev := <-events:
+			i.mu.Lock()
+			i.currentAgentState = ev.NewState
+			i.mu.Unlock()
+			i.scheduleSilenceCheck()
+		}
+	}
+}
+
+func (i *IVRActivity) watchUserInputTranscripts() {
+	events := i.Session.UserInputTranscribedEvents()
+	for {
+		select {
+		case <-i.ctx.Done():
+			return
+		case ev := <-events:
+			i.onUserInputTranscribed(ev)
+		}
+	}
+}
+
+func (i *IVRActivity) onUserInputTranscribed(ev UserInputTranscribedEvent) {
+	if !ev.IsFinal {
+		return
+	}
+	i.mu.Lock()
+	loopDetected := i.loopDetector.addAndCheck(ev.Transcript)
+	i.mu.Unlock()
+	if !loopDetected {
+		return
+	}
+	logger.Logger.Debugw("IVRActivity: speech loop detected; sending notification")
+	allowInterruptions := false
+	if _, err := i.Session.GenerateReplyWithOptions(context.Background(), GenerateReplyOptions{
+		AllowInterruptions: &allowInterruptions,
+	}); err != nil && err != ErrAgentSessionNotRunning {
+		i.Session.EmitError(ErrorEvent{Error: err, CreatedAt: time.Now()})
+	}
+	i.mu.Lock()
+	i.loopDetector.reset()
+	i.mu.Unlock()
+}
+
+func (i *IVRActivity) scheduleSilenceCheck() {
+	i.mu.Lock()
+	shouldSchedule := i.shouldScheduleCheckLocked()
+	if shouldSchedule {
+		if i.lastShouldScheduleCheck {
+			i.mu.Unlock()
+			return
+		}
+		if i.silenceTimer != nil {
+			i.silenceTimer.Stop()
+		}
+		i.silenceTimer = time.AfterFunc(i.maxSilenceDuration, i.onSilenceDetected)
+	} else if i.silenceTimer != nil {
+		i.silenceTimer.Stop()
+		i.silenceTimer = nil
+	}
+	i.lastShouldScheduleCheck = shouldSchedule
+	i.mu.Unlock()
+}
+
+func (i *IVRActivity) shouldScheduleCheckLocked() bool {
+	isUserSilent := i.currentUserState == UserStateListening || i.currentUserState == UserStateAway
+	isAgentSilent := i.currentAgentState == AgentStateIdle || i.currentAgentState == AgentStateListening
+	return isUserSilent && isAgentSilent
+}
+
+func (i *IVRActivity) onSilenceDetected() {
+	i.mu.Lock()
+	i.silenceTimer = nil
+	i.lastShouldScheduleCheck = false
+	i.mu.Unlock()
+
+	logger.Logger.Debugw("IVRActivity: silence detected; sending notification")
+	if _, err := i.Session.GenerateReply(context.Background(), ""); err != nil && err != ErrAgentSessionNotRunning {
+		i.Session.EmitError(ErrorEvent{Error: err, CreatedAt: time.Now()})
+	}
+	i.scheduleSilenceCheck()
+}
+
+type ivrLoopDetector struct {
+	windowSize           int
+	consecutiveThreshold int
+	chunks               []string
+	consecutiveSimilar   int
+}
+
+func newIVRLoopDetector(windowSize, consecutiveThreshold int) *ivrLoopDetector {
+	return &ivrLoopDetector{
+		windowSize:           windowSize,
+		consecutiveThreshold: consecutiveThreshold,
+		chunks:               make([]string, 0, windowSize),
+	}
+}
+
+func (d *ivrLoopDetector) addAndCheck(chunk string) bool {
+	normalized := strings.Join(strings.Fields(strings.ToLower(chunk)), " ")
+	if normalized == "" {
+		return false
+	}
+	previous := ""
+	if len(d.chunks) > 0 {
+		previous = d.chunks[len(d.chunks)-1]
+	}
+	d.chunks = append(d.chunks, normalized)
+	if len(d.chunks) > d.windowSize {
+		d.chunks = d.chunks[len(d.chunks)-d.windowSize:]
+	}
+	if previous != "" && previous == normalized {
+		d.consecutiveSimilar++
+	} else {
+		d.consecutiveSimilar = 0
+	}
+	return d.consecutiveSimilar >= d.consecutiveThreshold
+}
+
+func (d *ivrLoopDetector) reset() {
+	d.chunks = d.chunks[:0]
+	d.consecutiveSimilar = 0
 }
