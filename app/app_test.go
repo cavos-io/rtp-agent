@@ -1173,6 +1173,54 @@ func TestDefaultConfigFromEnvSelectsSpeechifyTTS(t *testing.T) {
 	}
 }
 
+func TestDefaultConfigFromEnvSelectsSpeechmaticsSpeechProviders(t *testing.T) {
+	t.Setenv("SPEECHMATICS_API_KEY", "test-speechmatics-key")
+	t.Setenv("RTP_AGENT_STT_PROVIDER", "speechmatics")
+	t.Setenv("RTP_AGENT_STT_BASE_URL", "wss://speechmatics.example/v2")
+	t.Setenv("RTP_AGENT_STT_LANGUAGE", "de")
+	t.Setenv("RTP_AGENT_STT_SAMPLE_RATE", "48000")
+	t.Setenv("RTP_AGENT_STT_ENCODING", "pcm_f32le")
+	t.Setenv("RTP_AGENT_STT_DOMAIN", "finance")
+	t.Setenv("RTP_AGENT_STT_OUTPUT_LOCALE", "de-DE")
+	t.Setenv("RTP_AGENT_STT_INTERIM_RESULTS", "false")
+	t.Setenv("RTP_AGENT_STT_DIARIZATION", "false")
+	t.Setenv("RTP_AGENT_STT_KEYTERMS_PROMPT", "LiveKit:live kit,Cavos")
+	t.Setenv("RTP_AGENT_STT_OPERATING_POINT", "enhanced")
+	t.Setenv("RTP_AGENT_STT_TEXT_TIMEOUT_SECONDS", "1.2")
+	t.Setenv("RTP_AGENT_STT_VAD_SILENCE_THRESHOLD_SECONDS", "0.6")
+	t.Setenv("RTP_AGENT_STT_MAX_DURATION_WITHOUT_ENDPOINTING_SECONDS", "1.8")
+	t.Setenv("RTP_AGENT_STT_MODEL_OPTIONS", "focus_speakers=agent,ignore_speakers=customer,focus_mode=ignore,known_speakers=agent:spk-1,permitted_marks=.|?,speaker_sensitivity=0.7")
+	t.Setenv("RTP_AGENT_STT_MAX_SPEAKERS", "4")
+	t.Setenv("RTP_AGENT_STT_PREFER_CURRENT_SPEAKER", "true")
+	t.Setenv("RTP_AGENT_TTS_PROVIDER", "speechmatics")
+	t.Setenv("RTP_AGENT_TTS_BASE_URL", "https://tts.speechmatics.example")
+	t.Setenv("RTP_AGENT_TTS_VOICE", "theo")
+	t.Setenv("RTP_AGENT_TTS_SAMPLE_RATE", "24000")
+
+	app, err := NewApp(DefaultConfigFromEnv())
+	if err != nil {
+		t.Fatalf("NewApp() error = %v", err)
+	}
+	if app.Session == nil {
+		t.Fatal("Session is nil")
+	}
+	if got := app.Session.STT.Label(); got != "speechmatics.STT" {
+		t.Fatalf("STT label = %q, want speechmatics.STT", got)
+	}
+	if caps := app.Session.STT.Capabilities(); !caps.Streaming || !caps.InterimResults || !caps.Diarization || caps.AlignedTranscript != "chunk" || caps.OfflineRecognize {
+		t.Fatalf("STT capabilities = %+v, want streaming interim diarization chunk-aligned without offline recognize", caps)
+	}
+	if got := app.Session.TTS.Label(); got != "speechmatics.TTS" {
+		t.Fatalf("TTS label = %q, want speechmatics.TTS", got)
+	}
+	if got := app.Session.TTS.SampleRate(); got != 24000 {
+		t.Fatalf("TTS sample rate = %d, want 24000", got)
+	}
+	if caps := app.Session.TTS.Capabilities(); caps.Streaming || caps.AlignedTranscript {
+		t.Fatalf("TTS capabilities = %+v, want non-streaming without aligned transcript", caps)
+	}
+}
+
 func TestDefaultConfigFromEnvSelectsAWSProviders(t *testing.T) {
 	t.Setenv("AWS_REGION", "us-west-2")
 	t.Setenv("RTP_AGENT_LLM_PROVIDER", "aws")

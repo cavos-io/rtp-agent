@@ -47,6 +47,7 @@ import (
 	"github.com/cavos-io/rtp-agent/adapter/smallestai"
 	"github.com/cavos-io/rtp-agent/adapter/soniox"
 	"github.com/cavos-io/rtp-agent/adapter/speechify"
+	"github.com/cavos-io/rtp-agent/adapter/speechmatics"
 	"github.com/cavos-io/rtp-agent/core/agent"
 	"github.com/cavos-io/rtp-agent/core/llm"
 	"github.com/cavos-io/rtp-agent/interface/worker"
@@ -54,45 +55,46 @@ import (
 )
 
 const (
-	providerAnthropic   = "anthropic"
-	providerAssemblyAI  = "assemblyai"
-	providerAsyncAI     = "asyncai"
-	providerAWS         = "aws"
-	providerAzure       = "azure"
-	providerBaseten     = "baseten"
-	providerCambai      = "cambai"
-	providerCartesia    = "cartesia"
-	providerCerebras    = "cerebras"
-	providerClova       = "clova"
-	providerDeepgram    = "deepgram"
-	providerElevenLabs  = "elevenlabs"
-	providerFal         = "fal"
-	providerFireworks   = "fireworks"
-	providerFishAudio   = "fishaudio"
-	providerGladia      = "gladia"
-	providerGnani       = "gnani"
-	providerGoogle      = "google"
-	providerGradium     = "gradium"
-	providerGroq        = "groq"
-	providerHume        = "hume"
-	providerInworld     = "inworld"
-	providerLMNT        = "lmnt"
-	providerMinimax     = "minimax"
-	providerMistralAI   = "mistralai"
-	providerMurf        = "murf"
-	providerNeuphonic   = "neuphonic"
-	providerOpenAI      = "openai"
-	providerResemble    = "resemble"
-	providerRespeecher  = "respeecher"
-	providerRime        = "rime"
-	providerRtzr        = "rtzr"
-	providerSarvam      = "sarvam"
-	providerSimplismart = "simplismart"
-	providerSLNG        = "slng"
-	providerSmallestAI  = "smallestai"
-	providerSoniox      = "soniox"
-	providerSpeechify   = "speechify"
-	providerLiveKit     = "livekit"
+	providerAnthropic    = "anthropic"
+	providerAssemblyAI   = "assemblyai"
+	providerAsyncAI      = "asyncai"
+	providerAWS          = "aws"
+	providerAzure        = "azure"
+	providerBaseten      = "baseten"
+	providerCambai       = "cambai"
+	providerCartesia     = "cartesia"
+	providerCerebras     = "cerebras"
+	providerClova        = "clova"
+	providerDeepgram     = "deepgram"
+	providerElevenLabs   = "elevenlabs"
+	providerFal          = "fal"
+	providerFireworks    = "fireworks"
+	providerFishAudio    = "fishaudio"
+	providerGladia       = "gladia"
+	providerGnani        = "gnani"
+	providerGoogle       = "google"
+	providerGradium      = "gradium"
+	providerGroq         = "groq"
+	providerHume         = "hume"
+	providerInworld      = "inworld"
+	providerLMNT         = "lmnt"
+	providerMinimax      = "minimax"
+	providerMistralAI    = "mistralai"
+	providerMurf         = "murf"
+	providerNeuphonic    = "neuphonic"
+	providerOpenAI       = "openai"
+	providerResemble     = "resemble"
+	providerRespeecher   = "respeecher"
+	providerRime         = "rime"
+	providerRtzr         = "rtzr"
+	providerSarvam       = "sarvam"
+	providerSimplismart  = "simplismart"
+	providerSLNG         = "slng"
+	providerSmallestAI   = "smallestai"
+	providerSoniox       = "soniox"
+	providerSpeechify    = "speechify"
+	providerSpeechmatics = "speechmatics"
+	providerLiveKit      = "livekit"
 )
 
 type AppConfig struct {
@@ -147,6 +149,8 @@ type AppConfig struct {
 	STTTranslationTargetLanguages           []string
 	STTTranslationSourceLanguages           []string
 	STTTranslationModel                     string
+	STTOutputLocale                         string
+	STTOperatingPoint                       string
 	STTTranslationMatchOriginalUtterances   *bool
 	STTTranslationLipsync                   *bool
 	STTTranslationContextAdaptation         *bool
@@ -207,6 +211,7 @@ type AppConfig struct {
 	STTInterruptMinSpeechFrames             *int
 	STTPreSpeechPadFrames                   *int
 	STTNumInitialIgnoredFrames              *int
+	STTPreferCurrentSpeaker                 *bool
 	TTSProvider                             string
 	TTSModel                                string
 	TTSVoice                                string
@@ -259,41 +264,42 @@ type AppConfig struct {
 	RealtimeProvider                        string
 	RealtimeModel                           string
 
-	OpenAIAPIKey      string
-	AnthropicAPIKey   string
-	GoogleAPIKey      string
-	ElevenLabsAPIKey  string
-	GroqAPIKey        string
-	CerebrasAPIKey    string
-	ClovaSTTSecret    string
-	ClovaSTTInvokeURL string
-	ClovaClientID     string
-	ClovaClientSecret string
-	FalAPIKey         string
-	FireworksAPIKey   string
-	FishAudioAPIKey   string
-	GladiaAPIKey      string
-	GnaniAPIKey       string
-	GradiumAPIKey     string
-	HumeAPIKey        string
-	InworldAPIKey     string
-	LMNTAPIKey        string
-	MinimaxAPIKey     string
-	MistralAPIKey     string
-	MurfAPIKey        string
-	NeuphonicAPIKey   string
-	ResembleAPIKey    string
-	RespeecherAPIKey  string
-	RimeAPIKey        string
-	RtzrClientID      string
-	RtzrClientSecret  string
-	RtzrAccessToken   string
-	SarvamAPIKey      string
-	SimplismartAPIKey string
-	SmallestAIAPIKey  string
-	SLNGAPIKey        string
-	SonioxAPIKey      string
-	SpeechifyAPIKey   string
+	OpenAIAPIKey       string
+	AnthropicAPIKey    string
+	GoogleAPIKey       string
+	ElevenLabsAPIKey   string
+	GroqAPIKey         string
+	CerebrasAPIKey     string
+	ClovaSTTSecret     string
+	ClovaSTTInvokeURL  string
+	ClovaClientID      string
+	ClovaClientSecret  string
+	FalAPIKey          string
+	FireworksAPIKey    string
+	FishAudioAPIKey    string
+	GladiaAPIKey       string
+	GnaniAPIKey        string
+	GradiumAPIKey      string
+	HumeAPIKey         string
+	InworldAPIKey      string
+	LMNTAPIKey         string
+	MinimaxAPIKey      string
+	MistralAPIKey      string
+	MurfAPIKey         string
+	NeuphonicAPIKey    string
+	ResembleAPIKey     string
+	RespeecherAPIKey   string
+	RimeAPIKey         string
+	RtzrClientID       string
+	RtzrClientSecret   string
+	RtzrAccessToken    string
+	SarvamAPIKey       string
+	SimplismartAPIKey  string
+	SmallestAIAPIKey   string
+	SLNGAPIKey         string
+	SonioxAPIKey       string
+	SpeechifyAPIKey    string
+	SpeechmaticsAPIKey string
 
 	GoogleCredentialsFile string
 
@@ -359,6 +365,8 @@ func DefaultConfigFromEnv() AppConfig {
 		STTTranslationTargetLanguages:           splitEnvList("RTP_AGENT_STT_TRANSLATION_TARGET_LANGUAGES"),
 		STTTranslationSourceLanguages:           splitEnvList("RTP_AGENT_STT_TRANSLATION_SOURCE_LANGUAGES"),
 		STTTranslationModel:                     os.Getenv("RTP_AGENT_STT_TRANSLATION_MODEL"),
+		STTOutputLocale:                         os.Getenv("RTP_AGENT_STT_OUTPUT_LOCALE"),
+		STTOperatingPoint:                       os.Getenv("RTP_AGENT_STT_OPERATING_POINT"),
 		STTTranslationMatchOriginalUtterances:   getenvOptionalBool("RTP_AGENT_STT_TRANSLATION_MATCH_ORIGINAL_UTTERANCES"),
 		STTTranslationLipsync:                   getenvOptionalBool("RTP_AGENT_STT_TRANSLATION_LIPSYNC"),
 		STTTranslationContextAdaptation:         getenvOptionalBool("RTP_AGENT_STT_TRANSLATION_CONTEXT_ADAPTATION"),
@@ -419,6 +427,7 @@ func DefaultConfigFromEnv() AppConfig {
 		STTInterruptMinSpeechFrames:             getenvOptionalInt("RTP_AGENT_STT_INTERRUPT_MIN_SPEECH_FRAMES"),
 		STTPreSpeechPadFrames:                   getenvOptionalInt("RTP_AGENT_STT_PRE_SPEECH_PAD_FRAMES"),
 		STTNumInitialIgnoredFrames:              getenvOptionalInt("RTP_AGENT_STT_NUM_INITIAL_IGNORED_FRAMES"),
+		STTPreferCurrentSpeaker:                 getenvOptionalBool("RTP_AGENT_STT_PREFER_CURRENT_SPEAKER"),
 		TTSProvider:                             normalizedEnv("RTP_AGENT_TTS_PROVIDER"),
 		TTSModel:                                os.Getenv("RTP_AGENT_TTS_MODEL"),
 		TTSVoice:                                os.Getenv("RTP_AGENT_TTS_VOICE"),
@@ -505,6 +514,7 @@ func DefaultConfigFromEnv() AppConfig {
 		SLNGAPIKey:                              os.Getenv("SLNG_API_KEY"),
 		SonioxAPIKey:                            os.Getenv("SONIOX_API_KEY"),
 		SpeechifyAPIKey:                         os.Getenv("SPEECHIFY_API_KEY"),
+		SpeechmaticsAPIKey:                      os.Getenv("SPEECHMATICS_API_KEY"),
 		GoogleCredentialsFile:                   firstEnv("RTP_AGENT_GOOGLE_CREDENTIALS_FILE", "GOOGLE_APPLICATION_CREDENTIALS"),
 	}
 }
@@ -1339,6 +1349,69 @@ func configureProviders(cfg AppConfig, a *agent.Agent) (llm.RealtimeModel, error
 			sttOpts = append(sttOpts, soniox.WithSonioxOneWayTranslation(cfg.STTTranslationTargetLanguages[0]))
 		}
 		a.STT = soniox.NewSonioxSTT(cfg.SonioxAPIKey, sttOpts...)
+	case providerSpeechmatics:
+		sttOpts := []speechmatics.SpeechmaticsSTTOption{}
+		if cfg.STTLanguage != "" {
+			sttOpts = append(sttOpts, speechmatics.WithSpeechmaticsSTTLanguage(cfg.STTLanguage))
+		}
+		if cfg.STTBaseURL != "" {
+			sttOpts = append(sttOpts, speechmatics.WithSpeechmaticsSTTBaseURL(cfg.STTBaseURL))
+		}
+		if cfg.STTSampleRate != nil {
+			sttOpts = append(sttOpts, speechmatics.WithSpeechmaticsSTTSampleRate(*cfg.STTSampleRate))
+		}
+		if cfg.STTEncoding != "" {
+			sttOpts = append(sttOpts, speechmatics.WithSpeechmaticsSTTAudioEncoding(cfg.STTEncoding))
+		}
+		if cfg.STTDomain != "" {
+			sttOpts = append(sttOpts, speechmatics.WithSpeechmaticsSTTDomain(cfg.STTDomain))
+		}
+		if cfg.STTOutputLocale != "" {
+			sttOpts = append(sttOpts, speechmatics.WithSpeechmaticsSTTOutputLocale(cfg.STTOutputLocale))
+		}
+		if cfg.STTInterimResults != nil {
+			sttOpts = append(sttOpts, speechmatics.WithSpeechmaticsSTTIncludePartials(*cfg.STTInterimResults))
+		}
+		if cfg.STTDiarization != nil {
+			sttOpts = append(sttOpts, speechmatics.WithSpeechmaticsSTTEnableDiarization(*cfg.STTDiarization))
+		}
+		if len(cfg.STTKeytermsPrompt) > 0 {
+			sttOpts = append(sttOpts, speechmatics.WithSpeechmaticsSTTAdditionalVocab(speechmaticsAdditionalVocab(cfg.STTKeytermsPrompt)))
+		}
+		focusSpeakers := modelOptionStringList(cfg.STTModelOptions, "focus_speakers")
+		ignoreSpeakers := modelOptionStringList(cfg.STTModelOptions, "ignore_speakers")
+		focusMode := modelOptionString(cfg.STTModelOptions, "focus_mode")
+		if len(focusSpeakers) > 0 || len(ignoreSpeakers) > 0 || focusMode != "" {
+			sttOpts = append(sttOpts, speechmatics.WithSpeechmaticsSTTSpeakerFocus(focusSpeakers, ignoreSpeakers, focusMode))
+		}
+		if speakers := speechmaticsKnownSpeakers(modelOptionString(cfg.STTModelOptions, "known_speakers")); len(speakers) > 0 {
+			sttOpts = append(sttOpts, speechmatics.WithSpeechmaticsSTTKnownSpeakers(speakers))
+		}
+		if cfg.STTOperatingPoint != "" {
+			sttOpts = append(sttOpts, speechmatics.WithSpeechmaticsSTTOperatingPoint(cfg.STTOperatingPoint))
+		}
+		if cfg.STTTextTimeoutSeconds != nil {
+			sttOpts = append(sttOpts, speechmatics.WithSpeechmaticsSTTMaxDelay(*cfg.STTTextTimeoutSeconds))
+		}
+		if cfg.STTVADSilenceThresholdSeconds != nil {
+			sttOpts = append(sttOpts, speechmatics.WithSpeechmaticsSTTEndOfUtteranceSilenceTrigger(*cfg.STTVADSilenceThresholdSeconds))
+		}
+		if cfg.STTMaxDurationWithoutEndpointingSeconds != nil {
+			sttOpts = append(sttOpts, speechmatics.WithSpeechmaticsSTTEndOfUtteranceMaxDelay(*cfg.STTMaxDurationWithoutEndpointingSeconds))
+		}
+		if overrides := speechmaticsPunctuationOverrides(cfg.STTModelOptions); len(overrides) > 0 {
+			sttOpts = append(sttOpts, speechmatics.WithSpeechmaticsSTTPunctuationOverrides(overrides))
+		}
+		if sensitivity := modelOptionFloat(cfg.STTModelOptions, "speaker_sensitivity"); sensitivity != nil {
+			sttOpts = append(sttOpts, speechmatics.WithSpeechmaticsSTTSpeakerSensitivity(*sensitivity))
+		}
+		if cfg.STTMaxSpeakers != nil {
+			sttOpts = append(sttOpts, speechmatics.WithSpeechmaticsSTTMaxSpeakers(*cfg.STTMaxSpeakers))
+		}
+		if cfg.STTPreferCurrentSpeaker != nil {
+			sttOpts = append(sttOpts, speechmatics.WithSpeechmaticsSTTPreferCurrentSpeaker(*cfg.STTPreferCurrentSpeaker))
+		}
+		a.STT = speechmatics.NewSpeechmaticsSTT(cfg.SpeechmaticsAPIKey, sttOpts...)
 	case providerAssemblyAI:
 		sttOpts := []assemblyai.AssemblyAISTTOption{}
 		if cfg.STTBaseURL != "" {
@@ -2031,6 +2104,18 @@ func configureProviders(cfg AppConfig, a *agent.Agent) (llm.RealtimeModel, error
 			ttsOpts = append(ttsOpts, speechify.WithSpeechifyTTSTextNormalization(*cfg.TTSTextNormalization))
 		}
 		a.TTS = speechify.NewSpeechifyTTS(cfg.SpeechifyAPIKey, cfg.TTSVoice, ttsOpts...)
+	case providerSpeechmatics:
+		ttsOpts := []speechmatics.SpeechmaticsTTSOption{}
+		if cfg.TTSVoice != "" {
+			ttsOpts = append(ttsOpts, speechmatics.WithSpeechmaticsTTSVoice(cfg.TTSVoice))
+		}
+		if cfg.TTSSampleRate != nil {
+			ttsOpts = append(ttsOpts, speechmatics.WithSpeechmaticsTTSSampleRate(*cfg.TTSSampleRate))
+		}
+		if cfg.TTSBaseURL != "" {
+			ttsOpts = append(ttsOpts, speechmatics.WithSpeechmaticsTTSBaseURL(cfg.TTSBaseURL))
+		}
+		a.TTS = speechmatics.NewSpeechmaticsTTS(cfg.SpeechmaticsAPIKey, ttsOpts...)
 	case providerSLNG:
 		ttsOpts := []slng.TTSOption{}
 		if cfg.TTSModel != "" {
@@ -2327,6 +2412,25 @@ func modelOptionBool(options map[string]any, key string) *bool {
 	}
 }
 
+func modelOptionFloat(options map[string]any, key string) *float64 {
+	value, ok := options[key]
+	if !ok {
+		return nil
+	}
+	switch typed := value.(type) {
+	case float64:
+		return &typed
+	case string:
+		parsed, err := strconv.ParseFloat(strings.TrimSpace(typed), 64)
+		if err != nil {
+			return nil
+		}
+		return &parsed
+	default:
+		return nil
+	}
+}
+
 func modelOptionStringList(options map[string]any, key string) []string {
 	raw := modelOptionString(options, key)
 	if raw == "" {
@@ -2391,6 +2495,66 @@ func sonioxContextTranslationTerms(raw string) []soniox.SonioxContextTranslation
 		}
 	}
 	return terms
+}
+
+func speechmaticsAdditionalVocab(values []string) []speechmatics.SpeechmaticsAdditionalVocabEntry {
+	entries := make([]speechmatics.SpeechmaticsAdditionalVocabEntry, 0, len(values))
+	for _, value := range values {
+		content, soundsLike, _ := strings.Cut(value, ":")
+		content = strings.TrimSpace(content)
+		if content == "" {
+			continue
+		}
+		entry := speechmatics.SpeechmaticsAdditionalVocabEntry{Content: content}
+		if soundsLike != "" {
+			entry.SoundsLike = splitPipeList(soundsLike)
+		}
+		entries = append(entries, entry)
+	}
+	return entries
+}
+
+func speechmaticsKnownSpeakers(raw string) []speechmatics.SpeechmaticsSpeakerIdentifier {
+	if raw == "" {
+		return nil
+	}
+	parts := strings.Split(raw, "|")
+	speakers := make([]speechmatics.SpeechmaticsSpeakerIdentifier, 0, len(parts))
+	for _, part := range parts {
+		label, speakerID, ok := strings.Cut(part, ":")
+		if !ok {
+			continue
+		}
+		label = strings.TrimSpace(label)
+		speakerID = strings.TrimSpace(speakerID)
+		if label != "" && speakerID != "" {
+			speakers = append(speakers, speechmatics.SpeechmaticsSpeakerIdentifier{Label: label, SpeakerID: speakerID})
+		}
+	}
+	return speakers
+}
+
+func speechmaticsPunctuationOverrides(options map[string]any) map[string]interface{} {
+	marks := modelOptionStringList(options, "permitted_marks")
+	if len(marks) == 0 {
+		return nil
+	}
+	return map[string]interface{}{"permitted_marks": marks}
+}
+
+func splitPipeList(raw string) []string {
+	if raw == "" {
+		return nil
+	}
+	parts := strings.Split(raw, "|")
+	values := make([]string, 0, len(parts))
+	for _, part := range parts {
+		value := strings.TrimSpace(part)
+		if value != "" {
+			values = append(values, value)
+		}
+	}
+	return values
 }
 
 func splitEnvFloatList(name string) []float64 {
