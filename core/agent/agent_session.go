@@ -220,6 +220,16 @@ func (s *AgentSession) WaitForInactive(ctx context.Context) error {
 	return activity.WaitForInactive(ctx)
 }
 
+func (s *AgentSession) Drain(ctx context.Context) error {
+	s.mu.Lock()
+	activity := s.activity
+	s.mu.Unlock()
+	if activity == nil {
+		return ErrAgentSessionNotRunning
+	}
+	return activity.Drain(ctx)
+}
+
 type AgentStateChangedEvent struct {
 	OldState  AgentState
 	NewState  AgentState

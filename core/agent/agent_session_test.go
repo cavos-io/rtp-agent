@@ -1030,6 +1030,45 @@ func TestAgentSessionWaitForInactiveWaitsForCurrentSpeech(t *testing.T) {
 	}
 }
 
+func TestAgentSessionDrainRequiresRunningActivity(t *testing.T) {
+	agent := NewAgent("test")
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+
+	err := session.Drain(context.Background())
+
+	if !errors.Is(err, ErrAgentSessionNotRunning) {
+		t.Fatalf("Drain error = %v, want ErrAgentSessionNotRunning", err)
+	}
+}
+
+func TestAgentSessionDrainDelegatesToActivity(t *testing.T) {
+	agent := NewAgent("test")
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	session.activity = NewAgentActivity(agent, session)
+	current := NewSpeechHandle(true, DefaultInputDetails())
+	session.activity.currentSpeech = current
+
+	done := make(chan error, 1)
+	go func() {
+		done <- session.Drain(context.Background())
+	}()
+
+	waitForDraining(t, session.activity)
+	current.MarkDone()
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("Drain error = %v, want nil", err)
+		}
+	case <-testTimeout():
+		t.Fatal("Drain did not return after current speech completed")
+	}
+	if !session.activity.schedulingPaused {
+		t.Fatal("schedulingPaused = false after Drain, want true")
+	}
+}
+
 func TestAgentSessionInterruptRequiresRunningActivity(t *testing.T) {
 	agent := NewAgent("test")
 	session := NewAgentSession(agent, nil, AgentSessionOptions{})

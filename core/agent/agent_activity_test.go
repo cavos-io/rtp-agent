@@ -221,6 +221,60 @@ func TestAgentActivityInterruptReturnsDisallowedInterruptionError(t *testing.T) 
 	}
 }
 
+func TestAgentActivityDrainRejectsNewSpeechWhileQueuedSpeechFinishes(t *testing.T) {
+	agent := NewAgent("test")
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	activity := NewAgentActivity(agent, session)
+	activity.Start()
+	defer activity.Stop()
+
+	current := NewSpeechHandle(true, DefaultInputDetails())
+	queued := NewSpeechHandle(true, DefaultInputDetails())
+	if err := activity.ScheduleSpeech(current, SpeechPriorityHigh, false); err != nil {
+		t.Fatalf("ScheduleSpeech current error = %v, want nil", err)
+	}
+	if err := activity.ScheduleSpeech(queued, SpeechPriorityNormal, false); err != nil {
+		t.Fatalf("ScheduleSpeech queued error = %v, want nil", err)
+	}
+	waitForCurrentSpeech(t, activity, current)
+
+	done := make(chan error, 1)
+	go func() {
+		done <- activity.Drain(context.Background())
+	}()
+
+	waitForDraining(t, activity)
+	rejected := NewSpeechHandle(true, DefaultInputDetails())
+	err := activity.ScheduleSpeech(rejected, SpeechPriorityNormal, false)
+	if !errors.Is(err, ErrSpeechSchedulingPaused) {
+		t.Fatalf("ScheduleSpeech during drain error = %v, want ErrSpeechSchedulingPaused", err)
+	}
+	if !rejected.IsInterrupted() {
+		t.Fatal("speech rejected during drain was not interrupted")
+	}
+
+	current.MarkDone()
+	waitForCurrentSpeech(t, activity, queued)
+	select {
+	case err := <-done:
+		t.Fatalf("Drain returned before queued speech completed: %v", err)
+	case <-time.After(10 * time.Millisecond):
+	}
+
+	queued.MarkDone()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("Drain error = %v, want nil", err)
+		}
+	case <-testTimeout():
+		t.Fatal("Drain did not return after queued speech completed")
+	}
+	if !activity.schedulingPaused {
+		t.Fatal("schedulingPaused = false after Drain, want true")
+	}
+}
+
 func TestAgentActivityStartRecordsInitialConfiguration(t *testing.T) {
 	agent := NewAgent("be helpful")
 	agent.Tools = []llm.Tool{&agentTestTool{id: "lookup", name: "lookup"}}
@@ -522,6 +576,50 @@ func waitForNoCurrentSpeech(t *testing.T, activity *AgentActivity) {
 			cleared := activity.currentSpeech == nil
 			activity.queueMu.Unlock()
 			if cleared {
+				return
+			}
+		}
+	}
+}
+
+func waitForCurrentSpeech(t *testing.T, activity *AgentActivity, want *SpeechHandle) {
+	t.Helper()
+
+	deadline := time.After(time.Second)
+	ticker := time.NewTicker(time.Millisecond)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-deadline:
+			t.Fatalf("current speech did not become %p", want)
+		case <-ticker.C:
+			activity.queueMu.Lock()
+			got := activity.currentSpeech
+			activity.queueMu.Unlock()
+			if got == want {
+				return
+			}
+		}
+	}
+}
+
+func waitForDraining(t *testing.T, activity *AgentActivity) {
+	t.Helper()
+
+	deadline := time.After(time.Second)
+	ticker := time.NewTicker(time.Millisecond)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-deadline:
+			t.Fatal("activity did not enter draining state")
+		case <-ticker.C:
+			activity.queueMu.Lock()
+			draining := activity.schedulingDraining
+			activity.queueMu.Unlock()
+			if draining {
 				return
 			}
 		}

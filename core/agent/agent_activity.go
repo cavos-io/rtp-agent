@@ -38,7 +38,8 @@ type AgentActivity struct {
 	queueMu        sync.Mutex
 	queueUpdatedCh chan struct{}
 
-	schedulingPaused bool
+	schedulingPaused   bool
+	schedulingDraining bool
 
 	sttEOSReceived bool
 	speaking       bool
@@ -152,6 +153,7 @@ func (a *AgentActivity) Interrupt(force bool) error {
 
 func (a *AgentActivity) WaitForInactive(ctx context.Context) error {
 	for {
+		a.processQueue()
 		active := a.activeSpeechHandles()
 		if len(active) == 0 {
 			return nil
@@ -160,6 +162,7 @@ func (a *AgentActivity) WaitForInactive(ctx context.Context) error {
 			if err := speech.Wait(ctx); err != nil {
 				return err
 			}
+			a.processQueue()
 		}
 	}
 }
@@ -384,7 +387,7 @@ func (a *AgentActivity) ScheduleSpeech(speech *SpeechHandle, priority int, force
 	a.queueMu.Lock()
 	defer a.queueMu.Unlock()
 
-	if a.schedulingPaused && !force {
+	if (a.schedulingPaused || a.schedulingDraining) && !force {
 		_ = speech.Interrupt(true)
 		return ErrSpeechSchedulingPaused
 	}
@@ -423,6 +426,9 @@ func (a *AgentActivity) processQueue() {
 	a.queueMu.Lock()
 	defer a.queueMu.Unlock()
 
+	if a.currentSpeech != nil && a.currentSpeech.IsDone() {
+		a.currentSpeech = nil
+	}
 	if len(a.speechQueue) == 0 || a.schedulingPaused || a.currentSpeech != nil {
 		return
 	}
@@ -452,6 +458,34 @@ func (a *AgentActivity) processQueue() {
 		default:
 		}
 	}()
+}
+
+func (a *AgentActivity) Drain(ctx context.Context) error {
+	if ctx == nil {
+		ctx = a.ctx
+	}
+
+	a.queueMu.Lock()
+	if a.schedulingPaused {
+		a.queueMu.Unlock()
+		return nil
+	}
+	a.schedulingDraining = true
+	a.queueMu.Unlock()
+
+	select {
+	case a.queueUpdatedCh <- struct{}{}:
+	default:
+	}
+
+	err := a.WaitForInactive(ctx)
+
+	a.queueMu.Lock()
+	a.schedulingPaused = true
+	a.schedulingDraining = false
+	a.queueMu.Unlock()
+
+	return err
 }
 
 func (a *AgentActivity) nextSpeechIndexLocked() int {
