@@ -16,6 +16,7 @@ import (
 	"github.com/cavos-io/rtp-agent/core/agent"
 	"github.com/cavos-io/rtp-agent/interface/worker"
 	"github.com/cavos-io/rtp-agent/interface/worker/ipc"
+	"github.com/cavos-io/rtp-agent/library/plugin"
 	"github.com/livekit/protocol/livekit"
 )
 
@@ -461,7 +462,7 @@ func TestRunEvalRequiresConfiguredRunner(t *testing.T) {
 
 func TestRunDownloadFilesForPluginsReturnsPluginError(t *testing.T) {
 	errBoom := errors.New("download failed")
-	plugins := []agent.Plugin{
+	plugins := []plugin.Plugin{
 		&fakePlugin{title: "ok", packageName: "plugin-ok"},
 		&fakePlugin{title: "bad", packageName: "plugin-bad", err: errBoom},
 	}

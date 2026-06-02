@@ -22,8 +22,25 @@ import (
 	"github.com/cavos-io/rtp-agent/core/tts"
 	"github.com/cavos-io/rtp-agent/core/vad"
 	"github.com/cavos-io/rtp-agent/interface/worker"
+	"github.com/cavos-io/rtp-agent/library/plugin"
 	lksdk "github.com/livekit/server-sdk-go/v2"
 )
+
+func TestAppRegistersSLNGPluginMetadata(t *testing.T) {
+	for _, registered := range plugin.RegisteredPlugins() {
+		if registered.Package() != "livekit.plugins.slng" {
+			continue
+		}
+		if registered.Title() != "livekit.plugins.slng" {
+			t.Fatalf("plugin title = %q, want livekit.plugins.slng", registered.Title())
+		}
+		if registered.Version() != "1.5.15" {
+			t.Fatalf("plugin version = %q, want reference version", registered.Version())
+		}
+		return
+	}
+	t.Fatal("SLNG plugin metadata was not registered")
+}
 
 func TestDefaultConfigFromEnvSelectsOpenAIProviders(t *testing.T) {
 	t.Setenv("OPENAI_API_KEY", "test-openai-key")

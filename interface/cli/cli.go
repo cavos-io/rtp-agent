@@ -21,6 +21,7 @@ import (
 	"github.com/cavos-io/rtp-agent/interface/worker"
 	workeripc "github.com/cavos-io/rtp-agent/interface/worker/ipc"
 	"github.com/cavos-io/rtp-agent/library/logger"
+	"github.com/cavos-io/rtp-agent/library/plugin"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/gordonklaus/portaudio"
 	"github.com/livekit/protocol/livekit"
@@ -353,10 +354,10 @@ func runEval(runner EvalRunner, out io.Writer) error {
 }
 
 func runDownloadFiles() error {
-	return runDownloadFilesForPlugins(agent.RegisteredPlugins())
+	return runDownloadFilesForPlugins(plugin.RegisteredPlugins())
 }
 
-func runDownloadFilesForPlugins(plugins []agent.Plugin) error {
+func runDownloadFilesForPlugins(plugins []plugin.Plugin) error {
 	fmt.Printf("Downloading files for %d registered plugins...\n", len(plugins))
 	for _, p := range plugins {
 		fmt.Printf("Downloading for %s (%s)...\n", p.Title(), p.Package())

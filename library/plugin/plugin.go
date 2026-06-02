@@ -1,4 +1,4 @@
-package agent
+package plugin
 
 import (
 	"sync"
@@ -13,10 +13,31 @@ type Plugin interface {
 	DownloadFiles() error
 }
 
+type metadataPlugin struct {
+	title       string
+	version     string
+	packageName string
+}
+
+func (p metadataPlugin) Title() string   { return p.title }
+func (p metadataPlugin) Version() string { return p.version }
+func (p metadataPlugin) Package() string { return p.packageName }
+func (p metadataPlugin) DownloadFiles() error {
+	return nil
+}
+
 var (
 	plugins   = make([]Plugin, 0)
 	pluginsMu sync.RWMutex
 )
+
+func RegisterPluginMetadata(title, version, packageName string) {
+	RegisterPlugin(metadataPlugin{
+		title:       title,
+		version:     version,
+		packageName: packageName,
+	})
+}
 
 func RegisterPlugin(p Plugin) {
 	pluginsMu.Lock()
