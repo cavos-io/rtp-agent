@@ -1677,6 +1677,22 @@ func TestDefaultConfigFromEnvSelectsEmailWorkflowAgent(t *testing.T) {
 	}
 }
 
+func TestDefaultConfigFromEnvEnablesIVRDetection(t *testing.T) {
+	t.Setenv("RTP_AGENT_IVR_DETECTION", "true")
+	t.Setenv("RTP_AGENT_IVR_SILENCE_DURATION_SECONDS", "0.25")
+
+	app, err := NewApp(DefaultConfigFromEnv())
+	if err != nil {
+		t.Fatalf("NewApp() error = %v", err)
+	}
+	if !app.Session.Options.IVRDetection {
+		t.Fatal("IVRDetection = false, want true")
+	}
+	if got := app.Session.Options.IVRSilenceDuration; got != 250*time.Millisecond {
+		t.Fatalf("IVRSilenceDuration = %v, want 250ms", got)
+	}
+}
+
 func TestConfigureRoomToolsAddsSendDTMFTool(t *testing.T) {
 	baseAgent := agent.NewAgent("test")
 	publisher := &fakeAppDtmfPublisher{}

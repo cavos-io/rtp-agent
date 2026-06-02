@@ -52,6 +52,8 @@ type AgentSessionOptions struct {
 	PreemptiveGeneration          bool
 	AECWarmupDuration             float64
 	TurnDetection                 TurnDetectionMode
+	IVRDetection                  bool
+	IVRSilenceDuration            time.Duration
 }
 
 type AgentSessionUpdateOptions struct {
@@ -128,6 +130,7 @@ type AgentSession struct {
 	userdata       any
 	userdataSet    bool
 	recordedEvents []Event
+	ivrActivity    *IVRActivity
 
 	// Event channels
 	AgentStateChangedCh chan AgentStateChangedEvent
@@ -256,6 +259,34 @@ type UserStateChangedEvent struct {
 }
 
 func (e *UserStateChangedEvent) GetType() string { return "user_state_changed" }
+
+func (s *AgentSession) AgentStateChangedEvents() <-chan AgentStateChangedEvent {
+	return s.agentStateChangedEvents()
+}
+
+func (s *AgentSession) agentStateChangedEvents() chan AgentStateChangedEvent {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.AgentStateChangedCh == nil {
+		s.AgentStateChangedCh = make(chan AgentStateChangedEvent, 10)
+	}
+	return s.AgentStateChangedCh
+}
+
+func (s *AgentSession) UserStateChangedEvents() <-chan UserStateChangedEvent {
+	return s.userStateChangedEvents()
+}
+
+func (s *AgentSession) userStateChangedEvents() chan UserStateChangedEvent {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.UserStateChangedCh == nil {
+		s.UserStateChangedCh = make(chan UserStateChangedEvent, 10)
+	}
+	return s.UserStateChangedCh
+}
 
 func NewAgentSession(agent AgentInterface, room *lksdk.Room, opts AgentSessionOptions) *AgentSession {
 	opts = withAgentSessionOptionDefaults(opts)
@@ -810,6 +841,13 @@ func (s *AgentSession) Start(ctx context.Context) error {
 	s.mu.Unlock()
 
 	activity.Start()
+	if s.Options.IVRDetection {
+		ivrActivity := NewIVRActivity(s)
+		s.mu.Lock()
+		s.ivrActivity = ivrActivity
+		s.mu.Unlock()
+		ivrActivity.Start()
+	}
 
 	// Trigger periodic usage metrics reporting
 	if hasMetricsCollector {
@@ -1175,7 +1213,9 @@ func (s *AgentSession) Stop(ctx context.Context) error {
 	}
 
 	activity := s.activity
+	ivrActivity := s.ivrActivity
 	s.activity = nil
+	s.ivrActivity = nil
 	s.started = false
 	s.UserState = UserStateListening
 	s.AgentState = AgentStateInitializing
@@ -1186,6 +1226,9 @@ func (s *AgentSession) Stop(ctx context.Context) error {
 	backgroundAudio := s.Options.BackgroundAudio
 	s.mu.Unlock()
 
+	if ivrActivity != nil {
+		ivrActivity.Stop()
+	}
 	if activity != nil {
 		activity.Stop()
 	}

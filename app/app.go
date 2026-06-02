@@ -413,6 +413,8 @@ type AppConfig struct {
 	LiveKitInferenceAPIKey      string
 	LiveKitInferenceAPISecret   string
 	AppTools                    []string
+	IVRDetection                bool
+	IVRSilenceDurationSeconds   *float64
 	WorkflowTask                string
 	WorkflowRequireConfirmation bool
 	WorkflowDtmfNumDigits       *int
@@ -684,6 +686,8 @@ func DefaultConfigFromEnv() AppConfig {
 		XAIFileSearchMaxResults:                 getenvOptionalInt("RTP_AGENT_XAI_FILE_SEARCH_MAX_RESULTS"),
 		GoogleCredentialsFile:                   firstEnv("RTP_AGENT_GOOGLE_CREDENTIALS_FILE", "GOOGLE_APPLICATION_CREDENTIALS"),
 		AppTools:                                splitEnvList("RTP_AGENT_TOOLS"),
+		IVRDetection:                            getenvBool("RTP_AGENT_IVR_DETECTION"),
+		IVRSilenceDurationSeconds:               getenvOptionalFloat("RTP_AGENT_IVR_SILENCE_DURATION_SECONDS"),
 		WorkflowTask:                            normalizedEnv("RTP_AGENT_WORKFLOW_TASK"),
 		WorkflowRequireConfirmation:             getenvBool("RTP_AGENT_WORKFLOW_REQUIRE_CONFIRMATION"),
 		WorkflowDtmfNumDigits:                   getenvOptionalInt("RTP_AGENT_WORKFLOW_DTMF_NUM_DIGITS"),
@@ -2782,6 +2786,10 @@ func agentSessionOptionsFromConfig(cfg AppConfig) (agent.AgentSessionOptions, er
 			backgroundAudioSource(cfg.BackgroundAudioAmbient),
 			backgroundAudioSource(cfg.BackgroundAudioThinking),
 		)
+	}
+	opts.IVRDetection = cfg.IVRDetection
+	if cfg.IVRSilenceDurationSeconds != nil {
+		opts.IVRSilenceDuration = time.Duration(*cfg.IVRSilenceDurationSeconds * float64(time.Second))
 	}
 	wordTokenizer, err := wordTokenizerFromConfig(cfg)
 	if err != nil {
