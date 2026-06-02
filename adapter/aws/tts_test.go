@@ -2,7 +2,9 @@ package aws
 
 import (
 	"bytes"
+	"context"
 	"io"
+	"strings"
 	"testing"
 
 	"github.com/aws/aws-sdk-go-v2/service/polly/types"
@@ -25,6 +27,37 @@ func TestAWSTTSDefaultsMatchReference(t *testing.T) {
 	}
 	if provider.sampleRate != 16000 {
 		t.Fatalf("sample rate = %d, want 16000", provider.sampleRate)
+	}
+	if provider.Label() != "aws.TTS" {
+		t.Fatalf("Label = %q, want aws.TTS", provider.Label())
+	}
+	if provider.Model() != "generative" {
+		t.Fatalf("Model = %q, want generative", provider.Model())
+	}
+	if provider.Provider() != "Amazon Polly" {
+		t.Fatalf("Provider = %q, want Amazon Polly", provider.Provider())
+	}
+	if provider.SampleRate() != 16000 {
+		t.Fatalf("SampleRate = %d, want 16000", provider.SampleRate())
+	}
+	if provider.NumChannels() != 1 {
+		t.Fatalf("NumChannels = %d, want 1", provider.NumChannels())
+	}
+	if provider.Capabilities().Streaming {
+		t.Fatal("Streaming = true, want false for Polly synthesize")
+	}
+}
+
+func TestNewAWSTTSUsesReferenceDefaults(t *testing.T) {
+	provider, err := NewAWSTTS(context.Background(), "", "")
+	if err != nil {
+		t.Fatalf("NewAWSTTS error = %v, want nil with SDK default config", err)
+	}
+	if provider.voice != types.VoiceIdRuth {
+		t.Fatalf("voice = %q, want Ruth", provider.voice)
+	}
+	if provider.Model() != "generative" {
+		t.Fatalf("Model = %q, want generative", provider.Model())
 	}
 }
 
@@ -93,5 +126,44 @@ func TestAWSTTSChunkedStreamUsesConfiguredSampleRate(t *testing.T) {
 	}
 	if audio.Frame.SampleRate != 24000 {
 		t.Fatalf("sample rate = %d, want 24000", audio.Frame.SampleRate)
+	}
+}
+
+func TestAWSTTSSynthesizeRequiresConfiguredClient(t *testing.T) {
+	provider := newAWSTTSWithClient(nil, "")
+
+	_, err := provider.Synthesize(context.Background(), "hello")
+
+	if err == nil || !strings.Contains(err.Error(), "client is not configured") {
+		t.Fatalf("Synthesize error = %v, want configured-client error", err)
+	}
+}
+
+func TestAWSTTSStreamReportsUnsupported(t *testing.T) {
+	provider := newAWSTTSWithClient(nil, "")
+
+	_, err := provider.Stream(context.Background())
+
+	if err == nil || !strings.Contains(err.Error(), "not supported") {
+		t.Fatalf("Stream error = %v, want unsupported error", err)
+	}
+}
+
+func TestAWSTTSChunkedStreamEOFAndClose(t *testing.T) {
+	stream := &awsTTSChunkedStream{
+		stream:     io.NopCloser(bytes.NewReader(nil)),
+		sampleRate: 16000,
+	}
+
+	if _, err := stream.Next(); err != io.EOF {
+		t.Fatalf("Next err = %v, want EOF", err)
+	}
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close err = %v, want nil", err)
+	}
+
+	empty := &awsTTSChunkedStream{}
+	if err := empty.Close(); err != nil {
+		t.Fatalf("empty Close err = %v, want nil", err)
 	}
 }
