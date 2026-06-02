@@ -1221,6 +1221,40 @@ func TestDefaultConfigFromEnvSelectsSpeechmaticsSpeechProviders(t *testing.T) {
 	}
 }
 
+func TestDefaultConfigFromEnvSelectsSpitchSpeechProviders(t *testing.T) {
+	t.Setenv("SPITCH_API_KEY", "test-spitch-key")
+	t.Setenv("RTP_AGENT_STT_PROVIDER", "spitch")
+	t.Setenv("RTP_AGENT_TTS_PROVIDER", "spitch")
+	t.Setenv("RTP_AGENT_TTS_BASE_URL", "https://spitch.example")
+	t.Setenv("RTP_AGENT_TTS_VOICE", "amina")
+	t.Setenv("RTP_AGENT_TTS_LANGUAGE", "fr")
+	t.Setenv("RTP_AGENT_TTS_RESPONSE_FORMAT", "wav")
+	t.Setenv("RTP_AGENT_TTS_SAMPLE_RATE", "16000")
+
+	app, err := NewApp(DefaultConfigFromEnv())
+	if err != nil {
+		t.Fatalf("NewApp() error = %v", err)
+	}
+	if app.Session == nil {
+		t.Fatal("Session is nil")
+	}
+	if got := app.Session.STT.Label(); got != "spitch.STT" {
+		t.Fatalf("STT label = %q, want spitch.STT", got)
+	}
+	if caps := app.Session.STT.Capabilities(); caps.Streaming || caps.InterimResults || caps.Diarization || !caps.OfflineRecognize {
+		t.Fatalf("STT capabilities = %+v, want offline recognize only", caps)
+	}
+	if got := app.Session.TTS.Label(); got != "spitch.TTS" {
+		t.Fatalf("TTS label = %q, want spitch.TTS", got)
+	}
+	if got := app.Session.TTS.SampleRate(); got != 16000 {
+		t.Fatalf("TTS sample rate = %d, want 16000", got)
+	}
+	if caps := app.Session.TTS.Capabilities(); caps.Streaming || caps.AlignedTranscript {
+		t.Fatalf("TTS capabilities = %+v, want non-streaming without aligned transcript", caps)
+	}
+}
+
 func TestDefaultConfigFromEnvSelectsAWSProviders(t *testing.T) {
 	t.Setenv("AWS_REGION", "us-west-2")
 	t.Setenv("RTP_AGENT_LLM_PROVIDER", "aws")

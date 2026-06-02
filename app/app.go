@@ -48,6 +48,7 @@ import (
 	"github.com/cavos-io/rtp-agent/adapter/soniox"
 	"github.com/cavos-io/rtp-agent/adapter/speechify"
 	"github.com/cavos-io/rtp-agent/adapter/speechmatics"
+	"github.com/cavos-io/rtp-agent/adapter/spitch"
 	"github.com/cavos-io/rtp-agent/core/agent"
 	"github.com/cavos-io/rtp-agent/core/llm"
 	"github.com/cavos-io/rtp-agent/interface/worker"
@@ -94,6 +95,7 @@ const (
 	providerSoniox       = "soniox"
 	providerSpeechify    = "speechify"
 	providerSpeechmatics = "speechmatics"
+	providerSpitch       = "spitch"
 	providerLiveKit      = "livekit"
 )
 
@@ -300,6 +302,7 @@ type AppConfig struct {
 	SonioxAPIKey       string
 	SpeechifyAPIKey    string
 	SpeechmaticsAPIKey string
+	SpitchAPIKey       string
 
 	GoogleCredentialsFile string
 
@@ -515,6 +518,7 @@ func DefaultConfigFromEnv() AppConfig {
 		SonioxAPIKey:                            os.Getenv("SONIOX_API_KEY"),
 		SpeechifyAPIKey:                         os.Getenv("SPEECHIFY_API_KEY"),
 		SpeechmaticsAPIKey:                      os.Getenv("SPEECHMATICS_API_KEY"),
+		SpitchAPIKey:                            os.Getenv("SPITCH_API_KEY"),
 		GoogleCredentialsFile:                   firstEnv("RTP_AGENT_GOOGLE_CREDENTIALS_FILE", "GOOGLE_APPLICATION_CREDENTIALS"),
 	}
 }
@@ -1412,6 +1416,8 @@ func configureProviders(cfg AppConfig, a *agent.Agent) (llm.RealtimeModel, error
 			sttOpts = append(sttOpts, speechmatics.WithSpeechmaticsSTTPreferCurrentSpeaker(*cfg.STTPreferCurrentSpeaker))
 		}
 		a.STT = speechmatics.NewSpeechmaticsSTT(cfg.SpeechmaticsAPIKey, sttOpts...)
+	case providerSpitch:
+		a.STT = spitch.NewSpitchSTT(cfg.SpitchAPIKey)
 	case providerAssemblyAI:
 		sttOpts := []assemblyai.AssemblyAISTTOption{}
 		if cfg.STTBaseURL != "" {
@@ -2116,6 +2122,24 @@ func configureProviders(cfg AppConfig, a *agent.Agent) (llm.RealtimeModel, error
 			ttsOpts = append(ttsOpts, speechmatics.WithSpeechmaticsTTSBaseURL(cfg.TTSBaseURL))
 		}
 		a.TTS = speechmatics.NewSpeechmaticsTTS(cfg.SpeechmaticsAPIKey, ttsOpts...)
+	case providerSpitch:
+		ttsOpts := []spitch.SpitchTTSOption{}
+		if cfg.TTSBaseURL != "" {
+			ttsOpts = append(ttsOpts, spitch.WithSpitchTTSBaseURL(cfg.TTSBaseURL))
+		}
+		if cfg.TTSVoice != "" {
+			ttsOpts = append(ttsOpts, spitch.WithSpitchTTSVoice(cfg.TTSVoice))
+		}
+		if cfg.TTSLanguage != "" {
+			ttsOpts = append(ttsOpts, spitch.WithSpitchTTSLanguage(cfg.TTSLanguage))
+		}
+		if cfg.TTSResponseFormat != "" {
+			ttsOpts = append(ttsOpts, spitch.WithSpitchTTSOutputFormat(cfg.TTSResponseFormat))
+		}
+		if cfg.TTSSampleRate != nil {
+			ttsOpts = append(ttsOpts, spitch.WithSpitchTTSSampleRate(*cfg.TTSSampleRate))
+		}
+		a.TTS = spitch.NewSpitchTTS(cfg.SpitchAPIKey, cfg.TTSVoice, ttsOpts...)
 	case providerSLNG:
 		ttsOpts := []slng.TTSOption{}
 		if cfg.TTSModel != "" {
