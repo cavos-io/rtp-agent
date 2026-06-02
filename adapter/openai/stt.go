@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -26,6 +27,7 @@ const (
 	openAIRealtimeSTTDefaultThreshold  = 0.5
 	openAIRealtimeSTTPrefixPaddingMS   = 600
 	openAIRealtimeSTTSilenceDurationMS = 350
+	openAIAPIKeyEnv                    = "OPENAI_API_KEY"
 )
 
 type OpenAISTT struct {
@@ -73,12 +75,17 @@ func WithOpenAISTTBaseURL(baseURL string) OpenAISTTOption {
 	}
 }
 
-func NewOpenAISTT(apiKey string, model string, opts ...OpenAISTTOption) *OpenAISTT {
+func NewOpenAISTT(apiKey string, model string, opts ...OpenAISTTOption) (*OpenAISTT, error) {
+	if apiKey == "" {
+		apiKey = os.Getenv(openAIAPIKeyEnv)
+	}
+	if apiKey == "" {
+		return nil, fmt.Errorf("OPENAI_API_KEY is required, either as argument or set OPENAI_API_KEY environment variable")
+	}
 	if model == "" {
 		model = "gpt-4o-mini-transcribe"
 	}
 	provider := &OpenAISTT{
-		client:   openai.NewClient(apiKey),
 		apiKey:   apiKey,
 		baseURL:  defaultOpenAIBaseURL,
 		model:    model,
@@ -87,7 +94,10 @@ func NewOpenAISTT(apiKey string, model string, opts ...OpenAISTTOption) *OpenAIS
 	for _, opt := range opts {
 		opt(provider)
 	}
-	return provider
+	config := openai.DefaultConfig(apiKey)
+	config.BaseURL = provider.baseURL
+	provider.client = openai.NewClientWithConfig(config)
+	return provider, nil
 }
 
 func (s *OpenAISTT) Label() string { return "openai.STT" }

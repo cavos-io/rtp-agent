@@ -1,13 +1,20 @@
 package openai
 
 import (
+	"context"
+	"errors"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
 
+	"github.com/cavos-io/rtp-agent/core/tts"
 	goopenai "github.com/sashabaranov/go-openai"
 )
 
 func TestOpenAITTSDefaultsMatchReference(t *testing.T) {
-	provider := NewOpenAITTS("test-key", "", "")
+	provider := mustNewOpenAITTS(t, "test-key", "", "")
 
 	if provider.model != goopenai.TTSModelGPT4oMini {
 		t.Fatalf("model = %q, want %q", provider.model, goopenai.TTSModelGPT4oMini)
@@ -23,8 +30,30 @@ func TestOpenAITTSDefaultsMatchReference(t *testing.T) {
 	}
 }
 
+func TestNewOpenAITTSUsesEnvironmentAPIKey(t *testing.T) {
+	t.Setenv(openAIAPIKeyEnv, "env-key")
+
+	provider, err := NewOpenAITTS("", "", "")
+	if err != nil {
+		t.Fatalf("NewOpenAITTS error = %v, want env fallback", err)
+	}
+
+	if provider.apiKey != "env-key" {
+		t.Fatalf("apiKey = %q, want env key", provider.apiKey)
+	}
+}
+
+func TestNewOpenAITTSRequiresAPIKey(t *testing.T) {
+	t.Setenv(openAIAPIKeyEnv, "")
+
+	_, err := NewOpenAITTS("", "", "")
+	if err == nil || !strings.Contains(err.Error(), "OPENAI_API_KEY") {
+		t.Fatalf("NewOpenAITTS error = %v, want missing API key error", err)
+	}
+}
+
 func TestOpenAITTSBuildSpeechRequestUsesReferenceOptions(t *testing.T) {
-	provider := NewOpenAITTS("test-key", "", "",
+	provider := mustNewOpenAITTS(t, "test-key", "", "",
 		WithOpenAITTSInstructions("speak warmly"),
 		WithOpenAITTSSpeed(1.25),
 		WithOpenAITTSResponseFormat(goopenai.SpeechResponseFormatPcm),
@@ -53,7 +82,7 @@ func TestOpenAITTSBuildSpeechRequestUsesReferenceOptions(t *testing.T) {
 }
 
 func TestOpenAITTSUpdateOptionsMatchesReference(t *testing.T) {
-	provider := NewOpenAITTS("test-key", "", "")
+	provider := mustNewOpenAITTS(t, "test-key", "", "")
 
 	provider.UpdateOptions(
 		WithOpenAITTSModel(goopenai.TTSModel1HD),
@@ -74,4 +103,117 @@ func TestOpenAITTSUpdateOptionsMatchesReference(t *testing.T) {
 	if provider.instructions != "speak softly" {
 		t.Fatalf("instructions = %q, want speak softly", provider.instructions)
 	}
+}
+
+func TestOpenAITTSLabelCapabilitiesAndUnsupportedStream(t *testing.T) {
+	provider := mustNewOpenAITTS(t, "test-key", "", "")
+
+	if provider.Label() != "openai.TTS" {
+		t.Fatalf("Label = %q, want openai.TTS", provider.Label())
+	}
+	if provider.Capabilities() != (tts.TTSCapabilities{Streaming: false, AlignedTranscript: false}) {
+		t.Fatalf("Capabilities = %+v, want non-streaming without alignment", provider.Capabilities())
+	}
+	if provider.SampleRate() != 24000 || provider.NumChannels() != 1 {
+		t.Fatalf("audio format = %d/%d, want 24000/1", provider.SampleRate(), provider.NumChannels())
+	}
+	if _, err := provider.Stream(context.Background()); !errors.Is(err, io.ErrUnexpectedEOF) {
+		t.Fatalf("Stream error = %v, want io.ErrUnexpectedEOF", err)
+	}
+}
+
+func TestOpenAITTSSynthesizeUsesOpenAISpeechAPI(t *testing.T) {
+	var gotAuth string
+	var gotPath string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotAuth = r.Header.Get("Authorization")
+		gotPath = r.URL.Path
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Fatalf("ReadAll body: %v", err)
+		}
+		for _, want := range []string{
+			`"model":"gpt-4o-mini-tts"`,
+			`"input":"hello"`,
+			`"voice":"ash"`,
+			`"response_format":"pcm"`,
+			`"speed":1.25`,
+		} {
+			if !strings.Contains(string(body), want) {
+				t.Fatalf("request body %s missing %s", body, want)
+			}
+		}
+		w.Header().Set("Content-Type", "audio/pcm")
+		_, _ = w.Write([]byte{1, 2, 3, 4})
+	}))
+	defer server.Close()
+
+	config := goopenai.DefaultConfig("test-key")
+	config.BaseURL = server.URL + "/v1"
+	provider, err := NewOpenAITTSWithConfig(config, "", "", WithOpenAITTSSpeed(1.25), WithOpenAITTSResponseFormat(goopenai.SpeechResponseFormatPcm))
+	if err != nil {
+		t.Fatalf("NewOpenAITTSWithConfig error = %v", err)
+	}
+
+	stream, err := provider.Synthesize(context.Background(), "hello")
+	if err != nil {
+		t.Fatalf("Synthesize error = %v", err)
+	}
+	defer stream.Close()
+
+	audio, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next error = %v", err)
+	}
+	if string(audio.Frame.Data) != string([]byte{1, 2, 3, 4}) {
+		t.Fatalf("audio bytes = %v, want server bytes", audio.Frame.Data)
+	}
+	if gotAuth != "Bearer test-key" {
+		t.Fatalf("Authorization = %q, want bearer key", gotAuth)
+	}
+	if gotPath != "/v1/audio/speech" {
+		t.Fatalf("path = %q, want OpenAI speech endpoint", gotPath)
+	}
+}
+
+func TestOpenAITTSChunkedStreamReturnsDataBeforeEOF(t *testing.T) {
+	stream := &openaiTTSChunkedStream{resp: &eofWithDataReader{data: []byte{1, 2, 3, 4}}}
+
+	audio, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next error = %v, want data before EOF", err)
+	}
+	if string(audio.Frame.Data) != string([]byte{1, 2, 3, 4}) {
+		t.Fatalf("audio bytes = %v, want EOF data", audio.Frame.Data)
+	}
+
+	_, err = stream.Next()
+	if !errors.Is(err, io.EOF) {
+		t.Fatalf("second Next error = %v, want EOF", err)
+	}
+}
+
+type eofWithDataReader struct {
+	data []byte
+	done bool
+}
+
+func (r *eofWithDataReader) Close() error { return nil }
+
+func (r *eofWithDataReader) Read(p []byte) (int, error) {
+	if r.done {
+		return 0, io.EOF
+	}
+	copy(p, r.data)
+	r.done = true
+	return len(r.data), io.EOF
+}
+
+func mustNewOpenAITTS(t *testing.T, apiKey string, model goopenai.SpeechModel, voice goopenai.SpeechVoice, opts ...OpenAITTSOption) *OpenAITTS {
+	t.Helper()
+	provider, err := NewOpenAITTS(apiKey, model, voice, opts...)
+	if err != nil {
+		t.Fatalf("NewOpenAITTS error = %v", err)
+	}
+	return provider
 }

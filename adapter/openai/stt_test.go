@@ -1,9 +1,12 @@
 package openai
 
 import (
+	"context"
 	"encoding/base64"
 	"encoding/json"
 	"math"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 
@@ -13,7 +16,7 @@ import (
 )
 
 func TestOpenAIAudioRequestAsksForWordTimestamps(t *testing.T) {
-	provider := NewOpenAISTT("test-key", "whisper-1")
+	provider := mustNewOpenAISTT(t, "test-key", "whisper-1")
 	req := openAIAudioRequest(provider, strings.NewReader("audio"), "en")
 
 	if req.Model != "whisper-1" {
@@ -66,7 +69,7 @@ func TestOpenAISpeechEventPreservesWordTimestamps(t *testing.T) {
 }
 
 func TestOpenAISTTCapabilitiesAdvertiseWordAlignment(t *testing.T) {
-	provider := NewOpenAISTT("test-key", "whisper-1")
+	provider := mustNewOpenAISTT(t, "test-key", "whisper-1")
 
 	if got := provider.Capabilities().AlignedTranscript; got != "word" {
 		t.Fatalf("AlignedTranscript = %q, want word", got)
@@ -74,7 +77,7 @@ func TestOpenAISTTCapabilitiesAdvertiseWordAlignment(t *testing.T) {
 }
 
 func TestOpenAISTTDefaultsMatchReference(t *testing.T) {
-	provider := NewOpenAISTT("test-key", "")
+	provider := mustNewOpenAISTT(t, "test-key", "")
 
 	if provider.model != "gpt-4o-mini-transcribe" {
 		t.Fatalf("model = %q, want gpt-4o-mini-transcribe", provider.model)
@@ -87,8 +90,30 @@ func TestOpenAISTTDefaultsMatchReference(t *testing.T) {
 	}
 }
 
+func TestNewOpenAISTTUsesEnvironmentAPIKey(t *testing.T) {
+	t.Setenv(openAIAPIKeyEnv, "env-key")
+
+	provider, err := NewOpenAISTT("", "")
+	if err != nil {
+		t.Fatalf("NewOpenAISTT error = %v, want env fallback", err)
+	}
+
+	if provider.apiKey != "env-key" {
+		t.Fatalf("apiKey = %q, want env key", provider.apiKey)
+	}
+}
+
+func TestNewOpenAISTTRequiresAPIKey(t *testing.T) {
+	t.Setenv(openAIAPIKeyEnv, "")
+
+	_, err := NewOpenAISTT("", "")
+	if err == nil || !strings.Contains(err.Error(), "OPENAI_API_KEY") {
+		t.Fatalf("NewOpenAISTT error = %v, want missing API key error", err)
+	}
+}
+
 func TestOpenAIAudioRequestUsesProviderOptions(t *testing.T) {
-	provider := NewOpenAISTT("test-key", "whisper-1",
+	provider := mustNewOpenAISTT(t, "test-key", "whisper-1",
 		WithOpenAISTTLanguage("id"),
 		WithOpenAISTTPrompt("domain words"),
 	)
@@ -107,7 +132,7 @@ func TestOpenAIAudioRequestUsesProviderOptions(t *testing.T) {
 }
 
 func TestOpenAISTTDetectLanguageOmitsLanguage(t *testing.T) {
-	provider := NewOpenAISTT("test-key", "",
+	provider := mustNewOpenAISTT(t, "test-key", "",
 		WithOpenAISTTDetectLanguage(true),
 	)
 
@@ -118,8 +143,67 @@ func TestOpenAISTTDetectLanguageOmitsLanguage(t *testing.T) {
 	}
 }
 
+func TestOpenAISTTLabelAndDisabledRealtimeStream(t *testing.T) {
+	provider := mustNewOpenAISTT(t, "test-key", "")
+
+	if provider.Label() != "openai.STT" {
+		t.Fatalf("Label = %q, want openai.STT", provider.Label())
+	}
+
+	_, err := provider.Stream(context.Background(), "")
+	if err == nil || !strings.Contains(err.Error(), "realtime stt is not enabled") {
+		t.Fatalf("Stream error = %v, want disabled realtime error", err)
+	}
+}
+
+func TestOpenAISTTRecognizeUsesOpenAITranscriptionAPI(t *testing.T) {
+	var gotAuth string
+	var gotPath string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotAuth = r.Header.Get("Authorization")
+		gotPath = r.URL.Path
+		if err := r.ParseMultipartForm(1 << 20); err != nil {
+			t.Fatalf("ParseMultipartForm: %v", err)
+		}
+		if r.FormValue("model") != "whisper-1" {
+			t.Fatalf("model form = %q, want whisper-1", r.FormValue("model"))
+		}
+		if r.FormValue("language") != "id" {
+			t.Fatalf("language form = %q, want id", r.FormValue("language"))
+		}
+		if r.FormValue("response_format") != string(goopenai.AudioResponseFormatVerboseJSON) {
+			t.Fatalf("response_format = %q, want verbose_json", r.FormValue("response_format"))
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"text":"hello","words":[{"word":"hello","start":0.1,"end":0.3}]}`))
+	}))
+	defer server.Close()
+
+	provider := mustNewOpenAISTT(t, "test-key", "whisper-1",
+		WithOpenAISTTBaseURL(server.URL+"/v1"),
+	)
+
+	event, err := provider.Recognize(context.Background(), []*model.AudioFrame{{Data: []byte{1, 2, 3}}}, "id")
+	if err != nil {
+		t.Fatalf("Recognize error = %v", err)
+	}
+
+	if gotAuth != "Bearer test-key" {
+		t.Fatalf("Authorization = %q, want bearer key", gotAuth)
+	}
+	if gotPath != "/v1/audio/transcriptions" {
+		t.Fatalf("path = %q, want OpenAI transcription endpoint", gotPath)
+	}
+	if event.Type != stt.SpeechEventFinalTranscript || event.Alternatives[0].Text != "hello" {
+		t.Fatalf("event = %+v, want final hello transcript", event)
+	}
+	if len(event.Alternatives[0].Words) != 1 || event.Alternatives[0].Words[0].Text != "hello" {
+		t.Fatalf("words = %+v, want hello timing", event.Alternatives[0].Words)
+	}
+}
+
 func TestOpenAIRealtimeSTTCapabilitiesAndWebsocketRequestMatchReference(t *testing.T) {
-	provider := NewOpenAISTT("test-key", "gpt-4o-mini-transcribe",
+	provider := mustNewOpenAISTT(t, "test-key", "gpt-4o-mini-transcribe",
 		WithOpenAISTTRealtime(true),
 		WithOpenAISTTBaseURL("https://openai.example/v1/"),
 		WithOpenAISTTLanguage("id"),
@@ -149,7 +233,7 @@ func TestOpenAIRealtimeSTTCapabilitiesAndWebsocketRequestMatchReference(t *testi
 }
 
 func TestOpenAIRealtimeSTTSessionUpdateMatchesReference(t *testing.T) {
-	provider := NewOpenAISTT("test-key", "gpt-4o-mini-transcribe",
+	provider := mustNewOpenAISTT(t, "test-key", "gpt-4o-mini-transcribe",
 		WithOpenAISTTRealtime(true),
 		WithOpenAISTTLanguage("id"),
 		WithOpenAISTTPrompt("domain words"),
@@ -261,4 +345,13 @@ func TestOpenAIRealtimeSTTEventsFromMessages(t *testing.T) {
 	if events[1].Type != stt.SpeechEventRecognitionUsage || events[1].RecognitionUsage.AudioDuration != 0.8 || events[1].RecognitionUsage.InputTokens != 3 {
 		t.Fatalf("usage event = %+v, want duration and tokens", events[1])
 	}
+}
+
+func mustNewOpenAISTT(t *testing.T, apiKey, model string, opts ...OpenAISTTOption) *OpenAISTT {
+	t.Helper()
+	provider, err := NewOpenAISTT(apiKey, model, opts...)
+	if err != nil {
+		t.Fatalf("NewOpenAISTT error = %v", err)
+	}
+	return provider
 }

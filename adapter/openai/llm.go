@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/url"
+	"os"
 	"strings"
 	"time"
 
@@ -14,22 +15,37 @@ import (
 	"github.com/sashabaranov/go-openai"
 )
 
+const defaultOpenAILLMModel = "gpt-4.1"
+
 type OpenAILLM struct {
 	client *openai.Client
 	model  string
 }
 
-func NewOpenAILLM(apiKey string, model string) *OpenAILLM {
-	return &OpenAILLM{
-		client: openai.NewClient(apiKey),
-		model:  model,
+func NewOpenAILLM(apiKey string, model string) (*OpenAILLM, error) {
+	if apiKey == "" {
+		apiKey = os.Getenv(openAIAPIKeyEnv)
 	}
+	if apiKey == "" {
+		return nil, fmt.Errorf("OPENAI_API_KEY is required, either as argument or set OPENAI_API_KEY environment variable")
+	}
+	config := openai.DefaultConfig(apiKey)
+	return newOpenAILLMWithConfigAndModel(config, model)
 }
 
 func NewOpenAILLMWithConfig(config openai.ClientConfig) *OpenAILLM {
+	model, _ := newOpenAILLMWithConfigAndModel(config, "")
+	return model
+}
+
+func newOpenAILLMWithConfigAndModel(config openai.ClientConfig, model string) (*OpenAILLM, error) {
+	if model == "" {
+		model = defaultOpenAILLMModel
+	}
 	return &OpenAILLM{
 		client: openai.NewClientWithConfig(config),
-	}
+		model:  model,
+	}, nil
 }
 
 func NewOpenAILLMWithBaseURL(apiKey string, model string, baseURL string) *OpenAILLM {
@@ -762,8 +778,4 @@ func (s *openaiStream) Close() error {
 		s.cancel = nil
 	}
 	return nil
-}
-
-func (l *OpenAILLM) RawClient() *openai.Client {
-	return l.client
 }

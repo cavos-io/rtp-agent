@@ -30,6 +30,52 @@ func (requestTestTool) Parameters() map[string]any {
 }
 func (requestTestTool) Execute(context.Context, string) (string, error) { return "", nil }
 
+func TestNewOpenAILLMUsesEnvironmentAPIKeyAndReferenceDefaultModel(t *testing.T) {
+	t.Setenv(openAIAPIKeyEnv, "env-key")
+
+	model, err := NewOpenAILLM("", "")
+	if err != nil {
+		t.Fatalf("NewOpenAILLM error = %v, want env fallback", err)
+	}
+
+	if model.Model() != defaultOpenAILLMModel {
+		t.Fatalf("Model = %q, want reference default", model.Model())
+	}
+}
+
+func TestNewOpenAILLMRequiresAPIKey(t *testing.T) {
+	t.Setenv(openAIAPIKeyEnv, "")
+
+	_, err := NewOpenAILLM("", "")
+	if err == nil || !strings.Contains(err.Error(), "OPENAI_API_KEY") {
+		t.Fatalf("NewOpenAILLM error = %v, want missing API key error", err)
+	}
+}
+
+func TestNewOpenAILLMChatUsesConfiguredKeyAndDefaultModel(t *testing.T) {
+	t.Setenv(openAIAPIKeyEnv, "env-key")
+	capture := &captureDeadlineHTTPClient{
+		statusCode:   http.StatusBadRequest,
+		responseBody: `{"error":{"message":"bad request","type":"invalid_request_error","code":"bad_request"}}`,
+	}
+	config := openaisdk.DefaultConfig("env-key")
+	config.HTTPClient = capture
+
+	model, err := newOpenAILLMWithConfigAndModel(config, "")
+	if err != nil {
+		t.Fatalf("newOpenAILLMWithConfigAndModel error = %v", err)
+	}
+
+	_, _ = model.Chat(context.Background(), llm.NewChatContext(), llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 0}))
+
+	if capture.requestBody == "" || !strings.Contains(capture.requestBody, `"model":"gpt-4.1"`) {
+		t.Fatalf("request body = %s, want default model", capture.requestBody)
+	}
+	if capture.authorization != "Bearer env-key" {
+		t.Fatalf("Authorization = %q, want bearer env key", capture.authorization)
+	}
+}
+
 func TestOpenAIChatAppliesConnectOptionsTimeoutToRequestContext(t *testing.T) {
 	sentinelErr := errors.New("stop after context capture")
 	capture := &captureDeadlineHTTPClient{err: sentinelErr}
@@ -166,12 +212,14 @@ func TestBuildOpenAIChatCompletionRequestAppliesExtraParams(t *testing.T) {
 }
 
 type captureDeadlineHTTPClient struct {
-	err          error
-	hasDeadline  bool
-	remaining    time.Duration
-	statusCode   int
-	responseBody string
-	header       http.Header
+	err           error
+	hasDeadline   bool
+	remaining     time.Duration
+	statusCode    int
+	responseBody  string
+	header        http.Header
+	requestBody   string
+	authorization string
 }
 
 func (c *captureDeadlineHTTPClient) Do(req *http.Request) (*http.Response, error) {
@@ -179,6 +227,12 @@ func (c *captureDeadlineHTTPClient) Do(req *http.Request) (*http.Response, error
 	c.hasDeadline = ok
 	if ok {
 		c.remaining = time.Until(deadline)
+	}
+	c.authorization = req.Header.Get("Authorization")
+	if req.Body != nil {
+		body, _ := io.ReadAll(req.Body)
+		c.requestBody = string(body)
+		req.Body = io.NopCloser(strings.NewReader(c.requestBody))
 	}
 	if c.err != nil {
 		return nil, c.err
