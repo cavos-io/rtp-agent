@@ -97,6 +97,11 @@ func init() {
 	plugin.RegisterPluginMetadata(slng.PluginTitle, slng.PluginVersion, slng.PluginPackage)
 }
 
+var (
+	appInitLoggerProvider     = telemetry.InitLoggerProvider
+	appShutdownLoggerProvider = telemetry.ShutdownLoggerProvider
+)
+
 const (
 	providerAnam         = "anam"
 	providerAnthropic    = "anthropic"
@@ -167,6 +172,9 @@ type AppConfig struct {
 	Logger          livekitlogger.Logger
 	MetricsRegistry *telemetry.MetricRegistry
 	Instructions    string
+
+	TelemetryLogsEndpoint string
+	TelemetryLogsHeaders  map[string]string
 
 	InitialChatContext                      map[string]any
 	AWSRegion                               string
@@ -471,6 +479,7 @@ type App struct {
 	RoomIO          *worker.RoomIO
 	RoomOptions     worker.RoomOptions
 	Config          AppConfig
+	telemetryLogs   bool
 }
 
 type EvaluationSummary struct {
@@ -485,6 +494,8 @@ type EvaluationSummary struct {
 func DefaultConfigFromEnv() AppConfig {
 	return AppConfig{
 		Instructions:                            getenvDefault("RTP_AGENT_INSTRUCTIONS", "You are a helpful realtime voice agent."),
+		TelemetryLogsEndpoint:                   os.Getenv("RTP_AGENT_OTLP_LOGS_ENDPOINT"),
+		TelemetryLogsHeaders:                    splitEnvStringMap("RTP_AGENT_OTLP_LOGS_HEADERS"),
 		InitialChatContext:                      jsonEnvMap("RTP_AGENT_CHAT_CONTEXT_JSON"),
 		AWSRegion:                               firstEnv("RTP_AGENT_AWS_REGION", "AWS_REGION"),
 		LLMProvider:                             normalizedEnv("RTP_AGENT_LLM_PROVIDER"),
@@ -857,11 +868,30 @@ func NewApp(cfg AppConfig) (*App, error) {
 		MetricsRegistry: metricsRegistry,
 		Config:          cfg,
 	}
+	if cfg.TelemetryLogsEndpoint != "" {
+		if err := appInitLoggerProvider(context.Background(), cfg.TelemetryLogsEndpoint, cfg.TelemetryLogsHeaders); err != nil {
+			app.closeMCPServers()
+			return nil, err
+		}
+		app.telemetryLogs = true
+	}
 	if err := server.RTCSession(app.runSession, nil, nil); err != nil {
-		app.closeMCPServers()
+		_ = app.Close(context.Background())
 		return nil, err
 	}
 	return app, nil
+}
+
+func (a *App) Close(ctx context.Context) error {
+	if a == nil {
+		return nil
+	}
+	a.closeMCPServers()
+	if a.telemetryLogs {
+		a.telemetryLogs = false
+		return appShutdownLoggerProvider(ctx)
+	}
+	return nil
 }
 
 func (a *App) EvaluateSession(ctx context.Context, reference *llm.ChatContext) (*EvaluationSummary, error) {

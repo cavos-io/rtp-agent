@@ -78,6 +78,64 @@ func TestNewAppUsesConfiguredMetricsRegistry(t *testing.T) {
 	}
 }
 
+func TestDefaultConfigFromEnvConfiguresTelemetryLogs(t *testing.T) {
+	t.Setenv("RTP_AGENT_OTLP_LOGS_ENDPOINT", "otel.example:4318")
+	t.Setenv("RTP_AGENT_OTLP_LOGS_HEADERS", "Authorization=Bearer token,X-Scope=agent")
+
+	cfg := DefaultConfigFromEnv()
+
+	if cfg.TelemetryLogsEndpoint != "otel.example:4318" {
+		t.Fatalf("TelemetryLogsEndpoint = %q, want otel.example:4318", cfg.TelemetryLogsEndpoint)
+	}
+	if got := cfg.TelemetryLogsHeaders["Authorization"]; got != "Bearer token" {
+		t.Fatalf("TelemetryLogsHeaders[Authorization] = %q, want Bearer token", got)
+	}
+	if got := cfg.TelemetryLogsHeaders["X-Scope"]; got != "agent" {
+		t.Fatalf("TelemetryLogsHeaders[X-Scope] = %q, want agent", got)
+	}
+}
+
+func TestNewAppInitializesAndClosesTelemetryLogs(t *testing.T) {
+	var initializedEndpoint string
+	var initializedHeaders map[string]string
+	var shutdownCalled bool
+	oldInit := appInitLoggerProvider
+	oldShutdown := appShutdownLoggerProvider
+	appInitLoggerProvider = func(ctx context.Context, endpoint string, headers map[string]string) error {
+		initializedEndpoint = endpoint
+		initializedHeaders = headers
+		return nil
+	}
+	appShutdownLoggerProvider = func(ctx context.Context) error {
+		shutdownCalled = true
+		return nil
+	}
+	t.Cleanup(func() {
+		appInitLoggerProvider = oldInit
+		appShutdownLoggerProvider = oldShutdown
+	})
+
+	app, err := NewApp(AppConfig{
+		TelemetryLogsEndpoint: "otel.example:4318",
+		TelemetryLogsHeaders:  map[string]string{"Authorization": "Bearer token"},
+	})
+	if err != nil {
+		t.Fatalf("NewApp() error = %v", err)
+	}
+	if initializedEndpoint != "otel.example:4318" {
+		t.Fatalf("initialized endpoint = %q, want otel.example:4318", initializedEndpoint)
+	}
+	if initializedHeaders["Authorization"] != "Bearer token" {
+		t.Fatalf("initialized headers = %#v, want Authorization header", initializedHeaders)
+	}
+	if err := app.Close(context.Background()); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+	if !shutdownCalled {
+		t.Fatal("Close() did not shut down telemetry log provider")
+	}
+}
+
 func TestRunSessionUsesJobMetricLabels(t *testing.T) {
 	registry := telemetry.NewMetricRegistry()
 	app, err := NewApp(AppConfig{

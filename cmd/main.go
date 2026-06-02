@@ -13,6 +13,7 @@ func main() {
 	if err != nil {
 		panic(err)
 	}
+	defer rtpApp.Close(context.Background())
 	cli.RunApp(rtpApp.Server, func(ctx context.Context) (string, error) {
 		summary, err := rtpApp.EvaluateSession(ctx, nil)
 		if err != nil {
