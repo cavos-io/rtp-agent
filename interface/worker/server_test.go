@@ -2750,6 +2750,33 @@ func TestAssignmentCompletionUploadsRecordedSessionReport(t *testing.T) {
 	}
 }
 
+func TestShouldUploadJobSessionReportUsesAnyRecordingOption(t *testing.T) {
+	ctx := NewJobContext(&livekit.Job{Id: "job_logs_only"}, "", "", "")
+	ctx.Report.RecordingOptions = agent.RecordingOptions{Logs: true}
+
+	if !shouldUploadJobSessionReport(ctx) {
+		t.Fatal("shouldUploadJobSessionReport(logs-only) = false, want true")
+	}
+}
+
+func TestShouldUploadJobSessionReportUsesEvaluationOrOutcome(t *testing.T) {
+	ctx := NewJobContext(&livekit.Job{Id: "job_eval_only"}, "", "", "")
+	ctx.Report.RecordingOptions = agent.RecordingOptions{}
+	ctx.Tagger.Evaluation(&agent.EvaluationResult{Judgments: map[string]string{"helpfulness": "pass"}})
+
+	if !shouldUploadJobSessionReport(ctx) {
+		t.Fatal("shouldUploadJobSessionReport(evaluation-only) = false, want true")
+	}
+
+	ctx = NewJobContext(&livekit.Job{Id: "job_outcome_only"}, "", "", "")
+	ctx.Report.RecordingOptions = agent.RecordingOptions{}
+	ctx.Tagger.Success("completed")
+
+	if !shouldUploadJobSessionReport(ctx) {
+		t.Fatal("shouldUploadJobSessionReport(outcome-only) = false, want true")
+	}
+}
+
 func TestAssignmentReportsFailureWhenEntrypointFails(t *testing.T) {
 	server := NewAgentServer(WorkerOptions{})
 	sentCh := make(chan *livekit.WorkerMessage, 2)
