@@ -14,6 +14,7 @@ import (
 	"github.com/cavos-io/rtp-agent/core/vad"
 	"github.com/cavos-io/rtp-agent/library/logger"
 	"github.com/cavos-io/rtp-agent/library/telemetry"
+	"github.com/cavos-io/rtp-agent/library/tokenize"
 	lksdk "github.com/livekit/server-sdk-go/v2"
 )
 
@@ -47,6 +48,7 @@ type AgentSessionOptions struct {
 	UseTTSAlignedTranscript       bool
 	TTSStreamPacer                *tts.SentenceStreamPacerOptions
 	BackgroundAudio               *BackgroundAudioPlayer
+	WordTokenizer                 tokenize.WordTokenizer
 	PreemptiveGeneration          bool
 	AECWarmupDuration             float64
 	TurnDetection                 TurnDetectionMode

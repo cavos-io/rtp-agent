@@ -783,8 +783,13 @@ func (a *AgentActivity) shouldSkipShortInterruption(currentSpeech *SpeechHandle,
 	if a.Agent.STT == nil && a.Session.STT == nil {
 		return false
 	}
-	words := tokenize.SplitWords(transcript, true, true, false)
-	return len(words) < a.Session.Options.MinInterruptionWords
+	var wordCount int
+	if a.Session.Options.WordTokenizer != nil {
+		wordCount = len(a.Session.Options.WordTokenizer.Tokenize(transcript, ""))
+	} else {
+		wordCount = len(tokenize.SplitWords(transcript, true, true, false))
+	}
+	return wordCount < a.Session.Options.MinInterruptionWords
 }
 
 func metricsReportFromEndOfTurn(info EndOfTurnInfo, onUserTurnCompletedDelay float64) map[string]any {

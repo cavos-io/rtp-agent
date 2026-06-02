@@ -1960,6 +1960,24 @@ func TestDefaultConfigFromEnvSelectsLiveKitTTSTokenizer(t *testing.T) {
 	}
 }
 
+func TestDefaultConfigFromEnvSelectsWordTokenizer(t *testing.T) {
+	t.Setenv("RTP_AGENT_WORD_TOKENIZER_PROVIDER", "blingfire")
+
+	app, err := NewApp(DefaultConfigFromEnv())
+	if err != nil {
+		t.Fatalf("NewApp() error = %v", err)
+	}
+	if app.Session == nil {
+		t.Fatal("Session is nil")
+	}
+	if app.Session.Options.WordTokenizer == nil {
+		t.Fatal("WordTokenizer is nil")
+	}
+	if got := reflect.TypeOf(app.Session.Options.WordTokenizer).String(); got != "*blingfire.WordTokenizer" {
+		t.Fatalf("WordTokenizer type = %q, want *blingfire.WordTokenizer", got)
+	}
+}
+
 func TestDefaultConfigFromEnvConfiguresTTSStreamPacer(t *testing.T) {
 	t.Setenv("RTP_AGENT_TTS_STREAM_PACER_ENABLED", "true")
 	t.Setenv("RTP_AGENT_TTS_STREAM_PACER_MIN_REMAINING_AUDIO_MS", "250")

@@ -327,6 +327,8 @@ type AppConfig struct {
 	TTSTokenizerLanguage                    string
 	TTSTokenizerMinSentenceLen              *int
 	TTSTokenizerStreamContextLen            *int
+	WordTokenizerProvider                   string
+	WordTokenizerLanguage                   string
 	TTSStreamPacerEnabled                   bool
 	TTSStreamPacerMinRemainingAudioMS       *int
 	TTSStreamPacerMaxTextLength             *int
@@ -597,6 +599,8 @@ func DefaultConfigFromEnv() AppConfig {
 		TTSTokenizerLanguage:                    os.Getenv("RTP_AGENT_TTS_TOKENIZER_LANGUAGE"),
 		TTSTokenizerMinSentenceLen:              getenvOptionalInt("RTP_AGENT_TTS_TOKENIZER_MIN_SENTENCE_LEN"),
 		TTSTokenizerStreamContextLen:            getenvOptionalInt("RTP_AGENT_TTS_TOKENIZER_STREAM_CONTEXT_LEN"),
+		WordTokenizerProvider:                   normalizedEnv("RTP_AGENT_WORD_TOKENIZER_PROVIDER"),
+		WordTokenizerLanguage:                   os.Getenv("RTP_AGENT_WORD_TOKENIZER_LANGUAGE"),
 		TTSStreamPacerEnabled:                   getenvBool("RTP_AGENT_TTS_STREAM_PACER_ENABLED"),
 		TTSStreamPacerMinRemainingAudioMS:       getenvOptionalInt("RTP_AGENT_TTS_STREAM_PACER_MIN_REMAINING_AUDIO_MS"),
 		TTSStreamPacerMaxTextLength:             getenvOptionalInt("RTP_AGENT_TTS_STREAM_PACER_MAX_TEXT_LENGTH"),
@@ -711,7 +715,11 @@ func NewApp(cfg AppConfig) (*App, error) {
 		return nil, err
 	}
 
-	session := agent.NewAgentSession(baseAgent, nil, agentSessionOptionsFromConfig(cfg))
+	sessionOptions, err := agentSessionOptionsFromConfig(cfg)
+	if err != nil {
+		return nil, err
+	}
+	session := agent.NewAgentSession(baseAgent, nil, sessionOptions)
 	if realtimeModel != nil {
 		session.Assistant = agent.NewMultimodalAgent(realtimeModel, session.ChatCtx)
 	}
@@ -2695,7 +2703,7 @@ func normalizeProvider(provider string) string {
 	return strings.ToLower(strings.TrimSpace(provider))
 }
 
-func agentSessionOptionsFromConfig(cfg AppConfig) agent.AgentSessionOptions {
+func agentSessionOptionsFromConfig(cfg AppConfig) (agent.AgentSessionOptions, error) {
 	opts := agent.AgentSessionOptions{}
 	if cfg.TTSStreamPacerEnabled {
 		pacer := coretts.SentenceStreamPacerOptions{}
@@ -2713,7 +2721,25 @@ func agentSessionOptionsFromConfig(cfg AppConfig) agent.AgentSessionOptions {
 			backgroundAudioSource(cfg.BackgroundAudioThinking),
 		)
 	}
-	return opts
+	wordTokenizer, err := wordTokenizerFromConfig(cfg)
+	if err != nil {
+		return opts, err
+	}
+	opts.WordTokenizer = wordTokenizer
+	return opts, nil
+}
+
+func wordTokenizerFromConfig(cfg AppConfig) (tokenize.WordTokenizer, error) {
+	provider := normalizeProvider(cfg.WordTokenizerProvider)
+	if provider == "" {
+		return nil, nil
+	}
+	switch provider {
+	case "blingfire":
+		return blingfire.NewWordTokenizer(cfg.WordTokenizerLanguage), nil
+	default:
+		return nil, fmt.Errorf("unsupported RTP_AGENT_WORD_TOKENIZER_PROVIDER %q", cfg.WordTokenizerProvider)
+	}
 }
 
 func backgroundAudioSource(value string) interface{} {
