@@ -15,7 +15,6 @@ import (
 )
 
 type PipelineAgent struct {
-	agent   *Agent
 	vad     vad.VAD
 	stt     stt.STT
 	LLM     llm.LLM

@@ -197,7 +197,7 @@ func validateSarvamLLMModel(model string) error {
 	if _, ok := sarvamLLMSupportedModels[model]; ok {
 		return nil
 	}
-	return fmt.Errorf("Unsupported Sarvam model %q. Supported models: sarvam-m, sarvam-30b, sarvam-30b-16k, sarvam-105b, sarvam-105b-32k", model)
+	return fmt.Errorf("unsupported Sarvam model %q; supported models: sarvam-m, sarvam-30b, sarvam-30b-16k, sarvam-105b, sarvam-105b-32k", model)
 }
 
 func filterSarvamLLMExtraBody(body map[string]any) map[string]any {

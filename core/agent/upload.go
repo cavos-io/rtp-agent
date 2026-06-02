@@ -45,7 +45,7 @@ func UploadSessionReport(
 
 	// Create JWT token
 	at := auth.NewAccessToken(apiKey, apiSecret).
-		AddGrant(&auth.VideoGrant{}).
+		SetVideoGrant(&auth.VideoGrant{}).
 		SetValidFor(6 * 3600 * time.Second)
 
 	// Add observability grants

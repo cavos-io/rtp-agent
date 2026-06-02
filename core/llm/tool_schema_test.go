@@ -114,12 +114,15 @@ func TestGenerateStrictJSONSchemaIncludesNullInPointerEnum(t *testing.T) {
 func TestGenerateStrictJSONSchemaSkipsUnexportedFields(t *testing.T) {
 	type request struct {
 		Query  string `json:"query"`
-		secret string `json:"secret"`
+		secret string
 	}
 
-	schema := GenerateStrictJSONSchema(reflect.TypeOf(request{}))
+	schema := GenerateStrictJSONSchema(reflect.TypeOf(request{Query: "public", secret: "hidden"}))
 
 	props := schema["properties"].(map[string]interface{})
+	if _, ok := props["query"]; !ok {
+		t.Fatalf("properties missing exported query field: %#v", props)
+	}
 	if _, ok := props["secret"]; ok {
 		t.Fatalf("properties contains unexported field: %#v", props)
 	}

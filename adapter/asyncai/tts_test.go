@@ -189,4 +189,7 @@ func TestAsyncAITTSEmptyStreamNextEOF(t *testing.T) {
 	if err != io.EOF {
 		t.Fatalf("Next err = %v, want EOF without websocket", err)
 	}
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close err = %v, want nil without websocket", err)
+	}
 }

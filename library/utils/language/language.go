@@ -2,6 +2,9 @@ package language
 
 import (
 	"strings"
+
+	"golang.org/x/text/cases"
+	textlanguage "golang.org/x/text/language"
 )
 
 var ISO639_3_To_1 = map[string]string{
@@ -83,7 +86,7 @@ func NormalizeLanguage(code string) string {
 		for _, part := range parts[1:] {
 			if len(part) == 4 {
 				// Script subtag
-				normalizedParts = append(normalizedParts, strings.Title(strings.ToLower(part)))
+				normalizedParts = append(normalizedParts, cases.Title(textlanguage.Und).String(strings.ToLower(part)))
 			} else {
 				// Region subtag
 				normalizedParts = append(normalizedParts, strings.ToUpper(part))
