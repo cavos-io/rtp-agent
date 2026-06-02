@@ -9,6 +9,7 @@ import (
 	"github.com/cavos-io/rtp-agent/core/audio/model"
 	"github.com/cavos-io/rtp-agent/core/llm"
 	"github.com/cavos-io/rtp-agent/core/tts"
+	"github.com/cavos-io/rtp-agent/library/telemetry"
 )
 
 type LLMGenerationData struct {
@@ -40,8 +41,10 @@ func PerformLLMInference(
 	}
 	chatOptions = append(chatOptions, llm.WithTools(llm.NewToolContext(toolItems).Flatten()))
 	chatOptions = append(chatOptions, options...)
+	ctx, span := telemetry.NewLLMSpan(ctx, llm.Model(l), llm.Provider(l))
 	stream, err := l.Chat(ctx, chatCtx, chatOptions...)
 	if err != nil {
+		span.End()
 		return nil, err
 	}
 
@@ -49,6 +52,7 @@ func PerformLLMInference(
 		defer close(data.TextCh)
 		defer close(data.FunctionCh)
 		defer stream.Close()
+		defer span.End()
 
 		startTime := time.Now()
 		for {

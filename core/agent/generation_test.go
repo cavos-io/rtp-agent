@@ -11,6 +11,10 @@ import (
 	"github.com/cavos-io/rtp-agent/core/audio/model"
 	"github.com/cavos-io/rtp-agent/core/llm"
 	"github.com/cavos-io/rtp-agent/core/tts"
+	"github.com/cavos-io/rtp-agent/library/telemetry"
+	"go.opentelemetry.io/otel/attribute"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
+	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 )
 
 func TestPerformLLMInferenceIgnoresNonFunctionToolCalls(t *testing.T) {
@@ -101,6 +105,46 @@ func TestPerformLLMInferenceFlattensToolsBeforeChat(t *testing.T) {
 	}
 	if gotTools[0].Name() != "alpha" || gotTools[1].Name() != "zebra" {
 		t.Fatalf("Chat tools = [%s, %s], want flattened alpha/zebra order", gotTools[0].Name(), gotTools[1].Name())
+	}
+}
+
+func TestPerformLLMInferenceRecordsLLMSpan(t *testing.T) {
+	recorder := tracetest.NewSpanRecorder()
+	provider := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(recorder))
+	oldTracer := telemetry.Tracer
+	telemetry.Tracer = provider.Tracer("test")
+	t.Cleanup(func() {
+		telemetry.Tracer = oldTracer
+		_ = provider.Shutdown(context.Background())
+	})
+
+	l := &fakeGenerationLLM{
+		model:    "test-model",
+		provider: "test-provider",
+		stream: &fakeGenerationLLMStream{
+			chunks: []*llm.ChatChunk{{Delta: &llm.ChoiceDelta{Content: "hello"}}},
+		},
+	}
+
+	data, err := PerformLLMInference(context.Background(), l, llm.NewChatContext(), nil)
+	if err != nil {
+		t.Fatalf("PerformLLMInference error = %v, want nil", err)
+	}
+	drainStrings(data.TextCh)
+
+	spans := recorder.Ended()
+	if len(spans) != 1 {
+		t.Fatalf("ended spans = %d, want 1", len(spans))
+	}
+	if spans[0].Name() != "llm_inference" {
+		t.Fatalf("span name = %q, want llm_inference", spans[0].Name())
+	}
+	attrs := spanAttributes(spans[0].Attributes())
+	if attrs[telemetry.AttrGenAIRequestModel] != "test-model" {
+		t.Fatalf("span model attr = %q, want test-model", attrs[telemetry.AttrGenAIRequestModel])
+	}
+	if attrs[telemetry.AttrGenAIProviderName] != "test-provider" {
+		t.Fatalf("span provider attr = %q, want test-provider", attrs[telemetry.AttrGenAIProviderName])
 	}
 }
 
@@ -346,6 +390,14 @@ func executeOneToolCall(t *testing.T, tool llm.Tool) ToolExecutionOutput {
 	return output
 }
 
+func spanAttributes(attrs []attribute.KeyValue) map[string]string {
+	values := make(map[string]string, len(attrs))
+	for _, attr := range attrs {
+		values[string(attr.Key)] = attr.Value.AsString()
+	}
+	return values
+}
+
 type fakeGenerationTool struct {
 	name   string
 	result string
@@ -386,6 +438,8 @@ type fakeGenerationLLM struct {
 	streams      []llm.LLMStream
 	calls        []llm.ChatOptions
 	chatContexts []*llm.ChatContext
+	model        string
+	provider     string
 }
 
 func (f *fakeGenerationLLM) Chat(_ context.Context, chatCtx *llm.ChatContext, opts ...llm.ChatOption) (llm.LLMStream, error) {
@@ -402,6 +456,10 @@ func (f *fakeGenerationLLM) Chat(_ context.Context, chatCtx *llm.ChatContext, op
 	}
 	return f.stream, nil
 }
+
+func (f *fakeGenerationLLM) Model() string { return f.model }
+
+func (f *fakeGenerationLLM) Provider() string { return f.provider }
 
 type fakeGenerationLLMStream struct {
 	chunks []*llm.ChatChunk
