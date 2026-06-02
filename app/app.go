@@ -17,6 +17,7 @@ import (
 	"github.com/cavos-io/rtp-agent/adapter/baseten"
 	"github.com/cavos-io/rtp-agent/adapter/cambai"
 	"github.com/cavos-io/rtp-agent/adapter/cartesia"
+	"github.com/cavos-io/rtp-agent/adapter/cerebras"
 	"github.com/cavos-io/rtp-agent/adapter/elevenlabs"
 	adaptergoogle "github.com/cavos-io/rtp-agent/adapter/google"
 	"github.com/cavos-io/rtp-agent/adapter/groq"
@@ -36,6 +37,7 @@ const (
 	providerBaseten    = "baseten"
 	providerCambai     = "cambai"
 	providerCartesia   = "cartesia"
+	providerCerebras   = "cerebras"
 	providerElevenLabs = "elevenlabs"
 	providerGoogle     = "google"
 	providerGroq       = "groq"
@@ -125,6 +127,7 @@ type AppConfig struct {
 	GoogleAPIKey     string
 	ElevenLabsAPIKey string
 	GroqAPIKey       string
+	CerebrasAPIKey   string
 
 	GoogleCredentialsFile string
 
@@ -219,6 +222,7 @@ func DefaultConfigFromEnv() AppConfig {
 		GoogleAPIKey:                    os.Getenv("GOOGLE_API_KEY"),
 		ElevenLabsAPIKey:                firstEnv("ELEVENLABS_API_KEY", "ELEVEN_API_KEY"),
 		GroqAPIKey:                      os.Getenv("GROQ_API_KEY"),
+		CerebrasAPIKey:                  os.Getenv("CEREBRAS_API_KEY"),
 		GoogleCredentialsFile:           firstEnv("RTP_AGENT_GOOGLE_CREDENTIALS_FILE", "GOOGLE_APPLICATION_CREDENTIALS"),
 	}
 }
@@ -295,6 +299,8 @@ func configureProviders(cfg AppConfig, a *agent.Agent) (llm.RealtimeModel, error
 		a.LLM = provider
 	case providerGroq:
 		a.LLM = groq.NewGroqLLM(cfg.GroqAPIKey, cfg.LLMModel)
+	case providerCerebras:
+		a.LLM = cerebras.NewCerebrasLLM(cfg.CerebrasAPIKey, cfg.LLMModel)
 	case providerAnthropic:
 		llmOpts := []anthropic.AnthropicOption{}
 		if cfg.LLMBaseURL != "" {

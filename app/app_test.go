@@ -363,6 +363,26 @@ func TestDefaultConfigFromEnvSelectsGroqProviders(t *testing.T) {
 	}
 }
 
+func TestDefaultConfigFromEnvSelectsCerebrasLLM(t *testing.T) {
+	t.Setenv("CEREBRAS_API_KEY", "test-cerebras-key")
+	t.Setenv("RTP_AGENT_LLM_PROVIDER", "cerebras")
+	t.Setenv("RTP_AGENT_LLM_MODEL", "llama3.1-test")
+
+	app, err := NewApp(DefaultConfigFromEnv())
+	if err != nil {
+		t.Fatalf("NewApp() error = %v", err)
+	}
+	if app.Session == nil || app.Session.LLM == nil {
+		t.Fatal("Session LLM is nil")
+	}
+	if got := llm.Provider(app.Session.LLM); got != "cerebras" {
+		t.Fatalf("LLM provider = %q, want cerebras", got)
+	}
+	if got := llm.Model(app.Session.LLM); got != "llama3.1-test" {
+		t.Fatalf("LLM model = %q, want llama3.1-test", got)
+	}
+}
+
 func TestDefaultConfigFromEnvSelectsLiveKitInferenceLLM(t *testing.T) {
 	t.Setenv("LIVEKIT_API_KEY", "test-livekit-key")
 	t.Setenv("LIVEKIT_API_SECRET", "test-livekit-secret")
