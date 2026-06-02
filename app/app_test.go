@@ -834,6 +834,36 @@ func TestDefaultConfigFromEnvSelectsRespeecherTTS(t *testing.T) {
 	}
 }
 
+func TestDefaultConfigFromEnvSelectsRimeTTS(t *testing.T) {
+	t.Setenv("RIME_API_KEY", "test-rime-key")
+	t.Setenv("RTP_AGENT_TTS_PROVIDER", "rime")
+	t.Setenv("RTP_AGENT_TTS_BASE_URL", "https://rime.example/v1/rime-tts")
+	t.Setenv("RTP_AGENT_TTS_WEBSOCKET_URL", "wss://rime.example")
+	t.Setenv("RTP_AGENT_TTS_MODEL", "mist")
+	t.Setenv("RTP_AGENT_TTS_VOICE", "cove")
+	t.Setenv("RTP_AGENT_TTS_LANGUAGE", "eng")
+	t.Setenv("RTP_AGENT_TTS_SAMPLE_RATE", "44100")
+	t.Setenv("RTP_AGENT_TTS_SPEED", "1.1")
+	t.Setenv("RTP_AGENT_TTS_DELIVERY_MODE", "bySentence")
+
+	app, err := NewApp(DefaultConfigFromEnv())
+	if err != nil {
+		t.Fatalf("NewApp() error = %v", err)
+	}
+	if app.Session == nil || app.Session.TTS == nil {
+		t.Fatal("Session TTS is nil")
+	}
+	if got := app.Session.TTS.Label(); got != "rime.TTS" {
+		t.Fatalf("TTS label = %q, want rime.TTS", got)
+	}
+	if got := app.Session.TTS.SampleRate(); got != 44100 {
+		t.Fatalf("TTS sample rate = %d, want 44100", got)
+	}
+	if caps := app.Session.TTS.Capabilities(); !caps.Streaming || !caps.AlignedTranscript {
+		t.Fatalf("TTS capabilities = %+v, want streaming with aligned transcript", caps)
+	}
+}
+
 func TestDefaultConfigFromEnvSelectsSLNGSpeechProviders(t *testing.T) {
 	t.Setenv("SLNG_API_KEY", "test-slng-key")
 	t.Setenv("RTP_AGENT_STT_PROVIDER", "slng")

@@ -39,6 +39,7 @@ import (
 	"github.com/cavos-io/rtp-agent/adapter/openai"
 	"github.com/cavos-io/rtp-agent/adapter/resemble"
 	"github.com/cavos-io/rtp-agent/adapter/respeecher"
+	"github.com/cavos-io/rtp-agent/adapter/rime"
 	"github.com/cavos-io/rtp-agent/adapter/slng"
 	"github.com/cavos-io/rtp-agent/core/agent"
 	"github.com/cavos-io/rtp-agent/core/llm"
@@ -77,6 +78,7 @@ const (
 	providerOpenAI     = "openai"
 	providerResemble   = "resemble"
 	providerRespeecher = "respeecher"
+	providerRime       = "rime"
 	providerSLNG       = "slng"
 	providerLiveKit    = "livekit"
 )
@@ -254,6 +256,7 @@ type AppConfig struct {
 	NeuphonicAPIKey   string
 	ResembleAPIKey    string
 	RespeecherAPIKey  string
+	RimeAPIKey        string
 	SLNGAPIKey        string
 
 	GoogleCredentialsFile string
@@ -440,6 +443,7 @@ func DefaultConfigFromEnv() AppConfig {
 		NeuphonicAPIKey:                         os.Getenv("NEUPHONIC_API_KEY"),
 		ResembleAPIKey:                          os.Getenv("RESEMBLE_API_KEY"),
 		RespeecherAPIKey:                        os.Getenv("RESPEECHER_API_KEY"),
+		RimeAPIKey:                              os.Getenv("RIME_API_KEY"),
 		SLNGAPIKey:                              os.Getenv("SLNG_API_KEY"),
 		GoogleCredentialsFile:                   firstEnv("RTP_AGENT_GOOGLE_CREDENTIALS_FILE", "GOOGLE_APPLICATION_CREDENTIALS"),
 	}
@@ -1584,6 +1588,30 @@ func configureProviders(cfg AppConfig, a *agent.Agent) (llm.RealtimeModel, error
 			ttsOpts = append(ttsOpts, respeecher.WithRespeecherTTSSamplingParams(cfg.TTSJSONConfig))
 		}
 		a.TTS = respeecher.NewRespeecherTTS(cfg.RespeecherAPIKey, "", ttsOpts...)
+	case providerRime:
+		ttsOpts := []rime.RimeTTSOption{}
+		if cfg.TTSBaseURL != "" {
+			ttsOpts = append(ttsOpts, rime.WithRimeTTSBaseURL(cfg.TTSBaseURL))
+		}
+		if cfg.TTSWebsocketURL != "" {
+			ttsOpts = append(ttsOpts, rime.WithRimeTTSBaseURL(cfg.TTSWebsocketURL), rime.WithRimeTTSWebsocket(true))
+		}
+		if cfg.TTSModel != "" {
+			ttsOpts = append(ttsOpts, rime.WithRimeTTSModel(cfg.TTSModel))
+		}
+		if cfg.TTSLanguage != "" {
+			ttsOpts = append(ttsOpts, rime.WithRimeTTSLang(cfg.TTSLanguage))
+		}
+		if cfg.TTSSampleRate != nil {
+			ttsOpts = append(ttsOpts, rime.WithRimeTTSSampleRate(*cfg.TTSSampleRate))
+		}
+		if cfg.TTSSpeed != 0 {
+			ttsOpts = append(ttsOpts, rime.WithRimeTTSTimeScaleFactor(cfg.TTSSpeed))
+		}
+		if cfg.TTSDeliveryMode != "" {
+			ttsOpts = append(ttsOpts, rime.WithRimeTTSSegment(cfg.TTSDeliveryMode))
+		}
+		a.TTS = rime.NewRimeTTS(cfg.RimeAPIKey, cfg.TTSVoice, ttsOpts...)
 	case providerSLNG:
 		ttsOpts := []slng.TTSOption{}
 		if cfg.TTSModel != "" {
