@@ -422,6 +422,7 @@ type AppConfig struct {
 	WorkflowWarmTransferSipCallTo         string
 	WorkflowWarmTransferSipTrunkID        string
 	WorkflowWarmTransferExtraInstructions string
+	WorkflowTaskGroupTasks                []string
 }
 
 type App struct {
@@ -698,6 +699,7 @@ func DefaultConfigFromEnv() AppConfig {
 		WorkflowWarmTransferSipCallTo:           os.Getenv("RTP_AGENT_WORKFLOW_WARM_TRANSFER_SIP_CALL_TO"),
 		WorkflowWarmTransferSipTrunkID:          os.Getenv("RTP_AGENT_WORKFLOW_WARM_TRANSFER_SIP_TRUNK_ID"),
 		WorkflowWarmTransferExtraInstructions:   os.Getenv("RTP_AGENT_WORKFLOW_WARM_TRANSFER_EXTRA_INSTRUCTIONS"),
+		WorkflowTaskGroupTasks:                  splitEnvList("RTP_AGENT_WORKFLOW_TASK_GROUP_TASKS"),
 	}
 }
 
@@ -805,11 +807,96 @@ func workflowAgentFromConfig(cfg AppConfig, baseAgent *agent.Agent) (agent.Agent
 			baseAgent.ChatCtx,
 			cfg.WorkflowWarmTransferExtraInstructions,
 		)
+	case "task_group", "task-group":
+		selectedGroup, err := workflowTaskGroupFromConfig(cfg, baseAgent)
+		if err != nil {
+			return nil, err
+		}
+		selected = selectedGroup
 	default:
 		return nil, fmt.Errorf("unsupported RTP_AGENT_WORKFLOW_TASK %q", cfg.WorkflowTask)
 	}
 	copyAgentRuntime(selected.GetAgent(), baseAgent)
 	return selected, nil
+}
+
+func workflowTaskGroupFromConfig(cfg AppConfig, baseAgent *agent.Agent) (*workflows.TaskGroup, error) {
+	if len(cfg.WorkflowTaskGroupTasks) == 0 {
+		return nil, fmt.Errorf("RTP_AGENT_WORKFLOW_TASK_GROUP_TASKS is required for task_group workflow")
+	}
+	group := workflows.NewTaskGroup(true, false)
+	for _, taskName := range cfg.WorkflowTaskGroupTasks {
+		info, err := workflowTaskFactoryFromName(cfg, baseAgent, taskName)
+		if err != nil {
+			return nil, err
+		}
+		group.Add(info.ID, info.Description, info.TaskFactory)
+	}
+	return group, nil
+}
+
+func workflowTaskFactoryFromName(cfg AppConfig, baseAgent *agent.Agent, taskName string) (workflows.FactoryInfo, error) {
+	task := normalizeProvider(taskName)
+	factory := func(taskFactory func() agent.AgentInterface) func() agent.AgentInterface {
+		return func() agent.AgentInterface {
+			selected := taskFactory()
+			copyAgentRuntime(selected.GetAgent(), baseAgent)
+			return selected
+		}
+	}
+	switch task {
+	case "address", "get_address":
+		return workflows.FactoryInfo{
+			ID:          "address",
+			Description: "Collect and confirm the user's mailing address.",
+			TaskFactory: factory(func() agent.AgentInterface {
+				return workflows.NewGetAddressTask(cfg.WorkflowRequireConfirmation)
+			}),
+		}, nil
+	case "email", "get_email":
+		return workflows.FactoryInfo{
+			ID:          "email",
+			Description: "Collect and confirm the user's email address.",
+			TaskFactory: factory(func() agent.AgentInterface {
+				return workflows.NewGetEmailTask(cfg.WorkflowRequireConfirmation)
+			}),
+		}, nil
+	case "dtmf", "get_dtmf":
+		numDigits := 1
+		if cfg.WorkflowDtmfNumDigits != nil {
+			numDigits = *cfg.WorkflowDtmfNumDigits
+		}
+		askConfirmation := cfg.WorkflowRequireConfirmation
+		if cfg.WorkflowDtmfAskConfirmation != nil {
+			askConfirmation = *cfg.WorkflowDtmfAskConfirmation
+		}
+		return workflows.FactoryInfo{
+			ID:          "dtmf",
+			Description: "Collect DTMF inputs from the user.",
+			TaskFactory: factory(func() agent.AgentInterface {
+				return workflows.NewGetDtmfTask(numDigits, askConfirmation)
+			}),
+		}, nil
+	case "warm_transfer", "warm-transfer":
+		sipCallTo := strings.TrimSpace(cfg.WorkflowWarmTransferSipCallTo)
+		if sipCallTo == "" {
+			return workflows.FactoryInfo{}, fmt.Errorf("RTP_AGENT_WORKFLOW_WARM_TRANSFER_SIP_CALL_TO is required for warm_transfer task group entry")
+		}
+		return workflows.FactoryInfo{
+			ID:          "warm_transfer",
+			Description: "Transfer the caller to a human agent by SIP.",
+			TaskFactory: factory(func() agent.AgentInterface {
+				return workflows.NewWarmTransferTask(
+					sipCallTo,
+					strings.TrimSpace(cfg.WorkflowWarmTransferSipTrunkID),
+					baseAgent.ChatCtx,
+					cfg.WorkflowWarmTransferExtraInstructions,
+				)
+			}),
+		}, nil
+	default:
+		return workflows.FactoryInfo{}, fmt.Errorf("unsupported RTP_AGENT_WORKFLOW_TASK_GROUP_TASKS entry %q", taskName)
+	}
 }
 
 func copyAgentRuntime(dst *agent.Agent, src *agent.Agent) {

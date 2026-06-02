@@ -1705,6 +1705,33 @@ func TestDefaultConfigFromEnvSelectsWarmTransferWorkflowAgent(t *testing.T) {
 	}
 }
 
+func TestDefaultConfigFromEnvSelectsTaskGroupWorkflowAgent(t *testing.T) {
+	t.Setenv("RTP_AGENT_WORKFLOW_TASK", "task_group")
+	t.Setenv("RTP_AGENT_WORKFLOW_TASK_GROUP_TASKS", "address,email,dtmf")
+	t.Setenv("RTP_AGENT_WORKFLOW_DTMF_NUM_DIGITS", "4")
+
+	app, err := NewApp(DefaultConfigFromEnv())
+	if err != nil {
+		t.Fatalf("NewApp() error = %v", err)
+	}
+	group, ok := app.Session.Agent.(*workflows.TaskGroup)
+	if !ok {
+		t.Fatalf("Session.Agent = %T, want *workflows.TaskGroup", app.Session.Agent)
+	}
+	if app.Agent != group.GetAgent() {
+		t.Fatal("App.Agent does not point at selected task group agent")
+	}
+	if len(group.RegisteredTasks) != 3 {
+		t.Fatalf("RegisteredTasks = %d, want 3", len(group.RegisteredTasks))
+	}
+	wantIDs := []string{"address", "email", "dtmf"}
+	for i, want := range wantIDs {
+		if got := group.RegisteredTasks[i].ID; got != want {
+			t.Fatalf("RegisteredTasks[%d].ID = %q, want %q", i, got, want)
+		}
+	}
+}
+
 func TestDefaultConfigFromEnvEnablesIVRDetection(t *testing.T) {
 	t.Setenv("RTP_AGENT_IVR_DETECTION", "true")
 	t.Setenv("RTP_AGENT_IVR_SILENCE_DURATION_SECONDS", "0.25")
