@@ -25,6 +25,7 @@ import (
 	"github.com/cavos-io/rtp-agent/library/logger"
 	mathutil "github.com/cavos-io/rtp-agent/library/math"
 	"github.com/cavos-io/rtp-agent/library/telemetry"
+	"github.com/cavos-io/rtp-agent/library/utils"
 	"github.com/go-jose/go-jose/v3"
 	"github.com/go-jose/go-jose/v3/jwt"
 	"github.com/gorilla/websocket"
@@ -695,7 +696,7 @@ func mergeWorkerOptions(current WorkerOptions, next WorkerOptions) WorkerOptions
 
 func resolveWorkerOptions(opts WorkerOptions) WorkerOptions {
 	if !opts.DevMode {
-		opts.DevMode = liveKitDevModeEnabled(os.Getenv("LIVEKIT_DEV_MODE"))
+		opts.DevMode = utils.IsDevMode()
 	}
 	if opts.WorkerType == "" {
 		opts.WorkerType = WorkerTypeRoom
@@ -897,15 +898,6 @@ func (s *AgentServer) configurePrometheusMultiprocDir() error {
 		}
 	}
 	return nil
-}
-
-func liveKitDevModeEnabled(value string) bool {
-	switch strings.ToLower(strings.TrimSpace(value)) {
-	case "1", "true", "t", "yes", "y", "on":
-		return true
-	default:
-		return false
-	}
 }
 
 func validWorkerLogLevel(logLevel string) bool {
