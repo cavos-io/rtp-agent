@@ -163,6 +163,7 @@ type AppConfig struct {
 	LLMBaseURL                              string
 	LLMExtraHeaders                         map[string]string
 	LLMExtraBody                            map[string]any
+	LLMFallbackProviders                    []string
 	STTProvider                             string
 	STTModel                                string
 	STTLanguage                             string
@@ -456,6 +457,7 @@ func DefaultConfigFromEnv() AppConfig {
 		LLMBaseURL:                              os.Getenv("RTP_AGENT_LLM_BASE_URL"),
 		LLMExtraHeaders:                         splitEnvStringMap("RTP_AGENT_LLM_EXTRA_HEADERS"),
 		LLMExtraBody:                            splitEnvMap("RTP_AGENT_LLM_JSON_CONFIG"),
+		LLMFallbackProviders:                    splitEnvList("RTP_AGENT_LLM_FALLBACK_PROVIDERS"),
 		STTProvider:                             normalizedEnv("RTP_AGENT_STT_PROVIDER"),
 		STTModel:                                os.Getenv("RTP_AGENT_STT_MODEL"),
 		STTLanguage:                             os.Getenv("RTP_AGENT_STT_LANGUAGE"),
@@ -1168,6 +1170,43 @@ func configureSTTAdapters(cfg AppConfig, a *agent.Agent) error {
 	return nil
 }
 
+func configureLLMFallbacks(cfg AppConfig, a *agent.Agent) error {
+	if len(cfg.LLMFallbackProviders) == 0 {
+		return nil
+	}
+	if a.LLM == nil {
+		return fmt.Errorf("RTP_AGENT_LLM_FALLBACK_PROVIDERS requires RTP_AGENT_LLM_PROVIDER")
+	}
+	llms := make([]llm.LLM, 0, len(cfg.LLMFallbackProviders)+1)
+	llms = append(llms, a.LLM)
+	for _, provider := range cfg.LLMFallbackProviders {
+		fallback, err := fallbackLLMFromProvider(cfg, provider)
+		if err != nil {
+			return err
+		}
+		llms = append(llms, fallback)
+	}
+	a.LLM = llm.NewFallbackAdapter(llms)
+	return nil
+}
+
+func fallbackLLMFromProvider(cfg AppConfig, provider string) (llm.LLM, error) {
+	switch normalizeProvider(provider) {
+	case providerMinimal:
+		return minimal.NewMinimalLLM(cfg.MinimalAPIKey, cfg.LLMModel), nil
+	case providerOpenAI:
+		return openai.NewOpenAILLM(cfg.OpenAIAPIKey, cfg.LLMModel)
+	case providerGroq:
+		return groq.NewGroqLLM(cfg.GroqAPIKey, cfg.LLMModel), nil
+	case providerXAI:
+		return xai.NewXaiLLM(cfg.XAIAPIKey, cfg.LLMModel), nil
+	case providerLiveKit:
+		return openai.NewLiveKitInferenceLLM(cfg.LLMModel, cfg.LiveKitInferenceAPIKey, cfg.LiveKitInferenceAPISecret)
+	default:
+		return nil, fmt.Errorf("unsupported RTP_AGENT_LLM_FALLBACK_PROVIDERS entry %q", provider)
+	}
+}
+
 func configureProviders(cfg AppConfig, a *agent.Agent) (llm.RealtimeModel, error) {
 	switch normalizeProvider(cfg.LLMProvider) {
 	case "":
@@ -1273,6 +1312,9 @@ func configureProviders(cfg AppConfig, a *agent.Agent) (llm.RealtimeModel, error
 		a.LLM = provider
 	default:
 		return nil, fmt.Errorf("unsupported RTP_AGENT_LLM_PROVIDER %q", cfg.LLMProvider)
+	}
+	if err := configureLLMFallbacks(cfg, a); err != nil {
+		return nil, err
 	}
 
 	switch normalizeProvider(cfg.STTProvider) {

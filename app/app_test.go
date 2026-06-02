@@ -1770,6 +1770,20 @@ func TestDefaultConfigFromEnvConfiguresEvaluationJudges(t *testing.T) {
 	}
 }
 
+func TestDefaultConfigFromEnvWrapsLLMFallbackProviders(t *testing.T) {
+	t.Setenv("RTP_AGENT_LLM_PROVIDER", "minimal")
+	t.Setenv("RTP_AGENT_LLM_FALLBACK_PROVIDERS", "openai")
+	t.Setenv("OPENAI_API_KEY", "test-openai-key")
+
+	app, err := NewApp(DefaultConfigFromEnv())
+	if err != nil {
+		t.Fatalf("NewApp() error = %v", err)
+	}
+	if got := llm.Label(app.Agent.LLM); got != "FallbackAdapter(minimal.MinimalLLM)" {
+		t.Fatalf("LLM label = %q, want fallback adapter around primary minimal LLM", got)
+	}
+}
+
 func TestEvaluateSessionReturnsEvaluationSummary(t *testing.T) {
 	baseAgent := agent.NewAgent("test")
 	session := agent.NewAgentSession(baseAgent, nil, agent.AgentSessionOptions{})
