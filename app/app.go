@@ -29,6 +29,7 @@ import (
 	adaptergoogle "github.com/cavos-io/rtp-agent/adapter/google"
 	"github.com/cavos-io/rtp-agent/adapter/gradium"
 	"github.com/cavos-io/rtp-agent/adapter/groq"
+	"github.com/cavos-io/rtp-agent/adapter/hume"
 	"github.com/cavos-io/rtp-agent/adapter/inworld"
 	"github.com/cavos-io/rtp-agent/adapter/openai"
 	"github.com/cavos-io/rtp-agent/core/agent"
@@ -58,6 +59,7 @@ const (
 	providerGoogle     = "google"
 	providerGradium    = "gradium"
 	providerGroq       = "groq"
+	providerHume       = "hume"
 	providerInworld    = "inworld"
 	providerOpenAI     = "openai"
 	providerLiveKit    = "livekit"
@@ -162,6 +164,7 @@ type AppConfig struct {
 	TTSModel                                string
 	TTSVoice                                string
 	TTSVoiceID                              string
+	TTSVoiceProvider                        string
 	TTSLanguage                             string
 	TTSEncoding                             string
 	TTSSampleRate                           *int
@@ -190,12 +193,16 @@ type AppConfig struct {
 	TTSJSONConfig                           map[string]any
 	TTSBitRate                              *int
 	TTSSpeakingRate                         *float64
+	TTSTrailingSilence                      *float64
+	TTSInstantMode                          *bool
 	TTSTimestampType                        string
 	TTSTextNormalization                    *bool
 	TTSDeliveryMode                         string
 	TTSTimestampTransportStrategy           string
 	TTSBufferCharThreshold                  *int
 	TTSMaxBufferDelayMS                     *int
+	TTSContextGenerationID                  string
+	TTSContextUtterances                    []hume.HumeTTSUtterance
 	RealtimeProvider                        string
 	RealtimeModel                           string
 
@@ -215,6 +222,7 @@ type AppConfig struct {
 	GladiaAPIKey      string
 	GnaniAPIKey       string
 	GradiumAPIKey     string
+	HumeAPIKey        string
 	InworldAPIKey     string
 
 	GoogleCredentialsFile string
@@ -328,6 +336,7 @@ func DefaultConfigFromEnv() AppConfig {
 		TTSModel:                                os.Getenv("RTP_AGENT_TTS_MODEL"),
 		TTSVoice:                                os.Getenv("RTP_AGENT_TTS_VOICE"),
 		TTSVoiceID:                              os.Getenv("RTP_AGENT_TTS_VOICE_ID"),
+		TTSVoiceProvider:                        os.Getenv("RTP_AGENT_TTS_VOICE_PROVIDER"),
 		TTSLanguage:                             os.Getenv("RTP_AGENT_TTS_LANGUAGE"),
 		TTSEncoding:                             os.Getenv("RTP_AGENT_TTS_ENCODING"),
 		TTSSampleRate:                           getenvOptionalInt("RTP_AGENT_TTS_SAMPLE_RATE"),
@@ -356,12 +365,16 @@ func DefaultConfigFromEnv() AppConfig {
 		TTSJSONConfig:                           splitEnvMap("RTP_AGENT_TTS_JSON_CONFIG"),
 		TTSBitRate:                              getenvOptionalInt("RTP_AGENT_TTS_BIT_RATE"),
 		TTSSpeakingRate:                         getenvOptionalFloat("RTP_AGENT_TTS_SPEAKING_RATE"),
+		TTSTrailingSilence:                      getenvOptionalFloat("RTP_AGENT_TTS_TRAILING_SILENCE"),
+		TTSInstantMode:                          getenvOptionalBool("RTP_AGENT_TTS_INSTANT_MODE"),
 		TTSTimestampType:                        os.Getenv("RTP_AGENT_TTS_TIMESTAMP_TYPE"),
 		TTSTextNormalization:                    getenvOptionalBool("RTP_AGENT_TTS_TEXT_NORMALIZATION"),
 		TTSDeliveryMode:                         os.Getenv("RTP_AGENT_TTS_DELIVERY_MODE"),
 		TTSTimestampTransportStrategy:           os.Getenv("RTP_AGENT_TTS_TIMESTAMP_TRANSPORT_STRATEGY"),
 		TTSBufferCharThreshold:                  getenvOptionalInt("RTP_AGENT_TTS_BUFFER_CHAR_THRESHOLD"),
 		TTSMaxBufferDelayMS:                     getenvOptionalInt("RTP_AGENT_TTS_MAX_BUFFER_DELAY_MS"),
+		TTSContextGenerationID:                  os.Getenv("RTP_AGENT_TTS_CONTEXT_GENERATION_ID"),
+		TTSContextUtterances:                    splitEnvHumeTTSUtterances("RTP_AGENT_TTS_CONTEXT_UTTERANCES"),
 		RealtimeProvider:                        normalizedEnv("RTP_AGENT_REALTIME_PROVIDER"),
 		RealtimeModel:                           os.Getenv("RTP_AGENT_REALTIME_MODEL"),
 		OpenAIAPIKey:                            os.Getenv("OPENAI_API_KEY"),
@@ -380,6 +393,7 @@ func DefaultConfigFromEnv() AppConfig {
 		GladiaAPIKey:                            os.Getenv("GLADIA_API_KEY"),
 		GnaniAPIKey:                             os.Getenv("GNANI_API_KEY"),
 		GradiumAPIKey:                           os.Getenv("GRADIUM_API_KEY"),
+		HumeAPIKey:                              os.Getenv("HUME_API_KEY"),
 		InworldAPIKey:                           os.Getenv("INWORLD_API_KEY"),
 		GoogleCredentialsFile:                   firstEnv("RTP_AGENT_GOOGLE_CREDENTIALS_FILE", "GOOGLE_APPLICATION_CREDENTIALS"),
 	}
@@ -459,6 +473,8 @@ func configureProviders(cfg AppConfig, a *agent.Agent) (llm.RealtimeModel, error
 		a.LLM = gradium.NewGradiumLLM(cfg.GradiumAPIKey, cfg.LLMModel)
 	case providerGroq:
 		a.LLM = groq.NewGroqLLM(cfg.GroqAPIKey, cfg.LLMModel)
+	case providerHume:
+		a.LLM = hume.NewHumeLLM(cfg.HumeAPIKey, cfg.LLMModel)
 	case providerInworld:
 		a.LLM = inworld.NewInworldLLM(cfg.InworldAPIKey, cfg.LLMModel)
 	case providerCerebras:
@@ -1220,6 +1236,40 @@ func configureProviders(cfg AppConfig, a *agent.Agent) (llm.RealtimeModel, error
 			ttsOpts = append(ttsOpts, gradium.WithGradiumTTSJSONConfig(cfg.TTSJSONConfig))
 		}
 		a.TTS = gradium.NewGradiumTTS(cfg.GradiumAPIKey, cfg.TTSVoice, ttsOpts...)
+	case providerHume:
+		ttsOpts := []hume.HumeTTSOption{}
+		if cfg.TTSBaseURL != "" {
+			ttsOpts = append(ttsOpts, hume.WithHumeTTSBaseURL(cfg.TTSBaseURL))
+		}
+		if cfg.TTSModel != "" {
+			ttsOpts = append(ttsOpts, hume.WithHumeTTSModelVersion(cfg.TTSModel))
+		}
+		if cfg.TTSVoiceID != "" {
+			ttsOpts = append(ttsOpts, hume.WithHumeTTSVoiceID(cfg.TTSVoiceID, cfg.TTSVoiceProvider))
+		} else if cfg.TTSVoice != "" {
+			ttsOpts = append(ttsOpts, hume.WithHumeTTSVoiceName(cfg.TTSVoice, cfg.TTSVoiceProvider))
+		}
+		if cfg.TTSInstructions != "" {
+			ttsOpts = append(ttsOpts, hume.WithHumeTTSDescription(cfg.TTSInstructions))
+		}
+		if cfg.TTSSpeed != 0 {
+			ttsOpts = append(ttsOpts, hume.WithHumeTTSSpeed(cfg.TTSSpeed))
+		}
+		if cfg.TTSTrailingSilence != nil {
+			ttsOpts = append(ttsOpts, hume.WithHumeTTSTrailingSilence(*cfg.TTSTrailingSilence))
+		}
+		if cfg.TTSInstantMode != nil {
+			ttsOpts = append(ttsOpts, hume.WithHumeTTSInstantMode(*cfg.TTSInstantMode))
+		}
+		if cfg.TTSResponseFormat != "" {
+			ttsOpts = append(ttsOpts, hume.WithHumeTTSAudioFormat(cfg.TTSResponseFormat))
+		}
+		if cfg.TTSContextGenerationID != "" {
+			ttsOpts = append(ttsOpts, hume.WithHumeTTSContextGenerationID(cfg.TTSContextGenerationID))
+		} else if len(cfg.TTSContextUtterances) > 0 {
+			ttsOpts = append(ttsOpts, hume.WithHumeTTSContextUtterances(cfg.TTSContextUtterances))
+		}
+		a.TTS = hume.NewHumeTTS(cfg.HumeAPIKey, "", ttsOpts...)
 	case providerInworld:
 		ttsOpts := []inworld.InworldTTSOption{}
 		if cfg.TTSBaseURL != "" {
@@ -1520,6 +1570,18 @@ func splitEnvFloatList(name string) []float64 {
 		}
 	}
 	return values
+}
+
+func splitEnvHumeTTSUtterances(name string) []hume.HumeTTSUtterance {
+	values := splitEnvList(name)
+	if len(values) == 0 {
+		return nil
+	}
+	utterances := make([]hume.HumeTTSUtterance, 0, len(values))
+	for _, value := range values {
+		utterances = append(utterances, hume.HumeTTSUtterance{Text: value})
+	}
+	return utterances
 }
 
 func splitEnvDeepgramKeywords(name string) []deepgram.DeepgramKeyword {

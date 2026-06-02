@@ -576,6 +576,44 @@ func TestDefaultConfigFromEnvSelectsInworldProviders(t *testing.T) {
 	}
 }
 
+func TestDefaultConfigFromEnvSelectsHumeProviders(t *testing.T) {
+	t.Setenv("HUME_API_KEY", "test-hume-key")
+	t.Setenv("RTP_AGENT_LLM_PROVIDER", "hume")
+	t.Setenv("RTP_AGENT_LLM_MODEL", "hume-evi-test")
+	t.Setenv("RTP_AGENT_TTS_PROVIDER", "hume")
+	t.Setenv("RTP_AGENT_TTS_BASE_URL", "https://hume.example")
+	t.Setenv("RTP_AGENT_TTS_MODEL", "2")
+	t.Setenv("RTP_AGENT_TTS_VOICE", "Ava")
+	t.Setenv("RTP_AGENT_TTS_VOICE_ID", "voice-id-test")
+	t.Setenv("RTP_AGENT_TTS_VOICE_PROVIDER", "HUME_AI")
+	t.Setenv("RTP_AGENT_TTS_INSTRUCTIONS", "warm and calm")
+	t.Setenv("RTP_AGENT_TTS_SPEED", "1.1")
+	t.Setenv("RTP_AGENT_TTS_TRAILING_SILENCE", "0.25")
+	t.Setenv("RTP_AGENT_TTS_INSTANT_MODE", "false")
+	t.Setenv("RTP_AGENT_TTS_RESPONSE_FORMAT", "wav")
+	t.Setenv("RTP_AGENT_TTS_CONTEXT_UTTERANCES", "hello there,how are you")
+
+	app, err := NewApp(DefaultConfigFromEnv())
+	if err != nil {
+		t.Fatalf("NewApp() error = %v", err)
+	}
+	if app.Session == nil {
+		t.Fatal("Session is nil")
+	}
+	if app.Session.LLM == nil {
+		t.Fatal("Session LLM is nil")
+	}
+	if got := app.Session.TTS.Label(); got != "hume.TTS" {
+		t.Fatalf("TTS label = %q, want hume.TTS", got)
+	}
+	if got := app.Session.TTS.SampleRate(); got != 48000 {
+		t.Fatalf("TTS sample rate = %d, want 48000", got)
+	}
+	if caps := app.Session.TTS.Capabilities(); caps.Streaming || caps.AlignedTranscript {
+		t.Fatalf("TTS capabilities = %+v, want non-streaming without aligned transcript", caps)
+	}
+}
+
 func TestDefaultConfigFromEnvSelectsAWSProviders(t *testing.T) {
 	t.Setenv("AWS_REGION", "us-west-2")
 	t.Setenv("RTP_AGENT_LLM_PROVIDER", "aws")
