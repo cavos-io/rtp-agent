@@ -157,12 +157,29 @@ type ToolExecutionOutput struct {
 	RawError   error
 }
 
+type ToolExecutionOptions struct {
+	Session *AgentSession
+}
+
+type ToolExecutionOption func(*ToolExecutionOptions)
+
+func WithToolExecutionSession(session *AgentSession) ToolExecutionOption {
+	return func(opts *ToolExecutionOptions) {
+		opts.Session = session
+	}
+}
+
 func PerformToolExecutions(
 	ctx context.Context,
 	functionCh <-chan *llm.FunctionToolCall,
 	toolCtx *llm.ToolContext,
+	opts ...ToolExecutionOption,
 ) <-chan ToolExecutionOutput {
 	outCh := make(chan ToolExecutionOutput, 10)
+	var options ToolExecutionOptions
+	for _, opt := range opts {
+		opt(&options)
+	}
 
 	go func() {
 		defer close(outCh)
@@ -172,7 +189,17 @@ func PerformToolExecutions(
 			wg.Add(1)
 			go func(fc *llm.FunctionToolCall) {
 				defer wg.Done()
-				result := llm.ExecuteFunctionCall(ctx, fc, toolCtx)
+				execCtx := ctx
+				if options.Session != nil {
+					functionCall := llm.FunctionCall{
+						CallID:    fc.CallID,
+						Name:      fc.Name,
+						Arguments: fc.Arguments,
+						Extra:     fc.Extra,
+					}
+					execCtx = WithRunContext(execCtx, NewRunContext(options.Session, nil, &functionCall))
+				}
+				result := llm.ExecuteFunctionCall(execCtx, fc, toolCtx)
 				outCh <- ToolExecutionOutput{
 					FncCall:    result.FncCall,
 					FncCallOut: result.FncCallOut,

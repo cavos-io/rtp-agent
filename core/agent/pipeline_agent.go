@@ -299,7 +299,7 @@ func (va *PipelineAgent) generateReplyWithOptions(opts pipelineReplyOptions) {
 			session.UpdateAgentState(AgentStateThinking)
 		}
 
-		toolOutCh := PerformToolExecutions(ctx, genData.FunctionCh, toolCtx)
+		toolOutCh := PerformToolExecutions(ctx, genData.FunctionCh, toolCtx, WithToolExecutionSession(session))
 
 		// Wait for tool executions to complete and collect results
 		var executedTools bool
