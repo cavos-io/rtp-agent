@@ -7,6 +7,7 @@ import (
 
 	"github.com/cavos-io/rtp-agent/core/agent"
 	"github.com/cavos-io/rtp-agent/core/llm"
+	"github.com/livekit/protocol/livekit"
 )
 
 type Shutter interface {
@@ -45,6 +46,11 @@ type agentSessionShutter struct {
 	session *agent.AgentSession
 }
 
+type jobRoomDeleter interface {
+	RoomInfo() *livekit.Room
+	DeleteRoom(context.Context, string) (*livekit.DeleteRoomResponse, error)
+}
+
 func (s *agentSessionShutter) Shutdown(reason string) {
 	if s.session != nil {
 		s.session.Shutdown()
@@ -52,6 +58,25 @@ func (s *agentSessionShutter) Shutdown(reason string) {
 }
 
 func (s *agentSessionShutter) DeleteRoom(ctx context.Context) error {
+	if s.session == nil {
+		return nil
+	}
+	jobCtx, err := s.session.JobContext()
+	if err != nil {
+		return err
+	}
+	deleter, ok := jobCtx.(jobRoomDeleter)
+	if !ok {
+		return fmt.Errorf("job context does not support room deletion")
+	}
+	roomName := ""
+	if room := deleter.RoomInfo(); room != nil {
+		roomName = room.GetName()
+	}
+	_, err = deleter.DeleteRoom(ctx, roomName)
+	if err != nil {
+		return err
+	}
 	return nil
 }
 
