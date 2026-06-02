@@ -207,6 +207,7 @@ type JobContext struct {
 	process                *JobProcess
 	primarySession         *agent.AgentSession
 	sessionDirectory       string
+	logContextFields       map[string]any
 	shutdownCallbacks      []func(string)
 	shutdownOnce           sync.Once
 	finishOnce             sync.Once
@@ -241,6 +242,10 @@ func NewJobContext(job *livekit.Job, url string, apiKey string, apiSecret string
 		Report:    report,
 		Tagger:    tagger,
 		process:   NewJobProcess(JobExecutorTypeThread, nil, ""),
+		logContextFields: map[string]any{
+			"job_id": report.JobID,
+			"room":   report.Room,
+		},
 	}
 }
 
@@ -291,6 +296,20 @@ func (c *JobContext) SetSessionDirectory(path string) {
 
 func (c *JobContext) SessionDirectory() string {
 	return c.sessionDirectory
+}
+
+func (c *JobContext) LogContextFields() map[string]any {
+	if c.logContextFields == nil {
+		c.logContextFields = make(map[string]any)
+	}
+	return c.logContextFields
+}
+
+func (c *JobContext) SetLogContextFields(fields map[string]any) {
+	c.logContextFields = fields
+	if c.logContextFields == nil {
+		c.logContextFields = make(map[string]any)
+	}
 }
 
 func (c *JobContext) Proc() *JobProcess {

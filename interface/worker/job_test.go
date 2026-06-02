@@ -213,6 +213,24 @@ func TestJobContextSessionDirectoryCanBeConfigured(t *testing.T) {
 	}
 }
 
+func TestJobContextLogContextFieldsAreMutableAndReplaceable(t *testing.T) {
+	ctx := NewJobContext(&livekit.Job{Id: "job_log_fields"}, "", "", "")
+
+	ctx.LogContextFields()["trace_id"] = "trace-a"
+	if got := ctx.LogContextFields()["trace_id"]; got != "trace-a" {
+		t.Fatalf("LogContextFields()[trace_id] = %#v, want trace-a", got)
+	}
+
+	replacement := map[string]any{"request_id": "req-a"}
+	ctx.SetLogContextFields(replacement)
+	if got := ctx.LogContextFields()["request_id"]; got != "req-a" {
+		t.Fatalf("LogContextFields()[request_id] = %#v, want req-a", got)
+	}
+	if _, ok := ctx.LogContextFields()["trace_id"]; ok {
+		t.Fatal("SetLogContextFields did not replace previous fields")
+	}
+}
+
 func TestJobContextAvatarStartInfoExposesLiveKitConnection(t *testing.T) {
 	ctx := NewJobContext(&livekit.Job{Id: "job_avatar"}, "wss://livekit.example", "key", "secret")
 	ctx.token = "room-token"
