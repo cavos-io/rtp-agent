@@ -206,6 +206,7 @@ type JobContext struct {
 	WorkerID               string
 	process                *JobProcess
 	primarySession         *agent.AgentSession
+	sessionDirectory       string
 	shutdownCallbacks      []func(string)
 	shutdownOnce           sync.Once
 	finishOnce             sync.Once
@@ -282,6 +283,14 @@ func (c *JobContext) JobID() string {
 
 func (c *JobContext) IsFakeJob() bool {
 	return c.fakeJob
+}
+
+func (c *JobContext) SetSessionDirectory(path string) {
+	c.sessionDirectory = path
+}
+
+func (c *JobContext) SessionDirectory() string {
+	return c.sessionDirectory
 }
 
 func (c *JobContext) Proc() *JobProcess {

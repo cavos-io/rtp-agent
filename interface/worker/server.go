@@ -126,6 +126,7 @@ type LocalJobOptions struct {
 	Token             string
 	RecordingOptions  agent.RecordingOptions
 	SessionReportPath string
+	SessionDirectory  string
 }
 
 type WorkerOptions struct {
@@ -1979,6 +1980,9 @@ func (s *AgentServer) ExecuteLocalJobWithOptions(ctx context.Context, roomName s
 	if options.SessionReportPath != "" {
 		return saveSessionReport(options.SessionReportPath, jobCtx.Report)
 	}
+	if jobCtx.SessionDirectory() != "" {
+		return saveSessionReport(filepath.Join(jobCtx.SessionDirectory(), "session_report.json"), jobCtx.Report)
+	}
 	return nil
 }
 
@@ -2159,6 +2163,7 @@ func newLocalJobContextWithOptions(roomName string, participantIdentity string, 
 	jobCtx.AcceptArguments = JobAcceptArguments{Identity: participantIdentity}
 	jobCtx.fakeJob = options.FakeJob
 	jobCtx.Report.RecordingOptions = options.RecordingOptions
+	jobCtx.SetSessionDirectory(options.SessionDirectory)
 	jobCtx.process = NewJobProcess(JobExecutorTypeThread, opts.UserArguments, opts.HTTPProxy)
 	if token != "" {
 		jobCtx.token = token

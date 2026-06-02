@@ -202,6 +202,17 @@ func TestJobContextMakeSessionReportUsesPrimarySession(t *testing.T) {
 	}
 }
 
+func TestJobContextSessionDirectoryCanBeConfigured(t *testing.T) {
+	ctx := NewJobContext(&livekit.Job{Id: "job_session_dir"}, "", "", "")
+	dir := t.TempDir()
+
+	ctx.SetSessionDirectory(dir)
+
+	if got := ctx.SessionDirectory(); got != dir {
+		t.Fatalf("SessionDirectory() = %q, want configured directory", got)
+	}
+}
+
 func TestJobContextAvatarStartInfoExposesLiveKitConnection(t *testing.T) {
 	ctx := NewJobContext(&livekit.Job{Id: "job_avatar"}, "wss://livekit.example", "key", "secret")
 	ctx.token = "room-token"
