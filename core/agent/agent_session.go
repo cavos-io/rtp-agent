@@ -388,7 +388,7 @@ func (s *AgentSession) AgentFalseInterruptionEvents() <-chan AgentFalseInterrupt
 
 func (s *AgentSession) EmitAgentFalseInterruption(ev AgentFalseInterruptionEvent) {
 	if ev.CreatedAt.IsZero() {
-		ev.CreatedAt = time.Now()
+		ev.CreatedAt = NewAgentFalseInterruptionEvent(ev.Resumed).CreatedAt
 	}
 	s.recordEvent(&ev)
 	ch := s.agentFalseInterruptionEvents()
@@ -414,7 +414,12 @@ func (s *AgentSession) UserTurnExceededEvents() <-chan UserTurnExceededEvent {
 
 func (s *AgentSession) EmitUserTurnExceeded(ev UserTurnExceededEvent) {
 	if ev.CreatedAt.IsZero() {
-		ev.CreatedAt = time.Now()
+		ev.CreatedAt = NewUserTurnExceededEvent(
+			ev.Transcript,
+			ev.AccumulatedTranscript,
+			ev.AccumulatedWordCount,
+			ev.Duration,
+		).CreatedAt
 	}
 	s.recordEvent(&ev)
 	s.mu.Lock()
@@ -627,7 +632,7 @@ func (s *AgentSession) ErrorEvents() <-chan ErrorEvent {
 
 func (s *AgentSession) EmitError(ev ErrorEvent) {
 	if ev.CreatedAt.IsZero() {
-		ev.CreatedAt = time.Now()
+		ev.CreatedAt = NewErrorEvent(ev.Error, ev.Source).CreatedAt
 	}
 	s.recordEvent(&ev)
 	ch := s.errorEvents()
