@@ -3,6 +3,7 @@ package openai
 import (
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"math"
 	"net/http"
 	"net/http/httptest"
@@ -1042,6 +1043,36 @@ func TestRealtimeSessionIgnoresInputAudioTranscriptionFailedWithoutPartial(t *te
 		"item_id": "item_123",
 	}); ok {
 		t.Fatalf("trackOpenAIRealtimeEvent = %#v, true; want no event", ev)
+	}
+}
+
+func TestRealtimeSessionBoundsInputAudioTranscriptionPartials(t *testing.T) {
+	session := &realtimeSession{}
+
+	session.trackRealtimeEvent(llm.RealtimeEvent{
+		Type: llm.RealtimeEventTypeInputAudioTranscriptionCompleted,
+		InputTranscription: &llm.InputTranscriptionCompleted{
+			ItemID:     "oldest",
+			Transcript: "old",
+			IsFinal:    false,
+		},
+	})
+	for i := 0; i < maxRealtimeInputTranscripts; i++ {
+		session.trackRealtimeEvent(llm.RealtimeEvent{
+			Type: llm.RealtimeEventTypeInputAudioTranscriptionCompleted,
+			InputTranscription: &llm.InputTranscriptionCompleted{
+				ItemID:     fmt.Sprintf("item_%d", i),
+				Transcript: "partial",
+				IsFinal:    false,
+			},
+		})
+	}
+
+	if ev, ok := session.trackOpenAIRealtimeEvent(map[string]any{
+		"type":    "conversation.item.input_audio_transcription.failed",
+		"item_id": "oldest",
+	}); ok {
+		t.Fatalf("trackOpenAIRealtimeEvent = %#v, true; want evicted partial to be ignored", ev)
 	}
 }
 
