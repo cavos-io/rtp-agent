@@ -1,37 +1,9 @@
 package browser
 
 import (
-	"context"
 	"reflect"
 	"testing"
 )
-
-func TestBrowserAgentStartTracksStateAndContext(t *testing.T) {
-	agent := NewBrowserAgent("test-key")
-
-	if agent.Started() {
-		t.Fatal("Started = true before Start")
-	}
-	if err := agent.Start(context.Background()); err != nil {
-		t.Fatalf("Start error = %v, want nil", err)
-	}
-	if !agent.Started() {
-		t.Fatal("Started = false after Start")
-	}
-	if err := agent.Start(context.Background()); err != nil {
-		t.Fatalf("second Start error = %v, want nil", err)
-	}
-
-	canceled, cancel := context.WithCancel(context.Background())
-	cancel()
-	agent = NewBrowserAgent("test-key")
-	if err := agent.Start(canceled); err != context.Canceled {
-		t.Fatalf("Start canceled error = %v, want context canceled", err)
-	}
-	if agent.Started() {
-		t.Fatal("Started = true after canceled Start")
-	}
-}
 
 func TestPageActionsRecordReferenceMouseActions(t *testing.T) {
 	actions := NewPageActions()
@@ -113,5 +85,36 @@ func TestPageActionsRecordKeyboardNavigationAndFrames(t *testing.T) {
 	}
 	if string(actions.LastFrame()) != "png" {
 		t.Fatalf("LastFrame = %q, want defensive copy", string(actions.LastFrame()))
+	}
+}
+
+func TestPageActionsEventsReturnsCopyAndCloseIsTerminal(t *testing.T) {
+	actions := NewPageActions()
+
+	actions.TypeText("first")
+	events := actions.Events()
+	if len(events) != 1 {
+		t.Fatalf("len(Events()) = %d, want 1", len(events))
+	}
+	events[0].Text = "mutated"
+
+	fresh := actions.Events()
+	if fresh[0].Text != "first" {
+		t.Fatalf("Events() returned mutable backing storage: %q", fresh[0].Text)
+	}
+
+	actions.Close()
+	actions.Close()
+	actions.Key("ignored")
+	actions.LeftClick(10, 20, "")
+
+	got := actions.Events()
+	want := []PageActionEvent{
+		{Type: "type_text", Text: "first"},
+		{Type: "close"},
+		{Type: "close"},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("events after close = %#v, want %#v", got, want)
 	}
 }

@@ -2,7 +2,6 @@ package browser
 
 import (
 	"bytes"
-	"context"
 	"sync"
 )
 
@@ -11,34 +10,6 @@ const (
 	MouseButtonMiddle = 1
 	MouseButtonRight  = 2
 )
-
-type BrowserAgent struct {
-	apiKey  string
-	mu      sync.Mutex
-	started bool
-}
-
-func NewBrowserAgent(apiKey string) *BrowserAgent {
-	return &BrowserAgent{
-		apiKey: apiKey,
-	}
-}
-
-func (a *BrowserAgent) Start(ctx context.Context) error {
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	a.started = true
-	return nil
-}
-
-func (a *BrowserAgent) Started() bool {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	return a.started
-}
 
 // PageActionEvent is the provider-agnostic input event emitted by PageActions.
 type PageActionEvent struct {
