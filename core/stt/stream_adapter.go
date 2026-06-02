@@ -9,6 +9,8 @@ import (
 	"github.com/cavos-io/rtp-agent/core/audio/model"
 	"github.com/cavos-io/rtp-agent/core/vad"
 	"github.com/cavos-io/rtp-agent/library/logger"
+	"github.com/cavos-io/rtp-agent/library/telemetry"
+	"go.opentelemetry.io/otel/trace"
 )
 
 // StreamAdapter converts a non-streaming STT into a streaming STT by coupling it with a VAD.
@@ -73,6 +75,7 @@ type streamAdapterWrapper struct {
 	rateGuard   SampleRateGuard
 	startOffset float64
 	startTime   float64
+	span        trace.Span
 }
 
 // StreamAdapterWrapper is kept public for LiveKit Agents API compatibility.
@@ -85,6 +88,7 @@ type streamAdapterInput struct {
 }
 
 func (a *StreamAdapter) Stream(ctx context.Context, language string) (RecognizeStream, error) {
+	ctx, span := telemetry.NewSTTStreamSpan(ctx, Model(a.stt), Provider(a.stt))
 	ctx, cancel := context.WithCancel(ctx)
 	w := &streamAdapterWrapper{
 		adapter:   a,
@@ -95,6 +99,7 @@ func (a *StreamAdapter) Stream(ctx context.Context, language string) (RecognizeS
 		errCh:     make(chan error, 1),
 		inputCh:   make(chan streamAdapterInput, 100),
 		startTime: streamStartTimeNow(),
+		span:      span,
 	}
 
 	go w.run()
@@ -103,6 +108,7 @@ func (a *StreamAdapter) Stream(ctx context.Context, language string) (RecognizeS
 
 func (w *streamAdapterWrapper) run() {
 	defer close(w.eventCh)
+	defer w.span.End()
 
 	vadStream, err := w.adapter.vad.Stream(w.ctx)
 	if err != nil {
