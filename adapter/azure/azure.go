@@ -3,15 +3,22 @@ package azure
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 
 	"github.com/cavos-io/rtp-agent/core/audio/model"
 	"github.com/cavos-io/rtp-agent/core/stt"
 	"github.com/cavos-io/rtp-agent/core/tts"
-	"github.com/cavos-io/rtp-agent/library/utils/language"
+)
+
+const (
+	azureSpeechKeyEnv           = "AZURE_SPEECH_KEY"
+	azureSpeechRegionEnv        = "AZURE_SPEECH_REGION"
+	defaultAzureTTSVoice        = "en-US-JennyNeural"
+	defaultAzureTTSSampleRate   = 24000
+	defaultAzureTTSSampleFormat = "raw-24khz-16bit-mono-pcm"
 )
 
 type AzureSTT struct {
@@ -19,16 +26,29 @@ type AzureSTT struct {
 	region string
 }
 
-func NewAzureSTT(apiKey string, region string) *AzureSTT {
+func NewAzureSTT(apiKey string, region string) (*AzureSTT, error) {
+	if apiKey == "" {
+		apiKey = os.Getenv(azureSpeechKeyEnv)
+	}
+	if region == "" {
+		region = os.Getenv(azureSpeechRegionEnv)
+	}
+	if apiKey == "" || region == "" {
+		return nil, fmt.Errorf("azure speech config requires AZURE_SPEECH_KEY and AZURE_SPEECH_REGION")
+	}
 	return &AzureSTT{
 		apiKey: apiKey,
 		region: region,
-	}
+	}, nil
 }
 
 func (s *AzureSTT) Label() string { return "azure.STT" }
+func (s *AzureSTT) Model() string { return "unknown" }
+func (s *AzureSTT) Provider() string {
+	return "Azure STT"
+}
 func (s *AzureSTT) Capabilities() stt.STTCapabilities {
-	return stt.STTCapabilities{Streaming: false, InterimResults: false, Diarization: false, OfflineRecognize: true}
+	return stt.STTCapabilities{Streaming: true, InterimResults: true, Diarization: false, AlignedTranscript: "chunk", OfflineRecognize: false}
 }
 
 func (s *AzureSTT) Stream(ctx context.Context, language string) (stt.RecognizeStream, error) {
@@ -36,90 +56,61 @@ func (s *AzureSTT) Stream(ctx context.Context, language string) (stt.RecognizeSt
 }
 
 func (s *AzureSTT) Recognize(ctx context.Context, frames []*model.AudioFrame, languageStr string) (*stt.SpeechEvent, error) {
-	languageStr = language.NormalizeLanguage(languageStr)
-	if languageStr == "" {
-		languageStr = "en-US"
-	}
-	url := fmt.Sprintf("https://%s.stt.speech.microsoft.com/speech/recognition/conversation/cognitiveservices/v1?language=%s", s.region, languageStr)
-
-	var buf bytes.Buffer
-	for _, f := range frames {
-		buf.Write(f.Data)
-	}
-
-	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(buf.Bytes()))
-	if err != nil {
-		return nil, err
-	}
-
-	req.Header.Set("Content-Type", "audio/wav; codecs=audio/pcm; samplerate=16000")
-	req.Header.Set("Ocp-Apim-Subscription-Key", s.apiKey)
-
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		respBody, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("azure stt error: %s", string(respBody))
-	}
-
-	var result struct {
-		DisplayText       string `json:"DisplayText"`
-		RecognitionStatus string `json:"RecognitionStatus"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return nil, err
-	}
-
-	return &stt.SpeechEvent{
-		Type: stt.SpeechEventFinalTranscript,
-		Alternatives: []stt.SpeechData{
-			{Text: result.DisplayText},
-		},
-	}, nil
+	return nil, fmt.Errorf("azure STT does not support single frame recognition")
 }
 
 type AzureTTS struct {
-	apiKey string
-	region string
-	voice  string
+	apiKey     string
+	region     string
+	voice      string
+	sampleRate int
+	httpClient *http.Client
 }
 
-func NewAzureTTS(apiKey string, region string, voice string) *AzureTTS {
+func NewAzureTTS(apiKey string, region string, voice string) (*AzureTTS, error) {
+	if apiKey == "" {
+		apiKey = os.Getenv(azureSpeechKeyEnv)
+	}
+	if region == "" {
+		region = os.Getenv(azureSpeechRegionEnv)
+	}
+	if apiKey == "" || region == "" {
+		return nil, fmt.Errorf("azure speech config requires AZURE_SPEECH_KEY and AZURE_SPEECH_REGION")
+	}
 	if voice == "" {
-		voice = "en-US-AvaMultilingualNeural"
+		voice = defaultAzureTTSVoice
 	}
 	return &AzureTTS{
-		apiKey: apiKey,
-		region: region,
-		voice:  voice,
-	}
+		apiKey:     apiKey,
+		region:     region,
+		voice:      voice,
+		sampleRate: defaultAzureTTSSampleRate,
+		httpClient: http.DefaultClient,
+	}, nil
 }
 
 func (t *AzureTTS) Label() string { return "azure.TTS" }
+func (t *AzureTTS) Model() string { return "unknown" }
+func (t *AzureTTS) Provider() string {
+	return "Azure TTS"
+}
 func (t *AzureTTS) Capabilities() tts.TTSCapabilities {
 	return tts.TTSCapabilities{Streaming: false, AlignedTranscript: false}
 }
-func (t *AzureTTS) SampleRate() int  { return 16000 }
+func (t *AzureTTS) SampleRate() int  { return t.sampleRate }
 func (t *AzureTTS) NumChannels() int { return 1 }
 
 func (t *AzureTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStream, error) {
-	url := fmt.Sprintf("https://%s.tts.speech.microsoft.com/cognitiveservices/v1", t.region)
-	ssml := fmt.Sprintf(`<speak version='1.0' xml:lang='en-US'><voice name='%s'>%s</voice></speak>`, t.voice, text)
-
-	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewBufferString(ssml))
+	req, err := buildAzureTTSRequest(ctx, t, text)
 	if err != nil {
 		return nil, err
 	}
 
-	req.Header.Set("Content-Type", "application/ssml+xml")
-	req.Header.Set("X-Microsoft-OutputFormat", "raw-16khz-16bit-mono-pcm")
-	req.Header.Set("Ocp-Apim-Subscription-Key", t.apiKey)
-
-	resp, err := http.DefaultClient.Do(req)
+	client := t.httpClient
+	if client == nil {
+		client = http.DefaultClient
+	}
+	resp, err := client.Do(req)
 	if err != nil {
 		return nil, err
 	}
@@ -131,21 +122,38 @@ func (t *AzureTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStre
 	}
 
 	return &azureTTSChunkedStream{
-		resp: resp,
+		body:       resp.Body,
+		sampleRate: t.sampleRate,
 	}, nil
 }
 
+func buildAzureTTSRequest(ctx context.Context, t *AzureTTS, text string) (*http.Request, error) {
+	url := fmt.Sprintf("https://%s.tts.speech.microsoft.com/cognitiveservices/v1", t.region)
+	ssml := fmt.Sprintf(`<speak version="1.0" xml:lang="en-US"><voice name="%s">%s</voice></speak>`, t.voice, text)
+
+	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewBufferString(ssml))
+	if err != nil {
+		return nil, err
+	}
+
+	req.Header.Set("Content-Type", "application/ssml+xml")
+	req.Header.Set("X-Microsoft-OutputFormat", defaultAzureTTSSampleFormat)
+	req.Header.Set("Ocp-Apim-Subscription-Key", t.apiKey)
+	return req, nil
+}
+
 func (t *AzureTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
-	return nil, fmt.Errorf("streaming azure tts not yet implemented")
+	return nil, fmt.Errorf("streaming azure tts is not supported")
 }
 
 type azureTTSChunkedStream struct {
-	resp *http.Response
+	body       io.ReadCloser
+	sampleRate int
 }
 
 func (s *azureTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 	buf := make([]byte, 4096)
-	n, err := s.resp.Body.Read(buf)
+	n, err := s.body.Read(buf)
 	if err != nil {
 		if err == io.EOF {
 			return nil, io.EOF
@@ -156,7 +164,7 @@ func (s *azureTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 	return &tts.SynthesizedAudio{
 		Frame: &model.AudioFrame{
 			Data:              buf[:n],
-			SampleRate:        16000,
+			SampleRate:        uint32(s.sampleRate),
 			NumChannels:       1,
 			SamplesPerChannel: uint32(n / 2),
 		},
@@ -164,5 +172,8 @@ func (s *azureTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 }
 
 func (s *azureTTSChunkedStream) Close() error {
-	return s.resp.Body.Close()
+	if s.body == nil {
+		return nil
+	}
+	return s.body.Close()
 }
