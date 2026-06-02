@@ -33,6 +33,7 @@ import (
 	"github.com/cavos-io/rtp-agent/adapter/inworld"
 	"github.com/cavos-io/rtp-agent/adapter/minimax"
 	"github.com/cavos-io/rtp-agent/adapter/mistralai"
+	"github.com/cavos-io/rtp-agent/adapter/murf"
 	"github.com/cavos-io/rtp-agent/adapter/openai"
 	"github.com/cavos-io/rtp-agent/core/agent"
 	"github.com/cavos-io/rtp-agent/core/llm"
@@ -65,6 +66,7 @@ const (
 	providerInworld    = "inworld"
 	providerMinimax    = "minimax"
 	providerMistralAI  = "mistralai"
+	providerMurf       = "murf"
 	providerOpenAI     = "openai"
 	providerLiveKit    = "livekit"
 )
@@ -232,6 +234,7 @@ type AppConfig struct {
 	InworldAPIKey     string
 	MinimaxAPIKey     string
 	MistralAPIKey     string
+	MurfAPIKey        string
 
 	GoogleCredentialsFile string
 
@@ -407,6 +410,7 @@ func DefaultConfigFromEnv() AppConfig {
 		InworldAPIKey:                           os.Getenv("INWORLD_API_KEY"),
 		MinimaxAPIKey:                           os.Getenv("MINIMAX_API_KEY"),
 		MistralAPIKey:                           os.Getenv("MISTRAL_API_KEY"),
+		MurfAPIKey:                              os.Getenv("MURF_API_KEY"),
 		GoogleCredentialsFile:                   firstEnv("RTP_AGENT_GOOGLE_CREDENTIALS_FILE", "GOOGLE_APPLICATION_CREDENTIALS"),
 	}
 }
@@ -1409,6 +1413,33 @@ func configureProviders(cfg AppConfig, a *agent.Agent) (llm.RealtimeModel, error
 			return nil, err
 		}
 		a.TTS = provider
+	case providerMurf:
+		ttsOpts := []murf.MurfTTSOption{}
+		if cfg.TTSBaseURL != "" {
+			ttsOpts = append(ttsOpts, murf.WithMurfTTSBaseURL(cfg.TTSBaseURL))
+		}
+		if cfg.TTSModel != "" {
+			ttsOpts = append(ttsOpts, murf.WithMurfTTSModel(cfg.TTSModel))
+		}
+		if cfg.TTSLanguage != "" {
+			ttsOpts = append(ttsOpts, murf.WithMurfTTSLocale(cfg.TTSLanguage))
+		}
+		if cfg.TTSVoice != "" {
+			ttsOpts = append(ttsOpts, murf.WithMurfTTSVoice(cfg.TTSVoice))
+		}
+		if cfg.TTSInstructions != "" {
+			ttsOpts = append(ttsOpts, murf.WithMurfTTSStyle(cfg.TTSInstructions))
+		}
+		if cfg.TTSSpeed != 0 {
+			ttsOpts = append(ttsOpts, murf.WithMurfTTSSpeed(int(cfg.TTSSpeed)))
+		}
+		if cfg.TTSPitch != nil {
+			ttsOpts = append(ttsOpts, murf.WithMurfTTSPitch(*cfg.TTSPitch))
+		}
+		if cfg.TTSSampleRate != nil {
+			ttsOpts = append(ttsOpts, murf.WithMurfTTSSampleRate(*cfg.TTSSampleRate))
+		}
+		a.TTS = murf.NewMurfTTS(cfg.MurfAPIKey, cfg.TTSVoice, ttsOpts...)
 	case providerCambai:
 		ttsOpts := []cambai.CambaiTTSOption{}
 		if cfg.TTSBaseURL != "" {

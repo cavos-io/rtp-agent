@@ -695,6 +695,36 @@ func TestDefaultConfigFromEnvSelectsMistralAIProviders(t *testing.T) {
 	}
 }
 
+func TestDefaultConfigFromEnvSelectsMurfTTS(t *testing.T) {
+	t.Setenv("MURF_API_KEY", "test-murf-key")
+	t.Setenv("RTP_AGENT_TTS_PROVIDER", "murf")
+	t.Setenv("RTP_AGENT_TTS_BASE_URL", "https://murf.example")
+	t.Setenv("RTP_AGENT_TTS_MODEL", "FALCON")
+	t.Setenv("RTP_AGENT_TTS_VOICE", "en-US-matthew")
+	t.Setenv("RTP_AGENT_TTS_LANGUAGE", "en-US")
+	t.Setenv("RTP_AGENT_TTS_INSTRUCTIONS", "Conversation")
+	t.Setenv("RTP_AGENT_TTS_SPEED", "4")
+	t.Setenv("RTP_AGENT_TTS_PITCH", "2")
+	t.Setenv("RTP_AGENT_TTS_SAMPLE_RATE", "44100")
+
+	app, err := NewApp(DefaultConfigFromEnv())
+	if err != nil {
+		t.Fatalf("NewApp() error = %v", err)
+	}
+	if app.Session == nil || app.Session.TTS == nil {
+		t.Fatal("Session TTS is nil")
+	}
+	if got := app.Session.TTS.Label(); got != "murf.TTS" {
+		t.Fatalf("TTS label = %q, want murf.TTS", got)
+	}
+	if got := app.Session.TTS.SampleRate(); got != 44100 {
+		t.Fatalf("TTS sample rate = %d, want 44100", got)
+	}
+	if caps := app.Session.TTS.Capabilities(); !caps.Streaming || caps.AlignedTranscript {
+		t.Fatalf("TTS capabilities = %+v, want streaming without aligned transcript", caps)
+	}
+}
+
 func TestDefaultConfigFromEnvSelectsAWSProviders(t *testing.T) {
 	t.Setenv("AWS_REGION", "us-west-2")
 	t.Setenv("RTP_AGENT_LLM_PROVIDER", "aws")
