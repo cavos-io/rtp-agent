@@ -370,6 +370,35 @@ func TestPerformToolExecutionsProvidesRunContext(t *testing.T) {
 	}
 }
 
+func TestPerformToolExecutionsSnapshotsToolContext(t *testing.T) {
+	original := &fakeGenerationTool{name: "lookup", result: "original"}
+	replacement := &fakeGenerationTool{name: "lookup", result: "replacement"}
+	toolCtx := llm.NewToolContext([]interface{}{original})
+	functionCh := make(chan *llm.FunctionToolCall)
+
+	outputs := PerformToolExecutions(context.Background(), functionCh, toolCtx)
+	if err := toolCtx.UpdateTools([]interface{}{replacement}); err != nil {
+		t.Fatalf("UpdateTools() error = %v", err)
+	}
+	functionCh <- &llm.FunctionToolCall{
+		Name:      "lookup",
+		CallID:    "call_lookup",
+		Arguments: `{}`,
+	}
+	close(functionCh)
+
+	output, ok := <-outputs
+	if !ok {
+		t.Fatal("PerformToolExecutions closed without output")
+	}
+	if output.RawError != nil {
+		t.Fatalf("RawError = %v, want nil", output.RawError)
+	}
+	if output.RawOutput != "original" {
+		t.Fatalf("RawOutput = %v, want original snapshot result", output.RawOutput)
+	}
+}
+
 func executeOneToolCall(t *testing.T, tool llm.Tool) ToolExecutionOutput {
 	t.Helper()
 

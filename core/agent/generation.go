@@ -213,6 +213,9 @@ func PerformToolExecutions(
 	opts ...ToolExecutionOption,
 ) <-chan ToolExecutionOutput {
 	outCh := make(chan ToolExecutionOutput, 10)
+	if toolCtx != nil {
+		toolCtx = toolCtx.Copy()
+	}
 	var options ToolExecutionOptions
 	for _, opt := range opts {
 		opt(&options)
