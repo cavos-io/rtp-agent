@@ -48,6 +48,7 @@ type Agent struct {
 	TTS           tts.TTS
 
 	AllowInterruptions         bool
+	AllowInterruptionsSet      bool
 	MinConsecutiveSpeechDelay  float64
 	UseTTSAlignedTranscript    bool
 	UseTTSAlignedTranscriptSet bool

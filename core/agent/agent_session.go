@@ -1162,12 +1162,12 @@ func (s *AgentSession) GenerateReplyWithOptions(ctx context.Context, opts Genera
 	// Trigger the pipeline
 	logger.Logger.Infow("Generating reply", "userInput", opts.UserInput)
 
-	allowInterruptions := s.Options.AllowInterruptions
+	allowInterruptions := s.defaultAllowInterruptions()
 	if opts.AllowInterruptions != nil {
 		allowInterruptions = *opts.AllowInterruptions
 	}
 	if realtimeTurnDetectionEnabled(assistant) && opts.AllowInterruptions != nil && !*opts.AllowInterruptions {
-		allowInterruptions = s.Options.AllowInterruptions
+		allowInterruptions = s.defaultAllowInterruptions()
 	}
 	inputModality := opts.InputModality
 	if inputModality == "" {
@@ -1236,12 +1236,12 @@ func (s *AgentSession) SayWithOptions(ctx context.Context, opts SayOptions) (*Sp
 
 	logger.Logger.Infow("Saying text", "text", opts.Text)
 
-	allowInterruptions := s.Options.AllowInterruptions
+	allowInterruptions := s.defaultAllowInterruptions()
 	if opts.AllowInterruptions != nil {
 		allowInterruptions = *opts.AllowInterruptions
 	}
 	if realtimeTurnDetectionEnabled(assistant) && opts.AllowInterruptions != nil && !*opts.AllowInterruptions {
-		allowInterruptions = s.Options.AllowInterruptions
+		allowInterruptions = s.defaultAllowInterruptions()
 	}
 	addToChatContext := true
 	if opts.AddToChatContext != nil {
@@ -1287,6 +1287,21 @@ func realtimeTurnDetectionEnabled(assistant any) bool {
 		return capabilities.RealtimeCapabilities().TurnDetection
 	}
 	return false
+}
+
+func (s *AgentSession) defaultAllowInterruptions() bool {
+	allowInterruptions := s.Options.AllowInterruptions
+	if s.Agent == nil {
+		return allowInterruptions
+	}
+	agent := s.Agent.GetAgent()
+	if agent == nil {
+		return allowInterruptions
+	}
+	if agent.AllowInterruptionsSet || agent.AllowInterruptions {
+		return agent.AllowInterruptions
+	}
+	return allowInterruptions
 }
 
 func (s *AgentSession) watchActiveRunSpeechHandle(handle *SpeechHandle) bool {

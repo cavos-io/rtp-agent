@@ -41,6 +41,40 @@ func TestAgentSessionGenerateReplyReturnsScheduledSpeechHandle(t *testing.T) {
 	}
 }
 
+func TestAgentSessionGenerateReplyUsesAgentAllowInterruptionsDefault(t *testing.T) {
+	agent := NewAgent("test")
+	agent.AllowInterruptions = true
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	session.Options.AllowInterruptions = false
+	session.activity = NewAgentActivity(agent, session)
+
+	handle, err := session.GenerateReply(context.Background(), "hello")
+
+	if err != nil {
+		t.Fatalf("GenerateReply error = %v, want nil", err)
+	}
+	if !handle.AllowInterruptions {
+		t.Fatal("handle.AllowInterruptions = false, want agent default true")
+	}
+}
+
+func TestAgentSessionGenerateReplyAgentAllowInterruptionsCanDisableSessionDefault(t *testing.T) {
+	agent := NewAgent("test")
+	agent.AllowInterruptions = false
+	agent.AllowInterruptionsSet = true
+	session := NewAgentSession(agent, nil, AgentSessionOptions{AllowInterruptions: true})
+	session.activity = NewAgentActivity(agent, session)
+
+	handle, err := session.GenerateReply(context.Background(), "hello")
+
+	if err != nil {
+		t.Fatalf("GenerateReply error = %v, want nil", err)
+	}
+	if handle.AllowInterruptions {
+		t.Fatal("handle.AllowInterruptions = true, want agent default false")
+	}
+}
+
 func TestAgentSessionStartConfiguresTTSStreamPacer(t *testing.T) {
 	baseAgent := NewAgent("test")
 	baseAgent.VAD = &fakePipelineVAD{}
@@ -447,6 +481,40 @@ func TestAgentSessionSayReturnsScheduledSpeechHandle(t *testing.T) {
 	}
 	if got, want := handle.InputDetails.Modality, "text"; got != want {
 		t.Fatalf("handle.InputDetails.Modality = %q, want %q", got, want)
+	}
+}
+
+func TestAgentSessionSayUsesAgentAllowInterruptionsDefault(t *testing.T) {
+	agent := NewAgent("test")
+	agent.AllowInterruptions = true
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	session.Options.AllowInterruptions = false
+	session.activity = NewAgentActivity(agent, session)
+
+	handle, err := session.Say(context.Background(), "hello")
+
+	if err != nil {
+		t.Fatalf("Say error = %v, want nil", err)
+	}
+	if !handle.AllowInterruptions {
+		t.Fatal("handle.AllowInterruptions = false, want agent default true")
+	}
+}
+
+func TestAgentSessionSayAgentAllowInterruptionsCanDisableSessionDefault(t *testing.T) {
+	agent := NewAgent("test")
+	agent.AllowInterruptions = false
+	agent.AllowInterruptionsSet = true
+	session := NewAgentSession(agent, nil, AgentSessionOptions{AllowInterruptions: true})
+	session.activity = NewAgentActivity(agent, session)
+
+	handle, err := session.Say(context.Background(), "hello")
+
+	if err != nil {
+		t.Fatalf("Say error = %v, want nil", err)
+	}
+	if handle.AllowInterruptions {
+		t.Fatal("handle.AllowInterruptions = true, want agent default false")
 	}
 }
 
