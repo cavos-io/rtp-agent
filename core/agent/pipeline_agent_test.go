@@ -1119,6 +1119,44 @@ func TestPipelineAgentScheduledSaySpeaksProvidedTextWithoutLLM(t *testing.T) {
 	}
 }
 
+func TestPipelineAgentScheduledSayPersistsAssistantTextInAgentChatContext(t *testing.T) {
+	pipelineCtx := llm.NewChatContext()
+	ttsStream := &fakePipelineTTSStream{}
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	agent := NewPipelineAgent(nil, nil, &fakeGenerationLLM{}, &fakePipelineTTS{stream: ttsStream}, pipelineCtx)
+	agent.session = session
+	agent.ctx = context.Background()
+	session.Assistant = agent
+	activity := NewAgentActivity(NewAgent("test"), session)
+	session.activity = activity
+	go activity.schedulingTask()
+	defer activity.Stop()
+
+	handle, err := session.Say(context.Background(), "persist this")
+	if err != nil {
+		t.Fatalf("Say error = %v, want nil", err)
+	}
+
+	waitCtx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if err := handle.Wait(waitCtx); err != nil {
+		t.Fatalf("scheduled pipeline say did not complete: %v", err)
+	}
+	var assistantMessages int
+	for _, item := range pipelineCtx.Items {
+		msg, ok := item.(*llm.ChatMessage)
+		if !ok {
+			continue
+		}
+		if msg.Role == llm.ChatRoleAssistant && msg.TextContent() == "persist this" {
+			assistantMessages++
+		}
+	}
+	if assistantMessages != 1 {
+		t.Fatalf("pipeline chat context items = %#v, want one scheduled say assistant message", pipelineCtx.Items)
+	}
+}
+
 func toolCallStream(callID string) *fakeGenerationLLMStream {
 	return &fakeGenerationLLMStream{
 		chunks: []*llm.ChatChunk{

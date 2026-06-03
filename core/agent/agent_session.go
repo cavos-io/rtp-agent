@@ -1268,6 +1268,7 @@ func (s *AgentSession) SayWithOptions(ctx context.Context, opts SayOptions) (*Sp
 			},
 			CreatedAt: time.Now(),
 		}
+		handle.Generation.AssistantMessage = assistantMessage
 	}
 
 	if err := activity.ScheduleSpeech(handle, SpeechPriorityNormal, false); err != nil {

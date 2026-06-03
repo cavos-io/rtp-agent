@@ -36,6 +36,7 @@ type SpeechGenerationOptions struct {
 	Tools              []string
 	ChatCtx            *llm.ChatContext
 	UserMessage        *llm.ChatMessage
+	AssistantMessage   *llm.ChatMessage
 	Text               string
 	RealtimeGeneration *llm.GenerationCreatedEvent
 }
