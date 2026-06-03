@@ -403,6 +403,10 @@ func (va *PipelineAgent) generateReplyWithOptions(opts pipelineReplyOptions) {
 			session.UpdateAgentState(AgentStateIdle)
 			break
 		}
+		if opts.SpeechHandle != nil {
+			opts.SpeechHandle.IncrementStep()
+			opts.SpeechHandle.AuthorizeGeneration()
+		}
 		toolSteps++
 		// Loop back to LLM with tool outputs
 	}
