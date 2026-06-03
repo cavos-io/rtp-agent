@@ -478,8 +478,41 @@ func (ma *MultimodalAgent) appendRealtimeToolResult(call *llm.FunctionCall, outp
 	}
 	ev.ReplyRequired = true
 	ma.session.EmitFunctionToolsExecuted(*ev)
-	if ev.HasToolReply() {
+	if !ev.HasToolReply() {
+		return
+	}
+	if ma.realtimeCapabilities().AutoToolReplyGeneration {
 		ma.installPendingRealtimeAutoToolReply()
+		return
+	}
+	ma.generateRealtimeToolReply()
+}
+
+func (ma *MultimodalAgent) realtimeCapabilities() llm.RealtimeCapabilities {
+	if ma.model == nil {
+		return llm.RealtimeCapabilities{}
+	}
+	return ma.model.Capabilities()
+}
+
+func (ma *MultimodalAgent) generateRealtimeToolReply() {
+	ma.mu.Lock()
+	rtSession := ma.rtSession
+	ma.mu.Unlock()
+	if rtSession == nil {
+		return
+	}
+	if err := rtSession.Interrupt(); err != nil {
+		logger.Logger.Warnw("failed to interrupt realtime session before tool reply", err)
+	}
+	if err := rtSession.GenerateReply(llm.RealtimeGenerateReplyOptions{ToolChoice: "auto"}); err != nil {
+		logger.Logger.Errorw("failed to generate realtime tool reply", err)
+		if ma.session != nil {
+			ma.session.EmitError(ErrorEvent{
+				Error:  llm.NewRealtimeModelError(llm.RealtimeLabel(ma.model), err, false),
+				Source: ma.model,
+			})
+		}
 	}
 }
 
