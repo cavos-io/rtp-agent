@@ -144,6 +144,10 @@ type componentUpdatingAssistant interface {
 	UpdateComponents(vad.VAD, stt.STT, llm.LLM, tts.TTS)
 }
 
+type realtimeModelUpdatingAssistant interface {
+	UpdateRealtimeModel(context.Context, llm.RealtimeModel) error
+}
+
 type realtimeOptionsUpdatingAssistant interface {
 	UpdateOptions(context.Context, llm.RealtimeSessionOptions) error
 }
@@ -1410,6 +1414,7 @@ func (s *AgentSession) UpdateAgent(agent AgentInterface) {
 	sessionSTT := s.STT
 	sessionLLM := s.LLM
 	sessionTTS := s.TTS
+	sessionRealtimeModel := s.RealtimeModel
 	if !started {
 		s.mu.Unlock()
 		return
@@ -1426,6 +1431,11 @@ func (s *AgentSession) UpdateAgent(agent AgentInterface) {
 
 	if updater, ok := assistant.(componentUpdatingAssistant); ok {
 		updater.UpdateComponents(sessionVAD, sessionSTT, sessionLLM, sessionTTS)
+	}
+	if updater, ok := assistant.(realtimeModelUpdatingAssistant); ok {
+		if err := updater.UpdateRealtimeModel(context.Background(), sessionRealtimeModel); err != nil {
+			logger.Logger.Errorw("failed to update realtime model on assistant", err)
+		}
 	}
 	if oldActivity != nil {
 		oldActivity.Stop()
