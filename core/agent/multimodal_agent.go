@@ -289,7 +289,17 @@ func (ma *MultimodalAgent) handleRealtimeEvent(ev llm.RealtimeEvent) {
 		}
 
 	case llm.RealtimeEventTypeFunctionCall:
+		if ev.Function == nil {
+			return
+		}
 		logger.Logger.Infow("Executing tool (multimodal)", "name", ev.Function.Name)
+		functionCall := &llm.FunctionCall{
+			CallID:    ev.Function.CallID,
+			Name:      ev.Function.Name,
+			Arguments: ev.Function.Arguments,
+			Extra:     ev.Function.Extra,
+			CreatedAt: time.Now(),
+		}
 
 		// Find and execute tool
 		var foundTool llm.Tool
@@ -301,7 +311,7 @@ func (ma *MultimodalAgent) handleRealtimeEvent(ev llm.RealtimeEvent) {
 		}
 
 		if foundTool == nil {
-			ma.appendRealtimeToolOutput(&llm.FunctionCallOutput{
+			ma.appendRealtimeToolResult(functionCall, &llm.FunctionCallOutput{
 				CallID:    ev.Function.CallID,
 				Name:      ev.Function.Name,
 				Output:    fmt.Sprintf("Unknown function: %s", ev.Function.Name),
@@ -323,7 +333,7 @@ func (ma *MultimodalAgent) handleRealtimeEvent(ev llm.RealtimeEvent) {
 			if errors.As(err, &toolErr) {
 				outputStr = toolErr.Message
 			}
-			ma.appendRealtimeToolOutput(&llm.FunctionCallOutput{
+			ma.appendRealtimeToolResult(functionCall, &llm.FunctionCallOutput{
 				CallID:    ev.Function.CallID,
 				Name:      ev.Function.Name,
 				Output:    outputStr,
@@ -333,7 +343,7 @@ func (ma *MultimodalAgent) handleRealtimeEvent(ev llm.RealtimeEvent) {
 			return
 		}
 
-		ma.appendRealtimeToolOutput(&llm.FunctionCallOutput{
+		ma.appendRealtimeToolResult(functionCall, &llm.FunctionCallOutput{
 			CallID:    ev.Function.CallID,
 			Name:      ev.Function.Name,
 			Output:    output,
@@ -420,12 +430,29 @@ func (ma *MultimodalAgent) realtimeTools() []llm.Tool {
 	return sessionRegisteredTools(ma.session)
 }
 
-func (ma *MultimodalAgent) appendRealtimeToolOutput(output *llm.FunctionCallOutput) {
+func (ma *MultimodalAgent) appendRealtimeToolResult(call *llm.FunctionCall, output *llm.FunctionCallOutput) {
 	if output == nil {
 		return
 	}
-	ma.chatCtx.Append(output)
-	_ = ma.rtSession.UpdateChatContext(ma.chatCtx)
+	if ma.chatCtx != nil {
+		if call != nil {
+			ma.chatCtx.Append(call)
+		}
+		ma.chatCtx.Append(output)
+	}
+	if ma.rtSession != nil && ma.chatCtx != nil {
+		_ = ma.rtSession.UpdateChatContext(ma.chatCtx)
+	}
+	if ma.session == nil || call == nil {
+		return
+	}
+	ev, err := NewFunctionToolsExecutedEvent([]*llm.FunctionCall{call}, []*llm.FunctionCallOutput{output})
+	if err != nil {
+		logger.Logger.Errorw("failed to create realtime function tools executed event", err)
+		return
+	}
+	ev.ReplyRequired = true
+	ma.session.EmitFunctionToolsExecuted(*ev)
 }
 
 func (ma *MultimodalAgent) OnAudioFrame(ctx context.Context, frame *model.AudioFrame) {

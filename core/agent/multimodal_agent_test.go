@@ -347,6 +347,23 @@ func TestMultimodalAgentExecutesAgentToolFunctionCall(t *testing.T) {
 	if output.IsError || output.Output != "agent result" {
 		t.Fatalf("function output = %#v, want agent tool result", output)
 	}
+	select {
+	case ev := <-session.FunctionToolsExecutedEvents():
+		if len(ev.FunctionCalls) != 1 || ev.FunctionCalls[0].Name != "lookup" || ev.FunctionCalls[0].CallID != "call_lookup" {
+			t.Fatalf("FunctionCalls = %#v, want lookup call_lookup", ev.FunctionCalls)
+		}
+		if len(ev.FunctionCallOutputs) != 1 || ev.FunctionCallOutputs[0] != output {
+			t.Fatalf("FunctionCallOutputs = %#v, want emitted realtime output", ev.FunctionCallOutputs)
+		}
+		if !ev.HasToolReply() {
+			t.Fatal("HasToolReply() = false, want true when realtime tool returned output")
+		}
+		if !chatContextContainsItem(session.ChatCtx, output) {
+			t.Fatalf("session ChatCtx items = %#v, want emitted realtime output", session.ChatCtx.Items)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("FunctionToolsExecutedEvents did not receive realtime function execution")
+	}
 }
 
 func TestMultimodalToolExecutionSuppressesStopResponse(t *testing.T) {
@@ -700,6 +717,18 @@ func findChatMessage(chatCtx *llm.ChatContext, role llm.ChatRole, text string) *
 		}
 	}
 	return nil
+}
+
+func chatContextContainsItem(chatCtx *llm.ChatContext, item llm.ChatItem) bool {
+	if chatCtx == nil {
+		return false
+	}
+	for _, existing := range chatCtx.Items {
+		if existing == item {
+			return true
+		}
+	}
+	return false
 }
 
 func toolNames(tools []llm.Tool) []string {
