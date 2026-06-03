@@ -101,6 +101,11 @@ type RunOptions struct {
 	OutputType         reflect.Type
 }
 
+type StartOptions struct {
+	CaptureRun bool
+	OutputType reflect.Type
+}
+
 type CommitUserTurnOptions struct {
 	TranscriptTimeout time.Duration
 	STTFlushDuration  time.Duration
@@ -875,10 +880,19 @@ func (s *AgentSession) closeEvents() chan CloseEvent {
 }
 
 func (s *AgentSession) Start(ctx context.Context) error {
+	_, err := s.StartWithOptions(ctx, StartOptions{})
+	return err
+}
+
+func (s *AgentSession) StartWithOptions(ctx context.Context, opts StartOptions) (*RunResult, error) {
 	s.mu.Lock()
 	if s.started {
 		s.mu.Unlock()
-		return nil
+		return nil, nil
+	}
+	if opts.CaptureRun && s.runState != nil && !s.runState.Done() {
+		s.mu.Unlock()
+		return nil, ErrAgentSessionNestedRun
 	}
 
 	if s.VAD == nil {
@@ -897,13 +911,19 @@ func (s *AgentSession) Start(ctx context.Context) error {
 	backgroundAudio := s.Options.BackgroundAudio
 	room := s.Room
 	hasMetricsCollector := s.MetricsCollector != nil
+	var runState *RunResult
+	if opts.CaptureRun {
+		runState = newRunResultFromOptions(s.ChatCtx, "", opts.OutputType)
+		s.runState = runState
+	}
 	s.mu.Unlock()
 
 	s.UpdateAgentState(AgentStateInitializing)
 
 	if backgroundAudio != nil && room != nil {
 		if err := backgroundAudio.Start(room, s); err != nil {
-			return err
+			s.clearRunStateIfCurrent(runState)
+			return nil, err
 		}
 	}
 	if avatar != nil {
@@ -911,14 +931,16 @@ func (s *AgentSession) Start(ctx context.Context) error {
 			if backgroundAudio != nil {
 				_ = backgroundAudio.Close()
 			}
-			return err
+			s.clearRunStateIfCurrent(runState)
+			return nil, err
 		}
 	}
 	if err := assistant.Start(ctx, s); err != nil {
 		if backgroundAudio != nil {
 			_ = backgroundAudio.Close()
 		}
-		return err
+		s.clearRunStateIfCurrent(runState)
+		return nil, err
 	}
 
 	activity := NewAgentActivity(agent, s)
@@ -943,7 +965,27 @@ func (s *AgentSession) Start(ctx context.Context) error {
 
 	s.UpdateAgentState(AgentStateListening)
 
-	return nil
+	if runState != nil {
+		if err := s.WaitForInactive(ctx); err != nil {
+			return nil, err
+		}
+		if !runState.Done() {
+			runState.MarkDone()
+		}
+	}
+
+	return runState, nil
+}
+
+func (s *AgentSession) clearRunStateIfCurrent(runState *RunResult) {
+	if runState == nil {
+		return
+	}
+	s.mu.Lock()
+	if s.runState == runState {
+		s.runState = nil
+	}
+	s.mu.Unlock()
 }
 
 func (s *AgentSession) reportUsageLoop(ctx context.Context) {
@@ -1229,11 +1271,11 @@ func (s *AgentSession) SayWithOptions(ctx context.Context, opts SayOptions) (*Sp
 	if err := activity.ScheduleSpeech(handle, SpeechPriorityNormal, false); err != nil {
 		return nil, err
 	}
+	s.watchActiveRunSpeechHandle(handle)
 	if assistantMessage != nil {
 		s.EmitConversationItemAdded(assistantMessage)
 		handle.AddChatItems(assistantMessage)
 	}
-	s.watchActiveRunSpeechHandle(handle)
 	return handle, nil
 }
 
