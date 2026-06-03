@@ -16,6 +16,7 @@ import (
 	"github.com/cavos-io/rtp-agent/library/telemetry"
 	"github.com/cavos-io/rtp-agent/library/tokenize"
 	"github.com/cavos-io/rtp-agent/library/utils/images"
+	"github.com/google/uuid"
 	lksdk "github.com/livekit/server-sdk-go/v2"
 )
 
@@ -98,6 +99,11 @@ type RunOptions struct {
 	AllowInterruptions *bool
 	InputModality      string
 	OutputType         reflect.Type
+}
+
+type StartOptions struct {
+	CaptureRun bool
+	OutputType reflect.Type
 }
 
 type CommitUserTurnOptions struct {
@@ -671,12 +677,21 @@ func (s *AgentSession) EmitFunctionToolsExecuted(ev FunctionToolsExecutedEvent) 
 	if ev.CreatedAt.IsZero() {
 		ev.CreatedAt = time.Now()
 	}
+	s.mu.Lock()
+	runState := s.runState
+	s.mu.Unlock()
 	for _, call := range ev.FunctionCalls {
 		s.insertChatItem(call)
+		if runState != nil {
+			runState.RecordItem(call)
+		}
 	}
 	for _, output := range ev.FunctionCallOutputs {
 		if output != nil {
 			s.insertChatItem(output)
+			if runState != nil {
+				runState.RecordItem(output)
+			}
 		}
 	}
 	s.recordEvent(&ev)
@@ -865,10 +880,19 @@ func (s *AgentSession) closeEvents() chan CloseEvent {
 }
 
 func (s *AgentSession) Start(ctx context.Context) error {
+	_, err := s.StartWithOptions(ctx, StartOptions{})
+	return err
+}
+
+func (s *AgentSession) StartWithOptions(ctx context.Context, opts StartOptions) (*RunResult, error) {
 	s.mu.Lock()
 	if s.started {
 		s.mu.Unlock()
-		return nil
+		return nil, nil
+	}
+	if opts.CaptureRun && s.runState != nil && !s.runState.Done() {
+		s.mu.Unlock()
+		return nil, ErrAgentSessionNestedRun
 	}
 
 	if s.VAD == nil {
@@ -887,13 +911,19 @@ func (s *AgentSession) Start(ctx context.Context) error {
 	backgroundAudio := s.Options.BackgroundAudio
 	room := s.Room
 	hasMetricsCollector := s.MetricsCollector != nil
+	var runState *RunResult
+	if opts.CaptureRun {
+		runState = newRunResultFromOptions(s.ChatCtx, "", opts.OutputType)
+		s.runState = runState
+	}
 	s.mu.Unlock()
 
 	s.UpdateAgentState(AgentStateInitializing)
 
 	if backgroundAudio != nil && room != nil {
 		if err := backgroundAudio.Start(room, s); err != nil {
-			return err
+			s.clearRunStateIfCurrent(runState)
+			return nil, err
 		}
 	}
 	if avatar != nil {
@@ -901,14 +931,16 @@ func (s *AgentSession) Start(ctx context.Context) error {
 			if backgroundAudio != nil {
 				_ = backgroundAudio.Close()
 			}
-			return err
+			s.clearRunStateIfCurrent(runState)
+			return nil, err
 		}
 	}
 	if err := assistant.Start(ctx, s); err != nil {
 		if backgroundAudio != nil {
 			_ = backgroundAudio.Close()
 		}
-		return err
+		s.clearRunStateIfCurrent(runState)
+		return nil, err
 	}
 
 	activity := NewAgentActivity(agent, s)
@@ -933,7 +965,27 @@ func (s *AgentSession) Start(ctx context.Context) error {
 
 	s.UpdateAgentState(AgentStateListening)
 
-	return nil
+	if runState != nil {
+		if err := s.WaitForInactive(ctx); err != nil {
+			return nil, err
+		}
+		if !runState.Done() {
+			runState.MarkDone()
+		}
+	}
+
+	return runState, nil
+}
+
+func (s *AgentSession) clearRunStateIfCurrent(runState *RunResult) {
+	if runState == nil {
+		return
+	}
+	s.mu.Lock()
+	if s.runState == runState {
+		s.runState = nil
+	}
+	s.mu.Unlock()
 }
 
 func (s *AgentSession) reportUsageLoop(ctx context.Context) {
@@ -1219,11 +1271,11 @@ func (s *AgentSession) SayWithOptions(ctx context.Context, opts SayOptions) (*Sp
 	if err := activity.ScheduleSpeech(handle, SpeechPriorityNormal, false); err != nil {
 		return nil, err
 	}
+	s.watchActiveRunSpeechHandle(handle)
 	if assistantMessage != nil {
 		s.EmitConversationItemAdded(assistantMessage)
 		handle.AddChatItems(assistantMessage)
 	}
-	s.watchActiveRunSpeechHandle(handle)
 	return handle, nil
 }
 
@@ -1234,13 +1286,14 @@ func realtimeTurnDetectionEnabled(assistant any) bool {
 	return false
 }
 
-func (s *AgentSession) watchActiveRunSpeechHandle(handle *SpeechHandle) {
+func (s *AgentSession) watchActiveRunSpeechHandle(handle *SpeechHandle) bool {
 	s.mu.Lock()
 	runState := s.runState
 	s.mu.Unlock()
 	if runState != nil {
-		runState.WatchSpeechHandle(handle)
+		return runState.WatchSpeechHandle(handle)
 	}
+	return false
 }
 
 func (s *AgentSession) Interrupt(force bool) error {
@@ -1298,6 +1351,11 @@ func (s *AgentSession) UpdateAgent(agent AgentInterface) {
 		s.mu.Unlock()
 		return
 	}
+	oldAgent := (*Agent)(nil)
+	if oldActivity != nil {
+		oldAgent = oldActivity.Agent
+	}
+	runState := s.runState
 
 	newActivity := NewAgentActivity(agent, s)
 	s.activity = newActivity
@@ -1306,7 +1364,35 @@ func (s *AgentSession) UpdateAgent(agent AgentInterface) {
 	if oldActivity != nil {
 		oldActivity.Stop()
 	}
+	handoff := newAgentHandoff(oldAgent, baseAgent)
+	if runState != nil {
+		runState.RecordAgentHandoff(handoff, oldAgent, baseAgent)
+	}
+	s.EmitConversationItemAdded(handoff)
 	newActivity.Start()
+}
+
+func newAgentHandoff(oldAgent *Agent, newAgent *Agent) *llm.AgentHandoff {
+	var oldAgentID *string
+	if oldID := agentHandoffID(oldAgent); oldID != "" {
+		oldAgentID = &oldID
+	}
+	return &llm.AgentHandoff{
+		ID:         "handoff_" + uuid.NewString()[:12],
+		OldAgentID: oldAgentID,
+		NewAgentID: agentHandoffID(newAgent),
+		CreatedAt:  time.Now(),
+	}
+}
+
+func agentHandoffID(agent *Agent) string {
+	if agent == nil {
+		return ""
+	}
+	if agent.ID != "" {
+		return agent.ID
+	}
+	return agent.Instructions
 }
 
 func (s *AgentSession) Stop(ctx context.Context) error {

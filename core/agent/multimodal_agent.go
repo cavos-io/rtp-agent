@@ -26,6 +26,9 @@ type MultimodalAgent struct {
 	ctx    context.Context
 	cancel context.CancelFunc
 
+	pendingAutoToolReply      *SpeechHandle
+	pendingAutoToolReplyTimer *time.Timer
+
 	PublishAudio func(frame *model.AudioFrame) error
 }
 
@@ -238,6 +241,7 @@ func (ma *MultimodalAgent) handleRealtimeEvent(ev llm.RealtimeEvent) {
 			Source:        "generate_reply",
 			SpeechHandle:  handle,
 		})
+		ma.attachPendingRealtimeAutoToolReply(handle)
 		if ma.session.activity != nil {
 			if err := ma.session.activity.ScheduleSpeech(handle, SpeechPriorityNormal, false); err != nil {
 				logger.Logger.Warnw("failed to schedule realtime generation", err, "response_id", ev.Generation.ResponseID)
@@ -289,55 +293,14 @@ func (ma *MultimodalAgent) handleRealtimeEvent(ev llm.RealtimeEvent) {
 		}
 
 	case llm.RealtimeEventTypeFunctionCall:
-		logger.Logger.Infow("Executing tool (multimodal)", "name", ev.Function.Name)
-
-		// Find and execute tool
-		var foundTool llm.Tool
-		for _, tool := range ma.realtimeTools() {
-			if tool.Name() == ev.Function.Name {
-				foundTool = tool
-				break
-			}
-		}
-
-		if foundTool == nil {
-			ma.appendRealtimeToolOutput(&llm.FunctionCallOutput{
-				CallID:    ev.Function.CallID,
-				Name:      ev.Function.Name,
-				Output:    fmt.Sprintf("Unknown function: %s", ev.Function.Name),
-				IsError:   true,
-				CreatedAt: time.Now(),
-			})
+		if ev.Function == nil {
 			return
 		}
-
-		output, err := foundTool.Execute(ma.ctx, ev.Function.Arguments)
-		if err != nil {
-			var stopResponse llm.StopResponse
-			if errors.As(err, &stopResponse) {
-				return
-			}
-
-			var toolErr llm.ToolError
-			outputStr := "An internal error occurred"
-			if errors.As(err, &toolErr) {
-				outputStr = toolErr.Message
-			}
-			ma.appendRealtimeToolOutput(&llm.FunctionCallOutput{
-				CallID:    ev.Function.CallID,
-				Name:      ev.Function.Name,
-				Output:    outputStr,
-				IsError:   true,
-				CreatedAt: time.Now(),
-			})
-			return
-		}
-
-		ma.appendRealtimeToolOutput(&llm.FunctionCallOutput{
+		ma.executeRealtimeFunctionCall(&llm.FunctionCall{
 			CallID:    ev.Function.CallID,
 			Name:      ev.Function.Name,
-			Output:    output,
-			IsError:   false,
+			Arguments: ev.Function.Arguments,
+			Extra:     ev.Function.Extra,
 			CreatedAt: time.Now(),
 		})
 
@@ -355,18 +318,27 @@ func (ma *MultimodalAgent) handleRealtimeEvent(ev llm.RealtimeEvent) {
 }
 
 func (ma *MultimodalAgent) consumeRealtimeGeneration(ctx context.Context, speech *SpeechHandle, generation *llm.GenerationCreatedEvent) {
-	if generation == nil || generation.MessageCh == nil {
+	if generation == nil || (generation.MessageCh == nil && generation.FunctionCh == nil) {
 		return
 	}
-	for {
+	messageCh := generation.MessageCh
+	functionCh := generation.FunctionCh
+	for messageCh != nil || functionCh != nil {
 		select {
 		case <-ctx.Done():
 			return
-		case message, ok := <-generation.MessageCh:
+		case message, ok := <-messageCh:
 			if !ok {
-				return
+				messageCh = nil
+				continue
 			}
 			ma.consumeRealtimeMessage(ctx, speech, message)
+		case call, ok := <-functionCh:
+			if !ok {
+				functionCh = nil
+				continue
+			}
+			ma.executeRealtimeFunctionCall(call)
 		}
 	}
 }
@@ -420,12 +392,202 @@ func (ma *MultimodalAgent) realtimeTools() []llm.Tool {
 	return sessionRegisteredTools(ma.session)
 }
 
-func (ma *MultimodalAgent) appendRealtimeToolOutput(output *llm.FunctionCallOutput) {
+func (ma *MultimodalAgent) executeRealtimeFunctionCall(functionCall *llm.FunctionCall) {
+	if functionCall == nil {
+		return
+	}
+	if functionCall.CreatedAt.IsZero() {
+		functionCall.CreatedAt = time.Now()
+	}
+	logger.Logger.Infow("Executing tool (multimodal)", "name", functionCall.Name)
+
+	var foundTool llm.Tool
+	for _, tool := range ma.realtimeTools() {
+		if tool.Name() == functionCall.Name {
+			foundTool = tool
+			break
+		}
+	}
+
+	if foundTool == nil {
+		ma.appendRealtimeToolResult(functionCall, &llm.FunctionCallOutput{
+			CallID:    functionCall.CallID,
+			Name:      functionCall.Name,
+			Output:    fmt.Sprintf("Unknown function: %s", functionCall.Name),
+			IsError:   true,
+			CreatedAt: time.Now(),
+		})
+		return
+	}
+
+	callCtx := ma.ctx
+	if callCtx == nil {
+		callCtx = context.Background()
+	}
+	output, err := foundTool.Execute(callCtx, functionCall.Arguments)
+	if err != nil {
+		var stopResponse llm.StopResponse
+		if errors.As(err, &stopResponse) {
+			return
+		}
+
+		var toolErr llm.ToolError
+		outputStr := "An internal error occurred"
+		if errors.As(err, &toolErr) {
+			outputStr = toolErr.Message
+		}
+		ma.appendRealtimeToolResult(functionCall, &llm.FunctionCallOutput{
+			CallID:    functionCall.CallID,
+			Name:      functionCall.Name,
+			Output:    outputStr,
+			IsError:   true,
+			CreatedAt: time.Now(),
+		})
+		return
+	}
+
+	ma.appendRealtimeToolResult(functionCall, &llm.FunctionCallOutput{
+		CallID:    functionCall.CallID,
+		Name:      functionCall.Name,
+		Output:    output,
+		IsError:   false,
+		CreatedAt: time.Now(),
+	})
+}
+
+func (ma *MultimodalAgent) appendRealtimeToolResult(call *llm.FunctionCall, output *llm.FunctionCallOutput) {
 	if output == nil {
 		return
 	}
-	ma.chatCtx.Append(output)
-	_ = ma.rtSession.UpdateChatContext(ma.chatCtx)
+	if ma.chatCtx != nil {
+		if call != nil {
+			ma.chatCtx.Append(call)
+		}
+		ma.chatCtx.Append(output)
+	}
+	if ma.rtSession != nil && ma.chatCtx != nil {
+		_ = ma.rtSession.UpdateChatContext(ma.chatCtx)
+	}
+	if ma.session == nil || call == nil {
+		return
+	}
+	ev, err := NewFunctionToolsExecutedEvent([]*llm.FunctionCall{call}, []*llm.FunctionCallOutput{output})
+	if err != nil {
+		logger.Logger.Errorw("failed to create realtime function tools executed event", err)
+		return
+	}
+	ev.ReplyRequired = true
+	ma.session.EmitFunctionToolsExecuted(*ev)
+	if !ev.HasToolReply() {
+		return
+	}
+	if ma.realtimeCapabilities().AutoToolReplyGeneration {
+		ma.installPendingRealtimeAutoToolReply()
+		return
+	}
+	ma.generateRealtimeToolReply()
+}
+
+func (ma *MultimodalAgent) realtimeCapabilities() llm.RealtimeCapabilities {
+	if ma.model == nil {
+		return llm.RealtimeCapabilities{}
+	}
+	return ma.model.Capabilities()
+}
+
+func (ma *MultimodalAgent) generateRealtimeToolReply() {
+	ma.mu.Lock()
+	rtSession := ma.rtSession
+	ma.mu.Unlock()
+	if rtSession == nil {
+		return
+	}
+	if err := rtSession.Interrupt(); err != nil {
+		logger.Logger.Warnw("failed to interrupt realtime session before tool reply", err)
+	}
+	if err := rtSession.GenerateReply(llm.RealtimeGenerateReplyOptions{ToolChoice: "auto"}); err != nil {
+		logger.Logger.Errorw("failed to generate realtime tool reply", err)
+		if ma.session != nil {
+			ma.session.EmitError(ErrorEvent{
+				Error:  llm.NewRealtimeModelError(llm.RealtimeLabel(ma.model), err, false),
+				Source: ma.model,
+			})
+		}
+	}
+}
+
+func (ma *MultimodalAgent) installPendingRealtimeAutoToolReply() {
+	ma.mu.Lock()
+	if ma.pendingAutoToolReply != nil {
+		ma.mu.Unlock()
+		return
+	}
+	session := ma.session
+	if session == nil {
+		ma.mu.Unlock()
+		return
+	}
+	pending := NewSpeechHandle(false, DefaultInputDetails())
+	ma.pendingAutoToolReply = pending
+	ma.mu.Unlock()
+
+	if !session.watchActiveRunSpeechHandle(pending) {
+		ma.releasePendingRealtimeAutoToolReply(pending)
+		return
+	}
+
+	timer := time.AfterFunc(5*time.Second, func() {
+		logger.Logger.Warnw("timed out waiting for realtime auto tool reply", nil)
+		ma.releasePendingRealtimeAutoToolReply(pending)
+	})
+	ma.mu.Lock()
+	if ma.pendingAutoToolReply == pending {
+		ma.pendingAutoToolReplyTimer = timer
+		ma.mu.Unlock()
+		return
+	}
+	ma.mu.Unlock()
+	timer.Stop()
+}
+
+func (ma *MultimodalAgent) attachPendingRealtimeAutoToolReply(handle *SpeechHandle) {
+	ma.mu.Lock()
+	pending := ma.pendingAutoToolReply
+	timer := ma.pendingAutoToolReplyTimer
+	if pending != nil {
+		ma.pendingAutoToolReply = nil
+		ma.pendingAutoToolReplyTimer = nil
+	}
+	session := ma.session
+	ma.mu.Unlock()
+
+	if pending == nil {
+		return
+	}
+	if timer != nil {
+		timer.Stop()
+	}
+	if session != nil {
+		session.watchActiveRunSpeechHandle(handle)
+	}
+	pending.MarkDone()
+}
+
+func (ma *MultimodalAgent) releasePendingRealtimeAutoToolReply(pending *SpeechHandle) {
+	ma.mu.Lock()
+	if ma.pendingAutoToolReply != pending {
+		ma.mu.Unlock()
+		return
+	}
+	timer := ma.pendingAutoToolReplyTimer
+	ma.pendingAutoToolReply = nil
+	ma.pendingAutoToolReplyTimer = nil
+	ma.mu.Unlock()
+
+	if timer != nil {
+		timer.Stop()
+	}
+	pending.MarkDone()
 }
 
 func (ma *MultimodalAgent) OnAudioFrame(ctx context.Context, frame *model.AudioFrame) {

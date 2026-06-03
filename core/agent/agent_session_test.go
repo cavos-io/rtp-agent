@@ -98,6 +98,38 @@ func TestAgentSessionStartEnablesIVRDetectionActivity(t *testing.T) {
 	}
 }
 
+func TestAgentSessionStartWithOptionsCapturesOnEnterSpeechRun(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	agent := &onEnterSayAgent{Agent: NewAgent("test")}
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	agent.session = session
+	session.Assistant = &doneScheduledSpeechAssistant{}
+
+	result, err := session.StartWithOptions(ctx, StartOptions{CaptureRun: true})
+	if err != nil {
+		t.Fatalf("StartWithOptions error = %v, want nil", err)
+	}
+	if result == nil {
+		t.Fatal("StartWithOptions result = nil, want captured RunResult")
+	}
+	if err := result.Wait(ctx); err != nil {
+		t.Fatalf("captured RunResult did not complete: %v", err)
+	}
+	events := result.Events()
+	if len(events) != 1 {
+		t.Fatalf("RunResult events length = %d, want on-enter assistant message", len(events))
+	}
+	msgEvent, ok := events[0].(*ChatMessageEvent)
+	if !ok {
+		t.Fatalf("events[0] = %T, want *ChatMessageEvent", events[0])
+	}
+	if msgEvent.Item.TextContent() != "hello from on enter" {
+		t.Fatalf("message text = %q, want hello from on enter", msgEvent.Item.TextContent())
+	}
+}
+
 func TestAgentSessionIVRDetectionGeneratesReplyAfterSilence(t *testing.T) {
 	baseAgent := NewAgent("test")
 	session := NewAgentSession(baseAgent, nil, AgentSessionOptions{
@@ -145,6 +177,23 @@ func (f *fakeSessionAssistant) Start(context.Context, *AgentSession) error { ret
 func (f *fakeSessionAssistant) OnAudioFrame(context.Context, *model.AudioFrame) {
 }
 func (f *fakeSessionAssistant) SetPublishAudio(func(frame *model.AudioFrame) error) {
+}
+
+type doneScheduledSpeechAssistant struct {
+	fakeSessionAssistant
+}
+
+func (d *doneScheduledSpeechAssistant) OnSpeechScheduled(ctx context.Context, speech *SpeechHandle) {
+	speech.MarkDone()
+}
+
+type onEnterSayAgent struct {
+	*Agent
+	session *AgentSession
+}
+
+func (a *onEnterSayAgent) OnEnter() {
+	_, _ = a.session.Say(context.Background(), "hello from on enter")
 }
 
 type fakeCloseableSessionAssistant struct {
@@ -1020,6 +1069,43 @@ func TestAgentSessionRunReturnsRunResultWatchingGeneratedSpeech(t *testing.T) {
 	}
 }
 
+func TestAgentSessionFunctionToolsExecutedRecordsActiveRunItems(t *testing.T) {
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	result := NewRunResult(session.ChatCtx)
+	session.runState = result
+	call := &llm.FunctionCall{
+		ID:        "call_item_1",
+		CallID:    "call_lookup",
+		Name:      "lookup",
+		Arguments: `{}`,
+		CreatedAt: time.Now(),
+	}
+	output := &llm.FunctionCallOutput{
+		ID:        "output_item_1",
+		CallID:    "call_lookup",
+		Name:      "lookup",
+		Output:    "tool result",
+		CreatedAt: call.CreatedAt.Add(time.Millisecond),
+	}
+	ev, err := NewFunctionToolsExecutedEvent([]*llm.FunctionCall{call}, []*llm.FunctionCallOutput{output})
+	if err != nil {
+		t.Fatalf("NewFunctionToolsExecutedEvent error = %v, want nil", err)
+	}
+
+	session.EmitFunctionToolsExecuted(*ev)
+
+	events := result.Events()
+	if len(events) != 2 {
+		t.Fatalf("RunResult events length = %d, want function call and output", len(events))
+	}
+	if callEvent, ok := events[0].(*FunctionCallEvent); !ok || callEvent.Item != call {
+		t.Fatalf("events[0] = %#v, want recorded function call", events[0])
+	}
+	if outputEvent, ok := events[1].(*FunctionCallOutputEvent); !ok || outputEvent.Item != output {
+		t.Fatalf("events[1] = %#v, want recorded function call output", events[1])
+	}
+}
+
 func TestAgentSessionRunWithOptionsPreservesUserInputAndOutputType(t *testing.T) {
 	agent := NewAgent("test")
 	session := NewAgentSession(agent, nil, AgentSessionOptions{})
@@ -1533,11 +1619,15 @@ func TestAgentSessionUpdateAgentBeforeStartSwapsAgentOnly(t *testing.T) {
 
 func TestAgentSessionUpdateAgentWhileRunningStartsNewActivity(t *testing.T) {
 	initial := &trackingAgent{Agent: NewAgent("initial")}
+	initial.ID = "agent_initial"
 	next := &trackingAgent{Agent: NewAgent("next")}
+	next.ID = "agent_next"
 	session := NewAgentSession(initial, nil, AgentSessionOptions{})
 	oldActivity := NewAgentActivity(initial, session)
 	session.activity = oldActivity
 	session.started = true
+	result := NewRunResult(session.ChatCtx)
+	session.runState = result
 
 	session.UpdateAgent(next)
 
@@ -1561,6 +1651,30 @@ func TestAgentSessionUpdateAgentWhileRunningStartsNewActivity(t *testing.T) {
 	}
 	if next.GetActivity() != session.activity {
 		t.Fatalf("next activity = %#v, want session activity", next.GetActivity())
+	}
+	var handoff *llm.AgentHandoff
+	for _, item := range session.ChatCtx.Items {
+		if candidate, ok := item.(*llm.AgentHandoff); ok {
+			handoff = candidate
+			break
+		}
+	}
+	if handoff == nil {
+		t.Fatalf("session ChatCtx items = %#v, want agent handoff item", session.ChatCtx.Items)
+	}
+	if handoff.OldAgentID == nil || *handoff.OldAgentID != "agent_initial" || handoff.NewAgentID != "agent_next" {
+		t.Fatalf("handoff = %#v, want initial to next", handoff)
+	}
+	events := result.Events()
+	if len(events) != 1 {
+		t.Fatalf("RunResult events length = %d, want handoff event", len(events))
+	}
+	handoffEvent, ok := events[0].(*AgentHandoffEvent)
+	if !ok {
+		t.Fatalf("events[0] = %T, want *AgentHandoffEvent", events[0])
+	}
+	if handoffEvent.Item != handoff || handoffEvent.OldAgent != initial.Agent || handoffEvent.NewAgent != next.Agent {
+		t.Fatalf("handoff event = %#v, want recorded session handoff", handoffEvent)
 	}
 }
 

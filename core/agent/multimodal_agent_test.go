@@ -347,6 +347,23 @@ func TestMultimodalAgentExecutesAgentToolFunctionCall(t *testing.T) {
 	if output.IsError || output.Output != "agent result" {
 		t.Fatalf("function output = %#v, want agent tool result", output)
 	}
+	select {
+	case ev := <-session.FunctionToolsExecutedEvents():
+		if len(ev.FunctionCalls) != 1 || ev.FunctionCalls[0].Name != "lookup" || ev.FunctionCalls[0].CallID != "call_lookup" {
+			t.Fatalf("FunctionCalls = %#v, want lookup call_lookup", ev.FunctionCalls)
+		}
+		if len(ev.FunctionCallOutputs) != 1 || ev.FunctionCallOutputs[0] != output {
+			t.Fatalf("FunctionCallOutputs = %#v, want emitted realtime output", ev.FunctionCallOutputs)
+		}
+		if !ev.HasToolReply() {
+			t.Fatal("HasToolReply() = false, want true when realtime tool returned output")
+		}
+		if !chatContextContainsItem(session.ChatCtx, output) {
+			t.Fatalf("session ChatCtx items = %#v, want emitted realtime output", session.ChatCtx.Items)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("FunctionToolsExecutedEvents did not receive realtime function execution")
+	}
 }
 
 func TestMultimodalToolExecutionSuppressesStopResponse(t *testing.T) {
@@ -504,6 +521,179 @@ func TestMultimodalAgentEmitsSpeechCreatedForServerGeneration(t *testing.T) {
 	defer doneCancel()
 	if err := handle.Wait(doneCtx); err != nil {
 		t.Fatalf("server realtime generation handle did not complete after stream close: %v", err)
+	}
+}
+
+func TestMultimodalAgentConsumesServerGenerationFunctionCalls(t *testing.T) {
+	agent := NewAgent("test")
+	agent.Tools = []llm.Tool{&fakeGenerationTool{name: "lookup", result: "agent result"}}
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	activity := NewAgentActivity(agent, session)
+	session.activity = activity
+	go activity.schedulingTask()
+	defer activity.Stop()
+
+	messageCh := make(chan llm.MessageGeneration)
+	functionCh := make(chan *llm.FunctionCall, 1)
+	chatCtx := llm.NewChatContext()
+	rtSession := &fakeRealtimeSession{}
+	ma := &MultimodalAgent{
+		session:   session,
+		chatCtx:   chatCtx,
+		rtSession: rtSession,
+		ctx:       context.Background(),
+	}
+	session.Assistant = ma
+
+	ma.handleRealtimeEvent(llm.RealtimeEvent{
+		Type: llm.RealtimeEventTypeGenerationCreated,
+		Generation: &llm.GenerationCreatedEvent{
+			MessageCh:     messageCh,
+			FunctionCh:    functionCh,
+			ResponseID:    "response_1",
+			UserInitiated: false,
+		},
+	})
+
+	functionCh <- &llm.FunctionCall{Name: "lookup", CallID: "call_lookup", Arguments: `{}`}
+	close(functionCh)
+	close(messageCh)
+
+	select {
+	case ev := <-session.FunctionToolsExecutedEvents():
+		if len(ev.FunctionCalls) != 1 || ev.FunctionCalls[0].Name != "lookup" || ev.FunctionCalls[0].CallID != "call_lookup" {
+			t.Fatalf("FunctionCalls = %#v, want lookup call_lookup", ev.FunctionCalls)
+		}
+		if len(ev.FunctionCallOutputs) != 1 {
+			t.Fatalf("FunctionCallOutputs = %#v, want one output", ev.FunctionCallOutputs)
+		}
+		output := ev.FunctionCallOutputs[0]
+		if output.IsError || output.Output != "agent result" {
+			t.Fatalf("function output = %#v, want agent result", output)
+		}
+		if !chatContextContainsItem(session.ChatCtx, output) {
+			t.Fatalf("session ChatCtx items = %#v, want emitted realtime output", session.ChatCtx.Items)
+		}
+		if rtSession.updated != chatCtx {
+			t.Fatalf("updated chat context = %#v, want realtime generation chat context", rtSession.updated)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("FunctionToolsExecutedEvents did not receive server generation function execution")
+	}
+}
+
+func TestMultimodalAgentKeepsRunOpenForRealtimeAutoToolReply(t *testing.T) {
+	agent := NewAgent("test")
+	agent.Tools = []llm.Tool{&fakeGenerationTool{name: "lookup", result: "agent result"}}
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	activity := NewAgentActivity(agent, session)
+	session.activity = activity
+	go activity.schedulingTask()
+	defer activity.Stop()
+
+	result := NewRunResult(session.ChatCtx)
+	session.runState = result
+	currentSpeech := NewSpeechHandle(true, DefaultInputDetails())
+	result.WatchSpeechHandle(currentSpeech)
+
+	chatCtx := llm.NewChatContext()
+	ma := &MultimodalAgent{
+		model:     &fakeRealtimeModel{capabilities: llm.RealtimeCapabilities{AutoToolReplyGeneration: true}},
+		session:   session,
+		chatCtx:   chatCtx,
+		rtSession: &fakeRealtimeSession{},
+		ctx:       context.Background(),
+	}
+	session.Assistant = ma
+
+	ma.executeRealtimeFunctionCall(&llm.FunctionCall{Name: "lookup", CallID: "call_lookup", Arguments: `{}`})
+	select {
+	case <-session.FunctionToolsExecutedEvents():
+	case <-time.After(time.Second):
+		t.Fatal("FunctionToolsExecutedEvents did not receive realtime function execution")
+	}
+
+	currentSpeech.MarkDone()
+	if result.Done() {
+		t.Fatal("RunResult marked done before realtime auto tool reply generation arrived")
+	}
+
+	textCh := make(chan string, 1)
+	textCh <- "tool answer"
+	close(textCh)
+	messageCh := make(chan llm.MessageGeneration, 1)
+	messageCh <- llm.MessageGeneration{MessageID: "msg_auto_reply", TextCh: textCh}
+	close(messageCh)
+
+	ma.handleRealtimeEvent(llm.RealtimeEvent{
+		Type: llm.RealtimeEventTypeGenerationCreated,
+		Generation: &llm.GenerationCreatedEvent{
+			MessageCh:     messageCh,
+			ResponseID:    "response_auto_reply",
+			UserInitiated: false,
+		},
+	})
+
+	var replyHandle *SpeechHandle
+	select {
+	case ev := <-session.SpeechCreatedEvents():
+		replyHandle = ev.SpeechHandle
+	case <-time.After(time.Second):
+		t.Fatal("SpeechCreatedEvents did not receive realtime auto tool reply generation")
+	}
+
+	doneCtx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if err := replyHandle.Wait(doneCtx); err != nil {
+		t.Fatalf("realtime auto tool reply handle did not complete: %v", err)
+	}
+	if !result.Done() {
+		t.Fatal("RunResult did not complete after realtime auto tool reply generation completed")
+	}
+	events := result.Events()
+	if len(events) != 3 {
+		t.Fatalf("RunResult events length = %d, want function call, output, and assistant reply", len(events))
+	}
+	if msgEvent, ok := events[2].(*ChatMessageEvent); !ok || msgEvent.Item.GetID() != "msg_auto_reply" {
+		t.Fatalf("events[2] = %#v, want auto tool reply assistant message", events[2])
+	}
+}
+
+func TestMultimodalAgentGeneratesToolReplyWhenRealtimeDoesNotAutoReply(t *testing.T) {
+	agent := NewAgent("test")
+	agent.Tools = []llm.Tool{&fakeGenerationTool{name: "lookup", result: "agent result"}}
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	chatCtx := llm.NewChatContext()
+	rtSession := &fakeRealtimeSession{generateCh: make(chan llm.RealtimeGenerateReplyOptions, 1)}
+	ma := &MultimodalAgent{
+		model:     &fakeRealtimeModel{capabilities: llm.RealtimeCapabilities{AutoToolReplyGeneration: false}},
+		session:   session,
+		chatCtx:   chatCtx,
+		rtSession: rtSession,
+		ctx:       context.Background(),
+	}
+	session.Assistant = ma
+
+	ma.executeRealtimeFunctionCall(&llm.FunctionCall{Name: "lookup", CallID: "call_lookup", Arguments: `{}`})
+
+	select {
+	case <-session.FunctionToolsExecutedEvents():
+	case <-time.After(time.Second):
+		t.Fatal("FunctionToolsExecutedEvents did not receive realtime function execution")
+	}
+	select {
+	case opts := <-rtSession.generateCh:
+		if opts.ToolChoice != "auto" {
+			t.Fatalf("GenerateReply ToolChoice = %#v, want auto", opts.ToolChoice)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("realtime session did not receive explicit tool reply GenerateReply")
+	}
+	if rtSession.interrupted != 1 {
+		t.Fatalf("realtime session interrupts = %d, want 1 before explicit tool reply", rtSession.interrupted)
+	}
+	if rtSession.generatedWithChatCtx == nil || !containsFunctionOutput(rtSession.generatedWithChatCtx, "call_lookup", "agent result") {
+		t.Fatalf("generated chat context = %#v, want tool output before explicit reply", rtSession.generatedWithChatCtx)
 	}
 }
 
@@ -702,6 +892,31 @@ func findChatMessage(chatCtx *llm.ChatContext, role llm.ChatRole, text string) *
 	return nil
 }
 
+func chatContextContainsItem(chatCtx *llm.ChatContext, item llm.ChatItem) bool {
+	if chatCtx == nil {
+		return false
+	}
+	for _, existing := range chatCtx.Items {
+		if existing == item {
+			return true
+		}
+	}
+	return false
+}
+
+func containsFunctionOutput(chatCtx *llm.ChatContext, callID, output string) bool {
+	if chatCtx == nil {
+		return false
+	}
+	for _, item := range chatCtx.Items {
+		callOutput, ok := item.(*llm.FunctionCallOutput)
+		if ok && callOutput.CallID == callID && callOutput.Output == output {
+			return true
+		}
+	}
+	return false
+}
+
 func toolNames(tools []llm.Tool) []string {
 	names := make([]string, 0, len(tools))
 	for _, tool := range tools {
@@ -758,6 +973,7 @@ type fakeRealtimeSession struct {
 	videoFrames          int
 	pushVideoErr         error
 	closed               int
+	interrupted          int
 }
 
 func (f *fakeRealtimeSession) UpdateInstructions(string) error { return nil }
@@ -793,7 +1009,10 @@ func (f *fakeRealtimeSession) Say(text string) error {
 
 func (f *fakeRealtimeSession) Truncate(llm.RealtimeTruncateOptions) error { return nil }
 
-func (f *fakeRealtimeSession) Interrupt() error { return nil }
+func (f *fakeRealtimeSession) Interrupt() error {
+	f.interrupted++
+	return nil
+}
 
 func (f *fakeRealtimeSession) Close() error {
 	f.closed++

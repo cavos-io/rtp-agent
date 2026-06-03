@@ -810,6 +810,62 @@ func TestPipelineAgentEmitsFunctionToolsExecutedEvent(t *testing.T) {
 	}
 }
 
+func TestPipelineAgentScheduledReplyProvidesSpeechHandleToTools(t *testing.T) {
+	chatCtx := llm.NewChatContext()
+	l := &fakeGenerationLLM{
+		streams: []llm.LLMStream{
+			&fakeGenerationLLMStream{
+				chunks: []*llm.ChatChunk{
+					{Delta: &llm.ChoiceDelta{
+						ToolCalls: []llm.FunctionToolCall{{
+							Type:      "function",
+							Name:      "lookup",
+							CallID:    "call_lookup",
+							Arguments: `{}`,
+						}},
+					}},
+				},
+			},
+			&fakeGenerationLLMStream{
+				chunks: []*llm.ChatChunk{
+					{Delta: &llm.ChoiceDelta{Content: "done"}},
+				},
+			},
+		},
+	}
+	tool := &runContextRecordingTool{}
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	session.Tools = []llm.Tool{tool}
+	agent := NewPipelineAgent(nil, nil, l, &fakePipelineTTS{}, chatCtx)
+	agent.session = session
+	agent.ctx = context.Background()
+	session.Assistant = agent
+	activity := NewAgentActivity(NewAgent("test"), session)
+	session.activity = activity
+	go activity.schedulingTask()
+	defer activity.Stop()
+
+	handle, err := session.GenerateReply(context.Background(), "hello")
+	if err != nil {
+		t.Fatalf("GenerateReply error = %v, want nil", err)
+	}
+
+	waitCtx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if err := handle.Wait(waitCtx); err != nil {
+		t.Fatalf("scheduled pipeline reply did not complete: %v", err)
+	}
+	if tool.runContext == nil {
+		t.Fatal("tool run context is nil")
+	}
+	if tool.runContext.SpeechHandle != handle {
+		t.Fatalf("tool run context SpeechHandle = %#v, want scheduled handle %#v", tool.runContext.SpeechHandle, handle)
+	}
+	if len(handle.ChatItems()) != 1 {
+		t.Fatalf("handle chat items = %#v, want generated assistant message", handle.ChatItems())
+	}
+}
+
 func toolCallStream(callID string) *fakeGenerationLLMStream {
 	return &fakeGenerationLLMStream{
 		chunks: []*llm.ChatChunk{
