@@ -417,13 +417,23 @@ func (va *PipelineAgent) generateReplyWithOptions(opts pipelineReplyOptions) {
 
 func (va *PipelineAgent) synthesizeSpeech(ctx context.Context, session *AgentSession, textCh <-chan string) error {
 	transcriptSync := NewTranscriptSynchronizer(0)
-	transcriptionDone := va.forwardAgentOutputTranscription(session, transcriptSync)
-	ttsTextCh := va.forwardTextToTranscriptSynchronizer(ctx, textCh, transcriptSync)
+	useAlignedTranscript := va.useTTSAlignedTranscript(session)
+	var transcriptionDone <-chan struct{}
+	ttsTextCh := textCh
+	if useAlignedTranscript {
+		transcriptionDone = closedChannel()
+	} else {
+		transcriptionDone = va.forwardAgentOutputTranscription(session, transcriptSync)
+		ttsTextCh = va.forwardTextToTranscriptSynchronizer(ctx, textCh, transcriptSync)
+	}
 	ttsGen, err := PerformTTSInference(ctx, va.tts, ttsTextCh, va.ttsInferenceOptions(session)...)
 	if err != nil {
 		transcriptSync.Close()
 		<-transcriptionDone
 		return err
+	}
+	if useAlignedTranscript {
+		transcriptionDone = va.forwardAlignedAgentOutputTranscription(session, ttsGen.TimedTextCh)
 	}
 
 	session.UpdateAgentState(AgentStateSpeaking)
@@ -443,6 +453,13 @@ func (va *PipelineAgent) synthesizeSpeech(ctx context.Context, session *AgentSes
 	transcriptSync.Close()
 	<-transcriptionDone
 	return nil
+}
+
+func (va *PipelineAgent) useTTSAlignedTranscript(session *AgentSession) bool {
+	if session == nil || !session.Options.UseTTSAlignedTranscript || va.tts == nil {
+		return false
+	}
+	return va.tts.Capabilities().AlignedTranscript
 }
 
 func (va *PipelineAgent) ttsInferenceOptions(session *AgentSession) []TTSInferenceOption {
@@ -493,6 +510,28 @@ func (va *PipelineAgent) forwardAgentOutputTranscription(session *AgentSession, 
 		}
 	}()
 	return done
+}
+
+func (va *PipelineAgent) forwardAlignedAgentOutputTranscription(session *AgentSession, timedTextCh <-chan tts.TimedString) <-chan struct{} {
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for timedText := range timedTextCh {
+			if timedText.Text == "" {
+				continue
+			}
+			session.EmitAgentOutputTranscribed(AgentOutputTranscribedEvent{
+				Transcript: timedText.Text,
+			})
+		}
+	}()
+	return done
+}
+
+func closedChannel() <-chan struct{} {
+	ch := make(chan struct{})
+	close(ch)
+	return ch
 }
 
 func sessionRegisteredTools(session *AgentSession) []llm.Tool {

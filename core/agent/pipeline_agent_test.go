@@ -502,6 +502,48 @@ func TestPipelineAgentEmitsSynchronizedAgentOutputTranscription(t *testing.T) {
 	}
 }
 
+func TestPipelineAgentUsesTTSAlignedTranscriptWhenEnabled(t *testing.T) {
+	chatCtx := llm.NewChatContext()
+	l := &fakeGenerationLLM{
+		stream: &fakeGenerationLLMStream{
+			chunks: []*llm.ChatChunk{
+				{Delta: &llm.ChoiceDelta{Content: "llm transcript"}},
+			},
+		},
+	}
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{
+		UseTTSAlignedTranscript: true,
+	})
+	agent := NewPipelineAgent(nil, nil, l, &fakePipelineTTS{
+		capabilities: tts.TTSCapabilities{Streaming: true, AlignedTranscript: true},
+		stream: &fakePipelineTTSStream{
+			frames: []*model.AudioFrame{{
+				Data:              make([]byte, 4000),
+				SampleRate:        1000,
+				NumChannels:       1,
+				SamplesPerChannel: 2000,
+			}},
+			timedTranscripts: [][]tts.TimedString{{
+				{Text: "aligned transcript", StartTime: 0.1, EndTime: 0.5},
+			}},
+		},
+	}, chatCtx)
+	agent.session = session
+	agent.ctx = context.Background()
+	events := session.AgentOutputTranscribedEvents()
+
+	agent.generateReply()
+
+	select {
+	case ev := <-events:
+		if ev.Transcript != "aligned transcript" {
+			t.Fatalf("agent output transcript = %q, want TTS aligned transcript", ev.Transcript)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("AgentOutputTranscribedEvents did not receive aligned assistant transcript")
+	}
+}
+
 func TestPipelineAgentEmitsConversationItemAddedForUserTranscript(t *testing.T) {
 	chatCtx := llm.NewChatContext()
 	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
@@ -1173,12 +1215,16 @@ func toolCallStream(callID string) *fakeGenerationLLMStream {
 }
 
 type fakePipelineTTS struct {
-	stream *fakePipelineTTSStream
+	stream       *fakePipelineTTSStream
+	capabilities tts.TTSCapabilities
 }
 
 func (f *fakePipelineTTS) Label() string { return "fake" }
 
 func (f *fakePipelineTTS) Capabilities() tts.TTSCapabilities {
+	if f.capabilities != (tts.TTSCapabilities{}) {
+		return f.capabilities
+	}
 	return tts.TTSCapabilities{Streaming: true}
 }
 
@@ -1232,9 +1278,10 @@ func (f *fakeIDGenerationTool) Execute(context.Context, string) (string, error) 
 }
 
 type fakePipelineTTSStream struct {
-	text   strings.Builder
-	frames []*model.AudioFrame
-	next   int
+	text             strings.Builder
+	frames           []*model.AudioFrame
+	timedTranscripts [][]tts.TimedString
+	next             int
 }
 
 func (f *fakePipelineTTSStream) PushText(text string) error {
@@ -1249,8 +1296,12 @@ func (f *fakePipelineTTSStream) Close() error { return nil }
 func (f *fakePipelineTTSStream) Next() (*tts.SynthesizedAudio, error) {
 	if f.next < len(f.frames) {
 		frame := f.frames[f.next]
+		var timedTranscript []tts.TimedString
+		if f.next < len(f.timedTranscripts) {
+			timedTranscript = f.timedTranscripts[f.next]
+		}
 		f.next++
-		return &tts.SynthesizedAudio{Frame: frame}, nil
+		return &tts.SynthesizedAudio{Frame: frame, TimedTranscript: timedTranscript}, nil
 	}
 	return nil, io.EOF
 }
