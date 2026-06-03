@@ -1026,6 +1026,50 @@ func TestPipelineAgentScheduledReplyIncludesUserMessageInInferenceContext(t *tes
 	t.Fatalf("inference chat context items = %#v, want scheduled user input", inferenceCtx.Items)
 }
 
+func TestPipelineAgentScheduledReplyPersistsUserMessageInAgentChatContext(t *testing.T) {
+	pipelineCtx := llm.NewChatContext()
+	l := &fakeGenerationLLM{
+		stream: &fakeGenerationLLMStream{
+			chunks: []*llm.ChatChunk{
+				{Delta: &llm.ChoiceDelta{Content: "answer"}},
+			},
+		},
+	}
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	agent := NewPipelineAgent(nil, nil, l, &fakePipelineTTS{}, pipelineCtx)
+	agent.session = session
+	agent.ctx = context.Background()
+	session.Assistant = agent
+	activity := NewAgentActivity(NewAgent("test"), session)
+	session.activity = activity
+	go activity.schedulingTask()
+	defer activity.Stop()
+
+	handle, err := session.GenerateReply(context.Background(), "remember this")
+	if err != nil {
+		t.Fatalf("GenerateReply error = %v, want nil", err)
+	}
+
+	waitCtx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if err := handle.Wait(waitCtx); err != nil {
+		t.Fatalf("scheduled pipeline reply did not complete: %v", err)
+	}
+	var userMessages int
+	for _, item := range pipelineCtx.Items {
+		msg, ok := item.(*llm.ChatMessage)
+		if !ok {
+			continue
+		}
+		if msg.Role == llm.ChatRoleUser && msg.TextContent() == "remember this" {
+			userMessages++
+		}
+	}
+	if userMessages != 1 {
+		t.Fatalf("pipeline chat context items = %#v, want one scheduled user message", pipelineCtx.Items)
+	}
+}
+
 func TestPipelineAgentScheduledSaySpeaksProvidedTextWithoutLLM(t *testing.T) {
 	chatCtx := llm.NewChatContext()
 	l := &fakeGenerationLLM{

@@ -284,10 +284,12 @@ func (va *PipelineAgent) generateReplyWithOptions(opts pipelineReplyOptions) {
 		replyCtx = opts.ChatCtx.Copy()
 	}
 	if opts.UserMessage != nil {
+		insertChatItemIfMissing(va.chatCtx, opts.UserMessage)
 		if replyCtx == va.chatCtx {
 			replyCtx = va.chatCtx.Copy()
+		} else {
+			insertChatItemIfMissing(replyCtx, opts.UserMessage)
 		}
-		replyCtx.Insert(opts.UserMessage)
 	}
 
 	// In Python parity, we loop for tool calls
@@ -502,6 +504,21 @@ func sessionRegisteredTools(session *AgentSession) []llm.Tool {
 		tools = append(tools, session.Agent.GetAgent().Tools...)
 	}
 	return tools
+}
+
+func insertChatItemIfMissing(chatCtx *llm.ChatContext, item llm.ChatItem) {
+	if chatCtx == nil || item == nil {
+		return
+	}
+	for _, existing := range chatCtx.Items {
+		if existing == item {
+			return
+		}
+		if item.GetID() != "" && existing.GetID() == item.GetID() && existing.GetType() == item.GetType() {
+			return
+		}
+	}
+	chatCtx.Insert(item)
 }
 
 func resolveToolsByID(tools []llm.Tool, ids []string) ([]llm.Tool, error) {
