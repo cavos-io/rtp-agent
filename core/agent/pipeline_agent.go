@@ -38,6 +38,7 @@ type pipelineReplyOptions struct {
 	ToolChoice   llm.ToolChoice
 	Tools        []string
 	ChatCtx      *llm.ChatContext
+	UserMessage  *llm.ChatMessage
 	SpeechHandle *SpeechHandle
 }
 
@@ -221,9 +222,26 @@ func (va *PipelineAgent) OnSpeechScheduled(ctx context.Context, speech *SpeechHa
 	defer speech.MarkDone()
 	speech.AuthorizeGeneration()
 
+	if speech.Generation.Text != "" {
+		va.mu.Lock()
+		session := va.session
+		va.mu.Unlock()
+		if session == nil {
+			return
+		}
+		if err := va.synthesizeSpeech(ctx, session, singleTextChannel(speech.Generation.Text)); err != nil {
+			logger.Logger.Errorw("TTS inference failed", err)
+		}
+		insertChatItemIfMissing(va.chatCtx, speech.Generation.AssistantMessage)
+		_ = speech.MarkGenerationDone()
+		session.UpdateAgentState(AgentStateIdle)
+		return
+	}
+
 	options := pipelineReplyOptions{
 		Tools:        append([]string(nil), speech.Generation.Tools...),
 		ChatCtx:      speech.Generation.ChatCtx,
+		UserMessage:  speech.Generation.UserMessage,
 		SpeechHandle: speech,
 	}
 	if speech.Generation.Instructions != nil {
@@ -262,16 +280,26 @@ func (va *PipelineAgent) generateReplyWithOptions(opts pipelineReplyOptions) {
 	}
 	toolCtx := llm.NewToolContext(toolsInterface)
 
+	replyCtx := va.chatCtx
+	if opts.ChatCtx != nil {
+		replyCtx = opts.ChatCtx.Copy()
+	}
+	if opts.UserMessage != nil {
+		insertChatItemIfMissing(va.chatCtx, opts.UserMessage)
+		if replyCtx == va.chatCtx {
+			replyCtx = va.chatCtx.Copy()
+		} else {
+			insertChatItemIfMissing(replyCtx, opts.UserMessage)
+		}
+	}
+
 	// In Python parity, we loop for tool calls
 	toolSteps := 0
 	for {
-		inferenceCtx := va.chatCtx
-		if opts.ChatCtx != nil {
-			inferenceCtx = opts.ChatCtx.Copy()
-		}
+		inferenceCtx := replyCtx
 		if opts.Instructions != "" {
-			if inferenceCtx == va.chatCtx {
-				inferenceCtx = va.chatCtx.Copy()
+			if inferenceCtx == replyCtx {
+				inferenceCtx = replyCtx.Copy()
 			}
 			inferenceCtx.Items = append([]llm.ChatItem{&llm.ChatMessage{
 				Role:    llm.ChatRoleSystem,
@@ -306,39 +334,8 @@ func (va *PipelineAgent) generateReplyWithOptions(opts pipelineReplyOptions) {
 			return
 		}
 
-		// Start TTS in parallel with LLM text
-		transcriptSync := NewTranscriptSynchronizer(0)
-		transcriptionDone := va.forwardAgentOutputTranscription(session, transcriptSync)
-		ttsTextCh := va.forwardTextToTranscriptSynchronizer(ctx, genData.TextCh, transcriptSync)
-		ttsOpts := []TTSInferenceOption{}
-		if va.ttsStreamPacer != nil {
-			ttsOpts = append(ttsOpts, WithTTSStreamPacer(*va.ttsStreamPacer))
-		}
-		if len(session.Options.TTSTextReplacements) > 0 {
-			ttsOpts = append(ttsOpts, WithTTSTextReplacements(session.Options.TTSTextReplacements))
-		}
-		ttsGen, err := PerformTTSInference(ctx, va.tts, ttsTextCh, ttsOpts...)
-		if err != nil {
-			transcriptSync.Close()
-			<-transcriptionDone
+		if err := va.synthesizeSpeech(ctx, session, genData.TextCh); err != nil {
 			logger.Logger.Errorw("TTS inference failed", err)
-		} else {
-			session.UpdateAgentState(AgentStateSpeaking)
-			for frame := range ttsGen.AudioCh {
-				select {
-				case <-ctx.Done():
-					transcriptSync.Close()
-					<-transcriptionDone
-					return
-				default:
-					transcriptSync.PushAudio(frame)
-					if va.PublishAudio != nil {
-						_ = va.PublishAudio(frame)
-					}
-				}
-			}
-			transcriptSync.Close()
-			<-transcriptionDone
 		}
 
 		if genData.GeneratedText != "" {
@@ -381,8 +378,14 @@ func (va *PipelineAgent) generateReplyWithOptions(opts pipelineReplyOptions) {
 			functionCalls = append(functionCalls, &fncCall)
 			functionCallOutputs = append(functionCallOutputs, toolOut.FncCallOut)
 			va.chatCtx.Append(&fncCall)
+			if replyCtx != va.chatCtx {
+				replyCtx.Append(&fncCall)
+			}
 			if toolOut.FncCallOut != nil {
 				va.chatCtx.Append(toolOut.FncCallOut)
+				if replyCtx != va.chatCtx {
+					replyCtx.Append(toolOut.FncCallOut)
+				}
 			}
 		}
 
@@ -403,9 +406,82 @@ func (va *PipelineAgent) generateReplyWithOptions(opts pipelineReplyOptions) {
 			session.UpdateAgentState(AgentStateIdle)
 			break
 		}
+		if opts.SpeechHandle != nil {
+			opts.SpeechHandle.IncrementStep()
+			opts.SpeechHandle.AuthorizeGeneration()
+		}
 		toolSteps++
 		// Loop back to LLM with tool outputs
 	}
+}
+
+func (va *PipelineAgent) synthesizeSpeech(ctx context.Context, session *AgentSession, textCh <-chan string) error {
+	transcriptSync := NewTranscriptSynchronizer(0)
+	useAlignedTranscript := va.useTTSAlignedTranscript(session)
+	var transcriptionDone <-chan struct{}
+	ttsTextCh := textCh
+	if useAlignedTranscript {
+		transcriptionDone = closedChannel()
+	} else {
+		transcriptionDone = va.forwardAgentOutputTranscription(session, transcriptSync)
+		ttsTextCh = va.forwardTextToTranscriptSynchronizer(ctx, textCh, transcriptSync)
+	}
+	ttsGen, err := PerformTTSInference(ctx, va.tts, ttsTextCh, va.ttsInferenceOptions(session)...)
+	if err != nil {
+		transcriptSync.Close()
+		<-transcriptionDone
+		return err
+	}
+	if useAlignedTranscript {
+		transcriptionDone = va.forwardAlignedAgentOutputTranscription(session, ttsGen.TimedTextCh)
+	}
+
+	session.UpdateAgentState(AgentStateSpeaking)
+	for frame := range ttsGen.AudioCh {
+		select {
+		case <-ctx.Done():
+			transcriptSync.Close()
+			<-transcriptionDone
+			return ctx.Err()
+		default:
+			transcriptSync.PushAudio(frame)
+			if va.PublishAudio != nil {
+				_ = va.PublishAudio(frame)
+			}
+		}
+	}
+	transcriptSync.Close()
+	<-transcriptionDone
+	return nil
+}
+
+func (va *PipelineAgent) useTTSAlignedTranscript(session *AgentSession) bool {
+	if session == nil || !session.Options.UseTTSAlignedTranscript || va.tts == nil {
+		return false
+	}
+	capabilities := va.tts.Capabilities()
+	return capabilities.AlignedTranscript || !capabilities.Streaming
+}
+
+func (va *PipelineAgent) ttsInferenceOptions(session *AgentSession) []TTSInferenceOption {
+	var opts []TTSInferenceOption
+	if va.ttsStreamPacer != nil {
+		opts = append(opts, WithTTSStreamPacer(*va.ttsStreamPacer))
+	}
+	if session != nil && len(session.Options.TTSTextReplacements) > 0 {
+		opts = append(opts, WithTTSTextReplacements(session.Options.TTSTextReplacements))
+	}
+	if va.useTTSAlignedTranscript(session) {
+		opts = append(opts, WithTTSPreserveTimedTranscript())
+	}
+	return opts
+}
+
+func singleTextChannel(text string) <-chan string {
+	ch := make(chan string, 1)
+	ch <- text
+	close(ch)
+	return ch
 }
 
 func (va *PipelineAgent) forwardTextToTranscriptSynchronizer(ctx context.Context, textCh <-chan string, syncer *TranscriptSynchronizer) <-chan string {
@@ -440,6 +516,28 @@ func (va *PipelineAgent) forwardAgentOutputTranscription(session *AgentSession, 
 	return done
 }
 
+func (va *PipelineAgent) forwardAlignedAgentOutputTranscription(session *AgentSession, timedTextCh <-chan tts.TimedString) <-chan struct{} {
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for timedText := range timedTextCh {
+			if timedText.Text == "" {
+				continue
+			}
+			session.EmitAgentOutputTranscribed(AgentOutputTranscribedEvent{
+				Transcript: timedText.Text,
+			})
+		}
+	}()
+	return done
+}
+
+func closedChannel() <-chan struct{} {
+	ch := make(chan struct{})
+	close(ch)
+	return ch
+}
+
 func sessionRegisteredTools(session *AgentSession) []llm.Tool {
 	if session == nil {
 		return nil
@@ -450,6 +548,21 @@ func sessionRegisteredTools(session *AgentSession) []llm.Tool {
 		tools = append(tools, session.Agent.GetAgent().Tools...)
 	}
 	return tools
+}
+
+func insertChatItemIfMissing(chatCtx *llm.ChatContext, item llm.ChatItem) {
+	if chatCtx == nil || item == nil {
+		return
+	}
+	for _, existing := range chatCtx.Items {
+		if existing == item {
+			return
+		}
+		if item.GetID() != "" && existing.GetID() == item.GetID() && existing.GetType() == item.GetType() {
+			return
+		}
+	}
+	chatCtx.Insert(item)
 }
 
 func resolveToolsByID(tools []llm.Tool, ids []string) ([]llm.Tool, error) {

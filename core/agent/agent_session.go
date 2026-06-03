@@ -1179,6 +1179,8 @@ func (s *AgentSession) GenerateReplyWithOptions(ctx context.Context, opts Genera
 	}
 	if opts.ToolChoice != nil {
 		handle.Generation.ToolChoice = opts.ToolChoice
+	} else if runCtx := GetRunContext(ctx); runCtx != nil && runCtx.FunctionCall != nil {
+		handle.Generation.ToolChoice = "none"
 	}
 	if len(opts.Tools) > 0 {
 		handle.Generation.Tools = append([]string(nil), opts.Tools...)
@@ -1266,6 +1268,7 @@ func (s *AgentSession) SayWithOptions(ctx context.Context, opts SayOptions) (*Sp
 			},
 			CreatedAt: time.Now(),
 		}
+		handle.Generation.AssistantMessage = assistantMessage
 	}
 
 	if err := activity.ScheduleSpeech(handle, SpeechPriorityNormal, false); err != nil {

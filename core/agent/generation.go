@@ -137,13 +137,15 @@ func typeName(v any) string {
 }
 
 type TTSGenerationData struct {
-	AudioCh chan *model.AudioFrame
-	TTFB    time.Duration
+	AudioCh     chan *model.AudioFrame
+	TimedTextCh chan tts.TimedString
+	TTFB        time.Duration
 }
 
 type TTSInferenceOptions struct {
-	StreamPacer      *tts.SentenceStreamPacerOptions
-	TextReplacements map[string]string
+	StreamPacer             *tts.SentenceStreamPacerOptions
+	TextReplacements        map[string]string
+	PreserveTimedTranscript bool
 }
 
 type TTSInferenceOption func(*TTSInferenceOptions)
@@ -160,9 +162,16 @@ func WithTTSTextReplacements(replacements map[string]string) TTSInferenceOption 
 	}
 }
 
+func WithTTSPreserveTimedTranscript() TTSInferenceOption {
+	return func(options *TTSInferenceOptions) {
+		options.PreserveTimedTranscript = true
+	}
+}
+
 func PerformTTSInference(ctx context.Context, t tts.TTS, textCh <-chan string, opts ...TTSInferenceOption) (*TTSGenerationData, error) {
 	data := &TTSGenerationData{
-		AudioCh: make(chan *model.AudioFrame, 100),
+		AudioCh:     make(chan *model.AudioFrame, 100),
+		TimedTextCh: make(chan tts.TimedString, 100),
 	}
 
 	var options TTSInferenceOptions
@@ -173,6 +182,7 @@ func PerformTTSInference(ctx context.Context, t tts.TTS, textCh <-chan string, o
 	if !t.Capabilities().Streaming {
 		go func() {
 			defer close(data.AudioCh)
+			defer close(data.TimedTextCh)
 
 			var text strings.Builder
 			for chunk := range textCh {
@@ -188,9 +198,21 @@ func PerformTTSInference(ctx context.Context, t tts.TTS, textCh <-chan string, o
 			if err != nil {
 				return
 			}
-			frame, err := tts.Collect(stream)
-			if err != nil || frame == nil {
-				return
+			var frame *model.AudioFrame
+			if options.PreserveTimedTranscript {
+				var timedTranscript []tts.TimedString
+				frame, timedTranscript, err = tts.CollectWithTimedTranscript(stream)
+				if err != nil || frame == nil {
+					return
+				}
+				for _, timedText := range timedTranscript {
+					data.TimedTextCh <- timedText
+				}
+			} else {
+				frame, err = tts.Collect(stream)
+				if err != nil || frame == nil {
+					return
+				}
 			}
 			data.TTFB = time.Since(startTime)
 			data.AudioCh <- frame
@@ -212,6 +234,7 @@ func PerformTTSInference(ctx context.Context, t tts.TTS, textCh <-chan string, o
 
 	go func() {
 		defer close(data.AudioCh)
+		defer close(data.TimedTextCh)
 		defer stream.Close()
 
 		startTime := time.Now()
@@ -236,6 +259,9 @@ func PerformTTSInference(ctx context.Context, t tts.TTS, textCh <-chan string, o
 			}
 			if data.TTFB == 0 {
 				data.TTFB = time.Since(startTime)
+			}
+			for _, timedText := range audio.TimedTranscript {
+				data.TimedTextCh <- timedText
 			}
 			data.AudioCh <- audio.Frame
 		}

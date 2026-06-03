@@ -189,6 +189,32 @@ func TestCollectCombinesChunkedStreamFrames(t *testing.T) {
 	}
 }
 
+func TestCollectWithTimedTranscriptPreservesTranscript(t *testing.T) {
+	timed := TimedString{Text: "aligned chunk", StartTime: 0.25, EndTime: 0.5}
+	stream := &collectChunkedStream{events: []*SynthesizedAudio{
+		{
+			Frame: &model.AudioFrame{
+				Data:              []byte{1, 0},
+				SampleRate:        24000,
+				NumChannels:       1,
+				SamplesPerChannel: 1,
+			},
+			TimedTranscript: []TimedString{timed},
+		},
+	}}
+
+	frame, got, err := CollectWithTimedTranscript(stream)
+	if err != nil {
+		t.Fatalf("CollectWithTimedTranscript error = %v", err)
+	}
+	if frame == nil {
+		t.Fatal("frame = nil, want combined audio")
+	}
+	if len(got) != 1 || got[0] != timed {
+		t.Fatalf("timed transcript = %#v, want %#v", got, []TimedString{timed})
+	}
+}
+
 func TestCollectReturnsStreamError(t *testing.T) {
 	wantErr := errors.New("provider failed")
 	stream := &collectChunkedStream{err: wantErr}

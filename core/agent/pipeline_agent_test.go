@@ -145,6 +145,69 @@ func TestPipelineAgentGenerateReplyWithChatContextUsesTemporaryContext(t *testin
 	}
 }
 
+func TestPipelineAgentGenerateReplyWithChatContextCarriesToolOutputs(t *testing.T) {
+	persistentCtx := llm.NewChatContext()
+	overrideCtx := llm.NewChatContext()
+	overrideCtx.Append(&llm.ChatMessage{
+		ID:      "override_user",
+		Role:    llm.ChatRoleUser,
+		Content: []llm.ChatContent{{Text: "override"}},
+	})
+	l := &fakeGenerationLLM{
+		streams: []llm.LLMStream{
+			&fakeGenerationLLMStream{
+				chunks: []*llm.ChatChunk{
+					{Delta: &llm.ChoiceDelta{
+						ToolCalls: []llm.FunctionToolCall{{
+							Type:      "function",
+							Name:      "lookup",
+							CallID:    "call_lookup",
+							Arguments: `{}`,
+						}},
+					}},
+				},
+			},
+			&fakeGenerationLLMStream{
+				chunks: []*llm.ChatChunk{
+					{Delta: &llm.ChoiceDelta{Content: "done"}},
+				},
+			},
+		},
+	}
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	session.Tools = []llm.Tool{&fakeGenerationTool{name: "lookup", result: "tool result"}}
+	agent := NewPipelineAgent(nil, nil, l, &fakePipelineTTS{}, persistentCtx)
+	agent.session = session
+	agent.ctx = context.Background()
+
+	agent.generateReplyWithOptions(pipelineReplyOptions{
+		ChatCtx: overrideCtx,
+	})
+
+	if len(l.chatContexts) != 2 {
+		t.Fatalf("LLM chat contexts = %d, want initial and tool reply calls", len(l.chatContexts))
+	}
+	if l.chatContexts[1] == overrideCtx {
+		t.Fatal("second LLM chat context aliases override context, want working copy")
+	}
+	if len(l.chatContexts[1].Items) != 3 {
+		t.Fatalf("second LLM chat context items = %#v, want override user, function call, and function output", l.chatContexts[1].Items)
+	}
+	if l.chatContexts[1].Items[0].GetID() != "override_user" {
+		t.Fatalf("second LLM first item = %#v, want override user", l.chatContexts[1].Items[0])
+	}
+	if _, ok := l.chatContexts[1].Items[1].(*llm.FunctionCall); !ok {
+		t.Fatalf("second LLM second item = %T, want FunctionCall", l.chatContexts[1].Items[1])
+	}
+	output, ok := l.chatContexts[1].Items[2].(*llm.FunctionCallOutput)
+	if !ok || output.CallID != "call_lookup" || output.Output != "tool result" {
+		t.Fatalf("second LLM third item = %#v, want lookup tool result", l.chatContexts[1].Items[2])
+	}
+	if len(overrideCtx.Items) != 1 {
+		t.Fatalf("override chat item count = %d, want unchanged", len(overrideCtx.Items))
+	}
+}
+
 func TestPipelineAgentGenerateReplyWithToolChoicePassesChatOption(t *testing.T) {
 	chatCtx := llm.NewChatContext()
 	l := &fakeGenerationLLM{
@@ -436,6 +499,48 @@ func TestPipelineAgentEmitsSynchronizedAgentOutputTranscription(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("AgentOutputTranscribedEvents did not receive assistant transcript")
+	}
+}
+
+func TestPipelineAgentUsesTTSAlignedTranscriptWhenEnabled(t *testing.T) {
+	chatCtx := llm.NewChatContext()
+	l := &fakeGenerationLLM{
+		stream: &fakeGenerationLLMStream{
+			chunks: []*llm.ChatChunk{
+				{Delta: &llm.ChoiceDelta{Content: "llm transcript"}},
+			},
+		},
+	}
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{
+		UseTTSAlignedTranscript: true,
+	})
+	agent := NewPipelineAgent(nil, nil, l, &fakePipelineTTS{
+		capabilities: tts.TTSCapabilities{Streaming: true, AlignedTranscript: true},
+		stream: &fakePipelineTTSStream{
+			frames: []*model.AudioFrame{{
+				Data:              make([]byte, 4000),
+				SampleRate:        1000,
+				NumChannels:       1,
+				SamplesPerChannel: 2000,
+			}},
+			timedTranscripts: [][]tts.TimedString{{
+				{Text: "aligned transcript", StartTime: 0.1, EndTime: 0.5},
+			}},
+		},
+	}, chatCtx)
+	agent.session = session
+	agent.ctx = context.Background()
+	events := session.AgentOutputTranscribedEvents()
+
+	agent.generateReply()
+
+	select {
+	case ev := <-events:
+		if ev.Transcript != "aligned transcript" {
+			t.Fatalf("agent output transcript = %q, want TTS aligned transcript", ev.Transcript)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("AgentOutputTranscribedEvents did not receive aligned assistant transcript")
 	}
 }
 
@@ -866,6 +971,234 @@ func TestPipelineAgentScheduledReplyProvidesSpeechHandleToTools(t *testing.T) {
 	}
 }
 
+func TestPipelineAgentScheduledReplyIncrementsSpeechStepForToolReply(t *testing.T) {
+	chatCtx := llm.NewChatContext()
+	l := &fakeGenerationLLM{
+		streams: []llm.LLMStream{
+			&fakeGenerationLLMStream{
+				chunks: []*llm.ChatChunk{
+					{Delta: &llm.ChoiceDelta{
+						ToolCalls: []llm.FunctionToolCall{{
+							Type:      "function",
+							Name:      "lookup",
+							CallID:    "call_lookup",
+							Arguments: `{}`,
+						}},
+					}},
+				},
+			},
+			&fakeGenerationLLMStream{
+				chunks: []*llm.ChatChunk{
+					{Delta: &llm.ChoiceDelta{Content: "done"}},
+				},
+			},
+		},
+	}
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	session.Tools = []llm.Tool{&fakeGenerationTool{name: "lookup", result: "tool result"}}
+	agent := NewPipelineAgent(nil, nil, l, &fakePipelineTTS{}, chatCtx)
+	agent.session = session
+	agent.ctx = context.Background()
+	session.Assistant = agent
+	activity := NewAgentActivity(NewAgent("test"), session)
+	session.activity = activity
+	go activity.schedulingTask()
+	defer activity.Stop()
+
+	handle, err := session.GenerateReply(context.Background(), "hello")
+	if err != nil {
+		t.Fatalf("GenerateReply error = %v, want nil", err)
+	}
+
+	waitCtx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if err := handle.Wait(waitCtx); err != nil {
+		t.Fatalf("scheduled pipeline reply did not complete: %v", err)
+	}
+	if got, want := handle.NumSteps(), 2; got != want {
+		t.Fatalf("handle.NumSteps() = %d, want %d after tool follow-up reply", got, want)
+	}
+}
+
+func TestPipelineAgentScheduledReplyIncludesUserMessageInInferenceContext(t *testing.T) {
+	pipelineCtx := llm.NewChatContext()
+	l := &fakeGenerationLLM{
+		stream: &fakeGenerationLLMStream{
+			chunks: []*llm.ChatChunk{
+				{Delta: &llm.ChoiceDelta{Content: "answer"}},
+			},
+		},
+	}
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	agent := NewPipelineAgent(nil, nil, l, &fakePipelineTTS{}, pipelineCtx)
+	agent.session = session
+	agent.ctx = context.Background()
+	session.Assistant = agent
+	activity := NewAgentActivity(NewAgent("test"), session)
+	session.activity = activity
+	go activity.schedulingTask()
+	defer activity.Stop()
+
+	handle, err := session.GenerateReply(context.Background(), "reply to this")
+	if err != nil {
+		t.Fatalf("GenerateReply error = %v, want nil", err)
+	}
+
+	waitCtx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if err := handle.Wait(waitCtx); err != nil {
+		t.Fatalf("scheduled pipeline reply did not complete: %v", err)
+	}
+	if len(l.chatContexts) != 1 {
+		t.Fatalf("LLM chat contexts = %d, want 1", len(l.chatContexts))
+	}
+	inferenceCtx := l.chatContexts[0]
+	if len(inferenceCtx.Items) == 0 {
+		t.Fatal("inference chat context is empty, want scheduled user message")
+	}
+	for _, item := range inferenceCtx.Items {
+		msg, ok := item.(*llm.ChatMessage)
+		if !ok {
+			continue
+		}
+		if msg.Role == llm.ChatRoleUser && msg.TextContent() == "reply to this" {
+			return
+		}
+	}
+	t.Fatalf("inference chat context items = %#v, want scheduled user input", inferenceCtx.Items)
+}
+
+func TestPipelineAgentScheduledReplyPersistsUserMessageInAgentChatContext(t *testing.T) {
+	pipelineCtx := llm.NewChatContext()
+	l := &fakeGenerationLLM{
+		stream: &fakeGenerationLLMStream{
+			chunks: []*llm.ChatChunk{
+				{Delta: &llm.ChoiceDelta{Content: "answer"}},
+			},
+		},
+	}
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	agent := NewPipelineAgent(nil, nil, l, &fakePipelineTTS{}, pipelineCtx)
+	agent.session = session
+	agent.ctx = context.Background()
+	session.Assistant = agent
+	activity := NewAgentActivity(NewAgent("test"), session)
+	session.activity = activity
+	go activity.schedulingTask()
+	defer activity.Stop()
+
+	handle, err := session.GenerateReply(context.Background(), "remember this")
+	if err != nil {
+		t.Fatalf("GenerateReply error = %v, want nil", err)
+	}
+
+	waitCtx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if err := handle.Wait(waitCtx); err != nil {
+		t.Fatalf("scheduled pipeline reply did not complete: %v", err)
+	}
+	var userMessages int
+	for _, item := range pipelineCtx.Items {
+		msg, ok := item.(*llm.ChatMessage)
+		if !ok {
+			continue
+		}
+		if msg.Role == llm.ChatRoleUser && msg.TextContent() == "remember this" {
+			userMessages++
+		}
+	}
+	if userMessages != 1 {
+		t.Fatalf("pipeline chat context items = %#v, want one scheduled user message", pipelineCtx.Items)
+	}
+}
+
+func TestPipelineAgentScheduledSaySpeaksProvidedTextWithoutLLM(t *testing.T) {
+	chatCtx := llm.NewChatContext()
+	l := &fakeGenerationLLM{
+		stream: &fakeGenerationLLMStream{
+			chunks: []*llm.ChatChunk{
+				{Delta: &llm.ChoiceDelta{Content: "wrong"}},
+			},
+		},
+	}
+	ttsStream := &fakePipelineTTSStream{}
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	agent := NewPipelineAgent(nil, nil, l, &fakePipelineTTS{stream: ttsStream}, chatCtx)
+	agent.session = session
+	agent.ctx = context.Background()
+	session.Assistant = agent
+	activity := NewAgentActivity(NewAgent("test"), session)
+	session.activity = activity
+	go activity.schedulingTask()
+	defer activity.Stop()
+
+	handle, err := session.Say(context.Background(), "speak this text")
+	if err != nil {
+		t.Fatalf("Say error = %v, want nil", err)
+	}
+
+	waitCtx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if err := handle.Wait(waitCtx); err != nil {
+		t.Fatalf("scheduled pipeline say did not complete: %v", err)
+	}
+	if got := ttsStream.text.String(); got != "speak this text" {
+		t.Fatalf("TTS text = %q, want scheduled say text", got)
+	}
+	if len(l.calls) != 0 {
+		t.Fatalf("LLM calls = %d, want 0 for scheduled say", len(l.calls))
+	}
+	items := handle.ChatItems()
+	if len(items) != 1 {
+		t.Fatalf("handle chat items = %#v, want committed say assistant message", items)
+	}
+	msg, ok := items[0].(*llm.ChatMessage)
+	if !ok {
+		t.Fatalf("handle chat item = %T, want *llm.ChatMessage", items[0])
+	}
+	if msg.Role != llm.ChatRoleAssistant || msg.TextContent() != "speak this text" {
+		t.Fatalf("handle chat message = %#v, want assistant say text", msg)
+	}
+}
+
+func TestPipelineAgentScheduledSayPersistsAssistantTextInAgentChatContext(t *testing.T) {
+	pipelineCtx := llm.NewChatContext()
+	ttsStream := &fakePipelineTTSStream{}
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	agent := NewPipelineAgent(nil, nil, &fakeGenerationLLM{}, &fakePipelineTTS{stream: ttsStream}, pipelineCtx)
+	agent.session = session
+	agent.ctx = context.Background()
+	session.Assistant = agent
+	activity := NewAgentActivity(NewAgent("test"), session)
+	session.activity = activity
+	go activity.schedulingTask()
+	defer activity.Stop()
+
+	handle, err := session.Say(context.Background(), "persist this")
+	if err != nil {
+		t.Fatalf("Say error = %v, want nil", err)
+	}
+
+	waitCtx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if err := handle.Wait(waitCtx); err != nil {
+		t.Fatalf("scheduled pipeline say did not complete: %v", err)
+	}
+	var assistantMessages int
+	for _, item := range pipelineCtx.Items {
+		msg, ok := item.(*llm.ChatMessage)
+		if !ok {
+			continue
+		}
+		if msg.Role == llm.ChatRoleAssistant && msg.TextContent() == "persist this" {
+			assistantMessages++
+		}
+	}
+	if assistantMessages != 1 {
+		t.Fatalf("pipeline chat context items = %#v, want one scheduled say assistant message", pipelineCtx.Items)
+	}
+}
+
 func toolCallStream(callID string) *fakeGenerationLLMStream {
 	return &fakeGenerationLLMStream{
 		chunks: []*llm.ChatChunk{
@@ -882,12 +1215,16 @@ func toolCallStream(callID string) *fakeGenerationLLMStream {
 }
 
 type fakePipelineTTS struct {
-	stream *fakePipelineTTSStream
+	stream       *fakePipelineTTSStream
+	capabilities tts.TTSCapabilities
 }
 
 func (f *fakePipelineTTS) Label() string { return "fake" }
 
 func (f *fakePipelineTTS) Capabilities() tts.TTSCapabilities {
+	if f.capabilities != (tts.TTSCapabilities{}) {
+		return f.capabilities
+	}
 	return tts.TTSCapabilities{Streaming: true}
 }
 
@@ -941,9 +1278,10 @@ func (f *fakeIDGenerationTool) Execute(context.Context, string) (string, error) 
 }
 
 type fakePipelineTTSStream struct {
-	text   strings.Builder
-	frames []*model.AudioFrame
-	next   int
+	text             strings.Builder
+	frames           []*model.AudioFrame
+	timedTranscripts [][]tts.TimedString
+	next             int
 }
 
 func (f *fakePipelineTTSStream) PushText(text string) error {
@@ -958,8 +1296,12 @@ func (f *fakePipelineTTSStream) Close() error { return nil }
 func (f *fakePipelineTTSStream) Next() (*tts.SynthesizedAudio, error) {
 	if f.next < len(f.frames) {
 		frame := f.frames[f.next]
+		var timedTranscript []tts.TimedString
+		if f.next < len(f.timedTranscripts) {
+			timedTranscript = f.timedTranscripts[f.next]
+		}
 		f.next++
-		return &tts.SynthesizedAudio{Frame: frame}, nil
+		return &tts.SynthesizedAudio{Frame: frame, TimedTranscript: timedTranscript}, nil
 	}
 	return nil, io.EOF
 }

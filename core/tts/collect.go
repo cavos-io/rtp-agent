@@ -8,6 +8,11 @@ import (
 )
 
 func Collect(stream ChunkedStream) (frame *model.AudioFrame, err error) {
+	frame, _, err = CollectWithTimedTranscript(stream)
+	return frame, err
+}
+
+func CollectWithTimedTranscript(stream ChunkedStream) (frame *model.AudioFrame, timedTranscript []TimedString, err error) {
 	defer func() {
 		closeErr := stream.Close()
 		if err == nil && closeErr != nil {
@@ -20,16 +25,20 @@ func Collect(stream ChunkedStream) (frame *model.AudioFrame, err error) {
 		audio, err := stream.Next()
 		if err != nil {
 			if errors.Is(err, io.EOF) {
-				return combined, nil
+				return combined, timedTranscript, nil
 			}
-			return nil, err
+			return nil, nil, err
 		}
 		if audio == nil || audio.Frame == nil {
+			if audio != nil {
+				timedTranscript = append(timedTranscript, audio.TimedTranscript...)
+			}
 			continue
 		}
+		timedTranscript = append(timedTranscript, audio.TimedTranscript...)
 		frame, err := combineAudioFrames(combined, audio.Frame)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		combined = frame
 	}
