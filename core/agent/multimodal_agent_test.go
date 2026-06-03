@@ -87,6 +87,33 @@ func TestMultimodalAgentStartUpdatesRealtimeSessionWithSessionAndAgentTools(t *t
 	}
 }
 
+func TestMultimodalAgentStartInitializesRealtimeSessionConfiguration(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	agent := NewAgent("be helpful")
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	session.Tools = []llm.Tool{&fakeGenerationTool{name: "session_tool"}}
+	chatCtx := llm.NewChatContext()
+	chatCtx.Items = append(chatCtx.Items, &llm.ChatMessage{ID: "user", Role: llm.ChatRoleUser})
+	rtSession := &fakeRealtimeSession{}
+	ma := NewMultimodalAgent(&fakeRealtimeModel{session: rtSession}, chatCtx)
+
+	if err := ma.Start(ctx, session); err != nil {
+		t.Fatalf("Start returned error: %v", err)
+	}
+
+	if rtSession.instructions != "be helpful" {
+		t.Fatalf("realtime instructions = %q, want be helpful", rtSession.instructions)
+	}
+	if rtSession.updated != chatCtx {
+		t.Fatalf("realtime chat context = %#v, want provided chat context", rtSession.updated)
+	}
+	if got, want := toolNames(rtSession.tools), []string{"session_tool"}; !equalStrings(got, want) {
+		t.Fatalf("updated realtime tools = %#v, want %#v", got, want)
+	}
+}
+
 func TestAgentUpdateInstructionsUpdatesRealtimeSession(t *testing.T) {
 	baseAgent := NewAgent("initial instructions")
 	session := NewAgentSession(baseAgent, nil, AgentSessionOptions{})
@@ -151,6 +178,24 @@ func TestAgentUpdateChatContextUpdatesRealtimeSession(t *testing.T) {
 	}
 	if got := chatItemIDs(rtSession.updated.Items); !stringSlicesEqual(got, []string{"user"}) {
 		t.Fatalf("realtime ChatCtx item IDs = %q, want user without synthetic instructions", got)
+	}
+}
+
+func TestAgentSessionUpdateOptionsUpdatesRealtimeToolChoice(t *testing.T) {
+	baseAgent := NewAgent("test")
+	session := NewAgentSession(baseAgent, nil, AgentSessionOptions{})
+	rtSession := &fakeRealtimeSession{}
+	ma := NewMultimodalAgent(&fakeRealtimeModel{session: rtSession}, llm.NewChatContext())
+	ma.rtSession = rtSession
+	session.Assistant = ma
+
+	toolChoice := llm.ToolChoice("auto")
+	if err := session.UpdateOptions(AgentSessionUpdateOptions{ToolChoice: &toolChoice}); err != nil {
+		t.Fatalf("UpdateOptions error = %v, want nil", err)
+	}
+
+	if rtSession.options.ToolChoice != "auto" {
+		t.Fatalf("realtime ToolChoice = %#v, want auto", rtSession.options.ToolChoice)
 	}
 }
 
@@ -1036,6 +1081,7 @@ type fakeRealtimeSession struct {
 	generatedWithChatCtx *llm.ChatContext
 	tools                []llm.Tool
 	instructions         string
+	options              llm.RealtimeSessionOptions
 	generateCh           chan llm.RealtimeGenerateReplyOptions
 	sayCh                chan string
 	videoFrames          int
@@ -1059,7 +1105,10 @@ func (f *fakeRealtimeSession) UpdateTools(tools []llm.Tool) error {
 	return nil
 }
 
-func (f *fakeRealtimeSession) UpdateOptions(llm.RealtimeSessionOptions) error { return nil }
+func (f *fakeRealtimeSession) UpdateOptions(options llm.RealtimeSessionOptions) error {
+	f.options = options
+	return nil
+}
 
 func (f *fakeRealtimeSession) GenerateReply(options llm.RealtimeGenerateReplyOptions) error {
 	if f.updated != nil {

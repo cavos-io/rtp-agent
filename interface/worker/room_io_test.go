@@ -8,6 +8,8 @@ import (
 
 	"github.com/cavos-io/rtp-agent/core/agent"
 	"github.com/cavos-io/rtp-agent/core/audio/model"
+	"github.com/cavos-io/rtp-agent/core/llm"
+	"github.com/cavos-io/rtp-agent/library/utils/images"
 	"github.com/livekit/protocol/livekit"
 	lksdk "github.com/livekit/server-sdk-go/v2"
 )
@@ -109,6 +111,19 @@ func TestNewRoomIOCanDisableTextInput(t *testing.T) {
 	err := room.RegisterTextStreamHandler(RoomIOChatTopic, func(*lksdk.TextStreamReader, string) {})
 	if err != nil {
 		t.Fatalf("RegisterTextStreamHandler(lk.chat) error = %v, want nil when disabled", err)
+	}
+}
+
+func TestNewRoomIOCreatesMultimodalAssistantWithRealtimeModel(t *testing.T) {
+	session := &agent.AgentSession{
+		ChatCtx:       llm.NewChatContext(),
+		RealtimeModel: &fakeRoomIORealtimeModel{session: &fakeRoomIORealtimeSession{}},
+	}
+
+	_ = NewRoomIO(lksdk.NewRoom(nil), session, RoomOptions{})
+
+	if _, ok := session.Assistant.(*agent.MultimodalAgent); !ok {
+		t.Fatalf("session assistant = %T, want *agent.MultimodalAgent", session.Assistant)
 	}
 }
 
@@ -899,3 +914,56 @@ func (f *fakeClientEventsDispatcher) DispatchAgentState(state agent.AgentState) 
 func (f *fakeClientEventsDispatcher) DispatchUserState(state agent.UserState) {
 	f.userStates = append(f.userStates, state)
 }
+
+type fakeRoomIORealtimeModel struct {
+	session llm.RealtimeSession
+}
+
+func (f *fakeRoomIORealtimeModel) Capabilities() llm.RealtimeCapabilities {
+	return llm.RealtimeCapabilities{}
+}
+
+func (f *fakeRoomIORealtimeModel) Session() (llm.RealtimeSession, error) {
+	if f.session != nil {
+		return f.session, nil
+	}
+	return &fakeRoomIORealtimeSession{}, nil
+}
+
+func (f *fakeRoomIORealtimeModel) Close() error { return nil }
+
+type fakeRoomIORealtimeSession struct{}
+
+func (f *fakeRoomIORealtimeSession) UpdateInstructions(string) error { return nil }
+
+func (f *fakeRoomIORealtimeSession) UpdateChatContext(*llm.ChatContext) error { return nil }
+
+func (f *fakeRoomIORealtimeSession) UpdateTools([]llm.Tool) error { return nil }
+
+func (f *fakeRoomIORealtimeSession) UpdateOptions(llm.RealtimeSessionOptions) error { return nil }
+
+func (f *fakeRoomIORealtimeSession) GenerateReply(llm.RealtimeGenerateReplyOptions) error {
+	return nil
+}
+
+func (f *fakeRoomIORealtimeSession) Say(string) error { return nil }
+
+func (f *fakeRoomIORealtimeSession) Truncate(llm.RealtimeTruncateOptions) error { return nil }
+
+func (f *fakeRoomIORealtimeSession) Interrupt() error { return nil }
+
+func (f *fakeRoomIORealtimeSession) Close() error { return nil }
+
+func (f *fakeRoomIORealtimeSession) EventCh() <-chan llm.RealtimeEvent {
+	ch := make(chan llm.RealtimeEvent)
+	close(ch)
+	return ch
+}
+
+func (f *fakeRoomIORealtimeSession) PushAudio(*model.AudioFrame) error { return nil }
+
+func (f *fakeRoomIORealtimeSession) PushVideo(*images.VideoFrame) error { return nil }
+
+func (f *fakeRoomIORealtimeSession) CommitAudio() error { return nil }
+
+func (f *fakeRoomIORealtimeSession) ClearAudio() error { return nil }

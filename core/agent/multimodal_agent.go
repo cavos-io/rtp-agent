@@ -52,16 +52,19 @@ func NewMultimodalAgent(
 func (ma *MultimodalAgent) Start(ctx context.Context, s *AgentSession) error {
 	ma.mu.Lock()
 	ma.session = s
+	ma.ctx = ctx
 	ma.mu.Unlock()
 
 	rtSession, err := ma.model.Session()
 	if err != nil {
 		return err
 	}
+	ma.mu.Lock()
 	ma.rtSession = rtSession
+	ma.mu.Unlock()
 
-	if err := ma.rtSession.UpdateTools(ma.realtimeTools()); err != nil {
-		logger.Logger.Errorw("failed to update tools on realtime session", err)
+	if err := ma.initializeRealtimeSession(rtSession); err != nil {
+		logger.Logger.Errorw("failed to initialize realtime session", err)
 	}
 
 	go ma.run(ctx, rtSession)
@@ -133,6 +136,95 @@ func (ma *MultimodalAgent) UpdateChatContext(ctx context.Context, chatCtx *llm.C
 	default:
 	}
 	return rtSession.UpdateChatContext(chatCtx)
+}
+
+func (ma *MultimodalAgent) UpdateOptions(ctx context.Context, options llm.RealtimeSessionOptions) error {
+	ma.mu.Lock()
+	rtSession := ma.rtSession
+	ma.mu.Unlock()
+	if rtSession == nil {
+		return nil
+	}
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	default:
+	}
+	return rtSession.UpdateOptions(options)
+}
+
+func (ma *MultimodalAgent) UpdateRealtimeModel(ctx context.Context, model llm.RealtimeModel) error {
+	if model == nil {
+		return nil
+	}
+
+	ma.mu.Lock()
+	if ma.model == model {
+		ma.mu.Unlock()
+		return nil
+	}
+	oldSession := ma.rtSession
+	runCtx := ma.ctx
+	ma.mu.Unlock()
+
+	if runCtx == nil {
+		runCtx = ctx
+	}
+	if oldSession == nil {
+		ma.mu.Lock()
+		ma.model = model
+		ma.mu.Unlock()
+		return nil
+	}
+
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	default:
+	}
+
+	rtSession, err := model.Session()
+	if err != nil {
+		return err
+	}
+	if err := ma.initializeRealtimeSession(rtSession); err != nil {
+		_ = rtSession.Close()
+		return err
+	}
+
+	ma.mu.Lock()
+	oldSession = ma.rtSession
+	ma.model = model
+	ma.rtSession = rtSession
+	ma.mu.Unlock()
+
+	if oldSession != nil {
+		_ = oldSession.Close()
+	}
+	go ma.run(runCtx, rtSession)
+	return nil
+}
+
+func (ma *MultimodalAgent) initializeRealtimeSession(rtSession llm.RealtimeSession) error {
+	ma.mu.Lock()
+	session := ma.session
+	chatCtx := ma.chatCtx
+	ma.mu.Unlock()
+
+	if session != nil && session.Agent != nil {
+		instructions := session.Agent.GetAgent().Instructions
+		if instructions != "" {
+			if err := rtSession.UpdateInstructions(instructions); err != nil {
+				return err
+			}
+		}
+	}
+	if chatCtx != nil {
+		if err := rtSession.UpdateChatContext(chatCtx); err != nil {
+			return err
+		}
+	}
+	return rtSession.UpdateTools(ma.realtimeTools())
 }
 
 func (ma *MultimodalAgent) SupportsNativeSay() bool {

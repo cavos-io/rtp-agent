@@ -62,12 +62,14 @@ type AgentSessionOptions struct {
 	IVRDetection                  bool
 	IVRSilenceDuration            time.Duration
 	VideoSampler                  *VoiceActivityVideoSampler
+	ToolChoice                    llm.ToolChoice
 }
 
 type AgentSessionUpdateOptions struct {
 	MinEndpointingDelay *float64
 	MaxEndpointingDelay *float64
 	TurnDetection       *TurnDetectionMode
+	ToolChoice          *llm.ToolChoice
 }
 
 var (
@@ -142,6 +144,14 @@ type componentUpdatingAssistant interface {
 	UpdateComponents(vad.VAD, stt.STT, llm.LLM, tts.TTS)
 }
 
+type realtimeModelUpdatingAssistant interface {
+	UpdateRealtimeModel(context.Context, llm.RealtimeModel) error
+}
+
+type realtimeOptionsUpdatingAssistant interface {
+	UpdateOptions(context.Context, llm.RealtimeSessionOptions) error
+}
+
 type AgentSession struct {
 	Options AgentSessionOptions
 
@@ -164,6 +174,7 @@ type AgentSession struct {
 	mu             sync.Mutex
 	activity       *AgentActivity
 	started        bool
+	runCtx         context.Context
 	runState       *RunResult
 	userAwayTimer  *time.Timer
 	userdata       any
@@ -374,6 +385,7 @@ func NewAgentSession(agent AgentInterface, room *lksdk.Room, opts AgentSessionOp
 		STT:                 baseAgent.STT,
 		VAD:                 baseAgent.VAD,
 		LLM:                 baseAgent.LLM,
+		RealtimeModel:       baseAgent.RealtimeModel,
 		TTS:                 baseAgent.TTS,
 		Options:             opts,
 		ChatCtx:             llm.NewChatContext(),
@@ -435,9 +447,8 @@ func withAgentSessionOptionDefaults(opts AgentSessionOptions) AgentSessionOption
 	return opts
 }
 
-func (s *AgentSession) UpdateOptions(opts AgentSessionUpdateOptions) {
+func (s *AgentSession) UpdateOptions(opts AgentSessionUpdateOptions) error {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 
 	if opts.MinEndpointingDelay != nil {
 		s.Options.MinEndpointingDelay = *opts.MinEndpointingDelay
@@ -448,6 +459,55 @@ func (s *AgentSession) UpdateOptions(opts AgentSessionUpdateOptions) {
 	if opts.TurnDetection != nil {
 		s.Options.TurnDetection = *opts.TurnDetection
 	}
+	if opts.ToolChoice != nil {
+		s.Options.ToolChoice = *opts.ToolChoice
+	}
+	assistant := s.Assistant
+	s.mu.Unlock()
+
+	if opts.ToolChoice == nil {
+		return nil
+	}
+	updater, ok := assistant.(realtimeOptionsUpdatingAssistant)
+	if !ok {
+		return nil
+	}
+	return updater.UpdateOptions(context.Background(), llm.RealtimeSessionOptions{
+		ToolChoice: *opts.ToolChoice,
+	})
+}
+
+func (s *AgentSession) EnsureAssistant() SessionAssistant {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.ensureAssistantLocked()
+}
+
+func (s *AgentSession) ensureAssistantLocked() SessionAssistant {
+	if s.Assistant != nil {
+		return s.Assistant
+	}
+	if s.RealtimeModel != nil {
+		s.Assistant = NewMultimodalAgent(s.RealtimeModel, s.ChatCtx)
+		return s.Assistant
+	}
+	s.Assistant = NewPipelineAgent(s.VAD, s.STT, s.LLM, s.TTS, s.ChatCtx)
+	return s.Assistant
+}
+
+func (s *AgentSession) replacementAssistantLocked(current SessionAssistant) SessionAssistant {
+	if s.RealtimeModel != nil {
+		if _, ok := current.(*MultimodalAgent); ok {
+			return nil
+		}
+		return NewMultimodalAgent(s.RealtimeModel, s.ChatCtx)
+	}
+	if _, ok := current.(*MultimodalAgent); !ok {
+		return nil
+	}
+	pipeline := NewPipelineAgent(s.VAD, s.STT, s.LLM, s.TTS, s.ChatCtx)
+	pipeline.ttsStreamPacer = s.Options.TTSStreamPacer
+	return pipeline
 }
 
 func (s *AgentSession) UserInputTranscribedEvents() <-chan UserInputTranscribedEvent {
@@ -903,10 +963,7 @@ func (s *AgentSession) StartWithOptions(ctx context.Context, opts StartOptions) 
 		s.VAD = vad.NewSimpleVAD(0.05)
 	}
 
-	if s.Assistant == nil {
-		s.Assistant = NewPipelineAgent(s.VAD, s.STT, s.LLM, s.TTS, s.ChatCtx)
-	}
-	assistant := s.Assistant
+	assistant := s.ensureAssistantLocked()
 	if pipeline, ok := assistant.(*PipelineAgent); ok {
 		pipeline.ttsStreamPacer = s.Options.TTSStreamPacer
 	}
@@ -951,6 +1008,7 @@ func (s *AgentSession) StartWithOptions(ctx context.Context, opts StartOptions) 
 	s.mu.Lock()
 	s.activity = activity
 	s.started = true
+	s.runCtx = ctx
 	s.mu.Unlock()
 
 	activity.Start()
@@ -1185,6 +1243,8 @@ func (s *AgentSession) GenerateReplyWithOptions(ctx context.Context, opts Genera
 		handle.Generation.ToolChoice = opts.ToolChoice
 	} else if runCtx := GetRunContext(ctx); runCtx != nil && runCtx.FunctionCall != nil {
 		handle.Generation.ToolChoice = "none"
+	} else if s.Options.ToolChoice != nil {
+		handle.Generation.ToolChoice = s.Options.ToolChoice
 	}
 	if len(opts.Tools) > 0 {
 		handle.Generation.Tools = append([]string(nil), opts.Tools...)
@@ -1371,9 +1431,17 @@ func (s *AgentSession) UpdateAgent(agent AgentInterface) {
 	sessionSTT := s.STT
 	sessionLLM := s.LLM
 	sessionTTS := s.TTS
+	sessionRealtimeModel := s.RealtimeModel
 	if !started {
 		s.mu.Unlock()
 		return
+	}
+	runCtx := s.runCtx
+	previousAssistant := assistant
+	replacementAssistant := s.replacementAssistantLocked(assistant)
+	if replacementAssistant != nil {
+		s.Assistant = replacementAssistant
+		assistant = replacementAssistant
 	}
 	oldAgent := (*Agent)(nil)
 	if oldActivity != nil {
@@ -1385,8 +1453,26 @@ func (s *AgentSession) UpdateAgent(agent AgentInterface) {
 	s.activity = newActivity
 	s.mu.Unlock()
 
-	if updater, ok := assistant.(componentUpdatingAssistant); ok {
+	if replacementAssistant != nil {
+		if runCtx == nil {
+			runCtx = context.Background()
+		}
+		if err := replacementAssistant.Start(runCtx, s); err != nil {
+			logger.Logger.Errorw("failed to start replacement assistant", err)
+		} else if closer, ok := previousAssistant.(closeableSessionAssistant); ok {
+			if err := closer.Close(); err != nil {
+				logger.Logger.Errorw("failed to close replaced assistant", err)
+			}
+		}
+	} else if updater, ok := assistant.(componentUpdatingAssistant); ok {
 		updater.UpdateComponents(sessionVAD, sessionSTT, sessionLLM, sessionTTS)
+	}
+	if replacementAssistant == nil {
+		if updater, ok := assistant.(realtimeModelUpdatingAssistant); ok {
+			if err := updater.UpdateRealtimeModel(context.Background(), sessionRealtimeModel); err != nil {
+				logger.Logger.Errorw("failed to update realtime model on assistant", err)
+			}
+		}
 	}
 	if oldActivity != nil {
 		oldActivity.Stop()
@@ -1408,6 +1494,10 @@ func (s *AgentSession) updateAgentComponentsLocked(agent *Agent) {
 	}
 	if agent.LLM != nil {
 		s.LLM = agent.LLM
+		s.RealtimeModel = nil
+	}
+	if agent.RealtimeModel != nil {
+		s.RealtimeModel = agent.RealtimeModel
 	}
 	if agent.TTS != nil {
 		s.TTS = agent.TTS
@@ -1454,6 +1544,7 @@ func (s *AgentSession) stop(ctx context.Context, commitPendingUserTurn bool) err
 	s.activity = nil
 	s.ivrActivity = nil
 	s.started = false
+	s.runCtx = nil
 	s.UserState = UserStateListening
 	s.AgentState = AgentStateInitializing
 	if s.userAwayTimer != nil {

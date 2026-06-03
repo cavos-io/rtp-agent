@@ -113,6 +113,46 @@ func TestAgentSessionStartConfiguresTTSStreamPacer(t *testing.T) {
 	}
 }
 
+func TestAgentSessionStartCreatesMultimodalAssistantWithRealtimeModel(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	session.RealtimeModel = &fakeRealtimeModel{session: &fakeRealtimeSession{}}
+	session.VAD = &fakePipelineVAD{}
+	session.STT = &fakePipelineSTT{}
+	session.LLM = &fakeGenerationLLM{stream: &fakeGenerationLLMStream{}}
+	session.TTS = &fakePipelineTTS{}
+
+	if err := session.Start(ctx); err != nil {
+		t.Fatalf("Start error = %v, want nil", err)
+	}
+	defer session.Stop(context.Background())
+
+	if _, ok := session.Assistant.(*MultimodalAgent); !ok {
+		t.Fatalf("Assistant = %T, want *MultimodalAgent", session.Assistant)
+	}
+}
+
+func TestAgentSessionUsesAgentRealtimeModel(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	baseAgent := NewAgent("test")
+	baseAgent.RealtimeModel = &fakeRealtimeModel{session: &fakeRealtimeSession{}}
+	session := NewAgentSession(baseAgent, nil, AgentSessionOptions{})
+
+	if err := session.Start(ctx); err != nil {
+		t.Fatalf("Start error = %v, want nil", err)
+	}
+	defer session.Stop(context.Background())
+
+	if session.RealtimeModel != baseAgent.RealtimeModel {
+		t.Fatalf("session.RealtimeModel = %#v, want agent realtime model", session.RealtimeModel)
+	}
+	if _, ok := session.Assistant.(*MultimodalAgent); !ok {
+		t.Fatalf("Assistant = %T, want *MultimodalAgent", session.Assistant)
+	}
+}
+
 func TestAgentSessionStartEnablesIVRDetectionActivity(t *testing.T) {
 	baseAgent := NewAgent("test")
 	session := NewAgentSession(baseAgent, nil, AgentSessionOptions{
@@ -1012,6 +1052,28 @@ func TestAgentSessionGenerateReplyOptionsPreserveToolChoice(t *testing.T) {
 	}
 }
 
+func TestAgentSessionUpdateOptionsToolChoiceDefaultsFutureReplies(t *testing.T) {
+	agent := NewAgent("test")
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	session.activity = NewAgentActivity(agent, session)
+	toolChoice := llm.ToolChoice("auto")
+	if err := session.UpdateOptions(AgentSessionUpdateOptions{ToolChoice: &toolChoice}); err != nil {
+		t.Fatalf("UpdateOptions error = %v, want nil", err)
+	}
+
+	handle, err := session.GenerateReplyWithOptions(context.Background(), GenerateReplyOptions{
+		UserInput:     "hello",
+		InputModality: "text",
+	})
+
+	if err != nil {
+		t.Fatalf("GenerateReplyWithOptions error = %v, want nil", err)
+	}
+	if handle.Generation.ToolChoice != "auto" {
+		t.Fatalf("handle.Generation.ToolChoice = %#v, want auto", handle.Generation.ToolChoice)
+	}
+}
+
 func TestAgentSessionGenerateReplyFromFunctionToolDefaultsToolChoiceNone(t *testing.T) {
 	agent := NewAgent("test")
 	session := NewAgentSession(agent, nil, AgentSessionOptions{})
@@ -1704,6 +1766,161 @@ func TestAgentSessionUpdateAgentBeforeStartSwapsAgentOnly(t *testing.T) {
 	}
 	if initial.entered != 0 || initial.exited != 0 || next.entered != 0 || next.exited != 0 {
 		t.Fatalf("lifecycle calls initial=%d/%d next=%d/%d, want none", initial.entered, initial.exited, next.entered, next.exited)
+	}
+}
+
+func TestAgentSessionUpdateAgentBeforeStartUsesNextRealtimeModel(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	initial := &trackingAgent{Agent: NewAgent("initial")}
+	next := &trackingAgent{Agent: NewAgent("next")}
+	nextRealtime := &fakeRealtimeModel{session: &fakeRealtimeSession{}}
+	next.RealtimeModel = nextRealtime
+	session := NewAgentSession(initial, nil, AgentSessionOptions{})
+	session.VAD = &fakePipelineVAD{}
+	session.STT = &fakePipelineSTT{}
+	session.LLM = &fakeGenerationLLM{stream: &fakeGenerationLLMStream{}}
+	session.TTS = &fakePipelineTTS{}
+
+	session.UpdateAgent(next)
+	if err := session.Start(ctx); err != nil {
+		t.Fatalf("Start error = %v, want nil", err)
+	}
+	defer session.Stop(context.Background())
+
+	if session.RealtimeModel != nextRealtime {
+		t.Fatalf("session.RealtimeModel = %#v, want next realtime model", session.RealtimeModel)
+	}
+	if _, ok := session.Assistant.(*MultimodalAgent); !ok {
+		t.Fatalf("Assistant = %T, want *MultimodalAgent", session.Assistant)
+	}
+}
+
+func TestAgentSessionUpdateAgentWhileRunningRefreshesMultimodalRealtimeModel(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	initial := &trackingAgent{Agent: NewAgent("initial")}
+	initialRealtimeSession := &fakeRealtimeSession{}
+	initialRealtime := &fakeRealtimeModel{session: initialRealtimeSession}
+	initial.RealtimeModel = initialRealtime
+	next := &trackingAgent{Agent: NewAgent("next")}
+	nextRealtimeSession := &fakeRealtimeSession{}
+	nextRealtime := &fakeRealtimeModel{session: nextRealtimeSession}
+	next.RealtimeModel = nextRealtime
+	session := NewAgentSession(initial, nil, AgentSessionOptions{})
+
+	if err := session.Start(ctx); err != nil {
+		t.Fatalf("Start error = %v, want nil", err)
+	}
+	defer session.Stop(context.Background())
+	assistant, ok := session.Assistant.(*MultimodalAgent)
+	if !ok {
+		t.Fatalf("Assistant = %T, want *MultimodalAgent", session.Assistant)
+	}
+	if assistant.model != initialRealtime {
+		t.Fatalf("assistant model before handoff = %#v, want initial realtime model", assistant.model)
+	}
+
+	session.UpdateAgent(next)
+
+	if session.RealtimeModel != nextRealtime {
+		t.Fatalf("session.RealtimeModel = %#v, want next realtime model", session.RealtimeModel)
+	}
+	if assistant.model != nextRealtime {
+		t.Fatalf("assistant model after handoff = %#v, want next realtime model", assistant.model)
+	}
+	if assistant.rtSession != nextRealtimeSession {
+		t.Fatalf("assistant realtime session after handoff = %#v, want next model session", assistant.rtSession)
+	}
+	if initialRealtimeSession.closed != 1 {
+		t.Fatalf("initial realtime session closed = %d, want 1", initialRealtimeSession.closed)
+	}
+}
+
+func TestAgentSessionUpdateAgentWhileRunningSwitchesPipelineToMultimodal(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	initial := &trackingAgent{Agent: NewAgent("initial")}
+	initial.VAD = &fakePipelineVAD{}
+	initial.STT = &fakePipelineSTT{}
+	initial.LLM = &fakeGenerationLLM{stream: &fakeGenerationLLMStream{}}
+	initial.TTS = &fakePipelineTTS{}
+	next := &trackingAgent{Agent: NewAgent("next")}
+	nextRealtimeSession := &fakeRealtimeSession{}
+	nextRealtime := &fakeRealtimeModel{session: nextRealtimeSession}
+	next.RealtimeModel = nextRealtime
+	session := NewAgentSession(initial, nil, AgentSessionOptions{})
+
+	if err := session.Start(ctx); err != nil {
+		t.Fatalf("Start error = %v, want nil", err)
+	}
+	defer session.Stop(context.Background())
+	if _, ok := session.Assistant.(*PipelineAgent); !ok {
+		t.Fatalf("Assistant before handoff = %T, want *PipelineAgent", session.Assistant)
+	}
+
+	session.UpdateAgent(next)
+
+	assistant, ok := session.Assistant.(*MultimodalAgent)
+	if !ok {
+		t.Fatalf("Assistant after handoff = %T, want *MultimodalAgent", session.Assistant)
+	}
+	if assistant.model != nextRealtime {
+		t.Fatalf("assistant model after handoff = %#v, want next realtime model", assistant.model)
+	}
+	if assistant.rtSession != nextRealtimeSession {
+		t.Fatalf("assistant realtime session after handoff = %#v, want next model session", assistant.rtSession)
+	}
+}
+
+func TestAgentSessionUpdateAgentWhileRunningSwitchesMultimodalToPipeline(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	initial := &trackingAgent{Agent: NewAgent("initial")}
+	initialRealtimeSession := &fakeRealtimeSession{}
+	initial.RealtimeModel = &fakeRealtimeModel{session: initialRealtimeSession}
+	next := &trackingAgent{Agent: NewAgent("next")}
+	nextVAD := &fakePipelineVAD{}
+	nextSTT := &fakePipelineSTT{}
+	nextLLM := &fakeGenerationLLM{stream: &fakeGenerationLLMStream{}}
+	nextTTS := &fakePipelineTTS{}
+	next.VAD = nextVAD
+	next.STT = nextSTT
+	next.LLM = nextLLM
+	next.TTS = nextTTS
+	session := NewAgentSession(initial, nil, AgentSessionOptions{})
+
+	if err := session.Start(ctx); err != nil {
+		t.Fatalf("Start error = %v, want nil", err)
+	}
+	defer session.Stop(context.Background())
+	if _, ok := session.Assistant.(*MultimodalAgent); !ok {
+		t.Fatalf("Assistant before handoff = %T, want *MultimodalAgent", session.Assistant)
+	}
+
+	session.UpdateAgent(next)
+
+	assistant, ok := session.Assistant.(*PipelineAgent)
+	if !ok {
+		t.Fatalf("Assistant after handoff = %T, want *PipelineAgent", session.Assistant)
+	}
+	if session.RealtimeModel != nil {
+		t.Fatalf("session.RealtimeModel = %#v, want nil after pipeline handoff", session.RealtimeModel)
+	}
+	if assistant.vad != nextVAD {
+		t.Fatalf("pipeline.vad = %#v, want next VAD", assistant.vad)
+	}
+	if assistant.stt != nextSTT {
+		t.Fatalf("pipeline.stt = %#v, want next STT", assistant.stt)
+	}
+	if assistant.LLM != nextLLM {
+		t.Fatalf("pipeline.LLM = %#v, want next LLM", assistant.LLM)
+	}
+	if assistant.tts != nextTTS {
+		t.Fatalf("pipeline.tts = %#v, want next TTS", assistant.tts)
+	}
+	if initialRealtimeSession.closed != 1 {
+		t.Fatalf("initial realtime session closed = %d, want 1", initialRealtimeSession.closed)
 	}
 }
 
