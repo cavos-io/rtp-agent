@@ -524,6 +524,64 @@ func TestMultimodalAgentEmitsSpeechCreatedForServerGeneration(t *testing.T) {
 	}
 }
 
+func TestMultimodalAgentConsumesServerGenerationFunctionCalls(t *testing.T) {
+	agent := NewAgent("test")
+	agent.Tools = []llm.Tool{&fakeGenerationTool{name: "lookup", result: "agent result"}}
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	activity := NewAgentActivity(agent, session)
+	session.activity = activity
+	go activity.schedulingTask()
+	defer activity.Stop()
+
+	messageCh := make(chan llm.MessageGeneration)
+	functionCh := make(chan *llm.FunctionCall, 1)
+	chatCtx := llm.NewChatContext()
+	rtSession := &fakeRealtimeSession{}
+	ma := &MultimodalAgent{
+		session:   session,
+		chatCtx:   chatCtx,
+		rtSession: rtSession,
+		ctx:       context.Background(),
+	}
+	session.Assistant = ma
+
+	ma.handleRealtimeEvent(llm.RealtimeEvent{
+		Type: llm.RealtimeEventTypeGenerationCreated,
+		Generation: &llm.GenerationCreatedEvent{
+			MessageCh:     messageCh,
+			FunctionCh:    functionCh,
+			ResponseID:    "response_1",
+			UserInitiated: false,
+		},
+	})
+
+	functionCh <- &llm.FunctionCall{Name: "lookup", CallID: "call_lookup", Arguments: `{}`}
+	close(functionCh)
+	close(messageCh)
+
+	select {
+	case ev := <-session.FunctionToolsExecutedEvents():
+		if len(ev.FunctionCalls) != 1 || ev.FunctionCalls[0].Name != "lookup" || ev.FunctionCalls[0].CallID != "call_lookup" {
+			t.Fatalf("FunctionCalls = %#v, want lookup call_lookup", ev.FunctionCalls)
+		}
+		if len(ev.FunctionCallOutputs) != 1 {
+			t.Fatalf("FunctionCallOutputs = %#v, want one output", ev.FunctionCallOutputs)
+		}
+		output := ev.FunctionCallOutputs[0]
+		if output.IsError || output.Output != "agent result" {
+			t.Fatalf("function output = %#v, want agent result", output)
+		}
+		if !chatContextContainsItem(session.ChatCtx, output) {
+			t.Fatalf("session ChatCtx items = %#v, want emitted realtime output", session.ChatCtx.Items)
+		}
+		if rtSession.updated != chatCtx {
+			t.Fatalf("updated chat context = %#v, want realtime generation chat context", rtSession.updated)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("FunctionToolsExecutedEvents did not receive server generation function execution")
+	}
+}
+
 func TestMultimodalAgentSkipsSpeechCreatedForUserInitiatedGeneration(t *testing.T) {
 	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
 	ma := &MultimodalAgent{session: session}

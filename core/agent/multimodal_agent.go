@@ -292,62 +292,11 @@ func (ma *MultimodalAgent) handleRealtimeEvent(ev llm.RealtimeEvent) {
 		if ev.Function == nil {
 			return
 		}
-		logger.Logger.Infow("Executing tool (multimodal)", "name", ev.Function.Name)
-		functionCall := &llm.FunctionCall{
+		ma.executeRealtimeFunctionCall(&llm.FunctionCall{
 			CallID:    ev.Function.CallID,
 			Name:      ev.Function.Name,
 			Arguments: ev.Function.Arguments,
 			Extra:     ev.Function.Extra,
-			CreatedAt: time.Now(),
-		}
-
-		// Find and execute tool
-		var foundTool llm.Tool
-		for _, tool := range ma.realtimeTools() {
-			if tool.Name() == ev.Function.Name {
-				foundTool = tool
-				break
-			}
-		}
-
-		if foundTool == nil {
-			ma.appendRealtimeToolResult(functionCall, &llm.FunctionCallOutput{
-				CallID:    ev.Function.CallID,
-				Name:      ev.Function.Name,
-				Output:    fmt.Sprintf("Unknown function: %s", ev.Function.Name),
-				IsError:   true,
-				CreatedAt: time.Now(),
-			})
-			return
-		}
-
-		output, err := foundTool.Execute(ma.ctx, ev.Function.Arguments)
-		if err != nil {
-			var stopResponse llm.StopResponse
-			if errors.As(err, &stopResponse) {
-				return
-			}
-
-			var toolErr llm.ToolError
-			outputStr := "An internal error occurred"
-			if errors.As(err, &toolErr) {
-				outputStr = toolErr.Message
-			}
-			ma.appendRealtimeToolResult(functionCall, &llm.FunctionCallOutput{
-				CallID:    ev.Function.CallID,
-				Name:      ev.Function.Name,
-				Output:    outputStr,
-				IsError:   true,
-				CreatedAt: time.Now(),
-			})
-			return
-		}
-
-		ma.appendRealtimeToolResult(functionCall, &llm.FunctionCallOutput{
-			CallID:    ev.Function.CallID,
-			Name:      ev.Function.Name,
-			Output:    output,
-			IsError:   false,
 			CreatedAt: time.Now(),
 		})
 
@@ -365,18 +314,27 @@ func (ma *MultimodalAgent) handleRealtimeEvent(ev llm.RealtimeEvent) {
 }
 
 func (ma *MultimodalAgent) consumeRealtimeGeneration(ctx context.Context, speech *SpeechHandle, generation *llm.GenerationCreatedEvent) {
-	if generation == nil || generation.MessageCh == nil {
+	if generation == nil || (generation.MessageCh == nil && generation.FunctionCh == nil) {
 		return
 	}
-	for {
+	messageCh := generation.MessageCh
+	functionCh := generation.FunctionCh
+	for messageCh != nil || functionCh != nil {
 		select {
 		case <-ctx.Done():
 			return
-		case message, ok := <-generation.MessageCh:
+		case message, ok := <-messageCh:
 			if !ok {
-				return
+				messageCh = nil
+				continue
 			}
 			ma.consumeRealtimeMessage(ctx, speech, message)
+		case call, ok := <-functionCh:
+			if !ok {
+				functionCh = nil
+				continue
+			}
+			ma.executeRealtimeFunctionCall(call)
 		}
 	}
 }
@@ -428,6 +386,69 @@ func (ma *MultimodalAgent) consumeRealtimeMessage(ctx context.Context, speech *S
 
 func (ma *MultimodalAgent) realtimeTools() []llm.Tool {
 	return sessionRegisteredTools(ma.session)
+}
+
+func (ma *MultimodalAgent) executeRealtimeFunctionCall(functionCall *llm.FunctionCall) {
+	if functionCall == nil {
+		return
+	}
+	if functionCall.CreatedAt.IsZero() {
+		functionCall.CreatedAt = time.Now()
+	}
+	logger.Logger.Infow("Executing tool (multimodal)", "name", functionCall.Name)
+
+	var foundTool llm.Tool
+	for _, tool := range ma.realtimeTools() {
+		if tool.Name() == functionCall.Name {
+			foundTool = tool
+			break
+		}
+	}
+
+	if foundTool == nil {
+		ma.appendRealtimeToolResult(functionCall, &llm.FunctionCallOutput{
+			CallID:    functionCall.CallID,
+			Name:      functionCall.Name,
+			Output:    fmt.Sprintf("Unknown function: %s", functionCall.Name),
+			IsError:   true,
+			CreatedAt: time.Now(),
+		})
+		return
+	}
+
+	callCtx := ma.ctx
+	if callCtx == nil {
+		callCtx = context.Background()
+	}
+	output, err := foundTool.Execute(callCtx, functionCall.Arguments)
+	if err != nil {
+		var stopResponse llm.StopResponse
+		if errors.As(err, &stopResponse) {
+			return
+		}
+
+		var toolErr llm.ToolError
+		outputStr := "An internal error occurred"
+		if errors.As(err, &toolErr) {
+			outputStr = toolErr.Message
+		}
+		ma.appendRealtimeToolResult(functionCall, &llm.FunctionCallOutput{
+			CallID:    functionCall.CallID,
+			Name:      functionCall.Name,
+			Output:    outputStr,
+			IsError:   true,
+			CreatedAt: time.Now(),
+		})
+		return
+	}
+
+	ma.appendRealtimeToolResult(functionCall, &llm.FunctionCallOutput{
+		CallID:    functionCall.CallID,
+		Name:      functionCall.Name,
+		Output:    output,
+		IsError:   false,
+		CreatedAt: time.Now(),
+	})
 }
 
 func (ma *MultimodalAgent) appendRealtimeToolResult(call *llm.FunctionCall, output *llm.FunctionCallOutput) {
