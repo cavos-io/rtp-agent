@@ -27,6 +27,10 @@ type toolUpdatingAssistant interface {
 	UpdateTools(context.Context) error
 }
 
+type chatContextUpdatingAssistant interface {
+	UpdateChatContext(context.Context, *llm.ChatContext) error
+}
+
 type EndOfTurnInfo struct {
 	SkipReply            bool
 	NewTranscript        string
@@ -359,11 +363,17 @@ func (a *AgentActivity) UpdateChatContext(ctx context.Context, chatCtx *llm.Chat
 	}
 	if chatCtx == nil {
 		a.Agent.ChatCtx = llm.NewChatContext()
-		return updateAgentInstructionsMessage(a.Agent.ChatCtx, a.Agent.Instructions, true)
+		if err := updateAgentInstructionsMessage(a.Agent.ChatCtx, a.Agent.Instructions, true); err != nil {
+			return err
+		}
+		return a.updateRealtimeChatContext(ctx)
 	}
 	if !excludeInvalid {
 		a.Agent.ChatCtx = chatCtx.Copy()
-		return updateAgentInstructionsMessage(a.Agent.ChatCtx, a.Agent.Instructions, true)
+		if err := updateAgentInstructionsMessage(a.Agent.ChatCtx, a.Agent.Instructions, true); err != nil {
+			return err
+		}
+		return a.updateRealtimeChatContext(ctx)
 	}
 	a.Agent.ChatCtx = chatCtx.Copy(llm.ChatContextCopyOptions{
 		Tools: a.chatContextTools(),
@@ -371,7 +381,26 @@ func (a *AgentActivity) UpdateChatContext(ctx context.Context, chatCtx *llm.Chat
 	if err := updateAgentInstructionsMessage(a.Agent.ChatCtx, a.Agent.Instructions, true); err != nil {
 		return err
 	}
+	if err := a.updateRealtimeChatContext(ctx); err != nil {
+		return err
+	}
 	return nil
+}
+
+func (a *AgentActivity) updateRealtimeChatContext(ctx context.Context) error {
+	if a.Session == nil {
+		return nil
+	}
+	updater, ok := a.Session.Assistant.(chatContextUpdatingAssistant)
+	if !ok {
+		return nil
+	}
+	chatCtx := llm.NewChatContext()
+	if a.Agent.ChatCtx != nil {
+		chatCtx = a.Agent.ChatCtx.Copy()
+	}
+	removeAgentInstructionsMessage(chatCtx)
+	return updater.UpdateChatContext(ctx, chatCtx)
 }
 
 func (a *AgentActivity) chatContextTools() []interface{} {
@@ -483,6 +512,19 @@ func updateAgentInstructionsMessage(chatCtx *llm.ChatContext, instructions strin
 		chatCtx.Items = append([]llm.ChatItem{msg}, chatCtx.Items...)
 	}
 	return nil
+}
+
+func removeAgentInstructionsMessage(chatCtx *llm.ChatContext) {
+	if chatCtx == nil {
+		return
+	}
+	for {
+		idx := chatCtx.IndexByID(agentInstructionsMessageID)
+		if idx == nil {
+			return
+		}
+		chatCtx.Items = append(chatCtx.Items[:*idx], chatCtx.Items[*idx+1:]...)
+	}
 }
 
 func (a *AgentActivity) ScheduleSpeech(speech *SpeechHandle, priority int, force bool) error {

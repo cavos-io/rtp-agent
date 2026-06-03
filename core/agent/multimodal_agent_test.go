@@ -127,6 +127,33 @@ func TestAgentUpdateToolsUpdatesRealtimeSession(t *testing.T) {
 	}
 }
 
+func TestAgentUpdateChatContextUpdatesRealtimeSession(t *testing.T) {
+	baseAgent := NewAgent("be helpful")
+	session := NewAgentSession(baseAgent, nil, AgentSessionOptions{})
+	rtSession := &fakeRealtimeSession{}
+	ma := NewMultimodalAgent(&fakeRealtimeModel{session: rtSession}, llm.NewChatContext())
+	ma.rtSession = rtSession
+	session.Assistant = ma
+	activity := NewAgentActivity(baseAgent, session)
+	session.activity = activity
+	source := llm.NewChatContext()
+	source.Append(&llm.ChatMessage{ID: "user", Role: llm.ChatRoleUser, Content: []llm.ChatContent{{Text: "hello"}}})
+
+	if err := baseAgent.UpdateChatContext(context.Background(), source); err != nil {
+		t.Fatalf("UpdateChatContext error = %v, want nil", err)
+	}
+
+	if got := chatItemIDs(baseAgent.ChatCtx.Items); !stringSlicesEqual(got, []string{agentInstructionsMessageID, "user"}) {
+		t.Fatalf("agent ChatCtx item IDs = %q, want instructions then user", got)
+	}
+	if rtSession.updated == nil {
+		t.Fatal("realtime chat context was not updated")
+	}
+	if got := chatItemIDs(rtSession.updated.Items); !stringSlicesEqual(got, []string{"user"}) {
+		t.Fatalf("realtime ChatCtx item IDs = %q, want user without synthetic instructions", got)
+	}
+}
+
 func TestMultimodalAgentGenerateReplySendsRealtimeOverrides(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

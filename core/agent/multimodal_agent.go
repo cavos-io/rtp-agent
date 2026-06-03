@@ -116,6 +116,25 @@ func (ma *MultimodalAgent) UpdateTools(ctx context.Context) error {
 	return rtSession.UpdateTools(ma.realtimeTools())
 }
 
+func (ma *MultimodalAgent) UpdateChatContext(ctx context.Context, chatCtx *llm.ChatContext) error {
+	if chatCtx == nil {
+		chatCtx = llm.NewChatContext()
+	}
+	ma.mu.Lock()
+	rtSession := ma.rtSession
+	ma.chatCtx = chatCtx
+	ma.mu.Unlock()
+	if rtSession == nil {
+		return nil
+	}
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	default:
+	}
+	return rtSession.UpdateChatContext(chatCtx)
+}
+
 func (ma *MultimodalAgent) SupportsNativeSay() bool {
 	return ma.model != nil && ma.model.Capabilities().SupportsSay
 }
