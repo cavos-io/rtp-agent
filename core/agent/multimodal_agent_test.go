@@ -106,6 +106,27 @@ func TestAgentUpdateInstructionsUpdatesRealtimeSession(t *testing.T) {
 	}
 }
 
+func TestAgentUpdateToolsUpdatesRealtimeSession(t *testing.T) {
+	baseAgent := NewAgent("test")
+	session := NewAgentSession(baseAgent, nil, AgentSessionOptions{})
+	session.Tools = []llm.Tool{&fakeGenerationTool{name: "session_tool"}}
+	rtSession := &fakeRealtimeSession{}
+	ma := NewMultimodalAgent(&fakeRealtimeModel{session: rtSession}, llm.NewChatContext())
+	ma.rtSession = rtSession
+	ma.session = session
+	session.Assistant = ma
+	activity := NewAgentActivity(baseAgent, session)
+	session.activity = activity
+
+	if err := baseAgent.UpdateTools(context.Background(), []llm.Tool{&fakeGenerationTool{name: "agent_tool"}}); err != nil {
+		t.Fatalf("UpdateTools error = %v, want nil", err)
+	}
+
+	if got, want := toolNames(rtSession.tools), []string{"session_tool", "agent_tool"}; !equalStrings(got, want) {
+		t.Fatalf("updated realtime tools = %#v, want %#v", got, want)
+	}
+}
+
 func TestMultimodalAgentGenerateReplySendsRealtimeOverrides(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

@@ -23,6 +23,10 @@ type instructionUpdatingAssistant interface {
 	UpdateInstructions(context.Context, string) error
 }
 
+type toolUpdatingAssistant interface {
+	UpdateTools(context.Context) error
+}
+
 type EndOfTurnInfo struct {
 	SkipReply            bool
 	NewTranscript        string
@@ -336,6 +340,13 @@ func (a *AgentActivity) UpdateTools(ctx context.Context, tools []llm.Tool) error
 				a.Session.ChatCtx = llm.NewChatContext()
 			}
 			a.Session.ChatCtx.Insert(configUpdate)
+		}
+	}
+	if a.Session != nil {
+		if updater, ok := a.Session.Assistant.(toolUpdatingAssistant); ok {
+			if err := updater.UpdateTools(ctx); err != nil {
+				return err
+			}
 		}
 	}
 	return a.UpdateChatContext(ctx, a.Agent.ChatCtx)
