@@ -146,6 +146,43 @@ func TestMultimodalAgentGenerateReplySendsRealtimeOverrides(t *testing.T) {
 	}
 }
 
+func TestMultimodalAgentSayUsesRealtimeSessionWhenSupported(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	rtSession := &fakeRealtimeSession{sayCh: make(chan string, 1)}
+	ma := NewMultimodalAgent(&fakeRealtimeModel{
+		session:      rtSession,
+		capabilities: llm.RealtimeCapabilities{SupportsSay: true},
+	}, llm.NewChatContext())
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	session.Assistant = ma
+
+	handle, err := session.Say(ctx, "hello from realtime")
+	if err == nil {
+		t.Fatalf("Say before Start error = nil, handle = %#v; want not running", handle)
+	}
+	if err := session.Start(ctx); err != nil {
+		t.Fatalf("Start returned error: %v", err)
+	}
+	handle, err = session.Say(ctx, "hello from realtime")
+	if err != nil {
+		t.Fatalf("Say returned error: %v", err)
+	}
+
+	select {
+	case text := <-rtSession.sayCh:
+		if text != "hello from realtime" {
+			t.Fatalf("Say text = %q, want hello from realtime", text)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("realtime session did not receive Say")
+	}
+	if !handle.IsDone() {
+		t.Fatal("speech handle is not done after realtime Say")
+	}
+}
+
 func TestAgentSessionStopClosesMultimodalRealtimeSession(t *testing.T) {
 	rtSession := &fakeRealtimeSession{}
 	ma := NewMultimodalAgent(&fakeRealtimeModel{session: rtSession}, llm.NewChatContext())
@@ -564,14 +601,15 @@ func equalStrings(a, b []string) bool {
 }
 
 type fakeRealtimeModel struct {
-	label    string
-	model    string
-	provider string
-	session  *fakeRealtimeSession
+	label        string
+	model        string
+	provider     string
+	session      *fakeRealtimeSession
+	capabilities llm.RealtimeCapabilities
 }
 
 func (f *fakeRealtimeModel) Capabilities() llm.RealtimeCapabilities {
-	return llm.RealtimeCapabilities{}
+	return f.capabilities
 }
 
 func (f *fakeRealtimeModel) Session() (llm.RealtimeSession, error) {
@@ -594,6 +632,7 @@ type fakeRealtimeSession struct {
 	generatedWithChatCtx *llm.ChatContext
 	tools                []llm.Tool
 	generateCh           chan llm.RealtimeGenerateReplyOptions
+	sayCh                chan string
 	videoFrames          int
 	pushVideoErr         error
 	closed               int
@@ -619,6 +658,13 @@ func (f *fakeRealtimeSession) GenerateReply(options llm.RealtimeGenerateReplyOpt
 	}
 	if f.generateCh != nil {
 		f.generateCh <- options
+	}
+	return nil
+}
+
+func (f *fakeRealtimeSession) Say(text string) error {
+	if f.sayCh != nil {
+		f.sayCh <- text
 	}
 	return nil
 }

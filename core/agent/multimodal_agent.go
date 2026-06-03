@@ -97,6 +97,19 @@ func (ma *MultimodalAgent) OnSpeechScheduled(ctx context.Context, speech *Speech
 		return
 	}
 
+	if speech.Generation.Text != "" && ma.model.Capabilities().SupportsSay {
+		if err := rtSession.Say(speech.Generation.Text); err != nil {
+			logger.Logger.Errorw("failed to say text with realtime session", err)
+			if session != nil {
+				session.EmitError(ErrorEvent{
+					Error:  llm.NewRealtimeModelError(llm.RealtimeLabel(ma.model), err, false),
+					Source: ma.model,
+				})
+			}
+		}
+		return
+	}
+
 	selectedTools, err := resolveToolsByID(sessionRegisteredTools(session), speech.Generation.Tools)
 	if err != nil {
 		logger.Logger.Errorw("failed to resolve realtime reply tools", err)

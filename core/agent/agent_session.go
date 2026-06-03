@@ -1179,6 +1179,7 @@ func (s *AgentSession) SayWithOptions(ctx context.Context, opts SayOptions) (*Sp
 	}
 
 	handle := NewSpeechHandle(allowInterruptions, InputDetails{Modality: "text"})
+	handle.Generation.Text = opts.Text
 	s.EmitSpeechCreated(SpeechCreatedEvent{
 		UserInitiated: true,
 		Source:        "say",
