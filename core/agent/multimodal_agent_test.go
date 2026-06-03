@@ -445,17 +445,28 @@ func TestMultimodalAgentDoesNotEmitErrorEventForRealtimeEOF(t *testing.T) {
 }
 
 func TestMultimodalAgentEmitsSpeechCreatedForServerGeneration(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
 	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{AllowInterruptions: true})
+	activity := NewAgentActivity(NewAgent("test"), session)
+	session.activity = activity
+	go activity.schedulingTask()
+	defer activity.Stop()
+	messageCh := make(chan llm.MessageGeneration)
 	ma := &MultimodalAgent{session: session}
+	session.Assistant = ma
 
 	ma.handleRealtimeEvent(llm.RealtimeEvent{
 		Type: llm.RealtimeEventTypeGenerationCreated,
 		Generation: &llm.GenerationCreatedEvent{
+			MessageCh:     messageCh,
 			ResponseID:    "response_1",
 			UserInitiated: false,
 		},
 	})
 
+	var handle *SpeechHandle
 	select {
 	case ev := <-session.SpeechCreatedEvents():
 		if ev.GetType() != "speech_created" {
@@ -470,6 +481,7 @@ func TestMultimodalAgentEmitsSpeechCreatedForServerGeneration(t *testing.T) {
 		if ev.SpeechHandle == nil {
 			t.Fatal("SpeechHandle = nil, want handle for server realtime generation")
 		}
+		handle = ev.SpeechHandle
 		if !ev.SpeechHandle.AllowInterruptions {
 			t.Fatal("SpeechHandle.AllowInterruptions = false, want session default true")
 		}
@@ -478,6 +490,20 @@ func TestMultimodalAgentEmitsSpeechCreatedForServerGeneration(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("SpeechCreatedEvents did not receive server realtime generation")
+	}
+	scheduleCtx, scheduleCancel := context.WithTimeout(ctx, 100*time.Millisecond)
+	defer scheduleCancel()
+	if err := handle.WaitForScheduled(scheduleCtx); err != nil {
+		t.Fatalf("server realtime generation was not scheduled: %v", err)
+	}
+	if handle.IsDone() {
+		t.Fatal("server realtime generation handle is done before generation stream closes")
+	}
+	close(messageCh)
+	doneCtx, doneCancel := context.WithTimeout(ctx, time.Second)
+	defer doneCancel()
+	if err := handle.Wait(doneCtx); err != nil {
+		t.Fatalf("server realtime generation handle did not complete after stream close: %v", err)
 	}
 }
 

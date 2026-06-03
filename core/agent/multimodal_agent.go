@@ -100,6 +100,11 @@ func (ma *MultimodalAgent) OnSpeechScheduled(ctx context.Context, speech *Speech
 	}
 	defer speech.MarkDone()
 
+	if speech.Generation.RealtimeGeneration != nil {
+		ma.consumeRealtimeGeneration(ctx, speech, speech.Generation.RealtimeGeneration)
+		return
+	}
+
 	ma.mu.Lock()
 	rtSession := ma.rtSession
 	session := ma.session
@@ -227,11 +232,17 @@ func (ma *MultimodalAgent) handleRealtimeEvent(ev llm.RealtimeEvent) {
 			return
 		}
 		handle := NewSpeechHandle(ma.session.Options.AllowInterruptions, DefaultInputDetails())
+		handle.Generation.RealtimeGeneration = ev.Generation
 		ma.session.EmitSpeechCreated(SpeechCreatedEvent{
 			UserInitiated: false,
 			Source:        "generate_reply",
 			SpeechHandle:  handle,
 		})
+		if ma.session.activity != nil {
+			if err := ma.session.activity.ScheduleSpeech(handle, SpeechPriorityNormal, false); err != nil {
+				logger.Logger.Warnw("failed to schedule realtime generation", err, "response_id", ev.Generation.ResponseID)
+			}
+		}
 
 	case llm.RealtimeEventTypeInputAudioTranscriptionCompleted:
 		if ev.InputTranscription == nil || ma.session == nil {
@@ -341,6 +352,68 @@ func (ma *MultimodalAgent) handleRealtimeEvent(ev llm.RealtimeEvent) {
 			}
 		}
 	}
+}
+
+func (ma *MultimodalAgent) consumeRealtimeGeneration(ctx context.Context, speech *SpeechHandle, generation *llm.GenerationCreatedEvent) {
+	if generation == nil || generation.MessageCh == nil {
+		return
+	}
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case message, ok := <-generation.MessageCh:
+			if !ok {
+				return
+			}
+			ma.consumeRealtimeMessage(ctx, speech, message)
+		}
+	}
+}
+
+func (ma *MultimodalAgent) consumeRealtimeMessage(ctx context.Context, speech *SpeechHandle, message llm.MessageGeneration) {
+	var text string
+	for message.TextCh != nil || message.AudioCh != nil {
+		select {
+		case <-ctx.Done():
+			return
+		case delta, ok := <-message.TextCh:
+			if !ok {
+				message.TextCh = nil
+				continue
+			}
+			text += delta
+		case frame, ok := <-message.AudioCh:
+			if !ok {
+				message.AudioCh = nil
+				continue
+			}
+			ma.mu.Lock()
+			publish := ma.PublishAudio
+			ma.mu.Unlock()
+			if publish != nil {
+				_ = publish(frame)
+			}
+		}
+	}
+	if text == "" {
+		return
+	}
+	msg := &llm.ChatMessage{
+		ID:        message.MessageID,
+		Role:      llm.ChatRoleAssistant,
+		Content:   []llm.ChatContent{{Text: text}},
+		CreatedAt: time.Now(),
+	}
+	if ma.chatCtx != nil {
+		if err := ma.chatCtx.UpsertItem(msg, llm.ChatContextUpsertOptions{AllowTypeMismatch: true}); err != nil {
+			logger.Logger.Errorw("failed to update realtime chat context with generated message", err)
+		}
+	}
+	if ma.session != nil {
+		ma.session.EmitConversationItemAdded(msg)
+	}
+	speech.AddChatItems(msg)
 }
 
 func (ma *MultimodalAgent) realtimeTools() []llm.Tool {
