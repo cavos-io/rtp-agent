@@ -1448,6 +1448,9 @@ func (s *AgentSession) updateAgentComponentsLocked(agent *Agent) {
 	if agent.LLM != nil {
 		s.LLM = agent.LLM
 	}
+	if agent.RealtimeModel != nil {
+		s.RealtimeModel = agent.RealtimeModel
+	}
 	if agent.TTS != nil {
 		s.TTS = agent.TTS
 	}

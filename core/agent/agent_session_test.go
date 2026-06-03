@@ -1769,6 +1769,33 @@ func TestAgentSessionUpdateAgentBeforeStartSwapsAgentOnly(t *testing.T) {
 	}
 }
 
+func TestAgentSessionUpdateAgentBeforeStartUsesNextRealtimeModel(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	initial := &trackingAgent{Agent: NewAgent("initial")}
+	next := &trackingAgent{Agent: NewAgent("next")}
+	nextRealtime := &fakeRealtimeModel{session: &fakeRealtimeSession{}}
+	next.RealtimeModel = nextRealtime
+	session := NewAgentSession(initial, nil, AgentSessionOptions{})
+	session.VAD = &fakePipelineVAD{}
+	session.STT = &fakePipelineSTT{}
+	session.LLM = &fakeGenerationLLM{stream: &fakeGenerationLLMStream{}}
+	session.TTS = &fakePipelineTTS{}
+
+	session.UpdateAgent(next)
+	if err := session.Start(ctx); err != nil {
+		t.Fatalf("Start error = %v, want nil", err)
+	}
+	defer session.Stop(context.Background())
+
+	if session.RealtimeModel != nextRealtime {
+		t.Fatalf("session.RealtimeModel = %#v, want next realtime model", session.RealtimeModel)
+	}
+	if _, ok := session.Assistant.(*MultimodalAgent); !ok {
+		t.Fatalf("Assistant = %T, want *MultimodalAgent", session.Assistant)
+	}
+}
+
 func TestAgentSessionUpdateAgentPreservesSessionComponentsWhenNextAgentOmitsThem(t *testing.T) {
 	initial := &trackingAgent{Agent: NewAgent("initial")}
 	next := &trackingAgent{Agent: NewAgent("next")}
