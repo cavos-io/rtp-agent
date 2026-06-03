@@ -221,6 +221,21 @@ func (va *PipelineAgent) OnSpeechScheduled(ctx context.Context, speech *SpeechHa
 	defer speech.MarkDone()
 	speech.AuthorizeGeneration()
 
+	if speech.Generation.Text != "" {
+		va.mu.Lock()
+		session := va.session
+		va.mu.Unlock()
+		if session == nil {
+			return
+		}
+		if err := va.synthesizeSpeech(ctx, session, singleTextChannel(speech.Generation.Text)); err != nil {
+			logger.Logger.Errorw("TTS inference failed", err)
+		}
+		_ = speech.MarkGenerationDone()
+		session.UpdateAgentState(AgentStateIdle)
+		return
+	}
+
 	options := pipelineReplyOptions{
 		Tools:        append([]string(nil), speech.Generation.Tools...),
 		ChatCtx:      speech.Generation.ChatCtx,
@@ -308,39 +323,8 @@ func (va *PipelineAgent) generateReplyWithOptions(opts pipelineReplyOptions) {
 			return
 		}
 
-		// Start TTS in parallel with LLM text
-		transcriptSync := NewTranscriptSynchronizer(0)
-		transcriptionDone := va.forwardAgentOutputTranscription(session, transcriptSync)
-		ttsTextCh := va.forwardTextToTranscriptSynchronizer(ctx, genData.TextCh, transcriptSync)
-		ttsOpts := []TTSInferenceOption{}
-		if va.ttsStreamPacer != nil {
-			ttsOpts = append(ttsOpts, WithTTSStreamPacer(*va.ttsStreamPacer))
-		}
-		if len(session.Options.TTSTextReplacements) > 0 {
-			ttsOpts = append(ttsOpts, WithTTSTextReplacements(session.Options.TTSTextReplacements))
-		}
-		ttsGen, err := PerformTTSInference(ctx, va.tts, ttsTextCh, ttsOpts...)
-		if err != nil {
-			transcriptSync.Close()
-			<-transcriptionDone
+		if err := va.synthesizeSpeech(ctx, session, genData.TextCh); err != nil {
 			logger.Logger.Errorw("TTS inference failed", err)
-		} else {
-			session.UpdateAgentState(AgentStateSpeaking)
-			for frame := range ttsGen.AudioCh {
-				select {
-				case <-ctx.Done():
-					transcriptSync.Close()
-					<-transcriptionDone
-					return
-				default:
-					transcriptSync.PushAudio(frame)
-					if va.PublishAudio != nil {
-						_ = va.PublishAudio(frame)
-					}
-				}
-			}
-			transcriptSync.Close()
-			<-transcriptionDone
 		}
 
 		if genData.GeneratedText != "" {
@@ -418,6 +402,54 @@ func (va *PipelineAgent) generateReplyWithOptions(opts pipelineReplyOptions) {
 		toolSteps++
 		// Loop back to LLM with tool outputs
 	}
+}
+
+func (va *PipelineAgent) synthesizeSpeech(ctx context.Context, session *AgentSession, textCh <-chan string) error {
+	transcriptSync := NewTranscriptSynchronizer(0)
+	transcriptionDone := va.forwardAgentOutputTranscription(session, transcriptSync)
+	ttsTextCh := va.forwardTextToTranscriptSynchronizer(ctx, textCh, transcriptSync)
+	ttsGen, err := PerformTTSInference(ctx, va.tts, ttsTextCh, va.ttsInferenceOptions(session)...)
+	if err != nil {
+		transcriptSync.Close()
+		<-transcriptionDone
+		return err
+	}
+
+	session.UpdateAgentState(AgentStateSpeaking)
+	for frame := range ttsGen.AudioCh {
+		select {
+		case <-ctx.Done():
+			transcriptSync.Close()
+			<-transcriptionDone
+			return ctx.Err()
+		default:
+			transcriptSync.PushAudio(frame)
+			if va.PublishAudio != nil {
+				_ = va.PublishAudio(frame)
+			}
+		}
+	}
+	transcriptSync.Close()
+	<-transcriptionDone
+	return nil
+}
+
+func (va *PipelineAgent) ttsInferenceOptions(session *AgentSession) []TTSInferenceOption {
+	var opts []TTSInferenceOption
+	if va.ttsStreamPacer != nil {
+		opts = append(opts, WithTTSStreamPacer(*va.ttsStreamPacer))
+	}
+	if session != nil && len(session.Options.TTSTextReplacements) > 0 {
+		opts = append(opts, WithTTSTextReplacements(session.Options.TTSTextReplacements))
+	}
+	return opts
+}
+
+func singleTextChannel(text string) <-chan string {
+	ch := make(chan string, 1)
+	ch <- text
+	close(ch)
+	return ch
 }
 
 func (va *PipelineAgent) forwardTextToTranscriptSynchronizer(ctx context.Context, textCh <-chan string, syncer *TranscriptSynchronizer) <-chan string {
