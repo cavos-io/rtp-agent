@@ -113,6 +113,26 @@ func TestAgentSessionStartConfiguresTTSStreamPacer(t *testing.T) {
 	}
 }
 
+func TestAgentSessionStartCreatesMultimodalAssistantWithRealtimeModel(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	session.RealtimeModel = &fakeRealtimeModel{session: &fakeRealtimeSession{}}
+	session.VAD = &fakePipelineVAD{}
+	session.STT = &fakePipelineSTT{}
+	session.LLM = &fakeGenerationLLM{stream: &fakeGenerationLLMStream{}}
+	session.TTS = &fakePipelineTTS{}
+
+	if err := session.Start(ctx); err != nil {
+		t.Fatalf("Start error = %v, want nil", err)
+	}
+	defer session.Stop(context.Background())
+
+	if _, ok := session.Assistant.(*MultimodalAgent); !ok {
+		t.Fatalf("Assistant = %T, want *MultimodalAgent", session.Assistant)
+	}
+}
+
 func TestAgentSessionStartEnablesIVRDetectionActivity(t *testing.T) {
 	baseAgent := NewAgent("test")
 	session := NewAgentSession(baseAgent, nil, AgentSessionOptions{

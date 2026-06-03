@@ -467,6 +467,24 @@ func (s *AgentSession) UpdateOptions(opts AgentSessionUpdateOptions) error {
 	})
 }
 
+func (s *AgentSession) EnsureAssistant() SessionAssistant {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.ensureAssistantLocked()
+}
+
+func (s *AgentSession) ensureAssistantLocked() SessionAssistant {
+	if s.Assistant != nil {
+		return s.Assistant
+	}
+	if s.RealtimeModel != nil {
+		s.Assistant = NewMultimodalAgent(s.RealtimeModel, s.ChatCtx)
+		return s.Assistant
+	}
+	s.Assistant = NewPipelineAgent(s.VAD, s.STT, s.LLM, s.TTS, s.ChatCtx)
+	return s.Assistant
+}
+
 func (s *AgentSession) UserInputTranscribedEvents() <-chan UserInputTranscribedEvent {
 	return s.userInputTranscribedEvents()
 }
@@ -920,10 +938,7 @@ func (s *AgentSession) StartWithOptions(ctx context.Context, opts StartOptions) 
 		s.VAD = vad.NewSimpleVAD(0.05)
 	}
 
-	if s.Assistant == nil {
-		s.Assistant = NewPipelineAgent(s.VAD, s.STT, s.LLM, s.TTS, s.ChatCtx)
-	}
-	assistant := s.Assistant
+	assistant := s.ensureAssistantLocked()
 	if pipeline, ok := assistant.(*PipelineAgent); ok {
 		pipeline.ttsStreamPacer = s.Options.TTSStreamPacer
 	}
