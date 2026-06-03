@@ -38,6 +38,7 @@ type pipelineReplyOptions struct {
 	ToolChoice   llm.ToolChoice
 	Tools        []string
 	ChatCtx      *llm.ChatContext
+	UserMessage  *llm.ChatMessage
 	SpeechHandle *SpeechHandle
 }
 
@@ -239,6 +240,7 @@ func (va *PipelineAgent) OnSpeechScheduled(ctx context.Context, speech *SpeechHa
 	options := pipelineReplyOptions{
 		Tools:        append([]string(nil), speech.Generation.Tools...),
 		ChatCtx:      speech.Generation.ChatCtx,
+		UserMessage:  speech.Generation.UserMessage,
 		SpeechHandle: speech,
 	}
 	if speech.Generation.Instructions != nil {
@@ -280,6 +282,12 @@ func (va *PipelineAgent) generateReplyWithOptions(opts pipelineReplyOptions) {
 	replyCtx := va.chatCtx
 	if opts.ChatCtx != nil {
 		replyCtx = opts.ChatCtx.Copy()
+	}
+	if opts.UserMessage != nil {
+		if replyCtx == va.chatCtx {
+			replyCtx = va.chatCtx.Copy()
+		}
+		replyCtx.Insert(opts.UserMessage)
 	}
 
 	// In Python parity, we loop for tool calls
