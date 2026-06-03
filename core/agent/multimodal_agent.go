@@ -83,6 +83,10 @@ func (ma *MultimodalAgent) SetPublishAudio(publish func(frame *model.AudioFrame)
 	ma.PublishAudio = publish
 }
 
+func (ma *MultimodalAgent) SupportsNativeSay() bool {
+	return ma.model != nil && ma.model.Capabilities().SupportsSay
+}
+
 func (ma *MultimodalAgent) OnSpeechScheduled(ctx context.Context, speech *SpeechHandle) {
 	if speech == nil {
 		return

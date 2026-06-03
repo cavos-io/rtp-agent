@@ -120,6 +120,10 @@ type scheduledSpeechAssistant interface {
 	OnSpeechScheduled(ctx context.Context, speech *SpeechHandle)
 }
 
+type nativeSayAssistant interface {
+	SupportsNativeSay() bool
+}
+
 type videoSessionAssistant interface {
 	OnVideoFrame(ctx context.Context, frame *images.VideoFrame)
 }
@@ -1161,6 +1165,7 @@ func (s *AgentSession) GenerateReplyWithOptions(ctx context.Context, opts Genera
 func (s *AgentSession) SayWithOptions(ctx context.Context, opts SayOptions) (*SpeechHandle, error) {
 	s.mu.Lock()
 	activity := s.activity
+	assistant := s.Assistant
 	s.mu.Unlock()
 
 	if activity == nil {
@@ -1176,6 +1181,9 @@ func (s *AgentSession) SayWithOptions(ctx context.Context, opts SayOptions) (*Sp
 	addToChatContext := true
 	if opts.AddToChatContext != nil {
 		addToChatContext = *opts.AddToChatContext
+	}
+	if nativeSay, ok := assistant.(nativeSayAssistant); ok && nativeSay.SupportsNativeSay() {
+		addToChatContext = true
 	}
 
 	handle := NewSpeechHandle(allowInterruptions, InputDetails{Modality: "text"})

@@ -165,7 +165,11 @@ func TestMultimodalAgentSayUsesRealtimeSessionWhenSupported(t *testing.T) {
 	if err := session.Start(ctx); err != nil {
 		t.Fatalf("Start returned error: %v", err)
 	}
-	handle, err = session.Say(ctx, "hello from realtime")
+	addToChatContext := false
+	handle, err = session.SayWithOptions(ctx, SayOptions{
+		Text:             "hello from realtime",
+		AddToChatContext: &addToChatContext,
+	})
 	if err != nil {
 		t.Fatalf("Say returned error: %v", err)
 	}
@@ -180,6 +184,13 @@ func TestMultimodalAgentSayUsesRealtimeSessionWhenSupported(t *testing.T) {
 	}
 	if !handle.IsDone() {
 		t.Fatal("speech handle is not done after realtime Say")
+	}
+	msg := findChatMessage(session.ChatCtx, llm.ChatRoleAssistant, "hello from realtime")
+	if msg == nil {
+		t.Fatalf("session chat context items = %#v, want realtime say assistant message", session.ChatCtx.Items)
+	}
+	if len(handle.ChatItems()) != 1 || handle.ChatItems()[0] != msg {
+		t.Fatalf("handle chat items = %#v, want realtime say assistant message", handle.ChatItems())
 	}
 }
 
@@ -578,6 +589,19 @@ func lastFunctionOutput(t *testing.T, chatCtx *llm.ChatContext) *llm.FunctionCal
 		t.Fatalf("last item = %T, want FunctionCallOutput", chatCtx.Items[len(chatCtx.Items)-1])
 	}
 	return output
+}
+
+func findChatMessage(chatCtx *llm.ChatContext, role llm.ChatRole, text string) *llm.ChatMessage {
+	if chatCtx == nil {
+		return nil
+	}
+	for _, item := range chatCtx.Items {
+		msg, ok := item.(*llm.ChatMessage)
+		if ok && msg.Role == role && msg.TextContent() == text {
+			return msg
+		}
+	}
+	return nil
 }
 
 func toolNames(tools []llm.Tool) []string {
