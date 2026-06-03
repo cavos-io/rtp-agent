@@ -944,6 +944,28 @@ func TestAgentSessionGenerateReplyOptionsPreserveToolChoice(t *testing.T) {
 	}
 }
 
+func TestAgentSessionGenerateReplyFromFunctionToolDefaultsToolChoiceNone(t *testing.T) {
+	agent := NewAgent("test")
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	session.activity = NewAgentActivity(agent, session)
+	ctx := WithRunContext(context.Background(), NewRunContext(session, nil, &llm.FunctionCall{
+		CallID: "call_lookup",
+		Name:   "lookup",
+	}))
+
+	handle, err := session.GenerateReplyWithOptions(ctx, GenerateReplyOptions{
+		UserInput:     "continue",
+		InputModality: "text",
+	})
+
+	if err != nil {
+		t.Fatalf("GenerateReplyWithOptions error = %v, want nil", err)
+	}
+	if handle.Generation.ToolChoice != "none" {
+		t.Fatalf("handle.Generation.ToolChoice = %#v, want none inside function tool context", handle.Generation.ToolChoice)
+	}
+}
+
 func TestAgentSessionGenerateReplyOptionsPreserveTools(t *testing.T) {
 	agent := NewAgent("test")
 	session := NewAgentSession(agent, nil, AgentSessionOptions{})
