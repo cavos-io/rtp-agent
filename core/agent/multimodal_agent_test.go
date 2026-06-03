@@ -87,6 +87,33 @@ func TestMultimodalAgentStartUpdatesRealtimeSessionWithSessionAndAgentTools(t *t
 	}
 }
 
+func TestMultimodalAgentStartInitializesRealtimeSessionConfiguration(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	agent := NewAgent("be helpful")
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	session.Tools = []llm.Tool{&fakeGenerationTool{name: "session_tool"}}
+	chatCtx := llm.NewChatContext()
+	chatCtx.Items = append(chatCtx.Items, &llm.ChatMessage{ID: "user", Role: llm.ChatRoleUser})
+	rtSession := &fakeRealtimeSession{}
+	ma := NewMultimodalAgent(&fakeRealtimeModel{session: rtSession}, chatCtx)
+
+	if err := ma.Start(ctx, session); err != nil {
+		t.Fatalf("Start returned error: %v", err)
+	}
+
+	if rtSession.instructions != "be helpful" {
+		t.Fatalf("realtime instructions = %q, want be helpful", rtSession.instructions)
+	}
+	if rtSession.updated != chatCtx {
+		t.Fatalf("realtime chat context = %#v, want provided chat context", rtSession.updated)
+	}
+	if got, want := toolNames(rtSession.tools), []string{"session_tool"}; !equalStrings(got, want) {
+		t.Fatalf("updated realtime tools = %#v, want %#v", got, want)
+	}
+}
+
 func TestAgentUpdateInstructionsUpdatesRealtimeSession(t *testing.T) {
 	baseAgent := NewAgent("initial instructions")
 	session := NewAgentSession(baseAgent, nil, AgentSessionOptions{})

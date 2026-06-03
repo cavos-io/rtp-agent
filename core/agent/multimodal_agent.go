@@ -63,8 +63,8 @@ func (ma *MultimodalAgent) Start(ctx context.Context, s *AgentSession) error {
 	ma.rtSession = rtSession
 	ma.mu.Unlock()
 
-	if err := rtSession.UpdateTools(ma.realtimeTools()); err != nil {
-		logger.Logger.Errorw("failed to update tools on realtime session", err)
+	if err := ma.initializeRealtimeSession(rtSession); err != nil {
+		logger.Logger.Errorw("failed to initialize realtime session", err)
 	}
 
 	go ma.run(ctx, rtSession)
@@ -187,7 +187,7 @@ func (ma *MultimodalAgent) UpdateRealtimeModel(ctx context.Context, model llm.Re
 	if err != nil {
 		return err
 	}
-	if err := rtSession.UpdateTools(ma.realtimeTools()); err != nil {
+	if err := ma.initializeRealtimeSession(rtSession); err != nil {
 		_ = rtSession.Close()
 		return err
 	}
@@ -203,6 +203,28 @@ func (ma *MultimodalAgent) UpdateRealtimeModel(ctx context.Context, model llm.Re
 	}
 	go ma.run(runCtx, rtSession)
 	return nil
+}
+
+func (ma *MultimodalAgent) initializeRealtimeSession(rtSession llm.RealtimeSession) error {
+	ma.mu.Lock()
+	session := ma.session
+	chatCtx := ma.chatCtx
+	ma.mu.Unlock()
+
+	if session != nil && session.Agent != nil {
+		instructions := session.Agent.GetAgent().Instructions
+		if instructions != "" {
+			if err := rtSession.UpdateInstructions(instructions); err != nil {
+				return err
+			}
+		}
+	}
+	if chatCtx != nil {
+		if err := rtSession.UpdateChatContext(chatCtx); err != nil {
+			return err
+		}
+	}
+	return rtSession.UpdateTools(ma.realtimeTools())
 }
 
 func (ma *MultimodalAgent) SupportsNativeSay() bool {
