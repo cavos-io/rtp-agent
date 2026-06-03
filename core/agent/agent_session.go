@@ -1143,6 +1143,9 @@ func (s *AgentSession) GenerateReplyWithOptions(ctx context.Context, opts Genera
 			CreatedAt: time.Now(),
 		}
 	}
+	if userMessage != nil && handle.Generation.UserMessage == nil {
+		handle.Generation.UserMessage = userMessage
+	}
 
 	// Schedule the speech
 	if err := activity.ScheduleSpeech(handle, SpeechPriorityNormal, false); err != nil {

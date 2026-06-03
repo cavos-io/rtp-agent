@@ -105,6 +105,25 @@ func (ma *MultimodalAgent) OnSpeechScheduled(ctx context.Context, speech *Speech
 		}
 		return
 	}
+	if speech.Generation.UserMessage != nil && ma.chatCtx != nil {
+		if err := ma.chatCtx.UpsertItem(speech.Generation.UserMessage, llm.ChatContextUpsertOptions{AllowTypeMismatch: true}); err != nil {
+			logger.Logger.Errorw("failed to update realtime chat context", err)
+			if session != nil {
+				session.EmitError(ErrorEvent{Error: err, Source: ma})
+			}
+			return
+		}
+		if err := rtSession.UpdateChatContext(ma.chatCtx); err != nil {
+			logger.Logger.Errorw("failed to update realtime session chat context", err)
+			if session != nil {
+				session.EmitError(ErrorEvent{
+					Error:  llm.NewRealtimeModelError(llm.RealtimeLabel(ma.model), err, false),
+					Source: ma.model,
+				})
+			}
+			return
+		}
+	}
 
 	options := llm.RealtimeGenerateReplyOptions{
 		ToolChoice: speech.Generation.ToolChoice,

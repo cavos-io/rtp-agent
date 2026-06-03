@@ -128,6 +128,19 @@ func TestMultimodalAgentGenerateReplySendsRealtimeOverrides(t *testing.T) {
 	if got, want := toolNames(opts.Tools), []string{"lookup"}; !equalStrings(got, want) {
 		t.Fatalf("Tools = %#v, want %#v", got, want)
 	}
+	if rtSession.generatedWithChatCtx == nil {
+		t.Fatal("GenerateReply saw nil chat context, want user input applied before generation")
+	}
+	if len(rtSession.generatedWithChatCtx.Items) != 1 {
+		t.Fatalf("GenerateReply chat context items = %#v, want one user message", rtSession.generatedWithChatCtx.Items)
+	}
+	msg, ok := rtSession.generatedWithChatCtx.Items[0].(*llm.ChatMessage)
+	if !ok {
+		t.Fatalf("GenerateReply chat context item = %T, want *llm.ChatMessage", rtSession.generatedWithChatCtx.Items[0])
+	}
+	if msg.Role != llm.ChatRoleUser || msg.TextContent() != "hello" {
+		t.Fatalf("GenerateReply chat context message = %#v, want user hello", msg)
+	}
 	if !handle.IsDone() {
 		t.Fatal("speech handle is not done after realtime GenerateReply")
 	}
@@ -577,12 +590,13 @@ func (f *fakeRealtimeModel) Model() string { return f.model }
 func (f *fakeRealtimeModel) Provider() string { return f.provider }
 
 type fakeRealtimeSession struct {
-	updated      *llm.ChatContext
-	tools        []llm.Tool
-	generateCh   chan llm.RealtimeGenerateReplyOptions
-	videoFrames  int
-	pushVideoErr error
-	closed       int
+	updated              *llm.ChatContext
+	generatedWithChatCtx *llm.ChatContext
+	tools                []llm.Tool
+	generateCh           chan llm.RealtimeGenerateReplyOptions
+	videoFrames          int
+	pushVideoErr         error
+	closed               int
 }
 
 func (f *fakeRealtimeSession) UpdateInstructions(string) error { return nil }
@@ -600,6 +614,9 @@ func (f *fakeRealtimeSession) UpdateTools(tools []llm.Tool) error {
 func (f *fakeRealtimeSession) UpdateOptions(llm.RealtimeSessionOptions) error { return nil }
 
 func (f *fakeRealtimeSession) GenerateReply(options llm.RealtimeGenerateReplyOptions) error {
+	if f.updated != nil {
+		f.generatedWithChatCtx = f.updated.Copy()
+	}
 	if f.generateCh != nil {
 		f.generateCh <- options
 	}
