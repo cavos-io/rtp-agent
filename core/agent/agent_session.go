@@ -671,12 +671,21 @@ func (s *AgentSession) EmitFunctionToolsExecuted(ev FunctionToolsExecutedEvent) 
 	if ev.CreatedAt.IsZero() {
 		ev.CreatedAt = time.Now()
 	}
+	s.mu.Lock()
+	runState := s.runState
+	s.mu.Unlock()
 	for _, call := range ev.FunctionCalls {
 		s.insertChatItem(call)
+		if runState != nil {
+			runState.RecordItem(call)
+		}
 	}
 	for _, output := range ev.FunctionCallOutputs {
 		if output != nil {
 			s.insertChatItem(output)
+			if runState != nil {
+				runState.RecordItem(output)
+			}
 		}
 	}
 	s.recordEvent(&ev)

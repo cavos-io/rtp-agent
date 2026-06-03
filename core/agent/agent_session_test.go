@@ -1020,6 +1020,43 @@ func TestAgentSessionRunReturnsRunResultWatchingGeneratedSpeech(t *testing.T) {
 	}
 }
 
+func TestAgentSessionFunctionToolsExecutedRecordsActiveRunItems(t *testing.T) {
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	result := NewRunResult(session.ChatCtx)
+	session.runState = result
+	call := &llm.FunctionCall{
+		ID:        "call_item_1",
+		CallID:    "call_lookup",
+		Name:      "lookup",
+		Arguments: `{}`,
+		CreatedAt: time.Now(),
+	}
+	output := &llm.FunctionCallOutput{
+		ID:        "output_item_1",
+		CallID:    "call_lookup",
+		Name:      "lookup",
+		Output:    "tool result",
+		CreatedAt: call.CreatedAt.Add(time.Millisecond),
+	}
+	ev, err := NewFunctionToolsExecutedEvent([]*llm.FunctionCall{call}, []*llm.FunctionCallOutput{output})
+	if err != nil {
+		t.Fatalf("NewFunctionToolsExecutedEvent error = %v, want nil", err)
+	}
+
+	session.EmitFunctionToolsExecuted(*ev)
+
+	events := result.Events()
+	if len(events) != 2 {
+		t.Fatalf("RunResult events length = %d, want function call and output", len(events))
+	}
+	if callEvent, ok := events[0].(*FunctionCallEvent); !ok || callEvent.Item != call {
+		t.Fatalf("events[0] = %#v, want recorded function call", events[0])
+	}
+	if outputEvent, ok := events[1].(*FunctionCallOutputEvent); !ok || outputEvent.Item != output {
+		t.Fatalf("events[1] = %#v, want recorded function call output", events[1])
+	}
+}
+
 func TestAgentSessionRunWithOptionsPreservesUserInputAndOutputType(t *testing.T) {
 	agent := NewAgent("test")
 	session := NewAgentSession(agent, nil, AgentSessionOptions{})
