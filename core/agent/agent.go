@@ -45,6 +45,7 @@ type Agent struct {
 	STT           stt.STT
 	VAD           vad.VAD
 	LLM           llm.LLM
+	RealtimeModel llm.RealtimeModel
 	TTS           tts.TTS
 
 	AllowInterruptions         bool

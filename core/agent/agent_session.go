@@ -380,6 +380,7 @@ func NewAgentSession(agent AgentInterface, room *lksdk.Room, opts AgentSessionOp
 		STT:                 baseAgent.STT,
 		VAD:                 baseAgent.VAD,
 		LLM:                 baseAgent.LLM,
+		RealtimeModel:       baseAgent.RealtimeModel,
 		TTS:                 baseAgent.TTS,
 		Options:             opts,
 		ChatCtx:             llm.NewChatContext(),

@@ -133,6 +133,26 @@ func TestAgentSessionStartCreatesMultimodalAssistantWithRealtimeModel(t *testing
 	}
 }
 
+func TestAgentSessionUsesAgentRealtimeModel(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	baseAgent := NewAgent("test")
+	baseAgent.RealtimeModel = &fakeRealtimeModel{session: &fakeRealtimeSession{}}
+	session := NewAgentSession(baseAgent, nil, AgentSessionOptions{})
+
+	if err := session.Start(ctx); err != nil {
+		t.Fatalf("Start error = %v, want nil", err)
+	}
+	defer session.Stop(context.Background())
+
+	if session.RealtimeModel != baseAgent.RealtimeModel {
+		t.Fatalf("session.RealtimeModel = %#v, want agent realtime model", session.RealtimeModel)
+	}
+	if _, ok := session.Assistant.(*MultimodalAgent); !ok {
+		t.Fatalf("Assistant = %T, want *MultimodalAgent", session.Assistant)
+	}
+}
+
 func TestAgentSessionStartEnablesIVRDetectionActivity(t *testing.T) {
 	baseAgent := NewAgent("test")
 	session := NewAgentSession(baseAgent, nil, AgentSessionOptions{
