@@ -1873,6 +1873,57 @@ func TestAgentSessionUpdateAgentWhileRunningSwitchesPipelineToMultimodal(t *test
 	}
 }
 
+func TestAgentSessionUpdateAgentWhileRunningSwitchesMultimodalToPipeline(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	initial := &trackingAgent{Agent: NewAgent("initial")}
+	initialRealtimeSession := &fakeRealtimeSession{}
+	initial.RealtimeModel = &fakeRealtimeModel{session: initialRealtimeSession}
+	next := &trackingAgent{Agent: NewAgent("next")}
+	nextVAD := &fakePipelineVAD{}
+	nextSTT := &fakePipelineSTT{}
+	nextLLM := &fakeGenerationLLM{stream: &fakeGenerationLLMStream{}}
+	nextTTS := &fakePipelineTTS{}
+	next.VAD = nextVAD
+	next.STT = nextSTT
+	next.LLM = nextLLM
+	next.TTS = nextTTS
+	session := NewAgentSession(initial, nil, AgentSessionOptions{})
+
+	if err := session.Start(ctx); err != nil {
+		t.Fatalf("Start error = %v, want nil", err)
+	}
+	defer session.Stop(context.Background())
+	if _, ok := session.Assistant.(*MultimodalAgent); !ok {
+		t.Fatalf("Assistant before handoff = %T, want *MultimodalAgent", session.Assistant)
+	}
+
+	session.UpdateAgent(next)
+
+	assistant, ok := session.Assistant.(*PipelineAgent)
+	if !ok {
+		t.Fatalf("Assistant after handoff = %T, want *PipelineAgent", session.Assistant)
+	}
+	if session.RealtimeModel != nil {
+		t.Fatalf("session.RealtimeModel = %#v, want nil after pipeline handoff", session.RealtimeModel)
+	}
+	if assistant.vad != nextVAD {
+		t.Fatalf("pipeline.vad = %#v, want next VAD", assistant.vad)
+	}
+	if assistant.stt != nextSTT {
+		t.Fatalf("pipeline.stt = %#v, want next STT", assistant.stt)
+	}
+	if assistant.LLM != nextLLM {
+		t.Fatalf("pipeline.LLM = %#v, want next LLM", assistant.LLM)
+	}
+	if assistant.tts != nextTTS {
+		t.Fatalf("pipeline.tts = %#v, want next TTS", assistant.tts)
+	}
+	if initialRealtimeSession.closed != 1 {
+		t.Fatalf("initial realtime session closed = %d, want 1", initialRealtimeSession.closed)
+	}
+}
+
 func TestAgentSessionUpdateAgentPreservesSessionComponentsWhenNextAgentOmitsThem(t *testing.T) {
 	initial := &trackingAgent{Agent: NewAgent("initial")}
 	next := &trackingAgent{Agent: NewAgent("next")}
