@@ -154,6 +154,24 @@ func TestAgentUpdateChatContextUpdatesRealtimeSession(t *testing.T) {
 	}
 }
 
+func TestAgentSessionUpdateOptionsUpdatesRealtimeToolChoice(t *testing.T) {
+	baseAgent := NewAgent("test")
+	session := NewAgentSession(baseAgent, nil, AgentSessionOptions{})
+	rtSession := &fakeRealtimeSession{}
+	ma := NewMultimodalAgent(&fakeRealtimeModel{session: rtSession}, llm.NewChatContext())
+	ma.rtSession = rtSession
+	session.Assistant = ma
+
+	toolChoice := llm.ToolChoice("auto")
+	if err := session.UpdateOptions(AgentSessionUpdateOptions{ToolChoice: &toolChoice}); err != nil {
+		t.Fatalf("UpdateOptions error = %v, want nil", err)
+	}
+
+	if rtSession.options.ToolChoice != "auto" {
+		t.Fatalf("realtime ToolChoice = %#v, want auto", rtSession.options.ToolChoice)
+	}
+}
+
 func TestMultimodalAgentGenerateReplySendsRealtimeOverrides(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -1036,6 +1054,7 @@ type fakeRealtimeSession struct {
 	generatedWithChatCtx *llm.ChatContext
 	tools                []llm.Tool
 	instructions         string
+	options              llm.RealtimeSessionOptions
 	generateCh           chan llm.RealtimeGenerateReplyOptions
 	sayCh                chan string
 	videoFrames          int
@@ -1059,7 +1078,10 @@ func (f *fakeRealtimeSession) UpdateTools(tools []llm.Tool) error {
 	return nil
 }
 
-func (f *fakeRealtimeSession) UpdateOptions(llm.RealtimeSessionOptions) error { return nil }
+func (f *fakeRealtimeSession) UpdateOptions(options llm.RealtimeSessionOptions) error {
+	f.options = options
+	return nil
+}
 
 func (f *fakeRealtimeSession) GenerateReply(options llm.RealtimeGenerateReplyOptions) error {
 	if f.updated != nil {

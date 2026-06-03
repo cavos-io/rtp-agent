@@ -68,6 +68,7 @@ type AgentSessionUpdateOptions struct {
 	MinEndpointingDelay *float64
 	MaxEndpointingDelay *float64
 	TurnDetection       *TurnDetectionMode
+	ToolChoice          *llm.ToolChoice
 }
 
 var (
@@ -140,6 +141,10 @@ type videoSessionAssistant interface {
 
 type componentUpdatingAssistant interface {
 	UpdateComponents(vad.VAD, stt.STT, llm.LLM, tts.TTS)
+}
+
+type realtimeOptionsUpdatingAssistant interface {
+	UpdateOptions(context.Context, llm.RealtimeSessionOptions) error
 }
 
 type AgentSession struct {
@@ -435,9 +440,8 @@ func withAgentSessionOptionDefaults(opts AgentSessionOptions) AgentSessionOption
 	return opts
 }
 
-func (s *AgentSession) UpdateOptions(opts AgentSessionUpdateOptions) {
+func (s *AgentSession) UpdateOptions(opts AgentSessionUpdateOptions) error {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 
 	if opts.MinEndpointingDelay != nil {
 		s.Options.MinEndpointingDelay = *opts.MinEndpointingDelay
@@ -448,6 +452,19 @@ func (s *AgentSession) UpdateOptions(opts AgentSessionUpdateOptions) {
 	if opts.TurnDetection != nil {
 		s.Options.TurnDetection = *opts.TurnDetection
 	}
+	assistant := s.Assistant
+	s.mu.Unlock()
+
+	if opts.ToolChoice == nil {
+		return nil
+	}
+	updater, ok := assistant.(realtimeOptionsUpdatingAssistant)
+	if !ok {
+		return nil
+	}
+	return updater.UpdateOptions(context.Background(), llm.RealtimeSessionOptions{
+		ToolChoice: *opts.ToolChoice,
+	})
 }
 
 func (s *AgentSession) UserInputTranscribedEvents() <-chan UserInputTranscribedEvent {
