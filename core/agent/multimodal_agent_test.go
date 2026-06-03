@@ -67,6 +67,26 @@ func TestMultimodalAgentStartsRealtimeSessionAndAcceptsAudio(t *testing.T) {
 	cancel()
 }
 
+func TestMultimodalAgentStartUpdatesRealtimeSessionWithSessionAndAgentTools(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	agent := NewAgent("test")
+	agent.Tools = []llm.Tool{&fakeGenerationTool{name: "agent_tool"}}
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	session.Tools = []llm.Tool{&fakeGenerationTool{name: "session_tool"}}
+	rtSession := &fakeRealtimeSession{}
+	ma := NewMultimodalAgent(&fakeRealtimeModel{session: rtSession}, llm.NewChatContext())
+
+	if err := ma.Start(ctx, session); err != nil {
+		t.Fatalf("Start returned error: %v", err)
+	}
+
+	if got, want := toolNames(rtSession.tools), []string{"session_tool", "agent_tool"}; !equalStrings(got, want) {
+		t.Fatalf("updated realtime tools = %#v, want %#v", got, want)
+	}
+}
+
 func TestAgentSessionStopClosesMultimodalRealtimeSession(t *testing.T) {
 	rtSession := &fakeRealtimeSession{}
 	ma := NewMultimodalAgent(&fakeRealtimeModel{session: rtSession}, llm.NewChatContext())
@@ -123,6 +143,30 @@ func TestMultimodalAgentEmitsRealtimeErrorWhenVideoPushFails(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("ErrorEvents did not receive realtime push video error")
+	}
+}
+
+func TestMultimodalAgentExecutesAgentToolFunctionCall(t *testing.T) {
+	chatCtx := llm.NewChatContext()
+	agent := NewAgent("test")
+	agent.Tools = []llm.Tool{&fakeGenerationTool{name: "lookup", result: "agent result"}}
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	rtSession := &fakeRealtimeSession{}
+	ma := &MultimodalAgent{
+		session:   session,
+		chatCtx:   chatCtx,
+		rtSession: rtSession,
+		ctx:       context.Background(),
+	}
+
+	ma.handleRealtimeEvent(llm.RealtimeEvent{
+		Type:     llm.RealtimeEventTypeFunctionCall,
+		Function: &llm.FunctionToolCall{Name: "lookup", CallID: "call_lookup", Arguments: `{}`},
+	})
+
+	output := lastFunctionOutput(t, chatCtx)
+	if output.IsError || output.Output != "agent result" {
+		t.Fatalf("function output = %#v, want agent tool result", output)
 	}
 }
 
@@ -440,6 +484,26 @@ func lastFunctionOutput(t *testing.T, chatCtx *llm.ChatContext) *llm.FunctionCal
 	return output
 }
 
+func toolNames(tools []llm.Tool) []string {
+	names := make([]string, 0, len(tools))
+	for _, tool := range tools {
+		names = append(names, tool.Name())
+	}
+	return names
+}
+
+func equalStrings(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
 type fakeRealtimeModel struct {
 	label    string
 	model    string
@@ -468,6 +532,7 @@ func (f *fakeRealtimeModel) Provider() string { return f.provider }
 
 type fakeRealtimeSession struct {
 	updated      *llm.ChatContext
+	tools        []llm.Tool
 	videoFrames  int
 	pushVideoErr error
 	closed       int
@@ -480,7 +545,10 @@ func (f *fakeRealtimeSession) UpdateChatContext(chatCtx *llm.ChatContext) error 
 	return nil
 }
 
-func (f *fakeRealtimeSession) UpdateTools([]llm.Tool) error { return nil }
+func (f *fakeRealtimeSession) UpdateTools(tools []llm.Tool) error {
+	f.tools = append([]llm.Tool(nil), tools...)
+	return nil
+}
 
 func (f *fakeRealtimeSession) UpdateOptions(llm.RealtimeSessionOptions) error { return nil }
 
