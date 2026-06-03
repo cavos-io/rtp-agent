@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/cavos-io/rtp-agent/core/audio/model"
 	"github.com/cavos-io/rtp-agent/core/llm"
 	"github.com/cavos-io/rtp-agent/core/stt"
 	"github.com/cavos-io/rtp-agent/library/telemetry"
@@ -76,6 +77,44 @@ func TestAgentActivityScheduleSpeechPreservesFIFOWithinPriority(t *testing.T) {
 	if activity.currentSpeech != second {
 		t.Fatalf("currentSpeech = %p, want second speech %p", activity.currentSpeech, second)
 	}
+}
+
+func TestAgentActivityRespectsMinConsecutiveSpeechDelay(t *testing.T) {
+	agent := NewAgent("test")
+	session := NewAgentSession(agent, nil, AgentSessionOptions{
+		MinConsecutiveSpeechDelay: 0.08,
+	})
+	assistant := &recordingScheduledSpeechAssistant{scheduledCh: make(chan *SpeechHandle, 10)}
+	session.Assistant = assistant
+	activity := NewAgentActivity(agent, session)
+
+	first := NewSpeechHandle(true, DefaultInputDetails())
+	second := NewSpeechHandle(true, DefaultInputDetails())
+	if err := activity.ScheduleSpeech(first, SpeechPriorityNormal, false); err != nil {
+		t.Fatalf("ScheduleSpeech first error = %v, want nil", err)
+	}
+	activity.processQueue()
+	if got := receiveScheduledSpeech(t, assistant); got != first {
+		t.Fatalf("scheduled speech = %p, want first %p", got, first)
+	}
+	first.MarkDone()
+	waitForNoCurrentSpeech(t, activity)
+
+	if err := activity.ScheduleSpeech(second, SpeechPriorityNormal, false); err != nil {
+		t.Fatalf("ScheduleSpeech second error = %v, want nil", err)
+	}
+	activity.processQueue()
+
+	select {
+	case got := <-assistant.scheduledCh:
+		t.Fatalf("scheduled speech = %p before min consecutive delay elapsed, want none", got)
+	case <-time.After(20 * time.Millisecond):
+	}
+
+	if got := receiveScheduledSpeech(t, assistant); got != second {
+		t.Fatalf("scheduled speech = %p, want second %p", got, second)
+	}
+	second.MarkDone()
 }
 
 func TestAgentActivityScheduleSpeechRejectsNonForcedSpeechWhilePaused(t *testing.T) {
@@ -1415,6 +1454,40 @@ func waitForInterrupted(t *testing.T, speech *SpeechHandle) {
 				return
 			}
 		}
+	}
+}
+
+type recordingScheduledSpeechAssistant struct {
+	scheduledCh chan *SpeechHandle
+}
+
+func (r *recordingScheduledSpeechAssistant) Start(context.Context, *AgentSession) error {
+	return nil
+}
+
+func (r *recordingScheduledSpeechAssistant) OnAudioFrame(context.Context, *model.AudioFrame) {
+}
+
+func (r *recordingScheduledSpeechAssistant) SetPublishAudio(func(frame *model.AudioFrame) error) {
+}
+
+func (r *recordingScheduledSpeechAssistant) OnSpeechScheduled(ctx context.Context, speech *SpeechHandle) {
+	speech.AuthorizeGeneration()
+	select {
+	case r.scheduledCh <- speech:
+	case <-ctx.Done():
+	}
+}
+
+func receiveScheduledSpeech(t *testing.T, assistant *recordingScheduledSpeechAssistant) *SpeechHandle {
+	t.Helper()
+
+	select {
+	case speech := <-assistant.scheduledCh:
+		return speech
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for scheduled speech")
+		return nil
 	}
 }
 

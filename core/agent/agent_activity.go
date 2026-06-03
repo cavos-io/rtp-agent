@@ -39,6 +39,7 @@ type AgentActivity struct {
 	currentSpeech  *SpeechHandle
 	speechQueue    []scheduledSpeech
 	nextSpeechSeq  uint64
+	lastSpeechDone time.Time
 	queueMu        sync.Mutex
 	queueUpdatedCh chan struct{}
 
@@ -523,9 +524,30 @@ func (a *AgentActivity) processQueue() {
 	}
 
 	a.currentSpeech = speech
+	delay := a.minConsecutiveSpeechDelay()
+	if delay > 0 && !a.lastSpeechDone.IsZero() {
+		delay -= time.Since(a.lastSpeechDone)
+	}
 	if a.Session != nil {
 		if assistant, ok := a.Session.Assistant.(scheduledSpeechAssistant); ok {
-			go assistant.OnSpeechScheduled(a.ctx, speech)
+			go func() {
+				if delay > 0 {
+					timer := time.NewTimer(delay)
+					select {
+					case <-timer.C:
+					case <-a.ctx.Done():
+						timer.Stop()
+						return
+					case <-speech.doneCh:
+						timer.Stop()
+						return
+					}
+				}
+				if speech.IsDone() {
+					return
+				}
+				assistant.OnSpeechScheduled(a.ctx, speech)
+			}()
 		}
 	}
 
@@ -536,6 +558,7 @@ func (a *AgentActivity) processQueue() {
 
 		a.queueMu.Lock()
 		a.currentSpeech = nil
+		a.lastSpeechDone = time.Now()
 		a.queueMu.Unlock()
 
 		// Trigger next
@@ -544,6 +567,16 @@ func (a *AgentActivity) processQueue() {
 		default:
 		}
 	}()
+}
+
+func (a *AgentActivity) minConsecutiveSpeechDelay() time.Duration {
+	if a.Agent != nil && a.Agent.MinConsecutiveSpeechDelay > 0 {
+		return time.Duration(a.Agent.MinConsecutiveSpeechDelay * float64(time.Second))
+	}
+	if a.Session != nil && a.Session.Options.MinConsecutiveSpeechDelay > 0 {
+		return time.Duration(a.Session.Options.MinConsecutiveSpeechDelay * float64(time.Second))
+	}
+	return 0
 }
 
 func (a *AgentActivity) Drain(ctx context.Context) error {
