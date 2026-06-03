@@ -1570,11 +1570,15 @@ func TestAgentSessionUpdateAgentBeforeStartSwapsAgentOnly(t *testing.T) {
 
 func TestAgentSessionUpdateAgentWhileRunningStartsNewActivity(t *testing.T) {
 	initial := &trackingAgent{Agent: NewAgent("initial")}
+	initial.ID = "agent_initial"
 	next := &trackingAgent{Agent: NewAgent("next")}
+	next.ID = "agent_next"
 	session := NewAgentSession(initial, nil, AgentSessionOptions{})
 	oldActivity := NewAgentActivity(initial, session)
 	session.activity = oldActivity
 	session.started = true
+	result := NewRunResult(session.ChatCtx)
+	session.runState = result
 
 	session.UpdateAgent(next)
 
@@ -1598,6 +1602,30 @@ func TestAgentSessionUpdateAgentWhileRunningStartsNewActivity(t *testing.T) {
 	}
 	if next.GetActivity() != session.activity {
 		t.Fatalf("next activity = %#v, want session activity", next.GetActivity())
+	}
+	var handoff *llm.AgentHandoff
+	for _, item := range session.ChatCtx.Items {
+		if candidate, ok := item.(*llm.AgentHandoff); ok {
+			handoff = candidate
+			break
+		}
+	}
+	if handoff == nil {
+		t.Fatalf("session ChatCtx items = %#v, want agent handoff item", session.ChatCtx.Items)
+	}
+	if handoff.OldAgentID == nil || *handoff.OldAgentID != "agent_initial" || handoff.NewAgentID != "agent_next" {
+		t.Fatalf("handoff = %#v, want initial to next", handoff)
+	}
+	events := result.Events()
+	if len(events) != 1 {
+		t.Fatalf("RunResult events length = %d, want handoff event", len(events))
+	}
+	handoffEvent, ok := events[0].(*AgentHandoffEvent)
+	if !ok {
+		t.Fatalf("events[0] = %T, want *AgentHandoffEvent", events[0])
+	}
+	if handoffEvent.Item != handoff || handoffEvent.OldAgent != initial.Agent || handoffEvent.NewAgent != next.Agent {
+		t.Fatalf("handoff event = %#v, want recorded session handoff", handoffEvent)
 	}
 }
 

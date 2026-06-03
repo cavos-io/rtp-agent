@@ -16,6 +16,7 @@ import (
 	"github.com/cavos-io/rtp-agent/library/telemetry"
 	"github.com/cavos-io/rtp-agent/library/tokenize"
 	"github.com/cavos-io/rtp-agent/library/utils/images"
+	"github.com/google/uuid"
 	lksdk "github.com/livekit/server-sdk-go/v2"
 )
 
@@ -1307,6 +1308,11 @@ func (s *AgentSession) UpdateAgent(agent AgentInterface) {
 		s.mu.Unlock()
 		return
 	}
+	oldAgent := (*Agent)(nil)
+	if oldActivity != nil {
+		oldAgent = oldActivity.Agent
+	}
+	runState := s.runState
 
 	newActivity := NewAgentActivity(agent, s)
 	s.activity = newActivity
@@ -1315,7 +1321,35 @@ func (s *AgentSession) UpdateAgent(agent AgentInterface) {
 	if oldActivity != nil {
 		oldActivity.Stop()
 	}
+	handoff := newAgentHandoff(oldAgent, baseAgent)
+	if runState != nil {
+		runState.RecordAgentHandoff(handoff, oldAgent, baseAgent)
+	}
+	s.EmitConversationItemAdded(handoff)
 	newActivity.Start()
+}
+
+func newAgentHandoff(oldAgent *Agent, newAgent *Agent) *llm.AgentHandoff {
+	var oldAgentID *string
+	if oldID := agentHandoffID(oldAgent); oldID != "" {
+		oldAgentID = &oldID
+	}
+	return &llm.AgentHandoff{
+		ID:         "handoff_" + uuid.NewString()[:12],
+		OldAgentID: oldAgentID,
+		NewAgentID: agentHandoffID(newAgent),
+		CreatedAt:  time.Now(),
+	}
+}
+
+func agentHandoffID(agent *Agent) string {
+	if agent == nil {
+		return ""
+	}
+	if agent.ID != "" {
+		return agent.ID
+	}
+	return agent.Instructions
 }
 
 func (s *AgentSession) Stop(ctx context.Context) error {
