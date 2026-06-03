@@ -174,6 +174,7 @@ type AgentSession struct {
 	mu             sync.Mutex
 	activity       *AgentActivity
 	started        bool
+	runCtx         context.Context
 	runState       *RunResult
 	userAwayTimer  *time.Timer
 	userdata       any
@@ -492,6 +493,21 @@ func (s *AgentSession) ensureAssistantLocked() SessionAssistant {
 	}
 	s.Assistant = NewPipelineAgent(s.VAD, s.STT, s.LLM, s.TTS, s.ChatCtx)
 	return s.Assistant
+}
+
+func (s *AgentSession) replacementAssistantLocked(current SessionAssistant) SessionAssistant {
+	if s.RealtimeModel != nil {
+		if _, ok := current.(*MultimodalAgent); ok {
+			return nil
+		}
+		return NewMultimodalAgent(s.RealtimeModel, s.ChatCtx)
+	}
+	if _, ok := current.(*MultimodalAgent); !ok {
+		return nil
+	}
+	pipeline := NewPipelineAgent(s.VAD, s.STT, s.LLM, s.TTS, s.ChatCtx)
+	pipeline.ttsStreamPacer = s.Options.TTSStreamPacer
+	return pipeline
 }
 
 func (s *AgentSession) UserInputTranscribedEvents() <-chan UserInputTranscribedEvent {
@@ -992,6 +1008,7 @@ func (s *AgentSession) StartWithOptions(ctx context.Context, opts StartOptions) 
 	s.mu.Lock()
 	s.activity = activity
 	s.started = true
+	s.runCtx = ctx
 	s.mu.Unlock()
 
 	activity.Start()
@@ -1419,6 +1436,13 @@ func (s *AgentSession) UpdateAgent(agent AgentInterface) {
 		s.mu.Unlock()
 		return
 	}
+	runCtx := s.runCtx
+	previousAssistant := assistant
+	replacementAssistant := s.replacementAssistantLocked(assistant)
+	if replacementAssistant != nil {
+		s.Assistant = replacementAssistant
+		assistant = replacementAssistant
+	}
 	oldAgent := (*Agent)(nil)
 	if oldActivity != nil {
 		oldAgent = oldActivity.Agent
@@ -1429,12 +1453,25 @@ func (s *AgentSession) UpdateAgent(agent AgentInterface) {
 	s.activity = newActivity
 	s.mu.Unlock()
 
-	if updater, ok := assistant.(componentUpdatingAssistant); ok {
+	if replacementAssistant != nil {
+		if runCtx == nil {
+			runCtx = context.Background()
+		}
+		if err := replacementAssistant.Start(runCtx, s); err != nil {
+			logger.Logger.Errorw("failed to start replacement assistant", err)
+		} else if closer, ok := previousAssistant.(closeableSessionAssistant); ok {
+			if err := closer.Close(); err != nil {
+				logger.Logger.Errorw("failed to close replaced assistant", err)
+			}
+		}
+	} else if updater, ok := assistant.(componentUpdatingAssistant); ok {
 		updater.UpdateComponents(sessionVAD, sessionSTT, sessionLLM, sessionTTS)
 	}
-	if updater, ok := assistant.(realtimeModelUpdatingAssistant); ok {
-		if err := updater.UpdateRealtimeModel(context.Background(), sessionRealtimeModel); err != nil {
-			logger.Logger.Errorw("failed to update realtime model on assistant", err)
+	if replacementAssistant == nil {
+		if updater, ok := assistant.(realtimeModelUpdatingAssistant); ok {
+			if err := updater.UpdateRealtimeModel(context.Background(), sessionRealtimeModel); err != nil {
+				logger.Logger.Errorw("failed to update realtime model on assistant", err)
+			}
 		}
 	}
 	if oldActivity != nil {
@@ -1506,6 +1543,7 @@ func (s *AgentSession) stop(ctx context.Context, commitPendingUserTurn bool) err
 	s.activity = nil
 	s.ivrActivity = nil
 	s.started = false
+	s.runCtx = nil
 	s.UserState = UserStateListening
 	s.AgentState = AgentStateInitializing
 	if s.userAwayTimer != nil {
