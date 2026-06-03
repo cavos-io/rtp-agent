@@ -1769,6 +1769,43 @@ func TestAgentSessionUpdateAgentUsesNextAgentComponentsWhenProvided(t *testing.T
 	}
 }
 
+func TestAgentSessionUpdateAgentRefreshesPipelineAssistantComponents(t *testing.T) {
+	initial := &trackingAgent{Agent: NewAgent("initial")}
+	initial.VAD = &fakePipelineVAD{}
+	initial.STT = &fakePipelineSTT{}
+	initial.LLM = &fakeGenerationLLM{stream: &fakeGenerationLLMStream{}}
+	initial.TTS = &fakePipelineTTS{}
+	next := &trackingAgent{Agent: NewAgent("next")}
+	nextVAD := &fakePipelineVAD{}
+	nextSTT := &fakePipelineSTT{}
+	nextLLM := &fakeGenerationLLM{stream: &fakeGenerationLLMStream{}}
+	nextTTS := &fakePipelineTTS{}
+	next.VAD = nextVAD
+	next.STT = nextSTT
+	next.LLM = nextLLM
+	next.TTS = nextTTS
+	session := NewAgentSession(initial, nil, AgentSessionOptions{})
+	pipeline := NewPipelineAgent(initial.VAD, initial.STT, initial.LLM, initial.TTS, session.ChatCtx)
+	session.Assistant = pipeline
+	session.activity = NewAgentActivity(initial, session)
+	session.started = true
+
+	session.UpdateAgent(next)
+
+	if pipeline.vad != nextVAD {
+		t.Fatalf("pipeline.vad = %#v, want next agent VAD", pipeline.vad)
+	}
+	if pipeline.stt != nextSTT {
+		t.Fatalf("pipeline.stt = %#v, want next agent STT", pipeline.stt)
+	}
+	if pipeline.LLM != nextLLM {
+		t.Fatalf("pipeline.LLM = %#v, want next agent LLM", pipeline.LLM)
+	}
+	if pipeline.tts != nextTTS {
+		t.Fatalf("pipeline.tts = %#v, want next agent TTS", pipeline.tts)
+	}
+}
+
 func TestAgentSessionUpdateAgentWhileRunningStartsNewActivity(t *testing.T) {
 	initial := &trackingAgent{Agent: NewAgent("initial")}
 	initial.ID = "agent_initial"

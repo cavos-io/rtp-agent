@@ -138,6 +138,10 @@ type videoSessionAssistant interface {
 	OnVideoFrame(ctx context.Context, frame *images.VideoFrame)
 }
 
+type componentUpdatingAssistant interface {
+	UpdateComponents(vad.VAD, stt.STT, llm.LLM, tts.TTS)
+}
+
 type AgentSession struct {
 	Options AgentSessionOptions
 
@@ -1362,6 +1366,11 @@ func (s *AgentSession) UpdateAgent(agent AgentInterface) {
 	started := s.started
 	s.Agent = agent
 	s.updateAgentComponentsLocked(baseAgent)
+	assistant := s.Assistant
+	sessionVAD := s.VAD
+	sessionSTT := s.STT
+	sessionLLM := s.LLM
+	sessionTTS := s.TTS
 	if !started {
 		s.mu.Unlock()
 		return
@@ -1376,6 +1385,9 @@ func (s *AgentSession) UpdateAgent(agent AgentInterface) {
 	s.activity = newActivity
 	s.mu.Unlock()
 
+	if updater, ok := assistant.(componentUpdatingAssistant); ok {
+		updater.UpdateComponents(sessionVAD, sessionSTT, sessionLLM, sessionTTS)
+	}
 	if oldActivity != nil {
 		oldActivity.Stop()
 	}

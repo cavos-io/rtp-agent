@@ -80,6 +80,15 @@ func (va *PipelineAgent) SetPublishAudio(publish func(frame *model.AudioFrame) e
 	va.PublishAudio = publish
 }
 
+func (va *PipelineAgent) UpdateComponents(vadObj vad.VAD, sttObj stt.STT, llmObj llm.LLM, ttsObj tts.TTS) {
+	va.mu.Lock()
+	defer va.mu.Unlock()
+	va.vad = vadObj
+	va.stt = sttObj
+	va.LLM = llmObj
+	va.tts = ttsObj
+}
+
 func (va *PipelineAgent) run(ctx context.Context) {
 	logger.Logger.Infow("PipelineAgent started")
 
