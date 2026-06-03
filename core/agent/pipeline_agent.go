@@ -38,6 +38,7 @@ type pipelineReplyOptions struct {
 	ToolChoice   llm.ToolChoice
 	Tools        []string
 	ChatCtx      *llm.ChatContext
+	SpeechHandle *SpeechHandle
 }
 
 func NewPipelineAgent(
@@ -213,6 +214,27 @@ func (va *PipelineAgent) generateReply() {
 	va.generateReplyWithOptions(pipelineReplyOptions{})
 }
 
+func (va *PipelineAgent) OnSpeechScheduled(ctx context.Context, speech *SpeechHandle) {
+	if speech == nil {
+		return
+	}
+	defer speech.MarkDone()
+	speech.AuthorizeGeneration()
+
+	options := pipelineReplyOptions{
+		Tools:        append([]string(nil), speech.Generation.Tools...),
+		ChatCtx:      speech.Generation.ChatCtx,
+		SpeechHandle: speech,
+	}
+	if speech.Generation.Instructions != nil {
+		options.Instructions = speech.Generation.Instructions.AsModality("text").String()
+	}
+	if speech.Generation.ToolChoice != nil {
+		options.ToolChoice = speech.Generation.ToolChoice
+	}
+	va.generateReplyWithOptions(options)
+}
+
 func (va *PipelineAgent) generateReplyWithOptions(opts pipelineReplyOptions) {
 	va.mu.Lock()
 	session := va.session
@@ -329,13 +351,23 @@ func (va *PipelineAgent) generateReplyWithOptions(opts pipelineReplyOptions) {
 			}
 			msg := va.chatCtx.AddMessage(args)
 			session.EmitConversationItemAdded(msg)
+			if opts.SpeechHandle != nil {
+				opts.SpeechHandle.AddChatItems(msg)
+			}
+		}
+
+		if opts.SpeechHandle != nil {
+			_ = opts.SpeechHandle.MarkGenerationDone()
 		}
 
 		if len(genData.GeneratedFunctions) > 0 {
 			session.UpdateAgentState(AgentStateThinking)
 		}
 
-		toolOutCh := PerformToolExecutions(ctx, genData.FunctionCh, toolCtx, WithToolExecutionSession(session))
+		toolOutCh := PerformToolExecutions(ctx, genData.FunctionCh, toolCtx,
+			WithToolExecutionSession(session),
+			WithToolExecutionSpeechHandle(opts.SpeechHandle),
+		)
 
 		// Wait for tool executions to complete and collect results
 		var executedTools bool

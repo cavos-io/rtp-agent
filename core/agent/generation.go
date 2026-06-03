@@ -256,7 +256,8 @@ type ToolExecutionOutput struct {
 }
 
 type ToolExecutionOptions struct {
-	Session *AgentSession
+	Session      *AgentSession
+	SpeechHandle *SpeechHandle
 }
 
 type ToolExecutionOption func(*ToolExecutionOptions)
@@ -264,6 +265,12 @@ type ToolExecutionOption func(*ToolExecutionOptions)
 func WithToolExecutionSession(session *AgentSession) ToolExecutionOption {
 	return func(opts *ToolExecutionOptions) {
 		opts.Session = session
+	}
+}
+
+func WithToolExecutionSpeechHandle(speechHandle *SpeechHandle) ToolExecutionOption {
+	return func(opts *ToolExecutionOptions) {
+		opts.SpeechHandle = speechHandle
 	}
 }
 
@@ -298,7 +305,7 @@ func PerformToolExecutions(
 						Arguments: fc.Arguments,
 						Extra:     fc.Extra,
 					}
-					execCtx = WithRunContext(execCtx, NewRunContext(options.Session, nil, &functionCall))
+					execCtx = WithRunContext(execCtx, NewRunContext(options.Session, options.SpeechHandle, &functionCall))
 				}
 				result := llm.ExecuteFunctionCall(execCtx, fc, toolCtx)
 				outCh <- ToolExecutionOutput{
