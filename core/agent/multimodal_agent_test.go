@@ -67,6 +67,222 @@ func TestMultimodalAgentStartsRealtimeSessionAndAcceptsAudio(t *testing.T) {
 	cancel()
 }
 
+func TestMultimodalAgentStartUpdatesRealtimeSessionWithSessionAndAgentTools(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	agent := NewAgent("test")
+	agent.Tools = []llm.Tool{&fakeGenerationTool{name: "agent_tool"}}
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	session.Tools = []llm.Tool{&fakeGenerationTool{name: "session_tool"}}
+	rtSession := &fakeRealtimeSession{}
+	ma := NewMultimodalAgent(&fakeRealtimeModel{session: rtSession}, llm.NewChatContext())
+
+	if err := ma.Start(ctx, session); err != nil {
+		t.Fatalf("Start returned error: %v", err)
+	}
+
+	if got, want := toolNames(rtSession.tools), []string{"session_tool", "agent_tool"}; !equalStrings(got, want) {
+		t.Fatalf("updated realtime tools = %#v, want %#v", got, want)
+	}
+}
+
+func TestMultimodalAgentGenerateReplySendsRealtimeOverrides(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	lookup := &fakeGenerationTool{name: "lookup"}
+	calendar := &fakeGenerationTool{name: "calendar"}
+	rtSession := &fakeRealtimeSession{generateCh: make(chan llm.RealtimeGenerateReplyOptions, 1)}
+	ma := NewMultimodalAgent(&fakeRealtimeModel{session: rtSession}, llm.NewChatContext())
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	session.Assistant = ma
+	session.Tools = []llm.Tool{lookup, calendar}
+
+	if err := session.Start(ctx); err != nil {
+		t.Fatalf("Start returned error: %v", err)
+	}
+	handle, err := session.GenerateReplyWithOptions(ctx, GenerateReplyOptions{
+		UserInput:     "hello",
+		Instructions:  "answer tersely",
+		ToolChoice:    "none",
+		Tools:         []string{"lookup"},
+		InputModality: "text",
+	})
+	if err != nil {
+		t.Fatalf("GenerateReplyWithOptions returned error: %v", err)
+	}
+
+	var opts llm.RealtimeGenerateReplyOptions
+	select {
+	case opts = <-rtSession.generateCh:
+	case <-time.After(time.Second):
+		t.Fatal("realtime session did not receive GenerateReply")
+	}
+	if opts.Instructions != "answer tersely" {
+		t.Fatalf("Instructions = %q, want answer tersely", opts.Instructions)
+	}
+	if opts.ToolChoice != "none" {
+		t.Fatalf("ToolChoice = %#v, want none", opts.ToolChoice)
+	}
+	if got, want := toolNames(opts.Tools), []string{"lookup"}; !equalStrings(got, want) {
+		t.Fatalf("Tools = %#v, want %#v", got, want)
+	}
+	if rtSession.generatedWithChatCtx == nil {
+		t.Fatal("GenerateReply saw nil chat context, want user input applied before generation")
+	}
+	if len(rtSession.generatedWithChatCtx.Items) != 1 {
+		t.Fatalf("GenerateReply chat context items = %#v, want one user message", rtSession.generatedWithChatCtx.Items)
+	}
+	msg, ok := rtSession.generatedWithChatCtx.Items[0].(*llm.ChatMessage)
+	if !ok {
+		t.Fatalf("GenerateReply chat context item = %T, want *llm.ChatMessage", rtSession.generatedWithChatCtx.Items[0])
+	}
+	if msg.Role != llm.ChatRoleUser || msg.TextContent() != "hello" {
+		t.Fatalf("GenerateReply chat context message = %#v, want user hello", msg)
+	}
+	if !handle.IsDone() {
+		t.Fatal("speech handle is not done after realtime GenerateReply")
+	}
+}
+
+func TestMultimodalAgentGenerateReplyIgnoresFalseAllowInterruptionsWithTurnDetection(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	rtSession := &fakeRealtimeSession{generateCh: make(chan llm.RealtimeGenerateReplyOptions, 1)}
+	ma := NewMultimodalAgent(&fakeRealtimeModel{
+		session:      rtSession,
+		capabilities: llm.RealtimeCapabilities{TurnDetection: true},
+	}, llm.NewChatContext())
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{AllowInterruptions: true})
+	session.Assistant = ma
+
+	if err := session.Start(ctx); err != nil {
+		t.Fatalf("Start returned error: %v", err)
+	}
+	allowInterruptions := false
+	handle, err := session.GenerateReplyWithOptions(ctx, GenerateReplyOptions{
+		UserInput:          "hello",
+		AllowInterruptions: &allowInterruptions,
+		InputModality:      "text",
+	})
+	if err != nil {
+		t.Fatalf("GenerateReplyWithOptions returned error: %v", err)
+	}
+
+	select {
+	case <-rtSession.generateCh:
+	case <-time.After(time.Second):
+		t.Fatal("realtime session did not receive GenerateReply")
+	}
+	if !handle.AllowInterruptions {
+		t.Fatal("SpeechHandle.AllowInterruptions = false, want session default true for realtime turn detection")
+	}
+}
+
+func TestMultimodalAgentSayUsesRealtimeSessionWhenSupported(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	rtSession := &fakeRealtimeSession{sayCh: make(chan string, 1)}
+	ma := NewMultimodalAgent(&fakeRealtimeModel{
+		session:      rtSession,
+		capabilities: llm.RealtimeCapabilities{SupportsSay: true},
+	}, llm.NewChatContext())
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	session.Assistant = ma
+
+	handle, err := session.Say(ctx, "hello from realtime")
+	if err == nil {
+		t.Fatalf("Say before Start error = nil, handle = %#v; want not running", handle)
+	}
+	if err := session.Start(ctx); err != nil {
+		t.Fatalf("Start returned error: %v", err)
+	}
+	addToChatContext := false
+	handle, err = session.SayWithOptions(ctx, SayOptions{
+		Text:             "hello from realtime",
+		AddToChatContext: &addToChatContext,
+	})
+	if err != nil {
+		t.Fatalf("Say returned error: %v", err)
+	}
+
+	select {
+	case text := <-rtSession.sayCh:
+		if text != "hello from realtime" {
+			t.Fatalf("Say text = %q, want hello from realtime", text)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("realtime session did not receive Say")
+	}
+	if !handle.IsDone() {
+		t.Fatal("speech handle is not done after realtime Say")
+	}
+	msg := findChatMessage(session.ChatCtx, llm.ChatRoleAssistant, "hello from realtime")
+	if msg == nil {
+		t.Fatalf("session chat context items = %#v, want realtime say assistant message", session.ChatCtx.Items)
+	}
+	if len(handle.ChatItems()) != 1 || handle.ChatItems()[0] != msg {
+		t.Fatalf("handle chat items = %#v, want realtime say assistant message", handle.ChatItems())
+	}
+}
+
+func TestMultimodalAgentSayIgnoresFalseAllowInterruptionsWithTurnDetection(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	rtSession := &fakeRealtimeSession{sayCh: make(chan string, 1)}
+	ma := NewMultimodalAgent(&fakeRealtimeModel{
+		session: rtSession,
+		capabilities: llm.RealtimeCapabilities{
+			TurnDetection: true,
+			SupportsSay:   true,
+		},
+	}, llm.NewChatContext())
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{AllowInterruptions: true})
+	session.Assistant = ma
+
+	if err := session.Start(ctx); err != nil {
+		t.Fatalf("Start returned error: %v", err)
+	}
+	allowInterruptions := false
+	handle, err := session.SayWithOptions(ctx, SayOptions{
+		Text:               "hello from realtime",
+		AllowInterruptions: &allowInterruptions,
+	})
+	if err != nil {
+		t.Fatalf("SayWithOptions returned error: %v", err)
+	}
+
+	select {
+	case <-rtSession.sayCh:
+	case <-time.After(time.Second):
+		t.Fatal("realtime session did not receive Say")
+	}
+	if !handle.AllowInterruptions {
+		t.Fatal("SpeechHandle.AllowInterruptions = false, want session default true for realtime turn detection")
+	}
+}
+
+func TestAgentSessionStopClosesMultimodalRealtimeSession(t *testing.T) {
+	rtSession := &fakeRealtimeSession{}
+	ma := NewMultimodalAgent(&fakeRealtimeModel{session: rtSession}, llm.NewChatContext())
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	session.Assistant = ma
+
+	if err := session.Start(context.Background()); err != nil {
+		t.Fatalf("Start error = %v", err)
+	}
+	if err := session.Stop(context.Background()); err != nil {
+		t.Fatalf("Stop error = %v", err)
+	}
+	if rtSession.closed != 1 {
+		t.Fatalf("realtime session closed = %d, want 1", rtSession.closed)
+	}
+}
+
 func TestMultimodalAgentPushesVideoToRealtimeSession(t *testing.T) {
 	rtSession := &fakeRealtimeSession{}
 	ma := &MultimodalAgent{rtSession: rtSession}
@@ -106,6 +322,30 @@ func TestMultimodalAgentEmitsRealtimeErrorWhenVideoPushFails(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("ErrorEvents did not receive realtime push video error")
+	}
+}
+
+func TestMultimodalAgentExecutesAgentToolFunctionCall(t *testing.T) {
+	chatCtx := llm.NewChatContext()
+	agent := NewAgent("test")
+	agent.Tools = []llm.Tool{&fakeGenerationTool{name: "lookup", result: "agent result"}}
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	rtSession := &fakeRealtimeSession{}
+	ma := &MultimodalAgent{
+		session:   session,
+		chatCtx:   chatCtx,
+		rtSession: rtSession,
+		ctx:       context.Background(),
+	}
+
+	ma.handleRealtimeEvent(llm.RealtimeEvent{
+		Type:     llm.RealtimeEventTypeFunctionCall,
+		Function: &llm.FunctionToolCall{Name: "lookup", CallID: "call_lookup", Arguments: `{}`},
+	})
+
+	output := lastFunctionOutput(t, chatCtx)
+	if output.IsError || output.Output != "agent result" {
+		t.Fatalf("function output = %#v, want agent tool result", output)
 	}
 }
 
@@ -205,17 +445,28 @@ func TestMultimodalAgentDoesNotEmitErrorEventForRealtimeEOF(t *testing.T) {
 }
 
 func TestMultimodalAgentEmitsSpeechCreatedForServerGeneration(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
 	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{AllowInterruptions: true})
+	activity := NewAgentActivity(NewAgent("test"), session)
+	session.activity = activity
+	go activity.schedulingTask()
+	defer activity.Stop()
+	messageCh := make(chan llm.MessageGeneration)
 	ma := &MultimodalAgent{session: session}
+	session.Assistant = ma
 
 	ma.handleRealtimeEvent(llm.RealtimeEvent{
 		Type: llm.RealtimeEventTypeGenerationCreated,
 		Generation: &llm.GenerationCreatedEvent{
+			MessageCh:     messageCh,
 			ResponseID:    "response_1",
 			UserInitiated: false,
 		},
 	})
 
+	var handle *SpeechHandle
 	select {
 	case ev := <-session.SpeechCreatedEvents():
 		if ev.GetType() != "speech_created" {
@@ -230,6 +481,7 @@ func TestMultimodalAgentEmitsSpeechCreatedForServerGeneration(t *testing.T) {
 		if ev.SpeechHandle == nil {
 			t.Fatal("SpeechHandle = nil, want handle for server realtime generation")
 		}
+		handle = ev.SpeechHandle
 		if !ev.SpeechHandle.AllowInterruptions {
 			t.Fatal("SpeechHandle.AllowInterruptions = false, want session default true")
 		}
@@ -238,6 +490,20 @@ func TestMultimodalAgentEmitsSpeechCreatedForServerGeneration(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("SpeechCreatedEvents did not receive server realtime generation")
+	}
+	scheduleCtx, scheduleCancel := context.WithTimeout(ctx, 100*time.Millisecond)
+	defer scheduleCancel()
+	if err := handle.WaitForScheduled(scheduleCtx); err != nil {
+		t.Fatalf("server realtime generation was not scheduled: %v", err)
+	}
+	if handle.IsDone() {
+		t.Fatal("server realtime generation handle is done before generation stream closes")
+	}
+	close(messageCh)
+	doneCtx, doneCancel := context.WithTimeout(ctx, time.Second)
+	defer doneCancel()
+	if err := handle.Wait(doneCtx); err != nil {
+		t.Fatalf("server realtime generation handle did not complete after stream close: %v", err)
 	}
 }
 
@@ -423,17 +689,55 @@ func lastFunctionOutput(t *testing.T, chatCtx *llm.ChatContext) *llm.FunctionCal
 	return output
 }
 
+func findChatMessage(chatCtx *llm.ChatContext, role llm.ChatRole, text string) *llm.ChatMessage {
+	if chatCtx == nil {
+		return nil
+	}
+	for _, item := range chatCtx.Items {
+		msg, ok := item.(*llm.ChatMessage)
+		if ok && msg.Role == role && msg.TextContent() == text {
+			return msg
+		}
+	}
+	return nil
+}
+
+func toolNames(tools []llm.Tool) []string {
+	names := make([]string, 0, len(tools))
+	for _, tool := range tools {
+		names = append(names, tool.Name())
+	}
+	return names
+}
+
+func equalStrings(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
 type fakeRealtimeModel struct {
-	label    string
-	model    string
-	provider string
+	label        string
+	model        string
+	provider     string
+	session      *fakeRealtimeSession
+	capabilities llm.RealtimeCapabilities
 }
 
 func (f *fakeRealtimeModel) Capabilities() llm.RealtimeCapabilities {
-	return llm.RealtimeCapabilities{}
+	return f.capabilities
 }
 
 func (f *fakeRealtimeModel) Session() (llm.RealtimeSession, error) {
+	if f.session != nil {
+		return f.session, nil
+	}
 	return &fakeRealtimeSession{}, nil
 }
 
@@ -446,9 +750,14 @@ func (f *fakeRealtimeModel) Model() string { return f.model }
 func (f *fakeRealtimeModel) Provider() string { return f.provider }
 
 type fakeRealtimeSession struct {
-	updated      *llm.ChatContext
-	videoFrames  int
-	pushVideoErr error
+	updated              *llm.ChatContext
+	generatedWithChatCtx *llm.ChatContext
+	tools                []llm.Tool
+	generateCh           chan llm.RealtimeGenerateReplyOptions
+	sayCh                chan string
+	videoFrames          int
+	pushVideoErr         error
+	closed               int
 }
 
 func (f *fakeRealtimeSession) UpdateInstructions(string) error { return nil }
@@ -458,17 +767,38 @@ func (f *fakeRealtimeSession) UpdateChatContext(chatCtx *llm.ChatContext) error 
 	return nil
 }
 
-func (f *fakeRealtimeSession) UpdateTools([]llm.Tool) error { return nil }
+func (f *fakeRealtimeSession) UpdateTools(tools []llm.Tool) error {
+	f.tools = append([]llm.Tool(nil), tools...)
+	return nil
+}
 
 func (f *fakeRealtimeSession) UpdateOptions(llm.RealtimeSessionOptions) error { return nil }
 
-func (f *fakeRealtimeSession) GenerateReply(llm.RealtimeGenerateReplyOptions) error { return nil }
+func (f *fakeRealtimeSession) GenerateReply(options llm.RealtimeGenerateReplyOptions) error {
+	if f.updated != nil {
+		f.generatedWithChatCtx = f.updated.Copy()
+	}
+	if f.generateCh != nil {
+		f.generateCh <- options
+	}
+	return nil
+}
+
+func (f *fakeRealtimeSession) Say(text string) error {
+	if f.sayCh != nil {
+		f.sayCh <- text
+	}
+	return nil
+}
 
 func (f *fakeRealtimeSession) Truncate(llm.RealtimeTruncateOptions) error { return nil }
 
 func (f *fakeRealtimeSession) Interrupt() error { return nil }
 
-func (f *fakeRealtimeSession) Close() error { return nil }
+func (f *fakeRealtimeSession) Close() error {
+	f.closed++
+	return nil
+}
 
 func (f *fakeRealtimeSession) EventCh() <-chan llm.RealtimeEvent {
 	ch := make(chan llm.RealtimeEvent)

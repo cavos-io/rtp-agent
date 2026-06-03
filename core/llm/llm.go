@@ -880,6 +880,7 @@ type RealtimeSession interface {
 	UpdateTools(tools []Tool) error
 	UpdateOptions(options RealtimeSessionOptions) error
 	GenerateReply(options RealtimeGenerateReplyOptions) error
+	Say(text string) error
 	Truncate(options RealtimeTruncateOptions) error
 	Interrupt() error
 	Close() error

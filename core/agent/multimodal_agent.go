@@ -57,11 +57,23 @@ func (ma *MultimodalAgent) Start(ctx context.Context, s *AgentSession) error {
 	}
 	ma.rtSession = rtSession
 
-	if err := ma.rtSession.UpdateTools(s.Tools); err != nil {
+	if err := ma.rtSession.UpdateTools(ma.realtimeTools()); err != nil {
 		logger.Logger.Errorw("failed to update tools on realtime session", err)
 	}
 
-	go ma.run(ctx)
+	go ma.run(ctx, rtSession)
+	return nil
+}
+
+func (ma *MultimodalAgent) Close() error {
+	ma.mu.Lock()
+	rtSession := ma.rtSession
+	ma.rtSession = nil
+	ma.mu.Unlock()
+
+	if rtSession != nil {
+		return rtSession.Close()
+	}
 	return nil
 }
 
@@ -71,19 +83,111 @@ func (ma *MultimodalAgent) SetPublishAudio(publish func(frame *model.AudioFrame)
 	ma.PublishAudio = publish
 }
 
-func (ma *MultimodalAgent) run(ctx context.Context) {
+func (ma *MultimodalAgent) SupportsNativeSay() bool {
+	return ma.model != nil && ma.model.Capabilities().SupportsSay
+}
+
+func (ma *MultimodalAgent) RealtimeCapabilities() llm.RealtimeCapabilities {
+	if ma.model == nil {
+		return llm.RealtimeCapabilities{}
+	}
+	return ma.model.Capabilities()
+}
+
+func (ma *MultimodalAgent) OnSpeechScheduled(ctx context.Context, speech *SpeechHandle) {
+	if speech == nil {
+		return
+	}
+	defer speech.MarkDone()
+
+	if speech.Generation.RealtimeGeneration != nil {
+		ma.consumeRealtimeGeneration(ctx, speech, speech.Generation.RealtimeGeneration)
+		return
+	}
+
+	ma.mu.Lock()
+	rtSession := ma.rtSession
+	session := ma.session
+	ma.mu.Unlock()
+	if rtSession == nil {
+		return
+	}
+
+	if speech.Generation.Text != "" && ma.model.Capabilities().SupportsSay {
+		if err := rtSession.Say(speech.Generation.Text); err != nil {
+			logger.Logger.Errorw("failed to say text with realtime session", err)
+			if session != nil {
+				session.EmitError(ErrorEvent{
+					Error:  llm.NewRealtimeModelError(llm.RealtimeLabel(ma.model), err, false),
+					Source: ma.model,
+				})
+			}
+		}
+		return
+	}
+
+	selectedTools, err := resolveToolsByID(sessionRegisteredTools(session), speech.Generation.Tools)
+	if err != nil {
+		logger.Logger.Errorw("failed to resolve realtime reply tools", err)
+		if session != nil {
+			session.EmitError(ErrorEvent{Error: err, Source: ma})
+		}
+		return
+	}
+	if speech.Generation.UserMessage != nil && ma.chatCtx != nil {
+		if err := ma.chatCtx.UpsertItem(speech.Generation.UserMessage, llm.ChatContextUpsertOptions{AllowTypeMismatch: true}); err != nil {
+			logger.Logger.Errorw("failed to update realtime chat context", err)
+			if session != nil {
+				session.EmitError(ErrorEvent{Error: err, Source: ma})
+			}
+			return
+		}
+		if err := rtSession.UpdateChatContext(ma.chatCtx); err != nil {
+			logger.Logger.Errorw("failed to update realtime session chat context", err)
+			if session != nil {
+				session.EmitError(ErrorEvent{
+					Error:  llm.NewRealtimeModelError(llm.RealtimeLabel(ma.model), err, false),
+					Source: ma.model,
+				})
+			}
+			return
+		}
+	}
+
+	options := llm.RealtimeGenerateReplyOptions{
+		ToolChoice: speech.Generation.ToolChoice,
+		Tools:      selectedTools,
+	}
+	if speech.Generation.Instructions != nil {
+		options.Instructions = speech.Generation.Instructions.AsModality("text").String()
+	}
+	if err := rtSession.GenerateReply(options); err != nil {
+		logger.Logger.Errorw("failed to generate realtime reply", err)
+		if session != nil {
+			session.EmitError(ErrorEvent{
+				Error:  llm.NewRealtimeModelError(llm.RealtimeLabel(ma.model), err, false),
+				Source: ma.model,
+			})
+		}
+	}
+}
+
+func (ma *MultimodalAgent) run(ctx context.Context, rtSession llm.RealtimeSession) {
 	logger.Logger.Infow("MultimodalAgent started")
 
-	eventCh := ma.rtSession.EventCh()
+	eventCh := rtSession.EventCh()
 
 	for {
 		select {
 		case <-ctx.Done():
-			ma.rtSession.Close()
+			_ = ma.Close()
 			return
 		case frame := <-ma.audioInCh:
-			if ma.rtSession != nil {
-				if err := ma.rtSession.PushAudio(frame); err != nil {
+			ma.mu.Lock()
+			rtSession := ma.rtSession
+			ma.mu.Unlock()
+			if rtSession != nil {
+				if err := rtSession.PushAudio(frame); err != nil {
 					logger.Logger.Errorw("failed to push audio to multimodal session", err)
 				}
 			}
@@ -128,11 +232,17 @@ func (ma *MultimodalAgent) handleRealtimeEvent(ev llm.RealtimeEvent) {
 			return
 		}
 		handle := NewSpeechHandle(ma.session.Options.AllowInterruptions, DefaultInputDetails())
+		handle.Generation.RealtimeGeneration = ev.Generation
 		ma.session.EmitSpeechCreated(SpeechCreatedEvent{
 			UserInitiated: false,
 			Source:        "generate_reply",
 			SpeechHandle:  handle,
 		})
+		if ma.session.activity != nil {
+			if err := ma.session.activity.ScheduleSpeech(handle, SpeechPriorityNormal, false); err != nil {
+				logger.Logger.Warnw("failed to schedule realtime generation", err, "response_id", ev.Generation.ResponseID)
+			}
+		}
 
 	case llm.RealtimeEventTypeInputAudioTranscriptionCompleted:
 		if ev.InputTranscription == nil || ma.session == nil {
@@ -183,9 +293,9 @@ func (ma *MultimodalAgent) handleRealtimeEvent(ev llm.RealtimeEvent) {
 
 		// Find and execute tool
 		var foundTool llm.Tool
-		for _, t := range ma.session.Tools {
-			if t.Name() == ev.Function.Name {
-				foundTool = t
+		for _, tool := range ma.realtimeTools() {
+			if tool.Name() == ev.Function.Name {
+				foundTool = tool
 				break
 			}
 		}
@@ -242,6 +352,72 @@ func (ma *MultimodalAgent) handleRealtimeEvent(ev llm.RealtimeEvent) {
 			}
 		}
 	}
+}
+
+func (ma *MultimodalAgent) consumeRealtimeGeneration(ctx context.Context, speech *SpeechHandle, generation *llm.GenerationCreatedEvent) {
+	if generation == nil || generation.MessageCh == nil {
+		return
+	}
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case message, ok := <-generation.MessageCh:
+			if !ok {
+				return
+			}
+			ma.consumeRealtimeMessage(ctx, speech, message)
+		}
+	}
+}
+
+func (ma *MultimodalAgent) consumeRealtimeMessage(ctx context.Context, speech *SpeechHandle, message llm.MessageGeneration) {
+	var text string
+	for message.TextCh != nil || message.AudioCh != nil {
+		select {
+		case <-ctx.Done():
+			return
+		case delta, ok := <-message.TextCh:
+			if !ok {
+				message.TextCh = nil
+				continue
+			}
+			text += delta
+		case frame, ok := <-message.AudioCh:
+			if !ok {
+				message.AudioCh = nil
+				continue
+			}
+			ma.mu.Lock()
+			publish := ma.PublishAudio
+			ma.mu.Unlock()
+			if publish != nil {
+				_ = publish(frame)
+			}
+		}
+	}
+	if text == "" {
+		return
+	}
+	msg := &llm.ChatMessage{
+		ID:        message.MessageID,
+		Role:      llm.ChatRoleAssistant,
+		Content:   []llm.ChatContent{{Text: text}},
+		CreatedAt: time.Now(),
+	}
+	if ma.chatCtx != nil {
+		if err := ma.chatCtx.UpsertItem(msg, llm.ChatContextUpsertOptions{AllowTypeMismatch: true}); err != nil {
+			logger.Logger.Errorw("failed to update realtime chat context with generated message", err)
+		}
+	}
+	if ma.session != nil {
+		ma.session.EmitConversationItemAdded(msg)
+	}
+	speech.AddChatItems(msg)
+}
+
+func (ma *MultimodalAgent) realtimeTools() []llm.Tool {
+	return sessionRegisteredTools(ma.session)
 }
 
 func (ma *MultimodalAgent) appendRealtimeToolOutput(output *llm.FunctionCallOutput) {

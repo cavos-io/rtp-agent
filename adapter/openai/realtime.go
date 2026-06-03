@@ -474,6 +474,10 @@ func (s *realtimeSession) GenerateReply(options llm.RealtimeGenerateReplyOptions
 	return s.sendMsg(openAIRealtimeGenerateReplyMessage(options))
 }
 
+func (s *realtimeSession) Say(text string) error {
+	return llm.NewRealtimeError("openai realtime session does not support say", nil)
+}
+
 func openAIRealtimeGenerateReplyMessage(options llm.RealtimeGenerateReplyOptions) map[string]any {
 	response := make(map[string]any)
 	if options.Instructions != "" {

@@ -31,11 +31,13 @@ type InputDetails struct {
 }
 
 type SpeechGenerationOptions struct {
-	Instructions *llm.Instructions
-	ToolChoice   llm.ToolChoice
-	Tools        []string
-	ChatCtx      *llm.ChatContext
-	UserMessage  *llm.ChatMessage
+	Instructions       *llm.Instructions
+	ToolChoice         llm.ToolChoice
+	Tools              []string
+	ChatCtx            *llm.ChatContext
+	UserMessage        *llm.ChatMessage
+	Text               string
+	RealtimeGeneration *llm.GenerationCreatedEvent
 }
 
 func DefaultInputDetails() InputDetails {

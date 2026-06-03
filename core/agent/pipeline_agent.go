@@ -226,7 +226,7 @@ func (va *PipelineAgent) generateReplyWithOptions(opts pipelineReplyOptions) {
 	logger.Logger.Infow("Generating reply")
 	session.UpdateAgentState(AgentStateThinking)
 
-	selectedTools, err := resolveToolsByID(session.Tools, opts.Tools)
+	selectedTools, err := resolveToolsByID(sessionRegisteredTools(session), opts.Tools)
 	if err != nil {
 		logger.Logger.Errorw("failed to resolve reply tools", err)
 		session.EmitError(ErrorEvent{Error: err, Source: va})
@@ -406,6 +406,18 @@ func (va *PipelineAgent) forwardAgentOutputTranscription(session *AgentSession, 
 		}
 	}()
 	return done
+}
+
+func sessionRegisteredTools(session *AgentSession) []llm.Tool {
+	if session == nil {
+		return nil
+	}
+	tools := make([]llm.Tool, 0, len(session.Tools))
+	tools = append(tools, session.Tools...)
+	if session.Agent != nil && session.Agent.GetAgent() != nil {
+		tools = append(tools, session.Agent.GetAgent().Tools...)
+	}
+	return tools
 }
 
 func resolveToolsByID(tools []llm.Tool, ids []string) ([]llm.Tool, error) {

@@ -244,6 +244,62 @@ func TestPipelineAgentGenerateReplyWithToolsFiltersChatOptions(t *testing.T) {
 	}
 }
 
+func TestPipelineAgentGenerateReplyIncludesAgentToolsInChatOptions(t *testing.T) {
+	chatCtx := llm.NewChatContext()
+	l := &fakeGenerationLLM{
+		stream: &fakeGenerationLLMStream{
+			chunks: []*llm.ChatChunk{
+				{Delta: &llm.ChoiceDelta{Content: "with tools"}},
+			},
+		},
+	}
+	baseAgent := NewAgent("test")
+	baseAgent.Tools = []llm.Tool{&fakeGenerationTool{name: "agent_tool"}}
+	session := NewAgentSession(baseAgent, nil, AgentSessionOptions{})
+	session.Tools = []llm.Tool{&fakeGenerationTool{name: "session_tool"}}
+	agent := NewPipelineAgent(nil, nil, l, &fakePipelineTTS{}, chatCtx)
+	agent.session = session
+	agent.ctx = context.Background()
+
+	agent.generateReplyWithOptions(pipelineReplyOptions{})
+
+	if len(l.calls) != 1 {
+		t.Fatalf("LLM Chat calls = %d, want 1", len(l.calls))
+	}
+	if got, want := generationToolNames(l.calls[0].Tools), []string{"agent_tool", "session_tool"}; !stringSlicesEqual(got, want) {
+		t.Fatalf("LLM tools = %#v, want %#v", got, want)
+	}
+}
+
+func TestPipelineAgentGenerateReplyWithToolsSelectsAgentTool(t *testing.T) {
+	chatCtx := llm.NewChatContext()
+	l := &fakeGenerationLLM{
+		stream: &fakeGenerationLLMStream{
+			chunks: []*llm.ChatChunk{
+				{Delta: &llm.ChoiceDelta{Content: "agent tool only"}},
+			},
+		},
+	}
+	baseAgent := NewAgent("test")
+	baseAgent.Tools = []llm.Tool{&fakeGenerationTool{name: "lookup"}}
+	session := NewAgentSession(baseAgent, nil, AgentSessionOptions{})
+	session.Tools = []llm.Tool{&fakeGenerationTool{name: "calendar"}}
+	agent := NewPipelineAgent(nil, nil, l, &fakePipelineTTS{}, chatCtx)
+	agent.session = session
+	agent.ctx = context.Background()
+
+	agent.generateReplyWithOptions(pipelineReplyOptions{
+		Tools: []string{"lookup"},
+	})
+
+	if len(l.calls) != 1 {
+		t.Fatalf("LLM Chat calls = %d, want 1", len(l.calls))
+	}
+	if got, want := generationToolNames(l.calls[0].Tools), []string{"lookup"}; !stringSlicesEqual(got, want) {
+		t.Fatalf("LLM tools = %#v, want %#v", got, want)
+	}
+}
+
 func TestPipelineAgentGenerateReplyWithToolsFiltersProviderTools(t *testing.T) {
 	chatCtx := llm.NewChatContext()
 	l := &fakeGenerationLLM{
@@ -936,6 +992,14 @@ func currentAgentState(session *AgentSession) AgentState {
 	session.mu.Lock()
 	defer session.mu.Unlock()
 	return session.AgentState
+}
+
+func generationToolNames(tools []llm.Tool) []string {
+	names := make([]string, 0, len(tools))
+	for _, tool := range tools {
+		names = append(names, tool.Name())
+	}
+	return names
 }
 
 func receiveUserInputTranscribedEvent(t *testing.T, session *AgentSession) UserInputTranscribedEvent {

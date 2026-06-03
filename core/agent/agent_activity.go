@@ -523,6 +523,11 @@ func (a *AgentActivity) processQueue() {
 	}
 
 	a.currentSpeech = speech
+	if a.Session != nil {
+		if assistant, ok := a.Session.Assistant.(scheduledSpeechAssistant); ok {
+			go assistant.OnSpeechScheduled(a.ctx, speech)
+		}
+	}
 
 	// Run speech completion asynchronously
 	go func() {

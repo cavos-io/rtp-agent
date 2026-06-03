@@ -112,6 +112,22 @@ type SessionAssistant interface {
 	SetPublishAudio(func(frame *model.AudioFrame) error)
 }
 
+type closeableSessionAssistant interface {
+	Close() error
+}
+
+type scheduledSpeechAssistant interface {
+	OnSpeechScheduled(ctx context.Context, speech *SpeechHandle)
+}
+
+type nativeSayAssistant interface {
+	SupportsNativeSay() bool
+}
+
+type realtimeCapabilitiesAssistant interface {
+	RealtimeCapabilities() llm.RealtimeCapabilities
+}
+
 type videoSessionAssistant interface {
 	OnVideoFrame(ctx context.Context, frame *images.VideoFrame)
 }
@@ -1079,13 +1095,14 @@ func (s *AgentSession) RunWithOptions(ctx context.Context, opts RunOptions) (*Ru
 func (s *AgentSession) GenerateReplyWithOptions(ctx context.Context, opts GenerateReplyOptions) (*SpeechHandle, error) {
 	s.mu.Lock()
 	activity := s.activity
+	assistant := s.Assistant
 	s.mu.Unlock()
 
 	if activity == nil {
 		return nil, ErrAgentSessionNotRunning
 	}
 	if len(opts.Tools) > 0 {
-		if _, err := resolveToolsByID(s.Tools, opts.Tools); err != nil {
+		if _, err := resolveToolsByID(sessionRegisteredTools(s), opts.Tools); err != nil {
 			return nil, err
 		}
 	}
@@ -1096,6 +1113,9 @@ func (s *AgentSession) GenerateReplyWithOptions(ctx context.Context, opts Genera
 	allowInterruptions := s.Options.AllowInterruptions
 	if opts.AllowInterruptions != nil {
 		allowInterruptions = *opts.AllowInterruptions
+	}
+	if realtimeTurnDetectionEnabled(assistant) && opts.AllowInterruptions != nil && !*opts.AllowInterruptions {
+		allowInterruptions = s.Options.AllowInterruptions
 	}
 	inputModality := opts.InputModality
 	if inputModality == "" {
@@ -1135,6 +1155,9 @@ func (s *AgentSession) GenerateReplyWithOptions(ctx context.Context, opts Genera
 			CreatedAt: time.Now(),
 		}
 	}
+	if userMessage != nil && handle.Generation.UserMessage == nil {
+		handle.Generation.UserMessage = userMessage
+	}
 
 	// Schedule the speech
 	if err := activity.ScheduleSpeech(handle, SpeechPriorityNormal, false); err != nil {
@@ -1150,6 +1173,7 @@ func (s *AgentSession) GenerateReplyWithOptions(ctx context.Context, opts Genera
 func (s *AgentSession) SayWithOptions(ctx context.Context, opts SayOptions) (*SpeechHandle, error) {
 	s.mu.Lock()
 	activity := s.activity
+	assistant := s.Assistant
 	s.mu.Unlock()
 
 	if activity == nil {
@@ -1162,12 +1186,19 @@ func (s *AgentSession) SayWithOptions(ctx context.Context, opts SayOptions) (*Sp
 	if opts.AllowInterruptions != nil {
 		allowInterruptions = *opts.AllowInterruptions
 	}
+	if realtimeTurnDetectionEnabled(assistant) && opts.AllowInterruptions != nil && !*opts.AllowInterruptions {
+		allowInterruptions = s.Options.AllowInterruptions
+	}
 	addToChatContext := true
 	if opts.AddToChatContext != nil {
 		addToChatContext = *opts.AddToChatContext
 	}
+	if nativeSay, ok := assistant.(nativeSayAssistant); ok && nativeSay.SupportsNativeSay() {
+		addToChatContext = true
+	}
 
 	handle := NewSpeechHandle(allowInterruptions, InputDetails{Modality: "text"})
+	handle.Generation.Text = opts.Text
 	s.EmitSpeechCreated(SpeechCreatedEvent{
 		UserInitiated: true,
 		Source:        "say",
@@ -1194,6 +1225,13 @@ func (s *AgentSession) SayWithOptions(ctx context.Context, opts SayOptions) (*Sp
 	}
 	s.watchActiveRunSpeechHandle(handle)
 	return handle, nil
+}
+
+func realtimeTurnDetectionEnabled(assistant any) bool {
+	if capabilities, ok := assistant.(realtimeCapabilitiesAssistant); ok {
+		return capabilities.RealtimeCapabilities().TurnDetection
+	}
+	return false
 }
 
 func (s *AgentSession) watchActiveRunSpeechHandle(handle *SpeechHandle) {
@@ -1284,6 +1322,7 @@ func (s *AgentSession) stop(ctx context.Context, commitPendingUserTurn bool) err
 
 	activity := s.activity
 	ivrActivity := s.ivrActivity
+	assistant := s.Assistant
 	s.activity = nil
 	s.ivrActivity = nil
 	s.started = false
@@ -1320,6 +1359,11 @@ func (s *AgentSession) stop(ctx context.Context, commitPendingUserTurn bool) err
 			}
 		}
 		activity.Stop()
+	}
+	if closer, ok := assistant.(closeableSessionAssistant); ok {
+		if err := closer.Close(); err != nil && stopErr == nil {
+			stopErr = err
+		}
 	}
 	if backgroundAudio != nil {
 		_ = backgroundAudio.Close()

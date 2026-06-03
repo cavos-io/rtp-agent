@@ -147,6 +147,16 @@ func (f *fakeSessionAssistant) OnAudioFrame(context.Context, *model.AudioFrame) 
 func (f *fakeSessionAssistant) SetPublishAudio(func(frame *model.AudioFrame) error) {
 }
 
+type fakeCloseableSessionAssistant struct {
+	fakeSessionAssistant
+	closed int
+}
+
+func (f *fakeCloseableSessionAssistant) Close() error {
+	f.closed++
+	return nil
+}
+
 type fakeVideoSessionAssistant struct {
 	fakeSessionAssistant
 	videoFrames int
@@ -905,6 +915,26 @@ func TestAgentSessionGenerateReplyOptionsPreserveTools(t *testing.T) {
 	}
 }
 
+func TestAgentSessionGenerateReplyOptionsAcceptAgentTools(t *testing.T) {
+	agent := NewAgent("test")
+	agent.Tools = []llm.Tool{&fakeGenerationTool{name: "lookup"}}
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	session.activity = NewAgentActivity(agent, session)
+
+	handle, err := session.GenerateReplyWithOptions(context.Background(), GenerateReplyOptions{
+		UserInput:     "hello",
+		Tools:         []string{"lookup"},
+		InputModality: "text",
+	})
+
+	if err != nil {
+		t.Fatalf("GenerateReplyWithOptions error = %v, want nil for agent tool selector", err)
+	}
+	if !stringSlicesEqual(handle.Generation.Tools, []string{"lookup"}) {
+		t.Fatalf("handle.Generation.Tools = %q, want [lookup]", handle.Generation.Tools)
+	}
+}
+
 func TestAgentSessionGenerateReplyOptionsPreserveChatContext(t *testing.T) {
 	agent := NewAgent("test")
 	session := NewAgentSession(agent, nil, AgentSessionOptions{})
@@ -1259,6 +1289,22 @@ func TestAgentSessionStopAllowsOnExitSessionCallbacks(t *testing.T) {
 	}
 	if !agent.exited {
 		t.Fatal("OnExit was not called")
+	}
+}
+
+func TestAgentSessionStopClosesCloseableAssistant(t *testing.T) {
+	agent := NewAgent("test")
+	assistant := &fakeCloseableSessionAssistant{}
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	session.Assistant = assistant
+	session.activity = NewAgentActivity(agent, session)
+	session.started = true
+
+	if err := session.Stop(context.Background()); err != nil {
+		t.Fatalf("Stop error = %v, want nil", err)
+	}
+	if assistant.closed != 1 {
+		t.Fatalf("assistant closed = %d, want 1", assistant.closed)
 	}
 }
 
