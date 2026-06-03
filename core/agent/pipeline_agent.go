@@ -262,16 +262,18 @@ func (va *PipelineAgent) generateReplyWithOptions(opts pipelineReplyOptions) {
 	}
 	toolCtx := llm.NewToolContext(toolsInterface)
 
+	replyCtx := va.chatCtx
+	if opts.ChatCtx != nil {
+		replyCtx = opts.ChatCtx.Copy()
+	}
+
 	// In Python parity, we loop for tool calls
 	toolSteps := 0
 	for {
-		inferenceCtx := va.chatCtx
-		if opts.ChatCtx != nil {
-			inferenceCtx = opts.ChatCtx.Copy()
-		}
+		inferenceCtx := replyCtx
 		if opts.Instructions != "" {
-			if inferenceCtx == va.chatCtx {
-				inferenceCtx = va.chatCtx.Copy()
+			if inferenceCtx == replyCtx {
+				inferenceCtx = replyCtx.Copy()
 			}
 			inferenceCtx.Items = append([]llm.ChatItem{&llm.ChatMessage{
 				Role:    llm.ChatRoleSystem,
@@ -381,8 +383,14 @@ func (va *PipelineAgent) generateReplyWithOptions(opts pipelineReplyOptions) {
 			functionCalls = append(functionCalls, &fncCall)
 			functionCallOutputs = append(functionCallOutputs, toolOut.FncCallOut)
 			va.chatCtx.Append(&fncCall)
+			if replyCtx != va.chatCtx {
+				replyCtx.Append(&fncCall)
+			}
 			if toolOut.FncCallOut != nil {
 				va.chatCtx.Append(toolOut.FncCallOut)
+				if replyCtx != va.chatCtx {
+					replyCtx.Append(toolOut.FncCallOut)
+				}
 			}
 		}
 

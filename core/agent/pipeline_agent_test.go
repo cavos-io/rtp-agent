@@ -145,6 +145,69 @@ func TestPipelineAgentGenerateReplyWithChatContextUsesTemporaryContext(t *testin
 	}
 }
 
+func TestPipelineAgentGenerateReplyWithChatContextCarriesToolOutputs(t *testing.T) {
+	persistentCtx := llm.NewChatContext()
+	overrideCtx := llm.NewChatContext()
+	overrideCtx.Append(&llm.ChatMessage{
+		ID:      "override_user",
+		Role:    llm.ChatRoleUser,
+		Content: []llm.ChatContent{{Text: "override"}},
+	})
+	l := &fakeGenerationLLM{
+		streams: []llm.LLMStream{
+			&fakeGenerationLLMStream{
+				chunks: []*llm.ChatChunk{
+					{Delta: &llm.ChoiceDelta{
+						ToolCalls: []llm.FunctionToolCall{{
+							Type:      "function",
+							Name:      "lookup",
+							CallID:    "call_lookup",
+							Arguments: `{}`,
+						}},
+					}},
+				},
+			},
+			&fakeGenerationLLMStream{
+				chunks: []*llm.ChatChunk{
+					{Delta: &llm.ChoiceDelta{Content: "done"}},
+				},
+			},
+		},
+	}
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	session.Tools = []llm.Tool{&fakeGenerationTool{name: "lookup", result: "tool result"}}
+	agent := NewPipelineAgent(nil, nil, l, &fakePipelineTTS{}, persistentCtx)
+	agent.session = session
+	agent.ctx = context.Background()
+
+	agent.generateReplyWithOptions(pipelineReplyOptions{
+		ChatCtx: overrideCtx,
+	})
+
+	if len(l.chatContexts) != 2 {
+		t.Fatalf("LLM chat contexts = %d, want initial and tool reply calls", len(l.chatContexts))
+	}
+	if l.chatContexts[1] == overrideCtx {
+		t.Fatal("second LLM chat context aliases override context, want working copy")
+	}
+	if len(l.chatContexts[1].Items) != 3 {
+		t.Fatalf("second LLM chat context items = %#v, want override user, function call, and function output", l.chatContexts[1].Items)
+	}
+	if l.chatContexts[1].Items[0].GetID() != "override_user" {
+		t.Fatalf("second LLM first item = %#v, want override user", l.chatContexts[1].Items[0])
+	}
+	if _, ok := l.chatContexts[1].Items[1].(*llm.FunctionCall); !ok {
+		t.Fatalf("second LLM second item = %T, want FunctionCall", l.chatContexts[1].Items[1])
+	}
+	output, ok := l.chatContexts[1].Items[2].(*llm.FunctionCallOutput)
+	if !ok || output.CallID != "call_lookup" || output.Output != "tool result" {
+		t.Fatalf("second LLM third item = %#v, want lookup tool result", l.chatContexts[1].Items[2])
+	}
+	if len(overrideCtx.Items) != 1 {
+		t.Fatalf("override chat item count = %d, want unchanged", len(overrideCtx.Items))
+	}
+}
+
 func TestPipelineAgentGenerateReplyWithToolChoicePassesChatOption(t *testing.T) {
 	chatCtx := llm.NewChatContext()
 	l := &fakeGenerationLLM{
