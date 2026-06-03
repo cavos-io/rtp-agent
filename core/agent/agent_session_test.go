@@ -1707,6 +1707,68 @@ func TestAgentSessionUpdateAgentBeforeStartSwapsAgentOnly(t *testing.T) {
 	}
 }
 
+func TestAgentSessionUpdateAgentPreservesSessionComponentsWhenNextAgentOmitsThem(t *testing.T) {
+	initial := &trackingAgent{Agent: NewAgent("initial")}
+	next := &trackingAgent{Agent: NewAgent("next")}
+	session := NewAgentSession(initial, nil, AgentSessionOptions{})
+	sessionSTT := &fakePipelineSTT{}
+	sessionVAD := &fakePipelineVAD{}
+	sessionLLM := &fakeGenerationLLM{stream: &fakeGenerationLLMStream{}}
+	sessionTTS := &fakePipelineTTS{}
+	session.STT = sessionSTT
+	session.VAD = sessionVAD
+	session.LLM = sessionLLM
+	session.TTS = sessionTTS
+
+	session.UpdateAgent(next)
+
+	if session.STT != sessionSTT {
+		t.Fatalf("session.STT = %#v, want preserved session STT", session.STT)
+	}
+	if session.VAD != sessionVAD {
+		t.Fatalf("session.VAD = %#v, want preserved session VAD", session.VAD)
+	}
+	if session.LLM != sessionLLM {
+		t.Fatalf("session.LLM = %#v, want preserved session LLM", session.LLM)
+	}
+	if session.TTS != sessionTTS {
+		t.Fatalf("session.TTS = %#v, want preserved session TTS", session.TTS)
+	}
+}
+
+func TestAgentSessionUpdateAgentUsesNextAgentComponentsWhenProvided(t *testing.T) {
+	initial := &trackingAgent{Agent: NewAgent("initial")}
+	next := &trackingAgent{Agent: NewAgent("next")}
+	nextSTT := &fakePipelineSTT{}
+	nextVAD := &fakePipelineVAD{}
+	nextLLM := &fakeGenerationLLM{stream: &fakeGenerationLLMStream{}}
+	nextTTS := &fakePipelineTTS{}
+	next.STT = nextSTT
+	next.VAD = nextVAD
+	next.LLM = nextLLM
+	next.TTS = nextTTS
+	session := NewAgentSession(initial, nil, AgentSessionOptions{})
+	session.STT = &fakePipelineSTT{}
+	session.VAD = &fakePipelineVAD{}
+	session.LLM = &fakeGenerationLLM{stream: &fakeGenerationLLMStream{}}
+	session.TTS = &fakePipelineTTS{}
+
+	session.UpdateAgent(next)
+
+	if session.STT != nextSTT {
+		t.Fatalf("session.STT = %#v, want next agent STT", session.STT)
+	}
+	if session.VAD != nextVAD {
+		t.Fatalf("session.VAD = %#v, want next agent VAD", session.VAD)
+	}
+	if session.LLM != nextLLM {
+		t.Fatalf("session.LLM = %#v, want next agent LLM", session.LLM)
+	}
+	if session.TTS != nextTTS {
+		t.Fatalf("session.TTS = %#v, want next agent TTS", session.TTS)
+	}
+}
+
 func TestAgentSessionUpdateAgentWhileRunningStartsNewActivity(t *testing.T) {
 	initial := &trackingAgent{Agent: NewAgent("initial")}
 	initial.ID = "agent_initial"

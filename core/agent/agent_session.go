@@ -1361,10 +1361,7 @@ func (s *AgentSession) UpdateAgent(agent AgentInterface) {
 	oldActivity := s.activity
 	started := s.started
 	s.Agent = agent
-	s.STT = baseAgent.STT
-	s.VAD = baseAgent.VAD
-	s.LLM = baseAgent.LLM
-	s.TTS = baseAgent.TTS
+	s.updateAgentComponentsLocked(baseAgent)
 	if !started {
 		s.mu.Unlock()
 		return
@@ -1388,6 +1385,21 @@ func (s *AgentSession) UpdateAgent(agent AgentInterface) {
 	}
 	s.EmitConversationItemAdded(handoff)
 	newActivity.Start()
+}
+
+func (s *AgentSession) updateAgentComponentsLocked(agent *Agent) {
+	if agent.STT != nil {
+		s.STT = agent.STT
+	}
+	if agent.VAD != nil {
+		s.VAD = agent.VAD
+	}
+	if agent.LLM != nil {
+		s.LLM = agent.LLM
+	}
+	if agent.TTS != nil {
+		s.TTS = agent.TTS
+	}
 }
 
 func newAgentHandoff(oldAgent *Agent, newAgent *Agent) *llm.AgentHandoff {
