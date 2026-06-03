@@ -87,6 +87,25 @@ func TestMultimodalAgentStartUpdatesRealtimeSessionWithSessionAndAgentTools(t *t
 	}
 }
 
+func TestAgentUpdateInstructionsUpdatesRealtimeSession(t *testing.T) {
+	baseAgent := NewAgent("initial instructions")
+	session := NewAgentSession(baseAgent, nil, AgentSessionOptions{})
+	rtSession := &fakeRealtimeSession{}
+	ma := NewMultimodalAgent(&fakeRealtimeModel{session: rtSession}, llm.NewChatContext())
+	ma.rtSession = rtSession
+	session.Assistant = ma
+	activity := NewAgentActivity(baseAgent, session)
+	session.activity = activity
+
+	if err := baseAgent.UpdateInstructions(context.Background(), "new instructions"); err != nil {
+		t.Fatalf("UpdateInstructions error = %v, want nil", err)
+	}
+
+	if rtSession.instructions != "new instructions" {
+		t.Fatalf("realtime instructions = %q, want new instructions", rtSession.instructions)
+	}
+}
+
 func TestMultimodalAgentGenerateReplySendsRealtimeOverrides(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -968,6 +987,7 @@ type fakeRealtimeSession struct {
 	updated              *llm.ChatContext
 	generatedWithChatCtx *llm.ChatContext
 	tools                []llm.Tool
+	instructions         string
 	generateCh           chan llm.RealtimeGenerateReplyOptions
 	sayCh                chan string
 	videoFrames          int
@@ -976,7 +996,10 @@ type fakeRealtimeSession struct {
 	interrupted          int
 }
 
-func (f *fakeRealtimeSession) UpdateInstructions(string) error { return nil }
+func (f *fakeRealtimeSession) UpdateInstructions(instructions string) error {
+	f.instructions = instructions
+	return nil
+}
 
 func (f *fakeRealtimeSession) UpdateChatContext(chatCtx *llm.ChatContext) error {
 	f.updated = chatCtx

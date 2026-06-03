@@ -19,6 +19,10 @@ var ErrSpeechSchedulingPaused = errors.New("speech scheduling is paused")
 
 const agentInstructionsMessageID = "lk.agent_task.instructions"
 
+type instructionUpdatingAssistant interface {
+	UpdateInstructions(context.Context, string) error
+}
+
 type EndOfTurnInfo struct {
 	SkipReply            bool
 	NewTranscript        string
@@ -288,6 +292,11 @@ func (a *AgentActivity) UpdateInstructions(ctx context.Context, instructions str
 	}
 	if err := updateAgentInstructionsMessage(a.Agent.ChatCtx, instructions, true); err != nil {
 		return err
+	}
+	if a.Session != nil {
+		if updater, ok := a.Session.Assistant.(instructionUpdatingAssistant); ok {
+			return updater.UpdateInstructions(ctx, instructions)
+		}
 	}
 	return nil
 }
