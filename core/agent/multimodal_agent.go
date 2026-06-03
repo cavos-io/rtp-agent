@@ -260,15 +260,7 @@ func (ma *MultimodalAgent) handleRealtimeEvent(ev llm.RealtimeEvent) {
 }
 
 func (ma *MultimodalAgent) realtimeTools() []llm.Tool {
-	if ma.session == nil {
-		return nil
-	}
-	tools := make([]llm.Tool, 0, len(ma.session.Tools))
-	tools = append(tools, ma.session.Tools...)
-	if ma.session.Agent != nil && ma.session.Agent.GetAgent() != nil {
-		tools = append(tools, ma.session.Agent.GetAgent().Tools...)
-	}
-	return tools
+	return sessionRegisteredTools(ma.session)
 }
 
 func (ma *MultimodalAgent) appendRealtimeToolOutput(output *llm.FunctionCallOutput) {

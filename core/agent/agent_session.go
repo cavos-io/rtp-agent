@@ -1089,7 +1089,7 @@ func (s *AgentSession) GenerateReplyWithOptions(ctx context.Context, opts Genera
 		return nil, ErrAgentSessionNotRunning
 	}
 	if len(opts.Tools) > 0 {
-		if _, err := resolveToolsByID(s.Tools, opts.Tools); err != nil {
+		if _, err := resolveToolsByID(sessionRegisteredTools(s), opts.Tools); err != nil {
 			return nil, err
 		}
 	}
