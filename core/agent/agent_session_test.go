@@ -41,6 +41,40 @@ func TestAgentSessionGenerateReplyReturnsScheduledSpeechHandle(t *testing.T) {
 	}
 }
 
+func TestAgentSessionGenerateReplyUsesAgentAllowInterruptionsDefault(t *testing.T) {
+	agent := NewAgent("test")
+	agent.AllowInterruptions = true
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	session.Options.AllowInterruptions = false
+	session.activity = NewAgentActivity(agent, session)
+
+	handle, err := session.GenerateReply(context.Background(), "hello")
+
+	if err != nil {
+		t.Fatalf("GenerateReply error = %v, want nil", err)
+	}
+	if !handle.AllowInterruptions {
+		t.Fatal("handle.AllowInterruptions = false, want agent default true")
+	}
+}
+
+func TestAgentSessionGenerateReplyAgentAllowInterruptionsCanDisableSessionDefault(t *testing.T) {
+	agent := NewAgent("test")
+	agent.AllowInterruptions = false
+	agent.AllowInterruptionsSet = true
+	session := NewAgentSession(agent, nil, AgentSessionOptions{AllowInterruptions: true})
+	session.activity = NewAgentActivity(agent, session)
+
+	handle, err := session.GenerateReply(context.Background(), "hello")
+
+	if err != nil {
+		t.Fatalf("GenerateReply error = %v, want nil", err)
+	}
+	if handle.AllowInterruptions {
+		t.Fatal("handle.AllowInterruptions = true, want agent default false")
+	}
+}
+
 func TestAgentSessionStartConfiguresTTSStreamPacer(t *testing.T) {
 	baseAgent := NewAgent("test")
 	baseAgent.VAD = &fakePipelineVAD{}
@@ -447,6 +481,40 @@ func TestAgentSessionSayReturnsScheduledSpeechHandle(t *testing.T) {
 	}
 	if got, want := handle.InputDetails.Modality, "text"; got != want {
 		t.Fatalf("handle.InputDetails.Modality = %q, want %q", got, want)
+	}
+}
+
+func TestAgentSessionSayUsesAgentAllowInterruptionsDefault(t *testing.T) {
+	agent := NewAgent("test")
+	agent.AllowInterruptions = true
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	session.Options.AllowInterruptions = false
+	session.activity = NewAgentActivity(agent, session)
+
+	handle, err := session.Say(context.Background(), "hello")
+
+	if err != nil {
+		t.Fatalf("Say error = %v, want nil", err)
+	}
+	if !handle.AllowInterruptions {
+		t.Fatal("handle.AllowInterruptions = false, want agent default true")
+	}
+}
+
+func TestAgentSessionSayAgentAllowInterruptionsCanDisableSessionDefault(t *testing.T) {
+	agent := NewAgent("test")
+	agent.AllowInterruptions = false
+	agent.AllowInterruptionsSet = true
+	session := NewAgentSession(agent, nil, AgentSessionOptions{AllowInterruptions: true})
+	session.activity = NewAgentActivity(agent, session)
+
+	handle, err := session.Say(context.Background(), "hello")
+
+	if err != nil {
+		t.Fatalf("Say error = %v, want nil", err)
+	}
+	if handle.AllowInterruptions {
+		t.Fatal("handle.AllowInterruptions = true, want agent default false")
 	}
 }
 
@@ -1636,6 +1704,105 @@ func TestAgentSessionUpdateAgentBeforeStartSwapsAgentOnly(t *testing.T) {
 	}
 	if initial.entered != 0 || initial.exited != 0 || next.entered != 0 || next.exited != 0 {
 		t.Fatalf("lifecycle calls initial=%d/%d next=%d/%d, want none", initial.entered, initial.exited, next.entered, next.exited)
+	}
+}
+
+func TestAgentSessionUpdateAgentPreservesSessionComponentsWhenNextAgentOmitsThem(t *testing.T) {
+	initial := &trackingAgent{Agent: NewAgent("initial")}
+	next := &trackingAgent{Agent: NewAgent("next")}
+	session := NewAgentSession(initial, nil, AgentSessionOptions{})
+	sessionSTT := &fakePipelineSTT{}
+	sessionVAD := &fakePipelineVAD{}
+	sessionLLM := &fakeGenerationLLM{stream: &fakeGenerationLLMStream{}}
+	sessionTTS := &fakePipelineTTS{}
+	session.STT = sessionSTT
+	session.VAD = sessionVAD
+	session.LLM = sessionLLM
+	session.TTS = sessionTTS
+
+	session.UpdateAgent(next)
+
+	if session.STT != sessionSTT {
+		t.Fatalf("session.STT = %#v, want preserved session STT", session.STT)
+	}
+	if session.VAD != sessionVAD {
+		t.Fatalf("session.VAD = %#v, want preserved session VAD", session.VAD)
+	}
+	if session.LLM != sessionLLM {
+		t.Fatalf("session.LLM = %#v, want preserved session LLM", session.LLM)
+	}
+	if session.TTS != sessionTTS {
+		t.Fatalf("session.TTS = %#v, want preserved session TTS", session.TTS)
+	}
+}
+
+func TestAgentSessionUpdateAgentUsesNextAgentComponentsWhenProvided(t *testing.T) {
+	initial := &trackingAgent{Agent: NewAgent("initial")}
+	next := &trackingAgent{Agent: NewAgent("next")}
+	nextSTT := &fakePipelineSTT{}
+	nextVAD := &fakePipelineVAD{}
+	nextLLM := &fakeGenerationLLM{stream: &fakeGenerationLLMStream{}}
+	nextTTS := &fakePipelineTTS{}
+	next.STT = nextSTT
+	next.VAD = nextVAD
+	next.LLM = nextLLM
+	next.TTS = nextTTS
+	session := NewAgentSession(initial, nil, AgentSessionOptions{})
+	session.STT = &fakePipelineSTT{}
+	session.VAD = &fakePipelineVAD{}
+	session.LLM = &fakeGenerationLLM{stream: &fakeGenerationLLMStream{}}
+	session.TTS = &fakePipelineTTS{}
+
+	session.UpdateAgent(next)
+
+	if session.STT != nextSTT {
+		t.Fatalf("session.STT = %#v, want next agent STT", session.STT)
+	}
+	if session.VAD != nextVAD {
+		t.Fatalf("session.VAD = %#v, want next agent VAD", session.VAD)
+	}
+	if session.LLM != nextLLM {
+		t.Fatalf("session.LLM = %#v, want next agent LLM", session.LLM)
+	}
+	if session.TTS != nextTTS {
+		t.Fatalf("session.TTS = %#v, want next agent TTS", session.TTS)
+	}
+}
+
+func TestAgentSessionUpdateAgentRefreshesPipelineAssistantComponents(t *testing.T) {
+	initial := &trackingAgent{Agent: NewAgent("initial")}
+	initial.VAD = &fakePipelineVAD{}
+	initial.STT = &fakePipelineSTT{}
+	initial.LLM = &fakeGenerationLLM{stream: &fakeGenerationLLMStream{}}
+	initial.TTS = &fakePipelineTTS{}
+	next := &trackingAgent{Agent: NewAgent("next")}
+	nextVAD := &fakePipelineVAD{}
+	nextSTT := &fakePipelineSTT{}
+	nextLLM := &fakeGenerationLLM{stream: &fakeGenerationLLMStream{}}
+	nextTTS := &fakePipelineTTS{}
+	next.VAD = nextVAD
+	next.STT = nextSTT
+	next.LLM = nextLLM
+	next.TTS = nextTTS
+	session := NewAgentSession(initial, nil, AgentSessionOptions{})
+	pipeline := NewPipelineAgent(initial.VAD, initial.STT, initial.LLM, initial.TTS, session.ChatCtx)
+	session.Assistant = pipeline
+	session.activity = NewAgentActivity(initial, session)
+	session.started = true
+
+	session.UpdateAgent(next)
+
+	if pipeline.vad != nextVAD {
+		t.Fatalf("pipeline.vad = %#v, want next agent VAD", pipeline.vad)
+	}
+	if pipeline.stt != nextSTT {
+		t.Fatalf("pipeline.stt = %#v, want next agent STT", pipeline.stt)
+	}
+	if pipeline.LLM != nextLLM {
+		t.Fatalf("pipeline.LLM = %#v, want next agent LLM", pipeline.LLM)
+	}
+	if pipeline.tts != nextTTS {
+		t.Fatalf("pipeline.tts = %#v, want next agent TTS", pipeline.tts)
 	}
 }
 

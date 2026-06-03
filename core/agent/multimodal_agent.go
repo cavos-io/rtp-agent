@@ -86,6 +86,55 @@ func (ma *MultimodalAgent) SetPublishAudio(publish func(frame *model.AudioFrame)
 	ma.PublishAudio = publish
 }
 
+func (ma *MultimodalAgent) UpdateInstructions(ctx context.Context, instructions string) error {
+	ma.mu.Lock()
+	rtSession := ma.rtSession
+	ma.mu.Unlock()
+	if rtSession == nil {
+		return nil
+	}
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	default:
+	}
+	return rtSession.UpdateInstructions(instructions)
+}
+
+func (ma *MultimodalAgent) UpdateTools(ctx context.Context) error {
+	ma.mu.Lock()
+	rtSession := ma.rtSession
+	ma.mu.Unlock()
+	if rtSession == nil {
+		return nil
+	}
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	default:
+	}
+	return rtSession.UpdateTools(ma.realtimeTools())
+}
+
+func (ma *MultimodalAgent) UpdateChatContext(ctx context.Context, chatCtx *llm.ChatContext) error {
+	if chatCtx == nil {
+		chatCtx = llm.NewChatContext()
+	}
+	ma.mu.Lock()
+	rtSession := ma.rtSession
+	ma.chatCtx = chatCtx
+	ma.mu.Unlock()
+	if rtSession == nil {
+		return nil
+	}
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	default:
+	}
+	return rtSession.UpdateChatContext(chatCtx)
+}
+
 func (ma *MultimodalAgent) SupportsNativeSay() bool {
 	return ma.model != nil && ma.model.Capabilities().SupportsSay
 }

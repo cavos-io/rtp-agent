@@ -19,6 +19,18 @@ var ErrSpeechSchedulingPaused = errors.New("speech scheduling is paused")
 
 const agentInstructionsMessageID = "lk.agent_task.instructions"
 
+type instructionUpdatingAssistant interface {
+	UpdateInstructions(context.Context, string) error
+}
+
+type toolUpdatingAssistant interface {
+	UpdateTools(context.Context) error
+}
+
+type chatContextUpdatingAssistant interface {
+	UpdateChatContext(context.Context, *llm.ChatContext) error
+}
+
 type EndOfTurnInfo struct {
 	SkipReply            bool
 	NewTranscript        string
@@ -39,6 +51,7 @@ type AgentActivity struct {
 	currentSpeech  *SpeechHandle
 	speechQueue    []scheduledSpeech
 	nextSpeechSeq  uint64
+	lastSpeechDone time.Time
 	queueMu        sync.Mutex
 	queueUpdatedCh chan struct{}
 
@@ -288,6 +301,11 @@ func (a *AgentActivity) UpdateInstructions(ctx context.Context, instructions str
 	if err := updateAgentInstructionsMessage(a.Agent.ChatCtx, instructions, true); err != nil {
 		return err
 	}
+	if a.Session != nil {
+		if updater, ok := a.Session.Assistant.(instructionUpdatingAssistant); ok {
+			return updater.UpdateInstructions(ctx, instructions)
+		}
+	}
 	return nil
 }
 
@@ -328,6 +346,13 @@ func (a *AgentActivity) UpdateTools(ctx context.Context, tools []llm.Tool) error
 			a.Session.ChatCtx.Insert(configUpdate)
 		}
 	}
+	if a.Session != nil {
+		if updater, ok := a.Session.Assistant.(toolUpdatingAssistant); ok {
+			if err := updater.UpdateTools(ctx); err != nil {
+				return err
+			}
+		}
+	}
 	return a.UpdateChatContext(ctx, a.Agent.ChatCtx)
 }
 
@@ -338,11 +363,17 @@ func (a *AgentActivity) UpdateChatContext(ctx context.Context, chatCtx *llm.Chat
 	}
 	if chatCtx == nil {
 		a.Agent.ChatCtx = llm.NewChatContext()
-		return updateAgentInstructionsMessage(a.Agent.ChatCtx, a.Agent.Instructions, true)
+		if err := updateAgentInstructionsMessage(a.Agent.ChatCtx, a.Agent.Instructions, true); err != nil {
+			return err
+		}
+		return a.updateRealtimeChatContext(ctx)
 	}
 	if !excludeInvalid {
 		a.Agent.ChatCtx = chatCtx.Copy()
-		return updateAgentInstructionsMessage(a.Agent.ChatCtx, a.Agent.Instructions, true)
+		if err := updateAgentInstructionsMessage(a.Agent.ChatCtx, a.Agent.Instructions, true); err != nil {
+			return err
+		}
+		return a.updateRealtimeChatContext(ctx)
 	}
 	a.Agent.ChatCtx = chatCtx.Copy(llm.ChatContextCopyOptions{
 		Tools: a.chatContextTools(),
@@ -350,7 +381,26 @@ func (a *AgentActivity) UpdateChatContext(ctx context.Context, chatCtx *llm.Chat
 	if err := updateAgentInstructionsMessage(a.Agent.ChatCtx, a.Agent.Instructions, true); err != nil {
 		return err
 	}
+	if err := a.updateRealtimeChatContext(ctx); err != nil {
+		return err
+	}
 	return nil
+}
+
+func (a *AgentActivity) updateRealtimeChatContext(ctx context.Context) error {
+	if a.Session == nil {
+		return nil
+	}
+	updater, ok := a.Session.Assistant.(chatContextUpdatingAssistant)
+	if !ok {
+		return nil
+	}
+	chatCtx := llm.NewChatContext()
+	if a.Agent.ChatCtx != nil {
+		chatCtx = a.Agent.ChatCtx.Copy()
+	}
+	removeAgentInstructionsMessage(chatCtx)
+	return updater.UpdateChatContext(ctx, chatCtx)
 }
 
 func (a *AgentActivity) chatContextTools() []interface{} {
@@ -464,6 +514,19 @@ func updateAgentInstructionsMessage(chatCtx *llm.ChatContext, instructions strin
 	return nil
 }
 
+func removeAgentInstructionsMessage(chatCtx *llm.ChatContext) {
+	if chatCtx == nil {
+		return
+	}
+	for {
+		idx := chatCtx.IndexByID(agentInstructionsMessageID)
+		if idx == nil {
+			return
+		}
+		chatCtx.Items = append(chatCtx.Items[:*idx], chatCtx.Items[*idx+1:]...)
+	}
+}
+
 func (a *AgentActivity) ScheduleSpeech(speech *SpeechHandle, priority int, force bool) error {
 	a.queueMu.Lock()
 	defer a.queueMu.Unlock()
@@ -523,9 +586,30 @@ func (a *AgentActivity) processQueue() {
 	}
 
 	a.currentSpeech = speech
+	delay := a.minConsecutiveSpeechDelay()
+	if delay > 0 && !a.lastSpeechDone.IsZero() {
+		delay -= time.Since(a.lastSpeechDone)
+	}
 	if a.Session != nil {
 		if assistant, ok := a.Session.Assistant.(scheduledSpeechAssistant); ok {
-			go assistant.OnSpeechScheduled(a.ctx, speech)
+			go func() {
+				if delay > 0 {
+					timer := time.NewTimer(delay)
+					select {
+					case <-timer.C:
+					case <-a.ctx.Done():
+						timer.Stop()
+						return
+					case <-speech.doneCh:
+						timer.Stop()
+						return
+					}
+				}
+				if speech.IsDone() {
+					return
+				}
+				assistant.OnSpeechScheduled(a.ctx, speech)
+			}()
 		}
 	}
 
@@ -536,6 +620,7 @@ func (a *AgentActivity) processQueue() {
 
 		a.queueMu.Lock()
 		a.currentSpeech = nil
+		a.lastSpeechDone = time.Now()
 		a.queueMu.Unlock()
 
 		// Trigger next
@@ -544,6 +629,16 @@ func (a *AgentActivity) processQueue() {
 		default:
 		}
 	}()
+}
+
+func (a *AgentActivity) minConsecutiveSpeechDelay() time.Duration {
+	if a.Agent != nil && a.Agent.MinConsecutiveSpeechDelay > 0 {
+		return time.Duration(a.Agent.MinConsecutiveSpeechDelay * float64(time.Second))
+	}
+	if a.Session != nil && a.Session.Options.MinConsecutiveSpeechDelay > 0 {
+		return time.Duration(a.Session.Options.MinConsecutiveSpeechDelay * float64(time.Second))
+	}
+	return 0
 }
 
 func (a *AgentActivity) Drain(ctx context.Context) error {

@@ -138,6 +138,10 @@ type videoSessionAssistant interface {
 	OnVideoFrame(ctx context.Context, frame *images.VideoFrame)
 }
 
+type componentUpdatingAssistant interface {
+	UpdateComponents(vad.VAD, stt.STT, llm.LLM, tts.TTS)
+}
+
 type AgentSession struct {
 	Options AgentSessionOptions
 
@@ -1162,12 +1166,12 @@ func (s *AgentSession) GenerateReplyWithOptions(ctx context.Context, opts Genera
 	// Trigger the pipeline
 	logger.Logger.Infow("Generating reply", "userInput", opts.UserInput)
 
-	allowInterruptions := s.Options.AllowInterruptions
+	allowInterruptions := s.defaultAllowInterruptions()
 	if opts.AllowInterruptions != nil {
 		allowInterruptions = *opts.AllowInterruptions
 	}
 	if realtimeTurnDetectionEnabled(assistant) && opts.AllowInterruptions != nil && !*opts.AllowInterruptions {
-		allowInterruptions = s.Options.AllowInterruptions
+		allowInterruptions = s.defaultAllowInterruptions()
 	}
 	inputModality := opts.InputModality
 	if inputModality == "" {
@@ -1236,12 +1240,12 @@ func (s *AgentSession) SayWithOptions(ctx context.Context, opts SayOptions) (*Sp
 
 	logger.Logger.Infow("Saying text", "text", opts.Text)
 
-	allowInterruptions := s.Options.AllowInterruptions
+	allowInterruptions := s.defaultAllowInterruptions()
 	if opts.AllowInterruptions != nil {
 		allowInterruptions = *opts.AllowInterruptions
 	}
 	if realtimeTurnDetectionEnabled(assistant) && opts.AllowInterruptions != nil && !*opts.AllowInterruptions {
-		allowInterruptions = s.Options.AllowInterruptions
+		allowInterruptions = s.defaultAllowInterruptions()
 	}
 	addToChatContext := true
 	if opts.AddToChatContext != nil {
@@ -1287,6 +1291,21 @@ func realtimeTurnDetectionEnabled(assistant any) bool {
 		return capabilities.RealtimeCapabilities().TurnDetection
 	}
 	return false
+}
+
+func (s *AgentSession) defaultAllowInterruptions() bool {
+	allowInterruptions := s.Options.AllowInterruptions
+	if s.Agent == nil {
+		return allowInterruptions
+	}
+	agent := s.Agent.GetAgent()
+	if agent == nil {
+		return allowInterruptions
+	}
+	if agent.AllowInterruptionsSet || agent.AllowInterruptions {
+		return agent.AllowInterruptions
+	}
+	return allowInterruptions
 }
 
 func (s *AgentSession) watchActiveRunSpeechHandle(handle *SpeechHandle) bool {
@@ -1346,10 +1365,12 @@ func (s *AgentSession) UpdateAgent(agent AgentInterface) {
 	oldActivity := s.activity
 	started := s.started
 	s.Agent = agent
-	s.STT = baseAgent.STT
-	s.VAD = baseAgent.VAD
-	s.LLM = baseAgent.LLM
-	s.TTS = baseAgent.TTS
+	s.updateAgentComponentsLocked(baseAgent)
+	assistant := s.Assistant
+	sessionVAD := s.VAD
+	sessionSTT := s.STT
+	sessionLLM := s.LLM
+	sessionTTS := s.TTS
 	if !started {
 		s.mu.Unlock()
 		return
@@ -1364,6 +1385,9 @@ func (s *AgentSession) UpdateAgent(agent AgentInterface) {
 	s.activity = newActivity
 	s.mu.Unlock()
 
+	if updater, ok := assistant.(componentUpdatingAssistant); ok {
+		updater.UpdateComponents(sessionVAD, sessionSTT, sessionLLM, sessionTTS)
+	}
 	if oldActivity != nil {
 		oldActivity.Stop()
 	}
@@ -1373,6 +1397,21 @@ func (s *AgentSession) UpdateAgent(agent AgentInterface) {
 	}
 	s.EmitConversationItemAdded(handoff)
 	newActivity.Start()
+}
+
+func (s *AgentSession) updateAgentComponentsLocked(agent *Agent) {
+	if agent.STT != nil {
+		s.STT = agent.STT
+	}
+	if agent.VAD != nil {
+		s.VAD = agent.VAD
+	}
+	if agent.LLM != nil {
+		s.LLM = agent.LLM
+	}
+	if agent.TTS != nil {
+		s.TTS = agent.TTS
+	}
 }
 
 func newAgentHandoff(oldAgent *Agent, newAgent *Agent) *llm.AgentHandoff {

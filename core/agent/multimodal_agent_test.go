@@ -87,6 +87,73 @@ func TestMultimodalAgentStartUpdatesRealtimeSessionWithSessionAndAgentTools(t *t
 	}
 }
 
+func TestAgentUpdateInstructionsUpdatesRealtimeSession(t *testing.T) {
+	baseAgent := NewAgent("initial instructions")
+	session := NewAgentSession(baseAgent, nil, AgentSessionOptions{})
+	rtSession := &fakeRealtimeSession{}
+	ma := NewMultimodalAgent(&fakeRealtimeModel{session: rtSession}, llm.NewChatContext())
+	ma.rtSession = rtSession
+	session.Assistant = ma
+	activity := NewAgentActivity(baseAgent, session)
+	session.activity = activity
+
+	if err := baseAgent.UpdateInstructions(context.Background(), "new instructions"); err != nil {
+		t.Fatalf("UpdateInstructions error = %v, want nil", err)
+	}
+
+	if rtSession.instructions != "new instructions" {
+		t.Fatalf("realtime instructions = %q, want new instructions", rtSession.instructions)
+	}
+}
+
+func TestAgentUpdateToolsUpdatesRealtimeSession(t *testing.T) {
+	baseAgent := NewAgent("test")
+	session := NewAgentSession(baseAgent, nil, AgentSessionOptions{})
+	session.Tools = []llm.Tool{&fakeGenerationTool{name: "session_tool"}}
+	rtSession := &fakeRealtimeSession{}
+	ma := NewMultimodalAgent(&fakeRealtimeModel{session: rtSession}, llm.NewChatContext())
+	ma.rtSession = rtSession
+	ma.session = session
+	session.Assistant = ma
+	activity := NewAgentActivity(baseAgent, session)
+	session.activity = activity
+
+	if err := baseAgent.UpdateTools(context.Background(), []llm.Tool{&fakeGenerationTool{name: "agent_tool"}}); err != nil {
+		t.Fatalf("UpdateTools error = %v, want nil", err)
+	}
+
+	if got, want := toolNames(rtSession.tools), []string{"session_tool", "agent_tool"}; !equalStrings(got, want) {
+		t.Fatalf("updated realtime tools = %#v, want %#v", got, want)
+	}
+}
+
+func TestAgentUpdateChatContextUpdatesRealtimeSession(t *testing.T) {
+	baseAgent := NewAgent("be helpful")
+	session := NewAgentSession(baseAgent, nil, AgentSessionOptions{})
+	rtSession := &fakeRealtimeSession{}
+	ma := NewMultimodalAgent(&fakeRealtimeModel{session: rtSession}, llm.NewChatContext())
+	ma.rtSession = rtSession
+	session.Assistant = ma
+	activity := NewAgentActivity(baseAgent, session)
+	session.activity = activity
+	source := llm.NewChatContext()
+	source.Append(&llm.ChatMessage{ID: "user", Role: llm.ChatRoleUser, Content: []llm.ChatContent{{Text: "hello"}}})
+
+	if err := baseAgent.UpdateChatContext(context.Background(), source); err != nil {
+		t.Fatalf("UpdateChatContext error = %v, want nil", err)
+	}
+
+	if got := chatItemIDs(baseAgent.ChatCtx.Items); !stringSlicesEqual(got, []string{agentInstructionsMessageID, "user"}) {
+		t.Fatalf("agent ChatCtx item IDs = %q, want instructions then user", got)
+	}
+	if rtSession.updated == nil {
+		t.Fatal("realtime chat context was not updated")
+	}
+	if got := chatItemIDs(rtSession.updated.Items); !stringSlicesEqual(got, []string{"user"}) {
+		t.Fatalf("realtime ChatCtx item IDs = %q, want user without synthetic instructions", got)
+	}
+}
+
 func TestMultimodalAgentGenerateReplySendsRealtimeOverrides(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -968,6 +1035,7 @@ type fakeRealtimeSession struct {
 	updated              *llm.ChatContext
 	generatedWithChatCtx *llm.ChatContext
 	tools                []llm.Tool
+	instructions         string
 	generateCh           chan llm.RealtimeGenerateReplyOptions
 	sayCh                chan string
 	videoFrames          int
@@ -976,7 +1044,10 @@ type fakeRealtimeSession struct {
 	interrupted          int
 }
 
-func (f *fakeRealtimeSession) UpdateInstructions(string) error { return nil }
+func (f *fakeRealtimeSession) UpdateInstructions(instructions string) error {
+	f.instructions = instructions
+	return nil
+}
 
 func (f *fakeRealtimeSession) UpdateChatContext(chatCtx *llm.ChatContext) error {
 	f.updated = chatCtx
