@@ -544,6 +544,95 @@ func TestPipelineAgentUsesTTSAlignedTranscriptWhenEnabled(t *testing.T) {
 	}
 }
 
+func TestPipelineAgentUsesAgentTTSAlignedTranscriptOverride(t *testing.T) {
+	chatCtx := llm.NewChatContext()
+	l := &fakeGenerationLLM{
+		stream: &fakeGenerationLLMStream{
+			chunks: []*llm.ChatChunk{
+				{Delta: &llm.ChoiceDelta{Content: "llm transcript"}},
+			},
+		},
+	}
+	baseAgent := NewAgent("test")
+	baseAgent.UseTTSAlignedTranscript = true
+	session := NewAgentSession(baseAgent, nil, AgentSessionOptions{
+		UseTTSAlignedTranscript: false,
+	})
+	agent := NewPipelineAgent(nil, nil, l, &fakePipelineTTS{
+		capabilities: tts.TTSCapabilities{Streaming: true, AlignedTranscript: true},
+		stream: &fakePipelineTTSStream{
+			frames: []*model.AudioFrame{{
+				Data:              make([]byte, 4000),
+				SampleRate:        1000,
+				NumChannels:       1,
+				SamplesPerChannel: 2000,
+			}},
+			timedTranscripts: [][]tts.TimedString{{
+				{Text: "agent aligned transcript", StartTime: 0.1, EndTime: 0.5},
+			}},
+		},
+	}, chatCtx)
+	agent.session = session
+	agent.ctx = context.Background()
+	events := session.AgentOutputTranscribedEvents()
+
+	agent.generateReply()
+
+	select {
+	case ev := <-events:
+		if ev.Transcript != "agent aligned transcript" {
+			t.Fatalf("agent output transcript = %q, want agent override TTS aligned transcript", ev.Transcript)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("AgentOutputTranscribedEvents did not receive agent override aligned assistant transcript")
+	}
+}
+
+func TestPipelineAgentAgentTTSAlignedTranscriptOverrideCanDisableSessionDefault(t *testing.T) {
+	chatCtx := llm.NewChatContext()
+	l := &fakeGenerationLLM{
+		stream: &fakeGenerationLLMStream{
+			chunks: []*llm.ChatChunk{
+				{Delta: &llm.ChoiceDelta{Content: "llm transcript"}},
+			},
+		},
+	}
+	baseAgent := NewAgent("test")
+	baseAgent.UseTTSAlignedTranscript = false
+	baseAgent.UseTTSAlignedTranscriptSet = true
+	session := NewAgentSession(baseAgent, nil, AgentSessionOptions{
+		UseTTSAlignedTranscript: true,
+	})
+	agent := NewPipelineAgent(nil, nil, l, &fakePipelineTTS{
+		capabilities: tts.TTSCapabilities{Streaming: true, AlignedTranscript: true},
+		stream: &fakePipelineTTSStream{
+			frames: []*model.AudioFrame{{
+				Data:              make([]byte, 4000),
+				SampleRate:        1000,
+				NumChannels:       1,
+				SamplesPerChannel: 2000,
+			}},
+			timedTranscripts: [][]tts.TimedString{{
+				{Text: "aligned transcript", StartTime: 0.1, EndTime: 0.5},
+			}},
+		},
+	}, chatCtx)
+	agent.session = session
+	agent.ctx = context.Background()
+	events := session.AgentOutputTranscribedEvents()
+
+	agent.generateReply()
+
+	select {
+	case ev := <-events:
+		if ev.Transcript != "llm transcript" {
+			t.Fatalf("agent output transcript = %q, want agent override to disable TTS aligned transcript", ev.Transcript)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("AgentOutputTranscribedEvents did not receive assistant transcript")
+	}
+}
+
 func TestPipelineAgentEmitsConversationItemAddedForUserTranscript(t *testing.T) {
 	chatCtx := llm.NewChatContext()
 	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})

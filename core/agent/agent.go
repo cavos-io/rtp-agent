@@ -47,11 +47,12 @@ type Agent struct {
 	LLM           llm.LLM
 	TTS           tts.TTS
 
-	AllowInterruptions        bool
-	MinConsecutiveSpeechDelay float64
-	UseTTSAlignedTranscript   bool
-	MinEndpointingDelay       float64
-	MaxEndpointingDelay       float64
+	AllowInterruptions         bool
+	MinConsecutiveSpeechDelay  float64
+	UseTTSAlignedTranscript    bool
+	UseTTSAlignedTranscriptSet bool
+	MinEndpointingDelay        float64
+	MaxEndpointingDelay        float64
 
 	activity *AgentActivity
 }

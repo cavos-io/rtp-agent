@@ -456,7 +456,18 @@ func (va *PipelineAgent) synthesizeSpeech(ctx context.Context, session *AgentSes
 }
 
 func (va *PipelineAgent) useTTSAlignedTranscript(session *AgentSession) bool {
-	if session == nil || !session.Options.UseTTSAlignedTranscript || va.tts == nil {
+	if session == nil || va.tts == nil {
+		return false
+	}
+	enabled := session.Options.UseTTSAlignedTranscript
+	if session.Agent != nil {
+		if agent := session.Agent.GetAgent(); agent != nil {
+			if agent.UseTTSAlignedTranscriptSet || agent.UseTTSAlignedTranscript {
+				enabled = agent.UseTTSAlignedTranscript
+			}
+		}
+	}
+	if !enabled {
 		return false
 	}
 	capabilities := va.tts.Capabilities()
