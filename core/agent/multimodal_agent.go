@@ -26,6 +26,9 @@ type MultimodalAgent struct {
 	ctx    context.Context
 	cancel context.CancelFunc
 
+	pendingAutoToolReply      *SpeechHandle
+	pendingAutoToolReplyTimer *time.Timer
+
 	PublishAudio func(frame *model.AudioFrame) error
 }
 
@@ -238,6 +241,7 @@ func (ma *MultimodalAgent) handleRealtimeEvent(ev llm.RealtimeEvent) {
 			Source:        "generate_reply",
 			SpeechHandle:  handle,
 		})
+		ma.attachPendingRealtimeAutoToolReply(handle)
 		if ma.session.activity != nil {
 			if err := ma.session.activity.ScheduleSpeech(handle, SpeechPriorityNormal, false); err != nil {
 				logger.Logger.Warnw("failed to schedule realtime generation", err, "response_id", ev.Generation.ResponseID)
@@ -474,6 +478,83 @@ func (ma *MultimodalAgent) appendRealtimeToolResult(call *llm.FunctionCall, outp
 	}
 	ev.ReplyRequired = true
 	ma.session.EmitFunctionToolsExecuted(*ev)
+	if ev.HasToolReply() {
+		ma.installPendingRealtimeAutoToolReply()
+	}
+}
+
+func (ma *MultimodalAgent) installPendingRealtimeAutoToolReply() {
+	ma.mu.Lock()
+	if ma.pendingAutoToolReply != nil {
+		ma.mu.Unlock()
+		return
+	}
+	session := ma.session
+	if session == nil {
+		ma.mu.Unlock()
+		return
+	}
+	pending := NewSpeechHandle(false, DefaultInputDetails())
+	ma.pendingAutoToolReply = pending
+	ma.mu.Unlock()
+
+	if !session.watchActiveRunSpeechHandle(pending) {
+		ma.releasePendingRealtimeAutoToolReply(pending)
+		return
+	}
+
+	timer := time.AfterFunc(5*time.Second, func() {
+		logger.Logger.Warnw("timed out waiting for realtime auto tool reply", nil)
+		ma.releasePendingRealtimeAutoToolReply(pending)
+	})
+	ma.mu.Lock()
+	if ma.pendingAutoToolReply == pending {
+		ma.pendingAutoToolReplyTimer = timer
+		ma.mu.Unlock()
+		return
+	}
+	ma.mu.Unlock()
+	timer.Stop()
+}
+
+func (ma *MultimodalAgent) attachPendingRealtimeAutoToolReply(handle *SpeechHandle) {
+	ma.mu.Lock()
+	pending := ma.pendingAutoToolReply
+	timer := ma.pendingAutoToolReplyTimer
+	if pending != nil {
+		ma.pendingAutoToolReply = nil
+		ma.pendingAutoToolReplyTimer = nil
+	}
+	session := ma.session
+	ma.mu.Unlock()
+
+	if pending == nil {
+		return
+	}
+	if timer != nil {
+		timer.Stop()
+	}
+	if session != nil {
+		session.watchActiveRunSpeechHandle(handle)
+	}
+	pending.MarkDone()
+}
+
+func (ma *MultimodalAgent) releasePendingRealtimeAutoToolReply(pending *SpeechHandle) {
+	ma.mu.Lock()
+	if ma.pendingAutoToolReply != pending {
+		ma.mu.Unlock()
+		return
+	}
+	timer := ma.pendingAutoToolReplyTimer
+	ma.pendingAutoToolReply = nil
+	ma.pendingAutoToolReplyTimer = nil
+	ma.mu.Unlock()
+
+	if timer != nil {
+		timer.Stop()
+	}
+	pending.MarkDone()
 }
 
 func (ma *MultimodalAgent) OnAudioFrame(ctx context.Context, frame *model.AudioFrame) {

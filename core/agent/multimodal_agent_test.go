@@ -582,6 +582,82 @@ func TestMultimodalAgentConsumesServerGenerationFunctionCalls(t *testing.T) {
 	}
 }
 
+func TestMultimodalAgentKeepsRunOpenForRealtimeAutoToolReply(t *testing.T) {
+	agent := NewAgent("test")
+	agent.Tools = []llm.Tool{&fakeGenerationTool{name: "lookup", result: "agent result"}}
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	activity := NewAgentActivity(agent, session)
+	session.activity = activity
+	go activity.schedulingTask()
+	defer activity.Stop()
+
+	result := NewRunResult(session.ChatCtx)
+	session.runState = result
+	currentSpeech := NewSpeechHandle(true, DefaultInputDetails())
+	result.WatchSpeechHandle(currentSpeech)
+
+	chatCtx := llm.NewChatContext()
+	ma := &MultimodalAgent{
+		session:   session,
+		chatCtx:   chatCtx,
+		rtSession: &fakeRealtimeSession{},
+		ctx:       context.Background(),
+	}
+	session.Assistant = ma
+
+	ma.executeRealtimeFunctionCall(&llm.FunctionCall{Name: "lookup", CallID: "call_lookup", Arguments: `{}`})
+	select {
+	case <-session.FunctionToolsExecutedEvents():
+	case <-time.After(time.Second):
+		t.Fatal("FunctionToolsExecutedEvents did not receive realtime function execution")
+	}
+
+	currentSpeech.MarkDone()
+	if result.Done() {
+		t.Fatal("RunResult marked done before realtime auto tool reply generation arrived")
+	}
+
+	textCh := make(chan string, 1)
+	textCh <- "tool answer"
+	close(textCh)
+	messageCh := make(chan llm.MessageGeneration, 1)
+	messageCh <- llm.MessageGeneration{MessageID: "msg_auto_reply", TextCh: textCh}
+	close(messageCh)
+
+	ma.handleRealtimeEvent(llm.RealtimeEvent{
+		Type: llm.RealtimeEventTypeGenerationCreated,
+		Generation: &llm.GenerationCreatedEvent{
+			MessageCh:     messageCh,
+			ResponseID:    "response_auto_reply",
+			UserInitiated: false,
+		},
+	})
+
+	var replyHandle *SpeechHandle
+	select {
+	case ev := <-session.SpeechCreatedEvents():
+		replyHandle = ev.SpeechHandle
+	case <-time.After(time.Second):
+		t.Fatal("SpeechCreatedEvents did not receive realtime auto tool reply generation")
+	}
+
+	doneCtx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if err := replyHandle.Wait(doneCtx); err != nil {
+		t.Fatalf("realtime auto tool reply handle did not complete: %v", err)
+	}
+	if !result.Done() {
+		t.Fatal("RunResult did not complete after realtime auto tool reply generation completed")
+	}
+	events := result.Events()
+	if len(events) != 3 {
+		t.Fatalf("RunResult events length = %d, want function call, output, and assistant reply", len(events))
+	}
+	if msgEvent, ok := events[2].(*ChatMessageEvent); !ok || msgEvent.Item.GetID() != "msg_auto_reply" {
+		t.Fatalf("events[2] = %#v, want auto tool reply assistant message", events[2])
+	}
+}
+
 func TestMultimodalAgentSkipsSpeechCreatedForUserInitiatedGeneration(t *testing.T) {
 	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
 	ma := &MultimodalAgent{session: session}

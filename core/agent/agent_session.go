@@ -1286,13 +1286,14 @@ func realtimeTurnDetectionEnabled(assistant any) bool {
 	return false
 }
 
-func (s *AgentSession) watchActiveRunSpeechHandle(handle *SpeechHandle) {
+func (s *AgentSession) watchActiveRunSpeechHandle(handle *SpeechHandle) bool {
 	s.mu.Lock()
 	runState := s.runState
 	s.mu.Unlock()
 	if runState != nil {
-		runState.WatchSpeechHandle(handle)
+		return runState.WatchSpeechHandle(handle)
 	}
+	return false
 }
 
 func (s *AgentSession) Interrupt(force bool) error {
