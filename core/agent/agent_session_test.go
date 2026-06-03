@@ -147,6 +147,16 @@ func (f *fakeSessionAssistant) OnAudioFrame(context.Context, *model.AudioFrame) 
 func (f *fakeSessionAssistant) SetPublishAudio(func(frame *model.AudioFrame) error) {
 }
 
+type fakeCloseableSessionAssistant struct {
+	fakeSessionAssistant
+	closed int
+}
+
+func (f *fakeCloseableSessionAssistant) Close() error {
+	f.closed++
+	return nil
+}
+
 type fakeVideoSessionAssistant struct {
 	fakeSessionAssistant
 	videoFrames int
@@ -1259,6 +1269,22 @@ func TestAgentSessionStopAllowsOnExitSessionCallbacks(t *testing.T) {
 	}
 	if !agent.exited {
 		t.Fatal("OnExit was not called")
+	}
+}
+
+func TestAgentSessionStopClosesCloseableAssistant(t *testing.T) {
+	agent := NewAgent("test")
+	assistant := &fakeCloseableSessionAssistant{}
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	session.Assistant = assistant
+	session.activity = NewAgentActivity(agent, session)
+	session.started = true
+
+	if err := session.Stop(context.Background()); err != nil {
+		t.Fatalf("Stop error = %v, want nil", err)
+	}
+	if assistant.closed != 1 {
+		t.Fatalf("assistant closed = %d, want 1", assistant.closed)
 	}
 }
 

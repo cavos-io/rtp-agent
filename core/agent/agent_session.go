@@ -112,6 +112,10 @@ type SessionAssistant interface {
 	SetPublishAudio(func(frame *model.AudioFrame) error)
 }
 
+type closeableSessionAssistant interface {
+	Close() error
+}
+
 type videoSessionAssistant interface {
 	OnVideoFrame(ctx context.Context, frame *images.VideoFrame)
 }
@@ -1284,6 +1288,7 @@ func (s *AgentSession) stop(ctx context.Context, commitPendingUserTurn bool) err
 
 	activity := s.activity
 	ivrActivity := s.ivrActivity
+	assistant := s.Assistant
 	s.activity = nil
 	s.ivrActivity = nil
 	s.started = false
@@ -1320,6 +1325,11 @@ func (s *AgentSession) stop(ctx context.Context, commitPendingUserTurn bool) err
 			}
 		}
 		activity.Stop()
+	}
+	if closer, ok := assistant.(closeableSessionAssistant); ok {
+		if err := closer.Close(); err != nil && stopErr == nil {
+			stopErr = err
+		}
 	}
 	if backgroundAudio != nil {
 		_ = backgroundAudio.Close()

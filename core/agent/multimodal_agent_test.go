@@ -67,6 +67,23 @@ func TestMultimodalAgentStartsRealtimeSessionAndAcceptsAudio(t *testing.T) {
 	cancel()
 }
 
+func TestAgentSessionStopClosesMultimodalRealtimeSession(t *testing.T) {
+	rtSession := &fakeRealtimeSession{}
+	ma := NewMultimodalAgent(&fakeRealtimeModel{session: rtSession}, llm.NewChatContext())
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	session.Assistant = ma
+
+	if err := session.Start(context.Background()); err != nil {
+		t.Fatalf("Start error = %v", err)
+	}
+	if err := session.Stop(context.Background()); err != nil {
+		t.Fatalf("Stop error = %v", err)
+	}
+	if rtSession.closed != 1 {
+		t.Fatalf("realtime session closed = %d, want 1", rtSession.closed)
+	}
+}
+
 func TestMultimodalAgentPushesVideoToRealtimeSession(t *testing.T) {
 	rtSession := &fakeRealtimeSession{}
 	ma := &MultimodalAgent{rtSession: rtSession}
@@ -427,6 +444,7 @@ type fakeRealtimeModel struct {
 	label    string
 	model    string
 	provider string
+	session  *fakeRealtimeSession
 }
 
 func (f *fakeRealtimeModel) Capabilities() llm.RealtimeCapabilities {
@@ -434,6 +452,9 @@ func (f *fakeRealtimeModel) Capabilities() llm.RealtimeCapabilities {
 }
 
 func (f *fakeRealtimeModel) Session() (llm.RealtimeSession, error) {
+	if f.session != nil {
+		return f.session, nil
+	}
 	return &fakeRealtimeSession{}, nil
 }
 
@@ -449,6 +470,7 @@ type fakeRealtimeSession struct {
 	updated      *llm.ChatContext
 	videoFrames  int
 	pushVideoErr error
+	closed       int
 }
 
 func (f *fakeRealtimeSession) UpdateInstructions(string) error { return nil }
@@ -468,7 +490,10 @@ func (f *fakeRealtimeSession) Truncate(llm.RealtimeTruncateOptions) error { retu
 
 func (f *fakeRealtimeSession) Interrupt() error { return nil }
 
-func (f *fakeRealtimeSession) Close() error { return nil }
+func (f *fakeRealtimeSession) Close() error {
+	f.closed++
+	return nil
+}
 
 func (f *fakeRealtimeSession) EventCh() <-chan llm.RealtimeEvent {
 	ch := make(chan llm.RealtimeEvent)

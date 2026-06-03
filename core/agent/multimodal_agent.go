@@ -61,7 +61,19 @@ func (ma *MultimodalAgent) Start(ctx context.Context, s *AgentSession) error {
 		logger.Logger.Errorw("failed to update tools on realtime session", err)
 	}
 
-	go ma.run(ctx)
+	go ma.run(ctx, rtSession)
+	return nil
+}
+
+func (ma *MultimodalAgent) Close() error {
+	ma.mu.Lock()
+	rtSession := ma.rtSession
+	ma.rtSession = nil
+	ma.mu.Unlock()
+
+	if rtSession != nil {
+		return rtSession.Close()
+	}
 	return nil
 }
 
@@ -71,19 +83,22 @@ func (ma *MultimodalAgent) SetPublishAudio(publish func(frame *model.AudioFrame)
 	ma.PublishAudio = publish
 }
 
-func (ma *MultimodalAgent) run(ctx context.Context) {
+func (ma *MultimodalAgent) run(ctx context.Context, rtSession llm.RealtimeSession) {
 	logger.Logger.Infow("MultimodalAgent started")
 
-	eventCh := ma.rtSession.EventCh()
+	eventCh := rtSession.EventCh()
 
 	for {
 		select {
 		case <-ctx.Done():
-			ma.rtSession.Close()
+			_ = ma.Close()
 			return
 		case frame := <-ma.audioInCh:
-			if ma.rtSession != nil {
-				if err := ma.rtSession.PushAudio(frame); err != nil {
+			ma.mu.Lock()
+			rtSession := ma.rtSession
+			ma.mu.Unlock()
+			if rtSession != nil {
+				if err := rtSession.PushAudio(frame); err != nil {
 					logger.Logger.Errorw("failed to push audio to multimodal session", err)
 				}
 			}
