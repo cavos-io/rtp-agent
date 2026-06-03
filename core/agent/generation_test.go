@@ -358,6 +358,40 @@ func TestPerformTTSInferenceUsesSynthesizeForNonStreamingTTS(t *testing.T) {
 	}
 }
 
+func TestPerformTTSInferencePreservesNonStreamingTimedTranscript(t *testing.T) {
+	timed := tts.TimedString{Text: "aligned chunk", StartTime: 0.25, EndTime: 0.5}
+	provider := &fakeGenerationChunkedTTS{
+		stream: &fakeGenerationChunkedStream{
+			frames: []*model.AudioFrame{{
+				Data:              []byte("chunked"),
+				SampleRate:        24000,
+				NumChannels:       1,
+				SamplesPerChannel: 3,
+			}},
+			timedTranscripts: [][]tts.TimedString{{timed}},
+		},
+	}
+	textCh := make(chan string, 1)
+	textCh <- "hello"
+	close(textCh)
+
+	data, err := PerformTTSInference(context.Background(), provider, textCh, WithTTSPreserveTimedTranscript())
+	if err != nil {
+		t.Fatalf("PerformTTSInference error = %v", err)
+	}
+
+	if _, ok := <-data.AudioCh; !ok {
+		t.Fatal("AudioCh closed before audio, want synthesized audio frame")
+	}
+	got, ok := <-data.TimedTextCh
+	if !ok {
+		t.Fatal("TimedTextCh closed before transcript, want provider timed transcript")
+	}
+	if got != timed {
+		t.Fatalf("timed transcript = %#v, want %#v", got, timed)
+	}
+}
+
 func TestPerformTTSInferenceUsesSentenceStreamPacerWhenEnabled(t *testing.T) {
 	providerStream := newPacedGenerationTTSStream()
 	provider := &fakeGenerationTTS{stream: providerStream}
@@ -639,9 +673,10 @@ func (f *fakeGenerationChunkedTTS) Stream(context.Context) (tts.SynthesizeStream
 }
 
 type fakeGenerationChunkedStream struct {
-	frames []*model.AudioFrame
-	index  int
-	closed bool
+	frames           []*model.AudioFrame
+	timedTranscripts [][]tts.TimedString
+	index            int
+	closed           bool
 }
 
 func (s *fakeGenerationChunkedStream) Next() (*tts.SynthesizedAudio, error) {
@@ -649,8 +684,12 @@ func (s *fakeGenerationChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 		return nil, io.EOF
 	}
 	frame := s.frames[s.index]
+	var timedTranscript []tts.TimedString
+	if s.index < len(s.timedTranscripts) {
+		timedTranscript = s.timedTranscripts[s.index]
+	}
 	s.index++
-	return &tts.SynthesizedAudio{Frame: frame}, nil
+	return &tts.SynthesizedAudio{Frame: frame, TimedTranscript: timedTranscript}, nil
 }
 
 func (s *fakeGenerationChunkedStream) Close() error {

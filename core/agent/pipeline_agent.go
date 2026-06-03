@@ -459,7 +459,8 @@ func (va *PipelineAgent) useTTSAlignedTranscript(session *AgentSession) bool {
 	if session == nil || !session.Options.UseTTSAlignedTranscript || va.tts == nil {
 		return false
 	}
-	return va.tts.Capabilities().AlignedTranscript
+	capabilities := va.tts.Capabilities()
+	return capabilities.AlignedTranscript || !capabilities.Streaming
 }
 
 func (va *PipelineAgent) ttsInferenceOptions(session *AgentSession) []TTSInferenceOption {
@@ -469,6 +470,9 @@ func (va *PipelineAgent) ttsInferenceOptions(session *AgentSession) []TTSInferen
 	}
 	if session != nil && len(session.Options.TTSTextReplacements) > 0 {
 		opts = append(opts, WithTTSTextReplacements(session.Options.TTSTextReplacements))
+	}
+	if va.useTTSAlignedTranscript(session) {
+		opts = append(opts, WithTTSPreserveTimedTranscript())
 	}
 	return opts
 }

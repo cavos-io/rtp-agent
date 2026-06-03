@@ -143,8 +143,9 @@ type TTSGenerationData struct {
 }
 
 type TTSInferenceOptions struct {
-	StreamPacer      *tts.SentenceStreamPacerOptions
-	TextReplacements map[string]string
+	StreamPacer             *tts.SentenceStreamPacerOptions
+	TextReplacements        map[string]string
+	PreserveTimedTranscript bool
 }
 
 type TTSInferenceOption func(*TTSInferenceOptions)
@@ -158,6 +159,12 @@ func WithTTSStreamPacer(opts tts.SentenceStreamPacerOptions) TTSInferenceOption 
 func WithTTSTextReplacements(replacements map[string]string) TTSInferenceOption {
 	return func(options *TTSInferenceOptions) {
 		options.TextReplacements = replacements
+	}
+}
+
+func WithTTSPreserveTimedTranscript() TTSInferenceOption {
+	return func(options *TTSInferenceOptions) {
+		options.PreserveTimedTranscript = true
 	}
 }
 
@@ -191,9 +198,21 @@ func PerformTTSInference(ctx context.Context, t tts.TTS, textCh <-chan string, o
 			if err != nil {
 				return
 			}
-			frame, err := tts.Collect(stream)
-			if err != nil || frame == nil {
-				return
+			var frame *model.AudioFrame
+			if options.PreserveTimedTranscript {
+				var timedTranscript []tts.TimedString
+				frame, timedTranscript, err = tts.CollectWithTimedTranscript(stream)
+				if err != nil || frame == nil {
+					return
+				}
+				for _, timedText := range timedTranscript {
+					data.TimedTextCh <- timedText
+				}
+			} else {
+				frame, err = tts.Collect(stream)
+				if err != nil || frame == nil {
+					return
+				}
 			}
 			data.TTFB = time.Since(startTime)
 			data.AudioCh <- frame
