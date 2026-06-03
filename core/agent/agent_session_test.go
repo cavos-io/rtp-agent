@@ -1032,6 +1032,28 @@ func TestAgentSessionGenerateReplyOptionsPreserveToolChoice(t *testing.T) {
 	}
 }
 
+func TestAgentSessionUpdateOptionsToolChoiceDefaultsFutureReplies(t *testing.T) {
+	agent := NewAgent("test")
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	session.activity = NewAgentActivity(agent, session)
+	toolChoice := llm.ToolChoice("auto")
+	if err := session.UpdateOptions(AgentSessionUpdateOptions{ToolChoice: &toolChoice}); err != nil {
+		t.Fatalf("UpdateOptions error = %v, want nil", err)
+	}
+
+	handle, err := session.GenerateReplyWithOptions(context.Background(), GenerateReplyOptions{
+		UserInput:     "hello",
+		InputModality: "text",
+	})
+
+	if err != nil {
+		t.Fatalf("GenerateReplyWithOptions error = %v, want nil", err)
+	}
+	if handle.Generation.ToolChoice != "auto" {
+		t.Fatalf("handle.Generation.ToolChoice = %#v, want auto", handle.Generation.ToolChoice)
+	}
+}
+
 func TestAgentSessionGenerateReplyFromFunctionToolDefaultsToolChoiceNone(t *testing.T) {
 	agent := NewAgent("test")
 	session := NewAgentSession(agent, nil, AgentSessionOptions{})

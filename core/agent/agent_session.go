@@ -62,6 +62,7 @@ type AgentSessionOptions struct {
 	IVRDetection                  bool
 	IVRSilenceDuration            time.Duration
 	VideoSampler                  *VoiceActivityVideoSampler
+	ToolChoice                    llm.ToolChoice
 }
 
 type AgentSessionUpdateOptions struct {
@@ -451,6 +452,9 @@ func (s *AgentSession) UpdateOptions(opts AgentSessionUpdateOptions) error {
 	}
 	if opts.TurnDetection != nil {
 		s.Options.TurnDetection = *opts.TurnDetection
+	}
+	if opts.ToolChoice != nil {
+		s.Options.ToolChoice = *opts.ToolChoice
 	}
 	assistant := s.Assistant
 	s.mu.Unlock()
@@ -1217,6 +1221,8 @@ func (s *AgentSession) GenerateReplyWithOptions(ctx context.Context, opts Genera
 		handle.Generation.ToolChoice = opts.ToolChoice
 	} else if runCtx := GetRunContext(ctx); runCtx != nil && runCtx.FunctionCall != nil {
 		handle.Generation.ToolChoice = "none"
+	} else if s.Options.ToolChoice != nil {
+		handle.Generation.ToolChoice = s.Options.ToolChoice
 	}
 	if len(opts.Tools) > 0 {
 		handle.Generation.Tools = append([]string(nil), opts.Tools...)
