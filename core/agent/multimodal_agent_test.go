@@ -87,6 +87,52 @@ func TestMultimodalAgentStartUpdatesRealtimeSessionWithSessionAndAgentTools(t *t
 	}
 }
 
+func TestMultimodalAgentGenerateReplySendsRealtimeOverrides(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	lookup := &fakeGenerationTool{name: "lookup"}
+	calendar := &fakeGenerationTool{name: "calendar"}
+	rtSession := &fakeRealtimeSession{generateCh: make(chan llm.RealtimeGenerateReplyOptions, 1)}
+	ma := NewMultimodalAgent(&fakeRealtimeModel{session: rtSession}, llm.NewChatContext())
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	session.Assistant = ma
+	session.Tools = []llm.Tool{lookup, calendar}
+
+	if err := session.Start(ctx); err != nil {
+		t.Fatalf("Start returned error: %v", err)
+	}
+	handle, err := session.GenerateReplyWithOptions(ctx, GenerateReplyOptions{
+		UserInput:     "hello",
+		Instructions:  "answer tersely",
+		ToolChoice:    "none",
+		Tools:         []string{"lookup"},
+		InputModality: "text",
+	})
+	if err != nil {
+		t.Fatalf("GenerateReplyWithOptions returned error: %v", err)
+	}
+
+	var opts llm.RealtimeGenerateReplyOptions
+	select {
+	case opts = <-rtSession.generateCh:
+	case <-time.After(time.Second):
+		t.Fatal("realtime session did not receive GenerateReply")
+	}
+	if opts.Instructions != "answer tersely" {
+		t.Fatalf("Instructions = %q, want answer tersely", opts.Instructions)
+	}
+	if opts.ToolChoice != "none" {
+		t.Fatalf("ToolChoice = %#v, want none", opts.ToolChoice)
+	}
+	if got, want := toolNames(opts.Tools), []string{"lookup"}; !equalStrings(got, want) {
+		t.Fatalf("Tools = %#v, want %#v", got, want)
+	}
+	if !handle.IsDone() {
+		t.Fatal("speech handle is not done after realtime GenerateReply")
+	}
+}
+
 func TestAgentSessionStopClosesMultimodalRealtimeSession(t *testing.T) {
 	rtSession := &fakeRealtimeSession{}
 	ma := NewMultimodalAgent(&fakeRealtimeModel{session: rtSession}, llm.NewChatContext())
@@ -533,6 +579,7 @@ func (f *fakeRealtimeModel) Provider() string { return f.provider }
 type fakeRealtimeSession struct {
 	updated      *llm.ChatContext
 	tools        []llm.Tool
+	generateCh   chan llm.RealtimeGenerateReplyOptions
 	videoFrames  int
 	pushVideoErr error
 	closed       int
@@ -552,7 +599,12 @@ func (f *fakeRealtimeSession) UpdateTools(tools []llm.Tool) error {
 
 func (f *fakeRealtimeSession) UpdateOptions(llm.RealtimeSessionOptions) error { return nil }
 
-func (f *fakeRealtimeSession) GenerateReply(llm.RealtimeGenerateReplyOptions) error { return nil }
+func (f *fakeRealtimeSession) GenerateReply(options llm.RealtimeGenerateReplyOptions) error {
+	if f.generateCh != nil {
+		f.generateCh <- options
+	}
+	return nil
+}
 
 func (f *fakeRealtimeSession) Truncate(llm.RealtimeTruncateOptions) error { return nil }
 

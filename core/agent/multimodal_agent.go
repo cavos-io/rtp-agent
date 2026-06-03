@@ -83,6 +83,47 @@ func (ma *MultimodalAgent) SetPublishAudio(publish func(frame *model.AudioFrame)
 	ma.PublishAudio = publish
 }
 
+func (ma *MultimodalAgent) OnSpeechScheduled(ctx context.Context, speech *SpeechHandle) {
+	if speech == nil {
+		return
+	}
+	defer speech.MarkDone()
+
+	ma.mu.Lock()
+	rtSession := ma.rtSession
+	session := ma.session
+	ma.mu.Unlock()
+	if rtSession == nil {
+		return
+	}
+
+	selectedTools, err := resolveToolsByID(sessionRegisteredTools(session), speech.Generation.Tools)
+	if err != nil {
+		logger.Logger.Errorw("failed to resolve realtime reply tools", err)
+		if session != nil {
+			session.EmitError(ErrorEvent{Error: err, Source: ma})
+		}
+		return
+	}
+
+	options := llm.RealtimeGenerateReplyOptions{
+		ToolChoice: speech.Generation.ToolChoice,
+		Tools:      selectedTools,
+	}
+	if speech.Generation.Instructions != nil {
+		options.Instructions = speech.Generation.Instructions.AsModality("text").String()
+	}
+	if err := rtSession.GenerateReply(options); err != nil {
+		logger.Logger.Errorw("failed to generate realtime reply", err)
+		if session != nil {
+			session.EmitError(ErrorEvent{
+				Error:  llm.NewRealtimeModelError(llm.RealtimeLabel(ma.model), err, false),
+				Source: ma.model,
+			})
+		}
+	}
+}
+
 func (ma *MultimodalAgent) run(ctx context.Context, rtSession llm.RealtimeSession) {
 	logger.Logger.Infow("MultimodalAgent started")
 

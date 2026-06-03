@@ -116,6 +116,10 @@ type closeableSessionAssistant interface {
 	Close() error
 }
 
+type scheduledSpeechAssistant interface {
+	OnSpeechScheduled(ctx context.Context, speech *SpeechHandle)
+}
+
 type videoSessionAssistant interface {
 	OnVideoFrame(ctx context.Context, frame *images.VideoFrame)
 }
