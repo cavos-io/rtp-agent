@@ -87,6 +87,13 @@ func (ma *MultimodalAgent) SupportsNativeSay() bool {
 	return ma.model != nil && ma.model.Capabilities().SupportsSay
 }
 
+func (ma *MultimodalAgent) RealtimeCapabilities() llm.RealtimeCapabilities {
+	if ma.model == nil {
+		return llm.RealtimeCapabilities{}
+	}
+	return ma.model.Capabilities()
+}
+
 func (ma *MultimodalAgent) OnSpeechScheduled(ctx context.Context, speech *SpeechHandle) {
 	if speech == nil {
 		return

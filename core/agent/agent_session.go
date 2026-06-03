@@ -124,6 +124,10 @@ type nativeSayAssistant interface {
 	SupportsNativeSay() bool
 }
 
+type realtimeCapabilitiesAssistant interface {
+	RealtimeCapabilities() llm.RealtimeCapabilities
+}
+
 type videoSessionAssistant interface {
 	OnVideoFrame(ctx context.Context, frame *images.VideoFrame)
 }
@@ -1091,6 +1095,7 @@ func (s *AgentSession) RunWithOptions(ctx context.Context, opts RunOptions) (*Ru
 func (s *AgentSession) GenerateReplyWithOptions(ctx context.Context, opts GenerateReplyOptions) (*SpeechHandle, error) {
 	s.mu.Lock()
 	activity := s.activity
+	assistant := s.Assistant
 	s.mu.Unlock()
 
 	if activity == nil {
@@ -1108,6 +1113,9 @@ func (s *AgentSession) GenerateReplyWithOptions(ctx context.Context, opts Genera
 	allowInterruptions := s.Options.AllowInterruptions
 	if opts.AllowInterruptions != nil {
 		allowInterruptions = *opts.AllowInterruptions
+	}
+	if realtimeTurnDetectionEnabled(assistant) && opts.AllowInterruptions != nil && !*opts.AllowInterruptions {
+		allowInterruptions = s.Options.AllowInterruptions
 	}
 	inputModality := opts.InputModality
 	if inputModality == "" {
@@ -1178,6 +1186,9 @@ func (s *AgentSession) SayWithOptions(ctx context.Context, opts SayOptions) (*Sp
 	if opts.AllowInterruptions != nil {
 		allowInterruptions = *opts.AllowInterruptions
 	}
+	if realtimeTurnDetectionEnabled(assistant) && opts.AllowInterruptions != nil && !*opts.AllowInterruptions {
+		allowInterruptions = s.Options.AllowInterruptions
+	}
 	addToChatContext := true
 	if opts.AddToChatContext != nil {
 		addToChatContext = *opts.AddToChatContext
@@ -1214,6 +1225,13 @@ func (s *AgentSession) SayWithOptions(ctx context.Context, opts SayOptions) (*Sp
 	}
 	s.watchActiveRunSpeechHandle(handle)
 	return handle, nil
+}
+
+func realtimeTurnDetectionEnabled(assistant any) bool {
+	if capabilities, ok := assistant.(realtimeCapabilitiesAssistant); ok {
+		return capabilities.RealtimeCapabilities().TurnDetection
+	}
+	return false
 }
 
 func (s *AgentSession) watchActiveRunSpeechHandle(handle *SpeechHandle) {

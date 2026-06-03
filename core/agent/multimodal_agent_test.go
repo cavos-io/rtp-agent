@@ -146,6 +146,41 @@ func TestMultimodalAgentGenerateReplySendsRealtimeOverrides(t *testing.T) {
 	}
 }
 
+func TestMultimodalAgentGenerateReplyIgnoresFalseAllowInterruptionsWithTurnDetection(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	rtSession := &fakeRealtimeSession{generateCh: make(chan llm.RealtimeGenerateReplyOptions, 1)}
+	ma := NewMultimodalAgent(&fakeRealtimeModel{
+		session:      rtSession,
+		capabilities: llm.RealtimeCapabilities{TurnDetection: true},
+	}, llm.NewChatContext())
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{AllowInterruptions: true})
+	session.Assistant = ma
+
+	if err := session.Start(ctx); err != nil {
+		t.Fatalf("Start returned error: %v", err)
+	}
+	allowInterruptions := false
+	handle, err := session.GenerateReplyWithOptions(ctx, GenerateReplyOptions{
+		UserInput:          "hello",
+		AllowInterruptions: &allowInterruptions,
+		InputModality:      "text",
+	})
+	if err != nil {
+		t.Fatalf("GenerateReplyWithOptions returned error: %v", err)
+	}
+
+	select {
+	case <-rtSession.generateCh:
+	case <-time.After(time.Second):
+		t.Fatal("realtime session did not receive GenerateReply")
+	}
+	if !handle.AllowInterruptions {
+		t.Fatal("SpeechHandle.AllowInterruptions = false, want session default true for realtime turn detection")
+	}
+}
+
 func TestMultimodalAgentSayUsesRealtimeSessionWhenSupported(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -191,6 +226,43 @@ func TestMultimodalAgentSayUsesRealtimeSessionWhenSupported(t *testing.T) {
 	}
 	if len(handle.ChatItems()) != 1 || handle.ChatItems()[0] != msg {
 		t.Fatalf("handle chat items = %#v, want realtime say assistant message", handle.ChatItems())
+	}
+}
+
+func TestMultimodalAgentSayIgnoresFalseAllowInterruptionsWithTurnDetection(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	rtSession := &fakeRealtimeSession{sayCh: make(chan string, 1)}
+	ma := NewMultimodalAgent(&fakeRealtimeModel{
+		session: rtSession,
+		capabilities: llm.RealtimeCapabilities{
+			TurnDetection: true,
+			SupportsSay:   true,
+		},
+	}, llm.NewChatContext())
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{AllowInterruptions: true})
+	session.Assistant = ma
+
+	if err := session.Start(ctx); err != nil {
+		t.Fatalf("Start returned error: %v", err)
+	}
+	allowInterruptions := false
+	handle, err := session.SayWithOptions(ctx, SayOptions{
+		Text:               "hello from realtime",
+		AllowInterruptions: &allowInterruptions,
+	})
+	if err != nil {
+		t.Fatalf("SayWithOptions returned error: %v", err)
+	}
+
+	select {
+	case <-rtSession.sayCh:
+	case <-time.After(time.Second):
+		t.Fatal("realtime session did not receive Say")
+	}
+	if !handle.AllowInterruptions {
+		t.Fatal("SpeechHandle.AllowInterruptions = false, want session default true for realtime turn detection")
 	}
 }
 
