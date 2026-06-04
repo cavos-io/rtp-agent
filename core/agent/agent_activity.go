@@ -395,10 +395,7 @@ func (a *AgentActivity) updateRealtimeChatContext(ctx context.Context) error {
 	if !ok {
 		return nil
 	}
-	chatCtx := llm.NewChatContext()
-	if a.Agent.ChatCtx != nil {
-		chatCtx = a.Agent.ChatCtx.Copy()
-	}
+	chatCtx := a.Agent.ChatContext()
 	removeAgentInstructionsMessage(chatCtx)
 	return updater.UpdateChatContext(ctx, chatCtx)
 }

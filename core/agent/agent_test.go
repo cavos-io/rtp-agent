@@ -29,6 +29,37 @@ func (t *agentTestTool) Parameters() map[string]any { return nil }
 
 func (t *agentTestTool) Execute(context.Context, string) (string, error) { return "", nil }
 
+func TestAgentChatContextReturnsCopy(t *testing.T) {
+	agent := NewAgent("help")
+	agent.ChatCtx.Append(&llm.ChatMessage{ID: "msg_1", Role: llm.ChatRoleUser})
+
+	got := agent.ChatContext()
+	if got == agent.ChatCtx {
+		t.Fatal("ChatContext() returned internal context pointer, want copy")
+	}
+	if len(got.Items) != 1 || got.Items[0].GetID() != "msg_1" {
+		t.Fatalf("ChatContext() items = %#v, want copied msg_1", got.Items)
+	}
+
+	got.Append(&llm.ChatMessage{ID: "msg_2", Role: llm.ChatRoleAssistant})
+	if len(agent.ChatCtx.Items) != 1 {
+		t.Fatalf("mutating ChatContext() result changed agent context to %d items, want 1", len(agent.ChatCtx.Items))
+	}
+}
+
+func TestAgentChatContextHandlesNilAgentContext(t *testing.T) {
+	agent := NewAgent("help")
+	agent.ChatCtx = nil
+
+	got := agent.ChatContext()
+	if got == nil {
+		t.Fatal("ChatContext() = nil, want empty context")
+	}
+	if len(got.Items) != 0 {
+		t.Fatalf("ChatContext() items = %d, want empty context", len(got.Items))
+	}
+}
+
 func TestAgentUpdateChatContextFiltersFunctionItemsToAgentTools(t *testing.T) {
 	agent := NewAgent("help")
 	agent.Tools = []llm.Tool{&agentTestTool{name: "lookup"}}

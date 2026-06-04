@@ -78,6 +78,18 @@ func (a *Agent) GetActivity() *AgentActivity {
 func (a *Agent) OnEnter() {}
 func (a *Agent) OnExit()  {}
 
+// ChatContext returns a copy of the agent's current chat context.
+//
+// This mirrors the reference SDK's read-only chat_ctx accessor: callers can
+// inspect the returned context without mutating the agent's internal history.
+// Use UpdateChatContext to replace the agent-owned context.
+func (a *Agent) ChatContext() *llm.ChatContext {
+	if a == nil || a.ChatCtx == nil {
+		return llm.NewChatContext()
+	}
+	return a.ChatCtx.Copy()
+}
+
 func (a *Agent) UpdateInstructions(ctx context.Context, instructions string) error {
 	if a.activity != nil {
 		return a.activity.UpdateInstructions(ctx, instructions)
