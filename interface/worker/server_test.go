@@ -343,6 +343,74 @@ func TestWorkerHTTPHandlerReportsConnectionFailure(t *testing.T) {
 	}
 }
 
+func TestWorkerHTTPHandlerUsesCustomHealthCheck(t *testing.T) {
+	called := false
+	server := NewAgentServer(WorkerOptions{
+		HealthCheck: func(got *AgentServer) error {
+			called = true
+			if got != nil && got.ID() != "unregistered" {
+				t.Fatalf("health check server ID = %q, want unregistered", got.ID())
+			}
+			return nil
+		},
+	})
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	rec := httptest.NewRecorder()
+
+	server.workerHTTPHandler().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("health status = %d, want 200", rec.Code)
+	}
+	if !called {
+		t.Fatal("custom health check was not called")
+	}
+	if strings.TrimSpace(rec.Body.String()) != "OK" {
+		t.Fatalf("health body = %q, want OK", rec.Body.String())
+	}
+}
+
+func TestWorkerHTTPHandlerReportsCustomHealthCheckFailure(t *testing.T) {
+	server := NewAgentServer(WorkerOptions{
+		HealthCheck: func(*AgentServer) error {
+			return errors.New("dependency unavailable")
+		},
+	})
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	rec := httptest.NewRecorder()
+
+	server.workerHTTPHandler().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("health status = %d, want 503", rec.Code)
+	}
+	if strings.TrimSpace(rec.Body.String()) != "dependency unavailable" {
+		t.Fatalf("health body = %q, want dependency unavailable", rec.Body.String())
+	}
+}
+
+func TestWorkerHTTPHandlerSkipsCustomHealthCheckAfterConnectionFailure(t *testing.T) {
+	called := false
+	server := NewAgentServer(WorkerOptions{
+		HealthCheck: func(*AgentServer) error {
+			called = true
+			return nil
+		},
+	})
+	server.setConnectionFailed(true)
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	rec := httptest.NewRecorder()
+
+	server.workerHTTPHandler().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("health status = %d, want 503", rec.Code)
+	}
+	if called {
+		t.Fatal("custom health check was called after connection failure")
+	}
+}
+
 func TestWorkerHTTPHandlerReportsWorkerMetadata(t *testing.T) {
 	t.Setenv("LIVEKIT_REMOTE_EOT_URL", "https://hosted.example")
 	server := NewAgentServer(WorkerOptions{
@@ -534,12 +602,14 @@ func TestUpdateOptionsMergesConfiguredValuesBeforeRun(t *testing.T) {
 		CanPublishData: false,
 		Hidden:         true,
 	}
+	healthCheck := func(*AgentServer) error { return nil }
 	err := server.UpdateOptions(WorkerOptions{
 		WSURL:            "wss://new.example",
 		APIKey:           "new-key",
 		MaxRetry:         9,
 		LoadThreshold:    0.8,
 		NumIdleProcesses: 2,
+		HealthCheck:      healthCheck,
 		Permissions:      permissions,
 	})
 	if err != nil {
@@ -566,6 +636,9 @@ func TestUpdateOptionsMergesConfiguredValuesBeforeRun(t *testing.T) {
 	}
 	if server.Options.NumIdleProcesses != 2 {
 		t.Fatalf("NumIdleProcesses = %d, want updated value", server.Options.NumIdleProcesses)
+	}
+	if server.Options.HealthCheck == nil {
+		t.Fatal("HealthCheck was not updated")
 	}
 	if server.Options.Permissions != permissions {
 		t.Fatal("Permissions was not replaced with updated pointer")

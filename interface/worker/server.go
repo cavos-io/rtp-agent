@@ -141,6 +141,7 @@ type WorkerOptions struct {
 	PortSet        bool
 	WSURL          string
 	LoadFunc       func(*AgentServer) float64
+	HealthCheck    func(*AgentServer) error
 	// WSRL is kept for backward compatibility. Prefer WSURL for new code.
 	WSRL                               string
 	APIKey                             string
@@ -656,6 +657,9 @@ func mergeWorkerOptions(current WorkerOptions, next WorkerOptions) WorkerOptions
 	if next.LoadFunc != nil {
 		current.LoadFunc = next.LoadFunc
 	}
+	if next.HealthCheck != nil {
+		current.HealthCheck = next.HealthCheck
+	}
 	if next.APIKey != "" {
 		current.APIKey = next.APIKey
 	}
@@ -835,6 +839,12 @@ func (s *AgentServer) workerHTTPHandler() http.Handler {
 		if s.hasConnectionFailed() {
 			http.Error(w, "failed to connect to livekit", http.StatusServiceUnavailable)
 			return
+		}
+		if s.Options.HealthCheck != nil {
+			if err := s.Options.HealthCheck(s); err != nil {
+				http.Error(w, err.Error(), http.StatusServiceUnavailable)
+				return
+			}
 		}
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte("OK"))
