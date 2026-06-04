@@ -142,6 +142,7 @@ type WorkerOptions struct {
 	WSURL          string
 	LoadFunc       func(*AgentServer) float64
 	HealthCheck    func(*AgentServer) error
+	SetupFunc      func(*JobProcess) error
 	// WSRL is kept for backward compatibility. Prefer WSURL for new code.
 	WSRL                               string
 	APIKey                             string
@@ -375,6 +376,7 @@ func (s *AgentServer) ReloadRunningJobs(ctx context.Context, jobs []workeripc.Ru
 			jobURL = info.URL
 		}
 		jobCtx := NewJobContext(info.Job, jobURL, s.Options.APIKey, s.Options.APISecret)
+		jobCtx.process = s.newJobProcess()
 		if info.Job.GetEnableRecording() {
 			jobCtx.Report.RecordingOptions = allRecordingOptions()
 		}
@@ -414,6 +416,7 @@ func (s *AgentServer) ExecuteRunningJob(ctx context.Context, info workeripc.Runn
 		jobURL = s.Options.WSRL
 	}
 	jobCtx := NewJobContext(info.Job, jobURL, s.Options.APIKey, s.Options.APISecret)
+	jobCtx.process = s.newJobProcess()
 	if info.Job.GetEnableRecording() {
 		jobCtx.Report.RecordingOptions = allRecordingOptions()
 	}
@@ -442,9 +445,7 @@ func (s *AgentServer) ExecuteRunningJob(ctx context.Context, info workeripc.Runn
 				doneCh <- fmt.Errorf("running job entrypoint panicked: %v", recovered)
 			}
 		}()
-		doneCh <- runWithJobContext(jobCtx, func() error {
-			return s.entrypointFnc(jobCtx)
-		})
+		doneCh <- s.runJobEntrypoint(jobCtx)
 	}()
 
 	select {
@@ -465,6 +466,9 @@ func (s *AgentServer) launchReloadedJob(ctx context.Context, jobCtx *JobContext)
 	if s.entrypointFnc == nil {
 		return
 	}
+	if jobCtx.process == nil {
+		jobCtx.process = s.newJobProcess()
+	}
 
 	go func() {
 		status := livekit.JobStatus_JS_SUCCESS
@@ -483,9 +487,7 @@ func (s *AgentServer) launchReloadedJob(ctx context.Context, jobCtx *JobContext)
 			}
 			s.finishJob(jobCtx)
 		}()
-		if err := runWithJobContext(jobCtx, func() error {
-			return s.entrypointFnc(jobCtx)
-		}); err != nil {
+		if err := s.runJobEntrypoint(jobCtx); err != nil {
 			logger.Logger.Errorw("Reloaded job entrypoint failed", err, "jobId", jobCtx.JobID())
 			status = livekit.JobStatus_JS_FAILED
 		}
@@ -659,6 +661,9 @@ func mergeWorkerOptions(current WorkerOptions, next WorkerOptions) WorkerOptions
 	}
 	if next.HealthCheck != nil {
 		current.HealthCheck = next.HealthCheck
+	}
+	if next.SetupFunc != nil {
+		current.SetupFunc = next.SetupFunc
 	}
 	if next.APIKey != "" {
 		current.APIKey = next.APIKey
@@ -1881,7 +1886,7 @@ func (s *AgentServer) handleAssignment(ctx context.Context, req *livekit.JobAssi
 		jobURL = req.GetUrl()
 	}
 	jobCtx := NewJobContext(req.Job, jobURL, s.Options.APIKey, s.Options.APISecret)
-	jobCtx.process = NewJobProcess(JobExecutorTypeThread, s.Options.UserArguments, s.Options.HTTPProxy)
+	jobCtx.process = s.newJobProcess()
 	if req.Job.GetEnableRecording() {
 		jobCtx.Report.RecordingOptions = allRecordingOptions()
 	}
@@ -1924,9 +1929,7 @@ func (s *AgentServer) handleAssignment(ctx context.Context, req *livekit.JobAssi
 				s.finishJob(jobCtx)
 			}()
 
-			if err := runWithJobContext(jobCtx, func() error {
-				return s.entrypointFnc(jobCtx)
-			}); err != nil {
+			if err := s.runJobEntrypoint(jobCtx); err != nil {
 				logger.Logger.Errorw("Job entrypoint failed", err, jobLogValues(jobCtx, "jobId", req.Job.Id)...)
 				status = livekit.JobStatus_JS_FAILED
 			}
@@ -1995,9 +1998,7 @@ func (s *AgentServer) ExecuteLocalJobWithOptions(ctx context.Context, roomName s
 				panic(recovered)
 			}
 		}()
-		if err := runWithJobContext(jobCtx, func() error {
-			return s.entrypointFnc(jobCtx)
-		}); err != nil {
+		if err := s.runJobEntrypoint(jobCtx); err != nil {
 			logger.Logger.Errorw("Local job entrypoint failed", err, jobLogValues(jobCtx, "jobId", jobCtx.Job.Id)...)
 			jobCtx.Shutdown("job failed")
 			return err
@@ -2063,6 +2064,27 @@ func waitForLocalEntrypoint(done <-chan struct{}) {
 	case <-timer.C:
 		logger.Logger.Warnw("local job entrypoint did not exit in time", nil)
 	}
+}
+
+func (s *AgentServer) newJobProcess() *JobProcess {
+	return NewJobProcess(JobExecutorTypeThread, s.Options.UserArguments, s.Options.HTTPProxy)
+}
+
+func (s *AgentServer) runJobEntrypoint(jobCtx *JobContext) error {
+	if jobCtx == nil {
+		return fmt.Errorf("job context is nil")
+	}
+	if jobCtx.process == nil {
+		jobCtx.process = s.newJobProcess()
+	}
+	if s.Options.SetupFunc != nil {
+		if err := s.Options.SetupFunc(jobCtx.process); err != nil {
+			return fmt.Errorf("worker setup failed: %w", err)
+		}
+	}
+	return runWithJobContext(jobCtx, func() error {
+		return s.entrypointFnc(jobCtx)
+	})
 }
 
 func (s *AgentServer) finishJob(jobCtx *JobContext) {
