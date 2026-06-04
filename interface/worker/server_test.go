@@ -3345,6 +3345,43 @@ func TestRTCSessionLoadsAgentNameFromEnvironmentAtRegistration(t *testing.T) {
 	}
 }
 
+func TestExecuteRunningJobSetsCurrentJobContext(t *testing.T) {
+	server := NewAgentServer(WorkerOptions{})
+	server.workerID = "worker-current"
+	entrypointCtx := make(chan *JobContext, 1)
+	server.entrypointFnc = func(ctx *JobContext) error {
+		got, ok := GetJobContext()
+		if !ok {
+			return errors.New("current job context missing")
+		}
+		if got != ctx {
+			return errors.New("current job context does not match entrypoint context")
+		}
+		entrypointCtx <- got
+		return nil
+	}
+
+	err := server.ExecuteRunningJob(context.Background(), ipc.RunningJobInfo{
+		Job:      &livekit.Job{Id: "job_current", Room: &livekit.Room{Name: "room-current"}},
+		WorkerID: "worker-current",
+	})
+	if err != nil {
+		t.Fatalf("ExecuteRunningJob() error = %v", err)
+	}
+
+	select {
+	case got := <-entrypointCtx:
+		if got.JobID() != "job_current" {
+			t.Fatalf("current context JobID = %q, want job_current", got.JobID())
+		}
+	default:
+		t.Fatal("entrypoint did not observe current job context")
+	}
+	if got, ok := GetJobContext(); ok || got != nil {
+		t.Fatalf("GetJobContext() after ExecuteRunningJob = %#v, %v; want nil, false", got, ok)
+	}
+}
+
 func TestNewJobContextDefaultsParticipantIdentity(t *testing.T) {
 	job := &livekit.Job{Id: "job_default"}
 	ctx := NewJobContext(job, "wss://livekit.example", "key", "secret")
