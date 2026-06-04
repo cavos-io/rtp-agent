@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"strings"
@@ -118,6 +119,13 @@ func TestPerformLLMInferenceRecordsLLMSpan(t *testing.T) {
 		_ = provider.Shutdown(context.Background())
 	})
 
+	chatCtx := llm.NewChatContext()
+	chatCtx.Append(&llm.ChatMessage{Role: llm.ChatRoleSystem, Content: []llm.ChatContent{{Text: "system prompt"}}})
+	chatCtx.Append(&llm.ChatMessage{Role: llm.ChatRoleUser, Content: []llm.ChatContent{{Text: "hello"}}})
+	chatCtx.Append(&llm.ChatMessage{Role: llm.ChatRoleAssistant, Content: []llm.ChatContent{{Text: "hi there"}}})
+	chatCtx.Append(&llm.FunctionCall{CallID: "call_lookup", Name: "lookup", Arguments: `{"city":"Jakarta"}`})
+	chatCtx.Append(&llm.FunctionCallOutput{CallID: "call_lookup", Name: "lookup", Output: "sunny"})
+
 	l := &fakeGenerationLLM{
 		model:    "test-model",
 		provider: "test-provider",
@@ -126,7 +134,7 @@ func TestPerformLLMInferenceRecordsLLMSpan(t *testing.T) {
 		},
 	}
 
-	data, err := PerformLLMInference(context.Background(), l, llm.NewChatContext(), nil)
+	data, err := PerformLLMInference(context.Background(), l, chatCtx, nil)
 	if err != nil {
 		t.Fatalf("PerformLLMInference error = %v, want nil", err)
 	}
@@ -146,6 +154,28 @@ func TestPerformLLMInferenceRecordsLLMSpan(t *testing.T) {
 	if attrs[telemetry.AttrGenAIProviderName] != "test-provider" {
 		t.Fatalf("span provider attr = %q, want test-provider", attrs[telemetry.AttrGenAIProviderName])
 	}
+
+	events := spans[0].Events()
+	if len(events) != 5 {
+		t.Fatalf("span events = %d, want 5 chat context events: %#v", len(events), events)
+	}
+	assertSpanEvent(t, events[0], telemetry.EventGenAISystemMessage, map[string]string{"content": "system prompt"})
+	assertSpanEvent(t, events[1], telemetry.EventGenAIUserMessage, map[string]string{"content": "hello"})
+	assertSpanEvent(t, events[2], telemetry.EventGenAIAssistantMessage, map[string]string{"content": "hi there"})
+	assertSpanEvent(t, events[3], telemetry.EventGenAIAssistantMessage, map[string]string{"role": "assistant"})
+	toolCalls := spanEventAttributeValues(events[3].Attributes)["tool_calls"].AsStringSlice()
+	if len(toolCalls) != 1 {
+		t.Fatalf("tool_calls event attribute = %#v, want one lookup call JSON", toolCalls)
+	}
+	var toolCall map[string]any
+	if err := json.Unmarshal([]byte(toolCalls[0]), &toolCall); err != nil {
+		t.Fatalf("tool call JSON unmarshal error = %v; payload %s", err, toolCalls[0])
+	}
+	function, ok := toolCall["function"].(map[string]any)
+	if !ok || function["name"] != "lookup" || function["arguments"] != `{"city":"Jakarta"}` || toolCall["id"] != "call_lookup" || toolCall["type"] != "function" {
+		t.Fatalf("tool call event = %#v, want lookup function call", toolCall)
+	}
+	assertSpanEvent(t, events[4], telemetry.EventGenAIToolMessage, map[string]string{"content": "sunny", "name": "lookup", "id": "call_lookup"})
 }
 
 func TestLLMToolSpanAttributesIncludeToolContextGroups(t *testing.T) {
@@ -514,6 +544,35 @@ func executeOneToolCall(t *testing.T, tool llm.Tool) ToolExecutionOutput {
 		t.Fatal("PerformToolExecutions closed without output")
 	}
 	return output
+}
+
+func assertSpanEvent(t *testing.T, event sdktrace.Event, wantName string, wantAttrs map[string]string) {
+	t.Helper()
+	if event.Name != wantName {
+		t.Fatalf("event name = %q, want %q", event.Name, wantName)
+	}
+	attrs := spanEventAttributes(event.Attributes)
+	for key, want := range wantAttrs {
+		if attrs[key] != want {
+			t.Fatalf("event %q attr %q = %q, want %q; attrs=%#v", event.Name, key, attrs[key], want, attrs)
+		}
+	}
+}
+
+func spanEventAttributes(attrs []attribute.KeyValue) map[string]string {
+	values := make(map[string]string, len(attrs))
+	for _, attr := range attrs {
+		values[string(attr.Key)] = attr.Value.AsString()
+	}
+	return values
+}
+
+func spanEventAttributeValues(attrs []attribute.KeyValue) map[string]attribute.Value {
+	values := make(map[string]attribute.Value, len(attrs))
+	for _, attr := range attrs {
+		values[string(attr.Key)] = attr.Value
+	}
+	return values
 }
 
 func spanAttributes(attrs []attribute.KeyValue) map[string]string {

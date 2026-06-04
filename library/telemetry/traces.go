@@ -32,12 +32,12 @@ const (
 	AttrInstructions      = "lk.instructions"
 	AttrSpeechInterrupted = "lk.interrupted"
 
-	AttrChatCtx                = "lk.chat_ctx"
-	AttrFunctionTools          = "lk.function_tools"
-	AttrProviderTools          = "lk.provider_tools"
-	AttrToolSets               = "lk.tool_sets"
-	AttrResponseText           = "lk.response.text"
-	AttrResponseFunctionCalls  = "lk.response.function_calls"
+	AttrChatCtx               = "lk.chat_ctx"
+	AttrFunctionTools         = "lk.function_tools"
+	AttrProviderTools         = "lk.provider_tools"
+	AttrToolSets              = "lk.tool_sets"
+	AttrResponseText          = "lk.response.text"
+	AttrResponseFunctionCalls = "lk.response.function_calls"
 
 	AttrFunctionToolID      = "lk.function_tool.id"
 	AttrFunctionToolName    = "lk.function_tool.name"
@@ -49,21 +49,44 @@ const (
 	AttrTTSStreaming = "lk.tts.streaming"
 	AttrTTSLabel     = "lk.tts.label"
 
-	AttrEOUProbability      = "lk.eou.probability"
+	AttrEOUProbability       = "lk.eou.probability"
 	AttrEOUUnlikelyThreshold = "lk.eou.unlikely_threshold"
-	AttrEOUDelay            = "lk.eou.endpointing_delay"
-	AttrEOULanguage         = "lk.eou.language"
-	AttrUserTranscript      = "lk.user_transcript"
+	AttrEOUDelay             = "lk.eou.endpointing_delay"
+	AttrEOULanguage          = "lk.eou.language"
+	AttrUserTranscript       = "lk.user_transcript"
 	AttrTranscriptConfidence = "lk.transcript_confidence"
-	AttrTranscriptionDelay  = "lk.transcription_delay"
-	AttrEndOfTurnDelay      = "lk.end_of_turn_delay"
+	AttrTranscriptionDelay   = "lk.transcription_delay"
+	AttrEndOfTurnDelay       = "lk.end_of_turn_delay"
 
 	AttrGenAIOperationName     = "gen_ai.operation.name"
 	AttrGenAIProviderName      = "gen_ai.provider.name"
 	AttrGenAIRequestModel      = "gen_ai.request.model"
 	AttrGenAIUsageInputTokens  = "gen_ai.usage.input_tokens"
 	AttrGenAIUsageOutputTokens = "gen_ai.usage.output_tokens"
+
+	EventGenAISystemMessage    = "gen_ai.system.message"
+	EventGenAIUserMessage      = "gen_ai.user.message"
+	EventGenAIAssistantMessage = "gen_ai.assistant.message"
+	EventGenAIToolMessage      = "gen_ai.tool.message"
+	EventGenAIChoice           = "gen_ai.choice"
 )
+
+type ChatTraceEvent struct {
+	Name       string
+	Attributes []attribute.KeyValue
+}
+
+func AddChatTraceEvents(span trace.Span, events []ChatTraceEvent) {
+	if span == nil {
+		return
+	}
+	for _, event := range events {
+		if event.Name == "" {
+			continue
+		}
+		span.AddEvent(event.Name, trace.WithAttributes(event.Attributes...))
+	}
+}
 
 func StartSpan(ctx context.Context, name string, opts ...trace.SpanStartOption) (context.Context, trace.Span) {
 	return Tracer.Start(ctx, name, opts...)
