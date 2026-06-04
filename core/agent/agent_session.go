@@ -290,6 +290,21 @@ func (s *AgentSession) SetJobContext(value any) {
 	s.jobContextSet = true
 }
 
+func (s *AgentSession) History() *llm.ChatContext {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.ChatCtx == nil {
+		return llm.NewChatContext()
+	}
+	return s.ChatCtx.Copy()
+}
+
+func (s *AgentSession) SessionOptions() AgentSessionOptions {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.Options
+}
+
 func (s *AgentSession) RecordedEvents() []Event {
 	s.mu.Lock()
 	defer s.mu.Unlock()

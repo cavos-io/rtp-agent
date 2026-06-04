@@ -17,6 +17,50 @@ import (
 	livekitlogger "github.com/livekit/protocol/logger"
 )
 
+func TestAgentSessionHistoryReturnsCopy(t *testing.T) {
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	session.ChatCtx.Append(&llm.ChatMessage{ID: "msg_1", Role: llm.ChatRoleUser})
+
+	history := session.History()
+	if history == session.ChatCtx {
+		t.Fatal("History() returned internal chat context pointer, want copy")
+	}
+	if got := len(history.Items); got != 1 {
+		t.Fatalf("History() item count = %d, want 1", got)
+	}
+	history.Append(&llm.ChatMessage{ID: "msg_2", Role: llm.ChatRoleAssistant})
+	if got := len(session.ChatCtx.Items); got != 1 {
+		t.Fatalf("mutating History() result changed session ChatCtx item count to %d, want 1", got)
+	}
+}
+
+func TestAgentSessionHistoryHandlesNilChatContext(t *testing.T) {
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	session.ChatCtx = nil
+
+	history := session.History()
+	if history == nil {
+		t.Fatal("History() = nil, want empty chat context")
+	}
+	if got := len(history.Items); got != 0 {
+		t.Fatalf("History() item count = %d, want 0", got)
+	}
+}
+
+func TestAgentSessionOptionsReturnsSnapshot(t *testing.T) {
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{MaxToolSteps: 7})
+
+	options := session.SessionOptions()
+	if options.MaxToolSteps != 7 {
+		t.Fatalf("SessionOptions().MaxToolSteps = %d, want 7", options.MaxToolSteps)
+	}
+
+	options.MaxToolSteps = 99
+	if session.Options.MaxToolSteps != 7 {
+		t.Fatalf("mutating SessionOptions() result changed session option to %d, want 7", session.Options.MaxToolSteps)
+	}
+}
+
 func TestAgentSessionGenerateReplyReturnsScheduledSpeechHandle(t *testing.T) {
 	agent := NewAgent("test")
 	session := NewAgentSession(agent, nil, AgentSessionOptions{AllowInterruptions: true})
