@@ -42,6 +42,8 @@ type AudioConfig struct {
 	Source      AudioSource
 	Volume      float64
 	Probability float64
+	FadeIn      float64
+	FadeOut     float64
 }
 
 type BackgroundAudioPlayer struct {
@@ -110,27 +112,110 @@ func (p *BackgroundAudioPlayer) selectSoundFromList(sounds []AudioConfig) *Audio
 	return &sounds[len(sounds)-1]
 }
 
-func (p *BackgroundAudioPlayer) normalizeSoundSource(source interface{}) (AudioSource, float64) {
+func (p *BackgroundAudioPlayer) normalizeSoundSource(source interface{}) (AudioSource, AudioConfig) {
 	if source == nil {
-		return nil, 0
+		return nil, AudioConfig{}
 	}
 
 	switch s := source.(type) {
 	case BuiltinAudioClip:
-		return s.Path(), 1.0
+		path := s.Path()
+		return path, AudioConfig{Source: path, Volume: 1.0, Probability: 1.0}
 	case []AudioConfig:
 		selected := p.selectSoundFromList(s)
 		if selected == nil {
-			return nil, 0
+			return nil, AudioConfig{}
 		}
-		return p.normalizeSoundSource(selected.Source)
+		return p.normalizeSoundSource(*selected)
 	case AudioConfig:
-		src, _ := p.normalizeSoundSource(s.Source)
-		return src, s.Volume
+		src, cfg := p.normalizeSoundSource(s.Source)
+		cfg.Source = src
+		cfg.Volume = s.Volume
+		cfg.Probability = s.Probability
+		cfg.FadeIn = s.FadeIn
+		cfg.FadeOut = s.FadeOut
+		return src, cfg
 	case string, <-chan *model.AudioFrame:
-		return s, 1.0
+		return s, AudioConfig{Source: s, Volume: 1.0, Probability: 1.0}
 	}
-	return nil, 0
+	return nil, AudioConfig{}
+}
+
+func backgroundFrameGain(startSample int, samples int, stopSample *int, fadeIn float64, fadeOut float64, sampleRate int, volume float64) []float64 {
+	fadeInSamples := 0
+	if fadeIn > 0 && sampleRate > 0 {
+		fadeInSamples = int(fadeIn * float64(sampleRate))
+	}
+	fadeOutSamples := 0
+	if fadeOut > 0 && sampleRate > 0 {
+		fadeOutSamples = int(fadeOut * float64(sampleRate))
+	}
+	needsFadeIn := fadeInSamples > 0 && startSample < fadeInSamples
+	needsFadeOut := fadeOutSamples > 0 && stopSample != nil
+	if !needsFadeIn && !needsFadeOut && volume == 1.0 {
+		return nil
+	}
+
+	gain := make([]float64, samples)
+	for i := range gain {
+		value := volume
+		idx := startSample + i
+		if needsFadeIn {
+			phase := clampFloat(float64(idx)/float64(fadeInSamples), 0, 1)
+			value *= math.Sin(phase * (math.Pi / 2))
+		}
+		if needsFadeOut {
+			phase := clampFloat(float64(idx-*stopSample)/float64(fadeOutSamples), 0, 1)
+			value *= math.Cos(phase * (math.Pi / 2))
+		}
+		gain[i] = value
+	}
+	return gain
+}
+
+func applyBackgroundFrameGain(frame *model.AudioFrame, gain []float64) *model.AudioFrame {
+	if frame == nil || gain == nil {
+		return frame
+	}
+	channels := int(frame.NumChannels)
+	if channels <= 0 {
+		channels = 1
+	}
+	out := &model.AudioFrame{
+		Data:              make([]byte, len(frame.Data)),
+		SampleRate:        frame.SampleRate,
+		NumChannels:       frame.NumChannels,
+		SamplesPerChannel: frame.SamplesPerChannel,
+	}
+	copy(out.Data, frame.Data)
+	for sampleIndex := 0; sampleIndex < len(gain); sampleIndex++ {
+		for ch := 0; ch < channels; ch++ {
+			byteIndex := (sampleIndex*channels + ch) * 2
+			if byteIndex+1 >= len(out.Data) {
+				break
+			}
+			sample := int16(out.Data[byteIndex]) | int16(out.Data[byteIndex+1])<<8
+			value := float64(sample) * gain[sampleIndex]
+			if value > 32767 {
+				value = 32767
+			} else if value < -32768 {
+				value = -32768
+			}
+			out.Data[byteIndex] = byte(int16(value))
+			out.Data[byteIndex+1] = byte(int16(value) >> 8)
+		}
+	}
+	return out
+}
+
+func clampFloat(value float64, minValue float64, maxValue float64) float64 {
+	if value < minValue {
+		return minValue
+	}
+	if value > maxValue {
+		return maxValue
+	}
+	return value
 }
 
 type PlayHandle struct {
@@ -183,7 +268,7 @@ func (p *BackgroundAudioPlayer) Play(audio interface{}, loop bool) *PlayHandle {
 		return handle
 	}
 
-	soundSource, volume := p.normalizeSoundSource(audio)
+	soundSource, cfg := p.normalizeSoundSource(audio)
 	if soundSource == nil {
 		handle := newPlayHandle()
 		handle.markPlayoutDone()
@@ -201,11 +286,11 @@ func (p *BackgroundAudioPlayer) Play(audio interface{}, loop bool) *PlayHandle {
 
 	handle := newPlayHandle()
 	p.playTasks.Add(1)
-	go p.playTask(handle, soundSource, volume, loop)
+	go p.playTask(handle, soundSource, cfg, loop)
 	return handle
 }
 
-func (p *BackgroundAudioPlayer) playTask(handle *PlayHandle, sound AudioSource, volume float64, loop bool) {
+func (p *BackgroundAudioPlayer) playTask(handle *PlayHandle, sound AudioSource, cfg AudioConfig, loop bool) {
 	defer p.playTasks.Done()
 	defer handle.markPlayoutDone()
 
@@ -233,35 +318,46 @@ func (p *BackgroundAudioPlayer) playTask(handle *PlayHandle, sound AudioSource, 
 		close(processedStream)
 	}()
 
+	frameStartSample := 0
+	lastSampleRate := 48000
+	var stopSample *int
+	stopCh := handle.stopCh
 	for {
+		if stopSample != nil && cfg.FadeOut > 0 {
+			fadeOutSamples := int(cfg.FadeOut * float64(lastSampleRate))
+			if frameStartSample >= *stopSample+fadeOutSamples {
+				return
+			}
+		}
 		select {
-		case <-handle.stopCh:
-			return
+		case <-stopCh:
+			if cfg.FadeOut <= 0 {
+				return
+			}
+			stop := frameStartSample
+			stopSample = &stop
+			stopCh = nil
+			continue
 		case <-p.mixerTaskCtx.Done():
 			return
 		case frame, ok := <-stream:
 			if !ok {
 				return
 			}
-			if volume != 1.0 {
-				data := make([]byte, len(frame.Data))
-				volFactor := math.Pow(10, math.Log10(volume))
-				for i := 0; i < len(frame.Data); i += 2 {
-					sample := int16(frame.Data[i]) | int16(frame.Data[i+1])<<8
-					val := float64(sample) * volFactor
-					if val > 32767 {
-						val = 32767
-					} else if val < -32768 {
-						val = -32768
-					}
-					data[i] = byte(int16(val))
-					data[i+1] = byte(int16(val) >> 8)
-				}
-				frame.Data = data
+			if frame.SampleRate > 0 {
+				lastSampleRate = int(frame.SampleRate)
 			}
+			gain := backgroundFrameGain(frameStartSample, int(frame.SamplesPerChannel), stopSample, cfg.FadeIn, cfg.FadeOut, lastSampleRate, cfg.Volume)
+			frame = applyBackgroundFrameGain(frame, gain)
+			frameStartSample += int(frame.SamplesPerChannel)
 			select {
-			case <-handle.stopCh:
-				return
+			case <-stopCh:
+				if cfg.FadeOut <= 0 {
+					return
+				}
+				stop := frameStartSample
+				stopSample = &stop
+				stopCh = nil
 			case processedStream <- frame:
 			}
 		}
@@ -299,13 +395,14 @@ func (p *BackgroundAudioPlayer) Start(room *lksdk.Room, agentSession *AgentSessi
 	go p.runMixerTask(track)
 
 	if p.ambientSound != nil {
-		source, vol := p.normalizeSoundSource(p.ambientSound)
+		source, cfg := p.normalizeSoundSource(p.ambientSound)
 		if source != nil {
+			cfg.Source = source
 			switch source.(type) {
 			case string:
-				p.ambientHandle = p.Play(AudioConfig{Source: source, Volume: vol}, true)
+				p.ambientHandle = p.Play(cfg, true)
 			default:
-				p.ambientHandle = p.Play(AudioConfig{Source: source, Volume: vol}, false)
+				p.ambientHandle = p.Play(cfg, false)
 			}
 		}
 	}
