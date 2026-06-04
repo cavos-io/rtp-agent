@@ -144,6 +144,28 @@ type UsageSummary struct {
 	STTAudioDuration          float64
 }
 
+func (s UsageSummary) LLMInputTokens() int {
+	return s.LLMPromptTokens
+}
+
+func (s *UsageSummary) SetLLMInputTokens(value int) {
+	if s == nil {
+		return
+	}
+	s.LLMPromptTokens = value
+}
+
+func (s UsageSummary) LLMOutputTokens() int {
+	return s.LLMCompletionTokens
+}
+
+func (s *UsageSummary) SetLLMOutputTokens(value int) {
+	if s == nil {
+		return
+	}
+	s.LLMCompletionTokens = value
+}
+
 type UsageCollector struct {
 	summary UsageSummary
 	mu      sync.Mutex
