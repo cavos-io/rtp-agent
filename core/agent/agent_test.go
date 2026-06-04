@@ -60,6 +60,66 @@ func TestAgentChatContextHandlesNilAgentContext(t *testing.T) {
 	}
 }
 
+func TestAgentTaskWaitReturnsCompletedResult(t *testing.T) {
+	task := NewAgentTask[string]("collect name")
+	if err := task.Complete("done"); err != nil {
+		t.Fatalf("Complete() error = %v", err)
+	}
+
+	got, err := task.Wait(context.Background())
+	if err != nil {
+		t.Fatalf("Wait() error = %v", err)
+	}
+	if got != "done" {
+		t.Fatalf("Wait() result = %q, want done", got)
+	}
+}
+
+func TestAgentTaskWaitReturnsFailure(t *testing.T) {
+	task := NewAgentTask[string]("collect name")
+	wantErr := errors.New("failed")
+	if err := task.Fail(wantErr); err != nil {
+		t.Fatalf("Fail() error = %v", err)
+	}
+
+	got, err := task.Wait(context.Background())
+	if !errors.Is(err, wantErr) {
+		t.Fatalf("Wait() error = %v, want %v", err, wantErr)
+	}
+	if got != "" {
+		t.Fatalf("Wait() result = %q, want zero value", got)
+	}
+}
+
+func TestAgentTaskWaitReturnsContextError(t *testing.T) {
+	task := NewAgentTask[string]("collect name")
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	got, err := task.Wait(ctx)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("Wait() error = %v, want context canceled", err)
+	}
+	if got != "" {
+		t.Fatalf("Wait() result = %q, want zero value", got)
+	}
+}
+
+func TestAgentTaskWaitAnyUsesTypedWait(t *testing.T) {
+	task := NewAgentTask[int]("collect number")
+	if err := task.Complete(7); err != nil {
+		t.Fatalf("Complete() error = %v", err)
+	}
+
+	got, err := task.WaitAny(context.Background())
+	if err != nil {
+		t.Fatalf("WaitAny() error = %v", err)
+	}
+	if got != 7 {
+		t.Fatalf("WaitAny() result = %#v, want 7", got)
+	}
+}
+
 func TestAgentUpdateChatContextFiltersFunctionItemsToAgentTools(t *testing.T) {
 	agent := NewAgent("help")
 	agent.Tools = []llm.Tool{&agentTestTool{name: "lookup"}}

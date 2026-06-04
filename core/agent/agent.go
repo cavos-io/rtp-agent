@@ -254,7 +254,25 @@ func (t *AgentTask[T]) Cancel() {
 	_ = t.Fail(llm.NewToolError("AgentTask " + t.ID + " is cancelled"))
 }
 
+func (t *AgentTask[T]) Wait(ctx context.Context) (T, error) {
+	var zero T
+	if t == nil {
+		return zero, errors.New("agent task is nil")
+	}
+	select {
+	case res := <-t.Result:
+		return res, nil
+	case err := <-t.Err:
+		return zero, err
+	case <-ctx.Done():
+		return zero, ctx.Err()
+	}
+}
+
 func (t *AgentTask[T]) WaitAny(ctx context.Context) (any, error) {
+	if t == nil {
+		return nil, errors.New("agent task is nil")
+	}
 	select {
 	case res := <-t.Result:
 		return res, nil
