@@ -191,6 +191,7 @@ type AgentTask[T any] struct {
 	doneCh    chan struct{}
 	mu        sync.Mutex
 	completed bool
+	waited    bool
 }
 
 type TaskWaiter interface {
@@ -198,6 +199,7 @@ type TaskWaiter interface {
 }
 
 var ErrAgentTaskAlreadyDone = errors.New("agent task is already done")
+var ErrAgentTaskAlreadyWaited = errors.New("agent task is not re-entrant, wait only once")
 
 func NewAgentTask[T any](instructions string) *AgentTask[T] {
 	baseAgent := NewAgent(instructions)
@@ -254,10 +256,23 @@ func (t *AgentTask[T]) Cancel() {
 	_ = t.Fail(llm.NewToolError("AgentTask " + t.ID + " is cancelled"))
 }
 
+func (t *AgentTask[T]) claimWait() error {
+	if t == nil {
+		return errors.New("agent task is nil")
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.waited {
+		return ErrAgentTaskAlreadyWaited
+	}
+	t.waited = true
+	return nil
+}
+
 func (t *AgentTask[T]) Wait(ctx context.Context) (T, error) {
 	var zero T
-	if t == nil {
-		return zero, errors.New("agent task is nil")
+	if err := t.claimWait(); err != nil {
+		return zero, err
 	}
 	select {
 	case res := <-t.Result:
@@ -270,8 +285,8 @@ func (t *AgentTask[T]) Wait(ctx context.Context) (T, error) {
 }
 
 func (t *AgentTask[T]) WaitAny(ctx context.Context) (any, error) {
-	if t == nil {
-		return nil, errors.New("agent task is nil")
+	if err := t.claimWait(); err != nil {
+		return nil, err
 	}
 	select {
 	case res := <-t.Result:

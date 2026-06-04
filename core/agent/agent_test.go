@@ -105,7 +105,7 @@ func TestAgentTaskWaitReturnsContextError(t *testing.T) {
 	}
 }
 
-func TestAgentTaskWaitAnyUsesTypedWait(t *testing.T) {
+func TestAgentTaskWaitAnyReturnsCompletedResult(t *testing.T) {
 	task := NewAgentTask[int]("collect number")
 	if err := task.Complete(7); err != nil {
 		t.Fatalf("Complete() error = %v", err)
@@ -117,6 +117,42 @@ func TestAgentTaskWaitAnyUsesTypedWait(t *testing.T) {
 	}
 	if got != 7 {
 		t.Fatalf("WaitAny() result = %#v, want 7", got)
+	}
+}
+
+func TestAgentTaskWaitIsNotReentrant(t *testing.T) {
+	task := NewAgentTask[string]("collect name")
+	if err := task.Complete("done"); err != nil {
+		t.Fatalf("Complete() error = %v", err)
+	}
+	if _, err := task.Wait(context.Background()); err != nil {
+		t.Fatalf("first Wait() error = %v", err)
+	}
+
+	got, err := task.Wait(context.Background())
+	if !errors.Is(err, ErrAgentTaskAlreadyWaited) {
+		t.Fatalf("second Wait() error = %v, want ErrAgentTaskAlreadyWaited", err)
+	}
+	if got != "" {
+		t.Fatalf("second Wait() result = %q, want zero value", got)
+	}
+}
+
+func TestAgentTaskWaitAnyIsNotReentrant(t *testing.T) {
+	task := NewAgentTask[string]("collect name")
+	if err := task.Complete("done"); err != nil {
+		t.Fatalf("Complete() error = %v", err)
+	}
+	if _, err := task.WaitAny(context.Background()); err != nil {
+		t.Fatalf("first WaitAny() error = %v", err)
+	}
+
+	got, err := task.WaitAny(context.Background())
+	if !errors.Is(err, ErrAgentTaskAlreadyWaited) {
+		t.Fatalf("second WaitAny() error = %v, want ErrAgentTaskAlreadyWaited", err)
+	}
+	if got != nil {
+		t.Fatalf("second WaitAny() result = %#v, want nil", got)
 	}
 }
 
