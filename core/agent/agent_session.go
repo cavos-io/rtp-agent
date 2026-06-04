@@ -166,7 +166,8 @@ type AgentSession struct {
 	Assistant     SessionAssistant
 	Room          *lksdk.Room
 
-	MetricsCollector *telemetry.UsageCollector
+	MetricsCollector    *telemetry.UsageCollector
+	ModelUsageCollector *telemetry.ModelUsageCollector
 
 	UserState  UserState
 	AgentState AgentState
@@ -391,6 +392,7 @@ func NewAgentSession(agent AgentInterface, room *lksdk.Room, opts AgentSessionOp
 		ChatCtx:             llm.NewChatContext(),
 		Tools:               make([]llm.Tool, 0),
 		MetricsCollector:    telemetry.NewUsageCollector(),
+		ModelUsageCollector: telemetry.NewModelUsageCollector(),
 		UserState:           UserStateListening,
 		AgentState:          AgentStateInitializing,
 		AgentStateChangedCh: make(chan AgentStateChangedEvent, 10),
@@ -790,6 +792,9 @@ func (s *AgentSession) EmitMetricsCollected(metrics telemetry.AgentMetrics) {
 		s.MetricsCollector.Collect(metrics)
 		usage = s.MetricsCollector.GetSummary()
 	}
+	if s.ModelUsageCollector != nil {
+		s.ModelUsageCollector.Collect(metrics)
+	}
 	ch := s.metricsCollectedEvents()
 	ev := MetricsCollectedEvent{
 		Metrics:   metrics,
@@ -810,6 +815,13 @@ func (s *AgentSession) Usage() telemetry.UsageSummary {
 		return telemetry.UsageSummary{}
 	}
 	return s.MetricsCollector.GetSummary()
+}
+
+func (s *AgentSession) ModelUsage() telemetry.AgentSessionUsage {
+	if s.ModelUsageCollector == nil {
+		return telemetry.AgentSessionUsage{}
+	}
+	return s.ModelUsageCollector.Usage()
 }
 
 func (s *AgentSession) metricsCollectedEvents() chan MetricsCollectedEvent {

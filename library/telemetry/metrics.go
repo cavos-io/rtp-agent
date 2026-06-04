@@ -39,6 +39,8 @@ type STTMetrics struct {
 	Timestamp     time.Time
 	Duration      float64
 	AudioDuration float64
+	InputTokens   int
+	OutputTokens  int
 	Streamed      bool
 	Metadata      *Metadata
 }
@@ -125,6 +127,206 @@ type RealtimeModelMetrics struct {
 }
 
 func (m *RealtimeModelMetrics) GetType() string { return "realtime_model_metrics" }
+
+type ModelUsage interface {
+	GetType() string
+}
+
+type LLMModelUsage struct {
+	Type                   string  `json:"type"`
+	Provider               string  `json:"provider"`
+	Model                  string  `json:"model"`
+	InputTokens            int     `json:"input_tokens"`
+	InputCachedTokens      int     `json:"input_cached_tokens"`
+	InputAudioTokens       int     `json:"input_audio_tokens"`
+	InputCachedAudioTokens int     `json:"input_cached_audio_tokens"`
+	InputTextTokens        int     `json:"input_text_tokens"`
+	InputCachedTextTokens  int     `json:"input_cached_text_tokens"`
+	InputImageTokens       int     `json:"input_image_tokens"`
+	InputCachedImageTokens int     `json:"input_cached_image_tokens"`
+	OutputTokens           int     `json:"output_tokens"`
+	OutputAudioTokens      int     `json:"output_audio_tokens"`
+	OutputTextTokens       int     `json:"output_text_tokens"`
+	SessionDuration        float64 `json:"session_duration"`
+}
+
+func (u *LLMModelUsage) GetType() string {
+	if u == nil || u.Type == "" {
+		return "llm_usage"
+	}
+	return u.Type
+}
+
+type TTSModelUsage struct {
+	Type            string  `json:"type"`
+	Provider        string  `json:"provider"`
+	Model           string  `json:"model"`
+	InputTokens     int     `json:"input_tokens"`
+	OutputTokens    int     `json:"output_tokens"`
+	CharactersCount int     `json:"characters_count"`
+	AudioDuration   float64 `json:"audio_duration"`
+}
+
+func (u *TTSModelUsage) GetType() string {
+	if u == nil || u.Type == "" {
+		return "tts_usage"
+	}
+	return u.Type
+}
+
+type STTModelUsage struct {
+	Type          string  `json:"type"`
+	Provider      string  `json:"provider"`
+	Model         string  `json:"model"`
+	InputTokens   int     `json:"input_tokens"`
+	OutputTokens  int     `json:"output_tokens"`
+	AudioDuration float64 `json:"audio_duration"`
+}
+
+func (u *STTModelUsage) GetType() string {
+	if u == nil || u.Type == "" {
+		return "stt_usage"
+	}
+	return u.Type
+}
+
+type AgentSessionUsage struct {
+	ModelUsage []ModelUsage `json:"model_usage"`
+}
+
+type ModelUsageCollector struct {
+	llmUsage map[[2]string]*LLMModelUsage
+	ttsUsage map[[2]string]*TTSModelUsage
+	sttUsage map[[2]string]*STTModelUsage
+	mu       sync.Mutex
+}
+
+func NewModelUsageCollector() *ModelUsageCollector {
+	return &ModelUsageCollector{
+		llmUsage: make(map[[2]string]*LLMModelUsage),
+		ttsUsage: make(map[[2]string]*TTSModelUsage),
+		sttUsage: make(map[[2]string]*STTModelUsage),
+	}
+}
+
+func (c *ModelUsageCollector) Collect(metrics AgentMetrics) {
+	if c == nil || metrics == nil {
+		return
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	provider, model := extractMetricsProviderModel(metrics)
+	switch m := metrics.(type) {
+	case *LLMMetrics:
+		usage := c.llmUsageFor(provider, model)
+		usage.InputTokens += m.PromptTokens
+		usage.InputCachedTokens += m.PromptCachedTokens
+		usage.OutputTokens += m.CompletionTokens
+	case *RealtimeModelMetrics:
+		usage := c.llmUsageFor(provider, model)
+		usage.InputTokens += m.InputTokens
+		usage.InputCachedTokens += m.InputTokenDetails.CachedTokens
+		usage.InputTextTokens += m.InputTokenDetails.TextTokens
+		usage.InputImageTokens += m.InputTokenDetails.ImageTokens
+		usage.InputAudioTokens += m.InputTokenDetails.AudioTokens
+		if m.InputTokenDetails.CachedTokensDetails != nil {
+			usage.InputCachedTextTokens += m.InputTokenDetails.CachedTokensDetails.TextTokens
+			usage.InputCachedImageTokens += m.InputTokenDetails.CachedTokensDetails.ImageTokens
+			usage.InputCachedAudioTokens += m.InputTokenDetails.CachedTokensDetails.AudioTokens
+		}
+		usage.OutputTextTokens += m.OutputTokenDetails.TextTokens
+		usage.OutputAudioTokens += m.OutputTokenDetails.AudioTokens
+		usage.OutputTokens += m.OutputTokens
+		usage.SessionDuration += m.Duration
+	case *TTSMetrics:
+		usage := c.ttsUsageFor(provider, model)
+		usage.InputTokens += m.InputTokens
+		usage.OutputTokens += m.OutputTokens
+		usage.CharactersCount += m.CharactersCount
+		usage.AudioDuration += m.AudioDuration
+	case *STTMetrics:
+		usage := c.sttUsageFor(provider, model)
+		usage.InputTokens += m.InputTokens
+		usage.OutputTokens += m.OutputTokens
+		usage.AudioDuration += m.AudioDuration
+	}
+}
+
+func (c *ModelUsageCollector) Flatten() []ModelUsage {
+	if c == nil {
+		return nil
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	result := make([]ModelUsage, 0, len(c.llmUsage)+len(c.ttsUsage)+len(c.sttUsage))
+	for _, usage := range c.llmUsage {
+		copy := *usage
+		result = append(result, &copy)
+	}
+	for _, usage := range c.ttsUsage {
+		copy := *usage
+		result = append(result, &copy)
+	}
+	for _, usage := range c.sttUsage {
+		copy := *usage
+		result = append(result, &copy)
+	}
+	return result
+}
+
+func (c *ModelUsageCollector) Usage() AgentSessionUsage {
+	return AgentSessionUsage{ModelUsage: c.Flatten()}
+}
+
+func (c *ModelUsageCollector) llmUsageFor(provider, model string) *LLMModelUsage {
+	key := [2]string{provider, model}
+	usage, ok := c.llmUsage[key]
+	if !ok {
+		usage = &LLMModelUsage{Type: "llm_usage", Provider: provider, Model: model}
+		c.llmUsage[key] = usage
+	}
+	return usage
+}
+
+func (c *ModelUsageCollector) ttsUsageFor(provider, model string) *TTSModelUsage {
+	key := [2]string{provider, model}
+	usage, ok := c.ttsUsage[key]
+	if !ok {
+		usage = &TTSModelUsage{Type: "tts_usage", Provider: provider, Model: model}
+		c.ttsUsage[key] = usage
+	}
+	return usage
+}
+
+func (c *ModelUsageCollector) sttUsageFor(provider, model string) *STTModelUsage {
+	key := [2]string{provider, model}
+	usage, ok := c.sttUsage[key]
+	if !ok {
+		usage = &STTModelUsage{Type: "stt_usage", Provider: provider, Model: model}
+		c.sttUsage[key] = usage
+	}
+	return usage
+}
+
+func extractMetricsProviderModel(metrics AgentMetrics) (string, string) {
+	var metadata *Metadata
+	switch m := metrics.(type) {
+	case *LLMMetrics:
+		metadata = m.Metadata
+	case *RealtimeModelMetrics:
+		metadata = m.Metadata
+	case *TTSMetrics:
+		metadata = m.Metadata
+	case *STTMetrics:
+		metadata = m.Metadata
+	}
+	if metadata == nil {
+		return "", ""
+	}
+	return metadata.ModelProvider, metadata.ModelName
+}
 
 type UsageSummary struct {
 	LLMPromptTokens           int
