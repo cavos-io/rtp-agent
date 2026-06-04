@@ -38,6 +38,7 @@ type SessionReport struct {
 	RealtimeProvider        string                  `json:"realtime_provider,omitempty"`
 	Timestamp               float64                 `json:"timestamp"`
 	Usage                   *telemetry.UsageSummary `json:"usage,omitempty"`
+	ModelUsage              []telemetry.ModelUsage  `json:"model_usage,omitempty"`
 	SDKVersion              string                  `json:"sdk_version"`
 	Tagger                  *Tagger                 `json:"-"`
 }
@@ -62,6 +63,9 @@ func NewSessionReport(sessions ...*AgentSession) *SessionReport {
 	usage := session.Usage()
 	if !usageSummaryIsZero(usage) {
 		report.Usage = &usage
+	}
+	if modelUsage := session.ModelUsage(); len(modelUsage.ModelUsage) > 0 {
+		report.ModelUsage = modelUsage.ModelUsage
 	}
 	if session.LLM != nil {
 		report.LLMModel = llm.Model(session.LLM)
@@ -108,6 +112,7 @@ func (r *SessionReport) ToDict() map[string]any {
 		"chat_history":               chatHistory,
 		"timestamp":                  r.Timestamp,
 		"usage":                      usageSummaryToDict(r.Usage),
+		"model_usage":                modelUsageToDict(r.ModelUsage),
 		"sdk_version":                r.SDKVersion,
 	}
 	if r.LLMModel != "" && r.LLMModel != "unknown" {
@@ -282,6 +287,70 @@ func usageSummaryToDict(usage *telemetry.UsageSummary) any {
 	addFloat("tts_audio_duration", usage.TTSAudioDuration)
 	addFloat("stt_audio_duration", usage.STTAudioDuration)
 	return []map[string]any{out}
+}
+
+func modelUsageToDict(modelUsage []telemetry.ModelUsage) any {
+	if len(modelUsage) == 0 {
+		return nil
+	}
+	out := make([]map[string]any, 0, len(modelUsage))
+	for _, usage := range modelUsage {
+		if usage == nil {
+			continue
+		}
+		entry := map[string]any{"type": usage.GetType()}
+		switch u := usage.(type) {
+		case *telemetry.LLMModelUsage:
+			addModelUsageBase(entry, u.Provider, u.Model)
+			addIntReportField(entry, "input_tokens", u.InputTokens)
+			addIntReportField(entry, "input_cached_tokens", u.InputCachedTokens)
+			addIntReportField(entry, "input_audio_tokens", u.InputAudioTokens)
+			addIntReportField(entry, "input_cached_audio_tokens", u.InputCachedAudioTokens)
+			addIntReportField(entry, "input_text_tokens", u.InputTextTokens)
+			addIntReportField(entry, "input_cached_text_tokens", u.InputCachedTextTokens)
+			addIntReportField(entry, "input_image_tokens", u.InputImageTokens)
+			addIntReportField(entry, "input_cached_image_tokens", u.InputCachedImageTokens)
+			addIntReportField(entry, "output_tokens", u.OutputTokens)
+			addIntReportField(entry, "output_audio_tokens", u.OutputAudioTokens)
+			addIntReportField(entry, "output_text_tokens", u.OutputTextTokens)
+			addFloatReportField(entry, "session_duration", u.SessionDuration)
+		case *telemetry.TTSModelUsage:
+			addModelUsageBase(entry, u.Provider, u.Model)
+			addIntReportField(entry, "input_tokens", u.InputTokens)
+			addIntReportField(entry, "output_tokens", u.OutputTokens)
+			addIntReportField(entry, "characters_count", u.CharactersCount)
+			addFloatReportField(entry, "audio_duration", u.AudioDuration)
+		case *telemetry.STTModelUsage:
+			addModelUsageBase(entry, u.Provider, u.Model)
+			addIntReportField(entry, "input_tokens", u.InputTokens)
+			addIntReportField(entry, "output_tokens", u.OutputTokens)
+			addFloatReportField(entry, "audio_duration", u.AudioDuration)
+		default:
+			continue
+		}
+		out = append(out, entry)
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+func addModelUsageBase(out map[string]any, provider string, model string) {
+	out["provider"] = provider
+	out["model"] = model
+}
+
+func addIntReportField(out map[string]any, key string, value int) {
+	if value != 0 {
+		out[key] = value
+	}
+}
+
+func addFloatReportField(out map[string]any, key string, value float64) {
+	if value != 0 {
+		out[key] = value
+	}
 }
 
 func addTaggerReportFields(out map[string]any, tagger *Tagger) {

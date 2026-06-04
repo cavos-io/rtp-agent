@@ -682,6 +682,11 @@ func (a *AgentActivity) nextSpeechIndexLocked() int {
 func (a *AgentActivity) OnStartOfSpeech(ev *vad.VADEvent) {
 	a.speaking = true
 	a.sttEOSReceived = false
+	if endpointing := a.endpointing(); endpointing != nil {
+		startedAt := vadEventTimestamp(ev)
+		overlapping := a.Session != nil && a.Session.AgentState == AgentStateSpeaking
+		endpointing.OnStartOfSpeech(startedAt, overlapping)
+	}
 	logger.Logger.Infow("Start of speech detected")
 
 	// Cancel pending EOU detection
@@ -695,6 +700,9 @@ func (a *AgentActivity) OnStartOfSpeech(ev *vad.VADEvent) {
 
 func (a *AgentActivity) OnEndOfSpeech(ev *vad.VADEvent) {
 	a.speaking = false
+	if endpointing := a.endpointing(); endpointing != nil {
+		endpointing.OnEndOfSpeech(vadEventTimestamp(ev), false)
+	}
 	logger.Logger.Infow("End of speech detected")
 
 	if a.turnDetectionMode() == TurnDetectionModeVAD {
@@ -1102,6 +1110,9 @@ func (a *AgentActivity) minEndpointingDelay() float64 {
 	if a.Agent.MinEndpointingDelay > 0 {
 		return a.Agent.MinEndpointingDelay
 	}
+	if endpointing := a.endpointing(); endpointing != nil {
+		return endpointing.MinDelay()
+	}
 	if a.Session != nil && a.Session.Options.MinEndpointingDelay > 0 {
 		return a.Session.Options.MinEndpointingDelay
 	}
@@ -1112,8 +1123,25 @@ func (a *AgentActivity) maxEndpointingDelay() float64 {
 	if a.Agent.MaxEndpointingDelay > 0 {
 		return a.Agent.MaxEndpointingDelay
 	}
+	if endpointing := a.endpointing(); endpointing != nil {
+		return endpointing.MaxDelay()
+	}
 	if a.Session != nil && a.Session.Options.MaxEndpointingDelay > 0 {
 		return a.Session.Options.MaxEndpointingDelay
 	}
 	return 3.0
+}
+
+func (a *AgentActivity) endpointing() Endpointing {
+	if a.Session == nil {
+		return nil
+	}
+	return a.Session.Options.Endpointing
+}
+
+func vadEventTimestamp(ev *vad.VADEvent) float64 {
+	if ev == nil {
+		return float64(time.Now().UnixNano()) / float64(time.Second)
+	}
+	return ev.Timestamp
 }

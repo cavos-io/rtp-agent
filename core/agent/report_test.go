@@ -182,6 +182,49 @@ func TestSessionReportToDictIncludesRealtimeModelMetadata(t *testing.T) {
 	}
 }
 
+func TestSessionReportToDictIncludesModelUsage(t *testing.T) {
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	session.EmitMetricsCollected(&telemetry.LLMMetrics{
+		PromptTokens:     3,
+		CompletionTokens: 5,
+		Metadata:         &telemetry.Metadata{ModelProvider: "openai", ModelName: "gpt-report"},
+	})
+	session.EmitMetricsCollected(&telemetry.TTSMetrics{
+		CharactersCount: 7,
+		AudioDuration:   1.25,
+		Metadata:        &telemetry.Metadata{ModelProvider: "cartesia", ModelName: "sonic"},
+	})
+
+	data := NewSessionReport(session).ToDict()
+	modelUsage, ok := data["model_usage"].([]map[string]any)
+	if !ok {
+		t.Fatalf("model_usage = %T, want []map[string]any", data["model_usage"])
+	}
+	llmUsage := findReportModelUsage(modelUsage, "llm_usage", "openai", "gpt-report")
+	if llmUsage == nil {
+		t.Fatalf("missing openai/gpt-report LLM usage in %#v", modelUsage)
+	}
+	if llmUsage["input_tokens"] != 3 || llmUsage["output_tokens"] != 5 {
+		t.Fatalf("LLM model usage = %#v, want input/output tokens", llmUsage)
+	}
+	ttsUsage := findReportModelUsage(modelUsage, "tts_usage", "cartesia", "sonic")
+	if ttsUsage == nil {
+		t.Fatalf("missing cartesia/sonic TTS usage in %#v", modelUsage)
+	}
+	if ttsUsage["characters_count"] != 7 || ttsUsage["audio_duration"] != 1.25 {
+		t.Fatalf("TTS model usage = %#v, want character/audio counts", ttsUsage)
+	}
+}
+
+func findReportModelUsage(entries []map[string]any, typ string, provider string, model string) map[string]any {
+	for _, entry := range entries {
+		if entry["type"] == typ && entry["provider"] == provider && entry["model"] == model {
+			return entry
+		}
+	}
+	return nil
+}
+
 func TestSessionReportToDictIncludesTaggerMetadata(t *testing.T) {
 	report := NewSessionReport()
 	tagger := NewTagger()

@@ -42,6 +42,8 @@ type AgentSessionOptions struct {
 	MinInterruptionWords          int
 	MinEndpointingDelay           float64
 	MaxEndpointingDelay           float64
+	EndpointingMode               string
+	Endpointing                   Endpointing
 	MaxToolSteps                  int
 	UserAwayTimeout               float64
 	FalseInterruptionTimeout      float64
@@ -68,6 +70,8 @@ type AgentSessionOptions struct {
 type AgentSessionUpdateOptions struct {
 	MinEndpointingDelay *float64
 	MaxEndpointingDelay *float64
+	EndpointingMode     *string
+	Endpointing         Endpointing
 	TurnDetection       *TurnDetectionMode
 	ToolChoice          *llm.ToolChoice
 }
@@ -166,7 +170,8 @@ type AgentSession struct {
 	Assistant     SessionAssistant
 	Room          *lksdk.Room
 
-	MetricsCollector *telemetry.UsageCollector
+	MetricsCollector    *telemetry.UsageCollector
+	ModelUsageCollector *telemetry.ModelUsageCollector
 
 	UserState  UserState
 	AgentState AgentState
@@ -391,6 +396,7 @@ func NewAgentSession(agent AgentInterface, room *lksdk.Room, opts AgentSessionOp
 		ChatCtx:             llm.NewChatContext(),
 		Tools:               make([]llm.Tool, 0),
 		MetricsCollector:    telemetry.NewUsageCollector(),
+		ModelUsageCollector: telemetry.NewModelUsageCollector(),
 		UserState:           UserStateListening,
 		AgentState:          AgentStateInitializing,
 		AgentStateChangedCh: make(chan AgentStateChangedEvent, 10),
@@ -427,6 +433,9 @@ func withAgentSessionOptionDefaults(opts AgentSessionOptions) AgentSessionOption
 	if opts.MaxEndpointingDelay == 0 {
 		opts.MaxEndpointingDelay = 3.0
 	}
+	if opts.Endpointing == nil {
+		opts.Endpointing = CreateEndpointing(opts.EndpointingMode, opts.MinEndpointingDelay, opts.MaxEndpointingDelay)
+	}
 	if opts.MaxToolSteps == 0 {
 		opts.MaxToolSteps = 3
 	}
@@ -455,6 +464,15 @@ func (s *AgentSession) UpdateOptions(opts AgentSessionUpdateOptions) error {
 	}
 	if opts.MaxEndpointingDelay != nil {
 		s.Options.MaxEndpointingDelay = *opts.MaxEndpointingDelay
+	}
+	if opts.EndpointingMode != nil {
+		s.Options.EndpointingMode = *opts.EndpointingMode
+		s.Options.Endpointing = CreateEndpointing(s.Options.EndpointingMode, s.Options.MinEndpointingDelay, s.Options.MaxEndpointingDelay)
+	} else if s.Options.Endpointing != nil {
+		s.Options.Endpointing.UpdateOptions(opts.MinEndpointingDelay, opts.MaxEndpointingDelay)
+	}
+	if opts.Endpointing != nil {
+		s.Options.Endpointing = opts.Endpointing
 	}
 	if opts.TurnDetection != nil {
 		s.Options.TurnDetection = *opts.TurnDetection
@@ -790,6 +808,9 @@ func (s *AgentSession) EmitMetricsCollected(metrics telemetry.AgentMetrics) {
 		s.MetricsCollector.Collect(metrics)
 		usage = s.MetricsCollector.GetSummary()
 	}
+	if s.ModelUsageCollector != nil {
+		s.ModelUsageCollector.Collect(metrics)
+	}
 	ch := s.metricsCollectedEvents()
 	ev := MetricsCollectedEvent{
 		Metrics:   metrics,
@@ -810,6 +831,13 @@ func (s *AgentSession) Usage() telemetry.UsageSummary {
 		return telemetry.UsageSummary{}
 	}
 	return s.MetricsCollector.GetSummary()
+}
+
+func (s *AgentSession) ModelUsage() telemetry.AgentSessionUsage {
+	if s.ModelUsageCollector == nil {
+		return telemetry.AgentSessionUsage{}
+	}
+	return s.ModelUsageCollector.Usage()
 }
 
 func (s *AgentSession) metricsCollectedEvents() chan MetricsCollectedEvent {
@@ -1072,6 +1100,15 @@ func (s *AgentSession) UpdateAgentState(state AgentState) {
 	oldState := s.AgentState
 	s.AgentState = state
 	backgroundAudio := s.Options.BackgroundAudio
+	endpointing := s.Options.Endpointing
+	if oldState != state && endpointing != nil {
+		now := float64(time.Now().UnixNano()) / float64(time.Second)
+		if state == AgentStateSpeaking {
+			endpointing.OnStartOfAgentSpeech(now)
+		} else if oldState == AgentStateSpeaking {
+			endpointing.OnEndOfAgentSpeech(now)
+		}
+	}
 	s.mu.Unlock()
 
 	if oldState != state {
