@@ -47,8 +47,9 @@ func (j *Judge) Evaluate(ctx context.Context, chatCtx *llm.ChatContext, referenc
 	if j.name == "handoff" {
 		if !hasHandoffs(chatCtx) {
 			return &JudgmentResult{
-				Verdict:   VerdictPass,
-				Reasoning: "No agent handoffs occurred in this conversation.",
+				Verdict:      VerdictPass,
+				Reasoning:    "No agent handoffs occurred in this conversation.",
+				Instructions: instructions,
 			}, nil
 		}
 	}
@@ -59,7 +60,12 @@ func (j *Judge) Evaluate(ctx context.Context, chatCtx *llm.ChatContext, referenc
 	}
 	prompt += "\n\nEvaluate if the conversation meets the criteria."
 
-	return evaluateWithLLM(ctx, effectiveLLM, prompt)
+	result, err := evaluateWithLLM(ctx, effectiveLLM, prompt)
+	if err != nil {
+		return nil, err
+	}
+	result.Instructions = instructions
+	return result, nil
 }
 
 func getLatestInstructions(chatCtx *llm.ChatContext) string {

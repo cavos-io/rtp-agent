@@ -5,6 +5,13 @@ import (
 	"testing"
 )
 
+func TestBasicWordTokenizerFormatWordsJoinsWithSpaces(t *testing.T) {
+	tokenizer := NewBasicWordTokenizer()
+	if got := tokenizer.FormatWords([]string{"hello", "world"}); got != "hello world" {
+		t.Fatalf("FormatWords() = %q, want hello world", got)
+	}
+}
+
 func TestSplitSentencesPreservesDecimalNumbers(t *testing.T) {
 	tokens := NewBasicSentenceTokenizer().Tokenize("Version 1.5 is ready. Next sentence.", "")
 

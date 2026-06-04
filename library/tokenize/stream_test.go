@@ -8,6 +8,19 @@ import (
 	"time"
 )
 
+func TestBufferedTokenStreamClosedReflectsLifecycle(t *testing.T) {
+	stream := NewBufferedTokenStream(strings.Fields, 1, 1)
+	if stream.Closed() {
+		t.Fatal("Closed() = true before close, want false")
+	}
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close returned error: %v", err)
+	}
+	if !stream.Closed() {
+		t.Fatal("Closed() = false after close, want true")
+	}
+}
+
 func TestBufferedTokenStreamCloseFlushesWithoutDeadlock(t *testing.T) {
 	stream := NewBufferedTokenStream(func(text string) []string {
 		return []string{text}

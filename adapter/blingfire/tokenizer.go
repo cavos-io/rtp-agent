@@ -82,3 +82,7 @@ func (t *WordTokenizer) Stream(language string) tokenize.WordStream {
 		return t.Tokenize(s, language)
 	}, 1, 1)
 }
+
+func (t *WordTokenizer) FormatWords(words []string) string {
+	return strings.Join(words, " ")
+}

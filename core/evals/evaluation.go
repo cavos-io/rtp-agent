@@ -17,12 +17,21 @@ const (
 )
 
 type JudgmentResult struct {
-	Verdict   Verdict
-	Reasoning string
+	Verdict      Verdict
+	Reasoning    string
+	Instructions string
 }
 
 func (j *JudgmentResult) Passed() bool {
-	return j.Verdict == VerdictPass
+	return j != nil && j.Verdict == VerdictPass
+}
+
+func (j *JudgmentResult) Failed() bool {
+	return j != nil && j.Verdict == VerdictFail
+}
+
+func (j *JudgmentResult) Uncertain() bool {
+	return j != nil && j.Verdict == VerdictMaybe
 }
 
 type Evaluator interface {
@@ -42,7 +51,7 @@ func (r *EvaluationResult) Score() float64 {
 	for _, j := range r.Judgments {
 		if j.Passed() {
 			total += 1.0
-		} else if j.Verdict == VerdictMaybe {
+		} else if j.Uncertain() {
 			total += 0.5
 		}
 	}
@@ -76,7 +85,7 @@ func (r *EvaluationResult) MajorityPassed() bool {
 
 func (r *EvaluationResult) NoneFailed() bool {
 	for _, j := range r.Judgments {
-		if j.Verdict == VerdictFail {
+		if j.Failed() {
 			return false
 		}
 	}

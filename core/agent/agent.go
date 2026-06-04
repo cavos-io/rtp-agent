@@ -78,6 +78,18 @@ func (a *Agent) GetActivity() *AgentActivity {
 func (a *Agent) OnEnter() {}
 func (a *Agent) OnExit()  {}
 
+// ChatContext returns a copy of the agent's current chat context.
+//
+// This mirrors the reference SDK's read-only chat_ctx accessor: callers can
+// inspect the returned context without mutating the agent's internal history.
+// Use UpdateChatContext to replace the agent-owned context.
+func (a *Agent) ChatContext() *llm.ChatContext {
+	if a == nil || a.ChatCtx == nil {
+		return llm.NewChatContext()
+	}
+	return a.ChatCtx.Copy()
+}
+
 func (a *Agent) UpdateInstructions(ctx context.Context, instructions string) error {
 	if a.activity != nil {
 		return a.activity.UpdateInstructions(ctx, instructions)
@@ -179,6 +191,7 @@ type AgentTask[T any] struct {
 	doneCh    chan struct{}
 	mu        sync.Mutex
 	completed bool
+	waited    bool
 }
 
 type TaskWaiter interface {
@@ -186,6 +199,7 @@ type TaskWaiter interface {
 }
 
 var ErrAgentTaskAlreadyDone = errors.New("agent task is already done")
+var ErrAgentTaskAlreadyWaited = errors.New("agent task is not re-entrant, wait only once")
 
 func NewAgentTask[T any](instructions string) *AgentTask[T] {
 	baseAgent := NewAgent(instructions)
@@ -242,7 +256,38 @@ func (t *AgentTask[T]) Cancel() {
 	_ = t.Fail(llm.NewToolError("AgentTask " + t.ID + " is cancelled"))
 }
 
+func (t *AgentTask[T]) claimWait() error {
+	if t == nil {
+		return errors.New("agent task is nil")
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.waited {
+		return ErrAgentTaskAlreadyWaited
+	}
+	t.waited = true
+	return nil
+}
+
+func (t *AgentTask[T]) Wait(ctx context.Context) (T, error) {
+	var zero T
+	if err := t.claimWait(); err != nil {
+		return zero, err
+	}
+	select {
+	case res := <-t.Result:
+		return res, nil
+	case err := <-t.Err:
+		return zero, err
+	case <-ctx.Done():
+		return zero, ctx.Err()
+	}
+}
+
 func (t *AgentTask[T]) WaitAny(ctx context.Context) (any, error) {
+	if err := t.claimWait(); err != nil {
+		return nil, err
+	}
 	select {
 	case res := <-t.Result:
 		return res, nil

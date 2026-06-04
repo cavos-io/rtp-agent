@@ -266,7 +266,7 @@ func usageSummaryToDict(usage *telemetry.UsageSummary) any {
 			out[key] = value
 		}
 	}
-	addInt("llm_prompt_tokens", usage.LLMPromptTokens)
+	addInt("llm_prompt_tokens", usage.LLMInputTokens())
 	addInt("llm_prompt_cached_tokens", usage.LLMPromptCachedTokens)
 	addInt("llm_input_audio_tokens", usage.LLMInputAudioTokens)
 	addInt("llm_input_cached_audio_tokens", usage.LLMInputCachedAudioTokens)
@@ -274,7 +274,7 @@ func usageSummaryToDict(usage *telemetry.UsageSummary) any {
 	addInt("llm_input_cached_text_tokens", usage.LLMInputCachedTextTokens)
 	addInt("llm_input_image_tokens", usage.LLMInputImageTokens)
 	addInt("llm_input_cached_image_tokens", usage.LLMInputCachedImageTokens)
-	addInt("llm_completion_tokens", usage.LLMCompletionTokens)
+	addInt("llm_completion_tokens", usage.LLMOutputTokens())
 	addInt("llm_output_audio_tokens", usage.LLMOutputAudioTokens)
 	addInt("llm_output_image_tokens", usage.LLMOutputImageTokens)
 	addInt("llm_output_text_tokens", usage.LLMOutputTextTokens)

@@ -29,6 +29,133 @@ func (t *agentTestTool) Parameters() map[string]any { return nil }
 
 func (t *agentTestTool) Execute(context.Context, string) (string, error) { return "", nil }
 
+func TestAgentChatContextReturnsCopy(t *testing.T) {
+	agent := NewAgent("help")
+	agent.ChatCtx.Append(&llm.ChatMessage{ID: "msg_1", Role: llm.ChatRoleUser})
+
+	got := agent.ChatContext()
+	if got == agent.ChatCtx {
+		t.Fatal("ChatContext() returned internal context pointer, want copy")
+	}
+	if len(got.Items) != 1 || got.Items[0].GetID() != "msg_1" {
+		t.Fatalf("ChatContext() items = %#v, want copied msg_1", got.Items)
+	}
+
+	got.Append(&llm.ChatMessage{ID: "msg_2", Role: llm.ChatRoleAssistant})
+	if len(agent.ChatCtx.Items) != 1 {
+		t.Fatalf("mutating ChatContext() result changed agent context to %d items, want 1", len(agent.ChatCtx.Items))
+	}
+}
+
+func TestAgentChatContextHandlesNilAgentContext(t *testing.T) {
+	agent := NewAgent("help")
+	agent.ChatCtx = nil
+
+	got := agent.ChatContext()
+	if got == nil {
+		t.Fatal("ChatContext() = nil, want empty context")
+	}
+	if len(got.Items) != 0 {
+		t.Fatalf("ChatContext() items = %d, want empty context", len(got.Items))
+	}
+}
+
+func TestAgentTaskWaitReturnsCompletedResult(t *testing.T) {
+	task := NewAgentTask[string]("collect name")
+	if err := task.Complete("done"); err != nil {
+		t.Fatalf("Complete() error = %v", err)
+	}
+
+	got, err := task.Wait(context.Background())
+	if err != nil {
+		t.Fatalf("Wait() error = %v", err)
+	}
+	if got != "done" {
+		t.Fatalf("Wait() result = %q, want done", got)
+	}
+}
+
+func TestAgentTaskWaitReturnsFailure(t *testing.T) {
+	task := NewAgentTask[string]("collect name")
+	wantErr := errors.New("failed")
+	if err := task.Fail(wantErr); err != nil {
+		t.Fatalf("Fail() error = %v", err)
+	}
+
+	got, err := task.Wait(context.Background())
+	if !errors.Is(err, wantErr) {
+		t.Fatalf("Wait() error = %v, want %v", err, wantErr)
+	}
+	if got != "" {
+		t.Fatalf("Wait() result = %q, want zero value", got)
+	}
+}
+
+func TestAgentTaskWaitReturnsContextError(t *testing.T) {
+	task := NewAgentTask[string]("collect name")
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	got, err := task.Wait(ctx)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("Wait() error = %v, want context canceled", err)
+	}
+	if got != "" {
+		t.Fatalf("Wait() result = %q, want zero value", got)
+	}
+}
+
+func TestAgentTaskWaitAnyReturnsCompletedResult(t *testing.T) {
+	task := NewAgentTask[int]("collect number")
+	if err := task.Complete(7); err != nil {
+		t.Fatalf("Complete() error = %v", err)
+	}
+
+	got, err := task.WaitAny(context.Background())
+	if err != nil {
+		t.Fatalf("WaitAny() error = %v", err)
+	}
+	if got != 7 {
+		t.Fatalf("WaitAny() result = %#v, want 7", got)
+	}
+}
+
+func TestAgentTaskWaitIsNotReentrant(t *testing.T) {
+	task := NewAgentTask[string]("collect name")
+	if err := task.Complete("done"); err != nil {
+		t.Fatalf("Complete() error = %v", err)
+	}
+	if _, err := task.Wait(context.Background()); err != nil {
+		t.Fatalf("first Wait() error = %v", err)
+	}
+
+	got, err := task.Wait(context.Background())
+	if !errors.Is(err, ErrAgentTaskAlreadyWaited) {
+		t.Fatalf("second Wait() error = %v, want ErrAgentTaskAlreadyWaited", err)
+	}
+	if got != "" {
+		t.Fatalf("second Wait() result = %q, want zero value", got)
+	}
+}
+
+func TestAgentTaskWaitAnyIsNotReentrant(t *testing.T) {
+	task := NewAgentTask[string]("collect name")
+	if err := task.Complete("done"); err != nil {
+		t.Fatalf("Complete() error = %v", err)
+	}
+	if _, err := task.WaitAny(context.Background()); err != nil {
+		t.Fatalf("first WaitAny() error = %v", err)
+	}
+
+	got, err := task.WaitAny(context.Background())
+	if !errors.Is(err, ErrAgentTaskAlreadyWaited) {
+		t.Fatalf("second WaitAny() error = %v, want ErrAgentTaskAlreadyWaited", err)
+	}
+	if got != nil {
+		t.Fatalf("second WaitAny() result = %#v, want nil", got)
+	}
+}
+
 func TestAgentUpdateChatContextFiltersFunctionItemsToAgentTools(t *testing.T) {
 	agent := NewAgent("help")
 	agent.Tools = []llm.Tool{&agentTestTool{name: "lookup"}}
