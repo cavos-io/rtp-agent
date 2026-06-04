@@ -27,11 +27,13 @@ type SentenceStream interface {
 	AClose() error
 	Close() error
 	Next() (*TokenData, error)
+	Closed() bool
 }
 
 type WordTokenizer interface {
 	Tokenize(text string, language string) []string
 	Stream(language string) WordStream
+	FormatWords(words []string) string
 }
 
 type WordStream interface {
@@ -41,6 +43,7 @@ type WordStream interface {
 	AClose() error
 	Close() error
 	Next() (*TokenData, error)
+	Closed() bool
 }
 
 // Basic Sentence Tokenizer
@@ -89,6 +92,10 @@ func (t *BasicWordTokenizer) Stream(language string) WordStream {
 	return NewBufferedTokenStream(func(s string) []string {
 		return t.Tokenize(s, language)
 	}, 1, 1)
+}
+
+func (t *BasicWordTokenizer) FormatWords(words []string) string {
+	return strings.Join(words, " ")
 }
 
 func SplitSentences(text string, minSentenceLen int, retainFormat bool) []TokenData {

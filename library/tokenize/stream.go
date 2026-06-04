@@ -146,6 +146,12 @@ func (s *BufferedTokenStream) AClose() error {
 	return nil
 }
 
+func (s *BufferedTokenStream) Closed() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.closed
+}
+
 func (s *BufferedTokenStream) Next() (*TokenData, error) {
 	tok, ok := <-s.eventCh
 	if !ok {

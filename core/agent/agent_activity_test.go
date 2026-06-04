@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -1503,4 +1504,8 @@ func (f fixedWordTokenizer) Stream(string) tokenize.WordStream {
 	return tokenize.NewBufferedTokenStream(func(string) []string {
 		return append([]string(nil), f.tokens...)
 	}, 1, 1)
+}
+
+func (f fixedWordTokenizer) FormatWords(words []string) string {
+	return strings.Join(words, " ")
 }
