@@ -343,6 +343,74 @@ func TestWorkerHTTPHandlerReportsConnectionFailure(t *testing.T) {
 	}
 }
 
+func TestWorkerHTTPHandlerUsesCustomHealthCheck(t *testing.T) {
+	called := false
+	server := NewAgentServer(WorkerOptions{
+		HealthCheck: func(got *AgentServer) error {
+			called = true
+			if got != nil && got.ID() != "unregistered" {
+				t.Fatalf("health check server ID = %q, want unregistered", got.ID())
+			}
+			return nil
+		},
+	})
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	rec := httptest.NewRecorder()
+
+	server.workerHTTPHandler().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("health status = %d, want 200", rec.Code)
+	}
+	if !called {
+		t.Fatal("custom health check was not called")
+	}
+	if strings.TrimSpace(rec.Body.String()) != "OK" {
+		t.Fatalf("health body = %q, want OK", rec.Body.String())
+	}
+}
+
+func TestWorkerHTTPHandlerReportsCustomHealthCheckFailure(t *testing.T) {
+	server := NewAgentServer(WorkerOptions{
+		HealthCheck: func(*AgentServer) error {
+			return errors.New("dependency unavailable")
+		},
+	})
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	rec := httptest.NewRecorder()
+
+	server.workerHTTPHandler().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("health status = %d, want 503", rec.Code)
+	}
+	if strings.TrimSpace(rec.Body.String()) != "dependency unavailable" {
+		t.Fatalf("health body = %q, want dependency unavailable", rec.Body.String())
+	}
+}
+
+func TestWorkerHTTPHandlerSkipsCustomHealthCheckAfterConnectionFailure(t *testing.T) {
+	called := false
+	server := NewAgentServer(WorkerOptions{
+		HealthCheck: func(*AgentServer) error {
+			called = true
+			return nil
+		},
+	})
+	server.setConnectionFailed(true)
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	rec := httptest.NewRecorder()
+
+	server.workerHTTPHandler().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("health status = %d, want 503", rec.Code)
+	}
+	if called {
+		t.Fatal("custom health check was called after connection failure")
+	}
+}
+
 func TestWorkerHTTPHandlerReportsWorkerMetadata(t *testing.T) {
 	t.Setenv("LIVEKIT_REMOTE_EOT_URL", "https://hosted.example")
 	server := NewAgentServer(WorkerOptions{
@@ -534,12 +602,16 @@ func TestUpdateOptionsMergesConfiguredValuesBeforeRun(t *testing.T) {
 		CanPublishData: false,
 		Hidden:         true,
 	}
+	healthCheck := func(*AgentServer) error { return nil }
+	setupFunc := func(*JobProcess) error { return nil }
 	err := server.UpdateOptions(WorkerOptions{
 		WSURL:            "wss://new.example",
 		APIKey:           "new-key",
 		MaxRetry:         9,
 		LoadThreshold:    0.8,
 		NumIdleProcesses: 2,
+		HealthCheck:      healthCheck,
+		SetupFunc:        setupFunc,
 		Permissions:      permissions,
 	})
 	if err != nil {
@@ -566,6 +638,12 @@ func TestUpdateOptionsMergesConfiguredValuesBeforeRun(t *testing.T) {
 	}
 	if server.Options.NumIdleProcesses != 2 {
 		t.Fatalf("NumIdleProcesses = %d, want updated value", server.Options.NumIdleProcesses)
+	}
+	if server.Options.HealthCheck == nil {
+		t.Fatal("HealthCheck was not updated")
+	}
+	if server.Options.SetupFunc == nil {
+		t.Fatal("SetupFunc was not updated")
 	}
 	if server.Options.Permissions != permissions {
 		t.Fatal("Permissions was not replaced with updated pointer")
@@ -1413,10 +1491,25 @@ func TestAgentServerReloadRunningJobsPreservesRecordingOptions(t *testing.T) {
 	}
 }
 
-func TestAgentServerExecuteRunningJobUsesProvidedAssignment(t *testing.T) {
-	server := NewAgentServer(WorkerOptions{APIKey: "api-key", APISecret: "api-secret"})
+func TestAgentServerExecuteRunningJobRunsSetupBeforeEntrypoint(t *testing.T) {
+	setupCh := make(chan *JobProcess, 1)
+	server := NewAgentServer(WorkerOptions{
+		APIKey:        "api-key",
+		APISecret:     "api-secret",
+		HTTPProxy:     "https://proxy.example",
+		HTTPProxySet:  true,
+		UserArguments: "user-args",
+		SetupFunc: func(proc *JobProcess) error {
+			proc.Userdata()["setup"] = true
+			setupCh <- proc
+			return nil
+		},
+	})
 	startedCh := make(chan *JobContext, 1)
 	server.entrypointFnc = func(ctx *JobContext) error {
+		if ctx.Proc().Userdata()["setup"] != true {
+			return errors.New("setup did not run before entrypoint")
+		}
 		startedCh <- ctx
 		return nil
 	}
@@ -1437,6 +1530,19 @@ func TestAgentServerExecuteRunningJobUsesProvidedAssignment(t *testing.T) {
 
 	if err := server.ExecuteRunningJob(context.Background(), info); err != nil {
 		t.Fatalf("ExecuteRunningJob() error = %v", err)
+	}
+
+	var setupProc *JobProcess
+	select {
+	case setupProc = <-setupCh:
+	case <-time.After(time.Second):
+		t.Fatal("setup function was not invoked")
+	}
+	if setupProc.UserArguments() != "user-args" {
+		t.Fatalf("setup UserArguments() = %#v, want user-args", setupProc.UserArguments())
+	}
+	if setupProc.HTTPProxy() != "https://proxy.example" {
+		t.Fatalf("setup HTTPProxy() = %q, want configured proxy", setupProc.HTTPProxy())
 	}
 
 	var jobCtx *JobContext
@@ -1625,6 +1731,34 @@ func TestAgentServerHandleReloadIPCMessageWritesResponse(t *testing.T) {
 	}
 	if resp.Jobs[0].Token != "active-token" {
 		t.Fatalf("Jobs[0].Token = %q, want active-token", resp.Jobs[0].Token)
+	}
+}
+
+func TestAgentServerExecuteRunningJobSetupFailureSkipsEntrypoint(t *testing.T) {
+	wantErr := errors.New("setup failed")
+	server := NewAgentServer(WorkerOptions{
+		SetupFunc: func(*JobProcess) error { return wantErr },
+	})
+	entrypointCalled := false
+	server.entrypointFnc = func(*JobContext) error {
+		entrypointCalled = true
+		return nil
+	}
+
+	err := server.ExecuteRunningJob(context.Background(), ipc.RunningJobInfo{
+		Job: &livekit.Job{Id: "job-setup-fails", Room: &livekit.Room{Name: "room-a"}},
+	})
+	if !errors.Is(err, wantErr) {
+		t.Fatalf("ExecuteRunningJob() error = %v, want setup failure", err)
+	}
+	if entrypointCalled {
+		t.Fatal("entrypoint was called after setup failure")
+	}
+	server.mu.Lock()
+	_, exists := server.activeJobs["job-setup-fails"]
+	server.mu.Unlock()
+	if exists {
+		t.Fatal("job remained active after setup failure")
 	}
 }
 
@@ -3616,14 +3750,23 @@ func TestExecuteLocalJobLaunchesThroughThreadExecutor(t *testing.T) {
 }
 
 func TestExecuteLocalJobExposesProcessContextToEntrypoint(t *testing.T) {
+	setupCh := make(chan *JobProcess, 1)
 	server := NewAgentServer(WorkerOptions{
 		WSRL:          "wss://local.example",
 		HTTPProxy:     "https://proxy.example",
 		HTTPProxySet:  true,
 		UserArguments: "user-args",
+		SetupFunc: func(proc *JobProcess) error {
+			proc.Userdata()["setup"] = true
+			setupCh <- proc
+			return nil
+		},
 	})
 	entrypointCh := make(chan *JobContext, 1)
 	server.entrypointFnc = func(ctx *JobContext) error {
+		if ctx.Proc().Userdata()["setup"] != true {
+			return errors.New("setup did not run before local entrypoint")
+		}
 		ctx.Proc().Userdata()["seen"] = true
 		entrypointCh <- ctx
 		return nil
@@ -3634,6 +3777,18 @@ func TestExecuteLocalJobExposesProcessContextToEntrypoint(t *testing.T) {
 	go func() {
 		doneCh <- server.ExecuteLocalJob(ctx, "room-a", "agent-local")
 	}()
+
+	var setupProc *JobProcess
+	select {
+	case setupProc = <-setupCh:
+	case <-time.After(time.Second):
+		cancel()
+		t.Fatal("local job setup did not run")
+	}
+	if setupProc.UserArguments() != "user-args" {
+		cancel()
+		t.Fatalf("setup UserArguments() = %#v, want user-args", setupProc.UserArguments())
+	}
 
 	var jobCtx *JobContext
 	select {

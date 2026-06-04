@@ -35,8 +35,8 @@ func NewIVRActivity(session *AgentSession) *IVRActivity {
 		ctx:                ctx,
 		cancel:             cancel,
 		maxSilenceDuration: maxSilenceDuration,
-		currentUserState:   session.UserState,
-		currentAgentState:  session.AgentState,
+		currentUserState:   session.UserStateValue(),
+		currentAgentState:  session.AgentStateValue(),
 		loopDetector:       newIVRLoopDetector(20, 3),
 	}
 }

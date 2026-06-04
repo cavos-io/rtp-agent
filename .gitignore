@@ -7,3 +7,9 @@ refs/
 
 # Git worktrees
 worktrees/
+
+# Agent files
+.claude
+.codex
+.gemini
+.pi

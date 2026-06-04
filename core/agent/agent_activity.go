@@ -254,7 +254,7 @@ func (a *AgentActivity) waitForUserTurnExceededCallback(ctx context.Context) (bo
 	if a.Session == nil {
 		return true, nil
 	}
-	if a.Session.AgentState == AgentStateSpeaking {
+	if a.Session.AgentStateValue() == AgentStateSpeaking {
 		return false, nil
 	}
 	if len(a.activeSpeechHandles()) == 0 {
@@ -272,7 +272,7 @@ func (a *AgentActivity) waitForUserTurnExceededCallback(ctx context.Context) (bo
 				return false, nil
 			}
 		case <-ticker.C:
-			if a.Session.AgentState == AgentStateSpeaking {
+			if a.Session.AgentStateValue() == AgentStateSpeaking {
 				return false, nil
 			}
 			if len(a.activeSpeechHandles()) == 0 {
@@ -684,7 +684,7 @@ func (a *AgentActivity) OnStartOfSpeech(ev *vad.VADEvent) {
 	a.sttEOSReceived = false
 	if endpointing := a.endpointing(); endpointing != nil {
 		startedAt := vadEventTimestamp(ev)
-		overlapping := a.Session != nil && a.Session.AgentState == AgentStateSpeaking
+		overlapping := a.Session != nil && a.Session.AgentStateValue() == AgentStateSpeaking
 		endpointing.OnStartOfSpeech(startedAt, overlapping)
 	}
 	logger.Logger.Infow("Start of speech detected")

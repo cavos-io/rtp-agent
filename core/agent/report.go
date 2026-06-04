@@ -55,11 +55,8 @@ func NewSessionReport(sessions ...*AgentSession) *SessionReport {
 	}
 
 	session := sessions[0]
-	session.mu.Lock()
-	report.Options = session.Options
-	if session.ChatCtx != nil {
-		report.ChatHistory = session.ChatCtx.Copy()
-	}
+	report.Options = session.SessionOptions()
+	report.ChatHistory = session.History()
 	usage := session.Usage()
 	if !usageSummaryIsZero(usage) {
 		report.Usage = &usage
@@ -67,6 +64,7 @@ func NewSessionReport(sessions ...*AgentSession) *SessionReport {
 	if modelUsage := session.ModelUsage(); len(modelUsage.ModelUsage) > 0 {
 		report.ModelUsage = modelUsage.ModelUsage
 	}
+	session.mu.Lock()
 	if session.LLM != nil {
 		report.LLMModel = llm.Model(session.LLM)
 		report.LLMProvider = llm.Provider(session.LLM)

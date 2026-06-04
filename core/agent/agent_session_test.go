@@ -17,6 +17,87 @@ import (
 	livekitlogger "github.com/livekit/protocol/logger"
 )
 
+func TestAgentSessionHistoryReturnsCopy(t *testing.T) {
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	session.ChatCtx.Append(&llm.ChatMessage{ID: "msg_1", Role: llm.ChatRoleUser})
+
+	history := session.History()
+	if history == session.ChatCtx {
+		t.Fatal("History() returned internal chat context pointer, want copy")
+	}
+	if got := len(history.Items); got != 1 {
+		t.Fatalf("History() item count = %d, want 1", got)
+	}
+	history.Append(&llm.ChatMessage{ID: "msg_2", Role: llm.ChatRoleAssistant})
+	if got := len(session.ChatCtx.Items); got != 1 {
+		t.Fatalf("mutating History() result changed session ChatCtx item count to %d, want 1", got)
+	}
+}
+
+func TestAgentSessionHistoryHandlesNilChatContext(t *testing.T) {
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	session.ChatCtx = nil
+
+	history := session.History()
+	if history == nil {
+		t.Fatal("History() = nil, want empty chat context")
+	}
+	if got := len(history.Items); got != 0 {
+		t.Fatalf("History() item count = %d, want 0", got)
+	}
+}
+
+func TestAgentSessionOptionsReturnsSnapshot(t *testing.T) {
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{MaxToolSteps: 7})
+
+	options := session.SessionOptions()
+	if options.MaxToolSteps != 7 {
+		t.Fatalf("SessionOptions().MaxToolSteps = %d, want 7", options.MaxToolSteps)
+	}
+
+	options.MaxToolSteps = 99
+	if session.Options.MaxToolSteps != 7 {
+		t.Fatalf("mutating SessionOptions() result changed session option to %d, want 7", session.Options.MaxToolSteps)
+	}
+}
+
+func TestAgentSessionStateValueAccessorsReturnCurrentStates(t *testing.T) {
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+
+	if got, want := session.UserStateValue(), UserStateListening; got != want {
+		t.Fatalf("UserStateValue() = %q, want %q", got, want)
+	}
+	if got, want := session.AgentStateValue(), AgentStateInitializing; got != want {
+		t.Fatalf("AgentStateValue() = %q, want %q", got, want)
+	}
+
+	session.UpdateUserState(UserStateSpeaking)
+	session.UpdateAgentState(AgentStateThinking)
+
+	if got, want := session.UserStateValue(), UserStateSpeaking; got != want {
+		t.Fatalf("UserStateValue() after update = %q, want %q", got, want)
+	}
+	if got, want := session.AgentStateValue(), AgentStateThinking; got != want {
+		t.Fatalf("AgentStateValue() after update = %q, want %q", got, want)
+	}
+}
+
+func TestNewIVRActivityInitializesFromSessionStateAccessors(t *testing.T) {
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	session.UpdateUserState(UserStateAway)
+	session.UpdateAgentState(AgentStateListening)
+
+	ivr := NewIVRActivity(session)
+	defer ivr.Stop()
+
+	if got, want := ivr.currentUserState, UserStateAway; got != want {
+		t.Fatalf("currentUserState = %q, want %q", got, want)
+	}
+	if got, want := ivr.currentAgentState, AgentStateListening; got != want {
+		t.Fatalf("currentAgentState = %q, want %q", got, want)
+	}
+}
+
 func TestAgentSessionGenerateReplyReturnsScheduledSpeechHandle(t *testing.T) {
 	agent := NewAgent("test")
 	session := NewAgentSession(agent, nil, AgentSessionOptions{AllowInterruptions: true})

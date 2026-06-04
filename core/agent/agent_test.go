@@ -29,7 +29,7 @@ func (t *agentTestTool) Parameters() map[string]any { return nil }
 
 func (t *agentTestTool) Execute(context.Context, string) (string, error) { return "", nil }
 
-func TestAgentChatContextReturnsCopy(t *testing.T) {
+func TestAgentChatContextReturnsReadOnlyCopy(t *testing.T) {
 	agent := NewAgent("help")
 	agent.ChatCtx.Append(&llm.ChatMessage{ID: "msg_1", Role: llm.ChatRoleUser})
 
@@ -37,14 +37,29 @@ func TestAgentChatContextReturnsCopy(t *testing.T) {
 	if got == agent.ChatCtx {
 		t.Fatal("ChatContext() returned internal context pointer, want copy")
 	}
+	if !got.Readonly() {
+		t.Fatal("ChatContext().Readonly() = false, want reference-style read-only view")
+	}
 	if len(got.Items) != 1 || got.Items[0].GetID() != "msg_1" {
 		t.Fatalf("ChatContext() items = %#v, want copied msg_1", got.Items)
 	}
 
-	got.Append(&llm.ChatMessage{ID: "msg_2", Role: llm.ChatRoleAssistant})
+	assertAgentPanics(t, "Append on read-only ChatContext()", func() {
+		got.Append(&llm.ChatMessage{ID: "msg_2", Role: llm.ChatRoleAssistant})
+	})
 	if len(agent.ChatCtx.Items) != 1 {
 		t.Fatalf("mutating ChatContext() result changed agent context to %d items, want 1", len(agent.ChatCtx.Items))
 	}
+}
+
+func assertAgentPanics(t *testing.T, name string, fn func()) {
+	t.Helper()
+	defer func() {
+		if recover() == nil {
+			t.Fatalf("%s did not panic", name)
+		}
+	}()
+	fn()
 }
 
 func TestAgentChatContextHandlesNilAgentContext(t *testing.T) {

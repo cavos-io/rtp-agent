@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"encoding/json"
 	"reflect"
 	"sort"
 	"strings"
@@ -48,6 +49,7 @@ func PerformLLMInference(
 	chatOptions = append(chatOptions, options...)
 	ctx, span := telemetry.NewLLMSpan(ctx, llm.Model(l), llm.Provider(l))
 	span.SetAttributes(llmToolSpanAttributes(toolCtx)...)
+	telemetry.AddChatTraceEvents(span, llmChatTraceEvents(chatCtx))
 	stream, err := l.Chat(ctx, chatCtx, chatOptions...)
 	if err != nil {
 		span.End()
@@ -92,6 +94,66 @@ func PerformLLMInference(
 	}()
 
 	return data, nil
+}
+
+func llmChatTraceEvents(chatCtx *llm.ChatContext) []telemetry.ChatTraceEvent {
+	if chatCtx == nil {
+		return nil
+	}
+	events := make([]telemetry.ChatTraceEvent, 0, len(chatCtx.Items))
+	for _, item := range chatCtx.Items {
+		switch it := item.(type) {
+		case *llm.ChatMessage:
+			eventName := llmChatMessageTraceEventName(it.Role)
+			if eventName == "" {
+				continue
+			}
+			events = append(events, telemetry.ChatTraceEvent{
+				Name:       eventName,
+				Attributes: []attribute.KeyValue{attribute.String("content", it.TextContent())},
+			})
+		case *llm.FunctionCall:
+			toolCall := map[string]any{
+				"function": map[string]any{"name": it.Name, "arguments": it.Arguments},
+				"id":       it.CallID,
+				"type":     "function",
+			}
+			encoded, err := json.Marshal(toolCall)
+			if err != nil {
+				continue
+			}
+			events = append(events, telemetry.ChatTraceEvent{
+				Name: telemetry.EventGenAIAssistantMessage,
+				Attributes: []attribute.KeyValue{
+					attribute.String("role", "assistant"),
+					attribute.StringSlice("tool_calls", []string{string(encoded)}),
+				},
+			})
+		case *llm.FunctionCallOutput:
+			events = append(events, telemetry.ChatTraceEvent{
+				Name: telemetry.EventGenAIToolMessage,
+				Attributes: []attribute.KeyValue{
+					attribute.String("content", it.Output),
+					attribute.String("name", it.Name),
+					attribute.String("id", it.CallID),
+				},
+			})
+		}
+	}
+	return events
+}
+
+func llmChatMessageTraceEventName(role llm.ChatRole) string {
+	switch role {
+	case llm.ChatRoleSystem, llm.ChatRoleDeveloper:
+		return telemetry.EventGenAISystemMessage
+	case llm.ChatRoleUser:
+		return telemetry.EventGenAIUserMessage
+	case llm.ChatRoleAssistant:
+		return telemetry.EventGenAIAssistantMessage
+	default:
+		return ""
+	}
 }
 
 func llmToolSpanAttributes(toolCtx *llm.ToolContext) []attribute.KeyValue {
