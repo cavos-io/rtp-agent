@@ -22,35 +22,44 @@ Options:
   --map-file FILE        Optional CSV/TSV mapping: source_prefix,target_prefixes
                          target_prefixes may be separated by comma, semicolon,
                          colon, or pipe.
+  --report TYPE          Report type: source|target. Default: source
+                         source: reference symbols with target candidates.
+                         target: target symbol inventory with source candidates.
+  --exclude-dir PATH     Exclude a directory path relative to each scan root.
+                         May be repeated. Common generated/cache directories
+                         are excluded by default.
   --include-tests        Include common test files. Default: excluded.
   -h, --help             Show help.
 
 Examples:
   scripts/parity-check.sh \
-    --source-dir refs/agents/livekit-agents \
+    --source-dir path/to/reference \
     --target-dir . \
     --source-lang python \
     --target-lang go \
     --output parity_report.csv
 
   scripts/parity-check.sh \
-    --source-dir refs/agents/livekit-agents \
+    --source-dir path/to/reference \
     --target-dir . \
-    --map-file parity-map.csv
+    --map-file parity-map.csv \
+    --report target
 
 Mapping file format:
   # source_prefix,target_prefixes
-  livekit/agents/worker.py,interface/worker/
-  livekit/agents/job.py,interface/worker/
-  livekit/agents/llm/,core/llm/
-  livekit/agents/stt/,core/stt/
-  livekit/agents/tts/,core/tts/
-  livekit/agents/vad.py,core/vad/
+  reference/worker.py,implementation/worker/
+  reference/llm/,core/llm/
+  reference/stt/,core/stt/
 
-CSV columns:
+Source report CSV columns:
   source_file,source_module,source_class,source_symbol,source_type,source_line,
   target_candidate,target_candidate_file,target_candidate_line,match_confidence,
   parity_status,notes
+
+Target report CSV columns:
+  target_file,target_module,target_owner,target_symbol,target_type,target_line,
+  source_candidate,source_candidate_file,source_candidate_line,match_confidence,
+  target_category,notes
 
 match_confidence values:
   name        Exact normalized symbol-name match. If mapping exists, mapped
@@ -66,7 +75,23 @@ OUTPUT="parity_report.csv"
 SOURCE_LANG="auto"
 TARGET_LANG="auto"
 MAP_FILE=""
+REPORT="source"
 INCLUDE_TESTS=0
+declare -a EXCLUDE_DIRS=(
+  ".git"
+  ".hg"
+  ".svn"
+  ".tmp"
+  "tmp"
+  "node_modules"
+  "vendor"
+  "__pycache__"
+  ".venv"
+  "venv"
+  "dist"
+  "build"
+  "coverage"
+)
 
 while (($#)); do
   case "$1" in
@@ -76,6 +101,8 @@ while (($#)); do
     --source-lang) SOURCE_LANG="${2:-}"; shift 2 ;;
     --target-lang) TARGET_LANG="${2:-}"; shift 2 ;;
     --map-file) MAP_FILE="${2:-}"; shift 2 ;;
+    --report) REPORT="${2:-}"; shift 2 ;;
+    --exclude-dir) EXCLUDE_DIRS+=("${2:-}"); shift 2 ;;
     --include-tests) INCLUDE_TESTS=1; shift ;;
     -h|--help) usage; exit 0 ;;
     *) echo "Unknown argument: $1" >&2; usage >&2; exit 2 ;;
@@ -97,6 +124,10 @@ if [[ ! -d "$TARGET_DIR" ]]; then
 fi
 if [[ -n "$MAP_FILE" && ! -f "$MAP_FILE" ]]; then
   echo "Error: map file not found: $MAP_FILE" >&2
+  exit 1
+fi
+if [[ "$REPORT" != "source" && "$REPORT" != "target" ]]; then
+  echo "Error: unsupported report type: $REPORT (supported: source, target)" >&2
   exit 1
 fi
 
@@ -149,11 +180,15 @@ is_test_path() {
 }
 
 should_skip_dir_path() {
-  local rel="$1"
-  case "$rel" in
-    .git/*|.tmp/*|worktrees/*|node_modules/*|vendor/*|__pycache__/*|.venv/*|venv/*|dist/*|build/*) return 0 ;;
-    */.git/*|*/.tmp/*|*/worktrees/*|*/node_modules/*|*/vendor/*|*/__pycache__/*|*/.venv/*|*/venv/*|*/dist/*|*/build/*) return 0 ;;
-  esac
+  local rel="$1" excluded
+  for excluded in "${EXCLUDE_DIRS[@]}"; do
+    excluded="${excluded#/}"
+    excluded="${excluded%/}"
+    [[ -z "$excluded" ]] && continue
+    if [[ "$rel" == "$excluded" || "$rel" == "$excluded"/* || "$rel" == */"$excluded"/* ]]; then
+      return 0
+    fi
+  done
   return 1
 }
 
@@ -337,6 +372,42 @@ map_paths_for_source() {
   return 0
 }
 
+is_target_in_paths() {
+  local target_file="$1" paths_text="$2" p
+  [[ -z "$paths_text" ]] && return 1
+  IFS=',;:|' read -r -a paths <<< "$paths_text"
+  for p in "${paths[@]}"; do
+    p="$(trim "$p")"
+    [[ -z "$p" ]] && continue
+    [[ "$target_file" == "$p"* ]] && return 0
+  done
+  return 1
+}
+
+target_category() {
+  local file="$1"
+
+  if [[ ${#map_targets[@]} -gt 0 ]]; then
+    local targets p
+    for targets in "${map_targets[@]}"; do
+      IFS=',;:|' read -r -a paths <<< "$targets"
+      for p in "${paths[@]}"; do
+        p="$(trim "$p")"
+        [[ -z "$p" ]] && continue
+        if [[ "$file" == "$p" || "$file" == "$p"* ]]; then
+          printf 'mapped_target'
+          return 0
+        fi
+      done
+    done
+  fi
+
+  case "$file" in
+    */*) printf 'unmapped_target' ;;
+    *) printf 'root_target' ;;
+  esac
+}
+
 load_map_file
 
 source_tsv="$(mktemp)"
@@ -353,9 +424,30 @@ extract_symbols "$TARGET_LANG" "$TARGET_DIR" > "$target_tsv"
 target_total=$(wc -l < "$target_tsv" | tr -d ' ')
 echo "  Found $target_total target symbols" >&2
 
+# Load source symbols into arrays.
+declare -a source_file=() source_module=() source_owner=() source_symbol=() source_symbol_camel_lower=() source_type=() source_line=()
+declare -A source_by_norm=()
+idx=0
+while IFS='|' read -r file module owner symbol typ line; do
+  [[ -z "${file:-}" ]] && continue
+  source_file[$idx]="$file"
+  source_module[$idx]="$module"
+  source_owner[$idx]="$owner"
+  source_symbol[$idx]="$symbol"
+  source_type[$idx]="$typ"
+  source_line[$idx]="$line"
+  normalized="$(snake_to_camel "$symbol")"
+  [[ -z "$normalized" ]] && normalized="$symbol"
+  norm="$(lower "$normalized")"
+  source_symbol_camel_lower[$idx]="$norm"
+  source_by_norm[$norm]="${source_by_norm[$norm]:-} $idx"
+  ((idx+=1))
+done < "$source_tsv"
+source_count=$idx
+
 # Load target symbols into arrays.
-declare -a target_file target_module target_owner target_symbol target_symbol_lower target_type target_line
-declare -A target_by_norm
+declare -a target_file=() target_module=() target_owner=() target_symbol=() target_symbol_lower=() target_type=() target_line=()
+declare -A target_by_norm=()
 idx=0
 while IFS='|' read -r file module owner symbol typ line; do
   [[ -z "${file:-}" ]] && continue
@@ -372,6 +464,7 @@ while IFS='|' read -r file module owner symbol typ line; do
 done < "$target_tsv"
 target_count=$idx
 
+if [[ "$REPORT" == "source" ]]; then
 {
   printf '%s\n' 'source_file,source_module,source_class,source_symbol,source_type,source_line,target_candidate,target_candidate_file,target_candidate_line,match_confidence,parity_status,notes'
 
@@ -472,17 +565,120 @@ target_count=$idx
   csv_escape "0%"; printf ',,,,,,,\n'
 } > "$OUTPUT"
 
-echo "Writing report to $OUTPUT ..." >&2
-echo "" >&2
-echo "====================================================" >&2
-echo "  Source symbols total :    $source_total" >&2
-echo "  Target symbols total :    $target_total" >&2
-echo "  Auto-detected matches:    $auto_matches/$source_total" >&2
-if (( source_total > 0 )); then
-  echo "  Auto coverage        :    $((100 * auto_matches / source_total))%" >&2
+  echo "Writing report to $OUTPUT ..." >&2
+  echo "" >&2
+  echo "====================================================" >&2
+  echo "  Source symbols total :    $source_total" >&2
+  echo "  Target symbols total :    $target_total" >&2
+  echo "  Auto-detected matches:    $auto_matches/$source_total" >&2
+  if (( source_total > 0 )); then
+    echo "  Auto coverage        :    $((100 * auto_matches / source_total))%" >&2
+  else
+    echo "  Auto coverage        :    0%" >&2
+  fi
+  echo "====================================================" >&2
+  echo "" >&2
+  echo "Done. Open $OUTPUT to annotate parity_status and notes." >&2
 else
-  echo "  Auto coverage        :    0%" >&2
+{
+  printf '%s\n' 'target_file,target_module,target_owner,target_symbol,target_type,target_line,source_candidate,source_candidate_file,source_candidate_line,match_confidence,target_category,notes'
+
+  auto_matches=0
+  unmatched=0
+  for ((t=0; t<target_count; t++)); do
+    norm_lower="${target_symbol_lower[$t]}"
+    best_idx=""
+    confidence="-"
+
+    # Pass 1: exact target name match against normalized source names. Prefer
+    # source rows whose map-file target paths include this target file.
+    if [[ -n "${source_by_norm[$norm_lower]:-}" ]]; then
+      for cand in ${source_by_norm[$norm_lower]}; do
+        mapped_paths="$(map_paths_for_source "${source_file[$cand]}" || true)"
+        if is_target_in_paths "${target_file[$t]}" "$mapped_paths"; then
+          best_idx="$cand"
+          break
+        fi
+      done
+      if [[ -z "$best_idx" ]]; then
+        for cand in ${source_by_norm[$norm_lower]}; do best_idx="$cand"; break; done
+      fi
+      confidence="name"
+    fi
+
+    # Pass 2: substring match against sources that map to this target file.
+    if [[ -z "$best_idx" && ${#map_sources[@]} -gt 0 ]]; then
+      for ((s=0; s<source_count; s++)); do
+        mapped_paths="$(map_paths_for_source "${source_file[$s]}" || true)"
+        is_target_in_paths "${target_file[$t]}" "$mapped_paths" || continue
+        source_l="${source_symbol_camel_lower[$s]}"
+        if [[ "$norm_lower" == *"$source_l"* || "$source_l" == *"$norm_lower"* ]]; then
+          best_idx="$s"
+          confidence="module_path"
+          break
+        fi
+      done
+    fi
+
+    s_symbol=""; s_file=""; s_line=""
+    if [[ -n "$best_idx" ]]; then
+      s_symbol="${source_symbol[$best_idx]}"
+      s_file="${source_file[$best_idx]}"
+      s_line="${source_line[$best_idx]}"
+      ((auto_matches+=1))
+    else
+      ((unmatched+=1))
+    fi
+
+    csv_escape "${target_file[$t]}"; printf ','
+    csv_escape "${target_module[$t]}"; printf ','
+    csv_escape "${target_owner[$t]}"; printf ','
+    csv_escape "${target_symbol[$t]}"; printf ','
+    csv_escape "${target_type[$t]}"; printf ','
+    csv_escape "${target_line[$t]}"; printf ','
+    csv_escape "$s_symbol"; printf ','
+    csv_escape "$s_file"; printf ','
+    csv_escape "$s_line"; printf ','
+    csv_escape "$confidence"; printf ','
+    csv_escape "$(target_category "${target_file[$t]}")"; printf ','
+    csv_escape ""; printf '\n'
+  done
+
+  printf '\n'
+  csv_escape "SUMMARY"; printf ','
+  csv_escape "Target symbols with source candidates"; printf ','
+  csv_escape "$auto_matches/$target_total"; printf ','
+  if (( target_total > 0 )); then
+    csv_escape "$((100 * auto_matches / target_total))%"
+  else
+    csv_escape "0%"
+  fi
+  printf ',,,,,,,,\n'
+
+  csv_escape "SUMMARY"; printf ','
+  csv_escape "Target symbols without source candidates"; printf ','
+  csv_escape "$unmatched/$target_total"; printf ','
+  if (( target_total > 0 )); then
+    csv_escape "$((100 * unmatched / target_total))%"
+  else
+    csv_escape "0%"
+  fi
+  printf ',,,,,,,,\n'
+} > "$OUTPUT"
+
+  echo "Writing report to $OUTPUT ..." >&2
+  echo "" >&2
+  echo "====================================================" >&2
+  echo "  Source symbols total       :    $source_total" >&2
+  echo "  Target symbols total       :    $target_total" >&2
+  echo "  Target source candidates   :    $auto_matches/$target_total" >&2
+  echo "  Target without candidates  :    $unmatched/$target_total" >&2
+  if (( target_total > 0 )); then
+    echo "  Candidate coverage         :    $((100 * auto_matches / target_total))%" >&2
+  else
+    echo "  Candidate coverage         :    0%" >&2
+  fi
+  echo "====================================================" >&2
+  echo "" >&2
+  echo "Done. Open $OUTPUT to inspect target symbols and annotate notes." >&2
 fi
-echo "====================================================" >&2
-echo "" >&2
-echo "Done. Open $OUTPUT to annotate parity_status and notes." >&2
