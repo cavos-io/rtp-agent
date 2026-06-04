@@ -1,11 +1,14 @@
 package worker
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"maps"
 	"os"
 	"reflect"
+	"runtime"
+	"strconv"
 	"sync"
 
 	"github.com/cavos-io/rtp-agent/core/agent"
@@ -18,6 +21,88 @@ import (
 	lksdk "github.com/livekit/server-sdk-go/v2"
 	"google.golang.org/protobuf/types/known/emptypb"
 )
+
+var currentJobContexts sync.Map
+
+type jobContextStack struct {
+	mu    sync.Mutex
+	stack []*JobContext
+}
+
+// GetJobContext returns the JobContext currently executing on this goroutine.
+//
+// This mirrors LiveKit Agents' get_job_context helper for code that runs inside
+// a worker job entrypoint. Go does not have Python contextvars, so newly spawned
+// goroutines should receive the JobContext explicitly instead of relying on this
+// helper.
+func GetJobContext() (*JobContext, bool) {
+	id, ok := currentGoroutineID()
+	if !ok {
+		return nil, false
+	}
+	value, ok := currentJobContexts.Load(id)
+	if !ok {
+		return nil, false
+	}
+	stack := value.(*jobContextStack)
+	stack.mu.Lock()
+	defer stack.mu.Unlock()
+	if len(stack.stack) == 0 {
+		return nil, false
+	}
+	return stack.stack[len(stack.stack)-1], true
+}
+
+// GetCurrentJobContext is an alias for GetJobContext kept for reference parity
+// with LiveKit Agents' get_current_job_context name.
+func GetCurrentJobContext() (*JobContext, bool) {
+	return GetJobContext()
+}
+
+func runWithJobContext(ctx *JobContext, fn func() error) error {
+	if fn == nil {
+		return nil
+	}
+	id, ok := currentGoroutineID()
+	if !ok {
+		return fn()
+	}
+	value, _ := currentJobContexts.LoadOrStore(id, &jobContextStack{})
+	stack := value.(*jobContextStack)
+	stack.mu.Lock()
+	stack.stack = append(stack.stack, ctx)
+	stack.mu.Unlock()
+	defer popCurrentJobContext(id, stack)
+	return fn()
+}
+
+func popCurrentJobContext(id uint64, stack *jobContextStack) {
+	stack.mu.Lock()
+	if len(stack.stack) > 0 {
+		stack.stack = stack.stack[:len(stack.stack)-1]
+	}
+	empty := len(stack.stack) == 0
+	stack.mu.Unlock()
+	if empty {
+		currentJobContexts.Delete(id)
+	}
+}
+
+func currentGoroutineID() (uint64, bool) {
+	var buf [64]byte
+	n := runtime.Stack(buf[:], false)
+	line := buf[:n]
+	line = bytes.TrimPrefix(line, []byte("goroutine "))
+	idField, _, ok := bytes.Cut(line, []byte(" "))
+	if !ok {
+		return 0, false
+	}
+	id, err := strconv.ParseUint(string(idField), 10, 64)
+	if err != nil {
+		return 0, false
+	}
+	return id, true
+}
 
 type JobAcceptArguments struct {
 	Name       string

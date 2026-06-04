@@ -298,7 +298,11 @@ func runningJobInfoFromContext(jobCtx *JobContext) workeripc.RunningJobInfo {
 
 func jobLogValues(jobCtx *JobContext, values ...any) []any {
 	if jobCtx == nil {
-		return values
+		if current, ok := GetCurrentJobContext(); ok {
+			jobCtx = current
+		} else {
+			return values
+		}
 	}
 	fields := jobCtx.LogContextFields()
 	logValues := make([]any, 0, len(values)+len(fields)*2)
@@ -437,7 +441,9 @@ func (s *AgentServer) ExecuteRunningJob(ctx context.Context, info workeripc.Runn
 				doneCh <- fmt.Errorf("running job entrypoint panicked: %v", recovered)
 			}
 		}()
-		doneCh <- s.entrypointFnc(jobCtx)
+		doneCh <- runWithJobContext(jobCtx, func() error {
+			return s.entrypointFnc(jobCtx)
+		})
 	}()
 
 	select {
@@ -476,7 +482,9 @@ func (s *AgentServer) launchReloadedJob(ctx context.Context, jobCtx *JobContext)
 			}
 			s.finishJob(jobCtx)
 		}()
-		if err := s.entrypointFnc(jobCtx); err != nil {
+		if err := runWithJobContext(jobCtx, func() error {
+			return s.entrypointFnc(jobCtx)
+		}); err != nil {
 			logger.Logger.Errorw("Reloaded job entrypoint failed", err, "jobId", jobCtx.JobID())
 			status = livekit.JobStatus_JS_FAILED
 		}
@@ -1906,7 +1914,9 @@ func (s *AgentServer) handleAssignment(ctx context.Context, req *livekit.JobAssi
 				s.finishJob(jobCtx)
 			}()
 
-			if err := s.entrypointFnc(jobCtx); err != nil {
+			if err := runWithJobContext(jobCtx, func() error {
+				return s.entrypointFnc(jobCtx)
+			}); err != nil {
 				logger.Logger.Errorw("Job entrypoint failed", err, jobLogValues(jobCtx, "jobId", req.Job.Id)...)
 				status = livekit.JobStatus_JS_FAILED
 			}
@@ -1975,7 +1985,9 @@ func (s *AgentServer) ExecuteLocalJobWithOptions(ctx context.Context, roomName s
 				panic(recovered)
 			}
 		}()
-		if err := s.entrypointFnc(jobCtx); err != nil {
+		if err := runWithJobContext(jobCtx, func() error {
+			return s.entrypointFnc(jobCtx)
+		}); err != nil {
 			logger.Logger.Errorw("Local job entrypoint failed", err, jobLogValues(jobCtx, "jobId", jobCtx.Job.Id)...)
 			jobCtx.Shutdown("job failed")
 			return err

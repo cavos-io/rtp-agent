@@ -19,6 +19,55 @@ import (
 	"google.golang.org/protobuf/types/known/emptypb"
 )
 
+func TestGetJobContextReturnsActiveEntrypointContext(t *testing.T) {
+	jobCtx := NewJobContext(&livekit.Job{Id: "job_current"}, "", "", "")
+
+	if got, ok := GetJobContext(); ok || got != nil {
+		t.Fatalf("GetJobContext() before entrypoint = %#v, %v; want nil, false", got, ok)
+	}
+
+	if err := runWithJobContext(jobCtx, func() error {
+		got, ok := GetJobContext()
+		if !ok || got != jobCtx {
+			t.Fatalf("GetJobContext() inside entrypoint = %#v, %v; want job context, true", got, ok)
+		}
+		if got, ok := GetCurrentJobContext(); !ok || got != jobCtx {
+			t.Fatalf("GetCurrentJobContext() inside entrypoint = %#v, %v; want job context, true", got, ok)
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("runWithJobContext() error = %v", err)
+	}
+
+	if got, ok := GetJobContext(); ok || got != nil {
+		t.Fatalf("GetJobContext() after entrypoint = %#v, %v; want nil, false", got, ok)
+	}
+}
+
+func TestRunWithJobContextRestoresPreviousContextAfterPanic(t *testing.T) {
+	outer := NewJobContext(&livekit.Job{Id: "job_outer"}, "", "", "")
+	inner := NewJobContext(&livekit.Job{Id: "job_inner"}, "", "", "")
+
+	_ = runWithJobContext(outer, func() error {
+		defer func() {
+			if recovered := recover(); recovered == nil {
+				t.Fatal("inner runWithJobContext did not panic")
+			}
+			if got, ok := GetJobContext(); !ok || got != outer {
+				t.Fatalf("GetJobContext() after nested panic = %#v, %v; want outer context", got, ok)
+			}
+		}()
+		_ = runWithJobContext(inner, func() error {
+			panic("boom")
+		})
+		return nil
+	})
+
+	if got, ok := GetJobContext(); ok || got != nil {
+		t.Fatalf("GetJobContext() after outer entrypoint = %#v, %v; want nil, false", got, ok)
+	}
+}
+
 func TestJobContextShutdownRunsCallbacks(t *testing.T) {
 	ctx := NewJobContext(&livekit.Job{Id: "job_shutdown"}, "", "", "")
 	var calls []string

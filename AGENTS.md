@@ -78,6 +78,25 @@ go-arch-lint check
 go-arch-lint mapping
 ```
 
+Optional parity guidance tool:
+
+```sh
+scripts/parity-check.sh \
+  --source-dir refs/agents/livekit-agents \
+  --target-dir . \
+  --source-lang python \
+  --target-lang go \
+  --output .tmp/parity_report.csv
+```
+
+Use the parity report as a directional aid when deciding whether a port is
+moving the Go implementation closer to the LiveKit reference. The report is a
+symbol/candidate matching tool, not proof of behavioral parity: it may contain
+false positives and false negatives, and `parity_status`/`notes` are for human
+review. Do not treat this as a mandatory command for every task; run it when it
+helps scope gaps, validate package placement, or inspect nearby reference-to-Go
+coverage.
+
 If Go tries to write module cache files under a read-only home directory, use a
 workspace-local `.tmp` cache rather than changing project code to work around
 the environment.
