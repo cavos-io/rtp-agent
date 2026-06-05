@@ -1131,6 +1131,9 @@ func (a *AgentActivity) OnInterimTranscript(ev *stt.SpeechEvent) {
 	if a.Session == nil {
 		return
 	}
+	if a.realtimeUserTranscriptionEnabled() {
+		return
+	}
 	transcript := ""
 	language := ""
 	speakerID := ""
@@ -1158,6 +1161,9 @@ func (a *AgentActivity) OnInterimTranscript(ev *stt.SpeechEvent) {
 }
 
 func (a *AgentActivity) OnFinalTranscript(ev *stt.SpeechEvent) {
+	if a.realtimeUserTranscriptionEnabled() {
+		return
+	}
 	a.sttEOSReceived = true
 	transcript := ""
 	confidence := 0.0
@@ -1198,6 +1204,17 @@ func (a *AgentActivity) OnFinalTranscript(ev *stt.SpeechEvent) {
 			TranscriptConfidence: confidence,
 		})
 	}
+}
+
+func (a *AgentActivity) realtimeUserTranscriptionEnabled() bool {
+	if a == nil || a.Session == nil {
+		return false
+	}
+	a.Session.mu.Lock()
+	assistant := a.Session.Assistant
+	a.Session.mu.Unlock()
+	capabilities, ok := assistant.(realtimeCapabilitiesAssistant)
+	return ok && capabilities.RealtimeCapabilities().UserTranscription
 }
 
 func (a *AgentActivity) interruptByAudioActivity(reason string, key string, value any) {

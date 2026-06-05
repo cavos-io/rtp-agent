@@ -1206,6 +1206,26 @@ func TestAgentActivityOnInterimTranscriptEmitsUserInputTranscribed(t *testing.T)
 	}
 }
 
+func TestAgentActivityOnInterimTranscriptSkipsRealtimeUserTranscription(t *testing.T) {
+	agent := NewAgent("test")
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	session.Assistant = realtimeUserTranscriptionAssistant{}
+	activity := NewAgentActivity(agent, session)
+
+	activity.OnInterimTranscript(&stt.SpeechEvent{
+		Alternatives: []stt.SpeechData{{
+			Language: "en",
+			Text:     "native realtime transcript",
+		}},
+	})
+
+	select {
+	case ev := <-session.UserInputTranscribedEvents():
+		t.Fatalf("UserInputTranscribedEvents received STT transcript despite realtime user transcription: %#v", ev)
+	case <-time.After(10 * time.Millisecond):
+	}
+}
+
 func TestAgentActivityOnInterimTranscriptInterruptsCurrentSpeech(t *testing.T) {
 	agent := NewAgent("test")
 	agent.STT = &fakePipelineSTT{}
@@ -2216,6 +2236,22 @@ func waitForAECWarmupInactive(t *testing.T, session *AgentSession) {
 
 type recordingScheduledSpeechAssistant struct {
 	scheduledCh chan *SpeechHandle
+}
+
+type realtimeUserTranscriptionAssistant struct{}
+
+func (r realtimeUserTranscriptionAssistant) Start(context.Context, *AgentSession) error {
+	return nil
+}
+
+func (r realtimeUserTranscriptionAssistant) OnAudioFrame(context.Context, *model.AudioFrame) {
+}
+
+func (r realtimeUserTranscriptionAssistant) SetPublishAudio(func(frame *model.AudioFrame) error) {
+}
+
+func (r realtimeUserTranscriptionAssistant) RealtimeCapabilities() llm.RealtimeCapabilities {
+	return llm.RealtimeCapabilities{UserTranscription: true}
 }
 
 func (r *recordingScheduledSpeechAssistant) Start(context.Context, *AgentSession) error {
