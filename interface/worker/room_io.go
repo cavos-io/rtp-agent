@@ -643,6 +643,10 @@ func (rio *RoomIO) SetParticipant(participantIdentity string) {
 func (rio *RoomIO) setParticipant(participantIdentity string, available bool) {
 	rio.mu.Lock()
 	defer rio.mu.Unlock()
+	if participantIdentity == "" || rio.userTranscriptionParticipantID != participantIdentity {
+		rio.userTranscriptionTrackID = ""
+		rio.userTranscriptionParticipantID = ""
+	}
 	rio.Options.ParticipantIdentity = participantIdentity
 	rio.participantAvailable = available
 }
@@ -895,6 +899,7 @@ func (rio *RoomIO) handleParticipantDisconnected(participantIdentity string, rea
 		return
 	}
 	rio.forgetConnectedParticipant(participantIdentity)
+	rio.clearUserTranscriptionTargetForParticipant(participantIdentity)
 	linkedParticipant, available := rio.participantState()
 	if linkedParticipant == "" || participantIdentity != linkedParticipant || !available {
 		return
@@ -922,6 +927,19 @@ func (rio *RoomIO) recordConnectedParticipant(identity string) {
 		rio.connectedParticipants = make(map[string]struct{})
 	}
 	rio.connectedParticipants[identity] = struct{}{}
+}
+
+func (rio *RoomIO) clearUserTranscriptionTargetForParticipant(participantIdentity string) {
+	if rio == nil || participantIdentity == "" {
+		return
+	}
+	rio.mu.Lock()
+	defer rio.mu.Unlock()
+	if rio.userTranscriptionParticipantID != participantIdentity {
+		return
+	}
+	rio.userTranscriptionTrackID = ""
+	rio.userTranscriptionParticipantID = ""
 }
 
 func (rio *RoomIO) forgetConnectedParticipant(identity string) {

@@ -474,6 +474,100 @@ func TestRoomIOPublishesUserInputLegacyTranscriptionPacket(t *testing.T) {
 	}
 }
 
+func TestRoomIOSetParticipantClearsStaleUserTranscriptionTarget(t *testing.T) {
+	session := agent.NewAgentSession(agent.NewAgent("test"), nil, agent.AgentSessionOptions{})
+	published := make(chan *livekit.Transcription, 1)
+	rio := &RoomIO{
+		AgentSession:                   session,
+		userTranscriptionTrackID:       "TR_user_audio",
+		userTranscriptionParticipantID: "caller-a",
+		transcriptionPacketPublisher: func(transcription *livekit.Transcription) error {
+			published <- transcription
+			return nil
+		},
+	}
+
+	rio.SetParticipant("caller-b")
+	rio.handleUserInputTranscribed(agent.UserInputTranscribedEvent{
+		Transcript: "stale caller transcript",
+		IsFinal:    true,
+		Language:   "en",
+	})
+
+	select {
+	case got := <-published:
+		t.Fatalf("published user transcription with stale target: %#v", got)
+	default:
+	}
+	if trackID, participantID := rio.userTranscriptionTarget(); trackID != "" || participantID != "" {
+		t.Fatalf("user transcription target = (%q, %q), want cleared", trackID, participantID)
+	}
+}
+
+func TestRoomIOUnsetParticipantClearsUserTranscriptionTarget(t *testing.T) {
+	session := agent.NewAgentSession(agent.NewAgent("test"), nil, agent.AgentSessionOptions{})
+	published := make(chan *livekit.Transcription, 1)
+	rio := &RoomIO{
+		AgentSession:                   session,
+		userTranscriptionTrackID:       "TR_user_audio",
+		userTranscriptionParticipantID: "caller-a",
+		transcriptionPacketPublisher: func(transcription *livekit.Transcription) error {
+			published <- transcription
+			return nil
+		},
+	}
+
+	rio.UnsetParticipant()
+	rio.handleUserInputTranscribed(agent.UserInputTranscribedEvent{
+		Transcript: "stale caller transcript",
+		IsFinal:    true,
+		Language:   "en",
+	})
+
+	select {
+	case got := <-published:
+		t.Fatalf("published user transcription with stale target: %#v", got)
+	default:
+	}
+	if trackID, participantID := rio.userTranscriptionTarget(); trackID != "" || participantID != "" {
+		t.Fatalf("user transcription target = (%q, %q), want cleared", trackID, participantID)
+	}
+}
+
+func TestRoomIOParticipantDisconnectClearsUserTranscriptionTarget(t *testing.T) {
+	session := agent.NewAgentSession(agent.NewAgent("test"), nil, agent.AgentSessionOptions{})
+	published := make(chan *livekit.Transcription, 1)
+	rio := &RoomIO{
+		AgentSession:                   session,
+		userTranscriptionTrackID:       "TR_user_audio",
+		userTranscriptionParticipantID: "caller-a",
+		Options: RoomOptions{
+			ParticipantIdentity: "caller-a",
+		},
+		participantAvailable: true,
+		transcriptionPacketPublisher: func(transcription *livekit.Transcription) error {
+			published <- transcription
+			return nil
+		},
+	}
+
+	rio.handleParticipantDisconnected("caller-a", livekit.DisconnectReason_DUPLICATE_IDENTITY)
+	rio.handleUserInputTranscribed(agent.UserInputTranscribedEvent{
+		Transcript: "stale caller transcript",
+		IsFinal:    true,
+		Language:   "en",
+	})
+
+	select {
+	case got := <-published:
+		t.Fatalf("published user transcription with disconnected target: %#v", got)
+	default:
+	}
+	if trackID, participantID := rio.userTranscriptionTarget(); trackID != "" || participantID != "" {
+		t.Fatalf("user transcription target = (%q, %q), want cleared", trackID, participantID)
+	}
+}
+
 func TestRoomIOPublishesUserInputTranscriptionStream(t *testing.T) {
 	session := agent.NewAgentSession(agent.NewAgent("test"), nil, agent.AgentSessionOptions{})
 	published := make(chan roomIOPublishedText, 1)
