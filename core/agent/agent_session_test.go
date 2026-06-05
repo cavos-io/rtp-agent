@@ -1549,6 +1549,21 @@ func TestAgentSessionShutdownClosesWithUserInitiatedReason(t *testing.T) {
 	}
 }
 
+func TestAgentSessionShutdownClosesMCPServers(t *testing.T) {
+	agent := NewAgent("test")
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	session.activity = NewAgentActivity(agent, session)
+	session.started = true
+	mcpServer := &fakeSessionMCPServer{}
+	session.SetMCPServers([]llm.MCPServer{mcpServer})
+
+	session.Shutdown(false)
+
+	if mcpServer.closed != 1 {
+		t.Fatalf("MCP server closed = %d, want 1", mcpServer.closed)
+	}
+}
+
 func TestAgentSessionShutdownDrainsByDefaultBeforeClosing(t *testing.T) {
 	agent := NewAgent("test")
 	session := NewAgentSession(agent, nil, AgentSessionOptions{})
@@ -2547,8 +2562,9 @@ func (f *fakeAvatarProvider) UpdateState(state AvatarState) error {
 }
 
 type fakeSessionMCPServer struct {
-	id    string
-	tools []llm.Tool
+	id     string
+	tools  []llm.Tool
+	closed int
 }
 
 func (f *fakeSessionMCPServer) Initialize(context.Context) error { return nil }
@@ -2561,4 +2577,7 @@ func (f *fakeSessionMCPServer) ListTools(context.Context) ([]llm.Tool, error) {
 	return f.tools, nil
 }
 
-func (f *fakeSessionMCPServer) Close() error { return nil }
+func (f *fakeSessionMCPServer) Close() error {
+	f.closed++
+	return nil
+}

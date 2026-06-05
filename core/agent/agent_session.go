@@ -1647,6 +1647,7 @@ func (s *AgentSession) stop(ctx context.Context, commitPendingUserTurn bool) err
 		s.userAwayTimer = nil
 	}
 	backgroundAudio := s.Options.BackgroundAudio
+	mcpServers := append([]llm.MCPServer(nil), s.mcpServers...)
 	s.mu.Unlock()
 
 	if ivrActivity != nil {
@@ -1676,6 +1677,14 @@ func (s *AgentSession) stop(ctx context.Context, commitPendingUserTurn bool) err
 	}
 	if closer, ok := assistant.(closeableSessionAssistant); ok {
 		if err := closer.Close(); err != nil && stopErr == nil {
+			stopErr = err
+		}
+	}
+	for _, server := range mcpServers {
+		if server == nil {
+			continue
+		}
+		if err := server.Close(); err != nil && stopErr == nil {
 			stopErr = err
 		}
 	}
