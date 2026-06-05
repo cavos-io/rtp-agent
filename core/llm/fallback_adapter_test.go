@@ -48,6 +48,28 @@ func TestFallbackAdapterReportsReferenceMetadata(t *testing.T) {
 	}
 }
 
+func TestFallbackAdapterStreamExposesChatContext(t *testing.T) {
+	adapter := NewFallbackAdapter([]LLM{
+		&fakeFallbackLLM{stream: &fakeFallbackStream{}},
+	})
+	chatCtx := NewChatContext()
+	chatCtx.AddMessage(ChatMessageArgs{Role: ChatRoleUser, Text: "hello"})
+
+	stream, err := adapter.Chat(context.Background(), chatCtx)
+	if err != nil {
+		t.Fatalf("Chat returned error: %v", err)
+	}
+	defer stream.Close()
+
+	chatCtxStream, ok := stream.(interface{ ChatCtx() *ChatContext })
+	if !ok {
+		t.Fatal("fallback stream does not expose ChatCtx()")
+	}
+	if got := chatCtxStream.ChatCtx(); got != chatCtx {
+		t.Fatalf("ChatCtx() = %p, want original context %p", got, chatCtx)
+	}
+}
+
 func TestFallbackAdapterDoesNotRetryAfterChunkSent(t *testing.T) {
 	firstErr := errors.New("primary stream failed")
 	adapter := NewFallbackAdapter([]LLM{
