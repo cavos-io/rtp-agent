@@ -618,7 +618,11 @@ func (va *PipelineAgent) synthesizeSpeech(ctx context.Context, session *AgentSes
 		default:
 			transcriptSync.PushAudio(frame)
 			if va.PublishAudio != nil {
-				_ = va.PublishAudio(frame)
+				if err := va.PublishAudio(frame); err != nil {
+					transcriptSync.Close()
+					<-transcriptionDone
+					return err
+				}
 			}
 		}
 	}

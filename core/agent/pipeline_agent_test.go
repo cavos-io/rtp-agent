@@ -1126,6 +1126,48 @@ func TestPipelineAgentEmitsTTSErrorEventForSpeechStreamFailure(t *testing.T) {
 	}
 }
 
+func TestPipelineAgentEmitsTTSErrorEventForPublishAudioFailure(t *testing.T) {
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	cause := errors.New("publish audio failed")
+	ttsSource := &fakePipelineTTS{stream: &fakePipelineTTSStream{
+		frames: []*model.AudioFrame{{
+			Data:              []byte{0, 1},
+			SampleRate:        24000,
+			NumChannels:       1,
+			SamplesPerChannel: 1,
+		}},
+	}}
+	agent := NewPipelineAgent(nil, nil, nil, ttsSource, llm.NewChatContext())
+	agent.session = session
+	agent.PublishAudio = func(*model.AudioFrame) error {
+		return cause
+	}
+	speech := NewSpeechHandle(false, DefaultInputDetails())
+	speech.Generation.Text = "hello"
+	speech.Generation.AssistantMessage = &llm.ChatMessage{
+		Role:    llm.ChatRoleAssistant,
+		Content: []llm.ChatContent{{Text: "hello"}},
+	}
+
+	agent.OnSpeechScheduled(context.Background(), speech)
+
+	select {
+	case ev := <-session.ErrorEvents():
+		var ttsErr tts.TTSError
+		if !errors.As(ev.Error, &ttsErr) {
+			t.Fatalf("Error = %T, want tts.TTSError", ev.Error)
+		}
+		if !errors.Is(ev.Error, cause) {
+			t.Fatalf("Error = %v, want cause %v", ev.Error, cause)
+		}
+		if ev.Source != ttsSource {
+			t.Fatalf("Source = %#v, want TTS source", ev.Source)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("ErrorEvents did not receive publish audio error")
+	}
+}
+
 func TestPipelineAgentEmitsTTSErrorEventForChunkedSpeechSynthesisFailure(t *testing.T) {
 	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
 	cause := errors.New("tts synthesize failed")
