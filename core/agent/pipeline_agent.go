@@ -308,6 +308,7 @@ func (va *PipelineAgent) OnSpeechScheduled(ctx context.Context, speech *SpeechHa
 		}
 		if err := va.synthesizeSpeech(ctx, session, singleTextChannel(speech.Generation.Text)); err != nil {
 			logger.Logger.Errorw("TTS inference failed", err)
+			va.emitTTSError(session, err)
 		}
 		insertChatItemIfMissing(va.chatCtx, speech.Generation.AssistantMessage)
 		_ = speech.MarkGenerationDone()
@@ -423,6 +424,7 @@ func (va *PipelineAgent) generateReplyWithOptions(opts pipelineReplyOptions) {
 
 		if err := va.synthesizeSpeech(ctx, session, genData.TextCh); err != nil {
 			logger.Logger.Errorw("TTS inference failed", err)
+			va.emitTTSError(session, err)
 		}
 		va.emitLLMMetrics(session, genData)
 
@@ -531,6 +533,22 @@ func (va *PipelineAgent) emitLLMMetrics(session *AgentSession, genData *LLMGener
 		return
 	}
 	session.EmitMetricsCollected(metrics)
+}
+
+func (va *PipelineAgent) emitTTSError(session *AgentSession, err error) {
+	if session == nil || err == nil {
+		return
+	}
+	label := "tts"
+	if va.tts != nil {
+		label = va.tts.Label()
+	}
+	ttsErr := tts.TTSError{Label: label, Err: err, Recoverable: false}
+	if session.activity != nil {
+		session.activity.OnError(ttsErr, va.tts)
+		return
+	}
+	session.EmitError(ErrorEvent{Error: ttsErr, Source: va.tts})
 }
 
 func llmCachedPromptTokens(usage *llm.CompletionUsage) int {
