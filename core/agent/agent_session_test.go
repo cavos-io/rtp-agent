@@ -1975,6 +1975,50 @@ func TestAgentSessionStartForwardsTTSErrorsThroughActivity(t *testing.T) {
 	}
 }
 
+func TestAgentSessionClosesAfterUnrecoverableTTSErrorThreshold(t *testing.T) {
+	ttsSource := &fakePipelineTTS{}
+	agent := NewAgent("test")
+	agent.TTS = ttsSource
+	agent.LLM = &fakeGenerationLLM{}
+	agent.STT = &fakePipelineSTT{}
+	agent.VAD = &fakePipelineVAD{}
+	session := NewAgentSession(agent, nil, AgentSessionOptions{MaxUnrecoverableErrors: 1})
+	session.Assistant = &fakeSessionAssistant{}
+
+	if err := session.Start(context.Background()); err != nil {
+		t.Fatalf("Start error = %v, want nil", err)
+	}
+
+	cause := errors.New("tts failed")
+	ttsSource.EmitError(tts.TTSError{Label: "fake", Err: cause, Recoverable: false})
+
+	select {
+	case ev := <-session.ErrorEvents():
+		if !errors.Is(ev.Error, cause) {
+			t.Fatalf("Error = %v, want cause %v", ev.Error, cause)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("ErrorEvents did not receive TTS error")
+	}
+
+	select {
+	case ev := <-session.CloseEvents():
+		t.Fatalf("CloseEvents received early close with reason %q", ev.Reason)
+	default:
+	}
+
+	ttsSource.EmitError(tts.TTSError{Label: "fake", Err: cause, Recoverable: false})
+
+	select {
+	case ev := <-session.CloseEvents():
+		if ev.Reason != CloseReasonError {
+			t.Fatalf("CloseEvent.Reason = %q, want error", ev.Reason)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("CloseEvents did not receive error close")
+	}
+}
+
 func TestAgentSessionCloseSoonCommitsPendingUserTurn(t *testing.T) {
 	agent := &turnCompletedAgent{Agent: NewAgent("test"), turns: make(chan *llm.ChatMessage, 1)}
 	agent.TurnDetection = TurnDetectionModeManual
