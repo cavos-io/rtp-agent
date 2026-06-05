@@ -186,6 +186,7 @@ type AgentSession struct {
 	userdataSet    bool
 	jobContext     any
 	jobContextSet  bool
+	mcpServers     []llm.MCPServer
 	recordedEvents []Event
 	ivrActivity    *IVRActivity
 	videoSampler   *VoiceActivityVideoSampler
@@ -329,6 +330,18 @@ func (s *AgentSession) AgentState() AgentState {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.agentState
+}
+
+func (s *AgentSession) SetMCPServers(servers []llm.MCPServer) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.mcpServers = append([]llm.MCPServer(nil), servers...)
+}
+
+func (s *AgentSession) MCPServers() []llm.MCPServer {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]llm.MCPServer(nil), s.mcpServers...)
 }
 
 func (s *AgentSession) RecordedEvents() []Event {

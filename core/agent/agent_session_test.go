@@ -106,6 +106,22 @@ func TestAgentSessionTurnDetectionReturnsUpdatedOption(t *testing.T) {
 	}
 }
 
+func TestAgentSessionMCPServersReturnsSnapshot(t *testing.T) {
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	servers := []llm.MCPServer{&fakeSessionMCPServer{id: "lookup"}}
+
+	session.SetMCPServers(servers)
+	got := session.MCPServers()
+	if len(got) != 1 || got[0] != servers[0] {
+		t.Fatalf("MCPServers() = %#v, want configured server", got)
+	}
+
+	got[0] = &fakeSessionMCPServer{id: "mutated"}
+	if session.MCPServers()[0] != servers[0] {
+		t.Fatal("mutating MCPServers() result changed session server list")
+	}
+}
+
 func TestNewIVRActivityInitializesFromSessionStateAccessors(t *testing.T) {
 	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
 	session.UpdateUserState(UserStateAway)
@@ -2507,3 +2523,13 @@ func (f *fakeAvatarProvider) UpdateState(state AvatarState) error {
 	f.state = state
 	return nil
 }
+
+type fakeSessionMCPServer struct {
+	id string
+}
+
+func (f *fakeSessionMCPServer) Initialize(context.Context) error { return nil }
+
+func (f *fakeSessionMCPServer) ListTools(context.Context) ([]llm.Tool, error) { return nil, nil }
+
+func (f *fakeSessionMCPServer) Close() error { return nil }
