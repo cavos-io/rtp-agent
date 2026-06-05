@@ -17,10 +17,13 @@ type Shutter interface {
 
 type EndCallToolOptions struct {
 	ExtraDescription string
-	DeleteRoom       bool
-	EndInstructions  string
-	OnToolCalled     func(ctx *agent.RunContext)
-	OnToolCompleted  func(ctx *agent.RunContext, output string)
+	// DeleteRoom is kept for compatibility. Room deletion is enabled by default;
+	// set DisableDeleteRoom to true to opt out.
+	DeleteRoom        bool
+	DisableDeleteRoom bool
+	EndInstructions   string
+	OnToolCalled      func(ctx *agent.RunContext)
+	OnToolCompleted   func(ctx *agent.RunContext, output string)
 }
 
 type EndCallTool struct {
@@ -135,7 +138,7 @@ func (t *EndCallTool) Execute(ctx context.Context, args string) (string, error) 
 			_ = rc.WaitForPlayout(context.Background())
 		}
 
-		if t.opts.DeleteRoom {
+		if t.shouldDeleteRoom() {
 			_ = t.shutter.DeleteRoom(context.Background())
 		}
 
@@ -147,4 +150,14 @@ func (t *EndCallTool) Execute(ctx context.Context, args string) (string, error) 
 	}
 
 	return t.opts.EndInstructions, nil
+}
+
+func (t *EndCallTool) shouldDeleteRoom() bool {
+	if t == nil {
+		return false
+	}
+	if t.opts.DisableDeleteRoom {
+		return false
+	}
+	return true
 }

@@ -1961,6 +1961,29 @@ func TestDefaultConfigFromEnvSelectsEmailWorkflowAgent(t *testing.T) {
 	}
 }
 
+func TestDefaultConfigFromEnvSelectsCardNumberWorkflowAgent(t *testing.T) {
+	t.Setenv("RTP_AGENT_WORKFLOW_TASK", "card_number")
+	t.Setenv("RTP_AGENT_WORKFLOW_REQUIRE_CONFIRMATION", "true")
+
+	app, err := NewApp(DefaultConfigFromEnv())
+	if err != nil {
+		t.Fatalf("NewApp() error = %v", err)
+	}
+	task, ok := app.Session.Agent.(*workflows.GetCardNumberTask)
+	if !ok {
+		t.Fatalf("Session.Agent = %T, want *workflows.GetCardNumberTask", app.Session.Agent)
+	}
+	if !task.RequireConfirmation {
+		t.Fatal("RequireConfirmation = false, want true")
+	}
+	if app.Agent != task.GetAgent() {
+		t.Fatal("App.Agent does not point at selected card-number workflow agent")
+	}
+	if len(app.Agent.Tools) != 3 {
+		t.Fatalf("workflow tools = %d, want record/decline/restart tools", len(app.Agent.Tools))
+	}
+}
+
 func TestDefaultConfigFromEnvSelectsWarmTransferWorkflowAgent(t *testing.T) {
 	t.Setenv("RTP_AGENT_WORKFLOW_TASK", "warm_transfer")
 	t.Setenv("RTP_AGENT_WORKFLOW_WARM_TRANSFER_SIP_CALL_TO", "+15550100")
@@ -1991,7 +2014,7 @@ func TestDefaultConfigFromEnvSelectsWarmTransferWorkflowAgent(t *testing.T) {
 
 func TestDefaultConfigFromEnvSelectsTaskGroupWorkflowAgent(t *testing.T) {
 	t.Setenv("RTP_AGENT_WORKFLOW_TASK", "task_group")
-	t.Setenv("RTP_AGENT_WORKFLOW_TASK_GROUP_TASKS", "address,email,dtmf")
+	t.Setenv("RTP_AGENT_WORKFLOW_TASK_GROUP_TASKS", "address,email,dtmf,card_number")
 	t.Setenv("RTP_AGENT_WORKFLOW_DTMF_NUM_DIGITS", "4")
 
 	app, err := NewApp(DefaultConfigFromEnv())
@@ -2005,10 +2028,10 @@ func TestDefaultConfigFromEnvSelectsTaskGroupWorkflowAgent(t *testing.T) {
 	if app.Agent != group.GetAgent() {
 		t.Fatal("App.Agent does not point at selected task group agent")
 	}
-	if len(group.RegisteredTasks) != 3 {
-		t.Fatalf("RegisteredTasks = %d, want 3", len(group.RegisteredTasks))
+	if len(group.RegisteredTasks) != 4 {
+		t.Fatalf("RegisteredTasks = %d, want 4", len(group.RegisteredTasks))
 	}
-	wantIDs := []string{"address", "email", "dtmf"}
+	wantIDs := []string{"address", "email", "dtmf", "card_number"}
 	for i, want := range wantIDs {
 		if got := group.RegisteredTasks[i].ID; got != want {
 			t.Fatalf("RegisteredTasks[%d].ID = %q, want %q", i, got, want)

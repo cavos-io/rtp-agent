@@ -675,6 +675,21 @@ func TestUpdateOptionsPreservesExplicitZeroPorts(t *testing.T) {
 	}
 }
 
+func TestUpdateOptionsRejectsInvalidLogLevel(t *testing.T) {
+	server := NewAgentServer(WorkerOptions{LogLevel: "info"})
+
+	err := server.UpdateOptions(WorkerOptions{LogLevel: "verbose"})
+	if err == nil {
+		t.Fatal("UpdateOptions() error = nil, want invalid log level error")
+	}
+	if !strings.Contains(err.Error(), "invalid log_level") {
+		t.Fatalf("UpdateOptions() error = %q, want invalid log_level message", err.Error())
+	}
+	if server.Options.LogLevel != "INFO" {
+		t.Fatalf("LogLevel = %q, want previous normalized INFO after rejected update", server.Options.LogLevel)
+	}
+}
+
 func TestUpdateOptionsPreservesExplicitZeroResourceValues(t *testing.T) {
 	server := NewAgentServer(WorkerOptions{
 		LoadThreshold:    0.5,
