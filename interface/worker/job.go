@@ -309,9 +309,9 @@ type JobContext struct {
 	Job                    *livekit.Job
 	Room                   *lksdk.Room
 	Report                 *agent.SessionReport
-	Tagger                 *agent.Tagger
 	AcceptArguments        JobAcceptArguments
-	WorkerID               string
+	tagger                 *agent.Tagger
+	workerID               string
 	process                *JobProcess
 	primarySession         *agent.AgentSession
 	sessionDirectory       string
@@ -349,13 +349,30 @@ func NewJobContext(job *livekit.Job, url string, apiKey string, apiSecret string
 		apiKey:    apiKey,
 		apiSecret: apiSecret,
 		Report:    report,
-		Tagger:    tagger,
+		tagger:    tagger,
 		process:   NewJobProcess(JobExecutorTypeThread, nil, ""),
 		logContextFields: map[string]any{
 			"job_id": report.JobID,
 			"room":   report.Room,
 		},
 	}
+}
+
+func (c *JobContext) Tagger() *agent.Tagger {
+	if c == nil {
+		return nil
+	}
+	if c.tagger == nil {
+		c.tagger = agent.NewTagger()
+	}
+	return c.tagger
+}
+
+func (c *JobContext) WorkerID() string {
+	if c == nil {
+		return ""
+	}
+	return c.workerID
 }
 
 func (c *JobContext) API() *JobAPI {
@@ -478,7 +495,7 @@ func (c *JobContext) MakeSessionReport(sessions ...*agent.AgentSession) (*agent.
 		report.AudioRecordingStartedAt = c.Report.AudioRecordingStartedAt
 		report.Duration = c.Report.Duration
 	}
-	report.Tagger = c.Tagger
+	report.Tagger = c.Tagger()
 	c.Report = report
 	return report, nil
 }

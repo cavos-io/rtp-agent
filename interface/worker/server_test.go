@@ -1393,8 +1393,8 @@ func TestAgentServerReloadRunningJobsLaunchesRefreshedJobs(t *testing.T) {
 	if launched.apiSecret != "api-secret" {
 		t.Fatalf("reloaded job apiSecret = %q, want api-secret", launched.apiSecret)
 	}
-	if launched.WorkerID != "worker-old" {
-		t.Fatalf("reloaded job WorkerID = %q, want original worker id", launched.WorkerID)
+	if launched.WorkerID() != "worker-old" {
+		t.Fatalf("reloaded job WorkerID() = %q, want original worker id", launched.WorkerID())
 	}
 	if !launched.fakeJob {
 		t.Fatal("reloaded job fakeJob = false, want true")
@@ -1560,8 +1560,8 @@ func TestAgentServerExecuteRunningJobRunsSetupBeforeEntrypoint(t *testing.T) {
 	if jobCtx.AcceptArguments.Attributes["tier"] != "gold" {
 		t.Fatalf("tier = %q, want gold", jobCtx.AcceptArguments.Attributes["tier"])
 	}
-	if jobCtx.WorkerID != "worker-process" {
-		t.Fatalf("WorkerID = %q, want worker-process", jobCtx.WorkerID)
+	if jobCtx.WorkerID() != "worker-process" {
+		t.Fatalf("WorkerID() = %q, want worker-process", jobCtx.WorkerID())
 	}
 	if jobCtx.url != "wss://process.example" {
 		t.Fatalf("url = %q, want process URL", jobCtx.url)
@@ -2682,8 +2682,8 @@ func TestAssignmentRecordsRegisteredWorkerID(t *testing.T) {
 
 	select {
 	case jobCtx := <-startedCh:
-		if jobCtx.WorkerID != "worker-a" {
-			t.Fatalf("jobCtx.WorkerID = %q, want worker-a", jobCtx.WorkerID)
+		if jobCtx.WorkerID() != "worker-a" {
+			t.Fatalf("jobCtx.WorkerID() = %q, want worker-a", jobCtx.WorkerID())
 		}
 	case <-time.After(time.Second):
 		t.Fatal("assignment entrypoint did not run")
@@ -2720,6 +2720,9 @@ func TestAssignmentInitializesJobLogContextFields(t *testing.T) {
 	select {
 	case jobCtx := <-startedCh:
 		fields := jobCtx.LogContextFields()
+		if jobCtx.WorkerID() != "worker-log" {
+			t.Fatalf("WorkerID() = %q, want worker-log", jobCtx.WorkerID())
+		}
 		if fields["job_id"] != "job_log_fields" {
 			t.Fatalf("log job_id = %#v, want job_log_fields", fields["job_id"])
 		}
@@ -2896,7 +2899,7 @@ func TestShouldUploadJobSessionReportUsesAnyRecordingOption(t *testing.T) {
 func TestShouldUploadJobSessionReportUsesEvaluationOrOutcome(t *testing.T) {
 	ctx := NewJobContext(&livekit.Job{Id: "job_eval_only"}, "", "", "")
 	ctx.Report.RecordingOptions = agent.RecordingOptions{}
-	ctx.Tagger.Evaluation(&agent.EvaluationResult{Judgments: map[string]string{"helpfulness": "pass"}})
+	ctx.Tagger().Evaluation(&agent.EvaluationResult{Judgments: map[string]string{"helpfulness": "pass"}})
 
 	if !shouldUploadJobSessionReport(ctx) {
 		t.Fatal("shouldUploadJobSessionReport(evaluation-only) = false, want true")
@@ -2904,7 +2907,7 @@ func TestShouldUploadJobSessionReportUsesEvaluationOrOutcome(t *testing.T) {
 
 	ctx = NewJobContext(&livekit.Job{Id: "job_outcome_only"}, "", "", "")
 	ctx.Report.RecordingOptions = agent.RecordingOptions{}
-	ctx.Tagger.Success("completed")
+	ctx.Tagger().Success("completed")
 
 	if !shouldUploadJobSessionReport(ctx) {
 		t.Fatal("shouldUploadJobSessionReport(outcome-only) = false, want true")
@@ -3650,8 +3653,8 @@ func TestExecuteLocalJobRecordsRegisteredWorkerID(t *testing.T) {
 
 	select {
 	case jobCtx := <-startedCh:
-		if jobCtx.WorkerID != "worker-local" {
-			t.Fatalf("local job WorkerID = %q, want worker-local", jobCtx.WorkerID)
+		if jobCtx.WorkerID() != "worker-local" {
+			t.Fatalf("local job WorkerID() = %q, want worker-local", jobCtx.WorkerID())
 		}
 	case <-time.After(time.Second):
 		t.Fatal("local job entrypoint did not run")
