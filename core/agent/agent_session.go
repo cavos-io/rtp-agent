@@ -305,6 +305,12 @@ func (s *AgentSession) SessionOptions() AgentSessionOptions {
 	return s.Options
 }
 
+func (s *AgentSession) TurnDetection() TurnDetectionMode {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.Options.TurnDetection
+}
+
 func (s *AgentSession) UserStateValue() UserState {
 	s.mu.Lock()
 	defer s.mu.Unlock()

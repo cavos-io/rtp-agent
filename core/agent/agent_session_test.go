@@ -82,6 +82,24 @@ func TestAgentSessionStateValueAccessorsReturnCurrentStates(t *testing.T) {
 	}
 }
 
+func TestAgentSessionTurnDetectionReturnsUpdatedOption(t *testing.T) {
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{
+		TurnDetection: TurnDetectionModeManual,
+	})
+
+	if got := session.TurnDetection(); got != TurnDetectionModeManual {
+		t.Fatalf("TurnDetection() = %q, want %q", got, TurnDetectionModeManual)
+	}
+
+	mode := TurnDetectionModeSTT
+	if err := session.UpdateOptions(AgentSessionUpdateOptions{TurnDetection: &mode}); err != nil {
+		t.Fatalf("UpdateOptions() error = %v", err)
+	}
+	if got := session.TurnDetection(); got != TurnDetectionModeSTT {
+		t.Fatalf("TurnDetection() after UpdateOptions = %q, want %q", got, TurnDetectionModeSTT)
+	}
+}
+
 func TestNewIVRActivityInitializesFromSessionStateAccessors(t *testing.T) {
 	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
 	session.UpdateUserState(UserStateAway)
