@@ -182,7 +182,24 @@ func (va *PipelineAgent) sttLoop(stream stt.RecognizeStream) {
 		alternative := ev.Alternatives[0]
 		va.mu.Lock()
 		session := va.session
+		ctx := va.ctx
 		va.mu.Unlock()
+		if session != nil && session.activity != nil {
+			if ev.Type == stt.SpeechEventInterimTranscript {
+				session.activity.OnInterimTranscript(ev)
+				continue
+			}
+			session.activity.OnFinalTranscript(ev)
+			if session.activity.turnDetectionMode() != TurnDetectionModeSTT {
+				if ctx == nil {
+					ctx = context.Background()
+				}
+				if _, err := session.activity.CommitUserTurn(ctx, CommitUserTurnOptions{}); err != nil {
+					va.emitError(err, va)
+				}
+			}
+			continue
+		}
 		if session != nil {
 			session.EmitUserInputTranscribed(UserInputTranscribedEvent{
 				Language:   alternative.Language,

@@ -670,6 +670,59 @@ func TestPipelineAgentEmitsConversationItemAddedForUserTranscript(t *testing.T) 
 	}
 }
 
+func TestPipelineAgentRoutesSTTTranscriptsThroughActivity(t *testing.T) {
+	baseAgent := NewAgent("test")
+	baseAgent.LLM = &fakeGenerationLLM{stream: &fakeGenerationLLMStream{}}
+	session := NewAgentSession(baseAgent, nil, AgentSessionOptions{})
+	activity := NewAgentActivity(baseAgent, session)
+	session.activity = activity
+	chatCtx := llm.NewChatContext()
+	pipeline := NewPipelineAgent(nil, nil, baseAgent.LLM, &fakePipelineTTS{}, chatCtx)
+	pipeline.session = session
+	pipeline.ctx = context.Background()
+	session.Assistant = pipeline
+
+	pipeline.sttLoop(&fakePipelineRecognizeStream{
+		events: []*stt.SpeechEvent{{
+			Type: stt.SpeechEventFinalTranscript,
+			Alternatives: []stt.SpeechData{{
+				Language:   "en",
+				Text:       "hello through activity",
+				SpeakerID:  "speaker_1",
+				Confidence: 0.82,
+			}},
+		}},
+	})
+
+	transcriptEvent := receiveUserInputTranscribedEvent(t, session)
+	if transcriptEvent.Transcript != "hello through activity" || !transcriptEvent.IsFinal {
+		t.Fatalf("UserInputTranscribedEvent = %#v, want final transcript from activity", transcriptEvent)
+	}
+	select {
+	case ev := <-session.ConversationItemAddedEvents():
+		msg, ok := ev.Item.(*llm.ChatMessage)
+		if !ok {
+			t.Fatalf("ConversationItemAdded item = %T, want *llm.ChatMessage", ev.Item)
+		}
+		if msg.Role != llm.ChatRoleUser || msg.TextContent() != "hello through activity" {
+			t.Fatalf("conversation message = %#v, want user transcript", msg)
+		}
+		if msg.TranscriptConfidence == nil || *msg.TranscriptConfidence != 0.82 {
+			t.Fatalf("TranscriptConfidence = %v, want 0.82", msg.TranscriptConfidence)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("ConversationItemAddedEvents did not receive activity-committed user transcript")
+	}
+
+	transcript, err := activity.CommitUserTurn(context.Background(), CommitUserTurnOptions{})
+	if err != nil {
+		t.Fatalf("CommitUserTurn error = %v, want nil", err)
+	}
+	if transcript != "" {
+		t.Fatalf("CommitUserTurn transcript after pipeline activity commit = %q, want empty", transcript)
+	}
+}
+
 func TestPipelineAgentEmitsUserInputTranscribedEvents(t *testing.T) {
 	chatCtx := llm.NewChatContext()
 	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
