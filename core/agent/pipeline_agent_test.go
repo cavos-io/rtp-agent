@@ -841,6 +841,32 @@ func TestPipelineAgentEmitsErrorEventForSTTPushFrameError(t *testing.T) {
 	}
 }
 
+func TestPipelineAgentEmitsErrorEventForSTTStreamStartError(t *testing.T) {
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	cause := errors.New("stt start failed")
+	source := &fakePipelineSTT{streamErr: cause}
+	agent := NewPipelineAgent(&fakePipelineVAD{}, source, nil, nil, llm.NewChatContext())
+	agent.session = session
+
+	agent.run(context.Background())
+
+	select {
+	case ev := <-session.ErrorEvents():
+		var sttErr *stt.STTError
+		if !errors.As(ev.Error, &sttErr) {
+			t.Fatalf("Error = %T, want *stt.STTError", ev.Error)
+		}
+		if !errors.Is(ev.Error, cause) {
+			t.Fatalf("Error = %v, want cause %v", ev.Error, cause)
+		}
+		if ev.Source != source {
+			t.Fatalf("Source = %#v, want STT source", ev.Source)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("ErrorEvents did not receive STT start error")
+	}
+}
+
 func TestPipelineAgentEmitsSTTMetricsForRecognitionUsage(t *testing.T) {
 	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
 	source := &fakePipelineSTT{}
@@ -1806,7 +1832,8 @@ func (f *fakePipelineTTSStream) Next() (*tts.SynthesizedAudio, error) {
 }
 
 type fakePipelineSTT struct {
-	stream *fakePipelineRecognizeStream
+	stream    *fakePipelineRecognizeStream
+	streamErr error
 }
 
 func (f *fakePipelineSTT) Label() string { return "fake-stt" }
@@ -1816,6 +1843,9 @@ func (f *fakePipelineSTT) Capabilities() stt.STTCapabilities {
 }
 
 func (f *fakePipelineSTT) Stream(context.Context, string) (stt.RecognizeStream, error) {
+	if f.streamErr != nil {
+		return nil, f.streamErr
+	}
 	if f.stream != nil {
 		return f.stream, nil
 	}

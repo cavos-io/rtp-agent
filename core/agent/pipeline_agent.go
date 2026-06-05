@@ -97,12 +97,18 @@ func (va *PipelineAgent) run(ctx context.Context) {
 	vadStream, err := va.vad.Stream(ctx)
 	if err != nil {
 		logger.Logger.Errorw("failed to start VAD stream", err)
+		va.emitError(err, va.vad)
 		return
 	}
 
 	sttStream, err := va.stt.Stream(ctx, "")
 	if err != nil {
 		logger.Logger.Errorw("failed to start STT stream", err)
+		label := "stt"
+		if va.stt != nil {
+			label = va.stt.Label()
+		}
+		va.emitError(stt.NewSTTError(label, err, false), va.stt)
 		return
 	}
 
