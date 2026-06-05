@@ -59,6 +59,9 @@ func LogMetrics(metrics AgentMetrics) {
 			"output_image_tokens", m.OutputTokenDetails.ImageTokens,
 			"total_tokens", m.TotalTokens,
 			"tokens_per_second", m.TokensPerSecond,
+			"session_duration", m.SessionDuration,
+			"acquire_time", m.AcquireTime,
+			"connection_reused", m.ConnectionReused,
 			"metadata", metadata,
 		)
 	case *TTSMetrics:

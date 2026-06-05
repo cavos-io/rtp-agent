@@ -129,6 +129,7 @@ type RealtimeModelMetrics struct {
 	RequestID          string
 	Timestamp          time.Time
 	Duration           float64
+	SessionDuration    float64
 	TTFT               float64
 	Cancelled          bool
 	InputTokens        int
@@ -137,6 +138,8 @@ type RealtimeModelMetrics struct {
 	TokensPerSecond    float64
 	InputTokenDetails  InputTokenDetails
 	OutputTokenDetails OutputTokenDetails
+	AcquireTime        float64
+	ConnectionReused   bool
 	Metadata           *Metadata
 }
 
@@ -268,7 +271,7 @@ func (c *ModelUsageCollector) Collect(metrics AgentMetrics) {
 		usage.OutputTextTokens += m.OutputTokenDetails.TextTokens
 		usage.OutputAudioTokens += m.OutputTokenDetails.AudioTokens
 		usage.OutputTokens += m.OutputTokens
-		usage.SessionDuration += m.Duration
+		usage.SessionDuration += m.SessionDuration
 	case *TTSMetrics:
 		usage := c.ttsUsageFor(provider, model)
 		usage.InputTokens += m.InputTokens

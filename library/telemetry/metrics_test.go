@@ -37,9 +37,12 @@ func TestModelUsageCollectorAggregatesByProviderAndModel(t *testing.T) {
 		Metadata:           &Metadata{ModelProvider: "openai", ModelName: "gpt"},
 	})
 	collector.Collect(&RealtimeModelMetrics{
-		InputTokens:  7,
-		OutputTokens: 11,
-		Duration:     2.5,
+		InputTokens:      7,
+		OutputTokens:     11,
+		Duration:         1.25,
+		SessionDuration:  2.5,
+		AcquireTime:      0.75,
+		ConnectionReused: true,
 		InputTokenDetails: InputTokenDetails{
 			TextTokens:   4,
 			AudioTokens:  2,
