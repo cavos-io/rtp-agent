@@ -10,6 +10,7 @@ import (
 	"github.com/cavos-io/rtp-agent/core/audio/model"
 	"github.com/cavos-io/rtp-agent/core/llm"
 	"github.com/cavos-io/rtp-agent/core/stt"
+	"github.com/cavos-io/rtp-agent/core/vad"
 	"github.com/cavos-io/rtp-agent/library/telemetry"
 	"github.com/cavos-io/rtp-agent/library/tokenize"
 )
@@ -276,6 +277,22 @@ func TestAgentActivityRealtimeInputSpeechCallbacksUpdateUserState(t *testing.T) 
 	activity.OnInputSpeechStopped(llm.InputSpeechStoppedEvent{})
 	if got := session.UserState(); got != UserStateListening {
 		t.Fatalf("UserState() after speech stopped = %q, want %q", got, UserStateListening)
+	}
+}
+
+func TestAgentActivityVADSpeechCallbacksUpdateUserState(t *testing.T) {
+	agent := NewAgent("test")
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	activity := NewAgentActivity(agent, session)
+
+	activity.OnStartOfSpeech(&vad.VADEvent{Type: vad.VADEventStartOfSpeech})
+	if got := session.UserState(); got != UserStateSpeaking {
+		t.Fatalf("UserState() after VAD speech started = %q, want %q", got, UserStateSpeaking)
+	}
+
+	activity.OnEndOfSpeech(&vad.VADEvent{Type: vad.VADEventEndOfSpeech})
+	if got := session.UserState(); got != UserStateListening {
+		t.Fatalf("UserState() after VAD speech ended = %q, want %q", got, UserStateListening)
 	}
 }
 

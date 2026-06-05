@@ -972,6 +972,9 @@ func (a *AgentActivity) nextSpeechIndexLocked() int {
 func (a *AgentActivity) OnStartOfSpeech(ev *vad.VADEvent) {
 	a.speaking = true
 	a.sttEOSReceived = false
+	if a.Session != nil {
+		a.Session.UpdateUserState(UserStateSpeaking)
+	}
 	if endpointing := a.endpointing(); endpointing != nil {
 		startedAt := vadEventTimestamp(ev)
 		overlapping := a.Session != nil && a.Session.AgentStateValue() == AgentStateSpeaking
@@ -990,6 +993,9 @@ func (a *AgentActivity) OnStartOfSpeech(ev *vad.VADEvent) {
 
 func (a *AgentActivity) OnEndOfSpeech(ev *vad.VADEvent) {
 	a.speaking = false
+	if a.Session != nil {
+		a.Session.UpdateUserState(UserStateListening)
+	}
 	if endpointing := a.endpointing(); endpointing != nil {
 		endpointing.OnEndOfSpeech(vadEventTimestamp(ev), false)
 	}

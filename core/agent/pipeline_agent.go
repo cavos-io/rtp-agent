@@ -131,7 +131,11 @@ func (va *PipelineAgent) vadLoop(stream vad.VADStream) {
 
 		if ev.Type == vad.VADEventStartOfSpeech {
 			logger.Logger.Infow("User started speaking")
-			va.session.UpdateUserState(UserStateSpeaking)
+			if va.session != nil && va.session.activity != nil {
+				va.session.activity.OnStartOfSpeech(ev)
+			} else if va.session != nil {
+				va.session.UpdateUserState(UserStateSpeaking)
+			}
 
 			// Interrupt ongoing agent speech/generation
 			va.mu.Lock()
@@ -144,7 +148,11 @@ func (va *PipelineAgent) vadLoop(stream vad.VADStream) {
 			va.mu.Unlock()
 		} else if ev.Type == vad.VADEventEndOfSpeech {
 			logger.Logger.Infow("User stopped speaking")
-			va.session.UpdateUserState(UserStateListening)
+			if va.session != nil && va.session.activity != nil {
+				va.session.activity.OnEndOfSpeech(ev)
+			} else if va.session != nil {
+				va.session.UpdateUserState(UserStateListening)
+			}
 		}
 	}
 }
