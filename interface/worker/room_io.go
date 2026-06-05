@@ -158,6 +158,7 @@ type RoomIO struct {
 	closed bool
 
 	audioTrack    *lksdk.LocalTrack
+	audioTrackID  string
 	decoder       AudioDecoder
 	encoder       AudioEncoder
 	audioDisabled bool
@@ -363,13 +364,26 @@ func (rio *RoomIO) handleAgentOutputTranscribed(ev agent.AgentOutputTranscribedE
 	if rio == nil || rio.transcriptionTextPublisher == nil || ev.Transcript == "" {
 		return
 	}
+	attributes := map[string]string{
+		RoomIOTranscriptionFinalAttribute:     strconv.FormatBool(ev.IsFinal),
+		RoomIOTranscriptionSegmentIDAttribute: roomIOTranscriptionSegmentID(),
+	}
+	if trackID := rio.transcriptionTrackID(); trackID != "" {
+		attributes[RoomIOTranscriptionTrackIDAttribute] = trackID
+	}
 	rio.transcriptionTextPublisher(ev.Transcript, lksdk.StreamTextOptions{
-		Topic: RoomIOTranscriptionTopic,
-		Attributes: map[string]string{
-			RoomIOTranscriptionFinalAttribute:     strconv.FormatBool(ev.IsFinal),
-			RoomIOTranscriptionSegmentIDAttribute: roomIOTranscriptionSegmentID(),
-		},
+		Topic:      RoomIOTranscriptionTopic,
+		Attributes: attributes,
 	})
+}
+
+func (rio *RoomIO) transcriptionTrackID() string {
+	if rio == nil {
+		return ""
+	}
+	rio.mu.Lock()
+	defer rio.mu.Unlock()
+	return rio.audioTrackID
 }
 
 func roomIOTranscriptionSegmentID() string {
@@ -468,6 +482,7 @@ func (rio *RoomIO) disableAudioIOForSimulator() {
 	preConnectAudio := rio.preConnectAudio
 	rio.preConnectAudio = nil
 	rio.audioTrack = nil
+	rio.audioTrackID = ""
 	rio.mu.Unlock()
 
 	if preConnectAudio != nil {
@@ -658,12 +673,19 @@ func (rio *RoomIO) Start(ctx context.Context) error {
 		return err
 	}
 
-	_, err = rio.Room.LocalParticipant.PublishTrack(track, rio.audioTrackPublicationOptions())
+	publication, err := rio.Room.LocalParticipant.PublishTrack(track, rio.audioTrackPublicationOptions())
 	if err != nil {
 		return err
 	}
 
+	trackID := ""
+	if publication != nil {
+		trackID = publication.SID()
+	}
+	rio.mu.Lock()
 	rio.audioTrack = track
+	rio.audioTrackID = trackID
+	rio.mu.Unlock()
 	return nil
 }
 

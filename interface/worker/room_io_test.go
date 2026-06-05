@@ -286,6 +286,30 @@ func TestRoomIOPublishesAgentOutputTranscriptionStream(t *testing.T) {
 	}
 }
 
+func TestRoomIOPublishesAgentOutputTranscriptionTrackID(t *testing.T) {
+	published := make(chan roomIOPublishedText, 1)
+	rio := &RoomIO{
+		audioTrackID: "TR_agent_audio",
+		transcriptionTextPublisher: func(text string, opts lksdk.StreamTextOptions) {
+			published <- roomIOPublishedText{text: text, opts: opts}
+		},
+	}
+
+	rio.handleAgentOutputTranscribed(agent.AgentOutputTranscribedEvent{
+		Transcript: "assistant transcript",
+		IsFinal:    true,
+	})
+
+	select {
+	case got := <-published:
+		if got.opts.Attributes[RoomIOTranscriptionTrackIDAttribute] != "TR_agent_audio" {
+			t.Fatalf("track id attribute = %q, want TR_agent_audio", got.opts.Attributes[RoomIOTranscriptionTrackIDAttribute])
+		}
+	case <-time.After(time.Second):
+		t.Fatal("agent transcription stream was not published")
+	}
+}
+
 type roomIOPublishedText struct {
 	text string
 	opts lksdk.StreamTextOptions
