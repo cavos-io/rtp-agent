@@ -117,6 +117,28 @@ func (a *AgentActivity) Stop() {
 	}
 }
 
+func (a *AgentActivity) SchedulingPaused() bool {
+	if a == nil {
+		return false
+	}
+	a.queueMu.Lock()
+	defer a.queueMu.Unlock()
+	return a.schedulingPaused
+}
+
+func (a *AgentActivity) AllowInterruptions() bool {
+	if a == nil {
+		return false
+	}
+	if a.Session != nil {
+		return a.Session.defaultAllowInterruptions()
+	}
+	if a.Agent != nil && (a.Agent.AllowInterruptionsSet || a.Agent.AllowInterruptions) {
+		return a.Agent.AllowInterruptions
+	}
+	return false
+}
+
 func (a *AgentActivity) recordInitialConfiguration() error {
 	if a.Agent.ChatCtx == nil {
 		a.Agent.ChatCtx = llm.NewChatContext()
