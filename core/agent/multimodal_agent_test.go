@@ -485,6 +485,26 @@ func TestMultimodalAgentGenerateReplyAppliesInstructionInputModality(t *testing.
 	}
 }
 
+func TestMultimodalAgentStartAppliesAgentInstructionVariants(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	rtSession := &fakeRealtimeSession{}
+	baseAgent := NewAgent("")
+	baseAgent.InstructionVariants = llm.NewInstructions("speak plainly", "write tersely")
+	ma := NewMultimodalAgent(&fakeRealtimeModel{session: rtSession}, llm.NewChatContext())
+	session := NewAgentSession(baseAgent, nil, AgentSessionOptions{})
+	session.Assistant = ma
+
+	if err := session.Start(ctx); err != nil {
+		t.Fatalf("Start returned error: %v", err)
+	}
+
+	if rtSession.instructions != "speak plainly" {
+		t.Fatalf("realtime instructions = %q, want audio-specific agent instructions", rtSession.instructions)
+	}
+}
+
 func TestMultimodalAgentGenerateReplyIgnoresFalseAllowInterruptionsWithTurnDetection(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

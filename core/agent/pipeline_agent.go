@@ -403,6 +403,10 @@ func (va *PipelineAgent) generateReplyWithOptions(opts pipelineReplyOptions) {
 	toolSteps := 0
 	for {
 		inferenceCtx := replyCtx
+		inputModality := ""
+		if opts.SpeechHandle != nil {
+			inputModality = opts.SpeechHandle.InputDetails.Modality
+		}
 		if opts.Instructions != "" {
 			if inferenceCtx == replyCtx {
 				inferenceCtx = replyCtx.Copy()
@@ -411,6 +415,12 @@ func (va *PipelineAgent) generateReplyWithOptions(opts pipelineReplyOptions) {
 				Role:    llm.ChatRoleSystem,
 				Content: []llm.ChatContent{{Text: opts.Instructions}},
 			}}, inferenceCtx.Items...)
+		}
+		if inputModality != "" {
+			if inferenceCtx == replyCtx {
+				inferenceCtx = replyCtx.Copy()
+			}
+			applyAgentInstructionsModality(inferenceCtx, inputModality)
 		}
 
 		var chatOptions []llm.ChatOption

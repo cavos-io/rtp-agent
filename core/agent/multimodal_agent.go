@@ -224,7 +224,7 @@ func (ma *MultimodalAgent) initializeRealtimeSession(rtSession llm.RealtimeSessi
 	ma.mu.Unlock()
 
 	if session != nil && session.Agent != nil {
-		instructions := session.Agent.GetAgent().Instructions
+		instructions := agentInstructionsText(session.Agent.GetAgent())
 		if instructions != "" {
 			if err := rtSession.UpdateInstructions(instructions); err != nil {
 				return err

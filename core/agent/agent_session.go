@@ -1746,7 +1746,7 @@ func agentHandoffID(agent *Agent) string {
 	if agent.ID != "" {
 		return agent.ID
 	}
-	return agent.Instructions
+	return agentInstructionsText(agent)
 }
 
 func (s *AgentSession) Stop(ctx context.Context) error {

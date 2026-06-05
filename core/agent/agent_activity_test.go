@@ -974,6 +974,44 @@ func TestAgentActivityStartRecordsInitialConfiguration(t *testing.T) {
 	}
 }
 
+func TestAgentActivityStartRecordsInstructionVariants(t *testing.T) {
+	agent := NewAgent("")
+	agent.InstructionVariants = llm.NewInstructions("speak plainly", "write tersely")
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	activity := NewAgentActivity(agent, session)
+
+	activity.Start()
+	defer activity.Stop()
+
+	if len(agent.ChatCtx.Items) == 0 {
+		t.Fatal("agent chat context has no initial items, want instruction variants")
+	}
+	msg, ok := agent.ChatCtx.Items[0].(*llm.ChatMessage)
+	if !ok {
+		t.Fatalf("first agent chat item = %T, want instructions message", agent.ChatCtx.Items[0])
+	}
+	if msg.ID != agentInstructionsMessageID || msg.Role != llm.ChatRoleSystem {
+		t.Fatalf("instructions message = %#v, want synthetic system instructions", msg)
+	}
+	if len(msg.Content) != 1 || msg.Content[0].Instructions == nil {
+		t.Fatalf("instructions content = %#v, want instruction variants", msg.Content)
+	}
+	if got := msg.Content[0].Instructions.AsModality("audio").String(); got != "speak plainly" {
+		t.Fatalf("audio instructions = %q, want speak plainly", got)
+	}
+	if got := msg.Content[0].Instructions.AsModality("text").String(); got != "write tersely" {
+		t.Fatalf("text instructions = %q, want write tersely", got)
+	}
+
+	config, ok := agent.ChatCtx.Items[len(agent.ChatCtx.Items)-1].(*llm.AgentConfigUpdate)
+	if !ok {
+		t.Fatalf("last agent chat item = %T, want config update", agent.ChatCtx.Items[len(agent.ChatCtx.Items)-1])
+	}
+	if config.Instructions == nil || *config.Instructions != "speak plainly" {
+		t.Fatalf("config instructions = %v, want speak plainly", config.Instructions)
+	}
+}
+
 func TestAgentActivityStartSkipsEmptyInitialConfiguration(t *testing.T) {
 	agent := NewAgent("")
 	session := NewAgentSession(agent, nil, AgentSessionOptions{})
