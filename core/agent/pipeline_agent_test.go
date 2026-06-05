@@ -812,6 +812,35 @@ func TestPipelineAgentEmitsErrorEventForSTTStreamError(t *testing.T) {
 	}
 }
 
+func TestPipelineAgentEmitsErrorEventForSTTPushFrameError(t *testing.T) {
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	cause := errors.New("stt push failed")
+	source := &fakePipelineSTT{stream: &fakePipelineRecognizeStream{pushErr: cause}}
+	agent := NewPipelineAgent(&fakePipelineVAD{}, source, nil, nil, llm.NewChatContext())
+	agent.session = session
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go agent.run(ctx)
+
+	agent.OnAudioFrame(ctx, &model.AudioFrame{Data: []byte{1, 2}, SampleRate: 16000, NumChannels: 1, SamplesPerChannel: 1})
+
+	select {
+	case ev := <-session.ErrorEvents():
+		var sttErr *stt.STTError
+		if !errors.As(ev.Error, &sttErr) {
+			t.Fatalf("Error = %T, want *stt.STTError", ev.Error)
+		}
+		if !errors.Is(ev.Error, cause) {
+			t.Fatalf("Error = %v, want cause %v", ev.Error, cause)
+		}
+		if ev.Source != source {
+			t.Fatalf("Source = %#v, want STT source", ev.Source)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("ErrorEvents did not receive STT push error")
+	}
+}
+
 func TestPipelineAgentEmitsSTTMetricsForRecognitionUsage(t *testing.T) {
 	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
 	source := &fakePipelineSTT{}
@@ -1776,7 +1805,9 @@ func (f *fakePipelineTTSStream) Next() (*tts.SynthesizedAudio, error) {
 	return nil, io.EOF
 }
 
-type fakePipelineSTT struct{}
+type fakePipelineSTT struct {
+	stream *fakePipelineRecognizeStream
+}
 
 func (f *fakePipelineSTT) Label() string { return "fake-stt" }
 
@@ -1785,6 +1816,9 @@ func (f *fakePipelineSTT) Capabilities() stt.STTCapabilities {
 }
 
 func (f *fakePipelineSTT) Stream(context.Context, string) (stt.RecognizeStream, error) {
+	if f.stream != nil {
+		return f.stream, nil
+	}
 	return &fakePipelineRecognizeStream{}, nil
 }
 
@@ -1794,6 +1828,7 @@ func (f *fakePipelineSTT) Recognize(context.Context, []*model.AudioFrame, string
 
 type fakePipelineVAD struct {
 	metricsHandlers []vad.VADMetricsHandler
+	stream          *fakePipelineVADStream
 }
 
 func (f *fakePipelineVAD) Label() string { return "fake-vad" }
@@ -1819,16 +1854,20 @@ func (f *fakePipelineVAD) EmitMetricsCollected(metrics *telemetry.VADMetrics) {
 }
 
 func (f *fakePipelineVAD) Stream(context.Context) (vad.VADStream, error) {
+	if f.stream != nil {
+		return f.stream, nil
+	}
 	return &fakePipelineVADStream{}, nil
 }
 
 type fakePipelineVADStream struct {
-	events []*vad.VADEvent
-	index  int
-	err    error
+	events  []*vad.VADEvent
+	index   int
+	err     error
+	pushErr error
 }
 
-func (f *fakePipelineVADStream) PushFrame(*model.AudioFrame) error { return nil }
+func (f *fakePipelineVADStream) PushFrame(*model.AudioFrame) error { return f.pushErr }
 
 func (f *fakePipelineVADStream) Flush() error { return nil }
 
@@ -1943,12 +1982,13 @@ func receiveUserInputTranscribedEvent(t *testing.T, session *AgentSession) UserI
 }
 
 type fakePipelineRecognizeStream struct {
-	events []*stt.SpeechEvent
-	index  int
-	err    error
+	events  []*stt.SpeechEvent
+	index   int
+	err     error
+	pushErr error
 }
 
-func (f *fakePipelineRecognizeStream) PushFrame(*model.AudioFrame) error { return nil }
+func (f *fakePipelineRecognizeStream) PushFrame(*model.AudioFrame) error { return f.pushErr }
 
 func (f *fakePipelineRecognizeStream) Flush() error { return nil }
 

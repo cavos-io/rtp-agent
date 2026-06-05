@@ -114,8 +114,18 @@ func (va *PipelineAgent) run(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case frame := <-va.audioInCh:
-			_ = vadStream.PushFrame(frame)
-			_ = sttStream.PushFrame(frame)
+			if err := vadStream.PushFrame(frame); err != nil {
+				logger.Logger.Errorw("VAD push frame failed", err)
+				va.emitError(err, va.vad)
+			}
+			if err := sttStream.PushFrame(frame); err != nil {
+				logger.Logger.Errorw("STT push frame failed", err)
+				label := "stt"
+				if va.stt != nil {
+					label = va.stt.Label()
+				}
+				va.emitError(stt.NewSTTError(label, err, false), va.stt)
+			}
 		}
 	}
 }
