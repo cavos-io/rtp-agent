@@ -195,6 +195,29 @@ func TestAgentSessionCloseEventsFanOutToSubscribers(t *testing.T) {
 	assertCloseEvent(t, second, "second")
 }
 
+func TestAgentSessionMetricsCollectedEventsFanOutToSubscribers(t *testing.T) {
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	first := session.MetricsCollectedEvents()
+	second := session.MetricsCollectedEvents()
+	metrics := &telemetry.LLMMetrics{RequestID: "llm_req", PromptTokens: 3}
+
+	session.EmitMetricsCollected(metrics)
+
+	assertMetricsCollectedEvent(t, first, metrics, "first")
+	assertMetricsCollectedEvent(t, second, metrics, "second")
+}
+
+func TestAgentSessionUsageUpdatedEventsFanOutToSubscribers(t *testing.T) {
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	first := session.SessionUsageUpdatedEvents()
+	second := session.SessionUsageUpdatedEvents()
+
+	session.EmitMetricsCollected(&telemetry.LLMMetrics{RequestID: "llm_req", PromptTokens: 3})
+
+	assertUsageUpdatedEvent(t, first, "first")
+	assertUsageUpdatedEvent(t, second, "second")
+}
+
 func assertUserTranscriptEvent(t *testing.T, events <-chan UserInputTranscribedEvent, name string) {
 	t.Helper()
 
@@ -270,6 +293,32 @@ func assertCloseEvent(t *testing.T, events <-chan CloseEvent, name string) {
 		}
 	case <-time.After(time.Second):
 		t.Fatalf("%s subscriber did not receive close event", name)
+	}
+}
+
+func assertMetricsCollectedEvent(t *testing.T, events <-chan MetricsCollectedEvent, metrics telemetry.AgentMetrics, name string) {
+	t.Helper()
+
+	select {
+	case ev := <-events:
+		if ev.Metrics != metrics {
+			t.Fatalf("%s subscriber metrics = %#v, want original metrics", name, ev.Metrics)
+		}
+	case <-time.After(time.Second):
+		t.Fatalf("%s subscriber did not receive metrics event", name)
+	}
+}
+
+func assertUsageUpdatedEvent(t *testing.T, events <-chan SessionUsageUpdatedEvent, name string) {
+	t.Helper()
+
+	select {
+	case ev := <-events:
+		if ev.Usage.LLMPromptTokens != 3 {
+			t.Fatalf("%s subscriber usage = %#v, want 3 prompt tokens", name, ev.Usage)
+		}
+	case <-time.After(time.Second):
+		t.Fatalf("%s subscriber did not receive usage event", name)
 	}
 }
 

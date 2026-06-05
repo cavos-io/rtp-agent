@@ -198,27 +198,31 @@ type AgentSession struct {
 	videoSampler   *VoiceActivityVideoSampler
 
 	// Event channels
-	AgentStateChangedCh chan AgentStateChangedEvent
-	UserStateChangedCh  chan UserStateChangedEvent
-	agentStateSubs      []chan AgentStateChangedEvent
-	userStateSubs       []chan UserStateChangedEvent
-	userInputSubs       []chan UserInputTranscribedEvent
-	agentOutputSubs     []chan AgentOutputTranscribedEvent
-	speechCreatedCh     chan SpeechCreatedEvent
-	falseInterruptionCh chan AgentFalseInterruptionEvent
-	userTurnExceededCh  chan UserTurnExceededEvent
-	overlappingSpeechCh chan OverlappingSpeechEvent
-	conversationItemCh  chan ConversationItemAddedEvent
-	functionToolsCh     chan FunctionToolsExecutedEvent
-	metricsCollectedCh  chan MetricsCollectedEvent
-	sessionUsageCh      chan SessionUsageUpdatedEvent
-	errorCh             chan ErrorEvent
-	errorChSubscribed   bool
-	errorSubs           []chan ErrorEvent
-	sipDTMFCh           chan SipDTMFEvent
-	closeCh             chan CloseEvent
-	closeChSubscribed   bool
-	closeSubs           []chan CloseEvent
+	AgentStateChangedCh  chan AgentStateChangedEvent
+	UserStateChangedCh   chan UserStateChangedEvent
+	agentStateSubs       []chan AgentStateChangedEvent
+	userStateSubs        []chan UserStateChangedEvent
+	userInputSubs        []chan UserInputTranscribedEvent
+	agentOutputSubs      []chan AgentOutputTranscribedEvent
+	speechCreatedCh      chan SpeechCreatedEvent
+	falseInterruptionCh  chan AgentFalseInterruptionEvent
+	userTurnExceededCh   chan UserTurnExceededEvent
+	overlappingSpeechCh  chan OverlappingSpeechEvent
+	conversationItemCh   chan ConversationItemAddedEvent
+	functionToolsCh      chan FunctionToolsExecutedEvent
+	metricsCollectedCh   chan MetricsCollectedEvent
+	metricsChSubscribed  bool
+	metricsSubs          []chan MetricsCollectedEvent
+	sessionUsageCh       chan SessionUsageUpdatedEvent
+	sessionUsageChSubbed bool
+	sessionUsageSubs     []chan SessionUsageUpdatedEvent
+	errorCh              chan ErrorEvent
+	errorChSubscribed    bool
+	errorSubs            []chan ErrorEvent
+	sipDTMFCh            chan SipDTMFEvent
+	closeCh              chan CloseEvent
+	closeChSubscribed    bool
+	closeSubs            []chan CloseEvent
 
 	llmErrorCount int
 	ttsErrorCount int
@@ -940,15 +944,16 @@ func (s *AgentSession) EmitMetricsCollected(metrics telemetry.AgentMetrics) {
 	if s.ModelUsageCollector != nil {
 		s.ModelUsageCollector.Collect(metrics)
 	}
-	ch := s.metricsCollectedEvents()
 	ev := MetricsCollectedEvent{
 		Metrics:   metrics,
 		CreatedAt: time.Now(),
 	}
 	s.recordEvent(&ev)
-	select {
-	case ch <- ev:
-	default:
+	for _, ch := range s.metricsCollectedSubscribers() {
+		select {
+		case ch <- ev:
+		default:
+		}
 	}
 	if s.MetricsCollector != nil {
 		s.EmitSessionUsageUpdated(SessionUsageUpdatedEvent{Usage: usage})
@@ -976,7 +981,26 @@ func (s *AgentSession) metricsCollectedEvents() chan MetricsCollectedEvent {
 	if s.metricsCollectedCh == nil {
 		s.metricsCollectedCh = make(chan MetricsCollectedEvent, 10)
 	}
-	return s.metricsCollectedCh
+	if !s.metricsChSubscribed {
+		s.metricsChSubscribed = true
+		return s.metricsCollectedCh
+	}
+	ch := make(chan MetricsCollectedEvent, 10)
+	s.metricsSubs = append(s.metricsSubs, ch)
+	return ch
+}
+
+func (s *AgentSession) metricsCollectedSubscribers() []chan MetricsCollectedEvent {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	subs := make([]chan MetricsCollectedEvent, 0, len(s.metricsSubs)+1)
+	if s.metricsCollectedCh == nil {
+		s.metricsCollectedCh = make(chan MetricsCollectedEvent, 10)
+	}
+	subs = append(subs, s.metricsCollectedCh)
+	subs = append(subs, s.metricsSubs...)
+	return subs
 }
 
 func (s *AgentSession) SessionUsageUpdatedEvents() <-chan SessionUsageUpdatedEvent {
@@ -988,10 +1012,11 @@ func (s *AgentSession) EmitSessionUsageUpdated(ev SessionUsageUpdatedEvent) {
 		ev.CreatedAt = time.Now()
 	}
 	s.recordEvent(&ev)
-	ch := s.sessionUsageUpdatedEvents()
-	select {
-	case ch <- ev:
-	default:
+	for _, ch := range s.sessionUsageUpdatedSubscribers() {
+		select {
+		case ch <- ev:
+		default:
+		}
 	}
 }
 
@@ -1002,7 +1027,26 @@ func (s *AgentSession) sessionUsageUpdatedEvents() chan SessionUsageUpdatedEvent
 	if s.sessionUsageCh == nil {
 		s.sessionUsageCh = make(chan SessionUsageUpdatedEvent, 10)
 	}
-	return s.sessionUsageCh
+	if !s.sessionUsageChSubbed {
+		s.sessionUsageChSubbed = true
+		return s.sessionUsageCh
+	}
+	ch := make(chan SessionUsageUpdatedEvent, 10)
+	s.sessionUsageSubs = append(s.sessionUsageSubs, ch)
+	return ch
+}
+
+func (s *AgentSession) sessionUsageUpdatedSubscribers() []chan SessionUsageUpdatedEvent {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	subs := make([]chan SessionUsageUpdatedEvent, 0, len(s.sessionUsageSubs)+1)
+	if s.sessionUsageCh == nil {
+		s.sessionUsageCh = make(chan SessionUsageUpdatedEvent, 10)
+	}
+	subs = append(subs, s.sessionUsageCh)
+	subs = append(subs, s.sessionUsageSubs...)
+	return subs
 }
 
 func (s *AgentSession) ErrorEvents() <-chan ErrorEvent {
