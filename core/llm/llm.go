@@ -969,6 +969,8 @@ type RealtimeEvent struct {
 // Fallback Adapter
 
 type FallbackAdapter struct {
+	MetricsEmitter
+	ErrorEmitter
 	llms                 []LLM
 	attemptTimeout       time.Duration
 	maxRetryPerLLM       int
@@ -1063,7 +1065,7 @@ func NewFallbackAdapterWithOptions(llms []LLM, options FallbackAdapterOptions) *
 	if eventBuffer < 16 {
 		eventBuffer = 16
 	}
-	return &FallbackAdapter{
+	adapter := &FallbackAdapter{
 		llms:                llms,
 		attemptTimeout:      attemptTimeout,
 		maxRetryPerLLM:      options.MaxRetryPerLLM,
@@ -1073,6 +1075,15 @@ func NewFallbackAdapterWithOptions(llms []LLM, options FallbackAdapterOptions) *
 		recovering:          make([]bool, len(llms)),
 		availabilityChanged: make(chan FallbackAvailabilityChangedEvent, eventBuffer),
 	}
+	for _, provider := range llms {
+		if collector, ok := provider.(metricsCollectorLLM); ok {
+			collector.OnMetricsCollected(adapter.EmitMetricsCollected)
+		}
+		if collector, ok := provider.(errorCollectorLLM); ok {
+			collector.OnError(adapter.EmitError)
+		}
+	}
+	return adapter
 }
 
 func initialAvailability(n int) []bool {
@@ -1127,6 +1138,14 @@ func (f *FallbackAdapter) Provider() string {
 
 func (f *FallbackAdapter) Prewarm() {
 	Prewarm(f.llms[0])
+}
+
+func (f *FallbackAdapter) OnMetricsCollected(handler LLMMetricsHandler) func() {
+	return f.MetricsEmitter.OnMetricsCollected(handler)
+}
+
+func (f *FallbackAdapter) OnError(handler LLMErrorHandler) func() {
+	return f.ErrorEmitter.OnError(handler)
 }
 
 func (f *FallbackAdapter) OnAvailabilityChanged(handler FallbackAvailabilityChangedHandler) func() {

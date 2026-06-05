@@ -7,7 +7,51 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/cavos-io/rtp-agent/library/telemetry"
 )
+
+func TestFallbackAdapterForwardsProviderMetrics(t *testing.T) {
+	primary := &fakeFallbackLLM{label: "primary.LLM"}
+	fallback := &fakeFallbackLLM{label: "fallback.LLM"}
+	adapter := NewFallbackAdapter([]LLM{primary, fallback})
+	metricsCh := make(chan string, 2)
+
+	unsubscribe := adapter.OnMetricsCollected(func(metrics *telemetry.LLMMetrics) {
+		metricsCh <- metrics.RequestID
+	})
+	defer unsubscribe()
+
+	primary.EmitMetricsCollected(&telemetry.LLMMetrics{RequestID: "primary-req"})
+	fallback.EmitMetricsCollected(&telemetry.LLMMetrics{RequestID: "fallback-req"})
+
+	got := []string{<-metricsCh, <-metricsCh}
+	if strings.Join(got, ",") != "primary-req,fallback-req" {
+		t.Fatalf("forwarded metrics = %#v, want primary and fallback request IDs", got)
+	}
+}
+
+func TestFallbackAdapterForwardsProviderErrors(t *testing.T) {
+	primary := &fakeFallbackLLM{label: "primary.LLM"}
+	fallback := &fakeFallbackLLM{label: "fallback.LLM"}
+	adapter := NewFallbackAdapter([]LLM{primary, fallback})
+	errCh := make(chan error, 2)
+
+	unsubscribe := adapter.OnError(func(err *LLMError) {
+		errCh <- err
+	})
+	defer unsubscribe()
+
+	primaryCause := errors.New("primary failed")
+	fallbackCause := errors.New("fallback failed")
+	primary.EmitError(NewLLMError("primary", primaryCause, true))
+	fallback.EmitError(NewLLMError("fallback", fallbackCause, true))
+
+	got := []error{<-errCh, <-errCh}
+	if !errors.Is(got[0], primaryCause) || !errors.Is(got[1], fallbackCause) {
+		t.Fatalf("forwarded errors = %#v, want primary then fallback causes", got)
+	}
+}
 
 func TestFallbackAdapterRetriesNextLLMWhenStreamFailsBeforeChunk(t *testing.T) {
 	firstErr := errors.New("primary stream failed")
@@ -776,6 +820,9 @@ func TestFallbackAdapterRecoversUnavailableProviderInBackground(t *testing.T) {
 }
 
 type fakeFallbackLLM struct {
+	MetricsEmitter
+	ErrorEmitter
+
 	streams []LLMStream
 	stream  LLMStream
 	err     error

@@ -32,8 +32,24 @@ type chatContextUpdatingAssistant interface {
 	UpdateChatContext(context.Context, *llm.ChatContext) error
 }
 
+type llmMetricsCollector interface {
+	OnMetricsCollected(llm.LLMMetricsHandler) func()
+}
+
+type llmErrorCollector interface {
+	OnError(llm.LLMErrorHandler) func()
+}
+
 type ttsMetricsCollector interface {
 	OnMetricsCollected(tts.TTSMetricsHandler) func()
+}
+
+type sttMetricsCollector interface {
+	OnMetricsCollected(stt.STTMetricsHandler) func()
+}
+
+type sttErrorCollector interface {
+	OnError(stt.STTErrorHandler) func()
 }
 
 type ttsErrorCollector interface {
@@ -117,6 +133,20 @@ type scheduledSpeech struct {
 
 func (a *AgentActivity) Start() {
 	_ = a.recordInitialConfiguration()
+	if a.Session != nil && a.Session.LLM != nil {
+		if collector, ok := a.Session.LLM.(llmMetricsCollector); ok {
+			unsubscribe := collector.OnMetricsCollected(func(metrics *telemetry.LLMMetrics) {
+				a.OnMetricsCollected(metrics)
+			})
+			a.providerUnsubscribes = append(a.providerUnsubscribes, unsubscribe)
+		}
+		if collector, ok := a.Session.LLM.(llmErrorCollector); ok {
+			unsubscribe := collector.OnError(func(err *llm.LLMError) {
+				a.OnError(err, a.Session.LLM)
+			})
+			a.providerUnsubscribes = append(a.providerUnsubscribes, unsubscribe)
+		}
+	}
 	if a.Session != nil && a.Session.TTS != nil {
 		if collector, ok := a.Session.TTS.(ttsMetricsCollector); ok {
 			unsubscribe := collector.OnMetricsCollected(func(metrics *telemetry.TTSMetrics) {
@@ -127,6 +157,20 @@ func (a *AgentActivity) Start() {
 		if collector, ok := a.Session.TTS.(ttsErrorCollector); ok {
 			unsubscribe := collector.OnError(func(err tts.TTSError) {
 				a.OnError(err, a.Session.TTS)
+			})
+			a.providerUnsubscribes = append(a.providerUnsubscribes, unsubscribe)
+		}
+	}
+	if a.Session != nil && a.Session.STT != nil {
+		if collector, ok := a.Session.STT.(sttMetricsCollector); ok {
+			unsubscribe := collector.OnMetricsCollected(func(metrics *telemetry.STTMetrics) {
+				a.OnMetricsCollected(metrics)
+			})
+			a.providerUnsubscribes = append(a.providerUnsubscribes, unsubscribe)
+		}
+		if collector, ok := a.Session.STT.(sttErrorCollector); ok {
+			unsubscribe := collector.OnError(func(err *stt.STTError) {
+				a.OnError(err, a.Session.STT)
 			})
 			a.providerUnsubscribes = append(a.providerUnsubscribes, unsubscribe)
 		}
