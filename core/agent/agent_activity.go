@@ -820,7 +820,9 @@ func (a *AgentActivity) OnInputSpeechStarted() {
 	if a == nil || a.Session == nil {
 		return
 	}
-	a.Session.UpdateUserState(UserStateSpeaking)
+	if !a.hasVADModel() {
+		a.Session.UpdateUserState(UserStateSpeaking)
+	}
 	go func() {
 		if err := a.Interrupt(false); err != nil {
 			logger.Logger.Errorw("realtime input speech started but current speech is not interruptable", err)
@@ -832,7 +834,9 @@ func (a *AgentActivity) OnInputSpeechStopped(ev llm.InputSpeechStoppedEvent) {
 	if a == nil || a.Session == nil {
 		return
 	}
-	a.Session.UpdateUserState(UserStateListening)
+	if !a.hasVADModel() {
+		a.Session.UpdateUserState(UserStateListening)
+	}
 	if ev.UserTranscriptionEnabled {
 		a.Session.EmitUserInputTranscribed(UserInputTranscribedEvent{
 			Transcript: "",
@@ -865,6 +869,67 @@ func (a *AgentActivity) OnInputAudioTranscriptionCompleted(ev llm.InputTranscrip
 		_ = a.Agent.ChatCtx.UpsertItem(msg, llm.ChatContextUpsertOptions{AllowTypeMismatch: true})
 	}
 	a.Session.EmitConversationItemAdded(msg)
+}
+
+func (a *AgentActivity) OnRemoteItemAdded(ev llm.RemoteItemAddedEvent) {
+	if a == nil || a.Agent == nil || a.Agent.ChatCtx == nil || ev.Item == nil {
+		return
+	}
+	item := ev.Item
+	if item.GetID() != "" && a.Agent.ChatCtx.GetByID(item.GetID()) != nil {
+		return
+	}
+	lastItemID := ""
+	if len(a.Agent.ChatCtx.Items) > 0 {
+		lastItemID = a.Agent.ChatCtx.Items[len(a.Agent.ChatCtx.Items)-1].GetID()
+	}
+	if ev.PreviousItemID == "" || ev.PreviousItemID == lastItemID {
+		a.Agent.ChatCtx.Items = append(a.Agent.ChatCtx.Items, item)
+	}
+}
+
+func (a *AgentActivity) OnMetricsCollected(metrics telemetry.AgentMetrics) {
+	if a == nil || a.Session == nil {
+		return
+	}
+	a.Session.EmitMetricsCollected(metrics)
+}
+
+func (a *AgentActivity) OnError(err error, source any) {
+	if a == nil || a.Session == nil || err == nil {
+		return
+	}
+	a.Session.EmitError(ErrorEvent{Error: err, Source: source})
+}
+
+func (a *AgentActivity) OnGenerationCreated(ev llm.GenerationCreatedEvent, configure ...func(*SpeechHandle)) (*SpeechHandle, error) {
+	if a == nil || a.Session == nil || ev.UserInitiated {
+		return nil, nil
+	}
+
+	a.queueMu.Lock()
+	schedulingBlocked := a.schedulingPaused || a.schedulingDraining
+	a.queueMu.Unlock()
+	if schedulingBlocked {
+		return nil, ErrSpeechSchedulingPaused
+	}
+
+	handle := NewSpeechHandle(a.AllowInterruptions(), DefaultInputDetails())
+	handle.Generation.RealtimeGeneration = &ev
+	a.Session.EmitSpeechCreated(SpeechCreatedEvent{
+		UserInitiated: false,
+		Source:        "generate_reply",
+		SpeechHandle:  handle,
+	})
+	for _, configureHandle := range configure {
+		if configureHandle != nil {
+			configureHandle(handle)
+		}
+	}
+	if err := a.ScheduleSpeech(handle, SpeechPriorityNormal, false); err != nil {
+		return handle, err
+	}
+	return handle, nil
 }
 
 func (a *AgentActivity) Drain(ctx context.Context) error {
@@ -911,6 +976,9 @@ func (a *AgentActivity) nextSpeechIndexLocked() int {
 func (a *AgentActivity) OnStartOfSpeech(ev *vad.VADEvent) {
 	a.speaking = true
 	a.sttEOSReceived = false
+	if a.Session != nil {
+		a.Session.UpdateUserState(UserStateSpeaking)
+	}
 	if endpointing := a.endpointing(); endpointing != nil {
 		startedAt := vadEventTimestamp(ev)
 		overlapping := a.Session != nil && a.Session.AgentStateValue() == AgentStateSpeaking
@@ -929,6 +997,9 @@ func (a *AgentActivity) OnStartOfSpeech(ev *vad.VADEvent) {
 
 func (a *AgentActivity) OnEndOfSpeech(ev *vad.VADEvent) {
 	a.speaking = false
+	if a.Session != nil {
+		a.Session.UpdateUserState(UserStateListening)
+	}
 	if endpointing := a.endpointing(); endpointing != nil {
 		endpointing.OnEndOfSpeech(vadEventTimestamp(ev), false)
 	}
@@ -938,6 +1009,25 @@ func (a *AgentActivity) OnEndOfSpeech(ev *vad.VADEvent) {
 		// Trigger EOU detection
 		a.runEOUDetection(EndOfTurnInfo{})
 	}
+}
+
+func (a *AgentActivity) OnVADInferenceDone(ev *vad.VADEvent) {
+	turnDetection := a.turnDetectionMode()
+	if turnDetection == TurnDetectionModeManual || turnDetection == TurnDetectionModeRealtimeLLM {
+		return
+	}
+	if ev == nil || ev.SpeechDuration < a.minInterruptionDuration() {
+		return
+	}
+	if turnDetection == TurnDetectionModeSTT && a.sttEOSReceived && ev.RawAccumulatedSilence > 0 {
+		return
+	}
+
+	go func() {
+		if err := a.Interrupt(false); err != nil {
+			logger.Logger.Warnw("failed to interrupt speech for VAD inference", err, "speech_duration", ev.SpeechDuration)
+		}
+	}()
 }
 
 func (a *AgentActivity) OnInterimTranscript(ev *stt.SpeechEvent) {
@@ -964,6 +1054,14 @@ func (a *AgentActivity) OnInterimTranscript(ev *stt.SpeechEvent) {
 		IsFinal:    false,
 		SpeakerID:  speakerID,
 	})
+	turnDetection := a.turnDetectionMode()
+	if transcript != "" && turnDetection != TurnDetectionModeManual && turnDetection != TurnDetectionModeRealtimeLLM {
+		go func() {
+			if err := a.Interrupt(false); err != nil {
+				logger.Logger.Warnw("failed to interrupt speech for interim transcript", err, "transcript", transcript)
+			}
+		}()
+	}
 }
 
 func (a *AgentActivity) OnFinalTranscript(ev *stt.SpeechEvent) {
@@ -997,7 +1095,15 @@ func (a *AgentActivity) OnFinalTranscript(ev *stt.SpeechEvent) {
 	a.userTurnMu.Unlock()
 	a.notifyUserTurnUpdated()
 
-	if a.turnDetectionMode() == TurnDetectionModeSTT {
+	turnDetection := a.turnDetectionMode()
+	if turnDetection != "" && turnDetection != TurnDetectionModeManual && turnDetection != TurnDetectionModeRealtimeLLM {
+		go func() {
+			if err := a.Interrupt(false); err != nil {
+				logger.Logger.Warnw("failed to interrupt speech for final transcript", err, "transcript", transcript)
+			}
+		}()
+	}
+	if turnDetection == TurnDetectionModeSTT {
 		a.runEOUDetection(EndOfTurnInfo{
 			NewTranscript:        transcript,
 			TranscriptConfidence: confidence,
@@ -1281,6 +1387,10 @@ func (a *AgentActivity) turnDetectionMode() TurnDetectionMode {
 	return TurnDetectionMode(mode)
 }
 
+func (a *AgentActivity) hasVADModel() bool {
+	return a != nil && ((a.Agent != nil && a.Agent.VAD != nil) || (a.Session != nil && a.Session.VAD != nil))
+}
+
 func (a *AgentActivity) runEOUDetection(info EndOfTurnInfo) {
 	a.eouMu.Lock()
 	if a.eouCancel != nil {
@@ -1338,6 +1448,13 @@ func (a *AgentActivity) minEndpointingDelay() float64 {
 
 func (a *AgentActivity) maxEndpointingDelay() float64 {
 	return a.EndpointingOpts().MaxDelay
+}
+
+func (a *AgentActivity) minInterruptionDuration() float64 {
+	if a != nil && a.Session != nil && a.Session.Options.MinInterruptionDuration > 0 {
+		return a.Session.Options.MinInterruptionDuration
+	}
+	return 0.5
 }
 
 func (a *AgentActivity) endpointing() Endpointing {

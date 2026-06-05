@@ -555,6 +555,42 @@ func TestMultimodalAgentEmitsErrorEventForRealtimeError(t *testing.T) {
 	}
 }
 
+func TestMultimodalAgentRoutesRealtimeErrorThroughActivity(t *testing.T) {
+	agent := NewAgent("test")
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	session.activity = NewAgentActivity(agent, session)
+	model := &fakeRealtimeModel{label: "test.RealtimeModel"}
+	cause := errors.New("realtime failed")
+	ma := &MultimodalAgent{
+		model:   model,
+		session: session,
+	}
+
+	ma.handleRealtimeEvent(llm.RealtimeEvent{
+		Type:  llm.RealtimeEventTypeError,
+		Error: cause,
+	})
+
+	select {
+	case ev := <-session.ErrorEvents():
+		rtErr, ok := ev.Error.(*llm.RealtimeModelError)
+		if !ok {
+			t.Fatalf("Error = %T, want *llm.RealtimeModelError", ev.Error)
+		}
+		if !errors.Is(rtErr, cause) {
+			t.Fatalf("RealtimeModelError unwrap = %v, want %v", rtErr, cause)
+		}
+		if rtErr.Label != "test.RealtimeModel" || rtErr.Recoverable {
+			t.Fatalf("RealtimeModelError = %#v, want label test.RealtimeModel recoverable false", rtErr)
+		}
+		if ev.Source != model {
+			t.Fatalf("Source = %#v, want realtime model", ev.Source)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("ErrorEvents did not receive routed realtime error")
+	}
+}
+
 func TestMultimodalAgentDoesNotEmitErrorEventForRealtimeEOF(t *testing.T) {
 	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
 	model := &fakeRealtimeModel{}
@@ -636,6 +672,32 @@ func TestMultimodalAgentEmitsSpeechCreatedForServerGeneration(t *testing.T) {
 	defer doneCancel()
 	if err := handle.Wait(doneCtx); err != nil {
 		t.Fatalf("server realtime generation handle did not complete after stream close: %v", err)
+	}
+}
+
+func TestMultimodalAgentSkipsServerGenerationWhenActivitySchedulingPaused(t *testing.T) {
+	agent := NewAgent("test")
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	activity := NewAgentActivity(agent, session)
+	session.activity = activity
+	activity.PauseScheduling()
+	ma := &MultimodalAgent{session: session}
+
+	ma.handleRealtimeEvent(llm.RealtimeEvent{
+		Type: llm.RealtimeEventTypeGenerationCreated,
+		Generation: &llm.GenerationCreatedEvent{
+			ResponseID:    "response_1",
+			UserInitiated: false,
+		},
+	})
+
+	select {
+	case ev := <-session.SpeechCreatedEvents():
+		t.Fatalf("unexpected SpeechCreated event while scheduling paused: %#v", ev)
+	default:
+	}
+	if len(activity.speechQueue) != 0 {
+		t.Fatalf("speechQueue length = %d, want no scheduled speech", len(activity.speechQueue))
 	}
 }
 
@@ -991,6 +1053,36 @@ func TestMultimodalAgentForwardsRealtimeMetrics(t *testing.T) {
 	}
 }
 
+func TestMultimodalAgentRoutesRealtimeMetricsThroughActivity(t *testing.T) {
+	agent := NewAgent("test")
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	session.activity = NewAgentActivity(agent, session)
+	metrics := &telemetry.RealtimeModelMetrics{RequestID: "req_1", InputTokens: 2}
+	ma := &MultimodalAgent{session: session}
+
+	ma.handleRealtimeEvent(llm.RealtimeEvent{
+		Type:    llm.RealtimeEventTypeMetricsCollected,
+		Metrics: metrics,
+	})
+
+	select {
+	case ev := <-session.MetricsCollectedEvents():
+		if ev.Metrics != metrics {
+			t.Fatalf("MetricsCollectedEvent metrics = %#v, want original metrics", ev.Metrics)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("MetricsCollectedEvents did not receive realtime metrics")
+	}
+	select {
+	case ev := <-session.SessionUsageUpdatedEvents():
+		if ev.Usage.LLMInputTokens() != 2 {
+			t.Fatalf("SessionUsageUpdatedEvent usage = %#v, want routed realtime usage", ev.Usage)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("SessionUsageUpdatedEvents did not receive realtime usage")
+	}
+}
+
 func TestMultimodalAgentAddsServerRemoteItemPlaceholder(t *testing.T) {
 	existing := &llm.ChatMessage{
 		ID:        "item_user_1",
@@ -1041,6 +1133,38 @@ func TestMultimodalAgentSkipsDuplicateRemoteItemPlaceholder(t *testing.T) {
 
 	if len(chatCtx.Items) != 1 {
 		t.Fatalf("chat context items = %#v, want duplicate remote item skipped", chatCtx.Items)
+	}
+}
+
+func TestMultimodalAgentRoutesRemoteItemAddedThroughActivity(t *testing.T) {
+	existing := &llm.ChatMessage{
+		ID:        "item_user_1",
+		Role:      llm.ChatRoleUser,
+		Content:   []llm.ChatContent{{Text: "hello"}},
+		CreatedAt: time.Now(),
+	}
+	remote := &llm.ChatMessage{
+		ID:        "item_assistant_1",
+		Role:      llm.ChatRoleAssistant,
+		Content:   []llm.ChatContent{{Text: "hi"}},
+		CreatedAt: existing.CreatedAt.Add(time.Second),
+	}
+	agent := NewAgent("test")
+	agent.ChatCtx.Insert(existing)
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	session.activity = NewAgentActivity(agent, session)
+	ma := &MultimodalAgent{session: session}
+
+	ma.handleRealtimeEvent(llm.RealtimeEvent{
+		Type: llm.RealtimeEventTypeRemoteItemAdded,
+		RemoteItem: &llm.RemoteItemAddedEvent{
+			PreviousItemID: "item_user_1",
+			Item:           remote,
+		},
+	})
+
+	if len(agent.ChatCtx.Items) != 2 || agent.ChatCtx.Items[1] != remote {
+		t.Fatalf("agent chat context items = %#v, want remote item routed through activity", agent.ChatCtx.Items)
 	}
 }
 

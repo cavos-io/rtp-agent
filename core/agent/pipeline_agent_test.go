@@ -670,6 +670,59 @@ func TestPipelineAgentEmitsConversationItemAddedForUserTranscript(t *testing.T) 
 	}
 }
 
+func TestPipelineAgentRoutesSTTTranscriptsThroughActivity(t *testing.T) {
+	baseAgent := NewAgent("test")
+	baseAgent.LLM = &fakeGenerationLLM{stream: &fakeGenerationLLMStream{}}
+	session := NewAgentSession(baseAgent, nil, AgentSessionOptions{})
+	activity := NewAgentActivity(baseAgent, session)
+	session.activity = activity
+	chatCtx := llm.NewChatContext()
+	pipeline := NewPipelineAgent(nil, nil, baseAgent.LLM, &fakePipelineTTS{}, chatCtx)
+	pipeline.session = session
+	pipeline.ctx = context.Background()
+	session.Assistant = pipeline
+
+	pipeline.sttLoop(&fakePipelineRecognizeStream{
+		events: []*stt.SpeechEvent{{
+			Type: stt.SpeechEventFinalTranscript,
+			Alternatives: []stt.SpeechData{{
+				Language:   "en",
+				Text:       "hello through activity",
+				SpeakerID:  "speaker_1",
+				Confidence: 0.82,
+			}},
+		}},
+	})
+
+	transcriptEvent := receiveUserInputTranscribedEvent(t, session)
+	if transcriptEvent.Transcript != "hello through activity" || !transcriptEvent.IsFinal {
+		t.Fatalf("UserInputTranscribedEvent = %#v, want final transcript from activity", transcriptEvent)
+	}
+	select {
+	case ev := <-session.ConversationItemAddedEvents():
+		msg, ok := ev.Item.(*llm.ChatMessage)
+		if !ok {
+			t.Fatalf("ConversationItemAdded item = %T, want *llm.ChatMessage", ev.Item)
+		}
+		if msg.Role != llm.ChatRoleUser || msg.TextContent() != "hello through activity" {
+			t.Fatalf("conversation message = %#v, want user transcript", msg)
+		}
+		if msg.TranscriptConfidence == nil || *msg.TranscriptConfidence != 0.82 {
+			t.Fatalf("TranscriptConfidence = %v, want 0.82", msg.TranscriptConfidence)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("ConversationItemAddedEvents did not receive activity-committed user transcript")
+	}
+
+	transcript, err := activity.CommitUserTurn(context.Background(), CommitUserTurnOptions{})
+	if err != nil {
+		t.Fatalf("CommitUserTurn error = %v, want nil", err)
+	}
+	if transcript != "" {
+		t.Fatalf("CommitUserTurn transcript after pipeline activity commit = %q, want empty", transcript)
+	}
+}
+
 func TestPipelineAgentEmitsUserInputTranscribedEvents(t *testing.T) {
 	chatCtx := llm.NewChatContext()
 	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
@@ -781,6 +834,62 @@ func TestPipelineAgentEmitsErrorEventForVADStreamError(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("ErrorEvents did not receive VAD stream error")
 	}
+}
+
+func TestPipelineAgentVADLoopForwardsSpeechEventsToActivity(t *testing.T) {
+	endpointing := &recordingPipelineEndpointing{}
+	agent := NewAgent("test")
+	session := NewAgentSession(agent, nil, AgentSessionOptions{Endpointing: endpointing})
+	activity := NewAgentActivity(agent, session)
+	session.activity = activity
+	pipeline := NewPipelineAgent(&fakePipelineVAD{}, nil, nil, nil, nil)
+	pipeline.session = session
+
+	pipeline.vadLoop(&fakePipelineVADStream{
+		events: []*vad.VADEvent{
+			{Type: vad.VADEventStartOfSpeech, Timestamp: 1.25},
+			{Type: vad.VADEventEndOfSpeech, Timestamp: 2.5},
+		},
+	})
+
+	if got := session.UserState(); got != UserStateListening {
+		t.Fatalf("UserState() = %q, want listening after VAD end", got)
+	}
+	if endpointing.startCount != 1 || endpointing.startAt != 1.25 {
+		t.Fatalf("endpointing start = (%d, %.2f), want (1, 1.25)", endpointing.startCount, endpointing.startAt)
+	}
+	if endpointing.endCount != 1 || endpointing.endAt != 2.5 {
+		t.Fatalf("endpointing end = (%d, %.2f), want (1, 2.50)", endpointing.endCount, endpointing.endAt)
+	}
+}
+
+func TestPipelineAgentVADLoopForwardsInferenceEventsToActivity(t *testing.T) {
+	agent := NewAgent("test")
+	agent.VAD = &fakePipelineVAD{}
+	session := NewAgentSession(agent, nil, AgentSessionOptions{
+		TurnDetection:           TurnDetectionModeVAD,
+		MinInterruptionDuration: 0.05,
+	})
+	activity := NewAgentActivity(agent, session)
+	current := NewSpeechHandle(true, DefaultInputDetails())
+	activity.currentSpeech = current
+	session.activity = activity
+	pipeline := NewPipelineAgent(&fakePipelineVAD{}, nil, nil, nil, nil)
+	pipeline.session = session
+
+	pipeline.vadLoop(&fakePipelineVADStream{
+		events: []*vad.VADEvent{
+			{
+				Type:                  vad.VADEventInferenceDone,
+				SpeechDuration:        0.06,
+				Speaking:              true,
+				RawAccumulatedSilence: 0,
+			},
+		},
+	})
+
+	waitForInterrupted(t, current)
+	current.MarkDone()
 }
 
 func TestPipelineAgentEmitsLLMErrorEventForChatFailure(t *testing.T) {
@@ -1446,7 +1555,9 @@ func (f *fakePipelineVAD) Stream(context.Context) (vad.VADStream, error) {
 }
 
 type fakePipelineVADStream struct {
-	err error
+	events []*vad.VADEvent
+	index  int
+	err    error
 }
 
 func (f *fakePipelineVADStream) PushFrame(*model.AudioFrame) error { return nil }
@@ -1458,12 +1569,41 @@ func (f *fakePipelineVADStream) EndInput() error { return nil }
 func (f *fakePipelineVADStream) Close() error { return nil }
 
 func (f *fakePipelineVADStream) Next() (*vad.VADEvent, error) {
+	if f.index < len(f.events) {
+		ev := f.events[f.index]
+		f.index++
+		return ev, nil
+	}
 	if f.err != nil {
 		err := f.err
 		f.err = nil
 		return nil, err
 	}
 	return nil, io.EOF
+}
+
+type recordingPipelineEndpointing struct {
+	startCount int
+	endCount   int
+	startAt    float64
+	endAt      float64
+}
+
+func (r *recordingPipelineEndpointing) UpdateOptions(*float64, *float64) {}
+func (r *recordingPipelineEndpointing) MinDelay() float64                { return 0 }
+func (r *recordingPipelineEndpointing) MaxDelay() float64                { return 0 }
+func (r *recordingPipelineEndpointing) Overlapping() bool                { return false }
+func (r *recordingPipelineEndpointing) OnStartOfAgentSpeech(float64)     {}
+func (r *recordingPipelineEndpointing) OnEndOfAgentSpeech(float64)       {}
+
+func (r *recordingPipelineEndpointing) OnStartOfSpeech(startedAt float64, overlapping bool) {
+	r.startCount++
+	r.startAt = startedAt
+}
+
+func (r *recordingPipelineEndpointing) OnEndOfSpeech(endedAt float64, shouldIgnore bool) {
+	r.endCount++
+	r.endAt = endedAt
 }
 
 type blockingPipelineTool struct {

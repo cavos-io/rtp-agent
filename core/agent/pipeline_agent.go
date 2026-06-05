@@ -131,7 +131,11 @@ func (va *PipelineAgent) vadLoop(stream vad.VADStream) {
 
 		if ev.Type == vad.VADEventStartOfSpeech {
 			logger.Logger.Infow("User started speaking")
-			va.session.UpdateUserState(UserStateSpeaking)
+			if va.session != nil && va.session.activity != nil {
+				va.session.activity.OnStartOfSpeech(ev)
+			} else if va.session != nil {
+				va.session.UpdateUserState(UserStateSpeaking)
+			}
 
 			// Interrupt ongoing agent speech/generation
 			va.mu.Lock()
@@ -144,7 +148,15 @@ func (va *PipelineAgent) vadLoop(stream vad.VADStream) {
 			va.mu.Unlock()
 		} else if ev.Type == vad.VADEventEndOfSpeech {
 			logger.Logger.Infow("User stopped speaking")
-			va.session.UpdateUserState(UserStateListening)
+			if va.session != nil && va.session.activity != nil {
+				va.session.activity.OnEndOfSpeech(ev)
+			} else if va.session != nil {
+				va.session.UpdateUserState(UserStateListening)
+			}
+		} else if ev.Type == vad.VADEventInferenceDone {
+			if va.session != nil && va.session.activity != nil {
+				va.session.activity.OnVADInferenceDone(ev)
+			}
 		}
 	}
 }
@@ -174,7 +186,24 @@ func (va *PipelineAgent) sttLoop(stream stt.RecognizeStream) {
 		alternative := ev.Alternatives[0]
 		va.mu.Lock()
 		session := va.session
+		ctx := va.ctx
 		va.mu.Unlock()
+		if session != nil && session.activity != nil {
+			if ev.Type == stt.SpeechEventInterimTranscript {
+				session.activity.OnInterimTranscript(ev)
+				continue
+			}
+			session.activity.OnFinalTranscript(ev)
+			if session.activity.turnDetectionMode() != TurnDetectionModeSTT {
+				if ctx == nil {
+					ctx = context.Background()
+				}
+				if _, err := session.activity.CommitUserTurn(ctx, CommitUserTurnOptions{}); err != nil {
+					va.emitError(err, va)
+				}
+			}
+			continue
+		}
 		if session != nil {
 			session.EmitUserInputTranscribed(UserInputTranscribedEvent{
 				Language:   alternative.Language,

@@ -395,6 +395,12 @@ func (ma *MultimodalAgent) handleRealtimeEvent(ev llm.RealtimeEvent) {
 		if ev.Generation == nil || ev.Generation.UserInitiated || ma.session == nil {
 			return
 		}
+		if ma.session.activity != nil {
+			if _, err := ma.session.activity.OnGenerationCreated(*ev.Generation, ma.attachPendingRealtimeAutoToolReply); err != nil {
+				logger.Logger.Warnw("failed to schedule realtime generation", err, "response_id", ev.Generation.ResponseID)
+			}
+			return
+		}
 		handle := NewSpeechHandle(ma.session.Options.AllowInterruptions, DefaultInputDetails())
 		handle.Generation.RealtimeGeneration = ev.Generation
 		ma.session.EmitSpeechCreated(SpeechCreatedEvent{
@@ -437,7 +443,14 @@ func (ma *MultimodalAgent) handleRealtimeEvent(ev llm.RealtimeEvent) {
 		}
 
 	case llm.RealtimeEventTypeRemoteItemAdded:
-		if ev.RemoteItem == nil || ev.RemoteItem.Item == nil || ma.chatCtx == nil {
+		if ev.RemoteItem == nil || ev.RemoteItem.Item == nil {
+			return
+		}
+		if ma.session != nil && ma.session.activity != nil {
+			ma.session.activity.OnRemoteItemAdded(*ev.RemoteItem)
+			return
+		}
+		if ma.chatCtx == nil {
 			return
 		}
 		item := ev.RemoteItem.Item
@@ -453,7 +466,12 @@ func (ma *MultimodalAgent) handleRealtimeEvent(ev llm.RealtimeEvent) {
 		}
 
 	case llm.RealtimeEventTypeMetricsCollected:
-		if ma.session != nil && ev.Metrics != nil {
+		if ma.session == nil || ev.Metrics == nil {
+			return
+		}
+		if ma.session.activity != nil {
+			ma.session.activity.OnMetricsCollected(ev.Metrics)
+		} else {
 			ma.session.EmitMetricsCollected(ev.Metrics)
 		}
 
@@ -473,10 +491,15 @@ func (ma *MultimodalAgent) handleRealtimeEvent(ev llm.RealtimeEvent) {
 		if ev.Error != io.EOF {
 			logger.Logger.Errorw("Realtime stream error", ev.Error)
 			if ma.session != nil && ev.Error != nil {
-				ma.session.EmitError(ErrorEvent{
-					Error:  llm.NewRealtimeModelError(llm.RealtimeLabel(ma.model), ev.Error, false),
-					Source: ma.model,
-				})
+				err := llm.NewRealtimeModelError(llm.RealtimeLabel(ma.model), ev.Error, false)
+				if ma.session.activity != nil {
+					ma.session.activity.OnError(err, ma.model)
+				} else {
+					ma.session.EmitError(ErrorEvent{
+						Error:  err,
+						Source: ma.model,
+					})
+				}
 			}
 		}
 	}

@@ -10,6 +10,7 @@ import (
 	"github.com/cavos-io/rtp-agent/core/audio/model"
 	"github.com/cavos-io/rtp-agent/core/llm"
 	"github.com/cavos-io/rtp-agent/core/stt"
+	"github.com/cavos-io/rtp-agent/core/vad"
 	"github.com/cavos-io/rtp-agent/library/telemetry"
 	"github.com/cavos-io/rtp-agent/library/tokenize"
 )
@@ -279,6 +280,107 @@ func TestAgentActivityRealtimeInputSpeechCallbacksUpdateUserState(t *testing.T) 
 	}
 }
 
+func TestAgentActivityRealtimeInputSpeechStartedKeepsVADOwnedUserState(t *testing.T) {
+	agent := NewAgent("test")
+	agent.VAD = &fakePipelineVAD{}
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	activity := NewAgentActivity(agent, session)
+	current := NewSpeechHandle(true, DefaultInputDetails())
+	activity.currentSpeech = current
+
+	activity.OnInputSpeechStarted()
+
+	if got := session.UserState(); got != UserStateListening {
+		t.Fatalf("UserState() after realtime speech started with VAD = %q, want %q", got, UserStateListening)
+	}
+	waitForInterrupted(t, current)
+	current.MarkDone()
+}
+
+func TestAgentActivityRealtimeInputSpeechStoppedKeepsVADOwnedUserState(t *testing.T) {
+	agent := NewAgent("test")
+	agent.VAD = &fakePipelineVAD{}
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	session.UpdateUserState(UserStateSpeaking)
+	activity := NewAgentActivity(agent, session)
+
+	activity.OnInputSpeechStopped(llm.InputSpeechStoppedEvent{UserTranscriptionEnabled: true})
+
+	if got := session.UserState(); got != UserStateSpeaking {
+		t.Fatalf("UserState() after realtime speech stopped with VAD = %q, want %q", got, UserStateSpeaking)
+	}
+	select {
+	case ev := <-session.UserInputTranscribedEvents():
+		if ev.Transcript != "" || ev.IsFinal {
+			t.Fatalf("UserInputTranscribedEvent = %#v, want empty interim transcript", ev)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("UserInputTranscribedEvents did not receive empty interim transcript")
+	}
+}
+
+func TestAgentActivityVADSpeechCallbacksUpdateUserState(t *testing.T) {
+	agent := NewAgent("test")
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	activity := NewAgentActivity(agent, session)
+
+	activity.OnStartOfSpeech(&vad.VADEvent{Type: vad.VADEventStartOfSpeech})
+	if got := session.UserState(); got != UserStateSpeaking {
+		t.Fatalf("UserState() after VAD speech started = %q, want %q", got, UserStateSpeaking)
+	}
+
+	activity.OnEndOfSpeech(&vad.VADEvent{Type: vad.VADEventEndOfSpeech})
+	if got := session.UserState(); got != UserStateListening {
+		t.Fatalf("UserState() after VAD speech ended = %q, want %q", got, UserStateListening)
+	}
+}
+
+func TestAgentActivityOnVADInferenceDoneInterruptsCurrentSpeech(t *testing.T) {
+	agent := NewAgent("test")
+	agent.VAD = &fakePipelineVAD{}
+	session := NewAgentSession(agent, nil, AgentSessionOptions{
+		TurnDetection:           TurnDetectionModeVAD,
+		MinInterruptionDuration: 0.05,
+	})
+	activity := NewAgentActivity(agent, session)
+	current := NewSpeechHandle(true, DefaultInputDetails())
+	activity.currentSpeech = current
+
+	activity.OnVADInferenceDone(&vad.VADEvent{
+		Type:                  vad.VADEventInferenceDone,
+		SpeechDuration:        0.06,
+		Speaking:              true,
+		RawAccumulatedSilence: 0,
+	})
+
+	waitForInterrupted(t, current)
+	current.MarkDone()
+}
+
+func TestAgentActivityOnVADInferenceDoneIgnoresManualTurnDetection(t *testing.T) {
+	agent := NewAgent("test")
+	agent.VAD = &fakePipelineVAD{}
+	session := NewAgentSession(agent, nil, AgentSessionOptions{
+		TurnDetection:           TurnDetectionModeManual,
+		MinInterruptionDuration: 0.05,
+	})
+	activity := NewAgentActivity(agent, session)
+	current := NewSpeechHandle(true, DefaultInputDetails())
+	activity.currentSpeech = current
+
+	activity.OnVADInferenceDone(&vad.VADEvent{
+		Type:                  vad.VADEventInferenceDone,
+		SpeechDuration:        0.06,
+		Speaking:              true,
+		RawAccumulatedSilence: 0,
+	})
+
+	if current.IsInterrupted() {
+		t.Fatal("current speech was interrupted for manual turn detection")
+	}
+	current.MarkDone()
+}
+
 func TestAgentActivityRealtimeInputSpeechStoppedEmitsInterimTranscriptWhenEnabled(t *testing.T) {
 	agent := NewAgent("test")
 	session := NewAgentSession(agent, nil, AgentSessionOptions{})
@@ -357,6 +459,175 @@ func TestAgentActivityInputAudioTranscriptionCompletedSkipsInterimMessage(t *tes
 	}
 	if session.ChatCtx.GetByID("item_user_1") != nil {
 		t.Fatalf("session chat context item = %#v, want none", session.ChatCtx.GetByID("item_user_1"))
+	}
+}
+
+func TestAgentActivityRemoteItemAddedAppendsServerPlaceholder(t *testing.T) {
+	existing := &llm.ChatMessage{
+		ID:        "item_user_1",
+		Role:      llm.ChatRoleUser,
+		Content:   []llm.ChatContent{{Text: "hello"}},
+		CreatedAt: time.Now(),
+	}
+	remote := &llm.ChatMessage{
+		ID:        "item_assistant_1",
+		Role:      llm.ChatRoleAssistant,
+		Content:   []llm.ChatContent{{Text: "hi"}},
+		CreatedAt: existing.CreatedAt.Add(time.Second),
+	}
+	agent := NewAgent("test")
+	agent.ChatCtx.Insert(existing)
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	activity := NewAgentActivity(agent, session)
+
+	activity.OnRemoteItemAdded(llm.RemoteItemAddedEvent{
+		PreviousItemID: "item_user_1",
+		Item:           remote,
+	})
+
+	if len(agent.ChatCtx.Items) != 2 || agent.ChatCtx.Items[1] != remote {
+		t.Fatalf("agent chat context items = %#v, want remote item appended after previous item", agent.ChatCtx.Items)
+	}
+	select {
+	case ev := <-session.ConversationItemAddedEvents():
+		t.Fatalf("unexpected conversation item event for remote placeholder: %#v", ev)
+	default:
+	}
+}
+
+func TestAgentActivityRemoteItemAddedSkipsDuplicatePlaceholder(t *testing.T) {
+	remote := &llm.ChatMessage{
+		ID:        "item_assistant_1",
+		Role:      llm.ChatRoleAssistant,
+		Content:   []llm.ChatContent{{Text: "hi"}},
+		CreatedAt: time.Now(),
+	}
+	agent := NewAgent("test")
+	agent.ChatCtx.Insert(remote)
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	activity := NewAgentActivity(agent, session)
+
+	activity.OnRemoteItemAdded(llm.RemoteItemAddedEvent{
+		Item: remote,
+	})
+
+	if len(agent.ChatCtx.Items) != 1 {
+		t.Fatalf("agent chat context items = %#v, want duplicate remote item skipped", agent.ChatCtx.Items)
+	}
+}
+
+func TestAgentActivityMetricsCollectedEmitsMetricsAndUsage(t *testing.T) {
+	agent := NewAgent("test")
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	activity := NewAgentActivity(agent, session)
+	metrics := &telemetry.RealtimeModelMetrics{
+		RequestID:    "req_1",
+		InputTokens:  3,
+		OutputTokens: 5,
+		TotalTokens:  8,
+	}
+
+	activity.OnMetricsCollected(metrics)
+
+	select {
+	case ev := <-session.MetricsCollectedEvents():
+		if ev.Metrics != metrics {
+			t.Fatalf("MetricsCollectedEvent metrics = %#v, want original metrics", ev.Metrics)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("MetricsCollectedEvents did not receive realtime metrics")
+	}
+	select {
+	case ev := <-session.SessionUsageUpdatedEvents():
+		if ev.Usage.LLMInputTokens() != 3 || ev.Usage.LLMOutputTokens() != 5 {
+			t.Fatalf("SessionUsageUpdatedEvent usage = %#v, want realtime token usage", ev.Usage)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("SessionUsageUpdatedEvents did not receive realtime usage")
+	}
+}
+
+func TestAgentActivityErrorEmitsSessionErrorEvent(t *testing.T) {
+	agent := NewAgent("test")
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	activity := NewAgentActivity(agent, session)
+	cause := errors.New("realtime failed")
+	source := &fakeRealtimeModel{label: "test.RealtimeModel"}
+
+	activity.OnError(cause, source)
+
+	select {
+	case ev := <-session.ErrorEvents():
+		if !errors.Is(ev.Error, cause) {
+			t.Fatalf("Error = %v, want %v", ev.Error, cause)
+		}
+		if ev.Source != source {
+			t.Fatalf("Source = %#v, want realtime source", ev.Source)
+		}
+		if ev.CreatedAt.IsZero() {
+			t.Fatal("CreatedAt is zero")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("ErrorEvents did not receive activity error")
+	}
+}
+
+func TestAgentActivityGenerationCreatedSkipsSpeechWhenSchedulingPaused(t *testing.T) {
+	agent := NewAgent("test")
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	activity := NewAgentActivity(agent, session)
+	activity.PauseScheduling()
+
+	handle, err := activity.OnGenerationCreated(llm.GenerationCreatedEvent{
+		ResponseID:    "response_1",
+		UserInitiated: false,
+	})
+
+	if !errors.Is(err, ErrSpeechSchedulingPaused) {
+		t.Fatalf("OnGenerationCreated error = %v, want ErrSpeechSchedulingPaused", err)
+	}
+	if handle != nil {
+		t.Fatalf("OnGenerationCreated handle = %#v, want nil when scheduling paused", handle)
+	}
+	select {
+	case ev := <-session.SpeechCreatedEvents():
+		t.Fatalf("unexpected SpeechCreated event while scheduling paused: %#v", ev)
+	default:
+	}
+}
+
+func TestAgentActivityGenerationCreatedEmitsAndSchedulesSpeech(t *testing.T) {
+	agent := NewAgent("test")
+	session := NewAgentSession(agent, nil, AgentSessionOptions{AllowInterruptions: true})
+	activity := NewAgentActivity(agent, session)
+	generation := llm.GenerationCreatedEvent{
+		ResponseID:    "response_1",
+		UserInitiated: false,
+	}
+
+	handle, err := activity.OnGenerationCreated(generation)
+	if err != nil {
+		t.Fatalf("OnGenerationCreated error = %v, want nil", err)
+	}
+	if handle == nil {
+		t.Fatal("OnGenerationCreated handle = nil, want speech handle")
+	}
+	if handle.Generation.RealtimeGeneration == nil || handle.Generation.RealtimeGeneration.ResponseID != "response_1" {
+		t.Fatalf("RealtimeGeneration = %#v, want response_1", handle.Generation.RealtimeGeneration)
+	}
+
+	select {
+	case ev := <-session.SpeechCreatedEvents():
+		if ev.SpeechHandle != handle || ev.UserInitiated || ev.Source != "generate_reply" {
+			t.Fatalf("SpeechCreatedEvent = %#v, want server generate_reply handle", ev)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("SpeechCreatedEvents did not receive realtime generation")
+	}
+	scheduleCtx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if err := handle.WaitForScheduled(scheduleCtx); err != nil {
+		t.Fatalf("speech handle was not scheduled: %v", err)
 	}
 }
 
@@ -875,6 +1146,70 @@ func TestAgentActivityOnInterimTranscriptEmitsUserInputTranscribed(t *testing.T)
 	case <-time.After(100 * time.Millisecond):
 		t.Fatal("UserInputTranscribedEvents did not receive interim transcript")
 	}
+}
+
+func TestAgentActivityOnInterimTranscriptInterruptsCurrentSpeech(t *testing.T) {
+	agent := NewAgent("test")
+	agent.STT = &fakePipelineSTT{}
+	session := NewAgentSession(agent, nil, AgentSessionOptions{TurnDetection: TurnDetectionModeSTT})
+	activity := NewAgentActivity(agent, session)
+	current := NewSpeechHandle(true, DefaultInputDetails())
+	activity.currentSpeech = current
+
+	activity.OnInterimTranscript(&stt.SpeechEvent{
+		Alternatives: []stt.SpeechData{{Text: "wait"}},
+	})
+
+	waitForInterrupted(t, current)
+}
+
+func TestAgentActivityOnInterimTranscriptDoesNotInterruptManualTurn(t *testing.T) {
+	agent := NewAgent("test")
+	session := NewAgentSession(agent, nil, AgentSessionOptions{TurnDetection: TurnDetectionModeManual})
+	activity := NewAgentActivity(agent, session)
+	current := NewSpeechHandle(true, DefaultInputDetails())
+	activity.currentSpeech = current
+
+	activity.OnInterimTranscript(&stt.SpeechEvent{
+		Alternatives: []stt.SpeechData{{Text: "wait"}},
+	})
+
+	if current.IsInterrupted() {
+		t.Fatal("current speech was interrupted for manual turn detection")
+	}
+}
+
+func TestAgentActivityOnFinalTranscriptInterruptsCurrentSpeechForVADTurnDetection(t *testing.T) {
+	agent := NewAgent("test")
+	agent.VAD = &fakePipelineVAD{}
+	session := NewAgentSession(agent, nil, AgentSessionOptions{TurnDetection: TurnDetectionModeVAD})
+	activity := NewAgentActivity(agent, session)
+	current := NewSpeechHandle(true, DefaultInputDetails())
+	activity.currentSpeech = current
+
+	activity.OnFinalTranscript(&stt.SpeechEvent{
+		Alternatives: []stt.SpeechData{{Text: "final fallback"}},
+	})
+
+	waitForInterrupted(t, current)
+	current.MarkDone()
+}
+
+func TestAgentActivityOnFinalTranscriptDoesNotInterruptManualTurnDetection(t *testing.T) {
+	agent := NewAgent("test")
+	session := NewAgentSession(agent, nil, AgentSessionOptions{TurnDetection: TurnDetectionModeManual})
+	activity := NewAgentActivity(agent, session)
+	current := NewSpeechHandle(true, DefaultInputDetails())
+	activity.currentSpeech = current
+
+	activity.OnFinalTranscript(&stt.SpeechEvent{
+		Alternatives: []stt.SpeechData{{Text: "manual final"}},
+	})
+
+	if current.IsInterrupted() {
+		t.Fatal("current speech was interrupted for manual turn detection")
+	}
+	current.MarkDone()
 }
 
 func TestAgentActivityClearUserTurnDropsPendingManualTranscript(t *testing.T) {
