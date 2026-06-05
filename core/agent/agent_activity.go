@@ -1112,6 +1112,9 @@ func (a *AgentActivity) OnVADInferenceDone(ev *vad.VADEvent) {
 	if turnDetection == TurnDetectionModeSTT && a.sttEOSReceived && ev.RawAccumulatedSilence > 0 {
 		return
 	}
+	if a.Session != nil && a.Session.aecWarmupActive() {
+		return
+	}
 
 	go func() {
 		if err := a.Interrupt(false); err != nil {
