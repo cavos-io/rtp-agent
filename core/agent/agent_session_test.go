@@ -218,6 +218,35 @@ func TestAgentSessionUsageUpdatedEventsFanOutToSubscribers(t *testing.T) {
 	assertUsageUpdatedEvent(t, second, "second")
 }
 
+func TestAgentSessionConversationItemAddedEventsFanOutToSubscribers(t *testing.T) {
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	first := session.ConversationItemAddedEvents()
+	second := session.ConversationItemAddedEvents()
+	msg := &llm.ChatMessage{ID: "msg_1", Role: llm.ChatRoleUser}
+
+	session.EmitConversationItemAdded(msg)
+
+	assertConversationItemAddedEvent(t, first, msg, "first")
+	assertConversationItemAddedEvent(t, second, msg, "second")
+}
+
+func TestAgentSessionFunctionToolsExecutedEventsFanOutToSubscribers(t *testing.T) {
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	first := session.FunctionToolsExecutedEvents()
+	second := session.FunctionToolsExecutedEvents()
+	call := &llm.FunctionCall{ID: "call_item", CallID: "call_lookup", Name: "lookup"}
+	output := &llm.FunctionCallOutput{ID: "output_item", CallID: "call_lookup", Name: "lookup", Output: "ok"}
+	ev, err := NewFunctionToolsExecutedEvent([]*llm.FunctionCall{call}, []*llm.FunctionCallOutput{output})
+	if err != nil {
+		t.Fatalf("NewFunctionToolsExecutedEvent error = %v", err)
+	}
+
+	session.EmitFunctionToolsExecuted(*ev)
+
+	assertFunctionToolsExecutedEvent(t, first, call, output, "first")
+	assertFunctionToolsExecutedEvent(t, second, call, output, "second")
+}
+
 func assertUserTranscriptEvent(t *testing.T, events <-chan UserInputTranscribedEvent, name string) {
 	t.Helper()
 
@@ -319,6 +348,35 @@ func assertUsageUpdatedEvent(t *testing.T, events <-chan SessionUsageUpdatedEven
 		}
 	case <-time.After(time.Second):
 		t.Fatalf("%s subscriber did not receive usage event", name)
+	}
+}
+
+func assertConversationItemAddedEvent(t *testing.T, events <-chan ConversationItemAddedEvent, item llm.ChatItem, name string) {
+	t.Helper()
+
+	select {
+	case ev := <-events:
+		if ev.Item != item {
+			t.Fatalf("%s subscriber item = %#v, want original item", name, ev.Item)
+		}
+	case <-time.After(time.Second):
+		t.Fatalf("%s subscriber did not receive conversation item event", name)
+	}
+}
+
+func assertFunctionToolsExecutedEvent(t *testing.T, events <-chan FunctionToolsExecutedEvent, call *llm.FunctionCall, output *llm.FunctionCallOutput, name string) {
+	t.Helper()
+
+	select {
+	case ev := <-events:
+		if len(ev.FunctionCalls) != 1 || ev.FunctionCalls[0] != call {
+			t.Fatalf("%s subscriber function calls = %#v, want original call", name, ev.FunctionCalls)
+		}
+		if len(ev.FunctionCallOutputs) != 1 || ev.FunctionCallOutputs[0] != output {
+			t.Fatalf("%s subscriber function outputs = %#v, want original output", name, ev.FunctionCallOutputs)
+		}
+	case <-time.After(time.Second):
+		t.Fatalf("%s subscriber did not receive function tools event", name)
 	}
 }
 

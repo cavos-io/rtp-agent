@@ -209,7 +209,11 @@ type AgentSession struct {
 	userTurnExceededCh   chan UserTurnExceededEvent
 	overlappingSpeechCh  chan OverlappingSpeechEvent
 	conversationItemCh   chan ConversationItemAddedEvent
+	conversationItemSubd bool
+	conversationItemSubs []chan ConversationItemAddedEvent
 	functionToolsCh      chan FunctionToolsExecutedEvent
+	functionToolsSubd    bool
+	functionToolsSubs    []chan FunctionToolsExecutedEvent
 	metricsCollectedCh   chan MetricsCollectedEvent
 	metricsChSubscribed  bool
 	metricsSubs          []chan MetricsCollectedEvent
@@ -849,10 +853,11 @@ func (s *AgentSession) EmitConversationItemAdded(item llm.ChatItem) {
 	s.insertChatItem(item)
 	ev := ConversationItemAddedEvent{Item: item, CreatedAt: time.Now()}
 	s.recordEvent(&ev)
-	ch := s.conversationItemAddedEvents()
-	select {
-	case ch <- ev:
-	default:
+	for _, ch := range s.conversationItemAddedSubscribers() {
+		select {
+		case ch <- ev:
+		default:
+		}
 	}
 }
 
@@ -863,7 +868,26 @@ func (s *AgentSession) conversationItemAddedEvents() chan ConversationItemAddedE
 	if s.conversationItemCh == nil {
 		s.conversationItemCh = make(chan ConversationItemAddedEvent, 10)
 	}
-	return s.conversationItemCh
+	if !s.conversationItemSubd {
+		s.conversationItemSubd = true
+		return s.conversationItemCh
+	}
+	ch := make(chan ConversationItemAddedEvent, 10)
+	s.conversationItemSubs = append(s.conversationItemSubs, ch)
+	return ch
+}
+
+func (s *AgentSession) conversationItemAddedSubscribers() []chan ConversationItemAddedEvent {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	subs := make([]chan ConversationItemAddedEvent, 0, len(s.conversationItemSubs)+1)
+	if s.conversationItemCh == nil {
+		s.conversationItemCh = make(chan ConversationItemAddedEvent, 10)
+	}
+	subs = append(subs, s.conversationItemCh)
+	subs = append(subs, s.conversationItemSubs...)
+	return subs
 }
 
 func (s *AgentSession) insertChatItem(item llm.ChatItem) {
@@ -910,10 +934,11 @@ func (s *AgentSession) EmitFunctionToolsExecuted(ev FunctionToolsExecutedEvent) 
 		}
 	}
 	s.recordEvent(&ev)
-	ch := s.functionToolsExecutedEvents()
-	select {
-	case ch <- ev:
-	default:
+	for _, ch := range s.functionToolsExecutedSubscribers() {
+		select {
+		case ch <- ev:
+		default:
+		}
 	}
 }
 
@@ -924,7 +949,26 @@ func (s *AgentSession) functionToolsExecutedEvents() chan FunctionToolsExecutedE
 	if s.functionToolsCh == nil {
 		s.functionToolsCh = make(chan FunctionToolsExecutedEvent, 10)
 	}
-	return s.functionToolsCh
+	if !s.functionToolsSubd {
+		s.functionToolsSubd = true
+		return s.functionToolsCh
+	}
+	ch := make(chan FunctionToolsExecutedEvent, 10)
+	s.functionToolsSubs = append(s.functionToolsSubs, ch)
+	return ch
+}
+
+func (s *AgentSession) functionToolsExecutedSubscribers() []chan FunctionToolsExecutedEvent {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	subs := make([]chan FunctionToolsExecutedEvent, 0, len(s.functionToolsSubs)+1)
+	if s.functionToolsCh == nil {
+		s.functionToolsCh = make(chan FunctionToolsExecutedEvent, 10)
+	}
+	subs = append(subs, s.functionToolsCh)
+	subs = append(subs, s.functionToolsSubs...)
+	return subs
 }
 
 func (s *AgentSession) MetricsCollectedEvents() <-chan MetricsCollectedEvent {
