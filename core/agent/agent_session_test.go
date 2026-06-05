@@ -1155,6 +1155,32 @@ func TestAgentSessionGenerateReplyOptionsPreserveInstructions(t *testing.T) {
 	}
 }
 
+func TestAgentSessionGenerateReplyOptionsPreserveInstructionVariants(t *testing.T) {
+	agent := NewAgent("test")
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	session.activity = NewAgentActivity(agent, session)
+	instructions := llm.NewInstructions("speak plainly", "write tersely")
+
+	handle, err := session.GenerateReplyWithOptions(context.Background(), GenerateReplyOptions{
+		UserInput:           "hello",
+		InstructionVariants: instructions,
+		InputModality:       "audio",
+	})
+
+	if err != nil {
+		t.Fatalf("GenerateReplyWithOptions error = %v, want nil", err)
+	}
+	if handle.Generation.Instructions == nil {
+		t.Fatal("handle.Generation.Instructions = nil, want per-call instruction variants")
+	}
+	if got := handle.Generation.Instructions.AsModality("audio").String(); got != "speak plainly" {
+		t.Fatalf("handle.Generation.Instructions audio = %q, want speak plainly", got)
+	}
+	if got := handle.Generation.Instructions.AsModality("text").String(); got != "write tersely" {
+		t.Fatalf("handle.Generation.Instructions text = %q, want write tersely", got)
+	}
+}
+
 func TestAgentSessionGenerateReplyOptionsPreserveToolChoice(t *testing.T) {
 	agent := NewAgent("test")
 	session := NewAgentSession(agent, nil, AgentSessionOptions{})

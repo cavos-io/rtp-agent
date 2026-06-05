@@ -347,17 +347,19 @@ func (a *AgentActivity) recordInitialConfiguration() error {
 		a.Session.ChatCtx = llm.NewChatContext()
 	}
 
-	if err := updateAgentInstructionsMessage(a.Agent.ChatCtx, a.Agent.Instructions, a.Agent.Instructions != ""); err != nil {
+	instructions := agentInstructionVariants(a.Agent)
+	if err := updateAgentInstructionsMessage(a.Agent.ChatCtx, instructions, instructions != nil); err != nil {
 		return err
 	}
 
 	toolNames := sortedAgentToolNames(a.Tools())
-	if a.Agent.Instructions == "" && len(toolNames) == 0 {
+	if instructions == nil && len(toolNames) == 0 {
 		return nil
 	}
 
+	instructionText := agentInstructionsText(a.Agent)
 	configUpdate := &llm.AgentConfigUpdate{
-		Instructions: stringPtrIfNotEmpty(a.Agent.Instructions),
+		Instructions: stringPtrIfNotEmpty(instructionText),
 		ToolsAdded:   toolNames,
 		CreatedAt:    time.Now(),
 	}
@@ -506,6 +508,7 @@ func (a *AgentActivity) waitForUserTurnExceededCallback(ctx context.Context) (bo
 
 func (a *AgentActivity) UpdateInstructions(ctx context.Context, instructions string) error {
 	a.Agent.Instructions = instructions
+	a.Agent.InstructionVariants = nil
 	configUpdate := &llm.AgentConfigUpdate{
 		Instructions: &instructions,
 		CreatedAt:    time.Now(),
@@ -520,7 +523,7 @@ func (a *AgentActivity) UpdateInstructions(ctx context.Context, instructions str
 		}
 		a.Session.ChatCtx.Insert(configUpdate)
 	}
-	if err := updateAgentInstructionsMessage(a.Agent.ChatCtx, instructions, true); err != nil {
+	if err := updateAgentInstructionsMessage(a.Agent.ChatCtx, llm.NewInstructions(instructions), true); err != nil {
 		return err
 	}
 	if a.Session != nil {
@@ -589,14 +592,14 @@ func (a *AgentActivity) UpdateChatCtx(ctx context.Context, chatCtx *llm.ChatCont
 	}
 	if chatCtx == nil {
 		a.Agent.ChatCtx = llm.NewChatContext()
-		if err := updateAgentInstructionsMessage(a.Agent.ChatCtx, a.Agent.Instructions, true); err != nil {
+		if err := updateAgentInstructionsMessage(a.Agent.ChatCtx, agentInstructionVariants(a.Agent), true); err != nil {
 			return err
 		}
 		return a.updateRealtimeChatContext(ctx)
 	}
 	if !excludeInvalid {
 		a.Agent.ChatCtx = chatCtx.Copy()
-		if err := updateAgentInstructionsMessage(a.Agent.ChatCtx, a.Agent.Instructions, true); err != nil {
+		if err := updateAgentInstructionsMessage(a.Agent.ChatCtx, agentInstructionVariants(a.Agent), true); err != nil {
 			return err
 		}
 		return a.updateRealtimeChatContext(ctx)
@@ -604,7 +607,7 @@ func (a *AgentActivity) UpdateChatCtx(ctx context.Context, chatCtx *llm.ChatCont
 	a.Agent.ChatCtx = chatCtx.Copy(llm.ChatContextCopyOptions{
 		Tools: a.Tools(),
 	})
-	if err := updateAgentInstructionsMessage(a.Agent.ChatCtx, a.Agent.Instructions, true); err != nil {
+	if err := updateAgentInstructionsMessage(a.Agent.ChatCtx, agentInstructionVariants(a.Agent), true); err != nil {
 		return err
 	}
 	if err := a.updateRealtimeChatContext(ctx); err != nil {
@@ -715,9 +718,37 @@ func stringPtrIfNotEmpty(value string) *string {
 	return &value
 }
 
-func updateAgentInstructionsMessage(chatCtx *llm.ChatContext, instructions string, addIfMissing bool) error {
+func agentInstructionVariants(agent *Agent) *llm.Instructions {
+	if agent == nil {
+		return nil
+	}
+	if agent.InstructionVariants != nil {
+		return agent.InstructionVariants
+	}
+	if agent.Instructions == "" {
+		return nil
+	}
+	return llm.NewInstructions(agent.Instructions)
+}
+
+func agentInstructionsText(agent *Agent) string {
+	instructions := agentInstructionVariants(agent)
+	if instructions == nil {
+		return ""
+	}
+	return instructions.String()
+}
+
+func updateAgentInstructionsMessage(chatCtx *llm.ChatContext, instructions *llm.Instructions, addIfMissing bool) error {
 	if chatCtx == nil {
 		return nil
+	}
+	if instructions == nil && !addIfMissing {
+		return nil
+	}
+	content := llm.ChatContent{}
+	if instructions != nil {
+		content.Instructions = instructions
 	}
 	idx := chatCtx.IndexByID(agentInstructionsMessageID)
 	if idx != nil {
@@ -728,7 +759,7 @@ func updateAgentInstructionsMessage(chatCtx *llm.ChatContext, instructions strin
 		chatCtx.Items[*idx] = &llm.ChatMessage{
 			ID:        agentInstructionsMessageID,
 			Role:      llm.ChatRoleSystem,
-			Content:   []llm.ChatContent{{Text: instructions}},
+			Content:   []llm.ChatContent{content},
 			CreatedAt: existing.CreatedAt,
 		}
 		return nil
@@ -737,11 +768,46 @@ func updateAgentInstructionsMessage(chatCtx *llm.ChatContext, instructions strin
 		msg := &llm.ChatMessage{
 			ID:      agentInstructionsMessageID,
 			Role:    llm.ChatRoleSystem,
-			Content: []llm.ChatContent{{Text: instructions}},
+			Content: []llm.ChatContent{content},
 		}
 		chatCtx.Items = append([]llm.ChatItem{msg}, chatCtx.Items...)
 	}
 	return nil
+}
+
+func applyAgentInstructionsModality(chatCtx *llm.ChatContext, modality string) {
+	if chatCtx == nil || modality == "" {
+		return
+	}
+	idx := chatCtx.IndexByID(agentInstructionsMessageID)
+	if idx == nil {
+		return
+	}
+	msg, ok := chatCtx.Items[*idx].(*llm.ChatMessage)
+	if !ok {
+		return
+	}
+	content := make([]llm.ChatContent, len(msg.Content))
+	changed := false
+	for i, part := range msg.Content {
+		if part.Instructions != nil {
+			part.Instructions = part.Instructions.AsModality(modality)
+			changed = true
+		}
+		content[i] = part
+	}
+	if !changed {
+		return
+	}
+	chatCtx.Items[*idx] = &llm.ChatMessage{
+		ID:          msg.ID,
+		Role:        msg.Role,
+		Content:     content,
+		Interrupted: msg.Interrupted,
+		CreatedAt:   msg.CreatedAt,
+		Extra:       msg.Extra,
+		Metrics:     msg.Metrics,
+	}
 }
 
 func removeAgentInstructionsMessage(chatCtx *llm.ChatContext) {
@@ -1124,19 +1190,14 @@ func (a *AgentActivity) OnVADInferenceDone(ev *vad.VADEvent) {
 	if turnDetection == TurnDetectionModeSTT && a.sttEOSReceived && ev.RawAccumulatedSilence > 0 {
 		return
 	}
-	if a.Session != nil && a.Session.aecWarmupActive() {
-		return
-	}
-
-	go func() {
-		if err := a.Interrupt(false); err != nil {
-			logger.Logger.Warnw("failed to interrupt speech for VAD inference", err, "speech_duration", ev.SpeechDuration)
-		}
-	}()
+	a.interruptByAudioActivity("VAD inference", "speech_duration", ev.SpeechDuration)
 }
 
 func (a *AgentActivity) OnInterimTranscript(ev *stt.SpeechEvent) {
 	if a.Session == nil {
+		return
+	}
+	if a.realtimeUserTranscriptionEnabled() {
 		return
 	}
 	transcript := ""
@@ -1161,15 +1222,14 @@ func (a *AgentActivity) OnInterimTranscript(ev *stt.SpeechEvent) {
 	})
 	turnDetection := a.turnDetectionMode()
 	if transcript != "" && turnDetection != TurnDetectionModeManual && turnDetection != TurnDetectionModeRealtimeLLM {
-		go func() {
-			if err := a.Interrupt(false); err != nil {
-				logger.Logger.Warnw("failed to interrupt speech for interim transcript", err, "transcript", transcript)
-			}
-		}()
+		a.interruptByAudioActivity("interim transcript", "transcript", transcript)
 	}
 }
 
 func (a *AgentActivity) OnFinalTranscript(ev *stt.SpeechEvent) {
+	if a.realtimeUserTranscriptionEnabled() {
+		return
+	}
 	a.sttEOSReceived = true
 	transcript := ""
 	confidence := 0.0
@@ -1202,11 +1262,7 @@ func (a *AgentActivity) OnFinalTranscript(ev *stt.SpeechEvent) {
 
 	turnDetection := a.turnDetectionMode()
 	if turnDetection != "" && turnDetection != TurnDetectionModeManual && turnDetection != TurnDetectionModeRealtimeLLM {
-		go func() {
-			if err := a.Interrupt(false); err != nil {
-				logger.Logger.Warnw("failed to interrupt speech for final transcript", err, "transcript", transcript)
-			}
-		}()
+		a.interruptByAudioActivity("final transcript", "transcript", transcript)
 	}
 	if turnDetection == TurnDetectionModeSTT {
 		a.runEOUDetection(EndOfTurnInfo{
@@ -1214,6 +1270,31 @@ func (a *AgentActivity) OnFinalTranscript(ev *stt.SpeechEvent) {
 			TranscriptConfidence: confidence,
 		})
 	}
+}
+
+func (a *AgentActivity) realtimeUserTranscriptionEnabled() bool {
+	if a == nil || a.Session == nil {
+		return false
+	}
+	a.Session.mu.Lock()
+	assistant := a.Session.Assistant
+	a.Session.mu.Unlock()
+	capabilities, ok := assistant.(realtimeCapabilitiesAssistant)
+	return ok && capabilities.RealtimeCapabilities().UserTranscription
+}
+
+func (a *AgentActivity) interruptByAudioActivity(reason string, key string, value any) {
+	if a == nil {
+		return
+	}
+	if a.Session != nil && a.Session.aecWarmupActive() {
+		return
+	}
+	go func() {
+		if err := a.Interrupt(false); err != nil {
+			logger.Logger.Warnw("failed to interrupt speech for "+reason, err, key, value)
+		}
+	}()
 }
 
 func (a *AgentActivity) ClearUserTurn() {

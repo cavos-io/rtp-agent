@@ -107,7 +107,9 @@ type RoomOptions struct {
 	AudioTrackName           string
 	PreConnectAudioTimeout   time.Duration
 	DisablePreConnectAudio   bool
+	DisableAudioInput        bool
 	DisableTextInput         bool
+	DisableAudioOutput       bool
 	DisableCloseOnDisconnect bool
 	DeleteRoomOnClose        bool
 	DeleteRoom               func(context.Context, string) error
@@ -177,7 +179,7 @@ func NewRoomIO(room *lksdk.Room, session *agent.AgentSession, opts RoomOptions) 
 	enc, _ := newOpusEncoder(48000, 1)
 
 	var preConnectAudio *PreConnectAudioHandler
-	if !opts.DisablePreConnectAudio {
+	if !opts.DisableAudioInput && !opts.DisablePreConnectAudio {
 		preConnectAudio = NewPreConnectAudioHandler(room, roomIOPreConnectAudioTimeout(opts))
 		preConnectAudio.Register()
 	}
@@ -204,7 +206,9 @@ func NewRoomIO(room *lksdk.Room, session *agent.AgentSession, opts RoomOptions) 
 		rio.registerTextInput()
 	}
 
-	session.EnsureAssistant().SetPublishAudio(rio.PublishAudio)
+	if !opts.DisableAudioOutput {
+		session.EnsureAssistant().SetPublishAudio(rio.PublishAudio)
+	}
 
 	return rio
 }
@@ -585,6 +589,9 @@ func participantKindAllowed(kind lksdk.ParticipantKind, allowed []lksdk.Particip
 }
 
 func (rio *RoomIO) Start(ctx context.Context) error {
+	if rio == nil || rio.Options.DisableAudioOutput {
+		return nil
+	}
 	track, err := lksdk.NewLocalSampleTrack(webrtc.RTPCodecCapability{
 		MimeType:  webrtc.MimeTypeOpus,
 		ClockRate: 48000,
@@ -618,7 +625,7 @@ func (rio *RoomIO) onTrackSubscribed(track *webrtc.TrackRemote, publication *lks
 	if rp != nil && !rio.shouldAcceptParticipant(rp.Identity(), rp.Kind(), rp.Attributes(), rio.localParticipantIdentity()) {
 		return
 	}
-	if rio.isAudioDisabled() {
+	if rio.Options.DisableAudioInput || rio.isAudioDisabled() {
 		return
 	}
 	if track.Kind() == webrtc.RTPCodecTypeAudio {
@@ -717,7 +724,7 @@ func roomIOCloseOnDisconnectReason(reason livekit.DisconnectReason) bool {
 }
 
 func (rio *RoomIO) handleAudioTrack(track *webrtc.TrackRemote) {
-	if rio.isAudioDisabled() {
+	if rio.Options.DisableAudioInput || rio.isAudioDisabled() {
 		return
 	}
 	// First, check for and flush any pre-connect audio buffered
@@ -787,7 +794,7 @@ func (rio *RoomIO) handleAudioTrack(track *webrtc.TrackRemote) {
 }
 
 func (rio *RoomIO) PublishAudio(frame *model.AudioFrame) error {
-	if rio.isAudioDisabled() {
+	if rio == nil || rio.Options.DisableAudioOutput || rio.isAudioDisabled() {
 		return nil
 	}
 	if rio.Recorder != nil {

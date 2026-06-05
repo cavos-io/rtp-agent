@@ -106,6 +106,40 @@ func TestMultimodalAgentSendsSilenceToRealtimeDuringAECWarmup(t *testing.T) {
 	}
 }
 
+func TestMultimodalAgentSendsSilenceToRealtimeDuringUninterruptibleSpeech(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{DiscardAudioIfUninterruptible: true})
+	activity := NewAgentActivity(NewAgent("test"), session)
+	activity.currentSpeech = NewSpeechHandle(false, DefaultInputDetails())
+	session.activity = activity
+	rtSession := &fakeRealtimeSession{
+		eventCh: make(chan llm.RealtimeEvent),
+		audioCh: make(chan *model.AudioFrame, 1),
+	}
+	ma := NewMultimodalAgent(&fakeRealtimeModel{}, llm.NewChatContext())
+	ma.session = session
+	ma.rtSession = rtSession
+	go ma.run(ctx, rtSession)
+
+	frame := &model.AudioFrame{
+		Data:              []byte{5, 6, 7, 8},
+		SampleRate:        24000,
+		NumChannels:       1,
+		SamplesPerChannel: 2,
+	}
+	ma.OnAudioFrame(context.Background(), frame)
+
+	got := receiveRealtimeAudioFrame(t, rtSession.audioCh)
+	if got == frame {
+		t.Fatal("realtime audio reused original frame during uninterruptible speech")
+	}
+	if !bytes.Equal(got.Data, make([]byte, len(frame.Data))) {
+		t.Fatalf("realtime audio data = %v, want silence", got.Data)
+	}
+}
+
 func TestMultimodalAgentEmitsRealtimeErrorWhenAudioPushFails(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -417,6 +451,57 @@ func TestMultimodalAgentGenerateReplySendsRealtimeOverrides(t *testing.T) {
 	}
 	if !handle.IsDone() {
 		t.Fatal("speech handle is not done after realtime GenerateReply")
+	}
+}
+
+func TestMultimodalAgentGenerateReplyAppliesInstructionInputModality(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	rtSession := &fakeRealtimeSession{generateCh: make(chan llm.RealtimeGenerateReplyOptions, 1)}
+	ma := NewMultimodalAgent(&fakeRealtimeModel{session: rtSession}, llm.NewChatContext())
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	session.Assistant = ma
+
+	if err := session.Start(ctx); err != nil {
+		t.Fatalf("Start returned error: %v", err)
+	}
+	_, err := session.GenerateReplyWithOptions(ctx, GenerateReplyOptions{
+		UserInput:           "hello",
+		InstructionVariants: llm.NewInstructions("speak plainly", "write tersely"),
+		InputModality:       "audio",
+	})
+	if err != nil {
+		t.Fatalf("GenerateReplyWithOptions returned error: %v", err)
+	}
+
+	select {
+	case opts := <-rtSession.generateCh:
+		if opts.Instructions != "speak plainly" {
+			t.Fatalf("Instructions = %q, want audio-specific instructions", opts.Instructions)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("realtime session did not receive GenerateReply")
+	}
+}
+
+func TestMultimodalAgentStartAppliesAgentInstructionVariants(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	rtSession := &fakeRealtimeSession{}
+	baseAgent := NewAgent("")
+	baseAgent.InstructionVariants = llm.NewInstructions("speak plainly", "write tersely")
+	ma := NewMultimodalAgent(&fakeRealtimeModel{session: rtSession}, llm.NewChatContext())
+	session := NewAgentSession(baseAgent, nil, AgentSessionOptions{})
+	session.Assistant = ma
+
+	if err := session.Start(ctx); err != nil {
+		t.Fatalf("Start returned error: %v", err)
+	}
+
+	if rtSession.instructions != "speak plainly" {
+		t.Fatalf("realtime instructions = %q, want audio-specific agent instructions", rtSession.instructions)
 	}
 }
 

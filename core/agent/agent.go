@@ -34,10 +34,11 @@ type AgentInterface interface {
 }
 
 type Agent struct {
-	ID           string
-	Instructions string
-	ChatCtx      *llm.ChatContext
-	Tools        []llm.Tool
+	ID                  string
+	Instructions        string
+	InstructionVariants *llm.Instructions
+	ChatCtx             *llm.ChatContext
+	Tools               []llm.Tool
 
 	TurnDetection TurnDetectionMode
 	TurnDetector  TurnDetector
@@ -102,6 +103,7 @@ func (a *Agent) UpdateInstructions(ctx context.Context, instructions string) err
 		return a.activity.UpdateInstructions(ctx, instructions)
 	}
 	a.Instructions = instructions
+	a.InstructionVariants = nil
 	return nil
 }
 

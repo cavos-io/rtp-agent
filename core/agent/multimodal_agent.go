@@ -224,7 +224,7 @@ func (ma *MultimodalAgent) initializeRealtimeSession(rtSession llm.RealtimeSessi
 	ma.mu.Unlock()
 
 	if session != nil && session.Agent != nil {
-		instructions := session.Agent.GetAgent().Instructions
+		instructions := agentInstructionsText(session.Agent.GetAgent())
 		if instructions != "" {
 			if err := rtSession.UpdateInstructions(instructions); err != nil {
 				return err
@@ -327,7 +327,7 @@ func (ma *MultimodalAgent) OnSpeechScheduled(ctx context.Context, speech *Speech
 		Tools:      selectedTools,
 	}
 	if speech.Generation.Instructions != nil {
-		options.Instructions = speech.Generation.Instructions.AsModality("text").String()
+		options.Instructions = speech.Generation.Instructions.AsModality(speech.InputDetails.Modality).String()
 	}
 	if err := rtSession.GenerateReply(options); err != nil {
 		logger.Logger.Errorw("failed to generate realtime reply", err)
@@ -357,7 +357,7 @@ func (ma *MultimodalAgent) run(ctx context.Context, rtSession llm.RealtimeSessio
 			ma.mu.Unlock()
 			if rtSession != nil {
 				rtFrame := frame
-				if session != nil && session.aecWarmupActive() {
+				if session != nil && session.shouldSilenceInputAudio() {
 					rtFrame = audio.SilenceFrameLike(frame)
 				}
 				if err := rtSession.PushAudio(rtFrame); err != nil {

@@ -59,6 +59,9 @@ func LogMetrics(metrics AgentMetrics) {
 			"output_image_tokens", m.OutputTokenDetails.ImageTokens,
 			"total_tokens", m.TotalTokens,
 			"tokens_per_second", m.TokensPerSecond,
+			"session_duration", m.SessionDuration,
+			"acquire_time", m.AcquireTime,
+			"connection_reused", m.ConnectionReused,
 			"metadata", metadata,
 		)
 	case *TTSMetrics:
@@ -97,6 +100,40 @@ func LogMetrics(metrics AgentMetrics) {
 		logger.Logger.Infow("STT metrics",
 			"type", m.GetType(),
 			"audio_duration", m.AudioDuration,
+			"metadata", metadata,
+		)
+	case *InterruptionMetrics:
+		if m.Metadata != nil {
+			metadata = map[string]interface{}{
+				"model_name":     m.Metadata.ModelName,
+				"model_provider": m.Metadata.ModelProvider,
+			}
+		}
+		logger.Logger.Infow("Interruption metrics",
+			"type", m.GetType(),
+			"total_duration", m.TotalDuration,
+			"prediction_duration", m.PredictionDuration,
+			"detection_delay", m.DetectionDelay,
+			"num_interruptions", m.NumInterruptions,
+			"num_backchannels", m.NumBackchannels,
+			"num_requests", m.NumRequests,
+			"metadata", metadata,
+		)
+	case *AvatarMetrics:
+		if m.Metadata != nil {
+			metadata = map[string]interface{}{
+				"model_name":     m.Metadata.ModelName,
+				"model_provider": m.Metadata.ModelProvider,
+			}
+		}
+		var avatarJoinLatency float64
+		if m.SessionStartedTime != nil && m.AvatarJoinedTime != nil {
+			avatarJoinLatency = m.AvatarJoinedTime.Sub(*m.SessionStartedTime).Seconds()
+		}
+		logger.Logger.Infow("Avatar metrics",
+			"type", m.GetType(),
+			"avatar_join_latency", avatarJoinLatency,
+			"playback_latency", m.PlaybackLatency,
 			"metadata", metadata,
 		)
 	}

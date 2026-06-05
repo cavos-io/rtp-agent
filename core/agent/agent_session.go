@@ -43,6 +43,7 @@ type AgentSessionOptions struct {
 	MinEndpointingDelay           float64
 	MaxEndpointingDelay           float64
 	EndpointingMode               string
+	EndpointingAlpha              float64
 	Endpointing                   Endpointing
 	MaxToolSteps                  int
 	UserAwayTimeout               float64
@@ -71,6 +72,7 @@ type AgentSessionOptions struct {
 type AgentSessionUpdateOptions struct {
 	MinEndpointingDelay *float64
 	MaxEndpointingDelay *float64
+	EndpointingAlpha    *float64
 	EndpointingMode     *string
 	Endpointing         Endpointing
 	TurnDetection       *TurnDetectionMode
@@ -85,14 +87,15 @@ var (
 )
 
 type GenerateReplyOptions struct {
-	UserInput          string
-	UserMessage        *llm.ChatMessage
-	Instructions       string
-	ToolChoice         llm.ToolChoice
-	Tools              []string
-	ChatCtx            *llm.ChatContext
-	AllowInterruptions *bool
-	InputModality      string
+	UserInput           string
+	UserMessage         *llm.ChatMessage
+	Instructions        string
+	InstructionVariants *llm.Instructions
+	ToolChoice          llm.ToolChoice
+	Tools               []string
+	ChatCtx             *llm.ChatContext
+	AllowInterruptions  *bool
+	InputModality       string
 }
 
 type SayOptions struct {
@@ -492,7 +495,7 @@ func withAgentSessionOptionDefaults(opts AgentSessionOptions) AgentSessionOption
 		opts.MaxEndpointingDelay = 3.0
 	}
 	if opts.Endpointing == nil {
-		opts.Endpointing = CreateEndpointing(opts.EndpointingMode, opts.MinEndpointingDelay, opts.MaxEndpointingDelay)
+		opts.Endpointing = CreateEndpointing(opts.EndpointingMode, opts.MinEndpointingDelay, opts.MaxEndpointingDelay, opts.EndpointingAlpha)
 	}
 	if opts.MaxToolSteps == 0 {
 		opts.MaxToolSteps = 3
@@ -526,14 +529,20 @@ func (s *AgentSession) UpdateOptions(opts AgentSessionUpdateOptions) error {
 	if opts.MaxEndpointingDelay != nil {
 		s.Options.MaxEndpointingDelay = *opts.MaxEndpointingDelay
 	}
+	if opts.EndpointingAlpha != nil {
+		s.Options.EndpointingAlpha = *opts.EndpointingAlpha
+	}
 	if opts.EndpointingMode != nil {
 		s.Options.EndpointingMode = *opts.EndpointingMode
-		s.Options.Endpointing = CreateEndpointing(s.Options.EndpointingMode, s.Options.MinEndpointingDelay, s.Options.MaxEndpointingDelay)
+		s.Options.Endpointing = CreateEndpointing(s.Options.EndpointingMode, s.Options.MinEndpointingDelay, s.Options.MaxEndpointingDelay, s.Options.EndpointingAlpha)
 	} else if s.Options.Endpointing != nil {
 		s.Options.Endpointing.UpdateOptions(opts.MinEndpointingDelay, opts.MaxEndpointingDelay)
 	}
 	if opts.Endpointing != nil {
 		s.Options.Endpointing = opts.Endpointing
+	}
+	if opts.EndpointingAlpha != nil {
+		updateEndpointingAlpha(s.Options.Endpointing, *opts.EndpointingAlpha)
 	}
 	if opts.TurnDetection != nil {
 		s.Options.TurnDetection = *opts.TurnDetection
@@ -558,6 +567,18 @@ func (s *AgentSession) UpdateOptions(opts AgentSessionUpdateOptions) error {
 	return updater.UpdateOptions(context.Background(), llm.RealtimeSessionOptions{
 		ToolChoice: *opts.ToolChoice,
 	})
+}
+
+type endpointingAlphaUpdater interface {
+	UpdateAlpha(alpha float64)
+}
+
+func updateEndpointingAlpha(endpointing Endpointing, alpha float64) {
+	updater, ok := endpointing.(endpointingAlphaUpdater)
+	if !ok {
+		return
+	}
+	updater.UpdateAlpha(alpha)
 }
 
 func (s *AgentSession) EnsureAssistant() SessionAssistant {
@@ -1153,8 +1174,17 @@ func (s *AgentSession) StartWithOptions(ctx context.Context, opts StartOptions) 
 			return nil, err
 		}
 	}
+	var unsubscribeAvatarMetrics func()
 	if avatar != nil {
+		if metricsSource, ok := avatar.(AvatarMetricsSource); ok {
+			unsubscribeAvatarMetrics = metricsSource.OnMetricsCollected(func(metrics *telemetry.AvatarMetrics) {
+				s.EmitMetricsCollected(metrics)
+			})
+		}
 		if err := avatar.Start(ctx); err != nil {
+			if unsubscribeAvatarMetrics != nil {
+				unsubscribeAvatarMetrics()
+			}
 			if backgroundAudio != nil {
 				_ = backgroundAudio.Close()
 			}
@@ -1163,6 +1193,9 @@ func (s *AgentSession) StartWithOptions(ctx context.Context, opts StartOptions) 
 		}
 	}
 	if err := assistant.Start(ctx, s); err != nil {
+		if unsubscribeAvatarMetrics != nil {
+			unsubscribeAvatarMetrics()
+		}
 		if backgroundAudio != nil {
 			_ = backgroundAudio.Close()
 		}
@@ -1420,7 +1453,9 @@ func (s *AgentSession) GenerateReplyWithOptions(ctx context.Context, opts Genera
 		inputModality = "text"
 	}
 	handle := NewSpeechHandle(allowInterruptions, InputDetails{Modality: inputModality})
-	if opts.Instructions != "" {
+	if opts.InstructionVariants != nil {
+		handle.Generation.Instructions = opts.InstructionVariants
+	} else if opts.Instructions != "" {
 		handle.Generation.Instructions = llm.NewInstructions(opts.Instructions)
 	}
 	if opts.ToolChoice != nil {
@@ -1711,7 +1746,7 @@ func agentHandoffID(agent *Agent) string {
 	if agent.ID != "" {
 		return agent.ID
 	}
-	return agent.Instructions
+	return agentInstructionsText(agent)
 }
 
 func (s *AgentSession) Stop(ctx context.Context) error {

@@ -974,6 +974,44 @@ func TestAgentActivityStartRecordsInitialConfiguration(t *testing.T) {
 	}
 }
 
+func TestAgentActivityStartRecordsInstructionVariants(t *testing.T) {
+	agent := NewAgent("")
+	agent.InstructionVariants = llm.NewInstructions("speak plainly", "write tersely")
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	activity := NewAgentActivity(agent, session)
+
+	activity.Start()
+	defer activity.Stop()
+
+	if len(agent.ChatCtx.Items) == 0 {
+		t.Fatal("agent chat context has no initial items, want instruction variants")
+	}
+	msg, ok := agent.ChatCtx.Items[0].(*llm.ChatMessage)
+	if !ok {
+		t.Fatalf("first agent chat item = %T, want instructions message", agent.ChatCtx.Items[0])
+	}
+	if msg.ID != agentInstructionsMessageID || msg.Role != llm.ChatRoleSystem {
+		t.Fatalf("instructions message = %#v, want synthetic system instructions", msg)
+	}
+	if len(msg.Content) != 1 || msg.Content[0].Instructions == nil {
+		t.Fatalf("instructions content = %#v, want instruction variants", msg.Content)
+	}
+	if got := msg.Content[0].Instructions.AsModality("audio").String(); got != "speak plainly" {
+		t.Fatalf("audio instructions = %q, want speak plainly", got)
+	}
+	if got := msg.Content[0].Instructions.AsModality("text").String(); got != "write tersely" {
+		t.Fatalf("text instructions = %q, want write tersely", got)
+	}
+
+	config, ok := agent.ChatCtx.Items[len(agent.ChatCtx.Items)-1].(*llm.AgentConfigUpdate)
+	if !ok {
+		t.Fatalf("last agent chat item = %T, want config update", agent.ChatCtx.Items[len(agent.ChatCtx.Items)-1])
+	}
+	if config.Instructions == nil || *config.Instructions != "speak plainly" {
+		t.Fatalf("config instructions = %v, want speak plainly", config.Instructions)
+	}
+}
+
 func TestAgentActivityStartSkipsEmptyInitialConfiguration(t *testing.T) {
 	agent := NewAgent("")
 	session := NewAgentSession(agent, nil, AgentSessionOptions{})
@@ -1206,6 +1244,26 @@ func TestAgentActivityOnInterimTranscriptEmitsUserInputTranscribed(t *testing.T)
 	}
 }
 
+func TestAgentActivityOnInterimTranscriptSkipsRealtimeUserTranscription(t *testing.T) {
+	agent := NewAgent("test")
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	session.Assistant = realtimeUserTranscriptionAssistant{}
+	activity := NewAgentActivity(agent, session)
+
+	activity.OnInterimTranscript(&stt.SpeechEvent{
+		Alternatives: []stt.SpeechData{{
+			Language: "en",
+			Text:     "native realtime transcript",
+		}},
+	})
+
+	select {
+	case ev := <-session.UserInputTranscribedEvents():
+		t.Fatalf("UserInputTranscribedEvents received STT transcript despite realtime user transcription: %#v", ev)
+	case <-time.After(10 * time.Millisecond):
+	}
+}
+
 func TestAgentActivityOnInterimTranscriptInterruptsCurrentSpeech(t *testing.T) {
 	agent := NewAgent("test")
 	agent.STT = &fakePipelineSTT{}
@@ -1219,6 +1277,30 @@ func TestAgentActivityOnInterimTranscriptInterruptsCurrentSpeech(t *testing.T) {
 	})
 
 	waitForInterrupted(t, current)
+}
+
+func TestAgentActivityOnInterimTranscriptIgnoresAECWarmup(t *testing.T) {
+	agent := NewAgent("test")
+	agent.STT = &fakePipelineSTT{}
+	session := NewAgentSession(agent, nil, AgentSessionOptions{
+		TurnDetection:     TurnDetectionModeSTT,
+		AECWarmupDuration: 0.05,
+	})
+	activity := NewAgentActivity(agent, session)
+	current := NewSpeechHandle(true, DefaultInputDetails())
+	activity.currentSpeech = current
+
+	session.UpdateAgentState(AgentStateSpeaking)
+	activity.OnInterimTranscript(&stt.SpeechEvent{
+		Alternatives: []stt.SpeechData{{Text: "echo"}},
+	})
+
+	select {
+	case <-current.interruptCh:
+		t.Fatal("current speech was interrupted during AEC warmup")
+	case <-time.After(10 * time.Millisecond):
+	}
+	current.MarkDone()
 }
 
 func TestAgentActivityOnInterimTranscriptDoesNotInterruptManualTurn(t *testing.T) {
@@ -2192,6 +2274,22 @@ func waitForAECWarmupInactive(t *testing.T, session *AgentSession) {
 
 type recordingScheduledSpeechAssistant struct {
 	scheduledCh chan *SpeechHandle
+}
+
+type realtimeUserTranscriptionAssistant struct{}
+
+func (r realtimeUserTranscriptionAssistant) Start(context.Context, *AgentSession) error {
+	return nil
+}
+
+func (r realtimeUserTranscriptionAssistant) OnAudioFrame(context.Context, *model.AudioFrame) {
+}
+
+func (r realtimeUserTranscriptionAssistant) SetPublishAudio(func(frame *model.AudioFrame) error) {
+}
+
+func (r realtimeUserTranscriptionAssistant) RealtimeCapabilities() llm.RealtimeCapabilities {
+	return llm.RealtimeCapabilities{UserTranscription: true}
 }
 
 func (r *recordingScheduledSpeechAssistant) Start(context.Context, *AgentSession) error {

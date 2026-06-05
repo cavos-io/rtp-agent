@@ -90,6 +90,31 @@ type EOUMetrics struct {
 
 func (m *EOUMetrics) GetType() string { return "eou_metrics" }
 
+type InterruptionMetrics struct {
+	Label              string
+	Timestamp          time.Time
+	TotalDuration      float64
+	PredictionDuration float64
+	DetectionDelay     float64
+	NumInterruptions   int
+	NumBackchannels    int
+	NumRequests        int
+	Metadata           *Metadata
+}
+
+func (m *InterruptionMetrics) GetType() string { return "interruption_metrics" }
+
+type AvatarMetrics struct {
+	Label              string
+	Timestamp          time.Time
+	PlaybackLatency    float64
+	SessionStartedTime *time.Time
+	AvatarJoinedTime   *time.Time
+	Metadata           *Metadata
+}
+
+func (m *AvatarMetrics) GetType() string { return "avatar_metrics" }
+
 type CachedTokenDetails struct {
 	AudioTokens int
 	TextTokens  int
@@ -115,6 +140,7 @@ type RealtimeModelMetrics struct {
 	RequestID          string
 	Timestamp          time.Time
 	Duration           float64
+	SessionDuration    float64
 	TTFT               float64
 	Cancelled          bool
 	InputTokens        int
@@ -123,6 +149,8 @@ type RealtimeModelMetrics struct {
 	TokensPerSecond    float64
 	InputTokenDetails  InputTokenDetails
 	OutputTokenDetails OutputTokenDetails
+	AcquireTime        float64
+	ConnectionReused   bool
 	Metadata           *Metadata
 }
 
@@ -190,22 +218,38 @@ func (u *STTModelUsage) GetType() string {
 	return u.Type
 }
 
+type InterruptionModelUsage struct {
+	Type          string `json:"type"`
+	Provider      string `json:"provider"`
+	Model         string `json:"model"`
+	TotalRequests int    `json:"total_requests"`
+}
+
+func (u *InterruptionModelUsage) GetType() string {
+	if u == nil || u.Type == "" {
+		return "interruption_usage"
+	}
+	return u.Type
+}
+
 type AgentSessionUsage struct {
 	ModelUsage []ModelUsage `json:"model_usage"`
 }
 
 type ModelUsageCollector struct {
-	llmUsage map[[2]string]*LLMModelUsage
-	ttsUsage map[[2]string]*TTSModelUsage
-	sttUsage map[[2]string]*STTModelUsage
-	mu       sync.Mutex
+	llmUsage          map[[2]string]*LLMModelUsage
+	ttsUsage          map[[2]string]*TTSModelUsage
+	sttUsage          map[[2]string]*STTModelUsage
+	interruptionUsage map[[2]string]*InterruptionModelUsage
+	mu                sync.Mutex
 }
 
 func NewModelUsageCollector() *ModelUsageCollector {
 	return &ModelUsageCollector{
-		llmUsage: make(map[[2]string]*LLMModelUsage),
-		ttsUsage: make(map[[2]string]*TTSModelUsage),
-		sttUsage: make(map[[2]string]*STTModelUsage),
+		llmUsage:          make(map[[2]string]*LLMModelUsage),
+		ttsUsage:          make(map[[2]string]*TTSModelUsage),
+		sttUsage:          make(map[[2]string]*STTModelUsage),
+		interruptionUsage: make(map[[2]string]*InterruptionModelUsage),
 	}
 }
 
@@ -238,7 +282,7 @@ func (c *ModelUsageCollector) Collect(metrics AgentMetrics) {
 		usage.OutputTextTokens += m.OutputTokenDetails.TextTokens
 		usage.OutputAudioTokens += m.OutputTokenDetails.AudioTokens
 		usage.OutputTokens += m.OutputTokens
-		usage.SessionDuration += m.Duration
+		usage.SessionDuration += m.SessionDuration
 	case *TTSMetrics:
 		usage := c.ttsUsageFor(provider, model)
 		usage.InputTokens += m.InputTokens
@@ -250,6 +294,9 @@ func (c *ModelUsageCollector) Collect(metrics AgentMetrics) {
 		usage.InputTokens += m.InputTokens
 		usage.OutputTokens += m.OutputTokens
 		usage.AudioDuration += m.AudioDuration
+	case *InterruptionMetrics:
+		usage := c.interruptionUsageFor(provider, model)
+		usage.TotalRequests += m.NumRequests
 	}
 }
 
@@ -260,7 +307,7 @@ func (c *ModelUsageCollector) Flatten() []ModelUsage {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	result := make([]ModelUsage, 0, len(c.llmUsage)+len(c.ttsUsage)+len(c.sttUsage))
+	result := make([]ModelUsage, 0, len(c.llmUsage)+len(c.ttsUsage)+len(c.sttUsage)+len(c.interruptionUsage))
 	for _, usage := range c.llmUsage {
 		copy := *usage
 		result = append(result, &copy)
@@ -270,6 +317,10 @@ func (c *ModelUsageCollector) Flatten() []ModelUsage {
 		result = append(result, &copy)
 	}
 	for _, usage := range c.sttUsage {
+		copy := *usage
+		result = append(result, &copy)
+	}
+	for _, usage := range c.interruptionUsage {
 		copy := *usage
 		result = append(result, &copy)
 	}
@@ -310,6 +361,16 @@ func (c *ModelUsageCollector) sttUsageFor(provider, model string) *STTModelUsage
 	return usage
 }
 
+func (c *ModelUsageCollector) interruptionUsageFor(provider, model string) *InterruptionModelUsage {
+	key := [2]string{provider, model}
+	usage, ok := c.interruptionUsage[key]
+	if !ok {
+		usage = &InterruptionModelUsage{Type: "interruption_usage", Provider: provider, Model: model}
+		c.interruptionUsage[key] = usage
+	}
+	return usage
+}
+
 func extractMetricsProviderModel(metrics AgentMetrics) (string, string) {
 	var metadata *Metadata
 	switch m := metrics.(type) {
@@ -320,6 +381,8 @@ func extractMetricsProviderModel(metrics AgentMetrics) (string, string) {
 	case *TTSMetrics:
 		metadata = m.Metadata
 	case *STTMetrics:
+		metadata = m.Metadata
+	case *InterruptionMetrics:
 		metadata = m.Metadata
 	}
 	if metadata == nil {

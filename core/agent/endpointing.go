@@ -105,6 +105,11 @@ func (e *DynamicEndpointing) UpdateOptions(minDelay *float64, maxDelay *float64)
 	e.resetFilterBounds()
 }
 
+func (e *DynamicEndpointing) UpdateAlpha(alpha float64) {
+	e.utterancePause.UpdateBase(alpha)
+	e.turnPause.UpdateBase(alpha)
+}
+
 func (e *DynamicEndpointing) resetFilterBounds() {
 	minDelay := e.minDelay
 	maxDelay := e.maxDelay
@@ -205,10 +210,10 @@ func (e *DynamicEndpointing) withinAgentSpeechLeadingSilenceGrace() bool {
 	return e.utteranceStartedAt != nil && e.agentSpeechStartedAt != nil && math.Abs(*e.utteranceStartedAt-*e.agentSpeechStartedAt) < agentSpeechLeadingSilenceGracePeriod
 }
 
-func CreateEndpointing(kind string, minDelay float64, maxDelay float64) Endpointing {
+func CreateEndpointing(kind string, minDelay float64, maxDelay float64, alpha ...float64) Endpointing {
 	switch kind {
 	case "dynamic":
-		return NewDynamicEndpointing(minDelay, maxDelay)
+		return NewDynamicEndpointing(minDelay, maxDelay, alpha...)
 	default:
 		return NewBaseEndpointing(minDelay, maxDelay)
 	}
