@@ -106,6 +106,40 @@ func TestMultimodalAgentSendsSilenceToRealtimeDuringAECWarmup(t *testing.T) {
 	}
 }
 
+func TestMultimodalAgentSendsSilenceToRealtimeDuringUninterruptibleSpeech(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{DiscardAudioIfUninterruptible: true})
+	activity := NewAgentActivity(NewAgent("test"), session)
+	activity.currentSpeech = NewSpeechHandle(false, DefaultInputDetails())
+	session.activity = activity
+	rtSession := &fakeRealtimeSession{
+		eventCh: make(chan llm.RealtimeEvent),
+		audioCh: make(chan *model.AudioFrame, 1),
+	}
+	ma := NewMultimodalAgent(&fakeRealtimeModel{}, llm.NewChatContext())
+	ma.session = session
+	ma.rtSession = rtSession
+	go ma.run(ctx, rtSession)
+
+	frame := &model.AudioFrame{
+		Data:              []byte{5, 6, 7, 8},
+		SampleRate:        24000,
+		NumChannels:       1,
+		SamplesPerChannel: 2,
+	}
+	ma.OnAudioFrame(context.Background(), frame)
+
+	got := receiveRealtimeAudioFrame(t, rtSession.audioCh)
+	if got == frame {
+		t.Fatal("realtime audio reused original frame during uninterruptible speech")
+	}
+	if !bytes.Equal(got.Data, make([]byte, len(frame.Data))) {
+		t.Fatalf("realtime audio data = %v, want silence", got.Data)
+	}
+}
+
 func TestMultimodalAgentEmitsRealtimeErrorWhenAudioPushFails(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

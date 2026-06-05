@@ -357,7 +357,7 @@ func (ma *MultimodalAgent) run(ctx context.Context, rtSession llm.RealtimeSessio
 			ma.mu.Unlock()
 			if rtSession != nil {
 				rtFrame := frame
-				if session != nil && session.aecWarmupActive() {
+				if session != nil && session.shouldSilenceInputAudio() {
 					rtFrame = audio.SilenceFrameLike(frame)
 				}
 				if err := rtSession.PushAudio(rtFrame); err != nil {
