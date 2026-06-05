@@ -17,6 +17,7 @@ import (
 
 type MCPServer interface {
 	Initialize(ctx context.Context) error
+	Initialized() bool
 	ListTools(ctx context.Context) ([]Tool, error)
 	Close() error
 }
@@ -26,7 +27,7 @@ type mcpRequestSender interface {
 }
 
 type mcpAvailability interface {
-	available() bool
+	Initialized() bool
 }
 
 type MCPServerHTTP struct {
@@ -99,7 +100,7 @@ func (s *MCPServerHTTP) Close() error {
 	return nil
 }
 
-func (s *MCPServerHTTP) available() bool {
+func (s *MCPServerHTTP) Initialized() bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.initialized
@@ -365,7 +366,7 @@ func (s *MCPServerStdio) setToolsCache(tools []Tool) {
 	s.cacheDirty = false
 }
 
-func (s *MCPServerStdio) available() bool {
+func (s *MCPServerStdio) Initialized() bool {
 	return s != nil && s.stdin != nil
 }
 
@@ -480,7 +481,7 @@ func (t *mcpProxyTool) Execute(ctx context.Context, args string) (string, error)
 	if t.server == nil {
 		return "", NewToolError("Tool invocation failed: internal service is unavailable. Please check that the MCPServer is still running.")
 	}
-	if availability, ok := t.server.(mcpAvailability); ok && !availability.available() {
+	if availability, ok := t.server.(mcpAvailability); ok && !availability.Initialized() {
 		return "", NewToolError("Tool invocation failed: internal service is unavailable. Please check that the MCPServer is still running.")
 	}
 

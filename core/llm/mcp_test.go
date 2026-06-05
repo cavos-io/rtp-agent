@@ -147,6 +147,43 @@ func TestMCPServerHTTPListsAndExecutesTools(t *testing.T) {
 	}
 }
 
+func TestMCPServerHTTPInitializedReflectsLifecycle(t *testing.T) {
+	httpServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req jsonRPCRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+
+		switch req.Method {
+		case "initialize":
+			writeMCPHTTPResponse(t, w, req.ID, map[string]any{"protocolVersion": "2024-11-05"})
+		case "initialized":
+			w.WriteHeader(http.StatusAccepted)
+		default:
+			t.Fatalf("unexpected MCP method %q", req.Method)
+		}
+	}))
+	defer httpServer.Close()
+
+	server := NewMCPServerHTTP(httpServer.URL)
+
+	if server.Initialized() {
+		t.Fatal("Initialized() = true before Initialize, want false")
+	}
+	if err := server.Initialize(context.Background()); err != nil {
+		t.Fatalf("Initialize() error = %v", err)
+	}
+	if !server.Initialized() {
+		t.Fatal("Initialized() = false after Initialize, want true")
+	}
+	if err := server.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+	if server.Initialized() {
+		t.Fatal("Initialized() = true after Close, want false")
+	}
+}
+
 func writeMCPHTTPResponse(t *testing.T, w http.ResponseWriter, id int64, result any) {
 	t.Helper()
 	w.Header().Set("Content-Type", "application/json")

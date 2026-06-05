@@ -2530,6 +2530,8 @@ type fakeSessionMCPServer struct {
 
 func (f *fakeSessionMCPServer) Initialize(context.Context) error { return nil }
 
+func (f *fakeSessionMCPServer) Initialized() bool { return true }
+
 func (f *fakeSessionMCPServer) ListTools(context.Context) ([]llm.Tool, error) { return nil, nil }
 
 func (f *fakeSessionMCPServer) Close() error { return nil }
