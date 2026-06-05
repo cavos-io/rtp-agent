@@ -250,6 +250,18 @@ func (a *AgentActivity) CurrentSpeech() *SpeechHandle {
 	return a.currentSpeech
 }
 
+func (a *AgentActivity) uninterruptibleSpeechActive() bool {
+	if a == nil {
+		return false
+	}
+	a.queueMu.Lock()
+	defer a.queueMu.Unlock()
+	return a.currentSpeech != nil &&
+		!a.currentSpeech.IsDone() &&
+		!a.currentSpeech.IsInterrupted() &&
+		!a.currentSpeech.AllowInterruptions
+}
+
 func (a *AgentActivity) Tools() []interface{} {
 	if a == nil || a.Agent == nil {
 		return nil

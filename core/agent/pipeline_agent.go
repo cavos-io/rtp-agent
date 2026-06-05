@@ -126,7 +126,7 @@ func (va *PipelineAgent) run(ctx context.Context) {
 				va.emitError(err, va.vad)
 			}
 			sttFrame := frame
-			if va.session != nil && va.session.aecWarmupActive() {
+			if va.session != nil && va.session.shouldSilenceInputAudio() {
 				sttFrame = audio.SilenceFrameLike(frame)
 			}
 			if err := sttStream.PushFrame(sttFrame); err != nil {

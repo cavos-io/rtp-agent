@@ -591,6 +591,48 @@ func TestPipelineAgentSendsSilenceToSTTDuringAECWarmup(t *testing.T) {
 	}
 }
 
+func TestPipelineAgentSendsSilenceToSTTDuringUninterruptibleSpeech(t *testing.T) {
+	vadStream := &fakePipelineVADStream{pushedCh: make(chan *model.AudioFrame, 1)}
+	sttStream := &fakePipelineRecognizeStream{pushedCh: make(chan *model.AudioFrame, 1)}
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{DiscardAudioIfUninterruptible: true})
+	activity := NewAgentActivity(NewAgent("test"), session)
+	activity.currentSpeech = NewSpeechHandle(false, DefaultInputDetails())
+	session.activity = activity
+	agent := NewPipelineAgent(
+		&fakePipelineVAD{stream: vadStream},
+		&fakePipelineSTT{stream: sttStream},
+		nil,
+		nil,
+		llm.NewChatContext(),
+	)
+	agent.session = session
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go agent.run(ctx)
+
+	frame := &model.AudioFrame{
+		Data:              []byte{5, 6, 7, 8},
+		SampleRate:        16000,
+		NumChannels:       1,
+		SamplesPerChannel: 2,
+	}
+	agent.OnAudioFrame(ctx, frame)
+
+	vadFrame := receivePipelineFrame(t, vadStream.pushedCh)
+	if !bytes.Equal(vadFrame.Data, frame.Data) {
+		t.Fatalf("VAD frame data = %v, want original %v", vadFrame.Data, frame.Data)
+	}
+
+	sttFrame := receivePipelineFrame(t, sttStream.pushedCh)
+	if sttFrame == frame {
+		t.Fatal("STT frame reused original frame during uninterruptible speech")
+	}
+	if !bytes.Equal(sttFrame.Data, make([]byte, len(frame.Data))) {
+		t.Fatalf("STT frame data = %v, want silence", sttFrame.Data)
+	}
+}
+
 func TestPipelineAgentUsesAgentTTSAlignedTranscriptOverride(t *testing.T) {
 	chatCtx := llm.NewChatContext()
 	l := &fakeGenerationLLM{

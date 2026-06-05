@@ -1016,6 +1016,20 @@ func (s *AgentSession) aecWarmupActive() bool {
 	return s.aecWarmupTimer != nil
 }
 
+func (s *AgentSession) shouldSilenceInputAudio() bool {
+	if s == nil {
+		return false
+	}
+	if s.aecWarmupActive() {
+		return true
+	}
+	s.mu.Lock()
+	activity := s.activity
+	discard := s.Options.DiscardAudioIfUninterruptible
+	s.mu.Unlock()
+	return discard && activity.uninterruptibleSpeechActive()
+}
+
 func (s *AgentSession) errorEvents() chan ErrorEvent {
 	s.mu.Lock()
 	defer s.mu.Unlock()
