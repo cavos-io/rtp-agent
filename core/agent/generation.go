@@ -342,7 +342,10 @@ func PerformTTSInference(ctx context.Context, t tts.TTS, textCh <-chan string, o
 				return
 			}
 		}
-		_ = tts.EndSynthesizeStreamInput(stream)
+		if err := tts.EndSynthesizeStreamInput(stream); err != nil {
+			data.StreamErr = err
+			return
+		}
 
 		for {
 			audio, err := stream.Next()
