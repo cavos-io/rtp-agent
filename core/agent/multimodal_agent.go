@@ -675,7 +675,16 @@ func (ma *MultimodalAgent) appendRealtimeToolResult(call *llm.FunctionCall, outp
 		ma.chatCtx.Append(output)
 	}
 	if ma.rtSession != nil && ma.chatCtx != nil {
-		_ = ma.rtSession.UpdateChatContext(ma.chatCtx)
+		if err := ma.rtSession.UpdateChatContext(ma.chatCtx); err != nil {
+			logger.Logger.Errorw("failed to update realtime session chat context with tool result", err)
+			if ma.session != nil {
+				ma.session.EmitError(ErrorEvent{
+					Error:  llm.NewRealtimeModelError(llm.RealtimeLabel(ma.model), err, false),
+					Source: ma.model,
+				})
+			}
+			return
+		}
 	}
 	if ma.session == nil || call == nil {
 		return

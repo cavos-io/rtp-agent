@@ -545,6 +545,46 @@ func TestMultimodalAgentExecutesAgentToolFunctionCall(t *testing.T) {
 	}
 }
 
+func TestMultimodalAgentEmitsErrorWhenRealtimeToolResultSyncFails(t *testing.T) {
+	chatCtx := llm.NewChatContext()
+	agent := NewAgent("test")
+	agent.Tools = []llm.Tool{&fakeGenerationTool{name: "lookup", result: "agent result"}}
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	model := &fakeRealtimeModel{label: "test.RealtimeModel"}
+	cause := errors.New("update chat context failed")
+	ma := &MultimodalAgent{
+		model:     model,
+		session:   session,
+		chatCtx:   chatCtx,
+		rtSession: &fakeRealtimeSession{updateChatContextErr: cause},
+		ctx:       context.Background(),
+	}
+
+	ma.handleRealtimeEvent(llm.RealtimeEvent{
+		Type:     llm.RealtimeEventTypeFunctionCall,
+		Function: &llm.FunctionToolCall{Name: "lookup", CallID: "call_lookup", Arguments: `{}`},
+	})
+
+	select {
+	case ev := <-session.ErrorEvents():
+		rtErr, ok := ev.Error.(*llm.RealtimeModelError)
+		if !ok {
+			t.Fatalf("Error = %T, want *llm.RealtimeModelError", ev.Error)
+		}
+		if !errors.Is(rtErr, cause) {
+			t.Fatalf("RealtimeModelError unwrap = %v, want %v", rtErr, cause)
+		}
+		if rtErr.Label != "test.RealtimeModel" || rtErr.Recoverable {
+			t.Fatalf("RealtimeModelError = %#v, want label test.RealtimeModel recoverable false", rtErr)
+		}
+		if ev.Source != model {
+			t.Fatalf("Source = %#v, want realtime model", ev.Source)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("ErrorEvents did not receive realtime tool result sync error")
+	}
+}
+
 func TestMultimodalToolExecutionSuppressesStopResponse(t *testing.T) {
 	chatCtx := llm.NewChatContext()
 	ma := &MultimodalAgent{
@@ -1340,6 +1380,7 @@ type fakeRealtimeSession struct {
 	eventCh               chan llm.RealtimeEvent
 	videoFrames           int
 	updateInstructionsErr error
+	updateChatContextErr  error
 	pushAudioErr          error
 	pushVideoErr          error
 	closed                int
@@ -1356,6 +1397,9 @@ func (f *fakeRealtimeSession) UpdateInstructions(instructions string) error {
 
 func (f *fakeRealtimeSession) UpdateChatContext(chatCtx *llm.ChatContext) error {
 	f.updated = chatCtx
+	if f.updateChatContextErr != nil {
+		return f.updateChatContextErr
+	}
 	return nil
 }
 
