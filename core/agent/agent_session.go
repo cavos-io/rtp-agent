@@ -528,9 +528,12 @@ func (s *AgentSession) UpdateOptions(opts AgentSessionUpdateOptions) error {
 	if opts.MaxEndpointingDelay != nil {
 		s.Options.MaxEndpointingDelay = *opts.MaxEndpointingDelay
 	}
+	if opts.EndpointingAlpha != nil {
+		s.Options.EndpointingAlpha = *opts.EndpointingAlpha
+	}
 	if opts.EndpointingMode != nil {
 		s.Options.EndpointingMode = *opts.EndpointingMode
-		s.Options.Endpointing = CreateEndpointing(s.Options.EndpointingMode, s.Options.MinEndpointingDelay, s.Options.MaxEndpointingDelay)
+		s.Options.Endpointing = CreateEndpointing(s.Options.EndpointingMode, s.Options.MinEndpointingDelay, s.Options.MaxEndpointingDelay, s.Options.EndpointingAlpha)
 	} else if s.Options.Endpointing != nil {
 		s.Options.Endpointing.UpdateOptions(opts.MinEndpointingDelay, opts.MaxEndpointingDelay)
 	}

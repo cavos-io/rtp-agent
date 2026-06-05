@@ -137,6 +137,35 @@ func TestAgentSessionUpdateOptionsUpdatesDynamicEndpointingAlpha(t *testing.T) {
 	}
 }
 
+func TestAgentSessionUpdateOptionsPersistsEndpointingAlphaAcrossModeChange(t *testing.T) {
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	alpha := 0.5
+	mode := "dynamic"
+
+	if err := session.UpdateOptions(AgentSessionUpdateOptions{EndpointingAlpha: &alpha}); err != nil {
+		t.Fatalf("UpdateOptions(alpha) error = %v", err)
+	}
+	if err := session.UpdateOptions(AgentSessionUpdateOptions{EndpointingMode: &mode}); err != nil {
+		t.Fatalf("UpdateOptions(mode) error = %v", err)
+	}
+	if session.Options.EndpointingAlpha != alpha {
+		t.Fatalf("EndpointingAlpha = %v, want %v", session.Options.EndpointingAlpha, alpha)
+	}
+	endpointing, ok := session.Options.Endpointing.(*DynamicEndpointing)
+	if !ok {
+		t.Fatalf("Endpointing = %T, want *DynamicEndpointing", session.Options.Endpointing)
+	}
+
+	endpointing.OnStartOfSpeech(0.0, false)
+	endpointing.OnEndOfSpeech(1.0, false)
+	endpointing.OnStartOfSpeech(1.75, false)
+	endpointing.OnEndOfSpeech(2.0, false)
+
+	if math.Abs(endpointing.MinDelay()-0.625) > 1e-9 {
+		t.Fatalf("MinDelay() = %v, want filtered utterance pause 0.625 with persisted alpha", endpointing.MinDelay())
+	}
+}
+
 func TestNewAgentSessionCreatesDynamicEndpointingWithConfiguredAlpha(t *testing.T) {
 	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{
 		EndpointingMode:  "dynamic",
