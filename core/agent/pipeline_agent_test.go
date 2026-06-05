@@ -989,10 +989,12 @@ func TestPipelineAgentEmitsLLMMetricsForUsageChunk(t *testing.T) {
 				{
 					ID: "chatcmpl_123",
 					Usage: &llm.CompletionUsage{
-						PromptTokens:       7,
-						PromptCachedTokens: 2,
-						CompletionTokens:   5,
-						TotalTokens:        12,
+						PromptTokens:        7,
+						PromptCachedTokens:  2,
+						CacheCreationTokens: 3,
+						CacheReadTokens:     4,
+						CompletionTokens:    5,
+						TotalTokens:         12,
 					},
 				},
 			},
@@ -1016,8 +1018,8 @@ func TestPipelineAgentEmitsLLMMetricsForUsageChunk(t *testing.T) {
 		if metrics.RequestID != "chatcmpl_123" {
 			t.Fatalf("RequestID = %q, want chatcmpl_123", metrics.RequestID)
 		}
-		if metrics.PromptTokens != 7 || metrics.PromptCachedTokens != 2 || metrics.CompletionTokens != 5 || metrics.TotalTokens != 12 {
-			t.Fatalf("token metrics = %#v, want prompt=7 cached=2 completion=5 total=12", metrics)
+		if metrics.PromptTokens != 7 || metrics.PromptCachedTokens != 9 || metrics.CompletionTokens != 5 || metrics.TotalTokens != 12 {
+			t.Fatalf("token metrics = %#v, want prompt=7 cached=9 completion=5 total=12", metrics)
 		}
 		if metrics.Metadata == nil || metrics.Metadata.ModelName != "test-model" || metrics.Metadata.ModelProvider != "test-provider" {
 			t.Fatalf("Metadata = %#v, want test provider/model", metrics.Metadata)

@@ -516,7 +516,7 @@ func (va *PipelineAgent) emitLLMMetrics(session *AgentSession, genData *LLMGener
 		TTFT:               genData.TTFT.Seconds(),
 		CompletionTokens:   genData.Usage.CompletionTokens,
 		PromptTokens:       genData.Usage.PromptTokens,
-		PromptCachedTokens: genData.Usage.PromptCachedTokens,
+		PromptCachedTokens: llmCachedPromptTokens(genData.Usage),
 		TotalTokens:        genData.Usage.TotalTokens,
 		Metadata: &telemetry.Metadata{
 			ModelName:     llm.Model(va.LLM),
@@ -531,6 +531,13 @@ func (va *PipelineAgent) emitLLMMetrics(session *AgentSession, genData *LLMGener
 		return
 	}
 	session.EmitMetricsCollected(metrics)
+}
+
+func llmCachedPromptTokens(usage *llm.CompletionUsage) int {
+	if usage == nil {
+		return 0
+	}
+	return usage.PromptCachedTokens + usage.CacheCreationTokens + usage.CacheReadTokens
 }
 
 func (va *PipelineAgent) synthesizeSpeech(ctx context.Context, session *AgentSession, textCh <-chan string) error {
