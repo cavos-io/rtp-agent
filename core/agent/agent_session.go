@@ -533,8 +533,12 @@ func (s *AgentSession) UpdateOptions(opts AgentSessionUpdateOptions) error {
 		s.Options.ToolChoice = *opts.ToolChoice
 	}
 	assistant := s.Assistant
+	activity := s.activity
 	s.mu.Unlock()
 
+	if activity != nil {
+		return activity.UpdateOptions(opts)
+	}
 	if opts.ToolChoice == nil {
 		return nil
 	}

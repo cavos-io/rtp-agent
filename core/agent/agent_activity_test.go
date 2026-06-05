@@ -220,6 +220,23 @@ func TestAgentActivityOnPipelineReplyDoneReturnsToListeningWhenInactive(t *testi
 	}
 }
 
+func TestAgentActivityUpdateOptionsForwardsRealtimeToolChoice(t *testing.T) {
+	agent := NewAgent("test")
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	assistant := &recordingOptionsAssistant{}
+	session.Assistant = assistant
+	activity := NewAgentActivity(agent, session)
+	toolChoice := llm.ToolChoice("none")
+
+	if err := activity.UpdateOptions(AgentSessionUpdateOptions{ToolChoice: &toolChoice}); err != nil {
+		t.Fatalf("UpdateOptions error = %v, want nil", err)
+	}
+
+	if assistant.options.ToolChoice != toolChoice {
+		t.Fatalf("realtime ToolChoice = %#v, want %#v", assistant.options.ToolChoice, toolChoice)
+	}
+}
+
 func TestAgentActivityUseTTSAlignedTranscriptUsesAgentOverride(t *testing.T) {
 	agent := NewAgent("test")
 	session := NewAgentSession(agent, nil, AgentSessionOptions{UseTTSAlignedTranscript: true})
@@ -1670,6 +1687,25 @@ func receiveScheduledSpeech(t *testing.T, assistant *recordingScheduledSpeechAss
 		t.Fatal("timed out waiting for scheduled speech")
 		return nil
 	}
+}
+
+type recordingOptionsAssistant struct {
+	options llm.RealtimeSessionOptions
+}
+
+func (r *recordingOptionsAssistant) Start(context.Context, *AgentSession) error {
+	return nil
+}
+
+func (r *recordingOptionsAssistant) OnAudioFrame(context.Context, *model.AudioFrame) {
+}
+
+func (r *recordingOptionsAssistant) SetPublishAudio(func(frame *model.AudioFrame) error) {
+}
+
+func (r *recordingOptionsAssistant) UpdateOptions(_ context.Context, options llm.RealtimeSessionOptions) error {
+	r.options = options
+	return nil
 }
 
 type fixedWordTokenizer struct {

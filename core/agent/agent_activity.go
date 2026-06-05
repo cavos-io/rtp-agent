@@ -486,6 +486,19 @@ func (a *AgentActivity) UpdateChatCtx(ctx context.Context, chatCtx *llm.ChatCont
 	return nil
 }
 
+func (a *AgentActivity) UpdateOptions(opts AgentSessionUpdateOptions) error {
+	if a == nil || a.Session == nil || opts.ToolChoice == nil {
+		return nil
+	}
+	updater, ok := a.Session.Assistant.(realtimeOptionsUpdatingAssistant)
+	if !ok {
+		return nil
+	}
+	return updater.UpdateOptions(context.Background(), llm.RealtimeSessionOptions{
+		ToolChoice: *opts.ToolChoice,
+	})
+}
+
 func (a *AgentActivity) updateRealtimeChatContext(ctx context.Context) error {
 	if a.Session == nil {
 		return nil
