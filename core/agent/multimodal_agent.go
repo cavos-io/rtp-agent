@@ -123,7 +123,11 @@ func (ma *MultimodalAgent) UpdateTools(ctx context.Context) error {
 		return ctx.Err()
 	default:
 	}
-	return rtSession.UpdateTools(ma.realtimeTools())
+	tools, err := ma.realtimeTools()
+	if err != nil {
+		return err
+	}
+	return rtSession.UpdateTools(tools)
 }
 
 func (ma *MultimodalAgent) UpdateChatContext(ctx context.Context, chatCtx *llm.ChatContext) error {
@@ -231,7 +235,11 @@ func (ma *MultimodalAgent) initializeRealtimeSession(rtSession llm.RealtimeSessi
 			return err
 		}
 	}
-	return rtSession.UpdateTools(ma.realtimeTools())
+	tools, err := ma.realtimeTools()
+	if err != nil {
+		return err
+	}
+	return rtSession.UpdateTools(tools)
 }
 
 func (ma *MultimodalAgent) SupportsNativeSay() bool {
@@ -606,13 +614,16 @@ func (ma *MultimodalAgent) consumeRealtimeMessage(ctx context.Context, speech *S
 	speech.AddChatItems(msg)
 }
 
-func (ma *MultimodalAgent) realtimeTools() []llm.Tool {
+func (ma *MultimodalAgent) realtimeTools() ([]llm.Tool, error) {
 	tools, err := sessionRegisteredTools(context.Background(), ma.session)
 	if err != nil {
-		logger.Logger.Errorw("failed to register realtime tools", err)
-		return nil
+		return nil, err
 	}
-	return tools
+	toolCtx := llm.EmptyToolContext()
+	if err := toolCtx.UpdateTools(agentToolsAsInterfaces(tools)); err != nil {
+		return nil, err
+	}
+	return tools, nil
 }
 
 func (ma *MultimodalAgent) executeRealtimeFunctionCall(functionCall *llm.FunctionCall) {
@@ -624,8 +635,16 @@ func (ma *MultimodalAgent) executeRealtimeFunctionCall(functionCall *llm.Functio
 	}
 	logger.Logger.Infow("Executing tool (multimodal)", "name", functionCall.Name)
 
+	tools, err := ma.realtimeTools()
+	if err != nil {
+		logger.Logger.Errorw("failed to register realtime tools", err)
+		if ma.session != nil {
+			ma.session.EmitError(ErrorEvent{Error: err, Source: ma})
+		}
+		return
+	}
 	var foundTool llm.Tool
-	for _, tool := range ma.realtimeTools() {
+	for _, tool := range tools {
 		if tool.Name() == functionCall.Name {
 			foundTool = tool
 			break

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"strings"
 	"testing"
 	"time"
 
@@ -159,6 +160,29 @@ func TestMultimodalAgentStartUpdatesRealtimeSessionWithSessionAndAgentTools(t *t
 
 	if got, want := toolNames(rtSession.tools), []string{"session_tool", "agent_tool"}; !equalStrings(got, want) {
 		t.Fatalf("updated realtime tools = %#v, want %#v", got, want)
+	}
+}
+
+func TestMultimodalAgentStartReturnsToolRegistrationError(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	agent := NewAgent("test")
+	agent.Tools = []llm.Tool{&fakeGenerationTool{name: "lookup"}}
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	session.Tools = []llm.Tool{&fakeGenerationTool{name: "lookup"}}
+	rtSession := &fakeRealtimeSession{}
+	ma := NewMultimodalAgent(&fakeRealtimeModel{session: rtSession}, llm.NewChatContext())
+
+	err := ma.Start(ctx, session)
+	if err == nil || !strings.Contains(err.Error(), "duplicate function name: lookup") {
+		t.Fatalf("Start error = %v, want duplicate function name error", err)
+	}
+	if rtSession.closed != 1 {
+		t.Fatalf("realtime session closed = %d, want 1", rtSession.closed)
+	}
+	if len(rtSession.tools) != 0 {
+		t.Fatalf("updated realtime tools = %#v, want no tools on registration error", toolNames(rtSession.tools))
 	}
 }
 
