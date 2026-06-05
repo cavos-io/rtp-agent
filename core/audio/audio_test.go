@@ -113,6 +113,34 @@ func TestSilenceFrameAllowsZeroDuration(t *testing.T) {
 	}
 }
 
+func TestSilenceFrameLikeMatchesShapeAndZerosData(t *testing.T) {
+	source := &AudioFrame{
+		Data:              []byte{1, 2, 3, 4},
+		SampleRate:        16000,
+		NumChannels:       1,
+		SamplesPerChannel: 2,
+	}
+
+	frame := SilenceFrameLike(source)
+
+	if frame == source {
+		t.Fatal("SilenceFrameLike returned original frame")
+	}
+	if frame.SampleRate != source.SampleRate || frame.NumChannels != source.NumChannels || frame.SamplesPerChannel != source.SamplesPerChannel {
+		t.Fatalf("SilenceFrameLike shape = rate %d channels %d samples %d, want rate %d channels %d samples %d",
+			frame.SampleRate, frame.NumChannels, frame.SamplesPerChannel,
+			source.SampleRate, source.NumChannels, source.SamplesPerChannel)
+	}
+	if len(frame.Data) != len(source.Data) {
+		t.Fatalf("SilenceFrameLike data bytes = %d, want %d", len(frame.Data), len(source.Data))
+	}
+	for i, sample := range frame.Data {
+		if sample != 0 {
+			t.Fatalf("SilenceFrameLike data[%d] = %d, want 0", i, sample)
+		}
+	}
+}
+
 func TestAudioArrayBufferPushReadShiftAndReset(t *testing.T) {
 	buffer := NewAudioArrayBuffer(4, 16000)
 	frame := audioFrameFromInt16(16000, 1, []int16{1, 2, 3})
