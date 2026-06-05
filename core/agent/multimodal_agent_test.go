@@ -166,12 +166,15 @@ func TestAgentUpdateChatContextUpdatesRealtimeSession(t *testing.T) {
 	source := llm.NewChatContext()
 	source.Append(&llm.ChatMessage{ID: "user", Role: llm.ChatRoleUser, Content: []llm.ChatContent{{Text: "hello"}}})
 
-	if err := baseAgent.UpdateChatContext(context.Background(), source); err != nil {
-		t.Fatalf("UpdateChatContext error = %v, want nil", err)
+	if err := baseAgent.UpdateChatCtx(context.Background(), source); err != nil {
+		t.Fatalf("UpdateChatCtx error = %v, want nil", err)
 	}
 
 	if got := chatItemIDs(baseAgent.ChatCtx.Items); !stringSlicesEqual(got, []string{agentInstructionsMessageID, "user"}) {
 		t.Fatalf("agent ChatCtx item IDs = %q, want instructions then user", got)
+	}
+	if baseAgent.ChatCtx == source {
+		t.Fatal("agent ChatCtx reused source context, want copied context")
 	}
 	if rtSession.updated == nil {
 		t.Fatal("realtime chat context was not updated")

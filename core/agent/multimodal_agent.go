@@ -270,7 +270,15 @@ func (ma *MultimodalAgent) OnSpeechScheduled(ctx context.Context, speech *Speech
 		return
 	}
 
-	selectedTools, err := resolveToolsByID(sessionRegisteredTools(session), speech.Generation.Tools)
+	registeredTools, err := sessionRegisteredTools(ctx, session)
+	if err != nil {
+		logger.Logger.Errorw("failed to register realtime reply tools", err)
+		if session != nil {
+			session.EmitError(ErrorEvent{Error: err, Source: ma})
+		}
+		return
+	}
+	selectedTools, err := resolveToolsByID(registeredTools, speech.Generation.Tools)
 	if err != nil {
 		logger.Logger.Errorw("failed to resolve realtime reply tools", err)
 		if session != nil {
@@ -530,7 +538,12 @@ func (ma *MultimodalAgent) consumeRealtimeMessage(ctx context.Context, speech *S
 }
 
 func (ma *MultimodalAgent) realtimeTools() []llm.Tool {
-	return sessionRegisteredTools(ma.session)
+	tools, err := sessionRegisteredTools(context.Background(), ma.session)
+	if err != nil {
+		logger.Logger.Errorw("failed to register realtime tools", err)
+		return nil
+	}
+	return tools
 }
 
 func (ma *MultimodalAgent) executeRealtimeFunctionCall(functionCall *llm.FunctionCall) {

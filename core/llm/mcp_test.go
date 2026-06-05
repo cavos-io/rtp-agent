@@ -147,6 +147,171 @@ func TestMCPServerHTTPListsAndExecutesTools(t *testing.T) {
 	}
 }
 
+func TestMCPServerHTTPInitializedReflectsLifecycle(t *testing.T) {
+	httpServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req jsonRPCRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+
+		switch req.Method {
+		case "initialize":
+			writeMCPHTTPResponse(t, w, req.ID, map[string]any{"protocolVersion": "2024-11-05"})
+		case "initialized":
+			w.WriteHeader(http.StatusAccepted)
+		default:
+			t.Fatalf("unexpected MCP method %q", req.Method)
+		}
+	}))
+	defer httpServer.Close()
+
+	server := NewMCPServerHTTP(httpServer.URL)
+
+	if server.Initialized() {
+		t.Fatal("Initialized() = true before Initialize, want false")
+	}
+	if err := server.Initialize(context.Background()); err != nil {
+		t.Fatalf("Initialize() error = %v", err)
+	}
+	if !server.Initialized() {
+		t.Fatal("Initialized() = false after Initialize, want true")
+	}
+	if err := server.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+	if server.Initialized() {
+		t.Fatal("Initialized() = true after Close, want false")
+	}
+}
+
+func TestMCPServerHTTPSetHeadersAppliesToSubsequentRequests(t *testing.T) {
+	httpServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req jsonRPCRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+
+		switch req.Method {
+		case "initialize":
+			if got := r.Header.Get("Authorization"); got != "Bearer first" {
+				t.Fatalf("initialize Authorization = %q, want first token", got)
+			}
+			writeMCPHTTPResponse(t, w, req.ID, map[string]any{"protocolVersion": "2024-11-05"})
+		case "initialized":
+			w.WriteHeader(http.StatusAccepted)
+		case "tools/list":
+			if got := r.Header.Get("Authorization"); got != "Bearer second" {
+				t.Fatalf("tools/list Authorization = %q, want updated token", got)
+			}
+			if got := r.Header.Get("X-Scope"); got != "tools" {
+				t.Fatalf("tools/list X-Scope = %q, want updated scope", got)
+			}
+			writeMCPHTTPResponse(t, w, req.ID, map[string]any{
+				"tools": []map[string]any{},
+			})
+		default:
+			t.Fatalf("unexpected MCP method %q", req.Method)
+		}
+	}))
+	defer httpServer.Close()
+
+	server := NewMCPServerHTTP(httpServer.URL)
+	server.Headers = map[string]string{"Authorization": "Bearer first"}
+
+	if err := server.Initialize(context.Background()); err != nil {
+		t.Fatalf("Initialize() error = %v", err)
+	}
+	server.SetHeaders(map[string]string{
+		"Authorization": "Bearer second",
+		"X-Scope":       "tools",
+	})
+	if _, err := server.ListTools(context.Background()); err != nil {
+		t.Fatalf("ListTools() error = %v", err)
+	}
+}
+
+func TestMCPToolsetSetupInitializesServerAndFlattensTools(t *testing.T) {
+	lookup := &testTool{id: "lookup", name: "lookup"}
+	server := &fakeMCPServer{tools: []Tool{lookup}}
+	toolset := NewMCPToolset("mcp-tools", server)
+
+	got, err := toolset.Setup(context.Background(), false)
+	if err != nil {
+		t.Fatalf("Setup() error = %v", err)
+	}
+	if got != toolset {
+		t.Fatalf("Setup() = %p, want receiver %p", got, toolset)
+	}
+	if server.initializeCalls != 1 {
+		t.Fatalf("Initialize calls = %d, want 1", server.initializeCalls)
+	}
+	if server.listToolsCalls != 1 {
+		t.Fatalf("ListTools calls = %d, want 1", server.listToolsCalls)
+	}
+
+	ctx := NewToolContext([]interface{}{toolset})
+	if got := ctx.GetFunctionTool("lookup"); got != lookup {
+		t.Fatalf("GetFunctionTool(lookup) = %p, want MCP tool %p", got, lookup)
+	}
+	if toolsets := ctx.Toolsets(); len(toolsets) != 1 || toolsets[0] != toolset {
+		t.Fatalf("Toolsets() = %#v, want MCP toolset", toolsets)
+	}
+}
+
+func TestMCPToolsetSetupReloadInvalidatesServerCache(t *testing.T) {
+	first := &testTool{id: "first", name: "first"}
+	second := &testTool{id: "second", name: "second"}
+	server := &fakeMCPServer{
+		initialized: true,
+		toolBatches: [][]Tool{
+			{first},
+			{second},
+		},
+	}
+	toolset := NewMCPToolset("mcp-tools", server)
+
+	if _, err := toolset.Setup(context.Background(), false); err != nil {
+		t.Fatalf("first Setup() error = %v", err)
+	}
+	if _, err := toolset.Setup(context.Background(), false); err != nil {
+		t.Fatalf("cached Setup() error = %v", err)
+	}
+	if server.listToolsCalls != 1 {
+		t.Fatalf("ListTools calls = %d, want cached setup to avoid reload", server.listToolsCalls)
+	}
+
+	if _, err := toolset.Setup(context.Background(), true); err != nil {
+		t.Fatalf("reload Setup() error = %v", err)
+	}
+	if server.invalidateCalls != 1 {
+		t.Fatalf("InvalidateCache calls = %d, want 1 on reload", server.invalidateCalls)
+	}
+	if server.listToolsCalls != 2 {
+		t.Fatalf("ListTools calls = %d, want reload to fetch tools again", server.listToolsCalls)
+	}
+	tools := toolset.Tools()
+	if len(tools) != 1 || tools[0] != second {
+		t.Fatalf("Tools() = %#v, want reloaded second tool", tools)
+	}
+}
+
+func TestMCPToolsetFilterUpdatesToolsetState(t *testing.T) {
+	keep := &testTool{id: "keep", name: "keep"}
+	drop := &testTool{id: "drop", name: "drop"}
+	server := &fakeMCPServer{tools: []Tool{keep, drop}}
+	toolset := NewMCPToolset("mcp-tools", server)
+
+	if _, err := toolset.Setup(context.Background(), false); err != nil {
+		t.Fatalf("Setup() error = %v", err)
+	}
+	toolset.FilterTools(func(tool Tool) bool {
+		return tool.Name() == "keep"
+	})
+	if tools := toolset.Tools(); len(tools) != 1 || tools[0] != keep {
+		t.Fatalf("filtered Tools() = %#v, want keep tool only", tools)
+	}
+}
+
 func writeMCPHTTPResponse(t *testing.T, w http.ResponseWriter, id int64, result any) {
 	t.Helper()
 	w.Header().Set("Content-Type", "application/json")
@@ -358,5 +523,47 @@ func (w *fakeMCPWriteCloser) Write(p []byte) (int, error) {
 }
 
 func (w *fakeMCPWriteCloser) Close() error {
+	return nil
+}
+
+type fakeMCPServer struct {
+	initialized     bool
+	tools           []Tool
+	toolBatches     [][]Tool
+	initializeCalls int
+	invalidateCalls int
+	listToolsCalls  int
+	closeCalls      int
+}
+
+func (s *fakeMCPServer) Initialize(context.Context) error {
+	s.initializeCalls++
+	s.initialized = true
+	return nil
+}
+
+func (s *fakeMCPServer) Initialized() bool {
+	return s.initialized
+}
+
+func (s *fakeMCPServer) InvalidateCache() {
+	s.invalidateCalls++
+}
+
+func (s *fakeMCPServer) ListTools(context.Context) ([]Tool, error) {
+	s.listToolsCalls++
+	if len(s.toolBatches) > 0 {
+		idx := s.listToolsCalls - 1
+		if idx >= len(s.toolBatches) {
+			idx = len(s.toolBatches) - 1
+		}
+		return s.toolBatches[idx], nil
+	}
+	return s.tools, nil
+}
+
+func (s *fakeMCPServer) Close() error {
+	s.closeCalls++
+	s.initialized = false
 	return nil
 }

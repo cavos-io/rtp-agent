@@ -309,6 +309,10 @@ func MakeFunctionCallOutput(fncCall FunctionCall, output any, exception error) F
 	}
 }
 
+func MakeToolOutput(fncCall FunctionCall, output any, exception error) FunctionCallResult {
+	return MakeFunctionCallOutput(fncCall, output, exception)
+}
+
 func CollectStream(stream LLMStream) (*CollectedResponse, error) {
 	if stream == nil {
 		return nil, fmt.Errorf("llm stream is nil")
@@ -406,7 +410,7 @@ func ExecuteFunctionCall(ctx context.Context, toolCall *FunctionToolCall, toolCt
 			Extra:     toolCall.Extra,
 			CreatedAt: time.Now(),
 		}
-		return MakeFunctionCallOutput(fncCall, nil, err)
+		return MakeToolOutput(fncCall, nil, err)
 	}
 	encodedArgs, err := json.Marshal(parsedArgs)
 	if err != nil {
@@ -417,7 +421,7 @@ func ExecuteFunctionCall(ctx context.Context, toolCall *FunctionToolCall, toolCt
 			Extra:     toolCall.Extra,
 			CreatedAt: time.Now(),
 		}
-		return MakeFunctionCallOutput(fncCall, nil, err)
+		return MakeToolOutput(fncCall, nil, err)
 	}
 	args = string(encodedArgs)
 
@@ -446,7 +450,7 @@ func ExecuteFunctionCall(ctx context.Context, toolCall *FunctionToolCall, toolCt
 	}
 
 	output, err := tool.Execute(ctx, args)
-	result := MakeFunctionCallOutput(fncCall, output, err)
+	result := MakeToolOutput(fncCall, output, err)
 	if result.FncCallOut != nil && result.FncCallOut.CreatedAt.IsZero() {
 		result.FncCallOut.CreatedAt = time.Now()
 	}

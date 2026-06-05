@@ -52,6 +52,31 @@ func (t nonComparableTool) Parameters() map[string]any { return nil }
 
 func (t nonComparableTool) Execute(context.Context, string) (string, error) { return "", nil }
 
+func TestToolContextEmptyMatchesReferenceConstructor(t *testing.T) {
+	var receiver ToolContext
+	ctx := receiver.Empty()
+	if ctx == nil {
+		t.Fatal("ToolContext.Empty() = nil, want context")
+	}
+	if len(ctx.FunctionTools()) != 0 {
+		t.Fatalf("len(ToolContext.Empty().FunctionTools()) = %d, want 0", len(ctx.FunctionTools()))
+	}
+	if len(ctx.ProviderTools()) != 0 {
+		t.Fatalf("len(ToolContext.Empty().ProviderTools()) = %d, want 0", len(ctx.ProviderTools()))
+	}
+	if len(ctx.Toolsets()) != 0 {
+		t.Fatalf("len(ToolContext.Empty().Toolsets()) = %d, want 0", len(ctx.Toolsets()))
+	}
+
+	tool := &testTool{id: "lookup", name: "lookup"}
+	if err := ctx.AddTool(tool); err != nil {
+		t.Fatalf("ToolContext.Empty().AddTool() error = %v, want nil", err)
+	}
+	if got := ctx.GetFunctionTool("lookup"); got != tool {
+		t.Fatalf("ToolContext.Empty().GetFunctionTool() = %p, want %p", got, tool)
+	}
+}
+
 func TestToolContextUpdateToolsAllowsSameToolInstanceDuplicate(t *testing.T) {
 	tool := &testTool{id: "lookup", name: "lookup"}
 	toolset := &testToolset{id: "tools", tools: []Tool{tool}}

@@ -299,6 +299,10 @@ func EmptyChatContext() *ChatContext {
 	return NewChatContext()
 }
 
+func (*ChatContext) Empty() *ChatContext {
+	return EmptyChatContext()
+}
+
 func (c *ChatContext) Append(item ChatItem) {
 	c.ensureMutable()
 	c.Items = append(c.Items, item)
@@ -1207,6 +1211,13 @@ type fallbackLLMStream struct {
 	closed       bool
 }
 
+func (s *fallbackLLMStream) ChatCtx() *ChatContext {
+	if s == nil {
+		return nil
+	}
+	return s.chatCtx
+}
+
 func (s *fallbackLLMStream) markUnavailable(index int, recover bool) {
 	s.adapter.mu.Lock()
 	changed := s.adapter.available[index]
@@ -1220,7 +1231,7 @@ func (s *fallbackLLMStream) markUnavailable(index int, recover bool) {
 	}
 	s.adapter.recovering[index] = true
 	llm := s.adapter.llms[index]
-	chatCtx := s.chatCtx
+	chatCtx := s.ChatCtx()
 	opts := append([]ChatOption(nil), s.opts...)
 	s.adapter.mu.Unlock()
 
@@ -1276,7 +1287,7 @@ func (s *fallbackLLMStream) tryStart(index int) error {
 		}
 		for {
 			ctx, cancel := s.adapter.attemptContext(s.ctx)
-			stream, err := s.adapter.llms[i].Chat(ctx, s.chatCtx, s.adapter.attemptOptions(s.opts)...)
+			stream, err := s.adapter.llms[i].Chat(ctx, s.ChatCtx(), s.adapter.attemptOptions(s.opts)...)
 			if err == nil {
 				s.adapter.setAvailable(i, true)
 				s.closeActive()

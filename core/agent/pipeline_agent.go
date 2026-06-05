@@ -275,7 +275,14 @@ func (va *PipelineAgent) generateReplyWithOptions(opts pipelineReplyOptions) {
 	logger.Logger.Infow("Generating reply")
 	session.UpdateAgentState(AgentStateThinking)
 
-	selectedTools, err := resolveToolsByID(sessionRegisteredTools(session), opts.Tools)
+	registeredTools, err := sessionRegisteredTools(ctx, session)
+	if err != nil {
+		logger.Logger.Errorw("failed to register reply tools", err)
+		session.EmitError(ErrorEvent{Error: err, Source: va})
+		session.UpdateAgentState(AgentStateIdle)
+		return
+	}
+	selectedTools, err := resolveToolsByID(registeredTools, opts.Tools)
 	if err != nil {
 		logger.Logger.Errorw("failed to resolve reply tools", err)
 		session.EmitError(ErrorEvent{Error: err, Source: va})
@@ -558,16 +565,31 @@ func closedChannel() <-chan struct{} {
 	return ch
 }
 
-func sessionRegisteredTools(session *AgentSession) []llm.Tool {
+func sessionRegisteredTools(ctx context.Context, session *AgentSession) ([]llm.Tool, error) {
 	if session == nil {
-		return nil
+		return nil, nil
 	}
 	tools := make([]llm.Tool, 0, len(session.Tools))
 	tools = append(tools, session.Tools...)
 	if session.Agent != nil && session.Agent.GetAgent() != nil {
 		tools = append(tools, session.Agent.GetAgent().Tools...)
 	}
-	return tools
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	for idx, server := range session.MCPServers() {
+		if server == nil {
+			continue
+		}
+		toolset := llm.NewMCPToolset(fmt.Sprintf("mcp_toolset_%d", idx), server)
+		toolsetID := toolset.ID()
+		if _, err := toolset.Setup(ctx, false); err != nil {
+			return nil, fmt.Errorf("setup MCP toolset %q: %w", toolsetID, err)
+		}
+		toolset.FilterTools(func(tool llm.Tool) bool { return tool != nil })
+		tools = append(tools, toolset.Tools()...)
+	}
+	return tools, nil
 }
 
 func insertChatItemIfMissing(chatCtx *llm.ChatContext, item llm.ChatItem) {

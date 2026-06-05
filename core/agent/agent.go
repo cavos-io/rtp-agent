@@ -133,8 +133,12 @@ func dedupeAgentToolsByID(tools []llm.Tool) []llm.Tool {
 }
 
 func (a *Agent) UpdateChatContext(ctx context.Context, chatCtx *llm.ChatContext, excludeInvalidFunctionCalls ...bool) error {
+	return a.UpdateChatCtx(ctx, chatCtx, excludeInvalidFunctionCalls...)
+}
+
+func (a *Agent) UpdateChatCtx(ctx context.Context, chatCtx *llm.ChatContext, excludeInvalidFunctionCalls ...bool) error {
 	if a.activity != nil {
-		return a.activity.UpdateChatContext(ctx, chatCtx, excludeInvalidFunctionCalls...)
+		return a.activity.UpdateChatCtx(ctx, chatCtx, excludeInvalidFunctionCalls...)
 	}
 	excludeInvalid := true
 	if len(excludeInvalidFunctionCalls) > 0 {

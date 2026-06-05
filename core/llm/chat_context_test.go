@@ -54,6 +54,28 @@ func TestEmptyChatContextReturnsMutableEmptyContext(t *testing.T) {
 	}
 }
 
+func TestChatContextEmptyMatchesReferenceConstructor(t *testing.T) {
+	var receiver ChatContext
+	ctx := receiver.Empty()
+	if ctx == nil {
+		t.Fatal("ChatContext.Empty() = nil, want context")
+	}
+	if ctx.Readonly() {
+		t.Fatal("ChatContext.Empty().Readonly() = true, want false")
+	}
+	if ctx.Items == nil {
+		t.Fatal("ChatContext.Empty().Items = nil, want empty slice")
+	}
+	if len(ctx.Items) != 0 {
+		t.Fatalf("len(ChatContext.Empty().Items) = %d, want 0", len(ctx.Items))
+	}
+
+	ctx.Append(&ChatMessage{ID: "msg", Role: ChatRoleUser})
+	if got := len(ctx.Items); got != 1 {
+		t.Fatalf("len(ChatContext.Empty().Items) after Append = %d, want 1", got)
+	}
+}
+
 func TestChatContextCopyFiltersReferenceItemTypes(t *testing.T) {
 	ctx := NewChatContext()
 	ctx.Items = []ChatItem{

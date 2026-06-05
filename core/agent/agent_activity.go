@@ -411,6 +411,10 @@ func (a *AgentActivity) UpdateTools(ctx context.Context, tools []llm.Tool) error
 }
 
 func (a *AgentActivity) UpdateChatContext(ctx context.Context, chatCtx *llm.ChatContext, excludeInvalidFunctionCalls ...bool) error {
+	return a.UpdateChatCtx(ctx, chatCtx, excludeInvalidFunctionCalls...)
+}
+
+func (a *AgentActivity) UpdateChatCtx(ctx context.Context, chatCtx *llm.ChatContext, excludeInvalidFunctionCalls ...bool) error {
 	excludeInvalid := true
 	if len(excludeInvalidFunctionCalls) > 0 {
 		excludeInvalid = excludeInvalidFunctionCalls[0]

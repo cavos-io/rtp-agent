@@ -22,6 +22,10 @@ func NewToolContext(tools []interface{}) *ToolContext {
 }
 
 func EmptyToolContext() *ToolContext {
+	return (*ToolContext)(nil).Empty()
+}
+
+func (*ToolContext) Empty() *ToolContext {
 	return NewToolContext([]interface{}{})
 }
 
