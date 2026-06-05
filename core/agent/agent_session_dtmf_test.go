@@ -26,3 +26,31 @@ func TestAgentSessionEmitSipDTMFPublishesEvent(t *testing.T) {
 		t.Fatal("SipDTMFEvents() did not receive emitted event")
 	}
 }
+
+func TestAgentSessionSipDTMFEventsFanOutToSubscribers(t *testing.T) {
+	session := &AgentSession{}
+	first := session.SipDTMFEvents()
+	second := session.SipDTMFEvents()
+
+	session.EmitSipDTMF(SipDTMFEvent{
+		Digit:          "9",
+		Code:           9,
+		SenderIdentity: "caller",
+	})
+
+	assertSipDTMFEvent(t, first, "first")
+	assertSipDTMFEvent(t, second, "second")
+}
+
+func assertSipDTMFEvent(t *testing.T, events <-chan SipDTMFEvent, name string) {
+	t.Helper()
+
+	select {
+	case ev := <-events:
+		if ev.Digit != "9" || ev.Code != 9 || ev.SenderIdentity != "caller" {
+			t.Fatalf("%s subscriber event = %#v, want caller digit 9", name, ev)
+		}
+	default:
+		t.Fatalf("%s subscriber did not receive DTMF event", name)
+	}
+}

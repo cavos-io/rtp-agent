@@ -232,6 +232,8 @@ type AgentSession struct {
 	errorChSubscribed    bool
 	errorSubs            []chan ErrorEvent
 	sipDTMFCh            chan SipDTMFEvent
+	sipDTMFSubd          bool
+	sipDTMFSubs          []chan SipDTMFEvent
 	closeCh              chan CloseEvent
 	closeChSubscribed    bool
 	closeSubs            []chan CloseEvent
@@ -1305,10 +1307,11 @@ func (s *AgentSession) SipDTMFEvents() <-chan SipDTMFEvent {
 }
 
 func (s *AgentSession) EmitSipDTMF(ev SipDTMFEvent) {
-	ch := s.sipDTMFEvents()
-	select {
-	case ch <- ev:
-	default:
+	for _, ch := range s.sipDTMFSubscribers() {
+		select {
+		case ch <- ev:
+		default:
+		}
 	}
 }
 
@@ -1319,7 +1322,26 @@ func (s *AgentSession) sipDTMFEvents() chan SipDTMFEvent {
 	if s.sipDTMFCh == nil {
 		s.sipDTMFCh = make(chan SipDTMFEvent, 10)
 	}
-	return s.sipDTMFCh
+	if !s.sipDTMFSubd {
+		s.sipDTMFSubd = true
+		return s.sipDTMFCh
+	}
+	ch := make(chan SipDTMFEvent, 10)
+	s.sipDTMFSubs = append(s.sipDTMFSubs, ch)
+	return ch
+}
+
+func (s *AgentSession) sipDTMFSubscribers() []chan SipDTMFEvent {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	subs := make([]chan SipDTMFEvent, 0, len(s.sipDTMFSubs)+1)
+	if s.sipDTMFCh == nil {
+		s.sipDTMFCh = make(chan SipDTMFEvent, 10)
+	}
+	subs = append(subs, s.sipDTMFCh)
+	subs = append(subs, s.sipDTMFSubs...)
+	return subs
 }
 
 func (s *AgentSession) CloseEvents() <-chan CloseEvent {
