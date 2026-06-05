@@ -1063,6 +1063,37 @@ func TestAgentActivityOnInterimTranscriptEmitsUserInputTranscribed(t *testing.T)
 	}
 }
 
+func TestAgentActivityOnInterimTranscriptInterruptsCurrentSpeech(t *testing.T) {
+	agent := NewAgent("test")
+	agent.STT = &fakePipelineSTT{}
+	session := NewAgentSession(agent, nil, AgentSessionOptions{TurnDetection: TurnDetectionModeSTT})
+	activity := NewAgentActivity(agent, session)
+	current := NewSpeechHandle(true, DefaultInputDetails())
+	activity.currentSpeech = current
+
+	activity.OnInterimTranscript(&stt.SpeechEvent{
+		Alternatives: []stt.SpeechData{{Text: "wait"}},
+	})
+
+	waitForInterrupted(t, current)
+}
+
+func TestAgentActivityOnInterimTranscriptDoesNotInterruptManualTurn(t *testing.T) {
+	agent := NewAgent("test")
+	session := NewAgentSession(agent, nil, AgentSessionOptions{TurnDetection: TurnDetectionModeManual})
+	activity := NewAgentActivity(agent, session)
+	current := NewSpeechHandle(true, DefaultInputDetails())
+	activity.currentSpeech = current
+
+	activity.OnInterimTranscript(&stt.SpeechEvent{
+		Alternatives: []stt.SpeechData{{Text: "wait"}},
+	})
+
+	if current.IsInterrupted() {
+		t.Fatal("current speech was interrupted for manual turn detection")
+	}
+}
+
 func TestAgentActivityClearUserTurnDropsPendingManualTranscript(t *testing.T) {
 	agent := &turnCompletedAgent{Agent: NewAgent("test"), turns: make(chan *llm.ChatMessage, 1)}
 	agent.TurnDetection = TurnDetectionModeManual

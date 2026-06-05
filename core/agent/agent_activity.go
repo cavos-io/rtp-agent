@@ -1031,6 +1031,14 @@ func (a *AgentActivity) OnInterimTranscript(ev *stt.SpeechEvent) {
 		IsFinal:    false,
 		SpeakerID:  speakerID,
 	})
+	turnDetection := a.turnDetectionMode()
+	if transcript != "" && turnDetection != TurnDetectionModeManual && turnDetection != TurnDetectionModeRealtimeLLM {
+		go func() {
+			if err := a.Interrupt(false); err != nil {
+				logger.Logger.Warnw("failed to interrupt speech for interim transcript", err, "transcript", transcript)
+			}
+		}()
+	}
 }
 
 func (a *AgentActivity) OnFinalTranscript(ev *stt.SpeechEvent) {
