@@ -293,6 +293,33 @@ func TestPerformTTSInferenceEndsStreamInput(t *testing.T) {
 	}
 }
 
+func TestPerformTTSInferenceRecordsPushTextError(t *testing.T) {
+	cause := errors.New("push text failed")
+	providerStream := newEndInputGenerationTTSStream()
+	providerStream.pushErr = cause
+	provider := &fakeGenerationTTS{stream: providerStream}
+	textCh := make(chan string, 1)
+	textCh <- "hello"
+	close(textCh)
+
+	data, err := PerformTTSInference(context.Background(), provider, textCh)
+	if err != nil {
+		t.Fatalf("PerformTTSInference error = %v, want nil startup error", err)
+	}
+
+	select {
+	case _, ok := <-data.AudioCh:
+		if ok {
+			t.Fatal("AudioCh emitted audio after PushText error")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("AudioCh did not close after PushText error")
+	}
+	if !errors.Is(data.StreamErr, cause) {
+		t.Fatalf("StreamErr = %v, want %v", data.StreamErr, cause)
+	}
+}
+
 func TestPerformTTSInferenceFiltersMarkdownAcrossChunks(t *testing.T) {
 	providerStream := newEndInputGenerationTTSStream()
 	provider := &fakeGenerationTTS{stream: providerStream}
@@ -784,6 +811,7 @@ type endInputGenerationTTSStream struct {
 	ended   chan struct{}
 	closed  bool
 	emitted bool
+	pushErr error
 }
 
 func newEndInputGenerationTTSStream() *endInputGenerationTTSStream {
@@ -794,6 +822,9 @@ func newEndInputGenerationTTSStream() *endInputGenerationTTSStream {
 
 func (s *endInputGenerationTTSStream) PushText(text string) error {
 	s.calls = append(s.calls, "push:"+text)
+	if s.pushErr != nil {
+		return s.pushErr
+	}
 	return nil
 }
 
