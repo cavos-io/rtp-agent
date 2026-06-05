@@ -1914,6 +1914,33 @@ func TestAgentSessionStartForwardsTTSMetricsThroughActivity(t *testing.T) {
 	}
 }
 
+func TestAgentSessionStartForwardsVADMetricsThroughActivity(t *testing.T) {
+	vadSource := &fakePipelineVAD{}
+	agent := NewAgent("test")
+	agent.VAD = vadSource
+	agent.LLM = &fakeGenerationLLM{}
+	agent.STT = &fakePipelineSTT{}
+	agent.TTS = &fakePipelineTTS{}
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	session.Assistant = &fakeSessionAssistant{}
+
+	if err := session.Start(context.Background()); err != nil {
+		t.Fatalf("Start error = %v, want nil", err)
+	}
+
+	metrics := &telemetry.VADMetrics{Label: "vad"}
+	vadSource.EmitMetricsCollected(metrics)
+
+	select {
+	case ev := <-session.MetricsCollectedEvents():
+		if ev.Metrics != metrics {
+			t.Fatalf("MetricsCollectedEvent metrics = %#v, want original VAD metrics", ev.Metrics)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("MetricsCollectedEvents did not receive VAD metrics")
+	}
+}
+
 func TestAgentSessionCloseSoonCommitsPendingUserTurn(t *testing.T) {
 	agent := &turnCompletedAgent{Agent: NewAgent("test"), turns: make(chan *llm.ChatMessage, 1)}
 	agent.TurnDetection = TurnDetectionModeManual

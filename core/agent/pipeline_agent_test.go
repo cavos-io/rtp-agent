@@ -14,6 +14,7 @@ import (
 	"github.com/cavos-io/rtp-agent/core/stt"
 	"github.com/cavos-io/rtp-agent/core/tts"
 	"github.com/cavos-io/rtp-agent/core/vad"
+	"github.com/cavos-io/rtp-agent/library/telemetry"
 )
 
 func TestPipelineAgentGenerateReplyAddsAssistantMessageWithExtra(t *testing.T) {
@@ -1537,7 +1538,9 @@ func (f *fakePipelineSTT) Recognize(context.Context, []*model.AudioFrame, string
 	return nil, nil
 }
 
-type fakePipelineVAD struct{}
+type fakePipelineVAD struct {
+	metricsHandlers []vad.VADMetricsHandler
+}
 
 func (f *fakePipelineVAD) Label() string { return "fake-vad" }
 
@@ -1549,7 +1552,17 @@ func (f *fakePipelineVAD) Capabilities() vad.VADCapabilities {
 	return vad.VADCapabilities{}
 }
 
-func (f *fakePipelineVAD) OnMetricsCollected(vad.VADMetricsHandler) {}
+func (f *fakePipelineVAD) OnMetricsCollected(handler vad.VADMetricsHandler) {
+	if handler != nil {
+		f.metricsHandlers = append(f.metricsHandlers, handler)
+	}
+}
+
+func (f *fakePipelineVAD) EmitMetricsCollected(metrics *telemetry.VADMetrics) {
+	for _, handler := range f.metricsHandlers {
+		handler(metrics)
+	}
+}
 
 func (f *fakePipelineVAD) Stream(context.Context) (vad.VADStream, error) {
 	return &fakePipelineVADStream{}, nil

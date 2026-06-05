@@ -121,6 +121,11 @@ func (a *AgentActivity) Start() {
 			a.metricUnsubscribes = append(a.metricUnsubscribes, unsubscribe)
 		}
 	}
+	if a.Session != nil && a.Session.VAD != nil {
+		a.Session.VAD.OnMetricsCollected(func(metrics *telemetry.VADMetrics) {
+			a.OnMetricsCollected(metrics)
+		})
+	}
 	a.AgentIntf.OnEnter()
 	a.queueMu.Lock()
 	a.schedulingStarted = true
