@@ -119,6 +119,24 @@ func TestAgentSessionUpdateOptionsUpdatesEndpointingPolicy(t *testing.T) {
 	}
 }
 
+func TestAgentSessionUpdateOptionsUpdatesDynamicEndpointingAlpha(t *testing.T) {
+	endpointing := NewDynamicEndpointing(0.5, 3.0, 0.9)
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{Endpointing: endpointing})
+	alpha := 0.5
+
+	if err := session.UpdateOptions(AgentSessionUpdateOptions{EndpointingAlpha: &alpha}); err != nil {
+		t.Fatalf("UpdateOptions() error = %v", err)
+	}
+	endpointing.OnStartOfSpeech(0.0, false)
+	endpointing.OnEndOfSpeech(1.0, false)
+	endpointing.OnStartOfSpeech(1.75, false)
+	endpointing.OnEndOfSpeech(2.0, false)
+
+	if math.Abs(endpointing.MinDelay()-0.625) > 1e-9 {
+		t.Fatalf("MinDelay() = %v, want filtered utterance pause 0.625 after alpha update", endpointing.MinDelay())
+	}
+}
+
 func TestAgentActivityFeedsEndpointingSpeechEvents(t *testing.T) {
 	endpointing := NewBaseEndpointing(0.5, 3.0)
 	agent := NewAgent("test")

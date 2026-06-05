@@ -71,6 +71,7 @@ type AgentSessionOptions struct {
 type AgentSessionUpdateOptions struct {
 	MinEndpointingDelay *float64
 	MaxEndpointingDelay *float64
+	EndpointingAlpha    *float64
 	EndpointingMode     *string
 	Endpointing         Endpointing
 	TurnDetection       *TurnDetectionMode
@@ -535,6 +536,9 @@ func (s *AgentSession) UpdateOptions(opts AgentSessionUpdateOptions) error {
 	if opts.Endpointing != nil {
 		s.Options.Endpointing = opts.Endpointing
 	}
+	if opts.EndpointingAlpha != nil {
+		updateEndpointingAlpha(s.Options.Endpointing, *opts.EndpointingAlpha)
+	}
 	if opts.TurnDetection != nil {
 		s.Options.TurnDetection = *opts.TurnDetection
 	}
@@ -558,6 +562,18 @@ func (s *AgentSession) UpdateOptions(opts AgentSessionUpdateOptions) error {
 	return updater.UpdateOptions(context.Background(), llm.RealtimeSessionOptions{
 		ToolChoice: *opts.ToolChoice,
 	})
+}
+
+type endpointingAlphaUpdater interface {
+	UpdateAlpha(alpha float64)
+}
+
+func updateEndpointingAlpha(endpointing Endpointing, alpha float64) {
+	updater, ok := endpointing.(endpointingAlphaUpdater)
+	if !ok {
+		return
+	}
+	updater.UpdateAlpha(alpha)
 }
 
 func (s *AgentSession) EnsureAssistant() SessionAssistant {

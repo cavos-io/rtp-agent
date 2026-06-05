@@ -105,6 +105,11 @@ func (e *DynamicEndpointing) UpdateOptions(minDelay *float64, maxDelay *float64)
 	e.resetFilterBounds()
 }
 
+func (e *DynamicEndpointing) UpdateAlpha(alpha float64) {
+	e.utterancePause.UpdateBase(alpha)
+	e.turnPause.UpdateBase(alpha)
+}
+
 func (e *DynamicEndpointing) resetFilterBounds() {
 	minDelay := e.minDelay
 	maxDelay := e.maxDelay
