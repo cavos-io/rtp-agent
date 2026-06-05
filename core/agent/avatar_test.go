@@ -111,6 +111,28 @@ func TestAgentSessionStartUnsubscribesAvatarMetricsOnStartError(t *testing.T) {
 	}
 }
 
+func TestAgentSessionStartUnsubscribesAvatarMetricsOnAssistantStartError(t *testing.T) {
+	errAssistant := errors.New("assistant start failed")
+	baseAgent := NewAgent("test")
+	avatar := &recordingAvatarProvider{}
+	baseAgent.Avatar = avatar
+
+	session := NewAgentSession(baseAgent, nil, AgentSessionOptions{})
+	session.Assistant = &failingStartAssistant{err: errAssistant}
+	err := session.Start(context.Background())
+	if !errors.Is(err, errAssistant) {
+		t.Fatalf("Start error = %v, want %v", err, errAssistant)
+	}
+
+	avatar.emitMetrics(&telemetry.AvatarMetrics{PlaybackLatency: 0.5})
+
+	select {
+	case ev := <-session.MetricsCollectedEvents():
+		t.Fatalf("MetricsCollectedEvents received avatar metrics after assistant Start failed: %#v", ev.Metrics)
+	default:
+	}
+}
+
 func TestAvatarProviderUpdateStateRecordsLatestState(t *testing.T) {
 	avatar := &recordingAvatarProvider{}
 
@@ -158,4 +180,13 @@ func (r *recordingAvatarProvider) emitMetrics(metrics *telemetry.AvatarMetrics) 
 	if r.metrics != nil {
 		r.metrics(metrics)
 	}
+}
+
+type failingStartAssistant struct {
+	fakeSessionAssistant
+	err error
+}
+
+func (f failingStartAssistant) Start(context.Context, *AgentSession) error {
+	return f.err
 }

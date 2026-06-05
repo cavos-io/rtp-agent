@@ -1169,8 +1169,8 @@ func (s *AgentSession) StartWithOptions(ctx context.Context, opts StartOptions) 
 			return nil, err
 		}
 	}
+	var unsubscribeAvatarMetrics func()
 	if avatar != nil {
-		var unsubscribeAvatarMetrics func()
 		if metricsSource, ok := avatar.(AvatarMetricsSource); ok {
 			unsubscribeAvatarMetrics = metricsSource.OnMetricsCollected(func(metrics *telemetry.AvatarMetrics) {
 				s.EmitMetricsCollected(metrics)
@@ -1188,6 +1188,9 @@ func (s *AgentSession) StartWithOptions(ctx context.Context, opts StartOptions) 
 		}
 	}
 	if err := assistant.Start(ctx, s); err != nil {
+		if unsubscribeAvatarMetrics != nil {
+			unsubscribeAvatarMetrics()
+		}
 		if backgroundAudio != nil {
 			_ = backgroundAudio.Close()
 		}
