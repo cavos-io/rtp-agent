@@ -200,8 +200,8 @@ type AgentSession struct {
 	// Event channels
 	AgentStateChangedCh chan AgentStateChangedEvent
 	UserStateChangedCh  chan UserStateChangedEvent
-	userInputCh         chan UserInputTranscribedEvent
-	agentOutputCh       chan AgentOutputTranscribedEvent
+	userInputSubs       []chan UserInputTranscribedEvent
+	agentOutputSubs     []chan AgentOutputTranscribedEvent
 	speechCreatedCh     chan SpeechCreatedEvent
 	falseInterruptionCh chan AgentFalseInterruptionEvent
 	userTurnExceededCh  chan UserTurnExceededEvent
@@ -462,7 +462,6 @@ func NewAgentSession(agent AgentInterface, room *lksdk.Room, opts AgentSessionOp
 		agentState:          AgentStateInitializing,
 		AgentStateChangedCh: make(chan AgentStateChangedEvent, 10),
 		UserStateChangedCh:  make(chan UserStateChangedEvent, 10),
-		userInputCh:         make(chan UserInputTranscribedEvent, 10),
 		speechCreatedCh:     make(chan SpeechCreatedEvent, 10),
 		falseInterruptionCh: make(chan AgentFalseInterruptionEvent, 10),
 		userTurnExceededCh:  make(chan UserTurnExceededEvent, 10),
@@ -629,10 +628,11 @@ func (s *AgentSession) EmitUserInputTranscribed(ev UserInputTranscribedEvent) {
 	if ev.IsFinal && userState == UserStateAway {
 		s.UpdateUserState(UserStateListening)
 	}
-	ch := s.userInputTranscribedEvents()
-	select {
-	case ch <- ev:
-	default:
+	for _, ch := range s.userInputTranscribedSubscribers() {
+		select {
+		case ch <- ev:
+		default:
+		}
 	}
 }
 
@@ -640,10 +640,16 @@ func (s *AgentSession) userInputTranscribedEvents() chan UserInputTranscribedEve
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	if s.userInputCh == nil {
-		s.userInputCh = make(chan UserInputTranscribedEvent, 10)
-	}
-	return s.userInputCh
+	ch := make(chan UserInputTranscribedEvent, 10)
+	s.userInputSubs = append(s.userInputSubs, ch)
+	return ch
+}
+
+func (s *AgentSession) userInputTranscribedSubscribers() []chan UserInputTranscribedEvent {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	return append([]chan UserInputTranscribedEvent(nil), s.userInputSubs...)
 }
 
 func (s *AgentSession) AgentOutputTranscribedEvents() <-chan AgentOutputTranscribedEvent {
@@ -655,10 +661,11 @@ func (s *AgentSession) EmitAgentOutputTranscribed(ev AgentOutputTranscribedEvent
 		ev.CreatedAt = time.Now()
 	}
 	s.recordEvent(&ev)
-	ch := s.agentOutputTranscribedEvents()
-	select {
-	case ch <- ev:
-	default:
+	for _, ch := range s.agentOutputTranscribedSubscribers() {
+		select {
+		case ch <- ev:
+		default:
+		}
 	}
 }
 
@@ -666,10 +673,16 @@ func (s *AgentSession) agentOutputTranscribedEvents() chan AgentOutputTranscribe
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	if s.agentOutputCh == nil {
-		s.agentOutputCh = make(chan AgentOutputTranscribedEvent, 10)
-	}
-	return s.agentOutputCh
+	ch := make(chan AgentOutputTranscribedEvent, 10)
+	s.agentOutputSubs = append(s.agentOutputSubs, ch)
+	return ch
+}
+
+func (s *AgentSession) agentOutputTranscribedSubscribers() []chan AgentOutputTranscribedEvent {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	return append([]chan AgentOutputTranscribedEvent(nil), s.agentOutputSubs...)
 }
 
 func (s *AgentSession) SpeechCreatedEvents() <-chan SpeechCreatedEvent {

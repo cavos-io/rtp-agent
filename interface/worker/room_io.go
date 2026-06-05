@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"strconv"
 	"sync"
 	"time"
 
@@ -11,6 +12,7 @@ import (
 	"github.com/cavos-io/rtp-agent/core/audio"
 	"github.com/cavos-io/rtp-agent/core/audio/model"
 	"github.com/cavos-io/rtp-agent/library/logger"
+	"github.com/google/uuid"
 	"github.com/hraban/opus"
 	"github.com/livekit/protocol/livekit"
 	lksdk "github.com/livekit/server-sdk-go/v2"
@@ -104,24 +106,29 @@ func (e *opusEncoder) Close() error {
 }
 
 type RoomOptions struct {
-	AudioTrackName           string
-	PreConnectAudioTimeout   time.Duration
-	DisablePreConnectAudio   bool
-	DisableAudioInput        bool
-	DisableTextInput         bool
-	DisableAudioOutput       bool
-	DisableCloseOnDisconnect bool
-	DeleteRoomOnClose        bool
-	DeleteRoom               func(context.Context, string) error
-	TextInputCallback        TextInputCallback
-	ParticipantIdentity      string
-	ParticipantKinds         []lksdk.ParticipantKind
+	AudioTrackName             string
+	PreConnectAudioTimeout     time.Duration
+	DisablePreConnectAudio     bool
+	DisableAudioInput          bool
+	DisableTextInput           bool
+	DisableAudioOutput         bool
+	DisableTranscriptionOutput bool
+	DisableCloseOnDisconnect   bool
+	DeleteRoomOnClose          bool
+	DeleteRoom                 func(context.Context, string) error
+	TextInputCallback          TextInputCallback
+	ParticipantIdentity        string
+	ParticipantKinds           []lksdk.ParticipantKind
 }
 
 const RoomIOChatTopic = "lk.chat"
+const RoomIOTranscriptionTopic = "lk.transcription"
 const RoomIOPublishOnBehalfAttribute = "lk.publish_on_behalf"
 const RoomIOAgentStateAttribute = "lk.agent.state"
 const RoomIOSimulatorAttribute = "lk.simulator"
+const RoomIOTranscriptionFinalAttribute = "lk.transcription_final"
+const RoomIOTranscriptionTrackIDAttribute = "lk.transcribed_track_id"
+const RoomIOTranscriptionSegmentIDAttribute = "lk.segment_id"
 const roomIODeleteRoomCloseTimeout = 10 * time.Second
 
 type TextInputEvent struct {
@@ -152,6 +159,7 @@ type RoomIO struct {
 	closed bool
 
 	audioTrack    *lksdk.LocalTrack
+	audioTrackID  string
 	decoder       AudioDecoder
 	encoder       AudioEncoder
 	audioDisabled bool
@@ -162,11 +170,20 @@ type RoomIO struct {
 	participantAvailable  bool
 	connectedParticipants map[string]struct{}
 
+	userTranscriptionCancel        context.CancelFunc
+	userTranscriptionTrackID       string
+	userTranscriptionParticipantID string
+
 	agentStateCancel         context.CancelFunc
 	agentStatePublisher      func(map[string]string)
 	agentStatePublishEnabled func() bool
 	userStateCancel          context.CancelFunc
 	clientEvents             roomIOClientEvents
+
+	agentTranscriptionCancel         context.CancelFunc
+	transcriptionTextPublisher       func(string, lksdk.StreamTextOptions)
+	transcriptionPacketPublisher     func(*livekit.Transcription) error
+	transcriptionParticipantIdentity func() string
 
 	sessionCloseCancel context.CancelFunc
 	deletingRoom       bool
@@ -197,9 +214,14 @@ func NewRoomIO(room *lksdk.Room, session *agent.AgentSession, opts RoomOptions) 
 	rio.agentStatePublisher = rio.publishLocalParticipantAttributes
 	rio.agentStatePublishEnabled = rio.roomConnected
 	rio.clientEvents = agent.NewClientEventsDispatcher(room)
+	rio.transcriptionTextPublisher = rio.publishTranscriptionText
+	rio.transcriptionPacketPublisher = rio.publishTranscriptionPacket
+	rio.transcriptionParticipantIdentity = rio.localParticipantIdentity
 	rio.roomName = rio.liveKitRoomName
 	rio.startAgentStateListener()
 	rio.startUserStateListener()
+	rio.startUserTranscriptionListener()
+	rio.startAgentTranscriptionListener()
 	rio.startSessionCloseListener()
 
 	if !opts.DisableTextInput {
@@ -277,6 +299,50 @@ func (rio *RoomIO) startSessionCloseListener() {
 	}()
 }
 
+func (rio *RoomIO) startAgentTranscriptionListener() {
+	if rio == nil || rio.AgentSession == nil || rio.Options.DisableTranscriptionOutput {
+		return
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	rio.agentTranscriptionCancel = cancel
+	events := rio.AgentSession.AgentOutputTranscribedEvents()
+	go func() {
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case ev, ok := <-events:
+				if !ok {
+					return
+				}
+				rio.handleAgentOutputTranscribed(ev)
+			}
+		}
+	}()
+}
+
+func (rio *RoomIO) startUserTranscriptionListener() {
+	if rio == nil || rio.AgentSession == nil || rio.Options.DisableTranscriptionOutput {
+		return
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	rio.userTranscriptionCancel = cancel
+	events := rio.AgentSession.UserInputTranscribedEvents()
+	go func() {
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case ev, ok := <-events:
+				if !ok {
+					return
+				}
+				rio.handleUserInputTranscribed(ev)
+			}
+		}
+	}()
+}
+
 func roomIOPreConnectAudioTimeout(opts RoomOptions) time.Duration {
 	if opts.PreConnectAudioTimeout > 0 {
 		return opts.PreConnectAudioTimeout
@@ -326,6 +392,128 @@ func (rio *RoomIO) handleUserStateChanged(ev agent.UserStateChangedEvent) {
 	rio.clientEvents.DispatchUserState(ev.NewState)
 }
 
+func (rio *RoomIO) handleAgentOutputTranscribed(ev agent.AgentOutputTranscribedEvent) {
+	if rio == nil || ev.Transcript == "" {
+		return
+	}
+	segmentID := roomIOTranscriptionSegmentID()
+	attributes := map[string]string{
+		RoomIOTranscriptionFinalAttribute:     strconv.FormatBool(ev.IsFinal),
+		RoomIOTranscriptionSegmentIDAttribute: segmentID,
+	}
+	if trackID := rio.transcriptionTrackID(); trackID != "" {
+		attributes[RoomIOTranscriptionTrackIDAttribute] = trackID
+	}
+	rio.publishLegacyAgentTranscription(ev, segmentID)
+	if rio.transcriptionTextPublisher == nil {
+		return
+	}
+	rio.transcriptionTextPublisher(ev.Transcript, lksdk.StreamTextOptions{
+		Topic:      RoomIOTranscriptionTopic,
+		Attributes: attributes,
+	})
+}
+
+func (rio *RoomIO) handleUserInputTranscribed(ev agent.UserInputTranscribedEvent) {
+	if rio == nil || ev.Transcript == "" {
+		return
+	}
+	trackID, participantID := rio.userTranscriptionTarget()
+	if trackID == "" || participantID == "" {
+		return
+	}
+	segmentID := roomIOTranscriptionSegmentID()
+	rio.publishTranscriptionPacketWithSegment(participantID, trackID, &livekit.TranscriptionSegment{
+		Id:       segmentID,
+		Text:     ev.Transcript,
+		Final:    ev.IsFinal,
+		Language: ev.Language,
+	})
+	rio.publishTranscriptionTextStream(ev.Transcript, trackID, ev.IsFinal, segmentID)
+}
+
+func (rio *RoomIO) publishLegacyAgentTranscription(ev agent.AgentOutputTranscribedEvent, segmentID string) {
+	if rio == nil || rio.transcriptionPacketPublisher == nil {
+		return
+	}
+	trackID := rio.transcriptionTrackID()
+	participantIdentity := ""
+	if rio.transcriptionParticipantIdentity != nil {
+		participantIdentity = rio.transcriptionParticipantIdentity()
+	}
+	if trackID == "" || participantIdentity == "" {
+		return
+	}
+	rio.publishTranscriptionPacketWithSegment(participantIdentity, trackID, &livekit.TranscriptionSegment{
+		Id:       segmentID,
+		Text:     ev.Transcript,
+		Final:    ev.IsFinal,
+		Language: ev.Language,
+	})
+}
+
+func (rio *RoomIO) publishTranscriptionPacketWithSegment(participantIdentity string, trackID string, segment *livekit.TranscriptionSegment) {
+	if rio == nil || rio.transcriptionPacketPublisher == nil || segment == nil {
+		return
+	}
+	if err := rio.transcriptionPacketPublisher(&livekit.Transcription{
+		TranscribedParticipantIdentity: participantIdentity,
+		TrackId:                        trackID,
+		Segments:                       []*livekit.TranscriptionSegment{segment},
+	}); err != nil {
+		logger.Logger.Warnw("failed to publish transcription packet", err)
+	}
+}
+
+func (rio *RoomIO) transcriptionTrackID() string {
+	if rio == nil {
+		return ""
+	}
+	rio.mu.Lock()
+	defer rio.mu.Unlock()
+	return rio.audioTrackID
+}
+
+func (rio *RoomIO) userTranscriptionTarget() (string, string) {
+	if rio == nil {
+		return "", ""
+	}
+	rio.mu.Lock()
+	defer rio.mu.Unlock()
+	return rio.userTranscriptionTrackID, rio.userTranscriptionParticipantID
+}
+
+func (rio *RoomIO) setUserTranscriptionTarget(trackID string, participantID string) {
+	if rio == nil {
+		return
+	}
+	rio.mu.Lock()
+	defer rio.mu.Unlock()
+	rio.userTranscriptionTrackID = trackID
+	rio.userTranscriptionParticipantID = participantID
+}
+
+func roomIOTranscriptionSegmentID() string {
+	return "SG_" + uuid.NewString()[:12]
+}
+
+func (rio *RoomIO) publishTranscriptionTextStream(text string, trackID string, final bool, segmentID string) {
+	if rio == nil || rio.transcriptionTextPublisher == nil || text == "" {
+		return
+	}
+	attributes := map[string]string{
+		RoomIOTranscriptionFinalAttribute:     strconv.FormatBool(final),
+		RoomIOTranscriptionSegmentIDAttribute: segmentID,
+	}
+	if trackID != "" {
+		attributes[RoomIOTranscriptionTrackIDAttribute] = trackID
+	}
+	rio.transcriptionTextPublisher(text, lksdk.StreamTextOptions{
+		Topic:      RoomIOTranscriptionTopic,
+		Attributes: attributes,
+	})
+}
+
 func (rio *RoomIO) roomConnected() bool {
 	return rio != nil && rio.Room != nil && rio.Room.ConnectionState() == lksdk.ConnectionStateConnected
 }
@@ -335,6 +523,30 @@ func (rio *RoomIO) publishLocalParticipantAttributes(attrs map[string]string) {
 		return
 	}
 	rio.Room.LocalParticipant.SetAttributes(attrs)
+}
+
+func (rio *RoomIO) publishTranscriptionText(text string, opts lksdk.StreamTextOptions) {
+	if rio == nil || rio.Room == nil || rio.Room.LocalParticipant == nil {
+		return
+	}
+	rio.Room.LocalParticipant.SendText(text, opts)
+}
+
+func (rio *RoomIO) publishTranscriptionPacket(transcription *livekit.Transcription) error {
+	if rio == nil || rio.Room == nil || rio.Room.LocalParticipant == nil || transcription == nil {
+		return nil
+	}
+	return rio.Room.LocalParticipant.PublishDataPacket(roomIOTranscriptionPacket{transcription: transcription})
+}
+
+type roomIOTranscriptionPacket struct {
+	transcription *livekit.Transcription
+}
+
+func (p roomIOTranscriptionPacket) ToProto() *livekit.DataPacket {
+	return &livekit.DataPacket{
+		Value: &livekit.DataPacket_Transcription{Transcription: p.transcription},
+	}
 }
 
 func (rio *RoomIO) handleAgentSessionClose(ev agent.CloseEvent) {
@@ -411,6 +623,9 @@ func (rio *RoomIO) disableAudioIOForSimulator() {
 	preConnectAudio := rio.preConnectAudio
 	rio.preConnectAudio = nil
 	rio.audioTrack = nil
+	rio.audioTrackID = ""
+	rio.userTranscriptionTrackID = ""
+	rio.userTranscriptionParticipantID = ""
 	rio.mu.Unlock()
 
 	if preConnectAudio != nil {
@@ -601,12 +816,19 @@ func (rio *RoomIO) Start(ctx context.Context) error {
 		return err
 	}
 
-	_, err = rio.Room.LocalParticipant.PublishTrack(track, rio.audioTrackPublicationOptions())
+	publication, err := rio.Room.LocalParticipant.PublishTrack(track, rio.audioTrackPublicationOptions())
 	if err != nil {
 		return err
 	}
 
+	trackID := ""
+	if publication != nil {
+		trackID = publication.SID()
+	}
+	rio.mu.Lock()
 	rio.audioTrack = track
+	rio.audioTrackID = trackID
+	rio.mu.Unlock()
 	return nil
 }
 
@@ -629,6 +851,13 @@ func (rio *RoomIO) onTrackSubscribed(track *webrtc.TrackRemote, publication *lks
 		return
 	}
 	if track.Kind() == webrtc.RTPCodecTypeAudio {
+		trackID := ""
+		if publication != nil {
+			trackID = publication.SID()
+		}
+		if rp != nil {
+			rio.setUserTranscriptionTarget(trackID, rp.Identity())
+		}
 		go rio.handleAudioTrack(track)
 	}
 }
@@ -834,8 +1063,16 @@ func (rio *RoomIO) Close() error {
 	if rio.userStateCancel != nil {
 		rio.userStateCancel()
 	}
+	if rio.userTranscriptionCancel != nil {
+		rio.userTranscriptionCancel()
+		rio.userTranscriptionCancel = nil
+	}
 	if rio.sessionCloseCancel != nil {
 		rio.sessionCloseCancel()
+	}
+	if rio.agentTranscriptionCancel != nil {
+		rio.agentTranscriptionCancel()
+		rio.agentTranscriptionCancel = nil
 	}
 	deleteRoomDone := rio.deleteRoomDone
 	rio.mu.Unlock()

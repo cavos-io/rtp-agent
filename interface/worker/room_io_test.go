@@ -3,6 +3,7 @@ package worker
 import (
 	"context"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -245,6 +246,262 @@ func TestRoomIOHandleUserStateChangedDispatchesClientEvent(t *testing.T) {
 	if len(dispatcher.userStates) != 1 || dispatcher.userStates[0] != agent.UserStateSpeaking {
 		t.Fatalf("dispatched user states = %#v, want speaking", dispatcher.userStates)
 	}
+}
+
+func TestRoomIOPublishesAgentOutputTranscriptionStream(t *testing.T) {
+	session := agent.NewAgentSession(agent.NewAgent("test"), nil, agent.AgentSessionOptions{})
+	published := make(chan roomIOPublishedText, 1)
+	rio := &RoomIO{
+		AgentSession: session,
+		transcriptionTextPublisher: func(text string, opts lksdk.StreamTextOptions) {
+			published <- roomIOPublishedText{text: text, opts: opts}
+		},
+	}
+	rio.startAgentTranscriptionListener()
+	defer rio.agentTranscriptionCancel()
+
+	session.EmitAgentOutputTranscribed(agent.AgentOutputTranscribedEvent{
+		Transcript: "assistant transcript",
+		IsFinal:    false,
+		Language:   "en",
+	})
+
+	select {
+	case got := <-published:
+		if got.text != "assistant transcript" {
+			t.Fatalf("published text = %q, want assistant transcript", got.text)
+		}
+		if got.opts.Topic != RoomIOTranscriptionTopic {
+			t.Fatalf("published topic = %q, want %q", got.opts.Topic, RoomIOTranscriptionTopic)
+		}
+		if got.opts.Attributes[RoomIOTranscriptionFinalAttribute] != "false" {
+			t.Fatalf("final attribute = %q, want false", got.opts.Attributes[RoomIOTranscriptionFinalAttribute])
+		}
+		segmentID := got.opts.Attributes[RoomIOTranscriptionSegmentIDAttribute]
+		if !strings.HasPrefix(segmentID, "SG_") {
+			t.Fatalf("segment id = %q, want SG_ prefix", segmentID)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("agent transcription stream was not published")
+	}
+}
+
+func TestRoomIOPublishesAgentOutputTranscriptionTrackID(t *testing.T) {
+	published := make(chan roomIOPublishedText, 1)
+	rio := &RoomIO{
+		audioTrackID: "TR_agent_audio",
+		transcriptionTextPublisher: func(text string, opts lksdk.StreamTextOptions) {
+			published <- roomIOPublishedText{text: text, opts: opts}
+		},
+	}
+
+	rio.handleAgentOutputTranscribed(agent.AgentOutputTranscribedEvent{
+		Transcript: "assistant transcript",
+		IsFinal:    true,
+	})
+
+	select {
+	case got := <-published:
+		if got.opts.Attributes[RoomIOTranscriptionTrackIDAttribute] != "TR_agent_audio" {
+			t.Fatalf("track id attribute = %q, want TR_agent_audio", got.opts.Attributes[RoomIOTranscriptionTrackIDAttribute])
+		}
+	case <-time.After(time.Second):
+		t.Fatal("agent transcription stream was not published")
+	}
+}
+
+func TestRoomIOPublishesAgentOutputLegacyTranscriptionPacket(t *testing.T) {
+	published := make(chan *livekit.Transcription, 1)
+	rio := &RoomIO{
+		audioTrackID: "TR_agent_audio",
+		transcriptionParticipantIdentity: func() string {
+			return "agent-local"
+		},
+		transcriptionPacketPublisher: func(transcription *livekit.Transcription) error {
+			published <- transcription
+			return nil
+		},
+	}
+
+	rio.handleAgentOutputTranscribed(agent.AgentOutputTranscribedEvent{
+		Transcript: "assistant transcript",
+		IsFinal:    true,
+		Language:   "en",
+	})
+
+	select {
+	case got := <-published:
+		if got.TranscribedParticipantIdentity != "agent-local" {
+			t.Fatalf("participant identity = %q, want agent-local", got.TranscribedParticipantIdentity)
+		}
+		if got.TrackId != "TR_agent_audio" {
+			t.Fatalf("track id = %q, want TR_agent_audio", got.TrackId)
+		}
+		if len(got.Segments) != 1 {
+			t.Fatalf("segments len = %d, want 1", len(got.Segments))
+		}
+		segment := got.Segments[0]
+		if !strings.HasPrefix(segment.Id, "SG_") {
+			t.Fatalf("segment id = %q, want SG_ prefix", segment.Id)
+		}
+		if segment.Text != "assistant transcript" || !segment.Final || segment.Language != "en" {
+			t.Fatalf("segment = %#v, want final en assistant transcript", segment)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("legacy transcription packet was not published")
+	}
+}
+
+func TestRoomIOPublishesUserInputLegacyTranscriptionPacket(t *testing.T) {
+	session := agent.NewAgentSession(agent.NewAgent("test"), nil, agent.AgentSessionOptions{})
+	published := make(chan *livekit.Transcription, 1)
+	rio := &RoomIO{
+		AgentSession:                   session,
+		userTranscriptionTrackID:       "TR_user_audio",
+		userTranscriptionParticipantID: "caller-a",
+		transcriptionPacketPublisher: func(transcription *livekit.Transcription) error {
+			published <- transcription
+			return nil
+		},
+	}
+	rio.startUserTranscriptionListener()
+	defer rio.userTranscriptionCancel()
+
+	session.EmitUserInputTranscribed(agent.UserInputTranscribedEvent{
+		Transcript: "caller transcript",
+		IsFinal:    true,
+		Language:   "en",
+	})
+
+	select {
+	case got := <-published:
+		if got.TranscribedParticipantIdentity != "caller-a" {
+			t.Fatalf("participant identity = %q, want caller-a", got.TranscribedParticipantIdentity)
+		}
+		if got.TrackId != "TR_user_audio" {
+			t.Fatalf("track id = %q, want TR_user_audio", got.TrackId)
+		}
+		if len(got.Segments) != 1 {
+			t.Fatalf("segments len = %d, want 1", len(got.Segments))
+		}
+		segment := got.Segments[0]
+		if !strings.HasPrefix(segment.Id, "SG_") {
+			t.Fatalf("segment id = %q, want SG_ prefix", segment.Id)
+		}
+		if segment.Text != "caller transcript" || !segment.Final || segment.Language != "en" {
+			t.Fatalf("segment = %#v, want final en caller transcript", segment)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("user transcription packet was not published")
+	}
+}
+
+func TestRoomIOPublishesUserInputTranscriptionStream(t *testing.T) {
+	session := agent.NewAgentSession(agent.NewAgent("test"), nil, agent.AgentSessionOptions{})
+	published := make(chan roomIOPublishedText, 1)
+	rio := &RoomIO{
+		AgentSession:                   session,
+		userTranscriptionTrackID:       "TR_user_audio",
+		userTranscriptionParticipantID: "caller-a",
+		transcriptionTextPublisher: func(text string, opts lksdk.StreamTextOptions) {
+			published <- roomIOPublishedText{text: text, opts: opts}
+		},
+	}
+	rio.startUserTranscriptionListener()
+	defer rio.userTranscriptionCancel()
+
+	session.EmitUserInputTranscribed(agent.UserInputTranscribedEvent{
+		Transcript: "caller transcript",
+		IsFinal:    true,
+		Language:   "en",
+	})
+
+	select {
+	case got := <-published:
+		if got.text != "caller transcript" {
+			t.Fatalf("published text = %q, want caller transcript", got.text)
+		}
+		if got.opts.Topic != RoomIOTranscriptionTopic {
+			t.Fatalf("published topic = %q, want %q", got.opts.Topic, RoomIOTranscriptionTopic)
+		}
+		if got.opts.Attributes[RoomIOTranscriptionFinalAttribute] != "true" {
+			t.Fatalf("final attribute = %q, want true", got.opts.Attributes[RoomIOTranscriptionFinalAttribute])
+		}
+		if got.opts.Attributes[RoomIOTranscriptionTrackIDAttribute] != "TR_user_audio" {
+			t.Fatalf("track id attribute = %q, want TR_user_audio", got.opts.Attributes[RoomIOTranscriptionTrackIDAttribute])
+		}
+		segmentID := got.opts.Attributes[RoomIOTranscriptionSegmentIDAttribute]
+		if !strings.HasPrefix(segmentID, "SG_") {
+			t.Fatalf("segment id = %q, want SG_ prefix", segmentID)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("user transcription stream was not published")
+	}
+}
+
+func TestRoomIOCanDisableAgentTranscriptionOutput(t *testing.T) {
+	session := agent.NewAgentSession(agent.NewAgent("test"), nil, agent.AgentSessionOptions{})
+	published := make(chan roomIOPublishedText, 1)
+	rio := &RoomIO{
+		AgentSession: session,
+		Options: RoomOptions{
+			DisableTranscriptionOutput: true,
+		},
+		transcriptionTextPublisher: func(text string, opts lksdk.StreamTextOptions) {
+			published <- roomIOPublishedText{text: text, opts: opts}
+		},
+	}
+	rio.startAgentTranscriptionListener()
+	if rio.agentTranscriptionCancel != nil {
+		defer rio.agentTranscriptionCancel()
+	}
+
+	session.EmitAgentOutputTranscribed(agent.AgentOutputTranscribedEvent{
+		Transcript: "assistant transcript",
+		IsFinal:    true,
+	})
+
+	select {
+	case got := <-published:
+		t.Fatalf("published agent transcription despite disabled output: %#v", got)
+	case <-time.After(50 * time.Millisecond):
+	}
+}
+
+func TestRoomIOCanDisableUserTranscriptionOutput(t *testing.T) {
+	session := agent.NewAgentSession(agent.NewAgent("test"), nil, agent.AgentSessionOptions{})
+	published := make(chan roomIOPublishedText, 1)
+	rio := &RoomIO{
+		AgentSession:                   session,
+		userTranscriptionTrackID:       "TR_user_audio",
+		userTranscriptionParticipantID: "caller-a",
+		Options: RoomOptions{
+			DisableTranscriptionOutput: true,
+		},
+		transcriptionTextPublisher: func(text string, opts lksdk.StreamTextOptions) {
+			published <- roomIOPublishedText{text: text, opts: opts}
+		},
+	}
+	rio.startUserTranscriptionListener()
+	if rio.userTranscriptionCancel != nil {
+		defer rio.userTranscriptionCancel()
+	}
+
+	session.EmitUserInputTranscribed(agent.UserInputTranscribedEvent{
+		Transcript: "caller transcript",
+		IsFinal:    true,
+	})
+
+	select {
+	case got := <-published:
+		t.Fatalf("published user transcription despite disabled output: %#v", got)
+	case <-time.After(50 * time.Millisecond):
+	}
+}
+
+type roomIOPublishedText struct {
+	text string
+	opts lksdk.StreamTextOptions
 }
 
 func TestRoomIOHandleAgentSessionCloseDeletesRoomWhenEnabled(t *testing.T) {

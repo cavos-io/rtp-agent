@@ -122,6 +122,59 @@ func TestAgentSessionMCPServersReturnsSnapshot(t *testing.T) {
 	}
 }
 
+func TestAgentSessionUserInputTranscribedEventsFanOutToSubscribers(t *testing.T) {
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	first := session.UserInputTranscribedEvents()
+	second := session.UserInputTranscribedEvents()
+
+	session.EmitUserInputTranscribed(UserInputTranscribedEvent{
+		Transcript: "hello",
+		IsFinal:    true,
+	})
+
+	assertUserTranscriptEvent(t, first, "first")
+	assertUserTranscriptEvent(t, second, "second")
+}
+
+func TestAgentSessionAgentOutputTranscribedEventsFanOutToSubscribers(t *testing.T) {
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	first := session.AgentOutputTranscribedEvents()
+	second := session.AgentOutputTranscribedEvents()
+
+	session.EmitAgentOutputTranscribed(AgentOutputTranscribedEvent{
+		Transcript: "hi",
+	})
+
+	assertAgentTranscriptEvent(t, first, "first")
+	assertAgentTranscriptEvent(t, second, "second")
+}
+
+func assertUserTranscriptEvent(t *testing.T, events <-chan UserInputTranscribedEvent, name string) {
+	t.Helper()
+
+	select {
+	case ev := <-events:
+		if ev.Transcript != "hello" || !ev.IsFinal {
+			t.Fatalf("%s subscriber event = %#v, want final hello transcript", name, ev)
+		}
+	case <-time.After(time.Second):
+		t.Fatalf("%s subscriber did not receive user transcript event", name)
+	}
+}
+
+func assertAgentTranscriptEvent(t *testing.T, events <-chan AgentOutputTranscribedEvent, name string) {
+	t.Helper()
+
+	select {
+	case ev := <-events:
+		if ev.Transcript != "hi" {
+			t.Fatalf("%s subscriber event = %#v, want hi transcript", name, ev)
+		}
+	case <-time.After(time.Second):
+		t.Fatalf("%s subscriber did not receive agent transcript event", name)
+	}
+}
+
 func TestNewIVRActivityInitializesFromSessionStateAccessors(t *testing.T) {
 	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
 	session.UpdateUserState(UserStateAway)
