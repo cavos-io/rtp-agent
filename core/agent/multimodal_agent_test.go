@@ -107,6 +107,41 @@ func TestMultimodalAgentEmitsRealtimeErrorWhenAudioPushFails(t *testing.T) {
 	}
 }
 
+func TestMultimodalAgentEmitsRealtimeErrorWhenEventAudioPublishFails(t *testing.T) {
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	cause := errors.New("publish realtime audio failed")
+	ma := &MultimodalAgent{
+		session: session,
+	}
+	ma.PublishAudio = func(*model.AudioFrame) error {
+		return cause
+	}
+
+	ma.handleRealtimeEvent(llm.RealtimeEvent{
+		Type: llm.RealtimeEventTypeAudio,
+		Data: []byte{0, 1},
+	})
+
+	select {
+	case ev := <-session.ErrorEvents():
+		rtErr, ok := ev.Error.(llm.RealtimeError)
+		if !ok {
+			t.Fatalf("Error = %T, want llm.RealtimeError", ev.Error)
+		}
+		if !errors.Is(rtErr, cause) {
+			t.Fatalf("RealtimeError unwrap = %v, want %v", rtErr, cause)
+		}
+		if rtErr.Message != "failed to publish realtime audio" {
+			t.Fatalf("RealtimeError message = %q", rtErr.Message)
+		}
+		if ev.Source != ma {
+			t.Fatalf("Source = %#v, want multimodal agent", ev.Source)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("ErrorEvents did not receive realtime event audio publish error")
+	}
+}
+
 func TestMultimodalAgentStartUpdatesRealtimeSessionWithSessionAndAgentTools(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

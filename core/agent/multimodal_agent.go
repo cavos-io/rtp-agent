@@ -400,7 +400,12 @@ func (ma *MultimodalAgent) handleRealtimeEvent(ev llm.RealtimeEvent) {
 				NumChannels:       1,
 				SamplesPerChannel: uint32(len(ev.Data) / 2),
 			}
-			_ = ma.PublishAudio(frame)
+			if err := ma.PublishAudio(frame); err != nil && ma.session != nil {
+				ma.session.EmitError(ErrorEvent{
+					Error:  llm.NewRealtimeError("failed to publish realtime audio", err),
+					Source: ma,
+				})
+			}
 		}
 
 	case llm.RealtimeEventTypeText:
