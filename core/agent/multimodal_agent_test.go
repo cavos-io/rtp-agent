@@ -154,6 +154,28 @@ func TestMultimodalAgentStartInitializesRealtimeSessionConfiguration(t *testing.
 	}
 }
 
+func TestMultimodalAgentStartReturnsRealtimeInitializationError(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	cause := errors.New("update instructions failed")
+	agent := NewAgent("be helpful")
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	rtSession := &fakeRealtimeSession{updateInstructionsErr: cause}
+	ma := NewMultimodalAgent(&fakeRealtimeModel{session: rtSession}, llm.NewChatContext())
+
+	err := ma.Start(ctx, session)
+	if !errors.Is(err, cause) {
+		t.Fatalf("Start error = %v, want %v", err, cause)
+	}
+	if rtSession.closed != 1 {
+		t.Fatalf("realtime session closed = %d, want 1", rtSession.closed)
+	}
+	if ma.rtSession != nil {
+		t.Fatalf("rtSession = %#v, want nil after initialization failure", ma.rtSession)
+	}
+}
+
 func TestAgentUpdateInstructionsUpdatesRealtimeSession(t *testing.T) {
 	baseAgent := NewAgent("initial instructions")
 	session := NewAgentSession(baseAgent, nil, AgentSessionOptions{})
@@ -1308,23 +1330,27 @@ func (f *fakeRealtimeModel) Model() string { return f.model }
 func (f *fakeRealtimeModel) Provider() string { return f.provider }
 
 type fakeRealtimeSession struct {
-	updated              *llm.ChatContext
-	generatedWithChatCtx *llm.ChatContext
-	tools                []llm.Tool
-	instructions         string
-	options              llm.RealtimeSessionOptions
-	generateCh           chan llm.RealtimeGenerateReplyOptions
-	sayCh                chan string
-	eventCh              chan llm.RealtimeEvent
-	videoFrames          int
-	pushAudioErr         error
-	pushVideoErr         error
-	closed               int
-	interrupted          int
+	updated               *llm.ChatContext
+	generatedWithChatCtx  *llm.ChatContext
+	tools                 []llm.Tool
+	instructions          string
+	options               llm.RealtimeSessionOptions
+	generateCh            chan llm.RealtimeGenerateReplyOptions
+	sayCh                 chan string
+	eventCh               chan llm.RealtimeEvent
+	videoFrames           int
+	updateInstructionsErr error
+	pushAudioErr          error
+	pushVideoErr          error
+	closed                int
+	interrupted           int
 }
 
 func (f *fakeRealtimeSession) UpdateInstructions(instructions string) error {
 	f.instructions = instructions
+	if f.updateInstructionsErr != nil {
+		return f.updateInstructionsErr
+	}
 	return nil
 }
 

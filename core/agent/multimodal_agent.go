@@ -65,6 +65,13 @@ func (ma *MultimodalAgent) Start(ctx context.Context, s *AgentSession) error {
 
 	if err := ma.initializeRealtimeSession(rtSession); err != nil {
 		logger.Logger.Errorw("failed to initialize realtime session", err)
+		_ = rtSession.Close()
+		ma.mu.Lock()
+		if ma.rtSession == rtSession {
+			ma.rtSession = nil
+		}
+		ma.mu.Unlock()
+		return err
 	}
 
 	go ma.run(ctx, rtSession)
