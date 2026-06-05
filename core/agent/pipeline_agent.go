@@ -479,8 +479,13 @@ func (va *PipelineAgent) useTTSAlignedTranscript(session *AgentSession) bool {
 	if session == nil || va.tts == nil {
 		return false
 	}
-	enabled := session.Options.UseTTSAlignedTranscript
-	if session.Agent != nil {
+	enabled := false
+	if session.activity != nil {
+		enabled = session.activity.UseTTSAlignedTranscript()
+	} else {
+		enabled = session.Options.UseTTSAlignedTranscript
+	}
+	if session.activity == nil && session.Agent != nil {
 		if agent := session.Agent.GetAgent(); agent != nil {
 			if agent.UseTTSAlignedTranscriptSet || agent.UseTTSAlignedTranscript {
 				enabled = agent.UseTTSAlignedTranscript

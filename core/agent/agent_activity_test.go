@@ -203,6 +203,28 @@ func TestAgentActivityMinConsecutiveSpeechDelayUsesAgentOverride(t *testing.T) {
 	}
 }
 
+func TestAgentActivityUseTTSAlignedTranscriptUsesAgentOverride(t *testing.T) {
+	agent := NewAgent("test")
+	session := NewAgentSession(agent, nil, AgentSessionOptions{UseTTSAlignedTranscript: true})
+	activity := NewAgentActivity(agent, session)
+
+	if !activity.UseTTSAlignedTranscript() {
+		t.Fatal("UseTTSAlignedTranscript() = false, want session default true")
+	}
+
+	agent.UseTTSAlignedTranscript = false
+	agent.UseTTSAlignedTranscriptSet = true
+	if activity.UseTTSAlignedTranscript() {
+		t.Fatal("UseTTSAlignedTranscript() = true, want explicit agent override false")
+	}
+
+	agent.UseTTSAlignedTranscript = true
+	session.Options.UseTTSAlignedTranscript = false
+	if !activity.UseTTSAlignedTranscript() {
+		t.Fatal("UseTTSAlignedTranscript() = false, want explicit agent override true")
+	}
+}
+
 func TestAgentActivityAllowInterruptionsUsesAgentOverride(t *testing.T) {
 	agent := NewAgent("test")
 	session := NewAgentSession(agent, nil, AgentSessionOptions{})

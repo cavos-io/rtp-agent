@@ -731,6 +731,20 @@ func (a *AgentActivity) MinConsecutiveSpeechDelay() time.Duration {
 	return 0
 }
 
+func (a *AgentActivity) UseTTSAlignedTranscript() bool {
+	if a == nil {
+		return false
+	}
+	enabled := false
+	if a.Session != nil {
+		enabled = a.Session.Options.UseTTSAlignedTranscript
+	}
+	if a.Agent != nil && (a.Agent.UseTTSAlignedTranscriptSet || a.Agent.UseTTSAlignedTranscript) {
+		enabled = a.Agent.UseTTSAlignedTranscript
+	}
+	return enabled
+}
+
 func (a *AgentActivity) Drain(ctx context.Context) error {
 	if ctx == nil {
 		ctx = a.ctx
