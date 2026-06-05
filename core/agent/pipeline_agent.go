@@ -414,10 +414,7 @@ func (va *PipelineAgent) generateReplyWithOptions(opts pipelineReplyOptions) {
 		genData, err := PerformLLMInference(ctx, va.LLM, inferenceCtx, selectedTools, chatOptions...)
 		if err != nil {
 			logger.Logger.Errorw("LLM inference failed", err)
-			session.EmitError(ErrorEvent{
-				Error:  llm.NewLLMError(llm.Label(va.LLM), err, false),
-				Source: va.LLM,
-			})
+			va.emitLLMError(session, err)
 			session.UpdateAgentState(AgentStateIdle)
 			return
 		}
@@ -425,6 +422,12 @@ func (va *PipelineAgent) generateReplyWithOptions(opts pipelineReplyOptions) {
 		if err := va.synthesizeSpeech(ctx, session, genData.TextCh); err != nil {
 			logger.Logger.Errorw("TTS inference failed", err)
 			va.emitTTSError(session, err)
+		}
+		if genData.StreamErr != nil {
+			logger.Logger.Errorw("LLM stream failed", genData.StreamErr)
+			va.emitLLMError(session, genData.StreamErr)
+			session.UpdateAgentState(AgentStateIdle)
+			return
 		}
 		va.emitLLMMetrics(session, genData)
 
@@ -533,6 +536,16 @@ func (va *PipelineAgent) emitLLMMetrics(session *AgentSession, genData *LLMGener
 		return
 	}
 	session.EmitMetricsCollected(metrics)
+}
+
+func (va *PipelineAgent) emitLLMError(session *AgentSession, err error) {
+	if session == nil || err == nil {
+		return
+	}
+	session.EmitError(ErrorEvent{
+		Error:  llm.NewLLMError(llm.Label(va.LLM), err, false),
+		Source: va.LLM,
+	})
 }
 
 func (va *PipelineAgent) emitTTSError(session *AgentSession, err error) {

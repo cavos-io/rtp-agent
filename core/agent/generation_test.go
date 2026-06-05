@@ -689,10 +689,16 @@ func (f *fakeGenerationLLM) Provider() string { return f.provider }
 type fakeGenerationLLMStream struct {
 	chunks []*llm.ChatChunk
 	index  int
+	err    error
 }
 
 func (f *fakeGenerationLLMStream) Next() (*llm.ChatChunk, error) {
 	if f.index >= len(f.chunks) {
+		if f.err != nil {
+			err := f.err
+			f.err = nil
+			return nil, err
+		}
 		return nil, io.EOF
 	}
 	chunk := f.chunks[f.index]

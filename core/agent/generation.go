@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"reflect"
 	"sort"
 	"strings"
@@ -27,6 +28,7 @@ type LLMGenerationData struct {
 	Duration           time.Duration
 	RequestID          string
 	Usage              *llm.CompletionUsage
+	StreamErr          error
 }
 
 func PerformLLMInference(
@@ -69,6 +71,9 @@ func PerformLLMInference(
 		for {
 			chunk, err := stream.Next()
 			if err != nil {
+				if err != io.EOF {
+					data.StreamErr = err
+				}
 				break
 			}
 

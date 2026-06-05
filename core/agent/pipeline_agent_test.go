@@ -973,6 +973,37 @@ func TestPipelineAgentEmitsLLMErrorEventForChatFailure(t *testing.T) {
 	}
 }
 
+func TestPipelineAgentEmitsLLMErrorEventForStreamFailure(t *testing.T) {
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	cause := errors.New("llm stream failed")
+	l := &fakeGenerationLLM{
+		stream: &fakeGenerationLLMStream{
+			err: cause,
+		},
+	}
+	agent := NewPipelineAgent(nil, nil, l, &fakePipelineTTS{}, llm.NewChatContext())
+	agent.session = session
+	agent.ctx = context.Background()
+
+	agent.generateReply()
+
+	select {
+	case ev := <-session.ErrorEvents():
+		llmErr, ok := ev.Error.(*llm.LLMError)
+		if !ok {
+			t.Fatalf("Error = %T, want *llm.LLMError", ev.Error)
+		}
+		if !errors.Is(llmErr, cause) {
+			t.Fatalf("LLMError unwrap = %v, want %v", llmErr, cause)
+		}
+		if ev.Source != l {
+			t.Fatalf("Source = %#v, want LLM source", ev.Source)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("ErrorEvents did not receive LLM stream error")
+	}
+}
+
 func TestPipelineAgentEmitsTTSErrorEventForSpeechSynthesisFailure(t *testing.T) {
 	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
 	cause := errors.New("tts stream failed")
