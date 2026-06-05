@@ -183,6 +183,8 @@ type AgentSession struct {
 	runCtx         context.Context
 	runState       *RunResult
 	userAwayTimer  *time.Timer
+	aecWarmupTimer *time.Timer
+	aecWarmupDone  bool
 	userdata       any
 	userdataSet    bool
 	jobContext     any
@@ -992,6 +994,42 @@ func (s *AgentSession) closeOnUnrecoverableError(err error) {
 	}
 }
 
+func (s *AgentSession) startAECWarmupLocked() {
+	if s == nil || s.Options.AECWarmupDuration <= 0 || s.aecWarmupDone || s.aecWarmupTimer != nil {
+		return
+	}
+	timeout := time.Duration(s.Options.AECWarmupDuration * float64(time.Second))
+	s.aecWarmupTimer = time.AfterFunc(timeout, func() {
+		s.mu.Lock()
+		s.aecWarmupTimer = nil
+		s.aecWarmupDone = true
+		s.mu.Unlock()
+	})
+}
+
+func (s *AgentSession) aecWarmupActive() bool {
+	if s == nil {
+		return false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.aecWarmupTimer != nil
+}
+
+func (s *AgentSession) shouldSilenceInputAudio() bool {
+	if s == nil {
+		return false
+	}
+	if s.aecWarmupActive() {
+		return true
+	}
+	s.mu.Lock()
+	activity := s.activity
+	discard := s.Options.DiscardAudioIfUninterruptible
+	s.mu.Unlock()
+	return discard && activity.uninterruptibleSpeechActive()
+}
+
 func (s *AgentSession) errorEvents() chan ErrorEvent {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -1201,6 +1239,11 @@ func (s *AgentSession) UpdateAgentState(state AgentState) {
 	s.agentState = state
 	backgroundAudio := s.Options.BackgroundAudio
 	endpointing := s.Options.Endpointing
+	if state == AgentStateSpeaking {
+		s.llmErrorCount = 0
+		s.ttsErrorCount = 0
+		s.startAECWarmupLocked()
+	}
 	if oldState != state && endpointing != nil {
 		now := float64(time.Now().UnixNano()) / float64(time.Second)
 		if state == AgentStateSpeaking {
@@ -1695,6 +1738,11 @@ func (s *AgentSession) stop(ctx context.Context, commitPendingUserTurn bool) err
 		s.userAwayTimer.Stop()
 		s.userAwayTimer = nil
 	}
+	if s.aecWarmupTimer != nil {
+		s.aecWarmupTimer.Stop()
+		s.aecWarmupTimer = nil
+	}
+	s.aecWarmupDone = true
 	backgroundAudio := s.Options.BackgroundAudio
 	mcpServers := append([]llm.MCPServer(nil), s.mcpServers...)
 	s.mu.Unlock()

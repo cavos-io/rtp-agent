@@ -1969,6 +1969,32 @@ func TestAgentSessionStartForwardsVADMetricsThroughActivity(t *testing.T) {
 	}
 }
 
+func TestAgentSessionStopUnsubscribesVADMetricsFromActivity(t *testing.T) {
+	vadSource := &fakePipelineVAD{}
+	agent := NewAgent("test")
+	agent.VAD = vadSource
+	agent.LLM = &fakeGenerationLLM{}
+	agent.STT = &fakePipelineSTT{}
+	agent.TTS = &fakePipelineTTS{}
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	session.Assistant = &fakeSessionAssistant{}
+
+	if err := session.Start(context.Background()); err != nil {
+		t.Fatalf("Start error = %v, want nil", err)
+	}
+	if err := session.Stop(context.Background()); err != nil {
+		t.Fatalf("Stop error = %v, want nil", err)
+	}
+
+	vadSource.EmitMetricsCollected(&telemetry.VADMetrics{Label: "late-vad"})
+
+	select {
+	case ev := <-session.MetricsCollectedEvents():
+		t.Fatalf("MetricsCollectedEvents received VAD metrics after Stop: %#v", ev.Metrics)
+	default:
+	}
+}
+
 func TestAgentSessionStartForwardsSTTMetricsThroughActivity(t *testing.T) {
 	sttSource := &fakePipelineSTT{}
 	agent := NewAgent("test")
@@ -2139,6 +2165,44 @@ func TestAgentSessionClosesAfterUnrecoverableTTSErrorThreshold(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("CloseEvents did not receive error close")
+	}
+}
+
+func TestAgentSessionSpeakingResetsUnrecoverableProviderErrorCounts(t *testing.T) {
+	agent := NewAgent("test")
+	agent.TTS = &fakePipelineTTS{}
+	agent.LLM = &fakeGenerationLLM{}
+	agent.STT = &fakePipelineSTT{}
+	agent.VAD = &fakePipelineVAD{}
+	session := NewAgentSession(agent, nil, AgentSessionOptions{MaxUnrecoverableErrors: 1})
+	session.Assistant = &fakeSessionAssistant{}
+
+	if err := session.Start(context.Background()); err != nil {
+		t.Fatalf("Start error = %v, want nil", err)
+	}
+
+	cause := errors.New("llm failed")
+	session.EmitError(*NewErrorEvent(&llm.LLMError{Err: cause, Recoverable: false}, agent.LLM))
+
+	select {
+	case <-session.ErrorEvents():
+	case <-time.After(time.Second):
+		t.Fatal("ErrorEvents did not receive LLM error")
+	}
+
+	select {
+	case ev := <-session.CloseEvents():
+		t.Fatalf("CloseEvents received early close with reason %q", ev.Reason)
+	default:
+	}
+
+	session.UpdateAgentState(AgentStateSpeaking)
+	session.EmitError(*NewErrorEvent(&llm.LLMError{Err: cause, Recoverable: false}, agent.LLM))
+
+	select {
+	case ev := <-session.CloseEvents():
+		t.Fatalf("CloseEvents received close after speaking reset with reason %q", ev.Reason)
+	default:
 	}
 }
 

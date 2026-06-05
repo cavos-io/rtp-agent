@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"io"
@@ -66,6 +67,43 @@ func TestMultimodalAgentStartsRealtimeSessionAndAcceptsAudio(t *testing.T) {
 		SamplesPerChannel: 1,
 	})
 	cancel()
+}
+
+func TestMultimodalAgentSendsSilenceToRealtimeDuringAECWarmup(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{AECWarmupDuration: 0.05})
+	session.UpdateAgentState(AgentStateSpeaking)
+	rtSession := &fakeRealtimeSession{
+		eventCh: make(chan llm.RealtimeEvent),
+		audioCh: make(chan *model.AudioFrame, 1),
+	}
+	ma := NewMultimodalAgent(&fakeRealtimeModel{}, llm.NewChatContext())
+	ma.session = session
+	ma.rtSession = rtSession
+	go ma.run(ctx, rtSession)
+
+	frame := &model.AudioFrame{
+		Data:              []byte{1, 2, 3, 4},
+		SampleRate:        24000,
+		NumChannels:       1,
+		SamplesPerChannel: 2,
+	}
+	ma.OnAudioFrame(context.Background(), frame)
+
+	got := receiveRealtimeAudioFrame(t, rtSession.audioCh)
+	if got == frame {
+		t.Fatal("realtime audio reused original frame during AEC warmup")
+	}
+	if got.SampleRate != frame.SampleRate || got.NumChannels != frame.NumChannels || got.SamplesPerChannel != frame.SamplesPerChannel {
+		t.Fatalf("realtime silence shape = rate %d channels %d samples %d, want rate %d channels %d samples %d",
+			got.SampleRate, got.NumChannels, got.SamplesPerChannel,
+			frame.SampleRate, frame.NumChannels, frame.SamplesPerChannel)
+	}
+	if !bytes.Equal(got.Data, make([]byte, len(frame.Data))) {
+		t.Fatalf("realtime audio data = %v, want silence", got.Data)
+	}
 }
 
 func TestMultimodalAgentEmitsRealtimeErrorWhenAudioPushFails(t *testing.T) {
@@ -1383,6 +1421,18 @@ func lastFunctionOutput(t *testing.T, chatCtx *llm.ChatContext) *llm.FunctionCal
 	return output
 }
 
+func receiveRealtimeAudioFrame(t *testing.T, ch <-chan *model.AudioFrame) *model.AudioFrame {
+	t.Helper()
+
+	select {
+	case frame := <-ch:
+		return frame
+	case <-time.After(time.Second):
+		t.Fatal("realtime session did not receive audio frame")
+	}
+	return nil
+}
+
 func findChatMessage(chatCtx *llm.ChatContext, role llm.ChatRole, text string) *llm.ChatMessage {
 	if chatCtx == nil {
 		return nil
@@ -1481,6 +1531,7 @@ type fakeRealtimeSession struct {
 	generateCh            chan llm.RealtimeGenerateReplyOptions
 	sayCh                 chan string
 	eventCh               chan llm.RealtimeEvent
+	audioCh               chan *model.AudioFrame
 	videoFrames           int
 	updateInstructionsErr error
 	updateChatContextErr  error
@@ -1554,7 +1605,10 @@ func (f *fakeRealtimeSession) EventCh() <-chan llm.RealtimeEvent {
 	return ch
 }
 
-func (f *fakeRealtimeSession) PushAudio(*model.AudioFrame) error {
+func (f *fakeRealtimeSession) PushAudio(frame *model.AudioFrame) error {
+	if f.audioCh != nil {
+		f.audioCh <- frame
+	}
 	return f.pushAudioErr
 }
 

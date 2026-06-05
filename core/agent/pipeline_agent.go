@@ -7,6 +7,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/cavos-io/rtp-agent/core/audio"
 	"github.com/cavos-io/rtp-agent/core/audio/model"
 	"github.com/cavos-io/rtp-agent/core/llm"
 	"github.com/cavos-io/rtp-agent/core/stt"
@@ -124,7 +125,11 @@ func (va *PipelineAgent) run(ctx context.Context) {
 				logger.Logger.Errorw("VAD push frame failed", err)
 				va.emitError(err, va.vad)
 			}
-			if err := sttStream.PushFrame(frame); err != nil {
+			sttFrame := frame
+			if va.session != nil && va.session.shouldSilenceInputAudio() {
+				sttFrame = audio.SilenceFrameLike(frame)
+			}
+			if err := sttStream.PushFrame(sttFrame); err != nil {
 				logger.Logger.Errorw("STT push frame failed", err)
 				label := "stt"
 				if va.stt != nil {

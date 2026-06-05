@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"io"
@@ -542,6 +543,93 @@ func TestPipelineAgentUsesTTSAlignedTranscriptWhenEnabled(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("AgentOutputTranscribedEvents did not receive aligned assistant transcript")
+	}
+}
+
+func TestPipelineAgentSendsSilenceToSTTDuringAECWarmup(t *testing.T) {
+	vadStream := &fakePipelineVADStream{pushedCh: make(chan *model.AudioFrame, 1)}
+	sttStream := &fakePipelineRecognizeStream{pushedCh: make(chan *model.AudioFrame, 1)}
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{AECWarmupDuration: 0.05})
+	session.UpdateAgentState(AgentStateSpeaking)
+	agent := NewPipelineAgent(
+		&fakePipelineVAD{stream: vadStream},
+		&fakePipelineSTT{stream: sttStream},
+		nil,
+		nil,
+		llm.NewChatContext(),
+	)
+	agent.session = session
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go agent.run(ctx)
+
+	frame := &model.AudioFrame{
+		Data:              []byte{1, 2, 3, 4},
+		SampleRate:        16000,
+		NumChannels:       1,
+		SamplesPerChannel: 2,
+	}
+	agent.OnAudioFrame(ctx, frame)
+
+	vadFrame := receivePipelineFrame(t, vadStream.pushedCh)
+	if !bytes.Equal(vadFrame.Data, frame.Data) {
+		t.Fatalf("VAD frame data = %v, want original %v", vadFrame.Data, frame.Data)
+	}
+
+	sttFrame := receivePipelineFrame(t, sttStream.pushedCh)
+	if sttFrame == frame {
+		t.Fatal("STT frame reused original frame during AEC warmup")
+	}
+	if sttFrame.SampleRate != frame.SampleRate || sttFrame.NumChannels != frame.NumChannels || sttFrame.SamplesPerChannel != frame.SamplesPerChannel {
+		t.Fatalf("STT silence shape = rate %d channels %d samples %d, want rate %d channels %d samples %d",
+			sttFrame.SampleRate, sttFrame.NumChannels, sttFrame.SamplesPerChannel,
+			frame.SampleRate, frame.NumChannels, frame.SamplesPerChannel)
+	}
+	if !bytes.Equal(sttFrame.Data, make([]byte, len(frame.Data))) {
+		t.Fatalf("STT frame data = %v, want silence", sttFrame.Data)
+	}
+}
+
+func TestPipelineAgentSendsSilenceToSTTDuringUninterruptibleSpeech(t *testing.T) {
+	vadStream := &fakePipelineVADStream{pushedCh: make(chan *model.AudioFrame, 1)}
+	sttStream := &fakePipelineRecognizeStream{pushedCh: make(chan *model.AudioFrame, 1)}
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{DiscardAudioIfUninterruptible: true})
+	activity := NewAgentActivity(NewAgent("test"), session)
+	activity.currentSpeech = NewSpeechHandle(false, DefaultInputDetails())
+	session.activity = activity
+	agent := NewPipelineAgent(
+		&fakePipelineVAD{stream: vadStream},
+		&fakePipelineSTT{stream: sttStream},
+		nil,
+		nil,
+		llm.NewChatContext(),
+	)
+	agent.session = session
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go agent.run(ctx)
+
+	frame := &model.AudioFrame{
+		Data:              []byte{5, 6, 7, 8},
+		SampleRate:        16000,
+		NumChannels:       1,
+		SamplesPerChannel: 2,
+	}
+	agent.OnAudioFrame(ctx, frame)
+
+	vadFrame := receivePipelineFrame(t, vadStream.pushedCh)
+	if !bytes.Equal(vadFrame.Data, frame.Data) {
+		t.Fatalf("VAD frame data = %v, want original %v", vadFrame.Data, frame.Data)
+	}
+
+	sttFrame := receivePipelineFrame(t, sttStream.pushedCh)
+	if sttFrame == frame {
+		t.Fatal("STT frame reused original frame during uninterruptible speech")
+	}
+	if !bytes.Equal(sttFrame.Data, make([]byte, len(frame.Data))) {
+		t.Fatalf("STT frame data = %v, want silence", sttFrame.Data)
 	}
 }
 
@@ -1916,9 +2004,17 @@ func (f *fakePipelineVAD) Capabilities() vad.VADCapabilities {
 	return vad.VADCapabilities{}
 }
 
-func (f *fakePipelineVAD) OnMetricsCollected(handler vad.VADMetricsHandler) {
-	if handler != nil {
-		f.metricsHandlers = append(f.metricsHandlers, handler)
+func (f *fakePipelineVAD) OnMetricsCollected(handler vad.VADMetricsHandler) func() {
+	if handler == nil {
+		return func() {}
+	}
+	f.metricsHandlers = append(f.metricsHandlers, handler)
+	index := len(f.metricsHandlers) - 1
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			f.metricsHandlers = append(f.metricsHandlers[:index], f.metricsHandlers[index+1:]...)
+		})
 	}
 }
 
@@ -1936,13 +2032,21 @@ func (f *fakePipelineVAD) Stream(context.Context) (vad.VADStream, error) {
 }
 
 type fakePipelineVADStream struct {
-	events  []*vad.VADEvent
-	index   int
-	err     error
-	pushErr error
+	events   []*vad.VADEvent
+	index    int
+	err      error
+	pushErr  error
+	frames   []*model.AudioFrame
+	pushedCh chan *model.AudioFrame
 }
 
-func (f *fakePipelineVADStream) PushFrame(*model.AudioFrame) error { return f.pushErr }
+func (f *fakePipelineVADStream) PushFrame(frame *model.AudioFrame) error {
+	f.frames = append(f.frames, frame)
+	if f.pushedCh != nil {
+		f.pushedCh <- frame
+	}
+	return f.pushErr
+}
 
 func (f *fakePipelineVADStream) Flush() error { return nil }
 
@@ -2056,14 +2160,34 @@ func receiveUserInputTranscribedEvent(t *testing.T, session *AgentSession) UserI
 	return UserInputTranscribedEvent{}
 }
 
-type fakePipelineRecognizeStream struct {
-	events  []*stt.SpeechEvent
-	index   int
-	err     error
-	pushErr error
+func receivePipelineFrame(t *testing.T, ch <-chan *model.AudioFrame) *model.AudioFrame {
+	t.Helper()
+
+	select {
+	case frame := <-ch:
+		return frame
+	case <-time.After(time.Second):
+		t.Fatal("pipeline stream did not receive audio frame")
+	}
+	return nil
 }
 
-func (f *fakePipelineRecognizeStream) PushFrame(*model.AudioFrame) error { return f.pushErr }
+type fakePipelineRecognizeStream struct {
+	events   []*stt.SpeechEvent
+	index    int
+	err      error
+	pushErr  error
+	frames   []*model.AudioFrame
+	pushedCh chan *model.AudioFrame
+}
+
+func (f *fakePipelineRecognizeStream) PushFrame(frame *model.AudioFrame) error {
+	f.frames = append(f.frames, frame)
+	if f.pushedCh != nil {
+		f.pushedCh <- frame
+	}
+	return f.pushErr
+}
 
 func (f *fakePipelineRecognizeStream) Flush() error { return nil }
 

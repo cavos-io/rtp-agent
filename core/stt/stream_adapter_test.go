@@ -693,7 +693,9 @@ func (f *fakeStreamAdapterVAD) Capabilities() vad.VADCapabilities {
 	return vad.VADCapabilities{UpdateInterval: 1}
 }
 
-func (f *fakeStreamAdapterVAD) OnMetricsCollected(vad.VADMetricsHandler) {}
+func (f *fakeStreamAdapterVAD) OnMetricsCollected(vad.VADMetricsHandler) func() {
+	return func() {}
+}
 
 func (f *fakeStreamAdapterVAD) Stream(context.Context) (vad.VADStream, error) {
 	if f.err != nil {

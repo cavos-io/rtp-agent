@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/cavos-io/rtp-agent/core/audio"
 	"github.com/cavos-io/rtp-agent/core/audio/model"
 	"github.com/cavos-io/rtp-agent/core/llm"
 	"github.com/cavos-io/rtp-agent/library/logger"
@@ -352,9 +353,14 @@ func (ma *MultimodalAgent) run(ctx context.Context, rtSession llm.RealtimeSessio
 		case frame := <-ma.audioInCh:
 			ma.mu.Lock()
 			rtSession := ma.rtSession
+			session := ma.session
 			ma.mu.Unlock()
 			if rtSession != nil {
-				if err := rtSession.PushAudio(frame); err != nil {
+				rtFrame := frame
+				if session != nil && session.aecWarmupActive() {
+					rtFrame = audio.SilenceFrameLike(frame)
+				}
+				if err := rtSession.PushAudio(rtFrame); err != nil {
 					logger.Logger.Errorw("failed to push audio to multimodal session", err)
 					ma.mu.Lock()
 					session := ma.session

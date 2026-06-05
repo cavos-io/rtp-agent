@@ -176,9 +176,10 @@ func (a *AgentActivity) Start() {
 		}
 	}
 	if a.Session != nil && a.Session.VAD != nil {
-		a.Session.VAD.OnMetricsCollected(func(metrics *telemetry.VADMetrics) {
+		unsubscribe := a.Session.VAD.OnMetricsCollected(func(metrics *telemetry.VADMetrics) {
 			a.OnMetricsCollected(metrics)
 		})
+		a.providerUnsubscribes = append(a.providerUnsubscribes, unsubscribe)
 	}
 	a.AgentIntf.OnEnter()
 	a.queueMu.Lock()
@@ -247,6 +248,18 @@ func (a *AgentActivity) CurrentSpeech() *SpeechHandle {
 	a.queueMu.Lock()
 	defer a.queueMu.Unlock()
 	return a.currentSpeech
+}
+
+func (a *AgentActivity) uninterruptibleSpeechActive() bool {
+	if a == nil {
+		return false
+	}
+	a.queueMu.Lock()
+	defer a.queueMu.Unlock()
+	return a.currentSpeech != nil &&
+		!a.currentSpeech.IsDone() &&
+		!a.currentSpeech.IsInterrupted() &&
+		!a.currentSpeech.AllowInterruptions
 }
 
 func (a *AgentActivity) Tools() []interface{} {
@@ -1109,6 +1122,9 @@ func (a *AgentActivity) OnVADInferenceDone(ev *vad.VADEvent) {
 		return
 	}
 	if turnDetection == TurnDetectionModeSTT && a.sttEOSReceived && ev.RawAccumulatedSilence > 0 {
+		return
+	}
+	if a.Session != nil && a.Session.aecWarmupActive() {
 		return
 	}
 

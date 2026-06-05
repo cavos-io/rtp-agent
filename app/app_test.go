@@ -2823,8 +2823,10 @@ func (f *fakeAppVAD) Model() string { return "fake-vad" }
 func (f *fakeAppVAD) Provider() string {
 	return "fake"
 }
-func (f *fakeAppVAD) Capabilities() vad.VADCapabilities        { return vad.VADCapabilities{} }
-func (f *fakeAppVAD) OnMetricsCollected(vad.VADMetricsHandler) {}
+func (f *fakeAppVAD) Capabilities() vad.VADCapabilities { return vad.VADCapabilities{} }
+func (f *fakeAppVAD) OnMetricsCollected(vad.VADMetricsHandler) func() {
+	return func() {}
+}
 func (f *fakeAppVAD) Stream(context.Context) (vad.VADStream, error) {
 	return &fakeAppVADStream{}, nil
 }

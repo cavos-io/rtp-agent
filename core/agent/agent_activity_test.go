@@ -357,6 +357,44 @@ func TestAgentActivityOnVADInferenceDoneInterruptsCurrentSpeech(t *testing.T) {
 	current.MarkDone()
 }
 
+func TestAgentActivityOnVADInferenceDoneIgnoresAECWarmup(t *testing.T) {
+	agent := NewAgent("test")
+	agent.VAD = &fakePipelineVAD{}
+	session := NewAgentSession(agent, nil, AgentSessionOptions{
+		TurnDetection:           TurnDetectionModeVAD,
+		MinInterruptionDuration: 0.05,
+		AECWarmupDuration:       0.02,
+	})
+	activity := NewAgentActivity(agent, session)
+	current := NewSpeechHandle(true, DefaultInputDetails())
+	activity.currentSpeech = current
+
+	session.UpdateAgentState(AgentStateSpeaking)
+	activity.OnVADInferenceDone(&vad.VADEvent{
+		Type:                  vad.VADEventInferenceDone,
+		SpeechDuration:        0.06,
+		Speaking:              true,
+		RawAccumulatedSilence: 0,
+	})
+
+	select {
+	case <-current.interruptCh:
+		t.Fatal("speech was interrupted during AEC warmup")
+	case <-time.After(10 * time.Millisecond):
+	}
+
+	waitForAECWarmupInactive(t, session)
+	activity.OnVADInferenceDone(&vad.VADEvent{
+		Type:                  vad.VADEventInferenceDone,
+		SpeechDuration:        0.06,
+		Speaking:              true,
+		RawAccumulatedSilence: 0,
+	})
+
+	waitForInterrupted(t, current)
+	current.MarkDone()
+}
+
 func TestAgentActivityOnVADInferenceDoneIgnoresManualTurnDetection(t *testing.T) {
 	agent := NewAgent("test")
 	agent.VAD = &fakePipelineVAD{}
@@ -2127,6 +2165,25 @@ func waitForInterrupted(t *testing.T, speech *SpeechHandle) {
 			t.Fatal("speech was not interrupted")
 		case <-ticker.C:
 			if speech.IsInterrupted() {
+				return
+			}
+		}
+	}
+}
+
+func waitForAECWarmupInactive(t *testing.T, session *AgentSession) {
+	t.Helper()
+
+	deadline := time.After(time.Second)
+	ticker := time.NewTicker(time.Millisecond)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-deadline:
+			t.Fatal("AEC warmup did not expire")
+		case <-ticker.C:
+			if !session.aecWarmupActive() {
 				return
 			}
 		}
