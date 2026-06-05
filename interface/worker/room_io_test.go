@@ -232,6 +232,45 @@ func TestRoomIOHandleAgentStateChangedSkipsWhenRoomDisconnected(t *testing.T) {
 	}
 }
 
+func TestRoomIOAgentStateListenerDoesNotConsumeLegacySessionChannel(t *testing.T) {
+	session := agent.NewAgentSession(agent.NewAgent("test"), nil, agent.AgentSessionOptions{})
+	published := make(chan map[string]string, 1)
+	rio := &RoomIO{
+		AgentSession: session,
+		agentStatePublisher: func(attrs map[string]string) {
+			published <- attrs
+		},
+		agentStatePublishEnabled: func() bool {
+			return true
+		},
+	}
+	rio.startAgentStateListener()
+	t.Cleanup(func() {
+		if rio.agentStateCancel != nil {
+			rio.agentStateCancel()
+		}
+	})
+
+	session.UpdateAgentState(agent.AgentStateThinking)
+
+	select {
+	case attrs := <-published:
+		if attrs[RoomIOAgentStateAttribute] != string(agent.AgentStateThinking) {
+			t.Fatalf("published agent state attributes = %#v, want %s=%s", attrs, RoomIOAgentStateAttribute, agent.AgentStateThinking)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("RoomIO did not publish the agent state change")
+	}
+	select {
+	case ev := <-session.AgentStateChangedCh:
+		if ev.NewState != agent.AgentStateThinking {
+			t.Fatalf("legacy agent state event = %#v, want thinking", ev)
+		}
+	default:
+		t.Fatal("RoomIO consumed the legacy agent state channel event")
+	}
+}
+
 func TestRoomIOHandleUserStateChangedDispatchesClientEvent(t *testing.T) {
 	dispatcher := &fakeClientEventsDispatcher{}
 	rio := &RoomIO{
@@ -245,6 +284,45 @@ func TestRoomIOHandleUserStateChangedDispatchesClientEvent(t *testing.T) {
 
 	if len(dispatcher.userStates) != 1 || dispatcher.userStates[0] != agent.UserStateSpeaking {
 		t.Fatalf("dispatched user states = %#v, want speaking", dispatcher.userStates)
+	}
+}
+
+func TestRoomIOUserStateListenerDoesNotConsumeLegacySessionChannel(t *testing.T) {
+	session := agent.NewAgentSession(agent.NewAgent("test"), nil, agent.AgentSessionOptions{})
+	dispatcher := &channelClientEventsDispatcher{
+		userStates: make(chan agent.UserState, 1),
+	}
+	rio := &RoomIO{
+		AgentSession: session,
+		agentStatePublishEnabled: func() bool {
+			return true
+		},
+		clientEvents: dispatcher,
+	}
+	rio.startUserStateListener()
+	t.Cleanup(func() {
+		if rio.userStateCancel != nil {
+			rio.userStateCancel()
+		}
+	})
+
+	session.UpdateUserState(agent.UserStateSpeaking)
+
+	select {
+	case state := <-dispatcher.userStates:
+		if state != agent.UserStateSpeaking {
+			t.Fatalf("dispatched user state = %q, want speaking", state)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("RoomIO did not dispatch the user state change")
+	}
+	select {
+	case ev := <-session.UserStateChangedCh:
+		if ev.NewState != agent.UserStateSpeaking {
+			t.Fatalf("legacy user state event = %#v, want speaking", ev)
+		}
+	default:
+		t.Fatal("RoomIO consumed the legacy user state channel event")
 	}
 }
 
@@ -1224,6 +1302,19 @@ func (f *fakeClientEventsDispatcher) DispatchAgentState(state agent.AgentState) 
 
 func (f *fakeClientEventsDispatcher) DispatchUserState(state agent.UserState) {
 	f.userStates = append(f.userStates, state)
+}
+
+type channelClientEventsDispatcher struct {
+	agentStates chan agent.AgentState
+	userStates  chan agent.UserState
+}
+
+func (c *channelClientEventsDispatcher) DispatchAgentState(state agent.AgentState) {
+	c.agentStates <- state
+}
+
+func (c *channelClientEventsDispatcher) DispatchUserState(state agent.UserState) {
+	c.userStates <- state
 }
 
 type fakeRoomIORealtimeModel struct {

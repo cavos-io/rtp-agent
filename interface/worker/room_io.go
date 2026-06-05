@@ -236,17 +236,18 @@ func NewRoomIO(room *lksdk.Room, session *agent.AgentSession, opts RoomOptions) 
 }
 
 func (rio *RoomIO) startAgentStateListener() {
-	if rio == nil || rio.AgentSession == nil || rio.AgentSession.AgentStateChangedCh == nil {
+	if rio == nil || rio.AgentSession == nil {
 		return
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	rio.agentStateCancel = cancel
+	events := rio.AgentSession.AgentStateChangedEvents()
 	go func() {
 		for {
 			select {
 			case <-ctx.Done():
 				return
-			case ev, ok := <-rio.AgentSession.AgentStateChangedCh:
+			case ev, ok := <-events:
 				if !ok {
 					return
 				}
@@ -257,17 +258,18 @@ func (rio *RoomIO) startAgentStateListener() {
 }
 
 func (rio *RoomIO) startUserStateListener() {
-	if rio == nil || rio.AgentSession == nil || rio.AgentSession.UserStateChangedCh == nil {
+	if rio == nil || rio.AgentSession == nil {
 		return
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	rio.userStateCancel = cancel
+	events := rio.AgentSession.UserStateChangedEvents()
 	go func() {
 		for {
 			select {
 			case <-ctx.Done():
 				return
-			case ev, ok := <-rio.AgentSession.UserStateChangedCh:
+			case ev, ok := <-events:
 				if !ok {
 					return
 				}
