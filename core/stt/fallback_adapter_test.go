@@ -11,6 +11,7 @@ import (
 
 	"github.com/cavos-io/rtp-agent/core/audio/model"
 	"github.com/cavos-io/rtp-agent/core/vad"
+	"github.com/cavos-io/rtp-agent/library/telemetry"
 )
 
 func TestFallbackAdapterAggregatesProviderCapabilities(t *testing.T) {
@@ -90,6 +91,26 @@ func TestFallbackAdapterAlwaysAdvertisesOfflineRecognize(t *testing.T) {
 
 	if !adapter.Capabilities().OfflineRecognize {
 		t.Fatal("OfflineRecognize = false, want true because FallbackAdapter exposes Recognize")
+	}
+}
+
+func TestFallbackAdapterForwardsProviderMetrics(t *testing.T) {
+	primary := &metadataSTT{label: "primary", capabilities: STTCapabilities{Streaming: true}}
+	fallback := &metadataSTT{label: "fallback", capabilities: STTCapabilities{Streaming: true}}
+	adapter := NewFallbackAdapter([]STT{primary, fallback})
+	metricsCh := make(chan string, 2)
+
+	unsubscribe := adapter.OnMetricsCollected(func(metrics *telemetry.STTMetrics) {
+		metricsCh <- metrics.RequestID
+	})
+	defer unsubscribe()
+
+	primary.EmitMetricsCollected(&telemetry.STTMetrics{RequestID: "primary-req"})
+	fallback.EmitMetricsCollected(&telemetry.STTMetrics{RequestID: "fallback-req"})
+
+	got := []string{<-metricsCh, <-metricsCh}
+	if strings.Join(got, ",") != "primary-req,fallback-req" {
+		t.Fatalf("forwarded metrics = %#v, want primary and fallback request IDs", got)
 	}
 }
 
@@ -1836,6 +1857,8 @@ func TestFallbackStreamForwardsEndInput(t *testing.T) {
 }
 
 type metadataSTT struct {
+	MetricsEmitter
+
 	mu               sync.Mutex
 	label            string
 	capabilities     STTCapabilities

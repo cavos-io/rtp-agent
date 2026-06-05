@@ -15,6 +15,7 @@ import (
 )
 
 type FallbackAdapter struct {
+	MetricsEmitter
 	stts                 []STT
 	capabilities         STTCapabilities
 	maxRetryPerSTT       int
@@ -207,6 +208,23 @@ func (f *FallbackAdapter) Close() error {
 	}
 	closeStreams(streams)
 	return nil
+}
+
+func (f *FallbackAdapter) OnMetricsCollected(handler STTMetricsHandler) func() {
+	unsubscribes := []func(){f.MetricsEmitter.OnMetricsCollected(handler)}
+	for _, stt := range f.stts {
+		if collector, ok := stt.(metricsCollectorSTT); ok {
+			unsubscribes = append(unsubscribes, collector.OnMetricsCollected(handler))
+		}
+	}
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			for _, unsubscribe := range unsubscribes {
+				unsubscribe()
+			}
+		})
+	}
 }
 
 func (f *FallbackAdapter) OnAvailabilityChanged(handler AvailabilityChangedHandler) func() {
