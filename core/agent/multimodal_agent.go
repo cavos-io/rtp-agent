@@ -485,10 +485,15 @@ func (ma *MultimodalAgent) handleRealtimeEvent(ev llm.RealtimeEvent) {
 		if ev.Error != io.EOF {
 			logger.Logger.Errorw("Realtime stream error", ev.Error)
 			if ma.session != nil && ev.Error != nil {
-				ma.session.EmitError(ErrorEvent{
-					Error:  llm.NewRealtimeModelError(llm.RealtimeLabel(ma.model), ev.Error, false),
-					Source: ma.model,
-				})
+				err := llm.NewRealtimeModelError(llm.RealtimeLabel(ma.model), ev.Error, false)
+				if ma.session.activity != nil {
+					ma.session.activity.OnError(err, ma.model)
+				} else {
+					ma.session.EmitError(ErrorEvent{
+						Error:  err,
+						Source: ma.model,
+					})
+				}
 			}
 		}
 	}

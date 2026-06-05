@@ -555,6 +555,42 @@ func TestMultimodalAgentEmitsErrorEventForRealtimeError(t *testing.T) {
 	}
 }
 
+func TestMultimodalAgentRoutesRealtimeErrorThroughActivity(t *testing.T) {
+	agent := NewAgent("test")
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	session.activity = NewAgentActivity(agent, session)
+	model := &fakeRealtimeModel{label: "test.RealtimeModel"}
+	cause := errors.New("realtime failed")
+	ma := &MultimodalAgent{
+		model:   model,
+		session: session,
+	}
+
+	ma.handleRealtimeEvent(llm.RealtimeEvent{
+		Type:  llm.RealtimeEventTypeError,
+		Error: cause,
+	})
+
+	select {
+	case ev := <-session.ErrorEvents():
+		rtErr, ok := ev.Error.(*llm.RealtimeModelError)
+		if !ok {
+			t.Fatalf("Error = %T, want *llm.RealtimeModelError", ev.Error)
+		}
+		if !errors.Is(rtErr, cause) {
+			t.Fatalf("RealtimeModelError unwrap = %v, want %v", rtErr, cause)
+		}
+		if rtErr.Label != "test.RealtimeModel" || rtErr.Recoverable {
+			t.Fatalf("RealtimeModelError = %#v, want label test.RealtimeModel recoverable false", rtErr)
+		}
+		if ev.Source != model {
+			t.Fatalf("Source = %#v, want realtime model", ev.Source)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("ErrorEvents did not receive routed realtime error")
+	}
+}
+
 func TestMultimodalAgentDoesNotEmitErrorEventForRealtimeEOF(t *testing.T) {
 	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
 	model := &fakeRealtimeModel{}

@@ -445,6 +445,31 @@ func TestAgentActivityMetricsCollectedEmitsMetricsAndUsage(t *testing.T) {
 	}
 }
 
+func TestAgentActivityErrorEmitsSessionErrorEvent(t *testing.T) {
+	agent := NewAgent("test")
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	activity := NewAgentActivity(agent, session)
+	cause := errors.New("realtime failed")
+	source := &fakeRealtimeModel{label: "test.RealtimeModel"}
+
+	activity.OnError(cause, source)
+
+	select {
+	case ev := <-session.ErrorEvents():
+		if !errors.Is(ev.Error, cause) {
+			t.Fatalf("Error = %v, want %v", ev.Error, cause)
+		}
+		if ev.Source != source {
+			t.Fatalf("Source = %#v, want realtime source", ev.Source)
+		}
+		if ev.CreatedAt.IsZero() {
+			t.Fatal("CreatedAt is zero")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("ErrorEvents did not receive activity error")
+	}
+}
+
 func TestAgentActivityUseTTSAlignedTranscriptUsesAgentOverride(t *testing.T) {
 	agent := NewAgent("test")
 	session := NewAgentSession(agent, nil, AgentSessionOptions{UseTTSAlignedTranscript: true})

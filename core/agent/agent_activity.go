@@ -891,6 +891,13 @@ func (a *AgentActivity) OnMetricsCollected(metrics telemetry.AgentMetrics) {
 	a.Session.EmitMetricsCollected(metrics)
 }
 
+func (a *AgentActivity) OnError(err error, source any) {
+	if a == nil || a.Session == nil || err == nil {
+		return
+	}
+	a.Session.EmitError(ErrorEvent{Error: err, Source: source})
+}
+
 func (a *AgentActivity) Drain(ctx context.Context) error {
 	if ctx == nil {
 		ctx = a.ctx
