@@ -352,6 +352,50 @@ func TestRoomIOPublishesAgentOutputLegacyTranscriptionPacket(t *testing.T) {
 	}
 }
 
+func TestRoomIOPublishesUserInputLegacyTranscriptionPacket(t *testing.T) {
+	session := agent.NewAgentSession(agent.NewAgent("test"), nil, agent.AgentSessionOptions{})
+	published := make(chan *livekit.Transcription, 1)
+	rio := &RoomIO{
+		AgentSession:                   session,
+		userTranscriptionTrackID:       "TR_user_audio",
+		userTranscriptionParticipantID: "caller-a",
+		transcriptionPacketPublisher: func(transcription *livekit.Transcription) error {
+			published <- transcription
+			return nil
+		},
+	}
+	rio.startUserTranscriptionListener()
+	defer rio.userTranscriptionCancel()
+
+	session.EmitUserInputTranscribed(agent.UserInputTranscribedEvent{
+		Transcript: "caller transcript",
+		IsFinal:    true,
+		Language:   "en",
+	})
+
+	select {
+	case got := <-published:
+		if got.TranscribedParticipantIdentity != "caller-a" {
+			t.Fatalf("participant identity = %q, want caller-a", got.TranscribedParticipantIdentity)
+		}
+		if got.TrackId != "TR_user_audio" {
+			t.Fatalf("track id = %q, want TR_user_audio", got.TrackId)
+		}
+		if len(got.Segments) != 1 {
+			t.Fatalf("segments len = %d, want 1", len(got.Segments))
+		}
+		segment := got.Segments[0]
+		if !strings.HasPrefix(segment.Id, "SG_") {
+			t.Fatalf("segment id = %q, want SG_ prefix", segment.Id)
+		}
+		if segment.Text != "caller transcript" || !segment.Final || segment.Language != "en" {
+			t.Fatalf("segment = %#v, want final en caller transcript", segment)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("user transcription packet was not published")
+	}
+}
+
 type roomIOPublishedText struct {
 	text string
 	opts lksdk.StreamTextOptions
