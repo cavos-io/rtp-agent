@@ -1969,6 +1969,32 @@ func TestAgentSessionStartForwardsVADMetricsThroughActivity(t *testing.T) {
 	}
 }
 
+func TestAgentSessionStopUnsubscribesVADMetricsFromActivity(t *testing.T) {
+	vadSource := &fakePipelineVAD{}
+	agent := NewAgent("test")
+	agent.VAD = vadSource
+	agent.LLM = &fakeGenerationLLM{}
+	agent.STT = &fakePipelineSTT{}
+	agent.TTS = &fakePipelineTTS{}
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	session.Assistant = &fakeSessionAssistant{}
+
+	if err := session.Start(context.Background()); err != nil {
+		t.Fatalf("Start error = %v, want nil", err)
+	}
+	if err := session.Stop(context.Background()); err != nil {
+		t.Fatalf("Stop error = %v, want nil", err)
+	}
+
+	vadSource.EmitMetricsCollected(&telemetry.VADMetrics{Label: "late-vad"})
+
+	select {
+	case ev := <-session.MetricsCollectedEvents():
+		t.Fatalf("MetricsCollectedEvents received VAD metrics after Stop: %#v", ev.Metrics)
+	default:
+	}
+}
+
 func TestAgentSessionStartForwardsSTTMetricsThroughActivity(t *testing.T) {
 	sttSource := &fakePipelineSTT{}
 	agent := NewAgent("test")

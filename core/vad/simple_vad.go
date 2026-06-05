@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"math"
+	"reflect"
 	"sync"
 	"time"
 
@@ -176,13 +177,31 @@ func (v *SimpleVAD) Capabilities() VADCapabilities {
 	return VADCapabilities{UpdateInterval: v.options.UpdateInterval}
 }
 
-func (v *SimpleVAD) OnMetricsCollected(handler VADMetricsHandler) {
+func (v *SimpleVAD) OnMetricsCollected(handler VADMetricsHandler) func() {
 	if handler == nil {
-		return
+		return func() {}
 	}
 	v.mu.Lock()
-	defer v.mu.Unlock()
 	v.handlers = append(v.handlers, handler)
+	v.mu.Unlock()
+
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			v.removeMetricsHandler(handler)
+		})
+	}
+}
+
+func (v *SimpleVAD) removeMetricsHandler(handler VADMetricsHandler) {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	for i, registered := range v.handlers {
+		if reflect.ValueOf(registered).Pointer() == reflect.ValueOf(handler).Pointer() {
+			v.handlers = append(v.handlers[:i], v.handlers[i+1:]...)
+			return
+		}
+	}
 }
 
 func (v *SimpleVAD) UpdateOptions(options SimpleVADOptions) {

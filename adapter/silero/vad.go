@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"math"
+	"reflect"
 	"sync"
 
 	"github.com/cavos-io/rtp-agent/core/vad"
@@ -182,13 +183,31 @@ func (v *SileroVAD) Capabilities() vad.VADCapabilities {
 	return vad.VADCapabilities{UpdateInterval: v.options.UpdateInterval}
 }
 
-func (v *SileroVAD) OnMetricsCollected(handler vad.VADMetricsHandler) {
+func (v *SileroVAD) OnMetricsCollected(handler vad.VADMetricsHandler) func() {
 	if handler == nil {
-		return
+		return func() {}
 	}
 	v.mu.Lock()
-	defer v.mu.Unlock()
 	v.handlers = append(v.handlers, handler)
+	v.mu.Unlock()
+
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			v.removeMetricsHandler(handler)
+		})
+	}
+}
+
+func (v *SileroVAD) removeMetricsHandler(handler vad.VADMetricsHandler) {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	for i, registered := range v.handlers {
+		if reflect.ValueOf(registered).Pointer() == reflect.ValueOf(handler).Pointer() {
+			v.handlers = append(v.handlers[:i], v.handlers[i+1:]...)
+			return
+		}
+	}
 }
 
 func (v *SileroVAD) UpdateOptions(options VADOptions) {

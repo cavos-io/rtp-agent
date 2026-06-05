@@ -40,7 +40,7 @@ type VAD interface {
 	Model() string
 	Provider() string
 	Capabilities() VADCapabilities
-	OnMetricsCollected(handler VADMetricsHandler)
+	OnMetricsCollected(handler VADMetricsHandler) func()
 	Stream(ctx context.Context) (VADStream, error)
 }
 

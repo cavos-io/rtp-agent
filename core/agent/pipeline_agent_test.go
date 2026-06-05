@@ -1916,9 +1916,17 @@ func (f *fakePipelineVAD) Capabilities() vad.VADCapabilities {
 	return vad.VADCapabilities{}
 }
 
-func (f *fakePipelineVAD) OnMetricsCollected(handler vad.VADMetricsHandler) {
-	if handler != nil {
-		f.metricsHandlers = append(f.metricsHandlers, handler)
+func (f *fakePipelineVAD) OnMetricsCollected(handler vad.VADMetricsHandler) func() {
+	if handler == nil {
+		return func() {}
+	}
+	f.metricsHandlers = append(f.metricsHandlers, handler)
+	index := len(f.metricsHandlers) - 1
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			f.metricsHandlers = append(f.metricsHandlers[:index], f.metricsHandlers[index+1:]...)
+		})
 	}
 }
 

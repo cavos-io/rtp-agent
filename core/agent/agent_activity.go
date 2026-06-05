@@ -176,9 +176,10 @@ func (a *AgentActivity) Start() {
 		}
 	}
 	if a.Session != nil && a.Session.VAD != nil {
-		a.Session.VAD.OnMetricsCollected(func(metrics *telemetry.VADMetrics) {
+		unsubscribe := a.Session.VAD.OnMetricsCollected(func(metrics *telemetry.VADMetrics) {
 			a.OnMetricsCollected(metrics)
 		})
+		a.providerUnsubscribes = append(a.providerUnsubscribes, unsubscribe)
 	}
 	a.AgentIntf.OnEnter()
 	a.queueMu.Lock()
