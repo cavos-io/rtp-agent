@@ -841,6 +841,32 @@ func TestPipelineAgentEmitsErrorEventForSTTPushFrameError(t *testing.T) {
 	}
 }
 
+func TestPipelineAgentEmitsErrorEventForSTTStreamStartError(t *testing.T) {
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	cause := errors.New("stt start failed")
+	source := &fakePipelineSTT{streamErr: cause}
+	agent := NewPipelineAgent(&fakePipelineVAD{}, source, nil, nil, llm.NewChatContext())
+	agent.session = session
+
+	agent.run(context.Background())
+
+	select {
+	case ev := <-session.ErrorEvents():
+		var sttErr *stt.STTError
+		if !errors.As(ev.Error, &sttErr) {
+			t.Fatalf("Error = %T, want *stt.STTError", ev.Error)
+		}
+		if !errors.Is(ev.Error, cause) {
+			t.Fatalf("Error = %v, want cause %v", ev.Error, cause)
+		}
+		if ev.Source != source {
+			t.Fatalf("Source = %#v, want STT source", ev.Source)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("ErrorEvents did not receive STT start error")
+	}
+}
+
 func TestPipelineAgentEmitsSTTMetricsForRecognitionUsage(t *testing.T) {
 	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
 	source := &fakePipelineSTT{}
@@ -1097,6 +1123,48 @@ func TestPipelineAgentEmitsTTSErrorEventForSpeechStreamFailure(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("ErrorEvents did not receive TTS stream error")
+	}
+}
+
+func TestPipelineAgentEmitsTTSErrorEventForPublishAudioFailure(t *testing.T) {
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	cause := errors.New("publish audio failed")
+	ttsSource := &fakePipelineTTS{stream: &fakePipelineTTSStream{
+		frames: []*model.AudioFrame{{
+			Data:              []byte{0, 1},
+			SampleRate:        24000,
+			NumChannels:       1,
+			SamplesPerChannel: 1,
+		}},
+	}}
+	agent := NewPipelineAgent(nil, nil, nil, ttsSource, llm.NewChatContext())
+	agent.session = session
+	agent.PublishAudio = func(*model.AudioFrame) error {
+		return cause
+	}
+	speech := NewSpeechHandle(false, DefaultInputDetails())
+	speech.Generation.Text = "hello"
+	speech.Generation.AssistantMessage = &llm.ChatMessage{
+		Role:    llm.ChatRoleAssistant,
+		Content: []llm.ChatContent{{Text: "hello"}},
+	}
+
+	agent.OnSpeechScheduled(context.Background(), speech)
+
+	select {
+	case ev := <-session.ErrorEvents():
+		var ttsErr tts.TTSError
+		if !errors.As(ev.Error, &ttsErr) {
+			t.Fatalf("Error = %T, want tts.TTSError", ev.Error)
+		}
+		if !errors.Is(ev.Error, cause) {
+			t.Fatalf("Error = %v, want cause %v", ev.Error, cause)
+		}
+		if ev.Source != ttsSource {
+			t.Fatalf("Source = %#v, want TTS source", ev.Source)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("ErrorEvents did not receive publish audio error")
 	}
 }
 
@@ -1806,7 +1874,8 @@ func (f *fakePipelineTTSStream) Next() (*tts.SynthesizedAudio, error) {
 }
 
 type fakePipelineSTT struct {
-	stream *fakePipelineRecognizeStream
+	stream    *fakePipelineRecognizeStream
+	streamErr error
 }
 
 func (f *fakePipelineSTT) Label() string { return "fake-stt" }
@@ -1816,6 +1885,9 @@ func (f *fakePipelineSTT) Capabilities() stt.STTCapabilities {
 }
 
 func (f *fakePipelineSTT) Stream(context.Context, string) (stt.RecognizeStream, error) {
+	if f.streamErr != nil {
+		return nil, f.streamErr
+	}
 	if f.stream != nil {
 		return f.stream, nil
 	}

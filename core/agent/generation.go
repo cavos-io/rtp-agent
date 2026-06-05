@@ -329,14 +329,23 @@ func PerformTTSInference(ctx context.Context, t tts.TTS, textCh <-chan string, o
 		for text := range textCh {
 			for _, filteredText := range transformBuffer.Push(text) {
 				filteredText = applyTTSTextReplacements(filteredText, options.TextReplacements)
-				_ = stream.PushText(filteredText)
+				if err := stream.PushText(filteredText); err != nil {
+					data.StreamErr = err
+					return
+				}
 			}
 		}
 		for _, filteredText := range transformBuffer.Flush() {
 			filteredText = applyTTSTextReplacements(filteredText, options.TextReplacements)
-			_ = stream.PushText(filteredText)
+			if err := stream.PushText(filteredText); err != nil {
+				data.StreamErr = err
+				return
+			}
 		}
-		_ = tts.EndSynthesizeStreamInput(stream)
+		if err := tts.EndSynthesizeStreamInput(stream); err != nil {
+			data.StreamErr = err
+			return
+		}
 
 		for {
 			audio, err := stream.Next()

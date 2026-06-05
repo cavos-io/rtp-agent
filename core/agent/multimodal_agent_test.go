@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"strings"
 	"testing"
 	"time"
 
@@ -67,6 +68,81 @@ func TestMultimodalAgentStartsRealtimeSessionAndAcceptsAudio(t *testing.T) {
 	cancel()
 }
 
+func TestMultimodalAgentEmitsRealtimeErrorWhenAudioPushFails(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	cause := errors.New("push audio failed")
+	eventCh := make(chan llm.RealtimeEvent)
+	rtSession := &fakeRealtimeSession{eventCh: eventCh, pushAudioErr: cause}
+	ma := NewMultimodalAgent(&fakeRealtimeModel{}, llm.NewChatContext())
+	ma.session = session
+	ma.rtSession = rtSession
+	go ma.run(ctx, rtSession)
+
+	ma.OnAudioFrame(context.Background(), &model.AudioFrame{
+		Data:              []byte{0, 1},
+		SampleRate:        24000,
+		NumChannels:       1,
+		SamplesPerChannel: 1,
+	})
+
+	select {
+	case ev := <-session.ErrorEvents():
+		rtErr, ok := ev.Error.(llm.RealtimeError)
+		if !ok {
+			t.Fatalf("Error = %T, want llm.RealtimeError", ev.Error)
+		}
+		if !errors.Is(rtErr, cause) {
+			t.Fatalf("RealtimeError unwrap = %v, want %v", rtErr, cause)
+		}
+		if rtErr.Message != "failed to push audio to realtime session" {
+			t.Fatalf("RealtimeError message = %q", rtErr.Message)
+		}
+		if ev.Source != rtSession {
+			t.Fatalf("Source = %#v, want realtime session", ev.Source)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("ErrorEvents did not receive realtime push audio error")
+	}
+}
+
+func TestMultimodalAgentEmitsRealtimeErrorWhenEventAudioPublishFails(t *testing.T) {
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	cause := errors.New("publish realtime audio failed")
+	ma := &MultimodalAgent{
+		session: session,
+	}
+	ma.PublishAudio = func(*model.AudioFrame) error {
+		return cause
+	}
+
+	ma.handleRealtimeEvent(llm.RealtimeEvent{
+		Type: llm.RealtimeEventTypeAudio,
+		Data: []byte{0, 1},
+	})
+
+	select {
+	case ev := <-session.ErrorEvents():
+		rtErr, ok := ev.Error.(llm.RealtimeError)
+		if !ok {
+			t.Fatalf("Error = %T, want llm.RealtimeError", ev.Error)
+		}
+		if !errors.Is(rtErr, cause) {
+			t.Fatalf("RealtimeError unwrap = %v, want %v", rtErr, cause)
+		}
+		if rtErr.Message != "failed to publish realtime audio" {
+			t.Fatalf("RealtimeError message = %q", rtErr.Message)
+		}
+		if ev.Source != ma {
+			t.Fatalf("Source = %#v, want multimodal agent", ev.Source)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("ErrorEvents did not receive realtime event audio publish error")
+	}
+}
+
 func TestMultimodalAgentStartUpdatesRealtimeSessionWithSessionAndAgentTools(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -84,6 +160,29 @@ func TestMultimodalAgentStartUpdatesRealtimeSessionWithSessionAndAgentTools(t *t
 
 	if got, want := toolNames(rtSession.tools), []string{"session_tool", "agent_tool"}; !equalStrings(got, want) {
 		t.Fatalf("updated realtime tools = %#v, want %#v", got, want)
+	}
+}
+
+func TestMultimodalAgentStartReturnsToolRegistrationError(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	agent := NewAgent("test")
+	agent.Tools = []llm.Tool{&fakeGenerationTool{name: "lookup"}}
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	session.Tools = []llm.Tool{&fakeGenerationTool{name: "lookup"}}
+	rtSession := &fakeRealtimeSession{}
+	ma := NewMultimodalAgent(&fakeRealtimeModel{session: rtSession}, llm.NewChatContext())
+
+	err := ma.Start(ctx, session)
+	if err == nil || !strings.Contains(err.Error(), "duplicate function name: lookup") {
+		t.Fatalf("Start error = %v, want duplicate function name error", err)
+	}
+	if rtSession.closed != 1 {
+		t.Fatalf("realtime session closed = %d, want 1", rtSession.closed)
+	}
+	if len(rtSession.tools) != 0 {
+		t.Fatalf("updated realtime tools = %#v, want no tools on registration error", toolNames(rtSession.tools))
 	}
 }
 
@@ -111,6 +210,28 @@ func TestMultimodalAgentStartInitializesRealtimeSessionConfiguration(t *testing.
 	}
 	if got, want := toolNames(rtSession.tools), []string{"session_tool"}; !equalStrings(got, want) {
 		t.Fatalf("updated realtime tools = %#v, want %#v", got, want)
+	}
+}
+
+func TestMultimodalAgentStartReturnsRealtimeInitializationError(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	cause := errors.New("update instructions failed")
+	agent := NewAgent("be helpful")
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	rtSession := &fakeRealtimeSession{updateInstructionsErr: cause}
+	ma := NewMultimodalAgent(&fakeRealtimeModel{session: rtSession}, llm.NewChatContext())
+
+	err := ma.Start(ctx, session)
+	if !errors.Is(err, cause) {
+		t.Fatalf("Start error = %v, want %v", err, cause)
+	}
+	if rtSession.closed != 1 {
+		t.Fatalf("realtime session closed = %d, want 1", rtSession.closed)
+	}
+	if ma.rtSession != nil {
+		t.Fatalf("rtSession = %#v, want nil after initialization failure", ma.rtSession)
 	}
 }
 
@@ -483,6 +604,46 @@ func TestMultimodalAgentExecutesAgentToolFunctionCall(t *testing.T) {
 	}
 }
 
+func TestMultimodalAgentEmitsErrorWhenRealtimeToolResultSyncFails(t *testing.T) {
+	chatCtx := llm.NewChatContext()
+	agent := NewAgent("test")
+	agent.Tools = []llm.Tool{&fakeGenerationTool{name: "lookup", result: "agent result"}}
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	model := &fakeRealtimeModel{label: "test.RealtimeModel"}
+	cause := errors.New("update chat context failed")
+	ma := &MultimodalAgent{
+		model:     model,
+		session:   session,
+		chatCtx:   chatCtx,
+		rtSession: &fakeRealtimeSession{updateChatContextErr: cause},
+		ctx:       context.Background(),
+	}
+
+	ma.handleRealtimeEvent(llm.RealtimeEvent{
+		Type:     llm.RealtimeEventTypeFunctionCall,
+		Function: &llm.FunctionToolCall{Name: "lookup", CallID: "call_lookup", Arguments: `{}`},
+	})
+
+	select {
+	case ev := <-session.ErrorEvents():
+		rtErr, ok := ev.Error.(*llm.RealtimeModelError)
+		if !ok {
+			t.Fatalf("Error = %T, want *llm.RealtimeModelError", ev.Error)
+		}
+		if !errors.Is(rtErr, cause) {
+			t.Fatalf("RealtimeModelError unwrap = %v, want %v", rtErr, cause)
+		}
+		if rtErr.Label != "test.RealtimeModel" || rtErr.Recoverable {
+			t.Fatalf("RealtimeModelError = %#v, want label test.RealtimeModel recoverable false", rtErr)
+		}
+		if ev.Source != model {
+			t.Fatalf("Source = %#v, want realtime model", ev.Source)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("ErrorEvents did not receive realtime tool result sync error")
+	}
+}
+
 func TestMultimodalToolExecutionSuppressesStopResponse(t *testing.T) {
 	chatCtx := llm.NewChatContext()
 	ma := &MultimodalAgent{
@@ -674,6 +835,46 @@ func TestMultimodalAgentEmitsSpeechCreatedForServerGeneration(t *testing.T) {
 	defer doneCancel()
 	if err := handle.Wait(doneCtx); err != nil {
 		t.Fatalf("server realtime generation handle did not complete after stream close: %v", err)
+	}
+}
+
+func TestMultimodalAgentEmitsRealtimeErrorWhenMessageAudioPublishFails(t *testing.T) {
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	cause := errors.New("publish generated audio failed")
+	ma := &MultimodalAgent{session: session}
+	ma.PublishAudio = func(*model.AudioFrame) error {
+		return cause
+	}
+	audioCh := make(chan *model.AudioFrame, 1)
+	audioCh <- &model.AudioFrame{
+		Data:              []byte{0, 1},
+		SampleRate:        24000,
+		NumChannels:       1,
+		SamplesPerChannel: 1,
+	}
+	close(audioCh)
+
+	ma.consumeRealtimeMessage(context.Background(), NewSpeechHandle(false, DefaultInputDetails()), llm.MessageGeneration{
+		AudioCh: audioCh,
+	})
+
+	select {
+	case ev := <-session.ErrorEvents():
+		rtErr, ok := ev.Error.(llm.RealtimeError)
+		if !ok {
+			t.Fatalf("Error = %T, want llm.RealtimeError", ev.Error)
+		}
+		if !errors.Is(rtErr, cause) {
+			t.Fatalf("RealtimeError unwrap = %v, want %v", rtErr, cause)
+		}
+		if rtErr.Message != "failed to publish realtime audio" {
+			t.Fatalf("RealtimeError message = %q", rtErr.Message)
+		}
+		if ev.Source != ma {
+			t.Fatalf("Source = %#v, want multimodal agent", ev.Source)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("ErrorEvents did not receive realtime message audio publish error")
 	}
 }
 
@@ -1245,6 +1446,7 @@ type fakeRealtimeModel struct {
 	model        string
 	provider     string
 	session      *fakeRealtimeSession
+	sessionErr   error
 	capabilities llm.RealtimeCapabilities
 }
 
@@ -1253,6 +1455,9 @@ func (f *fakeRealtimeModel) Capabilities() llm.RealtimeCapabilities {
 }
 
 func (f *fakeRealtimeModel) Session() (llm.RealtimeSession, error) {
+	if f.sessionErr != nil {
+		return nil, f.sessionErr
+	}
 	if f.session != nil {
 		return f.session, nil
 	}
@@ -1268,26 +1473,36 @@ func (f *fakeRealtimeModel) Model() string { return f.model }
 func (f *fakeRealtimeModel) Provider() string { return f.provider }
 
 type fakeRealtimeSession struct {
-	updated              *llm.ChatContext
-	generatedWithChatCtx *llm.ChatContext
-	tools                []llm.Tool
-	instructions         string
-	options              llm.RealtimeSessionOptions
-	generateCh           chan llm.RealtimeGenerateReplyOptions
-	sayCh                chan string
-	videoFrames          int
-	pushVideoErr         error
-	closed               int
-	interrupted          int
+	updated               *llm.ChatContext
+	generatedWithChatCtx  *llm.ChatContext
+	tools                 []llm.Tool
+	instructions          string
+	options               llm.RealtimeSessionOptions
+	generateCh            chan llm.RealtimeGenerateReplyOptions
+	sayCh                 chan string
+	eventCh               chan llm.RealtimeEvent
+	videoFrames           int
+	updateInstructionsErr error
+	updateChatContextErr  error
+	pushAudioErr          error
+	pushVideoErr          error
+	closed                int
+	interrupted           int
 }
 
 func (f *fakeRealtimeSession) UpdateInstructions(instructions string) error {
 	f.instructions = instructions
+	if f.updateInstructionsErr != nil {
+		return f.updateInstructionsErr
+	}
 	return nil
 }
 
 func (f *fakeRealtimeSession) UpdateChatContext(chatCtx *llm.ChatContext) error {
 	f.updated = chatCtx
+	if f.updateChatContextErr != nil {
+		return f.updateChatContextErr
+	}
 	return nil
 }
 
@@ -1331,12 +1546,17 @@ func (f *fakeRealtimeSession) Close() error {
 }
 
 func (f *fakeRealtimeSession) EventCh() <-chan llm.RealtimeEvent {
+	if f.eventCh != nil {
+		return f.eventCh
+	}
 	ch := make(chan llm.RealtimeEvent)
 	close(ch)
 	return ch
 }
 
-func (f *fakeRealtimeSession) PushAudio(*model.AudioFrame) error { return nil }
+func (f *fakeRealtimeSession) PushAudio(*model.AudioFrame) error {
+	return f.pushAudioErr
+}
 
 func (f *fakeRealtimeSession) PushVideo(*images.VideoFrame) error {
 	f.videoFrames++

@@ -65,6 +65,13 @@ func (ma *MultimodalAgent) Start(ctx context.Context, s *AgentSession) error {
 
 	if err := ma.initializeRealtimeSession(rtSession); err != nil {
 		logger.Logger.Errorw("failed to initialize realtime session", err)
+		_ = rtSession.Close()
+		ma.mu.Lock()
+		if ma.rtSession == rtSession {
+			ma.rtSession = nil
+		}
+		ma.mu.Unlock()
+		return err
 	}
 
 	go ma.run(ctx, rtSession)
@@ -116,7 +123,11 @@ func (ma *MultimodalAgent) UpdateTools(ctx context.Context) error {
 		return ctx.Err()
 	default:
 	}
-	return rtSession.UpdateTools(ma.realtimeTools())
+	tools, err := ma.realtimeTools()
+	if err != nil {
+		return err
+	}
+	return rtSession.UpdateTools(tools)
 }
 
 func (ma *MultimodalAgent) UpdateChatContext(ctx context.Context, chatCtx *llm.ChatContext) error {
@@ -224,7 +235,11 @@ func (ma *MultimodalAgent) initializeRealtimeSession(rtSession llm.RealtimeSessi
 			return err
 		}
 	}
-	return rtSession.UpdateTools(ma.realtimeTools())
+	tools, err := ma.realtimeTools()
+	if err != nil {
+		return err
+	}
+	return rtSession.UpdateTools(tools)
 }
 
 func (ma *MultimodalAgent) SupportsNativeSay() bool {
@@ -341,6 +356,15 @@ func (ma *MultimodalAgent) run(ctx context.Context, rtSession llm.RealtimeSessio
 			if rtSession != nil {
 				if err := rtSession.PushAudio(frame); err != nil {
 					logger.Logger.Errorw("failed to push audio to multimodal session", err)
+					ma.mu.Lock()
+					session := ma.session
+					ma.mu.Unlock()
+					if session != nil {
+						session.EmitError(ErrorEvent{
+							Error:  llm.NewRealtimeError("failed to push audio to realtime session", err),
+							Source: rtSession,
+						})
+					}
 				}
 			}
 		case ev, ok := <-eventCh:
@@ -384,7 +408,12 @@ func (ma *MultimodalAgent) handleRealtimeEvent(ev llm.RealtimeEvent) {
 				NumChannels:       1,
 				SamplesPerChannel: uint32(len(ev.Data) / 2),
 			}
-			_ = ma.PublishAudio(frame)
+			if err := ma.PublishAudio(frame); err != nil && ma.session != nil {
+				ma.session.EmitError(ErrorEvent{
+					Error:  llm.NewRealtimeError("failed to publish realtime audio", err),
+					Source: ma,
+				})
+			}
 		}
 
 	case llm.RealtimeEventTypeText:
@@ -550,9 +579,18 @@ func (ma *MultimodalAgent) consumeRealtimeMessage(ctx context.Context, speech *S
 			}
 			ma.mu.Lock()
 			publish := ma.PublishAudio
+			session := ma.session
 			ma.mu.Unlock()
 			if publish != nil {
-				_ = publish(frame)
+				if err := publish(frame); err != nil {
+					if session != nil {
+						session.EmitError(ErrorEvent{
+							Error:  llm.NewRealtimeError("failed to publish realtime audio", err),
+							Source: ma,
+						})
+					}
+					return
+				}
 			}
 		}
 	}
@@ -576,13 +614,16 @@ func (ma *MultimodalAgent) consumeRealtimeMessage(ctx context.Context, speech *S
 	speech.AddChatItems(msg)
 }
 
-func (ma *MultimodalAgent) realtimeTools() []llm.Tool {
+func (ma *MultimodalAgent) realtimeTools() ([]llm.Tool, error) {
 	tools, err := sessionRegisteredTools(context.Background(), ma.session)
 	if err != nil {
-		logger.Logger.Errorw("failed to register realtime tools", err)
-		return nil
+		return nil, err
 	}
-	return tools
+	toolCtx := llm.EmptyToolContext()
+	if err := toolCtx.UpdateTools(agentToolsAsInterfaces(tools)); err != nil {
+		return nil, err
+	}
+	return tools, nil
 }
 
 func (ma *MultimodalAgent) executeRealtimeFunctionCall(functionCall *llm.FunctionCall) {
@@ -594,8 +635,16 @@ func (ma *MultimodalAgent) executeRealtimeFunctionCall(functionCall *llm.Functio
 	}
 	logger.Logger.Infow("Executing tool (multimodal)", "name", functionCall.Name)
 
+	tools, err := ma.realtimeTools()
+	if err != nil {
+		logger.Logger.Errorw("failed to register realtime tools", err)
+		if ma.session != nil {
+			ma.session.EmitError(ErrorEvent{Error: err, Source: ma})
+		}
+		return
+	}
 	var foundTool llm.Tool
-	for _, tool := range ma.realtimeTools() {
+	for _, tool := range tools {
 		if tool.Name() == functionCall.Name {
 			foundTool = tool
 			break
@@ -659,7 +708,16 @@ func (ma *MultimodalAgent) appendRealtimeToolResult(call *llm.FunctionCall, outp
 		ma.chatCtx.Append(output)
 	}
 	if ma.rtSession != nil && ma.chatCtx != nil {
-		_ = ma.rtSession.UpdateChatContext(ma.chatCtx)
+		if err := ma.rtSession.UpdateChatContext(ma.chatCtx); err != nil {
+			logger.Logger.Errorw("failed to update realtime session chat context with tool result", err)
+			if ma.session != nil {
+				ma.session.EmitError(ErrorEvent{
+					Error:  llm.NewRealtimeModelError(llm.RealtimeLabel(ma.model), err, false),
+					Source: ma.model,
+				})
+			}
+			return
+		}
 	}
 	if ma.session == nil || call == nil {
 		return
