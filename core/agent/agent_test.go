@@ -75,6 +75,15 @@ func TestAgentChatContextHandlesNilAgentContext(t *testing.T) {
 	}
 }
 
+func TestAgentLabelReturnsID(t *testing.T) {
+	agent := NewAgent("help")
+	agent.ID = "agent-support"
+
+	if got := agent.Label(); got != "agent-support" {
+		t.Fatalf("Label() = %q, want agent ID", got)
+	}
+}
+
 func TestAgentTaskWaitReturnsCompletedResult(t *testing.T) {
 	task := NewAgentTask[string]("collect name")
 	if err := task.Complete("done"); err != nil {

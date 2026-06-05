@@ -181,14 +181,15 @@ func TestNewJobContextAttachesTaggerToSessionReport(t *testing.T) {
 		"secret",
 	)
 
-	if ctx.Tagger == nil {
-		t.Fatal("Tagger = nil, want job tagger")
+	tagger := ctx.Tagger()
+	if tagger == nil {
+		t.Fatal("Tagger() = nil, want job tagger")
 	}
-	if ctx.Report == nil || ctx.Report.Tagger != ctx.Tagger {
-		t.Fatal("Report Tagger does not reference job tagger")
+	if ctx.Report == nil || ctx.Report.Tagger != tagger {
+		t.Fatal("Report Tagger does not reference JobContext Tagger()")
 	}
 
-	ctx.Tagger.Fail("caller hung up")
+	tagger.Fail("caller hung up")
 	data := ctx.Report.ToDict()
 	outcome, ok := data["outcome"].(map[string]any)
 	if !ok {
@@ -196,6 +197,34 @@ func TestNewJobContextAttachesTaggerToSessionReport(t *testing.T) {
 	}
 	if outcome["outcome"] != "fail" || outcome["reason"] != "caller hung up" {
 		t.Fatalf("outcome = %#v, want fail reason", outcome)
+	}
+}
+
+func TestJobContextWorkerIDReturnsAssignedWorkerID(t *testing.T) {
+	ctx := NewJobContext(&livekit.Job{Id: "job_worker_id"}, "", "", "")
+
+	if got := ctx.WorkerID(); got != "" {
+		t.Fatalf("WorkerID() before assignment = %q, want empty", got)
+	}
+
+	ctx.workerID = "worker-a"
+
+	if got := ctx.WorkerID(); got != "worker-a" {
+		t.Fatalf("WorkerID() = %q, want worker-a", got)
+	}
+}
+
+func TestJobContextInitRecordingStoresOptionsOnce(t *testing.T) {
+	ctx := NewJobContext(&livekit.Job{Id: "job_recording"}, "", "", "")
+
+	ctx.InitRecording(agent.RecordingOptions{Audio: true, Logs: true})
+	if got, want := ctx.Report.RecordingOptions, (agent.RecordingOptions{Audio: true, Logs: true}); got != want {
+		t.Fatalf("RecordingOptions = %#v, want %#v", got, want)
+	}
+
+	ctx.InitRecording(agent.RecordingOptions{Transcript: true})
+	if got, want := ctx.Report.RecordingOptions, (agent.RecordingOptions{Audio: true, Logs: true}); got != want {
+		t.Fatalf("RecordingOptions after second InitRecording = %#v, want first options %#v", got, want)
 	}
 }
 
@@ -245,7 +274,7 @@ func TestJobContextMakeSessionReportUsesPrimarySession(t *testing.T) {
 	if got := len(report.ChatHistory.Items); got != 1 {
 		t.Fatalf("report chat history items = %d, want 1", got)
 	}
-	if report.Tagger != ctx.Tagger {
+	if report.Tagger != ctx.Tagger() {
 		t.Fatal("report Tagger does not preserve job tagger")
 	}
 	if ctx.Report != report {

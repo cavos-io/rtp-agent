@@ -841,6 +841,7 @@ func NewApp(cfg AppConfig) (*App, error) {
 	if err != nil {
 		return nil, err
 	}
+	session.SetMCPServers(mcpServers)
 	if err := configureAppTools(cfg, sessionAgent.GetAgent(), session); err != nil {
 		closeMCPServers(mcpServers)
 		return nil, err

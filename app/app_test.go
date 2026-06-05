@@ -1826,6 +1826,9 @@ func TestDefaultConfigFromEnvAddsMCPHTTPTools(t *testing.T) {
 	if len(app.Agent.Tools) != 1 {
 		t.Fatalf("len(Agent.Tools) = %d, want 1 MCP HTTP tool", len(app.Agent.Tools))
 	}
+	if got := len(app.Session.MCPServers()); got != 1 {
+		t.Fatalf("len(Session.MCPServers()) = %d, want 1 MCP HTTP server", got)
+	}
 	if got := app.Agent.Tools[0].Name(); got != "lookup" {
 		t.Fatalf("tool name = %q, want lookup", got)
 	}

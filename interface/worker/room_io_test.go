@@ -578,6 +578,29 @@ func TestRoomIOShouldHandleParticipantMatchesLinkedParticipant(t *testing.T) {
 	}
 }
 
+func TestRoomIOLinkedParticipantReportsIdentityAndAvailability(t *testing.T) {
+	rio := &RoomIO{Options: RoomOptions{ParticipantIdentity: "caller-a"}}
+
+	identity, available := rio.LinkedParticipant()
+	if identity != "caller-a" || available {
+		t.Fatalf("LinkedParticipant() = (%q, %v), want configured unavailable participant", identity, available)
+	}
+
+	if !rio.handleParticipantConnected("caller-a", lksdk.ParticipantStandard, nil, "agent-local") {
+		t.Fatal("handleParticipantConnected(caller-a) = false, want true")
+	}
+	identity, available = rio.LinkedParticipant()
+	if identity != "caller-a" || !available {
+		t.Fatalf("LinkedParticipant() after connect = (%q, %v), want available caller-a", identity, available)
+	}
+
+	rio.handleParticipantDisconnected("caller-a", livekit.DisconnectReason_DUPLICATE_IDENTITY)
+	identity, available = rio.LinkedParticipant()
+	if identity != "caller-a" || available {
+		t.Fatalf("LinkedParticipant() after disconnect = (%q, %v), want unavailable caller-a", identity, available)
+	}
+}
+
 func TestRoomIOShouldHandleParticipantAllowsAnyWhenUnset(t *testing.T) {
 	rio := &RoomIO{}
 

@@ -138,6 +138,41 @@ func TestAgentActivityScheduleSpeechRejectsNonForcedSpeechWhilePaused(t *testing
 	}
 }
 
+func TestAgentActivitySchedulingPausedReportsState(t *testing.T) {
+	agent := NewAgent("test")
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	activity := NewAgentActivity(agent, session)
+
+	if activity.SchedulingPaused() {
+		t.Fatal("SchedulingPaused() = true, want false")
+	}
+	activity.schedulingPaused = true
+	if !activity.SchedulingPaused() {
+		t.Fatal("SchedulingPaused() = false after pause, want true")
+	}
+}
+
+func TestAgentActivityAllowInterruptionsUsesAgentOverride(t *testing.T) {
+	agent := NewAgent("test")
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	activity := NewAgentActivity(agent, session)
+
+	if !activity.AllowInterruptions() {
+		t.Fatal("AllowInterruptions() = false, want session default true")
+	}
+
+	agent.AllowInterruptions = false
+	agent.AllowInterruptionsSet = true
+	if activity.AllowInterruptions() {
+		t.Fatal("AllowInterruptions() = true, want explicit agent override false")
+	}
+
+	agent.AllowInterruptions = true
+	if !activity.AllowInterruptions() {
+		t.Fatal("AllowInterruptions() = false, want explicit agent override true")
+	}
+}
+
 func TestAgentActivityScheduleSpeechAllowsForcedSpeechWhilePaused(t *testing.T) {
 	agent := NewAgent("test")
 	session := NewAgentSession(agent, nil, AgentSessionOptions{})

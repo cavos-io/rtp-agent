@@ -295,6 +295,10 @@ func NewChatContext() *ChatContext {
 	}
 }
 
+func EmptyChatContext() *ChatContext {
+	return NewChatContext()
+}
+
 func (c *ChatContext) Append(item ChatItem) {
 	c.ensureMutable()
 	c.Items = append(c.Items, item)

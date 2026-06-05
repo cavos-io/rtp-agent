@@ -68,51 +68,73 @@ func (c *ToolContext) GetFunctionTool(name string) Tool {
 	return nil
 }
 
+func (c *ToolContext) AddTool(tool interface{}) error {
+	return c.addToolValue(tool, true)
+}
+
+func (c *ToolContext) addToolValue(tool interface{}, topLevel bool) error {
+	if t, ok := tool.(ProviderTool); ok {
+		c.providerTools = append(c.providerTools, t)
+		sort.Slice(c.providerTools, func(i, j int) bool {
+			return c.providerTools[i].ID() < c.providerTools[j].ID()
+		})
+		if topLevel {
+			c.tools = append(c.tools, tool)
+		}
+		return nil
+	}
+
+	if t, ok := tool.(Toolset); ok {
+		for _, childTool := range t.Tools() {
+			if err := c.addToolValue(childTool, false); err != nil {
+				return err
+			}
+		}
+		c.toolsets = append(c.toolsets, t)
+		if topLevel {
+			c.tools = append(c.tools, tool)
+		}
+		return nil
+	}
+	if t, ok := tool.(Tool); ok {
+		if err := c.addTool(t); err != nil {
+			return err
+		}
+		if topLevel {
+			c.tools = append(c.tools, tool)
+		}
+		return nil
+	}
+
+	return fmt.Errorf("unknown tool type: %v", reflect.TypeOf(tool))
+}
+
 func (c *ToolContext) UpdateTools(tools []interface{}) error {
-	c.tools = tools
+	c.tools = make([]interface{}, 0, len(tools))
 	c.functionTools = make(map[string]Tool)
 	c.providerTools = make([]ProviderTool, 0)
 	c.toolsets = make([]Toolset, 0)
 
-	var addTool func(tool interface{}) error
-	addTool = func(tool interface{}) error {
-		if t, ok := tool.(ProviderTool); ok {
-			c.providerTools = append(c.providerTools, t)
-			return nil
-		}
-
-		if t, ok := tool.(Toolset); ok {
-			for _, childTool := range t.Tools() {
-				if err := addTool(childTool); err != nil {
-					return err
-				}
-			}
-			c.toolsets = append(c.toolsets, t)
-			return nil
-		}
-		if t, ok := tool.(Tool); ok {
-			name := t.Name()
-			if existing, exists := c.functionTools[name]; exists {
-				if sameTool(existing, t) {
-					return nil
-				}
-				return fmt.Errorf("duplicate function name: %s", name)
-			}
-			c.functionTools[name] = t
-			return nil
-		}
-
-		return fmt.Errorf("unknown tool type: %v", reflect.TypeOf(tool))
-	}
-
 	for _, t := range tools {
-		if err := addTool(t); err != nil {
+		if err := c.AddTool(t); err != nil {
 			return err
 		}
 	}
 	sort.Slice(c.providerTools, func(i, j int) bool {
 		return c.providerTools[i].ID() < c.providerTools[j].ID()
 	})
+	return nil
+}
+
+func (c *ToolContext) addTool(tool Tool) error {
+	name := tool.Name()
+	if existing, exists := c.functionTools[name]; exists {
+		if sameTool(existing, tool) {
+			return nil
+		}
+		return fmt.Errorf("duplicate function name: %s", name)
+	}
+	c.functionTools[name] = tool
 	return nil
 }
 

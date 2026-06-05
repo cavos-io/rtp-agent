@@ -81,6 +81,27 @@ func TestRecorderIOPopulateSessionReportSetsRecordingMetadata(t *testing.T) {
 	}
 }
 
+func TestRecorderIOLifecycleAccessorsReturnRecordingStateAndOutputPath(t *testing.T) {
+	recorder := NewRecorderIO(&agent.AgentSession{})
+
+	if recorder.Recording() {
+		t.Fatal("Recording() before start = true, want false")
+	}
+	if got := recorder.OutputPath(); got != "" {
+		t.Fatalf("OutputPath() before start = %q, want empty", got)
+	}
+
+	recorder.started = true
+	recorder.outPath = ".tmp/session.ogg"
+
+	if !recorder.Recording() {
+		t.Fatal("Recording() = false, want true")
+	}
+	if got := recorder.OutputPath(); got != ".tmp/session.ogg" {
+		t.Fatalf("OutputPath() = %q, want .tmp/session.ogg", got)
+	}
+}
+
 func TestRecorderIOStopMarksRecorderStopped(t *testing.T) {
 	recorder := NewRecorderIO(&agent.AgentSession{})
 	recorder.started = true

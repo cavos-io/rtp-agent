@@ -33,6 +33,27 @@ func assertPanics(t *testing.T, name string, fn func()) {
 	fn()
 }
 
+func TestEmptyChatContextReturnsMutableEmptyContext(t *testing.T) {
+	ctx := EmptyChatContext()
+	if ctx == nil {
+		t.Fatal("EmptyChatContext() = nil, want context")
+	}
+	if ctx.Readonly() {
+		t.Fatal("EmptyChatContext().Readonly() = true, want false")
+	}
+	if ctx.Items == nil {
+		t.Fatal("EmptyChatContext().Items = nil, want empty slice")
+	}
+	if len(ctx.Items) != 0 {
+		t.Fatalf("len(EmptyChatContext().Items) = %d, want 0", len(ctx.Items))
+	}
+
+	ctx.Append(&ChatMessage{ID: "user", Role: ChatRoleUser})
+	if got := len(ctx.Items); got != 1 {
+		t.Fatalf("len(EmptyChatContext().Items) after Append = %d, want 1", got)
+	}
+}
+
 func TestChatContextCopyFiltersReferenceItemTypes(t *testing.T) {
 	ctx := NewChatContext()
 	ctx.Items = []ChatItem{
@@ -78,6 +99,19 @@ func TestChatContextCopyFiltersFunctionItemsByTools(t *testing.T) {
 
 	if got, want := itemIDs(copied.Items), "lookup-call,lookup-output,weather-call,weather-output,calendar-call,calendar-output"; got != want {
 		t.Fatalf("Copy() item IDs = %q, want %q", got, want)
+	}
+}
+
+func TestChatContextGetToolNamesIncludesStringsToolsAndToolsets(t *testing.T) {
+	lookup := &testTool{id: "lookup", name: "lookup"}
+	weather := &testTool{id: "weather", name: "weather"}
+	toolset := &testToolset{id: "tools", tools: []Tool{weather}}
+	ctx := NewChatContext()
+
+	names := ctx.GetToolNames([]interface{}{"calendar", lookup, toolset, 123})
+
+	if got, want := strings.Join(names, ","), "calendar,lookup,weather"; got != want {
+		t.Fatalf("GetToolNames() = %q, want %q", got, want)
 	}
 }
 
@@ -1306,6 +1340,33 @@ func TestChatContextFromDictRestoresContext(t *testing.T) {
 	}
 	if call, ok := ctx.Items[1].(*FunctionCall); !ok || call.CallID != "call_lookup" {
 		t.Fatalf("item[1] = %#v, want function call", ctx.Items[1])
+	}
+}
+
+func TestChatContextFromDictMethodReplacesReceiverItems(t *testing.T) {
+	data := map[string]any{
+		"items": []map[string]any{
+			{
+				"id":      "replacement",
+				"type":    "message",
+				"role":    "assistant",
+				"content": []any{"ready"},
+			},
+		},
+	}
+	ctx := NewChatContext()
+	ctx.Append(&ChatMessage{ID: "old", Role: ChatRoleUser, Content: []ChatContent{{Text: "old"}}})
+
+	if err := ctx.FromDict(data); err != nil {
+		t.Fatalf("FromDict() error = %v", err)
+	}
+
+	if len(ctx.Items) != 1 {
+		t.Fatalf("len(items) = %d, want 1", len(ctx.Items))
+	}
+	msg, ok := ctx.Items[0].(*ChatMessage)
+	if !ok || msg.ID != "replacement" || msg.TextContent() != "ready" {
+		t.Fatalf("item[0] = %#v, want replacement assistant message", ctx.Items[0])
 	}
 }
 

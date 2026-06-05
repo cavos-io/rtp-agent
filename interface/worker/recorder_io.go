@@ -46,6 +46,18 @@ func NewRecorderIO(session *agent.AgentSession) *RecorderIO {
 	}
 }
 
+func (r *RecorderIO) Recording() bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.started
+}
+
+func (r *RecorderIO) OutputPath() string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.outPath
+}
+
 func (r *RecorderIO) RecordingStartedAt() *time.Time {
 	r.mu.Lock()
 	defer r.mu.Unlock()

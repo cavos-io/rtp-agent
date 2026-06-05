@@ -72,8 +72,11 @@ func (c *ChatContext) Copy(options ...ChatContextCopyOptions) *ChatContext {
 		opts = options[0]
 	}
 
-	newCtx := NewChatContext()
-	validTools := chatContextCopyToolNames(opts.Tools)
+	newCtx := EmptyChatContext()
+	validTools := make(map[string]struct{})
+	for _, name := range c.GetToolNames(opts.Tools) {
+		validTools[name] = struct{}{}
+	}
 	filterByTools := opts.Tools != nil
 	for _, item := range c.Items {
 		if opts.ExcludeFunctionCall && isFunctionChatItem(item) {
@@ -192,17 +195,17 @@ func (c *ChatContext) UpsertItem(item ChatItem, options ...ChatContextUpsertOpti
 	return nil
 }
 
-func chatContextCopyToolNames(tools []interface{}) map[string]struct{} {
-	names := make(map[string]struct{})
+func (c *ChatContext) GetToolNames(tools []interface{}) []string {
+	names := make([]string, 0, len(tools))
 	for _, tool := range tools {
 		switch t := tool.(type) {
 		case string:
-			names[t] = struct{}{}
+			names = append(names, t)
 		case Tool:
-			names[t.Name()] = struct{}{}
+			names = append(names, t.Name())
 		case Toolset:
 			for _, childTool := range t.Tools() {
-				names[childTool.Name()] = struct{}{}
+				names = append(names, childTool.Name())
 			}
 		}
 	}
@@ -586,15 +589,22 @@ func (c *ChatContext) MarshalJSON() ([]byte, error) {
 }
 
 func ChatContextFromDict(data map[string]any) (*ChatContext, error) {
+	ctx := NewChatContext()
+	if err := ctx.FromDict(data); err != nil {
+		return nil, err
+	}
+	return ctx, nil
+}
+
+func (c *ChatContext) FromDict(data map[string]any) error {
 	encoded, err := json.Marshal(data)
 	if err != nil {
-		return nil, err
+		return err
 	}
-	var ctx ChatContext
-	if err := json.Unmarshal(encoded, &ctx); err != nil {
-		return nil, err
+	if err := json.Unmarshal(encoded, c); err != nil {
+		return err
 	}
-	return &ctx, nil
+	return nil
 }
 
 func (c *ChatContext) UnmarshalJSON(data []byte) error {

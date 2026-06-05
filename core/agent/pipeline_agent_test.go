@@ -844,6 +844,10 @@ func TestPipelineAgentReturnsToThinkingWhileExecutingTools(t *testing.T) {
 	agent.session = session
 	agent.ctx = context.Background()
 
+	if got := currentAgentState(session); got != AgentStateInitializing {
+		t.Fatalf("initial AgentState = %q, want %q", got, AgentStateInitializing)
+	}
+
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
@@ -1476,9 +1480,7 @@ func (b *blockingPipelineTool) Execute(ctx context.Context, _ string) (string, e
 }
 
 func currentAgentState(session *AgentSession) AgentState {
-	session.mu.Lock()
-	defer session.mu.Unlock()
-	return session.AgentState
+	return session.AgentState()
 }
 
 func generationToolNames(tools []llm.Tool) []string {

@@ -173,8 +173,8 @@ type AgentSession struct {
 	MetricsCollector    *telemetry.UsageCollector
 	ModelUsageCollector *telemetry.ModelUsageCollector
 
-	UserState  UserState
-	AgentState AgentState
+	userState  UserState
+	agentState AgentState
 
 	mu             sync.Mutex
 	activity       *AgentActivity
@@ -186,6 +186,7 @@ type AgentSession struct {
 	userdataSet    bool
 	jobContext     any
 	jobContextSet  bool
+	mcpServers     []llm.MCPServer
 	recordedEvents []Event
 	ivrActivity    *IVRActivity
 	videoSampler   *VoiceActivityVideoSampler
@@ -305,16 +306,42 @@ func (s *AgentSession) SessionOptions() AgentSessionOptions {
 	return s.Options
 }
 
-func (s *AgentSession) UserStateValue() UserState {
+func (s *AgentSession) TurnDetection() TurnDetectionMode {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.UserState
+	return s.Options.TurnDetection
+}
+
+func (s *AgentSession) UserStateValue() UserState {
+	return s.UserState()
 }
 
 func (s *AgentSession) AgentStateValue() AgentState {
+	return s.AgentState()
+}
+
+func (s *AgentSession) UserState() UserState {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.AgentState
+	return s.userState
+}
+
+func (s *AgentSession) AgentState() AgentState {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.agentState
+}
+
+func (s *AgentSession) SetMCPServers(servers []llm.MCPServer) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.mcpServers = append([]llm.MCPServer(nil), servers...)
+}
+
+func (s *AgentSession) MCPServers() []llm.MCPServer {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]llm.MCPServer(nil), s.mcpServers...)
 }
 
 func (s *AgentSession) RecordedEvents() []Event {
@@ -424,8 +451,8 @@ func NewAgentSession(agent AgentInterface, room *lksdk.Room, opts AgentSessionOp
 		Tools:               make([]llm.Tool, 0),
 		MetricsCollector:    telemetry.NewUsageCollector(),
 		ModelUsageCollector: telemetry.NewModelUsageCollector(),
-		UserState:           UserStateListening,
-		AgentState:          AgentStateInitializing,
+		userState:           UserStateListening,
+		agentState:          AgentStateInitializing,
 		AgentStateChangedCh: make(chan AgentStateChangedEvent, 10),
 		UserStateChangedCh:  make(chan UserStateChangedEvent, 10),
 		userInputCh:         make(chan UserInputTranscribedEvent, 10),
@@ -565,7 +592,7 @@ func (s *AgentSession) EmitUserInputTranscribed(ev UserInputTranscribedEvent) {
 	}
 	s.recordEvent(&ev)
 	s.mu.Lock()
-	userState := s.UserState
+	userState := s.userState
 	s.mu.Unlock()
 	if ev.IsFinal && userState == UserStateAway {
 		s.UpdateUserState(UserStateListening)
@@ -1124,8 +1151,8 @@ func (s *AgentSession) reportUsageLoop(ctx context.Context) {
 
 func (s *AgentSession) UpdateAgentState(state AgentState) {
 	s.mu.Lock()
-	oldState := s.AgentState
-	s.AgentState = state
+	oldState := s.agentState
+	s.agentState = state
 	backgroundAudio := s.Options.BackgroundAudio
 	endpointing := s.Options.Endpointing
 	if oldState != state && endpointing != nil {
@@ -1163,8 +1190,8 @@ func (s *AgentSession) UpdateAgentState(state AgentState) {
 
 func (s *AgentSession) UpdateUserState(state UserState) {
 	s.mu.Lock()
-	oldState := s.UserState
-	s.UserState = state
+	oldState := s.userState
+	s.userState = state
 	videoSampler := s.videoSampler
 	s.mu.Unlock()
 
@@ -1199,8 +1226,8 @@ func (s *AgentSession) updateUserAwayTimer() {
 		s.userAwayTimer = nil
 	}
 	shouldStart := s.Options.UserAwayTimeout > 0 &&
-		s.AgentState == AgentStateListening &&
-		s.UserState == UserStateListening
+		s.agentState == AgentStateListening &&
+		s.userState == UserStateListening
 	timeout := s.Options.UserAwayTimeout
 	s.mu.Unlock()
 
@@ -1213,7 +1240,7 @@ func (s *AgentSession) updateUserAwayTimer() {
 	})
 
 	s.mu.Lock()
-	if s.AgentState == AgentStateListening && s.UserState == UserStateListening && s.userAwayTimer == nil {
+	if s.agentState == AgentStateListening && s.userState == UserStateListening && s.userAwayTimer == nil {
 		s.userAwayTimer = timer
 		s.mu.Unlock()
 		return
@@ -1609,8 +1636,8 @@ func (s *AgentSession) stop(ctx context.Context, commitPendingUserTurn bool) err
 	s.ivrActivity = nil
 	s.started = false
 	s.runCtx = nil
-	s.UserState = UserStateListening
-	s.AgentState = AgentStateInitializing
+	s.userState = UserStateListening
+	s.agentState = AgentStateInitializing
 	if s.userAwayTimer != nil {
 		s.userAwayTimer.Stop()
 		s.userAwayTimer = nil

@@ -64,21 +64,61 @@ func TestAgentSessionOptionsReturnsSnapshot(t *testing.T) {
 func TestAgentSessionStateValueAccessorsReturnCurrentStates(t *testing.T) {
 	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
 
-	if got, want := session.UserStateValue(), UserStateListening; got != want {
-		t.Fatalf("UserStateValue() = %q, want %q", got, want)
+	if got, want := session.UserState(), UserStateListening; got != want {
+		t.Fatalf("UserState() = %q, want %q", got, want)
 	}
-	if got, want := session.AgentStateValue(), AgentStateInitializing; got != want {
-		t.Fatalf("AgentStateValue() = %q, want %q", got, want)
+	if got, want := session.AgentState(), AgentStateInitializing; got != want {
+		t.Fatalf("AgentState() = %q, want %q", got, want)
 	}
 
 	session.UpdateUserState(UserStateSpeaking)
 	session.UpdateAgentState(AgentStateThinking)
 
+	if got, want := session.UserState(), UserStateSpeaking; got != want {
+		t.Fatalf("UserState() after update = %q, want %q", got, want)
+	}
+	if got, want := session.AgentState(), AgentStateThinking; got != want {
+		t.Fatalf("AgentState() after update = %q, want %q", got, want)
+	}
 	if got, want := session.UserStateValue(), UserStateSpeaking; got != want {
-		t.Fatalf("UserStateValue() after update = %q, want %q", got, want)
+		t.Fatalf("UserStateValue() compatibility alias = %q, want %q", got, want)
 	}
 	if got, want := session.AgentStateValue(), AgentStateThinking; got != want {
-		t.Fatalf("AgentStateValue() after update = %q, want %q", got, want)
+		t.Fatalf("AgentStateValue() compatibility alias = %q, want %q", got, want)
+	}
+}
+
+func TestAgentSessionTurnDetectionReturnsUpdatedOption(t *testing.T) {
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{
+		TurnDetection: TurnDetectionModeManual,
+	})
+
+	if got := session.TurnDetection(); got != TurnDetectionModeManual {
+		t.Fatalf("TurnDetection() = %q, want %q", got, TurnDetectionModeManual)
+	}
+
+	mode := TurnDetectionModeSTT
+	if err := session.UpdateOptions(AgentSessionUpdateOptions{TurnDetection: &mode}); err != nil {
+		t.Fatalf("UpdateOptions() error = %v", err)
+	}
+	if got := session.TurnDetection(); got != TurnDetectionModeSTT {
+		t.Fatalf("TurnDetection() after UpdateOptions = %q, want %q", got, TurnDetectionModeSTT)
+	}
+}
+
+func TestAgentSessionMCPServersReturnsSnapshot(t *testing.T) {
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	servers := []llm.MCPServer{&fakeSessionMCPServer{id: "lookup"}}
+
+	session.SetMCPServers(servers)
+	got := session.MCPServers()
+	if len(got) != 1 || got[0] != servers[0] {
+		t.Fatalf("MCPServers() = %#v, want configured server", got)
+	}
+
+	got[0] = &fakeSessionMCPServer{id: "mutated"}
+	if session.MCPServers()[0] != servers[0] {
+		t.Fatal("mutating MCPServers() result changed session server list")
 	}
 }
 
@@ -448,8 +488,8 @@ func TestNewAgentSessionInitializesUserStateListening(t *testing.T) {
 	agent := NewAgent("test")
 	session := NewAgentSession(agent, nil, AgentSessionOptions{})
 
-	if session.UserState != UserStateListening {
-		t.Fatalf("UserState = %q, want %q", session.UserState, UserStateListening)
+	if got := session.UserState(); got != UserStateListening {
+		t.Fatalf("UserState() = %q, want %q", got, UserStateListening)
 	}
 }
 
@@ -457,8 +497,8 @@ func TestNewAgentSessionInitializesAgentStateInitializing(t *testing.T) {
 	agent := NewAgent("test")
 	session := NewAgentSession(agent, nil, AgentSessionOptions{})
 
-	if session.AgentState != AgentStateInitializing {
-		t.Fatalf("AgentState = %q, want %q", session.AgentState, AgentStateInitializing)
+	if got := session.AgentState(); got != AgentStateInitializing {
+		t.Fatalf("AgentState() = %q, want %q", got, AgentStateInitializing)
 	}
 }
 
@@ -1571,18 +1611,18 @@ func TestAgentSessionStopResetsSessionStates(t *testing.T) {
 	session := NewAgentSession(agent, nil, AgentSessionOptions{})
 	session.activity = NewAgentActivity(agent, session)
 	session.started = true
-	session.UserState = UserStateSpeaking
-	session.AgentState = AgentStateThinking
+	session.UpdateUserState(UserStateSpeaking)
+	session.UpdateAgentState(AgentStateThinking)
 
 	if err := session.Stop(context.Background()); err != nil {
 		t.Fatalf("Stop error = %v, want nil", err)
 	}
 
-	if session.UserState != UserStateListening {
-		t.Fatalf("UserState after Stop = %q, want %q", session.UserState, UserStateListening)
+	if got := session.UserState(); got != UserStateListening {
+		t.Fatalf("UserState() after Stop = %q, want %q", got, UserStateListening)
 	}
-	if session.AgentState != AgentStateInitializing {
-		t.Fatalf("AgentState after Stop = %q, want %q", session.AgentState, AgentStateInitializing)
+	if got := session.AgentState(); got != AgentStateInitializing {
+		t.Fatalf("AgentState() after Stop = %q, want %q", got, AgentStateInitializing)
 	}
 }
 
@@ -2294,8 +2334,8 @@ func TestAgentSessionMarksUserAwayAfterIdleTimeout(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("UserStateChangedCh did not receive away event")
 	}
-	if session.UserState != UserStateAway {
-		t.Fatalf("UserState = %q, want away", session.UserState)
+	if got := session.UserState(); got != UserStateAway {
+		t.Fatalf("UserState() = %q, want away", got)
 	}
 }
 
@@ -2319,8 +2359,8 @@ func TestAgentSessionCancelsUserAwayTimerWhenUserSpeaks(t *testing.T) {
 		t.Fatalf("unexpected user state event after speaking = %q -> %q", ev.OldState, ev.NewState)
 	case <-time.After(60 * time.Millisecond):
 	}
-	if session.UserState != UserStateSpeaking {
-		t.Fatalf("UserState = %q, want speaking", session.UserState)
+	if got := session.UserState(); got != UserStateSpeaking {
+		t.Fatalf("UserState() = %q, want speaking", got)
 	}
 }
 
@@ -2483,3 +2523,13 @@ func (f *fakeAvatarProvider) UpdateState(state AvatarState) error {
 	f.state = state
 	return nil
 }
+
+type fakeSessionMCPServer struct {
+	id string
+}
+
+func (f *fakeSessionMCPServer) Initialize(context.Context) error { return nil }
+
+func (f *fakeSessionMCPServer) ListTools(context.Context) ([]llm.Tool, error) { return nil, nil }
+
+func (f *fakeSessionMCPServer) Close() error { return nil }

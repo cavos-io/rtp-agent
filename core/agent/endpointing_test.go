@@ -80,6 +80,10 @@ func TestAgentActivityUsesConfiguredEndpointingPolicy(t *testing.T) {
 	session := NewAgentSession(agent, nil, AgentSessionOptions{Endpointing: endpointing})
 	activity := NewAgentActivity(agent, session)
 
+	opts := activity.EndpointingOpts()
+	if opts.Mode != "" || opts.MinDelay != 0.2 || opts.MaxDelay != 0.8 {
+		t.Fatalf("EndpointingOpts() = %#v, want session endpointing policy", opts)
+	}
 	if got := activity.minEndpointingDelay(); got != 0.2 {
 		t.Fatalf("minEndpointingDelay() = %v, want endpointing min delay", got)
 	}
@@ -89,6 +93,10 @@ func TestAgentActivityUsesConfiguredEndpointingPolicy(t *testing.T) {
 
 	agent.MinEndpointingDelay = 0.1
 	agent.MaxEndpointingDelay = 0.4
+	opts = activity.EndpointingOpts()
+	if opts.Mode != "" || opts.MinDelay != 0.1 || opts.MaxDelay != 0.4 {
+		t.Fatalf("agent EndpointingOpts() = %#v, want agent endpointing overrides", opts)
+	}
 	if got := activity.minEndpointingDelay(); got != 0.1 {
 		t.Fatalf("agent minEndpointingDelay override = %v, want 0.1", got)
 	}
