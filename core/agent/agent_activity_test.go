@@ -188,6 +188,21 @@ func TestAgentActivityToolsCombinesSessionAndAgentTools(t *testing.T) {
 	}
 }
 
+func TestAgentActivityMinConsecutiveSpeechDelayUsesAgentOverride(t *testing.T) {
+	agent := NewAgent("test")
+	session := NewAgentSession(agent, nil, AgentSessionOptions{MinConsecutiveSpeechDelay: 0.25})
+	activity := NewAgentActivity(agent, session)
+
+	if got := activity.MinConsecutiveSpeechDelay(); got != 250*time.Millisecond {
+		t.Fatalf("MinConsecutiveSpeechDelay() = %v, want 250ms session default", got)
+	}
+
+	agent.MinConsecutiveSpeechDelay = 0.75
+	if got := activity.MinConsecutiveSpeechDelay(); got != 750*time.Millisecond {
+		t.Fatalf("MinConsecutiveSpeechDelay() = %v, want 750ms agent override", got)
+	}
+}
+
 func TestAgentActivityAllowInterruptionsUsesAgentOverride(t *testing.T) {
 	agent := NewAgent("test")
 	session := NewAgentSession(agent, nil, AgentSessionOptions{})

@@ -676,7 +676,7 @@ func (a *AgentActivity) processQueue() {
 	}
 
 	a.currentSpeech = speech
-	delay := a.minConsecutiveSpeechDelay()
+	delay := a.MinConsecutiveSpeechDelay()
 	if delay > 0 && !a.lastSpeechDone.IsZero() {
 		delay -= time.Since(a.lastSpeechDone)
 	}
@@ -721,7 +721,7 @@ func (a *AgentActivity) processQueue() {
 	}()
 }
 
-func (a *AgentActivity) minConsecutiveSpeechDelay() time.Duration {
+func (a *AgentActivity) MinConsecutiveSpeechDelay() time.Duration {
 	if a.Agent != nil && a.Agent.MinConsecutiveSpeechDelay > 0 {
 		return time.Duration(a.Agent.MinConsecutiveSpeechDelay * float64(time.Second))
 	}
