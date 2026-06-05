@@ -175,8 +175,10 @@ type RoomIO struct {
 	userStateCancel          context.CancelFunc
 	clientEvents             roomIOClientEvents
 
-	agentTranscriptionCancel   context.CancelFunc
-	transcriptionTextPublisher func(string, lksdk.StreamTextOptions)
+	agentTranscriptionCancel         context.CancelFunc
+	transcriptionTextPublisher       func(string, lksdk.StreamTextOptions)
+	transcriptionPacketPublisher     func(*livekit.Transcription) error
+	transcriptionParticipantIdentity func() string
 
 	sessionCloseCancel context.CancelFunc
 	deletingRoom       bool
@@ -208,6 +210,8 @@ func NewRoomIO(room *lksdk.Room, session *agent.AgentSession, opts RoomOptions) 
 	rio.agentStatePublishEnabled = rio.roomConnected
 	rio.clientEvents = agent.NewClientEventsDispatcher(room)
 	rio.transcriptionTextPublisher = rio.publishTranscriptionText
+	rio.transcriptionPacketPublisher = rio.publishTranscriptionPacket
+	rio.transcriptionParticipantIdentity = rio.localParticipantIdentity
 	rio.roomName = rio.liveKitRoomName
 	rio.startAgentStateListener()
 	rio.startUserStateListener()
@@ -361,20 +365,53 @@ func (rio *RoomIO) handleUserStateChanged(ev agent.UserStateChangedEvent) {
 }
 
 func (rio *RoomIO) handleAgentOutputTranscribed(ev agent.AgentOutputTranscribedEvent) {
-	if rio == nil || rio.transcriptionTextPublisher == nil || ev.Transcript == "" {
+	if rio == nil || ev.Transcript == "" {
 		return
 	}
+	segmentID := roomIOTranscriptionSegmentID()
 	attributes := map[string]string{
 		RoomIOTranscriptionFinalAttribute:     strconv.FormatBool(ev.IsFinal),
-		RoomIOTranscriptionSegmentIDAttribute: roomIOTranscriptionSegmentID(),
+		RoomIOTranscriptionSegmentIDAttribute: segmentID,
 	}
 	if trackID := rio.transcriptionTrackID(); trackID != "" {
 		attributes[RoomIOTranscriptionTrackIDAttribute] = trackID
+	}
+	rio.publishLegacyAgentTranscription(ev, segmentID)
+	if rio.transcriptionTextPublisher == nil {
+		return
 	}
 	rio.transcriptionTextPublisher(ev.Transcript, lksdk.StreamTextOptions{
 		Topic:      RoomIOTranscriptionTopic,
 		Attributes: attributes,
 	})
+}
+
+func (rio *RoomIO) publishLegacyAgentTranscription(ev agent.AgentOutputTranscribedEvent, segmentID string) {
+	if rio == nil || rio.transcriptionPacketPublisher == nil {
+		return
+	}
+	trackID := rio.transcriptionTrackID()
+	participantIdentity := ""
+	if rio.transcriptionParticipantIdentity != nil {
+		participantIdentity = rio.transcriptionParticipantIdentity()
+	}
+	if trackID == "" || participantIdentity == "" {
+		return
+	}
+	if err := rio.transcriptionPacketPublisher(&livekit.Transcription{
+		TranscribedParticipantIdentity: participantIdentity,
+		TrackId:                        trackID,
+		Segments: []*livekit.TranscriptionSegment{
+			{
+				Id:       segmentID,
+				Text:     ev.Transcript,
+				Final:    ev.IsFinal,
+				Language: ev.Language,
+			},
+		},
+	}); err != nil {
+		logger.Logger.Warnw("failed to publish agent transcription packet", err)
+	}
 }
 
 func (rio *RoomIO) transcriptionTrackID() string {
@@ -406,6 +443,23 @@ func (rio *RoomIO) publishTranscriptionText(text string, opts lksdk.StreamTextOp
 		return
 	}
 	rio.Room.LocalParticipant.SendText(text, opts)
+}
+
+func (rio *RoomIO) publishTranscriptionPacket(transcription *livekit.Transcription) error {
+	if rio == nil || rio.Room == nil || rio.Room.LocalParticipant == nil || transcription == nil {
+		return nil
+	}
+	return rio.Room.LocalParticipant.PublishDataPacket(roomIOTranscriptionPacket{transcription: transcription})
+}
+
+type roomIOTranscriptionPacket struct {
+	transcription *livekit.Transcription
+}
+
+func (p roomIOTranscriptionPacket) ToProto() *livekit.DataPacket {
+	return &livekit.DataPacket{
+		Value: &livekit.DataPacket_Transcription{Transcription: p.transcription},
+	}
 }
 
 func (rio *RoomIO) handleAgentSessionClose(ev agent.CloseEvent) {
