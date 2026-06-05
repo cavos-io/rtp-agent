@@ -1140,6 +1140,39 @@ func TestAgentActivityOnInterimTranscriptDoesNotInterruptManualTurn(t *testing.T
 	}
 }
 
+func TestAgentActivityOnFinalTranscriptInterruptsCurrentSpeechForVADTurnDetection(t *testing.T) {
+	agent := NewAgent("test")
+	agent.VAD = &fakePipelineVAD{}
+	session := NewAgentSession(agent, nil, AgentSessionOptions{TurnDetection: TurnDetectionModeVAD})
+	activity := NewAgentActivity(agent, session)
+	current := NewSpeechHandle(true, DefaultInputDetails())
+	activity.currentSpeech = current
+
+	activity.OnFinalTranscript(&stt.SpeechEvent{
+		Alternatives: []stt.SpeechData{{Text: "final fallback"}},
+	})
+
+	waitForInterrupted(t, current)
+	current.MarkDone()
+}
+
+func TestAgentActivityOnFinalTranscriptDoesNotInterruptManualTurnDetection(t *testing.T) {
+	agent := NewAgent("test")
+	session := NewAgentSession(agent, nil, AgentSessionOptions{TurnDetection: TurnDetectionModeManual})
+	activity := NewAgentActivity(agent, session)
+	current := NewSpeechHandle(true, DefaultInputDetails())
+	activity.currentSpeech = current
+
+	activity.OnFinalTranscript(&stt.SpeechEvent{
+		Alternatives: []stt.SpeechData{{Text: "manual final"}},
+	})
+
+	if current.IsInterrupted() {
+		t.Fatal("current speech was interrupted for manual turn detection")
+	}
+	current.MarkDone()
+}
+
 func TestAgentActivityClearUserTurnDropsPendingManualTranscript(t *testing.T) {
 	agent := &turnCompletedAgent{Agent: NewAgent("test"), turns: make(chan *llm.ChatMessage, 1)}
 	agent.TurnDetection = TurnDetectionModeManual

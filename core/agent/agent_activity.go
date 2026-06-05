@@ -1091,7 +1091,15 @@ func (a *AgentActivity) OnFinalTranscript(ev *stt.SpeechEvent) {
 	a.userTurnMu.Unlock()
 	a.notifyUserTurnUpdated()
 
-	if a.turnDetectionMode() == TurnDetectionModeSTT {
+	turnDetection := a.turnDetectionMode()
+	if turnDetection != "" && turnDetection != TurnDetectionModeManual && turnDetection != TurnDetectionModeRealtimeLLM {
+		go func() {
+			if err := a.Interrupt(false); err != nil {
+				logger.Logger.Warnw("failed to interrupt speech for final transcript", err, "transcript", transcript)
+			}
+		}()
+	}
+	if turnDetection == TurnDetectionModeSTT {
 		a.runEOUDetection(EndOfTurnInfo{
 			NewTranscript:        transcript,
 			TranscriptConfidence: confidence,
