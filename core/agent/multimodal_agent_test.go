@@ -454,6 +454,37 @@ func TestMultimodalAgentGenerateReplySendsRealtimeOverrides(t *testing.T) {
 	}
 }
 
+func TestMultimodalAgentGenerateReplyAppliesInstructionInputModality(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	rtSession := &fakeRealtimeSession{generateCh: make(chan llm.RealtimeGenerateReplyOptions, 1)}
+	ma := NewMultimodalAgent(&fakeRealtimeModel{session: rtSession}, llm.NewChatContext())
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	session.Assistant = ma
+
+	if err := session.Start(ctx); err != nil {
+		t.Fatalf("Start returned error: %v", err)
+	}
+	_, err := session.GenerateReplyWithOptions(ctx, GenerateReplyOptions{
+		UserInput:           "hello",
+		InstructionVariants: llm.NewInstructions("speak plainly", "write tersely"),
+		InputModality:       "audio",
+	})
+	if err != nil {
+		t.Fatalf("GenerateReplyWithOptions returned error: %v", err)
+	}
+
+	select {
+	case opts := <-rtSession.generateCh:
+		if opts.Instructions != "speak plainly" {
+			t.Fatalf("Instructions = %q, want audio-specific instructions", opts.Instructions)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("realtime session did not receive GenerateReply")
+	}
+}
+
 func TestMultimodalAgentGenerateReplyIgnoresFalseAllowInterruptionsWithTurnDetection(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

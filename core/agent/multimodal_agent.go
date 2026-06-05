@@ -327,7 +327,7 @@ func (ma *MultimodalAgent) OnSpeechScheduled(ctx context.Context, speech *Speech
 		Tools:      selectedTools,
 	}
 	if speech.Generation.Instructions != nil {
-		options.Instructions = speech.Generation.Instructions.AsModality("text").String()
+		options.Instructions = speech.Generation.Instructions.AsModality(speech.InputDetails.Modality).String()
 	}
 	if err := rtSession.GenerateReply(options); err != nil {
 		logger.Logger.Errorw("failed to generate realtime reply", err)

@@ -102,6 +102,40 @@ func TestPipelineAgentGenerateReplyWithInstructionsUsesTemporaryChatContext(t *t
 	}
 }
 
+func TestPipelineAgentGenerateReplyAppliesInstructionInputModality(t *testing.T) {
+	chatCtx := llm.NewChatContext()
+	l := &fakeGenerationLLM{
+		stream: &fakeGenerationLLMStream{
+			chunks: []*llm.ChatChunk{
+				{Delta: &llm.ChoiceDelta{Content: "audio answer"}},
+			},
+		},
+	}
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	agent := NewPipelineAgent(nil, nil, l, &fakePipelineTTS{}, chatCtx)
+	agent.session = session
+	agent.ctx = context.Background()
+	speech := NewSpeechHandle(true, InputDetails{Modality: "audio"})
+	speech.Generation.Instructions = llm.NewInstructions("speak plainly", "write tersely")
+
+	agent.OnSpeechScheduled(context.Background(), speech)
+
+	if len(l.chatContexts) != 1 {
+		t.Fatalf("LLM chat contexts = %d, want 1", len(l.chatContexts))
+	}
+	inferenceCtx := l.chatContexts[0]
+	if len(inferenceCtx.Items) == 0 {
+		t.Fatal("inference chat context is empty, want instruction message")
+	}
+	instruction, ok := inferenceCtx.Items[0].(*llm.ChatMessage)
+	if !ok {
+		t.Fatalf("first inference item = %T, want *llm.ChatMessage", inferenceCtx.Items[0])
+	}
+	if instruction.Role != llm.ChatRoleSystem || instruction.TextContent() != "speak plainly" {
+		t.Fatalf("instruction message = %#v, want audio-specific instructions", instruction)
+	}
+}
+
 func TestPipelineAgentGenerateReplyWithChatContextUsesTemporaryContext(t *testing.T) {
 	persistentCtx := llm.NewChatContext()
 	overrideCtx := llm.NewChatContext()

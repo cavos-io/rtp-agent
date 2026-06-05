@@ -87,14 +87,15 @@ var (
 )
 
 type GenerateReplyOptions struct {
-	UserInput          string
-	UserMessage        *llm.ChatMessage
-	Instructions       string
-	ToolChoice         llm.ToolChoice
-	Tools              []string
-	ChatCtx            *llm.ChatContext
-	AllowInterruptions *bool
-	InputModality      string
+	UserInput           string
+	UserMessage         *llm.ChatMessage
+	Instructions        string
+	InstructionVariants *llm.Instructions
+	ToolChoice          llm.ToolChoice
+	Tools               []string
+	ChatCtx             *llm.ChatContext
+	AllowInterruptions  *bool
+	InputModality       string
 }
 
 type SayOptions struct {
@@ -1452,7 +1453,9 @@ func (s *AgentSession) GenerateReplyWithOptions(ctx context.Context, opts Genera
 		inputModality = "text"
 	}
 	handle := NewSpeechHandle(allowInterruptions, InputDetails{Modality: inputModality})
-	if opts.Instructions != "" {
+	if opts.InstructionVariants != nil {
+		handle.Generation.Instructions = opts.InstructionVariants
+	} else if opts.Instructions != "" {
 		handle.Generation.Instructions = llm.NewInstructions(opts.Instructions)
 	}
 	if opts.ToolChoice != nil {

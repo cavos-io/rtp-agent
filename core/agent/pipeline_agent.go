@@ -344,7 +344,7 @@ func (va *PipelineAgent) OnSpeechScheduled(ctx context.Context, speech *SpeechHa
 		SpeechHandle: speech,
 	}
 	if speech.Generation.Instructions != nil {
-		options.Instructions = speech.Generation.Instructions.AsModality("text").String()
+		options.Instructions = speech.Generation.Instructions.AsModality(speech.InputDetails.Modality).String()
 	}
 	if speech.Generation.ToolChoice != nil {
 		options.ToolChoice = speech.Generation.ToolChoice
