@@ -926,6 +926,63 @@ func TestPipelineAgentEmitsLLMErrorEventForChatFailure(t *testing.T) {
 	}
 }
 
+func TestPipelineAgentEmitsLLMMetricsForUsageChunk(t *testing.T) {
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	l := &fakeGenerationLLM{
+		model:    "test-model",
+		provider: "test-provider",
+		stream: &fakeGenerationLLMStream{
+			chunks: []*llm.ChatChunk{
+				{
+					ID: "chatcmpl_123",
+					Delta: &llm.ChoiceDelta{
+						Content: "hello",
+					},
+				},
+				{
+					ID: "chatcmpl_123",
+					Usage: &llm.CompletionUsage{
+						PromptTokens:       7,
+						PromptCachedTokens: 2,
+						CompletionTokens:   5,
+						TotalTokens:        12,
+					},
+				},
+			},
+		},
+	}
+	agent := NewPipelineAgent(nil, nil, l, &fakePipelineTTS{}, llm.NewChatContext())
+	agent.session = session
+	agent.ctx = context.Background()
+
+	agent.generateReply()
+
+	select {
+	case ev := <-session.MetricsCollectedEvents():
+		metrics, ok := ev.Metrics.(*telemetry.LLMMetrics)
+		if !ok {
+			t.Fatalf("Metrics = %T, want *telemetry.LLMMetrics", ev.Metrics)
+		}
+		if metrics.Label != "agent.fakeGenerationLLM" {
+			t.Fatalf("Label = %q, want agent.fakeGenerationLLM", metrics.Label)
+		}
+		if metrics.RequestID != "chatcmpl_123" {
+			t.Fatalf("RequestID = %q, want chatcmpl_123", metrics.RequestID)
+		}
+		if metrics.PromptTokens != 7 || metrics.PromptCachedTokens != 2 || metrics.CompletionTokens != 5 || metrics.TotalTokens != 12 {
+			t.Fatalf("token metrics = %#v, want prompt=7 cached=2 completion=5 total=12", metrics)
+		}
+		if metrics.Metadata == nil || metrics.Metadata.ModelName != "test-model" || metrics.Metadata.ModelProvider != "test-provider" {
+			t.Fatalf("Metadata = %#v, want test provider/model", metrics.Metadata)
+		}
+		if metrics.Timestamp.IsZero() {
+			t.Fatal("Timestamp is zero")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("MetricsCollectedEvents did not receive LLM metrics")
+	}
+}
+
 func TestPipelineAgentReturnsToThinkingWhileExecutingTools(t *testing.T) {
 	chatCtx := llm.NewChatContext()
 	l := &fakeGenerationLLM{

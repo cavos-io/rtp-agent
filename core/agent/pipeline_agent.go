@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"sync"
+	"time"
 
 	"github.com/cavos-io/rtp-agent/core/audio/model"
 	"github.com/cavos-io/rtp-agent/core/llm"
@@ -12,6 +13,7 @@ import (
 	"github.com/cavos-io/rtp-agent/core/tts"
 	"github.com/cavos-io/rtp-agent/core/vad"
 	"github.com/cavos-io/rtp-agent/library/logger"
+	"github.com/cavos-io/rtp-agent/library/telemetry"
 )
 
 type PipelineAgent struct {
@@ -385,6 +387,7 @@ func (va *PipelineAgent) generateReplyWithOptions(opts pipelineReplyOptions) {
 		if err := va.synthesizeSpeech(ctx, session, genData.TextCh); err != nil {
 			logger.Logger.Errorw("TTS inference failed", err)
 		}
+		va.emitLLMMetrics(session, genData)
 
 		if genData.GeneratedText != "" {
 			args := llm.ChatMessageArgs{
@@ -462,6 +465,35 @@ func (va *PipelineAgent) generateReplyWithOptions(opts pipelineReplyOptions) {
 		toolSteps++
 		// Loop back to LLM with tool outputs
 	}
+}
+
+func (va *PipelineAgent) emitLLMMetrics(session *AgentSession, genData *LLMGenerationData) {
+	if session == nil || genData == nil || genData.Usage == nil {
+		return
+	}
+	metrics := &telemetry.LLMMetrics{
+		Label:              llm.Label(va.LLM),
+		RequestID:          genData.RequestID,
+		Timestamp:          time.Now(),
+		Duration:           genData.Duration.Seconds(),
+		TTFT:               genData.TTFT.Seconds(),
+		CompletionTokens:   genData.Usage.CompletionTokens,
+		PromptTokens:       genData.Usage.PromptTokens,
+		PromptCachedTokens: genData.Usage.PromptCachedTokens,
+		TotalTokens:        genData.Usage.TotalTokens,
+		Metadata: &telemetry.Metadata{
+			ModelName:     llm.Model(va.LLM),
+			ModelProvider: llm.Provider(va.LLM),
+		},
+	}
+	if metrics.Duration > 0 {
+		metrics.TokensPerSecond = float64(metrics.CompletionTokens) / metrics.Duration
+	}
+	if session.activity != nil {
+		session.activity.OnMetricsCollected(metrics)
+		return
+	}
+	session.EmitMetricsCollected(metrics)
 }
 
 func (va *PipelineAgent) synthesizeSpeech(ctx context.Context, session *AgentSession, textCh <-chan string) error {

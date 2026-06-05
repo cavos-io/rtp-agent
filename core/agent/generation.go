@@ -24,6 +24,9 @@ type LLMGenerationData struct {
 	GeneratedFunctions []llm.FunctionToolCall
 	GeneratedExtra     map[string]any
 	TTFT               time.Duration
+	Duration           time.Duration
+	RequestID          string
+	Usage              *llm.CompletionUsage
 }
 
 func PerformLLMInference(
@@ -71,6 +74,14 @@ func PerformLLMInference(
 
 			if data.TTFT == 0 {
 				data.TTFT = time.Since(startTime)
+			}
+			data.Duration = time.Since(startTime)
+			if chunk.ID != "" {
+				data.RequestID = chunk.ID
+			}
+			if chunk.Usage != nil {
+				usage := *chunk.Usage
+				data.Usage = &usage
 			}
 
 			if chunk.Delta != nil {
