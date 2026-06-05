@@ -940,6 +940,8 @@ func workflowAgentFromConfig(cfg AppConfig, baseAgent *agent.Agent) (agent.Agent
 		selected = workflows.NewGetEmailTask(cfg.WorkflowRequireConfirmation)
 	case "card_number", "card-number", "get_card_number":
 		selected = workflows.NewGetCardNumberTask(cfg.WorkflowRequireConfirmation)
+	case "security_code", "security-code", "get_security_code":
+		selected = workflows.NewGetSecurityCodeTask(cfg.WorkflowRequireConfirmation)
 	case "dtmf", "get_dtmf":
 		numDigits := 1
 		if cfg.WorkflowDtmfNumDigits != nil {
@@ -1021,6 +1023,14 @@ func workflowTaskFactoryFromName(cfg AppConfig, baseAgent *agent.Agent, taskName
 			Description: "Collect and validate the user's credit card number.",
 			TaskFactory: factory(func() agent.AgentInterface {
 				return workflows.NewGetCardNumberTask(cfg.WorkflowRequireConfirmation)
+			}),
+		}, nil
+	case "security_code", "security-code", "get_security_code":
+		return workflows.FactoryInfo{
+			ID:          "security_code",
+			Description: "Collect and validate the user's card security code.",
+			TaskFactory: factory(func() agent.AgentInterface {
+				return workflows.NewGetSecurityCodeTask(cfg.WorkflowRequireConfirmation)
 			}),
 		}, nil
 	case "dtmf", "get_dtmf":

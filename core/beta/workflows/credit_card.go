@@ -22,10 +22,20 @@ type GetCardNumberResult struct {
 	CardNumber string
 }
 
+type GetSecurityCodeResult struct {
+	SecurityCode string
+}
+
 type GetCardNumberTask struct {
 	agent.AgentTask[*GetCardNumberResult]
 	RequireConfirmation bool
 	currentCardNumber   string
+}
+
+type GetSecurityCodeTask struct {
+	agent.AgentTask[*GetSecurityCodeResult]
+	RequireConfirmation bool
+	currentSecurityCode string
 }
 
 const CardNumberInstructions = `You are a single step in a broader process of collecting credit card information.
@@ -37,6 +47,16 @@ If the user refuses to provide a number, call decline_card_capture.
 If the user wishes to start over the card collection process, call restart_card_collection.
 Avoid listing out questions with bullet points or numbers, use a natural conversational tone.
 Never repeat sensitive information, such as the user's card number, back to the user.`
+
+const SecurityCodeInstructions = `You are a single step in a broader process of collecting credit card information.
+You are solely responsible for collecting the user's card security code.
+Handle input as noisy voice transcription. Expect users to read the security code digit by digit.
+Normalize spoken digits silently: 'four' to 4, 'zero' or 'oh' to 0.
+Filter out filler words or hesitations.
+If the user refuses to provide a code, call decline_card_capture.
+If the user wishes to start over the card collection process, call restart_card_collection.
+Avoid listing out questions with bullet points or numbers, use a natural conversational tone.
+Never repeat sensitive information, such as the user's security code, back to the user.`
 
 func NewGetCardNumberTask(requireConfirmation bool) *GetCardNumberTask {
 	t := &GetCardNumberTask{
@@ -53,10 +73,33 @@ func NewGetCardNumberTask(requireConfirmation bool) *GetCardNumberTask {
 	return t
 }
 
+func NewGetSecurityCodeTask(requireConfirmation bool) *GetSecurityCodeTask {
+	t := &GetSecurityCodeTask{
+		AgentTask:           *agent.NewAgentTask[*GetSecurityCodeResult](SecurityCodeInstructions),
+		RequireConfirmation: requireConfirmation,
+	}
+
+	t.Agent.Tools = []llm.Tool{
+		&updateSecurityCodeTool{task: t},
+		&declineCardCaptureTool{task: t},
+		&restartCardCollectionTool{task: t},
+	}
+
+	return t
+}
+
 func (t *GetCardNumberTask) OnEnter() {
 	if activity := t.Agent.GetActivity(); activity != nil {
 		if session := activity.Session; session != nil {
 			_, _ = session.GenerateReply(context.Background(), "Ask for the user's credit card number.")
+		}
+	}
+}
+
+func (t *GetSecurityCodeTask) OnEnter() {
+	if activity := t.Agent.GetActivity(); activity != nil {
+		if session := activity.Session; session != nil {
+			_, _ = session.GenerateReply(context.Background(), "Collect the user's card security code.")
 		}
 	}
 }
@@ -69,6 +112,10 @@ func (t *GetCardNumberTask) completeCardNumber(cardNumber string) {
 		}
 	}
 	t.Complete(&GetCardNumberResult{Issuer: issuer, CardNumber: cardNumber})
+}
+
+func (t *GetSecurityCodeTask) completeSecurityCode(securityCode string) {
+	t.Complete(&GetSecurityCodeResult{SecurityCode: securityCode})
 }
 
 type recordCardNumberTool struct {
@@ -128,6 +175,60 @@ func (t *GetCardNumberTask) setConfirmCardNumberTool(cardNumber string) {
 	t.Agent.Tools = tools
 }
 
+type updateSecurityCodeTool struct {
+	task *GetSecurityCodeTask
+}
+
+func (t *updateSecurityCodeTool) ID() string   { return "update_security_code" }
+func (t *updateSecurityCodeTool) Name() string { return "update_security_code" }
+func (t *updateSecurityCodeTool) Description() string {
+	return "Update the card security code."
+}
+func (t *updateSecurityCodeTool) Parameters() map[string]any {
+	return map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"security_code": map[string]any{"type": "string", "description": "The card security code, 3-4 digits and possibly with leading zeroes"},
+		},
+		"required": []string{"security_code"},
+	}
+}
+
+func (t *updateSecurityCodeTool) Execute(ctx context.Context, args string) (string, error) {
+	var params struct {
+		SecurityCode string `json:"security_code"`
+	}
+	if err := json.Unmarshal([]byte(args), &params); err != nil {
+		return "", err
+	}
+
+	securityCode := strings.TrimSpace(params.SecurityCode)
+	if !validSecurityCode(securityCode) {
+		return "", llm.NewToolError("The security code's length is invalid, ask the user to repeat or to provide a new card and start over.")
+	}
+
+	t.task.currentSecurityCode = securityCode
+	if !t.task.RequireConfirmation {
+		t.task.completeSecurityCode(securityCode)
+		return "Security code captured and task completed.", nil
+	}
+
+	t.task.setConfirmSecurityCodeTool(securityCode)
+	return "The security code has been updated.\nDo not repeat the security code back to the user, ask them to repeat themselves.", nil
+}
+
+func (t *GetSecurityCodeTask) setConfirmSecurityCodeTool(securityCode string) {
+	tools := make([]llm.Tool, 0, len(t.Agent.Tools)+1)
+	for _, tool := range t.Agent.Tools {
+		if tool.ID() == "confirm_security_code" {
+			continue
+		}
+		tools = append(tools, tool)
+	}
+	tools = append(tools, &confirmSecurityCodeTool{task: t, securityCode: securityCode})
+	t.Agent.Tools = tools
+}
+
 type confirmCardNumberTool struct {
 	task       *GetCardNumberTask
 	cardNumber string
@@ -166,8 +267,46 @@ func (t *confirmCardNumberTool) Execute(ctx context.Context, args string) (strin
 	return "Card number confirmed.", nil
 }
 
+type confirmSecurityCodeTool struct {
+	task         *GetSecurityCodeTask
+	securityCode string
+}
+
+func (t *confirmSecurityCodeTool) ID() string   { return "confirm_security_code" }
+func (t *confirmSecurityCodeTool) Name() string { return "confirm_security_code" }
+func (t *confirmSecurityCodeTool) Description() string {
+	return "Confirm the security code after the user repeats it."
+}
+func (t *confirmSecurityCodeTool) Parameters() map[string]any {
+	return map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"repeated_security_code": map[string]any{"type": "string", "description": "The security code repeated by the user"},
+		},
+		"required": []string{"repeated_security_code"},
+	}
+}
+
+func (t *confirmSecurityCodeTool) Execute(ctx context.Context, args string) (string, error) {
+	var params struct {
+		RepeatedSecurityCode string `json:"repeated_security_code"`
+	}
+	if err := json.Unmarshal([]byte(args), &params); err != nil {
+		return "", err
+	}
+	if strings.TrimSpace(params.RepeatedSecurityCode) != t.securityCode {
+		return "", llm.NewToolError("The repeated security code does not match, ask the user to try again.")
+	}
+	t.task.completeSecurityCode(t.securityCode)
+	return "Security code confirmed.", nil
+}
+
+type cardFailureTask interface {
+	Fail(error) error
+}
+
 type declineCardCaptureTool struct {
-	task *GetCardNumberTask
+	task cardFailureTask
 }
 
 func (t *declineCardCaptureTool) ID() string   { return "decline_card_capture" }
@@ -188,7 +327,7 @@ func (t *declineCardCaptureTool) Execute(ctx context.Context, args string) (stri
 }
 
 type restartCardCollectionTool struct {
-	task *GetCardNumberTask
+	task cardFailureTask
 }
 
 func (t *restartCardCollectionTool) ID() string   { return "restart_card_collection" }
@@ -236,6 +375,18 @@ func normalizeCardDigits(cardNumber string) string {
 		}
 	}
 	return b.String()
+}
+
+func validSecurityCode(securityCode string) bool {
+	if len(securityCode) < 3 || len(securityCode) > 4 {
+		return false
+	}
+	for _, r := range securityCode {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return true
 }
 
 func validateCardNumberLuhn(cardNumber string) bool {
