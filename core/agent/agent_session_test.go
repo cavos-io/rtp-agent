@@ -2168,6 +2168,44 @@ func TestAgentSessionClosesAfterUnrecoverableTTSErrorThreshold(t *testing.T) {
 	}
 }
 
+func TestAgentSessionSpeakingResetsUnrecoverableProviderErrorCounts(t *testing.T) {
+	agent := NewAgent("test")
+	agent.TTS = &fakePipelineTTS{}
+	agent.LLM = &fakeGenerationLLM{}
+	agent.STT = &fakePipelineSTT{}
+	agent.VAD = &fakePipelineVAD{}
+	session := NewAgentSession(agent, nil, AgentSessionOptions{MaxUnrecoverableErrors: 1})
+	session.Assistant = &fakeSessionAssistant{}
+
+	if err := session.Start(context.Background()); err != nil {
+		t.Fatalf("Start error = %v, want nil", err)
+	}
+
+	cause := errors.New("llm failed")
+	session.EmitError(*NewErrorEvent(&llm.LLMError{Err: cause, Recoverable: false}, agent.LLM))
+
+	select {
+	case <-session.ErrorEvents():
+	case <-time.After(time.Second):
+		t.Fatal("ErrorEvents did not receive LLM error")
+	}
+
+	select {
+	case ev := <-session.CloseEvents():
+		t.Fatalf("CloseEvents received early close with reason %q", ev.Reason)
+	default:
+	}
+
+	session.UpdateAgentState(AgentStateSpeaking)
+	session.EmitError(*NewErrorEvent(&llm.LLMError{Err: cause, Recoverable: false}, agent.LLM))
+
+	select {
+	case ev := <-session.CloseEvents():
+		t.Fatalf("CloseEvents received close after speaking reset with reason %q", ev.Reason)
+	default:
+	}
+}
+
 func TestAgentSessionCloseSoonCommitsPendingUserTurn(t *testing.T) {
 	agent := &turnCompletedAgent{Agent: NewAgent("test"), turns: make(chan *llm.ChatMessage, 1)}
 	agent.TurnDetection = TurnDetectionModeManual

@@ -1201,6 +1201,10 @@ func (s *AgentSession) UpdateAgentState(state AgentState) {
 	s.agentState = state
 	backgroundAudio := s.Options.BackgroundAudio
 	endpointing := s.Options.Endpointing
+	if state == AgentStateSpeaking {
+		s.llmErrorCount = 0
+		s.ttsErrorCount = 0
+	}
 	if oldState != state && endpointing != nil {
 		now := float64(time.Now().UnixNano()) / float64(time.Second)
 		if state == AgentStateSpeaking {
