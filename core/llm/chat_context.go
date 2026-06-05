@@ -72,7 +72,7 @@ func (c *ChatContext) Copy(options ...ChatContextCopyOptions) *ChatContext {
 		opts = options[0]
 	}
 
-	newCtx := NewChatContext()
+	newCtx := EmptyChatContext()
 	validTools := make(map[string]struct{})
 	for _, name := range c.GetToolNames(opts.Tools) {
 		validTools[name] = struct{}{}

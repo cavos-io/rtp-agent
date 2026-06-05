@@ -33,6 +33,27 @@ func assertPanics(t *testing.T, name string, fn func()) {
 	fn()
 }
 
+func TestEmptyChatContextReturnsMutableEmptyContext(t *testing.T) {
+	ctx := EmptyChatContext()
+	if ctx == nil {
+		t.Fatal("EmptyChatContext() = nil, want context")
+	}
+	if ctx.Readonly() {
+		t.Fatal("EmptyChatContext().Readonly() = true, want false")
+	}
+	if ctx.Items == nil {
+		t.Fatal("EmptyChatContext().Items = nil, want empty slice")
+	}
+	if len(ctx.Items) != 0 {
+		t.Fatalf("len(EmptyChatContext().Items) = %d, want 0", len(ctx.Items))
+	}
+
+	ctx.Append(&ChatMessage{ID: "user", Role: ChatRoleUser})
+	if got := len(ctx.Items); got != 1 {
+		t.Fatalf("len(EmptyChatContext().Items) after Append = %d, want 1", got)
+	}
+}
+
 func TestChatContextCopyFiltersReferenceItemTypes(t *testing.T) {
 	ctx := NewChatContext()
 	ctx.Items = []ChatItem{
