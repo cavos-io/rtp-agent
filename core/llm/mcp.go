@@ -125,6 +125,18 @@ func (s *MCPServerHTTP) setToolsCache(tools []Tool) {
 	s.cacheDirty = false
 }
 
+func (s *MCPServerHTTP) SetHeaders(headers map[string]string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.Headers = cloneStringMap(headers)
+}
+
+func (s *MCPServerHTTP) headersSnapshot() map[string]string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return cloneStringMap(s.Headers)
+}
+
 func (s *MCPServerHTTP) sendRequest(ctx context.Context, method string, params interface{}) (*jsonRPCResponse, error) {
 	id := s.msgID.Add(1)
 	return s.postJSONRPC(ctx, &jsonRPCRequest{
@@ -160,7 +172,7 @@ func (s *MCPServerHTTP) postJSONRPCValue(ctx context.Context, value interface{})
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
 	httpReq.Header.Set("Accept", "application/json")
-	for key, value := range s.Headers {
+	for key, value := range s.headersSnapshot() {
 		httpReq.Header.Set(key, value)
 	}
 
@@ -189,6 +201,17 @@ func (s *MCPServerHTTP) postJSONRPCValue(ctx context.Context, value interface{})
 		return nil, fmt.Errorf("rpc error %d: %s", decoded.Error.Code, decoded.Error.Message)
 	}
 	return &decoded, nil
+}
+
+func cloneStringMap(src map[string]string) map[string]string {
+	if len(src) == 0 {
+		return nil
+	}
+	dst := make(map[string]string, len(src))
+	for key, value := range src {
+		dst[key] = value
+	}
+	return dst
 }
 
 type MCPServerStdio struct {

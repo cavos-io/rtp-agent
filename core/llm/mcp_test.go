@@ -184,6 +184,52 @@ func TestMCPServerHTTPInitializedReflectsLifecycle(t *testing.T) {
 	}
 }
 
+func TestMCPServerHTTPSetHeadersAppliesToSubsequentRequests(t *testing.T) {
+	httpServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req jsonRPCRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+
+		switch req.Method {
+		case "initialize":
+			if got := r.Header.Get("Authorization"); got != "Bearer first" {
+				t.Fatalf("initialize Authorization = %q, want first token", got)
+			}
+			writeMCPHTTPResponse(t, w, req.ID, map[string]any{"protocolVersion": "2024-11-05"})
+		case "initialized":
+			w.WriteHeader(http.StatusAccepted)
+		case "tools/list":
+			if got := r.Header.Get("Authorization"); got != "Bearer second" {
+				t.Fatalf("tools/list Authorization = %q, want updated token", got)
+			}
+			if got := r.Header.Get("X-Scope"); got != "tools" {
+				t.Fatalf("tools/list X-Scope = %q, want updated scope", got)
+			}
+			writeMCPHTTPResponse(t, w, req.ID, map[string]any{
+				"tools": []map[string]any{},
+			})
+		default:
+			t.Fatalf("unexpected MCP method %q", req.Method)
+		}
+	}))
+	defer httpServer.Close()
+
+	server := NewMCPServerHTTP(httpServer.URL)
+	server.Headers = map[string]string{"Authorization": "Bearer first"}
+
+	if err := server.Initialize(context.Background()); err != nil {
+		t.Fatalf("Initialize() error = %v", err)
+	}
+	server.SetHeaders(map[string]string{
+		"Authorization": "Bearer second",
+		"X-Scope":       "tools",
+	})
+	if _, err := server.ListTools(context.Background()); err != nil {
+		t.Fatalf("ListTools() error = %v", err)
+	}
+}
+
 func writeMCPHTTPResponse(t *testing.T, w http.ResponseWriter, id int64, result any) {
 	t.Helper()
 	w.Header().Set("Content-Type", "application/json")
