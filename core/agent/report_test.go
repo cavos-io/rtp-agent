@@ -194,6 +194,10 @@ func TestSessionReportToDictIncludesModelUsage(t *testing.T) {
 		AudioDuration:   1.25,
 		Metadata:        &telemetry.Metadata{ModelProvider: "cartesia", ModelName: "sonic"},
 	})
+	session.EmitMetricsCollected(&telemetry.InterruptionMetrics{
+		NumRequests: 11,
+		Metadata:    &telemetry.Metadata{ModelProvider: "livekit", ModelName: "adaptive"},
+	})
 
 	data := NewSessionReport(session).ToDict()
 	modelUsage, ok := data["model_usage"].([]map[string]any)
@@ -213,6 +217,13 @@ func TestSessionReportToDictIncludesModelUsage(t *testing.T) {
 	}
 	if ttsUsage["characters_count"] != 7 || ttsUsage["audio_duration"] != 1.25 {
 		t.Fatalf("TTS model usage = %#v, want character/audio counts", ttsUsage)
+	}
+	interruptionUsage := findReportModelUsage(modelUsage, "interruption_usage", "livekit", "adaptive")
+	if interruptionUsage == nil {
+		t.Fatalf("missing livekit/adaptive interruption usage in %#v", modelUsage)
+	}
+	if interruptionUsage["total_requests"] != 11 {
+		t.Fatalf("Interruption model usage = %#v, want total requests", interruptionUsage)
 	}
 }
 

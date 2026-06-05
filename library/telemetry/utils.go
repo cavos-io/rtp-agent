@@ -99,5 +99,22 @@ func LogMetrics(metrics AgentMetrics) {
 			"audio_duration", m.AudioDuration,
 			"metadata", metadata,
 		)
+	case *InterruptionMetrics:
+		if m.Metadata != nil {
+			metadata = map[string]interface{}{
+				"model_name":     m.Metadata.ModelName,
+				"model_provider": m.Metadata.ModelProvider,
+			}
+		}
+		logger.Logger.Infow("Interruption metrics",
+			"type", m.GetType(),
+			"total_duration", m.TotalDuration,
+			"prediction_duration", m.PredictionDuration,
+			"detection_delay", m.DetectionDelay,
+			"num_interruptions", m.NumInterruptions,
+			"num_backchannels", m.NumBackchannels,
+			"num_requests", m.NumRequests,
+			"metadata", metadata,
+		)
 	}
 }

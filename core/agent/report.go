@@ -323,6 +323,9 @@ func modelUsageToDict(modelUsage []telemetry.ModelUsage) any {
 			addIntReportField(entry, "input_tokens", u.InputTokens)
 			addIntReportField(entry, "output_tokens", u.OutputTokens)
 			addFloatReportField(entry, "audio_duration", u.AudioDuration)
+		case *telemetry.InterruptionModelUsage:
+			addModelUsageBase(entry, u.Provider, u.Model)
+			addIntReportField(entry, "total_requests", u.TotalRequests)
 		default:
 			continue
 		}

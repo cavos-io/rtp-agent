@@ -67,10 +67,14 @@ func TestModelUsageCollectorAggregatesByProviderAndModel(t *testing.T) {
 		AudioDuration: 3.5,
 		Metadata:      &Metadata{ModelProvider: "deepgram", ModelName: "nova"},
 	})
+	collector.Collect(&InterruptionMetrics{
+		NumRequests: 5,
+		Metadata:    &Metadata{ModelProvider: "livekit", ModelName: "adaptive"},
+	})
 
 	usage := collector.Usage().ModelUsage
-	if len(usage) != 3 {
-		t.Fatalf("ModelUsage length = %d, want 3", len(usage))
+	if len(usage) != 4 {
+		t.Fatalf("ModelUsage length = %d, want 4", len(usage))
 	}
 
 	llmUsage := findModelUsage[*LLMModelUsage](usage, "openai", "gpt")
@@ -95,6 +99,11 @@ func TestModelUsageCollectorAggregatesByProviderAndModel(t *testing.T) {
 	sttUsage := findModelUsage[*STTModelUsage](usage, "deepgram", "nova")
 	if sttUsage == nil || sttUsage.InputTokens != 23 || sttUsage.OutputTokens != 29 || sttUsage.AudioDuration != 3.5 {
 		t.Fatalf("STT usage = %#v, want token/audio counts", sttUsage)
+	}
+
+	interruptionUsage := findModelUsage[*InterruptionModelUsage](usage, "livekit", "adaptive")
+	if interruptionUsage == nil || interruptionUsage.TotalRequests != 5 {
+		t.Fatalf("Interruption usage = %#v, want request count", interruptionUsage)
 	}
 }
 
@@ -135,6 +144,10 @@ func findModelUsage[T ModelUsage](usage []ModelUsage, provider string, model str
 				return candidate
 			}
 		case *STTModelUsage:
+			if typed.Provider == provider && typed.Model == model {
+				return candidate
+			}
+		case *InterruptionModelUsage:
 			if typed.Provider == provider && typed.Model == model {
 				return candidate
 			}
