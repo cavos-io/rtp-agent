@@ -1600,6 +1600,7 @@ func (s *AgentSession) UpdateAgent(agent AgentInterface) {
 		}
 		if err := replacementAssistant.Start(runCtx, s); err != nil {
 			logger.Logger.Errorw("failed to start replacement assistant", err)
+			s.EmitError(ErrorEvent{Error: err, Source: replacementAssistant})
 		} else if closer, ok := previousAssistant.(closeableSessionAssistant); ok {
 			if err := closer.Close(); err != nil {
 				logger.Logger.Errorw("failed to close replaced assistant", err)

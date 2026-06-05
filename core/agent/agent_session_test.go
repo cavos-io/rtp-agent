@@ -2195,6 +2195,43 @@ func TestAgentSessionUpdateAgentWhileRunningSwitchesPipelineToMultimodal(t *test
 	}
 }
 
+func TestAgentSessionUpdateAgentEmitsErrorWhenReplacementAssistantStartFails(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	initial := &trackingAgent{Agent: NewAgent("initial")}
+	initial.VAD = &fakePipelineVAD{}
+	initial.STT = &fakePipelineSTT{}
+	initial.LLM = &fakeGenerationLLM{stream: &fakeGenerationLLMStream{}}
+	initial.TTS = &fakePipelineTTS{}
+	next := &trackingAgent{Agent: NewAgent("next")}
+	cause := errors.New("replacement realtime start failed")
+	next.RealtimeModel = &fakeRealtimeModel{sessionErr: cause}
+	session := NewAgentSession(initial, nil, AgentSessionOptions{})
+
+	if err := session.Start(ctx); err != nil {
+		t.Fatalf("Start error = %v, want nil", err)
+	}
+	defer session.Stop(context.Background())
+
+	session.UpdateAgent(next)
+
+	assistant, ok := session.Assistant.(*MultimodalAgent)
+	if !ok {
+		t.Fatalf("Assistant after handoff = %T, want *MultimodalAgent", session.Assistant)
+	}
+	select {
+	case ev := <-session.ErrorEvents():
+		if !errors.Is(ev.Error, cause) {
+			t.Fatalf("Error = %v, want %v", ev.Error, cause)
+		}
+		if ev.Source != assistant {
+			t.Fatalf("Source = %#v, want replacement assistant", ev.Source)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("ErrorEvents did not receive replacement assistant start error")
+	}
+}
+
 func TestAgentSessionUpdateAgentWhileRunningSwitchesMultimodalToPipeline(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
