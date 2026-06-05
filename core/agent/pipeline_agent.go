@@ -178,6 +178,10 @@ func (va *PipelineAgent) sttLoop(stream stt.RecognizeStream) {
 			return
 		}
 
+		if ev.Type == stt.SpeechEventRecognitionUsage {
+			va.emitSTTMetrics(ev)
+			continue
+		}
 		if ev.Type != stt.SpeechEventInterimTranscript && ev.Type != stt.SpeechEventFinalTranscript {
 			continue
 		}
@@ -233,6 +237,39 @@ func (va *PipelineAgent) sttLoop(stream stt.RecognizeStream) {
 			go va.generateReply()
 		}
 	}
+}
+
+func (va *PipelineAgent) emitSTTMetrics(ev *stt.SpeechEvent) {
+	if va == nil || ev == nil || ev.RecognitionUsage == nil {
+		return
+	}
+	metrics := &telemetry.STTMetrics{
+		Label:         "stt",
+		RequestID:     ev.RequestID,
+		Timestamp:     time.Now(),
+		AudioDuration: ev.RecognitionUsage.AudioDuration,
+		InputTokens:   ev.RecognitionUsage.InputTokens,
+		OutputTokens:  ev.RecognitionUsage.OutputTokens,
+		Streamed:      true,
+		Metadata: &telemetry.Metadata{
+			ModelName:     stt.Model(va.stt),
+			ModelProvider: stt.Provider(va.stt),
+		},
+	}
+	if va.stt != nil {
+		metrics.Label = va.stt.Label()
+	}
+	va.mu.Lock()
+	session := va.session
+	va.mu.Unlock()
+	if session == nil {
+		return
+	}
+	if session.activity != nil {
+		session.activity.OnMetricsCollected(metrics)
+		return
+	}
+	session.EmitMetricsCollected(metrics)
 }
 
 func (va *PipelineAgent) emitError(err error, source any) {

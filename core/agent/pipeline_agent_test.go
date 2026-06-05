@@ -812,6 +812,53 @@ func TestPipelineAgentEmitsErrorEventForSTTStreamError(t *testing.T) {
 	}
 }
 
+func TestPipelineAgentEmitsSTTMetricsForRecognitionUsage(t *testing.T) {
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	source := &fakePipelineSTT{}
+	agent := NewPipelineAgent(nil, source, nil, nil, llm.NewChatContext())
+	agent.session = session
+	stream := &fakePipelineRecognizeStream{
+		events: []*stt.SpeechEvent{
+			{
+				Type:      stt.SpeechEventRecognitionUsage,
+				RequestID: "stt_req_123",
+				RecognitionUsage: &stt.RecognitionUsage{
+					AudioDuration: 1.25,
+					InputTokens:   3,
+					OutputTokens:  5,
+				},
+			},
+		},
+	}
+
+	agent.sttLoop(stream)
+
+	select {
+	case ev := <-session.MetricsCollectedEvents():
+		metrics, ok := ev.Metrics.(*telemetry.STTMetrics)
+		if !ok {
+			t.Fatalf("Metrics = %T, want *telemetry.STTMetrics", ev.Metrics)
+		}
+		if metrics.Label != "fake-stt" {
+			t.Fatalf("Label = %q, want fake-stt", metrics.Label)
+		}
+		if metrics.RequestID != "stt_req_123" {
+			t.Fatalf("RequestID = %q, want stt_req_123", metrics.RequestID)
+		}
+		if metrics.AudioDuration != 1.25 || metrics.InputTokens != 3 || metrics.OutputTokens != 5 {
+			t.Fatalf("usage metrics = %#v, want audio=1.25 input=3 output=5", metrics)
+		}
+		if !metrics.Streamed {
+			t.Fatal("Streamed = false, want true")
+		}
+		if metrics.Timestamp.IsZero() {
+			t.Fatal("Timestamp is zero")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("MetricsCollectedEvents did not receive STT metrics")
+	}
+}
+
 func TestPipelineAgentEmitsErrorEventForVADStreamError(t *testing.T) {
 	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
 	source := &fakePipelineVAD{}
