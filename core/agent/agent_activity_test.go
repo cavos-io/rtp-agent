@@ -1652,13 +1652,14 @@ func TestAgentActivityCommitUserTurnInterruptsCurrentSpeechBeforeReply(t *testin
 		done <- err
 	}()
 
+	speechCreatedEvents := session.SpeechCreatedEvents()
 	waitForInterrupted(t, current)
 	select {
 	case err := <-done:
 		t.Fatalf("CommitUserTurn returned before current speech completed: %v", err)
 	case msg := <-agent.turns:
 		t.Fatalf("OnUserTurnCompleted called before current speech completed with %q", msg.TextContent())
-	case ev := <-session.SpeechCreatedEvents():
+	case ev := <-speechCreatedEvents:
 		t.Fatalf("reply generated before current speech completed: %#v", ev)
 	case <-time.After(20 * time.Millisecond):
 	}
@@ -1682,7 +1683,7 @@ func TestAgentActivityCommitUserTurnInterruptsCurrentSpeechBeforeReply(t *testin
 		t.Fatal("OnUserTurnCompleted was not called after current speech completed")
 	}
 	select {
-	case ev := <-session.SpeechCreatedEvents():
+	case ev := <-speechCreatedEvents:
 		if ev.SpeechHandle.Generation.UserMessage == nil || ev.SpeechHandle.Generation.UserMessage.TextContent() != "interrupt and reply" {
 			t.Fatalf("reply user message = %#v, want committed user turn", ev.SpeechHandle.Generation.UserMessage)
 		}

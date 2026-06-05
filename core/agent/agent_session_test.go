@@ -247,6 +247,51 @@ func TestAgentSessionFunctionToolsExecutedEventsFanOutToSubscribers(t *testing.T
 	assertFunctionToolsExecutedEvent(t, second, call, output, "second")
 }
 
+func TestAgentSessionSpeechCreatedEventsFanOutToSubscribers(t *testing.T) {
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	first := session.SpeechCreatedEvents()
+	second := session.SpeechCreatedEvents()
+	speech := NewSpeechHandle(true, DefaultInputDetails())
+
+	session.EmitSpeechCreated(SpeechCreatedEvent{SpeechHandle: speech, Source: "say"})
+
+	assertSpeechCreatedEvent(t, first, speech, "first")
+	assertSpeechCreatedEvent(t, second, speech, "second")
+}
+
+func TestAgentSessionFalseInterruptionEventsFanOutToSubscribers(t *testing.T) {
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	first := session.AgentFalseInterruptionEvents()
+	second := session.AgentFalseInterruptionEvents()
+
+	session.EmitAgentFalseInterruption(AgentFalseInterruptionEvent{Resumed: true})
+
+	assertFalseInterruptionEvent(t, first, "first")
+	assertFalseInterruptionEvent(t, second, "second")
+}
+
+func TestAgentSessionUserTurnExceededEventsFanOutToSubscribers(t *testing.T) {
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	first := session.UserTurnExceededEvents()
+	second := session.UserTurnExceededEvents()
+
+	session.EmitUserTurnExceeded(UserTurnExceededEvent{Transcript: "too long"})
+
+	assertUserTurnExceededEvent(t, first, "first")
+	assertUserTurnExceededEvent(t, second, "second")
+}
+
+func TestAgentSessionOverlappingSpeechEventsFanOutToSubscribers(t *testing.T) {
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	first := session.OverlappingSpeechEvents()
+	second := session.OverlappingSpeechEvents()
+
+	session.EmitOverlappingSpeech(OverlappingSpeechEvent{IsInterruption: true})
+
+	assertOverlappingSpeechEvent(t, first, "first")
+	assertOverlappingSpeechEvent(t, second, "second")
+}
+
 func assertUserTranscriptEvent(t *testing.T, events <-chan UserInputTranscribedEvent, name string) {
 	t.Helper()
 
@@ -377,6 +422,58 @@ func assertFunctionToolsExecutedEvent(t *testing.T, events <-chan FunctionToolsE
 		}
 	case <-time.After(time.Second):
 		t.Fatalf("%s subscriber did not receive function tools event", name)
+	}
+}
+
+func assertSpeechCreatedEvent(t *testing.T, events <-chan SpeechCreatedEvent, speech *SpeechHandle, name string) {
+	t.Helper()
+
+	select {
+	case ev := <-events:
+		if ev.SpeechHandle != speech || ev.Source != "say" {
+			t.Fatalf("%s subscriber event = %#v, want original say speech", name, ev)
+		}
+	case <-time.After(time.Second):
+		t.Fatalf("%s subscriber did not receive speech created event", name)
+	}
+}
+
+func assertFalseInterruptionEvent(t *testing.T, events <-chan AgentFalseInterruptionEvent, name string) {
+	t.Helper()
+
+	select {
+	case ev := <-events:
+		if !ev.Resumed {
+			t.Fatalf("%s subscriber event = %#v, want resumed interruption", name, ev)
+		}
+	case <-time.After(time.Second):
+		t.Fatalf("%s subscriber did not receive false interruption event", name)
+	}
+}
+
+func assertUserTurnExceededEvent(t *testing.T, events <-chan UserTurnExceededEvent, name string) {
+	t.Helper()
+
+	select {
+	case ev := <-events:
+		if ev.Transcript != "too long" {
+			t.Fatalf("%s subscriber event = %#v, want too long transcript", name, ev)
+		}
+	case <-time.After(time.Second):
+		t.Fatalf("%s subscriber did not receive user turn exceeded event", name)
+	}
+}
+
+func assertOverlappingSpeechEvent(t *testing.T, events <-chan OverlappingSpeechEvent, name string) {
+	t.Helper()
+
+	select {
+	case ev := <-events:
+		if !ev.IsInterruption {
+			t.Fatalf("%s subscriber event = %#v, want interruption", name, ev)
+		}
+	case <-time.After(time.Second):
+		t.Fatalf("%s subscriber did not receive overlapping speech event", name)
 	}
 }
 
