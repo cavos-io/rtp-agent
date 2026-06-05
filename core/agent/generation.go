@@ -275,6 +275,7 @@ func PerformTTSInference(ctx context.Context, t tts.TTS, textCh <-chan string, o
 			startTime := time.Now()
 			stream, err := t.Synthesize(ctx, transformedText)
 			if err != nil {
+				data.StreamErr = err
 				return
 			}
 			var frame *model.AudioFrame
@@ -282,6 +283,9 @@ func PerformTTSInference(ctx context.Context, t tts.TTS, textCh <-chan string, o
 				var timedTranscript []tts.TimedString
 				frame, timedTranscript, err = tts.CollectWithTimedTranscript(stream)
 				if err != nil || frame == nil {
+					if err != nil {
+						data.StreamErr = err
+					}
 					return
 				}
 				for _, timedText := range timedTranscript {
@@ -290,6 +294,9 @@ func PerformTTSInference(ctx context.Context, t tts.TTS, textCh <-chan string, o
 			} else {
 				frame, err = tts.Collect(stream)
 				if err != nil || frame == nil {
+					if err != nil {
+						data.StreamErr = err
+					}
 					return
 				}
 			}
