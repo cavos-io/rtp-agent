@@ -938,6 +938,10 @@ func workflowAgentFromConfig(cfg AppConfig, baseAgent *agent.Agent) (agent.Agent
 		selected = workflows.NewGetAddressTask(cfg.WorkflowRequireConfirmation)
 	case "email", "get_email":
 		selected = workflows.NewGetEmailTask(cfg.WorkflowRequireConfirmation)
+	case "phone_number", "phone-number", "phone", "get_phone_number":
+		selected = workflows.NewGetPhoneNumberTask(workflows.GetPhoneNumberOptions{
+			RequireConfirmation: cfg.WorkflowRequireConfirmation,
+		})
 	case "name", "get_name":
 		selected = workflows.NewGetNameTask(workflows.GetNameOptions{
 			FirstName:           true,
@@ -950,6 +954,8 @@ func workflowAgentFromConfig(cfg AppConfig, baseAgent *agent.Agent) (agent.Agent
 		selected = workflows.NewGetSecurityCodeTask(cfg.WorkflowRequireConfirmation)
 	case "expiration_date", "expiration-date", "get_expiration_date":
 		selected = workflows.NewGetExpirationDateTask(cfg.WorkflowRequireConfirmation)
+	case "credit_card", "credit-card", "get_credit_card":
+		selected = workflows.NewGetCreditCardTask(cfg.WorkflowRequireConfirmation)
 	case "dtmf", "get_dtmf":
 		numDigits := 1
 		if cfg.WorkflowDtmfNumDigits != nil {
@@ -1025,6 +1031,16 @@ func workflowTaskFactoryFromName(cfg AppConfig, baseAgent *agent.Agent, taskName
 				return workflows.NewGetEmailTask(cfg.WorkflowRequireConfirmation)
 			}),
 		}, nil
+	case "phone_number", "phone-number", "phone", "get_phone_number":
+		return workflows.FactoryInfo{
+			ID:          "phone_number",
+			Description: "Collect and confirm the user's phone number.",
+			TaskFactory: factory(func() agent.AgentInterface {
+				return workflows.NewGetPhoneNumberTask(workflows.GetPhoneNumberOptions{
+					RequireConfirmation: cfg.WorkflowRequireConfirmation,
+				})
+			}),
+		}, nil
 	case "name", "get_name":
 		return workflows.FactoryInfo{
 			ID:          "name",
@@ -1059,6 +1075,14 @@ func workflowTaskFactoryFromName(cfg AppConfig, baseAgent *agent.Agent, taskName
 			Description: "Collect and validate the user's card expiration date.",
 			TaskFactory: factory(func() agent.AgentInterface {
 				return workflows.NewGetExpirationDateTask(cfg.WorkflowRequireConfirmation)
+			}),
+		}, nil
+	case "credit_card", "credit-card", "get_credit_card":
+		return workflows.FactoryInfo{
+			ID:          "credit_card",
+			Description: "Collect and validate the user's credit card details.",
+			TaskFactory: factory(func() agent.AgentInterface {
+				return workflows.NewGetCreditCardTask(cfg.WorkflowRequireConfirmation)
 			}),
 		}, nil
 	case "dtmf", "get_dtmf":
