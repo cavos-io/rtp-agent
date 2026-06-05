@@ -31,6 +31,14 @@ type GetExpirationDateResult struct {
 	Date string
 }
 
+type GetCreditCardResult struct {
+	CardholderName string
+	Issuer         string
+	CardNumber     string
+	SecurityCode   string
+	ExpirationDate string
+}
+
 type GetCardNumberTask struct {
 	agent.AgentTask[*GetCardNumberResult]
 	RequireConfirmation bool
@@ -47,6 +55,11 @@ type GetExpirationDateTask struct {
 	agent.AgentTask[*GetExpirationDateResult]
 	RequireConfirmation   bool
 	currentExpirationDate string
+}
+
+type GetCreditCardTask struct {
+	agent.AgentTask[*GetCreditCardResult]
+	RequireConfirmation bool
 }
 
 const CardNumberInstructions = `You are a single step in a broader process of collecting credit card information.
@@ -77,6 +90,9 @@ If the user refuses to provide a date, call decline_card_capture.
 If the user wishes to start over the card collection process, call restart_card_collection.
 Avoid listing out questions with bullet points or numbers, use a natural conversational tone.
 Never repeat sensitive information, such as the user's expiration date, back to the user.`
+
+const CreditCardInstructions = `Collect the user's credit card information by running the cardholder name, card number, security code, and expiration date subtasks.
+Never repeat sensitive card details back to the user.`
 
 func NewGetCardNumberTask(requireConfirmation bool) *GetCardNumberTask {
 	t := &GetCardNumberTask{
@@ -123,6 +139,13 @@ func NewGetExpirationDateTask(requireConfirmation bool) *GetExpirationDateTask {
 	return t
 }
 
+func NewGetCreditCardTask(requireConfirmation bool) *GetCreditCardTask {
+	return &GetCreditCardTask{
+		AgentTask:           *agent.NewAgentTask[*GetCreditCardResult](CreditCardInstructions),
+		RequireConfirmation: requireConfirmation,
+	}
+}
+
 func (t *GetCardNumberTask) OnEnter() {
 	if activity := t.Agent.GetActivity(); activity != nil {
 		if session := activity.Session; session != nil {
@@ -145,6 +168,79 @@ func (t *GetExpirationDateTask) OnEnter() {
 			_, _ = session.GenerateReply(context.Background(), "Collect the user's card expiration date.")
 		}
 	}
+}
+
+func (t *GetCreditCardTask) OnEnter() {
+	group := t.buildTaskGroup()
+	go func() {
+		if activity := t.Agent.GetActivity(); activity != nil && activity.Session != nil {
+			groupActivity := group.Agent.Start(activity.Session, group)
+			defer groupActivity.Stop()
+		} else {
+			group.OnEnter()
+		}
+		result, err := group.Wait(context.Background())
+		if err != nil {
+			_ = t.Fail(err)
+			return
+		}
+		if err := t.completeCreditCardFromTaskResults(result.TaskResults); err != nil {
+			_ = t.Fail(err)
+		}
+	}()
+}
+
+func (t *GetCreditCardTask) buildTaskGroup() *TaskGroup {
+	group := NewTaskGroup(true, false)
+	group.Add("cardholder_name_task", "Collects the cardholder's full name", func() agent.AgentInterface {
+		return NewGetNameTask(GetNameOptions{
+			FirstName:           true,
+			LastName:            true,
+			ExtraInstructions:   "This is in the context of credit card information collection, ask specifically for the full name listed on it.",
+			RequireConfirmation: t.RequireConfirmation,
+		})
+	})
+	group.Add("card_number_task", "Collects the user's card number", func() agent.AgentInterface {
+		return NewGetCardNumberTask(t.RequireConfirmation)
+	})
+	group.Add("security_code_task", "Collects the card's security code", func() agent.AgentInterface {
+		return NewGetSecurityCodeTask(t.RequireConfirmation)
+	})
+	group.Add("expiration_date_task", "Collects the card's expiration date", func() agent.AgentInterface {
+		return NewGetExpirationDateTask(t.RequireConfirmation)
+	})
+	return group
+}
+
+func (t *GetCreditCardTask) completeCreditCardFromTaskResults(results map[string]any) error {
+	name, ok := results["cardholder_name_task"].(*GetNameResult)
+	if !ok || name == nil {
+		return fmt.Errorf("cardholder_name_task result = %T, want *GetNameResult", results["cardholder_name_task"])
+	}
+	cardNumber, ok := results["card_number_task"].(*GetCardNumberResult)
+	if !ok || cardNumber == nil {
+		return fmt.Errorf("card_number_task result = %T, want *GetCardNumberResult", results["card_number_task"])
+	}
+	securityCode, ok := results["security_code_task"].(*GetSecurityCodeResult)
+	if !ok || securityCode == nil {
+		return fmt.Errorf("security_code_task result = %T, want *GetSecurityCodeResult", results["security_code_task"])
+	}
+	expirationDate, ok := results["expiration_date_task"].(*GetExpirationDateResult)
+	if !ok || expirationDate == nil {
+		return fmt.Errorf("expiration_date_task result = %T, want *GetExpirationDateResult", results["expiration_date_task"])
+	}
+
+	cardholderName := strings.TrimSpace(strings.Join([]string{name.FirstName, name.MiddleName, name.LastName}, " "))
+	for strings.Contains(cardholderName, "  ") {
+		cardholderName = strings.ReplaceAll(cardholderName, "  ", " ")
+	}
+	return t.Complete(&GetCreditCardResult{
+		CardholderName: cardholderName,
+		Issuer:         cardNumber.Issuer,
+		CardNumber:     cardNumber.CardNumber,
+		SecurityCode:   securityCode.SecurityCode,
+		ExpirationDate: expirationDate.Date,
+	})
 }
 
 func (t *GetCardNumberTask) completeCardNumber(cardNumber string) {

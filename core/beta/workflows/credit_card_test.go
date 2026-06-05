@@ -224,6 +224,75 @@ func TestGetExpirationDateTaskRequiresMatchingConfirmation(t *testing.T) {
 	}
 }
 
+func TestGetCreditCardTaskCombinesSubtaskResults(t *testing.T) {
+	task := NewGetCreditCardTask(true)
+
+	err := task.completeCreditCardFromTaskResults(map[string]any{
+		"cardholder_name_task": &GetNameResult{FirstName: "Ada", LastName: "Lovelace"},
+		"card_number_task":     &GetCardNumberResult{Issuer: "Visa", CardNumber: "4111111111111111"},
+		"security_code_task":   &GetSecurityCodeResult{SecurityCode: "123"},
+		"expiration_date_task": &GetExpirationDateResult{Date: "04/35"},
+	})
+	if err != nil {
+		t.Fatalf("completeCreditCardFromTaskResults() error = %v", err)
+	}
+
+	select {
+	case result := <-task.Result:
+		if result.CardholderName != "Ada Lovelace" {
+			t.Fatalf("CardholderName = %q, want Ada Lovelace", result.CardholderName)
+		}
+		if result.Issuer != "Visa" || result.CardNumber != "4111111111111111" {
+			t.Fatalf("card result = %#v, want Visa 4111111111111111", result)
+		}
+		if result.SecurityCode != "123" || result.ExpirationDate != "04/35" {
+			t.Fatalf("security/expiration result = %#v, want 123 04/35", result)
+		}
+	default:
+		t.Fatal("task did not complete after combining subtask results")
+	}
+}
+
+func TestGetCreditCardTaskBuildsReferenceSubtasks(t *testing.T) {
+	task := NewGetCreditCardTask(true)
+	group := task.buildTaskGroup()
+
+	if len(group.RegisteredTasks) != 4 {
+		t.Fatalf("RegisteredTasks = %d, want 4", len(group.RegisteredTasks))
+	}
+	wantIDs := []string{"cardholder_name_task", "card_number_task", "security_code_task", "expiration_date_task"}
+	for i, want := range wantIDs {
+		if got := group.RegisteredTasks[i].ID; got != want {
+			t.Fatalf("RegisteredTasks[%d].ID = %q, want %q", i, got, want)
+		}
+	}
+	for _, info := range group.RegisteredTasks {
+		child := info.TaskFactory()
+		switch info.ID {
+		case "cardholder_name_task":
+			nameTask, ok := child.(*GetNameTask)
+			if !ok {
+				t.Fatalf("cardholder task = %T, want *GetNameTask", child)
+			}
+			if !nameTask.CollectFirstName || !nameTask.CollectLastName || !nameTask.RequireConfirmation {
+				t.Fatalf("name task options = %#v, want first+last with confirmation", nameTask)
+			}
+		case "card_number_task":
+			if cardTask, ok := child.(*GetCardNumberTask); !ok || !cardTask.RequireConfirmation {
+				t.Fatalf("card number task = %#v, want confirming *GetCardNumberTask", child)
+			}
+		case "security_code_task":
+			if codeTask, ok := child.(*GetSecurityCodeTask); !ok || !codeTask.RequireConfirmation {
+				t.Fatalf("security code task = %#v, want confirming *GetSecurityCodeTask", child)
+			}
+		case "expiration_date_task":
+			if dateTask, ok := child.(*GetExpirationDateTask); !ok || !dateTask.RequireConfirmation {
+				t.Fatalf("expiration date task = %#v, want confirming *GetExpirationDateTask", child)
+			}
+		}
+	}
+}
+
 func itoa(n int) string {
 	return strconv.Itoa(n)
 }
