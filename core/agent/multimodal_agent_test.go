@@ -675,6 +675,32 @@ func TestMultimodalAgentEmitsSpeechCreatedForServerGeneration(t *testing.T) {
 	}
 }
 
+func TestMultimodalAgentSkipsServerGenerationWhenActivitySchedulingPaused(t *testing.T) {
+	agent := NewAgent("test")
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	activity := NewAgentActivity(agent, session)
+	session.activity = activity
+	activity.PauseScheduling()
+	ma := &MultimodalAgent{session: session}
+
+	ma.handleRealtimeEvent(llm.RealtimeEvent{
+		Type: llm.RealtimeEventTypeGenerationCreated,
+		Generation: &llm.GenerationCreatedEvent{
+			ResponseID:    "response_1",
+			UserInitiated: false,
+		},
+	})
+
+	select {
+	case ev := <-session.SpeechCreatedEvents():
+		t.Fatalf("unexpected SpeechCreated event while scheduling paused: %#v", ev)
+	default:
+	}
+	if len(activity.speechQueue) != 0 {
+		t.Fatalf("speechQueue length = %d, want no scheduled speech", len(activity.speechQueue))
+	}
+}
+
 func TestMultimodalAgentConsumesServerGenerationFunctionCalls(t *testing.T) {
 	agent := NewAgent("test")
 	agent.Tools = []llm.Tool{&fakeGenerationTool{name: "lookup", result: "agent result"}}

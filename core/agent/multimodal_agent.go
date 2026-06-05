@@ -395,6 +395,12 @@ func (ma *MultimodalAgent) handleRealtimeEvent(ev llm.RealtimeEvent) {
 		if ev.Generation == nil || ev.Generation.UserInitiated || ma.session == nil {
 			return
 		}
+		if ma.session.activity != nil {
+			if _, err := ma.session.activity.OnGenerationCreated(*ev.Generation, ma.attachPendingRealtimeAutoToolReply); err != nil {
+				logger.Logger.Warnw("failed to schedule realtime generation", err, "response_id", ev.Generation.ResponseID)
+			}
+			return
+		}
 		handle := NewSpeechHandle(ma.session.Options.AllowInterruptions, DefaultInputDetails())
 		handle.Generation.RealtimeGeneration = ev.Generation
 		ma.session.EmitSpeechCreated(SpeechCreatedEvent{

@@ -470,6 +470,65 @@ func TestAgentActivityErrorEmitsSessionErrorEvent(t *testing.T) {
 	}
 }
 
+func TestAgentActivityGenerationCreatedSkipsSpeechWhenSchedulingPaused(t *testing.T) {
+	agent := NewAgent("test")
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	activity := NewAgentActivity(agent, session)
+	activity.PauseScheduling()
+
+	handle, err := activity.OnGenerationCreated(llm.GenerationCreatedEvent{
+		ResponseID:    "response_1",
+		UserInitiated: false,
+	})
+
+	if !errors.Is(err, ErrSpeechSchedulingPaused) {
+		t.Fatalf("OnGenerationCreated error = %v, want ErrSpeechSchedulingPaused", err)
+	}
+	if handle != nil {
+		t.Fatalf("OnGenerationCreated handle = %#v, want nil when scheduling paused", handle)
+	}
+	select {
+	case ev := <-session.SpeechCreatedEvents():
+		t.Fatalf("unexpected SpeechCreated event while scheduling paused: %#v", ev)
+	default:
+	}
+}
+
+func TestAgentActivityGenerationCreatedEmitsAndSchedulesSpeech(t *testing.T) {
+	agent := NewAgent("test")
+	session := NewAgentSession(agent, nil, AgentSessionOptions{AllowInterruptions: true})
+	activity := NewAgentActivity(agent, session)
+	generation := llm.GenerationCreatedEvent{
+		ResponseID:    "response_1",
+		UserInitiated: false,
+	}
+
+	handle, err := activity.OnGenerationCreated(generation)
+	if err != nil {
+		t.Fatalf("OnGenerationCreated error = %v, want nil", err)
+	}
+	if handle == nil {
+		t.Fatal("OnGenerationCreated handle = nil, want speech handle")
+	}
+	if handle.Generation.RealtimeGeneration == nil || handle.Generation.RealtimeGeneration.ResponseID != "response_1" {
+		t.Fatalf("RealtimeGeneration = %#v, want response_1", handle.Generation.RealtimeGeneration)
+	}
+
+	select {
+	case ev := <-session.SpeechCreatedEvents():
+		if ev.SpeechHandle != handle || ev.UserInitiated || ev.Source != "generate_reply" {
+			t.Fatalf("SpeechCreatedEvent = %#v, want server generate_reply handle", ev)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("SpeechCreatedEvents did not receive realtime generation")
+	}
+	scheduleCtx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if err := handle.WaitForScheduled(scheduleCtx); err != nil {
+		t.Fatalf("speech handle was not scheduled: %v", err)
+	}
+}
+
 func TestAgentActivityUseTTSAlignedTranscriptUsesAgentOverride(t *testing.T) {
 	agent := NewAgent("test")
 	session := NewAgentSession(agent, nil, AgentSessionOptions{UseTTSAlignedTranscript: true})
