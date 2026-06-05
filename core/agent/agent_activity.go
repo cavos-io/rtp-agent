@@ -892,6 +892,17 @@ func (a *AgentActivity) OnMetricsCollected(metrics telemetry.AgentMetrics) {
 	if a == nil || a.Session == nil {
 		return
 	}
+	a.queueMu.Lock()
+	currentSpeech := a.currentSpeech
+	a.queueMu.Unlock()
+	if currentSpeech != nil {
+		switch m := metrics.(type) {
+		case *telemetry.LLMMetrics:
+			m.SpeechID = currentSpeech.ID
+		case *telemetry.TTSMetrics:
+			m.SpeechID = currentSpeech.ID
+		}
+	}
 	a.Session.EmitMetricsCollected(metrics)
 }
 

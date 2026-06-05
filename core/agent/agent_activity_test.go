@@ -547,6 +547,26 @@ func TestAgentActivityMetricsCollectedEmitsMetricsAndUsage(t *testing.T) {
 	}
 }
 
+func TestAgentActivityMetricsCollectedAddsCurrentSpeechID(t *testing.T) {
+	agent := NewAgent("test")
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	activity := NewAgentActivity(agent, session)
+	current := NewSpeechHandle(true, DefaultInputDetails())
+	activity.currentSpeech = current
+	llmMetrics := &telemetry.LLMMetrics{RequestID: "llm_req"}
+	ttsMetrics := &telemetry.TTSMetrics{RequestID: "tts_req"}
+
+	activity.OnMetricsCollected(llmMetrics)
+	activity.OnMetricsCollected(ttsMetrics)
+
+	if llmMetrics.SpeechID != current.ID {
+		t.Fatalf("LLMMetrics SpeechID = %q, want current speech %q", llmMetrics.SpeechID, current.ID)
+	}
+	if ttsMetrics.SpeechID != current.ID {
+		t.Fatalf("TTSMetrics SpeechID = %q, want current speech %q", ttsMetrics.SpeechID, current.ID)
+	}
+}
+
 func TestAgentActivityErrorEmitsSessionErrorEvent(t *testing.T) {
 	agent := NewAgent("test")
 	session := NewAgentSession(agent, nil, AgentSessionOptions{})
