@@ -32,6 +32,14 @@ type chatContextUpdatingAssistant interface {
 	UpdateChatContext(context.Context, *llm.ChatContext) error
 }
 
+type llmMetricsCollector interface {
+	OnMetricsCollected(llm.LLMMetricsHandler) func()
+}
+
+type llmErrorCollector interface {
+	OnError(llm.LLMErrorHandler) func()
+}
+
 type ttsMetricsCollector interface {
 	OnMetricsCollected(tts.TTSMetricsHandler) func()
 }
@@ -125,6 +133,20 @@ type scheduledSpeech struct {
 
 func (a *AgentActivity) Start() {
 	_ = a.recordInitialConfiguration()
+	if a.Session != nil && a.Session.LLM != nil {
+		if collector, ok := a.Session.LLM.(llmMetricsCollector); ok {
+			unsubscribe := collector.OnMetricsCollected(func(metrics *telemetry.LLMMetrics) {
+				a.OnMetricsCollected(metrics)
+			})
+			a.providerUnsubscribes = append(a.providerUnsubscribes, unsubscribe)
+		}
+		if collector, ok := a.Session.LLM.(llmErrorCollector); ok {
+			unsubscribe := collector.OnError(func(err *llm.LLMError) {
+				a.OnError(err, a.Session.LLM)
+			})
+			a.providerUnsubscribes = append(a.providerUnsubscribes, unsubscribe)
+		}
+	}
 	if a.Session != nil && a.Session.TTS != nil {
 		if collector, ok := a.Session.TTS.(ttsMetricsCollector); ok {
 			unsubscribe := collector.OnMetricsCollected(func(metrics *telemetry.TTSMetrics) {

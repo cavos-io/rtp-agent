@@ -1915,6 +1915,33 @@ func TestAgentSessionStartForwardsTTSMetricsThroughActivity(t *testing.T) {
 	}
 }
 
+func TestAgentSessionStartForwardsLLMMetricsThroughActivity(t *testing.T) {
+	llmSource := &fakeGenerationLLM{}
+	agent := NewAgent("test")
+	agent.LLM = llmSource
+	agent.STT = &fakePipelineSTT{}
+	agent.VAD = &fakePipelineVAD{}
+	agent.TTS = &fakePipelineTTS{}
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	session.Assistant = &fakeSessionAssistant{}
+
+	if err := session.Start(context.Background()); err != nil {
+		t.Fatalf("Start error = %v, want nil", err)
+	}
+
+	metrics := &telemetry.LLMMetrics{RequestID: "llm_req", PromptTokens: 5}
+	llmSource.EmitMetricsCollected(metrics)
+
+	select {
+	case ev := <-session.MetricsCollectedEvents():
+		if ev.Metrics != metrics {
+			t.Fatalf("MetricsCollectedEvent metrics = %#v, want original LLM metrics", ev.Metrics)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("MetricsCollectedEvents did not receive LLM metrics")
+	}
+}
+
 func TestAgentSessionStartForwardsVADMetricsThroughActivity(t *testing.T) {
 	vadSource := &fakePipelineVAD{}
 	agent := NewAgent("test")
@@ -2000,6 +2027,40 @@ func TestAgentSessionStartForwardsTTSErrorsThroughActivity(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("ErrorEvents did not receive TTS error")
+	}
+}
+
+func TestAgentSessionStartForwardsLLMErrorsThroughActivity(t *testing.T) {
+	llmSource := &fakeGenerationLLM{}
+	agent := NewAgent("test")
+	agent.LLM = llmSource
+	agent.STT = &fakePipelineSTT{}
+	agent.VAD = &fakePipelineVAD{}
+	agent.TTS = &fakePipelineTTS{}
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	session.Assistant = &fakeSessionAssistant{}
+
+	if err := session.Start(context.Background()); err != nil {
+		t.Fatalf("Start error = %v, want nil", err)
+	}
+
+	cause := errors.New("llm failed")
+	llmSource.EmitError(llm.NewLLMError("fake", cause, true))
+
+	select {
+	case ev := <-session.ErrorEvents():
+		var llmErr *llm.LLMError
+		if !errors.As(ev.Error, &llmErr) {
+			t.Fatalf("Error = %T, want *llm.LLMError", ev.Error)
+		}
+		if !errors.Is(ev.Error, cause) {
+			t.Fatalf("Error = %v, want cause %v", ev.Error, cause)
+		}
+		if ev.Source != llmSource {
+			t.Fatalf("Source = %#v, want LLM source", ev.Source)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("ErrorEvents did not receive LLM error")
 	}
 }
 

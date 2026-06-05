@@ -713,6 +713,9 @@ func (r *runContextRecordingTool) Execute(ctx context.Context, args string) (str
 }
 
 type fakeGenerationLLM struct {
+	llm.MetricsEmitter
+	llm.ErrorEmitter
+
 	stream       llm.LLMStream
 	streams      []llm.LLMStream
 	calls        []llm.ChatOptions
