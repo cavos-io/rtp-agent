@@ -92,6 +92,16 @@ func TestNewRoomIOCanDisablePreConnectAudio(t *testing.T) {
 	}
 }
 
+func TestNewRoomIOCanDisableAudioInput(t *testing.T) {
+	rio := NewRoomIO(&lksdk.Room{}, &agent.AgentSession{}, RoomOptions{
+		DisableAudioInput: true,
+	})
+
+	if rio.preConnectAudio != nil {
+		t.Fatalf("preConnectAudio = %#v, want nil when audio input disabled", rio.preConnectAudio)
+	}
+}
+
 func TestNewRoomIORegistersReferenceChatTextHandler(t *testing.T) {
 	room := lksdk.NewRoom(nil)
 	_ = NewRoomIO(room, &agent.AgentSession{}, RoomOptions{})

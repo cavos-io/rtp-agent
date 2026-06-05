@@ -107,6 +107,7 @@ type RoomOptions struct {
 	AudioTrackName           string
 	PreConnectAudioTimeout   time.Duration
 	DisablePreConnectAudio   bool
+	DisableAudioInput        bool
 	DisableTextInput         bool
 	DisableAudioOutput       bool
 	DisableCloseOnDisconnect bool
@@ -178,7 +179,7 @@ func NewRoomIO(room *lksdk.Room, session *agent.AgentSession, opts RoomOptions) 
 	enc, _ := newOpusEncoder(48000, 1)
 
 	var preConnectAudio *PreConnectAudioHandler
-	if !opts.DisablePreConnectAudio {
+	if !opts.DisableAudioInput && !opts.DisablePreConnectAudio {
 		preConnectAudio = NewPreConnectAudioHandler(room, roomIOPreConnectAudioTimeout(opts))
 		preConnectAudio.Register()
 	}
@@ -624,7 +625,7 @@ func (rio *RoomIO) onTrackSubscribed(track *webrtc.TrackRemote, publication *lks
 	if rp != nil && !rio.shouldAcceptParticipant(rp.Identity(), rp.Kind(), rp.Attributes(), rio.localParticipantIdentity()) {
 		return
 	}
-	if rio.isAudioDisabled() {
+	if rio.Options.DisableAudioInput || rio.isAudioDisabled() {
 		return
 	}
 	if track.Kind() == webrtc.RTPCodecTypeAudio {
@@ -723,7 +724,7 @@ func roomIOCloseOnDisconnectReason(reason livekit.DisconnectReason) bool {
 }
 
 func (rio *RoomIO) handleAudioTrack(track *webrtc.TrackRemote) {
-	if rio.isAudioDisabled() {
+	if rio.Options.DisableAudioInput || rio.isAudioDisabled() {
 		return
 	}
 	// First, check for and flush any pre-connect audio buffered
