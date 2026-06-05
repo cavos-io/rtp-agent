@@ -108,6 +108,7 @@ type RoomOptions struct {
 	PreConnectAudioTimeout   time.Duration
 	DisablePreConnectAudio   bool
 	DisableTextInput         bool
+	DisableAudioOutput       bool
 	DisableCloseOnDisconnect bool
 	DeleteRoomOnClose        bool
 	DeleteRoom               func(context.Context, string) error
@@ -204,7 +205,9 @@ func NewRoomIO(room *lksdk.Room, session *agent.AgentSession, opts RoomOptions) 
 		rio.registerTextInput()
 	}
 
-	session.EnsureAssistant().SetPublishAudio(rio.PublishAudio)
+	if !opts.DisableAudioOutput {
+		session.EnsureAssistant().SetPublishAudio(rio.PublishAudio)
+	}
 
 	return rio
 }
@@ -585,6 +588,9 @@ func participantKindAllowed(kind lksdk.ParticipantKind, allowed []lksdk.Particip
 }
 
 func (rio *RoomIO) Start(ctx context.Context) error {
+	if rio == nil || rio.Options.DisableAudioOutput {
+		return nil
+	}
 	track, err := lksdk.NewLocalSampleTrack(webrtc.RTPCodecCapability{
 		MimeType:  webrtc.MimeTypeOpus,
 		ClockRate: 48000,
@@ -787,7 +793,7 @@ func (rio *RoomIO) handleAudioTrack(track *webrtc.TrackRemote) {
 }
 
 func (rio *RoomIO) PublishAudio(frame *model.AudioFrame) error {
-	if rio.isAudioDisabled() {
+	if rio == nil || rio.Options.DisableAudioOutput || rio.isAudioDisabled() {
 		return nil
 	}
 	if rio.Recorder != nil {

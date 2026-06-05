@@ -114,6 +114,27 @@ func TestNewRoomIOCanDisableTextInput(t *testing.T) {
 	}
 }
 
+func TestNewRoomIOCanDisableAudioOutput(t *testing.T) {
+	assistant := &agent.PipelineAgent{}
+	session := &agent.AgentSession{Assistant: assistant}
+
+	_ = NewRoomIO(lksdk.NewRoom(nil), session, RoomOptions{
+		DisableAudioOutput: true,
+	})
+
+	if assistant.PublishAudio != nil {
+		t.Fatal("PublishAudio configured despite disabled room audio output")
+	}
+}
+
+func TestRoomIOStartSkipsTrackWhenAudioOutputDisabled(t *testing.T) {
+	rio := &RoomIO{Options: RoomOptions{DisableAudioOutput: true}}
+
+	if err := rio.Start(context.Background()); err != nil {
+		t.Fatalf("Start() error = %v, want nil with disabled audio output", err)
+	}
+}
+
 func TestNewRoomIOCreatesMultimodalAssistantWithRealtimeModel(t *testing.T) {
 	session := &agent.AgentSession{
 		ChatCtx:       llm.NewChatContext(),
