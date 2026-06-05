@@ -43,6 +43,7 @@ type AgentSessionOptions struct {
 	MinEndpointingDelay           float64
 	MaxEndpointingDelay           float64
 	EndpointingMode               string
+	EndpointingAlpha              float64
 	Endpointing                   Endpointing
 	MaxToolSteps                  int
 	UserAwayTimeout               float64
@@ -493,7 +494,7 @@ func withAgentSessionOptionDefaults(opts AgentSessionOptions) AgentSessionOption
 		opts.MaxEndpointingDelay = 3.0
 	}
 	if opts.Endpointing == nil {
-		opts.Endpointing = CreateEndpointing(opts.EndpointingMode, opts.MinEndpointingDelay, opts.MaxEndpointingDelay)
+		opts.Endpointing = CreateEndpointing(opts.EndpointingMode, opts.MinEndpointingDelay, opts.MaxEndpointingDelay, opts.EndpointingAlpha)
 	}
 	if opts.MaxToolSteps == 0 {
 		opts.MaxToolSteps = 3
