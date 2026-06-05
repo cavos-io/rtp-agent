@@ -597,6 +597,9 @@ func (s *AgentServer) UpdateOptions(opts WorkerOptions) error {
 
 	updated := mergeWorkerOptions(current, opts)
 	updated = resolveWorkerOptions(updated)
+	if !validWorkerLogLevel(updated.LogLevel) {
+		return fmt.Errorf("invalid log_level %q, valid levels: CRITICAL, DEBUG, ERROR, INFO, TRACE, WARN", updated.LogLevel)
+	}
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
