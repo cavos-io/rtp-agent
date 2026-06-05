@@ -303,6 +303,7 @@ func TestAgentActivityRealtimeInputSpeechStoppedKeepsVADOwnedUserState(t *testin
 	session := NewAgentSession(agent, nil, AgentSessionOptions{})
 	session.UpdateUserState(UserStateSpeaking)
 	activity := NewAgentActivity(agent, session)
+	userTranscriptEvents := session.UserInputTranscribedEvents()
 
 	activity.OnInputSpeechStopped(llm.InputSpeechStoppedEvent{UserTranscriptionEnabled: true})
 
@@ -310,7 +311,7 @@ func TestAgentActivityRealtimeInputSpeechStoppedKeepsVADOwnedUserState(t *testin
 		t.Fatalf("UserState() after realtime speech stopped with VAD = %q, want %q", got, UserStateSpeaking)
 	}
 	select {
-	case ev := <-session.UserInputTranscribedEvents():
+	case ev := <-userTranscriptEvents:
 		if ev.Transcript != "" || ev.IsFinal {
 			t.Fatalf("UserInputTranscribedEvent = %#v, want empty interim transcript", ev)
 		}
@@ -423,11 +424,12 @@ func TestAgentActivityRealtimeInputSpeechStoppedEmitsInterimTranscriptWhenEnable
 	agent := NewAgent("test")
 	session := NewAgentSession(agent, nil, AgentSessionOptions{})
 	activity := NewAgentActivity(agent, session)
+	userTranscriptEvents := session.UserInputTranscribedEvents()
 
 	activity.OnInputSpeechStopped(llm.InputSpeechStoppedEvent{UserTranscriptionEnabled: true})
 
 	select {
-	case ev := <-session.UserInputTranscribedEvents():
+	case ev := <-userTranscriptEvents:
 		if ev.Transcript != "" || ev.IsFinal {
 			t.Fatalf("UserInputTranscribedEvent = %#v, want empty interim transcript", ev)
 		}
@@ -440,6 +442,7 @@ func TestAgentActivityInputAudioTranscriptionCompletedCommitsFinalMessage(t *tes
 	agent := NewAgent("test")
 	session := NewAgentSession(agent, nil, AgentSessionOptions{})
 	activity := NewAgentActivity(agent, session)
+	userTranscriptEvents := session.UserInputTranscribedEvents()
 
 	activity.OnInputAudioTranscriptionCompleted(llm.InputTranscriptionCompleted{
 		ItemID:     "item_user_1",
@@ -447,7 +450,7 @@ func TestAgentActivityInputAudioTranscriptionCompletedCommitsFinalMessage(t *tes
 		IsFinal:    true,
 	})
 
-	transcriptEvent := receiveUserInputTranscribedEvent(t, session)
+	transcriptEvent := receiveUserInputTranscribedEvent(t, userTranscriptEvents)
 	if transcriptEvent.Transcript != "hello realtime" || !transcriptEvent.IsFinal {
 		t.Fatalf("UserInputTranscribedEvent = %#v, want final hello realtime", transcriptEvent)
 	}
@@ -476,6 +479,7 @@ func TestAgentActivityInputAudioTranscriptionCompletedSkipsInterimMessage(t *tes
 	agent := NewAgent("test")
 	session := NewAgentSession(agent, nil, AgentSessionOptions{})
 	activity := NewAgentActivity(agent, session)
+	userTranscriptEvents := session.UserInputTranscribedEvents()
 
 	activity.OnInputAudioTranscriptionCompleted(llm.InputTranscriptionCompleted{
 		ItemID:     "item_user_1",
@@ -483,7 +487,7 @@ func TestAgentActivityInputAudioTranscriptionCompletedSkipsInterimMessage(t *tes
 		IsFinal:    false,
 	})
 
-	transcriptEvent := receiveUserInputTranscribedEvent(t, session)
+	transcriptEvent := receiveUserInputTranscribedEvent(t, userTranscriptEvents)
 	if transcriptEvent.Transcript != "hello" || transcriptEvent.IsFinal {
 		t.Fatalf("UserInputTranscribedEvent = %#v, want interim hello", transcriptEvent)
 	}
@@ -1193,6 +1197,7 @@ func TestAgentActivityOnFinalTranscriptEmitsUserInputTranscribed(t *testing.T) {
 	agent.TurnDetection = TurnDetectionModeManual
 	session := NewAgentSession(agent, nil, AgentSessionOptions{})
 	activity := NewAgentActivity(agent, session)
+	userTranscriptEvents := session.UserInputTranscribedEvents()
 
 	activity.OnFinalTranscript(&stt.SpeechEvent{
 		Alternatives: []stt.SpeechData{{
@@ -1203,7 +1208,7 @@ func TestAgentActivityOnFinalTranscriptEmitsUserInputTranscribed(t *testing.T) {
 	})
 
 	select {
-	case ev := <-session.UserInputTranscribedEvents():
+	case ev := <-userTranscriptEvents:
 		if ev.GetType() != "user_input_transcribed" {
 			t.Fatalf("event type = %q, want user_input_transcribed", ev.GetType())
 		}
@@ -1222,6 +1227,7 @@ func TestAgentActivityOnInterimTranscriptEmitsUserInputTranscribed(t *testing.T)
 	agent := NewAgent("test")
 	session := NewAgentSession(agent, nil, AgentSessionOptions{})
 	activity := NewAgentActivity(agent, session)
+	userTranscriptEvents := session.UserInputTranscribedEvents()
 
 	activity.OnInterimTranscript(&stt.SpeechEvent{
 		Alternatives: []stt.SpeechData{{
@@ -1232,7 +1238,7 @@ func TestAgentActivityOnInterimTranscriptEmitsUserInputTranscribed(t *testing.T)
 	})
 
 	select {
-	case ev := <-session.UserInputTranscribedEvents():
+	case ev := <-userTranscriptEvents:
 		if ev.Transcript != "interim transcript" || ev.IsFinal {
 			t.Fatalf("event transcript/final = %q/%v, want interim transcript/false", ev.Transcript, ev.IsFinal)
 		}
@@ -1249,6 +1255,7 @@ func TestAgentActivityOnInterimTranscriptSkipsRealtimeUserTranscription(t *testi
 	session := NewAgentSession(agent, nil, AgentSessionOptions{})
 	session.Assistant = realtimeUserTranscriptionAssistant{}
 	activity := NewAgentActivity(agent, session)
+	userTranscriptEvents := session.UserInputTranscribedEvents()
 
 	activity.OnInterimTranscript(&stt.SpeechEvent{
 		Alternatives: []stt.SpeechData{{
@@ -1258,7 +1265,7 @@ func TestAgentActivityOnInterimTranscriptSkipsRealtimeUserTranscription(t *testi
 	})
 
 	select {
-	case ev := <-session.UserInputTranscribedEvents():
+	case ev := <-userTranscriptEvents:
 		t.Fatalf("UserInputTranscribedEvents received STT transcript despite realtime user transcription: %#v", ev)
 	case <-time.After(10 * time.Millisecond):
 	}
@@ -1412,6 +1419,7 @@ func TestAgentActivityCommitUserTurnFallsBackToInterimTranscriptAfterTimeout(t *
 	session := NewAgentSession(agent, nil, AgentSessionOptions{})
 	activity := NewAgentActivity(agent, session)
 	defer activity.Stop()
+	interimEvents := session.UserInputTranscribedEvents()
 
 	activity.OnInterimTranscript(&stt.SpeechEvent{
 		Alternatives: []stt.SpeechData{{
@@ -1421,8 +1429,9 @@ func TestAgentActivityCommitUserTurnFallsBackToInterimTranscriptAfterTimeout(t *
 			SpeakerID:  "speaker-1",
 		}},
 	})
-	<-session.UserInputTranscribedEvents()
+	<-interimEvents
 
+	finalEvents := session.UserInputTranscribedEvents()
 	transcript, err := activity.CommitUserTurn(context.Background(), CommitUserTurnOptions{
 		TranscriptTimeout: 10 * time.Millisecond,
 	})
@@ -1441,7 +1450,7 @@ func TestAgentActivityCommitUserTurnFallsBackToInterimTranscriptAfterTimeout(t *
 		t.Fatal("OnUserTurnCompleted was not called for interim fallback")
 	}
 	select {
-	case ev := <-session.UserInputTranscribedEvents():
+	case ev := <-finalEvents:
 		if !ev.IsFinal || ev.Transcript != "interim fallback" || ev.Language != "en" || ev.SpeakerID != "speaker-1" {
 			t.Fatalf("fallback final event = %#v, want final interim fallback/en/speaker-1", ev)
 		}

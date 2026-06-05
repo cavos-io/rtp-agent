@@ -839,6 +839,7 @@ func TestPipelineAgentRoutesSTTTranscriptsThroughActivity(t *testing.T) {
 	baseAgent := NewAgent("test")
 	baseAgent.LLM = &fakeGenerationLLM{stream: &fakeGenerationLLMStream{}}
 	session := NewAgentSession(baseAgent, nil, AgentSessionOptions{})
+	userTranscriptEvents := session.UserInputTranscribedEvents()
 	activity := NewAgentActivity(baseAgent, session)
 	session.activity = activity
 	chatCtx := llm.NewChatContext()
@@ -859,7 +860,7 @@ func TestPipelineAgentRoutesSTTTranscriptsThroughActivity(t *testing.T) {
 		}},
 	})
 
-	transcriptEvent := receiveUserInputTranscribedEvent(t, session)
+	transcriptEvent := receiveUserInputTranscribedEvent(t, userTranscriptEvents)
 	if transcriptEvent.Transcript != "hello through activity" || !transcriptEvent.IsFinal {
 		t.Fatalf("UserInputTranscribedEvent = %#v, want final transcript from activity", transcriptEvent)
 	}
@@ -891,6 +892,7 @@ func TestPipelineAgentRoutesSTTTranscriptsThroughActivity(t *testing.T) {
 func TestPipelineAgentEmitsUserInputTranscribedEvents(t *testing.T) {
 	chatCtx := llm.NewChatContext()
 	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	userTranscriptEvents := session.UserInputTranscribedEvents()
 	agent := NewPipelineAgent(nil, nil, &fakeGenerationLLM{
 		stream: &fakeGenerationLLMStream{},
 	}, &fakePipelineTTS{}, chatCtx)
@@ -920,8 +922,8 @@ func TestPipelineAgentEmitsUserInputTranscribedEvents(t *testing.T) {
 	agent.sttLoop(stream)
 
 	events := []UserInputTranscribedEvent{
-		receiveUserInputTranscribedEvent(t, session),
-		receiveUserInputTranscribedEvent(t, session),
+		receiveUserInputTranscribedEvent(t, userTranscriptEvents),
+		receiveUserInputTranscribedEvent(t, userTranscriptEvents),
 	}
 	if events[0].Transcript != "hello" || events[0].IsFinal {
 		t.Fatalf("interim transcript event = %#v, want non-final hello", events[0])
@@ -2224,11 +2226,11 @@ func generationToolNames(tools []llm.Tool) []string {
 	return names
 }
 
-func receiveUserInputTranscribedEvent(t *testing.T, session *AgentSession) UserInputTranscribedEvent {
+func receiveUserInputTranscribedEvent(t *testing.T, events <-chan UserInputTranscribedEvent) UserInputTranscribedEvent {
 	t.Helper()
 
 	select {
-	case ev := <-session.UserInputTranscribedEvents():
+	case ev := <-events:
 		return ev
 	case <-time.After(time.Second):
 		t.Fatal("UserInputTranscribedEvents did not receive transcript")

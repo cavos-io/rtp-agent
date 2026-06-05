@@ -1222,6 +1222,7 @@ func TestMultimodalAgentSkipsSpeechCreatedForUserInitiatedGeneration(t *testing.
 func TestMultimodalAgentEmitsFinalInputTranscriptionAndCommitsUserMessage(t *testing.T) {
 	chatCtx := llm.NewChatContext()
 	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	userTranscriptEvents := session.UserInputTranscribedEvents()
 	ma := &MultimodalAgent{
 		session: session,
 		chatCtx: chatCtx,
@@ -1237,7 +1238,7 @@ func TestMultimodalAgentEmitsFinalInputTranscriptionAndCommitsUserMessage(t *tes
 	})
 
 	select {
-	case ev := <-session.UserInputTranscribedEvents():
+	case ev := <-userTranscriptEvents:
 		if ev.Transcript != "hello realtime" || !ev.IsFinal {
 			t.Fatalf("transcription event = %#v, want final hello realtime", ev)
 		}
@@ -1265,6 +1266,7 @@ func TestMultimodalAgentEmitsFinalInputTranscriptionAndCommitsUserMessage(t *tes
 func TestMultimodalAgentEmitsInterimInputTranscriptionWithoutCommittingMessage(t *testing.T) {
 	chatCtx := llm.NewChatContext()
 	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	userTranscriptEvents := session.UserInputTranscribedEvents()
 	ma := &MultimodalAgent{
 		session: session,
 		chatCtx: chatCtx,
@@ -1280,7 +1282,7 @@ func TestMultimodalAgentEmitsInterimInputTranscriptionWithoutCommittingMessage(t
 	})
 
 	select {
-	case ev := <-session.UserInputTranscribedEvents():
+	case ev := <-userTranscriptEvents:
 		if ev.Transcript != "hello" || ev.IsFinal {
 			t.Fatalf("transcription event = %#v, want interim hello", ev)
 		}
@@ -1300,6 +1302,7 @@ func TestMultimodalAgentEmitsInterimInputTranscriptionWithoutCommittingMessage(t
 func TestMultimodalAgentRoutesInputAudioTranscriptionThroughActivity(t *testing.T) {
 	agent := NewAgent("test")
 	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	userTranscriptEvents := session.UserInputTranscribedEvents()
 	activity := NewAgentActivity(agent, session)
 	session.activity = activity
 	ma := &MultimodalAgent{session: session, chatCtx: session.ChatCtx}
@@ -1313,7 +1316,7 @@ func TestMultimodalAgentRoutesInputAudioTranscriptionThroughActivity(t *testing.
 		},
 	})
 
-	transcriptEvent := receiveUserInputTranscribedEvent(t, session)
+	transcriptEvent := receiveUserInputTranscribedEvent(t, userTranscriptEvents)
 	if transcriptEvent.Transcript != "hello activity" || !transcriptEvent.IsFinal {
 		t.Fatalf("UserInputTranscribedEvent = %#v, want final hello activity", transcriptEvent)
 	}
@@ -1337,6 +1340,7 @@ func TestMultimodalAgentRoutesRealtimeSpeechStoppedThroughActivity(t *testing.T)
 	activity := NewAgentActivity(agent, session)
 	session.activity = activity
 	ma := &MultimodalAgent{session: session, chatCtx: llm.NewChatContext()}
+	userTranscriptEvents := session.UserInputTranscribedEvents()
 	session.UpdateUserState(UserStateSpeaking)
 
 	ma.handleRealtimeEvent(llm.RealtimeEvent{
@@ -1350,7 +1354,7 @@ func TestMultimodalAgentRoutesRealtimeSpeechStoppedThroughActivity(t *testing.T)
 		t.Fatalf("UserState() = %q, want %q", got, UserStateListening)
 	}
 	select {
-	case ev := <-session.UserInputTranscribedEvents():
+	case ev := <-userTranscriptEvents:
 		if ev.Transcript != "" || ev.IsFinal {
 			t.Fatalf("UserInputTranscribedEvent = %#v, want empty interim transcript", ev)
 		}
