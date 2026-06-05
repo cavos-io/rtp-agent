@@ -1154,6 +1154,11 @@ func (s *AgentSession) StartWithOptions(ctx context.Context, opts StartOptions) 
 		}
 	}
 	if avatar != nil {
+		if metricsSource, ok := avatar.(AvatarMetricsSource); ok {
+			metricsSource.OnMetricsCollected(func(metrics *telemetry.AvatarMetrics) {
+				s.EmitMetricsCollected(metrics)
+			})
+		}
 		if err := avatar.Start(ctx); err != nil {
 			if backgroundAudio != nil {
 				_ = backgroundAudio.Close()

@@ -119,5 +119,22 @@ func LogMetrics(metrics AgentMetrics) {
 			"num_requests", m.NumRequests,
 			"metadata", metadata,
 		)
+	case *AvatarMetrics:
+		if m.Metadata != nil {
+			metadata = map[string]interface{}{
+				"model_name":     m.Metadata.ModelName,
+				"model_provider": m.Metadata.ModelProvider,
+			}
+		}
+		var avatarJoinLatency float64
+		if m.SessionStartedTime != nil && m.AvatarJoinedTime != nil {
+			avatarJoinLatency = m.AvatarJoinedTime.Sub(*m.SessionStartedTime).Seconds()
+		}
+		logger.Logger.Infow("Avatar metrics",
+			"type", m.GetType(),
+			"avatar_join_latency", avatarJoinLatency,
+			"playback_latency", m.PlaybackLatency,
+			"metadata", metadata,
+		)
 	}
 }

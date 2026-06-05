@@ -104,6 +104,17 @@ type InterruptionMetrics struct {
 
 func (m *InterruptionMetrics) GetType() string { return "interruption_metrics" }
 
+type AvatarMetrics struct {
+	Label              string
+	Timestamp          time.Time
+	PlaybackLatency    float64
+	SessionStartedTime *time.Time
+	AvatarJoinedTime   *time.Time
+	Metadata           *Metadata
+}
+
+func (m *AvatarMetrics) GetType() string { return "avatar_metrics" }
+
 type CachedTokenDetails struct {
 	AudioTokens int
 	TextTokens  int

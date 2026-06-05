@@ -3,6 +3,9 @@ package agent
 import (
 	"context"
 	"testing"
+	"time"
+
+	"github.com/cavos-io/rtp-agent/library/telemetry"
 )
 
 type avatarContextKey string
@@ -55,6 +58,33 @@ func TestAgentSessionStartDoesNotRestartAvatarProvider(t *testing.T) {
 	}
 }
 
+func TestAgentSessionStartSubscribesAvatarMetrics(t *testing.T) {
+	baseAgent := NewAgent("test")
+	baseAgent.VAD = &fakePipelineVAD{}
+	baseAgent.STT = &fakePipelineSTT{}
+	baseAgent.LLM = &fakeGenerationLLM{stream: &fakeGenerationLLMStream{}}
+	baseAgent.TTS = &fakePipelineTTS{}
+	avatar := &recordingAvatarProvider{}
+	baseAgent.Avatar = avatar
+
+	session := NewAgentSession(baseAgent, nil, AgentSessionOptions{})
+	if err := session.Start(context.Background()); err != nil {
+		t.Fatalf("Start error = %v", err)
+	}
+	metrics := &telemetry.AvatarMetrics{PlaybackLatency: 0.125}
+
+	avatar.emitMetrics(metrics)
+
+	select {
+	case ev := <-session.MetricsCollectedEvents():
+		if ev.Metrics != metrics {
+			t.Fatalf("MetricsCollectedEvent metrics = %#v, want original avatar metrics", ev.Metrics)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("MetricsCollectedEvents did not receive avatar metrics")
+	}
+}
+
 func TestAvatarProviderUpdateStateRecordsLatestState(t *testing.T) {
 	avatar := &recordingAvatarProvider{}
 
@@ -76,6 +106,7 @@ type recordingAvatarProvider struct {
 	startCalls   int
 	startContext context.Context
 	state        AvatarState
+	metrics      AvatarMetricsHandler
 }
 
 func (r *recordingAvatarProvider) Start(ctx context.Context) error {
@@ -87,4 +118,17 @@ func (r *recordingAvatarProvider) Start(ctx context.Context) error {
 func (r *recordingAvatarProvider) UpdateState(state AvatarState) error {
 	r.state = state
 	return nil
+}
+
+func (r *recordingAvatarProvider) OnMetricsCollected(handler AvatarMetricsHandler) func() {
+	r.metrics = handler
+	return func() {
+		r.metrics = nil
+	}
+}
+
+func (r *recordingAvatarProvider) emitMetrics(metrics *telemetry.AvatarMetrics) {
+	if r.metrics != nil {
+		r.metrics(metrics)
+	}
 }
