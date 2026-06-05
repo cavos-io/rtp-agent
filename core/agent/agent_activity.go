@@ -36,6 +36,10 @@ type ttsMetricsCollector interface {
 	OnMetricsCollected(tts.TTSMetricsHandler) func()
 }
 
+type ttsErrorCollector interface {
+	OnError(tts.TTSErrorHandler) func()
+}
+
 type EndOfTurnInfo struct {
 	SkipReply            bool
 	NewTranscript        string
@@ -67,7 +71,7 @@ type AgentActivity struct {
 	sttEOSReceived bool
 	speaking       bool
 
-	metricUnsubscribes []func()
+	providerUnsubscribes []func()
 
 	userTurnMu                   sync.Mutex
 	userTurnUpdatedCh            chan struct{}
@@ -118,7 +122,13 @@ func (a *AgentActivity) Start() {
 			unsubscribe := collector.OnMetricsCollected(func(metrics *telemetry.TTSMetrics) {
 				a.OnMetricsCollected(metrics)
 			})
-			a.metricUnsubscribes = append(a.metricUnsubscribes, unsubscribe)
+			a.providerUnsubscribes = append(a.providerUnsubscribes, unsubscribe)
+		}
+		if collector, ok := a.Session.TTS.(ttsErrorCollector); ok {
+			unsubscribe := collector.OnError(func(err tts.TTSError) {
+				a.OnError(err, a.Session.TTS)
+			})
+			a.providerUnsubscribes = append(a.providerUnsubscribes, unsubscribe)
 		}
 	}
 	if a.Session != nil && a.Session.VAD != nil {
@@ -135,10 +145,10 @@ func (a *AgentActivity) Start() {
 
 func (a *AgentActivity) Stop() {
 	a.AgentIntf.OnExit()
-	for _, unsubscribe := range a.metricUnsubscribes {
+	for _, unsubscribe := range a.providerUnsubscribes {
 		unsubscribe()
 	}
-	a.metricUnsubscribes = nil
+	a.providerUnsubscribes = nil
 	a.cancel()
 	a.queueMu.Lock()
 	a.schedulingStarted = false

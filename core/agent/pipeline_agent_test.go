@@ -1431,6 +1431,7 @@ func toolCallStream(callID string) *fakeGenerationLLMStream {
 
 type fakePipelineTTS struct {
 	tts.MetricsEmitter
+	tts.ErrorEmitter
 	stream       *fakePipelineTTSStream
 	capabilities tts.TTSCapabilities
 }

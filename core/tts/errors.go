@@ -15,6 +15,23 @@ type TTSError struct {
 	Recoverable bool
 }
 
+func (e TTSError) Error() string {
+	if e.Err != nil {
+		return e.Err.Error()
+	}
+	if e.Label != "" {
+		return e.Label
+	}
+	if e.Type != "" {
+		return e.Type
+	}
+	return TTSErrorType
+}
+
+func (e TTSError) Unwrap() error {
+	return e.Err
+}
+
 type TTSErrorHandler func(TTSError)
 
 type ErrorEmitter struct {

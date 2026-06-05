@@ -1941,6 +1941,40 @@ func TestAgentSessionStartForwardsVADMetricsThroughActivity(t *testing.T) {
 	}
 }
 
+func TestAgentSessionStartForwardsTTSErrorsThroughActivity(t *testing.T) {
+	ttsSource := &fakePipelineTTS{}
+	agent := NewAgent("test")
+	agent.TTS = ttsSource
+	agent.LLM = &fakeGenerationLLM{}
+	agent.STT = &fakePipelineSTT{}
+	agent.VAD = &fakePipelineVAD{}
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	session.Assistant = &fakeSessionAssistant{}
+
+	if err := session.Start(context.Background()); err != nil {
+		t.Fatalf("Start error = %v, want nil", err)
+	}
+
+	cause := errors.New("tts failed")
+	ttsSource.EmitError(tts.TTSError{Label: "fake", Err: cause, Recoverable: true})
+
+	select {
+	case ev := <-session.ErrorEvents():
+		var ttsErr tts.TTSError
+		if !errors.As(ev.Error, &ttsErr) {
+			t.Fatalf("Error = %T, want tts.TTSError", ev.Error)
+		}
+		if !errors.Is(ev.Error, cause) {
+			t.Fatalf("Error = %v, want cause %v", ev.Error, cause)
+		}
+		if ev.Source != ttsSource {
+			t.Fatalf("Source = %#v, want TTS source", ev.Source)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("ErrorEvents did not receive TTS error")
+	}
+}
+
 func TestAgentSessionCloseSoonCommitsPendingUserTurn(t *testing.T) {
 	agent := &turnCompletedAgent{Agent: NewAgent("test"), turns: make(chan *llm.ChatMessage, 1)}
 	agent.TurnDetection = TurnDetectionModeManual
