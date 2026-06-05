@@ -42,9 +42,12 @@ func NewIVRActivity(session *AgentSession) *IVRActivity {
 }
 
 func (i *IVRActivity) Start() {
-	go i.watchUserState()
-	go i.watchAgentState()
-	go i.watchUserInputTranscripts()
+	userStateEvents := i.Session.UserStateChangedEvents()
+	agentStateEvents := i.Session.AgentStateChangedEvents()
+	userTranscriptEvents := i.Session.UserInputTranscribedEvents()
+	go i.watchUserState(userStateEvents)
+	go i.watchAgentState(agentStateEvents)
+	go i.watchUserInputTranscripts(userTranscriptEvents)
 	i.scheduleSilenceCheck()
 }
 
@@ -58,8 +61,7 @@ func (i *IVRActivity) Stop() {
 	i.mu.Unlock()
 }
 
-func (i *IVRActivity) watchUserState() {
-	events := i.Session.UserStateChangedEvents()
+func (i *IVRActivity) watchUserState(events <-chan UserStateChangedEvent) {
 	for {
 		select {
 		case <-i.ctx.Done():
@@ -73,8 +75,7 @@ func (i *IVRActivity) watchUserState() {
 	}
 }
 
-func (i *IVRActivity) watchAgentState() {
-	events := i.Session.AgentStateChangedEvents()
+func (i *IVRActivity) watchAgentState(events <-chan AgentStateChangedEvent) {
 	for {
 		select {
 		case <-i.ctx.Done():
@@ -88,8 +89,7 @@ func (i *IVRActivity) watchAgentState() {
 	}
 }
 
-func (i *IVRActivity) watchUserInputTranscripts() {
-	events := i.Session.UserInputTranscribedEvents()
+func (i *IVRActivity) watchUserInputTranscripts(events <-chan UserInputTranscribedEvent) {
 	for {
 		select {
 		case <-i.ctx.Done():

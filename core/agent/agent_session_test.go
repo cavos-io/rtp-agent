@@ -149,6 +149,28 @@ func TestAgentSessionAgentOutputTranscribedEventsFanOutToSubscribers(t *testing.
 	assertAgentTranscriptEvent(t, second, "second")
 }
 
+func TestAgentSessionUserStateChangedEventsFanOutToSubscribers(t *testing.T) {
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	first := session.UserStateChangedEvents()
+	second := session.UserStateChangedEvents()
+
+	session.UpdateUserState(UserStateSpeaking)
+
+	assertUserStateChangedEvent(t, first, "first")
+	assertUserStateChangedEvent(t, second, "second")
+}
+
+func TestAgentSessionAgentStateChangedEventsFanOutToSubscribers(t *testing.T) {
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	first := session.AgentStateChangedEvents()
+	second := session.AgentStateChangedEvents()
+
+	session.UpdateAgentState(AgentStateThinking)
+
+	assertAgentStateChangedEvent(t, first, "first")
+	assertAgentStateChangedEvent(t, second, "second")
+}
+
 func assertUserTranscriptEvent(t *testing.T, events <-chan UserInputTranscribedEvent, name string) {
 	t.Helper()
 
@@ -172,6 +194,32 @@ func assertAgentTranscriptEvent(t *testing.T, events <-chan AgentOutputTranscrib
 		}
 	case <-time.After(time.Second):
 		t.Fatalf("%s subscriber did not receive agent transcript event", name)
+	}
+}
+
+func assertUserStateChangedEvent(t *testing.T, events <-chan UserStateChangedEvent, name string) {
+	t.Helper()
+
+	select {
+	case ev := <-events:
+		if ev.OldState != UserStateListening || ev.NewState != UserStateSpeaking {
+			t.Fatalf("%s subscriber event = %#v, want listening to speaking", name, ev)
+		}
+	case <-time.After(time.Second):
+		t.Fatalf("%s subscriber did not receive user state event", name)
+	}
+}
+
+func assertAgentStateChangedEvent(t *testing.T, events <-chan AgentStateChangedEvent, name string) {
+	t.Helper()
+
+	select {
+	case ev := <-events:
+		if ev.OldState != AgentStateInitializing || ev.NewState != AgentStateThinking {
+			t.Fatalf("%s subscriber event = %#v, want initializing to thinking", name, ev)
+		}
+	case <-time.After(time.Second):
+		t.Fatalf("%s subscriber did not receive agent state event", name)
 	}
 }
 

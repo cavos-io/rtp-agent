@@ -200,6 +200,8 @@ type AgentSession struct {
 	// Event channels
 	AgentStateChangedCh chan AgentStateChangedEvent
 	UserStateChangedCh  chan UserStateChangedEvent
+	agentStateSubs      []chan AgentStateChangedEvent
+	userStateSubs       []chan UserStateChangedEvent
 	userInputSubs       []chan UserInputTranscribedEvent
 	agentOutputSubs     []chan AgentOutputTranscribedEvent
 	speechCreatedCh     chan SpeechCreatedEvent
@@ -422,10 +424,22 @@ func (s *AgentSession) agentStateChangedEvents() chan AgentStateChangedEvent {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	ch := make(chan AgentStateChangedEvent, 10)
+	s.agentStateSubs = append(s.agentStateSubs, ch)
+	return ch
+}
+
+func (s *AgentSession) agentStateChangedSubscribers() []chan AgentStateChangedEvent {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	subs := make([]chan AgentStateChangedEvent, 0, len(s.agentStateSubs)+1)
 	if s.AgentStateChangedCh == nil {
 		s.AgentStateChangedCh = make(chan AgentStateChangedEvent, 10)
 	}
-	return s.AgentStateChangedCh
+	subs = append(subs, s.AgentStateChangedCh)
+	subs = append(subs, s.agentStateSubs...)
+	return subs
 }
 
 func (s *AgentSession) UserStateChangedEvents() <-chan UserStateChangedEvent {
@@ -436,10 +450,22 @@ func (s *AgentSession) userStateChangedEvents() chan UserStateChangedEvent {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	ch := make(chan UserStateChangedEvent, 10)
+	s.userStateSubs = append(s.userStateSubs, ch)
+	return ch
+}
+
+func (s *AgentSession) userStateChangedSubscribers() []chan UserStateChangedEvent {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	subs := make([]chan UserStateChangedEvent, 0, len(s.userStateSubs)+1)
 	if s.UserStateChangedCh == nil {
 		s.UserStateChangedCh = make(chan UserStateChangedEvent, 10)
 	}
-	return s.UserStateChangedCh
+	subs = append(subs, s.UserStateChangedCh)
+	subs = append(subs, s.userStateSubs...)
+	return subs
 }
 
 func NewAgentSession(agent AgentInterface, room *lksdk.Room, opts AgentSessionOptions) *AgentSession {
@@ -1315,10 +1341,11 @@ func (s *AgentSession) UpdateAgentState(state AgentState) {
 			CreatedAt: time.Now(),
 		}
 		s.recordEvent(&ev)
-		select {
-		case s.AgentStateChangedCh <- ev:
-		default:
-			// Channel full, ignore
+		for _, ch := range s.agentStateChangedSubscribers() {
+			select {
+			case ch <- ev:
+			default:
+			}
 		}
 	}
 }
@@ -1346,10 +1373,11 @@ func (s *AgentSession) UpdateUserState(state UserState) {
 			CreatedAt: time.Now(),
 		}
 		s.recordEvent(&ev)
-		select {
-		case s.UserStateChangedCh <- ev:
-		default:
-			// Channel full, ignore
+		for _, ch := range s.userStateChangedSubscribers() {
+			select {
+			case ch <- ev:
+			default:
+			}
 		}
 	}
 }
