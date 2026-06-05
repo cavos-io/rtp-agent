@@ -890,13 +890,22 @@ func TestPipelineAgentForcesNoToolsAfterMaxToolSteps(t *testing.T) {
 			},
 			&fakeGenerationLLMStream{
 				chunks: []*llm.ChatChunk{
-					{Delta: &llm.ChoiceDelta{Content: "final answer"}},
+					{Delta: &llm.ChoiceDelta{
+						Content: "final answer",
+						ToolCalls: []llm.FunctionToolCall{{
+							Type:      "function",
+							Name:      "lookup",
+							CallID:    "call_lookup_after_none",
+							Arguments: `{}`,
+						}},
+					}},
 				},
 			},
 		},
 	}
 	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{MaxToolSteps: 1})
-	session.Tools = []llm.Tool{&fakeGenerationTool{name: "lookup", result: "done"}}
+	tool := &countingPipelineTool{name: "lookup", result: "done"}
+	session.Tools = []llm.Tool{tool}
 	agent := NewPipelineAgent(nil, nil, l, &fakePipelineTTS{}, chatCtx)
 	agent.session = session
 	agent.ctx = context.Background()
@@ -911,6 +920,9 @@ func TestPipelineAgentForcesNoToolsAfterMaxToolSteps(t *testing.T) {
 	}
 	if l.calls[1].ToolChoice != "none" {
 		t.Fatalf("second ToolChoice = %#v, want none", l.calls[1].ToolChoice)
+	}
+	if tool.calls != 1 {
+		t.Fatalf("tool executions = %d, want only first tool call before tool_choice none", tool.calls)
 	}
 }
 
@@ -1459,6 +1471,25 @@ type blockingPipelineTool struct {
 	started chan struct{}
 	release chan struct{}
 	once    sync.Once
+}
+
+type countingPipelineTool struct {
+	name   string
+	result string
+	calls  int
+}
+
+func (c *countingPipelineTool) ID() string { return c.name }
+
+func (c *countingPipelineTool) Name() string { return c.name }
+
+func (c *countingPipelineTool) Description() string { return "" }
+
+func (c *countingPipelineTool) Parameters() map[string]any { return nil }
+
+func (c *countingPipelineTool) Execute(context.Context, string) (string, error) {
+	c.calls++
+	return c.result, nil
 }
 
 func (b *blockingPipelineTool) ID() string { return b.name }

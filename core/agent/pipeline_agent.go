@@ -324,10 +324,13 @@ func (va *PipelineAgent) generateReplyWithOptions(opts pipelineReplyOptions) {
 		}
 
 		var chatOptions []llm.ChatOption
+		var activeToolChoice llm.ToolChoice
 		if opts.ToolChoice != nil {
+			activeToolChoice = opts.ToolChoice
 			chatOptions = append(chatOptions, llm.WithToolChoice(opts.ToolChoice))
 		}
 		if session.Options.MaxToolSteps > 0 && toolSteps >= session.Options.MaxToolSteps {
+			activeToolChoice = "none"
 			chatOptions = append(chatOptions, llm.WithToolChoice("none"))
 		}
 		if session.Options.LLMParallelToolCalls != nil {
@@ -380,6 +383,7 @@ func (va *PipelineAgent) generateReplyWithOptions(opts pipelineReplyOptions) {
 		toolOutCh := PerformToolExecutions(ctx, genData.FunctionCh, toolCtx,
 			WithToolExecutionSession(session),
 			WithToolExecutionSpeechHandle(opts.SpeechHandle),
+			WithToolExecutionToolChoice(activeToolChoice),
 		)
 
 		// Wait for tool executions to complete and collect results
