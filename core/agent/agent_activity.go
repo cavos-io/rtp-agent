@@ -57,6 +57,7 @@ type AgentActivity struct {
 
 	schedulingPaused   bool
 	schedulingDraining bool
+	schedulingStarted  bool
 
 	sttEOSReceived bool
 	speaking       bool
@@ -106,12 +107,18 @@ type scheduledSpeech struct {
 func (a *AgentActivity) Start() {
 	_ = a.recordInitialConfiguration()
 	a.AgentIntf.OnEnter()
+	a.queueMu.Lock()
+	a.schedulingStarted = true
+	a.queueMu.Unlock()
 	go a.schedulingTask()
 }
 
 func (a *AgentActivity) Stop() {
 	a.AgentIntf.OnExit()
 	a.cancel()
+	a.queueMu.Lock()
+	a.schedulingStarted = false
+	a.queueMu.Unlock()
 	if a.Agent.activity == a {
 		a.Agent.activity = nil
 	}
@@ -752,7 +759,9 @@ func (a *AgentActivity) processQueue() {
 		<-speech.doneCh
 
 		a.queueMu.Lock()
-		a.currentSpeech = nil
+		if a.currentSpeech == speech {
+			a.currentSpeech = nil
+		}
 		a.lastSpeechDone = time.Now()
 		a.queueMu.Unlock()
 
@@ -788,15 +797,47 @@ func (a *AgentActivity) UseTTSAlignedTranscript() bool {
 	return enabled
 }
 
-func (a *AgentActivity) OnPipelineReplyDone(*SpeechHandle) {
+func (a *AgentActivity) OnPipelineReplyDone(speech *SpeechHandle) {
 	if a == nil || a.Session == nil {
 		return
 	}
 	a.queueMu.Lock()
+	if speech != nil && a.currentSpeech == speech && speech.IsDone() {
+		a.currentSpeech = nil
+	}
 	inactive := len(a.speechQueue) == 0 && (a.currentSpeech == nil || a.currentSpeech.IsDone())
+	started := a.schedulingStarted
 	a.queueMu.Unlock()
 	if inactive {
 		a.Session.UpdateAgentState(AgentStateListening)
+	}
+	if started {
+		go a.processQueue()
+	}
+}
+
+func (a *AgentActivity) OnInputSpeechStarted() {
+	if a == nil || a.Session == nil {
+		return
+	}
+	a.Session.UpdateUserState(UserStateSpeaking)
+	go func() {
+		if err := a.Interrupt(false); err != nil {
+			logger.Logger.Errorw("realtime input speech started but current speech is not interruptable", err)
+		}
+	}()
+}
+
+func (a *AgentActivity) OnInputSpeechStopped(ev llm.InputSpeechStoppedEvent) {
+	if a == nil || a.Session == nil {
+		return
+	}
+	a.Session.UpdateUserState(UserStateListening)
+	if ev.UserTranscriptionEnabled {
+		a.Session.EmitUserInputTranscribed(UserInputTranscribedEvent{
+			Transcript: "",
+			IsFinal:    false,
+		})
 	}
 }
 

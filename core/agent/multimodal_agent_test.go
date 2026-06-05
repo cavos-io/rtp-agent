@@ -909,6 +909,34 @@ func TestMultimodalAgentEmitsInterimInputTranscriptionWithoutCommittingMessage(t
 	}
 }
 
+func TestMultimodalAgentRoutesRealtimeSpeechStoppedThroughActivity(t *testing.T) {
+	agent := NewAgent("test")
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	activity := NewAgentActivity(agent, session)
+	session.activity = activity
+	ma := &MultimodalAgent{session: session, chatCtx: llm.NewChatContext()}
+	session.UpdateUserState(UserStateSpeaking)
+
+	ma.handleRealtimeEvent(llm.RealtimeEvent{
+		Type: llm.RealtimeEventTypeSpeechStopped,
+		SpeechStopped: &llm.InputSpeechStoppedEvent{
+			UserTranscriptionEnabled: true,
+		},
+	})
+
+	if got := session.UserState(); got != UserStateListening {
+		t.Fatalf("UserState() = %q, want %q", got, UserStateListening)
+	}
+	select {
+	case ev := <-session.UserInputTranscribedEvents():
+		if ev.Transcript != "" || ev.IsFinal {
+			t.Fatalf("UserInputTranscribedEvent = %#v, want empty interim transcript", ev)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("UserInputTranscribedEvents did not receive empty interim transcript")
+	}
+}
+
 func TestMultimodalAgentForwardsRealtimeMetrics(t *testing.T) {
 	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
 	metrics := &telemetry.RealtimeModelMetrics{RequestID: "req_1"}

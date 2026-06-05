@@ -356,11 +356,23 @@ func (ma *MultimodalAgent) handleRealtimeEvent(ev llm.RealtimeEvent) {
 	switch ev.Type {
 	case llm.RealtimeEventTypeSpeechStarted:
 		logger.Logger.Infow("User started speaking (multimodal)")
-		ma.session.UpdateUserState(UserStateSpeaking)
+		if ma.session != nil && ma.session.activity != nil {
+			ma.session.activity.OnInputSpeechStarted()
+		} else if ma.session != nil {
+			ma.session.UpdateUserState(UserStateSpeaking)
+		}
 
 	case llm.RealtimeEventTypeSpeechStopped:
 		logger.Logger.Infow("User stopped speaking (multimodal)")
-		ma.session.UpdateUserState(UserStateListening)
+		if ma.session != nil && ma.session.activity != nil {
+			speechStopped := llm.InputSpeechStoppedEvent{}
+			if ev.SpeechStopped != nil {
+				speechStopped = *ev.SpeechStopped
+			}
+			ma.session.activity.OnInputSpeechStopped(speechStopped)
+		} else if ma.session != nil {
+			ma.session.UpdateUserState(UserStateListening)
+		}
 
 	case llm.RealtimeEventTypeAudio:
 		ma.session.UpdateAgentState(AgentStateSpeaking)

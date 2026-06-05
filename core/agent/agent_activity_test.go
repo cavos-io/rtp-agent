@@ -263,6 +263,39 @@ func TestAgentActivityUpdateOptionsForwardsRealtimeToolChoice(t *testing.T) {
 	}
 }
 
+func TestAgentActivityRealtimeInputSpeechCallbacksUpdateUserState(t *testing.T) {
+	agent := NewAgent("test")
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	activity := NewAgentActivity(agent, session)
+
+	activity.OnInputSpeechStarted()
+	if got := session.UserState(); got != UserStateSpeaking {
+		t.Fatalf("UserState() after speech started = %q, want %q", got, UserStateSpeaking)
+	}
+
+	activity.OnInputSpeechStopped(llm.InputSpeechStoppedEvent{})
+	if got := session.UserState(); got != UserStateListening {
+		t.Fatalf("UserState() after speech stopped = %q, want %q", got, UserStateListening)
+	}
+}
+
+func TestAgentActivityRealtimeInputSpeechStoppedEmitsInterimTranscriptWhenEnabled(t *testing.T) {
+	agent := NewAgent("test")
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	activity := NewAgentActivity(agent, session)
+
+	activity.OnInputSpeechStopped(llm.InputSpeechStoppedEvent{UserTranscriptionEnabled: true})
+
+	select {
+	case ev := <-session.UserInputTranscribedEvents():
+		if ev.Transcript != "" || ev.IsFinal {
+			t.Fatalf("UserInputTranscribedEvent = %#v, want empty interim transcript", ev)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("UserInputTranscribedEvents did not receive empty interim transcript")
+	}
+}
+
 func TestAgentActivityUseTTSAlignedTranscriptUsesAgentOverride(t *testing.T) {
 	agent := NewAgent("test")
 	session := NewAgentSession(agent, nil, AgentSessionOptions{UseTTSAlignedTranscript: true})
