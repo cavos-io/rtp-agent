@@ -99,6 +99,26 @@ func TestNormalizeSoundSourcePreservesAudioConfigGainFields(t *testing.T) {
 	}
 }
 
+func TestNormalizeSoundSourceAppliesAudioConfigReferenceDefaults(t *testing.T) {
+	player := NewBackgroundAudioPlayer(nil, nil)
+
+	src, cfg := player.normalizeSoundSource(AudioConfig{Source: "ambient.ogg"})
+	if src != "ambient.ogg" || cfg.Source != "ambient.ogg" {
+		t.Fatalf("source = %#v / %#v, want ambient.ogg", src, cfg.Source)
+	}
+	if cfg.Volume != 1.0 || cfg.Probability != 1.0 {
+		t.Fatalf("cfg = %#v, want default volume/probability 1.0", cfg)
+	}
+
+	src, cfg = player.normalizeSoundSource([]AudioConfig{{Source: "thinking.ogg"}})
+	if src != "thinking.ogg" || cfg.Source != "thinking.ogg" {
+		t.Fatalf("list source = %#v / %#v, want thinking.ogg", src, cfg.Source)
+	}
+	if cfg.Volume != 1.0 || cfg.Probability != 1.0 {
+		t.Fatalf("list cfg = %#v, want default volume/probability 1.0", cfg)
+	}
+}
+
 func backgroundTestFrame(sampleRate uint32, channels uint32, samplesPerChannel uint32, samples []int16) *model.AudioFrame {
 	data := make([]byte, len(samples)*2)
 	for i, sample := range samples {

@@ -80,7 +80,8 @@ func NewBackgroundAudioPlayer(ambientSound, thinkingSound interface{}) *Backgrou
 func (p *BackgroundAudioPlayer) selectSoundFromList(sounds []AudioConfig) *AudioConfig {
 	var totalProbability float64
 	for _, s := range sounds {
-		totalProbability += s.Probability
+		cfg := backgroundAudioConfigWithDefaults(s)
+		totalProbability += cfg.Probability
 	}
 	if totalProbability <= 0 {
 		return nil
@@ -99,17 +100,29 @@ func (p *BackgroundAudioPlayer) selectSoundFromList(sounds []AudioConfig) *Audio
 	var cumulative float64
 
 	for _, s := range sounds {
-		if s.Probability <= 0 {
+		cfg := backgroundAudioConfigWithDefaults(s)
+		if cfg.Probability <= 0 {
 			continue
 		}
-		normProb := s.Probability / normalizeFactor
+		normProb := cfg.Probability / normalizeFactor
 		cumulative += normProb
 
 		if r <= cumulative {
-			return &s
+			return &cfg
 		}
 	}
-	return &sounds[len(sounds)-1]
+	cfg := backgroundAudioConfigWithDefaults(sounds[len(sounds)-1])
+	return &cfg
+}
+
+func backgroundAudioConfigWithDefaults(cfg AudioConfig) AudioConfig {
+	if cfg.Volume == 0 {
+		cfg.Volume = 1.0
+	}
+	if cfg.Probability == 0 {
+		cfg.Probability = 1.0
+	}
+	return cfg
 }
 
 func (p *BackgroundAudioPlayer) normalizeSoundSource(source interface{}) (AudioSource, AudioConfig) {
@@ -128,6 +141,7 @@ func (p *BackgroundAudioPlayer) normalizeSoundSource(source interface{}) (AudioS
 		}
 		return p.normalizeSoundSource(*selected)
 	case AudioConfig:
+		s = backgroundAudioConfigWithDefaults(s)
 		src, cfg := p.normalizeSoundSource(s.Source)
 		cfg.Source = src
 		cfg.Volume = s.Volume
