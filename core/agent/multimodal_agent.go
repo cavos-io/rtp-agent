@@ -437,7 +437,14 @@ func (ma *MultimodalAgent) handleRealtimeEvent(ev llm.RealtimeEvent) {
 		}
 
 	case llm.RealtimeEventTypeRemoteItemAdded:
-		if ev.RemoteItem == nil || ev.RemoteItem.Item == nil || ma.chatCtx == nil {
+		if ev.RemoteItem == nil || ev.RemoteItem.Item == nil {
+			return
+		}
+		if ma.session != nil && ma.session.activity != nil {
+			ma.session.activity.OnRemoteItemAdded(*ev.RemoteItem)
+			return
+		}
+		if ma.chatCtx == nil {
 			return
 		}
 		item := ev.RemoteItem.Item

@@ -867,6 +867,23 @@ func (a *AgentActivity) OnInputAudioTranscriptionCompleted(ev llm.InputTranscrip
 	a.Session.EmitConversationItemAdded(msg)
 }
 
+func (a *AgentActivity) OnRemoteItemAdded(ev llm.RemoteItemAddedEvent) {
+	if a == nil || a.Agent == nil || a.Agent.ChatCtx == nil || ev.Item == nil {
+		return
+	}
+	item := ev.Item
+	if item.GetID() != "" && a.Agent.ChatCtx.GetByID(item.GetID()) != nil {
+		return
+	}
+	lastItemID := ""
+	if len(a.Agent.ChatCtx.Items) > 0 {
+		lastItemID = a.Agent.ChatCtx.Items[len(a.Agent.ChatCtx.Items)-1].GetID()
+	}
+	if ev.PreviousItemID == "" || ev.PreviousItemID == lastItemID {
+		a.Agent.ChatCtx.Items = append(a.Agent.ChatCtx.Items, item)
+	}
+}
+
 func (a *AgentActivity) Drain(ctx context.Context) error {
 	if ctx == nil {
 		ctx = a.ctx

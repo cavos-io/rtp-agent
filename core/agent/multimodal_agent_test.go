@@ -1044,6 +1044,38 @@ func TestMultimodalAgentSkipsDuplicateRemoteItemPlaceholder(t *testing.T) {
 	}
 }
 
+func TestMultimodalAgentRoutesRemoteItemAddedThroughActivity(t *testing.T) {
+	existing := &llm.ChatMessage{
+		ID:        "item_user_1",
+		Role:      llm.ChatRoleUser,
+		Content:   []llm.ChatContent{{Text: "hello"}},
+		CreatedAt: time.Now(),
+	}
+	remote := &llm.ChatMessage{
+		ID:        "item_assistant_1",
+		Role:      llm.ChatRoleAssistant,
+		Content:   []llm.ChatContent{{Text: "hi"}},
+		CreatedAt: existing.CreatedAt.Add(time.Second),
+	}
+	agent := NewAgent("test")
+	agent.ChatCtx.Insert(existing)
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	session.activity = NewAgentActivity(agent, session)
+	ma := &MultimodalAgent{session: session}
+
+	ma.handleRealtimeEvent(llm.RealtimeEvent{
+		Type: llm.RealtimeEventTypeRemoteItemAdded,
+		RemoteItem: &llm.RemoteItemAddedEvent{
+			PreviousItemID: "item_user_1",
+			Item:           remote,
+		},
+	})
+
+	if len(agent.ChatCtx.Items) != 2 || agent.ChatCtx.Items[1] != remote {
+		t.Fatalf("agent chat context items = %#v, want remote item routed through activity", agent.ChatCtx.Items)
+	}
+}
+
 func lastFunctionOutput(t *testing.T, chatCtx *llm.ChatContext) *llm.FunctionCallOutput {
 	t.Helper()
 	if len(chatCtx.Items) == 0 {

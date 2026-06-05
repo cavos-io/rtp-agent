@@ -360,6 +360,60 @@ func TestAgentActivityInputAudioTranscriptionCompletedSkipsInterimMessage(t *tes
 	}
 }
 
+func TestAgentActivityRemoteItemAddedAppendsServerPlaceholder(t *testing.T) {
+	existing := &llm.ChatMessage{
+		ID:        "item_user_1",
+		Role:      llm.ChatRoleUser,
+		Content:   []llm.ChatContent{{Text: "hello"}},
+		CreatedAt: time.Now(),
+	}
+	remote := &llm.ChatMessage{
+		ID:        "item_assistant_1",
+		Role:      llm.ChatRoleAssistant,
+		Content:   []llm.ChatContent{{Text: "hi"}},
+		CreatedAt: existing.CreatedAt.Add(time.Second),
+	}
+	agent := NewAgent("test")
+	agent.ChatCtx.Insert(existing)
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	activity := NewAgentActivity(agent, session)
+
+	activity.OnRemoteItemAdded(llm.RemoteItemAddedEvent{
+		PreviousItemID: "item_user_1",
+		Item:           remote,
+	})
+
+	if len(agent.ChatCtx.Items) != 2 || agent.ChatCtx.Items[1] != remote {
+		t.Fatalf("agent chat context items = %#v, want remote item appended after previous item", agent.ChatCtx.Items)
+	}
+	select {
+	case ev := <-session.ConversationItemAddedEvents():
+		t.Fatalf("unexpected conversation item event for remote placeholder: %#v", ev)
+	default:
+	}
+}
+
+func TestAgentActivityRemoteItemAddedSkipsDuplicatePlaceholder(t *testing.T) {
+	remote := &llm.ChatMessage{
+		ID:        "item_assistant_1",
+		Role:      llm.ChatRoleAssistant,
+		Content:   []llm.ChatContent{{Text: "hi"}},
+		CreatedAt: time.Now(),
+	}
+	agent := NewAgent("test")
+	agent.ChatCtx.Insert(remote)
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	activity := NewAgentActivity(agent, session)
+
+	activity.OnRemoteItemAdded(llm.RemoteItemAddedEvent{
+		Item: remote,
+	})
+
+	if len(agent.ChatCtx.Items) != 1 {
+		t.Fatalf("agent chat context items = %#v, want duplicate remote item skipped", agent.ChatCtx.Items)
+	}
+}
+
 func TestAgentActivityUseTTSAlignedTranscriptUsesAgentOverride(t *testing.T) {
 	agent := NewAgent("test")
 	session := NewAgentSession(agent, nil, AgentSessionOptions{UseTTSAlignedTranscript: true})
