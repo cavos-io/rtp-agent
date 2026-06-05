@@ -1221,6 +1221,30 @@ func TestAgentActivityOnInterimTranscriptInterruptsCurrentSpeech(t *testing.T) {
 	waitForInterrupted(t, current)
 }
 
+func TestAgentActivityOnInterimTranscriptIgnoresAECWarmup(t *testing.T) {
+	agent := NewAgent("test")
+	agent.STT = &fakePipelineSTT{}
+	session := NewAgentSession(agent, nil, AgentSessionOptions{
+		TurnDetection:     TurnDetectionModeSTT,
+		AECWarmupDuration: 0.05,
+	})
+	activity := NewAgentActivity(agent, session)
+	current := NewSpeechHandle(true, DefaultInputDetails())
+	activity.currentSpeech = current
+
+	session.UpdateAgentState(AgentStateSpeaking)
+	activity.OnInterimTranscript(&stt.SpeechEvent{
+		Alternatives: []stt.SpeechData{{Text: "echo"}},
+	})
+
+	select {
+	case <-current.interruptCh:
+		t.Fatal("current speech was interrupted during AEC warmup")
+	case <-time.After(10 * time.Millisecond):
+	}
+	current.MarkDone()
+}
+
 func TestAgentActivityOnInterimTranscriptDoesNotInterruptManualTurn(t *testing.T) {
 	agent := NewAgent("test")
 	session := NewAgentSession(agent, nil, AgentSessionOptions{TurnDetection: TurnDetectionModeManual})

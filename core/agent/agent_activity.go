@@ -1124,15 +1124,7 @@ func (a *AgentActivity) OnVADInferenceDone(ev *vad.VADEvent) {
 	if turnDetection == TurnDetectionModeSTT && a.sttEOSReceived && ev.RawAccumulatedSilence > 0 {
 		return
 	}
-	if a.Session != nil && a.Session.aecWarmupActive() {
-		return
-	}
-
-	go func() {
-		if err := a.Interrupt(false); err != nil {
-			logger.Logger.Warnw("failed to interrupt speech for VAD inference", err, "speech_duration", ev.SpeechDuration)
-		}
-	}()
+	a.interruptByAudioActivity("VAD inference", "speech_duration", ev.SpeechDuration)
 }
 
 func (a *AgentActivity) OnInterimTranscript(ev *stt.SpeechEvent) {
@@ -1161,11 +1153,7 @@ func (a *AgentActivity) OnInterimTranscript(ev *stt.SpeechEvent) {
 	})
 	turnDetection := a.turnDetectionMode()
 	if transcript != "" && turnDetection != TurnDetectionModeManual && turnDetection != TurnDetectionModeRealtimeLLM {
-		go func() {
-			if err := a.Interrupt(false); err != nil {
-				logger.Logger.Warnw("failed to interrupt speech for interim transcript", err, "transcript", transcript)
-			}
-		}()
+		a.interruptByAudioActivity("interim transcript", "transcript", transcript)
 	}
 }
 
@@ -1202,11 +1190,7 @@ func (a *AgentActivity) OnFinalTranscript(ev *stt.SpeechEvent) {
 
 	turnDetection := a.turnDetectionMode()
 	if turnDetection != "" && turnDetection != TurnDetectionModeManual && turnDetection != TurnDetectionModeRealtimeLLM {
-		go func() {
-			if err := a.Interrupt(false); err != nil {
-				logger.Logger.Warnw("failed to interrupt speech for final transcript", err, "transcript", transcript)
-			}
-		}()
+		a.interruptByAudioActivity("final transcript", "transcript", transcript)
 	}
 	if turnDetection == TurnDetectionModeSTT {
 		a.runEOUDetection(EndOfTurnInfo{
@@ -1214,6 +1198,20 @@ func (a *AgentActivity) OnFinalTranscript(ev *stt.SpeechEvent) {
 			TranscriptConfidence: confidence,
 		})
 	}
+}
+
+func (a *AgentActivity) interruptByAudioActivity(reason string, key string, value any) {
+	if a == nil {
+		return
+	}
+	if a.Session != nil && a.Session.aecWarmupActive() {
+		return
+	}
+	go func() {
+		if err := a.Interrupt(false); err != nil {
+			logger.Logger.Warnw("failed to interrupt speech for "+reason, err, key, value)
+		}
+	}()
 }
 
 func (a *AgentActivity) ClearUserTurn() {
