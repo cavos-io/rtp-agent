@@ -40,6 +40,10 @@ type sttMetricsCollector interface {
 	OnMetricsCollected(stt.STTMetricsHandler) func()
 }
 
+type sttErrorCollector interface {
+	OnError(stt.STTErrorHandler) func()
+}
+
 type ttsErrorCollector interface {
 	OnError(tts.TTSErrorHandler) func()
 }
@@ -139,6 +143,12 @@ func (a *AgentActivity) Start() {
 		if collector, ok := a.Session.STT.(sttMetricsCollector); ok {
 			unsubscribe := collector.OnMetricsCollected(func(metrics *telemetry.STTMetrics) {
 				a.OnMetricsCollected(metrics)
+			})
+			a.providerUnsubscribes = append(a.providerUnsubscribes, unsubscribe)
+		}
+		if collector, ok := a.Session.STT.(sttErrorCollector); ok {
+			unsubscribe := collector.OnError(func(err *stt.STTError) {
+				a.OnError(err, a.Session.STT)
 			})
 			a.providerUnsubscribes = append(a.providerUnsubscribes, unsubscribe)
 		}

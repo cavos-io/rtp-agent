@@ -17,6 +17,7 @@ import (
 // It buffers audio frames and sends them to the underlying STT Recognize method when the VAD detects speech.
 type StreamAdapter struct {
 	MetricsEmitter
+	ErrorEmitter
 	stt STT
 	vad vad.VAD
 }
@@ -56,6 +57,21 @@ func (a *StreamAdapter) OnMetricsCollected(handler STTMetricsHandler) func() {
 	unsubscribes := []func(){a.MetricsEmitter.OnMetricsCollected(handler)}
 	if collector, ok := a.stt.(metricsCollectorSTT); ok {
 		unsubscribes = append(unsubscribes, collector.OnMetricsCollected(handler))
+	}
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			for _, unsubscribe := range unsubscribes {
+				unsubscribe()
+			}
+		})
+	}
+}
+
+func (a *StreamAdapter) OnError(handler STTErrorHandler) func() {
+	unsubscribes := []func(){a.ErrorEmitter.OnError(handler)}
+	if collector, ok := a.stt.(errorCollectorSTT); ok {
+		unsubscribes = append(unsubscribes, collector.OnError(handler))
 	}
 	var once sync.Once
 	return func() {

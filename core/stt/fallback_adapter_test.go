@@ -114,6 +114,28 @@ func TestFallbackAdapterForwardsProviderMetrics(t *testing.T) {
 	}
 }
 
+func TestFallbackAdapterForwardsProviderErrors(t *testing.T) {
+	primary := &metadataSTT{label: "primary", capabilities: STTCapabilities{Streaming: true}}
+	fallback := &metadataSTT{label: "fallback", capabilities: STTCapabilities{Streaming: true}}
+	adapter := NewFallbackAdapter([]STT{primary, fallback})
+	errCh := make(chan error, 2)
+
+	unsubscribe := adapter.OnError(func(err *STTError) {
+		errCh <- err
+	})
+	defer unsubscribe()
+
+	primaryCause := errors.New("primary failed")
+	fallbackCause := errors.New("fallback failed")
+	primary.EmitError(NewSTTError("primary", primaryCause, true))
+	fallback.EmitError(NewSTTError("fallback", fallbackCause, true))
+
+	got := []error{<-errCh, <-errCh}
+	if !errors.Is(got[0], primaryCause) || !errors.Is(got[1], fallbackCause) {
+		t.Fatalf("forwarded errors = %#v, want primary then fallback causes", got)
+	}
+}
+
 func TestFallbackStreamSeedsStartTime(t *testing.T) {
 	inner := &metadataRecognizeStream{events: []*SpeechEvent{{Type: SpeechEventFinalTranscript}}}
 	adapter := NewFallbackAdapter([]STT{
@@ -1858,6 +1880,7 @@ func TestFallbackStreamForwardsEndInput(t *testing.T) {
 
 type metadataSTT struct {
 	MetricsEmitter
+	ErrorEmitter
 
 	mu               sync.Mutex
 	label            string

@@ -76,6 +76,29 @@ func TestStreamAdapterForwardsWrappedSTTMetrics(t *testing.T) {
 	}
 }
 
+func TestStreamAdapterForwardsWrappedSTTErrors(t *testing.T) {
+	wrapped := &fakeStreamAdapterSTT{}
+	adapter := NewStreamAdapter(wrapped, &fakeStreamAdapterVAD{})
+	errCh := make(chan error, 1)
+
+	unsubscribe := adapter.OnError(func(err *STTError) {
+		errCh <- err
+	})
+	defer unsubscribe()
+
+	cause := errors.New("wrapped stt failed")
+	wrapped.EmitError(NewSTTError("wrapped", cause, true))
+
+	select {
+	case err := <-errCh:
+		if !errors.Is(err, cause) {
+			t.Fatalf("forwarded error = %v, want cause %v", err, cause)
+		}
+	default:
+		t.Fatal("error handler was not called")
+	}
+}
+
 func TestStreamAdapterWrapperIsPublicReferenceType(t *testing.T) {
 	var _ RecognizeStream = (*StreamAdapterWrapper)(nil)
 	var _ StreamTiming = (*StreamAdapterWrapper)(nil)
@@ -600,6 +623,7 @@ func streamAdapterSpanAttributes(attrs []attribute.KeyValue) map[string]string {
 
 type fakeStreamAdapterSTT struct {
 	MetricsEmitter
+	ErrorEmitter
 
 	recognizeErr     error
 	recognizeResult  *SpeechEvent
