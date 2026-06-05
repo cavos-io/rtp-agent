@@ -280,6 +280,45 @@ func TestAgentActivityRealtimeInputSpeechCallbacksUpdateUserState(t *testing.T) 
 	}
 }
 
+func TestAgentActivityRealtimeInputSpeechStartedKeepsVADOwnedUserState(t *testing.T) {
+	agent := NewAgent("test")
+	agent.VAD = &fakePipelineVAD{}
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	activity := NewAgentActivity(agent, session)
+	current := NewSpeechHandle(true, DefaultInputDetails())
+	activity.currentSpeech = current
+
+	activity.OnInputSpeechStarted()
+
+	if got := session.UserState(); got != UserStateListening {
+		t.Fatalf("UserState() after realtime speech started with VAD = %q, want %q", got, UserStateListening)
+	}
+	waitForInterrupted(t, current)
+	current.MarkDone()
+}
+
+func TestAgentActivityRealtimeInputSpeechStoppedKeepsVADOwnedUserState(t *testing.T) {
+	agent := NewAgent("test")
+	agent.VAD = &fakePipelineVAD{}
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	session.UpdateUserState(UserStateSpeaking)
+	activity := NewAgentActivity(agent, session)
+
+	activity.OnInputSpeechStopped(llm.InputSpeechStoppedEvent{UserTranscriptionEnabled: true})
+
+	if got := session.UserState(); got != UserStateSpeaking {
+		t.Fatalf("UserState() after realtime speech stopped with VAD = %q, want %q", got, UserStateSpeaking)
+	}
+	select {
+	case ev := <-session.UserInputTranscribedEvents():
+		if ev.Transcript != "" || ev.IsFinal {
+			t.Fatalf("UserInputTranscribedEvent = %#v, want empty interim transcript", ev)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("UserInputTranscribedEvents did not receive empty interim transcript")
+	}
+}
+
 func TestAgentActivityVADSpeechCallbacksUpdateUserState(t *testing.T) {
 	agent := NewAgent("test")
 	session := NewAgentSession(agent, nil, AgentSessionOptions{})

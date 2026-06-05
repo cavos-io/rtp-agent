@@ -820,7 +820,9 @@ func (a *AgentActivity) OnInputSpeechStarted() {
 	if a == nil || a.Session == nil {
 		return
 	}
-	a.Session.UpdateUserState(UserStateSpeaking)
+	if !a.hasVADModel() {
+		a.Session.UpdateUserState(UserStateSpeaking)
+	}
 	go func() {
 		if err := a.Interrupt(false); err != nil {
 			logger.Logger.Errorw("realtime input speech started but current speech is not interruptable", err)
@@ -832,7 +834,9 @@ func (a *AgentActivity) OnInputSpeechStopped(ev llm.InputSpeechStoppedEvent) {
 	if a == nil || a.Session == nil {
 		return
 	}
-	a.Session.UpdateUserState(UserStateListening)
+	if !a.hasVADModel() {
+		a.Session.UpdateUserState(UserStateListening)
+	}
 	if ev.UserTranscriptionEnabled {
 		a.Session.EmitUserInputTranscribed(UserInputTranscribedEvent{
 			Transcript: "",
@@ -1381,6 +1385,10 @@ func (a *AgentActivity) turnDetectionMode() TurnDetectionMode {
 		}
 	}
 	return TurnDetectionMode(mode)
+}
+
+func (a *AgentActivity) hasVADModel() bool {
+	return a != nil && ((a.Agent != nil && a.Agent.VAD != nil) || (a.Session != nil && a.Session.VAD != nil))
 }
 
 func (a *AgentActivity) runEOUDetection(info EndOfTurnInfo) {
