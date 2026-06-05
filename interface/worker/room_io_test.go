@@ -396,6 +396,49 @@ func TestRoomIOPublishesUserInputLegacyTranscriptionPacket(t *testing.T) {
 	}
 }
 
+func TestRoomIOPublishesUserInputTranscriptionStream(t *testing.T) {
+	session := agent.NewAgentSession(agent.NewAgent("test"), nil, agent.AgentSessionOptions{})
+	published := make(chan roomIOPublishedText, 1)
+	rio := &RoomIO{
+		AgentSession:                   session,
+		userTranscriptionTrackID:       "TR_user_audio",
+		userTranscriptionParticipantID: "caller-a",
+		transcriptionTextPublisher: func(text string, opts lksdk.StreamTextOptions) {
+			published <- roomIOPublishedText{text: text, opts: opts}
+		},
+	}
+	rio.startUserTranscriptionListener()
+	defer rio.userTranscriptionCancel()
+
+	session.EmitUserInputTranscribed(agent.UserInputTranscribedEvent{
+		Transcript: "caller transcript",
+		IsFinal:    true,
+		Language:   "en",
+	})
+
+	select {
+	case got := <-published:
+		if got.text != "caller transcript" {
+			t.Fatalf("published text = %q, want caller transcript", got.text)
+		}
+		if got.opts.Topic != RoomIOTranscriptionTopic {
+			t.Fatalf("published topic = %q, want %q", got.opts.Topic, RoomIOTranscriptionTopic)
+		}
+		if got.opts.Attributes[RoomIOTranscriptionFinalAttribute] != "true" {
+			t.Fatalf("final attribute = %q, want true", got.opts.Attributes[RoomIOTranscriptionFinalAttribute])
+		}
+		if got.opts.Attributes[RoomIOTranscriptionTrackIDAttribute] != "TR_user_audio" {
+			t.Fatalf("track id attribute = %q, want TR_user_audio", got.opts.Attributes[RoomIOTranscriptionTrackIDAttribute])
+		}
+		segmentID := got.opts.Attributes[RoomIOTranscriptionSegmentIDAttribute]
+		if !strings.HasPrefix(segmentID, "SG_") {
+			t.Fatalf("segment id = %q, want SG_ prefix", segmentID)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("user transcription stream was not published")
+	}
+}
+
 type roomIOPublishedText struct {
 	text string
 	opts lksdk.StreamTextOptions

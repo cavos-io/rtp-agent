@@ -421,12 +421,14 @@ func (rio *RoomIO) handleUserInputTranscribed(ev agent.UserInputTranscribedEvent
 	if trackID == "" || participantID == "" {
 		return
 	}
+	segmentID := roomIOTranscriptionSegmentID()
 	rio.publishTranscriptionPacketWithSegment(participantID, trackID, &livekit.TranscriptionSegment{
-		Id:       roomIOTranscriptionSegmentID(),
+		Id:       segmentID,
 		Text:     ev.Transcript,
 		Final:    ev.IsFinal,
 		Language: ev.Language,
 	})
+	rio.publishTranscriptionTextStream(ev.Transcript, trackID, ev.IsFinal, segmentID)
 }
 
 func (rio *RoomIO) publishLegacyAgentTranscription(ev agent.AgentOutputTranscribedEvent, segmentID string) {
@@ -492,6 +494,23 @@ func (rio *RoomIO) setUserTranscriptionTarget(trackID string, participantID stri
 
 func roomIOTranscriptionSegmentID() string {
 	return "SG_" + uuid.NewString()[:12]
+}
+
+func (rio *RoomIO) publishTranscriptionTextStream(text string, trackID string, final bool, segmentID string) {
+	if rio == nil || rio.transcriptionTextPublisher == nil || text == "" {
+		return
+	}
+	attributes := map[string]string{
+		RoomIOTranscriptionFinalAttribute:     strconv.FormatBool(final),
+		RoomIOTranscriptionSegmentIDAttribute: segmentID,
+	}
+	if trackID != "" {
+		attributes[RoomIOTranscriptionTrackIDAttribute] = trackID
+	}
+	rio.transcriptionTextPublisher(text, lksdk.StreamTextOptions{
+		Topic:      RoomIOTranscriptionTopic,
+		Attributes: attributes,
+	})
 }
 
 func (rio *RoomIO) roomConnected() bool {
