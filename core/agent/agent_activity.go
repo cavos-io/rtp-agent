@@ -126,6 +126,15 @@ func (a *AgentActivity) SchedulingPaused() bool {
 	return a.schedulingPaused
 }
 
+func (a *AgentActivity) CurrentSpeech() *SpeechHandle {
+	if a == nil {
+		return nil
+	}
+	a.queueMu.Lock()
+	defer a.queueMu.Unlock()
+	return a.currentSpeech
+}
+
 func (a *AgentActivity) AllowInterruptions() bool {
 	if a == nil {
 		return false

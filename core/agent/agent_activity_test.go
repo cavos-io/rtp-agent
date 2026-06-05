@@ -152,6 +152,22 @@ func TestAgentActivitySchedulingPausedReportsState(t *testing.T) {
 	}
 }
 
+func TestAgentActivityCurrentSpeechReportsActiveSpeech(t *testing.T) {
+	agent := NewAgent("test")
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	activity := NewAgentActivity(agent, session)
+
+	if got := activity.CurrentSpeech(); got != nil {
+		t.Fatalf("CurrentSpeech() = %#v, want nil before speech is active", got)
+	}
+
+	current := NewSpeechHandle(true, DefaultInputDetails())
+	activity.currentSpeech = current
+	if got := activity.CurrentSpeech(); got != current {
+		t.Fatalf("CurrentSpeech() = %#v, want active speech %#v", got, current)
+	}
+}
+
 func TestAgentActivityAllowInterruptionsUsesAgentOverride(t *testing.T) {
 	agent := NewAgent("test")
 	session := NewAgentSession(agent, nil, AgentSessionOptions{})

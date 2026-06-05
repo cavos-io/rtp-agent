@@ -250,9 +250,7 @@ func (s *AgentSession) CurrentSpeech() *SpeechHandle {
 		return nil
 	}
 
-	activity.queueMu.Lock()
-	defer activity.queueMu.Unlock()
-	return activity.currentSpeech
+	return activity.CurrentSpeech()
 }
 
 func (s *AgentSession) Userdata() (any, error) {
