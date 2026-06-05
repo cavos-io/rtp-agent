@@ -139,6 +139,18 @@ func (a *AgentActivity) AllowInterruptions() bool {
 	return false
 }
 
+func (a *AgentActivity) InterruptionEnabled() bool {
+	if a == nil || !a.AllowInterruptions() {
+		return false
+	}
+	switch a.turnDetectionMode() {
+	case "", TurnDetectionModeManual, TurnDetectionModeRealtimeLLM:
+		return false
+	default:
+		return true
+	}
+}
+
 func (a *AgentActivity) EndpointingOpts() EndpointingOptions {
 	opts := EndpointingOptions{
 		MinDelay: 0.5,
@@ -1025,10 +1037,10 @@ func (a *AgentActivity) shouldSkipShortInterruption(currentSpeech *SpeechHandle,
 	if currentSpeech == nil || !currentSpeech.AllowInterruptions || currentSpeech.IsInterrupted() || currentSpeech.IsDone() {
 		return false
 	}
-	if a.Session == nil || a.Session.Options.MinInterruptionWords <= 0 {
+	if !a.InterruptionEnabled() {
 		return false
 	}
-	if a.turnDetectionMode() == TurnDetectionModeManual {
+	if a.Session == nil || a.Session.Options.MinInterruptionWords <= 0 {
 		return false
 	}
 	if a.Agent.STT == nil && a.Session.STT == nil {

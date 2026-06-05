@@ -173,6 +173,34 @@ func TestAgentActivityAllowInterruptionsUsesAgentOverride(t *testing.T) {
 	}
 }
 
+func TestAgentActivityInterruptionEnabledRequiresDetectionModeAndAllowance(t *testing.T) {
+	agent := NewAgent("test")
+	agent.STT = &fakePipelineSTT{}
+	session := NewAgentSession(agent, nil, AgentSessionOptions{TurnDetection: TurnDetectionModeSTT})
+	activity := NewAgentActivity(agent, session)
+
+	if !activity.InterruptionEnabled() {
+		t.Fatal("InterruptionEnabled() = false, want true with STT turn detection and interruptions allowed")
+	}
+
+	agent.AllowInterruptions = false
+	agent.AllowInterruptionsSet = true
+	if activity.InterruptionEnabled() {
+		t.Fatal("InterruptionEnabled() = true, want false when agent disables interruptions")
+	}
+
+	agent.AllowInterruptions = true
+	session.Options.TurnDetection = TurnDetectionModeManual
+	if activity.InterruptionEnabled() {
+		t.Fatal("InterruptionEnabled() = true, want false for manual turn detection")
+	}
+
+	session.Options.TurnDetection = TurnDetectionModeRealtimeLLM
+	if activity.InterruptionEnabled() {
+		t.Fatal("InterruptionEnabled() = true, want false for realtime LLM turn detection")
+	}
+}
+
 func TestAgentActivityScheduleSpeechAllowsForcedSpeechWhilePaused(t *testing.T) {
 	agent := NewAgent("test")
 	session := NewAgentSession(agent, nil, AgentSessionOptions{})
