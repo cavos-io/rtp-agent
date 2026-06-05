@@ -14,6 +14,7 @@ import (
 	"github.com/cavos-io/rtp-agent/core/stt"
 	"github.com/cavos-io/rtp-agent/core/tts"
 	"github.com/cavos-io/rtp-agent/core/vad"
+	"github.com/cavos-io/rtp-agent/library/telemetry"
 )
 
 func TestPipelineAgentGenerateReplyAddsAssistantMessageWithExtra(t *testing.T) {
@@ -811,6 +812,82 @@ func TestPipelineAgentEmitsErrorEventForSTTStreamError(t *testing.T) {
 	}
 }
 
+func TestPipelineAgentEmitsErrorEventForSTTPushFrameError(t *testing.T) {
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	cause := errors.New("stt push failed")
+	source := &fakePipelineSTT{stream: &fakePipelineRecognizeStream{pushErr: cause}}
+	agent := NewPipelineAgent(&fakePipelineVAD{}, source, nil, nil, llm.NewChatContext())
+	agent.session = session
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go agent.run(ctx)
+
+	agent.OnAudioFrame(ctx, &model.AudioFrame{Data: []byte{1, 2}, SampleRate: 16000, NumChannels: 1, SamplesPerChannel: 1})
+
+	select {
+	case ev := <-session.ErrorEvents():
+		var sttErr *stt.STTError
+		if !errors.As(ev.Error, &sttErr) {
+			t.Fatalf("Error = %T, want *stt.STTError", ev.Error)
+		}
+		if !errors.Is(ev.Error, cause) {
+			t.Fatalf("Error = %v, want cause %v", ev.Error, cause)
+		}
+		if ev.Source != source {
+			t.Fatalf("Source = %#v, want STT source", ev.Source)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("ErrorEvents did not receive STT push error")
+	}
+}
+
+func TestPipelineAgentEmitsSTTMetricsForRecognitionUsage(t *testing.T) {
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	source := &fakePipelineSTT{}
+	agent := NewPipelineAgent(nil, source, nil, nil, llm.NewChatContext())
+	agent.session = session
+	stream := &fakePipelineRecognizeStream{
+		events: []*stt.SpeechEvent{
+			{
+				Type:      stt.SpeechEventRecognitionUsage,
+				RequestID: "stt_req_123",
+				RecognitionUsage: &stt.RecognitionUsage{
+					AudioDuration: 1.25,
+					InputTokens:   3,
+					OutputTokens:  5,
+				},
+			},
+		},
+	}
+
+	agent.sttLoop(stream)
+
+	select {
+	case ev := <-session.MetricsCollectedEvents():
+		metrics, ok := ev.Metrics.(*telemetry.STTMetrics)
+		if !ok {
+			t.Fatalf("Metrics = %T, want *telemetry.STTMetrics", ev.Metrics)
+		}
+		if metrics.Label != "fake-stt" {
+			t.Fatalf("Label = %q, want fake-stt", metrics.Label)
+		}
+		if metrics.RequestID != "stt_req_123" {
+			t.Fatalf("RequestID = %q, want stt_req_123", metrics.RequestID)
+		}
+		if metrics.AudioDuration != 1.25 || metrics.InputTokens != 3 || metrics.OutputTokens != 5 {
+			t.Fatalf("usage metrics = %#v, want audio=1.25 input=3 output=5", metrics)
+		}
+		if !metrics.Streamed {
+			t.Fatal("Streamed = false, want true")
+		}
+		if metrics.Timestamp.IsZero() {
+			t.Fatal("Timestamp is zero")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("MetricsCollectedEvents did not receive STT metrics")
+	}
+}
+
 func TestPipelineAgentEmitsErrorEventForVADStreamError(t *testing.T) {
 	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
 	source := &fakePipelineVAD{}
@@ -922,6 +999,198 @@ func TestPipelineAgentEmitsLLMErrorEventForChatFailure(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("ErrorEvents did not receive LLM error")
+	}
+}
+
+func TestPipelineAgentEmitsLLMErrorEventForStreamFailure(t *testing.T) {
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	cause := errors.New("llm stream failed")
+	l := &fakeGenerationLLM{
+		stream: &fakeGenerationLLMStream{
+			err: cause,
+		},
+	}
+	agent := NewPipelineAgent(nil, nil, l, &fakePipelineTTS{}, llm.NewChatContext())
+	agent.session = session
+	agent.ctx = context.Background()
+
+	agent.generateReply()
+
+	select {
+	case ev := <-session.ErrorEvents():
+		llmErr, ok := ev.Error.(*llm.LLMError)
+		if !ok {
+			t.Fatalf("Error = %T, want *llm.LLMError", ev.Error)
+		}
+		if !errors.Is(llmErr, cause) {
+			t.Fatalf("LLMError unwrap = %v, want %v", llmErr, cause)
+		}
+		if ev.Source != l {
+			t.Fatalf("Source = %#v, want LLM source", ev.Source)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("ErrorEvents did not receive LLM stream error")
+	}
+}
+
+func TestPipelineAgentEmitsTTSErrorEventForSpeechSynthesisFailure(t *testing.T) {
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	cause := errors.New("tts stream failed")
+	ttsSource := &fakePipelineTTS{streamErr: cause}
+	agent := NewPipelineAgent(nil, nil, nil, ttsSource, llm.NewChatContext())
+	agent.session = session
+	speech := NewSpeechHandle(false, DefaultInputDetails())
+	speech.Generation.Text = "hello"
+	speech.Generation.AssistantMessage = &llm.ChatMessage{
+		Role:    llm.ChatRoleAssistant,
+		Content: []llm.ChatContent{{Text: "hello"}},
+	}
+
+	agent.OnSpeechScheduled(context.Background(), speech)
+
+	select {
+	case ev := <-session.ErrorEvents():
+		var ttsErr tts.TTSError
+		if !errors.As(ev.Error, &ttsErr) {
+			t.Fatalf("Error = %T, want tts.TTSError", ev.Error)
+		}
+		if !errors.Is(ev.Error, cause) {
+			t.Fatalf("Error = %v, want cause %v", ev.Error, cause)
+		}
+		if ttsErr.Label != "fake" || ttsErr.Recoverable {
+			t.Fatalf("TTSError = %#v, want fake unrecoverable error", ttsErr)
+		}
+		if ev.Source != ttsSource {
+			t.Fatalf("Source = %#v, want TTS source", ev.Source)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("ErrorEvents did not receive TTS error")
+	}
+}
+
+func TestPipelineAgentEmitsTTSErrorEventForSpeechStreamFailure(t *testing.T) {
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	cause := errors.New("tts next failed")
+	ttsSource := &fakePipelineTTS{stream: &fakePipelineTTSStream{err: cause}}
+	agent := NewPipelineAgent(nil, nil, nil, ttsSource, llm.NewChatContext())
+	agent.session = session
+	speech := NewSpeechHandle(false, DefaultInputDetails())
+	speech.Generation.Text = "hello"
+	speech.Generation.AssistantMessage = &llm.ChatMessage{
+		Role:    llm.ChatRoleAssistant,
+		Content: []llm.ChatContent{{Text: "hello"}},
+	}
+
+	agent.OnSpeechScheduled(context.Background(), speech)
+
+	select {
+	case ev := <-session.ErrorEvents():
+		var ttsErr tts.TTSError
+		if !errors.As(ev.Error, &ttsErr) {
+			t.Fatalf("Error = %T, want tts.TTSError", ev.Error)
+		}
+		if !errors.Is(ev.Error, cause) {
+			t.Fatalf("Error = %v, want cause %v", ev.Error, cause)
+		}
+		if ev.Source != ttsSource {
+			t.Fatalf("Source = %#v, want TTS source", ev.Source)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("ErrorEvents did not receive TTS stream error")
+	}
+}
+
+func TestPipelineAgentEmitsTTSErrorEventForChunkedSpeechSynthesisFailure(t *testing.T) {
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	cause := errors.New("tts synthesize failed")
+	ttsSource := &fakePipelineTTS{
+		capabilities:  tts.TTSCapabilities{Streaming: false, AlignedTranscript: true},
+		synthesizeErr: cause,
+	}
+	agent := NewPipelineAgent(nil, nil, nil, ttsSource, llm.NewChatContext())
+	agent.session = session
+	speech := NewSpeechHandle(false, DefaultInputDetails())
+	speech.Generation.Text = "hello"
+	speech.Generation.AssistantMessage = &llm.ChatMessage{
+		Role:    llm.ChatRoleAssistant,
+		Content: []llm.ChatContent{{Text: "hello"}},
+	}
+
+	agent.OnSpeechScheduled(context.Background(), speech)
+
+	select {
+	case ev := <-session.ErrorEvents():
+		var ttsErr tts.TTSError
+		if !errors.As(ev.Error, &ttsErr) {
+			t.Fatalf("Error = %T, want tts.TTSError", ev.Error)
+		}
+		if !errors.Is(ev.Error, cause) {
+			t.Fatalf("Error = %v, want cause %v", ev.Error, cause)
+		}
+		if ev.Source != ttsSource {
+			t.Fatalf("Source = %#v, want TTS source", ev.Source)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("ErrorEvents did not receive chunked TTS error")
+	}
+}
+
+func TestPipelineAgentEmitsLLMMetricsForUsageChunk(t *testing.T) {
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	l := &fakeGenerationLLM{
+		model:    "test-model",
+		provider: "test-provider",
+		stream: &fakeGenerationLLMStream{
+			chunks: []*llm.ChatChunk{
+				{
+					ID: "chatcmpl_123",
+					Delta: &llm.ChoiceDelta{
+						Content: "hello",
+					},
+				},
+				{
+					ID: "chatcmpl_123",
+					Usage: &llm.CompletionUsage{
+						PromptTokens:        7,
+						PromptCachedTokens:  2,
+						CacheCreationTokens: 3,
+						CacheReadTokens:     4,
+						CompletionTokens:    5,
+						TotalTokens:         12,
+					},
+				},
+			},
+		},
+	}
+	agent := NewPipelineAgent(nil, nil, l, &fakePipelineTTS{}, llm.NewChatContext())
+	agent.session = session
+	agent.ctx = context.Background()
+
+	agent.generateReply()
+
+	select {
+	case ev := <-session.MetricsCollectedEvents():
+		metrics, ok := ev.Metrics.(*telemetry.LLMMetrics)
+		if !ok {
+			t.Fatalf("Metrics = %T, want *telemetry.LLMMetrics", ev.Metrics)
+		}
+		if metrics.Label != "agent.fakeGenerationLLM" {
+			t.Fatalf("Label = %q, want agent.fakeGenerationLLM", metrics.Label)
+		}
+		if metrics.RequestID != "chatcmpl_123" {
+			t.Fatalf("RequestID = %q, want chatcmpl_123", metrics.RequestID)
+		}
+		if metrics.PromptTokens != 7 || metrics.PromptCachedTokens != 9 || metrics.CompletionTokens != 5 || metrics.TotalTokens != 12 {
+			t.Fatalf("token metrics = %#v, want prompt=7 cached=9 completion=5 total=12", metrics)
+		}
+		if metrics.Metadata == nil || metrics.Metadata.ModelName != "test-model" || metrics.Metadata.ModelProvider != "test-provider" {
+			t.Fatalf("Metadata = %#v, want test provider/model", metrics.Metadata)
+		}
+		if metrics.Timestamp.IsZero() {
+			t.Fatal("Timestamp is zero")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("MetricsCollectedEvents did not receive LLM metrics")
 	}
 }
 
@@ -1429,8 +1698,12 @@ func toolCallStream(callID string) *fakeGenerationLLMStream {
 }
 
 type fakePipelineTTS struct {
-	stream       *fakePipelineTTSStream
-	capabilities tts.TTSCapabilities
+	tts.MetricsEmitter
+	tts.ErrorEmitter
+	stream        *fakePipelineTTSStream
+	streamErr     error
+	synthesizeErr error
+	capabilities  tts.TTSCapabilities
 }
 
 func (f *fakePipelineTTS) Label() string { return "fake" }
@@ -1447,10 +1720,16 @@ func (f *fakePipelineTTS) SampleRate() int { return 24000 }
 func (f *fakePipelineTTS) NumChannels() int { return 1 }
 
 func (f *fakePipelineTTS) Synthesize(context.Context, string) (tts.ChunkedStream, error) {
+	if f.synthesizeErr != nil {
+		return nil, f.synthesizeErr
+	}
 	return nil, nil
 }
 
 func (f *fakePipelineTTS) Stream(context.Context) (tts.SynthesizeStream, error) {
+	if f.streamErr != nil {
+		return nil, f.streamErr
+	}
 	if f.stream == nil {
 		f.stream = &fakePipelineTTSStream{}
 	}
@@ -1496,6 +1775,7 @@ type fakePipelineTTSStream struct {
 	frames           []*model.AudioFrame
 	timedTranscripts [][]tts.TimedString
 	next             int
+	err              error
 }
 
 func (f *fakePipelineTTSStream) PushText(text string) error {
@@ -1517,10 +1797,17 @@ func (f *fakePipelineTTSStream) Next() (*tts.SynthesizedAudio, error) {
 		f.next++
 		return &tts.SynthesizedAudio{Frame: frame, TimedTranscript: timedTranscript}, nil
 	}
+	if f.err != nil {
+		err := f.err
+		f.err = nil
+		return nil, err
+	}
 	return nil, io.EOF
 }
 
-type fakePipelineSTT struct{}
+type fakePipelineSTT struct {
+	stream *fakePipelineRecognizeStream
+}
 
 func (f *fakePipelineSTT) Label() string { return "fake-stt" }
 
@@ -1529,6 +1816,9 @@ func (f *fakePipelineSTT) Capabilities() stt.STTCapabilities {
 }
 
 func (f *fakePipelineSTT) Stream(context.Context, string) (stt.RecognizeStream, error) {
+	if f.stream != nil {
+		return f.stream, nil
+	}
 	return &fakePipelineRecognizeStream{}, nil
 }
 
@@ -1536,7 +1826,10 @@ func (f *fakePipelineSTT) Recognize(context.Context, []*model.AudioFrame, string
 	return nil, nil
 }
 
-type fakePipelineVAD struct{}
+type fakePipelineVAD struct {
+	metricsHandlers []vad.VADMetricsHandler
+	stream          *fakePipelineVADStream
+}
 
 func (f *fakePipelineVAD) Label() string { return "fake-vad" }
 
@@ -1548,19 +1841,33 @@ func (f *fakePipelineVAD) Capabilities() vad.VADCapabilities {
 	return vad.VADCapabilities{}
 }
 
-func (f *fakePipelineVAD) OnMetricsCollected(vad.VADMetricsHandler) {}
+func (f *fakePipelineVAD) OnMetricsCollected(handler vad.VADMetricsHandler) {
+	if handler != nil {
+		f.metricsHandlers = append(f.metricsHandlers, handler)
+	}
+}
+
+func (f *fakePipelineVAD) EmitMetricsCollected(metrics *telemetry.VADMetrics) {
+	for _, handler := range f.metricsHandlers {
+		handler(metrics)
+	}
+}
 
 func (f *fakePipelineVAD) Stream(context.Context) (vad.VADStream, error) {
+	if f.stream != nil {
+		return f.stream, nil
+	}
 	return &fakePipelineVADStream{}, nil
 }
 
 type fakePipelineVADStream struct {
-	events []*vad.VADEvent
-	index  int
-	err    error
+	events  []*vad.VADEvent
+	index   int
+	err     error
+	pushErr error
 }
 
-func (f *fakePipelineVADStream) PushFrame(*model.AudioFrame) error { return nil }
+func (f *fakePipelineVADStream) PushFrame(*model.AudioFrame) error { return f.pushErr }
 
 func (f *fakePipelineVADStream) Flush() error { return nil }
 
@@ -1675,12 +1982,13 @@ func receiveUserInputTranscribedEvent(t *testing.T, session *AgentSession) UserI
 }
 
 type fakePipelineRecognizeStream struct {
-	events []*stt.SpeechEvent
-	index  int
-	err    error
+	events  []*stt.SpeechEvent
+	index   int
+	err     error
+	pushErr error
 }
 
-func (f *fakePipelineRecognizeStream) PushFrame(*model.AudioFrame) error { return nil }
+func (f *fakePipelineRecognizeStream) PushFrame(*model.AudioFrame) error { return f.pushErr }
 
 func (f *fakePipelineRecognizeStream) Flush() error { return nil }
 

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"sync"
+	"time"
 
 	"github.com/cavos-io/rtp-agent/core/audio/model"
 	"github.com/cavos-io/rtp-agent/core/llm"
@@ -12,6 +13,7 @@ import (
 	"github.com/cavos-io/rtp-agent/core/tts"
 	"github.com/cavos-io/rtp-agent/core/vad"
 	"github.com/cavos-io/rtp-agent/library/logger"
+	"github.com/cavos-io/rtp-agent/library/telemetry"
 )
 
 type PipelineAgent struct {
@@ -112,8 +114,18 @@ func (va *PipelineAgent) run(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case frame := <-va.audioInCh:
-			_ = vadStream.PushFrame(frame)
-			_ = sttStream.PushFrame(frame)
+			if err := vadStream.PushFrame(frame); err != nil {
+				logger.Logger.Errorw("VAD push frame failed", err)
+				va.emitError(err, va.vad)
+			}
+			if err := sttStream.PushFrame(frame); err != nil {
+				logger.Logger.Errorw("STT push frame failed", err)
+				label := "stt"
+				if va.stt != nil {
+					label = va.stt.Label()
+				}
+				va.emitError(stt.NewSTTError(label, err, false), va.stt)
+			}
 		}
 	}
 }
@@ -176,6 +188,10 @@ func (va *PipelineAgent) sttLoop(stream stt.RecognizeStream) {
 			return
 		}
 
+		if ev.Type == stt.SpeechEventRecognitionUsage {
+			va.emitSTTMetrics(ev)
+			continue
+		}
 		if ev.Type != stt.SpeechEventInterimTranscript && ev.Type != stt.SpeechEventFinalTranscript {
 			continue
 		}
@@ -233,6 +249,39 @@ func (va *PipelineAgent) sttLoop(stream stt.RecognizeStream) {
 	}
 }
 
+func (va *PipelineAgent) emitSTTMetrics(ev *stt.SpeechEvent) {
+	if va == nil || ev == nil || ev.RecognitionUsage == nil {
+		return
+	}
+	metrics := &telemetry.STTMetrics{
+		Label:         "stt",
+		RequestID:     ev.RequestID,
+		Timestamp:     time.Now(),
+		AudioDuration: ev.RecognitionUsage.AudioDuration,
+		InputTokens:   ev.RecognitionUsage.InputTokens,
+		OutputTokens:  ev.RecognitionUsage.OutputTokens,
+		Streamed:      true,
+		Metadata: &telemetry.Metadata{
+			ModelName:     stt.Model(va.stt),
+			ModelProvider: stt.Provider(va.stt),
+		},
+	}
+	if va.stt != nil {
+		metrics.Label = va.stt.Label()
+	}
+	va.mu.Lock()
+	session := va.session
+	va.mu.Unlock()
+	if session == nil {
+		return
+	}
+	if session.activity != nil {
+		session.activity.OnMetricsCollected(metrics)
+		return
+	}
+	session.EmitMetricsCollected(metrics)
+}
+
 func (va *PipelineAgent) emitError(err error, source any) {
 	if err == nil {
 		return
@@ -269,6 +318,7 @@ func (va *PipelineAgent) OnSpeechScheduled(ctx context.Context, speech *SpeechHa
 		}
 		if err := va.synthesizeSpeech(ctx, session, singleTextChannel(speech.Generation.Text)); err != nil {
 			logger.Logger.Errorw("TTS inference failed", err)
+			va.emitTTSError(session, err)
 		}
 		insertChatItemIfMissing(va.chatCtx, speech.Generation.AssistantMessage)
 		_ = speech.MarkGenerationDone()
@@ -374,17 +424,22 @@ func (va *PipelineAgent) generateReplyWithOptions(opts pipelineReplyOptions) {
 		genData, err := PerformLLMInference(ctx, va.LLM, inferenceCtx, selectedTools, chatOptions...)
 		if err != nil {
 			logger.Logger.Errorw("LLM inference failed", err)
-			session.EmitError(ErrorEvent{
-				Error:  llm.NewLLMError(llm.Label(va.LLM), err, false),
-				Source: va.LLM,
-			})
+			va.emitLLMError(session, err)
 			session.UpdateAgentState(AgentStateIdle)
 			return
 		}
 
 		if err := va.synthesizeSpeech(ctx, session, genData.TextCh); err != nil {
 			logger.Logger.Errorw("TTS inference failed", err)
+			va.emitTTSError(session, err)
 		}
+		if genData.StreamErr != nil {
+			logger.Logger.Errorw("LLM stream failed", genData.StreamErr)
+			va.emitLLMError(session, genData.StreamErr)
+			session.UpdateAgentState(AgentStateIdle)
+			return
+		}
+		va.emitLLMMetrics(session, genData)
 
 		if genData.GeneratedText != "" {
 			args := llm.ChatMessageArgs{
@@ -464,6 +519,68 @@ func (va *PipelineAgent) generateReplyWithOptions(opts pipelineReplyOptions) {
 	}
 }
 
+func (va *PipelineAgent) emitLLMMetrics(session *AgentSession, genData *LLMGenerationData) {
+	if session == nil || genData == nil || genData.Usage == nil {
+		return
+	}
+	metrics := &telemetry.LLMMetrics{
+		Label:              llm.Label(va.LLM),
+		RequestID:          genData.RequestID,
+		Timestamp:          time.Now(),
+		Duration:           genData.Duration.Seconds(),
+		TTFT:               genData.TTFT.Seconds(),
+		CompletionTokens:   genData.Usage.CompletionTokens,
+		PromptTokens:       genData.Usage.PromptTokens,
+		PromptCachedTokens: llmCachedPromptTokens(genData.Usage),
+		TotalTokens:        genData.Usage.TotalTokens,
+		Metadata: &telemetry.Metadata{
+			ModelName:     llm.Model(va.LLM),
+			ModelProvider: llm.Provider(va.LLM),
+		},
+	}
+	if metrics.Duration > 0 {
+		metrics.TokensPerSecond = float64(metrics.CompletionTokens) / metrics.Duration
+	}
+	if session.activity != nil {
+		session.activity.OnMetricsCollected(metrics)
+		return
+	}
+	session.EmitMetricsCollected(metrics)
+}
+
+func (va *PipelineAgent) emitLLMError(session *AgentSession, err error) {
+	if session == nil || err == nil {
+		return
+	}
+	session.EmitError(ErrorEvent{
+		Error:  llm.NewLLMError(llm.Label(va.LLM), err, false),
+		Source: va.LLM,
+	})
+}
+
+func (va *PipelineAgent) emitTTSError(session *AgentSession, err error) {
+	if session == nil || err == nil {
+		return
+	}
+	label := "tts"
+	if va.tts != nil {
+		label = va.tts.Label()
+	}
+	ttsErr := tts.TTSError{Label: label, Err: err, Recoverable: false}
+	if session.activity != nil {
+		session.activity.OnError(ttsErr, va.tts)
+		return
+	}
+	session.EmitError(ErrorEvent{Error: ttsErr, Source: va.tts})
+}
+
+func llmCachedPromptTokens(usage *llm.CompletionUsage) int {
+	if usage == nil {
+		return 0
+	}
+	return usage.PromptCachedTokens + usage.CacheCreationTokens + usage.CacheReadTokens
+}
+
 func (va *PipelineAgent) synthesizeSpeech(ctx context.Context, session *AgentSession, textCh <-chan string) error {
 	transcriptSync := NewTranscriptSynchronizer(0)
 	useAlignedTranscript := va.useTTSAlignedTranscript(session)
@@ -501,6 +618,9 @@ func (va *PipelineAgent) synthesizeSpeech(ctx context.Context, session *AgentSes
 	}
 	transcriptSync.Close()
 	<-transcriptionDone
+	if ttsGen.StreamErr != nil {
+		return ttsGen.StreamErr
+	}
 	return nil
 }
 

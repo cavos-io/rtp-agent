@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"reflect"
 	"sort"
 	"strings"
@@ -24,6 +25,10 @@ type LLMGenerationData struct {
 	GeneratedFunctions []llm.FunctionToolCall
 	GeneratedExtra     map[string]any
 	TTFT               time.Duration
+	Duration           time.Duration
+	RequestID          string
+	Usage              *llm.CompletionUsage
+	StreamErr          error
 }
 
 func PerformLLMInference(
@@ -66,11 +71,22 @@ func PerformLLMInference(
 		for {
 			chunk, err := stream.Next()
 			if err != nil {
+				if err != io.EOF {
+					data.StreamErr = err
+				}
 				break
 			}
 
 			if data.TTFT == 0 {
 				data.TTFT = time.Since(startTime)
+			}
+			data.Duration = time.Since(startTime)
+			if chunk.ID != "" {
+				data.RequestID = chunk.ID
+			}
+			if chunk.Usage != nil {
+				usage := *chunk.Usage
+				data.Usage = &usage
 			}
 
 			if chunk.Delta != nil {
@@ -202,6 +218,7 @@ type TTSGenerationData struct {
 	AudioCh     chan *model.AudioFrame
 	TimedTextCh chan tts.TimedString
 	TTFB        time.Duration
+	StreamErr   error
 }
 
 type TTSInferenceOptions struct {
@@ -258,6 +275,7 @@ func PerformTTSInference(ctx context.Context, t tts.TTS, textCh <-chan string, o
 			startTime := time.Now()
 			stream, err := t.Synthesize(ctx, transformedText)
 			if err != nil {
+				data.StreamErr = err
 				return
 			}
 			var frame *model.AudioFrame
@@ -265,6 +283,9 @@ func PerformTTSInference(ctx context.Context, t tts.TTS, textCh <-chan string, o
 				var timedTranscript []tts.TimedString
 				frame, timedTranscript, err = tts.CollectWithTimedTranscript(stream)
 				if err != nil || frame == nil {
+					if err != nil {
+						data.StreamErr = err
+					}
 					return
 				}
 				for _, timedText := range timedTranscript {
@@ -273,6 +294,9 @@ func PerformTTSInference(ctx context.Context, t tts.TTS, textCh <-chan string, o
 			} else {
 				frame, err = tts.Collect(stream)
 				if err != nil || frame == nil {
+					if err != nil {
+						data.StreamErr = err
+					}
 					return
 				}
 			}
@@ -317,6 +341,9 @@ func PerformTTSInference(ctx context.Context, t tts.TTS, textCh <-chan string, o
 		for {
 			audio, err := stream.Next()
 			if err != nil {
+				if err != io.EOF {
+					data.StreamErr = err
+				}
 				break
 			}
 			if data.TTFB == 0 {

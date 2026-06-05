@@ -332,8 +332,10 @@ func TestMultimodalAgentSayUsesRealtimeSessionWhenSupported(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("realtime session did not receive Say")
 	}
-	if !handle.IsDone() {
-		t.Fatal("speech handle is not done after realtime Say")
+	waitCtx, waitCancel := context.WithTimeout(ctx, time.Second)
+	defer waitCancel()
+	if err := handle.Wait(waitCtx); err != nil {
+		t.Fatalf("speech handle did not finish after realtime Say: %v", err)
 	}
 	msg := findChatMessage(session.ChatCtx, llm.ChatRoleAssistant, "hello from realtime")
 	if msg == nil {

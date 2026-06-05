@@ -9,6 +9,7 @@ import (
 
 	"github.com/cavos-io/rtp-agent/core/llm"
 	"github.com/cavos-io/rtp-agent/core/stt"
+	"github.com/cavos-io/rtp-agent/core/tts"
 	"github.com/cavos-io/rtp-agent/core/vad"
 	"github.com/cavos-io/rtp-agent/library/logger"
 	"github.com/cavos-io/rtp-agent/library/telemetry"
@@ -29,6 +30,14 @@ type toolUpdatingAssistant interface {
 
 type chatContextUpdatingAssistant interface {
 	UpdateChatContext(context.Context, *llm.ChatContext) error
+}
+
+type ttsMetricsCollector interface {
+	OnMetricsCollected(tts.TTSMetricsHandler) func()
+}
+
+type ttsErrorCollector interface {
+	OnError(tts.TTSErrorHandler) func()
 }
 
 type EndOfTurnInfo struct {
@@ -61,6 +70,8 @@ type AgentActivity struct {
 
 	sttEOSReceived bool
 	speaking       bool
+
+	providerUnsubscribes []func()
 
 	userTurnMu                   sync.Mutex
 	userTurnUpdatedCh            chan struct{}
@@ -106,6 +117,25 @@ type scheduledSpeech struct {
 
 func (a *AgentActivity) Start() {
 	_ = a.recordInitialConfiguration()
+	if a.Session != nil && a.Session.TTS != nil {
+		if collector, ok := a.Session.TTS.(ttsMetricsCollector); ok {
+			unsubscribe := collector.OnMetricsCollected(func(metrics *telemetry.TTSMetrics) {
+				a.OnMetricsCollected(metrics)
+			})
+			a.providerUnsubscribes = append(a.providerUnsubscribes, unsubscribe)
+		}
+		if collector, ok := a.Session.TTS.(ttsErrorCollector); ok {
+			unsubscribe := collector.OnError(func(err tts.TTSError) {
+				a.OnError(err, a.Session.TTS)
+			})
+			a.providerUnsubscribes = append(a.providerUnsubscribes, unsubscribe)
+		}
+	}
+	if a.Session != nil && a.Session.VAD != nil {
+		a.Session.VAD.OnMetricsCollected(func(metrics *telemetry.VADMetrics) {
+			a.OnMetricsCollected(metrics)
+		})
+	}
 	a.AgentIntf.OnEnter()
 	a.queueMu.Lock()
 	a.schedulingStarted = true
@@ -115,6 +145,10 @@ func (a *AgentActivity) Start() {
 
 func (a *AgentActivity) Stop() {
 	a.AgentIntf.OnExit()
+	for _, unsubscribe := range a.providerUnsubscribes {
+		unsubscribe()
+	}
+	a.providerUnsubscribes = nil
 	a.cancel()
 	a.queueMu.Lock()
 	a.schedulingStarted = false
@@ -891,6 +925,17 @@ func (a *AgentActivity) OnRemoteItemAdded(ev llm.RemoteItemAddedEvent) {
 func (a *AgentActivity) OnMetricsCollected(metrics telemetry.AgentMetrics) {
 	if a == nil || a.Session == nil {
 		return
+	}
+	a.queueMu.Lock()
+	currentSpeech := a.currentSpeech
+	a.queueMu.Unlock()
+	if currentSpeech != nil {
+		switch m := metrics.(type) {
+		case *telemetry.LLMMetrics:
+			m.SpeechID = currentSpeech.ID
+		case *telemetry.TTSMetrics:
+			m.SpeechID = currentSpeech.ID
+		}
 	}
 	a.Session.EmitMetricsCollected(metrics)
 }

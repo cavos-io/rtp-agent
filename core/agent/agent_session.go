@@ -65,6 +65,7 @@ type AgentSessionOptions struct {
 	IVRSilenceDuration            time.Duration
 	VideoSampler                  *VoiceActivityVideoSampler
 	ToolChoice                    llm.ToolChoice
+	MaxUnrecoverableErrors        int
 }
 
 type AgentSessionUpdateOptions struct {
@@ -207,6 +208,9 @@ type AgentSession struct {
 	errorCh             chan ErrorEvent
 	sipDTMFCh           chan SipDTMFEvent
 	closeCh             chan CloseEvent
+
+	llmErrorCount int
+	ttsErrorCount int
 }
 
 type SipDTMFEvent struct {
@@ -504,6 +508,9 @@ func withAgentSessionOptionDefaults(opts AgentSessionOptions) AgentSessionOption
 	}
 	if opts.SessionCloseTranscriptTimeout == 0 {
 		opts.SessionCloseTranscriptTimeout = 2.0
+	}
+	if opts.MaxUnrecoverableErrors == 0 {
+		opts.MaxUnrecoverableErrors = 3
 	}
 	return opts
 }
@@ -945,6 +952,43 @@ func (s *AgentSession) EmitError(ev ErrorEvent) {
 	select {
 	case ch <- ev:
 	default:
+	}
+	s.closeOnUnrecoverableError(ev.Error)
+}
+
+func (s *AgentSession) closeOnUnrecoverableError(err error) {
+	if s == nil || err == nil {
+		return
+	}
+	shouldClose := false
+	var llmErr *llm.LLMError
+	var sttErr *stt.STTError
+	var ttsErr tts.TTSError
+	var realtimeErr *llm.RealtimeModelError
+	switch {
+	case errors.As(err, &llmErr):
+		if llmErr.Recoverable {
+			return
+		}
+		s.mu.Lock()
+		s.llmErrorCount++
+		shouldClose = s.llmErrorCount > s.Options.MaxUnrecoverableErrors
+		s.mu.Unlock()
+	case errors.As(err, &ttsErr):
+		if ttsErr.Recoverable {
+			return
+		}
+		s.mu.Lock()
+		s.ttsErrorCount++
+		shouldClose = s.ttsErrorCount > s.Options.MaxUnrecoverableErrors
+		s.mu.Unlock()
+	case errors.As(err, &sttErr):
+		shouldClose = !sttErr.Recoverable
+	case errors.As(err, &realtimeErr):
+		shouldClose = !realtimeErr.Recoverable
+	}
+	if shouldClose {
+		s.CloseSoon(CloseReasonError)
 	}
 }
 
