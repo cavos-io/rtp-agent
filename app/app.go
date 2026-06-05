@@ -938,6 +938,12 @@ func workflowAgentFromConfig(cfg AppConfig, baseAgent *agent.Agent) (agent.Agent
 		selected = workflows.NewGetAddressTask(cfg.WorkflowRequireConfirmation)
 	case "email", "get_email":
 		selected = workflows.NewGetEmailTask(cfg.WorkflowRequireConfirmation)
+	case "name", "get_name":
+		selected = workflows.NewGetNameTask(workflows.GetNameOptions{
+			FirstName:           true,
+			LastName:            true,
+			RequireConfirmation: cfg.WorkflowRequireConfirmation,
+		})
 	case "card_number", "card-number", "get_card_number":
 		selected = workflows.NewGetCardNumberTask(cfg.WorkflowRequireConfirmation)
 	case "security_code", "security-code", "get_security_code":
@@ -1017,6 +1023,18 @@ func workflowTaskFactoryFromName(cfg AppConfig, baseAgent *agent.Agent, taskName
 			Description: "Collect and confirm the user's email address.",
 			TaskFactory: factory(func() agent.AgentInterface {
 				return workflows.NewGetEmailTask(cfg.WorkflowRequireConfirmation)
+			}),
+		}, nil
+	case "name", "get_name":
+		return workflows.FactoryInfo{
+			ID:          "name",
+			Description: "Collect and confirm the user's name.",
+			TaskFactory: factory(func() agent.AgentInterface {
+				return workflows.NewGetNameTask(workflows.GetNameOptions{
+					FirstName:           true,
+					LastName:            true,
+					RequireConfirmation: cfg.WorkflowRequireConfirmation,
+				})
 			}),
 		}, nil
 	case "card_number", "card-number", "get_card_number":
