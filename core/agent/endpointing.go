@@ -19,6 +19,12 @@ type Endpointing interface {
 	OnEndOfAgentSpeech(endedAt float64)
 }
 
+type EndpointingOptions struct {
+	Mode     string
+	MinDelay float64
+	MaxDelay float64
+}
+
 type BaseEndpointing struct {
 	minDelay    float64
 	maxDelay    float64

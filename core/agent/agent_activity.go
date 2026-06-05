@@ -139,6 +139,38 @@ func (a *AgentActivity) AllowInterruptions() bool {
 	return false
 }
 
+func (a *AgentActivity) EndpointingOpts() EndpointingOptions {
+	opts := EndpointingOptions{
+		MinDelay: 0.5,
+		MaxDelay: 3.0,
+	}
+	if a == nil {
+		return opts
+	}
+	if a.Session != nil {
+		opts.Mode = a.Session.Options.EndpointingMode
+		if a.Session.Options.MinEndpointingDelay > 0 {
+			opts.MinDelay = a.Session.Options.MinEndpointingDelay
+		}
+		if a.Session.Options.MaxEndpointingDelay > 0 {
+			opts.MaxDelay = a.Session.Options.MaxEndpointingDelay
+		}
+		if endpointing := a.endpointing(); endpointing != nil {
+			opts.MinDelay = endpointing.MinDelay()
+			opts.MaxDelay = endpointing.MaxDelay()
+		}
+	}
+	if a.Agent != nil {
+		if a.Agent.MinEndpointingDelay > 0 {
+			opts.MinDelay = a.Agent.MinEndpointingDelay
+		}
+		if a.Agent.MaxEndpointingDelay > 0 {
+			opts.MaxDelay = a.Agent.MaxEndpointingDelay
+		}
+	}
+	return opts
+}
+
 func (a *AgentActivity) recordInitialConfiguration() error {
 	if a.Agent.ChatCtx == nil {
 		a.Agent.ChatCtx = llm.NewChatContext()
@@ -1129,29 +1161,11 @@ func (a *AgentActivity) runEOUDetection(info EndOfTurnInfo) {
 }
 
 func (a *AgentActivity) minEndpointingDelay() float64 {
-	if a.Agent.MinEndpointingDelay > 0 {
-		return a.Agent.MinEndpointingDelay
-	}
-	if endpointing := a.endpointing(); endpointing != nil {
-		return endpointing.MinDelay()
-	}
-	if a.Session != nil && a.Session.Options.MinEndpointingDelay > 0 {
-		return a.Session.Options.MinEndpointingDelay
-	}
-	return 0.5
+	return a.EndpointingOpts().MinDelay
 }
 
 func (a *AgentActivity) maxEndpointingDelay() float64 {
-	if a.Agent.MaxEndpointingDelay > 0 {
-		return a.Agent.MaxEndpointingDelay
-	}
-	if endpointing := a.endpointing(); endpointing != nil {
-		return endpointing.MaxDelay()
-	}
-	if a.Session != nil && a.Session.Options.MaxEndpointingDelay > 0 {
-		return a.Session.Options.MaxEndpointingDelay
-	}
-	return 3.0
+	return a.EndpointingOpts().MaxDelay
 }
 
 func (a *AgentActivity) endpointing() Endpointing {
