@@ -1942,6 +1942,33 @@ func TestAgentSessionStartForwardsVADMetricsThroughActivity(t *testing.T) {
 	}
 }
 
+func TestAgentSessionStartForwardsSTTMetricsThroughActivity(t *testing.T) {
+	sttSource := &fakePipelineSTT{}
+	agent := NewAgent("test")
+	agent.STT = sttSource
+	agent.LLM = &fakeGenerationLLM{}
+	agent.VAD = &fakePipelineVAD{}
+	agent.TTS = &fakePipelineTTS{}
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	session.Assistant = &fakeSessionAssistant{}
+
+	if err := session.Start(context.Background()); err != nil {
+		t.Fatalf("Start error = %v, want nil", err)
+	}
+
+	metrics := &telemetry.STTMetrics{RequestID: "stt_req", InputTokens: 3}
+	sttSource.EmitMetricsCollected(metrics)
+
+	select {
+	case ev := <-session.MetricsCollectedEvents():
+		if ev.Metrics != metrics {
+			t.Fatalf("MetricsCollectedEvent metrics = %#v, want original STT metrics", ev.Metrics)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("MetricsCollectedEvents did not receive STT metrics")
+	}
+}
+
 func TestAgentSessionStartForwardsTTSErrorsThroughActivity(t *testing.T) {
 	ttsSource := &fakePipelineTTS{}
 	agent := NewAgent("test")

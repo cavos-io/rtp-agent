@@ -1874,6 +1874,8 @@ func (f *fakePipelineTTSStream) Next() (*tts.SynthesizedAudio, error) {
 }
 
 type fakePipelineSTT struct {
+	stt.MetricsEmitter
+
 	stream    *fakePipelineRecognizeStream
 	streamErr error
 }

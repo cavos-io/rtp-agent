@@ -36,6 +36,10 @@ type ttsMetricsCollector interface {
 	OnMetricsCollected(tts.TTSMetricsHandler) func()
 }
 
+type sttMetricsCollector interface {
+	OnMetricsCollected(stt.STTMetricsHandler) func()
+}
+
 type ttsErrorCollector interface {
 	OnError(tts.TTSErrorHandler) func()
 }
@@ -127,6 +131,14 @@ func (a *AgentActivity) Start() {
 		if collector, ok := a.Session.TTS.(ttsErrorCollector); ok {
 			unsubscribe := collector.OnError(func(err tts.TTSError) {
 				a.OnError(err, a.Session.TTS)
+			})
+			a.providerUnsubscribes = append(a.providerUnsubscribes, unsubscribe)
+		}
+	}
+	if a.Session != nil && a.Session.STT != nil {
+		if collector, ok := a.Session.STT.(sttMetricsCollector); ok {
+			unsubscribe := collector.OnMetricsCollected(func(metrics *telemetry.STTMetrics) {
+				a.OnMetricsCollected(metrics)
 			})
 			a.providerUnsubscribes = append(a.providerUnsubscribes, unsubscribe)
 		}
