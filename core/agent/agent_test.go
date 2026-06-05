@@ -222,6 +222,28 @@ func TestAgentUpdateChatContextCanKeepInvalidFunctionItems(t *testing.T) {
 	}
 }
 
+func TestAgentUpdateChatCtxMatchesReferenceName(t *testing.T) {
+	agent := NewAgent("help")
+	agent.Tools = []llm.Tool{&agentTestTool{name: "lookup"}}
+	source := llm.NewChatContext()
+	source.Append(&llm.ChatMessage{ID: "msg_1", Role: llm.ChatRoleUser})
+	source.Append(&llm.FunctionCall{ID: "lookup-call", Name: "lookup"})
+	source.Append(&llm.FunctionCall{ID: "calendar-call", Name: "calendar"})
+
+	if err := agent.UpdateChatCtx(context.Background(), source); err != nil {
+		t.Fatalf("UpdateChatCtx error = %v, want nil", err)
+	}
+
+	got := chatItemIDs(agent.ChatCtx.Items)
+	want := []string{"msg_1", "lookup-call"}
+	if !stringSlicesEqual(got, want) {
+		t.Fatalf("agent ChatCtx item IDs = %q, want %q", got, want)
+	}
+	if agent.ChatCtx == source {
+		t.Fatal("UpdateChatCtx reused source context, want copied context")
+	}
+}
+
 func TestAgentUpdateToolsFiltersChatContextFunctionItems(t *testing.T) {
 	agent := NewAgent("help")
 	agent.ChatCtx.Append(&llm.ChatMessage{ID: "msg_1", Role: llm.ChatRoleUser})
