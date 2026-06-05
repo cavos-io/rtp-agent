@@ -608,6 +608,9 @@ func (va *PipelineAgent) synthesizeSpeech(ctx context.Context, session *AgentSes
 	}
 	transcriptSync.Close()
 	<-transcriptionDone
+	if ttsGen.StreamErr != nil {
+		return ttsGen.StreamErr
+	}
 	return nil
 }
 

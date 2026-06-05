@@ -1039,6 +1039,38 @@ func TestPipelineAgentEmitsTTSErrorEventForSpeechSynthesisFailure(t *testing.T) 
 	}
 }
 
+func TestPipelineAgentEmitsTTSErrorEventForSpeechStreamFailure(t *testing.T) {
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	cause := errors.New("tts next failed")
+	ttsSource := &fakePipelineTTS{stream: &fakePipelineTTSStream{err: cause}}
+	agent := NewPipelineAgent(nil, nil, nil, ttsSource, llm.NewChatContext())
+	agent.session = session
+	speech := NewSpeechHandle(false, DefaultInputDetails())
+	speech.Generation.Text = "hello"
+	speech.Generation.AssistantMessage = &llm.ChatMessage{
+		Role:    llm.ChatRoleAssistant,
+		Content: []llm.ChatContent{{Text: "hello"}},
+	}
+
+	agent.OnSpeechScheduled(context.Background(), speech)
+
+	select {
+	case ev := <-session.ErrorEvents():
+		var ttsErr tts.TTSError
+		if !errors.As(ev.Error, &ttsErr) {
+			t.Fatalf("Error = %T, want tts.TTSError", ev.Error)
+		}
+		if !errors.Is(ev.Error, cause) {
+			t.Fatalf("Error = %v, want cause %v", ev.Error, cause)
+		}
+		if ev.Source != ttsSource {
+			t.Fatalf("Source = %#v, want TTS source", ev.Source)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("ErrorEvents did not receive TTS stream error")
+	}
+}
+
 func TestPipelineAgentEmitsLLMMetricsForUsageChunk(t *testing.T) {
 	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
 	l := &fakeGenerationLLM{
@@ -1675,6 +1707,7 @@ type fakePipelineTTSStream struct {
 	frames           []*model.AudioFrame
 	timedTranscripts [][]tts.TimedString
 	next             int
+	err              error
 }
 
 func (f *fakePipelineTTSStream) PushText(text string) error {
@@ -1695,6 +1728,11 @@ func (f *fakePipelineTTSStream) Next() (*tts.SynthesizedAudio, error) {
 		}
 		f.next++
 		return &tts.SynthesizedAudio{Frame: frame, TimedTranscript: timedTranscript}, nil
+	}
+	if f.err != nil {
+		err := f.err
+		f.err = nil
+		return nil, err
 	}
 	return nil, io.EOF
 }

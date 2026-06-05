@@ -218,6 +218,7 @@ type TTSGenerationData struct {
 	AudioCh     chan *model.AudioFrame
 	TimedTextCh chan tts.TimedString
 	TTFB        time.Duration
+	StreamErr   error
 }
 
 type TTSInferenceOptions struct {
@@ -333,6 +334,9 @@ func PerformTTSInference(ctx context.Context, t tts.TTS, textCh <-chan string, o
 		for {
 			audio, err := stream.Next()
 			if err != nil {
+				if err != io.EOF {
+					data.StreamErr = err
+				}
 				break
 			}
 			if data.TTFB == 0 {
