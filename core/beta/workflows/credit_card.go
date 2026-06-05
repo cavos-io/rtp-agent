@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/cavos-io/rtp-agent/core/agent"
 	"github.com/cavos-io/rtp-agent/core/llm"
@@ -26,6 +27,10 @@ type GetSecurityCodeResult struct {
 	SecurityCode string
 }
 
+type GetExpirationDateResult struct {
+	Date string
+}
+
 type GetCardNumberTask struct {
 	agent.AgentTask[*GetCardNumberResult]
 	RequireConfirmation bool
@@ -36,6 +41,12 @@ type GetSecurityCodeTask struct {
 	agent.AgentTask[*GetSecurityCodeResult]
 	RequireConfirmation bool
 	currentSecurityCode string
+}
+
+type GetExpirationDateTask struct {
+	agent.AgentTask[*GetExpirationDateResult]
+	RequireConfirmation   bool
+	currentExpirationDate string
 }
 
 const CardNumberInstructions = `You are a single step in a broader process of collecting credit card information.
@@ -57,6 +68,15 @@ If the user refuses to provide a code, call decline_card_capture.
 If the user wishes to start over the card collection process, call restart_card_collection.
 Avoid listing out questions with bullet points or numbers, use a natural conversational tone.
 Never repeat sensitive information, such as the user's security code, back to the user.`
+
+const ExpirationDateInstructions = `You are a single step in a broader process of collecting credit card information.
+You are solely responsible for collecting the user's card expiration date.
+Handle input as noisy voice transcription. Expect formats like April twenty five, oh four twenty five, four slash twenty five, or April 2025.
+Normalize spoken months and digits silently.
+If the user refuses to provide a date, call decline_card_capture.
+If the user wishes to start over the card collection process, call restart_card_collection.
+Avoid listing out questions with bullet points or numbers, use a natural conversational tone.
+Never repeat sensitive information, such as the user's expiration date, back to the user.`
 
 func NewGetCardNumberTask(requireConfirmation bool) *GetCardNumberTask {
 	t := &GetCardNumberTask{
@@ -88,6 +108,21 @@ func NewGetSecurityCodeTask(requireConfirmation bool) *GetSecurityCodeTask {
 	return t
 }
 
+func NewGetExpirationDateTask(requireConfirmation bool) *GetExpirationDateTask {
+	t := &GetExpirationDateTask{
+		AgentTask:           *agent.NewAgentTask[*GetExpirationDateResult](ExpirationDateInstructions),
+		RequireConfirmation: requireConfirmation,
+	}
+
+	t.Agent.Tools = []llm.Tool{
+		&updateExpirationDateTool{task: t},
+		&declineCardCaptureTool{task: t},
+		&restartCardCollectionTool{task: t},
+	}
+
+	return t
+}
+
 func (t *GetCardNumberTask) OnEnter() {
 	if activity := t.Agent.GetActivity(); activity != nil {
 		if session := activity.Session; session != nil {
@@ -104,6 +139,14 @@ func (t *GetSecurityCodeTask) OnEnter() {
 	}
 }
 
+func (t *GetExpirationDateTask) OnEnter() {
+	if activity := t.Agent.GetActivity(); activity != nil {
+		if session := activity.Session; session != nil {
+			_, _ = session.GenerateReply(context.Background(), "Collect the user's card expiration date.")
+		}
+	}
+}
+
 func (t *GetCardNumberTask) completeCardNumber(cardNumber string) {
 	issuer := "Other"
 	if cardNumber != "" {
@@ -116,6 +159,10 @@ func (t *GetCardNumberTask) completeCardNumber(cardNumber string) {
 
 func (t *GetSecurityCodeTask) completeSecurityCode(securityCode string) {
 	t.Complete(&GetSecurityCodeResult{SecurityCode: securityCode})
+}
+
+func (t *GetExpirationDateTask) completeExpirationDate(expirationDate string) {
+	t.Complete(&GetExpirationDateResult{Date: expirationDate})
 }
 
 type recordCardNumberTool struct {
@@ -229,6 +276,72 @@ func (t *GetSecurityCodeTask) setConfirmSecurityCodeTool(securityCode string) {
 	t.Agent.Tools = tools
 }
 
+type updateExpirationDateTool struct {
+	task *GetExpirationDateTask
+}
+
+func (t *updateExpirationDateTool) ID() string   { return "update_expiration_date" }
+func (t *updateExpirationDateTool) Name() string { return "update_expiration_date" }
+func (t *updateExpirationDateTool) Description() string {
+	return "Update the card expiration date."
+}
+func (t *updateExpirationDateTool) Parameters() map[string]any {
+	return map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"expiration_month": map[string]any{"type": "integer", "description": "The numerical expiration month, for example 4 for April"},
+			"expiration_year":  map[string]any{"type": "integer", "description": "The two-digit expiration year, for example 35 for 2035"},
+		},
+		"required": []string{"expiration_month", "expiration_year"},
+	}
+}
+
+func (t *updateExpirationDateTool) Execute(ctx context.Context, args string) (string, error) {
+	var params struct {
+		ExpirationMonth int `json:"expiration_month"`
+		ExpirationYear  int `json:"expiration_year"`
+	}
+	if err := json.Unmarshal([]byte(args), &params); err != nil {
+		return "", err
+	}
+	if params.ExpirationMonth < 1 || params.ExpirationMonth > 12 {
+		return "", llm.NewToolError("The expiration month is invalid, ask the user to repeat the expiration month.")
+	}
+	if params.ExpirationYear < 0 || params.ExpirationYear > 99 {
+		return "", llm.NewToolError("The expiration year is invalid, ask the user to repeat the expiration year.")
+	}
+	if expirationDateExpired(params.ExpirationMonth, params.ExpirationYear, time.Now()) {
+		return "", llm.NewToolError("The expiration date is in the past, the card is expired. Ask the user to provide another card.")
+	}
+
+	expirationDate := formatExpirationDate(params.ExpirationMonth, params.ExpirationYear)
+	t.task.currentExpirationDate = expirationDate
+	if !t.task.RequireConfirmation {
+		t.task.completeExpirationDate(expirationDate)
+		return "Expiration date captured and task completed.", nil
+	}
+
+	t.task.setConfirmExpirationDateTool(params.ExpirationMonth, params.ExpirationYear, expirationDate)
+	return "The expiration date has been updated.\nDo not repeat the expiration date back to the user, ask them to repeat themselves.", nil
+}
+
+func (t *GetExpirationDateTask) setConfirmExpirationDateTool(month int, year int, expirationDate string) {
+	tools := make([]llm.Tool, 0, len(t.Agent.Tools)+1)
+	for _, tool := range t.Agent.Tools {
+		if tool.ID() == "confirm_expiration_date" {
+			continue
+		}
+		tools = append(tools, tool)
+	}
+	tools = append(tools, &confirmExpirationDateTool{
+		task:            t,
+		expirationMonth: month,
+		expirationYear:  year,
+		expirationDate:  expirationDate,
+	})
+	t.Agent.Tools = tools
+}
+
 type confirmCardNumberTool struct {
 	task       *GetCardNumberTask
 	cardNumber string
@@ -299,6 +412,44 @@ func (t *confirmSecurityCodeTool) Execute(ctx context.Context, args string) (str
 	}
 	t.task.completeSecurityCode(t.securityCode)
 	return "Security code confirmed.", nil
+}
+
+type confirmExpirationDateTool struct {
+	task            *GetExpirationDateTask
+	expirationMonth int
+	expirationYear  int
+	expirationDate  string
+}
+
+func (t *confirmExpirationDateTool) ID() string   { return "confirm_expiration_date" }
+func (t *confirmExpirationDateTool) Name() string { return "confirm_expiration_date" }
+func (t *confirmExpirationDateTool) Description() string {
+	return "Confirm the expiration date after the user repeats it."
+}
+func (t *confirmExpirationDateTool) Parameters() map[string]any {
+	return map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"repeated_expiration_month": map[string]any{"type": "integer", "description": "The expiration month repeated by the user"},
+			"repeated_expiration_year":  map[string]any{"type": "integer", "description": "The expiration year repeated by the user"},
+		},
+		"required": []string{"repeated_expiration_month", "repeated_expiration_year"},
+	}
+}
+
+func (t *confirmExpirationDateTool) Execute(ctx context.Context, args string) (string, error) {
+	var params struct {
+		RepeatedExpirationMonth int `json:"repeated_expiration_month"`
+		RepeatedExpirationYear  int `json:"repeated_expiration_year"`
+	}
+	if err := json.Unmarshal([]byte(args), &params); err != nil {
+		return "", err
+	}
+	if params.RepeatedExpirationMonth != t.expirationMonth || params.RepeatedExpirationYear != t.expirationYear {
+		return "", llm.NewToolError("The repeated expiration date does not match, ask the user to try again.")
+	}
+	t.task.completeExpirationDate(t.expirationDate)
+	return "Expiration date confirmed.", nil
 }
 
 type cardFailureTask interface {
@@ -387,6 +538,15 @@ func validSecurityCode(securityCode string) bool {
 		}
 	}
 	return true
+}
+
+func formatExpirationDate(month int, year int) string {
+	return fmt.Sprintf("%02d/%02d", month, year)
+}
+
+func expirationDateExpired(month int, year int, today time.Time) bool {
+	fullYear := 2000 + year
+	return fullYear < today.Year() || (fullYear == today.Year() && month < int(today.Month()))
 }
 
 func validateCardNumberLuhn(cardNumber string) bool {

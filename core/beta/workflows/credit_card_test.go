@@ -2,7 +2,9 @@ package workflows
 
 import (
 	"context"
+	"strconv"
 	"testing"
+	"time"
 )
 
 func TestGetCardNumberTaskRecordsValidCardWithoutConfirmation(t *testing.T) {
@@ -142,4 +144,93 @@ func TestGetSecurityCodeTaskRequiresMatchingConfirmation(t *testing.T) {
 	default:
 		t.Fatal("task did not complete after matching confirmation")
 	}
+}
+
+func TestGetExpirationDateTaskRecordsFutureDateWithoutConfirmation(t *testing.T) {
+	task := NewGetExpirationDateTask(false)
+	tool := &updateExpirationDateTool{task: task}
+	futureYear := (time.Now().Year() + 1) % 100
+
+	out, err := tool.Execute(context.Background(), `{"expiration_month":4,"expiration_year":`+itoa(futureYear)+`}`)
+	if err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+	if out != "Expiration date captured and task completed." {
+		t.Fatalf("Execute() output = %q, want completion message", out)
+	}
+
+	select {
+	case result := <-task.Result:
+		want := "04/" + twoDigit(futureYear)
+		if result.Date != want {
+			t.Fatalf("Date = %q, want %s", result.Date, want)
+		}
+	default:
+		t.Fatal("task did not complete after valid expiration date")
+	}
+}
+
+func TestGetExpirationDateTaskRejectsInvalidOrExpiredDate(t *testing.T) {
+	task := NewGetExpirationDateTask(false)
+	tool := &updateExpirationDateTool{task: task}
+
+	cases := []string{
+		`{"expiration_month":13,"expiration_year":35}`,
+		`{"expiration_month":1,"expiration_year":100}`,
+		`{"expiration_month":1,"expiration_year":0}`,
+	}
+	for _, args := range cases {
+		if _, err := tool.Execute(context.Background(), args); err == nil {
+			t.Fatalf("Execute(%s) error = nil, want invalid expiration date error", args)
+		}
+	}
+
+	select {
+	case result := <-task.Result:
+		t.Fatalf("task completed with %#v, want no completion for invalid date", result)
+	default:
+	}
+}
+
+func TestGetExpirationDateTaskRequiresMatchingConfirmation(t *testing.T) {
+	task := NewGetExpirationDateTask(true)
+	update := &updateExpirationDateTool{task: task}
+	futureYear := (time.Now().Year() + 1) % 100
+
+	out, err := update.Execute(context.Background(), `{"expiration_month":12,"expiration_year":`+itoa(futureYear)+`}`)
+	if err != nil {
+		t.Fatalf("update Execute() error = %v", err)
+	}
+	if out == "" {
+		t.Fatal("update Execute() output is empty, want confirmation prompt guidance")
+	}
+	if len(task.Agent.Tools) != 4 || task.Agent.Tools[3].Name() != "confirm_expiration_date" {
+		t.Fatalf("tools = %#v, want confirm_expiration_date appended", task.Agent.Tools)
+	}
+
+	confirm := &confirmExpirationDateTool{task: task, expirationMonth: 12, expirationYear: futureYear, expirationDate: "12/" + twoDigit(futureYear)}
+	if _, err := confirm.Execute(context.Background(), `{"repeated_expiration_month":12,"repeated_expiration_year":`+itoa(futureYear)+`}`); err != nil {
+		t.Fatalf("confirm Execute() error = %v", err)
+	}
+
+	select {
+	case result := <-task.Result:
+		want := "12/" + twoDigit(futureYear)
+		if result.Date != want {
+			t.Fatalf("Date = %q, want %s", result.Date, want)
+		}
+	default:
+		t.Fatal("task did not complete after matching confirmation")
+	}
+}
+
+func itoa(n int) string {
+	return strconv.Itoa(n)
+}
+
+func twoDigit(n int) string {
+	if n < 10 {
+		return "0" + strconv.Itoa(n)
+	}
+	return strconv.Itoa(n)
 }

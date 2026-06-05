@@ -942,6 +942,8 @@ func workflowAgentFromConfig(cfg AppConfig, baseAgent *agent.Agent) (agent.Agent
 		selected = workflows.NewGetCardNumberTask(cfg.WorkflowRequireConfirmation)
 	case "security_code", "security-code", "get_security_code":
 		selected = workflows.NewGetSecurityCodeTask(cfg.WorkflowRequireConfirmation)
+	case "expiration_date", "expiration-date", "get_expiration_date":
+		selected = workflows.NewGetExpirationDateTask(cfg.WorkflowRequireConfirmation)
 	case "dtmf", "get_dtmf":
 		numDigits := 1
 		if cfg.WorkflowDtmfNumDigits != nil {
@@ -1031,6 +1033,14 @@ func workflowTaskFactoryFromName(cfg AppConfig, baseAgent *agent.Agent, taskName
 			Description: "Collect and validate the user's card security code.",
 			TaskFactory: factory(func() agent.AgentInterface {
 				return workflows.NewGetSecurityCodeTask(cfg.WorkflowRequireConfirmation)
+			}),
+		}, nil
+	case "expiration_date", "expiration-date", "get_expiration_date":
+		return workflows.FactoryInfo{
+			ID:          "expiration_date",
+			Description: "Collect and validate the user's card expiration date.",
+			TaskFactory: factory(func() agent.AgentInterface {
+				return workflows.NewGetExpirationDateTask(cfg.WorkflowRequireConfirmation)
 			}),
 		}, nil
 	case "dtmf", "get_dtmf":
