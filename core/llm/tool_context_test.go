@@ -86,6 +86,50 @@ func TestToolContextUpdateToolsRejectsDifferentToolsWithSameName(t *testing.T) {
 	}
 }
 
+func TestToolContextAddToolUpdatesFlattenedTools(t *testing.T) {
+	lookup := &testTool{id: "lookup", name: "lookup"}
+	provider := &testProviderTool{testTool: testTool{id: "provider", name: "provider"}}
+	nestedProvider := &testProviderTool{testTool: testTool{id: "nested-provider", name: "nested-provider"}}
+	weather := &testTool{id: "weather", name: "weather"}
+	toolset := &testToolset{id: "set", tools: []Tool{weather, nestedProvider}}
+	ctx := NewToolContext([]interface{}{lookup})
+
+	if err := ctx.AddTool(provider); err != nil {
+		t.Fatalf("AddTool(provider) error = %v", err)
+	}
+	if err := ctx.AddTool(toolset); err != nil {
+		t.Fatalf("AddTool(toolset) error = %v", err)
+	}
+
+	if got := ctx.GetFunctionTool("lookup"); got != lookup {
+		t.Fatalf("GetFunctionTool(lookup) = %p, want %p", got, lookup)
+	}
+	if got := ctx.GetFunctionTool("weather"); got != weather {
+		t.Fatalf("GetFunctionTool(weather) = %p, want %p", got, weather)
+	}
+	providerTools := ctx.ProviderTools()
+	if len(providerTools) != 2 || providerTools[0] != nestedProvider || providerTools[1] != provider {
+		t.Fatalf("ProviderTools() = %#v, want sorted providers including nested provider", providerTools)
+	}
+	toolsets := ctx.Toolsets()
+	if len(toolsets) != 1 || toolsets[0] != toolset {
+		t.Fatalf("Toolsets() = %#v, want added toolset", toolsets)
+	}
+}
+
+func TestToolContextAddToolRejectsDifferentToolWithSameName(t *testing.T) {
+	ctx := NewToolContext([]interface{}{&testTool{id: "lookup-a", name: "lookup"}})
+
+	err := ctx.AddTool(&testTool{id: "lookup-b", name: "lookup"})
+
+	if err == nil {
+		t.Fatal("AddTool() error = nil, want duplicate function name error")
+	}
+	if !strings.Contains(err.Error(), "duplicate function name: lookup") {
+		t.Fatalf("AddTool() error = %q, want duplicate function name", err)
+	}
+}
+
 func TestNewToolContextPanicsOnDuplicateFunctionName(t *testing.T) {
 	defer func() {
 		if r := recover(); r == nil {
