@@ -57,6 +57,7 @@ type AgentActivity struct {
 
 	schedulingPaused   bool
 	schedulingDraining bool
+	schedulingStarted  bool
 
 	sttEOSReceived bool
 	speaking       bool
@@ -106,12 +107,18 @@ type scheduledSpeech struct {
 func (a *AgentActivity) Start() {
 	_ = a.recordInitialConfiguration()
 	a.AgentIntf.OnEnter()
+	a.queueMu.Lock()
+	a.schedulingStarted = true
+	a.queueMu.Unlock()
 	go a.schedulingTask()
 }
 
 func (a *AgentActivity) Stop() {
 	a.AgentIntf.OnExit()
 	a.cancel()
+	a.queueMu.Lock()
+	a.schedulingStarted = false
+	a.queueMu.Unlock()
 	if a.Agent.activity == a {
 		a.Agent.activity = nil
 	}
@@ -126,6 +133,64 @@ func (a *AgentActivity) SchedulingPaused() bool {
 	return a.schedulingPaused
 }
 
+func (a *AgentActivity) PauseScheduling() {
+	if a == nil {
+		return
+	}
+	a.queueMu.Lock()
+	a.schedulingPaused = true
+	a.queueMu.Unlock()
+
+	select {
+	case a.queueUpdatedCh <- struct{}{}:
+	default:
+	}
+}
+
+func (a *AgentActivity) ResumeScheduling() {
+	if a == nil {
+		return
+	}
+	a.queueMu.Lock()
+	a.schedulingPaused = false
+	a.schedulingDraining = false
+	a.queueMu.Unlock()
+
+	select {
+	case a.queueUpdatedCh <- struct{}{}:
+	default:
+	}
+}
+
+func (a *AgentActivity) CurrentSpeech() *SpeechHandle {
+	if a == nil {
+		return nil
+	}
+	a.queueMu.Lock()
+	defer a.queueMu.Unlock()
+	return a.currentSpeech
+}
+
+func (a *AgentActivity) Tools() []interface{} {
+	if a == nil || a.Agent == nil {
+		return nil
+	}
+	capacity := len(a.Agent.Tools)
+	if a.Session != nil {
+		capacity += len(a.Session.Tools)
+	}
+	tools := make([]interface{}, 0, capacity)
+	if a.Session != nil {
+		for _, tool := range a.Session.Tools {
+			tools = append(tools, tool)
+		}
+	}
+	for _, tool := range a.Agent.Tools {
+		tools = append(tools, tool)
+	}
+	return tools
+}
+
 func (a *AgentActivity) AllowInterruptions() bool {
 	if a == nil {
 		return false
@@ -137,6 +202,18 @@ func (a *AgentActivity) AllowInterruptions() bool {
 		return a.Agent.AllowInterruptions
 	}
 	return false
+}
+
+func (a *AgentActivity) InterruptionEnabled() bool {
+	if a == nil || !a.AllowInterruptions() {
+		return false
+	}
+	switch a.turnDetectionMode() {
+	case "", TurnDetectionModeManual, TurnDetectionModeRealtimeLLM:
+		return false
+	default:
+		return true
+	}
 }
 
 func (a *AgentActivity) EndpointingOpts() EndpointingOptions {
@@ -183,7 +260,7 @@ func (a *AgentActivity) recordInitialConfiguration() error {
 		return err
 	}
 
-	toolNames := sortedAgentToolNames(a.chatContextTools())
+	toolNames := sortedAgentToolNames(a.Tools())
 	if a.Agent.Instructions == "" && len(toolNames) == 0 {
 		return nil
 	}
@@ -434,7 +511,7 @@ func (a *AgentActivity) UpdateChatCtx(ctx context.Context, chatCtx *llm.ChatCont
 		return a.updateRealtimeChatContext(ctx)
 	}
 	a.Agent.ChatCtx = chatCtx.Copy(llm.ChatContextCopyOptions{
-		Tools: a.chatContextTools(),
+		Tools: a.Tools(),
 	})
 	if err := updateAgentInstructionsMessage(a.Agent.ChatCtx, a.Agent.Instructions, true); err != nil {
 		return err
@@ -443,6 +520,19 @@ func (a *AgentActivity) UpdateChatCtx(ctx context.Context, chatCtx *llm.ChatCont
 		return err
 	}
 	return nil
+}
+
+func (a *AgentActivity) UpdateOptions(opts AgentSessionUpdateOptions) error {
+	if a == nil || a.Session == nil || opts.ToolChoice == nil {
+		return nil
+	}
+	updater, ok := a.Session.Assistant.(realtimeOptionsUpdatingAssistant)
+	if !ok {
+		return nil
+	}
+	return updater.UpdateOptions(context.Background(), llm.RealtimeSessionOptions{
+		ToolChoice: *opts.ToolChoice,
+	})
 }
 
 func (a *AgentActivity) updateRealtimeChatContext(ctx context.Context) error {
@@ -458,17 +548,11 @@ func (a *AgentActivity) updateRealtimeChatContext(ctx context.Context) error {
 	return updater.UpdateChatContext(ctx, chatCtx)
 }
 
-func (a *AgentActivity) chatContextTools() []interface{} {
-	tools := make([]interface{}, 0, len(a.Agent.Tools))
-	if a.Session != nil {
-		for _, tool := range a.Session.Tools {
-			tools = append(tools, tool)
-		}
+func (a *AgentActivity) RetrieveChatCtx() *llm.ChatContext {
+	if a == nil || a.Agent == nil {
+		return llm.NewChatContext().ReadOnly()
 	}
-	for _, tool := range a.Agent.Tools {
-		tools = append(tools, tool)
-	}
-	return tools
+	return a.Agent.ChatContext()
 }
 
 func agentToolNameSet(tools []llm.Tool) map[string]struct{} {
@@ -641,7 +725,8 @@ func (a *AgentActivity) processQueue() {
 	}
 
 	a.currentSpeech = speech
-	delay := a.minConsecutiveSpeechDelay()
+	speech.AddDoneCallback(a.OnPipelineReplyDone)
+	delay := a.MinConsecutiveSpeechDelay()
 	if delay > 0 && !a.lastSpeechDone.IsZero() {
 		delay -= time.Since(a.lastSpeechDone)
 	}
@@ -674,7 +759,9 @@ func (a *AgentActivity) processQueue() {
 		<-speech.doneCh
 
 		a.queueMu.Lock()
-		a.currentSpeech = nil
+		if a.currentSpeech == speech {
+			a.currentSpeech = nil
+		}
 		a.lastSpeechDone = time.Now()
 		a.queueMu.Unlock()
 
@@ -686,7 +773,7 @@ func (a *AgentActivity) processQueue() {
 	}()
 }
 
-func (a *AgentActivity) minConsecutiveSpeechDelay() time.Duration {
+func (a *AgentActivity) MinConsecutiveSpeechDelay() time.Duration {
 	if a.Agent != nil && a.Agent.MinConsecutiveSpeechDelay > 0 {
 		return time.Duration(a.Agent.MinConsecutiveSpeechDelay * float64(time.Second))
 	}
@@ -694,6 +781,90 @@ func (a *AgentActivity) minConsecutiveSpeechDelay() time.Duration {
 		return time.Duration(a.Session.Options.MinConsecutiveSpeechDelay * float64(time.Second))
 	}
 	return 0
+}
+
+func (a *AgentActivity) UseTTSAlignedTranscript() bool {
+	if a == nil {
+		return false
+	}
+	enabled := false
+	if a.Session != nil {
+		enabled = a.Session.Options.UseTTSAlignedTranscript
+	}
+	if a.Agent != nil && (a.Agent.UseTTSAlignedTranscriptSet || a.Agent.UseTTSAlignedTranscript) {
+		enabled = a.Agent.UseTTSAlignedTranscript
+	}
+	return enabled
+}
+
+func (a *AgentActivity) OnPipelineReplyDone(speech *SpeechHandle) {
+	if a == nil || a.Session == nil {
+		return
+	}
+	a.queueMu.Lock()
+	if speech != nil && a.currentSpeech == speech && speech.IsDone() {
+		a.currentSpeech = nil
+	}
+	inactive := len(a.speechQueue) == 0 && (a.currentSpeech == nil || a.currentSpeech.IsDone())
+	started := a.schedulingStarted
+	a.queueMu.Unlock()
+	if inactive {
+		a.Session.UpdateAgentState(AgentStateListening)
+	}
+	if started {
+		go a.processQueue()
+	}
+}
+
+func (a *AgentActivity) OnInputSpeechStarted() {
+	if a == nil || a.Session == nil {
+		return
+	}
+	a.Session.UpdateUserState(UserStateSpeaking)
+	go func() {
+		if err := a.Interrupt(false); err != nil {
+			logger.Logger.Errorw("realtime input speech started but current speech is not interruptable", err)
+		}
+	}()
+}
+
+func (a *AgentActivity) OnInputSpeechStopped(ev llm.InputSpeechStoppedEvent) {
+	if a == nil || a.Session == nil {
+		return
+	}
+	a.Session.UpdateUserState(UserStateListening)
+	if ev.UserTranscriptionEnabled {
+		a.Session.EmitUserInputTranscribed(UserInputTranscribedEvent{
+			Transcript: "",
+			IsFinal:    false,
+		})
+	}
+}
+
+func (a *AgentActivity) OnInputAudioTranscriptionCompleted(ev llm.InputTranscriptionCompleted) {
+	if a == nil || a.Session == nil {
+		return
+	}
+	a.Session.EmitUserInputTranscribed(UserInputTranscribedEvent{
+		Transcript: ev.Transcript,
+		IsFinal:    ev.IsFinal,
+	})
+	if !ev.IsFinal {
+		return
+	}
+
+	msg := &llm.ChatMessage{
+		ID:   ev.ItemID,
+		Role: llm.ChatRoleUser,
+		Content: []llm.ChatContent{
+			{Text: ev.Transcript},
+		},
+		CreatedAt: time.Now(),
+	}
+	if a.Agent != nil && a.Agent.ChatCtx != nil {
+		_ = a.Agent.ChatCtx.UpsertItem(msg, llm.ChatContextUpsertOptions{AllowTypeMismatch: true})
+	}
+	a.Session.EmitConversationItemAdded(msg)
 }
 
 func (a *AgentActivity) Drain(ctx context.Context) error {
@@ -717,9 +888,9 @@ func (a *AgentActivity) Drain(ctx context.Context) error {
 	err := a.WaitForInactive(ctx)
 
 	a.queueMu.Lock()
-	a.schedulingPaused = true
 	a.schedulingDraining = false
 	a.queueMu.Unlock()
+	a.PauseScheduling()
 
 	return err
 }
@@ -965,10 +1136,7 @@ func (a *AgentActivity) completeUserTurn(ctx context.Context, info EndOfTurnInfo
 		return nil, nil
 	}
 
-	chatCtx := llm.NewChatContext()
-	if a.Agent.ChatCtx != nil {
-		chatCtx = a.Agent.ChatCtx.Copy()
-	}
+	chatCtx := a.RetrieveChatCtx().Copy()
 	hookStart := time.Now()
 	if err := a.AgentIntf.OnUserTurnCompleted(ctx, chatCtx, newMsg); err != nil {
 		var stopResponse llm.StopResponse
@@ -1021,10 +1189,10 @@ func (a *AgentActivity) shouldSkipShortInterruption(currentSpeech *SpeechHandle,
 	if currentSpeech == nil || !currentSpeech.AllowInterruptions || currentSpeech.IsInterrupted() || currentSpeech.IsDone() {
 		return false
 	}
-	if a.Session == nil || a.Session.Options.MinInterruptionWords <= 0 {
+	if !a.InterruptionEnabled() {
 		return false
 	}
-	if a.turnDetectionMode() == TurnDetectionModeManual {
+	if a.Session == nil || a.Session.Options.MinInterruptionWords <= 0 {
 		return false
 	}
 	if a.Agent.STT == nil && a.Session.STT == nil {
@@ -1129,7 +1297,7 @@ func (a *AgentActivity) runEOUDetection(info EndOfTurnInfo) {
 
 		if a.Agent.TurnDetector != nil && info.NewTranscript != "" {
 			// Predict end of turn
-			chatCtx := a.Agent.ChatCtx.Copy()
+			chatCtx := a.RetrieveChatCtx().Copy()
 			chatCtx.Append(&llm.ChatMessage{
 				Role:    llm.ChatRoleUser,
 				Content: []llm.ChatContent{{Text: info.NewTranscript}},

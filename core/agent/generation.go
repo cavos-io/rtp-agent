@@ -346,6 +346,7 @@ type ToolExecutionOutput struct {
 type ToolExecutionOptions struct {
 	Session      *AgentSession
 	SpeechHandle *SpeechHandle
+	ToolChoice   llm.ToolChoice
 }
 
 type ToolExecutionOption func(*ToolExecutionOptions)
@@ -359,6 +360,12 @@ func WithToolExecutionSession(session *AgentSession) ToolExecutionOption {
 func WithToolExecutionSpeechHandle(speechHandle *SpeechHandle) ToolExecutionOption {
 	return func(opts *ToolExecutionOptions) {
 		opts.SpeechHandle = speechHandle
+	}
+}
+
+func WithToolExecutionToolChoice(toolChoice llm.ToolChoice) ToolExecutionOption {
+	return func(opts *ToolExecutionOptions) {
+		opts.ToolChoice = toolChoice
 	}
 }
 
@@ -382,6 +389,9 @@ func PerformToolExecutions(
 		var wg sync.WaitGroup
 
 		for fncCall := range functionCh {
+			if options.ToolChoice == "none" {
+				continue
+			}
 			wg.Add(1)
 			go func(fc *llm.FunctionToolCall) {
 				defer wg.Done()

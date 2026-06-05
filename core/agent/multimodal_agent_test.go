@@ -909,6 +909,68 @@ func TestMultimodalAgentEmitsInterimInputTranscriptionWithoutCommittingMessage(t
 	}
 }
 
+func TestMultimodalAgentRoutesInputAudioTranscriptionThroughActivity(t *testing.T) {
+	agent := NewAgent("test")
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	activity := NewAgentActivity(agent, session)
+	session.activity = activity
+	ma := &MultimodalAgent{session: session, chatCtx: session.ChatCtx}
+
+	ma.handleRealtimeEvent(llm.RealtimeEvent{
+		Type: llm.RealtimeEventTypeInputAudioTranscriptionCompleted,
+		InputTranscription: &llm.InputTranscriptionCompleted{
+			ItemID:     "item_user_1",
+			Transcript: "hello activity",
+			IsFinal:    true,
+		},
+	})
+
+	transcriptEvent := receiveUserInputTranscribedEvent(t, session)
+	if transcriptEvent.Transcript != "hello activity" || !transcriptEvent.IsFinal {
+		t.Fatalf("UserInputTranscribedEvent = %#v, want final hello activity", transcriptEvent)
+	}
+	select {
+	case ev := <-session.ConversationItemAddedEvents():
+		msg, ok := ev.Item.(*llm.ChatMessage)
+		if !ok {
+			t.Fatalf("ConversationItemAdded item = %T, want *llm.ChatMessage", ev.Item)
+		}
+		if agent.ChatCtx.GetByID("item_user_1") != msg {
+			t.Fatalf("agent chat context item = %#v, want routed message", agent.ChatCtx.GetByID("item_user_1"))
+		}
+	case <-time.After(time.Second):
+		t.Fatal("ConversationItemAddedEvents did not receive realtime user message")
+	}
+}
+
+func TestMultimodalAgentRoutesRealtimeSpeechStoppedThroughActivity(t *testing.T) {
+	agent := NewAgent("test")
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	activity := NewAgentActivity(agent, session)
+	session.activity = activity
+	ma := &MultimodalAgent{session: session, chatCtx: llm.NewChatContext()}
+	session.UpdateUserState(UserStateSpeaking)
+
+	ma.handleRealtimeEvent(llm.RealtimeEvent{
+		Type: llm.RealtimeEventTypeSpeechStopped,
+		SpeechStopped: &llm.InputSpeechStoppedEvent{
+			UserTranscriptionEnabled: true,
+		},
+	})
+
+	if got := session.UserState(); got != UserStateListening {
+		t.Fatalf("UserState() = %q, want %q", got, UserStateListening)
+	}
+	select {
+	case ev := <-session.UserInputTranscribedEvents():
+		if ev.Transcript != "" || ev.IsFinal {
+			t.Fatalf("UserInputTranscribedEvent = %#v, want empty interim transcript", ev)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("UserInputTranscribedEvents did not receive empty interim transcript")
+	}
+}
+
 func TestMultimodalAgentForwardsRealtimeMetrics(t *testing.T) {
 	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
 	metrics := &telemetry.RealtimeModelMetrics{RequestID: "req_1"}

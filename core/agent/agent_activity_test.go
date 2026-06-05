@@ -146,9 +146,239 @@ func TestAgentActivitySchedulingPausedReportsState(t *testing.T) {
 	if activity.SchedulingPaused() {
 		t.Fatal("SchedulingPaused() = true, want false")
 	}
-	activity.schedulingPaused = true
+	activity.PauseScheduling()
 	if !activity.SchedulingPaused() {
 		t.Fatal("SchedulingPaused() = false after pause, want true")
+	}
+}
+
+func TestAgentActivityResumeSchedulingWakesQueuedForcedSpeech(t *testing.T) {
+	agent := NewAgent("test")
+	assistant := &recordingScheduledSpeechAssistant{scheduledCh: make(chan *SpeechHandle, 1)}
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	session.Assistant = assistant
+	activity := NewAgentActivity(agent, session)
+	activity.Start()
+	defer activity.Stop()
+	activity.PauseScheduling()
+	speech := NewSpeechHandle(true, DefaultInputDetails())
+
+	if err := activity.ScheduleSpeech(speech, SpeechPriorityNormal, true); err != nil {
+		t.Fatalf("ScheduleSpeech forced error = %v, want nil", err)
+	}
+	activity.ResumeScheduling()
+
+	select {
+	case got := <-assistant.scheduledCh:
+		if got != speech {
+			t.Fatalf("scheduled speech = %p, want %p", got, speech)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("ResumeScheduling did not wake queued forced speech")
+	}
+}
+
+func TestAgentActivityCurrentSpeechReportsActiveSpeech(t *testing.T) {
+	agent := NewAgent("test")
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	activity := NewAgentActivity(agent, session)
+
+	if got := activity.CurrentSpeech(); got != nil {
+		t.Fatalf("CurrentSpeech() = %#v, want nil before speech is active", got)
+	}
+
+	current := NewSpeechHandle(true, DefaultInputDetails())
+	activity.currentSpeech = current
+	if got := activity.CurrentSpeech(); got != current {
+		t.Fatalf("CurrentSpeech() = %#v, want active speech %#v", got, current)
+	}
+}
+
+func TestAgentActivityToolsCombinesSessionAndAgentTools(t *testing.T) {
+	agentTool := &agentTestTool{id: "agent", name: "agent"}
+	sessionTool := &agentTestTool{id: "session", name: "session"}
+	agent := NewAgent("test")
+	agent.Tools = []llm.Tool{agentTool}
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	session.Tools = []llm.Tool{sessionTool}
+	activity := NewAgentActivity(agent, session)
+
+	got := activity.Tools()
+	if len(got) != 2 || got[0] != sessionTool || got[1] != agentTool {
+		t.Fatalf("Tools() = %#v, want session tool then agent tool", got)
+	}
+
+	got[0] = agentTool
+	if session.Tools[0] != sessionTool {
+		t.Fatal("mutating Tools() result changed session tools")
+	}
+}
+
+func TestAgentActivityMinConsecutiveSpeechDelayUsesAgentOverride(t *testing.T) {
+	agent := NewAgent("test")
+	session := NewAgentSession(agent, nil, AgentSessionOptions{MinConsecutiveSpeechDelay: 0.25})
+	activity := NewAgentActivity(agent, session)
+
+	if got := activity.MinConsecutiveSpeechDelay(); got != 250*time.Millisecond {
+		t.Fatalf("MinConsecutiveSpeechDelay() = %v, want 250ms session default", got)
+	}
+
+	agent.MinConsecutiveSpeechDelay = 0.75
+	if got := activity.MinConsecutiveSpeechDelay(); got != 750*time.Millisecond {
+		t.Fatalf("MinConsecutiveSpeechDelay() = %v, want 750ms agent override", got)
+	}
+}
+
+func TestAgentActivityOnPipelineReplyDoneReturnsToListeningWhenInactive(t *testing.T) {
+	agent := NewAgent("test")
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	activity := NewAgentActivity(agent, session)
+	session.activity = activity
+	current := NewSpeechHandle(true, DefaultInputDetails())
+	activity.currentSpeech = current
+	session.UpdateAgentState(AgentStateSpeaking)
+	current.MarkDone()
+
+	activity.OnPipelineReplyDone(current)
+
+	if got := session.AgentState(); got != AgentStateListening {
+		t.Fatalf("AgentState() = %q, want %q", got, AgentStateListening)
+	}
+}
+
+func TestAgentActivityUpdateOptionsForwardsRealtimeToolChoice(t *testing.T) {
+	agent := NewAgent("test")
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	assistant := &recordingOptionsAssistant{}
+	session.Assistant = assistant
+	activity := NewAgentActivity(agent, session)
+	toolChoice := llm.ToolChoice("none")
+
+	if err := activity.UpdateOptions(AgentSessionUpdateOptions{ToolChoice: &toolChoice}); err != nil {
+		t.Fatalf("UpdateOptions error = %v, want nil", err)
+	}
+
+	if assistant.options.ToolChoice != toolChoice {
+		t.Fatalf("realtime ToolChoice = %#v, want %#v", assistant.options.ToolChoice, toolChoice)
+	}
+}
+
+func TestAgentActivityRealtimeInputSpeechCallbacksUpdateUserState(t *testing.T) {
+	agent := NewAgent("test")
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	activity := NewAgentActivity(agent, session)
+
+	activity.OnInputSpeechStarted()
+	if got := session.UserState(); got != UserStateSpeaking {
+		t.Fatalf("UserState() after speech started = %q, want %q", got, UserStateSpeaking)
+	}
+
+	activity.OnInputSpeechStopped(llm.InputSpeechStoppedEvent{})
+	if got := session.UserState(); got != UserStateListening {
+		t.Fatalf("UserState() after speech stopped = %q, want %q", got, UserStateListening)
+	}
+}
+
+func TestAgentActivityRealtimeInputSpeechStoppedEmitsInterimTranscriptWhenEnabled(t *testing.T) {
+	agent := NewAgent("test")
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	activity := NewAgentActivity(agent, session)
+
+	activity.OnInputSpeechStopped(llm.InputSpeechStoppedEvent{UserTranscriptionEnabled: true})
+
+	select {
+	case ev := <-session.UserInputTranscribedEvents():
+		if ev.Transcript != "" || ev.IsFinal {
+			t.Fatalf("UserInputTranscribedEvent = %#v, want empty interim transcript", ev)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("UserInputTranscribedEvents did not receive empty interim transcript")
+	}
+}
+
+func TestAgentActivityInputAudioTranscriptionCompletedCommitsFinalMessage(t *testing.T) {
+	agent := NewAgent("test")
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	activity := NewAgentActivity(agent, session)
+
+	activity.OnInputAudioTranscriptionCompleted(llm.InputTranscriptionCompleted{
+		ItemID:     "item_user_1",
+		Transcript: "hello realtime",
+		IsFinal:    true,
+	})
+
+	transcriptEvent := receiveUserInputTranscribedEvent(t, session)
+	if transcriptEvent.Transcript != "hello realtime" || !transcriptEvent.IsFinal {
+		t.Fatalf("UserInputTranscribedEvent = %#v, want final hello realtime", transcriptEvent)
+	}
+
+	select {
+	case ev := <-session.ConversationItemAddedEvents():
+		msg, ok := ev.Item.(*llm.ChatMessage)
+		if !ok {
+			t.Fatalf("ConversationItemAdded item = %T, want *llm.ChatMessage", ev.Item)
+		}
+		if msg.ID != "item_user_1" || msg.Role != llm.ChatRoleUser || msg.TextContent() != "hello realtime" {
+			t.Fatalf("message = %#v, want committed user message with realtime transcript", msg)
+		}
+		if agent.ChatCtx.GetByID("item_user_1") != msg {
+			t.Fatalf("agent chat context item = %#v, want committed message", agent.ChatCtx.GetByID("item_user_1"))
+		}
+		if session.ChatCtx.GetByID("item_user_1") != msg {
+			t.Fatalf("session chat context item = %#v, want committed message", session.ChatCtx.GetByID("item_user_1"))
+		}
+	case <-time.After(time.Second):
+		t.Fatal("ConversationItemAddedEvents did not receive realtime user message")
+	}
+}
+
+func TestAgentActivityInputAudioTranscriptionCompletedSkipsInterimMessage(t *testing.T) {
+	agent := NewAgent("test")
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	activity := NewAgentActivity(agent, session)
+
+	activity.OnInputAudioTranscriptionCompleted(llm.InputTranscriptionCompleted{
+		ItemID:     "item_user_1",
+		Transcript: "hello",
+		IsFinal:    false,
+	})
+
+	transcriptEvent := receiveUserInputTranscribedEvent(t, session)
+	if transcriptEvent.Transcript != "hello" || transcriptEvent.IsFinal {
+		t.Fatalf("UserInputTranscribedEvent = %#v, want interim hello", transcriptEvent)
+	}
+	select {
+	case ev := <-session.ConversationItemAddedEvents():
+		t.Fatalf("unexpected conversation item for interim transcript: %#v", ev)
+	default:
+	}
+	if agent.ChatCtx.GetByID("item_user_1") != nil {
+		t.Fatalf("agent chat context item = %#v, want none", agent.ChatCtx.GetByID("item_user_1"))
+	}
+	if session.ChatCtx.GetByID("item_user_1") != nil {
+		t.Fatalf("session chat context item = %#v, want none", session.ChatCtx.GetByID("item_user_1"))
+	}
+}
+
+func TestAgentActivityUseTTSAlignedTranscriptUsesAgentOverride(t *testing.T) {
+	agent := NewAgent("test")
+	session := NewAgentSession(agent, nil, AgentSessionOptions{UseTTSAlignedTranscript: true})
+	activity := NewAgentActivity(agent, session)
+
+	if !activity.UseTTSAlignedTranscript() {
+		t.Fatal("UseTTSAlignedTranscript() = false, want session default true")
+	}
+
+	agent.UseTTSAlignedTranscript = false
+	agent.UseTTSAlignedTranscriptSet = true
+	if activity.UseTTSAlignedTranscript() {
+		t.Fatal("UseTTSAlignedTranscript() = true, want explicit agent override false")
+	}
+
+	agent.UseTTSAlignedTranscript = true
+	session.Options.UseTTSAlignedTranscript = false
+	if !activity.UseTTSAlignedTranscript() {
+		t.Fatal("UseTTSAlignedTranscript() = false, want explicit agent override true")
 	}
 }
 
@@ -170,6 +400,34 @@ func TestAgentActivityAllowInterruptionsUsesAgentOverride(t *testing.T) {
 	agent.AllowInterruptions = true
 	if !activity.AllowInterruptions() {
 		t.Fatal("AllowInterruptions() = false, want explicit agent override true")
+	}
+}
+
+func TestAgentActivityInterruptionEnabledRequiresDetectionModeAndAllowance(t *testing.T) {
+	agent := NewAgent("test")
+	agent.STT = &fakePipelineSTT{}
+	session := NewAgentSession(agent, nil, AgentSessionOptions{TurnDetection: TurnDetectionModeSTT})
+	activity := NewAgentActivity(agent, session)
+
+	if !activity.InterruptionEnabled() {
+		t.Fatal("InterruptionEnabled() = false, want true with STT turn detection and interruptions allowed")
+	}
+
+	agent.AllowInterruptions = false
+	agent.AllowInterruptionsSet = true
+	if activity.InterruptionEnabled() {
+		t.Fatal("InterruptionEnabled() = true, want false when agent disables interruptions")
+	}
+
+	agent.AllowInterruptions = true
+	session.Options.TurnDetection = TurnDetectionModeManual
+	if activity.InterruptionEnabled() {
+		t.Fatal("InterruptionEnabled() = true, want false for manual turn detection")
+	}
+
+	session.Options.TurnDetection = TurnDetectionModeRealtimeLLM
+	if activity.InterruptionEnabled() {
+		t.Fatal("InterruptionEnabled() = true, want false for realtime LLM turn detection")
 	}
 }
 
@@ -400,6 +658,33 @@ func TestAgentActivityStartSkipsEmptyInitialConfiguration(t *testing.T) {
 	}
 	if len(session.ChatCtx.Items) != 0 {
 		t.Fatalf("session chat context items = %#v, want no initial config for empty agent", session.ChatCtx.Items)
+	}
+}
+
+func TestAgentActivityRetrieveChatCtxReturnsReadOnlySnapshot(t *testing.T) {
+	agent := NewAgent("")
+	agent.ChatCtx.Append(&llm.ChatMessage{ID: "user", Role: llm.ChatRoleUser})
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	activity := NewAgentActivity(agent, session)
+	defer activity.Stop()
+
+	got := activity.RetrieveChatCtx()
+	if got == nil {
+		t.Fatal("RetrieveChatCtx returned nil, want chat context")
+	}
+	if !got.Readonly() {
+		t.Fatal("RetrieveChatCtx returned mutable context, want read-only snapshot")
+	}
+	if got == agent.ChatCtx {
+		t.Fatal("RetrieveChatCtx returned agent-owned context, want snapshot")
+	}
+	if len(got.Items) != 1 || got.Items[0].GetID() != "user" {
+		t.Fatalf("RetrieveChatCtx items = %#v, want existing agent message", got.Items)
+	}
+
+	agent.ChatCtx = nil
+	if empty := activity.RetrieveChatCtx(); empty == nil || !empty.Readonly() || len(empty.Items) != 0 {
+		t.Fatalf("RetrieveChatCtx with nil agent context = %#v, want empty read-only context", empty)
 	}
 }
 
@@ -1525,6 +1810,25 @@ func receiveScheduledSpeech(t *testing.T, assistant *recordingScheduledSpeechAss
 		t.Fatal("timed out waiting for scheduled speech")
 		return nil
 	}
+}
+
+type recordingOptionsAssistant struct {
+	options llm.RealtimeSessionOptions
+}
+
+func (r *recordingOptionsAssistant) Start(context.Context, *AgentSession) error {
+	return nil
+}
+
+func (r *recordingOptionsAssistant) OnAudioFrame(context.Context, *model.AudioFrame) {
+}
+
+func (r *recordingOptionsAssistant) SetPublishAudio(func(frame *model.AudioFrame) error) {
+}
+
+func (r *recordingOptionsAssistant) UpdateOptions(_ context.Context, options llm.RealtimeSessionOptions) error {
+	r.options = options
+	return nil
 }
 
 type fixedWordTokenizer struct {

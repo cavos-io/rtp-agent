@@ -250,9 +250,7 @@ func (s *AgentSession) CurrentSpeech() *SpeechHandle {
 		return nil
 	}
 
-	activity.queueMu.Lock()
-	defer activity.queueMu.Unlock()
-	return activity.currentSpeech
+	return activity.CurrentSpeech()
 }
 
 func (s *AgentSession) Userdata() (any, error) {
@@ -535,8 +533,12 @@ func (s *AgentSession) UpdateOptions(opts AgentSessionUpdateOptions) error {
 		s.Options.ToolChoice = *opts.ToolChoice
 	}
 	assistant := s.Assistant
+	activity := s.activity
 	s.mu.Unlock()
 
+	if activity != nil {
+		return activity.UpdateOptions(opts)
+	}
 	if opts.ToolChoice == nil {
 		return nil
 	}
@@ -1647,6 +1649,7 @@ func (s *AgentSession) stop(ctx context.Context, commitPendingUserTurn bool) err
 		s.userAwayTimer = nil
 	}
 	backgroundAudio := s.Options.BackgroundAudio
+	mcpServers := append([]llm.MCPServer(nil), s.mcpServers...)
 	s.mu.Unlock()
 
 	if ivrActivity != nil {
@@ -1676,6 +1679,14 @@ func (s *AgentSession) stop(ctx context.Context, commitPendingUserTurn bool) err
 	}
 	if closer, ok := assistant.(closeableSessionAssistant); ok {
 		if err := closer.Close(); err != nil && stopErr == nil {
+			stopErr = err
+		}
+	}
+	for _, server := range mcpServers {
+		if server == nil {
+			continue
+		}
+		if err := server.Close(); err != nil && stopErr == nil {
 			stopErr = err
 		}
 	}

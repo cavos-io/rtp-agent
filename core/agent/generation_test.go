@@ -240,6 +240,23 @@ func TestPerformToolExecutionsSuppressesOutputForStopResponse(t *testing.T) {
 	}
 }
 
+func TestPerformToolExecutionsIgnoresCallsWhenToolChoiceNone(t *testing.T) {
+	toolCtx := llm.NewToolContext([]interface{}{&fakeGenerationTool{name: "lookup", result: "ignored"}})
+	functionCh := make(chan *llm.FunctionToolCall, 1)
+	functionCh <- &llm.FunctionToolCall{
+		Name:      "lookup",
+		CallID:    "call_lookup",
+		Arguments: `{}`,
+	}
+	close(functionCh)
+
+	outCh := PerformToolExecutions(context.Background(), functionCh, toolCtx, WithToolExecutionToolChoice("none"))
+
+	if output, ok := <-outCh; ok {
+		t.Fatalf("PerformToolExecutions emitted %#v, want no output when tool_choice is none", output)
+	}
+}
+
 func TestPerformTTSInferenceEndsStreamInput(t *testing.T) {
 	providerStream := newEndInputGenerationTTSStream()
 	provider := &fakeGenerationTTS{stream: providerStream}
