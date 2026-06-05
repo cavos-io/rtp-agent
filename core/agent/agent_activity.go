@@ -69,9 +69,11 @@ type EndOfTurnInfo struct {
 // AgentActivity handles the internal event loops, I/O processing, and
 // speech generation queue for an Agent.
 type AgentActivity struct {
-	AgentIntf AgentInterface
-	Agent     *Agent
-	Session   *AgentSession
+	AgentIntf        AgentInterface
+	Agent            *Agent
+	Session          *AgentSession
+	agentStateMu     sync.Mutex
+	agentStateEvents <-chan AgentStateChangedEvent
 
 	currentSpeech  *SpeechHandle
 	speechQueue    []scheduledSpeech
@@ -487,11 +489,12 @@ func (a *AgentActivity) waitForUserTurnExceededCallback(ctx context.Context) (bo
 
 	ticker := time.NewTicker(time.Millisecond)
 	defer ticker.Stop()
+	agentStateEvents := a.sessionAgentStateChangedEvents()
 	for {
 		select {
 		case <-ctx.Done():
 			return false, ctx.Err()
-		case ev := <-a.Session.AgentStateChangedCh:
+		case ev := <-agentStateEvents:
 			if ev.NewState == AgentStateSpeaking {
 				return false, nil
 			}
@@ -504,6 +507,16 @@ func (a *AgentActivity) waitForUserTurnExceededCallback(ctx context.Context) (bo
 			}
 		}
 	}
+}
+
+func (a *AgentActivity) sessionAgentStateChangedEvents() <-chan AgentStateChangedEvent {
+	a.agentStateMu.Lock()
+	defer a.agentStateMu.Unlock()
+
+	if a.agentStateEvents == nil && a.Session != nil {
+		a.agentStateEvents = a.Session.AgentStateChangedEvents()
+	}
+	return a.agentStateEvents
 }
 
 func (a *AgentActivity) UpdateInstructions(ctx context.Context, instructions string) error {
