@@ -1612,6 +1612,7 @@ func (s *AgentSession) UpdateAgent(agent AgentInterface) {
 		if updater, ok := assistant.(realtimeModelUpdatingAssistant); ok {
 			if err := updater.UpdateRealtimeModel(context.Background(), sessionRealtimeModel); err != nil {
 				logger.Logger.Errorw("failed to update realtime model on assistant", err)
+				s.EmitError(ErrorEvent{Error: err, Source: sessionRealtimeModel})
 			}
 		}
 	}

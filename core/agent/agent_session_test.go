@@ -2127,6 +2127,38 @@ func TestAgentSessionUpdateAgentWhileRunningRefreshesMultimodalRealtimeModel(t *
 	}
 }
 
+func TestAgentSessionUpdateAgentEmitsErrorWhenRealtimeModelRefreshFails(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	initial := &trackingAgent{Agent: NewAgent("initial")}
+	initialRealtime := &fakeRealtimeModel{session: &fakeRealtimeSession{}}
+	initial.RealtimeModel = initialRealtime
+	next := &trackingAgent{Agent: NewAgent("next")}
+	cause := errors.New("realtime session failed")
+	nextRealtime := &fakeRealtimeModel{sessionErr: cause}
+	next.RealtimeModel = nextRealtime
+	session := NewAgentSession(initial, nil, AgentSessionOptions{})
+
+	if err := session.Start(ctx); err != nil {
+		t.Fatalf("Start error = %v, want nil", err)
+	}
+	defer session.Stop(context.Background())
+
+	session.UpdateAgent(next)
+
+	select {
+	case ev := <-session.ErrorEvents():
+		if !errors.Is(ev.Error, cause) {
+			t.Fatalf("Error = %v, want %v", ev.Error, cause)
+		}
+		if ev.Source != nextRealtime {
+			t.Fatalf("Source = %#v, want next realtime model", ev.Source)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("ErrorEvents did not receive realtime model refresh error")
+	}
+}
+
 func TestAgentSessionUpdateAgentWhileRunningSwitchesPipelineToMultimodal(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

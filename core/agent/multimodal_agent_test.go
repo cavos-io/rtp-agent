@@ -1446,6 +1446,7 @@ type fakeRealtimeModel struct {
 	model        string
 	provider     string
 	session      *fakeRealtimeSession
+	sessionErr   error
 	capabilities llm.RealtimeCapabilities
 }
 
@@ -1454,6 +1455,9 @@ func (f *fakeRealtimeModel) Capabilities() llm.RealtimeCapabilities {
 }
 
 func (f *fakeRealtimeModel) Session() (llm.RealtimeSession, error) {
+	if f.sessionErr != nil {
+		return nil, f.sessionErr
+	}
 	if f.session != nil {
 		return f.session, nil
 	}
