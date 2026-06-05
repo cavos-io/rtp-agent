@@ -1322,6 +1322,33 @@ func TestChatContextFromDictRestoresContext(t *testing.T) {
 	}
 }
 
+func TestChatContextFromDictMethodReplacesReceiverItems(t *testing.T) {
+	data := map[string]any{
+		"items": []map[string]any{
+			{
+				"id":      "replacement",
+				"type":    "message",
+				"role":    "assistant",
+				"content": []any{"ready"},
+			},
+		},
+	}
+	ctx := NewChatContext()
+	ctx.Append(&ChatMessage{ID: "old", Role: ChatRoleUser, Content: []ChatContent{{Text: "old"}}})
+
+	if err := ctx.FromDict(data); err != nil {
+		t.Fatalf("FromDict() error = %v", err)
+	}
+
+	if len(ctx.Items) != 1 {
+		t.Fatalf("len(items) = %d, want 1", len(ctx.Items))
+	}
+	msg, ok := ctx.Items[0].(*ChatMessage)
+	if !ok || msg.ID != "replacement" || msg.TextContent() != "ready" {
+		t.Fatalf("item[0] = %#v, want replacement assistant message", ctx.Items[0])
+	}
+}
+
 func TestChatContextToOpenAIProviderFormatGroupsToolCallsWithOutputs(t *testing.T) {
 	ctx := NewChatContext()
 	groupID := "assistant-turn"

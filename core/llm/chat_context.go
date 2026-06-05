@@ -589,15 +589,22 @@ func (c *ChatContext) MarshalJSON() ([]byte, error) {
 }
 
 func ChatContextFromDict(data map[string]any) (*ChatContext, error) {
+	ctx := NewChatContext()
+	if err := ctx.FromDict(data); err != nil {
+		return nil, err
+	}
+	return ctx, nil
+}
+
+func (c *ChatContext) FromDict(data map[string]any) error {
 	encoded, err := json.Marshal(data)
 	if err != nil {
-		return nil, err
+		return err
 	}
-	var ctx ChatContext
-	if err := json.Unmarshal(encoded, &ctx); err != nil {
-		return nil, err
+	if err := json.Unmarshal(encoded, c); err != nil {
+		return err
 	}
-	return &ctx, nil
+	return nil
 }
 
 func (c *ChatContext) UnmarshalJSON(data []byte) error {
