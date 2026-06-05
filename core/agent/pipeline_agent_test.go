@@ -863,6 +863,35 @@ func TestPipelineAgentVADLoopForwardsSpeechEventsToActivity(t *testing.T) {
 	}
 }
 
+func TestPipelineAgentVADLoopForwardsInferenceEventsToActivity(t *testing.T) {
+	agent := NewAgent("test")
+	agent.VAD = &fakePipelineVAD{}
+	session := NewAgentSession(agent, nil, AgentSessionOptions{
+		TurnDetection:           TurnDetectionModeVAD,
+		MinInterruptionDuration: 0.05,
+	})
+	activity := NewAgentActivity(agent, session)
+	current := NewSpeechHandle(true, DefaultInputDetails())
+	activity.currentSpeech = current
+	session.activity = activity
+	pipeline := NewPipelineAgent(&fakePipelineVAD{}, nil, nil, nil, nil)
+	pipeline.session = session
+
+	pipeline.vadLoop(&fakePipelineVADStream{
+		events: []*vad.VADEvent{
+			{
+				Type:                  vad.VADEventInferenceDone,
+				SpeechDuration:        0.06,
+				Speaking:              true,
+				RawAccumulatedSilence: 0,
+			},
+		},
+	})
+
+	waitForInterrupted(t, current)
+	current.MarkDone()
+}
+
 func TestPipelineAgentEmitsLLMErrorEventForChatFailure(t *testing.T) {
 	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
 	cause := errors.New("llm chat failed")

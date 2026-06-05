@@ -1007,6 +1007,25 @@ func (a *AgentActivity) OnEndOfSpeech(ev *vad.VADEvent) {
 	}
 }
 
+func (a *AgentActivity) OnVADInferenceDone(ev *vad.VADEvent) {
+	turnDetection := a.turnDetectionMode()
+	if turnDetection == TurnDetectionModeManual || turnDetection == TurnDetectionModeRealtimeLLM {
+		return
+	}
+	if ev == nil || ev.SpeechDuration < a.minInterruptionDuration() {
+		return
+	}
+	if turnDetection == TurnDetectionModeSTT && a.sttEOSReceived && ev.RawAccumulatedSilence > 0 {
+		return
+	}
+
+	go func() {
+		if err := a.Interrupt(false); err != nil {
+			logger.Logger.Warnw("failed to interrupt speech for VAD inference", err, "speech_duration", ev.SpeechDuration)
+		}
+	}()
+}
+
 func (a *AgentActivity) OnInterimTranscript(ev *stt.SpeechEvent) {
 	if a.Session == nil {
 		return
@@ -1413,6 +1432,13 @@ func (a *AgentActivity) minEndpointingDelay() float64 {
 
 func (a *AgentActivity) maxEndpointingDelay() float64 {
 	return a.EndpointingOpts().MaxDelay
+}
+
+func (a *AgentActivity) minInterruptionDuration() float64 {
+	if a != nil && a.Session != nil && a.Session.Options.MinInterruptionDuration > 0 {
+		return a.Session.Options.MinInterruptionDuration
+	}
+	return 0.5
 }
 
 func (a *AgentActivity) endpointing() Endpointing {

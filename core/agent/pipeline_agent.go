@@ -153,6 +153,10 @@ func (va *PipelineAgent) vadLoop(stream vad.VADStream) {
 			} else if va.session != nil {
 				va.session.UpdateUserState(UserStateListening)
 			}
+		} else if ev.Type == vad.VADEventInferenceDone {
+			if va.session != nil && va.session.activity != nil {
+				va.session.activity.OnVADInferenceDone(ev)
+			}
 		}
 	}
 }
