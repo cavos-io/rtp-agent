@@ -126,6 +126,35 @@ func (a *AgentActivity) SchedulingPaused() bool {
 	return a.schedulingPaused
 }
 
+func (a *AgentActivity) PauseScheduling() {
+	if a == nil {
+		return
+	}
+	a.queueMu.Lock()
+	a.schedulingPaused = true
+	a.queueMu.Unlock()
+
+	select {
+	case a.queueUpdatedCh <- struct{}{}:
+	default:
+	}
+}
+
+func (a *AgentActivity) ResumeScheduling() {
+	if a == nil {
+		return
+	}
+	a.queueMu.Lock()
+	a.schedulingPaused = false
+	a.schedulingDraining = false
+	a.queueMu.Unlock()
+
+	select {
+	case a.queueUpdatedCh <- struct{}{}:
+	default:
+	}
+}
+
 func (a *AgentActivity) CurrentSpeech() *SpeechHandle {
 	if a == nil {
 		return nil
@@ -792,9 +821,9 @@ func (a *AgentActivity) Drain(ctx context.Context) error {
 	err := a.WaitForInactive(ctx)
 
 	a.queueMu.Lock()
-	a.schedulingPaused = true
 	a.schedulingDraining = false
 	a.queueMu.Unlock()
+	a.PauseScheduling()
 
 	return err
 }

@@ -146,9 +146,35 @@ func TestAgentActivitySchedulingPausedReportsState(t *testing.T) {
 	if activity.SchedulingPaused() {
 		t.Fatal("SchedulingPaused() = true, want false")
 	}
-	activity.schedulingPaused = true
+	activity.PauseScheduling()
 	if !activity.SchedulingPaused() {
 		t.Fatal("SchedulingPaused() = false after pause, want true")
+	}
+}
+
+func TestAgentActivityResumeSchedulingWakesQueuedForcedSpeech(t *testing.T) {
+	agent := NewAgent("test")
+	assistant := &recordingScheduledSpeechAssistant{scheduledCh: make(chan *SpeechHandle, 1)}
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	session.Assistant = assistant
+	activity := NewAgentActivity(agent, session)
+	activity.Start()
+	defer activity.Stop()
+	activity.PauseScheduling()
+	speech := NewSpeechHandle(true, DefaultInputDetails())
+
+	if err := activity.ScheduleSpeech(speech, SpeechPriorityNormal, true); err != nil {
+		t.Fatalf("ScheduleSpeech forced error = %v, want nil", err)
+	}
+	activity.ResumeScheduling()
+
+	select {
+	case got := <-assistant.scheduledCh:
+		if got != speech {
+			t.Fatalf("scheduled speech = %p, want %p", got, speech)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("ResumeScheduling did not wake queued forced speech")
 	}
 }
 
