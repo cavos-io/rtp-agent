@@ -1154,12 +1154,16 @@ func (s *AgentSession) StartWithOptions(ctx context.Context, opts StartOptions) 
 		}
 	}
 	if avatar != nil {
+		var unsubscribeAvatarMetrics func()
 		if metricsSource, ok := avatar.(AvatarMetricsSource); ok {
-			metricsSource.OnMetricsCollected(func(metrics *telemetry.AvatarMetrics) {
+			unsubscribeAvatarMetrics = metricsSource.OnMetricsCollected(func(metrics *telemetry.AvatarMetrics) {
 				s.EmitMetricsCollected(metrics)
 			})
 		}
 		if err := avatar.Start(ctx); err != nil {
+			if unsubscribeAvatarMetrics != nil {
+				unsubscribeAvatarMetrics()
+			}
 			if backgroundAudio != nil {
 				_ = backgroundAudio.Close()
 			}

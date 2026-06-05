@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -85,6 +86,31 @@ func TestAgentSessionStartSubscribesAvatarMetrics(t *testing.T) {
 	}
 }
 
+func TestAgentSessionStartUnsubscribesAvatarMetricsOnStartError(t *testing.T) {
+	errAvatar := errors.New("avatar start failed")
+	baseAgent := NewAgent("test")
+	baseAgent.VAD = &fakePipelineVAD{}
+	baseAgent.STT = &fakePipelineSTT{}
+	baseAgent.LLM = &fakeGenerationLLM{stream: &fakeGenerationLLMStream{}}
+	baseAgent.TTS = &fakePipelineTTS{}
+	avatar := &recordingAvatarProvider{startErr: errAvatar}
+	baseAgent.Avatar = avatar
+
+	session := NewAgentSession(baseAgent, nil, AgentSessionOptions{})
+	err := session.Start(context.Background())
+	if !errors.Is(err, errAvatar) {
+		t.Fatalf("Start error = %v, want %v", err, errAvatar)
+	}
+
+	avatar.emitMetrics(&telemetry.AvatarMetrics{PlaybackLatency: 0.25})
+
+	select {
+	case ev := <-session.MetricsCollectedEvents():
+		t.Fatalf("MetricsCollectedEvents received avatar metrics after failed Start: %#v", ev.Metrics)
+	default:
+	}
+}
+
 func TestAvatarProviderUpdateStateRecordsLatestState(t *testing.T) {
 	avatar := &recordingAvatarProvider{}
 
@@ -105,6 +131,7 @@ func TestAvatarProviderUpdateStateRecordsLatestState(t *testing.T) {
 type recordingAvatarProvider struct {
 	startCalls   int
 	startContext context.Context
+	startErr     error
 	state        AvatarState
 	metrics      AvatarMetricsHandler
 }
@@ -112,7 +139,7 @@ type recordingAvatarProvider struct {
 func (r *recordingAvatarProvider) Start(ctx context.Context) error {
 	r.startCalls++
 	r.startContext = ctx
-	return nil
+	return r.startErr
 }
 
 func (r *recordingAvatarProvider) UpdateState(state AvatarState) error {
