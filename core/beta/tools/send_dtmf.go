@@ -40,7 +40,8 @@ Call when:
 
 func (t *SendDTMFTool) Parameters() map[string]any {
 	return map[string]any{
-		"type": "object",
+		"type":                 "object",
+		"additionalProperties": false,
 		"properties": map[string]any{
 			"events": map[string]any{
 				"type": "array",
