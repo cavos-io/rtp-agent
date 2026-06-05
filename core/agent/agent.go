@@ -75,6 +75,13 @@ func (a *Agent) GetActivity() *AgentActivity {
 	return a.activity
 }
 
+func (a *Agent) Label() string {
+	if a == nil {
+		return ""
+	}
+	return a.ID
+}
+
 func (a *Agent) OnEnter() {}
 func (a *Agent) OnExit()  {}
 
