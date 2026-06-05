@@ -413,6 +413,10 @@ func (ma *MultimodalAgent) handleRealtimeEvent(ev llm.RealtimeEvent) {
 		if ev.InputTranscription == nil || ma.session == nil {
 			return
 		}
+		if ma.session.activity != nil {
+			ma.session.activity.OnInputAudioTranscriptionCompleted(*ev.InputTranscription)
+			return
+		}
 		ma.session.EmitUserInputTranscribed(UserInputTranscribedEvent{
 			Transcript: ev.InputTranscription.Transcript,
 			IsFinal:    ev.InputTranscription.IsFinal,

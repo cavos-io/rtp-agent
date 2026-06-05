@@ -841,6 +841,32 @@ func (a *AgentActivity) OnInputSpeechStopped(ev llm.InputSpeechStoppedEvent) {
 	}
 }
 
+func (a *AgentActivity) OnInputAudioTranscriptionCompleted(ev llm.InputTranscriptionCompleted) {
+	if a == nil || a.Session == nil {
+		return
+	}
+	a.Session.EmitUserInputTranscribed(UserInputTranscribedEvent{
+		Transcript: ev.Transcript,
+		IsFinal:    ev.IsFinal,
+	})
+	if !ev.IsFinal {
+		return
+	}
+
+	msg := &llm.ChatMessage{
+		ID:   ev.ItemID,
+		Role: llm.ChatRoleUser,
+		Content: []llm.ChatContent{
+			{Text: ev.Transcript},
+		},
+		CreatedAt: time.Now(),
+	}
+	if a.Agent != nil && a.Agent.ChatCtx != nil {
+		_ = a.Agent.ChatCtx.UpsertItem(msg, llm.ChatContextUpsertOptions{AllowTypeMismatch: true})
+	}
+	a.Session.EmitConversationItemAdded(msg)
+}
+
 func (a *AgentActivity) Drain(ctx context.Context) error {
 	if ctx == nil {
 		ctx = a.ctx

@@ -296,6 +296,70 @@ func TestAgentActivityRealtimeInputSpeechStoppedEmitsInterimTranscriptWhenEnable
 	}
 }
 
+func TestAgentActivityInputAudioTranscriptionCompletedCommitsFinalMessage(t *testing.T) {
+	agent := NewAgent("test")
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	activity := NewAgentActivity(agent, session)
+
+	activity.OnInputAudioTranscriptionCompleted(llm.InputTranscriptionCompleted{
+		ItemID:     "item_user_1",
+		Transcript: "hello realtime",
+		IsFinal:    true,
+	})
+
+	transcriptEvent := receiveUserInputTranscribedEvent(t, session)
+	if transcriptEvent.Transcript != "hello realtime" || !transcriptEvent.IsFinal {
+		t.Fatalf("UserInputTranscribedEvent = %#v, want final hello realtime", transcriptEvent)
+	}
+
+	select {
+	case ev := <-session.ConversationItemAddedEvents():
+		msg, ok := ev.Item.(*llm.ChatMessage)
+		if !ok {
+			t.Fatalf("ConversationItemAdded item = %T, want *llm.ChatMessage", ev.Item)
+		}
+		if msg.ID != "item_user_1" || msg.Role != llm.ChatRoleUser || msg.TextContent() != "hello realtime" {
+			t.Fatalf("message = %#v, want committed user message with realtime transcript", msg)
+		}
+		if agent.ChatCtx.GetByID("item_user_1") != msg {
+			t.Fatalf("agent chat context item = %#v, want committed message", agent.ChatCtx.GetByID("item_user_1"))
+		}
+		if session.ChatCtx.GetByID("item_user_1") != msg {
+			t.Fatalf("session chat context item = %#v, want committed message", session.ChatCtx.GetByID("item_user_1"))
+		}
+	case <-time.After(time.Second):
+		t.Fatal("ConversationItemAddedEvents did not receive realtime user message")
+	}
+}
+
+func TestAgentActivityInputAudioTranscriptionCompletedSkipsInterimMessage(t *testing.T) {
+	agent := NewAgent("test")
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	activity := NewAgentActivity(agent, session)
+
+	activity.OnInputAudioTranscriptionCompleted(llm.InputTranscriptionCompleted{
+		ItemID:     "item_user_1",
+		Transcript: "hello",
+		IsFinal:    false,
+	})
+
+	transcriptEvent := receiveUserInputTranscribedEvent(t, session)
+	if transcriptEvent.Transcript != "hello" || transcriptEvent.IsFinal {
+		t.Fatalf("UserInputTranscribedEvent = %#v, want interim hello", transcriptEvent)
+	}
+	select {
+	case ev := <-session.ConversationItemAddedEvents():
+		t.Fatalf("unexpected conversation item for interim transcript: %#v", ev)
+	default:
+	}
+	if agent.ChatCtx.GetByID("item_user_1") != nil {
+		t.Fatalf("agent chat context item = %#v, want none", agent.ChatCtx.GetByID("item_user_1"))
+	}
+	if session.ChatCtx.GetByID("item_user_1") != nil {
+		t.Fatalf("session chat context item = %#v, want none", session.ChatCtx.GetByID("item_user_1"))
+	}
+}
+
 func TestAgentActivityUseTTSAlignedTranscriptUsesAgentOverride(t *testing.T) {
 	agent := NewAgent("test")
 	session := NewAgentSession(agent, nil, AgentSessionOptions{UseTTSAlignedTranscript: true})
