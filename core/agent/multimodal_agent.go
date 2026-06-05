@@ -460,7 +460,12 @@ func (ma *MultimodalAgent) handleRealtimeEvent(ev llm.RealtimeEvent) {
 		}
 
 	case llm.RealtimeEventTypeMetricsCollected:
-		if ma.session != nil && ev.Metrics != nil {
+		if ma.session == nil || ev.Metrics == nil {
+			return
+		}
+		if ma.session.activity != nil {
+			ma.session.activity.OnMetricsCollected(ev.Metrics)
+		} else {
 			ma.session.EmitMetricsCollected(ev.Metrics)
 		}
 

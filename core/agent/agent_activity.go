@@ -884,6 +884,13 @@ func (a *AgentActivity) OnRemoteItemAdded(ev llm.RemoteItemAddedEvent) {
 	}
 }
 
+func (a *AgentActivity) OnMetricsCollected(metrics telemetry.AgentMetrics) {
+	if a == nil || a.Session == nil {
+		return
+	}
+	a.Session.EmitMetricsCollected(metrics)
+}
+
 func (a *AgentActivity) Drain(ctx context.Context) error {
 	if ctx == nil {
 		ctx = a.ctx

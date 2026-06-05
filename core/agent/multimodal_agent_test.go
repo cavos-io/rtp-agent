@@ -991,6 +991,36 @@ func TestMultimodalAgentForwardsRealtimeMetrics(t *testing.T) {
 	}
 }
 
+func TestMultimodalAgentRoutesRealtimeMetricsThroughActivity(t *testing.T) {
+	agent := NewAgent("test")
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	session.activity = NewAgentActivity(agent, session)
+	metrics := &telemetry.RealtimeModelMetrics{RequestID: "req_1", InputTokens: 2}
+	ma := &MultimodalAgent{session: session}
+
+	ma.handleRealtimeEvent(llm.RealtimeEvent{
+		Type:    llm.RealtimeEventTypeMetricsCollected,
+		Metrics: metrics,
+	})
+
+	select {
+	case ev := <-session.MetricsCollectedEvents():
+		if ev.Metrics != metrics {
+			t.Fatalf("MetricsCollectedEvent metrics = %#v, want original metrics", ev.Metrics)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("MetricsCollectedEvents did not receive realtime metrics")
+	}
+	select {
+	case ev := <-session.SessionUsageUpdatedEvents():
+		if ev.Usage.LLMInputTokens() != 2 {
+			t.Fatalf("SessionUsageUpdatedEvent usage = %#v, want routed realtime usage", ev.Usage)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("SessionUsageUpdatedEvents did not receive realtime usage")
+	}
+}
+
 func TestMultimodalAgentAddsServerRemoteItemPlaceholder(t *testing.T) {
 	existing := &llm.ChatMessage{
 		ID:        "item_user_1",

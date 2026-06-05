@@ -414,6 +414,37 @@ func TestAgentActivityRemoteItemAddedSkipsDuplicatePlaceholder(t *testing.T) {
 	}
 }
 
+func TestAgentActivityMetricsCollectedEmitsMetricsAndUsage(t *testing.T) {
+	agent := NewAgent("test")
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	activity := NewAgentActivity(agent, session)
+	metrics := &telemetry.RealtimeModelMetrics{
+		RequestID:    "req_1",
+		InputTokens:  3,
+		OutputTokens: 5,
+		TotalTokens:  8,
+	}
+
+	activity.OnMetricsCollected(metrics)
+
+	select {
+	case ev := <-session.MetricsCollectedEvents():
+		if ev.Metrics != metrics {
+			t.Fatalf("MetricsCollectedEvent metrics = %#v, want original metrics", ev.Metrics)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("MetricsCollectedEvents did not receive realtime metrics")
+	}
+	select {
+	case ev := <-session.SessionUsageUpdatedEvents():
+		if ev.Usage.LLMInputTokens() != 3 || ev.Usage.LLMOutputTokens() != 5 {
+			t.Fatalf("SessionUsageUpdatedEvent usage = %#v, want realtime token usage", ev.Usage)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("SessionUsageUpdatedEvents did not receive realtime usage")
+	}
+}
+
 func TestAgentActivityUseTTSAlignedTranscriptUsesAgentOverride(t *testing.T) {
 	agent := NewAgent("test")
 	session := NewAgentSession(agent, nil, AgentSessionOptions{UseTTSAlignedTranscript: true})
