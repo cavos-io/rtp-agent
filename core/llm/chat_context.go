@@ -101,7 +101,27 @@ func (c *ChatContext) Copy(options ...ChatContextCopyOptions) *ChatContext {
 	return newCtx
 }
 
+func (c *ChatContext) ReadOnly() *ChatContext {
+	if c == nil {
+		return (&ChatContext{}).ReadOnly()
+	}
+	view := c.Copy()
+	view.readOnly = true
+	return view
+}
+
+func (c *ChatContext) Readonly() bool {
+	return c != nil && c.readOnly
+}
+
+func (c *ChatContext) ensureMutable() {
+	if c != nil && c.readOnly {
+		panic("trying to modify a read-only chat context, please use Copy() and Agent.UpdateChatContext() to modify the chat context")
+	}
+}
+
 func (c *ChatContext) AddMessage(args ChatMessageArgs) *ChatMessage {
+	c.ensureMutable()
 	createdAt := args.CreatedAt
 	if createdAt.IsZero() {
 		createdAt = time.Now()
@@ -128,6 +148,7 @@ func (c *ChatContext) AddMessage(args ChatMessageArgs) *ChatMessage {
 }
 
 func (c *ChatContext) Insert(items ...ChatItem) {
+	c.ensureMutable()
 	for _, item := range items {
 		idx := c.FindInsertionIndex(item.GetCreatedAt())
 		c.Items = append(c.Items[:idx], append([]ChatItem{item}, c.Items[idx:]...)...)
@@ -153,6 +174,7 @@ func (c *ChatContext) IndexByID(itemID string) *int {
 }
 
 func (c *ChatContext) UpsertItem(item ChatItem, options ...ChatContextUpsertOptions) error {
+	c.ensureMutable()
 	var opts ChatContextUpsertOptions
 	if len(options) > 0 {
 		opts = options[0]
@@ -223,6 +245,7 @@ func (c *ChatContext) Messages() []*ChatMessage {
 }
 
 func (c *ChatContext) Truncate(maxItems int) *ChatContext {
+	c.ensureMutable()
 	if len(c.Items) <= maxItems {
 		return c
 	}
@@ -270,6 +293,7 @@ type ChatContextSummarizeOptions struct {
 }
 
 func (c *ChatContext) Merge(other *ChatContext, options ...ChatContextMergeOptions) *ChatContext {
+	c.ensureMutable()
 	var opts ChatContextMergeOptions
 	if len(options) > 0 {
 		opts = options[0]
@@ -300,6 +324,7 @@ func (c *ChatContext) Merge(other *ChatContext, options ...ChatContextMergeOptio
 }
 
 func (c *ChatContext) Summarize(ctx context.Context, llm LLM, options ...ChatContextSummarizeOptions) (*ChatContext, error) {
+	c.ensureMutable()
 	keepLastTurns := 2
 	if len(options) > 0 {
 		keepLastTurns = options[0].KeepLastTurns

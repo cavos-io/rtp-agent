@@ -285,7 +285,8 @@ func (m *MetricsReport) GetType() string         { return "metrics_report" }
 func (m *MetricsReport) GetCreatedAt() time.Time { return m.CreatedAt }
 
 type ChatContext struct {
-	Items []ChatItem
+	Items    []ChatItem
+	readOnly bool
 }
 
 func NewChatContext() *ChatContext {
@@ -295,6 +296,7 @@ func NewChatContext() *ChatContext {
 }
 
 func (c *ChatContext) Append(item ChatItem) {
+	c.ensureMutable()
 	c.Items = append(c.Items, item)
 
 	// Emit OTLP log event

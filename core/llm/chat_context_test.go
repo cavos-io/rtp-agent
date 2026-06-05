@@ -23,6 +23,16 @@ func boolPtr(value bool) *bool {
 	return &value
 }
 
+func assertPanics(t *testing.T, name string, fn func()) {
+	t.Helper()
+	defer func() {
+		if recover() == nil {
+			t.Fatalf("%s did not panic", name)
+		}
+	}()
+	fn()
+}
+
 func TestChatContextCopyFiltersReferenceItemTypes(t *testing.T) {
 	ctx := NewChatContext()
 	ctx.Items = []ChatItem{
@@ -108,6 +118,45 @@ func TestChatContextCopyPreservesShallowCopyBehavior(t *testing.T) {
 	}
 	if copied.Items[0] != item {
 		t.Fatalf("Copy().Items[0] = %p, want %p", copied.Items[0], item)
+	}
+}
+
+func TestChatContextReadOnlyViewRejectsMutatingMethods(t *testing.T) {
+	ctx := NewChatContext()
+	ctx.Items = []ChatItem{
+		&ChatMessage{ID: "user", Role: ChatRoleUser, Content: []ChatContent{{Text: "hello"}}},
+	}
+
+	readOnly := ctx.ReadOnly()
+
+	if !readOnly.Readonly() {
+		t.Fatal("ReadOnly().Readonly() = false, want true")
+	}
+	if ctx.Readonly() {
+		t.Fatal("Readonly() on mutable context = true, want false")
+	}
+	if got, want := itemIDs(readOnly.Items), "user"; got != want {
+		t.Fatalf("read-only items = %q, want %q", got, want)
+	}
+
+	assertPanics(t, "AddMessage on read-only context", func() {
+		readOnly.AddMessage(ChatMessageArgs{Role: ChatRoleUser, Text: "blocked"})
+	})
+
+	if got, want := itemIDs(ctx.Items), "user"; got != want {
+		t.Fatalf("source items after read-only mutation = %q, want %q", got, want)
+	}
+
+	mutable := readOnly.Copy()
+	if mutable.Readonly() {
+		t.Fatal("Copy() from read-only context is still read-only, want mutable copy")
+	}
+	mutable.AddMessage(ChatMessageArgs{ID: "copy", Role: ChatRoleAssistant, Text: "ok"})
+	if got, want := itemIDs(mutable.Items), "user,copy"; got != want {
+		t.Fatalf("mutable copy items = %q, want %q", got, want)
+	}
+	if got, want := itemIDs(ctx.Items), "user"; got != want {
+		t.Fatalf("source items after mutable copy change = %q, want %q", got, want)
 	}
 }
 

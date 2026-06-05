@@ -85,9 +85,9 @@ func (a *Agent) OnExit()  {}
 // Use UpdateChatContext to replace the agent-owned context.
 func (a *Agent) ChatContext() *llm.ChatContext {
 	if a == nil || a.ChatCtx == nil {
-		return llm.NewChatContext()
+		return llm.NewChatContext().ReadOnly()
 	}
-	return a.ChatCtx.Copy()
+	return a.ChatCtx.ReadOnly()
 }
 
 func (a *Agent) UpdateInstructions(ctx context.Context, instructions string) error {
