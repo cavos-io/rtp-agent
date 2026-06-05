@@ -61,6 +61,43 @@ func TestAgentSessionOptionsReturnsSnapshot(t *testing.T) {
 	}
 }
 
+func TestAgentSessionStateValueAccessorsReturnCurrentStates(t *testing.T) {
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+
+	if got, want := session.UserStateValue(), UserStateListening; got != want {
+		t.Fatalf("UserStateValue() = %q, want %q", got, want)
+	}
+	if got, want := session.AgentStateValue(), AgentStateInitializing; got != want {
+		t.Fatalf("AgentStateValue() = %q, want %q", got, want)
+	}
+
+	session.UpdateUserState(UserStateSpeaking)
+	session.UpdateAgentState(AgentStateThinking)
+
+	if got, want := session.UserStateValue(), UserStateSpeaking; got != want {
+		t.Fatalf("UserStateValue() after update = %q, want %q", got, want)
+	}
+	if got, want := session.AgentStateValue(), AgentStateThinking; got != want {
+		t.Fatalf("AgentStateValue() after update = %q, want %q", got, want)
+	}
+}
+
+func TestNewIVRActivityInitializesFromSessionStateAccessors(t *testing.T) {
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	session.UpdateUserState(UserStateAway)
+	session.UpdateAgentState(AgentStateListening)
+
+	ivr := NewIVRActivity(session)
+	defer ivr.Stop()
+
+	if got, want := ivr.currentUserState, UserStateAway; got != want {
+		t.Fatalf("currentUserState = %q, want %q", got, want)
+	}
+	if got, want := ivr.currentAgentState, AgentStateListening; got != want {
+		t.Fatalf("currentAgentState = %q, want %q", got, want)
+	}
+}
+
 func TestAgentSessionGenerateReplyReturnsScheduledSpeechHandle(t *testing.T) {
 	agent := NewAgent("test")
 	session := NewAgentSession(agent, nil, AgentSessionOptions{AllowInterruptions: true})

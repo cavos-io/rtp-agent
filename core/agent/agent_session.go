@@ -305,6 +305,18 @@ func (s *AgentSession) SessionOptions() AgentSessionOptions {
 	return s.Options
 }
 
+func (s *AgentSession) UserStateValue() UserState {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.UserState
+}
+
+func (s *AgentSession) AgentStateValue() AgentState {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.AgentState
+}
+
 func (s *AgentSession) RecordedEvents() []Event {
 	s.mu.Lock()
 	defer s.mu.Unlock()
