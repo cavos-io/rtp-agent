@@ -54,6 +54,28 @@ func TestStreamAdapterExposesWrappedSTT(t *testing.T) {
 	}
 }
 
+func TestStreamAdapterForwardsWrappedSTTMetrics(t *testing.T) {
+	wrapped := &fakeStreamAdapterSTT{}
+	adapter := NewStreamAdapter(wrapped, &fakeStreamAdapterVAD{})
+	metricsCh := make(chan string, 1)
+
+	unsubscribe := adapter.OnMetricsCollected(func(metrics *telemetry.STTMetrics) {
+		metricsCh <- metrics.RequestID
+	})
+	defer unsubscribe()
+
+	wrapped.EmitMetricsCollected(&telemetry.STTMetrics{RequestID: "req-1"})
+
+	select {
+	case requestID := <-metricsCh:
+		if requestID != "req-1" {
+			t.Fatalf("metrics RequestID = %q, want req-1", requestID)
+		}
+	default:
+		t.Fatal("metrics handler was not called")
+	}
+}
+
 func TestStreamAdapterWrapperIsPublicReferenceType(t *testing.T) {
 	var _ RecognizeStream = (*StreamAdapterWrapper)(nil)
 	var _ StreamTiming = (*StreamAdapterWrapper)(nil)
@@ -577,6 +599,8 @@ func streamAdapterSpanAttributes(attrs []attribute.KeyValue) map[string]string {
 }
 
 type fakeStreamAdapterSTT struct {
+	MetricsEmitter
+
 	recognizeErr     error
 	recognizeResult  *SpeechEvent
 	recognizeStarted chan struct{}

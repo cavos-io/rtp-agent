@@ -16,6 +16,7 @@ import (
 // StreamAdapter converts a non-streaming STT into a streaming STT by coupling it with a VAD.
 // It buffers audio frames and sends them to the underlying STT Recognize method when the VAD detects speech.
 type StreamAdapter struct {
+	MetricsEmitter
 	stt STT
 	vad vad.VAD
 }
@@ -49,6 +50,21 @@ func (a *StreamAdapter) Provider() string {
 
 func (a *StreamAdapter) Prewarm() {
 	Prewarm(a.stt)
+}
+
+func (a *StreamAdapter) OnMetricsCollected(handler STTMetricsHandler) func() {
+	unsubscribes := []func(){a.MetricsEmitter.OnMetricsCollected(handler)}
+	if collector, ok := a.stt.(metricsCollectorSTT); ok {
+		unsubscribes = append(unsubscribes, collector.OnMetricsCollected(handler))
+	}
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			for _, unsubscribe := range unsubscribes {
+				unsubscribe()
+			}
+		})
+	}
 }
 
 func (a *StreamAdapter) Recognize(ctx context.Context, frames []*model.AudioFrame, language string) (*SpeechEvent, error) {
