@@ -18,6 +18,7 @@ import (
 type MCPServer interface {
 	Initialize(ctx context.Context) error
 	Initialized() bool
+	InvalidateCache()
 	ListTools(ctx context.Context) ([]Tool, error)
 	Close() error
 }
@@ -91,11 +92,17 @@ func (s *MCPServerHTTP) ListTools(ctx context.Context) ([]Tool, error) {
 	return tools, nil
 }
 
-func (s *MCPServerHTTP) Close() error {
+func (s *MCPServerHTTP) InvalidateCache() {
 	s.mu.Lock()
-	s.initialized = false
+	defer s.mu.Unlock()
 	s.cacheDirty = true
 	s.toolsCache = nil
+}
+
+func (s *MCPServerHTTP) Close() error {
+	s.InvalidateCache()
+	s.mu.Lock()
+	s.initialized = false
 	s.mu.Unlock()
 	return nil
 }
@@ -230,6 +237,86 @@ type MCPServerStdio struct {
 
 	cacheDirty bool
 	toolsCache []Tool
+}
+
+type MCPToolset struct {
+	id          string
+	mcpServer   MCPServer
+	initialized bool
+	tools       []Tool
+	mu          sync.Mutex
+}
+
+func NewMCPToolset(id string, server MCPServer) *MCPToolset {
+	return &MCPToolset{id: id, mcpServer: server}
+}
+
+func (t *MCPToolset) ID() string {
+	if t == nil {
+		return ""
+	}
+	return t.id
+}
+
+func (t *MCPToolset) Tools() []Tool {
+	if t == nil {
+		return nil
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	tools := make([]Tool, len(t.tools))
+	copy(tools, t.tools)
+	return tools
+}
+
+func (t *MCPToolset) Setup(ctx context.Context, reload bool) (*MCPToolset, error) {
+	if t == nil {
+		return nil, fmt.Errorf("MCP toolset is nil")
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	if !reload && t.initialized {
+		return t, nil
+	}
+	if t.mcpServer == nil {
+		return nil, fmt.Errorf("MCP toolset %q has no server", t.id)
+	}
+	if !t.mcpServer.Initialized() {
+		if err := t.mcpServer.Initialize(ctx); err != nil {
+			return nil, err
+		}
+	} else if reload {
+		t.mcpServer.InvalidateCache()
+	}
+
+	tools, err := t.mcpServer.ListTools(ctx)
+	if err != nil {
+		return nil, err
+	}
+	t.tools = make([]Tool, len(tools))
+	copy(t.tools, tools)
+	t.initialized = true
+	return t, nil
+}
+
+func (t *MCPToolset) FilterTools(filter func(Tool) bool) *MCPToolset {
+	if t == nil {
+		return nil
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if filter == nil {
+		return t
+	}
+	filtered := make([]Tool, 0, len(t.tools))
+	for _, tool := range t.tools {
+		if tool != nil && filter(tool) {
+			filtered = append(filtered, tool)
+		}
+	}
+	t.tools = filtered
+	return t
 }
 
 func NewMCPServerStdio(command string, args []string) *MCPServerStdio {

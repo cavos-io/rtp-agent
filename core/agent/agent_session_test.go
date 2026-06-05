@@ -1257,6 +1257,28 @@ func TestAgentSessionGenerateReplyOptionsAcceptAgentTools(t *testing.T) {
 	}
 }
 
+func TestAgentSessionGenerateReplyOptionsAcceptMCPServerTools(t *testing.T) {
+	agent := NewAgent("test")
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	session.SetMCPServers([]llm.MCPServer{
+		&fakeSessionMCPServer{tools: []llm.Tool{&fakeGenerationTool{name: "lookup"}}},
+	})
+	session.activity = NewAgentActivity(agent, session)
+
+	handle, err := session.GenerateReplyWithOptions(context.Background(), GenerateReplyOptions{
+		UserInput:     "hello",
+		Tools:         []string{"lookup"},
+		InputModality: "text",
+	})
+
+	if err != nil {
+		t.Fatalf("GenerateReplyWithOptions error = %v, want nil for MCP server tool selector", err)
+	}
+	if !stringSlicesEqual(handle.Generation.Tools, []string{"lookup"}) {
+		t.Fatalf("handle.Generation.Tools = %q, want [lookup]", handle.Generation.Tools)
+	}
+}
+
 func TestAgentSessionGenerateReplyOptionsPreserveChatContext(t *testing.T) {
 	agent := NewAgent("test")
 	session := NewAgentSession(agent, nil, AgentSessionOptions{})
@@ -2525,13 +2547,18 @@ func (f *fakeAvatarProvider) UpdateState(state AvatarState) error {
 }
 
 type fakeSessionMCPServer struct {
-	id string
+	id    string
+	tools []llm.Tool
 }
 
 func (f *fakeSessionMCPServer) Initialize(context.Context) error { return nil }
 
 func (f *fakeSessionMCPServer) Initialized() bool { return true }
 
-func (f *fakeSessionMCPServer) ListTools(context.Context) ([]llm.Tool, error) { return nil, nil }
+func (f *fakeSessionMCPServer) InvalidateCache() {}
+
+func (f *fakeSessionMCPServer) ListTools(context.Context) ([]llm.Tool, error) {
+	return f.tools, nil
+}
 
 func (f *fakeSessionMCPServer) Close() error { return nil }

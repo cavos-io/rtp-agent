@@ -1307,7 +1307,11 @@ func (s *AgentSession) GenerateReplyWithOptions(ctx context.Context, opts Genera
 		return nil, ErrAgentSessionNotRunning
 	}
 	if len(opts.Tools) > 0 {
-		if _, err := resolveToolsByID(sessionRegisteredTools(s), opts.Tools); err != nil {
+		registeredTools, err := sessionRegisteredTools(ctx, s)
+		if err != nil {
+			return nil, err
+		}
+		if _, err := resolveToolsByID(registeredTools, opts.Tools); err != nil {
 			return nil, err
 		}
 	}
