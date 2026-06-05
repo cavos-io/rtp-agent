@@ -162,6 +162,28 @@ func TestMakeFunctionCallOutputUsesToolErrorMessage(t *testing.T) {
 	}
 }
 
+func TestMakeToolOutputReturnsVisibleOutputAndRawValues(t *testing.T) {
+	call := FunctionCall{CallID: "call_lookup", Name: "lookup", Arguments: `{"city":"Paris"}`}
+
+	result := MakeToolOutput(call, "Paris", nil)
+
+	if result.FncCall.CallID != call.CallID || result.FncCall.Name != call.Name || result.FncCall.Arguments != call.Arguments {
+		t.Fatalf("FncCall = %#v, want original call", result.FncCall)
+	}
+	if result.FncCallOut == nil {
+		t.Fatal("FncCallOut = nil, want successful output")
+	}
+	if result.FncCallOut.IsError || result.FncCallOut.Output != "Paris" {
+		t.Fatalf("FncCallOut = %#v, want visible Paris output", result.FncCallOut)
+	}
+	if result.RawOutput != "Paris" {
+		t.Fatalf("RawOutput = %#v, want original raw output", result.RawOutput)
+	}
+	if result.RawError != nil {
+		t.Fatalf("RawError = %v, want nil", result.RawError)
+	}
+}
+
 func TestMakeFunctionCallOutputSuppressesStopResponse(t *testing.T) {
 	call := FunctionCall{CallID: "call_lookup", Name: "lookup", Arguments: "{}"}
 
