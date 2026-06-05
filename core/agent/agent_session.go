@@ -1604,6 +1604,7 @@ func (s *AgentSession) UpdateAgent(agent AgentInterface) {
 		} else if closer, ok := previousAssistant.(closeableSessionAssistant); ok {
 			if err := closer.Close(); err != nil {
 				logger.Logger.Errorw("failed to close replaced assistant", err)
+				s.EmitError(ErrorEvent{Error: err, Source: previousAssistant})
 			}
 		}
 	} else if updater, ok := assistant.(componentUpdatingAssistant); ok {

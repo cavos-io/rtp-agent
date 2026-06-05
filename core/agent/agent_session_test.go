@@ -393,12 +393,13 @@ func (a *onEnterSayAgent) OnEnter() {
 
 type fakeCloseableSessionAssistant struct {
 	fakeSessionAssistant
-	closed int
+	closed   int
+	closeErr error
 }
 
 func (f *fakeCloseableSessionAssistant) Close() error {
 	f.closed++
-	return nil
+	return f.closeErr
 }
 
 type fakeVideoSessionAssistant struct {
@@ -2229,6 +2230,41 @@ func TestAgentSessionUpdateAgentEmitsErrorWhenReplacementAssistantStartFails(t *
 		}
 	case <-time.After(time.Second):
 		t.Fatal("ErrorEvents did not receive replacement assistant start error")
+	}
+}
+
+func TestAgentSessionUpdateAgentEmitsErrorWhenPreviousAssistantCloseFails(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	initial := &trackingAgent{Agent: NewAgent("initial")}
+	next := &trackingAgent{Agent: NewAgent("next")}
+	nextRealtime := &fakeRealtimeModel{session: &fakeRealtimeSession{}}
+	next.RealtimeModel = nextRealtime
+	cause := errors.New("previous assistant close failed")
+	previous := &fakeCloseableSessionAssistant{closeErr: cause}
+	session := NewAgentSession(initial, nil, AgentSessionOptions{})
+	session.Assistant = previous
+
+	if err := session.Start(ctx); err != nil {
+		t.Fatalf("Start error = %v, want nil", err)
+	}
+	defer session.Stop(context.Background())
+
+	session.UpdateAgent(next)
+
+	select {
+	case ev := <-session.ErrorEvents():
+		if !errors.Is(ev.Error, cause) {
+			t.Fatalf("Error = %v, want %v", ev.Error, cause)
+		}
+		if ev.Source != previous {
+			t.Fatalf("Source = %#v, want previous assistant", ev.Source)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("ErrorEvents did not receive previous assistant close error")
+	}
+	if previous.closed != 1 {
+		t.Fatalf("previous assistant closed = %d, want 1", previous.closed)
 	}
 }
 
