@@ -9,6 +9,7 @@ import (
 
 	"github.com/cavos-io/rtp-agent/core/llm"
 	"github.com/cavos-io/rtp-agent/core/stt"
+	"github.com/cavos-io/rtp-agent/core/tts"
 	"github.com/cavos-io/rtp-agent/core/vad"
 	"github.com/cavos-io/rtp-agent/library/logger"
 	"github.com/cavos-io/rtp-agent/library/telemetry"
@@ -29,6 +30,10 @@ type toolUpdatingAssistant interface {
 
 type chatContextUpdatingAssistant interface {
 	UpdateChatContext(context.Context, *llm.ChatContext) error
+}
+
+type ttsMetricsCollector interface {
+	OnMetricsCollected(tts.TTSMetricsHandler) func()
 }
 
 type EndOfTurnInfo struct {
@@ -61,6 +66,8 @@ type AgentActivity struct {
 
 	sttEOSReceived bool
 	speaking       bool
+
+	metricUnsubscribes []func()
 
 	userTurnMu                   sync.Mutex
 	userTurnUpdatedCh            chan struct{}
@@ -106,6 +113,14 @@ type scheduledSpeech struct {
 
 func (a *AgentActivity) Start() {
 	_ = a.recordInitialConfiguration()
+	if a.Session != nil && a.Session.TTS != nil {
+		if collector, ok := a.Session.TTS.(ttsMetricsCollector); ok {
+			unsubscribe := collector.OnMetricsCollected(func(metrics *telemetry.TTSMetrics) {
+				a.OnMetricsCollected(metrics)
+			})
+			a.metricUnsubscribes = append(a.metricUnsubscribes, unsubscribe)
+		}
+	}
 	a.AgentIntf.OnEnter()
 	a.queueMu.Lock()
 	a.schedulingStarted = true
@@ -115,6 +130,10 @@ func (a *AgentActivity) Start() {
 
 func (a *AgentActivity) Stop() {
 	a.AgentIntf.OnExit()
+	for _, unsubscribe := range a.metricUnsubscribes {
+		unsubscribe()
+	}
+	a.metricUnsubscribes = nil
 	a.cancel()
 	a.queueMu.Lock()
 	a.schedulingStarted = false
