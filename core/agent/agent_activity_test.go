@@ -203,6 +203,23 @@ func TestAgentActivityMinConsecutiveSpeechDelayUsesAgentOverride(t *testing.T) {
 	}
 }
 
+func TestAgentActivityOnPipelineReplyDoneReturnsToListeningWhenInactive(t *testing.T) {
+	agent := NewAgent("test")
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	activity := NewAgentActivity(agent, session)
+	session.activity = activity
+	current := NewSpeechHandle(true, DefaultInputDetails())
+	activity.currentSpeech = current
+	session.UpdateAgentState(AgentStateSpeaking)
+	current.MarkDone()
+
+	activity.OnPipelineReplyDone(current)
+
+	if got := session.AgentState(); got != AgentStateListening {
+		t.Fatalf("AgentState() = %q, want %q", got, AgentStateListening)
+	}
+}
+
 func TestAgentActivityUseTTSAlignedTranscriptUsesAgentOverride(t *testing.T) {
 	agent := NewAgent("test")
 	session := NewAgentSession(agent, nil, AgentSessionOptions{UseTTSAlignedTranscript: true})

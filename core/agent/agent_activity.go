@@ -676,6 +676,7 @@ func (a *AgentActivity) processQueue() {
 	}
 
 	a.currentSpeech = speech
+	speech.AddDoneCallback(a.OnPipelineReplyDone)
 	delay := a.MinConsecutiveSpeechDelay()
 	if delay > 0 && !a.lastSpeechDone.IsZero() {
 		delay -= time.Since(a.lastSpeechDone)
@@ -743,6 +744,18 @@ func (a *AgentActivity) UseTTSAlignedTranscript() bool {
 		enabled = a.Agent.UseTTSAlignedTranscript
 	}
 	return enabled
+}
+
+func (a *AgentActivity) OnPipelineReplyDone(*SpeechHandle) {
+	if a == nil || a.Session == nil {
+		return
+	}
+	a.queueMu.Lock()
+	inactive := len(a.speechQueue) == 0 && (a.currentSpeech == nil || a.currentSpeech.IsDone())
+	a.queueMu.Unlock()
+	if inactive {
+		a.Session.UpdateAgentState(AgentStateListening)
+	}
 }
 
 func (a *AgentActivity) Drain(ctx context.Context) error {
