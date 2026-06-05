@@ -341,6 +341,15 @@ func (ma *MultimodalAgent) run(ctx context.Context, rtSession llm.RealtimeSessio
 			if rtSession != nil {
 				if err := rtSession.PushAudio(frame); err != nil {
 					logger.Logger.Errorw("failed to push audio to multimodal session", err)
+					ma.mu.Lock()
+					session := ma.session
+					ma.mu.Unlock()
+					if session != nil {
+						session.EmitError(ErrorEvent{
+							Error:  llm.NewRealtimeError("failed to push audio to realtime session", err),
+							Source: rtSession,
+						})
+					}
 				}
 			}
 		case ev, ok := <-eventCh:

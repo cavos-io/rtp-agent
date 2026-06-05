@@ -67,6 +67,46 @@ func TestMultimodalAgentStartsRealtimeSessionAndAcceptsAudio(t *testing.T) {
 	cancel()
 }
 
+func TestMultimodalAgentEmitsRealtimeErrorWhenAudioPushFails(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	cause := errors.New("push audio failed")
+	eventCh := make(chan llm.RealtimeEvent)
+	rtSession := &fakeRealtimeSession{eventCh: eventCh, pushAudioErr: cause}
+	ma := NewMultimodalAgent(&fakeRealtimeModel{}, llm.NewChatContext())
+	ma.session = session
+	ma.rtSession = rtSession
+	go ma.run(ctx, rtSession)
+
+	ma.OnAudioFrame(context.Background(), &model.AudioFrame{
+		Data:              []byte{0, 1},
+		SampleRate:        24000,
+		NumChannels:       1,
+		SamplesPerChannel: 1,
+	})
+
+	select {
+	case ev := <-session.ErrorEvents():
+		rtErr, ok := ev.Error.(llm.RealtimeError)
+		if !ok {
+			t.Fatalf("Error = %T, want llm.RealtimeError", ev.Error)
+		}
+		if !errors.Is(rtErr, cause) {
+			t.Fatalf("RealtimeError unwrap = %v, want %v", rtErr, cause)
+		}
+		if rtErr.Message != "failed to push audio to realtime session" {
+			t.Fatalf("RealtimeError message = %q", rtErr.Message)
+		}
+		if ev.Source != rtSession {
+			t.Fatalf("Source = %#v, want realtime session", ev.Source)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("ErrorEvents did not receive realtime push audio error")
+	}
+}
+
 func TestMultimodalAgentStartUpdatesRealtimeSessionWithSessionAndAgentTools(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -1275,7 +1315,9 @@ type fakeRealtimeSession struct {
 	options              llm.RealtimeSessionOptions
 	generateCh           chan llm.RealtimeGenerateReplyOptions
 	sayCh                chan string
+	eventCh              chan llm.RealtimeEvent
 	videoFrames          int
+	pushAudioErr         error
 	pushVideoErr         error
 	closed               int
 	interrupted          int
@@ -1331,12 +1373,17 @@ func (f *fakeRealtimeSession) Close() error {
 }
 
 func (f *fakeRealtimeSession) EventCh() <-chan llm.RealtimeEvent {
+	if f.eventCh != nil {
+		return f.eventCh
+	}
 	ch := make(chan llm.RealtimeEvent)
 	close(ch)
 	return ch
 }
 
-func (f *fakeRealtimeSession) PushAudio(*model.AudioFrame) error { return nil }
+func (f *fakeRealtimeSession) PushAudio(*model.AudioFrame) error {
+	return f.pushAudioErr
+}
 
 func (f *fakeRealtimeSession) PushVideo(*images.VideoFrame) error {
 	f.videoFrames++
