@@ -316,6 +316,7 @@ type JobContext struct {
 	primarySession         *agent.AgentSession
 	sessionDirectory       string
 	logContextFields       map[string]any
+	recordingInitialized   bool
 	shutdownCallbacks      []func(string)
 	shutdownOnce           sync.Once
 	finishOnce             sync.Once
@@ -373,6 +374,21 @@ func (c *JobContext) WorkerID() string {
 		return ""
 	}
 	return c.workerID
+}
+
+func (c *JobContext) InitRecording(options agent.RecordingOptions) {
+	if c == nil {
+		return
+	}
+	if c.recordingInitialized {
+		return
+	}
+	c.recordingInitialized = true
+	if c.Report == nil {
+		c.Report = agent.NewSessionReport()
+		c.Report.Tagger = c.Tagger()
+	}
+	c.Report.RecordingOptions = options
 }
 
 func (c *JobContext) API() *JobAPI {

@@ -214,6 +214,20 @@ func TestJobContextWorkerIDReturnsAssignedWorkerID(t *testing.T) {
 	}
 }
 
+func TestJobContextInitRecordingStoresOptionsOnce(t *testing.T) {
+	ctx := NewJobContext(&livekit.Job{Id: "job_recording"}, "", "", "")
+
+	ctx.InitRecording(agent.RecordingOptions{Audio: true, Logs: true})
+	if got, want := ctx.Report.RecordingOptions, (agent.RecordingOptions{Audio: true, Logs: true}); got != want {
+		t.Fatalf("RecordingOptions = %#v, want %#v", got, want)
+	}
+
+	ctx.InitRecording(agent.RecordingOptions{Transcript: true})
+	if got, want := ctx.Report.RecordingOptions, (agent.RecordingOptions{Audio: true, Logs: true}); got != want {
+		t.Fatalf("RecordingOptions after second InitRecording = %#v, want first options %#v", got, want)
+	}
+}
+
 func TestJobContextPrimarySessionRequiresRegisteredSession(t *testing.T) {
 	ctx := NewJobContext(&livekit.Job{Id: "job_no_session"}, "", "", "")
 

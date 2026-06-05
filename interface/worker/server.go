@@ -378,7 +378,7 @@ func (s *AgentServer) ReloadRunningJobs(ctx context.Context, jobs []workeripc.Ru
 		jobCtx := NewJobContext(info.Job, jobURL, s.Options.APIKey, s.Options.APISecret)
 		jobCtx.process = s.newJobProcess()
 		if info.Job.GetEnableRecording() {
-			jobCtx.Report.RecordingOptions = allRecordingOptions()
+			jobCtx.InitRecording(allRecordingOptions())
 		}
 		jobCtx.token = info.Token
 		jobCtx.workerID = info.WorkerID
@@ -418,7 +418,7 @@ func (s *AgentServer) ExecuteRunningJob(ctx context.Context, info workeripc.Runn
 	jobCtx := NewJobContext(info.Job, jobURL, s.Options.APIKey, s.Options.APISecret)
 	jobCtx.process = s.newJobProcess()
 	if info.Job.GetEnableRecording() {
-		jobCtx.Report.RecordingOptions = allRecordingOptions()
+		jobCtx.InitRecording(allRecordingOptions())
 	}
 	jobCtx.token = info.Token
 	jobCtx.workerID = info.WorkerID
@@ -1888,7 +1888,7 @@ func (s *AgentServer) handleAssignment(ctx context.Context, req *livekit.JobAssi
 	jobCtx := NewJobContext(req.Job, jobURL, s.Options.APIKey, s.Options.APISecret)
 	jobCtx.process = s.newJobProcess()
 	if req.Job.GetEnableRecording() {
-		jobCtx.Report.RecordingOptions = allRecordingOptions()
+		jobCtx.InitRecording(allRecordingOptions())
 	}
 	jobCtx.token = req.GetToken()
 
@@ -2233,7 +2233,9 @@ func newLocalJobContextWithOptions(roomName string, participantIdentity string, 
 	jobCtx := NewJobContext(job, opts.WSRL, opts.APIKey, opts.APISecret)
 	jobCtx.AcceptArguments = JobAcceptArguments{Identity: participantIdentity}
 	jobCtx.fakeJob = options.FakeJob
-	jobCtx.Report.RecordingOptions = options.RecordingOptions
+	if hasSessionRecordingOption(options.RecordingOptions) {
+		jobCtx.InitRecording(options.RecordingOptions)
+	}
 	jobCtx.SetSessionDirectory(options.SessionDirectory)
 	jobCtx.process = NewJobProcess(JobExecutorTypeThread, opts.UserArguments, opts.HTTPProxy)
 	if token != "" {
