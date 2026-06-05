@@ -403,6 +403,33 @@ func TestAgentActivityStartSkipsEmptyInitialConfiguration(t *testing.T) {
 	}
 }
 
+func TestAgentActivityRetrieveChatCtxReturnsReadOnlySnapshot(t *testing.T) {
+	agent := NewAgent("")
+	agent.ChatCtx.Append(&llm.ChatMessage{ID: "user", Role: llm.ChatRoleUser})
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	activity := NewAgentActivity(agent, session)
+	defer activity.Stop()
+
+	got := activity.RetrieveChatCtx()
+	if got == nil {
+		t.Fatal("RetrieveChatCtx returned nil, want chat context")
+	}
+	if !got.Readonly() {
+		t.Fatal("RetrieveChatCtx returned mutable context, want read-only snapshot")
+	}
+	if got == agent.ChatCtx {
+		t.Fatal("RetrieveChatCtx returned agent-owned context, want snapshot")
+	}
+	if len(got.Items) != 1 || got.Items[0].GetID() != "user" {
+		t.Fatalf("RetrieveChatCtx items = %#v, want existing agent message", got.Items)
+	}
+
+	agent.ChatCtx = nil
+	if empty := activity.RetrieveChatCtx(); empty == nil || !empty.Readonly() || len(empty.Items) != 0 {
+		t.Fatalf("RetrieveChatCtx with nil agent context = %#v, want empty read-only context", empty)
+	}
+}
+
 func TestAgentActivityUsesSessionMinEndpointingDelay(t *testing.T) {
 	agent := &turnCompletedAgent{Agent: NewAgent("test"), turns: make(chan *llm.ChatMessage, 1)}
 	agent.TurnDetection = TurnDetectionModeSTT

@@ -458,6 +458,13 @@ func (a *AgentActivity) updateRealtimeChatContext(ctx context.Context) error {
 	return updater.UpdateChatContext(ctx, chatCtx)
 }
 
+func (a *AgentActivity) RetrieveChatCtx() *llm.ChatContext {
+	if a == nil || a.Agent == nil {
+		return llm.NewChatContext().ReadOnly()
+	}
+	return a.Agent.ChatContext()
+}
+
 func (a *AgentActivity) chatContextTools() []interface{} {
 	tools := make([]interface{}, 0, len(a.Agent.Tools))
 	if a.Session != nil {
@@ -965,10 +972,7 @@ func (a *AgentActivity) completeUserTurn(ctx context.Context, info EndOfTurnInfo
 		return nil, nil
 	}
 
-	chatCtx := llm.NewChatContext()
-	if a.Agent.ChatCtx != nil {
-		chatCtx = a.Agent.ChatCtx.Copy()
-	}
+	chatCtx := a.RetrieveChatCtx().Copy()
 	hookStart := time.Now()
 	if err := a.AgentIntf.OnUserTurnCompleted(ctx, chatCtx, newMsg); err != nil {
 		var stopResponse llm.StopResponse
@@ -1129,7 +1133,7 @@ func (a *AgentActivity) runEOUDetection(info EndOfTurnInfo) {
 
 		if a.Agent.TurnDetector != nil && info.NewTranscript != "" {
 			// Predict end of turn
-			chatCtx := a.Agent.ChatCtx.Copy()
+			chatCtx := a.RetrieveChatCtx().Copy()
 			chatCtx.Append(&llm.ChatMessage{
 				Role:    llm.ChatRoleUser,
 				Content: []llm.ChatContent{{Text: info.NewTranscript}},
