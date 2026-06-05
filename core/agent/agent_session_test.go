@@ -171,6 +171,30 @@ func TestAgentSessionAgentStateChangedEventsFanOutToSubscribers(t *testing.T) {
 	assertAgentStateChangedEvent(t, second, "second")
 }
 
+func TestAgentSessionErrorEventsFanOutToSubscribers(t *testing.T) {
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	first := session.ErrorEvents()
+	second := session.ErrorEvents()
+
+	session.EmitError(ErrorEvent{Error: errors.New("failed"), Source: "llm"})
+
+	assertErrorEvent(t, first, "first")
+	assertErrorEvent(t, second, "second")
+}
+
+func TestAgentSessionCloseEventsFanOutToSubscribers(t *testing.T) {
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	session.activity = NewAgentActivity(session.Agent, session)
+	session.started = true
+	first := session.CloseEvents()
+	second := session.CloseEvents()
+
+	session.CloseSoon(CloseReasonUserInitiated)
+
+	assertCloseEvent(t, first, "first")
+	assertCloseEvent(t, second, "second")
+}
+
 func assertUserTranscriptEvent(t *testing.T, events <-chan UserInputTranscribedEvent, name string) {
 	t.Helper()
 
@@ -220,6 +244,32 @@ func assertAgentStateChangedEvent(t *testing.T, events <-chan AgentStateChangedE
 		}
 	case <-time.After(time.Second):
 		t.Fatalf("%s subscriber did not receive agent state event", name)
+	}
+}
+
+func assertErrorEvent(t *testing.T, events <-chan ErrorEvent, name string) {
+	t.Helper()
+
+	select {
+	case ev := <-events:
+		if ev.Error == nil || ev.Error.Error() != "failed" || ev.Source != "llm" {
+			t.Fatalf("%s subscriber event = %#v, want failed llm error", name, ev)
+		}
+	case <-time.After(time.Second):
+		t.Fatalf("%s subscriber did not receive error event", name)
+	}
+}
+
+func assertCloseEvent(t *testing.T, events <-chan CloseEvent, name string) {
+	t.Helper()
+
+	select {
+	case ev := <-events:
+		if ev.Reason != CloseReasonUserInitiated {
+			t.Fatalf("%s subscriber event = %#v, want user initiated close", name, ev)
+		}
+	case <-time.After(time.Second):
+		t.Fatalf("%s subscriber did not receive close event", name)
 	}
 }
 
@@ -1706,9 +1756,10 @@ func TestAgentSessionShutdownDrainsByDefaultBeforeClosing(t *testing.T) {
 		done <- struct{}{}
 	}()
 
+	closeEvents := session.CloseEvents()
 	waitForDraining(t, session.activity)
 	select {
-	case <-session.CloseEvents():
+	case <-closeEvents:
 		t.Fatal("Shutdown emitted close event before active speech drained")
 	case <-done:
 		t.Fatal("Shutdown returned before active speech drained")
@@ -1723,7 +1774,7 @@ func TestAgentSessionShutdownDrainsByDefaultBeforeClosing(t *testing.T) {
 		t.Fatal("Shutdown did not return after active speech completed")
 	}
 	select {
-	case ev := <-session.CloseEvents():
+	case ev := <-closeEvents:
 		if ev.Reason != CloseReasonUserInitiated {
 			t.Fatalf("CloseEvent.Reason = %q, want user_initiated", ev.Reason)
 		}
@@ -2266,6 +2317,7 @@ func TestAgentSessionClosesAfterUnrecoverableTTSErrorThreshold(t *testing.T) {
 	}
 
 	cause := errors.New("tts failed")
+	closeEvents := session.CloseEvents()
 	ttsSource.EmitError(tts.TTSError{Label: "fake", Err: cause, Recoverable: false})
 
 	select {
@@ -2278,7 +2330,7 @@ func TestAgentSessionClosesAfterUnrecoverableTTSErrorThreshold(t *testing.T) {
 	}
 
 	select {
-	case ev := <-session.CloseEvents():
+	case ev := <-closeEvents:
 		t.Fatalf("CloseEvents received early close with reason %q", ev.Reason)
 	default:
 	}
@@ -2286,7 +2338,7 @@ func TestAgentSessionClosesAfterUnrecoverableTTSErrorThreshold(t *testing.T) {
 	ttsSource.EmitError(tts.TTSError{Label: "fake", Err: cause, Recoverable: false})
 
 	select {
-	case ev := <-session.CloseEvents():
+	case ev := <-closeEvents:
 		if ev.Reason != CloseReasonError {
 			t.Fatalf("CloseEvent.Reason = %q, want error", ev.Reason)
 		}

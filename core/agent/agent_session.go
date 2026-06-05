@@ -213,8 +213,12 @@ type AgentSession struct {
 	metricsCollectedCh  chan MetricsCollectedEvent
 	sessionUsageCh      chan SessionUsageUpdatedEvent
 	errorCh             chan ErrorEvent
+	errorChSubscribed   bool
+	errorSubs           []chan ErrorEvent
 	sipDTMFCh           chan SipDTMFEvent
 	closeCh             chan CloseEvent
+	closeChSubscribed   bool
+	closeSubs           []chan CloseEvent
 
 	llmErrorCount int
 	ttsErrorCount int
@@ -1010,10 +1014,11 @@ func (s *AgentSession) EmitError(ev ErrorEvent) {
 		ev.CreatedAt = NewErrorEvent(ev.Error, ev.Source).CreatedAt
 	}
 	s.recordEvent(&ev)
-	ch := s.errorEvents()
-	select {
-	case ch <- ev:
-	default:
+	for _, ch := range s.errorSubscribers() {
+		select {
+		case ch <- ev:
+		default:
+		}
 	}
 	s.closeOnUnrecoverableError(ev.Error)
 }
@@ -1097,7 +1102,26 @@ func (s *AgentSession) errorEvents() chan ErrorEvent {
 	if s.errorCh == nil {
 		s.errorCh = make(chan ErrorEvent, 10)
 	}
-	return s.errorCh
+	if !s.errorChSubscribed {
+		s.errorChSubscribed = true
+		return s.errorCh
+	}
+	ch := make(chan ErrorEvent, 10)
+	s.errorSubs = append(s.errorSubs, ch)
+	return ch
+}
+
+func (s *AgentSession) errorSubscribers() []chan ErrorEvent {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	subs := make([]chan ErrorEvent, 0, len(s.errorSubs)+1)
+	if s.errorCh == nil {
+		s.errorCh = make(chan ErrorEvent, 10)
+	}
+	subs = append(subs, s.errorCh)
+	subs = append(subs, s.errorSubs...)
+	return subs
 }
 
 func (s *AgentSession) SipDTMFEvents() <-chan SipDTMFEvent {
@@ -1138,10 +1162,11 @@ func (s *AgentSession) CloseSoon(reason CloseReason) {
 
 	ev := CloseEvent{Reason: reason, CreatedAt: time.Now()}
 	s.recordEvent(&ev)
-	ch := s.closeEvents()
-	select {
-	case ch <- ev:
-	default:
+	for _, ch := range s.closeSubscribers() {
+		select {
+		case ch <- ev:
+		default:
+		}
 	}
 	_ = s.stop(context.Background(), reason != CloseReasonError)
 }
@@ -1166,7 +1191,26 @@ func (s *AgentSession) closeEvents() chan CloseEvent {
 	if s.closeCh == nil {
 		s.closeCh = make(chan CloseEvent, 10)
 	}
-	return s.closeCh
+	if !s.closeChSubscribed {
+		s.closeChSubscribed = true
+		return s.closeCh
+	}
+	ch := make(chan CloseEvent, 10)
+	s.closeSubs = append(s.closeSubs, ch)
+	return ch
+}
+
+func (s *AgentSession) closeSubscribers() []chan CloseEvent {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	subs := make([]chan CloseEvent, 0, len(s.closeSubs)+1)
+	if s.closeCh == nil {
+		s.closeCh = make(chan CloseEvent, 10)
+	}
+	subs = append(subs, s.closeCh)
+	subs = append(subs, s.closeSubs...)
+	return subs
 }
 
 func (s *AgentSession) Start(ctx context.Context) error {
