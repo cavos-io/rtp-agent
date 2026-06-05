@@ -168,6 +168,26 @@ func TestAgentActivityCurrentSpeechReportsActiveSpeech(t *testing.T) {
 	}
 }
 
+func TestAgentActivityToolsCombinesSessionAndAgentTools(t *testing.T) {
+	agentTool := &agentTestTool{id: "agent", name: "agent"}
+	sessionTool := &agentTestTool{id: "session", name: "session"}
+	agent := NewAgent("test")
+	agent.Tools = []llm.Tool{agentTool}
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	session.Tools = []llm.Tool{sessionTool}
+	activity := NewAgentActivity(agent, session)
+
+	got := activity.Tools()
+	if len(got) != 2 || got[0] != sessionTool || got[1] != agentTool {
+		t.Fatalf("Tools() = %#v, want session tool then agent tool", got)
+	}
+
+	got[0] = agentTool
+	if session.Tools[0] != sessionTool {
+		t.Fatal("mutating Tools() result changed session tools")
+	}
+}
+
 func TestAgentActivityAllowInterruptionsUsesAgentOverride(t *testing.T) {
 	agent := NewAgent("test")
 	session := NewAgentSession(agent, nil, AgentSessionOptions{})

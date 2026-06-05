@@ -135,6 +135,26 @@ func (a *AgentActivity) CurrentSpeech() *SpeechHandle {
 	return a.currentSpeech
 }
 
+func (a *AgentActivity) Tools() []interface{} {
+	if a == nil || a.Agent == nil {
+		return nil
+	}
+	capacity := len(a.Agent.Tools)
+	if a.Session != nil {
+		capacity += len(a.Session.Tools)
+	}
+	tools := make([]interface{}, 0, capacity)
+	if a.Session != nil {
+		for _, tool := range a.Session.Tools {
+			tools = append(tools, tool)
+		}
+	}
+	for _, tool := range a.Agent.Tools {
+		tools = append(tools, tool)
+	}
+	return tools
+}
+
 func (a *AgentActivity) AllowInterruptions() bool {
 	if a == nil {
 		return false
@@ -204,7 +224,7 @@ func (a *AgentActivity) recordInitialConfiguration() error {
 		return err
 	}
 
-	toolNames := sortedAgentToolNames(a.chatContextTools())
+	toolNames := sortedAgentToolNames(a.Tools())
 	if a.Agent.Instructions == "" && len(toolNames) == 0 {
 		return nil
 	}
@@ -455,7 +475,7 @@ func (a *AgentActivity) UpdateChatCtx(ctx context.Context, chatCtx *llm.ChatCont
 		return a.updateRealtimeChatContext(ctx)
 	}
 	a.Agent.ChatCtx = chatCtx.Copy(llm.ChatContextCopyOptions{
-		Tools: a.chatContextTools(),
+		Tools: a.Tools(),
 	})
 	if err := updateAgentInstructionsMessage(a.Agent.ChatCtx, a.Agent.Instructions, true); err != nil {
 		return err
@@ -484,19 +504,6 @@ func (a *AgentActivity) RetrieveChatCtx() *llm.ChatContext {
 		return llm.NewChatContext().ReadOnly()
 	}
 	return a.Agent.ChatContext()
-}
-
-func (a *AgentActivity) chatContextTools() []interface{} {
-	tools := make([]interface{}, 0, len(a.Agent.Tools))
-	if a.Session != nil {
-		for _, tool := range a.Session.Tools {
-			tools = append(tools, tool)
-		}
-	}
-	for _, tool := range a.Agent.Tools {
-		tools = append(tools, tool)
-	}
-	return tools
 }
 
 func agentToolNameSet(tools []llm.Tool) map[string]struct{} {
