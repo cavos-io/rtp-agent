@@ -81,6 +81,19 @@ func TestChatContextCopyFiltersFunctionItemsByTools(t *testing.T) {
 	}
 }
 
+func TestChatContextGetToolNamesIncludesStringsToolsAndToolsets(t *testing.T) {
+	lookup := &testTool{id: "lookup", name: "lookup"}
+	weather := &testTool{id: "weather", name: "weather"}
+	toolset := &testToolset{id: "tools", tools: []Tool{weather}}
+	ctx := NewChatContext()
+
+	names := ctx.GetToolNames([]interface{}{"calendar", lookup, toolset, 123})
+
+	if got, want := strings.Join(names, ","), "calendar,lookup,weather"; got != want {
+		t.Fatalf("GetToolNames() = %q, want %q", got, want)
+	}
+}
+
 func TestChatContextCopyFiltersOutFunctionItemsOutsideTools(t *testing.T) {
 	ctx := NewChatContext()
 	ctx.Items = []ChatItem{

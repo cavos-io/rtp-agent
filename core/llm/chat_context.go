@@ -73,7 +73,10 @@ func (c *ChatContext) Copy(options ...ChatContextCopyOptions) *ChatContext {
 	}
 
 	newCtx := NewChatContext()
-	validTools := chatContextCopyToolNames(opts.Tools)
+	validTools := make(map[string]struct{})
+	for _, name := range c.GetToolNames(opts.Tools) {
+		validTools[name] = struct{}{}
+	}
 	filterByTools := opts.Tools != nil
 	for _, item := range c.Items {
 		if opts.ExcludeFunctionCall && isFunctionChatItem(item) {
@@ -192,17 +195,17 @@ func (c *ChatContext) UpsertItem(item ChatItem, options ...ChatContextUpsertOpti
 	return nil
 }
 
-func chatContextCopyToolNames(tools []interface{}) map[string]struct{} {
-	names := make(map[string]struct{})
+func (c *ChatContext) GetToolNames(tools []interface{}) []string {
+	names := make([]string, 0, len(tools))
 	for _, tool := range tools {
 		switch t := tool.(type) {
 		case string:
-			names[t] = struct{}{}
+			names = append(names, t)
 		case Tool:
-			names[t.Name()] = struct{}{}
+			names = append(names, t.Name())
 		case Toolset:
 			for _, childTool := range t.Tools() {
-				names[childTool.Name()] = struct{}{}
+				names = append(names, childTool.Name())
 			}
 		}
 	}
