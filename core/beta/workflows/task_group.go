@@ -88,18 +88,24 @@ func (g *TaskGroup) runTasks() {
 		g.mu.Lock()
 		g.currentTask = factory.TaskFactory()
 		g.VisitedTasks[taskID] = struct{}{}
+		currentTask := g.currentTask
 		g.mu.Unlock()
-
-		// In Python, it updates chat ctx and tools
-		// Here we assume the agent task handles its own execution when Start is called
 
 		logger.Logger.Infow("Running task in group", "taskID", taskID)
 		if tool := g.buildOutOfScopeTool(taskID); tool != nil {
-			g.currentTask.GetAgent().Tools = append(g.currentTask.GetAgent().Tools, tool)
+			currentTask.GetAgent().Tools = append(currentTask.GetAgent().Tools, tool)
 		}
 
-		if waiter, ok := g.currentTask.(agent.TaskWaiter); ok {
+		var activity *agent.AgentActivity
+		if groupActivity := g.Agent.GetActivity(); groupActivity != nil && groupActivity.Session != nil {
+			activity = currentTask.GetAgent().Start(groupActivity.Session, currentTask)
+		}
+
+		if waiter, ok := currentTask.(agent.TaskWaiter); ok {
 			result, err := waiter.WaitAny(context.Background())
+			if activity != nil {
+				activity.Stop()
+			}
 			if err != nil {
 				if outErr, isOutErr := err.(*OutOfScopeError); isOutErr {
 					// Regression logic
@@ -118,6 +124,9 @@ func (g *TaskGroup) runTasks() {
 				}
 			}
 		} else {
+			if activity != nil {
+				activity.Stop()
+			}
 			// If it's not a TaskWaiter, we just assume it completed (fallback)
 			results[taskID] = nil
 		}
