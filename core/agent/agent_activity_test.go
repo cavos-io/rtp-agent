@@ -420,6 +420,54 @@ func TestAgentActivityOnVADInferenceDoneIgnoresManualTurnDetection(t *testing.T)
 	current.MarkDone()
 }
 
+func TestAgentActivityUserTurnExceededWaitDoesNotConsumeLegacyAgentStateChannel(t *testing.T) {
+	agent := NewAgent("test")
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	activity := NewAgentActivity(agent, session)
+	activity.currentSpeech = NewSpeechHandle(true, DefaultInputDetails())
+	sentinel := AgentStateChangedEvent{
+		OldState: AgentState("sentinel"),
+		NewState: AgentStateSpeaking,
+	}
+	session.AgentStateChangedCh <- sentinel
+
+	result := make(chan bool, 1)
+	errs := make(chan error, 1)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() {
+		shouldRun, err := activity.waitForUserTurnExceededCallback(ctx)
+		result <- shouldRun
+		errs <- err
+	}()
+
+	var shouldRun bool
+	select {
+	case shouldRun = <-result:
+	case <-time.After(20 * time.Millisecond):
+		session.UpdateAgentState(AgentStateSpeaking)
+		select {
+		case shouldRun = <-result:
+		case <-time.After(time.Second):
+			t.Fatal("waitForUserTurnExceededCallback did not return after agent started speaking")
+		}
+	}
+	if shouldRun {
+		t.Fatal("waitForUserTurnExceededCallback() = true, want false when agent starts speaking")
+	}
+	if err := <-errs; err != nil {
+		t.Fatalf("waitForUserTurnExceededCallback() error = %v, want nil", err)
+	}
+	select {
+	case ev := <-session.AgentStateChangedCh:
+		if ev.OldState != sentinel.OldState || ev.NewState != sentinel.NewState {
+			t.Fatalf("legacy agent state event = %#v, want sentinel event %#v", ev, sentinel)
+		}
+	default:
+		t.Fatal("waitForUserTurnExceededCallback consumed the legacy agent state channel event")
+	}
+}
+
 func TestAgentActivityRealtimeInputSpeechStoppedEmitsInterimTranscriptWhenEnabled(t *testing.T) {
 	agent := NewAgent("test")
 	session := NewAgentSession(agent, nil, AgentSessionOptions{})
@@ -1652,13 +1700,14 @@ func TestAgentActivityCommitUserTurnInterruptsCurrentSpeechBeforeReply(t *testin
 		done <- err
 	}()
 
+	speechCreatedEvents := session.SpeechCreatedEvents()
 	waitForInterrupted(t, current)
 	select {
 	case err := <-done:
 		t.Fatalf("CommitUserTurn returned before current speech completed: %v", err)
 	case msg := <-agent.turns:
 		t.Fatalf("OnUserTurnCompleted called before current speech completed with %q", msg.TextContent())
-	case ev := <-session.SpeechCreatedEvents():
+	case ev := <-speechCreatedEvents:
 		t.Fatalf("reply generated before current speech completed: %#v", ev)
 	case <-time.After(20 * time.Millisecond):
 	}
@@ -1682,7 +1731,7 @@ func TestAgentActivityCommitUserTurnInterruptsCurrentSpeechBeforeReply(t *testin
 		t.Fatal("OnUserTurnCompleted was not called after current speech completed")
 	}
 	select {
-	case ev := <-session.SpeechCreatedEvents():
+	case ev := <-speechCreatedEvents:
 		if ev.SpeechHandle.Generation.UserMessage == nil || ev.SpeechHandle.Generation.UserMessage.TextContent() != "interrupt and reply" {
 			t.Fatalf("reply user message = %#v, want committed user turn", ev.SpeechHandle.Generation.UserMessage)
 		}
