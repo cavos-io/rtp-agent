@@ -3,6 +3,7 @@ package worker
 import (
 	"context"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -245,6 +246,49 @@ func TestRoomIOHandleUserStateChangedDispatchesClientEvent(t *testing.T) {
 	if len(dispatcher.userStates) != 1 || dispatcher.userStates[0] != agent.UserStateSpeaking {
 		t.Fatalf("dispatched user states = %#v, want speaking", dispatcher.userStates)
 	}
+}
+
+func TestRoomIOPublishesAgentOutputTranscriptionStream(t *testing.T) {
+	session := agent.NewAgentSession(agent.NewAgent("test"), nil, agent.AgentSessionOptions{})
+	published := make(chan roomIOPublishedText, 1)
+	rio := &RoomIO{
+		AgentSession: session,
+		transcriptionTextPublisher: func(text string, opts lksdk.StreamTextOptions) {
+			published <- roomIOPublishedText{text: text, opts: opts}
+		},
+	}
+	rio.startAgentTranscriptionListener()
+	defer rio.agentTranscriptionCancel()
+
+	session.EmitAgentOutputTranscribed(agent.AgentOutputTranscribedEvent{
+		Transcript: "assistant transcript",
+		IsFinal:    false,
+		Language:   "en",
+	})
+
+	select {
+	case got := <-published:
+		if got.text != "assistant transcript" {
+			t.Fatalf("published text = %q, want assistant transcript", got.text)
+		}
+		if got.opts.Topic != RoomIOTranscriptionTopic {
+			t.Fatalf("published topic = %q, want %q", got.opts.Topic, RoomIOTranscriptionTopic)
+		}
+		if got.opts.Attributes[RoomIOTranscriptionFinalAttribute] != "false" {
+			t.Fatalf("final attribute = %q, want false", got.opts.Attributes[RoomIOTranscriptionFinalAttribute])
+		}
+		segmentID := got.opts.Attributes[RoomIOTranscriptionSegmentIDAttribute]
+		if !strings.HasPrefix(segmentID, "SG_") {
+			t.Fatalf("segment id = %q, want SG_ prefix", segmentID)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("agent transcription stream was not published")
+	}
+}
+
+type roomIOPublishedText struct {
+	text string
+	opts lksdk.StreamTextOptions
 }
 
 func TestRoomIOHandleAgentSessionCloseDeletesRoomWhenEnabled(t *testing.T) {

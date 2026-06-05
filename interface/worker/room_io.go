@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"strconv"
 	"sync"
 	"time"
 
@@ -11,6 +12,7 @@ import (
 	"github.com/cavos-io/rtp-agent/core/audio"
 	"github.com/cavos-io/rtp-agent/core/audio/model"
 	"github.com/cavos-io/rtp-agent/library/logger"
+	"github.com/google/uuid"
 	"github.com/hraban/opus"
 	"github.com/livekit/protocol/livekit"
 	lksdk "github.com/livekit/server-sdk-go/v2"
@@ -119,9 +121,13 @@ type RoomOptions struct {
 }
 
 const RoomIOChatTopic = "lk.chat"
+const RoomIOTranscriptionTopic = "lk.transcription"
 const RoomIOPublishOnBehalfAttribute = "lk.publish_on_behalf"
 const RoomIOAgentStateAttribute = "lk.agent.state"
 const RoomIOSimulatorAttribute = "lk.simulator"
+const RoomIOTranscriptionFinalAttribute = "lk.transcription_final"
+const RoomIOTranscriptionTrackIDAttribute = "lk.transcribed_track_id"
+const RoomIOTranscriptionSegmentIDAttribute = "lk.segment_id"
 const roomIODeleteRoomCloseTimeout = 10 * time.Second
 
 type TextInputEvent struct {
@@ -168,6 +174,9 @@ type RoomIO struct {
 	userStateCancel          context.CancelFunc
 	clientEvents             roomIOClientEvents
 
+	agentTranscriptionCancel   context.CancelFunc
+	transcriptionTextPublisher func(string, lksdk.StreamTextOptions)
+
 	sessionCloseCancel context.CancelFunc
 	deletingRoom       bool
 	deleteRoomDone     chan struct{}
@@ -197,9 +206,11 @@ func NewRoomIO(room *lksdk.Room, session *agent.AgentSession, opts RoomOptions) 
 	rio.agentStatePublisher = rio.publishLocalParticipantAttributes
 	rio.agentStatePublishEnabled = rio.roomConnected
 	rio.clientEvents = agent.NewClientEventsDispatcher(room)
+	rio.transcriptionTextPublisher = rio.publishTranscriptionText
 	rio.roomName = rio.liveKitRoomName
 	rio.startAgentStateListener()
 	rio.startUserStateListener()
+	rio.startAgentTranscriptionListener()
 	rio.startSessionCloseListener()
 
 	if !opts.DisableTextInput {
@@ -277,6 +288,28 @@ func (rio *RoomIO) startSessionCloseListener() {
 	}()
 }
 
+func (rio *RoomIO) startAgentTranscriptionListener() {
+	if rio == nil || rio.AgentSession == nil {
+		return
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	rio.agentTranscriptionCancel = cancel
+	events := rio.AgentSession.AgentOutputTranscribedEvents()
+	go func() {
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case ev, ok := <-events:
+				if !ok {
+					return
+				}
+				rio.handleAgentOutputTranscribed(ev)
+			}
+		}
+	}()
+}
+
 func roomIOPreConnectAudioTimeout(opts RoomOptions) time.Duration {
 	if opts.PreConnectAudioTimeout > 0 {
 		return opts.PreConnectAudioTimeout
@@ -326,6 +359,23 @@ func (rio *RoomIO) handleUserStateChanged(ev agent.UserStateChangedEvent) {
 	rio.clientEvents.DispatchUserState(ev.NewState)
 }
 
+func (rio *RoomIO) handleAgentOutputTranscribed(ev agent.AgentOutputTranscribedEvent) {
+	if rio == nil || rio.transcriptionTextPublisher == nil || ev.Transcript == "" {
+		return
+	}
+	rio.transcriptionTextPublisher(ev.Transcript, lksdk.StreamTextOptions{
+		Topic: RoomIOTranscriptionTopic,
+		Attributes: map[string]string{
+			RoomIOTranscriptionFinalAttribute:     strconv.FormatBool(ev.IsFinal),
+			RoomIOTranscriptionSegmentIDAttribute: roomIOTranscriptionSegmentID(),
+		},
+	})
+}
+
+func roomIOTranscriptionSegmentID() string {
+	return "SG_" + uuid.NewString()[:12]
+}
+
 func (rio *RoomIO) roomConnected() bool {
 	return rio != nil && rio.Room != nil && rio.Room.ConnectionState() == lksdk.ConnectionStateConnected
 }
@@ -335,6 +385,13 @@ func (rio *RoomIO) publishLocalParticipantAttributes(attrs map[string]string) {
 		return
 	}
 	rio.Room.LocalParticipant.SetAttributes(attrs)
+}
+
+func (rio *RoomIO) publishTranscriptionText(text string, opts lksdk.StreamTextOptions) {
+	if rio == nil || rio.Room == nil || rio.Room.LocalParticipant == nil {
+		return
+	}
+	rio.Room.LocalParticipant.SendText(text, opts)
 }
 
 func (rio *RoomIO) handleAgentSessionClose(ev agent.CloseEvent) {
@@ -836,6 +893,10 @@ func (rio *RoomIO) Close() error {
 	}
 	if rio.sessionCloseCancel != nil {
 		rio.sessionCloseCancel()
+	}
+	if rio.agentTranscriptionCancel != nil {
+		rio.agentTranscriptionCancel()
+		rio.agentTranscriptionCancel = nil
 	}
 	deleteRoomDone := rio.deleteRoomDone
 	rio.mu.Unlock()
