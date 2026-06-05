@@ -521,6 +521,13 @@ func (rio *RoomIO) participantState() (string, bool) {
 	return rio.Options.ParticipantIdentity, rio.participantAvailable
 }
 
+func (rio *RoomIO) LinkedParticipant() (string, bool) {
+	if rio == nil {
+		return "", false
+	}
+	return rio.participantState()
+}
+
 func (rio *RoomIO) shouldHandleParticipant(participantIdentity string) bool {
 	linkedParticipant := rio.participantIdentity()
 	return linkedParticipant == "" || participantIdentity == linkedParticipant
