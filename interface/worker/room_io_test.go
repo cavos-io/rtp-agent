@@ -439,6 +439,66 @@ func TestRoomIOPublishesUserInputTranscriptionStream(t *testing.T) {
 	}
 }
 
+func TestRoomIOCanDisableAgentTranscriptionOutput(t *testing.T) {
+	session := agent.NewAgentSession(agent.NewAgent("test"), nil, agent.AgentSessionOptions{})
+	published := make(chan roomIOPublishedText, 1)
+	rio := &RoomIO{
+		AgentSession: session,
+		Options: RoomOptions{
+			DisableTranscriptionOutput: true,
+		},
+		transcriptionTextPublisher: func(text string, opts lksdk.StreamTextOptions) {
+			published <- roomIOPublishedText{text: text, opts: opts}
+		},
+	}
+	rio.startAgentTranscriptionListener()
+	if rio.agentTranscriptionCancel != nil {
+		defer rio.agentTranscriptionCancel()
+	}
+
+	session.EmitAgentOutputTranscribed(agent.AgentOutputTranscribedEvent{
+		Transcript: "assistant transcript",
+		IsFinal:    true,
+	})
+
+	select {
+	case got := <-published:
+		t.Fatalf("published agent transcription despite disabled output: %#v", got)
+	case <-time.After(50 * time.Millisecond):
+	}
+}
+
+func TestRoomIOCanDisableUserTranscriptionOutput(t *testing.T) {
+	session := agent.NewAgentSession(agent.NewAgent("test"), nil, agent.AgentSessionOptions{})
+	published := make(chan roomIOPublishedText, 1)
+	rio := &RoomIO{
+		AgentSession:                   session,
+		userTranscriptionTrackID:       "TR_user_audio",
+		userTranscriptionParticipantID: "caller-a",
+		Options: RoomOptions{
+			DisableTranscriptionOutput: true,
+		},
+		transcriptionTextPublisher: func(text string, opts lksdk.StreamTextOptions) {
+			published <- roomIOPublishedText{text: text, opts: opts}
+		},
+	}
+	rio.startUserTranscriptionListener()
+	if rio.userTranscriptionCancel != nil {
+		defer rio.userTranscriptionCancel()
+	}
+
+	session.EmitUserInputTranscribed(agent.UserInputTranscribedEvent{
+		Transcript: "caller transcript",
+		IsFinal:    true,
+	})
+
+	select {
+	case got := <-published:
+		t.Fatalf("published user transcription despite disabled output: %#v", got)
+	case <-time.After(50 * time.Millisecond):
+	}
+}
+
 type roomIOPublishedText struct {
 	text string
 	opts lksdk.StreamTextOptions

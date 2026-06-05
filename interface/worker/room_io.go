@@ -106,18 +106,19 @@ func (e *opusEncoder) Close() error {
 }
 
 type RoomOptions struct {
-	AudioTrackName           string
-	PreConnectAudioTimeout   time.Duration
-	DisablePreConnectAudio   bool
-	DisableAudioInput        bool
-	DisableTextInput         bool
-	DisableAudioOutput       bool
-	DisableCloseOnDisconnect bool
-	DeleteRoomOnClose        bool
-	DeleteRoom               func(context.Context, string) error
-	TextInputCallback        TextInputCallback
-	ParticipantIdentity      string
-	ParticipantKinds         []lksdk.ParticipantKind
+	AudioTrackName             string
+	PreConnectAudioTimeout     time.Duration
+	DisablePreConnectAudio     bool
+	DisableAudioInput          bool
+	DisableTextInput           bool
+	DisableAudioOutput         bool
+	DisableTranscriptionOutput bool
+	DisableCloseOnDisconnect   bool
+	DeleteRoomOnClose          bool
+	DeleteRoom                 func(context.Context, string) error
+	TextInputCallback          TextInputCallback
+	ParticipantIdentity        string
+	ParticipantKinds           []lksdk.ParticipantKind
 }
 
 const RoomIOChatTopic = "lk.chat"
@@ -299,7 +300,7 @@ func (rio *RoomIO) startSessionCloseListener() {
 }
 
 func (rio *RoomIO) startAgentTranscriptionListener() {
-	if rio == nil || rio.AgentSession == nil {
+	if rio == nil || rio.AgentSession == nil || rio.Options.DisableTranscriptionOutput {
 		return
 	}
 	ctx, cancel := context.WithCancel(context.Background())
@@ -321,7 +322,7 @@ func (rio *RoomIO) startAgentTranscriptionListener() {
 }
 
 func (rio *RoomIO) startUserTranscriptionListener() {
-	if rio == nil || rio.AgentSession == nil {
+	if rio == nil || rio.AgentSession == nil || rio.Options.DisableTranscriptionOutput {
 		return
 	}
 	ctx, cancel := context.WithCancel(context.Background())
