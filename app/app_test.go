@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -1935,6 +1936,19 @@ func TestDefaultConfigFromEnvSelectsDtmfWorkflowAgent(t *testing.T) {
 	}
 	if len(app.Agent.Tools) != 1 || app.Agent.Tools[0].Name() != "confirm_inputs" {
 		t.Fatalf("workflow tools = %#v, want confirm_inputs", app.Agent.Tools)
+	}
+}
+
+func TestDefaultConfigFromEnvRejectsInvalidDtmfNumDigits(t *testing.T) {
+	t.Setenv("RTP_AGENT_WORKFLOW_TASK", "dtmf")
+	t.Setenv("RTP_AGENT_WORKFLOW_DTMF_NUM_DIGITS", "0")
+
+	_, err := NewApp(DefaultConfigFromEnv())
+	if err == nil {
+		t.Fatal("NewApp() error = nil, want invalid DTMF num digits error")
+	}
+	if !strings.Contains(err.Error(), "num_digits must be greater than 0") {
+		t.Fatalf("NewApp() error = %v, want invalid num_digits error", err)
 	}
 }
 

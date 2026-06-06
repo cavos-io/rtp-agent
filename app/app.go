@@ -978,7 +978,11 @@ func workflowAgentFromConfig(cfg AppConfig, baseAgent *agent.Agent) (agent.Agent
 		if cfg.WorkflowDtmfAskConfirmation != nil {
 			askConfirmation = *cfg.WorkflowDtmfAskConfirmation
 		}
-		selected = workflows.NewGetDtmfTask(numDigits, askConfirmation)
+		task, err := workflows.NewGetDtmfTask(numDigits, askConfirmation)
+		if err != nil {
+			return nil, err
+		}
+		selected = task
 	case "warm_transfer", "warm-transfer":
 		sipCallTo := strings.TrimSpace(cfg.WorkflowWarmTransferSipCallTo)
 		if sipCallTo == "" {
@@ -1126,11 +1130,18 @@ func workflowTaskFactoryFromName(cfg AppConfig, baseAgent *agent.Agent, taskName
 		if cfg.WorkflowDtmfAskConfirmation != nil {
 			askConfirmation = *cfg.WorkflowDtmfAskConfirmation
 		}
+		if err := workflows.ValidateDtmfNumDigits(numDigits); err != nil {
+			return workflows.FactoryInfo{}, err
+		}
 		return workflows.FactoryInfo{
 			ID:          "dtmf",
 			Description: "Collect DTMF inputs from the user.",
 			TaskFactory: factory(func() agent.AgentInterface {
-				return workflows.NewGetDtmfTask(numDigits, askConfirmation)
+				task, err := workflows.NewGetDtmfTask(numDigits, askConfirmation)
+				if err != nil {
+					panic(fmt.Sprintf("validated DTMF task config rejected: %v", err))
+				}
+				return task
 			}),
 		}, nil
 	case "warm_transfer", "warm-transfer":

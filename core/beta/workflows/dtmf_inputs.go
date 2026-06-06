@@ -30,7 +30,18 @@ type GetDtmfTask struct {
 	dtmfStopCh         chan struct{}
 }
 
-func NewGetDtmfTask(numDigits int, askConfirmation bool) *GetDtmfTask {
+func ValidateDtmfNumDigits(numDigits int) error {
+	if numDigits <= 0 {
+		return fmt.Errorf("num_digits must be greater than 0")
+	}
+	return nil
+}
+
+func NewGetDtmfTask(numDigits int, askConfirmation bool) (*GetDtmfTask, error) {
+	if err := ValidateDtmfNumDigits(numDigits); err != nil {
+		return nil, err
+	}
+
 	instructions := `You are a single step in a broader system, responsible solely for gathering digits input from the user. 
 You will either receive a sequence of digits through dtmf events tagged by <dtmf_inputs>, or 
 user will directly say the digits to you. You should be able to handle both cases. `
@@ -56,7 +67,7 @@ user will directly say the digits to you. You should be able to handle both case
 		t.Agent.Tools = []llm.Tool{&recordInputsTool{task: t}}
 	}
 
-	return t
+	return t, nil
 }
 
 func (t *GetDtmfTask) OnEnter() {
