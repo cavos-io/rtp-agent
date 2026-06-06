@@ -364,7 +364,7 @@ func TestClientAgentStateStringMapsIdleToReferenceListening(t *testing.T) {
 		{state: AgentStateListening, want: "listening", ok: true},
 		{state: AgentStateThinking, want: "thinking", ok: true},
 		{state: AgentStateSpeaking, want: "speaking", ok: true},
-		{state: AgentStateInitializing, ok: false},
+		{state: AgentStateInitializing, want: "initializing", ok: true},
 		{state: AgentState("unknown"), ok: false},
 	}
 
@@ -373,6 +373,13 @@ func TestClientAgentStateStringMapsIdleToReferenceListening(t *testing.T) {
 		if ok != tt.ok || got != tt.want {
 			t.Fatalf("clientAgentStateString(%q) = %q, %v; want %q, %v", tt.state, got, ok, tt.want, tt.ok)
 		}
+	}
+}
+
+func TestClientAgentStateStringIncludesReferenceInitializing(t *testing.T) {
+	got, ok := clientAgentStateString(AgentStateInitializing)
+	if !ok || got != "initializing" {
+		t.Fatalf("clientAgentStateString(%q) = %q, %v; want initializing, true", AgentStateInitializing, got, ok)
 	}
 }
 

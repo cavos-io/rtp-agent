@@ -313,6 +313,8 @@ func (d *ClientEventsDispatcher) dispatchData(payload ClientEventPayload) {
 
 func clientAgentStateString(state AgentState) (string, bool) {
 	switch state {
+	case AgentStateInitializing:
+		return "initializing", true
 	case AgentStateIdle, AgentStateListening:
 		return "listening", true
 	case AgentStateThinking:
