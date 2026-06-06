@@ -50,8 +50,15 @@ func NewGetNameTask(opts GetNameOptions) *GetNameTask {
 	if !opts.FirstName && !opts.MiddleName && !opts.LastName {
 		opts.FirstName = true
 	}
+	instructions := NameInstructions
+	if opts.VerifySpelling {
+		instructions += "\nAfter receiving the name, always verify the spelling by asking the user to confirm or spell out the name letter by letter."
+	}
+	if strings.TrimSpace(opts.ExtraInstructions) != "" {
+		instructions += "\n" + strings.TrimSpace(opts.ExtraInstructions)
+	}
 	t := &GetNameTask{
-		AgentTask:           *agent.NewAgentTask[*GetNameResult](NameInstructions + opts.ExtraInstructions),
+		AgentTask:           *agent.NewAgentTask[*GetNameResult](instructions),
 		RequireConfirmation: opts.RequireConfirmation,
 		CollectFirstName:    opts.FirstName,
 		CollectMiddleName:   opts.MiddleName,
