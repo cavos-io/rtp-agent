@@ -31,12 +31,7 @@ func IsCloud(rawURL string) bool {
 }
 
 func IsDevMode() bool {
-	switch strings.ToLower(strings.TrimSpace(os.Getenv("LIVEKIT_DEV_MODE"))) {
-	case "1", "true", "t", "yes", "y", "on":
-		return true
-	default:
-		return false
-	}
+	return os.Getenv("LIVEKIT_DEV_MODE") == "1"
 }
 
 func IsHosted() bool {

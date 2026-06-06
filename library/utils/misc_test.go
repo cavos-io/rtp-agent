@@ -38,14 +38,19 @@ func TestIsDevModeMatchesReferenceEnv(t *testing.T) {
 		t.Fatal("IsDevMode() = false, want true")
 	}
 
+	t.Setenv("LIVEKIT_DEV_MODE", "")
+	if IsDevMode() {
+		t.Fatal("IsDevMode() = true for empty value, want false")
+	}
+
 	t.Setenv("LIVEKIT_DEV_MODE", "true")
-	if !IsDevMode() {
-		t.Fatal("IsDevMode() = false for value true, want true")
+	if IsDevMode() {
+		t.Fatal("IsDevMode() = true for value true, want false")
 	}
 
 	t.Setenv("LIVEKIT_DEV_MODE", "on")
-	if !IsDevMode() {
-		t.Fatal("IsDevMode() = false for value on, want true")
+	if IsDevMode() {
+		t.Fatal("IsDevMode() = true for value on, want false")
 	}
 }
 
