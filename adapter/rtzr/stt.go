@@ -47,9 +47,17 @@ type RtzrSTT struct {
 	activeThreshold float64
 	usePunctuation  bool
 	keywords        []string
+	httpClient      rtzrHTTPDoer
+	dialWebsocket   rtzrWebsocketDialer
 }
 
 type RtzrSTTOption func(*RtzrSTT)
+
+type rtzrHTTPDoer interface {
+	Do(*http.Request) (*http.Response, error)
+}
+
+type rtzrWebsocketDialer func(context.Context, string, http.Header) (*websocket.Conn, *http.Response, error)
 
 func WithRtzrClientSecret(secret string) RtzrSTTOption {
 	return func(s *RtzrSTT) {
@@ -147,6 +155,22 @@ func WithRtzrKeywords(keywords []string) RtzrSTTOption {
 	}
 }
 
+func withRtzrHTTPClient(client rtzrHTTPDoer) RtzrSTTOption {
+	return func(s *RtzrSTT) {
+		if client != nil {
+			s.httpClient = client
+		}
+	}
+}
+
+func withRtzrWebsocketDialer(dialer rtzrWebsocketDialer) RtzrSTTOption {
+	return func(s *RtzrSTT) {
+		if dialer != nil {
+			s.dialWebsocket = dialer
+		}
+	}
+}
+
 func NewRtzrSTT(clientID string, opts ...RtzrSTTOption) *RtzrSTT {
 	provider := &RtzrSTT{
 		clientID:        clientID,
@@ -160,6 +184,8 @@ func NewRtzrSTT(clientID string, opts ...RtzrSTTOption) *RtzrSTT {
 		epdTime:         defaultEPDTime,
 		noiseThreshold:  defaultNoiseThreshold,
 		activeThreshold: defaultActiveThreshold,
+		httpClient:      http.DefaultClient,
+		dialWebsocket:   defaultRtzrWebsocketDialer,
 	}
 	for _, opt := range opts {
 		opt(provider)
@@ -182,7 +208,7 @@ func (s *RtzrSTT) Stream(ctx context.Context, language string) (stt.RecognizeStr
 	}
 	header := make(http.Header)
 	header.Set("Authorization", "bearer "+token)
-	conn, _, err := websocket.DefaultDialer.DialContext(ctx, buildRtzrStreamURL(s, buildRtzrConfig(s)), header)
+	conn, _, err := s.dialWebsocket(ctx, buildRtzrStreamURL(s, buildRtzrConfig(s)), header)
 	if err != nil {
 		return nil, fmt.Errorf("failed to dial rtzr websocket: %w", err)
 	}
@@ -214,7 +240,7 @@ func (s *RtzrSTT) token(ctx context.Context) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := s.httpClient.Do(req)
 	if err != nil {
 		return "", err
 	}
@@ -234,6 +260,10 @@ func (s *RtzrSTT) token(ctx context.Context) (string, error) {
 	}
 	s.accessToken = result.AccessToken
 	return s.accessToken, nil
+}
+
+func defaultRtzrWebsocketDialer(ctx context.Context, endpoint string, headers http.Header) (*websocket.Conn, *http.Response, error) {
+	return websocket.DefaultDialer.DialContext(ctx, endpoint, headers)
 }
 
 func buildRtzrAuthRequest(ctx context.Context, s *RtzrSTT) (*http.Request, error) {
