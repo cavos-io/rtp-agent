@@ -97,3 +97,42 @@ func NormalizeLanguage(code string) string {
 
 	return lowered
 }
+
+// Language returns the base ISO 639-1 language code when the normalized tag
+// starts with a mappable ISO 639-3 subtag.
+func Language(code string) string {
+	parts := strings.Split(NormalizeLanguage(code), "-")
+	base := parts[0]
+	if val, ok := ISO639_3_To_1[base]; ok {
+		return val
+	}
+	return base
+}
+
+// ISO returns the ISO 639-1 language tag with the first region subtag.
+func ISO(code string) string {
+	normalized := NormalizeLanguage(code)
+	base := Language(normalized)
+	for _, part := range strings.Split(normalized, "-")[1:] {
+		if len(part) == 2 {
+			return base + "-" + part
+		}
+	}
+	return base
+}
+
+// Region returns the first two-letter region subtag, or an empty string when
+// the normalized language tag has no region.
+func Region(code string) string {
+	for _, part := range strings.Split(NormalizeLanguage(code), "-")[1:] {
+		if len(part) == 2 {
+			return part
+		}
+	}
+	return ""
+}
+
+// ToLanguageName returns the English language name for the base language code.
+func ToLanguageName(code string) string {
+	return CodeToLanguageName[Language(code)]
+}
