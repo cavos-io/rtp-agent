@@ -2,6 +2,7 @@ case_name,go_package,test_name,description
 address-confirmation-default,./core/beta/workflows,TestGetAddressTaskInjectsConfirmToolAfterUpdate,Validates address capture default confirmation behavior
 dtmf-tool-error,./core/beta/tools,TestSendDTMFToolReturnsFailureOutputForInvalidEvent,Validates beta DTMF tool invalid-event behavior
 dtmf-num-digits-validation,./core/beta/workflows,TestNewGetDtmfTaskRejectsNonPositiveNumDigits,Validates DTMF task rejects non-positive digit counts
+dtmf-exit-flushes-inputs,./core/beta/workflows,TestGetDtmfTaskFlushesPendingInputsOnExit,Validates DTMF task flushes buffered inputs on exit
 email-confirmation-default,./core/beta/workflows,TestGetEmailTaskInjectsConfirmToolAfterUpdate,Validates email capture default confirmation behavior
 phone-confirmation-default,./core/beta/workflows,TestGetPhoneNumberTaskRequiresConfirmation,Validates phone number capture default confirmation behavior
 dob-confirmation-default,./core/beta/workflows,TestGetDOBTaskRequiresConfirmation,Validates date of birth capture default confirmation behavior

@@ -81,6 +81,23 @@ func TestGetDtmfTaskCompletesFromSessionSipDTMFEvents(t *testing.T) {
 	}
 }
 
+func TestGetDtmfTaskFlushesPendingInputsOnExit(t *testing.T) {
+	task := newDtmfTaskForTest(t, 2, false)
+
+	task.onSipDTMFReceived("1")
+	task.onSipDTMFReceived("2")
+	task.OnExit()
+
+	select {
+	case result := <-task.Result:
+		if result.UserInput != "1 2" {
+			t.Fatalf("UserInput = %q, want 1 2", result.UserInput)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for DTMF task completion after exit")
+	}
+}
+
 func newDtmfTaskForTest(t *testing.T, numDigits int, askConfirmation bool) *GetDtmfTask {
 	t.Helper()
 

@@ -103,7 +103,12 @@ func (t *GetDtmfTask) OnExit() {
 		close(t.dtmfStopCh)
 		t.dtmfStopCh = nil
 	}
+	shouldGenerateReply := !t.dtmfReplyRunning && len(t.currDtmfInputs) > 0
 	t.mu.Unlock()
+
+	if shouldGenerateReply {
+		go t.generateDtmfReply()
+	}
 }
 
 func (t *GetDtmfTask) onSipDTMFReceived(digit string) {
