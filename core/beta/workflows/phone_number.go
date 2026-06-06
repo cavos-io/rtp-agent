@@ -18,8 +18,9 @@ type GetPhoneNumberResult struct {
 }
 
 type GetPhoneNumberOptions struct {
-	ExtraInstructions   string
-	RequireConfirmation bool
+	ExtraInstructions      string
+	RequireConfirmation    bool
+	RequireConfirmationSet bool
 }
 
 type GetPhoneNumberTask struct {
@@ -44,10 +45,14 @@ func NewGetPhoneNumberTask(opts GetPhoneNumberOptions) *GetPhoneNumberTask {
 	if strings.TrimSpace(opts.ExtraInstructions) != "" {
 		instructions += "\n" + strings.TrimSpace(opts.ExtraInstructions)
 	}
+	requireConfirmation := true
+	if opts.RequireConfirmationSet {
+		requireConfirmation = opts.RequireConfirmation
+	}
 	t := &GetPhoneNumberTask{
 		AgentTask:           *agent.NewAgentTask[*GetPhoneNumberResult](instructions),
 		ExtraInstructions:   opts.ExtraInstructions,
-		RequireConfirmation: opts.RequireConfirmation,
+		RequireConfirmation: requireConfirmation,
 	}
 
 	t.Agent.Tools = []llm.Tool{

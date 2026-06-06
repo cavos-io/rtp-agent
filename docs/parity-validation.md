@@ -48,6 +48,8 @@ Available cases:
   confirmation by default, matching the reference audio behavior.
 - `email-confirmation-default`: validates that email capture asks for
   confirmation by default, matching the reference audio behavior.
+- `phone-confirmation-default`: validates that phone number capture asks for
+  confirmation by default, matching the reference audio behavior.
 
 Run all cases:
 
