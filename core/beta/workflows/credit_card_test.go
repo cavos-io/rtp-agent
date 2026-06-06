@@ -294,6 +294,45 @@ func TestGetCreditCardTaskBuildsReferenceSubtasks(t *testing.T) {
 	}
 }
 
+func TestGetCreditCardTaskRestartsCollectionOnRestartError(t *testing.T) {
+	task := NewGetCreditCardTask(false)
+	attempts := 0
+
+	task.runCreditCardCollection(context.Background(), func() *TaskGroup {
+		attempts++
+		group := NewTaskGroup(false, false)
+		if attempts == 1 {
+			if err := group.Fail(&CardCollectionRestartError{Reason: "wrong card"}); err != nil {
+				t.Fatalf("group.Fail() error = %v", err)
+			}
+			return group
+		}
+		if err := group.Complete(&TaskGroupResult{TaskResults: map[string]any{
+			"cardholder_name_task": &GetNameResult{FirstName: "Ada", LastName: "Lovelace"},
+			"card_number_task":     &GetCardNumberResult{Issuer: "Visa", CardNumber: "4111111111111111"},
+			"security_code_task":   &GetSecurityCodeResult{SecurityCode: "123"},
+			"expiration_date_task": &GetExpirationDateResult{Date: "04/35"},
+		}}); err != nil {
+			t.Fatalf("group.Complete() error = %v", err)
+		}
+		return group
+	}, func(group *TaskGroup) {})
+
+	if attempts != 2 {
+		t.Fatalf("attempts = %d, want 2", attempts)
+	}
+	select {
+	case result := <-task.Result:
+		if result.CardholderName != "Ada Lovelace" || result.CardNumber != "4111111111111111" {
+			t.Fatalf("result = %#v, want second group result", result)
+		}
+	case err := <-task.Err:
+		t.Fatalf("task failed with %T %v, want completed result", err, err)
+	default:
+		t.Fatal("task did not complete after restart and second group result")
+	}
+}
+
 func TestDeclineCardCaptureToolFailsWithTypedReason(t *testing.T) {
 	task := NewGetCardNumberTask(false)
 	tool := &declineCardCaptureTool{task: task}

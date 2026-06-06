@@ -3,6 +3,7 @@ package workflows
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -187,23 +188,39 @@ func (t *GetExpirationDateTask) OnEnter() {
 }
 
 func (t *GetCreditCardTask) OnEnter() {
-	group := t.buildTaskGroup()
 	go func() {
-		if activity := t.Agent.GetActivity(); activity != nil && activity.Session != nil {
-			groupActivity := group.Agent.Start(activity.Session, group)
-			defer groupActivity.Stop()
-		} else {
-			group.OnEnter()
-		}
-		result, err := group.Wait(context.Background())
+		t.runCreditCardCollection(context.Background(), t.buildTaskGroup, t.startCreditCardTaskGroup)
+	}()
+}
+
+func (t *GetCreditCardTask) startCreditCardTaskGroup(group *TaskGroup) {
+	if activity := t.Agent.GetActivity(); activity != nil && activity.Session != nil {
+		groupActivity := group.Agent.Start(activity.Session, group)
+		defer groupActivity.Stop()
+	} else {
+		group.OnEnter()
+	}
+}
+
+func (t *GetCreditCardTask) runCreditCardCollection(ctx context.Context, buildGroup func() *TaskGroup, startGroup func(*TaskGroup)) {
+	for !t.Done() {
+		group := buildGroup()
+		startGroup(group)
+
+		result, err := group.Wait(ctx)
 		if err != nil {
+			var restart *CardCollectionRestartError
+			if errors.As(err, &restart) {
+				continue
+			}
 			_ = t.Fail(err)
 			return
 		}
 		if err := t.completeCreditCardFromTaskResults(result.TaskResults); err != nil {
 			_ = t.Fail(err)
 		}
-	}()
+		return
+	}
 }
 
 func (t *GetCreditCardTask) buildTaskGroup() *TaskGroup {
