@@ -12,3 +12,4 @@ credit-card-confirmation-default,go_test,./core/beta/workflows,TestGetCreditCard
 warm-transfer-sip-config-validation,go_test,./core/beta/workflows,TestNewWarmTransferTaskRejectsMissingSIPConfig,,Validates warm transfer rejects missing SIP target or trunk config
 warm-transfer-sip-request-options,go_test,./core/beta/workflows,TestWarmTransferOnEnterDialsHumanAgentSIPParticipant,,Validates warm transfer sends SIP request options
 warm-transfer-app-config-options,go_test,./app,TestDefaultConfigFromEnvSelectsWarmTransferWorkflowAgent,,Validates app wires warm transfer SIP config options
+ivr-dtmf-tool-default,go_test,./app,TestConfigureRoomToolsAddsSendDTMFToolForIVRDetection,,Validates IVR detection exposes the DTMF sender tool by default

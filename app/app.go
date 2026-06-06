@@ -4125,10 +4125,13 @@ func configureMCPTools(ctx context.Context, cfg AppConfig, a *agent.Agent) ([]ll
 }
 
 func configureRoomTools(cfg AppConfig, a *agent.Agent, publisher betatools.DtmfPublisher) error {
-	if len(cfg.AppTools) == 0 {
+	if len(cfg.AppTools) == 0 && !cfg.IVRDetection {
 		return nil
 	}
 	tools := make([]llm.Tool, 0, len(cfg.AppTools))
+	if cfg.IVRDetection {
+		tools = append(tools, betatools.NewSendDTMFTool(publisher))
+	}
 	for _, tool := range cfg.AppTools {
 		switch normalizeProvider(tool) {
 		case "send_dtmf", "send_dtmf_events", "senddtmf":
