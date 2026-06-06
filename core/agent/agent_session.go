@@ -1255,7 +1255,7 @@ func (s *AgentSession) closeOnUnrecoverableError(err error) {
 		shouldClose = !realtimeErr.Recoverable
 	}
 	if shouldClose {
-		s.CloseSoon(CloseReasonError)
+		s.closeSoon(CloseReasonError, err)
 	}
 }
 
@@ -1371,6 +1371,10 @@ func (s *AgentSession) CloseEvents() <-chan CloseEvent {
 }
 
 func (s *AgentSession) CloseSoon(reason CloseReason) {
+	s.closeSoon(reason, nil)
+}
+
+func (s *AgentSession) closeSoon(reason CloseReason, err error) {
 	s.mu.Lock()
 	started := s.started
 	activity := s.activity
@@ -1380,7 +1384,7 @@ func (s *AgentSession) CloseSoon(reason CloseReason) {
 		return
 	}
 
-	ev := CloseEvent{Reason: reason, CreatedAt: time.Now()}
+	ev := CloseEvent{Reason: reason, Error: err, CreatedAt: time.Now()}
 	s.recordEvent(&ev)
 	for _, ch := range s.closeSubscribers() {
 		select {
