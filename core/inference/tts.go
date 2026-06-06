@@ -42,6 +42,7 @@ func NewTTS(model string, apiKey, apiSecret string, opts ...TTSOption) *TTS {
 	if model == "" {
 		model = "cartesia/sonic-3"
 	}
+	apiKey, apiSecret = resolveInferenceCredentials(apiKey, apiSecret)
 	t := &TTS{
 		model:     model,
 		apiKey:    apiKey,

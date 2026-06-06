@@ -29,6 +29,7 @@ func NewSTT(model string, apiKey, apiSecret string) *STT {
 	if model == "" {
 		model = "deepgram/nova-3"
 	}
+	apiKey, apiSecret = resolveInferenceCredentials(apiKey, apiSecret)
 	return &STT{
 		model:     model,
 		apiKey:    apiKey,

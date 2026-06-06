@@ -8,6 +8,22 @@ import (
 	"github.com/cavos-io/rtp-agent/core/stt"
 )
 
+func TestNewSTTUsesReferenceCredentialEnvFallback(t *testing.T) {
+	t.Setenv("LIVEKIT_API_KEY", "base-key")
+	t.Setenv("LIVEKIT_API_SECRET", "base-secret")
+	t.Setenv("LIVEKIT_INFERENCE_API_KEY", "inference-key")
+	t.Setenv("LIVEKIT_INFERENCE_API_SECRET", "inference-secret")
+
+	provider := NewSTT("deepgram/nova-3", "", "")
+
+	if provider.apiKey != "inference-key" {
+		t.Fatalf("apiKey = %q, want inference-key", provider.apiKey)
+	}
+	if provider.apiSecret != "inference-secret" {
+		t.Fatalf("apiSecret = %q, want inference-secret", provider.apiSecret)
+	}
+}
+
 func TestInferenceSTTFinalTranscriptEmitsStructuredRecognitionUsage(t *testing.T) {
 	stream := &inferenceSTTStream{
 		eventCh:       make(chan *stt.SpeechEvent, 4),
