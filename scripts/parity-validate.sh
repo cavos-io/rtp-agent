@@ -16,12 +16,23 @@ Options:
 Cases:
   Cases are listed in scripts/parity-fixtures/test-cases.tsv.
   The TSV is simple tab-delimited text, not quoted CSV.
+  Columns:
+    case_name, type, source_ref, target_ref, go_package, go_test,
+    python_runner, go_runner, input_json, contract, behavior, notes
+
+Case types:
+  go-test        Runs one Go test as target-side regression evidence.
+  symbol-report  Runs a unique Layer 1 symbol-report golden fixture.
+  cross-runtime  Reserved for shared Python/Go JSON trace validation. This
+                 dispatch is intentionally a placeholder until real runners
+                 exist; it must not be treated as proof.
 EOF
 }
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 FIXTURE_ROOT="$REPO_ROOT/scripts/parity-fixtures"
 TEST_CASES_FILE="$REPO_ROOT/scripts/parity-fixtures/test-cases.tsv"
+EXPECTED_MANIFEST_HEADER=$'case_name\ttype\tsource_ref\ttarget_ref\tgo_package\tgo_test\tpython_runner\tgo_runner\tinput_json\tcontract\tbehavior\tnotes'
 KEEP_TEMP=0
 LIST_ONLY=0
 declare -a REQUESTED_CASES=()
@@ -57,6 +68,7 @@ if (( ${#REQUESTED_CASES[@]} == 0 )); then
 fi
 
 resolve_cases() {
+  validate_manifest_schema
   local requested selected=()
   for requested in "${REQUESTED_CASES[@]}"; do
     case "$requested" in
@@ -85,6 +97,7 @@ resolve_cases() {
 }
 
 list_cases() {
+  validate_manifest_schema
   test_case_names
 }
 
@@ -135,6 +148,30 @@ test_case_row() {
   awk -F '\t' -v name="$case_name" 'NR > 1 && $1 == name { print; exit }' "$TEST_CASES_FILE"
 }
 
+validate_manifest_schema() {
+  local header
+  if [[ ! -f "$TEST_CASES_FILE" ]]; then
+    echo "Missing manifest: $TEST_CASES_FILE" >&2
+    return 2
+  fi
+  IFS= read -r header < "$TEST_CASES_FILE"
+  if [[ "$header" != "$EXPECTED_MANIFEST_HEADER" ]]; then
+    echo "Invalid manifest header in $TEST_CASES_FILE" >&2
+    echo "Expected: $EXPECTED_MANIFEST_HEADER" >&2
+    echo "Actual:   $header" >&2
+    return 2
+  fi
+  if ! awk -F '\t' 'NR > 1 && NF != 12 { printf "line %d has %d columns, want 12\n", NR, NF; exit 1 }' "$TEST_CASES_FILE" >&2; then
+    echo "Invalid manifest row in $TEST_CASES_FILE" >&2
+    return 2
+  fi
+}
+
+case_field() {
+  local case_name="$1" field_number="$2"
+  awk -F '\t' -v name="$case_name" -v field="$field_number" 'NR > 1 && $1 == name { print $field; exit }' "$TEST_CASES_FILE"
+}
+
 module_path() {
   awk '$1 == "module" { print $2; exit }' "$REPO_ROOT/go.mod"
 }
@@ -153,13 +190,19 @@ go_package_import_path() {
 
 run_go_test_manifest_case() {
   local case_name="$1" tmpdir="$2"
-  local row case_type source_ref target_ref go_package test_name contract behavior notes expected_package actual_norm
+  local row case_type source_ref target_ref go_package test_name contract behavior expected_package actual_norm
   row="$(test_case_row "$case_name")"
   if [[ -z "$row" ]]; then
     echo "[$case_name] missing manifest row in $TEST_CASES_FILE" >&2
     return 2
   fi
-  IFS=$'\t' read -r _ case_type source_ref target_ref go_package test_name contract behavior notes <<< "$row"
+  case_type="$(case_field "$case_name" 2)"
+  source_ref="$(case_field "$case_name" 3)"
+  target_ref="$(case_field "$case_name" 4)"
+  go_package="$(case_field "$case_name" 5)"
+  test_name="$(case_field "$case_name" 6)"
+  contract="$(case_field "$case_name" 10)"
+  behavior="$(case_field "$case_name" 11)"
   if [[ "$case_type" != "go-test" ]]; then
     echo "[$case_name] manifest row type = $case_type, want go-test" >&2
     return 2
@@ -180,6 +223,24 @@ run_go_test_manifest_case() {
   normalize_case "$case_name" "$tmpdir/actual.raw" "$actual_norm" "$tmpdir"
   expected_package="$(go_package_import_path "$go_package")"
   assert_go_test_pass_output "$case_name" "$actual_norm" "$test_name" "$expected_package" "$tmpdir/actual.raw"
+}
+
+run_cross_runtime_manifest_case() {
+  local case_name="$1"
+  local python_runner go_runner input_json contract behavior
+  python_runner="$(case_field "$case_name" 7)"
+  go_runner="$(case_field "$case_name" 8)"
+  input_json="$(case_field "$case_name" 9)"
+  contract="$(case_field "$case_name" 10)"
+  behavior="$(case_field "$case_name" 11)"
+
+  if [[ -z "$python_runner" || -z "$go_runner" || -z "$input_json" || -z "$contract" || -z "$behavior" ]]; then
+    echo "[$case_name] cross-runtime rows must set python_runner, go_runner, input_json, contract, and behavior" >&2
+    return 2
+  fi
+
+  echo "[$case_name] cross-runtime validation is not implemented yet; runners are schema-only placeholders and do not prove behavior." >&2
+  return 2
 }
 
 assert_go_test_pass_output() {
@@ -250,13 +311,14 @@ run_symbol_report_case() {
 
 run_case() {
   local case_name="$1"
-  local row case_type source_ref target_ref go_package test_name contract behavior notes case_dir tmpdir expected actual_norm expected_norm
+  local row case_type target_ref case_dir tmpdir expected actual_norm expected_norm
   row="$(test_case_row "$case_name")"
   if [[ -z "$row" ]]; then
     echo "[$case_name] missing manifest row in $TEST_CASES_FILE" >&2
     return 2
   fi
-  IFS=$'\t' read -r _ case_type source_ref target_ref go_package test_name contract behavior notes <<< "$row"
+  case_type="$(case_field "$case_name" 2)"
+  target_ref="$(case_field "$case_name" 4)"
   case_dir="$FIXTURE_ROOT/$target_ref"
   tmpdir="$(mktemp -d "${TMPDIR:-/tmp}/parity-validate.${case_name}.XXXXXX")"
   expected="$case_dir/expected.txt"
@@ -291,6 +353,12 @@ run_case() {
         echo "[$case_name] fixture output differs from golden." >&2
         echo "Temp dir: $tmpdir" >&2
         cat "$tmpdir/diff.txt" >&2
+        return 1
+      fi
+      ;;
+    cross-runtime)
+      if ! run_cross_runtime_manifest_case "$case_name"; then
+        echo "Temp dir: $tmpdir" >&2
         return 1
       fi
       ;;

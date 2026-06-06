@@ -133,25 +133,28 @@ Use the parity layers as follows:
      should usually mean adding one row to the shared CSV/TSV manifest rather
      than creating dedicated per-case files.
    * Manifest rows should explain the parity intent, not only the command to run.
-     Include fields such as case name, case type, source reference, target
-     reference, Go package, Go test, Python runner, Go runner, input payload,
-     contract label, behavior summary, and notes when supported.
+     The current TSV schema is:
+     `case_name`, `type`, `source_ref`, `target_ref`, `go_package`, `go_test`,
+     `python_runner`, `go_runner`, `input_json`, `contract`, `behavior`, `notes`.
    * Simple `go-test` manifest cases are useful as cheap target-side regression
      checks. They should verify that the selected test ran, passed, and completed
      in the expected package after normalization.
    * Go-only cases do not prove Python reference behavior and Go behavior are
      identical unless the Go test itself clearly encodes the reference behavior.
    * For important behavior, prefer `cross-runtime` manifest cases when
-     practical. A cross-runtime case should define one shared scenario, run it
+     practical. A cross-runtime case should define one shared scenario in the
+     manifest with `python_runner`, `go_runner`, and `input_json`, run it
      against both the Python reference and Go target through thin runners,
      normalize their JSON traces or contract outputs, and compare the result.
    * Do not compare raw stdout for cross-runtime parity. Prefer normalized JSON
      traces or shared contract/invariant output such as `task_started`,
      `tool_called`, `state_changed`, `awaiting_confirmation`, `completed`, or
      `error`.
-   * If Python reference execution is not practical yet, keep the case as
-     `go-test` evidence and document the future cross-runtime runner path. Do
-     not fake cross-runtime proof.
+   * `cross-runtime` is currently a schema and dispatch placeholder in
+     `scripts/parity-validate.sh`. Until real Python and Go runners are wired,
+     keep cases as `go-test` evidence and document the future cross-runtime
+     runner path in the manifest notes. Do not add a `cross-runtime` row that
+     cannot execute both sides, and do not fake cross-runtime proof.
    * Use dedicated fixture directories or per-case golden files only when the
      case has genuinely unique file inputs, traces, symbol-report output, or
      other content that cannot be represented cleanly as manifest columns.
