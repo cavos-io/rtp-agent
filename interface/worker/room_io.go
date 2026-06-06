@@ -633,6 +633,9 @@ func (rio *RoomIO) disableAudioIOForSimulator() {
 	if preConnectAudio != nil {
 		preConnectAudio.Close()
 	}
+	if rio.AgentSession != nil {
+		rio.AgentSession.OnAudioEnabledChanged(false)
+	}
 }
 
 func (rio *RoomIO) SetParticipant(participantIdentity string) {

@@ -259,6 +259,26 @@ func (s *AgentSession) OnAudioFrame(ctx context.Context, frame *model.AudioFrame
 	}
 }
 
+func (s *AgentSession) OnAudioEnabledChanged(enabled bool) {
+	if enabled {
+		return
+	}
+
+	s.mu.Lock()
+	userState := s.userState
+	activity := s.activity
+	s.mu.Unlock()
+
+	if userState != UserStateSpeaking {
+		return
+	}
+	if activity != nil {
+		activity.OnEndOfSpeech(nil)
+		return
+	}
+	s.UpdateUserState(UserStateListening)
+}
+
 func (s *AgentSession) OnVideoFrame(ctx context.Context, frame *images.VideoFrame) {
 	if frame == nil {
 		return
