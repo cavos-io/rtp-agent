@@ -122,7 +122,7 @@ Use the parity layers as follows:
 3. **Layer 3: Fixture/golden behavior validation**
 
    * Use `scripts/parity-validate.sh` and checked-in cases under
-     `parity-fixtures/` when available.
+     `scripts/parity-fixtures/` when available.
    * Every important parity slice should add or update at least one Layer 3
      fixture.
    * Do not create one fixture per private helper unless it proves meaningful

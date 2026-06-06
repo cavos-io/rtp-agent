@@ -34,8 +34,8 @@ human review.
 ## Layer 3: Fixture And Golden Behavior Validation
 
 `scripts/parity-validate.sh` runs named deterministic fixture cases under
-`parity-fixtures/` and compares normalized actual output with checked-in golden
-output.
+`scripts/parity-fixtures/` and compares normalized actual output with checked-in
+golden output.
 
 Available cases:
 

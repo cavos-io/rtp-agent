@@ -22,7 +22,7 @@ EOF
 }
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-FIXTURE_ROOT="$REPO_ROOT/parity-fixtures/cases"
+FIXTURE_ROOT="$REPO_ROOT/scripts/parity-fixtures/cases"
 KEEP_TEMP=0
 declare -a REQUESTED_CASES=()
 declare -a ALL_CASES=("pull-basic" "dtmf-tool-error")
