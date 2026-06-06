@@ -32,6 +32,14 @@ const Answer, BackupAnswer = 42, 7
 var Global, FallbackGlobal = Widget{}, Widget{}
 GO
 
+cat > "$TARGET_DIR/core/llm/types_test.go" <<'GO'
+package llm
+
+import "testing"
+
+func TestWidgetBehavior(t *testing.T) {}
+GO
+
 cat > "$TARGET_DIR/core/llmfoo/misleading.go" <<'GO'
 package llmfoo
 
@@ -66,7 +74,9 @@ awk -F, 'NF && NF != 12 { printf "%s:%d has %d columns\n", FILENAME, NR, NF; exi
   "$SOURCE_REPORT" "$TARGET_REPORT"
 
 grep -q '"Widget","class"' "$SOURCE_REPORT"
+grep -q '"Widget","class","1","Widget","core/llm/types.go","3","tested"' "$SOURCE_REPORT"
 grep -q '"Widget","type"' "$TARGET_REPORT"
+grep -q '"Widget","type","3","Widget","pkg/ref.py","1","tested"' "$TARGET_REPORT"
 grep -q '"Answer","const"' "$TARGET_REPORT"
 grep -q '"BackupAnswer","const"' "$TARGET_REPORT"
 grep -q '"Global","var"' "$TARGET_REPORT"

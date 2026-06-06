@@ -64,6 +64,7 @@ Target report CSV columns:
   target_category,notes
 
 match_confidence values:
+  tested      Candidate target symbol has nearby target test evidence.
   name        Exact normalized symbol-name match. If mapping exists, mapped
               target paths are preferred.
   module_path Substring symbol match inside mapped target paths only.
@@ -484,11 +485,78 @@ target_category() {
   esac
 }
 
+rel_dirname() {
+  local path="$1"
+  if [[ "$path" == */* ]]; then
+    printf '%s' "${path%/*}"
+  else
+    printf '.'
+  fi
+}
+
+extract_go_test_names() {
+  local root="$1"
+  find "$root" -type f -name '*_test.go' -print0 | sort -z | while IFS= read -r -d '' file; do
+    local rel="${file#$root/}"
+    should_skip_dir_path "$rel" && continue
+    awk -v rel="$rel" '
+      function ltrim(s) { sub(/^[ \t]+/, "", s); return s }
+      {
+        line=ltrim($0)
+        if (line ~ /^func[ \t]+Test[A-Za-z0-9_]*[ \t]*\(/) {
+          sub(/^func[ \t]+/, "", line)
+          sub(/\(.*/, "", line)
+          print rel "|" line
+        }
+      }
+    ' "$file"
+  done
+}
+
+extract_python_test_names() {
+  local root="$1"
+  find "$root" -type f \( -name 'test_*.py' -o -name '*_test.py' \) -print0 | sort -z | while IFS= read -r -d '' file; do
+    local rel="${file#$root/}"
+    should_skip_dir_path "$rel" && continue
+    awk -v rel="$rel" '
+      function ltrim(s) { sub(/^[ \t]+/, "", s); return s }
+      {
+        line=ltrim($0)
+        if (line ~ /^(async[ \t]+)?def[ \t]+test_[A-Za-z0-9_]+[ \t]*\(/) {
+          sub(/^async[ \t]+def[ \t]+/, "", line)
+          sub(/^def[ \t]+/, "", line)
+          sub(/\(.*/, "", line)
+          print rel "|" line
+        }
+      }
+    ' "$file"
+  done
+}
+
+extract_test_names() {
+  local lang="$1" dir="$2"
+  case "$lang" in
+    go) extract_go_test_names "$dir" ;;
+    python) extract_python_test_names "$dir" ;;
+    *) return 0 ;;
+  esac
+}
+
+candidate_confidence() {
+  local base_confidence="$1" candidate_idx="$2"
+  if [[ "$base_confidence" != "-" && -n "$candidate_idx" && "${target_tested[$candidate_idx]:-0}" == "1" ]]; then
+    printf 'tested'
+    return 0
+  fi
+  printf '%s' "$base_confidence"
+}
+
 load_map_file
 
 source_tsv="$(mktemp)"
 target_tsv="$(mktemp)"
-trap 'rm -f "$source_tsv" "$target_tsv"' EXIT
+target_tests_tsv="$(mktemp)"
+trap 'rm -f "$source_tsv" "$target_tsv" "$target_tests_tsv"' EXIT
 
 echo "Extracting $SOURCE_LANG symbols from $SOURCE_DIR ..." >&2
 extract_symbols "$SOURCE_LANG" "$SOURCE_DIR" > "$source_tsv"
@@ -499,6 +567,8 @@ echo "Extracting $TARGET_LANG symbols from $TARGET_DIR ..." >&2
 extract_symbols "$TARGET_LANG" "$TARGET_DIR" > "$target_tsv"
 target_total=$(wc -l < "$target_tsv" | tr -d ' ')
 echo "  Found $target_total target symbols" >&2
+
+extract_test_names "$TARGET_LANG" "$TARGET_DIR" > "$target_tests_tsv"
 
 # Load source symbols into arrays.
 declare -a source_file=() source_module=() source_owner=() source_symbol=() source_symbol_camel_lower=() source_type=() source_line=()
@@ -539,6 +609,32 @@ while IFS='|' read -r file module owner symbol typ line; do
   ((idx+=1))
 done < "$target_tsv"
 target_count=$idx
+
+declare -a target_test_file=() target_test_name=() target_test_name_lower=()
+idx=0
+while IFS='|' read -r file name; do
+  [[ -z "${file:-}" || -z "${name:-}" ]] && continue
+  target_test_file[$idx]="$file"
+  target_test_name[$idx]="$name"
+  target_test_name_lower[$idx]="$(lower "$name")"
+  ((idx+=1))
+done < "$target_tests_tsv"
+target_test_count=$idx
+
+declare -a target_tested=()
+for ((t=0; t<target_count; t++)); do
+  target_tested[$t]=0
+  t_dir="$(rel_dirname "${target_file[$t]}")"
+  t_symbol_l="${target_symbol_lower[$t]}"
+  [[ -z "$t_symbol_l" ]] && continue
+  for ((test_idx=0; test_idx<target_test_count; test_idx++)); do
+    [[ "$(rel_dirname "${target_test_file[$test_idx]}")" == "$t_dir" ]] || continue
+    if [[ "${target_test_name_lower[$test_idx]}" == *"$t_symbol_l"* ]]; then
+      target_tested[$t]=1
+      break
+    fi
+  done
+done
 
 if [[ "$REPORT" == "source" ]]; then
 {
@@ -604,6 +700,7 @@ if [[ "$REPORT" == "source" ]]; then
 
     t_symbol=""; t_file=""; t_line=""
     if [[ -n "$best_idx" ]]; then
+      confidence="$(candidate_confidence "$confidence" "$best_idx")"
       t_symbol="${target_symbol[$best_idx]}"
       t_file="${target_file[$best_idx]}"
       t_line="${target_line[$best_idx]}"
@@ -698,6 +795,7 @@ else
 
     s_symbol=""; s_file=""; s_line=""
     if [[ -n "$best_idx" ]]; then
+      confidence="$(candidate_confidence "$confidence" "$t")"
       s_symbol="${source_symbol[$best_idx]}"
       s_file="${source_file[$best_idx]}"
       s_line="${source_line[$best_idx]}"

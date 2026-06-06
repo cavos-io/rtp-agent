@@ -95,9 +95,11 @@ Use the parity report as a directional aid when deciding whether a port is
 moving the Go implementation closer to the LiveKit reference. The report is a
 symbol/candidate matching tool, not proof of behavioral parity: it may contain
 false positives and false negatives, and `parity_status`/`notes` are for human
-review. Do not treat this as a mandatory command for every task; run it when it
-helps scope gaps, validate package placement, or inspect nearby reference-to-Go
-coverage.
+review. `match_confidence=tested` means the matched target symbol has nearby
+automated test-name evidence, which is stronger than a bare name match but still
+needs human review or behavior validation for full equivalence. Do not treat
+this as a mandatory command for every task; run it when it helps scope gaps,
+validate package placement, or inspect nearby reference-to-Go coverage.
 
 ## Behavior Parity Validation
 
