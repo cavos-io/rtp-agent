@@ -137,15 +137,22 @@ Use the parity layers as follows:
     expected output.
   * A fixture should fail with a clear diff when target behavior diverges from
     expected reference behavior.
-  * Reuse shared expectation templates when multiple fixtures have the same
-    output shape, such as normalized `go test -v` pass output.
-  * Prefer small per-case metadata files over duplicated golden files when the
-    only differences are package name, test name, command, or fixture inputs.
-  * Keep per-case `expected.txt` files only when the expected output is
-    genuinely case-specific, such as symbol report CSV output or behavior
-    traces with unique content.
-  * Adding a new parity case should usually mean adding the smallest useful
-    fixture metadata, not copying an existing golden file.
+  * Reuse validation mechanisms as aggressively as possible. Do not create
+    one fixture directory per case when a group
+    of cases can be represented as rows in a shared manifest.
+    * Simple Go-test-backed parity cases should be table-driven from a shared
+      manifest, such as `scripts/parity-fixtures/test-cases.csv`, with one row
+      per case containing the case name, Go package, test name, and short
+      description.
+    * For generic Go test pass cases, prefer assertion-based validation over
+      golden files: verify that the selected test ran, passed, and completed in
+      the expected package after normalization.
+    * Use dedicated fixture directories and per-case `expected.txt` files only
+      for cases with real unique inputs, outputs, traces, or symbol-report golden
+      content.
+    * Adding a simple parity case should usually mean adding one manifest row,
+      not copying a directory or creating another metadata file.
+
 
 4. **Layer 4: Quality gates**
 
