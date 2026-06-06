@@ -40,6 +40,27 @@ func TestInferenceSTTCapabilitiesUseReferenceDefaultDiarization(t *testing.T) {
 	}
 }
 
+func TestInferenceSTTSessionCreateParamsMatchReferenceShape(t *testing.T) {
+	modelName, params := sttSessionCreateParams("auto:en", "")
+
+	if modelName != "auto" {
+		t.Fatalf("modelName = %q, want auto", modelName)
+	}
+	if _, ok := params["model"]; ok {
+		t.Fatalf("session.create model = %v, want omitted for auto", params["model"])
+	}
+	settings, ok := params["settings"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("settings = %#v, want map", params["settings"])
+	}
+	if settings["language"] != "en" {
+		t.Fatalf("settings.language = %v, want en", settings["language"])
+	}
+	if extra, ok := settings["extra"].(map[string]interface{}); !ok || len(extra) != 0 {
+		t.Fatalf("settings.extra = %#v, want empty map", settings["extra"])
+	}
+}
+
 func TestInferenceSTTFinalTranscriptEmitsStructuredRecognitionUsage(t *testing.T) {
 	stream := &inferenceSTTStream{
 		eventCh:       make(chan *stt.SpeechEvent, 4),

@@ -61,13 +61,7 @@ func (s *STT) Stream(ctx context.Context, language string) (stt.RecognizeStream,
 		return nil, err
 	}
 
-	modelName := s.model
-	if idx := strings.LastIndex(s.model, ":"); idx != -1 {
-		if language == "" {
-			language = s.model[idx+1:]
-		}
-		modelName = s.model[:idx]
-	}
+	modelName, createParams := sttSessionCreateParams(s.model, language)
 
 	wsURL, err := url.Parse(s.baseURL + "/stt")
 	if err != nil {
@@ -84,21 +78,6 @@ func (s *STT) Stream(ctx context.Context, language string) (stt.RecognizeStream,
 	conn, _, err := websocket.DefaultDialer.Dial(wsURL.String(), header)
 	if err != nil {
 		return nil, fmt.Errorf("failed to connect to LiveKit Inference STT: %w", err)
-	}
-
-	// Send session.create
-	settings := map[string]interface{}{
-		"sample_rate": "16000",
-		"encoding":    "pcm_s16le",
-	}
-	if language != "" {
-		settings["language"] = language
-	}
-
-	createParams := map[string]interface{}{
-		"type":     "session.create",
-		"settings": settings,
-		"model":    modelName,
 	}
 
 	if err := conn.WriteJSON(createParams); err != nil {
@@ -119,6 +98,33 @@ func (s *STT) Stream(ctx context.Context, language string) (stt.RecognizeStream,
 	go stream.run()
 
 	return stream, nil
+}
+
+func sttSessionCreateParams(model string, language string) (string, map[string]interface{}) {
+	modelName := model
+	if idx := strings.LastIndex(model, ":"); idx != -1 {
+		if language == "" {
+			language = model[idx+1:]
+		}
+		modelName = model[:idx]
+	}
+	settings := map[string]interface{}{
+		"sample_rate": "16000",
+		"encoding":    "pcm_s16le",
+		"extra":       map[string]interface{}{},
+	}
+	if language != "" {
+		settings["language"] = language
+	}
+
+	createParams := map[string]interface{}{
+		"type":     "session.create",
+		"settings": settings,
+	}
+	if modelName != "auto" {
+		createParams["model"] = modelName
+	}
+	return modelName, createParams
 }
 
 type inferenceSTTStream struct {
