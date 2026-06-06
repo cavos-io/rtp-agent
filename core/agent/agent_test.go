@@ -118,6 +118,17 @@ func TestAgentTaskWaitReturnsCompletedResult(t *testing.T) {
 	}
 }
 
+func TestNewAgentTaskUsesReferenceDefaultID(t *testing.T) {
+	task := NewAgentTask[string]("collect name")
+
+	if task.ID != "agent_task" {
+		t.Fatalf("NewAgentTask().ID = %q, want agent_task", task.ID)
+	}
+	if got := task.Label(); got != "agent_task" {
+		t.Fatalf("Label() = %q, want agent_task", got)
+	}
+}
+
 func TestAgentTaskWaitReturnsFailure(t *testing.T) {
 	task := NewAgentTask[string]("collect name")
 	wantErr := errors.New("failed")
@@ -642,6 +653,21 @@ func TestAgentTaskCancelFailsWithToolError(t *testing.T) {
 	}
 	if toolErr.Message != "AgentTask task_1 is cancelled" {
 		t.Fatalf("ToolError message = %q, want cancellation message", toolErr.Message)
+	}
+}
+
+func TestAgentTaskCancelUsesDefaultID(t *testing.T) {
+	task := NewAgentTask[string]("collect data")
+
+	task.Cancel()
+
+	_, err := task.WaitAny(context.Background())
+	var toolErr llm.ToolError
+	if !errors.As(err, &toolErr) {
+		t.Fatalf("WaitAny error = %T %v, want llm.ToolError", err, err)
+	}
+	if toolErr.Message != "AgentTask agent_task is cancelled" {
+		t.Fatalf("ToolError message = %q, want default cancellation message", toolErr.Message)
 	}
 }
 
