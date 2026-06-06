@@ -4,6 +4,7 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/cavos-io/rtp-agent/core/agent"
 	"github.com/cavos-io/rtp-agent/core/llm"
@@ -15,7 +16,7 @@ func TestNewWarmTransferTaskBuildsInstructionsAndTools(t *testing.T) {
 	chatCtx.Insert(&llm.ChatMessage{Role: llm.ChatRoleUser, Content: []llm.ChatContent{{Text: "I need billing help"}}})
 	chatCtx.Insert(&llm.ChatMessage{Role: llm.ChatRoleAssistant, Content: []llm.ChatContent{{Text: "I can transfer you"}}})
 
-	task := NewWarmTransferTask("+15550100", "trunk_123", chatCtx, "\nUse a concise handoff.")
+	task := newWarmTransferTaskForTest(t, "+15550100", "trunk_123", chatCtx, "\nUse a concise handoff.")
 
 	if task.TargetPhoneNumber != "+15550100" || task.SipTrunkID != "trunk_123" {
 		t.Fatalf("task SIP fields = %#v/%#v, want target and trunk", task.TargetPhoneNumber, task.SipTrunkID)
@@ -34,8 +35,19 @@ func TestNewWarmTransferTaskBuildsInstructionsAndTools(t *testing.T) {
 	}
 }
 
+func TestNewWarmTransferTaskRejectsMissingSIPConfig(t *testing.T) {
+	t.Setenv("LIVEKIT_SIP_OUTBOUND_TRUNK", "")
+
+	if _, err := NewWarmTransferTask("", "trunk_123", nil, ""); err == nil {
+		t.Fatal("NewWarmTransferTask() error = nil, want missing sip_call_to error")
+	}
+	if _, err := NewWarmTransferTask("+15550100", "", nil, ""); err == nil {
+		t.Fatal("NewWarmTransferTask() error = nil, want missing outbound trunk error")
+	}
+}
+
 func TestWarmTransferLifecycleCleansHumanAgentSession(t *testing.T) {
-	task := NewWarmTransferTask("+15550100", "trunk_123", nil, "")
+	task := newWarmTransferTaskForTest(t, "+15550100", "trunk_123", nil, "")
 	task.humanAgentSess = agent.NewAgentSession(agent.NewAgent("human"), nil, agent.AgentSessionOptions{})
 
 	task.OnEnter()
@@ -50,9 +62,11 @@ func TestWarmTransferLifecycleCleansHumanAgentSession(t *testing.T) {
 }
 
 func TestWarmTransferOnEnterDialsHumanAgentSIPParticipant(t *testing.T) {
-	task := NewWarmTransferTask("+15550100", "trunk_123", nil, "")
+	task := newWarmTransferTaskForTest(t, "+15550100", "trunk_123", nil, "")
 	task.SipNumber = "+15550999"
 	task.SipHeaders = map[string]string{"X-Trace": "trace-a"}
+	task.Dtmf = "ww1234#"
+	task.RingingTimeout = 7 * time.Second
 	jobCtx := &fakeWarmTransferJobContext{room: &livekit.Room{Name: "caller-room"}}
 	session := agent.NewAgentSession(task, nil, agent.AgentSessionOptions{})
 	session.SetJobContext(jobCtx)
@@ -85,10 +99,16 @@ func TestWarmTransferOnEnterDialsHumanAgentSIPParticipant(t *testing.T) {
 	if jobCtx.createSIPRequest.Headers["X-Trace"] != "trace-a" {
 		t.Fatalf("CreateSIPParticipant Headers = %#v, want X-Trace", jobCtx.createSIPRequest.Headers)
 	}
+	if jobCtx.createSIPRequest.Dtmf != "ww1234#" {
+		t.Fatalf("CreateSIPParticipant Dtmf = %q, want ww1234#", jobCtx.createSIPRequest.Dtmf)
+	}
+	if jobCtx.createSIPRequest.RingingTimeout == nil || jobCtx.createSIPRequest.RingingTimeout.AsDuration() != 7*time.Second {
+		t.Fatalf("CreateSIPParticipant RingingTimeout = %v, want 7s", jobCtx.createSIPRequest.RingingTimeout)
+	}
 }
 
 func TestConnectToCallerCompletesWarmTransfer(t *testing.T) {
-	task := NewWarmTransferTask("+15550100", "trunk_123", nil, "")
+	task := newWarmTransferTaskForTest(t, "+15550100", "trunk_123", nil, "")
 	task.humanAgentSess = agent.NewAgentSession(agent.NewAgent("human"), nil, agent.AgentSessionOptions{})
 	jobCtx := &fakeWarmTransferJobContext{room: &livekit.Room{Name: "caller-room"}}
 	session := agent.NewAgentSession(task, nil, agent.AgentSessionOptions{})
@@ -151,7 +171,7 @@ func (f *fakeWarmTransferJobContext) CreateSIPParticipant(_ context.Context, req
 }
 
 func TestWarmTransferToolsCompleteAndFailTask(t *testing.T) {
-	connectTask := NewWarmTransferTask("+15550100", "trunk_123", nil, "")
+	connectTask := newWarmTransferTaskForTest(t, "+15550100", "trunk_123", nil, "")
 	connectTask.humanAgentSess = agent.NewAgentSession(agent.NewAgent("human"), nil, agent.AgentSessionOptions{})
 	connectJobCtx := &fakeWarmTransferJobContext{room: &livekit.Room{Name: "caller-room"}}
 	connectSession := agent.NewAgentSession(connectTask, nil, agent.AgentSessionOptions{})
@@ -175,7 +195,7 @@ func TestWarmTransferToolsCompleteAndFailTask(t *testing.T) {
 		t.Fatalf("humanAgentSess = %#v, want cleared after connect tool result", connectTask.humanAgentSess)
 	}
 
-	declineTask := NewWarmTransferTask("+15550100", "trunk_123", nil, "")
+	declineTask := newWarmTransferTaskForTest(t, "+15550100", "trunk_123", nil, "")
 	declineTask.humanAgentSess = agent.NewAgentSession(agent.NewAgent("human"), nil, agent.AgentSessionOptions{})
 	decline := &declineTransferTool{task: declineTask}
 	if decline.ID() != "decline_transfer" || decline.Name() != "decline_transfer" || decline.Description() == "" {
@@ -197,7 +217,7 @@ func TestWarmTransferToolsCompleteAndFailTask(t *testing.T) {
 		t.Fatal("decline Execute with invalid JSON returned nil error")
 	}
 
-	voicemailTask := NewWarmTransferTask("+15550100", "trunk_123", nil, "")
+	voicemailTask := newWarmTransferTaskForTest(t, "+15550100", "trunk_123", nil, "")
 	voicemailTask.humanAgentSess = agent.NewAgentSession(agent.NewAgent("human"), nil, agent.AgentSessionOptions{})
 	voicemail := &voicemailDetectedTool{task: voicemailTask}
 	if voicemail.ID() != "voicemail_detected" || voicemail.Name() != "voicemail_detected" || voicemail.Description() == "" {
@@ -215,4 +235,14 @@ func TestWarmTransferToolsCompleteAndFailTask(t *testing.T) {
 	if voicemailTask.humanAgentSess != nil {
 		t.Fatalf("humanAgentSess = %#v, want cleared after voicemail result", voicemailTask.humanAgentSess)
 	}
+}
+
+func newWarmTransferTaskForTest(t *testing.T, targetPhone string, trunkID string, chatCtx *llm.ChatContext, extraInstructions string) *WarmTransferTask {
+	t.Helper()
+
+	task, err := NewWarmTransferTask(targetPhone, trunkID, chatCtx, extraInstructions)
+	if err != nil {
+		t.Fatalf("NewWarmTransferTask() error = %v", err)
+	}
+	return task
 }

@@ -451,6 +451,9 @@ type AppConfig struct {
 	WorkflowDtmfAskConfirmation           *bool
 	WorkflowWarmTransferSipCallTo         string
 	WorkflowWarmTransferSipTrunkID        string
+	WorkflowWarmTransferSipHeaders        map[string]string
+	WorkflowWarmTransferDTMF              string
+	WorkflowWarmTransferRingingTimeout    *float64
 	WorkflowWarmTransferExtraInstructions string
 	WorkflowTaskGroupTasks                []string
 	EvalJudges                            []string
@@ -767,6 +770,9 @@ func DefaultConfigFromEnv() AppConfig {
 		WorkflowDtmfAskConfirmation:             getenvOptionalBool("RTP_AGENT_WORKFLOW_DTMF_ASK_CONFIRMATION"),
 		WorkflowWarmTransferSipCallTo:           os.Getenv("RTP_AGENT_WORKFLOW_WARM_TRANSFER_SIP_CALL_TO"),
 		WorkflowWarmTransferSipTrunkID:          os.Getenv("RTP_AGENT_WORKFLOW_WARM_TRANSFER_SIP_TRUNK_ID"),
+		WorkflowWarmTransferSipHeaders:          splitEnvStringMap("RTP_AGENT_WORKFLOW_WARM_TRANSFER_SIP_HEADERS"),
+		WorkflowWarmTransferDTMF:                os.Getenv("RTP_AGENT_WORKFLOW_WARM_TRANSFER_DTMF"),
+		WorkflowWarmTransferRingingTimeout:      getenvOptionalFloat("RTP_AGENT_WORKFLOW_WARM_TRANSFER_RINGING_TIMEOUT_SECONDS"),
 		WorkflowWarmTransferExtraInstructions:   os.Getenv("RTP_AGENT_WORKFLOW_WARM_TRANSFER_EXTRA_INSTRUCTIONS"),
 		WorkflowTaskGroupTasks:                  splitEnvList("RTP_AGENT_WORKFLOW_TASK_GROUP_TASKS"),
 		EvalJudges:                              splitEnvList("RTP_AGENT_EVAL_JUDGES"),
@@ -978,18 +984,27 @@ func workflowAgentFromConfig(cfg AppConfig, baseAgent *agent.Agent) (agent.Agent
 		if cfg.WorkflowDtmfAskConfirmation != nil {
 			askConfirmation = *cfg.WorkflowDtmfAskConfirmation
 		}
-		selected = workflows.NewGetDtmfTask(numDigits, askConfirmation)
+		task, err := workflows.NewGetDtmfTask(numDigits, askConfirmation)
+		if err != nil {
+			return nil, err
+		}
+		selected = task
 	case "warm_transfer", "warm-transfer":
 		sipCallTo := strings.TrimSpace(cfg.WorkflowWarmTransferSipCallTo)
 		if sipCallTo == "" {
 			return nil, fmt.Errorf("RTP_AGENT_WORKFLOW_WARM_TRANSFER_SIP_CALL_TO is required for warm_transfer workflow")
 		}
-		selected = workflows.NewWarmTransferTask(
+		task, err := workflows.NewWarmTransferTask(
 			sipCallTo,
 			strings.TrimSpace(cfg.WorkflowWarmTransferSipTrunkID),
 			baseAgent.ChatCtx,
 			cfg.WorkflowWarmTransferExtraInstructions,
 		)
+		if err != nil {
+			return nil, err
+		}
+		applyWarmTransferOptions(task, cfg)
+		selected = task
 	case "task_group", "task-group":
 		selectedGroup, err := workflowTaskGroupFromConfig(cfg, baseAgent)
 		if err != nil {
@@ -1126,11 +1141,18 @@ func workflowTaskFactoryFromName(cfg AppConfig, baseAgent *agent.Agent, taskName
 		if cfg.WorkflowDtmfAskConfirmation != nil {
 			askConfirmation = *cfg.WorkflowDtmfAskConfirmation
 		}
+		if err := workflows.ValidateDtmfNumDigits(numDigits); err != nil {
+			return workflows.FactoryInfo{}, err
+		}
 		return workflows.FactoryInfo{
 			ID:          "dtmf",
 			Description: "Collect DTMF inputs from the user.",
 			TaskFactory: factory(func() agent.AgentInterface {
-				return workflows.NewGetDtmfTask(numDigits, askConfirmation)
+				task, err := workflows.NewGetDtmfTask(numDigits, askConfirmation)
+				if err != nil {
+					panic(fmt.Sprintf("validated DTMF task config rejected: %v", err))
+				}
+				return task
 			}),
 		}, nil
 	case "warm_transfer", "warm-transfer":
@@ -1138,20 +1160,47 @@ func workflowTaskFactoryFromName(cfg AppConfig, baseAgent *agent.Agent, taskName
 		if sipCallTo == "" {
 			return workflows.FactoryInfo{}, fmt.Errorf("RTP_AGENT_WORKFLOW_WARM_TRANSFER_SIP_CALL_TO is required for warm_transfer task group entry")
 		}
+		sipTrunkID := strings.TrimSpace(cfg.WorkflowWarmTransferSipTrunkID)
+		if sipTrunkID == "" {
+			sipTrunkID = strings.TrimSpace(os.Getenv("LIVEKIT_SIP_OUTBOUND_TRUNK"))
+		}
+		if _, err := workflows.NewWarmTransferTask(
+			sipCallTo,
+			sipTrunkID,
+			baseAgent.ChatCtx,
+			cfg.WorkflowWarmTransferExtraInstructions,
+		); err != nil {
+			return workflows.FactoryInfo{}, err
+		}
 		return workflows.FactoryInfo{
 			ID:          "warm_transfer",
 			Description: "Transfer the caller to a human agent by SIP.",
 			TaskFactory: factory(func() agent.AgentInterface {
-				return workflows.NewWarmTransferTask(
+				task, err := workflows.NewWarmTransferTask(
 					sipCallTo,
-					strings.TrimSpace(cfg.WorkflowWarmTransferSipTrunkID),
+					sipTrunkID,
 					baseAgent.ChatCtx,
 					cfg.WorkflowWarmTransferExtraInstructions,
 				)
+				if err != nil {
+					panic(fmt.Sprintf("validated warm transfer task config rejected: %v", err))
+				}
+				applyWarmTransferOptions(task, cfg)
+				return task
 			}),
 		}, nil
 	default:
 		return workflows.FactoryInfo{}, fmt.Errorf("unsupported RTP_AGENT_WORKFLOW_TASK_GROUP_TASKS entry %q", taskName)
+	}
+}
+
+func applyWarmTransferOptions(task *workflows.WarmTransferTask, cfg AppConfig) {
+	if len(cfg.WorkflowWarmTransferSipHeaders) > 0 {
+		task.SipHeaders = cfg.WorkflowWarmTransferSipHeaders
+	}
+	task.Dtmf = strings.TrimSpace(cfg.WorkflowWarmTransferDTMF)
+	if cfg.WorkflowWarmTransferRingingTimeout != nil {
+		task.RingingTimeout = time.Duration(*cfg.WorkflowWarmTransferRingingTimeout * float64(time.Second))
 	}
 }
 
@@ -4076,10 +4125,13 @@ func configureMCPTools(ctx context.Context, cfg AppConfig, a *agent.Agent) ([]ll
 }
 
 func configureRoomTools(cfg AppConfig, a *agent.Agent, publisher betatools.DtmfPublisher) error {
-	if len(cfg.AppTools) == 0 {
+	if len(cfg.AppTools) == 0 && !cfg.IVRDetection {
 		return nil
 	}
 	tools := make([]llm.Tool, 0, len(cfg.AppTools))
+	if cfg.IVRDetection {
+		tools = append(tools, betatools.NewSendDTMFTool(publisher))
+	}
 	for _, tool := range cfg.AppTools {
 		switch normalizeProvider(tool) {
 		case "send_dtmf", "send_dtmf_events", "senddtmf":

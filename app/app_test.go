@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -1938,6 +1939,19 @@ func TestDefaultConfigFromEnvSelectsDtmfWorkflowAgent(t *testing.T) {
 	}
 }
 
+func TestDefaultConfigFromEnvRejectsInvalidDtmfNumDigits(t *testing.T) {
+	t.Setenv("RTP_AGENT_WORKFLOW_TASK", "dtmf")
+	t.Setenv("RTP_AGENT_WORKFLOW_DTMF_NUM_DIGITS", "0")
+
+	_, err := NewApp(DefaultConfigFromEnv())
+	if err == nil {
+		t.Fatal("NewApp() error = nil, want invalid DTMF num digits error")
+	}
+	if !strings.Contains(err.Error(), "num_digits must be greater than 0") {
+		t.Fatalf("NewApp() error = %v, want invalid num_digits error", err)
+	}
+}
+
 func TestDefaultConfigFromEnvSelectsEmailWorkflowAgent(t *testing.T) {
 	t.Setenv("RTP_AGENT_WORKFLOW_TASK", "email")
 	t.Setenv("RTP_AGENT_WORKFLOW_REQUIRE_CONFIRMATION", "true")
@@ -2126,6 +2140,9 @@ func TestDefaultConfigFromEnvSelectsWarmTransferWorkflowAgent(t *testing.T) {
 	t.Setenv("RTP_AGENT_WORKFLOW_TASK", "warm_transfer")
 	t.Setenv("RTP_AGENT_WORKFLOW_WARM_TRANSFER_SIP_CALL_TO", "+15550100")
 	t.Setenv("RTP_AGENT_WORKFLOW_WARM_TRANSFER_SIP_TRUNK_ID", "trunk_123")
+	t.Setenv("RTP_AGENT_WORKFLOW_WARM_TRANSFER_SIP_HEADERS", "X-Trace=trace-a,X-Queue=billing")
+	t.Setenv("RTP_AGENT_WORKFLOW_WARM_TRANSFER_DTMF", "ww1234#")
+	t.Setenv("RTP_AGENT_WORKFLOW_WARM_TRANSFER_RINGING_TIMEOUT_SECONDS", "3.5")
 	t.Setenv("RTP_AGENT_WORKFLOW_WARM_TRANSFER_EXTRA_INSTRUCTIONS", "\nKeep the handoff concise.")
 
 	app, err := NewApp(DefaultConfigFromEnv())
@@ -2142,11 +2159,34 @@ func TestDefaultConfigFromEnvSelectsWarmTransferWorkflowAgent(t *testing.T) {
 	if task.SipTrunkID != "trunk_123" {
 		t.Fatalf("SipTrunkID = %q, want trunk_123", task.SipTrunkID)
 	}
+	if task.SipHeaders["X-Trace"] != "trace-a" || task.SipHeaders["X-Queue"] != "billing" {
+		t.Fatalf("SipHeaders = %#v, want configured SIP headers", task.SipHeaders)
+	}
+	if task.Dtmf != "ww1234#" {
+		t.Fatalf("Dtmf = %q, want ww1234#", task.Dtmf)
+	}
+	if task.RingingTimeout != 3500*time.Millisecond {
+		t.Fatalf("RingingTimeout = %v, want 3.5s", task.RingingTimeout)
+	}
 	if app.Agent != task.GetAgent() {
 		t.Fatal("App.Agent does not point at selected warm transfer agent")
 	}
 	if len(app.Agent.Tools) != 3 {
 		t.Fatalf("workflow tools = %d, want connect/decline/voicemail tools", len(app.Agent.Tools))
+	}
+}
+
+func TestDefaultConfigFromEnvRejectsWarmTransferWithoutSIPTrunk(t *testing.T) {
+	t.Setenv("LIVEKIT_SIP_OUTBOUND_TRUNK", "")
+	t.Setenv("RTP_AGENT_WORKFLOW_TASK", "warm_transfer")
+	t.Setenv("RTP_AGENT_WORKFLOW_WARM_TRANSFER_SIP_CALL_TO", "+15550100")
+
+	_, err := NewApp(DefaultConfigFromEnv())
+	if err == nil {
+		t.Fatal("NewApp() error = nil, want missing SIP trunk error")
+	}
+	if !strings.Contains(err.Error(), "LIVEKIT_SIP_OUTBOUND_TRUNK") {
+		t.Fatalf("NewApp() error = %v, want missing outbound trunk error", err)
 	}
 }
 
@@ -2380,6 +2420,22 @@ func TestConfigureRoomToolsAddsSendDTMFTool(t *testing.T) {
 	publisher := &fakeAppDtmfPublisher{}
 
 	err := configureRoomTools(AppConfig{AppTools: []string{"send_dtmf"}}, baseAgent, publisher)
+	if err != nil {
+		t.Fatalf("configureRoomTools() error = %v", err)
+	}
+	if len(baseAgent.Tools) != 1 {
+		t.Fatalf("len(Agent.Tools) = %d, want 1", len(baseAgent.Tools))
+	}
+	if got := baseAgent.Tools[0].Name(); got != "send_dtmf_events" {
+		t.Fatalf("tool[0].Name() = %q, want send_dtmf_events", got)
+	}
+}
+
+func TestConfigureRoomToolsAddsSendDTMFToolForIVRDetection(t *testing.T) {
+	baseAgent := agent.NewAgent("test")
+	publisher := &fakeAppDtmfPublisher{}
+
+	err := configureRoomTools(AppConfig{IVRDetection: true}, baseAgent, publisher)
 	if err != nil {
 		t.Fatalf("configureRoomTools() error = %v", err)
 	}
