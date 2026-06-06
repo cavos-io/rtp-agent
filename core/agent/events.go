@@ -311,17 +311,23 @@ func (d *ClientEventsDispatcher) dispatchData(payload ClientEventPayload) {
 	}
 }
 
-// DispatchAgentState emits AgentStateIdle, AgentStateThinking, AgentStateSpeaking
-func (d *ClientEventsDispatcher) DispatchAgentState(state AgentState) {
-	var stateStr string
+func clientAgentStateString(state AgentState) (string, bool) {
 	switch state {
-	case AgentStateIdle:
-		stateStr = "idle"
+	case AgentStateIdle, AgentStateListening:
+		return "listening", true
 	case AgentStateThinking:
-		stateStr = "thinking"
+		return "thinking", true
 	case AgentStateSpeaking:
-		stateStr = "speaking"
+		return "speaking", true
 	default:
+		return "", false
+	}
+}
+
+// DispatchAgentState emits reference-style client agent states.
+func (d *ClientEventsDispatcher) DispatchAgentState(state AgentState) {
+	stateStr, ok := clientAgentStateString(state)
+	if !ok {
 		return
 	}
 

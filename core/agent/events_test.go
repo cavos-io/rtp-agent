@@ -352,3 +352,25 @@ func TestClientEventsDispatcherNoopsWithoutRoom(t *testing.T) {
 	dispatcher.DispatchUserState(UserStateSpeaking)
 	dispatcher.DispatchUserState(UserState("unknown"))
 }
+
+func TestClientAgentStateStringMapsIdleToReferenceListening(t *testing.T) {
+	tests := []struct {
+		state AgentState
+		want  string
+		ok    bool
+	}{
+		{state: AgentStateIdle, want: "listening", ok: true},
+		{state: AgentStateListening, want: "listening", ok: true},
+		{state: AgentStateThinking, want: "thinking", ok: true},
+		{state: AgentStateSpeaking, want: "speaking", ok: true},
+		{state: AgentStateInitializing, ok: false},
+		{state: AgentState("unknown"), ok: false},
+	}
+
+	for _, tt := range tests {
+		got, ok := clientAgentStateString(tt.state)
+		if ok != tt.ok || got != tt.want {
+			t.Fatalf("clientAgentStateString(%q) = %q, %v; want %q, %v", tt.state, got, ok, tt.want, tt.ok)
+		}
+	}
+}
