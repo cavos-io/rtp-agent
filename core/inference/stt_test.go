@@ -24,6 +24,14 @@ func TestNewSTTUsesReferenceCredentialEnvFallback(t *testing.T) {
 	}
 }
 
+func TestInferenceSTTCapabilitiesReportReferenceWordAlignment(t *testing.T) {
+	provider := NewSTT("deepgram/nova-3", "key", "secret")
+
+	if got := provider.Capabilities().AlignedTranscript; got != "word" {
+		t.Fatalf("AlignedTranscript = %q, want word", got)
+	}
+}
+
 func TestInferenceSTTFinalTranscriptEmitsStructuredRecognitionUsage(t *testing.T) {
 	stream := &inferenceSTTStream{
 		eventCh:       make(chan *stt.SpeechEvent, 4),

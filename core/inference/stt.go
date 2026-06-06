@@ -44,10 +44,11 @@ func (s *STT) Label() string {
 
 func (s *STT) Capabilities() stt.STTCapabilities {
 	return stt.STTCapabilities{
-		Streaming:        true,
-		InterimResults:   true,
-		Diarization:      true,
-		OfflineRecognize: false,
+		Streaming:         true,
+		InterimResults:    true,
+		Diarization:       true,
+		AlignedTranscript: "word",
+		OfflineRecognize:  false,
 	}
 }
 
