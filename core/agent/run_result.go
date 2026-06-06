@@ -744,9 +744,54 @@ func formatRunEvents(events []RunEvent, selectedIndex int) string {
 		if i == selectedIndex {
 			prefix = ">>>"
 		}
-		lines = append(lines, fmt.Sprintf("%s [%d] %s", prefix, i, event.GetType()))
+		lines = append(lines, fmt.Sprintf("%s [%d] %s%s", prefix, i, event.GetType(), formatRunEventDetails(event)))
 	}
 	return strings.Join(lines, "\n")
+}
+
+func formatRunEventDetails(event RunEvent) string {
+	switch event := event.(type) {
+	case *ChatMessageEvent:
+		if event.Item == nil {
+			return ""
+		}
+		details := []string{fmt.Sprintf("role=%s", event.Item.Role)}
+		if text := event.Item.TextContent(); text != "" {
+			details = append(details, fmt.Sprintf("content=%q", text))
+		}
+		return " " + strings.Join(details, " ")
+	case *FunctionCallEvent:
+		if event.Item == nil {
+			return ""
+		}
+		details := []string{fmt.Sprintf("name=%s", event.Item.Name)}
+		if event.Item.Arguments != "" {
+			details = append(details, fmt.Sprintf("arguments=%s", event.Item.Arguments))
+		}
+		return " " + strings.Join(details, " ")
+	case *FunctionCallOutputEvent:
+		if event.Item == nil {
+			return ""
+		}
+		return fmt.Sprintf(" name=%s output=%q is_error=%t", event.Item.Name, event.Item.Output, event.Item.IsError)
+	case *AgentHandoffEvent:
+		if event == nil {
+			return ""
+		}
+		details := make([]string, 0, 2)
+		if event.OldAgent != nil {
+			details = append(details, fmt.Sprintf("old_agent=%s", event.OldAgent.Label()))
+		}
+		if event.NewAgent != nil {
+			details = append(details, fmt.Sprintf("new_agent=%s", event.NewAgent.Label()))
+		}
+		if len(details) == 0 {
+			return ""
+		}
+		return " " + strings.Join(details, " ")
+	default:
+		return ""
+	}
 }
 
 func (a *RunAssert) Judge(ctx context.Context, evaluator evals.Evaluator, llmInstance llm.LLM) (*RunAssert, error) {
