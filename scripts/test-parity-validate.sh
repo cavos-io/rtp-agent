@@ -17,6 +17,7 @@ hosted-cross	cross-runtime	refs/agents/livekit-agents/livekit/agents/utils/misc.
 cloud-cross	cross-runtime	refs/agents/livekit-agents/livekit/agents/utils/misc.py	library/utils/misc.go			python3 scripts/parity-runners/python-utils.py	go run ./scripts/parity-runners/go-utils	{"contract":"cloud-url-host-suffix","url_values":["wss://tenant.livekit.cloud","https://tenant.livekit.run/path","http://localhost:7880","://bad-url","https://livekit.cloud.evil.example"]}	cloud-url-host-suffix	Cloud URL detection follows reference hostname suffix rules.	Smoke test for URL-vector cross-runtime runner dispatch.
 camel-cross	cross-runtime	refs/agents/livekit-agents/livekit/agents/utils/misc.py	library/utils/misc.go			python3 scripts/parity-runners/python-utils.py	go run ./scripts/parity-runners/go-utils	{"contract":"camel-to-snake-case","name_values":["HTTPServerID","roomID","JobContext","already_ok","URL"]}	camel-to-snake-case	CamelCase names convert to snake_case using reference word boundaries.	Smoke test for string-result cross-runtime runner dispatch.
 exp-filter-cross	cross-runtime	refs/agents/livekit-agents/livekit/agents/utils/exp_filter.py	library/math/filter.go			python3 scripts/parity-runners/python-utils.py	go run ./scripts/parity-runners/go-utils	{"contract":"exp-filter-initial-minimum","alpha":0.5,"initial":10,"min_val":6,"exp":1,"sample":2}	exp-filter-initial-minimum	ExpFilter applies reference initial values and minimum clamping.	Smoke test for numeric-result cross-runtime runner dispatch.
+moving-average-cross	cross-runtime	refs/agents/livekit-agents/livekit/agents/utils/moving_average.py	library/math/filter.go			python3 scripts/parity-runners/python-utils.py	go run ./scripts/parity-runners/go-utils	{"contract":"moving-average-window","window_size":3,"sample_values":[1,2,3,4]}	moving-average-window	MovingAverage tracks rolling average, size, and reset behavior.	Smoke test for rolling-window cross-runtime runner dispatch.
 TSV
 
 cat > "$BAD_MANIFEST" <<'TSV'
@@ -41,6 +42,8 @@ PARITY_TEST_CASES_FILE="$VALID_MANIFEST" "$ROOT/scripts/parity-validate.sh" --li
   | grep -Fxq 'camel-cross'
 PARITY_TEST_CASES_FILE="$VALID_MANIFEST" "$ROOT/scripts/parity-validate.sh" --list \
   | grep -Fxq 'exp-filter-cross'
+PARITY_TEST_CASES_FILE="$VALID_MANIFEST" "$ROOT/scripts/parity-validate.sh" --list \
+  | grep -Fxq 'moving-average-cross'
 
 PARITY_TEST_CASES_FILE="$VALID_MANIFEST" "$ROOT/scripts/parity-validate.sh" --case dev-mode-cross > "$WORKDIR/cross.out" 2>&1
 grep -q '^\[dev-mode-cross\] ok$' "$WORKDIR/cross.out"
@@ -57,12 +60,16 @@ grep -q '^\[camel-cross\] ok$' "$WORKDIR/camel-cross.out"
 PARITY_TEST_CASES_FILE="$VALID_MANIFEST" "$ROOT/scripts/parity-validate.sh" --case exp-filter-cross > "$WORKDIR/exp-filter-cross.out" 2>&1
 grep -q '^\[exp-filter-cross\] ok$' "$WORKDIR/exp-filter-cross.out"
 
+PARITY_TEST_CASES_FILE="$VALID_MANIFEST" "$ROOT/scripts/parity-validate.sh" --case moving-average-cross > "$WORKDIR/moving-average-cross.out" 2>&1
+grep -q '^\[moving-average-cross\] ok$' "$WORKDIR/moving-average-cross.out"
+
 PARITY_TEST_CASES_FILE="$VALID_MANIFEST" "$ROOT/scripts/parity-validate.sh" > "$WORKDIR/all-cross.out" 2>&1
 grep -q '^\[dev-mode-cross\] ok$' "$WORKDIR/all-cross.out"
 grep -q '^\[hosted-cross\] ok$' "$WORKDIR/all-cross.out"
 grep -q '^\[cloud-cross\] ok$' "$WORKDIR/all-cross.out"
 grep -q '^\[camel-cross\] ok$' "$WORKDIR/all-cross.out"
 grep -q '^\[exp-filter-cross\] ok$' "$WORKDIR/all-cross.out"
+grep -q '^\[moving-average-cross\] ok$' "$WORKDIR/all-cross.out"
 
 if PARITY_TEST_CASES_FILE="$INCOMPLETE_CROSS_MANIFEST" "$ROOT/scripts/parity-validate.sh" --case missing-runner > "$WORKDIR/incomplete-cross.out" 2>&1; then
   echo "cross-runtime case with a missing runner unexpectedly passed" >&2

@@ -85,6 +85,22 @@ def load_reference_exp_filter():
     return module
 
 
+def load_reference_moving_average():
+    root = repo_root()
+    moving_average_path = root / "refs/agents/livekit-agents/livekit/agents/utils/moving_average.py"
+
+    spec = importlib.util.spec_from_file_location(
+        "livekit.agents.utils.moving_average", moving_average_path
+    )
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f"cannot load reference moving_average.py from {moving_average_path}")
+
+    module = importlib.util.module_from_spec(spec)
+    sys.modules["livekit.agents.utils.moving_average"] = module
+    spec.loader.exec_module(module)
+    return module
+
+
 def load_input(path: str) -> dict:
     with open(path, "r", encoding="utf-8") as file:
         data = json.load(file)
@@ -114,6 +130,13 @@ def optional_string_values(input_data: dict, field: str, default: list[str | Non
     ):
         raise ValueError(f"{field} must be a list of strings or null")
     return values
+
+
+def float_values(input_data: dict, field: str, default: list[float]) -> list[float]:
+    values = input_data.get(field, default)
+    if not isinstance(values, list) or not all(isinstance(value, (int, float)) for value in values):
+        raise ValueError(f"{field} must be a list of numbers")
+    return [float(value) for value in values]
 
 
 def run_dev_mode_env_exact(input_data: dict) -> dict:
@@ -251,6 +274,41 @@ def run_exp_filter_initial_minimum(input_data: dict) -> dict:
     }
 
 
+def run_moving_average_window(input_data: dict) -> dict:
+    moving_average = load_reference_moving_average()
+    window_size = int(input_data.get("window_size", 3))
+    samples = float_values(input_data, "sample_values", [1, 2, 3, 4])
+
+    average = moving_average.MovingAverage(window_size)
+    events = [
+        {
+            "name": "initial",
+            "avg": f"{average.get_avg():g}",
+            "size": average.size(),
+        }
+    ]
+    for sample in samples:
+        average.add_sample(sample)
+        events.append(
+            {
+                "name": "add_sample",
+                "sample": f"{sample:g}",
+                "avg": f"{average.get_avg():g}",
+                "size": average.size(),
+            }
+        )
+    average.reset()
+    events.append(
+        {
+            "name": "reset",
+            "avg": f"{average.get_avg():g}",
+            "size": average.size(),
+        }
+    )
+
+    return {"contract": "moving-average-window", "events": events}
+
+
 def main() -> int:
     if len(sys.argv) != 2:
         print("usage: python-utils.py INPUT_JSON", file=sys.stderr)
@@ -268,6 +326,8 @@ def main() -> int:
         output = run_camel_to_snake_case(input_data)
     elif contract == "exp-filter-initial-minimum":
         output = run_exp_filter_initial_minimum(input_data)
+    elif contract == "moving-average-window":
+        output = run_moving_average_window(input_data)
     else:
         print(f"unsupported contract: {contract}", file=sys.stderr)
         return 2
