@@ -72,7 +72,7 @@ func (t *SendDTMFTool) Execute(ctx context.Context, args string) (string, error)
 	for _, event := range a.Events {
 		code, err := beta.DtmfEventToCode(event)
 		if err != nil {
-			return "", err
+			return fmt.Sprintf("Failed to send DTMF event: %s. Error: %v", event, err), nil
 		}
 
 		err = t.publisher.PublishDTMF(int32(code), string(event))
