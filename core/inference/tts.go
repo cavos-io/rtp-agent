@@ -42,11 +42,12 @@ func NewTTS(model string, apiKey, apiSecret string, opts ...TTSOption) *TTS {
 	if model == "" {
 		model = "cartesia/sonic-3"
 	}
+	apiKey, apiSecret = resolveInferenceCredentials(apiKey, apiSecret)
 	t := &TTS{
 		model:     model,
 		apiKey:    apiKey,
 		apiSecret: apiSecret,
-		baseURL:   "wss://agent-gateway.livekit.cloud/v1",
+		baseURL:   defaultInferenceWebsocketURL(),
 	}
 	for _, opt := range opts {
 		opt(t)
@@ -118,6 +119,7 @@ func (t *TTS) connectionPool() *utils.ConnectionPool[*websocket.Conn] {
 	if t.connPool == nil {
 		t.connPool = utils.NewConnectionPool[*websocket.Conn](utils.ConnectionPoolOptions[*websocket.Conn]{
 			MaxSessionDuration: time.Minute,
+			MarkRefreshedOnGet: true,
 			Connect:            t.connectTTSWebsocket,
 			Close: func(ctx context.Context, conn *websocket.Conn) error {
 				_ = conn.Close()
@@ -129,7 +131,7 @@ func (t *TTS) connectionPool() *utils.ConnectionPool[*websocket.Conn] {
 }
 
 func (t *TTS) connectTTSWebsocket(ctx context.Context) (*websocket.Conn, error) {
-	token, err := CreateAccessToken(t.apiKey, t.apiSecret, time.Hour)
+	token, err := CreateAccessToken(t.apiKey, t.apiSecret, InferenceAccessTokenTTL)
 	if err != nil {
 		return nil, err
 	}

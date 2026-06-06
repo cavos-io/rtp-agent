@@ -215,6 +215,28 @@ func TestAgentActivityToolsCombinesSessionAndAgentTools(t *testing.T) {
 	}
 }
 
+func TestAgentActivityUpdateChatCtxPreservesMCPToolItems(t *testing.T) {
+	mcpTool := &agentTestTool{id: "lookup", name: "lookup"}
+	agent := NewAgent("test")
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	session.SetMCPServers([]llm.MCPServer{&fakeActivityMCPServer{tools: []llm.Tool{mcpTool}}})
+	activity := NewAgentActivity(agent, session)
+	chatCtx := llm.NewChatContext()
+	chatCtx.Items = []llm.ChatItem{
+		&llm.ChatMessage{ID: "user", Role: llm.ChatRoleUser, Content: []llm.ChatContent{{Text: "look this up"}}},
+		&llm.FunctionCall{ID: "lookup-call", CallID: "call_lookup", Name: "lookup", Arguments: "{}"},
+		&llm.FunctionCallOutput{ID: "lookup-output", CallID: "call_lookup", Name: "lookup", Output: "found"},
+	}
+
+	if err := activity.UpdateChatCtx(context.Background(), chatCtx); err != nil {
+		t.Fatalf("UpdateChatCtx() error = %v", err)
+	}
+
+	if got, want := agentActivityChatItemIDs(agent.ChatCtx.Items), "lk.agent_task.instructions,user,lookup-call,lookup-output"; got != want {
+		t.Fatalf("agent chat context item IDs = %q, want %q", got, want)
+	}
+}
+
 func TestAgentActivityMinConsecutiveSpeechDelayUsesAgentOverride(t *testing.T) {
 	agent := NewAgent("test")
 	session := NewAgentSession(agent, nil, AgentSessionOptions{MinConsecutiveSpeechDelay: 0.25})
@@ -2397,6 +2419,30 @@ func (r *recordingOptionsAssistant) SetPublishAudio(func(frame *model.AudioFrame
 func (r *recordingOptionsAssistant) UpdateOptions(_ context.Context, options llm.RealtimeSessionOptions) error {
 	r.options = options
 	return nil
+}
+
+type fakeActivityMCPServer struct {
+	tools []llm.Tool
+}
+
+func (f *fakeActivityMCPServer) Initialize(context.Context) error { return nil }
+
+func (f *fakeActivityMCPServer) Initialized() bool { return true }
+
+func (f *fakeActivityMCPServer) InvalidateCache() {}
+
+func (f *fakeActivityMCPServer) ListTools(context.Context) ([]llm.Tool, error) {
+	return f.tools, nil
+}
+
+func (f *fakeActivityMCPServer) Close() error { return nil }
+
+func agentActivityChatItemIDs(items []llm.ChatItem) string {
+	ids := make([]string, 0, len(items))
+	for _, item := range items {
+		ids = append(ids, item.GetID())
+	}
+	return strings.Join(ids, ",")
 }
 
 type fixedWordTokenizer struct {

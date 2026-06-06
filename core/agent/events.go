@@ -311,17 +311,25 @@ func (d *ClientEventsDispatcher) dispatchData(payload ClientEventPayload) {
 	}
 }
 
-// DispatchAgentState emits AgentStateIdle, AgentStateThinking, AgentStateSpeaking
-func (d *ClientEventsDispatcher) DispatchAgentState(state AgentState) {
-	var stateStr string
+func clientAgentStateString(state AgentState) (string, bool) {
 	switch state {
-	case AgentStateIdle:
-		stateStr = "idle"
+	case AgentStateInitializing:
+		return "initializing", true
+	case AgentStateIdle, AgentStateListening:
+		return "listening", true
 	case AgentStateThinking:
-		stateStr = "thinking"
+		return "thinking", true
 	case AgentStateSpeaking:
-		stateStr = "speaking"
+		return "speaking", true
 	default:
+		return "", false
+	}
+}
+
+// DispatchAgentState emits reference-style client agent states.
+func (d *ClientEventsDispatcher) DispatchAgentState(state AgentState) {
+	stateStr, ok := clientAgentStateString(state)
+	if !ok {
 		return
 	}
 
@@ -331,15 +339,23 @@ func (d *ClientEventsDispatcher) DispatchAgentState(state AgentState) {
 	})
 }
 
-// DispatchUserState emits UserStateListening, UserStateSpeaking
-func (d *ClientEventsDispatcher) DispatchUserState(state UserState) {
-	var stateStr string
+func clientUserStateString(state UserState) (string, bool) {
 	switch state {
 	case UserStateListening:
-		stateStr = "listening"
+		return "listening", true
 	case UserStateSpeaking:
-		stateStr = "speaking"
+		return "speaking", true
+	case UserStateAway:
+		return "away", true
 	default:
+		return "", false
+	}
+}
+
+// DispatchUserState emits reference-style client user states.
+func (d *ClientEventsDispatcher) DispatchUserState(state UserState) {
+	stateStr, ok := clientUserStateString(state)
+	if !ok {
 		return
 	}
 

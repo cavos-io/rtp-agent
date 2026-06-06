@@ -1,9 +1,9 @@
 # source-report
 source_file,source_module,source_class,source_symbol,source_type,source_line,target_candidate,target_candidate_file,target_candidate_line,match_confidence,parity_status,notes
 "pkg/ref.py","pkg","","Widget","class","1","Widget","core/llm/types.go","3","name","",""
-"pkg/ref.py","pkg","","exact_name","function","4","ExactName","core/llmfoo/misleading.go","3","name","",""
+"pkg/ref.py","pkg","","exact_name","function","4","","","","-","",""
 
-"SUMMARY","Auto-detected candidate coverage","2/2","100%",,,,,,,,
+"SUMMARY","Auto-detected candidate coverage","1/2","50%",,,,,,,,
 "SUMMARY","Verified coverage (team fills parity_status=exists)","0/2","0%",,,,,,,,
 # target-report
 target_file,target_module,target_owner,target_symbol,target_type,target_line,source_candidate,source_candidate_file,source_candidate_line,match_confidence,target_category,notes
@@ -12,7 +12,7 @@ target_file,target_module,target_owner,target_symbol,target_type,target_line,sou
 "core/llm/types.go","core","","BackupAnswer","const","5","","","","-","mapped_target",""
 "core/llm/types.go","core","","Global","var","7","","","","-","mapped_target",""
 "core/llm/types.go","core","","FallbackGlobal","var","7","","","","-","mapped_target",""
-"core/llmfoo/misleading.go","core","","ExactName","function","3","exact_name","pkg/ref.py","4","name","unmapped_target",""
+"core/llmfoo/misleading.go","core","","ExactName","function","3","","","","-","unmapped_target",""
 
-"SUMMARY","Target symbols with source candidates","2/6","33%",,,,,,,,
-"SUMMARY","Target symbols without source candidates","4/6","66%",,,,,,,,
+"SUMMARY","Target symbols with source candidates","1/6","16%",,,,,,,,
+"SUMMARY","Target symbols without source candidates","5/6","83%",,,,,,,,

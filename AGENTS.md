@@ -67,7 +67,7 @@ For each parity task:
 3. Identify whether the task is core behavior, transport glue, provider adapter,
    CLI behavior, or shared utility code.
 4. Add or update focused tests near the Go package being changed.
-5. Add or update a behavior parity fixture when the task changes a meaningful
+5. Add or update a behavior parity manifest case when the task changes a meaningful
    reference-to-Go behavior.
 6. Run the narrowest useful verification first, then broaden as risk increases.
 
@@ -95,83 +95,94 @@ Use the parity report as a directional aid when deciding whether a port is
 moving the Go implementation closer to the LiveKit reference. The report is a
 symbol/candidate matching tool, not proof of behavioral parity: it may contain
 false positives and false negatives, and `parity_status`/`notes` are for human
-review. `match_confidence=tested` means the matched target symbol has nearby
-automated test-name evidence, which is stronger than a bare name match but still
-needs human review or behavior validation for full equivalence. Do not treat
-this as a mandatory command for every task; run it when it helps scope gaps,
-validate package placement, or inspect nearby reference-to-Go coverage.
+review. Layer 1 `match_confidence` values describe candidate matching only, not
+tested behavior. Do not treat this as a mandatory command for every task; run it
+when it helps scope gaps, validate package placement, or inspect nearby
+reference-to-Go coverage.
 
 ## Behavior Parity Validation
 
 Name-based symbol matching is only Layer 1 parity discovery. Behavioral parity
-must be validated with tests, fixtures, or explicit review evidence.
+must be validated with tests, manifest cases, shared contracts, or explicit
+review evidence.
 
 Use the parity layers as follows:
 
 1. **Layer 1: Symbol candidate report**
 
-  * `scripts/parity-check.sh` finds possible source/target symbol matches.
-  * It helps identify gaps and candidate files.
-  * It does not prove that behavior is equivalent.
+   * `scripts/parity-check.sh` finds possible source/target symbol matches.
+   * It helps identify gaps and candidate files.
+   * It does not prove that behavior is equivalent.
+   * If a source path has mapped target paths, candidate matching should stay
+     inside those mapped paths. Do not treat accidental global name matches
+     outside the mapped destination as parity evidence.
+   * Layer 1 must not claim behavior is tested or verified.
 
 2. **Layer 2: Agent-assisted review placeholder**
 
-  * Future tooling may classify candidate pairs as `exists`, `partial`,
-    `missing`, `intentionally_different`, or `unknown`.
-  * Until that tooling exists, do not depend on agent review as the only proof
-    of parity.
+   * Future tooling may classify candidate pairs as `exists`, `partial`,
+     `missing`, `intentionally_different`, or `unknown`.
+   * Until that tooling exists, do not depend on agent review as the only proof
+     of parity.
 
-3. **Layer 3: Fixture/golden behavior validation**
+3. **Layer 3: Manifest-driven behavior validation**
 
-  * Use `scripts/parity-validate.sh` and checked-in cases under
-    `scripts/parity-fixtures/` when available.
-  * Every important parity slice should add or update at least one Layer 3
-    fixture.
-  * Do not create one fixture per private helper unless it proves meaningful
-    behavior.
-  * Prefer fixtures for public flows, lifecycle behavior, error handling,
-    config precedence, streaming behavior, retries, tool calls, room I/O,
-    telemetry, and other behavior that can regress.
-  * Fixtures should define input state, command/runner behavior, expected output
-    or trace, normalization rules, and assertions/invariants.
-  * Normalize unstable fields such as timestamps, absolute paths, UUIDs,
-    random IDs, and nondeterministic ordering before comparing actual and
-    expected output.
-  * A fixture should fail with a clear diff when target behavior diverges from
-    expected reference behavior.
-  * Reuse validation mechanisms as aggressively as possible. Do not create
-    one fixture directory per case when a group
-    of cases can be represented as rows in a shared manifest.
-    * Simple Go-test-backed parity cases should be table-driven from a shared
-      manifest, such as `scripts/parity-fixtures/test-cases.csv`, with one row
-      per case containing the case name, Go package, test name, and short
-      description.
-    * For generic Go test pass cases, prefer assertion-based validation over
-      golden files: verify that the selected test ran, passed, and completed in
-      the expected package after normalization.
-    * Use dedicated fixture directories and per-case `expected.txt` files only
-      for cases with real unique inputs, outputs, traces, or symbol-report golden
-      content.
-    * Adding a simple parity case should usually mean adding one manifest row,
-      not copying a directory or creating another metadata file.
+   * Use `scripts/parity-validate.sh` and the shared parity case manifest under
+     `scripts/parity-fixtures/` when available.
+   * Prefer manifest/table-driven parity cases. Adding a simple parity case
+     should usually mean adding one row to the shared TSV manifest rather
+     than creating dedicated per-case files.
+   * Manifest rows should explain the parity intent, not only the command to run.
+     Include fields such as case name, case type, source reference, target
+     reference, Go package, Go test, contract label, behavior summary, and notes
+     when supported.
+   * The current manifest is `scripts/parity-fixtures/test-cases.tsv`. It is
+     simple tab-delimited text, not quoted CSV. Columns are:
 
+     ```text
+     case_name	type	source_ref	target_ref	go_package	go_test	contract	behavior	notes
+     ```
+
+   * Simple Go-test-backed cases are useful as cheap target-side regression
+     checks. They should verify that the selected test ran, passed, and completed
+     in the expected package after normalization.
+   * Go-only cases do not prove Python reference behavior and Go behavior are
+     identical unless the Go test itself encodes the reference behavior clearly.
+   * For important behavior, prefer future cross-runtime manifest cases when
+     practical: one row should define the shared scenario, Python reference
+     runner, Go target runner, input payload, and contract or trace to compare.
+   * Use dedicated fixture directories or per-case golden files only when the
+     case has genuinely unique file inputs, traces, symbol-report output, or
+     other content that cannot be represented cleanly as manifest columns.
+   * Normalize unstable fields such as timestamps, absolute paths, UUIDs,
+     random IDs, durations, and nondeterministic ordering before comparing
+     actual and expected output.
+   * A validation case should fail with clear output showing which behavior,
+     contract, assertion, or diff failed.
 
 4. **Layer 4: Quality gates**
 
-  * Run focused Go tests and broaden verification as needed.
-  * Run architecture checks when imports or package boundaries change.
-  * Run `staticcheck ./...` and `deadcode ./...` when the task is likely to
-    affect shared behavior, public interfaces, or unused parity scaffolding.
-  * Fix issues related to the current task. Do not use unrelated staticcheck or
-    deadcode output as permission for broad, unfocused rewrites.
+   * Use `scripts/check-test-integrity.sh` and `scripts/check-deadcode.sh` when
+     available to prevent fake progress through weakened tests or unused parity
+     code.
+   * These gates do not prove behavior. They protect the validation work from
+     deadcode, inert ports, and obvious test weakening.
+   * Run focused Go tests and broaden verification as needed.
+   * Run architecture checks when imports or package boundaries change.
+   * Run `staticcheck ./...` and `deadcode ./...` when the task is likely to
+     affect shared behavior, public interfaces, or unused parity scaffolding.
+   * Fix issues related to the current task. Do not use unrelated staticcheck or
+     deadcode output as permission for broad, unfocused rewrites.
+
+For parity-sensitive changes, prefer the minimum gate:
+
+```sh
+scripts/parity-gate.sh
+```
 
 A parity implementation is not complete unless new target code is tested, wired
 into production flow, or explicitly documented as pending parity. Do not leave
 new deadcode behind.
-
-If Go tries to write module cache files under a read-only home directory, use a
-workspace-local `.tmp` cache rather than changing project code to work around
-the environment.
 
 ## Current Known Drift
 

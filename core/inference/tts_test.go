@@ -4,12 +4,14 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/cavos-io/rtp-agent/library/tokenize"
+	"github.com/go-jose/go-jose/v3/jwt"
 	"github.com/gorilla/websocket"
 )
 
@@ -20,6 +22,36 @@ func TestNewTTSUsesConfiguredSentenceTokenizer(t *testing.T) {
 
 	if got := provider.sentenceTokenizer; got != tokenizer {
 		t.Fatalf("sentenceTokenizer = %T, want configured tokenizer", got)
+	}
+}
+
+func TestNewTTSUsesReferenceCredentialEnvFallback(t *testing.T) {
+	t.Setenv("LIVEKIT_API_KEY", "base-key")
+	t.Setenv("LIVEKIT_API_SECRET", "base-secret")
+	t.Setenv("LIVEKIT_INFERENCE_API_KEY", "inference-key")
+	t.Setenv("LIVEKIT_INFERENCE_API_SECRET", "inference-secret")
+
+	provider := NewTTS("cartesia/sonic-3", "", "")
+
+	if provider.apiKey != "inference-key" {
+		t.Fatalf("apiKey = %q, want inference-key", provider.apiKey)
+	}
+	if provider.apiSecret != "inference-secret" {
+		t.Fatalf("apiSecret = %q, want inference-secret", provider.apiSecret)
+	}
+}
+
+func TestNewTTSFallsBackToLiveKitCredentials(t *testing.T) {
+	t.Setenv("LIVEKIT_API_KEY", "base-key")
+	t.Setenv("LIVEKIT_API_SECRET", "base-secret")
+
+	provider := NewTTS("cartesia/sonic-3", "", "")
+
+	if provider.apiKey != "base-key" {
+		t.Fatalf("apiKey = %q, want base-key", provider.apiKey)
+	}
+	if provider.apiSecret != "base-secret" {
+		t.Fatalf("apiSecret = %q, want base-secret", provider.apiSecret)
 	}
 }
 
@@ -78,6 +110,37 @@ func TestTTSPrewarmReusesConnectionForNextStream(t *testing.T) {
 
 	if got := connCount.Load(); got != 1 {
 		t.Fatalf("connections = %d, want 1 prewarmed connection reused by Stream", got)
+	}
+}
+
+func TestTTSConnectionPoolRefreshesSessionAgeOnGet(t *testing.T) {
+	provider := NewTTS("cartesia/sonic-3", "key", "secret")
+
+	pool := reflect.ValueOf(provider.connectionPool()).Elem()
+	markRefreshedOnGet := pool.FieldByName("opts").FieldByName("MarkRefreshedOnGet").Bool()
+	if !markRefreshedOnGet {
+		t.Fatal("connection pool MarkRefreshedOnGet = false, want true")
+	}
+}
+
+func TestInferenceAccessTokenTTLMatchesReferenceDefault(t *testing.T) {
+	token, err := CreateAccessToken("key", "secret", InferenceAccessTokenTTL)
+	if err != nil {
+		t.Fatalf("CreateAccessToken() error = %v", err)
+	}
+	parsed, err := jwt.ParseSigned(token)
+	if err != nil {
+		t.Fatalf("ParseSigned() error = %v", err)
+	}
+	claims := jwt.Claims{}
+	if err := parsed.UnsafeClaimsWithoutVerification(&claims); err != nil {
+		t.Fatalf("UnsafeClaimsWithoutVerification() error = %v", err)
+	}
+	if claims.NotBefore == nil || claims.Expiry == nil {
+		t.Fatalf("claims missing not-before or expiry: %#v", claims)
+	}
+	if got := claims.Expiry.Time().Sub(claims.NotBefore.Time()); got != 10*time.Minute {
+		t.Fatalf("access token TTL = %v, want 10m", got)
 	}
 }
 

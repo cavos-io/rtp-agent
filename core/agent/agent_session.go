@@ -47,6 +47,7 @@ type AgentSessionOptions struct {
 	Endpointing                   Endpointing
 	MaxToolSteps                  int
 	UserAwayTimeout               float64
+	DisableUserAwayTimeout        bool
 	FalseInterruptionTimeout      float64
 	ResumeFalseInterruption       bool
 	MinConsecutiveSpeechDelay     float64
@@ -568,7 +569,7 @@ func withAgentSessionOptionDefaults(opts AgentSessionOptions) AgentSessionOption
 	if opts.MaxToolSteps == 0 {
 		opts.MaxToolSteps = 3
 	}
-	if opts.UserAwayTimeout == 0 {
+	if !opts.DisableUserAwayTimeout && opts.UserAwayTimeout == 0 {
 		opts.UserAwayTimeout = 15.0
 	}
 	if opts.FalseInterruptionTimeout == 0 {
@@ -1651,7 +1652,8 @@ func (s *AgentSession) updateUserAwayTimer() {
 		s.userAwayTimer.Stop()
 		s.userAwayTimer = nil
 	}
-	shouldStart := s.Options.UserAwayTimeout > 0 &&
+	shouldStart := !s.Options.DisableUserAwayTimeout &&
+		s.Options.UserAwayTimeout > 0 &&
 		s.agentState == AgentStateListening &&
 		s.userState == UserStateListening
 	timeout := s.Options.UserAwayTimeout
@@ -2108,6 +2110,9 @@ func (s *AgentSession) stop(ctx context.Context, commitPendingUserTurn bool) err
 			if cancel != nil {
 				cancel()
 			}
+		}
+		if task, ok := activity.AgentIntf.(interface{ Cancel() }); ok {
+			task.Cancel()
 		}
 		activity.Stop()
 	}

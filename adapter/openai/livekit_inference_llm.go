@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"os"
 	"strings"
-	"time"
 
 	"github.com/cavos-io/rtp-agent/core/inference"
 	"github.com/cavos-io/rtp-agent/core/llm"
@@ -81,7 +80,7 @@ func (l *LiveKitInferenceLLM) Provider() string {
 }
 
 func (l *LiveKitInferenceLLM) Chat(ctx context.Context, chatCtx *llm.ChatContext, opts ...llm.ChatOption) (llm.LLMStream, error) {
-	token, err := inference.CreateAccessToken(l.apiKey, l.apiSecret, time.Hour)
+	token, err := inference.CreateAccessToken(l.apiKey, l.apiSecret, inference.InferenceAccessTokenTTL)
 	if err != nil {
 		return nil, err
 	}

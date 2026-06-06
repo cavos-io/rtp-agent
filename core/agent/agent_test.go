@@ -84,6 +84,25 @@ func TestAgentLabelReturnsID(t *testing.T) {
 	}
 }
 
+func TestNewAgentUsesReferenceDefaultID(t *testing.T) {
+	agent := NewAgent("help")
+
+	if agent.ID != "default_agent" {
+		t.Fatalf("NewAgent().ID = %q, want default_agent", agent.ID)
+	}
+	if got := agent.Label(); got != "default_agent" {
+		t.Fatalf("Label() = %q, want default_agent", got)
+	}
+}
+
+func TestAgentHandoffIDUsesDefaultAgentID(t *testing.T) {
+	agent := NewAgent("sensitive instructions")
+
+	if got := agentHandoffID(agent); got != "default_agent" {
+		t.Fatalf("agentHandoffID() = %q, want default_agent", got)
+	}
+}
+
 func TestAgentTaskWaitReturnsCompletedResult(t *testing.T) {
 	task := NewAgentTask[string]("collect name")
 	if err := task.Complete("done"); err != nil {
@@ -96,6 +115,17 @@ func TestAgentTaskWaitReturnsCompletedResult(t *testing.T) {
 	}
 	if got != "done" {
 		t.Fatalf("Wait() result = %q, want done", got)
+	}
+}
+
+func TestNewAgentTaskUsesReferenceDefaultID(t *testing.T) {
+	task := NewAgentTask[string]("collect name")
+
+	if task.ID != "agent_task" {
+		t.Fatalf("NewAgentTask().ID = %q, want agent_task", task.ID)
+	}
+	if got := task.Label(); got != "agent_task" {
+		t.Fatalf("Label() = %q, want agent_task", got)
 	}
 }
 
@@ -623,6 +653,21 @@ func TestAgentTaskCancelFailsWithToolError(t *testing.T) {
 	}
 	if toolErr.Message != "AgentTask task_1 is cancelled" {
 		t.Fatalf("ToolError message = %q, want cancellation message", toolErr.Message)
+	}
+}
+
+func TestAgentTaskCancelUsesDefaultID(t *testing.T) {
+	task := NewAgentTask[string]("collect data")
+
+	task.Cancel()
+
+	_, err := task.WaitAny(context.Background())
+	var toolErr llm.ToolError
+	if !errors.As(err, &toolErr) {
+		t.Fatalf("WaitAny error = %T %v, want llm.ToolError", err, err)
+	}
+	if toolErr.Message != "AgentTask agent_task is cancelled" {
+		t.Fatalf("ToolError message = %q, want default cancellation message", toolErr.Message)
 	}
 }
 

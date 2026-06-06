@@ -350,5 +350,55 @@ func TestClientEventsDispatcherNoopsWithoutRoom(t *testing.T) {
 	dispatcher.DispatchAgentState(AgentState("unknown"))
 	dispatcher.DispatchUserState(UserStateListening)
 	dispatcher.DispatchUserState(UserStateSpeaking)
+	dispatcher.DispatchUserState(UserStateAway)
 	dispatcher.DispatchUserState(UserState("unknown"))
+}
+
+func TestClientAgentStateStringMapsIdleToReferenceListening(t *testing.T) {
+	tests := []struct {
+		state AgentState
+		want  string
+		ok    bool
+	}{
+		{state: AgentStateIdle, want: "listening", ok: true},
+		{state: AgentStateListening, want: "listening", ok: true},
+		{state: AgentStateThinking, want: "thinking", ok: true},
+		{state: AgentStateSpeaking, want: "speaking", ok: true},
+		{state: AgentStateInitializing, want: "initializing", ok: true},
+		{state: AgentState("unknown"), ok: false},
+	}
+
+	for _, tt := range tests {
+		got, ok := clientAgentStateString(tt.state)
+		if ok != tt.ok || got != tt.want {
+			t.Fatalf("clientAgentStateString(%q) = %q, %v; want %q, %v", tt.state, got, ok, tt.want, tt.ok)
+		}
+	}
+}
+
+func TestClientAgentStateStringIncludesReferenceInitializing(t *testing.T) {
+	got, ok := clientAgentStateString(AgentStateInitializing)
+	if !ok || got != "initializing" {
+		t.Fatalf("clientAgentStateString(%q) = %q, %v; want initializing, true", AgentStateInitializing, got, ok)
+	}
+}
+
+func TestClientUserStateStringIncludesReferenceAway(t *testing.T) {
+	tests := []struct {
+		state UserState
+		want  string
+		ok    bool
+	}{
+		{state: UserStateListening, want: "listening", ok: true},
+		{state: UserStateSpeaking, want: "speaking", ok: true},
+		{state: UserStateAway, want: "away", ok: true},
+		{state: UserState("unknown"), ok: false},
+	}
+
+	for _, tt := range tests {
+		got, ok := clientUserStateString(tt.state)
+		if ok != tt.ok || got != tt.want {
+			t.Fatalf("clientUserStateString(%q) = %q, %v; want %q, %v", tt.state, got, ok, tt.want, tt.ok)
+		}
+	}
 }

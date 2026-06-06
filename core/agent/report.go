@@ -137,6 +137,10 @@ func (r *SessionReport) MarshalJSON() ([]byte, error) {
 }
 
 func sessionReportOptionsToDict(opts AgentSessionOptions) map[string]any {
+	userAwayTimeout := any(opts.UserAwayTimeout)
+	if opts.DisableUserAwayTimeout {
+		userAwayTimeout = nil
+	}
 	return map[string]any{
 		"allow_interruptions":              opts.AllowInterruptions,
 		"discard_audio_if_uninterruptible": opts.DiscardAudioIfUninterruptible,
@@ -145,7 +149,7 @@ func sessionReportOptionsToDict(opts AgentSessionOptions) map[string]any {
 		"min_endpointing_delay":            opts.MinEndpointingDelay,
 		"max_endpointing_delay":            opts.MaxEndpointingDelay,
 		"max_tool_steps":                   opts.MaxToolSteps,
-		"user_away_timeout":                opts.UserAwayTimeout,
+		"user_away_timeout":                userAwayTimeout,
 		"min_consecutive_speech_delay":     opts.MinConsecutiveSpeechDelay,
 		"use_tts_aligned_transcript":       opts.UseTTSAlignedTranscript,
 		"aec_warmup_duration":              opts.AECWarmupDuration,

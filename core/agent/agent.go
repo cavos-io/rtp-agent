@@ -62,6 +62,7 @@ type Agent struct {
 
 func NewAgent(instructions string) *Agent {
 	return &Agent{
+		ID:           "default_agent",
 		Instructions: instructions,
 		ChatCtx:      llm.NewChatContext(),
 		Tools:        make([]llm.Tool, 0),
@@ -216,6 +217,7 @@ var ErrAgentTaskAlreadyWaited = errors.New("agent task is not re-entrant, wait o
 
 func NewAgentTask[T any](instructions string) *AgentTask[T] {
 	baseAgent := NewAgent(instructions)
+	baseAgent.ID = "agent_task"
 	return &AgentTask[T]{
 		Agent:  *baseAgent,
 		Result: make(chan T, 1),

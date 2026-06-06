@@ -9,7 +9,6 @@ import (
 	"net/url"
 	"strings"
 	"sync"
-	"time"
 
 	"github.com/cavos-io/rtp-agent/core/audio"
 	"github.com/cavos-io/rtp-agent/core/audio/model"
@@ -29,11 +28,12 @@ func NewSTT(model string, apiKey, apiSecret string) *STT {
 	if model == "" {
 		model = "deepgram/nova-3"
 	}
+	apiKey, apiSecret = resolveInferenceCredentials(apiKey, apiSecret)
 	return &STT{
 		model:     model,
 		apiKey:    apiKey,
 		apiSecret: apiSecret,
-		baseURL:   "wss://agent-gateway.livekit.cloud/v1",
+		baseURL:   defaultInferenceWebsocketURL(),
 	}
 }
 
@@ -43,10 +43,11 @@ func (s *STT) Label() string {
 
 func (s *STT) Capabilities() stt.STTCapabilities {
 	return stt.STTCapabilities{
-		Streaming:        true,
-		InterimResults:   true,
-		Diarization:      true,
-		OfflineRecognize: false,
+		Streaming:         true,
+		InterimResults:    true,
+		Diarization:       false,
+		AlignedTranscript: "word",
+		OfflineRecognize:  false,
 	}
 }
 
@@ -55,18 +56,12 @@ func (s *STT) Recognize(ctx context.Context, frames []*model.AudioFrame, languag
 }
 
 func (s *STT) Stream(ctx context.Context, language string) (stt.RecognizeStream, error) {
-	token, err := CreateAccessToken(s.apiKey, s.apiSecret, time.Hour)
+	token, err := CreateAccessToken(s.apiKey, s.apiSecret, InferenceAccessTokenTTL)
 	if err != nil {
 		return nil, err
 	}
 
-	modelName := s.model
-	if idx := strings.LastIndex(s.model, ":"); idx != -1 {
-		if language == "" {
-			language = s.model[idx+1:]
-		}
-		modelName = s.model[:idx]
-	}
+	modelName, createParams := sttSessionCreateParams(s.model, language)
 
 	wsURL, err := url.Parse(s.baseURL + "/stt")
 	if err != nil {
@@ -83,21 +78,6 @@ func (s *STT) Stream(ctx context.Context, language string) (stt.RecognizeStream,
 	conn, _, err := websocket.DefaultDialer.Dial(wsURL.String(), header)
 	if err != nil {
 		return nil, fmt.Errorf("failed to connect to LiveKit Inference STT: %w", err)
-	}
-
-	// Send session.create
-	settings := map[string]interface{}{
-		"sample_rate": "16000",
-		"encoding":    "pcm_s16le",
-	}
-	if language != "" {
-		settings["language"] = language
-	}
-
-	createParams := map[string]interface{}{
-		"type":     "session.create",
-		"settings": settings,
-		"model":    modelName,
 	}
 
 	if err := conn.WriteJSON(createParams); err != nil {
@@ -118,6 +98,33 @@ func (s *STT) Stream(ctx context.Context, language string) (stt.RecognizeStream,
 	go stream.run()
 
 	return stream, nil
+}
+
+func sttSessionCreateParams(model string, language string) (string, map[string]interface{}) {
+	modelName := model
+	if idx := strings.LastIndex(model, ":"); idx != -1 {
+		if language == "" {
+			language = model[idx+1:]
+		}
+		modelName = model[:idx]
+	}
+	settings := map[string]interface{}{
+		"sample_rate": "16000",
+		"encoding":    "pcm_s16le",
+		"extra":       map[string]interface{}{},
+	}
+	if language != "" {
+		settings["language"] = language
+	}
+
+	createParams := map[string]interface{}{
+		"type":     "session.create",
+		"settings": settings,
+	}
+	if modelName != "auto" {
+		createParams["model"] = modelName
+	}
+	return modelName, createParams
 }
 
 type inferenceSTTStream struct {
