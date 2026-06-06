@@ -46,7 +46,7 @@ func (s *STT) Capabilities() stt.STTCapabilities {
 	return stt.STTCapabilities{
 		Streaming:         true,
 		InterimResults:    true,
-		Diarization:       true,
+		Diarization:       false,
 		AlignedTranscript: "word",
 		OfflineRecognize:  false,
 	}

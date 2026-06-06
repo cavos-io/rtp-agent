@@ -32,6 +32,14 @@ func TestInferenceSTTCapabilitiesReportReferenceWordAlignment(t *testing.T) {
 	}
 }
 
+func TestInferenceSTTCapabilitiesUseReferenceDefaultDiarization(t *testing.T) {
+	provider := NewSTT("deepgram/nova-3", "key", "secret")
+
+	if provider.Capabilities().Diarization {
+		t.Fatal("Diarization = true, want false by default")
+	}
+}
+
 func TestInferenceSTTFinalTranscriptEmitsStructuredRecognitionUsage(t *testing.T) {
 	stream := &inferenceSTTStream{
 		eventCh:       make(chan *stt.SpeechEvent, 4),
