@@ -24,6 +24,7 @@ func TestPerformLLMInferenceIgnoresNonFunctionToolCalls(t *testing.T) {
 			chunks: []*llm.ChatChunk{
 				{Delta: &llm.ChoiceDelta{ToolCalls: []llm.FunctionToolCall{
 					{Type: "custom", Name: "ignored", CallID: "call_ignored"},
+					{Name: "missing_type", CallID: "call_missing_type"},
 					{Type: "function", Name: "lookup", CallID: "call_lookup"},
 				}}},
 			},
