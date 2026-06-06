@@ -52,6 +52,8 @@ Available cases:
   confirmation by default, matching the reference audio behavior.
 - `dob-confirmation-default`: validates that date of birth capture asks for
   confirmation by default, matching the reference audio behavior.
+- `name-confirmation-default`: validates that name capture asks for confirmation
+  by default, matching the reference audio behavior.
 
 Run all cases:
 

@@ -956,9 +956,10 @@ func workflowAgentFromConfig(cfg AppConfig, baseAgent *agent.Agent) (agent.Agent
 		})
 	case "name", "get_name":
 		selected = workflows.NewGetNameTask(workflows.GetNameOptions{
-			FirstName:           true,
-			LastName:            true,
-			RequireConfirmation: cfg.WorkflowRequireConfirmation,
+			FirstName:              true,
+			LastName:               true,
+			RequireConfirmation:    cfg.WorkflowRequireConfirmation,
+			RequireConfirmationSet: true,
 		})
 	case "card_number", "card-number", "get_card_number":
 		selected = workflows.NewGetCardNumberTask(cfg.WorkflowRequireConfirmation)
@@ -1077,9 +1078,10 @@ func workflowTaskFactoryFromName(cfg AppConfig, baseAgent *agent.Agent, taskName
 			Description: "Collect and confirm the user's name.",
 			TaskFactory: factory(func() agent.AgentInterface {
 				return workflows.NewGetNameTask(workflows.GetNameOptions{
-					FirstName:           true,
-					LastName:            true,
-					RequireConfirmation: cfg.WorkflowRequireConfirmation,
+					FirstName:              true,
+					LastName:               true,
+					RequireConfirmation:    cfg.WorkflowRequireConfirmation,
+					RequireConfirmationSet: true,
 				})
 			}),
 		}, nil

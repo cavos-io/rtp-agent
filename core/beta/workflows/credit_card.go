@@ -227,10 +227,11 @@ func (t *GetCreditCardTask) buildTaskGroup() *TaskGroup {
 	group := NewTaskGroup(true, false)
 	group.Add("cardholder_name_task", "Collects the cardholder's full name", func() agent.AgentInterface {
 		return NewGetNameTask(GetNameOptions{
-			FirstName:           true,
-			LastName:            true,
-			ExtraInstructions:   "This is in the context of credit card information collection, ask specifically for the full name listed on it.",
-			RequireConfirmation: t.RequireConfirmation,
+			FirstName:              true,
+			LastName:               true,
+			ExtraInstructions:      "This is in the context of credit card information collection, ask specifically for the full name listed on it.",
+			RequireConfirmation:    t.RequireConfirmation,
+			RequireConfirmationSet: true,
 		})
 	})
 	group.Add("card_number_task", "Collects the user's card number", func() agent.AgentInterface {
