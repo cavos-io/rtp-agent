@@ -2,6 +2,7 @@ package workflows
 
 import (
 	"context"
+	"errors"
 	"strconv"
 	"testing"
 	"time"
@@ -290,6 +291,40 @@ func TestGetCreditCardTaskBuildsReferenceSubtasks(t *testing.T) {
 				t.Fatalf("expiration date task = %#v, want confirming *GetExpirationDateTask", child)
 			}
 		}
+	}
+}
+
+func TestDeclineCardCaptureToolFailsWithTypedReason(t *testing.T) {
+	task := NewGetCardNumberTask(false)
+	tool := &declineCardCaptureTool{task: task}
+
+	if _, err := tool.Execute(context.Background(), `{"reason":"user refused"}`); err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+	_, err := task.WaitAny(context.Background())
+	var declined *CardCaptureDeclinedError
+	if !errors.As(err, &declined) {
+		t.Fatalf("WaitAny() error = %T %v, want CardCaptureDeclinedError", err, err)
+	}
+	if declined.Reason != "user refused" {
+		t.Fatalf("Reason = %q, want user refused", declined.Reason)
+	}
+}
+
+func TestRestartCardCollectionToolFailsWithTypedReason(t *testing.T) {
+	task := NewGetCardNumberTask(false)
+	tool := &restartCardCollectionTool{task: task}
+
+	if _, err := tool.Execute(context.Background(), `{"reason":"wrong card"}`); err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+	_, err := task.WaitAny(context.Background())
+	var restart *CardCollectionRestartError
+	if !errors.As(err, &restart) {
+		t.Fatalf("WaitAny() error = %T %v, want CardCollectionRestartError", err, err)
+	}
+	if restart.Reason != "wrong card" {
+		t.Fatalf("Reason = %q, want wrong card", restart.Reason)
 	}
 }
 

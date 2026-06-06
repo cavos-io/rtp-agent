@@ -39,6 +39,22 @@ type GetCreditCardResult struct {
 	ExpirationDate string
 }
 
+type CardCaptureDeclinedError struct {
+	Reason string
+}
+
+func (e *CardCaptureDeclinedError) Error() string {
+	return fmt.Sprintf("couldn't get the card details: %s", e.Reason)
+}
+
+type CardCollectionRestartError struct {
+	Reason string
+}
+
+func (e *CardCollectionRestartError) Error() string {
+	return fmt.Sprintf("starting over: %s", e.Reason)
+}
+
 type GetCardNumberTask struct {
 	agent.AgentTask[*GetCardNumberResult]
 	RequireConfirmation bool
@@ -569,7 +585,7 @@ func (t *declineCardCaptureTool) Execute(ctx context.Context, args string) (stri
 	if err != nil {
 		return "", err
 	}
-	t.task.Fail(fmt.Errorf("couldn't get the card details: %s", reason))
+	_ = t.task.Fail(&CardCaptureDeclinedError{Reason: reason})
 	return "Task failed.", nil
 }
 
@@ -590,7 +606,7 @@ func (t *restartCardCollectionTool) Execute(ctx context.Context, args string) (s
 	if err != nil {
 		return "", err
 	}
-	t.task.Fail(fmt.Errorf("starting over: %s", reason))
+	_ = t.task.Fail(&CardCollectionRestartError{Reason: reason})
 	return "Task failed.", nil
 }
 
