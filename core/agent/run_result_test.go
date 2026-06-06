@@ -431,6 +431,23 @@ func TestRunAssertUsesRecordedEventsForFunctionCalls(t *testing.T) {
 	}
 }
 
+func TestRunAssertContainsFunctionCallUsesReferenceHelperName(t *testing.T) {
+	result := NewRunResult(llm.NewChatContext())
+	result.RecordItem(&llm.FunctionCall{
+		ID:        "fnc_1",
+		CallID:    "call_1",
+		Name:      "lookup",
+		Arguments: `{"city":"Jakarta"}`,
+		CreatedAt: time.Now(),
+	})
+
+	err := result.Expect.ContainsFunctionCall("lookup").HasError()
+
+	if err != nil {
+		t.Fatalf("ContainsFunctionCall returned error = %v, want nil for recorded event", err)
+	}
+}
+
 func TestRunAssertUsesRecordedEventsForFunctionCallArguments(t *testing.T) {
 	result := NewRunResult(llm.NewChatContext())
 	functionCall := &llm.FunctionCall{

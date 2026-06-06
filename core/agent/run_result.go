@@ -362,6 +362,14 @@ func (a *RunAssert) IsFunctionCall(name string) *RunAssert {
 }
 
 func (a *RunAssert) IsFunctionCallWithArguments(name string, arguments map[string]any) *RunAssert {
+	return a.ContainsFunctionCallWithArguments(name, arguments)
+}
+
+func (a *RunAssert) ContainsFunctionCall(name string) *RunAssert {
+	return a.ContainsFunctionCallWithArguments(name, nil)
+}
+
+func (a *RunAssert) ContainsFunctionCallWithArguments(name string, arguments map[string]any) *RunAssert {
 	return a.ContainsFunctionCallMatching(RunEventCriteria{
 		Name:      name,
 		Arguments: arguments,
