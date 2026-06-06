@@ -1,0 +1,4 @@
+=== RUN TestGetCreditCardTaskBuildsReferenceSubtasks
+--- PASS: TestGetCreditCardTaskBuildsReferenceSubtasks (<duration>)
+PASS
+ok github.com/cavos-io/rtp-agent/core/beta/workflows <duration>

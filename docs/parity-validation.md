@@ -54,6 +54,8 @@ Available cases:
   confirmation by default, matching the reference audio behavior.
 - `name-confirmation-default`: validates that name capture asks for confirmation
   by default, matching the reference audio behavior.
+- `credit-card-confirmation-default`: validates that credit-card collection
+  propagates confirmation by default to its reference subtasks.
 
 Run all cases:
 

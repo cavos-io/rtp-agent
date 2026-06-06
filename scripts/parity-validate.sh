@@ -33,6 +33,9 @@ Cases:
   name-confirmation-default
                    Validates that name capture asks for confirmation by
                    default, matching the reference audio behavior.
+  credit-card-confirmation-default
+                   Validates that credit-card collection propagates confirmation
+                   by default to its reference subtasks.
 EOF
 }
 
@@ -40,7 +43,7 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 FIXTURE_ROOT="$REPO_ROOT/scripts/parity-fixtures/cases"
 KEEP_TEMP=0
 declare -a REQUESTED_CASES=()
-declare -a ALL_CASES=("pull-basic" "dtmf-tool-error" "address-confirmation-default" "email-confirmation-default" "phone-confirmation-default" "dob-confirmation-default" "name-confirmation-default")
+declare -a ALL_CASES=("pull-basic" "dtmf-tool-error" "address-confirmation-default" "email-confirmation-default" "phone-confirmation-default" "dob-confirmation-default" "name-confirmation-default" "credit-card-confirmation-default")
 
 while (($#)); do
   case "$1" in
@@ -79,7 +82,7 @@ resolve_cases() {
       all)
         selected+=("${ALL_CASES[@]}")
         ;;
-      pull-basic|dtmf-tool-error|address-confirmation-default|email-confirmation-default|phone-confirmation-default|dob-confirmation-default|name-confirmation-default)
+      pull-basic|dtmf-tool-error|address-confirmation-default|email-confirmation-default|phone-confirmation-default|dob-confirmation-default|name-confirmation-default|credit-card-confirmation-default)
         selected+=("$requested")
         ;;
       "")
@@ -115,7 +118,7 @@ normalize_case() {
   normalize_common "$input" "$common" "$tmpdir"
 
   case "$case_name" in
-    dtmf-tool-error|address-confirmation-default|email-confirmation-default|phone-confirmation-default|dob-confirmation-default|name-confirmation-default)
+    dtmf-tool-error|address-confirmation-default|email-confirmation-default|phone-confirmation-default|dob-confirmation-default|name-confirmation-default|credit-card-confirmation-default)
       sed -E \
         -e 's/[[:space:]]+/ /g' \
         -e 's/\([0-9.]+s\)/(<duration>)/g' \
@@ -219,6 +222,14 @@ run_name_confirmation_default() {
   ) > "$tmpdir/actual.raw" 2>&1
 }
 
+run_credit_card_confirmation_default() {
+  local tmpdir="$1"
+  (
+    cd "$REPO_ROOT"
+    go test ./core/beta/workflows -run TestGetCreditCardTaskBuildsReferenceSubtasks -count=1 -v
+  ) > "$tmpdir/actual.raw" 2>&1
+}
+
 run_case() {
   local case_name="$1"
   local tmpdir expected actual_norm expected_norm
@@ -240,6 +251,7 @@ run_case() {
     phone-confirmation-default) run_phone_confirmation_default "$tmpdir" ;;
     dob-confirmation-default) run_dob_confirmation_default "$tmpdir" ;;
     name-confirmation-default) run_name_confirmation_default "$tmpdir" ;;
+    credit-card-confirmation-default) run_credit_card_confirmation_default "$tmpdir" ;;
     *) echo "unknown case: $case_name" >&2; return 2 ;;
   esac
 

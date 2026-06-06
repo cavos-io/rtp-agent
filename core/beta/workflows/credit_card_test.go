@@ -50,7 +50,7 @@ func TestGetCardNumberTaskRejectsInvalidLuhnNumber(t *testing.T) {
 }
 
 func TestGetCardNumberTaskRequiresMatchingConfirmation(t *testing.T) {
-	task := NewGetCardNumberTask(true)
+	task := NewGetCardNumberTask()
 	record := &recordCardNumberTool{task: task}
 
 	out, err := record.Execute(context.Background(), `{"card_number":"5555 5555 5555 4444"}`)
@@ -118,7 +118,7 @@ func TestGetSecurityCodeTaskRejectsInvalidCode(t *testing.T) {
 }
 
 func TestGetSecurityCodeTaskRequiresMatchingConfirmation(t *testing.T) {
-	task := NewGetSecurityCodeTask(true)
+	task := NewGetSecurityCodeTask()
 	update := &updateSecurityCodeTool{task: task}
 
 	out, err := update.Execute(context.Background(), `{"security_code":"1234"}`)
@@ -194,7 +194,7 @@ func TestGetExpirationDateTaskRejectsInvalidOrExpiredDate(t *testing.T) {
 }
 
 func TestGetExpirationDateTaskRequiresMatchingConfirmation(t *testing.T) {
-	task := NewGetExpirationDateTask(true)
+	task := NewGetExpirationDateTask()
 	update := &updateExpirationDateTool{task: task}
 	futureYear := (time.Now().Year() + 1) % 100
 
@@ -222,6 +222,21 @@ func TestGetExpirationDateTaskRequiresMatchingConfirmation(t *testing.T) {
 		}
 	default:
 		t.Fatal("task did not complete after matching confirmation")
+	}
+}
+
+func TestCreditCardTasksDefaultToConfirmation(t *testing.T) {
+	if task := NewGetCardNumberTask(); !task.RequireConfirmation {
+		t.Fatal("NewGetCardNumberTask() RequireConfirmation = false, want true")
+	}
+	if task := NewGetSecurityCodeTask(); !task.RequireConfirmation {
+		t.Fatal("NewGetSecurityCodeTask() RequireConfirmation = false, want true")
+	}
+	if task := NewGetExpirationDateTask(); !task.RequireConfirmation {
+		t.Fatal("NewGetExpirationDateTask() RequireConfirmation = false, want true")
+	}
+	if task := NewGetCreditCardTask(); !task.RequireConfirmation {
+		t.Fatal("NewGetCreditCardTask() RequireConfirmation = false, want true")
 	}
 }
 
@@ -255,7 +270,7 @@ func TestGetCreditCardTaskCombinesSubtaskResults(t *testing.T) {
 }
 
 func TestGetCreditCardTaskBuildsReferenceSubtasks(t *testing.T) {
-	task := NewGetCreditCardTask(true)
+	task := NewGetCreditCardTask()
 	group := task.buildTaskGroup()
 
 	if len(group.RegisteredTasks) != 4 {
