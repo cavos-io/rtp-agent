@@ -53,6 +53,25 @@ func NewMCPServerHTTP(url string) *MCPServerHTTP {
 	}
 }
 
+func (s *MCPServerHTTP) SetHTTPClient(client *http.Client) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if client == nil {
+		s.client = http.DefaultClient
+		return
+	}
+	s.client = client
+}
+
+func (s *MCPServerHTTP) httpClientSnapshot() *http.Client {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.client == nil {
+		return http.DefaultClient
+	}
+	return s.client
+}
+
 func (s *MCPServerHTTP) Initialize(ctx context.Context) error {
 	params := map[string]interface{}{
 		"protocolVersion": "2024-11-05",
@@ -183,11 +202,7 @@ func (s *MCPServerHTTP) postJSONRPCValue(ctx context.Context, value interface{})
 		httpReq.Header.Set(key, value)
 	}
 
-	client := s.client
-	if client == nil {
-		client = http.DefaultClient
-	}
-	resp, err := client.Do(httpReq)
+	resp, err := s.httpClientSnapshot().Do(httpReq)
 	if err != nil {
 		return nil, err
 	}

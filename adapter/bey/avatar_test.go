@@ -3,6 +3,7 @@ package bey
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -96,7 +97,7 @@ func TestBeyAvatarStartAndUpdateState(t *testing.T) {
 
 func TestBeyAvatarStartCreatesSessionWhenLiveKitInfoIsPresent(t *testing.T) {
 	var sawRequest bool
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	client := newBeyTestHTTPClient(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		sawRequest = true
 		if r.URL.Path != "/v1/session" {
 			t.Fatalf("path = %q, want session endpoint", r.URL.Path)
@@ -120,13 +121,13 @@ func TestBeyAvatarStartCreatesSessionWhenLiveKitInfoIsPresent(t *testing.T) {
 		}
 		w.WriteHeader(http.StatusOK)
 	}))
-	defer server.Close()
-	t.Setenv(beyAPIURLEnv, server.URL)
+	t.Setenv(beyAPIURLEnv, "https://bey.test")
 
 	avatar, err := NewBeyAvatar("test-key")
 	if err != nil {
 		t.Fatalf("NewBeyAvatar error = %v", err)
 	}
+	avatar.httpClient = client
 	ctx := agent.ContextWithAvatarStartInfo(context.Background(), agent.AvatarStartInfo{
 		LiveKitURL:   "wss://livekit.example",
 		LiveKitToken: "livekit-token",
@@ -174,4 +175,26 @@ func TestBuildBeySessionRequestMatchesReference(t *testing.T) {
 	if payload["livekit_token"] != "livekit-token" {
 		t.Fatalf("livekit_token = %#v, want livekit token", payload["livekit_token"])
 	}
+}
+
+func newBeyTestHTTPClient(handler http.Handler) *http.Client {
+	return &http.Client{
+		Transport: beyRoundTripper(func(req *http.Request) (*http.Response, error) {
+			rec := httptest.NewRecorder()
+			handler.ServeHTTP(rec, req)
+			return &http.Response{
+				StatusCode: rec.Code,
+				Status:     http.StatusText(rec.Code),
+				Header:     rec.Header(),
+				Body:       io.NopCloser(rec.Body),
+				Request:    req,
+			}, nil
+		}),
+	}
+}
+
+type beyRoundTripper func(*http.Request) (*http.Response, error)
+
+func (f beyRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
+	return f(req)
 }

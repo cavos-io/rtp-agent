@@ -1782,7 +1782,7 @@ func TestDefaultConfigFromEnvAddsMCPStdioTools(t *testing.T) {
 }
 
 func TestDefaultConfigFromEnvAddsMCPHTTPTools(t *testing.T) {
-	httpServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	httpClient := newAppMCPHTTPTestClient(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if got := r.Header.Get("Authorization"); got != "Bearer token" {
 			t.Fatalf("Authorization header = %q, want bearer token", got)
 		}
@@ -1805,10 +1805,18 @@ func TestDefaultConfigFromEnvAddsMCPHTTPTools(t *testing.T) {
 			t.Fatalf("unexpected MCP method %q", req.Method)
 		}
 	}))
-	defer httpServer.Close()
+	originalNewMCPServerHTTP := appNewMCPServerHTTP
+	appNewMCPServerHTTP = func(url string) *llm.MCPServerHTTP {
+		server := llm.NewMCPServerHTTP(url)
+		server.SetHTTPClient(httpClient)
+		return server
+	}
+	t.Cleanup(func() {
+		appNewMCPServerHTTP = originalNewMCPServerHTTP
+	})
 
 	servers := []map[string]any{{
-		"url":           httpServer.URL,
+		"url":           "https://mcp.test/rpc",
 		"transportType": "streamable_http",
 		"allowedTools":  []string{"lookup"},
 		"headers":       map[string]string{"Authorization": "Bearer token"},
@@ -1833,6 +1841,26 @@ func TestDefaultConfigFromEnvAddsMCPHTTPTools(t *testing.T) {
 	if got := app.Agent.Tools[0].Name(); got != "lookup" {
 		t.Fatalf("tool name = %q, want lookup", got)
 	}
+}
+
+func newAppMCPHTTPTestClient(handler http.Handler) *http.Client {
+	return &http.Client{
+		Transport: appMCPHTTPRoundTripper(func(req *http.Request) (*http.Response, error) {
+			recorder := httptest.NewRecorder()
+			handler.ServeHTTP(recorder, req)
+			resp := recorder.Result()
+			if resp.Body == nil {
+				resp.Body = io.NopCloser(strings.NewReader(""))
+			}
+			return resp, nil
+		}),
+	}
+}
+
+type appMCPHTTPRoundTripper func(*http.Request) (*http.Response, error)
+
+func (f appMCPHTTPRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
+	return f(req)
 }
 
 func TestMCPStdioHelperProcess(t *testing.T) {

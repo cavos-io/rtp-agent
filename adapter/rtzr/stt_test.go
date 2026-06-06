@@ -2,11 +2,14 @@ package rtzr
 
 import (
 	"context"
+	"errors"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -98,7 +101,7 @@ func TestRtzrBuildAuthRequestMatchesReference(t *testing.T) {
 
 func TestRtzrTokenUsesCustomAPIBaseAndCachesResult(t *testing.T) {
 	requests := 0
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	client := newRtzrTestHTTPClient(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		requests++
 		if r.URL.Path != "/v1/authenticate" {
 			t.Fatalf("auth path = %q, want /v1/authenticate", r.URL.Path)
@@ -114,11 +117,11 @@ func TestRtzrTokenUsesCustomAPIBaseAndCachesResult(t *testing.T) {
 		}
 		_, _ = w.Write([]byte(`{"access_token":"token-1"}`))
 	}))
-	defer server.Close()
 
 	provider := NewRtzrSTT("client-id",
 		WithRtzrClientSecret("client-secret"),
-		WithRtzrAPIBase(server.URL),
+		WithRtzrAPIBase("https://rtzr.test"),
+		withRtzrHTTPClient(client),
 	)
 	token, err := provider.token(context.Background())
 	if err != nil {
@@ -185,21 +188,14 @@ func TestRtzrSTTRecognizeMatchesReferenceUnsupportedOffline(t *testing.T) {
 }
 
 func TestRtzrSTTStreamSendsAudioFlushAndCloseMessages(t *testing.T) {
-	upgrader := websocket.Upgrader{}
 	queryCh := make(chan url.Values, 1)
 	authCh := make(chan string, 1)
 	audioCh := make(chan []byte, 1)
 	flushCh := make(chan string, 1)
 	closeCh := make(chan string, 1)
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	dialer := newRtzrTestWebsocketDialer(t, func(conn *websocket.Conn, r *http.Request) {
 		queryCh <- r.URL.Query()
 		authCh <- r.Header.Get("Authorization")
-		conn, err := upgrader.Upgrade(w, r, nil)
-		if err != nil {
-			t.Errorf("Upgrade returned error: %v", err)
-			return
-		}
-		defer conn.Close()
 
 		if err := conn.WriteMessage(websocket.TextMessage, []byte(`{"start_at":0,"duration":100,"final":false,"alternatives":[{"text":"hello"}]}`)); err != nil {
 			t.Errorf("write transcript event: %v", err)
@@ -238,13 +234,12 @@ func TestRtzrSTTStreamSendsAudioFlushAndCloseMessages(t *testing.T) {
 			return
 		}
 		closeCh <- string(closePayload)
-	}))
-	defer server.Close()
+	})
 
-	wsBase := "ws" + strings.TrimPrefix(server.URL, "http")
 	provider := NewRtzrSTT("client-id",
 		WithRtzrAccessToken("access-token"),
-		WithRtzrWSBase(wsBase),
+		WithRtzrWSBase("ws://rtzr.test"),
+		dialer,
 	)
 	stream, err := provider.Stream(context.Background(), "en")
 	if err != nil {
@@ -428,3 +423,120 @@ func readRequestBody(t *testing.T, req *http.Request) string {
 	}
 	return string(data)
 }
+
+func newRtzrTestHTTPClient(handler http.Handler) *http.Client {
+	return &http.Client{
+		Transport: rtzrRoundTripper(func(req *http.Request) (*http.Response, error) {
+			recorder := httptest.NewRecorder()
+			handler.ServeHTTP(recorder, req)
+			resp := recorder.Result()
+			if resp.Body == nil {
+				resp.Body = io.NopCloser(strings.NewReader(""))
+			}
+			return resp, nil
+		}),
+	}
+}
+
+type rtzrRoundTripper func(*http.Request) (*http.Response, error)
+
+func (f rtzrRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
+	return f(req)
+}
+
+func newRtzrTestWebsocketDialer(t *testing.T, handler func(*websocket.Conn, *http.Request)) RtzrSTTOption {
+	t.Helper()
+	upgrader := websocket.Upgrader{}
+	return withRtzrWebsocketDialer(func(ctx context.Context, endpoint string, headers http.Header) (*websocket.Conn, *http.Response, error) {
+		clientConn, serverConn := net.Pipe()
+		listener := newRtzrSingleConnListener(serverConn)
+		server := &http.Server{
+			Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				conn, err := upgrader.Upgrade(w, r, nil)
+				if err != nil {
+					t.Errorf("Upgrade returned error: %v", err)
+					return
+				}
+				defer conn.Close()
+				handler(conn, r)
+			}),
+		}
+		serverErrCh := make(chan error, 1)
+		go func() {
+			if err := server.Serve(listener); err != nil && !errors.Is(err, http.ErrServerClosed) && !errors.Is(err, net.ErrClosed) {
+				serverErrCh <- err
+			}
+		}()
+		t.Cleanup(func() {
+			_ = server.Close()
+			_ = listener.Close()
+			_ = clientConn.Close()
+			_ = serverConn.Close()
+		})
+
+		dialer := websocket.Dialer{
+			NetDialContext: func(context.Context, string, string) (net.Conn, error) {
+				return clientConn, nil
+			},
+		}
+		conn, response, err := dialer.DialContext(ctx, endpoint, headers)
+		select {
+		case serverErr := <-serverErrCh:
+			if err == nil {
+				err = serverErr
+			}
+		default:
+		}
+		return conn, response, err
+	})
+}
+
+type rtzrSingleConnListener struct {
+	mu     sync.Mutex
+	once   sync.Once
+	conn   net.Conn
+	closed chan struct{}
+}
+
+func newRtzrSingleConnListener(conn net.Conn) *rtzrSingleConnListener {
+	return &rtzrSingleConnListener{
+		conn:   conn,
+		closed: make(chan struct{}),
+	}
+}
+
+func (l *rtzrSingleConnListener) Accept() (net.Conn, error) {
+	l.mu.Lock()
+	if l.conn != nil {
+		conn := l.conn
+		l.conn = nil
+		l.mu.Unlock()
+		return conn, nil
+	}
+	l.mu.Unlock()
+
+	<-l.closed
+	return nil, net.ErrClosed
+}
+
+func (l *rtzrSingleConnListener) Close() error {
+	l.once.Do(func() {
+		close(l.closed)
+		l.mu.Lock()
+		if l.conn != nil {
+			_ = l.conn.Close()
+			l.conn = nil
+		}
+		l.mu.Unlock()
+	})
+	return nil
+}
+
+func (l *rtzrSingleConnListener) Addr() net.Addr {
+	return rtzrDummyAddr("pipe")
+}
+
+type rtzrDummyAddr string
+
+func (a rtzrDummyAddr) Network() string { return string(a) }
+func (a rtzrDummyAddr) String() string  { return string(a) }

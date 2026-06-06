@@ -101,6 +101,7 @@ func init() {
 var (
 	appInitLoggerProvider     = telemetry.InitLoggerProvider
 	appShutdownLoggerProvider = telemetry.ShutdownLoggerProvider
+	appNewMCPServerHTTP       = llm.NewMCPServerHTTP
 )
 
 const (
@@ -4095,7 +4096,7 @@ func configureMCPTools(ctx context.Context, cfg AppConfig, a *agent.Agent) ([]ll
 			closeMCPServers(servers)
 			return nil, fmt.Errorf("RTP_AGENT_MCP_HTTP_SERVERS entry requires url")
 		}
-		server := llm.NewMCPServerHTTP(url)
+		server := appNewMCPServerHTTP(url)
 		server.TransportType = serverConfig.TransportType
 		server.AllowedTools = serverConfig.AllowedTools
 		server.Headers = serverConfig.Headers

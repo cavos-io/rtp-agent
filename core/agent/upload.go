@@ -26,7 +26,10 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
-var recordUploadTelemetryEvent = telemetry.RecordChatEvent
+var (
+	recordUploadTelemetryEvent = telemetry.RecordChatEvent
+	recordingUploadHTTPClient  = &http.Client{Timeout: 30 * time.Second}
+)
 
 func UploadSessionReport(
 	cloudURL string,
@@ -127,7 +130,6 @@ func UploadSessionReport(
 		return fmt.Errorf("failed to close multipart writer: %w", err)
 	}
 
-	client := &http.Client{Timeout: 30 * time.Second}
 	uploadURL := fmt.Sprintf("%s/observability/recordings/v0", observabilityURL)
 	payload := b.Bytes()
 	for attempt := 0; attempt <= maxRecordingUploadRetries; attempt++ {
@@ -138,7 +140,7 @@ func UploadSessionReport(
 		req.Header.Set("Authorization", "Bearer "+jwt)
 		req.Header.Set("Content-Type", w.FormDataContentType())
 
-		resp, err := client.Do(req)
+		resp, err := recordingUploadHTTPClient.Do(req)
 		if err != nil {
 			return fmt.Errorf("failed to execute upload request: %w", err)
 		}

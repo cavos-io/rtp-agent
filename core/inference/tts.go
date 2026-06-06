@@ -26,11 +26,20 @@ type TTS struct {
 	apiSecret         string
 	baseURL           string
 	sentenceTokenizer tokenize.SentenceTokenizer
+	dialWebsocket     inferenceTTSDialer
 	connPoolMu        sync.Mutex
-	connPool          *utils.ConnectionPool[*websocket.Conn]
+	connPool          *utils.ConnectionPool[inferenceTTSConn]
 }
 
 type TTSOption func(*TTS)
+
+type inferenceTTSConn interface {
+	WriteJSON(v any) error
+	ReadMessage() (messageType int, p []byte, err error)
+	Close() error
+}
+
+type inferenceTTSDialer func(ctx context.Context, endpoint string, header http.Header) (inferenceTTSConn, error)
 
 func WithSentenceTokenizer(tokenizer tokenize.SentenceTokenizer) TTSOption {
 	return func(t *TTS) {
@@ -44,10 +53,11 @@ func NewTTS(model string, apiKey, apiSecret string, opts ...TTSOption) *TTS {
 	}
 	apiKey, apiSecret = resolveInferenceCredentials(apiKey, apiSecret)
 	t := &TTS{
-		model:     model,
-		apiKey:    apiKey,
-		apiSecret: apiSecret,
-		baseURL:   defaultInferenceWebsocketURL(),
+		model:         model,
+		apiKey:        apiKey,
+		apiSecret:     apiSecret,
+		baseURL:       defaultInferenceWebsocketURL(),
+		dialWebsocket: defaultInferenceTTSDialer,
 	}
 	for _, opt := range opts {
 		opt(t)
@@ -112,16 +122,16 @@ func (t *TTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
 	return stream, nil
 }
 
-func (t *TTS) connectionPool() *utils.ConnectionPool[*websocket.Conn] {
+func (t *TTS) connectionPool() *utils.ConnectionPool[inferenceTTSConn] {
 	t.connPoolMu.Lock()
 	defer t.connPoolMu.Unlock()
 
 	if t.connPool == nil {
-		t.connPool = utils.NewConnectionPool[*websocket.Conn](utils.ConnectionPoolOptions[*websocket.Conn]{
+		t.connPool = utils.NewConnectionPool[inferenceTTSConn](utils.ConnectionPoolOptions[inferenceTTSConn]{
 			MaxSessionDuration: time.Minute,
 			MarkRefreshedOnGet: true,
 			Connect:            t.connectTTSWebsocket,
-			Close: func(ctx context.Context, conn *websocket.Conn) error {
+			Close: func(ctx context.Context, conn inferenceTTSConn) error {
 				_ = conn.Close()
 				return nil
 			},
@@ -130,7 +140,7 @@ func (t *TTS) connectionPool() *utils.ConnectionPool[*websocket.Conn] {
 	return t.connPool
 }
 
-func (t *TTS) connectTTSWebsocket(ctx context.Context) (*websocket.Conn, error) {
+func (t *TTS) connectTTSWebsocket(ctx context.Context) (inferenceTTSConn, error) {
 	token, err := CreateAccessToken(t.apiKey, t.apiSecret, InferenceAccessTokenTTL)
 	if err != nil {
 		return nil, err
@@ -150,7 +160,7 @@ func (t *TTS) connectTTSWebsocket(ctx context.Context) (*websocket.Conn, error) 
 	header := http.Header{}
 	header.Add("Authorization", "Bearer "+token)
 
-	conn, _, err := websocket.DefaultDialer.DialContext(ctx, wsURL.String(), header)
+	conn, err := t.dialWebsocket(ctx, wsURL.String(), header)
 	if err != nil {
 		return nil, fmt.Errorf("failed to connect to LiveKit Inference TTS: %w", err)
 	}
@@ -160,6 +170,14 @@ func (t *TTS) connectTTSWebsocket(ctx context.Context) (*websocket.Conn, error) 
 		return nil, err
 	}
 
+	return conn, nil
+}
+
+func defaultInferenceTTSDialer(ctx context.Context, endpoint string, header http.Header) (inferenceTTSConn, error) {
+	conn, _, err := websocket.DefaultDialer.DialContext(ctx, endpoint, header)
+	if err != nil {
+		return nil, err
+	}
 	return conn, nil
 }
 
@@ -189,8 +207,8 @@ func ttsSessionCreateParams(model string, voice string) (string, map[string]inte
 
 type inferenceTTSStream struct {
 	tts       *TTS
-	conn      *websocket.Conn
-	connPool  *utils.ConnectionPool[*websocket.Conn]
+	conn      inferenceTTSConn
+	connPool  *utils.ConnectionPool[inferenceTTSConn]
 	ctx       context.Context
 	cancel    context.CancelFunc
 	tokenizer tokenize.SentenceStream

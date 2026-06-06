@@ -39,9 +39,12 @@ type GradiumSTT struct {
 	vadFlush          bool
 	temperature       *float64
 	language          string
+	dialWebsocket     gradiumSTTWebsocketDialer
 }
 
 type GradiumSTTOption func(*GradiumSTT)
+
+type gradiumSTTWebsocketDialer func(context.Context, string, http.Header) (*websocket.Conn, *http.Response, error)
 
 func WithGradiumSTTModelEndpoint(endpoint string) GradiumSTTOption {
 	return func(s *GradiumSTT) {
@@ -93,6 +96,14 @@ func WithGradiumSTTBufferSizeSeconds(seconds float64) GradiumSTTOption {
 	}
 }
 
+func withGradiumSTTWebsocketDialer(dialer gradiumSTTWebsocketDialer) GradiumSTTOption {
+	return func(s *GradiumSTT) {
+		if dialer != nil {
+			s.dialWebsocket = dialer
+		}
+	}
+}
+
 func NewGradiumSTT(apiKey string, opts ...GradiumSTTOption) *GradiumSTT {
 	bucket := defaultSTTVADBucket
 	provider := &GradiumSTT{
@@ -106,6 +117,7 @@ func NewGradiumSTT(apiKey string, opts ...GradiumSTTOption) *GradiumSTT {
 		vadBucket:         &bucket,
 		vadFlush:          true,
 		language:          defaultSTTLanguage,
+		dialWebsocket:     defaultGradiumSTTWebsocketDialer,
 	}
 	for _, opt := range opts {
 		opt(provider)
@@ -122,7 +134,7 @@ func (s *GradiumSTT) Stream(ctx context.Context, language string) (stt.Recognize
 	if language != "" {
 		s.language = language
 	}
-	conn, _, err := websocket.DefaultDialer.DialContext(ctx, s.modelEndpoint, buildGradiumSTTHeaders(s))
+	conn, _, err := s.dialWebsocket(ctx, s.modelEndpoint, buildGradiumSTTHeaders(s))
 	if err != nil {
 		return nil, fmt.Errorf("failed to dial gradium stt websocket: %w", err)
 	}
@@ -149,6 +161,10 @@ func (s *GradiumSTT) Stream(ctx context.Context, language string) (stt.Recognize
 	}
 	go stream.readLoop()
 	return stream, nil
+}
+
+func defaultGradiumSTTWebsocketDialer(ctx context.Context, endpoint string, headers http.Header) (*websocket.Conn, *http.Response, error) {
+	return websocket.DefaultDialer.DialContext(ctx, endpoint, headers)
 }
 
 func (s *GradiumSTT) Recognize(ctx context.Context, frames []*model.AudioFrame, language string) (*stt.SpeechEvent, error) {

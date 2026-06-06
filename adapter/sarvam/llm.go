@@ -43,9 +43,14 @@ type SarvamLLM struct {
 	baseURL      string
 	extraHeaders map[string]string
 	extraBody    map[string]any
+	httpClient   sarvamLLMHTTPDoer
 }
 
 type SarvamLLMOption func(*SarvamLLM)
+
+type sarvamLLMHTTPDoer interface {
+	Do(*http.Request) (*http.Response, error)
+}
 
 func WithSarvamLLMBaseURL(baseURL string) SarvamLLMOption {
 	return func(l *SarvamLLM) {
@@ -67,6 +72,14 @@ func WithSarvamLLMExtraBody(body map[string]any) SarvamLLMOption {
 	}
 }
 
+func withSarvamLLMHTTPClient(client sarvamLLMHTTPDoer) SarvamLLMOption {
+	return func(l *SarvamLLM) {
+		if client != nil {
+			l.httpClient = client
+		}
+	}
+}
+
 func NewSarvamLLM(apiKey string, model string, opts ...SarvamLLMOption) *SarvamLLM {
 	provider, _ := NewSarvamLLMWithError(apiKey, model, opts...)
 	return provider
@@ -80,9 +93,10 @@ func NewSarvamLLMWithError(apiKey string, model string, opts ...SarvamLLMOption)
 		return nil, err
 	}
 	provider := &SarvamLLM{
-		apiKey:  apiKey,
-		model:   model,
-		baseURL: defaultSarvamLLMBaseURL,
+		apiKey:     apiKey,
+		model:      model,
+		baseURL:    defaultSarvamLLMBaseURL,
+		httpClient: http.DefaultClient,
 	}
 	for _, opt := range opts {
 		opt(provider)
@@ -124,7 +138,7 @@ func (l *SarvamLLM) Chat(ctx context.Context, chatCtx *llm.ChatContext, opts ...
 		}
 		return nil, err
 	}
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := l.httpClient.Do(req)
 	if err != nil {
 		if cancel != nil {
 			cancel()

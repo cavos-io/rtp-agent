@@ -3,7 +3,6 @@ package inference
 import (
 	"context"
 	"net/http"
-	"net/http/httptest"
 	"reflect"
 	"strings"
 	"sync/atomic"
@@ -12,7 +11,6 @@ import (
 
 	"github.com/cavos-io/rtp-agent/library/tokenize"
 	"github.com/go-jose/go-jose/v3/jwt"
-	"github.com/gorilla/websocket"
 )
 
 func TestNewTTSUsesConfiguredSentenceTokenizer(t *testing.T) {
@@ -58,42 +56,36 @@ func TestNewTTSFallsBackToLiveKitCredentials(t *testing.T) {
 func TestTTSPrewarmReusesConnectionForNextStream(t *testing.T) {
 	var connCount atomic.Int32
 	sessionCreated := make(chan struct{}, 1)
-	upgrader := websocket.Upgrader{}
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/v1/tts" {
-			t.Errorf("path = %q, want /v1/tts", r.URL.Path)
+	provider := NewTTS("cartesia/sonic-3:voice-id", "key", "secret")
+	provider.baseURL = "wss://inference.test/v1"
+	provider.dialWebsocket = func(ctx context.Context, endpoint string, header http.Header) (inferenceTTSConn, error) {
+		if !strings.HasPrefix(endpoint, "wss://inference.test/v1/tts?") {
+			t.Errorf("endpoint = %q, want inference TTS websocket endpoint", endpoint)
 		}
-		if got := r.URL.Query().Get("model"); got != "cartesia/sonic-3" {
-			t.Errorf("model query = %q, want cartesia/sonic-3", got)
+		if !strings.Contains(endpoint, "model=cartesia%2Fsonic-3") {
+			t.Errorf("endpoint = %q, want encoded model query", endpoint)
 		}
-
-		conn, err := upgrader.Upgrade(w, r, nil)
-		if err != nil {
-			t.Errorf("upgrade websocket: %v", err)
-			return
+		if got := header.Get("Authorization"); !strings.HasPrefix(got, "Bearer ") {
+			t.Errorf("Authorization = %q, want bearer token", got)
 		}
 		connCount.Add(1)
-
-		go func() {
-			defer conn.Close()
-			for {
-				var msg map[string]any
-				if err := conn.ReadJSON(&msg); err != nil {
-					return
-				}
+		return &recordingTTSConn{
+			onWriteJSON: func(msg map[string]any) {
 				if msg["type"] == "session.create" {
+					if got := msg["model"]; got != "cartesia/sonic-3" {
+						t.Errorf("model = %v, want cartesia/sonic-3", got)
+					}
+					if got := msg["voice"]; got != "voice-id" {
+						t.Errorf("voice = %v, want voice-id", got)
+					}
 					select {
 					case sessionCreated <- struct{}{}:
 					default:
 					}
 				}
-			}
-		}()
-	}))
-	defer server.Close()
-
-	provider := NewTTS("cartesia/sonic-3:voice-id", "key", "secret")
-	provider.baseURL = "ws" + strings.TrimPrefix(server.URL, "http") + "/v1"
+			},
+		}, nil
+	}
 
 	provider.Prewarm()
 	select {
@@ -111,6 +103,30 @@ func TestTTSPrewarmReusesConnectionForNextStream(t *testing.T) {
 	if got := connCount.Load(); got != 1 {
 		t.Fatalf("connections = %d, want 1 prewarmed connection reused by Stream", got)
 	}
+}
+
+type recordingTTSConn struct {
+	closed      atomic.Bool
+	onWriteJSON func(map[string]any)
+}
+
+func (c *recordingTTSConn) WriteJSON(v any) error {
+	if msg, ok := v.(map[string]any); ok && c.onWriteJSON != nil {
+		c.onWriteJSON(msg)
+	}
+	return nil
+}
+
+func (c *recordingTTSConn) ReadMessage() (int, []byte, error) {
+	for !c.closed.Load() {
+		time.Sleep(time.Millisecond)
+	}
+	return 0, nil, context.Canceled
+}
+
+func (c *recordingTTSConn) Close() error {
+	c.closed.Store(true)
+	return nil
 }
 
 func TestTTSConnectionPoolRefreshesSessionAgeOnGet(t *testing.T) {
