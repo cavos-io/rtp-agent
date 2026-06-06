@@ -17,6 +17,11 @@ type GetEmailResult struct {
 	Email string
 }
 
+type GetEmailOptions struct {
+	RequireConfirmation    bool
+	RequireConfirmationSet bool
+}
+
 type GetEmailTask struct {
 	agent.AgentTask[*GetEmailResult]
 	RequireConfirmation bool
@@ -45,7 +50,11 @@ If the email is unclear or invalid, or it takes too much back-and-forth, prompt 
 Ignore unrelated input and avoid going off-topic. Do not generate markdown, greetings, or unnecessary commentary.
 Always explicitly invoke a tool when applicable. Do not hallucinate tool usage, no real action is taken unless the tool is explicitly called.`
 
-func NewGetEmailTask(requireConfirmation bool) *GetEmailTask {
+func NewGetEmailTask(opts GetEmailOptions) *GetEmailTask {
+	requireConfirmation := true
+	if opts.RequireConfirmationSet {
+		requireConfirmation = opts.RequireConfirmation
+	}
 	t := &GetEmailTask{
 		AgentTask:           *agent.NewAgentTask[*GetEmailResult](EmailInstructions),
 		RequireConfirmation: requireConfirmation,

@@ -46,6 +46,8 @@ Available cases:
   existing Go package test command.
 - `address-confirmation-default`: validates that address capture asks for
   confirmation by default, matching the reference audio behavior.
+- `email-confirmation-default`: validates that email capture asks for
+  confirmation by default, matching the reference audio behavior.
 
 Run all cases:
 

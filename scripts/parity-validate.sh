@@ -21,6 +21,9 @@ Cases:
   address-confirmation-default
                    Validates that address capture asks for confirmation by
                    default, matching the reference audio behavior.
+  email-confirmation-default
+                   Validates that email capture asks for confirmation by
+                   default, matching the reference audio behavior.
 EOF
 }
 
@@ -28,7 +31,7 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 FIXTURE_ROOT="$REPO_ROOT/scripts/parity-fixtures/cases"
 KEEP_TEMP=0
 declare -a REQUESTED_CASES=()
-declare -a ALL_CASES=("pull-basic" "dtmf-tool-error" "address-confirmation-default")
+declare -a ALL_CASES=("pull-basic" "dtmf-tool-error" "address-confirmation-default" "email-confirmation-default")
 
 while (($#)); do
   case "$1" in
@@ -67,7 +70,7 @@ resolve_cases() {
       all)
         selected+=("${ALL_CASES[@]}")
         ;;
-      pull-basic|dtmf-tool-error|address-confirmation-default)
+      pull-basic|dtmf-tool-error|address-confirmation-default|email-confirmation-default)
         selected+=("$requested")
         ;;
       "")
@@ -103,7 +106,7 @@ normalize_case() {
   normalize_common "$input" "$common" "$tmpdir"
 
   case "$case_name" in
-    dtmf-tool-error|address-confirmation-default)
+    dtmf-tool-error|address-confirmation-default|email-confirmation-default)
       sed -E \
         -e 's/[[:space:]]+/ /g' \
         -e 's/\([0-9.]+s\)/(<duration>)/g' \
@@ -175,6 +178,14 @@ run_address_confirmation_default() {
   ) > "$tmpdir/actual.raw" 2>&1
 }
 
+run_email_confirmation_default() {
+  local tmpdir="$1"
+  (
+    cd "$REPO_ROOT"
+    go test ./core/beta/workflows -run TestGetEmailTaskInjectsConfirmToolAfterUpdate -count=1 -v
+  ) > "$tmpdir/actual.raw" 2>&1
+}
+
 run_case() {
   local case_name="$1"
   local tmpdir expected actual_norm expected_norm
@@ -192,6 +203,7 @@ run_case() {
     pull-basic) run_pull_basic "$tmpdir" ;;
     dtmf-tool-error) run_dtmf_tool_error "$tmpdir" ;;
     address-confirmation-default) run_address_confirmation_default "$tmpdir" ;;
+    email-confirmation-default) run_email_confirmation_default "$tmpdir" ;;
     *) echo "unknown case: $case_name" >&2; return 2 ;;
   esac
 

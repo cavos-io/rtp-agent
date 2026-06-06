@@ -940,7 +940,10 @@ func workflowAgentFromConfig(cfg AppConfig, baseAgent *agent.Agent) (agent.Agent
 			RequireConfirmationSet: true,
 		})
 	case "email", "get_email":
-		selected = workflows.NewGetEmailTask(cfg.WorkflowRequireConfirmation)
+		selected = workflows.NewGetEmailTask(workflows.GetEmailOptions{
+			RequireConfirmation:    cfg.WorkflowRequireConfirmation,
+			RequireConfirmationSet: true,
+		})
 	case "phone_number", "phone-number", "phone", "get_phone_number":
 		selected = workflows.NewGetPhoneNumberTask(workflows.GetPhoneNumberOptions{
 			RequireConfirmation: cfg.WorkflowRequireConfirmation,
@@ -1038,7 +1041,10 @@ func workflowTaskFactoryFromName(cfg AppConfig, baseAgent *agent.Agent, taskName
 			ID:          "email",
 			Description: "Collect and confirm the user's email address.",
 			TaskFactory: factory(func() agent.AgentInterface {
-				return workflows.NewGetEmailTask(cfg.WorkflowRequireConfirmation)
+				return workflows.NewGetEmailTask(workflows.GetEmailOptions{
+					RequireConfirmation:    cfg.WorkflowRequireConfirmation,
+					RequireConfirmationSet: true,
+				})
 			}),
 		}, nil
 	case "phone_number", "phone-number", "phone", "get_phone_number":
