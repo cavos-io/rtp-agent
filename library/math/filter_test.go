@@ -47,6 +47,29 @@ func TestExpFilterRequiresSampleOrInitial(t *testing.T) {
 	}
 }
 
+func TestExpFilterResetAlphaPreservesReferenceValue(t *testing.T) {
+	filter, err := NewExpFilterWithOptions(0.5, ExpFilterOptions{})
+	if err != nil {
+		t.Fatalf("NewExpFilterWithOptions() error = %v", err)
+	}
+	if got := filter.Apply(1, 10); got != 10 {
+		t.Fatalf("initial Apply() = %v, want 10", got)
+	}
+
+	filter.Reset(0.25)
+
+	value, ok := filter.Value()
+	if !ok {
+		t.Fatal("Value() ok = false after Reset(alpha), want true")
+	}
+	if value != 10 {
+		t.Fatalf("Value() after Reset(alpha) = %v, want preserved value 10", value)
+	}
+	if got := filter.Apply(1, 14); got != 13 {
+		t.Fatalf("Apply() after Reset(alpha) = %v, want 13", got)
+	}
+}
+
 func TestExpFilterLegacyConstructorKeepsMaximumClamp(t *testing.T) {
 	filter := NewExpFilter(0.5, 5)
 
