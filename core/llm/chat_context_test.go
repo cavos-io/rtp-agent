@@ -9,6 +9,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/cavos-io/rtp-agent/library/utils/images"
 )
 
 func itemIDs(items []ChatItem) string {
@@ -1470,6 +1472,42 @@ func TestChatContextToOpenAIProviderFormatIncludesImageContent(t *testing.T) {
 	}
 	if content[1]["type"] != "text" || content[1]["text"] != "describe this" {
 		t.Fatalf("text content = %#v", content[1])
+	}
+}
+
+func TestChatContextToOpenAIProviderFormatSerializesVideoFrameImage(t *testing.T) {
+	ctx := NewChatContext()
+	ctx.Items = []ChatItem{
+		&ChatMessage{
+			ID:   "user",
+			Role: ChatRoleUser,
+			Content: []ChatContent{
+				{Image: &ImageContent{
+					Image: &images.VideoFrame{
+						Width:  1,
+						Height: 1,
+						Format: "rgba",
+						Data:   []byte{255, 0, 0, 255},
+					},
+					InferenceDetail: "low",
+				}},
+			},
+		},
+	}
+
+	messages, _, err := ctx.ToProviderFormatE("openai")
+	if err != nil {
+		t.Fatalf("ToProviderFormatE() error = %v", err)
+	}
+
+	content := messages[0]["content"].([]map[string]any)
+	imageURL := content[0]["image_url"].(map[string]any)
+	url, _ := imageURL["url"].(string)
+	if !strings.HasPrefix(url, "data:image/jpeg;base64,") {
+		t.Fatalf("image URL = %q, want JPEG data URL", url)
+	}
+	if imageURL["detail"] != "low" {
+		t.Fatalf("image detail = %#v, want low", imageURL["detail"])
 	}
 }
 
