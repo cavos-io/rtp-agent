@@ -154,6 +154,27 @@ func TestHyphenateWordMatchesReferenceExceptions(t *testing.T) {
 	}
 }
 
+func TestHyphenateWordMatchesReferencePatterns(t *testing.T) {
+	tests := map[string][]string{
+		"beautiful":     {"beau", "ti", "ful"},
+		"communication": {"com", "mu", "ni", "ca", "tion"},
+		"computer":      {"com", "put", "er"},
+		"development":   {"de", "vel", "op", "ment"},
+		"extraordinary": {"ex", "tra", "or", "di", "nary"},
+		"hyphenation":   {"hy", "phen", "ation"},
+		"reference":     {"ref", "er", "ence"},
+		"tokenizer":     {"to", "k", "eniz", "er"},
+		"workflow":      {"work", "flow"},
+	}
+
+	for word, want := range tests {
+		got := HyphenateWord(word)
+		if !reflect.DeepEqual(got, want) {
+			t.Fatalf("HyphenateWord(%q) = %#v, want %#v", word, got, want)
+		}
+	}
+}
+
 func TestHyphenateWordKeepsShortWordsWhole(t *testing.T) {
 	for _, word := range []string{"", "go", "word"} {
 		got := HyphenateWord(word)
