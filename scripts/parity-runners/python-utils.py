@@ -131,17 +131,44 @@ def run_hosted_env_presence(input_data: dict) -> dict:
                 os.environ.pop("LIVEKIT_REMOTE_EOT_URL", None)
             else:
                 os.environ["LIVEKIT_REMOTE_EOT_URL"] = value
-            events.append(
-                {
-                    "name": "is_hosted",
-                    "env": value,
-                    "result": bool(misc.is_hosted()),
-                }
-            )
+            event = {
+                "name": "is_hosted",
+                "result": bool(misc.is_hosted()),
+            }
+            if value is not None:
+                event["env"] = value
+            events.append(event)
     finally:
         restore_env("LIVEKIT_REMOTE_EOT_URL", original, original_present)
 
     return {"contract": "hosted-env-presence", "events": events}
+
+
+def run_cloud_url_host_suffix(input_data: dict) -> dict:
+    misc = load_reference_misc()
+    values = string_values(
+        input_data,
+        "url_values",
+        [
+            "wss://tenant.livekit.cloud",
+            "https://tenant.livekit.run/path",
+            "http://localhost:7880",
+            "://bad-url",
+            "https://livekit.cloud.evil.example",
+        ],
+    )
+
+    events = []
+    for value in values:
+        events.append(
+            {
+                "name": "is_cloud",
+                "url": value,
+                "result": bool(misc.is_cloud(value)),
+            }
+        )
+
+    return {"contract": "cloud-url-host-suffix", "events": events}
 
 
 def main() -> int:
@@ -155,6 +182,8 @@ def main() -> int:
         output = run_dev_mode_env_exact(input_data)
     elif contract == "hosted-env-presence":
         output = run_hosted_env_presence(input_data)
+    elif contract == "cloud-url-host-suffix":
+        output = run_cloud_url_host_suffix(input_data)
     else:
         print(f"unsupported contract: {contract}", file=sys.stderr)
         return 2

@@ -11,11 +11,13 @@ import (
 type inputEnvelope struct {
 	Contract  string    `json:"contract"`
 	EnvValues []*string `json:"env_values"`
+	URLValues []string  `json:"url_values"`
 }
 
 type event struct {
 	Name   string  `json:"name"`
-	Env    *string `json:"env"`
+	Env    *string `json:"env,omitempty"`
+	URL    string  `json:"url,omitempty"`
 	Result bool    `json:"result"`
 }
 
@@ -54,6 +56,8 @@ func run() error {
 		return runDevModeEnvExact(input)
 	case "hosted-env-presence":
 		return runHostedEnvPresence(input)
+	case "cloud-url-host-suffix":
+		return runCloudURLHostSuffix(input)
 	default:
 		return fmt.Errorf("unsupported contract: %s", input.Contract)
 	}
@@ -118,6 +122,31 @@ func runHostedEnvPresence(input inputEnvelope) error {
 			Name:   "is_hosted",
 			Env:    value,
 			Result: utils.IsHosted(),
+		})
+	}
+
+	encoder := json.NewEncoder(os.Stdout)
+	encoder.SetEscapeHTML(false)
+	return encoder.Encode(output)
+}
+
+func runCloudURLHostSuffix(input inputEnvelope) error {
+	if input.URLValues == nil {
+		input.URLValues = []string{
+			"wss://tenant.livekit.cloud",
+			"https://tenant.livekit.run/path",
+			"http://localhost:7880",
+			"://bad-url",
+			"https://livekit.cloud.evil.example",
+		}
+	}
+
+	output := outputEnvelope{Contract: "cloud-url-host-suffix"}
+	for _, value := range input.URLValues {
+		output.Events = append(output.Events, event{
+			Name:   "is_cloud",
+			URL:    value,
+			Result: utils.IsCloud(value),
 		})
 	}
 
