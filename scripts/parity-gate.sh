@@ -6,6 +6,7 @@ cd "$REPO_ROOT"
 
 bash -n scripts/parity-check.sh
 bash -n scripts/parity-validate.sh
+bash -n scripts/parity-test-inventory.sh
 bash -n scripts/check-test-integrity.sh
 bash -n scripts/check-deadcode.sh
 
