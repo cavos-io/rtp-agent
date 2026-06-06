@@ -7,12 +7,14 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/cavos-io/rtp-agent/core/agent"
 	"github.com/cavos-io/rtp-agent/core/llm"
 	"github.com/cavos-io/rtp-agent/library/logger"
 	"github.com/livekit/protocol/livekit"
 	lksdk "github.com/livekit/server-sdk-go/v2"
+	"google.golang.org/protobuf/types/known/durationpb"
 )
 
 const WarmTransferBaseInstructions = `# Identity
@@ -51,6 +53,8 @@ type WarmTransferTask struct {
 	SipTrunkID        string
 	SipNumber         string
 	SipHeaders        map[string]string
+	Dtmf              string
+	RingingTimeout    time.Duration
 	HoldAudio         interface{}
 
 	callerRoom         *lksdk.Room
@@ -140,7 +144,7 @@ func (t *WarmTransferTask) OnEnter() {
 		return
 	}
 	callerRoomName := t.callerRoomName(jobCtx)
-	_, err = jobCtx.CreateSIPParticipant(context.Background(), &livekit.CreateSIPParticipantRequest{
+	req := &livekit.CreateSIPParticipantRequest{
 		RoomName:            t.humanAgentRoomName(callerRoomName),
 		ParticipantIdentity: t.humanAgentIdentity,
 		SipTrunkId:          t.SipTrunkID,
@@ -148,7 +152,12 @@ func (t *WarmTransferTask) OnEnter() {
 		WaitUntilAnswered:   true,
 		SipNumber:           t.SipNumber,
 		Headers:             t.SipHeaders,
-	})
+		Dtmf:                t.Dtmf,
+	}
+	if t.RingingTimeout > 0 {
+		req.RingingTimeout = durationpb.New(t.RingingTimeout)
+	}
+	_, err = jobCtx.CreateSIPParticipant(context.Background(), req)
 	if err != nil {
 		t.Fail(err)
 	}

@@ -2140,6 +2140,8 @@ func TestDefaultConfigFromEnvSelectsWarmTransferWorkflowAgent(t *testing.T) {
 	t.Setenv("RTP_AGENT_WORKFLOW_TASK", "warm_transfer")
 	t.Setenv("RTP_AGENT_WORKFLOW_WARM_TRANSFER_SIP_CALL_TO", "+15550100")
 	t.Setenv("RTP_AGENT_WORKFLOW_WARM_TRANSFER_SIP_TRUNK_ID", "trunk_123")
+	t.Setenv("RTP_AGENT_WORKFLOW_WARM_TRANSFER_DTMF", "ww1234#")
+	t.Setenv("RTP_AGENT_WORKFLOW_WARM_TRANSFER_RINGING_TIMEOUT_SECONDS", "3.5")
 	t.Setenv("RTP_AGENT_WORKFLOW_WARM_TRANSFER_EXTRA_INSTRUCTIONS", "\nKeep the handoff concise.")
 
 	app, err := NewApp(DefaultConfigFromEnv())
@@ -2155,6 +2157,12 @@ func TestDefaultConfigFromEnvSelectsWarmTransferWorkflowAgent(t *testing.T) {
 	}
 	if task.SipTrunkID != "trunk_123" {
 		t.Fatalf("SipTrunkID = %q, want trunk_123", task.SipTrunkID)
+	}
+	if task.Dtmf != "ww1234#" {
+		t.Fatalf("Dtmf = %q, want ww1234#", task.Dtmf)
+	}
+	if task.RingingTimeout != 3500*time.Millisecond {
+		t.Fatalf("RingingTimeout = %v, want 3.5s", task.RingingTimeout)
 	}
 	if app.Agent != task.GetAgent() {
 		t.Fatal("App.Agent does not point at selected warm transfer agent")

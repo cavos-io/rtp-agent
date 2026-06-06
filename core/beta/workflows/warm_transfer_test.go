@@ -4,6 +4,7 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/cavos-io/rtp-agent/core/agent"
 	"github.com/cavos-io/rtp-agent/core/llm"
@@ -64,6 +65,8 @@ func TestWarmTransferOnEnterDialsHumanAgentSIPParticipant(t *testing.T) {
 	task := newWarmTransferTaskForTest(t, "+15550100", "trunk_123", nil, "")
 	task.SipNumber = "+15550999"
 	task.SipHeaders = map[string]string{"X-Trace": "trace-a"}
+	task.Dtmf = "ww1234#"
+	task.RingingTimeout = 7 * time.Second
 	jobCtx := &fakeWarmTransferJobContext{room: &livekit.Room{Name: "caller-room"}}
 	session := agent.NewAgentSession(task, nil, agent.AgentSessionOptions{})
 	session.SetJobContext(jobCtx)
@@ -95,6 +98,12 @@ func TestWarmTransferOnEnterDialsHumanAgentSIPParticipant(t *testing.T) {
 	}
 	if jobCtx.createSIPRequest.Headers["X-Trace"] != "trace-a" {
 		t.Fatalf("CreateSIPParticipant Headers = %#v, want X-Trace", jobCtx.createSIPRequest.Headers)
+	}
+	if jobCtx.createSIPRequest.Dtmf != "ww1234#" {
+		t.Fatalf("CreateSIPParticipant Dtmf = %q, want ww1234#", jobCtx.createSIPRequest.Dtmf)
+	}
+	if jobCtx.createSIPRequest.RingingTimeout == nil || jobCtx.createSIPRequest.RingingTimeout.AsDuration() != 7*time.Second {
+		t.Fatalf("CreateSIPParticipant RingingTimeout = %v, want 7s", jobCtx.createSIPRequest.RingingTimeout)
 	}
 }
 

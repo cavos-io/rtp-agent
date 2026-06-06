@@ -8,3 +8,4 @@ dob-confirmation-default,./core/beta/workflows,TestGetDOBTaskRequiresConfirmatio
 name-confirmation-default,./core/beta/workflows,TestGetNameTaskRequiresConfirmation,Validates name capture default confirmation behavior
 credit-card-confirmation-default,./core/beta/workflows,TestGetCreditCardTaskBuildsReferenceSubtasks,Validates credit-card default confirmation propagation
 warm-transfer-sip-config-validation,./core/beta/workflows,TestNewWarmTransferTaskRejectsMissingSIPConfig,Validates warm transfer rejects missing SIP target or trunk config
+warm-transfer-sip-request-options,./core/beta/workflows,TestWarmTransferOnEnterDialsHumanAgentSIPParticipant,Validates warm transfer sends SIP request options

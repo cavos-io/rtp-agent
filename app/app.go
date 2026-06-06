@@ -451,6 +451,8 @@ type AppConfig struct {
 	WorkflowDtmfAskConfirmation           *bool
 	WorkflowWarmTransferSipCallTo         string
 	WorkflowWarmTransferSipTrunkID        string
+	WorkflowWarmTransferDTMF              string
+	WorkflowWarmTransferRingingTimeout    *float64
 	WorkflowWarmTransferExtraInstructions string
 	WorkflowTaskGroupTasks                []string
 	EvalJudges                            []string
@@ -767,6 +769,8 @@ func DefaultConfigFromEnv() AppConfig {
 		WorkflowDtmfAskConfirmation:             getenvOptionalBool("RTP_AGENT_WORKFLOW_DTMF_ASK_CONFIRMATION"),
 		WorkflowWarmTransferSipCallTo:           os.Getenv("RTP_AGENT_WORKFLOW_WARM_TRANSFER_SIP_CALL_TO"),
 		WorkflowWarmTransferSipTrunkID:          os.Getenv("RTP_AGENT_WORKFLOW_WARM_TRANSFER_SIP_TRUNK_ID"),
+		WorkflowWarmTransferDTMF:                os.Getenv("RTP_AGENT_WORKFLOW_WARM_TRANSFER_DTMF"),
+		WorkflowWarmTransferRingingTimeout:      getenvOptionalFloat("RTP_AGENT_WORKFLOW_WARM_TRANSFER_RINGING_TIMEOUT_SECONDS"),
 		WorkflowWarmTransferExtraInstructions:   os.Getenv("RTP_AGENT_WORKFLOW_WARM_TRANSFER_EXTRA_INSTRUCTIONS"),
 		WorkflowTaskGroupTasks:                  splitEnvList("RTP_AGENT_WORKFLOW_TASK_GROUP_TASKS"),
 		EvalJudges:                              splitEnvList("RTP_AGENT_EVAL_JUDGES"),
@@ -997,6 +1001,7 @@ func workflowAgentFromConfig(cfg AppConfig, baseAgent *agent.Agent) (agent.Agent
 		if err != nil {
 			return nil, err
 		}
+		applyWarmTransferOptions(task, cfg)
 		selected = task
 	case "task_group", "task-group":
 		selectedGroup, err := workflowTaskGroupFromConfig(cfg, baseAgent)
@@ -1178,11 +1183,19 @@ func workflowTaskFactoryFromName(cfg AppConfig, baseAgent *agent.Agent, taskName
 				if err != nil {
 					panic(fmt.Sprintf("validated warm transfer task config rejected: %v", err))
 				}
+				applyWarmTransferOptions(task, cfg)
 				return task
 			}),
 		}, nil
 	default:
 		return workflows.FactoryInfo{}, fmt.Errorf("unsupported RTP_AGENT_WORKFLOW_TASK_GROUP_TASKS entry %q", taskName)
+	}
+}
+
+func applyWarmTransferOptions(task *workflows.WarmTransferTask, cfg AppConfig) {
+	task.Dtmf = strings.TrimSpace(cfg.WorkflowWarmTransferDTMF)
+	if cfg.WorkflowWarmTransferRingingTimeout != nil {
+		task.RingingTimeout = time.Duration(*cfg.WorkflowWarmTransferRingingTimeout * float64(time.Second))
 	}
 }
 
