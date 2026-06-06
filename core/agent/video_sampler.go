@@ -22,13 +22,13 @@ type VoiceActivityVideoSampler struct {
 }
 
 func NewVoiceActivityVideoSampler(session *AgentSession, sampleRate float64, opts images.EncodeOptions) *VoiceActivityVideoSampler {
+	if sampleRate <= 0 {
+		sampleRate = 1.0
+	}
 	return NewVoiceActivityVideoSamplerWithRates(session, sampleRate, 0.3, opts)
 }
 
 func NewVoiceActivityVideoSamplerWithRates(session *AgentSession, speakingFPS float64, silentFPS float64, opts images.EncodeOptions) *VoiceActivityVideoSampler {
-	if speakingFPS <= 0 {
-		speakingFPS = 1.0
-	}
 	return &VoiceActivityVideoSampler{
 		agentSession: session,
 		speakingFPS:  speakingFPS,

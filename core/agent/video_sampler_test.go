@@ -52,3 +52,12 @@ func TestVoiceActivityVideoSamplerUsesSpeakingFPS(t *testing.T) {
 		t.Fatal("speaking frame after speaking interval was not sampled")
 	}
 }
+
+func TestVoiceActivityVideoSamplerDisablesSpeakingFramesWhenSpeakingFPSZero(t *testing.T) {
+	sampler := NewVoiceActivityVideoSamplerWithRates(nil, 0, 1.0, images.EncodeOptions{})
+	sampler.SetSpeaking(true)
+
+	if sampler.OnVideoFrame(context.Background(), &images.VideoFrame{}) {
+		t.Fatal("speaking frame was sampled with speaking FPS set to zero")
+	}
+}
