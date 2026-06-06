@@ -135,3 +135,31 @@ func TestReplaceWordsIsCaseInsensitiveAndPreservesPunctuation(t *testing.T) {
 		t.Fatalf("ReplaceWords() = %q, want %q", got, want)
 	}
 }
+
+func TestHyphenateWordMatchesReferenceExceptions(t *testing.T) {
+	tests := map[string][]string{
+		"Associate":     {"As", "so", "ciate"},
+		"associate":     {"as", "so", "ciate"},
+		"obligatory":    {"oblig", "a", "tory"},
+		"philanthropic": {"phil", "an", "thropic"},
+		"recognizance":  {"re", "cog", "ni", "zance"},
+		"table":         {"ta", "ble"},
+	}
+
+	for word, want := range tests {
+		got := HyphenateWord(word)
+		if !reflect.DeepEqual(got, want) {
+			t.Fatalf("HyphenateWord(%q) = %#v, want %#v", word, got, want)
+		}
+	}
+}
+
+func TestHyphenateWordKeepsShortWordsWhole(t *testing.T) {
+	for _, word := range []string{"", "go", "word"} {
+		got := HyphenateWord(word)
+		want := []string{word}
+		if !reflect.DeepEqual(got, want) {
+			t.Fatalf("HyphenateWord(%q) = %#v, want %#v", word, got, want)
+		}
+	}
+}
