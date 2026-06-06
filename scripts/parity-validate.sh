@@ -14,13 +14,14 @@ Options:
   -h, --help    Show help.
 
 Cases:
-  Cases are listed in scripts/parity-fixtures/test-cases.csv.
+  Cases are listed in scripts/parity-fixtures/test-cases.tsv.
+  The TSV is simple tab-delimited text, not quoted CSV.
 EOF
 }
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 FIXTURE_ROOT="$REPO_ROOT/scripts/parity-fixtures"
-TEST_CASES_FILE="$REPO_ROOT/scripts/parity-fixtures/test-cases.csv"
+TEST_CASES_FILE="$REPO_ROOT/scripts/parity-fixtures/test-cases.tsv"
 KEEP_TEMP=0
 LIST_ONLY=0
 declare -a REQUESTED_CASES=()
@@ -125,13 +126,13 @@ normalize_case() {
 
 test_case_names() {
   [[ -f "$TEST_CASES_FILE" ]] || return 0
-  awk -F ',' 'NR > 1 && $1 != "" { print $1 }' "$TEST_CASES_FILE"
+  awk -F '\t' 'NR > 1 && $1 != "" { print $1 }' "$TEST_CASES_FILE"
 }
 
 test_case_row() {
   local case_name="$1"
   [[ -f "$TEST_CASES_FILE" ]] || return 0
-  awk -F ',' -v name="$case_name" 'NR > 1 && $1 == name { print; exit }' "$TEST_CASES_FILE"
+  awk -F '\t' -v name="$case_name" 'NR > 1 && $1 == name { print; exit }' "$TEST_CASES_FILE"
 }
 
 module_path() {
@@ -152,19 +153,19 @@ go_package_import_path() {
 
 run_go_test_manifest_case() {
   local case_name="$1" tmpdir="$2"
-  local row case_type go_package test_name fixture_path description expected_package actual_norm
+  local row case_type source_ref target_ref go_package test_name contract behavior notes expected_package actual_norm
   row="$(test_case_row "$case_name")"
   if [[ -z "$row" ]]; then
     echo "[$case_name] missing manifest row in $TEST_CASES_FILE" >&2
     return 2
   fi
-  IFS=',' read -r _ case_type go_package test_name fixture_path description <<< "$row"
-  if [[ "$case_type" != "go_test" ]]; then
-    echo "[$case_name] manifest row type = $case_type, want go_test" >&2
+  IFS=$'\t' read -r _ case_type source_ref target_ref go_package test_name contract behavior notes <<< "$row"
+  if [[ "$case_type" != "go-test" ]]; then
+    echo "[$case_name] manifest row type = $case_type, want go-test" >&2
     return 2
   fi
-  if [[ -z "$go_package" || -z "$test_name" || -z "$description" ]]; then
-    echo "[$case_name] manifest row must set go_package, test_name, and description" >&2
+  if [[ -z "$source_ref" || -z "$target_ref" || -z "$go_package" || -z "$test_name" || -z "$contract" || -z "$behavior" ]]; then
+    echo "[$case_name] manifest row must set source_ref, target_ref, go_package, go_test, contract, and behavior" >&2
     return 2
   fi
 
@@ -249,29 +250,29 @@ run_symbol_report_case() {
 
 run_case() {
   local case_name="$1"
-  local row case_type go_package test_name fixture_path description case_dir tmpdir expected actual_norm expected_norm
+  local row case_type source_ref target_ref go_package test_name contract behavior notes case_dir tmpdir expected actual_norm expected_norm
   row="$(test_case_row "$case_name")"
   if [[ -z "$row" ]]; then
     echo "[$case_name] missing manifest row in $TEST_CASES_FILE" >&2
     return 2
   fi
-  IFS=',' read -r _ case_type go_package test_name fixture_path description <<< "$row"
-  case_dir="$FIXTURE_ROOT/$fixture_path"
+  IFS=$'\t' read -r _ case_type source_ref target_ref go_package test_name contract behavior notes <<< "$row"
+  case_dir="$FIXTURE_ROOT/$target_ref"
   tmpdir="$(mktemp -d "${TMPDIR:-/tmp}/parity-validate.${case_name}.XXXXXX")"
   expected="$case_dir/expected.txt"
   actual_norm="$tmpdir/actual.normalized"
   expected_norm="$tmpdir/expected.normalized"
 
   case "$case_type" in
-    go_test)
+    go-test)
       if ! run_go_test_manifest_case "$case_name" "$tmpdir"; then
         echo "Temp dir: $tmpdir" >&2
         return 1
       fi
       ;;
-    symbol_report)
-      if [[ -z "$fixture_path" ]]; then
-        echo "[$case_name] manifest row must set fixture_path" >&2
+    symbol-report)
+      if [[ -z "$target_ref" ]]; then
+        echo "[$case_name] manifest row must set target_ref to the fixture path" >&2
         return 2
       fi
       if [[ ! -f "$expected" ]]; then
@@ -279,7 +280,7 @@ run_case() {
         return 1
       fi
 
-      if ! run_symbol_report_case "$case_name" "$fixture_path" "$tmpdir"; then
+      if ! run_symbol_report_case "$case_name" "$target_ref" "$tmpdir"; then
         echo "Temp dir: $tmpdir" >&2
         return 1
       fi

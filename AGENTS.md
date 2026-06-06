@@ -95,11 +95,10 @@ Use the parity report as a directional aid when deciding whether a port is
 moving the Go implementation closer to the LiveKit reference. The report is a
 symbol/candidate matching tool, not proof of behavioral parity: it may contain
 false positives and false negatives, and `parity_status`/`notes` are for human
-review. `match_confidence=tested` means the matched target symbol has nearby
-automated test-name evidence, which is stronger than a bare name match but still
-needs human review or behavior validation for full equivalence. Do not treat
-this as a mandatory command for every task; run it when it helps scope gaps,
-validate package placement, or inspect nearby reference-to-Go coverage.
+review. Layer 1 `match_confidence` values describe candidate matching only, not
+tested behavior. Do not treat this as a mandatory command for every task; run it
+when it helps scope gaps, validate package placement, or inspect nearby
+reference-to-Go coverage.
 
 ## Behavior Parity Validation
 
@@ -131,12 +130,19 @@ Use the parity layers as follows:
    * Use `scripts/parity-validate.sh` and the shared parity case manifest under
      `scripts/parity-fixtures/` when available.
    * Prefer manifest/table-driven parity cases. Adding a simple parity case
-     should usually mean adding one row to the shared CSV/TSV manifest rather
+     should usually mean adding one row to the shared TSV manifest rather
      than creating dedicated per-case files.
    * Manifest rows should explain the parity intent, not only the command to run.
      Include fields such as case name, case type, source reference, target
      reference, Go package, Go test, contract label, behavior summary, and notes
      when supported.
+   * The current manifest is `scripts/parity-fixtures/test-cases.tsv`. It is
+     simple tab-delimited text, not quoted CSV. Columns are:
+
+     ```text
+     case_name	type	source_ref	target_ref	go_package	go_test	contract	behavior	notes
+     ```
+
    * Simple Go-test-backed cases are useful as cheap target-side regression
      checks. They should verify that the selected test ran, passed, and completed
      in the expected package after normalization.
@@ -171,11 +177,7 @@ Use the parity layers as follows:
 For parity-sensitive changes, prefer the minimum gate:
 
 ```sh
-bash -n scripts/parity-check.sh
-bash -n scripts/parity-validate.sh
-scripts/parity-validate.sh
-scripts/check-test-integrity.sh
-scripts/check-deadcode.sh
+scripts/parity-gate.sh
 ```
 
 A parity implementation is not complete unless new target code is tested, wired

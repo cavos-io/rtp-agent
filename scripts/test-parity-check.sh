@@ -74,9 +74,18 @@ awk -F, 'NF && NF != 12 { printf "%s:%d has %d columns\n", FILENAME, NR, NF; exi
   "$SOURCE_REPORT" "$TARGET_REPORT"
 
 grep -q '"Widget","class"' "$SOURCE_REPORT"
-grep -q '"Widget","class","1","Widget","core/llm/types.go","3","tested"' "$SOURCE_REPORT"
+grep -q '"Widget","class","1","Widget","core/llm/types.go","3","name"' "$SOURCE_REPORT"
+grep -q '"exact_name","function","4","","","","-"' "$SOURCE_REPORT"
+if grep -q '"exact_name".*"core/llmfoo/misleading.go"' "$SOURCE_REPORT"; then
+  echo "source report accepted an unmapped sibling path candidate" >&2
+  exit 1
+fi
+if grep -q '"tested"' "$SOURCE_REPORT" "$TARGET_REPORT"; then
+  echo "Layer 1 report must not claim tested behavior" >&2
+  exit 1
+fi
 grep -q '"Widget","type"' "$TARGET_REPORT"
-grep -q '"Widget","type","3","Widget","pkg/ref.py","1","tested"' "$TARGET_REPORT"
+grep -q '"Widget","type","3","Widget","pkg/ref.py","1","name"' "$TARGET_REPORT"
 grep -q '"Answer","const"' "$TARGET_REPORT"
 grep -q '"BackupAnswer","const"' "$TARGET_REPORT"
 grep -q '"Global","var"' "$TARGET_REPORT"

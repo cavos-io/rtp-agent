@@ -64,9 +64,8 @@ Target report CSV columns:
   target_category,notes
 
 match_confidence values:
-  tested      Candidate target symbol has nearby target test evidence.
   name        Exact normalized symbol-name match. If mapping exists, mapped
-              target paths are preferred.
+              target paths are required for mapped source files.
   module_path Substring symbol match inside mapped target paths only.
   -           No automated candidate found.
 EOF
@@ -494,69 +493,11 @@ rel_dirname() {
   fi
 }
 
-extract_go_test_names() {
-  local root="$1"
-  find "$root" -type f -name '*_test.go' -print0 | sort -z | while IFS= read -r -d '' file; do
-    local rel="${file#$root/}"
-    should_skip_dir_path "$rel" && continue
-    awk -v rel="$rel" '
-      function ltrim(s) { sub(/^[ \t]+/, "", s); return s }
-      {
-        line=ltrim($0)
-        if (line ~ /^func[ \t]+Test[A-Za-z0-9_]*[ \t]*\(/) {
-          sub(/^func[ \t]+/, "", line)
-          sub(/\(.*/, "", line)
-          print rel "|" line
-        }
-      }
-    ' "$file"
-  done
-}
-
-extract_python_test_names() {
-  local root="$1"
-  find "$root" -type f \( -name 'test_*.py' -o -name '*_test.py' \) -print0 | sort -z | while IFS= read -r -d '' file; do
-    local rel="${file#$root/}"
-    should_skip_dir_path "$rel" && continue
-    awk -v rel="$rel" '
-      function ltrim(s) { sub(/^[ \t]+/, "", s); return s }
-      {
-        line=ltrim($0)
-        if (line ~ /^(async[ \t]+)?def[ \t]+test_[A-Za-z0-9_]+[ \t]*\(/) {
-          sub(/^async[ \t]+def[ \t]+/, "", line)
-          sub(/^def[ \t]+/, "", line)
-          sub(/\(.*/, "", line)
-          print rel "|" line
-        }
-      }
-    ' "$file"
-  done
-}
-
-extract_test_names() {
-  local lang="$1" dir="$2"
-  case "$lang" in
-    go) extract_go_test_names "$dir" ;;
-    python) extract_python_test_names "$dir" ;;
-    *) return 0 ;;
-  esac
-}
-
-candidate_confidence() {
-  local base_confidence="$1" candidate_idx="$2"
-  if [[ "$base_confidence" != "-" && -n "$candidate_idx" && "${target_tested[$candidate_idx]:-0}" == "1" ]]; then
-    printf 'tested'
-    return 0
-  fi
-  printf '%s' "$base_confidence"
-}
-
 load_map_file
 
 source_tsv="$(mktemp)"
 target_tsv="$(mktemp)"
-target_tests_tsv="$(mktemp)"
-trap 'rm -f "$source_tsv" "$target_tsv" "$target_tests_tsv"' EXIT
+trap 'rm -f "$source_tsv" "$target_tsv"' EXIT
 
 echo "Extracting $SOURCE_LANG symbols from $SOURCE_DIR ..." >&2
 extract_symbols "$SOURCE_LANG" "$SOURCE_DIR" > "$source_tsv"
@@ -567,8 +508,6 @@ echo "Extracting $TARGET_LANG symbols from $TARGET_DIR ..." >&2
 extract_symbols "$TARGET_LANG" "$TARGET_DIR" > "$target_tsv"
 target_total=$(wc -l < "$target_tsv" | tr -d ' ')
 echo "  Found $target_total target symbols" >&2
-
-extract_test_names "$TARGET_LANG" "$TARGET_DIR" > "$target_tests_tsv"
 
 # Load source symbols into arrays.
 declare -a source_file=() source_module=() source_owner=() source_symbol=() source_symbol_camel_lower=() source_type=() source_line=()
@@ -610,32 +549,6 @@ while IFS='|' read -r file module owner symbol typ line; do
 done < "$target_tsv"
 target_count=$idx
 
-declare -a target_test_file=() target_test_name=() target_test_name_lower=()
-idx=0
-while IFS='|' read -r file name; do
-  [[ -z "${file:-}" || -z "${name:-}" ]] && continue
-  target_test_file[$idx]="$file"
-  target_test_name[$idx]="$name"
-  target_test_name_lower[$idx]="$(lower "$name")"
-  ((idx+=1))
-done < "$target_tests_tsv"
-target_test_count=$idx
-
-declare -a target_tested=()
-for ((t=0; t<target_count; t++)); do
-  target_tested[$t]=0
-  t_dir="$(rel_dirname "${target_file[$t]}")"
-  t_symbol_l="${target_symbol_lower[$t]}"
-  [[ -z "$t_symbol_l" ]] && continue
-  for ((test_idx=0; test_idx<target_test_count; test_idx++)); do
-    [[ "$(rel_dirname "${target_test_file[$test_idx]}")" == "$t_dir" ]] || continue
-    if [[ "${target_test_name_lower[$test_idx]}" == *"$t_symbol_l"* ]]; then
-      target_tested[$t]=1
-      break
-    fi
-  done
-done
-
 if [[ "$REPORT" == "source" ]]; then
 {
   printf '%s\n' 'source_file,source_module,source_class,source_symbol,source_type,source_line,target_candidate,target_candidate_file,target_candidate_line,match_confidence,parity_status,notes'
@@ -653,10 +566,12 @@ if [[ "$REPORT" == "source" ]]; then
     best_idx=""
     confidence="-"
 
-    # Pass 1: exact normalized name match globally; prefer mapped target paths.
+    # Pass 1: exact normalized name match. If the source has mapped target paths,
+    # candidates must stay inside those mapped paths. Global exact-name fallback
+    # is allowed only for unmapped source files.
     if [[ -n "${target_by_norm[$norm_lower]:-}" ]]; then
-      for cand in ${target_by_norm[$norm_lower]}; do
-        if [[ -n "$mapped_paths" ]]; then
+      if [[ -n "$mapped_paths" ]]; then
+        for cand in ${target_by_norm[$norm_lower]}; do
           IFS=',;:|' read -r -a paths <<< "$mapped_paths"
           for p in "${paths[@]}"; do
             p="$(trim "$p")"
@@ -666,12 +581,11 @@ if [[ "$REPORT" == "source" ]]; then
               break 2
             fi
           done
-        fi
-      done
-      if [[ -z "$best_idx" ]]; then
+        done
+      else
         for cand in ${target_by_norm[$norm_lower]}; do best_idx="$cand"; break; done
       fi
-      confidence="name"
+      [[ -n "$best_idx" ]] && confidence="name"
     fi
 
     # Pass 2: substring match, but only inside mapped target paths.
@@ -700,7 +614,6 @@ if [[ "$REPORT" == "source" ]]; then
 
     t_symbol=""; t_file=""; t_line=""
     if [[ -n "$best_idx" ]]; then
-      confidence="$(candidate_confidence "$confidence" "$best_idx")"
       t_symbol="${target_symbol[$best_idx]}"
       t_file="${target_file[$best_idx]}"
       t_line="${target_line[$best_idx]}"
@@ -763,20 +676,21 @@ else
     best_idx=""
     confidence="-"
 
-    # Pass 1: exact target name match against normalized source names. Prefer
-    # source rows whose map-file target paths include this target file.
+    # Pass 1: exact target name match against normalized source names. Mapped
+    # source rows can only match target files inside their mapped paths.
     if [[ -n "${source_by_norm[$norm_lower]:-}" ]]; then
       for cand in ${source_by_norm[$norm_lower]}; do
         mapped_paths="$(map_paths_for_source "${source_file[$cand]}" || true)"
-        if is_target_in_paths "${target_file[$t]}" "$mapped_paths"; then
+        if [[ -n "$mapped_paths" ]]; then
+          is_target_in_paths "${target_file[$t]}" "$mapped_paths" || continue
+          best_idx="$cand"
+          break
+        else
           best_idx="$cand"
           break
         fi
       done
-      if [[ -z "$best_idx" ]]; then
-        for cand in ${source_by_norm[$norm_lower]}; do best_idx="$cand"; break; done
-      fi
-      confidence="name"
+      [[ -n "$best_idx" ]] && confidence="name"
     fi
 
     # Pass 2: substring match against sources that map to this target file.
@@ -795,7 +709,6 @@ else
 
     s_symbol=""; s_file=""; s_line=""
     if [[ -n "$best_idx" ]]; then
-      confidence="$(candidate_confidence "$confidence" "$t")"
       s_symbol="${source_symbol[$best_idx]}"
       s_file="${source_file[$best_idx]}"
       s_line="${source_line[$best_idx]}"
