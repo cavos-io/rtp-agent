@@ -6,6 +6,7 @@ import (
 	"image"
 	"image/jpeg"
 	"image/png"
+	"strings"
 
 	"golang.org/x/image/draw"
 )
@@ -19,7 +20,7 @@ type VideoFrame struct {
 }
 
 type EncodeOptions struct {
-	Format   string // "jpeg" or "png"
+	Format   string // "JPEG" or "PNG"; lowercase aliases are accepted for compatibility.
 	Quality  int    // 1-100 for jpeg
 	Width    int    // 0 means original
 	Height   int    // 0 means original
@@ -28,7 +29,7 @@ type EncodeOptions struct {
 
 func NewEncodeOptions() EncodeOptions {
 	return EncodeOptions{
-		Format:   "jpeg",
+		Format:   "JPEG",
 		Quality:  75,
 		Width:    0,
 		Height:   0,
@@ -198,12 +199,13 @@ func Encode(frame *VideoFrame, opts EncodeOptions) ([]byte, error) {
 	}
 
 	var buf bytes.Buffer
-	if opts.Format == "jpeg" || opts.Format == "jpg" {
+	format := strings.ToUpper(opts.Format)
+	if format == "JPEG" || format == "JPG" {
 		err := jpeg.Encode(&buf, img, &jpeg.Options{Quality: opts.Quality})
 		if err != nil {
 			return nil, err
 		}
-	} else if opts.Format == "png" {
+	} else if format == "PNG" {
 		err := png.Encode(&buf, img)
 		if err != nil {
 			return nil, err
