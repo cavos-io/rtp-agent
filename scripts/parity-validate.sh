@@ -14,34 +14,13 @@ Options:
   -h, --help    Show help.
 
 Cases:
-  pull-basic       Validates source and target symbol candidate reports against
-                   checked-in fixture/golden output.
-  dtmf-tool-error  Validates the beta DTMF tool invalid-event behavior through
-                   the existing Go package test command.
-  address-confirmation-default
-                   Validates that address capture asks for confirmation by
-                   default, matching the reference audio behavior.
-  email-confirmation-default
-                   Validates that email capture asks for confirmation by
-                   default, matching the reference audio behavior.
-  phone-confirmation-default
-                   Validates that phone number capture asks for confirmation by
-                   default, matching the reference audio behavior.
-  dob-confirmation-default
-                   Validates that date of birth capture asks for confirmation by
-                   default, matching the reference audio behavior.
-  name-confirmation-default
-                   Validates that name capture asks for confirmation by
-                   default, matching the reference audio behavior.
-  credit-card-confirmation-default
-                   Validates that credit-card collection propagates confirmation
-                   by default to its reference subtasks.
+  Cases are listed in scripts/parity-fixtures/test-cases.csv.
 EOF
 }
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-FIXTURE_ROOT="$REPO_ROOT/scripts/parity-fixtures/cases"
-GO_TEST_CASES_FILE="$REPO_ROOT/scripts/parity-fixtures/test-cases.csv"
+FIXTURE_ROOT="$REPO_ROOT/scripts/parity-fixtures"
+TEST_CASES_FILE="$REPO_ROOT/scripts/parity-fixtures/test-cases.csv"
 KEEP_TEMP=0
 LIST_ONLY=0
 declare -a REQUESTED_CASES=()
@@ -105,13 +84,12 @@ resolve_cases() {
 }
 
 list_cases() {
-  find "$FIXTURE_ROOT" -mindepth 2 -maxdepth 2 -name expected.txt -printf '%h\n' | xargs -r -n1 basename | sort
-  go_test_case_names
+  test_case_names
 }
 
 case_exists() {
   local case_name="$1"
-  [[ -f "$FIXTURE_ROOT/$case_name/expected.txt" ]] || go_test_case_exists "$case_name"
+  [[ -n "$(test_case_row "$case_name")" ]]
 }
 
 normalize_common() {
@@ -145,20 +123,15 @@ normalize_case() {
   esac
 }
 
-go_test_case_names() {
-  [[ -f "$GO_TEST_CASES_FILE" ]] || return 0
-  awk -F ',' 'NR > 1 && $1 != "" { print $1 }' "$GO_TEST_CASES_FILE"
+test_case_names() {
+  [[ -f "$TEST_CASES_FILE" ]] || return 0
+  awk -F ',' 'NR > 1 && $1 != "" { print $1 }' "$TEST_CASES_FILE"
 }
 
-go_test_case_exists() {
+test_case_row() {
   local case_name="$1"
-  [[ -n "$(go_test_case_row "$case_name")" ]]
-}
-
-go_test_case_row() {
-  local case_name="$1"
-  [[ -f "$GO_TEST_CASES_FILE" ]] || return 0
-  awk -F ',' -v name="$case_name" 'NR > 1 && $1 == name { print; exit }' "$GO_TEST_CASES_FILE"
+  [[ -f "$TEST_CASES_FILE" ]] || return 0
+  awk -F ',' -v name="$case_name" 'NR > 1 && $1 == name { print; exit }' "$TEST_CASES_FILE"
 }
 
 module_path() {
@@ -179,13 +152,17 @@ go_package_import_path() {
 
 run_go_test_manifest_case() {
   local case_name="$1" tmpdir="$2"
-  local row go_package test_name description expected_package actual_norm
-  row="$(go_test_case_row "$case_name")"
+  local row case_type go_package test_name fixture_path description expected_package actual_norm
+  row="$(test_case_row "$case_name")"
   if [[ -z "$row" ]]; then
-    echo "[$case_name] missing manifest row in $GO_TEST_CASES_FILE" >&2
+    echo "[$case_name] missing manifest row in $TEST_CASES_FILE" >&2
     return 2
   fi
-  IFS=',' read -r _ go_package test_name description <<< "$row"
+  IFS=',' read -r _ case_type go_package test_name fixture_path description <<< "$row"
+  if [[ "$case_type" != "go_test" ]]; then
+    echo "[$case_name] manifest row type = $case_type, want go_test" >&2
+    return 2
+  fi
   if [[ -z "$go_package" || -z "$test_name" || -z "$description" ]]; then
     echo "[$case_name] manifest row must set go_package, test_name, and description" >&2
     return 2
@@ -222,22 +199,27 @@ assert_go_test_pass_output() {
   fi
 }
 
-run_pull_basic() {
-  local tmpdir="$1"
-  local case_dir="$FIXTURE_ROOT/pull-basic"
+run_symbol_report_case() {
+  local case_name="$1" fixture_path="$2" tmpdir="$3"
+  local case_dir="$FIXTURE_ROOT/$fixture_path"
   local source_dir="$tmpdir/source"
   local target_dir="$tmpdir/target"
   local source_report="$tmpdir/source.csv"
   local target_report="$tmpdir/target.csv"
 
+  if [[ -z "$fixture_path" || ! -d "$case_dir" ]]; then
+    echo "[$case_name] missing symbol-report fixture directory: $case_dir" >&2
+    return 2
+  fi
+
   cp -R "$case_dir/source" "$source_dir"
   mkdir -p "$target_dir"
   while IFS= read -r -d '' fixture; do
-    local rel="${fixture#$case_dir/target-src/}"
+    local rel="${fixture#$case_dir/target/}"
     local out="$target_dir/${rel%.fixture}"
     mkdir -p "$(dirname "$out")"
     cp "$fixture" "$out"
-  done < <(find "$case_dir/target-src" -type f -name '*.go.fixture' -print0 | sort -z)
+  done < <(find "$case_dir/target" -type f -name '*.go.fixture' -print0 | sort -z)
 
   "$REPO_ROOT/scripts/parity-check.sh" \
     --source-dir "$source_dir" \
@@ -267,38 +249,55 @@ run_pull_basic() {
 
 run_case() {
   local case_name="$1"
-  local case_dir tmpdir expected actual_norm expected_norm
-  case_dir="$FIXTURE_ROOT/$case_name"
+  local row case_type go_package test_name fixture_path description case_dir tmpdir expected actual_norm expected_norm
+  row="$(test_case_row "$case_name")"
+  if [[ -z "$row" ]]; then
+    echo "[$case_name] missing manifest row in $TEST_CASES_FILE" >&2
+    return 2
+  fi
+  IFS=',' read -r _ case_type go_package test_name fixture_path description <<< "$row"
+  case_dir="$FIXTURE_ROOT/$fixture_path"
   tmpdir="$(mktemp -d "${TMPDIR:-/tmp}/parity-validate.${case_name}.XXXXXX")"
   expected="$case_dir/expected.txt"
   actual_norm="$tmpdir/actual.normalized"
   expected_norm="$tmpdir/expected.normalized"
 
-  if go_test_case_exists "$case_name"; then
-    if ! run_go_test_manifest_case "$case_name" "$tmpdir"; then
-      echo "Temp dir: $tmpdir" >&2
-      return 1
-    fi
-  else
-    if [[ ! -f "$expected" ]]; then
-      echo "[$case_name] missing expected output: $expected" >&2
-      return 1
-    fi
+  case "$case_type" in
+    go_test)
+      if ! run_go_test_manifest_case "$case_name" "$tmpdir"; then
+        echo "Temp dir: $tmpdir" >&2
+        return 1
+      fi
+      ;;
+    symbol_report)
+      if [[ -z "$fixture_path" ]]; then
+        echo "[$case_name] manifest row must set fixture_path" >&2
+        return 2
+      fi
+      if [[ ! -f "$expected" ]]; then
+        echo "[$case_name] missing expected output: $expected" >&2
+        return 1
+      fi
 
-    case "$case_name" in
-      pull-basic) run_pull_basic "$tmpdir" ;;
-      *) echo "unknown non-metadata case: $case_name" >&2; return 2 ;;
-    esac
-    normalize_case "$case_name" "$tmpdir/actual.raw" "$actual_norm" "$tmpdir"
-    normalize_common "$expected" "$expected_norm" "$tmpdir"
+      if ! run_symbol_report_case "$case_name" "$fixture_path" "$tmpdir"; then
+        echo "Temp dir: $tmpdir" >&2
+        return 1
+      fi
+      normalize_case "$case_name" "$tmpdir/actual.raw" "$actual_norm" "$tmpdir"
+      normalize_common "$expected" "$expected_norm" "$tmpdir"
 
-    if ! diff -u "$expected_norm" "$actual_norm" > "$tmpdir/diff.txt"; then
-      echo "[$case_name] fixture output differs from golden." >&2
-      echo "Temp dir: $tmpdir" >&2
-      cat "$tmpdir/diff.txt" >&2
-      return 1
-    fi
-  fi
+      if ! diff -u "$expected_norm" "$actual_norm" > "$tmpdir/diff.txt"; then
+        echo "[$case_name] fixture output differs from golden." >&2
+        echo "Temp dir: $tmpdir" >&2
+        cat "$tmpdir/diff.txt" >&2
+        return 1
+      fi
+      ;;
+    *)
+      echo "[$case_name] unsupported case_type: $case_type" >&2
+      return 2
+      ;;
+  esac
 
   echo "[$case_name] ok"
   if (( KEEP_TEMP == 0 )); then
