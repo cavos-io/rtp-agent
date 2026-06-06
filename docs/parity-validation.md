@@ -50,6 +50,8 @@ Available cases:
   confirmation by default, matching the reference audio behavior.
 - `phone-confirmation-default`: validates that phone number capture asks for
   confirmation by default, matching the reference audio behavior.
+- `dob-confirmation-default`: validates that date of birth capture asks for
+  confirmation by default, matching the reference audio behavior.
 
 Run all cases:
 

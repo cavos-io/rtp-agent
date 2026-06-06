@@ -7,7 +7,7 @@ import (
 )
 
 func TestGetDOBTaskRecordsPastDateWithoutConfirmation(t *testing.T) {
-	task := NewGetDOBTask(GetDOBOptions{})
+	task := NewGetDOBTask(GetDOBOptions{RequireConfirmationSet: true})
 	tool := &updateDOBTool{task: task}
 
 	out, err := tool.Execute(context.Background(), `{"year":1990,"month":1,"day":15}`)
@@ -29,7 +29,7 @@ func TestGetDOBTaskRecordsPastDateWithoutConfirmation(t *testing.T) {
 }
 
 func TestGetDOBTaskRejectsInvalidOrFutureDate(t *testing.T) {
-	task := NewGetDOBTask(GetDOBOptions{})
+	task := NewGetDOBTask(GetDOBOptions{RequireConfirmationSet: true})
 	tool := &updateDOBTool{task: task}
 
 	cases := []string{
@@ -54,7 +54,7 @@ func TestGetDOBTaskRejectsInvalidOrFutureDate(t *testing.T) {
 }
 
 func TestGetDOBTaskRequiresConfirmation(t *testing.T) {
-	task := NewGetDOBTask(GetDOBOptions{RequireConfirmation: true})
+	task := NewGetDOBTask(GetDOBOptions{})
 	update := &updateDOBTool{task: task}
 
 	out, err := update.Execute(context.Background(), `{"year":1985,"month":7,"day":4}`)
@@ -84,7 +84,7 @@ func TestGetDOBTaskRequiresConfirmation(t *testing.T) {
 }
 
 func TestGetDOBTaskIncludesOptionalTime(t *testing.T) {
-	task := NewGetDOBTask(GetDOBOptions{IncludeTime: true})
+	task := NewGetDOBTask(GetDOBOptions{IncludeTime: true, RequireConfirmationSet: true})
 
 	var updateTime *updateDOBTimeTool
 	for _, tool := range task.Agent.Tools {
@@ -117,8 +117,21 @@ func TestGetDOBTaskIncludesOptionalTime(t *testing.T) {
 	}
 }
 
+func TestGetDOBTaskCanDisableDefaultConfirmation(t *testing.T) {
+	task := NewGetDOBTask(GetDOBOptions{RequireConfirmation: false, RequireConfirmationSet: true})
+	update := &updateDOBTool{task: task}
+
+	out, err := update.Execute(context.Background(), `{"year":1990,"month":1,"day":15}`)
+	if err != nil {
+		t.Fatalf("update Execute() error = %v", err)
+	}
+	if out != "Date of birth captured and task completed." {
+		t.Fatalf("update Execute() output = %q, want completion message", out)
+	}
+}
+
 func TestDeclineDOBCaptureToolFailsWithReason(t *testing.T) {
-	task := NewGetDOBTask(GetDOBOptions{})
+	task := NewGetDOBTask(GetDOBOptions{RequireConfirmationSet: true})
 	tool := &declineDOBCaptureTool{task: task}
 
 	if _, err := tool.Execute(context.Background(), `{"reason":"user refused"}`); err != nil {
