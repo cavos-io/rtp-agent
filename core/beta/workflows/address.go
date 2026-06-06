@@ -55,7 +55,6 @@ func NewGetAddressTask(requireConfirmation bool) *GetAddressTask {
 
 	t.Agent.Tools = []llm.Tool{
 		&updateAddressTool{task: t},
-		&confirmAddressTool{task: t},
 		&declineAddressCaptureTool{task: t},
 	}
 
@@ -112,15 +111,29 @@ func (t *updateAddressTool) Execute(ctx context.Context, args string) (string, e
 	t.task.currentAddress = address
 
 	if !t.task.RequireConfirmation {
-		t.task.Complete(&GetAddressResult{Address: address})
+		_ = t.task.Complete(&GetAddressResult{Address: address})
 		return "Address captured and task completed.", nil
 	}
 
-	return fmt.Sprintf("The address has been updated to %s\nPrompt the user for confirmation, do not call `confirm_address` directly", address), nil
+	t.task.setConfirmAddressTool(address)
+	return fmt.Sprintf("The address has been updated to %s\nRepeat the address field by field if needed.\nPrompt the user for confirmation, do not call `confirm_address` directly", address), nil
+}
+
+func (t *GetAddressTask) setConfirmAddressTool(address string) {
+	tools := make([]llm.Tool, 0, len(t.Agent.Tools)+1)
+	for _, tool := range t.Agent.Tools {
+		if tool.ID() == "confirm_address" {
+			continue
+		}
+		tools = append(tools, tool)
+	}
+	tools = append(tools, &confirmAddressTool{task: t, address: address})
+	t.Agent.Tools = tools
 }
 
 type confirmAddressTool struct {
-	task *GetAddressTask
+	task    *GetAddressTask
+	address string
 }
 
 func (t *confirmAddressTool) ID() string   { return "confirm_address" }
@@ -139,9 +152,12 @@ func (t *confirmAddressTool) Execute(ctx context.Context, args string) (string, 
 	if t.task.currentAddress == "" {
 		return "", fmt.Errorf("error: no address was provided, update_address must be called before")
 	}
+	if t.address != t.task.currentAddress {
+		return "", llm.NewToolError("The address has changed since confirmation was requested, ask the user to confirm the updated address.")
+	}
 
 	t.task.addressConfirmed = true
-	t.task.Complete(&GetAddressResult{Address: t.task.currentAddress})
+	_ = t.task.Complete(&GetAddressResult{Address: t.address})
 	return "Address confirmed.", nil
 }
 
@@ -172,6 +188,6 @@ func (t *declineAddressCaptureTool) Execute(ctx context.Context, args string) (s
 		return "", err
 	}
 
-	t.task.Fail(fmt.Errorf("couldn't get the address: %s", params.Reason))
+	_ = t.task.Fail(fmt.Errorf("couldn't get the address: %s", params.Reason))
 	return "Task failed.", nil
 }
