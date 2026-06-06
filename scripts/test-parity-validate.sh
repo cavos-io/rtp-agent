@@ -12,6 +12,8 @@ INCOMPLETE_CROSS_MANIFEST="$WORKDIR/incomplete-cross-test-cases.tsv"
 
 cat > "$VALID_MANIFEST" <<'TSV'
 case_name	type	source_ref	target_ref	go_package	go_test	python_runner	go_runner	input_json	contract	behavior	notes
+go-dev-mode	go-test	refs/agents/livekit-agents/livekit/agents/utils/misc.py	library/utils/misc_test.go	./library/utils	TestIsDevModeMatchesReferenceEnv				dev-mode-env-exact	Development mode is enabled only when LIVEKIT_DEV_MODE is exactly 1.	Smoke test for batched go-test manifest dispatch.
+go-hosted-mode	go-test	refs/agents/livekit-agents/livekit/agents/utils/misc.py	library/utils/misc_test.go	./library/utils	TestIsHostedUsesReferenceEnv				hosted-env-presence	Hosted mode follows LIVEKIT_REMOTE_EOT_URL environment presence.	Smoke test for batched go-test manifest dispatch.
 dev-mode-cross	cross-runtime	refs/agents/livekit-agents/livekit/agents/utils/misc.py	library/utils/misc.go			python3 scripts/parity-runners/python-utils.py	go run ./scripts/parity-runners/go-utils	{"env_values":["1","","true","on"]}	dev-mode-env-exact	Development mode is enabled only when LIVEKIT_DEV_MODE is exactly 1.	Smoke test for real cross-runtime runner dispatch.
 hosted-cross	cross-runtime	refs/agents/livekit-agents/livekit/agents/utils/misc.py	library/utils/misc.go			python3 scripts/parity-runners/python-utils.py	go run ./scripts/parity-runners/go-utils	{"contract":"hosted-env-presence","env_values":[null,"","https://hosted.example"]}	hosted-env-presence	Hosted mode follows LIVEKIT_REMOTE_EOT_URL environment presence.	Smoke test for multi-contract cross-runtime runner dispatch.
 cloud-cross	cross-runtime	refs/agents/livekit-agents/livekit/agents/utils/misc.py	library/utils/misc.go			python3 scripts/parity-runners/python-utils.py	go run ./scripts/parity-runners/go-utils	{"contract":"cloud-url-host-suffix","url_values":["wss://tenant.livekit.cloud","https://tenant.livekit.run/path","http://localhost:7880","://bad-url","https://livekit.cloud.evil.example"]}	cloud-url-host-suffix	Cloud URL detection follows reference hostname suffix rules.	Smoke test for URL-vector cross-runtime runner dispatch.
@@ -33,6 +35,10 @@ TSV
 
 bash -n "$ROOT/scripts/parity-validate.sh"
 
+PARITY_TEST_CASES_FILE="$VALID_MANIFEST" "$ROOT/scripts/parity-validate.sh" --list \
+  | grep -Fxq 'go-dev-mode'
+PARITY_TEST_CASES_FILE="$VALID_MANIFEST" "$ROOT/scripts/parity-validate.sh" --list \
+  | grep -Fxq 'go-hosted-mode'
 PARITY_TEST_CASES_FILE="$VALID_MANIFEST" "$ROOT/scripts/parity-validate.sh" --list \
   | grep -Fxq 'dev-mode-cross'
 PARITY_TEST_CASES_FILE="$VALID_MANIFEST" "$ROOT/scripts/parity-validate.sh" --list \
@@ -70,6 +76,8 @@ PARITY_TEST_CASES_FILE="$VALID_MANIFEST" "$ROOT/scripts/parity-validate.sh" --ca
 grep -q '^\[bounded-dict-cross\] ok$' "$WORKDIR/bounded-dict-cross.out"
 
 PARITY_TEST_CASES_FILE="$VALID_MANIFEST" "$ROOT/scripts/parity-validate.sh" > "$WORKDIR/all-cross.out" 2>&1
+grep -q '^\[go-dev-mode\] ok$' "$WORKDIR/all-cross.out"
+grep -q '^\[go-hosted-mode\] ok$' "$WORKDIR/all-cross.out"
 grep -q '^\[dev-mode-cross\] ok$' "$WORKDIR/all-cross.out"
 grep -q '^\[hosted-cross\] ok$' "$WORKDIR/all-cross.out"
 grep -q '^\[cloud-cross\] ok$' "$WORKDIR/all-cross.out"
