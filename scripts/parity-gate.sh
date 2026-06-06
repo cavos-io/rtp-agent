@@ -10,6 +10,7 @@ Options:
   --case NAME  Run only the selected parity validation case. May be repeated.
                Use this for the local inner loop of a focused parity slice.
   --changed    Run parity validation cases related to changed files.
+               Manifest row edits run the changed manifest cases directly.
                This is a local inner-loop shortcut, not a replacement for --all.
   --all        Run every parity validation case. This is the default.
   -h, --help   Show help.
@@ -40,6 +41,34 @@ changed_files() {
 }
 
 changed_case_args() {
+  {
+    changed_manifest_case_names
+    changed_path_case_names
+  } | awk 'NF && !seen[$0]++ { print "--case"; print }'
+}
+
+changed_manifest_case_names() {
+  local manifest_path="${TEST_CASES_FILE#$REPO_ROOT/}"
+  if [[ "$manifest_path" == "$TEST_CASES_FILE" ]]; then
+    return 0
+  fi
+
+  git diff HEAD --unified=0 -- "$manifest_path" \
+    | awk -F '\t' '
+      /^\+[^+]/ {
+        line = substr($0, 2)
+        if (line == "" || line ~ /^case_name\t/) {
+          next
+        }
+        split(line, fields, "\t")
+        if (fields[1] != "") {
+          print fields[1]
+        }
+      }
+    '
+}
+
+changed_path_case_names() {
   local changed
   changed="$(changed_files)"
   if [[ -z "$changed" ]]; then
@@ -109,7 +138,6 @@ changed_case_args() {
       for (i = 1; i <= changed_count; i++) {
         for (j = 1; j <= path_count; j++) {
           if (path_match(changed_paths[i], paths[j])) {
-            print "--case"
             print case_name
             next
           }
