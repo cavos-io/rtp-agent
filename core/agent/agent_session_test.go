@@ -2622,6 +2622,45 @@ func TestAgentSessionCloseSoonCommitsPendingUserTurn(t *testing.T) {
 	}
 }
 
+func TestAgentSessionStopCancelsActiveAgentTask(t *testing.T) {
+	task := NewAgentTask[string]("collect data")
+	task.ID = "collect_data"
+	session := NewAgentSession(task, nil, AgentSessionOptions{})
+	session.activity = NewAgentActivity(task, session)
+	session.started = true
+
+	if err := session.Stop(context.Background()); err != nil {
+		t.Fatalf("Stop() error = %v, want nil", err)
+	}
+
+	type waitResult struct {
+		value any
+		err   error
+	}
+	done := make(chan waitResult, 1)
+	go func() {
+		got, err := task.WaitAny(context.Background())
+		done <- waitResult{value: got, err: err}
+	}()
+
+	var result waitResult
+	select {
+	case result = <-done:
+	case <-testTimeout():
+		t.Fatal("WaitAny() did not return after Stop cancelled the active AgentTask")
+	}
+	if result.value != nil {
+		t.Fatalf("WaitAny() result = %#v, want nil", result.value)
+	}
+	var toolErr llm.ToolError
+	if !errors.As(result.err, &toolErr) {
+		t.Fatalf("WaitAny() error = %T %v, want llm.ToolError", result.err, result.err)
+	}
+	if toolErr.Message != "AgentTask collect_data is cancelled" {
+		t.Fatalf("ToolError message = %q, want cancellation message", toolErr.Message)
+	}
+}
+
 func TestAgentSessionUpdateAgentBeforeStartSwapsAgentOnly(t *testing.T) {
 	initial := &trackingAgent{Agent: NewAgent("initial")}
 	next := &trackingAgent{Agent: NewAgent("next")}

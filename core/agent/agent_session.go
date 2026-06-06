@@ -2109,6 +2109,9 @@ func (s *AgentSession) stop(ctx context.Context, commitPendingUserTurn bool) err
 				cancel()
 			}
 		}
+		if task, ok := activity.AgentIntf.(interface{ Cancel() }); ok {
+			task.Cancel()
+		}
 		activity.Stop()
 	}
 	if closer, ok := assistant.(closeableSessionAssistant); ok {
