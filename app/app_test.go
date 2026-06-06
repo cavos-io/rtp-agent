@@ -1956,8 +1956,11 @@ func TestDefaultConfigFromEnvSelectsEmailWorkflowAgent(t *testing.T) {
 	if app.Agent != task.GetAgent() {
 		t.Fatal("App.Agent does not point at selected workflow agent")
 	}
-	if len(app.Agent.Tools) != 3 {
-		t.Fatalf("workflow tools = %d, want email update/confirm/decline tools", len(app.Agent.Tools))
+	if len(app.Agent.Tools) != 2 {
+		t.Fatalf("workflow tools = %d, want email update/decline tools", len(app.Agent.Tools))
+	}
+	if app.Agent.Tools[0].Name() != "update_email_address" || app.Agent.Tools[1].Name() != "decline_email_capture" {
+		t.Fatalf("workflow tools = %#v, want email update/decline tools", app.Agent.Tools)
 	}
 }
 

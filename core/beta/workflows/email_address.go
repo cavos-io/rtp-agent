@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"regexp"
+	"strings"
 
 	"github.com/cavos-io/rtp-agent/core/agent"
 	"github.com/cavos-io/rtp-agent/core/llm"
@@ -52,7 +53,6 @@ func NewGetEmailTask(requireConfirmation bool) *GetEmailTask {
 
 	t.Agent.Tools = []llm.Tool{
 		&updateEmailTool{task: t},
-		&confirmEmailTool{task: t},
 		&declineEmailCaptureTool{task: t},
 	}
 
@@ -94,23 +94,37 @@ func (t *updateEmailTool) Execute(ctx context.Context, args string) (string, err
 		return "", err
 	}
 
-	email := params.Email
+	email := strings.TrimSpace(params.Email)
 	if !emailRegex.MatchString(email) {
-		return "", fmt.Errorf("invalid email address provided: %s", email)
+		return "", llm.NewToolError(fmt.Sprintf("Invalid email address provided: %s", email))
 	}
 
 	t.task.currentEmail = email
 
 	if !t.task.RequireConfirmation {
-		t.task.Complete(&GetEmailResult{Email: email})
+		_ = t.task.Complete(&GetEmailResult{Email: email})
 		return "Email captured and task completed.", nil
 	}
 
-	return fmt.Sprintf("The email has been updated to %s\nPrompt the user for confirmation, do not call `confirm_email_address` directly", email), nil
+	t.task.setConfirmEmailTool(email)
+	return fmt.Sprintf("The email has been updated to %s\nRepeat the email character by character if needed.\nPrompt the user for confirmation, do not call `confirm_email_address` directly", email), nil
+}
+
+func (t *GetEmailTask) setConfirmEmailTool(email string) {
+	tools := make([]llm.Tool, 0, len(t.Agent.Tools)+1)
+	for _, tool := range t.Agent.Tools {
+		if tool.ID() == "confirm_email_address" {
+			continue
+		}
+		tools = append(tools, tool)
+	}
+	tools = append(tools, &confirmEmailTool{task: t, email: email})
+	t.Agent.Tools = tools
 }
 
 type confirmEmailTool struct {
-	task *GetEmailTask
+	task  *GetEmailTask
+	email string
 }
 
 func (t *confirmEmailTool) ID() string   { return "confirm_email_address" }
@@ -129,9 +143,12 @@ func (t *confirmEmailTool) Execute(ctx context.Context, args string) (string, er
 	if t.task.currentEmail == "" {
 		return "", fmt.Errorf("error: no email address was provided, update_email_address must be called before")
 	}
+	if t.email != t.task.currentEmail {
+		return "", llm.NewToolError("The email has changed since confirmation was requested, ask the user to confirm the updated email.")
+	}
 
 	t.task.emailConfirmed = true
-	t.task.Complete(&GetEmailResult{Email: t.task.currentEmail})
+	_ = t.task.Complete(&GetEmailResult{Email: t.email})
 	return "Email address confirmed.", nil
 }
 
@@ -162,6 +179,6 @@ func (t *declineEmailCaptureTool) Execute(ctx context.Context, args string) (str
 		return "", err
 	}
 
-	t.task.Fail(fmt.Errorf("couldn't get the email address: %s", params.Reason))
+	_ = t.task.Fail(fmt.Errorf("couldn't get the email address: %s", params.Reason))
 	return "Task failed.", nil
 }
