@@ -44,9 +44,12 @@ type BasetenSTT struct {
 	vadThreshold               float64
 	vadMinSilenceDurationMS    int
 	vadSpeechPadMS             int
+	dialWebsocket              basetenSTTWebsocketDialer
 }
 
 type BasetenSTTOption func(*BasetenSTT)
+
+type basetenSTTWebsocketDialer func(context.Context, string, http.Header) (*websocket.Conn, *http.Response, error)
 
 func WithBasetenSTTModelEndpoint(endpoint string) BasetenSTTOption {
 	return func(s *BasetenSTT) {
@@ -104,6 +107,14 @@ func WithBasetenSTTVADThreshold(threshold float64) BasetenSTTOption {
 	}
 }
 
+func withBasetenSTTWebsocketDialer(dialer basetenSTTWebsocketDialer) BasetenSTTOption {
+	return func(s *BasetenSTT) {
+		if dialer != nil {
+			s.dialWebsocket = dialer
+		}
+	}
+}
+
 func NewBasetenSTT(apiKey string, model string, opts ...BasetenSTTOption) (*BasetenSTT, error) {
 	if apiKey == "" {
 		apiKey = os.Getenv(basetenAPIKeyEnv)
@@ -139,6 +150,7 @@ func NewBasetenSTT(apiKey string, model string, opts ...BasetenSTTOption) (*Base
 		vadThreshold:               defaultBasetenSTTVADThreshold,
 		vadMinSilenceDurationMS:    defaultBasetenSTTVADMinSilenceMS,
 		vadSpeechPadMS:             defaultBasetenSTTVADSpeechPadMS,
+		dialWebsocket:              defaultBasetenSTTWebsocketDialer,
 	}
 	for _, opt := range opts {
 		opt(provider)
@@ -168,7 +180,7 @@ func (s *BasetenSTT) Stream(ctx context.Context, language string) (stt.Recognize
 	if language != "" {
 		s.language = language
 	}
-	conn, _, err := websocket.DefaultDialer.DialContext(ctx, s.modelEndpoint, buildBasetenSTTHeaders(s))
+	conn, _, err := s.dialWebsocket(ctx, s.modelEndpoint, buildBasetenSTTHeaders(s))
 	if err != nil {
 		return nil, fmt.Errorf("failed to dial baseten stt websocket: %w", err)
 	}
@@ -194,6 +206,10 @@ func (s *BasetenSTT) Stream(ctx context.Context, language string) (stt.Recognize
 	}
 	go stream.readLoop()
 	return stream, nil
+}
+
+func defaultBasetenSTTWebsocketDialer(ctx context.Context, endpoint string, headers http.Header) (*websocket.Conn, *http.Response, error) {
+	return websocket.DefaultDialer.DialContext(ctx, endpoint, headers)
 }
 
 func (s *BasetenSTT) Recognize(ctx context.Context, frames []*model.AudioFrame, language string) (*stt.SpeechEvent, error) {

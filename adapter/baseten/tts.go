@@ -36,9 +36,17 @@ type BasetenTTS struct {
 	maxTokens     int
 	bufferSize    int
 	sampleRate    int
+	httpClient    basetenTTSHTTPDoer
+	dialWebsocket basetenTTSWebsocketDialer
 }
 
 type BasetenTTSOption func(*BasetenTTS)
+
+type basetenTTSHTTPDoer interface {
+	Do(*http.Request) (*http.Response, error)
+}
+
+type basetenTTSWebsocketDialer func(context.Context, string, http.Header) (*websocket.Conn, *http.Response, error)
 
 func WithBasetenTTSModelEndpoint(endpoint string) BasetenTTSOption {
 	return func(t *BasetenTTS) {
@@ -86,6 +94,22 @@ func WithBasetenTTSBufferSize(bufferSize int) BasetenTTSOption {
 	}
 }
 
+func withBasetenTTSHTTPClient(client basetenTTSHTTPDoer) BasetenTTSOption {
+	return func(t *BasetenTTS) {
+		if client != nil {
+			t.httpClient = client
+		}
+	}
+}
+
+func withBasetenTTSWebsocketDialer(dialer basetenTTSWebsocketDialer) BasetenTTSOption {
+	return func(t *BasetenTTS) {
+		if dialer != nil {
+			t.dialWebsocket = dialer
+		}
+	}
+}
+
 func NewBasetenTTS(apiKey string, model string, opts ...BasetenTTSOption) (*BasetenTTS, error) {
 	if apiKey == "" {
 		apiKey = os.Getenv(basetenAPIKeyEnv)
@@ -113,6 +137,8 @@ func NewBasetenTTS(apiKey string, model string, opts ...BasetenTTSOption) (*Base
 		maxTokens:     defaultBasetenTTSMaxTokens,
 		bufferSize:    defaultBasetenTTSBufferSize,
 		sampleRate:    defaultBasetenTTSSampleRate,
+		httpClient:    http.DefaultClient,
+		dialWebsocket: defaultBasetenTTSWebsocketDialer,
 	}
 	for _, opt := range opts {
 		opt(provider)
@@ -139,7 +165,7 @@ func (t *BasetenTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedSt
 	if err != nil {
 		return nil, err
 	}
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := t.httpClient.Do(req)
 	if err != nil {
 		return nil, err
 	}
@@ -175,7 +201,7 @@ func (t *BasetenTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
 	if !t.Capabilities().Streaming {
 		return nil, fmt.Errorf("baseten websocket tts streaming requires a ws:// or wss:// endpoint")
 	}
-	conn, _, err := websocket.DefaultDialer.DialContext(ctx, t.modelEndpoint, buildBasetenTTSWebsocketHeaders(t))
+	conn, _, err := t.dialWebsocket(ctx, t.modelEndpoint, buildBasetenTTSWebsocketHeaders(t))
 	if err != nil {
 		return nil, fmt.Errorf("failed to dial baseten tts websocket: %w", err)
 	}
@@ -199,6 +225,10 @@ func (t *BasetenTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
 	}
 	go stream.readLoop()
 	return stream, nil
+}
+
+func defaultBasetenTTSWebsocketDialer(ctx context.Context, endpoint string, headers http.Header) (*websocket.Conn, *http.Response, error) {
+	return websocket.DefaultDialer.DialContext(ctx, endpoint, headers)
 }
 
 func buildBasetenTTSWebsocketHeaders(t *BasetenTTS) http.Header {

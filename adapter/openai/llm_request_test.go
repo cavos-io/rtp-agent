@@ -218,6 +218,28 @@ func TestBuildOpenAIChatCompletionRequestAppliesExtraParams(t *testing.T) {
 	}
 }
 
+func TestNewOpenAILLMWithBaseURLAndHTTPClientUsesConfiguredClient(t *testing.T) {
+	capture := &captureDeadlineHTTPClient{
+		statusCode:   http.StatusBadRequest,
+		responseBody: `{"error":{"message":"bad request","type":"invalid_request_error","code":"bad_request"}}`,
+	}
+	model := NewOpenAILLMWithBaseURLAndHTTPClient("test-key", "gpt-4o", "https://openai.test/v1", capture)
+
+	_, err := model.Chat(
+		context.Background(),
+		llm.NewChatContext(),
+		llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 0}),
+	)
+
+	var statusErr *llm.APIStatusError
+	if !errors.As(err, &statusErr) {
+		t.Fatalf("Chat error = %T %v, want APIStatusError", err, err)
+	}
+	if capture.authorization != "Bearer test-key" {
+		t.Fatalf("Authorization = %q, want Bearer test-key", capture.authorization)
+	}
+}
+
 type captureDeadlineHTTPClient struct {
 	err           error
 	hasDeadline   bool

@@ -3,8 +3,8 @@ package anam
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
-	"net/http/httptest"
 	"strings"
 	"testing"
 
@@ -82,8 +82,12 @@ func TestAnamAvatarStartCreatesSessionWhenLiveKitInfoIsPresent(t *testing.T) {
 		AvatarModel: "anam-model",
 	}
 	var sawRequest bool
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	originalClient := http.DefaultClient
+	http.DefaultClient = &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
 		sawRequest = true
+		if r.Method != http.MethodPost {
+			t.Fatalf("method = %q, want POST", r.Method)
+		}
 		if r.URL.Path != "/v1/auth/session-token" {
 			t.Fatalf("path = %q, want session-token endpoint", r.URL.Path)
 		}
@@ -105,10 +109,18 @@ func TestAnamAvatarStartCreatesSessionWhenLiveKitInfoIsPresent(t *testing.T) {
 		if environment["livekitToken"] != "livekit-token" {
 			t.Fatalf("environment.livekitToken = %v, want LiveKit token", environment["livekitToken"])
 		}
-		w.WriteHeader(http.StatusOK)
-	}))
-	defer server.Close()
-	t.Setenv(anamAPIURLEnv, server.URL)
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Status:     "200 OK",
+			Body:       io.NopCloser(strings.NewReader("{}")),
+			Header:     make(http.Header),
+			Request:    r,
+		}, nil
+	})}
+	t.Cleanup(func() {
+		http.DefaultClient = originalClient
+	})
+	t.Setenv(anamAPIURLEnv, "https://anam.test")
 
 	avatar := NewAnamAvatar("explicit-key", persona)
 	ctx := agent.ContextWithAvatarStartInfo(context.Background(), agent.AvatarStartInfo{
@@ -125,6 +137,12 @@ func TestAnamAvatarStartCreatesSessionWhenLiveKitInfoIsPresent(t *testing.T) {
 	if !sawRequest {
 		t.Fatal("Start did not create an Anam session")
 	}
+}
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) {
+	return f(r)
 }
 
 func TestNewAnamAvatarUsesReferenceAPIURLAndPersonaConfig(t *testing.T) {

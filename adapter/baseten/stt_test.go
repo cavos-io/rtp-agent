@@ -3,11 +3,12 @@ package baseten
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net"
 	"net/http"
-	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -193,7 +194,7 @@ func TestBasetenSTTStreamSendsReferenceMetadataAndAudio(t *testing.T) {
 	audioCh := make(chan []byte, 1)
 	terminateCh := make(chan string, 1)
 	errCh := make(chan error, 1)
-	server := newBasetenSTTTestWebsocketServer(t, func(conn *websocket.Conn, r *http.Request) {
+	dialer := newBasetenSTTTestWebsocketDialer(t, func(conn *websocket.Conn, r *http.Request) {
 		if got := r.Header.Get("Authorization"); got != "Api-Key test-key" {
 			t.Errorf("Authorization = %q, want Api-Key header", got)
 		}
@@ -224,10 +225,10 @@ func TestBasetenSTTStreamSendsReferenceMetadataAndAudio(t *testing.T) {
 		}
 		terminateCh <- string(terminatePayload)
 	})
-	defer server.Close()
 
 	provider := mustNewBasetenSTT(t, "test-key", "",
-		WithBasetenSTTModelEndpoint(httpToWS(server.URL)),
+		WithBasetenSTTModelEndpoint("ws://baseten.test/websocket"),
+		dialer,
 		WithBasetenSTTLanguage("auto"),
 		WithBasetenSTTSampleRate(8000),
 	)
@@ -259,7 +260,7 @@ func TestBasetenSTTStreamSendsReferenceMetadataAndAudio(t *testing.T) {
 }
 
 func TestBasetenSTTStreamMapsWebsocketTranscripts(t *testing.T) {
-	server := newBasetenSTTTestWebsocketServer(t, func(conn *websocket.Conn, r *http.Request) {
+	dialer := newBasetenSTTTestWebsocketDialer(t, func(conn *websocket.Conn, r *http.Request) {
 		if _, _, err := conn.ReadMessage(); err != nil {
 			t.Errorf("read metadata: %v", err)
 			return
@@ -275,9 +276,11 @@ func TestBasetenSTTStreamMapsWebsocketTranscripts(t *testing.T) {
 		}
 		_ = conn.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""), time.Now().Add(time.Second))
 	})
-	defer server.Close()
 
-	provider := mustNewBasetenSTT(t, "test-key", "", WithBasetenSTTModelEndpoint(httpToWS(server.URL)))
+	provider := mustNewBasetenSTT(t, "test-key", "",
+		WithBasetenSTTModelEndpoint("ws://baseten.test/websocket"),
+		dialer,
+	)
 	stream, err := provider.Stream(context.Background(), "")
 	if err != nil {
 		t.Fatalf("Stream error = %v", err)
@@ -297,14 +300,12 @@ func TestBasetenSTTStreamMapsWebsocketTranscripts(t *testing.T) {
 }
 
 func TestBasetenSTTStreamDialErrorReturnsFailure(t *testing.T) {
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatalf("listen: %v", err)
-	}
-	addr := listener.Addr().String()
-	listener.Close()
-
-	provider := mustNewBasetenSTT(t, "test-key", "", WithBasetenSTTModelEndpoint("ws://"+addr))
+	provider := mustNewBasetenSTT(t, "test-key", "",
+		WithBasetenSTTModelEndpoint("ws://baseten.test/websocket"),
+		withBasetenSTTWebsocketDialer(func(context.Context, string, http.Header) (*websocket.Conn, *http.Response, error) {
+			return nil, nil, errors.New("dial failed")
+		}),
+	)
 	if _, err := provider.Stream(context.Background(), ""); err == nil {
 		t.Fatal("Stream error = nil, want dial failure")
 	}
@@ -319,19 +320,102 @@ func mustNewBasetenSTT(t *testing.T, apiKey string, model string, opts ...Basete
 	return provider
 }
 
-func newBasetenSTTTestWebsocketServer(t *testing.T, handler func(*websocket.Conn, *http.Request)) *httptest.Server {
+func newBasetenSTTTestWebsocketDialer(t *testing.T, handler func(*websocket.Conn, *http.Request)) BasetenSTTOption {
 	t.Helper()
 	upgrader := websocket.Upgrader{}
-	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		conn, err := upgrader.Upgrade(w, r, nil)
-		if err != nil {
-			t.Errorf("upgrade: %v", err)
-			return
+	return withBasetenSTTWebsocketDialer(func(ctx context.Context, endpoint string, headers http.Header) (*websocket.Conn, *http.Response, error) {
+		clientConn, serverConn := net.Pipe()
+		listener := newBasetenSingleConnListener(serverConn)
+		server := &http.Server{
+			Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				conn, err := upgrader.Upgrade(w, r, nil)
+				if err != nil {
+					t.Errorf("upgrade: %v", err)
+					return
+				}
+				defer conn.Close()
+				handler(conn, r)
+			}),
 		}
-		defer conn.Close()
-		handler(conn, r)
-	}))
+		serverErrCh := make(chan error, 1)
+		go func() {
+			if err := server.Serve(listener); err != nil && !errors.Is(err, http.ErrServerClosed) && !errors.Is(err, net.ErrClosed) {
+				serverErrCh <- err
+			}
+		}()
+		t.Cleanup(func() {
+			_ = server.Close()
+			_ = listener.Close()
+			_ = clientConn.Close()
+			_ = serverConn.Close()
+		})
+
+		dialer := websocket.Dialer{
+			NetDialContext: func(context.Context, string, string) (net.Conn, error) {
+				return clientConn, nil
+			},
+		}
+		conn, response, err := dialer.DialContext(ctx, endpoint, headers)
+		select {
+		case serverErr := <-serverErrCh:
+			if err == nil {
+				err = serverErr
+			}
+		default:
+		}
+		return conn, response, err
+	})
 }
+
+type basetenSingleConnListener struct {
+	mu     sync.Mutex
+	once   sync.Once
+	conn   net.Conn
+	closed chan struct{}
+}
+
+func newBasetenSingleConnListener(conn net.Conn) *basetenSingleConnListener {
+	return &basetenSingleConnListener{
+		conn:   conn,
+		closed: make(chan struct{}),
+	}
+}
+
+func (l *basetenSingleConnListener) Accept() (net.Conn, error) {
+	l.mu.Lock()
+	if l.conn != nil {
+		conn := l.conn
+		l.conn = nil
+		l.mu.Unlock()
+		return conn, nil
+	}
+	l.mu.Unlock()
+
+	<-l.closed
+	return nil, net.ErrClosed
+}
+
+func (l *basetenSingleConnListener) Close() error {
+	l.once.Do(func() {
+		close(l.closed)
+		l.mu.Lock()
+		if l.conn != nil {
+			_ = l.conn.Close()
+			l.conn = nil
+		}
+		l.mu.Unlock()
+	})
+	return nil
+}
+
+func (l *basetenSingleConnListener) Addr() net.Addr {
+	return basetenDummyAddr("pipe")
+}
+
+type basetenDummyAddr string
+
+func (a basetenDummyAddr) Network() string { return string(a) }
+func (a basetenDummyAddr) String() string  { return string(a) }
 
 func assertBasetenSTTEvent(t *testing.T, events []*stt.SpeechEvent, index int, eventType stt.SpeechEventType, text string) {
 	t.Helper()
