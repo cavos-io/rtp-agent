@@ -121,7 +121,7 @@ func (s *BufferedTokenStream) EndInput() error {
 	defer s.mu.Unlock()
 
 	if s.closed {
-		return nil
+		return fmt.Errorf("stream closed")
 	}
 
 	s.flushLocked()
