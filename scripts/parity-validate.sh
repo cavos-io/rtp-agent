@@ -41,10 +41,10 @@ EOF
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 FIXTURE_ROOT="$REPO_ROOT/scripts/parity-fixtures/cases"
-EXPECTATION_ROOT="$REPO_ROOT/scripts/parity-fixtures/expectations"
+GO_TEST_CASES_FILE="$REPO_ROOT/scripts/parity-fixtures/test-cases.csv"
 KEEP_TEMP=0
+LIST_ONLY=0
 declare -a REQUESTED_CASES=()
-declare -a ALL_CASES=("pull-basic" "dtmf-tool-error" "address-confirmation-default" "email-confirmation-default" "phone-confirmation-default" "dob-confirmation-default" "name-confirmation-default" "credit-card-confirmation-default")
 
 while (($#)); do
   case "$1" in
@@ -53,8 +53,8 @@ while (($#)); do
       shift 2
       ;;
     --list)
-      printf '%s\n' "${ALL_CASES[@]}"
-      exit 0
+      LIST_ONLY=1
+      shift
       ;;
     --keep-temp)
       KEEP_TEMP=1
@@ -81,24 +81,37 @@ resolve_cases() {
   for requested in "${REQUESTED_CASES[@]}"; do
     case "$requested" in
       all)
-        selected+=("${ALL_CASES[@]}")
-        ;;
-      pull-basic|dtmf-tool-error|address-confirmation-default|email-confirmation-default|phone-confirmation-default|dob-confirmation-default|name-confirmation-default|credit-card-confirmation-default)
-        selected+=("$requested")
+        while IFS= read -r case_name; do
+          selected+=("$case_name")
+        done < <(list_cases)
         ;;
       "")
         echo "Error: --case requires a name." >&2
         return 2
         ;;
       *)
-        echo "Error: unknown case: $requested" >&2
-        echo "Available cases:" >&2
-        printf '  %s\n' "${ALL_CASES[@]}" >&2
-        return 2
+        if case_exists "$requested"; then
+          selected+=("$requested")
+        else
+          echo "Error: unknown case: $requested" >&2
+          echo "Available cases:" >&2
+          list_cases | sed 's/^/  /' >&2
+          return 2
+        fi
         ;;
     esac
   done
   printf '%s\n' "${selected[@]}"
+}
+
+list_cases() {
+  find "$FIXTURE_ROOT" -mindepth 2 -maxdepth 2 -name expected.txt -printf '%h\n' | xargs -r -n1 basename | sort
+  go_test_case_names
+}
+
+case_exists() {
+  local case_name="$1"
+  [[ -f "$FIXTURE_ROOT/$case_name/expected.txt" ]] || go_test_case_exists "$case_name"
 }
 
 normalize_common() {
@@ -132,43 +145,81 @@ normalize_case() {
   esac
 }
 
-load_case_metadata() {
-  local case_dir="$1"
-  EXPECTATION=""
-  GO_PACKAGE=""
-  PACKAGE=""
-  TEST_NAME=""
-  # shellcheck disable=SC1090
-  source "$case_dir/case.env"
+go_test_case_names() {
+  [[ -f "$GO_TEST_CASES_FILE" ]] || return 0
+  awk -F ',' 'NR > 1 && $1 != "" { print $1 }' "$GO_TEST_CASES_FILE"
 }
 
-run_go_test_case() {
-  local tmpdir="$1"
-  if [[ -z "$GO_PACKAGE" || -z "$TEST_NAME" ]]; then
-    echo "case metadata must set GO_PACKAGE and TEST_NAME" >&2
+go_test_case_exists() {
+  local case_name="$1"
+  [[ -n "$(go_test_case_row "$case_name")" ]]
+}
+
+go_test_case_row() {
+  local case_name="$1"
+  [[ -f "$GO_TEST_CASES_FILE" ]] || return 0
+  awk -F ',' -v name="$case_name" 'NR > 1 && $1 == name { print; exit }' "$GO_TEST_CASES_FILE"
+}
+
+module_path() {
+  awk '$1 == "module" { print $2; exit }' "$REPO_ROOT/go.mod"
+}
+
+go_package_import_path() {
+  local go_package="$1"
+  case "$go_package" in
+    ./*)
+      printf '%s/%s\n' "$(module_path)" "${go_package#./}"
+      ;;
+    *)
+      printf '%s\n' "$go_package"
+      ;;
+  esac
+}
+
+run_go_test_manifest_case() {
+  local case_name="$1" tmpdir="$2"
+  local row go_package test_name description expected_package actual_norm
+  row="$(go_test_case_row "$case_name")"
+  if [[ -z "$row" ]]; then
+    echo "[$case_name] missing manifest row in $GO_TEST_CASES_FILE" >&2
     return 2
   fi
-  (
+  IFS=',' read -r _ go_package test_name description <<< "$row"
+  if [[ -z "$go_package" || -z "$test_name" || -z "$description" ]]; then
+    echo "[$case_name] manifest row must set go_package, test_name, and description" >&2
+    return 2
+  fi
+
+  if ! (
     cd "$REPO_ROOT"
-    go test "$GO_PACKAGE" -run "$TEST_NAME" -count=1 -v
-  ) > "$tmpdir/actual.raw" 2>&1
+    go test "$go_package" -run "^$test_name$" -count=1 -v
+  ) > "$tmpdir/actual.raw" 2>&1; then
+    :
+  fi
+
+  actual_norm="$tmpdir/actual.normalized"
+  normalize_case "$case_name" "$tmpdir/actual.raw" "$actual_norm" "$tmpdir"
+  expected_package="$(go_package_import_path "$go_package")"
+  assert_go_test_pass_output "$case_name" "$actual_norm" "$test_name" "$expected_package" "$tmpdir/actual.raw"
 }
 
-render_expectation_template() {
-  local template_name="$1" output="$2"
-  local template="$EXPECTATION_ROOT/$template_name.txt"
-  if [[ ! -f "$template" ]]; then
-    echo "missing expectation template: $template" >&2
+assert_go_test_pass_output() {
+  local case_name="$1" output="$2" test_name="$3" expected_package="$4" raw_output="$5"
+  local failures=()
+
+  grep -Fqx -- "=== RUN $test_name" "$output" || failures+=("missing === RUN $test_name")
+  grep -Fqx -- "--- PASS: $test_name (<duration>)" "$output" || failures+=("missing --- PASS: $test_name (<duration>)")
+  grep -Fqx -- "PASS" "$output" || failures+=("missing final PASS")
+  grep -Fqx -- "ok $expected_package <duration>" "$output" || failures+=("missing package result: ok $expected_package <duration>")
+
+  if (( ${#failures[@]} > 0 )); then
+    echo "[$case_name] Go test output failed normalized assertions:" >&2
+    printf '  - %s\n' "${failures[@]}" >&2
+    echo "Captured output:" >&2
+    cat "$raw_output" >&2
     return 1
   fi
-  if [[ -z "$PACKAGE" || -z "$TEST_NAME" ]]; then
-    echo "case metadata must set PACKAGE and TEST_NAME" >&2
-    return 2
-  fi
-  sed \
-    -e "s#{{PACKAGE}}#$PACKAGE#g" \
-    -e "s#{{TEST_NAME}}#$TEST_NAME#g" \
-    "$template" > "$output"
 }
 
 run_pull_basic() {
@@ -223,23 +274,11 @@ run_case() {
   actual_norm="$tmpdir/actual.normalized"
   expected_norm="$tmpdir/expected.normalized"
 
-  if [[ -f "$case_dir/case.env" ]]; then
-    load_case_metadata "$case_dir"
-    case "$EXPECTATION" in
-      go-test-pass)
-        run_go_test_case "$tmpdir"
-        render_expectation_template "$EXPECTATION" "$tmpdir/expected.raw"
-        expected="$tmpdir/expected.raw"
-        ;;
-      "")
-        echo "[$case_name] case.env must set EXPECTATION." >&2
-        return 2
-        ;;
-      *)
-        echo "[$case_name] unsupported expectation: $EXPECTATION" >&2
-        return 2
-        ;;
-    esac
+  if go_test_case_exists "$case_name"; then
+    if ! run_go_test_manifest_case "$case_name" "$tmpdir"; then
+      echo "Temp dir: $tmpdir" >&2
+      return 1
+    fi
   else
     if [[ ! -f "$expected" ]]; then
       echo "[$case_name] missing expected output: $expected" >&2
@@ -250,16 +289,15 @@ run_case() {
       pull-basic) run_pull_basic "$tmpdir" ;;
       *) echo "unknown non-metadata case: $case_name" >&2; return 2 ;;
     esac
-  fi
+    normalize_case "$case_name" "$tmpdir/actual.raw" "$actual_norm" "$tmpdir"
+    normalize_common "$expected" "$expected_norm" "$tmpdir"
 
-  normalize_case "$case_name" "$tmpdir/actual.raw" "$actual_norm" "$tmpdir"
-  normalize_common "$expected" "$expected_norm" "$tmpdir"
-
-  if ! diff -u "$expected_norm" "$actual_norm" > "$tmpdir/diff.txt"; then
-    echo "[$case_name] fixture output differs from golden." >&2
-    echo "Temp dir: $tmpdir" >&2
-    cat "$tmpdir/diff.txt" >&2
-    return 1
+    if ! diff -u "$expected_norm" "$actual_norm" > "$tmpdir/diff.txt"; then
+      echo "[$case_name] fixture output differs from golden." >&2
+      echo "Temp dir: $tmpdir" >&2
+      cat "$tmpdir/diff.txt" >&2
+      return 1
+    fi
   fi
 
   echo "[$case_name] ok"
@@ -273,6 +311,10 @@ run_case() {
 main() {
   local case_name failed=0
   local cases_file
+  if (( LIST_ONLY == 1 )); then
+    list_cases
+    return 0
+  fi
   cases_file="$(mktemp "${TMPDIR:-/tmp}/parity-validate.cases.XXXXXX")"
   trap 'rm -f "$cases_file"' RETURN
   if ! resolve_cases > "$cases_file"; then

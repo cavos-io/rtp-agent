@@ -1,0 +1,8 @@
+case_name,go_package,test_name,description
+address-confirmation-default,./core/beta/workflows,TestGetAddressTaskInjectsConfirmToolAfterUpdate,Validates address capture default confirmation behavior
+dtmf-tool-error,./core/beta/tools,TestSendDTMFToolReturnsFailureOutputForInvalidEvent,Validates beta DTMF tool invalid-event behavior
+email-confirmation-default,./core/beta/workflows,TestGetEmailTaskInjectsConfirmToolAfterUpdate,Validates email capture default confirmation behavior
+phone-confirmation-default,./core/beta/workflows,TestGetPhoneNumberTaskRequiresConfirmation,Validates phone number capture default confirmation behavior
+dob-confirmation-default,./core/beta/workflows,TestGetDOBTaskRequiresConfirmation,Validates date of birth capture default confirmation behavior
+name-confirmation-default,./core/beta/workflows,TestGetNameTaskRequiresConfirmation,Validates name capture default confirmation behavior
+credit-card-confirmation-default,./core/beta/workflows,TestGetCreditCardTaskBuildsReferenceSubtasks,Validates credit-card default confirmation propagation
