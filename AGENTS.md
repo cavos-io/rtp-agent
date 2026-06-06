@@ -139,14 +139,13 @@ Use the parity layers as follows:
     expected reference behavior.
   * Reuse shared expectation templates when multiple fixtures have the same
     output shape, such as normalized `go test -v` pass output.
-    * Prefer small per-case metadata files over duplicated golden files when the
-      only differences are package name, test name, command, or fixture inputs.
-    * Keep per-case `expected.txt` files only when the expected output is
-      genuinely case-specific, such as symbol report CSV output or behavior
-      traces with unique content.
-    * Adding a new parity case should usually mean adding the smallest useful
-      fixture metadata, not copying an existing golden file.
-
+  * Prefer small per-case metadata files over duplicated golden files when the
+    only differences are package name, test name, command, or fixture inputs.
+  * Keep per-case `expected.txt` files only when the expected output is
+    genuinely case-specific, such as symbol report CSV output or behavior
+    traces with unique content.
+  * Adding a new parity case should usually mean adding the smallest useful
+    fixture metadata, not copying an existing golden file.
 
 4. **Layer 4: Quality gates**
 

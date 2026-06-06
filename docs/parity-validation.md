@@ -35,7 +35,13 @@ human review.
 
 `scripts/parity-validate.sh` runs named deterministic fixture cases under
 `scripts/parity-fixtures/` and compares normalized actual output with checked-in
-golden output.
+expectations.
+
+Cases with a common output shape should use a shared expectation template from
+`scripts/parity-fixtures/expectations/` plus a small `case.env` metadata file.
+For example, simple `go test -v` pass cases use `EXPECTATION=go-test-pass` with
+`GO_PACKAGE`, `PACKAGE`, and `TEST_NAME`. Keep per-case `expected.txt` files for
+unique outputs such as the `pull-basic` symbol report CSV golden.
 
 Available cases:
 
@@ -69,10 +75,10 @@ Run a single case:
 scripts/parity-validate.sh --case pull-basic
 ```
 
-The validator captures raw command output in a temporary directory, normalizes
-unstable values such as absolute paths, timestamps, UUIDs, temp paths, and
-durations, then runs `diff -u` against the golden file. On failure it prints the
-temp directory and the diff.
+The validator captures raw command output in a temporary directory, renders any
+shared expectation template, normalizes unstable values such as absolute paths,
+timestamps, UUIDs, temp paths, and durations, then runs `diff -u` against the
+expected output. On failure it prints the temp directory and the diff.
 
 ## Layer 4: Quality Gates
 

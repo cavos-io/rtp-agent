@@ -41,6 +41,7 @@ EOF
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 FIXTURE_ROOT="$REPO_ROOT/scripts/parity-fixtures/cases"
+EXPECTATION_ROOT="$REPO_ROOT/scripts/parity-fixtures/expectations"
 KEEP_TEMP=0
 declare -a REQUESTED_CASES=()
 declare -a ALL_CASES=("pull-basic" "dtmf-tool-error" "address-confirmation-default" "email-confirmation-default" "phone-confirmation-default" "dob-confirmation-default" "name-confirmation-default" "credit-card-confirmation-default")
@@ -118,17 +119,56 @@ normalize_case() {
   normalize_common "$input" "$common" "$tmpdir"
 
   case "$case_name" in
-    dtmf-tool-error|address-confirmation-default|email-confirmation-default|phone-confirmation-default|dob-confirmation-default|name-confirmation-default|credit-card-confirmation-default)
+    pull-basic)
+      cp "$common" "$output"
+      ;;
+    *)
       sed -E \
         -e 's/[[:space:]]+/ /g' \
         -e 's/\([0-9.]+s\)/(<duration>)/g' \
         -e 's/ [0-9.]+s$/ <duration>/' \
         "$common" > "$output"
       ;;
-    pull-basic)
-      cp "$common" "$output"
-      ;;
   esac
+}
+
+load_case_metadata() {
+  local case_dir="$1"
+  EXPECTATION=""
+  GO_PACKAGE=""
+  PACKAGE=""
+  TEST_NAME=""
+  # shellcheck disable=SC1090
+  source "$case_dir/case.env"
+}
+
+run_go_test_case() {
+  local tmpdir="$1"
+  if [[ -z "$GO_PACKAGE" || -z "$TEST_NAME" ]]; then
+    echo "case metadata must set GO_PACKAGE and TEST_NAME" >&2
+    return 2
+  fi
+  (
+    cd "$REPO_ROOT"
+    go test "$GO_PACKAGE" -run "$TEST_NAME" -count=1 -v
+  ) > "$tmpdir/actual.raw" 2>&1
+}
+
+render_expectation_template() {
+  local template_name="$1" output="$2"
+  local template="$EXPECTATION_ROOT/$template_name.txt"
+  if [[ ! -f "$template" ]]; then
+    echo "missing expectation template: $template" >&2
+    return 1
+  fi
+  if [[ -z "$PACKAGE" || -z "$TEST_NAME" ]]; then
+    echo "case metadata must set PACKAGE and TEST_NAME" >&2
+    return 2
+  fi
+  sed \
+    -e "s#{{PACKAGE}}#$PACKAGE#g" \
+    -e "s#{{TEST_NAME}}#$TEST_NAME#g" \
+    "$template" > "$output"
 }
 
 run_pull_basic() {
@@ -174,86 +214,43 @@ run_pull_basic() {
   } > "$tmpdir/actual.raw"
 }
 
-run_dtmf_tool_error() {
-  local tmpdir="$1"
-  (
-    cd "$REPO_ROOT"
-    go test ./core/beta/tools -run TestSendDTMFToolReturnsFailureOutputForInvalidEvent -count=1 -v
-  ) > "$tmpdir/actual.raw" 2>&1
-}
-
-run_address_confirmation_default() {
-  local tmpdir="$1"
-  (
-    cd "$REPO_ROOT"
-    go test ./core/beta/workflows -run TestGetAddressTaskInjectsConfirmToolAfterUpdate -count=1 -v
-  ) > "$tmpdir/actual.raw" 2>&1
-}
-
-run_email_confirmation_default() {
-  local tmpdir="$1"
-  (
-    cd "$REPO_ROOT"
-    go test ./core/beta/workflows -run TestGetEmailTaskInjectsConfirmToolAfterUpdate -count=1 -v
-  ) > "$tmpdir/actual.raw" 2>&1
-}
-
-run_phone_confirmation_default() {
-  local tmpdir="$1"
-  (
-    cd "$REPO_ROOT"
-    go test ./core/beta/workflows -run TestGetPhoneNumberTaskRequiresConfirmation -count=1 -v
-  ) > "$tmpdir/actual.raw" 2>&1
-}
-
-run_dob_confirmation_default() {
-  local tmpdir="$1"
-  (
-    cd "$REPO_ROOT"
-    go test ./core/beta/workflows -run TestGetDOBTaskRequiresConfirmation -count=1 -v
-  ) > "$tmpdir/actual.raw" 2>&1
-}
-
-run_name_confirmation_default() {
-  local tmpdir="$1"
-  (
-    cd "$REPO_ROOT"
-    go test ./core/beta/workflows -run TestGetNameTaskRequiresConfirmation -count=1 -v
-  ) > "$tmpdir/actual.raw" 2>&1
-}
-
-run_credit_card_confirmation_default() {
-  local tmpdir="$1"
-  (
-    cd "$REPO_ROOT"
-    go test ./core/beta/workflows -run TestGetCreditCardTaskBuildsReferenceSubtasks -count=1 -v
-  ) > "$tmpdir/actual.raw" 2>&1
-}
-
 run_case() {
   local case_name="$1"
-  local tmpdir expected actual_norm expected_norm
+  local case_dir tmpdir expected actual_norm expected_norm
+  case_dir="$FIXTURE_ROOT/$case_name"
   tmpdir="$(mktemp -d "${TMPDIR:-/tmp}/parity-validate.${case_name}.XXXXXX")"
-  expected="$FIXTURE_ROOT/$case_name/expected.txt"
+  expected="$case_dir/expected.txt"
   actual_norm="$tmpdir/actual.normalized"
   expected_norm="$tmpdir/expected.normalized"
 
-  if [[ ! -f "$expected" ]]; then
-    echo "[$case_name] missing expected output: $expected" >&2
-    return 1
-  fi
+  if [[ -f "$case_dir/case.env" ]]; then
+    load_case_metadata "$case_dir"
+    case "$EXPECTATION" in
+      go-test-pass)
+        run_go_test_case "$tmpdir"
+        render_expectation_template "$EXPECTATION" "$tmpdir/expected.raw"
+        expected="$tmpdir/expected.raw"
+        ;;
+      "")
+        echo "[$case_name] case.env must set EXPECTATION." >&2
+        return 2
+        ;;
+      *)
+        echo "[$case_name] unsupported expectation: $EXPECTATION" >&2
+        return 2
+        ;;
+    esac
+  else
+    if [[ ! -f "$expected" ]]; then
+      echo "[$case_name] missing expected output: $expected" >&2
+      return 1
+    fi
 
-  case "$case_name" in
-    pull-basic) run_pull_basic "$tmpdir" ;;
-    dtmf-tool-error) run_dtmf_tool_error "$tmpdir" ;;
-    address-confirmation-default) run_address_confirmation_default "$tmpdir" ;;
-    email-confirmation-default) run_email_confirmation_default "$tmpdir" ;;
-    phone-confirmation-default) run_phone_confirmation_default "$tmpdir" ;;
-    dob-confirmation-default) run_dob_confirmation_default "$tmpdir" ;;
-    name-confirmation-default) run_name_confirmation_default "$tmpdir" ;;
-    credit-card-confirmation-default) run_credit_card_confirmation_default "$tmpdir" ;;
-    *) echo "unknown case: $case_name" >&2; return 2 ;;
-  esac
+    case "$case_name" in
+      pull-basic) run_pull_basic "$tmpdir" ;;
+      *) echo "unknown non-metadata case: $case_name" >&2; return 2 ;;
+    esac
+  fi
 
   normalize_case "$case_name" "$tmpdir/actual.raw" "$actual_norm" "$tmpdir"
   normalize_common "$expected" "$expected_norm" "$tmpdir"
