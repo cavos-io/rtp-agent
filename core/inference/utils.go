@@ -9,8 +9,9 @@ import (
 )
 
 const (
-	defaultInferenceURL = "https://agent-gateway.livekit.cloud/v1"
-	stagingInferenceURL = "https://agent-gateway.staging.livekit.cloud/v1"
+	defaultInferenceURL     = "https://agent-gateway.livekit.cloud/v1"
+	stagingInferenceURL     = "https://agent-gateway.staging.livekit.cloud/v1"
+	InferenceAccessTokenTTL = 10 * time.Minute
 )
 
 func defaultInferenceWebsocketURL() string {

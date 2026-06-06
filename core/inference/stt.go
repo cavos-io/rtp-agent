@@ -9,7 +9,6 @@ import (
 	"net/url"
 	"strings"
 	"sync"
-	"time"
 
 	"github.com/cavos-io/rtp-agent/core/audio"
 	"github.com/cavos-io/rtp-agent/core/audio/model"
@@ -57,7 +56,7 @@ func (s *STT) Recognize(ctx context.Context, frames []*model.AudioFrame, languag
 }
 
 func (s *STT) Stream(ctx context.Context, language string) (stt.RecognizeStream, error) {
-	token, err := CreateAccessToken(s.apiKey, s.apiSecret, time.Hour)
+	token, err := CreateAccessToken(s.apiKey, s.apiSecret, InferenceAccessTokenTTL)
 	if err != nil {
 		return nil, err
 	}

@@ -131,7 +131,7 @@ func (t *TTS) connectionPool() *utils.ConnectionPool[*websocket.Conn] {
 }
 
 func (t *TTS) connectTTSWebsocket(ctx context.Context) (*websocket.Conn, error) {
-	token, err := CreateAccessToken(t.apiKey, t.apiSecret, time.Hour)
+	token, err := CreateAccessToken(t.apiKey, t.apiSecret, InferenceAccessTokenTTL)
 	if err != nil {
 		return nil, err
 	}

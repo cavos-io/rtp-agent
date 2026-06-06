@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/cavos-io/rtp-agent/library/tokenize"
+	"github.com/go-jose/go-jose/v3/jwt"
 	"github.com/gorilla/websocket"
 )
 
@@ -119,6 +120,27 @@ func TestTTSConnectionPoolRefreshesSessionAgeOnGet(t *testing.T) {
 	markRefreshedOnGet := pool.FieldByName("opts").FieldByName("MarkRefreshedOnGet").Bool()
 	if !markRefreshedOnGet {
 		t.Fatal("connection pool MarkRefreshedOnGet = false, want true")
+	}
+}
+
+func TestInferenceAccessTokenTTLMatchesReferenceDefault(t *testing.T) {
+	token, err := CreateAccessToken("key", "secret", InferenceAccessTokenTTL)
+	if err != nil {
+		t.Fatalf("CreateAccessToken() error = %v", err)
+	}
+	parsed, err := jwt.ParseSigned(token)
+	if err != nil {
+		t.Fatalf("ParseSigned() error = %v", err)
+	}
+	claims := jwt.Claims{}
+	if err := parsed.UnsafeClaimsWithoutVerification(&claims); err != nil {
+		t.Fatalf("UnsafeClaimsWithoutVerification() error = %v", err)
+	}
+	if claims.NotBefore == nil || claims.Expiry == nil {
+		t.Fatalf("claims missing not-before or expiry: %#v", claims)
+	}
+	if got := claims.Expiry.Time().Sub(claims.NotBefore.Time()); got != 10*time.Minute {
+		t.Fatalf("access token TTL = %v, want 10m", got)
 	}
 }
 
