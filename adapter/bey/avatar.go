@@ -29,8 +29,13 @@ type BeyAvatar struct {
 	avatarID       string
 	avatarIdentity string
 	avatarName     string
+	httpClient     beyHTTPDoer
 	state          agent.AvatarState
 	started        bool
+}
+
+type beyHTTPDoer interface {
+	Do(*http.Request) (*http.Response, error)
 }
 
 func NewBeyAvatar(apiKey string) (*BeyAvatar, error) {
@@ -50,6 +55,7 @@ func NewBeyAvatar(apiKey string) (*BeyAvatar, error) {
 		avatarID:       defaultBeyAvatarID,
 		avatarIdentity: defaultBeyAvatarAgentIdentity,
 		avatarName:     defaultBeyAvatarAgentName,
+		httpClient:     http.DefaultClient,
 		state:          agent.AvatarStateIdle,
 	}, nil
 }
@@ -88,7 +94,7 @@ func (a *BeyAvatar) createSession(ctx context.Context, info agent.AvatarStartInf
 	}
 	req.Header = headers
 	req.Header.Set("Content-Type", "application/json")
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := a.httpClient.Do(req)
 	if err != nil {
 		return err
 	}
