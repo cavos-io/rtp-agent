@@ -108,44 +108,54 @@ Use the parity layers as follows:
 
 1. **Layer 1: Symbol candidate report**
 
-   * `scripts/parity-check.sh` finds possible source/target symbol matches.
-   * It helps identify gaps and candidate files.
-   * It does not prove that behavior is equivalent.
+  * `scripts/parity-check.sh` finds possible source/target symbol matches.
+  * It helps identify gaps and candidate files.
+  * It does not prove that behavior is equivalent.
 
 2. **Layer 2: Agent-assisted review placeholder**
 
-   * Future tooling may classify candidate pairs as `exists`, `partial`,
-     `missing`, `intentionally_different`, or `unknown`.
-   * Until that tooling exists, do not depend on agent review as the only proof
-     of parity.
+  * Future tooling may classify candidate pairs as `exists`, `partial`,
+    `missing`, `intentionally_different`, or `unknown`.
+  * Until that tooling exists, do not depend on agent review as the only proof
+    of parity.
 
 3. **Layer 3: Fixture/golden behavior validation**
 
-   * Use `scripts/parity-validate.sh` and checked-in cases under
-     `scripts/parity-fixtures/` when available.
-   * Every important parity slice should add or update at least one Layer 3
-     fixture.
-   * Do not create one fixture per private helper unless it proves meaningful
-     behavior.
-   * Prefer fixtures for public flows, lifecycle behavior, error handling,
-     config precedence, streaming behavior, retries, tool calls, room I/O,
-     telemetry, and other behavior that can regress.
-   * Fixtures should define input state, command/runner behavior, expected output
-     or trace, normalization rules, and assertions/invariants.
-   * Normalize unstable fields such as timestamps, absolute paths, UUIDs,
-     random IDs, and nondeterministic ordering before comparing actual and
-     expected output.
-   * A fixture should fail with a clear diff when target behavior diverges from
-     expected reference behavior.
+  * Use `scripts/parity-validate.sh` and checked-in cases under
+    `scripts/parity-fixtures/` when available.
+  * Every important parity slice should add or update at least one Layer 3
+    fixture.
+  * Do not create one fixture per private helper unless it proves meaningful
+    behavior.
+  * Prefer fixtures for public flows, lifecycle behavior, error handling,
+    config precedence, streaming behavior, retries, tool calls, room I/O,
+    telemetry, and other behavior that can regress.
+  * Fixtures should define input state, command/runner behavior, expected output
+    or trace, normalization rules, and assertions/invariants.
+  * Normalize unstable fields such as timestamps, absolute paths, UUIDs,
+    random IDs, and nondeterministic ordering before comparing actual and
+    expected output.
+  * A fixture should fail with a clear diff when target behavior diverges from
+    expected reference behavior.
+  * Reuse shared expectation templates when multiple fixtures have the same
+    output shape, such as normalized `go test -v` pass output.
+    * Prefer small per-case metadata files over duplicated golden files when the
+      only differences are package name, test name, command, or fixture inputs.
+    * Keep per-case `expected.txt` files only when the expected output is
+      genuinely case-specific, such as symbol report CSV output or behavior
+      traces with unique content.
+    * Adding a new parity case should usually mean adding the smallest useful
+      fixture metadata, not copying an existing golden file.
+
 
 4. **Layer 4: Quality gates**
 
-   * Run focused Go tests and broaden verification as needed.
-   * Run architecture checks when imports or package boundaries change.
-   * Run `staticcheck ./...` and `deadcode ./...` when the task is likely to
-     affect shared behavior, public interfaces, or unused parity scaffolding.
-   * Fix issues related to the current task. Do not use unrelated staticcheck or
-     deadcode output as permission for broad, unfocused rewrites.
+  * Run focused Go tests and broaden verification as needed.
+  * Run architecture checks when imports or package boundaries change.
+  * Run `staticcheck ./...` and `deadcode ./...` when the task is likely to
+    affect shared behavior, public interfaces, or unused parity scaffolding.
+  * Fix issues related to the current task. Do not use unrelated staticcheck or
+    deadcode output as permission for broad, unfocused rewrites.
 
 A parity implementation is not complete unless new target code is tested, wired
 into production flow, or explicitly documented as pending parity. Do not leave
