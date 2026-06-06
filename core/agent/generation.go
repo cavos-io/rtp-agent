@@ -98,7 +98,7 @@ func PerformLLMInference(
 					data.TextCh <- chunk.Delta.Content
 				}
 				for _, fc := range chunk.Delta.ToolCalls {
-					if fc.Type != "" && fc.Type != "function" {
+					if fc.Type != "function" {
 						continue
 					}
 					f := fc

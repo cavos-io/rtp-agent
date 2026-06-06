@@ -1,0 +1,3 @@
+package llmfoo
+
+func ExactName() {}

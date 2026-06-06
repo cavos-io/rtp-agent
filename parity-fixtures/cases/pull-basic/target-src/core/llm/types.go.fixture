@@ -1,0 +1,7 @@
+package llm
+
+type Widget struct{}
+
+const Answer, BackupAnswer = 42, 7
+
+var Global, FallbackGlobal = Widget{}, Widget{}

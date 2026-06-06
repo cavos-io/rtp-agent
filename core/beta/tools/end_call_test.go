@@ -3,6 +3,7 @@ package tools
 import (
 	"context"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -23,6 +24,19 @@ func TestEndCallToolParametersUseStrictEmptyObjectSchema(t *testing.T) {
 	}
 	if !reflect.DeepEqual(params, want) {
 		t.Fatalf("Parameters() = %#v, want strict empty object schema", params)
+	}
+}
+
+func TestEndCallToolDescriptionUsesReferenceCallGuidance(t *testing.T) {
+	tool := NewEndCallTool(nil, EndCallToolOptions{})
+
+	desc := tool.Description()
+
+	if !strings.Contains(desc, "The user clearly indicates they are done") {
+		t.Fatalf("Description() = %q, want reference done-user guidance", desc)
+	}
+	if strings.Contains(desc, "agent determines the conversation is complete") {
+		t.Fatalf("Description() = %q, want no broader completion trigger", desc)
 	}
 }
 

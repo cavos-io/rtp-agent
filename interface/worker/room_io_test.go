@@ -1143,9 +1143,12 @@ func TestRoomIOHandleParticipantConnectedLinksFirstAcceptedParticipant(t *testin
 }
 
 func TestRoomIOHandleParticipantConnectedDisablesAudioForSimulator(t *testing.T) {
-	recorder := NewRecorderIO(&agent.AgentSession{})
+	session := agent.NewAgentSession(agent.NewAgent("test"), nil, agent.AgentSessionOptions{})
+	session.UpdateUserState(agent.UserStateSpeaking)
+	recorder := NewRecorderIO(session)
 	recorder.started = true
 	rio := &RoomIO{
+		AgentSession:    session,
 		Recorder:        recorder,
 		preConnectAudio: &PreConnectAudioHandler{},
 	}
@@ -1177,6 +1180,9 @@ func TestRoomIOHandleParticipantConnectedDisablesAudioForSimulator(t *testing.T)
 	}
 	if recorder.OutputStartTime != nil {
 		t.Fatal("recorder output was recorded after simulator disabled audio output")
+	}
+	if got := session.UserState(); got != agent.UserStateListening {
+		t.Fatalf("session UserState() = %q, want listening after simulator disabled audio", got)
 	}
 }
 

@@ -19,7 +19,9 @@ Options:
   --output FILE          CSV report path. Default: parity_report.csv
   --source-lang LANG     Source language: python|go. Default: auto
   --target-lang LANG     Target language: python|go. Default: auto
-  --map-file FILE        Optional CSV/TSV mapping: source_prefix,target_prefixes
+  --map-file FILE        Optional simple CSV/TSV-like mapping:
+                         source_prefix,target_prefixes. This splits on the
+                         first tab or comma; quoted CSV fields are not parsed.
                          target_prefixes may be separated by comma, semicolon,
                          colon, or pipe.
   --report TYPE          Report type: source|target. Default: source
@@ -171,6 +173,18 @@ trim() {
   printf '%s' "$value"
 }
 
+path_has_prefix() {
+  local file="$1" prefix="$2"
+  file="$(trim "$file")"
+  prefix="$(trim "$prefix")"
+  while [[ "$file" == ./* ]]; do file="${file#./}"; done
+  while [[ "$prefix" == ./* ]]; do prefix="${prefix#./}"; done
+  while [[ "$file" == */ ]]; do file="${file%/}"; done
+  while [[ "$prefix" == */ ]]; do prefix="${prefix%/}"; done
+  [[ -z "$file" || -z "$prefix" ]] && return 1
+  [[ "$file" == "$prefix" || "$file" == "$prefix"/* ]]
+}
+
 is_test_path() {
   local rel="$1"
   [[ "$INCLUDE_TESTS" -eq 1 ]] && return 1
@@ -241,6 +255,7 @@ extract_python_symbols() {
           class_name=trimmed
           sub(/^class[ \t]+/, "", class_name)
           sub(/[^A-Za-z0-9_].*$/, "", class_name)
+          print rel "|" module "|""|" class_name "|class|" NR
           class_indent=indent
           pending_property=0
           next
@@ -289,6 +304,7 @@ extract_go_symbols() {
     [[ "$module" == "$rel" ]] && module="${rel%.go}"
     awk -v rel="$rel" -v module="$module" '
       function ltrim(s) { sub(/^[ \t]+/, "", s); return s }
+      function trim_ws(s) { sub(/^[ \t]+/, "", s); sub(/[ \t]+$/, "", s); return s }
       function parse_name(s,  name) {
         sub(/^func[ \t]+/, "", s)
         if (s ~ /^\(/) {
@@ -309,13 +325,73 @@ extract_go_symbols() {
         }
         return ""
       }
+      function parse_decl_name(s, keyword,  name) {
+        sub("^" keyword "[ \t]+", "", s)
+        name=s
+        sub(/[ \t=({].*$/, "", name)
+        return name
+      }
+      function parse_block_name(s,  name) {
+        name=s
+        sub(/[ \t=({].*$/, "", name)
+        return name
+      }
+      function emit_decl_names(s, kind,  names, n, i, name) {
+        if (kind == "type") {
+          name=parse_block_name(s)
+          if (name ~ /^[A-Za-z_][A-Za-z0-9_]*$/) {
+            print rel "|" module "|""|" name "|type|" NR
+          }
+          return
+        }
+        sub(/=.*/, "", s)
+        n=split(s, names, ",")
+        for (i=1; i<=n; i++) {
+          name=trim_ws(names[i])
+          sub(/[ \t].*$/, "", name)
+          if (name ~ /^[A-Za-z_][A-Za-z0-9_]*$/) {
+            print rel "|" module "|""|" name "|" kind "|" NR
+          }
+        }
+      }
+      BEGIN { decl_kind="" }
       {
         line=ltrim($0)
+        if (line ~ /^\/\//) {
+          next
+        }
+
+        if (decl_kind != "") {
+          if (line ~ /^\)/) {
+            decl_kind=""
+            next
+          }
+          if (line ~ /^[A-Za-z_][A-Za-z0-9_]*/) {
+            emit_decl_names(line, decl_kind)
+          }
+          next
+        }
+
         if (line ~ /^func[ \t]+(\([^)]*\)[ \t]+)?[A-Za-z_][A-Za-z0-9_]*[ \t]*(\[|\()/) {
           name=parse_name(line)
           recv=parse_receiver(line)
           typ = recv == "" ? "function" : "method"
           print rel "|" module "|" recv "|" name "|" typ "|" NR
+        } else if (line ~ /^type[ \t]+\(/) {
+          decl_kind="type"
+        } else if (line ~ /^const[ \t]+\(/) {
+          decl_kind="const"
+        } else if (line ~ /^var[ \t]+\(/) {
+          decl_kind="var"
+        } else if (line ~ /^type[ \t]+[A-Za-z_][A-Za-z0-9_]*/) {
+          name=parse_decl_name(line, "type")
+          print rel "|" module "|""|" name "|type|" NR
+        } else if (line ~ /^const[ \t]+[A-Za-z_][A-Za-z0-9_]*/) {
+          sub(/^const[ \t]+/, "", line)
+          emit_decl_names(line, "const")
+        } else if (line ~ /^var[ \t]+[A-Za-z_][A-Za-z0-9_]*/) {
+          sub(/^var[ \t]+/, "", line)
+          emit_decl_names(line, "var")
         }
       }
     ' "$file"
@@ -364,7 +440,7 @@ map_paths_for_source() {
   local source_file="$1"
   local i
   for ((i=0; i<${#map_sources[@]}; i++)); do
-    if [[ "$source_file" == "${map_sources[$i]}" || "$source_file" == "${map_sources[$i]}"* ]]; then
+    if path_has_prefix "$source_file" "${map_sources[$i]}"; then
       printf '%s' "${map_targets[$i]}"
       return 0
     fi
@@ -379,7 +455,7 @@ is_target_in_paths() {
   for p in "${paths[@]}"; do
     p="$(trim "$p")"
     [[ -z "$p" ]] && continue
-    [[ "$target_file" == "$p"* ]] && return 0
+    path_has_prefix "$target_file" "$p" && return 0
   done
   return 1
 }
@@ -394,7 +470,7 @@ target_category() {
       for p in "${paths[@]}"; do
         p="$(trim "$p")"
         [[ -z "$p" ]] && continue
-        if [[ "$file" == "$p" || "$file" == "$p"* ]]; then
+        if path_has_prefix "$file" "$p"; then
           printf 'mapped_target'
           return 0
         fi
@@ -489,7 +565,7 @@ if [[ "$REPORT" == "source" ]]; then
           for p in "${paths[@]}"; do
             p="$(trim "$p")"
             [[ -z "$p" ]] && continue
-            if [[ "${target_file[$cand]}" == "$p"* ]]; then
+            if path_has_prefix "${target_file[$cand]}" "$p"; then
               best_idx="$cand"
               break 2
             fi
@@ -511,7 +587,7 @@ if [[ "$REPORT" == "source" ]]; then
         for p in "${paths[@]}"; do
           p="$(trim "$p")"
           [[ -z "$p" ]] && continue
-          if [[ "${target_file[$cand]}" == "$p"* ]]; then
+          if path_has_prefix "${target_file[$cand]}" "$p"; then
             in_path=1
             break
           fi
@@ -550,19 +626,19 @@ if [[ "$REPORT" == "source" ]]; then
 
   printf '\n'
   csv_escape "SUMMARY"; printf ','
-  csv_escape "Auto-detected coverage"; printf ','
+  csv_escape "Auto-detected candidate coverage"; printf ','
   csv_escape "$auto_matches/$source_total"; printf ','
   if (( source_total > 0 )); then
     csv_escape "$((100 * auto_matches / source_total))%"
   else
     csv_escape "0%"
   fi
-  printf ',,,,,,,\n'
+  printf ',,,,,,,,\n'
 
   csv_escape "SUMMARY"; printf ','
   csv_escape "Verified coverage (team fills parity_status=exists)"; printf ','
   csv_escape "0/$source_total"; printf ','
-  csv_escape "0%"; printf ',,,,,,,\n'
+  csv_escape "0%"; printf ',,,,,,,,\n'
 } > "$OUTPUT"
 
   echo "Writing report to $OUTPUT ..." >&2
@@ -572,9 +648,9 @@ if [[ "$REPORT" == "source" ]]; then
   echo "  Target symbols total :    $target_total" >&2
   echo "  Auto-detected matches:    $auto_matches/$source_total" >&2
   if (( source_total > 0 )); then
-    echo "  Auto coverage        :    $((100 * auto_matches / source_total))%" >&2
+    echo "  Auto candidate coverage:  $((100 * auto_matches / source_total))%" >&2
   else
-    echo "  Auto coverage        :    0%" >&2
+    echo "  Auto candidate coverage:  0%" >&2
   fi
   echo "====================================================" >&2
   echo "" >&2

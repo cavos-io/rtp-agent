@@ -160,6 +160,17 @@ func TestAgentSessionUserStateChangedEventsFanOutToSubscribers(t *testing.T) {
 	assertUserStateChangedEvent(t, second, "second")
 }
 
+func TestAgentSessionAudioDisabledEndsSpeakingState(t *testing.T) {
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	session.UpdateUserState(UserStateSpeaking)
+
+	session.OnAudioEnabledChanged(false)
+
+	if got := session.UserState(); got != UserStateListening {
+		t.Fatalf("UserState() = %q, want listening after audio disabled", got)
+	}
+}
+
 func TestAgentSessionAgentStateChangedEventsFanOutToSubscribers(t *testing.T) {
 	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
 	first := session.AgentStateChangedEvents()

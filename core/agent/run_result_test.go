@@ -660,7 +660,7 @@ func TestRunAssertHasErrorIncludesEventDebugContext(t *testing.T) {
 	result := NewRunResult(llm.NewChatContext())
 	now := time.Now()
 	result.RecordItem(&llm.ChatMessage{ID: "msg_1", Role: llm.ChatRoleAssistant, CreatedAt: now})
-	result.RecordItem(&llm.FunctionCall{ID: "fnc_1", CallID: "call_1", Name: "lookup", CreatedAt: now.Add(time.Millisecond)})
+	result.RecordItem(&llm.FunctionCall{ID: "fnc_1", CallID: "call_1", Name: "lookup", Arguments: `{"city":"Jakarta"}`, CreatedAt: now.Add(time.Millisecond)})
 
 	err := result.Expect.NextEvent("message").NoMoreEvents().HasError()
 
@@ -672,6 +672,8 @@ func TestRunAssertHasErrorIncludesEventDebugContext(t *testing.T) {
 		"Context around failure:",
 		"   [0] message",
 		">>> [1] function_call",
+		"name=lookup",
+		`arguments={"city":"Jakarta"}`,
 	} {
 		if !strings.Contains(msg, want) {
 			t.Fatalf("HasError message = %q, want to contain %q", msg, want)
