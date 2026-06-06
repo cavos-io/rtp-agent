@@ -123,6 +123,23 @@ func TestTTSConnectionPoolRefreshesSessionAgeOnGet(t *testing.T) {
 	}
 }
 
+func TestInferenceTTSSessionCreateParamsMatchReferenceShape(t *testing.T) {
+	modelName, params := ttsSessionCreateParams("cartesia/sonic-3:voice-id", "")
+
+	if modelName != "cartesia/sonic-3" {
+		t.Fatalf("modelName = %q, want cartesia/sonic-3", modelName)
+	}
+	if params["voice"] != "voice-id" {
+		t.Fatalf("voice = %v, want voice-id", params["voice"])
+	}
+	if params["model"] != "cartesia/sonic-3" {
+		t.Fatalf("model = %v, want cartesia/sonic-3", params["model"])
+	}
+	if extra, ok := params["extra"].(map[string]interface{}); !ok || len(extra) != 0 {
+		t.Fatalf("extra = %#v, want empty map", params["extra"])
+	}
+}
+
 func TestInferenceAccessTokenTTLMatchesReferenceDefault(t *testing.T) {
 	token, err := CreateAccessToken("key", "secret", InferenceAccessTokenTTL)
 	if err != nil {

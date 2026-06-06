@@ -136,12 +136,7 @@ func (t *TTS) connectTTSWebsocket(ctx context.Context) (*websocket.Conn, error) 
 		return nil, err
 	}
 
-	modelName := t.model
-	voice := t.voice
-	if idx := strings.LastIndex(t.model, ":"); idx != -1 {
-		voice = t.model[idx+1:]
-		modelName = t.model[:idx]
-	}
+	modelName, createParams := ttsSessionCreateParams(t.model, t.voice)
 
 	wsURL, err := url.Parse(t.baseURL + "/tts")
 	if err != nil {
@@ -160,23 +155,36 @@ func (t *TTS) connectTTSWebsocket(ctx context.Context) (*websocket.Conn, error) 
 		return nil, fmt.Errorf("failed to connect to LiveKit Inference TTS: %w", err)
 	}
 
-	// Send session.create
-	createParams := map[string]interface{}{
-		"type":        "session.create",
-		"sample_rate": "24000",
-		"encoding":    "pcm_s16le",
-		"model":       modelName,
-	}
-	if voice != "" {
-		createParams["voice"] = voice
-	}
-
 	if err := conn.WriteJSON(createParams); err != nil {
 		conn.Close()
 		return nil, err
 	}
 
 	return conn, nil
+}
+
+func ttsSessionCreateParams(model string, voice string) (string, map[string]interface{}) {
+	modelName := model
+	if idx := strings.LastIndex(model, ":"); idx != -1 {
+		if voice == "" {
+			voice = model[idx+1:]
+		}
+		modelName = model[:idx]
+	}
+
+	createParams := map[string]interface{}{
+		"type":        "session.create",
+		"sample_rate": "24000",
+		"encoding":    "pcm_s16le",
+		"extra":       map[string]interface{}{},
+	}
+	if modelName != "" {
+		createParams["model"] = modelName
+	}
+	if voice != "" {
+		createParams["voice"] = voice
+	}
+	return modelName, createParams
 }
 
 type inferenceTTSStream struct {
