@@ -5,13 +5,19 @@ import (
 	"fmt"
 	"os"
 
+	lkmath "github.com/cavos-io/rtp-agent/library/math"
 	"github.com/cavos-io/rtp-agent/library/utils"
 )
 
 type inputEnvelope struct {
+	Alpha      *float64  `json:"alpha"`
 	Contract   string    `json:"contract"`
 	EnvValues  []*string `json:"env_values"`
+	Exp        *float64  `json:"exp"`
+	Initial    *float64  `json:"initial"`
+	MinVal     *float64  `json:"min_val"`
 	NameValues []string  `json:"name_values"`
+	Sample     *float64  `json:"sample"`
 	URLValues  []string  `json:"url_values"`
 }
 
@@ -62,6 +68,8 @@ func run() error {
 		return runCloudURLHostSuffix(input)
 	case "camel-to-snake-case":
 		return runCamelToSnakeCase(input)
+	case "exp-filter-initial-minimum":
+		return runExpFilterInitialMinimum(input)
 	default:
 		return fmt.Errorf("unsupported contract: %s", input.Contract)
 	}
@@ -182,6 +190,49 @@ func runCamelToSnakeCase(input inputEnvelope) error {
 	encoder := json.NewEncoder(os.Stdout)
 	encoder.SetEscapeHTML(false)
 	return encoder.Encode(output)
+}
+
+func runExpFilterInitialMinimum(input inputEnvelope) error {
+	alpha := floatValue(input.Alpha, 0.5)
+	initial := floatValue(input.Initial, 10)
+	minimum := floatValue(input.MinVal, 6)
+	exp := floatValue(input.Exp, 1)
+	sample := floatValue(input.Sample, 2)
+
+	filter, err := lkmath.NewExpFilterWithOptions(alpha, lkmath.ExpFilterOptions{
+		Initial: &initial,
+		MinVal:  &minimum,
+	})
+	if err != nil {
+		return err
+	}
+	applied := filter.Apply(exp, sample)
+	value, ok := filter.Value()
+	if !ok {
+		return fmt.Errorf("filter value is unset after apply")
+	}
+
+	output := outputEnvelope{Contract: "exp-filter-initial-minimum"}
+	output.Events = append(output.Events, event{
+		Name:   "apply",
+		Input:  fmt.Sprintf("alpha=%g,initial=%g,min=%g,exp=%g,sample=%g", alpha, initial, minimum, exp, sample),
+		Result: fmt.Sprintf("%g", applied),
+	})
+	output.Events = append(output.Events, event{
+		Name:   "value",
+		Result: fmt.Sprintf("%g", value),
+	})
+
+	encoder := json.NewEncoder(os.Stdout)
+	encoder.SetEscapeHTML(false)
+	return encoder.Encode(output)
+}
+
+func floatValue(value *float64, fallback float64) float64 {
+	if value == nil {
+		return fallback
+	}
+	return *value
 }
 
 func ptr(value string) *string {

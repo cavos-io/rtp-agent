@@ -42,8 +42,14 @@ def load_reference_misc():
     class NotGiven:
         pass
 
+    class NotGivenOr:
+        def __class_getitem__(cls, item):
+            return object
+
+    not_given = NotGiven()
+    types_mod.NOT_GIVEN = not_given
     types_mod.NotGiven = NotGiven
-    types_mod.NotGivenOr = object
+    types_mod.NotGivenOr = NotGivenOr
 
     sys.modules.setdefault("livekit", livekit_mod)
     sys.modules.setdefault("livekit.agents", agents_mod)
@@ -56,6 +62,25 @@ def load_reference_misc():
 
     module = importlib.util.module_from_spec(spec)
     sys.modules["livekit.agents.utils.misc"] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+def load_reference_exp_filter():
+    root = repo_root()
+    exp_filter_path = root / "refs/agents/livekit-agents/livekit/agents/utils/exp_filter.py"
+    misc = load_reference_misc()
+    utils_mod = sys.modules["livekit.agents.utils"]
+    setattr(utils_mod, "misc", misc)
+
+    spec = importlib.util.spec_from_file_location(
+        "livekit.agents.utils.exp_filter", exp_filter_path
+    )
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f"cannot load reference exp_filter.py from {exp_filter_path}")
+
+    module = importlib.util.module_from_spec(spec)
+    sys.modules["livekit.agents.utils.exp_filter"] = module
     spec.loader.exec_module(module)
     return module
 
@@ -198,6 +223,34 @@ def run_camel_to_snake_case(input_data: dict) -> dict:
     return {"contract": "camel-to-snake-case", "events": events}
 
 
+def run_exp_filter_initial_minimum(input_data: dict) -> dict:
+    exp_filter = load_reference_exp_filter()
+    alpha = float(input_data.get("alpha", 0.5))
+    initial = float(input_data.get("initial", 10.0))
+    minimum = float(input_data.get("min_val", 6.0))
+    exp = float(input_data.get("exp", 1.0))
+    sample = float(input_data.get("sample", 2.0))
+
+    filter_ = exp_filter.ExpFilter(alpha, min_val=minimum, initial=initial)
+    applied = filter_.apply(exp, sample)
+    value = filter_.value
+
+    return {
+        "contract": "exp-filter-initial-minimum",
+        "events": [
+            {
+                "name": "apply",
+                "input": f"alpha={alpha:g},initial={initial:g},min={minimum:g},exp={exp:g},sample={sample:g}",
+                "result": f"{applied:g}",
+            },
+            {
+                "name": "value",
+                "result": f"{value:g}",
+            },
+        ],
+    }
+
+
 def main() -> int:
     if len(sys.argv) != 2:
         print("usage: python-utils.py INPUT_JSON", file=sys.stderr)
@@ -213,6 +266,8 @@ def main() -> int:
         output = run_cloud_url_host_suffix(input_data)
     elif contract == "camel-to-snake-case":
         output = run_camel_to_snake_case(input_data)
+    elif contract == "exp-filter-initial-minimum":
+        output = run_exp_filter_initial_minimum(input_data)
     else:
         print(f"unsupported contract: {contract}", file=sys.stderr)
         return 2
