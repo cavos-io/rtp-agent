@@ -66,7 +66,12 @@ func Encode(frame *VideoFrame, opts EncodeOptions) ([]byte, error) {
 			return nil, fmt.Errorf("insufficient data for rgba frame")
 		}
 		rgbaImg := image.NewRGBA(rect)
-		rgbaImg.Pix = frame.Data[:expected]
+		for i := 0; i < expected; i += 4 {
+			rgbaImg.Pix[i] = frame.Data[i]
+			rgbaImg.Pix[i+1] = frame.Data[i+1]
+			rgbaImg.Pix[i+2] = frame.Data[i+2]
+			rgbaImg.Pix[i+3] = 255
+		}
 		img = rgbaImg
 
 	case "argb":
@@ -80,7 +85,7 @@ func Encode(frame *VideoFrame, opts EncodeOptions) ([]byte, error) {
 			rgbaImg.Pix[i] = frame.Data[i+1]   // R
 			rgbaImg.Pix[i+1] = frame.Data[i+2] // G
 			rgbaImg.Pix[i+2] = frame.Data[i+3] // B
-			rgbaImg.Pix[i+3] = frame.Data[i]   // A
+			rgbaImg.Pix[i+3] = 255             // reference conversion discards alpha
 		}
 		img = rgbaImg
 

@@ -1,6 +1,8 @@
 package images
 
 import (
+	"bytes"
+	"image/png"
 	"strings"
 	"testing"
 )
@@ -62,5 +64,27 @@ func TestEncodeAcceptsReferenceFormatNames(t *testing.T) {
 				t.Fatalf("Encode returned empty bytes for reference format %q", format)
 			}
 		})
+	}
+}
+
+func TestEncodePNGDiscardsAlphaLikeReferenceRGBConversion(t *testing.T) {
+	frame := &VideoFrame{
+		Width:  1,
+		Height: 1,
+		Format: "rgba",
+		Data:   []byte{255, 0, 0, 0},
+	}
+
+	encoded, err := Encode(frame, EncodeOptions{Format: "PNG"})
+	if err != nil {
+		t.Fatalf("Encode() error = %v", err)
+	}
+	img, err := png.Decode(bytes.NewReader(encoded))
+	if err != nil {
+		t.Fatalf("Decode PNG error = %v", err)
+	}
+	r, g, b, a := img.At(0, 0).RGBA()
+	if r != 0xffff || g != 0 || b != 0 || a != 0xffff {
+		t.Fatalf("decoded RGBA = (%#x, %#x, %#x, %#x), want opaque red", r, g, b, a)
 	}
 }
