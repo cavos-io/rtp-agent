@@ -2,8 +2,10 @@ package agent
 
 import (
 	"context"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync/atomic"
 	"testing"
 
@@ -16,12 +18,11 @@ import (
 
 func TestUploadSessionReportUsesObservabilityURLEnvOverride(t *testing.T) {
 	requestCh := make(chan string, 1)
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	useRecordingUploadHTTPClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		requestCh <- r.URL.Path
 		w.WriteHeader(http.StatusOK)
 	}))
-	defer server.Close()
-	t.Setenv("LIVEKIT_OBSERVABILITY_URL", server.URL)
+	t.Setenv("LIVEKIT_OBSERVABILITY_URL", "https://observability.test")
 
 	report := NewSessionReport()
 	report.RecordingOptions = RecordingOptions{Transcript: true}
@@ -43,7 +44,7 @@ func TestUploadSessionReportUsesObservabilityURLEnvOverride(t *testing.T) {
 
 func TestUploadSessionReportRetriesRetryableRecordingUpload(t *testing.T) {
 	var attempts int32
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	useRecordingUploadHTTPClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if atomic.AddInt32(&attempts, 1) == 1 {
 			w.Header().Set("Retry-After", "0")
 			w.WriteHeader(http.StatusServiceUnavailable)
@@ -51,8 +52,7 @@ func TestUploadSessionReportRetriesRetryableRecordingUpload(t *testing.T) {
 		}
 		w.WriteHeader(http.StatusOK)
 	}))
-	defer server.Close()
-	t.Setenv("LIVEKIT_OBSERVABILITY_URL", server.URL)
+	t.Setenv("LIVEKIT_OBSERVABILITY_URL", "https://observability.test")
 
 	report := NewSessionReport()
 	report.RecordingOptions = RecordingOptions{Transcript: true}
@@ -77,7 +77,7 @@ func TestUploadSessionReportRetriesProtobufRetryInfo(t *testing.T) {
 	}
 
 	var attempts int32
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	useRecordingUploadHTTPClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if atomic.AddInt32(&attempts, 1) == 1 {
 			w.WriteHeader(http.StatusServiceUnavailable)
 			_, _ = w.Write(body)
@@ -85,8 +85,7 @@ func TestUploadSessionReportRetriesProtobufRetryInfo(t *testing.T) {
 		}
 		w.WriteHeader(http.StatusOK)
 	}))
-	defer server.Close()
-	t.Setenv("LIVEKIT_OBSERVABILITY_URL", server.URL)
+	t.Setenv("LIVEKIT_OBSERVABILITY_URL", "https://observability.test")
 
 	report := NewSessionReport()
 	report.RecordingOptions = RecordingOptions{Transcript: true}
@@ -169,4 +168,29 @@ type uploadTelemetryEvent struct {
 	eventType string
 	body      string
 	attrs     map[string]interface{}
+}
+
+func useRecordingUploadHTTPClient(t *testing.T, handler http.Handler) {
+	t.Helper()
+	oldClient := recordingUploadHTTPClient
+	recordingUploadHTTPClient = &http.Client{
+		Transport: recordingUploadRoundTripper(func(req *http.Request) (*http.Response, error) {
+			recorder := httptest.NewRecorder()
+			handler.ServeHTTP(recorder, req)
+			resp := recorder.Result()
+			if resp.Body == nil {
+				resp.Body = io.NopCloser(strings.NewReader(""))
+			}
+			return resp, nil
+		}),
+	}
+	t.Cleanup(func() {
+		recordingUploadHTTPClient = oldClient
+	})
+}
+
+type recordingUploadRoundTripper func(*http.Request) (*http.Response, error)
+
+func (f recordingUploadRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
+	return f(req)
 }
