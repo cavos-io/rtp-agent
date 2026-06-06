@@ -62,6 +62,7 @@ type Agent struct {
 
 func NewAgent(instructions string) *Agent {
 	return &Agent{
+		ID:           "default_agent",
 		Instructions: instructions,
 		ChatCtx:      llm.NewChatContext(),
 		Tools:        make([]llm.Tool, 0),

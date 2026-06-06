@@ -84,6 +84,25 @@ func TestAgentLabelReturnsID(t *testing.T) {
 	}
 }
 
+func TestNewAgentUsesReferenceDefaultID(t *testing.T) {
+	agent := NewAgent("help")
+
+	if agent.ID != "default_agent" {
+		t.Fatalf("NewAgent().ID = %q, want default_agent", agent.ID)
+	}
+	if got := agent.Label(); got != "default_agent" {
+		t.Fatalf("Label() = %q, want default_agent", got)
+	}
+}
+
+func TestAgentHandoffIDUsesDefaultAgentID(t *testing.T) {
+	agent := NewAgent("sensitive instructions")
+
+	if got := agentHandoffID(agent); got != "default_agent" {
+		t.Fatalf("agentHandoffID() = %q, want default_agent", got)
+	}
+}
+
 func TestAgentTaskWaitReturnsCompletedResult(t *testing.T) {
 	task := NewAgentTask[string]("collect name")
 	if err := task.Complete("done"); err != nil {
