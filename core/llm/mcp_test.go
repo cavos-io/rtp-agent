@@ -4,10 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -80,7 +82,7 @@ func TestMCPProxyToolReportsUnavailableServer(t *testing.T) {
 func TestMCPServerHTTPListsAndExecutesTools(t *testing.T) {
 	var sawInitialize bool
 	var sawToolCall bool
-	httpServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	httpClient := newMCPTestHTTPClient(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if got := r.Header.Get("Authorization"); got != "Bearer token" {
 			t.Fatalf("Authorization header = %q, want bearer token", got)
 		}
@@ -112,14 +114,14 @@ func TestMCPServerHTTPListsAndExecutesTools(t *testing.T) {
 			t.Fatalf("unexpected MCP method %q", req.Method)
 		}
 	}))
-	defer httpServer.Close()
 
-	server := NewMCPServerHTTP(httpServer.URL)
+	server := NewMCPServerHTTP("https://mcp.test/rpc")
+	server.client = httpClient
 	server.TransportType = "streamable_http"
 	server.AllowedTools = []string{"lookup"}
 	server.Headers = map[string]string{"Authorization": "Bearer token"}
 
-	if server.URL != httpServer.URL {
+	if server.URL != "https://mcp.test/rpc" {
 		t.Fatalf("URL = %q, want constructor URL", server.URL)
 	}
 	if err := server.Initialize(context.Background()); err != nil {
@@ -148,7 +150,7 @@ func TestMCPServerHTTPListsAndExecutesTools(t *testing.T) {
 }
 
 func TestMCPServerHTTPInitializedReflectsLifecycle(t *testing.T) {
-	httpServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	httpClient := newMCPTestHTTPClient(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var req jsonRPCRequest
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			t.Fatalf("decode request: %v", err)
@@ -163,9 +165,9 @@ func TestMCPServerHTTPInitializedReflectsLifecycle(t *testing.T) {
 			t.Fatalf("unexpected MCP method %q", req.Method)
 		}
 	}))
-	defer httpServer.Close()
 
-	server := NewMCPServerHTTP(httpServer.URL)
+	server := NewMCPServerHTTP("https://mcp.test/rpc")
+	server.client = httpClient
 
 	if server.Initialized() {
 		t.Fatal("Initialized() = true before Initialize, want false")
@@ -185,7 +187,7 @@ func TestMCPServerHTTPInitializedReflectsLifecycle(t *testing.T) {
 }
 
 func TestMCPServerHTTPSetHeadersAppliesToSubsequentRequests(t *testing.T) {
-	httpServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	httpClient := newMCPTestHTTPClient(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var req jsonRPCRequest
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			t.Fatalf("decode request: %v", err)
@@ -213,9 +215,9 @@ func TestMCPServerHTTPSetHeadersAppliesToSubsequentRequests(t *testing.T) {
 			t.Fatalf("unexpected MCP method %q", req.Method)
 		}
 	}))
-	defer httpServer.Close()
 
-	server := NewMCPServerHTTP(httpServer.URL)
+	server := NewMCPServerHTTP("https://mcp.test/rpc")
+	server.client = httpClient
 	server.Headers = map[string]string{"Authorization": "Bearer first"}
 
 	if err := server.Initialize(context.Background()); err != nil {
@@ -228,6 +230,26 @@ func TestMCPServerHTTPSetHeadersAppliesToSubsequentRequests(t *testing.T) {
 	if _, err := server.ListTools(context.Background()); err != nil {
 		t.Fatalf("ListTools() error = %v", err)
 	}
+}
+
+func newMCPTestHTTPClient(handler http.Handler) *http.Client {
+	return &http.Client{
+		Transport: mcpTestRoundTripper(func(req *http.Request) (*http.Response, error) {
+			recorder := httptest.NewRecorder()
+			handler.ServeHTTP(recorder, req)
+			resp := recorder.Result()
+			if resp.Body == nil {
+				resp.Body = io.NopCloser(strings.NewReader(""))
+			}
+			return resp, nil
+		}),
+	}
+}
+
+type mcpTestRoundTripper func(*http.Request) (*http.Response, error)
+
+func (f mcpTestRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
+	return f(req)
 }
 
 func TestMCPToolsetSetupInitializesServerAndFlattensTools(t *testing.T) {
