@@ -79,6 +79,65 @@ func TestTaskGroupStartsChildTaskBeforeWaiting(t *testing.T) {
 	}
 }
 
+func TestTaskGroupOutOfScopeRerunsTargetAndActiveTask(t *testing.T) {
+	group := NewTaskGroup(false, false)
+	firstRuns := 0
+	secondRuns := 0
+	group.Add("first", "Collect first value", func() agent.AgentInterface {
+		firstRuns++
+		return newCompletedTask("first-" + itoa(firstRuns))
+	})
+	group.Add("second", "Collect second value", func() agent.AgentInterface {
+		secondRuns++
+		if secondRuns == 1 {
+			return newFailedTask(&OutOfScopeError{TargetTaskIDs: []string{"first"}})
+		}
+		return newCompletedTask("second-" + itoa(secondRuns))
+	})
+
+	group.OnEnter()
+
+	select {
+	case result := <-group.Result:
+		if firstRuns != 2 || secondRuns != 2 {
+			t.Fatalf("runs = first:%d second:%d, want first:2 second:2", firstRuns, secondRuns)
+		}
+		if result.TaskResults["first"] != "first-2" || result.TaskResults["second"] != "second-2" {
+			t.Fatalf("TaskResults = %#v, want rerun target and active task results", result.TaskResults)
+		}
+	case err := <-group.Err:
+		t.Fatalf("group failed with %v, want completed result", err)
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for task group result")
+	}
+}
+
+func TestTaskGroupReturnExceptionsRecordsErrorAndContinues(t *testing.T) {
+	group := NewTaskGroup(false, true)
+	group.Add("first", "Fails", func() agent.AgentInterface {
+		return newFailedTask(errors.New("first failed"))
+	})
+	group.Add("second", "Completes", func() agent.AgentInterface {
+		return newCompletedTask("second done")
+	})
+
+	group.OnEnter()
+
+	select {
+	case result := <-group.Result:
+		if err, ok := result.TaskResults["first"].(error); !ok || err.Error() != "first failed" {
+			t.Fatalf("TaskResults[first] = %#v, want recorded error", result.TaskResults["first"])
+		}
+		if result.TaskResults["second"] != "second done" {
+			t.Fatalf("TaskResults[second] = %#v, want second done", result.TaskResults["second"])
+		}
+	case err := <-group.Err:
+		t.Fatalf("group failed with %v, want error recorded in result", err)
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for task group result")
+	}
+}
+
 type completingTask struct {
 	agent.AgentTask[string]
 	value string
@@ -93,4 +152,20 @@ func newCompletingTask(value string) *completingTask {
 
 func (t *completingTask) OnEnter() {
 	_ = t.Complete(t.value)
+}
+
+func newCompletedTask(value string) *completingTask {
+	task := newCompletingTask(value)
+	_ = task.Complete(value)
+	return task
+}
+
+type failingTask struct {
+	agent.AgentTask[string]
+}
+
+func newFailedTask(err error) *failingTask {
+	task := &failingTask{AgentTask: *agent.NewAgentTask[string]("failed")}
+	_ = task.Fail(err)
+	return task
 }

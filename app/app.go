@@ -942,6 +942,10 @@ func workflowAgentFromConfig(cfg AppConfig, baseAgent *agent.Agent) (agent.Agent
 		selected = workflows.NewGetPhoneNumberTask(workflows.GetPhoneNumberOptions{
 			RequireConfirmation: cfg.WorkflowRequireConfirmation,
 		})
+	case "dob", "date_of_birth", "date-of-birth", "get_dob":
+		selected = workflows.NewGetDOBTask(workflows.GetDOBOptions{
+			RequireConfirmation: cfg.WorkflowRequireConfirmation,
+		})
 	case "name", "get_name":
 		selected = workflows.NewGetNameTask(workflows.GetNameOptions{
 			FirstName:           true,
@@ -1037,6 +1041,16 @@ func workflowTaskFactoryFromName(cfg AppConfig, baseAgent *agent.Agent, taskName
 			Description: "Collect and confirm the user's phone number.",
 			TaskFactory: factory(func() agent.AgentInterface {
 				return workflows.NewGetPhoneNumberTask(workflows.GetPhoneNumberOptions{
+					RequireConfirmation: cfg.WorkflowRequireConfirmation,
+				})
+			}),
+		}, nil
+	case "dob", "date_of_birth", "date-of-birth", "get_dob":
+		return workflows.FactoryInfo{
+			ID:          "dob",
+			Description: "Collect and confirm the user's date of birth.",
+			TaskFactory: factory(func() agent.AgentInterface {
+				return workflows.NewGetDOBTask(workflows.GetDOBOptions{
 					RequireConfirmation: cfg.WorkflowRequireConfirmation,
 				})
 			}),
