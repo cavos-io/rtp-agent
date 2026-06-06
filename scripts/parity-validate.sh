@@ -16,6 +16,7 @@ Options:
 Cases:
   Cases are listed in scripts/parity-fixtures/test-cases.tsv.
   The TSV is simple tab-delimited text, not quoted CSV.
+  Tabs are separators and are not allowed inside fields.
   Columns:
     case_name, type, source_ref, target_ref, go_package, go_test,
     python_runner, go_runner, input_json, contract, behavior, notes
@@ -25,13 +26,13 @@ Case types:
   symbol-report  Runs a unique Layer 1 symbol-report golden fixture.
   cross-runtime  Reserved for shared Python/Go JSON trace validation. This
                  dispatch is intentionally a placeholder until real runners
-                 exist; it must not be treated as proof.
+                 exist and execute both sides; it must not be treated as proof.
 EOF
 }
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 FIXTURE_ROOT="$REPO_ROOT/scripts/parity-fixtures"
-TEST_CASES_FILE="$REPO_ROOT/scripts/parity-fixtures/test-cases.tsv"
+TEST_CASES_FILE="${PARITY_TEST_CASES_FILE:-$REPO_ROOT/scripts/parity-fixtures/test-cases.tsv}"
 EXPECTED_MANIFEST_HEADER=$'case_name\ttype\tsource_ref\ttarget_ref\tgo_package\tgo_test\tpython_runner\tgo_runner\tinput_json\tcontract\tbehavior\tnotes'
 KEEP_TEMP=0
 LIST_ONLY=0
@@ -161,7 +162,7 @@ validate_manifest_schema() {
     echo "Actual:   $header" >&2
     return 2
   fi
-  if ! awk -F '\t' 'NR > 1 && NF != 12 { printf "line %d has %d columns, want 12\n", NR, NF; exit 1 }' "$TEST_CASES_FILE" >&2; then
+  if ! awk -F '\t' 'NR > 1 && NF != 12 { printf "line %d has %d columns, want 12. Tabs are not allowed inside manifest fields.\n", NR, NF; exit 1 }' "$TEST_CASES_FILE" >&2; then
     echo "Invalid manifest row in $TEST_CASES_FILE" >&2
     return 2
   fi
@@ -239,7 +240,8 @@ run_cross_runtime_manifest_case() {
     return 2
   fi
 
-  echo "[$case_name] cross-runtime validation is not implemented yet; runners are schema-only placeholders and do not prove behavior." >&2
+  echo "[$case_name] cross-runtime validation is not implemented yet; runners must execute both Python and Go before this case can prove behavior." >&2
+  echo "[$case_name] schema-only placeholders do not prove behavior." >&2
   return 2
 }
 
