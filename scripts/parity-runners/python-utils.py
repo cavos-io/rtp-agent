@@ -42,8 +42,14 @@ def load_reference_misc():
     class NotGiven:
         pass
 
+    class NotGivenOr:
+        def __class_getitem__(cls, item):
+            return object
+
+    not_given = NotGiven()
+    types_mod.NOT_GIVEN = not_given
     types_mod.NotGiven = NotGiven
-    types_mod.NotGivenOr = object
+    types_mod.NotGivenOr = NotGivenOr
 
     sys.modules.setdefault("livekit", livekit_mod)
     sys.modules.setdefault("livekit.agents", agents_mod)
@@ -60,6 +66,25 @@ def load_reference_misc():
     return module
 
 
+def load_reference_exp_filter():
+    root = repo_root()
+    exp_filter_path = root / "refs/agents/livekit-agents/livekit/agents/utils/exp_filter.py"
+    misc = load_reference_misc()
+    utils_mod = sys.modules["livekit.agents.utils"]
+    setattr(utils_mod, "misc", misc)
+
+    spec = importlib.util.spec_from_file_location(
+        "livekit.agents.utils.exp_filter", exp_filter_path
+    )
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f"cannot load reference exp_filter.py from {exp_filter_path}")
+
+    module = importlib.util.module_from_spec(spec)
+    sys.modules["livekit.agents.utils.exp_filter"] = module
+    spec.loader.exec_module(module)
+    return module
+
+
 def load_input(path: str) -> dict:
     with open(path, "r", encoding="utf-8") as file:
         data = json.load(file)
@@ -68,11 +93,32 @@ def load_input(path: str) -> dict:
     return data
 
 
+def restore_env(name: str, original: str | None, original_present: bool) -> None:
+    if original_present:
+        os.environ[name] = original or ""
+    else:
+        os.environ.pop(name, None)
+
+
+def string_values(input_data: dict, field: str, default: list[str]) -> list[str]:
+    values = input_data.get(field, default)
+    if not isinstance(values, list) or not all(isinstance(value, str) for value in values):
+        raise ValueError(f"{field} must be a list of strings")
+    return values
+
+
+def optional_string_values(input_data: dict, field: str, default: list[str | None]) -> list[str | None]:
+    values = input_data.get(field, default)
+    if not isinstance(values, list) or not all(
+        value is None or isinstance(value, str) for value in values
+    ):
+        raise ValueError(f"{field} must be a list of strings or null")
+    return values
+
+
 def run_dev_mode_env_exact(input_data: dict) -> dict:
     misc = load_reference_misc()
-    values = input_data.get("env_values", ["1", "", "true", "on"])
-    if not isinstance(values, list) or not all(isinstance(value, str) for value in values):
-        raise ValueError("env_values must be a list of strings")
+    values = string_values(input_data, "env_values", ["1", "", "true", "on"])
 
     original = os.environ.get("LIVEKIT_DEV_MODE")
     original_present = "LIVEKIT_DEV_MODE" in os.environ
@@ -88,12 +134,121 @@ def run_dev_mode_env_exact(input_data: dict) -> dict:
                 }
             )
     finally:
-        if original_present:
-            os.environ["LIVEKIT_DEV_MODE"] = original or ""
-        else:
-            os.environ.pop("LIVEKIT_DEV_MODE", None)
+        restore_env("LIVEKIT_DEV_MODE", original, original_present)
 
     return {"contract": "dev-mode-env-exact", "events": events}
+
+
+def run_hosted_env_presence(input_data: dict) -> dict:
+    misc = load_reference_misc()
+    values = optional_string_values(
+        input_data,
+        "env_values",
+        [None, "", "https://hosted.example"],
+    )
+
+    original = os.environ.get("LIVEKIT_REMOTE_EOT_URL")
+    original_present = "LIVEKIT_REMOTE_EOT_URL" in os.environ
+    events = []
+    try:
+        for value in values:
+            if value is None:
+                os.environ.pop("LIVEKIT_REMOTE_EOT_URL", None)
+            else:
+                os.environ["LIVEKIT_REMOTE_EOT_URL"] = value
+            event = {
+                "name": "is_hosted",
+                "result": bool(misc.is_hosted()),
+            }
+            if value is not None:
+                event["env"] = value
+            events.append(event)
+    finally:
+        restore_env("LIVEKIT_REMOTE_EOT_URL", original, original_present)
+
+    return {"contract": "hosted-env-presence", "events": events}
+
+
+def run_cloud_url_host_suffix(input_data: dict) -> dict:
+    misc = load_reference_misc()
+    values = string_values(
+        input_data,
+        "url_values",
+        [
+            "wss://tenant.livekit.cloud",
+            "https://tenant.livekit.run/path",
+            "http://localhost:7880",
+            "://bad-url",
+            "https://livekit.cloud.evil.example",
+        ],
+    )
+
+    events = []
+    for value in values:
+        events.append(
+            {
+                "name": "is_cloud",
+                "url": value,
+                "result": bool(misc.is_cloud(value)),
+            }
+        )
+
+    return {"contract": "cloud-url-host-suffix", "events": events}
+
+
+def run_camel_to_snake_case(input_data: dict) -> dict:
+    misc = load_reference_misc()
+    values = string_values(
+        input_data,
+        "name_values",
+        [
+            "HTTPServerID",
+            "roomID",
+            "JobContext",
+            "already_ok",
+            "URL",
+        ],
+    )
+
+    events = []
+    for value in values:
+        events.append(
+            {
+                "name": "camel_to_snake_case",
+                "input": value,
+                "result": misc.camel_to_snake_case(value),
+            }
+        )
+
+    return {"contract": "camel-to-snake-case", "events": events}
+
+
+def run_exp_filter_initial_minimum(input_data: dict) -> dict:
+    exp_filter = load_reference_exp_filter()
+    alpha = float(input_data.get("alpha", 0.5))
+    initial = float(input_data.get("initial", 10.0))
+    minimum = float(input_data.get("min_val", 6.0))
+    exp = float(input_data.get("exp", 1.0))
+    sample = float(input_data.get("sample", 2.0))
+
+    filter_ = exp_filter.ExpFilter(alpha, min_val=minimum, initial=initial)
+    applied = filter_.apply(exp, sample)
+    value = filter_.value
+
+    return {
+        "contract": "exp-filter-initial-minimum",
+        "events": [
+            {
+                "name": "apply",
+                "input": f"alpha={alpha:g},initial={initial:g},min={minimum:g},exp={exp:g},sample={sample:g}",
+                "result": f"{applied:g}",
+            },
+            {
+                "name": "value",
+                "result": f"{value:g}",
+            },
+        ],
+    }
 
 
 def main() -> int:
@@ -103,11 +258,20 @@ def main() -> int:
 
     input_data = load_input(sys.argv[1])
     contract = input_data.get("contract", "dev-mode-env-exact")
-    if contract != "dev-mode-env-exact":
+    if contract == "dev-mode-env-exact":
+        output = run_dev_mode_env_exact(input_data)
+    elif contract == "hosted-env-presence":
+        output = run_hosted_env_presence(input_data)
+    elif contract == "cloud-url-host-suffix":
+        output = run_cloud_url_host_suffix(input_data)
+    elif contract == "camel-to-snake-case":
+        output = run_camel_to_snake_case(input_data)
+    elif contract == "exp-filter-initial-minimum":
+        output = run_exp_filter_initial_minimum(input_data)
+    else:
         print(f"unsupported contract: {contract}", file=sys.stderr)
         return 2
 
-    output = run_dev_mode_env_exact(input_data)
     json.dump(output, sys.stdout, sort_keys=True, separators=(",", ":"))
     sys.stdout.write("\n")
     return 0
