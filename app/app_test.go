@@ -2140,6 +2140,7 @@ func TestDefaultConfigFromEnvSelectsWarmTransferWorkflowAgent(t *testing.T) {
 	t.Setenv("RTP_AGENT_WORKFLOW_TASK", "warm_transfer")
 	t.Setenv("RTP_AGENT_WORKFLOW_WARM_TRANSFER_SIP_CALL_TO", "+15550100")
 	t.Setenv("RTP_AGENT_WORKFLOW_WARM_TRANSFER_SIP_TRUNK_ID", "trunk_123")
+	t.Setenv("RTP_AGENT_WORKFLOW_WARM_TRANSFER_SIP_HEADERS", "X-Trace=trace-a,X-Queue=billing")
 	t.Setenv("RTP_AGENT_WORKFLOW_WARM_TRANSFER_DTMF", "ww1234#")
 	t.Setenv("RTP_AGENT_WORKFLOW_WARM_TRANSFER_RINGING_TIMEOUT_SECONDS", "3.5")
 	t.Setenv("RTP_AGENT_WORKFLOW_WARM_TRANSFER_EXTRA_INSTRUCTIONS", "\nKeep the handoff concise.")
@@ -2157,6 +2158,9 @@ func TestDefaultConfigFromEnvSelectsWarmTransferWorkflowAgent(t *testing.T) {
 	}
 	if task.SipTrunkID != "trunk_123" {
 		t.Fatalf("SipTrunkID = %q, want trunk_123", task.SipTrunkID)
+	}
+	if task.SipHeaders["X-Trace"] != "trace-a" || task.SipHeaders["X-Queue"] != "billing" {
+		t.Fatalf("SipHeaders = %#v, want configured SIP headers", task.SipHeaders)
 	}
 	if task.Dtmf != "ww1234#" {
 		t.Fatalf("Dtmf = %q, want ww1234#", task.Dtmf)

@@ -10,3 +10,4 @@ name-confirmation-default,./core/beta/workflows,TestGetNameTaskRequiresConfirmat
 credit-card-confirmation-default,./core/beta/workflows,TestGetCreditCardTaskBuildsReferenceSubtasks,Validates credit-card default confirmation propagation
 warm-transfer-sip-config-validation,./core/beta/workflows,TestNewWarmTransferTaskRejectsMissingSIPConfig,Validates warm transfer rejects missing SIP target or trunk config
 warm-transfer-sip-request-options,./core/beta/workflows,TestWarmTransferOnEnterDialsHumanAgentSIPParticipant,Validates warm transfer sends SIP request options
+warm-transfer-app-config-options,./app,TestDefaultConfigFromEnvSelectsWarmTransferWorkflowAgent,Validates app wires warm transfer SIP config options

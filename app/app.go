@@ -451,6 +451,7 @@ type AppConfig struct {
 	WorkflowDtmfAskConfirmation           *bool
 	WorkflowWarmTransferSipCallTo         string
 	WorkflowWarmTransferSipTrunkID        string
+	WorkflowWarmTransferSipHeaders        map[string]string
 	WorkflowWarmTransferDTMF              string
 	WorkflowWarmTransferRingingTimeout    *float64
 	WorkflowWarmTransferExtraInstructions string
@@ -769,6 +770,7 @@ func DefaultConfigFromEnv() AppConfig {
 		WorkflowDtmfAskConfirmation:             getenvOptionalBool("RTP_AGENT_WORKFLOW_DTMF_ASK_CONFIRMATION"),
 		WorkflowWarmTransferSipCallTo:           os.Getenv("RTP_AGENT_WORKFLOW_WARM_TRANSFER_SIP_CALL_TO"),
 		WorkflowWarmTransferSipTrunkID:          os.Getenv("RTP_AGENT_WORKFLOW_WARM_TRANSFER_SIP_TRUNK_ID"),
+		WorkflowWarmTransferSipHeaders:          splitEnvStringMap("RTP_AGENT_WORKFLOW_WARM_TRANSFER_SIP_HEADERS"),
 		WorkflowWarmTransferDTMF:                os.Getenv("RTP_AGENT_WORKFLOW_WARM_TRANSFER_DTMF"),
 		WorkflowWarmTransferRingingTimeout:      getenvOptionalFloat("RTP_AGENT_WORKFLOW_WARM_TRANSFER_RINGING_TIMEOUT_SECONDS"),
 		WorkflowWarmTransferExtraInstructions:   os.Getenv("RTP_AGENT_WORKFLOW_WARM_TRANSFER_EXTRA_INSTRUCTIONS"),
@@ -1193,6 +1195,9 @@ func workflowTaskFactoryFromName(cfg AppConfig, baseAgent *agent.Agent, taskName
 }
 
 func applyWarmTransferOptions(task *workflows.WarmTransferTask, cfg AppConfig) {
+	if len(cfg.WorkflowWarmTransferSipHeaders) > 0 {
+		task.SipHeaders = cfg.WorkflowWarmTransferSipHeaders
+	}
 	task.Dtmf = strings.TrimSpace(cfg.WorkflowWarmTransferDTMF)
 	if cfg.WorkflowWarmTransferRingingTimeout != nil {
 		task.RingingTimeout = time.Duration(*cfg.WorkflowWarmTransferRingingTimeout * float64(time.Second))
