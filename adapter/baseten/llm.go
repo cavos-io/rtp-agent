@@ -5,8 +5,9 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/cavos-io/rtp-agent/adapter/openai"
+	adapteropenai "github.com/cavos-io/rtp-agent/adapter/openai"
 	"github.com/cavos-io/rtp-agent/core/llm"
+	openaisdk "github.com/sashabaranov/go-openai"
 )
 
 const (
@@ -16,7 +17,7 @@ const (
 )
 
 type BasetenLLM struct {
-	inner   *openai.OpenAILLM
+	inner   *adapteropenai.OpenAILLM
 	baseURL string
 }
 
@@ -25,6 +26,10 @@ func NewBasetenLLM(apiKey string, model string) (*BasetenLLM, error) {
 }
 
 func newBasetenLLMWithBaseURL(apiKey string, model string, baseURL string) (*BasetenLLM, error) {
+	return newBasetenLLMWithBaseURLAndHTTPClient(apiKey, model, baseURL, nil)
+}
+
+func newBasetenLLMWithBaseURLAndHTTPClient(apiKey string, model string, baseURL string, httpClient openaisdk.HTTPDoer) (*BasetenLLM, error) {
 	if apiKey == "" {
 		apiKey = os.Getenv(basetenAPIKeyEnv)
 	}
@@ -35,7 +40,7 @@ func newBasetenLLMWithBaseURL(apiKey string, model string, baseURL string) (*Bas
 		model = defaultBasetenLLMModel
 	}
 	return &BasetenLLM{
-		inner:   openai.NewOpenAILLMWithBaseURL(apiKey, model, baseURL),
+		inner:   adapteropenai.NewOpenAILLMWithBaseURLAndHTTPClient(apiKey, model, baseURL, httpClient),
 		baseURL: baseURL,
 	}, nil
 }

@@ -44,9 +44,16 @@ func newOpenAILLMWithConfigAndModel(config openai.ClientConfig, model string) (*
 }
 
 func NewOpenAILLMWithBaseURL(apiKey string, model string, baseURL string) *OpenAILLM {
+	return NewOpenAILLMWithBaseURLAndHTTPClient(apiKey, model, baseURL, nil)
+}
+
+func NewOpenAILLMWithBaseURLAndHTTPClient(apiKey string, model string, baseURL string, httpClient openai.HTTPDoer) *OpenAILLM {
 	config := openai.DefaultConfig(apiKey)
 	if baseURL != "" {
 		config.BaseURL = baseURL
+	}
+	if httpClient != nil {
+		config.HTTPClient = httpClient
 	}
 	return &OpenAILLM{
 		client: openai.NewClientWithConfig(config),

@@ -3,8 +3,8 @@ package baseten
 import (
 	"context"
 	"errors"
+	"io"
 	"net/http"
-	"net/http/httptest"
 	"strings"
 	"testing"
 
@@ -41,16 +41,12 @@ func TestBasetenLLMRequiresAPIKey(t *testing.T) {
 }
 
 func TestBasetenLLMChatDelegatesToOpenAICompatibleEndpoint(t *testing.T) {
-	var gotAuth string
-	var gotPath string
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		gotAuth = r.Header.Get("Authorization")
-		gotPath = r.URL.Path
-		http.Error(w, `{"error":{"message":"bad request","type":"invalid_request_error","code":"bad_request"}}`, http.StatusBadRequest)
-	}))
-	defer server.Close()
+	client := &captureBasetenHTTPClient{
+		statusCode:   http.StatusBadRequest,
+		responseBody: `{"error":{"message":"bad request","type":"invalid_request_error","code":"bad_request"}}`,
+	}
 
-	provider, err := newBasetenLLMWithBaseURL("test-key", "custom-model", server.URL+"/v1")
+	provider, err := newBasetenLLMWithBaseURLAndHTTPClient("test-key", "custom-model", "https://baseten.test/v1", client)
 	if err != nil {
 		t.Fatalf("newBasetenLLMWithBaseURL error = %v", err)
 	}
@@ -61,10 +57,33 @@ func TestBasetenLLMChatDelegatesToOpenAICompatibleEndpoint(t *testing.T) {
 	if !errors.As(err, &statusErr) {
 		t.Fatalf("Chat error = %T %v, want APIStatusError from local endpoint", err, err)
 	}
-	if gotAuth != "Bearer test-key" {
-		t.Fatalf("Authorization = %q, want Bearer test-key", gotAuth)
+	if client.authorization != "Bearer test-key" {
+		t.Fatalf("Authorization = %q, want Bearer test-key", client.authorization)
 	}
-	if gotPath != "/v1/chat/completions" {
-		t.Fatalf("path = %q, want OpenAI-compatible chat completions path", gotPath)
+	if client.path != "/v1/chat/completions" {
+		t.Fatalf("path = %q, want OpenAI-compatible chat completions path", client.path)
 	}
+}
+
+type captureBasetenHTTPClient struct {
+	statusCode    int
+	responseBody  string
+	authorization string
+	path          string
+}
+
+func (c *captureBasetenHTTPClient) Do(req *http.Request) (*http.Response, error) {
+	c.authorization = req.Header.Get("Authorization")
+	c.path = req.URL.Path
+	statusCode := c.statusCode
+	if statusCode == 0 {
+		statusCode = http.StatusOK
+	}
+	return &http.Response{
+		StatusCode: statusCode,
+		Status:     http.StatusText(statusCode),
+		Body:       io.NopCloser(strings.NewReader(c.responseBody)),
+		Header:     make(http.Header),
+		Request:    req,
+	}, nil
 }
