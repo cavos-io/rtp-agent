@@ -88,3 +88,44 @@ func TestExpFilterLegacyConstructorKeepsMaximumClamp(t *testing.T) {
 		t.Fatalf("Filtered() after Reset = %v, want legacy unset sentinel -1", got)
 	}
 }
+
+func TestMovingAverageMatchesReferenceWindow(t *testing.T) {
+	average := NewMovingAverage(3)
+
+	if got := average.GetAvg(); got != 0 {
+		t.Fatalf("initial GetAvg() = %v, want 0", got)
+	}
+
+	average.AddSample(1)
+	if got := average.GetAvg(); got != 1 {
+		t.Fatalf("GetAvg() after 1 sample = %v, want 1", got)
+	}
+	if got := average.Size(); got != 1 {
+		t.Fatalf("Size() after 1 sample = %v, want 1", got)
+	}
+
+	average.AddSample(2)
+	average.AddSample(3)
+	if got := average.GetAvg(); got != 2 {
+		t.Fatalf("GetAvg() after full window = %v, want 2", got)
+	}
+	if got := average.Size(); got != 3 {
+		t.Fatalf("Size() after full window = %v, want 3", got)
+	}
+
+	average.AddSample(4)
+	if got := average.GetAvg(); got != 3 {
+		t.Fatalf("GetAvg() after rollover = %v, want 3", got)
+	}
+	if got := average.Size(); got != 3 {
+		t.Fatalf("Size() after rollover = %v, want 3", got)
+	}
+
+	average.Reset()
+	if got := average.GetAvg(); got != 0 {
+		t.Fatalf("GetAvg() after Reset() = %v, want 0", got)
+	}
+	if got := average.Size(); got != 0 {
+		t.Fatalf("Size() after Reset() = %v, want 0", got)
+	}
+}

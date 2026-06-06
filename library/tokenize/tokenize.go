@@ -281,6 +281,42 @@ func ReplaceWords(text string, replacements map[string]string) string {
 	return builder.String()
 }
 
+var referenceHyphenationExceptions = map[string][]int{
+	"associate":     {2, 4},
+	"associates":    {2, 4},
+	"declination":   {3, 5, 7},
+	"obligatory":    {5, 6},
+	"philanthropic": {4, 6},
+	"present":       {},
+	"presents":      {},
+	"project":       {},
+	"projects":      {},
+	"reciprocity":   {4},
+	"recognizance":  {2, 5, 7},
+	"reformation":   {3, 5, 7},
+	"retribution":   {3, 5, 7},
+	"table":         {2},
+}
+
+// HyphenateWord returns reference-compatible English hyphenation pieces for
+// the explicit exception table exposed by the LiveKit basic tokenizer.
+func HyphenateWord(word string) []string {
+	if len(word) <= 4 {
+		return []string{word}
+	}
+	if breaks, ok := referenceHyphenationExceptions[strings.ToLower(word)]; ok {
+		pieces := make([]string, 0, len(breaks)+1)
+		start := 0
+		for _, end := range breaks {
+			pieces = append(pieces, word[start:end])
+			start = end
+		}
+		pieces = append(pieces, word[start:])
+		return pieces
+	}
+	return []string{word}
+}
+
 func SplitParagraphs(text string) []TokenData {
 	pattern := regexp.MustCompile(`\n\s*\n`)
 	indices := pattern.FindAllStringIndex(text, -1)

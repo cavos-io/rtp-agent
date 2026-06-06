@@ -23,6 +23,9 @@ Cases:
 
 Case types:
   go-test        Runs one Go test as target-side regression evidence.
+                 Multiple selected go-test cases in the same package are
+                 batched into one go test process, then each selected test is
+                 still asserted from normalized output.
   symbol-report  Runs a unique Layer 1 symbol-report golden fixture.
   cross-runtime  Runs Python reference and Go target runners with the same
                  input JSON and compares normalized JSON envelopes:
@@ -363,6 +366,60 @@ assert_go_test_pass_output() {
   fi
 }
 
+escape_extended_regex() {
+  sed -E 's/[][(){}.^$*+?|\\]/\\&/g' <<<"$1"
+}
+
+run_go_test_manifest_cases() {
+  local go_package="$1" tmpdir="$2"
+  shift 2
+  local case_name case_type source_ref target_ref test_name contract behavior expected_package actual_norm
+  local regex="" escaped
+
+  if (( $# == 0 )); then
+    return 0
+  fi
+
+  for case_name in "$@"; do
+    case_type="$(case_field "$case_name" 2)"
+    source_ref="$(case_field "$case_name" 3)"
+    target_ref="$(case_field "$case_name" 4)"
+    test_name="$(case_field "$case_name" 6)"
+    contract="$(case_field "$case_name" 10)"
+    behavior="$(case_field "$case_name" 11)"
+    if [[ "$case_type" != "go-test" ]]; then
+      echo "[$case_name] manifest row type = $case_type, want go-test" >&2
+      return 2
+    fi
+    if [[ -z "$source_ref" || -z "$target_ref" || -z "$go_package" || -z "$test_name" || -z "$contract" || -z "$behavior" ]]; then
+      echo "[$case_name] manifest row must set source_ref, target_ref, go_package, go_test, contract, and behavior" >&2
+      return 2
+    fi
+    escaped="$(escape_extended_regex "$test_name")"
+    if [[ -z "$regex" ]]; then
+      regex="$escaped"
+    else
+      regex="$regex|$escaped"
+    fi
+  done
+
+  if ! (
+    cd "$REPO_ROOT"
+    go test "$go_package" -run "^($regex)$" -count=1 -v
+  ) > "$tmpdir/actual.raw" 2>&1; then
+    :
+  fi
+
+  actual_norm="$tmpdir/actual.normalized"
+  normalize_case "go-test-batch" "$tmpdir/actual.raw" "$actual_norm" "$tmpdir"
+  expected_package="$(go_package_import_path "$go_package")"
+  for case_name in "$@"; do
+    test_name="$(case_field "$case_name" 6)"
+    assert_go_test_pass_output "$case_name" "$actual_norm" "$test_name" "$expected_package" "$tmpdir/actual.raw" || return
+    echo "[$case_name] ok"
+  done
+}
+
 run_symbol_report_case() {
   local case_name="$1" fixture_path="$2" tmpdir="$3"
   local case_dir="$FIXTURE_ROOT/$fixture_path"
@@ -479,8 +536,11 @@ run_case() {
 }
 
 main() {
-  local case_name failed=0
+  local case_name case_type go_package failed=0
   local cases_file
+  local -a go_packages=() other_cases=()
+  declare -A go_package_seen=()
+  declare -A go_package_cases=()
   if (( LIST_ONLY == 1 )); then
     list_cases
     return 0
@@ -492,10 +552,46 @@ main() {
   fi
   while IFS= read -r case_name; do
     [[ -z "$case_name" ]] && continue
+    case_type="$(case_field "$case_name" 2)"
+    if [[ "$case_type" == "go-test" ]]; then
+      go_package="$(case_field "$case_name" 5)"
+      if [[ -z "$go_package" ]]; then
+        echo "[$case_name] manifest row must set go_package" >&2
+        failed=1
+        continue
+      fi
+      if [[ -z "${go_package_seen[$go_package]:-}" ]]; then
+        go_packages+=("$go_package")
+        go_package_seen[$go_package]=1
+      fi
+      go_package_cases[$go_package]+="$case_name"$'\n'
+    else
+      other_cases+=("$case_name")
+    fi
+  done < "$cases_file"
+
+  for go_package in "${go_packages[@]}"; do
+    local tmpdir batch_cases=()
+    tmpdir="$(mktemp -d "${TMPDIR:-/tmp}/parity-validate.go-test.XXXXXX")"
+    while IFS= read -r case_name; do
+      [[ -z "$case_name" ]] && continue
+      batch_cases+=("$case_name")
+    done <<<"${go_package_cases[$go_package]}"
+    if ! run_go_test_manifest_cases "$go_package" "$tmpdir" "${batch_cases[@]}"; then
+      echo "Temp dir: $tmpdir" >&2
+      failed=1
+    elif (( KEEP_TEMP == 0 )); then
+      rm -rf "$tmpdir"
+    else
+      echo "[go-test:$go_package] temp dir: $tmpdir"
+    fi
+  done
+
+  for case_name in "${other_cases[@]}"; do
     if ! run_case "$case_name"; then
       failed=1
     fi
-  done < "$cases_file"
+  done
   return "$failed"
 }
 

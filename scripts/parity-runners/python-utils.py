@@ -85,6 +85,47 @@ def load_reference_exp_filter():
     return module
 
 
+def load_reference_moving_average():
+    root = repo_root()
+    moving_average_path = root / "refs/agents/livekit-agents/livekit/agents/utils/moving_average.py"
+
+    spec = importlib.util.spec_from_file_location(
+        "livekit.agents.utils.moving_average", moving_average_path
+    )
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f"cannot load reference moving_average.py from {moving_average_path}")
+
+    module = importlib.util.module_from_spec(spec)
+    sys.modules["livekit.agents.utils.moving_average"] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+def load_reference_bounded_dict():
+    root = repo_root()
+    bounded_dict_path = root / "refs/agents/livekit-agents/livekit/agents/utils/bounded_dict.py"
+
+    log_mod = types.ModuleType("livekit.agents.log")
+
+    class Logger:
+        def warning(self, *args, **kwargs):
+            return None
+
+    log_mod.logger = Logger()
+    sys.modules["livekit.agents.log"] = log_mod
+
+    spec = importlib.util.spec_from_file_location(
+        "livekit.agents.utils.bounded_dict", bounded_dict_path
+    )
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f"cannot load reference bounded_dict.py from {bounded_dict_path}")
+
+    module = importlib.util.module_from_spec(spec)
+    sys.modules["livekit.agents.utils.bounded_dict"] = module
+    spec.loader.exec_module(module)
+    return module
+
+
 def load_input(path: str) -> dict:
     with open(path, "r", encoding="utf-8") as file:
         data = json.load(file)
@@ -114,6 +155,13 @@ def optional_string_values(input_data: dict, field: str, default: list[str | Non
     ):
         raise ValueError(f"{field} must be a list of strings or null")
     return values
+
+
+def float_values(input_data: dict, field: str, default: list[float]) -> list[float]:
+    values = input_data.get(field, default)
+    if not isinstance(values, list) or not all(isinstance(value, (int, float)) for value in values):
+        raise ValueError(f"{field} must be a list of numbers")
+    return [float(value) for value in values]
 
 
 def run_dev_mode_env_exact(input_data: dict) -> dict:
@@ -251,6 +299,76 @@ def run_exp_filter_initial_minimum(input_data: dict) -> dict:
     }
 
 
+def run_moving_average_window(input_data: dict) -> dict:
+    moving_average = load_reference_moving_average()
+    window_size = int(input_data.get("window_size", 3))
+    samples = float_values(input_data, "sample_values", [1, 2, 3, 4])
+
+    average = moving_average.MovingAverage(window_size)
+    events = [
+        {
+            "name": "initial",
+            "avg": f"{average.get_avg():g}",
+            "size": average.size(),
+        }
+    ]
+    for sample in samples:
+        average.add_sample(sample)
+        events.append(
+            {
+                "name": "add_sample",
+                "sample": f"{sample:g}",
+                "avg": f"{average.get_avg():g}",
+                "size": average.size(),
+            }
+        )
+    average.reset()
+    events.append(
+        {
+            "name": "reset",
+            "avg": f"{average.get_avg():g}",
+            "size": average.size(),
+        }
+    )
+
+    return {"contract": "moving-average-window", "events": events}
+
+
+def run_bounded_dict_pop_if_order(input_data: dict) -> dict:
+    bounded_dict = load_reference_bounded_dict()
+    maxsize = int(input_data.get("maxsize", 4))
+
+    dictionary = bounded_dict.BoundedDict(maxsize)
+    dictionary["oldest"] = 1
+    dictionary["middle"] = 2
+    dictionary["newest"] = 3
+
+    predicate_key, predicate_value = dictionary.pop_if(lambda value: value % 2 == 1)
+    oldest_key, oldest_value = dictionary.pop_if()
+
+    return {
+        "contract": "bounded-dict-pop-if-order",
+        "events": [
+            {
+                "name": "predicate_odd",
+                "result": {
+                    "key": predicate_key,
+                    "value": predicate_value,
+                    "ok": predicate_key is not None,
+                },
+            },
+            {
+                "name": "pop_oldest",
+                "result": {
+                    "key": oldest_key,
+                    "value": oldest_value,
+                    "ok": oldest_key is not None,
+                },
+            },
+        ],
+    }
+
+
 def main() -> int:
     if len(sys.argv) != 2:
         print("usage: python-utils.py INPUT_JSON", file=sys.stderr)
@@ -268,6 +386,10 @@ def main() -> int:
         output = run_camel_to_snake_case(input_data)
     elif contract == "exp-filter-initial-minimum":
         output = run_exp_filter_initial_minimum(input_data)
+    elif contract == "moving-average-window":
+        output = run_moving_average_window(input_data)
+    elif contract == "bounded-dict-pop-if-order":
+        output = run_bounded_dict_pop_if_order(input_data)
     else:
         print(f"unsupported contract: {contract}", file=sys.stderr)
         return 2

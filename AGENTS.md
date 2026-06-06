@@ -69,7 +69,10 @@ For each parity task:
 4. Add or update focused tests near the Go package being changed.
 5. Add or update a behavior parity manifest case when the task changes a meaningful
    reference-to-Go behavior.
-6. Run the narrowest useful verification first, then broaden as risk increases.
+6. Before changing `scripts/parity-runners/*`, explain why the runner change is
+   reusable across a category of future cases; otherwise prefer manifest-only
+   parity rows.
+7. Run the narrowest useful verification first, then broaden as risk increases.
 
 Common verification commands:
 
@@ -146,6 +149,16 @@ Use the parity layers as follows:
      manifest with `python_runner`, `go_runner`, and `input_json`, run it
      against both the Python reference and Go target through thin runners,
      normalize their JSON traces or contract outputs, and compare the result.
+   * Prefer manifest-only additions. Do not keep expanding
+     `scripts/parity-runners/*` with one-off contract branches for individual
+     cases.
+   * Add or modify parity runner code only when it creates a reusable runner
+     family that can support multiple future cases, such as utilities,
+     environment helpers, string/vector transforms, math/vector checks, or later
+     workflow trace contracts.
+   * Keep a case as `go-test` when cross-runtime validation would require
+     single-purpose runner code or workflow orchestration that is not yet
+     reusable.
    * Add the first cross-runtime cases for pure utility or vector behavior
      before workflow orchestration. Good early cases have no network, room,
      timing, provider, or lifecycle dependencies and can emit a compact JSON
@@ -154,11 +167,9 @@ Use the parity layers as follows:
      traces or shared contract/invariant output such as `task_started`,
      `tool_called`, `state_changed`, `awaiting_confirmation`, `completed`, or
      `error`.
-   * `cross-runtime` is currently a schema and dispatch placeholder in
-     `scripts/parity-validate.sh`. Until real Python and Go runners are wired,
-     keep cases as `go-test` evidence and document the future cross-runtime
-     runner path in the manifest notes. Do not add a `cross-runtime` row that
-     cannot execute both sides, and do not fake cross-runtime proof.
+   * `cross-runtime` rows require real Python and Go runner execution. Do not add
+     a `cross-runtime` row that cannot execute both sides, and do not fake
+     cross-runtime proof.
    * Use dedicated fixture directories or per-case golden files only when the
      case has genuinely unique file inputs, traces, symbol-report output, or
      other content that cannot be represented cleanly as manifest columns.

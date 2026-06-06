@@ -10,23 +10,28 @@ import (
 )
 
 type inputEnvelope struct {
-	Alpha      *float64  `json:"alpha"`
-	Contract   string    `json:"contract"`
-	EnvValues  []*string `json:"env_values"`
-	Exp        *float64  `json:"exp"`
-	Initial    *float64  `json:"initial"`
-	MinVal     *float64  `json:"min_val"`
-	NameValues []string  `json:"name_values"`
-	Sample     *float64  `json:"sample"`
-	URLValues  []string  `json:"url_values"`
+	Alpha        *float64  `json:"alpha"`
+	Contract     string    `json:"contract"`
+	EnvValues    []*string `json:"env_values"`
+	Exp          *float64  `json:"exp"`
+	Initial      *float64  `json:"initial"`
+	MinVal       *float64  `json:"min_val"`
+	NameValues   []string  `json:"name_values"`
+	Sample       *float64  `json:"sample"`
+	SampleValues []float64 `json:"sample_values"`
+	URLValues    []string  `json:"url_values"`
+	WindowSize   *int      `json:"window_size"`
 }
 
 type event struct {
+	Avg    string  `json:"avg,omitempty"`
 	Name   string  `json:"name"`
 	Env    *string `json:"env,omitempty"`
 	URL    string  `json:"url,omitempty"`
 	Input  string  `json:"input,omitempty"`
-	Result any     `json:"result"`
+	Result any     `json:"result,omitempty"`
+	Sample string  `json:"sample,omitempty"`
+	Size   *int    `json:"size,omitempty"`
 }
 
 type outputEnvelope struct {
@@ -70,6 +75,10 @@ func run() error {
 		return runCamelToSnakeCase(input)
 	case "exp-filter-initial-minimum":
 		return runExpFilterInitialMinimum(input)
+	case "moving-average-window":
+		return runMovingAverageWindow(input)
+	case "bounded-dict-pop-if-order":
+		return runBoundedDictPopIfOrder(input)
 	default:
 		return fmt.Errorf("unsupported contract: %s", input.Contract)
 	}
@@ -192,6 +201,75 @@ func runCamelToSnakeCase(input inputEnvelope) error {
 	return encoder.Encode(output)
 }
 
+func runMovingAverageWindow(input inputEnvelope) error {
+	windowSize := intValue(input.WindowSize, 3)
+	samples := input.SampleValues
+	if samples == nil {
+		samples = []float64{1, 2, 3, 4}
+	}
+
+	average := lkmath.NewMovingAverage(windowSize)
+	output := outputEnvelope{Contract: "moving-average-window"}
+	output.Events = append(output.Events, event{
+		Name: "initial",
+		Avg:  fmt.Sprintf("%g", average.GetAvg()),
+		Size: intPtr(average.Size()),
+	})
+	for _, sample := range samples {
+		average.AddSample(sample)
+		output.Events = append(output.Events, event{
+			Name:   "add_sample",
+			Sample: fmt.Sprintf("%g", sample),
+			Avg:    fmt.Sprintf("%g", average.GetAvg()),
+			Size:   intPtr(average.Size()),
+		})
+	}
+	average.Reset()
+	output.Events = append(output.Events, event{
+		Name: "reset",
+		Avg:  fmt.Sprintf("%g", average.GetAvg()),
+		Size: intPtr(average.Size()),
+	})
+
+	encoder := json.NewEncoder(os.Stdout)
+	encoder.SetEscapeHTML(false)
+	return encoder.Encode(output)
+}
+
+func runBoundedDictPopIfOrder(input inputEnvelope) error {
+	dictionary := utils.NewBoundedDict[string, int](4)
+	dictionary.Set("oldest", 1)
+	dictionary.Set("middle", 2)
+	dictionary.Set("newest", 3)
+
+	predicateKey, predicateValue, predicateOK := dictionary.PopIf(func(value int) bool {
+		return value%2 == 1
+	})
+	oldestKey, oldestValue, oldestOK := dictionary.PopIf(nil)
+
+	output := outputEnvelope{Contract: "bounded-dict-pop-if-order"}
+	output.Events = append(output.Events, event{
+		Name: "predicate_odd",
+		Result: map[string]any{
+			"key":   predicateKey,
+			"value": predicateValue,
+			"ok":    predicateOK,
+		},
+	})
+	output.Events = append(output.Events, event{
+		Name: "pop_oldest",
+		Result: map[string]any{
+			"key":   oldestKey,
+			"value": oldestValue,
+			"ok":    oldestOK,
+		},
+	})
+
+	encoder := json.NewEncoder(os.Stdout)
+	encoder.SetEscapeHTML(false)
+	return encoder.Encode(output)
+}
+
 func runExpFilterInitialMinimum(input inputEnvelope) error {
 	alpha := floatValue(input.Alpha, 0.5)
 	initial := floatValue(input.Initial, 10)
@@ -235,6 +313,17 @@ func floatValue(value *float64, fallback float64) float64 {
 	return *value
 }
 
+func intValue(value *int, fallback int) int {
+	if value == nil {
+		return fallback
+	}
+	return *value
+}
+
 func ptr(value string) *string {
+	return &value
+}
+
+func intPtr(value int) *int {
 	return &value
 }
