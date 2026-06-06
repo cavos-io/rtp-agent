@@ -2557,6 +2557,9 @@ func TestAgentSessionClosesAfterUnrecoverableTTSErrorThreshold(t *testing.T) {
 		if ev.Reason != CloseReasonError {
 			t.Fatalf("CloseEvent.Reason = %q, want error", ev.Reason)
 		}
+		if !errors.Is(ev.Error, cause) {
+			t.Fatalf("CloseEvent.Error = %v, want cause %v", ev.Error, cause)
+		}
 	case <-time.After(time.Second):
 		t.Fatal("CloseEvents did not receive error close")
 	}

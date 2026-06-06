@@ -64,9 +64,6 @@ func (p *ConnectionPool[T]) Get(ctx context.Context, timeout time.Duration) (T, 
 			return conn, nil
 		}
 		p.removeLocked(conn)
-		if err := p.drainToCloseLocked(ctx); err != nil {
-			return zero, err
-		}
 	}
 
 	start := time.Now()

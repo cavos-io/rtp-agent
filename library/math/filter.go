@@ -48,6 +48,7 @@ func (e *ExpFilter) Reset(alpha float64) {
 			panic(err)
 		}
 		e.alpha = alpha
+		return
 	}
 	e.filtered = nil
 }

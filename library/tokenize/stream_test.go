@@ -133,6 +133,17 @@ func TestBufferedTokenStreamEndInputFlushesAndCloses(t *testing.T) {
 	}
 }
 
+func TestBufferedTokenStreamEndInputRejectsClosedStream(t *testing.T) {
+	stream := NewBufferedTokenStream(strings.Fields, 1, 1)
+	if err := stream.EndInput(); err != nil {
+		t.Fatalf("first EndInput returned error: %v", err)
+	}
+
+	if err := stream.EndInput(); err == nil {
+		t.Fatal("second EndInput error = nil, want closed stream error")
+	}
+}
+
 func TestBufferedTokenStreamACloseDoesNotFlush(t *testing.T) {
 	stream := NewBufferedTokenStream(func(text string) []string {
 		return []string{text}

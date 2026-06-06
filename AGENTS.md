@@ -130,27 +130,35 @@ Use the parity layers as follows:
    * Use `scripts/parity-validate.sh` and the shared parity case manifest under
      `scripts/parity-fixtures/` when available.
    * Prefer manifest/table-driven parity cases. Adding a simple parity case
-     should usually mean adding one row to the shared TSV manifest rather
+     should usually mean adding one row to the shared CSV/TSV manifest rather
      than creating dedicated per-case files.
    * Manifest rows should explain the parity intent, not only the command to run.
-     Include fields such as case name, case type, source reference, target
-     reference, Go package, Go test, contract label, behavior summary, and notes
-     when supported.
-   * The current manifest is `scripts/parity-fixtures/test-cases.tsv`. It is
-     simple tab-delimited text, not quoted CSV. Columns are:
-
-     ```text
-     case_name	type	source_ref	target_ref	go_package	go_test	contract	behavior	notes
-     ```
-
-   * Simple Go-test-backed cases are useful as cheap target-side regression
+     The current TSV schema is:
+     `case_name`, `type`, `source_ref`, `target_ref`, `go_package`, `go_test`,
+     `python_runner`, `go_runner`, `input_json`, `contract`, `behavior`, `notes`.
+   * Simple `go-test` manifest cases are useful as cheap target-side regression
      checks. They should verify that the selected test ran, passed, and completed
      in the expected package after normalization.
    * Go-only cases do not prove Python reference behavior and Go behavior are
-     identical unless the Go test itself encodes the reference behavior clearly.
-   * For important behavior, prefer future cross-runtime manifest cases when
-     practical: one row should define the shared scenario, Python reference
-     runner, Go target runner, input payload, and contract or trace to compare.
+     identical unless the Go test itself clearly encodes the reference behavior.
+   * For important behavior, prefer `cross-runtime` manifest cases when
+     practical. A cross-runtime case should define one shared scenario in the
+     manifest with `python_runner`, `go_runner`, and `input_json`, run it
+     against both the Python reference and Go target through thin runners,
+     normalize their JSON traces or contract outputs, and compare the result.
+   * Add the first cross-runtime cases for pure utility or vector behavior
+     before workflow orchestration. Good early cases have no network, room,
+     timing, provider, or lifecycle dependencies and can emit a compact JSON
+     contract from both runtimes.
+   * Do not compare raw stdout for cross-runtime parity. Prefer normalized JSON
+     traces or shared contract/invariant output such as `task_started`,
+     `tool_called`, `state_changed`, `awaiting_confirmation`, `completed`, or
+     `error`.
+   * `cross-runtime` is currently a schema and dispatch placeholder in
+     `scripts/parity-validate.sh`. Until real Python and Go runners are wired,
+     keep cases as `go-test` evidence and document the future cross-runtime
+     runner path in the manifest notes. Do not add a `cross-runtime` row that
+     cannot execute both sides, and do not fake cross-runtime proof.
    * Use dedicated fixture directories or per-case golden files only when the
      case has genuinely unique file inputs, traces, symbol-report output, or
      other content that cannot be represented cleanly as manifest columns.

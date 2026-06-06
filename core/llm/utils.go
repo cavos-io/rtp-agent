@@ -11,6 +11,8 @@ import (
 	"regexp"
 	"strings"
 	"time"
+
+	"github.com/cavos-io/rtp-agent/library/utils/images"
 )
 
 type DiffOps struct {
@@ -55,13 +57,29 @@ func SerializeImage(image *ImageContent) (*SerializedImage, error) {
 	if image == nil {
 		return nil, fmt.Errorf("image content is nil")
 	}
-	imageString, ok := image.Image.(string)
-	if !ok || imageString == "" {
-		return nil, fmt.Errorf("unsupported image type")
-	}
 	serialized := &SerializedImage{
 		InferenceDetail: imageInferenceDetailOrDefault(image.InferenceDetail),
 		MIMEType:        image.MimeType,
+	}
+	if frame, ok := image.Image.(*images.VideoFrame); ok {
+		opts := images.NewEncodeOptions()
+		if image.InferenceWidth != nil && image.InferenceHeight != nil {
+			opts.Width = *image.InferenceWidth
+			opts.Height = *image.InferenceHeight
+			opts.Strategy = "scale_aspect_fit"
+		}
+		data, err := images.Encode(frame, opts)
+		if err != nil {
+			return nil, fmt.Errorf("encode video frame image: %w", err)
+		}
+		serialized.MIMEType = "image/jpeg"
+		serialized.DataBytes = data
+		return serialized, nil
+	}
+
+	imageString, ok := image.Image.(string)
+	if !ok || imageString == "" {
+		return nil, fmt.Errorf("unsupported image type")
 	}
 	if !strings.HasPrefix(imageString, "data:") {
 		serialized.ExternalURL = imageString

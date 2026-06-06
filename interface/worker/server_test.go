@@ -3139,6 +3139,15 @@ func TestValidateRunPreconditionsReportsSpecificMissingCredential(t *testing.T) 
 }
 
 func TestValidateRunPreconditionsNormalizesCloudLoadOptions(t *testing.T) {
+	oldSampler := defaultWorkerLoadSample
+	oldCalc := defaultWorkerLoadCalc
+	defaultWorkerLoadSample = func() float64 { return 0.64 }
+	defaultWorkerLoadCalc = nil
+	t.Cleanup(func() {
+		defaultWorkerLoadSample = oldSampler
+		defaultWorkerLoadCalc = oldCalc
+	})
+
 	server := NewAgentServer(WorkerOptions{
 		WSRL:          "wss://livekit.example",
 		APIKey:        "key",
@@ -3157,8 +3166,8 @@ func TestValidateRunPreconditionsNormalizesCloudLoadOptions(t *testing.T) {
 		t.Fatalf("validateRunPreconditions() error = %v", err)
 	}
 
-	if server.Options.LoadFunc != nil {
-		t.Fatal("LoadFunc was not reset for cloud worker token")
+	if got := server.currentLoad(); got != 0.64 {
+		t.Fatalf("currentLoad() = %v, want default load sample 0.64", got)
 	}
 	if server.Options.LoadThreshold != defaultLoadThreshold {
 		t.Fatalf("LoadThreshold = %v, want default %v for cloud worker token", server.Options.LoadThreshold, defaultLoadThreshold)

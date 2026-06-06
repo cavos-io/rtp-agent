@@ -1398,7 +1398,7 @@ func (s *AgentServer) availableForJobWithLoad(load float64) bool {
 func (s *AgentServer) validateRunPreconditions() error {
 	s.Options = resolveWorkerOptions(s.Options)
 	if s.Options.WorkerToken != "" {
-		s.Options.LoadFunc = nil
+		s.Options.LoadFunc = defaultWorkerLoadFunc
 		s.Options.LoadThreshold = defaultLoadThreshold
 	}
 	if s.Options.LoadThreshold > 1 && !math.IsInf(s.Options.LoadThreshold, 1) && !s.Options.DevMode {
