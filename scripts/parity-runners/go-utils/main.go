@@ -77,6 +77,8 @@ func run() error {
 		return runExpFilterInitialMinimum(input)
 	case "moving-average-window":
 		return runMovingAverageWindow(input)
+	case "bounded-dict-pop-if-order":
+		return runBoundedDictPopIfOrder(input)
 	default:
 		return fmt.Errorf("unsupported contract: %s", input.Contract)
 	}
@@ -227,6 +229,40 @@ func runMovingAverageWindow(input inputEnvelope) error {
 		Name: "reset",
 		Avg:  fmt.Sprintf("%g", average.GetAvg()),
 		Size: intPtr(average.Size()),
+	})
+
+	encoder := json.NewEncoder(os.Stdout)
+	encoder.SetEscapeHTML(false)
+	return encoder.Encode(output)
+}
+
+func runBoundedDictPopIfOrder(input inputEnvelope) error {
+	dictionary := utils.NewBoundedDict[string, int](4)
+	dictionary.Set("oldest", 1)
+	dictionary.Set("middle", 2)
+	dictionary.Set("newest", 3)
+
+	predicateKey, predicateValue, predicateOK := dictionary.PopIf(func(value int) bool {
+		return value%2 == 1
+	})
+	oldestKey, oldestValue, oldestOK := dictionary.PopIf(nil)
+
+	output := outputEnvelope{Contract: "bounded-dict-pop-if-order"}
+	output.Events = append(output.Events, event{
+		Name: "predicate_odd",
+		Result: map[string]any{
+			"key":   predicateKey,
+			"value": predicateValue,
+			"ok":    predicateOK,
+		},
+	})
+	output.Events = append(output.Events, event{
+		Name: "pop_oldest",
+		Result: map[string]any{
+			"key":   oldestKey,
+			"value": oldestValue,
+			"ok":    oldestOK,
+		},
 	})
 
 	encoder := json.NewEncoder(os.Stdout)
