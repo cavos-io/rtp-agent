@@ -149,16 +149,41 @@ func (t *WarmTransferTask) OnExit() {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
+	t.cleanupResultResourcesLocked()
+}
+
+func (t *WarmTransferTask) cleanupResultResourcesLocked() {
 	if t.holdAudioHandle != nil {
 		t.holdAudioHandle.Stop()
+		t.holdAudioHandle = nil
 	}
 	if t.backgroundAudio != nil {
 		t.backgroundAudio.Close()
+		t.backgroundAudio = nil
 	}
 	if t.humanAgentSess != nil {
 		t.humanAgentSess.Shutdown(false)
 		t.humanAgentSess = nil
 	}
+}
+
+func (t *WarmTransferTask) setResultLocked(result *WarmTransferResult, err error) {
+	if t.Done() {
+		return
+	}
+	t.cleanupResultResourcesLocked()
+	if err != nil {
+		_ = t.Fail(err)
+		return
+	}
+	_ = t.Complete(result)
+}
+
+func (t *WarmTransferTask) setResult(result *WarmTransferResult, err error) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	t.setResultLocked(result, err)
 }
 
 func (t *WarmTransferTask) ConnectToCaller() error {
@@ -181,7 +206,7 @@ func (t *WarmTransferTask) ConnectToCaller() error {
 		return err
 	}
 
-	t.Complete(&WarmTransferResult{HumanAgentIdentity: t.humanAgentIdentity})
+	t.setResultLocked(&WarmTransferResult{HumanAgentIdentity: t.humanAgentIdentity}, nil)
 	return nil
 }
 
@@ -271,7 +296,7 @@ func (t *declineTransferTool) Execute(ctx context.Context, args string) (string,
 		return "", err
 	}
 
-	t.task.Fail(fmt.Errorf("human agent declined to connect: %s", params.Reason))
+	t.task.setResult(nil, llm.NewToolError(fmt.Sprintf("human agent declined to connect: %s", params.Reason)))
 	return "Transfer declined.", nil
 }
 
@@ -289,6 +314,6 @@ func (t *voicemailDetectedTool) Parameters() map[string]any {
 }
 
 func (t *voicemailDetectedTool) Execute(ctx context.Context, args string) (string, error) {
-	t.task.Fail(fmt.Errorf("voicemail detected"))
+	t.task.setResult(nil, llm.NewToolError("voicemail detected"))
 	return "Voicemail detected.", nil
 }

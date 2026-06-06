@@ -211,6 +211,18 @@ func (t *outOfScopeTool) Execute(ctx context.Context, args string) (string, erro
 		return "", err
 	}
 
+	t.group.mu.Lock()
+	currentTask := t.group.currentTask
+	t.group.mu.Unlock()
+
+	if task, ok := currentTask.(interface {
+		Done() bool
+		Fail(error) error
+	}); ok && !task.Done() {
+		_ = task.Fail(&OutOfScopeError{TargetTaskIDs: params.TaskIDs})
+		return "Regressing to requested task.", nil
+	}
+
 	return "", &OutOfScopeError{TargetTaskIDs: params.TaskIDs}
 }
 

@@ -121,6 +121,9 @@ func TestConnectToCallerCompletesWarmTransfer(t *testing.T) {
 	if !ok || transfer.HumanAgentIdentity != "human-agent-sip" {
 		t.Fatalf("result = %#v, want warm transfer result", result)
 	}
+	if task.humanAgentSess != nil {
+		t.Fatalf("humanAgentSess = %#v, want cleared after connect result", task.humanAgentSess)
+	}
 }
 
 type fakeWarmTransferJobContext struct {
@@ -168,8 +171,12 @@ func TestWarmTransferToolsCompleteAndFailTask(t *testing.T) {
 	if connectJobCtx.moveRequest == nil {
 		t.Fatal("connect Execute did not move participant")
 	}
+	if connectTask.humanAgentSess != nil {
+		t.Fatalf("humanAgentSess = %#v, want cleared after connect tool result", connectTask.humanAgentSess)
+	}
 
 	declineTask := NewWarmTransferTask("+15550100", "trunk_123", nil, "")
+	declineTask.humanAgentSess = agent.NewAgentSession(agent.NewAgent("human"), nil, agent.AgentSessionOptions{})
 	decline := &declineTransferTool{task: declineTask}
 	if decline.ID() != "decline_transfer" || decline.Name() != "decline_transfer" || decline.Description() == "" {
 		t.Fatalf("decline tool metadata is incomplete")
@@ -183,11 +190,15 @@ func TestWarmTransferToolsCompleteAndFailTask(t *testing.T) {
 	if _, err := declineTask.WaitAny(context.Background()); err == nil || !strings.Contains(err.Error(), "busy") {
 		t.Fatalf("decline task error = %v, want busy reason", err)
 	}
+	if declineTask.humanAgentSess != nil {
+		t.Fatalf("humanAgentSess = %#v, want cleared after decline result", declineTask.humanAgentSess)
+	}
 	if _, err := decline.Execute(context.Background(), `{`); err == nil {
 		t.Fatal("decline Execute with invalid JSON returned nil error")
 	}
 
 	voicemailTask := NewWarmTransferTask("+15550100", "trunk_123", nil, "")
+	voicemailTask.humanAgentSess = agent.NewAgentSession(agent.NewAgent("human"), nil, agent.AgentSessionOptions{})
 	voicemail := &voicemailDetectedTool{task: voicemailTask}
 	if voicemail.ID() != "voicemail_detected" || voicemail.Name() != "voicemail_detected" || voicemail.Description() == "" {
 		t.Fatalf("voicemail tool metadata is incomplete")
@@ -200,5 +211,8 @@ func TestWarmTransferToolsCompleteAndFailTask(t *testing.T) {
 	}
 	if _, err := voicemailTask.WaitAny(context.Background()); err == nil || !strings.Contains(err.Error(), "voicemail") {
 		t.Fatalf("voicemail task error = %v, want voicemail error", err)
+	}
+	if voicemailTask.humanAgentSess != nil {
+		t.Fatalf("humanAgentSess = %#v, want cleared after voicemail result", voicemailTask.humanAgentSess)
 	}
 }

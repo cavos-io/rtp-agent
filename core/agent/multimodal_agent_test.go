@@ -786,6 +786,34 @@ func TestMultimodalToolExecutionSuppressesStopResponse(t *testing.T) {
 	}
 }
 
+func TestMultimodalToolExecutionUsesScopedMockTool(t *testing.T) {
+	chatCtx := llm.NewChatContext()
+	agent := NewAgent("test")
+	agent.Tools = []llm.Tool{&fakeGenerationTool{name: "lookup", result: "real"}}
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	ctx := MockTools(context.Background(), session.Agent, map[string]MockToolFunc{
+		"lookup": func(ctx context.Context, args string) (string, error) {
+			return "mocked realtime", nil
+		},
+	})
+	ma := &MultimodalAgent{
+		session:   session,
+		chatCtx:   chatCtx,
+		rtSession: &fakeRealtimeSession{},
+		ctx:       ctx,
+	}
+
+	ma.handleRealtimeEvent(llm.RealtimeEvent{
+		Type:     llm.RealtimeEventTypeFunctionCall,
+		Function: &llm.FunctionToolCall{Name: "lookup", CallID: "call_lookup", Arguments: `{}`},
+	})
+
+	output := lastFunctionOutput(t, chatCtx)
+	if output.IsError || output.Output != "mocked realtime" {
+		t.Fatalf("function output = %#v, want mocked realtime success", output)
+	}
+}
+
 func TestMultimodalToolExecutionReportsUnknownFunction(t *testing.T) {
 	chatCtx := llm.NewChatContext()
 	ma := &MultimodalAgent{

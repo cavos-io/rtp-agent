@@ -672,7 +672,13 @@ func (ma *MultimodalAgent) executeRealtimeFunctionCall(functionCall *llm.Functio
 	if callCtx == nil {
 		callCtx = context.Background()
 	}
-	output, err := foundTool.Execute(callCtx, functionCall.Arguments)
+	callCtx = contextWithSessionMockTools(callCtx, ma.session)
+	var output string
+	if mock, ok := mockToolFunc(callCtx, ma.session.Agent, functionCall.Name); ok {
+		output, err = mock(callCtx, functionCall.Arguments)
+	} else {
+		output, err = foundTool.Execute(callCtx, functionCall.Arguments)
+	}
 	if err != nil {
 		var stopResponse llm.StopResponse
 		if errors.As(err, &stopResponse) {

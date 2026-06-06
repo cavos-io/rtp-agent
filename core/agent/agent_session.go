@@ -67,6 +67,7 @@ type AgentSessionOptions struct {
 	VideoSampler                  *VoiceActivityVideoSampler
 	ToolChoice                    llm.ToolChoice
 	MaxUnrecoverableErrors        int
+	MockTools                     map[string]MockToolFunc
 }
 
 type AgentSessionUpdateOptions struct {

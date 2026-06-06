@@ -441,7 +441,8 @@ func PerformToolExecutions(
 					}
 					execCtx = WithRunContext(execCtx, NewRunContext(options.Session, options.SpeechHandle, &functionCall))
 				}
-				result := llm.ExecuteFunctionCall(execCtx, fc, toolCtx)
+				executionToolCtx := mockToolContext(execCtx, toolCtx, options.Session, fc.Name)
+				result := llm.ExecuteFunctionCall(execCtx, fc, executionToolCtx)
 				outCh <- ToolExecutionOutput{
 					FncCall:    result.FncCall,
 					FncCallOut: result.FncCallOut,

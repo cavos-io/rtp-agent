@@ -568,6 +568,44 @@ func TestPerformToolExecutionsProvidesRunContext(t *testing.T) {
 	}
 }
 
+func TestPerformToolExecutionsUsesScopedMockTool(t *testing.T) {
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	toolCtx := llm.NewToolContext([]interface{}{&fakeGenerationTool{name: "lookup", result: "real"}})
+	functionCh := make(chan *llm.FunctionToolCall, 1)
+	functionCh <- &llm.FunctionToolCall{
+		Name:      "lookup",
+		CallID:    "call_lookup",
+		Arguments: `{"city":"Jakarta"}`,
+	}
+	close(functionCh)
+	ctx := MockTools(context.Background(), session.Agent, map[string]MockToolFunc{
+		"lookup": func(ctx context.Context, args string) (string, error) {
+			if GetRunContext(ctx) == nil {
+				t.Fatal("mock tool run context is nil")
+			}
+			if args != `{"city":"Jakarta"}` {
+				t.Fatalf("mock args = %q, want canonical JSON arguments", args)
+			}
+			return "mocked", nil
+		},
+	})
+
+	outputs := PerformToolExecutions(ctx, functionCh, toolCtx, WithToolExecutionSession(session))
+	output, ok := <-outputs
+	if !ok {
+		t.Fatal("PerformToolExecutions closed without output")
+	}
+	if output.RawError != nil {
+		t.Fatalf("RawError = %v, want nil", output.RawError)
+	}
+	if output.RawOutput != "mocked" {
+		t.Fatalf("RawOutput = %v, want mocked", output.RawOutput)
+	}
+	if output.FncCallOut == nil || output.FncCallOut.Output != "mocked" || output.FncCallOut.IsError {
+		t.Fatalf("FncCallOut = %#v, want mocked successful output", output.FncCallOut)
+	}
+}
+
 func TestPerformToolExecutionsSnapshotsToolContext(t *testing.T) {
 	original := &fakeGenerationTool{name: "lookup", result: "original"}
 	replacement := &fakeGenerationTool{name: "lookup", result: "replacement"}

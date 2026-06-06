@@ -39,21 +39,26 @@ func TestTaskGroupOutOfScopeToolRejectsInvalidTargets(t *testing.T) {
 	}
 }
 
-func TestTaskGroupOutOfScopeToolReturnsVisitedTargets(t *testing.T) {
+func TestTaskGroupOutOfScopeToolCompletesActiveTaskWithVisitedTargets(t *testing.T) {
 	group := NewTaskGroup(false, false)
 	group.Add("first", "Collect first value", nil)
 	group.Add("second", "Collect second value", nil)
 	group.VisitedTasks["first"] = struct{}{}
+	activeTask := newCompletingTask("second")
+	group.currentTask = activeTask
 
 	tool := group.buildOutOfScopeTool("second")
 	if tool == nil {
 		t.Fatal("buildOutOfScopeTool() = nil, want regression tool for visited tasks")
 	}
 
-	_, err := tool.Execute(context.Background(), `{"task_ids":["first"]}`)
+	if _, err := tool.Execute(context.Background(), `{"task_ids":["first"]}`); err != nil {
+		t.Fatalf("Execute() error = %v, want nil after completing active task", err)
+	}
+	_, err := activeTask.WaitAny(context.Background())
 	var outErr *OutOfScopeError
 	if !errors.As(err, &outErr) {
-		t.Fatalf("Execute() error = %T, want OutOfScopeError", err)
+		t.Fatalf("active task error = %T, want OutOfScopeError", err)
 	}
 	if len(outErr.TargetTaskIDs) != 1 || outErr.TargetTaskIDs[0] != "first" {
 		t.Fatalf("OutOfScopeError.TargetTaskIDs = %#v, want [first]", outErr.TargetTaskIDs)
