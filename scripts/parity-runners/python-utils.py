@@ -68,11 +68,32 @@ def load_input(path: str) -> dict:
     return data
 
 
+def restore_env(name: str, original: str | None, original_present: bool) -> None:
+    if original_present:
+        os.environ[name] = original or ""
+    else:
+        os.environ.pop(name, None)
+
+
+def string_values(input_data: dict, field: str, default: list[str]) -> list[str]:
+    values = input_data.get(field, default)
+    if not isinstance(values, list) or not all(isinstance(value, str) for value in values):
+        raise ValueError(f"{field} must be a list of strings")
+    return values
+
+
+def optional_string_values(input_data: dict, field: str, default: list[str | None]) -> list[str | None]:
+    values = input_data.get(field, default)
+    if not isinstance(values, list) or not all(
+        value is None or isinstance(value, str) for value in values
+    ):
+        raise ValueError(f"{field} must be a list of strings or null")
+    return values
+
+
 def run_dev_mode_env_exact(input_data: dict) -> dict:
     misc = load_reference_misc()
-    values = input_data.get("env_values", ["1", "", "true", "on"])
-    if not isinstance(values, list) or not all(isinstance(value, str) for value in values):
-        raise ValueError("env_values must be a list of strings")
+    values = string_values(input_data, "env_values", ["1", "", "true", "on"])
 
     original = os.environ.get("LIVEKIT_DEV_MODE")
     original_present = "LIVEKIT_DEV_MODE" in os.environ
@@ -88,12 +109,39 @@ def run_dev_mode_env_exact(input_data: dict) -> dict:
                 }
             )
     finally:
-        if original_present:
-            os.environ["LIVEKIT_DEV_MODE"] = original or ""
-        else:
-            os.environ.pop("LIVEKIT_DEV_MODE", None)
+        restore_env("LIVEKIT_DEV_MODE", original, original_present)
 
     return {"contract": "dev-mode-env-exact", "events": events}
+
+
+def run_hosted_env_presence(input_data: dict) -> dict:
+    misc = load_reference_misc()
+    values = optional_string_values(
+        input_data,
+        "env_values",
+        [None, "", "https://hosted.example"],
+    )
+
+    original = os.environ.get("LIVEKIT_REMOTE_EOT_URL")
+    original_present = "LIVEKIT_REMOTE_EOT_URL" in os.environ
+    events = []
+    try:
+        for value in values:
+            if value is None:
+                os.environ.pop("LIVEKIT_REMOTE_EOT_URL", None)
+            else:
+                os.environ["LIVEKIT_REMOTE_EOT_URL"] = value
+            events.append(
+                {
+                    "name": "is_hosted",
+                    "env": value,
+                    "result": bool(misc.is_hosted()),
+                }
+            )
+    finally:
+        restore_env("LIVEKIT_REMOTE_EOT_URL", original, original_present)
+
+    return {"contract": "hosted-env-presence", "events": events}
 
 
 def main() -> int:
@@ -103,11 +151,14 @@ def main() -> int:
 
     input_data = load_input(sys.argv[1])
     contract = input_data.get("contract", "dev-mode-env-exact")
-    if contract != "dev-mode-env-exact":
+    if contract == "dev-mode-env-exact":
+        output = run_dev_mode_env_exact(input_data)
+    elif contract == "hosted-env-presence":
+        output = run_hosted_env_presence(input_data)
+    else:
         print(f"unsupported contract: {contract}", file=sys.stderr)
         return 2
 
-    output = run_dev_mode_env_exact(input_data)
     json.dump(output, sys.stdout, sort_keys=True, separators=(",", ":"))
     sys.stdout.write("\n")
     return 0

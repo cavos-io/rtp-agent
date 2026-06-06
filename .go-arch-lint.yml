@@ -37,6 +37,9 @@ components:
   library:
     in: library/**
 
+  scripts:
+    in: scripts/parity-runners/**
+
 commonComponents:
   - library
 
@@ -73,6 +76,11 @@ deps:
       - core
 
   library:
+    anyVendorDeps: true
+    mayDependOn:
+      - library
+
+  scripts:
     anyVendorDeps: true
     mayDependOn:
       - library

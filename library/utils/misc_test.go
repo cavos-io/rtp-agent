@@ -1,6 +1,9 @@
 package utils
 
-import "testing"
+import (
+	"os"
+	"testing"
+)
 
 func TestCamelToSnakeCaseMatchesReference(t *testing.T) {
 	tests := map[string]string{
@@ -55,12 +58,35 @@ func TestIsDevModeMatchesReferenceEnv(t *testing.T) {
 }
 
 func TestIsHostedUsesReferenceEnv(t *testing.T) {
-	t.Setenv("LIVEKIT_REMOTE_EOT_URL", "https://hosted.example")
+	const envName = "LIVEKIT_REMOTE_EOT_URL"
+	original, ok := os.LookupEnv(envName)
+	t.Cleanup(func() {
+		if ok {
+			if err := os.Setenv(envName, original); err != nil {
+				t.Fatalf("restore %s: %v", envName, err)
+			}
+		} else if err := os.Unsetenv(envName); err != nil {
+			t.Fatalf("unset %s: %v", envName, err)
+		}
+	})
+
+	if err := os.Unsetenv(envName); err != nil {
+		t.Fatalf("unset %s: %v", envName, err)
+	}
+	if IsHosted() {
+		t.Fatal("IsHosted() = true for absent env, want false")
+	}
+
+	if err := os.Setenv(envName, "https://hosted.example"); err != nil {
+		t.Fatalf("set %s: %v", envName, err)
+	}
 	if !IsHosted() {
 		t.Fatal("IsHosted() = false, want true")
 	}
 
-	t.Setenv("LIVEKIT_REMOTE_EOT_URL", "")
+	if err := os.Setenv(envName, ""); err != nil {
+		t.Fatalf("set %s: %v", envName, err)
+	}
 	if !IsHosted() {
 		t.Fatal("IsHosted() = false for empty but set env, want true")
 	}
