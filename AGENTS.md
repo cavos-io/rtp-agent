@@ -146,6 +146,10 @@ Use the parity layers as follows:
      manifest with `python_runner`, `go_runner`, and `input_json`, run it
      against both the Python reference and Go target through thin runners,
      normalize their JSON traces or contract outputs, and compare the result.
+   * Add the first cross-runtime cases for pure utility or vector behavior
+     before workflow orchestration. Good early cases have no network, room,
+     timing, provider, or lifecycle dependencies and can emit a compact JSON
+     contract from both runtimes.
    * Do not compare raw stdout for cross-runtime parity. Prefer normalized JSON
      traces or shared contract/invariant output such as `task_started`,
      `tool_called`, `state_changed`, `awaiting_confirmation`, `completed`, or
