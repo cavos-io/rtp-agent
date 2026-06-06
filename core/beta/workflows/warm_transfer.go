@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"strings"
 	"sync"
 
 	"github.com/cavos-io/rtp-agent/core/agent"
@@ -68,7 +69,19 @@ type warmTransferJobContext interface {
 	MoveParticipant(ctx context.Context, room string, identity string, destinationRoom string) error
 }
 
-func NewWarmTransferTask(targetPhone string, trunkId string, chatCtx *llm.ChatContext, extraInstructions string) *WarmTransferTask {
+func NewWarmTransferTask(targetPhone string, trunkId string, chatCtx *llm.ChatContext, extraInstructions string) (*WarmTransferTask, error) {
+	targetPhone = strings.TrimSpace(targetPhone)
+	trunkId = strings.TrimSpace(trunkId)
+	if targetPhone == "" {
+		return nil, fmt.Errorf("`sip_call_to` must be set")
+	}
+	if trunkId == "" {
+		trunkId = strings.TrimSpace(os.Getenv("LIVEKIT_SIP_OUTBOUND_TRUNK"))
+	}
+	if trunkId == "" {
+		return nil, fmt.Errorf("`LIVEKIT_SIP_OUTBOUND_TRUNK` environment variable, `sip_trunk_id`, or `sip_connection` must be set")
+	}
+
 	prevConvo := ""
 	if chatCtx != nil {
 		for _, msg := range chatCtx.Items {
@@ -94,17 +107,13 @@ func NewWarmTransferTask(targetPhone string, trunkId string, chatCtx *llm.ChatCo
 		SipNumber:          os.Getenv("LIVEKIT_SIP_NUMBER"),
 	}
 
-	if t.SipTrunkID == "" {
-		t.SipTrunkID = os.Getenv("LIVEKIT_SIP_OUTBOUND_TRUNK")
-	}
-
 	t.Agent.Tools = []llm.Tool{
 		&connectToCallerTool{task: t},
 		&declineTransferTool{task: t},
 		&voicemailDetectedTool{task: t},
 	}
 
-	return t
+	return t, nil
 }
 
 func (t *WarmTransferTask) OnEnter() {

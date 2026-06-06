@@ -2164,6 +2164,20 @@ func TestDefaultConfigFromEnvSelectsWarmTransferWorkflowAgent(t *testing.T) {
 	}
 }
 
+func TestDefaultConfigFromEnvRejectsWarmTransferWithoutSIPTrunk(t *testing.T) {
+	t.Setenv("LIVEKIT_SIP_OUTBOUND_TRUNK", "")
+	t.Setenv("RTP_AGENT_WORKFLOW_TASK", "warm_transfer")
+	t.Setenv("RTP_AGENT_WORKFLOW_WARM_TRANSFER_SIP_CALL_TO", "+15550100")
+
+	_, err := NewApp(DefaultConfigFromEnv())
+	if err == nil {
+		t.Fatal("NewApp() error = nil, want missing SIP trunk error")
+	}
+	if !strings.Contains(err.Error(), "LIVEKIT_SIP_OUTBOUND_TRUNK") {
+		t.Fatalf("NewApp() error = %v, want missing outbound trunk error", err)
+	}
+}
+
 func TestDefaultConfigFromEnvSelectsTaskGroupWorkflowAgent(t *testing.T) {
 	t.Setenv("RTP_AGENT_WORKFLOW_TASK", "task_group")
 	t.Setenv("RTP_AGENT_WORKFLOW_TASK_GROUP_TASKS", "address,email,phone_number,dob,name,dtmf,card_number,security_code,expiration_date,credit_card")
