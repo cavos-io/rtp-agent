@@ -9,16 +9,18 @@ import (
 )
 
 type inputEnvelope struct {
-	Contract  string    `json:"contract"`
-	EnvValues []*string `json:"env_values"`
-	URLValues []string  `json:"url_values"`
+	Contract   string    `json:"contract"`
+	EnvValues  []*string `json:"env_values"`
+	NameValues []string  `json:"name_values"`
+	URLValues  []string  `json:"url_values"`
 }
 
 type event struct {
 	Name   string  `json:"name"`
 	Env    *string `json:"env,omitempty"`
 	URL    string  `json:"url,omitempty"`
-	Result bool    `json:"result"`
+	Input  string  `json:"input,omitempty"`
+	Result any     `json:"result"`
 }
 
 type outputEnvelope struct {
@@ -58,6 +60,8 @@ func run() error {
 		return runHostedEnvPresence(input)
 	case "cloud-url-host-suffix":
 		return runCloudURLHostSuffix(input)
+	case "camel-to-snake-case":
+		return runCamelToSnakeCase(input)
 	default:
 		return fmt.Errorf("unsupported contract: %s", input.Contract)
 	}
@@ -147,6 +151,31 @@ func runCloudURLHostSuffix(input inputEnvelope) error {
 			Name:   "is_cloud",
 			URL:    value,
 			Result: utils.IsCloud(value),
+		})
+	}
+
+	encoder := json.NewEncoder(os.Stdout)
+	encoder.SetEscapeHTML(false)
+	return encoder.Encode(output)
+}
+
+func runCamelToSnakeCase(input inputEnvelope) error {
+	if input.NameValues == nil {
+		input.NameValues = []string{
+			"HTTPServerID",
+			"roomID",
+			"JobContext",
+			"already_ok",
+			"URL",
+		}
+	}
+
+	output := outputEnvelope{Contract: "camel-to-snake-case"}
+	for _, value := range input.NameValues {
+		output.Events = append(output.Events, event{
+			Name:   "camel_to_snake_case",
+			Input:  value,
+			Result: utils.CamelToSnakeCase(value),
 		})
 	}
 

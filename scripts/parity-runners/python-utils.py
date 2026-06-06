@@ -171,6 +171,33 @@ def run_cloud_url_host_suffix(input_data: dict) -> dict:
     return {"contract": "cloud-url-host-suffix", "events": events}
 
 
+def run_camel_to_snake_case(input_data: dict) -> dict:
+    misc = load_reference_misc()
+    values = string_values(
+        input_data,
+        "name_values",
+        [
+            "HTTPServerID",
+            "roomID",
+            "JobContext",
+            "already_ok",
+            "URL",
+        ],
+    )
+
+    events = []
+    for value in values:
+        events.append(
+            {
+                "name": "camel_to_snake_case",
+                "input": value,
+                "result": misc.camel_to_snake_case(value),
+            }
+        )
+
+    return {"contract": "camel-to-snake-case", "events": events}
+
+
 def main() -> int:
     if len(sys.argv) != 2:
         print("usage: python-utils.py INPUT_JSON", file=sys.stderr)
@@ -184,6 +211,8 @@ def main() -> int:
         output = run_hosted_env_presence(input_data)
     elif contract == "cloud-url-host-suffix":
         output = run_cloud_url_host_suffix(input_data)
+    elif contract == "camel-to-snake-case":
+        output = run_camel_to_snake_case(input_data)
     else:
         print(f"unsupported contract: {contract}", file=sys.stderr)
         return 2
