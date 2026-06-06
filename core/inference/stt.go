@@ -34,7 +34,7 @@ func NewSTT(model string, apiKey, apiSecret string) *STT {
 		model:     model,
 		apiKey:    apiKey,
 		apiSecret: apiSecret,
-		baseURL:   "wss://agent-gateway.livekit.cloud/v1",
+		baseURL:   defaultInferenceWebsocketURL(),
 	}
 }
 

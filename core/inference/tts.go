@@ -47,7 +47,7 @@ func NewTTS(model string, apiKey, apiSecret string, opts ...TTSOption) *TTS {
 		model:     model,
 		apiKey:    apiKey,
 		apiSecret: apiSecret,
-		baseURL:   "wss://agent-gateway.livekit.cloud/v1",
+		baseURL:   defaultInferenceWebsocketURL(),
 	}
 	for _, opt := range opts {
 		opt(t)
