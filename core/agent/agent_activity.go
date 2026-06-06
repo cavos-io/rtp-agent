@@ -617,8 +617,16 @@ func (a *AgentActivity) UpdateChatCtx(ctx context.Context, chatCtx *llm.ChatCont
 		}
 		return a.updateRealtimeChatContext(ctx)
 	}
+	tools := a.Tools()
+	if a.Session != nil {
+		registeredTools, err := sessionRegisteredTools(ctx, a.Session)
+		if err != nil {
+			return err
+		}
+		tools = agentToolsAsInterfaces(registeredTools)
+	}
 	a.Agent.ChatCtx = chatCtx.Copy(llm.ChatContextCopyOptions{
-		Tools: a.Tools(),
+		Tools: tools,
 	})
 	if err := updateAgentInstructionsMessage(a.Agent.ChatCtx, agentInstructionVariants(a.Agent), true); err != nil {
 		return err
