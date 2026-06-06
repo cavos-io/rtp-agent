@@ -44,6 +44,8 @@ Available cases:
   boundary handling.
 - `dtmf-tool-error`: validates beta DTMF tool invalid-event behavior through the
   existing Go package test command.
+- `address-confirmation-default`: validates that address capture asks for
+  confirmation by default, matching the reference audio behavior.
 
 Run all cases:
 

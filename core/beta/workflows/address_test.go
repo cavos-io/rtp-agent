@@ -6,7 +6,7 @@ import (
 )
 
 func TestGetAddressTaskRecordsAddressWithoutConfirmation(t *testing.T) {
-	task := NewGetAddressTask(false)
+	task := NewGetAddressTask(GetAddressOptions{RequireConfirmationSet: true})
 	tool := &updateAddressTool{task: task}
 
 	out, err := tool.Execute(context.Background(), `{"street_address":"123 Main St","unit_number":"","locality":"Springfield IL 62701","country":"United States"}`)
@@ -28,7 +28,7 @@ func TestGetAddressTaskRecordsAddressWithoutConfirmation(t *testing.T) {
 }
 
 func TestGetAddressTaskInjectsConfirmToolAfterUpdate(t *testing.T) {
-	task := NewGetAddressTask(true)
+	task := NewGetAddressTask(GetAddressOptions{})
 	if len(task.Agent.Tools) != 2 {
 		t.Fatalf("initial tools = %d, want update/decline before address is captured", len(task.Agent.Tools))
 	}
@@ -60,8 +60,21 @@ func TestGetAddressTaskInjectsConfirmToolAfterUpdate(t *testing.T) {
 	}
 }
 
+func TestGetAddressTaskCanDisableDefaultConfirmation(t *testing.T) {
+	task := NewGetAddressTask(GetAddressOptions{RequireConfirmation: false, RequireConfirmationSet: true})
+	update := &updateAddressTool{task: task}
+
+	out, err := update.Execute(context.Background(), `{"street_address":"123 Main St","unit_number":"","locality":"Springfield IL 62701","country":"United States"}`)
+	if err != nil {
+		t.Fatalf("update Execute() error = %v", err)
+	}
+	if out != "Address captured and task completed." {
+		t.Fatalf("update Execute() output = %q, want completion message", out)
+	}
+}
+
 func TestGetAddressTaskRejectsStaleConfirmation(t *testing.T) {
-	task := NewGetAddressTask(true)
+	task := NewGetAddressTask(GetAddressOptions{})
 	update := &updateAddressTool{task: task}
 
 	if _, err := update.Execute(context.Background(), `{"street_address":"123 Main St","unit_number":"","locality":"Springfield IL 62701","country":"United States"}`); err != nil {
@@ -84,7 +97,7 @@ func TestGetAddressTaskRejectsStaleConfirmation(t *testing.T) {
 }
 
 func TestDeclineAddressCaptureToolFailsWithReason(t *testing.T) {
-	task := NewGetAddressTask(false)
+	task := NewGetAddressTask(GetAddressOptions{RequireConfirmationSet: true})
 	tool := &declineAddressCaptureTool{task: task}
 
 	if _, err := tool.Execute(context.Background(), `{"reason":"user refused"}`); err != nil {

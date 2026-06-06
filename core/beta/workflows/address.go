@@ -13,6 +13,11 @@ type GetAddressResult struct {
 	Address string
 }
 
+type GetAddressOptions struct {
+	RequireConfirmation    bool
+	RequireConfirmationSet bool
+}
+
 type GetAddressTask struct {
 	agent.AgentTask[*GetAddressResult]
 	RequireConfirmation bool
@@ -47,7 +52,11 @@ If the address is unclear or invalid, or it takes too much back-and-forth, promp
 Ignore unrelated input and avoid going off-topic. Do not generate markdown, greetings, or unnecessary commentary.
 Always explicitly invoke a tool when applicable. Do not hallucinate tool usage, no real action is taken unless the tool is explicitly called.`
 
-func NewGetAddressTask(requireConfirmation bool) *GetAddressTask {
+func NewGetAddressTask(opts GetAddressOptions) *GetAddressTask {
+	requireConfirmation := true
+	if opts.RequireConfirmationSet {
+		requireConfirmation = opts.RequireConfirmation
+	}
 	t := &GetAddressTask{
 		AgentTask:           *agent.NewAgentTask[*GetAddressResult](AddressInstructions),
 		RequireConfirmation: requireConfirmation,

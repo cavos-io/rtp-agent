@@ -18,6 +18,9 @@ Cases:
                    checked-in fixture/golden output.
   dtmf-tool-error  Validates the beta DTMF tool invalid-event behavior through
                    the existing Go package test command.
+  address-confirmation-default
+                   Validates that address capture asks for confirmation by
+                   default, matching the reference audio behavior.
 EOF
 }
 
@@ -25,7 +28,7 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 FIXTURE_ROOT="$REPO_ROOT/scripts/parity-fixtures/cases"
 KEEP_TEMP=0
 declare -a REQUESTED_CASES=()
-declare -a ALL_CASES=("pull-basic" "dtmf-tool-error")
+declare -a ALL_CASES=("pull-basic" "dtmf-tool-error" "address-confirmation-default")
 
 while (($#)); do
   case "$1" in
@@ -57,28 +60,29 @@ if (( ${#REQUESTED_CASES[@]} == 0 )); then
   REQUESTED_CASES=("all")
 fi
 
-expand_cases() {
-  local requested
+resolve_cases() {
+  local requested selected=()
   for requested in "${REQUESTED_CASES[@]}"; do
     case "$requested" in
       all)
-        printf '%s\n' "${ALL_CASES[@]}"
+        selected+=("${ALL_CASES[@]}")
         ;;
-      pull-basic|dtmf-tool-error)
-        printf '%s\n' "$requested"
+      pull-basic|dtmf-tool-error|address-confirmation-default)
+        selected+=("$requested")
         ;;
       "")
         echo "Error: --case requires a name." >&2
-        exit 2
+        return 2
         ;;
       *)
         echo "Error: unknown case: $requested" >&2
         echo "Available cases:" >&2
         printf '  %s\n' "${ALL_CASES[@]}" >&2
-        exit 2
+        return 2
         ;;
     esac
   done
+  printf '%s\n' "${selected[@]}"
 }
 
 normalize_common() {
@@ -99,7 +103,7 @@ normalize_case() {
   normalize_common "$input" "$common" "$tmpdir"
 
   case "$case_name" in
-    dtmf-tool-error)
+    dtmf-tool-error|address-confirmation-default)
       sed -E \
         -e 's/[[:space:]]+/ /g' \
         -e 's/\([0-9.]+s\)/(<duration>)/g' \
@@ -163,6 +167,14 @@ run_dtmf_tool_error() {
   ) > "$tmpdir/actual.raw" 2>&1
 }
 
+run_address_confirmation_default() {
+  local tmpdir="$1"
+  (
+    cd "$REPO_ROOT"
+    go test ./core/beta/workflows -run TestGetAddressTaskInjectsConfirmToolAfterUpdate -count=1 -v
+  ) > "$tmpdir/actual.raw" 2>&1
+}
+
 run_case() {
   local case_name="$1"
   local tmpdir expected actual_norm expected_norm
@@ -179,6 +191,7 @@ run_case() {
   case "$case_name" in
     pull-basic) run_pull_basic "$tmpdir" ;;
     dtmf-tool-error) run_dtmf_tool_error "$tmpdir" ;;
+    address-confirmation-default) run_address_confirmation_default "$tmpdir" ;;
     *) echo "unknown case: $case_name" >&2; return 2 ;;
   esac
 
@@ -202,12 +215,18 @@ run_case() {
 
 main() {
   local case_name failed=0
+  local cases_file
+  cases_file="$(mktemp "${TMPDIR:-/tmp}/parity-validate.cases.XXXXXX")"
+  trap 'rm -f "$cases_file"' RETURN
+  if ! resolve_cases > "$cases_file"; then
+    return 2
+  fi
   while IFS= read -r case_name; do
     [[ -z "$case_name" ]] && continue
     if ! run_case "$case_name"; then
       failed=1
     fi
-  done < <(expand_cases)
+  done < "$cases_file"
   return "$failed"
 }
 
