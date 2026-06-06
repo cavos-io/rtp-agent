@@ -3,8 +3,8 @@ package sarvam
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
-	"net/http/httptest"
 	"strings"
 	"testing"
 
@@ -108,7 +108,7 @@ func TestBuildSarvamLLMChatRequestMatchesReferenceHeadersAndBody(t *testing.T) {
 }
 
 func TestSarvamLLMChatStreamsOpenAICompatibleContent(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	client := newSarvamTestHTTPClient(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("api-subscription-key") != "test-key" {
 			t.Fatalf("api-subscription-key = %q, want test-key", r.Header.Get("api-subscription-key"))
 		}
@@ -117,9 +117,11 @@ func TestSarvamLLMChatStreamsOpenAICompatibleContent(t *testing.T) {
 		_, _ = w.Write([]byte("data: {\"choices\":[{\"delta\":{\"content\":\"lo\"}}]}\n\n"))
 		_, _ = w.Write([]byte("data: [DONE]\n\n"))
 	}))
-	defer server.Close()
 
-	provider := NewSarvamLLM("test-key", "", WithSarvamLLMBaseURL(server.URL))
+	provider := NewSarvamLLM("test-key", "",
+		WithSarvamLLMBaseURL("https://sarvam.test/v1"),
+		withSarvamLLMHTTPClient(client),
+	)
 	stream, err := provider.Chat(context.Background(), llm.NewChatContext())
 	if err != nil {
 		t.Fatalf("chat: %v", err)
@@ -141,4 +143,46 @@ func TestSarvamLLMChatStreamsOpenAICompatibleContent(t *testing.T) {
 
 func TestSarvamLLMImplementsInterface(t *testing.T) {
 	var _ llm.LLM = NewSarvamLLM("test-key", "")
+}
+
+func newSarvamTestHTTPClient(handler http.Handler) *http.Client {
+	return &http.Client{
+		Transport: sarvamRoundTripper(func(req *http.Request) (*http.Response, error) {
+			rec := httptestResponseRecorder{
+				header: make(http.Header),
+				code:   http.StatusOK,
+			}
+			handler.ServeHTTP(&rec, req)
+			return &http.Response{
+				StatusCode: rec.code,
+				Header:     rec.header,
+				Body:       io.NopCloser(strings.NewReader(rec.body.String())),
+				Request:    req,
+			}, nil
+		}),
+	}
+}
+
+type sarvamRoundTripper func(*http.Request) (*http.Response, error)
+
+func (f sarvamRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
+	return f(req)
+}
+
+type httptestResponseRecorder struct {
+	header http.Header
+	body   strings.Builder
+	code   int
+}
+
+func (r *httptestResponseRecorder) Header() http.Header {
+	return r.header
+}
+
+func (r *httptestResponseRecorder) Write(data []byte) (int, error) {
+	return r.body.Write(data)
+}
+
+func (r *httptestResponseRecorder) WriteHeader(statusCode int) {
+	r.code = statusCode
 }
