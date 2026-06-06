@@ -1,0 +1,91 @@
+package workflows
+
+import (
+	"context"
+	"strings"
+	"testing"
+)
+
+func TestGetPhoneNumberTaskRecordsValidNumberWithoutConfirmation(t *testing.T) {
+	task := NewGetPhoneNumberTask(GetPhoneNumberOptions{})
+	tool := &updatePhoneNumberTool{task: task}
+
+	out, err := tool.Execute(context.Background(), `{"phone_number":"(555) 123-4567"}`)
+	if err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+	if out != "Phone number captured and task completed." {
+		t.Fatalf("Execute() output = %q, want completion message", out)
+	}
+
+	select {
+	case result := <-task.Result:
+		if result.PhoneNumber != "5551234567" {
+			t.Fatalf("PhoneNumber = %q, want normalized digits", result.PhoneNumber)
+		}
+	default:
+		t.Fatal("task did not complete after valid phone number")
+	}
+}
+
+func TestGetPhoneNumberTaskRejectsInvalidNumber(t *testing.T) {
+	task := NewGetPhoneNumberTask(GetPhoneNumberOptions{})
+	tool := &updatePhoneNumberTool{task: task}
+
+	_, err := tool.Execute(context.Background(), `{"phone_number":"000-12"}`)
+	if err == nil {
+		t.Fatal("Execute() error = nil, want invalid phone number error")
+	}
+	if !strings.Contains(err.Error(), "Invalid phone number provided") {
+		t.Fatalf("Execute() error = %v, want invalid phone number", err)
+	}
+
+	select {
+	case result := <-task.Result:
+		t.Fatalf("task completed with %#v, want no completion for invalid phone", result)
+	default:
+	}
+}
+
+func TestGetPhoneNumberTaskRequiresConfirmation(t *testing.T) {
+	task := NewGetPhoneNumberTask(GetPhoneNumberOptions{RequireConfirmation: true})
+	update := &updatePhoneNumberTool{task: task}
+
+	out, err := update.Execute(context.Background(), `{"phone_number":"+1 555 123 4567"}`)
+	if err != nil {
+		t.Fatalf("update Execute() error = %v", err)
+	}
+	if out == "" {
+		t.Fatal("update Execute() output is empty, want confirmation prompt guidance")
+	}
+	if len(task.Agent.Tools) != 3 || task.Agent.Tools[2].Name() != "confirm_phone_number" {
+		t.Fatalf("tools = %#v, want confirm_phone_number appended", task.Agent.Tools)
+	}
+
+	confirm := &confirmPhoneNumberTool{task: task, phoneNumber: "+15551234567"}
+	if _, err := confirm.Execute(context.Background(), `{}`); err != nil {
+		t.Fatalf("confirm Execute() error = %v", err)
+	}
+
+	select {
+	case result := <-task.Result:
+		if result.PhoneNumber != "+15551234567" {
+			t.Fatalf("PhoneNumber = %q, want +15551234567", result.PhoneNumber)
+		}
+	default:
+		t.Fatal("task did not complete after confirmation")
+	}
+}
+
+func TestDeclinePhoneNumberCaptureToolFailsWithReason(t *testing.T) {
+	task := NewGetPhoneNumberTask(GetPhoneNumberOptions{})
+	tool := &declinePhoneNumberCaptureTool{task: task}
+
+	if _, err := tool.Execute(context.Background(), `{"reason":"user refused"}`); err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+	_, err := task.WaitAny(context.Background())
+	if err == nil || err.Error() != "couldn't get the phone number: user refused" {
+		t.Fatalf("WaitAny() error = %v, want decline reason", err)
+	}
+}
