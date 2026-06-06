@@ -4,9 +4,9 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"io"
 	"math"
 	"net/http"
-	"net/http/httptest"
 	"strings"
 	"testing"
 
@@ -159,11 +159,11 @@ func TestOpenAISTTLabelAndDisabledRealtimeStream(t *testing.T) {
 func TestOpenAISTTRecognizeUsesOpenAITranscriptionAPI(t *testing.T) {
 	var gotAuth string
 	var gotPath string
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	client := openAITestHTTPDoer(func(r *http.Request) (*http.Response, error) {
 		gotAuth = r.Header.Get("Authorization")
 		gotPath = r.URL.Path
 		if err := r.ParseMultipartForm(1 << 20); err != nil {
-			t.Fatalf("ParseMultipartForm: %v", err)
+			return nil, err
 		}
 		if r.FormValue("model") != "whisper-1" {
 			t.Fatalf("model form = %q, want whisper-1", r.FormValue("model"))
@@ -174,13 +174,18 @@ func TestOpenAISTTRecognizeUsesOpenAITranscriptionAPI(t *testing.T) {
 		if r.FormValue("response_format") != string(goopenai.AudioResponseFormatVerboseJSON) {
 			t.Fatalf("response_format = %q, want verbose_json", r.FormValue("response_format"))
 		}
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"text":"hello","words":[{"word":"hello","start":0.1,"end":0.3}]}`))
-	}))
-	defer server.Close()
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Status:     "200 OK",
+			Header:     http.Header{"Content-Type": []string{"application/json"}},
+			Body:       io.NopCloser(strings.NewReader(`{"text":"hello","words":[{"word":"hello","start":0.1,"end":0.3}]}`)),
+			Request:    r,
+		}, nil
+	})
 
 	provider := mustNewOpenAISTT(t, "test-key", "whisper-1",
-		WithOpenAISTTBaseURL(server.URL+"/v1"),
+		WithOpenAISTTBaseURL("https://openai.test/v1"),
+		withOpenAISTTHTTPClient(client),
 	)
 
 	event, err := provider.Recognize(context.Background(), []*model.AudioFrame{{Data: []byte{1, 2, 3}}}, "id")
@@ -354,4 +359,10 @@ func mustNewOpenAISTT(t *testing.T, apiKey, model string, opts ...OpenAISTTOptio
 		t.Fatalf("NewOpenAISTT error = %v", err)
 	}
 	return provider
+}
+
+type openAITestHTTPDoer func(*http.Request) (*http.Response, error)
+
+func (f openAITestHTTPDoer) Do(req *http.Request) (*http.Response, error) {
+	return f(req)
 }

@@ -14,6 +14,7 @@ import (
 
 type OpenAITTS struct {
 	client         *openai.Client
+	httpClient     openai.HTTPDoer
 	apiKey         string
 	model          openai.SpeechModel
 	voice          openai.SpeechVoice
@@ -67,6 +68,14 @@ func WithOpenAITTSBaseURL(baseURL string) OpenAITTSOption {
 	}
 }
 
+func withOpenAITTSHTTPClient(client openai.HTTPDoer) OpenAITTSOption {
+	return func(t *OpenAITTS) {
+		if client != nil {
+			t.httpClient = client
+		}
+	}
+}
+
 func NewOpenAITTS(apiKey string, model openai.SpeechModel, voice openai.SpeechVoice, opts ...OpenAITTSOption) (*OpenAITTS, error) {
 	if apiKey == "" {
 		apiKey = os.Getenv(openAIAPIKeyEnv)
@@ -101,9 +110,14 @@ func newOpenAITTS(client *openai.Client, apiKey string, model openai.SpeechModel
 	if provider.responseFormat == "" {
 		provider.responseFormat = openai.SpeechResponseFormatMp3
 	}
-	if provider.baseURL != "" {
+	if provider.baseURL != "" || provider.httpClient != nil {
 		config := openai.DefaultConfig(apiKey)
-		config.BaseURL = provider.baseURL
+		if provider.baseURL != "" {
+			config.BaseURL = provider.baseURL
+		}
+		if provider.httpClient != nil {
+			config.HTTPClient = provider.httpClient
+		}
 		provider.client = openai.NewClientWithConfig(config)
 	}
 	return provider

@@ -5,7 +5,6 @@ import (
 	"errors"
 	"io"
 	"net/http"
-	"net/http/httptest"
 	"strings"
 	"testing"
 
@@ -125,12 +124,12 @@ func TestOpenAITTSLabelCapabilitiesAndUnsupportedStream(t *testing.T) {
 func TestOpenAITTSSynthesizeUsesOpenAISpeechAPI(t *testing.T) {
 	var gotAuth string
 	var gotPath string
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	client := openAITestHTTPDoer(func(r *http.Request) (*http.Response, error) {
 		gotAuth = r.Header.Get("Authorization")
 		gotPath = r.URL.Path
 		body, err := io.ReadAll(r.Body)
 		if err != nil {
-			t.Fatalf("ReadAll body: %v", err)
+			return nil, err
 		}
 		for _, want := range []string{
 			`"model":"gpt-4o-mini-tts"`,
@@ -143,15 +142,20 @@ func TestOpenAITTSSynthesizeUsesOpenAISpeechAPI(t *testing.T) {
 				t.Fatalf("request body %s missing %s", body, want)
 			}
 		}
-		w.Header().Set("Content-Type", "audio/pcm")
-		_, _ = w.Write([]byte{1, 2, 3, 4})
-	}))
-	defer server.Close()
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Status:     "200 OK",
+			Header:     http.Header{"Content-Type": []string{"audio/pcm"}},
+			Body:       io.NopCloser(strings.NewReader(string([]byte{1, 2, 3, 4}))),
+			Request:    r,
+		}, nil
+	})
 
 	provider, err := NewOpenAITTS("test-key", "", "",
-		WithOpenAITTSBaseURL(server.URL+"/v1"),
+		WithOpenAITTSBaseURL("https://openai.test/v1"),
 		WithOpenAITTSSpeed(1.25),
 		WithOpenAITTSResponseFormat(goopenai.SpeechResponseFormatPcm),
+		withOpenAITTSHTTPClient(client),
 	)
 	if err != nil {
 		t.Fatalf("NewOpenAITTS error = %v", err)

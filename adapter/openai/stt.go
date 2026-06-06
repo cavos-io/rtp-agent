@@ -32,6 +32,7 @@ const (
 
 type OpenAISTT struct {
 	client         *openai.Client
+	httpClient     openai.HTTPDoer
 	apiKey         string
 	baseURL        string
 	model          string
@@ -39,9 +40,12 @@ type OpenAISTT struct {
 	detectLanguage bool
 	prompt         string
 	useRealtime    bool
+	dialWebsocket  openAIRealtimeSTTWebsocketDialer
 }
 
 type OpenAISTTOption func(*OpenAISTT)
+
+type openAIRealtimeSTTWebsocketDialer func(context.Context, string, http.Header) (*websocket.Conn, *http.Response, error)
 
 func WithOpenAISTTLanguage(language string) OpenAISTTOption {
 	return func(s *OpenAISTT) {
@@ -75,6 +79,14 @@ func WithOpenAISTTBaseURL(baseURL string) OpenAISTTOption {
 	}
 }
 
+func withOpenAISTTHTTPClient(client openai.HTTPDoer) OpenAISTTOption {
+	return func(s *OpenAISTT) {
+		if client != nil {
+			s.httpClient = client
+		}
+	}
+}
+
 func NewOpenAISTT(apiKey string, model string, opts ...OpenAISTTOption) (*OpenAISTT, error) {
 	if apiKey == "" {
 		apiKey = os.Getenv(openAIAPIKeyEnv)
@@ -86,16 +98,20 @@ func NewOpenAISTT(apiKey string, model string, opts ...OpenAISTTOption) (*OpenAI
 		model = "gpt-4o-mini-transcribe"
 	}
 	provider := &OpenAISTT{
-		apiKey:   apiKey,
-		baseURL:  defaultOpenAIBaseURL,
-		model:    model,
-		language: "en",
+		apiKey:        apiKey,
+		baseURL:       defaultOpenAIBaseURL,
+		model:         model,
+		language:      "en",
+		dialWebsocket: defaultOpenAIRealtimeSTTWebsocketDialer,
 	}
 	for _, opt := range opts {
 		opt(provider)
 	}
 	config := openai.DefaultConfig(apiKey)
 	config.BaseURL = provider.baseURL
+	if provider.httpClient != nil {
+		config.HTTPClient = provider.httpClient
+	}
 	provider.client = openai.NewClientWithConfig(config)
 	return provider, nil
 }
@@ -110,7 +126,7 @@ func (s *OpenAISTT) Stream(ctx context.Context, language string) (stt.RecognizeS
 	if !s.useRealtime {
 		return nil, fmt.Errorf("openai realtime stt is not enabled")
 	}
-	conn, _, err := websocket.DefaultDialer.DialContext(ctx, buildOpenAIRealtimeSTTWebsocketURL(s).String(), buildOpenAIRealtimeSTTHeaders(s))
+	conn, _, err := s.dialWebsocket(ctx, buildOpenAIRealtimeSTTWebsocketURL(s).String(), buildOpenAIRealtimeSTTHeaders(s))
 	if err != nil {
 		return nil, fmt.Errorf("failed to dial openai realtime stt websocket: %w", err)
 	}
@@ -140,6 +156,10 @@ func (s *OpenAISTT) Stream(ctx context.Context, language string) (stt.RecognizeS
 	}
 	go stream.readLoop()
 	return stream, nil
+}
+
+func defaultOpenAIRealtimeSTTWebsocketDialer(ctx context.Context, endpoint string, headers http.Header) (*websocket.Conn, *http.Response, error) {
+	return websocket.DefaultDialer.DialContext(ctx, endpoint, headers)
 }
 
 func buildOpenAIRealtimeSTTWebsocketURL(s *OpenAISTT) *url.URL {

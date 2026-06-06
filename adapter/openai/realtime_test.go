@@ -1,13 +1,16 @@
 package openai
 
 import (
+	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math"
+	"net"
 	"net/http"
-	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -36,15 +39,9 @@ func TestRealtimeModelCapabilitiesMatchReference(t *testing.T) {
 }
 
 func TestRealtimeSessionSendsProtocolMessages(t *testing.T) {
-	upgrader := websocket.Upgrader{}
 	messages := make(chan string, 32)
 	connected := make(chan *http.Request, 1)
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		conn, err := upgrader.Upgrade(w, r, nil)
-		if err != nil {
-			t.Errorf("Upgrade error = %v", err)
-			return
-		}
+	dialer := newOpenAIRealtimeTestWebsocketDialer(t, func(conn *websocket.Conn, r *http.Request) {
 		connected <- r
 		if err := conn.WriteMessage(websocket.TextMessage, []byte(`{"type":"input_audio_buffer.speech_stopped"}`)); err != nil {
 			t.Errorf("WriteMessage event error = %v", err)
@@ -57,12 +54,11 @@ func TestRealtimeSessionSendsProtocolMessages(t *testing.T) {
 			}
 			messages <- string(msg)
 		}
-	}))
-	defer server.Close()
+	})
 
-	realtimeURL := "ws" + strings.TrimPrefix(server.URL, "http")
 	realtimeModel := NewRealtimeModel("test-key", "gpt-realtime")
-	realtimeModel.baseURL = realtimeURL
+	realtimeModel.baseURL = "ws://openai.test/v1/realtime"
+	realtimeModel.dialWebsocket = dialer
 
 	session, err := realtimeModel.Session()
 	if err != nil {
@@ -167,6 +163,103 @@ func TestRealtimeSessionSendsProtocolMessages(t *testing.T) {
 		t.Fatalf("Close error = %v", err)
 	}
 }
+
+func newOpenAIRealtimeTestWebsocketDialer(t *testing.T, handler func(*websocket.Conn, *http.Request)) openAIRealtimeWebsocketDialer {
+	t.Helper()
+	upgrader := websocket.Upgrader{}
+	return func(endpoint string, headers http.Header) (*websocket.Conn, *http.Response, error) {
+		clientConn, serverConn := net.Pipe()
+		listener := newOpenAISingleConnListener(serverConn)
+		server := &http.Server{
+			Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				conn, err := upgrader.Upgrade(w, r, nil)
+				if err != nil {
+					t.Errorf("Upgrade error = %v", err)
+					return
+				}
+				defer conn.Close()
+				handler(conn, r)
+			}),
+		}
+		serverErrCh := make(chan error, 1)
+		go func() {
+			if err := server.Serve(listener); err != nil && !errors.Is(err, http.ErrServerClosed) && !errors.Is(err, net.ErrClosed) {
+				serverErrCh <- err
+			}
+		}()
+		t.Cleanup(func() {
+			_ = server.Close()
+			_ = listener.Close()
+			_ = clientConn.Close()
+			_ = serverConn.Close()
+		})
+
+		dialer := websocket.Dialer{
+			NetDialContext: func(context.Context, string, string) (net.Conn, error) {
+				return clientConn, nil
+			},
+		}
+		conn, response, err := dialer.Dial(endpoint, headers)
+		select {
+		case serverErr := <-serverErrCh:
+			if err == nil {
+				err = serverErr
+			}
+		default:
+		}
+		return conn, response, err
+	}
+}
+
+type openAISingleConnListener struct {
+	mu     sync.Mutex
+	once   sync.Once
+	conn   net.Conn
+	closed chan struct{}
+}
+
+func newOpenAISingleConnListener(conn net.Conn) *openAISingleConnListener {
+	return &openAISingleConnListener{
+		conn:   conn,
+		closed: make(chan struct{}),
+	}
+}
+
+func (l *openAISingleConnListener) Accept() (net.Conn, error) {
+	l.mu.Lock()
+	if l.conn != nil {
+		conn := l.conn
+		l.conn = nil
+		l.mu.Unlock()
+		return conn, nil
+	}
+	l.mu.Unlock()
+
+	<-l.closed
+	return nil, net.ErrClosed
+}
+
+func (l *openAISingleConnListener) Close() error {
+	l.once.Do(func() {
+		close(l.closed)
+		l.mu.Lock()
+		if l.conn != nil {
+			_ = l.conn.Close()
+			l.conn = nil
+		}
+		l.mu.Unlock()
+	})
+	return nil
+}
+
+func (l *openAISingleConnListener) Addr() net.Addr {
+	return openAIDummyAddr("pipe")
+}
+
+type openAIDummyAddr string
+
+func (a openAIDummyAddr) Network() string { return string(a) }
+func (a openAIDummyAddr) String() string  { return string(a) }
 
 func assertRealtimeMessage(t *testing.T, raw string, wantType string, wantContains string) {
 	t.Helper()
