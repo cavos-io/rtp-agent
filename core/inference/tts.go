@@ -118,6 +118,7 @@ func (t *TTS) connectionPool() *utils.ConnectionPool[*websocket.Conn] {
 	if t.connPool == nil {
 		t.connPool = utils.NewConnectionPool[*websocket.Conn](utils.ConnectionPoolOptions[*websocket.Conn]{
 			MaxSessionDuration: time.Minute,
+			MarkRefreshedOnGet: true,
 			Connect:            t.connectTTSWebsocket,
 			Close: func(ctx context.Context, conn *websocket.Conn) error {
 				_ = conn.Close()

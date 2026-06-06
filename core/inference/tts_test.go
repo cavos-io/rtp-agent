@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -78,6 +79,16 @@ func TestTTSPrewarmReusesConnectionForNextStream(t *testing.T) {
 
 	if got := connCount.Load(); got != 1 {
 		t.Fatalf("connections = %d, want 1 prewarmed connection reused by Stream", got)
+	}
+}
+
+func TestTTSConnectionPoolRefreshesSessionAgeOnGet(t *testing.T) {
+	provider := NewTTS("cartesia/sonic-3", "key", "secret")
+
+	pool := reflect.ValueOf(provider.connectionPool()).Elem()
+	markRefreshedOnGet := pool.FieldByName("opts").FieldByName("MarkRefreshedOnGet").Bool()
+	if !markRefreshedOnGet {
+		t.Fatal("connection pool MarkRefreshedOnGet = false, want true")
 	}
 }
 
