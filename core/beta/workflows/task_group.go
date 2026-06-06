@@ -108,8 +108,15 @@ func (g *TaskGroup) runTasks() {
 			}
 			if err != nil {
 				if outErr, isOutErr := err.(*OutOfScopeError); isOutErr {
-					// Regression logic
-					taskStack = append(outErr.TargetTaskIDs, taskStack...)
+					nextStack := make([]string, 0, len(outErr.TargetTaskIDs)+1+len(taskStack))
+					nextStack = append(nextStack, outErr.TargetTaskIDs...)
+					nextStack = append(nextStack, taskID)
+					nextStack = append(nextStack, taskStack...)
+					taskStack = nextStack
+					continue
+				}
+				if g.ReturnExceptions {
+					results[taskID] = err
 					continue
 				}
 				g.Fail(err)
@@ -119,6 +126,10 @@ func (g *TaskGroup) runTasks() {
 
 			if g.OnTaskCompleted != nil {
 				if err := g.OnTaskCompleted(taskID, result); err != nil {
+					if g.ReturnExceptions {
+						results[taskID] = err
+						continue
+					}
 					g.Fail(err)
 					return
 				}
