@@ -28,3 +28,8 @@ if grep -q '^\[dev-mode-cross\] ok$' "$WORKDIR/skipped.out"; then
   echo "changed-file gate ran an unrelated case" >&2
   exit 1
 fi
+
+PARITY_TEST_CASES_FILE="$MANIFEST" \
+PARITY_GATE_CHANGED_FILES='docs/not-a-case.md' \
+  "$ROOT/scripts/parity-gate.sh" --changed --quick > "$WORKDIR/quick.out" 2>&1
+grep -q '^Quick gate: skipping scripts/check-deadcode.sh\. Run scripts/parity-gate.sh before completion\.$' "$WORKDIR/quick.out"

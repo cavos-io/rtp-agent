@@ -4,7 +4,7 @@ set -euo pipefail
 usage() {
   cat <<'EOF'
 Usage:
-  scripts/parity-gate.sh [--case NAME ...] [--changed] [--all]
+  scripts/parity-gate.sh [--case NAME ...] [--changed] [--all] [--quick]
 
 Options:
   --case NAME  Run only the selected parity validation case. May be repeated.
@@ -13,11 +13,15 @@ Options:
                Manifest row edits run the changed manifest cases directly.
                This is a local inner-loop shortcut, not a replacement for --all.
   --all        Run every parity validation case. This is the default.
+  --quick      Skip the expensive staged-Go analyzer gate.
+               Use only for local iteration; run the default full gate before
+               treating a parity-sensitive slice as complete.
   -h, --help   Show help.
 
-The gate always runs shell syntax checks, test-integrity checks, and deadcode
-checks. Case filtering only changes the Layer 3 parity validation scope. Use
-the full default gate before considering a parity-sensitive slice complete.
+The gate always runs shell syntax checks and test-integrity checks. By default
+it also runs the staged-Go analyzer gate through scripts/check-deadcode.sh.
+Case filtering only changes the Layer 3 parity validation scope. Use the full
+default gate before considering a parity-sensitive slice complete.
 EOF
 }
 
@@ -27,6 +31,7 @@ cd "$REPO_ROOT"
 TEST_CASES_FILE="${PARITY_TEST_CASES_FILE:-$REPO_ROOT/scripts/parity-fixtures/test-cases.tsv}"
 declare -a CASE_ARGS=()
 MODE="all"
+QUICK=0
 
 changed_files() {
   if [[ -n "${PARITY_GATE_CHANGED_FILES:-}" ]]; then
@@ -169,6 +174,10 @@ while (($#)); do
       MODE="all"
       shift
       ;;
+    --quick)
+      QUICK=1
+      shift
+      ;;
     -h|--help)
       usage
       exit 0
@@ -204,4 +213,8 @@ case "$MODE" in
     ;;
 esac
 scripts/check-test-integrity.sh
-scripts/check-deadcode.sh
+if (( QUICK == 1 )); then
+  echo "Quick gate: skipping scripts/check-deadcode.sh. Run scripts/parity-gate.sh before completion."
+else
+  scripts/check-deadcode.sh
+fi
