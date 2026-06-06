@@ -337,15 +337,23 @@ func (d *ClientEventsDispatcher) DispatchAgentState(state AgentState) {
 	})
 }
 
-// DispatchUserState emits UserStateListening, UserStateSpeaking
-func (d *ClientEventsDispatcher) DispatchUserState(state UserState) {
-	var stateStr string
+func clientUserStateString(state UserState) (string, bool) {
 	switch state {
 	case UserStateListening:
-		stateStr = "listening"
+		return "listening", true
 	case UserStateSpeaking:
-		stateStr = "speaking"
+		return "speaking", true
+	case UserStateAway:
+		return "away", true
 	default:
+		return "", false
+	}
+}
+
+// DispatchUserState emits reference-style client user states.
+func (d *ClientEventsDispatcher) DispatchUserState(state UserState) {
+	stateStr, ok := clientUserStateString(state)
+	if !ok {
 		return
 	}
 
