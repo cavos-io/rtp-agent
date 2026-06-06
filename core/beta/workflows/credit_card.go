@@ -111,10 +111,10 @@ Never repeat sensitive information, such as the user's expiration date, back to 
 const CreditCardInstructions = `Collect the user's credit card information by running the cardholder name, card number, security code, and expiration date subtasks.
 Never repeat sensitive card details back to the user.`
 
-func NewGetCardNumberTask(requireConfirmation bool) *GetCardNumberTask {
+func NewGetCardNumberTask(requireConfirmation ...bool) *GetCardNumberTask {
 	t := &GetCardNumberTask{
 		AgentTask:           *agent.NewAgentTask[*GetCardNumberResult](CardNumberInstructions),
-		RequireConfirmation: requireConfirmation,
+		RequireConfirmation: defaultCardConfirmation(requireConfirmation),
 	}
 
 	t.Agent.Tools = []llm.Tool{
@@ -126,10 +126,10 @@ func NewGetCardNumberTask(requireConfirmation bool) *GetCardNumberTask {
 	return t
 }
 
-func NewGetSecurityCodeTask(requireConfirmation bool) *GetSecurityCodeTask {
+func NewGetSecurityCodeTask(requireConfirmation ...bool) *GetSecurityCodeTask {
 	t := &GetSecurityCodeTask{
 		AgentTask:           *agent.NewAgentTask[*GetSecurityCodeResult](SecurityCodeInstructions),
-		RequireConfirmation: requireConfirmation,
+		RequireConfirmation: defaultCardConfirmation(requireConfirmation),
 	}
 
 	t.Agent.Tools = []llm.Tool{
@@ -141,10 +141,10 @@ func NewGetSecurityCodeTask(requireConfirmation bool) *GetSecurityCodeTask {
 	return t
 }
 
-func NewGetExpirationDateTask(requireConfirmation bool) *GetExpirationDateTask {
+func NewGetExpirationDateTask(requireConfirmation ...bool) *GetExpirationDateTask {
 	t := &GetExpirationDateTask{
 		AgentTask:           *agent.NewAgentTask[*GetExpirationDateResult](ExpirationDateInstructions),
-		RequireConfirmation: requireConfirmation,
+		RequireConfirmation: defaultCardConfirmation(requireConfirmation),
 	}
 
 	t.Agent.Tools = []llm.Tool{
@@ -156,11 +156,18 @@ func NewGetExpirationDateTask(requireConfirmation bool) *GetExpirationDateTask {
 	return t
 }
 
-func NewGetCreditCardTask(requireConfirmation bool) *GetCreditCardTask {
+func NewGetCreditCardTask(requireConfirmation ...bool) *GetCreditCardTask {
 	return &GetCreditCardTask{
 		AgentTask:           *agent.NewAgentTask[*GetCreditCardResult](CreditCardInstructions),
-		RequireConfirmation: requireConfirmation,
+		RequireConfirmation: defaultCardConfirmation(requireConfirmation),
 	}
+}
+
+func defaultCardConfirmation(requireConfirmation []bool) bool {
+	if len(requireConfirmation) > 0 {
+		return requireConfirmation[0]
+	}
+	return true
 }
 
 func (t *GetCardNumberTask) OnEnter() {
@@ -227,10 +234,11 @@ func (t *GetCreditCardTask) buildTaskGroup() *TaskGroup {
 	group := NewTaskGroup(true, false)
 	group.Add("cardholder_name_task", "Collects the cardholder's full name", func() agent.AgentInterface {
 		return NewGetNameTask(GetNameOptions{
-			FirstName:           true,
-			LastName:            true,
-			ExtraInstructions:   "This is in the context of credit card information collection, ask specifically for the full name listed on it.",
-			RequireConfirmation: t.RequireConfirmation,
+			FirstName:              true,
+			LastName:               true,
+			ExtraInstructions:      "This is in the context of credit card information collection, ask specifically for the full name listed on it.",
+			RequireConfirmation:    t.RequireConfirmation,
+			RequireConfirmationSet: true,
 		})
 	})
 	group.Add("card_number_task", "Collects the user's card number", func() agent.AgentInterface {

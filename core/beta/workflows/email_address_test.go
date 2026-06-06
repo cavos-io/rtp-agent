@@ -7,7 +7,7 @@ import (
 )
 
 func TestGetEmailTaskRecordsEmailWithoutConfirmation(t *testing.T) {
-	task := NewGetEmailTask(false)
+	task := NewGetEmailTask(GetEmailOptions{RequireConfirmationSet: true})
 	tool := &updateEmailTool{task: task}
 
 	out, err := tool.Execute(context.Background(), `{"email":"ada@example.com"}`)
@@ -29,7 +29,7 @@ func TestGetEmailTaskRecordsEmailWithoutConfirmation(t *testing.T) {
 }
 
 func TestGetEmailTaskRejectsInvalidEmail(t *testing.T) {
-	task := NewGetEmailTask(false)
+	task := NewGetEmailTask(GetEmailOptions{RequireConfirmationSet: true})
 	tool := &updateEmailTool{task: task}
 
 	_, err := tool.Execute(context.Background(), `{"email":"ada at example"}`)
@@ -48,7 +48,7 @@ func TestGetEmailTaskRejectsInvalidEmail(t *testing.T) {
 }
 
 func TestGetEmailTaskInjectsConfirmToolAfterUpdate(t *testing.T) {
-	task := NewGetEmailTask(true)
+	task := NewGetEmailTask(GetEmailOptions{})
 	if len(task.Agent.Tools) != 2 {
 		t.Fatalf("initial tools = %d, want update/decline before email is captured", len(task.Agent.Tools))
 	}
@@ -80,8 +80,21 @@ func TestGetEmailTaskInjectsConfirmToolAfterUpdate(t *testing.T) {
 	}
 }
 
+func TestGetEmailTaskCanDisableDefaultConfirmation(t *testing.T) {
+	task := NewGetEmailTask(GetEmailOptions{RequireConfirmation: false, RequireConfirmationSet: true})
+	update := &updateEmailTool{task: task}
+
+	out, err := update.Execute(context.Background(), `{"email":"ada@example.com"}`)
+	if err != nil {
+		t.Fatalf("update Execute() error = %v", err)
+	}
+	if out != "Email captured and task completed." {
+		t.Fatalf("update Execute() output = %q, want completion message", out)
+	}
+}
+
 func TestGetEmailTaskRejectsStaleConfirmation(t *testing.T) {
-	task := NewGetEmailTask(true)
+	task := NewGetEmailTask(GetEmailOptions{})
 	update := &updateEmailTool{task: task}
 
 	if _, err := update.Execute(context.Background(), `{"email":"ada@example.com"}`); err != nil {
@@ -104,7 +117,7 @@ func TestGetEmailTaskRejectsStaleConfirmation(t *testing.T) {
 }
 
 func TestDeclineEmailCaptureToolFailsWithReason(t *testing.T) {
-	task := NewGetEmailTask(false)
+	task := NewGetEmailTask(GetEmailOptions{RequireConfirmationSet: true})
 	tool := &declineEmailCaptureTool{task: task}
 
 	if _, err := tool.Execute(context.Background(), `{"reason":"user refused"}`); err != nil {

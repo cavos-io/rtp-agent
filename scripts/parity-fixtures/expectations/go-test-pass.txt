@@ -1,0 +1,4 @@
+=== RUN {{TEST_NAME}}
+--- PASS: {{TEST_NAME}} (<duration>)
+PASS
+ok {{PACKAGE}} <duration>

@@ -17,12 +17,13 @@ type GetNameResult struct {
 }
 
 type GetNameOptions struct {
-	FirstName           bool
-	MiddleName          bool
-	LastName            bool
-	VerifySpelling      bool
-	ExtraInstructions   string
-	RequireConfirmation bool
+	FirstName              bool
+	MiddleName             bool
+	LastName               bool
+	VerifySpelling         bool
+	ExtraInstructions      string
+	RequireConfirmation    bool
+	RequireConfirmationSet bool
 }
 
 type GetNameTask struct {
@@ -57,9 +58,13 @@ func NewGetNameTask(opts GetNameOptions) *GetNameTask {
 	if strings.TrimSpace(opts.ExtraInstructions) != "" {
 		instructions += "\n" + strings.TrimSpace(opts.ExtraInstructions)
 	}
+	requireConfirmation := true
+	if opts.RequireConfirmationSet {
+		requireConfirmation = opts.RequireConfirmation
+	}
 	t := &GetNameTask{
 		AgentTask:           *agent.NewAgentTask[*GetNameResult](instructions),
-		RequireConfirmation: opts.RequireConfirmation,
+		RequireConfirmation: requireConfirmation,
 		CollectFirstName:    opts.FirstName,
 		CollectMiddleName:   opts.MiddleName,
 		CollectLastName:     opts.LastName,

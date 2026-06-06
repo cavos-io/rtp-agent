@@ -7,7 +7,7 @@ import (
 )
 
 func TestGetPhoneNumberTaskRecordsValidNumberWithoutConfirmation(t *testing.T) {
-	task := NewGetPhoneNumberTask(GetPhoneNumberOptions{})
+	task := NewGetPhoneNumberTask(GetPhoneNumberOptions{RequireConfirmationSet: true})
 	tool := &updatePhoneNumberTool{task: task}
 
 	out, err := tool.Execute(context.Background(), `{"phone_number":"(555) 123-4567"}`)
@@ -29,7 +29,7 @@ func TestGetPhoneNumberTaskRecordsValidNumberWithoutConfirmation(t *testing.T) {
 }
 
 func TestGetPhoneNumberTaskRejectsInvalidNumber(t *testing.T) {
-	task := NewGetPhoneNumberTask(GetPhoneNumberOptions{})
+	task := NewGetPhoneNumberTask(GetPhoneNumberOptions{RequireConfirmationSet: true})
 	tool := &updatePhoneNumberTool{task: task}
 
 	_, err := tool.Execute(context.Background(), `{"phone_number":"000-12"}`)
@@ -48,7 +48,7 @@ func TestGetPhoneNumberTaskRejectsInvalidNumber(t *testing.T) {
 }
 
 func TestGetPhoneNumberTaskRequiresConfirmation(t *testing.T) {
-	task := NewGetPhoneNumberTask(GetPhoneNumberOptions{RequireConfirmation: true})
+	task := NewGetPhoneNumberTask(GetPhoneNumberOptions{})
 	update := &updatePhoneNumberTool{task: task}
 
 	out, err := update.Execute(context.Background(), `{"phone_number":"+1 555 123 4567"}`)
@@ -77,8 +77,21 @@ func TestGetPhoneNumberTaskRequiresConfirmation(t *testing.T) {
 	}
 }
 
+func TestGetPhoneNumberTaskCanDisableDefaultConfirmation(t *testing.T) {
+	task := NewGetPhoneNumberTask(GetPhoneNumberOptions{RequireConfirmation: false, RequireConfirmationSet: true})
+	update := &updatePhoneNumberTool{task: task}
+
+	out, err := update.Execute(context.Background(), `{"phone_number":"(555) 123-4567"}`)
+	if err != nil {
+		t.Fatalf("update Execute() error = %v", err)
+	}
+	if out != "Phone number captured and task completed." {
+		t.Fatalf("update Execute() output = %q, want completion message", out)
+	}
+}
+
 func TestDeclinePhoneNumberCaptureToolFailsWithReason(t *testing.T) {
-	task := NewGetPhoneNumberTask(GetPhoneNumberOptions{})
+	task := NewGetPhoneNumberTask(GetPhoneNumberOptions{RequireConfirmationSet: true})
 	tool := &declinePhoneNumberCaptureTool{task: task}
 
 	if _, err := tool.Execute(context.Background(), `{"reason":"user refused"}`); err != nil {

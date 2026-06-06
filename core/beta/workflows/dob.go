@@ -17,9 +17,10 @@ type GetDOBResult struct {
 }
 
 type GetDOBOptions struct {
-	ExtraInstructions   string
-	IncludeTime         bool
-	RequireConfirmation bool
+	ExtraInstructions      string
+	IncludeTime            bool
+	RequireConfirmation    bool
+	RequireConfirmationSet bool
 }
 
 type GetDOBTask struct {
@@ -49,11 +50,15 @@ func NewGetDOBTask(opts GetDOBOptions) *GetDOBTask {
 	if strings.TrimSpace(opts.ExtraInstructions) != "" {
 		instructions += "\n" + strings.TrimSpace(opts.ExtraInstructions)
 	}
+	requireConfirmation := true
+	if opts.RequireConfirmationSet {
+		requireConfirmation = opts.RequireConfirmation
+	}
 	t := &GetDOBTask{
 		AgentTask:           *agent.NewAgentTask[*GetDOBResult](instructions),
 		ExtraInstructions:   opts.ExtraInstructions,
 		IncludeTime:         opts.IncludeTime,
-		RequireConfirmation: opts.RequireConfirmation,
+		RequireConfirmation: requireConfirmation,
 	}
 
 	t.Agent.Tools = []llm.Tool{

@@ -7,7 +7,7 @@ import (
 )
 
 func TestGetNameTaskUpdatesRequiredPartsWithoutConfirmation(t *testing.T) {
-	task := NewGetNameTask(GetNameOptions{FirstName: true, LastName: true})
+	task := NewGetNameTask(GetNameOptions{FirstName: true, LastName: true, RequireConfirmationSet: true})
 	tool := &updateNameTool{task: task}
 
 	out, err := tool.Execute(context.Background(), `{"first_name":" Ada ","last_name":" Lovelace "}`)
@@ -37,7 +37,7 @@ func TestGetNameTaskVerifySpellingAddsReferenceInstruction(t *testing.T) {
 }
 
 func TestGetNameTaskRejectsMissingRequiredPart(t *testing.T) {
-	task := NewGetNameTask(GetNameOptions{FirstName: true, LastName: true})
+	task := NewGetNameTask(GetNameOptions{FirstName: true, LastName: true, RequireConfirmationSet: true})
 	tool := &updateNameTool{task: task}
 
 	_, err := tool.Execute(context.Background(), `{"first_name":"Ada"}`)
@@ -53,7 +53,7 @@ func TestGetNameTaskRejectsMissingRequiredPart(t *testing.T) {
 }
 
 func TestGetNameTaskRequiresConfirmation(t *testing.T) {
-	task := NewGetNameTask(GetNameOptions{FirstName: true, LastName: true, RequireConfirmation: true})
+	task := NewGetNameTask(GetNameOptions{FirstName: true, LastName: true})
 	update := &updateNameTool{task: task}
 
 	out, err := update.Execute(context.Background(), `{"first_name":"Ada","last_name":"Lovelace"}`)
@@ -82,8 +82,21 @@ func TestGetNameTaskRequiresConfirmation(t *testing.T) {
 	}
 }
 
+func TestGetNameTaskCanDisableDefaultConfirmation(t *testing.T) {
+	task := NewGetNameTask(GetNameOptions{FirstName: true, LastName: true, RequireConfirmation: false, RequireConfirmationSet: true})
+	update := &updateNameTool{task: task}
+
+	out, err := update.Execute(context.Background(), `{"first_name":"Ada","last_name":"Lovelace"}`)
+	if err != nil {
+		t.Fatalf("update Execute() error = %v", err)
+	}
+	if out != "Name captured and task completed." {
+		t.Fatalf("update Execute() output = %q, want completion message", out)
+	}
+}
+
 func TestGetNameTaskDeclineFailsTask(t *testing.T) {
-	task := NewGetNameTask(GetNameOptions{FirstName: true})
+	task := NewGetNameTask(GetNameOptions{FirstName: true, RequireConfirmationSet: true})
 	tool := &declineNameCaptureTool{task: task}
 
 	if _, err := tool.Execute(context.Background(), `{"reason":"privacy"}`); err != nil {

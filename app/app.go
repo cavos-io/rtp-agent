@@ -935,22 +935,31 @@ func workflowAgentFromConfig(cfg AppConfig, baseAgent *agent.Agent) (agent.Agent
 	var selected agent.AgentInterface
 	switch task {
 	case "address", "get_address":
-		selected = workflows.NewGetAddressTask(cfg.WorkflowRequireConfirmation)
+		selected = workflows.NewGetAddressTask(workflows.GetAddressOptions{
+			RequireConfirmation:    cfg.WorkflowRequireConfirmation,
+			RequireConfirmationSet: true,
+		})
 	case "email", "get_email":
-		selected = workflows.NewGetEmailTask(cfg.WorkflowRequireConfirmation)
+		selected = workflows.NewGetEmailTask(workflows.GetEmailOptions{
+			RequireConfirmation:    cfg.WorkflowRequireConfirmation,
+			RequireConfirmationSet: true,
+		})
 	case "phone_number", "phone-number", "phone", "get_phone_number":
 		selected = workflows.NewGetPhoneNumberTask(workflows.GetPhoneNumberOptions{
-			RequireConfirmation: cfg.WorkflowRequireConfirmation,
+			RequireConfirmation:    cfg.WorkflowRequireConfirmation,
+			RequireConfirmationSet: true,
 		})
 	case "dob", "date_of_birth", "date-of-birth", "get_dob":
 		selected = workflows.NewGetDOBTask(workflows.GetDOBOptions{
-			RequireConfirmation: cfg.WorkflowRequireConfirmation,
+			RequireConfirmation:    cfg.WorkflowRequireConfirmation,
+			RequireConfirmationSet: true,
 		})
 	case "name", "get_name":
 		selected = workflows.NewGetNameTask(workflows.GetNameOptions{
-			FirstName:           true,
-			LastName:            true,
-			RequireConfirmation: cfg.WorkflowRequireConfirmation,
+			FirstName:              true,
+			LastName:               true,
+			RequireConfirmation:    cfg.WorkflowRequireConfirmation,
+			RequireConfirmationSet: true,
 		})
 	case "card_number", "card-number", "get_card_number":
 		selected = workflows.NewGetCardNumberTask(cfg.WorkflowRequireConfirmation)
@@ -1024,7 +1033,10 @@ func workflowTaskFactoryFromName(cfg AppConfig, baseAgent *agent.Agent, taskName
 			ID:          "address",
 			Description: "Collect and confirm the user's mailing address.",
 			TaskFactory: factory(func() agent.AgentInterface {
-				return workflows.NewGetAddressTask(cfg.WorkflowRequireConfirmation)
+				return workflows.NewGetAddressTask(workflows.GetAddressOptions{
+					RequireConfirmation:    cfg.WorkflowRequireConfirmation,
+					RequireConfirmationSet: true,
+				})
 			}),
 		}, nil
 	case "email", "get_email":
@@ -1032,7 +1044,10 @@ func workflowTaskFactoryFromName(cfg AppConfig, baseAgent *agent.Agent, taskName
 			ID:          "email",
 			Description: "Collect and confirm the user's email address.",
 			TaskFactory: factory(func() agent.AgentInterface {
-				return workflows.NewGetEmailTask(cfg.WorkflowRequireConfirmation)
+				return workflows.NewGetEmailTask(workflows.GetEmailOptions{
+					RequireConfirmation:    cfg.WorkflowRequireConfirmation,
+					RequireConfirmationSet: true,
+				})
 			}),
 		}, nil
 	case "phone_number", "phone-number", "phone", "get_phone_number":
@@ -1041,7 +1056,8 @@ func workflowTaskFactoryFromName(cfg AppConfig, baseAgent *agent.Agent, taskName
 			Description: "Collect and confirm the user's phone number.",
 			TaskFactory: factory(func() agent.AgentInterface {
 				return workflows.NewGetPhoneNumberTask(workflows.GetPhoneNumberOptions{
-					RequireConfirmation: cfg.WorkflowRequireConfirmation,
+					RequireConfirmation:    cfg.WorkflowRequireConfirmation,
+					RequireConfirmationSet: true,
 				})
 			}),
 		}, nil
@@ -1051,7 +1067,8 @@ func workflowTaskFactoryFromName(cfg AppConfig, baseAgent *agent.Agent, taskName
 			Description: "Collect and confirm the user's date of birth.",
 			TaskFactory: factory(func() agent.AgentInterface {
 				return workflows.NewGetDOBTask(workflows.GetDOBOptions{
-					RequireConfirmation: cfg.WorkflowRequireConfirmation,
+					RequireConfirmation:    cfg.WorkflowRequireConfirmation,
+					RequireConfirmationSet: true,
 				})
 			}),
 		}, nil
@@ -1061,9 +1078,10 @@ func workflowTaskFactoryFromName(cfg AppConfig, baseAgent *agent.Agent, taskName
 			Description: "Collect and confirm the user's name.",
 			TaskFactory: factory(func() agent.AgentInterface {
 				return workflows.NewGetNameTask(workflows.GetNameOptions{
-					FirstName:           true,
-					LastName:            true,
-					RequireConfirmation: cfg.WorkflowRequireConfirmation,
+					FirstName:              true,
+					LastName:               true,
+					RequireConfirmation:    cfg.WorkflowRequireConfirmation,
+					RequireConfirmationSet: true,
 				})
 			}),
 		}, nil
