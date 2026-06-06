@@ -326,6 +326,21 @@ func TestSessionReportToDictIncludesSessionCloseTranscriptTimeout(t *testing.T) 
 	}
 }
 
+func TestSessionReportToDictSerializesDisabledUserAwayTimeoutAsNil(t *testing.T) {
+	report := NewSessionReport()
+	report.Options.UserAwayTimeout = 15
+	report.Options.DisableUserAwayTimeout = true
+
+	data := report.ToDict()
+	options, ok := data["options"].(map[string]any)
+	if !ok {
+		t.Fatalf("options = %T, want map[string]any", data["options"])
+	}
+	if options["user_away_timeout"] != nil {
+		t.Fatalf("user_away_timeout = %#v, want nil", options["user_away_timeout"])
+	}
+}
+
 func TestSessionReportToDictIncludesExistingSessionOptions(t *testing.T) {
 	report := NewSessionReport()
 	report.Options.UseTTSAlignedTranscript = true

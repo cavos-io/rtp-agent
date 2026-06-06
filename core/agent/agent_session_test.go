@@ -3257,6 +3257,25 @@ func TestAgentSessionCancelsUserAwayTimerWhenUserSpeaks(t *testing.T) {
 	}
 }
 
+func TestAgentSessionCanDisableUserAwayTimeout(t *testing.T) {
+	agent := NewAgent("test")
+	session := NewAgentSession(agent, nil, AgentSessionOptions{
+		UserAwayTimeout:        0.01,
+		DisableUserAwayTimeout: true,
+	})
+
+	session.UpdateAgentState(AgentStateListening)
+
+	select {
+	case ev := <-session.UserStateChangedCh:
+		t.Fatalf("unexpected user state event with user-away timeout disabled = %q -> %q", ev.OldState, ev.NewState)
+	case <-time.After(40 * time.Millisecond):
+	}
+	if got := session.UserState(); got != UserStateListening {
+		t.Fatalf("UserState() = %q, want listening", got)
+	}
+}
+
 func receiveAgentStateChangedEvent(t *testing.T, session *AgentSession) AgentStateChangedEvent {
 	t.Helper()
 	select {
