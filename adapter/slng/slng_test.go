@@ -12,6 +12,8 @@ import (
 	"github.com/cavos-io/rtp-agent/core/tts"
 )
 
+const expectedPluginNamespace = "rtp-agent.plugins."
+
 func TestSLNGPluginMetadataUsesRTPAgentNamespace(t *testing.T) {
 	if PluginTitle != "rtp-agent.plugins.slng" {
 		t.Fatalf("plugin title = %q, want rtp-agent.plugins.slng", PluginTitle)
@@ -22,10 +24,10 @@ func TestSLNGPluginMetadataUsesRTPAgentNamespace(t *testing.T) {
 	if PluginPackage != "rtp-agent.plugins.slng" {
 		t.Fatalf("plugin package = %q, want rtp-agent.plugins.slng", PluginPackage)
 	}
-	if strings.HasPrefix(PluginTitle, "livekit.plugins.") {
+	if !strings.HasPrefix(PluginTitle, expectedPluginNamespace) {
 		t.Fatalf("plugin title = %q, want rtp-agent namespace", PluginTitle)
 	}
-	if strings.HasPrefix(PluginPackage, "livekit.plugins.") {
+	if !strings.HasPrefix(PluginPackage, expectedPluginNamespace) {
 		t.Fatalf("plugin package = %q, want rtp-agent namespace", PluginPackage)
 	}
 }
