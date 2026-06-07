@@ -104,6 +104,10 @@ func (t *GetDtmfTask) OnEnter() {
 			}
 		}
 	}()
+
+	_, _ = activity.Session.GenerateReplyWithOptions(context.Background(), agent.GenerateReplyOptions{
+		ToolChoice: "none",
+	})
 }
 
 func (t *GetDtmfTask) OnExit() {

@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/cavos-io/rtp-agent/core/agent"
+	"github.com/cavos-io/rtp-agent/core/audio/model"
 )
 
 func TestRecordInputsToolRejectsInvalidDtmfEvents(t *testing.T) {
@@ -78,6 +79,38 @@ func TestGetDtmfTaskCompletesFromSessionSipDTMFEvents(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("timed out waiting for DTMF task completion")
+	}
+}
+
+func TestGetDtmfTaskOnEnterGeneratesInitialReplyWithoutTools(t *testing.T) {
+	task := newDtmfTaskForTest(t, 2, false)
+	session := agent.NewAgentSession(task, nil, agent.AgentSessionOptions{})
+	session.Assistant = &fakeDtmfSessionAssistant{}
+	speechEvents := session.SpeechCreatedEvents()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	if err := session.Start(ctx); err != nil {
+		t.Fatalf("Start error = %v", err)
+	}
+	defer session.Stop(context.Background())
+
+	select {
+	case ev := <-speechEvents:
+		if ev.Source != "generate_reply" {
+			t.Fatalf("SpeechCreated Source = %q, want generate_reply", ev.Source)
+		}
+		if ev.SpeechHandle == nil {
+			t.Fatal("SpeechCreated SpeechHandle = nil, want initial reply handle")
+		}
+		if ev.SpeechHandle.Generation.ToolChoice != "none" {
+			t.Fatalf("initial reply ToolChoice = %#v, want none", ev.SpeechHandle.Generation.ToolChoice)
+		}
+		if ev.SpeechHandle.Generation.UserMessage != nil {
+			t.Fatalf("initial reply UserMessage = %#v, want nil", ev.SpeechHandle.Generation.UserMessage)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for DTMF initial reply")
 	}
 }
 
@@ -214,4 +247,11 @@ func newDtmfTaskForTest(t *testing.T, numDigits int, askConfirmation bool) *GetD
 		t.Fatalf("NewGetDtmfTask() error = %v", err)
 	}
 	return task
+}
+
+type fakeDtmfSessionAssistant struct{}
+
+func (f *fakeDtmfSessionAssistant) Start(context.Context, *agent.AgentSession) error { return nil }
+func (f *fakeDtmfSessionAssistant) OnAudioFrame(context.Context, *model.AudioFrame)  {}
+func (f *fakeDtmfSessionAssistant) SetPublishAudio(func(frame *model.AudioFrame) error) {
 }
