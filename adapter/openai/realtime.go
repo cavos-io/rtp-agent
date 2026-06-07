@@ -542,7 +542,8 @@ func openAIRealtimeVideoMessage(image *llm.ImageContent) (map[string]any, error)
 	}
 	url := fmt.Sprintf("data:%s;base64,%s", img.MIMEType, base64.StdEncoding.EncodeToString(img.DataBytes))
 	return map[string]any{
-		"type": "conversation.item.create",
+		"type":     "conversation.item.create",
+		"event_id": cavosmath.ShortUUID("video_"),
 		"item": map[string]any{
 			"type": "message",
 			"role": "user",

@@ -535,6 +535,9 @@ func TestRealtimeVideoMessageMapsImageContent(t *testing.T) {
 	if msg["type"] != "conversation.item.create" {
 		t.Fatalf("message type = %#v, want conversation.item.create", msg["type"])
 	}
+	if eventID, ok := msg["event_id"].(string); !ok || !strings.HasPrefix(eventID, "video_") {
+		t.Fatalf("event_id = %#v, want video_ prefix", msg["event_id"])
+	}
 	item := msg["item"].(map[string]any)
 	if item["type"] != "message" || item["role"] != "user" {
 		t.Fatalf("item = %#v, want user message", item)
