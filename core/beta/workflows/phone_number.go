@@ -156,10 +156,19 @@ func (t *confirmPhoneNumberTool) Parameters() map[string]any {
 
 func (t *confirmPhoneNumberTool) Execute(ctx context.Context, args string) (string, error) {
 	if t.phoneNumber != t.task.currentPhoneNumber {
-		return "", llm.NewToolError("The phone number has changed since confirmation was requested, ask the user to confirm the updated number.")
+		if activity := t.task.Agent.GetActivity(); activity != nil && activity.Session != nil {
+			_, _ = activity.Session.GenerateReplyWithOptions(context.Background(), agent.GenerateReplyOptions{
+				Instructions: phoneNumberStaleConfirmationPrompt(),
+			})
+		}
+		return "", nil
 	}
 	_ = t.task.Complete(&GetPhoneNumberResult{PhoneNumber: t.phoneNumber})
 	return "Phone number confirmed.", nil
+}
+
+func phoneNumberStaleConfirmationPrompt() string {
+	return "The phone number has changed since confirmation was requested, ask the user to confirm the updated number."
 }
 
 type declinePhoneNumberCaptureTool struct {

@@ -4,6 +4,9 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/cavos-io/rtp-agent/core/agent"
 )
 
 func TestGetPhoneNumberTaskRecordsValidNumberWithoutConfirmation(t *testing.T) {
@@ -118,6 +121,64 @@ func TestGetPhoneNumberTaskInstructionsOmitConfirmationWhenDisabled(t *testing.T
 
 	if strings.Contains(task.Instructions, "confirm_phone_number") {
 		t.Fatalf("Instructions = %q, want no confirm_phone_number guidance when confirmation disabled", task.Instructions)
+	}
+}
+
+func TestGetPhoneNumberTaskStaleConfirmationPromptsForUpdatedNumber(t *testing.T) {
+	task := NewGetPhoneNumberTask(GetPhoneNumberOptions{})
+	session := agent.NewAgentSession(task, nil, agent.AgentSessionOptions{})
+	session.Assistant = &fakeDtmfSessionAssistant{}
+	speechEvents := session.SpeechCreatedEvents()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	if err := session.Start(ctx); err != nil {
+		t.Fatalf("Start error = %v", err)
+	}
+	defer session.Stop(context.Background())
+
+	select {
+	case <-speechEvents:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for phone on-enter prompt")
+	}
+
+	update := &updatePhoneNumberTool{task: task}
+	if _, err := update.Execute(context.Background(), `{"phone_number":"+1 555 123 4567"}`); err != nil {
+		t.Fatalf("first update Execute() error = %v", err)
+	}
+	staleConfirm := &confirmPhoneNumberTool{task: task, phoneNumber: "+15551234567"}
+
+	if _, err := update.Execute(context.Background(), `{"phone_number":"+1 555 987 6543"}`); err != nil {
+		t.Fatalf("second update Execute() error = %v", err)
+	}
+	if _, err := staleConfirm.Execute(context.Background(), `{}`); err != nil {
+		t.Fatalf("stale confirm Execute() error = %v, want nil after prompting for updated confirmation", err)
+	}
+
+	select {
+	case ev := <-speechEvents:
+		if ev.Source != "generate_reply" {
+			t.Fatalf("SpeechCreated Source = %q, want generate_reply", ev.Source)
+		}
+		if ev.SpeechHandle == nil {
+			t.Fatal("SpeechCreated SpeechHandle = nil, want stale confirmation reply handle")
+		}
+		want := phoneNumberStaleConfirmationPrompt()
+		if ev.SpeechHandle.Generation.Instructions == nil {
+			t.Fatal("stale confirmation instructions = nil, want changed-phone prompt")
+		}
+		if got := ev.SpeechHandle.Generation.Instructions.AsModality("text").String(); got != want {
+			t.Fatalf("stale confirmation instructions = %q, want %q", got, want)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for stale confirmation prompt")
+	}
+
+	select {
+	case result := <-task.Result:
+		t.Fatalf("task completed with %#v, want no completion for stale confirmation", result)
+	default:
 	}
 }
 
