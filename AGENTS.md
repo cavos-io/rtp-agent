@@ -3,10 +3,12 @@
 ## Primary Mission
 
 This repository is a Go implementation effort for LiveKit Agents-style runtime behavior.
-Use `refs/agents/livekit-agents` as the behavioral reference and port its useful
-functionality into the Go codebase incrementally.
 
-Do not duplicate broad project setup or architecture guidance here. Read:
+Use `refs/agents/livekit-agents` as the behavioral reference and mirror its useful functionality in Go incrementally.
+
+Parity is now close enough that the priority is no longer symbol coverage. The priority is **functionality mirroring**: prove that the Python reference and Go implementation behave identically for the same scenarios.
+
+Read:
 
 * `README.md` for project purpose, setup, and CLI usage.
 * `ARCHITECTURE.md` for layer boundaries and dependency direction.
@@ -42,48 +44,133 @@ Use this map when deciding where reference behavior belongs:
 
 ## Porting Rules
 
-* Start from the Python reference behavior, then implement the Go version in the
-  package that matches the map above.
-* Preserve public concepts and lifecycle semantics where practical: worker,
-  job context, agent, session, activity, tools, streaming LLM/STT/TTS, VAD,
-  interruption, room I/O, telemetry, and plugin/provider boundaries.
-* Keep `core` provider-agnostic. Provider-specific API details belong in
-  `adapter/<provider>`.
-* Keep LiveKit transport, room connection, and worker protocol concerns in
-  `interface/worker`.
+* Start from the Python reference behavior, then implement or adjust the Go behavior in the mapped package.
+* Preserve lifecycle semantics where practical: worker, job context, agent, session, activity, tools, streaming LLM/STT/TTS, VAD, interruption, room I/O, telemetry, and provider boundaries.
+* Keep `core` provider-agnostic. Provider-specific API details belong in `adapter/<provider>`.
+* Keep LiveKit transport, room connection, and worker protocol concerns in `interface/worker`.
 * Keep CLI parsing and local developer commands in `interface/cli`.
-* Prefer small Go interfaces around stable behavior over direct translations of
-  Python inheritance patterns.
-* Do not add new cross-layer imports that violate `.go-arch-lint.yml`.
-* Do not edit `refs/agents/*` except when explicitly updating the vendored
-  reference material.
+* Prefer small Go interfaces around stable behavior over direct translations of Python inheritance patterns.
+* Do not add cross-layer imports that violate `.go-arch-lint.yml`.
+* Do not edit `refs/agents/*` except when explicitly updating vendored reference material.
+* Do not leave new deadcode behind. New functionality must be wired into real product flow, tests, registry, factory, config, interface, or composition roots.
 
-## Working Workflow
+## Functionality Mirroring Workflow
 
 For each parity task:
 
-1. Inspect the matching Python reference files under `refs/agents/livekit-agents`.
-2. Inspect the existing Go package and tests before changing code.
-3. Identify whether the task is core behavior, transport glue, provider adapter,
-   CLI behavior, or shared utility code.
-4. Add or update focused tests near the Go package being changed.
-5. Add or update a behavior parity manifest case when the task changes a meaningful
-   reference-to-Go behavior.
-6. Before changing `scripts/parity-runners/*`, explain why the runner change is
-   reusable across a category of future cases; otherwise prefer manifest-only
-   parity rows.
-7. Run the narrowest useful verification first, then broaden as risk increases.
+1. Inspect the matching Python reference under `refs/agents/livekit-agents`.
+2. Inspect the existing Go package and tests.
+3. Identify the behavior to mirror, not only the symbol or file to port.
+4. Create or update a shared parity scenario when practical.
+5. Run the Python reference and Go implementation for the same scenario.
+6. Compare normalized outputs, state transitions, events, errors, or JSON traces.
+7. Debug both sides until the expected behavior is understood and the Go behavior matches the Python reference.
+8. Add or update Go tests and parity manifest cases.
+9. Ensure new code is wired into real flow and does not appear in `deadcode`.
+10. Commit only after validation passes.
 
-Common verification commands:
+Before implementation, briefly state:
+
+* selected behavior gap
+* Python reference files
+* Go target files/packages
+* expected reference behavior
+* Python run command or runner
+* Go run command or test
+* comparison contract
+* validation plan
+
+## Required Validation Mindset
+
+Name-based matching is not parity. A Go symbol existing with the same name as a Python symbol is only a candidate.
+
+Parity must be proven with one or more of:
+
+* cross-runtime parity cases
+* shared manifest scenarios
+* Python runner output compared with Go runner output
+* Go tests that explicitly encode the Python reference behavior
+* documented review evidence for behavior that cannot yet be executed automatically
+
+For important behavior, prefer cross-runtime execution:
+
+```sh
+scripts/parity-validate.sh
+```
+
+When adding a behavior case, prefer adding a row to the shared manifest under `scripts/parity-fixtures/` rather than creating one-off runners.
+
+The manifest schema is:
+
+```text
+case_name, type, source_ref, target_ref, go_package, go_test,
+python_runner, go_runner, input_json, contract, behavior, notes
+```
+
+Use `cross-runtime` cases when both sides can actually run.
+
+A valid cross-runtime case must:
+
+* run the Python reference
+* run the Go target
+* use the same input scenario
+* emit normalized JSON, trace, or contract output
+* compare behavior rather than raw stdout
+* normalize unstable fields such as timestamps, paths, UUIDs, random IDs, durations, and nondeterministic ordering
+
+Do not add fake cross-runtime cases. If a case cannot execute both Python and Go, keep it as `go-test` and clearly state what behavior the Go test encodes from the reference.
+
+## Debugging Python and Go Together
+
+When behavior differs:
+
+1. Reproduce the Python reference behavior first.
+2. Reproduce the Go behavior second.
+3. Capture both outputs in comparable form.
+4. Identify whether the difference is:
+
+   * missing Go behavior
+   * intentionally different Go design
+   * reference behavior not applicable to this project
+   * test/runner mismatch
+   * unstable output normalization issue
+5. Fix the Go implementation or runner as appropriate.
+6. Re-run both sides.
+7. Only claim parity when both sides match the stated contract.
+
+Do not change tests to match broken behavior. Update tests only when they better encode the reference contract.
+
+## Verification Commands
+
+Use the narrowest useful verification first, then broaden.
+
+Common commands:
 
 ```sh
 scripts/go-test-all.sh
 scripts/go-build-all.sh
 go-arch-lint check
 go-arch-lint mapping
+scripts/parity-validate.sh
+scripts/parity-gate.sh
 ```
 
-Optional parity guidance tool:
+Use static and deadcode checks as quality gates:
+
+```sh
+staticcheck ./... > staticcheck.txt
+deadcode ./... > deadcode.txt
+```
+
+Rules:
+
+* Fix staticcheck/deadcode caused by new or touched code before committing.
+* Do not commit `staticcheck.txt` or `deadcode.txt` unless explicitly required.
+* Do not create fake references to silence deadcode.
+* Prefer wiring intended functionality into real flows.
+* Remove code only when clearly obsolete, duplicated, or unintended.
+
+Optional parity discovery command:
 
 ```sh
 scripts/parity-check.sh \
@@ -94,123 +181,73 @@ scripts/parity-check.sh \
   --output .tmp/parity_report.csv
 ```
 
-Use the parity report as a directional aid when deciding whether a port is
-moving the Go implementation closer to the LiveKit reference. The report is a
-symbol/candidate matching tool, not proof of behavioral parity: it may contain
-false positives and false negatives, and `parity_status`/`notes` are for human
-review. Layer 1 `match_confidence` values describe candidate matching only, not
-tested behavior. Do not treat this as a mandatory command for every task; run it
-when it helps scope gaps, validate package placement, or inspect nearby
-reference-to-Go coverage.
+Use this as directional guidance only. It does not prove behavior.
 
-## Behavior Parity Validation
+## Quality Gates
 
-Name-based symbol matching is only Layer 1 parity discovery. Behavioral parity
-must be validated with tests, manifest cases, shared contracts, or explicit
-review evidence.
-
-Use the parity layers as follows:
-
-1. **Layer 1: Symbol candidate report**
-
-   * `scripts/parity-check.sh` finds possible source/target symbol matches.
-   * It helps identify gaps and candidate files.
-   * It does not prove that behavior is equivalent.
-   * If a source path has mapped target paths, candidate matching should stay
-     inside those mapped paths. Do not treat accidental global name matches
-     outside the mapped destination as parity evidence.
-   * Layer 1 must not claim behavior is tested or verified.
-
-2. **Layer 2: Agent-assisted review placeholder**
-
-   * Future tooling may classify candidate pairs as `exists`, `partial`,
-     `missing`, `intentionally_different`, or `unknown`.
-   * Until that tooling exists, do not depend on agent review as the only proof
-     of parity.
-
-3. **Layer 3: Manifest-driven behavior validation**
-
-   * Use `scripts/parity-validate.sh` and the shared parity case manifest under
-     `scripts/parity-fixtures/` when available.
-   * Prefer manifest/table-driven parity cases. Adding a simple parity case
-     should usually mean adding one row to the shared CSV/TSV manifest rather
-     than creating dedicated per-case files.
-   * Manifest rows should explain the parity intent, not only the command to run.
-     The current TSV schema is:
-     `case_name`, `type`, `source_ref`, `target_ref`, `go_package`, `go_test`,
-     `python_runner`, `go_runner`, `input_json`, `contract`, `behavior`, `notes`.
-   * Simple `go-test` manifest cases are useful as cheap target-side regression
-     checks. They should verify that the selected test ran, passed, and completed
-     in the expected package after normalization.
-   * Go-only cases do not prove Python reference behavior and Go behavior are
-     identical unless the Go test itself clearly encodes the reference behavior.
-   * For important behavior, prefer `cross-runtime` manifest cases when
-     practical. A cross-runtime case should define one shared scenario in the
-     manifest with `python_runner`, `go_runner`, and `input_json`, run it
-     against both the Python reference and Go target through thin runners,
-     normalize their JSON traces or contract outputs, and compare the result.
-   * Prefer manifest-only additions. Do not keep expanding
-     `scripts/parity-runners/*` with one-off contract branches for individual
-     cases.
-   * Add or modify parity runner code only when it creates a reusable runner
-     family that can support multiple future cases, such as utilities,
-     environment helpers, string/vector transforms, math/vector checks, or later
-     workflow trace contracts.
-   * Keep a case as `go-test` when cross-runtime validation would require
-     single-purpose runner code or workflow orchestration that is not yet
-     reusable.
-   * Add the first cross-runtime cases for pure utility or vector behavior
-     before workflow orchestration. Good early cases have no network, room,
-     timing, provider, or lifecycle dependencies and can emit a compact JSON
-     contract from both runtimes.
-   * Do not compare raw stdout for cross-runtime parity. Prefer normalized JSON
-     traces or shared contract/invariant output such as `task_started`,
-     `tool_called`, `state_changed`, `awaiting_confirmation`, `completed`, or
-     `error`.
-   * `cross-runtime` rows require real Python and Go runner execution. Do not add
-     a `cross-runtime` row that cannot execute both sides, and do not fake
-     cross-runtime proof.
-   * Use dedicated fixture directories or per-case golden files only when the
-     case has genuinely unique file inputs, traces, symbol-report output, or
-     other content that cannot be represented cleanly as manifest columns.
-   * Normalize unstable fields such as timestamps, absolute paths, UUIDs,
-     random IDs, durations, and nondeterministic ordering before comparing
-     actual and expected output.
-   * A validation case should fail with clear output showing which behavior,
-     contract, assertion, or diff failed.
-
-4. **Layer 4: Quality gates**
-
-   * Use `scripts/check-test-integrity.sh` and `scripts/check-deadcode.sh` when
-     available to prevent fake progress through weakened tests or unused parity
-     code.
-   * These gates do not prove behavior. They protect the validation work from
-     deadcode, inert ports, and obvious test weakening.
-   * Run focused Go tests and broaden verification as needed.
-   * Run architecture checks when imports or package boundaries change.
-   * Run `staticcheck ./...` and `deadcode ./...` when the task is likely to
-     affect shared behavior, public interfaces, or unused parity scaffolding.
-   * Fix issues related to the current task. Do not use unrelated staticcheck or
-     deadcode output as permission for broad, unfocused rewrites.
-
-For parity-sensitive changes, prefer the minimum gate:
+Use available gates to prevent fake progress:
 
 ```sh
+scripts/check-test-integrity.sh
+scripts/check-deadcode.sh
 scripts/parity-gate.sh
 ```
 
-A parity implementation is not complete unless new target code is tested, wired
-into production flow, or explicitly documented as pending parity. Do not leave
-new deadcode behind.
+These gates protect against:
+
+* weakened tests
+* unused parity code
+* inert ports
+* false confidence from symbol-only matching
+
+They do not replace behavior validation.
+
+## Testing Rules
+
+* Do not delete, skip, weaken, or rewrite tests just to pass.
+* Do not add `t.Skip`, `t.Skipf`, `SkipNow`, or `testing.Short` guards.
+* Do not remove meaningful assertions.
+* Do not add meaningless tests only to increase coverage.
+* Do not hide failures by changing tests to match broken behavior.
+* Add tests near the package being changed.
+* Prefer table-driven tests when behavior has multiple scenarios.
+* For parity-sensitive behavior, add or update manifest cases.
+
+## Commit Rules
+
+Keep commits small and focused.
+
+Each commit should represent one coherent functionality-mirroring improvement.
+
+Suggested commit types:
+
+* `feat(core): mirror <reference behavior>`
+* `feat(adapter): mirror <provider behavior>`
+* `fix(core): align <behavior> with reference`
+* `fix(adapter): align <provider> behavior with reference`
+* `test(core): add cross-runtime parity for <behavior>`
+* `test(parity): add manifest case for <behavior>`
+* `refactor(core): wire <component> into <flow>`
+
+Before committing:
+
+1. Run relevant Python reference runner or parity case.
+2. Run relevant Go test or runner.
+3. Run broader Go validation.
+4. Run staticcheck/deadcode gates when touched code may affect wiring.
+5. Confirm no new deadcode remains.
+6. Confirm `staticcheck.txt` and `deadcode.txt` are not staged unless intentionally tracked.
 
 ## Current Known Drift
 
-* Several LiveKit reference areas already have partial Go equivalents. Treat
-  existing Go code as the starting point and close behavioral gaps
-  incrementally.
+Several LiveKit reference areas already have partial Go equivalents. Treat existing Go code as the starting point.
+
+Do not re-port from scratch when Go behavior already exists. Instead, compare behavior, identify gaps, and adjust incrementally.
 
 ## Documentation Hygiene
 
-Keep this file focused on instructions for future coding agents. Put user-facing
-setup and feature documentation in `README.md` or the Docusaurus docs. Put
-architecture policy in `ARCHITECTURE.md`.
+Keep this file focused on instructions for coding agents.
+
+Put user-facing setup and feature documentation in `README.md` or docs.
+
+Put architecture policy in `ARCHITECTURE.md`.
