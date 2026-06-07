@@ -4,6 +4,9 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/cavos-io/rtp-agent/core/agent"
 )
 
 func TestGetAddressTaskRecordsAddressWithoutConfirmation(t *testing.T) {
@@ -149,8 +152,25 @@ func TestGetAddressTaskOnEnterUsesReferencePrompt(t *testing.T) {
 	}
 }
 
-func TestGetAddressTaskRejectsStaleConfirmation(t *testing.T) {
+func TestGetAddressTaskStaleConfirmationPromptsForUpdatedAddress(t *testing.T) {
 	task := NewGetAddressTask(GetAddressOptions{})
+	session := agent.NewAgentSession(task, nil, agent.AgentSessionOptions{})
+	session.Assistant = &fakeDtmfSessionAssistant{}
+	speechEvents := session.SpeechCreatedEvents()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	if err := session.Start(ctx); err != nil {
+		t.Fatalf("Start error = %v", err)
+	}
+	defer session.Stop(context.Background())
+
+	select {
+	case <-speechEvents:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for address on-enter prompt")
+	}
+
 	update := &updateAddressTool{task: task}
 
 	if _, err := update.Execute(context.Background(), `{"street_address":"123 Main St","unit_number":"","locality":"Springfield IL 62701","country":"United States"}`); err != nil {
@@ -161,8 +181,27 @@ func TestGetAddressTaskRejectsStaleConfirmation(t *testing.T) {
 	if _, err := update.Execute(context.Background(), `{"street_address":"456 Oak Ave","unit_number":"","locality":"Springfield IL 62701","country":"United States"}`); err != nil {
 		t.Fatalf("second update Execute() error = %v", err)
 	}
-	if _, err := staleConfirm.Execute(context.Background(), `{}`); err == nil {
-		t.Fatal("stale confirm Execute() error = nil, want changed-address error")
+	if _, err := staleConfirm.Execute(context.Background(), `{}`); err != nil {
+		t.Fatalf("stale confirm Execute() error = %v, want nil after prompting for updated confirmation", err)
+	}
+
+	select {
+	case ev := <-speechEvents:
+		if ev.Source != "generate_reply" {
+			t.Fatalf("SpeechCreated Source = %q, want generate_reply", ev.Source)
+		}
+		if ev.SpeechHandle == nil {
+			t.Fatal("SpeechCreated SpeechHandle = nil, want stale confirmation reply handle")
+		}
+		want := addressStaleConfirmationPrompt()
+		if ev.SpeechHandle.Generation.Instructions == nil {
+			t.Fatal("stale confirmation instructions = nil, want changed-address prompt")
+		}
+		if got := ev.SpeechHandle.Generation.Instructions.AsModality("text").String(); got != want {
+			t.Fatalf("stale confirmation instructions = %q, want %q", got, want)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for stale confirmation prompt")
 	}
 
 	select {
