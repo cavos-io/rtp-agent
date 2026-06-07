@@ -32,6 +32,7 @@ import (
 	"github.com/cavos-io/rtp-agent/adapter/cerebras"
 	"github.com/cavos-io/rtp-agent/adapter/clova"
 	"github.com/cavos-io/rtp-agent/adapter/deepgram"
+	"github.com/cavos-io/rtp-agent/adapter/did"
 	"github.com/cavos-io/rtp-agent/adapter/elevenlabs"
 	"github.com/cavos-io/rtp-agent/adapter/fal"
 	"github.com/cavos-io/rtp-agent/adapter/fireworksai"
@@ -117,6 +118,7 @@ func TestAppRegistersReferencePluginMetadataBatch(t *testing.T) {
 		cerebras.PluginPackage:   {title: cerebras.PluginTitle, version: cerebras.PluginVersion},
 		clova.PluginPackage:      {title: clova.PluginTitle, version: clova.PluginVersion},
 		deepgram.PluginPackage:   {title: deepgram.PluginTitle, version: deepgram.PluginVersion},
+		did.PluginPackage:        {title: did.PluginTitle, version: did.PluginVersion},
 		elevenlabs.PluginPackage: {title: elevenlabs.PluginTitle, version: elevenlabs.PluginVersion},
 		fal.PluginPackage:        {title: fal.PluginTitle, version: fal.PluginVersion},
 		fireworksai.PluginPackage: {
@@ -2934,6 +2936,7 @@ func TestDefaultConfigFromEnvSelectsAvatarProvider(t *testing.T) {
 		{name: "avatartalk", provider: "avatartalk", keyEnv: "AVATARTALK_API_KEY", wantAvatar: "*avatartalk.AvatartalkAvatar"},
 		{name: "bey", provider: "bey", keyEnv: "BEY_API_KEY", wantAvatar: "*bey.BeyAvatar"},
 		{name: "bithuman", provider: "bithuman", keyEnv: "BITHUMAN_API_KEY", wantAvatar: "*bithuman.BithumanAvatar"},
+		{name: "did", provider: "did", keyEnv: "DID_API_KEY", wantAvatar: "*did.DIDAvatar"},
 		{name: "hedra", provider: "hedra", keyEnv: "HEDRA_API_KEY", wantAvatar: "*hedra.HedraAvatar"},
 		{name: "keyframe", provider: "keyframe", keyEnv: "KEYFRAME_API_KEY", wantAvatar: "*keyframe.KeyframeAgent"},
 		{name: "lemonslice", provider: "lemonslice", keyEnv: "LEMONSLICE_API_KEY", wantAvatar: "*lemonslice.LemonsliceAvatar"},

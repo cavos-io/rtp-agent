@@ -30,6 +30,7 @@ import (
 	"github.com/cavos-io/rtp-agent/adapter/cerebras"
 	"github.com/cavos-io/rtp-agent/adapter/clova"
 	"github.com/cavos-io/rtp-agent/adapter/deepgram"
+	"github.com/cavos-io/rtp-agent/adapter/did"
 	"github.com/cavos-io/rtp-agent/adapter/elevenlabs"
 	"github.com/cavos-io/rtp-agent/adapter/fal"
 	"github.com/cavos-io/rtp-agent/adapter/fireworksai"
@@ -115,6 +116,7 @@ func init() {
 	plugin.RegisterPluginMetadata(cerebras.PluginTitle, cerebras.PluginVersion, cerebras.PluginPackage)
 	plugin.RegisterPluginDownloader(clova.PluginTitle, clova.PluginVersion, clova.PluginPackage, clova.Plugin{}.DownloadFiles)
 	plugin.RegisterPluginMetadata(deepgram.PluginTitle, deepgram.PluginVersion, deepgram.PluginPackage)
+	plugin.RegisterPluginMetadata(did.PluginTitle, did.PluginVersion, did.PluginPackage)
 	plugin.RegisterPluginMetadata(elevenlabs.PluginTitle, elevenlabs.PluginVersion, elevenlabs.PluginPackage)
 	plugin.RegisterPluginMetadata(fal.PluginTitle, fal.PluginVersion, fal.PluginPackage)
 	plugin.RegisterPluginMetadata(fireworksai.PluginTitle, fireworksai.PluginVersion, fireworksai.PluginPackage)
@@ -187,6 +189,7 @@ const (
 	providerCerebras     = "cerebras"
 	providerClova        = "clova"
 	providerDeepgram     = "deepgram"
+	providerDID          = "did"
 	providerElevenLabs   = "elevenlabs"
 	providerFal          = "fal"
 	providerFireworks    = "fireworks"
@@ -453,6 +456,8 @@ type AppConfig struct {
 	ClovaSTTInvokeURL           string
 	ClovaClientID               string
 	ClovaClientSecret           string
+	DIDAPIKey                   string
+	DIDAgentID                  string
 	FalAPIKey                   string
 	FireworksAPIKey             string
 	FishAudioAPIKey             string
@@ -797,6 +802,8 @@ func DefaultConfigFromEnv() AppConfig {
 		ClovaSTTInvokeURL:                       os.Getenv("CLOVA_STT_INVOKE_URL"),
 		ClovaClientID:                           os.Getenv("CLOVA_CLIENT_ID"),
 		ClovaClientSecret:                       os.Getenv("CLOVA_CLIENT_SECRET"),
+		DIDAPIKey:                               os.Getenv("DID_API_KEY"),
+		DIDAgentID:                              os.Getenv("DID_AGENT_ID"),
 		FalAPIKey:                               firstEnv("FAL_KEY", "FAL_API_KEY"),
 		FireworksAPIKey:                         os.Getenv("FIREWORKS_API_KEY"),
 		FishAudioAPIKey:                         firstEnv("FISHAUDIO_API_KEY", "FISH_AUDIO_API_KEY"),
@@ -1586,6 +1593,9 @@ func configureAvatar(cfg AppConfig, a *agent.Agent) error {
 		return nil
 	case providerBitHuman:
 		a.Avatar = bithuman.NewBithumanAvatar(cfg.BitHumanAPIKey)
+		return nil
+	case providerDID:
+		a.Avatar = did.NewDIDAvatar(cfg.DIDAgentID, cfg.DIDAPIKey)
 		return nil
 	case providerHedra:
 		a.Avatar = hedra.NewHedraAvatar(cfg.HedraAPIKey)
