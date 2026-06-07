@@ -410,6 +410,9 @@ func openAIRealtimeUpdateOptionsMessage(options llm.RealtimeSessionOptions) map[
 	if options.Truncation != nil {
 		session["truncation"] = options.Truncation
 	}
+	if options.Tracing != nil {
+		session["tracing"] = options.Tracing
+	}
 	output := make(map[string]any)
 	if options.Voice != "" {
 		output["voice"] = options.Voice

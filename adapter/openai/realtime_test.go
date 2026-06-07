@@ -353,6 +353,21 @@ func TestRealtimeUpdateOptionsMessageMapsTruncation(t *testing.T) {
 	}
 }
 
+func TestRealtimeUpdateOptionsMessageMapsTracing(t *testing.T) {
+	msg := openAIRealtimeUpdateOptionsMessage(llm.RealtimeSessionOptions{
+		Tracing: map[string]any{"workflow_name": "checkout"},
+	})
+
+	if msg["type"] != "session.update" {
+		t.Fatalf("message type = %#v, want session.update", msg["type"])
+	}
+	session := msg["session"].(map[string]any)
+	tracing := session["tracing"].(map[string]any)
+	if tracing["workflow_name"] != "checkout" {
+		t.Fatalf("tracing = %#v, want workflow_name checkout", tracing)
+	}
+}
+
 func TestRealtimeAudioBufferMessages(t *testing.T) {
 	commit := openAIRealtimeCommitAudioMessage()
 	if commit["type"] != "input_audio_buffer.commit" {

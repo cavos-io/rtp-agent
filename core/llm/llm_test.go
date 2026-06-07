@@ -337,6 +337,17 @@ func TestRealtimeSessionOptionsExposeTruncation(t *testing.T) {
 	}
 }
 
+func TestRealtimeSessionOptionsExposeTracing(t *testing.T) {
+	options := RealtimeSessionOptions{
+		Tracing: map[string]any{"workflow_name": "checkout"},
+	}
+
+	tracing := options.Tracing.(map[string]any)
+	if tracing["workflow_name"] != "checkout" {
+		t.Fatalf("Tracing = %#v, want workflow_name checkout", options.Tracing)
+	}
+}
+
 func TestRealtimeGenerateReplyOptionsExposePerResponseOverrides(t *testing.T) {
 	options := RealtimeGenerateReplyOptions{
 		Instructions: "answer briefly",

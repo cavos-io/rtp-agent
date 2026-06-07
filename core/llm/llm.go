@@ -873,6 +873,7 @@ type RealtimeSessionOptions struct {
 	Speed                   float64
 	MaxResponseOutputTokens any
 	Truncation              any
+	Tracing                 any
 }
 
 type RealtimeGenerateReplyOptions struct {
