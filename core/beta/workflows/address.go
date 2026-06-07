@@ -26,7 +26,9 @@ type GetAddressTask struct {
 	addressConfirmed    bool
 }
 
-const AddressInstructions = `You are only a single step in a broader system, responsible solely for capturing an address.
+const addressConfirmationInstruction = "Call `confirm_address` after the user confirmed the address is correct."
+
+const addressInstructionsBeforeConfirmation = `You are only a single step in a broader system, responsible solely for capturing an address.
 You will be handling addresses from any country. Expect that users will say address in different formats with fields filled like:
 - 'street_address': '450 SOUTH MAIN ST', 'unit_number': 'FLOOR 2', 'locality': 'SALT LAKE CITY UT 84101', 'country': 'UNITED STATES',
 - 'street_address': '123 MAPLE STREET', 'unit_number': 'APARTMENT 10', 'locality': 'OTTAWA ON K1A 0B1', 'country': 'CANADA',
@@ -42,8 +44,9 @@ Normalize common spoken patterns silently:
 Don't mention corrections. Treat inputs as possibly imperfect but fix them silently.
 Call update_address at the first opportunity whenever you form a new hypothesis about the address. (before asking any questions or providing any answers.)
 Don't invent new addresses, stick strictly to what the user said.
-Call confirm_address after the user confirmed the address is correct.
-When reading a numerical ordinal suffix (st, nd, rd, th), the number must be verbally expanded into its full, correctly pronounced word form.
+`
+
+const addressInstructionsAfterConfirmation = `When reading a numerical ordinal suffix (st, nd, rd, th), the number must be verbally expanded into its full, correctly pronounced word form.
 Do not read the number and the suffix letters separately.
 Confirm postal codes by reading them out digit-by-digit as a sequence of single numbers. Do not read them as cardinal numbers.
 For example, read 90210 as 'nine zero two one zero.'
@@ -53,13 +56,21 @@ If the address is unclear or invalid, or it takes too much back-and-forth, promp
 Ignore unrelated input and avoid going off-topic. Do not generate markdown, greetings, or unnecessary commentary.
 Always explicitly invoke a tool when applicable. Do not hallucinate tool usage, no real action is taken unless the tool is explicitly called.`
 
+const AddressInstructions = addressInstructionsBeforeConfirmation + addressConfirmationInstruction + "\n" + addressInstructionsAfterConfirmation
+
+const addressInstructionsWithoutConfirmation = addressInstructionsBeforeConfirmation + addressInstructionsAfterConfirmation
+
 func NewGetAddressTask(opts GetAddressOptions) *GetAddressTask {
 	requireConfirmation := true
 	if opts.RequireConfirmationSet {
 		requireConfirmation = opts.RequireConfirmation
 	}
+	instructions := AddressInstructions
+	if !requireConfirmation {
+		instructions = addressInstructionsWithoutConfirmation
+	}
 	t := &GetAddressTask{
-		AgentTask:           *agent.NewAgentTask[*GetAddressResult](AddressInstructions),
+		AgentTask:           *agent.NewAgentTask[*GetAddressResult](instructions),
 		RequireConfirmation: requireConfirmation,
 	}
 

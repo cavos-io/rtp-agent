@@ -96,6 +96,14 @@ func TestGetAddressTaskCanDisableDefaultConfirmation(t *testing.T) {
 	}
 }
 
+func TestGetAddressTaskInstructionsOmitConfirmationWhenDisabled(t *testing.T) {
+	task := NewGetAddressTask(GetAddressOptions{RequireConfirmation: false, RequireConfirmationSet: true})
+
+	if strings.Contains(task.Instructions, "confirm_address") {
+		t.Fatalf("Instructions = %q, want no confirm_address guidance when confirmation disabled", task.Instructions)
+	}
+}
+
 func TestGetAddressTaskRejectsStaleConfirmation(t *testing.T) {
 	task := NewGetAddressTask(GetAddressOptions{})
 	update := &updateAddressTool{task: task}
