@@ -33,7 +33,7 @@ const (
 
 func (b BuiltinAudioClip) Path() string {
 	cwd, _ := os.Getwd()
-	return filepath.Join(cwd, "resources", string(b))
+	return filepath.Join(cwd, "resources", "audio", string(b))
 }
 
 type AudioSource interface{} // Can be string, BuiltinAudioClip, or <-chan *model.AudioFrame
