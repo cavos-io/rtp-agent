@@ -2,33 +2,13 @@
   "version": "0.2.0",
   "configurations": [
     {
-      "name": "Debug main Go application",
+      "name": "Debug ./cmd/main.go command",
       "type": "go",
       "request": "launch",
       "mode": "debug",
       "program": "${workspaceFolder}/cmd/main.go",
       "cwd": "${workspaceFolder}",
-      "args": ["start"],
-      "envFile": "${workspaceFolder}/.env"
-    },
-    {
-      "name": "Debug ./cmd/main.go start",
-      "type": "go",
-      "request": "launch",
-      "mode": "debug",
-      "program": "${workspaceFolder}/cmd/main.go",
-      "cwd": "${workspaceFolder}",
-      "args": ["start"],
-      "envFile": "${workspaceFolder}/.env"
-    },
-    {
-      "name": "Debug ./cmd/main.go dev",
-      "type": "go",
-      "request": "launch",
-      "mode": "debug",
-      "program": "${workspaceFolder}/cmd/main.go",
-      "cwd": "${workspaceFolder}",
-      "args": ["dev"],
+      "args": ["${input:mainCommand}"],
       "envFile": "${workspaceFolder}/.env"
     },
     {
@@ -62,26 +42,6 @@
       "envFile": "${workspaceFolder}/.env"
     },
     {
-      "name": "Debug ./cmd/main.go download-files",
-      "type": "go",
-      "request": "launch",
-      "mode": "debug",
-      "program": "${workspaceFolder}/cmd/main.go",
-      "cwd": "${workspaceFolder}",
-      "args": ["download-files"],
-      "envFile": "${workspaceFolder}/.env"
-    },
-    {
-      "name": "Debug ./cmd/main.go eval",
-      "type": "go",
-      "request": "launch",
-      "mode": "debug",
-      "program": "${workspaceFolder}/cmd/main.go",
-      "cwd": "${workspaceFolder}",
-      "args": ["eval"],
-      "envFile": "${workspaceFolder}/.env"
-    },
-    {
       "name": "Debug current Go test file",
       "type": "go",
       "request": "launch",
@@ -101,6 +61,13 @@
     }
   ],
   "inputs": [
+    {
+      "id": "mainCommand",
+      "type": "pickString",
+      "description": "Command for ./cmd/main.go",
+      "default": "start",
+      "options": ["start", "dev", "console", "download-files", "eval"]
+    },
     {
       "id": "connectRoomName",
       "type": "promptString",
