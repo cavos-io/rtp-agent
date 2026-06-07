@@ -58,10 +58,12 @@ import (
 	"github.com/cavos-io/rtp-agent/adapter/nvidia"
 	"github.com/cavos-io/rtp-agent/adapter/openai"
 	"github.com/cavos-io/rtp-agent/adapter/perplexity"
+	"github.com/cavos-io/rtp-agent/adapter/phonic"
 	"github.com/cavos-io/rtp-agent/adapter/resemble"
 	"github.com/cavos-io/rtp-agent/adapter/respeecher"
 	"github.com/cavos-io/rtp-agent/adapter/rime"
 	"github.com/cavos-io/rtp-agent/adapter/rtzr"
+	"github.com/cavos-io/rtp-agent/adapter/runway"
 	"github.com/cavos-io/rtp-agent/adapter/sarvam"
 	"github.com/cavos-io/rtp-agent/adapter/silero"
 	"github.com/cavos-io/rtp-agent/adapter/simli"
@@ -144,10 +146,12 @@ func init() {
 	plugin.RegisterPluginMetadata(nvidia.PluginTitle, nvidia.PluginVersion, nvidia.PluginPackage)
 	plugin.RegisterPluginMetadata(openai.PluginTitle, openai.PluginVersion, openai.PluginPackage)
 	plugin.RegisterPluginMetadata(perplexity.PluginTitle, perplexity.PluginVersion, perplexity.PluginPackage)
+	plugin.RegisterPluginMetadata(phonic.PluginTitle, phonic.PluginVersion, phonic.PluginPackage)
 	plugin.RegisterPluginMetadata(resemble.PluginTitle, resemble.PluginVersion, resemble.PluginPackage)
 	plugin.RegisterPluginMetadata(respeecher.PluginTitle, respeecher.PluginVersion, respeecher.PluginPackage)
 	plugin.RegisterPluginMetadata(rime.PluginTitle, rime.PluginVersion, rime.PluginPackage)
 	plugin.RegisterPluginMetadata(rtzr.PluginTitle, rtzr.PluginVersion, rtzr.PluginPackage)
+	plugin.RegisterPluginMetadata(runway.PluginTitle, runway.PluginVersion, runway.PluginPackage)
 	plugin.RegisterPluginMetadata(sarvam.PluginTitle, sarvam.PluginVersion, sarvam.PluginPackage)
 	plugin.RegisterPluginDownloader(silero.PluginTitle, silero.PluginVersion, silero.PluginPackage, silero.Plugin{}.DownloadFiles)
 	plugin.RegisterPluginMetadata(simli.PluginTitle, simli.PluginVersion, simli.PluginPackage)
@@ -215,10 +219,12 @@ const (
 	providerNvidia       = "nvidia"
 	providerOpenAI       = "openai"
 	providerPerplexity   = "perplexity"
+	providerPhonic       = "phonic"
 	providerResemble     = "resemble"
 	providerRespeecher   = "respeecher"
 	providerRime         = "rime"
 	providerRtzr         = "rtzr"
+	providerRunway       = "runway"
 	providerSarvam       = "sarvam"
 	providerSilero       = "silero"
 	providerSimli        = "simli"
@@ -479,12 +485,17 @@ type AppConfig struct {
 	NeuphonicAPIKey             string
 	NvidiaAPIKey                string
 	PerplexityAPIKey            string
+	PhonicAPIKey                string
 	ResembleAPIKey              string
 	RespeecherAPIKey            string
 	RimeAPIKey                  string
 	RtzrClientID                string
 	RtzrClientSecret            string
 	RtzrAccessToken             string
+	RunwayAPISecret             string
+	RunwayAvatarID              string
+	RunwayPresetID              string
+	RunwayMaxDuration           *int
 	SarvamAPIKey                string
 	SimliAPIKey                 string
 	SimplismartAPIKey           string
@@ -825,12 +836,17 @@ func DefaultConfigFromEnv() AppConfig {
 		NeuphonicAPIKey:                         os.Getenv("NEUPHONIC_API_KEY"),
 		NvidiaAPIKey:                            os.Getenv("NVIDIA_API_KEY"),
 		PerplexityAPIKey:                        os.Getenv("PERPLEXITY_API_KEY"),
+		PhonicAPIKey:                            os.Getenv("PHONIC_API_KEY"),
 		ResembleAPIKey:                          os.Getenv("RESEMBLE_API_KEY"),
 		RespeecherAPIKey:                        os.Getenv("RESPEECHER_API_KEY"),
 		RimeAPIKey:                              os.Getenv("RIME_API_KEY"),
 		RtzrClientID:                            os.Getenv("RTZR_CLIENT_ID"),
 		RtzrClientSecret:                        os.Getenv("RTZR_CLIENT_SECRET"),
 		RtzrAccessToken:                         os.Getenv("RTZR_ACCESS_TOKEN"),
+		RunwayAPISecret:                         os.Getenv("RUNWAYML_API_SECRET"),
+		RunwayAvatarID:                          os.Getenv("RTP_AGENT_RUNWAY_AVATAR_ID"),
+		RunwayPresetID:                          os.Getenv("RTP_AGENT_RUNWAY_PRESET_ID"),
+		RunwayMaxDuration:                       getenvOptionalInt("RTP_AGENT_RUNWAY_MAX_DURATION"),
 		SarvamAPIKey:                            os.Getenv("SARVAM_API_KEY"),
 		SimliAPIKey:                             os.Getenv("SIMLI_API_KEY"),
 		SimplismartAPIKey:                       os.Getenv("SIMPLISMART_API_KEY"),
@@ -1608,6 +1624,23 @@ func configureAvatar(cfg AppConfig, a *agent.Agent) error {
 		return nil
 	case providerLiveAvatar:
 		a.Avatar = liveavatar.NewLiveAvatar(cfg.LiveAvatarAPIKey)
+		return nil
+	case providerRunway:
+		opts := []runway.RunwayAvatarOption{}
+		if cfg.RunwayAvatarID != "" {
+			opts = append(opts, runway.WithRunwayAvatarID(cfg.RunwayAvatarID))
+		}
+		if cfg.RunwayPresetID != "" {
+			opts = append(opts, runway.WithRunwayPresetID(cfg.RunwayPresetID))
+		}
+		if cfg.RunwayMaxDuration != nil {
+			opts = append(opts, runway.WithRunwayMaxDuration(*cfg.RunwayMaxDuration))
+		}
+		avatar, err := runway.NewRunwayAvatar(cfg.RunwayAPISecret, opts...)
+		if err != nil {
+			return err
+		}
+		a.Avatar = avatar
 		return nil
 	case providerSimli:
 		a.Avatar = simli.NewSimliAvatar(cfg.SimliAPIKey)
@@ -3762,6 +3795,8 @@ func configureProviders(cfg AppConfig, a *agent.Agent) (llm.RealtimeModel, error
 		return nil, nil
 	case providerOpenAI:
 		return openai.NewRealtimeModel(cfg.OpenAIAPIKey, cfg.RealtimeModel), nil
+	case providerPhonic:
+		return phonic.NewRealtimeModel(cfg.PhonicAPIKey)
 	default:
 		return nil, fmt.Errorf("unsupported RTP_AGENT_REALTIME_PROVIDER %q", cfg.RealtimeProvider)
 	}
