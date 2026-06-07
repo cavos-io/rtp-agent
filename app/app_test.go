@@ -47,6 +47,7 @@ import (
 	"github.com/cavos-io/rtp-agent/adapter/hume"
 	"github.com/cavos-io/rtp-agent/adapter/inworld"
 	"github.com/cavos-io/rtp-agent/adapter/keyframe"
+	"github.com/cavos-io/rtp-agent/adapter/krisp"
 	"github.com/cavos-io/rtp-agent/adapter/langchain"
 	"github.com/cavos-io/rtp-agent/adapter/lemonslice"
 	"github.com/cavos-io/rtp-agent/adapter/liveavatar"
@@ -141,6 +142,7 @@ func TestAppRegistersReferencePluginMetadataBatch(t *testing.T) {
 		hume.PluginPackage:       {title: hume.PluginTitle, version: hume.PluginVersion},
 		inworld.PluginPackage:    {title: inworld.PluginTitle, version: inworld.PluginVersion},
 		keyframe.PluginPackage:   {title: keyframe.PluginTitle, version: keyframe.PluginVersion},
+		krisp.PluginPackage:      {title: krisp.PluginTitle, version: krisp.PluginVersion},
 		langchain.PluginPackage:  {title: langchain.PluginTitle, version: langchain.PluginVersion},
 		lemonslice.PluginPackage: {title: lemonslice.PluginTitle, version: lemonslice.PluginVersion},
 		liveavatar.PluginPackage: {title: liveavatar.PluginTitle, version: liveavatar.PluginVersion},

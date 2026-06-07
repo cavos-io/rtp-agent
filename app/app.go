@@ -45,6 +45,7 @@ import (
 	"github.com/cavos-io/rtp-agent/adapter/hume"
 	"github.com/cavos-io/rtp-agent/adapter/inworld"
 	"github.com/cavos-io/rtp-agent/adapter/keyframe"
+	"github.com/cavos-io/rtp-agent/adapter/krisp"
 	"github.com/cavos-io/rtp-agent/adapter/langchain"
 	"github.com/cavos-io/rtp-agent/adapter/lemonslice"
 	"github.com/cavos-io/rtp-agent/adapter/liveavatar"
@@ -133,6 +134,7 @@ func init() {
 	plugin.RegisterPluginMetadata(hume.PluginTitle, hume.PluginVersion, hume.PluginPackage)
 	plugin.RegisterPluginMetadata(inworld.PluginTitle, inworld.PluginVersion, inworld.PluginPackage)
 	plugin.RegisterPluginMetadata(keyframe.PluginTitle, keyframe.PluginVersion, keyframe.PluginPackage)
+	plugin.RegisterPluginMetadata(krisp.PluginTitle, krisp.PluginVersion, krisp.PluginPackage)
 	plugin.RegisterPluginMetadata(langchain.PluginTitle, langchain.PluginVersion, langchain.PluginPackage)
 	plugin.RegisterPluginMetadata(lemonslice.PluginTitle, lemonslice.PluginVersion, lemonslice.PluginPackage)
 	plugin.RegisterPluginMetadata(liveavatar.PluginTitle, liveavatar.PluginVersion, liveavatar.PluginPackage)
