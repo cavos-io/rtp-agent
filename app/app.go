@@ -129,6 +129,7 @@ func init() {
 	plugin.RegisterPluginMetadata(keyframe.PluginTitle, keyframe.PluginVersion, keyframe.PluginPackage)
 	plugin.RegisterPluginMetadata(langchain.PluginTitle, langchain.PluginVersion, langchain.PluginPackage)
 	plugin.RegisterPluginMetadata(lemonslice.PluginTitle, lemonslice.PluginVersion, lemonslice.PluginPackage)
+	plugin.RegisterPluginMetadata(liveavatar.PluginTitle, liveavatar.PluginVersion, liveavatar.PluginPackage)
 	plugin.RegisterPluginMetadata(lmnt.PluginTitle, lmnt.PluginVersion, lmnt.PluginPackage)
 	plugin.RegisterPluginMetadata(minimal.PluginTitle, minimal.PluginVersion, minimal.PluginPackage)
 	plugin.RegisterPluginMetadata(minimax.PluginTitle, minimax.PluginVersion, minimax.PluginPackage)

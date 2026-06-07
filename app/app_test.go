@@ -47,6 +47,7 @@ import (
 	"github.com/cavos-io/rtp-agent/adapter/keyframe"
 	"github.com/cavos-io/rtp-agent/adapter/langchain"
 	"github.com/cavos-io/rtp-agent/adapter/lemonslice"
+	"github.com/cavos-io/rtp-agent/adapter/liveavatar"
 	"github.com/cavos-io/rtp-agent/adapter/lmnt"
 	"github.com/cavos-io/rtp-agent/adapter/minimal"
 	"github.com/cavos-io/rtp-agent/adapter/minimax"
@@ -136,6 +137,7 @@ func TestAppRegistersReferencePluginMetadataBatch(t *testing.T) {
 		keyframe.PluginPackage:   {title: keyframe.PluginTitle, version: keyframe.PluginVersion},
 		langchain.PluginPackage:  {title: langchain.PluginTitle, version: langchain.PluginVersion},
 		lemonslice.PluginPackage: {title: lemonslice.PluginTitle, version: lemonslice.PluginVersion},
+		liveavatar.PluginPackage: {title: liveavatar.PluginTitle, version: liveavatar.PluginVersion},
 		lmnt.PluginPackage:       {title: lmnt.PluginTitle, version: lmnt.PluginVersion},
 		minimal.PluginPackage:    {title: minimal.PluginTitle, version: minimal.PluginVersion},
 		minimax.PluginPackage:    {title: minimax.PluginTitle, version: minimax.PluginVersion},
