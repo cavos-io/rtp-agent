@@ -20,11 +20,17 @@ const (
 )
 
 var (
-	ErrSpeechInterruptionsDisabled = errors.New("speech handle does not allow interruptions")
-	ErrSpeechAlreadyInterrupted    = errors.New("speech handle is already interrupted")
+	ErrSpeechInterruptionsDisabled = speechHandleReferenceError("This generation handle does not allow interruptions")
+	ErrSpeechAlreadyInterrupted    = speechHandleReferenceError("Cannot set allow_interruptions to False, the SpeechHandle is already interrupted")
 	ErrSpeechInterrupted           = errors.New("speech interrupted")
 	ErrSpeechNoActiveGeneration    = errors.New("speech handle has no active generation")
 )
+
+type speechHandleReferenceError string
+
+func (e speechHandleReferenceError) Error() string {
+	return string(e)
+}
 
 type InputDetails struct {
 	Modality string

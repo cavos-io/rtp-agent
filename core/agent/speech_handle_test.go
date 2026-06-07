@@ -25,6 +25,9 @@ func TestSpeechHandleInterruptDisallowedReturnsError(t *testing.T) {
 	if !errors.Is(err, ErrSpeechInterruptionsDisabled) {
 		t.Fatalf("Interrupt(false) error = %v, want ErrSpeechInterruptionsDisabled", err)
 	}
+	if got, want := err.Error(), "This generation handle does not allow interruptions"; got != want {
+		t.Fatalf("Interrupt(false) error message = %q, want reference message %q", got, want)
+	}
 	if speech.IsInterrupted() {
 		t.Fatal("speech was interrupted, want interruption rejected")
 	}
@@ -52,6 +55,9 @@ func TestSpeechHandleDisallowInterruptionsAfterInterruptFails(t *testing.T) {
 
 	if !errors.Is(err, ErrSpeechAlreadyInterrupted) {
 		t.Fatalf("SetAllowInterruptions(false) error = %v, want ErrSpeechAlreadyInterrupted", err)
+	}
+	if got, want := err.Error(), "Cannot set allow_interruptions to False, the SpeechHandle is already interrupted"; got != want {
+		t.Fatalf("SetAllowInterruptions(false) error message = %q, want reference message %q", got, want)
 	}
 	if !speech.AllowInterruptions {
 		t.Fatal("AllowInterruptions changed to false after interruption, want unchanged")
