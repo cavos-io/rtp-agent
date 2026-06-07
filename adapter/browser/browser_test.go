@@ -5,6 +5,21 @@ import (
 	"testing"
 )
 
+func TestBrowserPluginDownloadFilesIsGoPageActionsNoop(t *testing.T) {
+	if PluginTitle != "rtp-agent.plugins.browser" {
+		t.Fatalf("plugin title = %q, want rtp-agent.plugins.browser", PluginTitle)
+	}
+	if PluginVersion != "1.5.15" {
+		t.Fatalf("plugin version = %q, want reference version", PluginVersion)
+	}
+	if PluginPackage != "rtp-agent.plugins.browser" {
+		t.Fatalf("plugin package = %q, want rtp-agent.plugins.browser", PluginPackage)
+	}
+	if err := (Plugin{}).DownloadFiles(); err != nil {
+		t.Fatalf("DownloadFiles() error = %v, want nil for Go PageActions adapter", err)
+	}
+}
+
 func TestPageActionsRecordReferenceMouseActions(t *testing.T) {
 	actions := NewPageActions()
 

@@ -11,6 +11,21 @@ import (
 	"testing"
 )
 
+func TestClovaPluginDownloadFilesMatchesReferenceNoop(t *testing.T) {
+	if PluginTitle != "rtp-agent.plugins.clova" {
+		t.Fatalf("plugin title = %q, want rtp-agent.plugins.clova", PluginTitle)
+	}
+	if PluginVersion != "1.5.15" {
+		t.Fatalf("plugin version = %q, want reference version", PluginVersion)
+	}
+	if PluginPackage != "rtp-agent.plugins.clova" {
+		t.Fatalf("plugin package = %q, want rtp-agent.plugins.clova", PluginPackage)
+	}
+	if err := (Plugin{}).DownloadFiles(); err != nil {
+		t.Fatalf("DownloadFiles() error = %v, want nil reference no-op", err)
+	}
+}
+
 func TestClovaSTTDefaultsMatchReference(t *testing.T) {
 	provider := NewClovaSTT("secret", "https://clova.example")
 

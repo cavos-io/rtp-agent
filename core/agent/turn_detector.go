@@ -7,9 +7,13 @@ import (
 	"fmt"
 	"io"
 	"strings"
+	"unicode"
 
 	"github.com/cavos-io/rtp-agent/core/llm"
+	"golang.org/x/text/unicode/norm"
 )
+
+const maxTurnDetectorHistoryTurns = 6
 
 // LLMTurnDetector uses an LLM to predict if the user has finished speaking.
 // It sends the recent conversation history to the LLM and asks for a probability score.
@@ -28,7 +32,7 @@ type turnDetectionResult struct {
 }
 
 func (m *LLMTurnDetector) PredictEndOfTurn(ctx context.Context, chatCtx *llm.ChatContext) (float64, error) {
-	if len(chatCtx.Items) == 0 {
+	if chatCtx == nil || len(chatCtx.Items) == 0 {
 		return 0.0, nil
 	}
 
@@ -47,27 +51,14 @@ Respond ONLY with a JSON object in this format:
 		Content: []llm.ChatContent{{Text: systemPrompt}},
 	})
 
-	// Build a text representation of the last few turns
-	var history strings.Builder
-	startIndex := 0
-	if len(chatCtx.Items) > 6 {
-		startIndex = len(chatCtx.Items) - 6 // Keep last 6 items for context
-	}
-
-	for i := startIndex; i < len(chatCtx.Items); i++ {
-		item := chatCtx.Items[i]
-		if msg, ok := item.(*llm.ChatMessage); ok {
-			role := string(msg.Role)
-			text := msg.TextContent()
-			if text != "" {
-				history.WriteString(fmt.Sprintf("%s: %s\n", role, text))
-			}
-		}
+	history := formatTurnDetectorHistory(chatCtx)
+	if history == "" {
+		return 0.0, nil
 	}
 
 	evalCtx.Append(&llm.ChatMessage{
 		Role:    llm.ChatRoleUser,
-		Content: []llm.ChatContent{{Text: history.String()}},
+		Content: []llm.ChatContent{{Text: history}},
 	})
 
 	stream, err := m.llmInstance.Chat(ctx, evalCtx)
@@ -107,6 +98,69 @@ Respond ONLY with a JSON object in this format:
 	}
 
 	return result.Probability, nil
+}
+
+type turnDetectorMessage struct {
+	role    llm.ChatRole
+	content string
+}
+
+func formatTurnDetectorHistory(chatCtx *llm.ChatContext) string {
+	messages := recentTurnDetectorMessages(chatCtx)
+	if len(messages) == 0 {
+		return ""
+	}
+
+	combined := make([]turnDetectorMessage, 0, len(messages))
+	for _, msg := range messages {
+		content := normalizeTurnDetectorText(msg.content)
+		if len(combined) > 0 && combined[len(combined)-1].role == msg.role {
+			combined[len(combined)-1].content = strings.TrimSpace(combined[len(combined)-1].content + " " + content)
+			continue
+		}
+		combined = append(combined, turnDetectorMessage{role: msg.role, content: content})
+	}
+
+	var history strings.Builder
+	for _, msg := range combined {
+		history.WriteString(fmt.Sprintf("%s: %s\n", msg.role, msg.content))
+	}
+	return history.String()
+}
+
+func recentTurnDetectorMessages(chatCtx *llm.ChatContext) []turnDetectorMessage {
+	if chatCtx == nil {
+		return nil
+	}
+
+	messages := make([]turnDetectorMessage, 0, maxTurnDetectorHistoryTurns)
+	for _, item := range chatCtx.Items {
+		msg, ok := item.(*llm.ChatMessage)
+		if !ok || (msg.Role != llm.ChatRoleUser && msg.Role != llm.ChatRoleAssistant) {
+			continue
+		}
+		text := strings.TrimSpace(msg.TextContent())
+		if text == "" {
+			continue
+		}
+		messages = append(messages, turnDetectorMessage{role: msg.Role, content: text})
+		if len(messages) > maxTurnDetectorHistoryTurns {
+			copy(messages, messages[1:])
+			messages = messages[:maxTurnDetectorHistoryTurns]
+		}
+	}
+	return messages
+}
+
+func normalizeTurnDetectorText(text string) string {
+	text = norm.NFKC.String(strings.ToLower(text))
+	text = strings.Map(func(r rune) rune {
+		if unicode.IsPunct(r) && r != '\'' && r != '-' {
+			return -1
+		}
+		return r
+	}, text)
+	return strings.Join(strings.Fields(text), " ")
 }
 
 func (m *LLMTurnDetector) fallbackHeuristic(chatCtx *llm.ChatContext) float64 {

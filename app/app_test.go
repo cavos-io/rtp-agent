@@ -26,18 +26,57 @@ import (
 	"github.com/cavos-io/rtp-agent/adapter/baseten"
 	"github.com/cavos-io/rtp-agent/adapter/bey"
 	"github.com/cavos-io/rtp-agent/adapter/bithuman"
+	"github.com/cavos-io/rtp-agent/adapter/browser"
 	"github.com/cavos-io/rtp-agent/adapter/cambai"
 	"github.com/cavos-io/rtp-agent/adapter/cartesia"
 	"github.com/cavos-io/rtp-agent/adapter/cerebras"
+	"github.com/cavos-io/rtp-agent/adapter/clova"
 	"github.com/cavos-io/rtp-agent/adapter/deepgram"
 	"github.com/cavos-io/rtp-agent/adapter/elevenlabs"
 	"github.com/cavos-io/rtp-agent/adapter/fal"
 	"github.com/cavos-io/rtp-agent/adapter/fireworksai"
 	"github.com/cavos-io/rtp-agent/adapter/fishaudio"
 	"github.com/cavos-io/rtp-agent/adapter/gladia"
+	"github.com/cavos-io/rtp-agent/adapter/gnani"
 	adaptergoogle "github.com/cavos-io/rtp-agent/adapter/google"
+	"github.com/cavos-io/rtp-agent/adapter/gradium"
+	"github.com/cavos-io/rtp-agent/adapter/groq"
+	"github.com/cavos-io/rtp-agent/adapter/hedra"
+	"github.com/cavos-io/rtp-agent/adapter/hume"
+	"github.com/cavos-io/rtp-agent/adapter/inworld"
+	"github.com/cavos-io/rtp-agent/adapter/keyframe"
+	"github.com/cavos-io/rtp-agent/adapter/langchain"
+	"github.com/cavos-io/rtp-agent/adapter/lemonslice"
+	"github.com/cavos-io/rtp-agent/adapter/liveavatar"
+	"github.com/cavos-io/rtp-agent/adapter/lmnt"
+	"github.com/cavos-io/rtp-agent/adapter/minimal"
+	"github.com/cavos-io/rtp-agent/adapter/minimax"
+	"github.com/cavos-io/rtp-agent/adapter/mistralai"
+	"github.com/cavos-io/rtp-agent/adapter/murf"
+	"github.com/cavos-io/rtp-agent/adapter/neuphonic"
+	"github.com/cavos-io/rtp-agent/adapter/nltk"
+	"github.com/cavos-io/rtp-agent/adapter/nvidia"
 	"github.com/cavos-io/rtp-agent/adapter/openai"
+	"github.com/cavos-io/rtp-agent/adapter/perplexity"
+	"github.com/cavos-io/rtp-agent/adapter/resemble"
+	"github.com/cavos-io/rtp-agent/adapter/respeecher"
+	"github.com/cavos-io/rtp-agent/adapter/rime"
+	"github.com/cavos-io/rtp-agent/adapter/rtzr"
+	"github.com/cavos-io/rtp-agent/adapter/sarvam"
 	"github.com/cavos-io/rtp-agent/adapter/silero"
+	"github.com/cavos-io/rtp-agent/adapter/simli"
+	"github.com/cavos-io/rtp-agent/adapter/simplismart"
+	"github.com/cavos-io/rtp-agent/adapter/smallestai"
+	"github.com/cavos-io/rtp-agent/adapter/soniox"
+	"github.com/cavos-io/rtp-agent/adapter/speechify"
+	"github.com/cavos-io/rtp-agent/adapter/speechmatics"
+	"github.com/cavos-io/rtp-agent/adapter/spitch"
+	"github.com/cavos-io/rtp-agent/adapter/tavus"
+	"github.com/cavos-io/rtp-agent/adapter/telnyx"
+	"github.com/cavos-io/rtp-agent/adapter/trugen"
+	"github.com/cavos-io/rtp-agent/adapter/ultravox"
+	"github.com/cavos-io/rtp-agent/adapter/upliftai"
+	"github.com/cavos-io/rtp-agent/adapter/xai"
 	"github.com/cavos-io/rtp-agent/core/agent"
 	"github.com/cavos-io/rtp-agent/core/audio/model"
 	"github.com/cavos-io/rtp-agent/core/beta/workflows"
@@ -71,9 +110,11 @@ func TestAppRegistersReferencePluginMetadataBatch(t *testing.T) {
 		baseten.PluginPackage:    {title: baseten.PluginTitle, version: baseten.PluginVersion},
 		bey.PluginPackage:        {title: bey.PluginTitle, version: bey.PluginVersion},
 		bithuman.PluginPackage:   {title: bithuman.PluginTitle, version: bithuman.PluginVersion},
+		browser.PluginPackage:    {title: browser.PluginTitle, version: browser.PluginVersion},
 		cambai.PluginPackage:     {title: cambai.PluginTitle, version: cambai.PluginVersion},
 		cartesia.PluginPackage:   {title: cartesia.PluginTitle, version: cartesia.PluginVersion},
 		cerebras.PluginPackage:   {title: cerebras.PluginTitle, version: cerebras.PluginVersion},
+		clova.PluginPackage:      {title: clova.PluginTitle, version: clova.PluginVersion},
 		deepgram.PluginPackage:   {title: deepgram.PluginTitle, version: deepgram.PluginVersion},
 		elevenlabs.PluginPackage: {title: elevenlabs.PluginTitle, version: elevenlabs.PluginVersion},
 		fal.PluginPackage:        {title: fal.PluginTitle, version: fal.PluginVersion},
@@ -83,11 +124,51 @@ func TestAppRegistersReferencePluginMetadataBatch(t *testing.T) {
 		},
 		fishaudio.PluginPackage: {title: fishaudio.PluginTitle, version: fishaudio.PluginVersion},
 		gladia.PluginPackage:    {title: gladia.PluginTitle, version: gladia.PluginVersion},
+		gnani.PluginPackage:     {title: gnani.PluginTitle, version: gnani.PluginVersion},
 		adaptergoogle.PluginPackage: {
 			title:   adaptergoogle.PluginTitle,
 			version: adaptergoogle.PluginVersion,
 		},
-		openai.PluginPackage: {title: openai.PluginTitle, version: openai.PluginVersion},
+		gradium.PluginPackage:    {title: gradium.PluginTitle, version: gradium.PluginVersion},
+		groq.PluginPackage:       {title: groq.PluginTitle, version: groq.PluginVersion},
+		hedra.PluginPackage:      {title: hedra.PluginTitle, version: hedra.PluginVersion},
+		hume.PluginPackage:       {title: hume.PluginTitle, version: hume.PluginVersion},
+		inworld.PluginPackage:    {title: inworld.PluginTitle, version: inworld.PluginVersion},
+		keyframe.PluginPackage:   {title: keyframe.PluginTitle, version: keyframe.PluginVersion},
+		langchain.PluginPackage:  {title: langchain.PluginTitle, version: langchain.PluginVersion},
+		lemonslice.PluginPackage: {title: lemonslice.PluginTitle, version: lemonslice.PluginVersion},
+		liveavatar.PluginPackage: {title: liveavatar.PluginTitle, version: liveavatar.PluginVersion},
+		lmnt.PluginPackage:       {title: lmnt.PluginTitle, version: lmnt.PluginVersion},
+		minimal.PluginPackage:    {title: minimal.PluginTitle, version: minimal.PluginVersion},
+		minimax.PluginPackage:    {title: minimax.PluginTitle, version: minimax.PluginVersion},
+		mistralai.PluginPackage:  {title: mistralai.PluginTitle, version: mistralai.PluginVersion},
+		murf.PluginPackage:       {title: murf.PluginTitle, version: murf.PluginVersion},
+		neuphonic.PluginPackage:  {title: neuphonic.PluginTitle, version: neuphonic.PluginVersion},
+		nltk.PluginPackage:       {title: nltk.PluginTitle, version: nltk.PluginVersion},
+		nvidia.PluginPackage:     {title: nvidia.PluginTitle, version: nvidia.PluginVersion},
+		openai.PluginPackage:     {title: openai.PluginTitle, version: openai.PluginVersion},
+		perplexity.PluginPackage: {title: perplexity.PluginTitle, version: perplexity.PluginVersion},
+		resemble.PluginPackage:   {title: resemble.PluginTitle, version: resemble.PluginVersion},
+		respeecher.PluginPackage: {title: respeecher.PluginTitle, version: respeecher.PluginVersion},
+		rime.PluginPackage:       {title: rime.PluginTitle, version: rime.PluginVersion},
+		rtzr.PluginPackage:       {title: rtzr.PluginTitle, version: rtzr.PluginVersion},
+		sarvam.PluginPackage:     {title: sarvam.PluginTitle, version: sarvam.PluginVersion},
+		simli.PluginPackage:      {title: simli.PluginTitle, version: simli.PluginVersion},
+		simplismart.PluginPackage: {
+			title:   simplismart.PluginTitle,
+			version: simplismart.PluginVersion,
+		},
+		smallestai.PluginPackage:   {title: smallestai.PluginTitle, version: smallestai.PluginVersion},
+		soniox.PluginPackage:       {title: soniox.PluginTitle, version: soniox.PluginVersion},
+		speechify.PluginPackage:    {title: speechify.PluginTitle, version: speechify.PluginVersion},
+		speechmatics.PluginPackage: {title: speechmatics.PluginTitle, version: speechmatics.PluginVersion},
+		spitch.PluginPackage:       {title: spitch.PluginTitle, version: spitch.PluginVersion},
+		tavus.PluginPackage:        {title: tavus.PluginTitle, version: tavus.PluginVersion},
+		telnyx.PluginPackage:       {title: telnyx.PluginTitle, version: telnyx.PluginVersion},
+		trugen.PluginPackage:       {title: trugen.PluginTitle, version: trugen.PluginVersion},
+		ultravox.PluginPackage:     {title: ultravox.PluginTitle, version: ultravox.PluginVersion},
+		upliftai.PluginPackage:     {title: upliftai.PluginTitle, version: upliftai.PluginVersion},
+		xai.PluginPackage:          {title: xai.PluginTitle, version: xai.PluginVersion},
 	}
 
 	for _, registered := range plugin.RegisteredPlugins() {
@@ -110,6 +191,63 @@ func TestAppRegistersReferencePluginMetadataBatch(t *testing.T) {
 		}
 		t.Fatalf("plugin metadata was not registered for packages: %s", strings.Join(missing, ", "))
 	}
+}
+
+func TestAppRegistersBrowserPluginDownloader(t *testing.T) {
+	for _, registered := range plugin.RegisteredPlugins() {
+		if registered.Package() != browser.PluginPackage {
+			continue
+		}
+		if registered.Title() != browser.PluginTitle {
+			t.Fatalf("plugin title = %q, want %q", registered.Title(), browser.PluginTitle)
+		}
+		if registered.Version() != browser.PluginVersion {
+			t.Fatalf("plugin version = %q, want %q", registered.Version(), browser.PluginVersion)
+		}
+		if err := registered.DownloadFiles(); err != nil {
+			t.Fatalf("DownloadFiles() error = %v, want nil for Go PageActions adapter", err)
+		}
+		return
+	}
+	t.Fatal("Browser plugin downloader was not registered")
+}
+
+func TestAppRegistersNltkPluginDownloader(t *testing.T) {
+	for _, registered := range plugin.RegisteredPlugins() {
+		if registered.Package() != nltk.PluginPackage {
+			continue
+		}
+		if registered.Title() != nltk.PluginTitle {
+			t.Fatalf("plugin title = %q, want %q", registered.Title(), nltk.PluginTitle)
+		}
+		if registered.Version() != nltk.PluginVersion {
+			t.Fatalf("plugin version = %q, want %q", registered.Version(), nltk.PluginVersion)
+		}
+		if err := registered.DownloadFiles(); err != nil {
+			t.Fatalf("DownloadFiles() error = %v, want nil for Go-native tokenizer", err)
+		}
+		return
+	}
+	t.Fatal("NLTK plugin downloader was not registered")
+}
+
+func TestAppRegistersClovaPluginDownloader(t *testing.T) {
+	for _, registered := range plugin.RegisteredPlugins() {
+		if registered.Package() != clova.PluginPackage {
+			continue
+		}
+		if registered.Title() != clova.PluginTitle {
+			t.Fatalf("plugin title = %q, want %q", registered.Title(), clova.PluginTitle)
+		}
+		if registered.Version() != clova.PluginVersion {
+			t.Fatalf("plugin version = %q, want %q", registered.Version(), clova.PluginVersion)
+		}
+		if err := registered.DownloadFiles(); err != nil {
+			t.Fatalf("DownloadFiles() error = %v, want nil reference no-op", err)
+		}
+		return
+	}
+	t.Fatal("Clova plugin downloader was not registered")
 }
 
 func TestAppRegistersSLNGPluginMetadata(t *testing.T) {
