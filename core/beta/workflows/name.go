@@ -66,7 +66,7 @@ func NewGetNameTask(opts GetNameOptions) *GetNameTask {
 	nameFormat := buildNameFormat(opts.FirstName, opts.MiddleName, opts.LastName)
 	instructions := nameInstructions(requireConfirmation, nameFormat)
 	if opts.VerifySpelling {
-		instructions += "\nAfter receiving the name, always verify the spelling by asking the user to confirm or spell out the name letter by letter."
+		instructions += "\nAfter receiving the name, always verify the spelling by asking the user to confirm or spell out the name letter by letter. When confirming, spell out each name part letter by letter to the user."
 	}
 	if strings.TrimSpace(opts.ExtraInstructions) != "" {
 		instructions += "\n" + strings.TrimSpace(opts.ExtraInstructions)

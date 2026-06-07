@@ -574,11 +574,13 @@ func applyConnectArgs(server *worker.AgentServer, args ConnectArgs) error {
 }
 
 func parseConsoleArgs(argv []string) (ConsoleArgs, error) {
-	args := ConsoleArgs{Mode: ConsoleModeAudio, LogLevel: "DEBUG"}
+	args := ConsoleArgs{Mode: ConsoleModeText, LogLevel: "DEBUG"}
 	for i := 2; i < len(argv); i++ {
 		switch argv[i] {
 		case "--text":
 			args.Mode = ConsoleModeText
+		case "--audio":
+			args.Mode = ConsoleModeAudio
 		case "--record":
 			args.Record = true
 		case "--list-devices":
@@ -690,10 +692,58 @@ func startConsoleAudioUI(ctx context.Context, args ConsoleArgs) (func(), error) 
 	}, nil
 }
 
+type consoleTranscriptSession interface {
+	AgentOutputTranscribedEvents() <-chan agent.AgentOutputTranscribedEvent
+}
+
+func startConsoleTranscriptPrinter(ctx context.Context, session any, out io.Writer) bool {
+	transcripts, ok := session.(consoleTranscriptSession)
+	if !ok || out == nil {
+		return false
+	}
+
+	events := transcripts.AgentOutputTranscribedEvents()
+	go func() {
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case ev := <-events:
+				if strings.TrimSpace(ev.Transcript) == "" {
+					continue
+				}
+				fmt.Fprintf(out, "\nAgent: %s\n❯ ", ev.Transcript)
+			}
+		}
+	}()
+	return true
+}
+
+func startConsoleTranscriptPrinterWhenReady(ctx context.Context, server *worker.AgentServer, out io.Writer) {
+	if server == nil {
+		return
+	}
+
+	go func() {
+		ticker := time.NewTicker(50 * time.Millisecond)
+		defer ticker.Stop()
+		for {
+			if startConsoleTranscriptPrinter(ctx, server.GetConsoleSession(), out) {
+				return
+			}
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+			}
+		}
+	}()
+}
+
 func runConsole(server *worker.AgentServer, argv []string) {
 	args, err := parseConsoleArgs(argv)
 	if err != nil {
-		fmt.Println("Usage: worker console [--text] [--record] [--input-device <device>] [--output-device <device>]")
+		fmt.Println("Usage: worker console [--text|--audio] [--record] [--input-device <device>] [--output-device <device>]")
 		os.Exit(1)
 	}
 
@@ -719,6 +769,7 @@ func runConsole(server *worker.AgentServer, argv []string) {
 		return
 	}
 	defer stopAudio()
+	startConsoleTranscriptPrinterWhenReady(ctx, server, os.Stdout)
 
 	logger.Logger.Infow(
 		"Starting console local job",

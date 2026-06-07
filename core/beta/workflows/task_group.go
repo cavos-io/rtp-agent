@@ -188,12 +188,25 @@ The following are the IDs and their corresponding task description. %s`, string(
 }
 
 func (t *outOfScopeTool) Parameters() map[string]any {
+	t.group.mu.Lock()
+	defer t.group.mu.Unlock()
+
+	validTaskIDs := make([]string, 0, len(t.group.VisitedTasks))
+	for _, info := range t.group.RegisteredTasks {
+		if info.ID == t.activeTaskID {
+			continue
+		}
+		if _, visited := t.group.VisitedTasks[info.ID]; visited {
+			validTaskIDs = append(validTaskIDs, info.ID)
+		}
+	}
+
 	return map[string]any{
 		"type": "object",
 		"properties": map[string]any{
 			"task_ids": map[string]any{
 				"type":  "array",
-				"items": map[string]any{"type": "string"},
+				"items": map[string]any{"type": "string", "enum": validTaskIDs},
 			},
 		},
 		"required": []string{"task_ids"},

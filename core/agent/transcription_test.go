@@ -33,6 +33,21 @@ func TestTranscriptSynchronizerInterruptStopsFurtherSyncing(t *testing.T) {
 	}
 }
 
+func TestTranscriptSynchronizerInterruptFlushesQueuedText(t *testing.T) {
+	syncer := &TranscriptSynchronizer{
+		textCh:  make(chan string, 2),
+		eventCh: make(chan string, 2),
+	}
+	syncer.textCh <- "queued "
+	syncer.textCh <- "text"
+
+	syncer.Interrupt()
+
+	if got := readTranscriptEvent(t, syncer); got != "queued text" {
+		t.Fatalf("interrupted transcript = %q, want queued text", got)
+	}
+}
+
 func waitForTranscriptBuffer(t *testing.T, syncer *TranscriptSynchronizer, want string) {
 	t.Helper()
 

@@ -28,6 +28,8 @@ type GetDtmfTask struct {
 	mu                 sync.Mutex
 	timer              *time.Timer
 	dtmfStopCh         chan struct{}
+	userState          agent.UserState
+	agentState         agent.AgentState
 }
 
 func ValidateDtmfNumDigits(numDigits int) error {
@@ -59,6 +61,8 @@ user will directly say the digits to you. You should be able to handle both case
 		DtmfInputTimeout:   4 * time.Second,
 		DtmfStopEvent:      beta.DtmfEventPound,
 		currDtmfInputs:     make([]beta.DtmfEvent, 0),
+		userState:          agent.UserStateListening,
+		agentState:         agent.AgentStateInitializing,
 	}
 
 	if askConfirmation {
@@ -79,19 +83,31 @@ func (t *GetDtmfTask) OnEnter() {
 	stopCh := make(chan struct{})
 	t.mu.Lock()
 	t.dtmfStopCh = stopCh
+	t.userState = activity.Session.UserState()
+	t.agentState = activity.Session.AgentState()
 	t.mu.Unlock()
 
-	events := activity.Session.SipDTMFEvents()
+	dtmfEvents := activity.Session.SipDTMFEvents()
+	userStateEvents := activity.Session.UserStateChangedEvents()
+	agentStateEvents := activity.Session.AgentStateChangedEvents()
 	go func() {
 		for {
 			select {
 			case <-stopCh:
 				return
-			case ev := <-events:
+			case ev := <-dtmfEvents:
 				t.onSipDTMFReceived(ev.Digit)
+			case ev := <-userStateEvents:
+				t.onUserStateChanged(ev.NewState)
+			case ev := <-agentStateEvents:
+				t.onAgentStateChanged(ev.NewState)
 			}
 		}
 	}()
+
+	_, _ = activity.Session.GenerateReplyWithOptions(context.Background(), agent.GenerateReplyOptions{
+		ToolChoice: "none",
+	})
 }
 
 func (t *GetDtmfTask) OnExit() {
@@ -127,10 +143,50 @@ func (t *GetDtmfTask) onSipDTMFReceived(digit string) {
 	t.currDtmfInputs = append(t.currDtmfInputs, beta.DtmfEvent(digit))
 	logger.Logger.Infow("DTMF inputs", "inputs", beta.FormatDtmf(t.currDtmfInputs))
 
+	t.updateDtmfReplyTimerLocked()
+}
+
+func (t *GetDtmfTask) onUserStateChanged(state agent.UserState) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	t.userState = state
+	t.updateDtmfReplyTimerLocked()
+}
+
+func (t *GetDtmfTask) onAgentStateChanged(state agent.AgentState) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	t.agentState = state
+	t.updateDtmfReplyTimerLocked()
+}
+
+func (t *GetDtmfTask) updateDtmfReplyTimerLocked() {
+	if t.dtmfReplyRunning || len(t.currDtmfInputs) == 0 {
+		return
+	}
+
+	if t.userState == agent.UserStateSpeaking ||
+		t.agentState == agent.AgentStateSpeaking ||
+		t.agentState == agent.AgentStateThinking {
+		t.cancelDtmfReplyTimerLocked()
+		return
+	}
+
+	t.scheduleDtmfReplyLocked()
+}
+
+func (t *GetDtmfTask) scheduleDtmfReplyLocked() {
+	t.cancelDtmfReplyTimerLocked()
+	t.timer = time.AfterFunc(t.DtmfInputTimeout, t.generateDtmfReply)
+}
+
+func (t *GetDtmfTask) cancelDtmfReplyTimerLocked() {
 	if t.timer != nil {
 		t.timer.Stop()
+		t.timer = nil
 	}
-	t.timer = time.AfterFunc(t.DtmfInputTimeout, t.generateDtmfReply)
 }
 
 func (t *GetDtmfTask) generateDtmfReply() {

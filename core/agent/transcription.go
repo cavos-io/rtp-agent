@@ -79,9 +79,17 @@ func (s *TranscriptSynchronizer) Interrupt() {
 	defer s.mu.Unlock()
 
 	s.interrupted = true
-	if s.textBuffer != "" {
-		s.eventCh <- s.textBuffer
-		s.textBuffer = ""
+	for {
+		select {
+		case text := <-s.textCh:
+			s.textBuffer += text
+		default:
+			if s.textBuffer != "" {
+				s.eventCh <- s.textBuffer
+				s.textBuffer = ""
+			}
+			return
+		}
 	}
 }
 
