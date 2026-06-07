@@ -31,8 +31,13 @@ func TestGetNameTaskUpdatesRequiredPartsWithoutConfirmation(t *testing.T) {
 func TestGetNameTaskVerifySpellingAddsReferenceInstruction(t *testing.T) {
 	task := NewGetNameTask(GetNameOptions{FirstName: true, VerifySpelling: true})
 
-	if !strings.Contains(task.Instructions, "always verify the spelling") {
-		t.Fatalf("Instructions = %q, want spelling verification guidance", task.Instructions)
+	for _, want := range []string{
+		"After receiving the name, always verify the spelling by asking the user to confirm or spell out the name letter by letter.",
+		"When confirming, spell out each name part letter by letter to the user.",
+	} {
+		if !strings.Contains(task.Instructions, want) {
+			t.Fatalf("Instructions = %q, want spelling verification guidance %q", task.Instructions, want)
+		}
 	}
 }
 
