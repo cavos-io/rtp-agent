@@ -95,6 +95,9 @@ func (g *TaskGroup) runTasks() {
 		if tool := g.buildOutOfScopeTool(taskID); tool != nil {
 			currentTask.GetAgent().Tools = append(currentTask.GetAgent().Tools, tool)
 		}
+		if g.ChatCtx != nil {
+			_ = currentTask.GetAgent().UpdateChatContext(context.Background(), g.ChatCtx.Copy())
+		}
 
 		var activity *agent.AgentActivity
 		if groupActivity := g.Agent.GetActivity(); groupActivity != nil && groupActivity.Session != nil {
@@ -123,6 +126,11 @@ func (g *TaskGroup) runTasks() {
 				return
 			}
 			results[taskID] = result
+			if g.ChatCtx != nil && currentTask.GetAgent().ChatCtx != nil {
+				g.ChatCtx.Merge(currentTask.GetAgent().ChatCtx.Copy(), llm.ChatContextMergeOptions{
+					ExcludeInstructions: true,
+				})
+			}
 
 			if g.OnTaskCompleted != nil {
 				if err := g.OnTaskCompleted(taskID, result); err != nil {

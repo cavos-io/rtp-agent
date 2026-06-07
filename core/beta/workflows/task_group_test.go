@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/cavos-io/rtp-agent/core/agent"
+	"github.com/cavos-io/rtp-agent/core/llm"
 )
 
 func TestTaskGroupBuildOutOfScopeToolReturnsNilBeforeVisitedTasks(t *testing.T) {
@@ -177,6 +178,68 @@ func TestTaskGroupReturnExceptionsRecordsErrorAndContinues(t *testing.T) {
 	}
 }
 
+func TestTaskGroupCopiesChatContextToChildTask(t *testing.T) {
+	group := NewTaskGroup(false, false)
+	group.ChatCtx.Append(&llm.ChatMessage{
+		ID:      "group-user",
+		Role:    llm.ChatRoleUser,
+		Content: []llm.ChatContent{{Text: "known group context"}},
+	})
+	child := newChatContextTask("child-done")
+	group.Add("child", "Reads shared context", func() agent.AgentInterface {
+		return child
+	})
+	session := agent.NewAgentSession(group, nil, agent.AgentSessionOptions{})
+	group.Agent.Start(session, group)
+	defer group.Agent.GetActivity().Stop()
+
+	select {
+	case <-group.Result:
+	case err := <-group.Err:
+		t.Fatalf("group failed with %v, want completed result", err)
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for task group result")
+	}
+
+	if child.seenGroupItem == nil {
+		t.Fatalf("child ChatCtx items = %#v, want copied group item", child.ChatCtx.Items)
+	}
+	if child.seenGroupItem.TextContent() != "known group context" {
+		t.Fatalf("child saw group text = %q, want known group context", child.seenGroupItem.TextContent())
+	}
+}
+
+func TestTaskGroupMergesCompletedChildChatContext(t *testing.T) {
+	group := NewTaskGroup(false, false)
+	group.ChatCtx.Append(&llm.ChatMessage{
+		ID:      "group-user",
+		Role:    llm.ChatRoleUser,
+		Content: []llm.ChatContent{{Text: "known group context"}},
+	})
+	child := newChatContextTask("child-done")
+	group.Add("child", "Produces child context", func() agent.AgentInterface {
+		return child
+	})
+	session := agent.NewAgentSession(group, nil, agent.AgentSessionOptions{})
+	group.Agent.Start(session, group)
+	defer group.Agent.GetActivity().Stop()
+
+	select {
+	case <-group.Result:
+	case err := <-group.Err:
+		t.Fatalf("group failed with %v, want completed result", err)
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for task group result")
+	}
+
+	if got := group.ChatCtx.GetByID("child-assistant"); got == nil {
+		t.Fatalf("group ChatCtx items = %#v, want merged child assistant message", group.ChatCtx.Items)
+	}
+	if got := group.ChatCtx.GetByID("child-instructions"); got != nil {
+		t.Fatalf("group ChatCtx instruction item = %#v, want excluded from child merge", got)
+	}
+}
+
 type completingTask struct {
 	agent.AgentTask[string]
 	value string
@@ -207,4 +270,34 @@ func newFailedTask(err error) *failingTask {
 	task := &failingTask{AgentTask: *agent.NewAgentTask[string]("failed")}
 	_ = task.Fail(err)
 	return task
+}
+
+type chatContextTask struct {
+	agent.AgentTask[string]
+	value         string
+	seenGroupItem *llm.ChatMessage
+}
+
+func newChatContextTask(value string) *chatContextTask {
+	return &chatContextTask{
+		AgentTask: *agent.NewAgentTask[string]("chat context task"),
+		value:     value,
+	}
+}
+
+func (t *chatContextTask) OnEnter() {
+	if msg, ok := t.ChatCtx.GetByID("group-user").(*llm.ChatMessage); ok {
+		t.seenGroupItem = msg
+	}
+	t.ChatCtx.Append(&llm.ChatMessage{
+		ID:      "child-instructions",
+		Role:    llm.ChatRoleSystem,
+		Content: []llm.ChatContent{{Text: "child instructions"}},
+	})
+	t.ChatCtx.Append(&llm.ChatMessage{
+		ID:      "child-assistant",
+		Role:    llm.ChatRoleAssistant,
+		Content: []llm.ChatContent{{Text: "child response"}},
+	})
+	_ = t.Complete(t.value)
 }
