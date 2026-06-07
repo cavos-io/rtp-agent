@@ -117,6 +117,31 @@ func TestGetAddressTaskInstructionsUseReferenceToolGuidance(t *testing.T) {
 	}
 }
 
+func TestUpdateAddressToolParametersUseReferenceDescriptions(t *testing.T) {
+	task := NewGetAddressTask(GetAddressOptions{})
+	tool := &updateAddressTool{task: task}
+
+	properties, ok := tool.Parameters()["properties"].(map[string]any)
+	if !ok {
+		t.Fatalf("properties = %#v, want map", tool.Parameters()["properties"])
+	}
+
+	for field, want := range map[string]string{
+		"street_address": "Dependent on country, may include fields like house number, street name, block, or district",
+		"unit_number":    "The unit number, for example Floor 1 or Apartment 12. If there is no unit number, return ''",
+		"locality":       "Dependent on country, may include fields like city, zip code, or province",
+		"country":        "The country the user lives in spelled out fully",
+	} {
+		schema, ok := properties[field].(map[string]any)
+		if !ok {
+			t.Fatalf("properties[%s] = %#v, want map", field, properties[field])
+		}
+		if got := schema["description"]; got != want {
+			t.Fatalf("properties[%s].description = %#v, want %q", field, got, want)
+		}
+	}
+}
+
 func TestGetAddressTaskOnEnterUsesReferencePrompt(t *testing.T) {
 	want := "Ask the user to provide their address."
 	if got := addressOnEnterPrompt(); got != want {

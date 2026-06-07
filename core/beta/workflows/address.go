@@ -107,10 +107,22 @@ func (t *updateAddressTool) Parameters() map[string]any {
 	return map[string]any{
 		"type": "object",
 		"properties": map[string]any{
-			"street_address": map[string]any{"type": "string"},
-			"unit_number":    map[string]any{"type": "string"},
-			"locality":       map[string]any{"type": "string"},
-			"country":        map[string]any{"type": "string"},
+			"street_address": map[string]any{
+				"type":        "string",
+				"description": "Dependent on country, may include fields like house number, street name, block, or district",
+			},
+			"unit_number": map[string]any{
+				"type":        "string",
+				"description": "The unit number, for example Floor 1 or Apartment 12. If there is no unit number, return ''",
+			},
+			"locality": map[string]any{
+				"type":        "string",
+				"description": "Dependent on country, may include fields like city, zip code, or province",
+			},
+			"country": map[string]any{
+				"type":        "string",
+				"description": "The country the user lives in spelled out fully",
+			},
 		},
 		"required": []string{"street_address", "unit_number", "locality", "country"},
 	}
