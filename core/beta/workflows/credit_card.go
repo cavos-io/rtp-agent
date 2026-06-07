@@ -559,7 +559,12 @@ func (t *confirmCardNumberTool) Execute(ctx context.Context, args string) (strin
 		return "", nil
 	}
 	if !validateCardNumberLuhn(t.cardNumber) {
-		return "", llm.NewToolError("The card number is not valid, ask the user if they made a mistake or to provide another card.")
+		if activity := t.task.Agent.GetActivity(); activity != nil && activity.Session != nil {
+			_, _ = activity.Session.GenerateReplyWithOptions(context.Background(), agent.GenerateReplyOptions{
+				Instructions: invalidCardNumberPrompt(),
+			})
+		}
+		return "", nil
 	}
 	t.task.completeCardNumber(t.cardNumber)
 	return "Card number confirmed.", nil
@@ -567,6 +572,10 @@ func (t *confirmCardNumberTool) Execute(ctx context.Context, args string) (strin
 
 func cardNumberMismatchPrompt() string {
 	return "The repeated card number does not match, ask the user to try again."
+}
+
+func invalidCardNumberPrompt() string {
+	return "The card number is not valid, ask the user if they made a mistake or to provide another card."
 }
 
 type confirmSecurityCodeTool struct {

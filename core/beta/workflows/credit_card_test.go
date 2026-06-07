@@ -54,7 +54,23 @@ func TestGetCardNumberTaskRejectsInvalidLuhnNumber(t *testing.T) {
 
 func TestGetCardNumberTaskDefersLuhnValidationUntilConfirmation(t *testing.T) {
 	task := NewGetCardNumberTask()
+	session := agent.NewAgentSession(task, nil, agent.AgentSessionOptions{})
+	session.Assistant = &fakeDtmfSessionAssistant{}
+	speechEvents := session.SpeechCreatedEvents()
 	record := &recordCardNumberTool{task: task}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	if err := session.Start(ctx); err != nil {
+		t.Fatalf("Start error = %v", err)
+	}
+	defer session.Stop(context.Background())
+
+	select {
+	case <-speechEvents:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for card-number on-enter prompt")
+	}
 
 	out, err := record.Execute(context.Background(), `{"card_number":"4111111111111112"}`)
 	if err != nil {
@@ -68,9 +84,27 @@ func TestGetCardNumberTaskDefersLuhnValidationUntilConfirmation(t *testing.T) {
 	}
 
 	confirm := &confirmCardNumberTool{task: task, cardNumber: "4111111111111112"}
-	_, err = confirm.Execute(context.Background(), `{"repeated_card_number":"4111111111111112"}`)
-	if err == nil || !strings.Contains(err.Error(), "The card number is not valid") {
-		t.Fatalf("confirm Execute() error = %v, want invalid card number after repeat", err)
+	if _, err = confirm.Execute(context.Background(), `{"repeated_card_number":"4111111111111112"}`); err != nil {
+		t.Fatalf("confirm Execute() error = %v, want nil after prompting for invalid card", err)
+	}
+
+	select {
+	case ev := <-speechEvents:
+		if ev.Source != "generate_reply" {
+			t.Fatalf("SpeechCreated Source = %q, want generate_reply", ev.Source)
+		}
+		if ev.SpeechHandle == nil {
+			t.Fatal("SpeechCreated SpeechHandle = nil, want invalid-card reply handle")
+		}
+		want := "The card number is not valid, ask the user if they made a mistake or to provide another card."
+		if ev.SpeechHandle.Generation.Instructions == nil {
+			t.Fatal("invalid-card instructions = nil, want invalid-card prompt")
+		}
+		if got := ev.SpeechHandle.Generation.Instructions.AsModality("text").String(); got != want {
+			t.Fatalf("invalid-card instructions = %q, want %q", got, want)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for invalid-card prompt")
 	}
 
 	select {
