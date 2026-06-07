@@ -12,14 +12,23 @@ import (
 
 type HttpServer struct {
 	server *http.Server
+	listen func(network, address string) (net.Listener, error)
 	Host   string
 	Port   int
 }
 
 func NewHttpServer(host string, port int) *HttpServer {
+	return NewHttpServerWithListen(host, port, net.Listen)
+}
+
+func NewHttpServerWithListen(host string, port int, listen func(network, address string) (net.Listener, error)) *HttpServer {
+	if listen == nil {
+		listen = net.Listen
+	}
 	return &HttpServer{
-		Host: host,
-		Port: port,
+		listen: listen,
+		Host:   host,
+		Port:   port,
 	}
 }
 
@@ -28,7 +37,7 @@ func (s *HttpServer) Start() error {
 	mux.Handle("/metrics", promhttp.Handler())
 
 	addr := fmt.Sprintf("%s:%d", s.Host, s.Port)
-	ln, err := net.Listen("tcp", addr)
+	ln, err := s.listen("tcp", addr)
 	if err != nil {
 		return err
 	}

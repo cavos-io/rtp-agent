@@ -30,10 +30,15 @@ import (
 type fakeWorkerHTTPListener struct {
 	closed chan struct{}
 	once   sync.Once
+	port   int
 }
 
 func newFakeWorkerHTTPListener() *fakeWorkerHTTPListener {
-	return &fakeWorkerHTTPListener{closed: make(chan struct{})}
+	return newFakeWorkerHTTPListenerWithPort(43881)
+}
+
+func newFakeWorkerHTTPListenerWithPort(port int) *fakeWorkerHTTPListener {
+	return &fakeWorkerHTTPListener{closed: make(chan struct{}), port: port}
 }
 
 func (l *fakeWorkerHTTPListener) Accept() (net.Conn, error) {
@@ -49,7 +54,7 @@ func (l *fakeWorkerHTTPListener) Close() error {
 }
 
 func (l *fakeWorkerHTTPListener) Addr() net.Addr {
-	return &net.TCPAddr{IP: net.ParseIP("127.0.0.1"), Port: 43881}
+	return &net.TCPAddr{IP: net.ParseIP("127.0.0.1"), Port: l.port}
 }
 
 func stubWorkerHTTPListener(t *testing.T) {
@@ -66,6 +71,23 @@ func stubWorkerHTTPListener(t *testing.T) {
 	}
 	t.Cleanup(func() {
 		workerListen = oldListen
+	})
+}
+
+func stubWorkerPrometheusListener(t *testing.T, assignedPort int) {
+	t.Helper()
+	oldListen := workerPrometheusListen
+	workerPrometheusListen = func(network, address string) (net.Listener, error) {
+		if network != "tcp" {
+			t.Fatalf("workerPrometheusListen network = %q, want tcp", network)
+		}
+		if !strings.HasPrefix(address, "127.0.0.1:") {
+			t.Fatalf("workerPrometheusListen address = %q, want 127.0.0.1:<port>", address)
+		}
+		return newFakeWorkerHTTPListenerWithPort(assignedPort), nil
+	}
+	t.Cleanup(func() {
+		workerPrometheusListen = oldListen
 	})
 }
 
@@ -537,7 +559,8 @@ func TestStartPrometheusServerUsesConfiguredPort(t *testing.T) {
 		t.Fatal("startPrometheusServer() = server, want nil when PrometheusPort is unset")
 	}
 
-	port := freeTCPPort(t)
+	port := 43882
+	stubWorkerPrometheusListener(t, port)
 	server = NewAgentServer(WorkerOptions{
 		Host:           "127.0.0.1",
 		PrometheusPort: port,
@@ -556,6 +579,7 @@ func TestStartPrometheusServerUsesConfiguredPort(t *testing.T) {
 }
 
 func TestStartPrometheusServerEnablesExplicitZeroPort(t *testing.T) {
+	stubWorkerPrometheusListener(t, 43883)
 	server := NewAgentServer(WorkerOptions{
 		Host:              "127.0.0.1",
 		PrometheusPortSet: true,
@@ -613,20 +637,6 @@ func TestConfigurePrometheusMultiprocDirCleansExistingMetricFiles(t *testing.T) 
 	if _, err := os.Stat(nestedDir); err != nil {
 		t.Fatalf("nested directory stat error = %v, want preserved directory", err)
 	}
-}
-
-func freeTCPPort(t *testing.T) int {
-	t.Helper()
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatalf("listen for free TCP port: %v", err)
-	}
-	defer ln.Close()
-	addr, ok := ln.Addr().(*net.TCPAddr)
-	if !ok {
-		t.Fatalf("listener address type = %T, want *net.TCPAddr", ln.Addr())
-	}
-	return addr.Port
 }
 
 func TestUpdateOptionsMergesConfiguredValuesBeforeRun(t *testing.T) {
@@ -3330,6 +3340,7 @@ func TestRunExportsLiveKitCredentialsBeforeDial(t *testing.T) {
 }
 
 func TestRunStartsConfiguredPrometheusServerBeforeDial(t *testing.T) {
+	stubWorkerPrometheusListener(t, 43884)
 	oldDial := workerDialContext
 	oldSleep := workerRetrySleep
 	t.Cleanup(func() {
@@ -3358,7 +3369,7 @@ func TestRunStartsConfiguredPrometheusServerBeforeDial(t *testing.T) {
 		MaxRetry:       1,
 		DevMode:        true,
 		Host:           "127.0.0.1",
-		PrometheusPort: freeTCPPort(t),
+		PrometheusPort: 43884,
 	})
 	if err := server.RTCSession(func(ctx *JobContext) error { return nil }, nil, nil); err != nil {
 		t.Fatalf("RTCSession() error = %v", err)
