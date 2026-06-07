@@ -117,6 +117,24 @@ func TestGetDOBTaskIncludesOptionalTime(t *testing.T) {
 	}
 }
 
+func TestGetDOBTaskIncludeTimeInstructionsPrecedeUpdateToolGuidance(t *testing.T) {
+	task := NewGetDOBTask(GetDOBOptions{IncludeTime: true})
+
+	timeInstruction := "Also ask for and capture the time of birth if the user knows it. The time is optional - if the user doesn't know it, proceed without it."
+	updateInstruction := "Call `update_dob` at the first opportunity whenever you form a new hypothesis about the date of birth. (before asking any questions or providing any answers.)"
+	timeIndex := strings.Index(task.Instructions, timeInstruction)
+	if timeIndex < 0 {
+		t.Fatalf("Instructions = %q, want optional-time instruction %q", task.Instructions, timeInstruction)
+	}
+	updateIndex := strings.Index(task.Instructions, updateInstruction)
+	if updateIndex < 0 {
+		t.Fatalf("Instructions = %q, want update guidance %q", task.Instructions, updateInstruction)
+	}
+	if timeIndex > updateIndex {
+		t.Fatalf("optional-time instruction appears after update guidance in %q", task.Instructions)
+	}
+}
+
 func TestGetDOBTaskUpdateTimeRequiresConfirmationGuidance(t *testing.T) {
 	task := NewGetDOBTask(GetDOBOptions{IncludeTime: true})
 	updateTime := &updateDOBTimeTool{task: task}
