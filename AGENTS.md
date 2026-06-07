@@ -202,16 +202,266 @@ These gates protect against:
 
 They do not replace behavior validation.
 
+## Test Integrity Guard
+
+`check-test-integrity.sh` only checks staged test changes.
+
+It blocks:
+
+- deleting `*_test.go`
+- staged test files where additions are not greater than deletions
+- newly added `t.Skip`, `t.Skipf`, `SkipNow`
+- new `testing.Short()` guards
+- suspicious always-true assertions
+- constant `if true` or `if false` conditions
+
+It warns on new equality assertions because they can hide self-comparison bugs.
+
+Important limitation:
+
+If nothing is staged, `check-test-integrity.sh` does not protect unstaged test changes.
+
+## Deadcode and Analyzer Guard
+
+`check-deadcode.sh` operates from staged Go files.
+
+It:
+
+- collects staged `*.go`
+- requires `staticcheck` and `deadcode`
+- runs:
+
+```sh
+staticcheck ./...
+deadcode -test ./...
+```
+
+It only blocks findings whose output lines reference staged Go files.
+
+This is intentional. It avoids blocking on existing repo-wide analyzer debt while catching new or touched issues.
+
+## Supporting Scripts
+
+### `scripts/parity-check.sh`
+
+Generic symbol scanner.
+
+It can compare Python and Go trees and emit CSV candidates.
+
+Use it for discovery only. It does not prove behavior.
+
+### `scripts/parity-test-inventory.sh`
+
+Finds Go tests not represented in the TSV manifest.
+
+Classifies missing tests as:
+
+- `reference-parity`
+- `target-regression`
+- `infrastructure`
+- `implementation-detail`
+- `unknown`
+
+Use it as an inventory aid only.
+
+### `scripts/go-test-all.sh`
+
+Simple full Go test wrapper:
+
+```sh
+go test ./...
+```
+
+Uses local `.tmp` cache/temp dirs.
+
+### `scripts/go-build-all.sh`
+
+Simple full build wrapper:
+
+```sh
+go build ./...
+```
+
+## Script Self-Tests
+
+These test the gate tooling itself:
+
+- `scripts/test-parity-validate.sh`
+- `scripts/test-parity-gate.sh`
+- `scripts/test-parity-check.sh`
+
+They create temporary manifests and fixtures, then verify:
+
+- manifest schema enforcement
+- tab-field rejection
+- `--list`
+- `--case`
+- batched `go-test`
+- real `cross-runtime`
+- changed-file case selection
+- symbol mapping behavior
+
+These are not automatically invoked by `parity-gate.sh`.
+
+Run them when changing parity scripts, manifest parsing, normalization, case selection, batching, or runner semantics.
+
 ## Testing Rules
 
-* Do not delete, skip, weaken, or rewrite tests just to pass.
-* Do not add `t.Skip`, `t.Skipf`, `SkipNow`, or `testing.Short` guards.
-* Do not remove meaningful assertions.
-* Do not add meaningless tests only to increase coverage.
-* Do not hide failures by changing tests to match broken behavior.
-* Add tests near the package being changed.
-* Prefer table-driven tests when behavior has multiple scenarios.
-* For parity-sensitive behavior, add or update manifest cases.
+- Do not delete, skip, weaken, or rewrite tests just to pass.
+- Do not add `t.Skip`, `t.Skipf`, `SkipNow`, or `testing.Short` guards.
+- Do not remove meaningful assertions.
+- Do not add meaningless tests only to increase coverage.
+- Do not hide failures by changing tests to match broken behavior.
+- Add tests near the package being changed.
+- Prefer table-driven tests when behavior has multiple scenarios.
+- For parity-sensitive behavior, add or update TSV manifest rows.
+- Keep JSON input embedded in the TSV `input_json` field.
+- For contract-sensitive behavior, document the contract in the TSV row or test name.
+- For runtime dependency behavior, add or update integration tests.
+- Prefer deterministic fixtures over sleeps.
+- Use explicit deadlines and cancellation in async/concurrent tests.
+- Avoid network calls to external paid services in default tests.
+- Mock provider APIs at the adapter boundary unless a real integration test is explicitly required.
+- Keep fast tests fast.
+- Keep integration tests clearly labeled and runnable separately.
+
+## Dead Code and Inert Port Policy
+
+Dead code is not acceptable as a side effect of porting.
+
+Do not add:
+
+- unused interfaces
+- unused adapters
+- unused constructors
+- unused registries
+- unused compatibility shims
+- unused provider methods
+- unused parity runners
+- unused fixtures
+- unused scripts
+- unused fake implementations
+
+New functionality must be connected to at least one of:
+
+- real runtime flow
+- composition root
+- registry/factory
+- CLI command
+- configuration path
+- provider adapter path
+- test exercising meaningful behavior
+- TSV parity manifest row
+- integration scenario
+
+Do not wire code only to avoid a deadcode warning. The wiring must represent intended product behavior.
+
+When working in an area with large existing dead code:
+
+1. Do not run broad cleanup blindly.
+2. Identify dead code relevant to the current task.
+3. Remove or wire only what is clearly tied to the behavior being implemented.
+4. Avoid exploding the diff.
+5. Document any large cleanup left for later.
+
+## Architecture Rules
+
+Respect existing package boundaries.
+
+General direction:
+
+```text
+cmd / app composition
+        ↓
+interface/*
+        ↓
+core/*
+        ↓
+library/*
+```
+
+Adapters implement provider or infrastructure details and should depend inward on stable core interfaces, not leak provider-specific concerns into core.
+
+Rules:
+
+- `core` must not depend on provider SDKs.
+- `core` must not depend on CLI or worker transport.
+- `interface/worker` may orchestrate LiveKit room/worker concerns.
+- `interface/cli` may parse commands and call application services.
+- `adapter/<provider>` owns provider-specific HTTP/WebSocket/API behavior.
+- `library/*` should remain small and cohesive.
+- Do not introduce import cycles.
+- Do not bypass architecture checks by moving code into vague packages.
+
+## LiveKit Runtime Areas That Need Special Care
+
+Treat these areas as parity-sensitive:
+
+- worker registration and lifecycle
+- job context creation and cleanup
+- agent dispatch
+- room connection and participant lifecycle
+- agent session startup/shutdown
+- agent activity state transitions
+- interruption and cancellation
+- VAD and turn detection
+- STT streaming event boundaries
+- LLM streaming and function/tool calls
+- TTS streaming and playout lifecycle
+- transcription synchronization
+- telemetry and metrics
+- provider adapter error normalization
+- CLI developer workflow
+- IPC behavior
+- eval/test helper behavior
+
+For these areas, prefer contract, TSV parity, or integration tests in addition to local Go unit tests.
+
+## Provider Adapter Rules
+
+Provider integrations belong in `adapter/<provider>`.
+
+Rules:
+
+- Keep provider SDK details out of `core`.
+- Normalize provider errors into core-level error categories.
+- Test provider request/response translation with unit tests.
+- Use fake local HTTP/WebSocket servers where practical.
+- Do not require real API keys in default CI.
+- If a provider behavior mirrors LiveKit plugin behavior, cite the relevant `livekit-plugins/*` reference path in tests or TSV manifest rows.
+- Add integration tests only when they can be deterministic and safe.
+
+## Concurrency and Streaming Rules
+
+Streaming behavior is often the real product contract.
+
+When touching streaming code:
+
+- Test event order when order matters.
+- Test cancellation.
+- Test backpressure or blocked consumers where practical.
+- Test close/error paths.
+- Test partial output behavior.
+- Test finalization behavior.
+- Avoid goroutine leaks.
+- Use context deadlines.
+- Avoid sleep-based tests unless there is no better synchronization mechanism.
+- Normalize nondeterministic scheduling details in parity traces.
+
+## Documentation Rules
+
+Keep this file focused on instructions for coding agents.
+
+Put user-facing setup and feature documentation in `README.md` or docs.
+
+Put architecture policy in `ARCHITECTURE.md`.
+
+When adding or changing major behavior:
+
+- update relevant docs
+- add examples if the behavior is user-facing
+- document parity limitations if full parity is not yet possible
+- keep operational notes separate from internal coding-agent instructions
 
 ## Commit Rules
 
@@ -221,33 +471,66 @@ Each commit should represent one coherent functionality-mirroring improvement.
 
 Suggested commit types:
 
-* `feat(core): mirror <reference behavior>`
-* `feat(adapter): mirror <provider behavior>`
-* `fix(core): align <behavior> with reference`
-* `fix(adapter): align <provider> behavior with reference`
-* `test(core): add cross-runtime parity for <behavior>`
-* `test(parity): add manifest case for <behavior>`
-* `refactor(core): wire <component> into <flow>`
+- `feat(core): mirror <reference behavior>`
+- `feat(adapter): mirror <provider behavior>`
+- `fix(core): align <behavior> with reference`
+- `fix(adapter): align <provider> behavior with reference`
+- `test(core): add Go parity coverage for <behavior>`
+- `test(parity): add TSV manifest case for <behavior>`
+- `test(parity): add cross-runtime case for <behavior>`
+- `test(contract): add <contract> coverage`
+- `test(integration): cover <runtime dependency behavior>`
+- `refactor(core): wire <component> into <flow>`
+- `chore(test): add CI reporting for <suite>`
 
 Before committing:
 
 1. Run relevant Python reference runner or parity case.
 2. Run relevant Go test or runner.
-3. Run broader Go validation.
-4. Run staticcheck/deadcode gates when touched code may affect wiring.
-5. Confirm no new deadcode remains.
-6. Confirm `staticcheck.txt` and `deadcode.txt` are not staged unless intentionally tracked.
+3. Run relevant contract tests.
+4. Run integration tests if runtime dependencies were touched.
+5. Run `scripts/parity-gate.sh --case <case-name>` for focused parity changes.
+6. Run `scripts/parity-gate.sh` for final parity-sensitive validation.
+7. Run broader Go validation.
+8. Run architecture checks if package boundaries changed.
+9. Run staticcheck/deadcode gates when touched code may affect wiring.
+10. Confirm no new deadcode remains.
+11. Confirm test reports or parity artifacts are generated where expected.
+12. Confirm `staticcheck.txt`, `deadcode.txt`, temporary traces, and generated scratch files are not staged unless intentionally tracked.
+
+Do not use `--no-verify` to bypass pre-commit hooks. If a hook fails, fix the issue or explain why the hook itself needs to change.
 
 ## Current Known Drift
 
 Several LiveKit reference areas already have partial Go equivalents. Treat existing Go code as the starting point.
 
-Do not re-port from scratch when Go behavior already exists. Instead, compare behavior, identify gaps, and adjust incrementally.
+Do not re-port from scratch when Go behavior already exists. Instead:
 
-## Documentation Hygiene
+1. compare behavior
+2. identify gaps
+3. add or update tests
+4. update the TSV manifest if parity-sensitive
+5. adjust incrementally
+6. validate against the selected contract
 
-Keep this file focused on instructions for coding agents.
+Parity is close enough that symbol coverage is less important than behavior proof, test quality, integration correctness, and dead-code-free wiring.
 
-Put user-facing setup and feature documentation in `README.md` or docs.
+Most current parity coverage may be `go-test`, not true `cross-runtime`. That is acceptable when the Go tests intentionally encode reference behavior, but important runtime behavior should graduate to `cross-runtime` when practical.
 
-Put architecture policy in `ARCHITECTURE.md`.
+## Agent Work Summary Format
+
+When finishing a task, report:
+
+- behavior mirrored or changed
+- Python reference files inspected
+- Go packages/files changed
+- tests added or updated
+- TSV manifest rows added or updated
+- case type used: `go-test`, `cross-runtime`, or `symbol-report`
+- contract/integration cases added or updated
+- commands run
+- remaining drift or limitations
+- deadcode/staticcheck status
+- commit hash, if committed
+
+Do not claim broader parity than the evidence supports.

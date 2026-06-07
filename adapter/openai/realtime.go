@@ -235,10 +235,32 @@ func openAIRealtimeSyncedChatContext(chatCtx *llm.ChatContext) *llm.ChatContext 
 	if chatCtx == nil {
 		return llm.NewChatContext()
 	}
-	return chatCtx.Copy(llm.ChatContextCopyOptions{
+	synced := chatCtx.Copy(llm.ChatContextCopyOptions{
 		ExcludeHandoff:      true,
 		ExcludeConfigUpdate: true,
 	})
+	items := synced.Items[:0]
+	for _, item := range synced.Items {
+		if openAIRealtimeInstructionItem(item) {
+			continue
+		}
+		items = append(items, item)
+	}
+	synced.Items = items
+	return synced
+}
+
+func openAIRealtimeInstructionItem(item llm.ChatItem) bool {
+	msg, ok := item.(*llm.ChatMessage)
+	if !ok || (msg.Role != llm.ChatRoleSystem && msg.Role != llm.ChatRoleDeveloper) {
+		return false
+	}
+	for _, content := range msg.Content {
+		if content.Instructions != nil {
+			return true
+		}
+	}
+	return false
 }
 
 func openAIRealtimeRemoteSnapshot(chatCtx *llm.ChatContext) *llm.RemoteChatContext {

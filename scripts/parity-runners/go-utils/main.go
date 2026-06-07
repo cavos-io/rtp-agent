@@ -17,6 +17,7 @@ type inputEnvelope struct {
 	Exp               *float64          `json:"exp"`
 	Initial           *float64          `json:"initial"`
 	IgnorePunctuation *bool             `json:"ignore_punctuation"`
+	MinSentenceLen    *int              `json:"min_sentence_len"`
 	MinVal            *float64          `json:"min_val"`
 	NameValues        []string          `json:"name_values"`
 	Sample            *float64          `json:"sample"`
@@ -89,6 +90,8 @@ func run() error {
 		return runTokenizeReplaceWords(input)
 	case "tokenize-split-words":
 		return runTokenizeSplitWords(input)
+	case "tokenize-split-sentences":
+		return runTokenizeSplitSentences(input)
 	default:
 		return fmt.Errorf("unsupported contract: %s", input.Contract)
 	}
@@ -362,6 +365,33 @@ func runTokenizeSplitWords(input inputEnvelope) error {
 		}
 		output.Events = append(output.Events, event{
 			Name:   "split_words",
+			Input:  value,
+			Result: result,
+		})
+	}
+
+	encoder := json.NewEncoder(os.Stdout)
+	encoder.SetEscapeHTML(false)
+	return encoder.Encode(output)
+}
+
+func runTokenizeSplitSentences(input inputEnvelope) error {
+	values := input.TextValues
+	if values == nil {
+		values = []string{"Version 1.5 is ready. Next sentence.", "他说：“你好。” 下一句。"}
+	}
+	minSentenceLen := intValue(input.MinSentenceLen, 20)
+	retainFormat := boolValue(input.RetainFormat, false)
+
+	output := outputEnvelope{Contract: "tokenize-split-sentences"}
+	for _, value := range values {
+		sentences := tokenize.SplitSentences(value, minSentenceLen, retainFormat)
+		result := make([]string, 0, len(sentences))
+		for _, sentence := range sentences {
+			result = append(result, sentence.Token)
+		}
+		output.Events = append(output.Events, event{
+			Name:   "split_sentences",
 			Input:  value,
 			Result: result,
 		})

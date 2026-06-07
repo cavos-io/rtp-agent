@@ -13,5 +13,6 @@ worktrees/
 .claude
 .codex
 .agents
+!.agents/plugins/marketplace.json
 .gemini
 .pi

@@ -839,8 +839,12 @@ func TestFunctionCallItemToMessageConvertsToolItemsToXMLMessages(t *testing.T) {
 		CreatedAt: time.Unix(10, 0),
 	}
 	callMsg := FunctionCallItemToMessage(call)
-	if callMsg == nil || callMsg.Role != ChatRoleUser || callMsg.TextContent() != "<function_call call_id=\"call_lookup\" name=\"lookup\">\n{\"city\":\"Paris\"}\n</function_call>" {
+	wantCall := "<function_call name=\"lookup\" call_id=\"call_lookup\">\n{\"city\":\"Paris\"}\n</function_call>"
+	if callMsg == nil || callMsg.Role != ChatRoleUser || callMsg.TextContent() != wantCall {
 		t.Fatalf("FunctionCallItemToMessage(call) = %#v", callMsg)
+	}
+	if !strings.Contains(callMsg.TextContent(), `function_call name="lookup" call_id="call_lookup"`) {
+		t.Fatalf("call message XML attribute order = %q, want reference name before call_id", callMsg.TextContent())
 	}
 	if callMsg.CreatedAt != call.CreatedAt || callMsg.Extra["is_function_call"] != true {
 		t.Fatalf("call message metadata = %#v", callMsg)
