@@ -58,6 +58,7 @@ import (
 	"github.com/cavos-io/rtp-agent/adapter/nvidia"
 	"github.com/cavos-io/rtp-agent/adapter/openai"
 	"github.com/cavos-io/rtp-agent/adapter/perplexity"
+	"github.com/cavos-io/rtp-agent/adapter/phonic"
 	"github.com/cavos-io/rtp-agent/adapter/resemble"
 	"github.com/cavos-io/rtp-agent/adapter/respeecher"
 	"github.com/cavos-io/rtp-agent/adapter/rime"
@@ -145,6 +146,7 @@ func init() {
 	plugin.RegisterPluginMetadata(nvidia.PluginTitle, nvidia.PluginVersion, nvidia.PluginPackage)
 	plugin.RegisterPluginMetadata(openai.PluginTitle, openai.PluginVersion, openai.PluginPackage)
 	plugin.RegisterPluginMetadata(perplexity.PluginTitle, perplexity.PluginVersion, perplexity.PluginPackage)
+	plugin.RegisterPluginMetadata(phonic.PluginTitle, phonic.PluginVersion, phonic.PluginPackage)
 	plugin.RegisterPluginMetadata(resemble.PluginTitle, resemble.PluginVersion, resemble.PluginPackage)
 	plugin.RegisterPluginMetadata(respeecher.PluginTitle, respeecher.PluginVersion, respeecher.PluginPackage)
 	plugin.RegisterPluginMetadata(rime.PluginTitle, rime.PluginVersion, rime.PluginPackage)
@@ -217,6 +219,7 @@ const (
 	providerNvidia       = "nvidia"
 	providerOpenAI       = "openai"
 	providerPerplexity   = "perplexity"
+	providerPhonic       = "phonic"
 	providerResemble     = "resemble"
 	providerRespeecher   = "respeecher"
 	providerRime         = "rime"
@@ -482,6 +485,7 @@ type AppConfig struct {
 	NeuphonicAPIKey             string
 	NvidiaAPIKey                string
 	PerplexityAPIKey            string
+	PhonicAPIKey                string
 	ResembleAPIKey              string
 	RespeecherAPIKey            string
 	RimeAPIKey                  string
@@ -832,6 +836,7 @@ func DefaultConfigFromEnv() AppConfig {
 		NeuphonicAPIKey:                         os.Getenv("NEUPHONIC_API_KEY"),
 		NvidiaAPIKey:                            os.Getenv("NVIDIA_API_KEY"),
 		PerplexityAPIKey:                        os.Getenv("PERPLEXITY_API_KEY"),
+		PhonicAPIKey:                            os.Getenv("PHONIC_API_KEY"),
 		ResembleAPIKey:                          os.Getenv("RESEMBLE_API_KEY"),
 		RespeecherAPIKey:                        os.Getenv("RESPEECHER_API_KEY"),
 		RimeAPIKey:                              os.Getenv("RIME_API_KEY"),
@@ -3790,6 +3795,8 @@ func configureProviders(cfg AppConfig, a *agent.Agent) (llm.RealtimeModel, error
 		return nil, nil
 	case providerOpenAI:
 		return openai.NewRealtimeModel(cfg.OpenAIAPIKey, cfg.RealtimeModel), nil
+	case providerPhonic:
+		return phonic.NewRealtimeModel(cfg.PhonicAPIKey)
 	default:
 		return nil, fmt.Errorf("unsupported RTP_AGENT_REALTIME_PROVIDER %q", cfg.RealtimeProvider)
 	}

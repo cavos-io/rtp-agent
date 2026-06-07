@@ -60,6 +60,7 @@ import (
 	"github.com/cavos-io/rtp-agent/adapter/nvidia"
 	"github.com/cavos-io/rtp-agent/adapter/openai"
 	"github.com/cavos-io/rtp-agent/adapter/perplexity"
+	"github.com/cavos-io/rtp-agent/adapter/phonic"
 	"github.com/cavos-io/rtp-agent/adapter/resemble"
 	"github.com/cavos-io/rtp-agent/adapter/respeecher"
 	"github.com/cavos-io/rtp-agent/adapter/rime"
@@ -153,6 +154,7 @@ func TestAppRegistersReferencePluginMetadataBatch(t *testing.T) {
 		nvidia.PluginPackage:     {title: nvidia.PluginTitle, version: nvidia.PluginVersion},
 		openai.PluginPackage:     {title: openai.PluginTitle, version: openai.PluginVersion},
 		perplexity.PluginPackage: {title: perplexity.PluginTitle, version: perplexity.PluginVersion},
+		phonic.PluginPackage:     {title: phonic.PluginTitle, version: phonic.PluginVersion},
 		resemble.PluginPackage:   {title: resemble.PluginTitle, version: resemble.PluginVersion},
 		respeecher.PluginPackage: {title: respeecher.PluginTitle, version: respeecher.PluginVersion},
 		rime.PluginPackage:       {title: rime.PluginTitle, version: rime.PluginVersion},
@@ -3459,6 +3461,28 @@ func TestDefaultConfigFromEnvConfiguresLLMTurnDetector(t *testing.T) {
 	}
 	if got := fmt.Sprintf("%T", app.Agent.TurnDetector); got != "*agent.LLMTurnDetector" {
 		t.Fatalf("TurnDetector type = %q, want *agent.LLMTurnDetector", got)
+	}
+}
+
+func TestDefaultConfigFromEnvSelectsPhonicRealtimeModel(t *testing.T) {
+	t.Setenv("PHONIC_API_KEY", "test-phonic-key")
+	t.Setenv("RTP_AGENT_REALTIME_PROVIDER", "phonic")
+
+	app, err := NewApp(DefaultConfigFromEnv())
+	if err != nil {
+		t.Fatalf("NewApp() error = %v", err)
+	}
+	if app.RealtimeModel == nil {
+		t.Fatal("RealtimeModel is nil")
+	}
+	if got := llm.RealtimeModelName(app.RealtimeModel); got != "phonic" {
+		t.Fatalf("Realtime model = %q, want phonic", got)
+	}
+	if got := llm.RealtimeProvider(app.RealtimeModel); got != "phonic" {
+		t.Fatalf("Realtime provider = %q, want phonic", got)
+	}
+	if _, ok := app.Session.Assistant.(*agent.MultimodalAgent); !ok {
+		t.Fatalf("Session assistant = %T, want *agent.MultimodalAgent", app.Session.Assistant)
 	}
 }
 
