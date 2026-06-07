@@ -298,8 +298,9 @@ func openAISpeechEvent(resp openai.AudioResponse) *stt.SpeechEvent {
 		Type: stt.SpeechEventFinalTranscript,
 		Alternatives: []stt.SpeechData{
 			{
-				Text:  resp.Text,
-				Words: openAITimedStrings(resp.Words),
+				Text:     resp.Text,
+				Language: resp.Language,
+				Words:    openAITimedStrings(resp.Words),
 			},
 		},
 	}

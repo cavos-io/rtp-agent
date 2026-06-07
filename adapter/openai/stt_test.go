@@ -52,6 +52,7 @@ func TestOpenAISpeechEventPreservesWordTimestamps(t *testing.T) {
 	var resp goopenai.AudioResponse
 	if err := json.Unmarshal([]byte(`{
 		"text": "hello world",
+		"language": "id",
 		"words": [
 			{"word": "hello", "start": 0.1, "end": 0.3},
 			{"word": "world", "start": 0.4, "end": 0.8}
@@ -71,6 +72,9 @@ func TestOpenAISpeechEventPreservesWordTimestamps(t *testing.T) {
 	alt := event.Alternatives[0]
 	if alt.Text != "hello world" {
 		t.Fatalf("text = %q, want hello world", alt.Text)
+	}
+	if alt.Language != "id" {
+		t.Fatalf("language = %q, want id", alt.Language)
 	}
 	if len(alt.Words) != 2 {
 		t.Fatalf("words = %d, want 2", len(alt.Words))
