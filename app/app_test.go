@@ -53,7 +53,26 @@ import (
 	"github.com/cavos-io/rtp-agent/adapter/neuphonic"
 	"github.com/cavos-io/rtp-agent/adapter/nvidia"
 	"github.com/cavos-io/rtp-agent/adapter/openai"
+	"github.com/cavos-io/rtp-agent/adapter/perplexity"
+	"github.com/cavos-io/rtp-agent/adapter/resemble"
+	"github.com/cavos-io/rtp-agent/adapter/respeecher"
+	"github.com/cavos-io/rtp-agent/adapter/rime"
+	"github.com/cavos-io/rtp-agent/adapter/rtzr"
+	"github.com/cavos-io/rtp-agent/adapter/sarvam"
 	"github.com/cavos-io/rtp-agent/adapter/silero"
+	"github.com/cavos-io/rtp-agent/adapter/simli"
+	"github.com/cavos-io/rtp-agent/adapter/simplismart"
+	"github.com/cavos-io/rtp-agent/adapter/smallestai"
+	"github.com/cavos-io/rtp-agent/adapter/soniox"
+	"github.com/cavos-io/rtp-agent/adapter/speechify"
+	"github.com/cavos-io/rtp-agent/adapter/speechmatics"
+	"github.com/cavos-io/rtp-agent/adapter/spitch"
+	"github.com/cavos-io/rtp-agent/adapter/tavus"
+	"github.com/cavos-io/rtp-agent/adapter/telnyx"
+	"github.com/cavos-io/rtp-agent/adapter/trugen"
+	"github.com/cavos-io/rtp-agent/adapter/ultravox"
+	"github.com/cavos-io/rtp-agent/adapter/upliftai"
+	"github.com/cavos-io/rtp-agent/adapter/xai"
 	"github.com/cavos-io/rtp-agent/core/agent"
 	"github.com/cavos-io/rtp-agent/core/audio/model"
 	"github.com/cavos-io/rtp-agent/core/beta/workflows"
@@ -120,6 +139,28 @@ func TestAppRegistersReferencePluginMetadataBatch(t *testing.T) {
 		neuphonic.PluginPackage:  {title: neuphonic.PluginTitle, version: neuphonic.PluginVersion},
 		nvidia.PluginPackage:     {title: nvidia.PluginTitle, version: nvidia.PluginVersion},
 		openai.PluginPackage:     {title: openai.PluginTitle, version: openai.PluginVersion},
+		perplexity.PluginPackage: {title: perplexity.PluginTitle, version: perplexity.PluginVersion},
+		resemble.PluginPackage:   {title: resemble.PluginTitle, version: resemble.PluginVersion},
+		respeecher.PluginPackage: {title: respeecher.PluginTitle, version: respeecher.PluginVersion},
+		rime.PluginPackage:       {title: rime.PluginTitle, version: rime.PluginVersion},
+		rtzr.PluginPackage:       {title: rtzr.PluginTitle, version: rtzr.PluginVersion},
+		sarvam.PluginPackage:     {title: sarvam.PluginTitle, version: sarvam.PluginVersion},
+		simli.PluginPackage:      {title: simli.PluginTitle, version: simli.PluginVersion},
+		simplismart.PluginPackage: {
+			title:   simplismart.PluginTitle,
+			version: simplismart.PluginVersion,
+		},
+		smallestai.PluginPackage:   {title: smallestai.PluginTitle, version: smallestai.PluginVersion},
+		soniox.PluginPackage:       {title: soniox.PluginTitle, version: soniox.PluginVersion},
+		speechify.PluginPackage:    {title: speechify.PluginTitle, version: speechify.PluginVersion},
+		speechmatics.PluginPackage: {title: speechmatics.PluginTitle, version: speechmatics.PluginVersion},
+		spitch.PluginPackage:       {title: spitch.PluginTitle, version: spitch.PluginVersion},
+		tavus.PluginPackage:        {title: tavus.PluginTitle, version: tavus.PluginVersion},
+		telnyx.PluginPackage:       {title: telnyx.PluginTitle, version: telnyx.PluginVersion},
+		trugen.PluginPackage:       {title: trugen.PluginTitle, version: trugen.PluginVersion},
+		ultravox.PluginPackage:     {title: ultravox.PluginTitle, version: ultravox.PluginVersion},
+		upliftai.PluginPackage:     {title: upliftai.PluginTitle, version: upliftai.PluginVersion},
+		xai.PluginPackage:          {title: xai.PluginTitle, version: xai.PluginVersion},
 	}
 
 	for _, registered := range plugin.RegisteredPlugins() {
