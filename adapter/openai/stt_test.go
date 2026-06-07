@@ -295,6 +295,32 @@ func TestOpenAIRealtimeWhisperVersionOmitsTurnDetection(t *testing.T) {
 	}
 }
 
+func TestOpenAIRealtimeSTTSessionUpdateIncludesNoiseReduction(t *testing.T) {
+	provider := mustNewOpenAISTT(t, "test-key", "gpt-4o-mini-transcribe",
+		WithOpenAISTTRealtime(true),
+		WithOpenAISTTNoiseReductionType("near_field"),
+	)
+
+	payload, err := buildOpenAIRealtimeSTTSessionUpdate(provider)
+	if err != nil {
+		t.Fatalf("build session update: %v", err)
+	}
+	var message map[string]any
+	if err := json.Unmarshal(payload, &message); err != nil {
+		t.Fatalf("decode session update: %v", err)
+	}
+	session := message["session"].(map[string]any)
+	audio := session["audio"].(map[string]any)
+	input := audio["input"].(map[string]any)
+	noiseReduction, ok := input["noise_reduction"].(map[string]any)
+	if !ok {
+		t.Fatalf("noise_reduction missing from input config: %+v", input)
+	}
+	if noiseReduction["type"] != "near_field" {
+		t.Fatalf("noise_reduction type = %#v, want near_field", noiseReduction["type"])
+	}
+}
+
 func TestOpenAIRealtimeSTTStreamMessagesMatchReference(t *testing.T) {
 	frame := &model.AudioFrame{
 		Data:              []byte{1, 2, 3, 4},

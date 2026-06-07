@@ -39,6 +39,7 @@ type OpenAISTT struct {
 	language       string
 	detectLanguage bool
 	prompt         string
+	noiseReduction string
 	useRealtime    bool
 	dialWebsocket  openAIRealtimeSTTWebsocketDialer
 }
@@ -62,6 +63,12 @@ func WithOpenAISTTDetectLanguage(detect bool) OpenAISTTOption {
 func WithOpenAISTTPrompt(prompt string) OpenAISTTOption {
 	return func(s *OpenAISTT) {
 		s.prompt = prompt
+	}
+}
+
+func WithOpenAISTTNoiseReductionType(noiseReductionType string) OpenAISTTOption {
+	return func(s *OpenAISTT) {
+		s.noiseReduction = noiseReductionType
 	}
 }
 
@@ -205,6 +212,11 @@ func buildOpenAIRealtimeSTTSessionUpdate(s *OpenAISTT) ([]byte, error) {
 			"threshold":           openAIRealtimeSTTDefaultThreshold,
 			"prefix_padding_ms":   openAIRealtimeSTTPrefixPaddingMS,
 			"silence_duration_ms": openAIRealtimeSTTSilenceDurationMS,
+		}
+	}
+	if s.noiseReduction != "" {
+		input["noise_reduction"] = map[string]interface{}{
+			"type": s.noiseReduction,
 		}
 	}
 	return json.Marshal(map[string]interface{}{
