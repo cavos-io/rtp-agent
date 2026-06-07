@@ -94,6 +94,7 @@ func basicAgentConfigFromEnv() app.AppConfig {
 	cfg.STTProvider = "livekit"
 	cfg.STTModel = "deepgram/nova-3"
 	cfg.STTLanguage = "multi"
+	cfg.VADProvider = "silero"
 	cfg.TTSProvider = "livekit"
 	cfg.TTSModel = "cartesia/sonic-3"
 	cfg.TTSVoice = "9626c31c-bec5-4cca-baa8-f8ba9e84c8bc"

@@ -7,6 +7,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/cavos-io/rtp-agent/core/agent"
 )
 
 func TestGetCardNumberTaskRecordsValidCardWithoutConfirmation(t *testing.T) {
@@ -36,11 +38,45 @@ func TestGetCardNumberTaskRecordsValidCardWithoutConfirmation(t *testing.T) {
 
 func TestGetCardNumberTaskRejectsInvalidLuhnNumber(t *testing.T) {
 	task := NewGetCardNumberTask(false)
+	session := agent.NewAgentSession(task, nil, agent.AgentSessionOptions{})
+	session.Assistant = &fakeDtmfSessionAssistant{}
+	speechEvents := session.SpeechCreatedEvents()
 	tool := &recordCardNumberTool{task: task}
 
-	_, err := tool.Execute(context.Background(), `{"card_number":"4111111111111112"}`)
-	if err == nil {
-		t.Fatal("Execute() error = nil, want invalid card number error")
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	if err := session.Start(ctx); err != nil {
+		t.Fatalf("Start error = %v", err)
+	}
+	defer session.Stop(context.Background())
+
+	select {
+	case <-speechEvents:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for card-number on-enter prompt")
+	}
+
+	if _, err := tool.Execute(context.Background(), `{"card_number":"4111111111111112"}`); err != nil {
+		t.Fatalf("Execute() error = %v, want nil after prompting for invalid card", err)
+	}
+
+	select {
+	case ev := <-speechEvents:
+		if ev.Source != "generate_reply" {
+			t.Fatalf("SpeechCreated Source = %q, want generate_reply", ev.Source)
+		}
+		if ev.SpeechHandle == nil {
+			t.Fatal("SpeechCreated SpeechHandle = nil, want invalid-card reply handle")
+		}
+		want := "The card number is not valid, ask the user if they made a mistake or to provide another card."
+		if ev.SpeechHandle.Generation.Instructions == nil {
+			t.Fatal("invalid-card instructions = nil, want invalid-card prompt")
+		}
+		if got := ev.SpeechHandle.Generation.Instructions.AsModality("text").String(); got != want {
+			t.Fatalf("invalid-card instructions = %q, want %q", got, want)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for invalid-card prompt")
 	}
 
 	select {
@@ -50,9 +86,75 @@ func TestGetCardNumberTaskRejectsInvalidLuhnNumber(t *testing.T) {
 	}
 }
 
+func TestGetCardNumberTaskRejectsInvalidLengthWithPrompt(t *testing.T) {
+	task := NewGetCardNumberTask()
+	session := agent.NewAgentSession(task, nil, agent.AgentSessionOptions{})
+	session.Assistant = &fakeDtmfSessionAssistant{}
+	speechEvents := session.SpeechCreatedEvents()
+	tool := &recordCardNumberTool{task: task}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	if err := session.Start(ctx); err != nil {
+		t.Fatalf("Start error = %v", err)
+	}
+	defer session.Stop(context.Background())
+
+	select {
+	case <-speechEvents:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for card-number on-enter prompt")
+	}
+
+	if _, err := tool.Execute(context.Background(), `{"card_number":"4111"}`); err != nil {
+		t.Fatalf("Execute() error = %v, want nil after prompting for invalid length", err)
+	}
+
+	select {
+	case ev := <-speechEvents:
+		if ev.Source != "generate_reply" {
+			t.Fatalf("SpeechCreated Source = %q, want generate_reply", ev.Source)
+		}
+		if ev.SpeechHandle == nil {
+			t.Fatal("SpeechCreated SpeechHandle = nil, want invalid-length reply handle")
+		}
+		want := "The length of the card number is invalid, ask the user to repeat their card number."
+		if ev.SpeechHandle.Generation.Instructions == nil {
+			t.Fatal("invalid-length instructions = nil, want invalid-length prompt")
+		}
+		if got := ev.SpeechHandle.Generation.Instructions.AsModality("text").String(); got != want {
+			t.Fatalf("invalid-length instructions = %q, want %q", got, want)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for invalid-length prompt")
+	}
+
+	select {
+	case result := <-task.Result:
+		t.Fatalf("task completed with %#v, want no completion for invalid length", result)
+	default:
+	}
+}
+
 func TestGetCardNumberTaskDefersLuhnValidationUntilConfirmation(t *testing.T) {
 	task := NewGetCardNumberTask()
+	session := agent.NewAgentSession(task, nil, agent.AgentSessionOptions{})
+	session.Assistant = &fakeDtmfSessionAssistant{}
+	speechEvents := session.SpeechCreatedEvents()
 	record := &recordCardNumberTool{task: task}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	if err := session.Start(ctx); err != nil {
+		t.Fatalf("Start error = %v", err)
+	}
+	defer session.Stop(context.Background())
+
+	select {
+	case <-speechEvents:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for card-number on-enter prompt")
+	}
 
 	out, err := record.Execute(context.Background(), `{"card_number":"4111111111111112"}`)
 	if err != nil {
@@ -66,9 +168,27 @@ func TestGetCardNumberTaskDefersLuhnValidationUntilConfirmation(t *testing.T) {
 	}
 
 	confirm := &confirmCardNumberTool{task: task, cardNumber: "4111111111111112"}
-	_, err = confirm.Execute(context.Background(), `{"repeated_card_number":"4111111111111112"}`)
-	if err == nil || !strings.Contains(err.Error(), "The card number is not valid") {
-		t.Fatalf("confirm Execute() error = %v, want invalid card number after repeat", err)
+	if _, err = confirm.Execute(context.Background(), `{"repeated_card_number":"4111111111111112"}`); err != nil {
+		t.Fatalf("confirm Execute() error = %v, want nil after prompting for invalid card", err)
+	}
+
+	select {
+	case ev := <-speechEvents:
+		if ev.Source != "generate_reply" {
+			t.Fatalf("SpeechCreated Source = %q, want generate_reply", ev.Source)
+		}
+		if ev.SpeechHandle == nil {
+			t.Fatal("SpeechCreated SpeechHandle = nil, want invalid-card reply handle")
+		}
+		want := "The card number is not valid, ask the user if they made a mistake or to provide another card."
+		if ev.SpeechHandle.Generation.Instructions == nil {
+			t.Fatal("invalid-card instructions = nil, want invalid-card prompt")
+		}
+		if got := ev.SpeechHandle.Generation.Instructions.AsModality("text").String(); got != want {
+			t.Fatalf("invalid-card instructions = %q, want %q", got, want)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for invalid-card prompt")
 	}
 
 	select {
@@ -108,6 +228,61 @@ func TestGetCardNumberTaskRequiresMatchingConfirmation(t *testing.T) {
 	}
 }
 
+func TestGetCardNumberTaskMismatchedConfirmationPromptsForRetry(t *testing.T) {
+	task := NewGetCardNumberTask()
+	session := agent.NewAgentSession(task, nil, agent.AgentSessionOptions{})
+	session.Assistant = &fakeDtmfSessionAssistant{}
+	speechEvents := session.SpeechCreatedEvents()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	if err := session.Start(ctx); err != nil {
+		t.Fatalf("Start error = %v", err)
+	}
+	defer session.Stop(context.Background())
+
+	select {
+	case <-speechEvents:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for card-number on-enter prompt")
+	}
+
+	record := &recordCardNumberTool{task: task}
+	if _, err := record.Execute(context.Background(), `{"card_number":"5555 5555 5555 4444"}`); err != nil {
+		t.Fatalf("record Execute() error = %v", err)
+	}
+	confirm := &confirmCardNumberTool{task: task, cardNumber: "5555555555554444"}
+
+	if _, err := confirm.Execute(context.Background(), `{"repeated_card_number":"4111111111111111"}`); err != nil {
+		t.Fatalf("confirm Execute() error = %v, want nil after prompting for retry", err)
+	}
+
+	select {
+	case ev := <-speechEvents:
+		if ev.Source != "generate_reply" {
+			t.Fatalf("SpeechCreated Source = %q, want generate_reply", ev.Source)
+		}
+		if ev.SpeechHandle == nil {
+			t.Fatal("SpeechCreated SpeechHandle = nil, want retry reply handle")
+		}
+		want := "The repeated card number does not match, ask the user to try again."
+		if ev.SpeechHandle.Generation.Instructions == nil {
+			t.Fatal("retry instructions = nil, want mismatch prompt")
+		}
+		if got := ev.SpeechHandle.Generation.Instructions.AsModality("text").String(); got != want {
+			t.Fatalf("retry instructions = %q, want %q", got, want)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for card-number retry prompt")
+	}
+
+	select {
+	case result := <-task.Result:
+		t.Fatalf("task completed with %#v, want no completion for mismatched confirmation", result)
+	default:
+	}
+}
+
 func TestGetSecurityCodeTaskRecordsValidCodeWithoutConfirmation(t *testing.T) {
 	task := NewGetSecurityCodeTask(false)
 	tool := &updateSecurityCodeTool{task: task}
@@ -132,11 +307,45 @@ func TestGetSecurityCodeTaskRecordsValidCodeWithoutConfirmation(t *testing.T) {
 
 func TestGetSecurityCodeTaskRejectsInvalidCode(t *testing.T) {
 	task := NewGetSecurityCodeTask(false)
+	session := agent.NewAgentSession(task, nil, agent.AgentSessionOptions{})
+	session.Assistant = &fakeDtmfSessionAssistant{}
+	speechEvents := session.SpeechCreatedEvents()
 	tool := &updateSecurityCodeTool{task: task}
 
-	_, err := tool.Execute(context.Background(), `{"security_code":"12a"}`)
-	if err == nil {
-		t.Fatal("Execute() error = nil, want invalid security code error")
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	if err := session.Start(ctx); err != nil {
+		t.Fatalf("Start error = %v", err)
+	}
+	defer session.Stop(context.Background())
+
+	select {
+	case <-speechEvents:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for security-code on-enter prompt")
+	}
+
+	if _, err := tool.Execute(context.Background(), `{"security_code":"12a"}`); err != nil {
+		t.Fatalf("Execute() error = %v, want nil after prompting for invalid code", err)
+	}
+
+	select {
+	case ev := <-speechEvents:
+		if ev.Source != "generate_reply" {
+			t.Fatalf("SpeechCreated Source = %q, want generate_reply", ev.Source)
+		}
+		if ev.SpeechHandle == nil {
+			t.Fatal("SpeechCreated SpeechHandle = nil, want invalid-code reply handle")
+		}
+		want := "The security code's length is invalid, ask the user to repeat or to provide a new card and start over."
+		if ev.SpeechHandle.Generation.Instructions == nil {
+			t.Fatal("invalid-code instructions = nil, want invalid-code prompt")
+		}
+		if got := ev.SpeechHandle.Generation.Instructions.AsModality("text").String(); got != want {
+			t.Fatalf("invalid-code instructions = %q, want %q", got, want)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for invalid-code prompt")
 	}
 
 	select {
@@ -179,6 +388,61 @@ func TestGetSecurityCodeTaskRequiresMatchingConfirmation(t *testing.T) {
 	}
 }
 
+func TestGetSecurityCodeTaskMismatchedConfirmationPromptsForRetry(t *testing.T) {
+	task := NewGetSecurityCodeTask()
+	session := agent.NewAgentSession(task, nil, agent.AgentSessionOptions{})
+	session.Assistant = &fakeDtmfSessionAssistant{}
+	speechEvents := session.SpeechCreatedEvents()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	if err := session.Start(ctx); err != nil {
+		t.Fatalf("Start error = %v", err)
+	}
+	defer session.Stop(context.Background())
+
+	select {
+	case <-speechEvents:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for security-code on-enter prompt")
+	}
+
+	update := &updateSecurityCodeTool{task: task}
+	if _, err := update.Execute(context.Background(), `{"security_code":"1234"}`); err != nil {
+		t.Fatalf("update Execute() error = %v", err)
+	}
+	confirm := &confirmSecurityCodeTool{task: task, securityCode: "1234"}
+
+	if _, err := confirm.Execute(context.Background(), `{"repeated_security_code":"4321"}`); err != nil {
+		t.Fatalf("confirm Execute() error = %v, want nil after prompting for retry", err)
+	}
+
+	select {
+	case ev := <-speechEvents:
+		if ev.Source != "generate_reply" {
+			t.Fatalf("SpeechCreated Source = %q, want generate_reply", ev.Source)
+		}
+		if ev.SpeechHandle == nil {
+			t.Fatal("SpeechCreated SpeechHandle = nil, want retry reply handle")
+		}
+		want := "The repeated security code does not match, ask the user to try again."
+		if ev.SpeechHandle.Generation.Instructions == nil {
+			t.Fatal("retry instructions = nil, want mismatch prompt")
+		}
+		if got := ev.SpeechHandle.Generation.Instructions.AsModality("text").String(); got != want {
+			t.Fatalf("retry instructions = %q, want %q", got, want)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for security-code retry prompt")
+	}
+
+	select {
+	case result := <-task.Result:
+		t.Fatalf("task completed with %#v, want no completion for mismatched confirmation", result)
+	default:
+	}
+}
+
 func TestGetExpirationDateTaskRecordsFutureDateWithoutConfirmation(t *testing.T) {
 	task := NewGetExpirationDateTask(false)
 	tool := &updateExpirationDateTool{task: task}
@@ -204,24 +468,76 @@ func TestGetExpirationDateTaskRecordsFutureDateWithoutConfirmation(t *testing.T)
 }
 
 func TestGetExpirationDateTaskRejectsInvalidOrExpiredDate(t *testing.T) {
-	task := NewGetExpirationDateTask(false)
-	tool := &updateExpirationDateTool{task: task}
-
-	cases := []string{
-		`{"expiration_month":13,"expiration_year":35}`,
-		`{"expiration_month":1,"expiration_year":100}`,
-		`{"expiration_month":1,"expiration_year":0}`,
+	cases := []struct {
+		name string
+		args string
+		want string
+	}{
+		{
+			name: "invalid month",
+			args: `{"expiration_month":13,"expiration_year":35}`,
+			want: "The expiration month is invalid, ask the user to repeat the expiration month.",
+		},
+		{
+			name: "invalid year",
+			args: `{"expiration_month":1,"expiration_year":100}`,
+			want: "The expiration year is invalid, ask the user to repeat the expiration year.",
+		},
+		{
+			name: "expired",
+			args: `{"expiration_month":1,"expiration_year":0}`,
+			want: "The expiration date is in the past, the card is expired. Ask the user to provide another card.",
+		},
 	}
-	for _, args := range cases {
-		if _, err := tool.Execute(context.Background(), args); err == nil {
-			t.Fatalf("Execute(%s) error = nil, want invalid expiration date error", args)
-		}
-	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			task := NewGetExpirationDateTask(false)
+			session := agent.NewAgentSession(task, nil, agent.AgentSessionOptions{})
+			session.Assistant = &fakeDtmfSessionAssistant{}
+			speechEvents := session.SpeechCreatedEvents()
+			tool := &updateExpirationDateTool{task: task}
 
-	select {
-	case result := <-task.Result:
-		t.Fatalf("task completed with %#v, want no completion for invalid date", result)
-	default:
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			if err := session.Start(ctx); err != nil {
+				t.Fatalf("Start error = %v", err)
+			}
+			defer session.Stop(context.Background())
+
+			select {
+			case <-speechEvents:
+			case <-time.After(time.Second):
+				t.Fatal("timed out waiting for expiration-date on-enter prompt")
+			}
+
+			if _, err := tool.Execute(context.Background(), tc.args); err != nil {
+				t.Fatalf("Execute(%s) error = %v, want nil after prompting for invalid expiration date", tc.args, err)
+			}
+
+			select {
+			case ev := <-speechEvents:
+				if ev.Source != "generate_reply" {
+					t.Fatalf("SpeechCreated Source = %q, want generate_reply", ev.Source)
+				}
+				if ev.SpeechHandle == nil {
+					t.Fatal("SpeechCreated SpeechHandle = nil, want invalid-expiration reply handle")
+				}
+				if ev.SpeechHandle.Generation.Instructions == nil {
+					t.Fatal("invalid-expiration instructions = nil, want invalid-expiration prompt")
+				}
+				if got := ev.SpeechHandle.Generation.Instructions.AsModality("text").String(); got != tc.want {
+					t.Fatalf("invalid-expiration instructions = %q, want %q", got, tc.want)
+				}
+			case <-time.After(time.Second):
+				t.Fatal("timed out waiting for invalid-expiration prompt")
+			}
+
+			select {
+			case result := <-task.Result:
+				t.Fatalf("task completed with %#v, want no completion for invalid date", result)
+			default:
+			}
+		})
 	}
 }
 
@@ -257,6 +573,62 @@ func TestGetExpirationDateTaskRequiresMatchingConfirmation(t *testing.T) {
 		}
 	default:
 		t.Fatal("task did not complete after matching confirmation")
+	}
+}
+
+func TestGetExpirationDateTaskMismatchedConfirmationPromptsForRetry(t *testing.T) {
+	task := NewGetExpirationDateTask()
+	session := agent.NewAgentSession(task, nil, agent.AgentSessionOptions{})
+	session.Assistant = &fakeDtmfSessionAssistant{}
+	speechEvents := session.SpeechCreatedEvents()
+	futureYear := (time.Now().Year() + 1) % 100
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	if err := session.Start(ctx); err != nil {
+		t.Fatalf("Start error = %v", err)
+	}
+	defer session.Stop(context.Background())
+
+	select {
+	case <-speechEvents:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for expiration-date on-enter prompt")
+	}
+
+	update := &updateExpirationDateTool{task: task}
+	if _, err := update.Execute(context.Background(), `{"expiration_month":12,"expiration_year":`+itoa(futureYear)+`}`); err != nil {
+		t.Fatalf("update Execute() error = %v", err)
+	}
+	confirm := &confirmExpirationDateTool{task: task, expirationMonth: 12, expirationYear: futureYear, expirationDate: "12/" + twoDigit(futureYear)}
+
+	if _, err := confirm.Execute(context.Background(), `{"repeated_expiration_month":11,"repeated_expiration_year":`+itoa(futureYear)+`}`); err != nil {
+		t.Fatalf("confirm Execute() error = %v, want nil after prompting for retry", err)
+	}
+
+	select {
+	case ev := <-speechEvents:
+		if ev.Source != "generate_reply" {
+			t.Fatalf("SpeechCreated Source = %q, want generate_reply", ev.Source)
+		}
+		if ev.SpeechHandle == nil {
+			t.Fatal("SpeechCreated SpeechHandle = nil, want retry reply handle")
+		}
+		want := "The repeated expiration date does not match, ask the user to try again."
+		if ev.SpeechHandle.Generation.Instructions == nil {
+			t.Fatal("retry instructions = nil, want mismatch prompt")
+		}
+		if got := ev.SpeechHandle.Generation.Instructions.AsModality("text").String(); got != want {
+			t.Fatalf("retry instructions = %q, want %q", got, want)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for expiration-date retry prompt")
+	}
+
+	select {
+	case result := <-task.Result:
+		t.Fatalf("task completed with %#v, want no completion for mismatched confirmation", result)
+	default:
 	}
 }
 

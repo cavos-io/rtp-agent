@@ -374,13 +374,23 @@ func (t *recordCardNumberTool) Execute(ctx context.Context, args string) (string
 
 	cardNumber := normalizeCardDigits(params.CardNumber)
 	if len(cardNumber) < 13 || len(cardNumber) > 19 {
-		return "", llm.NewToolError("The length of the card number is invalid, ask the user to repeat their card number.")
+		if activity := t.task.Agent.GetActivity(); activity != nil && activity.Session != nil {
+			_, _ = activity.Session.GenerateReplyWithOptions(context.Background(), agent.GenerateReplyOptions{
+				Instructions: invalidCardNumberLengthPrompt(),
+			})
+		}
+		return "", nil
 	}
 
 	t.task.currentCardNumber = cardNumber
 	if !t.task.RequireConfirmation {
 		if !validateCardNumberLuhn(cardNumber) {
-			return "", llm.NewToolError("The card number is not valid, ask the user if they made a mistake or to provide another card.")
+			if activity := t.task.Agent.GetActivity(); activity != nil && activity.Session != nil {
+				_, _ = activity.Session.GenerateReplyWithOptions(context.Background(), agent.GenerateReplyOptions{
+					Instructions: invalidCardNumberPrompt(),
+				})
+			}
+			return "", nil
 		}
 		t.task.completeCardNumber(cardNumber)
 		return "Card number captured and task completed.", nil
@@ -431,7 +441,12 @@ func (t *updateSecurityCodeTool) Execute(ctx context.Context, args string) (stri
 
 	securityCode := strings.TrimSpace(params.SecurityCode)
 	if !validSecurityCode(securityCode) {
-		return "", llm.NewToolError("The security code's length is invalid, ask the user to repeat or to provide a new card and start over.")
+		if activity := t.task.Agent.GetActivity(); activity != nil && activity.Session != nil {
+			_, _ = activity.Session.GenerateReplyWithOptions(context.Background(), agent.GenerateReplyOptions{
+				Instructions: invalidSecurityCodePrompt(),
+			})
+		}
+		return "", nil
 	}
 
 	t.task.currentSecurityCode = securityCode
@@ -442,6 +457,10 @@ func (t *updateSecurityCodeTool) Execute(ctx context.Context, args string) (stri
 
 	t.task.setConfirmSecurityCodeTool(securityCode)
 	return "The security code has been updated.\nDo not repeat the security code back to the user, ask them to repeat themselves.\nCall `confirm_security_code` once the user confirms, do not call it preemptively.", nil
+}
+
+func invalidSecurityCodePrompt() string {
+	return "The security code's length is invalid, ask the user to repeat or to provide a new card and start over."
 }
 
 func (t *GetSecurityCodeTask) setConfirmSecurityCodeTool(securityCode string) {
@@ -485,13 +504,16 @@ func (t *updateExpirationDateTool) Execute(ctx context.Context, args string) (st
 		return "", err
 	}
 	if params.ExpirationMonth < 1 || params.ExpirationMonth > 12 {
-		return "", llm.NewToolError("The expiration month is invalid, ask the user to repeat the expiration month.")
+		t.task.promptInvalidExpirationDate(invalidExpirationMonthPrompt())
+		return "", nil
 	}
 	if params.ExpirationYear < 0 || params.ExpirationYear > 99 {
-		return "", llm.NewToolError("The expiration year is invalid, ask the user to repeat the expiration year.")
+		t.task.promptInvalidExpirationDate(invalidExpirationYearPrompt())
+		return "", nil
 	}
 	if expirationDateExpired(params.ExpirationMonth, params.ExpirationYear, time.Now()) {
-		return "", llm.NewToolError("The expiration date is in the past, the card is expired. Ask the user to provide another card.")
+		t.task.promptInvalidExpirationDate(expiredExpirationDatePrompt())
+		return "", nil
 	}
 
 	expirationDate := formatExpirationDate(params.ExpirationMonth, params.ExpirationYear)
@@ -503,6 +525,26 @@ func (t *updateExpirationDateTool) Execute(ctx context.Context, args string) (st
 
 	t.task.setConfirmExpirationDateTool(params.ExpirationMonth, params.ExpirationYear, expirationDate)
 	return "The expiration date has been updated.\nDo not repeat the expiration date back to the user, ask them to repeat themselves.\nCall `confirm_expiration_date` once the user confirms, do not call it preemptively.", nil
+}
+
+func (t *GetExpirationDateTask) promptInvalidExpirationDate(prompt string) {
+	if activity := t.Agent.GetActivity(); activity != nil && activity.Session != nil {
+		_, _ = activity.Session.GenerateReplyWithOptions(context.Background(), agent.GenerateReplyOptions{
+			Instructions: prompt,
+		})
+	}
+}
+
+func invalidExpirationMonthPrompt() string {
+	return "The expiration month is invalid, ask the user to repeat the expiration month."
+}
+
+func invalidExpirationYearPrompt() string {
+	return "The expiration year is invalid, ask the user to repeat the expiration year."
+}
+
+func expiredExpirationDatePrompt() string {
+	return "The expiration date is in the past, the card is expired. Ask the user to provide another card."
 }
 
 func (t *GetExpirationDateTask) setConfirmExpirationDateTool(month int, year int, expirationDate string) {
@@ -551,13 +593,35 @@ func (t *confirmCardNumberTool) Execute(ctx context.Context, args string) (strin
 	}
 	repeated := normalizeCardDigits(params.RepeatedCardNumber)
 	if repeated != t.cardNumber {
-		return "", llm.NewToolError("The repeated card number does not match, ask the user to try again.")
+		if activity := t.task.Agent.GetActivity(); activity != nil && activity.Session != nil {
+			_, _ = activity.Session.GenerateReplyWithOptions(context.Background(), agent.GenerateReplyOptions{
+				Instructions: cardNumberMismatchPrompt(),
+			})
+		}
+		return "", nil
 	}
 	if !validateCardNumberLuhn(t.cardNumber) {
-		return "", llm.NewToolError("The card number is not valid, ask the user if they made a mistake or to provide another card.")
+		if activity := t.task.Agent.GetActivity(); activity != nil && activity.Session != nil {
+			_, _ = activity.Session.GenerateReplyWithOptions(context.Background(), agent.GenerateReplyOptions{
+				Instructions: invalidCardNumberPrompt(),
+			})
+		}
+		return "", nil
 	}
 	t.task.completeCardNumber(t.cardNumber)
 	return "Card number confirmed.", nil
+}
+
+func cardNumberMismatchPrompt() string {
+	return "The repeated card number does not match, ask the user to try again."
+}
+
+func invalidCardNumberPrompt() string {
+	return "The card number is not valid, ask the user if they made a mistake or to provide another card."
+}
+
+func invalidCardNumberLengthPrompt() string {
+	return "The length of the card number is invalid, ask the user to repeat their card number."
 }
 
 type confirmSecurityCodeTool struct {
@@ -588,10 +652,19 @@ func (t *confirmSecurityCodeTool) Execute(ctx context.Context, args string) (str
 		return "", err
 	}
 	if strings.TrimSpace(params.RepeatedSecurityCode) != t.securityCode {
-		return "", llm.NewToolError("The repeated security code does not match, ask the user to try again.")
+		if activity := t.task.Agent.GetActivity(); activity != nil && activity.Session != nil {
+			_, _ = activity.Session.GenerateReplyWithOptions(context.Background(), agent.GenerateReplyOptions{
+				Instructions: securityCodeMismatchPrompt(),
+			})
+		}
+		return "", nil
 	}
 	t.task.completeSecurityCode(t.securityCode)
 	return "Security code confirmed.", nil
+}
+
+func securityCodeMismatchPrompt() string {
+	return "The repeated security code does not match, ask the user to try again."
 }
 
 type confirmExpirationDateTool struct {
@@ -626,10 +699,19 @@ func (t *confirmExpirationDateTool) Execute(ctx context.Context, args string) (s
 		return "", err
 	}
 	if params.RepeatedExpirationMonth != t.expirationMonth || params.RepeatedExpirationYear != t.expirationYear {
-		return "", llm.NewToolError("The repeated expiration date does not match, ask the user to try again.")
+		if activity := t.task.Agent.GetActivity(); activity != nil && activity.Session != nil {
+			_, _ = activity.Session.GenerateReplyWithOptions(context.Background(), agent.GenerateReplyOptions{
+				Instructions: expirationDateMismatchPrompt(),
+			})
+		}
+		return "", nil
 	}
 	t.task.completeExpirationDate(t.expirationDate)
 	return "Expiration date confirmed.", nil
+}
+
+func expirationDateMismatchPrompt() string {
+	return "The repeated expiration date does not match, ask the user to try again."
 }
 
 type cardFailureTask interface {
