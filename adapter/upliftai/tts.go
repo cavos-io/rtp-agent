@@ -12,6 +12,11 @@ import (
 	"github.com/cavos-io/rtp-agent/core/tts"
 )
 
+const (
+	defaultUpliftAIVoiceID    = "v_meklc281"
+	defaultUpliftAISampleRate = 22050
+)
+
 type UpliftAITTS struct {
 	apiKey string
 	voice  string
@@ -19,7 +24,7 @@ type UpliftAITTS struct {
 
 func NewUpliftAITTS(apiKey string, voice string) *UpliftAITTS {
 	if voice == "" {
-		voice = "default_voice"
+		voice = defaultUpliftAIVoiceID
 	}
 	return &UpliftAITTS{
 		apiKey: apiKey,
@@ -29,9 +34,9 @@ func NewUpliftAITTS(apiKey string, voice string) *UpliftAITTS {
 
 func (t *UpliftAITTS) Label() string { return "upliftai.TTS" }
 func (t *UpliftAITTS) Capabilities() tts.TTSCapabilities {
-	return tts.TTSCapabilities{Streaming: false, AlignedTranscript: false}
+	return tts.TTSCapabilities{Streaming: true, AlignedTranscript: false}
 }
-func (t *UpliftAITTS) SampleRate() int  { return 24000 }
+func (t *UpliftAITTS) SampleRate() int  { return defaultUpliftAISampleRate }
 func (t *UpliftAITTS) NumChannels() int { return 1 }
 
 func (t *UpliftAITTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStream, error) {
@@ -88,7 +93,7 @@ func (s *upliftAITTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 	return &tts.SynthesizedAudio{
 		Frame: &model.AudioFrame{
 			Data:              buf[:n],
-			SampleRate:        24000,
+			SampleRate:        defaultUpliftAISampleRate,
 			NumChannels:       1,
 			SamplesPerChannel: uint32(n / 2),
 		},

@@ -601,11 +601,14 @@ func TestDefaultConfigFromEnvSelectsUpliftAIProviders(t *testing.T) {
 	if got := app.Session.TTS.Label(); got != "upliftai.TTS" {
 		t.Fatalf("TTS label = %q, want upliftai.TTS", got)
 	}
-	if got := app.Session.TTS.SampleRate(); got != 24000 {
-		t.Fatalf("TTS sample rate = %d, want 24000", got)
+	if got := app.Session.TTS.SampleRate(); got != 22050 {
+		t.Fatalf("TTS sample rate = %d, want reference sample rate 22050", got)
 	}
-	if caps := app.Session.TTS.Capabilities(); caps.Streaming || caps.AlignedTranscript {
-		t.Fatalf("TTS capabilities = %+v, want non-streaming without aligned transcript", caps)
+	if caps := app.Session.TTS.Capabilities(); !caps.Streaming || caps.AlignedTranscript {
+		t.Fatalf("TTS capabilities = %+v, want reference streaming without aligned transcript", caps)
+	}
+	if _, err := app.Session.TTS.Stream(context.Background()); err == nil || !strings.Contains(err.Error(), "streaming tts not natively supported") {
+		t.Fatalf("TTS Stream() error = %v, want explicit unsupported streaming error", err)
 	}
 }
 
