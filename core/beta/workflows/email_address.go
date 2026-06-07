@@ -45,13 +45,13 @@ Normalize common spoken patterns silently:
 - Filter out filler words or hesitations.
 - Assume some spelling if contextually obvious (e.g. 'mike b two two' → mikeb22).
 Don't mention corrections. Treat inputs as possibly imperfect but fix them silently.
-Call update_email_address at the first opportunity whenever you form a new hypothesis about the email. (before asking any questions or providing any answers.)
+Call ` + "`update_email_address`" + ` at the first opportunity whenever you form a new hypothesis about the email. (before asking any questions or providing any answers.)
 Don't invent new email addresses, stick strictly to what the user said.
 `
 
 const emailInstructionsAfterConfirmation = `If the email is unclear or invalid, or it takes too much back-and-forth, prompt for it in parts: first the part before the '@', then the domain—only if needed.
 Ignore unrelated input and avoid going off-topic. Do not generate markdown, greetings, or unnecessary commentary.
-Always explicitly invoke a tool when applicable. Do not hallucinate tool usage, no real action is taken unless the tool is explicitly called.`
+Always explicitly invoke a tool when applicable. Do not simulate tool usage, no real action is taken unless the tool is explicitly called.`
 
 const EmailInstructions = emailInstructionsBeforeConfirmation + emailConfirmationInstruction + "\n" + emailInstructionsAfterConfirmation
 
