@@ -56,7 +56,7 @@ func NewSessionReport(sessions ...*AgentSession) *SessionReport {
 
 	session := sessions[0]
 	report.Options = session.SessionOptions()
-	report.ChatHistory = session.History()
+	report.ChatHistory = session.History().Copy()
 	usage := session.Usage()
 	if !usageSummaryIsZero(usage) {
 		report.Usage = &usage

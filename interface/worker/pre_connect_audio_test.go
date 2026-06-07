@@ -1,7 +1,10 @@
 package worker
 
 import (
+	"bytes"
 	"context"
+	"errors"
+	"io"
 	"testing"
 	"time"
 
@@ -80,6 +83,75 @@ func TestPreConnectAudioStaleBufferReturnsEmptyFrames(t *testing.T) {
 	if len(frames) != 0 {
 		t.Fatalf("WaitForData() stale frames len = %d, want 0", len(frames))
 	}
+}
+
+func TestPreConnectAudioRawPCMUsesReferenceByteStreamFlush(t *testing.T) {
+	data := make([]byte, 24)
+	for i := 0; i < 12; i++ {
+		data[i*2] = byte(i + 1)
+	}
+
+	frames, err := readPreConnectRawPCMFrames(bytes.NewReader(data), 100, 1)
+	if err != nil {
+		t.Fatalf("readPreConnectRawPCMFrames() error = %v", err)
+	}
+
+	if len(frames) != 2 {
+		t.Fatalf("frames len = %d, want byte-stream chunk and flushed tail", len(frames))
+	}
+	if frames[0].SampleRate != 100 || frames[0].NumChannels != 1 || frames[0].SamplesPerChannel != 10 {
+		t.Fatalf("first frame shape = %d/%d/%d, want 100/1/10", frames[0].SampleRate, frames[0].NumChannels, frames[0].SamplesPerChannel)
+	}
+	if !bytes.Equal(frames[0].Data, data[:20]) {
+		t.Fatalf("first frame data = %v, want %v", frames[0].Data, data[:20])
+	}
+	if frames[1].SampleRate != 100 || frames[1].NumChannels != 1 || frames[1].SamplesPerChannel != 2 {
+		t.Fatalf("tail frame shape = %d/%d/%d, want 100/1/2", frames[1].SampleRate, frames[1].NumChannels, frames[1].SamplesPerChannel)
+	}
+	if !bytes.Equal(frames[1].Data, data[20:]) {
+		t.Fatalf("tail frame data = %v, want %v", frames[1].Data, data[20:])
+	}
+}
+
+func TestPreConnectAudioRawPCMRejectsInvalidAudioShape(t *testing.T) {
+	if _, err := readPreConnectRawPCMFrames(bytes.NewReader([]byte{1, 0}), 0, 1); err == nil {
+		t.Fatal("readPreConnectRawPCMFrames() zero sample rate error = nil")
+	}
+	if _, err := readPreConnectRawPCMFrames(bytes.NewReader([]byte{1, 0}), 100, 0); err == nil {
+		t.Fatal("readPreConnectRawPCMFrames() zero channels error = nil")
+	}
+}
+
+func TestPreConnectAudioRawPCMReadErrorDropsPartialFrames(t *testing.T) {
+	readErr := errors.New("stream failed")
+	reader := &preConnectErrReader{
+		data: []byte{1, 0},
+		err:  readErr,
+	}
+
+	frames, err := readPreConnectRawPCMFrames(reader, 10, 1)
+
+	if !errors.Is(err, readErr) {
+		t.Fatalf("readPreConnectRawPCMFrames() error = %v, want %v", err, readErr)
+	}
+	if frames != nil {
+		t.Fatalf("readPreConnectRawPCMFrames() frames = %#v, want nil on read error", frames)
+	}
+}
+
+type preConnectErrReader struct {
+	data []byte
+	err  error
+	done bool
+}
+
+func (r *preConnectErrReader) Read(p []byte) (int, error) {
+	if r.done {
+		return 0, io.EOF
+	}
+	r.done = true
+	copy(p, r.data)
+	return len(r.data), r.err
 }
 
 func waitForPreConnectBufferWaiter(t *testing.T, handler *PreConnectAudioHandler, trackID string) {

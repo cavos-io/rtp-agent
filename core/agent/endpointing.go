@@ -102,19 +102,19 @@ func NewDynamicEndpointing(minDelay float64, maxDelay float64, alpha ...float64)
 
 func (e *DynamicEndpointing) UpdateOptions(minDelay *float64, maxDelay *float64) {
 	e.BaseEndpointing.UpdateOptions(minDelay, maxDelay)
-	e.resetFilterBounds()
+	if minDelay != nil {
+		_ = e.utterancePause.ResetWithOptions(lkmath.ExpFilterOptions{Initial: minDelay, MinVal: minDelay})
+		_ = e.turnPause.ResetWithOptions(lkmath.ExpFilterOptions{MinVal: minDelay})
+	}
+	if maxDelay != nil {
+		_ = e.turnPause.ResetWithOptions(lkmath.ExpFilterOptions{Initial: maxDelay, MaxVal: maxDelay})
+		_ = e.utterancePause.ResetWithOptions(lkmath.ExpFilterOptions{MaxVal: maxDelay})
+	}
 }
 
 func (e *DynamicEndpointing) UpdateAlpha(alpha float64) {
 	e.utterancePause.UpdateBase(alpha)
 	e.turnPause.UpdateBase(alpha)
-}
-
-func (e *DynamicEndpointing) resetFilterBounds() {
-	minDelay := e.minDelay
-	maxDelay := e.maxDelay
-	_ = e.utterancePause.ResetWithOptions(lkmath.ExpFilterOptions{MinVal: &minDelay, MaxVal: &maxDelay})
-	_ = e.turnPause.ResetWithOptions(lkmath.ExpFilterOptions{MinVal: &minDelay, MaxVal: &maxDelay})
 }
 
 func (e *DynamicEndpointing) MinDelay() float64 {
@@ -202,6 +202,8 @@ func (e *DynamicEndpointing) OnEndOfSpeech(endedAt float64, shouldIgnore bool) {
 		e.utterancePause.Apply(1.0, utterancePause)
 	}
 	e.utteranceEndedAt = &endedAt
+	e.agentSpeechStartedAt = nil
+	e.agentSpeechEndedAt = nil
 	e.overlapping = false
 	e.speaking = false
 }

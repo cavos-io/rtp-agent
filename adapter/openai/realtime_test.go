@@ -56,6 +56,15 @@ func TestNewOpenAIRealtimeModelUsesReferenceDefaultModel(t *testing.T) {
 	}
 }
 
+func TestNewOpenAIRealtimeModelProviderUsesReferenceBaseURLHost(t *testing.T) {
+	t.Setenv("OPENAI_BASE_URL", "https://gateway.openai.test/openai/v1")
+	model := NewRealtimeModel("test-key", "")
+
+	if got := model.Provider(); got != "gateway.openai.test" {
+		t.Fatalf("Provider() = %q, want gateway.openai.test", got)
+	}
+}
+
 func TestOpenAIRealtimeSessionRequiresAPIKeyBeforeDial(t *testing.T) {
 	t.Setenv("OPENAI_API_KEY", "")
 	model := NewRealtimeModel("", "")
@@ -133,6 +142,9 @@ func TestRealtimeSessionSendsProtocolMessages(t *testing.T) {
 	if req.Header.Get("OpenAI-Beta") != "realtime=v1" {
 		t.Fatalf("OpenAI-Beta = %q, want realtime=v1", req.Header.Get("OpenAI-Beta"))
 	}
+	initialUpdate := <-messages
+	assertRealtimeMessage(t, initialUpdate, "session.update", "gpt-realtime")
+	assertRealtimeMessageEventID(t, initialUpdate, "session_update_")
 
 	select {
 	case ev := <-session.EventCh():
@@ -192,7 +204,8 @@ func TestRealtimeSessionSendsProtocolMessages(t *testing.T) {
 	if err := session.Interrupt(); err != nil {
 		t.Fatalf("Interrupt error = %v", err)
 	}
-	assertRealtimeMessage(t, <-messages, "response.cancel", "")
+	inactiveInterruptReason := "interrupt without active generation should not send response.cancel"
+	assertNoRealtimeMessage(t, messages, inactiveInterruptReason)
 
 	audioChunk := make([]byte, 24000/10*2)
 	copy(audioChunk, []byte{1, 2, 3, 4})
@@ -231,6 +244,10 @@ func TestRealtimeSessionSendsProtocolMessages(t *testing.T) {
 	if response["instructions"] != "answer briefly\ngo" {
 		t.Fatalf("generate reply instructions = %#v, want session and per-response instructions", response["instructions"])
 	}
+	if err := session.Interrupt(); err != nil {
+		t.Fatalf("Interrupt pending generation error = %v", err)
+	}
+	assertRealtimeMessage(t, <-messages, "response.cancel", "")
 
 	if err := session.Truncate(llm.RealtimeTruncateOptions{
 		MessageID:      "user-1",
@@ -261,6 +278,27 @@ func TestRealtimeSessionSendsProtocolMessages(t *testing.T) {
 		t.Fatalf("ClearAudio error = %v", err)
 	}
 	assertRealtimeMessage(t, <-messages, "input_audio_buffer.clear", "")
+
+	stereo48kChunk := make([]byte, 4800*2*2)
+	for i := 0; i < 4800; i++ {
+		sampleOffset := i * 4
+		stereo48kChunk[sampleOffset] = byte(i)
+		stereo48kChunk[sampleOffset+2] = byte(i)
+	}
+	if err := session.PushAudio(&audiomodel.AudioFrame{Data: stereo48kChunk, SampleRate: 48000, NumChannels: 2, SamplesPerChannel: 4800}); err != nil {
+		t.Fatalf("PushAudio stereo 48k error = %v", err)
+	}
+	normalizedAudioMessage := <-messages
+	assertRealtimeMessage(t, normalizedAudioMessage, "input_audio_buffer.append", "")
+	normalizedAudioPayload := realtimeMessagePayload(t, normalizedAudioMessage, "audio")
+	normalizedAudio, err := base64.StdEncoding.DecodeString(normalizedAudioPayload)
+	if err != nil {
+		t.Fatalf("decode normalized audio payload: %v", err)
+	}
+	if len(normalizedAudio) != len(audioChunk) {
+		t.Fatalf("normalized audio bytes = %d, want %d for 24k mono", len(normalizedAudio), len(audioChunk))
+	}
+	assertNoRealtimeMessage(t, messages, "normalized 48k stereo audio should emit one 100ms 24k mono chunk")
 
 	if err := session.Close(); err != nil {
 		t.Fatalf("Close error = %v", err)
@@ -376,6 +414,19 @@ func assertRealtimeMessage(t *testing.T, raw string, wantType string, wantContai
 	if wantContains != "" && !strings.Contains(raw, wantContains) {
 		t.Fatalf("message %s does not contain %q", raw, wantContains)
 	}
+}
+
+func realtimeMessagePayload(t *testing.T, raw string, key string) string {
+	t.Helper()
+	var msg map[string]any
+	if err := json.Unmarshal([]byte(raw), &msg); err != nil {
+		t.Fatalf("decode message %q: %v", raw, err)
+	}
+	value, ok := msg[key].(string)
+	if !ok {
+		t.Fatalf("message %q field %q = %#v, want string", raw, key, msg[key])
+	}
+	return value
 }
 
 func assertRealtimeMessageEventID(t *testing.T, raw string, wantPrefix string) {

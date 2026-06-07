@@ -6,6 +6,14 @@ import (
 	"github.com/cavos-io/rtp-agent/core/llm"
 )
 
+func TestNewOpenAILLMWithBaseURLProviderUsesReferenceHost(t *testing.T) {
+	model := NewOpenAILLMWithBaseURL("test-key", "gpt-4o", "https://gateway.openai.test/v1")
+
+	if got := model.Provider(); got != "gateway.openai.test" {
+		t.Fatalf("Provider() = %q, want gateway.openai.test", got)
+	}
+}
+
 func TestBuildOpenAIChatMessagesGroupsToolCallsWithOutputs(t *testing.T) {
 	ctx := llm.NewChatContext()
 	groupID := "assistant-turn"

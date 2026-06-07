@@ -2,12 +2,14 @@ package worker
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/cavos-io/rtp-agent/core/audio"
 	"github.com/cavos-io/rtp-agent/core/audio/model"
 	"github.com/cavos-io/rtp-agent/library/logger"
 	lksdk "github.com/livekit/server-sdk-go/v2"
@@ -96,8 +98,16 @@ func (h *PreConnectAudioHandler) readAudioTask(reader *lksdk.ByteStreamReader, p
 		return
 	}
 
-	sampleRate, _ := strconv.Atoi(sampleRateStr)
-	channels, _ := strconv.Atoi(channelsStr)
+	sampleRate, err := strconv.Atoi(sampleRateStr)
+	if err != nil {
+		logger.Logger.Warnw("invalid sampleRate in pre-connect byte stream", err)
+		return
+	}
+	channels, err := strconv.Atoi(channelsStr)
+	if err != nil {
+		logger.Logger.Warnw("invalid channels in pre-connect byte stream", err)
+		return
+	}
 
 	buf := &PreConnectAudioBuffer{
 		Timestamp: time.Now(),
@@ -137,29 +147,40 @@ func (h *PreConnectAudioHandler) readAudioTask(reader *lksdk.ByteStreamReader, p
 		}
 	} else {
 		// Raw PCM
-		for {
-			chunk := make([]byte, 4096)
-			n, err := reader.Read(chunk)
-			if n > 0 {
-				data := make([]byte, n)
-				copy(data, chunk[:n])
-				buf.Frames = append(buf.Frames, &model.AudioFrame{
-					Data:              data,
-					SampleRate:        uint32(sampleRate),
-					NumChannels:       uint32(channels),
-					SamplesPerChannel: uint32(n / (channels * 2)),
-				})
-			}
-			if err == io.EOF {
-				break
-			} else if err != nil {
-				logger.Logger.Warnw("error reading pre-connect pcm stream", err)
-				break
-			}
+		frames, err := readPreConnectRawPCMFrames(reader, sampleRate, channels)
+		if err != nil {
+			logger.Logger.Warnw("error reading pre-connect pcm stream", err)
+			return
 		}
+		buf.Frames = append(buf.Frames, frames...)
 	}
 
 	h.publishBuffer(trackID, buf)
+}
+
+func readPreConnectRawPCMFrames(reader io.Reader, sampleRate int, channels int) ([]*model.AudioFrame, error) {
+	if sampleRate <= 0 {
+		return nil, fmt.Errorf("pre-connect audio sample rate must be positive")
+	}
+	if channels <= 0 {
+		return nil, fmt.Errorf("pre-connect audio channels must be positive")
+	}
+	audioStream := audio.NewAudioByteStream(uint32(sampleRate), uint32(channels), 0)
+	frames := make([]*model.AudioFrame, 0)
+	chunk := make([]byte, 4096)
+	for {
+		n, err := reader.Read(chunk)
+		if n > 0 {
+			frames = append(frames, audioStream.Push(chunk[:n])...)
+		}
+		if err == io.EOF {
+			frames = append(frames, audioStream.Flush()...)
+			return frames, nil
+		}
+		if err != nil {
+			return nil, err
+		}
+	}
 }
 
 func (h *PreConnectAudioHandler) publishBuffer(trackID string, buf *PreConnectAudioBuffer) {

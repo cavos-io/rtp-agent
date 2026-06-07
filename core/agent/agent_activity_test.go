@@ -1081,6 +1081,29 @@ func TestAgentActivityStartRecordsInitialConfiguration(t *testing.T) {
 	}
 }
 
+func TestAgentActivityStartRecordsInitialMCPTools(t *testing.T) {
+	agent := NewAgent("")
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	session.SetMCPServers([]llm.MCPServer{
+		&fakeActivityMCPServer{tools: []llm.Tool{&agentTestTool{id: "lookup", name: "lookup"}}},
+	})
+	activity := NewAgentActivity(agent, session)
+
+	activity.Start()
+	defer activity.Stop()
+
+	if len(agent.ChatCtx.Items) == 0 {
+		t.Fatal("agent chat context has no initial items, want MCP tool config")
+	}
+	config, ok := agent.ChatCtx.Items[len(agent.ChatCtx.Items)-1].(*llm.AgentConfigUpdate)
+	if !ok {
+		t.Fatalf("last agent chat item = %T, want config update", agent.ChatCtx.Items[len(agent.ChatCtx.Items)-1])
+	}
+	if !stringSlicesEqual(config.ToolsAdded, []string{"lookup"}) {
+		t.Fatalf("config tools added = %q, want [lookup]", config.ToolsAdded)
+	}
+}
+
 func TestAgentActivityStartRecordsInstructionVariants(t *testing.T) {
 	agent := NewAgent("")
 	agent.InstructionVariants = llm.NewInstructions("speak plainly", "write tersely")

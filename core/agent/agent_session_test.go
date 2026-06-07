@@ -17,20 +17,24 @@ import (
 	livekitlogger "github.com/livekit/protocol/logger"
 )
 
-func TestAgentSessionHistoryReturnsCopy(t *testing.T) {
+func TestAgentSessionHistoryReturnsLiveContext(t *testing.T) {
 	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
 	session.ChatCtx.Append(&llm.ChatMessage{ID: "msg_1", Role: llm.ChatRoleUser})
 
 	history := session.History()
-	if history == session.ChatCtx {
-		t.Fatal("History() returned internal chat context pointer, want copy")
+	if history != session.ChatCtx {
+		t.Fatal("History() did not return internal chat context pointer")
 	}
 	if got := len(history.Items); got != 1 {
 		t.Fatalf("History() item count = %d, want 1", got)
 	}
 	history.Append(&llm.ChatMessage{ID: "msg_2", Role: llm.ChatRoleAssistant})
-	if got := len(session.ChatCtx.Items); got != 1 {
-		t.Fatalf("mutating History() result changed session ChatCtx item count to %d, want 1", got)
+	if got := len(session.ChatCtx.Items); got != 2 {
+		t.Fatalf("mutating History() result left session ChatCtx item count at %d, want 2", got)
+	}
+	session.ChatCtx.Append(&llm.ChatMessage{ID: "msg_3", Role: llm.ChatRoleUser})
+	if got := len(history.Items); got != 3 {
+		t.Fatalf("mutating session ChatCtx left History() result item count at %d, want 3", got)
 	}
 }
 
@@ -106,7 +110,7 @@ func TestAgentSessionTurnDetectionReturnsUpdatedOption(t *testing.T) {
 	}
 }
 
-func TestAgentSessionMCPServersReturnsSnapshot(t *testing.T) {
+func TestAgentSessionMCPServersReturnsLiveList(t *testing.T) {
 	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
 	servers := []llm.MCPServer{&fakeSessionMCPServer{id: "lookup"}}
 
@@ -115,10 +119,12 @@ func TestAgentSessionMCPServersReturnsSnapshot(t *testing.T) {
 	if len(got) != 1 || got[0] != servers[0] {
 		t.Fatalf("MCPServers() = %#v, want configured server", got)
 	}
+	mutated := &fakeSessionMCPServer{id: "mutated"}
+	got[0] = mutated
 
-	got[0] = &fakeSessionMCPServer{id: "mutated"}
-	if session.MCPServers()[0] != servers[0] {
-		t.Fatal("mutating MCPServers() result changed session server list")
+	gotAgain := session.MCPServers()
+	if len(gotAgain) != 1 || gotAgain[0] != mutated {
+		t.Fatal("mutating MCPServers() result did not update session server list")
 	}
 }
 
@@ -952,6 +958,22 @@ func TestNewAgentSessionAppliesReferenceOptionDefaults(t *testing.T) {
 	}
 	if opts.SessionCloseTranscriptTimeout != 2.0 {
 		t.Fatalf("SessionCloseTranscriptTimeout = %v, want 2.0", opts.SessionCloseTranscriptTimeout)
+	}
+}
+
+func TestNewAgentSessionPreservesExplicitFalseTurnOptions(t *testing.T) {
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{
+		ResumeFalseInterruption:    false,
+		ResumeFalseInterruptionSet: true,
+		PreemptiveGeneration:       false,
+		PreemptiveGenerationSet:    true,
+	})
+
+	if session.Options.ResumeFalseInterruption {
+		t.Fatal("ResumeFalseInterruption = true, want explicit false")
+	}
+	if session.Options.PreemptiveGeneration {
+		t.Fatal("PreemptiveGeneration = true, want explicit false")
 	}
 }
 

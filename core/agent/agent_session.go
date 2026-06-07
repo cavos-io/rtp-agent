@@ -50,6 +50,7 @@ type AgentSessionOptions struct {
 	DisableUserAwayTimeout        bool
 	FalseInterruptionTimeout      float64
 	ResumeFalseInterruption       bool
+	ResumeFalseInterruptionSet    bool
 	MinConsecutiveSpeechDelay     float64
 	UseTTSAlignedTranscript       bool
 	TTSStreamPacer                *tts.SentenceStreamPacerOptions
@@ -60,6 +61,7 @@ type AgentSessionOptions struct {
 	BackgroundAudio               *BackgroundAudioPlayer
 	WordTokenizer                 tokenize.WordTokenizer
 	PreemptiveGeneration          bool
+	PreemptiveGenerationSet       bool
 	AECWarmupDuration             float64
 	SessionCloseTranscriptTimeout float64
 	TurnDetection                 TurnDetectionMode
@@ -350,7 +352,7 @@ func (s *AgentSession) History() *llm.ChatContext {
 	if s.ChatCtx == nil {
 		return llm.NewChatContext()
 	}
-	return s.ChatCtx.Copy()
+	return s.ChatCtx
 }
 
 func (s *AgentSession) SessionOptions() AgentSessionOptions {
@@ -394,7 +396,7 @@ func (s *AgentSession) SetMCPServers(servers []llm.MCPServer) {
 func (s *AgentSession) MCPServers() []llm.MCPServer {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return append([]llm.MCPServer(nil), s.mcpServers...)
+	return s.mcpServers
 }
 
 func (s *AgentSession) RecordedEvents() []Event {
@@ -575,8 +577,12 @@ func withAgentSessionOptionDefaults(opts AgentSessionOptions) AgentSessionOption
 	if opts.FalseInterruptionTimeout == 0 {
 		opts.FalseInterruptionTimeout = 2.0
 	}
-	opts.ResumeFalseInterruption = true
-	opts.PreemptiveGeneration = true
+	if !opts.ResumeFalseInterruptionSet {
+		opts.ResumeFalseInterruption = true
+	}
+	if !opts.PreemptiveGenerationSet {
+		opts.PreemptiveGeneration = true
+	}
 	if opts.AECWarmupDuration == 0 {
 		opts.AECWarmupDuration = 3.0
 	}

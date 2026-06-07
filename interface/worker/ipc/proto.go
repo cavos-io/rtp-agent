@@ -199,7 +199,7 @@ type InferenceRequest struct {
 
 type InferenceResponse struct {
 	RequestID string `json:"request_id"`
-	Data      []byte `json:"data,omitempty"`
+	Data      []byte `json:"data"`
 	Error     string `json:"error,omitempty"`
 }
 

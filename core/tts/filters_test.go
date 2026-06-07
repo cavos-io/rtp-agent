@@ -98,6 +98,31 @@ func TestTextTransformBufferFiltersMarkdownAcrossChunks(t *testing.T) {
 	}
 }
 
+func TestTextReplaceBufferReplacesTermsAcrossChunks(t *testing.T) {
+	buffer := NewTextReplaceBuffer(map[string]string{"LiveKit": "Cavos"}, false)
+
+	chunks := append(buffer.Push("Use Li"), buffer.Push("veKit now.")...)
+	chunks = append(chunks, buffer.Flush()...)
+
+	if got, want := strings.Join(chunks, ""), "Use Cavos now."; got != want {
+		t.Fatalf("joined output = %q, want %q; chunks = %#v", got, want, chunks)
+	}
+	for _, chunk := range chunks {
+		if strings.Contains(chunk, "LiveKit") {
+			t.Fatalf("chunk %q leaked replaced term; chunks = %#v", chunk, chunks)
+		}
+	}
+
+	shorter := NewTextReplaceBuffer(map[string]string{"LiveKit": "LK"}, false)
+
+	chunks = append(shorter.Push("Try Live"), shorter.Push("Kit.")...)
+	chunks = append(chunks, shorter.Flush()...)
+
+	if got, want := strings.Join(chunks, ""), "Try LK."; got != want {
+		t.Fatalf("joined output = %q, want %q; chunks = %#v", got, want, chunks)
+	}
+}
+
 func equalStringSlices(a, b []string) bool {
 	if len(a) != len(b) {
 		return false

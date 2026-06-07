@@ -354,7 +354,15 @@ func (a *AgentActivity) recordInitialConfiguration() error {
 		return err
 	}
 
-	toolNames := sortedAgentToolNames(a.Tools())
+	tools := a.Tools()
+	if a.Session != nil {
+		registeredTools, err := sessionRegisteredTools(context.Background(), a.Session)
+		if err != nil {
+			return err
+		}
+		tools = agentToolsAsInterfaces(registeredTools)
+	}
+	toolNames := sortedAgentToolNames(tools)
 	if instructions == nil && len(toolNames) == 0 {
 		return nil
 	}

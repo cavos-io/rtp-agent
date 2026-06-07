@@ -3,6 +3,7 @@ package openai
 import (
 	"context"
 	"encoding/base64"
+	"encoding/binary"
 	"encoding/json"
 	"fmt"
 	"math"
@@ -57,7 +58,11 @@ func (m *RealtimeModel) Model() string {
 }
 
 func (m *RealtimeModel) Provider() string {
-	return "openai"
+	u, err := url.Parse(m.baseURL)
+	if err != nil || u.Host == "" {
+		return "openai"
+	}
+	return u.Host
 }
 
 func (m *RealtimeModel) Close() error {
@@ -88,6 +93,7 @@ type realtimeSession struct {
 	remote           *llm.RemoteChatContext
 	inputTranscripts *utils.BoundedDict[inputTranscriptKey, realtimeInputTranscript]
 	generation       *realtimeGeneration
+	pendingResponses int
 	instructions     string
 	audioBStream     *audio.AudioByteStream
 	pushedDuration   float64
@@ -97,6 +103,9 @@ type realtimeSession struct {
 const maxRealtimeInputTranscripts = 1024
 const openAIRealtimeInputSampleRate = 24000
 const openAIRealtimeInputNumChannels = 1
+const openAIRealtimeDefaultVoice = "marin"
+const openAIRealtimeDefaultSpeed = 1.0
+const openAIRealtimeDefaultMaxOutputTokens = "inf"
 
 type inputTranscriptKey struct {
 	itemID       string
@@ -149,6 +158,12 @@ func (m *RealtimeModel) Session() (llm.RealtimeSession, error) {
 	}
 
 	go s.eventLoop()
+	initialSession := openAIRealtimeInitialSession(m.model)
+	s.optionsState = openAIRealtimeOptionEntries(initialSession)
+	if err := s.sendMsg(openAIRealtimeInitialSessionUpdateMessage(initialSession)); err != nil {
+		_ = s.Close()
+		return nil, err
+	}
 
 	return s, nil
 }
@@ -189,6 +204,37 @@ func openAIRealtimeSessionURL(baseURL, model string) string {
 
 func defaultOpenAIRealtimeWebsocketDialer(endpoint string, headers http.Header) (*websocket.Conn, *http.Response, error) {
 	return websocket.DefaultDialer.Dial(endpoint, headers)
+}
+
+func openAIRealtimeInitialSession(model string) map[string]any {
+	audioFormat := map[string]any{
+		"type": "audio/pcm",
+		"rate": openAIRealtimeInputSampleRate,
+	}
+	return map[string]any{
+		"type":              "realtime",
+		"model":             model,
+		"output_modalities": []string{"audio"},
+		"audio": map[string]any{
+			"input": map[string]any{
+				"format": audioFormat,
+			},
+			"output": map[string]any{
+				"format": audioFormat,
+				"speed":  openAIRealtimeDefaultSpeed,
+				"voice":  openAIRealtimeDefaultVoice,
+			},
+		},
+		"max_output_tokens": openAIRealtimeDefaultMaxOutputTokens,
+	}
+}
+
+func openAIRealtimeInitialSessionUpdateMessage(session map[string]any) map[string]any {
+	return map[string]any{
+		"type":     "session.update",
+		"event_id": cavosmath.ShortUUID("session_update_"),
+		"session":  session,
+	}
 }
 
 func (s *realtimeSession) EventCh() <-chan llm.RealtimeEvent {
@@ -656,6 +702,12 @@ func openAIRealtimeToolChoice(choice llm.ToolChoice) any {
 }
 
 func (s *realtimeSession) Interrupt() error {
+	s.mu.Lock()
+	active := s.generation != nil || s.pendingResponses > 0
+	s.mu.Unlock()
+	if !active {
+		return nil
+	}
 	msg := map[string]any{
 		"type": "response.cancel",
 	}
@@ -665,6 +717,10 @@ func (s *realtimeSession) Interrupt() error {
 func (s *realtimeSession) PushAudio(frame *model.AudioFrame) error {
 	if frame == nil || len(frame.Data) == 0 {
 		return nil
+	}
+	frame, err := normalizeOpenAIRealtimeInputAudio(frame)
+	if err != nil {
+		return err
 	}
 	if s.audioBStream == nil {
 		s.audioBStream = newOpenAIRealtimeAudioByteStream()
@@ -683,6 +739,60 @@ func (s *realtimeSession) PushAudio(frame *model.AudioFrame) error {
 		}
 	}
 	return nil
+}
+
+func normalizeOpenAIRealtimeInputAudio(frame *model.AudioFrame) (*model.AudioFrame, error) {
+	if frame == nil {
+		return nil, nil
+	}
+	if frame.SampleRate == 0 || frame.NumChannels == 0 {
+		return frame, nil
+	}
+	if frame.SampleRate == openAIRealtimeInputSampleRate && frame.NumChannels == openAIRealtimeInputNumChannels {
+		return frame, nil
+	}
+	if len(frame.Data)%2 != 0 {
+		return nil, fmt.Errorf("openai realtime input audio must be 16-bit PCM")
+	}
+	samplesPerChannel := frame.SamplesPerChannel
+	if samplesPerChannel == 0 {
+		samplesPerChannel = uint32(len(frame.Data)) / frame.NumChannels / 2
+	}
+	expectedBytes := int(samplesPerChannel * frame.NumChannels * 2)
+	if len(frame.Data) < expectedBytes {
+		return nil, fmt.Errorf("openai realtime input audio data is shorter than declared sample count")
+	}
+	if samplesPerChannel == 0 {
+		return &model.AudioFrame{
+			SampleRate:        openAIRealtimeInputSampleRate,
+			NumChannels:       openAIRealtimeInputNumChannels,
+			SamplesPerChannel: 0,
+		}, nil
+	}
+
+	outSamples := uint32((uint64(samplesPerChannel)*uint64(openAIRealtimeInputSampleRate) + uint64(frame.SampleRate) - 1) / uint64(frame.SampleRate))
+	out := make([]byte, int(outSamples*openAIRealtimeInputNumChannels*2))
+	channelCount := int(frame.NumChannels)
+	for outIdx := uint32(0); outIdx < outSamples; outIdx++ {
+		srcIdx := uint32(uint64(outIdx) * uint64(frame.SampleRate) / uint64(openAIRealtimeInputSampleRate))
+		if srcIdx >= samplesPerChannel {
+			srcIdx = samplesPerChannel - 1
+		}
+		var sum int32
+		for ch := 0; ch < channelCount; ch++ {
+			offset := (int(srcIdx)*channelCount + ch) * 2
+			sum += int32(int16(binary.LittleEndian.Uint16(frame.Data[offset : offset+2])))
+		}
+		sample := sum / int32(channelCount)
+		binary.LittleEndian.PutUint16(out[int(outIdx)*2:int(outIdx)*2+2], uint16(int16(sample)))
+	}
+
+	return &model.AudioFrame{
+		Data:              out,
+		SampleRate:        openAIRealtimeInputSampleRate,
+		NumChannels:       openAIRealtimeInputNumChannels,
+		SamplesPerChannel: outSamples,
+	}, nil
 }
 
 func newOpenAIRealtimeAudioByteStream() *audio.AudioByteStream {
@@ -741,7 +851,13 @@ func (s *realtimeSession) GenerateReply(options llm.RealtimeGenerateReplyOptions
 	s.mu.Lock()
 	instructions := s.instructions
 	s.mu.Unlock()
-	return s.sendMsg(openAIRealtimeGenerateReplyMessageWithSessionInstructions(options, instructions))
+	if err := s.sendMsg(openAIRealtimeGenerateReplyMessageWithSessionInstructions(options, instructions)); err != nil {
+		return err
+	}
+	s.mu.Lock()
+	s.pendingResponses++
+	s.mu.Unlock()
+	return nil
 }
 
 func (s *realtimeSession) Say(text string) error {
@@ -1045,6 +1161,9 @@ func (s *realtimeSession) trackRealtimeEvent(ev llm.RealtimeEvent) llm.RealtimeE
 func (s *realtimeSession) trackRealtimeGenerationCreated(ev llm.RealtimeEvent) llm.RealtimeEvent {
 	if ev.Generation == nil {
 		return ev
+	}
+	if s.pendingResponses > 0 {
+		s.pendingResponses--
 	}
 	generation := &realtimeGeneration{
 		messageCh:  make(chan llm.MessageGeneration, 100),

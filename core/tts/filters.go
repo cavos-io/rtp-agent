@@ -2,6 +2,7 @@ package tts
 
 import (
 	"regexp"
+	"sort"
 	"strings"
 )
 
@@ -45,8 +46,46 @@ type TextTransformBuffer struct {
 	bufferIsNewline bool
 }
 
+type TextReplaceBuffer struct {
+	replacements  []textReplacement
+	tailLen       int
+	caseSensitive bool
+	buffer        string
+}
+
+type textReplacement struct {
+	old string
+	new string
+}
+
 func NewTextTransformBuffer() *TextTransformBuffer {
 	return &TextTransformBuffer{bufferIsNewline: true}
+}
+
+func NewTextReplaceBuffer(replacements map[string]string, caseSensitive bool) *TextReplaceBuffer {
+	keys := make([]string, 0, len(replacements))
+	tailLen := 0
+	for old := range replacements {
+		keys = append(keys, old)
+		if len(old) > tailLen {
+			tailLen = len(old)
+		}
+	}
+	sort.Strings(keys)
+
+	ordered := make([]textReplacement, 0, len(keys))
+	for _, old := range keys {
+		ordered = append(ordered, textReplacement{old: old, new: replacements[old]})
+	}
+	if tailLen > 0 {
+		tailLen--
+	}
+
+	return &TextReplaceBuffer{
+		replacements:  ordered,
+		tailLen:       tailLen,
+		caseSensitive: caseSensitive,
+	}
 }
 
 func (b *TextTransformBuffer) Push(text string) []string {
@@ -86,8 +125,59 @@ func (b *TextTransformBuffer) Push(text string) []string {
 	return nil
 }
 
+func (b *TextReplaceBuffer) Push(text string) []string {
+	if text == "" {
+		return nil
+	}
+	b.buffer += text
+	if len(b.buffer) <= b.tailLen {
+		return nil
+	}
+
+	b.buffer = b.apply(b.buffer)
+	if len(b.buffer) <= b.tailLen {
+		return nil
+	}
+	flushTo := len(b.buffer) - b.tailLen
+	out := b.buffer[:flushTo]
+	b.buffer = b.buffer[flushTo:]
+	if out == "" {
+		return nil
+	}
+	return []string{out}
+}
+
 func (b *TextTransformBuffer) Flush() []string {
 	return b.flush()
+}
+
+func (b *TextReplaceBuffer) Flush() []string {
+	if b.buffer == "" {
+		return nil
+	}
+	text := b.apply(b.buffer)
+	b.buffer = ""
+	if text == "" {
+		return nil
+	}
+	return []string{text}
+}
+
+func (b *TextReplaceBuffer) apply(text string) string {
+	for _, replacement := range b.replacements {
+		if replacement.old == "" {
+			continue
+		}
+		pattern := regexp.QuoteMeta(replacement.old)
+		if !b.caseSensitive {
+			pattern = "(?i)" + pattern
+		}
+		re := regexp.MustCompile(pattern)
+		text = re.ReplaceAllStringFunc(text, func(string) string {
+			return replacement.new
+		})
+	}
+	return text
 }
 
 func FilterMarkdown(text string) string {
