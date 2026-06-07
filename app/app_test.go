@@ -2285,6 +2285,7 @@ func TestDefaultConfigFromEnvSelectsWarmTransferWorkflowAgent(t *testing.T) {
 	t.Setenv("RTP_AGENT_WORKFLOW_WARM_TRANSFER_SIP_HEADERS", "X-Trace=trace-a,X-Queue=billing")
 	t.Setenv("RTP_AGENT_WORKFLOW_WARM_TRANSFER_DTMF", "ww1234#")
 	t.Setenv("RTP_AGENT_WORKFLOW_WARM_TRANSFER_RINGING_TIMEOUT_SECONDS", "3.5")
+	t.Setenv("RTP_AGENT_WORKFLOW_WARM_TRANSFER_HOLD_AUDIO", "custom-hold.ogg")
 	t.Setenv("RTP_AGENT_WORKFLOW_WARM_TRANSFER_PERSONA", "You brief a licensed support specialist before joining the caller.")
 	t.Setenv("RTP_AGENT_WORKFLOW_WARM_TRANSFER_EXTRA_INSTRUCTIONS", "\nKeep the handoff concise.")
 
@@ -2314,6 +2315,9 @@ func TestDefaultConfigFromEnvSelectsWarmTransferWorkflowAgent(t *testing.T) {
 	if task.RingingTimeout != 3500*time.Millisecond {
 		t.Fatalf("RingingTimeout = %v, want 3.5s", task.RingingTimeout)
 	}
+	if task.HoldAudio != "custom-hold.ogg" {
+		t.Fatalf("HoldAudio = %#v, want configured custom hold audio", task.HoldAudio)
+	}
 	if !strings.Contains(task.Instructions, "You brief a licensed support specialist before joining the caller.") {
 		t.Fatalf("Instructions = %q, want custom warm-transfer persona", task.Instructions)
 	}
@@ -2328,6 +2332,25 @@ func TestDefaultConfigFromEnvSelectsWarmTransferWorkflowAgent(t *testing.T) {
 	}
 	if len(app.Agent.Tools) != 3 {
 		t.Fatalf("workflow tools = %d, want connect/decline/voicemail tools", len(app.Agent.Tools))
+	}
+}
+
+func TestDefaultConfigFromEnvDisablesWarmTransferHoldAudio(t *testing.T) {
+	t.Setenv("RTP_AGENT_WORKFLOW_TASK", "warm_transfer")
+	t.Setenv("RTP_AGENT_WORKFLOW_WARM_TRANSFER_SIP_CALL_TO", "+15550100")
+	t.Setenv("RTP_AGENT_WORKFLOW_WARM_TRANSFER_SIP_TRUNK_ID", "trunk_123")
+	t.Setenv("RTP_AGENT_WORKFLOW_WARM_TRANSFER_DISABLE_HOLD_AUDIO", "true")
+
+	app, err := NewApp(DefaultConfigFromEnv())
+	if err != nil {
+		t.Fatalf("NewApp() error = %v", err)
+	}
+	task, ok := app.Session.Agent.(*workflows.WarmTransferTask)
+	if !ok {
+		t.Fatalf("Session.Agent = %T, want *workflows.WarmTransferTask", app.Session.Agent)
+	}
+	if task.HoldAudio != nil {
+		t.Fatalf("HoldAudio = %#v, want nil when hold audio is disabled", task.HoldAudio)
 	}
 }
 

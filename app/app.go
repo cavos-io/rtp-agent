@@ -475,6 +475,8 @@ type AppConfig struct {
 	WorkflowWarmTransferSipHeaders        map[string]string
 	WorkflowWarmTransferDTMF              string
 	WorkflowWarmTransferRingingTimeout    *float64
+	WorkflowWarmTransferHoldAudio         string
+	WorkflowWarmTransferDisableHoldAudio  bool
 	WorkflowWarmTransferPersona           string
 	WorkflowWarmTransferExtraInstructions string
 	WorkflowTaskGroupTasks                []string
@@ -815,6 +817,8 @@ func DefaultConfigFromEnv() AppConfig {
 		WorkflowWarmTransferSipHeaders:          splitEnvStringMap("RTP_AGENT_WORKFLOW_WARM_TRANSFER_SIP_HEADERS"),
 		WorkflowWarmTransferDTMF:                os.Getenv("RTP_AGENT_WORKFLOW_WARM_TRANSFER_DTMF"),
 		WorkflowWarmTransferRingingTimeout:      getenvOptionalFloat("RTP_AGENT_WORKFLOW_WARM_TRANSFER_RINGING_TIMEOUT_SECONDS"),
+		WorkflowWarmTransferHoldAudio:           os.Getenv("RTP_AGENT_WORKFLOW_WARM_TRANSFER_HOLD_AUDIO"),
+		WorkflowWarmTransferDisableHoldAudio:    getenvBool("RTP_AGENT_WORKFLOW_WARM_TRANSFER_DISABLE_HOLD_AUDIO"),
 		WorkflowWarmTransferPersona:             os.Getenv("RTP_AGENT_WORKFLOW_WARM_TRANSFER_PERSONA"),
 		WorkflowWarmTransferExtraInstructions:   os.Getenv("RTP_AGENT_WORKFLOW_WARM_TRANSFER_EXTRA_INSTRUCTIONS"),
 		WorkflowTaskGroupTasks:                  splitEnvList("RTP_AGENT_WORKFLOW_TASK_GROUP_TASKS"),
@@ -1034,12 +1038,14 @@ func workflowAgentFromConfig(cfg AppConfig, baseAgent *agent.Agent) (agent.Agent
 			return nil, fmt.Errorf("RTP_AGENT_WORKFLOW_WARM_TRANSFER_SIP_CALL_TO is required for warm_transfer workflow")
 		}
 		task, err := workflows.NewWarmTransferTaskWithOptions(workflows.WarmTransferOptions{
-			TargetPhone:   sipCallTo,
-			TrunkID:       strings.TrimSpace(cfg.WorkflowWarmTransferSipTrunkID),
-			SipConnection: cfg.WorkflowWarmTransferSipConnection,
-			SipNumber:     cfg.WorkflowWarmTransferSipNumber,
-			ChatContext:   baseAgent.ChatCtx,
-			Instructions:  workflowInstructionParts(cfg.WorkflowWarmTransferPersona, cfg.WorkflowWarmTransferExtraInstructions),
+			TargetPhone:      sipCallTo,
+			TrunkID:          strings.TrimSpace(cfg.WorkflowWarmTransferSipTrunkID),
+			SipConnection:    cfg.WorkflowWarmTransferSipConnection,
+			SipNumber:        cfg.WorkflowWarmTransferSipNumber,
+			HoldAudio:        workflowWarmTransferHoldAudio(cfg),
+			DisableHoldAudio: cfg.WorkflowWarmTransferDisableHoldAudio,
+			ChatContext:      baseAgent.ChatCtx,
+			Instructions:     workflowInstructionParts(cfg.WorkflowWarmTransferPersona, cfg.WorkflowWarmTransferExtraInstructions),
 		})
 		if err != nil {
 			return nil, err
@@ -1136,6 +1142,13 @@ func workflowDtmfOptionsFromConfig(cfg AppConfig) workflows.GetDtmfOptions {
 		opts.DtmfStopEvent = beta.DtmfEvent(stopEvent)
 	}
 	return opts
+}
+
+func workflowWarmTransferHoldAudio(cfg AppConfig) interface{} {
+	if cfg.WorkflowWarmTransferDisableHoldAudio {
+		return nil
+	}
+	return backgroundAudioSource(cfg.WorkflowWarmTransferHoldAudio)
 }
 
 func workflowTaskFactoryFromName(cfg AppConfig, baseAgent *agent.Agent, taskName string) (workflows.FactoryInfo, error) {
@@ -1267,12 +1280,14 @@ func workflowTaskFactoryFromName(cfg AppConfig, baseAgent *agent.Agent, taskName
 			sipTrunkID = strings.TrimSpace(os.Getenv("LIVEKIT_SIP_OUTBOUND_TRUNK"))
 		}
 		if _, err := workflows.NewWarmTransferTaskWithOptions(workflows.WarmTransferOptions{
-			TargetPhone:   sipCallTo,
-			TrunkID:       sipTrunkID,
-			SipConnection: cfg.WorkflowWarmTransferSipConnection,
-			SipNumber:     cfg.WorkflowWarmTransferSipNumber,
-			ChatContext:   baseAgent.ChatCtx,
-			Instructions:  workflowInstructionParts(cfg.WorkflowWarmTransferPersona, cfg.WorkflowWarmTransferExtraInstructions),
+			TargetPhone:      sipCallTo,
+			TrunkID:          sipTrunkID,
+			SipConnection:    cfg.WorkflowWarmTransferSipConnection,
+			SipNumber:        cfg.WorkflowWarmTransferSipNumber,
+			HoldAudio:        workflowWarmTransferHoldAudio(cfg),
+			DisableHoldAudio: cfg.WorkflowWarmTransferDisableHoldAudio,
+			ChatContext:      baseAgent.ChatCtx,
+			Instructions:     workflowInstructionParts(cfg.WorkflowWarmTransferPersona, cfg.WorkflowWarmTransferExtraInstructions),
 		}); err != nil {
 			return workflows.FactoryInfo{}, err
 		}
@@ -1281,12 +1296,14 @@ func workflowTaskFactoryFromName(cfg AppConfig, baseAgent *agent.Agent, taskName
 			Description: "Transfer the caller to a human agent by SIP.",
 			TaskFactory: factory(func() agent.AgentInterface {
 				task, err := workflows.NewWarmTransferTaskWithOptions(workflows.WarmTransferOptions{
-					TargetPhone:   sipCallTo,
-					TrunkID:       sipTrunkID,
-					SipConnection: cfg.WorkflowWarmTransferSipConnection,
-					SipNumber:     cfg.WorkflowWarmTransferSipNumber,
-					ChatContext:   baseAgent.ChatCtx,
-					Instructions:  workflowInstructionParts(cfg.WorkflowWarmTransferPersona, cfg.WorkflowWarmTransferExtraInstructions),
+					TargetPhone:      sipCallTo,
+					TrunkID:          sipTrunkID,
+					SipConnection:    cfg.WorkflowWarmTransferSipConnection,
+					SipNumber:        cfg.WorkflowWarmTransferSipNumber,
+					HoldAudio:        workflowWarmTransferHoldAudio(cfg),
+					DisableHoldAudio: cfg.WorkflowWarmTransferDisableHoldAudio,
+					ChatContext:      baseAgent.ChatCtx,
+					Instructions:     workflowInstructionParts(cfg.WorkflowWarmTransferPersona, cfg.WorkflowWarmTransferExtraInstructions),
 				})
 				if err != nil {
 					panic(fmt.Sprintf("validated warm transfer task config rejected: %v", err))
