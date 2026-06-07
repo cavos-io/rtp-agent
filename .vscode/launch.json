@@ -6,9 +6,79 @@
       "type": "go",
       "request": "launch",
       "mode": "debug",
-      "program": "${workspaceFolder}/cmd",
+      "program": "${workspaceFolder}/cmd/main.go",
       "cwd": "${workspaceFolder}",
       "args": ["start"],
+      "envFile": "${workspaceFolder}/.env"
+    },
+    {
+      "name": "Debug ./cmd/main.go start",
+      "type": "go",
+      "request": "launch",
+      "mode": "debug",
+      "program": "${workspaceFolder}/cmd/main.go",
+      "cwd": "${workspaceFolder}",
+      "args": ["start"],
+      "envFile": "${workspaceFolder}/.env"
+    },
+    {
+      "name": "Debug ./cmd/main.go dev",
+      "type": "go",
+      "request": "launch",
+      "mode": "debug",
+      "program": "${workspaceFolder}/cmd/main.go",
+      "cwd": "${workspaceFolder}",
+      "args": ["dev"],
+      "envFile": "${workspaceFolder}/.env"
+    },
+    {
+      "name": "Debug ./cmd/main.go console",
+      "type": "go",
+      "request": "launch",
+      "mode": "debug",
+      "program": "${workspaceFolder}/cmd/main.go",
+      "cwd": "${workspaceFolder}",
+      "args": ["console"],
+      "envFile": "${workspaceFolder}/.env"
+    },
+    {
+      "name": "Debug ./cmd/main.go console --audio",
+      "type": "go",
+      "request": "launch",
+      "mode": "debug",
+      "program": "${workspaceFolder}/cmd/main.go",
+      "cwd": "${workspaceFolder}",
+      "args": ["console", "--audio"],
+      "envFile": "${workspaceFolder}/.env"
+    },
+    {
+      "name": "Debug ./cmd/main.go connect",
+      "type": "go",
+      "request": "launch",
+      "mode": "debug",
+      "program": "${workspaceFolder}/cmd/main.go",
+      "cwd": "${workspaceFolder}",
+      "args": ["connect", "${input:connectRoomName}", "${input:connectParticipantIdentity}"],
+      "envFile": "${workspaceFolder}/.env"
+    },
+    {
+      "name": "Debug ./cmd/main.go download-files",
+      "type": "go",
+      "request": "launch",
+      "mode": "debug",
+      "program": "${workspaceFolder}/cmd/main.go",
+      "cwd": "${workspaceFolder}",
+      "args": ["download-files"],
+      "envFile": "${workspaceFolder}/.env"
+    },
+    {
+      "name": "Debug ./cmd/main.go eval",
+      "type": "go",
+      "request": "launch",
+      "mode": "debug",
+      "program": "${workspaceFolder}/cmd/main.go",
+      "cwd": "${workspaceFolder}",
+      "args": ["eval"],
       "envFile": "${workspaceFolder}/.env"
     },
     {
@@ -28,6 +98,19 @@
       "program": "${fileDirname}",
       "cwd": "${workspaceFolder}",
       "envFile": "${workspaceFolder}/.env"
+    }
+  ],
+  "inputs": [
+    {
+      "id": "connectRoomName",
+      "type": "promptString",
+      "description": "Room name for ./cmd/main.go connect"
+    },
+    {
+      "id": "connectParticipantIdentity",
+      "type": "promptString",
+      "description": "Participant identity for ./cmd/main.go connect",
+      "default": ""
     }
   ]
 }
