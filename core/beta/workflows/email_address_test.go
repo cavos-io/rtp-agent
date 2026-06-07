@@ -4,6 +4,9 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/cavos-io/rtp-agent/core/agent"
 )
 
 func TestGetEmailTaskRecordsEmailWithoutConfirmation(t *testing.T) {
@@ -124,8 +127,25 @@ func TestGetEmailTaskOnEnterUsesReferencePrompt(t *testing.T) {
 	}
 }
 
-func TestGetEmailTaskRejectsStaleConfirmation(t *testing.T) {
+func TestGetEmailTaskStaleConfirmationPromptsForUpdatedEmail(t *testing.T) {
 	task := NewGetEmailTask(GetEmailOptions{})
+	session := agent.NewAgentSession(task, nil, agent.AgentSessionOptions{})
+	session.Assistant = &fakeDtmfSessionAssistant{}
+	speechEvents := session.SpeechCreatedEvents()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	if err := session.Start(ctx); err != nil {
+		t.Fatalf("Start error = %v", err)
+	}
+	defer session.Stop(context.Background())
+
+	select {
+	case <-speechEvents:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for email on-enter prompt")
+	}
+
 	update := &updateEmailTool{task: task}
 
 	if _, err := update.Execute(context.Background(), `{"email":"ada@example.com"}`); err != nil {
@@ -136,8 +156,27 @@ func TestGetEmailTaskRejectsStaleConfirmation(t *testing.T) {
 	if _, err := update.Execute(context.Background(), `{"email":"grace@example.com"}`); err != nil {
 		t.Fatalf("second update Execute() error = %v", err)
 	}
-	if _, err := staleConfirm.Execute(context.Background(), `{}`); err == nil {
-		t.Fatal("stale confirm Execute() error = nil, want changed-email error")
+	if _, err := staleConfirm.Execute(context.Background(), `{}`); err != nil {
+		t.Fatalf("stale confirm Execute() error = %v, want nil after prompting for updated confirmation", err)
+	}
+
+	select {
+	case ev := <-speechEvents:
+		if ev.Source != "generate_reply" {
+			t.Fatalf("SpeechCreated Source = %q, want generate_reply", ev.Source)
+		}
+		if ev.SpeechHandle == nil {
+			t.Fatal("SpeechCreated SpeechHandle = nil, want stale confirmation reply handle")
+		}
+		want := emailStaleConfirmationPrompt()
+		if ev.SpeechHandle.Generation.Instructions == nil {
+			t.Fatal("stale confirmation instructions = nil, want changed-email prompt")
+		}
+		if got := ev.SpeechHandle.Generation.Instructions.AsModality("text").String(); got != want {
+			t.Fatalf("stale confirmation instructions = %q, want %q", got, want)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for stale confirmation prompt")
 	}
 
 	select {
