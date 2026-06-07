@@ -90,6 +90,23 @@ func TestGetPhoneNumberTaskCanDisableDefaultConfirmation(t *testing.T) {
 	}
 }
 
+func TestGetPhoneNumberTaskInstructionsIncludeReferenceConfirmationWhenEnabled(t *testing.T) {
+	task := NewGetPhoneNumberTask(GetPhoneNumberOptions{})
+
+	want := "Call `confirm_phone_number` after the user confirmed the phone number is correct."
+	if !strings.Contains(task.Instructions, want) {
+		t.Fatalf("Instructions = %q, want reference confirmation instruction %q", task.Instructions, want)
+	}
+}
+
+func TestGetPhoneNumberTaskInstructionsOmitConfirmationWhenDisabled(t *testing.T) {
+	task := NewGetPhoneNumberTask(GetPhoneNumberOptions{RequireConfirmation: false, RequireConfirmationSet: true})
+
+	if strings.Contains(task.Instructions, "confirm_phone_number") {
+		t.Fatalf("Instructions = %q, want no confirm_phone_number guidance when confirmation disabled", task.Instructions)
+	}
+}
+
 func TestDeclinePhoneNumberCaptureToolFailsWithReason(t *testing.T) {
 	task := NewGetPhoneNumberTask(GetPhoneNumberOptions{RequireConfirmationSet: true})
 	tool := &declinePhoneNumberCaptureTool{task: task}

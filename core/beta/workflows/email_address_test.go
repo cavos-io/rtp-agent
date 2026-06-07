@@ -96,6 +96,14 @@ func TestGetEmailTaskCanDisableDefaultConfirmation(t *testing.T) {
 	}
 }
 
+func TestGetEmailTaskInstructionsOmitConfirmationWhenDisabled(t *testing.T) {
+	task := NewGetEmailTask(GetEmailOptions{RequireConfirmation: false, RequireConfirmationSet: true})
+
+	if strings.Contains(task.Instructions, "confirm_email_address") {
+		t.Fatalf("Instructions = %q, want no confirm_email_address guidance when confirmation disabled", task.Instructions)
+	}
+}
+
 func TestGetEmailTaskRejectsStaleConfirmation(t *testing.T) {
 	task := NewGetEmailTask(GetEmailOptions{})
 	update := &updateEmailTool{task: task}

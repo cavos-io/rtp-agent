@@ -30,25 +30,25 @@ type GetPhoneNumberTask struct {
 	currentPhoneNumber  string
 }
 
-const PhoneNumberInstructions = `You are only a single step in a broader system, responsible solely for capturing a phone number.
-Handle input as noisy voice transcription. Expect that users will say phone numbers aloud in grouped digits or with an optional leading plus.
-Normalize common spoken patterns silently: convert spoken digits to numeric form, remove filler words, strip dashes, spaces, parentheses, and dots, and recognize plus at the start as the international prefix.
-Call update_phone_number at the first opportunity whenever you form a new hypothesis about the phone number.
-Don't invent phone numbers, stick strictly to what the user said.
-If the number is unclear or invalid, or it takes too much back-and-forth, prompt for it in parts: first the area code, then the remaining digits.
-Never repeat the phone number back to the user as a single block of digits. Read it back in groups.
-Ignore unrelated input and avoid going off-topic. Do not generate markdown, greetings, or unnecessary commentary.
-Always explicitly invoke a tool when applicable. Do not simulate tool usage.`
+const phoneNumberConfirmationInstruction = "Call `confirm_phone_number` after the user confirmed the phone number is correct."
+
+const PhoneNumberInstructions = "You are only a single step in a broader system, responsible solely for capturing a phone number.\n" +
+	"Handle input as noisy voice transcription. Expect that users will say phone numbers aloud in grouped digits or with an optional leading plus.\n" +
+	"Normalize common spoken patterns silently: convert spoken digits to numeric form, remove filler words, strip dashes, spaces, parentheses, and dots, and recognize plus at the start as the international prefix.\n" +
+	"Call update_phone_number at the first opportunity whenever you form a new hypothesis about the phone number.\n" +
+	"Don't invent phone numbers, stick strictly to what the user said.\n" +
+	phoneNumberConfirmationInstruction + "\n" +
+	"If the number is unclear or invalid, or it takes too much back-and-forth, prompt for it in parts: first the area code, then the remaining digits.\n" +
+	"Never repeat the phone number back to the user as a single block of digits. Read it back in groups.\n" +
+	"Ignore unrelated input and avoid going off-topic. Do not generate markdown, greetings, or unnecessary commentary.\n" +
+	"Always explicitly invoke a tool when applicable. Do not simulate tool usage."
 
 func NewGetPhoneNumberTask(opts GetPhoneNumberOptions) *GetPhoneNumberTask {
-	instructions := PhoneNumberInstructions
-	if strings.TrimSpace(opts.ExtraInstructions) != "" {
-		instructions += "\n" + strings.TrimSpace(opts.ExtraInstructions)
-	}
 	requireConfirmation := true
 	if opts.RequireConfirmationSet {
 		requireConfirmation = opts.RequireConfirmation
 	}
+	instructions := phoneNumberInstructions(requireConfirmation, opts.ExtraInstructions)
 	t := &GetPhoneNumberTask{
 		AgentTask:           *agent.NewAgentTask[*GetPhoneNumberResult](instructions),
 		ExtraInstructions:   opts.ExtraInstructions,
@@ -61,6 +61,17 @@ func NewGetPhoneNumberTask(opts GetPhoneNumberOptions) *GetPhoneNumberTask {
 	}
 
 	return t
+}
+
+func phoneNumberInstructions(requireConfirmation bool, extraInstructions string) string {
+	instructions := PhoneNumberInstructions
+	if !requireConfirmation {
+		instructions = strings.Replace(instructions, "\n"+phoneNumberConfirmationInstruction, "", 1)
+	}
+	if strings.TrimSpace(extraInstructions) != "" {
+		instructions += "\n" + strings.TrimSpace(extraInstructions)
+	}
+	return instructions
 }
 
 func (t *GetPhoneNumberTask) OnEnter() {

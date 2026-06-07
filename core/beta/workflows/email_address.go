@@ -29,7 +29,9 @@ type GetEmailTask struct {
 	emailConfirmed      bool
 }
 
-const EmailInstructions = `You are only a single step in a broader system, responsible solely for capturing an email address.
+const emailConfirmationInstruction = "Call `confirm_email_address` after the user confirmed the email address is correct."
+
+const emailInstructionsBeforeConfirmation = `You are only a single step in a broader system, responsible solely for capturing an email address.
 Handle input as noisy voice transcription. Expect that users will say emails aloud with formats like:
 - 'john dot doe at gmail dot com'
 - 'susan underscore smith at yahoo dot co dot uk'
@@ -45,18 +47,27 @@ Normalize common spoken patterns silently:
 Don't mention corrections. Treat inputs as possibly imperfect but fix them silently.
 Call update_email_address at the first opportunity whenever you form a new hypothesis about the email. (before asking any questions or providing any answers.)
 Don't invent new email addresses, stick strictly to what the user said.
-Call confirm_email_address after the user confirmed the email address is correct.
-If the email is unclear or invalid, or it takes too much back-and-forth, prompt for it in parts: first the part before the '@', then the domain—only if needed.
+`
+
+const emailInstructionsAfterConfirmation = `If the email is unclear or invalid, or it takes too much back-and-forth, prompt for it in parts: first the part before the '@', then the domain—only if needed.
 Ignore unrelated input and avoid going off-topic. Do not generate markdown, greetings, or unnecessary commentary.
 Always explicitly invoke a tool when applicable. Do not hallucinate tool usage, no real action is taken unless the tool is explicitly called.`
+
+const EmailInstructions = emailInstructionsBeforeConfirmation + emailConfirmationInstruction + "\n" + emailInstructionsAfterConfirmation
+
+const emailInstructionsWithoutConfirmation = emailInstructionsBeforeConfirmation + emailInstructionsAfterConfirmation
 
 func NewGetEmailTask(opts GetEmailOptions) *GetEmailTask {
 	requireConfirmation := true
 	if opts.RequireConfirmationSet {
 		requireConfirmation = opts.RequireConfirmation
 	}
+	instructions := EmailInstructions
+	if !requireConfirmation {
+		instructions = emailInstructionsWithoutConfirmation
+	}
 	t := &GetEmailTask{
-		AgentTask:           *agent.NewAgentTask[*GetEmailResult](EmailInstructions),
+		AgentTask:           *agent.NewAgentTask[*GetEmailResult](instructions),
 		RequireConfirmation: requireConfirmation,
 	}
 
