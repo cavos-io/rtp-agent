@@ -12,6 +12,7 @@ import (
 	"github.com/cavos-io/rtp-agent/core/audio/model"
 	"github.com/cavos-io/rtp-agent/core/llm"
 	"github.com/cavos-io/rtp-agent/library/logger"
+	cavosmath "github.com/cavos-io/rtp-agent/library/math"
 	"github.com/cavos-io/rtp-agent/library/telemetry"
 	"github.com/cavos-io/rtp-agent/library/utils"
 	"github.com/cavos-io/rtp-agent/library/utils/images"
@@ -546,6 +547,8 @@ func (s *realtimeSession) Say(text string) error {
 
 func openAIRealtimeGenerateReplyMessage(options llm.RealtimeGenerateReplyOptions) map[string]any {
 	response := make(map[string]any)
+	eventID := cavosmath.ShortUUID("response_create_")
+	response["metadata"] = map[string]any{"client_event_id": eventID}
 	if options.Instructions != "" {
 		response["instructions"] = options.Instructions
 	}
@@ -558,6 +561,7 @@ func openAIRealtimeGenerateReplyMessage(options llm.RealtimeGenerateReplyOptions
 
 	return map[string]any{
 		"type":     "response.create",
+		"event_id": eventID,
 		"response": response,
 	}
 }

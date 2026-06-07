@@ -458,6 +458,23 @@ func TestRealtimeGenerateReplyMessageMapsPerResponseOptions(t *testing.T) {
 	}
 }
 
+func TestRealtimeGenerateReplyMessageIncludesClientEventMetadata(t *testing.T) {
+	msg := openAIRealtimeGenerateReplyMessage(llm.RealtimeGenerateReplyOptions{})
+
+	if msg["type"] != "response.create" {
+		t.Fatalf("message type = %#v, want response.create", msg["type"])
+	}
+	eventID, ok := msg["event_id"].(string)
+	if !ok || !strings.HasPrefix(eventID, "response_create_") {
+		t.Fatalf("event_id = %#v, want response_create_ prefix", msg["event_id"])
+	}
+	response := msg["response"].(map[string]any)
+	metadata := response["metadata"].(map[string]any)
+	if metadata["client_event_id"] != eventID {
+		t.Fatalf("client_event_id = %#v, want %q", metadata["client_event_id"], eventID)
+	}
+}
+
 func TestRealtimeTruncateMessageMapsAudioModality(t *testing.T) {
 	msg := openAIRealtimeTruncateMessage(llm.RealtimeTruncateOptions{
 		MessageID:      "msg_123",
