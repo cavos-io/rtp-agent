@@ -121,10 +121,17 @@ func TestRealtimeSessionSendsProtocolMessages(t *testing.T) {
 	}
 	assertRealtimeMessage(t, <-messages, "response.cancel", "")
 
-	if err := session.PushAudio(&audiomodel.AudioFrame{Data: []byte{1, 2, 3, 4}}); err != nil {
+	audioChunk := make([]byte, 24000/10*2)
+	copy(audioChunk, []byte{1, 2, 3, 4})
+	if err := session.PushAudio(&audiomodel.AudioFrame{Data: audioChunk, SampleRate: 24000, NumChannels: 1, SamplesPerChannel: 2400}); err != nil {
 		t.Fatalf("PushAudio error = %v", err)
 	}
-	assertRealtimeMessage(t, <-messages, "input_audio_buffer.append", base64.StdEncoding.EncodeToString([]byte{1, 2, 3, 4}))
+	assertRealtimeMessage(t, <-messages, "input_audio_buffer.append", base64.StdEncoding.EncodeToString(audioChunk))
+
+	if err := session.PushAudio(&audiomodel.AudioFrame{Data: []byte{5, 6}, SampleRate: 24000, NumChannels: 1, SamplesPerChannel: 1}); err != nil {
+		t.Fatalf("PushAudio partial error = %v", err)
+	}
+	assertNoRealtimeMessage(t, messages, "partial audio frame should wait for byte-stream chunk")
 
 	if err := session.PushVideo(nil); err != nil {
 		t.Fatalf("PushVideo nil error = %v", err)
@@ -299,6 +306,15 @@ func assertRealtimeMessageEventID(t *testing.T, raw string, wantPrefix string) {
 	eventID, ok := msg["event_id"].(string)
 	if !ok || !strings.HasPrefix(eventID, wantPrefix) {
 		t.Fatalf("event_id = %#v, want %s prefix; raw=%s", msg["event_id"], wantPrefix, raw)
+	}
+}
+
+func assertNoRealtimeMessage(t *testing.T, messages <-chan string, reason string) {
+	t.Helper()
+	select {
+	case msg := <-messages:
+		t.Fatalf("unexpected realtime message for %s: %s", reason, msg)
+	case <-time.After(25 * time.Millisecond):
 	}
 }
 

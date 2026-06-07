@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"sync"
 
+	"github.com/cavos-io/rtp-agent/core/audio"
 	"github.com/cavos-io/rtp-agent/core/audio/model"
 	"github.com/cavos-io/rtp-agent/core/llm"
 	"github.com/cavos-io/rtp-agent/library/logger"
@@ -77,9 +78,12 @@ type realtimeSession struct {
 	inputTranscripts *utils.BoundedDict[inputTranscriptKey, realtimeInputTranscript]
 	generation       *realtimeGeneration
 	instructions     string
+	audioBStream     *audio.AudioByteStream
 }
 
 const maxRealtimeInputTranscripts = 1024
+const openAIRealtimeInputSampleRate = 24000
+const openAIRealtimeInputNumChannels = 1
 
 type inputTranscriptKey struct {
 	itemID       string
@@ -120,11 +124,12 @@ func (m *RealtimeModel) Session() (llm.RealtimeSession, error) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	s := &realtimeSession{
-		conn:    conn,
-		ctx:     ctx,
-		cancel:  cancel,
-		eventCh: make(chan llm.RealtimeEvent, 100),
-		remote:  llm.NewRemoteChatContext(),
+		conn:         conn,
+		ctx:          ctx,
+		cancel:       cancel,
+		eventCh:      make(chan llm.RealtimeEvent, 100),
+		remote:       llm.NewRemoteChatContext(),
+		audioBStream: newOpenAIRealtimeAudioByteStream(),
 	}
 
 	go s.eventLoop()
@@ -504,13 +509,28 @@ func (s *realtimeSession) PushAudio(frame *model.AudioFrame) error {
 	if frame == nil || len(frame.Data) == 0 {
 		return nil
 	}
-
-	b64Audio := base64.StdEncoding.EncodeToString(frame.Data)
-	msg := map[string]any{
-		"type":  "input_audio_buffer.append",
-		"audio": b64Audio,
+	if s.audioBStream == nil {
+		s.audioBStream = newOpenAIRealtimeAudioByteStream()
 	}
-	return s.sendMsg(msg)
+
+	for _, chunk := range s.audioBStream.Write(frame.Data) {
+		msg := map[string]any{
+			"type":  "input_audio_buffer.append",
+			"audio": base64.StdEncoding.EncodeToString(chunk.Data),
+		}
+		if err := s.sendMsg(msg); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func newOpenAIRealtimeAudioByteStream() *audio.AudioByteStream {
+	return audio.NewAudioByteStream(
+		openAIRealtimeInputSampleRate,
+		openAIRealtimeInputNumChannels,
+		openAIRealtimeInputSampleRate/10,
+	)
 }
 
 func (s *realtimeSession) PushVideo(frame *images.VideoFrame) error {
