@@ -84,10 +84,10 @@ You are solely responsible for collecting the card number.
 Handle input as noisy voice transcription. Expect users to read the card number digit by digit.
 Normalize spoken digits silently: 'four' to 4, 'zero' or 'oh' to 0.
 Filter out filler words or hesitations.
-If the user refuses to provide a number, call decline_card_capture.
-If the user wishes to start over the card collection process, call restart_card_collection.
+If the user refuses to provide a number, call decline_card_capture().
+If the user wishes to start over the card collection process, call restart_card_collection().
 Avoid listing out questions with bullet points or numbers, use a natural conversational tone.
-Never repeat sensitive information, such as the user's card number, back to the user.`
+Never repeat any sensitive information, such as the user's card number, back to the user.`
 
 const cardNumberConfirmationInstructions = "Call `confirm_card_number` once the user has repeated their card number."
 
@@ -96,10 +96,10 @@ You are solely responsible for collecting the user's card security code.
 Handle input as noisy voice transcription. Expect users to read the security code digit by digit.
 Normalize spoken digits silently: 'four' to 4, 'zero' or 'oh' to 0.
 Filter out filler words or hesitations.
-If the user refuses to provide a code, call decline_card_capture.
-If the user wishes to start over the card collection process, call restart_card_collection.
+If the user refuses to provide a code, call decline_card_capture().
+If the user wishes to start over the card collection process, call restart_card_collection().
 Avoid listing out questions with bullet points or numbers, use a natural conversational tone.
-Never repeat sensitive information, such as the user's security code, back to the user.`
+Never repeat any sensitive information, such as the user's security code, back to the user.`
 
 const securityCodeConfirmationInstructions = "Call `confirm_security_code` once the user has repeated their security code."
 
@@ -107,10 +107,11 @@ const ExpirationDateInstructions = `You are a single step in a broader process o
 You are solely responsible for collecting the user's card expiration date.
 Handle input as noisy voice transcription. Expect formats like April twenty five, oh four twenty five, four slash twenty five, or April 2025.
 Normalize spoken months and digits silently.
-If the user refuses to provide a date, call decline_card_capture.
-If the user wishes to start over the card collection process, call restart_card_collection.
+Filter out filler words or hesitations.
+If the user refuses to provide a date, call decline_card_capture().
+If the user wishes to start over the card collection process, call restart_card_collection().
 Avoid listing out questions with bullet points or numbers, use a natural conversational tone.
-Never repeat sensitive information, such as the user's expiration date, back to the user.`
+Never repeat any sensitive information, such as the user's expiration date, back to the user.`
 
 const expirationDateConfirmationInstructions = "Call `confirm_expiration_date` once the user has repeated their expiration date."
 

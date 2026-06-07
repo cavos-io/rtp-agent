@@ -279,27 +279,45 @@ func TestCreditCardSubtaskInstructionsIncludeReferenceConfirmationWhenEnabled(t 
 	cases := []struct {
 		name         string
 		instructions string
-		want         string
+		wantParts    []string
 	}{
 		{
 			name:         "card_number",
 			instructions: NewGetCardNumberTask().Instructions,
-			want:         "Call `confirm_card_number` once the user has repeated their card number.",
+			wantParts: []string{
+				"If the user refuses to provide a number, call decline_card_capture().",
+				"If the user wishes to start over the card collection process, call restart_card_collection().",
+				"Never repeat any sensitive information, such as the user's card number, back to the user.",
+				"Call `confirm_card_number` once the user has repeated their card number.",
+			},
 		},
 		{
 			name:         "security_code",
 			instructions: NewGetSecurityCodeTask().Instructions,
-			want:         "Call `confirm_security_code` once the user has repeated their security code.",
+			wantParts: []string{
+				"If the user refuses to provide a code, call decline_card_capture().",
+				"If the user wishes to start over the card collection process, call restart_card_collection().",
+				"Never repeat any sensitive information, such as the user's security code, back to the user.",
+				"Call `confirm_security_code` once the user has repeated their security code.",
+			},
 		},
 		{
 			name:         "expiration_date",
 			instructions: NewGetExpirationDateTask().Instructions,
-			want:         "Call `confirm_expiration_date` once the user has repeated their expiration date.",
+			wantParts: []string{
+				"If the user refuses to provide a date, call decline_card_capture().",
+				"If the user wishes to start over the card collection process, call restart_card_collection().",
+				"Filter out filler words or hesitations.",
+				"Never repeat any sensitive information, such as the user's expiration date, back to the user.",
+				"Call `confirm_expiration_date` once the user has repeated their expiration date.",
+			},
 		},
 	}
 	for _, tc := range cases {
-		if !strings.Contains(tc.instructions, tc.want) {
-			t.Fatalf("%s instructions = %q, want reference confirmation instruction %q", tc.name, tc.instructions, tc.want)
+		for _, want := range tc.wantParts {
+			if !strings.Contains(tc.instructions, want) {
+				t.Fatalf("%s instructions = %q, want reference instruction %q", tc.name, tc.instructions, want)
+			}
 		}
 	}
 }
