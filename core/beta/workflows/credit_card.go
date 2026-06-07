@@ -333,12 +333,12 @@ func (t *recordCardNumberTool) Execute(ctx context.Context, args string) (string
 	if len(cardNumber) < 13 || len(cardNumber) > 19 {
 		return "", llm.NewToolError("The length of the card number is invalid, ask the user to repeat their card number.")
 	}
-	if !validateCardNumberLuhn(cardNumber) {
-		return "", llm.NewToolError("The card number is not valid, ask the user if they made a mistake or to provide another card.")
-	}
 
 	t.task.currentCardNumber = cardNumber
 	if !t.task.RequireConfirmation {
+		if !validateCardNumberLuhn(cardNumber) {
+			return "", llm.NewToolError("The card number is not valid, ask the user if they made a mistake or to provide another card.")
+		}
 		t.task.completeCardNumber(cardNumber)
 		return "Card number captured and task completed.", nil
 	}
@@ -398,7 +398,7 @@ func (t *updateSecurityCodeTool) Execute(ctx context.Context, args string) (stri
 	}
 
 	t.task.setConfirmSecurityCodeTool(securityCode)
-	return "The security code has been updated.\nDo not repeat the security code back to the user, ask them to repeat themselves.", nil
+	return "The security code has been updated.\nDo not repeat the security code back to the user, ask them to repeat themselves.\nCall `confirm_security_code` once the user confirms, do not call it preemptively.", nil
 }
 
 func (t *GetSecurityCodeTask) setConfirmSecurityCodeTool(securityCode string) {
@@ -459,7 +459,7 @@ func (t *updateExpirationDateTool) Execute(ctx context.Context, args string) (st
 	}
 
 	t.task.setConfirmExpirationDateTool(params.ExpirationMonth, params.ExpirationYear, expirationDate)
-	return "The expiration date has been updated.\nDo not repeat the expiration date back to the user, ask them to repeat themselves.", nil
+	return "The expiration date has been updated.\nDo not repeat the expiration date back to the user, ask them to repeat themselves.\nCall `confirm_expiration_date` once the user confirms, do not call it preemptively.", nil
 }
 
 func (t *GetExpirationDateTask) setConfirmExpirationDateTool(month int, year int, expirationDate string) {

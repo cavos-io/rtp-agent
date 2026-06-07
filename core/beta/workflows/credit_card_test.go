@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 )
@@ -40,6 +41,34 @@ func TestGetCardNumberTaskRejectsInvalidLuhnNumber(t *testing.T) {
 	_, err := tool.Execute(context.Background(), `{"card_number":"4111111111111112"}`)
 	if err == nil {
 		t.Fatal("Execute() error = nil, want invalid card number error")
+	}
+
+	select {
+	case result := <-task.Result:
+		t.Fatalf("task completed with %#v, want no completion for invalid card", result)
+	default:
+	}
+}
+
+func TestGetCardNumberTaskDefersLuhnValidationUntilConfirmation(t *testing.T) {
+	task := NewGetCardNumberTask()
+	record := &recordCardNumberTool{task: task}
+
+	out, err := record.Execute(context.Background(), `{"card_number":"4111111111111112"}`)
+	if err != nil {
+		t.Fatalf("record Execute() error = %v, want confirmation prompt before Luhn validation", err)
+	}
+	if !strings.Contains(out, "Ask them to repeat the number, do not repeat the number back to them.") {
+		t.Fatalf("record Execute() output = %q, want repeat prompt", out)
+	}
+	if len(task.Agent.Tools) != 4 || task.Agent.Tools[3].Name() != "confirm_card_number" {
+		t.Fatalf("tools = %#v, want confirm_card_number appended", task.Agent.Tools)
+	}
+
+	confirm := &confirmCardNumberTool{task: task, cardNumber: "4111111111111112"}
+	_, err = confirm.Execute(context.Background(), `{"repeated_card_number":"4111111111111112"}`)
+	if err == nil || !strings.Contains(err.Error(), "The card number is not valid") {
+		t.Fatalf("confirm Execute() error = %v, want invalid card number after repeat", err)
 	}
 
 	select {
@@ -128,6 +157,9 @@ func TestGetSecurityCodeTaskRequiresMatchingConfirmation(t *testing.T) {
 	if out == "" {
 		t.Fatal("update Execute() output is empty, want confirmation prompt guidance")
 	}
+	if !strings.Contains(out, "Call `confirm_security_code` once the user confirms, do not call it preemptively.") {
+		t.Fatalf("update Execute() output = %q, want reference confirm-tool guidance", out)
+	}
 	if len(task.Agent.Tools) != 4 || task.Agent.Tools[3].Name() != "confirm_security_code" {
 		t.Fatalf("tools = %#v, want confirm_security_code appended", task.Agent.Tools)
 	}
@@ -204,6 +236,9 @@ func TestGetExpirationDateTaskRequiresMatchingConfirmation(t *testing.T) {
 	}
 	if out == "" {
 		t.Fatal("update Execute() output is empty, want confirmation prompt guidance")
+	}
+	if !strings.Contains(out, "Call `confirm_expiration_date` once the user confirms, do not call it preemptively.") {
+		t.Fatalf("update Execute() output = %q, want reference confirm-tool guidance", out)
 	}
 	if len(task.Agent.Tools) != 4 || task.Agent.Tools[3].Name() != "confirm_expiration_date" {
 		t.Fatalf("tools = %#v, want confirm_expiration_date appended", task.Agent.Tools)
