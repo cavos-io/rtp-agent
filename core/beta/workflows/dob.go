@@ -171,10 +171,17 @@ func (t *updateDOBTimeTool) Execute(ctx context.Context, args string) (string, e
 	if t.task.RequireConfirmation {
 		t.task.setConfirmDOBTool(t.task.currentDOB, t.task.currentTime)
 	}
-	if t.task.currentDOB == nil {
-		return fmt.Sprintf("The time of birth has been updated to %s\nThe date of birth has not been provided yet, ask the user to provide it.", birthTime.Format("03:04 PM")), nil
+	formattedTime := birthTime.Format("03:04 PM")
+	response := fmt.Sprintf("The time of birth has been updated to %s", formattedTime)
+	if t.task.currentDOB != nil {
+		response = fmt.Sprintf("The date and time of birth has been updated to %s at %s", t.task.currentDOB.Format("January 02, 2006"), formattedTime)
 	}
-	return fmt.Sprintf("The date and time of birth has been updated to %s at %s", t.task.currentDOB.Format("January 02, 2006"), birthTime.Format("03:04 PM")), nil
+	if t.task.RequireConfirmation {
+		response += "\nRepeat the time back to the user in a natural spoken format.\nPrompt the user for confirmation, do not call `confirm_dob` directly"
+	} else {
+		response += "\nThe date of birth has not been provided yet, ask the user to provide it."
+	}
+	return response, nil
 }
 
 func (t *GetDOBTask) setConfirmDOBTool(dob *time.Time, birthTime *time.Time) {
