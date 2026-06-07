@@ -293,6 +293,22 @@ func TestRealtimeUpdateOptionsMessageMapsNamedToolChoice(t *testing.T) {
 	}
 }
 
+func TestRealtimeUpdateOptionsMessageMapsVoice(t *testing.T) {
+	msg := openAIRealtimeUpdateOptionsMessage(llm.RealtimeSessionOptions{
+		Voice: "marin",
+	})
+
+	if msg["type"] != "session.update" {
+		t.Fatalf("message type = %#v, want session.update", msg["type"])
+	}
+	session := msg["session"].(map[string]any)
+	audio := session["audio"].(map[string]any)
+	output := audio["output"].(map[string]any)
+	if output["voice"] != "marin" {
+		t.Fatalf("voice = %#v, want marin", output["voice"])
+	}
+}
+
 func TestRealtimeAudioBufferMessages(t *testing.T) {
 	commit := openAIRealtimeCommitAudioMessage()
 	if commit["type"] != "input_audio_buffer.commit" {

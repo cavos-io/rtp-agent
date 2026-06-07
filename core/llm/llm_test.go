@@ -297,6 +297,16 @@ func TestRealtimeSessionOptionsExposeToolChoice(t *testing.T) {
 	}
 }
 
+func TestRealtimeSessionOptionsExposeVoice(t *testing.T) {
+	options := RealtimeSessionOptions{
+		Voice: "marin",
+	}
+
+	if options.Voice != "marin" {
+		t.Fatalf("Voice = %q, want marin", options.Voice)
+	}
+}
+
 func TestRealtimeGenerateReplyOptionsExposePerResponseOverrides(t *testing.T) {
 	options := RealtimeGenerateReplyOptions{
 		Instructions: "answer briefly",
