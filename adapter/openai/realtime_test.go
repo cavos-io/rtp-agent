@@ -368,6 +368,23 @@ func TestRealtimeUpdateOptionsMessageMapsTracing(t *testing.T) {
 	}
 }
 
+func TestRealtimeUpdateOptionsMessageMapsTurnDetection(t *testing.T) {
+	msg := openAIRealtimeUpdateOptionsMessage(llm.RealtimeSessionOptions{
+		TurnDetection: map[string]any{"type": "server_vad"},
+	})
+
+	if msg["type"] != "session.update" {
+		t.Fatalf("message type = %#v, want session.update", msg["type"])
+	}
+	session := msg["session"].(map[string]any)
+	audio := session["audio"].(map[string]any)
+	input := audio["input"].(map[string]any)
+	turnDetection := input["turn_detection"].(map[string]any)
+	if turnDetection["type"] != "server_vad" {
+		t.Fatalf("turn_detection = %#v, want type server_vad", turnDetection)
+	}
+}
+
 func TestRealtimeAudioBufferMessages(t *testing.T) {
 	commit := openAIRealtimeCommitAudioMessage()
 	if commit["type"] != "input_audio_buffer.commit" {

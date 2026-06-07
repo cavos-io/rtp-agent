@@ -348,6 +348,17 @@ func TestRealtimeSessionOptionsExposeTracing(t *testing.T) {
 	}
 }
 
+func TestRealtimeSessionOptionsExposeTurnDetection(t *testing.T) {
+	options := RealtimeSessionOptions{
+		TurnDetection: map[string]any{"type": "server_vad"},
+	}
+
+	turnDetection := options.TurnDetection.(map[string]any)
+	if turnDetection["type"] != "server_vad" {
+		t.Fatalf("TurnDetection = %#v, want type server_vad", options.TurnDetection)
+	}
+}
+
 func TestRealtimeGenerateReplyOptionsExposePerResponseOverrides(t *testing.T) {
 	options := RealtimeGenerateReplyOptions{
 		Instructions: "answer briefly",

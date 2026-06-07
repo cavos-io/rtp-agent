@@ -874,6 +874,7 @@ type RealtimeSessionOptions struct {
 	MaxResponseOutputTokens any
 	Truncation              any
 	Tracing                 any
+	TurnDetection           any
 }
 
 type RealtimeGenerateReplyOptions struct {
