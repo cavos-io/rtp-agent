@@ -92,6 +92,16 @@ func TestSpeechHandleWaitIfNotInterruptedReturnsWhenWorkCompletes(t *testing.T) 
 	}
 }
 
+func TestSpeechHandleWaitIfNotInterruptedSuppressesWorkErrors(t *testing.T) {
+	speech := NewSpeechHandle(true, DefaultInputDetails())
+	workDone := make(chan error, 1)
+	workDone <- errors.New("work failed")
+
+	if err := speech.WaitIfNotInterrupted(context.Background(), workDone); err != nil {
+		t.Fatalf("WaitIfNotInterrupted error = %v, want nil for reference return_exceptions behavior", err)
+	}
+}
+
 func TestSpeechHandleWaitIfNotInterruptedWaitsForAllWork(t *testing.T) {
 	speech := NewSpeechHandle(true, DefaultInputDetails())
 	firstDone := make(chan error, 1)

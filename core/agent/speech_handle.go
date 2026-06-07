@@ -251,18 +251,13 @@ func (s *SpeechHandle) WaitIfNotInterrupted(ctx context.Context, workDone ...<-c
 	}
 
 	for len(cases) > 2 {
-		chosen, value, ok := reflect.Select(cases)
+		chosen, _, _ := reflect.Select(cases)
 		switch chosen {
 		case 0:
 			return nil
 		case 1:
 			return ctx.Err()
 		default:
-			if ok && !value.IsNil() {
-				if err, _ := value.Interface().(error); err != nil {
-					return err
-				}
-			}
 			cases = append(cases[:chosen], cases[chosen+1:]...)
 		}
 	}
