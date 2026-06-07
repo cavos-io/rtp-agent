@@ -166,7 +166,7 @@ func SplitSentences(text string, minSentenceLen int, retainFormat bool) []TokenD
 
 		buff += prePad + sentence
 		endPos += len(match)
-		if len(buff) > minSentenceLen {
+		if len([]rune(buff)) > minSentenceLen {
 			prefixLen := len(prePad)
 			if len(buff) >= prefixLen {
 				sentences = append(sentences, TokenData{Token: buff[prefixLen:], Start: startPos, End: endPos})

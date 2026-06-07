@@ -126,10 +126,12 @@ def load_reference_bounded_dict():
     return module
 
 
-def load_reference_tokenize_utils():
+def prepare_reference_tokenize_package():
     root = repo_root()
     tokenize_root = root / "refs/agents/livekit-agents/livekit/agents/tokenize"
 
+    sys.modules.setdefault("livekit", types.ModuleType("livekit"))
+    agents_mod = sys.modules.setdefault("livekit.agents", types.ModuleType("livekit.agents"))
     utils_mod = sys.modules.setdefault("livekit.agents.utils", types.ModuleType("livekit.agents.utils"))
     aio_mod = types.ModuleType("livekit.agents.utils.aio")
 
@@ -147,22 +149,31 @@ def load_reference_tokenize_utils():
     tokenize_pkg = types.ModuleType("livekit.agents.tokenize")
     tokenize_pkg.__path__ = [str(tokenize_root)]
     sys.modules["livekit.agents.tokenize"] = tokenize_pkg
+    setattr(agents_mod, "tokenize", tokenize_pkg)
+    return tokenize_pkg, tokenize_root
 
-    def load_module(name: str, filename: str):
-        path = tokenize_root / filename
-        spec = importlib.util.spec_from_file_location(name, path)
-        if spec is None or spec.loader is None:
-            raise RuntimeError(f"cannot load {name} from {path}")
-        module = importlib.util.module_from_spec(spec)
-        sys.modules[name] = module
-        spec.loader.exec_module(module)
-        return module
 
-    tokenizer_module = load_module("livekit.agents.tokenize.tokenizer", "tokenizer.py")
+def load_reference_tokenize_module(module_name: str, filename: str):
+    tokenize_pkg, tokenize_root = prepare_reference_tokenize_package()
+    full_name = f"livekit.agents.tokenize.{module_name}"
+    path = tokenize_root / filename
+    spec = importlib.util.spec_from_file_location(full_name, path)
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f"cannot load {full_name} from {path}")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[full_name] = module
+    spec.loader.exec_module(module)
+    setattr(tokenize_pkg, module_name, module)
+    return module
+
+
+def load_reference_tokenize_utils():
+    tokenize_pkg, _tokenize_root = prepare_reference_tokenize_package()
+    tokenizer_module = load_reference_tokenize_module("tokenizer", "tokenizer.py")
     setattr(tokenize_pkg, "tokenizer", tokenizer_module)
-    basic_word_module = load_module("livekit.agents.tokenize._basic_word", "_basic_word.py")
+    basic_word_module = load_reference_tokenize_module("_basic_word", "_basic_word.py")
     setattr(tokenize_pkg, "_basic_word", basic_word_module)
-    utils_module = load_module("livekit.agents.tokenize.utils", "utils.py")
+    utils_module = load_reference_tokenize_module("utils", "utils.py")
     return utils_module
 
 
@@ -478,6 +489,38 @@ def run_tokenize_split_words(input_data: dict) -> dict:
     return {"contract": "tokenize-split-words", "events": events}
 
 
+def run_tokenize_split_sentences(input_data: dict) -> dict:
+    load_reference_tokenize_utils()
+    basic_sent = load_reference_tokenize_module("_basic_sent", "_basic_sent.py")
+    values = string_values(
+        input_data,
+        "text_values",
+        ["Version 1.5 is ready. Next sentence.", "他说：“你好。” 下一句。"],
+    )
+    min_sentence_len = int(input_data.get("min_sentence_len", 20))
+    retain_format = bool(input_data.get("retain_format", False))
+
+    events = []
+    for value in values:
+        result = [
+            token
+            for token, _start, _end in basic_sent.split_sentences(
+                value,
+                min_sentence_len=min_sentence_len,
+                retain_format=retain_format,
+            )
+        ]
+        events.append(
+            {
+                "name": "split_sentences",
+                "input": value,
+                "result": result,
+            }
+        )
+
+    return {"contract": "tokenize-split-sentences", "events": events}
+
+
 def main() -> int:
     if len(sys.argv) != 2:
         print("usage: python-utils.py INPUT_JSON", file=sys.stderr)
@@ -503,6 +546,8 @@ def main() -> int:
         output = run_tokenize_replace_words(input_data)
     elif contract == "tokenize-split-words":
         output = run_tokenize_split_words(input_data)
+    elif contract == "tokenize-split-sentences":
+        output = run_tokenize_split_sentences(input_data)
     else:
         print(f"unsupported contract: {contract}", file=sys.stderr)
         return 2

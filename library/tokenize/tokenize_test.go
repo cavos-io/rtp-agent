@@ -29,14 +29,22 @@ func TestSplitSentencesPreservesDecimalNumbers(t *testing.T) {
 func TestSplitSentencesKeepsClosingQuoteAfterCJKPunctuation(t *testing.T) {
 	tokens := NewBasicSentenceTokenizer().Tokenize("他说：“你好。” 下一句。", "")
 
-	if len(tokens) != 2 {
-		t.Fatalf("tokens = %#v, want 2 sentences", tokens)
+	if len(tokens) != 1 {
+		t.Fatalf("tokens = %#v, want buffered short CJK sentence", tokens)
 	}
-	if tokens[0] != "他说：“你好。”" {
-		t.Fatalf("first token = %q, want closing quote in first sentence", tokens[0])
+	if tokens[0] != "他说：“你好。” 下一句。" {
+		t.Fatalf("token = %q, want closing quote preserved and short CJK fragments buffered", tokens[0])
 	}
-	if tokens[1] != "下一句。" {
-		t.Fatalf("second token = %q, want next sentence", tokens[1])
+}
+
+func TestSplitSentencesUsesRuneLengthForReferenceMinimum(t *testing.T) {
+	tokens := SplitSentences("短句一。 短句二。", 20, false)
+
+	if len(tokens) != 1 {
+		t.Fatalf("tokens = %#v, want one token while rune length remains under minimum", tokens)
+	}
+	if tokens[0].Token != "短句一。 短句二。" {
+		t.Fatalf("token = %q, want CJK fragments buffered by rune length", tokens[0].Token)
 	}
 }
 
