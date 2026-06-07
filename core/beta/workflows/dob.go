@@ -32,27 +32,35 @@ type GetDOBTask struct {
 	currentTime         *time.Time
 }
 
-const DOBInstructions = `You are only a single step in a broader system, responsible solely for capturing a date of birth.
+const dobConfirmationInstruction = "Call `confirm_dob` after the user confirmed the date of birth is correct."
+
+const dobInstructionsBeforeConfirmation = `You are only a single step in a broader system, responsible solely for capturing a date of birth.
 Handle input as noisy voice transcription. Expect users to say dates aloud in formats like January 15th 1990, one fifteen ninety, Jan 15 90, or 15th January 1990.
 Normalize common spoken patterns silently: convert spoken numbers and ordinals to numeric form, recognize month names, handle two-digit years appropriately, and filter filler words.
 Call update_dob at the first opportunity whenever you form a new hypothesis about the date of birth.
 Don't invent dates, stick strictly to what the user said.
-When reading back dates, use a natural spoken format like January fifteenth, nineteen ninety.
+`
+
+const dobInstructionsAfterConfirmation = `When reading back dates, use a natural spoken format like January fifteenth, nineteen ninety.
 If the date is unclear or invalid, or it takes too much back-and-forth, prompt for it in parts: first the month, then the day, then the year.
 Ignore unrelated input and avoid going off-topic. Do not generate markdown, greetings, or unnecessary commentary.
 Always explicitly invoke a tool when applicable. Do not simulate tool usage.`
 
+const DOBInstructions = dobInstructionsBeforeConfirmation + dobConfirmationInstruction + "\n" + dobInstructionsAfterConfirmation
+
+const dobInstructionsWithoutConfirmation = dobInstructionsBeforeConfirmation + dobInstructionsAfterConfirmation
+
 func NewGetDOBTask(opts GetDOBOptions) *GetDOBTask {
-	instructions := DOBInstructions
+	requireConfirmation := true
+	if opts.RequireConfirmationSet {
+		requireConfirmation = opts.RequireConfirmation
+	}
+	instructions := dobInstructions(requireConfirmation)
 	if opts.IncludeTime {
 		instructions += "\nAlso ask for and capture the time of birth if the user knows it. The time is optional; if the user does not know it, proceed without it."
 	}
 	if strings.TrimSpace(opts.ExtraInstructions) != "" {
 		instructions += "\n" + strings.TrimSpace(opts.ExtraInstructions)
-	}
-	requireConfirmation := true
-	if opts.RequireConfirmationSet {
-		requireConfirmation = opts.RequireConfirmation
 	}
 	t := &GetDOBTask{
 		AgentTask:           *agent.NewAgentTask[*GetDOBResult](instructions),
@@ -70,6 +78,13 @@ func NewGetDOBTask(opts GetDOBOptions) *GetDOBTask {
 	}
 
 	return t
+}
+
+func dobInstructions(requireConfirmation bool) string {
+	if !requireConfirmation {
+		return dobInstructionsWithoutConfirmation
+	}
+	return DOBInstructions
 }
 
 func (t *GetDOBTask) OnEnter() {

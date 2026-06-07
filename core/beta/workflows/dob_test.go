@@ -176,6 +176,23 @@ func TestGetDOBTaskCanDisableDefaultConfirmation(t *testing.T) {
 	}
 }
 
+func TestGetDOBTaskInstructionsIncludeReferenceConfirmationWhenEnabled(t *testing.T) {
+	task := NewGetDOBTask(GetDOBOptions{})
+
+	want := "Call `confirm_dob` after the user confirmed the date of birth is correct."
+	if !strings.Contains(task.Instructions, want) {
+		t.Fatalf("Instructions = %q, want reference confirmation instruction %q", task.Instructions, want)
+	}
+}
+
+func TestGetDOBTaskInstructionsOmitConfirmationWhenDisabled(t *testing.T) {
+	task := NewGetDOBTask(GetDOBOptions{RequireConfirmation: false, RequireConfirmationSet: true})
+
+	if strings.Contains(task.Instructions, "confirm_dob") {
+		t.Fatalf("Instructions = %q, want no confirm_dob guidance when confirmation disabled", task.Instructions)
+	}
+}
+
 func TestDeclineDOBCaptureToolFailsWithReason(t *testing.T) {
 	task := NewGetDOBTask(GetDOBOptions{RequireConfirmationSet: true})
 	tool := &declineDOBCaptureTool{task: task}
