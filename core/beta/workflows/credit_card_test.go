@@ -418,24 +418,76 @@ func TestGetExpirationDateTaskRecordsFutureDateWithoutConfirmation(t *testing.T)
 }
 
 func TestGetExpirationDateTaskRejectsInvalidOrExpiredDate(t *testing.T) {
-	task := NewGetExpirationDateTask(false)
-	tool := &updateExpirationDateTool{task: task}
-
-	cases := []string{
-		`{"expiration_month":13,"expiration_year":35}`,
-		`{"expiration_month":1,"expiration_year":100}`,
-		`{"expiration_month":1,"expiration_year":0}`,
+	cases := []struct {
+		name string
+		args string
+		want string
+	}{
+		{
+			name: "invalid month",
+			args: `{"expiration_month":13,"expiration_year":35}`,
+			want: "The expiration month is invalid, ask the user to repeat the expiration month.",
+		},
+		{
+			name: "invalid year",
+			args: `{"expiration_month":1,"expiration_year":100}`,
+			want: "The expiration year is invalid, ask the user to repeat the expiration year.",
+		},
+		{
+			name: "expired",
+			args: `{"expiration_month":1,"expiration_year":0}`,
+			want: "The expiration date is in the past, the card is expired. Ask the user to provide another card.",
+		},
 	}
-	for _, args := range cases {
-		if _, err := tool.Execute(context.Background(), args); err == nil {
-			t.Fatalf("Execute(%s) error = nil, want invalid expiration date error", args)
-		}
-	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			task := NewGetExpirationDateTask(false)
+			session := agent.NewAgentSession(task, nil, agent.AgentSessionOptions{})
+			session.Assistant = &fakeDtmfSessionAssistant{}
+			speechEvents := session.SpeechCreatedEvents()
+			tool := &updateExpirationDateTool{task: task}
 
-	select {
-	case result := <-task.Result:
-		t.Fatalf("task completed with %#v, want no completion for invalid date", result)
-	default:
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			if err := session.Start(ctx); err != nil {
+				t.Fatalf("Start error = %v", err)
+			}
+			defer session.Stop(context.Background())
+
+			select {
+			case <-speechEvents:
+			case <-time.After(time.Second):
+				t.Fatal("timed out waiting for expiration-date on-enter prompt")
+			}
+
+			if _, err := tool.Execute(context.Background(), tc.args); err != nil {
+				t.Fatalf("Execute(%s) error = %v, want nil after prompting for invalid expiration date", tc.args, err)
+			}
+
+			select {
+			case ev := <-speechEvents:
+				if ev.Source != "generate_reply" {
+					t.Fatalf("SpeechCreated Source = %q, want generate_reply", ev.Source)
+				}
+				if ev.SpeechHandle == nil {
+					t.Fatal("SpeechCreated SpeechHandle = nil, want invalid-expiration reply handle")
+				}
+				if ev.SpeechHandle.Generation.Instructions == nil {
+					t.Fatal("invalid-expiration instructions = nil, want invalid-expiration prompt")
+				}
+				if got := ev.SpeechHandle.Generation.Instructions.AsModality("text").String(); got != tc.want {
+					t.Fatalf("invalid-expiration instructions = %q, want %q", got, tc.want)
+				}
+			case <-time.After(time.Second):
+				t.Fatal("timed out waiting for invalid-expiration prompt")
+			}
+
+			select {
+			case result := <-task.Result:
+				t.Fatalf("task completed with %#v, want no completion for invalid date", result)
+			default:
+			}
+		})
 	}
 }
 

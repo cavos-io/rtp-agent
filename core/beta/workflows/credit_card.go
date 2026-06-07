@@ -499,13 +499,16 @@ func (t *updateExpirationDateTool) Execute(ctx context.Context, args string) (st
 		return "", err
 	}
 	if params.ExpirationMonth < 1 || params.ExpirationMonth > 12 {
-		return "", llm.NewToolError("The expiration month is invalid, ask the user to repeat the expiration month.")
+		t.task.promptInvalidExpirationDate(invalidExpirationMonthPrompt())
+		return "", nil
 	}
 	if params.ExpirationYear < 0 || params.ExpirationYear > 99 {
-		return "", llm.NewToolError("The expiration year is invalid, ask the user to repeat the expiration year.")
+		t.task.promptInvalidExpirationDate(invalidExpirationYearPrompt())
+		return "", nil
 	}
 	if expirationDateExpired(params.ExpirationMonth, params.ExpirationYear, time.Now()) {
-		return "", llm.NewToolError("The expiration date is in the past, the card is expired. Ask the user to provide another card.")
+		t.task.promptInvalidExpirationDate(expiredExpirationDatePrompt())
+		return "", nil
 	}
 
 	expirationDate := formatExpirationDate(params.ExpirationMonth, params.ExpirationYear)
@@ -517,6 +520,26 @@ func (t *updateExpirationDateTool) Execute(ctx context.Context, args string) (st
 
 	t.task.setConfirmExpirationDateTool(params.ExpirationMonth, params.ExpirationYear, expirationDate)
 	return "The expiration date has been updated.\nDo not repeat the expiration date back to the user, ask them to repeat themselves.\nCall `confirm_expiration_date` once the user confirms, do not call it preemptively.", nil
+}
+
+func (t *GetExpirationDateTask) promptInvalidExpirationDate(prompt string) {
+	if activity := t.Agent.GetActivity(); activity != nil && activity.Session != nil {
+		_, _ = activity.Session.GenerateReplyWithOptions(context.Background(), agent.GenerateReplyOptions{
+			Instructions: prompt,
+		})
+	}
+}
+
+func invalidExpirationMonthPrompt() string {
+	return "The expiration month is invalid, ask the user to repeat the expiration month."
+}
+
+func invalidExpirationYearPrompt() string {
+	return "The expiration year is invalid, ask the user to repeat the expiration year."
+}
+
+func expiredExpirationDatePrompt() string {
+	return "The expiration date is in the past, the card is expired. Ask the user to provide another card."
 }
 
 func (t *GetExpirationDateTask) setConfirmExpirationDateTool(month int, year int, expirationDate string) {
