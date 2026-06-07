@@ -644,10 +644,19 @@ func (t *confirmExpirationDateTool) Execute(ctx context.Context, args string) (s
 		return "", err
 	}
 	if params.RepeatedExpirationMonth != t.expirationMonth || params.RepeatedExpirationYear != t.expirationYear {
-		return "", llm.NewToolError("The repeated expiration date does not match, ask the user to try again.")
+		if activity := t.task.Agent.GetActivity(); activity != nil && activity.Session != nil {
+			_, _ = activity.Session.GenerateReplyWithOptions(context.Background(), agent.GenerateReplyOptions{
+				Instructions: expirationDateMismatchPrompt(),
+			})
+		}
+		return "", nil
 	}
 	t.task.completeExpirationDate(t.expirationDate)
 	return "Expiration date confirmed.", nil
+}
+
+func expirationDateMismatchPrompt() string {
+	return "The repeated expiration date does not match, ask the user to try again."
 }
 
 type cardFailureTask interface {

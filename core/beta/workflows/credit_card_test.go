@@ -372,6 +372,62 @@ func TestGetExpirationDateTaskRequiresMatchingConfirmation(t *testing.T) {
 	}
 }
 
+func TestGetExpirationDateTaskMismatchedConfirmationPromptsForRetry(t *testing.T) {
+	task := NewGetExpirationDateTask()
+	session := agent.NewAgentSession(task, nil, agent.AgentSessionOptions{})
+	session.Assistant = &fakeDtmfSessionAssistant{}
+	speechEvents := session.SpeechCreatedEvents()
+	futureYear := (time.Now().Year() + 1) % 100
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	if err := session.Start(ctx); err != nil {
+		t.Fatalf("Start error = %v", err)
+	}
+	defer session.Stop(context.Background())
+
+	select {
+	case <-speechEvents:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for expiration-date on-enter prompt")
+	}
+
+	update := &updateExpirationDateTool{task: task}
+	if _, err := update.Execute(context.Background(), `{"expiration_month":12,"expiration_year":`+itoa(futureYear)+`}`); err != nil {
+		t.Fatalf("update Execute() error = %v", err)
+	}
+	confirm := &confirmExpirationDateTool{task: task, expirationMonth: 12, expirationYear: futureYear, expirationDate: "12/" + twoDigit(futureYear)}
+
+	if _, err := confirm.Execute(context.Background(), `{"repeated_expiration_month":11,"repeated_expiration_year":`+itoa(futureYear)+`}`); err != nil {
+		t.Fatalf("confirm Execute() error = %v, want nil after prompting for retry", err)
+	}
+
+	select {
+	case ev := <-speechEvents:
+		if ev.Source != "generate_reply" {
+			t.Fatalf("SpeechCreated Source = %q, want generate_reply", ev.Source)
+		}
+		if ev.SpeechHandle == nil {
+			t.Fatal("SpeechCreated SpeechHandle = nil, want retry reply handle")
+		}
+		want := "The repeated expiration date does not match, ask the user to try again."
+		if ev.SpeechHandle.Generation.Instructions == nil {
+			t.Fatal("retry instructions = nil, want mismatch prompt")
+		}
+		if got := ev.SpeechHandle.Generation.Instructions.AsModality("text").String(); got != want {
+			t.Fatalf("retry instructions = %q, want %q", got, want)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for expiration-date retry prompt")
+	}
+
+	select {
+	case result := <-task.Result:
+		t.Fatalf("task completed with %#v, want no completion for mismatched confirmation", result)
+	default:
+	}
+}
+
 func TestCreditCardTasksDefaultToConfirmation(t *testing.T) {
 	if task := NewGetCardNumberTask(); !task.RequireConfirmation {
 		t.Fatal("NewGetCardNumberTask() RequireConfirmation = false, want true")
