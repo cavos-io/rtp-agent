@@ -41,6 +41,7 @@ import (
 	adaptergoogle "github.com/cavos-io/rtp-agent/adapter/google"
 	"github.com/cavos-io/rtp-agent/adapter/gradium"
 	"github.com/cavos-io/rtp-agent/adapter/groq"
+	"github.com/cavos-io/rtp-agent/adapter/hamming"
 	"github.com/cavos-io/rtp-agent/adapter/hedra"
 	"github.com/cavos-io/rtp-agent/adapter/hume"
 	"github.com/cavos-io/rtp-agent/adapter/inworld"
@@ -131,6 +132,7 @@ func TestAppRegistersReferencePluginMetadataBatch(t *testing.T) {
 		},
 		gradium.PluginPackage:    {title: gradium.PluginTitle, version: gradium.PluginVersion},
 		groq.PluginPackage:       {title: groq.PluginTitle, version: groq.PluginVersion},
+		hamming.PluginPackage:    {title: hamming.PluginTitle, version: hamming.PluginVersion},
 		hedra.PluginPackage:      {title: hedra.PluginTitle, version: hedra.PluginVersion},
 		hume.PluginPackage:       {title: hume.PluginTitle, version: hume.PluginVersion},
 		inworld.PluginPackage:    {title: inworld.PluginTitle, version: inworld.PluginVersion},

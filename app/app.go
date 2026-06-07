@@ -39,6 +39,7 @@ import (
 	adaptergoogle "github.com/cavos-io/rtp-agent/adapter/google"
 	"github.com/cavos-io/rtp-agent/adapter/gradium"
 	"github.com/cavos-io/rtp-agent/adapter/groq"
+	"github.com/cavos-io/rtp-agent/adapter/hamming"
 	"github.com/cavos-io/rtp-agent/adapter/hedra"
 	"github.com/cavos-io/rtp-agent/adapter/hume"
 	"github.com/cavos-io/rtp-agent/adapter/inworld"
@@ -123,6 +124,7 @@ func init() {
 	plugin.RegisterPluginMetadata(adaptergoogle.PluginTitle, adaptergoogle.PluginVersion, adaptergoogle.PluginPackage)
 	plugin.RegisterPluginMetadata(gradium.PluginTitle, gradium.PluginVersion, gradium.PluginPackage)
 	plugin.RegisterPluginMetadata(groq.PluginTitle, groq.PluginVersion, groq.PluginPackage)
+	plugin.RegisterPluginMetadata(hamming.PluginTitle, hamming.PluginVersion, hamming.PluginPackage)
 	plugin.RegisterPluginMetadata(hedra.PluginTitle, hedra.PluginVersion, hedra.PluginPackage)
 	plugin.RegisterPluginMetadata(hume.PluginTitle, hume.PluginVersion, hume.PluginPackage)
 	plugin.RegisterPluginMetadata(inworld.PluginTitle, inworld.PluginVersion, inworld.PluginPackage)
