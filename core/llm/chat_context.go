@@ -501,6 +501,10 @@ func (c *ChatContext) IsEquivalent(other *ChatContext) bool {
 
 func ToXML(tagName string, content string, attrs map[string]any) string {
 	attrsStr := xmlAttrsString(attrs)
+	return toXMLWithAttrs(tagName, content, attrsStr)
+}
+
+func toXMLWithAttrs(tagName string, content string, attrsStr string) string {
 	openTag := tagName
 	if attrsStr != "" {
 		openTag += " " + attrsStr
@@ -527,15 +531,28 @@ func xmlAttrsString(attrs map[string]any) string {
 	return strings.Join(parts, " ")
 }
 
+func xmlOrderedAttrsString(attrs ...xmlAttr) string {
+	parts := make([]string, 0, len(attrs))
+	for _, attr := range attrs {
+		parts = append(parts, fmt.Sprintf(`%s="%v"`, attr.Key, attr.Value))
+	}
+	return strings.Join(parts, " ")
+}
+
+type xmlAttr struct {
+	Key   string
+	Value any
+}
+
 func FunctionCallItemToMessage(item ChatItem) *ChatMessage {
 	switch it := item.(type) {
 	case *FunctionCall:
 		return &ChatMessage{
 			Role: ChatRoleUser,
-			Content: []ChatContent{{Text: ToXML("function_call", it.Arguments, map[string]any{
-				"name":    it.Name,
-				"call_id": it.CallID,
-			})}},
+			Content: []ChatContent{{Text: toXMLWithAttrs("function_call", it.Arguments, xmlOrderedAttrsString(
+				xmlAttr{Key: "name", Value: it.Name},
+				xmlAttr{Key: "call_id", Value: it.CallID},
+			))}},
 			CreatedAt: it.CreatedAt,
 			Extra:     map[string]any{"is_function_call": true},
 		}
@@ -546,10 +563,10 @@ func FunctionCallItemToMessage(item ChatItem) *ChatMessage {
 		}
 		return &ChatMessage{
 			Role: ChatRoleAssistant,
-			Content: []ChatContent{{Text: ToXML("function_call_output", output, map[string]any{
-				"call_id": it.CallID,
-				"name":    it.Name,
-			})}},
+			Content: []ChatContent{{Text: toXMLWithAttrs("function_call_output", output, xmlOrderedAttrsString(
+				xmlAttr{Key: "call_id", Value: it.CallID},
+				xmlAttr{Key: "name", Value: it.Name},
+			))}},
 			CreatedAt: it.CreatedAt,
 			Extra:     map[string]any{"is_function_call_output": true},
 		}
