@@ -317,6 +317,16 @@ func TestRealtimeSessionOptionsExposeSpeed(t *testing.T) {
 	}
 }
 
+func TestRealtimeSessionOptionsExposeMaxResponseOutputTokens(t *testing.T) {
+	options := RealtimeSessionOptions{
+		MaxResponseOutputTokens: 64,
+	}
+
+	if options.MaxResponseOutputTokens != 64 {
+		t.Fatalf("MaxResponseOutputTokens = %#v, want 64", options.MaxResponseOutputTokens)
+	}
+}
+
 func TestRealtimeGenerateReplyOptionsExposePerResponseOverrides(t *testing.T) {
 	options := RealtimeGenerateReplyOptions{
 		Instructions: "answer briefly",

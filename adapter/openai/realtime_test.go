@@ -325,6 +325,20 @@ func TestRealtimeUpdateOptionsMessageMapsSpeed(t *testing.T) {
 	}
 }
 
+func TestRealtimeUpdateOptionsMessageMapsMaxResponseOutputTokens(t *testing.T) {
+	msg := openAIRealtimeUpdateOptionsMessage(llm.RealtimeSessionOptions{
+		MaxResponseOutputTokens: 64,
+	})
+
+	if msg["type"] != "session.update" {
+		t.Fatalf("message type = %#v, want session.update", msg["type"])
+	}
+	session := msg["session"].(map[string]any)
+	if session["max_response_output_tokens"] != 64 {
+		t.Fatalf("max_response_output_tokens = %#v, want 64", session["max_response_output_tokens"])
+	}
+}
+
 func TestRealtimeAudioBufferMessages(t *testing.T) {
 	commit := openAIRealtimeCommitAudioMessage()
 	if commit["type"] != "input_audio_buffer.commit" {

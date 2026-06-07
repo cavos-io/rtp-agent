@@ -404,6 +404,9 @@ func openAIRealtimeUpdateOptionsMessage(options llm.RealtimeSessionOptions) map[
 	if toolChoice := openAIRealtimeToolChoice(options.ToolChoice); toolChoice != nil {
 		session["tool_choice"] = toolChoice
 	}
+	if options.MaxResponseOutputTokens != nil {
+		session["max_response_output_tokens"] = options.MaxResponseOutputTokens
+	}
 	output := make(map[string]any)
 	if options.Voice != "" {
 		output["voice"] = options.Voice
