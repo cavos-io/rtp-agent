@@ -90,6 +90,7 @@ import (
 	"github.com/cavos-io/rtp-agent/library/plugin"
 	"github.com/cavos-io/rtp-agent/library/telemetry"
 	"github.com/cavos-io/rtp-agent/library/tokenize"
+	"github.com/livekit/protocol/livekit"
 	livekitlogger "github.com/livekit/protocol/logger"
 	lksdk "github.com/livekit/server-sdk-go/v2"
 	goopenai "github.com/sashabaranov/go-openai"
@@ -469,6 +470,7 @@ type AppConfig struct {
 	WorkflowNameExtraInstructions         string
 	WorkflowWarmTransferSipCallTo         string
 	WorkflowWarmTransferSipTrunkID        string
+	WorkflowWarmTransferSipConnection     *livekit.SIPOutboundConfig
 	WorkflowWarmTransferSipNumber         string
 	WorkflowWarmTransferSipHeaders        map[string]string
 	WorkflowWarmTransferDTMF              string
@@ -808,6 +810,7 @@ func DefaultConfigFromEnv() AppConfig {
 		WorkflowNameExtraInstructions:           os.Getenv("RTP_AGENT_WORKFLOW_NAME_EXTRA_INSTRUCTIONS"),
 		WorkflowWarmTransferSipCallTo:           os.Getenv("RTP_AGENT_WORKFLOW_WARM_TRANSFER_SIP_CALL_TO"),
 		WorkflowWarmTransferSipTrunkID:          os.Getenv("RTP_AGENT_WORKFLOW_WARM_TRANSFER_SIP_TRUNK_ID"),
+		WorkflowWarmTransferSipConnection:       sipOutboundConfigFromEnv("RTP_AGENT_WORKFLOW_WARM_TRANSFER_SIP_CONNECTION_JSON"),
 		WorkflowWarmTransferSipNumber:           os.Getenv("RTP_AGENT_WORKFLOW_WARM_TRANSFER_SIP_NUMBER"),
 		WorkflowWarmTransferSipHeaders:          splitEnvStringMap("RTP_AGENT_WORKFLOW_WARM_TRANSFER_SIP_HEADERS"),
 		WorkflowWarmTransferDTMF:                os.Getenv("RTP_AGENT_WORKFLOW_WARM_TRANSFER_DTMF"),
@@ -1031,11 +1034,12 @@ func workflowAgentFromConfig(cfg AppConfig, baseAgent *agent.Agent) (agent.Agent
 			return nil, fmt.Errorf("RTP_AGENT_WORKFLOW_WARM_TRANSFER_SIP_CALL_TO is required for warm_transfer workflow")
 		}
 		task, err := workflows.NewWarmTransferTaskWithOptions(workflows.WarmTransferOptions{
-			TargetPhone:  sipCallTo,
-			TrunkID:      strings.TrimSpace(cfg.WorkflowWarmTransferSipTrunkID),
-			SipNumber:    cfg.WorkflowWarmTransferSipNumber,
-			ChatContext:  baseAgent.ChatCtx,
-			Instructions: workflowInstructionParts(cfg.WorkflowWarmTransferPersona, cfg.WorkflowWarmTransferExtraInstructions),
+			TargetPhone:   sipCallTo,
+			TrunkID:       strings.TrimSpace(cfg.WorkflowWarmTransferSipTrunkID),
+			SipConnection: cfg.WorkflowWarmTransferSipConnection,
+			SipNumber:     cfg.WorkflowWarmTransferSipNumber,
+			ChatContext:   baseAgent.ChatCtx,
+			Instructions:  workflowInstructionParts(cfg.WorkflowWarmTransferPersona, cfg.WorkflowWarmTransferExtraInstructions),
 		})
 		if err != nil {
 			return nil, err
@@ -1259,15 +1263,16 @@ func workflowTaskFactoryFromName(cfg AppConfig, baseAgent *agent.Agent, taskName
 			return workflows.FactoryInfo{}, fmt.Errorf("RTP_AGENT_WORKFLOW_WARM_TRANSFER_SIP_CALL_TO is required for warm_transfer task group entry")
 		}
 		sipTrunkID := strings.TrimSpace(cfg.WorkflowWarmTransferSipTrunkID)
-		if sipTrunkID == "" {
+		if sipTrunkID == "" && cfg.WorkflowWarmTransferSipConnection == nil {
 			sipTrunkID = strings.TrimSpace(os.Getenv("LIVEKIT_SIP_OUTBOUND_TRUNK"))
 		}
 		if _, err := workflows.NewWarmTransferTaskWithOptions(workflows.WarmTransferOptions{
-			TargetPhone:  sipCallTo,
-			TrunkID:      sipTrunkID,
-			SipNumber:    cfg.WorkflowWarmTransferSipNumber,
-			ChatContext:  baseAgent.ChatCtx,
-			Instructions: workflowInstructionParts(cfg.WorkflowWarmTransferPersona, cfg.WorkflowWarmTransferExtraInstructions),
+			TargetPhone:   sipCallTo,
+			TrunkID:       sipTrunkID,
+			SipConnection: cfg.WorkflowWarmTransferSipConnection,
+			SipNumber:     cfg.WorkflowWarmTransferSipNumber,
+			ChatContext:   baseAgent.ChatCtx,
+			Instructions:  workflowInstructionParts(cfg.WorkflowWarmTransferPersona, cfg.WorkflowWarmTransferExtraInstructions),
 		}); err != nil {
 			return workflows.FactoryInfo{}, err
 		}
@@ -1276,11 +1281,12 @@ func workflowTaskFactoryFromName(cfg AppConfig, baseAgent *agent.Agent, taskName
 			Description: "Transfer the caller to a human agent by SIP.",
 			TaskFactory: factory(func() agent.AgentInterface {
 				task, err := workflows.NewWarmTransferTaskWithOptions(workflows.WarmTransferOptions{
-					TargetPhone:  sipCallTo,
-					TrunkID:      sipTrunkID,
-					SipNumber:    cfg.WorkflowWarmTransferSipNumber,
-					ChatContext:  baseAgent.ChatCtx,
-					Instructions: workflowInstructionParts(cfg.WorkflowWarmTransferPersona, cfg.WorkflowWarmTransferExtraInstructions),
+					TargetPhone:   sipCallTo,
+					TrunkID:       sipTrunkID,
+					SipConnection: cfg.WorkflowWarmTransferSipConnection,
+					SipNumber:     cfg.WorkflowWarmTransferSipNumber,
+					ChatContext:   baseAgent.ChatCtx,
+					Instructions:  workflowInstructionParts(cfg.WorkflowWarmTransferPersona, cfg.WorkflowWarmTransferExtraInstructions),
 				})
 				if err != nil {
 					panic(fmt.Sprintf("validated warm transfer task config rejected: %v", err))
@@ -3872,6 +3878,18 @@ func mcpHTTPServersFromEnv(name string) []MCPHTTPServerConfig {
 		return nil
 	}
 	return servers
+}
+
+func sipOutboundConfigFromEnv(name string) *livekit.SIPOutboundConfig {
+	raw := os.Getenv(name)
+	if strings.TrimSpace(raw) == "" {
+		return nil
+	}
+	config := &livekit.SIPOutboundConfig{}
+	if err := json.Unmarshal([]byte(raw), config); err != nil {
+		return nil
+	}
+	return config
 }
 
 func jsonEnvMap(name string) map[string]any {

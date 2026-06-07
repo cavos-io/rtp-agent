@@ -2345,6 +2345,34 @@ func TestDefaultConfigFromEnvRejectsWarmTransferWithoutSIPTrunk(t *testing.T) {
 	}
 }
 
+func TestDefaultConfigFromEnvSelectsWarmTransferSIPConnection(t *testing.T) {
+	t.Setenv("LIVEKIT_SIP_OUTBOUND_TRUNK", "")
+	t.Setenv("RTP_AGENT_WORKFLOW_TASK", "warm_transfer")
+	t.Setenv("RTP_AGENT_WORKFLOW_WARM_TRANSFER_SIP_CALL_TO", "+15550100")
+	t.Setenv("RTP_AGENT_WORKFLOW_WARM_TRANSFER_SIP_CONNECTION_JSON", `{"hostname":"sip.example.com","destination_country":"US","auth_username":"agent","auth_password":"secret"}`)
+
+	app, err := NewApp(DefaultConfigFromEnv())
+	if err != nil {
+		t.Fatalf("NewApp() error = %v", err)
+	}
+	task, ok := app.Session.Agent.(*workflows.WarmTransferTask)
+	if !ok {
+		t.Fatalf("Session.Agent = %T, want *workflows.WarmTransferTask", app.Session.Agent)
+	}
+	if task.SipTrunkID != "" {
+		t.Fatalf("SipTrunkID = %q, want empty when explicit SIP connection is configured", task.SipTrunkID)
+	}
+	if task.SipConnection == nil {
+		t.Fatal("SipConnection = nil, want configured SIP outbound connection")
+	}
+	if task.SipConnection.GetHostname() != "sip.example.com" ||
+		task.SipConnection.GetDestinationCountry() != "US" ||
+		task.SipConnection.GetAuthUsername() != "agent" ||
+		task.SipConnection.GetAuthPassword() != "secret" {
+		t.Fatalf("SipConnection = %#v, want configured SIP outbound connection", task.SipConnection)
+	}
+}
+
 func TestDefaultConfigFromEnvSelectsTaskGroupWorkflowAgent(t *testing.T) {
 	t.Setenv("RTP_AGENT_WORKFLOW_TASK", "task_group")
 	t.Setenv("RTP_AGENT_WORKFLOW_TASK_GROUP_TASKS", "address,email,phone_number,dob,name,dtmf,card_number,security_code,expiration_date,credit_card")
