@@ -79,34 +79,11 @@ func (p *ProcPool) Start(ctx context.Context) error {
 	}
 
 	closedExecutors := p.pruneFinishedExecutorsLocked()
-	idleNeeded := p.targetIdle - p.idleExecutorCountLocked()
-	capacity := p.maxProcesses - len(p.executors)
-	if idleNeeded > capacity {
-		idleNeeded = capacity
-	}
-	if idleNeeded < 0 {
-		idleNeeded = 0
-	}
-
-	warmedExecutors := make([]JobExecutor, 0, idleNeeded)
-	for i := 0; i < idleNeeded; i++ {
-		executor := p.createExecutorLocked()
-		warmedExecutors = append(warmedExecutors, executor)
-	}
+	warmedExecutors := p.warmIdleExecutorsLocked()
 	p.mu.Unlock()
 
 	p.emitMany(ProcPoolEventProcessClosed, closedExecutors)
-	for _, executor := range warmedExecutors {
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		default:
-		}
-		p.emit(ProcPoolEventProcessCreated, executor)
-		p.emit(ProcPoolEventProcessStarted, executor)
-		p.emit(ProcPoolEventProcessReady, executor)
-	}
-	return nil
+	return p.emitWarmedExecutors(ctx, warmedExecutors)
 }
 
 func (p *ProcPool) LaunchRunningJob(ctx context.Context, info RunningJobInfo) error {
@@ -158,10 +135,46 @@ func (p *ProcPool) LaunchRunningJob(ctx context.Context, info RunningJobInfo) er
 		}
 		logger.Logger.Infow("Launched job", "executor_type", p.executorType, "executor_id", id, "job_id", info.Job.GetId())
 		p.emit(ProcPoolEventJobLaunched, executor)
+		p.mu.Lock()
+		warmedExecutors := p.warmIdleExecutorsLocked()
+		p.mu.Unlock()
+		_ = p.emitWarmedExecutors(ctx, warmedExecutors)
 		return nil
 	}
 
 	return lastErr
+}
+
+func (p *ProcPool) warmIdleExecutorsLocked() []JobExecutor {
+	idleNeeded := p.targetIdle - p.idleExecutorCountLocked()
+	capacity := p.maxProcesses - len(p.executors)
+	if idleNeeded > capacity {
+		idleNeeded = capacity
+	}
+	if idleNeeded < 0 {
+		idleNeeded = 0
+	}
+
+	warmedExecutors := make([]JobExecutor, 0, idleNeeded)
+	for i := 0; i < idleNeeded; i++ {
+		executor := p.createExecutorLocked()
+		warmedExecutors = append(warmedExecutors, executor)
+	}
+	return warmedExecutors
+}
+
+func (p *ProcPool) emitWarmedExecutors(ctx context.Context, executors []JobExecutor) error {
+	for _, executor := range executors {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
+		}
+		p.emit(ProcPoolEventProcessCreated, executor)
+		p.emit(ProcPoolEventProcessStarted, executor)
+		p.emit(ProcPoolEventProcessReady, executor)
+	}
+	return nil
 }
 
 func (p *ProcPool) createExecutorLocked() JobExecutor {
