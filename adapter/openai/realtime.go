@@ -453,7 +453,7 @@ func openAIRealtimeUpdateOptionsMessageWithEventID(options llm.RealtimeSessionOp
 		session["tool_choice"] = toolChoice
 	}
 	if options.MaxResponseOutputTokens != nil {
-		session["max_response_output_tokens"] = options.MaxResponseOutputTokens
+		session["max_output_tokens"] = options.MaxResponseOutputTokens
 	}
 	if options.Truncation != nil {
 		session["truncation"] = options.Truncation
@@ -518,8 +518,8 @@ func openAIRealtimeOptionEntries(session map[string]any) map[string]any {
 	if value, ok := session["tool_choice"]; ok {
 		entries["tool_choice"] = value
 	}
-	if value, ok := session["max_response_output_tokens"]; ok {
-		entries["max_response_output_tokens"] = value
+	if value, ok := session["max_output_tokens"]; ok {
+		entries["max_output_tokens"] = value
 	}
 	if value, ok := session["truncation"]; ok {
 		entries["truncation"] = value
@@ -554,7 +554,7 @@ func openAIRealtimeSessionFromOptionEntries(entries map[string]any) map[string]a
 	output := make(map[string]any)
 	for key, value := range entries {
 		switch key {
-		case "tool_choice", "max_response_output_tokens", "truncation", "tracing":
+		case "tool_choice", "max_output_tokens", "truncation", "tracing":
 			session[key] = value
 		case "audio.input.turn_detection":
 			input["turn_detection"] = value

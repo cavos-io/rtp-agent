@@ -401,8 +401,11 @@ func TestRealtimeUpdateOptionsMessageMapsMaxResponseOutputTokens(t *testing.T) {
 		t.Fatalf("message type = %#v, want session.update", msg["type"])
 	}
 	session := msg["session"].(map[string]any)
-	if session["max_response_output_tokens"] != 64 {
-		t.Fatalf("max_response_output_tokens = %#v, want 64", session["max_response_output_tokens"])
+	if session["max_output_tokens"] != 64 {
+		t.Fatalf("max_output_tokens = %#v, want 64", session["max_output_tokens"])
+	}
+	if _, ok := session["max_response_output_tokens"]; ok {
+		t.Fatalf("max_response_output_tokens present in session payload: %#v", session)
 	}
 }
 
