@@ -418,7 +418,7 @@ func (s *AgentSession) recordEvent(ev Event) {
 func (s *AgentSession) CurrentAgent() (AgentInterface, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if !s.started || s.Agent == nil {
+	if s.Agent == nil {
 		return nil, ErrAgentSessionNotRunning
 	}
 	return s.Agent, nil

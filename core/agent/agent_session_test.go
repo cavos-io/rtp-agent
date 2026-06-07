@@ -1861,17 +1861,30 @@ func TestAgentSessionGenerateReplyRequiresRunningActivity(t *testing.T) {
 	}
 }
 
-func TestAgentSessionCurrentAgentRequiresRunningSession(t *testing.T) {
+func TestAgentSessionCurrentAgentRequiresConfiguredAgent(t *testing.T) {
+	session := &AgentSession{}
+
+	current, err := session.CurrentAgent()
+
+	if current != nil {
+		t.Fatalf("CurrentAgent = %#v, want nil when session has no agent", current)
+	}
+	if !errors.Is(err, ErrAgentSessionNotRunning) {
+		t.Fatalf("CurrentAgent error = %v, want ErrAgentSessionNotRunning", err)
+	}
+}
+
+func TestAgentSessionCurrentAgentReturnsConfiguredAgentBeforeStart(t *testing.T) {
 	agent := NewAgent("test")
 	session := NewAgentSession(agent, nil, AgentSessionOptions{})
 
 	current, err := session.CurrentAgent()
 
-	if current != nil {
-		t.Fatalf("CurrentAgent = %#v, want nil when session is not running", current)
+	if err != nil {
+		t.Fatalf("CurrentAgent error = %v, want nil before start when agent is configured", err)
 	}
-	if !errors.Is(err, ErrAgentSessionNotRunning) {
-		t.Fatalf("CurrentAgent error = %v, want ErrAgentSessionNotRunning", err)
+	if current != agent {
+		t.Fatalf("CurrentAgent = %#v, want configured agent %#v", current, agent)
 	}
 }
 
