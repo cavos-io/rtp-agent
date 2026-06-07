@@ -1995,6 +1995,7 @@ func TestDefaultConfigFromEnvRejectsInvalidDtmfNumDigits(t *testing.T) {
 func TestDefaultConfigFromEnvSelectsAddressWorkflowAgent(t *testing.T) {
 	t.Setenv("RTP_AGENT_WORKFLOW_TASK", "address")
 	t.Setenv("RTP_AGENT_WORKFLOW_REQUIRE_CONFIRMATION", "true")
+	t.Setenv("RTP_AGENT_WORKFLOW_ADDRESS_PERSONA", "You only collect shipping addresses for hardware orders.")
 	t.Setenv("RTP_AGENT_WORKFLOW_ADDRESS_EXTRA_INSTRUCTIONS", "Ask whether this is the shipping address.")
 
 	app, err := NewApp(DefaultConfigFromEnv())
@@ -2011,6 +2012,12 @@ func TestDefaultConfigFromEnvSelectsAddressWorkflowAgent(t *testing.T) {
 	if !strings.Contains(task.Instructions, "Ask whether this is the shipping address.") {
 		t.Fatalf("Instructions = %q, want address extra instructions", task.Instructions)
 	}
+	if !strings.Contains(task.Instructions, "You only collect shipping addresses for hardware orders.") {
+		t.Fatalf("Instructions = %q, want custom address persona", task.Instructions)
+	}
+	if strings.Contains(task.Instructions, "responsible solely for capturing an address") {
+		t.Fatalf("Instructions = %q, want default address persona replaced", task.Instructions)
+	}
 	if app.Agent != task.GetAgent() {
 		t.Fatal("App.Agent does not point at selected address workflow agent")
 	}
@@ -2022,6 +2029,7 @@ func TestDefaultConfigFromEnvSelectsAddressWorkflowAgent(t *testing.T) {
 func TestDefaultConfigFromEnvSelectsEmailWorkflowAgent(t *testing.T) {
 	t.Setenv("RTP_AGENT_WORKFLOW_TASK", "email")
 	t.Setenv("RTP_AGENT_WORKFLOW_REQUIRE_CONFIRMATION", "true")
+	t.Setenv("RTP_AGENT_WORKFLOW_EMAIL_PERSONA", "You only collect work email addresses for account recovery.")
 	t.Setenv("RTP_AGENT_WORKFLOW_EMAIL_EXTRA_INSTRUCTIONS", "Ask for the work email address on file.")
 
 	app, err := NewApp(DefaultConfigFromEnv())
@@ -2037,6 +2045,12 @@ func TestDefaultConfigFromEnvSelectsEmailWorkflowAgent(t *testing.T) {
 	}
 	if !strings.Contains(task.Instructions, "Ask for the work email address on file.") {
 		t.Fatalf("Instructions = %q, want email extra instructions", task.Instructions)
+	}
+	if !strings.Contains(task.Instructions, "You only collect work email addresses for account recovery.") {
+		t.Fatalf("Instructions = %q, want custom email persona", task.Instructions)
+	}
+	if strings.Contains(task.Instructions, "responsible solely for capturing an email address") {
+		t.Fatalf("Instructions = %q, want default email persona replaced", task.Instructions)
 	}
 	if app.Agent != task.GetAgent() {
 		t.Fatal("App.Agent does not point at selected workflow agent")
@@ -2271,6 +2285,7 @@ func TestDefaultConfigFromEnvSelectsWarmTransferWorkflowAgent(t *testing.T) {
 	t.Setenv("RTP_AGENT_WORKFLOW_WARM_TRANSFER_SIP_HEADERS", "X-Trace=trace-a,X-Queue=billing")
 	t.Setenv("RTP_AGENT_WORKFLOW_WARM_TRANSFER_DTMF", "ww1234#")
 	t.Setenv("RTP_AGENT_WORKFLOW_WARM_TRANSFER_RINGING_TIMEOUT_SECONDS", "3.5")
+	t.Setenv("RTP_AGENT_WORKFLOW_WARM_TRANSFER_PERSONA", "You brief a licensed support specialist before joining the caller.")
 	t.Setenv("RTP_AGENT_WORKFLOW_WARM_TRANSFER_EXTRA_INSTRUCTIONS", "\nKeep the handoff concise.")
 
 	app, err := NewApp(DefaultConfigFromEnv())
@@ -2298,6 +2313,15 @@ func TestDefaultConfigFromEnvSelectsWarmTransferWorkflowAgent(t *testing.T) {
 	}
 	if task.RingingTimeout != 3500*time.Millisecond {
 		t.Fatalf("RingingTimeout = %v, want 3.5s", task.RingingTimeout)
+	}
+	if !strings.Contains(task.Instructions, "You brief a licensed support specialist before joining the caller.") {
+		t.Fatalf("Instructions = %q, want custom warm-transfer persona", task.Instructions)
+	}
+	if strings.Contains(task.Instructions, "You are an agent that is reaching out to a human agent for help.") {
+		t.Fatalf("Instructions = %q, want default warm-transfer persona replaced", task.Instructions)
+	}
+	if !strings.Contains(task.Instructions, "Keep the handoff concise.") {
+		t.Fatalf("Instructions = %q, want warm-transfer extra instructions", task.Instructions)
 	}
 	if app.Agent != task.GetAgent() {
 		t.Fatal("App.Agent does not point at selected warm transfer agent")
