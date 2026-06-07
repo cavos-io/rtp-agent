@@ -97,6 +97,7 @@ import (
 )
 
 func init() {
+	plugin.RegisterPluginDownloader(silero.PluginTitle, silero.PluginVersion, silero.PluginPackage, silero.Plugin{}.DownloadFiles)
 	plugin.RegisterPluginMetadata(slng.PluginTitle, slng.PluginVersion, slng.PluginPackage)
 }
 

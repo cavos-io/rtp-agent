@@ -15,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/cavos-io/rtp-agent/adapter/silero"
 	"github.com/cavos-io/rtp-agent/core/agent"
 	"github.com/cavos-io/rtp-agent/core/audio/model"
 	"github.com/cavos-io/rtp-agent/core/beta/workflows"
@@ -46,6 +47,22 @@ func TestAppRegistersSLNGPluginMetadata(t *testing.T) {
 		return
 	}
 	t.Fatal("SLNG plugin metadata was not registered")
+}
+
+func TestAppRegistersSileroPluginDownloader(t *testing.T) {
+	for _, registered := range plugin.RegisteredPlugins() {
+		if registered.Package() != silero.PluginPackage {
+			continue
+		}
+		if registered.Title() != silero.PluginTitle {
+			t.Fatalf("plugin title = %q, want %q", registered.Title(), silero.PluginTitle)
+		}
+		if registered.Version() != silero.PluginVersion {
+			t.Fatalf("plugin version = %q, want %q", registered.Version(), silero.PluginVersion)
+		}
+		return
+	}
+	t.Fatal("Silero plugin downloader was not registered")
 }
 
 func TestNewAppInstallsConfiguredLogger(t *testing.T) {
