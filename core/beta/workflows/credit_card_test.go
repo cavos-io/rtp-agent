@@ -257,11 +257,45 @@ func TestGetSecurityCodeTaskRecordsValidCodeWithoutConfirmation(t *testing.T) {
 
 func TestGetSecurityCodeTaskRejectsInvalidCode(t *testing.T) {
 	task := NewGetSecurityCodeTask(false)
+	session := agent.NewAgentSession(task, nil, agent.AgentSessionOptions{})
+	session.Assistant = &fakeDtmfSessionAssistant{}
+	speechEvents := session.SpeechCreatedEvents()
 	tool := &updateSecurityCodeTool{task: task}
 
-	_, err := tool.Execute(context.Background(), `{"security_code":"12a"}`)
-	if err == nil {
-		t.Fatal("Execute() error = nil, want invalid security code error")
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	if err := session.Start(ctx); err != nil {
+		t.Fatalf("Start error = %v", err)
+	}
+	defer session.Stop(context.Background())
+
+	select {
+	case <-speechEvents:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for security-code on-enter prompt")
+	}
+
+	if _, err := tool.Execute(context.Background(), `{"security_code":"12a"}`); err != nil {
+		t.Fatalf("Execute() error = %v, want nil after prompting for invalid code", err)
+	}
+
+	select {
+	case ev := <-speechEvents:
+		if ev.Source != "generate_reply" {
+			t.Fatalf("SpeechCreated Source = %q, want generate_reply", ev.Source)
+		}
+		if ev.SpeechHandle == nil {
+			t.Fatal("SpeechCreated SpeechHandle = nil, want invalid-code reply handle")
+		}
+		want := "The security code's length is invalid, ask the user to repeat or to provide a new card and start over."
+		if ev.SpeechHandle.Generation.Instructions == nil {
+			t.Fatal("invalid-code instructions = nil, want invalid-code prompt")
+		}
+		if got := ev.SpeechHandle.Generation.Instructions.AsModality("text").String(); got != want {
+			t.Fatalf("invalid-code instructions = %q, want %q", got, want)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for invalid-code prompt")
 	}
 
 	select {

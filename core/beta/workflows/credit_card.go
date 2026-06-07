@@ -436,7 +436,12 @@ func (t *updateSecurityCodeTool) Execute(ctx context.Context, args string) (stri
 
 	securityCode := strings.TrimSpace(params.SecurityCode)
 	if !validSecurityCode(securityCode) {
-		return "", llm.NewToolError("The security code's length is invalid, ask the user to repeat or to provide a new card and start over.")
+		if activity := t.task.Agent.GetActivity(); activity != nil && activity.Session != nil {
+			_, _ = activity.Session.GenerateReplyWithOptions(context.Background(), agent.GenerateReplyOptions{
+				Instructions: invalidSecurityCodePrompt(),
+			})
+		}
+		return "", nil
 	}
 
 	t.task.currentSecurityCode = securityCode
@@ -447,6 +452,10 @@ func (t *updateSecurityCodeTool) Execute(ctx context.Context, args string) (stri
 
 	t.task.setConfirmSecurityCodeTool(securityCode)
 	return "The security code has been updated.\nDo not repeat the security code back to the user, ask them to repeat themselves.\nCall `confirm_security_code` once the user confirms, do not call it preemptively.", nil
+}
+
+func invalidSecurityCodePrompt() string {
+	return "The security code's length is invalid, ask the user to repeat or to provide a new card and start over."
 }
 
 func (t *GetSecurityCodeTask) setConfirmSecurityCodeTool(securityCode string) {
