@@ -71,6 +71,44 @@ func (p *ProcPool) LaunchJob(ctx context.Context, job *livekit.Job) error {
 	return p.LaunchRunningJob(ctx, RunningJobInfo{Job: job})
 }
 
+func (p *ProcPool) Start(ctx context.Context) error {
+	p.mu.Lock()
+	if p.closed {
+		p.mu.Unlock()
+		return ErrProcPoolClosed
+	}
+
+	closedExecutors := p.pruneFinishedExecutorsLocked()
+	idleNeeded := p.targetIdle - p.idleExecutorCountLocked()
+	capacity := p.maxProcesses - len(p.executors)
+	if idleNeeded > capacity {
+		idleNeeded = capacity
+	}
+	if idleNeeded < 0 {
+		idleNeeded = 0
+	}
+
+	warmedExecutors := make([]JobExecutor, 0, idleNeeded)
+	for i := 0; i < idleNeeded; i++ {
+		executor := p.createExecutorLocked()
+		warmedExecutors = append(warmedExecutors, executor)
+	}
+	p.mu.Unlock()
+
+	p.emitMany(ProcPoolEventProcessClosed, closedExecutors)
+	for _, executor := range warmedExecutors {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
+		}
+		p.emit(ProcPoolEventProcessCreated, executor)
+		p.emit(ProcPoolEventProcessStarted, executor)
+		p.emit(ProcPoolEventProcessReady, executor)
+	}
+	return nil
+}
+
 func (p *ProcPool) LaunchRunningJob(ctx context.Context, info RunningJobInfo) error {
 	var lastErr error
 	for attempt := 0; attempt < maxLaunchAttempts; attempt++ {
@@ -81,19 +119,24 @@ func (p *ProcPool) LaunchRunningJob(ctx context.Context, info RunningJobInfo) er
 		}
 
 		closedExecutors := p.pruneFinishedExecutorsLocked()
-		if len(p.executors) >= p.maxProcesses {
+		executor := p.idleExecutorLocked()
+		executorWarmed := executor != nil
+		if executor == nil && len(p.executors) >= p.maxProcesses {
 			p.mu.Unlock()
 			p.emitMany(ProcPoolEventProcessClosed, closedExecutors)
 			return fmt.Errorf("proc pool exhausted, max capacity reached")
 		}
 
-		id := "exec_" + uuid.NewString()[:8]
-		executor := p.executorFactory(id)
-		p.executors[id] = executor
+		if executor == nil {
+			executor = p.createExecutorLocked()
+		}
+		id := executor.ID()
 		p.mu.Unlock()
 
 		p.emitMany(ProcPoolEventProcessClosed, closedExecutors)
-		p.emit(ProcPoolEventProcessCreated, executor)
+		if !executorWarmed {
+			p.emit(ProcPoolEventProcessCreated, executor)
+		}
 
 		err := executor.LaunchRunningJob(ctx, info)
 		if err != nil {
@@ -109,14 +152,42 @@ func (p *ProcPool) LaunchRunningJob(ctx context.Context, info RunningJobInfo) er
 			continue
 		}
 
-		p.emit(ProcPoolEventProcessStarted, executor)
-		p.emit(ProcPoolEventProcessReady, executor)
+		if !executorWarmed {
+			p.emit(ProcPoolEventProcessStarted, executor)
+			p.emit(ProcPoolEventProcessReady, executor)
+		}
 		logger.Logger.Infow("Launched job", "executor_type", p.executorType, "executor_id", id, "job_id", info.Job.GetId())
 		p.emit(ProcPoolEventJobLaunched, executor)
 		return nil
 	}
 
 	return lastErr
+}
+
+func (p *ProcPool) createExecutorLocked() JobExecutor {
+	id := "exec_" + uuid.NewString()[:8]
+	executor := p.executorFactory(id)
+	p.executors[executor.ID()] = executor
+	return executor
+}
+
+func (p *ProcPool) idleExecutorLocked() JobExecutor {
+	for _, executor := range p.executors {
+		if !executor.Started() {
+			return executor
+		}
+	}
+	return nil
+}
+
+func (p *ProcPool) idleExecutorCountLocked() int {
+	count := 0
+	for _, executor := range p.executors {
+		if !executor.Started() {
+			count++
+		}
+	}
+	return count
 }
 
 func (p *ProcPool) pruneFinishedExecutorsLocked() []JobExecutor {

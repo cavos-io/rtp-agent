@@ -62,8 +62,10 @@ var newLocalJobExecutor = func(id string, entrypoint func() error) workeripc.Job
 }
 
 type localJobPool interface {
+	Start(ctx context.Context) error
 	LaunchRunningJob(ctx context.Context, info workeripc.RunningJobInfo) error
 	GetByJobID(jobID string) workeripc.JobExecutor
+	SetTargetIdleProcesses(numIdleProcesses int)
 	SetCloseTimeout(timeout time.Duration)
 	Close() error
 }
@@ -2036,8 +2038,14 @@ func (s *AgentServer) launchLocalJobExecutor(ctx context.Context, jobCtx *JobCon
 	info := runningJobInfoFromContext(jobCtx)
 	if s.Options.NumIdleProcessesSet && s.Options.NumIdleProcesses > 0 {
 		pool := newLocalProcPool(s.Options.NumIdleProcesses, workeripc.ExecutorTypeThread, entrypoint)
+		pool.SetTargetIdleProcesses(s.Options.NumIdleProcesses)
 		pool.SetCloseTimeout(time.Duration(s.Options.ShutdownProcessTimeoutSeconds * float64(time.Second)))
+		if err := pool.Start(ctx); err != nil {
+			_ = pool.Close()
+			return err
+		}
 		if err := pool.LaunchRunningJob(ctx, info); err != nil {
+			_ = pool.Close()
 			return err
 		}
 		go func() {
