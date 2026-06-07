@@ -26,6 +26,7 @@ import (
 	"github.com/cavos-io/rtp-agent/adapter/baseten"
 	"github.com/cavos-io/rtp-agent/adapter/bey"
 	"github.com/cavos-io/rtp-agent/adapter/bithuman"
+	"github.com/cavos-io/rtp-agent/adapter/browser"
 	"github.com/cavos-io/rtp-agent/adapter/cambai"
 	"github.com/cavos-io/rtp-agent/adapter/cartesia"
 	"github.com/cavos-io/rtp-agent/adapter/cerebras"
@@ -108,6 +109,7 @@ func TestAppRegistersReferencePluginMetadataBatch(t *testing.T) {
 		baseten.PluginPackage:    {title: baseten.PluginTitle, version: baseten.PluginVersion},
 		bey.PluginPackage:        {title: bey.PluginTitle, version: bey.PluginVersion},
 		bithuman.PluginPackage:   {title: bithuman.PluginTitle, version: bithuman.PluginVersion},
+		browser.PluginPackage:    {title: browser.PluginTitle, version: browser.PluginVersion},
 		cambai.PluginPackage:     {title: cambai.PluginTitle, version: cambai.PluginVersion},
 		cartesia.PluginPackage:   {title: cartesia.PluginTitle, version: cartesia.PluginVersion},
 		cerebras.PluginPackage:   {title: cerebras.PluginTitle, version: cerebras.PluginVersion},
@@ -187,6 +189,25 @@ func TestAppRegistersReferencePluginMetadataBatch(t *testing.T) {
 		}
 		t.Fatalf("plugin metadata was not registered for packages: %s", strings.Join(missing, ", "))
 	}
+}
+
+func TestAppRegistersBrowserPluginDownloader(t *testing.T) {
+	for _, registered := range plugin.RegisteredPlugins() {
+		if registered.Package() != browser.PluginPackage {
+			continue
+		}
+		if registered.Title() != browser.PluginTitle {
+			t.Fatalf("plugin title = %q, want %q", registered.Title(), browser.PluginTitle)
+		}
+		if registered.Version() != browser.PluginVersion {
+			t.Fatalf("plugin version = %q, want %q", registered.Version(), browser.PluginVersion)
+		}
+		if err := registered.DownloadFiles(); err != nil {
+			t.Fatalf("DownloadFiles() error = %v, want nil for Go PageActions adapter", err)
+		}
+		return
+	}
+	t.Fatal("Browser plugin downloader was not registered")
 }
 
 func TestAppRegistersNltkPluginDownloader(t *testing.T) {

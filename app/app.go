@@ -108,6 +108,7 @@ func init() {
 	plugin.RegisterPluginMetadata(baseten.PluginTitle, baseten.PluginVersion, baseten.PluginPackage)
 	plugin.RegisterPluginMetadata(bey.PluginTitle, bey.PluginVersion, bey.PluginPackage)
 	plugin.RegisterPluginMetadata(bithuman.PluginTitle, bithuman.PluginVersion, bithuman.PluginPackage)
+	plugin.RegisterPluginDownloader(browser.PluginTitle, browser.PluginVersion, browser.PluginPackage, browser.Plugin{}.DownloadFiles)
 	plugin.RegisterPluginMetadata(cambai.PluginTitle, cambai.PluginVersion, cambai.PluginPackage)
 	plugin.RegisterPluginMetadata(cartesia.PluginTitle, cartesia.PluginVersion, cartesia.PluginPackage)
 	plugin.RegisterPluginMetadata(cerebras.PluginTitle, cerebras.PluginVersion, cerebras.PluginPackage)
