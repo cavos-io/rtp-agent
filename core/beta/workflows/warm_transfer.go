@@ -53,6 +53,7 @@ type WarmTransferResult struct {
 type WarmTransferOptions struct {
 	TargetPhone       string
 	TrunkID           string
+	SipNumber         string
 	ChatContext       *llm.ChatContext
 	ExtraInstructions string
 	Instructions      *beta.InstructionParts
@@ -128,12 +129,17 @@ func NewWarmTransferTaskWithOptions(opts WarmTransferOptions) (*WarmTransferTask
 		instructions += opts.ExtraInstructions
 	}
 
+	sipNumber := strings.TrimSpace(opts.SipNumber)
+	if sipNumber == "" {
+		sipNumber = os.Getenv("LIVEKIT_SIP_NUMBER")
+	}
+
 	t := &WarmTransferTask{
 		AgentTask:          *agent.NewAgentTask[*WarmTransferResult](instructions),
 		TargetPhoneNumber:  targetPhone,
 		SipTrunkID:         trunkId,
 		humanAgentIdentity: "human-agent-sip",
-		SipNumber:          os.Getenv("LIVEKIT_SIP_NUMBER"),
+		SipNumber:          sipNumber,
 	}
 
 	t.Agent.Tools = []llm.Tool{

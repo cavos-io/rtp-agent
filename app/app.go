@@ -467,6 +467,7 @@ type AppConfig struct {
 	WorkflowNameExtraInstructions         string
 	WorkflowWarmTransferSipCallTo         string
 	WorkflowWarmTransferSipTrunkID        string
+	WorkflowWarmTransferSipNumber         string
 	WorkflowWarmTransferSipHeaders        map[string]string
 	WorkflowWarmTransferDTMF              string
 	WorkflowWarmTransferRingingTimeout    *float64
@@ -802,6 +803,7 @@ func DefaultConfigFromEnv() AppConfig {
 		WorkflowNameExtraInstructions:           os.Getenv("RTP_AGENT_WORKFLOW_NAME_EXTRA_INSTRUCTIONS"),
 		WorkflowWarmTransferSipCallTo:           os.Getenv("RTP_AGENT_WORKFLOW_WARM_TRANSFER_SIP_CALL_TO"),
 		WorkflowWarmTransferSipTrunkID:          os.Getenv("RTP_AGENT_WORKFLOW_WARM_TRANSFER_SIP_TRUNK_ID"),
+		WorkflowWarmTransferSipNumber:           os.Getenv("RTP_AGENT_WORKFLOW_WARM_TRANSFER_SIP_NUMBER"),
 		WorkflowWarmTransferSipHeaders:          splitEnvStringMap("RTP_AGENT_WORKFLOW_WARM_TRANSFER_SIP_HEADERS"),
 		WorkflowWarmTransferDTMF:                os.Getenv("RTP_AGENT_WORKFLOW_WARM_TRANSFER_DTMF"),
 		WorkflowWarmTransferRingingTimeout:      getenvOptionalFloat("RTP_AGENT_WORKFLOW_WARM_TRANSFER_RINGING_TIMEOUT_SECONDS"),
@@ -1021,6 +1023,7 @@ func workflowAgentFromConfig(cfg AppConfig, baseAgent *agent.Agent) (agent.Agent
 		task, err := workflows.NewWarmTransferTaskWithOptions(workflows.WarmTransferOptions{
 			TargetPhone:       sipCallTo,
 			TrunkID:           strings.TrimSpace(cfg.WorkflowWarmTransferSipTrunkID),
+			SipNumber:         cfg.WorkflowWarmTransferSipNumber,
 			ChatContext:       baseAgent.ChatCtx,
 			ExtraInstructions: cfg.WorkflowWarmTransferExtraInstructions,
 		})
@@ -1240,6 +1243,7 @@ func workflowTaskFactoryFromName(cfg AppConfig, baseAgent *agent.Agent, taskName
 		if _, err := workflows.NewWarmTransferTaskWithOptions(workflows.WarmTransferOptions{
 			TargetPhone:       sipCallTo,
 			TrunkID:           sipTrunkID,
+			SipNumber:         cfg.WorkflowWarmTransferSipNumber,
 			ChatContext:       baseAgent.ChatCtx,
 			ExtraInstructions: cfg.WorkflowWarmTransferExtraInstructions,
 		}); err != nil {
@@ -1252,6 +1256,7 @@ func workflowTaskFactoryFromName(cfg AppConfig, baseAgent *agent.Agent, taskName
 				task, err := workflows.NewWarmTransferTaskWithOptions(workflows.WarmTransferOptions{
 					TargetPhone:       sipCallTo,
 					TrunkID:           sipTrunkID,
+					SipNumber:         cfg.WorkflowWarmTransferSipNumber,
 					ChatContext:       baseAgent.ChatCtx,
 					ExtraInstructions: cfg.WorkflowWarmTransferExtraInstructions,
 				})

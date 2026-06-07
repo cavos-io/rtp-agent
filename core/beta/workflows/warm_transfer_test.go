@@ -82,6 +82,23 @@ func TestNewWarmTransferTaskInstructionPartsCanRemovePersona(t *testing.T) {
 	}
 }
 
+func TestNewWarmTransferTaskUsesExplicitSIPNumberOption(t *testing.T) {
+	t.Setenv("LIVEKIT_SIP_NUMBER", "+15550000")
+
+	task, err := NewWarmTransferTaskWithOptions(WarmTransferOptions{
+		TargetPhone: "+15550100",
+		TrunkID:     "trunk_123",
+		SipNumber:   "+15550999",
+	})
+	if err != nil {
+		t.Fatalf("NewWarmTransferTaskWithOptions() error = %v", err)
+	}
+
+	if task.SipNumber != "+15550999" {
+		t.Fatalf("SipNumber = %q, want explicit option", task.SipNumber)
+	}
+}
+
 func TestNewWarmTransferTaskRejectsMissingSIPConfig(t *testing.T) {
 	t.Setenv("LIVEKIT_SIP_OUTBOUND_TRUNK", "")
 
