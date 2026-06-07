@@ -77,6 +77,7 @@ import (
 	"github.com/cavos-io/rtp-agent/adapter/upliftai"
 	"github.com/cavos-io/rtp-agent/adapter/xai"
 	"github.com/cavos-io/rtp-agent/core/agent"
+	beta "github.com/cavos-io/rtp-agent/core/beta"
 	betatools "github.com/cavos-io/rtp-agent/core/beta/tools"
 	"github.com/cavos-io/rtp-agent/core/beta/workflows"
 	"github.com/cavos-io/rtp-agent/core/evals"
@@ -448,6 +449,7 @@ type AppConfig struct {
 	IVRSilenceDurationSeconds             *float64
 	WorkflowTask                          string
 	WorkflowRequireConfirmation           bool
+	WorkflowEmailExtraInstructions        string
 	WorkflowDtmfNumDigits                 *int
 	WorkflowDtmfAskConfirmation           *bool
 	WorkflowDtmfExtraInstructions         string
@@ -771,6 +773,7 @@ func DefaultConfigFromEnv() AppConfig {
 		IVRSilenceDurationSeconds:               getenvOptionalFloat("RTP_AGENT_IVR_SILENCE_DURATION_SECONDS"),
 		WorkflowTask:                            normalizedEnv("RTP_AGENT_WORKFLOW_TASK"),
 		WorkflowRequireConfirmation:             getenvBool("RTP_AGENT_WORKFLOW_REQUIRE_CONFIRMATION"),
+		WorkflowEmailExtraInstructions:          os.Getenv("RTP_AGENT_WORKFLOW_EMAIL_EXTRA_INSTRUCTIONS"),
 		WorkflowDtmfNumDigits:                   getenvOptionalInt("RTP_AGENT_WORKFLOW_DTMF_NUM_DIGITS"),
 		WorkflowDtmfAskConfirmation:             getenvOptionalBool("RTP_AGENT_WORKFLOW_DTMF_ASK_CONFIRMATION"),
 		WorkflowDtmfExtraInstructions:           os.Getenv("RTP_AGENT_WORKFLOW_DTMF_EXTRA_INSTRUCTIONS"),
@@ -958,6 +961,7 @@ func workflowAgentFromConfig(cfg AppConfig, baseAgent *agent.Agent) (agent.Agent
 		selected = workflows.NewGetEmailTask(workflows.GetEmailOptions{
 			RequireConfirmation:    cfg.WorkflowRequireConfirmation,
 			RequireConfirmationSet: true,
+			Instructions:           workflowInstructionParts(cfg.WorkflowEmailExtraInstructions),
 		})
 	case "phone_number", "phone-number", "phone", "get_phone_number":
 		selected = workflows.NewGetPhoneNumberTask(workflows.GetPhoneNumberOptions{
@@ -1049,6 +1053,14 @@ func workflowTaskGroupFromConfig(cfg AppConfig, baseAgent *agent.Agent) (*workfl
 	return group, nil
 }
 
+func workflowInstructionParts(extra string) *beta.InstructionParts {
+	extra = strings.TrimSpace(extra)
+	if extra == "" {
+		return nil
+	}
+	return &beta.InstructionParts{Extra: extra}
+}
+
 func workflowTaskFactoryFromName(cfg AppConfig, baseAgent *agent.Agent, taskName string) (workflows.FactoryInfo, error) {
 	task := normalizeProvider(taskName)
 	factory := func(taskFactory func() agent.AgentInterface) func() agent.AgentInterface {
@@ -1078,6 +1090,7 @@ func workflowTaskFactoryFromName(cfg AppConfig, baseAgent *agent.Agent, taskName
 				return workflows.NewGetEmailTask(workflows.GetEmailOptions{
 					RequireConfirmation:    cfg.WorkflowRequireConfirmation,
 					RequireConfirmationSet: true,
+					Instructions:           workflowInstructionParts(cfg.WorkflowEmailExtraInstructions),
 				})
 			}),
 		}, nil
