@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"math"
 	"net/http"
+	"os"
 	"reflect"
 	"sync"
 
@@ -33,6 +34,9 @@ type openAIRealtimeWebsocketDialer func(string, http.Header) (*websocket.Conn, *
 func NewRealtimeModel(apiKey, model string) *RealtimeModel {
 	if model == "" {
 		model = "gpt-4o-realtime-preview"
+	}
+	if apiKey == "" {
+		apiKey = os.Getenv("OPENAI_API_KEY")
 	}
 	return &RealtimeModel{
 		apiKey:        apiKey,
@@ -114,6 +118,9 @@ type realtimeMessageGeneration struct {
 }
 
 func (m *RealtimeModel) Session() (llm.RealtimeSession, error) {
+	if m.apiKey == "" {
+		return nil, fmt.Errorf("OPENAI_API_KEY is required, either as argument or set OPENAI_API_KEY environment variable")
+	}
 	wsURL := fmt.Sprintf("%s?model=%s", m.baseURL, m.model)
 
 	header := http.Header{}

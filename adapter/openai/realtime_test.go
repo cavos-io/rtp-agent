@@ -38,6 +38,35 @@ func TestRealtimeModelCapabilitiesMatchReference(t *testing.T) {
 	}
 }
 
+func TestNewOpenAIRealtimeModelUsesEnvAPIKey(t *testing.T) {
+	t.Setenv("OPENAI_API_KEY", "env-key")
+
+	model := NewRealtimeModel("", "")
+
+	if model.apiKey != "env-key" {
+		t.Fatalf("apiKey = %q, want env-key", model.apiKey)
+	}
+}
+
+func TestOpenAIRealtimeSessionRequiresAPIKeyBeforeDial(t *testing.T) {
+	t.Setenv("OPENAI_API_KEY", "")
+	model := NewRealtimeModel("", "")
+	dialed := false
+	model.dialWebsocket = func(string, http.Header) (*websocket.Conn, *http.Response, error) {
+		dialed = true
+		return nil, nil, errors.New("dial should not be called")
+	}
+
+	_, err := model.Session()
+
+	if err == nil || !strings.Contains(err.Error(), "OPENAI_API_KEY") {
+		t.Fatalf("Session() error = %v, want OPENAI_API_KEY error", err)
+	}
+	if dialed {
+		t.Fatal("Session() dialed websocket before validating API key")
+	}
+}
+
 func TestRealtimeSessionSendsProtocolMessages(t *testing.T) {
 	messages := make(chan string, 32)
 	connected := make(chan *http.Request, 1)
