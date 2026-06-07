@@ -254,7 +254,7 @@ func (s *SpeechHandle) WaitIfNotInterrupted(ctx context.Context, workDone ...<-c
 		chosen, value, ok := reflect.Select(cases)
 		switch chosen {
 		case 0:
-			return ErrSpeechInterrupted
+			return nil
 		case 1:
 			return ctx.Err()
 		default:

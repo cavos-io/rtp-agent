@@ -134,8 +134,11 @@ func TestSpeechHandleWaitIfNotInterruptedReturnsOnInterrupt(t *testing.T) {
 
 	err := speech.WaitIfNotInterrupted(context.Background(), workDone)
 
-	if !errors.Is(err, ErrSpeechInterrupted) {
-		t.Fatalf("WaitIfNotInterrupted error = %v, want ErrSpeechInterrupted", err)
+	if err != nil {
+		t.Fatalf("WaitIfNotInterrupted error = %v, want nil after interrupt", err)
+	}
+	if !speech.IsInterrupted() {
+		t.Fatal("speech was not interrupted, want interrupt to wake WaitIfNotInterrupted")
 	}
 }
 
