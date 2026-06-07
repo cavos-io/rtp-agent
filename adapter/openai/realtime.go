@@ -35,7 +35,7 @@ type openAIRealtimeWebsocketDialer func(string, http.Header) (*websocket.Conn, *
 
 func NewRealtimeModel(apiKey, model string) *RealtimeModel {
 	if model == "" {
-		model = "gpt-4o-realtime-preview"
+		model = "gpt-realtime"
 	}
 	if apiKey == "" {
 		apiKey = os.Getenv("OPENAI_API_KEY")

@@ -48,6 +48,14 @@ func TestNewOpenAIRealtimeModelUsesEnvAPIKey(t *testing.T) {
 	}
 }
 
+func TestNewOpenAIRealtimeModelUsesReferenceDefaultModel(t *testing.T) {
+	model := NewRealtimeModel("test-key", "")
+
+	if model.Model() != "gpt-realtime" {
+		t.Fatalf("Model() = %q, want gpt-realtime", model.Model())
+	}
+}
+
 func TestOpenAIRealtimeSessionRequiresAPIKeyBeforeDial(t *testing.T) {
 	t.Setenv("OPENAI_API_KEY", "")
 	model := NewRealtimeModel("", "")
