@@ -309,6 +309,22 @@ func TestRealtimeUpdateOptionsMessageMapsVoice(t *testing.T) {
 	}
 }
 
+func TestRealtimeUpdateOptionsMessageMapsSpeed(t *testing.T) {
+	msg := openAIRealtimeUpdateOptionsMessage(llm.RealtimeSessionOptions{
+		Speed: 1.25,
+	})
+
+	if msg["type"] != "session.update" {
+		t.Fatalf("message type = %#v, want session.update", msg["type"])
+	}
+	session := msg["session"].(map[string]any)
+	audio := session["audio"].(map[string]any)
+	output := audio["output"].(map[string]any)
+	if output["speed"] != 1.25 {
+		t.Fatalf("speed = %#v, want 1.25", output["speed"])
+	}
+}
+
 func TestRealtimeAudioBufferMessages(t *testing.T) {
 	commit := openAIRealtimeCommitAudioMessage()
 	if commit["type"] != "input_audio_buffer.commit" {

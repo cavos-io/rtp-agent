@@ -404,11 +404,16 @@ func openAIRealtimeUpdateOptionsMessage(options llm.RealtimeSessionOptions) map[
 	if toolChoice := openAIRealtimeToolChoice(options.ToolChoice); toolChoice != nil {
 		session["tool_choice"] = toolChoice
 	}
+	output := make(map[string]any)
 	if options.Voice != "" {
+		output["voice"] = options.Voice
+	}
+	if options.Speed > 0 {
+		output["speed"] = options.Speed
+	}
+	if len(output) > 0 {
 		session["audio"] = map[string]any{
-			"output": map[string]any{
-				"voice": options.Voice,
-			},
+			"output": output,
 		}
 	}
 	return map[string]any{

@@ -307,6 +307,16 @@ func TestRealtimeSessionOptionsExposeVoice(t *testing.T) {
 	}
 }
 
+func TestRealtimeSessionOptionsExposeSpeed(t *testing.T) {
+	options := RealtimeSessionOptions{
+		Speed: 1.25,
+	}
+
+	if options.Speed != 1.25 {
+		t.Fatalf("Speed = %v, want 1.25", options.Speed)
+	}
+}
+
 func TestRealtimeGenerateReplyOptionsExposePerResponseOverrides(t *testing.T) {
 	options := RealtimeGenerateReplyOptions{
 		Instructions: "answer briefly",
