@@ -453,6 +453,7 @@ type AppConfig struct {
 	WorkflowDtmfExtraInstructions         string
 	WorkflowPhoneNumberExtraInstructions  string
 	WorkflowDOBExtraInstructions          string
+	WorkflowNameExtraInstructions         string
 	WorkflowWarmTransferSipCallTo         string
 	WorkflowWarmTransferSipTrunkID        string
 	WorkflowWarmTransferSipHeaders        map[string]string
@@ -775,6 +776,7 @@ func DefaultConfigFromEnv() AppConfig {
 		WorkflowDtmfExtraInstructions:           os.Getenv("RTP_AGENT_WORKFLOW_DTMF_EXTRA_INSTRUCTIONS"),
 		WorkflowPhoneNumberExtraInstructions:    os.Getenv("RTP_AGENT_WORKFLOW_PHONE_NUMBER_EXTRA_INSTRUCTIONS"),
 		WorkflowDOBExtraInstructions:            os.Getenv("RTP_AGENT_WORKFLOW_DOB_EXTRA_INSTRUCTIONS"),
+		WorkflowNameExtraInstructions:           os.Getenv("RTP_AGENT_WORKFLOW_NAME_EXTRA_INSTRUCTIONS"),
 		WorkflowWarmTransferSipCallTo:           os.Getenv("RTP_AGENT_WORKFLOW_WARM_TRANSFER_SIP_CALL_TO"),
 		WorkflowWarmTransferSipTrunkID:          os.Getenv("RTP_AGENT_WORKFLOW_WARM_TRANSFER_SIP_TRUNK_ID"),
 		WorkflowWarmTransferSipHeaders:          splitEnvStringMap("RTP_AGENT_WORKFLOW_WARM_TRANSFER_SIP_HEADERS"),
@@ -975,6 +977,7 @@ func workflowAgentFromConfig(cfg AppConfig, baseAgent *agent.Agent) (agent.Agent
 			LastName:               true,
 			RequireConfirmation:    cfg.WorkflowRequireConfirmation,
 			RequireConfirmationSet: true,
+			ExtraInstructions:      cfg.WorkflowNameExtraInstructions,
 		})
 	case "card_number", "card-number", "get_card_number":
 		selected = workflows.NewGetCardNumberTask(cfg.WorkflowRequireConfirmation)
@@ -1112,6 +1115,7 @@ func workflowTaskFactoryFromName(cfg AppConfig, baseAgent *agent.Agent, taskName
 					LastName:               true,
 					RequireConfirmation:    cfg.WorkflowRequireConfirmation,
 					RequireConfirmationSet: true,
+					ExtraInstructions:      cfg.WorkflowNameExtraInstructions,
 				})
 			}),
 		}, nil

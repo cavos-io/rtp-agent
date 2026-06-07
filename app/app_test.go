@@ -2067,6 +2067,7 @@ func TestDefaultConfigFromEnvSelectsDOBWorkflowAgent(t *testing.T) {
 func TestDefaultConfigFromEnvSelectsNameWorkflowAgent(t *testing.T) {
 	t.Setenv("RTP_AGENT_WORKFLOW_TASK", "name")
 	t.Setenv("RTP_AGENT_WORKFLOW_REQUIRE_CONFIRMATION", "true")
+	t.Setenv("RTP_AGENT_WORKFLOW_NAME_EXTRA_INSTRUCTIONS", "Ask for the legal name on the account.")
 
 	app, err := NewApp(DefaultConfigFromEnv())
 	if err != nil {
@@ -2078,6 +2079,9 @@ func TestDefaultConfigFromEnvSelectsNameWorkflowAgent(t *testing.T) {
 	}
 	if !task.RequireConfirmation {
 		t.Fatal("RequireConfirmation = false, want true")
+	}
+	if !strings.Contains(task.Instructions, "Ask for the legal name on the account.") {
+		t.Fatalf("Instructions = %q, want name extra instructions", task.Instructions)
 	}
 	if app.Agent != task.GetAgent() {
 		t.Fatal("App.Agent does not point at selected name workflow agent")
