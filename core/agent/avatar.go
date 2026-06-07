@@ -27,6 +27,7 @@ type AvatarMetricsSource interface {
 type AvatarStartInfo struct {
 	LiveKitURL   string
 	LiveKitToken string
+	RoomName     string
 }
 
 type avatarStartInfoContextKey struct{}

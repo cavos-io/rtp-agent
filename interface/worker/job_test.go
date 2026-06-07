@@ -323,6 +323,23 @@ func TestJobContextAvatarStartInfoExposesLiveKitConnection(t *testing.T) {
 	if info.LiveKitToken != "room-token" {
 		t.Fatalf("LiveKitToken = %q, want job token", info.LiveKitToken)
 	}
+	if info.RoomName != "" {
+		t.Fatalf("RoomName = %q, want empty without room info", info.RoomName)
+	}
+}
+
+func TestJobContextAvatarStartInfoExposesRoomName(t *testing.T) {
+	ctx := NewJobContext(&livekit.Job{
+		Id:   "job_avatar",
+		Room: &livekit.Room{Name: "support-room"},
+	}, "wss://livekit.example", "key", "secret")
+	ctx.token = "room-token"
+
+	info := ctx.AvatarStartInfo()
+
+	if info.RoomName != "support-room" {
+		t.Fatalf("RoomName = %q, want job room name", info.RoomName)
+	}
 }
 
 func TestJobContextAPIReturnsCachedLiveKitClients(t *testing.T) {
