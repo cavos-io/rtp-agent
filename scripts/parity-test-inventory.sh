@@ -51,7 +51,8 @@ awk -F '\t' 'NR > 1 && $2 == "go-test" && $5 != "" && $6 != "" {
 }' "$MANIFEST" | sort -u > "$manifest_keys"
 
 find "$REPO_ROOT" \
-  \( -path "$REPO_ROOT/.git" -o \
+  \( -path "$REPO_ROOT/.agents" -o \
+     -path "$REPO_ROOT/.git" -o \
      -path "$REPO_ROOT/.tmp" -o \
      -path "$REPO_ROOT/refs" -o \
      -path "$REPO_ROOT/worktrees" -o \
