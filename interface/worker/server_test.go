@@ -532,6 +532,7 @@ func TestWorkerHTTPHandlerReportsEnvAgentNameProvenance(t *testing.T) {
 }
 
 func TestWorkerInfoReportsStartedHTTPPort(t *testing.T) {
+	stubWorkerHTTPListener(t)
 	server := NewAgentServer(WorkerOptions{DevMode: true, Host: "127.0.0.1"})
 	httpServer, err := server.startWorkerHTTPServer()
 	if err != nil {
