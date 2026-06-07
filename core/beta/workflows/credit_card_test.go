@@ -7,6 +7,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/cavos-io/rtp-agent/core/agent"
 )
 
 func TestGetCardNumberTaskRecordsValidCardWithoutConfirmation(t *testing.T) {
@@ -105,6 +107,61 @@ func TestGetCardNumberTaskRequiresMatchingConfirmation(t *testing.T) {
 		}
 	default:
 		t.Fatal("task did not complete after matching confirmation")
+	}
+}
+
+func TestGetCardNumberTaskMismatchedConfirmationPromptsForRetry(t *testing.T) {
+	task := NewGetCardNumberTask()
+	session := agent.NewAgentSession(task, nil, agent.AgentSessionOptions{})
+	session.Assistant = &fakeDtmfSessionAssistant{}
+	speechEvents := session.SpeechCreatedEvents()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	if err := session.Start(ctx); err != nil {
+		t.Fatalf("Start error = %v", err)
+	}
+	defer session.Stop(context.Background())
+
+	select {
+	case <-speechEvents:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for card-number on-enter prompt")
+	}
+
+	record := &recordCardNumberTool{task: task}
+	if _, err := record.Execute(context.Background(), `{"card_number":"5555 5555 5555 4444"}`); err != nil {
+		t.Fatalf("record Execute() error = %v", err)
+	}
+	confirm := &confirmCardNumberTool{task: task, cardNumber: "5555555555554444"}
+
+	if _, err := confirm.Execute(context.Background(), `{"repeated_card_number":"4111111111111111"}`); err != nil {
+		t.Fatalf("confirm Execute() error = %v, want nil after prompting for retry", err)
+	}
+
+	select {
+	case ev := <-speechEvents:
+		if ev.Source != "generate_reply" {
+			t.Fatalf("SpeechCreated Source = %q, want generate_reply", ev.Source)
+		}
+		if ev.SpeechHandle == nil {
+			t.Fatal("SpeechCreated SpeechHandle = nil, want retry reply handle")
+		}
+		want := "The repeated card number does not match, ask the user to try again."
+		if ev.SpeechHandle.Generation.Instructions == nil {
+			t.Fatal("retry instructions = nil, want mismatch prompt")
+		}
+		if got := ev.SpeechHandle.Generation.Instructions.AsModality("text").String(); got != want {
+			t.Fatalf("retry instructions = %q, want %q", got, want)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for card-number retry prompt")
+	}
+
+	select {
+	case result := <-task.Result:
+		t.Fatalf("task completed with %#v, want no completion for mismatched confirmation", result)
+	default:
 	}
 }
 
