@@ -380,7 +380,12 @@ func (t *recordCardNumberTool) Execute(ctx context.Context, args string) (string
 	t.task.currentCardNumber = cardNumber
 	if !t.task.RequireConfirmation {
 		if !validateCardNumberLuhn(cardNumber) {
-			return "", llm.NewToolError("The card number is not valid, ask the user if they made a mistake or to provide another card.")
+			if activity := t.task.Agent.GetActivity(); activity != nil && activity.Session != nil {
+				_, _ = activity.Session.GenerateReplyWithOptions(context.Background(), agent.GenerateReplyOptions{
+					Instructions: invalidCardNumberPrompt(),
+				})
+			}
+			return "", nil
 		}
 		t.task.completeCardNumber(cardNumber)
 		return "Card number captured and task completed.", nil
