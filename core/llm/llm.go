@@ -875,6 +875,7 @@ type RealtimeSessionOptions struct {
 	Truncation              any
 	Tracing                 any
 	TurnDetection           any
+	InputAudioTranscription any
 }
 
 type RealtimeGenerateReplyOptions struct {

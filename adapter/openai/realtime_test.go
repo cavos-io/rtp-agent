@@ -385,6 +385,23 @@ func TestRealtimeUpdateOptionsMessageMapsTurnDetection(t *testing.T) {
 	}
 }
 
+func TestRealtimeUpdateOptionsMessageMapsInputAudioTranscription(t *testing.T) {
+	msg := openAIRealtimeUpdateOptionsMessage(llm.RealtimeSessionOptions{
+		InputAudioTranscription: map[string]any{"model": "gpt-4o-transcribe"},
+	})
+
+	if msg["type"] != "session.update" {
+		t.Fatalf("message type = %#v, want session.update", msg["type"])
+	}
+	session := msg["session"].(map[string]any)
+	audio := session["audio"].(map[string]any)
+	input := audio["input"].(map[string]any)
+	transcription := input["transcription"].(map[string]any)
+	if transcription["model"] != "gpt-4o-transcribe" {
+		t.Fatalf("transcription = %#v, want model gpt-4o-transcribe", transcription)
+	}
+}
+
 func TestRealtimeAudioBufferMessages(t *testing.T) {
 	commit := openAIRealtimeCommitAudioMessage()
 	if commit["type"] != "input_audio_buffer.commit" {

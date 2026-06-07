@@ -359,6 +359,17 @@ func TestRealtimeSessionOptionsExposeTurnDetection(t *testing.T) {
 	}
 }
 
+func TestRealtimeSessionOptionsExposeInputAudioTranscription(t *testing.T) {
+	options := RealtimeSessionOptions{
+		InputAudioTranscription: map[string]any{"model": "gpt-4o-transcribe"},
+	}
+
+	transcription := options.InputAudioTranscription.(map[string]any)
+	if transcription["model"] != "gpt-4o-transcribe" {
+		t.Fatalf("InputAudioTranscription = %#v, want model gpt-4o-transcribe", options.InputAudioTranscription)
+	}
+}
+
 func TestRealtimeGenerateReplyOptionsExposePerResponseOverrides(t *testing.T) {
 	options := RealtimeGenerateReplyOptions{
 		Instructions: "answer briefly",

@@ -417,6 +417,9 @@ func openAIRealtimeUpdateOptionsMessage(options llm.RealtimeSessionOptions) map[
 	if options.TurnDetection != nil {
 		input["turn_detection"] = options.TurnDetection
 	}
+	if options.InputAudioTranscription != nil {
+		input["transcription"] = options.InputAudioTranscription
+	}
 	output := make(map[string]any)
 	if options.Voice != "" {
 		output["voice"] = options.Voice
