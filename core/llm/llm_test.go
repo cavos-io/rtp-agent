@@ -370,6 +370,17 @@ func TestRealtimeSessionOptionsExposeInputAudioTranscription(t *testing.T) {
 	}
 }
 
+func TestRealtimeSessionOptionsExposeInputAudioNoiseReduction(t *testing.T) {
+	options := RealtimeSessionOptions{
+		InputAudioNoiseReduction: map[string]any{"type": "near_field"},
+	}
+
+	noiseReduction := options.InputAudioNoiseReduction.(map[string]any)
+	if noiseReduction["type"] != "near_field" {
+		t.Fatalf("InputAudioNoiseReduction = %#v, want type near_field", options.InputAudioNoiseReduction)
+	}
+}
+
 func TestRealtimeGenerateReplyOptionsExposePerResponseOverrides(t *testing.T) {
 	options := RealtimeGenerateReplyOptions{
 		Instructions: "answer briefly",

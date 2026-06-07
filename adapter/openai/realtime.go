@@ -420,6 +420,9 @@ func openAIRealtimeUpdateOptionsMessage(options llm.RealtimeSessionOptions) map[
 	if options.InputAudioTranscription != nil {
 		input["transcription"] = options.InputAudioTranscription
 	}
+	if options.InputAudioNoiseReduction != nil {
+		input["noise_reduction"] = options.InputAudioNoiseReduction
+	}
 	output := make(map[string]any)
 	if options.Voice != "" {
 		output["voice"] = options.Voice
