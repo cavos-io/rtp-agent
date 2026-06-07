@@ -308,6 +308,22 @@ func TestSpeechHandleWaitForGenerationRequiresActiveGeneration(t *testing.T) {
 	if !errors.Is(err, ErrSpeechNoActiveGeneration) {
 		t.Fatalf("WaitForGeneration error = %v, want ErrSpeechNoActiveGeneration", err)
 	}
+	if got, want := err.Error(), "cannot use wait_for_generation: no active generation is running."; got != want {
+		t.Fatalf("WaitForGeneration error message = %q, want reference message %q", got, want)
+	}
+}
+
+func TestSpeechHandleMarkGenerationDoneRequiresActiveGeneration(t *testing.T) {
+	speech := NewSpeechHandle(true, DefaultInputDetails())
+
+	err := speech.MarkGenerationDone()
+
+	if !errors.Is(err, ErrSpeechNoActiveGeneration) {
+		t.Fatalf("MarkGenerationDone error = %v, want ErrSpeechNoActiveGeneration", err)
+	}
+	if got, want := err.Error(), "cannot use mark_generation_done: no active generation is running."; got != want {
+		t.Fatalf("MarkGenerationDone error message = %q, want reference message %q", got, want)
+	}
 }
 
 func TestSpeechHandleWaitForGenerationReturnsAfterMarkGenerationDone(t *testing.T) {
