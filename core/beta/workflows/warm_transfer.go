@@ -15,6 +15,7 @@ import (
 	"github.com/cavos-io/rtp-agent/library/logger"
 	"github.com/livekit/protocol/livekit"
 	lksdk "github.com/livekit/server-sdk-go/v2"
+	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/durationpb"
 )
 
@@ -53,6 +54,7 @@ type WarmTransferResult struct {
 type WarmTransferOptions struct {
 	TargetPhone       string
 	TrunkID           string
+	SipConnection     *livekit.SIPOutboundConfig
 	SipNumber         string
 	ChatContext       *llm.ChatContext
 	ExtraInstructions string
@@ -63,6 +65,7 @@ type WarmTransferTask struct {
 	agent.AgentTask[*WarmTransferResult]
 	TargetPhoneNumber string
 	SipTrunkID        string
+	SipConnection     *livekit.SIPOutboundConfig
 	SipNumber         string
 	SipHeaders        map[string]string
 	Dtmf              string
@@ -101,9 +104,11 @@ func NewWarmTransferTaskWithOptions(opts WarmTransferOptions) (*WarmTransferTask
 		return nil, fmt.Errorf("`sip_call_to` must be set")
 	}
 	if trunkId == "" {
-		trunkId = strings.TrimSpace(os.Getenv("LIVEKIT_SIP_OUTBOUND_TRUNK"))
+		if opts.SipConnection == nil {
+			trunkId = strings.TrimSpace(os.Getenv("LIVEKIT_SIP_OUTBOUND_TRUNK"))
+		}
 	}
-	if trunkId == "" {
+	if trunkId == "" && opts.SipConnection == nil {
 		return nil, fmt.Errorf("`LIVEKIT_SIP_OUTBOUND_TRUNK` environment variable, `sip_trunk_id`, or `sip_connection` must be set")
 	}
 
@@ -138,6 +143,7 @@ func NewWarmTransferTaskWithOptions(opts WarmTransferOptions) (*WarmTransferTask
 		AgentTask:          *agent.NewAgentTask[*WarmTransferResult](instructions),
 		TargetPhoneNumber:  targetPhone,
 		SipTrunkID:         trunkId,
+		SipConnection:      opts.SipConnection,
 		humanAgentIdentity: "human-agent-sip",
 		SipNumber:          sipNumber,
 	}
@@ -184,6 +190,9 @@ func (t *WarmTransferTask) OnEnter() {
 		SipNumber:           t.SipNumber,
 		Headers:             t.SipHeaders,
 		Dtmf:                t.Dtmf,
+	}
+	if t.SipConnection != nil {
+		req.Trunk = proto.Clone(t.SipConnection).(*livekit.SIPOutboundConfig)
 	}
 	if t.RingingTimeout > 0 {
 		req.RingingTimeout = durationpb.New(t.RingingTimeout)

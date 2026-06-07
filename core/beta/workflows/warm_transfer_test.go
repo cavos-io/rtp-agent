@@ -99,6 +99,30 @@ func TestNewWarmTransferTaskUsesExplicitSIPNumberOption(t *testing.T) {
 	}
 }
 
+func TestNewWarmTransferTaskAllowsExplicitSIPConnectionWithoutTrunk(t *testing.T) {
+	t.Setenv("LIVEKIT_SIP_OUTBOUND_TRUNK", "")
+
+	connection := &livekit.SIPOutboundConfig{
+		Hostname:     "sip.example.com",
+		AuthUsername: "agent",
+		AuthPassword: "secret",
+	}
+	task, err := NewWarmTransferTaskWithOptions(WarmTransferOptions{
+		TargetPhone:   "+15550100",
+		SipConnection: connection,
+	})
+	if err != nil {
+		t.Fatalf("NewWarmTransferTaskWithOptions() error = %v", err)
+	}
+
+	if task.SipTrunkID != "" {
+		t.Fatalf("SipTrunkID = %q, want empty when explicit SIP connection is used", task.SipTrunkID)
+	}
+	if task.SipConnection != connection {
+		t.Fatalf("SipConnection = %#v, want explicit connection", task.SipConnection)
+	}
+}
+
 func TestNewWarmTransferTaskRejectsMissingSIPConfig(t *testing.T) {
 	t.Setenv("LIVEKIT_SIP_OUTBOUND_TRUNK", "")
 
@@ -168,6 +192,50 @@ func TestWarmTransferOnEnterDialsHumanAgentSIPParticipant(t *testing.T) {
 	}
 	if jobCtx.createSIPRequest.RingingTimeout == nil || jobCtx.createSIPRequest.RingingTimeout.AsDuration() != 7*time.Second {
 		t.Fatalf("CreateSIPParticipant RingingTimeout = %v, want 7s", jobCtx.createSIPRequest.RingingTimeout)
+	}
+}
+
+func TestWarmTransferOnEnterUsesExplicitSIPConnection(t *testing.T) {
+	t.Setenv("LIVEKIT_SIP_OUTBOUND_TRUNK", "trunk-env")
+
+	connection := &livekit.SIPOutboundConfig{
+		Hostname:           "sip.example.com",
+		DestinationCountry: "US",
+		AuthUsername:       "agent",
+		AuthPassword:       "secret",
+	}
+	task, err := NewWarmTransferTaskWithOptions(WarmTransferOptions{
+		TargetPhone:   "+15550100",
+		SipConnection: connection,
+	})
+	if err != nil {
+		t.Fatalf("NewWarmTransferTaskWithOptions() error = %v", err)
+	}
+	jobCtx := &fakeWarmTransferJobContext{room: &livekit.Room{Name: "caller-room"}}
+	session := agent.NewAgentSession(task, nil, agent.AgentSessionOptions{})
+	session.SetJobContext(jobCtx)
+	task.Agent.Start(session, task)
+	defer task.Agent.GetActivity().Stop()
+
+	task.OnEnter()
+
+	if jobCtx.createSIPRequest == nil {
+		t.Fatal("OnEnter did not create SIP participant")
+	}
+	if jobCtx.createSIPRequest.SipTrunkId != "" {
+		t.Fatalf("CreateSIPParticipant SipTrunkId = %q, want empty with explicit SIP connection", jobCtx.createSIPRequest.SipTrunkId)
+	}
+	if jobCtx.createSIPRequest.Trunk == nil {
+		t.Fatal("CreateSIPParticipant Trunk = nil, want explicit SIP connection")
+	}
+	if jobCtx.createSIPRequest.Trunk == connection {
+		t.Fatal("CreateSIPParticipant Trunk aliases input connection, want copied SIP connection")
+	}
+	if jobCtx.createSIPRequest.Trunk.GetHostname() != "sip.example.com" ||
+		jobCtx.createSIPRequest.Trunk.GetDestinationCountry() != "US" ||
+		jobCtx.createSIPRequest.Trunk.GetAuthUsername() != "agent" ||
+		jobCtx.createSIPRequest.Trunk.GetAuthPassword() != "secret" {
+		t.Fatalf("CreateSIPParticipant Trunk = %#v, want explicit SIP connection copied", jobCtx.createSIPRequest.Trunk)
 	}
 }
 
