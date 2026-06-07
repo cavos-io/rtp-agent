@@ -3905,12 +3905,20 @@ func TestExecuteLocalJobWithExplicitIdleProcessesLaunchesThroughProcPool(t *test
 	releaseOnce := make(chan struct{})
 	var capturedMaxProcesses int
 	var capturedExecutorType ipc.ExecutorType
+	var capturedTargetIdle int
 	var capturedCloseTimeout time.Duration
+	var poolStarted bool
+	var launchSawStarted bool
 	newLocalProcPool = func(maxProcesses int, executorType ipc.ExecutorType, entrypoint func() error) localJobPool {
 		capturedMaxProcesses = maxProcesses
 		capturedExecutorType = executorType
 		return &localJobPoolStub{
+			start: func() error {
+				poolStarted = true
+				return nil
+			},
 			launch: func(info ipc.RunningJobInfo) error {
+				launchSawStarted = poolStarted
 				launchedCh <- info
 				go func() {
 					<-releaseEntrypoint
@@ -3936,6 +3944,9 @@ func TestExecuteLocalJobWithExplicitIdleProcessesLaunchesThroughProcPool(t *test
 			},
 			setCloseTimeout: func(timeout time.Duration) {
 				capturedCloseTimeout = timeout
+			},
+			setTargetIdle: func(numIdleProcesses int) {
+				capturedTargetIdle = numIdleProcesses
 			},
 		}
 	}
@@ -3987,6 +3998,14 @@ func TestExecuteLocalJobWithExplicitIdleProcessesLaunchesThroughProcPool(t *test
 	if capturedCloseTimeout != 3*time.Second {
 		cancel()
 		t.Fatalf("proc pool close timeout = %v, want 3s", capturedCloseTimeout)
+	}
+	if capturedTargetIdle != 2 {
+		cancel()
+		t.Fatalf("proc pool target idle = %d, want 2", capturedTargetIdle)
+	}
+	if !launchSawStarted {
+		cancel()
+		t.Fatal("proc pool launch ran before Start")
 	}
 	if launched.WorkerID != "worker-pool" || launched.URL != "wss://local.example" {
 		cancel()
@@ -5053,10 +5072,19 @@ func (e *localJobExecutorStub) LaunchRunningJob(_ context.Context, info ipc.Runn
 }
 
 type localJobPoolStub struct {
+	start           func() error
 	launch          func(ipc.RunningJobInfo) error
 	getByJobID      func(string) ipc.JobExecutor
+	setTargetIdle   func(int)
 	setCloseTimeout func(time.Duration)
 	close           func() error
+}
+
+func (p *localJobPoolStub) Start(_ context.Context) error {
+	if p.start != nil {
+		return p.start()
+	}
+	return nil
 }
 
 func (p *localJobPoolStub) LaunchRunningJob(_ context.Context, info ipc.RunningJobInfo) error {
@@ -5071,6 +5099,12 @@ func (p *localJobPoolStub) GetByJobID(jobID string) ipc.JobExecutor {
 		return p.getByJobID(jobID)
 	}
 	return nil
+}
+
+func (p *localJobPoolStub) SetTargetIdleProcesses(numIdleProcesses int) {
+	if p.setTargetIdle != nil {
+		p.setTargetIdle(numIdleProcesses)
+	}
 }
 
 func (p *localJobPoolStub) SetCloseTimeout(timeout time.Duration) {

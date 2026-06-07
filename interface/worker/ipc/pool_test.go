@@ -239,6 +239,177 @@ func TestProcPoolTargetIdleProcesses(t *testing.T) {
 	}
 }
 
+func TestProcPoolStartWarmsTargetIdleExecutors(t *testing.T) {
+	executors := []*fakeJobExecutor{
+		{id: "exec-a"},
+		{id: "exec-b"},
+	}
+	var created int
+	pool := NewProcPool(3, ExecutorTypeThread, nil)
+	pool.SetTargetIdleProcesses(2)
+	pool.executorFactory = func(id string) JobExecutor {
+		executor := executors[created]
+		created++
+		return executor
+	}
+
+	var events []ProcPoolEvent
+	for _, event := range []ProcPoolEvent{
+		ProcPoolEventProcessCreated,
+		ProcPoolEventProcessStarted,
+		ProcPoolEventProcessReady,
+	} {
+		event := event
+		pool.On(event, func(executor JobExecutor) {
+			events = append(events, event)
+			if executor.Started() {
+				t.Fatalf("%s executor %q is running a job, want warmed idle executor", event, executor.ID())
+			}
+		})
+	}
+
+	if err := pool.Start(context.Background()); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	if err := pool.Start(context.Background()); err != nil {
+		t.Fatalf("second Start: %v", err)
+	}
+
+	if created != 2 {
+		t.Fatalf("created executors = %d, want 2", created)
+	}
+	gotExecutors := pool.GetExecutors()
+	if len(gotExecutors) != 2 {
+		t.Fatalf("executors len = %d, want 2", len(gotExecutors))
+	}
+	for _, executor := range executors {
+		if executor.launches != 0 {
+			t.Fatalf("%s launches = %d, want 0", executor.id, executor.launches)
+		}
+	}
+
+	wantEvents := []ProcPoolEvent{
+		ProcPoolEventProcessCreated,
+		ProcPoolEventProcessStarted,
+		ProcPoolEventProcessReady,
+		ProcPoolEventProcessCreated,
+		ProcPoolEventProcessStarted,
+		ProcPoolEventProcessReady,
+	}
+	if len(events) != len(wantEvents) {
+		t.Fatalf("events = %v, want %v", events, wantEvents)
+	}
+	for i := range wantEvents {
+		if events[i] != wantEvents[i] {
+			t.Fatalf("events = %v, want %v", events, wantEvents)
+		}
+	}
+}
+
+func TestProcPoolLaunchUsesWarmedIdleExecutor(t *testing.T) {
+	idle := &fakeJobExecutor{id: "idle"}
+	var created int
+	pool := NewProcPool(1, ExecutorTypeThread, nil)
+	pool.SetTargetIdleProcesses(1)
+	pool.executorFactory = func(id string) JobExecutor {
+		created++
+		return idle
+	}
+
+	eventCounts := map[ProcPoolEvent]int{}
+	for _, event := range []ProcPoolEvent{
+		ProcPoolEventProcessCreated,
+		ProcPoolEventProcessStarted,
+		ProcPoolEventProcessReady,
+		ProcPoolEventJobLaunched,
+	} {
+		event := event
+		pool.On(event, func(executor JobExecutor) {
+			if executor.ID() != "idle" {
+				t.Fatalf("%s executor = %q, want idle", event, executor.ID())
+			}
+			eventCounts[event]++
+		})
+	}
+
+	if err := pool.Start(context.Background()); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	if err := pool.LaunchJob(context.Background(), &livekit.Job{Id: "job-a"}); err != nil {
+		t.Fatalf("LaunchJob: %v", err)
+	}
+
+	if created != 1 {
+		t.Fatalf("created executors = %d, want warmed executor only", created)
+	}
+	if idle.launches != 1 {
+		t.Fatalf("idle launches = %d, want 1", idle.launches)
+	}
+	if idle.Job().GetId() != "job-a" {
+		t.Fatalf("idle job = %q, want job-a", idle.Job().GetId())
+	}
+	for _, event := range []ProcPoolEvent{
+		ProcPoolEventProcessCreated,
+		ProcPoolEventProcessStarted,
+		ProcPoolEventProcessReady,
+		ProcPoolEventJobLaunched,
+	} {
+		if eventCounts[event] != 1 {
+			t.Fatalf("%s count = %d, want 1", event, eventCounts[event])
+		}
+	}
+}
+
+func TestProcPoolLaunchRefillsTargetIdleAfterUsingWarmedExecutor(t *testing.T) {
+	running := &fakeJobExecutor{id: "running"}
+	replacement := &fakeJobExecutor{id: "replacement"}
+	executors := []*fakeJobExecutor{running, replacement}
+	var created int
+	pool := NewProcPool(2, ExecutorTypeThread, nil)
+	pool.SetTargetIdleProcesses(1)
+	pool.executorFactory = func(id string) JobExecutor {
+		executor := executors[created]
+		created++
+		return executor
+	}
+
+	ready := map[string]int{}
+	pool.On(ProcPoolEventProcessReady, func(executor JobExecutor) {
+		ready[executor.ID()]++
+	})
+
+	if err := pool.Start(context.Background()); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	if err := pool.LaunchJob(context.Background(), &livekit.Job{Id: "job-a"}); err != nil {
+		t.Fatalf("LaunchJob: %v", err)
+	}
+
+	if created != 2 {
+		t.Fatalf("created executors = %d, want warmed executor plus replacement", created)
+	}
+	if running.launches != 1 {
+		t.Fatalf("running launches = %d, want 1", running.launches)
+	}
+	if replacement.launches != 0 {
+		t.Fatalf("replacement launches = %d, want idle replacement", replacement.launches)
+	}
+	if replacement.Started() {
+		t.Fatal("replacement Started() = true, want warmed idle executor")
+	}
+	if ready["running"] != 1 || ready["replacement"] != 1 {
+		t.Fatalf("ready events = %#v, want one warm-ready event for running and replacement", ready)
+	}
+
+	gotExecutors := pool.GetExecutors()
+	if len(gotExecutors) != 2 {
+		t.Fatalf("executors len = %d, want running plus idle replacement", len(gotExecutors))
+	}
+	if pool.GetByJobID("job-a") != running {
+		t.Fatal("GetByJobID(job-a) did not return warmed executor used for launch")
+	}
+}
+
 func TestProcPoolLaunchAfterCloseIsRejected(t *testing.T) {
 	var created int
 	pool := NewProcPool(1, ExecutorTypeThread, nil)

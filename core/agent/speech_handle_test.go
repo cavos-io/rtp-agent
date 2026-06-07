@@ -25,6 +25,9 @@ func TestSpeechHandleInterruptDisallowedReturnsError(t *testing.T) {
 	if !errors.Is(err, ErrSpeechInterruptionsDisabled) {
 		t.Fatalf("Interrupt(false) error = %v, want ErrSpeechInterruptionsDisabled", err)
 	}
+	if got, want := err.Error(), "This generation handle does not allow interruptions"; got != want {
+		t.Fatalf("Interrupt(false) error message = %q, want reference message %q", got, want)
+	}
 	if speech.IsInterrupted() {
 		t.Fatal("speech was interrupted, want interruption rejected")
 	}
@@ -52,6 +55,9 @@ func TestSpeechHandleDisallowInterruptionsAfterInterruptFails(t *testing.T) {
 
 	if !errors.Is(err, ErrSpeechAlreadyInterrupted) {
 		t.Fatalf("SetAllowInterruptions(false) error = %v, want ErrSpeechAlreadyInterrupted", err)
+	}
+	if got, want := err.Error(), "Cannot set allow_interruptions to False, the SpeechHandle is already interrupted"; got != want {
+		t.Fatalf("SetAllowInterruptions(false) error message = %q, want reference message %q", got, want)
 	}
 	if !speech.AllowInterruptions {
 		t.Fatal("AllowInterruptions changed to false after interruption, want unchanged")
@@ -83,6 +89,16 @@ func TestSpeechHandleWaitIfNotInterruptedReturnsWhenWorkCompletes(t *testing.T) 
 
 	if err := speech.WaitIfNotInterrupted(context.Background(), workDone); err != nil {
 		t.Fatalf("WaitIfNotInterrupted error = %v, want nil", err)
+	}
+}
+
+func TestSpeechHandleWaitIfNotInterruptedSuppressesWorkErrors(t *testing.T) {
+	speech := NewSpeechHandle(true, DefaultInputDetails())
+	workDone := make(chan error, 1)
+	workDone <- errors.New("work failed")
+
+	if err := speech.WaitIfNotInterrupted(context.Background(), workDone); err != nil {
+		t.Fatalf("WaitIfNotInterrupted error = %v, want nil for reference return_exceptions behavior", err)
 	}
 }
 
@@ -128,8 +144,11 @@ func TestSpeechHandleWaitIfNotInterruptedReturnsOnInterrupt(t *testing.T) {
 
 	err := speech.WaitIfNotInterrupted(context.Background(), workDone)
 
-	if !errors.Is(err, ErrSpeechInterrupted) {
-		t.Fatalf("WaitIfNotInterrupted error = %v, want ErrSpeechInterrupted", err)
+	if err != nil {
+		t.Fatalf("WaitIfNotInterrupted error = %v, want nil after interrupt", err)
+	}
+	if !speech.IsInterrupted() {
+		t.Fatal("speech was not interrupted, want interrupt to wake WaitIfNotInterrupted")
 	}
 }
 
@@ -301,6 +320,22 @@ func TestSpeechHandleWaitForGenerationRequiresActiveGeneration(t *testing.T) {
 
 	if !errors.Is(err, ErrSpeechNoActiveGeneration) {
 		t.Fatalf("WaitForGeneration error = %v, want ErrSpeechNoActiveGeneration", err)
+	}
+	if got, want := err.Error(), "cannot use wait_for_generation: no active generation is running."; got != want {
+		t.Fatalf("WaitForGeneration error message = %q, want reference message %q", got, want)
+	}
+}
+
+func TestSpeechHandleMarkGenerationDoneRequiresActiveGeneration(t *testing.T) {
+	speech := NewSpeechHandle(true, DefaultInputDetails())
+
+	err := speech.MarkGenerationDone()
+
+	if !errors.Is(err, ErrSpeechNoActiveGeneration) {
+		t.Fatalf("MarkGenerationDone error = %v, want ErrSpeechNoActiveGeneration", err)
+	}
+	if got, want := err.Error(), "cannot use mark_generation_done: no active generation is running."; got != want {
+		t.Fatalf("MarkGenerationDone error message = %q, want reference message %q", got, want)
 	}
 }
 

@@ -20,11 +20,30 @@ const (
 )
 
 var (
-	ErrSpeechInterruptionsDisabled = errors.New("speech handle does not allow interruptions")
-	ErrSpeechAlreadyInterrupted    = errors.New("speech handle is already interrupted")
+	ErrSpeechInterruptionsDisabled = speechHandleReferenceError("This generation handle does not allow interruptions")
+	ErrSpeechAlreadyInterrupted    = speechHandleReferenceError("Cannot set allow_interruptions to False, the SpeechHandle is already interrupted")
 	ErrSpeechInterrupted           = errors.New("speech interrupted")
 	ErrSpeechNoActiveGeneration    = errors.New("speech handle has no active generation")
+
+	errSpeechWaitNoActiveGeneration = speechHandleNoActiveGenerationError("cannot use wait_for_generation: no active generation is running.")
+	errSpeechMarkNoActiveGeneration = speechHandleNoActiveGenerationError("cannot use mark_generation_done: no active generation is running.")
 )
+
+type speechHandleReferenceError string
+
+func (e speechHandleReferenceError) Error() string {
+	return string(e)
+}
+
+type speechHandleNoActiveGenerationError string
+
+func (e speechHandleNoActiveGenerationError) Error() string {
+	return string(e)
+}
+
+func (e speechHandleNoActiveGenerationError) Is(target error) bool {
+	return target == ErrSpeechNoActiveGeneration
+}
 
 type InputDetails struct {
 	Modality string
@@ -232,18 +251,13 @@ func (s *SpeechHandle) WaitIfNotInterrupted(ctx context.Context, workDone ...<-c
 	}
 
 	for len(cases) > 2 {
-		chosen, value, ok := reflect.Select(cases)
+		chosen, _, _ := reflect.Select(cases)
 		switch chosen {
 		case 0:
-			return ErrSpeechInterrupted
+			return nil
 		case 1:
 			return ctx.Err()
 		default:
-			if ok && !value.IsNil() {
-				if err, _ := value.Interface().(error); err != nil {
-					return err
-				}
-			}
 			cases = append(cases[:chosen], cases[chosen+1:]...)
 		}
 	}
@@ -389,14 +403,14 @@ func (s *SpeechHandle) WaitForGeneration(ctx context.Context, stepIndex int) err
 	s.mu.Lock()
 	if len(s.generationChs) == 0 {
 		s.mu.Unlock()
-		return ErrSpeechNoActiveGeneration
+		return errSpeechWaitNoActiveGeneration
 	}
 	if stepIndex < 0 {
 		stepIndex = len(s.generationChs) + stepIndex
 	}
 	if stepIndex < 0 || stepIndex >= len(s.generationChs) {
 		s.mu.Unlock()
-		return ErrSpeechNoActiveGeneration
+		return errSpeechWaitNoActiveGeneration
 	}
 	generationCh := s.generationChs[stepIndex]
 	s.mu.Unlock()
@@ -414,7 +428,7 @@ func (s *SpeechHandle) MarkGenerationDone() error {
 	defer s.mu.Unlock()
 
 	if len(s.generationChs) == 0 {
-		return ErrSpeechNoActiveGeneration
+		return errSpeechMarkNoActiveGeneration
 	}
 
 	s.closeGenerationLocked(len(s.generationChs) - 1)
