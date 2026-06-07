@@ -179,9 +179,14 @@ func TestGetDOBTaskCanDisableDefaultConfirmation(t *testing.T) {
 func TestGetDOBTaskInstructionsIncludeReferenceConfirmationWhenEnabled(t *testing.T) {
 	task := NewGetDOBTask(GetDOBOptions{})
 
-	want := "Call `confirm_dob` after the user confirmed the date of birth is correct."
-	if !strings.Contains(task.Instructions, want) {
-		t.Fatalf("Instructions = %q, want reference confirmation instruction %q", task.Instructions, want)
+	wantParts := []string{
+		"Call `update_dob` at the first opportunity whenever you form a new hypothesis about the date of birth. (before asking any questions or providing any answers.)",
+		"Call `confirm_dob` after the user confirmed the date of birth is correct.",
+	}
+	for _, want := range wantParts {
+		if !strings.Contains(task.Instructions, want) {
+			t.Fatalf("Instructions = %q, want reference instruction %q", task.Instructions, want)
+		}
 	}
 }
 

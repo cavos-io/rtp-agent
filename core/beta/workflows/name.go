@@ -44,7 +44,7 @@ const nameConfirmationInstruction = "Call `confirm_name` after the user confirme
 const nameInstructionsBeforeConfirmation = `You are only a single step in a broader system, responsible solely for capturing the user's name.
 Handle input as noisy voice transcription. Expect users to say names aloud, possibly followed by spelling.
 Normalize common spoken patterns silently, preserve special characters such as hyphens and apostrophes, and capitalize name parts appropriately.
-Call update_name at the first opportunity whenever you form a new hypothesis about the name.
+Call ` + "`update_name`" + ` at the first opportunity whenever you form a new hypothesis about the name. (before asking any questions or providing any answers.)
 Don't invent names, stick strictly to what the user said.
 `
 

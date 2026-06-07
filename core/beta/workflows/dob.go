@@ -37,7 +37,7 @@ const dobConfirmationInstruction = "Call `confirm_dob` after the user confirmed 
 const dobInstructionsBeforeConfirmation = `You are only a single step in a broader system, responsible solely for capturing a date of birth.
 Handle input as noisy voice transcription. Expect users to say dates aloud in formats like January 15th 1990, one fifteen ninety, Jan 15 90, or 15th January 1990.
 Normalize common spoken patterns silently: convert spoken numbers and ordinals to numeric form, recognize month names, handle two-digit years appropriately, and filter filler words.
-Call update_dob at the first opportunity whenever you form a new hypothesis about the date of birth.
+Call ` + "`update_dob`" + ` at the first opportunity whenever you form a new hypothesis about the date of birth. (before asking any questions or providing any answers.)
 Don't invent dates, stick strictly to what the user said.
 `
 
