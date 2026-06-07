@@ -597,10 +597,19 @@ func (t *confirmSecurityCodeTool) Execute(ctx context.Context, args string) (str
 		return "", err
 	}
 	if strings.TrimSpace(params.RepeatedSecurityCode) != t.securityCode {
-		return "", llm.NewToolError("The repeated security code does not match, ask the user to try again.")
+		if activity := t.task.Agent.GetActivity(); activity != nil && activity.Session != nil {
+			_, _ = activity.Session.GenerateReplyWithOptions(context.Background(), agent.GenerateReplyOptions{
+				Instructions: securityCodeMismatchPrompt(),
+			})
+		}
+		return "", nil
 	}
 	t.task.completeSecurityCode(t.securityCode)
 	return "Security code confirmed.", nil
+}
+
+func securityCodeMismatchPrompt() string {
+	return "The repeated security code does not match, ask the user to try again."
 }
 
 type confirmExpirationDateTool struct {

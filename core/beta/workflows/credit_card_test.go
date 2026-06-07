@@ -236,6 +236,61 @@ func TestGetSecurityCodeTaskRequiresMatchingConfirmation(t *testing.T) {
 	}
 }
 
+func TestGetSecurityCodeTaskMismatchedConfirmationPromptsForRetry(t *testing.T) {
+	task := NewGetSecurityCodeTask()
+	session := agent.NewAgentSession(task, nil, agent.AgentSessionOptions{})
+	session.Assistant = &fakeDtmfSessionAssistant{}
+	speechEvents := session.SpeechCreatedEvents()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	if err := session.Start(ctx); err != nil {
+		t.Fatalf("Start error = %v", err)
+	}
+	defer session.Stop(context.Background())
+
+	select {
+	case <-speechEvents:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for security-code on-enter prompt")
+	}
+
+	update := &updateSecurityCodeTool{task: task}
+	if _, err := update.Execute(context.Background(), `{"security_code":"1234"}`); err != nil {
+		t.Fatalf("update Execute() error = %v", err)
+	}
+	confirm := &confirmSecurityCodeTool{task: task, securityCode: "1234"}
+
+	if _, err := confirm.Execute(context.Background(), `{"repeated_security_code":"4321"}`); err != nil {
+		t.Fatalf("confirm Execute() error = %v, want nil after prompting for retry", err)
+	}
+
+	select {
+	case ev := <-speechEvents:
+		if ev.Source != "generate_reply" {
+			t.Fatalf("SpeechCreated Source = %q, want generate_reply", ev.Source)
+		}
+		if ev.SpeechHandle == nil {
+			t.Fatal("SpeechCreated SpeechHandle = nil, want retry reply handle")
+		}
+		want := "The repeated security code does not match, ask the user to try again."
+		if ev.SpeechHandle.Generation.Instructions == nil {
+			t.Fatal("retry instructions = nil, want mismatch prompt")
+		}
+		if got := ev.SpeechHandle.Generation.Instructions.AsModality("text").String(); got != want {
+			t.Fatalf("retry instructions = %q, want %q", got, want)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for security-code retry prompt")
+	}
+
+	select {
+	case result := <-task.Result:
+		t.Fatalf("task completed with %#v, want no completion for mismatched confirmation", result)
+	default:
+	}
+}
+
 func TestGetExpirationDateTaskRecordsFutureDateWithoutConfirmation(t *testing.T) {
 	task := NewGetExpirationDateTask(false)
 	tool := &updateExpirationDateTool{task: task}
