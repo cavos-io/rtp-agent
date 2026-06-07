@@ -238,7 +238,12 @@ func (t *confirmDOBTool) Execute(ctx context.Context, args string) (string, erro
 		return "", nil
 	}
 	if t.task.currentDOB == nil {
-		return "", llm.NewToolError("No date of birth was provided yet, ask the user to provide it.")
+		if activity := t.task.Agent.GetActivity(); activity != nil && activity.Session != nil {
+			_, _ = activity.Session.GenerateReplyWithOptions(context.Background(), agent.GenerateReplyOptions{
+				Instructions: dobMissingDatePrompt(),
+			})
+		}
+		return "", nil
 	}
 	_ = t.task.Complete(&GetDOBResult{DateOfBirth: *t.task.currentDOB, TimeOfBirth: t.task.currentTime})
 	return "Date of birth confirmed.", nil
@@ -246,6 +251,10 @@ func (t *confirmDOBTool) Execute(ctx context.Context, args string) (string, erro
 
 func dobStaleConfirmationPrompt() string {
 	return "The date of birth has changed since confirmation was requested, ask the user to confirm the updated date."
+}
+
+func dobMissingDatePrompt() string {
+	return "No date of birth was provided yet, ask the user to provide it."
 }
 
 type declineDOBCaptureTool struct {

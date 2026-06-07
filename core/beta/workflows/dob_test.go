@@ -279,6 +279,61 @@ func TestGetDOBTaskStaleConfirmationPromptsForUpdatedDate(t *testing.T) {
 	}
 }
 
+func TestGetDOBTaskConfirmWithoutDatePromptsForDate(t *testing.T) {
+	task := NewGetDOBTask(GetDOBOptions{IncludeTime: true})
+	session := agent.NewAgentSession(task, nil, agent.AgentSessionOptions{})
+	session.Assistant = &fakeDtmfSessionAssistant{}
+	speechEvents := session.SpeechCreatedEvents()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	if err := session.Start(ctx); err != nil {
+		t.Fatalf("Start error = %v", err)
+	}
+	defer session.Stop(context.Background())
+
+	select {
+	case <-speechEvents:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for DOB on-enter prompt")
+	}
+
+	updateTime := &updateDOBTimeTool{task: task}
+	if _, err := updateTime.Execute(context.Background(), `{"hour":15,"minute":30}`); err != nil {
+		t.Fatalf("update_time Execute() error = %v", err)
+	}
+	confirm := &confirmDOBTool{task: task, dateOfBirth: nil, timeOfBirth: task.currentTime}
+
+	if _, err := confirm.Execute(context.Background(), `{}`); err != nil {
+		t.Fatalf("confirm Execute() error = %v, want nil after prompting for date", err)
+	}
+
+	select {
+	case ev := <-speechEvents:
+		if ev.Source != "generate_reply" {
+			t.Fatalf("SpeechCreated Source = %q, want generate_reply", ev.Source)
+		}
+		if ev.SpeechHandle == nil {
+			t.Fatal("SpeechCreated SpeechHandle = nil, want missing-date reply handle")
+		}
+		want := "No date of birth was provided yet, ask the user to provide it."
+		if ev.SpeechHandle.Generation.Instructions == nil {
+			t.Fatal("missing-date instructions = nil, want date prompt")
+		}
+		if got := ev.SpeechHandle.Generation.Instructions.AsModality("text").String(); got != want {
+			t.Fatalf("missing-date instructions = %q, want %q", got, want)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for missing-date prompt")
+	}
+
+	select {
+	case result := <-task.Result:
+		t.Fatalf("task completed with %#v, want no completion without date", result)
+	default:
+	}
+}
+
 func TestDeclineDOBCaptureToolFailsWithReason(t *testing.T) {
 	task := NewGetDOBTask(GetDOBOptions{RequireConfirmationSet: true})
 	tool := &declineDOBCaptureTool{task: task}
