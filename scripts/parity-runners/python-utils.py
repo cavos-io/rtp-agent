@@ -444,6 +444,40 @@ def run_tokenize_replace_words(input_data: dict) -> dict:
     return {"contract": "tokenize-replace-words", "events": events}
 
 
+def run_tokenize_split_words(input_data: dict) -> dict:
+    load_reference_tokenize_utils()
+    basic_word = sys.modules["livekit.agents.tokenize._basic_word"]
+    values = string_values(
+        input_data,
+        "text_values",
+        [" Hello, world!  keep-format? ", "alpha beta,gamma"],
+    )
+    ignore_punctuation = bool(input_data.get("ignore_punctuation", True))
+    split_character = bool(input_data.get("split_character", False))
+    retain_format = bool(input_data.get("retain_format", False))
+
+    events = []
+    for value in values:
+        result = [
+            {"token": token, "start": start, "end": end}
+            for token, start, end in basic_word.split_words(
+                value,
+                ignore_punctuation=ignore_punctuation,
+                split_character=split_character,
+                retain_format=retain_format,
+            )
+        ]
+        events.append(
+            {
+                "name": "split_words",
+                "input": value,
+                "result": result,
+            }
+        )
+
+    return {"contract": "tokenize-split-words", "events": events}
+
+
 def main() -> int:
     if len(sys.argv) != 2:
         print("usage: python-utils.py INPUT_JSON", file=sys.stderr)
@@ -467,6 +501,8 @@ def main() -> int:
         output = run_bounded_dict_pop_if_order(input_data)
     elif contract == "tokenize-replace-words":
         output = run_tokenize_replace_words(input_data)
+    elif contract == "tokenize-split-words":
+        output = run_tokenize_split_words(input_data)
     else:
         print(f"unsupported contract: {contract}", file=sys.stderr)
         return 2

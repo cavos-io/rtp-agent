@@ -11,19 +11,22 @@ import (
 )
 
 type inputEnvelope struct {
-	Alpha        *float64          `json:"alpha"`
-	Contract     string            `json:"contract"`
-	EnvValues    []*string         `json:"env_values"`
-	Exp          *float64          `json:"exp"`
-	Initial      *float64          `json:"initial"`
-	MinVal       *float64          `json:"min_val"`
-	NameValues   []string          `json:"name_values"`
-	Sample       *float64          `json:"sample"`
-	SampleValues []float64         `json:"sample_values"`
-	Replacements map[string]string `json:"replacements"`
-	TextValues   []string          `json:"text_values"`
-	URLValues    []string          `json:"url_values"`
-	WindowSize   *int              `json:"window_size"`
+	Alpha             *float64          `json:"alpha"`
+	Contract          string            `json:"contract"`
+	EnvValues         []*string         `json:"env_values"`
+	Exp               *float64          `json:"exp"`
+	Initial           *float64          `json:"initial"`
+	IgnorePunctuation *bool             `json:"ignore_punctuation"`
+	MinVal            *float64          `json:"min_val"`
+	NameValues        []string          `json:"name_values"`
+	Sample            *float64          `json:"sample"`
+	SampleValues      []float64         `json:"sample_values"`
+	Replacements      map[string]string `json:"replacements"`
+	RetainFormat      *bool             `json:"retain_format"`
+	TextValues        []string          `json:"text_values"`
+	SplitCharacter    *bool             `json:"split_character"`
+	URLValues         []string          `json:"url_values"`
+	WindowSize        *int              `json:"window_size"`
 }
 
 type event struct {
@@ -84,6 +87,8 @@ func run() error {
 		return runBoundedDictPopIfOrder(input)
 	case "tokenize-replace-words":
 		return runTokenizeReplaceWords(input)
+	case "tokenize-split-words":
+		return runTokenizeSplitWords(input)
 	default:
 		return fmt.Errorf("unsupported contract: %s", input.Contract)
 	}
@@ -333,6 +338,45 @@ func runTokenizeReplaceWords(input inputEnvelope) error {
 	encoder := json.NewEncoder(os.Stdout)
 	encoder.SetEscapeHTML(false)
 	return encoder.Encode(output)
+}
+
+func runTokenizeSplitWords(input inputEnvelope) error {
+	values := input.TextValues
+	if values == nil {
+		values = []string{" Hello, world!  keep-format? ", "alpha beta,gamma"}
+	}
+	ignorePunctuation := boolValue(input.IgnorePunctuation, true)
+	splitCharacter := boolValue(input.SplitCharacter, false)
+	retainFormat := boolValue(input.RetainFormat, false)
+
+	output := outputEnvelope{Contract: "tokenize-split-words"}
+	for _, value := range values {
+		words := tokenize.SplitWords(value, ignorePunctuation, splitCharacter, retainFormat)
+		result := make([]map[string]any, 0, len(words))
+		for _, word := range words {
+			result = append(result, map[string]any{
+				"token": word.Token,
+				"start": word.Start,
+				"end":   word.End,
+			})
+		}
+		output.Events = append(output.Events, event{
+			Name:   "split_words",
+			Input:  value,
+			Result: result,
+		})
+	}
+
+	encoder := json.NewEncoder(os.Stdout)
+	encoder.SetEscapeHTML(false)
+	return encoder.Encode(output)
+}
+
+func boolValue(value *bool, fallback bool) bool {
+	if value == nil {
+		return fallback
+	}
+	return *value
 }
 
 func floatValue(value *float64, fallback float64) float64 {
