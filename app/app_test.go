@@ -15,14 +15,26 @@ import (
 	"testing"
 	"time"
 
+	"github.com/cavos-io/rtp-agent/adapter/anam"
 	"github.com/cavos-io/rtp-agent/adapter/anthropic"
 	"github.com/cavos-io/rtp-agent/adapter/assemblyai"
+	"github.com/cavos-io/rtp-agent/adapter/asyncai"
+	"github.com/cavos-io/rtp-agent/adapter/avatario"
+	"github.com/cavos-io/rtp-agent/adapter/avatartalk"
 	adapteraws "github.com/cavos-io/rtp-agent/adapter/aws"
 	"github.com/cavos-io/rtp-agent/adapter/azure"
 	"github.com/cavos-io/rtp-agent/adapter/baseten"
+	"github.com/cavos-io/rtp-agent/adapter/bey"
+	"github.com/cavos-io/rtp-agent/adapter/bithuman"
+	"github.com/cavos-io/rtp-agent/adapter/cambai"
 	"github.com/cavos-io/rtp-agent/adapter/cartesia"
+	"github.com/cavos-io/rtp-agent/adapter/cerebras"
 	"github.com/cavos-io/rtp-agent/adapter/deepgram"
 	"github.com/cavos-io/rtp-agent/adapter/elevenlabs"
+	"github.com/cavos-io/rtp-agent/adapter/fal"
+	"github.com/cavos-io/rtp-agent/adapter/fireworksai"
+	"github.com/cavos-io/rtp-agent/adapter/fishaudio"
+	"github.com/cavos-io/rtp-agent/adapter/gladia"
 	adaptergoogle "github.com/cavos-io/rtp-agent/adapter/google"
 	"github.com/cavos-io/rtp-agent/adapter/openai"
 	"github.com/cavos-io/rtp-agent/adapter/silero"
@@ -48,14 +60,29 @@ func TestAppRegistersReferencePluginMetadataBatch(t *testing.T) {
 		title   string
 		version string
 	}{
+		anam.PluginPackage:       {title: anam.PluginTitle, version: anam.PluginVersion},
 		anthropic.PluginPackage:  {title: anthropic.PluginTitle, version: anthropic.PluginVersion},
 		assemblyai.PluginPackage: {title: assemblyai.PluginTitle, version: assemblyai.PluginVersion},
+		asyncai.PluginPackage:    {title: asyncai.PluginTitle, version: asyncai.PluginVersion},
+		avatario.PluginPackage:   {title: avatario.PluginTitle, version: avatario.PluginVersion},
+		avatartalk.PluginPackage: {title: avatartalk.PluginTitle, version: avatartalk.PluginVersion},
 		adapteraws.PluginPackage: {title: adapteraws.PluginTitle, version: adapteraws.PluginVersion},
 		azure.PluginPackage:      {title: azure.PluginTitle, version: azure.PluginVersion},
 		baseten.PluginPackage:    {title: baseten.PluginTitle, version: baseten.PluginVersion},
+		bey.PluginPackage:        {title: bey.PluginTitle, version: bey.PluginVersion},
+		bithuman.PluginPackage:   {title: bithuman.PluginTitle, version: bithuman.PluginVersion},
+		cambai.PluginPackage:     {title: cambai.PluginTitle, version: cambai.PluginVersion},
 		cartesia.PluginPackage:   {title: cartesia.PluginTitle, version: cartesia.PluginVersion},
+		cerebras.PluginPackage:   {title: cerebras.PluginTitle, version: cerebras.PluginVersion},
 		deepgram.PluginPackage:   {title: deepgram.PluginTitle, version: deepgram.PluginVersion},
 		elevenlabs.PluginPackage: {title: elevenlabs.PluginTitle, version: elevenlabs.PluginVersion},
+		fal.PluginPackage:        {title: fal.PluginTitle, version: fal.PluginVersion},
+		fireworksai.PluginPackage: {
+			title:   fireworksai.PluginTitle,
+			version: fireworksai.PluginVersion,
+		},
+		fishaudio.PluginPackage: {title: fishaudio.PluginTitle, version: fishaudio.PluginVersion},
+		gladia.PluginPackage:    {title: gladia.PluginTitle, version: gladia.PluginVersion},
 		adaptergoogle.PluginPackage: {
 			title:   adaptergoogle.PluginTitle,
 			version: adaptergoogle.PluginVersion,
