@@ -99,6 +99,55 @@ func TestNewWarmTransferTaskUsesExplicitSIPNumberOption(t *testing.T) {
 	}
 }
 
+func TestNewWarmTransferTaskUsesReferenceDefaultHoldAudio(t *testing.T) {
+	task := newWarmTransferTaskForTest(t, "+15550100", "trunk_123", nil, "")
+
+	hold, ok := task.HoldAudio.(agent.AudioConfig)
+	if !ok {
+		t.Fatalf("HoldAudio = %T, want agent.AudioConfig", task.HoldAudio)
+	}
+	if hold.Source != agent.HoldMusic {
+		t.Fatalf("HoldAudio.Source = %#v, want HoldMusic", hold.Source)
+	}
+	if hold.Volume != 0.8 {
+		t.Fatalf("HoldAudio.Volume = %v, want 0.8", hold.Volume)
+	}
+}
+
+func TestNewWarmTransferTaskAllowsCustomHoldAudio(t *testing.T) {
+	custom := agent.AudioConfig{
+		Source: "custom-hold.ogg",
+		Volume: 0.4,
+	}
+	task, err := NewWarmTransferTaskWithOptions(WarmTransferOptions{
+		TargetPhone: "+15550100",
+		TrunkID:     "trunk_123",
+		HoldAudio:   custom,
+	})
+	if err != nil {
+		t.Fatalf("NewWarmTransferTaskWithOptions() error = %v", err)
+	}
+
+	if task.HoldAudio != custom {
+		t.Fatalf("HoldAudio = %#v, want custom hold audio", task.HoldAudio)
+	}
+}
+
+func TestNewWarmTransferTaskCanDisableHoldAudio(t *testing.T) {
+	task, err := NewWarmTransferTaskWithOptions(WarmTransferOptions{
+		TargetPhone:      "+15550100",
+		TrunkID:          "trunk_123",
+		DisableHoldAudio: true,
+	})
+	if err != nil {
+		t.Fatalf("NewWarmTransferTaskWithOptions() error = %v", err)
+	}
+
+	if task.HoldAudio != nil {
+		t.Fatalf("HoldAudio = %#v, want nil when hold audio is disabled", task.HoldAudio)
+	}
+}
+
 func TestNewWarmTransferTaskAllowsExplicitSIPConnectionWithoutTrunk(t *testing.T) {
 	t.Setenv("LIVEKIT_SIP_OUTBOUND_TRUNK", "")
 
@@ -146,6 +195,28 @@ func TestWarmTransferLifecycleCleansHumanAgentSession(t *testing.T) {
 	task.OnExit()
 	if task.humanAgentSess != nil {
 		t.Fatalf("humanAgentSess = %#v, want cleared on exit", task.humanAgentSess)
+	}
+}
+
+func TestWarmTransferOnEnterSkipsBackgroundAudioWhenHoldAudioDisabled(t *testing.T) {
+	task, err := NewWarmTransferTaskWithOptions(WarmTransferOptions{
+		TargetPhone:      "+15550100",
+		TrunkID:          "trunk_123",
+		DisableHoldAudio: true,
+	})
+	if err != nil {
+		t.Fatalf("NewWarmTransferTaskWithOptions() error = %v", err)
+	}
+	jobCtx := &fakeWarmTransferJobContext{room: &livekit.Room{Name: "caller-room"}}
+	session := agent.NewAgentSession(task, nil, agent.AgentSessionOptions{})
+	session.SetJobContext(jobCtx)
+	task.Agent.Start(session, task)
+	defer task.Agent.GetActivity().Stop()
+
+	task.OnEnter()
+
+	if task.backgroundAudio != nil {
+		t.Fatalf("backgroundAudio = %#v, want nil when hold audio is disabled", task.backgroundAudio)
 	}
 }
 

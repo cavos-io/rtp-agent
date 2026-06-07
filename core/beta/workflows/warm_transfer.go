@@ -56,6 +56,8 @@ type WarmTransferOptions struct {
 	TrunkID           string
 	SipConnection     *livekit.SIPOutboundConfig
 	SipNumber         string
+	HoldAudio         interface{}
+	DisableHoldAudio  bool
 	ChatContext       *llm.ChatContext
 	ExtraInstructions string
 	Instructions      *beta.InstructionParts
@@ -138,6 +140,15 @@ func NewWarmTransferTaskWithOptions(opts WarmTransferOptions) (*WarmTransferTask
 	if sipNumber == "" {
 		sipNumber = os.Getenv("LIVEKIT_SIP_NUMBER")
 	}
+	var holdAudio interface{} = agent.AudioConfig{
+		Source: agent.HoldMusic,
+		Volume: 0.8,
+	}
+	if opts.DisableHoldAudio {
+		holdAudio = nil
+	} else if opts.HoldAudio != nil {
+		holdAudio = opts.HoldAudio
+	}
 
 	t := &WarmTransferTask{
 		AgentTask:          *agent.NewAgentTask[*WarmTransferResult](instructions),
@@ -146,6 +157,7 @@ func NewWarmTransferTaskWithOptions(opts WarmTransferOptions) (*WarmTransferTask
 		SipConnection:      opts.SipConnection,
 		humanAgentIdentity: "human-agent-sip",
 		SipNumber:          sipNumber,
+		HoldAudio:          holdAudio,
 	}
 
 	t.Agent.Tools = []llm.Tool{
@@ -166,14 +178,9 @@ func (t *WarmTransferTask) OnEnter() {
 		t.callerRoom = activity.Session.Room
 	}
 
-	// In a full implementation, we would start background audio and dial SIP
-	// self.background_audio = BackgroundAudioPlayer()
-	// self.hold_audio = AudioConfig(BuiltinAudioClip.HOLD_MUSIC, volume=0.8)
-
-	t.backgroundAudio = agent.NewBackgroundAudioPlayer(agent.AudioConfig{
-		Source: agent.HoldMusic,
-		Volume: 0.8,
-	}, nil)
+	if t.HoldAudio != nil {
+		t.backgroundAudio = agent.NewBackgroundAudioPlayer(t.HoldAudio, nil)
+	}
 
 	jobCtx, err := t.jobContext()
 	if err != nil {
