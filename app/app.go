@@ -1000,7 +1000,11 @@ func workflowAgentFromConfig(cfg AppConfig, baseAgent *agent.Agent) (agent.Agent
 			IncludeTime:            cfg.WorkflowDOBIncludeTime,
 		})
 	case "name", "get_name":
-		selected = workflows.NewGetNameTask(workflowNameOptionsFromConfig(cfg))
+		nameOpts, err := workflowNameOptionsFromConfig(cfg)
+		if err != nil {
+			return nil, err
+		}
+		selected = workflows.NewGetNameTask(nameOpts)
 	case "card_number", "card-number", "get_card_number":
 		selected = workflows.NewGetCardNumberTask(cfg.WorkflowRequireConfirmation)
 	case "security_code", "security-code", "get_security_code":
@@ -1068,7 +1072,7 @@ func workflowInstructionParts(extra string) *beta.InstructionParts {
 	return &beta.InstructionParts{Extra: extra}
 }
 
-func workflowNameOptionsFromConfig(cfg AppConfig) workflows.GetNameOptions {
+func workflowNameOptionsFromConfig(cfg AppConfig) (workflows.GetNameOptions, error) {
 	firstName := true
 	if cfg.WorkflowNameFirstName != nil {
 		firstName = *cfg.WorkflowNameFirstName
@@ -1081,6 +1085,9 @@ func workflowNameOptionsFromConfig(cfg AppConfig) workflows.GetNameOptions {
 	if cfg.WorkflowNameLastName != nil {
 		lastName = *cfg.WorkflowNameLastName
 	}
+	if !firstName && !middleName && !lastName {
+		return workflows.GetNameOptions{}, fmt.Errorf("at least one of first_name, middle_name, or last_name must be true")
+	}
 	return workflows.GetNameOptions{
 		FirstName:              firstName,
 		MiddleName:             middleName,
@@ -1090,7 +1097,7 @@ func workflowNameOptionsFromConfig(cfg AppConfig) workflows.GetNameOptions {
 		RequireConfirmation:    cfg.WorkflowRequireConfirmation,
 		RequireConfirmationSet: true,
 		ExtraInstructions:      cfg.WorkflowNameExtraInstructions,
-	}
+	}, nil
 }
 
 func workflowDtmfOptionsFromConfig(cfg AppConfig) workflows.GetDtmfOptions {
@@ -1176,11 +1183,15 @@ func workflowTaskFactoryFromName(cfg AppConfig, baseAgent *agent.Agent, taskName
 			}),
 		}, nil
 	case "name", "get_name":
+		nameOpts, err := workflowNameOptionsFromConfig(cfg)
+		if err != nil {
+			return workflows.FactoryInfo{}, err
+		}
 		return workflows.FactoryInfo{
 			ID:          "name",
 			Description: "Collect and confirm the user's name.",
 			TaskFactory: factory(func() agent.AgentInterface {
-				return workflows.NewGetNameTask(workflowNameOptionsFromConfig(cfg))
+				return workflows.NewGetNameTask(nameOpts)
 			}),
 		}, nil
 	case "card_number", "card-number", "get_card_number":

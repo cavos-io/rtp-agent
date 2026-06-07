@@ -2159,6 +2159,21 @@ func TestDefaultConfigFromEnvSelectsNameWorkflowAgent(t *testing.T) {
 	}
 }
 
+func TestDefaultConfigFromEnvRejectsNameWorkflowWithoutSelectedParts(t *testing.T) {
+	t.Setenv("RTP_AGENT_WORKFLOW_TASK", "name")
+	t.Setenv("RTP_AGENT_WORKFLOW_NAME_FIRST_NAME", "false")
+	t.Setenv("RTP_AGENT_WORKFLOW_NAME_MIDDLE_NAME", "false")
+	t.Setenv("RTP_AGENT_WORKFLOW_NAME_LAST_NAME", "false")
+
+	_, err := NewApp(DefaultConfigFromEnv())
+	if err == nil {
+		t.Fatal("NewApp() error = nil, want no selected name parts error")
+	}
+	if !strings.Contains(strings.ToLower(err.Error()), "at least one of first_name, middle_name, or last_name must be true") {
+		t.Fatalf("NewApp() error = %v, want reference selected-name-part error", err)
+	}
+}
+
 func TestDefaultConfigFromEnvSelectsCardNumberWorkflowAgent(t *testing.T) {
 	t.Setenv("RTP_AGENT_WORKFLOW_TASK", "card_number")
 	t.Setenv("RTP_AGENT_WORKFLOW_REQUIRE_CONFIRMATION", "true")
