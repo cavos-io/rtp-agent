@@ -4,6 +4,9 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/cavos-io/rtp-agent/core/agent"
 )
 
 func TestGetNameTaskUpdatesRequiredPartsWithoutConfirmation(t *testing.T) {
@@ -139,6 +142,64 @@ func TestGetNameTaskInstructionsOmitConfirmationWhenDisabled(t *testing.T) {
 
 	if strings.Contains(task.Instructions, "confirm_name") {
 		t.Fatalf("Instructions = %q, want no confirm_name guidance when confirmation disabled", task.Instructions)
+	}
+}
+
+func TestGetNameTaskStaleConfirmationPromptsForUpdatedName(t *testing.T) {
+	task := NewGetNameTask(GetNameOptions{FirstName: true, LastName: true})
+	session := agent.NewAgentSession(task, nil, agent.AgentSessionOptions{})
+	session.Assistant = &fakeDtmfSessionAssistant{}
+	speechEvents := session.SpeechCreatedEvents()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	if err := session.Start(ctx); err != nil {
+		t.Fatalf("Start error = %v", err)
+	}
+	defer session.Stop(context.Background())
+
+	select {
+	case <-speechEvents:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for name on-enter prompt")
+	}
+
+	update := &updateNameTool{task: task}
+	if _, err := update.Execute(context.Background(), `{"first_name":"Ada","last_name":"Lovelace"}`); err != nil {
+		t.Fatalf("first update Execute() error = %v", err)
+	}
+	staleConfirm := &confirmNameTool{task: task, firstName: "Ada", lastName: "Lovelace"}
+
+	if _, err := update.Execute(context.Background(), `{"first_name":"Grace","last_name":"Hopper"}`); err != nil {
+		t.Fatalf("second update Execute() error = %v", err)
+	}
+	if _, err := staleConfirm.Execute(context.Background(), `{}`); err != nil {
+		t.Fatalf("stale confirm Execute() error = %v, want nil after prompting for updated confirmation", err)
+	}
+
+	select {
+	case ev := <-speechEvents:
+		if ev.Source != "generate_reply" {
+			t.Fatalf("SpeechCreated Source = %q, want generate_reply", ev.Source)
+		}
+		if ev.SpeechHandle == nil {
+			t.Fatal("SpeechCreated SpeechHandle = nil, want stale confirmation reply handle")
+		}
+		want := nameStaleConfirmationPrompt()
+		if ev.SpeechHandle.Generation.Instructions == nil {
+			t.Fatal("stale confirmation instructions = nil, want changed-name prompt")
+		}
+		if got := ev.SpeechHandle.Generation.Instructions.AsModality("text").String(); got != want {
+			t.Fatalf("stale confirmation instructions = %q, want %q", got, want)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for stale confirmation prompt")
+	}
+
+	select {
+	case result := <-task.Result:
+		t.Fatalf("task completed with %#v, want no completion for stale confirmation", result)
+	default:
 	}
 }
 
