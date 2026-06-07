@@ -86,6 +86,56 @@ func TestGetCardNumberTaskRejectsInvalidLuhnNumber(t *testing.T) {
 	}
 }
 
+func TestGetCardNumberTaskRejectsInvalidLengthWithPrompt(t *testing.T) {
+	task := NewGetCardNumberTask()
+	session := agent.NewAgentSession(task, nil, agent.AgentSessionOptions{})
+	session.Assistant = &fakeDtmfSessionAssistant{}
+	speechEvents := session.SpeechCreatedEvents()
+	tool := &recordCardNumberTool{task: task}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	if err := session.Start(ctx); err != nil {
+		t.Fatalf("Start error = %v", err)
+	}
+	defer session.Stop(context.Background())
+
+	select {
+	case <-speechEvents:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for card-number on-enter prompt")
+	}
+
+	if _, err := tool.Execute(context.Background(), `{"card_number":"4111"}`); err != nil {
+		t.Fatalf("Execute() error = %v, want nil after prompting for invalid length", err)
+	}
+
+	select {
+	case ev := <-speechEvents:
+		if ev.Source != "generate_reply" {
+			t.Fatalf("SpeechCreated Source = %q, want generate_reply", ev.Source)
+		}
+		if ev.SpeechHandle == nil {
+			t.Fatal("SpeechCreated SpeechHandle = nil, want invalid-length reply handle")
+		}
+		want := "The length of the card number is invalid, ask the user to repeat their card number."
+		if ev.SpeechHandle.Generation.Instructions == nil {
+			t.Fatal("invalid-length instructions = nil, want invalid-length prompt")
+		}
+		if got := ev.SpeechHandle.Generation.Instructions.AsModality("text").String(); got != want {
+			t.Fatalf("invalid-length instructions = %q, want %q", got, want)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for invalid-length prompt")
+	}
+
+	select {
+	case result := <-task.Result:
+		t.Fatalf("task completed with %#v, want no completion for invalid length", result)
+	default:
+	}
+}
+
 func TestGetCardNumberTaskDefersLuhnValidationUntilConfirmation(t *testing.T) {
 	task := NewGetCardNumberTask()
 	session := agent.NewAgentSession(task, nil, agent.AgentSessionOptions{})

@@ -374,7 +374,12 @@ func (t *recordCardNumberTool) Execute(ctx context.Context, args string) (string
 
 	cardNumber := normalizeCardDigits(params.CardNumber)
 	if len(cardNumber) < 13 || len(cardNumber) > 19 {
-		return "", llm.NewToolError("The length of the card number is invalid, ask the user to repeat their card number.")
+		if activity := t.task.Agent.GetActivity(); activity != nil && activity.Session != nil {
+			_, _ = activity.Session.GenerateReplyWithOptions(context.Background(), agent.GenerateReplyOptions{
+				Instructions: invalidCardNumberLengthPrompt(),
+			})
+		}
+		return "", nil
 	}
 
 	t.task.currentCardNumber = cardNumber
@@ -613,6 +618,10 @@ func cardNumberMismatchPrompt() string {
 
 func invalidCardNumberPrompt() string {
 	return "The card number is not valid, ask the user if they made a mistake or to provide another card."
+}
+
+func invalidCardNumberLengthPrompt() string {
+	return "The length of the card number is invalid, ask the user to repeat their card number."
 }
 
 type confirmSecurityCodeTool struct {
