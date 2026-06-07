@@ -692,6 +692,54 @@ func startConsoleAudioUI(ctx context.Context, args ConsoleArgs) (func(), error) 
 	}, nil
 }
 
+type consoleTranscriptSession interface {
+	AgentOutputTranscribedEvents() <-chan agent.AgentOutputTranscribedEvent
+}
+
+func startConsoleTranscriptPrinter(ctx context.Context, session any, out io.Writer) bool {
+	transcripts, ok := session.(consoleTranscriptSession)
+	if !ok || out == nil {
+		return false
+	}
+
+	events := transcripts.AgentOutputTranscribedEvents()
+	go func() {
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case ev := <-events:
+				if strings.TrimSpace(ev.Transcript) == "" {
+					continue
+				}
+				fmt.Fprintf(out, "\nAgent: %s\n❯ ", ev.Transcript)
+			}
+		}
+	}()
+	return true
+}
+
+func startConsoleTranscriptPrinterWhenReady(ctx context.Context, server *worker.AgentServer, out io.Writer) {
+	if server == nil {
+		return
+	}
+
+	go func() {
+		ticker := time.NewTicker(50 * time.Millisecond)
+		defer ticker.Stop()
+		for {
+			if startConsoleTranscriptPrinter(ctx, server.GetConsoleSession(), out) {
+				return
+			}
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+			}
+		}
+	}()
+}
+
 func runConsole(server *worker.AgentServer, argv []string) {
 	args, err := parseConsoleArgs(argv)
 	if err != nil {
@@ -721,6 +769,7 @@ func runConsole(server *worker.AgentServer, argv []string) {
 		return
 	}
 	defer stopAudio()
+	startConsoleTranscriptPrinterWhenReady(ctx, server, os.Stdout)
 
 	logger.Logger.Infow(
 		"Starting console local job",

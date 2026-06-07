@@ -416,6 +416,28 @@ func TestStartConsoleAudioUISkipsAudioForTextMode(t *testing.T) {
 	stop()
 }
 
+func TestStartConsoleTranscriptPrinterWritesAgentOutput(t *testing.T) {
+	session := agent.NewAgentSession(agent.NewAgent("help"), nil, agent.AgentSessionOptions{})
+	var out bytes.Buffer
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	if !startConsoleTranscriptPrinter(ctx, session, &out) {
+		t.Fatal("startConsoleTranscriptPrinter() = false, want true for AgentSession")
+	}
+	session.EmitAgentOutputTranscribed(agent.AgentOutputTranscribedEvent{Transcript: "hello from agent"})
+
+	deadline := time.After(time.Second)
+	for !strings.Contains(out.String(), "hello from agent") {
+		select {
+		case <-deadline:
+			t.Fatalf("console transcript output = %q, want agent transcript", out.String())
+		default:
+			time.Sleep(time.Millisecond)
+		}
+	}
+}
+
 func TestFormatConsoleAudioDevicesListsInputsOutputsAndDefaults(t *testing.T) {
 	got := formatConsoleAudioDevices([]consoleAudioDevice{
 		{Index: 0, Name: "Built-in Mic", MaxInputChannels: 1},
