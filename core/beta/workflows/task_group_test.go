@@ -3,6 +3,7 @@ package workflows
 import (
 	"context"
 	"errors"
+	"io"
 	"testing"
 	"time"
 
@@ -240,6 +241,41 @@ func TestTaskGroupMergesCompletedChildChatContext(t *testing.T) {
 	}
 }
 
+func TestTaskGroupSummarizesMergedChatContext(t *testing.T) {
+	group := NewTaskGroup(true, false)
+	child := newChatContextTask("child-done")
+	group.Add("child", "Produces child context", func() agent.AgentInterface {
+		return child
+	})
+	summaryLLM := &taskGroupSummaryLLM{response: "collected child context"}
+	session := agent.NewAgentSession(group, nil, agent.AgentSessionOptions{})
+	session.LLM = summaryLLM
+	group.Agent.Start(session, group)
+	defer group.Agent.GetActivity().Stop()
+
+	select {
+	case <-group.Result:
+	case err := <-group.Err:
+		t.Fatalf("group failed with %v, want completed result", err)
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for task group result")
+	}
+
+	if len(summaryLLM.requests) != 1 {
+		t.Fatalf("summary LLM requests = %d, want 1", len(summaryLLM.requests))
+	}
+	summary := findTaskGroupSummaryMessage(group.ChatCtx)
+	if summary == nil {
+		t.Fatalf("group ChatCtx items = %#v, want summary message", group.ChatCtx.Items)
+	}
+	if got := summary.TextContent(); got != "<chat_history_summary>\ncollected child context\n</chat_history_summary>" {
+		t.Fatalf("summary text = %q, want wrapped LLM summary", got)
+	}
+	if got := group.ChatCtx.GetByID("child-assistant"); got != nil {
+		t.Fatalf("group ChatCtx child assistant item = %#v, want summarized away", got)
+	}
+}
+
 type completingTask struct {
 	agent.AgentTask[string]
 	value string
@@ -300,4 +336,48 @@ func (t *chatContextTask) OnEnter() {
 		Content: []llm.ChatContent{{Text: "child response"}},
 	})
 	_ = t.Complete(t.value)
+}
+
+type taskGroupSummaryLLM struct {
+	response string
+	requests []*llm.ChatContext
+}
+
+func (f *taskGroupSummaryLLM) Chat(_ context.Context, chatCtx *llm.ChatContext, _ ...llm.ChatOption) (llm.LLMStream, error) {
+	f.requests = append(f.requests, chatCtx)
+	return &taskGroupSummaryStream{
+		chunks: []*llm.ChatChunk{{Delta: &llm.ChoiceDelta{Content: f.response}}},
+	}, nil
+}
+
+type taskGroupSummaryStream struct {
+	chunks []*llm.ChatChunk
+	index  int
+}
+
+func (s *taskGroupSummaryStream) Next() (*llm.ChatChunk, error) {
+	if s.index >= len(s.chunks) {
+		return nil, io.EOF
+	}
+	chunk := s.chunks[s.index]
+	s.index++
+	return chunk, nil
+}
+
+func (s *taskGroupSummaryStream) Close() error { return nil }
+
+func findTaskGroupSummaryMessage(chatCtx *llm.ChatContext) *llm.ChatMessage {
+	if chatCtx == nil {
+		return nil
+	}
+	for _, item := range chatCtx.Items {
+		msg, ok := item.(*llm.ChatMessage)
+		if !ok {
+			continue
+		}
+		if isSummary, _ := msg.Extra["is_summary"].(bool); isSummary {
+			return msg
+		}
+	}
+	return nil
 }
