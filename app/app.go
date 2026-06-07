@@ -111,6 +111,7 @@ func init() {
 	plugin.RegisterPluginMetadata(cambai.PluginTitle, cambai.PluginVersion, cambai.PluginPackage)
 	plugin.RegisterPluginMetadata(cartesia.PluginTitle, cartesia.PluginVersion, cartesia.PluginPackage)
 	plugin.RegisterPluginMetadata(cerebras.PluginTitle, cerebras.PluginVersion, cerebras.PluginPackage)
+	plugin.RegisterPluginDownloader(clova.PluginTitle, clova.PluginVersion, clova.PluginPackage, clova.Plugin{}.DownloadFiles)
 	plugin.RegisterPluginMetadata(deepgram.PluginTitle, deepgram.PluginVersion, deepgram.PluginPackage)
 	plugin.RegisterPluginMetadata(elevenlabs.PluginTitle, elevenlabs.PluginVersion, elevenlabs.PluginPackage)
 	plugin.RegisterPluginMetadata(fal.PluginTitle, fal.PluginVersion, fal.PluginPackage)

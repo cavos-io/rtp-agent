@@ -29,6 +29,7 @@ import (
 	"github.com/cavos-io/rtp-agent/adapter/cambai"
 	"github.com/cavos-io/rtp-agent/adapter/cartesia"
 	"github.com/cavos-io/rtp-agent/adapter/cerebras"
+	"github.com/cavos-io/rtp-agent/adapter/clova"
 	"github.com/cavos-io/rtp-agent/adapter/deepgram"
 	"github.com/cavos-io/rtp-agent/adapter/elevenlabs"
 	"github.com/cavos-io/rtp-agent/adapter/fal"
@@ -109,6 +110,7 @@ func TestAppRegistersReferencePluginMetadataBatch(t *testing.T) {
 		cambai.PluginPackage:     {title: cambai.PluginTitle, version: cambai.PluginVersion},
 		cartesia.PluginPackage:   {title: cartesia.PluginTitle, version: cartesia.PluginVersion},
 		cerebras.PluginPackage:   {title: cerebras.PluginTitle, version: cerebras.PluginVersion},
+		clova.PluginPackage:      {title: clova.PluginTitle, version: clova.PluginVersion},
 		deepgram.PluginPackage:   {title: deepgram.PluginTitle, version: deepgram.PluginVersion},
 		elevenlabs.PluginPackage: {title: elevenlabs.PluginTitle, version: elevenlabs.PluginVersion},
 		fal.PluginPackage:        {title: fal.PluginTitle, version: fal.PluginVersion},
@@ -183,6 +185,25 @@ func TestAppRegistersReferencePluginMetadataBatch(t *testing.T) {
 		}
 		t.Fatalf("plugin metadata was not registered for packages: %s", strings.Join(missing, ", "))
 	}
+}
+
+func TestAppRegistersClovaPluginDownloader(t *testing.T) {
+	for _, registered := range plugin.RegisteredPlugins() {
+		if registered.Package() != clova.PluginPackage {
+			continue
+		}
+		if registered.Title() != clova.PluginTitle {
+			t.Fatalf("plugin title = %q, want %q", registered.Title(), clova.PluginTitle)
+		}
+		if registered.Version() != clova.PluginVersion {
+			t.Fatalf("plugin version = %q, want %q", registered.Version(), clova.PluginVersion)
+		}
+		if err := registered.DownloadFiles(); err != nil {
+			t.Fatalf("DownloadFiles() error = %v, want nil reference no-op", err)
+		}
+		return
+	}
+	t.Fatal("Clova plugin downloader was not registered")
 }
 
 func TestAppRegistersSLNGPluginMetadata(t *testing.T) {
