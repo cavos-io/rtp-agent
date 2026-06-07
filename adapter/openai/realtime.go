@@ -7,11 +7,17 @@ import (
 	"fmt"
 	"math"
 	"net/http"
+	"net/url"
+	"os"
+	"reflect"
+	"strings"
 	"sync"
 
+	"github.com/cavos-io/rtp-agent/core/audio"
 	"github.com/cavos-io/rtp-agent/core/audio/model"
 	"github.com/cavos-io/rtp-agent/core/llm"
 	"github.com/cavos-io/rtp-agent/library/logger"
+	cavosmath "github.com/cavos-io/rtp-agent/library/math"
 	"github.com/cavos-io/rtp-agent/library/telemetry"
 	"github.com/cavos-io/rtp-agent/library/utils"
 	"github.com/cavos-io/rtp-agent/library/utils/images"
@@ -29,12 +35,19 @@ type openAIRealtimeWebsocketDialer func(string, http.Header) (*websocket.Conn, *
 
 func NewRealtimeModel(apiKey, model string) *RealtimeModel {
 	if model == "" {
-		model = "gpt-4o-realtime-preview"
+		model = "gpt-realtime"
+	}
+	if apiKey == "" {
+		apiKey = os.Getenv("OPENAI_API_KEY")
+	}
+	baseURL := os.Getenv("OPENAI_BASE_URL")
+	if baseURL == "" {
+		baseURL = "https://api.openai.com/v1"
 	}
 	return &RealtimeModel{
 		apiKey:        apiKey,
 		model:         model,
-		baseURL:       "wss://api.openai.com/v1/realtime",
+		baseURL:       openAIRealtimeBaseURL(baseURL),
 		dialWebsocket: defaultOpenAIRealtimeWebsocketDialer,
 	}
 }
@@ -75,9 +88,15 @@ type realtimeSession struct {
 	remote           *llm.RemoteChatContext
 	inputTranscripts *utils.BoundedDict[inputTranscriptKey, realtimeInputTranscript]
 	generation       *realtimeGeneration
+	instructions     string
+	audioBStream     *audio.AudioByteStream
+	pushedDuration   float64
+	optionsState     map[string]any
 }
 
 const maxRealtimeInputTranscripts = 1024
+const openAIRealtimeInputSampleRate = 24000
+const openAIRealtimeInputNumChannels = 1
 
 type inputTranscriptKey struct {
 	itemID       string
@@ -105,7 +124,10 @@ type realtimeMessageGeneration struct {
 }
 
 func (m *RealtimeModel) Session() (llm.RealtimeSession, error) {
-	wsURL := fmt.Sprintf("%s?model=%s", m.baseURL, m.model)
+	if m.apiKey == "" {
+		return nil, fmt.Errorf("OPENAI_API_KEY is required, either as argument or set OPENAI_API_KEY environment variable")
+	}
+	wsURL := openAIRealtimeSessionURL(m.baseURL, m.model)
 
 	header := http.Header{}
 	header.Add("Authorization", "Bearer "+m.apiKey)
@@ -118,16 +140,51 @@ func (m *RealtimeModel) Session() (llm.RealtimeSession, error) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	s := &realtimeSession{
-		conn:    conn,
-		ctx:     ctx,
-		cancel:  cancel,
-		eventCh: make(chan llm.RealtimeEvent, 100),
-		remote:  llm.NewRemoteChatContext(),
+		conn:         conn,
+		ctx:          ctx,
+		cancel:       cancel,
+		eventCh:      make(chan llm.RealtimeEvent, 100),
+		remote:       llm.NewRemoteChatContext(),
+		audioBStream: newOpenAIRealtimeAudioByteStream(),
 	}
 
 	go s.eventLoop()
 
 	return s, nil
+}
+
+func openAIRealtimeBaseURL(rawURL string) string {
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return rawURL
+	}
+	switch u.Scheme {
+	case "http":
+		u.Scheme = "ws"
+	case "https":
+		u.Scheme = "wss"
+	}
+	path := strings.TrimRight(u.Path, "/")
+	switch path {
+	case "", "/v1", "/openai", "/openai/v1":
+		u.Path = path + "/realtime"
+	default:
+		u.Path = path
+	}
+	return u.String()
+}
+
+func openAIRealtimeSessionURL(baseURL, model string) string {
+	u, err := url.Parse(baseURL)
+	if err != nil {
+		return fmt.Sprintf("%s?model=%s", baseURL, url.QueryEscape(model))
+	}
+	query := u.Query()
+	if query.Get("model") == "" {
+		query.Set("model", model)
+	}
+	u.RawQuery = query.Encode()
+	return u.String()
 }
 
 func defaultOpenAIRealtimeWebsocketDialer(endpoint string, headers http.Header) (*websocket.Conn, *http.Response, error) {
@@ -140,12 +197,19 @@ func (s *realtimeSession) EventCh() <-chan llm.RealtimeEvent {
 
 func (s *realtimeSession) UpdateInstructions(instructions string) error {
 	msg := map[string]any{
-		"type": "session.update",
+		"type":     "session.update",
+		"event_id": cavosmath.ShortUUID("instructions_update_"),
 		"session": map[string]any{
 			"instructions": instructions,
 		},
 	}
-	return s.sendMsg(msg)
+	if err := s.sendMsg(msg); err != nil {
+		return err
+	}
+	s.mu.Lock()
+	s.instructions = instructions
+	s.mu.Unlock()
+	return nil
 }
 
 func (s *realtimeSession) UpdateChatContext(chatCtx *llm.ChatContext) error {
@@ -173,7 +237,8 @@ func (s *realtimeSession) UpdateChatContext(chatCtx *llm.ChatContext) error {
 
 func (s *realtimeSession) UpdateTools(tools []llm.Tool) error {
 	msg := map[string]any{
-		"type": "session.update",
+		"type":     "session.update",
+		"event_id": cavosmath.ShortUUID("tools_update_"),
 		"session": map[string]any{
 			"tools": openAIRealtimeTools(tools),
 		},
@@ -281,8 +346,9 @@ func openAIRealtimeRemoteSnapshot(chatCtx *llm.ChatContext) *llm.RemoteChatConte
 
 func openAIRealtimeDeleteChatItemMessage(itemID string) map[string]any {
 	return map[string]any{
-		"type":    "conversation.item.delete",
-		"item_id": itemID,
+		"type":     "conversation.item.delete",
+		"event_id": cavosmath.ShortUUID("chat_ctx_delete_"),
+		"item_id":  itemID,
 	}
 }
 
@@ -304,6 +370,7 @@ func openAIRealtimeCreateChatItemMessage(chatCtx *llm.ChatContext, previousItemI
 	}
 	return map[string]any{
 		"type":             "conversation.item.create",
+		"event_id":         cavosmath.ShortUUID("chat_ctx_create_"),
 		"previous_item_id": previous,
 		"item":             openAIItem,
 	}, nil
@@ -396,18 +463,169 @@ func openAIRealtimeImageContent(image *llm.ImageContent) (map[string]any, error)
 }
 
 func (s *realtimeSession) UpdateOptions(options llm.RealtimeSessionOptions) error {
-	return s.sendMsg(openAIRealtimeUpdateOptionsMessage(options))
+	msg := openAIRealtimeUpdateOptionsMessageWithEventID(options, cavosmath.ShortUUID("options_update_"))
+	if msg == nil {
+		return nil
+	}
+	session, _ := msg["session"].(map[string]any)
+	s.mu.Lock()
+	changedSession, changedOptions := openAIRealtimeChangedOptionsSession(session, s.optionsState)
+	if len(changedSession) == 0 {
+		s.mu.Unlock()
+		return nil
+	}
+	s.mu.Unlock()
+	msg["session"] = changedSession
+	if err := s.sendMsg(msg); err != nil {
+		return err
+	}
+	s.mu.Lock()
+	if s.optionsState == nil {
+		s.optionsState = make(map[string]any, len(changedOptions))
+	}
+	for key, value := range changedOptions {
+		s.optionsState[key] = value
+	}
+	s.mu.Unlock()
+	return nil
 }
 
 func openAIRealtimeUpdateOptionsMessage(options llm.RealtimeSessionOptions) map[string]any {
+	return openAIRealtimeUpdateOptionsMessageWithEventID(options, "")
+}
+
+func openAIRealtimeUpdateOptionsMessageWithEventID(options llm.RealtimeSessionOptions, eventID string) map[string]any {
 	session := make(map[string]any)
 	if toolChoice := openAIRealtimeToolChoice(options.ToolChoice); toolChoice != nil {
 		session["tool_choice"] = toolChoice
 	}
-	return map[string]any{
+	if options.MaxResponseOutputTokens != nil {
+		session["max_output_tokens"] = options.MaxResponseOutputTokens
+	}
+	if options.Truncation != nil {
+		session["truncation"] = options.Truncation
+	}
+	if options.Tracing != nil {
+		session["tracing"] = options.Tracing
+	}
+	input := make(map[string]any)
+	if options.TurnDetection != nil {
+		input["turn_detection"] = options.TurnDetection
+	}
+	if options.InputAudioTranscription != nil {
+		input["transcription"] = options.InputAudioTranscription
+	}
+	if options.InputAudioNoiseReduction != nil {
+		input["noise_reduction"] = options.InputAudioNoiseReduction
+	}
+	output := make(map[string]any)
+	if options.Voice != "" {
+		output["voice"] = options.Voice
+	}
+	if options.Speed > 0 {
+		output["speed"] = options.Speed
+	}
+	if len(input) > 0 || len(output) > 0 {
+		audio := make(map[string]any)
+		if len(input) > 0 {
+			audio["input"] = input
+		}
+		if len(output) > 0 {
+			audio["output"] = output
+		}
+		session["audio"] = audio
+	}
+	if len(session) == 0 {
+		return nil
+	}
+	msg := map[string]any{
 		"type":    "session.update",
 		"session": session,
 	}
+	if eventID != "" {
+		msg["event_id"] = eventID
+	}
+	return msg
+}
+
+func openAIRealtimeChangedOptionsSession(session map[string]any, current map[string]any) (map[string]any, map[string]any) {
+	options := openAIRealtimeOptionEntries(session)
+	changedOptions := make(map[string]any)
+	for key, value := range options {
+		if current != nil && reflect.DeepEqual(current[key], value) {
+			continue
+		}
+		changedOptions[key] = value
+	}
+	return openAIRealtimeSessionFromOptionEntries(changedOptions), changedOptions
+}
+
+func openAIRealtimeOptionEntries(session map[string]any) map[string]any {
+	entries := make(map[string]any)
+	if value, ok := session["tool_choice"]; ok {
+		entries["tool_choice"] = value
+	}
+	if value, ok := session["max_output_tokens"]; ok {
+		entries["max_output_tokens"] = value
+	}
+	if value, ok := session["truncation"]; ok {
+		entries["truncation"] = value
+	}
+	if value, ok := session["tracing"]; ok {
+		entries["tracing"] = value
+	}
+	audio, _ := session["audio"].(map[string]any)
+	input, _ := audio["input"].(map[string]any)
+	if value, ok := input["turn_detection"]; ok {
+		entries["audio.input.turn_detection"] = value
+	}
+	if value, ok := input["transcription"]; ok {
+		entries["audio.input.transcription"] = value
+	}
+	if value, ok := input["noise_reduction"]; ok {
+		entries["audio.input.noise_reduction"] = value
+	}
+	output, _ := audio["output"].(map[string]any)
+	if value, ok := output["voice"]; ok {
+		entries["audio.output.voice"] = value
+	}
+	if value, ok := output["speed"]; ok {
+		entries["audio.output.speed"] = value
+	}
+	return entries
+}
+
+func openAIRealtimeSessionFromOptionEntries(entries map[string]any) map[string]any {
+	session := make(map[string]any)
+	input := make(map[string]any)
+	output := make(map[string]any)
+	for key, value := range entries {
+		switch key {
+		case "tool_choice", "max_output_tokens", "truncation", "tracing":
+			session[key] = value
+		case "audio.input.turn_detection":
+			input["turn_detection"] = value
+		case "audio.input.transcription":
+			input["transcription"] = value
+		case "audio.input.noise_reduction":
+			input["noise_reduction"] = value
+		case "audio.output.voice":
+			output["voice"] = value
+		case "audio.output.speed":
+			output["speed"] = value
+		}
+	}
+	if len(input) > 0 || len(output) > 0 {
+		audio := make(map[string]any)
+		if len(input) > 0 {
+			audio["input"] = input
+		}
+		if len(output) > 0 {
+			audio["output"] = output
+		}
+		session["audio"] = audio
+	}
+	return session
 }
 
 func openAIRealtimeToolChoice(choice llm.ToolChoice) any {
@@ -448,13 +666,31 @@ func (s *realtimeSession) PushAudio(frame *model.AudioFrame) error {
 	if frame == nil || len(frame.Data) == 0 {
 		return nil
 	}
-
-	b64Audio := base64.StdEncoding.EncodeToString(frame.Data)
-	msg := map[string]any{
-		"type":  "input_audio_buffer.append",
-		"audio": b64Audio,
+	if s.audioBStream == nil {
+		s.audioBStream = newOpenAIRealtimeAudioByteStream()
 	}
-	return s.sendMsg(msg)
+
+	for _, chunk := range s.audioBStream.Write(frame.Data) {
+		msg := map[string]any{
+			"type":  "input_audio_buffer.append",
+			"audio": base64.StdEncoding.EncodeToString(chunk.Data),
+		}
+		if err := s.sendMsg(msg); err != nil {
+			return err
+		}
+		if chunk.SampleRate > 0 {
+			s.pushedDuration += float64(chunk.SamplesPerChannel) / float64(chunk.SampleRate)
+		}
+	}
+	return nil
+}
+
+func newOpenAIRealtimeAudioByteStream() *audio.AudioByteStream {
+	return audio.NewAudioByteStream(
+		openAIRealtimeInputSampleRate,
+		openAIRealtimeInputNumChannels,
+		openAIRealtimeInputSampleRate/10,
+	)
 }
 
 func (s *realtimeSession) PushVideo(frame *images.VideoFrame) error {
@@ -486,7 +722,8 @@ func openAIRealtimeVideoMessage(image *llm.ImageContent) (map[string]any, error)
 	}
 	url := fmt.Sprintf("data:%s;base64,%s", img.MIMEType, base64.StdEncoding.EncodeToString(img.DataBytes))
 	return map[string]any{
-		"type": "conversation.item.create",
+		"type":     "conversation.item.create",
+		"event_id": cavosmath.ShortUUID("video_"),
 		"item": map[string]any{
 			"type": "message",
 			"role": "user",
@@ -501,7 +738,10 @@ func openAIRealtimeVideoMessage(image *llm.ImageContent) (map[string]any, error)
 }
 
 func (s *realtimeSession) GenerateReply(options llm.RealtimeGenerateReplyOptions) error {
-	return s.sendMsg(openAIRealtimeGenerateReplyMessage(options))
+	s.mu.Lock()
+	instructions := s.instructions
+	s.mu.Unlock()
+	return s.sendMsg(openAIRealtimeGenerateReplyMessageWithSessionInstructions(options, instructions))
 }
 
 func (s *realtimeSession) Say(text string) error {
@@ -509,7 +749,16 @@ func (s *realtimeSession) Say(text string) error {
 }
 
 func openAIRealtimeGenerateReplyMessage(options llm.RealtimeGenerateReplyOptions) map[string]any {
+	return openAIRealtimeGenerateReplyMessageWithSessionInstructions(options, "")
+}
+
+func openAIRealtimeGenerateReplyMessageWithSessionInstructions(options llm.RealtimeGenerateReplyOptions, sessionInstructions string) map[string]any {
 	response := make(map[string]any)
+	eventID := cavosmath.ShortUUID("response_create_")
+	response["metadata"] = map[string]any{"client_event_id": eventID}
+	if sessionInstructions != "" && options.Instructions != "" {
+		options.Instructions = sessionInstructions + "\n" + options.Instructions
+	}
 	if options.Instructions != "" {
 		response["instructions"] = options.Instructions
 	}
@@ -522,6 +771,7 @@ func openAIRealtimeGenerateReplyMessage(options llm.RealtimeGenerateReplyOptions
 
 	return map[string]any{
 		"type":     "response.create",
+		"event_id": eventID,
 		"response": response,
 	}
 }
@@ -592,7 +842,14 @@ func openAIRealtimeTruncatedTranscriptChatContext(oldCtx *llm.ChatContext, optio
 }
 
 func (s *realtimeSession) CommitAudio() error {
-	return s.sendMsg(openAIRealtimeCommitAudioMessage())
+	if s.pushedDuration <= 0.1 {
+		return nil
+	}
+	if err := s.sendMsg(openAIRealtimeCommitAudioMessage()); err != nil {
+		return err
+	}
+	s.pushedDuration = 0
+	return nil
 }
 
 func openAIRealtimeCommitAudioMessage() map[string]any {
@@ -602,7 +859,11 @@ func openAIRealtimeCommitAudioMessage() map[string]any {
 }
 
 func (s *realtimeSession) ClearAudio() error {
-	return s.sendMsg(openAIRealtimeClearAudioMessage())
+	if err := s.sendMsg(openAIRealtimeClearAudioMessage()); err != nil {
+		return err
+	}
+	s.pushedDuration = 0
+	return nil
 }
 
 func openAIRealtimeClearAudioMessage() map[string]any {

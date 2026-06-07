@@ -297,6 +297,90 @@ func TestRealtimeSessionOptionsExposeToolChoice(t *testing.T) {
 	}
 }
 
+func TestRealtimeSessionOptionsExposeVoice(t *testing.T) {
+	options := RealtimeSessionOptions{
+		Voice: "marin",
+	}
+
+	if options.Voice != "marin" {
+		t.Fatalf("Voice = %q, want marin", options.Voice)
+	}
+}
+
+func TestRealtimeSessionOptionsExposeSpeed(t *testing.T) {
+	options := RealtimeSessionOptions{
+		Speed: 1.25,
+	}
+
+	if options.Speed != 1.25 {
+		t.Fatalf("Speed = %v, want 1.25", options.Speed)
+	}
+}
+
+func TestRealtimeSessionOptionsExposeMaxResponseOutputTokens(t *testing.T) {
+	options := RealtimeSessionOptions{
+		MaxResponseOutputTokens: 64,
+	}
+
+	if options.MaxResponseOutputTokens != 64 {
+		t.Fatalf("MaxResponseOutputTokens = %#v, want 64", options.MaxResponseOutputTokens)
+	}
+}
+
+func TestRealtimeSessionOptionsExposeTruncation(t *testing.T) {
+	options := RealtimeSessionOptions{
+		Truncation: "disabled",
+	}
+
+	if options.Truncation != "disabled" {
+		t.Fatalf("Truncation = %#v, want disabled", options.Truncation)
+	}
+}
+
+func TestRealtimeSessionOptionsExposeTracing(t *testing.T) {
+	options := RealtimeSessionOptions{
+		Tracing: map[string]any{"workflow_name": "checkout"},
+	}
+
+	tracing := options.Tracing.(map[string]any)
+	if tracing["workflow_name"] != "checkout" {
+		t.Fatalf("Tracing = %#v, want workflow_name checkout", options.Tracing)
+	}
+}
+
+func TestRealtimeSessionOptionsExposeTurnDetection(t *testing.T) {
+	options := RealtimeSessionOptions{
+		TurnDetection: map[string]any{"type": "server_vad"},
+	}
+
+	turnDetection := options.TurnDetection.(map[string]any)
+	if turnDetection["type"] != "server_vad" {
+		t.Fatalf("TurnDetection = %#v, want type server_vad", options.TurnDetection)
+	}
+}
+
+func TestRealtimeSessionOptionsExposeInputAudioTranscription(t *testing.T) {
+	options := RealtimeSessionOptions{
+		InputAudioTranscription: map[string]any{"model": "gpt-4o-transcribe"},
+	}
+
+	transcription := options.InputAudioTranscription.(map[string]any)
+	if transcription["model"] != "gpt-4o-transcribe" {
+		t.Fatalf("InputAudioTranscription = %#v, want model gpt-4o-transcribe", options.InputAudioTranscription)
+	}
+}
+
+func TestRealtimeSessionOptionsExposeInputAudioNoiseReduction(t *testing.T) {
+	options := RealtimeSessionOptions{
+		InputAudioNoiseReduction: map[string]any{"type": "near_field"},
+	}
+
+	noiseReduction := options.InputAudioNoiseReduction.(map[string]any)
+	if noiseReduction["type"] != "near_field" {
+		t.Fatalf("InputAudioNoiseReduction = %#v, want type near_field", options.InputAudioNoiseReduction)
+	}
+}
+
 func TestRealtimeGenerateReplyOptionsExposePerResponseOverrides(t *testing.T) {
 	options := RealtimeGenerateReplyOptions{
 		Instructions: "answer briefly",

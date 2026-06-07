@@ -868,7 +868,15 @@ func reflectedRealtimeModelLabel(model RealtimeModel) string {
 }
 
 type RealtimeSessionOptions struct {
-	ToolChoice ToolChoice
+	ToolChoice               ToolChoice
+	Voice                    string
+	Speed                    float64
+	MaxResponseOutputTokens  any
+	Truncation               any
+	Tracing                  any
+	TurnDetection            any
+	InputAudioTranscription  any
+	InputAudioNoiseReduction any
 }
 
 type RealtimeGenerateReplyOptions struct {
