@@ -462,6 +462,7 @@ type AppConfig struct {
 	WorkflowNameFirstName                 *bool
 	WorkflowNameMiddleName                *bool
 	WorkflowNameLastName                  *bool
+	WorkflowNameFormat                    string
 	WorkflowNameVerifySpelling            bool
 	WorkflowNameExtraInstructions         string
 	WorkflowWarmTransferSipCallTo         string
@@ -796,6 +797,7 @@ func DefaultConfigFromEnv() AppConfig {
 		WorkflowNameFirstName:                   getenvOptionalBool("RTP_AGENT_WORKFLOW_NAME_FIRST_NAME"),
 		WorkflowNameMiddleName:                  getenvOptionalBool("RTP_AGENT_WORKFLOW_NAME_MIDDLE_NAME"),
 		WorkflowNameLastName:                    getenvOptionalBool("RTP_AGENT_WORKFLOW_NAME_LAST_NAME"),
+		WorkflowNameFormat:                      os.Getenv("RTP_AGENT_WORKFLOW_NAME_FORMAT"),
 		WorkflowNameVerifySpelling:              getenvBool("RTP_AGENT_WORKFLOW_NAME_VERIFY_SPELLING"),
 		WorkflowNameExtraInstructions:           os.Getenv("RTP_AGENT_WORKFLOW_NAME_EXTRA_INSTRUCTIONS"),
 		WorkflowWarmTransferSipCallTo:           os.Getenv("RTP_AGENT_WORKFLOW_WARM_TRANSFER_SIP_CALL_TO"),
@@ -1080,6 +1082,7 @@ func workflowNameOptionsFromConfig(cfg AppConfig) workflows.GetNameOptions {
 		FirstName:              firstName,
 		MiddleName:             middleName,
 		LastName:               lastName,
+		NameFormat:             cfg.WorkflowNameFormat,
 		VerifySpelling:         cfg.WorkflowNameVerifySpelling,
 		RequireConfirmation:    cfg.WorkflowRequireConfirmation,
 		RequireConfirmationSet: true,

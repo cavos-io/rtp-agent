@@ -20,6 +20,7 @@ type GetNameOptions struct {
 	FirstName              bool
 	MiddleName             bool
 	LastName               bool
+	NameFormat             string
 	VerifySpelling         bool
 	ExtraInstructions      string
 	RequireConfirmation    bool
@@ -63,7 +64,10 @@ func NewGetNameTask(opts GetNameOptions) *GetNameTask {
 	if opts.RequireConfirmationSet {
 		requireConfirmation = opts.RequireConfirmation
 	}
-	nameFormat := buildNameFormat(opts.FirstName, opts.MiddleName, opts.LastName)
+	nameFormat := strings.TrimSpace(opts.NameFormat)
+	if nameFormat == "" {
+		nameFormat = buildNameFormat(opts.FirstName, opts.MiddleName, opts.LastName)
+	}
 	instructions := nameInstructions(requireConfirmation, nameFormat)
 	if opts.VerifySpelling {
 		instructions += "\nAfter receiving the name, always verify the spelling by asking the user to confirm or spell out the name letter by letter. When confirming, spell out each name part letter by letter to the user."
@@ -126,17 +130,16 @@ func (t *GetNameTask) completeName() {
 }
 
 func (t *GetNameTask) fullName() string {
-	parts := make([]string, 0, 3)
-	if t.firstName != "" {
-		parts = append(parts, t.firstName)
+	formatted := t.nameFormat
+	replacements := map[string]string{
+		"{first_name}":  t.firstName,
+		"{middle_name}": t.middleName,
+		"{last_name}":   t.lastName,
 	}
-	if t.middleName != "" {
-		parts = append(parts, t.middleName)
+	for placeholder, value := range replacements {
+		formatted = strings.ReplaceAll(formatted, placeholder, value)
 	}
-	if t.lastName != "" {
-		parts = append(parts, t.lastName)
-	}
-	return strings.Join(parts, " ")
+	return strings.TrimSpace(formatted)
 }
 
 type updateNameTool struct {
