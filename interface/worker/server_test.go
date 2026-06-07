@@ -27,6 +27,48 @@ import (
 	"github.com/livekit/protocol/livekit"
 )
 
+type fakeWorkerHTTPListener struct {
+	closed chan struct{}
+	once   sync.Once
+}
+
+func newFakeWorkerHTTPListener() *fakeWorkerHTTPListener {
+	return &fakeWorkerHTTPListener{closed: make(chan struct{})}
+}
+
+func (l *fakeWorkerHTTPListener) Accept() (net.Conn, error) {
+	<-l.closed
+	return nil, net.ErrClosed
+}
+
+func (l *fakeWorkerHTTPListener) Close() error {
+	l.once.Do(func() {
+		close(l.closed)
+	})
+	return nil
+}
+
+func (l *fakeWorkerHTTPListener) Addr() net.Addr {
+	return &net.TCPAddr{IP: net.ParseIP("127.0.0.1"), Port: 43881}
+}
+
+func stubWorkerHTTPListener(t *testing.T) {
+	t.Helper()
+	oldListen := workerListen
+	workerListen = func(network, address string) (net.Listener, error) {
+		if network != "tcp" {
+			t.Fatalf("workerListen network = %q, want tcp", network)
+		}
+		if address == "" {
+			t.Fatal("workerListen address is empty")
+		}
+		return newFakeWorkerHTTPListener(), nil
+	}
+	t.Cleanup(func() {
+		workerListen = oldListen
+	})
+}
+
 func TestNewAgentServerLoadsLiveKitOptionsFromEnvironment(t *testing.T) {
 	t.Setenv("LIVEKIT_URL", "wss://livekit.example")
 	t.Setenv("LIVEKIT_API_KEY", "env-key")
@@ -3235,6 +3277,7 @@ func TestValidateRunPreconditionsRejectsInvalidLogLevel(t *testing.T) {
 }
 
 func TestRunExportsLiveKitCredentialsBeforeDial(t *testing.T) {
+	stubWorkerHTTPListener(t)
 	t.Setenv("LIVEKIT_URL", "wss://old.example")
 	t.Setenv("LIVEKIT_API_KEY", "old-key")
 	t.Setenv("LIVEKIT_API_SECRET", "old-secret")
@@ -3325,6 +3368,7 @@ func TestRunStartsConfiguredPrometheusServerBeforeDial(t *testing.T) {
 }
 
 func TestRunUnregisteredStartsHTTPAndSkipsLiveKitCredentials(t *testing.T) {
+	stubWorkerHTTPListener(t)
 	server := NewAgentServer(WorkerOptions{DevMode: true, Host: "127.0.0.1"})
 	if err := server.RTCSession(func(*JobContext) error { return nil }, nil, nil); err != nil {
 		t.Fatalf("RTCSession() error = %v", err)

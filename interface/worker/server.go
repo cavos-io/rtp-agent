@@ -102,6 +102,8 @@ var workerRetrySleep = func(ctx context.Context, delay time.Duration) error {
 	}
 }
 
+var workerListen = net.Listen
+
 type WorkerPermissions struct {
 	CanPublish        bool
 	CanSubscribe      bool
@@ -880,7 +882,7 @@ func (s *AgentServer) workerHTTPHandler() http.Handler {
 func (s *AgentServer) startWorkerHTTPServer() (*http.Server, error) {
 	host := s.Options.Host
 	addr := fmt.Sprintf("%s:%d", host, s.Options.Port)
-	ln, err := net.Listen("tcp", addr)
+	ln, err := workerListen("tcp", addr)
 	if err != nil {
 		return nil, err
 	}
