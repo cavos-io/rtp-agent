@@ -115,8 +115,11 @@ func TestGetNameTaskInstructionsIncludeReferenceConfirmationWhenEnabled(t *testi
 	task := NewGetNameTask(GetNameOptions{FirstName: true})
 
 	wantParts := []string{
+		"You need to naturally collect the name parts in this order: {first_name}.",
 		"Call `update_name` at the first opportunity whenever you form a new hypothesis about the name. (before asking any questions or providing any answers.)",
 		"Call `confirm_name` after the user confirmed the name is correct.",
+		"If the name is unclear or it takes too much back-and-forth, prompt for each name part separately.",
+		"Avoid verbosity by not sharing example names or spellings unless prompted to do so. Do not deviate from the goal of collecting the user's name.",
 		"Always explicitly invoke a tool when applicable. Do not simulate tool usage, no real action is taken unless the tool is explicitly called.",
 	}
 	for _, want := range wantParts {
