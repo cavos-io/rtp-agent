@@ -4,11 +4,12 @@ import (
 	"context"
 	"fmt"
 
+	basicagent "github.com/cavos-io/rtp-agent/examples/voice_agents/basic_agent/basicagent"
 	"github.com/cavos-io/rtp-agent/interface/cli"
 )
 
 func main() {
-	rtpApp, err := newBasicAgentApp(basicAgentConfigFromEnv())
+	rtpApp, err := basicagent.NewApp(basicagent.ConfigFromEnv())
 	if err != nil {
 		panic(err)
 	}
