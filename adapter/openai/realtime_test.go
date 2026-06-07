@@ -133,6 +133,9 @@ func TestRealtimeSessionSendsProtocolMessages(t *testing.T) {
 	if req.Header.Get("OpenAI-Beta") != "realtime=v1" {
 		t.Fatalf("OpenAI-Beta = %q, want realtime=v1", req.Header.Get("OpenAI-Beta"))
 	}
+	initialUpdate := <-messages
+	assertRealtimeMessage(t, initialUpdate, "session.update", "gpt-realtime")
+	assertRealtimeMessageEventID(t, initialUpdate, "session_update_")
 
 	select {
 	case ev := <-session.EventCh():

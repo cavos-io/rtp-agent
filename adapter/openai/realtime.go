@@ -97,6 +97,9 @@ type realtimeSession struct {
 const maxRealtimeInputTranscripts = 1024
 const openAIRealtimeInputSampleRate = 24000
 const openAIRealtimeInputNumChannels = 1
+const openAIRealtimeDefaultVoice = "marin"
+const openAIRealtimeDefaultSpeed = 1.0
+const openAIRealtimeDefaultMaxOutputTokens = "inf"
 
 type inputTranscriptKey struct {
 	itemID       string
@@ -149,6 +152,12 @@ func (m *RealtimeModel) Session() (llm.RealtimeSession, error) {
 	}
 
 	go s.eventLoop()
+	initialSession := openAIRealtimeInitialSession(m.model)
+	s.optionsState = openAIRealtimeOptionEntries(initialSession)
+	if err := s.sendMsg(openAIRealtimeInitialSessionUpdateMessage(initialSession)); err != nil {
+		_ = s.Close()
+		return nil, err
+	}
 
 	return s, nil
 }
@@ -189,6 +198,37 @@ func openAIRealtimeSessionURL(baseURL, model string) string {
 
 func defaultOpenAIRealtimeWebsocketDialer(endpoint string, headers http.Header) (*websocket.Conn, *http.Response, error) {
 	return websocket.DefaultDialer.Dial(endpoint, headers)
+}
+
+func openAIRealtimeInitialSession(model string) map[string]any {
+	audioFormat := map[string]any{
+		"type": "audio/pcm",
+		"rate": openAIRealtimeInputSampleRate,
+	}
+	return map[string]any{
+		"type":              "realtime",
+		"model":             model,
+		"output_modalities": []string{"audio"},
+		"audio": map[string]any{
+			"input": map[string]any{
+				"format": audioFormat,
+			},
+			"output": map[string]any{
+				"format": audioFormat,
+				"speed":  openAIRealtimeDefaultSpeed,
+				"voice":  openAIRealtimeDefaultVoice,
+			},
+		},
+		"max_output_tokens": openAIRealtimeDefaultMaxOutputTokens,
+	}
+}
+
+func openAIRealtimeInitialSessionUpdateMessage(session map[string]any) map[string]any {
+	return map[string]any{
+		"type":     "session.update",
+		"event_id": cavosmath.ShortUUID("session_update_"),
+		"session":  session,
+	}
 }
 
 func (s *realtimeSession) EventCh() <-chan llm.RealtimeEvent {
