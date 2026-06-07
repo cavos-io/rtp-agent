@@ -1984,6 +1984,33 @@ func TestDefaultConfigFromEnvRejectsInvalidDtmfNumDigits(t *testing.T) {
 	}
 }
 
+func TestDefaultConfigFromEnvSelectsAddressWorkflowAgent(t *testing.T) {
+	t.Setenv("RTP_AGENT_WORKFLOW_TASK", "address")
+	t.Setenv("RTP_AGENT_WORKFLOW_REQUIRE_CONFIRMATION", "true")
+	t.Setenv("RTP_AGENT_WORKFLOW_ADDRESS_EXTRA_INSTRUCTIONS", "Ask whether this is the shipping address.")
+
+	app, err := NewApp(DefaultConfigFromEnv())
+	if err != nil {
+		t.Fatalf("NewApp() error = %v", err)
+	}
+	task, ok := app.Session.Agent.(*workflows.GetAddressTask)
+	if !ok {
+		t.Fatalf("Session.Agent = %T, want *workflows.GetAddressTask", app.Session.Agent)
+	}
+	if !task.RequireConfirmation {
+		t.Fatal("RequireConfirmation = false, want true")
+	}
+	if !strings.Contains(task.Instructions, "Ask whether this is the shipping address.") {
+		t.Fatalf("Instructions = %q, want address extra instructions", task.Instructions)
+	}
+	if app.Agent != task.GetAgent() {
+		t.Fatal("App.Agent does not point at selected address workflow agent")
+	}
+	if len(app.Agent.Tools) != 2 {
+		t.Fatalf("workflow tools = %d, want update/decline tools", len(app.Agent.Tools))
+	}
+}
+
 func TestDefaultConfigFromEnvSelectsEmailWorkflowAgent(t *testing.T) {
 	t.Setenv("RTP_AGENT_WORKFLOW_TASK", "email")
 	t.Setenv("RTP_AGENT_WORKFLOW_REQUIRE_CONFIRMATION", "true")

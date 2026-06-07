@@ -449,6 +449,7 @@ type AppConfig struct {
 	IVRSilenceDurationSeconds             *float64
 	WorkflowTask                          string
 	WorkflowRequireConfirmation           bool
+	WorkflowAddressExtraInstructions      string
 	WorkflowEmailExtraInstructions        string
 	WorkflowDtmfNumDigits                 *int
 	WorkflowDtmfAskConfirmation           *bool
@@ -773,6 +774,7 @@ func DefaultConfigFromEnv() AppConfig {
 		IVRSilenceDurationSeconds:               getenvOptionalFloat("RTP_AGENT_IVR_SILENCE_DURATION_SECONDS"),
 		WorkflowTask:                            normalizedEnv("RTP_AGENT_WORKFLOW_TASK"),
 		WorkflowRequireConfirmation:             getenvBool("RTP_AGENT_WORKFLOW_REQUIRE_CONFIRMATION"),
+		WorkflowAddressExtraInstructions:        os.Getenv("RTP_AGENT_WORKFLOW_ADDRESS_EXTRA_INSTRUCTIONS"),
 		WorkflowEmailExtraInstructions:          os.Getenv("RTP_AGENT_WORKFLOW_EMAIL_EXTRA_INSTRUCTIONS"),
 		WorkflowDtmfNumDigits:                   getenvOptionalInt("RTP_AGENT_WORKFLOW_DTMF_NUM_DIGITS"),
 		WorkflowDtmfAskConfirmation:             getenvOptionalBool("RTP_AGENT_WORKFLOW_DTMF_ASK_CONFIRMATION"),
@@ -956,6 +958,7 @@ func workflowAgentFromConfig(cfg AppConfig, baseAgent *agent.Agent) (agent.Agent
 		selected = workflows.NewGetAddressTask(workflows.GetAddressOptions{
 			RequireConfirmation:    cfg.WorkflowRequireConfirmation,
 			RequireConfirmationSet: true,
+			Instructions:           workflowInstructionParts(cfg.WorkflowAddressExtraInstructions),
 		})
 	case "email", "get_email":
 		selected = workflows.NewGetEmailTask(workflows.GetEmailOptions{
@@ -1079,6 +1082,7 @@ func workflowTaskFactoryFromName(cfg AppConfig, baseAgent *agent.Agent, taskName
 				return workflows.NewGetAddressTask(workflows.GetAddressOptions{
 					RequireConfirmation:    cfg.WorkflowRequireConfirmation,
 					RequireConfirmationSet: true,
+					Instructions:           workflowInstructionParts(cfg.WorkflowAddressExtraInstructions),
 				})
 			}),
 		}, nil
