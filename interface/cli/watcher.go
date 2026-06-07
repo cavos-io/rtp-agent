@@ -39,6 +39,8 @@ type reloadIPCServer struct {
 	path string
 }
 
+var reloadIPCListen = net.Listen
+
 func (s *reloadIPCServer) Close() error {
 	err := s.Listener.Close()
 	if removeErr := os.Remove(s.path); err == nil && removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) {
@@ -304,7 +306,7 @@ func (w *Watcher) startReloadIPCServer(ctx context.Context, path string) (io.Clo
 	if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return nil, err
 	}
-	listener, err := net.Listen("unix", path)
+	listener, err := reloadIPCListen("unix", path)
 	if err != nil {
 		return nil, err
 	}

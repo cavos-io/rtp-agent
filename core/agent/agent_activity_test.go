@@ -81,6 +81,39 @@ func TestAgentActivityScheduleSpeechPreservesFIFOWithinPriority(t *testing.T) {
 	}
 }
 
+func TestAgentActivityProcessQueueDoesNotDeadlockWhenSpeechCompletesDuringDoneCallbackRegistration(t *testing.T) {
+	agent := NewAgent("test")
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	activity := NewAgentActivity(agent, session)
+	speech := NewSpeechHandle(true, DefaultInputDetails())
+	activity.speechQueue = append(activity.speechQueue, scheduledSpeech{
+		speech:   speech,
+		priority: SpeechPriorityNormal,
+	})
+
+	speech.mu.Lock()
+	done := make(chan struct{})
+	go func() {
+		activity.processQueue()
+		close(done)
+	}()
+
+	select {
+	case <-done:
+		t.Fatal("processQueue returned before done callback registration was released")
+	case <-time.After(10 * time.Millisecond):
+	}
+	close(speech.doneCh)
+	speech.mu.Unlock()
+
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("processQueue deadlocked when done callback ran during registration")
+	}
+	waitForNoCurrentSpeech(t, activity)
+}
+
 func TestAgentActivityRespectsMinConsecutiveSpeechDelay(t *testing.T) {
 	agent := NewAgent("test")
 	session := NewAgentSession(agent, nil, AgentSessionOptions{

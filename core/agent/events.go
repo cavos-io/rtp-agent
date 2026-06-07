@@ -3,7 +3,6 @@ package agent
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"sync"
 	"time"
 
@@ -17,7 +16,13 @@ type Event interface {
 	GetType() string
 }
 
-var ErrFunctionToolEventLengthMismatch = errors.New("function calls and outputs must have the same length")
+var ErrFunctionToolEventLengthMismatch = functionToolEventLengthMismatchError("The number of function_calls and function_call_outputs must match.")
+
+type functionToolEventLengthMismatchError string
+
+func (e functionToolEventLengthMismatchError) Error() string {
+	return string(e)
+}
 
 type UserInputTranscribedEvent struct {
 	Language   string

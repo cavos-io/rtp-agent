@@ -175,6 +175,9 @@ func TestFunctionToolsExecutedEventRequiresParallelLists(t *testing.T) {
 	if !errors.Is(err, ErrFunctionToolEventLengthMismatch) {
 		t.Fatalf("NewFunctionToolsExecutedEvent error = %v, want ErrFunctionToolEventLengthMismatch", err)
 	}
+	if got, want := err.Error(), "The number of function_calls and function_call_outputs must match."; got != want {
+		t.Fatalf("NewFunctionToolsExecutedEvent error message = %q, want reference message %q", got, want)
+	}
 }
 
 func TestFunctionToolsExecutedEventReplyAndHandoffFlagsCanBeCanceled(t *testing.T) {

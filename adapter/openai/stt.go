@@ -39,6 +39,7 @@ type OpenAISTT struct {
 	language       string
 	detectLanguage bool
 	prompt         string
+	noiseReduction string
 	useRealtime    bool
 	dialWebsocket  openAIRealtimeSTTWebsocketDialer
 }
@@ -62,6 +63,12 @@ func WithOpenAISTTDetectLanguage(detect bool) OpenAISTTOption {
 func WithOpenAISTTPrompt(prompt string) OpenAISTTOption {
 	return func(s *OpenAISTT) {
 		s.prompt = prompt
+	}
+}
+
+func WithOpenAISTTNoiseReductionType(noiseReductionType string) OpenAISTTOption {
+	return func(s *OpenAISTT) {
+		s.noiseReduction = noiseReductionType
 	}
 }
 
@@ -207,6 +214,11 @@ func buildOpenAIRealtimeSTTSessionUpdate(s *OpenAISTT) ([]byte, error) {
 			"silence_duration_ms": openAIRealtimeSTTSilenceDurationMS,
 		}
 	}
+	if s.noiseReduction != "" {
+		input["noise_reduction"] = map[string]interface{}{
+			"type": s.noiseReduction,
+		}
+	}
 	return json.Marshal(map[string]interface{}{
 		"type": "session.update",
 		"session": map[string]interface{}{
@@ -219,7 +231,7 @@ func buildOpenAIRealtimeSTTSessionUpdate(s *OpenAISTT) ([]byte, error) {
 }
 
 func openAIRealtimeIsWhisperModel(model string) bool {
-	return model == "gpt-realtime-whisper"
+	return strings.HasPrefix(model, "gpt-realtime-whisper")
 }
 
 func buildOpenAIRealtimeSTTAudioAppendMessage(frame *model.AudioFrame) ([]byte, error) {
@@ -264,17 +276,21 @@ func openAIAudioRequest(s *OpenAISTT, reader io.Reader, language string) openai.
 	if s.detectLanguage {
 		requestLanguage = ""
 	}
-	return openai.AudioRequest{
+	req := openai.AudioRequest{
 		Model:    s.model,
 		FilePath: "audio.wav", // Static filename required by API when Reader is used.
 		Reader:   reader,
 		Language: requestLanguage,
 		Prompt:   s.prompt,
-		Format:   openai.AudioResponseFormatVerboseJSON,
-		TimestampGranularities: []openai.TranscriptionTimestampGranularity{
-			openai.TranscriptionTimestampGranularityWord,
-		},
+		Format:   openai.AudioResponseFormatJSON,
 	}
+	if s.model == "whisper-1" {
+		req.Format = openai.AudioResponseFormatVerboseJSON
+		req.TimestampGranularities = []openai.TranscriptionTimestampGranularity{
+			openai.TranscriptionTimestampGranularityWord,
+		}
+	}
+	return req
 }
 
 func openAISpeechEvent(resp openai.AudioResponse) *stt.SpeechEvent {

@@ -33,6 +33,21 @@ func TestOpenAIAudioRequestAsksForWordTimestamps(t *testing.T) {
 	}
 }
 
+func TestOpenAIAudioRequestUsesJSONForNonWhisperModels(t *testing.T) {
+	provider := mustNewOpenAISTT(t, "test-key", "")
+	req := openAIAudioRequest(provider, strings.NewReader("audio"), "")
+
+	if req.Model != "gpt-4o-mini-transcribe" {
+		t.Fatalf("model = %q, want gpt-4o-mini-transcribe", req.Model)
+	}
+	if req.Format != goopenai.AudioResponseFormatJSON {
+		t.Fatalf("format = %q, want json", req.Format)
+	}
+	if len(req.TimestampGranularities) != 0 {
+		t.Fatalf("timestamp granularities = %#v, want omitted for non-whisper model", req.TimestampGranularities)
+	}
+}
+
 func TestOpenAISpeechEventPreservesWordTimestamps(t *testing.T) {
 	var resp goopenai.AudioResponse
 	if err := json.Unmarshal([]byte(`{
@@ -271,6 +286,53 @@ func TestOpenAIRealtimeSTTSessionUpdateMatchesReference(t *testing.T) {
 	}
 	if input["turn_detection"] == nil {
 		t.Fatalf("turn_detection missing")
+	}
+}
+
+func TestOpenAIRealtimeWhisperVersionOmitsTurnDetection(t *testing.T) {
+	provider := mustNewOpenAISTT(t, "test-key", "gpt-realtime-whisper-2025-06-03",
+		WithOpenAISTTRealtime(true),
+	)
+
+	payload, err := buildOpenAIRealtimeSTTSessionUpdate(provider)
+	if err != nil {
+		t.Fatalf("build session update: %v", err)
+	}
+	var message map[string]any
+	if err := json.Unmarshal(payload, &message); err != nil {
+		t.Fatalf("decode session update: %v", err)
+	}
+	session := message["session"].(map[string]any)
+	audio := session["audio"].(map[string]any)
+	input := audio["input"].(map[string]any)
+	if _, ok := input["turn_detection"]; ok {
+		t.Fatalf("turn_detection = %+v, want omitted for realtime whisper model", input["turn_detection"])
+	}
+}
+
+func TestOpenAIRealtimeSTTSessionUpdateIncludesNoiseReduction(t *testing.T) {
+	provider := mustNewOpenAISTT(t, "test-key", "gpt-4o-mini-transcribe",
+		WithOpenAISTTRealtime(true),
+		WithOpenAISTTNoiseReductionType("near_field"),
+	)
+
+	payload, err := buildOpenAIRealtimeSTTSessionUpdate(provider)
+	if err != nil {
+		t.Fatalf("build session update: %v", err)
+	}
+	var message map[string]any
+	if err := json.Unmarshal(payload, &message); err != nil {
+		t.Fatalf("decode session update: %v", err)
+	}
+	session := message["session"].(map[string]any)
+	audio := session["audio"].(map[string]any)
+	input := audio["input"].(map[string]any)
+	noiseReduction, ok := input["noise_reduction"].(map[string]any)
+	if !ok {
+		t.Fatalf("noise_reduction missing from input config: %+v", input)
+	}
+	if noiseReduction["type"] != "near_field" {
+		t.Fatalf("noise_reduction type = %#v, want near_field", noiseReduction["type"])
 	}
 }
 

@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -1376,6 +1377,22 @@ func TestWatcherStartReloadIPCServerRunsSessionForChildConnection(t *testing.T) 
 	socketPath := tempUnixSocketPath(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+	serverConn, childConn := net.Pipe()
+	defer childConn.Close()
+	listener := newStubReloadIPCListener(serverConn)
+	origListen := reloadIPCListen
+	reloadIPCListen = func(network, address string) (net.Listener, error) {
+		if network != "unix" {
+			t.Fatalf("reload IPC network = %q, want unix", network)
+		}
+		if address != socketPath {
+			t.Fatalf("reload IPC address = %q, want %q", address, socketPath)
+		}
+		return listener, nil
+	}
+	t.Cleanup(func() {
+		reloadIPCListen = origListen
+	})
 
 	closer, err := watcher.startReloadIPCServer(ctx, socketPath)
 	if err != nil {
@@ -1383,20 +1400,54 @@ func TestWatcherStartReloadIPCServerRunsSessionForChildConnection(t *testing.T) 
 	}
 	defer closer.Close()
 
-	conn, err := net.Dial("unix", socketPath)
-	if err != nil {
-		t.Fatalf("dial reload IPC socket: %v", err)
-	}
-	defer conn.Close()
-
-	msg := readIPCMessageWithin(t, conn, time.Second, "initial reload jobs request")
+	msg := readIPCMessageWithin(t, childConn, time.Second, "initial reload jobs request")
 	if msg.Type != ipc.MessageTypeReloadJobsRequest {
 		t.Fatalf("initial request Type = %q, want %q", msg.Type, ipc.MessageTypeReloadJobsRequest)
 	}
-	if err := ipc.WriteMessage(conn, mustIPCMessage(t, &ipc.Reloaded{})); err != nil {
+	if err := ipc.WriteMessage(childConn, mustIPCMessage(t, &ipc.Reloaded{})); err != nil {
 		t.Fatalf("WriteMessage Reloaded: %v", err)
 	}
 }
+
+type stubReloadIPCListener struct {
+	once   sync.Once
+	connC  chan net.Conn
+	closeC chan struct{}
+}
+
+func newStubReloadIPCListener(conn net.Conn) *stubReloadIPCListener {
+	l := &stubReloadIPCListener{
+		connC:  make(chan net.Conn, 1),
+		closeC: make(chan struct{}),
+	}
+	l.connC <- conn
+	return l
+}
+
+func (l *stubReloadIPCListener) Accept() (net.Conn, error) {
+	select {
+	case conn := <-l.connC:
+		return conn, nil
+	case <-l.closeC:
+		return nil, net.ErrClosed
+	}
+}
+
+func (l *stubReloadIPCListener) Close() error {
+	l.once.Do(func() {
+		close(l.closeC)
+	})
+	return nil
+}
+
+func (l *stubReloadIPCListener) Addr() net.Addr {
+	return stubNetAddr("reload-ipc")
+}
+
+type stubNetAddr string
+
+func (a stubNetAddr) Network() string { return string(a) }
+func (a stubNetAddr) String() string  { return string(a) }
 
 type writerFunc func([]byte) (int, error)
 
