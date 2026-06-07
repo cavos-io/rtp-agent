@@ -1944,6 +1944,8 @@ func TestDefaultConfigFromEnvSelectsDtmfWorkflowAgent(t *testing.T) {
 	t.Setenv("RTP_AGENT_WORKFLOW_TASK", "dtmf")
 	t.Setenv("RTP_AGENT_WORKFLOW_DTMF_NUM_DIGITS", "4")
 	t.Setenv("RTP_AGENT_WORKFLOW_DTMF_ASK_CONFIRMATION", "true")
+	t.Setenv("RTP_AGENT_WORKFLOW_DTMF_INPUT_TIMEOUT_SECONDS", "2.5")
+	t.Setenv("RTP_AGENT_WORKFLOW_DTMF_STOP_EVENT", "*")
 	t.Setenv("RTP_AGENT_WORKFLOW_DTMF_EXTRA_INSTRUCTIONS", "Tell the user this is their appointment PIN.")
 
 	app, err := NewApp(DefaultConfigFromEnv())
@@ -1959,6 +1961,12 @@ func TestDefaultConfigFromEnvSelectsDtmfWorkflowAgent(t *testing.T) {
 	}
 	if !task.AskForConfirmation {
 		t.Fatal("AskForConfirmation = false, want true")
+	}
+	if task.DtmfInputTimeout != 2500*time.Millisecond {
+		t.Fatalf("DtmfInputTimeout = %s, want 2.5s", task.DtmfInputTimeout)
+	}
+	if string(task.DtmfStopEvent) != "*" {
+		t.Fatalf("DtmfStopEvent = %q, want *", task.DtmfStopEvent)
 	}
 	if !strings.Contains(task.Instructions, "Tell the user this is their appointment PIN.") {
 		t.Fatalf("Instructions = %q, want DTMF extra instructions", task.Instructions)

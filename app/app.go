@@ -453,6 +453,8 @@ type AppConfig struct {
 	WorkflowEmailExtraInstructions        string
 	WorkflowDtmfNumDigits                 *int
 	WorkflowDtmfAskConfirmation           *bool
+	WorkflowDtmfInputTimeoutSeconds       *float64
+	WorkflowDtmfStopEvent                 string
 	WorkflowDtmfExtraInstructions         string
 	WorkflowPhoneNumberExtraInstructions  string
 	WorkflowDOBExtraInstructions          string
@@ -785,6 +787,8 @@ func DefaultConfigFromEnv() AppConfig {
 		WorkflowEmailExtraInstructions:          os.Getenv("RTP_AGENT_WORKFLOW_EMAIL_EXTRA_INSTRUCTIONS"),
 		WorkflowDtmfNumDigits:                   getenvOptionalInt("RTP_AGENT_WORKFLOW_DTMF_NUM_DIGITS"),
 		WorkflowDtmfAskConfirmation:             getenvOptionalBool("RTP_AGENT_WORKFLOW_DTMF_ASK_CONFIRMATION"),
+		WorkflowDtmfInputTimeoutSeconds:         getenvOptionalFloat("RTP_AGENT_WORKFLOW_DTMF_INPUT_TIMEOUT_SECONDS"),
+		WorkflowDtmfStopEvent:                   os.Getenv("RTP_AGENT_WORKFLOW_DTMF_STOP_EVENT"),
 		WorkflowDtmfExtraInstructions:           os.Getenv("RTP_AGENT_WORKFLOW_DTMF_EXTRA_INSTRUCTIONS"),
 		WorkflowPhoneNumberExtraInstructions:    os.Getenv("RTP_AGENT_WORKFLOW_PHONE_NUMBER_EXTRA_INSTRUCTIONS"),
 		WorkflowDOBExtraInstructions:            os.Getenv("RTP_AGENT_WORKFLOW_DOB_EXTRA_INSTRUCTIONS"),
@@ -1002,19 +1006,7 @@ func workflowAgentFromConfig(cfg AppConfig, baseAgent *agent.Agent) (agent.Agent
 	case "credit_card", "credit-card", "get_credit_card":
 		selected = workflows.NewGetCreditCardTask(cfg.WorkflowRequireConfirmation)
 	case "dtmf", "get_dtmf":
-		numDigits := 1
-		if cfg.WorkflowDtmfNumDigits != nil {
-			numDigits = *cfg.WorkflowDtmfNumDigits
-		}
-		askConfirmation := cfg.WorkflowRequireConfirmation
-		if cfg.WorkflowDtmfAskConfirmation != nil {
-			askConfirmation = *cfg.WorkflowDtmfAskConfirmation
-		}
-		task, err := workflows.NewGetDtmfTaskWithOptions(workflows.GetDtmfOptions{
-			NumDigits:          numDigits,
-			AskForConfirmation: askConfirmation,
-			ExtraInstructions:  cfg.WorkflowDtmfExtraInstructions,
-		})
+		task, err := workflows.NewGetDtmfTaskWithOptions(workflowDtmfOptionsFromConfig(cfg))
 		if err != nil {
 			return nil, err
 		}
@@ -1093,6 +1085,29 @@ func workflowNameOptionsFromConfig(cfg AppConfig) workflows.GetNameOptions {
 		RequireConfirmationSet: true,
 		ExtraInstructions:      cfg.WorkflowNameExtraInstructions,
 	}
+}
+
+func workflowDtmfOptionsFromConfig(cfg AppConfig) workflows.GetDtmfOptions {
+	numDigits := 1
+	if cfg.WorkflowDtmfNumDigits != nil {
+		numDigits = *cfg.WorkflowDtmfNumDigits
+	}
+	askConfirmation := cfg.WorkflowRequireConfirmation
+	if cfg.WorkflowDtmfAskConfirmation != nil {
+		askConfirmation = *cfg.WorkflowDtmfAskConfirmation
+	}
+	opts := workflows.GetDtmfOptions{
+		NumDigits:          numDigits,
+		AskForConfirmation: askConfirmation,
+		ExtraInstructions:  cfg.WorkflowDtmfExtraInstructions,
+	}
+	if cfg.WorkflowDtmfInputTimeoutSeconds != nil {
+		opts.DtmfInputTimeout = time.Duration(*cfg.WorkflowDtmfInputTimeoutSeconds * float64(time.Second))
+	}
+	if stopEvent := strings.TrimSpace(cfg.WorkflowDtmfStopEvent); stopEvent != "" {
+		opts.DtmfStopEvent = beta.DtmfEvent(stopEvent)
+	}
+	return opts
 }
 
 func workflowTaskFactoryFromName(cfg AppConfig, baseAgent *agent.Agent, taskName string) (workflows.FactoryInfo, error) {
@@ -1195,26 +1210,15 @@ func workflowTaskFactoryFromName(cfg AppConfig, baseAgent *agent.Agent, taskName
 			}),
 		}, nil
 	case "dtmf", "get_dtmf":
-		numDigits := 1
-		if cfg.WorkflowDtmfNumDigits != nil {
-			numDigits = *cfg.WorkflowDtmfNumDigits
-		}
-		askConfirmation := cfg.WorkflowRequireConfirmation
-		if cfg.WorkflowDtmfAskConfirmation != nil {
-			askConfirmation = *cfg.WorkflowDtmfAskConfirmation
-		}
-		if err := workflows.ValidateDtmfNumDigits(numDigits); err != nil {
+		opts := workflowDtmfOptionsFromConfig(cfg)
+		if err := workflows.ValidateDtmfNumDigits(opts.NumDigits); err != nil {
 			return workflows.FactoryInfo{}, err
 		}
 		return workflows.FactoryInfo{
 			ID:          "dtmf",
 			Description: "Collect DTMF inputs from the user.",
 			TaskFactory: factory(func() agent.AgentInterface {
-				task, err := workflows.NewGetDtmfTaskWithOptions(workflows.GetDtmfOptions{
-					NumDigits:          numDigits,
-					AskForConfirmation: askConfirmation,
-					ExtraInstructions:  cfg.WorkflowDtmfExtraInstructions,
-				})
+				task, err := workflows.NewGetDtmfTaskWithOptions(opts)
 				if err != nil {
 					panic(fmt.Sprintf("validated DTMF task config rejected: %v", err))
 				}
