@@ -4,7 +4,7 @@ set -euo pipefail
 usage() {
   cat <<'EOF'
 Usage:
-  scripts/parity-gate.sh [--case NAME ...] [--changed] [--all] [--quick]
+  scripts/parity-gate.sh [--case NAME ...] [--changed] [--all] [--quick] [--local]
 
 Options:
   --case NAME  Run only the selected parity validation case. May be repeated.
@@ -16,6 +16,7 @@ Options:
   --quick      Skip the expensive staged-Go analyzer gate.
                Use only for local iteration; run the default full gate before
                treating a parity-sensitive slice as complete.
+  --local      Alias for --changed --quick. Use for fast local iteration only.
   -h, --help   Show help.
 
 The gate always runs shell syntax checks and test-integrity checks. By default
@@ -175,6 +176,12 @@ while (($#)); do
       shift
       ;;
     --quick)
+      QUICK=1
+      shift
+      ;;
+    --local)
+      MODE="changed"
+      CASE_ARGS=()
       QUICK=1
       shift
       ;;

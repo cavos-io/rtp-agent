@@ -33,3 +33,9 @@ PARITY_TEST_CASES_FILE="$MANIFEST" \
 PARITY_GATE_CHANGED_FILES='docs/not-a-case.md' \
   "$ROOT/scripts/parity-gate.sh" --changed --quick > "$WORKDIR/quick.out" 2>&1
 grep -q '^Quick gate: skipping scripts/check-deadcode.sh\. Run scripts/parity-gate.sh before completion\.$' "$WORKDIR/quick.out"
+
+PARITY_TEST_CASES_FILE="$MANIFEST" \
+PARITY_GATE_CHANGED_FILES='library/utils/misc.go' \
+  "$ROOT/scripts/parity-gate.sh" --local > "$WORKDIR/local.out" 2>&1
+grep -q '^\[dev-mode-cross\] ok$' "$WORKDIR/local.out"
+grep -q '^Quick gate: skipping scripts/check-deadcode.sh\. Run scripts/parity-gate.sh before completion\.$' "$WORKDIR/local.out"
