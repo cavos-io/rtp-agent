@@ -129,6 +129,37 @@ func TestGetDtmfTaskDefersPendingReplyWhileUserSpeaking(t *testing.T) {
 	}
 }
 
+func TestGetDtmfTaskDefersPendingReplyWhileAgentThinking(t *testing.T) {
+	task := newDtmfTaskForTest(t, 2, false)
+	task.DtmfInputTimeout = 20 * time.Millisecond
+	session := agent.NewAgentSession(task, nil, agent.AgentSessionOptions{})
+	task.Agent.Start(session, task)
+	defer task.Agent.GetActivity().Stop()
+
+	session.EmitSipDTMF(agent.SipDTMFEvent{Digit: "1", Code: 1})
+	session.EmitSipDTMF(agent.SipDTMFEvent{Digit: "2", Code: 2})
+	session.UpdateAgentState(agent.AgentStateThinking)
+	waitForDtmfTaskAgentState(t, task, agent.AgentStateThinking)
+	time.Sleep(2 * task.DtmfInputTimeout)
+
+	select {
+	case result := <-task.Result:
+		t.Fatalf("task completed with %#v while agent was thinking, want pending input deferred", result)
+	default:
+	}
+
+	session.UpdateAgentState(agent.AgentStateListening)
+
+	select {
+	case result := <-task.Result:
+		if result.UserInput != "1 2" {
+			t.Fatalf("UserInput = %q, want 1 2", result.UserInput)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for DTMF task completion after agent stopped thinking")
+	}
+}
+
 func waitForDtmfTaskUserState(t *testing.T, task *GetDtmfTask, want agent.UserState) {
 	t.Helper()
 
@@ -147,6 +178,29 @@ func waitForDtmfTaskUserState(t *testing.T, task *GetDtmfTask, want agent.UserSt
 		select {
 		case <-deadline:
 			t.Fatalf("DTMF task userState = %q, want %q", got, want)
+		case <-ticker.C:
+		}
+	}
+}
+
+func waitForDtmfTaskAgentState(t *testing.T, task *GetDtmfTask, want agent.AgentState) {
+	t.Helper()
+
+	deadline := time.After(time.Second)
+	ticker := time.NewTicker(time.Millisecond)
+	defer ticker.Stop()
+
+	for {
+		task.mu.Lock()
+		got := task.agentState
+		task.mu.Unlock()
+		if got == want {
+			return
+		}
+
+		select {
+		case <-deadline:
+			t.Fatalf("DTMF task agentState = %q, want %q", got, want)
 		case <-ticker.C:
 		}
 	}
