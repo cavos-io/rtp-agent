@@ -106,6 +106,7 @@ var workerRetrySleep = func(ctx context.Context, delay time.Duration) error {
 
 var workerListen = net.Listen
 var workerPrometheusListen = net.Listen
+var workerReloadIPCDial = net.Dial
 
 type WorkerPermissions struct {
 	CanPublish        bool
@@ -579,7 +580,7 @@ func (s *AgentServer) startReloadIPCSessionFromEnv(ctx context.Context) {
 		return
 	}
 	go func() {
-		conn, err := net.Dial("unix", path)
+		conn, err := workerReloadIPCDial("unix", path)
 		if err != nil {
 			logger.Logger.Errorw("failed to connect reload IPC", err, "path", path)
 			return

@@ -1950,11 +1950,24 @@ func TestAgentServerRunReloadIPCSessionRequestsThenProcessesMessages(t *testing.
 
 func TestAgentServerStartReloadIPCSessionFromEnvDialsUnixSocket(t *testing.T) {
 	socketPath := tempWorkerUnixSocketPath(t)
-	listener, err := net.Listen("unix", socketPath)
-	if err != nil {
-		t.Fatalf("Listen unix: %v", err)
+	workerConn, watcherConn := net.Pipe()
+	t.Cleanup(func() {
+		workerConn.Close()
+		watcherConn.Close()
+	})
+	oldDial := workerReloadIPCDial
+	workerReloadIPCDial = func(network, address string) (net.Conn, error) {
+		if network != "unix" {
+			t.Fatalf("reload IPC network = %q, want unix", network)
+		}
+		if address != socketPath {
+			t.Fatalf("reload IPC address = %q, want %q", address, socketPath)
+		}
+		return workerConn, nil
 	}
-	defer listener.Close()
+	t.Cleanup(func() {
+		workerReloadIPCDial = oldDial
+	})
 	t.Setenv("RTP_AGENT_RELOAD_IPC", socketPath)
 
 	server := NewAgentServer(WorkerOptions{})
@@ -1962,37 +1975,30 @@ func TestAgentServerStartReloadIPCSessionFromEnvDialsUnixSocket(t *testing.T) {
 	defer cancel()
 	server.startReloadIPCSessionFromEnv(ctx)
 
-	connCh := make(chan net.Conn, 1)
-	errCh := make(chan error, 1)
-	go func() {
-		conn, err := listener.Accept()
-		if err != nil {
-			errCh <- err
-			return
-		}
-		connCh <- conn
-	}()
-
-	var conn net.Conn
-	select {
-	case conn = <-connCh:
-	case err := <-errCh:
-		t.Fatalf("Accept reload IPC connection: %v", err)
-	case <-time.After(time.Second):
-		t.Fatal("worker did not dial reload IPC socket")
-	}
-	defer conn.Close()
-
-	if err := conn.SetReadDeadline(time.Now().Add(time.Second)); err != nil {
+	if err := watcherConn.SetReadDeadline(time.Now().Add(time.Second)); err != nil {
 		t.Fatalf("SetReadDeadline: %v", err)
 	}
-	msg, err := ipc.ReadMessage(conn)
+	msg, err := ipc.ReadMessage(watcherConn)
 	if err != nil {
 		t.Fatalf("ReadMessage initial reload request: %v", err)
 	}
 	if msg.Type != ipc.MessageTypeReloadJobsRequest {
 		t.Fatalf("initial request Type = %q, want %q", msg.Type, ipc.MessageTypeReloadJobsRequest)
 	}
+}
+
+func TestAgentServerStartReloadIPCSessionFromEnvSkipsEmptySocketPath(t *testing.T) {
+	oldDial := workerReloadIPCDial
+	workerReloadIPCDial = func(network, address string) (net.Conn, error) {
+		t.Fatalf("workerReloadIPCDial called with network=%q address=%q, want no dial without RTP_AGENT_RELOAD_IPC", network, address)
+		return nil, nil
+	}
+	t.Cleanup(func() {
+		workerReloadIPCDial = oldDial
+	})
+
+	server := NewAgentServer(WorkerOptions{})
+	server.startReloadIPCSessionFromEnv(context.Background())
 }
 
 func tempWorkerUnixSocketPath(t *testing.T) string {
