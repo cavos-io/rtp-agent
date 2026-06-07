@@ -168,11 +168,11 @@ func (t *updateNameTool) Execute(ctx context.Context, args string) (string, erro
 	}
 
 	t.task.setConfirmNameTool(firstName, middleName, lastName)
-	guidance := "Prompt the user for confirmation, do not call `confirm_name` directly"
+	fullName := t.task.fullName()
 	if t.task.VerifySpelling {
-		guidance = "Spell out the name letter by letter for verification. " + guidance
+		return fmt.Sprintf("The name has been updated to %s\nSpell out the name letter by letter for verification: %s\nPrompt the user for confirmation, do not call `confirm_name` directly", fullName, fullName), nil
 	}
-	return fmt.Sprintf("The name has been updated to %s\n%s", t.task.fullName(), guidance), nil
+	return fmt.Sprintf("The name has been updated to %s\nRepeat the name back to the user and prompt for confirmation, do not call `confirm_name` directly", fullName), nil
 }
 
 func (t *GetNameTask) validateNameParts(firstName string, middleName string, lastName string) error {

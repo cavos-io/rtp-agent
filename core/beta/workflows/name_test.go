@@ -60,8 +60,11 @@ func TestGetNameTaskRequiresConfirmation(t *testing.T) {
 	if err != nil {
 		t.Fatalf("update Execute() error = %v", err)
 	}
-	if !strings.Contains(out, "Prompt the user for confirmation") {
+	if !strings.Contains(out, "prompt for confirmation") {
 		t.Fatalf("update output = %q, want confirmation guidance", out)
+	}
+	if !strings.Contains(out, "Repeat the name back to the user and prompt for confirmation") {
+		t.Fatalf("update output = %q, want repeat-name confirmation guidance", out)
 	}
 	if len(task.Agent.Tools) != 3 || task.Agent.Tools[2].Name() != "confirm_name" {
 		t.Fatalf("tools = %#v, want confirm_name appended", task.Agent.Tools)
@@ -79,6 +82,19 @@ func TestGetNameTaskRequiresConfirmation(t *testing.T) {
 		}
 	default:
 		t.Fatal("task did not complete after confirmation")
+	}
+}
+
+func TestGetNameTaskVerifySpellingOutputIncludesName(t *testing.T) {
+	task := NewGetNameTask(GetNameOptions{FirstName: true, LastName: true, VerifySpelling: true})
+	update := &updateNameTool{task: task}
+
+	out, err := update.Execute(context.Background(), `{"first_name":"Ada","last_name":"Lovelace"}`)
+	if err != nil {
+		t.Fatalf("update Execute() error = %v", err)
+	}
+	if !strings.Contains(out, "Spell out the name letter by letter for verification: Ada Lovelace") {
+		t.Fatalf("update output = %q, want spell-out guidance with full name", out)
 	}
 }
 
