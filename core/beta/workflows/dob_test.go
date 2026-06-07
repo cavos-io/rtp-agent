@@ -176,6 +176,30 @@ func TestGetDOBTaskCanDisableDefaultConfirmation(t *testing.T) {
 	}
 }
 
+func TestGetDOBTaskInstructionsIncludeReferenceConfirmationWhenEnabled(t *testing.T) {
+	task := NewGetDOBTask(GetDOBOptions{})
+
+	wantParts := []string{
+		"Call `update_dob` at the first opportunity whenever you form a new hypothesis about the date of birth. (before asking any questions or providing any answers.)",
+		"Call `confirm_dob` after the user confirmed the date of birth is correct.",
+		"Avoid verbosity by not sharing example dates or formats unless prompted to do so. Do not deviate from the goal of collecting the user's birthday.",
+		"Always explicitly invoke a tool when applicable. Do not simulate tool usage, no real action is taken unless the tool is explicitly called.",
+	}
+	for _, want := range wantParts {
+		if !strings.Contains(task.Instructions, want) {
+			t.Fatalf("Instructions = %q, want reference instruction %q", task.Instructions, want)
+		}
+	}
+}
+
+func TestGetDOBTaskInstructionsOmitConfirmationWhenDisabled(t *testing.T) {
+	task := NewGetDOBTask(GetDOBOptions{RequireConfirmation: false, RequireConfirmationSet: true})
+
+	if strings.Contains(task.Instructions, "confirm_dob") {
+		t.Fatalf("Instructions = %q, want no confirm_dob guidance when confirmation disabled", task.Instructions)
+	}
+}
+
 func TestDeclineDOBCaptureToolFailsWithReason(t *testing.T) {
 	task := NewGetDOBTask(GetDOBOptions{RequireConfirmationSet: true})
 	tool := &declineDOBCaptureTool{task: task}

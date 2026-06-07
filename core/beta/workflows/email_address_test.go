@@ -104,6 +104,26 @@ func TestGetEmailTaskInstructionsOmitConfirmationWhenDisabled(t *testing.T) {
 	}
 }
 
+func TestGetEmailTaskInstructionsUseReferenceToolGuidance(t *testing.T) {
+	task := NewGetEmailTask(GetEmailOptions{})
+
+	for _, want := range []string{
+		"Call `update_email_address` at the first opportunity whenever you form a new hypothesis about the email. (before asking any questions or providing any answers.)",
+		"Always explicitly invoke a tool when applicable. Do not simulate tool usage, no real action is taken unless the tool is explicitly called.",
+	} {
+		if !strings.Contains(task.Instructions, want) {
+			t.Fatalf("Instructions = %q, want reference guidance %q", task.Instructions, want)
+		}
+	}
+}
+
+func TestGetEmailTaskOnEnterUsesReferencePrompt(t *testing.T) {
+	want := "Ask the user to provide an email address."
+	if got := emailOnEnterPrompt(); got != want {
+		t.Fatalf("emailOnEnterPrompt() = %q, want %q", got, want)
+	}
+}
+
 func TestGetEmailTaskRejectsStaleConfirmation(t *testing.T) {
 	task := NewGetEmailTask(GetEmailOptions{})
 	update := &updateEmailTool{task: task}

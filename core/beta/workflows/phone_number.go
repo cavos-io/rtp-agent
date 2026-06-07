@@ -35,13 +35,14 @@ const phoneNumberConfirmationInstruction = "Call `confirm_phone_number` after th
 const PhoneNumberInstructions = "You are only a single step in a broader system, responsible solely for capturing a phone number.\n" +
 	"Handle input as noisy voice transcription. Expect that users will say phone numbers aloud in grouped digits or with an optional leading plus.\n" +
 	"Normalize common spoken patterns silently: convert spoken digits to numeric form, remove filler words, strip dashes, spaces, parentheses, and dots, and recognize plus at the start as the international prefix.\n" +
-	"Call update_phone_number at the first opportunity whenever you form a new hypothesis about the phone number.\n" +
+	"Call `update_phone_number` at the first opportunity whenever you form a new hypothesis about the phone number. (before asking any questions or providing any answers.)\n" +
 	"Don't invent phone numbers, stick strictly to what the user said.\n" +
 	phoneNumberConfirmationInstruction + "\n" +
 	"If the number is unclear or invalid, or it takes too much back-and-forth, prompt for it in parts: first the area code, then the remaining digits.\n" +
 	"Never repeat the phone number back to the user as a single block of digits. Read it back in groups.\n" +
 	"Ignore unrelated input and avoid going off-topic. Do not generate markdown, greetings, or unnecessary commentary.\n" +
-	"Always explicitly invoke a tool when applicable. Do not simulate tool usage."
+	"Avoid verbosity by not sharing example phone numbers or formats unless prompted to do so. Do not deviate from the goal of collecting the user's phone number.\n" +
+	"Always explicitly invoke a tool when applicable. Do not simulate tool usage, no real action is taken unless the tool is explicitly called."
 
 func NewGetPhoneNumberTask(opts GetPhoneNumberOptions) *GetPhoneNumberTask {
 	requireConfirmation := true

@@ -99,6 +99,20 @@ func TestGetPhoneNumberTaskInstructionsIncludeReferenceConfirmationWhenEnabled(t
 	}
 }
 
+func TestGetPhoneNumberTaskInstructionsUseReferenceBehaviorGuidance(t *testing.T) {
+	task := NewGetPhoneNumberTask(GetPhoneNumberOptions{})
+
+	for _, want := range []string{
+		"Call `update_phone_number` at the first opportunity whenever you form a new hypothesis about the phone number. (before asking any questions or providing any answers.)",
+		"Avoid verbosity by not sharing example phone numbers or formats unless prompted to do so. Do not deviate from the goal of collecting the user's phone number.",
+		"Always explicitly invoke a tool when applicable. Do not simulate tool usage, no real action is taken unless the tool is explicitly called.",
+	} {
+		if !strings.Contains(task.Instructions, want) {
+			t.Fatalf("Instructions = %q, want reference guidance %q", task.Instructions, want)
+		}
+	}
+}
+
 func TestGetPhoneNumberTaskInstructionsOmitConfirmationWhenDisabled(t *testing.T) {
 	task := NewGetPhoneNumberTask(GetPhoneNumberOptions{RequireConfirmation: false, RequireConfirmationSet: true})
 

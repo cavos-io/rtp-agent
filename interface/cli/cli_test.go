@@ -659,6 +659,18 @@ func TestRunWorkerLifecyclePropagatesRunErrors(t *testing.T) {
 	}
 }
 
+func TestWriteWorkerErrorIncludesRunError(t *testing.T) {
+	var out strings.Builder
+
+	writeWorkerError(&out, errors.New("ws_url is required, or set LIVEKIT_URL environment variable"))
+
+	got := out.String()
+	want := "Worker error: ws_url is required, or set LIVEKIT_URL environment variable\n"
+	if got != want {
+		t.Fatalf("worker error output = %q, want %q", got, want)
+	}
+}
+
 func TestRunWorkerLifecyclePropagatesDrainErrors(t *testing.T) {
 	drainErr := errors.New("drain failed")
 	runner := &fakeWorkerLifecycle{runErr: context.Canceled, drainErr: drainErr}

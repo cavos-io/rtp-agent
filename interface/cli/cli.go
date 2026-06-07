@@ -377,8 +377,13 @@ func runWorker(server *worker.AgentServer, devMode bool) {
 	logger.Logger.Infow("Starting worker", "devMode", devMode)
 	if err := runWorkerLifecycle(ctx, server, devMode); err != nil {
 		logger.Logger.Errorw("Worker error", err)
+		writeWorkerError(os.Stderr, err)
 		os.Exit(1)
 	}
+}
+
+func writeWorkerError(w io.Writer, err error) {
+	fmt.Fprintf(w, "Worker error: %v\n", err)
 }
 
 type workerLifecycle interface {

@@ -39,28 +39,37 @@ type GetNameTask struct {
 	lastName            string
 }
 
-const NameInstructions = `You are only a single step in a broader system, responsible solely for capturing the user's name.
+const nameConfirmationInstruction = "Call `confirm_name` after the user confirmed the name is correct."
+
+const nameInstructionsBeforeConfirmation = `You are only a single step in a broader system, responsible solely for capturing the user's name.
+You need to naturally collect the name parts in this order: %s.
 Handle input as noisy voice transcription. Expect users to say names aloud, possibly followed by spelling.
 Normalize common spoken patterns silently, preserve special characters such as hyphens and apostrophes, and capitalize name parts appropriately.
-Call update_name at the first opportunity whenever you form a new hypothesis about the name.
+Call ` + "`update_name`" + ` at the first opportunity whenever you form a new hypothesis about the name. (before asking any questions or providing any answers.)
 Don't invent names, stick strictly to what the user said.
-If the user explicitly declines to provide their name, call decline_name_capture.
-Ignore unrelated input and avoid going off-topic.`
+`
+
+const nameInstructionsAfterConfirmation = `If the user explicitly declines to provide their name, call decline_name_capture.
+If the name is unclear or it takes too much back-and-forth, prompt for each name part separately.
+Ignore unrelated input and avoid going off-topic. Do not generate markdown, greetings, or unnecessary commentary.
+Avoid verbosity by not sharing example names or spellings unless prompted to do so. Do not deviate from the goal of collecting the user's name.
+Always explicitly invoke a tool when applicable. Do not simulate tool usage, no real action is taken unless the tool is explicitly called.`
 
 func NewGetNameTask(opts GetNameOptions) *GetNameTask {
 	if !opts.FirstName && !opts.MiddleName && !opts.LastName {
 		opts.FirstName = true
 	}
-	instructions := NameInstructions
+	requireConfirmation := true
+	if opts.RequireConfirmationSet {
+		requireConfirmation = opts.RequireConfirmation
+	}
+	nameFormat := buildNameFormat(opts.FirstName, opts.MiddleName, opts.LastName)
+	instructions := nameInstructions(requireConfirmation, nameFormat)
 	if opts.VerifySpelling {
 		instructions += "\nAfter receiving the name, always verify the spelling by asking the user to confirm or spell out the name letter by letter."
 	}
 	if strings.TrimSpace(opts.ExtraInstructions) != "" {
 		instructions += "\n" + strings.TrimSpace(opts.ExtraInstructions)
-	}
-	requireConfirmation := true
-	if opts.RequireConfirmationSet {
-		requireConfirmation = opts.RequireConfirmation
 	}
 	t := &GetNameTask{
 		AgentTask:           *agent.NewAgentTask[*GetNameResult](instructions),
@@ -69,13 +78,21 @@ func NewGetNameTask(opts GetNameOptions) *GetNameTask {
 		CollectMiddleName:   opts.MiddleName,
 		CollectLastName:     opts.LastName,
 		VerifySpelling:      opts.VerifySpelling,
+		nameFormat:          nameFormat,
 	}
-	t.nameFormat = t.buildNameFormat()
 	t.Agent.Tools = []llm.Tool{
 		&updateNameTool{task: t},
 		&declineNameCaptureTool{task: t},
 	}
 	return t
+}
+
+func nameInstructions(requireConfirmation bool, nameFormat string) string {
+	beforeConfirmation := fmt.Sprintf(nameInstructionsBeforeConfirmation, nameFormat)
+	if !requireConfirmation {
+		return beforeConfirmation + nameInstructionsAfterConfirmation
+	}
+	return beforeConfirmation + nameConfirmationInstruction + "\n" + nameInstructionsAfterConfirmation
 }
 
 func (t *GetNameTask) OnEnter() {
@@ -86,15 +103,15 @@ func (t *GetNameTask) OnEnter() {
 	}
 }
 
-func (t *GetNameTask) buildNameFormat() string {
+func buildNameFormat(firstName bool, middleName bool, lastName bool) string {
 	parts := make([]string, 0, 3)
-	if t.CollectFirstName {
+	if firstName {
 		parts = append(parts, "{first_name}")
 	}
-	if t.CollectMiddleName {
+	if middleName {
 		parts = append(parts, "{middle_name}")
 	}
-	if t.CollectLastName {
+	if lastName {
 		parts = append(parts, "{last_name}")
 	}
 	return strings.Join(parts, " ")
