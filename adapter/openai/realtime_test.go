@@ -67,6 +67,26 @@ func TestOpenAIRealtimeSessionRequiresAPIKeyBeforeDial(t *testing.T) {
 	}
 }
 
+func TestOpenAIRealtimeSessionUsesEnvBaseURL(t *testing.T) {
+	t.Setenv("OPENAI_BASE_URL", "https://openai.test/openai/v1")
+	model := NewRealtimeModel("test-key", "gpt-realtime")
+	var endpoint string
+	model.dialWebsocket = func(url string, _ http.Header) (*websocket.Conn, *http.Response, error) {
+		endpoint = url
+		return nil, nil, errors.New("stop after endpoint capture")
+	}
+
+	_, err := model.Session()
+
+	if err == nil || !strings.Contains(err.Error(), "stop after endpoint capture") {
+		t.Fatalf("Session() error = %v, want captured dial error", err)
+	}
+	want := "wss://openai.test/openai/v1/realtime?model=gpt-realtime"
+	if endpoint != want {
+		t.Fatalf("endpoint = %q, want %q", endpoint, want)
+	}
+}
+
 func TestRealtimeSessionSendsProtocolMessages(t *testing.T) {
 	messages := make(chan string, 32)
 	connected := make(chan *http.Request, 1)

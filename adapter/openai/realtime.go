@@ -7,8 +7,10 @@ import (
 	"fmt"
 	"math"
 	"net/http"
+	"net/url"
 	"os"
 	"reflect"
+	"strings"
 	"sync"
 
 	"github.com/cavos-io/rtp-agent/core/audio"
@@ -38,10 +40,14 @@ func NewRealtimeModel(apiKey, model string) *RealtimeModel {
 	if apiKey == "" {
 		apiKey = os.Getenv("OPENAI_API_KEY")
 	}
+	baseURL := os.Getenv("OPENAI_BASE_URL")
+	if baseURL == "" {
+		baseURL = "https://api.openai.com/v1"
+	}
 	return &RealtimeModel{
 		apiKey:        apiKey,
 		model:         model,
-		baseURL:       "wss://api.openai.com/v1/realtime",
+		baseURL:       openAIRealtimeBaseURL(baseURL),
 		dialWebsocket: defaultOpenAIRealtimeWebsocketDialer,
 	}
 }
@@ -121,7 +127,7 @@ func (m *RealtimeModel) Session() (llm.RealtimeSession, error) {
 	if m.apiKey == "" {
 		return nil, fmt.Errorf("OPENAI_API_KEY is required, either as argument or set OPENAI_API_KEY environment variable")
 	}
-	wsURL := fmt.Sprintf("%s?model=%s", m.baseURL, m.model)
+	wsURL := openAIRealtimeSessionURL(m.baseURL, m.model)
 
 	header := http.Header{}
 	header.Add("Authorization", "Bearer "+m.apiKey)
@@ -145,6 +151,40 @@ func (m *RealtimeModel) Session() (llm.RealtimeSession, error) {
 	go s.eventLoop()
 
 	return s, nil
+}
+
+func openAIRealtimeBaseURL(rawURL string) string {
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return rawURL
+	}
+	switch u.Scheme {
+	case "http":
+		u.Scheme = "ws"
+	case "https":
+		u.Scheme = "wss"
+	}
+	path := strings.TrimRight(u.Path, "/")
+	switch path {
+	case "", "/v1", "/openai", "/openai/v1":
+		u.Path = path + "/realtime"
+	default:
+		u.Path = path
+	}
+	return u.String()
+}
+
+func openAIRealtimeSessionURL(baseURL, model string) string {
+	u, err := url.Parse(baseURL)
+	if err != nil {
+		return fmt.Sprintf("%s?model=%s", baseURL, url.QueryEscape(model))
+	}
+	query := u.Query()
+	if query.Get("model") == "" {
+		query.Set("model", model)
+	}
+	u.RawQuery = query.Encode()
+	return u.String()
 }
 
 func defaultOpenAIRealtimeWebsocketDialer(endpoint string, headers http.Header) (*websocket.Conn, *http.Response, error) {
