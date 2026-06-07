@@ -872,6 +872,7 @@ type RealtimeSessionOptions struct {
 	Voice                   string
 	Speed                   float64
 	MaxResponseOutputTokens any
+	Truncation              any
 }
 
 type RealtimeGenerateReplyOptions struct {

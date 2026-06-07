@@ -407,6 +407,9 @@ func openAIRealtimeUpdateOptionsMessage(options llm.RealtimeSessionOptions) map[
 	if options.MaxResponseOutputTokens != nil {
 		session["max_response_output_tokens"] = options.MaxResponseOutputTokens
 	}
+	if options.Truncation != nil {
+		session["truncation"] = options.Truncation
+	}
 	output := make(map[string]any)
 	if options.Voice != "" {
 		output["voice"] = options.Voice

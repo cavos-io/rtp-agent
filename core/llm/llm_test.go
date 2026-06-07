@@ -327,6 +327,16 @@ func TestRealtimeSessionOptionsExposeMaxResponseOutputTokens(t *testing.T) {
 	}
 }
 
+func TestRealtimeSessionOptionsExposeTruncation(t *testing.T) {
+	options := RealtimeSessionOptions{
+		Truncation: "disabled",
+	}
+
+	if options.Truncation != "disabled" {
+		t.Fatalf("Truncation = %#v, want disabled", options.Truncation)
+	}
+}
+
 func TestRealtimeGenerateReplyOptionsExposePerResponseOverrides(t *testing.T) {
 	options := RealtimeGenerateReplyOptions{
 		Instructions: "answer briefly",

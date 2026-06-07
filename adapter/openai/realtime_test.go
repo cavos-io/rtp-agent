@@ -339,6 +339,20 @@ func TestRealtimeUpdateOptionsMessageMapsMaxResponseOutputTokens(t *testing.T) {
 	}
 }
 
+func TestRealtimeUpdateOptionsMessageMapsTruncation(t *testing.T) {
+	msg := openAIRealtimeUpdateOptionsMessage(llm.RealtimeSessionOptions{
+		Truncation: "disabled",
+	})
+
+	if msg["type"] != "session.update" {
+		t.Fatalf("message type = %#v, want session.update", msg["type"])
+	}
+	session := msg["session"].(map[string]any)
+	if session["truncation"] != "disabled" {
+		t.Fatalf("truncation = %#v, want disabled", session["truncation"])
+	}
+}
+
 func TestRealtimeAudioBufferMessages(t *testing.T) {
 	commit := openAIRealtimeCommitAudioMessage()
 	if commit["type"] != "input_audio_buffer.commit" {
