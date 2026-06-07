@@ -1944,6 +1944,7 @@ func TestDefaultConfigFromEnvSelectsDtmfWorkflowAgent(t *testing.T) {
 	t.Setenv("RTP_AGENT_WORKFLOW_TASK", "dtmf")
 	t.Setenv("RTP_AGENT_WORKFLOW_DTMF_NUM_DIGITS", "4")
 	t.Setenv("RTP_AGENT_WORKFLOW_DTMF_ASK_CONFIRMATION", "true")
+	t.Setenv("RTP_AGENT_WORKFLOW_DTMF_EXTRA_INSTRUCTIONS", "Tell the user this is their appointment PIN.")
 
 	app, err := NewApp(DefaultConfigFromEnv())
 	if err != nil {
@@ -1958,6 +1959,9 @@ func TestDefaultConfigFromEnvSelectsDtmfWorkflowAgent(t *testing.T) {
 	}
 	if !task.AskForConfirmation {
 		t.Fatal("AskForConfirmation = false, want true")
+	}
+	if !strings.Contains(task.Instructions, "Tell the user this is their appointment PIN.") {
+		t.Fatalf("Instructions = %q, want DTMF extra instructions", task.Instructions)
 	}
 	if app.Agent != task.GetAgent() {
 		t.Fatal("App.Agent does not point at selected workflow agent")
@@ -1980,9 +1984,37 @@ func TestDefaultConfigFromEnvRejectsInvalidDtmfNumDigits(t *testing.T) {
 	}
 }
 
+func TestDefaultConfigFromEnvSelectsAddressWorkflowAgent(t *testing.T) {
+	t.Setenv("RTP_AGENT_WORKFLOW_TASK", "address")
+	t.Setenv("RTP_AGENT_WORKFLOW_REQUIRE_CONFIRMATION", "true")
+	t.Setenv("RTP_AGENT_WORKFLOW_ADDRESS_EXTRA_INSTRUCTIONS", "Ask whether this is the shipping address.")
+
+	app, err := NewApp(DefaultConfigFromEnv())
+	if err != nil {
+		t.Fatalf("NewApp() error = %v", err)
+	}
+	task, ok := app.Session.Agent.(*workflows.GetAddressTask)
+	if !ok {
+		t.Fatalf("Session.Agent = %T, want *workflows.GetAddressTask", app.Session.Agent)
+	}
+	if !task.RequireConfirmation {
+		t.Fatal("RequireConfirmation = false, want true")
+	}
+	if !strings.Contains(task.Instructions, "Ask whether this is the shipping address.") {
+		t.Fatalf("Instructions = %q, want address extra instructions", task.Instructions)
+	}
+	if app.Agent != task.GetAgent() {
+		t.Fatal("App.Agent does not point at selected address workflow agent")
+	}
+	if len(app.Agent.Tools) != 2 {
+		t.Fatalf("workflow tools = %d, want update/decline tools", len(app.Agent.Tools))
+	}
+}
+
 func TestDefaultConfigFromEnvSelectsEmailWorkflowAgent(t *testing.T) {
 	t.Setenv("RTP_AGENT_WORKFLOW_TASK", "email")
 	t.Setenv("RTP_AGENT_WORKFLOW_REQUIRE_CONFIRMATION", "true")
+	t.Setenv("RTP_AGENT_WORKFLOW_EMAIL_EXTRA_INSTRUCTIONS", "Ask for the work email address on file.")
 
 	app, err := NewApp(DefaultConfigFromEnv())
 	if err != nil {
@@ -1994,6 +2026,9 @@ func TestDefaultConfigFromEnvSelectsEmailWorkflowAgent(t *testing.T) {
 	}
 	if !task.RequireConfirmation {
 		t.Fatal("RequireConfirmation = false, want true")
+	}
+	if !strings.Contains(task.Instructions, "Ask for the work email address on file.") {
+		t.Fatalf("Instructions = %q, want email extra instructions", task.Instructions)
 	}
 	if app.Agent != task.GetAgent() {
 		t.Fatal("App.Agent does not point at selected workflow agent")
@@ -2009,6 +2044,7 @@ func TestDefaultConfigFromEnvSelectsEmailWorkflowAgent(t *testing.T) {
 func TestDefaultConfigFromEnvSelectsPhoneNumberWorkflowAgent(t *testing.T) {
 	t.Setenv("RTP_AGENT_WORKFLOW_TASK", "phone_number")
 	t.Setenv("RTP_AGENT_WORKFLOW_REQUIRE_CONFIRMATION", "true")
+	t.Setenv("RTP_AGENT_WORKFLOW_PHONE_NUMBER_EXTRA_INSTRUCTIONS", "Ask whether this is a mobile number.")
 
 	app, err := NewApp(DefaultConfigFromEnv())
 	if err != nil {
@@ -2021,6 +2057,9 @@ func TestDefaultConfigFromEnvSelectsPhoneNumberWorkflowAgent(t *testing.T) {
 	if !task.RequireConfirmation {
 		t.Fatal("RequireConfirmation = false, want true")
 	}
+	if !strings.Contains(task.Instructions, "Ask whether this is a mobile number.") {
+		t.Fatalf("Instructions = %q, want phone-number extra instructions", task.Instructions)
+	}
 	if app.Agent != task.GetAgent() {
 		t.Fatal("App.Agent does not point at selected phone-number workflow agent")
 	}
@@ -2032,6 +2071,7 @@ func TestDefaultConfigFromEnvSelectsPhoneNumberWorkflowAgent(t *testing.T) {
 func TestDefaultConfigFromEnvSelectsDOBWorkflowAgent(t *testing.T) {
 	t.Setenv("RTP_AGENT_WORKFLOW_TASK", "dob")
 	t.Setenv("RTP_AGENT_WORKFLOW_REQUIRE_CONFIRMATION", "true")
+	t.Setenv("RTP_AGENT_WORKFLOW_DOB_EXTRA_INSTRUCTIONS", "Ask for the birthdate exactly as shown on the insurance card.")
 
 	app, err := NewApp(DefaultConfigFromEnv())
 	if err != nil {
@@ -2044,6 +2084,9 @@ func TestDefaultConfigFromEnvSelectsDOBWorkflowAgent(t *testing.T) {
 	if !task.RequireConfirmation {
 		t.Fatal("RequireConfirmation = false, want true")
 	}
+	if !strings.Contains(task.Instructions, "Ask for the birthdate exactly as shown on the insurance card.") {
+		t.Fatalf("Instructions = %q, want DOB extra instructions", task.Instructions)
+	}
 	if app.Agent != task.GetAgent() {
 		t.Fatal("App.Agent does not point at selected DOB workflow agent")
 	}
@@ -2055,6 +2098,7 @@ func TestDefaultConfigFromEnvSelectsDOBWorkflowAgent(t *testing.T) {
 func TestDefaultConfigFromEnvSelectsNameWorkflowAgent(t *testing.T) {
 	t.Setenv("RTP_AGENT_WORKFLOW_TASK", "name")
 	t.Setenv("RTP_AGENT_WORKFLOW_REQUIRE_CONFIRMATION", "true")
+	t.Setenv("RTP_AGENT_WORKFLOW_NAME_EXTRA_INSTRUCTIONS", "Ask for the legal name on the account.")
 
 	app, err := NewApp(DefaultConfigFromEnv())
 	if err != nil {
@@ -2066,6 +2110,9 @@ func TestDefaultConfigFromEnvSelectsNameWorkflowAgent(t *testing.T) {
 	}
 	if !task.RequireConfirmation {
 		t.Fatal("RequireConfirmation = false, want true")
+	}
+	if !strings.Contains(task.Instructions, "Ask for the legal name on the account.") {
+		t.Fatalf("Instructions = %q, want name extra instructions", task.Instructions)
 	}
 	if app.Agent != task.GetAgent() {
 		t.Fatal("App.Agent does not point at selected name workflow agent")
@@ -2740,6 +2787,9 @@ func TestDefaultConfigFromEnvSelectsLiveKitInferenceLLM(t *testing.T) {
 	}
 	if got := llm.Provider(app.Session.LLM); got != "livekit" {
 		t.Fatalf("LLM provider = %q, want livekit", got)
+	}
+	if app.Config.LiveKitInferenceAPIKey != "test-livekit-key" || app.Config.LiveKitInferenceAPISecret != "test-livekit-secret" {
+		t.Fatalf("LiveKit inference credentials = %q/%q, want environment values", app.Config.LiveKitInferenceAPIKey, app.Config.LiveKitInferenceAPISecret)
 	}
 	if app.Session.STT == nil {
 		t.Fatal("Session STT is nil")

@@ -77,6 +77,7 @@ import (
 	"github.com/cavos-io/rtp-agent/adapter/upliftai"
 	"github.com/cavos-io/rtp-agent/adapter/xai"
 	"github.com/cavos-io/rtp-agent/core/agent"
+	beta "github.com/cavos-io/rtp-agent/core/beta"
 	betatools "github.com/cavos-io/rtp-agent/core/beta/tools"
 	"github.com/cavos-io/rtp-agent/core/beta/workflows"
 	"github.com/cavos-io/rtp-agent/core/evals"
@@ -448,8 +449,14 @@ type AppConfig struct {
 	IVRSilenceDurationSeconds             *float64
 	WorkflowTask                          string
 	WorkflowRequireConfirmation           bool
+	WorkflowAddressExtraInstructions      string
+	WorkflowEmailExtraInstructions        string
 	WorkflowDtmfNumDigits                 *int
 	WorkflowDtmfAskConfirmation           *bool
+	WorkflowDtmfExtraInstructions         string
+	WorkflowPhoneNumberExtraInstructions  string
+	WorkflowDOBExtraInstructions          string
+	WorkflowNameExtraInstructions         string
 	WorkflowWarmTransferSipCallTo         string
 	WorkflowWarmTransferSipTrunkID        string
 	WorkflowWarmTransferSipHeaders        map[string]string
@@ -760,6 +767,8 @@ func DefaultConfigFromEnv() AppConfig {
 		XAIFileSearchVectorStoreIDs:             splitEnvList("RTP_AGENT_XAI_FILE_SEARCH_VECTOR_STORE_IDS"),
 		XAIFileSearchMaxResults:                 getenvOptionalInt("RTP_AGENT_XAI_FILE_SEARCH_MAX_RESULTS"),
 		GoogleCredentialsFile:                   firstEnv("RTP_AGENT_GOOGLE_CREDENTIALS_FILE", "GOOGLE_APPLICATION_CREDENTIALS"),
+		LiveKitInferenceAPIKey:                  os.Getenv("LIVEKIT_API_KEY"),
+		LiveKitInferenceAPISecret:               os.Getenv("LIVEKIT_API_SECRET"),
 		AppTools:                                splitEnvList("RTP_AGENT_TOOLS"),
 		MCPStdioServers:                         mcpStdioServersFromEnv("RTP_AGENT_MCP_STDIO_SERVERS"),
 		MCPHTTPServers:                          mcpHTTPServersFromEnv("RTP_AGENT_MCP_HTTP_SERVERS"),
@@ -767,8 +776,14 @@ func DefaultConfigFromEnv() AppConfig {
 		IVRSilenceDurationSeconds:               getenvOptionalFloat("RTP_AGENT_IVR_SILENCE_DURATION_SECONDS"),
 		WorkflowTask:                            normalizedEnv("RTP_AGENT_WORKFLOW_TASK"),
 		WorkflowRequireConfirmation:             getenvBool("RTP_AGENT_WORKFLOW_REQUIRE_CONFIRMATION"),
+		WorkflowAddressExtraInstructions:        os.Getenv("RTP_AGENT_WORKFLOW_ADDRESS_EXTRA_INSTRUCTIONS"),
+		WorkflowEmailExtraInstructions:          os.Getenv("RTP_AGENT_WORKFLOW_EMAIL_EXTRA_INSTRUCTIONS"),
 		WorkflowDtmfNumDigits:                   getenvOptionalInt("RTP_AGENT_WORKFLOW_DTMF_NUM_DIGITS"),
 		WorkflowDtmfAskConfirmation:             getenvOptionalBool("RTP_AGENT_WORKFLOW_DTMF_ASK_CONFIRMATION"),
+		WorkflowDtmfExtraInstructions:           os.Getenv("RTP_AGENT_WORKFLOW_DTMF_EXTRA_INSTRUCTIONS"),
+		WorkflowPhoneNumberExtraInstructions:    os.Getenv("RTP_AGENT_WORKFLOW_PHONE_NUMBER_EXTRA_INSTRUCTIONS"),
+		WorkflowDOBExtraInstructions:            os.Getenv("RTP_AGENT_WORKFLOW_DOB_EXTRA_INSTRUCTIONS"),
+		WorkflowNameExtraInstructions:           os.Getenv("RTP_AGENT_WORKFLOW_NAME_EXTRA_INSTRUCTIONS"),
 		WorkflowWarmTransferSipCallTo:           os.Getenv("RTP_AGENT_WORKFLOW_WARM_TRANSFER_SIP_CALL_TO"),
 		WorkflowWarmTransferSipTrunkID:          os.Getenv("RTP_AGENT_WORKFLOW_WARM_TRANSFER_SIP_TRUNK_ID"),
 		WorkflowWarmTransferSipHeaders:          splitEnvStringMap("RTP_AGENT_WORKFLOW_WARM_TRANSFER_SIP_HEADERS"),
@@ -945,21 +960,25 @@ func workflowAgentFromConfig(cfg AppConfig, baseAgent *agent.Agent) (agent.Agent
 		selected = workflows.NewGetAddressTask(workflows.GetAddressOptions{
 			RequireConfirmation:    cfg.WorkflowRequireConfirmation,
 			RequireConfirmationSet: true,
+			Instructions:           workflowInstructionParts(cfg.WorkflowAddressExtraInstructions),
 		})
 	case "email", "get_email":
 		selected = workflows.NewGetEmailTask(workflows.GetEmailOptions{
 			RequireConfirmation:    cfg.WorkflowRequireConfirmation,
 			RequireConfirmationSet: true,
+			Instructions:           workflowInstructionParts(cfg.WorkflowEmailExtraInstructions),
 		})
 	case "phone_number", "phone-number", "phone", "get_phone_number":
 		selected = workflows.NewGetPhoneNumberTask(workflows.GetPhoneNumberOptions{
 			RequireConfirmation:    cfg.WorkflowRequireConfirmation,
 			RequireConfirmationSet: true,
+			ExtraInstructions:      cfg.WorkflowPhoneNumberExtraInstructions,
 		})
 	case "dob", "date_of_birth", "date-of-birth", "get_dob":
 		selected = workflows.NewGetDOBTask(workflows.GetDOBOptions{
 			RequireConfirmation:    cfg.WorkflowRequireConfirmation,
 			RequireConfirmationSet: true,
+			ExtraInstructions:      cfg.WorkflowDOBExtraInstructions,
 		})
 	case "name", "get_name":
 		selected = workflows.NewGetNameTask(workflows.GetNameOptions{
@@ -967,6 +986,7 @@ func workflowAgentFromConfig(cfg AppConfig, baseAgent *agent.Agent) (agent.Agent
 			LastName:               true,
 			RequireConfirmation:    cfg.WorkflowRequireConfirmation,
 			RequireConfirmationSet: true,
+			ExtraInstructions:      cfg.WorkflowNameExtraInstructions,
 		})
 	case "card_number", "card-number", "get_card_number":
 		selected = workflows.NewGetCardNumberTask(cfg.WorkflowRequireConfirmation)
@@ -985,7 +1005,11 @@ func workflowAgentFromConfig(cfg AppConfig, baseAgent *agent.Agent) (agent.Agent
 		if cfg.WorkflowDtmfAskConfirmation != nil {
 			askConfirmation = *cfg.WorkflowDtmfAskConfirmation
 		}
-		task, err := workflows.NewGetDtmfTask(numDigits, askConfirmation)
+		task, err := workflows.NewGetDtmfTaskWithOptions(workflows.GetDtmfOptions{
+			NumDigits:          numDigits,
+			AskForConfirmation: askConfirmation,
+			ExtraInstructions:  cfg.WorkflowDtmfExtraInstructions,
+		})
 		if err != nil {
 			return nil, err
 		}
@@ -995,12 +1019,12 @@ func workflowAgentFromConfig(cfg AppConfig, baseAgent *agent.Agent) (agent.Agent
 		if sipCallTo == "" {
 			return nil, fmt.Errorf("RTP_AGENT_WORKFLOW_WARM_TRANSFER_SIP_CALL_TO is required for warm_transfer workflow")
 		}
-		task, err := workflows.NewWarmTransferTask(
-			sipCallTo,
-			strings.TrimSpace(cfg.WorkflowWarmTransferSipTrunkID),
-			baseAgent.ChatCtx,
-			cfg.WorkflowWarmTransferExtraInstructions,
-		)
+		task, err := workflows.NewWarmTransferTaskWithOptions(workflows.WarmTransferOptions{
+			TargetPhone:       sipCallTo,
+			TrunkID:           strings.TrimSpace(cfg.WorkflowWarmTransferSipTrunkID),
+			ChatContext:       baseAgent.ChatCtx,
+			ExtraInstructions: cfg.WorkflowWarmTransferExtraInstructions,
+		})
 		if err != nil {
 			return nil, err
 		}
@@ -1034,6 +1058,14 @@ func workflowTaskGroupFromConfig(cfg AppConfig, baseAgent *agent.Agent) (*workfl
 	return group, nil
 }
 
+func workflowInstructionParts(extra string) *beta.InstructionParts {
+	extra = strings.TrimSpace(extra)
+	if extra == "" {
+		return nil
+	}
+	return &beta.InstructionParts{Extra: extra}
+}
+
 func workflowTaskFactoryFromName(cfg AppConfig, baseAgent *agent.Agent, taskName string) (workflows.FactoryInfo, error) {
 	task := normalizeProvider(taskName)
 	factory := func(taskFactory func() agent.AgentInterface) func() agent.AgentInterface {
@@ -1052,6 +1084,7 @@ func workflowTaskFactoryFromName(cfg AppConfig, baseAgent *agent.Agent, taskName
 				return workflows.NewGetAddressTask(workflows.GetAddressOptions{
 					RequireConfirmation:    cfg.WorkflowRequireConfirmation,
 					RequireConfirmationSet: true,
+					Instructions:           workflowInstructionParts(cfg.WorkflowAddressExtraInstructions),
 				})
 			}),
 		}, nil
@@ -1063,6 +1096,7 @@ func workflowTaskFactoryFromName(cfg AppConfig, baseAgent *agent.Agent, taskName
 				return workflows.NewGetEmailTask(workflows.GetEmailOptions{
 					RequireConfirmation:    cfg.WorkflowRequireConfirmation,
 					RequireConfirmationSet: true,
+					Instructions:           workflowInstructionParts(cfg.WorkflowEmailExtraInstructions),
 				})
 			}),
 		}, nil
@@ -1074,6 +1108,7 @@ func workflowTaskFactoryFromName(cfg AppConfig, baseAgent *agent.Agent, taskName
 				return workflows.NewGetPhoneNumberTask(workflows.GetPhoneNumberOptions{
 					RequireConfirmation:    cfg.WorkflowRequireConfirmation,
 					RequireConfirmationSet: true,
+					ExtraInstructions:      cfg.WorkflowPhoneNumberExtraInstructions,
 				})
 			}),
 		}, nil
@@ -1085,6 +1120,7 @@ func workflowTaskFactoryFromName(cfg AppConfig, baseAgent *agent.Agent, taskName
 				return workflows.NewGetDOBTask(workflows.GetDOBOptions{
 					RequireConfirmation:    cfg.WorkflowRequireConfirmation,
 					RequireConfirmationSet: true,
+					ExtraInstructions:      cfg.WorkflowDOBExtraInstructions,
 				})
 			}),
 		}, nil
@@ -1098,6 +1134,7 @@ func workflowTaskFactoryFromName(cfg AppConfig, baseAgent *agent.Agent, taskName
 					LastName:               true,
 					RequireConfirmation:    cfg.WorkflowRequireConfirmation,
 					RequireConfirmationSet: true,
+					ExtraInstructions:      cfg.WorkflowNameExtraInstructions,
 				})
 			}),
 		}, nil
@@ -1149,7 +1186,11 @@ func workflowTaskFactoryFromName(cfg AppConfig, baseAgent *agent.Agent, taskName
 			ID:          "dtmf",
 			Description: "Collect DTMF inputs from the user.",
 			TaskFactory: factory(func() agent.AgentInterface {
-				task, err := workflows.NewGetDtmfTask(numDigits, askConfirmation)
+				task, err := workflows.NewGetDtmfTaskWithOptions(workflows.GetDtmfOptions{
+					NumDigits:          numDigits,
+					AskForConfirmation: askConfirmation,
+					ExtraInstructions:  cfg.WorkflowDtmfExtraInstructions,
+				})
 				if err != nil {
 					panic(fmt.Sprintf("validated DTMF task config rejected: %v", err))
 				}
@@ -1165,24 +1206,24 @@ func workflowTaskFactoryFromName(cfg AppConfig, baseAgent *agent.Agent, taskName
 		if sipTrunkID == "" {
 			sipTrunkID = strings.TrimSpace(os.Getenv("LIVEKIT_SIP_OUTBOUND_TRUNK"))
 		}
-		if _, err := workflows.NewWarmTransferTask(
-			sipCallTo,
-			sipTrunkID,
-			baseAgent.ChatCtx,
-			cfg.WorkflowWarmTransferExtraInstructions,
-		); err != nil {
+		if _, err := workflows.NewWarmTransferTaskWithOptions(workflows.WarmTransferOptions{
+			TargetPhone:       sipCallTo,
+			TrunkID:           sipTrunkID,
+			ChatContext:       baseAgent.ChatCtx,
+			ExtraInstructions: cfg.WorkflowWarmTransferExtraInstructions,
+		}); err != nil {
 			return workflows.FactoryInfo{}, err
 		}
 		return workflows.FactoryInfo{
 			ID:          "warm_transfer",
 			Description: "Transfer the caller to a human agent by SIP.",
 			TaskFactory: factory(func() agent.AgentInterface {
-				task, err := workflows.NewWarmTransferTask(
-					sipCallTo,
-					sipTrunkID,
-					baseAgent.ChatCtx,
-					cfg.WorkflowWarmTransferExtraInstructions,
-				)
+				task, err := workflows.NewWarmTransferTaskWithOptions(workflows.WarmTransferOptions{
+					TargetPhone:       sipCallTo,
+					TrunkID:           sipTrunkID,
+					ChatContext:       baseAgent.ChatCtx,
+					ExtraInstructions: cfg.WorkflowWarmTransferExtraInstructions,
+				})
 				if err != nil {
 					panic(fmt.Sprintf("validated warm transfer task config rejected: %v", err))
 				}

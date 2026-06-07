@@ -95,6 +95,9 @@ func (g *TaskGroup) runTasks() {
 		if tool := g.buildOutOfScopeTool(taskID); tool != nil {
 			currentTask.GetAgent().Tools = append(currentTask.GetAgent().Tools, tool)
 		}
+		if g.ChatCtx != nil {
+			_ = currentTask.GetAgent().UpdateChatContext(context.Background(), g.ChatCtx.Copy())
+		}
 
 		var activity *agent.AgentActivity
 		if groupActivity := g.Agent.GetActivity(); groupActivity != nil && groupActivity.Session != nil {
@@ -123,6 +126,11 @@ func (g *TaskGroup) runTasks() {
 				return
 			}
 			results[taskID] = result
+			if g.ChatCtx != nil && currentTask.GetAgent().ChatCtx != nil {
+				g.ChatCtx.Merge(currentTask.GetAgent().ChatCtx.Copy(), llm.ChatContextMergeOptions{
+					ExcludeInstructions: true,
+				})
+			}
 
 			if g.OnTaskCompleted != nil {
 				if err := g.OnTaskCompleted(taskID, result); err != nil {
@@ -143,7 +151,34 @@ func (g *TaskGroup) runTasks() {
 		}
 	}
 
+	if g.SummarizeChatCtx {
+		sessionLLM := taskGroupSessionLLM(g)
+		if sessionLLM == nil {
+			g.Fail(fmt.Errorf("llm must be configured to summarize the chat context"))
+			return
+		}
+		chatCtx := g.ChatCtx
+		if chatCtx == nil {
+			chatCtx = llm.NewChatContext()
+		}
+		summarized, err := chatCtx.Summarize(context.Background(), sessionLLM, llm.ChatContextSummarizeOptions{
+			KeepLastTurns: 0,
+		})
+		if err != nil {
+			g.Fail(err)
+			return
+		}
+		g.ChatCtx = summarized
+	}
+
 	g.Complete(&TaskGroupResult{TaskResults: results})
+}
+
+func taskGroupSessionLLM(g *TaskGroup) llm.LLM {
+	if g == nil || g.Agent.GetActivity() == nil || g.Agent.GetActivity().Session == nil {
+		return nil
+	}
+	return g.Agent.GetActivity().Session.LLM
 }
 
 func (g *TaskGroup) buildOutOfScopeTool(activeTaskID string) llm.Tool {

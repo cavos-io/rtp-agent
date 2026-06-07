@@ -26,6 +26,15 @@ const (
 	DtmfEventD     DtmfEvent = "D"
 )
 
+// InstructionParts customizes reusable workflow instruction sections.
+//
+// A nil Persona preserves the workflow default. A non-nil empty Persona removes
+// that persona section. Extra is appended to the generated workflow prompt.
+type InstructionParts struct {
+	Persona *string
+	Extra   string
+}
+
 func FormatDtmf(events []DtmfEvent) string {
 	var vals []string
 	for _, e := range events {

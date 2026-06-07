@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/cavos-io/rtp-agent/core/agent"
+	beta "github.com/cavos-io/rtp-agent/core/beta"
 	"github.com/cavos-io/rtp-agent/core/llm"
 )
 
@@ -20,6 +21,7 @@ type GetEmailResult struct {
 type GetEmailOptions struct {
 	RequireConfirmation    bool
 	RequireConfirmationSet bool
+	Instructions           *beta.InstructionParts
 }
 
 type GetEmailTask struct {
@@ -31,7 +33,9 @@ type GetEmailTask struct {
 
 const emailConfirmationInstruction = "Call `confirm_email_address` after the user confirmed the email address is correct."
 
-const emailInstructionsBeforeConfirmation = `You are only a single step in a broader system, responsible solely for capturing an email address.
+const emailPersona = "You are only a single step in a broader system, responsible solely for capturing an email address."
+
+const emailInstructionsBeforeConfirmation = emailPersona + `
 Handle input as noisy voice transcription. Expect that users will say emails aloud with formats like:
 - 'john dot doe at gmail dot com'
 - 'susan underscore smith at yahoo dot co dot uk'
@@ -66,6 +70,7 @@ func NewGetEmailTask(opts GetEmailOptions) *GetEmailTask {
 	if !requireConfirmation {
 		instructions = emailInstructionsWithoutConfirmation
 	}
+	instructions = applyInstructionParts(instructions, emailPersona, opts.Instructions)
 	t := &GetEmailTask{
 		AgentTask:           *agent.NewAgentTask[*GetEmailResult](instructions),
 		RequireConfirmation: requireConfirmation,

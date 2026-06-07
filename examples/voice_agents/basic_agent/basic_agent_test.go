@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -121,6 +123,35 @@ func TestBasicAgentConfigMatchesReferenceProvidersAndSessionOptions(t *testing.T
 	}
 	if got := opts.TTSTextReplacements["LiveKit"]; got != "<<ˈ|l|aɪ|v>> <<ˈ|k|ɪ|t>>" {
 		t.Fatalf("LiveKit text replacement = %q, want reference pronunciation", got)
+	}
+}
+
+func TestBasicAgentConfigLoadsDotEnvLikeReferenceExample(t *testing.T) {
+	dir := t.TempDir()
+	t.Chdir(dir)
+	t.Setenv("LIVEKIT_API_KEY", "already-set")
+	oldSecret, hadSecret := os.LookupEnv("LIVEKIT_API_SECRET")
+	if err := os.Unsetenv("LIVEKIT_API_SECRET"); err != nil {
+		t.Fatalf("Unsetenv LIVEKIT_API_SECRET error = %v", err)
+	}
+	t.Cleanup(func() {
+		if hadSecret {
+			_ = os.Setenv("LIVEKIT_API_SECRET", oldSecret)
+			return
+		}
+		_ = os.Unsetenv("LIVEKIT_API_SECRET")
+	})
+	if err := os.WriteFile(filepath.Join(dir, ".env"), []byte("LIVEKIT_API_KEY=from-file\nLIVEKIT_API_SECRET=from-dotenv\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile .env error = %v", err)
+	}
+
+	cfg := basicAgentConfigFromEnv()
+
+	if got := cfg.LiveKitInferenceAPIKey; got != "already-set" {
+		t.Fatalf("LiveKitInferenceAPIKey = %q, want existing environment value preserved", got)
+	}
+	if got := cfg.LiveKitInferenceAPISecret; got != "from-dotenv" {
+		t.Fatalf("LiveKitInferenceAPISecret = %q, want value loaded from .env", got)
 	}
 }
 

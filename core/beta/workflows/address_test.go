@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/cavos-io/rtp-agent/core/agent"
+	"github.com/cavos-io/rtp-agent/core/beta"
 )
 
 func TestGetAddressTaskRecordsAddressWithoutConfirmation(t *testing.T) {
@@ -117,6 +118,40 @@ func TestGetAddressTaskInstructionsUseReferenceToolGuidance(t *testing.T) {
 		if !strings.Contains(task.Instructions, want) {
 			t.Fatalf("Instructions = %q, want reference guidance %q", task.Instructions, want)
 		}
+	}
+}
+
+func TestGetAddressTaskInstructionPartsCustomizePersonaAndExtra(t *testing.T) {
+	customPersona := "You only collect shipping addresses for hardware orders."
+	task := NewGetAddressTask(GetAddressOptions{
+		Instructions: &beta.InstructionParts{
+			Persona: &customPersona,
+			Extra:   "Ask whether the destination is residential or commercial.",
+		},
+	})
+
+	if !strings.Contains(task.Instructions, customPersona) {
+		t.Fatalf("Instructions = %q, want custom persona", task.Instructions)
+	}
+	if strings.Contains(task.Instructions, "responsible solely for capturing an address") {
+		t.Fatalf("Instructions = %q, want default persona replaced", task.Instructions)
+	}
+	if !strings.Contains(task.Instructions, "Ask whether the destination is residential or commercial.") {
+		t.Fatalf("Instructions = %q, want extra instructions appended", task.Instructions)
+	}
+}
+
+func TestGetAddressTaskInstructionPartsCanRemovePersona(t *testing.T) {
+	emptyPersona := ""
+	task := NewGetAddressTask(GetAddressOptions{
+		Instructions: &beta.InstructionParts{Persona: &emptyPersona},
+	})
+
+	if strings.Contains(task.Instructions, "responsible solely for capturing an address") {
+		t.Fatalf("Instructions = %q, want default persona removed", task.Instructions)
+	}
+	if !strings.Contains(task.Instructions, "Call `update_address` at the first opportunity") {
+		t.Fatalf("Instructions = %q, want workflow guidance preserved", task.Instructions)
 	}
 }
 

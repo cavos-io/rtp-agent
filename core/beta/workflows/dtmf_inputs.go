@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -15,6 +16,14 @@ import (
 
 type GetDtmfResult struct {
 	UserInput string
+}
+
+type GetDtmfOptions struct {
+	NumDigits          int
+	AskForConfirmation bool
+	DtmfInputTimeout   time.Duration
+	DtmfStopEvent      beta.DtmfEvent
+	ExtraInstructions  string
 }
 
 type GetDtmfTask struct {
@@ -40,32 +49,50 @@ func ValidateDtmfNumDigits(numDigits int) error {
 }
 
 func NewGetDtmfTask(numDigits int, askConfirmation bool) (*GetDtmfTask, error) {
-	if err := ValidateDtmfNumDigits(numDigits); err != nil {
+	return NewGetDtmfTaskWithOptions(GetDtmfOptions{
+		NumDigits:          numDigits,
+		AskForConfirmation: askConfirmation,
+	})
+}
+
+func NewGetDtmfTaskWithOptions(opts GetDtmfOptions) (*GetDtmfTask, error) {
+	if err := ValidateDtmfNumDigits(opts.NumDigits); err != nil {
 		return nil, err
+	}
+	inputTimeout := opts.DtmfInputTimeout
+	if inputTimeout == 0 {
+		inputTimeout = 4 * time.Second
+	}
+	stopEvent := opts.DtmfStopEvent
+	if stopEvent == "" {
+		stopEvent = beta.DtmfEventPound
 	}
 
 	instructions := `You are a single step in a broader system, responsible solely for gathering digits input from the user. 
 You will either receive a sequence of digits through dtmf events tagged by <dtmf_inputs>, or 
 user will directly say the digits to you. You should be able to handle both cases. `
 
-	if askConfirmation {
+	if opts.AskForConfirmation {
 		instructions += "Once user has confirmed the digits (by verbally spoken or entered manually), call `confirm_inputs` with the inputs."
 	} else {
 		instructions += "If user provides the digits through voice and it is valid, call `record_inputs` with the inputs."
 	}
+	if extra := strings.TrimSpace(opts.ExtraInstructions); extra != "" {
+		instructions += "\n" + extra
+	}
 
 	t := &GetDtmfTask{
 		AgentTask:          *agent.NewAgentTask[*GetDtmfResult](instructions),
-		NumDigits:          numDigits,
-		AskForConfirmation: askConfirmation,
-		DtmfInputTimeout:   4 * time.Second,
-		DtmfStopEvent:      beta.DtmfEventPound,
+		NumDigits:          opts.NumDigits,
+		AskForConfirmation: opts.AskForConfirmation,
+		DtmfInputTimeout:   inputTimeout,
+		DtmfStopEvent:      stopEvent,
 		currDtmfInputs:     make([]beta.DtmfEvent, 0),
 		userState:          agent.UserStateListening,
 		agentState:         agent.AgentStateInitializing,
 	}
 
-	if askConfirmation {
+	if opts.AskForConfirmation {
 		t.Agent.Tools = []llm.Tool{&confirmInputsTool{task: t}}
 	} else {
 		t.Agent.Tools = []llm.Tool{&recordInputsTool{task: t}}

@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/cavos-io/rtp-agent/core/agent"
+	beta "github.com/cavos-io/rtp-agent/core/beta"
 	"github.com/cavos-io/rtp-agent/core/llm"
 	"github.com/cavos-io/rtp-agent/library/logger"
 	"github.com/livekit/protocol/livekit"
@@ -17,7 +18,7 @@ import (
 	"google.golang.org/protobuf/types/known/durationpb"
 )
 
-const WarmTransferBaseInstructions = `# Identity
+const warmTransferPersona = `# Identity
 
 You are an agent that is reaching out to a human agent for help. There has been a previous conversation
 between you and a caller, the conversation history is included below.
@@ -26,7 +27,9 @@ between you and a caller, the conversation history is included below.
 
 Your main goal is to give the human agent sufficient context about why the caller had called in,
 so that the human agent could gain sufficient knowledge to help the caller directly.
+`
 
+const WarmTransferBaseInstructions = warmTransferPersona + `
 # Context
 
 In the conversation, user refers to the human agent, caller refers to the person who's transcript is included.
@@ -45,6 +48,14 @@ give a brief introduction of the conversation so far, and ask if they want to co
 
 type WarmTransferResult struct {
 	HumanAgentIdentity string
+}
+
+type WarmTransferOptions struct {
+	TargetPhone       string
+	TrunkID           string
+	ChatContext       *llm.ChatContext
+	ExtraInstructions string
+	Instructions      *beta.InstructionParts
 }
 
 type WarmTransferTask struct {
@@ -74,8 +85,17 @@ type warmTransferJobContext interface {
 }
 
 func NewWarmTransferTask(targetPhone string, trunkId string, chatCtx *llm.ChatContext, extraInstructions string) (*WarmTransferTask, error) {
-	targetPhone = strings.TrimSpace(targetPhone)
-	trunkId = strings.TrimSpace(trunkId)
+	return NewWarmTransferTaskWithOptions(WarmTransferOptions{
+		TargetPhone:       targetPhone,
+		TrunkID:           trunkId,
+		ChatContext:       chatCtx,
+		ExtraInstructions: extraInstructions,
+	})
+}
+
+func NewWarmTransferTaskWithOptions(opts WarmTransferOptions) (*WarmTransferTask, error) {
+	targetPhone := strings.TrimSpace(opts.TargetPhone)
+	trunkId := strings.TrimSpace(opts.TrunkID)
 	if targetPhone == "" {
 		return nil, fmt.Errorf("`sip_call_to` must be set")
 	}
@@ -87,8 +107,8 @@ func NewWarmTransferTask(targetPhone string, trunkId string, chatCtx *llm.ChatCo
 	}
 
 	prevConvo := ""
-	if chatCtx != nil {
-		for _, msg := range chatCtx.Items {
+	if opts.ChatContext != nil {
+		for _, msg := range opts.ChatContext.Items {
 			if m, ok := msg.(*llm.ChatMessage); ok && (m.Role == llm.ChatRoleUser || m.Role == llm.ChatRoleAssistant) {
 				role := "Caller"
 				if m.Role == llm.ChatRoleAssistant {
@@ -101,7 +121,12 @@ func NewWarmTransferTask(targetPhone string, trunkId string, chatCtx *llm.ChatCo
 		}
 	}
 
-	instructions := fmt.Sprintf(WarmTransferBaseInstructions, prevConvo) + extraInstructions
+	instructions := fmt.Sprintf(WarmTransferBaseInstructions, prevConvo)
+	if opts.Instructions != nil {
+		instructions = applyInstructionParts(instructions, warmTransferPersona, opts.Instructions)
+	} else {
+		instructions += opts.ExtraInstructions
+	}
 
 	t := &WarmTransferTask{
 		AgentTask:          *agent.NewAgentTask[*WarmTransferResult](instructions),
