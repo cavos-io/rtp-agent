@@ -1944,6 +1944,8 @@ func TestDefaultConfigFromEnvSelectsDtmfWorkflowAgent(t *testing.T) {
 	t.Setenv("RTP_AGENT_WORKFLOW_TASK", "dtmf")
 	t.Setenv("RTP_AGENT_WORKFLOW_DTMF_NUM_DIGITS", "4")
 	t.Setenv("RTP_AGENT_WORKFLOW_DTMF_ASK_CONFIRMATION", "true")
+	t.Setenv("RTP_AGENT_WORKFLOW_DTMF_INPUT_TIMEOUT_SECONDS", "2.5")
+	t.Setenv("RTP_AGENT_WORKFLOW_DTMF_STOP_EVENT", "*")
 	t.Setenv("RTP_AGENT_WORKFLOW_DTMF_EXTRA_INSTRUCTIONS", "Tell the user this is their appointment PIN.")
 
 	app, err := NewApp(DefaultConfigFromEnv())
@@ -1959,6 +1961,12 @@ func TestDefaultConfigFromEnvSelectsDtmfWorkflowAgent(t *testing.T) {
 	}
 	if !task.AskForConfirmation {
 		t.Fatal("AskForConfirmation = false, want true")
+	}
+	if task.DtmfInputTimeout != 2500*time.Millisecond {
+		t.Fatalf("DtmfInputTimeout = %s, want 2.5s", task.DtmfInputTimeout)
+	}
+	if string(task.DtmfStopEvent) != "*" {
+		t.Fatalf("DtmfStopEvent = %q, want *", task.DtmfStopEvent)
 	}
 	if !strings.Contains(task.Instructions, "Tell the user this is their appointment PIN.") {
 		t.Fatalf("Instructions = %q, want DTMF extra instructions", task.Instructions)
@@ -1987,6 +1995,7 @@ func TestDefaultConfigFromEnvRejectsInvalidDtmfNumDigits(t *testing.T) {
 func TestDefaultConfigFromEnvSelectsAddressWorkflowAgent(t *testing.T) {
 	t.Setenv("RTP_AGENT_WORKFLOW_TASK", "address")
 	t.Setenv("RTP_AGENT_WORKFLOW_REQUIRE_CONFIRMATION", "true")
+	t.Setenv("RTP_AGENT_WORKFLOW_ADDRESS_PERSONA", "You only collect shipping addresses for hardware orders.")
 	t.Setenv("RTP_AGENT_WORKFLOW_ADDRESS_EXTRA_INSTRUCTIONS", "Ask whether this is the shipping address.")
 
 	app, err := NewApp(DefaultConfigFromEnv())
@@ -2003,6 +2012,12 @@ func TestDefaultConfigFromEnvSelectsAddressWorkflowAgent(t *testing.T) {
 	if !strings.Contains(task.Instructions, "Ask whether this is the shipping address.") {
 		t.Fatalf("Instructions = %q, want address extra instructions", task.Instructions)
 	}
+	if !strings.Contains(task.Instructions, "You only collect shipping addresses for hardware orders.") {
+		t.Fatalf("Instructions = %q, want custom address persona", task.Instructions)
+	}
+	if strings.Contains(task.Instructions, "responsible solely for capturing an address") {
+		t.Fatalf("Instructions = %q, want default address persona replaced", task.Instructions)
+	}
 	if app.Agent != task.GetAgent() {
 		t.Fatal("App.Agent does not point at selected address workflow agent")
 	}
@@ -2014,6 +2029,7 @@ func TestDefaultConfigFromEnvSelectsAddressWorkflowAgent(t *testing.T) {
 func TestDefaultConfigFromEnvSelectsEmailWorkflowAgent(t *testing.T) {
 	t.Setenv("RTP_AGENT_WORKFLOW_TASK", "email")
 	t.Setenv("RTP_AGENT_WORKFLOW_REQUIRE_CONFIRMATION", "true")
+	t.Setenv("RTP_AGENT_WORKFLOW_EMAIL_PERSONA", "You only collect work email addresses for account recovery.")
 	t.Setenv("RTP_AGENT_WORKFLOW_EMAIL_EXTRA_INSTRUCTIONS", "Ask for the work email address on file.")
 
 	app, err := NewApp(DefaultConfigFromEnv())
@@ -2029,6 +2045,12 @@ func TestDefaultConfigFromEnvSelectsEmailWorkflowAgent(t *testing.T) {
 	}
 	if !strings.Contains(task.Instructions, "Ask for the work email address on file.") {
 		t.Fatalf("Instructions = %q, want email extra instructions", task.Instructions)
+	}
+	if !strings.Contains(task.Instructions, "You only collect work email addresses for account recovery.") {
+		t.Fatalf("Instructions = %q, want custom email persona", task.Instructions)
+	}
+	if strings.Contains(task.Instructions, "responsible solely for capturing an email address") {
+		t.Fatalf("Instructions = %q, want default email persona replaced", task.Instructions)
 	}
 	if app.Agent != task.GetAgent() {
 		t.Fatal("App.Agent does not point at selected workflow agent")
@@ -2071,6 +2093,7 @@ func TestDefaultConfigFromEnvSelectsPhoneNumberWorkflowAgent(t *testing.T) {
 func TestDefaultConfigFromEnvSelectsDOBWorkflowAgent(t *testing.T) {
 	t.Setenv("RTP_AGENT_WORKFLOW_TASK", "dob")
 	t.Setenv("RTP_AGENT_WORKFLOW_REQUIRE_CONFIRMATION", "true")
+	t.Setenv("RTP_AGENT_WORKFLOW_DOB_INCLUDE_TIME", "true")
 	t.Setenv("RTP_AGENT_WORKFLOW_DOB_EXTRA_INSTRUCTIONS", "Ask for the birthdate exactly as shown on the insurance card.")
 
 	app, err := NewApp(DefaultConfigFromEnv())
@@ -2084,20 +2107,36 @@ func TestDefaultConfigFromEnvSelectsDOBWorkflowAgent(t *testing.T) {
 	if !task.RequireConfirmation {
 		t.Fatal("RequireConfirmation = false, want true")
 	}
+	if !task.IncludeTime {
+		t.Fatal("IncludeTime = false, want true")
+	}
 	if !strings.Contains(task.Instructions, "Ask for the birthdate exactly as shown on the insurance card.") {
 		t.Fatalf("Instructions = %q, want DOB extra instructions", task.Instructions)
+	}
+	if !strings.Contains(task.Instructions, "Also ask for and capture the time of birth if the user knows it.") {
+		t.Fatalf("Instructions = %q, want DOB time instructions", task.Instructions)
 	}
 	if app.Agent != task.GetAgent() {
 		t.Fatal("App.Agent does not point at selected DOB workflow agent")
 	}
-	if len(app.Agent.Tools) != 2 {
-		t.Fatalf("workflow tools = %d, want update/decline tools", len(app.Agent.Tools))
+	if len(app.Agent.Tools) != 3 {
+		t.Fatalf("workflow tools = %d, want update/decline/time tools", len(app.Agent.Tools))
+	}
+	wantTools := map[string]bool{"update_dob": true, "decline_dob_capture": true, "update_time": true}
+	for _, tool := range app.Agent.Tools {
+		delete(wantTools, tool.Name())
+	}
+	if len(wantTools) != 0 {
+		t.Fatalf("workflow tools = %#v, missing %v", app.Agent.Tools, wantTools)
 	}
 }
 
 func TestDefaultConfigFromEnvSelectsNameWorkflowAgent(t *testing.T) {
 	t.Setenv("RTP_AGENT_WORKFLOW_TASK", "name")
 	t.Setenv("RTP_AGENT_WORKFLOW_REQUIRE_CONFIRMATION", "true")
+	t.Setenv("RTP_AGENT_WORKFLOW_NAME_MIDDLE_NAME", "true")
+	t.Setenv("RTP_AGENT_WORKFLOW_NAME_VERIFY_SPELLING", "true")
+	t.Setenv("RTP_AGENT_WORKFLOW_NAME_FORMAT", "{last_name}, {first_name} {middle_name}")
 	t.Setenv("RTP_AGENT_WORKFLOW_NAME_EXTRA_INSTRUCTIONS", "Ask for the legal name on the account.")
 
 	app, err := NewApp(DefaultConfigFromEnv())
@@ -2111,6 +2150,18 @@ func TestDefaultConfigFromEnvSelectsNameWorkflowAgent(t *testing.T) {
 	if !task.RequireConfirmation {
 		t.Fatal("RequireConfirmation = false, want true")
 	}
+	if !task.CollectFirstName || !task.CollectMiddleName || !task.CollectLastName {
+		t.Fatalf("name parts = first:%t middle:%t last:%t, want all enabled", task.CollectFirstName, task.CollectMiddleName, task.CollectLastName)
+	}
+	if !task.VerifySpelling {
+		t.Fatal("VerifySpelling = false, want true")
+	}
+	if !strings.Contains(task.Instructions, "You need to naturally collect the name parts in this order: {last_name}, {first_name} {middle_name}.") {
+		t.Fatalf("Instructions = %q, want configured name collection order", task.Instructions)
+	}
+	if !strings.Contains(task.Instructions, "After receiving the name, always verify the spelling") {
+		t.Fatalf("Instructions = %q, want spelling verification instructions", task.Instructions)
+	}
 	if !strings.Contains(task.Instructions, "Ask for the legal name on the account.") {
 		t.Fatalf("Instructions = %q, want name extra instructions", task.Instructions)
 	}
@@ -2119,6 +2170,21 @@ func TestDefaultConfigFromEnvSelectsNameWorkflowAgent(t *testing.T) {
 	}
 	if len(app.Agent.Tools) != 2 {
 		t.Fatalf("workflow tools = %d, want update/decline tools", len(app.Agent.Tools))
+	}
+}
+
+func TestDefaultConfigFromEnvRejectsNameWorkflowWithoutSelectedParts(t *testing.T) {
+	t.Setenv("RTP_AGENT_WORKFLOW_TASK", "name")
+	t.Setenv("RTP_AGENT_WORKFLOW_NAME_FIRST_NAME", "false")
+	t.Setenv("RTP_AGENT_WORKFLOW_NAME_MIDDLE_NAME", "false")
+	t.Setenv("RTP_AGENT_WORKFLOW_NAME_LAST_NAME", "false")
+
+	_, err := NewApp(DefaultConfigFromEnv())
+	if err == nil {
+		t.Fatal("NewApp() error = nil, want no selected name parts error")
+	}
+	if !strings.Contains(strings.ToLower(err.Error()), "at least one of first_name, middle_name, or last_name must be true") {
+		t.Fatalf("NewApp() error = %v, want reference selected-name-part error", err)
 	}
 }
 
@@ -2215,9 +2281,12 @@ func TestDefaultConfigFromEnvSelectsWarmTransferWorkflowAgent(t *testing.T) {
 	t.Setenv("RTP_AGENT_WORKFLOW_TASK", "warm_transfer")
 	t.Setenv("RTP_AGENT_WORKFLOW_WARM_TRANSFER_SIP_CALL_TO", "+15550100")
 	t.Setenv("RTP_AGENT_WORKFLOW_WARM_TRANSFER_SIP_TRUNK_ID", "trunk_123")
+	t.Setenv("RTP_AGENT_WORKFLOW_WARM_TRANSFER_SIP_NUMBER", "+15550999")
 	t.Setenv("RTP_AGENT_WORKFLOW_WARM_TRANSFER_SIP_HEADERS", "X-Trace=trace-a,X-Queue=billing")
 	t.Setenv("RTP_AGENT_WORKFLOW_WARM_TRANSFER_DTMF", "ww1234#")
 	t.Setenv("RTP_AGENT_WORKFLOW_WARM_TRANSFER_RINGING_TIMEOUT_SECONDS", "3.5")
+	t.Setenv("RTP_AGENT_WORKFLOW_WARM_TRANSFER_HOLD_AUDIO", "custom-hold.ogg")
+	t.Setenv("RTP_AGENT_WORKFLOW_WARM_TRANSFER_PERSONA", "You brief a licensed support specialist before joining the caller.")
 	t.Setenv("RTP_AGENT_WORKFLOW_WARM_TRANSFER_EXTRA_INSTRUCTIONS", "\nKeep the handoff concise.")
 
 	app, err := NewApp(DefaultConfigFromEnv())
@@ -2234,6 +2303,9 @@ func TestDefaultConfigFromEnvSelectsWarmTransferWorkflowAgent(t *testing.T) {
 	if task.SipTrunkID != "trunk_123" {
 		t.Fatalf("SipTrunkID = %q, want trunk_123", task.SipTrunkID)
 	}
+	if task.SipNumber != "+15550999" {
+		t.Fatalf("SipNumber = %q, want +15550999", task.SipNumber)
+	}
 	if task.SipHeaders["X-Trace"] != "trace-a" || task.SipHeaders["X-Queue"] != "billing" {
 		t.Fatalf("SipHeaders = %#v, want configured SIP headers", task.SipHeaders)
 	}
@@ -2243,11 +2315,42 @@ func TestDefaultConfigFromEnvSelectsWarmTransferWorkflowAgent(t *testing.T) {
 	if task.RingingTimeout != 3500*time.Millisecond {
 		t.Fatalf("RingingTimeout = %v, want 3.5s", task.RingingTimeout)
 	}
+	if task.HoldAudio != "custom-hold.ogg" {
+		t.Fatalf("HoldAudio = %#v, want configured custom hold audio", task.HoldAudio)
+	}
+	if !strings.Contains(task.Instructions, "You brief a licensed support specialist before joining the caller.") {
+		t.Fatalf("Instructions = %q, want custom warm-transfer persona", task.Instructions)
+	}
+	if strings.Contains(task.Instructions, "You are an agent that is reaching out to a human agent for help.") {
+		t.Fatalf("Instructions = %q, want default warm-transfer persona replaced", task.Instructions)
+	}
+	if !strings.Contains(task.Instructions, "Keep the handoff concise.") {
+		t.Fatalf("Instructions = %q, want warm-transfer extra instructions", task.Instructions)
+	}
 	if app.Agent != task.GetAgent() {
 		t.Fatal("App.Agent does not point at selected warm transfer agent")
 	}
 	if len(app.Agent.Tools) != 3 {
 		t.Fatalf("workflow tools = %d, want connect/decline/voicemail tools", len(app.Agent.Tools))
+	}
+}
+
+func TestDefaultConfigFromEnvDisablesWarmTransferHoldAudio(t *testing.T) {
+	t.Setenv("RTP_AGENT_WORKFLOW_TASK", "warm_transfer")
+	t.Setenv("RTP_AGENT_WORKFLOW_WARM_TRANSFER_SIP_CALL_TO", "+15550100")
+	t.Setenv("RTP_AGENT_WORKFLOW_WARM_TRANSFER_SIP_TRUNK_ID", "trunk_123")
+	t.Setenv("RTP_AGENT_WORKFLOW_WARM_TRANSFER_DISABLE_HOLD_AUDIO", "true")
+
+	app, err := NewApp(DefaultConfigFromEnv())
+	if err != nil {
+		t.Fatalf("NewApp() error = %v", err)
+	}
+	task, ok := app.Session.Agent.(*workflows.WarmTransferTask)
+	if !ok {
+		t.Fatalf("Session.Agent = %T, want *workflows.WarmTransferTask", app.Session.Agent)
+	}
+	if task.HoldAudio != nil {
+		t.Fatalf("HoldAudio = %#v, want nil when hold audio is disabled", task.HoldAudio)
 	}
 }
 
@@ -2262,6 +2365,34 @@ func TestDefaultConfigFromEnvRejectsWarmTransferWithoutSIPTrunk(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "LIVEKIT_SIP_OUTBOUND_TRUNK") {
 		t.Fatalf("NewApp() error = %v, want missing outbound trunk error", err)
+	}
+}
+
+func TestDefaultConfigFromEnvSelectsWarmTransferSIPConnection(t *testing.T) {
+	t.Setenv("LIVEKIT_SIP_OUTBOUND_TRUNK", "")
+	t.Setenv("RTP_AGENT_WORKFLOW_TASK", "warm_transfer")
+	t.Setenv("RTP_AGENT_WORKFLOW_WARM_TRANSFER_SIP_CALL_TO", "+15550100")
+	t.Setenv("RTP_AGENT_WORKFLOW_WARM_TRANSFER_SIP_CONNECTION_JSON", `{"hostname":"sip.example.com","destination_country":"US","auth_username":"agent","auth_password":"secret"}`)
+
+	app, err := NewApp(DefaultConfigFromEnv())
+	if err != nil {
+		t.Fatalf("NewApp() error = %v", err)
+	}
+	task, ok := app.Session.Agent.(*workflows.WarmTransferTask)
+	if !ok {
+		t.Fatalf("Session.Agent = %T, want *workflows.WarmTransferTask", app.Session.Agent)
+	}
+	if task.SipTrunkID != "" {
+		t.Fatalf("SipTrunkID = %q, want empty when explicit SIP connection is configured", task.SipTrunkID)
+	}
+	if task.SipConnection == nil {
+		t.Fatal("SipConnection = nil, want configured SIP outbound connection")
+	}
+	if task.SipConnection.GetHostname() != "sip.example.com" ||
+		task.SipConnection.GetDestinationCountry() != "US" ||
+		task.SipConnection.GetAuthUsername() != "agent" ||
+		task.SipConnection.GetAuthPassword() != "secret" {
+		t.Fatalf("SipConnection = %#v, want configured SIP outbound connection", task.SipConnection)
 	}
 }
 

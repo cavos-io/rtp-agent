@@ -15,6 +15,7 @@ import (
 	"github.com/cavos-io/rtp-agent/library/logger"
 	"github.com/livekit/protocol/livekit"
 	lksdk "github.com/livekit/server-sdk-go/v2"
+	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/durationpb"
 )
 
@@ -53,6 +54,10 @@ type WarmTransferResult struct {
 type WarmTransferOptions struct {
 	TargetPhone       string
 	TrunkID           string
+	SipConnection     *livekit.SIPOutboundConfig
+	SipNumber         string
+	HoldAudio         interface{}
+	DisableHoldAudio  bool
 	ChatContext       *llm.ChatContext
 	ExtraInstructions string
 	Instructions      *beta.InstructionParts
@@ -62,6 +67,7 @@ type WarmTransferTask struct {
 	agent.AgentTask[*WarmTransferResult]
 	TargetPhoneNumber string
 	SipTrunkID        string
+	SipConnection     *livekit.SIPOutboundConfig
 	SipNumber         string
 	SipHeaders        map[string]string
 	Dtmf              string
@@ -100,9 +106,11 @@ func NewWarmTransferTaskWithOptions(opts WarmTransferOptions) (*WarmTransferTask
 		return nil, fmt.Errorf("`sip_call_to` must be set")
 	}
 	if trunkId == "" {
-		trunkId = strings.TrimSpace(os.Getenv("LIVEKIT_SIP_OUTBOUND_TRUNK"))
+		if opts.SipConnection == nil {
+			trunkId = strings.TrimSpace(os.Getenv("LIVEKIT_SIP_OUTBOUND_TRUNK"))
+		}
 	}
-	if trunkId == "" {
+	if trunkId == "" && opts.SipConnection == nil {
 		return nil, fmt.Errorf("`LIVEKIT_SIP_OUTBOUND_TRUNK` environment variable, `sip_trunk_id`, or `sip_connection` must be set")
 	}
 
@@ -128,12 +136,28 @@ func NewWarmTransferTaskWithOptions(opts WarmTransferOptions) (*WarmTransferTask
 		instructions += opts.ExtraInstructions
 	}
 
+	sipNumber := strings.TrimSpace(opts.SipNumber)
+	if sipNumber == "" {
+		sipNumber = os.Getenv("LIVEKIT_SIP_NUMBER")
+	}
+	var holdAudio interface{} = agent.AudioConfig{
+		Source: agent.HoldMusic,
+		Volume: 0.8,
+	}
+	if opts.DisableHoldAudio {
+		holdAudio = nil
+	} else if opts.HoldAudio != nil {
+		holdAudio = opts.HoldAudio
+	}
+
 	t := &WarmTransferTask{
 		AgentTask:          *agent.NewAgentTask[*WarmTransferResult](instructions),
 		TargetPhoneNumber:  targetPhone,
 		SipTrunkID:         trunkId,
+		SipConnection:      opts.SipConnection,
 		humanAgentIdentity: "human-agent-sip",
-		SipNumber:          os.Getenv("LIVEKIT_SIP_NUMBER"),
+		SipNumber:          sipNumber,
+		HoldAudio:          holdAudio,
 	}
 
 	t.Agent.Tools = []llm.Tool{
@@ -154,14 +178,9 @@ func (t *WarmTransferTask) OnEnter() {
 		t.callerRoom = activity.Session.Room
 	}
 
-	// In a full implementation, we would start background audio and dial SIP
-	// self.background_audio = BackgroundAudioPlayer()
-	// self.hold_audio = AudioConfig(BuiltinAudioClip.HOLD_MUSIC, volume=0.8)
-
-	t.backgroundAudio = agent.NewBackgroundAudioPlayer(agent.AudioConfig{
-		Source: agent.HoldMusic,
-		Volume: 0.8,
-	}, nil)
+	if t.HoldAudio != nil {
+		t.backgroundAudio = agent.NewBackgroundAudioPlayer(t.HoldAudio, nil)
+	}
 
 	jobCtx, err := t.jobContext()
 	if err != nil {
@@ -178,6 +197,9 @@ func (t *WarmTransferTask) OnEnter() {
 		SipNumber:           t.SipNumber,
 		Headers:             t.SipHeaders,
 		Dtmf:                t.Dtmf,
+	}
+	if t.SipConnection != nil {
+		req.Trunk = proto.Clone(t.SipConnection).(*livekit.SIPOutboundConfig)
 	}
 	if t.RingingTimeout > 0 {
 		req.RingingTimeout = durationpb.New(t.RingingTimeout)

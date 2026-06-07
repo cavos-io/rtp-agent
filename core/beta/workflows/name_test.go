@@ -106,6 +106,28 @@ func TestGetNameTaskVerifySpellingOutputIncludesName(t *testing.T) {
 	}
 }
 
+func TestGetNameTaskCustomNameFormatShapesInstructionsAndOutput(t *testing.T) {
+	task := NewGetNameTask(GetNameOptions{
+		FirstName:  true,
+		MiddleName: true,
+		LastName:   true,
+		NameFormat: "{last_name}, {first_name} {middle_name}",
+	})
+	update := &updateNameTool{task: task}
+
+	if !strings.Contains(task.Instructions, "You need to naturally collect the name parts in this order: {last_name}, {first_name} {middle_name}.") {
+		t.Fatalf("Instructions = %q, want custom name format", task.Instructions)
+	}
+
+	out, err := update.Execute(context.Background(), `{"first_name":"Ada","middle_name":"Byron","last_name":"Lovelace"}`)
+	if err != nil {
+		t.Fatalf("update Execute() error = %v", err)
+	}
+	if !strings.Contains(out, "The name has been updated to Lovelace, Ada Byron") {
+		t.Fatalf("update output = %q, want custom formatted full name", out)
+	}
+}
+
 func TestGetNameTaskCanDisableDefaultConfirmation(t *testing.T) {
 	task := NewGetNameTask(GetNameOptions{FirstName: true, LastName: true, RequireConfirmation: false, RequireConfirmationSet: true})
 	update := &updateNameTool{task: task}
