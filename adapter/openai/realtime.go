@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"math"
 	"net/http"
+	"reflect"
 	"sync"
 
 	"github.com/cavos-io/rtp-agent/core/audio"
@@ -80,6 +81,7 @@ type realtimeSession struct {
 	instructions     string
 	audioBStream     *audio.AudioByteStream
 	pushedDuration   float64
+	optionsSession   map[string]any
 }
 
 const maxRealtimeInputTranscripts = 1024
@@ -418,7 +420,20 @@ func (s *realtimeSession) UpdateOptions(options llm.RealtimeSessionOptions) erro
 	if msg == nil {
 		return nil
 	}
-	return s.sendMsg(msg)
+	session, _ := msg["session"].(map[string]any)
+	s.mu.Lock()
+	if reflect.DeepEqual(s.optionsSession, session) {
+		s.mu.Unlock()
+		return nil
+	}
+	s.mu.Unlock()
+	if err := s.sendMsg(msg); err != nil {
+		return err
+	}
+	s.mu.Lock()
+	s.optionsSession = session
+	s.mu.Unlock()
+	return nil
 }
 
 func openAIRealtimeUpdateOptionsMessage(options llm.RealtimeSessionOptions) map[string]any {
