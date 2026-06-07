@@ -1,4 +1,4 @@
-package main
+package basicagent
 
 import (
 	"context"
@@ -94,7 +94,7 @@ func TestLookupWeatherToolMatchesReferenceContract(t *testing.T) {
 }
 
 func TestBasicAgentConfigMatchesReferenceProvidersAndSessionOptions(t *testing.T) {
-	cfg := basicAgentConfigFromEnv()
+	cfg := ConfigFromEnv()
 
 	if cfg.LLMProvider != "livekit" || cfg.LLMModel != "openai/gpt-4.1-mini" {
 		t.Fatalf("LLM provider/model = %q/%q, want livekit/openai/gpt-4.1-mini", cfg.LLMProvider, cfg.LLMModel)
@@ -145,7 +145,7 @@ func TestBasicAgentConfigLoadsDotEnvLikeReferenceExample(t *testing.T) {
 		t.Fatalf("WriteFile .env error = %v", err)
 	}
 
-	cfg := basicAgentConfigFromEnv()
+	cfg := ConfigFromEnv()
 
 	if got := cfg.LiveKitInferenceAPIKey; got != "already-set" {
 		t.Fatalf("LiveKitInferenceAPIKey = %q, want existing environment value preserved", got)

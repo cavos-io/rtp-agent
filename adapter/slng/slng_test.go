@@ -5,21 +5,28 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/url"
+	"strings"
 	"testing"
 
 	"github.com/cavos-io/rtp-agent/core/stt"
 	"github.com/cavos-io/rtp-agent/core/tts"
 )
 
-func TestSLNGPluginMetadataMatchesReference(t *testing.T) {
-	if PluginTitle != "livekit.plugins.slng" {
-		t.Fatalf("plugin title = %q, want livekit.plugins.slng", PluginTitle)
+func TestSLNGPluginMetadataUsesRTPAgentNamespace(t *testing.T) {
+	if PluginTitle != "rtp-agent.plugins.slng" {
+		t.Fatalf("plugin title = %q, want rtp-agent.plugins.slng", PluginTitle)
 	}
 	if PluginVersion != "1.5.15" {
 		t.Fatalf("plugin version = %q, want reference version", PluginVersion)
 	}
-	if PluginPackage != "livekit.plugins.slng" {
-		t.Fatalf("plugin package = %q, want livekit.plugins.slng", PluginPackage)
+	if PluginPackage != "rtp-agent.plugins.slng" {
+		t.Fatalf("plugin package = %q, want rtp-agent.plugins.slng", PluginPackage)
+	}
+	if strings.HasPrefix(PluginTitle, "livekit.plugins.") {
+		t.Fatalf("plugin title = %q, want rtp-agent namespace", PluginTitle)
+	}
+	if strings.HasPrefix(PluginPackage, "livekit.plugins.") {
+		t.Fatalf("plugin package = %q, want rtp-agent namespace", PluginPackage)
 	}
 }
 

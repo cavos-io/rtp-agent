@@ -1,4 +1,4 @@
-package main
+package basicagent
 
 import (
 	"bufio"
@@ -89,7 +89,7 @@ func (lookupWeatherTool) Execute(ctx context.Context, args string) (string, erro
 	return "sunny with a temperature of 70 degrees.", nil
 }
 
-func basicAgentConfigFromEnv() app.AppConfig {
+func ConfigFromEnv() app.AppConfig {
 	_ = loadBasicAgentDotEnv(".env")
 	cfg := app.DefaultConfigFromEnv()
 	cfg.Instructions = basicAgentInstructions
@@ -171,7 +171,7 @@ func basicAgentSessionOptions() agent.AgentSessionOptions {
 	}
 }
 
-func newBasicAgentApp(cfg app.AppConfig) (*app.App, error) {
+func NewApp(cfg app.AppConfig) (*app.App, error) {
 	rtpApp, err := app.Init(cfg)
 	if err != nil {
 		return nil, err

@@ -17,12 +17,16 @@ type metadataPlugin struct {
 	title       string
 	version     string
 	packageName string
+	download    func() error
 }
 
 func (p metadataPlugin) Title() string   { return p.title }
 func (p metadataPlugin) Version() string { return p.version }
 func (p metadataPlugin) Package() string { return p.packageName }
 func (p metadataPlugin) DownloadFiles() error {
+	if p.download != nil {
+		return p.download()
+	}
 	return nil
 }
 
@@ -36,6 +40,15 @@ func RegisterPluginMetadata(title, version, packageName string) {
 		title:       title,
 		version:     version,
 		packageName: packageName,
+	})
+}
+
+func RegisterPluginDownloader(title, version, packageName string, download func() error) {
+	RegisterPlugin(metadataPlugin{
+		title:       title,
+		version:     version,
+		packageName: packageName,
+		download:    download,
 	})
 }
 

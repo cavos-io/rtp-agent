@@ -15,6 +15,29 @@ import (
 	"testing"
 	"time"
 
+	"github.com/cavos-io/rtp-agent/adapter/anam"
+	"github.com/cavos-io/rtp-agent/adapter/anthropic"
+	"github.com/cavos-io/rtp-agent/adapter/assemblyai"
+	"github.com/cavos-io/rtp-agent/adapter/asyncai"
+	"github.com/cavos-io/rtp-agent/adapter/avatario"
+	"github.com/cavos-io/rtp-agent/adapter/avatartalk"
+	adapteraws "github.com/cavos-io/rtp-agent/adapter/aws"
+	"github.com/cavos-io/rtp-agent/adapter/azure"
+	"github.com/cavos-io/rtp-agent/adapter/baseten"
+	"github.com/cavos-io/rtp-agent/adapter/bey"
+	"github.com/cavos-io/rtp-agent/adapter/bithuman"
+	"github.com/cavos-io/rtp-agent/adapter/cambai"
+	"github.com/cavos-io/rtp-agent/adapter/cartesia"
+	"github.com/cavos-io/rtp-agent/adapter/cerebras"
+	"github.com/cavos-io/rtp-agent/adapter/deepgram"
+	"github.com/cavos-io/rtp-agent/adapter/elevenlabs"
+	"github.com/cavos-io/rtp-agent/adapter/fal"
+	"github.com/cavos-io/rtp-agent/adapter/fireworksai"
+	"github.com/cavos-io/rtp-agent/adapter/fishaudio"
+	"github.com/cavos-io/rtp-agent/adapter/gladia"
+	adaptergoogle "github.com/cavos-io/rtp-agent/adapter/google"
+	"github.com/cavos-io/rtp-agent/adapter/openai"
+	"github.com/cavos-io/rtp-agent/adapter/silero"
 	"github.com/cavos-io/rtp-agent/core/agent"
 	"github.com/cavos-io/rtp-agent/core/audio/model"
 	"github.com/cavos-io/rtp-agent/core/beta/workflows"
@@ -32,13 +55,70 @@ import (
 	lksdk "github.com/livekit/server-sdk-go/v2"
 )
 
-func TestAppRegistersSLNGPluginMetadata(t *testing.T) {
+func TestAppRegistersReferencePluginMetadataBatch(t *testing.T) {
+	expected := map[string]struct {
+		title   string
+		version string
+	}{
+		anam.PluginPackage:       {title: anam.PluginTitle, version: anam.PluginVersion},
+		anthropic.PluginPackage:  {title: anthropic.PluginTitle, version: anthropic.PluginVersion},
+		assemblyai.PluginPackage: {title: assemblyai.PluginTitle, version: assemblyai.PluginVersion},
+		asyncai.PluginPackage:    {title: asyncai.PluginTitle, version: asyncai.PluginVersion},
+		avatario.PluginPackage:   {title: avatario.PluginTitle, version: avatario.PluginVersion},
+		avatartalk.PluginPackage: {title: avatartalk.PluginTitle, version: avatartalk.PluginVersion},
+		adapteraws.PluginPackage: {title: adapteraws.PluginTitle, version: adapteraws.PluginVersion},
+		azure.PluginPackage:      {title: azure.PluginTitle, version: azure.PluginVersion},
+		baseten.PluginPackage:    {title: baseten.PluginTitle, version: baseten.PluginVersion},
+		bey.PluginPackage:        {title: bey.PluginTitle, version: bey.PluginVersion},
+		bithuman.PluginPackage:   {title: bithuman.PluginTitle, version: bithuman.PluginVersion},
+		cambai.PluginPackage:     {title: cambai.PluginTitle, version: cambai.PluginVersion},
+		cartesia.PluginPackage:   {title: cartesia.PluginTitle, version: cartesia.PluginVersion},
+		cerebras.PluginPackage:   {title: cerebras.PluginTitle, version: cerebras.PluginVersion},
+		deepgram.PluginPackage:   {title: deepgram.PluginTitle, version: deepgram.PluginVersion},
+		elevenlabs.PluginPackage: {title: elevenlabs.PluginTitle, version: elevenlabs.PluginVersion},
+		fal.PluginPackage:        {title: fal.PluginTitle, version: fal.PluginVersion},
+		fireworksai.PluginPackage: {
+			title:   fireworksai.PluginTitle,
+			version: fireworksai.PluginVersion,
+		},
+		fishaudio.PluginPackage: {title: fishaudio.PluginTitle, version: fishaudio.PluginVersion},
+		gladia.PluginPackage:    {title: gladia.PluginTitle, version: gladia.PluginVersion},
+		adaptergoogle.PluginPackage: {
+			title:   adaptergoogle.PluginTitle,
+			version: adaptergoogle.PluginVersion,
+		},
+		openai.PluginPackage: {title: openai.PluginTitle, version: openai.PluginVersion},
+	}
+
 	for _, registered := range plugin.RegisteredPlugins() {
-		if registered.Package() != "livekit.plugins.slng" {
+		want, ok := expected[registered.Package()]
+		if !ok {
 			continue
 		}
-		if registered.Title() != "livekit.plugins.slng" {
-			t.Fatalf("plugin title = %q, want livekit.plugins.slng", registered.Title())
+		if registered.Title() != want.title {
+			t.Fatalf("%s title = %q, want %q", registered.Package(), registered.Title(), want.title)
+		}
+		if registered.Version() != want.version {
+			t.Fatalf("%s version = %q, want %q", registered.Package(), registered.Version(), want.version)
+		}
+		delete(expected, registered.Package())
+	}
+	if len(expected) > 0 {
+		missing := make([]string, 0, len(expected))
+		for packageName := range expected {
+			missing = append(missing, packageName)
+		}
+		t.Fatalf("plugin metadata was not registered for packages: %s", strings.Join(missing, ", "))
+	}
+}
+
+func TestAppRegistersSLNGPluginMetadata(t *testing.T) {
+	for _, registered := range plugin.RegisteredPlugins() {
+		if registered.Package() != "rtp-agent.plugins.slng" {
+			continue
+		}
+		if registered.Title() != "rtp-agent.plugins.slng" {
+			t.Fatalf("plugin title = %q, want rtp-agent.plugins.slng", registered.Title())
 		}
 		if registered.Version() != "1.5.15" {
 			t.Fatalf("plugin version = %q, want reference version", registered.Version())
@@ -46,6 +126,22 @@ func TestAppRegistersSLNGPluginMetadata(t *testing.T) {
 		return
 	}
 	t.Fatal("SLNG plugin metadata was not registered")
+}
+
+func TestAppRegistersSileroPluginDownloader(t *testing.T) {
+	for _, registered := range plugin.RegisteredPlugins() {
+		if registered.Package() != silero.PluginPackage {
+			continue
+		}
+		if registered.Title() != silero.PluginTitle {
+			t.Fatalf("plugin title = %q, want %q", registered.Title(), silero.PluginTitle)
+		}
+		if registered.Version() != silero.PluginVersion {
+			t.Fatalf("plugin version = %q, want %q", registered.Version(), silero.PluginVersion)
+		}
+		return
+	}
+	t.Fatal("Silero plugin downloader was not registered")
 }
 
 func TestNewAppInstallsConfiguredLogger(t *testing.T) {
