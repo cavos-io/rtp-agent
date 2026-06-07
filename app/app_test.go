@@ -64,6 +64,7 @@ import (
 	"github.com/cavos-io/rtp-agent/adapter/respeecher"
 	"github.com/cavos-io/rtp-agent/adapter/rime"
 	"github.com/cavos-io/rtp-agent/adapter/rtzr"
+	"github.com/cavos-io/rtp-agent/adapter/runway"
 	"github.com/cavos-io/rtp-agent/adapter/sarvam"
 	"github.com/cavos-io/rtp-agent/adapter/silero"
 	"github.com/cavos-io/rtp-agent/adapter/simli"
@@ -156,6 +157,7 @@ func TestAppRegistersReferencePluginMetadataBatch(t *testing.T) {
 		respeecher.PluginPackage: {title: respeecher.PluginTitle, version: respeecher.PluginVersion},
 		rime.PluginPackage:       {title: rime.PluginTitle, version: rime.PluginVersion},
 		rtzr.PluginPackage:       {title: rtzr.PluginTitle, version: rtzr.PluginVersion},
+		runway.PluginPackage:     {title: runway.PluginTitle, version: runway.PluginVersion},
 		sarvam.PluginPackage:     {title: sarvam.PluginTitle, version: sarvam.PluginVersion},
 		simli.PluginPackage:      {title: simli.PluginTitle, version: simli.PluginVersion},
 		simplismart.PluginPackage: {
@@ -2965,6 +2967,23 @@ func TestDefaultConfigFromEnvSelectsAvatarProvider(t *testing.T) {
 				t.Fatalf("Agent Avatar type = %q, want %s", got, tc.wantAvatar)
 			}
 		})
+	}
+}
+
+func TestDefaultConfigFromEnvSelectsRunwayAvatarProvider(t *testing.T) {
+	t.Setenv("RTP_AGENT_AVATAR_PROVIDER", "runway")
+	t.Setenv("RUNWAYML_API_SECRET", "runway-secret")
+	t.Setenv("RTP_AGENT_RUNWAY_AVATAR_ID", "avatar-123")
+
+	app, err := NewApp(DefaultConfigFromEnv())
+	if err != nil {
+		t.Fatalf("NewApp() error = %v", err)
+	}
+	if app.Agent == nil {
+		t.Fatal("Agent is nil")
+	}
+	if got := fmt.Sprintf("%T", app.Agent.Avatar); got != "*runway.RunwayAvatar" {
+		t.Fatalf("Agent Avatar type = %q, want *runway.RunwayAvatar", got)
 	}
 }
 

@@ -326,6 +326,9 @@ func TestJobContextAvatarStartInfoExposesLiveKitConnection(t *testing.T) {
 	if info.RoomName != "" {
 		t.Fatalf("RoomName = %q, want empty without room info", info.RoomName)
 	}
+	if info.AgentIdentity != "agent-job_avatar" {
+		t.Fatalf("AgentIdentity = %q, want default local participant identity", info.AgentIdentity)
+	}
 }
 
 func TestJobContextAvatarStartInfoExposesRoomName(t *testing.T) {
