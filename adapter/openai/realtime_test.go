@@ -89,12 +89,16 @@ func TestRealtimeSessionSendsProtocolMessages(t *testing.T) {
 	if err := session.UpdateInstructions("answer briefly"); err != nil {
 		t.Fatalf("UpdateInstructions error = %v", err)
 	}
-	assertRealtimeMessage(t, <-messages, "session.update", "answer briefly")
+	instructionsUpdate := <-messages
+	assertRealtimeMessage(t, instructionsUpdate, "session.update", "answer briefly")
+	assertRealtimeMessageEventID(t, instructionsUpdate, "instructions_update_")
 
 	if err := session.UpdateTools([]llm.Tool{requestTestTool{}}); err != nil {
 		t.Fatalf("UpdateTools error = %v", err)
 	}
-	assertRealtimeMessage(t, <-messages, "session.update", "lookup")
+	toolsUpdate := <-messages
+	assertRealtimeMessage(t, toolsUpdate, "session.update", "lookup")
+	assertRealtimeMessageEventID(t, toolsUpdate, "tools_update_")
 
 	chatCtx := llm.NewChatContext()
 	chatCtx.Items = []llm.ChatItem{
@@ -108,7 +112,9 @@ func TestRealtimeSessionSendsProtocolMessages(t *testing.T) {
 	if err := session.UpdateOptions(llm.RealtimeSessionOptions{ToolChoice: "auto"}); err != nil {
 		t.Fatalf("UpdateOptions error = %v", err)
 	}
-	assertRealtimeMessage(t, <-messages, "session.update", "auto")
+	optionsUpdate := <-messages
+	assertRealtimeMessage(t, optionsUpdate, "session.update", "auto")
+	assertRealtimeMessageEventID(t, optionsUpdate, "options_update_")
 
 	if err := session.Interrupt(); err != nil {
 		t.Fatalf("Interrupt error = %v", err)
@@ -281,6 +287,18 @@ func assertRealtimeMessage(t *testing.T, raw string, wantType string, wantContai
 	}
 	if wantContains != "" && !strings.Contains(raw, wantContains) {
 		t.Fatalf("message %s does not contain %q", raw, wantContains)
+	}
+}
+
+func assertRealtimeMessageEventID(t *testing.T, raw string, wantPrefix string) {
+	t.Helper()
+	var msg map[string]any
+	if err := json.Unmarshal([]byte(raw), &msg); err != nil {
+		t.Fatalf("message %q is not JSON: %v", raw, err)
+	}
+	eventID, ok := msg["event_id"].(string)
+	if !ok || !strings.HasPrefix(eventID, wantPrefix) {
+		t.Fatalf("event_id = %#v, want %s prefix; raw=%s", msg["event_id"], wantPrefix, raw)
 	}
 }
 

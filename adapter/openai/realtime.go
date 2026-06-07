@@ -142,7 +142,8 @@ func (s *realtimeSession) EventCh() <-chan llm.RealtimeEvent {
 
 func (s *realtimeSession) UpdateInstructions(instructions string) error {
 	msg := map[string]any{
-		"type": "session.update",
+		"type":     "session.update",
+		"event_id": cavosmath.ShortUUID("instructions_update_"),
 		"session": map[string]any{
 			"instructions": instructions,
 		},
@@ -181,7 +182,8 @@ func (s *realtimeSession) UpdateChatContext(chatCtx *llm.ChatContext) error {
 
 func (s *realtimeSession) UpdateTools(tools []llm.Tool) error {
 	msg := map[string]any{
-		"type": "session.update",
+		"type":     "session.update",
+		"event_id": cavosmath.ShortUUID("tools_update_"),
 		"session": map[string]any{
 			"tools": openAIRealtimeTools(tools),
 		},
@@ -404,10 +406,14 @@ func openAIRealtimeImageContent(image *llm.ImageContent) (map[string]any, error)
 }
 
 func (s *realtimeSession) UpdateOptions(options llm.RealtimeSessionOptions) error {
-	return s.sendMsg(openAIRealtimeUpdateOptionsMessage(options))
+	return s.sendMsg(openAIRealtimeUpdateOptionsMessageWithEventID(options, cavosmath.ShortUUID("options_update_")))
 }
 
 func openAIRealtimeUpdateOptionsMessage(options llm.RealtimeSessionOptions) map[string]any {
+	return openAIRealtimeUpdateOptionsMessageWithEventID(options, "")
+}
+
+func openAIRealtimeUpdateOptionsMessageWithEventID(options llm.RealtimeSessionOptions, eventID string) map[string]any {
 	session := make(map[string]any)
 	if toolChoice := openAIRealtimeToolChoice(options.ToolChoice); toolChoice != nil {
 		session["tool_choice"] = toolChoice
@@ -448,10 +454,14 @@ func openAIRealtimeUpdateOptionsMessage(options llm.RealtimeSessionOptions) map[
 		}
 		session["audio"] = audio
 	}
-	return map[string]any{
+	msg := map[string]any{
 		"type":    "session.update",
 		"session": session,
 	}
+	if eventID != "" {
+		msg["event_id"] = eventID
+	}
+	return msg
 }
 
 func openAIRealtimeToolChoice(choice llm.ToolChoice) any {
