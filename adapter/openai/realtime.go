@@ -76,6 +76,7 @@ type realtimeSession struct {
 	remote           *llm.RemoteChatContext
 	inputTranscripts *utils.BoundedDict[inputTranscriptKey, realtimeInputTranscript]
 	generation       *realtimeGeneration
+	instructions     string
 }
 
 const maxRealtimeInputTranscripts = 1024
@@ -146,7 +147,13 @@ func (s *realtimeSession) UpdateInstructions(instructions string) error {
 			"instructions": instructions,
 		},
 	}
-	return s.sendMsg(msg)
+	if err := s.sendMsg(msg); err != nil {
+		return err
+	}
+	s.mu.Lock()
+	s.instructions = instructions
+	s.mu.Unlock()
+	return nil
 }
 
 func (s *realtimeSession) UpdateChatContext(chatCtx *llm.ChatContext) error {
@@ -538,7 +545,10 @@ func openAIRealtimeVideoMessage(image *llm.ImageContent) (map[string]any, error)
 }
 
 func (s *realtimeSession) GenerateReply(options llm.RealtimeGenerateReplyOptions) error {
-	return s.sendMsg(openAIRealtimeGenerateReplyMessage(options))
+	s.mu.Lock()
+	instructions := s.instructions
+	s.mu.Unlock()
+	return s.sendMsg(openAIRealtimeGenerateReplyMessageWithSessionInstructions(options, instructions))
 }
 
 func (s *realtimeSession) Say(text string) error {
@@ -546,9 +556,16 @@ func (s *realtimeSession) Say(text string) error {
 }
 
 func openAIRealtimeGenerateReplyMessage(options llm.RealtimeGenerateReplyOptions) map[string]any {
+	return openAIRealtimeGenerateReplyMessageWithSessionInstructions(options, "")
+}
+
+func openAIRealtimeGenerateReplyMessageWithSessionInstructions(options llm.RealtimeGenerateReplyOptions, sessionInstructions string) map[string]any {
 	response := make(map[string]any)
 	eventID := cavosmath.ShortUUID("response_create_")
 	response["metadata"] = map[string]any{"client_event_id": eventID}
+	if sessionInstructions != "" && options.Instructions != "" {
+		options.Instructions = sessionInstructions + "\n" + options.Instructions
+	}
 	if options.Instructions != "" {
 		response["instructions"] = options.Instructions
 	}

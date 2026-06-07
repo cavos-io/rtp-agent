@@ -127,7 +127,16 @@ func TestRealtimeSessionSendsProtocolMessages(t *testing.T) {
 	if err := session.GenerateReply(llm.RealtimeGenerateReplyOptions{Instructions: "go", ToolChoice: "auto"}); err != nil {
 		t.Fatalf("GenerateReply error = %v", err)
 	}
-	assertRealtimeMessage(t, <-messages, "response.create", "go")
+	generateReplyMessage := <-messages
+	assertRealtimeMessage(t, generateReplyMessage, "response.create", "go")
+	var generateReply map[string]any
+	if err := json.Unmarshal([]byte(generateReplyMessage), &generateReply); err != nil {
+		t.Fatalf("decode generate reply message: %v", err)
+	}
+	response := generateReply["response"].(map[string]any)
+	if response["instructions"] != "answer briefly\ngo" {
+		t.Fatalf("generate reply instructions = %#v, want session and per-response instructions", response["instructions"])
+	}
 
 	if err := session.Truncate(llm.RealtimeTruncateOptions{
 		MessageID:      "user-1",
