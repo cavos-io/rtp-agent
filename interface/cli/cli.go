@@ -574,11 +574,13 @@ func applyConnectArgs(server *worker.AgentServer, args ConnectArgs) error {
 }
 
 func parseConsoleArgs(argv []string) (ConsoleArgs, error) {
-	args := ConsoleArgs{Mode: ConsoleModeAudio, LogLevel: "DEBUG"}
+	args := ConsoleArgs{Mode: ConsoleModeText, LogLevel: "DEBUG"}
 	for i := 2; i < len(argv); i++ {
 		switch argv[i] {
 		case "--text":
 			args.Mode = ConsoleModeText
+		case "--audio":
+			args.Mode = ConsoleModeAudio
 		case "--record":
 			args.Record = true
 		case "--list-devices":
@@ -693,7 +695,7 @@ func startConsoleAudioUI(ctx context.Context, args ConsoleArgs) (func(), error) 
 func runConsole(server *worker.AgentServer, argv []string) {
 	args, err := parseConsoleArgs(argv)
 	if err != nil {
-		fmt.Println("Usage: worker console [--text] [--record] [--input-device <device>] [--output-device <device>]")
+		fmt.Println("Usage: worker console [--text|--audio] [--record] [--input-device <device>] [--output-device <device>]")
 		os.Exit(1)
 	}
 

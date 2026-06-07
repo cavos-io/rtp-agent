@@ -234,16 +234,26 @@ func TestConsoleLocalJobArgsMatchReference(t *testing.T) {
 	}
 }
 
-func TestParseConsoleArgsDefaultsToAudioMode(t *testing.T) {
+func TestParseConsoleArgsDefaultsToTextMode(t *testing.T) {
 	args, err := parseConsoleArgs([]string{"worker", "console"})
+	if err != nil {
+		t.Fatalf("parseConsoleArgs() error = %v", err)
+	}
+	if args.Mode != ConsoleModeText {
+		t.Fatalf("Mode = %q, want %q", args.Mode, ConsoleModeText)
+	}
+	if args.Record {
+		t.Fatal("Record = true, want false")
+	}
+}
+
+func TestParseConsoleArgsSupportsAudioMode(t *testing.T) {
+	args, err := parseConsoleArgs([]string{"worker", "console", "--audio"})
 	if err != nil {
 		t.Fatalf("parseConsoleArgs() error = %v", err)
 	}
 	if args.Mode != ConsoleModeAudio {
 		t.Fatalf("Mode = %q, want %q", args.Mode, ConsoleModeAudio)
-	}
-	if args.Record {
-		t.Fatal("Record = true, want false")
 	}
 }
 
@@ -392,6 +402,18 @@ func TestRunConsoleListDevicesReturnsBeforeStartingConsole(t *testing.T) {
 	if calls != 1 {
 		t.Fatalf("printConsoleAudioDevices calls = %d, want 1", calls)
 	}
+}
+
+func TestStartConsoleAudioUISkipsAudioForTextMode(t *testing.T) {
+	stop, err := startConsoleAudioUI(context.Background(), ConsoleArgs{Mode: ConsoleModeText})
+	if err != nil {
+		t.Fatalf("startConsoleAudioUI(text) error = %v, want nil", err)
+	}
+	if stop == nil {
+		t.Fatal("startConsoleAudioUI(text) stop = nil, want no-op stop function")
+	}
+
+	stop()
 }
 
 func TestFormatConsoleAudioDevicesListsInputsOutputsAndDefaults(t *testing.T) {
