@@ -885,12 +885,12 @@ func (a *AgentActivity) schedulingTask() {
 
 func (a *AgentActivity) processQueue() {
 	a.queueMu.Lock()
-	defer a.queueMu.Unlock()
 
 	if a.currentSpeech != nil && a.currentSpeech.IsDone() {
 		a.currentSpeech = nil
 	}
 	if len(a.speechQueue) == 0 || a.schedulingPaused || a.currentSpeech != nil {
+		a.queueMu.Unlock()
 		return
 	}
 
@@ -899,36 +899,41 @@ func (a *AgentActivity) processQueue() {
 	a.speechQueue = append(a.speechQueue[:nextIdx], a.speechQueue[nextIdx+1:]...)
 
 	if speech.IsDone() {
+		a.queueMu.Unlock()
 		return
 	}
 
 	a.currentSpeech = speech
-	speech.AddDoneCallback(a.OnPipelineReplyDone)
 	delay := a.MinConsecutiveSpeechDelay()
 	if delay > 0 && !a.lastSpeechDone.IsZero() {
 		delay -= time.Since(a.lastSpeechDone)
 	}
+	var assistant scheduledSpeechAssistant
 	if a.Session != nil {
-		if assistant, ok := a.Session.Assistant.(scheduledSpeechAssistant); ok {
-			go func() {
-				if delay > 0 {
-					timer := time.NewTimer(delay)
-					select {
-					case <-timer.C:
-					case <-a.ctx.Done():
-						timer.Stop()
-						return
-					case <-speech.doneCh:
-						timer.Stop()
-						return
-					}
-				}
-				if speech.IsDone() {
+		assistant, _ = a.Session.Assistant.(scheduledSpeechAssistant)
+	}
+	a.queueMu.Unlock()
+
+	speech.AddDoneCallback(a.OnPipelineReplyDone)
+	if assistant != nil {
+		go func() {
+			if delay > 0 {
+				timer := time.NewTimer(delay)
+				select {
+				case <-timer.C:
+				case <-a.ctx.Done():
+					timer.Stop()
+					return
+				case <-speech.doneCh:
+					timer.Stop()
 					return
 				}
-				assistant.OnSpeechScheduled(a.ctx, speech)
-			}()
-		}
+			}
+			if speech.IsDone() {
+				return
+			}
+			assistant.OnSpeechScheduled(a.ctx, speech)
+		}()
 	}
 
 	// Run speech completion asynchronously
