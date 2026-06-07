@@ -450,6 +450,7 @@ type AppConfig struct {
 	WorkflowRequireConfirmation           bool
 	WorkflowDtmfNumDigits                 *int
 	WorkflowDtmfAskConfirmation           *bool
+	WorkflowDtmfExtraInstructions         string
 	WorkflowWarmTransferSipCallTo         string
 	WorkflowWarmTransferSipTrunkID        string
 	WorkflowWarmTransferSipHeaders        map[string]string
@@ -769,6 +770,7 @@ func DefaultConfigFromEnv() AppConfig {
 		WorkflowRequireConfirmation:             getenvBool("RTP_AGENT_WORKFLOW_REQUIRE_CONFIRMATION"),
 		WorkflowDtmfNumDigits:                   getenvOptionalInt("RTP_AGENT_WORKFLOW_DTMF_NUM_DIGITS"),
 		WorkflowDtmfAskConfirmation:             getenvOptionalBool("RTP_AGENT_WORKFLOW_DTMF_ASK_CONFIRMATION"),
+		WorkflowDtmfExtraInstructions:           os.Getenv("RTP_AGENT_WORKFLOW_DTMF_EXTRA_INSTRUCTIONS"),
 		WorkflowWarmTransferSipCallTo:           os.Getenv("RTP_AGENT_WORKFLOW_WARM_TRANSFER_SIP_CALL_TO"),
 		WorkflowWarmTransferSipTrunkID:          os.Getenv("RTP_AGENT_WORKFLOW_WARM_TRANSFER_SIP_TRUNK_ID"),
 		WorkflowWarmTransferSipHeaders:          splitEnvStringMap("RTP_AGENT_WORKFLOW_WARM_TRANSFER_SIP_HEADERS"),
@@ -985,7 +987,11 @@ func workflowAgentFromConfig(cfg AppConfig, baseAgent *agent.Agent) (agent.Agent
 		if cfg.WorkflowDtmfAskConfirmation != nil {
 			askConfirmation = *cfg.WorkflowDtmfAskConfirmation
 		}
-		task, err := workflows.NewGetDtmfTask(numDigits, askConfirmation)
+		task, err := workflows.NewGetDtmfTaskWithOptions(workflows.GetDtmfOptions{
+			NumDigits:          numDigits,
+			AskForConfirmation: askConfirmation,
+			ExtraInstructions:  cfg.WorkflowDtmfExtraInstructions,
+		})
 		if err != nil {
 			return nil, err
 		}
@@ -1149,7 +1155,11 @@ func workflowTaskFactoryFromName(cfg AppConfig, baseAgent *agent.Agent, taskName
 			ID:          "dtmf",
 			Description: "Collect DTMF inputs from the user.",
 			TaskFactory: factory(func() agent.AgentInterface {
-				task, err := workflows.NewGetDtmfTask(numDigits, askConfirmation)
+				task, err := workflows.NewGetDtmfTaskWithOptions(workflows.GetDtmfOptions{
+					NumDigits:          numDigits,
+					AskForConfirmation: askConfirmation,
+					ExtraInstructions:  cfg.WorkflowDtmfExtraInstructions,
+				})
 				if err != nil {
 					panic(fmt.Sprintf("validated DTMF task config rejected: %v", err))
 				}

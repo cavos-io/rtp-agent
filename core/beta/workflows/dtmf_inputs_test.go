@@ -8,6 +8,7 @@ import (
 
 	"github.com/cavos-io/rtp-agent/core/agent"
 	"github.com/cavos-io/rtp-agent/core/audio/model"
+	"github.com/cavos-io/rtp-agent/core/beta"
 )
 
 func TestRecordInputsToolRejectsInvalidDtmfEvents(t *testing.T) {
@@ -45,6 +46,26 @@ func TestConfirmInputsToolRejectsInvalidDtmfEvents(t *testing.T) {
 func TestNewGetDtmfTaskRejectsNonPositiveNumDigits(t *testing.T) {
 	if _, err := NewGetDtmfTask(0, false); err == nil {
 		t.Fatal("NewGetDtmfTask(0, false) error = nil, want invalid num_digits error")
+	}
+}
+
+func TestNewGetDtmfTaskWithOptionsAppendsExtraInstructions(t *testing.T) {
+	task, err := NewGetDtmfTaskWithOptions(GetDtmfOptions{
+		NumDigits:          4,
+		AskForConfirmation: true,
+		ExtraInstructions:  "Tell the user this is their appointment PIN.",
+		DtmfInputTimeout:   4 * time.Second,
+		DtmfStopEvent:      beta.DtmfEventPound,
+	})
+	if err != nil {
+		t.Fatalf("NewGetDtmfTaskWithOptions() error = %v", err)
+	}
+
+	if !strings.Contains(task.Instructions, "Tell the user this is their appointment PIN.") {
+		t.Fatalf("Instructions = %q, want extra instructions", task.Instructions)
+	}
+	if !strings.Contains(task.Instructions, "call `confirm_inputs`") {
+		t.Fatalf("Instructions = %q, want confirmation guidance preserved", task.Instructions)
 	}
 }
 

@@ -1944,6 +1944,7 @@ func TestDefaultConfigFromEnvSelectsDtmfWorkflowAgent(t *testing.T) {
 	t.Setenv("RTP_AGENT_WORKFLOW_TASK", "dtmf")
 	t.Setenv("RTP_AGENT_WORKFLOW_DTMF_NUM_DIGITS", "4")
 	t.Setenv("RTP_AGENT_WORKFLOW_DTMF_ASK_CONFIRMATION", "true")
+	t.Setenv("RTP_AGENT_WORKFLOW_DTMF_EXTRA_INSTRUCTIONS", "Tell the user this is their appointment PIN.")
 
 	app, err := NewApp(DefaultConfigFromEnv())
 	if err != nil {
@@ -1958,6 +1959,9 @@ func TestDefaultConfigFromEnvSelectsDtmfWorkflowAgent(t *testing.T) {
 	}
 	if !task.AskForConfirmation {
 		t.Fatal("AskForConfirmation = false, want true")
+	}
+	if !strings.Contains(task.Instructions, "Tell the user this is their appointment PIN.") {
+		t.Fatalf("Instructions = %q, want DTMF extra instructions", task.Instructions)
 	}
 	if app.Agent != task.GetAgent() {
 		t.Fatal("App.Agent does not point at selected workflow agent")
