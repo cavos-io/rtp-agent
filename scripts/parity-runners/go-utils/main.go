@@ -6,21 +6,24 @@ import (
 	"os"
 
 	lkmath "github.com/cavos-io/rtp-agent/library/math"
+	"github.com/cavos-io/rtp-agent/library/tokenize"
 	"github.com/cavos-io/rtp-agent/library/utils"
 )
 
 type inputEnvelope struct {
-	Alpha        *float64  `json:"alpha"`
-	Contract     string    `json:"contract"`
-	EnvValues    []*string `json:"env_values"`
-	Exp          *float64  `json:"exp"`
-	Initial      *float64  `json:"initial"`
-	MinVal       *float64  `json:"min_val"`
-	NameValues   []string  `json:"name_values"`
-	Sample       *float64  `json:"sample"`
-	SampleValues []float64 `json:"sample_values"`
-	URLValues    []string  `json:"url_values"`
-	WindowSize   *int      `json:"window_size"`
+	Alpha        *float64          `json:"alpha"`
+	Contract     string            `json:"contract"`
+	EnvValues    []*string         `json:"env_values"`
+	Exp          *float64          `json:"exp"`
+	Initial      *float64          `json:"initial"`
+	MinVal       *float64          `json:"min_val"`
+	NameValues   []string          `json:"name_values"`
+	Sample       *float64          `json:"sample"`
+	SampleValues []float64         `json:"sample_values"`
+	Replacements map[string]string `json:"replacements"`
+	TextValues   []string          `json:"text_values"`
+	URLValues    []string          `json:"url_values"`
+	WindowSize   *int              `json:"window_size"`
 }
 
 type event struct {
@@ -79,6 +82,8 @@ func run() error {
 		return runMovingAverageWindow(input)
 	case "bounded-dict-pop-if-order":
 		return runBoundedDictPopIfOrder(input)
+	case "tokenize-replace-words":
+		return runTokenizeReplaceWords(input)
 	default:
 		return fmt.Errorf("unsupported contract: %s", input.Contract)
 	}
@@ -300,6 +305,30 @@ func runExpFilterInitialMinimum(input inputEnvelope) error {
 		Name:   "value",
 		Result: fmt.Sprintf("%g", value),
 	})
+
+	encoder := json.NewEncoder(os.Stdout)
+	encoder.SetEscapeHTML(false)
+	return encoder.Encode(output)
+}
+
+func runTokenizeReplaceWords(input inputEnvelope) error {
+	values := input.TextValues
+	if values == nil {
+		values = []string{"Hello, WORLD! workflow stays.", "Do not replace flow inside workflow."}
+	}
+	replacements := input.Replacements
+	if replacements == nil {
+		replacements = map[string]string{"hello": "hi", "world": "there", "flow": "stream"}
+	}
+
+	output := outputEnvelope{Contract: "tokenize-replace-words"}
+	for _, value := range values {
+		output.Events = append(output.Events, event{
+			Name:   "replace_words",
+			Input:  value,
+			Result: tokenize.ReplaceWords(value, replacements),
+		})
+	}
 
 	encoder := json.NewEncoder(os.Stdout)
 	encoder.SetEscapeHTML(false)
