@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/cavos-io/rtp-agent/core/agent"
+	"github.com/cavos-io/rtp-agent/core/beta"
 	"github.com/cavos-io/rtp-agent/core/llm"
 	"github.com/livekit/protocol/livekit"
 )
@@ -32,6 +33,52 @@ func TestNewWarmTransferTaskBuildsInstructionsAndTools(t *testing.T) {
 	}
 	if len(task.Tools) != 3 {
 		t.Fatalf("tools length = %d, want 3", len(task.Tools))
+	}
+}
+
+func TestNewWarmTransferTaskInstructionPartsCustomizePersonaAndExtra(t *testing.T) {
+	customPersona := "You brief a licensed support specialist before joining the caller."
+	task, err := NewWarmTransferTaskWithOptions(WarmTransferOptions{
+		TargetPhone: "+15550100",
+		TrunkID:     "trunk_123",
+		Instructions: &beta.InstructionParts{
+			Persona: &customPersona,
+			Extra:   "Mention the caller prefers SMS follow-up.",
+		},
+	})
+	if err != nil {
+		t.Fatalf("NewWarmTransferTaskWithOptions() error = %v", err)
+	}
+
+	if !strings.Contains(task.Instructions, customPersona) {
+		t.Fatalf("Instructions = %q, want custom persona", task.Instructions)
+	}
+	if strings.Contains(task.Instructions, "reaching out to a human agent for help") {
+		t.Fatalf("Instructions = %q, want default persona replaced", task.Instructions)
+	}
+	if !strings.Contains(task.Instructions, "Mention the caller prefers SMS follow-up.") {
+		t.Fatalf("Instructions = %q, want extra instructions appended", task.Instructions)
+	}
+}
+
+func TestNewWarmTransferTaskInstructionPartsCanRemovePersona(t *testing.T) {
+	emptyPersona := ""
+	task, err := NewWarmTransferTaskWithOptions(WarmTransferOptions{
+		TargetPhone:       "+15550100",
+		TrunkID:           "trunk_123",
+		Instructions:      &beta.InstructionParts{Persona: &emptyPersona},
+		ChatContext:       nil,
+		ExtraInstructions: "",
+	})
+	if err != nil {
+		t.Fatalf("NewWarmTransferTaskWithOptions() error = %v", err)
+	}
+
+	if strings.Contains(task.Instructions, "reaching out to a human agent for help") {
+		t.Fatalf("Instructions = %q, want default persona removed", task.Instructions)
+	}
+	if !strings.Contains(task.Instructions, "connect_to_caller") {
+		t.Fatalf("Instructions = %q, want transfer guidance preserved", task.Instructions)
 	}
 }
 

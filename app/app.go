@@ -995,12 +995,12 @@ func workflowAgentFromConfig(cfg AppConfig, baseAgent *agent.Agent) (agent.Agent
 		if sipCallTo == "" {
 			return nil, fmt.Errorf("RTP_AGENT_WORKFLOW_WARM_TRANSFER_SIP_CALL_TO is required for warm_transfer workflow")
 		}
-		task, err := workflows.NewWarmTransferTask(
-			sipCallTo,
-			strings.TrimSpace(cfg.WorkflowWarmTransferSipTrunkID),
-			baseAgent.ChatCtx,
-			cfg.WorkflowWarmTransferExtraInstructions,
-		)
+		task, err := workflows.NewWarmTransferTaskWithOptions(workflows.WarmTransferOptions{
+			TargetPhone:       sipCallTo,
+			TrunkID:           strings.TrimSpace(cfg.WorkflowWarmTransferSipTrunkID),
+			ChatContext:       baseAgent.ChatCtx,
+			ExtraInstructions: cfg.WorkflowWarmTransferExtraInstructions,
+		})
 		if err != nil {
 			return nil, err
 		}
@@ -1165,24 +1165,24 @@ func workflowTaskFactoryFromName(cfg AppConfig, baseAgent *agent.Agent, taskName
 		if sipTrunkID == "" {
 			sipTrunkID = strings.TrimSpace(os.Getenv("LIVEKIT_SIP_OUTBOUND_TRUNK"))
 		}
-		if _, err := workflows.NewWarmTransferTask(
-			sipCallTo,
-			sipTrunkID,
-			baseAgent.ChatCtx,
-			cfg.WorkflowWarmTransferExtraInstructions,
-		); err != nil {
+		if _, err := workflows.NewWarmTransferTaskWithOptions(workflows.WarmTransferOptions{
+			TargetPhone:       sipCallTo,
+			TrunkID:           sipTrunkID,
+			ChatContext:       baseAgent.ChatCtx,
+			ExtraInstructions: cfg.WorkflowWarmTransferExtraInstructions,
+		}); err != nil {
 			return workflows.FactoryInfo{}, err
 		}
 		return workflows.FactoryInfo{
 			ID:          "warm_transfer",
 			Description: "Transfer the caller to a human agent by SIP.",
 			TaskFactory: factory(func() agent.AgentInterface {
-				task, err := workflows.NewWarmTransferTask(
-					sipCallTo,
-					sipTrunkID,
-					baseAgent.ChatCtx,
-					cfg.WorkflowWarmTransferExtraInstructions,
-				)
+				task, err := workflows.NewWarmTransferTaskWithOptions(workflows.WarmTransferOptions{
+					TargetPhone:       sipCallTo,
+					TrunkID:           sipTrunkID,
+					ChatContext:       baseAgent.ChatCtx,
+					ExtraInstructions: cfg.WorkflowWarmTransferExtraInstructions,
+				})
 				if err != nil {
 					panic(fmt.Sprintf("validated warm transfer task config rejected: %v", err))
 				}
