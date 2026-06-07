@@ -109,6 +109,7 @@ func (t *updateEmailTool) Execute(ctx context.Context, args string) (string, err
 	}
 
 	t.task.currentEmail = email
+	separatedEmail := strings.Join(strings.Split(email, ""), " ")
 
 	if !t.task.RequireConfirmation {
 		_ = t.task.Complete(&GetEmailResult{Email: email})
@@ -116,7 +117,7 @@ func (t *updateEmailTool) Execute(ctx context.Context, args string) (string, err
 	}
 
 	t.task.setConfirmEmailTool(email)
-	return fmt.Sprintf("The email has been updated to %s\nRepeat the email character by character if needed.\nPrompt the user for confirmation, do not call `confirm_email_address` directly", email), nil
+	return fmt.Sprintf("The email has been updated to %s\nRepeat the email character by character: %s if needed\nPrompt the user for confirmation, do not call `confirm_email_address` directly", email, separatedEmail), nil
 }
 
 func (t *GetEmailTask) setConfirmEmailTool(email string) {

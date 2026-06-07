@@ -61,6 +61,9 @@ func TestGetEmailTaskInjectsConfirmToolAfterUpdate(t *testing.T) {
 	if out == "" {
 		t.Fatal("update Execute() output is empty, want confirmation guidance")
 	}
+	if !strings.Contains(out, "Repeat the email character by character: a d a @ e x a m p l e . c o m if needed") {
+		t.Fatalf("update Execute() output = %q, want character-by-character guidance", out)
+	}
 	if len(task.Agent.Tools) != 3 || task.Agent.Tools[2].Name() != "confirm_email_address" {
 		t.Fatalf("tools = %#v, want confirm_email_address appended", task.Agent.Tools)
 	}
