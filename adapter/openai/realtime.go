@@ -81,7 +81,7 @@ type realtimeSession struct {
 	instructions     string
 	audioBStream     *audio.AudioByteStream
 	pushedDuration   float64
-	optionsSession   map[string]any
+	optionsState     map[string]any
 }
 
 const maxRealtimeInputTranscripts = 1024
@@ -422,16 +422,23 @@ func (s *realtimeSession) UpdateOptions(options llm.RealtimeSessionOptions) erro
 	}
 	session, _ := msg["session"].(map[string]any)
 	s.mu.Lock()
-	if reflect.DeepEqual(s.optionsSession, session) {
+	changedSession, changedOptions := openAIRealtimeChangedOptionsSession(session, s.optionsState)
+	if len(changedSession) == 0 {
 		s.mu.Unlock()
 		return nil
 	}
 	s.mu.Unlock()
+	msg["session"] = changedSession
 	if err := s.sendMsg(msg); err != nil {
 		return err
 	}
 	s.mu.Lock()
-	s.optionsSession = session
+	if s.optionsState == nil {
+		s.optionsState = make(map[string]any, len(changedOptions))
+	}
+	for key, value := range changedOptions {
+		s.optionsState[key] = value
+	}
 	s.mu.Unlock()
 	return nil
 }
@@ -492,6 +499,86 @@ func openAIRealtimeUpdateOptionsMessageWithEventID(options llm.RealtimeSessionOp
 		msg["event_id"] = eventID
 	}
 	return msg
+}
+
+func openAIRealtimeChangedOptionsSession(session map[string]any, current map[string]any) (map[string]any, map[string]any) {
+	options := openAIRealtimeOptionEntries(session)
+	changedOptions := make(map[string]any)
+	for key, value := range options {
+		if current != nil && reflect.DeepEqual(current[key], value) {
+			continue
+		}
+		changedOptions[key] = value
+	}
+	return openAIRealtimeSessionFromOptionEntries(changedOptions), changedOptions
+}
+
+func openAIRealtimeOptionEntries(session map[string]any) map[string]any {
+	entries := make(map[string]any)
+	if value, ok := session["tool_choice"]; ok {
+		entries["tool_choice"] = value
+	}
+	if value, ok := session["max_response_output_tokens"]; ok {
+		entries["max_response_output_tokens"] = value
+	}
+	if value, ok := session["truncation"]; ok {
+		entries["truncation"] = value
+	}
+	if value, ok := session["tracing"]; ok {
+		entries["tracing"] = value
+	}
+	audio, _ := session["audio"].(map[string]any)
+	input, _ := audio["input"].(map[string]any)
+	if value, ok := input["turn_detection"]; ok {
+		entries["audio.input.turn_detection"] = value
+	}
+	if value, ok := input["transcription"]; ok {
+		entries["audio.input.transcription"] = value
+	}
+	if value, ok := input["noise_reduction"]; ok {
+		entries["audio.input.noise_reduction"] = value
+	}
+	output, _ := audio["output"].(map[string]any)
+	if value, ok := output["voice"]; ok {
+		entries["audio.output.voice"] = value
+	}
+	if value, ok := output["speed"]; ok {
+		entries["audio.output.speed"] = value
+	}
+	return entries
+}
+
+func openAIRealtimeSessionFromOptionEntries(entries map[string]any) map[string]any {
+	session := make(map[string]any)
+	input := make(map[string]any)
+	output := make(map[string]any)
+	for key, value := range entries {
+		switch key {
+		case "tool_choice", "max_response_output_tokens", "truncation", "tracing":
+			session[key] = value
+		case "audio.input.turn_detection":
+			input["turn_detection"] = value
+		case "audio.input.transcription":
+			input["transcription"] = value
+		case "audio.input.noise_reduction":
+			input["noise_reduction"] = value
+		case "audio.output.voice":
+			output["voice"] = value
+		case "audio.output.speed":
+			output["speed"] = value
+		}
+	}
+	if len(input) > 0 || len(output) > 0 {
+		audio := make(map[string]any)
+		if len(input) > 0 {
+			audio["input"] = input
+		}
+		if len(output) > 0 {
+			audio["output"] = output
+		}
+		session["audio"] = audio
+	}
+	return session
 }
 
 func openAIRealtimeToolChoice(choice llm.ToolChoice) any {

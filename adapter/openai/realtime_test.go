@@ -123,6 +123,14 @@ func TestRealtimeSessionSendsProtocolMessages(t *testing.T) {
 		t.Fatalf("UpdateOptions empty error = %v", err)
 	}
 	assertNoRealtimeMessage(t, messages, "empty options update should not send a session update")
+	if err := session.UpdateOptions(llm.RealtimeSessionOptions{Voice: "alloy"}); err != nil {
+		t.Fatalf("UpdateOptions voice error = %v", err)
+	}
+	assertRealtimeMessage(t, <-messages, "session.update", "alloy")
+	if err := session.UpdateOptions(llm.RealtimeSessionOptions{ToolChoice: "auto"}); err != nil {
+		t.Fatalf("UpdateOptions unchanged tool choice error = %v", err)
+	}
+	assertNoRealtimeMessage(t, messages, "unchanged tool choice should not send after another option changes")
 
 	if err := session.Interrupt(); err != nil {
 		t.Fatalf("Interrupt error = %v", err)
