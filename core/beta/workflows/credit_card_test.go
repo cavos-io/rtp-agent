@@ -333,6 +333,35 @@ func TestCreditCardSubtaskInstructionsOmitConfirmationWhenDisabled(t *testing.T)
 	}
 }
 
+func TestCreditCardSubtaskOnEnterPromptsUseReferenceText(t *testing.T) {
+	cases := []struct {
+		name string
+		got  string
+		want string
+	}{
+		{
+			name: "card_number",
+			got:  cardNumberOnEnterPrompt(),
+			want: "Ask for the user's credit card number.",
+		},
+		{
+			name: "security_code",
+			got:  securityCodeOnEnterPrompt(),
+			want: "Collect the user's card's security code.",
+		},
+		{
+			name: "expiration_date",
+			got:  expirationDateOnEnterPrompt(),
+			want: "Collect the user's card's expiration date.",
+		},
+	}
+	for _, tc := range cases {
+		if tc.got != tc.want {
+			t.Fatalf("%s OnEnter prompt = %q, want %q", tc.name, tc.got, tc.want)
+		}
+	}
+}
+
 func TestGetCreditCardTaskCombinesSubtaskResults(t *testing.T) {
 	task := NewGetCreditCardTask(true)
 

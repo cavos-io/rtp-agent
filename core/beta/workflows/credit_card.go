@@ -203,25 +203,37 @@ func expirationDateInstructions(requireConfirmation bool) string {
 func (t *GetCardNumberTask) OnEnter() {
 	if activity := t.Agent.GetActivity(); activity != nil {
 		if session := activity.Session; session != nil {
-			_, _ = session.GenerateReply(context.Background(), "Ask for the user's credit card number.")
+			_, _ = session.GenerateReply(context.Background(), cardNumberOnEnterPrompt())
 		}
 	}
+}
+
+func cardNumberOnEnterPrompt() string {
+	return "Ask for the user's credit card number."
 }
 
 func (t *GetSecurityCodeTask) OnEnter() {
 	if activity := t.Agent.GetActivity(); activity != nil {
 		if session := activity.Session; session != nil {
-			_, _ = session.GenerateReply(context.Background(), "Collect the user's card security code.")
+			_, _ = session.GenerateReply(context.Background(), securityCodeOnEnterPrompt())
 		}
 	}
+}
+
+func securityCodeOnEnterPrompt() string {
+	return "Collect the user's card's security code."
 }
 
 func (t *GetExpirationDateTask) OnEnter() {
 	if activity := t.Agent.GetActivity(); activity != nil {
 		if session := activity.Session; session != nil {
-			_, _ = session.GenerateReply(context.Background(), "Collect the user's card expiration date.")
+			_, _ = session.GenerateReply(context.Background(), expirationDateOnEnterPrompt())
 		}
 	}
+}
+
+func expirationDateOnEnterPrompt() string {
+	return "Collect the user's card's expiration date."
 }
 
 func (t *GetCreditCardTask) OnEnter() {
