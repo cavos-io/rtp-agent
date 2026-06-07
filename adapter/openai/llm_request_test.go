@@ -555,6 +555,30 @@ func TestBuildOpenAIChatCompletionRequestDropsUnsupportedReasoningParams(t *test
 	}
 }
 
+func TestBuildOpenAIChatCompletionRequestDefaultsReasoningEffort(t *testing.T) {
+	cases := []struct {
+		model string
+		want  string
+	}{
+		{model: "gpt-5", want: "minimal"},
+		{model: "gpt-5-mini", want: "minimal"},
+		{model: "gpt-5.1", want: "none"},
+		{model: "gpt-5.2", want: "none"},
+		{model: "gpt-4.1", want: ""},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.model, func(t *testing.T) {
+			req := buildOpenAIChatCompletionRequest(tc.model, llm.NewChatContext(), &llm.ChatOptions{
+				ParallelToolCalls: true,
+			})
+			if req.ReasoningEffort != tc.want {
+				t.Fatalf("ReasoningEffort = %q, want %q", req.ReasoningEffort, tc.want)
+			}
+		})
+	}
+}
+
 func TestBuildOpenAIChatCompletionRequestDropsReasoningEffortWithIncompatibleTools(t *testing.T) {
 	req := buildOpenAIChatCompletionRequest("gpt-5.2", llm.NewChatContext(), &llm.ChatOptions{
 		Tools: []llm.Tool{requestTestTool{}},

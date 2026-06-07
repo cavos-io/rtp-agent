@@ -202,6 +202,9 @@ func buildOpenAIChatCompletionRequest(model string, chatCtx *llm.ChatContext, op
 	}
 
 	applyOpenAIExtraParams(&req, dropUnsupportedOpenAIParams(model, options.ExtraParams, len(options.Tools) > 0))
+	if req.ReasoningEffort == "" {
+		req.ReasoningEffort = defaultOpenAIReasoningEffort(model, len(options.Tools) > 0)
+	}
 	return req
 }
 
@@ -422,6 +425,24 @@ func unsupportedOpenAIParamsForModel(modelName string) map[string]struct{} {
 
 func openAIReasoningEffortToolIncompatible(modelName string) bool {
 	return strings.HasPrefix(modelName, "gpt-5.2") || strings.HasPrefix(modelName, "gpt-5.4")
+}
+
+func defaultOpenAIReasoningEffort(model string, hasTools bool) string {
+	modelName := model
+	if slash := strings.LastIndex(modelName, "/"); slash >= 0 {
+		modelName = modelName[slash+1:]
+	}
+	if hasTools && openAIReasoningEffortToolIncompatible(modelName) {
+		return ""
+	}
+	switch modelName {
+	case "gpt-5.1", "gpt-5.2", "gpt-5.4":
+		return "none"
+	case "gpt-5", "gpt-5-mini", "gpt-5-nano", "gpt-5.4-mini":
+		return "minimal"
+	default:
+		return ""
+	}
 }
 
 func asFloat32(value any) (float32, bool) {
