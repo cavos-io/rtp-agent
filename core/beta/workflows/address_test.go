@@ -104,6 +104,19 @@ func TestGetAddressTaskInstructionsOmitConfirmationWhenDisabled(t *testing.T) {
 	}
 }
 
+func TestGetAddressTaskInstructionsUseReferenceToolGuidance(t *testing.T) {
+	task := NewGetAddressTask(GetAddressOptions{})
+
+	for _, want := range []string{
+		"Call `update_address` at the first opportunity whenever you form a new hypothesis about the address. (before asking any questions or providing any answers.)",
+		"Always explicitly invoke a tool when applicable. Do not simulate tool usage, no real action is taken unless the tool is explicitly called.",
+	} {
+		if !strings.Contains(task.Instructions, want) {
+			t.Fatalf("Instructions = %q, want reference guidance %q", task.Instructions, want)
+		}
+	}
+}
+
 func TestGetAddressTaskOnEnterUsesReferencePrompt(t *testing.T) {
 	want := "Ask the user to provide their address."
 	if got := addressOnEnterPrompt(); got != want {

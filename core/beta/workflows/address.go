@@ -42,7 +42,7 @@ Normalize common spoken patterns silently:
 - Filter out filler words or hesitations.
 - Recognize when there may be accents on certain letters if explicitly said or common in the location specified. Be sure to verify the correct accents if existent.
 Don't mention corrections. Treat inputs as possibly imperfect but fix them silently.
-Call update_address at the first opportunity whenever you form a new hypothesis about the address. (before asking any questions or providing any answers.)
+Call ` + "`update_address`" + ` at the first opportunity whenever you form a new hypothesis about the address. (before asking any questions or providing any answers.)
 Don't invent new addresses, stick strictly to what the user said.
 `
 
@@ -54,7 +54,7 @@ Avoid using bullet points and parenthese in any responses.
 Spell out the address letter-by-letter when applicable, such as street names and provinces, especially when the user spells it out initially.
 If the address is unclear or invalid, or it takes too much back-and-forth, prompt for it in parts in this order: street address, unit number if applicable, locality, and country.
 Ignore unrelated input and avoid going off-topic. Do not generate markdown, greetings, or unnecessary commentary.
-Always explicitly invoke a tool when applicable. Do not hallucinate tool usage, no real action is taken unless the tool is explicitly called.`
+Always explicitly invoke a tool when applicable. Do not simulate tool usage, no real action is taken unless the tool is explicitly called.`
 
 const AddressInstructions = addressInstructionsBeforeConfirmation + addressConfirmationInstruction + "\n" + addressInstructionsAfterConfirmation
 
