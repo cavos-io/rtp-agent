@@ -295,6 +295,7 @@ func TestCreditCardSubtaskInstructionsIncludeReferenceConfirmationWhenEnabled(t 
 			name:         "security_code",
 			instructions: NewGetSecurityCodeTask().Instructions,
 			wantParts: []string{
+				"You are solely responsible for collecting the user's card's security code.",
 				"If the user refuses to provide a code, call decline_card_capture().",
 				"If the user wishes to start over the card collection process, call restart_card_collection().",
 				"Never repeat any sensitive information, such as the user's security code, back to the user.",
@@ -305,6 +306,7 @@ func TestCreditCardSubtaskInstructionsIncludeReferenceConfirmationWhenEnabled(t 
 			name:         "expiration_date",
 			instructions: NewGetExpirationDateTask().Instructions,
 			wantParts: []string{
+				"You are solely responsible for collecting the user's card's expiration date.",
 				"If the user refuses to provide a date, call decline_card_capture().",
 				"If the user wishes to start over the card collection process, call restart_card_collection().",
 				"Filter out filler words or hesitations.",
