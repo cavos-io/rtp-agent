@@ -191,12 +191,21 @@ func (t *confirmAddressTool) Execute(ctx context.Context, args string) (string, 
 		return "", fmt.Errorf("error: no address was provided, update_address must be called before")
 	}
 	if t.address != t.task.currentAddress {
-		return "", llm.NewToolError("The address has changed since confirmation was requested, ask the user to confirm the updated address.")
+		if activity := t.task.Agent.GetActivity(); activity != nil && activity.Session != nil {
+			_, _ = activity.Session.GenerateReplyWithOptions(context.Background(), agent.GenerateReplyOptions{
+				Instructions: addressStaleConfirmationPrompt(),
+			})
+		}
+		return "", nil
 	}
 
 	t.task.addressConfirmed = true
 	_ = t.task.Complete(&GetAddressResult{Address: t.address})
 	return "Address confirmed.", nil
+}
+
+func addressStaleConfirmationPrompt() string {
+	return "The address has changed since confirmation was requested, ask the user to confirm the updated address."
 }
 
 type declineAddressCaptureTool struct {

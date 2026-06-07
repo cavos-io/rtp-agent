@@ -169,12 +169,21 @@ func (t *confirmEmailTool) Execute(ctx context.Context, args string) (string, er
 		return "", fmt.Errorf("error: no email address was provided, update_email_address must be called before")
 	}
 	if t.email != t.task.currentEmail {
-		return "", llm.NewToolError("The email has changed since confirmation was requested, ask the user to confirm the updated email.")
+		if activity := t.task.Agent.GetActivity(); activity != nil && activity.Session != nil {
+			_, _ = activity.Session.GenerateReplyWithOptions(context.Background(), agent.GenerateReplyOptions{
+				Instructions: emailStaleConfirmationPrompt(),
+			})
+		}
+		return "", nil
 	}
 
 	t.task.emailConfirmed = true
 	_ = t.task.Complete(&GetEmailResult{Email: t.email})
 	return "Email address confirmed.", nil
+}
+
+func emailStaleConfirmationPrompt() string {
+	return "The email has changed since confirmation was requested, ask the user to confirm the updated email."
 }
 
 type declineEmailCaptureTool struct {

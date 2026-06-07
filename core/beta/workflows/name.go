@@ -247,10 +247,19 @@ func (t *confirmNameTool) Parameters() map[string]any {
 
 func (t *confirmNameTool) Execute(ctx context.Context, args string) (string, error) {
 	if t.task.firstName != t.firstName || t.task.middleName != t.middleName || t.task.lastName != t.lastName {
-		return "", llm.NewToolError("The name has changed since confirmation was requested, ask the user to confirm the updated name.")
+		if activity := t.task.Agent.GetActivity(); activity != nil && activity.Session != nil {
+			_, _ = activity.Session.GenerateReplyWithOptions(context.Background(), agent.GenerateReplyOptions{
+				Instructions: nameStaleConfirmationPrompt(),
+			})
+		}
+		return "", nil
 	}
 	t.task.completeName()
 	return "Name confirmed.", nil
+}
+
+func nameStaleConfirmationPrompt() string {
+	return "The name has changed since confirmation was requested, ask the user to confirm the updated name."
 }
 
 type declineNameCaptureTool struct {

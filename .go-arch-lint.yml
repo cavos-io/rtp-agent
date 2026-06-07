@@ -24,6 +24,9 @@ components:
   cmd:
     in: cmd
 
+  examples:
+    in: examples/**
+
   interface:
     in: interface/**
 
@@ -49,6 +52,14 @@ deps:
     mayDependOn:
       - app
       - interface
+
+  examples:
+    anyVendorDeps: true
+    mayDependOn:
+      - app
+      - core
+      - interface
+      - library
 
   app:
     anyVendorDeps: true
