@@ -414,7 +414,11 @@ func openAIRealtimeImageContent(image *llm.ImageContent) (map[string]any, error)
 }
 
 func (s *realtimeSession) UpdateOptions(options llm.RealtimeSessionOptions) error {
-	return s.sendMsg(openAIRealtimeUpdateOptionsMessageWithEventID(options, cavosmath.ShortUUID("options_update_")))
+	msg := openAIRealtimeUpdateOptionsMessageWithEventID(options, cavosmath.ShortUUID("options_update_"))
+	if msg == nil {
+		return nil
+	}
+	return s.sendMsg(msg)
 }
 
 func openAIRealtimeUpdateOptionsMessage(options llm.RealtimeSessionOptions) map[string]any {
@@ -461,6 +465,9 @@ func openAIRealtimeUpdateOptionsMessageWithEventID(options llm.RealtimeSessionOp
 			audio["output"] = output
 		}
 		session["audio"] = audio
+	}
+	if len(session) == 0 {
+		return nil
 	}
 	msg := map[string]any{
 		"type":    "session.update",

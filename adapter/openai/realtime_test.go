@@ -115,6 +115,10 @@ func TestRealtimeSessionSendsProtocolMessages(t *testing.T) {
 	optionsUpdate := <-messages
 	assertRealtimeMessage(t, optionsUpdate, "session.update", "auto")
 	assertRealtimeMessageEventID(t, optionsUpdate, "options_update_")
+	if err := session.UpdateOptions(llm.RealtimeSessionOptions{}); err != nil {
+		t.Fatalf("UpdateOptions empty error = %v", err)
+	}
+	assertNoRealtimeMessage(t, messages, "empty options update should not send a session update")
 
 	if err := session.Interrupt(); err != nil {
 		t.Fatalf("Interrupt error = %v", err)
