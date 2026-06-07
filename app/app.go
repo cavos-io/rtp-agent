@@ -456,6 +456,7 @@ type AppConfig struct {
 	WorkflowDtmfExtraInstructions         string
 	WorkflowPhoneNumberExtraInstructions  string
 	WorkflowDOBExtraInstructions          string
+	WorkflowDOBIncludeTime                bool
 	WorkflowNameExtraInstructions         string
 	WorkflowWarmTransferSipCallTo         string
 	WorkflowWarmTransferSipTrunkID        string
@@ -783,6 +784,7 @@ func DefaultConfigFromEnv() AppConfig {
 		WorkflowDtmfExtraInstructions:           os.Getenv("RTP_AGENT_WORKFLOW_DTMF_EXTRA_INSTRUCTIONS"),
 		WorkflowPhoneNumberExtraInstructions:    os.Getenv("RTP_AGENT_WORKFLOW_PHONE_NUMBER_EXTRA_INSTRUCTIONS"),
 		WorkflowDOBExtraInstructions:            os.Getenv("RTP_AGENT_WORKFLOW_DOB_EXTRA_INSTRUCTIONS"),
+		WorkflowDOBIncludeTime:                  getenvBool("RTP_AGENT_WORKFLOW_DOB_INCLUDE_TIME"),
 		WorkflowNameExtraInstructions:           os.Getenv("RTP_AGENT_WORKFLOW_NAME_EXTRA_INSTRUCTIONS"),
 		WorkflowWarmTransferSipCallTo:           os.Getenv("RTP_AGENT_WORKFLOW_WARM_TRANSFER_SIP_CALL_TO"),
 		WorkflowWarmTransferSipTrunkID:          os.Getenv("RTP_AGENT_WORKFLOW_WARM_TRANSFER_SIP_TRUNK_ID"),
@@ -979,6 +981,7 @@ func workflowAgentFromConfig(cfg AppConfig, baseAgent *agent.Agent) (agent.Agent
 			RequireConfirmation:    cfg.WorkflowRequireConfirmation,
 			RequireConfirmationSet: true,
 			ExtraInstructions:      cfg.WorkflowDOBExtraInstructions,
+			IncludeTime:            cfg.WorkflowDOBIncludeTime,
 		})
 	case "name", "get_name":
 		selected = workflows.NewGetNameTask(workflows.GetNameOptions{
@@ -1121,6 +1124,7 @@ func workflowTaskFactoryFromName(cfg AppConfig, baseAgent *agent.Agent, taskName
 					RequireConfirmation:    cfg.WorkflowRequireConfirmation,
 					RequireConfirmationSet: true,
 					ExtraInstructions:      cfg.WorkflowDOBExtraInstructions,
+					IncludeTime:            cfg.WorkflowDOBIncludeTime,
 				})
 			}),
 		}, nil

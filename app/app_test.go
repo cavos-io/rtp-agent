@@ -2071,6 +2071,7 @@ func TestDefaultConfigFromEnvSelectsPhoneNumberWorkflowAgent(t *testing.T) {
 func TestDefaultConfigFromEnvSelectsDOBWorkflowAgent(t *testing.T) {
 	t.Setenv("RTP_AGENT_WORKFLOW_TASK", "dob")
 	t.Setenv("RTP_AGENT_WORKFLOW_REQUIRE_CONFIRMATION", "true")
+	t.Setenv("RTP_AGENT_WORKFLOW_DOB_INCLUDE_TIME", "true")
 	t.Setenv("RTP_AGENT_WORKFLOW_DOB_EXTRA_INSTRUCTIONS", "Ask for the birthdate exactly as shown on the insurance card.")
 
 	app, err := NewApp(DefaultConfigFromEnv())
@@ -2084,14 +2085,27 @@ func TestDefaultConfigFromEnvSelectsDOBWorkflowAgent(t *testing.T) {
 	if !task.RequireConfirmation {
 		t.Fatal("RequireConfirmation = false, want true")
 	}
+	if !task.IncludeTime {
+		t.Fatal("IncludeTime = false, want true")
+	}
 	if !strings.Contains(task.Instructions, "Ask for the birthdate exactly as shown on the insurance card.") {
 		t.Fatalf("Instructions = %q, want DOB extra instructions", task.Instructions)
+	}
+	if !strings.Contains(task.Instructions, "Also ask for and capture the time of birth if the user knows it.") {
+		t.Fatalf("Instructions = %q, want DOB time instructions", task.Instructions)
 	}
 	if app.Agent != task.GetAgent() {
 		t.Fatal("App.Agent does not point at selected DOB workflow agent")
 	}
-	if len(app.Agent.Tools) != 2 {
-		t.Fatalf("workflow tools = %d, want update/decline tools", len(app.Agent.Tools))
+	if len(app.Agent.Tools) != 3 {
+		t.Fatalf("workflow tools = %d, want update/decline/time tools", len(app.Agent.Tools))
+	}
+	wantTools := map[string]bool{"update_dob": true, "decline_dob_capture": true, "update_time": true}
+	for _, tool := range app.Agent.Tools {
+		delete(wantTools, tool.Name())
+	}
+	if len(wantTools) != 0 {
+		t.Fatalf("workflow tools = %#v, missing %v", app.Agent.Tools, wantTools)
 	}
 }
 
