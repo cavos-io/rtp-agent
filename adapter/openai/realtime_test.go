@@ -1300,6 +1300,42 @@ func TestRealtimeChatContextCreateMessagesSkipAgentMetadataItems(t *testing.T) {
 	}
 }
 
+func TestRealtimeChatContextCreateMessagesSkipsInstructionsButKeepsSystemMessages(t *testing.T) {
+	chatCtx := llm.NewChatContext()
+	chatCtx.AddMessage(llm.ChatMessageArgs{
+		ID:      "instructions",
+		Role:    llm.ChatRoleSystem,
+		Content: []llm.ChatContent{{Instructions: llm.NewInstructions("speak warmly")}},
+	})
+	chatCtx.AddMessage(llm.ChatMessageArgs{
+		ID:   "system-note",
+		Role: llm.ChatRoleSystem,
+		Text: "customer is premium",
+	})
+	chatCtx.AddMessage(llm.ChatMessageArgs{
+		ID:   "user",
+		Role: llm.ChatRoleUser,
+		Text: "hello",
+	})
+
+	msgs, err := openAIRealtimeChatContextCreateMessages(chatCtx)
+	if err != nil {
+		t.Fatalf("openAIRealtimeChatContextCreateMessages error = %v, want nil", err)
+	}
+	if len(msgs) != 2 {
+		t.Fatalf("messages len = %d, want system note and user message", len(msgs))
+	}
+
+	systemItem := msgs[0]["item"].(map[string]any)
+	if systemItem["id"] != "system-note" || systemItem["role"] != "system" {
+		t.Fatalf("first item = %#v, want preserved system message", systemItem)
+	}
+	userItem := msgs[1]["item"].(map[string]any)
+	if userItem["id"] != "user" || userItem["role"] != "user" {
+		t.Fatalf("second item = %#v, want user message", userItem)
+	}
+}
+
 func TestRealtimeChatContextUpdateMessagesDeleteRemovedAndRecreateChangedItems(t *testing.T) {
 	oldCtx := llm.NewChatContext()
 	oldCtx.AddMessage(llm.ChatMessageArgs{ID: "keep", Role: llm.ChatRoleUser, Text: "keep"})
