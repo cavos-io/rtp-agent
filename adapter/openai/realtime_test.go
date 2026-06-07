@@ -195,7 +195,8 @@ func TestRealtimeSessionSendsProtocolMessages(t *testing.T) {
 	if err := session.Interrupt(); err != nil {
 		t.Fatalf("Interrupt error = %v", err)
 	}
-	assertRealtimeMessage(t, <-messages, "response.cancel", "")
+	inactiveInterruptReason := "interrupt without active generation should not send response.cancel"
+	assertNoRealtimeMessage(t, messages, inactiveInterruptReason)
 
 	audioChunk := make([]byte, 24000/10*2)
 	copy(audioChunk, []byte{1, 2, 3, 4})

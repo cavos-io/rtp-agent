@@ -696,6 +696,9 @@ func openAIRealtimeToolChoice(choice llm.ToolChoice) any {
 }
 
 func (s *realtimeSession) Interrupt() error {
+	if s.generation == nil {
+		return nil
+	}
 	msg := map[string]any{
 		"type": "response.cancel",
 	}
