@@ -452,6 +452,7 @@ type AppConfig struct {
 	WorkflowDtmfAskConfirmation           *bool
 	WorkflowDtmfExtraInstructions         string
 	WorkflowPhoneNumberExtraInstructions  string
+	WorkflowDOBExtraInstructions          string
 	WorkflowWarmTransferSipCallTo         string
 	WorkflowWarmTransferSipTrunkID        string
 	WorkflowWarmTransferSipHeaders        map[string]string
@@ -773,6 +774,7 @@ func DefaultConfigFromEnv() AppConfig {
 		WorkflowDtmfAskConfirmation:             getenvOptionalBool("RTP_AGENT_WORKFLOW_DTMF_ASK_CONFIRMATION"),
 		WorkflowDtmfExtraInstructions:           os.Getenv("RTP_AGENT_WORKFLOW_DTMF_EXTRA_INSTRUCTIONS"),
 		WorkflowPhoneNumberExtraInstructions:    os.Getenv("RTP_AGENT_WORKFLOW_PHONE_NUMBER_EXTRA_INSTRUCTIONS"),
+		WorkflowDOBExtraInstructions:            os.Getenv("RTP_AGENT_WORKFLOW_DOB_EXTRA_INSTRUCTIONS"),
 		WorkflowWarmTransferSipCallTo:           os.Getenv("RTP_AGENT_WORKFLOW_WARM_TRANSFER_SIP_CALL_TO"),
 		WorkflowWarmTransferSipTrunkID:          os.Getenv("RTP_AGENT_WORKFLOW_WARM_TRANSFER_SIP_TRUNK_ID"),
 		WorkflowWarmTransferSipHeaders:          splitEnvStringMap("RTP_AGENT_WORKFLOW_WARM_TRANSFER_SIP_HEADERS"),
@@ -965,6 +967,7 @@ func workflowAgentFromConfig(cfg AppConfig, baseAgent *agent.Agent) (agent.Agent
 		selected = workflows.NewGetDOBTask(workflows.GetDOBOptions{
 			RequireConfirmation:    cfg.WorkflowRequireConfirmation,
 			RequireConfirmationSet: true,
+			ExtraInstructions:      cfg.WorkflowDOBExtraInstructions,
 		})
 	case "name", "get_name":
 		selected = workflows.NewGetNameTask(workflows.GetNameOptions{
@@ -1095,6 +1098,7 @@ func workflowTaskFactoryFromName(cfg AppConfig, baseAgent *agent.Agent, taskName
 				return workflows.NewGetDOBTask(workflows.GetDOBOptions{
 					RequireConfirmation:    cfg.WorkflowRequireConfirmation,
 					RequireConfirmationSet: true,
+					ExtraInstructions:      cfg.WorkflowDOBExtraInstructions,
 				})
 			}),
 		}, nil

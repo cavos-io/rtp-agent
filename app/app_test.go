@@ -2040,6 +2040,7 @@ func TestDefaultConfigFromEnvSelectsPhoneNumberWorkflowAgent(t *testing.T) {
 func TestDefaultConfigFromEnvSelectsDOBWorkflowAgent(t *testing.T) {
 	t.Setenv("RTP_AGENT_WORKFLOW_TASK", "dob")
 	t.Setenv("RTP_AGENT_WORKFLOW_REQUIRE_CONFIRMATION", "true")
+	t.Setenv("RTP_AGENT_WORKFLOW_DOB_EXTRA_INSTRUCTIONS", "Ask for the birthdate exactly as shown on the insurance card.")
 
 	app, err := NewApp(DefaultConfigFromEnv())
 	if err != nil {
@@ -2051,6 +2052,9 @@ func TestDefaultConfigFromEnvSelectsDOBWorkflowAgent(t *testing.T) {
 	}
 	if !task.RequireConfirmation {
 		t.Fatal("RequireConfirmation = false, want true")
+	}
+	if !strings.Contains(task.Instructions, "Ask for the birthdate exactly as shown on the insurance card.") {
+		t.Fatalf("Instructions = %q, want DOB extra instructions", task.Instructions)
 	}
 	if app.Agent != task.GetAgent() {
 		t.Fatal("App.Agent does not point at selected DOB workflow agent")
