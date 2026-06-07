@@ -276,17 +276,21 @@ func openAIAudioRequest(s *OpenAISTT, reader io.Reader, language string) openai.
 	if s.detectLanguage {
 		requestLanguage = ""
 	}
-	return openai.AudioRequest{
+	req := openai.AudioRequest{
 		Model:    s.model,
 		FilePath: "audio.wav", // Static filename required by API when Reader is used.
 		Reader:   reader,
 		Language: requestLanguage,
 		Prompt:   s.prompt,
-		Format:   openai.AudioResponseFormatVerboseJSON,
-		TimestampGranularities: []openai.TranscriptionTimestampGranularity{
-			openai.TranscriptionTimestampGranularityWord,
-		},
+		Format:   openai.AudioResponseFormatJSON,
 	}
+	if s.model == "whisper-1" {
+		req.Format = openai.AudioResponseFormatVerboseJSON
+		req.TimestampGranularities = []openai.TranscriptionTimestampGranularity{
+			openai.TranscriptionTimestampGranularityWord,
+		}
+	}
+	return req
 }
 
 func openAISpeechEvent(resp openai.AudioResponse) *stt.SpeechEvent {

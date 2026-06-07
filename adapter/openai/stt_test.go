@@ -33,6 +33,21 @@ func TestOpenAIAudioRequestAsksForWordTimestamps(t *testing.T) {
 	}
 }
 
+func TestOpenAIAudioRequestUsesJSONForNonWhisperModels(t *testing.T) {
+	provider := mustNewOpenAISTT(t, "test-key", "")
+	req := openAIAudioRequest(provider, strings.NewReader("audio"), "")
+
+	if req.Model != "gpt-4o-mini-transcribe" {
+		t.Fatalf("model = %q, want gpt-4o-mini-transcribe", req.Model)
+	}
+	if req.Format != goopenai.AudioResponseFormatJSON {
+		t.Fatalf("format = %q, want json", req.Format)
+	}
+	if len(req.TimestampGranularities) != 0 {
+		t.Fatalf("timestamp granularities = %#v, want omitted for non-whisper model", req.TimestampGranularities)
+	}
+}
+
 func TestOpenAISpeechEventPreservesWordTimestamps(t *testing.T) {
 	var resp goopenai.AudioResponse
 	if err := json.Unmarshal([]byte(`{
