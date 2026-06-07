@@ -275,6 +275,64 @@ func TestCreditCardTasksDefaultToConfirmation(t *testing.T) {
 	}
 }
 
+func TestCreditCardSubtaskInstructionsIncludeReferenceConfirmationWhenEnabled(t *testing.T) {
+	cases := []struct {
+		name         string
+		instructions string
+		want         string
+	}{
+		{
+			name:         "card_number",
+			instructions: NewGetCardNumberTask().Instructions,
+			want:         "Call `confirm_card_number` once the user has repeated their card number.",
+		},
+		{
+			name:         "security_code",
+			instructions: NewGetSecurityCodeTask().Instructions,
+			want:         "Call `confirm_security_code` once the user has repeated their security code.",
+		},
+		{
+			name:         "expiration_date",
+			instructions: NewGetExpirationDateTask().Instructions,
+			want:         "Call `confirm_expiration_date` once the user has repeated their expiration date.",
+		},
+	}
+	for _, tc := range cases {
+		if !strings.Contains(tc.instructions, tc.want) {
+			t.Fatalf("%s instructions = %q, want reference confirmation instruction %q", tc.name, tc.instructions, tc.want)
+		}
+	}
+}
+
+func TestCreditCardSubtaskInstructionsOmitConfirmationWhenDisabled(t *testing.T) {
+	cases := []struct {
+		name         string
+		instructions string
+		unwanted     string
+	}{
+		{
+			name:         "card_number",
+			instructions: NewGetCardNumberTask(false).Instructions,
+			unwanted:     "confirm_card_number",
+		},
+		{
+			name:         "security_code",
+			instructions: NewGetSecurityCodeTask(false).Instructions,
+			unwanted:     "confirm_security_code",
+		},
+		{
+			name:         "expiration_date",
+			instructions: NewGetExpirationDateTask(false).Instructions,
+			unwanted:     "confirm_expiration_date",
+		},
+	}
+	for _, tc := range cases {
+		if strings.Contains(tc.instructions, tc.unwanted) {
+			t.Fatalf("%s instructions = %q, want no %s when confirmation disabled", tc.name, tc.instructions, tc.unwanted)
+		}
+	}
+}
+
 func TestGetCreditCardTaskCombinesSubtaskResults(t *testing.T) {
 	task := NewGetCreditCardTask(true)
 
