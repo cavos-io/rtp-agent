@@ -218,7 +218,7 @@ run_go_test_manifest_case() {
 
   if ! (
     cd "$REPO_ROOT"
-    go test "$go_package" -run "^$test_name$" -count=1 -v
+    GOCACHE="${GOCACHE:-$REPO_ROOT/.tmp/gocache}" go test "$go_package" -run "^$test_name$" -count=1 -v
   ) > "$tmpdir/actual.raw" 2>&1; then
     :
   fi
@@ -405,7 +405,7 @@ run_go_test_manifest_cases() {
 
   if ! (
     cd "$REPO_ROOT"
-    go test "$go_package" -run "^($regex)$" -count=1 -v
+    GOCACHE="${GOCACHE:-$REPO_ROOT/.tmp/gocache}" go test "$go_package" -run "^($regex)$" -count=1 -v
   ) > "$tmpdir/actual.raw" 2>&1; then
     :
   fi

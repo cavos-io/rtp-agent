@@ -117,6 +117,52 @@ func TestGetDOBTaskIncludesOptionalTime(t *testing.T) {
 	}
 }
 
+func TestGetDOBTaskUpdateTimeRequiresConfirmationGuidance(t *testing.T) {
+	task := NewGetDOBTask(GetDOBOptions{IncludeTime: true})
+	updateTime := &updateDOBTimeTool{task: task}
+
+	out, err := updateTime.Execute(context.Background(), `{"hour":15,"minute":30}`)
+	if err != nil {
+		t.Fatalf("update_time Execute() error = %v", err)
+	}
+
+	wantParts := []string{
+		"The time of birth has been updated to 03:30 PM",
+		"Repeat the time back to the user in a natural spoken format.",
+		"Prompt the user for confirmation, do not call `confirm_dob` directly",
+	}
+	for _, want := range wantParts {
+		if !strings.Contains(out, want) {
+			t.Fatalf("update_time output = %q, want to contain %q", out, want)
+		}
+	}
+}
+
+func TestGetDOBTaskUpdateTimeWithDateRequiresConfirmationGuidance(t *testing.T) {
+	task := NewGetDOBTask(GetDOBOptions{IncludeTime: true})
+	updateDOB := &updateDOBTool{task: task}
+	updateTime := &updateDOBTimeTool{task: task}
+
+	if _, err := updateDOB.Execute(context.Background(), `{"year":1990,"month":1,"day":15}`); err != nil {
+		t.Fatalf("update_dob Execute() error = %v", err)
+	}
+	out, err := updateTime.Execute(context.Background(), `{"hour":15,"minute":30}`)
+	if err != nil {
+		t.Fatalf("update_time Execute() error = %v", err)
+	}
+
+	wantParts := []string{
+		"The date and time of birth has been updated to January 15, 1990 at 03:30 PM",
+		"Repeat the time back to the user in a natural spoken format.",
+		"Prompt the user for confirmation, do not call `confirm_dob` directly",
+	}
+	for _, want := range wantParts {
+		if !strings.Contains(out, want) {
+			t.Fatalf("update_time output = %q, want to contain %q", out, want)
+		}
+	}
+}
+
 func TestGetDOBTaskCanDisableDefaultConfirmation(t *testing.T) {
 	task := NewGetDOBTask(GetDOBOptions{RequireConfirmation: false, RequireConfirmationSet: true})
 	update := &updateDOBTool{task: task}

@@ -89,6 +89,8 @@ If the user wishes to start over the card collection process, call restart_card_
 Avoid listing out questions with bullet points or numbers, use a natural conversational tone.
 Never repeat sensitive information, such as the user's card number, back to the user.`
 
+const cardNumberConfirmationInstructions = "Call `confirm_card_number` once the user has repeated their card number."
+
 const SecurityCodeInstructions = `You are a single step in a broader process of collecting credit card information.
 You are solely responsible for collecting the user's card security code.
 Handle input as noisy voice transcription. Expect users to read the security code digit by digit.
@@ -99,6 +101,8 @@ If the user wishes to start over the card collection process, call restart_card_
 Avoid listing out questions with bullet points or numbers, use a natural conversational tone.
 Never repeat sensitive information, such as the user's security code, back to the user.`
 
+const securityCodeConfirmationInstructions = "Call `confirm_security_code` once the user has repeated their security code."
+
 const ExpirationDateInstructions = `You are a single step in a broader process of collecting credit card information.
 You are solely responsible for collecting the user's card expiration date.
 Handle input as noisy voice transcription. Expect formats like April twenty five, oh four twenty five, four slash twenty five, or April 2025.
@@ -108,13 +112,16 @@ If the user wishes to start over the card collection process, call restart_card_
 Avoid listing out questions with bullet points or numbers, use a natural conversational tone.
 Never repeat sensitive information, such as the user's expiration date, back to the user.`
 
+const expirationDateConfirmationInstructions = "Call `confirm_expiration_date` once the user has repeated their expiration date."
+
 const CreditCardInstructions = `Collect the user's credit card information by running the cardholder name, card number, security code, and expiration date subtasks.
 Never repeat sensitive card details back to the user.`
 
 func NewGetCardNumberTask(requireConfirmation ...bool) *GetCardNumberTask {
+	confirmationRequired := defaultCardConfirmation(requireConfirmation)
 	t := &GetCardNumberTask{
-		AgentTask:           *agent.NewAgentTask[*GetCardNumberResult](CardNumberInstructions),
-		RequireConfirmation: defaultCardConfirmation(requireConfirmation),
+		AgentTask:           *agent.NewAgentTask[*GetCardNumberResult](cardNumberInstructions(confirmationRequired)),
+		RequireConfirmation: confirmationRequired,
 	}
 
 	t.Agent.Tools = []llm.Tool{
@@ -127,9 +134,10 @@ func NewGetCardNumberTask(requireConfirmation ...bool) *GetCardNumberTask {
 }
 
 func NewGetSecurityCodeTask(requireConfirmation ...bool) *GetSecurityCodeTask {
+	confirmationRequired := defaultCardConfirmation(requireConfirmation)
 	t := &GetSecurityCodeTask{
-		AgentTask:           *agent.NewAgentTask[*GetSecurityCodeResult](SecurityCodeInstructions),
-		RequireConfirmation: defaultCardConfirmation(requireConfirmation),
+		AgentTask:           *agent.NewAgentTask[*GetSecurityCodeResult](securityCodeInstructions(confirmationRequired)),
+		RequireConfirmation: confirmationRequired,
 	}
 
 	t.Agent.Tools = []llm.Tool{
@@ -142,9 +150,10 @@ func NewGetSecurityCodeTask(requireConfirmation ...bool) *GetSecurityCodeTask {
 }
 
 func NewGetExpirationDateTask(requireConfirmation ...bool) *GetExpirationDateTask {
+	confirmationRequired := defaultCardConfirmation(requireConfirmation)
 	t := &GetExpirationDateTask{
-		AgentTask:           *agent.NewAgentTask[*GetExpirationDateResult](ExpirationDateInstructions),
-		RequireConfirmation: defaultCardConfirmation(requireConfirmation),
+		AgentTask:           *agent.NewAgentTask[*GetExpirationDateResult](expirationDateInstructions(confirmationRequired)),
+		RequireConfirmation: confirmationRequired,
 	}
 
 	t.Agent.Tools = []llm.Tool{
@@ -168,6 +177,27 @@ func defaultCardConfirmation(requireConfirmation []bool) bool {
 		return requireConfirmation[0]
 	}
 	return true
+}
+
+func cardNumberInstructions(requireConfirmation bool) string {
+	if !requireConfirmation {
+		return CardNumberInstructions
+	}
+	return CardNumberInstructions + "\n" + cardNumberConfirmationInstructions
+}
+
+func securityCodeInstructions(requireConfirmation bool) string {
+	if !requireConfirmation {
+		return SecurityCodeInstructions
+	}
+	return SecurityCodeInstructions + "\n" + securityCodeConfirmationInstructions
+}
+
+func expirationDateInstructions(requireConfirmation bool) string {
+	if !requireConfirmation {
+		return ExpirationDateInstructions
+	}
+	return ExpirationDateInstructions + "\n" + expirationDateConfirmationInstructions
 }
 
 func (t *GetCardNumberTask) OnEnter() {
@@ -333,12 +363,12 @@ func (t *recordCardNumberTool) Execute(ctx context.Context, args string) (string
 	if len(cardNumber) < 13 || len(cardNumber) > 19 {
 		return "", llm.NewToolError("The length of the card number is invalid, ask the user to repeat their card number.")
 	}
-	if !validateCardNumberLuhn(cardNumber) {
-		return "", llm.NewToolError("The card number is not valid, ask the user if they made a mistake or to provide another card.")
-	}
 
 	t.task.currentCardNumber = cardNumber
 	if !t.task.RequireConfirmation {
+		if !validateCardNumberLuhn(cardNumber) {
+			return "", llm.NewToolError("The card number is not valid, ask the user if they made a mistake or to provide another card.")
+		}
 		t.task.completeCardNumber(cardNumber)
 		return "Card number captured and task completed.", nil
 	}
@@ -398,7 +428,7 @@ func (t *updateSecurityCodeTool) Execute(ctx context.Context, args string) (stri
 	}
 
 	t.task.setConfirmSecurityCodeTool(securityCode)
-	return "The security code has been updated.\nDo not repeat the security code back to the user, ask them to repeat themselves.", nil
+	return "The security code has been updated.\nDo not repeat the security code back to the user, ask them to repeat themselves.\nCall `confirm_security_code` once the user confirms, do not call it preemptively.", nil
 }
 
 func (t *GetSecurityCodeTask) setConfirmSecurityCodeTool(securityCode string) {
@@ -459,7 +489,7 @@ func (t *updateExpirationDateTool) Execute(ctx context.Context, args string) (st
 	}
 
 	t.task.setConfirmExpirationDateTool(params.ExpirationMonth, params.ExpirationYear, expirationDate)
-	return "The expiration date has been updated.\nDo not repeat the expiration date back to the user, ask them to repeat themselves.", nil
+	return "The expiration date has been updated.\nDo not repeat the expiration date back to the user, ask them to repeat themselves.\nCall `confirm_expiration_date` once the user confirms, do not call it preemptively.", nil
 }
 
 func (t *GetExpirationDateTask) setConfirmExpirationDateTool(month int, year int, expirationDate string) {

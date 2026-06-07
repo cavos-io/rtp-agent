@@ -61,6 +61,9 @@ func TestGetEmailTaskInjectsConfirmToolAfterUpdate(t *testing.T) {
 	if out == "" {
 		t.Fatal("update Execute() output is empty, want confirmation guidance")
 	}
+	if !strings.Contains(out, "Repeat the email character by character: a d a @ e x a m p l e . c o m if needed") {
+		t.Fatalf("update Execute() output = %q, want character-by-character guidance", out)
+	}
 	if len(task.Agent.Tools) != 3 || task.Agent.Tools[2].Name() != "confirm_email_address" {
 		t.Fatalf("tools = %#v, want confirm_email_address appended", task.Agent.Tools)
 	}
@@ -90,6 +93,14 @@ func TestGetEmailTaskCanDisableDefaultConfirmation(t *testing.T) {
 	}
 	if out != "Email captured and task completed." {
 		t.Fatalf("update Execute() output = %q, want completion message", out)
+	}
+}
+
+func TestGetEmailTaskInstructionsOmitConfirmationWhenDisabled(t *testing.T) {
+	task := NewGetEmailTask(GetEmailOptions{RequireConfirmation: false, RequireConfirmationSet: true})
+
+	if strings.Contains(task.Instructions, "confirm_email_address") {
+		t.Fatalf("Instructions = %q, want no confirm_email_address guidance when confirmation disabled", task.Instructions)
 	}
 }
 
