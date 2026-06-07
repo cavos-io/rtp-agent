@@ -39,28 +39,36 @@ type GetNameTask struct {
 	lastName            string
 }
 
-const NameInstructions = `You are only a single step in a broader system, responsible solely for capturing the user's name.
+const nameConfirmationInstruction = "Call `confirm_name` after the user confirmed the name is correct."
+
+const nameInstructionsBeforeConfirmation = `You are only a single step in a broader system, responsible solely for capturing the user's name.
 Handle input as noisy voice transcription. Expect users to say names aloud, possibly followed by spelling.
 Normalize common spoken patterns silently, preserve special characters such as hyphens and apostrophes, and capitalize name parts appropriately.
 Call update_name at the first opportunity whenever you form a new hypothesis about the name.
 Don't invent names, stick strictly to what the user said.
-If the user explicitly declines to provide their name, call decline_name_capture.
+`
+
+const nameInstructionsAfterConfirmation = `If the user explicitly declines to provide their name, call decline_name_capture.
 Ignore unrelated input and avoid going off-topic.`
+
+const NameInstructions = nameInstructionsBeforeConfirmation + nameConfirmationInstruction + "\n" + nameInstructionsAfterConfirmation
+
+const nameInstructionsWithoutConfirmation = nameInstructionsBeforeConfirmation + nameInstructionsAfterConfirmation
 
 func NewGetNameTask(opts GetNameOptions) *GetNameTask {
 	if !opts.FirstName && !opts.MiddleName && !opts.LastName {
 		opts.FirstName = true
 	}
-	instructions := NameInstructions
+	requireConfirmation := true
+	if opts.RequireConfirmationSet {
+		requireConfirmation = opts.RequireConfirmation
+	}
+	instructions := nameInstructions(requireConfirmation)
 	if opts.VerifySpelling {
 		instructions += "\nAfter receiving the name, always verify the spelling by asking the user to confirm or spell out the name letter by letter."
 	}
 	if strings.TrimSpace(opts.ExtraInstructions) != "" {
 		instructions += "\n" + strings.TrimSpace(opts.ExtraInstructions)
-	}
-	requireConfirmation := true
-	if opts.RequireConfirmationSet {
-		requireConfirmation = opts.RequireConfirmation
 	}
 	t := &GetNameTask{
 		AgentTask:           *agent.NewAgentTask[*GetNameResult](instructions),
@@ -76,6 +84,13 @@ func NewGetNameTask(opts GetNameOptions) *GetNameTask {
 		&declineNameCaptureTool{task: t},
 	}
 	return t
+}
+
+func nameInstructions(requireConfirmation bool) string {
+	if !requireConfirmation {
+		return nameInstructionsWithoutConfirmation
+	}
+	return NameInstructions
 }
 
 func (t *GetNameTask) OnEnter() {

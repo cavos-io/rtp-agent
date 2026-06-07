@@ -111,6 +111,23 @@ func TestGetNameTaskCanDisableDefaultConfirmation(t *testing.T) {
 	}
 }
 
+func TestGetNameTaskInstructionsIncludeReferenceConfirmationWhenEnabled(t *testing.T) {
+	task := NewGetNameTask(GetNameOptions{FirstName: true})
+
+	want := "Call `confirm_name` after the user confirmed the name is correct."
+	if !strings.Contains(task.Instructions, want) {
+		t.Fatalf("Instructions = %q, want reference confirmation instruction %q", task.Instructions, want)
+	}
+}
+
+func TestGetNameTaskInstructionsOmitConfirmationWhenDisabled(t *testing.T) {
+	task := NewGetNameTask(GetNameOptions{FirstName: true, RequireConfirmation: false, RequireConfirmationSet: true})
+
+	if strings.Contains(task.Instructions, "confirm_name") {
+		t.Fatalf("Instructions = %q, want no confirm_name guidance when confirmation disabled", task.Instructions)
+	}
+}
+
 func TestGetNameTaskDeclineFailsTask(t *testing.T) {
 	task := NewGetNameTask(GetNameOptions{FirstName: true, RequireConfirmationSet: true})
 	tool := &declineNameCaptureTool{task: task}
