@@ -219,7 +219,7 @@ func buildOpenAIRealtimeSTTSessionUpdate(s *OpenAISTT) ([]byte, error) {
 }
 
 func openAIRealtimeIsWhisperModel(model string) bool {
-	return model == "gpt-realtime-whisper"
+	return strings.HasPrefix(model, "gpt-realtime-whisper")
 }
 
 func buildOpenAIRealtimeSTTAudioAppendMessage(frame *model.AudioFrame) ([]byte, error) {

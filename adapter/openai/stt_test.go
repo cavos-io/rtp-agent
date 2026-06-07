@@ -274,6 +274,27 @@ func TestOpenAIRealtimeSTTSessionUpdateMatchesReference(t *testing.T) {
 	}
 }
 
+func TestOpenAIRealtimeWhisperVersionOmitsTurnDetection(t *testing.T) {
+	provider := mustNewOpenAISTT(t, "test-key", "gpt-realtime-whisper-2025-06-03",
+		WithOpenAISTTRealtime(true),
+	)
+
+	payload, err := buildOpenAIRealtimeSTTSessionUpdate(provider)
+	if err != nil {
+		t.Fatalf("build session update: %v", err)
+	}
+	var message map[string]any
+	if err := json.Unmarshal(payload, &message); err != nil {
+		t.Fatalf("decode session update: %v", err)
+	}
+	session := message["session"].(map[string]any)
+	audio := session["audio"].(map[string]any)
+	input := audio["input"].(map[string]any)
+	if _, ok := input["turn_detection"]; ok {
+		t.Fatalf("turn_detection = %+v, want omitted for realtime whisper model", input["turn_detection"])
+	}
+}
+
 func TestOpenAIRealtimeSTTStreamMessagesMatchReference(t *testing.T) {
 	frame := &model.AudioFrame{
 		Data:              []byte{1, 2, 3, 4},
