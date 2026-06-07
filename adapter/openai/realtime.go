@@ -3,6 +3,7 @@ package openai
 import (
 	"context"
 	"encoding/base64"
+	"encoding/binary"
 	"encoding/json"
 	"fmt"
 	"math"
@@ -713,6 +714,10 @@ func (s *realtimeSession) PushAudio(frame *model.AudioFrame) error {
 	if frame == nil || len(frame.Data) == 0 {
 		return nil
 	}
+	frame, err := normalizeOpenAIRealtimeInputAudio(frame)
+	if err != nil {
+		return err
+	}
 	if s.audioBStream == nil {
 		s.audioBStream = newOpenAIRealtimeAudioByteStream()
 	}
@@ -730,6 +735,60 @@ func (s *realtimeSession) PushAudio(frame *model.AudioFrame) error {
 		}
 	}
 	return nil
+}
+
+func normalizeOpenAIRealtimeInputAudio(frame *model.AudioFrame) (*model.AudioFrame, error) {
+	if frame == nil {
+		return nil, nil
+	}
+	if frame.SampleRate == 0 || frame.NumChannels == 0 {
+		return frame, nil
+	}
+	if frame.SampleRate == openAIRealtimeInputSampleRate && frame.NumChannels == openAIRealtimeInputNumChannels {
+		return frame, nil
+	}
+	if len(frame.Data)%2 != 0 {
+		return nil, fmt.Errorf("openai realtime input audio must be 16-bit PCM")
+	}
+	samplesPerChannel := frame.SamplesPerChannel
+	if samplesPerChannel == 0 {
+		samplesPerChannel = uint32(len(frame.Data)) / frame.NumChannels / 2
+	}
+	expectedBytes := int(samplesPerChannel * frame.NumChannels * 2)
+	if len(frame.Data) < expectedBytes {
+		return nil, fmt.Errorf("openai realtime input audio data is shorter than declared sample count")
+	}
+	if samplesPerChannel == 0 {
+		return &model.AudioFrame{
+			SampleRate:        openAIRealtimeInputSampleRate,
+			NumChannels:       openAIRealtimeInputNumChannels,
+			SamplesPerChannel: 0,
+		}, nil
+	}
+
+	outSamples := uint32((uint64(samplesPerChannel)*uint64(openAIRealtimeInputSampleRate) + uint64(frame.SampleRate) - 1) / uint64(frame.SampleRate))
+	out := make([]byte, int(outSamples*openAIRealtimeInputNumChannels*2))
+	channelCount := int(frame.NumChannels)
+	for outIdx := uint32(0); outIdx < outSamples; outIdx++ {
+		srcIdx := uint32(uint64(outIdx) * uint64(frame.SampleRate) / uint64(openAIRealtimeInputSampleRate))
+		if srcIdx >= samplesPerChannel {
+			srcIdx = samplesPerChannel - 1
+		}
+		var sum int32
+		for ch := 0; ch < channelCount; ch++ {
+			offset := (int(srcIdx)*channelCount + ch) * 2
+			sum += int32(int16(binary.LittleEndian.Uint16(frame.Data[offset : offset+2])))
+		}
+		sample := sum / int32(channelCount)
+		binary.LittleEndian.PutUint16(out[int(outIdx)*2:int(outIdx)*2+2], uint16(int16(sample)))
+	}
+
+	return &model.AudioFrame{
+		Data:              out,
+		SampleRate:        openAIRealtimeInputSampleRate,
+		NumChannels:       openAIRealtimeInputNumChannels,
+		SamplesPerChannel: outSamples,
+	}, nil
 }
 
 func newOpenAIRealtimeAudioByteStream() *audio.AudioByteStream {
