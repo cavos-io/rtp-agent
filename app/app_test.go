@@ -2013,6 +2013,7 @@ func TestDefaultConfigFromEnvSelectsEmailWorkflowAgent(t *testing.T) {
 func TestDefaultConfigFromEnvSelectsPhoneNumberWorkflowAgent(t *testing.T) {
 	t.Setenv("RTP_AGENT_WORKFLOW_TASK", "phone_number")
 	t.Setenv("RTP_AGENT_WORKFLOW_REQUIRE_CONFIRMATION", "true")
+	t.Setenv("RTP_AGENT_WORKFLOW_PHONE_NUMBER_EXTRA_INSTRUCTIONS", "Ask whether this is a mobile number.")
 
 	app, err := NewApp(DefaultConfigFromEnv())
 	if err != nil {
@@ -2024,6 +2025,9 @@ func TestDefaultConfigFromEnvSelectsPhoneNumberWorkflowAgent(t *testing.T) {
 	}
 	if !task.RequireConfirmation {
 		t.Fatal("RequireConfirmation = false, want true")
+	}
+	if !strings.Contains(task.Instructions, "Ask whether this is a mobile number.") {
+		t.Fatalf("Instructions = %q, want phone-number extra instructions", task.Instructions)
 	}
 	if app.Agent != task.GetAgent() {
 		t.Fatal("App.Agent does not point at selected phone-number workflow agent")
