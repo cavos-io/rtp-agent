@@ -230,13 +230,22 @@ func (t *confirmDOBTool) Parameters() map[string]any {
 
 func (t *confirmDOBTool) Execute(ctx context.Context, args string) (string, error) {
 	if !sameOptionalTime(t.dateOfBirth, t.task.currentDOB) || !sameOptionalTime(t.timeOfBirth, t.task.currentTime) {
-		return "", llm.NewToolError("The date of birth has changed since confirmation was requested, ask the user to confirm the updated date.")
+		if activity := t.task.Agent.GetActivity(); activity != nil && activity.Session != nil {
+			_, _ = activity.Session.GenerateReplyWithOptions(context.Background(), agent.GenerateReplyOptions{
+				Instructions: dobStaleConfirmationPrompt(),
+			})
+		}
+		return "", nil
 	}
 	if t.task.currentDOB == nil {
 		return "", llm.NewToolError("No date of birth was provided yet, ask the user to provide it.")
 	}
 	_ = t.task.Complete(&GetDOBResult{DateOfBirth: *t.task.currentDOB, TimeOfBirth: t.task.currentTime})
 	return "Date of birth confirmed.", nil
+}
+
+func dobStaleConfirmationPrompt() string {
+	return "The date of birth has changed since confirmation was requested, ask the user to confirm the updated date."
 }
 
 type declineDOBCaptureTool struct {
