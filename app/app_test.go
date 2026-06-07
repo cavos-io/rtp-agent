@@ -79,6 +79,7 @@ import (
 	"github.com/cavos-io/rtp-agent/adapter/tavus"
 	"github.com/cavos-io/rtp-agent/adapter/telnyx"
 	"github.com/cavos-io/rtp-agent/adapter/trugen"
+	"github.com/cavos-io/rtp-agent/adapter/turndetector"
 	"github.com/cavos-io/rtp-agent/adapter/ultravox"
 	"github.com/cavos-io/rtp-agent/adapter/upliftai"
 	"github.com/cavos-io/rtp-agent/adapter/xai"
@@ -176,6 +177,7 @@ func TestAppRegistersReferencePluginMetadataBatch(t *testing.T) {
 		tavus.PluginPackage:        {title: tavus.PluginTitle, version: tavus.PluginVersion},
 		telnyx.PluginPackage:       {title: telnyx.PluginTitle, version: telnyx.PluginVersion},
 		trugen.PluginPackage:       {title: trugen.PluginTitle, version: trugen.PluginVersion},
+		turndetector.PluginPackage: {title: turndetector.PluginTitle, version: turndetector.PluginVersion},
 		ultravox.PluginPackage:     {title: ultravox.PluginTitle, version: ultravox.PluginVersion},
 		upliftai.PluginPackage:     {title: upliftai.PluginTitle, version: upliftai.PluginVersion},
 		xai.PluginPackage:          {title: xai.PluginTitle, version: xai.PluginVersion},

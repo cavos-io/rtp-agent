@@ -6,6 +6,7 @@ allow:
   deepScan: true
 
 exclude:
+  - .agents
   - .codex
   - .git
   - .tmp
