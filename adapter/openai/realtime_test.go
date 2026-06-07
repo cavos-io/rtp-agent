@@ -235,6 +235,10 @@ func TestRealtimeSessionSendsProtocolMessages(t *testing.T) {
 	if response["instructions"] != "answer briefly\ngo" {
 		t.Fatalf("generate reply instructions = %#v, want session and per-response instructions", response["instructions"])
 	}
+	if err := session.Interrupt(); err != nil {
+		t.Fatalf("Interrupt pending generation error = %v", err)
+	}
+	assertRealtimeMessage(t, <-messages, "response.cancel", "")
 
 	if err := session.Truncate(llm.RealtimeTruncateOptions{
 		MessageID:      "user-1",

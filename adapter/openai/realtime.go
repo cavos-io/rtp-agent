@@ -88,6 +88,7 @@ type realtimeSession struct {
 	remote           *llm.RemoteChatContext
 	inputTranscripts *utils.BoundedDict[inputTranscriptKey, realtimeInputTranscript]
 	generation       *realtimeGeneration
+	pendingResponses int
 	instructions     string
 	audioBStream     *audio.AudioByteStream
 	pushedDuration   float64
@@ -696,7 +697,10 @@ func openAIRealtimeToolChoice(choice llm.ToolChoice) any {
 }
 
 func (s *realtimeSession) Interrupt() error {
-	if s.generation == nil {
+	s.mu.Lock()
+	active := s.generation != nil || s.pendingResponses > 0
+	s.mu.Unlock()
+	if !active {
 		return nil
 	}
 	msg := map[string]any{
@@ -784,7 +788,13 @@ func (s *realtimeSession) GenerateReply(options llm.RealtimeGenerateReplyOptions
 	s.mu.Lock()
 	instructions := s.instructions
 	s.mu.Unlock()
-	return s.sendMsg(openAIRealtimeGenerateReplyMessageWithSessionInstructions(options, instructions))
+	if err := s.sendMsg(openAIRealtimeGenerateReplyMessageWithSessionInstructions(options, instructions)); err != nil {
+		return err
+	}
+	s.mu.Lock()
+	s.pendingResponses++
+	s.mu.Unlock()
+	return nil
 }
 
 func (s *realtimeSession) Say(text string) error {
@@ -1088,6 +1098,9 @@ func (s *realtimeSession) trackRealtimeEvent(ev llm.RealtimeEvent) llm.RealtimeE
 func (s *realtimeSession) trackRealtimeGenerationCreated(ev llm.RealtimeEvent) llm.RealtimeEvent {
 	if ev.Generation == nil {
 		return ev
+	}
+	if s.pendingResponses > 0 {
+		s.pendingResponses--
 	}
 	generation := &realtimeGeneration{
 		messageCh:  make(chan llm.MessageGeneration, 100),
