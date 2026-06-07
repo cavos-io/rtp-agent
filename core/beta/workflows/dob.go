@@ -44,7 +44,7 @@ Don't invent dates, stick strictly to what the user said.
 const dobInstructionsAfterConfirmation = `When reading back dates, use a natural spoken format like January fifteenth, nineteen ninety.
 If the date is unclear or invalid, or it takes too much back-and-forth, prompt for it in parts: first the month, then the day, then the year.
 Ignore unrelated input and avoid going off-topic. Do not generate markdown, greetings, or unnecessary commentary.
-Always explicitly invoke a tool when applicable. Do not simulate tool usage.`
+Always explicitly invoke a tool when applicable. Do not simulate tool usage, no real action is taken unless the tool is explicitly called.`
 
 const DOBInstructions = dobInstructionsBeforeConfirmation + dobConfirmationInstruction + "\n" + dobInstructionsAfterConfirmation
 

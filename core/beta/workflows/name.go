@@ -49,7 +49,8 @@ Don't invent names, stick strictly to what the user said.
 `
 
 const nameInstructionsAfterConfirmation = `If the user explicitly declines to provide their name, call decline_name_capture.
-Ignore unrelated input and avoid going off-topic.`
+Ignore unrelated input and avoid going off-topic.
+Always explicitly invoke a tool when applicable. Do not simulate tool usage, no real action is taken unless the tool is explicitly called.`
 
 const NameInstructions = nameInstructionsBeforeConfirmation + nameConfirmationInstruction + "\n" + nameInstructionsAfterConfirmation
 

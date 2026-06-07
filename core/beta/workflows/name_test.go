@@ -117,6 +117,7 @@ func TestGetNameTaskInstructionsIncludeReferenceConfirmationWhenEnabled(t *testi
 	wantParts := []string{
 		"Call `update_name` at the first opportunity whenever you form a new hypothesis about the name. (before asking any questions or providing any answers.)",
 		"Call `confirm_name` after the user confirmed the name is correct.",
+		"Always explicitly invoke a tool when applicable. Do not simulate tool usage, no real action is taken unless the tool is explicitly called.",
 	}
 	for _, want := range wantParts {
 		if !strings.Contains(task.Instructions, want) {

@@ -182,6 +182,7 @@ func TestGetDOBTaskInstructionsIncludeReferenceConfirmationWhenEnabled(t *testin
 	wantParts := []string{
 		"Call `update_dob` at the first opportunity whenever you form a new hypothesis about the date of birth. (before asking any questions or providing any answers.)",
 		"Call `confirm_dob` after the user confirmed the date of birth is correct.",
+		"Always explicitly invoke a tool when applicable. Do not simulate tool usage, no real action is taken unless the tool is explicitly called.",
 	}
 	for _, want := range wantParts {
 		if !strings.Contains(task.Instructions, want) {
