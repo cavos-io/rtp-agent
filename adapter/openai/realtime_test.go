@@ -132,6 +132,14 @@ func TestRealtimeSessionSendsProtocolMessages(t *testing.T) {
 		t.Fatalf("PushAudio partial error = %v", err)
 	}
 	assertNoRealtimeMessage(t, messages, "partial audio frame should wait for byte-stream chunk")
+	if err := session.CommitAudio(); err != nil {
+		t.Fatalf("CommitAudio partial error = %v", err)
+	}
+	assertNoRealtimeMessage(t, messages, "commit should wait for more than 100ms of pushed audio")
+	if err := session.PushAudio(&audiomodel.AudioFrame{Data: audioChunk, SampleRate: 24000, NumChannels: 1, SamplesPerChannel: 2400}); err != nil {
+		t.Fatalf("PushAudio second chunk error = %v", err)
+	}
+	assertRealtimeMessage(t, <-messages, "input_audio_buffer.append", "")
 
 	if err := session.PushVideo(nil); err != nil {
 		t.Fatalf("PushVideo nil error = %v", err)

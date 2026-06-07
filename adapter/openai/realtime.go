@@ -79,6 +79,7 @@ type realtimeSession struct {
 	generation       *realtimeGeneration
 	instructions     string
 	audioBStream     *audio.AudioByteStream
+	pushedDuration   float64
 }
 
 const maxRealtimeInputTranscripts = 1024
@@ -521,6 +522,9 @@ func (s *realtimeSession) PushAudio(frame *model.AudioFrame) error {
 		if err := s.sendMsg(msg); err != nil {
 			return err
 		}
+		if chunk.SampleRate > 0 {
+			s.pushedDuration += float64(chunk.SamplesPerChannel) / float64(chunk.SampleRate)
+		}
 	}
 	return nil
 }
@@ -682,7 +686,14 @@ func openAIRealtimeTruncatedTranscriptChatContext(oldCtx *llm.ChatContext, optio
 }
 
 func (s *realtimeSession) CommitAudio() error {
-	return s.sendMsg(openAIRealtimeCommitAudioMessage())
+	if s.pushedDuration <= 0.1 {
+		return nil
+	}
+	if err := s.sendMsg(openAIRealtimeCommitAudioMessage()); err != nil {
+		return err
+	}
+	s.pushedDuration = 0
+	return nil
 }
 
 func openAIRealtimeCommitAudioMessage() map[string]any {
@@ -692,7 +703,11 @@ func openAIRealtimeCommitAudioMessage() map[string]any {
 }
 
 func (s *realtimeSession) ClearAudio() error {
-	return s.sendMsg(openAIRealtimeClearAudioMessage())
+	if err := s.sendMsg(openAIRealtimeClearAudioMessage()); err != nil {
+		return err
+	}
+	s.pushedDuration = 0
+	return nil
 }
 
 func openAIRealtimeClearAudioMessage() map[string]any {
