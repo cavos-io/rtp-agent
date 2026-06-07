@@ -2112,6 +2112,8 @@ func TestDefaultConfigFromEnvSelectsDOBWorkflowAgent(t *testing.T) {
 func TestDefaultConfigFromEnvSelectsNameWorkflowAgent(t *testing.T) {
 	t.Setenv("RTP_AGENT_WORKFLOW_TASK", "name")
 	t.Setenv("RTP_AGENT_WORKFLOW_REQUIRE_CONFIRMATION", "true")
+	t.Setenv("RTP_AGENT_WORKFLOW_NAME_MIDDLE_NAME", "true")
+	t.Setenv("RTP_AGENT_WORKFLOW_NAME_VERIFY_SPELLING", "true")
 	t.Setenv("RTP_AGENT_WORKFLOW_NAME_EXTRA_INSTRUCTIONS", "Ask for the legal name on the account.")
 
 	app, err := NewApp(DefaultConfigFromEnv())
@@ -2124,6 +2126,18 @@ func TestDefaultConfigFromEnvSelectsNameWorkflowAgent(t *testing.T) {
 	}
 	if !task.RequireConfirmation {
 		t.Fatal("RequireConfirmation = false, want true")
+	}
+	if !task.CollectFirstName || !task.CollectMiddleName || !task.CollectLastName {
+		t.Fatalf("name parts = first:%t middle:%t last:%t, want all enabled", task.CollectFirstName, task.CollectMiddleName, task.CollectLastName)
+	}
+	if !task.VerifySpelling {
+		t.Fatal("VerifySpelling = false, want true")
+	}
+	if !strings.Contains(task.Instructions, "You need to naturally collect the name parts in this order: {first_name} {middle_name} {last_name}.") {
+		t.Fatalf("Instructions = %q, want first/middle/last collection order", task.Instructions)
+	}
+	if !strings.Contains(task.Instructions, "After receiving the name, always verify the spelling") {
+		t.Fatalf("Instructions = %q, want spelling verification instructions", task.Instructions)
 	}
 	if !strings.Contains(task.Instructions, "Ask for the legal name on the account.") {
 		t.Fatalf("Instructions = %q, want name extra instructions", task.Instructions)

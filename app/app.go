@@ -457,6 +457,10 @@ type AppConfig struct {
 	WorkflowPhoneNumberExtraInstructions  string
 	WorkflowDOBExtraInstructions          string
 	WorkflowDOBIncludeTime                bool
+	WorkflowNameFirstName                 *bool
+	WorkflowNameMiddleName                *bool
+	WorkflowNameLastName                  *bool
+	WorkflowNameVerifySpelling            bool
 	WorkflowNameExtraInstructions         string
 	WorkflowWarmTransferSipCallTo         string
 	WorkflowWarmTransferSipTrunkID        string
@@ -785,6 +789,10 @@ func DefaultConfigFromEnv() AppConfig {
 		WorkflowPhoneNumberExtraInstructions:    os.Getenv("RTP_AGENT_WORKFLOW_PHONE_NUMBER_EXTRA_INSTRUCTIONS"),
 		WorkflowDOBExtraInstructions:            os.Getenv("RTP_AGENT_WORKFLOW_DOB_EXTRA_INSTRUCTIONS"),
 		WorkflowDOBIncludeTime:                  getenvBool("RTP_AGENT_WORKFLOW_DOB_INCLUDE_TIME"),
+		WorkflowNameFirstName:                   getenvOptionalBool("RTP_AGENT_WORKFLOW_NAME_FIRST_NAME"),
+		WorkflowNameMiddleName:                  getenvOptionalBool("RTP_AGENT_WORKFLOW_NAME_MIDDLE_NAME"),
+		WorkflowNameLastName:                    getenvOptionalBool("RTP_AGENT_WORKFLOW_NAME_LAST_NAME"),
+		WorkflowNameVerifySpelling:              getenvBool("RTP_AGENT_WORKFLOW_NAME_VERIFY_SPELLING"),
 		WorkflowNameExtraInstructions:           os.Getenv("RTP_AGENT_WORKFLOW_NAME_EXTRA_INSTRUCTIONS"),
 		WorkflowWarmTransferSipCallTo:           os.Getenv("RTP_AGENT_WORKFLOW_WARM_TRANSFER_SIP_CALL_TO"),
 		WorkflowWarmTransferSipTrunkID:          os.Getenv("RTP_AGENT_WORKFLOW_WARM_TRANSFER_SIP_TRUNK_ID"),
@@ -984,13 +992,7 @@ func workflowAgentFromConfig(cfg AppConfig, baseAgent *agent.Agent) (agent.Agent
 			IncludeTime:            cfg.WorkflowDOBIncludeTime,
 		})
 	case "name", "get_name":
-		selected = workflows.NewGetNameTask(workflows.GetNameOptions{
-			FirstName:              true,
-			LastName:               true,
-			RequireConfirmation:    cfg.WorkflowRequireConfirmation,
-			RequireConfirmationSet: true,
-			ExtraInstructions:      cfg.WorkflowNameExtraInstructions,
-		})
+		selected = workflows.NewGetNameTask(workflowNameOptionsFromConfig(cfg))
 	case "card_number", "card-number", "get_card_number":
 		selected = workflows.NewGetCardNumberTask(cfg.WorkflowRequireConfirmation)
 	case "security_code", "security-code", "get_security_code":
@@ -1069,6 +1071,30 @@ func workflowInstructionParts(extra string) *beta.InstructionParts {
 	return &beta.InstructionParts{Extra: extra}
 }
 
+func workflowNameOptionsFromConfig(cfg AppConfig) workflows.GetNameOptions {
+	firstName := true
+	if cfg.WorkflowNameFirstName != nil {
+		firstName = *cfg.WorkflowNameFirstName
+	}
+	middleName := false
+	if cfg.WorkflowNameMiddleName != nil {
+		middleName = *cfg.WorkflowNameMiddleName
+	}
+	lastName := true
+	if cfg.WorkflowNameLastName != nil {
+		lastName = *cfg.WorkflowNameLastName
+	}
+	return workflows.GetNameOptions{
+		FirstName:              firstName,
+		MiddleName:             middleName,
+		LastName:               lastName,
+		VerifySpelling:         cfg.WorkflowNameVerifySpelling,
+		RequireConfirmation:    cfg.WorkflowRequireConfirmation,
+		RequireConfirmationSet: true,
+		ExtraInstructions:      cfg.WorkflowNameExtraInstructions,
+	}
+}
+
 func workflowTaskFactoryFromName(cfg AppConfig, baseAgent *agent.Agent, taskName string) (workflows.FactoryInfo, error) {
 	task := normalizeProvider(taskName)
 	factory := func(taskFactory func() agent.AgentInterface) func() agent.AgentInterface {
@@ -1133,13 +1159,7 @@ func workflowTaskFactoryFromName(cfg AppConfig, baseAgent *agent.Agent, taskName
 			ID:          "name",
 			Description: "Collect and confirm the user's name.",
 			TaskFactory: factory(func() agent.AgentInterface {
-				return workflows.NewGetNameTask(workflows.GetNameOptions{
-					FirstName:              true,
-					LastName:               true,
-					RequireConfirmation:    cfg.WorkflowRequireConfirmation,
-					RequireConfirmationSet: true,
-					ExtraInstructions:      cfg.WorkflowNameExtraInstructions,
-				})
+				return workflows.NewGetNameTask(workflowNameOptionsFromConfig(cfg))
 			}),
 		}, nil
 	case "card_number", "card-number", "get_card_number":
