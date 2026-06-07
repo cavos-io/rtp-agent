@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/cavos-io/rtp-agent/core/agent"
+	"github.com/cavos-io/rtp-agent/core/beta"
 )
 
 func TestGetEmailTaskRecordsEmailWithoutConfirmation(t *testing.T) {
@@ -117,6 +118,40 @@ func TestGetEmailTaskInstructionsUseReferenceToolGuidance(t *testing.T) {
 		if !strings.Contains(task.Instructions, want) {
 			t.Fatalf("Instructions = %q, want reference guidance %q", task.Instructions, want)
 		}
+	}
+}
+
+func TestGetEmailTaskInstructionPartsCustomizePersonaAndExtra(t *testing.T) {
+	customPersona := "You only collect work email addresses for account recovery."
+	task := NewGetEmailTask(GetEmailOptions{
+		Instructions: &beta.InstructionParts{
+			Persona: &customPersona,
+			Extra:   "Ask for the company domain when the user gives a personal address.",
+		},
+	})
+
+	if !strings.Contains(task.Instructions, customPersona) {
+		t.Fatalf("Instructions = %q, want custom persona", task.Instructions)
+	}
+	if strings.Contains(task.Instructions, "responsible solely for capturing an email address") {
+		t.Fatalf("Instructions = %q, want default persona replaced", task.Instructions)
+	}
+	if !strings.Contains(task.Instructions, "Ask for the company domain when the user gives a personal address.") {
+		t.Fatalf("Instructions = %q, want extra instructions appended", task.Instructions)
+	}
+}
+
+func TestGetEmailTaskInstructionPartsCanRemovePersona(t *testing.T) {
+	emptyPersona := ""
+	task := NewGetEmailTask(GetEmailOptions{
+		Instructions: &beta.InstructionParts{Persona: &emptyPersona},
+	})
+
+	if strings.Contains(task.Instructions, "responsible solely for capturing an email address") {
+		t.Fatalf("Instructions = %q, want default persona removed", task.Instructions)
+	}
+	if !strings.Contains(task.Instructions, "Call `update_email_address` at the first opportunity") {
+		t.Fatalf("Instructions = %q, want workflow guidance preserved", task.Instructions)
 	}
 }
 

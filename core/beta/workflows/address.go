@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/cavos-io/rtp-agent/core/agent"
+	beta "github.com/cavos-io/rtp-agent/core/beta"
 	"github.com/cavos-io/rtp-agent/core/llm"
 )
 
@@ -17,6 +18,7 @@ type GetAddressResult struct {
 type GetAddressOptions struct {
 	RequireConfirmation    bool
 	RequireConfirmationSet bool
+	Instructions           *beta.InstructionParts
 }
 
 type GetAddressTask struct {
@@ -28,7 +30,9 @@ type GetAddressTask struct {
 
 const addressConfirmationInstruction = "Call `confirm_address` after the user confirmed the address is correct."
 
-const addressInstructionsBeforeConfirmation = `You are only a single step in a broader system, responsible solely for capturing an address.
+const addressPersona = "You are only a single step in a broader system, responsible solely for capturing an address."
+
+const addressInstructionsBeforeConfirmation = addressPersona + `
 You will be handling addresses from any country. Expect that users will say address in different formats with fields filled like:
 - 'street_address': '450 SOUTH MAIN ST', 'unit_number': 'FLOOR 2', 'locality': 'SALT LAKE CITY UT 84101', 'country': 'UNITED STATES',
 - 'street_address': '123 MAPLE STREET', 'unit_number': 'APARTMENT 10', 'locality': 'OTTAWA ON K1A 0B1', 'country': 'CANADA',
@@ -69,6 +73,7 @@ func NewGetAddressTask(opts GetAddressOptions) *GetAddressTask {
 	if !requireConfirmation {
 		instructions = addressInstructionsWithoutConfirmation
 	}
+	instructions = applyInstructionParts(instructions, addressPersona, opts.Instructions)
 	t := &GetAddressTask{
 		AgentTask:           *agent.NewAgentTask[*GetAddressResult](instructions),
 		RequireConfirmation: requireConfirmation,
