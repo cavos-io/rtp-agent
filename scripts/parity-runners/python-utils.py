@@ -126,6 +126,46 @@ def load_reference_bounded_dict():
     return module
 
 
+def load_reference_tokenize_utils():
+    root = repo_root()
+    tokenize_root = root / "refs/agents/livekit-agents/livekit/agents/tokenize"
+
+    utils_mod = sys.modules.setdefault("livekit.agents.utils", types.ModuleType("livekit.agents.utils"))
+    aio_mod = types.ModuleType("livekit.agents.utils.aio")
+
+    class Chan:
+        def __init__(self):
+            self.closed = False
+
+        def close(self):
+            self.closed = True
+
+    aio_mod.Chan = Chan
+    setattr(utils_mod, "aio", aio_mod)
+    sys.modules["livekit.agents.utils.aio"] = aio_mod
+
+    tokenize_pkg = types.ModuleType("livekit.agents.tokenize")
+    tokenize_pkg.__path__ = [str(tokenize_root)]
+    sys.modules["livekit.agents.tokenize"] = tokenize_pkg
+
+    def load_module(name: str, filename: str):
+        path = tokenize_root / filename
+        spec = importlib.util.spec_from_file_location(name, path)
+        if spec is None or spec.loader is None:
+            raise RuntimeError(f"cannot load {name} from {path}")
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[name] = module
+        spec.loader.exec_module(module)
+        return module
+
+    tokenizer_module = load_module("livekit.agents.tokenize.tokenizer", "tokenizer.py")
+    setattr(tokenize_pkg, "tokenizer", tokenizer_module)
+    basic_word_module = load_module("livekit.agents.tokenize._basic_word", "_basic_word.py")
+    setattr(tokenize_pkg, "_basic_word", basic_word_module)
+    utils_module = load_module("livekit.agents.tokenize.utils", "utils.py")
+    return utils_module
+
+
 def load_input(path: str) -> dict:
     with open(path, "r", encoding="utf-8") as file:
         data = json.load(file)
@@ -162,6 +202,15 @@ def float_values(input_data: dict, field: str, default: list[float]) -> list[flo
     if not isinstance(values, list) or not all(isinstance(value, (int, float)) for value in values):
         raise ValueError(f"{field} must be a list of numbers")
     return [float(value) for value in values]
+
+
+def string_map(input_data: dict, field: str, default: dict[str, str]) -> dict[str, str]:
+    values = input_data.get(field, default)
+    if not isinstance(values, dict) or not all(
+        isinstance(key, str) and isinstance(value, str) for key, value in values.items()
+    ):
+        raise ValueError(f"{field} must be an object with string keys and values")
+    return dict(values)
 
 
 def run_dev_mode_env_exact(input_data: dict) -> dict:
@@ -369,6 +418,66 @@ def run_bounded_dict_pop_if_order(input_data: dict) -> dict:
     }
 
 
+def run_tokenize_replace_words(input_data: dict) -> dict:
+    tokenize_utils = load_reference_tokenize_utils()
+    values = string_values(
+        input_data,
+        "text_values",
+        ["Hello, WORLD! workflow stays.", "Do not replace flow inside workflow."],
+    )
+    replacements = string_map(
+        input_data,
+        "replacements",
+        {"hello": "hi", "world": "there", "flow": "stream"},
+    )
+
+    events = []
+    for value in values:
+        events.append(
+            {
+                "name": "replace_words",
+                "input": value,
+                "result": tokenize_utils.replace_words(text=value, replacements=replacements),
+            }
+        )
+
+    return {"contract": "tokenize-replace-words", "events": events}
+
+
+def run_tokenize_split_words(input_data: dict) -> dict:
+    load_reference_tokenize_utils()
+    basic_word = sys.modules["livekit.agents.tokenize._basic_word"]
+    values = string_values(
+        input_data,
+        "text_values",
+        [" Hello, world!  keep-format? ", "alpha beta,gamma"],
+    )
+    ignore_punctuation = bool(input_data.get("ignore_punctuation", True))
+    split_character = bool(input_data.get("split_character", False))
+    retain_format = bool(input_data.get("retain_format", False))
+
+    events = []
+    for value in values:
+        result = [
+            {"token": token, "start": start, "end": end}
+            for token, start, end in basic_word.split_words(
+                value,
+                ignore_punctuation=ignore_punctuation,
+                split_character=split_character,
+                retain_format=retain_format,
+            )
+        ]
+        events.append(
+            {
+                "name": "split_words",
+                "input": value,
+                "result": result,
+            }
+        )
+
+    return {"contract": "tokenize-split-words", "events": events}
+
+
 def main() -> int:
     if len(sys.argv) != 2:
         print("usage: python-utils.py INPUT_JSON", file=sys.stderr)
@@ -390,6 +499,10 @@ def main() -> int:
         output = run_moving_average_window(input_data)
     elif contract == "bounded-dict-pop-if-order":
         output = run_bounded_dict_pop_if_order(input_data)
+    elif contract == "tokenize-replace-words":
+        output = run_tokenize_replace_words(input_data)
+    elif contract == "tokenize-split-words":
+        output = run_tokenize_split_words(input_data)
     else:
         print(f"unsupported contract: {contract}", file=sys.stderr)
         return 2

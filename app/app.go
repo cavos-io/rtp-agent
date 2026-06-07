@@ -45,6 +45,7 @@ import (
 	"github.com/cavos-io/rtp-agent/adapter/hume"
 	"github.com/cavos-io/rtp-agent/adapter/inworld"
 	"github.com/cavos-io/rtp-agent/adapter/keyframe"
+	"github.com/cavos-io/rtp-agent/adapter/krisp"
 	"github.com/cavos-io/rtp-agent/adapter/langchain"
 	"github.com/cavos-io/rtp-agent/adapter/lemonslice"
 	"github.com/cavos-io/rtp-agent/adapter/liveavatar"
@@ -77,6 +78,7 @@ import (
 	"github.com/cavos-io/rtp-agent/adapter/tavus"
 	"github.com/cavos-io/rtp-agent/adapter/telnyx"
 	"github.com/cavos-io/rtp-agent/adapter/trugen"
+	"github.com/cavos-io/rtp-agent/adapter/turndetector"
 	"github.com/cavos-io/rtp-agent/adapter/ultravox"
 	"github.com/cavos-io/rtp-agent/adapter/upliftai"
 	"github.com/cavos-io/rtp-agent/adapter/xai"
@@ -133,6 +135,7 @@ func init() {
 	plugin.RegisterPluginMetadata(hume.PluginTitle, hume.PluginVersion, hume.PluginPackage)
 	plugin.RegisterPluginMetadata(inworld.PluginTitle, inworld.PluginVersion, inworld.PluginPackage)
 	plugin.RegisterPluginMetadata(keyframe.PluginTitle, keyframe.PluginVersion, keyframe.PluginPackage)
+	plugin.RegisterPluginMetadata(krisp.PluginTitle, krisp.PluginVersion, krisp.PluginPackage)
 	plugin.RegisterPluginMetadata(langchain.PluginTitle, langchain.PluginVersion, langchain.PluginPackage)
 	plugin.RegisterPluginMetadata(lemonslice.PluginTitle, lemonslice.PluginVersion, lemonslice.PluginPackage)
 	plugin.RegisterPluginMetadata(liveavatar.PluginTitle, liveavatar.PluginVersion, liveavatar.PluginPackage)
@@ -165,6 +168,7 @@ func init() {
 	plugin.RegisterPluginMetadata(tavus.PluginTitle, tavus.PluginVersion, tavus.PluginPackage)
 	plugin.RegisterPluginMetadata(telnyx.PluginTitle, telnyx.PluginVersion, telnyx.PluginPackage)
 	plugin.RegisterPluginMetadata(trugen.PluginTitle, trugen.PluginVersion, trugen.PluginPackage)
+	plugin.RegisterPluginMetadata(turndetector.PluginTitle, turndetector.PluginVersion, turndetector.PluginPackage)
 	plugin.RegisterPluginMetadata(ultravox.PluginTitle, ultravox.PluginVersion, ultravox.PluginPackage)
 	plugin.RegisterPluginMetadata(upliftai.PluginTitle, upliftai.PluginVersion, upliftai.PluginPackage)
 	plugin.RegisterPluginMetadata(xai.PluginTitle, xai.PluginVersion, xai.PluginPackage)

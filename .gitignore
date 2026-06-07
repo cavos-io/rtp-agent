@@ -12,5 +12,6 @@ worktrees/
 # Agent files
 .claude
 .codex
+.agents
 .gemini
 .pi
