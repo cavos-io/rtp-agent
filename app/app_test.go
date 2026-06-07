@@ -35,7 +35,23 @@ import (
 	"github.com/cavos-io/rtp-agent/adapter/fireworksai"
 	"github.com/cavos-io/rtp-agent/adapter/fishaudio"
 	"github.com/cavos-io/rtp-agent/adapter/gladia"
+	"github.com/cavos-io/rtp-agent/adapter/gnani"
 	adaptergoogle "github.com/cavos-io/rtp-agent/adapter/google"
+	"github.com/cavos-io/rtp-agent/adapter/gradium"
+	"github.com/cavos-io/rtp-agent/adapter/groq"
+	"github.com/cavos-io/rtp-agent/adapter/hedra"
+	"github.com/cavos-io/rtp-agent/adapter/hume"
+	"github.com/cavos-io/rtp-agent/adapter/inworld"
+	"github.com/cavos-io/rtp-agent/adapter/keyframe"
+	"github.com/cavos-io/rtp-agent/adapter/langchain"
+	"github.com/cavos-io/rtp-agent/adapter/lemonslice"
+	"github.com/cavos-io/rtp-agent/adapter/lmnt"
+	"github.com/cavos-io/rtp-agent/adapter/minimal"
+	"github.com/cavos-io/rtp-agent/adapter/minimax"
+	"github.com/cavos-io/rtp-agent/adapter/mistralai"
+	"github.com/cavos-io/rtp-agent/adapter/murf"
+	"github.com/cavos-io/rtp-agent/adapter/neuphonic"
+	"github.com/cavos-io/rtp-agent/adapter/nvidia"
 	"github.com/cavos-io/rtp-agent/adapter/openai"
 	"github.com/cavos-io/rtp-agent/adapter/silero"
 	"github.com/cavos-io/rtp-agent/core/agent"
@@ -83,11 +99,27 @@ func TestAppRegistersReferencePluginMetadataBatch(t *testing.T) {
 		},
 		fishaudio.PluginPackage: {title: fishaudio.PluginTitle, version: fishaudio.PluginVersion},
 		gladia.PluginPackage:    {title: gladia.PluginTitle, version: gladia.PluginVersion},
+		gnani.PluginPackage:     {title: gnani.PluginTitle, version: gnani.PluginVersion},
 		adaptergoogle.PluginPackage: {
 			title:   adaptergoogle.PluginTitle,
 			version: adaptergoogle.PluginVersion,
 		},
-		openai.PluginPackage: {title: openai.PluginTitle, version: openai.PluginVersion},
+		gradium.PluginPackage:    {title: gradium.PluginTitle, version: gradium.PluginVersion},
+		groq.PluginPackage:       {title: groq.PluginTitle, version: groq.PluginVersion},
+		hedra.PluginPackage:      {title: hedra.PluginTitle, version: hedra.PluginVersion},
+		hume.PluginPackage:       {title: hume.PluginTitle, version: hume.PluginVersion},
+		inworld.PluginPackage:    {title: inworld.PluginTitle, version: inworld.PluginVersion},
+		keyframe.PluginPackage:   {title: keyframe.PluginTitle, version: keyframe.PluginVersion},
+		langchain.PluginPackage:  {title: langchain.PluginTitle, version: langchain.PluginVersion},
+		lemonslice.PluginPackage: {title: lemonslice.PluginTitle, version: lemonslice.PluginVersion},
+		lmnt.PluginPackage:       {title: lmnt.PluginTitle, version: lmnt.PluginVersion},
+		minimal.PluginPackage:    {title: minimal.PluginTitle, version: minimal.PluginVersion},
+		minimax.PluginPackage:    {title: minimax.PluginTitle, version: minimax.PluginVersion},
+		mistralai.PluginPackage:  {title: mistralai.PluginTitle, version: mistralai.PluginVersion},
+		murf.PluginPackage:       {title: murf.PluginTitle, version: murf.PluginVersion},
+		neuphonic.PluginPackage:  {title: neuphonic.PluginTitle, version: neuphonic.PluginVersion},
+		nvidia.PluginPackage:     {title: nvidia.PluginTitle, version: nvidia.PluginVersion},
+		openai.PluginPackage:     {title: openai.PluginTitle, version: openai.PluginVersion},
 	}
 
 	for _, registered := range plugin.RegisteredPlugins() {
