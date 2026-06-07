@@ -97,6 +97,16 @@ import (
 )
 
 func init() {
+	plugin.RegisterPluginMetadata(anthropic.PluginTitle, anthropic.PluginVersion, anthropic.PluginPackage)
+	plugin.RegisterPluginMetadata(assemblyai.PluginTitle, assemblyai.PluginVersion, assemblyai.PluginPackage)
+	plugin.RegisterPluginMetadata(adapteraws.PluginTitle, adapteraws.PluginVersion, adapteraws.PluginPackage)
+	plugin.RegisterPluginMetadata(azure.PluginTitle, azure.PluginVersion, azure.PluginPackage)
+	plugin.RegisterPluginMetadata(baseten.PluginTitle, baseten.PluginVersion, baseten.PluginPackage)
+	plugin.RegisterPluginMetadata(cartesia.PluginTitle, cartesia.PluginVersion, cartesia.PluginPackage)
+	plugin.RegisterPluginMetadata(deepgram.PluginTitle, deepgram.PluginVersion, deepgram.PluginPackage)
+	plugin.RegisterPluginMetadata(elevenlabs.PluginTitle, elevenlabs.PluginVersion, elevenlabs.PluginPackage)
+	plugin.RegisterPluginMetadata(adaptergoogle.PluginTitle, adaptergoogle.PluginVersion, adaptergoogle.PluginPackage)
+	plugin.RegisterPluginMetadata(openai.PluginTitle, openai.PluginVersion, openai.PluginPackage)
 	plugin.RegisterPluginDownloader(silero.PluginTitle, silero.PluginVersion, silero.PluginPackage, silero.Plugin{}.DownloadFiles)
 	plugin.RegisterPluginMetadata(slng.PluginTitle, slng.PluginVersion, slng.PluginPackage)
 }

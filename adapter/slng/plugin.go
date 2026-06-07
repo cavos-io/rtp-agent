@@ -1,7 +1,7 @@
 package slng
 
 const (
-	PluginTitle   = "livekit.plugins.slng"
+	PluginTitle   = "rtp-agent.plugins.slng"
 	PluginVersion = "1.5.15"
-	PluginPackage = "livekit.plugins.slng"
+	PluginPackage = "rtp-agent.plugins.slng"
 )

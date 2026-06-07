@@ -15,6 +15,16 @@ import (
 	"testing"
 	"time"
 
+	"github.com/cavos-io/rtp-agent/adapter/anthropic"
+	"github.com/cavos-io/rtp-agent/adapter/assemblyai"
+	adapteraws "github.com/cavos-io/rtp-agent/adapter/aws"
+	"github.com/cavos-io/rtp-agent/adapter/azure"
+	"github.com/cavos-io/rtp-agent/adapter/baseten"
+	"github.com/cavos-io/rtp-agent/adapter/cartesia"
+	"github.com/cavos-io/rtp-agent/adapter/deepgram"
+	"github.com/cavos-io/rtp-agent/adapter/elevenlabs"
+	adaptergoogle "github.com/cavos-io/rtp-agent/adapter/google"
+	"github.com/cavos-io/rtp-agent/adapter/openai"
 	"github.com/cavos-io/rtp-agent/adapter/silero"
 	"github.com/cavos-io/rtp-agent/core/agent"
 	"github.com/cavos-io/rtp-agent/core/audio/model"
@@ -33,13 +43,55 @@ import (
 	lksdk "github.com/livekit/server-sdk-go/v2"
 )
 
-func TestAppRegistersSLNGPluginMetadata(t *testing.T) {
+func TestAppRegistersReferencePluginMetadataBatch(t *testing.T) {
+	expected := map[string]struct {
+		title   string
+		version string
+	}{
+		anthropic.PluginPackage:  {title: anthropic.PluginTitle, version: anthropic.PluginVersion},
+		assemblyai.PluginPackage: {title: assemblyai.PluginTitle, version: assemblyai.PluginVersion},
+		adapteraws.PluginPackage: {title: adapteraws.PluginTitle, version: adapteraws.PluginVersion},
+		azure.PluginPackage:      {title: azure.PluginTitle, version: azure.PluginVersion},
+		baseten.PluginPackage:    {title: baseten.PluginTitle, version: baseten.PluginVersion},
+		cartesia.PluginPackage:   {title: cartesia.PluginTitle, version: cartesia.PluginVersion},
+		deepgram.PluginPackage:   {title: deepgram.PluginTitle, version: deepgram.PluginVersion},
+		elevenlabs.PluginPackage: {title: elevenlabs.PluginTitle, version: elevenlabs.PluginVersion},
+		adaptergoogle.PluginPackage: {
+			title:   adaptergoogle.PluginTitle,
+			version: adaptergoogle.PluginVersion,
+		},
+		openai.PluginPackage: {title: openai.PluginTitle, version: openai.PluginVersion},
+	}
+
 	for _, registered := range plugin.RegisteredPlugins() {
-		if registered.Package() != "livekit.plugins.slng" {
+		want, ok := expected[registered.Package()]
+		if !ok {
 			continue
 		}
-		if registered.Title() != "livekit.plugins.slng" {
-			t.Fatalf("plugin title = %q, want livekit.plugins.slng", registered.Title())
+		if registered.Title() != want.title {
+			t.Fatalf("%s title = %q, want %q", registered.Package(), registered.Title(), want.title)
+		}
+		if registered.Version() != want.version {
+			t.Fatalf("%s version = %q, want %q", registered.Package(), registered.Version(), want.version)
+		}
+		delete(expected, registered.Package())
+	}
+	if len(expected) > 0 {
+		missing := make([]string, 0, len(expected))
+		for packageName := range expected {
+			missing = append(missing, packageName)
+		}
+		t.Fatalf("plugin metadata was not registered for packages: %s", strings.Join(missing, ", "))
+	}
+}
+
+func TestAppRegistersSLNGPluginMetadata(t *testing.T) {
+	for _, registered := range plugin.RegisteredPlugins() {
+		if registered.Package() != "rtp-agent.plugins.slng" {
+			continue
+		}
+		if registered.Title() != "rtp-agent.plugins.slng" {
+			t.Fatalf("plugin title = %q, want rtp-agent.plugins.slng", registered.Title())
 		}
 		if registered.Version() != "1.5.15" {
 			t.Fatalf("plugin version = %q, want reference version", registered.Version())

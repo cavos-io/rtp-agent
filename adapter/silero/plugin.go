@@ -9,9 +9,9 @@ import (
 )
 
 const (
-	PluginTitle   = "livekit.plugins.silero"
+	PluginTitle   = "rtp-agent.plugins.silero"
 	PluginVersion = "1.5.15"
-	PluginPackage = "livekit.plugins.silero"
+	PluginPackage = "rtp-agent.plugins.silero"
 
 	sileroModelFileName = "silero_vad.onnx"
 	sileroModelURL      = "https://raw.githubusercontent.com/snakers4/silero-vad/master/src/silero_vad/data/silero_vad.onnx"
