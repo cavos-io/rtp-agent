@@ -767,6 +767,8 @@ func DefaultConfigFromEnv() AppConfig {
 		XAIFileSearchVectorStoreIDs:             splitEnvList("RTP_AGENT_XAI_FILE_SEARCH_VECTOR_STORE_IDS"),
 		XAIFileSearchMaxResults:                 getenvOptionalInt("RTP_AGENT_XAI_FILE_SEARCH_MAX_RESULTS"),
 		GoogleCredentialsFile:                   firstEnv("RTP_AGENT_GOOGLE_CREDENTIALS_FILE", "GOOGLE_APPLICATION_CREDENTIALS"),
+		LiveKitInferenceAPIKey:                  os.Getenv("LIVEKIT_API_KEY"),
+		LiveKitInferenceAPISecret:               os.Getenv("LIVEKIT_API_SECRET"),
 		AppTools:                                splitEnvList("RTP_AGENT_TOOLS"),
 		MCPStdioServers:                         mcpStdioServersFromEnv("RTP_AGENT_MCP_STDIO_SERVERS"),
 		MCPHTTPServers:                          mcpHTTPServersFromEnv("RTP_AGENT_MCP_HTTP_SERVERS"),

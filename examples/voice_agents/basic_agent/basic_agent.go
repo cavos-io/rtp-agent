@@ -1,9 +1,12 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
+	"strings"
 
 	"github.com/cavos-io/rtp-agent/app"
 	"github.com/cavos-io/rtp-agent/core/agent"
@@ -87,6 +90,7 @@ func (lookupWeatherTool) Execute(ctx context.Context, args string) (string, erro
 }
 
 func basicAgentConfigFromEnv() app.AppConfig {
+	_ = loadBasicAgentDotEnv(".env")
 	cfg := app.DefaultConfigFromEnv()
 	cfg.Instructions = basicAgentInstructions
 	cfg.LLMProvider = "livekit"
@@ -103,6 +107,56 @@ func basicAgentConfigFromEnv() app.AppConfig {
 	}
 	cfg.TTSTextReplacements["LiveKit"] = "<<ˈ|l|aɪ|v>> <<ˈ|k|ɪ|t>>"
 	return cfg
+}
+
+func loadBasicAgentDotEnv(path string) error {
+	file, err := os.Open(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	defer file.Close()
+
+	scanner := bufio.NewScanner(file)
+	for scanner.Scan() {
+		key, value, ok := parseBasicAgentDotEnvLine(scanner.Text())
+		if !ok {
+			continue
+		}
+		if _, exists := os.LookupEnv(key); exists {
+			continue
+		}
+		if err := os.Setenv(key, value); err != nil {
+			return err
+		}
+	}
+	return scanner.Err()
+}
+
+func parseBasicAgentDotEnvLine(line string) (string, string, bool) {
+	line = strings.TrimSpace(line)
+	if line == "" || strings.HasPrefix(line, "#") {
+		return "", "", false
+	}
+	line = strings.TrimSpace(strings.TrimPrefix(line, "export "))
+	key, value, ok := strings.Cut(line, "=")
+	if !ok {
+		return "", "", false
+	}
+	key = strings.TrimSpace(key)
+	if key == "" || strings.ContainsAny(key, " \t") {
+		return "", "", false
+	}
+	value = strings.TrimSpace(value)
+	if len(value) >= 2 {
+		quote := value[0]
+		if (quote == '\'' || quote == '"') && value[len(value)-1] == quote {
+			value = value[1 : len(value)-1]
+		}
+	}
+	return key, value, true
 }
 
 func basicAgentSessionOptions() agent.AgentSessionOptions {

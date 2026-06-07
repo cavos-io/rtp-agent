@@ -2788,6 +2788,9 @@ func TestDefaultConfigFromEnvSelectsLiveKitInferenceLLM(t *testing.T) {
 	if got := llm.Provider(app.Session.LLM); got != "livekit" {
 		t.Fatalf("LLM provider = %q, want livekit", got)
 	}
+	if app.Config.LiveKitInferenceAPIKey != "test-livekit-key" || app.Config.LiveKitInferenceAPISecret != "test-livekit-secret" {
+		t.Fatalf("LiveKit inference credentials = %q/%q, want environment values", app.Config.LiveKitInferenceAPIKey, app.Config.LiveKitInferenceAPISecret)
+	}
 	if app.Session.STT == nil {
 		t.Fatal("Session STT is nil")
 	}
