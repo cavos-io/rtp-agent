@@ -2,6 +2,14 @@ package llm
 
 import "fmt"
 
+type duplicateRemoteChatItemError struct {
+	itemID string
+}
+
+func (e duplicateRemoteChatItemError) Error() string {
+	return "Item with ID " + e.itemID + " already exists."
+}
+
 type remoteChatItem struct {
 	item ChatItem
 	prev *remoteChatItem
@@ -41,7 +49,7 @@ func (c *RemoteChatContext) Insert(previousItemID *string, message ChatItem) err
 	itemID := message.GetID()
 
 	if _, exists := c.idToItem[itemID]; exists {
-		return fmt.Errorf("item with ID %s already exists", itemID)
+		return duplicateRemoteChatItemError{itemID: itemID}
 	}
 
 	newNode := &remoteChatItem{item: message}
