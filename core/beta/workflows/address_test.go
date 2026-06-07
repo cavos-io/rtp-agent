@@ -2,6 +2,7 @@ package workflows
 
 import (
 	"context"
+	"strings"
 	"testing"
 )
 
@@ -27,6 +28,25 @@ func TestGetAddressTaskRecordsAddressWithoutConfirmation(t *testing.T) {
 	}
 }
 
+func TestGetAddressTaskSkipsWhitespaceOnlyUnitNumber(t *testing.T) {
+	task := NewGetAddressTask(GetAddressOptions{RequireConfirmationSet: true})
+	tool := &updateAddressTool{task: task}
+
+	_, err := tool.Execute(context.Background(), `{"street_address":"123 Main St","unit_number":"   ","locality":"Springfield IL 62701","country":"United States"}`)
+	if err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+
+	select {
+	case result := <-task.Result:
+		if result.Address != "123 Main St Springfield IL 62701 United States" {
+			t.Fatalf("Address = %q, want whitespace-only unit omitted", result.Address)
+		}
+	default:
+		t.Fatal("task did not complete after address update")
+	}
+}
+
 func TestGetAddressTaskInjectsConfirmToolAfterUpdate(t *testing.T) {
 	task := NewGetAddressTask(GetAddressOptions{})
 	if len(task.Agent.Tools) != 2 {
@@ -40,6 +60,9 @@ func TestGetAddressTaskInjectsConfirmToolAfterUpdate(t *testing.T) {
 	}
 	if out == "" {
 		t.Fatal("update Execute() output is empty, want confirmation guidance")
+	}
+	if !strings.Contains(out, `Repeat the address field by field: ["123 Main St" "Apt 4" "Springfield IL 62701" "United States"] if needed`) {
+		t.Fatalf("update Execute() output = %q, want field-by-field address guidance", out)
 	}
 	if len(task.Agent.Tools) != 3 || task.Agent.Tools[2].Name() != "confirm_address" {
 		t.Fatalf("tools = %#v, want confirm_address appended", task.Agent.Tools)

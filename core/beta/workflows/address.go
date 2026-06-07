@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	"github.com/cavos-io/rtp-agent/core/agent"
 	"github.com/cavos-io/rtp-agent/core/llm"
@@ -111,11 +112,12 @@ func (t *updateAddressTool) Execute(ctx context.Context, args string) (string, e
 		return "", err
 	}
 
-	address := params.StreetAddress
-	if params.UnitNumber != "" {
-		address += " " + params.UnitNumber
+	addressFields := []string{params.StreetAddress}
+	if strings.TrimSpace(params.UnitNumber) != "" {
+		addressFields = append(addressFields, params.UnitNumber)
 	}
-	address += " " + params.Locality + " " + params.Country
+	addressFields = append(addressFields, params.Locality, params.Country)
+	address := strings.Join(addressFields, " ")
 
 	t.task.currentAddress = address
 
@@ -125,7 +127,7 @@ func (t *updateAddressTool) Execute(ctx context.Context, args string) (string, e
 	}
 
 	t.task.setConfirmAddressTool(address)
-	return fmt.Sprintf("The address has been updated to %s\nRepeat the address field by field if needed.\nPrompt the user for confirmation, do not call `confirm_address` directly", address), nil
+	return fmt.Sprintf("The address has been updated to %s\nRepeat the address field by field: %q if needed\nPrompt the user for confirmation, do not call `confirm_address` directly", address, addressFields), nil
 }
 
 func (t *GetAddressTask) setConfirmAddressTool(address string) {
