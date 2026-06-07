@@ -104,6 +104,13 @@ func TestGetAddressTaskInstructionsOmitConfirmationWhenDisabled(t *testing.T) {
 	}
 }
 
+func TestGetAddressTaskOnEnterUsesReferencePrompt(t *testing.T) {
+	want := "Ask the user to provide their address."
+	if got := addressOnEnterPrompt(); got != want {
+		t.Fatalf("addressOnEnterPrompt() = %q, want %q", got, want)
+	}
+}
+
 func TestGetAddressTaskRejectsStaleConfirmation(t *testing.T) {
 	task := NewGetAddressTask(GetAddressOptions{})
 	update := &updateAddressTool{task: task}

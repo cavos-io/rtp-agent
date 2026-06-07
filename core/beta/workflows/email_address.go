@@ -82,9 +82,13 @@ func NewGetEmailTask(opts GetEmailOptions) *GetEmailTask {
 func (t *GetEmailTask) OnEnter() {
 	if activity := t.Agent.GetActivity(); activity != nil {
 		if session := activity.Session; session != nil {
-			_, _ = session.GenerateReply(context.Background(), "Please tell me your email address.")
+			_, _ = session.GenerateReply(context.Background(), emailOnEnterPrompt())
 		}
 	}
+}
+
+func emailOnEnterPrompt() string {
+	return "Ask the user to provide an email address."
 }
 
 type updateEmailTool struct {

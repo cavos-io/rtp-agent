@@ -85,9 +85,13 @@ func NewGetAddressTask(opts GetAddressOptions) *GetAddressTask {
 func (t *GetAddressTask) OnEnter() {
 	if activity := t.Agent.GetActivity(); activity != nil {
 		if session := activity.Session; session != nil {
-			_, _ = session.GenerateReply(context.Background(), "Please tell me your address.")
+			_, _ = session.GenerateReply(context.Background(), addressOnEnterPrompt())
 		}
 	}
+}
+
+func addressOnEnterPrompt() string {
+	return "Ask the user to provide their address."
 }
 
 type updateAddressTool struct {

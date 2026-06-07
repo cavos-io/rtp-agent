@@ -104,6 +104,13 @@ func TestGetEmailTaskInstructionsOmitConfirmationWhenDisabled(t *testing.T) {
 	}
 }
 
+func TestGetEmailTaskOnEnterUsesReferencePrompt(t *testing.T) {
+	want := "Ask the user to provide an email address."
+	if got := emailOnEnterPrompt(); got != want {
+		t.Fatalf("emailOnEnterPrompt() = %q, want %q", got, want)
+	}
+}
+
 func TestGetEmailTaskRejectsStaleConfirmation(t *testing.T) {
 	task := NewGetEmailTask(GetEmailOptions{})
 	update := &updateEmailTool{task: task}
