@@ -52,6 +52,7 @@ import (
 	"github.com/cavos-io/rtp-agent/adapter/mistralai"
 	"github.com/cavos-io/rtp-agent/adapter/murf"
 	"github.com/cavos-io/rtp-agent/adapter/neuphonic"
+	"github.com/cavos-io/rtp-agent/adapter/nltk"
 	"github.com/cavos-io/rtp-agent/adapter/nvidia"
 	"github.com/cavos-io/rtp-agent/adapter/openai"
 	"github.com/cavos-io/rtp-agent/adapter/perplexity"
@@ -139,6 +140,7 @@ func TestAppRegistersReferencePluginMetadataBatch(t *testing.T) {
 		mistralai.PluginPackage:  {title: mistralai.PluginTitle, version: mistralai.PluginVersion},
 		murf.PluginPackage:       {title: murf.PluginTitle, version: murf.PluginVersion},
 		neuphonic.PluginPackage:  {title: neuphonic.PluginTitle, version: neuphonic.PluginVersion},
+		nltk.PluginPackage:       {title: nltk.PluginTitle, version: nltk.PluginVersion},
 		nvidia.PluginPackage:     {title: nvidia.PluginTitle, version: nvidia.PluginVersion},
 		openai.PluginPackage:     {title: openai.PluginTitle, version: openai.PluginVersion},
 		perplexity.PluginPackage: {title: perplexity.PluginTitle, version: perplexity.PluginVersion},
@@ -185,6 +187,25 @@ func TestAppRegistersReferencePluginMetadataBatch(t *testing.T) {
 		}
 		t.Fatalf("plugin metadata was not registered for packages: %s", strings.Join(missing, ", "))
 	}
+}
+
+func TestAppRegistersNltkPluginDownloader(t *testing.T) {
+	for _, registered := range plugin.RegisteredPlugins() {
+		if registered.Package() != nltk.PluginPackage {
+			continue
+		}
+		if registered.Title() != nltk.PluginTitle {
+			t.Fatalf("plugin title = %q, want %q", registered.Title(), nltk.PluginTitle)
+		}
+		if registered.Version() != nltk.PluginVersion {
+			t.Fatalf("plugin version = %q, want %q", registered.Version(), nltk.PluginVersion)
+		}
+		if err := registered.DownloadFiles(); err != nil {
+			t.Fatalf("DownloadFiles() error = %v, want nil for Go-native tokenizer", err)
+		}
+		return
+	}
+	t.Fatal("NLTK plugin downloader was not registered")
 }
 
 func TestAppRegistersClovaPluginDownloader(t *testing.T) {

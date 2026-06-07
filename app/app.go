@@ -134,6 +134,7 @@ func init() {
 	plugin.RegisterPluginMetadata(mistralai.PluginTitle, mistralai.PluginVersion, mistralai.PluginPackage)
 	plugin.RegisterPluginMetadata(murf.PluginTitle, murf.PluginVersion, murf.PluginPackage)
 	plugin.RegisterPluginMetadata(neuphonic.PluginTitle, neuphonic.PluginVersion, neuphonic.PluginPackage)
+	plugin.RegisterPluginDownloader(nltk.PluginTitle, nltk.PluginVersion, nltk.PluginPackage, nltk.Plugin{}.DownloadFiles)
 	plugin.RegisterPluginMetadata(nvidia.PluginTitle, nvidia.PluginVersion, nvidia.PluginPackage)
 	plugin.RegisterPluginMetadata(openai.PluginTitle, openai.PluginVersion, openai.PluginPackage)
 	plugin.RegisterPluginMetadata(perplexity.PluginTitle, perplexity.PluginVersion, perplexity.PluginPackage)
