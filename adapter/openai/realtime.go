@@ -291,8 +291,9 @@ func openAIRealtimeRemoteSnapshot(chatCtx *llm.ChatContext) *llm.RemoteChatConte
 
 func openAIRealtimeDeleteChatItemMessage(itemID string) map[string]any {
 	return map[string]any{
-		"type":    "conversation.item.delete",
-		"item_id": itemID,
+		"type":     "conversation.item.delete",
+		"event_id": cavosmath.ShortUUID("chat_ctx_delete_"),
+		"item_id":  itemID,
 	}
 }
 
@@ -314,6 +315,7 @@ func openAIRealtimeCreateChatItemMessage(chatCtx *llm.ChatContext, previousItemI
 	}
 	return map[string]any{
 		"type":             "conversation.item.create",
+		"event_id":         cavosmath.ShortUUID("chat_ctx_create_"),
 		"previous_item_id": previous,
 		"item":             openAIItem,
 	}, nil

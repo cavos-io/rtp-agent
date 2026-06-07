@@ -1527,8 +1527,14 @@ func TestRealtimeChatContextUpdateMessagesDeleteRemovedAndRecreateChangedItems(t
 	if msgs[0]["type"] != "conversation.item.delete" || msgs[0]["item_id"] != "removed" {
 		t.Fatalf("first message = %#v, want delete removed", msgs[0])
 	}
+	if eventID, ok := msgs[0]["event_id"].(string); !ok || !strings.HasPrefix(eventID, "chat_ctx_delete_") {
+		t.Fatalf("first event_id = %#v, want chat_ctx_delete_ prefix", msgs[0]["event_id"])
+	}
 	if msgs[1]["type"] != "conversation.item.create" || msgs[1]["previous_item_id"] != "changed" {
 		t.Fatalf("second message = %#v, want create after changed", msgs[1])
+	}
+	if eventID, ok := msgs[1]["event_id"].(string); !ok || !strings.HasPrefix(eventID, "chat_ctx_create_") {
+		t.Fatalf("second event_id = %#v, want chat_ctx_create_ prefix", msgs[1]["event_id"])
 	}
 	created := msgs[1]["item"].(map[string]any)
 	if created["id"] != "created" {
@@ -1537,8 +1543,14 @@ func TestRealtimeChatContextUpdateMessagesDeleteRemovedAndRecreateChangedItems(t
 	if msgs[2]["type"] != "conversation.item.delete" || msgs[2]["item_id"] != "changed" {
 		t.Fatalf("third message = %#v, want delete changed", msgs[2])
 	}
+	if eventID, ok := msgs[2]["event_id"].(string); !ok || !strings.HasPrefix(eventID, "chat_ctx_delete_") {
+		t.Fatalf("third event_id = %#v, want chat_ctx_delete_ prefix", msgs[2]["event_id"])
+	}
 	if msgs[3]["type"] != "conversation.item.create" || msgs[3]["previous_item_id"] != "keep" {
 		t.Fatalf("fourth message = %#v, want recreate changed after keep", msgs[3])
+	}
+	if eventID, ok := msgs[3]["event_id"].(string); !ok || !strings.HasPrefix(eventID, "chat_ctx_create_") {
+		t.Fatalf("fourth event_id = %#v, want chat_ctx_create_ prefix", msgs[3]["event_id"])
 	}
 	changed := msgs[3]["item"].(map[string]any)
 	content := changed["content"].([]map[string]any)
