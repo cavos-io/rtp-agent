@@ -1320,6 +1320,35 @@ func TestAgentSessionRecordsEmittedEvents(t *testing.T) {
 	}
 }
 
+func TestAgentSessionOnReceivesRecordedEmittedEvents(t *testing.T) {
+	agent := NewAgent("test")
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	cause := errors.New("provider failed")
+	received := make(chan Event, 1)
+
+	session.On("error", func(ev Event) {
+		if len(session.RecordedEvents()) != 1 {
+			t.Fatalf("RecordedEvents length during callback = %d, want 1", len(session.RecordedEvents()))
+		}
+		received <- ev
+	})
+
+	session.EmitError(ErrorEvent{Error: cause, Source: "llm"})
+
+	select {
+	case ev := <-received:
+		errEvent, ok := ev.(*ErrorEvent)
+		if !ok {
+			t.Fatalf("listener event = %T, want *ErrorEvent", ev)
+		}
+		if !errors.Is(errEvent.Error, cause) || errEvent.Source != "llm" {
+			t.Fatalf("listener error event = %#v, want original error/source", errEvent)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("listener did not receive emitted event")
+	}
+}
+
 func TestAgentSessionRecordedEventsReturnsCopy(t *testing.T) {
 	agent := NewAgent("test")
 	session := NewAgentSession(agent, nil, AgentSessionOptions{})

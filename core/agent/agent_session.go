@@ -199,6 +199,7 @@ type AgentSession struct {
 	jobContextSet  bool
 	mcpServers     []llm.MCPServer
 	recordedEvents []Event
+	eventListeners map[string][]func(Event)
 	ivrActivity    *IVRActivity
 	videoSampler   *VoiceActivityVideoSampler
 
@@ -409,13 +410,29 @@ func (s *AgentSession) RecordedEvents() []Event {
 	return events
 }
 
+func (s *AgentSession) On(eventType string, callback func(Event)) {
+	if s == nil || eventType == "" || callback == nil {
+		return
+	}
+	s.mu.Lock()
+	if s.eventListeners == nil {
+		s.eventListeners = make(map[string][]func(Event))
+	}
+	s.eventListeners[eventType] = append(s.eventListeners[eventType], callback)
+	s.mu.Unlock()
+}
+
 func (s *AgentSession) recordEvent(ev Event) {
 	if ev == nil {
 		return
 	}
 	s.mu.Lock()
 	s.recordedEvents = append(s.recordedEvents, ev)
+	listeners := append(([]func(Event))(nil), s.eventListeners[ev.GetType()]...)
 	s.mu.Unlock()
+	for _, listener := range listeners {
+		listener(ev)
+	}
 }
 
 func (s *AgentSession) CurrentAgent() (AgentInterface, error) {
