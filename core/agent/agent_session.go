@@ -1231,10 +1231,8 @@ func (s *AgentSession) EmitMetricsCollected(metrics telemetry.AgentMetrics) {
 	}
 	telemetry.LogMetrics(metrics)
 	telemetry.CollectOTelUsage(metrics)
-	var usage telemetry.UsageSummary
 	if s.MetricsCollector != nil {
 		s.MetricsCollector.Collect(metrics)
-		usage = s.MetricsCollector.GetSummary()
 	}
 	if s.ModelUsageCollector != nil {
 		s.ModelUsageCollector.Collect(metrics)
@@ -1251,7 +1249,7 @@ func (s *AgentSession) EmitMetricsCollected(metrics telemetry.AgentMetrics) {
 		}
 	}
 	if s.MetricsCollector != nil {
-		s.EmitSessionUsageUpdated(SessionUsageUpdatedEvent{Usage: usage})
+		s.EmitSessionUsageUpdated(SessionUsageUpdatedEvent{Usage: s.ModelUsage()})
 	}
 }
 

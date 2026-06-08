@@ -163,7 +163,7 @@ type MetricsCollectedEvent struct {
 func (e *MetricsCollectedEvent) GetType() string { return "metrics_collected" }
 
 type SessionUsageUpdatedEvent struct {
-	Usage     telemetry.UsageSummary
+	Usage     telemetry.AgentSessionUsage
 	CreatedAt time.Time
 }
 

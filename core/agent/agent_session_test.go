@@ -472,8 +472,8 @@ func assertUsageUpdatedEvent(t *testing.T, events <-chan SessionUsageUpdatedEven
 
 	select {
 	case ev := <-events:
-		if ev.Usage.LLMPromptTokens != 3 {
-			t.Fatalf("%s subscriber usage = %#v, want 3 prompt tokens", name, ev.Usage)
+		if ev.Usage.LLMInputTokens() != 3 {
+			t.Fatalf("%s subscriber usage = %#v, want 3 input tokens", name, ev.Usage)
 		}
 	case <-time.After(time.Second):
 		t.Fatalf("%s subscriber did not receive usage event", name)
@@ -3631,8 +3631,8 @@ func TestAgentSessionEmitMetricsCollectedCollectsUsageAndEmitsEvent(t *testing.T
 		if ev.GetType() != "session_usage_updated" {
 			t.Fatalf("event type = %q, want session_usage_updated", ev.GetType())
 		}
-		if ev.Usage.LLMPromptTokens != 7 || ev.Usage.LLMCompletionTokens != 11 {
-			t.Fatalf("usage event summary = %#v, want prompt=7 completion=11", ev.Usage)
+		if ev.Usage.LLMInputTokens() != 7 || ev.Usage.LLMOutputTokens() != 11 {
+			t.Fatalf("usage event summary = %#v, want input=7 output=11", ev.Usage)
 		}
 		if ev.CreatedAt.Before(before) || ev.CreatedAt.IsZero() {
 			t.Fatalf("usage event CreatedAt = %v, want timestamp after %v", ev.CreatedAt, before)
@@ -3645,6 +3645,37 @@ func TestAgentSessionEmitMetricsCollectedCollectsUsageAndEmitsEvent(t *testing.T
 	}
 	if got := recorder.infoValue("LLM metrics", "type"); got != "llm_metrics" {
 		t.Fatalf("logged LLM metrics type = %#v, want llm_metrics", got)
+	}
+}
+
+func TestAgentSessionUsageUpdatedEventCarriesModelUsage(t *testing.T) {
+	agent := NewAgent("test")
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	metrics := &telemetry.LLMMetrics{
+		PromptTokens:     7,
+		CompletionTokens: 11,
+		Metadata:         &telemetry.Metadata{ModelProvider: "openai", ModelName: "gpt-4o"},
+	}
+
+	session.EmitMetricsCollected(metrics)
+
+	select {
+	case ev := <-session.SessionUsageUpdatedEvents():
+		if len(ev.Usage.ModelUsage) != 1 {
+			t.Fatalf("usage event model usage = %#v, want one entry", ev.Usage.ModelUsage)
+		}
+		llmUsage, ok := ev.Usage.ModelUsage[0].(*telemetry.LLMModelUsage)
+		if !ok {
+			t.Fatalf("usage event model usage type = %T, want *telemetry.LLMModelUsage", ev.Usage.ModelUsage[0])
+		}
+		if llmUsage.Provider != "openai" || llmUsage.Model != "gpt-4o" {
+			t.Fatalf("usage provider/model = %q/%q, want openai/gpt-4o", llmUsage.Provider, llmUsage.Model)
+		}
+		if llmUsage.InputTokens != 7 || llmUsage.OutputTokens != 11 {
+			t.Fatalf("usage tokens = input %d output %d, want 7/11", llmUsage.InputTokens, llmUsage.OutputTokens)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("SessionUsageUpdatedEvents did not receive event")
 	}
 }
 
