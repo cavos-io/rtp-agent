@@ -47,6 +47,15 @@ func WithOpenAILLMTopP(topP float64) OpenAILLMOption {
 	}
 }
 
+func WithOpenAILLMMaxCompletionTokens(maxCompletionTokens int) OpenAILLMOption {
+	return func(l *OpenAILLM) {
+		if l.extraParams == nil {
+			l.extraParams = map[string]any{}
+		}
+		l.extraParams["max_completion_tokens"] = maxCompletionTokens
+	}
+}
+
 func WithOpenAILLMParallelToolCalls(parallelToolCalls bool) OpenAILLMOption {
 	return func(l *OpenAILLM) {
 		l.parallelToolCalls = parallelToolCalls

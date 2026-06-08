@@ -202,6 +202,26 @@ func TestOpenAIChatAppliesProviderTopP(t *testing.T) {
 	}
 }
 
+func TestOpenAIChatAppliesProviderMaxCompletionTokens(t *testing.T) {
+	capture := &captureDeadlineHTTPClient{
+		statusCode:   http.StatusBadRequest,
+		responseBody: `{"error":{"message":"bad request","type":"invalid_request_error","code":"bad_request"}}`,
+	}
+	model := NewOpenAILLMWithBaseURLAndHTTPClient(
+		"test-key",
+		"gpt-4o",
+		"https://openai.test/v1",
+		capture,
+		WithOpenAILLMMaxCompletionTokens(256),
+	)
+
+	_, _ = model.Chat(context.Background(), llm.NewChatContext(), llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 0}))
+
+	if !strings.Contains(capture.requestBody, `"max_completion_tokens":256`) {
+		t.Fatalf("request body = %s, want provider max_completion_tokens", capture.requestBody)
+	}
+}
+
 func TestOpenAIChatAppliesConnectOptionsTimeoutToRequestContext(t *testing.T) {
 	sentinelErr := errors.New("stop after context capture")
 	capture := &captureDeadlineHTTPClient{err: sentinelErr}
