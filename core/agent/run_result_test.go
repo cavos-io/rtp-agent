@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"errors"
+	"fmt"
 	"reflect"
 	"strings"
 	"testing"
@@ -10,6 +11,14 @@ import (
 
 	"github.com/cavos-io/rtp-agent/core/llm"
 )
+
+type runResultStringer struct {
+	value string
+}
+
+func (s runResultStringer) String() string {
+	return s.value
+}
 
 func TestRunResultRecordsSupportedItemsInChronologicalOrder(t *testing.T) {
 	result := NewRunResult(llm.NewChatContext())
@@ -321,6 +330,24 @@ func TestRunResultFinalOutputAcceptsExpectedType(t *testing.T) {
 	}
 	if output != "done" {
 		t.Fatalf("FinalOutput = %#v, want done", output)
+	}
+}
+
+func TestRunResultFinalOutputAcceptsAssignableType(t *testing.T) {
+	result := NewRunResultWithOutputType(llm.NewChatContext(), reflect.TypeOf((*fmt.Stringer)(nil)).Elem())
+	speech := NewSpeechHandle(true, DefaultInputDetails())
+	want := runResultStringer{value: "done"}
+	speech.SetRunFinalOutput(want)
+
+	result.WatchSpeechHandle(speech)
+	speech.MarkDone()
+
+	output, err := result.FinalOutput()
+	if err != nil {
+		t.Fatalf("FinalOutput error = %v, want nil for assignable output type", err)
+	}
+	if output != want {
+		t.Fatalf("FinalOutput = %#v, want %#v", output, want)
 	}
 }
 

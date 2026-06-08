@@ -343,7 +343,7 @@ func (r *RunResult) setFinalOutputLocked(output any) {
 	r.finalOutputErr = nil
 	if err, ok := output.(error); ok {
 		r.finalOutputErr = err
-	} else if r.finalOutputType != nil && reflect.TypeOf(output) != r.finalOutputType {
+	} else if r.finalOutputType != nil && !reflect.TypeOf(output).AssignableTo(r.finalOutputType) {
 		r.finalOutputErr = fmt.Errorf("%w: expected %s, got %T", ErrRunResultFinalOutputType, r.finalOutputType, output)
 	} else {
 		r.finalOutput = output
