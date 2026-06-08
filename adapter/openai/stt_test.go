@@ -166,6 +166,53 @@ func TestOpenAISTTDetectLanguageOmitsLanguage(t *testing.T) {
 	}
 }
 
+func TestOpenAISTTUpdateOptionsMatchesReference(t *testing.T) {
+	provider := mustNewOpenAISTT(t, "test-key", "gpt-4o-mini-transcribe")
+
+	provider.UpdateOptions(
+		WithOpenAISTTModel("whisper-1"),
+		WithOpenAISTTLanguage("id"),
+		WithOpenAISTTPrompt("domain words"),
+		WithOpenAISTTNoiseReductionType("far_field"),
+	)
+
+	req := openAIAudioRequest(provider, strings.NewReader("audio"), "")
+	if req.Model != "whisper-1" {
+		t.Fatalf("model = %q, want whisper-1", req.Model)
+	}
+	if req.Language != "id" {
+		t.Fatalf("language = %q, want id", req.Language)
+	}
+	if req.Prompt != "domain words" {
+		t.Fatalf("prompt = %q, want domain words", req.Prompt)
+	}
+
+	provider.UpdateOptions(WithOpenAISTTDetectLanguage(true))
+
+	payload, err := buildOpenAIRealtimeSTTSessionUpdate(provider)
+	if err != nil {
+		t.Fatalf("build session update: %v", err)
+	}
+	var message map[string]any
+	if err := json.Unmarshal(payload, &message); err != nil {
+		t.Fatalf("decode session update: %v", err)
+	}
+	session := message["session"].(map[string]any)
+	audio := session["audio"].(map[string]any)
+	input := audio["input"].(map[string]any)
+	transcription := input["transcription"].(map[string]any)
+	if transcription["model"] != "whisper-1" {
+		t.Fatalf("transcription model = %#v, want whisper-1", transcription["model"])
+	}
+	if _, ok := transcription["language"]; ok {
+		t.Fatalf("language = %#v, want omitted when detect_language is enabled", transcription["language"])
+	}
+	noiseReduction := input["noise_reduction"].(map[string]any)
+	if noiseReduction["type"] != "far_field" {
+		t.Fatalf("noise_reduction type = %#v, want far_field", noiseReduction["type"])
+	}
+}
+
 func TestOpenAISTTLabelAndDisabledRealtimeStream(t *testing.T) {
 	provider := mustNewOpenAISTT(t, "test-key", "")
 

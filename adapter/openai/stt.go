@@ -48,6 +48,14 @@ type OpenAISTTOption func(*OpenAISTT)
 
 type openAIRealtimeSTTWebsocketDialer func(context.Context, string, http.Header) (*websocket.Conn, *http.Response, error)
 
+func WithOpenAISTTModel(model string) OpenAISTTOption {
+	return func(s *OpenAISTT) {
+		if model != "" {
+			s.model = model
+		}
+	}
+}
+
 func WithOpenAISTTLanguage(language string) OpenAISTTOption {
 	return func(s *OpenAISTT) {
 		s.language = language
@@ -136,6 +144,12 @@ func (s *OpenAISTT) Provider() string {
 }
 func (s *OpenAISTT) Capabilities() stt.STTCapabilities {
 	return stt.STTCapabilities{Streaming: s.useRealtime, InterimResults: s.useRealtime, Diarization: false, OfflineRecognize: true}
+}
+
+func (s *OpenAISTT) UpdateOptions(opts ...OpenAISTTOption) {
+	for _, opt := range opts {
+		opt(s)
+	}
 }
 
 func (s *OpenAISTT) Stream(ctx context.Context, language string) (stt.RecognizeStream, error) {
