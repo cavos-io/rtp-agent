@@ -316,6 +316,23 @@ func TestRunResultFinalOutputRejectsUnexpectedType(t *testing.T) {
 	}
 }
 
+func TestRunResultFinalOutputRejectsNilUnexpectedType(t *testing.T) {
+	result := NewRunResultWithOutputType(llm.NewChatContext(), reflect.TypeOf(""))
+	speech := NewSpeechHandle(true, DefaultInputDetails())
+	speech.SetRunFinalOutput(nil)
+
+	result.WatchSpeechHandle(speech)
+	speech.MarkDone()
+
+	output, err := result.FinalOutput()
+	if !errors.Is(err, ErrRunResultFinalOutputType) {
+		t.Fatalf("FinalOutput error = %v, want ErrRunResultFinalOutputType", err)
+	}
+	if output != nil {
+		t.Fatalf("FinalOutput output = %#v, want nil on nil type mismatch", output)
+	}
+}
+
 func TestRunResultFinalOutputAcceptsExpectedType(t *testing.T) {
 	result := NewRunResultWithOutputType(llm.NewChatContext(), reflect.TypeOf(""))
 	speech := NewSpeechHandle(true, DefaultInputDetails())
