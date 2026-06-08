@@ -65,6 +65,15 @@ func WithOpenAILLMStore(store bool) OpenAILLMOption {
 	}
 }
 
+func WithOpenAILLMServiceTier(serviceTier string) OpenAILLMOption {
+	return func(l *OpenAILLM) {
+		if l.extraParams == nil {
+			l.extraParams = map[string]any{}
+		}
+		l.extraParams["service_tier"] = serviceTier
+	}
+}
+
 func WithOpenAILLMParallelToolCalls(parallelToolCalls bool) OpenAILLMOption {
 	return func(l *OpenAILLM) {
 		l.parallelToolCalls = parallelToolCalls
