@@ -328,6 +328,55 @@ func TestPipelineAgentGenerateReplyWithChatContextCarriesToolOutputs(t *testing.
 	}
 }
 
+func TestPipelineAgentToolReplyRefreshesUpdatedInstructions(t *testing.T) {
+	baseAgent := NewAgent("old instructions")
+	if err := updateAgentInstructionsMessage(baseAgent.ChatCtx, llm.NewInstructions(baseAgent.Instructions), true); err != nil {
+		t.Fatalf("updateAgentInstructionsMessage error = %v", err)
+	}
+	l := &fakeGenerationLLM{
+		streams: []llm.LLMStream{
+			&fakeGenerationLLMStream{
+				chunks: []*llm.ChatChunk{
+					{Delta: &llm.ChoiceDelta{
+						ToolCalls: []llm.FunctionToolCall{{
+							Type:      "function",
+							Name:      "update_instructions",
+							CallID:    "call_update_instructions",
+							Arguments: `{}`,
+						}},
+					}},
+				},
+			},
+			&fakeGenerationLLMStream{
+				chunks: []*llm.ChatChunk{
+					{Delta: &llm.ChoiceDelta{Content: "done"}},
+				},
+			},
+		},
+	}
+	session := NewAgentSession(baseAgent, nil, AgentSessionOptions{})
+	activity := NewAgentActivity(baseAgent, session)
+	baseAgent.activity = activity
+	session.activity = activity
+	session.Tools = []llm.Tool{updateInstructionsPipelineTool{instructions: "new instructions"}}
+	agent := NewPipelineAgent(nil, nil, l, &fakePipelineTTS{}, baseAgent.ChatCtx)
+	agent.session = session
+	agent.ctx = context.Background()
+	replyCtx := baseAgent.ChatCtx.Copy()
+
+	agent.generateReplyWithOptions(pipelineReplyOptions{
+		ChatCtx: replyCtx,
+	})
+
+	if len(l.chatContexts) != 2 {
+		t.Fatalf("LLM chat contexts = %d, want initial and tool reply calls", len(l.chatContexts))
+	}
+	instructions := instructionMessageFromContext(t, l.chatContexts[1])
+	if got := instructions.TextContent(); got != "new instructions" {
+		t.Fatalf("tool reply instructions = %q, want updated instructions", got)
+	}
+}
+
 func TestPipelineAgentGenerateReplyWithToolChoicePassesChatOption(t *testing.T) {
 	chatCtx := llm.NewChatContext()
 	l := &fakeGenerationLLM{
@@ -2403,6 +2452,29 @@ type countingPipelineTool struct {
 	calls  int
 }
 
+type updateInstructionsPipelineTool struct {
+	instructions string
+}
+
+func (u updateInstructionsPipelineTool) ID() string { return "update_instructions" }
+
+func (u updateInstructionsPipelineTool) Name() string { return "update_instructions" }
+
+func (u updateInstructionsPipelineTool) Description() string { return "" }
+
+func (u updateInstructionsPipelineTool) Parameters() map[string]any { return nil }
+
+func (u updateInstructionsPipelineTool) Execute(ctx context.Context, _ string) (string, error) {
+	runCtx := GetRunContext(ctx)
+	if runCtx == nil || runCtx.Session == nil || runCtx.Session.Agent == nil {
+		return "", errors.New("missing run context")
+	}
+	if err := runCtx.Session.Agent.GetAgent().UpdateInstructions(ctx, u.instructions); err != nil {
+		return "", err
+	}
+	return "updated", nil
+}
+
 func (c *countingPipelineTool) ID() string { return c.name }
 
 func (c *countingPipelineTool) Name() string { return c.name }
@@ -2432,6 +2504,22 @@ func (b *blockingPipelineTool) Execute(ctx context.Context, _ string) (string, e
 	case <-b.release:
 		return "done", nil
 	}
+}
+
+func instructionMessageFromContext(t *testing.T, chatCtx *llm.ChatContext) *llm.ChatMessage {
+	t.Helper()
+	for _, item := range chatCtx.Items {
+		if item.GetID() != agentInstructionsMessageID {
+			continue
+		}
+		msg, ok := item.(*llm.ChatMessage)
+		if !ok {
+			t.Fatalf("instruction item = %T, want *llm.ChatMessage", item)
+		}
+		return msg
+	}
+	t.Fatalf("chat context items = %#v, want instruction message", chatCtx.Items)
+	return nil
 }
 
 func assertAssistantMetricMetadata(t *testing.T, metrics map[string]any, key, model, provider string) {

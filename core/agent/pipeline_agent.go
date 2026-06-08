@@ -564,6 +564,11 @@ func (va *PipelineAgent) generateReplyWithOptions(opts pipelineReplyOptions) {
 				}
 				session.EmitFunctionToolsExecuted(*ev)
 			}
+			if activeAgent := session.Agent.GetAgent(); activeAgent != nil {
+				if err := updateAgentInstructionsMessage(replyCtx, agentInstructionVariants(activeAgent), false); err != nil {
+					logger.Logger.Warnw("failed to refresh reply instructions", err)
+				}
+			}
 		}
 
 		// If no tool calls, we're done
