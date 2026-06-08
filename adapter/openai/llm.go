@@ -18,8 +18,9 @@ import (
 const defaultOpenAILLMModel = "gpt-4.1"
 
 type OpenAILLM struct {
-	client *openai.Client
-	model  string
+	client  *openai.Client
+	model   string
+	baseURL string
 }
 
 func NewOpenAILLM(apiKey string, model string) (*OpenAILLM, error) {
@@ -38,8 +39,9 @@ func newOpenAILLMWithConfigAndModel(config openai.ClientConfig, model string) (*
 		model = defaultOpenAILLMModel
 	}
 	return &OpenAILLM{
-		client: openai.NewClientWithConfig(config),
-		model:  model,
+		client:  openai.NewClientWithConfig(config),
+		model:   model,
+		baseURL: config.BaseURL,
 	}, nil
 }
 
@@ -56,8 +58,9 @@ func NewOpenAILLMWithBaseURLAndHTTPClient(apiKey string, model string, baseURL s
 		config.HTTPClient = httpClient
 	}
 	return &OpenAILLM{
-		client: openai.NewClientWithConfig(config),
-		model:  model,
+		client:  openai.NewClientWithConfig(config),
+		model:   model,
+		baseURL: config.BaseURL,
 	}
 }
 
@@ -66,7 +69,11 @@ func (l *OpenAILLM) Model() string {
 }
 
 func (l *OpenAILLM) Provider() string {
-	return "openai"
+	u, err := url.Parse(l.baseURL)
+	if err != nil || u.Host == "" {
+		return "openai"
+	}
+	return u.Host
 }
 
 func (l *OpenAILLM) Chat(ctx context.Context, chatCtx *llm.ChatContext, opts ...llm.ChatOption) (llm.LLMStream, error) {
