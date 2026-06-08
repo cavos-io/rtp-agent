@@ -104,6 +104,26 @@ func TestOpenAIRealtimeSessionUsesEnvBaseURL(t *testing.T) {
 	}
 }
 
+func TestOpenAIRealtimeSessionUsesConstructorBaseURL(t *testing.T) {
+	t.Setenv("OPENAI_BASE_URL", "https://env.openai.test/openai/v1")
+	model := NewRealtimeModel("test-key", "gpt-realtime", WithOpenAIRealtimeBaseURL("https://constructor.openai.test/openai/v1"))
+	var endpoint string
+	model.dialWebsocket = func(url string, _ http.Header) (*websocket.Conn, *http.Response, error) {
+		endpoint = url
+		return nil, nil, errors.New("stop after endpoint capture")
+	}
+
+	_, err := model.Session()
+
+	if err == nil || !strings.Contains(err.Error(), "stop after endpoint capture") {
+		t.Fatalf("Session() error = %v, want captured dial error", err)
+	}
+	want := "wss://constructor.openai.test/openai/v1/realtime?model=gpt-realtime"
+	if endpoint != want {
+		t.Fatalf("endpoint = %q, want %q", endpoint, want)
+	}
+}
+
 func TestRealtimeModelUpdateOptionsForwardsToActiveSession(t *testing.T) {
 	messages := make(chan string, 8)
 	dialer := newOpenAIRealtimeTestWebsocketDialer(t, func(conn *websocket.Conn, _ *http.Request) {
@@ -191,6 +211,400 @@ func TestRealtimeModelUpdateOptionsAppliesToNewSession(t *testing.T) {
 	assertRealtimeMessage(t, initialUpdate, "session.update", "alloy")
 }
 
+func TestRealtimeModelConstructorVoiceAppliesToInitialSession(t *testing.T) {
+	messages := make(chan string, 4)
+	dialer := newOpenAIRealtimeTestWebsocketDialer(t, func(conn *websocket.Conn, _ *http.Request) {
+		for {
+			_, msg, err := conn.ReadMessage()
+			if err != nil {
+				return
+			}
+			messages <- string(msg)
+		}
+	})
+
+	realtimeModel := NewRealtimeModel("test-key", "gpt-realtime", WithOpenAIRealtimeVoice("alloy"))
+	realtimeModel.baseURL = "ws://openai.test/v1/realtime"
+	realtimeModel.dialWebsocket = dialer
+
+	session, err := realtimeModel.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	defer session.Close()
+
+	initialUpdate := <-messages
+	assertRealtimeMessage(t, initialUpdate, "session.update", "alloy")
+}
+
+func TestRealtimeModelConstructorExplicitZeroSpeedAppliesToInitialSession(t *testing.T) {
+	messages := make(chan string, 4)
+	dialer := newOpenAIRealtimeTestWebsocketDialer(t, func(conn *websocket.Conn, _ *http.Request) {
+		for {
+			_, msg, err := conn.ReadMessage()
+			if err != nil {
+				return
+			}
+			messages <- string(msg)
+		}
+	})
+
+	realtimeModel := NewRealtimeModel("test-key", "gpt-realtime", WithOpenAIRealtimeSpeed(0))
+	realtimeModel.baseURL = "ws://openai.test/v1/realtime"
+	realtimeModel.dialWebsocket = dialer
+
+	session, err := realtimeModel.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	defer session.Close()
+
+	initialUpdate := <-messages
+	var msg map[string]any
+	if err := json.Unmarshal([]byte(initialUpdate), &msg); err != nil {
+		t.Fatalf("decode initial update: %v", err)
+	}
+	sessionPayload := msg["session"].(map[string]any)
+	audio := sessionPayload["audio"].(map[string]any)
+	output := audio["output"].(map[string]any)
+	if output["speed"] != 0.0 {
+		t.Fatalf("speed = %#v, want explicit zero", output["speed"])
+	}
+}
+
+func TestRealtimeModelConstructorToolChoiceAppliesToInitialSession(t *testing.T) {
+	messages := make(chan string, 4)
+	dialer := newOpenAIRealtimeTestWebsocketDialer(t, func(conn *websocket.Conn, _ *http.Request) {
+		for {
+			_, msg, err := conn.ReadMessage()
+			if err != nil {
+				return
+			}
+			messages <- string(msg)
+		}
+	})
+
+	realtimeModel := NewRealtimeModel("test-key", "gpt-realtime", WithOpenAIRealtimeToolChoice(map[string]any{
+		"type": "function",
+		"function": map[string]any{
+			"name": "lookup",
+		},
+	}))
+	realtimeModel.baseURL = "ws://openai.test/v1/realtime"
+	realtimeModel.dialWebsocket = dialer
+
+	session, err := realtimeModel.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	defer session.Close()
+
+	initialUpdate := <-messages
+	var msg map[string]any
+	if err := json.Unmarshal([]byte(initialUpdate), &msg); err != nil {
+		t.Fatalf("decode initial update: %v", err)
+	}
+	sessionPayload := msg["session"].(map[string]any)
+	choice := sessionPayload["tool_choice"].(map[string]any)
+	if choice["type"] != "function" || choice["name"] != "lookup" {
+		t.Fatalf("tool_choice = %#v, want named lookup function", choice)
+	}
+}
+
+func TestRealtimeModelConstructorTracingAppliesToInitialSession(t *testing.T) {
+	messages := make(chan string, 4)
+	dialer := newOpenAIRealtimeTestWebsocketDialer(t, func(conn *websocket.Conn, _ *http.Request) {
+		for {
+			_, msg, err := conn.ReadMessage()
+			if err != nil {
+				return
+			}
+			messages <- string(msg)
+		}
+	})
+
+	realtimeModel := NewRealtimeModel("test-key", "gpt-realtime", WithOpenAIRealtimeTracing(map[string]any{"workflow_name": "checkout"}))
+	realtimeModel.baseURL = "ws://openai.test/v1/realtime"
+	realtimeModel.dialWebsocket = dialer
+
+	session, err := realtimeModel.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	defer session.Close()
+
+	initialUpdate := <-messages
+	var msg map[string]any
+	if err := json.Unmarshal([]byte(initialUpdate), &msg); err != nil {
+		t.Fatalf("decode initial update: %v", err)
+	}
+	sessionPayload := msg["session"].(map[string]any)
+	tracing := sessionPayload["tracing"].(map[string]any)
+	if tracing["workflow_name"] != "checkout" {
+		t.Fatalf("tracing = %#v, want workflow_name checkout", tracing)
+	}
+}
+
+func TestRealtimeModelConstructorTruncationAppliesToInitialSession(t *testing.T) {
+	messages := make(chan string, 4)
+	dialer := newOpenAIRealtimeTestWebsocketDialer(t, func(conn *websocket.Conn, _ *http.Request) {
+		for {
+			_, msg, err := conn.ReadMessage()
+			if err != nil {
+				return
+			}
+			messages <- string(msg)
+		}
+	})
+
+	realtimeModel := NewRealtimeModel("test-key", "gpt-realtime", WithOpenAIRealtimeTruncation("disabled"))
+	realtimeModel.baseURL = "ws://openai.test/v1/realtime"
+	realtimeModel.dialWebsocket = dialer
+
+	session, err := realtimeModel.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	defer session.Close()
+
+	initialUpdate := <-messages
+	var msg map[string]any
+	if err := json.Unmarshal([]byte(initialUpdate), &msg); err != nil {
+		t.Fatalf("decode initial update: %v", err)
+	}
+	sessionPayload := msg["session"].(map[string]any)
+	if sessionPayload["truncation"] != "disabled" {
+		t.Fatalf("truncation = %#v, want disabled", sessionPayload["truncation"])
+	}
+}
+
+func TestRealtimeModelConstructorInputAudioTranscriptionAppliesToInitialSession(t *testing.T) {
+	messages := make(chan string, 4)
+	dialer := newOpenAIRealtimeTestWebsocketDialer(t, func(conn *websocket.Conn, _ *http.Request) {
+		for {
+			_, msg, err := conn.ReadMessage()
+			if err != nil {
+				return
+			}
+			messages <- string(msg)
+		}
+	})
+
+	realtimeModel := NewRealtimeModel("test-key", "gpt-realtime", WithOpenAIRealtimeInputAudioTranscription(map[string]any{"model": "gpt-4o-transcribe"}))
+	realtimeModel.baseURL = "ws://openai.test/v1/realtime"
+	realtimeModel.dialWebsocket = dialer
+
+	session, err := realtimeModel.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	defer session.Close()
+
+	initialUpdate := <-messages
+	var msg map[string]any
+	if err := json.Unmarshal([]byte(initialUpdate), &msg); err != nil {
+		t.Fatalf("decode initial update: %v", err)
+	}
+	sessionPayload := msg["session"].(map[string]any)
+	audio := sessionPayload["audio"].(map[string]any)
+	input := audio["input"].(map[string]any)
+	transcription := input["transcription"].(map[string]any)
+	if transcription["model"] != "gpt-4o-transcribe" {
+		t.Fatalf("transcription = %#v, want gpt-4o-transcribe model", transcription)
+	}
+}
+
+func TestRealtimeModelConstructorInputAudioNoiseReductionAppliesToInitialSession(t *testing.T) {
+	messages := make(chan string, 4)
+	dialer := newOpenAIRealtimeTestWebsocketDialer(t, func(conn *websocket.Conn, _ *http.Request) {
+		for {
+			_, msg, err := conn.ReadMessage()
+			if err != nil {
+				return
+			}
+			messages <- string(msg)
+		}
+	})
+
+	realtimeModel := NewRealtimeModel("test-key", "gpt-realtime", WithOpenAIRealtimeInputAudioNoiseReduction(map[string]any{"type": "near_field"}))
+	realtimeModel.baseURL = "ws://openai.test/v1/realtime"
+	realtimeModel.dialWebsocket = dialer
+
+	session, err := realtimeModel.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	defer session.Close()
+
+	initialUpdate := <-messages
+	var msg map[string]any
+	if err := json.Unmarshal([]byte(initialUpdate), &msg); err != nil {
+		t.Fatalf("decode initial update: %v", err)
+	}
+	sessionPayload := msg["session"].(map[string]any)
+	audio := sessionPayload["audio"].(map[string]any)
+	input := audio["input"].(map[string]any)
+	noiseReduction := input["noise_reduction"].(map[string]any)
+	if noiseReduction["type"] != "near_field" {
+		t.Fatalf("noise_reduction = %#v, want near_field type", noiseReduction)
+	}
+}
+
+func TestRealtimeModelConstructorTurnDetectionAppliesToInitialSession(t *testing.T) {
+	messages := make(chan string, 4)
+	dialer := newOpenAIRealtimeTestWebsocketDialer(t, func(conn *websocket.Conn, _ *http.Request) {
+		for {
+			_, msg, err := conn.ReadMessage()
+			if err != nil {
+				return
+			}
+			messages <- string(msg)
+		}
+	})
+
+	realtimeModel := NewRealtimeModel("test-key", "gpt-realtime", WithOpenAIRealtimeTurnDetection(map[string]any{
+		"type":                "server_vad",
+		"threshold":           0.45,
+		"prefix_padding_ms":   250,
+		"silence_duration_ms": 450,
+		"create_response":     false,
+	}))
+	realtimeModel.baseURL = "ws://openai.test/v1/realtime"
+	realtimeModel.dialWebsocket = dialer
+
+	session, err := realtimeModel.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	defer session.Close()
+
+	initialUpdate := <-messages
+	var msg map[string]any
+	if err := json.Unmarshal([]byte(initialUpdate), &msg); err != nil {
+		t.Fatalf("decode initial update: %v", err)
+	}
+	sessionPayload := msg["session"].(map[string]any)
+	audio := sessionPayload["audio"].(map[string]any)
+	input := audio["input"].(map[string]any)
+	turnDetection := input["turn_detection"].(map[string]any)
+	if turnDetection["type"] != "server_vad" ||
+		turnDetection["threshold"] != 0.45 ||
+		turnDetection["prefix_padding_ms"] != float64(250) ||
+		turnDetection["silence_duration_ms"] != float64(450) ||
+		turnDetection["create_response"] != false {
+		t.Fatalf("turn_detection = %#v, want configured server_vad", turnDetection)
+	}
+}
+
+func TestRealtimeModelConstructorTextModalitiesApplyToInitialSession(t *testing.T) {
+	messages := make(chan string, 4)
+	dialer := newOpenAIRealtimeTestWebsocketDialer(t, func(conn *websocket.Conn, _ *http.Request) {
+		for {
+			_, msg, err := conn.ReadMessage()
+			if err != nil {
+				return
+			}
+			messages <- string(msg)
+		}
+	})
+
+	realtimeModel := NewRealtimeModel("test-key", "gpt-realtime", WithOpenAIRealtimeModalities([]string{"text"}))
+	realtimeModel.baseURL = "ws://openai.test/v1/realtime"
+	realtimeModel.dialWebsocket = dialer
+
+	if realtimeModel.Capabilities().AudioOutput {
+		t.Fatal("AudioOutput capability = true, want false for text-only modalities")
+	}
+
+	session, err := realtimeModel.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	defer session.Close()
+
+	initialUpdate := <-messages
+	var msg map[string]any
+	if err := json.Unmarshal([]byte(initialUpdate), &msg); err != nil {
+		t.Fatalf("decode initial update: %v", err)
+	}
+	sessionPayload := msg["session"].(map[string]any)
+	modalities := sessionPayload["output_modalities"].([]any)
+	if len(modalities) != 1 || modalities[0] != "text" {
+		t.Fatalf("output_modalities = %#v, want text", modalities)
+	}
+}
+
+func TestRealtimeModelConstructorMaxResponseOutputTokensAppliesToInitialSession(t *testing.T) {
+	messages := make(chan string, 4)
+	dialer := newOpenAIRealtimeTestWebsocketDialer(t, func(conn *websocket.Conn, _ *http.Request) {
+		for {
+			_, msg, err := conn.ReadMessage()
+			if err != nil {
+				return
+			}
+			messages <- string(msg)
+		}
+	})
+
+	realtimeModel := NewRealtimeModel("test-key", "gpt-realtime", WithOpenAIRealtimeMaxResponseOutputTokens(96))
+	realtimeModel.baseURL = "ws://openai.test/v1/realtime"
+	realtimeModel.dialWebsocket = dialer
+
+	session, err := realtimeModel.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	defer session.Close()
+
+	initialUpdate := <-messages
+	var msg map[string]any
+	if err := json.Unmarshal([]byte(initialUpdate), &msg); err != nil {
+		t.Fatalf("decode initial update: %v", err)
+	}
+	sessionPayload := msg["session"].(map[string]any)
+	if sessionPayload["max_output_tokens"] != float64(96) {
+		t.Fatalf("max_output_tokens = %#v, want 96", sessionPayload["max_output_tokens"])
+	}
+}
+
+func TestRealtimeInitialSessionUsesDefaultToolChoice(t *testing.T) {
+	session := openAIRealtimeInitialSession("gpt-realtime")
+
+	if session["tool_choice"] != "auto" {
+		t.Fatalf("tool_choice = %#v, want auto", session["tool_choice"])
+	}
+}
+
+func TestRealtimeInitialSessionUsesDefaultInputAudioOptions(t *testing.T) {
+	session := openAIRealtimeInitialSession("gpt-realtime")
+
+	audio := session["audio"].(map[string]any)
+	input := audio["input"].(map[string]any)
+	transcription, ok := input["transcription"].(map[string]any)
+	if !ok {
+		t.Fatalf("transcription = %#v, want default transcription config", input["transcription"])
+	}
+	if transcription["model"] != "gpt-4o-mini-transcribe" {
+		t.Fatalf("transcription = %#v, want gpt-4o-mini-transcribe", transcription)
+	}
+	turnDetection, ok := input["turn_detection"].(map[string]any)
+	if !ok {
+		t.Fatalf("turn_detection = %#v, want default semantic VAD config", input["turn_detection"])
+	}
+	if turnDetection["type"] != "semantic_vad" {
+		t.Fatalf("turn_detection type = %#v, want semantic_vad", turnDetection["type"])
+	}
+	if turnDetection["eagerness"] != "medium" {
+		t.Fatalf("turn_detection eagerness = %#v, want medium", turnDetection["eagerness"])
+	}
+	if turnDetection["create_response"] != true {
+		t.Fatalf("turn_detection create_response = %#v, want true", turnDetection["create_response"])
+	}
+	if turnDetection["interrupt_response"] != true {
+		t.Fatalf("turn_detection interrupt_response = %#v, want true", turnDetection["interrupt_response"])
+	}
+}
+
 func TestRealtimeSessionSendsProtocolMessages(t *testing.T) {
 	messages := make(chan string, 32)
 	connected := make(chan *http.Request, 1)
@@ -266,15 +680,9 @@ func TestRealtimeSessionSendsProtocolMessages(t *testing.T) {
 	assertRealtimeMessage(t, <-messages, "conversation.item.create", "user-1")
 
 	if err := session.UpdateOptions(llm.RealtimeSessionOptions{ToolChoice: "auto"}); err != nil {
-		t.Fatalf("UpdateOptions error = %v", err)
+		t.Fatalf("UpdateOptions unchanged default tool choice error = %v", err)
 	}
-	optionsUpdate := <-messages
-	assertRealtimeMessage(t, optionsUpdate, "session.update", "auto")
-	assertRealtimeMessageEventID(t, optionsUpdate, "options_update_")
-	if err := session.UpdateOptions(llm.RealtimeSessionOptions{ToolChoice: "auto"}); err != nil {
-		t.Fatalf("UpdateOptions repeated error = %v", err)
-	}
-	assertNoRealtimeMessage(t, messages, "unchanged options update should not send a session update")
+	assertNoRealtimeMessage(t, messages, "unchanged default tool choice should not send a session update")
 	if err := session.UpdateOptions(llm.RealtimeSessionOptions{}); err != nil {
 		t.Fatalf("UpdateOptions empty error = %v", err)
 	}

@@ -32,12 +32,95 @@ type RealtimeModel struct {
 	dialWebsocket openAIRealtimeWebsocketDialer
 	mu            sync.Mutex
 	options       llm.RealtimeSessionOptions
+	modalities    []string
 	sessions      map[*realtimeSession]struct{}
 }
 
 type openAIRealtimeWebsocketDialer func(string, http.Header) (*websocket.Conn, *http.Response, error)
 
-func NewRealtimeModel(apiKey, model string) *RealtimeModel {
+type openAIRealtimeModelOptions struct {
+	sessionOptions llm.RealtimeSessionOptions
+	modalities     []string
+	baseURL        string
+}
+
+type OpenAIRealtimeOption func(*openAIRealtimeModelOptions)
+
+func WithOpenAIRealtimeVoice(voice string) OpenAIRealtimeOption {
+	return func(options *openAIRealtimeModelOptions) {
+		options.sessionOptions.Voice = voice
+	}
+}
+
+func WithOpenAIRealtimeSpeed(speed float64) OpenAIRealtimeOption {
+	return func(options *openAIRealtimeModelOptions) {
+		options.sessionOptions.Speed = speed
+		options.sessionOptions.SpeedSet = true
+	}
+}
+
+func WithOpenAIRealtimeToolChoice(toolChoice llm.ToolChoice) OpenAIRealtimeOption {
+	return func(options *openAIRealtimeModelOptions) {
+		options.sessionOptions.ToolChoice = toolChoice
+		options.sessionOptions.ToolChoiceSet = true
+	}
+}
+
+func WithOpenAIRealtimeTracing(tracing any) OpenAIRealtimeOption {
+	return func(options *openAIRealtimeModelOptions) {
+		options.sessionOptions.Tracing = tracing
+		options.sessionOptions.TracingSet = true
+	}
+}
+
+func WithOpenAIRealtimeTruncation(truncation any) OpenAIRealtimeOption {
+	return func(options *openAIRealtimeModelOptions) {
+		options.sessionOptions.Truncation = truncation
+		options.sessionOptions.TruncationSet = true
+	}
+}
+
+func WithOpenAIRealtimeInputAudioTranscription(transcription any) OpenAIRealtimeOption {
+	return func(options *openAIRealtimeModelOptions) {
+		options.sessionOptions.InputAudioTranscription = transcription
+		options.sessionOptions.InputAudioTranscriptionSet = true
+	}
+}
+
+func WithOpenAIRealtimeInputAudioNoiseReduction(noiseReduction any) OpenAIRealtimeOption {
+	return func(options *openAIRealtimeModelOptions) {
+		options.sessionOptions.InputAudioNoiseReduction = noiseReduction
+		options.sessionOptions.InputAudioNoiseReductionSet = true
+	}
+}
+
+func WithOpenAIRealtimeTurnDetection(turnDetection any) OpenAIRealtimeOption {
+	return func(options *openAIRealtimeModelOptions) {
+		options.sessionOptions.TurnDetection = turnDetection
+		options.sessionOptions.TurnDetectionSet = true
+	}
+}
+
+func WithOpenAIRealtimeModalities(modalities []string) OpenAIRealtimeOption {
+	return func(options *openAIRealtimeModelOptions) {
+		options.modalities = append([]string(nil), modalities...)
+	}
+}
+
+func WithOpenAIRealtimeMaxResponseOutputTokens(tokens any) OpenAIRealtimeOption {
+	return func(options *openAIRealtimeModelOptions) {
+		options.sessionOptions.MaxResponseOutputTokens = tokens
+		options.sessionOptions.MaxResponseOutputTokensSet = true
+	}
+}
+
+func WithOpenAIRealtimeBaseURL(baseURL string) OpenAIRealtimeOption {
+	return func(options *openAIRealtimeModelOptions) {
+		options.baseURL = baseURL
+	}
+}
+
+func NewRealtimeModel(apiKey, model string, opts ...OpenAIRealtimeOption) *RealtimeModel {
 	if model == "" {
 		model = "gpt-realtime"
 	}
@@ -48,11 +131,20 @@ func NewRealtimeModel(apiKey, model string) *RealtimeModel {
 	if baseURL == "" {
 		baseURL = "https://api.openai.com/v1"
 	}
+	options := openAIRealtimeModelOptions{}
+	for _, opt := range opts {
+		opt(&options)
+	}
+	if options.baseURL != "" {
+		baseURL = options.baseURL
+	}
 	return &RealtimeModel{
 		apiKey:        apiKey,
 		model:         model,
 		baseURL:       openAIRealtimeBaseURL(baseURL),
 		dialWebsocket: defaultOpenAIRealtimeWebsocketDialer,
+		options:       options.sessionOptions,
+		modalities:    options.modalities,
 	}
 }
 
@@ -95,7 +187,7 @@ func (m *RealtimeModel) Capabilities() llm.RealtimeCapabilities {
 		TurnDetection:           true,
 		UserTranscription:       true,
 		AutoToolReplyGeneration: false,
-		AudioOutput:             true,
+		AudioOutput:             len(m.modalities) == 0 || realtimeModalitiesInclude(m.modalities, "audio"),
 		ManualFunctionCalls:     true,
 		MutableChatContext:      true,
 		MutableInstructions:     true,
@@ -169,7 +261,7 @@ func (m *RealtimeModel) Session() (llm.RealtimeSession, error) {
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
-	initialSession := openAIRealtimeInitialSession(m.model)
+	initialSession := openAIRealtimeInitialSession(m.model, m.modalities)
 	m.mu.Lock()
 	initialOptions := m.options
 	m.mu.Unlock()
@@ -252,18 +344,31 @@ func defaultOpenAIRealtimeWebsocketDialer(endpoint string, headers http.Header) 
 	return websocket.DefaultDialer.Dial(endpoint, headers)
 }
 
-func openAIRealtimeInitialSession(model string) map[string]any {
+func openAIRealtimeInitialSession(model string, modalities ...[]string) map[string]any {
 	audioFormat := map[string]any{
 		"type": "audio/pcm",
 		"rate": openAIRealtimeInputSampleRate,
 	}
+	outputModality := "audio"
+	if len(modalities) > 0 && !realtimeModalitiesInclude(modalities[0], "audio") {
+		outputModality = "text"
+	}
 	return map[string]any{
 		"type":              "realtime",
 		"model":             model,
-		"output_modalities": []string{"audio"},
+		"output_modalities": []string{outputModality},
 		"audio": map[string]any{
 			"input": map[string]any{
 				"format": audioFormat,
+				"transcription": map[string]any{
+					"model": "gpt-4o-mini-transcribe",
+				},
+				"turn_detection": map[string]any{
+					"type":               "semantic_vad",
+					"create_response":    true,
+					"eagerness":          "medium",
+					"interrupt_response": true,
+				},
 			},
 			"output": map[string]any{
 				"format": audioFormat,
@@ -272,6 +377,7 @@ func openAIRealtimeInitialSession(model string) map[string]any {
 			},
 		},
 		"max_output_tokens": openAIRealtimeDefaultMaxOutputTokens,
+		"tool_choice":       "auto",
 	}
 }
 
