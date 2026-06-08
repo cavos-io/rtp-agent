@@ -349,7 +349,7 @@ func (va *PipelineAgent) OnSpeechScheduled(ctx context.Context, speech *SpeechHa
 		if session == nil {
 			return
 		}
-		if err := va.synthesizeSpeech(ctx, session, singleTextChannel(speech.Generation.Text)); err != nil {
+		if _, err := va.synthesizeSpeech(ctx, session, singleTextChannel(speech.Generation.Text)); err != nil {
 			logger.Logger.Errorw("TTS inference failed", err)
 			va.emitTTSError(session, err)
 		}
@@ -472,7 +472,8 @@ func (va *PipelineAgent) generateReplyWithOptions(opts pipelineReplyOptions) {
 			return
 		}
 
-		if err := va.synthesizeSpeech(ctx, session, genData.TextCh); err != nil {
+		ttsGen, err := va.synthesizeSpeech(ctx, session, genData.TextCh)
+		if err != nil {
 			logger.Logger.Errorw("TTS inference failed", err)
 			va.emitTTSError(session, err)
 		}
@@ -492,6 +493,23 @@ func (va *PipelineAgent) generateReplyWithOptions(opts pipelineReplyOptions) {
 			if len(genData.GeneratedExtra) > 0 {
 				args.Extra = genData.GeneratedExtra
 			}
+			metrics := map[string]any{
+				"llm_metadata": map[string]any{
+					"model_name":     llm.Model(va.LLM),
+					"model_provider": llm.Provider(va.LLM),
+				},
+				"tts_metadata": map[string]any{
+					"model_name":     tts.Model(va.tts),
+					"model_provider": tts.Provider(va.tts),
+				},
+			}
+			if genData.TTFT > 0 {
+				metrics["llm_node_ttft"] = genData.TTFT.Seconds()
+			}
+			if ttsGen != nil && ttsGen.TTFB > 0 {
+				metrics["tts_node_ttfb"] = ttsGen.TTFB.Seconds()
+			}
+			args.Metrics = metrics
 			msg := va.chatCtx.AddMessage(args)
 			session.EmitConversationItemAdded(msg)
 			if opts.SpeechHandle != nil {
@@ -624,7 +642,7 @@ func llmCachedPromptTokens(usage *llm.CompletionUsage) int {
 	return usage.PromptCachedTokens + usage.CacheCreationTokens + usage.CacheReadTokens
 }
 
-func (va *PipelineAgent) synthesizeSpeech(ctx context.Context, session *AgentSession, textCh <-chan string) error {
+func (va *PipelineAgent) synthesizeSpeech(ctx context.Context, session *AgentSession, textCh <-chan string) (*TTSGenerationData, error) {
 	transcriptSync := NewTranscriptSynchronizer(0)
 	useAlignedTranscript := va.useTTSAlignedTranscript(session)
 	var transcriptionDone <-chan struct{}
@@ -639,7 +657,7 @@ func (va *PipelineAgent) synthesizeSpeech(ctx context.Context, session *AgentSes
 	if err != nil {
 		transcriptSync.Close()
 		<-transcriptionDone
-		return err
+		return nil, err
 	}
 	if useAlignedTranscript {
 		transcriptionDone = va.forwardAlignedAgentOutputTranscription(session, ttsGen.TimedTextCh)
@@ -651,14 +669,14 @@ func (va *PipelineAgent) synthesizeSpeech(ctx context.Context, session *AgentSes
 		case <-ctx.Done():
 			transcriptSync.Close()
 			<-transcriptionDone
-			return ctx.Err()
+			return ttsGen, ctx.Err()
 		default:
 			transcriptSync.PushAudio(frame)
 			if va.PublishAudio != nil {
 				if err := va.PublishAudio(frame); err != nil {
 					transcriptSync.Close()
 					<-transcriptionDone
-					return err
+					return ttsGen, err
 				}
 			}
 		}
@@ -666,9 +684,9 @@ func (va *PipelineAgent) synthesizeSpeech(ctx context.Context, session *AgentSes
 	transcriptSync.Close()
 	<-transcriptionDone
 	if ttsGen.StreamErr != nil {
-		return ttsGen.StreamErr
+		return ttsGen, ttsGen.StreamErr
 	}
-	return nil
+	return ttsGen, nil
 }
 
 func (va *PipelineAgent) useTTSAlignedTranscript(session *AgentSession) bool {

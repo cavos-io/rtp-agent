@@ -53,6 +53,48 @@ func TestPipelineAgentGenerateReplyAddsAssistantMessageWithExtra(t *testing.T) {
 	}
 }
 
+func TestPipelineAgentGenerateReplyAddsAssistantMessageTTSMetrics(t *testing.T) {
+	chatCtx := llm.NewChatContext()
+	l := &fakeGenerationLLM{
+		model:    "test-llm",
+		provider: "test-llm-provider",
+		stream: &fakeGenerationLLMStream{
+			chunks: []*llm.ChatChunk{
+				{Delta: &llm.ChoiceDelta{Content: "hello"}},
+			},
+		},
+	}
+	ttsStream := &fakePipelineTTSStream{
+		frames: []*model.AudioFrame{{Data: []byte{1, 2}}},
+	}
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	agent := NewPipelineAgent(nil, nil, l, &fakePipelineTTS{
+		model:    "test-voice",
+		provider: "test-tts-provider",
+		stream:   ttsStream,
+	}, chatCtx)
+	agent.session = session
+	agent.ctx = context.Background()
+
+	agent.generateReply()
+
+	if len(chatCtx.Items) != 1 {
+		t.Fatalf("chatCtx.Items length = %d, want 1 assistant message", len(chatCtx.Items))
+	}
+	msg, ok := chatCtx.Items[0].(*llm.ChatMessage)
+	if !ok {
+		t.Fatalf("chatCtx item = %T, want *llm.ChatMessage", chatCtx.Items[0])
+	}
+	if got, ok := msg.Metrics["llm_node_ttft"].(float64); !ok || got <= 0 {
+		t.Fatalf("assistant Metrics[llm_node_ttft] = %#v, want positive first token latency", msg.Metrics["llm_node_ttft"])
+	}
+	if got, ok := msg.Metrics["tts_node_ttfb"].(float64); !ok || got <= 0 {
+		t.Fatalf("assistant Metrics[tts_node_ttfb] = %#v, want positive first audio latency", msg.Metrics["tts_node_ttfb"])
+	}
+	assertAssistantMetricMetadata(t, msg.Metrics, "llm_metadata", "test-llm", "test-llm-provider")
+	assertAssistantMetricMetadata(t, msg.Metrics, "tts_metadata", "test-voice", "test-tts-provider")
+}
+
 func TestPipelineAgentGenerateReplyWithInstructionsUsesTemporaryChatContext(t *testing.T) {
 	chatCtx := llm.NewChatContext()
 	chatCtx.Append(&llm.ChatMessage{
@@ -2106,6 +2148,8 @@ func toolCallStream(callID string) *fakeGenerationLLMStream {
 type fakePipelineTTS struct {
 	tts.MetricsEmitter
 	tts.ErrorEmitter
+	model         string
+	provider      string
 	stream        *fakePipelineTTSStream
 	streamErr     error
 	synthesizeErr error
@@ -2113,6 +2157,10 @@ type fakePipelineTTS struct {
 }
 
 func (f *fakePipelineTTS) Label() string { return "fake" }
+
+func (f *fakePipelineTTS) Model() string { return f.model }
+
+func (f *fakePipelineTTS) Provider() string { return f.provider }
 
 func (f *fakePipelineTTS) Capabilities() tts.TTSCapabilities {
 	if f.capabilities != (tts.TTSCapabilities{}) {
@@ -2383,6 +2431,18 @@ func (b *blockingPipelineTool) Execute(ctx context.Context, _ string) (string, e
 		return "", ctx.Err()
 	case <-b.release:
 		return "done", nil
+	}
+}
+
+func assertAssistantMetricMetadata(t *testing.T, metrics map[string]any, key, model, provider string) {
+	t.Helper()
+
+	got, ok := metrics[key].(map[string]any)
+	if !ok {
+		t.Fatalf("assistant Metrics[%s] = %#v, want metadata map", key, metrics[key])
+	}
+	if got["model_name"] != model || got["model_provider"] != provider {
+		t.Fatalf("assistant Metrics[%s] = %#v, want model/provider %s/%s", key, got, model, provider)
 	}
 }
 

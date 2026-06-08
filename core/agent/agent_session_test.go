@@ -15,6 +15,10 @@ import (
 	"github.com/cavos-io/rtp-agent/library/telemetry"
 	"github.com/cavos-io/rtp-agent/library/utils/images"
 	livekitlogger "github.com/livekit/protocol/logger"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/sdk/metric"
+	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 )
 
 func TestAgentSessionHistoryReturnsLiveContext(t *testing.T) {
@@ -36,6 +40,69 @@ func TestAgentSessionHistoryReturnsLiveContext(t *testing.T) {
 	if got := len(history.Items); got != 3 {
 		t.Fatalf("mutating session ChatCtx left History() result item count at %d, want 3", got)
 	}
+}
+
+func TestAgentSessionStopFlushesOTelTurnMetrics(t *testing.T) {
+	reader := metric.NewManualReader()
+	provider := metric.NewMeterProvider(metric.WithReader(reader))
+	previous := otel.GetMeterProvider()
+	otel.SetMeterProvider(provider)
+	t.Cleanup(func() {
+		otel.SetMeterProvider(previous)
+	})
+
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	session.ChatCtx.Append(&llm.ChatMessage{
+		ID:   "msg_1",
+		Role: llm.ChatRoleAssistant,
+		Metrics: map[string]any{
+			"llm_node_ttft": 0.5,
+			"llm_metadata": map[string]any{
+				"model_provider": "openai",
+				"model_name":     "gpt-4o",
+			},
+		},
+	})
+	session.started = true
+
+	if err := session.Stop(context.Background()); err != nil {
+		t.Fatalf("Stop() error = %v", err)
+	}
+
+	var rm metricdata.ResourceMetrics
+	if err := reader.Collect(context.Background(), &rm); err != nil {
+		t.Fatalf("Collect() error = %v", err)
+	}
+	assertAgentFloatHistogramPoint(t, rm, "lk.agents.turn.llm_ttft", attribute.NewSet(
+		attribute.String("model_provider", "openai"),
+		attribute.String("model_name", "gpt-4o"),
+	), 0.5)
+}
+
+func assertAgentFloatHistogramPoint(t *testing.T, rm metricdata.ResourceMetrics, name string, attrs attribute.Set, want float64) {
+	t.Helper()
+
+	for _, scope := range rm.ScopeMetrics {
+		for _, metric := range scope.Metrics {
+			if metric.Name != name {
+				continue
+			}
+			histogram, ok := metric.Data.(metricdata.Histogram[float64])
+			if !ok {
+				t.Fatalf("%s data = %T, want float64 histogram", name, metric.Data)
+			}
+			for _, point := range histogram.DataPoints {
+				if point.Attributes.Equals(&attrs) {
+					if point.Count != 1 || point.Sum != want {
+						t.Fatalf("%s point = count %d sum %v, want count 1 sum %v", name, point.Count, point.Sum, want)
+					}
+					return
+				}
+			}
+			t.Fatalf("%s did not include attributes %v", name, attrs)
+		}
+	}
+	t.Fatalf("missing metric %s", name)
 }
 
 func TestAgentSessionHistoryHandlesNilChatContext(t *testing.T) {

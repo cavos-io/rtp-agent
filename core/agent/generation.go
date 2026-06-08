@@ -257,11 +257,13 @@ func PerformTTSInference(ctx context.Context, t tts.TTS, textCh <-chan string, o
 	for _, opt := range opts {
 		opt(&options)
 	}
+	ctx, span := telemetry.NewTTSNodeSpan(ctx, tts.Model(t), tts.Provider(t))
 
 	if !t.Capabilities().Streaming {
 		go func() {
 			defer close(data.AudioCh)
 			defer close(data.TimedTextCh)
+			defer span.End()
 
 			var text strings.Builder
 			for chunk := range textCh {
@@ -301,6 +303,7 @@ func PerformTTSInference(ctx context.Context, t tts.TTS, textCh <-chan string, o
 				}
 			}
 			data.TTFB = time.Since(startTime)
+			span.SetAttributes(attribute.Float64(telemetry.AttrResponseTTFB, data.TTFB.Seconds()))
 			data.AudioCh <- frame
 		}()
 		return data, nil
@@ -308,6 +311,7 @@ func PerformTTSInference(ctx context.Context, t tts.TTS, textCh <-chan string, o
 
 	stream, err := t.Stream(ctx)
 	if err != nil {
+		span.End()
 		return nil, err
 	}
 	if options.StreamPacer != nil {
@@ -322,6 +326,7 @@ func PerformTTSInference(ctx context.Context, t tts.TTS, textCh <-chan string, o
 		defer close(data.AudioCh)
 		defer close(data.TimedTextCh)
 		defer stream.Close()
+		defer span.End()
 
 		startTime := time.Now()
 		transformBuffer := tts.NewTextTransformBuffer()
@@ -357,6 +362,7 @@ func PerformTTSInference(ctx context.Context, t tts.TTS, textCh <-chan string, o
 			}
 			if data.TTFB == 0 {
 				data.TTFB = time.Since(startTime)
+				span.SetAttributes(attribute.Float64(telemetry.AttrResponseTTFB, data.TTFB.Seconds()))
 			}
 			for _, timedText := range audio.TimedTranscript {
 				data.TimedTextCh <- timedText

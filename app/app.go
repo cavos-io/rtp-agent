@@ -3391,6 +3391,12 @@ func configureProviders(cfg AppConfig, a *agent.Agent) (llm.RealtimeModel, error
 			ttsOpts = append(ttsOpts, murf.WithMurfTTSSampleRate(*cfg.TTSSampleRate))
 		}
 		a.TTS = murf.NewMurfTTS(cfg.MurfAPIKey, cfg.TTSVoice, ttsOpts...)
+	case providerNvidia:
+		provider, err := nvidia.NewNvidiaTTS(cfg.NvidiaAPIKey, cfg.TTSVoice)
+		if err != nil {
+			return nil, err
+		}
+		a.TTS = provider
 	case providerLMNT:
 		ttsOpts := []lmnt.LMNTTTSOption{}
 		if cfg.TTSModel != "" {

@@ -1102,6 +1102,7 @@ func (s *AgentSession) EmitMetricsCollected(metrics telemetry.AgentMetrics) {
 		return
 	}
 	telemetry.LogMetrics(metrics)
+	telemetry.CollectOTelUsage(metrics)
 	var usage telemetry.UsageSummary
 	if s.MetricsCollector != nil {
 		s.MetricsCollector.Collect(metrics)
@@ -2143,8 +2144,22 @@ func (s *AgentSession) stop(ctx context.Context, commitPendingUserTurn bool) err
 			stopErr = err
 		}
 	}
+	s.flushOTelTurnMetrics()
 	if backgroundAudio != nil {
 		_ = backgroundAudio.Close()
 	}
 	return stopErr
+}
+
+func (s *AgentSession) flushOTelTurnMetrics() {
+	if s == nil || s.ChatCtx == nil {
+		return
+	}
+	for _, item := range s.ChatCtx.Items {
+		msg, ok := item.(*llm.ChatMessage)
+		if !ok || len(msg.Metrics) == 0 {
+			continue
+		}
+		telemetry.RecordOTelTurnMetrics(msg.Metrics)
+	}
 }
