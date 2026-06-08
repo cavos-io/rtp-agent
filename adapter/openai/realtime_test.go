@@ -104,6 +104,93 @@ func TestOpenAIRealtimeSessionUsesEnvBaseURL(t *testing.T) {
 	}
 }
 
+func TestRealtimeModelUpdateOptionsForwardsToActiveSession(t *testing.T) {
+	messages := make(chan string, 8)
+	dialer := newOpenAIRealtimeTestWebsocketDialer(t, func(conn *websocket.Conn, _ *http.Request) {
+		for {
+			_, msg, err := conn.ReadMessage()
+			if err != nil {
+				return
+			}
+			messages <- string(msg)
+		}
+	})
+
+	realtimeModel := NewRealtimeModel("test-key", "gpt-realtime")
+	realtimeModel.baseURL = "ws://openai.test/v1/realtime"
+	realtimeModel.dialWebsocket = dialer
+
+	session, err := realtimeModel.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	defer session.Close()
+	<-messages
+
+	if err := realtimeModel.UpdateOptions(llm.RealtimeSessionOptions{
+		TurnDetection: map[string]any{"type": "server_vad"},
+	}); err != nil {
+		t.Fatalf("UpdateOptions set error = %v", err)
+	}
+	setUpdate := <-messages
+	assertRealtimeMessage(t, setUpdate, "session.update", "server_vad")
+
+	if err := realtimeModel.UpdateOptions(llm.RealtimeSessionOptions{
+		TurnDetectionSet: true,
+	}); err != nil {
+		t.Fatalf("UpdateOptions clear error = %v", err)
+	}
+	clearUpdate := <-messages
+	assertRealtimeMessage(t, clearUpdate, "session.update", "turn_detection")
+	var msg map[string]any
+	if err := json.Unmarshal([]byte(clearUpdate), &msg); err != nil {
+		t.Fatalf("decode clear update: %v", err)
+	}
+	sessionPayload := msg["session"].(map[string]any)
+	audio := sessionPayload["audio"].(map[string]any)
+	input := audio["input"].(map[string]any)
+	value, ok := input["turn_detection"]
+	if !ok {
+		t.Fatalf("turn_detection missing from clear update: %#v", input)
+	}
+	if value != nil {
+		t.Fatalf("turn_detection = %#v, want nil clear", value)
+	}
+}
+
+func TestRealtimeModelUpdateOptionsAppliesToNewSession(t *testing.T) {
+	messages := make(chan string, 4)
+	dialer := newOpenAIRealtimeTestWebsocketDialer(t, func(conn *websocket.Conn, _ *http.Request) {
+		for {
+			_, msg, err := conn.ReadMessage()
+			if err != nil {
+				return
+			}
+			messages <- string(msg)
+		}
+	})
+
+	realtimeModel := NewRealtimeModel("test-key", "gpt-realtime")
+	realtimeModel.baseURL = "ws://openai.test/v1/realtime"
+	realtimeModel.dialWebsocket = dialer
+	if err := realtimeModel.UpdateOptions(llm.RealtimeSessionOptions{
+		TurnDetection: map[string]any{"type": "server_vad"},
+		Voice:         "alloy",
+	}); err != nil {
+		t.Fatalf("UpdateOptions error = %v", err)
+	}
+
+	session, err := realtimeModel.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	defer session.Close()
+
+	initialUpdate := <-messages
+	assertRealtimeMessage(t, initialUpdate, "session.update", "server_vad")
+	assertRealtimeMessage(t, initialUpdate, "session.update", "alloy")
+}
+
 func TestRealtimeSessionSendsProtocolMessages(t *testing.T) {
 	messages := make(chan string, 32)
 	connected := make(chan *http.Request, 1)
@@ -468,6 +555,20 @@ func TestRealtimeUpdateOptionsMessageMapsNamedToolChoice(t *testing.T) {
 	}
 }
 
+func TestRealtimeUpdateOptionsMessageResetsToolChoiceToAuto(t *testing.T) {
+	msg := openAIRealtimeUpdateOptionsMessage(llm.RealtimeSessionOptions{
+		ToolChoiceSet: true,
+	})
+
+	if msg["type"] != "session.update" {
+		t.Fatalf("message type = %#v, want session.update", msg["type"])
+	}
+	session := msg["session"].(map[string]any)
+	if session["tool_choice"] != "auto" {
+		t.Fatalf("tool_choice = %#v, want auto", session["tool_choice"])
+	}
+}
+
 func TestRealtimeUpdateOptionsMessageMapsVoice(t *testing.T) {
 	msg := openAIRealtimeUpdateOptionsMessage(llm.RealtimeSessionOptions{
 		Voice: "marin",
@@ -500,6 +601,23 @@ func TestRealtimeUpdateOptionsMessageMapsSpeed(t *testing.T) {
 	}
 }
 
+func TestRealtimeUpdateOptionsMessageMapsExplicitZeroSpeed(t *testing.T) {
+	msg := openAIRealtimeUpdateOptionsMessage(llm.RealtimeSessionOptions{
+		Speed:    0,
+		SpeedSet: true,
+	})
+
+	if msg["type"] != "session.update" {
+		t.Fatalf("message type = %#v, want session.update", msg["type"])
+	}
+	session := msg["session"].(map[string]any)
+	audio := session["audio"].(map[string]any)
+	output := audio["output"].(map[string]any)
+	if output["speed"] != 0.0 {
+		t.Fatalf("speed = %#v, want explicit zero", output["speed"])
+	}
+}
+
 func TestRealtimeUpdateOptionsMessageMapsMaxResponseOutputTokens(t *testing.T) {
 	msg := openAIRealtimeUpdateOptionsMessage(llm.RealtimeSessionOptions{
 		MaxResponseOutputTokens: 64,
@@ -517,6 +635,24 @@ func TestRealtimeUpdateOptionsMessageMapsMaxResponseOutputTokens(t *testing.T) {
 	}
 }
 
+func TestRealtimeUpdateOptionsMessageClearsMaxResponseOutputTokens(t *testing.T) {
+	msg := openAIRealtimeUpdateOptionsMessage(llm.RealtimeSessionOptions{
+		MaxResponseOutputTokensSet: true,
+	})
+
+	if msg["type"] != "session.update" {
+		t.Fatalf("message type = %#v, want session.update", msg["type"])
+	}
+	session := msg["session"].(map[string]any)
+	value, ok := session["max_output_tokens"]
+	if !ok {
+		t.Fatalf("max_output_tokens missing from session payload: %#v", session)
+	}
+	if value != nil {
+		t.Fatalf("max_output_tokens = %#v, want nil reset", value)
+	}
+}
+
 func TestRealtimeUpdateOptionsMessageMapsTruncation(t *testing.T) {
 	msg := openAIRealtimeUpdateOptionsMessage(llm.RealtimeSessionOptions{
 		Truncation: "disabled",
@@ -528,6 +664,24 @@ func TestRealtimeUpdateOptionsMessageMapsTruncation(t *testing.T) {
 	session := msg["session"].(map[string]any)
 	if session["truncation"] != "disabled" {
 		t.Fatalf("truncation = %#v, want disabled", session["truncation"])
+	}
+}
+
+func TestRealtimeUpdateOptionsMessageClearsTruncation(t *testing.T) {
+	msg := openAIRealtimeUpdateOptionsMessage(llm.RealtimeSessionOptions{
+		TruncationSet: true,
+	})
+
+	if msg["type"] != "session.update" {
+		t.Fatalf("message type = %#v, want session.update", msg["type"])
+	}
+	session := msg["session"].(map[string]any)
+	value, ok := session["truncation"]
+	if !ok {
+		t.Fatalf("truncation missing from session payload: %#v", session)
+	}
+	if value != nil {
+		t.Fatalf("truncation = %#v, want nil reset", value)
 	}
 }
 
@@ -543,6 +697,24 @@ func TestRealtimeUpdateOptionsMessageMapsTracing(t *testing.T) {
 	tracing := session["tracing"].(map[string]any)
 	if tracing["workflow_name"] != "checkout" {
 		t.Fatalf("tracing = %#v, want workflow_name checkout", tracing)
+	}
+}
+
+func TestRealtimeUpdateOptionsMessageClearsTracing(t *testing.T) {
+	msg := openAIRealtimeUpdateOptionsMessage(llm.RealtimeSessionOptions{
+		TracingSet: true,
+	})
+
+	if msg["type"] != "session.update" {
+		t.Fatalf("message type = %#v, want session.update", msg["type"])
+	}
+	session := msg["session"].(map[string]any)
+	value, ok := session["tracing"]
+	if !ok {
+		t.Fatalf("tracing missing from session payload: %#v", session)
+	}
+	if value != nil {
+		t.Fatalf("tracing = %#v, want nil reset", value)
 	}
 }
 
@@ -563,6 +735,26 @@ func TestRealtimeUpdateOptionsMessageMapsTurnDetection(t *testing.T) {
 	}
 }
 
+func TestRealtimeUpdateOptionsMessageClearsTurnDetection(t *testing.T) {
+	msg := openAIRealtimeUpdateOptionsMessage(llm.RealtimeSessionOptions{
+		TurnDetectionSet: true,
+	})
+
+	if msg["type"] != "session.update" {
+		t.Fatalf("message type = %#v, want session.update", msg["type"])
+	}
+	session := msg["session"].(map[string]any)
+	audio := session["audio"].(map[string]any)
+	input := audio["input"].(map[string]any)
+	value, ok := input["turn_detection"]
+	if !ok {
+		t.Fatalf("turn_detection missing from input config: %#v", input)
+	}
+	if value != nil {
+		t.Fatalf("turn_detection = %#v, want nil reset", value)
+	}
+}
+
 func TestRealtimeUpdateOptionsMessageMapsInputAudioTranscription(t *testing.T) {
 	msg := openAIRealtimeUpdateOptionsMessage(llm.RealtimeSessionOptions{
 		InputAudioTranscription: map[string]any{"model": "gpt-4o-transcribe"},
@@ -580,6 +772,26 @@ func TestRealtimeUpdateOptionsMessageMapsInputAudioTranscription(t *testing.T) {
 	}
 }
 
+func TestRealtimeUpdateOptionsMessageClearsInputAudioTranscription(t *testing.T) {
+	msg := openAIRealtimeUpdateOptionsMessage(llm.RealtimeSessionOptions{
+		InputAudioTranscriptionSet: true,
+	})
+
+	if msg["type"] != "session.update" {
+		t.Fatalf("message type = %#v, want session.update", msg["type"])
+	}
+	session := msg["session"].(map[string]any)
+	audio := session["audio"].(map[string]any)
+	input := audio["input"].(map[string]any)
+	value, ok := input["transcription"]
+	if !ok {
+		t.Fatalf("transcription missing from input config: %#v", input)
+	}
+	if value != nil {
+		t.Fatalf("transcription = %#v, want nil reset", value)
+	}
+}
+
 func TestRealtimeUpdateOptionsMessageMapsInputAudioNoiseReduction(t *testing.T) {
 	msg := openAIRealtimeUpdateOptionsMessage(llm.RealtimeSessionOptions{
 		InputAudioNoiseReduction: map[string]any{"type": "near_field"},
@@ -594,6 +806,26 @@ func TestRealtimeUpdateOptionsMessageMapsInputAudioNoiseReduction(t *testing.T) 
 	noiseReduction := input["noise_reduction"].(map[string]any)
 	if noiseReduction["type"] != "near_field" {
 		t.Fatalf("noise_reduction = %#v, want type near_field", noiseReduction)
+	}
+}
+
+func TestRealtimeUpdateOptionsMessageClearsInputAudioNoiseReduction(t *testing.T) {
+	msg := openAIRealtimeUpdateOptionsMessage(llm.RealtimeSessionOptions{
+		InputAudioNoiseReductionSet: true,
+	})
+
+	if msg["type"] != "session.update" {
+		t.Fatalf("message type = %#v, want session.update", msg["type"])
+	}
+	session := msg["session"].(map[string]any)
+	audio := session["audio"].(map[string]any)
+	input := audio["input"].(map[string]any)
+	value, ok := input["noise_reduction"]
+	if !ok {
+		t.Fatalf("noise_reduction missing from input config: %#v", input)
+	}
+	if value != nil {
+		t.Fatalf("noise_reduction = %#v, want nil reset", value)
 	}
 }
 

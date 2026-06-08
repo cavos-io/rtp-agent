@@ -202,6 +202,166 @@ func TestOpenAIChatAppliesProviderTopP(t *testing.T) {
 	}
 }
 
+func TestOpenAIChatAppliesProviderMaxCompletionTokens(t *testing.T) {
+	capture := &captureDeadlineHTTPClient{
+		statusCode:   http.StatusBadRequest,
+		responseBody: `{"error":{"message":"bad request","type":"invalid_request_error","code":"bad_request"}}`,
+	}
+	model := NewOpenAILLMWithBaseURLAndHTTPClient(
+		"test-key",
+		"gpt-4o",
+		"https://openai.test/v1",
+		capture,
+		WithOpenAILLMMaxCompletionTokens(256),
+	)
+
+	_, _ = model.Chat(context.Background(), llm.NewChatContext(), llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 0}))
+
+	if !strings.Contains(capture.requestBody, `"max_completion_tokens":256`) {
+		t.Fatalf("request body = %s, want provider max_completion_tokens", capture.requestBody)
+	}
+}
+
+func TestOpenAIChatAppliesProviderStore(t *testing.T) {
+	capture := &captureDeadlineHTTPClient{
+		statusCode:   http.StatusBadRequest,
+		responseBody: `{"error":{"message":"bad request","type":"invalid_request_error","code":"bad_request"}}`,
+	}
+	model := NewOpenAILLMWithBaseURLAndHTTPClient(
+		"test-key",
+		"gpt-4o",
+		"https://openai.test/v1",
+		capture,
+		WithOpenAILLMStore(true),
+	)
+
+	_, _ = model.Chat(context.Background(), llm.NewChatContext(), llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 0}))
+
+	if !strings.Contains(capture.requestBody, `"store":true`) {
+		t.Fatalf("request body = %s, want provider store true", capture.requestBody)
+	}
+}
+
+func TestOpenAIChatAppliesProviderServiceTier(t *testing.T) {
+	capture := &captureDeadlineHTTPClient{
+		statusCode:   http.StatusBadRequest,
+		responseBody: `{"error":{"message":"bad request","type":"invalid_request_error","code":"bad_request"}}`,
+	}
+	model := NewOpenAILLMWithBaseURLAndHTTPClient(
+		"test-key",
+		"gpt-4o",
+		"https://openai.test/v1",
+		capture,
+		WithOpenAILLMServiceTier("priority"),
+	)
+
+	_, _ = model.Chat(context.Background(), llm.NewChatContext(), llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 0}))
+
+	if !strings.Contains(capture.requestBody, `"service_tier":"priority"`) {
+		t.Fatalf("request body = %s, want provider service_tier", capture.requestBody)
+	}
+}
+
+func TestOpenAIChatAppliesProviderSafetyIdentifier(t *testing.T) {
+	capture := &captureDeadlineHTTPClient{
+		statusCode:   http.StatusBadRequest,
+		responseBody: `{"error":{"message":"bad request","type":"invalid_request_error","code":"bad_request"}}`,
+	}
+	model := NewOpenAILLMWithBaseURLAndHTTPClient(
+		"test-key",
+		"gpt-4o",
+		"https://openai.test/v1",
+		capture,
+		WithOpenAILLMSafetyIdentifier("hashed-user"),
+	)
+
+	_, _ = model.Chat(context.Background(), llm.NewChatContext(), llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 0}))
+
+	if !strings.Contains(capture.requestBody, `"safety_identifier":"hashed-user"`) {
+		t.Fatalf("request body = %s, want provider safety_identifier", capture.requestBody)
+	}
+}
+
+func TestOpenAIChatAppliesProviderUser(t *testing.T) {
+	capture := &captureDeadlineHTTPClient{
+		statusCode:   http.StatusBadRequest,
+		responseBody: `{"error":{"message":"bad request","type":"invalid_request_error","code":"bad_request"}}`,
+	}
+	model := NewOpenAILLMWithBaseURLAndHTTPClient(
+		"test-key",
+		"gpt-4o",
+		"https://openai.test/v1",
+		capture,
+		WithOpenAILLMUser("caller-123"),
+	)
+
+	_, _ = model.Chat(context.Background(), llm.NewChatContext(), llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 0}))
+
+	if !strings.Contains(capture.requestBody, `"user":"caller-123"`) {
+		t.Fatalf("request body = %s, want provider user", capture.requestBody)
+	}
+}
+
+func TestOpenAIChatAppliesProviderMetadata(t *testing.T) {
+	capture := &captureDeadlineHTTPClient{
+		statusCode:   http.StatusBadRequest,
+		responseBody: `{"error":{"message":"bad request","type":"invalid_request_error","code":"bad_request"}}`,
+	}
+	model := NewOpenAILLMWithBaseURLAndHTTPClient(
+		"test-key",
+		"gpt-4o",
+		"https://openai.test/v1",
+		capture,
+		WithOpenAILLMMetadata(map[string]string{"trace": "abc"}),
+	)
+
+	_, _ = model.Chat(context.Background(), llm.NewChatContext(), llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 0}))
+
+	if !strings.Contains(capture.requestBody, `"metadata":{"trace":"abc"}`) {
+		t.Fatalf("request body = %s, want provider metadata", capture.requestBody)
+	}
+}
+
+func TestOpenAIChatAppliesProviderVerbosity(t *testing.T) {
+	capture := &captureDeadlineHTTPClient{
+		statusCode:   http.StatusBadRequest,
+		responseBody: `{"error":{"message":"bad request","type":"invalid_request_error","code":"bad_request"}}`,
+	}
+	model := NewOpenAILLMWithBaseURLAndHTTPClient(
+		"test-key",
+		"gpt-5",
+		"https://openai.test/v1",
+		capture,
+		WithOpenAILLMVerbosity("low"),
+	)
+
+	_, _ = model.Chat(context.Background(), llm.NewChatContext(), llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 0}))
+
+	if !strings.Contains(capture.requestBody, `"verbosity":"low"`) {
+		t.Fatalf("request body = %s, want provider verbosity", capture.requestBody)
+	}
+}
+
+func TestOpenAIChatAppliesProviderReasoningEffort(t *testing.T) {
+	capture := &captureDeadlineHTTPClient{
+		statusCode:   http.StatusBadRequest,
+		responseBody: `{"error":{"message":"bad request","type":"invalid_request_error","code":"bad_request"}}`,
+	}
+	model := NewOpenAILLMWithBaseURLAndHTTPClient(
+		"test-key",
+		"gpt-5",
+		"https://openai.test/v1",
+		capture,
+		WithOpenAILLMReasoningEffort("low"),
+	)
+
+	_, _ = model.Chat(context.Background(), llm.NewChatContext(), llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 0}))
+
+	if !strings.Contains(capture.requestBody, `"reasoning_effort":"low"`) {
+		t.Fatalf("request body = %s, want provider reasoning_effort", capture.requestBody)
+	}
+}
+
 func TestOpenAIChatAppliesConnectOptionsTimeoutToRequestContext(t *testing.T) {
 	sentinelErr := errors.New("stop after context capture")
 	capture := &captureDeadlineHTTPClient{err: sentinelErr}

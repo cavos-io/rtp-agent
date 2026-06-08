@@ -47,6 +47,78 @@ func WithOpenAILLMTopP(topP float64) OpenAILLMOption {
 	}
 }
 
+func WithOpenAILLMMaxCompletionTokens(maxCompletionTokens int) OpenAILLMOption {
+	return func(l *OpenAILLM) {
+		if l.extraParams == nil {
+			l.extraParams = map[string]any{}
+		}
+		l.extraParams["max_completion_tokens"] = maxCompletionTokens
+	}
+}
+
+func WithOpenAILLMStore(store bool) OpenAILLMOption {
+	return func(l *OpenAILLM) {
+		if l.extraParams == nil {
+			l.extraParams = map[string]any{}
+		}
+		l.extraParams["store"] = store
+	}
+}
+
+func WithOpenAILLMServiceTier(serviceTier string) OpenAILLMOption {
+	return func(l *OpenAILLM) {
+		if l.extraParams == nil {
+			l.extraParams = map[string]any{}
+		}
+		l.extraParams["service_tier"] = serviceTier
+	}
+}
+
+func WithOpenAILLMSafetyIdentifier(safetyIdentifier string) OpenAILLMOption {
+	return func(l *OpenAILLM) {
+		if l.extraParams == nil {
+			l.extraParams = map[string]any{}
+		}
+		l.extraParams["safety_identifier"] = safetyIdentifier
+	}
+}
+
+func WithOpenAILLMUser(user string) OpenAILLMOption {
+	return func(l *OpenAILLM) {
+		if l.extraParams == nil {
+			l.extraParams = map[string]any{}
+		}
+		l.extraParams["user"] = user
+	}
+}
+
+func WithOpenAILLMMetadata(metadata map[string]string) OpenAILLMOption {
+	return func(l *OpenAILLM) {
+		if l.extraParams == nil {
+			l.extraParams = map[string]any{}
+		}
+		l.extraParams["metadata"] = metadata
+	}
+}
+
+func WithOpenAILLMVerbosity(verbosity string) OpenAILLMOption {
+	return func(l *OpenAILLM) {
+		if l.extraParams == nil {
+			l.extraParams = map[string]any{}
+		}
+		l.extraParams["verbosity"] = verbosity
+	}
+}
+
+func WithOpenAILLMReasoningEffort(reasoningEffort string) OpenAILLMOption {
+	return func(l *OpenAILLM) {
+		if l.extraParams == nil {
+			l.extraParams = map[string]any{}
+		}
+		l.extraParams["reasoning_effort"] = reasoningEffort
+	}
+}
+
 func WithOpenAILLMParallelToolCalls(parallelToolCalls bool) OpenAILLMOption {
 	return func(l *OpenAILLM) {
 		l.parallelToolCalls = parallelToolCalls
