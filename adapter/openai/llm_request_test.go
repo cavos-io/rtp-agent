@@ -659,6 +659,7 @@ func (c *captureDeadlineHTTPClient) Do(req *http.Request) (*http.Response, error
 	if ok {
 		c.remaining = time.Until(deadline)
 	}
+	c.header = req.Header.Clone()
 	c.requestURL = req.URL.String()
 	c.authorization = req.Header.Get("Authorization")
 	c.apiKey = req.Header.Get(openaisdk.AzureAPIKeyHeader)

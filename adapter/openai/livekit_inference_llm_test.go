@@ -251,3 +251,36 @@ func TestLiveKitInferenceLLMUpdateOptionsReplacesReferenceExtraParams(t *testing
 		t.Fatalf("request body = %s, want updated user", capture.requestBody)
 	}
 }
+
+func TestLiveKitInferenceLLMChatSendsReferenceExtraHeaders(t *testing.T) {
+	capture := &captureDeadlineHTTPClient{
+		statusCode:   http.StatusUnauthorized,
+		responseBody: `{"error":{"message":"stop"}}`,
+	}
+
+	provider, err := NewLiveKitInferenceLLM("openai/gpt-4.1", "key", "secret",
+		WithLiveKitInferenceLLMExtraParams(map[string]any{
+			"extra_headers": map[string]any{
+				"X-Trace-ID": "trace-123",
+			},
+			"user": "caller-123",
+		}),
+	)
+	if err != nil {
+		t.Fatalf("NewLiveKitInferenceLLM error = %v", err)
+	}
+	provider.baseURL = "https://inference.test/v1"
+	provider.httpClient = capture
+
+	_, _ = provider.Chat(context.Background(), llm.NewChatContext(), llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 0}))
+
+	if got := capture.header.Get("X-Trace-ID"); got != "trace-123" {
+		t.Fatalf("X-Trace-ID = %q, want trace-123", got)
+	}
+	if !strings.Contains(capture.requestBody, `"user":"caller-123"`) {
+		t.Fatalf("request body = %s, want non-header extra param preserved", capture.requestBody)
+	}
+	if strings.Contains(capture.requestBody, "extra_headers") {
+		t.Fatalf("request body = %s, want extra_headers consumed as headers", capture.requestBody)
+	}
+}

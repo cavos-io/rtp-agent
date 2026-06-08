@@ -27,6 +27,7 @@ const (
 
 type liveKitInferenceHeadersHTTPClient struct {
 	base              goopenai.HTTPDoer
+	extraHeaders      http.Header
 	provider          string
 	inferencePriority string
 }
@@ -37,6 +38,11 @@ func (c *liveKitInferenceHeadersHTTPClient) Do(req *http.Request) (*http.Respons
 		base = http.DefaultClient
 	}
 	cloned := req.Clone(req.Context())
+	for key, values := range c.extraHeaders {
+		for _, value := range values {
+			cloned.Header.Add(key, value)
+		}
+	}
 	cloned.Header.Set("User-Agent", liveKitInferenceUserAgent())
 	inference.AddContextHeaders(cloned.Header)
 	if c.provider != "" {
@@ -162,12 +168,14 @@ func (l *LiveKitInferenceLLM) Chat(ctx context.Context, chatCtx *llm.ChatContext
 		inferencePriority = priority
 		chatOpts = filtered
 	}
+	extraHeaders, extraParams := liveKitInferenceExtraHeadersFromParams(l.extraParams)
 	inner := NewOpenAILLMWithBaseURLAndHTTPClient(token, l.model, l.baseURL, &liveKitInferenceHeadersHTTPClient{
 		base:              l.httpClient,
+		extraHeaders:      extraHeaders,
 		provider:          l.provider,
 		inferencePriority: inferencePriority,
 	}, func(inner *OpenAILLM) {
-		inner.extraParams = cloneLiveKitInferenceLLMExtraParams(l.extraParams)
+		inner.extraParams = extraParams
 	})
 	return inner.Chat(ctx, chatCtx, chatOpts...)
 }
@@ -206,4 +214,39 @@ func cloneLiveKitInferenceLLMExtraParams(params map[string]any) map[string]any {
 		clone[key] = value
 	}
 	return clone
+}
+
+func liveKitInferenceExtraHeadersFromParams(params map[string]any) (http.Header, map[string]any) {
+	extraParams := cloneLiveKitInferenceLLMExtraParams(params)
+	if len(extraParams) == 0 {
+		return nil, extraParams
+	}
+	rawHeaders, ok := extraParams["extra_headers"]
+	if !ok {
+		return nil, extraParams
+	}
+	delete(extraParams, "extra_headers")
+	headers := http.Header{}
+	switch typed := rawHeaders.(type) {
+	case http.Header:
+		for key, values := range typed {
+			for _, value := range values {
+				headers.Add(key, value)
+			}
+		}
+	case map[string]string:
+		for key, value := range typed {
+			headers.Set(key, value)
+		}
+	case map[string]any:
+		for key, value := range typed {
+			if text, ok := value.(string); ok {
+				headers.Set(key, text)
+			}
+		}
+	}
+	if len(headers) == 0 {
+		return nil, extraParams
+	}
+	return headers, extraParams
 }
