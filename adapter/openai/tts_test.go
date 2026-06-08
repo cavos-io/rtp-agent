@@ -83,6 +83,18 @@ func TestOpenAITTSBuildSpeechRequestUsesReferenceOptions(t *testing.T) {
 	}
 }
 
+func TestOpenAITTSConstructorPreservesExplicitZeroSpeed(t *testing.T) {
+	provider := mustNewOpenAITTS(t, "test-key", "", "",
+		WithOpenAITTSSpeed(0),
+	)
+
+	got := buildOpenAITTSSpeechRequest(provider, "hello")
+
+	if got.Speed != 0 {
+		t.Fatalf("speed = %v, want explicit zero speed", got.Speed)
+	}
+}
+
 func TestOpenAITTSUpdateOptionsMatchesReference(t *testing.T) {
 	provider := mustNewOpenAITTS(t, "test-key", "", "")
 
