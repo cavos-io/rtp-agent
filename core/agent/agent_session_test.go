@@ -209,6 +209,43 @@ func TestAgentSessionUserInputTranscribedEventsFanOutToSubscribers(t *testing.T)
 	assertUserTranscriptEvent(t, second, "second")
 }
 
+func TestAgentSessionUserTranscriptFilterAppliesBeforeFanOut(t *testing.T) {
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	session.UserTranscriptFilter = func(text string) string {
+		if text == "my secret code" {
+			return "my [redacted] code"
+		}
+		return text
+	}
+	events := session.UserInputTranscribedEvents()
+
+	session.EmitUserInputTranscribed(UserInputTranscribedEvent{
+		Transcript: "my secret code",
+		IsFinal:    true,
+	})
+
+	select {
+	case ev := <-events:
+		if ev.Transcript != "my [redacted] code" {
+			t.Fatalf("transcript event = %q, want filtered transcript", ev.Transcript)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("UserInputTranscribedEvents did not receive filtered transcript")
+	}
+
+	recorded := session.RecordedEvents()
+	if len(recorded) != 1 {
+		t.Fatalf("RecordedEvents length = %d, want 1", len(recorded))
+	}
+	userEvent, ok := recorded[0].(*UserInputTranscribedEvent)
+	if !ok {
+		t.Fatalf("RecordedEvents[0] = %T, want *UserInputTranscribedEvent", recorded[0])
+	}
+	if userEvent.Transcript != "my [redacted] code" {
+		t.Fatalf("recorded transcript = %q, want filtered transcript", userEvent.Transcript)
+	}
+}
+
 func TestAgentSessionAgentOutputTranscribedEventsFanOutToSubscribers(t *testing.T) {
 	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
 	first := session.AgentOutputTranscribedEvents()

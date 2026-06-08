@@ -210,12 +210,15 @@ type AgentSession struct {
 	userdataSet    bool
 	jobContext     any
 	jobContextSet  bool
-	mcpServers     []llm.MCPServer
-	recordedEvents []Event
-	eventListeners map[string][]agentEventListener
-	nextListenerID uint64
-	ivrActivity    *IVRActivity
-	videoSampler   *VoiceActivityVideoSampler
+	// UserTranscriptFilter, when non-nil, is applied before user transcript
+	// events are recorded or broadcast to RoomIO subscribers.
+	UserTranscriptFilter func(string) string
+	mcpServers           []llm.MCPServer
+	recordedEvents       []Event
+	eventListeners       map[string][]agentEventListener
+	nextListenerID       uint64
+	ivrActivity          *IVRActivity
+	videoSampler         *VoiceActivityVideoSampler
 
 	// Event channels
 	AgentStateChangedCh  chan AgentStateChangedEvent
@@ -840,6 +843,9 @@ func (s *AgentSession) UserInputTranscribedEvents() <-chan UserInputTranscribedE
 }
 
 func (s *AgentSession) EmitUserInputTranscribed(ev UserInputTranscribedEvent) {
+	if s.UserTranscriptFilter != nil {
+		ev.Transcript = s.UserTranscriptFilter(ev.Transcript)
+	}
 	if ev.CreatedAt.IsZero() {
 		ev.CreatedAt = time.Now()
 	}
