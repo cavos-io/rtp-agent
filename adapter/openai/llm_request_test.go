@@ -142,6 +142,26 @@ func TestOpenAIChatAppliesProviderParallelToolCalls(t *testing.T) {
 	}
 }
 
+func TestOpenAIChatAppliesProviderToolChoice(t *testing.T) {
+	capture := &captureDeadlineHTTPClient{
+		statusCode:   http.StatusBadRequest,
+		responseBody: `{"error":{"message":"bad request","type":"invalid_request_error","code":"bad_request"}}`,
+	}
+	model := NewOpenAILLMWithBaseURLAndHTTPClient(
+		"test-key",
+		"gpt-4o",
+		"https://openai.test/v1",
+		capture,
+		WithOpenAILLMToolChoice("none"),
+	)
+
+	_, _ = model.Chat(context.Background(), llm.NewChatContext(), llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 0}))
+
+	if !strings.Contains(capture.requestBody, `"tool_choice":"none"`) {
+		t.Fatalf("request body = %s, want provider tool_choice none", capture.requestBody)
+	}
+}
+
 func TestOpenAIChatAppliesProviderTemperature(t *testing.T) {
 	capture := &captureDeadlineHTTPClient{
 		statusCode:   http.StatusBadRequest,

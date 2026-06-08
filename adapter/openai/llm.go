@@ -24,6 +24,7 @@ type OpenAILLM struct {
 	extraParams          map[string]any
 	parallelToolCalls    bool
 	parallelToolCallsSet bool
+	toolChoice           llm.ToolChoice
 }
 
 type OpenAILLMOption func(*OpenAILLM)
@@ -50,6 +51,12 @@ func WithOpenAILLMParallelToolCalls(parallelToolCalls bool) OpenAILLMOption {
 	return func(l *OpenAILLM) {
 		l.parallelToolCalls = parallelToolCalls
 		l.parallelToolCallsSet = true
+	}
+}
+
+func WithOpenAILLMToolChoice(toolChoice llm.ToolChoice) OpenAILLMOption {
+	return func(l *OpenAILLM) {
+		l.toolChoice = toolChoice
 	}
 }
 
@@ -130,7 +137,7 @@ func (l *OpenAILLM) Chat(ctx context.Context, chatCtx *llm.ChatContext, opts ...
 	}
 
 	effectiveOptions := options
-	if len(l.extraParams) > 0 || (l.parallelToolCallsSet && !options.ParallelToolCallsSet) {
+	if len(l.extraParams) > 0 || (l.parallelToolCallsSet && !options.ParallelToolCallsSet) || (l.toolChoice != nil && options.ToolChoice == nil) {
 		copied := *options
 		if len(l.extraParams) > 0 {
 			copied.ExtraParams = mergeOpenAIExtraParams(options.ExtraParams, l.extraParams)
@@ -138,6 +145,9 @@ func (l *OpenAILLM) Chat(ctx context.Context, chatCtx *llm.ChatContext, opts ...
 		if l.parallelToolCallsSet && !options.ParallelToolCallsSet {
 			copied.ParallelToolCalls = l.parallelToolCalls
 			copied.ParallelToolCallsSet = true
+		}
+		if l.toolChoice != nil && options.ToolChoice == nil {
+			copied.ToolChoice = l.toolChoice
 		}
 		effectiveOptions = &copied
 	}
