@@ -18,12 +18,24 @@ import (
 const defaultOpenAILLMModel = "gpt-4.1"
 
 type OpenAILLM struct {
-	client  *openai.Client
-	model   string
-	baseURL string
+	client      *openai.Client
+	model       string
+	baseURL     string
+	extraParams map[string]any
 }
 
-func NewOpenAILLM(apiKey string, model string) (*OpenAILLM, error) {
+type OpenAILLMOption func(*OpenAILLM)
+
+func WithOpenAILLMTemperature(temperature float64) OpenAILLMOption {
+	return func(l *OpenAILLM) {
+		if l.extraParams == nil {
+			l.extraParams = map[string]any{}
+		}
+		l.extraParams["temperature"] = temperature
+	}
+}
+
+func NewOpenAILLM(apiKey string, model string, opts ...OpenAILLMOption) (*OpenAILLM, error) {
 	if apiKey == "" {
 		apiKey = os.Getenv(openAIAPIKeyEnv)
 	}
@@ -31,25 +43,29 @@ func NewOpenAILLM(apiKey string, model string) (*OpenAILLM, error) {
 		return nil, fmt.Errorf("OPENAI_API_KEY is required, either as argument or set OPENAI_API_KEY environment variable")
 	}
 	config := openai.DefaultConfig(apiKey)
-	return newOpenAILLMWithConfigAndModel(config, model)
+	return newOpenAILLMWithConfigAndModel(config, model, opts...)
 }
 
-func newOpenAILLMWithConfigAndModel(config openai.ClientConfig, model string) (*OpenAILLM, error) {
+func newOpenAILLMWithConfigAndModel(config openai.ClientConfig, model string, opts ...OpenAILLMOption) (*OpenAILLM, error) {
 	if model == "" {
 		model = defaultOpenAILLMModel
 	}
-	return &OpenAILLM{
+	provider := &OpenAILLM{
 		client:  openai.NewClientWithConfig(config),
 		model:   model,
 		baseURL: config.BaseURL,
-	}, nil
+	}
+	for _, opt := range opts {
+		opt(provider)
+	}
+	return provider, nil
 }
 
-func NewOpenAILLMWithBaseURL(apiKey string, model string, baseURL string) *OpenAILLM {
-	return NewOpenAILLMWithBaseURLAndHTTPClient(apiKey, model, baseURL, nil)
+func NewOpenAILLMWithBaseURL(apiKey string, model string, baseURL string, opts ...OpenAILLMOption) *OpenAILLM {
+	return NewOpenAILLMWithBaseURLAndHTTPClient(apiKey, model, baseURL, nil, opts...)
 }
 
-func NewOpenAILLMWithBaseURLAndHTTPClient(apiKey string, model string, baseURL string, httpClient openai.HTTPDoer) *OpenAILLM {
+func NewOpenAILLMWithBaseURLAndHTTPClient(apiKey string, model string, baseURL string, httpClient openai.HTTPDoer, opts ...OpenAILLMOption) *OpenAILLM {
 	config := openai.DefaultConfig(apiKey)
 	if baseURL != "" {
 		config.BaseURL = baseURL
@@ -57,11 +73,15 @@ func NewOpenAILLMWithBaseURLAndHTTPClient(apiKey string, model string, baseURL s
 	if httpClient != nil {
 		config.HTTPClient = httpClient
 	}
-	return &OpenAILLM{
+	provider := &OpenAILLM{
 		client:  openai.NewClientWithConfig(config),
 		model:   model,
 		baseURL: config.BaseURL,
 	}
+	for _, opt := range opts {
+		opt(provider)
+	}
+	return provider
 }
 
 func (l *OpenAILLM) Model() string {
@@ -91,7 +111,14 @@ func (l *OpenAILLM) Chat(ctx context.Context, chatCtx *llm.ChatContext, opts ...
 		ctx, cancel = context.WithTimeout(ctx, connectOptions.Timeout)
 	}
 
-	req := buildOpenAIChatCompletionRequest(l.model, chatCtx, options)
+	effectiveOptions := options
+	if len(l.extraParams) > 0 {
+		copied := *options
+		copied.ExtraParams = mergeOpenAIExtraParams(options.ExtraParams, l.extraParams)
+		effectiveOptions = &copied
+	}
+
+	req := buildOpenAIChatCompletionRequest(l.model, chatCtx, effectiveOptions)
 
 	var lastErr error
 	for attempt := 0; attempt <= connectOptions.MaxRetry; attempt++ {
@@ -170,6 +197,17 @@ func waitOpenAIRetryInterval(ctx context.Context, interval time.Duration) error 
 	case <-timer.C:
 		return nil
 	}
+}
+
+func mergeOpenAIExtraParams(callParams, providerParams map[string]any) map[string]any {
+	merged := make(map[string]any, len(callParams)+len(providerParams))
+	for key, value := range callParams {
+		merged[key] = value
+	}
+	for key, value := range providerParams {
+		merged[key] = value
+	}
+	return merged
 }
 
 func buildOpenAIChatCompletionRequest(model string, chatCtx *llm.ChatContext, options *llm.ChatOptions) openai.ChatCompletionRequest {
