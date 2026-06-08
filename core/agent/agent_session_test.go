@@ -1055,6 +1055,23 @@ func TestNewAgentSessionPreservesExplicitZeroFalseInterruptionTimeout(t *testing
 	}
 }
 
+func TestNewAgentSessionPreservesExplicitZeroMinEndpointingDelay(t *testing.T) {
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{
+		MinEndpointingDelay:    0,
+		MinEndpointingDelaySet: true,
+	})
+
+	if session.Options.MinEndpointingDelay != 0 {
+		t.Fatalf("MinEndpointingDelay = %v, want explicit zero preserved", session.Options.MinEndpointingDelay)
+	}
+	if session.Options.Endpointing == nil {
+		t.Fatal("Endpointing = nil, want default endpointing policy")
+	}
+	if got := session.Options.Endpointing.MinDelay(); got != 0 {
+		t.Fatalf("Endpointing.MinDelay() = %v, want explicit zero", got)
+	}
+}
+
 func TestNewAgentSessionPreservesExplicitZeroSessionCloseTranscriptTimeout(t *testing.T) {
 	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{
 		SessionCloseTranscriptTimeout:    0,

@@ -41,6 +41,7 @@ type AgentSessionOptions struct {
 	MinInterruptionDuration          float64
 	MinInterruptionWords             int
 	MinEndpointingDelay              float64
+	MinEndpointingDelaySet           bool
 	MaxEndpointingDelay              float64
 	EndpointingMode                  string
 	EndpointingAlpha                 float64
@@ -691,7 +692,7 @@ func withAgentSessionOptionDefaults(opts AgentSessionOptions) AgentSessionOption
 	if opts.MinInterruptionDuration == 0 {
 		opts.MinInterruptionDuration = 0.5
 	}
-	if opts.MinEndpointingDelay == 0 {
+	if !opts.MinEndpointingDelaySet && opts.MinEndpointingDelay == 0 {
 		opts.MinEndpointingDelay = 0.5
 	}
 	if opts.MaxEndpointingDelay == 0 {
