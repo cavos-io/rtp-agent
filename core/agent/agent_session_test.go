@@ -17,20 +17,24 @@ import (
 	livekitlogger "github.com/livekit/protocol/logger"
 )
 
-func TestAgentSessionHistoryReturnsCopy(t *testing.T) {
+func TestAgentSessionHistoryReturnsLiveContext(t *testing.T) {
 	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
 	session.ChatCtx.Append(&llm.ChatMessage{ID: "msg_1", Role: llm.ChatRoleUser})
 
 	history := session.History()
-	if history == session.ChatCtx {
-		t.Fatal("History() returned internal chat context pointer, want copy")
+	if history != session.ChatCtx {
+		t.Fatal("History() did not return internal chat context pointer")
 	}
 	if got := len(history.Items); got != 1 {
 		t.Fatalf("History() item count = %d, want 1", got)
 	}
 	history.Append(&llm.ChatMessage{ID: "msg_2", Role: llm.ChatRoleAssistant})
-	if got := len(session.ChatCtx.Items); got != 1 {
-		t.Fatalf("mutating History() result changed session ChatCtx item count to %d, want 1", got)
+	if got := len(session.ChatCtx.Items); got != 2 {
+		t.Fatalf("mutating History() result left session ChatCtx item count at %d, want 2", got)
+	}
+	session.ChatCtx.Append(&llm.ChatMessage{ID: "msg_3", Role: llm.ChatRoleUser})
+	if got := len(history.Items); got != 3 {
+		t.Fatalf("mutating session ChatCtx left History() result item count at %d, want 3", got)
 	}
 }
 

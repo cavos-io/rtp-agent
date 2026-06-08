@@ -350,7 +350,7 @@ func (s *AgentSession) History() *llm.ChatContext {
 	if s.ChatCtx == nil {
 		return llm.NewChatContext()
 	}
-	return s.ChatCtx.Copy()
+	return s.ChatCtx
 }
 
 func (s *AgentSession) SessionOptions() AgentSessionOptions {
