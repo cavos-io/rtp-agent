@@ -394,6 +394,42 @@ func TestRealtimeModelConstructorInputAudioTranscriptionAppliesToInitialSession(
 	}
 }
 
+func TestRealtimeModelConstructorInputAudioNoiseReductionAppliesToInitialSession(t *testing.T) {
+	messages := make(chan string, 4)
+	dialer := newOpenAIRealtimeTestWebsocketDialer(t, func(conn *websocket.Conn, _ *http.Request) {
+		for {
+			_, msg, err := conn.ReadMessage()
+			if err != nil {
+				return
+			}
+			messages <- string(msg)
+		}
+	})
+
+	realtimeModel := NewRealtimeModel("test-key", "gpt-realtime", WithOpenAIRealtimeInputAudioNoiseReduction(map[string]any{"type": "near_field"}))
+	realtimeModel.baseURL = "ws://openai.test/v1/realtime"
+	realtimeModel.dialWebsocket = dialer
+
+	session, err := realtimeModel.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	defer session.Close()
+
+	initialUpdate := <-messages
+	var msg map[string]any
+	if err := json.Unmarshal([]byte(initialUpdate), &msg); err != nil {
+		t.Fatalf("decode initial update: %v", err)
+	}
+	sessionPayload := msg["session"].(map[string]any)
+	audio := sessionPayload["audio"].(map[string]any)
+	input := audio["input"].(map[string]any)
+	noiseReduction := input["noise_reduction"].(map[string]any)
+	if noiseReduction["type"] != "near_field" {
+		t.Fatalf("noise_reduction = %#v, want near_field type", noiseReduction)
+	}
+}
+
 func TestRealtimeInitialSessionUsesDefaultToolChoice(t *testing.T) {
 	session := openAIRealtimeInitialSession("gpt-realtime")
 

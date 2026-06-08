@@ -80,6 +80,13 @@ func WithOpenAIRealtimeInputAudioTranscription(transcription any) OpenAIRealtime
 	}
 }
 
+func WithOpenAIRealtimeInputAudioNoiseReduction(noiseReduction any) OpenAIRealtimeOption {
+	return func(options *llm.RealtimeSessionOptions) {
+		options.InputAudioNoiseReduction = noiseReduction
+		options.InputAudioNoiseReductionSet = true
+	}
+}
+
 func NewRealtimeModel(apiKey, model string, opts ...OpenAIRealtimeOption) *RealtimeModel {
 	if model == "" {
 		model = "gpt-realtime"
