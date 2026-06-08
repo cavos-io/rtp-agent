@@ -262,6 +262,26 @@ func TestOpenAIChatAppliesProviderServiceTier(t *testing.T) {
 	}
 }
 
+func TestOpenAIChatAppliesProviderSafetyIdentifier(t *testing.T) {
+	capture := &captureDeadlineHTTPClient{
+		statusCode:   http.StatusBadRequest,
+		responseBody: `{"error":{"message":"bad request","type":"invalid_request_error","code":"bad_request"}}`,
+	}
+	model := NewOpenAILLMWithBaseURLAndHTTPClient(
+		"test-key",
+		"gpt-4o",
+		"https://openai.test/v1",
+		capture,
+		WithOpenAILLMSafetyIdentifier("hashed-user"),
+	)
+
+	_, _ = model.Chat(context.Background(), llm.NewChatContext(), llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 0}))
+
+	if !strings.Contains(capture.requestBody, `"safety_identifier":"hashed-user"`) {
+		t.Fatalf("request body = %s, want provider safety_identifier", capture.requestBody)
+	}
+}
+
 func TestOpenAIChatAppliesConnectOptionsTimeoutToRequestContext(t *testing.T) {
 	sentinelErr := errors.New("stop after context capture")
 	capture := &captureDeadlineHTTPClient{err: sentinelErr}

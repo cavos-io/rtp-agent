@@ -74,6 +74,15 @@ func WithOpenAILLMServiceTier(serviceTier string) OpenAILLMOption {
 	}
 }
 
+func WithOpenAILLMSafetyIdentifier(safetyIdentifier string) OpenAILLMOption {
+	return func(l *OpenAILLM) {
+		if l.extraParams == nil {
+			l.extraParams = map[string]any{}
+		}
+		l.extraParams["safety_identifier"] = safetyIdentifier
+	}
+}
+
 func WithOpenAILLMParallelToolCalls(parallelToolCalls bool) OpenAILLMOption {
 	return func(l *OpenAILLM) {
 		l.parallelToolCalls = parallelToolCalls
