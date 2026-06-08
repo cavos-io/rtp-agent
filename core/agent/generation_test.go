@@ -220,6 +220,10 @@ func TestPerformTTSInferenceRecordsTTSNodeSpan(t *testing.T) {
 	if attrs[telemetry.AttrGenAIProviderName] != "test-provider" {
 		t.Fatalf("span provider attr = %q, want test-provider", attrs[telemetry.AttrGenAIProviderName])
 	}
+	attrValues := spanAttributeValues(spans[0].Attributes())
+	if got := attrValues[telemetry.AttrResponseTTFB].AsFloat64(); got <= 0 {
+		t.Fatalf("span ttfb attr = %v, want first audio latency", got)
+	}
 }
 
 func TestLLMToolSpanAttributesIncludeToolContextGroups(t *testing.T) {

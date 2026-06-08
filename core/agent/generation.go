@@ -303,6 +303,7 @@ func PerformTTSInference(ctx context.Context, t tts.TTS, textCh <-chan string, o
 				}
 			}
 			data.TTFB = time.Since(startTime)
+			span.SetAttributes(attribute.Float64(telemetry.AttrResponseTTFB, data.TTFB.Seconds()))
 			data.AudioCh <- frame
 		}()
 		return data, nil
@@ -361,6 +362,7 @@ func PerformTTSInference(ctx context.Context, t tts.TTS, textCh <-chan string, o
 			}
 			if data.TTFB == 0 {
 				data.TTFB = time.Since(startTime)
+				span.SetAttributes(attribute.Float64(telemetry.AttrResponseTTFB, data.TTFB.Seconds()))
 			}
 			for _, timedText := range audio.TimedTranscript {
 				data.TimedTextCh <- timedText

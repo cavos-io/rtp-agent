@@ -38,6 +38,7 @@ const (
 	AttrToolSets              = "lk.tool_sets"
 	AttrResponseText          = "lk.response.text"
 	AttrResponseFunctionCalls = "lk.response.function_calls"
+	AttrResponseTTFB          = "lk.response.ttfb"
 
 	AttrFunctionToolID      = "lk.function_tool.id"
 	AttrFunctionToolName    = "lk.function_tool.name"
