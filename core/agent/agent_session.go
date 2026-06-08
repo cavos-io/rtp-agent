@@ -200,6 +200,7 @@ type AgentSession struct {
 	mcpServers     []llm.MCPServer
 	recordedEvents []Event
 	eventListeners map[string][]agentEventListener
+	nextListenerID uint64
 	ivrActivity    *IVRActivity
 	videoSampler   *VoiceActivityVideoSampler
 
@@ -249,6 +250,7 @@ type AgentSession struct {
 }
 
 type agentEventListener struct {
+	id       uint64
 	callback func(Event)
 	once     bool
 }
@@ -415,16 +417,21 @@ func (s *AgentSession) RecordedEvents() []Event {
 	return events
 }
 
-func (s *AgentSession) On(eventType string, callback func(Event)) {
+func (s *AgentSession) On(eventType string, callback func(Event)) func() {
 	if s == nil || eventType == "" || callback == nil {
-		return
+		return func() {}
 	}
 	s.mu.Lock()
 	if s.eventListeners == nil {
 		s.eventListeners = make(map[string][]agentEventListener)
 	}
-	s.eventListeners[eventType] = append(s.eventListeners[eventType], agentEventListener{callback: callback})
+	s.nextListenerID++
+	id := s.nextListenerID
+	s.eventListeners[eventType] = append(s.eventListeners[eventType], agentEventListener{id: id, callback: callback})
 	s.mu.Unlock()
+	return func() {
+		s.removeEventListener(eventType, id)
+	}
 }
 
 func (s *AgentSession) Once(eventType string, callback func(Event)) {
@@ -437,6 +444,27 @@ func (s *AgentSession) Once(eventType string, callback func(Event)) {
 	}
 	s.eventListeners[eventType] = append(s.eventListeners[eventType], agentEventListener{callback: callback, once: true})
 	s.mu.Unlock()
+}
+
+func (s *AgentSession) removeEventListener(eventType string, id uint64) {
+	if s == nil || eventType == "" || id == 0 {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	listeners := s.eventListeners[eventType]
+	for i, listener := range listeners {
+		if listener.id != id {
+			continue
+		}
+		listeners = append(listeners[:i], listeners[i+1:]...)
+		if len(listeners) == 0 {
+			delete(s.eventListeners, eventType)
+		} else {
+			s.eventListeners[eventType] = listeners
+		}
+		return
+	}
 }
 
 func (s *AgentSession) recordEvent(ev Event) {
