@@ -1292,9 +1292,7 @@ func (c *ChatContext) toMistralProviderFormat() ([]map[string]any, any, error) {
 	for _, group := range groupOpenAIToolCalls(c.Items) {
 		if group.message != nil {
 			if group.message.Role == ChatRoleSystem || group.message.Role == ChatRoleDeveloper {
-				if text := group.message.TextContent(); text != "" {
-					instructions = text
-				}
+				instructions = mistralInstructionContent(group.message)
 			} else if entry, err := mistralMessageEntry(group.message); err != nil {
 				return nil, nil, err
 			} else if entry != nil {
@@ -1320,6 +1318,19 @@ func (c *ChatContext) toMistralProviderFormat() ([]map[string]any, any, error) {
 	}
 
 	return entries, map[string]any{"instructions": instructions}, nil
+}
+
+func mistralInstructionContent(msg *ChatMessage) any {
+	parts := make([]string, 0, len(msg.Content))
+	for _, content := range msg.Content {
+		if content.Text != "" {
+			parts = append(parts, content.Text)
+		}
+	}
+	if len(parts) == 0 {
+		return nil
+	}
+	return strings.Join(parts, "\n")
 }
 
 func (c *ChatContext) toAWSProviderFormat(opts ChatContextProviderFormatOptions) ([]map[string]any, any, error) {

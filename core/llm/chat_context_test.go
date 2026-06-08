@@ -2095,6 +2095,30 @@ func TestChatContextToMistralProviderFormatMapsEntriesAndInstructions(t *testing
 	}
 }
 
+func TestChatContextToMistralProviderFormatInstructionsUseTextPartsOnly(t *testing.T) {
+	ctx := NewChatContext()
+	ctx.Items = []ChatItem{
+		&ChatMessage{
+			ID:   "system",
+			Role: ChatRoleSystem,
+			Content: []ChatContent{
+				{Instructions: NewInstructions("voice instructions", "text instructions")},
+				{Text: "plain text"},
+			},
+		},
+	}
+
+	_, extra := ctx.ToProviderFormat("mistralai")
+
+	data, ok := extra.(map[string]any)
+	if !ok {
+		t.Fatalf("mistral extra = %#v, want map", extra)
+	}
+	if data["instructions"] != "plain text" {
+		t.Fatalf("instructions = %#v, want plain text", data["instructions"])
+	}
+}
+
 func TestChatContextToMistralProviderFormatReturnsImageSerializationError(t *testing.T) {
 	ctx := NewChatContext()
 	ctx.Items = []ChatItem{
