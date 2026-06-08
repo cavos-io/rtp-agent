@@ -406,6 +406,43 @@ func TestOpenAIRealtimeSTTSessionUpdateMatchesReference(t *testing.T) {
 	}
 }
 
+func TestOpenAIRealtimeSTTSessionUpdateUsesCustomTurnDetection(t *testing.T) {
+	provider := mustNewOpenAISTT(t, "test-key", "gpt-4o-mini-transcribe",
+		WithOpenAISTTRealtime(true),
+		WithOpenAISTTTurnDetection(map[string]any{
+			"type":                "server_vad",
+			"threshold":           0.7,
+			"prefix_padding_ms":   250,
+			"silence_duration_ms": 900,
+		}),
+	)
+
+	payload, err := buildOpenAIRealtimeSTTSessionUpdate(provider)
+	if err != nil {
+		t.Fatalf("build session update: %v", err)
+	}
+	var message map[string]any
+	if err := json.Unmarshal(payload, &message); err != nil {
+		t.Fatalf("decode session update: %v", err)
+	}
+	session := message["session"].(map[string]any)
+	audio := session["audio"].(map[string]any)
+	input := audio["input"].(map[string]any)
+	turnDetection := input["turn_detection"].(map[string]any)
+	if turnDetection["type"] != "server_vad" {
+		t.Fatalf("turn_detection type = %#v, want server_vad", turnDetection["type"])
+	}
+	if turnDetection["threshold"] != 0.7 {
+		t.Fatalf("turn_detection threshold = %#v, want 0.7", turnDetection["threshold"])
+	}
+	if turnDetection["prefix_padding_ms"] != float64(250) {
+		t.Fatalf("turn_detection prefix_padding_ms = %#v, want 250", turnDetection["prefix_padding_ms"])
+	}
+	if turnDetection["silence_duration_ms"] != float64(900) {
+		t.Fatalf("turn_detection silence_duration_ms = %#v, want 900", turnDetection["silence_duration_ms"])
+	}
+}
+
 func TestOpenAIRealtimeWhisperVersionOmitsTurnDetection(t *testing.T) {
 	provider := mustNewOpenAISTT(t, "test-key", "gpt-realtime-whisper-2025-06-03",
 		WithOpenAISTTRealtime(true),

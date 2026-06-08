@@ -40,6 +40,7 @@ type OpenAISTT struct {
 	detectLanguage  bool
 	detectOptionSet bool
 	prompt          string
+	turnDetection   map[string]interface{}
 	noiseReduction  string
 	useRealtime     bool
 	dialWebsocket   openAIRealtimeSTTWebsocketDialer
@@ -84,6 +85,19 @@ func WithOpenAISTTPrompt(prompt string) OpenAISTTOption {
 func WithOpenAISTTNoiseReductionType(noiseReductionType string) OpenAISTTOption {
 	return func(s *OpenAISTT) {
 		s.noiseReduction = noiseReductionType
+	}
+}
+
+func WithOpenAISTTTurnDetection(turnDetection map[string]interface{}) OpenAISTTOption {
+	return func(s *OpenAISTT) {
+		if turnDetection == nil {
+			s.turnDetection = nil
+			return
+		}
+		s.turnDetection = make(map[string]interface{}, len(turnDetection))
+		for key, value := range turnDetection {
+			s.turnDetection[key] = value
+		}
 	}
 }
 
@@ -280,12 +294,16 @@ func buildOpenAIRealtimeSTTSessionUpdate(s *OpenAISTT) ([]byte, error) {
 		"transcription": transcription,
 	}
 	if !openAIRealtimeIsWhisperModel(s.model) {
-		input["turn_detection"] = map[string]interface{}{
-			"type":                "server_vad",
-			"threshold":           openAIRealtimeSTTDefaultThreshold,
-			"prefix_padding_ms":   openAIRealtimeSTTPrefixPaddingMS,
-			"silence_duration_ms": openAIRealtimeSTTSilenceDurationMS,
+		turnDetection := s.turnDetection
+		if turnDetection == nil {
+			turnDetection = map[string]interface{}{
+				"type":                "server_vad",
+				"threshold":           openAIRealtimeSTTDefaultThreshold,
+				"prefix_padding_ms":   openAIRealtimeSTTPrefixPaddingMS,
+				"silence_duration_ms": openAIRealtimeSTTSilenceDurationMS,
+			}
 		}
+		input["turn_detection"] = turnDetection
 	}
 	if s.noiseReduction != "" {
 		input["noise_reduction"] = map[string]interface{}{
