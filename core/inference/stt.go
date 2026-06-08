@@ -67,7 +67,7 @@ func (s *STT) Capabilities() stt.STTCapabilities {
 }
 
 func (s *STT) Recognize(ctx context.Context, frames []*model.AudioFrame, language string) (*stt.SpeechEvent, error) {
-	return nil, fmt.Errorf("offline recognize is unsupported natively by LiveKit Inference STT, use stream instead")
+	return nil, fmt.Errorf("LiveKit Inference STT does not support batch recognition, use stream() instead")
 }
 
 func (s *STT) Stream(ctx context.Context, language string) (stt.RecognizeStream, error) {

@@ -43,6 +43,18 @@ func TestInferenceSTTCapabilitiesUseReferenceDefaultDiarization(t *testing.T) {
 	}
 }
 
+func TestInferenceSTTRecognizeMatchesReferenceUnsupportedBatch(t *testing.T) {
+	provider := NewSTT("deepgram/nova-3", "key", "secret")
+
+	_, err := provider.Recognize(context.Background(), nil, "")
+	if err == nil {
+		t.Fatal("Recognize() error = nil, want unsupported batch recognition error")
+	}
+	if got, want := err.Error(), "LiveKit Inference STT does not support batch recognition, use stream() instead"; got != want {
+		t.Fatalf("Recognize() error = %q, want %q", got, want)
+	}
+}
+
 func TestInferenceSTTReportsReferenceModelProviderMetadata(t *testing.T) {
 	provider := NewSTT("deepgram/nova-3", "key", "secret")
 
