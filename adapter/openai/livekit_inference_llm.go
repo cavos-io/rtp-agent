@@ -56,6 +56,7 @@ type LiveKitInferenceLLM struct {
 	httpClient     goopenai.HTTPDoer
 	provider       string
 	inferenceClass string
+	extraParams    map[string]any
 }
 
 var _ llm.LLM = (*LiveKitInferenceLLM)(nil)
@@ -79,6 +80,12 @@ func WithLiveKitInferenceLLMProvider(provider string) LiveKitInferenceLLMOption 
 func WithLiveKitInferenceLLMClass(inferenceClass string) LiveKitInferenceLLMOption {
 	return func(l *LiveKitInferenceLLM) {
 		l.inferenceClass = inferenceClass
+	}
+}
+
+func WithLiveKitInferenceLLMExtraParams(params map[string]any) LiveKitInferenceLLMOption {
+	return func(l *LiveKitInferenceLLM) {
+		l.extraParams = cloneLiveKitInferenceLLMExtraParams(params)
 	}
 }
 
@@ -159,6 +166,8 @@ func (l *LiveKitInferenceLLM) Chat(ctx context.Context, chatCtx *llm.ChatContext
 		base:              l.httpClient,
 		provider:          l.provider,
 		inferencePriority: inferencePriority,
+	}, func(inner *OpenAILLM) {
+		inner.extraParams = cloneLiveKitInferenceLLMExtraParams(l.extraParams)
 	})
 	return inner.Chat(ctx, chatCtx, chatOpts...)
 }
@@ -186,4 +195,15 @@ func liveKitInferenceClassFromChatOptions(opts []llm.ChatOption) (string, []llm.
 	filtered = append(filtered, opts...)
 	filtered = append(filtered, llm.WithExtraParams(filteredParams))
 	return priority, filtered, true
+}
+
+func cloneLiveKitInferenceLLMExtraParams(params map[string]any) map[string]any {
+	if params == nil {
+		return nil
+	}
+	clone := make(map[string]any, len(params))
+	for key, value := range params {
+		clone[key] = value
+	}
+	return clone
 }

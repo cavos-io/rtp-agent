@@ -215,3 +215,39 @@ func TestLiveKitInferenceLLMUpdateOptionsChangesReferenceModel(t *testing.T) {
 		t.Fatalf("request body = %s, want updated model", capture.requestBody)
 	}
 }
+
+func TestLiveKitInferenceLLMUpdateOptionsReplacesReferenceExtraParams(t *testing.T) {
+	capture := &captureDeadlineHTTPClient{
+		statusCode:   http.StatusUnauthorized,
+		responseBody: `{"error":{"message":"stop"}}`,
+	}
+
+	provider, err := NewLiveKitInferenceLLM("openai/gpt-4.1", "key", "secret",
+		WithLiveKitInferenceLLMExtraParams(map[string]any{
+			"temperature": 0.2,
+			"user":        "initial-user",
+		}),
+	)
+	if err != nil {
+		t.Fatalf("NewLiveKitInferenceLLM error = %v", err)
+	}
+	provider.baseURL = "https://inference.test/v1"
+	provider.httpClient = capture
+
+	provider.UpdateOptions(WithLiveKitInferenceLLMExtraParams(map[string]any{
+		"top_p": 0.4,
+		"user":  "updated-user",
+	}))
+
+	_, _ = provider.Chat(context.Background(), llm.NewChatContext(), llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 0}))
+
+	if strings.Contains(capture.requestBody, `"temperature"`) {
+		t.Fatalf("request body = %s, want replaced extra params without temperature", capture.requestBody)
+	}
+	if !strings.Contains(capture.requestBody, `"top_p":0.4`) {
+		t.Fatalf("request body = %s, want updated top_p", capture.requestBody)
+	}
+	if !strings.Contains(capture.requestBody, `"user":"updated-user"`) {
+		t.Fatalf("request body = %s, want updated user", capture.requestBody)
+	}
+}
