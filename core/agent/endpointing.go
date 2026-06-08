@@ -202,6 +202,8 @@ func (e *DynamicEndpointing) OnEndOfSpeech(endedAt float64, shouldIgnore bool) {
 		e.utterancePause.Apply(1.0, utterancePause)
 	}
 	e.utteranceEndedAt = &endedAt
+	e.agentSpeechStartedAt = nil
+	e.agentSpeechEndedAt = nil
 	e.overlapping = false
 	e.speaking = false
 }
