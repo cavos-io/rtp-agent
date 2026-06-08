@@ -2144,8 +2144,22 @@ func (s *AgentSession) stop(ctx context.Context, commitPendingUserTurn bool) err
 			stopErr = err
 		}
 	}
+	s.flushOTelTurnMetrics()
 	if backgroundAudio != nil {
 		_ = backgroundAudio.Close()
 	}
 	return stopErr
+}
+
+func (s *AgentSession) flushOTelTurnMetrics() {
+	if s == nil || s.ChatCtx == nil {
+		return
+	}
+	for _, item := range s.ChatCtx.Items {
+		msg, ok := item.(*llm.ChatMessage)
+		if !ok || len(msg.Metrics) == 0 {
+			continue
+		}
+		telemetry.RecordOTelTurnMetrics(msg.Metrics)
+	}
 }
