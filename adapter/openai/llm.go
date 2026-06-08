@@ -18,10 +18,12 @@ import (
 const defaultOpenAILLMModel = "gpt-4.1"
 
 type OpenAILLM struct {
-	client      *openai.Client
-	model       string
-	baseURL     string
-	extraParams map[string]any
+	client               *openai.Client
+	model                string
+	baseURL              string
+	extraParams          map[string]any
+	parallelToolCalls    bool
+	parallelToolCallsSet bool
 }
 
 type OpenAILLMOption func(*OpenAILLM)
@@ -41,6 +43,13 @@ func WithOpenAILLMTopP(topP float64) OpenAILLMOption {
 			l.extraParams = map[string]any{}
 		}
 		l.extraParams["top_p"] = topP
+	}
+}
+
+func WithOpenAILLMParallelToolCalls(parallelToolCalls bool) OpenAILLMOption {
+	return func(l *OpenAILLM) {
+		l.parallelToolCalls = parallelToolCalls
+		l.parallelToolCallsSet = true
 	}
 }
 
@@ -121,9 +130,15 @@ func (l *OpenAILLM) Chat(ctx context.Context, chatCtx *llm.ChatContext, opts ...
 	}
 
 	effectiveOptions := options
-	if len(l.extraParams) > 0 {
+	if len(l.extraParams) > 0 || (l.parallelToolCallsSet && !options.ParallelToolCallsSet) {
 		copied := *options
-		copied.ExtraParams = mergeOpenAIExtraParams(options.ExtraParams, l.extraParams)
+		if len(l.extraParams) > 0 {
+			copied.ExtraParams = mergeOpenAIExtraParams(options.ExtraParams, l.extraParams)
+		}
+		if l.parallelToolCallsSet && !options.ParallelToolCallsSet {
+			copied.ParallelToolCalls = l.parallelToolCalls
+			copied.ParallelToolCallsSet = true
+		}
 		effectiveOptions = &copied
 	}
 

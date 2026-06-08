@@ -122,6 +122,26 @@ func TestOpenAIChatSerializesExplicitParallelToolCalls(t *testing.T) {
 	}
 }
 
+func TestOpenAIChatAppliesProviderParallelToolCalls(t *testing.T) {
+	capture := &captureDeadlineHTTPClient{
+		statusCode:   http.StatusBadRequest,
+		responseBody: `{"error":{"message":"bad request","type":"invalid_request_error","code":"bad_request"}}`,
+	}
+	model := NewOpenAILLMWithBaseURLAndHTTPClient(
+		"test-key",
+		"gpt-4o",
+		"https://openai.test/v1",
+		capture,
+		WithOpenAILLMParallelToolCalls(false),
+	)
+
+	_, _ = model.Chat(context.Background(), llm.NewChatContext(), llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 0}))
+
+	if !strings.Contains(capture.requestBody, `"parallel_tool_calls":false`) {
+		t.Fatalf("request body = %s, want provider parallel_tool_calls false", capture.requestBody)
+	}
+}
+
 func TestOpenAIChatAppliesProviderTemperature(t *testing.T) {
 	capture := &captureDeadlineHTTPClient{
 		statusCode:   http.StatusBadRequest,
