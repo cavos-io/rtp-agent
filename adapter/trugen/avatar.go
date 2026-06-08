@@ -2,27 +2,46 @@ package trugen
 
 import (
 	"context"
-	"fmt"
 
 	"github.com/cavos-io/rtp-agent/core/agent"
 )
 
+const (
+	providerName               = "trugen"
+	defaultAvatarAgentIdentity = "trugen-avatar"
+	defaultAvatarID            = "665a1170"
+	defaultInitialAvatarState  = agent.AvatarStateIdle
+)
+
 type TrugenAvatar struct {
-	apiKey string
+	apiKey         string
+	avatarID       string
+	avatarIdentity string
+	state          agent.AvatarState
 }
 
 func NewTrugenAvatar(apiKey string) *TrugenAvatar {
 	return &TrugenAvatar{
-		apiKey: apiKey,
+		apiKey:         apiKey,
+		avatarID:       defaultAvatarID,
+		avatarIdentity: defaultAvatarAgentIdentity,
+		state:          defaultInitialAvatarState,
 	}
 }
 
 func (a *TrugenAvatar) Start(ctx context.Context) error {
-	fmt.Println("TrugenAvatar started.")
 	return nil
 }
 
 func (a *TrugenAvatar) UpdateState(state agent.AvatarState) error {
-	fmt.Printf("TrugenAvatar state updated to: %s\n", state)
+	a.state = state
 	return nil
+}
+
+func (a *TrugenAvatar) Provider() string {
+	return providerName
+}
+
+func (a *TrugenAvatar) AvatarIdentity() string {
+	return a.avatarIdentity
 }
