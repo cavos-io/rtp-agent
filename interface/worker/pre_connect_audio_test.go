@@ -111,6 +111,15 @@ func TestPreConnectAudioRawPCMUsesReferenceByteStreamFlush(t *testing.T) {
 	}
 }
 
+func TestPreConnectAudioRawPCMRejectsInvalidAudioShape(t *testing.T) {
+	if _, err := readPreConnectRawPCMFrames(bytes.NewReader([]byte{1, 0}), 0, 1); err == nil {
+		t.Fatal("readPreConnectRawPCMFrames() zero sample rate error = nil")
+	}
+	if _, err := readPreConnectRawPCMFrames(bytes.NewReader([]byte{1, 0}), 100, 0); err == nil {
+		t.Fatal("readPreConnectRawPCMFrames() zero channels error = nil")
+	}
+}
+
 func waitForPreConnectBufferWaiter(t *testing.T, handler *PreConnectAudioHandler, trackID string) {
 	t.Helper()
 

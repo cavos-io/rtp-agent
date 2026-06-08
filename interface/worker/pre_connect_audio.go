@@ -2,6 +2,7 @@ package worker
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"strconv"
 	"strings"
@@ -97,8 +98,16 @@ func (h *PreConnectAudioHandler) readAudioTask(reader *lksdk.ByteStreamReader, p
 		return
 	}
 
-	sampleRate, _ := strconv.Atoi(sampleRateStr)
-	channels, _ := strconv.Atoi(channelsStr)
+	sampleRate, err := strconv.Atoi(sampleRateStr)
+	if err != nil {
+		logger.Logger.Warnw("invalid sampleRate in pre-connect byte stream", err)
+		return
+	}
+	channels, err := strconv.Atoi(channelsStr)
+	if err != nil {
+		logger.Logger.Warnw("invalid channels in pre-connect byte stream", err)
+		return
+	}
 
 	buf := &PreConnectAudioBuffer{
 		Timestamp: time.Now(),
@@ -149,6 +158,12 @@ func (h *PreConnectAudioHandler) readAudioTask(reader *lksdk.ByteStreamReader, p
 }
 
 func readPreConnectRawPCMFrames(reader io.Reader, sampleRate int, channels int) ([]*model.AudioFrame, error) {
+	if sampleRate <= 0 {
+		return nil, fmt.Errorf("pre-connect audio sample rate must be positive")
+	}
+	if channels <= 0 {
+		return nil, fmt.Errorf("pre-connect audio channels must be positive")
+	}
 	audioStream := audio.NewAudioByteStream(uint32(sampleRate), uint32(channels), 0)
 	frames := make([]*model.AudioFrame, 0)
 	chunk := make([]byte, 4096)
