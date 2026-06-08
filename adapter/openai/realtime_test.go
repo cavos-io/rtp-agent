@@ -702,6 +702,26 @@ func TestRealtimeUpdateOptionsMessageMapsInputAudioNoiseReduction(t *testing.T) 
 	}
 }
 
+func TestRealtimeUpdateOptionsMessageClearsInputAudioNoiseReduction(t *testing.T) {
+	msg := openAIRealtimeUpdateOptionsMessage(llm.RealtimeSessionOptions{
+		InputAudioNoiseReductionSet: true,
+	})
+
+	if msg["type"] != "session.update" {
+		t.Fatalf("message type = %#v, want session.update", msg["type"])
+	}
+	session := msg["session"].(map[string]any)
+	audio := session["audio"].(map[string]any)
+	input := audio["input"].(map[string]any)
+	value, ok := input["noise_reduction"]
+	if !ok {
+		t.Fatalf("noise_reduction missing from input config: %#v", input)
+	}
+	if value != nil {
+		t.Fatalf("noise_reduction = %#v, want nil reset", value)
+	}
+}
+
 func TestRealtimeAudioBufferMessages(t *testing.T) {
 	commit := openAIRealtimeCommitAudioMessage()
 	if commit["type"] != "input_audio_buffer.commit" {

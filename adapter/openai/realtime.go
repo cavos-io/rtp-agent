@@ -563,7 +563,7 @@ func openAIRealtimeUpdateOptionsMessageWithEventID(options llm.RealtimeSessionOp
 	if options.InputAudioTranscriptionSet || options.InputAudioTranscription != nil {
 		input["transcription"] = options.InputAudioTranscription
 	}
-	if options.InputAudioNoiseReduction != nil {
+	if options.InputAudioNoiseReductionSet || options.InputAudioNoiseReduction != nil {
 		input["noise_reduction"] = options.InputAudioNoiseReduction
 	}
 	output := make(map[string]any)
