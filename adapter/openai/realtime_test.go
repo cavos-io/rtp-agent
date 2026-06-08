@@ -358,6 +358,42 @@ func TestRealtimeModelConstructorTruncationAppliesToInitialSession(t *testing.T)
 	}
 }
 
+func TestRealtimeModelConstructorInputAudioTranscriptionAppliesToInitialSession(t *testing.T) {
+	messages := make(chan string, 4)
+	dialer := newOpenAIRealtimeTestWebsocketDialer(t, func(conn *websocket.Conn, _ *http.Request) {
+		for {
+			_, msg, err := conn.ReadMessage()
+			if err != nil {
+				return
+			}
+			messages <- string(msg)
+		}
+	})
+
+	realtimeModel := NewRealtimeModel("test-key", "gpt-realtime", WithOpenAIRealtimeInputAudioTranscription(map[string]any{"model": "gpt-4o-transcribe"}))
+	realtimeModel.baseURL = "ws://openai.test/v1/realtime"
+	realtimeModel.dialWebsocket = dialer
+
+	session, err := realtimeModel.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	defer session.Close()
+
+	initialUpdate := <-messages
+	var msg map[string]any
+	if err := json.Unmarshal([]byte(initialUpdate), &msg); err != nil {
+		t.Fatalf("decode initial update: %v", err)
+	}
+	sessionPayload := msg["session"].(map[string]any)
+	audio := sessionPayload["audio"].(map[string]any)
+	input := audio["input"].(map[string]any)
+	transcription := input["transcription"].(map[string]any)
+	if transcription["model"] != "gpt-4o-transcribe" {
+		t.Fatalf("transcription = %#v, want gpt-4o-transcribe model", transcription)
+	}
+}
+
 func TestRealtimeInitialSessionUsesDefaultToolChoice(t *testing.T) {
 	session := openAIRealtimeInitialSession("gpt-realtime")
 

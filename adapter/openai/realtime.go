@@ -73,6 +73,13 @@ func WithOpenAIRealtimeTruncation(truncation any) OpenAIRealtimeOption {
 	}
 }
 
+func WithOpenAIRealtimeInputAudioTranscription(transcription any) OpenAIRealtimeOption {
+	return func(options *llm.RealtimeSessionOptions) {
+		options.InputAudioTranscription = transcription
+		options.InputAudioTranscriptionSet = true
+	}
+}
+
 func NewRealtimeModel(apiKey, model string, opts ...OpenAIRealtimeOption) *RealtimeModel {
 	if model == "" {
 		model = "gpt-realtime"
