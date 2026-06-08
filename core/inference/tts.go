@@ -51,9 +51,11 @@ func NewTTS(model string, apiKey, apiSecret string, opts ...TTSOption) *TTS {
 	if model == "" {
 		model = "cartesia/sonic-3"
 	}
+	model, voice := ttsModelAndVoice(model, "")
 	apiKey, apiSecret = resolveInferenceCredentials(apiKey, apiSecret)
 	t := &TTS{
 		model:         model,
+		voice:         voice,
 		apiKey:        apiKey,
 		apiSecret:     apiSecret,
 		baseURL:       defaultInferenceWebsocketURL(),
@@ -73,6 +75,14 @@ type FallbackModel struct {
 
 func (t *TTS) Label() string {
 	return "livekit.TTS"
+}
+
+func (t *TTS) Model() string {
+	return t.model
+}
+
+func (t *TTS) Provider() string {
+	return "livekit"
 }
 
 func (t *TTS) Capabilities() tts.TTSCapabilities {
@@ -183,14 +193,7 @@ func defaultInferenceTTSDialer(ctx context.Context, endpoint string, header http
 }
 
 func ttsSessionCreateParams(model string, voice string) (string, map[string]interface{}) {
-	modelName := model
-	if idx := strings.LastIndex(model, ":"); idx != -1 {
-		if voice == "" {
-			voice = model[idx+1:]
-		}
-		modelName = model[:idx]
-	}
-
+	modelName, voice := ttsModelAndVoice(model, voice)
 	createParams := map[string]interface{}{
 		"type":        "session.create",
 		"sample_rate": "24000",
@@ -204,6 +207,17 @@ func ttsSessionCreateParams(model string, voice string) (string, map[string]inte
 		createParams["voice"] = voice
 	}
 	return modelName, createParams
+}
+
+func ttsModelAndVoice(model string, voice string) (string, string) {
+	modelName := model
+	if idx := strings.LastIndex(model, ":"); idx != -1 {
+		if voice == "" {
+			voice = model[idx+1:]
+		}
+		modelName = model[:idx]
+	}
+	return modelName, voice
 }
 
 type inferenceTTSStream struct {

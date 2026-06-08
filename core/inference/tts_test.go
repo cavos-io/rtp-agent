@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	coretts "github.com/cavos-io/rtp-agent/core/tts"
 	"github.com/cavos-io/rtp-agent/library/tokenize"
 	"github.com/go-jose/go-jose/v3/jwt"
 )
@@ -50,6 +51,17 @@ func TestNewTTSFallsBackToLiveKitCredentials(t *testing.T) {
 	}
 	if provider.apiSecret != "base-secret" {
 		t.Fatalf("apiSecret = %q, want base-secret", provider.apiSecret)
+	}
+}
+
+func TestInferenceTTSReportsReferenceModelProviderMetadata(t *testing.T) {
+	provider := NewTTS("cartesia/sonic-3:voice-id", "key", "secret")
+
+	if got := coretts.Model(provider); got != "cartesia/sonic-3" {
+		t.Fatalf("Model = %q, want parsed reference model", got)
+	}
+	if got := coretts.Provider(provider); got != "livekit" {
+		t.Fatalf("Provider = %q, want livekit", got)
 	}
 }
 

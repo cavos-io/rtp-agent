@@ -43,6 +43,17 @@ func TestInferenceSTTCapabilitiesUseReferenceDefaultDiarization(t *testing.T) {
 	}
 }
 
+func TestInferenceSTTReportsReferenceModelProviderMetadata(t *testing.T) {
+	provider := NewSTT("deepgram/nova-3", "key", "secret")
+
+	if got := stt.Model(provider); got != "deepgram/nova-3" {
+		t.Fatalf("Model = %q, want configured reference model", got)
+	}
+	if got := stt.Provider(provider); got != "livekit" {
+		t.Fatalf("Provider = %q, want livekit", got)
+	}
+}
+
 func TestSTTWebsocketSendsReferenceInferenceHeaders(t *testing.T) {
 	var captured http.Header
 	provider := NewSTT("deepgram/nova-3", "key", "secret")

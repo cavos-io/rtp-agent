@@ -45,6 +45,14 @@ func (s *STT) Label() string {
 	return "livekit.STT"
 }
 
+func (s *STT) Model() string {
+	return s.model
+}
+
+func (s *STT) Provider() string {
+	return "livekit"
+}
+
 func (s *STT) Capabilities() stt.STTCapabilities {
 	return stt.STTCapabilities{
 		Streaming:         true,
