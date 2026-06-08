@@ -871,6 +871,7 @@ func reflectedRealtimeModelLabel(model RealtimeModel) string {
 
 type RealtimeSessionOptions struct {
 	ToolChoice               ToolChoice
+	ToolChoiceSet            bool
 	Voice                    string
 	Speed                    float64
 	SpeedSet                 bool

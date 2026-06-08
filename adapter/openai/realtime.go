@@ -544,6 +544,8 @@ func openAIRealtimeUpdateOptionsMessageWithEventID(options llm.RealtimeSessionOp
 	session := make(map[string]any)
 	if toolChoice := openAIRealtimeToolChoice(options.ToolChoice); toolChoice != nil {
 		session["tool_choice"] = toolChoice
+	} else if options.ToolChoiceSet {
+		session["tool_choice"] = "auto"
 	}
 	if options.MaxResponseOutputTokens != nil {
 		session["max_output_tokens"] = options.MaxResponseOutputTokens

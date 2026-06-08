@@ -468,6 +468,20 @@ func TestRealtimeUpdateOptionsMessageMapsNamedToolChoice(t *testing.T) {
 	}
 }
 
+func TestRealtimeUpdateOptionsMessageResetsToolChoiceToAuto(t *testing.T) {
+	msg := openAIRealtimeUpdateOptionsMessage(llm.RealtimeSessionOptions{
+		ToolChoiceSet: true,
+	})
+
+	if msg["type"] != "session.update" {
+		t.Fatalf("message type = %#v, want session.update", msg["type"])
+	}
+	session := msg["session"].(map[string]any)
+	if session["tool_choice"] != "auto" {
+		t.Fatalf("tool_choice = %#v, want auto", session["tool_choice"])
+	}
+}
+
 func TestRealtimeUpdateOptionsMessageMapsVoice(t *testing.T) {
 	msg := openAIRealtimeUpdateOptionsMessage(llm.RealtimeSessionOptions{
 		Voice: "marin",
