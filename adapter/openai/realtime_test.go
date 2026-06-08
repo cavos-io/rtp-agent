@@ -580,6 +580,24 @@ func TestRealtimeUpdateOptionsMessageMapsTruncation(t *testing.T) {
 	}
 }
 
+func TestRealtimeUpdateOptionsMessageClearsTruncation(t *testing.T) {
+	msg := openAIRealtimeUpdateOptionsMessage(llm.RealtimeSessionOptions{
+		TruncationSet: true,
+	})
+
+	if msg["type"] != "session.update" {
+		t.Fatalf("message type = %#v, want session.update", msg["type"])
+	}
+	session := msg["session"].(map[string]any)
+	value, ok := session["truncation"]
+	if !ok {
+		t.Fatalf("truncation missing from session payload: %#v", session)
+	}
+	if value != nil {
+		t.Fatalf("truncation = %#v, want nil reset", value)
+	}
+}
+
 func TestRealtimeUpdateOptionsMessageMapsTracing(t *testing.T) {
 	msg := openAIRealtimeUpdateOptionsMessage(llm.RealtimeSessionOptions{
 		Tracing: map[string]any{"workflow_name": "checkout"},

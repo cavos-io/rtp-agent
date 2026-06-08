@@ -878,6 +878,7 @@ type RealtimeSessionOptions struct {
 	MaxResponseOutputTokens    any
 	MaxResponseOutputTokensSet bool
 	Truncation                 any
+	TruncationSet              bool
 	Tracing                    any
 	TurnDetection              any
 	InputAudioTranscription    any

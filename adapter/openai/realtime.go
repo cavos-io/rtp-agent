@@ -550,7 +550,7 @@ func openAIRealtimeUpdateOptionsMessageWithEventID(options llm.RealtimeSessionOp
 	if options.MaxResponseOutputTokensSet || options.MaxResponseOutputTokens != nil {
 		session["max_output_tokens"] = options.MaxResponseOutputTokens
 	}
-	if options.Truncation != nil {
+	if options.TruncationSet || options.Truncation != nil {
 		session["truncation"] = options.Truncation
 	}
 	if options.Tracing != nil {
