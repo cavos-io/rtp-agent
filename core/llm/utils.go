@@ -171,7 +171,7 @@ func ParseFunctionArguments(jsonArguments string) (map[string]any, error) {
 }
 
 func functionArgumentTypeName(value any) string {
-	switch value.(type) {
+	switch number := value.(type) {
 	case []any:
 		return "list"
 	case string:
@@ -179,6 +179,9 @@ func functionArgumentTypeName(value any) string {
 	case bool:
 		return "bool"
 	case float64:
+		if number == float64(int64(number)) {
+			return "int"
+		}
 		return "float"
 	default:
 		return fmt.Sprintf("%T", value)

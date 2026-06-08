@@ -49,6 +49,18 @@ func TestParseFunctionArgumentsUnwrapsNestedJSONString(t *testing.T) {
 	}
 }
 
+func TestParseFunctionArgumentsRejectsNumericNonObjectWithReferenceError(t *testing.T) {
+	_, err := ParseFunctionArguments(`3`)
+	if err == nil {
+		t.Fatal("ParseFunctionArguments(number) error = nil, want error")
+	}
+
+	want := "expected dict from function arguments, got int: 3"
+	if err.Error() != want {
+		t.Fatalf("ParseFunctionArguments(number) error = %q, want %q", err.Error(), want)
+	}
+}
+
 func TestParseFunctionArgumentsRepairsLeakedTemplateTokens(t *testing.T) {
 	args, err := ParseFunctionArguments(`{"city":"Paris"}<|im_end|>`)
 	if err != nil {
