@@ -648,6 +648,26 @@ func TestRealtimeUpdateOptionsMessageMapsTurnDetection(t *testing.T) {
 	}
 }
 
+func TestRealtimeUpdateOptionsMessageClearsTurnDetection(t *testing.T) {
+	msg := openAIRealtimeUpdateOptionsMessage(llm.RealtimeSessionOptions{
+		TurnDetectionSet: true,
+	})
+
+	if msg["type"] != "session.update" {
+		t.Fatalf("message type = %#v, want session.update", msg["type"])
+	}
+	session := msg["session"].(map[string]any)
+	audio := session["audio"].(map[string]any)
+	input := audio["input"].(map[string]any)
+	value, ok := input["turn_detection"]
+	if !ok {
+		t.Fatalf("turn_detection missing from input config: %#v", input)
+	}
+	if value != nil {
+		t.Fatalf("turn_detection = %#v, want nil reset", value)
+	}
+}
+
 func TestRealtimeUpdateOptionsMessageMapsInputAudioTranscription(t *testing.T) {
 	msg := openAIRealtimeUpdateOptionsMessage(llm.RealtimeSessionOptions{
 		InputAudioTranscription: map[string]any{"model": "gpt-4o-transcribe"},

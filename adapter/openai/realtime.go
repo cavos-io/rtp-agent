@@ -557,7 +557,7 @@ func openAIRealtimeUpdateOptionsMessageWithEventID(options llm.RealtimeSessionOp
 		session["tracing"] = options.Tracing
 	}
 	input := make(map[string]any)
-	if options.TurnDetection != nil {
+	if options.TurnDetectionSet || options.TurnDetection != nil {
 		input["turn_detection"] = options.TurnDetection
 	}
 	if options.InputAudioTranscriptionSet || options.InputAudioTranscription != nil {

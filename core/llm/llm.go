@@ -882,6 +882,7 @@ type RealtimeSessionOptions struct {
 	Tracing                     any
 	TracingSet                  bool
 	TurnDetection               any
+	TurnDetectionSet            bool
 	InputAudioTranscription     any
 	InputAudioTranscriptionSet  bool
 	InputAudioNoiseReduction    any
