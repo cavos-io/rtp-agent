@@ -1128,6 +1128,7 @@ func (rio *RoomIO) WaitForPlayout(ctx context.Context) (PlaybackFinishedEvent, e
 		select {
 		case <-waiter:
 		case <-ctx.Done():
+			rio.removePlaybackWaiter(waiter)
 			return PlaybackFinishedEvent{}, ctx.Err()
 		}
 		rio.mu.Lock()
@@ -1135,6 +1136,18 @@ func (rio *RoomIO) WaitForPlayout(ctx context.Context) (PlaybackFinishedEvent, e
 	ev := rio.lastPlaybackEvent
 	rio.mu.Unlock()
 	return ev, nil
+}
+
+func (rio *RoomIO) removePlaybackWaiter(waiter chan struct{}) {
+	rio.mu.Lock()
+	defer rio.mu.Unlock()
+	for i, candidate := range rio.playbackWaiters {
+		if candidate != waiter {
+			continue
+		}
+		rio.playbackWaiters = append(rio.playbackWaiters[:i], rio.playbackWaiters[i+1:]...)
+		return
+	}
 }
 
 func (rio *RoomIO) Flush() {

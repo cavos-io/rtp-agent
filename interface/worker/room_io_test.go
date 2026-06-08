@@ -241,6 +241,37 @@ func TestRoomIOClearBufferFinishesPlaybackAsInterrupted(t *testing.T) {
 	}
 }
 
+func TestRoomIOWaitForPlayoutCancellationRemovesWaiter(t *testing.T) {
+	rio := &RoomIO{audioTrack: newRoomIOTestAudioTrack(t)}
+	if err := rio.PublishAudio(&model.AudioFrame{
+		Data:              make([]byte, 960*2),
+		SampleRate:        48000,
+		NumChannels:       1,
+		SamplesPerChannel: 960,
+	}); err != nil {
+		t.Fatalf("PublishAudio error = %v", err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	waitErr := make(chan error, 1)
+	go func() {
+		_, err := rio.WaitForPlayout(ctx)
+		waitErr <- err
+	}()
+
+	waitForPlaybackWaiters(t, rio, 1)
+	cancel()
+
+	select {
+	case err := <-waitErr:
+		if err != context.Canceled {
+			t.Fatalf("WaitForPlayout error = %v, want context.Canceled", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("WaitForPlayout did not return after cancellation")
+	}
+	waitForPlaybackWaiters(t, rio, 0)
+}
+
 func TestRoomIOOffPlaybackStartedRemovesMatchingHandler(t *testing.T) {
 	rio := &RoomIO{audioTrack: newRoomIOTestAudioTrack(t)}
 	removed := make(chan PlaybackStartedEvent, 1)
@@ -1696,6 +1727,24 @@ func assertClosed(t *testing.T, ch <-chan struct{}, label string) {
 	case <-time.After(time.Second):
 		t.Fatalf("%s was not cancelled", label)
 	}
+}
+
+func waitForPlaybackWaiters(t *testing.T, rio *RoomIO, want int) {
+	t.Helper()
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		rio.mu.Lock()
+		got := len(rio.playbackWaiters)
+		rio.mu.Unlock()
+		if got == want {
+			return
+		}
+		time.Sleep(time.Millisecond)
+	}
+	rio.mu.Lock()
+	got := len(rio.playbackWaiters)
+	rio.mu.Unlock()
+	t.Fatalf("playback waiters = %d, want %d", got, want)
 }
 
 type fakeRoomIORealtimeModel struct {
