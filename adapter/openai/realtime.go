@@ -59,6 +59,13 @@ func WithOpenAIRealtimeToolChoice(toolChoice llm.ToolChoice) OpenAIRealtimeOptio
 	}
 }
 
+func WithOpenAIRealtimeTracing(tracing any) OpenAIRealtimeOption {
+	return func(options *llm.RealtimeSessionOptions) {
+		options.Tracing = tracing
+		options.TracingSet = true
+	}
+}
+
 func NewRealtimeModel(apiKey, model string, opts ...OpenAIRealtimeOption) *RealtimeModel {
 	if model == "" {
 		model = "gpt-realtime"
