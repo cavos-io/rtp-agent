@@ -137,6 +137,35 @@ func TestRunResultFinalOutputReturnsValueAfterDone(t *testing.T) {
 	}
 }
 
+func TestRunResultFinalOutputRejectsFalsyValues(t *testing.T) {
+	tests := []struct {
+		name   string
+		output any
+	}{
+		{name: "empty string", output: ""},
+		{name: "false", output: false},
+		{name: "zero int", output: 0},
+		{name: "zero float", output: 0.0},
+		{name: "nil", output: nil},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := NewRunResult(llm.NewChatContext())
+			result.SetFinalOutput(tt.output)
+			result.MarkDone()
+
+			output, err := result.FinalOutput()
+			if !errors.Is(err, ErrRunResultNoFinalOutput) {
+				t.Fatalf("FinalOutput error = %v, want ErrRunResultNoFinalOutput", err)
+			}
+			if output != nil {
+				t.Fatalf("FinalOutput output = %#v, want nil for falsy final output", output)
+			}
+		})
+	}
+}
+
 func TestRunResultWaitReturnsAfterMarkDone(t *testing.T) {
 	result := NewRunResult(llm.NewChatContext())
 	done := make(chan error, 1)
