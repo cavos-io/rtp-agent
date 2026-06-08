@@ -159,6 +159,7 @@ func (t *TTS) connectTTSWebsocket(ctx context.Context) (inferenceTTSConn, error)
 
 	header := http.Header{}
 	header.Add("Authorization", "Bearer "+token)
+	header.Set("User-Agent", inferenceUserAgent())
 
 	conn, err := t.dialWebsocket(ctx, wsURL.String(), header)
 	if err != nil {

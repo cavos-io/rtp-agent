@@ -1,7 +1,9 @@
 package inference
 
 import (
+	"fmt"
 	"os"
+	"runtime"
 	"strings"
 	"time"
 
@@ -13,6 +15,10 @@ const (
 	stagingInferenceURL     = "https://agent-gateway.staging.livekit.cloud/v1"
 	InferenceAccessTokenTTL = 10 * time.Minute
 )
+
+func inferenceUserAgent() string {
+	return fmt.Sprintf("LiveKit Agents/Go (go %s)", runtime.Version())
+}
 
 func defaultInferenceWebsocketURL() string {
 	inferenceURL := os.Getenv("LIVEKIT_INFERENCE_URL")

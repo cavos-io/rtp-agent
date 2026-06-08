@@ -105,6 +105,29 @@ func TestTTSPrewarmReusesConnectionForNextStream(t *testing.T) {
 	}
 }
 
+func TestTTSWebsocketSendsReferenceInferenceHeaders(t *testing.T) {
+	var captured http.Header
+	provider := NewTTS("cartesia/sonic-3", "key", "secret")
+	provider.baseURL = "wss://inference.test/v1"
+	provider.dialWebsocket = func(ctx context.Context, endpoint string, header http.Header) (inferenceTTSConn, error) {
+		captured = header.Clone()
+		return &recordingTTSConn{}, nil
+	}
+
+	stream, err := provider.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	defer stream.Close()
+
+	if !strings.HasPrefix(captured.Get("User-Agent"), "LiveKit Agents/") {
+		t.Fatalf("User-Agent = %q, want LiveKit Agents version prefix", captured.Get("User-Agent"))
+	}
+	if !strings.Contains(captured.Get("User-Agent"), " (go ") {
+		t.Fatalf("User-Agent = %q, want Go runtime marker", captured.Get("User-Agent"))
+	}
+}
+
 type recordingTTSConn struct {
 	closed      atomic.Bool
 	onWriteJSON func(map[string]any)
