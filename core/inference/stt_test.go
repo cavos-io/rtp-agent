@@ -54,6 +54,14 @@ func TestInferenceSTTReportsReferenceModelProviderMetadata(t *testing.T) {
 	}
 }
 
+func TestNewSTTParsesReferenceModelStringForMetadata(t *testing.T) {
+	provider := NewSTT("deepgram/nova-3:en", "key", "secret")
+
+	if got := stt.Model(provider); got != "deepgram/nova-3" {
+		t.Fatalf("Model = %q, want model string language suffix stripped", got)
+	}
+}
+
 func TestSTTWebsocketSendsReferenceInferenceHeaders(t *testing.T) {
 	var captured http.Header
 	provider := NewSTT("deepgram/nova-3", "key", "secret")

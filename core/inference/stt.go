@@ -31,6 +31,7 @@ func NewSTT(model string, apiKey, apiSecret string) *STT {
 	if model == "" {
 		model = "deepgram/nova-3"
 	}
+	model, _ = sttModelAndLanguage(model, "")
 	apiKey, apiSecret = resolveInferenceCredentials(apiKey, apiSecret)
 	return &STT{
 		model:         model,
@@ -122,13 +123,7 @@ func defaultInferenceSTTDialer(ctx context.Context, endpoint string, header http
 }
 
 func sttSessionCreateParams(model string, language string) (string, map[string]interface{}) {
-	modelName := model
-	if idx := strings.LastIndex(model, ":"); idx != -1 {
-		if language == "" {
-			language = model[idx+1:]
-		}
-		modelName = model[:idx]
-	}
+	modelName, language := sttModelAndLanguage(model, language)
 	settings := map[string]interface{}{
 		"sample_rate": "16000",
 		"encoding":    "pcm_s16le",
@@ -146,6 +141,17 @@ func sttSessionCreateParams(model string, language string) (string, map[string]i
 		createParams["model"] = modelName
 	}
 	return modelName, createParams
+}
+
+func sttModelAndLanguage(model string, language string) (string, string) {
+	modelName := model
+	if idx := strings.LastIndex(model, ":"); idx != -1 {
+		if language == "" {
+			language = model[idx+1:]
+		}
+		modelName = model[:idx]
+	}
+	return modelName, language
 }
 
 type inferenceSTTStream struct {
