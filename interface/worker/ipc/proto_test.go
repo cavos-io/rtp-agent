@@ -246,6 +246,31 @@ func TestInferenceMessagesRoundTrip(t *testing.T) {
 	}
 }
 
+func TestInferenceResponsePreservesEmptyData(t *testing.T) {
+	msg, err := NewMessage(&InferenceResponse{
+		RequestID: "req-empty",
+		Data:      []byte{},
+	})
+	if err != nil {
+		t.Fatalf("NewMessage: %v", err)
+	}
+
+	decoded, err := DecodePayload(msg)
+	if err != nil {
+		t.Fatalf("DecodePayload: %v", err)
+	}
+	resp, ok := decoded.(*InferenceResponse)
+	if !ok {
+		t.Fatalf("decoded payload type = %T, want *InferenceResponse", decoded)
+	}
+	if resp.Data == nil {
+		t.Fatal("Data = nil, want explicit empty payload")
+	}
+	if len(resp.Data) != 0 {
+		t.Fatalf("Data len = %d, want 0", len(resp.Data))
+	}
+}
+
 func TestReferenceIPCMessageTypesAreNamed(t *testing.T) {
 	expected := map[MessageType]struct{}{
 		MessageTypeInferenceRequest:   {},
