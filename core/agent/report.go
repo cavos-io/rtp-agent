@@ -155,7 +155,12 @@ func sessionReportOptionsToDict(opts AgentSessionOptions) map[string]any {
 		"aec_warmup_duration":              opts.AECWarmupDuration,
 		"ivr_detection":                    opts.IVRDetection,
 		"turn_detection":                   opts.TurnDetection,
-		"preemptive_generation":            map[string]any{"enabled": opts.PreemptiveGeneration},
+		"preemptive_generation": map[string]any{
+			"enabled":             opts.PreemptiveGeneration,
+			"preemptive_tts":      false,
+			"max_speech_duration": 10.0,
+			"max_retries":         3,
+		},
 		"session_close_transcript_timeout": opts.SessionCloseTranscriptTimeout,
 	}
 }

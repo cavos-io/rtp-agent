@@ -310,6 +310,15 @@ func TestSessionReportToDictUsesReferencePreemptiveGenerationShape(t *testing.T)
 	if preemptive["enabled"] != true {
 		t.Fatalf("preemptive_generation enabled = %#v, want true", preemptive["enabled"])
 	}
+	if preemptive["preemptive_tts"] != false {
+		t.Fatalf("preemptive_generation preemptive_tts = %#v, want false", preemptive["preemptive_tts"])
+	}
+	if preemptive["max_speech_duration"] != 10.0 {
+		t.Fatalf("preemptive_generation max_speech_duration = %#v, want 10.0", preemptive["max_speech_duration"])
+	}
+	if preemptive["max_retries"] != 3 {
+		t.Fatalf("preemptive_generation max_retries = %#v, want 3", preemptive["max_retries"])
+	}
 }
 
 func TestSessionReportToDictIncludesSessionCloseTranscriptTimeout(t *testing.T) {
