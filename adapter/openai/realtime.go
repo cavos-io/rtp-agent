@@ -264,6 +264,15 @@ func openAIRealtimeInitialSession(model string) map[string]any {
 		"audio": map[string]any{
 			"input": map[string]any{
 				"format": audioFormat,
+				"transcription": map[string]any{
+					"model": "gpt-4o-mini-transcribe",
+				},
+				"turn_detection": map[string]any{
+					"type":               "semantic_vad",
+					"create_response":    true,
+					"eagerness":          "medium",
+					"interrupt_response": true,
+				},
 			},
 			"output": map[string]any{
 				"format": audioFormat,

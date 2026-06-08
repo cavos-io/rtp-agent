@@ -199,6 +199,36 @@ func TestRealtimeInitialSessionUsesDefaultToolChoice(t *testing.T) {
 	}
 }
 
+func TestRealtimeInitialSessionUsesDefaultInputAudioOptions(t *testing.T) {
+	session := openAIRealtimeInitialSession("gpt-realtime")
+
+	audio := session["audio"].(map[string]any)
+	input := audio["input"].(map[string]any)
+	transcription, ok := input["transcription"].(map[string]any)
+	if !ok {
+		t.Fatalf("transcription = %#v, want default transcription config", input["transcription"])
+	}
+	if transcription["model"] != "gpt-4o-mini-transcribe" {
+		t.Fatalf("transcription = %#v, want gpt-4o-mini-transcribe", transcription)
+	}
+	turnDetection, ok := input["turn_detection"].(map[string]any)
+	if !ok {
+		t.Fatalf("turn_detection = %#v, want default semantic VAD config", input["turn_detection"])
+	}
+	if turnDetection["type"] != "semantic_vad" {
+		t.Fatalf("turn_detection type = %#v, want semantic_vad", turnDetection["type"])
+	}
+	if turnDetection["eagerness"] != "medium" {
+		t.Fatalf("turn_detection eagerness = %#v, want medium", turnDetection["eagerness"])
+	}
+	if turnDetection["create_response"] != true {
+		t.Fatalf("turn_detection create_response = %#v, want true", turnDetection["create_response"])
+	}
+	if turnDetection["interrupt_response"] != true {
+		t.Fatalf("turn_detection interrupt_response = %#v, want true", turnDetection["interrupt_response"])
+	}
+}
+
 func TestRealtimeSessionSendsProtocolMessages(t *testing.T) {
 	messages := make(chan string, 32)
 	connected := make(chan *http.Request, 1)
