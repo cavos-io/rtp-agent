@@ -126,7 +126,7 @@ func NewOpenAISTT(apiKey string, model string, opts ...OpenAISTTOption) (*OpenAI
 func (s *OpenAISTT) Label() string    { return "openai.STT" }
 func (s *OpenAISTT) Provider() string { return "openai" }
 func (s *OpenAISTT) Capabilities() stt.STTCapabilities {
-	return stt.STTCapabilities{Streaming: s.useRealtime, InterimResults: s.useRealtime, Diarization: false, AlignedTranscript: "word", OfflineRecognize: true}
+	return stt.STTCapabilities{Streaming: s.useRealtime, InterimResults: s.useRealtime, Diarization: false, OfflineRecognize: true}
 }
 
 func (s *OpenAISTT) Stream(ctx context.Context, language string) (stt.RecognizeStream, error) {

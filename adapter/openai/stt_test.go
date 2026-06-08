@@ -87,11 +87,15 @@ func TestOpenAISpeechEventPreservesWordTimestamps(t *testing.T) {
 	}
 }
 
-func TestOpenAISTTCapabilitiesAdvertiseWordAlignment(t *testing.T) {
+func TestOpenAISTTCapabilitiesMatchReferenceAlignment(t *testing.T) {
 	provider := mustNewOpenAISTT(t, "test-key", "whisper-1")
 
-	if got := provider.Capabilities().AlignedTranscript; got != "word" {
-		t.Fatalf("AlignedTranscript = %q, want word", got)
+	caps := provider.Capabilities()
+	if caps.Streaming || caps.InterimResults {
+		t.Fatalf("capabilities = %+v, want non-realtime defaults", caps)
+	}
+	if got := caps.AlignedTranscript; got != "" {
+		t.Fatalf("AlignedTranscript = %q, want empty", got)
 	}
 }
 
@@ -235,8 +239,8 @@ func TestOpenAIRealtimeSTTCapabilitiesAndWebsocketRequestMatchReference(t *testi
 	)
 
 	caps := provider.Capabilities()
-	if !caps.Streaming || !caps.InterimResults || caps.AlignedTranscript != "word" {
-		t.Fatalf("capabilities = %+v, want realtime streaming/interim with existing word alignment", caps)
+	if !caps.Streaming || !caps.InterimResults || caps.AlignedTranscript != "" {
+		t.Fatalf("capabilities = %+v, want realtime streaming/interim without aligned transcript", caps)
 	}
 
 	wsURL := buildOpenAIRealtimeSTTWebsocketURL(provider)
