@@ -568,7 +568,7 @@ func openAIRealtimeUpdateOptionsMessageWithEventID(options llm.RealtimeSessionOp
 	if options.Voice != "" {
 		output["voice"] = options.Voice
 	}
-	if options.Speed > 0 {
+	if options.SpeedSet || options.Speed > 0 {
 		output["speed"] = options.Speed
 	}
 	if len(input) > 0 || len(output) > 0 {

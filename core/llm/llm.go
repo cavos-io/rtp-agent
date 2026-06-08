@@ -873,6 +873,7 @@ type RealtimeSessionOptions struct {
 	ToolChoice               ToolChoice
 	Voice                    string
 	Speed                    float64
+	SpeedSet                 bool
 	MaxResponseOutputTokens  any
 	Truncation               any
 	Tracing                  any

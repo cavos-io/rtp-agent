@@ -500,6 +500,23 @@ func TestRealtimeUpdateOptionsMessageMapsSpeed(t *testing.T) {
 	}
 }
 
+func TestRealtimeUpdateOptionsMessageMapsExplicitZeroSpeed(t *testing.T) {
+	msg := openAIRealtimeUpdateOptionsMessage(llm.RealtimeSessionOptions{
+		Speed:    0,
+		SpeedSet: true,
+	})
+
+	if msg["type"] != "session.update" {
+		t.Fatalf("message type = %#v, want session.update", msg["type"])
+	}
+	session := msg["session"].(map[string]any)
+	audio := session["audio"].(map[string]any)
+	output := audio["output"].(map[string]any)
+	if output["speed"] != 0.0 {
+		t.Fatalf("speed = %#v, want explicit zero", output["speed"])
+	}
+}
+
 func TestRealtimeUpdateOptionsMessageMapsMaxResponseOutputTokens(t *testing.T) {
 	msg := openAIRealtimeUpdateOptionsMessage(llm.RealtimeSessionOptions{
 		MaxResponseOutputTokens: 64,
