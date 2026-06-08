@@ -1128,7 +1128,10 @@ func (s *AgentSession) EmitFunctionToolsExecuted(ev FunctionToolsExecutedEvent) 
 	s.mu.Lock()
 	runState := s.runState
 	s.mu.Unlock()
-	for _, call := range ev.FunctionCalls {
+	for i, call := range ev.FunctionCalls {
+		if i >= len(ev.FunctionCallOutputs) || ev.FunctionCallOutputs[i] == nil {
+			continue
+		}
 		s.insertChatItem(call)
 		if runState != nil {
 			runState.RecordItem(call)

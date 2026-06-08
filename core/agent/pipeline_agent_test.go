@@ -1895,6 +1895,59 @@ func TestPipelineAgentEmitsFunctionToolsExecutedEvent(t *testing.T) {
 	}
 }
 
+func TestPipelineAgentStopResponseDoesNotAppendToolCallOrGenerateReply(t *testing.T) {
+	chatCtx := llm.NewChatContext()
+	l := &fakeGenerationLLM{
+		streams: []llm.LLMStream{
+			&fakeGenerationLLMStream{
+				chunks: []*llm.ChatChunk{
+					{Delta: &llm.ChoiceDelta{
+						ToolCalls: []llm.FunctionToolCall{{
+							Type:      "function",
+							Name:      "lookup",
+							CallID:    "call_lookup",
+							Arguments: `{}`,
+						}},
+					}},
+				},
+			},
+			&fakeGenerationLLMStream{
+				chunks: []*llm.ChatChunk{
+					{Delta: &llm.ChoiceDelta{Content: "should not run"}},
+				},
+			},
+		},
+	}
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	session.Tools = []llm.Tool{&fakeGenerationTool{name: "lookup", err: llm.StopResponse{}}}
+	agent := NewPipelineAgent(nil, nil, l, &fakePipelineTTS{}, chatCtx)
+	agent.session = session
+	agent.ctx = context.Background()
+
+	agent.generateReply()
+
+	if len(l.chatContexts) != 1 {
+		t.Fatalf("LLM chat contexts = %d, want only initial call after StopResponse", len(l.chatContexts))
+	}
+	if len(chatCtx.Items) != 0 {
+		t.Fatalf("chatCtx.Items = %#v, want no dangling function call after StopResponse", chatCtx.Items)
+	}
+	select {
+	case ev := <-session.FunctionToolsExecutedEvents():
+		if len(ev.FunctionCalls) != 1 || ev.FunctionCalls[0].CallID != "call_lookup" {
+			t.Fatalf("FunctionCalls = %#v, want call_lookup event", ev.FunctionCalls)
+		}
+		if len(ev.FunctionCallOutputs) != 1 || ev.FunctionCallOutputs[0] != nil {
+			t.Fatalf("FunctionCallOutputs = %#v, want nil output for StopResponse", ev.FunctionCallOutputs)
+		}
+		if ev.HasToolReply() {
+			t.Fatal("HasToolReply() = true, want false for StopResponse")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("FunctionToolsExecutedEvents did not receive StopResponse event")
+	}
+}
+
 func TestPipelineAgentScheduledReplyProvidesSpeechHandleToTools(t *testing.T) {
 	chatCtx := llm.NewChatContext()
 	l := &fakeGenerationLLM{
