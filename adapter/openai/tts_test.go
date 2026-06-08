@@ -121,6 +121,16 @@ func TestOpenAITTSLabelCapabilitiesAndUnsupportedStream(t *testing.T) {
 	}
 }
 
+func TestOpenAITTSProviderUsesReferenceBaseURLHost(t *testing.T) {
+	provider := mustNewOpenAITTS(t, "test-key", "", "",
+		WithOpenAITTSBaseURL("https://tts.openai.test/v1"),
+	)
+
+	if got := provider.Provider(); got != "tts.openai.test" {
+		t.Fatalf("Provider() = %q, want tts.openai.test", got)
+	}
+}
+
 func TestOpenAITTSSynthesizeUsesOpenAISpeechAPI(t *testing.T) {
 	var gotAuth string
 	var gotPath string

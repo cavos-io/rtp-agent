@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"net/url"
 	"os"
 	"strings"
 
@@ -129,8 +130,14 @@ func (t *OpenAITTS) UpdateOptions(opts ...OpenAITTSOption) {
 	}
 }
 
-func (t *OpenAITTS) Label() string    { return "openai.TTS" }
-func (t *OpenAITTS) Provider() string { return "openai" }
+func (t *OpenAITTS) Label() string { return "openai.TTS" }
+func (t *OpenAITTS) Provider() string {
+	u, err := url.Parse(t.baseURL)
+	if err != nil || u.Host == "" {
+		return "openai"
+	}
+	return u.Host
+}
 func (t *OpenAITTS) Capabilities() tts.TTSCapabilities {
 	return tts.TTSCapabilities{Streaming: false, AlignedTranscript: false}
 }
