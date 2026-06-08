@@ -569,6 +569,30 @@ func TestOpenAIRealtimeSTTStreamUpdateOptionsChangesLanguage(t *testing.T) {
 	}
 }
 
+func TestOpenAISTTUpdateOptionsPropagatesEmptyLanguageToActiveStream(t *testing.T) {
+	provider := mustNewOpenAISTT(t, "test-key", "",
+		WithOpenAISTTRealtime(true),
+	)
+	stream := &openAIRealtimeSTTStream{
+		state: &openAIRealtimeSTTMessageState{language: "id"},
+	}
+	provider.registerRealtimeSTTStream(stream)
+
+	provider.UpdateOptions(WithOpenAISTTLanguage(""))
+
+	events, err := openAIRealtimeSTTEventsFromMessage([]byte(`{
+		"type":"conversation.item.input_audio_transcription.delta",
+		"item_id":"item-1",
+		"delta":"hello"
+	}`), stream.state)
+	if err != nil {
+		t.Fatalf("events from message: %v", err)
+	}
+	if got := events[0].Alternatives[0].Language; got != "" {
+		t.Fatalf("language = %q, want empty after explicit language update", got)
+	}
+}
+
 func TestOpenAISTTUpdateOptionsPropagatesLanguageToActiveStream(t *testing.T) {
 	provider := mustNewOpenAISTT(t, "test-key", "gpt-4o-mini-transcribe",
 		WithOpenAISTTRealtime(true),

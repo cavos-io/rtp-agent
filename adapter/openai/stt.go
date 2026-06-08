@@ -37,6 +37,8 @@ type OpenAISTT struct {
 	baseURL         string
 	model           string
 	language        string
+	languageSet     bool
+	languageValue   string
 	detectLanguage  bool
 	detectOptionSet bool
 	prompt          string
@@ -62,6 +64,8 @@ func WithOpenAISTTModel(model string) OpenAISTTOption {
 
 func WithOpenAISTTLanguage(language string) OpenAISTTOption {
 	return func(s *OpenAISTT) {
+		s.languageSet = true
+		s.languageValue = language
 		s.language = language
 	}
 }
@@ -165,19 +169,24 @@ func (s *OpenAISTT) Capabilities() stt.STTCapabilities {
 }
 
 func (s *OpenAISTT) UpdateOptions(opts ...OpenAISTTOption) {
-	previousLanguage := s.language
 	previousDetectOptionSet := s.detectOptionSet
+	s.languageSet = false
+	s.languageValue = ""
 	s.detectOptionSet = false
 	for _, opt := range opts {
 		opt(s)
 	}
+	languageSet := s.languageSet
+	languageValue := s.languageValue
 	detectOptionSet := s.detectOptionSet
+	s.languageSet = false
+	s.languageValue = ""
 	s.detectOptionSet = previousDetectOptionSet || detectOptionSet
 	if detectOptionSet {
 		s.language = ""
 	}
-	if s.language != "" && s.language != previousLanguage {
-		s.updateRealtimeSTTStreamLanguage(s.language)
+	if languageSet {
+		s.updateRealtimeSTTStreamLanguage(languageValue)
 	}
 }
 
@@ -462,7 +471,7 @@ func (s *openAIRealtimeSTTStream) Flush() error {
 }
 
 func (s *openAIRealtimeSTTStream) UpdateOptions(language string) {
-	if s == nil || language == "" {
+	if s == nil {
 		return
 	}
 	if s.state == nil {
