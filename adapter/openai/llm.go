@@ -56,6 +56,15 @@ func WithOpenAILLMMaxCompletionTokens(maxCompletionTokens int) OpenAILLMOption {
 	}
 }
 
+func WithOpenAILLMStore(store bool) OpenAILLMOption {
+	return func(l *OpenAILLM) {
+		if l.extraParams == nil {
+			l.extraParams = map[string]any{}
+		}
+		l.extraParams["store"] = store
+	}
+}
+
 func WithOpenAILLMParallelToolCalls(parallelToolCalls bool) OpenAILLMOption {
 	return func(l *OpenAILLM) {
 		l.parallelToolCalls = parallelToolCalls
