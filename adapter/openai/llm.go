@@ -35,6 +35,15 @@ func WithOpenAILLMTemperature(temperature float64) OpenAILLMOption {
 	}
 }
 
+func WithOpenAILLMTopP(topP float64) OpenAILLMOption {
+	return func(l *OpenAILLM) {
+		if l.extraParams == nil {
+			l.extraParams = map[string]any{}
+		}
+		l.extraParams["top_p"] = topP
+	}
+}
+
 func NewOpenAILLM(apiKey string, model string, opts ...OpenAILLMOption) (*OpenAILLM, error) {
 	if apiKey == "" {
 		apiKey = os.Getenv(openAIAPIKeyEnv)
