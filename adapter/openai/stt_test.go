@@ -9,9 +9,11 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/cavos-io/rtp-agent/core/audio/model"
 	"github.com/cavos-io/rtp-agent/core/stt"
+	"github.com/gorilla/websocket"
 	goopenai "github.com/sashabaranov/go-openai"
 )
 
@@ -457,6 +459,79 @@ func TestOpenAIRealtimeSTTStreamMessagesMatchReference(t *testing.T) {
 	}
 	if commitMessage["type"] != "input_audio_buffer.commit" {
 		t.Fatalf("commit type = %#v, want input_audio_buffer.commit", commitMessage["type"])
+	}
+}
+
+func TestOpenAIRealtimeSTTStreamUpdateOptionsChangesLanguage(t *testing.T) {
+	stream := &openAIRealtimeSTTStream{
+		state: &openAIRealtimeSTTMessageState{language: "en"},
+	}
+
+	stream.UpdateOptions("id")
+
+	events, err := openAIRealtimeSTTEventsFromMessage([]byte(`{
+		"type":"conversation.item.input_audio_transcription.delta",
+		"item_id":"item-1",
+		"delta":"halo"
+	}`), stream.state)
+	if err != nil {
+		t.Fatalf("events from message: %v", err)
+	}
+	if got := events[0].Alternatives[0].Language; got != "id" {
+		t.Fatalf("language = %q, want id", got)
+	}
+}
+
+func TestOpenAISTTUpdateOptionsPropagatesLanguageToActiveStream(t *testing.T) {
+	provider := mustNewOpenAISTT(t, "test-key", "gpt-4o-mini-transcribe",
+		WithOpenAISTTRealtime(true),
+		WithOpenAISTTBaseURL("http://openai.test/v1"),
+	)
+	started := make(chan struct{})
+	sendDelta := make(chan struct{})
+	releaseServer := make(chan struct{})
+	provider.dialWebsocket = func(ctx context.Context, endpoint string, headers http.Header) (*websocket.Conn, *http.Response, error) {
+		dialer := newOpenAIRealtimeTestWebsocketDialer(t, func(conn *websocket.Conn, _ *http.Request) {
+			if _, _, err := conn.ReadMessage(); err != nil {
+				t.Errorf("session update read error = %v", err)
+				return
+			}
+			close(started)
+			<-sendDelta
+			if err := conn.WriteMessage(websocket.TextMessage, []byte(`{
+				"type":"conversation.item.input_audio_transcription.delta",
+				"item_id":"item-1",
+				"delta":"halo"
+			}`)); err != nil {
+				t.Errorf("write delta: %v", err)
+			}
+			<-releaseServer
+		})
+		return dialer(endpoint, headers)
+	}
+
+	stream, err := provider.Stream(context.Background(), "")
+	if err != nil {
+		t.Fatalf("Stream error = %v", err)
+	}
+	defer stream.Close()
+	defer close(releaseServer)
+
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("stream did not send initial session update")
+	}
+
+	provider.UpdateOptions(WithOpenAISTTLanguage("id"))
+	close(sendDelta)
+
+	event, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next error = %v", err)
+	}
+	if got := event.Alternatives[0].Language; got != "id" {
+		t.Fatalf("language = %q, want id", got)
 	}
 }
 

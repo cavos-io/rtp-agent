@@ -42,6 +42,8 @@ type OpenAISTT struct {
 	noiseReduction string
 	useRealtime    bool
 	dialWebsocket  openAIRealtimeSTTWebsocketDialer
+	streamsMu      sync.Mutex
+	streams        map[*openAIRealtimeSTTStream]struct{}
 }
 
 type OpenAISTTOption func(*OpenAISTT)
@@ -147,8 +149,45 @@ func (s *OpenAISTT) Capabilities() stt.STTCapabilities {
 }
 
 func (s *OpenAISTT) UpdateOptions(opts ...OpenAISTTOption) {
+	previousLanguage := s.language
 	for _, opt := range opts {
 		opt(s)
+	}
+	if s.language != "" && s.language != previousLanguage {
+		s.updateRealtimeSTTStreamLanguage(s.language)
+	}
+}
+
+func (s *OpenAISTT) registerRealtimeSTTStream(stream *openAIRealtimeSTTStream) {
+	if s == nil || stream == nil {
+		return
+	}
+	s.streamsMu.Lock()
+	defer s.streamsMu.Unlock()
+	if s.streams == nil {
+		s.streams = map[*openAIRealtimeSTTStream]struct{}{}
+	}
+	s.streams[stream] = struct{}{}
+}
+
+func (s *OpenAISTT) unregisterRealtimeSTTStream(stream *openAIRealtimeSTTStream) {
+	if s == nil || stream == nil {
+		return
+	}
+	s.streamsMu.Lock()
+	defer s.streamsMu.Unlock()
+	delete(s.streams, stream)
+}
+
+func (s *OpenAISTT) updateRealtimeSTTStreamLanguage(language string) {
+	s.streamsMu.Lock()
+	streams := make([]*openAIRealtimeSTTStream, 0, len(s.streams))
+	for stream := range s.streams {
+		streams = append(streams, stream)
+	}
+	s.streamsMu.Unlock()
+	for _, stream := range streams {
+		stream.UpdateOptions(language)
 	}
 }
 
@@ -183,7 +222,9 @@ func (s *OpenAISTT) Stream(ctx context.Context, language string) (stt.RecognizeS
 			language: s.language,
 			timing:   map[string]openAIRealtimeSTTTiming{},
 		},
+		owner: s,
 	}
+	s.registerRealtimeSTTStream(stream)
 	go stream.readLoop()
 	return stream, nil
 }
@@ -358,6 +399,7 @@ type openAIRealtimeSTTStream struct {
 	mu     sync.Mutex
 	closed bool
 	state  *openAIRealtimeSTTMessageState
+	owner  *OpenAISTT
 }
 
 func (s *openAIRealtimeSTTStream) PushFrame(frame *model.AudioFrame) error {
@@ -392,6 +434,16 @@ func (s *openAIRealtimeSTTStream) Flush() error {
 	return s.conn.WriteMessage(websocket.TextMessage, message)
 }
 
+func (s *openAIRealtimeSTTStream) UpdateOptions(language string) {
+	if s == nil || language == "" {
+		return
+	}
+	if s.state == nil {
+		s.state = &openAIRealtimeSTTMessageState{}
+	}
+	s.state.language = language
+}
+
 func (s *openAIRealtimeSTTStream) Close() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -399,6 +451,9 @@ func (s *openAIRealtimeSTTStream) Close() error {
 		return nil
 	}
 	s.closed = true
+	if s.owner != nil {
+		s.owner.unregisterRealtimeSTTStream(s)
+	}
 	s.cancel()
 	_ = s.conn.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""), time.Now().Add(time.Second))
 	return s.conn.Close()
