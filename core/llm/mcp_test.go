@@ -53,8 +53,9 @@ func TestMCPProxyToolTreatsEmptyResultAsToolError(t *testing.T) {
 	if !errors.As(err, &toolErr) {
 		t.Fatalf("error = %T %v, want ToolError", err, err)
 	}
-	if toolErr.Message == "" {
-		t.Fatal("ToolError message is empty, want explanation for empty MCP result")
+	want := "Tool 'lookup' completed without producing a result. This might indicate an issue with internal processing."
+	if toolErr.Message != want {
+		t.Fatalf("ToolError message = %q, want %q", toolErr.Message, want)
 	}
 }
 
@@ -149,6 +150,29 @@ func TestMCPServerHTTPListsAndExecutesTools(t *testing.T) {
 	}
 }
 
+func TestMCPServerHTTPDetectsReferenceTransportFromURL(t *testing.T) {
+	tests := []struct {
+		name string
+		url  string
+		want string
+	}{
+		{name: "streamable http mcp path", url: "https://mcp.test/mcp", want: "streamable_http"},
+		{name: "streamable http upper path trailing slash", url: "https://mcp.test/API/MCP/", want: "streamable_http"},
+		{name: "sse path", url: "https://mcp.test/sse", want: "sse"},
+		{name: "backward compatible default", url: "https://mcp.test/rpc", want: "sse"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			server := NewMCPServerHTTP(tt.url)
+
+			if server.TransportType != tt.want {
+				t.Fatalf("TransportType = %q, want %q", server.TransportType, tt.want)
+			}
+		})
+	}
+}
+
 func TestMCPServerHTTPInitializedReflectsLifecycle(t *testing.T) {
 	httpClient := newMCPTestHTTPClient(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var req jsonRPCRequest
@@ -229,6 +253,26 @@ func TestMCPServerHTTPSetHeadersAppliesToSubsequentRequests(t *testing.T) {
 	})
 	if _, err := server.ListTools(context.Background()); err != nil {
 		t.Fatalf("ListTools() error = %v", err)
+	}
+}
+
+func TestMCPServersRejectListToolsBeforeInitialize(t *testing.T) {
+	tests := []struct {
+		name   string
+		server MCPServer
+	}{
+		{name: "http", server: NewMCPServerHTTP("https://mcp.test/mcp")},
+		{name: "stdio", server: NewMCPServerStdio("mcp-server", nil)},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := tt.server.ListTools(context.Background())
+
+			if err == nil || !strings.Contains(err.Error(), "MCPServer isn't initialized") {
+				t.Fatalf("ListTools() error = %v, want uninitialized MCPServer error", err)
+			}
+		})
 	}
 }
 

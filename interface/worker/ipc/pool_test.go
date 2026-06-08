@@ -229,13 +229,29 @@ func TestProcPoolTargetIdleProcesses(t *testing.T) {
 	}
 
 	pool.SetTargetIdleProcesses(10)
-	if got := pool.TargetIdleProcesses(); got != 4 {
-		t.Fatalf("TargetIdleProcesses after high value = %d, want capped max", got)
+	if got := pool.TargetIdleProcesses(); got != 10 {
+		t.Fatalf("TargetIdleProcesses after high value = %d, want raw configured value", got)
 	}
 
 	pool.SetTargetIdleProcesses(-1)
-	if got := pool.TargetIdleProcesses(); got != 0 {
-		t.Fatalf("TargetIdleProcesses after negative value = %d, want 0", got)
+	if got := pool.TargetIdleProcesses(); got != -1 {
+		t.Fatalf("TargetIdleProcesses after negative value = %d, want raw configured value", got)
+	}
+}
+
+func TestProcPoolHighTargetIdleProcessesStillWarmsOnlyCapacity(t *testing.T) {
+	pool := NewProcPool(2, ExecutorTypeThread, nil)
+	pool.SetTargetIdleProcesses(10)
+
+	if err := pool.Start(context.Background()); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+
+	if got := len(pool.GetExecutors()); got != 2 {
+		t.Fatalf("warmed executors = %d, want capped process capacity", got)
+	}
+	if got := pool.TargetIdleProcesses(); got != 10 {
+		t.Fatalf("TargetIdleProcesses = %d, want raw configured value", got)
 	}
 }
 

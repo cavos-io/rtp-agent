@@ -972,6 +972,30 @@ func TestAgentSessionAudioInputHookConfiguresReplacementPipelineAssistant(t *tes
 	}
 }
 
+func TestPipelineAgentSessionOptionDisablesTTSTextTransforms(t *testing.T) {
+	providerStream := &fakePipelineTTSStream{
+		frames: []*model.AudioFrame{{
+			Data:              []byte("audio"),
+			SampleRate:        24000,
+			NumChannels:       1,
+			SamplesPerChannel: 2,
+		}},
+	}
+	baseAgent := NewAgent("test")
+	session := NewAgentSession(baseAgent, nil, AgentSessionOptions{
+		DisableTTSTextTransforms: true,
+	})
+	agent := NewPipelineAgent(nil, nil, nil, &fakePipelineTTS{stream: providerStream}, llm.NewChatContext())
+
+	if _, err := agent.synthesizeSpeech(context.Background(), session, singleTextChannel("Say **bold** now")); err != nil {
+		t.Fatalf("synthesizeSpeech error = %v", err)
+	}
+
+	if got, want := providerStream.text.String(), "Say **bold** now"; got != want {
+		t.Fatalf("pushed TTS text = %q, want raw text %q", got, want)
+	}
+}
+
 func TestPipelineAgentUsesAgentTTSAlignedTranscriptOverride(t *testing.T) {
 	chatCtx := llm.NewChatContext()
 	l := &fakeGenerationLLM{
@@ -1776,9 +1800,64 @@ func TestPipelineAgentForcesNoToolsAfterMaxToolSteps(t *testing.T) {
 					}},
 				},
 			},
+			&fakeGenerationLLMStream{
+				chunks: []*llm.ChatChunk{
+					{Delta: &llm.ChoiceDelta{Content: "fallback answer"}},
+				},
+			},
 		},
 	}
 	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{MaxToolSteps: 1})
+	tool := &countingPipelineTool{name: "lookup", result: "done"}
+	session.Tools = []llm.Tool{tool}
+	agent := NewPipelineAgent(nil, nil, l, &fakePipelineTTS{}, chatCtx)
+	agent.session = session
+	agent.ctx = context.Background()
+
+	agent.generateReply()
+
+	if len(l.calls) != 3 {
+		t.Fatalf("LLM Chat calls = %d, want 3", len(l.calls))
+	}
+	if l.calls[0].ToolChoice != nil {
+		t.Fatalf("first ToolChoice = %#v, want nil", l.calls[0].ToolChoice)
+	}
+	if l.calls[1].ToolChoice != nil {
+		t.Fatalf("second ToolChoice = %#v, want nil before max step is exceeded", l.calls[1].ToolChoice)
+	}
+	if l.calls[2].ToolChoice != "none" {
+		t.Fatalf("third ToolChoice = %#v, want none after max tool steps", l.calls[2].ToolChoice)
+	}
+	if tool.calls != 2 {
+		t.Fatalf("tool executions = %d, want two tool calls before tool_choice none", tool.calls)
+	}
+}
+
+func TestPipelineAgentExplicitZeroMaxToolStepsForcesNoToolsAfterInitialTool(t *testing.T) {
+	chatCtx := llm.NewChatContext()
+	l := &fakeGenerationLLM{
+		stream: &fakeGenerationLLMStream{},
+		streams: []llm.LLMStream{
+			toolCallStream("call_lookup_initial"),
+			&fakeGenerationLLMStream{
+				chunks: []*llm.ChatChunk{
+					{Delta: &llm.ChoiceDelta{
+						Content: "final answer",
+						ToolCalls: []llm.FunctionToolCall{{
+							Type:      "function",
+							Name:      "lookup",
+							CallID:    "call_lookup_after_limit",
+							Arguments: `{}`,
+						}},
+					}},
+				},
+			},
+		},
+	}
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{
+		MaxToolSteps:    0,
+		MaxToolStepsSet: true,
+	})
 	tool := &countingPipelineTool{name: "lookup", result: "done"}
 	session.Tools = []llm.Tool{tool}
 	agent := NewPipelineAgent(nil, nil, l, &fakePipelineTTS{}, chatCtx)
@@ -1794,10 +1873,10 @@ func TestPipelineAgentForcesNoToolsAfterMaxToolSteps(t *testing.T) {
 		t.Fatalf("first ToolChoice = %#v, want nil", l.calls[0].ToolChoice)
 	}
 	if l.calls[1].ToolChoice != "none" {
-		t.Fatalf("second ToolChoice = %#v, want none", l.calls[1].ToolChoice)
+		t.Fatalf("second ToolChoice = %#v, want none after explicit zero max tool steps", l.calls[1].ToolChoice)
 	}
 	if tool.calls != 1 {
-		t.Fatalf("tool executions = %d, want only first tool call before tool_choice none", tool.calls)
+		t.Fatalf("tool executions = %d, want only initial tool call before tool_choice none", tool.calls)
 	}
 }
 
@@ -1808,9 +1887,18 @@ func TestPipelineAgentDefaultsMaxToolStepsToThree(t *testing.T) {
 			toolCallStream("call_lookup_1"),
 			toolCallStream("call_lookup_2"),
 			toolCallStream("call_lookup_3"),
+			toolCallStream("call_lookup_4"),
 			&fakeGenerationLLMStream{
 				chunks: []*llm.ChatChunk{
-					{Delta: &llm.ChoiceDelta{Content: "final answer"}},
+					{Delta: &llm.ChoiceDelta{
+						Content: "final answer",
+						ToolCalls: []llm.FunctionToolCall{{
+							Type:      "function",
+							Name:      "lookup",
+							CallID:    "call_lookup_after_default_limit",
+							Arguments: `{}`,
+						}},
+					}},
 				},
 			},
 		},
@@ -1823,16 +1911,16 @@ func TestPipelineAgentDefaultsMaxToolStepsToThree(t *testing.T) {
 
 	agent.generateReply()
 
-	if len(l.calls) != 4 {
-		t.Fatalf("LLM Chat calls = %d, want 4", len(l.calls))
+	if len(l.calls) != 5 {
+		t.Fatalf("LLM Chat calls = %d, want 5", len(l.calls))
 	}
-	for i := 0; i < 3; i++ {
+	for i := 0; i < 4; i++ {
 		if l.calls[i].ToolChoice != nil {
 			t.Fatalf("call %d ToolChoice = %#v, want nil", i+1, l.calls[i].ToolChoice)
 		}
 	}
-	if l.calls[3].ToolChoice != "none" {
-		t.Fatalf("fourth ToolChoice = %#v, want none after default max tool steps", l.calls[3].ToolChoice)
+	if l.calls[4].ToolChoice != "none" {
+		t.Fatalf("fifth ToolChoice = %#v, want none after default max tool steps", l.calls[4].ToolChoice)
 	}
 }
 

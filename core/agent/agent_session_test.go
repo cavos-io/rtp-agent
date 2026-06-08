@@ -1044,6 +1044,69 @@ func TestNewAgentSessionPreservesExplicitFalseTurnOptions(t *testing.T) {
 	}
 }
 
+func TestNewAgentSessionPreservesExplicitFalseAllowInterruptions(t *testing.T) {
+	agent := NewAgent("test")
+	session := NewAgentSession(agent, nil, AgentSessionOptions{
+		AllowInterruptions:    false,
+		AllowInterruptionsSet: true,
+	})
+
+	if session.Options.AllowInterruptions {
+		t.Fatal("AllowInterruptions = true, want explicit false")
+	}
+	activity := NewAgentActivity(agent, session)
+	if activity.AllowInterruptions() {
+		t.Fatal("AgentActivity.AllowInterruptions() = true, want explicit session false")
+	}
+	if activity.InterruptionEnabled() {
+		t.Fatal("AgentActivity.InterruptionEnabled() = true, want false when interruptions are disabled")
+	}
+}
+
+func TestNewAgentSessionPreservesExplicitFalseDiscardAudioIfUninterruptible(t *testing.T) {
+	agent := NewAgent("test")
+	session := NewAgentSession(agent, nil, AgentSessionOptions{
+		DiscardAudioIfUninterruptible:    false,
+		DiscardAudioIfUninterruptibleSet: true,
+	})
+
+	if session.Options.DiscardAudioIfUninterruptible {
+		t.Fatal("DiscardAudioIfUninterruptible = true, want explicit false")
+	}
+	session.activity = NewAgentActivity(agent, session)
+	session.activity.currentSpeech = NewSpeechHandle(false, DefaultInputDetails())
+	if session.shouldSilenceInputAudio() {
+		t.Fatal("shouldSilenceInputAudio() = true, want false when discard audio is explicitly disabled")
+	}
+}
+
+func TestNewAgentSessionPreservesExplicitZeroMaxToolSteps(t *testing.T) {
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{
+		MaxToolSteps:    0,
+		MaxToolStepsSet: true,
+	})
+
+	if session.Options.MaxToolSteps != 0 {
+		t.Fatalf("MaxToolSteps = %d, want explicit zero", session.Options.MaxToolSteps)
+	}
+}
+
+func TestNewAgentSessionPreservesExplicitZeroMinInterruptionDuration(t *testing.T) {
+	agent := NewAgent("test")
+	session := NewAgentSession(agent, nil, AgentSessionOptions{
+		MinInterruptionDuration:    0,
+		MinInterruptionDurationSet: true,
+	})
+
+	if session.Options.MinInterruptionDuration != 0 {
+		t.Fatalf("MinInterruptionDuration = %v, want explicit zero preserved", session.Options.MinInterruptionDuration)
+	}
+	activity := NewAgentActivity(agent, session)
+	if got := activity.minInterruptionDuration(); got != 0 {
+		t.Fatalf("AgentActivity.minInterruptionDuration() = %v, want explicit zero", got)
+	}
+}
+
 func TestNewAgentSessionPreservesExplicitZeroFalseInterruptionTimeout(t *testing.T) {
 	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{
 		FalseInterruptionTimeout:    0,
@@ -1052,6 +1115,40 @@ func TestNewAgentSessionPreservesExplicitZeroFalseInterruptionTimeout(t *testing
 
 	if session.Options.FalseInterruptionTimeout != 0 {
 		t.Fatalf("FalseInterruptionTimeout = %v, want explicit zero preserved", session.Options.FalseInterruptionTimeout)
+	}
+}
+
+func TestNewAgentSessionPreservesExplicitZeroMinEndpointingDelay(t *testing.T) {
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{
+		MinEndpointingDelay:    0,
+		MinEndpointingDelaySet: true,
+	})
+
+	if session.Options.MinEndpointingDelay != 0 {
+		t.Fatalf("MinEndpointingDelay = %v, want explicit zero preserved", session.Options.MinEndpointingDelay)
+	}
+	if session.Options.Endpointing == nil {
+		t.Fatal("Endpointing = nil, want default endpointing policy")
+	}
+	if got := session.Options.Endpointing.MinDelay(); got != 0 {
+		t.Fatalf("Endpointing.MinDelay() = %v, want explicit zero", got)
+	}
+}
+
+func TestNewAgentSessionPreservesExplicitZeroMaxEndpointingDelay(t *testing.T) {
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{
+		MaxEndpointingDelay:    0,
+		MaxEndpointingDelaySet: true,
+	})
+
+	if session.Options.MaxEndpointingDelay != 0 {
+		t.Fatalf("MaxEndpointingDelay = %v, want explicit zero preserved", session.Options.MaxEndpointingDelay)
+	}
+	if session.Options.Endpointing == nil {
+		t.Fatal("Endpointing = nil, want default endpointing policy")
+	}
+	if got := session.Options.Endpointing.MaxDelay(); got != 0 {
+		t.Fatalf("Endpointing.MaxDelay() = %v, want explicit zero", got)
 	}
 }
 

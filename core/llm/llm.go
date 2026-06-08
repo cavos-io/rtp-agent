@@ -572,10 +572,10 @@ func DefaultAPIConnectOptions() APIConnectOptions {
 
 func (o APIConnectOptions) Validate() error {
 	if o.MaxRetry < 0 {
-		return errors.New("max retry must be greater than or equal to 0")
+		return errors.New("max_retry must be greater than or equal to 0")
 	}
 	if o.RetryInterval < 0 {
-		return errors.New("retry interval must be greater than or equal to 0")
+		return errors.New("retry_interval must be greater than or equal to 0")
 	}
 	if o.Timeout < 0 {
 		return errors.New("timeout must be greater than or equal to 0")

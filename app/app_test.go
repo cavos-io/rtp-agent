@@ -3339,6 +3339,24 @@ func TestDefaultConfigFromEnvConfiguresTTSTextReplacements(t *testing.T) {
 	}
 }
 
+func TestDefaultConfigFromEnvDisablesTTSTextTransforms(t *testing.T) {
+	t.Setenv("RTP_AGENT_DISABLE_TTS_TEXT_TRANSFORMS", "true")
+
+	app, err := NewApp(DefaultConfigFromEnv())
+	if err != nil {
+		t.Fatalf("NewApp() error = %v", err)
+	}
+	if !app.Config.DisableTTSTextTransforms {
+		t.Fatal("Config.DisableTTSTextTransforms = false, want true")
+	}
+	if app.Session == nil {
+		t.Fatal("Session is nil")
+	}
+	if !app.Session.Options.DisableTTSTextTransforms {
+		t.Fatal("Session.Options.DisableTTSTextTransforms = false, want true")
+	}
+}
+
 func TestDefaultConfigFromEnvConfiguresBackgroundAudio(t *testing.T) {
 	t.Setenv("RTP_AGENT_BACKGROUND_AUDIO_AMBIENT", "city-ambience.ogg")
 	t.Setenv("RTP_AGENT_BACKGROUND_AUDIO_THINKING", "/tmp/thinking.wav")

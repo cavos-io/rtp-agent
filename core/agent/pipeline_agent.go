@@ -451,7 +451,7 @@ func (va *PipelineAgent) generateReplyWithOptions(opts pipelineReplyOptions) {
 			activeToolChoice = opts.ToolChoice
 			chatOptions = append(chatOptions, llm.WithToolChoice(opts.ToolChoice))
 		}
-		if session.Options.MaxToolSteps > 0 && toolSteps >= session.Options.MaxToolSteps {
+		if toolSteps > session.Options.MaxToolSteps {
 			activeToolChoice = "none"
 			chatOptions = append(chatOptions, llm.WithToolChoice("none"))
 		}
@@ -729,6 +729,9 @@ func (va *PipelineAgent) ttsInferenceOptions(session *AgentSession) []TTSInferen
 	}
 	if session != nil && len(session.Options.TTSTextReplacements) > 0 {
 		opts = append(opts, WithTTSTextReplacements(session.Options.TTSTextReplacements))
+	}
+	if session != nil && session.Options.DisableTTSTextTransforms {
+		opts = append(opts, WithTTSTextTransformsDisabled())
 	}
 	if va.useTTSAlignedTranscript(session) {
 		opts = append(opts, WithTTSPreserveTimedTranscript())

@@ -141,11 +141,11 @@ func ParseFunctionArguments(jsonArguments string) (map[string]any, error) {
 	var value any
 	if err := json.Unmarshal([]byte(jsonArguments), &value); err != nil {
 		repaired := repairFunctionArguments(jsonArguments)
-		if repaired == jsonArguments {
-			return nil, fmt.Errorf("could not parse function arguments as JSON: %w", err)
+		if repaired == "" || repaired == jsonArguments {
+			return nil, fmt.Errorf("could not parse function arguments as JSON: %w: %.200s", err, jsonArguments)
 		}
 		if retryErr := json.Unmarshal([]byte(repaired), &value); retryErr != nil {
-			return nil, fmt.Errorf("could not parse function arguments as JSON: %w", err)
+			return nil, fmt.Errorf("could not parse function arguments as JSON: %w: %.200s", err, jsonArguments)
 		}
 		value = cleanRepairedFunctionArguments(value)
 	}
@@ -165,9 +165,27 @@ func ParseFunctionArguments(jsonArguments string) (map[string]any, error) {
 	}
 	args, ok := value.(map[string]any)
 	if !ok {
-		return nil, fmt.Errorf("expected object from function arguments, got %T", value)
+		return nil, fmt.Errorf("expected dict from function arguments, got %s: %.200s", functionArgumentTypeName(value), jsonArguments)
 	}
 	return args, nil
+}
+
+func functionArgumentTypeName(value any) string {
+	switch number := value.(type) {
+	case []any:
+		return "list"
+	case string:
+		return "str"
+	case bool:
+		return "bool"
+	case float64:
+		if number == float64(int64(number)) {
+			return "int"
+		}
+		return "float"
+	default:
+		return fmt.Sprintf("%T", value)
+	}
 }
 
 func repairFunctionArguments(value string) string {
@@ -311,7 +329,7 @@ func MakeFunctionCallOutput(fncCall FunctionCall, output any, exception error) F
 
 	outputString := ""
 	if output != nil {
-		outputString = fmt.Sprint(output)
+		outputString = functionOutputString(output)
 	}
 
 	return FunctionCallResult{
@@ -502,6 +520,61 @@ func isValidFunctionOutput(value any) bool {
 			}
 		}
 		return true
+	default:
+		return false
+	}
+}
+
+func functionOutputString(value any) string {
+	if isFalsyFunctionOutput(value) {
+		return ""
+	}
+	return fmt.Sprint(value)
+}
+
+func isFalsyFunctionOutput(value any) bool {
+	if value == nil {
+		return true
+	}
+	switch v := value.(type) {
+	case string:
+		return v == ""
+	case bool:
+		return !v
+	case int:
+		return v == 0
+	case int8:
+		return v == 0
+	case int16:
+		return v == 0
+	case int32:
+		return v == 0
+	case int64:
+		return v == 0
+	case uint:
+		return v == 0
+	case uint8:
+		return v == 0
+	case uint16:
+		return v == 0
+	case uint32:
+		return v == 0
+	case uint64:
+		return v == 0
+	case float32:
+		return v == 0
+	case float64:
+		return v == 0
+	case complex64:
+		return v == 0
+	case complex128:
+		return v == 0
+	}
+
+	v := reflect.ValueOf(value)
+	switch v.Kind() {
+	case reflect.Array, reflect.Slice, reflect.Map:
+		return v.Len() == 0
 	default:
 		return false
 	}

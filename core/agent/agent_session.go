@@ -37,15 +37,21 @@ const (
 
 type AgentSessionOptions struct {
 	AllowInterruptions               bool
+	AllowInterruptionsSet            bool
 	DiscardAudioIfUninterruptible    bool
+	DiscardAudioIfUninterruptibleSet bool
 	MinInterruptionDuration          float64
+	MinInterruptionDurationSet       bool
 	MinInterruptionWords             int
 	MinEndpointingDelay              float64
+	MinEndpointingDelaySet           bool
 	MaxEndpointingDelay              float64
+	MaxEndpointingDelaySet           bool
 	EndpointingMode                  string
 	EndpointingAlpha                 float64
 	Endpointing                      Endpointing
 	MaxToolSteps                     int
+	MaxToolStepsSet                  bool
 	UserAwayTimeout                  float64
 	UserAwayTimeoutSet               bool
 	DisableUserAwayTimeout           bool
@@ -57,6 +63,7 @@ type AgentSessionOptions struct {
 	UseTTSAlignedTranscript          bool
 	TTSStreamPacer                   *tts.SentenceStreamPacerOptions
 	TTSTextReplacements              map[string]string
+	DisableTTSTextTransforms         bool
 	LLMParallelToolCalls             *bool
 	LLMExtraParams                   map[string]any
 	LLMResponseFormat                map[string]any
@@ -686,21 +693,25 @@ func NewAgentSession(agent AgentInterface, room *lksdk.Room, opts AgentSessionOp
 }
 
 func withAgentSessionOptionDefaults(opts AgentSessionOptions) AgentSessionOptions {
-	opts.AllowInterruptions = true
-	opts.DiscardAudioIfUninterruptible = true
-	if opts.MinInterruptionDuration == 0 {
+	if !opts.AllowInterruptionsSet {
+		opts.AllowInterruptions = true
+	}
+	if !opts.DiscardAudioIfUninterruptibleSet {
+		opts.DiscardAudioIfUninterruptible = true
+	}
+	if !opts.MinInterruptionDurationSet && opts.MinInterruptionDuration == 0 {
 		opts.MinInterruptionDuration = 0.5
 	}
-	if opts.MinEndpointingDelay == 0 {
+	if !opts.MinEndpointingDelaySet && opts.MinEndpointingDelay == 0 {
 		opts.MinEndpointingDelay = 0.5
 	}
-	if opts.MaxEndpointingDelay == 0 {
+	if !opts.MaxEndpointingDelaySet && opts.MaxEndpointingDelay == 0 {
 		opts.MaxEndpointingDelay = 3.0
 	}
 	if opts.Endpointing == nil {
 		opts.Endpointing = CreateEndpointing(opts.EndpointingMode, opts.MinEndpointingDelay, opts.MaxEndpointingDelay, opts.EndpointingAlpha)
 	}
-	if opts.MaxToolSteps == 0 {
+	if !opts.MaxToolStepsSet && opts.MaxToolSteps == 0 {
 		opts.MaxToolSteps = 3
 	}
 	if !opts.DisableUserAwayTimeout && !opts.UserAwayTimeoutSet && opts.UserAwayTimeout == 0 {

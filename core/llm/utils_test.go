@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"strings"
 	"testing"
 )
 
@@ -46,6 +47,18 @@ func TestParseFunctionArgumentsUnwrapsNestedJSONString(t *testing.T) {
 
 	if args["city"] != "Paris" {
 		t.Fatalf("args = %#v, want nested JSON object", args)
+	}
+}
+
+func TestParseFunctionArgumentsRejectsNumericNonObjectWithReferenceError(t *testing.T) {
+	_, err := ParseFunctionArguments(`3`)
+	if err == nil {
+		t.Fatal("ParseFunctionArguments(number) error = nil, want error")
+	}
+
+	want := "expected dict from function arguments, got int: 3"
+	if err.Error() != want {
+		t.Fatalf("ParseFunctionArguments(number) error = %q, want %q", err.Error(), want)
 	}
 }
 
@@ -143,6 +156,34 @@ func TestParseFunctionArgumentsRejectsNonObject(t *testing.T) {
 	}
 }
 
+func TestParseFunctionArgumentsRejectsNonObjectWithReferenceError(t *testing.T) {
+	_, err := ParseFunctionArguments(`["Paris"]`)
+	if err == nil {
+		t.Fatal("ParseFunctionArguments(array) error = nil, want error")
+	}
+
+	want := `expected dict from function arguments, got list: ["Paris"]`
+	if err.Error() != want {
+		t.Fatalf("ParseFunctionArguments(array) error = %q, want %q", err.Error(), want)
+	}
+}
+
+func TestParseFunctionArgumentsReportsRawPrefixWhenRepairIsEmpty(t *testing.T) {
+	const raw = `<|im_end|>`
+
+	_, err := ParseFunctionArguments(raw)
+	if err == nil {
+		t.Fatal("ParseFunctionArguments(template token) error = nil, want error")
+	}
+
+	if !strings.HasPrefix(err.Error(), "could not parse function arguments as JSON: ") {
+		t.Fatalf("ParseFunctionArguments(template token) error = %q, want could-not-parse category", err.Error())
+	}
+	if !strings.HasSuffix(err.Error(), ": "+raw) {
+		t.Fatalf("ParseFunctionArguments(template token) error = %q, want raw argument prefix suffix", err.Error())
+	}
+}
+
 func TestMakeFunctionCallOutputUsesToolErrorMessage(t *testing.T) {
 	call := FunctionCall{CallID: "call_lookup", Name: "lookup", Arguments: "{}"}
 
@@ -226,6 +267,35 @@ func TestMakeFunctionCallOutputStringifiesValidOutputs(t *testing.T) {
 	}
 	if result.RawOutput != 7 {
 		t.Fatalf("RawOutput = %#v, want original output", result.RawOutput)
+	}
+}
+
+func TestMakeFunctionCallOutputUsesEmptyStringForFalsyOutputs(t *testing.T) {
+	call := FunctionCall{CallID: "call_lookup", Name: "lookup", Arguments: "{}"}
+
+	tests := []struct {
+		name   string
+		output any
+	}{
+		{name: "false", output: false},
+		{name: "zero int", output: 0},
+		{name: "zero float", output: 0.0},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := MakeFunctionCallOutput(call, tt.output, nil)
+
+			if result.FncCallOut == nil {
+				t.Fatal("FncCallOut = nil, want successful output")
+			}
+			if result.FncCallOut.IsError || result.FncCallOut.Output != "" {
+				t.Fatalf("FncCallOut = %#v, want empty successful output", result.FncCallOut)
+			}
+			if result.RawOutput != tt.output {
+				t.Fatalf("RawOutput = %#v, want original output %#v", result.RawOutput, tt.output)
+			}
+		})
 	}
 }
 

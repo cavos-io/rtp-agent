@@ -428,6 +428,36 @@ func TestPerformTTSInferenceFiltersMarkdownAcrossChunks(t *testing.T) {
 	}
 }
 
+func TestPerformTTSInferenceCanDisableTextTransforms(t *testing.T) {
+	providerStream := newEndInputGenerationTTSStream()
+	provider := &fakeGenerationTTS{stream: providerStream}
+	textCh := make(chan string, 2)
+	textCh <- "Say **bo"
+	textCh <- "ld** now"
+	close(textCh)
+
+	data, err := PerformTTSInference(context.Background(), provider, textCh, WithTTSTextTransformsDisabled())
+	if err != nil {
+		t.Fatalf("PerformTTSInference error = %v", err)
+	}
+	<-data.AudioCh
+
+	got := providerStream.calls
+	if len(got) == 0 || got[len(got)-1] != "end_input" {
+		t.Fatalf("stream calls = %#v, want final end_input", got)
+	}
+	var pushed strings.Builder
+	for _, call := range got[:len(got)-1] {
+		if !strings.HasPrefix(call, "push:") {
+			t.Fatalf("stream calls = %#v, want only push calls before end_input", got)
+		}
+		pushed.WriteString(strings.TrimPrefix(call, "push:"))
+	}
+	if want := "Say **bold** now"; pushed.String() != want {
+		t.Fatalf("pushed text = %q, want %q; calls = %#v", pushed.String(), want, got)
+	}
+}
+
 func TestPerformTTSInferenceAppliesTextReplacements(t *testing.T) {
 	providerStream := newEndInputGenerationTTSStream()
 	provider := &fakeGenerationTTS{stream: providerStream}

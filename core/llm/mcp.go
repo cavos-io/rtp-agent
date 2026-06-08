@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"strings"
@@ -47,10 +48,24 @@ type MCPServerHTTP struct {
 
 func NewMCPServerHTTP(url string) *MCPServerHTTP {
 	return &MCPServerHTTP{
-		URL:        url,
-		client:     http.DefaultClient,
-		cacheDirty: true,
+		URL:           url,
+		TransportType: detectMCPHTTPTransportType(url),
+		client:        http.DefaultClient,
+		cacheDirty:    true,
 	}
+}
+
+func detectMCPHTTPTransportType(rawURL string) string {
+	parsed, err := url.Parse(rawURL)
+	path := rawURL
+	if err == nil {
+		path = parsed.Path
+	}
+	path = strings.TrimRight(strings.ToLower(path), "/")
+	if strings.HasSuffix(path, "/mcp") {
+		return "streamable_http"
+	}
+	return "sse"
 }
 
 func (s *MCPServerHTTP) SetHTTPClient(client *http.Client) {
@@ -94,6 +109,9 @@ func (s *MCPServerHTTP) Initialize(ctx context.Context) error {
 }
 
 func (s *MCPServerHTTP) ListTools(ctx context.Context) ([]Tool, error) {
+	if !s.Initialized() {
+		return nil, fmt.Errorf("MCPServer isn't initialized")
+	}
 	if tools, ok := s.cachedTools(); ok {
 		return tools, nil
 	}
@@ -448,6 +466,9 @@ func (s *MCPServerStdio) Initialize(ctx context.Context) error {
 }
 
 func (s *MCPServerStdio) ListTools(ctx context.Context) ([]Tool, error) {
+	if !s.Initialized() {
+		return nil, fmt.Errorf("MCPServer isn't initialized")
+	}
 	if tools, ok := s.cachedTools(); ok {
 		return tools, nil
 	}
@@ -636,7 +657,7 @@ func (t *mcpProxyTool) Execute(ctx context.Context, args string) (string, error)
 	}
 
 	if len(result.Content) == 0 {
-		return "", NewToolError(fmt.Sprintf("Tool %q completed without producing a result.", t.name))
+		return "", NewToolError(fmt.Sprintf("Tool '%s' completed without producing a result. This might indicate an issue with internal processing.", t.name))
 	}
 	return serializeMCPToolContent(result.Content)
 }

@@ -224,6 +224,7 @@ type TTSGenerationData struct {
 type TTSInferenceOptions struct {
 	StreamPacer             *tts.SentenceStreamPacerOptions
 	TextReplacements        map[string]string
+	DisableTextTransforms   bool
 	PreserveTimedTranscript bool
 }
 
@@ -238,6 +239,12 @@ func WithTTSStreamPacer(opts tts.SentenceStreamPacerOptions) TTSInferenceOption 
 func WithTTSTextReplacements(replacements map[string]string) TTSInferenceOption {
 	return func(options *TTSInferenceOptions) {
 		options.TextReplacements = replacements
+	}
+}
+
+func WithTTSTextTransformsDisabled() TTSInferenceOption {
+	return func(options *TTSInferenceOptions) {
+		options.DisableTextTransforms = true
 	}
 }
 
@@ -269,7 +276,11 @@ func PerformTTSInference(ctx context.Context, t tts.TTS, textCh <-chan string, o
 			for chunk := range textCh {
 				text.WriteString(chunk)
 			}
-			transformedText := strings.TrimSpace(applyTTSTextReplacements(tts.ApplyTextTransforms(text.String()), options.TextReplacements))
+			ttsText := text.String()
+			if !options.DisableTextTransforms {
+				ttsText = tts.ApplyTextTransforms(ttsText)
+			}
+			transformedText := strings.TrimSpace(applyTTSTextReplacements(ttsText, options.TextReplacements))
 			if transformedText == "" {
 				return
 			}
@@ -329,22 +340,35 @@ func PerformTTSInference(ctx context.Context, t tts.TTS, textCh <-chan string, o
 		defer span.End()
 
 		startTime := time.Now()
-		transformBuffer := tts.NewTextTransformBuffer()
 
-		for text := range textCh {
-			for _, filteredText := range transformBuffer.Push(text) {
-				filteredText = applyTTSTextReplacements(filteredText, options.TextReplacements)
+		if options.DisableTextTransforms {
+			for text := range textCh {
+				filteredText := applyTTSTextReplacements(text, options.TextReplacements)
+				if filteredText == "" {
+					continue
+				}
 				if err := stream.PushText(filteredText); err != nil {
 					data.StreamErr = err
 					return
 				}
 			}
-		}
-		for _, filteredText := range transformBuffer.Flush() {
-			filteredText = applyTTSTextReplacements(filteredText, options.TextReplacements)
-			if err := stream.PushText(filteredText); err != nil {
-				data.StreamErr = err
-				return
+		} else {
+			transformBuffer := tts.NewTextTransformBuffer()
+			for text := range textCh {
+				for _, filteredText := range transformBuffer.Push(text) {
+					filteredText = applyTTSTextReplacements(filteredText, options.TextReplacements)
+					if err := stream.PushText(filteredText); err != nil {
+						data.StreamErr = err
+						return
+					}
+				}
+			}
+			for _, filteredText := range transformBuffer.Flush() {
+				filteredText = applyTTSTextReplacements(filteredText, options.TextReplacements)
+				if err := stream.PushText(filteredText); err != nil {
+					data.StreamErr = err
+					return
+				}
 			}
 		}
 		if err := tts.EndSynthesizeStreamInput(stream); err != nil {

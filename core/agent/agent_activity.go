@@ -1671,8 +1671,10 @@ func (a *AgentActivity) maxEndpointingDelay() float64 {
 }
 
 func (a *AgentActivity) minInterruptionDuration() float64 {
-	if a != nil && a.Session != nil && a.Session.Options.MinInterruptionDuration > 0 {
-		return a.Session.Options.MinInterruptionDuration
+	if a != nil && a.Session != nil {
+		if a.Session.Options.MinInterruptionDurationSet || a.Session.Options.MinInterruptionDuration > 0 {
+			return a.Session.Options.MinInterruptionDuration
+		}
 	}
 	return 0.5
 }

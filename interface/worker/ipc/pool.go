@@ -270,7 +270,7 @@ func (p *ProcPool) On(event ProcPoolEvent, handler func(JobExecutor)) {
 func (p *ProcPool) SetTargetIdleProcesses(numIdleProcesses int) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	p.targetIdle = clampInt(numIdleProcesses, 0, p.maxProcesses)
+	p.targetIdle = numIdleProcesses
 }
 
 func (p *ProcPool) TargetIdleProcesses() int {
@@ -330,16 +330,6 @@ func closeContext(closeTimeout time.Duration) (context.Context, context.CancelFu
 		closeTimeout = 5 * time.Second
 	}
 	return context.WithTimeout(context.Background(), closeTimeout)
-}
-
-func clampInt(value int, min int, max int) int {
-	if value < min {
-		return min
-	}
-	if value > max {
-		return max
-	}
-	return value
 }
 
 func (p *ProcPool) emit(event ProcPoolEvent, executor JobExecutor) {

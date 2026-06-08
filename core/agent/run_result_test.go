@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"errors"
+	"fmt"
 	"reflect"
 	"strings"
 	"testing"
@@ -10,6 +11,14 @@ import (
 
 	"github.com/cavos-io/rtp-agent/core/llm"
 )
+
+type runResultStringer struct {
+	value string
+}
+
+func (s runResultStringer) String() string {
+	return s.value
+}
 
 func TestRunResultRecordsSupportedItemsInChronologicalOrder(t *testing.T) {
 	result := NewRunResult(llm.NewChatContext())
@@ -134,6 +143,35 @@ func TestRunResultFinalOutputReturnsValueAfterDone(t *testing.T) {
 	}
 	if !result.Done() {
 		t.Fatal("Done() = false, want true after MarkDone")
+	}
+}
+
+func TestRunResultFinalOutputRejectsFalsyValues(t *testing.T) {
+	tests := []struct {
+		name   string
+		output any
+	}{
+		{name: "empty string", output: ""},
+		{name: "false", output: false},
+		{name: "zero int", output: 0},
+		{name: "zero float", output: 0.0},
+		{name: "nil", output: nil},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := NewRunResult(llm.NewChatContext())
+			result.SetFinalOutput(tt.output)
+			result.MarkDone()
+
+			output, err := result.FinalOutput()
+			if !errors.Is(err, ErrRunResultNoFinalOutput) {
+				t.Fatalf("FinalOutput error = %v, want ErrRunResultNoFinalOutput", err)
+			}
+			if output != nil {
+				t.Fatalf("FinalOutput output = %#v, want nil for falsy final output", output)
+			}
+		})
 	}
 }
 
@@ -278,6 +316,23 @@ func TestRunResultFinalOutputRejectsUnexpectedType(t *testing.T) {
 	}
 }
 
+func TestRunResultFinalOutputRejectsNilUnexpectedType(t *testing.T) {
+	result := NewRunResultWithOutputType(llm.NewChatContext(), reflect.TypeOf(""))
+	speech := NewSpeechHandle(true, DefaultInputDetails())
+	speech.SetRunFinalOutput(nil)
+
+	result.WatchSpeechHandle(speech)
+	speech.MarkDone()
+
+	output, err := result.FinalOutput()
+	if !errors.Is(err, ErrRunResultFinalOutputType) {
+		t.Fatalf("FinalOutput error = %v, want ErrRunResultFinalOutputType", err)
+	}
+	if output != nil {
+		t.Fatalf("FinalOutput output = %#v, want nil on nil type mismatch", output)
+	}
+}
+
 func TestRunResultFinalOutputAcceptsExpectedType(t *testing.T) {
 	result := NewRunResultWithOutputType(llm.NewChatContext(), reflect.TypeOf(""))
 	speech := NewSpeechHandle(true, DefaultInputDetails())
@@ -292,6 +347,24 @@ func TestRunResultFinalOutputAcceptsExpectedType(t *testing.T) {
 	}
 	if output != "done" {
 		t.Fatalf("FinalOutput = %#v, want done", output)
+	}
+}
+
+func TestRunResultFinalOutputAcceptsAssignableType(t *testing.T) {
+	result := NewRunResultWithOutputType(llm.NewChatContext(), reflect.TypeOf((*fmt.Stringer)(nil)).Elem())
+	speech := NewSpeechHandle(true, DefaultInputDetails())
+	want := runResultStringer{value: "done"}
+	speech.SetRunFinalOutput(want)
+
+	result.WatchSpeechHandle(speech)
+	speech.MarkDone()
+
+	output, err := result.FinalOutput()
+	if err != nil {
+		t.Fatalf("FinalOutput error = %v, want nil for assignable output type", err)
+	}
+	if output != want {
+		t.Fatalf("FinalOutput = %#v, want %#v", output, want)
 	}
 }
 
