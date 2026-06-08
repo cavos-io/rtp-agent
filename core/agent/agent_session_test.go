@@ -1063,6 +1063,23 @@ func TestNewAgentSessionPreservesExplicitFalseAllowInterruptions(t *testing.T) {
 	}
 }
 
+func TestNewAgentSessionPreservesExplicitFalseDiscardAudioIfUninterruptible(t *testing.T) {
+	agent := NewAgent("test")
+	session := NewAgentSession(agent, nil, AgentSessionOptions{
+		DiscardAudioIfUninterruptible:    false,
+		DiscardAudioIfUninterruptibleSet: true,
+	})
+
+	if session.Options.DiscardAudioIfUninterruptible {
+		t.Fatal("DiscardAudioIfUninterruptible = true, want explicit false")
+	}
+	session.activity = NewAgentActivity(agent, session)
+	session.activity.currentSpeech = NewSpeechHandle(false, DefaultInputDetails())
+	if session.shouldSilenceInputAudio() {
+		t.Fatal("shouldSilenceInputAudio() = true, want false when discard audio is explicitly disabled")
+	}
+}
+
 func TestNewAgentSessionPreservesExplicitZeroMinInterruptionDuration(t *testing.T) {
 	agent := NewAgent("test")
 	session := NewAgentSession(agent, nil, AgentSessionOptions{

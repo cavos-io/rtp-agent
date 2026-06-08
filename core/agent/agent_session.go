@@ -39,6 +39,7 @@ type AgentSessionOptions struct {
 	AllowInterruptions               bool
 	AllowInterruptionsSet            bool
 	DiscardAudioIfUninterruptible    bool
+	DiscardAudioIfUninterruptibleSet bool
 	MinInterruptionDuration          float64
 	MinInterruptionDurationSet       bool
 	MinInterruptionWords             int
@@ -693,7 +694,9 @@ func withAgentSessionOptionDefaults(opts AgentSessionOptions) AgentSessionOption
 	if !opts.AllowInterruptionsSet {
 		opts.AllowInterruptions = true
 	}
-	opts.DiscardAudioIfUninterruptible = true
+	if !opts.DiscardAudioIfUninterruptibleSet {
+		opts.DiscardAudioIfUninterruptible = true
+	}
 	if !opts.MinInterruptionDurationSet && opts.MinInterruptionDuration == 0 {
 		opts.MinInterruptionDuration = 0.5
 	}
