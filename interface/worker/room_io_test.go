@@ -13,6 +13,7 @@ import (
 	"github.com/cavos-io/rtp-agent/library/utils/images"
 	"github.com/livekit/protocol/livekit"
 	lksdk "github.com/livekit/server-sdk-go/v2"
+	"github.com/pion/webrtc/v4"
 )
 
 type fakeRoomIOTextResponder struct {
@@ -146,6 +147,99 @@ func TestRoomIOStartSkipsTrackWhenAudioOutputDisabled(t *testing.T) {
 	}
 }
 
+func TestRoomIOPlaybackEventsFollowCaptureAndFlush(t *testing.T) {
+	rio := &RoomIO{audioTrack: newRoomIOTestAudioTrack(t)}
+	var started []PlaybackStartedEvent
+	var finished []PlaybackFinishedEvent
+	rio.OnPlaybackStarted(func(ev PlaybackStartedEvent) {
+		started = append(started, ev)
+	})
+	rio.OnPlaybackFinished(func(ev PlaybackFinishedEvent) {
+		finished = append(finished, ev)
+	})
+	frame := &model.AudioFrame{
+		Data:              make([]byte, 960*2),
+		SampleRate:        48000,
+		NumChannels:       1,
+		SamplesPerChannel: 960,
+	}
+
+	if err := rio.PublishAudio(frame); err != nil {
+		t.Fatalf("PublishAudio error = %v", err)
+	}
+	if len(started) != 1 {
+		t.Fatalf("playback_started events = %d, want 1", len(started))
+	}
+	if started[0].CreatedAt.IsZero() {
+		t.Fatal("playback_started CreatedAt is zero")
+	}
+	done := make(chan PlaybackFinishedEvent, 1)
+	errCh := make(chan error, 1)
+	go func() {
+		ev, err := rio.WaitForPlayout(context.Background())
+		if err != nil {
+			errCh <- err
+			return
+		}
+		done <- ev
+	}()
+	select {
+	case ev := <-done:
+		t.Fatalf("WaitForPlayout returned before Flush: %#v", ev)
+	case err := <-errCh:
+		t.Fatalf("WaitForPlayout error before Flush: %v", err)
+	case <-time.After(20 * time.Millisecond):
+	}
+
+	rio.Flush()
+
+	select {
+	case err := <-errCh:
+		t.Fatalf("WaitForPlayout error = %v", err)
+	case ev := <-done:
+		if ev.Interrupted {
+			t.Fatal("PlaybackFinishedEvent.Interrupted = true, want false after Flush")
+		}
+		if ev.PlaybackPosition != 20*time.Millisecond {
+			t.Fatalf("PlaybackPosition = %v, want 20ms", ev.PlaybackPosition)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("WaitForPlayout did not return after Flush")
+	}
+	if len(finished) != 1 {
+		t.Fatalf("playback_finished events = %d, want 1", len(finished))
+	}
+	if finished[0].Interrupted || finished[0].PlaybackPosition != 20*time.Millisecond {
+		t.Fatalf("playback_finished event = %#v, want non-interrupted 20ms", finished[0])
+	}
+}
+
+func TestRoomIOClearBufferFinishesPlaybackAsInterrupted(t *testing.T) {
+	rio := &RoomIO{audioTrack: newRoomIOTestAudioTrack(t)}
+	frame := &model.AudioFrame{
+		Data:              make([]byte, 480*2),
+		SampleRate:        48000,
+		NumChannels:       1,
+		SamplesPerChannel: 480,
+	}
+	if err := rio.PublishAudio(frame); err != nil {
+		t.Fatalf("PublishAudio error = %v", err)
+	}
+
+	rio.ClearBuffer()
+
+	ev, err := rio.WaitForPlayout(context.Background())
+	if err != nil {
+		t.Fatalf("WaitForPlayout error = %v", err)
+	}
+	if !ev.Interrupted {
+		t.Fatal("PlaybackFinishedEvent.Interrupted = false, want true after ClearBuffer")
+	}
+	if ev.PlaybackPosition != 10*time.Millisecond {
+		t.Fatalf("PlaybackPosition = %v, want 10ms", ev.PlaybackPosition)
+	}
+}
+
 func TestNewRoomIOCreatesMultimodalAssistantWithRealtimeModel(t *testing.T) {
 	session := &agent.AgentSession{
 		ChatCtx:       llm.NewChatContext(),
@@ -157,6 +251,19 @@ func TestNewRoomIOCreatesMultimodalAssistantWithRealtimeModel(t *testing.T) {
 	if _, ok := session.Assistant.(*agent.MultimodalAgent); !ok {
 		t.Fatalf("session assistant = %T, want *agent.MultimodalAgent", session.Assistant)
 	}
+}
+
+func newRoomIOTestAudioTrack(t *testing.T) *lksdk.LocalTrack {
+	t.Helper()
+	track, err := lksdk.NewLocalSampleTrack(webrtc.RTPCodecCapability{
+		MimeType:  webrtc.MimeTypeOpus,
+		ClockRate: 48000,
+		Channels:  1,
+	})
+	if err != nil {
+		t.Fatalf("NewLocalSampleTrack error = %v", err)
+	}
+	return track
 }
 
 func TestRoomIOCloseUnregistersChatTextHandler(t *testing.T) {
