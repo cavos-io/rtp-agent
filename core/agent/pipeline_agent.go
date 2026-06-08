@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/cavos-io/rtp-agent/core/audio"
@@ -17,6 +18,10 @@ import (
 	"github.com/cavos-io/rtp-agent/library/telemetry"
 )
 
+// AudioInputHook is called for each incoming audio frame before it is forwarded
+// to VAD and STT processing. Returning nil drops the frame from both pipelines.
+type AudioInputHook func(ctx context.Context, frame *model.AudioFrame) *model.AudioFrame
+
 type PipelineAgent struct {
 	vad     vad.VAD
 	stt     stt.STT
@@ -26,9 +31,10 @@ type PipelineAgent struct {
 
 	ttsStreamPacer *tts.SentenceStreamPacerOptions
 
-	audioInCh chan *model.AudioFrame
-	mu        sync.Mutex
-	session   *AgentSession
+	audioInCh      chan *model.AudioFrame
+	audioInputHook atomic.Pointer[AudioInputHook]
+	mu             sync.Mutex
+	session        *AgentSession
 
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -83,6 +89,16 @@ func (va *PipelineAgent) SetPublishAudio(publish func(frame *model.AudioFrame) e
 	va.PublishAudio = publish
 }
 
+// SetAudioInputHook registers a hook that intercepts incoming audio before VAD
+// and STT. Passing nil clears the hook.
+func (va *PipelineAgent) SetAudioInputHook(hook AudioInputHook) {
+	if hook == nil {
+		va.audioInputHook.Store(nil)
+		return
+	}
+	va.audioInputHook.Store(&hook)
+}
+
 func (va *PipelineAgent) UpdateComponents(vadObj vad.VAD, sttObj stt.STT, llmObj llm.LLM, ttsObj tts.TTS) {
 	va.mu.Lock()
 	defer va.mu.Unlock()
@@ -121,6 +137,12 @@ func (va *PipelineAgent) run(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case frame := <-va.audioInCh:
+			if hookPtr := va.audioInputHook.Load(); hookPtr != nil {
+				frame = (*hookPtr)(ctx, frame)
+			}
+			if frame == nil {
+				continue
+			}
 			if err := vadStream.PushFrame(frame); err != nil {
 				logger.Logger.Errorw("VAD push frame failed", err)
 				va.emitError(err, va.vad)
