@@ -548,6 +548,24 @@ func TestRealtimeUpdateOptionsMessageMapsMaxResponseOutputTokens(t *testing.T) {
 	}
 }
 
+func TestRealtimeUpdateOptionsMessageClearsMaxResponseOutputTokens(t *testing.T) {
+	msg := openAIRealtimeUpdateOptionsMessage(llm.RealtimeSessionOptions{
+		MaxResponseOutputTokensSet: true,
+	})
+
+	if msg["type"] != "session.update" {
+		t.Fatalf("message type = %#v, want session.update", msg["type"])
+	}
+	session := msg["session"].(map[string]any)
+	value, ok := session["max_output_tokens"]
+	if !ok {
+		t.Fatalf("max_output_tokens missing from session payload: %#v", session)
+	}
+	if value != nil {
+		t.Fatalf("max_output_tokens = %#v, want nil reset", value)
+	}
+}
+
 func TestRealtimeUpdateOptionsMessageMapsTruncation(t *testing.T) {
 	msg := openAIRealtimeUpdateOptionsMessage(llm.RealtimeSessionOptions{
 		Truncation: "disabled",
