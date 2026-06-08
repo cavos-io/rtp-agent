@@ -321,7 +321,7 @@ func TestStreamAdapterForwardsFlushToVAD(t *testing.T) {
 	}
 }
 
-func TestStreamAdapterEndInputFlushesAndRejectsMoreInput(t *testing.T) {
+func TestStreamAdapterEndInputForwardsEndWithoutImplicitFlushAndRejectsMoreInput(t *testing.T) {
 	flushCh := make(chan struct{}, 1)
 	endInputCh := make(chan struct{}, 1)
 	stream, err := NewStreamAdapter(&fakeStreamAdapterSTT{}, &fakeStreamAdapterVAD{
@@ -346,20 +346,23 @@ func TestStreamAdapterEndInputFlushesAndRejectsMoreInput(t *testing.T) {
 	}
 
 	select {
-	case <-flushCh:
-	case <-time.After(100 * time.Millisecond):
-		t.Fatal("timed out waiting for EndInput flush")
-	}
-	select {
 	case <-endInputCh:
 	case <-time.After(100 * time.Millisecond):
 		t.Fatal("timed out waiting for VAD EndInput")
+	}
+	select {
+	case <-flushCh:
+		t.Fatal("EndInput forwarded an implicit VAD Flush")
+	case <-time.After(20 * time.Millisecond):
 	}
 	if err := stream.PushFrame(&model.AudioFrame{Data: []byte("late"), SampleRate: 16000, NumChannels: 1, SamplesPerChannel: 1}); err == nil {
 		t.Fatal("PushFrame after EndInput returned nil, want error")
 	}
 	if err := stream.Flush(); err == nil {
 		t.Fatal("Flush after EndInput returned nil, want error")
+	}
+	if err := ending.EndInput(); err == nil {
+		t.Fatal("second EndInput returned nil, want error")
 	}
 }
 
