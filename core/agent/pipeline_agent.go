@@ -493,11 +493,23 @@ func (va *PipelineAgent) generateReplyWithOptions(opts pipelineReplyOptions) {
 			if len(genData.GeneratedExtra) > 0 {
 				args.Extra = genData.GeneratedExtra
 			}
-			if ttsGen != nil && ttsGen.TTFB > 0 {
-				args.Metrics = map[string]any{
-					"tts_node_ttfb": ttsGen.TTFB.Seconds(),
-				}
+			metrics := map[string]any{
+				"llm_metadata": map[string]any{
+					"model_name":     llm.Model(va.LLM),
+					"model_provider": llm.Provider(va.LLM),
+				},
+				"tts_metadata": map[string]any{
+					"model_name":     tts.Model(va.tts),
+					"model_provider": tts.Provider(va.tts),
+				},
 			}
+			if genData.TTFT > 0 {
+				metrics["llm_node_ttft"] = genData.TTFT.Seconds()
+			}
+			if ttsGen != nil && ttsGen.TTFB > 0 {
+				metrics["tts_node_ttfb"] = ttsGen.TTFB.Seconds()
+			}
+			args.Metrics = metrics
 			msg := va.chatCtx.AddMessage(args)
 			session.EmitConversationItemAdded(msg)
 			if opts.SpeechHandle != nil {
