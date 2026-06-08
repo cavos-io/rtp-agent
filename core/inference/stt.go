@@ -19,6 +19,7 @@ import (
 
 type STT struct {
 	model         string
+	language      string
 	apiKey        string
 	apiSecret     string
 	baseURL       string
@@ -31,10 +32,11 @@ func NewSTT(model string, apiKey, apiSecret string) *STT {
 	if model == "" {
 		model = "deepgram/nova-3"
 	}
-	model, _ = sttModelAndLanguage(model, "")
+	model, language := sttModelAndLanguage(model, "")
 	apiKey, apiSecret = resolveInferenceCredentials(apiKey, apiSecret)
 	return &STT{
 		model:         model,
+		language:      language,
 		apiKey:        apiKey,
 		apiSecret:     apiSecret,
 		baseURL:       defaultInferenceWebsocketURL(),
@@ -72,6 +74,9 @@ func (s *STT) Stream(ctx context.Context, language string) (stt.RecognizeStream,
 	token, err := CreateAccessToken(s.apiKey, s.apiSecret, InferenceAccessTokenTTL)
 	if err != nil {
 		return nil, err
+	}
+	if language == "" {
+		language = s.language
 	}
 
 	modelName, createParams := sttSessionCreateParams(s.model, language)

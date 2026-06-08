@@ -62,6 +62,32 @@ func TestNewSTTParsesReferenceModelStringForMetadata(t *testing.T) {
 	}
 }
 
+func TestNewSTTPreservesReferenceModelStringLanguageForStream(t *testing.T) {
+	conn := &fakeInferenceWebsocketConn{}
+	provider := NewSTT("deepgram/nova-3:en", "key", "secret")
+	provider.baseURL = "wss://inference.test/v1"
+	provider.dialWebsocket = func(ctx context.Context, endpoint string, header http.Header) (inferenceWebsocketConn, error) {
+		return conn, nil
+	}
+
+	stream, err := provider.Stream(context.Background(), "")
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	defer stream.Close()
+
+	if len(conn.writes) != 1 {
+		t.Fatalf("writes = %d, want session.create", len(conn.writes))
+	}
+	settings, ok := conn.writes[0]["settings"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("settings = %#v, want map", conn.writes[0]["settings"])
+	}
+	if settings["language"] != "en" {
+		t.Fatalf("settings.language = %#v, want parsed model string language", settings["language"])
+	}
+}
+
 func TestSTTWebsocketSendsReferenceInferenceHeaders(t *testing.T) {
 	var captured http.Header
 	provider := NewSTT("deepgram/nova-3", "key", "secret")
