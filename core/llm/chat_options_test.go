@@ -41,6 +41,42 @@ func TestAPIConnectOptionsRejectNegativeValues(t *testing.T) {
 	}
 }
 
+func TestAPIConnectOptionsRejectNegativeValuesWithReferenceFieldNames(t *testing.T) {
+	tests := []struct {
+		name    string
+		options APIConnectOptions
+		want    string
+	}{
+		{
+			name:    "max retry",
+			options: APIConnectOptions{MaxRetry: -1},
+			want:    "max_retry must be greater than or equal to 0",
+		},
+		{
+			name:    "retry interval",
+			options: APIConnectOptions{RetryInterval: -time.Nanosecond},
+			want:    "retry_interval must be greater than or equal to 0",
+		},
+		{
+			name:    "timeout",
+			options: APIConnectOptions{Timeout: -time.Nanosecond},
+			want:    "timeout must be greater than or equal to 0",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := tt.options.Validate()
+			if err == nil {
+				t.Fatal("Validate() error = nil, want negative value rejection")
+			}
+			if err.Error() != tt.want {
+				t.Fatalf("Validate() error = %q, want %q", err.Error(), tt.want)
+			}
+		})
+	}
+}
+
 func TestAPIConnectOptionsIntervalForRetry(t *testing.T) {
 	options := APIConnectOptions{RetryInterval: 3 * time.Second}
 
