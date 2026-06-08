@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/cavos-io/rtp-agent/core/agent"
+	"github.com/cavos-io/rtp-agent/core/inference"
 	"github.com/cavos-io/rtp-agent/core/llm"
 	workeripc "github.com/cavos-io/rtp-agent/interface/worker/ipc"
 	"github.com/livekit/protocol/auth"
@@ -41,6 +42,30 @@ func TestGetJobContextReturnsActiveEntrypointContext(t *testing.T) {
 
 	if got, ok := GetJobContext(); ok || got != nil {
 		t.Fatalf("GetJobContext() after entrypoint = %#v, %v; want nil, false", got, ok)
+	}
+}
+
+func TestJobContextProvidesReferenceInferenceHeaders(t *testing.T) {
+	jobCtx := NewJobContext(&livekit.Job{
+		Id:   "job_inference",
+		Room: &livekit.Room{Sid: "RM_inference", Name: "room-a"},
+	}, "", "", "")
+
+	if got := inference.InferenceHeaders().Get("X-LiveKit-Job-ID"); got != "" {
+		t.Fatalf("X-LiveKit-Job-ID outside job context = %q, want empty", got)
+	}
+
+	if err := runWithJobContext(jobCtx, func() error {
+		headers := inference.InferenceHeaders()
+		if got := headers.Get("X-LiveKit-Job-ID"); got != "job_inference" {
+			t.Fatalf("X-LiveKit-Job-ID = %q, want job_inference", got)
+		}
+		if got := headers.Get("X-LiveKit-Room-ID"); got != "RM_inference" {
+			t.Fatalf("X-LiveKit-Room-ID = %q, want RM_inference", got)
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("runWithJobContext() error = %v", err)
 	}
 }
 

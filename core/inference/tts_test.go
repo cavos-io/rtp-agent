@@ -152,6 +152,37 @@ func TestTTSWebsocketSendsReferenceInferenceHeaders(t *testing.T) {
 	}
 }
 
+func TestTTSWebsocketSendsReferenceContextHeaders(t *testing.T) {
+	restore := SetContextHeadersProvider(func() map[string]string {
+		return map[string]string{
+			HeaderRoomID: "RM_tts",
+			HeaderJobID:  "job_tts",
+		}
+	})
+	defer restore()
+
+	var captured http.Header
+	provider := NewTTS("cartesia/sonic-3", "key", "secret")
+	provider.baseURL = "wss://inference.test/v1"
+	provider.dialWebsocket = func(ctx context.Context, endpoint string, header http.Header) (inferenceTTSConn, error) {
+		captured = header.Clone()
+		return &recordingTTSConn{}, nil
+	}
+
+	stream, err := provider.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	defer stream.Close()
+
+	if got := captured.Get(HeaderRoomID); got != "RM_tts" {
+		t.Fatalf("%s = %q, want RM_tts", HeaderRoomID, got)
+	}
+	if got := captured.Get(HeaderJobID); got != "job_tts" {
+		t.Fatalf("%s = %q, want job_tts", HeaderJobID, got)
+	}
+}
+
 type recordingTTSConn struct {
 	closed      atomic.Bool
 	onWriteJSON func(map[string]any)

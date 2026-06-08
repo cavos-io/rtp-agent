@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/cavos-io/rtp-agent/core/inference"
 	"github.com/cavos-io/rtp-agent/core/llm"
 )
 
@@ -118,5 +119,36 @@ func TestLiveKitInferenceLLMChatSendsReferenceInferenceHeaders(t *testing.T) {
 	}
 	if !strings.Contains(capture.userAgent, " (go ") {
 		t.Fatalf("User-Agent = %q, want Go runtime marker", capture.userAgent)
+	}
+}
+
+func TestLiveKitInferenceLLMChatSendsReferenceContextHeaders(t *testing.T) {
+	restore := inference.SetContextHeadersProvider(func() map[string]string {
+		return map[string]string{
+			inference.HeaderRoomID: "RM_llm",
+			inference.HeaderJobID:  "job_llm",
+		}
+	})
+	defer restore()
+
+	capture := &captureDeadlineHTTPClient{
+		statusCode:   http.StatusUnauthorized,
+		responseBody: `{"error":{"message":"stop"}}`,
+	}
+
+	provider, err := NewLiveKitInferenceLLM("openai/gpt-4.1", "key", "secret")
+	if err != nil {
+		t.Fatalf("NewLiveKitInferenceLLM error = %v", err)
+	}
+	provider.baseURL = "https://inference.test/v1"
+	provider.httpClient = capture
+
+	_, _ = provider.Chat(context.Background(), llm.NewChatContext(), llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 0}))
+
+	if capture.roomID != "RM_llm" {
+		t.Fatalf("%s = %q, want RM_llm", inference.HeaderRoomID, capture.roomID)
+	}
+	if capture.jobID != "job_llm" {
+		t.Fatalf("%s = %q, want job_llm", inference.HeaderJobID, capture.jobID)
 	}
 }

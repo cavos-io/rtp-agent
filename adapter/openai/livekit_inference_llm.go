@@ -36,6 +36,7 @@ func (c *liveKitInferenceHeadersHTTPClient) Do(req *http.Request) (*http.Respons
 	}
 	cloned := req.Clone(req.Context())
 	cloned.Header.Set("User-Agent", liveKitInferenceUserAgent())
+	inference.AddContextHeaders(cloned.Header)
 	return base.Do(cloned)
 }
 

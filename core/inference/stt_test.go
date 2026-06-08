@@ -123,6 +123,37 @@ func TestSTTWebsocketSendsReferenceInferenceHeaders(t *testing.T) {
 	}
 }
 
+func TestSTTWebsocketSendsReferenceContextHeaders(t *testing.T) {
+	restore := SetContextHeadersProvider(func() map[string]string {
+		return map[string]string{
+			HeaderRoomID: "RM_stt",
+			HeaderJobID:  "job_stt",
+		}
+	})
+	defer restore()
+
+	var captured http.Header
+	provider := NewSTT("deepgram/nova-3", "key", "secret")
+	provider.baseURL = "wss://inference.test/v1"
+	provider.dialWebsocket = func(ctx context.Context, endpoint string, header http.Header) (inferenceWebsocketConn, error) {
+		captured = header.Clone()
+		return &fakeInferenceWebsocketConn{}, nil
+	}
+
+	stream, err := provider.Stream(context.Background(), "en")
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	defer stream.Close()
+
+	if got := captured.Get(HeaderRoomID); got != "RM_stt" {
+		t.Fatalf("%s = %q, want RM_stt", HeaderRoomID, got)
+	}
+	if got := captured.Get(HeaderJobID); got != "job_stt" {
+		t.Fatalf("%s = %q, want job_stt", HeaderJobID, got)
+	}
+}
+
 func TestInferenceSTTSessionCreateParamsMatchReferenceShape(t *testing.T) {
 	modelName, params := sttSessionCreateParams("auto:en", "")
 

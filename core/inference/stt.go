@@ -90,9 +90,8 @@ func (s *STT) Stream(ctx context.Context, language string) (stt.RecognizeStream,
 	q.Set("model", modelName)
 	wsURL.RawQuery = q.Encode()
 
-	header := http.Header{}
+	header := InferenceHeaders()
 	header.Add("Authorization", "Bearer "+token)
-	header.Set("User-Agent", inferenceUserAgent())
 
 	conn, err := s.dialWebsocket(ctx, wsURL.String(), header)
 	if err != nil {

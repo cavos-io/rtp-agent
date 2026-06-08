@@ -167,9 +167,8 @@ func (t *TTS) connectTTSWebsocket(ctx context.Context) (inferenceTTSConn, error)
 	q.Set("model", modelName)
 	wsURL.RawQuery = q.Encode()
 
-	header := http.Header{}
+	header := InferenceHeaders()
 	header.Add("Authorization", "Bearer "+token)
-	header.Set("User-Agent", inferenceUserAgent())
 
 	conn, err := t.dialWebsocket(ctx, wsURL.String(), header)
 	if err != nil {
