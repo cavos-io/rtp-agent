@@ -77,9 +77,7 @@ func (l *OpenAILLM) Provider() string {
 }
 
 func (l *OpenAILLM) Chat(ctx context.Context, chatCtx *llm.ChatContext, opts ...llm.ChatOption) (llm.LLMStream, error) {
-	options := &llm.ChatOptions{
-		ParallelToolCalls: true,
-	}
+	options := &llm.ChatOptions{}
 	for _, opt := range opts {
 		opt(options)
 	}
@@ -192,11 +190,13 @@ func buildOpenAIChatCompletionRequest(model string, chatCtx *llm.ChatContext, op
 	}
 
 	req := openai.ChatCompletionRequest{
-		Model:             model,
-		Messages:          messages,
-		Tools:             tools,
-		ParallelToolCalls: &options.ParallelToolCalls,
-		Stream:            true,
+		Model:    model,
+		Messages: messages,
+		Tools:    tools,
+		Stream:   true,
+	}
+	if options.ParallelToolCallsSet {
+		req.ParallelToolCalls = &options.ParallelToolCalls
 	}
 
 	if options.ToolChoice != nil {

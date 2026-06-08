@@ -547,12 +547,13 @@ type Toolset interface {
 type ToolChoice any
 
 type ChatOptions struct {
-	Tools             []Tool
-	ToolChoice        ToolChoice
-	ParallelToolCalls bool
-	ConnectOptions    *APIConnectOptions
-	ExtraParams       map[string]any
-	ResponseFormat    map[string]any
+	Tools                []Tool
+	ToolChoice           ToolChoice
+	ParallelToolCalls    bool
+	ParallelToolCallsSet bool
+	ConnectOptions       *APIConnectOptions
+	ExtraParams          map[string]any
+	ResponseFormat       map[string]any
 }
 
 type APIConnectOptions struct {
@@ -698,6 +699,7 @@ func WithToolChoice(choice ToolChoice) ChatOption {
 func WithParallelToolCalls(parallel bool) ChatOption {
 	return func(o *ChatOptions) {
 		o.ParallelToolCalls = parallel
+		o.ParallelToolCallsSet = true
 	}
 }
 
