@@ -16,6 +16,7 @@ import (
 
 	"github.com/cavos-io/rtp-agent/core/audio/model"
 	"github.com/cavos-io/rtp-agent/core/stt"
+	languageutil "github.com/cavos-io/rtp-agent/library/utils/language"
 	"github.com/gorilla/websocket"
 	"github.com/sashabaranov/go-openai"
 )
@@ -350,7 +351,7 @@ func buildOpenAIRealtimeSTTSessionUpdate(s *OpenAISTT) ([]byte, error) {
 		transcription["prompt"] = s.prompt
 	}
 	if s.language != "" {
-		transcription["language"] = s.language
+		transcription["language"] = openAISTTRequestLanguage(s.language)
 	}
 	input := map[string]interface{}{
 		"format": map[string]interface{}{
@@ -433,6 +434,9 @@ func openAIAudioRequest(s *OpenAISTT, reader io.Reader, language string) openai.
 	if language != "" {
 		requestLanguage = language
 	}
+	if requestLanguage != "" {
+		requestLanguage = openAISTTRequestLanguage(requestLanguage)
+	}
 	req := openai.AudioRequest{
 		Model:    s.model,
 		FilePath: "audio.wav", // Static filename required by API when Reader is used.
@@ -448,6 +452,10 @@ func openAIAudioRequest(s *OpenAISTT, reader io.Reader, language string) openai.
 		}
 	}
 	return req
+}
+
+func openAISTTRequestLanguage(language string) string {
+	return languageutil.Language(language)
 }
 
 func openAISpeechEvent(resp openai.AudioResponse) *stt.SpeechEvent {
