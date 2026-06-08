@@ -793,6 +793,94 @@ func TestPipelineAgentAudioInputHookCanDropFrames(t *testing.T) {
 	}
 }
 
+func TestAgentSessionAudioInputHookConfiguresPipelineAssistant(t *testing.T) {
+	vadStream := &fakePipelineVADStream{pushedCh: make(chan *model.AudioFrame, 1)}
+	sttStream := &fakePipelineRecognizeStream{pushedCh: make(chan *model.AudioFrame, 1)}
+	baseAgent := NewAgent("test")
+	baseAgent.VAD = &fakePipelineVAD{stream: vadStream}
+	baseAgent.STT = &fakePipelineSTT{stream: sttStream}
+	session := NewAgentSession(baseAgent, nil, AgentSessionOptions{
+		AudioInputHook: func(_ context.Context, frame *model.AudioFrame) *model.AudioFrame {
+			changed := append([]byte(nil), frame.Data...)
+			changed[0] = 7
+			return &model.AudioFrame{
+				Data:              changed,
+				SampleRate:        frame.SampleRate,
+				NumChannels:       frame.NumChannels,
+				SamplesPerChannel: frame.SamplesPerChannel,
+			}
+		},
+	})
+
+	agent, ok := session.EnsureAssistant().(*PipelineAgent)
+	if !ok {
+		t.Fatalf("assistant = %T, want *PipelineAgent", session.Assistant)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go agent.run(ctx)
+
+	agent.OnAudioFrame(ctx, &model.AudioFrame{
+		Data:              []byte{1, 2, 3, 4},
+		SampleRate:        16000,
+		NumChannels:       1,
+		SamplesPerChannel: 2,
+	})
+
+	vadFrame := receivePipelineFrame(t, vadStream.pushedCh)
+	sttFrame := receivePipelineFrame(t, sttStream.pushedCh)
+	if !bytes.Equal(vadFrame.Data, []byte{7, 2, 3, 4}) {
+		t.Fatalf("VAD frame data = %v, want session hook transformed audio", vadFrame.Data)
+	}
+	if !bytes.Equal(sttFrame.Data, []byte{7, 2, 3, 4}) {
+		t.Fatalf("STT frame data = %v, want session hook transformed audio", sttFrame.Data)
+	}
+}
+
+func TestAgentSessionAudioInputHookConfiguresReplacementPipelineAssistant(t *testing.T) {
+	vadStream := &fakePipelineVADStream{pushedCh: make(chan *model.AudioFrame, 1)}
+	sttStream := &fakePipelineRecognizeStream{pushedCh: make(chan *model.AudioFrame, 1)}
+	baseAgent := NewAgent("test")
+	baseAgent.VAD = &fakePipelineVAD{stream: vadStream}
+	baseAgent.STT = &fakePipelineSTT{stream: sttStream}
+	session := NewAgentSession(baseAgent, nil, AgentSessionOptions{
+		AudioInputHook: func(_ context.Context, frame *model.AudioFrame) *model.AudioFrame {
+			changed := append([]byte(nil), frame.Data...)
+			changed[0] = 8
+			return &model.AudioFrame{
+				Data:              changed,
+				SampleRate:        frame.SampleRate,
+				NumChannels:       frame.NumChannels,
+				SamplesPerChannel: frame.SamplesPerChannel,
+			}
+		},
+	})
+
+	replacement, ok := session.replacementAssistantLocked(&MultimodalAgent{}).(*PipelineAgent)
+	if !ok {
+		t.Fatalf("replacement assistant = %T, want *PipelineAgent", replacement)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go replacement.run(ctx)
+
+	replacement.OnAudioFrame(ctx, &model.AudioFrame{
+		Data:              []byte{1, 2, 3, 4},
+		SampleRate:        16000,
+		NumChannels:       1,
+		SamplesPerChannel: 2,
+	})
+
+	vadFrame := receivePipelineFrame(t, vadStream.pushedCh)
+	sttFrame := receivePipelineFrame(t, sttStream.pushedCh)
+	if !bytes.Equal(vadFrame.Data, []byte{8, 2, 3, 4}) {
+		t.Fatalf("VAD frame data = %v, want replacement hook transformed audio", vadFrame.Data)
+	}
+	if !bytes.Equal(sttFrame.Data, []byte{8, 2, 3, 4}) {
+		t.Fatalf("STT frame data = %v, want replacement hook transformed audio", sttFrame.Data)
+	}
+}
+
 func TestPipelineAgentUsesAgentTTSAlignedTranscriptOverride(t *testing.T) {
 	chatCtx := llm.NewChatContext()
 	l := &fakeGenerationLLM{
