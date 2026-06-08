@@ -451,7 +451,7 @@ func (va *PipelineAgent) generateReplyWithOptions(opts pipelineReplyOptions) {
 			activeToolChoice = opts.ToolChoice
 			chatOptions = append(chatOptions, llm.WithToolChoice(opts.ToolChoice))
 		}
-		if session.Options.MaxToolSteps > 0 && toolSteps >= session.Options.MaxToolSteps {
+		if toolSteps > session.Options.MaxToolSteps {
 			activeToolChoice = "none"
 			chatOptions = append(chatOptions, llm.WithToolChoice("none"))
 		}

@@ -1080,6 +1080,17 @@ func TestNewAgentSessionPreservesExplicitFalseDiscardAudioIfUninterruptible(t *t
 	}
 }
 
+func TestNewAgentSessionPreservesExplicitZeroMaxToolSteps(t *testing.T) {
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{
+		MaxToolSteps:    0,
+		MaxToolStepsSet: true,
+	})
+
+	if session.Options.MaxToolSteps != 0 {
+		t.Fatalf("MaxToolSteps = %d, want explicit zero", session.Options.MaxToolSteps)
+	}
+}
+
 func TestNewAgentSessionPreservesExplicitZeroMinInterruptionDuration(t *testing.T) {
 	agent := NewAgent("test")
 	session := NewAgentSession(agent, nil, AgentSessionOptions{

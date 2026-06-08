@@ -51,6 +51,7 @@ type AgentSessionOptions struct {
 	EndpointingAlpha                 float64
 	Endpointing                      Endpointing
 	MaxToolSteps                     int
+	MaxToolStepsSet                  bool
 	UserAwayTimeout                  float64
 	UserAwayTimeoutSet               bool
 	DisableUserAwayTimeout           bool
@@ -709,7 +710,7 @@ func withAgentSessionOptionDefaults(opts AgentSessionOptions) AgentSessionOption
 	if opts.Endpointing == nil {
 		opts.Endpointing = CreateEndpointing(opts.EndpointingMode, opts.MinEndpointingDelay, opts.MaxEndpointingDelay, opts.EndpointingAlpha)
 	}
-	if opts.MaxToolSteps == 0 {
+	if !opts.MaxToolStepsSet && opts.MaxToolSteps == 0 {
 		opts.MaxToolSteps = 3
 	}
 	if !opts.DisableUserAwayTimeout && !opts.UserAwayTimeoutSet && opts.UserAwayTimeout == 0 {
