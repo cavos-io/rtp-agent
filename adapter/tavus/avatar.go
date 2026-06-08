@@ -2,27 +2,43 @@ package tavus
 
 import (
 	"context"
-	"fmt"
 
 	"github.com/cavos-io/rtp-agent/core/agent"
 )
 
+const (
+	providerName               = "tavus"
+	defaultAvatarAgentIdentity = "tavus-avatar-agent"
+	defaultInitialAvatarState  = agent.AvatarStateIdle
+)
+
 type TavusAvatar struct {
-	apiKey string
+	apiKey         string
+	avatarIdentity string
+	state          agent.AvatarState
 }
 
 func NewTavusAvatar(apiKey string) *TavusAvatar {
 	return &TavusAvatar{
-		apiKey: apiKey,
+		apiKey:         apiKey,
+		avatarIdentity: defaultAvatarAgentIdentity,
+		state:          defaultInitialAvatarState,
 	}
 }
 
 func (a *TavusAvatar) Start(ctx context.Context) error {
-	fmt.Println("TavusAvatar started.")
 	return nil
 }
 
 func (a *TavusAvatar) UpdateState(state agent.AvatarState) error {
-	fmt.Printf("TavusAvatar state updated to: %s\n", state)
+	a.state = state
 	return nil
+}
+
+func (a *TavusAvatar) Provider() string {
+	return providerName
+}
+
+func (a *TavusAvatar) AvatarIdentity() string {
+	return a.avatarIdentity
 }
