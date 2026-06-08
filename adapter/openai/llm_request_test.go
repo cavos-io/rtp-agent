@@ -613,6 +613,30 @@ func TestBuildOpenAIChatCompletionRequestAppliesExtraParams(t *testing.T) {
 	}
 }
 
+func TestBuildOpenAIChatCompletionRequestAppliesExtraParamParallelToolCalls(t *testing.T) {
+	req := buildOpenAIChatCompletionRequest("gpt-4o", llm.NewChatContext(), &llm.ChatOptions{
+		ExtraParams: map[string]any{
+			"parallel_tool_calls": false,
+		},
+	})
+
+	if got, ok := req.ParallelToolCalls.(*bool); !ok || got == nil || *got {
+		t.Fatalf("ParallelToolCalls = %#v, want pointer to false", req.ParallelToolCalls)
+	}
+}
+
+func TestBuildOpenAIChatCompletionRequestAppliesExtraParamToolChoice(t *testing.T) {
+	req := buildOpenAIChatCompletionRequest("gpt-4o", llm.NewChatContext(), &llm.ChatOptions{
+		ExtraParams: map[string]any{
+			"tool_choice": "none",
+		},
+	})
+
+	if req.ToolChoice != "none" {
+		t.Fatalf("ToolChoice = %#v, want none", req.ToolChoice)
+	}
+}
+
 func TestNewOpenAILLMWithBaseURLAndHTTPClientUsesConfiguredClient(t *testing.T) {
 	capture := &captureDeadlineHTTPClient{
 		statusCode:   http.StatusBadRequest,
@@ -636,19 +660,21 @@ func TestNewOpenAILLMWithBaseURLAndHTTPClientUsesConfiguredClient(t *testing.T) 
 }
 
 type captureDeadlineHTTPClient struct {
-	err           error
-	hasDeadline   bool
-	remaining     time.Duration
-	statusCode    int
-	responseBody  string
-	header        http.Header
-	requestURL    string
-	requestBody   string
-	authorization string
-	apiKey        string
-	userAgent     string
-	roomID        string
-	jobID         string
+	err               error
+	hasDeadline       bool
+	remaining         time.Duration
+	statusCode        int
+	responseBody      string
+	header            http.Header
+	requestURL        string
+	requestBody       string
+	authorization     string
+	apiKey            string
+	userAgent         string
+	roomID            string
+	jobID             string
+	inferenceProvider string
+	inferencePriority string
 }
 
 func (c *captureDeadlineHTTPClient) Do(req *http.Request) (*http.Response, error) {
@@ -657,12 +683,15 @@ func (c *captureDeadlineHTTPClient) Do(req *http.Request) (*http.Response, error
 	if ok {
 		c.remaining = time.Until(deadline)
 	}
+	c.header = req.Header.Clone()
 	c.requestURL = req.URL.String()
 	c.authorization = req.Header.Get("Authorization")
 	c.apiKey = req.Header.Get(openaisdk.AzureAPIKeyHeader)
 	c.userAgent = req.Header.Get("User-Agent")
 	c.roomID = req.Header.Get("X-LiveKit-Room-ID")
 	c.jobID = req.Header.Get("X-LiveKit-Job-ID")
+	c.inferenceProvider = req.Header.Get("X-LiveKit-Inference-Provider")
+	c.inferencePriority = req.Header.Get("X-LiveKit-Inference-Priority")
 	if req.Body != nil {
 		body, _ := io.ReadAll(req.Body)
 		c.requestBody = string(body)

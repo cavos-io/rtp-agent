@@ -152,3 +152,171 @@ func TestLiveKitInferenceLLMChatSendsReferenceContextHeaders(t *testing.T) {
 		t.Fatalf("%s = %q, want job_llm", inference.HeaderJobID, capture.jobID)
 	}
 }
+
+func TestLiveKitInferenceLLMChatSendsReferenceRoutingHeaders(t *testing.T) {
+	capture := &captureDeadlineHTTPClient{
+		statusCode:   http.StatusUnauthorized,
+		responseBody: `{"error":{"message":"stop"}}`,
+	}
+
+	provider, err := NewLiveKitInferenceLLM(
+		"google/gemini-2.5-flash",
+		"key",
+		"secret",
+		WithLiveKitInferenceLLMProvider("google"),
+		WithLiveKitInferenceLLMClass("standard"),
+	)
+	if err != nil {
+		t.Fatalf("NewLiveKitInferenceLLM error = %v", err)
+	}
+	provider.baseURL = "https://inference.test/v1"
+	provider.httpClient = capture
+
+	_, _ = provider.Chat(
+		context.Background(),
+		llm.NewChatContext(),
+		llm.WithExtraParams(map[string]any{"inference_class": "priority"}),
+		llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 0}),
+	)
+
+	if capture.inferenceProvider != "google" {
+		t.Fatalf("%s = %q, want google", inference.HeaderInferenceProvider, capture.inferenceProvider)
+	}
+	if capture.inferencePriority != "priority" {
+		t.Fatalf("%s = %q, want priority", inference.HeaderInferencePriority, capture.inferencePriority)
+	}
+	if strings.Contains(capture.requestBody, "inference_class") {
+		t.Fatalf("request body = %s, want inference_class consumed as header", capture.requestBody)
+	}
+}
+
+func TestLiveKitInferenceLLMUpdateOptionsChangesReferenceModel(t *testing.T) {
+	capture := &captureDeadlineHTTPClient{
+		statusCode:   http.StatusUnauthorized,
+		responseBody: `{"error":{"message":"stop"}}`,
+	}
+
+	provider, err := NewLiveKitInferenceLLM("openai/gpt-4.1", "key", "secret")
+	if err != nil {
+		t.Fatalf("NewLiveKitInferenceLLM error = %v", err)
+	}
+	provider.baseURL = "https://inference.test/v1"
+	provider.httpClient = capture
+
+	provider.UpdateOptions(WithLiveKitInferenceLLMModel("openai/gpt-5-mini"))
+
+	if provider.Model() != "openai/gpt-5-mini" {
+		t.Fatalf("Model = %q, want updated model", provider.Model())
+	}
+
+	_, _ = provider.Chat(context.Background(), llm.NewChatContext(), llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 0}))
+
+	if !strings.Contains(capture.requestBody, `"model":"openai/gpt-5-mini"`) {
+		t.Fatalf("request body = %s, want updated model", capture.requestBody)
+	}
+}
+
+func TestLiveKitInferenceLLMUpdateOptionsReplacesReferenceExtraParams(t *testing.T) {
+	capture := &captureDeadlineHTTPClient{
+		statusCode:   http.StatusUnauthorized,
+		responseBody: `{"error":{"message":"stop"}}`,
+	}
+
+	provider, err := NewLiveKitInferenceLLM("openai/gpt-4.1", "key", "secret",
+		WithLiveKitInferenceLLMExtraParams(map[string]any{
+			"temperature": 0.2,
+			"user":        "initial-user",
+		}),
+	)
+	if err != nil {
+		t.Fatalf("NewLiveKitInferenceLLM error = %v", err)
+	}
+	provider.baseURL = "https://inference.test/v1"
+	provider.httpClient = capture
+
+	provider.UpdateOptions(WithLiveKitInferenceLLMExtraParams(map[string]any{
+		"top_p": 0.4,
+		"user":  "updated-user",
+	}))
+
+	_, _ = provider.Chat(context.Background(), llm.NewChatContext(), llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 0}))
+
+	if strings.Contains(capture.requestBody, `"temperature"`) {
+		t.Fatalf("request body = %s, want replaced extra params without temperature", capture.requestBody)
+	}
+	if !strings.Contains(capture.requestBody, `"top_p":0.4`) {
+		t.Fatalf("request body = %s, want updated top_p", capture.requestBody)
+	}
+	if !strings.Contains(capture.requestBody, `"user":"updated-user"`) {
+		t.Fatalf("request body = %s, want updated user", capture.requestBody)
+	}
+}
+
+func TestLiveKitInferenceLLMChatSendsReferenceExtraHeaders(t *testing.T) {
+	capture := &captureDeadlineHTTPClient{
+		statusCode:   http.StatusUnauthorized,
+		responseBody: `{"error":{"message":"stop"}}`,
+	}
+
+	provider, err := NewLiveKitInferenceLLM("openai/gpt-4.1", "key", "secret",
+		WithLiveKitInferenceLLMExtraParams(map[string]any{
+			"extra_headers": map[string]any{
+				"X-Trace-ID": "trace-123",
+			},
+			"user": "caller-123",
+		}),
+	)
+	if err != nil {
+		t.Fatalf("NewLiveKitInferenceLLM error = %v", err)
+	}
+	provider.baseURL = "https://inference.test/v1"
+	provider.httpClient = capture
+
+	_, _ = provider.Chat(context.Background(), llm.NewChatContext(), llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 0}))
+
+	if got := capture.header.Get("X-Trace-ID"); got != "trace-123" {
+		t.Fatalf("X-Trace-ID = %q, want trace-123", got)
+	}
+	if !strings.Contains(capture.requestBody, `"user":"caller-123"`) {
+		t.Fatalf("request body = %s, want non-header extra param preserved", capture.requestBody)
+	}
+	if strings.Contains(capture.requestBody, "extra_headers") {
+		t.Fatalf("request body = %s, want extra_headers consumed as headers", capture.requestBody)
+	}
+}
+
+func TestLiveKitInferenceLLMChatSendsReferenceCallExtraHeaders(t *testing.T) {
+	capture := &captureDeadlineHTTPClient{
+		statusCode:   http.StatusUnauthorized,
+		responseBody: `{"error":{"message":"stop"}}`,
+	}
+
+	provider, err := NewLiveKitInferenceLLM("openai/gpt-4.1", "key", "secret")
+	if err != nil {
+		t.Fatalf("NewLiveKitInferenceLLM error = %v", err)
+	}
+	provider.baseURL = "https://inference.test/v1"
+	provider.httpClient = capture
+
+	_, _ = provider.Chat(
+		context.Background(),
+		llm.NewChatContext(),
+		llm.WithExtraParams(map[string]any{
+			"extra_headers": map[string]any{
+				"X-Call-ID": "call-123",
+			},
+			"user": "caller-456",
+		}),
+		llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 0}),
+	)
+
+	if got := capture.header.Get("X-Call-ID"); got != "call-123" {
+		t.Fatalf("X-Call-ID = %q, want call-123", got)
+	}
+	if !strings.Contains(capture.requestBody, `"user":"caller-456"`) {
+		t.Fatalf("request body = %s, want non-header call extra param preserved", capture.requestBody)
+	}
+	if strings.Contains(capture.requestBody, "extra_headers") {
+		t.Fatalf("request body = %s, want call extra_headers consumed as headers", capture.requestBody)
+	}
+}

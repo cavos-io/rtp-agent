@@ -26,6 +26,133 @@ func TestSplitSentencesPreservesDecimalNumbers(t *testing.T) {
 	}
 }
 
+func TestSplitSentencesUsesReferenceWebsiteSuffixes(t *testing.T) {
+	tests := []struct {
+		name string
+		text string
+		want []string
+	}{
+		{
+			name: "reference suffix remains protected",
+			text: "Please visit the service at example.io. Next sentence follows here.",
+			want: []string{"Please visit the service at example.io.", "Next sentence follows here."},
+		},
+		{
+			name: "non reference suffix is not protected",
+			text: "Please visit the service at example.dev. Next sentence follows here.",
+			want: []string{"Please visit the service at example.", "dev. Next sentence follows here."},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := NewBasicSentenceTokenizer().Tokenize(tt.text, "")
+			if !reflect.DeepEqual(got, tt.want) {
+				t.Fatalf("Tokenize() = %#v, want %#v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestSplitSentencesUsesReferenceTitlePrefixes(t *testing.T) {
+	tests := []struct {
+		name string
+		text string
+		want []string
+	}{
+		{
+			name: "professor title is not protected",
+			text: "Please consult Prof. Smith for details. Next sentence follows here.",
+			want: []string{"Please consult Prof.", "Smith for details. Next sentence follows here."},
+		},
+		{
+			name: "captain title is not protected",
+			text: "Please consult Capt. Smith for details. Next sentence follows here.",
+			want: []string{"Please consult Capt.", "Smith for details. Next sentence follows here."},
+		},
+		{
+			name: "doctor title remains protected",
+			text: "Please consult Dr. Smith for details. Next sentence follows here.",
+			want: []string{"Please consult Dr. Smith for details.", "Next sentence follows here."},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := NewBasicSentenceTokenizer().Tokenize(tt.text, "")
+			if !reflect.DeepEqual(got, tt.want) {
+				t.Fatalf("Tokenize() = %#v, want %#v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestSplitSentencesUsesReferenceCompanySuffixes(t *testing.T) {
+	tests := []struct {
+		name string
+		text string
+		want []string
+	}{
+		{
+			name: "llc suffix is not protected",
+			text: "Please contact Foo LLC. Next sentence follows here.",
+			want: []string{"Please contact Foo LLC.", "Next sentence follows here."},
+		},
+		{
+			name: "corp suffix is not protected",
+			text: "Please contact Foo Corp. Next sentence follows here.",
+			want: []string{"Please contact Foo Corp.", "Next sentence follows here."},
+		},
+		{
+			name: "co suffix remains protected",
+			text: "Please contact Foo Co. Next sentence follows here.",
+			want: []string{"Please contact Foo Co. Next sentence follows here."},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := NewBasicSentenceTokenizer().Tokenize(tt.text, "")
+			if !reflect.DeepEqual(got, tt.want) {
+				t.Fatalf("Tokenize() = %#v, want %#v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestSplitSentencesUsesReferenceStarterWords(t *testing.T) {
+	tests := []struct {
+		name string
+		text string
+		want []string
+	}{
+		{
+			name: "therefore is not a starter",
+			text: "Please inspect the acronym A.B. Therefore this sentence follows here.",
+			want: []string{"Please inspect the acronym A.B. Therefore this sentence follows here."},
+		},
+		{
+			name: "consequently is not a starter",
+			text: "Please inspect the acronym A.B. Consequently this sentence follows here.",
+			want: []string{"Please inspect the acronym A.B. Consequently this sentence follows here."},
+		},
+		{
+			name: "however remains a starter",
+			text: "Please inspect the acronym A.B. However this sentence follows here.",
+			want: []string{"Please inspect the acronym A.B.", "However this sentence follows here."},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := NewBasicSentenceTokenizer().Tokenize(tt.text, "")
+			if !reflect.DeepEqual(got, tt.want) {
+				t.Fatalf("Tokenize() = %#v, want %#v", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestSplitSentencesKeepsClosingQuoteAfterCJKPunctuation(t *testing.T) {
 	tokens := NewBasicSentenceTokenizer().Tokenize("他说：“你好。” 下一句。", "")
 
