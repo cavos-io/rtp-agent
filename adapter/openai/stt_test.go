@@ -179,6 +179,16 @@ func TestOpenAISTTLabelAndDisabledRealtimeStream(t *testing.T) {
 	}
 }
 
+func TestOpenAISTTProviderUsesReferenceBaseURLHost(t *testing.T) {
+	provider := mustNewOpenAISTT(t, "test-key", "",
+		WithOpenAISTTBaseURL("https://stt.openai.test/v1"),
+	)
+
+	if got := provider.Provider(); got != "stt.openai.test" {
+		t.Fatalf("Provider() = %q, want stt.openai.test", got)
+	}
+}
+
 func TestOpenAISTTRecognizeUsesOpenAITranscriptionAPI(t *testing.T) {
 	var gotAuth string
 	var gotPath string

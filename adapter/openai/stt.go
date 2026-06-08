@@ -123,8 +123,14 @@ func NewOpenAISTT(apiKey string, model string, opts ...OpenAISTTOption) (*OpenAI
 	return provider, nil
 }
 
-func (s *OpenAISTT) Label() string    { return "openai.STT" }
-func (s *OpenAISTT) Provider() string { return "openai" }
+func (s *OpenAISTT) Label() string { return "openai.STT" }
+func (s *OpenAISTT) Provider() string {
+	u, err := url.Parse(s.baseURL)
+	if err != nil || u.Host == "" {
+		return "openai"
+	}
+	return u.Host
+}
 func (s *OpenAISTT) Capabilities() stt.STTCapabilities {
 	return stt.STTCapabilities{Streaming: s.useRealtime, InterimResults: s.useRealtime, Diarization: false, OfflineRecognize: true}
 }
