@@ -54,7 +54,7 @@ func TestSynthesizeWithStreamEndsInputWhenSupported(t *testing.T) {
 	}
 }
 
-func TestSynthesizeWithStreamIgnoresEmptyText(t *testing.T) {
+func TestSynthesizeWithStreamPushesEmptyText(t *testing.T) {
 	provider := &fakeStreamingTTS{
 		stream: &fakeSynthesizeStream{},
 	}
@@ -64,14 +64,17 @@ func TestSynthesizeWithStreamIgnoresEmptyText(t *testing.T) {
 		t.Fatalf("SynthesizeWithStream() error = %v", err)
 	}
 	defer chunked.Close()
+	if chunked == nil {
+		t.Fatal("SynthesizeWithStream() returned nil stream")
+	}
 
-	wantCalls := []string{"flush"}
+	wantCalls := []string{"push:", "flush"}
 	if !reflect.DeepEqual(provider.stream.calls, wantCalls) {
 		t.Fatalf("stream calls = %#v, want %#v", provider.stream.calls, wantCalls)
 	}
 }
 
-func TestSynthesizeWithStreamIgnoresEmptyTextWhenEndingInput(t *testing.T) {
+func TestSynthesizeWithStreamPushesEmptyTextBeforeEndingInput(t *testing.T) {
 	stream := &endInputSynthesizeStream{}
 	provider := &endInputStreamingTTS{stream: stream}
 
@@ -80,8 +83,11 @@ func TestSynthesizeWithStreamIgnoresEmptyTextWhenEndingInput(t *testing.T) {
 		t.Fatalf("SynthesizeWithStream() error = %v", err)
 	}
 	defer chunked.Close()
+	if chunked == nil {
+		t.Fatal("SynthesizeWithStream() returned nil stream")
+	}
 
-	wantCalls := []string{"end_input"}
+	wantCalls := []string{"push:", "end_input"}
 	if !reflect.DeepEqual(stream.calls, wantCalls) {
 		t.Fatalf("stream calls = %#v, want %#v", stream.calls, wantCalls)
 	}
