@@ -53,6 +53,38 @@ func TestPipelineAgentGenerateReplyAddsAssistantMessageWithExtra(t *testing.T) {
 	}
 }
 
+func TestPipelineAgentGenerateReplyAddsAssistantMessageTTSMetrics(t *testing.T) {
+	chatCtx := llm.NewChatContext()
+	l := &fakeGenerationLLM{
+		stream: &fakeGenerationLLMStream{
+			chunks: []*llm.ChatChunk{
+				{Delta: &llm.ChoiceDelta{Content: "hello"}},
+			},
+		},
+	}
+	ttsStream := &fakePipelineTTSStream{
+		frames: []*model.AudioFrame{{Data: []byte{1, 2}}},
+	}
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	agent := NewPipelineAgent(nil, nil, l, &fakePipelineTTS{stream: ttsStream}, chatCtx)
+	agent.session = session
+	agent.ctx = context.Background()
+
+	agent.generateReply()
+
+	if len(chatCtx.Items) != 1 {
+		t.Fatalf("chatCtx.Items length = %d, want 1 assistant message", len(chatCtx.Items))
+	}
+	msg, ok := chatCtx.Items[0].(*llm.ChatMessage)
+	if !ok {
+		t.Fatalf("chatCtx item = %T, want *llm.ChatMessage", chatCtx.Items[0])
+	}
+	got, ok := msg.Metrics["tts_node_ttfb"].(float64)
+	if !ok || got <= 0 {
+		t.Fatalf("assistant Metrics[tts_node_ttfb] = %#v, want positive first audio latency", msg.Metrics["tts_node_ttfb"])
+	}
+}
+
 func TestPipelineAgentGenerateReplyWithInstructionsUsesTemporaryChatContext(t *testing.T) {
 	chatCtx := llm.NewChatContext()
 	chatCtx.Append(&llm.ChatMessage{
