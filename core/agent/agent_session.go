@@ -50,6 +50,7 @@ type AgentSessionOptions struct {
 	DisableUserAwayTimeout        bool
 	FalseInterruptionTimeout      float64
 	ResumeFalseInterruption       bool
+	ResumeFalseInterruptionSet    bool
 	MinConsecutiveSpeechDelay     float64
 	UseTTSAlignedTranscript       bool
 	TTSStreamPacer                *tts.SentenceStreamPacerOptions
@@ -60,6 +61,7 @@ type AgentSessionOptions struct {
 	BackgroundAudio               *BackgroundAudioPlayer
 	WordTokenizer                 tokenize.WordTokenizer
 	PreemptiveGeneration          bool
+	PreemptiveGenerationSet       bool
 	AECWarmupDuration             float64
 	SessionCloseTranscriptTimeout float64
 	TurnDetection                 TurnDetectionMode
@@ -575,8 +577,12 @@ func withAgentSessionOptionDefaults(opts AgentSessionOptions) AgentSessionOption
 	if opts.FalseInterruptionTimeout == 0 {
 		opts.FalseInterruptionTimeout = 2.0
 	}
-	opts.ResumeFalseInterruption = true
-	opts.PreemptiveGeneration = true
+	if !opts.ResumeFalseInterruptionSet {
+		opts.ResumeFalseInterruption = true
+	}
+	if !opts.PreemptiveGenerationSet {
+		opts.PreemptiveGeneration = true
+	}
 	if opts.AECWarmupDuration == 0 {
 		opts.AECWarmupDuration = 3.0
 	}

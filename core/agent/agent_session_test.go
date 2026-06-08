@@ -961,6 +961,22 @@ func TestNewAgentSessionAppliesReferenceOptionDefaults(t *testing.T) {
 	}
 }
 
+func TestNewAgentSessionPreservesExplicitFalseTurnOptions(t *testing.T) {
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{
+		ResumeFalseInterruption:    false,
+		ResumeFalseInterruptionSet: true,
+		PreemptiveGeneration:       false,
+		PreemptiveGenerationSet:    true,
+	})
+
+	if session.Options.ResumeFalseInterruption {
+		t.Fatal("ResumeFalseInterruption = true, want explicit false")
+	}
+	if session.Options.PreemptiveGeneration {
+		t.Fatal("PreemptiveGeneration = true, want explicit false")
+	}
+}
+
 func TestAgentSessionGenerateReplyEmitsSpeechCreatedEvent(t *testing.T) {
 	agent := NewAgent("test")
 	session := NewAgentSession(agent, nil, AgentSessionOptions{AllowInterruptions: true})
