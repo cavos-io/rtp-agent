@@ -270,6 +270,35 @@ func TestMakeFunctionCallOutputStringifiesValidOutputs(t *testing.T) {
 	}
 }
 
+func TestMakeFunctionCallOutputUsesEmptyStringForFalsyOutputs(t *testing.T) {
+	call := FunctionCall{CallID: "call_lookup", Name: "lookup", Arguments: "{}"}
+
+	tests := []struct {
+		name   string
+		output any
+	}{
+		{name: "false", output: false},
+		{name: "zero int", output: 0},
+		{name: "zero float", output: 0.0},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := MakeFunctionCallOutput(call, tt.output, nil)
+
+			if result.FncCallOut == nil {
+				t.Fatal("FncCallOut = nil, want successful output")
+			}
+			if result.FncCallOut.IsError || result.FncCallOut.Output != "" {
+				t.Fatalf("FncCallOut = %#v, want empty successful output", result.FncCallOut)
+			}
+			if result.RawOutput != tt.output {
+				t.Fatalf("RawOutput = %#v, want original output %#v", result.RawOutput, tt.output)
+			}
+		})
+	}
+}
+
 func TestMakeFunctionCallOutputTimestampsCreatedOutputs(t *testing.T) {
 	call := FunctionCall{CallID: "call_lookup", Name: "lookup", Arguments: "{}"}
 	tests := []struct {

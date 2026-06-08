@@ -329,7 +329,7 @@ func MakeFunctionCallOutput(fncCall FunctionCall, output any, exception error) F
 
 	outputString := ""
 	if output != nil {
-		outputString = fmt.Sprint(output)
+		outputString = functionOutputString(output)
 	}
 
 	return FunctionCallResult{
@@ -520,6 +520,61 @@ func isValidFunctionOutput(value any) bool {
 			}
 		}
 		return true
+	default:
+		return false
+	}
+}
+
+func functionOutputString(value any) string {
+	if isFalsyFunctionOutput(value) {
+		return ""
+	}
+	return fmt.Sprint(value)
+}
+
+func isFalsyFunctionOutput(value any) bool {
+	if value == nil {
+		return true
+	}
+	switch v := value.(type) {
+	case string:
+		return v == ""
+	case bool:
+		return !v
+	case int:
+		return v == 0
+	case int8:
+		return v == 0
+	case int16:
+		return v == 0
+	case int32:
+		return v == 0
+	case int64:
+		return v == 0
+	case uint:
+		return v == 0
+	case uint8:
+		return v == 0
+	case uint16:
+		return v == 0
+	case uint32:
+		return v == 0
+	case uint64:
+		return v == 0
+	case float32:
+		return v == 0
+	case float64:
+		return v == 0
+	case complex64:
+		return v == 0
+	case complex128:
+		return v == 0
+	}
+
+	v := reflect.ValueOf(value)
+	switch v.Kind() {
+	case reflect.Array, reflect.Slice, reflect.Map:
+		return v.Len() == 0
 	default:
 		return false
 	}
