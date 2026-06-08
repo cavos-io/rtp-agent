@@ -52,6 +52,13 @@ func WithOpenAIRealtimeSpeed(speed float64) OpenAIRealtimeOption {
 	}
 }
 
+func WithOpenAIRealtimeToolChoice(toolChoice llm.ToolChoice) OpenAIRealtimeOption {
+	return func(options *llm.RealtimeSessionOptions) {
+		options.ToolChoice = toolChoice
+		options.ToolChoiceSet = true
+	}
+}
+
 func NewRealtimeModel(apiKey, model string, opts ...OpenAIRealtimeOption) *RealtimeModel {
 	if model == "" {
 		model = "gpt-realtime"
