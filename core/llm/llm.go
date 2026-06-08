@@ -880,6 +880,7 @@ type RealtimeSessionOptions struct {
 	Truncation                 any
 	TruncationSet              bool
 	Tracing                    any
+	TracingSet                 bool
 	TurnDetection              any
 	InputAudioTranscription    any
 	InputAudioNoiseReduction   any

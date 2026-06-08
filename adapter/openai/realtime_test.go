@@ -613,6 +613,24 @@ func TestRealtimeUpdateOptionsMessageMapsTracing(t *testing.T) {
 	}
 }
 
+func TestRealtimeUpdateOptionsMessageClearsTracing(t *testing.T) {
+	msg := openAIRealtimeUpdateOptionsMessage(llm.RealtimeSessionOptions{
+		TracingSet: true,
+	})
+
+	if msg["type"] != "session.update" {
+		t.Fatalf("message type = %#v, want session.update", msg["type"])
+	}
+	session := msg["session"].(map[string]any)
+	value, ok := session["tracing"]
+	if !ok {
+		t.Fatalf("tracing missing from session payload: %#v", session)
+	}
+	if value != nil {
+		t.Fatalf("tracing = %#v, want nil reset", value)
+	}
+}
+
 func TestRealtimeUpdateOptionsMessageMapsTurnDetection(t *testing.T) {
 	msg := openAIRealtimeUpdateOptionsMessage(llm.RealtimeSessionOptions{
 		TurnDetection: map[string]any{"type": "server_vad"},

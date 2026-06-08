@@ -553,7 +553,7 @@ func openAIRealtimeUpdateOptionsMessageWithEventID(options llm.RealtimeSessionOp
 	if options.TruncationSet || options.Truncation != nil {
 		session["truncation"] = options.Truncation
 	}
-	if options.Tracing != nil {
+	if options.TracingSet || options.Tracing != nil {
 		session["tracing"] = options.Tracing
 	}
 	input := make(map[string]any)
