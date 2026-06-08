@@ -1072,6 +1072,23 @@ func TestNewAgentSessionPreservesExplicitZeroMinEndpointingDelay(t *testing.T) {
 	}
 }
 
+func TestNewAgentSessionPreservesExplicitZeroMaxEndpointingDelay(t *testing.T) {
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{
+		MaxEndpointingDelay:    0,
+		MaxEndpointingDelaySet: true,
+	})
+
+	if session.Options.MaxEndpointingDelay != 0 {
+		t.Fatalf("MaxEndpointingDelay = %v, want explicit zero preserved", session.Options.MaxEndpointingDelay)
+	}
+	if session.Options.Endpointing == nil {
+		t.Fatal("Endpointing = nil, want default endpointing policy")
+	}
+	if got := session.Options.Endpointing.MaxDelay(); got != 0 {
+		t.Fatalf("Endpointing.MaxDelay() = %v, want explicit zero", got)
+	}
+}
+
 func TestNewAgentSessionPreservesExplicitZeroSessionCloseTranscriptTimeout(t *testing.T) {
 	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{
 		SessionCloseTranscriptTimeout:    0,
