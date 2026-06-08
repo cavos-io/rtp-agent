@@ -188,6 +188,7 @@ type AgentSession struct {
 	mu             sync.Mutex
 	activity       *AgentActivity
 	started        bool
+	closing        bool
 	runCtx         context.Context
 	runState       *RunResult
 	userAwayTimer  *time.Timer
@@ -1516,20 +1517,32 @@ func (s *AgentSession) closeSoon(reason CloseReason, err error) {
 	started := s.started
 	activity := s.activity
 	agent := s.Agent
-	s.mu.Unlock()
 	if !started && activity == nil && agent != nil {
+		s.mu.Unlock()
 		return
 	}
+	if s.closing {
+		s.mu.Unlock()
+		return
+	}
+	s.closing = true
+	closeEventListeners := s.closeEventListenersLocked()
+	closeSubscribers := s.closeSubscribersLocked()
+	s.mu.Unlock()
 
-	ev := CloseEvent{Reason: reason, Error: err, CreatedAt: time.Now()}
-	s.recordEvent(&ev)
-	for _, ch := range s.closeSubscribers() {
+	_ = s.stop(context.Background(), reason != CloseReasonError)
+
+	ev := &CloseEvent{Reason: reason, Error: err, CreatedAt: time.Now()}
+	s.appendRecordedEvent(ev)
+	for _, listener := range closeEventListeners {
+		listener(ev)
+	}
+	for _, ch := range closeSubscribers {
 		select {
-		case ch <- ev:
+		case ch <- *ev:
 		default:
 		}
 	}
-	_ = s.stop(context.Background(), reason != CloseReasonError)
 }
 
 func (s *AgentSession) Shutdown(drain ...bool) {
@@ -1561,10 +1574,7 @@ func (s *AgentSession) closeEvents() chan CloseEvent {
 	return ch
 }
 
-func (s *AgentSession) closeSubscribers() []chan CloseEvent {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
+func (s *AgentSession) closeSubscribersLocked() []chan CloseEvent {
 	subs := make([]chan CloseEvent, 0, len(s.closeSubs)+1)
 	if s.closeCh == nil {
 		s.closeCh = make(chan CloseEvent, 10)
@@ -1572,6 +1582,24 @@ func (s *AgentSession) closeSubscribers() []chan CloseEvent {
 	subs = append(subs, s.closeCh)
 	subs = append(subs, s.closeSubs...)
 	return subs
+}
+
+func (s *AgentSession) closeEventListenersLocked() []func(Event) {
+	registered := s.eventListeners["close"]
+	listeners := make([]func(Event), 0, len(registered))
+	for _, listener := range registered {
+		listeners = append(listeners, listener.callback)
+	}
+	return listeners
+}
+
+func (s *AgentSession) appendRecordedEvent(ev Event) {
+	if ev == nil {
+		return
+	}
+	s.mu.Lock()
+	s.recordedEvents = append(s.recordedEvents, ev)
+	s.mu.Unlock()
 }
 
 func (s *AgentSession) Start(ctx context.Context) error {
@@ -1651,6 +1679,7 @@ func (s *AgentSession) StartWithOptions(ctx context.Context, opts StartOptions) 
 	s.mu.Lock()
 	s.activity = activity
 	s.started = true
+	s.closing = false
 	s.runCtx = ctx
 	s.mu.Unlock()
 

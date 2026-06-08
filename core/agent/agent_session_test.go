@@ -1522,6 +1522,49 @@ func TestAgentSessionCloseSoonClearsEventListeners(t *testing.T) {
 	}
 }
 
+func TestAgentSessionCloseSoonEmitsCloseAfterCleanup(t *testing.T) {
+	agent := NewAgent("test")
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	session.activity = NewAgentActivity(agent, session)
+	session.started = true
+	current := NewSpeechHandle(true, DefaultInputDetails())
+	session.activity.currentSpeech = current
+	session.activity.OnFinalTranscript(&stt.SpeechEvent{
+		Alternatives: []stt.SpeechData{{Text: "closing turn"}},
+	})
+
+	done := make(chan struct{}, 1)
+	go func() {
+		session.CloseSoon(CloseReasonUserInitiated)
+		done <- struct{}{}
+	}()
+
+	closeEvents := session.CloseEvents()
+	time.Sleep(20 * time.Millisecond)
+	select {
+	case ev := <-closeEvents:
+		t.Fatalf("CloseSoon emitted close before cleanup completed: %#v", ev)
+	case <-done:
+		t.Fatal("CloseSoon returned before active speech cleanup completed")
+	default:
+	}
+
+	current.MarkDone()
+	select {
+	case <-done:
+	case <-testTimeout():
+		t.Fatal("CloseSoon did not finish after speech completed")
+	}
+	select {
+	case ev := <-closeEvents:
+		if ev.Reason != CloseReasonUserInitiated {
+			t.Fatalf("close reason = %q, want user_initiated", ev.Reason)
+		}
+	default:
+		t.Fatal("CloseSoon did not emit close after cleanup completed")
+	}
+}
+
 func TestAgentSessionRecordedEventsReturnsCopy(t *testing.T) {
 	agent := NewAgent("test")
 	session := NewAgentSession(agent, nil, AgentSessionOptions{})
