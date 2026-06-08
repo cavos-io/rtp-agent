@@ -110,6 +110,15 @@ func WithOpenAILLMVerbosity(verbosity string) OpenAILLMOption {
 	}
 }
 
+func WithOpenAILLMReasoningEffort(reasoningEffort string) OpenAILLMOption {
+	return func(l *OpenAILLM) {
+		if l.extraParams == nil {
+			l.extraParams = map[string]any{}
+		}
+		l.extraParams["reasoning_effort"] = reasoningEffort
+	}
+}
+
 func WithOpenAILLMParallelToolCalls(parallelToolCalls bool) OpenAILLMOption {
 	return func(l *OpenAILLM) {
 		l.parallelToolCalls = parallelToolCalls
