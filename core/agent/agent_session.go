@@ -62,6 +62,7 @@ type AgentSessionOptions struct {
 	WordTokenizer                 tokenize.WordTokenizer
 	PreemptiveGeneration          bool
 	PreemptiveGenerationSet       bool
+	AudioInputHook                AudioInputHook
 	AECWarmupDuration             float64
 	SessionCloseTranscriptTimeout float64
 	TurnDetection                 TurnDetectionMode
@@ -670,7 +671,9 @@ func (s *AgentSession) ensureAssistantLocked() SessionAssistant {
 		s.Assistant = NewMultimodalAgent(s.RealtimeModel, s.ChatCtx)
 		return s.Assistant
 	}
-	s.Assistant = NewPipelineAgent(s.VAD, s.STT, s.LLM, s.TTS, s.ChatCtx)
+	pipeline := NewPipelineAgent(s.VAD, s.STT, s.LLM, s.TTS, s.ChatCtx)
+	pipeline.SetAudioInputHook(s.Options.AudioInputHook)
+	s.Assistant = pipeline
 	return s.Assistant
 }
 
@@ -686,6 +689,7 @@ func (s *AgentSession) replacementAssistantLocked(current SessionAssistant) Sess
 	}
 	pipeline := NewPipelineAgent(s.VAD, s.STT, s.LLM, s.TTS, s.ChatCtx)
 	pipeline.ttsStreamPacer = s.Options.TTSStreamPacer
+	pipeline.SetAudioInputHook(s.Options.AudioInputHook)
 	return pipeline
 }
 

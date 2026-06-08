@@ -61,6 +61,124 @@ func TestNewOpenAILLMRequiresAPIKey(t *testing.T) {
 	}
 }
 
+func TestNewAzureOpenAILLMRoutesDeploymentAndKeepsModelMetadata(t *testing.T) {
+	capture := &captureDeadlineHTTPClient{
+		statusCode:   http.StatusBadRequest,
+		responseBody: `{"error":{"message":"bad request","type":"invalid_request_error","code":"bad_request"}}`,
+	}
+
+	model, err := NewAzureOpenAILLM(
+		"gpt-4o",
+		"https://resource.openai.azure.com",
+		"chat-deployment",
+		"2024-06-01",
+		"azure-key",
+		"",
+		withOpenAILLMHTTPClient(capture),
+	)
+	if err != nil {
+		t.Fatalf("NewAzureOpenAILLM error = %v", err)
+	}
+
+	_, _ = model.Chat(context.Background(), llm.NewChatContext(), llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 0}))
+
+	if model.Model() != "gpt-4o" {
+		t.Fatalf("Model = %q, want reference model metadata", model.Model())
+	}
+	if got := model.Provider(); got != "resource.openai.azure.com" {
+		t.Fatalf("Provider() = %q, want Azure endpoint host", got)
+	}
+	if !strings.Contains(capture.requestURL, "/openai/deployments/chat-deployment/chat/completions") {
+		t.Fatalf("request URL = %s, want Azure deployment route", capture.requestURL)
+	}
+	if !strings.Contains(capture.requestURL, "api-version=2024-06-01") {
+		t.Fatalf("request URL = %s, want configured api-version", capture.requestURL)
+	}
+	if capture.apiKey != "azure-key" {
+		t.Fatalf("api-key header = %q, want Azure API key", capture.apiKey)
+	}
+	if capture.authorization != "" {
+		t.Fatalf("Authorization = %q, want no bearer token for API-key auth", capture.authorization)
+	}
+}
+
+func TestNewAzureOpenAILLMFallsBackToReferenceEnvironment(t *testing.T) {
+	t.Setenv("AZURE_OPENAI_ENDPOINT", "https://env-resource.openai.azure.com")
+	t.Setenv("AZURE_OPENAI_API_KEY", "env-azure-key")
+	t.Setenv("OPENAI_API_VERSION", "2024-08-01-preview")
+	capture := &captureDeadlineHTTPClient{
+		statusCode:   http.StatusBadRequest,
+		responseBody: `{"error":{"message":"bad request","type":"invalid_request_error","code":"bad_request"}}`,
+	}
+
+	model, err := NewAzureOpenAILLM(
+		"",
+		"",
+		"",
+		"",
+		"",
+		"",
+		withOpenAILLMHTTPClient(capture),
+	)
+	if err != nil {
+		t.Fatalf("NewAzureOpenAILLM error = %v", err)
+	}
+
+	_, _ = model.Chat(context.Background(), llm.NewChatContext(), llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 0}))
+
+	if model.Model() != defaultOpenAILLMModel {
+		t.Fatalf("Model = %q, want default model", model.Model())
+	}
+	if !strings.Contains(capture.requestURL, "/openai/deployments/"+defaultOpenAILLMModel+"/chat/completions") {
+		t.Fatalf("request URL = %s, want default model as deployment", capture.requestURL)
+	}
+	if !strings.Contains(capture.requestURL, "api-version=2024-08-01-preview") {
+		t.Fatalf("request URL = %s, want env api-version", capture.requestURL)
+	}
+	if capture.apiKey != "env-azure-key" {
+		t.Fatalf("api-key header = %q, want env Azure API key", capture.apiKey)
+	}
+}
+
+func TestNewAzureOpenAILLMRequiresEndpoint(t *testing.T) {
+	t.Setenv("AZURE_OPENAI_ENDPOINT", "")
+	t.Setenv("AZURE_OPENAI_API_KEY", "key")
+
+	_, err := NewAzureOpenAILLM("gpt-4o", "", "", "", "", "")
+	if err == nil || !strings.Contains(err.Error(), "AZURE_OPENAI_ENDPOINT") {
+		t.Fatalf("NewAzureOpenAILLM error = %v, want missing endpoint error", err)
+	}
+}
+
+func TestNewAzureOpenAILLMUsesEntraTokenWhenAPIKeyEmpty(t *testing.T) {
+	capture := &captureDeadlineHTTPClient{
+		statusCode:   http.StatusBadRequest,
+		responseBody: `{"error":{"message":"bad request","type":"invalid_request_error","code":"bad_request"}}`,
+	}
+
+	model, err := NewAzureOpenAILLM(
+		"gpt-4o",
+		"https://resource.openai.azure.com",
+		"chat-deployment",
+		"2024-06-01",
+		"",
+		"entra-token",
+		withOpenAILLMHTTPClient(capture),
+	)
+	if err != nil {
+		t.Fatalf("NewAzureOpenAILLM error = %v", err)
+	}
+
+	_, _ = model.Chat(context.Background(), llm.NewChatContext(), llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 0}))
+
+	if capture.apiKey != "" {
+		t.Fatalf("api-key header = %q, want removed for Entra token auth", capture.apiKey)
+	}
+	if capture.authorization != "Bearer entra-token" {
+		t.Fatalf("Authorization = %q, want Entra bearer token", capture.authorization)
+	}
+}
+
 func TestNewOpenAILLMChatUsesConfiguredKeyAndDefaultModel(t *testing.T) {
 	t.Setenv(openAIAPIKeyEnv, "env-key")
 	capture := &captureDeadlineHTTPClient{
@@ -524,8 +642,10 @@ type captureDeadlineHTTPClient struct {
 	statusCode    int
 	responseBody  string
 	header        http.Header
+	requestURL    string
 	requestBody   string
 	authorization string
+	apiKey        string
 }
 
 func (c *captureDeadlineHTTPClient) Do(req *http.Request) (*http.Response, error) {
@@ -534,7 +654,9 @@ func (c *captureDeadlineHTTPClient) Do(req *http.Request) (*http.Response, error
 	if ok {
 		c.remaining = time.Until(deadline)
 	}
+	c.requestURL = req.URL.String()
 	c.authorization = req.Header.Get("Authorization")
+	c.apiKey = req.Header.Get(openaisdk.AzureAPIKeyHeader)
 	if req.Body != nil {
 		body, _ := io.ReadAll(req.Body)
 		c.requestBody = string(body)

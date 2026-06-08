@@ -137,6 +137,161 @@ func TestNewOpenAISTTRequiresAPIKey(t *testing.T) {
 	}
 }
 
+func TestNewAzureOpenAISTTRoutesDeploymentAndKeepsModelMetadata(t *testing.T) {
+	var gotAPIKey string
+	var gotAuth string
+	var gotPath string
+	var gotQuery string
+	client := openAITestHTTPDoer(func(r *http.Request) (*http.Response, error) {
+		gotAPIKey = r.Header.Get(goopenai.AzureAPIKeyHeader)
+		gotAuth = r.Header.Get("Authorization")
+		gotPath = r.URL.Path
+		gotQuery = r.URL.RawQuery
+		if err := r.ParseMultipartForm(1 << 20); err != nil {
+			return nil, err
+		}
+		if r.FormValue("model") != "gpt-4o-mini-transcribe" {
+			t.Fatalf("model form = %q, want reference model metadata", r.FormValue("model"))
+		}
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Status:     "200 OK",
+			Header:     http.Header{"Content-Type": []string{"application/json"}},
+			Body:       io.NopCloser(strings.NewReader(`{"text":"hello"}`)),
+			Request:    r,
+		}, nil
+	})
+
+	provider, err := NewAzureOpenAISTT(
+		"gpt-4o-mini-transcribe",
+		"https://resource.openai.azure.com",
+		"stt-deployment",
+		"2024-06-01",
+		"azure-key",
+		"",
+		withOpenAISTTHTTPClient(client),
+	)
+	if err != nil {
+		t.Fatalf("NewAzureOpenAISTT error = %v", err)
+	}
+
+	if _, err := provider.Recognize(context.Background(), []*model.AudioFrame{{Data: []byte{1, 2, 3}}}, "en"); err != nil {
+		t.Fatalf("Recognize error = %v", err)
+	}
+
+	if provider.model != "gpt-4o-mini-transcribe" {
+		t.Fatalf("model = %q, want reference model metadata", provider.model)
+	}
+	if got := provider.Provider(); got != "resource.openai.azure.com" {
+		t.Fatalf("Provider() = %q, want Azure endpoint host", got)
+	}
+	if gotPath != "/openai/deployments/stt-deployment/audio/transcriptions" {
+		t.Fatalf("path = %q, want Azure deployment transcription route", gotPath)
+	}
+	if !strings.Contains(gotQuery, "api-version=2024-06-01") {
+		t.Fatalf("query = %q, want configured api-version", gotQuery)
+	}
+	if gotAPIKey != "azure-key" {
+		t.Fatalf("api-key header = %q, want Azure API key", gotAPIKey)
+	}
+	if gotAuth != "" {
+		t.Fatalf("Authorization = %q, want no bearer token for API-key auth", gotAuth)
+	}
+}
+
+func TestNewAzureOpenAISTTFallsBackToReferenceEnvironment(t *testing.T) {
+	t.Setenv("AZURE_OPENAI_ENDPOINT", "https://env-resource.openai.azure.com")
+	t.Setenv("AZURE_OPENAI_API_KEY", "env-azure-key")
+	t.Setenv("OPENAI_API_VERSION", "2024-08-01-preview")
+	var gotAPIKey string
+	var gotPath string
+	var gotQuery string
+	client := openAITestHTTPDoer(func(r *http.Request) (*http.Response, error) {
+		gotAPIKey = r.Header.Get(goopenai.AzureAPIKeyHeader)
+		gotPath = r.URL.Path
+		gotQuery = r.URL.RawQuery
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Status:     "200 OK",
+			Header:     http.Header{"Content-Type": []string{"application/json"}},
+			Body:       io.NopCloser(strings.NewReader(`{"text":"hello"}`)),
+			Request:    r,
+		}, nil
+	})
+
+	provider, err := NewAzureOpenAISTT("", "", "", "", "", "", withOpenAISTTHTTPClient(client))
+	if err != nil {
+		t.Fatalf("NewAzureOpenAISTT error = %v", err)
+	}
+
+	if _, err := provider.Recognize(context.Background(), []*model.AudioFrame{{Data: []byte{1, 2, 3}}}, "en"); err != nil {
+		t.Fatalf("Recognize error = %v", err)
+	}
+
+	if provider.model != "gpt-4o-mini-transcribe" {
+		t.Fatalf("model = %q, want default model", provider.model)
+	}
+	if gotPath != "/openai/deployments/gpt-4o-mini-transcribe/audio/transcriptions" {
+		t.Fatalf("path = %q, want default model as Azure deployment", gotPath)
+	}
+	if !strings.Contains(gotQuery, "api-version=2024-08-01-preview") {
+		t.Fatalf("query = %q, want env api-version", gotQuery)
+	}
+	if gotAPIKey != "env-azure-key" {
+		t.Fatalf("api-key header = %q, want env Azure API key", gotAPIKey)
+	}
+}
+
+func TestNewAzureOpenAISTTRequiresEndpoint(t *testing.T) {
+	t.Setenv("AZURE_OPENAI_ENDPOINT", "")
+	t.Setenv("AZURE_OPENAI_API_KEY", "key")
+
+	_, err := NewAzureOpenAISTT("gpt-4o-mini-transcribe", "", "", "", "", "")
+	if err == nil || !strings.Contains(err.Error(), "AZURE_OPENAI_ENDPOINT") {
+		t.Fatalf("NewAzureOpenAISTT error = %v, want missing endpoint error", err)
+	}
+}
+
+func TestNewAzureOpenAISTTUsesEntraTokenWhenAPIKeyEmpty(t *testing.T) {
+	var gotAPIKey string
+	var gotAuth string
+	client := openAITestHTTPDoer(func(r *http.Request) (*http.Response, error) {
+		gotAPIKey = r.Header.Get(goopenai.AzureAPIKeyHeader)
+		gotAuth = r.Header.Get("Authorization")
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Status:     "200 OK",
+			Header:     http.Header{"Content-Type": []string{"application/json"}},
+			Body:       io.NopCloser(strings.NewReader(`{"text":"hello"}`)),
+			Request:    r,
+		}, nil
+	})
+
+	provider, err := NewAzureOpenAISTT(
+		"gpt-4o-mini-transcribe",
+		"https://resource.openai.azure.com",
+		"stt-deployment",
+		"2024-06-01",
+		"",
+		"entra-token",
+		withOpenAISTTHTTPClient(client),
+	)
+	if err != nil {
+		t.Fatalf("NewAzureOpenAISTT error = %v", err)
+	}
+
+	if _, err := provider.Recognize(context.Background(), []*model.AudioFrame{{Data: []byte{1, 2, 3}}}, "en"); err != nil {
+		t.Fatalf("Recognize error = %v", err)
+	}
+
+	if gotAPIKey != "" {
+		t.Fatalf("api-key header = %q, want removed for Entra token auth", gotAPIKey)
+	}
+	if gotAuth != "Bearer entra-token" {
+		t.Fatalf("Authorization = %q, want Entra bearer token", gotAuth)
+	}
+}
+
 func TestOpenAIAudioRequestUsesProviderOptions(t *testing.T) {
 	provider := mustNewOpenAISTT(t, "test-key", "whisper-1",
 		WithOpenAISTTLanguage("id"),

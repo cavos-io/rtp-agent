@@ -54,6 +54,170 @@ func TestNewOpenAITTSRequiresAPIKey(t *testing.T) {
 	}
 }
 
+func TestNewAzureOpenAITTSRoutesDeploymentAndKeepsModelMetadata(t *testing.T) {
+	var gotAPIKey string
+	var gotAuth string
+	var gotPath string
+	var gotQuery string
+	client := openAITestHTTPDoer(func(r *http.Request) (*http.Response, error) {
+		gotAPIKey = r.Header.Get(goopenai.AzureAPIKeyHeader)
+		gotAuth = r.Header.Get("Authorization")
+		gotPath = r.URL.Path
+		gotQuery = r.URL.RawQuery
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			return nil, err
+		}
+		if !strings.Contains(string(body), `"model":"gpt-4o-mini-tts"`) {
+			t.Fatalf("request body %s missing reference model metadata", body)
+		}
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Status:     "200 OK",
+			Header:     http.Header{"Content-Type": []string{"audio/pcm"}},
+			Body:       io.NopCloser(strings.NewReader(string([]byte{1, 2, 3, 4}))),
+			Request:    r,
+		}, nil
+	})
+
+	provider, err := NewAzureOpenAITTS(
+		goopenai.TTSModelGPT4oMini,
+		goopenai.VoiceAsh,
+		"https://resource.openai.azure.com",
+		"tts-deployment",
+		"2024-06-01",
+		"azure-key",
+		"",
+		withOpenAITTSHTTPClient(client),
+	)
+	if err != nil {
+		t.Fatalf("NewAzureOpenAITTS error = %v", err)
+	}
+
+	stream, err := provider.Synthesize(context.Background(), "hello")
+	if err != nil {
+		t.Fatalf("Synthesize error = %v", err)
+	}
+	defer stream.Close()
+
+	if provider.model != goopenai.TTSModelGPT4oMini {
+		t.Fatalf("model = %q, want reference model metadata", provider.model)
+	}
+	if got := provider.Provider(); got != "resource.openai.azure.com" {
+		t.Fatalf("Provider() = %q, want Azure endpoint host", got)
+	}
+	if gotPath != "/openai/deployments/tts-deployment/audio/speech" {
+		t.Fatalf("path = %q, want Azure deployment speech route", gotPath)
+	}
+	if !strings.Contains(gotQuery, "api-version=2024-06-01") {
+		t.Fatalf("query = %q, want configured api-version", gotQuery)
+	}
+	if gotAPIKey != "azure-key" {
+		t.Fatalf("api-key header = %q, want Azure API key", gotAPIKey)
+	}
+	if gotAuth != "" {
+		t.Fatalf("Authorization = %q, want no bearer token for API-key auth", gotAuth)
+	}
+}
+
+func TestNewAzureOpenAITTSFallsBackToReferenceEnvironment(t *testing.T) {
+	t.Setenv("AZURE_OPENAI_ENDPOINT", "https://env-resource.openai.azure.com")
+	t.Setenv("AZURE_OPENAI_API_KEY", "env-azure-key")
+	t.Setenv("OPENAI_API_VERSION", "2024-08-01-preview")
+	var gotAPIKey string
+	var gotPath string
+	var gotQuery string
+	client := openAITestHTTPDoer(func(r *http.Request) (*http.Response, error) {
+		gotAPIKey = r.Header.Get(goopenai.AzureAPIKeyHeader)
+		gotPath = r.URL.Path
+		gotQuery = r.URL.RawQuery
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Status:     "200 OK",
+			Header:     http.Header{"Content-Type": []string{"audio/pcm"}},
+			Body:       io.NopCloser(strings.NewReader(string([]byte{1, 2, 3, 4}))),
+			Request:    r,
+		}, nil
+	})
+
+	provider, err := NewAzureOpenAITTS("", "", "", "", "", "", "", withOpenAITTSHTTPClient(client))
+	if err != nil {
+		t.Fatalf("NewAzureOpenAITTS error = %v", err)
+	}
+
+	stream, err := provider.Synthesize(context.Background(), "hello")
+	if err != nil {
+		t.Fatalf("Synthesize error = %v", err)
+	}
+	defer stream.Close()
+
+	if provider.model != goopenai.TTSModelGPT4oMini {
+		t.Fatalf("model = %q, want default model", provider.model)
+	}
+	if gotPath != "/openai/deployments/gpt-4o-mini-tts/audio/speech" {
+		t.Fatalf("path = %q, want default model as Azure deployment", gotPath)
+	}
+	if !strings.Contains(gotQuery, "api-version=2024-08-01-preview") {
+		t.Fatalf("query = %q, want env api-version", gotQuery)
+	}
+	if gotAPIKey != "env-azure-key" {
+		t.Fatalf("api-key header = %q, want env Azure API key", gotAPIKey)
+	}
+}
+
+func TestNewAzureOpenAITTSRequiresEndpoint(t *testing.T) {
+	t.Setenv("AZURE_OPENAI_ENDPOINT", "")
+	t.Setenv("AZURE_OPENAI_API_KEY", "key")
+
+	_, err := NewAzureOpenAITTS(goopenai.TTSModelGPT4oMini, goopenai.VoiceAsh, "", "", "", "", "")
+	if err == nil || !strings.Contains(err.Error(), "AZURE_OPENAI_ENDPOINT") {
+		t.Fatalf("NewAzureOpenAITTS error = %v, want missing endpoint error", err)
+	}
+}
+
+func TestNewAzureOpenAITTSUsesEntraTokenWhenAPIKeyEmpty(t *testing.T) {
+	var gotAPIKey string
+	var gotAuth string
+	client := openAITestHTTPDoer(func(r *http.Request) (*http.Response, error) {
+		gotAPIKey = r.Header.Get(goopenai.AzureAPIKeyHeader)
+		gotAuth = r.Header.Get("Authorization")
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Status:     "200 OK",
+			Header:     http.Header{"Content-Type": []string{"audio/pcm"}},
+			Body:       io.NopCloser(strings.NewReader(string([]byte{1, 2, 3, 4}))),
+			Request:    r,
+		}, nil
+	})
+
+	provider, err := NewAzureOpenAITTS(
+		goopenai.TTSModelGPT4oMini,
+		goopenai.VoiceAsh,
+		"https://resource.openai.azure.com",
+		"tts-deployment",
+		"2024-06-01",
+		"",
+		"entra-token",
+		withOpenAITTSHTTPClient(client),
+	)
+	if err != nil {
+		t.Fatalf("NewAzureOpenAITTS error = %v", err)
+	}
+
+	stream, err := provider.Synthesize(context.Background(), "hello")
+	if err != nil {
+		t.Fatalf("Synthesize error = %v", err)
+	}
+	defer stream.Close()
+
+	if gotAPIKey != "" {
+		t.Fatalf("api-key header = %q, want removed for Entra token auth", gotAPIKey)
+	}
+	if gotAuth != "Bearer entra-token" {
+		t.Fatalf("Authorization = %q, want Entra bearer token", gotAuth)
+	}
+}
+
 func TestOpenAITTSBuildSpeechRequestUsesReferenceOptions(t *testing.T) {
 	provider := mustNewOpenAITTS(t, "test-key", "", "",
 		WithOpenAITTSInstructions("speak warmly"),

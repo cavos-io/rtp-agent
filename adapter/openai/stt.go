@@ -156,6 +156,63 @@ func NewOpenAISTT(apiKey string, model string, opts ...OpenAISTTOption) (*OpenAI
 	return provider, nil
 }
 
+func NewAzureOpenAISTT(model, azureEndpoint, azureDeployment, apiVersion, apiKey, azureADToken string, opts ...OpenAISTTOption) (*OpenAISTT, error) {
+	if model == "" {
+		model = "gpt-4o-mini-transcribe"
+	}
+	if azureEndpoint == "" {
+		azureEndpoint = os.Getenv(azureOpenAIEndpointEnv)
+	}
+	if apiVersion == "" {
+		apiVersion = os.Getenv(openAIAPIVersionEnv)
+	}
+	if apiKey == "" {
+		apiKey = os.Getenv(azureOpenAIAPIKeyEnv)
+	}
+	if azureADToken == "" {
+		azureADToken = os.Getenv(azureOpenAIADTokenEnv)
+	}
+	if azureEndpoint == "" {
+		return nil, fmt.Errorf("%s is required for Azure OpenAI STT", azureOpenAIEndpointEnv)
+	}
+	if apiKey == "" && azureADToken == "" {
+		return nil, fmt.Errorf("%s or %s is required for Azure OpenAI STT", azureOpenAIAPIKeyEnv, azureOpenAIADTokenEnv)
+	}
+	if azureDeployment == "" {
+		azureDeployment = model
+	}
+
+	provider := &OpenAISTT{
+		apiKey:        apiKey,
+		baseURL:       azureEndpoint,
+		model:         model,
+		language:      "en",
+		dialWebsocket: defaultOpenAIRealtimeSTTWebsocketDialer,
+	}
+	for _, opt := range opts {
+		opt(provider)
+	}
+
+	config := openai.DefaultAzureConfig(apiKey, azureEndpoint)
+	config.AzureModelMapperFunc = func(string) string {
+		return azureDeployment
+	}
+	if apiVersion != "" {
+		config.APIVersion = apiVersion
+	}
+	if provider.httpClient != nil {
+		config.HTTPClient = provider.httpClient
+	}
+	if apiKey == "" && azureADToken != "" {
+		config.HTTPClient = &azureADTokenHTTPClient{
+			base:  config.HTTPClient,
+			token: azureADToken,
+		}
+	}
+	provider.client = openai.NewClientWithConfig(config)
+	return provider, nil
+}
+
 func (s *OpenAISTT) Label() string { return "openai.STT" }
 func (s *OpenAISTT) Provider() string {
 	u, err := url.Parse(s.baseURL)
