@@ -368,6 +368,24 @@ func TestAgentSessionMetricsCollectedEventsFanOutToSubscribers(t *testing.T) {
 	assertMetricsCollectedEvent(t, second, metrics, "second")
 }
 
+func TestAgentSessionOnMetricsCollectedWarnsDeprecated(t *testing.T) {
+	oldLogger := logutil.Logger
+	recorder := &recordingLogger{}
+	logutil.SetLogger(recorder)
+	defer logutil.SetLogger(oldLogger)
+
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+
+	session.On("metrics_collected", func(Event) {})
+
+	if len(recorder.warnMessages) != 1 {
+		t.Fatalf("warn messages = %#v, want one deprecation warning", recorder.warnMessages)
+	}
+	if got := recorder.warnMessages[0]; got != "metrics_collected is deprecated. Use session_usage_updated for usage tracking and ChatMessage.metrics for per-turn latency." {
+		t.Fatalf("warning = %q, want reference deprecation message", got)
+	}
+}
+
 func TestAgentSessionUsageUpdatedEventsFanOutToSubscribers(t *testing.T) {
 	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
 	first := session.SessionUsageUpdatedEvents()
@@ -4032,6 +4050,7 @@ func TestAgentSessionUsageReturnsCollectedSummary(t *testing.T) {
 
 type recordingLogger struct {
 	infoMessages []string
+	warnMessages []string
 	infoFields   map[string]map[string]any
 }
 
@@ -4051,7 +4070,9 @@ func (l *recordingLogger) Infow(msg string, keysAndValues ...any) {
 	}
 	l.infoFields[msg] = fields
 }
-func (l *recordingLogger) Warnw(msg string, err error, keysAndValues ...any)  {}
+func (l *recordingLogger) Warnw(msg string, err error, keysAndValues ...any) {
+	l.warnMessages = append(l.warnMessages, msg)
+}
 func (l *recordingLogger) Errorw(msg string, err error, keysAndValues ...any) {}
 func (l *recordingLogger) WithValues(keysAndValues ...any) livekitlogger.Logger {
 	return l

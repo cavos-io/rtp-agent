@@ -438,6 +438,9 @@ func (s *AgentSession) On(eventType string, callback func(Event)) func() {
 	if s == nil || eventType == "" || callback == nil {
 		return func() {}
 	}
+	if eventType == "metrics_collected" {
+		logger.Logger.Warnw("metrics_collected is deprecated. Use session_usage_updated for usage tracking and ChatMessage.metrics for per-turn latency.", nil)
+	}
 	s.mu.Lock()
 	if s.eventListeners == nil {
 		s.eventListeners = make(map[string][]agentEventListener)
