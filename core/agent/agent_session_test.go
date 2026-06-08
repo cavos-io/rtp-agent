@@ -1044,6 +1044,17 @@ func TestNewAgentSessionPreservesExplicitFalseTurnOptions(t *testing.T) {
 	}
 }
 
+func TestNewAgentSessionPreservesExplicitZeroSessionCloseTranscriptTimeout(t *testing.T) {
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{
+		SessionCloseTranscriptTimeout:    0,
+		SessionCloseTranscriptTimeoutSet: true,
+	})
+
+	if session.Options.SessionCloseTranscriptTimeout != 0 {
+		t.Fatalf("SessionCloseTranscriptTimeout = %v, want explicit zero preserved", session.Options.SessionCloseTranscriptTimeout)
+	}
+}
+
 func TestAgentSessionGenerateReplyEmitsSpeechCreatedEvent(t *testing.T) {
 	agent := NewAgent("test")
 	session := NewAgentSession(agent, nil, AgentSessionOptions{AllowInterruptions: true})

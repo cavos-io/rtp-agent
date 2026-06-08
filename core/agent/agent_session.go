@@ -36,42 +36,43 @@ const (
 )
 
 type AgentSessionOptions struct {
-	AllowInterruptions            bool
-	DiscardAudioIfUninterruptible bool
-	MinInterruptionDuration       float64
-	MinInterruptionWords          int
-	MinEndpointingDelay           float64
-	MaxEndpointingDelay           float64
-	EndpointingMode               string
-	EndpointingAlpha              float64
-	Endpointing                   Endpointing
-	MaxToolSteps                  int
-	UserAwayTimeout               float64
-	DisableUserAwayTimeout        bool
-	FalseInterruptionTimeout      float64
-	ResumeFalseInterruption       bool
-	ResumeFalseInterruptionSet    bool
-	MinConsecutiveSpeechDelay     float64
-	UseTTSAlignedTranscript       bool
-	TTSStreamPacer                *tts.SentenceStreamPacerOptions
-	TTSTextReplacements           map[string]string
-	LLMParallelToolCalls          *bool
-	LLMExtraParams                map[string]any
-	LLMResponseFormat             map[string]any
-	BackgroundAudio               *BackgroundAudioPlayer
-	WordTokenizer                 tokenize.WordTokenizer
-	PreemptiveGeneration          bool
-	PreemptiveGenerationSet       bool
-	AudioInputHook                AudioInputHook
-	AECWarmupDuration             float64
-	SessionCloseTranscriptTimeout float64
-	TurnDetection                 TurnDetectionMode
-	IVRDetection                  bool
-	IVRSilenceDuration            time.Duration
-	VideoSampler                  *VoiceActivityVideoSampler
-	ToolChoice                    llm.ToolChoice
-	MaxUnrecoverableErrors        int
-	MockTools                     map[string]MockToolFunc
+	AllowInterruptions               bool
+	DiscardAudioIfUninterruptible    bool
+	MinInterruptionDuration          float64
+	MinInterruptionWords             int
+	MinEndpointingDelay              float64
+	MaxEndpointingDelay              float64
+	EndpointingMode                  string
+	EndpointingAlpha                 float64
+	Endpointing                      Endpointing
+	MaxToolSteps                     int
+	UserAwayTimeout                  float64
+	DisableUserAwayTimeout           bool
+	FalseInterruptionTimeout         float64
+	ResumeFalseInterruption          bool
+	ResumeFalseInterruptionSet       bool
+	MinConsecutiveSpeechDelay        float64
+	UseTTSAlignedTranscript          bool
+	TTSStreamPacer                   *tts.SentenceStreamPacerOptions
+	TTSTextReplacements              map[string]string
+	LLMParallelToolCalls             *bool
+	LLMExtraParams                   map[string]any
+	LLMResponseFormat                map[string]any
+	BackgroundAudio                  *BackgroundAudioPlayer
+	WordTokenizer                    tokenize.WordTokenizer
+	PreemptiveGeneration             bool
+	PreemptiveGenerationSet          bool
+	AudioInputHook                   AudioInputHook
+	AECWarmupDuration                float64
+	SessionCloseTranscriptTimeout    float64
+	SessionCloseTranscriptTimeoutSet bool
+	TurnDetection                    TurnDetectionMode
+	IVRDetection                     bool
+	IVRSilenceDuration               time.Duration
+	VideoSampler                     *VoiceActivityVideoSampler
+	ToolChoice                       llm.ToolChoice
+	MaxUnrecoverableErrors           int
+	MockTools                        map[string]MockToolFunc
 }
 
 type AgentSessionUpdateOptions struct {
@@ -713,7 +714,7 @@ func withAgentSessionOptionDefaults(opts AgentSessionOptions) AgentSessionOption
 	if opts.AECWarmupDuration == 0 {
 		opts.AECWarmupDuration = 3.0
 	}
-	if opts.SessionCloseTranscriptTimeout == 0 {
+	if !opts.SessionCloseTranscriptTimeoutSet && opts.SessionCloseTranscriptTimeout == 0 {
 		opts.SessionCloseTranscriptTimeout = 2.0
 	}
 	if opts.MaxUnrecoverableErrors == 0 {
