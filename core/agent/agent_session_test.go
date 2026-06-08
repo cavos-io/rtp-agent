@@ -1044,6 +1044,25 @@ func TestNewAgentSessionPreservesExplicitFalseTurnOptions(t *testing.T) {
 	}
 }
 
+func TestNewAgentSessionPreservesExplicitFalseAllowInterruptions(t *testing.T) {
+	agent := NewAgent("test")
+	session := NewAgentSession(agent, nil, AgentSessionOptions{
+		AllowInterruptions:    false,
+		AllowInterruptionsSet: true,
+	})
+
+	if session.Options.AllowInterruptions {
+		t.Fatal("AllowInterruptions = true, want explicit false")
+	}
+	activity := NewAgentActivity(agent, session)
+	if activity.AllowInterruptions() {
+		t.Fatal("AgentActivity.AllowInterruptions() = true, want explicit session false")
+	}
+	if activity.InterruptionEnabled() {
+		t.Fatal("AgentActivity.InterruptionEnabled() = true, want false when interruptions are disabled")
+	}
+}
+
 func TestNewAgentSessionPreservesExplicitZeroMinInterruptionDuration(t *testing.T) {
 	agent := NewAgent("test")
 	session := NewAgentSession(agent, nil, AgentSessionOptions{
