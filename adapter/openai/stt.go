@@ -57,6 +57,9 @@ func WithOpenAISTTLanguage(language string) OpenAISTTOption {
 func WithOpenAISTTDetectLanguage(detect bool) OpenAISTTOption {
 	return func(s *OpenAISTT) {
 		s.detectLanguage = detect
+		if detect {
+			s.language = ""
+		}
 	}
 }
 

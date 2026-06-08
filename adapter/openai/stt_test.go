@@ -328,6 +328,29 @@ func TestOpenAIRealtimeWhisperVersionOmitsTurnDetection(t *testing.T) {
 	}
 }
 
+func TestOpenAIRealtimeSTTDetectLanguageOmitsLanguage(t *testing.T) {
+	provider := mustNewOpenAISTT(t, "test-key", "gpt-4o-mini-transcribe",
+		WithOpenAISTTRealtime(true),
+		WithOpenAISTTDetectLanguage(true),
+	)
+
+	payload, err := buildOpenAIRealtimeSTTSessionUpdate(provider)
+	if err != nil {
+		t.Fatalf("build session update: %v", err)
+	}
+	var message map[string]any
+	if err := json.Unmarshal(payload, &message); err != nil {
+		t.Fatalf("decode session update: %v", err)
+	}
+	session := message["session"].(map[string]any)
+	audio := session["audio"].(map[string]any)
+	input := audio["input"].(map[string]any)
+	transcription := input["transcription"].(map[string]any)
+	if _, ok := transcription["language"]; ok {
+		t.Fatalf("language = %#v, want omitted when detect_language is enabled", transcription["language"])
+	}
+}
+
 func TestOpenAIRealtimeSTTSessionUpdateIncludesNoiseReduction(t *testing.T) {
 	provider := mustNewOpenAISTT(t, "test-key", "gpt-4o-mini-transcribe",
 		WithOpenAISTTRealtime(true),
