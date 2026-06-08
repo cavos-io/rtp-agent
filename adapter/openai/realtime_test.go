@@ -476,6 +476,44 @@ func TestRealtimeModelConstructorTurnDetectionAppliesToInitialSession(t *testing
 	}
 }
 
+func TestRealtimeModelConstructorTextModalitiesApplyToInitialSession(t *testing.T) {
+	messages := make(chan string, 4)
+	dialer := newOpenAIRealtimeTestWebsocketDialer(t, func(conn *websocket.Conn, _ *http.Request) {
+		for {
+			_, msg, err := conn.ReadMessage()
+			if err != nil {
+				return
+			}
+			messages <- string(msg)
+		}
+	})
+
+	realtimeModel := NewRealtimeModel("test-key", "gpt-realtime", WithOpenAIRealtimeModalities([]string{"text"}))
+	realtimeModel.baseURL = "ws://openai.test/v1/realtime"
+	realtimeModel.dialWebsocket = dialer
+
+	if realtimeModel.Capabilities().AudioOutput {
+		t.Fatal("AudioOutput capability = true, want false for text-only modalities")
+	}
+
+	session, err := realtimeModel.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	defer session.Close()
+
+	initialUpdate := <-messages
+	var msg map[string]any
+	if err := json.Unmarshal([]byte(initialUpdate), &msg); err != nil {
+		t.Fatalf("decode initial update: %v", err)
+	}
+	sessionPayload := msg["session"].(map[string]any)
+	modalities := sessionPayload["output_modalities"].([]any)
+	if len(modalities) != 1 || modalities[0] != "text" {
+		t.Fatalf("output_modalities = %#v, want text", modalities)
+	}
+}
+
 func TestRealtimeInitialSessionUsesDefaultToolChoice(t *testing.T) {
 	session := openAIRealtimeInitialSession("gpt-realtime")
 
