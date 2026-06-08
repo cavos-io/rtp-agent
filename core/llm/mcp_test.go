@@ -53,8 +53,9 @@ func TestMCPProxyToolTreatsEmptyResultAsToolError(t *testing.T) {
 	if !errors.As(err, &toolErr) {
 		t.Fatalf("error = %T %v, want ToolError", err, err)
 	}
-	if toolErr.Message == "" {
-		t.Fatal("ToolError message is empty, want explanation for empty MCP result")
+	want := "Tool 'lookup' completed without producing a result. This might indicate an issue with internal processing."
+	if toolErr.Message != want {
+		t.Fatalf("ToolError message = %q, want %q", toolErr.Message, want)
 	}
 }
 

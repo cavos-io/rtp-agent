@@ -657,7 +657,7 @@ func (t *mcpProxyTool) Execute(ctx context.Context, args string) (string, error)
 	}
 
 	if len(result.Content) == 0 {
-		return "", NewToolError(fmt.Sprintf("Tool %q completed without producing a result.", t.name))
+		return "", NewToolError(fmt.Sprintf("Tool '%s' completed without producing a result. This might indicate an issue with internal processing.", t.name))
 	}
 	return serializeMCPToolContent(result.Content)
 }
