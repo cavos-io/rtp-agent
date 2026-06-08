@@ -1,7 +1,10 @@
 package inference
 
 import (
+	"context"
 	"io"
+	"net/http"
+	"strings"
 	"testing"
 
 	"github.com/cavos-io/rtp-agent/core/audio/model"
@@ -37,6 +40,29 @@ func TestInferenceSTTCapabilitiesUseReferenceDefaultDiarization(t *testing.T) {
 
 	if provider.Capabilities().Diarization {
 		t.Fatal("Diarization = true, want false by default")
+	}
+}
+
+func TestSTTWebsocketSendsReferenceInferenceHeaders(t *testing.T) {
+	var captured http.Header
+	provider := NewSTT("deepgram/nova-3", "key", "secret")
+	provider.baseURL = "wss://inference.test/v1"
+	provider.dialWebsocket = func(ctx context.Context, endpoint string, header http.Header) (inferenceWebsocketConn, error) {
+		captured = header.Clone()
+		return &fakeInferenceWebsocketConn{}, nil
+	}
+
+	stream, err := provider.Stream(context.Background(), "en")
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	defer stream.Close()
+
+	if !strings.HasPrefix(captured.Get("User-Agent"), "LiveKit Agents/") {
+		t.Fatalf("User-Agent = %q, want LiveKit Agents version prefix", captured.Get("User-Agent"))
+	}
+	if !strings.Contains(captured.Get("User-Agent"), " (go ") {
+		t.Fatalf("User-Agent = %q, want Go runtime marker", captured.Get("User-Agent"))
 	}
 }
 

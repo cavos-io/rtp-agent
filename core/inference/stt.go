@@ -18,11 +18,14 @@ import (
 )
 
 type STT struct {
-	model     string
-	apiKey    string
-	apiSecret string
-	baseURL   string
+	model         string
+	apiKey        string
+	apiSecret     string
+	baseURL       string
+	dialWebsocket inferenceSTTDialer
 }
+
+type inferenceSTTDialer func(ctx context.Context, endpoint string, header http.Header) (inferenceWebsocketConn, error)
 
 func NewSTT(model string, apiKey, apiSecret string) *STT {
 	if model == "" {
@@ -30,10 +33,11 @@ func NewSTT(model string, apiKey, apiSecret string) *STT {
 	}
 	apiKey, apiSecret = resolveInferenceCredentials(apiKey, apiSecret)
 	return &STT{
-		model:     model,
-		apiKey:    apiKey,
-		apiSecret: apiSecret,
-		baseURL:   defaultInferenceWebsocketURL(),
+		model:         model,
+		apiKey:        apiKey,
+		apiSecret:     apiSecret,
+		baseURL:       defaultInferenceWebsocketURL(),
+		dialWebsocket: defaultInferenceSTTDialer,
 	}
 }
 
@@ -74,8 +78,9 @@ func (s *STT) Stream(ctx context.Context, language string) (stt.RecognizeStream,
 
 	header := http.Header{}
 	header.Add("Authorization", "Bearer "+token)
+	header.Set("User-Agent", inferenceUserAgent())
 
-	conn, _, err := websocket.DefaultDialer.Dial(wsURL.String(), header)
+	conn, err := s.dialWebsocket(ctx, wsURL.String(), header)
 	if err != nil {
 		return nil, fmt.Errorf("failed to connect to LiveKit Inference STT: %w", err)
 	}
@@ -98,6 +103,14 @@ func (s *STT) Stream(ctx context.Context, language string) (stt.RecognizeStream,
 	go stream.run()
 
 	return stream, nil
+}
+
+func defaultInferenceSTTDialer(ctx context.Context, endpoint string, header http.Header) (inferenceWebsocketConn, error) {
+	conn, _, err := websocket.DefaultDialer.DialContext(ctx, endpoint, header)
+	if err != nil {
+		return nil, err
+	}
+	return conn, nil
 }
 
 func sttSessionCreateParams(model string, language string) (string, map[string]interface{}) {
