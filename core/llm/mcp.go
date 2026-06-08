@@ -109,6 +109,9 @@ func (s *MCPServerHTTP) Initialize(ctx context.Context) error {
 }
 
 func (s *MCPServerHTTP) ListTools(ctx context.Context) ([]Tool, error) {
+	if !s.Initialized() {
+		return nil, fmt.Errorf("MCPServer isn't initialized")
+	}
 	if tools, ok := s.cachedTools(); ok {
 		return tools, nil
 	}
@@ -463,6 +466,9 @@ func (s *MCPServerStdio) Initialize(ctx context.Context) error {
 }
 
 func (s *MCPServerStdio) ListTools(ctx context.Context) ([]Tool, error) {
+	if !s.Initialized() {
+		return nil, fmt.Errorf("MCPServer isn't initialized")
+	}
 	if tools, ok := s.cachedTools(); ok {
 		return tools, nil
 	}

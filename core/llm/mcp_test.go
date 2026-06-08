@@ -255,6 +255,26 @@ func TestMCPServerHTTPSetHeadersAppliesToSubsequentRequests(t *testing.T) {
 	}
 }
 
+func TestMCPServersRejectListToolsBeforeInitialize(t *testing.T) {
+	tests := []struct {
+		name   string
+		server MCPServer
+	}{
+		{name: "http", server: NewMCPServerHTTP("https://mcp.test/mcp")},
+		{name: "stdio", server: NewMCPServerStdio("mcp-server", nil)},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := tt.server.ListTools(context.Background())
+
+			if err == nil || !strings.Contains(err.Error(), "MCPServer isn't initialized") {
+				t.Fatalf("ListTools() error = %v, want uninitialized MCPServer error", err)
+			}
+		})
+	}
+}
+
 func newMCPTestHTTPClient(handler http.Handler) *http.Client {
 	return &http.Client{
 		Transport: mcpTestRoundTripper(func(req *http.Request) (*http.Response, error) {
