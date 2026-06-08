@@ -1349,6 +1349,39 @@ func TestAgentSessionOnReceivesRecordedEmittedEvents(t *testing.T) {
 	}
 }
 
+func TestAgentSessionOnceReceivesOnlyFirstMatchingEvent(t *testing.T) {
+	agent := NewAgent("test")
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	first := errors.New("first failure")
+	second := errors.New("second failure")
+	received := make(chan Event, 2)
+
+	session.Once("error", func(ev Event) {
+		received <- ev
+	})
+
+	session.EmitError(ErrorEvent{Error: first, Source: "llm"})
+	session.EmitError(ErrorEvent{Error: second, Source: "tts"})
+
+	select {
+	case ev := <-received:
+		errEvent, ok := ev.(*ErrorEvent)
+		if !ok {
+			t.Fatalf("listener event = %T, want *ErrorEvent", ev)
+		}
+		if !errors.Is(errEvent.Error, first) || errEvent.Source != "llm" {
+			t.Fatalf("listener error event = %#v, want first error/source", errEvent)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("one-shot listener did not receive first emitted event")
+	}
+	select {
+	case ev := <-received:
+		t.Fatalf("one-shot listener received second event: %#v", ev)
+	default:
+	}
+}
+
 func TestAgentSessionRecordedEventsReturnsCopy(t *testing.T) {
 	agent := NewAgent("test")
 	session := NewAgentSession(agent, nil, AgentSessionOptions{})

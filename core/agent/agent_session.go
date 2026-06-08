@@ -199,7 +199,7 @@ type AgentSession struct {
 	jobContextSet  bool
 	mcpServers     []llm.MCPServer
 	recordedEvents []Event
-	eventListeners map[string][]func(Event)
+	eventListeners map[string][]agentEventListener
 	ivrActivity    *IVRActivity
 	videoSampler   *VoiceActivityVideoSampler
 
@@ -246,6 +246,11 @@ type AgentSession struct {
 
 	llmErrorCount int
 	ttsErrorCount int
+}
+
+type agentEventListener struct {
+	callback func(Event)
+	once     bool
 }
 
 type SipDTMFEvent struct {
@@ -416,9 +421,21 @@ func (s *AgentSession) On(eventType string, callback func(Event)) {
 	}
 	s.mu.Lock()
 	if s.eventListeners == nil {
-		s.eventListeners = make(map[string][]func(Event))
+		s.eventListeners = make(map[string][]agentEventListener)
 	}
-	s.eventListeners[eventType] = append(s.eventListeners[eventType], callback)
+	s.eventListeners[eventType] = append(s.eventListeners[eventType], agentEventListener{callback: callback})
+	s.mu.Unlock()
+}
+
+func (s *AgentSession) Once(eventType string, callback func(Event)) {
+	if s == nil || eventType == "" || callback == nil {
+		return
+	}
+	s.mu.Lock()
+	if s.eventListeners == nil {
+		s.eventListeners = make(map[string][]agentEventListener)
+	}
+	s.eventListeners[eventType] = append(s.eventListeners[eventType], agentEventListener{callback: callback, once: true})
 	s.mu.Unlock()
 }
 
@@ -428,7 +445,23 @@ func (s *AgentSession) recordEvent(ev Event) {
 	}
 	s.mu.Lock()
 	s.recordedEvents = append(s.recordedEvents, ev)
-	listeners := append(([]func(Event))(nil), s.eventListeners[ev.GetType()]...)
+	eventType := ev.GetType()
+	registered := s.eventListeners[eventType]
+	listeners := make([]func(Event), 0, len(registered))
+	if len(registered) > 0 {
+		remaining := registered[:0]
+		for _, listener := range registered {
+			listeners = append(listeners, listener.callback)
+			if !listener.once {
+				remaining = append(remaining, listener)
+			}
+		}
+		if len(remaining) == 0 {
+			delete(s.eventListeners, eventType)
+		} else {
+			s.eventListeners[eventType] = remaining
+		}
+	}
 	s.mu.Unlock()
 	for _, listener := range listeners {
 		listener(ev)
