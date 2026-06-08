@@ -179,6 +179,49 @@ func TestPerformLLMInferenceRecordsLLMSpan(t *testing.T) {
 	assertSpanEvent(t, events[4], telemetry.EventGenAIToolMessage, map[string]string{"content": "sunny", "name": "lookup", "id": "call_lookup"})
 }
 
+func TestPerformTTSInferenceRecordsTTSNodeSpan(t *testing.T) {
+	recorder := tracetest.NewSpanRecorder()
+	provider := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(recorder))
+	oldTracer := telemetry.Tracer
+	telemetry.Tracer = provider.Tracer("test")
+	t.Cleanup(func() {
+		telemetry.Tracer = oldTracer
+		_ = provider.Shutdown(context.Background())
+	})
+
+	textCh := make(chan string, 1)
+	textCh <- "hello"
+	close(textCh)
+	ttsProvider := &fakeGenerationTTS{
+		model:    "test-voice",
+		provider: "test-provider",
+		stream: &fakeGenerationTTSStream{
+			audio: []*tts.SynthesizedAudio{{Frame: &model.AudioFrame{Data: []byte{1, 2}}}},
+		},
+	}
+
+	data, err := PerformTTSInference(context.Background(), ttsProvider, textCh)
+	if err != nil {
+		t.Fatalf("PerformTTSInference error = %v", err)
+	}
+	drainAudioFrames(data.AudioCh)
+
+	spans := recorder.Ended()
+	if len(spans) != 1 {
+		t.Fatalf("ended spans = %d, want 1", len(spans))
+	}
+	if spans[0].Name() != "tts_node" {
+		t.Fatalf("span name = %q, want tts_node", spans[0].Name())
+	}
+	attrs := spanAttributes(spans[0].Attributes())
+	if attrs[telemetry.AttrGenAIRequestModel] != "test-voice" {
+		t.Fatalf("span model attr = %q, want test-voice", attrs[telemetry.AttrGenAIRequestModel])
+	}
+	if attrs[telemetry.AttrGenAIProviderName] != "test-provider" {
+		t.Fatalf("span provider attr = %q, want test-provider", attrs[telemetry.AttrGenAIProviderName])
+	}
+}
+
 func TestLLMToolSpanAttributesIncludeToolContextGroups(t *testing.T) {
 	lookup := &fakeGenerationTool{name: "lookup"}
 	search := &fakeGenerationTool{name: "search"}
@@ -805,7 +848,9 @@ func (f *fakeGenerationLLMStream) Next() (*llm.ChatChunk, error) {
 func (f *fakeGenerationLLMStream) Close() error { return nil }
 
 type fakeGenerationTTS struct {
-	stream tts.SynthesizeStream
+	model    string
+	provider string
+	stream   tts.SynthesizeStream
 }
 
 func (f *fakeGenerationTTS) Label() string { return "fake-generation-tts" }
@@ -818,12 +863,40 @@ func (f *fakeGenerationTTS) SampleRate() int { return 24000 }
 
 func (f *fakeGenerationTTS) NumChannels() int { return 1 }
 
+func (f *fakeGenerationTTS) Model() string { return f.model }
+
+func (f *fakeGenerationTTS) Provider() string { return f.provider }
+
 func (f *fakeGenerationTTS) Synthesize(context.Context, string) (tts.ChunkedStream, error) {
 	return nil, nil
 }
 
 func (f *fakeGenerationTTS) Stream(context.Context) (tts.SynthesizeStream, error) {
 	return f.stream, nil
+}
+
+type fakeGenerationTTSStream struct {
+	audio  []*tts.SynthesizedAudio
+	index  int
+	closed bool
+}
+
+func (f *fakeGenerationTTSStream) PushText(string) error { return nil }
+
+func (f *fakeGenerationTTSStream) Flush() error { return nil }
+
+func (f *fakeGenerationTTSStream) Close() error {
+	f.closed = true
+	return nil
+}
+
+func (f *fakeGenerationTTSStream) Next() (*tts.SynthesizedAudio, error) {
+	if f.index >= len(f.audio) {
+		return nil, io.EOF
+	}
+	audio := f.audio[f.index]
+	f.index++
+	return audio, nil
 }
 
 type fakeGenerationChunkedTTS struct {
@@ -1012,4 +1085,12 @@ func drainStrings(ch <-chan string) []string {
 		values = append(values, value)
 	}
 	return values
+}
+
+func drainAudioFrames(ch <-chan *model.AudioFrame) []*model.AudioFrame {
+	frames := make([]*model.AudioFrame, 0)
+	for frame := range ch {
+		frames = append(frames, frame)
+	}
+	return frames
 }

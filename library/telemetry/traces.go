@@ -111,6 +111,13 @@ func NewTTSStreamSpan(ctx context.Context, model, provider string) (context.Cont
 	))
 }
 
+func NewTTSNodeSpan(ctx context.Context, model, provider string) (context.Context, trace.Span) {
+	return StartSpan(ctx, "tts_node", trace.WithAttributes(
+		attribute.String(AttrGenAIRequestModel, model),
+		attribute.String(AttrGenAIProviderName, provider),
+	))
+}
+
 func NewSTTStreamSpan(ctx context.Context, model, provider string) (context.Context, trace.Span) {
 	return StartSpan(ctx, "stt_stream", trace.WithAttributes(
 		attribute.String(AttrGenAIRequestModel, model),
