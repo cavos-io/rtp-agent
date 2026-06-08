@@ -83,6 +83,15 @@ func WithOpenAILLMSafetyIdentifier(safetyIdentifier string) OpenAILLMOption {
 	}
 }
 
+func WithOpenAILLMUser(user string) OpenAILLMOption {
+	return func(l *OpenAILLM) {
+		if l.extraParams == nil {
+			l.extraParams = map[string]any{}
+		}
+		l.extraParams["user"] = user
+	}
+}
+
 func WithOpenAILLMParallelToolCalls(parallelToolCalls bool) OpenAILLMOption {
 	return func(l *OpenAILLM) {
 		l.parallelToolCalls = parallelToolCalls
