@@ -669,7 +669,7 @@ func NewAgentSession(agent AgentInterface, room *lksdk.Room, opts AgentSessionOp
 		TTS:                 baseAgent.TTS,
 		Options:             opts,
 		ChatCtx:             llm.NewChatContext(),
-		Tools:               make([]llm.Tool, 0),
+		Tools:               copySessionTools(baseAgent.Tools),
 		MetricsCollector:    telemetry.NewUsageCollector(),
 		ModelUsageCollector: telemetry.NewModelUsageCollector(),
 		userState:           UserStateListening,
@@ -2142,6 +2142,7 @@ func (s *AgentSession) UpdateAgent(agent AgentInterface) {
 	oldActivity := s.activity
 	started := s.started
 	s.Agent = agent
+	s.Tools = copySessionTools(baseAgent.Tools)
 	s.updateAgentComponentsLocked(baseAgent)
 	assistant := s.Assistant
 	sessionVAD := s.VAD
@@ -2203,6 +2204,13 @@ func (s *AgentSession) UpdateAgent(agent AgentInterface) {
 	}
 	s.EmitConversationItemAdded(handoff)
 	newActivity.Start()
+}
+
+func copySessionTools(tools []llm.Tool) []llm.Tool {
+	if len(tools) == 0 {
+		return []llm.Tool{}
+	}
+	return append([]llm.Tool(nil), tools...)
 }
 
 func (s *AgentSession) updateAgentComponentsLocked(agent *Agent) {

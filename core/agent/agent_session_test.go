@@ -195,6 +195,18 @@ func TestAgentSessionMCPServersReturnsLiveList(t *testing.T) {
 	}
 }
 
+func TestNewAgentSessionCopiesInitialAgentTools(t *testing.T) {
+	agent := NewAgent("test")
+	lookup := &fakeGenerationTool{name: "lookup"}
+	agent.Tools = []llm.Tool{lookup}
+
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+
+	if len(session.Tools) != 1 || session.Tools[0] != lookup {
+		t.Fatalf("session.Tools = %#v, want initial agent tool", session.Tools)
+	}
+}
+
 func TestAgentSessionUserInputTranscribedEventsFanOutToSubscribers(t *testing.T) {
 	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
 	first := session.UserInputTranscribedEvents()
@@ -3238,6 +3250,25 @@ func TestAgentSessionUpdateAgentBeforeStartSwapsAgentOnly(t *testing.T) {
 	}
 	if initial.entered != 0 || initial.exited != 0 || next.entered != 0 || next.exited != 0 {
 		t.Fatalf("lifecycle calls initial=%d/%d next=%d/%d, want none", initial.entered, initial.exited, next.entered, next.exited)
+	}
+}
+
+func TestAgentSessionUpdateAgentReplacesSessionTools(t *testing.T) {
+	initial := &trackingAgent{Agent: NewAgent("initial")}
+	initialTool := &fakeGenerationTool{name: "initial_lookup"}
+	initial.Tools = []llm.Tool{initialTool}
+	next := &trackingAgent{Agent: NewAgent("next")}
+	nextTool := &fakeGenerationTool{name: "next_lookup"}
+	next.Tools = []llm.Tool{nextTool}
+	session := NewAgentSession(initial, nil, AgentSessionOptions{})
+	if len(session.Tools) != 1 || session.Tools[0] != initialTool {
+		t.Fatalf("initial session.Tools = %#v, want initial agent tool", session.Tools)
+	}
+
+	session.UpdateAgent(next)
+
+	if len(session.Tools) != 1 || session.Tools[0] != nextTool {
+		t.Fatalf("session.Tools after UpdateAgent = %#v, want next agent tool", session.Tools)
 	}
 }
 
