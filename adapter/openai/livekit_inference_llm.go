@@ -62,6 +62,14 @@ var _ llm.LLM = (*LiveKitInferenceLLM)(nil)
 
 type LiveKitInferenceLLMOption func(*LiveKitInferenceLLM)
 
+func WithLiveKitInferenceLLMModel(model string) LiveKitInferenceLLMOption {
+	return func(l *LiveKitInferenceLLM) {
+		if model != "" {
+			l.model = model
+		}
+	}
+}
+
 func WithLiveKitInferenceLLMProvider(provider string) LiveKitInferenceLLMOption {
 	return func(l *LiveKitInferenceLLM) {
 		l.provider = provider
@@ -128,6 +136,12 @@ func (l *LiveKitInferenceLLM) Model() string {
 
 func (l *LiveKitInferenceLLM) Provider() string {
 	return "livekit"
+}
+
+func (l *LiveKitInferenceLLM) UpdateOptions(opts ...LiveKitInferenceLLMOption) {
+	for _, opt := range opts {
+		opt(l)
+	}
 }
 
 func (l *LiveKitInferenceLLM) Chat(ctx context.Context, chatCtx *llm.ChatContext, opts ...llm.ChatOption) (llm.LLMStream, error) {

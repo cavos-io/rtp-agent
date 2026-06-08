@@ -189,3 +189,29 @@ func TestLiveKitInferenceLLMChatSendsReferenceRoutingHeaders(t *testing.T) {
 		t.Fatalf("request body = %s, want inference_class consumed as header", capture.requestBody)
 	}
 }
+
+func TestLiveKitInferenceLLMUpdateOptionsChangesReferenceModel(t *testing.T) {
+	capture := &captureDeadlineHTTPClient{
+		statusCode:   http.StatusUnauthorized,
+		responseBody: `{"error":{"message":"stop"}}`,
+	}
+
+	provider, err := NewLiveKitInferenceLLM("openai/gpt-4.1", "key", "secret")
+	if err != nil {
+		t.Fatalf("NewLiveKitInferenceLLM error = %v", err)
+	}
+	provider.baseURL = "https://inference.test/v1"
+	provider.httpClient = capture
+
+	provider.UpdateOptions(WithLiveKitInferenceLLMModel("openai/gpt-5-mini"))
+
+	if provider.Model() != "openai/gpt-5-mini" {
+		t.Fatalf("Model = %q, want updated model", provider.Model())
+	}
+
+	_, _ = provider.Chat(context.Background(), llm.NewChatContext(), llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 0}))
+
+	if !strings.Contains(capture.requestBody, `"model":"openai/gpt-5-mini"`) {
+		t.Fatalf("request body = %s, want updated model", capture.requestBody)
+	}
+}
