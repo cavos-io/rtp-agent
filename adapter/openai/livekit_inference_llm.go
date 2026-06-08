@@ -163,12 +163,15 @@ func (l *LiveKitInferenceLLM) Chat(ctx context.Context, chatCtx *llm.ChatContext
 		return nil, err
 	}
 
-	inferencePriority, chatOpts := l.inferenceClass, opts
-	if priority, filtered, ok := liveKitInferenceClassFromChatOptions(opts); ok {
+	inferencePriority := l.inferenceClass
+	callHeaders, chatOpts := liveKitInferenceCallHeadersAndOptions(opts)
+	if priority := liveKitInferenceClassFromOptions(opts); priority != "" {
 		inferencePriority = priority
-		chatOpts = filtered
 	}
 	extraHeaders, extraParams := liveKitInferenceExtraHeadersFromParams(l.extraParams)
+	if len(extraHeaders) == 0 {
+		extraHeaders = callHeaders
+	}
 	inner := NewOpenAILLMWithBaseURLAndHTTPClient(token, l.model, l.baseURL, &liveKitInferenceHeadersHTTPClient{
 		base:              l.httpClient,
 		extraHeaders:      extraHeaders,
@@ -180,40 +183,47 @@ func (l *LiveKitInferenceLLM) Chat(ctx context.Context, chatCtx *llm.ChatContext
 	return inner.Chat(ctx, chatCtx, chatOpts...)
 }
 
-func liveKitInferenceClassFromChatOptions(opts []llm.ChatOption) (string, []llm.ChatOption, bool) {
+func liveKitInferenceClassFromOptions(opts []llm.ChatOption) string {
 	options := &llm.ChatOptions{}
 	for _, opt := range opts {
 		opt(options)
 	}
 	value, ok := options.ExtraParams["inference_class"]
 	if !ok {
-		return "", opts, false
+		return ""
 	}
 	priority, ok := value.(string)
 	if !ok || priority == "" {
-		return "", opts, false
+		return ""
 	}
-	filteredParams := make(map[string]any, len(options.ExtraParams)-1)
-	for key, value := range options.ExtraParams {
-		if key != "inference_class" {
-			filteredParams[key] = value
-		}
-	}
-	filtered := make([]llm.ChatOption, 0, len(opts)+1)
-	filtered = append(filtered, opts...)
-	filtered = append(filtered, llm.WithExtraParams(filteredParams))
-	return priority, filtered, true
+	return priority
 }
 
-func cloneLiveKitInferenceLLMExtraParams(params map[string]any) map[string]any {
-	if params == nil {
-		return nil
+func liveKitInferenceCallHeadersAndOptions(opts []llm.ChatOption) (http.Header, []llm.ChatOption) {
+	options := &llm.ChatOptions{}
+	for _, opt := range opts {
+		opt(options)
 	}
-	clone := make(map[string]any, len(params))
-	for key, value := range params {
-		clone[key] = value
+	if len(options.ExtraParams) == 0 {
+		return nil, opts
 	}
-	return clone
+	headers, filteredParams := liveKitInferenceExtraHeadersFromParams(options.ExtraParams)
+	if _, ok := filteredParams["inference_class"]; !ok && headers == nil {
+		return nil, opts
+	}
+	if _, ok := filteredParams["inference_class"]; ok {
+		filtered := make(map[string]any, len(filteredParams)-1)
+		for key, value := range filteredParams {
+			if key != "inference_class" {
+				filtered[key] = value
+			}
+		}
+		filteredParams = filtered
+	}
+	filteredOpts := make([]llm.ChatOption, 0, len(opts)+1)
+	filteredOpts = append(filteredOpts, opts...)
+	filteredOpts = append(filteredOpts, llm.WithExtraParams(filteredParams))
+	return headers, filteredOpts
 }
 
 func liveKitInferenceExtraHeadersFromParams(params map[string]any) (http.Header, map[string]any) {
@@ -249,4 +259,15 @@ func liveKitInferenceExtraHeadersFromParams(params map[string]any) (http.Header,
 		return nil, extraParams
 	}
 	return headers, extraParams
+}
+
+func cloneLiveKitInferenceLLMExtraParams(params map[string]any) map[string]any {
+	if params == nil {
+		return nil
+	}
+	clone := make(map[string]any, len(params))
+	for key, value := range params {
+		clone[key] = value
+	}
+	return clone
 }
