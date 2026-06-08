@@ -307,6 +307,38 @@ func TestOpenAISTTRecognizeUsesOpenAITranscriptionAPI(t *testing.T) {
 	}
 }
 
+func TestOpenAISTTRecognizeLanguageOverridePersists(t *testing.T) {
+	client := openAITestHTTPDoer(func(r *http.Request) (*http.Response, error) {
+		if err := r.ParseMultipartForm(1 << 20); err != nil {
+			return nil, err
+		}
+		if r.FormValue("language") != "id" {
+			t.Fatalf("language form = %q, want id", r.FormValue("language"))
+		}
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Status:     "200 OK",
+			Header:     http.Header{"Content-Type": []string{"application/json"}},
+			Body:       io.NopCloser(strings.NewReader(`{"text":"hello"}`)),
+			Request:    r,
+		}, nil
+	})
+	provider := mustNewOpenAISTT(t, "test-key", "",
+		WithOpenAISTTDetectLanguage(true),
+		WithOpenAISTTBaseURL("https://openai.test/v1"),
+		withOpenAISTTHTTPClient(client),
+	)
+
+	if _, err := provider.Recognize(context.Background(), []*model.AudioFrame{{Data: []byte{1, 2, 3}}}, "id"); err != nil {
+		t.Fatalf("Recognize error = %v", err)
+	}
+
+	req := openAIAudioRequest(provider, strings.NewReader("audio"), "")
+	if req.Language != "id" {
+		t.Fatalf("language after Recognize override = %q, want id", req.Language)
+	}
+}
+
 func TestOpenAIRealtimeSTTCapabilitiesAndWebsocketRequestMatchReference(t *testing.T) {
 	provider := mustNewOpenAISTT(t, "test-key", "gpt-4o-mini-transcribe",
 		WithOpenAISTTRealtime(true),

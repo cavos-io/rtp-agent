@@ -331,6 +331,9 @@ func (s *OpenAISTT) Recognize(ctx context.Context, frames []*model.AudioFrame, l
 		buf.Write(f.Data)
 	}
 
+	if language != "" {
+		s.language = language
+	}
 	req := openAIAudioRequest(s, bytes.NewReader(buf.Bytes()), language)
 
 	resp, err := s.client.CreateTranscription(ctx, req)
@@ -345,9 +348,6 @@ func openAIAudioRequest(s *OpenAISTT, reader io.Reader, language string) openai.
 	requestLanguage := s.language
 	if language != "" {
 		requestLanguage = language
-	}
-	if s.detectLanguage {
-		requestLanguage = ""
 	}
 	req := openai.AudioRequest{
 		Model:    s.model,
