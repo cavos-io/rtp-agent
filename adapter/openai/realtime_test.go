@@ -56,6 +56,15 @@ func TestNewOpenAIRealtimeModelUsesReferenceDefaultModel(t *testing.T) {
 	}
 }
 
+func TestNewOpenAIRealtimeModelProviderUsesReferenceBaseURLHost(t *testing.T) {
+	t.Setenv("OPENAI_BASE_URL", "https://gateway.openai.test/openai/v1")
+	model := NewRealtimeModel("test-key", "")
+
+	if got := model.Provider(); got != "gateway.openai.test" {
+		t.Fatalf("Provider() = %q, want gateway.openai.test", got)
+	}
+}
+
 func TestOpenAIRealtimeSessionRequiresAPIKeyBeforeDial(t *testing.T) {
 	t.Setenv("OPENAI_API_KEY", "")
 	model := NewRealtimeModel("", "")

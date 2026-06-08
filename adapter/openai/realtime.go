@@ -58,7 +58,11 @@ func (m *RealtimeModel) Model() string {
 }
 
 func (m *RealtimeModel) Provider() string {
-	return "openai"
+	u, err := url.Parse(m.baseURL)
+	if err != nil || u.Host == "" {
+		return "openai"
+	}
+	return u.Host
 }
 
 func (m *RealtimeModel) Close() error {
