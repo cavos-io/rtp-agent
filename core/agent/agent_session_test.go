@@ -1400,6 +1400,39 @@ func TestAgentSessionOffRemovesMatchingListener(t *testing.T) {
 	}
 }
 
+func TestAgentSessionOffUsesCallbackIdentity(t *testing.T) {
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	first := make(chan Event, 1)
+	second := make(chan Event, 1)
+	makeCallback := func(ch chan<- Event) func(Event) {
+		return func(ev Event) {
+			ch <- ev
+		}
+	}
+	firstCallback := makeCallback(first)
+	secondCallback := makeCallback(second)
+
+	session.On("error", firstCallback)
+	session.On("error", secondCallback)
+	session.Off("error", secondCallback)
+
+	session.EmitError(ErrorEvent{Error: errors.New("provider failed"), Source: "llm"})
+
+	select {
+	case ev := <-first:
+		if _, ok := ev.(*ErrorEvent); !ok {
+			t.Fatalf("first listener event = %T, want *ErrorEvent", ev)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("first listener did not receive emitted event")
+	}
+	select {
+	case ev := <-second:
+		t.Fatalf("removed second listener received event: %#v", ev)
+	default:
+	}
+}
+
 func TestAgentSessionOnceReceivesOnlyFirstMatchingEvent(t *testing.T) {
 	agent := NewAgent("test")
 	session := NewAgentSession(agent, nil, AgentSessionOptions{})

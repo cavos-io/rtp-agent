@@ -1243,9 +1243,11 @@ func (rio *RoomIO) Close() error {
 	rio.closed = true
 	if rio.agentStateCancel != nil {
 		rio.agentStateCancel()
+		rio.agentStateCancel = nil
 	}
 	if rio.userStateCancel != nil {
 		rio.userStateCancel()
+		rio.userStateCancel = nil
 	}
 	if rio.userTranscriptionCancel != nil {
 		rio.userTranscriptionCancel()
@@ -1253,6 +1255,7 @@ func (rio *RoomIO) Close() error {
 	}
 	if rio.sessionCloseCancel != nil {
 		rio.sessionCloseCancel()
+		rio.sessionCloseCancel = nil
 	}
 	if rio.agentTranscriptionCancel != nil {
 		rio.agentTranscriptionCancel()

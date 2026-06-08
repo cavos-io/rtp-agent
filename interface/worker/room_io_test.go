@@ -4,6 +4,7 @@ import (
 	"context"
 	"reflect"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -277,6 +278,46 @@ func TestRoomIOOffPlaybackStartedRemovesMatchingHandler(t *testing.T) {
 	}
 }
 
+func TestRoomIOOffPlaybackStartedUsesCallbackIdentity(t *testing.T) {
+	rio := &RoomIO{audioTrack: newRoomIOTestAudioTrack(t)}
+	first := make(chan PlaybackStartedEvent, 1)
+	second := make(chan PlaybackStartedEvent, 1)
+	makeCallback := func(ch chan<- PlaybackStartedEvent) func(PlaybackStartedEvent) {
+		return func(ev PlaybackStartedEvent) {
+			ch <- ev
+		}
+	}
+	firstCallback := makeCallback(first)
+	secondCallback := makeCallback(second)
+
+	rio.OnPlaybackStarted(firstCallback)
+	rio.OnPlaybackStarted(secondCallback)
+	rio.OffPlaybackStarted(secondCallback)
+
+	if err := rio.PublishAudio(&model.AudioFrame{
+		Data:              make([]byte, 960*2),
+		SampleRate:        48000,
+		NumChannels:       1,
+		SamplesPerChannel: 960,
+	}); err != nil {
+		t.Fatalf("PublishAudio error = %v", err)
+	}
+
+	select {
+	case ev := <-first:
+		if ev.CreatedAt.IsZero() {
+			t.Fatal("first playback_started CreatedAt is zero")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("first playback_started handler did not receive event")
+	}
+	select {
+	case ev := <-second:
+		t.Fatalf("removed second playback_started handler received event: %#v", ev)
+	default:
+	}
+}
+
 func TestRoomIOOffPlaybackFinishedRemovesMatchingHandler(t *testing.T) {
 	rio := &RoomIO{audioTrack: newRoomIOTestAudioTrack(t)}
 	removed := make(chan PlaybackFinishedEvent, 1)
@@ -352,6 +393,46 @@ func TestRoomIOCloseUnregistersChatTextHandler(t *testing.T) {
 	err := room.RegisterTextStreamHandler(RoomIOChatTopic, func(*lksdk.TextStreamReader, string) {})
 	if err != nil {
 		t.Fatalf("RegisterTextStreamHandler after RoomIO.Close() error = %v, want nil", err)
+	}
+}
+
+func TestRoomIOCloseClearsSessionListeners(t *testing.T) {
+	agentStateCancelled := make(chan struct{})
+	userStateCancelled := make(chan struct{})
+	userTranscriptionCancelled := make(chan struct{})
+	agentTranscriptionCancelled := make(chan struct{})
+	sessionCloseCancelled := make(chan struct{})
+	rio := &RoomIO{
+		agentStateCancel:         closeOnce(agentStateCancelled),
+		userStateCancel:          closeOnce(userStateCancelled),
+		userTranscriptionCancel:  closeOnce(userTranscriptionCancelled),
+		agentTranscriptionCancel: closeOnce(agentTranscriptionCancelled),
+		sessionCloseCancel:       closeOnce(sessionCloseCancelled),
+	}
+
+	if err := rio.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+
+	assertClosed(t, agentStateCancelled, "agent state listener")
+	assertClosed(t, userStateCancelled, "user state listener")
+	assertClosed(t, userTranscriptionCancelled, "user transcription listener")
+	assertClosed(t, agentTranscriptionCancelled, "agent transcription listener")
+	assertClosed(t, sessionCloseCancelled, "session close listener")
+	if rio.agentStateCancel != nil {
+		t.Fatal("agentStateCancel still set after Close")
+	}
+	if rio.userStateCancel != nil {
+		t.Fatal("userStateCancel still set after Close")
+	}
+	if rio.userTranscriptionCancel != nil {
+		t.Fatal("userTranscriptionCancel still set after Close")
+	}
+	if rio.agentTranscriptionCancel != nil {
+		t.Fatal("agentTranscriptionCancel still set after Close")
+	}
+	if rio.sessionCloseCancel != nil {
+		t.Fatal("sessionCloseCancel still set after Close")
 	}
 }
 
@@ -1597,6 +1678,24 @@ func (c *channelClientEventsDispatcher) DispatchAgentState(state agent.AgentStat
 
 func (c *channelClientEventsDispatcher) DispatchUserState(state agent.UserState) {
 	c.userStates <- state
+}
+
+func closeOnce(ch chan struct{}) context.CancelFunc {
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			close(ch)
+		})
+	}
+}
+
+func assertClosed(t *testing.T, ch <-chan struct{}, label string) {
+	t.Helper()
+	select {
+	case <-ch:
+	case <-time.After(time.Second):
+		t.Fatalf("%s was not cancelled", label)
+	}
 }
 
 type fakeRoomIORealtimeModel struct {
