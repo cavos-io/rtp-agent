@@ -90,6 +90,26 @@ func TestDynamicEndpointingClearsAgentSpeechAfterInterruption(t *testing.T) {
 	}
 }
 
+func TestDynamicEndpointingUpdateOptionsResetsFilteredDelays(t *testing.T) {
+	endpointing := NewDynamicEndpointing(0.5, 3.0, 0.5)
+
+	endpointing.OnStartOfSpeech(0.0, false)
+	endpointing.OnEndOfSpeech(1.0, false)
+	endpointing.OnStartOfSpeech(1.75, false)
+	endpointing.OnEndOfSpeech(2.0, false)
+
+	minDelay := 0.25
+	maxDelay := 1.25
+	endpointing.UpdateOptions(&minDelay, &maxDelay)
+
+	if endpointing.MinDelay() != minDelay {
+		t.Fatalf("MinDelay() = %v, want reset min delay %v", endpointing.MinDelay(), minDelay)
+	}
+	if endpointing.MaxDelay() != maxDelay {
+		t.Fatalf("MaxDelay() = %v, want reset max delay %v", endpointing.MaxDelay(), maxDelay)
+	}
+}
+
 func TestAgentActivityUsesConfiguredEndpointingPolicy(t *testing.T) {
 	endpointing := NewBaseEndpointing(0.2, 0.8)
 	agent := NewAgent("test")
