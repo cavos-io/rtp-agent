@@ -3,6 +3,8 @@ package worker
 import (
 	"bytes"
 	"context"
+	"errors"
+	"io"
 	"testing"
 	"time"
 
@@ -118,6 +120,38 @@ func TestPreConnectAudioRawPCMRejectsInvalidAudioShape(t *testing.T) {
 	if _, err := readPreConnectRawPCMFrames(bytes.NewReader([]byte{1, 0}), 100, 0); err == nil {
 		t.Fatal("readPreConnectRawPCMFrames() zero channels error = nil")
 	}
+}
+
+func TestPreConnectAudioRawPCMReadErrorDropsPartialFrames(t *testing.T) {
+	readErr := errors.New("stream failed")
+	reader := &preConnectErrReader{
+		data: []byte{1, 0},
+		err:  readErr,
+	}
+
+	frames, err := readPreConnectRawPCMFrames(reader, 10, 1)
+
+	if !errors.Is(err, readErr) {
+		t.Fatalf("readPreConnectRawPCMFrames() error = %v, want %v", err, readErr)
+	}
+	if frames != nil {
+		t.Fatalf("readPreConnectRawPCMFrames() frames = %#v, want nil on read error", frames)
+	}
+}
+
+type preConnectErrReader struct {
+	data []byte
+	err  error
+	done bool
+}
+
+func (r *preConnectErrReader) Read(p []byte) (int, error) {
+	if r.done {
+		return 0, io.EOF
+	}
+	r.done = true
+	copy(p, r.data)
+	return len(r.data), r.err
 }
 
 func waitForPreConnectBufferWaiter(t *testing.T, handler *PreConnectAudioHandler, trackID string) {

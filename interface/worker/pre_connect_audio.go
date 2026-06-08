@@ -150,6 +150,7 @@ func (h *PreConnectAudioHandler) readAudioTask(reader *lksdk.ByteStreamReader, p
 		frames, err := readPreConnectRawPCMFrames(reader, sampleRate, channels)
 		if err != nil {
 			logger.Logger.Warnw("error reading pre-connect pcm stream", err)
+			return
 		}
 		buf.Frames = append(buf.Frames, frames...)
 	}
@@ -177,7 +178,7 @@ func readPreConnectRawPCMFrames(reader io.Reader, sampleRate int, channels int) 
 			return frames, nil
 		}
 		if err != nil {
-			return frames, err
+			return nil, err
 		}
 	}
 }
