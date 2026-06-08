@@ -615,6 +615,31 @@ func TestDefaultConfigFromEnvSelectsUpliftAIProviders(t *testing.T) {
 	}
 }
 
+func TestDefaultConfigFromEnvSelectsNvidiaTTS(t *testing.T) {
+	t.Setenv("NVIDIA_API_KEY", "test-nvidia-key")
+	t.Setenv("RTP_AGENT_TTS_PROVIDER", "nvidia")
+
+	app, err := NewApp(DefaultConfigFromEnv())
+	if err != nil {
+		t.Fatalf("NewApp() error = %v", err)
+	}
+	if app.Session == nil || app.Session.TTS == nil {
+		t.Fatal("Session TTS is nil")
+	}
+	if got := app.Session.TTS.Label(); got != "nvidia.TTS" {
+		t.Fatalf("TTS label = %q, want nvidia.TTS", got)
+	}
+	if got := tts.Model(app.Session.TTS); got != "Magpie-Multilingual.EN-US.Leo" {
+		t.Fatalf("TTS model = %q, want reference default voice", got)
+	}
+	if got := app.Session.TTS.SampleRate(); got != 16000 {
+		t.Fatalf("TTS sample rate = %d, want reference sample rate 16000", got)
+	}
+	if caps := app.Session.TTS.Capabilities(); !caps.Streaming || caps.AlignedTranscript {
+		t.Fatalf("TTS capabilities = %+v, want reference streaming without aligned transcript", caps)
+	}
+}
+
 func TestDefaultConfigFromEnvSelectsUltravoxTTS(t *testing.T) {
 	t.Setenv("ULTRAVOX_API_KEY", "test-ultravox-key")
 	t.Setenv("RTP_AGENT_TTS_PROVIDER", "ultravox")
