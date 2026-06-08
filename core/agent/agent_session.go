@@ -63,6 +63,7 @@ type AgentSessionOptions struct {
 	UseTTSAlignedTranscript          bool
 	TTSStreamPacer                   *tts.SentenceStreamPacerOptions
 	TTSTextReplacements              map[string]string
+	DisableTTSTextTransforms         bool
 	LLMParallelToolCalls             *bool
 	LLMExtraParams                   map[string]any
 	LLMResponseFormat                map[string]any

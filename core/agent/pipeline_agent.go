@@ -730,6 +730,9 @@ func (va *PipelineAgent) ttsInferenceOptions(session *AgentSession) []TTSInferen
 	if session != nil && len(session.Options.TTSTextReplacements) > 0 {
 		opts = append(opts, WithTTSTextReplacements(session.Options.TTSTextReplacements))
 	}
+	if session != nil && session.Options.DisableTTSTextTransforms {
+		opts = append(opts, WithTTSTextTransformsDisabled())
+	}
 	if va.useTTSAlignedTranscript(session) {
 		opts = append(opts, WithTTSPreserveTimedTranscript())
 	}
