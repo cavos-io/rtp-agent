@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 
 	"github.com/cavos-io/rtp-agent/core/audio/model"
 	"github.com/cavos-io/rtp-agent/core/tts"
@@ -23,6 +24,9 @@ type UpliftAITTS struct {
 }
 
 func NewUpliftAITTS(apiKey string, voice string) *UpliftAITTS {
+	if apiKey == "" {
+		apiKey = os.Getenv("UPLIFTAI_API_KEY")
+	}
 	if voice == "" {
 		voice = defaultUpliftAIVoiceID
 	}
