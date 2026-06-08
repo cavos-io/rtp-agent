@@ -250,9 +250,10 @@ type AgentSession struct {
 }
 
 type agentEventListener struct {
-	id       uint64
-	callback func(Event)
-	once     bool
+	id              uint64
+	callback        func(Event)
+	callbackPointer uintptr
+	once            bool
 }
 
 type SipDTMFEvent struct {
@@ -427,11 +428,22 @@ func (s *AgentSession) On(eventType string, callback func(Event)) func() {
 	}
 	s.nextListenerID++
 	id := s.nextListenerID
-	s.eventListeners[eventType] = append(s.eventListeners[eventType], agentEventListener{id: id, callback: callback})
+	s.eventListeners[eventType] = append(s.eventListeners[eventType], agentEventListener{
+		id:              id,
+		callback:        callback,
+		callbackPointer: reflect.ValueOf(callback).Pointer(),
+	})
 	s.mu.Unlock()
 	return func() {
 		s.removeEventListener(eventType, id)
 	}
+}
+
+func (s *AgentSession) Off(eventType string, callback func(Event)) {
+	if s == nil || eventType == "" || callback == nil {
+		return
+	}
+	s.removeEventListenerByCallback(eventType, reflect.ValueOf(callback).Pointer())
 }
 
 func (s *AgentSession) Once(eventType string, callback func(Event)) func() {
@@ -444,7 +456,12 @@ func (s *AgentSession) Once(eventType string, callback func(Event)) func() {
 	}
 	s.nextListenerID++
 	id := s.nextListenerID
-	s.eventListeners[eventType] = append(s.eventListeners[eventType], agentEventListener{id: id, callback: callback, once: true})
+	s.eventListeners[eventType] = append(s.eventListeners[eventType], agentEventListener{
+		id:              id,
+		callback:        callback,
+		callbackPointer: reflect.ValueOf(callback).Pointer(),
+		once:            true,
+	})
 	s.mu.Unlock()
 	return func() {
 		s.removeEventListener(eventType, id)
@@ -460,6 +477,27 @@ func (s *AgentSession) removeEventListener(eventType string, id uint64) {
 	listeners := s.eventListeners[eventType]
 	for i, listener := range listeners {
 		if listener.id != id {
+			continue
+		}
+		listeners = append(listeners[:i], listeners[i+1:]...)
+		if len(listeners) == 0 {
+			delete(s.eventListeners, eventType)
+		} else {
+			s.eventListeners[eventType] = listeners
+		}
+		return
+	}
+}
+
+func (s *AgentSession) removeEventListenerByCallback(eventType string, callbackPointer uintptr) {
+	if s == nil || eventType == "" || callbackPointer == 0 {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	listeners := s.eventListeners[eventType]
+	for i, listener := range listeners {
+		if listener.callbackPointer != callbackPointer {
 			continue
 		}
 		listeners = append(listeners[:i], listeners[i+1:]...)

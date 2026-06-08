@@ -1368,6 +1368,38 @@ func TestAgentSessionOnReturnsUnsubscribe(t *testing.T) {
 	}
 }
 
+func TestAgentSessionOffRemovesMatchingListener(t *testing.T) {
+	agent := NewAgent("test")
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	removed := make(chan Event, 1)
+	kept := make(chan Event, 1)
+
+	callback := func(ev Event) {
+		removed <- ev
+	}
+	session.On("error", callback)
+	session.On("error", func(ev Event) {
+		kept <- ev
+	})
+
+	session.Off("error", callback)
+	session.EmitError(ErrorEvent{Error: errors.New("provider failed"), Source: "llm"})
+
+	select {
+	case ev := <-removed:
+		t.Fatalf("removed listener received event: %#v", ev)
+	default:
+	}
+	select {
+	case ev := <-kept:
+		if _, ok := ev.(*ErrorEvent); !ok {
+			t.Fatalf("kept listener event = %T, want *ErrorEvent", ev)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("remaining listener did not receive emitted event")
+	}
+}
+
 func TestAgentSessionOnceReceivesOnlyFirstMatchingEvent(t *testing.T) {
 	agent := NewAgent("test")
 	session := NewAgentSession(agent, nil, AgentSessionOptions{})
