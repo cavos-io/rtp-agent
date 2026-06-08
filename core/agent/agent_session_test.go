@@ -1401,6 +1401,25 @@ func TestAgentSessionOnceReceivesOnlyFirstMatchingEvent(t *testing.T) {
 	}
 }
 
+func TestAgentSessionOnceReturnsUnsubscribe(t *testing.T) {
+	agent := NewAgent("test")
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	received := make(chan Event, 1)
+
+	unsubscribe := session.Once("error", func(ev Event) {
+		received <- ev
+	})
+	unsubscribe()
+
+	session.EmitError(ErrorEvent{Error: errors.New("provider failed"), Source: "llm"})
+
+	select {
+	case ev := <-received:
+		t.Fatalf("unsubscribed one-shot listener received event: %#v", ev)
+	default:
+	}
+}
+
 func TestAgentSessionRecordedEventsReturnsCopy(t *testing.T) {
 	agent := NewAgent("test")
 	session := NewAgentSession(agent, nil, AgentSessionOptions{})

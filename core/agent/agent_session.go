@@ -434,16 +434,21 @@ func (s *AgentSession) On(eventType string, callback func(Event)) func() {
 	}
 }
 
-func (s *AgentSession) Once(eventType string, callback func(Event)) {
+func (s *AgentSession) Once(eventType string, callback func(Event)) func() {
 	if s == nil || eventType == "" || callback == nil {
-		return
+		return func() {}
 	}
 	s.mu.Lock()
 	if s.eventListeners == nil {
 		s.eventListeners = make(map[string][]agentEventListener)
 	}
-	s.eventListeners[eventType] = append(s.eventListeners[eventType], agentEventListener{callback: callback, once: true})
+	s.nextListenerID++
+	id := s.nextListenerID
+	s.eventListeners[eventType] = append(s.eventListeners[eventType], agentEventListener{id: id, callback: callback, once: true})
 	s.mu.Unlock()
+	return func() {
+		s.removeEventListener(eventType, id)
+	}
 }
 
 func (s *AgentSession) removeEventListener(eventType string, id uint64) {
