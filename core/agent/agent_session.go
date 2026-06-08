@@ -394,7 +394,7 @@ func (s *AgentSession) SetMCPServers(servers []llm.MCPServer) {
 func (s *AgentSession) MCPServers() []llm.MCPServer {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return append([]llm.MCPServer(nil), s.mcpServers...)
+	return s.mcpServers
 }
 
 func (s *AgentSession) RecordedEvents() []Event {

@@ -110,7 +110,7 @@ func TestAgentSessionTurnDetectionReturnsUpdatedOption(t *testing.T) {
 	}
 }
 
-func TestAgentSessionMCPServersReturnsSnapshot(t *testing.T) {
+func TestAgentSessionMCPServersReturnsLiveList(t *testing.T) {
 	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
 	servers := []llm.MCPServer{&fakeSessionMCPServer{id: "lookup"}}
 
@@ -119,10 +119,12 @@ func TestAgentSessionMCPServersReturnsSnapshot(t *testing.T) {
 	if len(got) != 1 || got[0] != servers[0] {
 		t.Fatalf("MCPServers() = %#v, want configured server", got)
 	}
+	mutated := &fakeSessionMCPServer{id: "mutated"}
+	got[0] = mutated
 
-	got[0] = &fakeSessionMCPServer{id: "mutated"}
-	if session.MCPServers()[0] != servers[0] {
-		t.Fatal("mutating MCPServers() result changed session server list")
+	gotAgain := session.MCPServers()
+	if len(gotAgain) != 1 || gotAgain[0] != mutated {
+		t.Fatal("mutating MCPServers() result did not update session server list")
 	}
 }
 
