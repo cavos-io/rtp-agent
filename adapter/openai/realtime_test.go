@@ -191,6 +191,14 @@ func TestRealtimeModelUpdateOptionsAppliesToNewSession(t *testing.T) {
 	assertRealtimeMessage(t, initialUpdate, "session.update", "alloy")
 }
 
+func TestRealtimeInitialSessionUsesDefaultToolChoice(t *testing.T) {
+	session := openAIRealtimeInitialSession("gpt-realtime")
+
+	if session["tool_choice"] != "auto" {
+		t.Fatalf("tool_choice = %#v, want auto", session["tool_choice"])
+	}
+}
+
 func TestRealtimeSessionSendsProtocolMessages(t *testing.T) {
 	messages := make(chan string, 32)
 	connected := make(chan *http.Request, 1)
@@ -266,15 +274,9 @@ func TestRealtimeSessionSendsProtocolMessages(t *testing.T) {
 	assertRealtimeMessage(t, <-messages, "conversation.item.create", "user-1")
 
 	if err := session.UpdateOptions(llm.RealtimeSessionOptions{ToolChoice: "auto"}); err != nil {
-		t.Fatalf("UpdateOptions error = %v", err)
+		t.Fatalf("UpdateOptions unchanged default tool choice error = %v", err)
 	}
-	optionsUpdate := <-messages
-	assertRealtimeMessage(t, optionsUpdate, "session.update", "auto")
-	assertRealtimeMessageEventID(t, optionsUpdate, "options_update_")
-	if err := session.UpdateOptions(llm.RealtimeSessionOptions{ToolChoice: "auto"}); err != nil {
-		t.Fatalf("UpdateOptions repeated error = %v", err)
-	}
-	assertNoRealtimeMessage(t, messages, "unchanged options update should not send a session update")
+	assertNoRealtimeMessage(t, messages, "unchanged default tool choice should not send a session update")
 	if err := session.UpdateOptions(llm.RealtimeSessionOptions{}); err != nil {
 		t.Fatalf("UpdateOptions empty error = %v", err)
 	}

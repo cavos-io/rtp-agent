@@ -272,6 +272,7 @@ func openAIRealtimeInitialSession(model string) map[string]any {
 			},
 		},
 		"max_output_tokens": openAIRealtimeDefaultMaxOutputTokens,
+		"tool_choice":       "auto",
 	}
 }
 
