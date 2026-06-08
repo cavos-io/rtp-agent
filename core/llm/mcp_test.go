@@ -149,6 +149,29 @@ func TestMCPServerHTTPListsAndExecutesTools(t *testing.T) {
 	}
 }
 
+func TestMCPServerHTTPDetectsReferenceTransportFromURL(t *testing.T) {
+	tests := []struct {
+		name string
+		url  string
+		want string
+	}{
+		{name: "streamable http mcp path", url: "https://mcp.test/mcp", want: "streamable_http"},
+		{name: "streamable http upper path trailing slash", url: "https://mcp.test/API/MCP/", want: "streamable_http"},
+		{name: "sse path", url: "https://mcp.test/sse", want: "sse"},
+		{name: "backward compatible default", url: "https://mcp.test/rpc", want: "sse"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			server := NewMCPServerHTTP(tt.url)
+
+			if server.TransportType != tt.want {
+				t.Fatalf("TransportType = %q, want %q", server.TransportType, tt.want)
+			}
+		})
+	}
+}
+
 func TestMCPServerHTTPInitializedReflectsLifecycle(t *testing.T) {
 	httpClient := newMCPTestHTTPClient(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var req jsonRPCRequest

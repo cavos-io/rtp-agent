@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"strings"
@@ -47,10 +48,24 @@ type MCPServerHTTP struct {
 
 func NewMCPServerHTTP(url string) *MCPServerHTTP {
 	return &MCPServerHTTP{
-		URL:        url,
-		client:     http.DefaultClient,
-		cacheDirty: true,
+		URL:           url,
+		TransportType: detectMCPHTTPTransportType(url),
+		client:        http.DefaultClient,
+		cacheDirty:    true,
 	}
+}
+
+func detectMCPHTTPTransportType(rawURL string) string {
+	parsed, err := url.Parse(rawURL)
+	path := rawURL
+	if err == nil {
+		path = parsed.Path
+	}
+	path = strings.TrimRight(strings.ToLower(path), "/")
+	if strings.HasSuffix(path, "/mcp") {
+		return "streamable_http"
+	}
+	return "sse"
 }
 
 func (s *MCPServerHTTP) SetHTTPClient(client *http.Client) {
