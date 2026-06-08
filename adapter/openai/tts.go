@@ -99,6 +99,7 @@ func newOpenAITTS(client *openai.Client, apiKey string, model openai.SpeechModel
 		apiKey:         apiKey,
 		model:          model,
 		voice:          voice,
+		baseURL:        defaultOpenAIBaseURL,
 		speed:          1.0,
 		responseFormat: openai.SpeechResponseFormatMp3,
 	}

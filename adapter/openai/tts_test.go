@@ -27,6 +27,9 @@ func TestOpenAITTSDefaultsMatchReference(t *testing.T) {
 	if provider.speed != 1.0 {
 		t.Fatalf("speed = %v, want 1.0", provider.speed)
 	}
+	if provider.Provider() != "api.openai.com" {
+		t.Fatalf("Provider() = %q, want api.openai.com", provider.Provider())
+	}
 }
 
 func TestNewOpenAITTSUsesEnvironmentAPIKey(t *testing.T) {
