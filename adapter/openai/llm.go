@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/http"
 	"net/url"
 	"os"
 	"strings"
@@ -17,10 +18,18 @@ import (
 
 const defaultOpenAILLMModel = "gpt-4.1"
 
+const (
+	azureOpenAIEndpointEnv = "AZURE_OPENAI_ENDPOINT"
+	azureOpenAIAPIKeyEnv   = "AZURE_OPENAI_API_KEY"
+	azureOpenAIADTokenEnv  = "AZURE_OPENAI_AD_TOKEN"
+	openAIAPIVersionEnv    = "OPENAI_API_VERSION"
+)
+
 type OpenAILLM struct {
 	client               *openai.Client
 	model                string
 	baseURL              string
+	httpClient           openai.HTTPDoer
 	extraParams          map[string]any
 	parallelToolCalls    bool
 	parallelToolCallsSet bool
@@ -132,6 +141,12 @@ func WithOpenAILLMToolChoice(toolChoice llm.ToolChoice) OpenAILLMOption {
 	}
 }
 
+func withOpenAILLMHTTPClient(httpClient openai.HTTPDoer) OpenAILLMOption {
+	return func(l *OpenAILLM) {
+		l.httpClient = httpClient
+	}
+}
+
 func NewOpenAILLM(apiKey string, model string, opts ...OpenAILLMOption) (*OpenAILLM, error) {
 	if apiKey == "" {
 		apiKey = os.Getenv(openAIAPIKeyEnv)
@@ -156,6 +171,74 @@ func newOpenAILLMWithConfigAndModel(config openai.ClientConfig, model string, op
 		opt(provider)
 	}
 	return provider, nil
+}
+
+func NewAzureOpenAILLM(model, azureEndpoint, azureDeployment, apiVersion, apiKey, azureADToken string, opts ...OpenAILLMOption) (*OpenAILLM, error) {
+	if model == "" {
+		model = defaultOpenAILLMModel
+	}
+	if azureEndpoint == "" {
+		azureEndpoint = os.Getenv(azureOpenAIEndpointEnv)
+	}
+	if apiVersion == "" {
+		apiVersion = os.Getenv(openAIAPIVersionEnv)
+	}
+	if apiKey == "" {
+		apiKey = os.Getenv(azureOpenAIAPIKeyEnv)
+	}
+	if azureADToken == "" {
+		azureADToken = os.Getenv(azureOpenAIADTokenEnv)
+	}
+	if azureEndpoint == "" {
+		return nil, fmt.Errorf("%s is required for Azure OpenAI LLM", azureOpenAIEndpointEnv)
+	}
+	if apiKey == "" && azureADToken == "" {
+		return nil, fmt.Errorf("%s or %s is required for Azure OpenAI LLM", azureOpenAIAPIKeyEnv, azureOpenAIADTokenEnv)
+	}
+	if azureDeployment == "" {
+		azureDeployment = model
+	}
+
+	provider := &OpenAILLM{model: model}
+	for _, opt := range opts {
+		opt(provider)
+	}
+
+	config := openai.DefaultAzureConfig(apiKey, azureEndpoint)
+	config.AzureModelMapperFunc = func(string) string {
+		return azureDeployment
+	}
+	if apiVersion != "" {
+		config.APIVersion = apiVersion
+	}
+	if provider.httpClient != nil {
+		config.HTTPClient = provider.httpClient
+	}
+	if apiKey == "" && azureADToken != "" {
+		config.HTTPClient = &azureADTokenHTTPClient{
+			base:  config.HTTPClient,
+			token: azureADToken,
+		}
+	}
+	provider.client = openai.NewClientWithConfig(config)
+	provider.baseURL = config.BaseURL
+	return provider, nil
+}
+
+type azureADTokenHTTPClient struct {
+	base  openai.HTTPDoer
+	token string
+}
+
+func (c *azureADTokenHTTPClient) Do(req *http.Request) (*http.Response, error) {
+	base := c.base
+	if base == nil {
+		base = http.DefaultClient
+	}
+	cloned := req.Clone(req.Context())
+	cloned.Header.Del(openai.AzureAPIKeyHeader)
+	cloned.Header.Set("Authorization", "Bearer "+c.token)
+	return base.Do(cloned)
 }
 
 func NewOpenAILLMWithBaseURL(apiKey string, model string, baseURL string, opts ...OpenAILLMOption) *OpenAILLM {
