@@ -31,19 +31,23 @@ const (
 )
 
 type OpenAISTT struct {
-	client         *openai.Client
-	httpClient     openai.HTTPDoer
-	apiKey         string
-	baseURL        string
-	model          string
-	language       string
-	detectLanguage bool
-	prompt         string
-	noiseReduction string
-	useRealtime    bool
-	dialWebsocket  openAIRealtimeSTTWebsocketDialer
-	streamsMu      sync.Mutex
-	streams        map[*openAIRealtimeSTTStream]struct{}
+	client          *openai.Client
+	httpClient      openai.HTTPDoer
+	apiKey          string
+	baseURL         string
+	model           string
+	language        string
+	languageSet     bool
+	languageValue   string
+	detectLanguage  bool
+	detectOptionSet bool
+	prompt          string
+	turnDetection   map[string]interface{}
+	noiseReduction  string
+	useRealtime     bool
+	dialWebsocket   openAIRealtimeSTTWebsocketDialer
+	streamsMu       sync.Mutex
+	streams         map[*openAIRealtimeSTTStream]struct{}
 }
 
 type OpenAISTTOption func(*OpenAISTT)
@@ -60,12 +64,15 @@ func WithOpenAISTTModel(model string) OpenAISTTOption {
 
 func WithOpenAISTTLanguage(language string) OpenAISTTOption {
 	return func(s *OpenAISTT) {
+		s.languageSet = true
+		s.languageValue = language
 		s.language = language
 	}
 }
 
 func WithOpenAISTTDetectLanguage(detect bool) OpenAISTTOption {
 	return func(s *OpenAISTT) {
+		s.detectOptionSet = true
 		s.detectLanguage = detect
 		if detect {
 			s.language = ""
@@ -82,6 +89,19 @@ func WithOpenAISTTPrompt(prompt string) OpenAISTTOption {
 func WithOpenAISTTNoiseReductionType(noiseReductionType string) OpenAISTTOption {
 	return func(s *OpenAISTT) {
 		s.noiseReduction = noiseReductionType
+	}
+}
+
+func WithOpenAISTTTurnDetection(turnDetection map[string]interface{}) OpenAISTTOption {
+	return func(s *OpenAISTT) {
+		if turnDetection == nil {
+			s.turnDetection = nil
+			return
+		}
+		s.turnDetection = make(map[string]interface{}, len(turnDetection))
+		for key, value := range turnDetection {
+			s.turnDetection[key] = value
+		}
 	}
 }
 
@@ -149,12 +169,24 @@ func (s *OpenAISTT) Capabilities() stt.STTCapabilities {
 }
 
 func (s *OpenAISTT) UpdateOptions(opts ...OpenAISTTOption) {
-	previousLanguage := s.language
+	previousDetectOptionSet := s.detectOptionSet
+	s.languageSet = false
+	s.languageValue = ""
+	s.detectOptionSet = false
 	for _, opt := range opts {
 		opt(s)
 	}
-	if s.language != "" && s.language != previousLanguage {
-		s.updateRealtimeSTTStreamLanguage(s.language)
+	languageSet := s.languageSet
+	languageValue := s.languageValue
+	detectOptionSet := s.detectOptionSet
+	s.languageSet = false
+	s.languageValue = ""
+	s.detectOptionSet = previousDetectOptionSet || detectOptionSet
+	if detectOptionSet {
+		s.language = ""
+	}
+	if languageSet {
+		s.updateRealtimeSTTStreamLanguage(languageValue)
 	}
 }
 
@@ -271,12 +303,16 @@ func buildOpenAIRealtimeSTTSessionUpdate(s *OpenAISTT) ([]byte, error) {
 		"transcription": transcription,
 	}
 	if !openAIRealtimeIsWhisperModel(s.model) {
-		input["turn_detection"] = map[string]interface{}{
-			"type":                "server_vad",
-			"threshold":           openAIRealtimeSTTDefaultThreshold,
-			"prefix_padding_ms":   openAIRealtimeSTTPrefixPaddingMS,
-			"silence_duration_ms": openAIRealtimeSTTSilenceDurationMS,
+		turnDetection := s.turnDetection
+		if turnDetection == nil {
+			turnDetection = map[string]interface{}{
+				"type":                "server_vad",
+				"threshold":           openAIRealtimeSTTDefaultThreshold,
+				"prefix_padding_ms":   openAIRealtimeSTTPrefixPaddingMS,
+				"silence_duration_ms": openAIRealtimeSTTSilenceDurationMS,
+			}
 		}
+		input["turn_detection"] = turnDetection
 	}
 	if s.noiseReduction != "" {
 		input["noise_reduction"] = map[string]interface{}{
@@ -322,6 +358,9 @@ func (s *OpenAISTT) Recognize(ctx context.Context, frames []*model.AudioFrame, l
 		buf.Write(f.Data)
 	}
 
+	if language != "" {
+		s.language = language
+	}
 	req := openAIAudioRequest(s, bytes.NewReader(buf.Bytes()), language)
 
 	resp, err := s.client.CreateTranscription(ctx, req)
@@ -336,9 +375,6 @@ func openAIAudioRequest(s *OpenAISTT, reader io.Reader, language string) openai.
 	requestLanguage := s.language
 	if language != "" {
 		requestLanguage = language
-	}
-	if s.detectLanguage {
-		requestLanguage = ""
 	}
 	req := openai.AudioRequest{
 		Model:    s.model,
@@ -435,7 +471,7 @@ func (s *openAIRealtimeSTTStream) Flush() error {
 }
 
 func (s *openAIRealtimeSTTStream) UpdateOptions(language string) {
-	if s == nil || language == "" {
+	if s == nil {
 		return
 	}
 	if s.state == nil {

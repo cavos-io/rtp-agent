@@ -27,6 +27,9 @@ func TestOpenAITTSDefaultsMatchReference(t *testing.T) {
 	if provider.speed != 1.0 {
 		t.Fatalf("speed = %v, want 1.0", provider.speed)
 	}
+	if provider.Provider() != "api.openai.com" {
+		t.Fatalf("Provider() = %q, want api.openai.com", provider.Provider())
+	}
 }
 
 func TestNewOpenAITTSUsesEnvironmentAPIKey(t *testing.T) {
@@ -77,6 +80,18 @@ func TestOpenAITTSBuildSpeechRequestUsesReferenceOptions(t *testing.T) {
 	}
 	if got.Speed != 1.25 {
 		t.Fatalf("speed = %v, want 1.25", got.Speed)
+	}
+}
+
+func TestOpenAITTSConstructorPreservesExplicitZeroSpeed(t *testing.T) {
+	provider := mustNewOpenAITTS(t, "test-key", "", "",
+		WithOpenAITTSSpeed(0),
+	)
+
+	got := buildOpenAITTSSpeechRequest(provider, "hello")
+
+	if got.Speed != 0 {
+		t.Fatalf("speed = %v, want explicit zero speed", got.Speed)
 	}
 }
 

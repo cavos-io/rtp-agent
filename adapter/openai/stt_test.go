@@ -215,6 +215,24 @@ func TestOpenAISTTUpdateOptionsMatchesReference(t *testing.T) {
 	}
 }
 
+func TestOpenAISTTUpdateOptionsDetectLanguageFalseClearsLanguage(t *testing.T) {
+	provider := mustNewOpenAISTT(t, "test-key", "",
+		WithOpenAISTTLanguage("id"),
+		WithOpenAISTTDetectLanguage(false),
+	)
+	constructorReq := openAIAudioRequest(provider, strings.NewReader("audio"), "")
+	if constructorReq.Language != "id" {
+		t.Fatalf("constructor language = %q, want id", constructorReq.Language)
+	}
+
+	provider.UpdateOptions(WithOpenAISTTDetectLanguage(false))
+
+	updateReq := openAIAudioRequest(provider, strings.NewReader("audio"), "")
+	if updateReq.Language != "" {
+		t.Fatalf("updated language = %q, want empty after explicit detect_language=false update", updateReq.Language)
+	}
+}
+
 func TestOpenAISTTLabelAndDisabledRealtimeStream(t *testing.T) {
 	provider := mustNewOpenAISTT(t, "test-key", "")
 
@@ -289,6 +307,38 @@ func TestOpenAISTTRecognizeUsesOpenAITranscriptionAPI(t *testing.T) {
 	}
 }
 
+func TestOpenAISTTRecognizeLanguageOverridePersists(t *testing.T) {
+	client := openAITestHTTPDoer(func(r *http.Request) (*http.Response, error) {
+		if err := r.ParseMultipartForm(1 << 20); err != nil {
+			return nil, err
+		}
+		if r.FormValue("language") != "id" {
+			t.Fatalf("language form = %q, want id", r.FormValue("language"))
+		}
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Status:     "200 OK",
+			Header:     http.Header{"Content-Type": []string{"application/json"}},
+			Body:       io.NopCloser(strings.NewReader(`{"text":"hello"}`)),
+			Request:    r,
+		}, nil
+	})
+	provider := mustNewOpenAISTT(t, "test-key", "",
+		WithOpenAISTTDetectLanguage(true),
+		WithOpenAISTTBaseURL("https://openai.test/v1"),
+		withOpenAISTTHTTPClient(client),
+	)
+
+	if _, err := provider.Recognize(context.Background(), []*model.AudioFrame{{Data: []byte{1, 2, 3}}}, "id"); err != nil {
+		t.Fatalf("Recognize error = %v", err)
+	}
+
+	req := openAIAudioRequest(provider, strings.NewReader("audio"), "")
+	if req.Language != "id" {
+		t.Fatalf("language after Recognize override = %q, want id", req.Language)
+	}
+}
+
 func TestOpenAIRealtimeSTTCapabilitiesAndWebsocketRequestMatchReference(t *testing.T) {
 	provider := mustNewOpenAISTT(t, "test-key", "gpt-4o-mini-transcribe",
 		WithOpenAISTTRealtime(true),
@@ -353,6 +403,43 @@ func TestOpenAIRealtimeSTTSessionUpdateMatchesReference(t *testing.T) {
 	}
 	if input["turn_detection"] == nil {
 		t.Fatalf("turn_detection missing")
+	}
+}
+
+func TestOpenAIRealtimeSTTSessionUpdateUsesCustomTurnDetection(t *testing.T) {
+	provider := mustNewOpenAISTT(t, "test-key", "gpt-4o-mini-transcribe",
+		WithOpenAISTTRealtime(true),
+		WithOpenAISTTTurnDetection(map[string]any{
+			"type":                "server_vad",
+			"threshold":           0.7,
+			"prefix_padding_ms":   250,
+			"silence_duration_ms": 900,
+		}),
+	)
+
+	payload, err := buildOpenAIRealtimeSTTSessionUpdate(provider)
+	if err != nil {
+		t.Fatalf("build session update: %v", err)
+	}
+	var message map[string]any
+	if err := json.Unmarshal(payload, &message); err != nil {
+		t.Fatalf("decode session update: %v", err)
+	}
+	session := message["session"].(map[string]any)
+	audio := session["audio"].(map[string]any)
+	input := audio["input"].(map[string]any)
+	turnDetection := input["turn_detection"].(map[string]any)
+	if turnDetection["type"] != "server_vad" {
+		t.Fatalf("turn_detection type = %#v, want server_vad", turnDetection["type"])
+	}
+	if turnDetection["threshold"] != 0.7 {
+		t.Fatalf("turn_detection threshold = %#v, want 0.7", turnDetection["threshold"])
+	}
+	if turnDetection["prefix_padding_ms"] != float64(250) {
+		t.Fatalf("turn_detection prefix_padding_ms = %#v, want 250", turnDetection["prefix_padding_ms"])
+	}
+	if turnDetection["silence_duration_ms"] != float64(900) {
+		t.Fatalf("turn_detection silence_duration_ms = %#v, want 900", turnDetection["silence_duration_ms"])
 	}
 }
 
@@ -479,6 +566,30 @@ func TestOpenAIRealtimeSTTStreamUpdateOptionsChangesLanguage(t *testing.T) {
 	}
 	if got := events[0].Alternatives[0].Language; got != "id" {
 		t.Fatalf("language = %q, want id", got)
+	}
+}
+
+func TestOpenAISTTUpdateOptionsPropagatesEmptyLanguageToActiveStream(t *testing.T) {
+	provider := mustNewOpenAISTT(t, "test-key", "",
+		WithOpenAISTTRealtime(true),
+	)
+	stream := &openAIRealtimeSTTStream{
+		state: &openAIRealtimeSTTMessageState{language: "id"},
+	}
+	provider.registerRealtimeSTTStream(stream)
+
+	provider.UpdateOptions(WithOpenAISTTLanguage(""))
+
+	events, err := openAIRealtimeSTTEventsFromMessage([]byte(`{
+		"type":"conversation.item.input_audio_transcription.delta",
+		"item_id":"item-1",
+		"delta":"hello"
+	}`), stream.state)
+	if err != nil {
+		t.Fatalf("events from message: %v", err)
+	}
+	if got := events[0].Alternatives[0].Language; got != "" {
+		t.Fatalf("language = %q, want empty after explicit language update", got)
 	}
 }
 

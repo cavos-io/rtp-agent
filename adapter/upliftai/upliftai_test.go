@@ -46,6 +46,16 @@ func TestUpliftAITTSReferenceDefaultsAndCapabilities(t *testing.T) {
 	}
 }
 
+func TestUpliftAITTSUsesEnvironmentAPIKey(t *testing.T) {
+	t.Setenv("UPLIFTAI_API_KEY", "env-secret")
+
+	tts := NewUpliftAITTS("", "")
+
+	if got, want := tts.apiKey, "env-secret"; got != want {
+		t.Fatalf("apiKey = %q, want environment key %q", got, want)
+	}
+}
+
 func TestUpliftAITTSChunkedStreamFramesAudio(t *testing.T) {
 	body := io.NopCloser(strings.NewReader("\x01\x02\x03\x04"))
 	stream := &upliftAITTSChunkedStream{resp: &http.Response{Body: body}}

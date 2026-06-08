@@ -439,8 +439,11 @@ func TestDefaultConfigFromEnvSelectsOpenAIProviders(t *testing.T) {
 	if app.Session.STT == nil {
 		t.Fatal("STT is nil")
 	}
-	if got := tts.Provider(app.Session.TTS); got != "openai" {
-		t.Fatalf("TTS provider = %q, want openai", got)
+	if app.Session.TTS == nil {
+		t.Fatal("TTS is nil")
+	}
+	if got := tts.Provider(app.Session.TTS); got != "api.openai.com" {
+		t.Fatalf("TTS provider = %q, want api.openai.com", got)
 	}
 	if app.RealtimeModel == nil {
 		t.Fatal("RealtimeModel is nil")

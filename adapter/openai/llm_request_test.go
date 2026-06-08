@@ -85,6 +85,123 @@ func TestNewOpenAILLMChatUsesConfiguredKeyAndDefaultModel(t *testing.T) {
 	}
 }
 
+func TestOpenAIChatOmitsDefaultParallelToolCalls(t *testing.T) {
+	capture := &captureDeadlineHTTPClient{
+		statusCode:   http.StatusBadRequest,
+		responseBody: `{"error":{"message":"bad request","type":"invalid_request_error","code":"bad_request"}}`,
+	}
+	config := openaisdk.DefaultConfig("test-key")
+	config.HTTPClient = capture
+	model := mustNewOpenAILLMWithConfig(t, config, "gpt-4o")
+
+	_, _ = model.Chat(context.Background(), llm.NewChatContext(), llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 0}))
+
+	if strings.Contains(capture.requestBody, `"parallel_tool_calls"`) {
+		t.Fatalf("request body = %s, want default parallel_tool_calls omitted", capture.requestBody)
+	}
+}
+
+func TestOpenAIChatSerializesExplicitParallelToolCalls(t *testing.T) {
+	capture := &captureDeadlineHTTPClient{
+		statusCode:   http.StatusBadRequest,
+		responseBody: `{"error":{"message":"bad request","type":"invalid_request_error","code":"bad_request"}}`,
+	}
+	config := openaisdk.DefaultConfig("test-key")
+	config.HTTPClient = capture
+	model := mustNewOpenAILLMWithConfig(t, config, "gpt-4o")
+
+	_, _ = model.Chat(
+		context.Background(),
+		llm.NewChatContext(),
+		llm.WithParallelToolCalls(false),
+		llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 0}),
+	)
+
+	if !strings.Contains(capture.requestBody, `"parallel_tool_calls":false`) {
+		t.Fatalf("request body = %s, want explicit parallel_tool_calls false", capture.requestBody)
+	}
+}
+
+func TestOpenAIChatAppliesProviderParallelToolCalls(t *testing.T) {
+	capture := &captureDeadlineHTTPClient{
+		statusCode:   http.StatusBadRequest,
+		responseBody: `{"error":{"message":"bad request","type":"invalid_request_error","code":"bad_request"}}`,
+	}
+	model := NewOpenAILLMWithBaseURLAndHTTPClient(
+		"test-key",
+		"gpt-4o",
+		"https://openai.test/v1",
+		capture,
+		WithOpenAILLMParallelToolCalls(false),
+	)
+
+	_, _ = model.Chat(context.Background(), llm.NewChatContext(), llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 0}))
+
+	if !strings.Contains(capture.requestBody, `"parallel_tool_calls":false`) {
+		t.Fatalf("request body = %s, want provider parallel_tool_calls false", capture.requestBody)
+	}
+}
+
+func TestOpenAIChatAppliesProviderToolChoice(t *testing.T) {
+	capture := &captureDeadlineHTTPClient{
+		statusCode:   http.StatusBadRequest,
+		responseBody: `{"error":{"message":"bad request","type":"invalid_request_error","code":"bad_request"}}`,
+	}
+	model := NewOpenAILLMWithBaseURLAndHTTPClient(
+		"test-key",
+		"gpt-4o",
+		"https://openai.test/v1",
+		capture,
+		WithOpenAILLMToolChoice("none"),
+	)
+
+	_, _ = model.Chat(context.Background(), llm.NewChatContext(), llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 0}))
+
+	if !strings.Contains(capture.requestBody, `"tool_choice":"none"`) {
+		t.Fatalf("request body = %s, want provider tool_choice none", capture.requestBody)
+	}
+}
+
+func TestOpenAIChatAppliesProviderTemperature(t *testing.T) {
+	capture := &captureDeadlineHTTPClient{
+		statusCode:   http.StatusBadRequest,
+		responseBody: `{"error":{"message":"bad request","type":"invalid_request_error","code":"bad_request"}}`,
+	}
+	model := NewOpenAILLMWithBaseURLAndHTTPClient(
+		"test-key",
+		"gpt-4o",
+		"https://openai.test/v1",
+		capture,
+		WithOpenAILLMTemperature(0.3),
+	)
+
+	_, _ = model.Chat(context.Background(), llm.NewChatContext(), llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 0}))
+
+	if !strings.Contains(capture.requestBody, `"temperature":0.3`) {
+		t.Fatalf("request body = %s, want provider temperature", capture.requestBody)
+	}
+}
+
+func TestOpenAIChatAppliesProviderTopP(t *testing.T) {
+	capture := &captureDeadlineHTTPClient{
+		statusCode:   http.StatusBadRequest,
+		responseBody: `{"error":{"message":"bad request","type":"invalid_request_error","code":"bad_request"}}`,
+	}
+	model := NewOpenAILLMWithBaseURLAndHTTPClient(
+		"test-key",
+		"gpt-4o",
+		"https://openai.test/v1",
+		capture,
+		WithOpenAILLMTopP(0.4),
+	)
+
+	_, _ = model.Chat(context.Background(), llm.NewChatContext(), llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 0}))
+
+	if !strings.Contains(capture.requestBody, `"top_p":0.4`) {
+		t.Fatalf("request body = %s, want provider top_p", capture.requestBody)
+	}
+}
+
 func TestOpenAIChatAppliesConnectOptionsTimeoutToRequestContext(t *testing.T) {
 	sentinelErr := errors.New("stop after context capture")
 	capture := &captureDeadlineHTTPClient{err: sentinelErr}
