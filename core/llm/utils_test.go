@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"strings"
 	"testing"
 )
 
@@ -164,6 +165,22 @@ func TestParseFunctionArgumentsRejectsNonObjectWithReferenceError(t *testing.T) 
 	want := `expected dict from function arguments, got list: ["Paris"]`
 	if err.Error() != want {
 		t.Fatalf("ParseFunctionArguments(array) error = %q, want %q", err.Error(), want)
+	}
+}
+
+func TestParseFunctionArgumentsReportsRawPrefixWhenRepairIsEmpty(t *testing.T) {
+	const raw = `<|im_end|>`
+
+	_, err := ParseFunctionArguments(raw)
+	if err == nil {
+		t.Fatal("ParseFunctionArguments(template token) error = nil, want error")
+	}
+
+	if !strings.HasPrefix(err.Error(), "could not parse function arguments as JSON: ") {
+		t.Fatalf("ParseFunctionArguments(template token) error = %q, want could-not-parse category", err.Error())
+	}
+	if !strings.HasSuffix(err.Error(), ": "+raw) {
+		t.Fatalf("ParseFunctionArguments(template token) error = %q, want raw argument prefix suffix", err.Error())
 	}
 }
 

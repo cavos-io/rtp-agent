@@ -141,11 +141,11 @@ func ParseFunctionArguments(jsonArguments string) (map[string]any, error) {
 	var value any
 	if err := json.Unmarshal([]byte(jsonArguments), &value); err != nil {
 		repaired := repairFunctionArguments(jsonArguments)
-		if repaired == jsonArguments {
-			return nil, fmt.Errorf("could not parse function arguments as JSON: %w", err)
+		if repaired == "" || repaired == jsonArguments {
+			return nil, fmt.Errorf("could not parse function arguments as JSON: %w: %.200s", err, jsonArguments)
 		}
 		if retryErr := json.Unmarshal([]byte(repaired), &value); retryErr != nil {
-			return nil, fmt.Errorf("could not parse function arguments as JSON: %w", err)
+			return nil, fmt.Errorf("could not parse function arguments as JSON: %w: %.200s", err, jsonArguments)
 		}
 		value = cleanRepairedFunctionArguments(value)
 	}
