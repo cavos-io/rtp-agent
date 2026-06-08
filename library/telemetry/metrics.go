@@ -34,15 +34,17 @@ type LLMMetrics struct {
 func (m *LLMMetrics) GetType() string { return "llm_metrics" }
 
 type STTMetrics struct {
-	Label         string
-	RequestID     string
-	Timestamp     time.Time
-	Duration      float64
-	AudioDuration float64
-	InputTokens   int
-	OutputTokens  int
-	Streamed      bool
-	Metadata      *Metadata
+	Label            string
+	RequestID        string
+	Timestamp        time.Time
+	Duration         float64
+	AudioDuration    float64
+	InputTokens      int
+	OutputTokens     int
+	Streamed         bool
+	AcquireTime      float64
+	ConnectionReused bool
+	Metadata         *Metadata
 }
 
 func (m *STTMetrics) GetType() string { return "stt_metrics" }

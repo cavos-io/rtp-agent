@@ -47,6 +47,7 @@ func CollectOTelUsageWithContext(ctx context.Context, metrics AgentMetrics) {
 	case *STTMetrics:
 		attrs := otelModelAttrs(ev.Metadata)
 		addFloat64Counter(ctx, meter, "lk.agents.usage.stt_audio_duration", ev.AudioDuration, attrs)
+		recordAcquireTime(ctx, meter, ev.AcquireTime, ev.ConnectionReused, ev.Metadata)
 	case *InterruptionMetrics:
 		attrs := otelModelAttrs(ev.Metadata)
 		addInt64Counter(ctx, meter, "lk.agents.usage.interruption_num_requests", int64(ev.NumRequests), attrs)
