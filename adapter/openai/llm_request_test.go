@@ -613,6 +613,18 @@ func TestBuildOpenAIChatCompletionRequestAppliesExtraParams(t *testing.T) {
 	}
 }
 
+func TestBuildOpenAIChatCompletionRequestAppliesExtraParamParallelToolCalls(t *testing.T) {
+	req := buildOpenAIChatCompletionRequest("gpt-4o", llm.NewChatContext(), &llm.ChatOptions{
+		ExtraParams: map[string]any{
+			"parallel_tool_calls": false,
+		},
+	})
+
+	if got, ok := req.ParallelToolCalls.(*bool); !ok || got == nil || *got {
+		t.Fatalf("ParallelToolCalls = %#v, want pointer to false", req.ParallelToolCalls)
+	}
+}
+
 func TestNewOpenAILLMWithBaseURLAndHTTPClientUsesConfiguredClient(t *testing.T) {
 	capture := &captureDeadlineHTTPClient{
 		statusCode:   http.StatusBadRequest,

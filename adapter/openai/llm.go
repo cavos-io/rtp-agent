@@ -577,6 +577,10 @@ func applyOpenAIExtraParams(req *openai.ChatCompletionRequest, params map[string
 			if v := asStreamOptions(value); v != nil {
 				req.StreamOptions = v
 			}
+		case "parallel_tool_calls":
+			if v, ok := value.(bool); ok {
+				req.ParallelToolCalls = &v
+			}
 		case "service_tier":
 			if v, ok := value.(string); ok {
 				req.ServiceTier = openai.ServiceTier(v)
