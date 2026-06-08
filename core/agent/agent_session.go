@@ -64,6 +64,7 @@ type AgentSessionOptions struct {
 	PreemptiveGenerationSet          bool
 	AudioInputHook                   AudioInputHook
 	AECWarmupDuration                float64
+	AECWarmupDurationSet             bool
 	SessionCloseTranscriptTimeout    float64
 	SessionCloseTranscriptTimeoutSet bool
 	TurnDetection                    TurnDetectionMode
@@ -712,7 +713,7 @@ func withAgentSessionOptionDefaults(opts AgentSessionOptions) AgentSessionOption
 	if !opts.PreemptiveGenerationSet {
 		opts.PreemptiveGeneration = true
 	}
-	if opts.AECWarmupDuration == 0 {
+	if !opts.AECWarmupDurationSet && opts.AECWarmupDuration == 0 {
 		opts.AECWarmupDuration = 3.0
 	}
 	if !opts.SessionCloseTranscriptTimeoutSet && opts.SessionCloseTranscriptTimeout == 0 {

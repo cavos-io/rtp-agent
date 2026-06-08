@@ -1055,6 +1055,17 @@ func TestNewAgentSessionPreservesExplicitZeroSessionCloseTranscriptTimeout(t *te
 	}
 }
 
+func TestNewAgentSessionPreservesExplicitZeroAECWarmupDuration(t *testing.T) {
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{
+		AECWarmupDuration:    0,
+		AECWarmupDurationSet: true,
+	})
+
+	if session.Options.AECWarmupDuration != 0 {
+		t.Fatalf("AECWarmupDuration = %v, want explicit zero preserved", session.Options.AECWarmupDuration)
+	}
+}
+
 func TestAgentSessionGenerateReplyEmitsSpeechCreatedEvent(t *testing.T) {
 	agent := NewAgent("test")
 	session := NewAgentSession(agent, nil, AgentSessionOptions{AllowInterruptions: true})
