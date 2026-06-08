@@ -72,6 +72,7 @@ type AgentSessionOptions struct {
 	VideoSampler                     *VoiceActivityVideoSampler
 	ToolChoice                       llm.ToolChoice
 	MaxUnrecoverableErrors           int
+	MaxUnrecoverableErrorsSet        bool
 	MockTools                        map[string]MockToolFunc
 }
 
@@ -717,7 +718,7 @@ func withAgentSessionOptionDefaults(opts AgentSessionOptions) AgentSessionOption
 	if !opts.SessionCloseTranscriptTimeoutSet && opts.SessionCloseTranscriptTimeout == 0 {
 		opts.SessionCloseTranscriptTimeout = 2.0
 	}
-	if opts.MaxUnrecoverableErrors == 0 {
+	if !opts.MaxUnrecoverableErrorsSet && opts.MaxUnrecoverableErrors == 0 {
 		opts.MaxUnrecoverableErrors = 3
 	}
 	return opts

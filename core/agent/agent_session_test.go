@@ -2961,6 +2961,51 @@ func TestAgentSessionSpeakingResetsUnrecoverableProviderErrorCounts(t *testing.T
 	}
 }
 
+func TestAgentSessionPreservesExplicitZeroMaxUnrecoverableErrors(t *testing.T) {
+	agent := NewAgent("test")
+	session := NewAgentSession(agent, nil, AgentSessionOptions{
+		MaxUnrecoverableErrors:    0,
+		MaxUnrecoverableErrorsSet: true,
+	})
+
+	if session.Options.MaxUnrecoverableErrors != 0 {
+		t.Fatalf("MaxUnrecoverableErrors = %d, want explicit zero preserved", session.Options.MaxUnrecoverableErrors)
+	}
+}
+
+func TestAgentSessionExplicitZeroMaxUnrecoverableErrorsClosesOnFirstError(t *testing.T) {
+	agent := NewAgent("test")
+	agent.TTS = &fakePipelineTTS{}
+	agent.LLM = &fakeGenerationLLM{}
+	agent.STT = &fakePipelineSTT{}
+	agent.VAD = &fakePipelineVAD{}
+	session := NewAgentSession(agent, nil, AgentSessionOptions{
+		MaxUnrecoverableErrors:    0,
+		MaxUnrecoverableErrorsSet: true,
+	})
+	session.Assistant = &fakeSessionAssistant{}
+
+	if err := session.Start(context.Background()); err != nil {
+		t.Fatalf("Start error = %v, want nil", err)
+	}
+
+	cause := errors.New("tts failed")
+	closeEvents := session.CloseEvents()
+	session.EmitError(*NewErrorEvent(tts.TTSError{Label: "fake", Err: cause, Recoverable: false}, agent.TTS))
+
+	select {
+	case ev := <-closeEvents:
+		if ev.Reason != CloseReasonError {
+			t.Fatalf("CloseEvent.Reason = %q, want error", ev.Reason)
+		}
+		if !errors.Is(ev.Error, cause) {
+			t.Fatalf("CloseEvent.Error = %v, want cause %v", ev.Error, cause)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("CloseEvents did not receive error close")
+	}
+}
+
 func TestAgentSessionCloseSoonCommitsPendingUserTurn(t *testing.T) {
 	agent := &turnCompletedAgent{Agent: NewAgent("test"), turns: make(chan *llm.ChatMessage, 1)}
 	agent.TurnDetection = TurnDetectionModeManual
