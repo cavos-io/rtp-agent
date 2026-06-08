@@ -217,6 +217,41 @@ func TestRealtimeModelConstructorVoiceAppliesToInitialSession(t *testing.T) {
 	assertRealtimeMessage(t, initialUpdate, "session.update", "alloy")
 }
 
+func TestRealtimeModelConstructorExplicitZeroSpeedAppliesToInitialSession(t *testing.T) {
+	messages := make(chan string, 4)
+	dialer := newOpenAIRealtimeTestWebsocketDialer(t, func(conn *websocket.Conn, _ *http.Request) {
+		for {
+			_, msg, err := conn.ReadMessage()
+			if err != nil {
+				return
+			}
+			messages <- string(msg)
+		}
+	})
+
+	realtimeModel := NewRealtimeModel("test-key", "gpt-realtime", WithOpenAIRealtimeSpeed(0))
+	realtimeModel.baseURL = "ws://openai.test/v1/realtime"
+	realtimeModel.dialWebsocket = dialer
+
+	session, err := realtimeModel.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	defer session.Close()
+
+	initialUpdate := <-messages
+	var msg map[string]any
+	if err := json.Unmarshal([]byte(initialUpdate), &msg); err != nil {
+		t.Fatalf("decode initial update: %v", err)
+	}
+	sessionPayload := msg["session"].(map[string]any)
+	audio := sessionPayload["audio"].(map[string]any)
+	output := audio["output"].(map[string]any)
+	if output["speed"] != 0.0 {
+		t.Fatalf("speed = %#v, want explicit zero", output["speed"])
+	}
+}
+
 func TestRealtimeInitialSessionUsesDefaultToolChoice(t *testing.T) {
 	session := openAIRealtimeInitialSession("gpt-realtime")
 

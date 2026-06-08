@@ -45,6 +45,13 @@ func WithOpenAIRealtimeVoice(voice string) OpenAIRealtimeOption {
 	}
 }
 
+func WithOpenAIRealtimeSpeed(speed float64) OpenAIRealtimeOption {
+	return func(options *llm.RealtimeSessionOptions) {
+		options.Speed = speed
+		options.SpeedSet = true
+	}
+}
+
 func NewRealtimeModel(apiKey, model string, opts ...OpenAIRealtimeOption) *RealtimeModel {
 	if model == "" {
 		model = "gpt-realtime"
