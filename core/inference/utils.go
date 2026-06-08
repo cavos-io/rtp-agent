@@ -17,9 +17,11 @@ const (
 	stagingInferenceURL     = "https://agent-gateway.staging.livekit.cloud/v1"
 	InferenceAccessTokenTTL = 10 * time.Minute
 
-	HeaderUserAgent = "User-Agent"
-	HeaderRoomID    = "X-LiveKit-Room-ID"
-	HeaderJobID     = "X-LiveKit-Job-ID"
+	HeaderUserAgent         = "User-Agent"
+	HeaderRoomID            = "X-LiveKit-Room-ID"
+	HeaderJobID             = "X-LiveKit-Job-ID"
+	HeaderInferenceProvider = "X-LiveKit-Inference-Provider"
+	HeaderInferencePriority = "X-LiveKit-Inference-Priority"
 )
 
 var inferenceContextHeadersProvider = struct {

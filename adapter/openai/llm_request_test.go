@@ -636,19 +636,21 @@ func TestNewOpenAILLMWithBaseURLAndHTTPClientUsesConfiguredClient(t *testing.T) 
 }
 
 type captureDeadlineHTTPClient struct {
-	err           error
-	hasDeadline   bool
-	remaining     time.Duration
-	statusCode    int
-	responseBody  string
-	header        http.Header
-	requestURL    string
-	requestBody   string
-	authorization string
-	apiKey        string
-	userAgent     string
-	roomID        string
-	jobID         string
+	err               error
+	hasDeadline       bool
+	remaining         time.Duration
+	statusCode        int
+	responseBody      string
+	header            http.Header
+	requestURL        string
+	requestBody       string
+	authorization     string
+	apiKey            string
+	userAgent         string
+	roomID            string
+	jobID             string
+	inferenceProvider string
+	inferencePriority string
 }
 
 func (c *captureDeadlineHTTPClient) Do(req *http.Request) (*http.Response, error) {
@@ -663,6 +665,8 @@ func (c *captureDeadlineHTTPClient) Do(req *http.Request) (*http.Response, error
 	c.userAgent = req.Header.Get("User-Agent")
 	c.roomID = req.Header.Get("X-LiveKit-Room-ID")
 	c.jobID = req.Header.Get("X-LiveKit-Job-ID")
+	c.inferenceProvider = req.Header.Get("X-LiveKit-Inference-Provider")
+	c.inferencePriority = req.Header.Get("X-LiveKit-Inference-Priority")
 	if req.Body != nil {
 		body, _ := io.ReadAll(req.Body)
 		c.requestBody = string(body)

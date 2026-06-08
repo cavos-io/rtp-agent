@@ -152,3 +152,40 @@ func TestLiveKitInferenceLLMChatSendsReferenceContextHeaders(t *testing.T) {
 		t.Fatalf("%s = %q, want job_llm", inference.HeaderJobID, capture.jobID)
 	}
 }
+
+func TestLiveKitInferenceLLMChatSendsReferenceRoutingHeaders(t *testing.T) {
+	capture := &captureDeadlineHTTPClient{
+		statusCode:   http.StatusUnauthorized,
+		responseBody: `{"error":{"message":"stop"}}`,
+	}
+
+	provider, err := NewLiveKitInferenceLLM(
+		"google/gemini-2.5-flash",
+		"key",
+		"secret",
+		WithLiveKitInferenceLLMProvider("google"),
+		WithLiveKitInferenceLLMClass("standard"),
+	)
+	if err != nil {
+		t.Fatalf("NewLiveKitInferenceLLM error = %v", err)
+	}
+	provider.baseURL = "https://inference.test/v1"
+	provider.httpClient = capture
+
+	_, _ = provider.Chat(
+		context.Background(),
+		llm.NewChatContext(),
+		llm.WithExtraParams(map[string]any{"inference_class": "priority"}),
+		llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 0}),
+	)
+
+	if capture.inferenceProvider != "google" {
+		t.Fatalf("%s = %q, want google", inference.HeaderInferenceProvider, capture.inferenceProvider)
+	}
+	if capture.inferencePriority != "priority" {
+		t.Fatalf("%s = %q, want priority", inference.HeaderInferencePriority, capture.inferencePriority)
+	}
+	if strings.Contains(capture.requestBody, "inference_class") {
+		t.Fatalf("request body = %s, want inference_class consumed as header", capture.requestBody)
+	}
+}
