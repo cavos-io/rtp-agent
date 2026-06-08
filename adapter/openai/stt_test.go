@@ -50,6 +50,20 @@ func TestOpenAIAudioRequestUsesJSONForNonWhisperModels(t *testing.T) {
 	}
 }
 
+func TestOpenAIAudioRequestUsesReferenceBaseLanguage(t *testing.T) {
+	provider := mustNewOpenAISTT(t, "test-key", "whisper-1", WithOpenAISTTLanguage("cmn-Hans-CN"))
+
+	req := openAIAudioRequest(provider, strings.NewReader("audio"), "")
+	if req.Language != "zh" {
+		t.Fatalf("language = %q, want zh base language", req.Language)
+	}
+
+	overrideReq := openAIAudioRequest(provider, strings.NewReader("audio"), "id-ID")
+	if overrideReq.Language != "id" {
+		t.Fatalf("override language = %q, want id base language", overrideReq.Language)
+	}
+}
+
 func TestOpenAISpeechEventPreservesWordTimestamps(t *testing.T) {
 	var resp goopenai.AudioResponse
 	if err := json.Unmarshal([]byte(`{
@@ -558,6 +572,29 @@ func TestOpenAIRealtimeSTTSessionUpdateMatchesReference(t *testing.T) {
 	}
 	if input["turn_detection"] == nil {
 		t.Fatalf("turn_detection missing")
+	}
+}
+
+func TestOpenAIRealtimeSTTSessionUpdateUsesReferenceBaseLanguage(t *testing.T) {
+	provider := mustNewOpenAISTT(t, "test-key", "gpt-4o-mini-transcribe",
+		WithOpenAISTTRealtime(true),
+		WithOpenAISTTLanguage("cmn-Hans-CN"),
+	)
+
+	payload, err := buildOpenAIRealtimeSTTSessionUpdate(provider)
+	if err != nil {
+		t.Fatalf("build session update: %v", err)
+	}
+	var message map[string]any
+	if err := json.Unmarshal(payload, &message); err != nil {
+		t.Fatalf("decode session update: %v", err)
+	}
+	session := message["session"].(map[string]any)
+	audio := session["audio"].(map[string]any)
+	input := audio["input"].(map[string]any)
+	transcription := input["transcription"].(map[string]any)
+	if transcription["language"] != "zh" {
+		t.Fatalf("language = %#v, want zh base language", transcription["language"])
 	}
 }
 

@@ -1320,6 +1320,143 @@ func TestAgentSessionRecordsEmittedEvents(t *testing.T) {
 	}
 }
 
+func TestAgentSessionOnReceivesRecordedEmittedEvents(t *testing.T) {
+	agent := NewAgent("test")
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	cause := errors.New("provider failed")
+	received := make(chan Event, 1)
+
+	session.On("error", func(ev Event) {
+		if len(session.RecordedEvents()) != 1 {
+			t.Fatalf("RecordedEvents length during callback = %d, want 1", len(session.RecordedEvents()))
+		}
+		received <- ev
+	})
+
+	session.EmitError(ErrorEvent{Error: cause, Source: "llm"})
+
+	select {
+	case ev := <-received:
+		errEvent, ok := ev.(*ErrorEvent)
+		if !ok {
+			t.Fatalf("listener event = %T, want *ErrorEvent", ev)
+		}
+		if !errors.Is(errEvent.Error, cause) || errEvent.Source != "llm" {
+			t.Fatalf("listener error event = %#v, want original error/source", errEvent)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("listener did not receive emitted event")
+	}
+}
+
+func TestAgentSessionOnReturnsUnsubscribe(t *testing.T) {
+	agent := NewAgent("test")
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	received := make(chan Event, 1)
+
+	unsubscribe := session.On("error", func(ev Event) {
+		received <- ev
+	})
+	unsubscribe()
+
+	session.EmitError(ErrorEvent{Error: errors.New("provider failed"), Source: "llm"})
+
+	select {
+	case ev := <-received:
+		t.Fatalf("unsubscribed listener received event: %#v", ev)
+	default:
+	}
+}
+
+func TestAgentSessionOnceReceivesOnlyFirstMatchingEvent(t *testing.T) {
+	agent := NewAgent("test")
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	first := errors.New("first failure")
+	second := errors.New("second failure")
+	received := make(chan Event, 2)
+
+	session.Once("error", func(ev Event) {
+		received <- ev
+	})
+
+	session.EmitError(ErrorEvent{Error: first, Source: "llm"})
+	session.EmitError(ErrorEvent{Error: second, Source: "tts"})
+
+	select {
+	case ev := <-received:
+		errEvent, ok := ev.(*ErrorEvent)
+		if !ok {
+			t.Fatalf("listener event = %T, want *ErrorEvent", ev)
+		}
+		if !errors.Is(errEvent.Error, first) || errEvent.Source != "llm" {
+			t.Fatalf("listener error event = %#v, want first error/source", errEvent)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("one-shot listener did not receive first emitted event")
+	}
+	select {
+	case ev := <-received:
+		t.Fatalf("one-shot listener received second event: %#v", ev)
+	default:
+	}
+}
+
+func TestAgentSessionOnceReturnsUnsubscribe(t *testing.T) {
+	agent := NewAgent("test")
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	received := make(chan Event, 1)
+
+	unsubscribe := session.Once("error", func(ev Event) {
+		received <- ev
+	})
+	unsubscribe()
+
+	session.EmitError(ErrorEvent{Error: errors.New("provider failed"), Source: "llm"})
+
+	select {
+	case ev := <-received:
+		t.Fatalf("unsubscribed one-shot listener received event: %#v", ev)
+	default:
+	}
+}
+
+func TestAgentSessionCloseSoonClearsEventListeners(t *testing.T) {
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	session.started = true
+
+	closeEvents := make(chan Event, 1)
+	errorEvents := make(chan Event, 1)
+	session.On("close", func(ev Event) {
+		closeEvents <- ev
+	})
+	session.On("error", func(ev Event) {
+		errorEvents <- ev
+	})
+
+	session.CloseSoon(CloseReasonUserInitiated)
+
+	select {
+	case ev := <-closeEvents:
+		closeEvent, ok := ev.(*CloseEvent)
+		if !ok {
+			t.Fatalf("close listener event = %T, want *CloseEvent", ev)
+		}
+		if closeEvent.Reason != CloseReasonUserInitiated {
+			t.Fatalf("close reason = %q, want %q", closeEvent.Reason, CloseReasonUserInitiated)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("close listener did not receive close event")
+	}
+
+	session.EmitError(ErrorEvent{Error: errors.New("after close"), Source: "llm"})
+
+	select {
+	case ev := <-errorEvents:
+		t.Fatalf("closed-session listener received later event: %#v", ev)
+	default:
+	}
+}
+
 func TestAgentSessionRecordedEventsReturnsCopy(t *testing.T) {
 	agent := NewAgent("test")
 	session := NewAgentSession(agent, nil, AgentSessionOptions{})

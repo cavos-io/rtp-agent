@@ -533,6 +533,7 @@ func (va *PipelineAgent) generateReplyWithOptions(opts pipelineReplyOptions) {
 
 		// Wait for tool executions to complete and collect results
 		var executedTools bool
+		var replyRequired bool
 		var functionCalls []*llm.FunctionCall
 		var functionCallOutputs []*llm.FunctionCallOutput
 		for toolOut := range toolOutCh {
@@ -542,13 +543,12 @@ func (va *PipelineAgent) generateReplyWithOptions(opts pipelineReplyOptions) {
 			fncCall := toolOut.FncCall
 			functionCalls = append(functionCalls, &fncCall)
 			functionCallOutputs = append(functionCallOutputs, toolOut.FncCallOut)
-			va.chatCtx.Append(&fncCall)
-			if replyCtx != va.chatCtx {
-				replyCtx.Append(&fncCall)
-			}
 			if toolOut.FncCallOut != nil {
+				replyRequired = true
+				va.chatCtx.Append(&fncCall)
 				va.chatCtx.Append(toolOut.FncCallOut)
 				if replyCtx != va.chatCtx {
+					replyCtx.Append(&fncCall)
 					replyCtx.Append(toolOut.FncCallOut)
 				}
 			}
@@ -564,10 +564,19 @@ func (va *PipelineAgent) generateReplyWithOptions(opts pipelineReplyOptions) {
 				}
 				session.EmitFunctionToolsExecuted(*ev)
 			}
+			if activeAgent := session.Agent.GetAgent(); activeAgent != nil {
+				if err := updateAgentInstructionsMessage(replyCtx, agentInstructionVariants(activeAgent), false); err != nil {
+					logger.Logger.Warnw("failed to refresh reply instructions", err)
+				}
+			}
 		}
 
 		// If no tool calls, we're done
 		if !executedTools {
+			session.UpdateAgentState(AgentStateIdle)
+			break
+		}
+		if !replyRequired {
 			session.UpdateAgentState(AgentStateIdle)
 			break
 		}

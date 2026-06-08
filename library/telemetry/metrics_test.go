@@ -185,6 +185,34 @@ func TestRecordOTelTurnMetricsRecordsReferenceLatencyHistograms(t *testing.T) {
 	), 0.40)
 }
 
+func TestCollectOTelUsageRecordsReferenceSTTConnectionAcquireTime(t *testing.T) {
+	reader := metric.NewManualReader()
+	provider := metric.NewMeterProvider(metric.WithReader(reader))
+	previous := otel.GetMeterProvider()
+	otel.SetMeterProvider(provider)
+	t.Cleanup(func() {
+		otel.SetMeterProvider(previous)
+	})
+
+	CollectOTelUsage(&STTMetrics{
+		AudioDuration:    1.2,
+		AcquireTime:      0.33,
+		ConnectionReused: true,
+		Metadata:         &Metadata{ModelProvider: "deepgram", ModelName: "nova-3"},
+	})
+
+	var rm metricdata.ResourceMetrics
+	if err := reader.Collect(context.Background(), &rm); err != nil {
+		t.Fatalf("Collect() error = %v", err)
+	}
+
+	assertFloatHistogramPoint(t, rm, "lk.agents.connection.acquire_time", attribute.NewSet(
+		attribute.String("model_provider", "deepgram"),
+		attribute.String("model_name", "nova-3"),
+		attribute.String("connection_reused", "true"),
+	), 0.33)
+}
+
 func TestModelUsageCollectorFlattenReturnsCopies(t *testing.T) {
 	collector := NewModelUsageCollector()
 	collector.Collect(&LLMMetrics{

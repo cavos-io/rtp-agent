@@ -199,6 +199,8 @@ type AgentSession struct {
 	jobContextSet  bool
 	mcpServers     []llm.MCPServer
 	recordedEvents []Event
+	eventListeners map[string][]agentEventListener
+	nextListenerID uint64
 	ivrActivity    *IVRActivity
 	videoSampler   *VoiceActivityVideoSampler
 
@@ -245,6 +247,12 @@ type AgentSession struct {
 
 	llmErrorCount int
 	ttsErrorCount int
+}
+
+type agentEventListener struct {
+	id       uint64
+	callback func(Event)
+	once     bool
 }
 
 type SipDTMFEvent struct {
@@ -409,13 +417,92 @@ func (s *AgentSession) RecordedEvents() []Event {
 	return events
 }
 
+func (s *AgentSession) On(eventType string, callback func(Event)) func() {
+	if s == nil || eventType == "" || callback == nil {
+		return func() {}
+	}
+	s.mu.Lock()
+	if s.eventListeners == nil {
+		s.eventListeners = make(map[string][]agentEventListener)
+	}
+	s.nextListenerID++
+	id := s.nextListenerID
+	s.eventListeners[eventType] = append(s.eventListeners[eventType], agentEventListener{id: id, callback: callback})
+	s.mu.Unlock()
+	return func() {
+		s.removeEventListener(eventType, id)
+	}
+}
+
+func (s *AgentSession) Once(eventType string, callback func(Event)) func() {
+	if s == nil || eventType == "" || callback == nil {
+		return func() {}
+	}
+	s.mu.Lock()
+	if s.eventListeners == nil {
+		s.eventListeners = make(map[string][]agentEventListener)
+	}
+	s.nextListenerID++
+	id := s.nextListenerID
+	s.eventListeners[eventType] = append(s.eventListeners[eventType], agentEventListener{id: id, callback: callback, once: true})
+	s.mu.Unlock()
+	return func() {
+		s.removeEventListener(eventType, id)
+	}
+}
+
+func (s *AgentSession) removeEventListener(eventType string, id uint64) {
+	if s == nil || eventType == "" || id == 0 {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	listeners := s.eventListeners[eventType]
+	for i, listener := range listeners {
+		if listener.id != id {
+			continue
+		}
+		listeners = append(listeners[:i], listeners[i+1:]...)
+		if len(listeners) == 0 {
+			delete(s.eventListeners, eventType)
+		} else {
+			s.eventListeners[eventType] = listeners
+		}
+		return
+	}
+}
+
+func (s *AgentSession) clearEventListenersLocked() {
+	s.eventListeners = nil
+}
+
 func (s *AgentSession) recordEvent(ev Event) {
 	if ev == nil {
 		return
 	}
 	s.mu.Lock()
 	s.recordedEvents = append(s.recordedEvents, ev)
+	eventType := ev.GetType()
+	registered := s.eventListeners[eventType]
+	listeners := make([]func(Event), 0, len(registered))
+	if len(registered) > 0 {
+		remaining := registered[:0]
+		for _, listener := range registered {
+			listeners = append(listeners, listener.callback)
+			if !listener.once {
+				remaining = append(remaining, listener)
+			}
+		}
+		if len(remaining) == 0 {
+			delete(s.eventListeners, eventType)
+		} else {
+			s.eventListeners[eventType] = remaining
+		}
+	}
 	s.mu.Unlock()
+	for _, listener := range listeners {
+		listener(ev)
+	}
 }
 
 func (s *AgentSession) CurrentAgent() (AgentInterface, error) {
@@ -1041,7 +1128,10 @@ func (s *AgentSession) EmitFunctionToolsExecuted(ev FunctionToolsExecutedEvent) 
 	s.mu.Lock()
 	runState := s.runState
 	s.mu.Unlock()
-	for _, call := range ev.FunctionCalls {
+	for i, call := range ev.FunctionCalls {
+		if i >= len(ev.FunctionCallOutputs) || ev.FunctionCallOutputs[i] == nil {
+			continue
+		}
 		s.insertChatItem(call)
 		if runState != nil {
 			runState.RecordItem(call)
@@ -2077,6 +2167,7 @@ func (s *AgentSession) Stop(ctx context.Context) error {
 func (s *AgentSession) stop(ctx context.Context, commitPendingUserTurn bool) error {
 	s.mu.Lock()
 	if !s.started {
+		s.clearEventListenersLocked()
 		s.mu.Unlock()
 		return nil
 	}
@@ -2087,6 +2178,7 @@ func (s *AgentSession) stop(ctx context.Context, commitPendingUserTurn bool) err
 	s.activity = nil
 	s.ivrActivity = nil
 	s.started = false
+	s.clearEventListenersLocked()
 	s.runCtx = nil
 	s.userState = UserStateListening
 	s.agentState = AgentStateInitializing
