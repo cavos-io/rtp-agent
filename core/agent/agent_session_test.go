@@ -1420,6 +1420,43 @@ func TestAgentSessionOnceReturnsUnsubscribe(t *testing.T) {
 	}
 }
 
+func TestAgentSessionCloseSoonClearsEventListeners(t *testing.T) {
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	session.started = true
+
+	closeEvents := make(chan Event, 1)
+	errorEvents := make(chan Event, 1)
+	session.On("close", func(ev Event) {
+		closeEvents <- ev
+	})
+	session.On("error", func(ev Event) {
+		errorEvents <- ev
+	})
+
+	session.CloseSoon(CloseReasonUserInitiated)
+
+	select {
+	case ev := <-closeEvents:
+		closeEvent, ok := ev.(*CloseEvent)
+		if !ok {
+			t.Fatalf("close listener event = %T, want *CloseEvent", ev)
+		}
+		if closeEvent.Reason != CloseReasonUserInitiated {
+			t.Fatalf("close reason = %q, want %q", closeEvent.Reason, CloseReasonUserInitiated)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("close listener did not receive close event")
+	}
+
+	session.EmitError(ErrorEvent{Error: errors.New("after close"), Source: "llm"})
+
+	select {
+	case ev := <-errorEvents:
+		t.Fatalf("closed-session listener received later event: %#v", ev)
+	default:
+	}
+}
+
 func TestAgentSessionRecordedEventsReturnsCopy(t *testing.T) {
 	agent := NewAgent("test")
 	session := NewAgentSession(agent, nil, AgentSessionOptions{})

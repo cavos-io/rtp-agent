@@ -472,6 +472,10 @@ func (s *AgentSession) removeEventListener(eventType string, id uint64) {
 	}
 }
 
+func (s *AgentSession) clearEventListenersLocked() {
+	s.eventListeners = nil
+}
+
 func (s *AgentSession) recordEvent(ev Event) {
 	if ev == nil {
 		return
@@ -2160,6 +2164,7 @@ func (s *AgentSession) Stop(ctx context.Context) error {
 func (s *AgentSession) stop(ctx context.Context, commitPendingUserTurn bool) error {
 	s.mu.Lock()
 	if !s.started {
+		s.clearEventListenersLocked()
 		s.mu.Unlock()
 		return nil
 	}
@@ -2170,6 +2175,7 @@ func (s *AgentSession) stop(ctx context.Context, commitPendingUserTurn bool) err
 	s.activity = nil
 	s.ivrActivity = nil
 	s.started = false
+	s.clearEventListenersLocked()
 	s.runCtx = nil
 	s.userState = UserStateListening
 	s.agentState = AgentStateInitializing
