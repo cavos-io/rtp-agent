@@ -86,7 +86,7 @@ func (t *TTS) Provider() string {
 }
 
 func (t *TTS) Capabilities() tts.TTSCapabilities {
-	return tts.TTSCapabilities{Streaming: true, AlignedTranscript: true}
+	return tts.TTSCapabilities{Streaming: true, AlignedTranscript: false}
 }
 
 func (t *TTS) SampleRate() int {
@@ -138,7 +138,7 @@ func (t *TTS) connectionPool() *utils.ConnectionPool[inferenceTTSConn] {
 
 	if t.connPool == nil {
 		t.connPool = utils.NewConnectionPool[inferenceTTSConn](utils.ConnectionPoolOptions[inferenceTTSConn]{
-			MaxSessionDuration: time.Minute,
+			MaxSessionDuration: 5 * time.Minute,
 			MarkRefreshedOnGet: true,
 			Connect:            t.connectTTSWebsocket,
 			Close: func(ctx context.Context, conn inferenceTTSConn) error {

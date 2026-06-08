@@ -65,6 +65,18 @@ func TestInferenceTTSReportsReferenceModelProviderMetadata(t *testing.T) {
 	}
 }
 
+func TestInferenceTTSDefaultCapabilitiesMatchReferenceAlignment(t *testing.T) {
+	provider := NewTTS("cartesia/sonic-3", "key", "secret")
+
+	capabilities := provider.Capabilities()
+	if !capabilities.Streaming {
+		t.Fatal("Streaming = false, want true")
+	}
+	if capabilities.AlignedTranscript {
+		t.Fatal("AlignedTranscript = true, want false without timestamp options")
+	}
+}
+
 func TestTTSPrewarmReusesConnectionForNextStream(t *testing.T) {
 	var connCount atomic.Int32
 	sessionCreated := make(chan struct{}, 1)
@@ -171,6 +183,16 @@ func TestTTSConnectionPoolRefreshesSessionAgeOnGet(t *testing.T) {
 	markRefreshedOnGet := pool.FieldByName("opts").FieldByName("MarkRefreshedOnGet").Bool()
 	if !markRefreshedOnGet {
 		t.Fatal("connection pool MarkRefreshedOnGet = false, want true")
+	}
+}
+
+func TestTTSConnectionPoolUsesReferenceMaxSessionDuration(t *testing.T) {
+	provider := NewTTS("cartesia/sonic-3", "key", "secret")
+
+	pool := reflect.ValueOf(provider.connectionPool()).Elem()
+	got := time.Duration(pool.FieldByName("opts").FieldByName("MaxSessionDuration").Int())
+	if got != 5*time.Minute {
+		t.Fatalf("MaxSessionDuration = %v, want 5m reference duration", got)
 	}
 }
 
