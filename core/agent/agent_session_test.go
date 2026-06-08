@@ -258,6 +258,34 @@ func TestAgentSessionUserTranscriptFilterAppliesBeforeFanOut(t *testing.T) {
 	}
 }
 
+func TestAgentSessionFinalTranscriptResetsAwayBeforeTranscriptEvent(t *testing.T) {
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	session.UpdateUserState(UserStateAway)
+	var order []string
+	session.On("user_state_changed", func(ev Event) {
+		stateEvent, ok := ev.(*UserStateChangedEvent)
+		if ok && stateEvent.NewState == UserStateListening {
+			order = append(order, "state:listening")
+		}
+	})
+	session.On("user_input_transcribed", func(ev Event) {
+		transcriptEvent, ok := ev.(*UserInputTranscribedEvent)
+		if ok {
+			order = append(order, "transcript:"+transcriptEvent.Transcript)
+		}
+	})
+
+	session.EmitUserInputTranscribed(UserInputTranscribedEvent{
+		Transcript: "hello",
+		IsFinal:    true,
+	})
+
+	want := []string{"state:listening", "transcript:hello"}
+	if !reflect.DeepEqual(order, want) {
+		t.Fatalf("event order = %#v, want %#v", order, want)
+	}
+}
+
 func TestAgentSessionAgentOutputTranscribedEventsFanOutToSubscribers(t *testing.T) {
 	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
 	first := session.AgentOutputTranscribedEvents()

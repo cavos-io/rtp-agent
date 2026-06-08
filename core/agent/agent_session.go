@@ -849,13 +849,13 @@ func (s *AgentSession) EmitUserInputTranscribed(ev UserInputTranscribedEvent) {
 	if ev.CreatedAt.IsZero() {
 		ev.CreatedAt = time.Now()
 	}
-	s.recordEvent(&ev)
 	s.mu.Lock()
 	userState := s.userState
 	s.mu.Unlock()
 	if ev.IsFinal && userState == UserStateAway {
 		s.UpdateUserState(UserStateListening)
 	}
+	s.recordEvent(&ev)
 	for _, ch := range s.userInputTranscribedSubscribers() {
 		select {
 		case ch <- ev:
