@@ -36,42 +36,47 @@ const (
 )
 
 type AgentSessionOptions struct {
-	AllowInterruptions            bool
-	DiscardAudioIfUninterruptible bool
-	MinInterruptionDuration       float64
-	MinInterruptionWords          int
-	MinEndpointingDelay           float64
-	MaxEndpointingDelay           float64
-	EndpointingMode               string
-	EndpointingAlpha              float64
-	Endpointing                   Endpointing
-	MaxToolSteps                  int
-	UserAwayTimeout               float64
-	DisableUserAwayTimeout        bool
-	FalseInterruptionTimeout      float64
-	ResumeFalseInterruption       bool
-	ResumeFalseInterruptionSet    bool
-	MinConsecutiveSpeechDelay     float64
-	UseTTSAlignedTranscript       bool
-	TTSStreamPacer                *tts.SentenceStreamPacerOptions
-	TTSTextReplacements           map[string]string
-	LLMParallelToolCalls          *bool
-	LLMExtraParams                map[string]any
-	LLMResponseFormat             map[string]any
-	BackgroundAudio               *BackgroundAudioPlayer
-	WordTokenizer                 tokenize.WordTokenizer
-	PreemptiveGeneration          bool
-	PreemptiveGenerationSet       bool
-	AudioInputHook                AudioInputHook
-	AECWarmupDuration             float64
-	SessionCloseTranscriptTimeout float64
-	TurnDetection                 TurnDetectionMode
-	IVRDetection                  bool
-	IVRSilenceDuration            time.Duration
-	VideoSampler                  *VoiceActivityVideoSampler
-	ToolChoice                    llm.ToolChoice
-	MaxUnrecoverableErrors        int
-	MockTools                     map[string]MockToolFunc
+	AllowInterruptions               bool
+	DiscardAudioIfUninterruptible    bool
+	MinInterruptionDuration          float64
+	MinInterruptionWords             int
+	MinEndpointingDelay              float64
+	MaxEndpointingDelay              float64
+	EndpointingMode                  string
+	EndpointingAlpha                 float64
+	Endpointing                      Endpointing
+	MaxToolSteps                     int
+	UserAwayTimeout                  float64
+	UserAwayTimeoutSet               bool
+	DisableUserAwayTimeout           bool
+	FalseInterruptionTimeout         float64
+	FalseInterruptionTimeoutSet      bool
+	ResumeFalseInterruption          bool
+	ResumeFalseInterruptionSet       bool
+	MinConsecutiveSpeechDelay        float64
+	UseTTSAlignedTranscript          bool
+	TTSStreamPacer                   *tts.SentenceStreamPacerOptions
+	TTSTextReplacements              map[string]string
+	LLMParallelToolCalls             *bool
+	LLMExtraParams                   map[string]any
+	LLMResponseFormat                map[string]any
+	BackgroundAudio                  *BackgroundAudioPlayer
+	WordTokenizer                    tokenize.WordTokenizer
+	PreemptiveGeneration             bool
+	PreemptiveGenerationSet          bool
+	AudioInputHook                   AudioInputHook
+	AECWarmupDuration                float64
+	AECWarmupDurationSet             bool
+	SessionCloseTranscriptTimeout    float64
+	SessionCloseTranscriptTimeoutSet bool
+	TurnDetection                    TurnDetectionMode
+	IVRDetection                     bool
+	IVRSilenceDuration               time.Duration
+	VideoSampler                     *VoiceActivityVideoSampler
+	ToolChoice                       llm.ToolChoice
+	MaxUnrecoverableErrors           int
+	MaxUnrecoverableErrorsSet        bool
+	MockTools                        map[string]MockToolFunc
 }
 
 type AgentSessionUpdateOptions struct {
@@ -188,6 +193,7 @@ type AgentSession struct {
 	mu             sync.Mutex
 	activity       *AgentActivity
 	started        bool
+	closing        bool
 	runCtx         context.Context
 	runState       *RunResult
 	userAwayTimer  *time.Timer
@@ -250,9 +256,10 @@ type AgentSession struct {
 }
 
 type agentEventListener struct {
-	id       uint64
-	callback func(Event)
-	once     bool
+	id              uint64
+	callback        func(Event)
+	callbackPointer uintptr
+	once            bool
 }
 
 type SipDTMFEvent struct {
@@ -427,11 +434,22 @@ func (s *AgentSession) On(eventType string, callback func(Event)) func() {
 	}
 	s.nextListenerID++
 	id := s.nextListenerID
-	s.eventListeners[eventType] = append(s.eventListeners[eventType], agentEventListener{id: id, callback: callback})
+	s.eventListeners[eventType] = append(s.eventListeners[eventType], agentEventListener{
+		id:              id,
+		callback:        callback,
+		callbackPointer: reflect.ValueOf(callback).Pointer(),
+	})
 	s.mu.Unlock()
 	return func() {
 		s.removeEventListener(eventType, id)
 	}
+}
+
+func (s *AgentSession) Off(eventType string, callback func(Event)) {
+	if s == nil || eventType == "" || callback == nil {
+		return
+	}
+	s.removeEventListenerByCallback(eventType, reflect.ValueOf(callback).Pointer())
 }
 
 func (s *AgentSession) Once(eventType string, callback func(Event)) func() {
@@ -444,7 +462,12 @@ func (s *AgentSession) Once(eventType string, callback func(Event)) func() {
 	}
 	s.nextListenerID++
 	id := s.nextListenerID
-	s.eventListeners[eventType] = append(s.eventListeners[eventType], agentEventListener{id: id, callback: callback, once: true})
+	s.eventListeners[eventType] = append(s.eventListeners[eventType], agentEventListener{
+		id:              id,
+		callback:        callback,
+		callbackPointer: reflect.ValueOf(callback).Pointer(),
+		once:            true,
+	})
 	s.mu.Unlock()
 	return func() {
 		s.removeEventListener(eventType, id)
@@ -460,6 +483,27 @@ func (s *AgentSession) removeEventListener(eventType string, id uint64) {
 	listeners := s.eventListeners[eventType]
 	for i, listener := range listeners {
 		if listener.id != id {
+			continue
+		}
+		listeners = append(listeners[:i], listeners[i+1:]...)
+		if len(listeners) == 0 {
+			delete(s.eventListeners, eventType)
+		} else {
+			s.eventListeners[eventType] = listeners
+		}
+		return
+	}
+}
+
+func (s *AgentSession) removeEventListenerByCallback(eventType string, callbackPointer uintptr) {
+	if s == nil || eventType == "" || callbackPointer == 0 {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	listeners := s.eventListeners[eventType]
+	for i, listener := range listeners {
+		if listener.callbackPointer != callbackPointer {
 			continue
 		}
 		listeners = append(listeners[:i], listeners[i+1:]...)
@@ -659,10 +703,10 @@ func withAgentSessionOptionDefaults(opts AgentSessionOptions) AgentSessionOption
 	if opts.MaxToolSteps == 0 {
 		opts.MaxToolSteps = 3
 	}
-	if !opts.DisableUserAwayTimeout && opts.UserAwayTimeout == 0 {
+	if !opts.DisableUserAwayTimeout && !opts.UserAwayTimeoutSet && opts.UserAwayTimeout == 0 {
 		opts.UserAwayTimeout = 15.0
 	}
-	if opts.FalseInterruptionTimeout == 0 {
+	if !opts.FalseInterruptionTimeoutSet && opts.FalseInterruptionTimeout == 0 {
 		opts.FalseInterruptionTimeout = 2.0
 	}
 	if !opts.ResumeFalseInterruptionSet {
@@ -671,13 +715,13 @@ func withAgentSessionOptionDefaults(opts AgentSessionOptions) AgentSessionOption
 	if !opts.PreemptiveGenerationSet {
 		opts.PreemptiveGeneration = true
 	}
-	if opts.AECWarmupDuration == 0 {
+	if !opts.AECWarmupDurationSet && opts.AECWarmupDuration == 0 {
 		opts.AECWarmupDuration = 3.0
 	}
-	if opts.SessionCloseTranscriptTimeout == 0 {
+	if !opts.SessionCloseTranscriptTimeoutSet && opts.SessionCloseTranscriptTimeout == 0 {
 		opts.SessionCloseTranscriptTimeout = 2.0
 	}
-	if opts.MaxUnrecoverableErrors == 0 {
+	if !opts.MaxUnrecoverableErrorsSet && opts.MaxUnrecoverableErrors == 0 {
 		opts.MaxUnrecoverableErrors = 3
 	}
 	return opts
@@ -1193,10 +1237,8 @@ func (s *AgentSession) EmitMetricsCollected(metrics telemetry.AgentMetrics) {
 	}
 	telemetry.LogMetrics(metrics)
 	telemetry.CollectOTelUsage(metrics)
-	var usage telemetry.UsageSummary
 	if s.MetricsCollector != nil {
 		s.MetricsCollector.Collect(metrics)
-		usage = s.MetricsCollector.GetSummary()
 	}
 	if s.ModelUsageCollector != nil {
 		s.ModelUsageCollector.Collect(metrics)
@@ -1213,7 +1255,7 @@ func (s *AgentSession) EmitMetricsCollected(metrics telemetry.AgentMetrics) {
 		}
 	}
 	if s.MetricsCollector != nil {
-		s.EmitSessionUsageUpdated(SessionUsageUpdatedEvent{Usage: usage})
+		s.EmitSessionUsageUpdated(SessionUsageUpdatedEvent{Usage: s.ModelUsage()})
 	}
 }
 
@@ -1480,20 +1522,32 @@ func (s *AgentSession) closeSoon(reason CloseReason, err error) {
 	started := s.started
 	activity := s.activity
 	agent := s.Agent
-	s.mu.Unlock()
 	if !started && activity == nil && agent != nil {
+		s.mu.Unlock()
 		return
 	}
+	if s.closing {
+		s.mu.Unlock()
+		return
+	}
+	s.closing = true
+	closeEventListeners := s.closeEventListenersLocked()
+	closeSubscribers := s.closeSubscribersLocked()
+	s.mu.Unlock()
 
-	ev := CloseEvent{Reason: reason, Error: err, CreatedAt: time.Now()}
-	s.recordEvent(&ev)
-	for _, ch := range s.closeSubscribers() {
+	_ = s.stop(context.Background(), reason != CloseReasonError)
+
+	ev := &CloseEvent{Reason: reason, Error: err, CreatedAt: time.Now()}
+	s.appendRecordedEvent(ev)
+	for _, listener := range closeEventListeners {
+		listener(ev)
+	}
+	for _, ch := range closeSubscribers {
 		select {
-		case ch <- ev:
+		case ch <- *ev:
 		default:
 		}
 	}
-	_ = s.stop(context.Background(), reason != CloseReasonError)
 }
 
 func (s *AgentSession) Shutdown(drain ...bool) {
@@ -1525,10 +1579,7 @@ func (s *AgentSession) closeEvents() chan CloseEvent {
 	return ch
 }
 
-func (s *AgentSession) closeSubscribers() []chan CloseEvent {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
+func (s *AgentSession) closeSubscribersLocked() []chan CloseEvent {
 	subs := make([]chan CloseEvent, 0, len(s.closeSubs)+1)
 	if s.closeCh == nil {
 		s.closeCh = make(chan CloseEvent, 10)
@@ -1536,6 +1587,24 @@ func (s *AgentSession) closeSubscribers() []chan CloseEvent {
 	subs = append(subs, s.closeCh)
 	subs = append(subs, s.closeSubs...)
 	return subs
+}
+
+func (s *AgentSession) closeEventListenersLocked() []func(Event) {
+	registered := s.eventListeners["close"]
+	listeners := make([]func(Event), 0, len(registered))
+	for _, listener := range registered {
+		listeners = append(listeners, listener.callback)
+	}
+	return listeners
+}
+
+func (s *AgentSession) appendRecordedEvent(ev Event) {
+	if ev == nil {
+		return
+	}
+	s.mu.Lock()
+	s.recordedEvents = append(s.recordedEvents, ev)
+	s.mu.Unlock()
 }
 
 func (s *AgentSession) Start(ctx context.Context) error {
@@ -1615,6 +1684,7 @@ func (s *AgentSession) StartWithOptions(ctx context.Context, opts StartOptions) 
 	s.mu.Lock()
 	s.activity = activity
 	s.started = true
+	s.closing = false
 	s.runCtx = ctx
 	s.mu.Unlock()
 
@@ -1758,7 +1828,7 @@ func (s *AgentSession) updateUserAwayTimer() {
 		s.userAwayTimer = nil
 	}
 	shouldStart := !s.Options.DisableUserAwayTimeout &&
-		s.Options.UserAwayTimeout > 0 &&
+		s.Options.UserAwayTimeout >= 0 &&
 		s.agentState == AgentStateListening &&
 		s.userState == UserStateListening
 	timeout := s.Options.UserAwayTimeout

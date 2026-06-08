@@ -472,8 +472,8 @@ func assertUsageUpdatedEvent(t *testing.T, events <-chan SessionUsageUpdatedEven
 
 	select {
 	case ev := <-events:
-		if ev.Usage.LLMPromptTokens != 3 {
-			t.Fatalf("%s subscriber usage = %#v, want 3 prompt tokens", name, ev.Usage)
+		if ev.Usage.LLMInputTokens() != 3 {
+			t.Fatalf("%s subscriber usage = %#v, want 3 input tokens", name, ev.Usage)
 		}
 	case <-time.After(time.Second):
 		t.Fatalf("%s subscriber did not receive usage event", name)
@@ -1044,6 +1044,39 @@ func TestNewAgentSessionPreservesExplicitFalseTurnOptions(t *testing.T) {
 	}
 }
 
+func TestNewAgentSessionPreservesExplicitZeroFalseInterruptionTimeout(t *testing.T) {
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{
+		FalseInterruptionTimeout:    0,
+		FalseInterruptionTimeoutSet: true,
+	})
+
+	if session.Options.FalseInterruptionTimeout != 0 {
+		t.Fatalf("FalseInterruptionTimeout = %v, want explicit zero preserved", session.Options.FalseInterruptionTimeout)
+	}
+}
+
+func TestNewAgentSessionPreservesExplicitZeroSessionCloseTranscriptTimeout(t *testing.T) {
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{
+		SessionCloseTranscriptTimeout:    0,
+		SessionCloseTranscriptTimeoutSet: true,
+	})
+
+	if session.Options.SessionCloseTranscriptTimeout != 0 {
+		t.Fatalf("SessionCloseTranscriptTimeout = %v, want explicit zero preserved", session.Options.SessionCloseTranscriptTimeout)
+	}
+}
+
+func TestNewAgentSessionPreservesExplicitZeroAECWarmupDuration(t *testing.T) {
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{
+		AECWarmupDuration:    0,
+		AECWarmupDurationSet: true,
+	})
+
+	if session.Options.AECWarmupDuration != 0 {
+		t.Fatalf("AECWarmupDuration = %v, want explicit zero preserved", session.Options.AECWarmupDuration)
+	}
+}
+
 func TestAgentSessionGenerateReplyEmitsSpeechCreatedEvent(t *testing.T) {
 	agent := NewAgent("test")
 	session := NewAgentSession(agent, nil, AgentSessionOptions{AllowInterruptions: true})
@@ -1368,6 +1401,71 @@ func TestAgentSessionOnReturnsUnsubscribe(t *testing.T) {
 	}
 }
 
+func TestAgentSessionOffRemovesMatchingListener(t *testing.T) {
+	agent := NewAgent("test")
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	removed := make(chan Event, 1)
+	kept := make(chan Event, 1)
+
+	callback := func(ev Event) {
+		removed <- ev
+	}
+	session.On("error", callback)
+	session.On("error", func(ev Event) {
+		kept <- ev
+	})
+
+	session.Off("error", callback)
+	session.EmitError(ErrorEvent{Error: errors.New("provider failed"), Source: "llm"})
+
+	select {
+	case ev := <-removed:
+		t.Fatalf("removed listener received event: %#v", ev)
+	default:
+	}
+	select {
+	case ev := <-kept:
+		if _, ok := ev.(*ErrorEvent); !ok {
+			t.Fatalf("kept listener event = %T, want *ErrorEvent", ev)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("remaining listener did not receive emitted event")
+	}
+}
+
+func TestAgentSessionOffUsesCallbackIdentity(t *testing.T) {
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	first := make(chan Event, 1)
+	second := make(chan Event, 1)
+	makeCallback := func(ch chan<- Event) func(Event) {
+		return func(ev Event) {
+			ch <- ev
+		}
+	}
+	firstCallback := makeCallback(first)
+	secondCallback := makeCallback(second)
+
+	session.On("error", firstCallback)
+	session.On("error", secondCallback)
+	session.Off("error", secondCallback)
+
+	session.EmitError(ErrorEvent{Error: errors.New("provider failed"), Source: "llm"})
+
+	select {
+	case ev := <-first:
+		if _, ok := ev.(*ErrorEvent); !ok {
+			t.Fatalf("first listener event = %T, want *ErrorEvent", ev)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("first listener did not receive emitted event")
+	}
+	select {
+	case ev := <-second:
+		t.Fatalf("removed second listener received event: %#v", ev)
+	default:
+	}
+}
+
 func TestAgentSessionOnceReceivesOnlyFirstMatchingEvent(t *testing.T) {
 	agent := NewAgent("test")
 	session := NewAgentSession(agent, nil, AgentSessionOptions{})
@@ -1454,6 +1552,49 @@ func TestAgentSessionCloseSoonClearsEventListeners(t *testing.T) {
 	case ev := <-errorEvents:
 		t.Fatalf("closed-session listener received later event: %#v", ev)
 	default:
+	}
+}
+
+func TestAgentSessionCloseSoonEmitsCloseAfterCleanup(t *testing.T) {
+	agent := NewAgent("test")
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	session.activity = NewAgentActivity(agent, session)
+	session.started = true
+	current := NewSpeechHandle(true, DefaultInputDetails())
+	session.activity.currentSpeech = current
+	session.activity.OnFinalTranscript(&stt.SpeechEvent{
+		Alternatives: []stt.SpeechData{{Text: "closing turn"}},
+	})
+
+	done := make(chan struct{}, 1)
+	go func() {
+		session.CloseSoon(CloseReasonUserInitiated)
+		done <- struct{}{}
+	}()
+
+	closeEvents := session.CloseEvents()
+	time.Sleep(20 * time.Millisecond)
+	select {
+	case ev := <-closeEvents:
+		t.Fatalf("CloseSoon emitted close before cleanup completed: %#v", ev)
+	case <-done:
+		t.Fatal("CloseSoon returned before active speech cleanup completed")
+	default:
+	}
+
+	current.MarkDone()
+	select {
+	case <-done:
+	case <-testTimeout():
+		t.Fatal("CloseSoon did not finish after speech completed")
+	}
+	select {
+	case ev := <-closeEvents:
+		if ev.Reason != CloseReasonUserInitiated {
+			t.Fatalf("close reason = %q, want user_initiated", ev.Reason)
+		}
+	default:
+		t.Fatal("CloseSoon did not emit close after cleanup completed")
 	}
 }
 
@@ -2842,6 +2983,51 @@ func TestAgentSessionSpeakingResetsUnrecoverableProviderErrorCounts(t *testing.T
 	}
 }
 
+func TestAgentSessionPreservesExplicitZeroMaxUnrecoverableErrors(t *testing.T) {
+	agent := NewAgent("test")
+	session := NewAgentSession(agent, nil, AgentSessionOptions{
+		MaxUnrecoverableErrors:    0,
+		MaxUnrecoverableErrorsSet: true,
+	})
+
+	if session.Options.MaxUnrecoverableErrors != 0 {
+		t.Fatalf("MaxUnrecoverableErrors = %d, want explicit zero preserved", session.Options.MaxUnrecoverableErrors)
+	}
+}
+
+func TestAgentSessionExplicitZeroMaxUnrecoverableErrorsClosesOnFirstError(t *testing.T) {
+	agent := NewAgent("test")
+	agent.TTS = &fakePipelineTTS{}
+	agent.LLM = &fakeGenerationLLM{}
+	agent.STT = &fakePipelineSTT{}
+	agent.VAD = &fakePipelineVAD{}
+	session := NewAgentSession(agent, nil, AgentSessionOptions{
+		MaxUnrecoverableErrors:    0,
+		MaxUnrecoverableErrorsSet: true,
+	})
+	session.Assistant = &fakeSessionAssistant{}
+
+	if err := session.Start(context.Background()); err != nil {
+		t.Fatalf("Start error = %v, want nil", err)
+	}
+
+	cause := errors.New("tts failed")
+	closeEvents := session.CloseEvents()
+	session.EmitError(*NewErrorEvent(tts.TTSError{Label: "fake", Err: cause, Recoverable: false}, agent.TTS))
+
+	select {
+	case ev := <-closeEvents:
+		if ev.Reason != CloseReasonError {
+			t.Fatalf("CloseEvent.Reason = %q, want error", ev.Reason)
+		}
+		if !errors.Is(ev.Error, cause) {
+			t.Fatalf("CloseEvent.Error = %v, want cause %v", ev.Error, cause)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("CloseEvents did not receive error close")
+	}
+}
+
 func TestAgentSessionCloseSoonCommitsPendingUserTurn(t *testing.T) {
 	agent := &turnCompletedAgent{Agent: NewAgent("test"), turns: make(chan *llm.ChatMessage, 1)}
 	agent.TurnDetection = TurnDetectionModeManual
@@ -3474,6 +3660,28 @@ func TestAgentSessionMarksUserAwayAfterIdleTimeout(t *testing.T) {
 	}
 }
 
+func TestAgentSessionExplicitZeroUserAwayTimeoutMarksAwayImmediately(t *testing.T) {
+	agent := NewAgent("test")
+	session := NewAgentSession(agent, nil, AgentSessionOptions{
+		UserAwayTimeout:    0,
+		UserAwayTimeoutSet: true,
+	})
+
+	session.UpdateAgentState(AgentStateListening)
+
+	select {
+	case ev := <-session.UserStateChangedCh:
+		if ev.OldState != UserStateListening || ev.NewState != UserStateAway {
+			t.Fatalf("event states = %q -> %q, want listening -> away", ev.OldState, ev.NewState)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("UserStateChangedCh did not receive immediate away event")
+	}
+	if got := session.UserState(); got != UserStateAway {
+		t.Fatalf("UserState() = %q, want away", got)
+	}
+}
+
 func TestAgentSessionCancelsUserAwayTimerWhenUserSpeaks(t *testing.T) {
 	agent := NewAgent("test")
 	session := NewAgentSession(agent, nil, AgentSessionOptions{UserAwayTimeout: 0.02})
@@ -3566,8 +3774,8 @@ func TestAgentSessionEmitMetricsCollectedCollectsUsageAndEmitsEvent(t *testing.T
 		if ev.GetType() != "session_usage_updated" {
 			t.Fatalf("event type = %q, want session_usage_updated", ev.GetType())
 		}
-		if ev.Usage.LLMPromptTokens != 7 || ev.Usage.LLMCompletionTokens != 11 {
-			t.Fatalf("usage event summary = %#v, want prompt=7 completion=11", ev.Usage)
+		if ev.Usage.LLMInputTokens() != 7 || ev.Usage.LLMOutputTokens() != 11 {
+			t.Fatalf("usage event summary = %#v, want input=7 output=11", ev.Usage)
 		}
 		if ev.CreatedAt.Before(before) || ev.CreatedAt.IsZero() {
 			t.Fatalf("usage event CreatedAt = %v, want timestamp after %v", ev.CreatedAt, before)
@@ -3580,6 +3788,37 @@ func TestAgentSessionEmitMetricsCollectedCollectsUsageAndEmitsEvent(t *testing.T
 	}
 	if got := recorder.infoValue("LLM metrics", "type"); got != "llm_metrics" {
 		t.Fatalf("logged LLM metrics type = %#v, want llm_metrics", got)
+	}
+}
+
+func TestAgentSessionUsageUpdatedEventCarriesModelUsage(t *testing.T) {
+	agent := NewAgent("test")
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	metrics := &telemetry.LLMMetrics{
+		PromptTokens:     7,
+		CompletionTokens: 11,
+		Metadata:         &telemetry.Metadata{ModelProvider: "openai", ModelName: "gpt-4o"},
+	}
+
+	session.EmitMetricsCollected(metrics)
+
+	select {
+	case ev := <-session.SessionUsageUpdatedEvents():
+		if len(ev.Usage.ModelUsage) != 1 {
+			t.Fatalf("usage event model usage = %#v, want one entry", ev.Usage.ModelUsage)
+		}
+		llmUsage, ok := ev.Usage.ModelUsage[0].(*telemetry.LLMModelUsage)
+		if !ok {
+			t.Fatalf("usage event model usage type = %T, want *telemetry.LLMModelUsage", ev.Usage.ModelUsage[0])
+		}
+		if llmUsage.Provider != "openai" || llmUsage.Model != "gpt-4o" {
+			t.Fatalf("usage provider/model = %q/%q, want openai/gpt-4o", llmUsage.Provider, llmUsage.Model)
+		}
+		if llmUsage.InputTokens != 7 || llmUsage.OutputTokens != 11 {
+			t.Fatalf("usage tokens = input %d output %d, want 7/11", llmUsage.InputTokens, llmUsage.OutputTokens)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("SessionUsageUpdatedEvents did not receive event")
 	}
 }
 

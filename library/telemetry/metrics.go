@@ -238,6 +238,26 @@ type AgentSessionUsage struct {
 	ModelUsage []ModelUsage `json:"model_usage"`
 }
 
+func (s AgentSessionUsage) LLMInputTokens() int {
+	total := 0
+	for _, usage := range s.ModelUsage {
+		if llmUsage, ok := usage.(*LLMModelUsage); ok {
+			total += llmUsage.InputTokens
+		}
+	}
+	return total
+}
+
+func (s AgentSessionUsage) LLMOutputTokens() int {
+	total := 0
+	for _, usage := range s.ModelUsage {
+		if llmUsage, ok := usage.(*LLMModelUsage); ok {
+			total += llmUsage.OutputTokens
+		}
+	}
+	return total
+}
+
 type ModelUsageCollector struct {
 	llmUsage          map[[2]string]*LLMModelUsage
 	ttsUsage          map[[2]string]*TTSModelUsage

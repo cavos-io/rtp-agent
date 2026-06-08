@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"reflect"
 	"strconv"
 	"sync"
 	"time"
@@ -144,6 +145,16 @@ type roomIOTextResponder interface {
 	GenerateReply(ctx context.Context, userInput string) (*agent.SpeechHandle, error)
 }
 
+type PlaybackStartedEvent struct {
+	CreatedAt time.Time
+}
+
+type PlaybackFinishedEvent struct {
+	PlaybackPosition       time.Duration
+	Interrupted            bool
+	SynchronizedTranscript string
+}
+
 type roomIOClientEvents interface {
 	DispatchAgentState(agent.AgentState)
 	DispatchUserState(agent.UserState)
@@ -163,6 +174,15 @@ type RoomIO struct {
 	decoder       AudioDecoder
 	encoder       AudioEncoder
 	audioDisabled bool
+
+	playbackCapturing        bool
+	playbackSegmentsCount    int
+	playbackFinishedCount    int
+	playbackPosition         time.Duration
+	lastPlaybackEvent        PlaybackFinishedEvent
+	playbackWaiters          []chan struct{}
+	playbackStartedHandlers  []func(PlaybackStartedEvent)
+	playbackFinishedHandlers []func(PlaybackFinishedEvent)
 
 	preConnectAudio *PreConnectAudioHandler
 	textInput       TextInputCallback
@@ -1045,6 +1065,149 @@ func (rio *RoomIO) handleAudioTrack(track *webrtc.TrackRemote) {
 	}
 }
 
+func (rio *RoomIO) OnPlaybackStarted(callback func(PlaybackStartedEvent)) {
+	if rio == nil || callback == nil {
+		return
+	}
+	rio.mu.Lock()
+	rio.playbackStartedHandlers = append(rio.playbackStartedHandlers, callback)
+	rio.mu.Unlock()
+}
+
+func (rio *RoomIO) OffPlaybackStarted(callback func(PlaybackStartedEvent)) {
+	if rio == nil || callback == nil {
+		return
+	}
+	callbackPointer := reflect.ValueOf(callback).Pointer()
+	rio.mu.Lock()
+	defer rio.mu.Unlock()
+	for i, handler := range rio.playbackStartedHandlers {
+		if reflect.ValueOf(handler).Pointer() != callbackPointer {
+			continue
+		}
+		rio.playbackStartedHandlers = append(rio.playbackStartedHandlers[:i], rio.playbackStartedHandlers[i+1:]...)
+		return
+	}
+}
+
+func (rio *RoomIO) OnPlaybackFinished(callback func(PlaybackFinishedEvent)) {
+	if rio == nil || callback == nil {
+		return
+	}
+	rio.mu.Lock()
+	rio.playbackFinishedHandlers = append(rio.playbackFinishedHandlers, callback)
+	rio.mu.Unlock()
+}
+
+func (rio *RoomIO) OffPlaybackFinished(callback func(PlaybackFinishedEvent)) {
+	if rio == nil || callback == nil {
+		return
+	}
+	callbackPointer := reflect.ValueOf(callback).Pointer()
+	rio.mu.Lock()
+	defer rio.mu.Unlock()
+	for i, handler := range rio.playbackFinishedHandlers {
+		if reflect.ValueOf(handler).Pointer() != callbackPointer {
+			continue
+		}
+		rio.playbackFinishedHandlers = append(rio.playbackFinishedHandlers[:i], rio.playbackFinishedHandlers[i+1:]...)
+		return
+	}
+}
+
+func (rio *RoomIO) WaitForPlayout(ctx context.Context) (PlaybackFinishedEvent, error) {
+	if rio == nil {
+		return PlaybackFinishedEvent{}, nil
+	}
+	rio.mu.Lock()
+	target := rio.playbackSegmentsCount
+	for rio.playbackFinishedCount < target {
+		waiter := make(chan struct{})
+		rio.playbackWaiters = append(rio.playbackWaiters, waiter)
+		rio.mu.Unlock()
+		select {
+		case <-waiter:
+		case <-ctx.Done():
+			rio.removePlaybackWaiter(waiter)
+			return PlaybackFinishedEvent{}, ctx.Err()
+		}
+		rio.mu.Lock()
+	}
+	ev := rio.lastPlaybackEvent
+	rio.mu.Unlock()
+	return ev, nil
+}
+
+func (rio *RoomIO) removePlaybackWaiter(waiter chan struct{}) {
+	rio.mu.Lock()
+	defer rio.mu.Unlock()
+	for i, candidate := range rio.playbackWaiters {
+		if candidate != waiter {
+			continue
+		}
+		rio.playbackWaiters = append(rio.playbackWaiters[:i], rio.playbackWaiters[i+1:]...)
+		return
+	}
+}
+
+func (rio *RoomIO) Flush() {
+	rio.finishPlayback(false, "")
+}
+
+func (rio *RoomIO) ClearBuffer() {
+	rio.finishPlayback(true, "")
+}
+
+func (rio *RoomIO) startPlayback() (PlaybackStartedEvent, []func(PlaybackStartedEvent), bool) {
+	rio.mu.Lock()
+	defer rio.mu.Unlock()
+	if rio.playbackCapturing {
+		return PlaybackStartedEvent{}, nil, false
+	}
+	rio.playbackCapturing = true
+	rio.playbackSegmentsCount++
+	ev := PlaybackStartedEvent{CreatedAt: time.Now()}
+	handlers := append([]func(PlaybackStartedEvent){}, rio.playbackStartedHandlers...)
+	return ev, handlers, true
+}
+
+func (rio *RoomIO) addPlaybackPosition(duration time.Duration) {
+	rio.mu.Lock()
+	rio.playbackPosition += duration
+	rio.mu.Unlock()
+}
+
+func (rio *RoomIO) finishPlayback(interrupted bool, synchronizedTranscript string) {
+	if rio == nil {
+		return
+	}
+	rio.mu.Lock()
+	if rio.playbackFinishedCount >= rio.playbackSegmentsCount {
+		rio.mu.Unlock()
+		return
+	}
+	rio.playbackCapturing = false
+	rio.playbackFinishedCount++
+	ev := PlaybackFinishedEvent{
+		PlaybackPosition:       rio.playbackPosition,
+		Interrupted:            interrupted,
+		SynchronizedTranscript: synchronizedTranscript,
+	}
+	rio.playbackPosition = 0
+	rio.lastPlaybackEvent = ev
+	handlers := append([]func(PlaybackFinishedEvent){}, rio.playbackFinishedHandlers...)
+	waiters := append([]chan struct{}{}, rio.playbackWaiters...)
+	rio.playbackWaiters = nil
+	rio.mu.Unlock()
+
+	for _, waiter := range waiters {
+		close(waiter)
+	}
+	for _, handler := range handlers {
+		handler(ev)
+	}
+}
+
 func (rio *RoomIO) PublishAudio(frame *model.AudioFrame) error {
 	if rio == nil || rio.Options.DisableAudioOutput || rio.isAudioDisabled() {
 		return nil
@@ -1062,6 +1225,13 @@ func (rio *RoomIO) PublishAudio(frame *model.AudioFrame) error {
 		return nil
 	}
 
+	started, handlers, ok := rio.startPlayback()
+	if ok {
+		for _, handler := range handlers {
+			handler(started)
+		}
+	}
+
 	data := frame.Data
 	if encoder != nil {
 		if encoded, err := encoder.Encode(frame.Data); err == nil {
@@ -1071,10 +1241,14 @@ func (rio *RoomIO) PublishAudio(frame *model.AudioFrame) error {
 
 	duration := time.Duration(audio.CalculateFrameDuration(frame) * float64(time.Second))
 
-	return track.WriteSample(media.Sample{
+	if err := track.WriteSample(media.Sample{
 		Data:     data,
 		Duration: duration,
-	}, nil)
+	}, nil); err != nil {
+		return err
+	}
+	rio.addPlaybackPosition(duration)
+	return nil
 }
 
 func (rio *RoomIO) Close() error {
@@ -1082,9 +1256,11 @@ func (rio *RoomIO) Close() error {
 	rio.closed = true
 	if rio.agentStateCancel != nil {
 		rio.agentStateCancel()
+		rio.agentStateCancel = nil
 	}
 	if rio.userStateCancel != nil {
 		rio.userStateCancel()
+		rio.userStateCancel = nil
 	}
 	if rio.userTranscriptionCancel != nil {
 		rio.userTranscriptionCancel()
@@ -1092,6 +1268,7 @@ func (rio *RoomIO) Close() error {
 	}
 	if rio.sessionCloseCancel != nil {
 		rio.sessionCloseCancel()
+		rio.sessionCloseCancel = nil
 	}
 	if rio.agentTranscriptionCancel != nil {
 		rio.agentTranscriptionCancel()

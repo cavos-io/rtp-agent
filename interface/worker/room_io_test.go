@@ -4,6 +4,7 @@ import (
 	"context"
 	"reflect"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -13,6 +14,7 @@ import (
 	"github.com/cavos-io/rtp-agent/library/utils/images"
 	"github.com/livekit/protocol/livekit"
 	lksdk "github.com/livekit/server-sdk-go/v2"
+	"github.com/pion/webrtc/v4"
 )
 
 type fakeRoomIOTextResponder struct {
@@ -146,6 +148,245 @@ func TestRoomIOStartSkipsTrackWhenAudioOutputDisabled(t *testing.T) {
 	}
 }
 
+func TestRoomIOPlaybackEventsFollowCaptureAndFlush(t *testing.T) {
+	rio := &RoomIO{audioTrack: newRoomIOTestAudioTrack(t)}
+	var started []PlaybackStartedEvent
+	var finished []PlaybackFinishedEvent
+	rio.OnPlaybackStarted(func(ev PlaybackStartedEvent) {
+		started = append(started, ev)
+	})
+	rio.OnPlaybackFinished(func(ev PlaybackFinishedEvent) {
+		finished = append(finished, ev)
+	})
+	frame := &model.AudioFrame{
+		Data:              make([]byte, 960*2),
+		SampleRate:        48000,
+		NumChannels:       1,
+		SamplesPerChannel: 960,
+	}
+
+	if err := rio.PublishAudio(frame); err != nil {
+		t.Fatalf("PublishAudio error = %v", err)
+	}
+	if len(started) != 1 {
+		t.Fatalf("playback_started events = %d, want 1", len(started))
+	}
+	if started[0].CreatedAt.IsZero() {
+		t.Fatal("playback_started CreatedAt is zero")
+	}
+	done := make(chan PlaybackFinishedEvent, 1)
+	errCh := make(chan error, 1)
+	go func() {
+		ev, err := rio.WaitForPlayout(context.Background())
+		if err != nil {
+			errCh <- err
+			return
+		}
+		done <- ev
+	}()
+	select {
+	case ev := <-done:
+		t.Fatalf("WaitForPlayout returned before Flush: %#v", ev)
+	case err := <-errCh:
+		t.Fatalf("WaitForPlayout error before Flush: %v", err)
+	case <-time.After(20 * time.Millisecond):
+	}
+
+	rio.Flush()
+
+	select {
+	case err := <-errCh:
+		t.Fatalf("WaitForPlayout error = %v", err)
+	case ev := <-done:
+		if ev.Interrupted {
+			t.Fatal("PlaybackFinishedEvent.Interrupted = true, want false after Flush")
+		}
+		if ev.PlaybackPosition != 20*time.Millisecond {
+			t.Fatalf("PlaybackPosition = %v, want 20ms", ev.PlaybackPosition)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("WaitForPlayout did not return after Flush")
+	}
+	if len(finished) != 1 {
+		t.Fatalf("playback_finished events = %d, want 1", len(finished))
+	}
+	if finished[0].Interrupted || finished[0].PlaybackPosition != 20*time.Millisecond {
+		t.Fatalf("playback_finished event = %#v, want non-interrupted 20ms", finished[0])
+	}
+}
+
+func TestRoomIOClearBufferFinishesPlaybackAsInterrupted(t *testing.T) {
+	rio := &RoomIO{audioTrack: newRoomIOTestAudioTrack(t)}
+	frame := &model.AudioFrame{
+		Data:              make([]byte, 480*2),
+		SampleRate:        48000,
+		NumChannels:       1,
+		SamplesPerChannel: 480,
+	}
+	if err := rio.PublishAudio(frame); err != nil {
+		t.Fatalf("PublishAudio error = %v", err)
+	}
+
+	rio.ClearBuffer()
+
+	ev, err := rio.WaitForPlayout(context.Background())
+	if err != nil {
+		t.Fatalf("WaitForPlayout error = %v", err)
+	}
+	if !ev.Interrupted {
+		t.Fatal("PlaybackFinishedEvent.Interrupted = false, want true after ClearBuffer")
+	}
+	if ev.PlaybackPosition != 10*time.Millisecond {
+		t.Fatalf("PlaybackPosition = %v, want 10ms", ev.PlaybackPosition)
+	}
+}
+
+func TestRoomIOWaitForPlayoutCancellationRemovesWaiter(t *testing.T) {
+	rio := &RoomIO{audioTrack: newRoomIOTestAudioTrack(t)}
+	if err := rio.PublishAudio(&model.AudioFrame{
+		Data:              make([]byte, 960*2),
+		SampleRate:        48000,
+		NumChannels:       1,
+		SamplesPerChannel: 960,
+	}); err != nil {
+		t.Fatalf("PublishAudio error = %v", err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	waitErr := make(chan error, 1)
+	go func() {
+		_, err := rio.WaitForPlayout(ctx)
+		waitErr <- err
+	}()
+
+	waitForPlaybackWaiters(t, rio, 1)
+	cancel()
+
+	select {
+	case err := <-waitErr:
+		if err != context.Canceled {
+			t.Fatalf("WaitForPlayout error = %v, want context.Canceled", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("WaitForPlayout did not return after cancellation")
+	}
+	waitForPlaybackWaiters(t, rio, 0)
+}
+
+func TestRoomIOOffPlaybackStartedRemovesMatchingHandler(t *testing.T) {
+	rio := &RoomIO{audioTrack: newRoomIOTestAudioTrack(t)}
+	removed := make(chan PlaybackStartedEvent, 1)
+	kept := make(chan PlaybackStartedEvent, 1)
+	callback := func(ev PlaybackStartedEvent) {
+		removed <- ev
+	}
+	rio.OnPlaybackStarted(callback)
+	rio.OnPlaybackStarted(func(ev PlaybackStartedEvent) {
+		kept <- ev
+	})
+	rio.OffPlaybackStarted(callback)
+
+	if err := rio.PublishAudio(&model.AudioFrame{
+		Data:              make([]byte, 960*2),
+		SampleRate:        48000,
+		NumChannels:       1,
+		SamplesPerChannel: 960,
+	}); err != nil {
+		t.Fatalf("PublishAudio error = %v", err)
+	}
+
+	select {
+	case ev := <-removed:
+		t.Fatalf("removed playback_started handler received event: %#v", ev)
+	default:
+	}
+	select {
+	case ev := <-kept:
+		if ev.CreatedAt.IsZero() {
+			t.Fatal("kept playback_started CreatedAt is zero")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("remaining playback_started handler did not receive event")
+	}
+}
+
+func TestRoomIOOffPlaybackStartedUsesCallbackIdentity(t *testing.T) {
+	rio := &RoomIO{audioTrack: newRoomIOTestAudioTrack(t)}
+	first := make(chan PlaybackStartedEvent, 1)
+	second := make(chan PlaybackStartedEvent, 1)
+	makeCallback := func(ch chan<- PlaybackStartedEvent) func(PlaybackStartedEvent) {
+		return func(ev PlaybackStartedEvent) {
+			ch <- ev
+		}
+	}
+	firstCallback := makeCallback(first)
+	secondCallback := makeCallback(second)
+
+	rio.OnPlaybackStarted(firstCallback)
+	rio.OnPlaybackStarted(secondCallback)
+	rio.OffPlaybackStarted(secondCallback)
+
+	if err := rio.PublishAudio(&model.AudioFrame{
+		Data:              make([]byte, 960*2),
+		SampleRate:        48000,
+		NumChannels:       1,
+		SamplesPerChannel: 960,
+	}); err != nil {
+		t.Fatalf("PublishAudio error = %v", err)
+	}
+
+	select {
+	case ev := <-first:
+		if ev.CreatedAt.IsZero() {
+			t.Fatal("first playback_started CreatedAt is zero")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("first playback_started handler did not receive event")
+	}
+	select {
+	case ev := <-second:
+		t.Fatalf("removed second playback_started handler received event: %#v", ev)
+	default:
+	}
+}
+
+func TestRoomIOOffPlaybackFinishedRemovesMatchingHandler(t *testing.T) {
+	rio := &RoomIO{audioTrack: newRoomIOTestAudioTrack(t)}
+	removed := make(chan PlaybackFinishedEvent, 1)
+	kept := make(chan PlaybackFinishedEvent, 1)
+	callback := func(ev PlaybackFinishedEvent) {
+		removed <- ev
+	}
+	rio.OnPlaybackFinished(callback)
+	rio.OnPlaybackFinished(func(ev PlaybackFinishedEvent) {
+		kept <- ev
+	})
+	rio.OffPlaybackFinished(callback)
+
+	if err := rio.PublishAudio(&model.AudioFrame{
+		Data:              make([]byte, 960*2),
+		SampleRate:        48000,
+		NumChannels:       1,
+		SamplesPerChannel: 960,
+	}); err != nil {
+		t.Fatalf("PublishAudio error = %v", err)
+	}
+	rio.Flush()
+
+	select {
+	case ev := <-removed:
+		t.Fatalf("removed playback_finished handler received event: %#v", ev)
+	default:
+	}
+	select {
+	case ev := <-kept:
+		if ev.Interrupted || ev.PlaybackPosition != 20*time.Millisecond {
+			t.Fatalf("kept playback_finished event = %#v, want non-interrupted 20ms", ev)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("remaining playback_finished handler did not receive event")
+	}
+}
+
 func TestNewRoomIOCreatesMultimodalAssistantWithRealtimeModel(t *testing.T) {
 	session := &agent.AgentSession{
 		ChatCtx:       llm.NewChatContext(),
@@ -159,6 +400,19 @@ func TestNewRoomIOCreatesMultimodalAssistantWithRealtimeModel(t *testing.T) {
 	}
 }
 
+func newRoomIOTestAudioTrack(t *testing.T) *lksdk.LocalTrack {
+	t.Helper()
+	track, err := lksdk.NewLocalSampleTrack(webrtc.RTPCodecCapability{
+		MimeType:  webrtc.MimeTypeOpus,
+		ClockRate: 48000,
+		Channels:  1,
+	})
+	if err != nil {
+		t.Fatalf("NewLocalSampleTrack error = %v", err)
+	}
+	return track
+}
+
 func TestRoomIOCloseUnregistersChatTextHandler(t *testing.T) {
 	room := lksdk.NewRoom(nil)
 	rio := NewRoomIO(room, &agent.AgentSession{}, RoomOptions{})
@@ -170,6 +424,46 @@ func TestRoomIOCloseUnregistersChatTextHandler(t *testing.T) {
 	err := room.RegisterTextStreamHandler(RoomIOChatTopic, func(*lksdk.TextStreamReader, string) {})
 	if err != nil {
 		t.Fatalf("RegisterTextStreamHandler after RoomIO.Close() error = %v, want nil", err)
+	}
+}
+
+func TestRoomIOCloseClearsSessionListeners(t *testing.T) {
+	agentStateCancelled := make(chan struct{})
+	userStateCancelled := make(chan struct{})
+	userTranscriptionCancelled := make(chan struct{})
+	agentTranscriptionCancelled := make(chan struct{})
+	sessionCloseCancelled := make(chan struct{})
+	rio := &RoomIO{
+		agentStateCancel:         closeOnce(agentStateCancelled),
+		userStateCancel:          closeOnce(userStateCancelled),
+		userTranscriptionCancel:  closeOnce(userTranscriptionCancelled),
+		agentTranscriptionCancel: closeOnce(agentTranscriptionCancelled),
+		sessionCloseCancel:       closeOnce(sessionCloseCancelled),
+	}
+
+	if err := rio.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+
+	assertClosed(t, agentStateCancelled, "agent state listener")
+	assertClosed(t, userStateCancelled, "user state listener")
+	assertClosed(t, userTranscriptionCancelled, "user transcription listener")
+	assertClosed(t, agentTranscriptionCancelled, "agent transcription listener")
+	assertClosed(t, sessionCloseCancelled, "session close listener")
+	if rio.agentStateCancel != nil {
+		t.Fatal("agentStateCancel still set after Close")
+	}
+	if rio.userStateCancel != nil {
+		t.Fatal("userStateCancel still set after Close")
+	}
+	if rio.userTranscriptionCancel != nil {
+		t.Fatal("userTranscriptionCancel still set after Close")
+	}
+	if rio.agentTranscriptionCancel != nil {
+		t.Fatal("agentTranscriptionCancel still set after Close")
+	}
+	if rio.sessionCloseCancel != nil {
+		t.Fatal("sessionCloseCancel still set after Close")
 	}
 }
 
@@ -1415,6 +1709,42 @@ func (c *channelClientEventsDispatcher) DispatchAgentState(state agent.AgentStat
 
 func (c *channelClientEventsDispatcher) DispatchUserState(state agent.UserState) {
 	c.userStates <- state
+}
+
+func closeOnce(ch chan struct{}) context.CancelFunc {
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			close(ch)
+		})
+	}
+}
+
+func assertClosed(t *testing.T, ch <-chan struct{}, label string) {
+	t.Helper()
+	select {
+	case <-ch:
+	case <-time.After(time.Second):
+		t.Fatalf("%s was not cancelled", label)
+	}
+}
+
+func waitForPlaybackWaiters(t *testing.T, rio *RoomIO, want int) {
+	t.Helper()
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		rio.mu.Lock()
+		got := len(rio.playbackWaiters)
+		rio.mu.Unlock()
+		if got == want {
+			return
+		}
+		time.Sleep(time.Millisecond)
+	}
+	rio.mu.Lock()
+	got := len(rio.playbackWaiters)
+	rio.mu.Unlock()
+	t.Fatalf("playback waiters = %d, want %d", got, want)
 }
 
 type fakeRoomIORealtimeModel struct {
