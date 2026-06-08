@@ -87,6 +87,70 @@ func NewOpenAITTS(apiKey string, model openai.SpeechModel, voice openai.SpeechVo
 	return newOpenAITTS(openai.NewClient(apiKey), apiKey, model, voice, opts...), nil
 }
 
+func NewAzureOpenAITTS(model openai.SpeechModel, voice openai.SpeechVoice, azureEndpoint, azureDeployment, apiVersion, apiKey, azureADToken string, opts ...OpenAITTSOption) (*OpenAITTS, error) {
+	if model == "" {
+		model = openai.TTSModelGPT4oMini
+	}
+	if voice == "" {
+		voice = openai.VoiceAsh
+	}
+	if azureEndpoint == "" {
+		azureEndpoint = os.Getenv(azureOpenAIEndpointEnv)
+	}
+	if apiVersion == "" {
+		apiVersion = os.Getenv(openAIAPIVersionEnv)
+	}
+	if apiKey == "" {
+		apiKey = os.Getenv(azureOpenAIAPIKeyEnv)
+	}
+	if azureADToken == "" {
+		azureADToken = os.Getenv(azureOpenAIADTokenEnv)
+	}
+	if azureEndpoint == "" {
+		return nil, fmt.Errorf("%s is required for Azure OpenAI TTS", azureOpenAIEndpointEnv)
+	}
+	if apiKey == "" && azureADToken == "" {
+		return nil, fmt.Errorf("%s or %s is required for Azure OpenAI TTS", azureOpenAIAPIKeyEnv, azureOpenAIADTokenEnv)
+	}
+	if azureDeployment == "" {
+		azureDeployment = string(model)
+	}
+
+	provider := &OpenAITTS{
+		apiKey:         apiKey,
+		model:          model,
+		voice:          voice,
+		baseURL:        azureEndpoint,
+		speed:          1.0,
+		responseFormat: openai.SpeechResponseFormatMp3,
+	}
+	for _, opt := range opts {
+		opt(provider)
+	}
+	if provider.responseFormat == "" {
+		provider.responseFormat = openai.SpeechResponseFormatMp3
+	}
+
+	config := openai.DefaultAzureConfig(apiKey, azureEndpoint)
+	config.AzureModelMapperFunc = func(string) string {
+		return azureDeployment
+	}
+	if apiVersion != "" {
+		config.APIVersion = apiVersion
+	}
+	if provider.httpClient != nil {
+		config.HTTPClient = provider.httpClient
+	}
+	if apiKey == "" && azureADToken != "" {
+		config.HTTPClient = &azureADTokenHTTPClient{
+			base:  config.HTTPClient,
+			token: azureADToken,
+		}
+	}
+	provider.client = openai.NewClientWithConfig(config)
+	return provider, nil
+}
+
 func newOpenAITTS(client *openai.Client, apiKey string, model openai.SpeechModel, voice openai.SpeechVoice, opts ...OpenAITTSOption) *OpenAITTS {
 	if model == "" {
 		model = openai.TTSModelGPT4oMini
