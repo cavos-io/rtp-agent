@@ -106,6 +106,13 @@ func WithOpenAIRealtimeModalities(modalities []string) OpenAIRealtimeOption {
 	}
 }
 
+func WithOpenAIRealtimeMaxResponseOutputTokens(tokens any) OpenAIRealtimeOption {
+	return func(options *openAIRealtimeModelOptions) {
+		options.sessionOptions.MaxResponseOutputTokens = tokens
+		options.sessionOptions.MaxResponseOutputTokensSet = true
+	}
+}
+
 func NewRealtimeModel(apiKey, model string, opts ...OpenAIRealtimeOption) *RealtimeModel {
 	if model == "" {
 		model = "gpt-realtime"
