@@ -3,11 +3,14 @@ package openai
 import (
 	"context"
 	"fmt"
+	"net/http"
 	"os"
+	"runtime"
 	"strings"
 
 	"github.com/cavos-io/rtp-agent/core/inference"
 	"github.com/cavos-io/rtp-agent/core/llm"
+	goopenai "github.com/sashabaranov/go-openai"
 )
 
 const (
@@ -22,11 +25,26 @@ const (
 	liveKitURLEnv                = "LIVEKIT_URL"
 )
 
+type liveKitInferenceHeadersHTTPClient struct {
+	base goopenai.HTTPDoer
+}
+
+func (c *liveKitInferenceHeadersHTTPClient) Do(req *http.Request) (*http.Response, error) {
+	base := c.base
+	if base == nil {
+		base = http.DefaultClient
+	}
+	cloned := req.Clone(req.Context())
+	cloned.Header.Set("User-Agent", liveKitInferenceUserAgent())
+	return base.Do(cloned)
+}
+
 type LiveKitInferenceLLM struct {
-	model     string
-	apiKey    string
-	apiSecret string
-	baseURL   string
+	model      string
+	apiKey     string
+	apiSecret  string
+	baseURL    string
+	httpClient goopenai.HTTPDoer
 }
 
 var _ llm.LLM = (*LiveKitInferenceLLM)(nil)
@@ -71,6 +89,10 @@ func liveKitInferenceLLMURL() string {
 	return defaultLiveKitInferenceLLMURL
 }
 
+func liveKitInferenceUserAgent() string {
+	return fmt.Sprintf("LiveKit Agents/%s (go %s)", PluginVersion, runtime.Version())
+}
+
 func (l *LiveKitInferenceLLM) Model() string {
 	return l.model
 }
@@ -85,6 +107,6 @@ func (l *LiveKitInferenceLLM) Chat(ctx context.Context, chatCtx *llm.ChatContext
 		return nil, err
 	}
 
-	inner := NewOpenAILLMWithBaseURL(token, l.model, l.baseURL)
+	inner := NewOpenAILLMWithBaseURLAndHTTPClient(token, l.model, l.baseURL, &liveKitInferenceHeadersHTTPClient{base: l.httpClient})
 	return inner.Chat(ctx, chatCtx, opts...)
 }

@@ -2,6 +2,7 @@ package openai
 
 import (
 	"context"
+	"net/http"
 	"strings"
 	"testing"
 
@@ -94,5 +95,28 @@ func TestLiveKitInferenceLLMChatBuildsTokenBeforeDelegating(t *testing.T) {
 	_, err = provider.Chat(ctx, llm.NewChatContext(), llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 0}))
 	if err == nil {
 		t.Fatal("Chat error = nil, want canceled request error after token creation")
+	}
+}
+
+func TestLiveKitInferenceLLMChatSendsReferenceInferenceHeaders(t *testing.T) {
+	capture := &captureDeadlineHTTPClient{
+		statusCode:   http.StatusUnauthorized,
+		responseBody: `{"error":{"message":"stop"}}`,
+	}
+
+	provider, err := NewLiveKitInferenceLLM("openai/gpt-4.1", "key", "secret")
+	if err != nil {
+		t.Fatalf("NewLiveKitInferenceLLM error = %v", err)
+	}
+	provider.baseURL = "https://inference.test/v1"
+	provider.httpClient = capture
+
+	_, _ = provider.Chat(context.Background(), llm.NewChatContext(), llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 0}))
+
+	if !strings.HasPrefix(capture.userAgent, "LiveKit Agents/") {
+		t.Fatalf("User-Agent = %q, want LiveKit Agents version prefix", capture.userAgent)
+	}
+	if !strings.Contains(capture.userAgent, " (go ") {
+		t.Fatalf("User-Agent = %q, want Go runtime marker", capture.userAgent)
 	}
 }

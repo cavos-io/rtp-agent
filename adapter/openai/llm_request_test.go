@@ -646,6 +646,7 @@ type captureDeadlineHTTPClient struct {
 	requestBody   string
 	authorization string
 	apiKey        string
+	userAgent     string
 }
 
 func (c *captureDeadlineHTTPClient) Do(req *http.Request) (*http.Response, error) {
@@ -657,6 +658,7 @@ func (c *captureDeadlineHTTPClient) Do(req *http.Request) (*http.Response, error
 	c.requestURL = req.URL.String()
 	c.authorization = req.Header.Get("Authorization")
 	c.apiKey = req.Header.Get(openaisdk.AzureAPIKeyHeader)
+	c.userAgent = req.Header.Get("User-Agent")
 	if req.Body != nil {
 		body, _ := io.ReadAll(req.Body)
 		c.requestBody = string(body)
