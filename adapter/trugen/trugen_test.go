@@ -1,6 +1,10 @@
 package trugen
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/cavos-io/rtp-agent/core/agent"
+)
 
 func TestTrugenPluginMetadataUsesRTPAgentNamespace(t *testing.T) {
 	if PluginTitle != "rtp-agent.plugins.trugen" {
@@ -11,5 +15,42 @@ func TestTrugenPluginMetadataUsesRTPAgentNamespace(t *testing.T) {
 	}
 	if PluginPackage != "rtp-agent.plugins.trugen" {
 		t.Fatalf("PluginPackage = %q, want rtp-agent.plugins.trugen", PluginPackage)
+	}
+}
+
+func TestNewTrugenAvatarUsesReferenceDefaults(t *testing.T) {
+	avatar := NewTrugenAvatar("test-key")
+
+	if avatar.apiKey != "test-key" {
+		t.Fatalf("apiKey = %q, want explicit API key", avatar.apiKey)
+	}
+	if avatar.avatarID != "665a1170" {
+		t.Fatalf("avatarID = %q, want reference default avatar ID", avatar.avatarID)
+	}
+	if avatar.Provider() != "trugen" {
+		t.Fatalf("Provider() = %q, want trugen", avatar.Provider())
+	}
+	if avatar.AvatarIdentity() != "trugen-avatar" {
+		t.Fatalf("AvatarIdentity() = %q, want reference identity", avatar.AvatarIdentity())
+	}
+	if avatar.state != agent.AvatarStateIdle {
+		t.Fatalf("state = %q, want idle", avatar.state)
+	}
+}
+
+func TestTrugenAvatarUpdateStateRecordsReferenceState(t *testing.T) {
+	avatar := NewTrugenAvatar("test-key")
+
+	if err := avatar.UpdateState(agent.AvatarStateSpeaking); err != nil {
+		t.Fatalf("UpdateState speaking error = %v", err)
+	}
+	if avatar.state != agent.AvatarStateSpeaking {
+		t.Fatalf("state = %q, want speaking", avatar.state)
+	}
+	if err := avatar.UpdateState(agent.AvatarStateIdle); err != nil {
+		t.Fatalf("UpdateState idle error = %v", err)
+	}
+	if avatar.state != agent.AvatarStateIdle {
+		t.Fatalf("state = %q, want idle", avatar.state)
 	}
 }
