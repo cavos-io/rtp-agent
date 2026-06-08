@@ -30,6 +30,9 @@ type RealtimeModel struct {
 	model         string
 	baseURL       string
 	dialWebsocket openAIRealtimeWebsocketDialer
+	mu            sync.Mutex
+	options       llm.RealtimeSessionOptions
+	sessions      map[*realtimeSession]struct{}
 }
 
 type openAIRealtimeWebsocketDialer func(string, http.Header) (*websocket.Conn, *http.Response, error)
@@ -69,6 +72,23 @@ func (m *RealtimeModel) Close() error {
 	return nil
 }
 
+func (m *RealtimeModel) UpdateOptions(options llm.RealtimeSessionOptions) error {
+	m.mu.Lock()
+	openAIRealtimeMergeSessionOptions(&m.options, options)
+	sessions := make([]*realtimeSession, 0, len(m.sessions))
+	for session := range m.sessions {
+		sessions = append(sessions, session)
+	}
+	m.mu.Unlock()
+
+	for _, session := range sessions {
+		if err := session.UpdateOptions(options); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func (m *RealtimeModel) Capabilities() llm.RealtimeCapabilities {
 	return llm.RealtimeCapabilities{
 		MessageTruncation:       true,
@@ -85,6 +105,7 @@ func (m *RealtimeModel) Capabilities() llm.RealtimeCapabilities {
 }
 
 type realtimeSession struct {
+	model            *RealtimeModel
 	conn             *websocket.Conn
 	ctx              context.Context
 	cancel           context.CancelFunc
@@ -148,7 +169,17 @@ func (m *RealtimeModel) Session() (llm.RealtimeSession, error) {
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
+	initialSession := openAIRealtimeInitialSession(m.model)
+	m.mu.Lock()
+	initialOptions := m.options
+	m.mu.Unlock()
+	if msg := openAIRealtimeUpdateOptionsMessage(initialOptions); msg != nil {
+		if session, ok := msg["session"].(map[string]any); ok {
+			openAIRealtimeMergeSessionPayload(initialSession, session)
+		}
+	}
 	s := &realtimeSession{
+		model:        m,
 		conn:         conn,
 		ctx:          ctx,
 		cancel:       cancel,
@@ -158,14 +189,29 @@ func (m *RealtimeModel) Session() (llm.RealtimeSession, error) {
 	}
 
 	go s.eventLoop()
-	initialSession := openAIRealtimeInitialSession(m.model)
 	s.optionsState = openAIRealtimeOptionEntries(initialSession)
 	if err := s.sendMsg(openAIRealtimeInitialSessionUpdateMessage(initialSession)); err != nil {
 		_ = s.Close()
 		return nil, err
 	}
+	m.registerSession(s)
 
 	return s, nil
+}
+
+func (m *RealtimeModel) registerSession(session *realtimeSession) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.sessions == nil {
+		m.sessions = make(map[*realtimeSession]struct{})
+	}
+	m.sessions[session] = struct{}{}
+}
+
+func (m *RealtimeModel) unregisterSession(session *realtimeSession) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	delete(m.sessions, session)
 }
 
 func openAIRealtimeBaseURL(rawURL string) string {
@@ -608,6 +654,70 @@ func openAIRealtimeChangedOptionsSession(session map[string]any, current map[str
 	return openAIRealtimeSessionFromOptionEntries(changedOptions), changedOptions
 }
 
+func openAIRealtimeMergeSessionOptions(dst *llm.RealtimeSessionOptions, src llm.RealtimeSessionOptions) {
+	if src.ToolChoiceSet || src.ToolChoice != nil {
+		dst.ToolChoice = src.ToolChoice
+		dst.ToolChoiceSet = true
+	}
+	if src.MaxResponseOutputTokensSet || src.MaxResponseOutputTokens != nil {
+		dst.MaxResponseOutputTokens = src.MaxResponseOutputTokens
+		dst.MaxResponseOutputTokensSet = true
+	}
+	if src.TruncationSet || src.Truncation != nil {
+		dst.Truncation = src.Truncation
+		dst.TruncationSet = true
+	}
+	if src.TracingSet || src.Tracing != nil {
+		dst.Tracing = src.Tracing
+		dst.TracingSet = true
+	}
+	if src.TurnDetectionSet || src.TurnDetection != nil {
+		dst.TurnDetection = src.TurnDetection
+		dst.TurnDetectionSet = true
+	}
+	if src.InputAudioTranscriptionSet || src.InputAudioTranscription != nil {
+		dst.InputAudioTranscription = src.InputAudioTranscription
+		dst.InputAudioTranscriptionSet = true
+	}
+	if src.InputAudioNoiseReductionSet || src.InputAudioNoiseReduction != nil {
+		dst.InputAudioNoiseReduction = src.InputAudioNoiseReduction
+		dst.InputAudioNoiseReductionSet = true
+	}
+	if src.Voice != "" {
+		dst.Voice = src.Voice
+	}
+	if src.SpeedSet || src.Speed > 0 {
+		dst.Speed = src.Speed
+		dst.SpeedSet = true
+	}
+}
+
+func openAIRealtimeMergeSessionPayload(dst map[string]any, src map[string]any) {
+	for key, value := range src {
+		if key != "audio" {
+			dst[key] = value
+			continue
+		}
+		dstAudio, _ := dst["audio"].(map[string]any)
+		if dstAudio == nil {
+			dstAudio = make(map[string]any)
+			dst["audio"] = dstAudio
+		}
+		srcAudio, _ := value.(map[string]any)
+		for audioKey, audioValue := range srcAudio {
+			dstConfig, _ := dstAudio[audioKey].(map[string]any)
+			if dstConfig == nil {
+				dstConfig = make(map[string]any)
+				dstAudio[audioKey] = dstConfig
+			}
+			srcConfig, _ := audioValue.(map[string]any)
+			for configKey, configValue := range srcConfig {
+				dstConfig[configKey] = configValue
+			}
+		}
+	}
+}
+
 func openAIRealtimeOptionEntries(session map[string]any) map[string]any {
 	entries := make(map[string]any)
 	if value, ok := session["tool_choice"]; ok {
@@ -991,6 +1101,9 @@ func openAIRealtimeClearAudioMessage() map[string]any {
 }
 
 func (s *realtimeSession) Close() error {
+	if s.model != nil {
+		s.model.unregisterSession(s)
+	}
 	s.cancel()
 	s.mu.Lock()
 	defer s.mu.Unlock()

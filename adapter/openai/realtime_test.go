@@ -104,6 +104,93 @@ func TestOpenAIRealtimeSessionUsesEnvBaseURL(t *testing.T) {
 	}
 }
 
+func TestRealtimeModelUpdateOptionsForwardsToActiveSession(t *testing.T) {
+	messages := make(chan string, 8)
+	dialer := newOpenAIRealtimeTestWebsocketDialer(t, func(conn *websocket.Conn, _ *http.Request) {
+		for {
+			_, msg, err := conn.ReadMessage()
+			if err != nil {
+				return
+			}
+			messages <- string(msg)
+		}
+	})
+
+	realtimeModel := NewRealtimeModel("test-key", "gpt-realtime")
+	realtimeModel.baseURL = "ws://openai.test/v1/realtime"
+	realtimeModel.dialWebsocket = dialer
+
+	session, err := realtimeModel.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	defer session.Close()
+	<-messages
+
+	if err := realtimeModel.UpdateOptions(llm.RealtimeSessionOptions{
+		TurnDetection: map[string]any{"type": "server_vad"},
+	}); err != nil {
+		t.Fatalf("UpdateOptions set error = %v", err)
+	}
+	setUpdate := <-messages
+	assertRealtimeMessage(t, setUpdate, "session.update", "server_vad")
+
+	if err := realtimeModel.UpdateOptions(llm.RealtimeSessionOptions{
+		TurnDetectionSet: true,
+	}); err != nil {
+		t.Fatalf("UpdateOptions clear error = %v", err)
+	}
+	clearUpdate := <-messages
+	assertRealtimeMessage(t, clearUpdate, "session.update", "turn_detection")
+	var msg map[string]any
+	if err := json.Unmarshal([]byte(clearUpdate), &msg); err != nil {
+		t.Fatalf("decode clear update: %v", err)
+	}
+	sessionPayload := msg["session"].(map[string]any)
+	audio := sessionPayload["audio"].(map[string]any)
+	input := audio["input"].(map[string]any)
+	value, ok := input["turn_detection"]
+	if !ok {
+		t.Fatalf("turn_detection missing from clear update: %#v", input)
+	}
+	if value != nil {
+		t.Fatalf("turn_detection = %#v, want nil clear", value)
+	}
+}
+
+func TestRealtimeModelUpdateOptionsAppliesToNewSession(t *testing.T) {
+	messages := make(chan string, 4)
+	dialer := newOpenAIRealtimeTestWebsocketDialer(t, func(conn *websocket.Conn, _ *http.Request) {
+		for {
+			_, msg, err := conn.ReadMessage()
+			if err != nil {
+				return
+			}
+			messages <- string(msg)
+		}
+	})
+
+	realtimeModel := NewRealtimeModel("test-key", "gpt-realtime")
+	realtimeModel.baseURL = "ws://openai.test/v1/realtime"
+	realtimeModel.dialWebsocket = dialer
+	if err := realtimeModel.UpdateOptions(llm.RealtimeSessionOptions{
+		TurnDetection: map[string]any{"type": "server_vad"},
+		Voice:         "alloy",
+	}); err != nil {
+		t.Fatalf("UpdateOptions error = %v", err)
+	}
+
+	session, err := realtimeModel.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	defer session.Close()
+
+	initialUpdate := <-messages
+	assertRealtimeMessage(t, initialUpdate, "session.update", "server_vad")
+	assertRealtimeMessage(t, initialUpdate, "session.update", "alloy")
+}
+
 func TestRealtimeSessionSendsProtocolMessages(t *testing.T) {
 	messages := make(chan string, 32)
 	connected := make(chan *http.Request, 1)
