@@ -135,6 +135,9 @@ func (b *TextReplaceBuffer) Push(text string) []string {
 	}
 
 	b.buffer = b.apply(b.buffer)
+	if len(b.buffer) <= b.tailLen {
+		return nil
+	}
 	flushTo := len(b.buffer) - b.tailLen
 	out := b.buffer[:flushTo]
 	b.buffer = b.buffer[flushTo:]

@@ -112,6 +112,15 @@ func TestTextReplaceBufferReplacesTermsAcrossChunks(t *testing.T) {
 			t.Fatalf("chunk %q leaked replaced term; chunks = %#v", chunk, chunks)
 		}
 	}
+
+	shorter := NewTextReplaceBuffer(map[string]string{"LiveKit": "LK"}, false)
+
+	chunks = append(shorter.Push("Try Live"), shorter.Push("Kit.")...)
+	chunks = append(chunks, shorter.Flush()...)
+
+	if got, want := strings.Join(chunks, ""), "Try LK."; got != want {
+		t.Fatalf("joined output = %q, want %q; chunks = %#v", got, want, chunks)
+	}
 }
 
 func equalStringSlices(a, b []string) bool {
