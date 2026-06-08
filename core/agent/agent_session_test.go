@@ -1044,6 +1044,22 @@ func TestNewAgentSessionPreservesExplicitFalseTurnOptions(t *testing.T) {
 	}
 }
 
+func TestNewAgentSessionPreservesExplicitZeroMinInterruptionDuration(t *testing.T) {
+	agent := NewAgent("test")
+	session := NewAgentSession(agent, nil, AgentSessionOptions{
+		MinInterruptionDuration:    0,
+		MinInterruptionDurationSet: true,
+	})
+
+	if session.Options.MinInterruptionDuration != 0 {
+		t.Fatalf("MinInterruptionDuration = %v, want explicit zero preserved", session.Options.MinInterruptionDuration)
+	}
+	activity := NewAgentActivity(agent, session)
+	if got := activity.minInterruptionDuration(); got != 0 {
+		t.Fatalf("AgentActivity.minInterruptionDuration() = %v, want explicit zero", got)
+	}
+}
+
 func TestNewAgentSessionPreservesExplicitZeroFalseInterruptionTimeout(t *testing.T) {
 	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{
 		FalseInterruptionTimeout:    0,

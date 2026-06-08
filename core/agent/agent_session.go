@@ -39,6 +39,7 @@ type AgentSessionOptions struct {
 	AllowInterruptions               bool
 	DiscardAudioIfUninterruptible    bool
 	MinInterruptionDuration          float64
+	MinInterruptionDurationSet       bool
 	MinInterruptionWords             int
 	MinEndpointingDelay              float64
 	MinEndpointingDelaySet           bool
@@ -690,7 +691,7 @@ func NewAgentSession(agent AgentInterface, room *lksdk.Room, opts AgentSessionOp
 func withAgentSessionOptionDefaults(opts AgentSessionOptions) AgentSessionOptions {
 	opts.AllowInterruptions = true
 	opts.DiscardAudioIfUninterruptible = true
-	if opts.MinInterruptionDuration == 0 {
+	if !opts.MinInterruptionDurationSet && opts.MinInterruptionDuration == 0 {
 		opts.MinInterruptionDuration = 0.5
 	}
 	if !opts.MinEndpointingDelaySet && opts.MinEndpointingDelay == 0 {
