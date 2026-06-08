@@ -1,6 +1,14 @@
 package telemetry
 
-import "testing"
+import (
+	"context"
+	"testing"
+
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/sdk/metric"
+	"go.opentelemetry.io/otel/sdk/metric/metricdata"
+)
 
 func TestUsageSummaryLLMTokenAliasesMatchPromptAndCompletion(t *testing.T) {
 	summary := UsageSummary{LLMPromptTokens: 3, LLMCompletionTokens: 5}
@@ -110,6 +118,36 @@ func TestModelUsageCollectorAggregatesByProviderAndModel(t *testing.T) {
 	}
 }
 
+func TestCollectOTelUsageRecordsReferenceLLMCounters(t *testing.T) {
+	reader := metric.NewManualReader()
+	provider := metric.NewMeterProvider(metric.WithReader(reader))
+	previous := otel.GetMeterProvider()
+	otel.SetMeterProvider(provider)
+	t.Cleanup(func() {
+		otel.SetMeterProvider(previous)
+	})
+
+	CollectOTelUsage(&LLMMetrics{
+		PromptTokens:       7,
+		PromptCachedTokens: 3,
+		CompletionTokens:   11,
+		Metadata:           &Metadata{ModelProvider: "openai", ModelName: "gpt-4o"},
+	})
+
+	var rm metricdata.ResourceMetrics
+	if err := reader.Collect(context.Background(), &rm); err != nil {
+		t.Fatalf("Collect() error = %v", err)
+	}
+
+	attrs := attribute.NewSet(
+		attribute.String("model_provider", "openai"),
+		attribute.String("model_name", "gpt-4o"),
+	)
+	assertIntCounterPoint(t, rm, "lk.agents.usage.llm_input_tokens", attrs, 7)
+	assertIntCounterPoint(t, rm, "lk.agents.usage.llm_input_cached_tokens", attrs, 3)
+	assertIntCounterPoint(t, rm, "lk.agents.usage.llm_output_tokens", attrs, 11)
+}
+
 func TestModelUsageCollectorFlattenReturnsCopies(t *testing.T) {
 	collector := NewModelUsageCollector()
 	collector.Collect(&LLMMetrics{
@@ -157,6 +195,32 @@ func findModelUsage[T ModelUsage](usage []ModelUsage, provider string, model str
 		}
 	}
 	return zero
+}
+
+func assertIntCounterPoint(t *testing.T, rm metricdata.ResourceMetrics, name string, attrs attribute.Set, want int64) {
+	t.Helper()
+
+	for _, scope := range rm.ScopeMetrics {
+		for _, metric := range scope.Metrics {
+			if metric.Name != name {
+				continue
+			}
+			sum, ok := metric.Data.(metricdata.Sum[int64])
+			if !ok {
+				t.Fatalf("%s data = %T, want int64 sum", name, metric.Data)
+			}
+			for _, point := range sum.DataPoints {
+				if point.Attributes.Equals(&attrs) {
+					if point.Value != want {
+						t.Fatalf("%s value = %d, want %d", name, point.Value, want)
+					}
+					return
+				}
+			}
+			t.Fatalf("%s did not include attributes %v", name, attrs)
+		}
+	}
+	t.Fatalf("missing metric %s", name)
 }
 
 func TestTTSMetricsCarriesTokenAndConnectionMetadata(t *testing.T) {
