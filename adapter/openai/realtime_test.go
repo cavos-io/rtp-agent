@@ -430,6 +430,52 @@ func TestRealtimeModelConstructorInputAudioNoiseReductionAppliesToInitialSession
 	}
 }
 
+func TestRealtimeModelConstructorTurnDetectionAppliesToInitialSession(t *testing.T) {
+	messages := make(chan string, 4)
+	dialer := newOpenAIRealtimeTestWebsocketDialer(t, func(conn *websocket.Conn, _ *http.Request) {
+		for {
+			_, msg, err := conn.ReadMessage()
+			if err != nil {
+				return
+			}
+			messages <- string(msg)
+		}
+	})
+
+	realtimeModel := NewRealtimeModel("test-key", "gpt-realtime", WithOpenAIRealtimeTurnDetection(map[string]any{
+		"type":                "server_vad",
+		"threshold":           0.45,
+		"prefix_padding_ms":   250,
+		"silence_duration_ms": 450,
+		"create_response":     false,
+	}))
+	realtimeModel.baseURL = "ws://openai.test/v1/realtime"
+	realtimeModel.dialWebsocket = dialer
+
+	session, err := realtimeModel.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	defer session.Close()
+
+	initialUpdate := <-messages
+	var msg map[string]any
+	if err := json.Unmarshal([]byte(initialUpdate), &msg); err != nil {
+		t.Fatalf("decode initial update: %v", err)
+	}
+	sessionPayload := msg["session"].(map[string]any)
+	audio := sessionPayload["audio"].(map[string]any)
+	input := audio["input"].(map[string]any)
+	turnDetection := input["turn_detection"].(map[string]any)
+	if turnDetection["type"] != "server_vad" ||
+		turnDetection["threshold"] != 0.45 ||
+		turnDetection["prefix_padding_ms"] != float64(250) ||
+		turnDetection["silence_duration_ms"] != float64(450) ||
+		turnDetection["create_response"] != false {
+		t.Fatalf("turn_detection = %#v, want configured server_vad", turnDetection)
+	}
+}
+
 func TestRealtimeInitialSessionUsesDefaultToolChoice(t *testing.T) {
 	session := openAIRealtimeInitialSession("gpt-realtime")
 

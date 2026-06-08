@@ -87,6 +87,13 @@ func WithOpenAIRealtimeInputAudioNoiseReduction(noiseReduction any) OpenAIRealti
 	}
 }
 
+func WithOpenAIRealtimeTurnDetection(turnDetection any) OpenAIRealtimeOption {
+	return func(options *llm.RealtimeSessionOptions) {
+		options.TurnDetection = turnDetection
+		options.TurnDetectionSet = true
+	}
+}
+
 func NewRealtimeModel(apiKey, model string, opts ...OpenAIRealtimeOption) *RealtimeModel {
 	if model == "" {
 		model = "gpt-realtime"
