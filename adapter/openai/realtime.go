@@ -37,7 +37,15 @@ type RealtimeModel struct {
 
 type openAIRealtimeWebsocketDialer func(string, http.Header) (*websocket.Conn, *http.Response, error)
 
-func NewRealtimeModel(apiKey, model string) *RealtimeModel {
+type OpenAIRealtimeOption func(*llm.RealtimeSessionOptions)
+
+func WithOpenAIRealtimeVoice(voice string) OpenAIRealtimeOption {
+	return func(options *llm.RealtimeSessionOptions) {
+		options.Voice = voice
+	}
+}
+
+func NewRealtimeModel(apiKey, model string, opts ...OpenAIRealtimeOption) *RealtimeModel {
 	if model == "" {
 		model = "gpt-realtime"
 	}
@@ -48,11 +56,16 @@ func NewRealtimeModel(apiKey, model string) *RealtimeModel {
 	if baseURL == "" {
 		baseURL = "https://api.openai.com/v1"
 	}
+	options := llm.RealtimeSessionOptions{}
+	for _, opt := range opts {
+		opt(&options)
+	}
 	return &RealtimeModel{
 		apiKey:        apiKey,
 		model:         model,
 		baseURL:       openAIRealtimeBaseURL(baseURL),
 		dialWebsocket: defaultOpenAIRealtimeWebsocketDialer,
+		options:       options,
 	}
 }
 
