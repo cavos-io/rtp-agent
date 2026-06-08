@@ -165,9 +165,24 @@ func ParseFunctionArguments(jsonArguments string) (map[string]any, error) {
 	}
 	args, ok := value.(map[string]any)
 	if !ok {
-		return nil, fmt.Errorf("expected object from function arguments, got %T", value)
+		return nil, fmt.Errorf("expected dict from function arguments, got %s: %.200s", functionArgumentTypeName(value), jsonArguments)
 	}
 	return args, nil
+}
+
+func functionArgumentTypeName(value any) string {
+	switch value.(type) {
+	case []any:
+		return "list"
+	case string:
+		return "str"
+	case bool:
+		return "bool"
+	case float64:
+		return "float"
+	default:
+		return fmt.Sprintf("%T", value)
+	}
 }
 
 func repairFunctionArguments(value string) string {

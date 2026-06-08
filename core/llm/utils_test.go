@@ -143,6 +143,18 @@ func TestParseFunctionArgumentsRejectsNonObject(t *testing.T) {
 	}
 }
 
+func TestParseFunctionArgumentsRejectsNonObjectWithReferenceError(t *testing.T) {
+	_, err := ParseFunctionArguments(`["Paris"]`)
+	if err == nil {
+		t.Fatal("ParseFunctionArguments(array) error = nil, want error")
+	}
+
+	want := `expected dict from function arguments, got list: ["Paris"]`
+	if err.Error() != want {
+		t.Fatalf("ParseFunctionArguments(array) error = %q, want %q", err.Error(), want)
+	}
+}
+
 func TestMakeFunctionCallOutputUsesToolErrorMessage(t *testing.T) {
 	call := FunctionCall{CallID: "call_lookup", Name: "lookup", Arguments: "{}"}
 
