@@ -31,19 +31,20 @@ const (
 )
 
 type OpenAISTT struct {
-	client         *openai.Client
-	httpClient     openai.HTTPDoer
-	apiKey         string
-	baseURL        string
-	model          string
-	language       string
-	detectLanguage bool
-	prompt         string
-	noiseReduction string
-	useRealtime    bool
-	dialWebsocket  openAIRealtimeSTTWebsocketDialer
-	streamsMu      sync.Mutex
-	streams        map[*openAIRealtimeSTTStream]struct{}
+	client          *openai.Client
+	httpClient      openai.HTTPDoer
+	apiKey          string
+	baseURL         string
+	model           string
+	language        string
+	detectLanguage  bool
+	detectOptionSet bool
+	prompt          string
+	noiseReduction  string
+	useRealtime     bool
+	dialWebsocket   openAIRealtimeSTTWebsocketDialer
+	streamsMu       sync.Mutex
+	streams         map[*openAIRealtimeSTTStream]struct{}
 }
 
 type OpenAISTTOption func(*OpenAISTT)
@@ -66,6 +67,7 @@ func WithOpenAISTTLanguage(language string) OpenAISTTOption {
 
 func WithOpenAISTTDetectLanguage(detect bool) OpenAISTTOption {
 	return func(s *OpenAISTT) {
+		s.detectOptionSet = true
 		s.detectLanguage = detect
 		if detect {
 			s.language = ""
@@ -150,8 +152,15 @@ func (s *OpenAISTT) Capabilities() stt.STTCapabilities {
 
 func (s *OpenAISTT) UpdateOptions(opts ...OpenAISTTOption) {
 	previousLanguage := s.language
+	previousDetectOptionSet := s.detectOptionSet
+	s.detectOptionSet = false
 	for _, opt := range opts {
 		opt(s)
+	}
+	detectOptionSet := s.detectOptionSet
+	s.detectOptionSet = previousDetectOptionSet || detectOptionSet
+	if detectOptionSet {
+		s.language = ""
 	}
 	if s.language != "" && s.language != previousLanguage {
 		s.updateRealtimeSTTStreamLanguage(s.language)

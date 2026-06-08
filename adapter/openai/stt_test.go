@@ -215,6 +215,24 @@ func TestOpenAISTTUpdateOptionsMatchesReference(t *testing.T) {
 	}
 }
 
+func TestOpenAISTTUpdateOptionsDetectLanguageFalseClearsLanguage(t *testing.T) {
+	provider := mustNewOpenAISTT(t, "test-key", "",
+		WithOpenAISTTLanguage("id"),
+		WithOpenAISTTDetectLanguage(false),
+	)
+	constructorReq := openAIAudioRequest(provider, strings.NewReader("audio"), "")
+	if constructorReq.Language != "id" {
+		t.Fatalf("constructor language = %q, want id", constructorReq.Language)
+	}
+
+	provider.UpdateOptions(WithOpenAISTTDetectLanguage(false))
+
+	updateReq := openAIAudioRequest(provider, strings.NewReader("audio"), "")
+	if updateReq.Language != "" {
+		t.Fatalf("updated language = %q, want empty after explicit detect_language=false update", updateReq.Language)
+	}
+}
+
 func TestOpenAISTTLabelAndDisabledRealtimeStream(t *testing.T) {
 	provider := mustNewOpenAISTT(t, "test-key", "")
 
