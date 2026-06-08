@@ -1439,6 +1439,28 @@ func TestChatContextToOpenAIProviderFormatGroupsToolCallsWithOutputs(t *testing.
 	}
 }
 
+func TestChatContextToOpenAIProviderFormatPreservesMultipleMatchedToolOutputs(t *testing.T) {
+	ctx := NewChatContext()
+	ctx.Items = []ChatItem{
+		&ChatMessage{ID: "assistant", Role: ChatRoleAssistant, Content: []ChatContent{{Text: "checking"}}},
+		&FunctionCall{ID: "assistant/tool", CallID: "call_lookup", Name: "lookup", Arguments: `{"city":"Paris"}`},
+		&FunctionCallOutput{ID: "output-1", CallID: "call_lookup", Name: "lookup", Output: "first"},
+		&FunctionCallOutput{ID: "output-2", CallID: "call_lookup", Name: "lookup", Output: "second"},
+	}
+
+	messages, _ := ctx.ToProviderFormat("openai")
+
+	if len(messages) != 3 {
+		t.Fatalf("len(messages) = %d, want assistant plus two tool outputs: %#v", len(messages), messages)
+	}
+	for i, want := range []string{"first", "second"} {
+		msg := messages[i+1]
+		if msg["role"] != "tool" || msg["tool_call_id"] != "call_lookup" || msg["content"] != want {
+			t.Fatalf("tool output message %d = %#v, want content %q for call_lookup", i+1, msg, want)
+		}
+	}
+}
+
 func TestChatContextToOpenAIProviderFormatIncludesImageContent(t *testing.T) {
 	ctx := NewChatContext()
 	ctx.Items = []ChatItem{

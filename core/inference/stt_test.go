@@ -1,7 +1,10 @@
 package inference
 
 import (
+	"context"
 	"io"
+	"net/http"
+	"strings"
 	"testing"
 
 	"github.com/cavos-io/rtp-agent/core/audio/model"
@@ -37,6 +40,117 @@ func TestInferenceSTTCapabilitiesUseReferenceDefaultDiarization(t *testing.T) {
 
 	if provider.Capabilities().Diarization {
 		t.Fatal("Diarization = true, want false by default")
+	}
+}
+
+func TestInferenceSTTRecognizeMatchesReferenceUnsupportedBatch(t *testing.T) {
+	provider := NewSTT("deepgram/nova-3", "key", "secret")
+
+	_, err := provider.Recognize(context.Background(), nil, "")
+	if err == nil {
+		t.Fatal("Recognize() error = nil, want unsupported batch recognition error")
+	}
+	if got, want := err.Error(), "LiveKit Inference STT does not support batch recognition, use stream() instead"; got != want {
+		t.Fatalf("Recognize() error = %q, want %q", got, want)
+	}
+}
+
+func TestInferenceSTTReportsReferenceModelProviderMetadata(t *testing.T) {
+	provider := NewSTT("deepgram/nova-3", "key", "secret")
+
+	if got := stt.Model(provider); got != "deepgram/nova-3" {
+		t.Fatalf("Model = %q, want configured reference model", got)
+	}
+	if got := stt.Provider(provider); got != "livekit" {
+		t.Fatalf("Provider = %q, want livekit", got)
+	}
+}
+
+func TestNewSTTParsesReferenceModelStringForMetadata(t *testing.T) {
+	provider := NewSTT("deepgram/nova-3:en", "key", "secret")
+
+	if got := stt.Model(provider); got != "deepgram/nova-3" {
+		t.Fatalf("Model = %q, want model string language suffix stripped", got)
+	}
+}
+
+func TestNewSTTPreservesReferenceModelStringLanguageForStream(t *testing.T) {
+	conn := &fakeInferenceWebsocketConn{}
+	provider := NewSTT("deepgram/nova-3:en", "key", "secret")
+	provider.baseURL = "wss://inference.test/v1"
+	provider.dialWebsocket = func(ctx context.Context, endpoint string, header http.Header) (inferenceWebsocketConn, error) {
+		return conn, nil
+	}
+
+	stream, err := provider.Stream(context.Background(), "")
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	defer stream.Close()
+
+	if len(conn.writes) != 1 {
+		t.Fatalf("writes = %d, want session.create", len(conn.writes))
+	}
+	settings, ok := conn.writes[0]["settings"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("settings = %#v, want map", conn.writes[0]["settings"])
+	}
+	if settings["language"] != "en" {
+		t.Fatalf("settings.language = %#v, want parsed model string language", settings["language"])
+	}
+}
+
+func TestSTTWebsocketSendsReferenceInferenceHeaders(t *testing.T) {
+	var captured http.Header
+	provider := NewSTT("deepgram/nova-3", "key", "secret")
+	provider.baseURL = "wss://inference.test/v1"
+	provider.dialWebsocket = func(ctx context.Context, endpoint string, header http.Header) (inferenceWebsocketConn, error) {
+		captured = header.Clone()
+		return &fakeInferenceWebsocketConn{}, nil
+	}
+
+	stream, err := provider.Stream(context.Background(), "en")
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	defer stream.Close()
+
+	if !strings.HasPrefix(captured.Get("User-Agent"), "LiveKit Agents/") {
+		t.Fatalf("User-Agent = %q, want LiveKit Agents version prefix", captured.Get("User-Agent"))
+	}
+	if !strings.Contains(captured.Get("User-Agent"), " (go ") {
+		t.Fatalf("User-Agent = %q, want Go runtime marker", captured.Get("User-Agent"))
+	}
+}
+
+func TestSTTWebsocketSendsReferenceContextHeaders(t *testing.T) {
+	restore := SetContextHeadersProvider(func() map[string]string {
+		return map[string]string{
+			HeaderRoomID: "RM_stt",
+			HeaderJobID:  "job_stt",
+		}
+	})
+	defer restore()
+
+	var captured http.Header
+	provider := NewSTT("deepgram/nova-3", "key", "secret")
+	provider.baseURL = "wss://inference.test/v1"
+	provider.dialWebsocket = func(ctx context.Context, endpoint string, header http.Header) (inferenceWebsocketConn, error) {
+		captured = header.Clone()
+		return &fakeInferenceWebsocketConn{}, nil
+	}
+
+	stream, err := provider.Stream(context.Background(), "en")
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	defer stream.Close()
+
+	if got := captured.Get(HeaderRoomID); got != "RM_stt" {
+		t.Fatalf("%s = %q, want RM_stt", HeaderRoomID, got)
+	}
+	if got := captured.Get(HeaderJobID); got != "job_stt" {
+		t.Fatalf("%s = %q, want job_stt", HeaderJobID, got)
 	}
 }
 

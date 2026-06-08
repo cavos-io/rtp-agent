@@ -1498,16 +1498,30 @@ func (g *openAIToolCallGroup) removeInvalidToolItems() {
 		return
 	}
 
-	outputsByCallID := make(map[string]*FunctionCallOutput)
+	callIDs := make(map[string]struct{}, len(g.toolCalls))
+	outputIDs := make(map[string]struct{}, len(g.toolOutputs))
+	validCallIDs := make(map[string]struct{})
+	for _, toolCall := range g.toolCalls {
+		callIDs[toolCall.CallID] = struct{}{}
+	}
 	for _, toolOutput := range g.toolOutputs {
-		outputsByCallID[toolOutput.CallID] = toolOutput
+		outputIDs[toolOutput.CallID] = struct{}{}
+	}
+	for callID := range callIDs {
+		if _, ok := outputIDs[callID]; ok {
+			validCallIDs[callID] = struct{}{}
+		}
 	}
 
 	validCalls := make([]*FunctionCall, 0, len(g.toolCalls))
 	validOutputs := make([]*FunctionCallOutput, 0, len(g.toolOutputs))
 	for _, toolCall := range g.toolCalls {
-		if toolOutput := outputsByCallID[toolCall.CallID]; toolOutput != nil {
+		if _, ok := validCallIDs[toolCall.CallID]; ok {
 			validCalls = append(validCalls, toolCall)
+		}
+	}
+	for _, toolOutput := range g.toolOutputs {
+		if _, ok := validCallIDs[toolOutput.CallID]; ok {
 			validOutputs = append(validOutputs, toolOutput)
 		}
 	}

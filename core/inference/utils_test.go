@@ -2,6 +2,27 @@ package inference
 
 import "testing"
 
+func TestInferenceHeadersIncludeReferenceContextHeaders(t *testing.T) {
+	restore := SetContextHeadersProvider(func() map[string]string {
+		return map[string]string{
+			"X-LiveKit-Room-ID": "RM_test",
+			"X-LiveKit-Job-ID":  "job_test",
+		}
+	})
+	defer restore()
+
+	headers := InferenceHeaders()
+	if got := headers.Get("User-Agent"); got == "" {
+		t.Fatal("User-Agent = empty, want LiveKit Agents header")
+	}
+	if got := headers.Get("X-LiveKit-Room-ID"); got != "RM_test" {
+		t.Fatalf("X-LiveKit-Room-ID = %q, want RM_test", got)
+	}
+	if got := headers.Get("X-LiveKit-Job-ID"); got != "job_test" {
+		t.Fatalf("X-LiveKit-Job-ID = %q, want job_test", got)
+	}
+}
+
 func TestNewInferenceClientsUseReferenceGatewaySelection(t *testing.T) {
 	t.Run("custom inference URL", func(t *testing.T) {
 		t.Setenv("LIVEKIT_INFERENCE_URL", "https://inference.example.test/v2")

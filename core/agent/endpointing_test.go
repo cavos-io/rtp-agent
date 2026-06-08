@@ -90,6 +90,21 @@ func TestDynamicEndpointingClearsAgentSpeechAfterInterruption(t *testing.T) {
 	}
 }
 
+func TestDynamicEndpointingDoesNotLearnUtterancePauseAfterAgentSpeechMarker(t *testing.T) {
+	endpointing := NewDynamicEndpointing(0.5, 3.0, 0.5)
+
+	endpointing.OnStartOfSpeech(0.0, false)
+	endpointing.OnEndOfSpeech(1.0, false)
+	endpointing.OnStartOfAgentSpeech(0.8)
+	endpointing.OnEndOfAgentSpeech(1.2)
+	endpointing.OnStartOfSpeech(2.5, false)
+	endpointing.OnEndOfSpeech(2.7, false)
+
+	if endpointing.MinDelay() != 0.5 {
+		t.Fatalf("MinDelay() = %v, want unchanged min delay when retained agent speech marker blocks utterance-pause learning", endpointing.MinDelay())
+	}
+}
+
 func TestDynamicEndpointingUpdateOptionsResetsFilteredDelays(t *testing.T) {
 	endpointing := NewDynamicEndpointing(0.5, 3.0, 0.5)
 

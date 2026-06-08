@@ -627,7 +627,7 @@ func openAIRealtimeChatMessageContent(msg *llm.ChatMessage) ([]map[string]any, e
 				"text": part.Text,
 			})
 		}
-		if part.Image != nil {
+		if msg.Role == llm.ChatRoleUser && part.Image != nil {
 			imagePart, err := openAIRealtimeImageContent(part.Image)
 			if err != nil {
 				return nil, err
@@ -636,7 +636,7 @@ func openAIRealtimeChatMessageContent(msg *llm.ChatMessage) ([]map[string]any, e
 				content = append(content, imagePart)
 			}
 		}
-		if part.Audio != nil && part.Audio.Transcript != "" {
+		if msg.Role == llm.ChatRoleUser && part.Audio != nil && part.Audio.Transcript != "" {
 			content = append(content, map[string]any{
 				"type":       "input_audio",
 				"transcript": part.Audio.Transcript,

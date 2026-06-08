@@ -195,6 +195,18 @@ func TestAgentSessionMCPServersReturnsLiveList(t *testing.T) {
 	}
 }
 
+func TestNewAgentSessionCopiesInitialAgentTools(t *testing.T) {
+	agent := NewAgent("test")
+	lookup := &fakeGenerationTool{name: "lookup"}
+	agent.Tools = []llm.Tool{lookup}
+
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+
+	if len(session.Tools) != 1 || session.Tools[0] != lookup {
+		t.Fatalf("session.Tools = %#v, want initial agent tool", session.Tools)
+	}
+}
+
 func TestAgentSessionUserInputTranscribedEventsFanOutToSubscribers(t *testing.T) {
 	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
 	first := session.UserInputTranscribedEvents()
@@ -207,6 +219,71 @@ func TestAgentSessionUserInputTranscribedEventsFanOutToSubscribers(t *testing.T)
 
 	assertUserTranscriptEvent(t, first, "first")
 	assertUserTranscriptEvent(t, second, "second")
+}
+
+func TestAgentSessionUserTranscriptFilterAppliesBeforeFanOut(t *testing.T) {
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	session.UserTranscriptFilter = func(text string) string {
+		if text == "my secret code" {
+			return "my [redacted] code"
+		}
+		return text
+	}
+	events := session.UserInputTranscribedEvents()
+
+	session.EmitUserInputTranscribed(UserInputTranscribedEvent{
+		Transcript: "my secret code",
+		IsFinal:    true,
+	})
+
+	select {
+	case ev := <-events:
+		if ev.Transcript != "my [redacted] code" {
+			t.Fatalf("transcript event = %q, want filtered transcript", ev.Transcript)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("UserInputTranscribedEvents did not receive filtered transcript")
+	}
+
+	recorded := session.RecordedEvents()
+	if len(recorded) != 1 {
+		t.Fatalf("RecordedEvents length = %d, want 1", len(recorded))
+	}
+	userEvent, ok := recorded[0].(*UserInputTranscribedEvent)
+	if !ok {
+		t.Fatalf("RecordedEvents[0] = %T, want *UserInputTranscribedEvent", recorded[0])
+	}
+	if userEvent.Transcript != "my [redacted] code" {
+		t.Fatalf("recorded transcript = %q, want filtered transcript", userEvent.Transcript)
+	}
+}
+
+func TestAgentSessionFinalTranscriptResetsAwayBeforeTranscriptEvent(t *testing.T) {
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	session.UpdateUserState(UserStateAway)
+	var order []string
+	session.On("user_state_changed", func(ev Event) {
+		stateEvent, ok := ev.(*UserStateChangedEvent)
+		if ok && stateEvent.NewState == UserStateListening {
+			order = append(order, "state:listening")
+		}
+	})
+	session.On("user_input_transcribed", func(ev Event) {
+		transcriptEvent, ok := ev.(*UserInputTranscribedEvent)
+		if ok {
+			order = append(order, "transcript:"+transcriptEvent.Transcript)
+		}
+	})
+
+	session.EmitUserInputTranscribed(UserInputTranscribedEvent{
+		Transcript: "hello",
+		IsFinal:    true,
+	})
+
+	want := []string{"state:listening", "transcript:hello"}
+	if !reflect.DeepEqual(order, want) {
+		t.Fatalf("event order = %#v, want %#v", order, want)
+	}
 }
 
 func TestAgentSessionAgentOutputTranscribedEventsFanOutToSubscribers(t *testing.T) {
@@ -289,6 +366,24 @@ func TestAgentSessionMetricsCollectedEventsFanOutToSubscribers(t *testing.T) {
 
 	assertMetricsCollectedEvent(t, first, metrics, "first")
 	assertMetricsCollectedEvent(t, second, metrics, "second")
+}
+
+func TestAgentSessionOnMetricsCollectedWarnsDeprecated(t *testing.T) {
+	oldLogger := logutil.Logger
+	recorder := &recordingLogger{}
+	logutil.SetLogger(recorder)
+	defer logutil.SetLogger(oldLogger)
+
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+
+	session.On("metrics_collected", func(Event) {})
+
+	if len(recorder.warnMessages) != 1 {
+		t.Fatalf("warn messages = %#v, want one deprecation warning", recorder.warnMessages)
+	}
+	if got := recorder.warnMessages[0]; got != "metrics_collected is deprecated. Use session_usage_updated for usage tracking and ChatMessage.metrics for per-turn latency." {
+		t.Fatalf("warning = %q, want reference deprecation message", got)
+	}
 }
 
 func TestAgentSessionUsageUpdatedEventsFanOutToSubscribers(t *testing.T) {
@@ -3204,6 +3299,25 @@ func TestAgentSessionUpdateAgentBeforeStartSwapsAgentOnly(t *testing.T) {
 	}
 }
 
+func TestAgentSessionUpdateAgentReplacesSessionTools(t *testing.T) {
+	initial := &trackingAgent{Agent: NewAgent("initial")}
+	initialTool := &fakeGenerationTool{name: "initial_lookup"}
+	initial.Tools = []llm.Tool{initialTool}
+	next := &trackingAgent{Agent: NewAgent("next")}
+	nextTool := &fakeGenerationTool{name: "next_lookup"}
+	next.Tools = []llm.Tool{nextTool}
+	session := NewAgentSession(initial, nil, AgentSessionOptions{})
+	if len(session.Tools) != 1 || session.Tools[0] != initialTool {
+		t.Fatalf("initial session.Tools = %#v, want initial agent tool", session.Tools)
+	}
+
+	session.UpdateAgent(next)
+
+	if len(session.Tools) != 1 || session.Tools[0] != nextTool {
+		t.Fatalf("session.Tools after UpdateAgent = %#v, want next agent tool", session.Tools)
+	}
+}
+
 func TestAgentSessionUpdateAgentBeforeStartUsesNextRealtimeModel(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -3936,6 +4050,7 @@ func TestAgentSessionUsageReturnsCollectedSummary(t *testing.T) {
 
 type recordingLogger struct {
 	infoMessages []string
+	warnMessages []string
 	infoFields   map[string]map[string]any
 }
 
@@ -3955,7 +4070,9 @@ func (l *recordingLogger) Infow(msg string, keysAndValues ...any) {
 	}
 	l.infoFields[msg] = fields
 }
-func (l *recordingLogger) Warnw(msg string, err error, keysAndValues ...any)  {}
+func (l *recordingLogger) Warnw(msg string, err error, keysAndValues ...any) {
+	l.warnMessages = append(l.warnMessages, msg)
+}
 func (l *recordingLogger) Errorw(msg string, err error, keysAndValues ...any) {}
 func (l *recordingLogger) WithValues(keysAndValues ...any) livekitlogger.Logger {
 	return l

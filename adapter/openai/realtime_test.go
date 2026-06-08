@@ -2300,6 +2300,47 @@ func TestRealtimeChatContextCreateMessagesSkipsInstructionsButKeepsSystemMessage
 	}
 }
 
+func TestRealtimeChatContextCreateMessagesDropsNonTextForNonUserRoles(t *testing.T) {
+	chatCtx := llm.NewChatContext()
+	chatCtx.AddMessage(llm.ChatMessageArgs{
+		ID:   "system",
+		Role: llm.ChatRoleSystem,
+		Content: []llm.ChatContent{
+			{Text: "system text"},
+			{Image: &llm.ImageContent{Image: "data:image/png;base64,aW1n"}},
+		},
+	})
+	chatCtx.AddMessage(llm.ChatMessageArgs{
+		ID:   "assistant",
+		Role: llm.ChatRoleAssistant,
+		Content: []llm.ChatContent{
+			{Text: "assistant text"},
+			{Image: &llm.ImageContent{Image: "data:image/png;base64,aW1n"}},
+			{Audio: &llm.AudioContent{Transcript: "assistant audio"}},
+		},
+	})
+
+	msgs, err := openAIRealtimeChatContextCreateMessages(chatCtx)
+	if err != nil {
+		t.Fatalf("openAIRealtimeChatContextCreateMessages error = %v, want nil", err)
+	}
+	if len(msgs) != 2 {
+		t.Fatalf("messages len = %d, want system and assistant messages", len(msgs))
+	}
+
+	systemItem := msgs[0]["item"].(map[string]any)
+	systemContent := systemItem["content"].([]map[string]any)
+	if len(systemContent) != 1 || systemContent[0]["type"] != "input_text" || systemContent[0]["text"] != "system text" {
+		t.Fatalf("system content = %#v, want only text content", systemContent)
+	}
+
+	assistantItem := msgs[1]["item"].(map[string]any)
+	assistantContent := assistantItem["content"].([]map[string]any)
+	if len(assistantContent) != 1 || assistantContent[0]["type"] != "output_text" || assistantContent[0]["text"] != "assistant text" {
+		t.Fatalf("assistant content = %#v, want only text content", assistantContent)
+	}
+}
+
 func TestRealtimeChatContextUpdateMessagesDeleteRemovedAndRecreateChangedItems(t *testing.T) {
 	oldCtx := llm.NewChatContext()
 	oldCtx.AddMessage(llm.ChatMessageArgs{ID: "keep", Role: llm.ChatRoleUser, Text: "keep"})

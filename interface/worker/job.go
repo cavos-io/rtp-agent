@@ -12,6 +12,7 @@ import (
 	"sync"
 
 	"github.com/cavos-io/rtp-agent/core/agent"
+	"github.com/cavos-io/rtp-agent/core/inference"
 	workeripc "github.com/cavos-io/rtp-agent/interface/worker/ipc"
 	"github.com/cavos-io/rtp-agent/library/logger"
 	"github.com/cavos-io/rtp-agent/library/utils"
@@ -23,6 +24,25 @@ import (
 )
 
 var currentJobContexts sync.Map
+
+func init() {
+	inference.SetContextHeadersProvider(currentInferenceContextHeaders)
+}
+
+func currentInferenceContextHeaders() map[string]string {
+	ctx, ok := GetJobContext()
+	if !ok || ctx == nil || ctx.Job == nil {
+		return nil
+	}
+	headers := map[string]string{}
+	if jobID := ctx.Job.GetId(); jobID != "" {
+		headers[inference.HeaderJobID] = jobID
+	}
+	if room := ctx.Job.GetRoom(); room != nil && room.GetSid() != "" {
+		headers[inference.HeaderRoomID] = room.GetSid()
+	}
+	return headers
+}
 
 type jobContextStack struct {
 	mu    sync.Mutex

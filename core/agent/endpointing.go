@@ -198,7 +198,7 @@ func (e *DynamicEndpointing) OnEndOfSpeech(endedAt float64, shouldIgnore bool) {
 		}
 	} else if turnPause := e.BetweenTurnDelay(); turnPause > 0 {
 		e.turnPause.Apply(1.0, turnPause)
-	} else if utterancePause := e.BetweenUtteranceDelay(); utterancePause > 0 {
+	} else if utterancePause := e.BetweenUtteranceDelay(); utterancePause > 0 && e.agentSpeechEndedAt == nil && e.agentSpeechStartedAt == nil {
 		e.utterancePause.Apply(1.0, utterancePause)
 	}
 	e.utteranceEndedAt = &endedAt

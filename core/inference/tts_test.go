@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	coretts "github.com/cavos-io/rtp-agent/core/tts"
 	"github.com/cavos-io/rtp-agent/library/tokenize"
 	"github.com/go-jose/go-jose/v3/jwt"
 )
@@ -50,6 +51,29 @@ func TestNewTTSFallsBackToLiveKitCredentials(t *testing.T) {
 	}
 	if provider.apiSecret != "base-secret" {
 		t.Fatalf("apiSecret = %q, want base-secret", provider.apiSecret)
+	}
+}
+
+func TestInferenceTTSReportsReferenceModelProviderMetadata(t *testing.T) {
+	provider := NewTTS("cartesia/sonic-3:voice-id", "key", "secret")
+
+	if got := coretts.Model(provider); got != "cartesia/sonic-3" {
+		t.Fatalf("Model = %q, want parsed reference model", got)
+	}
+	if got := coretts.Provider(provider); got != "livekit" {
+		t.Fatalf("Provider = %q, want livekit", got)
+	}
+}
+
+func TestInferenceTTSDefaultCapabilitiesMatchReferenceAlignment(t *testing.T) {
+	provider := NewTTS("cartesia/sonic-3", "key", "secret")
+
+	capabilities := provider.Capabilities()
+	if !capabilities.Streaming {
+		t.Fatal("Streaming = false, want true")
+	}
+	if capabilities.AlignedTranscript {
+		t.Fatal("AlignedTranscript = true, want false without timestamp options")
 	}
 }
 
@@ -105,6 +129,60 @@ func TestTTSPrewarmReusesConnectionForNextStream(t *testing.T) {
 	}
 }
 
+func TestTTSWebsocketSendsReferenceInferenceHeaders(t *testing.T) {
+	var captured http.Header
+	provider := NewTTS("cartesia/sonic-3", "key", "secret")
+	provider.baseURL = "wss://inference.test/v1"
+	provider.dialWebsocket = func(ctx context.Context, endpoint string, header http.Header) (inferenceTTSConn, error) {
+		captured = header.Clone()
+		return &recordingTTSConn{}, nil
+	}
+
+	stream, err := provider.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	defer stream.Close()
+
+	if !strings.HasPrefix(captured.Get("User-Agent"), "LiveKit Agents/") {
+		t.Fatalf("User-Agent = %q, want LiveKit Agents version prefix", captured.Get("User-Agent"))
+	}
+	if !strings.Contains(captured.Get("User-Agent"), " (go ") {
+		t.Fatalf("User-Agent = %q, want Go runtime marker", captured.Get("User-Agent"))
+	}
+}
+
+func TestTTSWebsocketSendsReferenceContextHeaders(t *testing.T) {
+	restore := SetContextHeadersProvider(func() map[string]string {
+		return map[string]string{
+			HeaderRoomID: "RM_tts",
+			HeaderJobID:  "job_tts",
+		}
+	})
+	defer restore()
+
+	var captured http.Header
+	provider := NewTTS("cartesia/sonic-3", "key", "secret")
+	provider.baseURL = "wss://inference.test/v1"
+	provider.dialWebsocket = func(ctx context.Context, endpoint string, header http.Header) (inferenceTTSConn, error) {
+		captured = header.Clone()
+		return &recordingTTSConn{}, nil
+	}
+
+	stream, err := provider.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	defer stream.Close()
+
+	if got := captured.Get(HeaderRoomID); got != "RM_tts" {
+		t.Fatalf("%s = %q, want RM_tts", HeaderRoomID, got)
+	}
+	if got := captured.Get(HeaderJobID); got != "job_tts" {
+		t.Fatalf("%s = %q, want job_tts", HeaderJobID, got)
+	}
+}
+
 type recordingTTSConn struct {
 	closed      atomic.Bool
 	onWriteJSON func(map[string]any)
@@ -136,6 +214,16 @@ func TestTTSConnectionPoolRefreshesSessionAgeOnGet(t *testing.T) {
 	markRefreshedOnGet := pool.FieldByName("opts").FieldByName("MarkRefreshedOnGet").Bool()
 	if !markRefreshedOnGet {
 		t.Fatal("connection pool MarkRefreshedOnGet = false, want true")
+	}
+}
+
+func TestTTSConnectionPoolUsesReferenceMaxSessionDuration(t *testing.T) {
+	provider := NewTTS("cartesia/sonic-3", "key", "secret")
+
+	pool := reflect.ValueOf(provider.connectionPool()).Elem()
+	got := time.Duration(pool.FieldByName("opts").FieldByName("MaxSessionDuration").Int())
+	if got != 5*time.Minute {
+		t.Fatalf("MaxSessionDuration = %v, want 5m reference duration", got)
 	}
 }
 

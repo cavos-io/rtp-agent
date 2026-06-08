@@ -18,27 +18,42 @@ import (
 )
 
 type STT struct {
-	model     string
-	apiKey    string
-	apiSecret string
-	baseURL   string
+	model         string
+	language      string
+	apiKey        string
+	apiSecret     string
+	baseURL       string
+	dialWebsocket inferenceSTTDialer
 }
+
+type inferenceSTTDialer func(ctx context.Context, endpoint string, header http.Header) (inferenceWebsocketConn, error)
 
 func NewSTT(model string, apiKey, apiSecret string) *STT {
 	if model == "" {
 		model = "deepgram/nova-3"
 	}
+	model, language := sttModelAndLanguage(model, "")
 	apiKey, apiSecret = resolveInferenceCredentials(apiKey, apiSecret)
 	return &STT{
-		model:     model,
-		apiKey:    apiKey,
-		apiSecret: apiSecret,
-		baseURL:   defaultInferenceWebsocketURL(),
+		model:         model,
+		language:      language,
+		apiKey:        apiKey,
+		apiSecret:     apiSecret,
+		baseURL:       defaultInferenceWebsocketURL(),
+		dialWebsocket: defaultInferenceSTTDialer,
 	}
 }
 
 func (s *STT) Label() string {
 	return "livekit.STT"
+}
+
+func (s *STT) Model() string {
+	return s.model
+}
+
+func (s *STT) Provider() string {
+	return "livekit"
 }
 
 func (s *STT) Capabilities() stt.STTCapabilities {
@@ -52,13 +67,16 @@ func (s *STT) Capabilities() stt.STTCapabilities {
 }
 
 func (s *STT) Recognize(ctx context.Context, frames []*model.AudioFrame, language string) (*stt.SpeechEvent, error) {
-	return nil, fmt.Errorf("offline recognize is unsupported natively by LiveKit Inference STT, use stream instead")
+	return nil, fmt.Errorf("LiveKit Inference STT does not support batch recognition, use stream() instead")
 }
 
 func (s *STT) Stream(ctx context.Context, language string) (stt.RecognizeStream, error) {
 	token, err := CreateAccessToken(s.apiKey, s.apiSecret, InferenceAccessTokenTTL)
 	if err != nil {
 		return nil, err
+	}
+	if language == "" {
+		language = s.language
 	}
 
 	modelName, createParams := sttSessionCreateParams(s.model, language)
@@ -72,10 +90,10 @@ func (s *STT) Stream(ctx context.Context, language string) (stt.RecognizeStream,
 	q.Set("model", modelName)
 	wsURL.RawQuery = q.Encode()
 
-	header := http.Header{}
+	header := InferenceHeaders()
 	header.Add("Authorization", "Bearer "+token)
 
-	conn, _, err := websocket.DefaultDialer.Dial(wsURL.String(), header)
+	conn, err := s.dialWebsocket(ctx, wsURL.String(), header)
 	if err != nil {
 		return nil, fmt.Errorf("failed to connect to LiveKit Inference STT: %w", err)
 	}
@@ -100,14 +118,16 @@ func (s *STT) Stream(ctx context.Context, language string) (stt.RecognizeStream,
 	return stream, nil
 }
 
-func sttSessionCreateParams(model string, language string) (string, map[string]interface{}) {
-	modelName := model
-	if idx := strings.LastIndex(model, ":"); idx != -1 {
-		if language == "" {
-			language = model[idx+1:]
-		}
-		modelName = model[:idx]
+func defaultInferenceSTTDialer(ctx context.Context, endpoint string, header http.Header) (inferenceWebsocketConn, error) {
+	conn, _, err := websocket.DefaultDialer.DialContext(ctx, endpoint, header)
+	if err != nil {
+		return nil, err
 	}
+	return conn, nil
+}
+
+func sttSessionCreateParams(model string, language string) (string, map[string]interface{}) {
+	modelName, language := sttModelAndLanguage(model, language)
 	settings := map[string]interface{}{
 		"sample_rate": "16000",
 		"encoding":    "pcm_s16le",
@@ -125,6 +145,17 @@ func sttSessionCreateParams(model string, language string) (string, map[string]i
 		createParams["model"] = modelName
 	}
 	return modelName, createParams
+}
+
+func sttModelAndLanguage(model string, language string) (string, string) {
+	modelName := model
+	if idx := strings.LastIndex(model, ":"); idx != -1 {
+		if language == "" {
+			language = model[idx+1:]
+		}
+		modelName = model[:idx]
+	}
+	return modelName, language
 }
 
 type inferenceSTTStream struct {

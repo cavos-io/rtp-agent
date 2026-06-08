@@ -210,12 +210,15 @@ type AgentSession struct {
 	userdataSet    bool
 	jobContext     any
 	jobContextSet  bool
-	mcpServers     []llm.MCPServer
-	recordedEvents []Event
-	eventListeners map[string][]agentEventListener
-	nextListenerID uint64
-	ivrActivity    *IVRActivity
-	videoSampler   *VoiceActivityVideoSampler
+	// UserTranscriptFilter, when non-nil, is applied before user transcript
+	// events are recorded or broadcast to RoomIO subscribers.
+	UserTranscriptFilter func(string) string
+	mcpServers           []llm.MCPServer
+	recordedEvents       []Event
+	eventListeners       map[string][]agentEventListener
+	nextListenerID       uint64
+	ivrActivity          *IVRActivity
+	videoSampler         *VoiceActivityVideoSampler
 
 	// Event channels
 	AgentStateChangedCh  chan AgentStateChangedEvent
@@ -434,6 +437,9 @@ func (s *AgentSession) RecordedEvents() []Event {
 func (s *AgentSession) On(eventType string, callback func(Event)) func() {
 	if s == nil || eventType == "" || callback == nil {
 		return func() {}
+	}
+	if eventType == "metrics_collected" {
+		logger.Logger.Warnw("metrics_collected is deprecated. Use session_usage_updated for usage tracking and ChatMessage.metrics for per-turn latency.", nil)
 	}
 	s.mu.Lock()
 	if s.eventListeners == nil {
@@ -666,7 +672,7 @@ func NewAgentSession(agent AgentInterface, room *lksdk.Room, opts AgentSessionOp
 		TTS:                 baseAgent.TTS,
 		Options:             opts,
 		ChatCtx:             llm.NewChatContext(),
-		Tools:               make([]llm.Tool, 0),
+		Tools:               copySessionTools(baseAgent.Tools),
 		MetricsCollector:    telemetry.NewUsageCollector(),
 		ModelUsageCollector: telemetry.NewModelUsageCollector(),
 		userState:           UserStateListening,
@@ -840,16 +846,19 @@ func (s *AgentSession) UserInputTranscribedEvents() <-chan UserInputTranscribedE
 }
 
 func (s *AgentSession) EmitUserInputTranscribed(ev UserInputTranscribedEvent) {
+	if s.UserTranscriptFilter != nil {
+		ev.Transcript = s.UserTranscriptFilter(ev.Transcript)
+	}
 	if ev.CreatedAt.IsZero() {
 		ev.CreatedAt = time.Now()
 	}
-	s.recordEvent(&ev)
 	s.mu.Lock()
 	userState := s.userState
 	s.mu.Unlock()
 	if ev.IsFinal && userState == UserStateAway {
 		s.UpdateUserState(UserStateListening)
 	}
+	s.recordEvent(&ev)
 	for _, ch := range s.userInputTranscribedSubscribers() {
 		select {
 		case ch <- ev:
@@ -2136,6 +2145,7 @@ func (s *AgentSession) UpdateAgent(agent AgentInterface) {
 	oldActivity := s.activity
 	started := s.started
 	s.Agent = agent
+	s.Tools = copySessionTools(baseAgent.Tools)
 	s.updateAgentComponentsLocked(baseAgent)
 	assistant := s.Assistant
 	sessionVAD := s.VAD
@@ -2197,6 +2207,13 @@ func (s *AgentSession) UpdateAgent(agent AgentInterface) {
 	}
 	s.EmitConversationItemAdded(handoff)
 	newActivity.Start()
+}
+
+func copySessionTools(tools []llm.Tool) []llm.Tool {
+	if len(tools) == 0 {
+		return []llm.Tool{}
+	}
+	return append([]llm.Tool(nil), tools...)
 }
 
 func (s *AgentSession) updateAgentComponentsLocked(agent *Agent) {
