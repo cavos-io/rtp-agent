@@ -1044,6 +1044,17 @@ func TestNewAgentSessionPreservesExplicitFalseTurnOptions(t *testing.T) {
 	}
 }
 
+func TestNewAgentSessionPreservesExplicitZeroFalseInterruptionTimeout(t *testing.T) {
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{
+		FalseInterruptionTimeout:    0,
+		FalseInterruptionTimeoutSet: true,
+	})
+
+	if session.Options.FalseInterruptionTimeout != 0 {
+		t.Fatalf("FalseInterruptionTimeout = %v, want explicit zero preserved", session.Options.FalseInterruptionTimeout)
+	}
+}
+
 func TestNewAgentSessionPreservesExplicitZeroSessionCloseTranscriptTimeout(t *testing.T) {
 	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{
 		SessionCloseTranscriptTimeout:    0,

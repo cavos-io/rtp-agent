@@ -50,6 +50,7 @@ type AgentSessionOptions struct {
 	UserAwayTimeoutSet               bool
 	DisableUserAwayTimeout           bool
 	FalseInterruptionTimeout         float64
+	FalseInterruptionTimeoutSet      bool
 	ResumeFalseInterruption          bool
 	ResumeFalseInterruptionSet       bool
 	MinConsecutiveSpeechDelay        float64
@@ -705,7 +706,7 @@ func withAgentSessionOptionDefaults(opts AgentSessionOptions) AgentSessionOption
 	if !opts.DisableUserAwayTimeout && !opts.UserAwayTimeoutSet && opts.UserAwayTimeout == 0 {
 		opts.UserAwayTimeout = 15.0
 	}
-	if opts.FalseInterruptionTimeout == 0 {
+	if !opts.FalseInterruptionTimeoutSet && opts.FalseInterruptionTimeout == 0 {
 		opts.FalseInterruptionTimeout = 2.0
 	}
 	if !opts.ResumeFalseInterruptionSet {
