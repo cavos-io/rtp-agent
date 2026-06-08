@@ -47,6 +47,7 @@ type AgentSessionOptions struct {
 	Endpointing                      Endpointing
 	MaxToolSteps                     int
 	UserAwayTimeout                  float64
+	UserAwayTimeoutSet               bool
 	DisableUserAwayTimeout           bool
 	FalseInterruptionTimeout         float64
 	ResumeFalseInterruption          bool
@@ -701,7 +702,7 @@ func withAgentSessionOptionDefaults(opts AgentSessionOptions) AgentSessionOption
 	if opts.MaxToolSteps == 0 {
 		opts.MaxToolSteps = 3
 	}
-	if !opts.DisableUserAwayTimeout && opts.UserAwayTimeout == 0 {
+	if !opts.DisableUserAwayTimeout && !opts.UserAwayTimeoutSet && opts.UserAwayTimeout == 0 {
 		opts.UserAwayTimeout = 15.0
 	}
 	if opts.FalseInterruptionTimeout == 0 {
@@ -1826,7 +1827,7 @@ func (s *AgentSession) updateUserAwayTimer() {
 		s.userAwayTimer = nil
 	}
 	shouldStart := !s.Options.DisableUserAwayTimeout &&
-		s.Options.UserAwayTimeout > 0 &&
+		s.Options.UserAwayTimeout >= 0 &&
 		s.agentState == AgentStateListening &&
 		s.userState == UserStateListening
 	timeout := s.Options.UserAwayTimeout

@@ -3649,6 +3649,28 @@ func TestAgentSessionMarksUserAwayAfterIdleTimeout(t *testing.T) {
 	}
 }
 
+func TestAgentSessionExplicitZeroUserAwayTimeoutMarksAwayImmediately(t *testing.T) {
+	agent := NewAgent("test")
+	session := NewAgentSession(agent, nil, AgentSessionOptions{
+		UserAwayTimeout:    0,
+		UserAwayTimeoutSet: true,
+	})
+
+	session.UpdateAgentState(AgentStateListening)
+
+	select {
+	case ev := <-session.UserStateChangedCh:
+		if ev.OldState != UserStateListening || ev.NewState != UserStateAway {
+			t.Fatalf("event states = %q -> %q, want listening -> away", ev.OldState, ev.NewState)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("UserStateChangedCh did not receive immediate away event")
+	}
+	if got := session.UserState(); got != UserStateAway {
+		t.Fatalf("UserState() = %q, want away", got)
+	}
+}
+
 func TestAgentSessionCancelsUserAwayTimerWhenUserSpeaks(t *testing.T) {
 	agent := NewAgent("test")
 	session := NewAgentSession(agent, nil, AgentSessionOptions{UserAwayTimeout: 0.02})
