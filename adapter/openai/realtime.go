@@ -41,6 +41,7 @@ type openAIRealtimeWebsocketDialer func(string, http.Header) (*websocket.Conn, *
 type openAIRealtimeModelOptions struct {
 	sessionOptions llm.RealtimeSessionOptions
 	modalities     []string
+	baseURL        string
 }
 
 type OpenAIRealtimeOption func(*openAIRealtimeModelOptions)
@@ -113,6 +114,12 @@ func WithOpenAIRealtimeMaxResponseOutputTokens(tokens any) OpenAIRealtimeOption 
 	}
 }
 
+func WithOpenAIRealtimeBaseURL(baseURL string) OpenAIRealtimeOption {
+	return func(options *openAIRealtimeModelOptions) {
+		options.baseURL = baseURL
+	}
+}
+
 func NewRealtimeModel(apiKey, model string, opts ...OpenAIRealtimeOption) *RealtimeModel {
 	if model == "" {
 		model = "gpt-realtime"
@@ -127,6 +134,9 @@ func NewRealtimeModel(apiKey, model string, opts ...OpenAIRealtimeOption) *Realt
 	options := openAIRealtimeModelOptions{}
 	for _, opt := range opts {
 		opt(&options)
+	}
+	if options.baseURL != "" {
+		baseURL = options.baseURL
 	}
 	return &RealtimeModel{
 		apiKey:        apiKey,
