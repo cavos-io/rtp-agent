@@ -560,7 +560,7 @@ func openAIRealtimeUpdateOptionsMessageWithEventID(options llm.RealtimeSessionOp
 	if options.TurnDetection != nil {
 		input["turn_detection"] = options.TurnDetection
 	}
-	if options.InputAudioTranscription != nil {
+	if options.InputAudioTranscriptionSet || options.InputAudioTranscription != nil {
 		input["transcription"] = options.InputAudioTranscription
 	}
 	if options.InputAudioNoiseReduction != nil {

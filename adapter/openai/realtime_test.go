@@ -665,6 +665,26 @@ func TestRealtimeUpdateOptionsMessageMapsInputAudioTranscription(t *testing.T) {
 	}
 }
 
+func TestRealtimeUpdateOptionsMessageClearsInputAudioTranscription(t *testing.T) {
+	msg := openAIRealtimeUpdateOptionsMessage(llm.RealtimeSessionOptions{
+		InputAudioTranscriptionSet: true,
+	})
+
+	if msg["type"] != "session.update" {
+		t.Fatalf("message type = %#v, want session.update", msg["type"])
+	}
+	session := msg["session"].(map[string]any)
+	audio := session["audio"].(map[string]any)
+	input := audio["input"].(map[string]any)
+	value, ok := input["transcription"]
+	if !ok {
+		t.Fatalf("transcription missing from input config: %#v", input)
+	}
+	if value != nil {
+		t.Fatalf("transcription = %#v, want nil reset", value)
+	}
+}
+
 func TestRealtimeUpdateOptionsMessageMapsInputAudioNoiseReduction(t *testing.T) {
 	msg := openAIRealtimeUpdateOptionsMessage(llm.RealtimeSessionOptions{
 		InputAudioNoiseReduction: map[string]any{"type": "near_field"},
