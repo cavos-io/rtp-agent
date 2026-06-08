@@ -240,6 +240,81 @@ func TestRoomIOClearBufferFinishesPlaybackAsInterrupted(t *testing.T) {
 	}
 }
 
+func TestRoomIOOffPlaybackStartedRemovesMatchingHandler(t *testing.T) {
+	rio := &RoomIO{audioTrack: newRoomIOTestAudioTrack(t)}
+	removed := make(chan PlaybackStartedEvent, 1)
+	kept := make(chan PlaybackStartedEvent, 1)
+	callback := func(ev PlaybackStartedEvent) {
+		removed <- ev
+	}
+	rio.OnPlaybackStarted(callback)
+	rio.OnPlaybackStarted(func(ev PlaybackStartedEvent) {
+		kept <- ev
+	})
+	rio.OffPlaybackStarted(callback)
+
+	if err := rio.PublishAudio(&model.AudioFrame{
+		Data:              make([]byte, 960*2),
+		SampleRate:        48000,
+		NumChannels:       1,
+		SamplesPerChannel: 960,
+	}); err != nil {
+		t.Fatalf("PublishAudio error = %v", err)
+	}
+
+	select {
+	case ev := <-removed:
+		t.Fatalf("removed playback_started handler received event: %#v", ev)
+	default:
+	}
+	select {
+	case ev := <-kept:
+		if ev.CreatedAt.IsZero() {
+			t.Fatal("kept playback_started CreatedAt is zero")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("remaining playback_started handler did not receive event")
+	}
+}
+
+func TestRoomIOOffPlaybackFinishedRemovesMatchingHandler(t *testing.T) {
+	rio := &RoomIO{audioTrack: newRoomIOTestAudioTrack(t)}
+	removed := make(chan PlaybackFinishedEvent, 1)
+	kept := make(chan PlaybackFinishedEvent, 1)
+	callback := func(ev PlaybackFinishedEvent) {
+		removed <- ev
+	}
+	rio.OnPlaybackFinished(callback)
+	rio.OnPlaybackFinished(func(ev PlaybackFinishedEvent) {
+		kept <- ev
+	})
+	rio.OffPlaybackFinished(callback)
+
+	if err := rio.PublishAudio(&model.AudioFrame{
+		Data:              make([]byte, 960*2),
+		SampleRate:        48000,
+		NumChannels:       1,
+		SamplesPerChannel: 960,
+	}); err != nil {
+		t.Fatalf("PublishAudio error = %v", err)
+	}
+	rio.Flush()
+
+	select {
+	case ev := <-removed:
+		t.Fatalf("removed playback_finished handler received event: %#v", ev)
+	default:
+	}
+	select {
+	case ev := <-kept:
+		if ev.Interrupted || ev.PlaybackPosition != 20*time.Millisecond {
+			t.Fatalf("kept playback_finished event = %#v, want non-interrupted 20ms", ev)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("remaining playback_finished handler did not receive event")
+	}
+}
+
 func TestNewRoomIOCreatesMultimodalAssistantWithRealtimeModel(t *testing.T) {
 	session := &agent.AgentSession{
 		ChatCtx:       llm.NewChatContext(),

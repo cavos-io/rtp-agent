@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"reflect"
 	"strconv"
 	"sync"
 	"time"
@@ -1073,6 +1074,22 @@ func (rio *RoomIO) OnPlaybackStarted(callback func(PlaybackStartedEvent)) {
 	rio.mu.Unlock()
 }
 
+func (rio *RoomIO) OffPlaybackStarted(callback func(PlaybackStartedEvent)) {
+	if rio == nil || callback == nil {
+		return
+	}
+	callbackPointer := reflect.ValueOf(callback).Pointer()
+	rio.mu.Lock()
+	defer rio.mu.Unlock()
+	for i, handler := range rio.playbackStartedHandlers {
+		if reflect.ValueOf(handler).Pointer() != callbackPointer {
+			continue
+		}
+		rio.playbackStartedHandlers = append(rio.playbackStartedHandlers[:i], rio.playbackStartedHandlers[i+1:]...)
+		return
+	}
+}
+
 func (rio *RoomIO) OnPlaybackFinished(callback func(PlaybackFinishedEvent)) {
 	if rio == nil || callback == nil {
 		return
@@ -1080,6 +1097,22 @@ func (rio *RoomIO) OnPlaybackFinished(callback func(PlaybackFinishedEvent)) {
 	rio.mu.Lock()
 	rio.playbackFinishedHandlers = append(rio.playbackFinishedHandlers, callback)
 	rio.mu.Unlock()
+}
+
+func (rio *RoomIO) OffPlaybackFinished(callback func(PlaybackFinishedEvent)) {
+	if rio == nil || callback == nil {
+		return
+	}
+	callbackPointer := reflect.ValueOf(callback).Pointer()
+	rio.mu.Lock()
+	defer rio.mu.Unlock()
+	for i, handler := range rio.playbackFinishedHandlers {
+		if reflect.ValueOf(handler).Pointer() != callbackPointer {
+			continue
+		}
+		rio.playbackFinishedHandlers = append(rio.playbackFinishedHandlers[:i], rio.playbackFinishedHandlers[i+1:]...)
+		return
+	}
 }
 
 func (rio *RoomIO) WaitForPlayout(ctx context.Context) (PlaybackFinishedEvent, error) {
