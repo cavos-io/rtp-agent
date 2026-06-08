@@ -101,6 +101,15 @@ func WithOpenAILLMMetadata(metadata map[string]string) OpenAILLMOption {
 	}
 }
 
+func WithOpenAILLMVerbosity(verbosity string) OpenAILLMOption {
+	return func(l *OpenAILLM) {
+		if l.extraParams == nil {
+			l.extraParams = map[string]any{}
+		}
+		l.extraParams["verbosity"] = verbosity
+	}
+}
+
 func WithOpenAILLMParallelToolCalls(parallelToolCalls bool) OpenAILLMOption {
 	return func(l *OpenAILLM) {
 		l.parallelToolCalls = parallelToolCalls

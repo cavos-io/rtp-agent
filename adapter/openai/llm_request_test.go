@@ -322,6 +322,26 @@ func TestOpenAIChatAppliesProviderMetadata(t *testing.T) {
 	}
 }
 
+func TestOpenAIChatAppliesProviderVerbosity(t *testing.T) {
+	capture := &captureDeadlineHTTPClient{
+		statusCode:   http.StatusBadRequest,
+		responseBody: `{"error":{"message":"bad request","type":"invalid_request_error","code":"bad_request"}}`,
+	}
+	model := NewOpenAILLMWithBaseURLAndHTTPClient(
+		"test-key",
+		"gpt-5",
+		"https://openai.test/v1",
+		capture,
+		WithOpenAILLMVerbosity("low"),
+	)
+
+	_, _ = model.Chat(context.Background(), llm.NewChatContext(), llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 0}))
+
+	if !strings.Contains(capture.requestBody, `"verbosity":"low"`) {
+		t.Fatalf("request body = %s, want provider verbosity", capture.requestBody)
+	}
+}
+
 func TestOpenAIChatAppliesConnectOptionsTimeoutToRequestContext(t *testing.T) {
 	sentinelErr := errors.New("stop after context capture")
 	capture := &captureDeadlineHTTPClient{err: sentinelErr}
