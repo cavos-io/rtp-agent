@@ -34,6 +34,30 @@ missing-runner	cross-runtime	refs/agents/livekit-agents/livekit/agents/utils/mis
 TSV
 
 bash -n "$ROOT/scripts/parity-validate.sh"
+bash -n "$ROOT/scripts/repo-temp-env.sh"
+
+TEMP_ENV_REPO="$WORKDIR/temp-env-repo"
+mkdir -p "$TEMP_ENV_REPO" "$WORKDIR/shared-tmp"
+ln -s "$WORKDIR/shared-tmp" "$TEMP_ENV_REPO/.tmp"
+(
+  unset GOCACHE TMPDIR
+  REPO_ROOT="$TEMP_ENV_REPO"
+  source "$ROOT/scripts/repo-temp-env.sh"
+  [[ ! -L "$TEMP_ENV_REPO/.tmp" ]]
+  [[ -d "$TEMP_ENV_REPO/.tmp/gocache" ]]
+  [[ -d "$TEMP_ENV_REPO/.tmp/gotmp" ]]
+  [[ "$GOCACHE" == "$TEMP_ENV_REPO/.tmp" ]]
+  [[ "$TMPDIR" == "$TEMP_ENV_REPO/.tmp/gotmp" ]]
+)
+(
+  export GOCACHE="$WORKDIR/custom-gocache"
+  export TMPDIR="$WORKDIR/custom-tmpdir"
+  mkdir -p "$GOCACHE" "$TMPDIR"
+  REPO_ROOT="$TEMP_ENV_REPO"
+  source "$ROOT/scripts/repo-temp-env.sh"
+  [[ "$GOCACHE" == "$WORKDIR/custom-gocache" ]]
+  [[ "$TMPDIR" == "$WORKDIR/custom-tmpdir" ]]
+)
 
 PARITY_TEST_CASES_FILE="$VALID_MANIFEST" "$ROOT/scripts/parity-validate.sh" --list \
   | grep -Fxq 'go-dev-mode'

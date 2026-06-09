@@ -34,6 +34,7 @@ EOF
 }
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+source "$REPO_ROOT/scripts/repo-temp-env.sh"
 FIXTURE_ROOT="$REPO_ROOT/scripts/parity-fixtures"
 TEST_CASES_FILE="${PARITY_TEST_CASES_FILE:-$REPO_ROOT/scripts/parity-fixtures/test-cases.tsv}"
 EXPECTED_MANIFEST_HEADER=$'case_name\ttype\tsource_ref\ttarget_ref\tgo_package\tgo_test\tpython_runner\tgo_runner\tinput_json\tcontract\tbehavior\tnotes'
