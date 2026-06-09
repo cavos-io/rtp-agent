@@ -411,6 +411,7 @@ type RunEventCriteria struct {
 	Name      string
 	Arguments map[string]any
 	Output    string
+	OutputSet bool
 	IsError   *bool
 	NewAgent  *Agent
 }
@@ -516,8 +517,9 @@ func (a *RunAssert) ContainsMessageMatching(criteria RunEventCriteria) *RunAsser
 
 func (a *RunAssert) ContainsFunctionCallOutput(output string, isError bool) *RunAssert {
 	return a.ContainsFunctionCallOutputMatching(RunEventCriteria{
-		Output:  output,
-		IsError: &isError,
+		Output:    output,
+		OutputSet: true,
+		IsError:   &isError,
 	})
 }
 
@@ -741,7 +743,7 @@ func eventMatchesCriteria(event RunEvent, criteria RunEventCriteria) bool {
 		}
 		return true
 	case *FunctionCallOutputEvent:
-		if criteria.Output != "" && event.Item.Output != criteria.Output {
+		if (criteria.OutputSet || criteria.Output != "") && event.Item.Output != criteria.Output {
 			return false
 		}
 		if criteria.IsError != nil && event.Item.IsError != *criteria.IsError {

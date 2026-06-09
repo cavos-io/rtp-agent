@@ -670,6 +670,34 @@ func TestRunAssertContainsFunctionCallOutputMatchingOutputOnly(t *testing.T) {
 	}
 }
 
+func TestRunAssertFunctionCallOutputCanMatchEmptyOutput(t *testing.T) {
+	result := NewRunResult(llm.NewChatContext())
+	result.RecordItem(&llm.FunctionCallOutput{
+		ID:        "out_empty",
+		CallID:    "call_empty",
+		Name:      "lookup",
+		Output:    "",
+		CreatedAt: time.Now(),
+	})
+
+	if err := result.Expect.ContainsFunctionCallOutput("", false).HasError(); err != nil {
+		t.Fatalf("ContainsFunctionCallOutput(empty) returned error = %v, want nil", err)
+	}
+
+	resultWithNonEmptyOutput := NewRunResult(llm.NewChatContext())
+	resultWithNonEmptyOutput.RecordItem(&llm.FunctionCallOutput{
+		ID:        "out_done",
+		CallID:    "call_done",
+		Name:      "lookup",
+		Output:    "done",
+		CreatedAt: time.Now(),
+	})
+
+	if err := resultWithNonEmptyOutput.Expect.ContainsFunctionCallOutput("", false).HasError(); err == nil {
+		t.Fatal("ContainsFunctionCallOutput(empty) error = nil, want mismatch for non-empty output")
+	}
+}
+
 func TestRunAssertContainsFunctionCallOutputMatchingErrorOnly(t *testing.T) {
 	result := NewRunResult(llm.NewChatContext())
 	isError := true
