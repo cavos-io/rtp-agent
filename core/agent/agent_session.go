@@ -101,7 +101,19 @@ var (
 	ErrAgentSessionNestedRun        = errors.New("nested runs are not supported")
 	ErrAgentSessionUserdataNotSet   = errors.New("AgentSession userdata is not set")
 	ErrAgentSessionJobContextNotSet = errors.New("agent session job context is not set")
+	errAgentSessionClosingSay       = agentSessionClosingError("AgentSession is closing, cannot use say()")
+	errAgentSessionClosingReply     = agentSessionClosingError("AgentSession is closing, cannot use generate_reply()")
 )
+
+type agentSessionClosingError string
+
+func (e agentSessionClosingError) Error() string {
+	return string(e)
+}
+
+func (agentSessionClosingError) Is(target error) bool {
+	return target == ErrAgentSessionNotRunning
+}
 
 type voiceAgentNotRunningError struct{}
 
@@ -1932,9 +1944,13 @@ func (s *AgentSession) GenerateReplyWithOptions(ctx context.Context, opts Genera
 	s.mu.Lock()
 	activity := s.activity
 	assistant := s.Assistant
+	closing := s.closing
 	s.mu.Unlock()
 
 	if activity == nil {
+		if closing {
+			return nil, errAgentSessionClosingReply
+		}
 		return nil, ErrAgentSessionNotRunning
 	}
 	if len(opts.Tools) > 0 {
@@ -2020,9 +2036,13 @@ func (s *AgentSession) SayWithOptions(ctx context.Context, opts SayOptions) (*Sp
 	s.mu.Lock()
 	activity := s.activity
 	assistant := s.Assistant
+	closing := s.closing
 	s.mu.Unlock()
 
 	if activity == nil {
+		if closing {
+			return nil, errAgentSessionClosingSay
+		}
 		return nil, ErrAgentSessionNotRunning
 	}
 
