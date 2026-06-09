@@ -29,6 +29,17 @@ func (googleRequestTestTool) Execute(context.Context, string) (string, error) {
 	return "", nil
 }
 
+func TestNewGoogleLLMUsesEnvironmentAPIKey(t *testing.T) {
+	t.Setenv("GOOGLE_API_KEY", "env-key")
+
+	if got := resolveGoogleAPIKey(""); got != "env-key" {
+		t.Fatalf("resolved API key = %q, want env key", got)
+	}
+	if got := resolveGoogleAPIKey("explicit-key"); got != "explicit-key" {
+		t.Fatalf("resolved API key = %q, want explicit key", got)
+	}
+}
+
 func TestBuildGoogleContentsGroupsToolCallsWithResponses(t *testing.T) {
 	ctx := llm.NewChatContext()
 	groupID := "assistant-turn"
