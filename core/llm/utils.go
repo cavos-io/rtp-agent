@@ -624,10 +624,10 @@ func functionOutputComplexRepr(value complex128, bitSize int) string {
 	imagPart := imag(value)
 	realText := functionOutputFloatRepr(realPart, bitSize)
 	imagText := functionOutputFloatRepr(imagPart, bitSize)
-	if realPart == 0 {
+	if realPart == 0 && !math.Signbit(realPart) {
 		return imagText + "j"
 	}
-	if imagPart < 0 {
+	if math.Signbit(imagPart) {
 		return "(" + realText + imagText + "j)"
 	}
 	return "(" + realText + "+" + imagText + "j)"

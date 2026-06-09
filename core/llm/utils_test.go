@@ -310,6 +310,8 @@ func TestMakeFunctionCallOutputStringifiesValidOutputs(t *testing.T) {
 		{name: "complex positive infinity", output: complex(math.Inf(1), 2), want: "(inf+2j)"},
 		{name: "complex imaginary infinity", output: complex(1, math.Inf(1)), want: "(1+infj)"},
 		{name: "complex nan", output: complex(math.NaN(), 2), want: "(nan+2j)"},
+		{name: "complex negative zero imaginary", output: complex(1, math.Copysign(0, -1)), want: "(1-0j)"},
+		{name: "complex negative zero real", output: complex(math.Copysign(0, -1), 2), want: "(-0+2j)"},
 		{name: "list", output: []any{1, "x", true}, want: "[1, 'x', True]"},
 		{name: "list string newline", output: []any{"line\nnext"}, want: "['line\\nnext']"},
 		{name: "dict", output: map[string]any{"ok": true}, want: "{'ok': True}"},
