@@ -1069,7 +1069,7 @@ func NewFallbackAdapter(llms []LLM) *FallbackAdapter {
 
 func NewFallbackAdapterWithOptions(llms []LLM, options FallbackAdapterOptions) *FallbackAdapter {
 	if len(llms) == 0 {
-		panic("FallbackAdapter requires at least one LLM")
+		panic("at least one LLM instance must be provided.")
 	}
 	attemptTimeout := options.AttemptTimeout
 	if attemptTimeout <= 0 {
