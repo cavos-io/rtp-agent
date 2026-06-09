@@ -603,6 +603,13 @@ func functionOutputFloatRepr(value float64, bitSize int) string {
 		return "-inf"
 	case math.IsNaN(value):
 		return "nan"
+	case value == 0:
+		if math.Signbit(value) {
+			return "-0.0"
+		}
+		return "0.0"
+	case math.Trunc(value) == value:
+		return strconv.FormatFloat(value, 'f', 1, bitSize)
 	default:
 		return strconv.FormatFloat(value, 'g', -1, bitSize)
 	}
@@ -622,8 +629,8 @@ func functionOutputStringRepr(value string) string {
 func functionOutputComplexRepr(value complex128, bitSize int) string {
 	realPart := real(value)
 	imagPart := imag(value)
-	realText := functionOutputFloatRepr(realPart, bitSize)
-	imagText := functionOutputFloatRepr(imagPart, bitSize)
+	realText := functionOutputComplexFloatRepr(realPart, bitSize)
+	imagText := functionOutputComplexFloatRepr(imagPart, bitSize)
 	if realPart == 0 && !math.Signbit(realPart) {
 		return imagText + "j"
 	}
@@ -631,6 +638,21 @@ func functionOutputComplexRepr(value complex128, bitSize int) string {
 		return "(" + realText + imagText + "j)"
 	}
 	return "(" + realText + "+" + imagText + "j)"
+}
+
+func functionOutputComplexFloatRepr(value float64, bitSize int) string {
+	switch {
+	case math.IsInf(value, 1):
+		return "inf"
+	case math.IsInf(value, -1):
+		return "-inf"
+	case math.IsNaN(value):
+		return "nan"
+	case value == 0 && math.Signbit(value):
+		return "-0"
+	default:
+		return strconv.FormatFloat(value, 'g', -1, bitSize)
+	}
 }
 
 func isFalsyFunctionOutput(value any) bool {

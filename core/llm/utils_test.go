@@ -313,8 +313,10 @@ func TestMakeFunctionCallOutputStringifiesValidOutputs(t *testing.T) {
 		{name: "complex negative zero imaginary", output: complex(1, math.Copysign(0, -1)), want: "(1-0j)"},
 		{name: "complex negative zero real", output: complex(math.Copysign(0, -1), 2), want: "(-0+2j)"},
 		{name: "list", output: []any{1, "x", true}, want: "[1, 'x', True]"},
+		{name: "list floats", output: []any{0.0, math.Copysign(0, -1), 1.0, 1.5}, want: "[0.0, -0.0, 1.0, 1.5]"},
 		{name: "list string newline", output: []any{"line\nnext"}, want: "['line\\nnext']"},
 		{name: "dict", output: map[string]any{"ok": true}, want: "{'ok': True}"},
+		{name: "dict float", output: map[string]any{"score": 1.0}, want: "{'score': 1.0}"},
 	}
 
 	for _, tt := range tests {
