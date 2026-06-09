@@ -802,6 +802,28 @@ func TestApplyWorkerArgsUsesDevDefaultLogLevel(t *testing.T) {
 	}
 }
 
+func TestCLIProtocolLoggerConfigUsesReferenceProductionJSON(t *testing.T) {
+	cfg := cliProtocolLoggerConfig("WARN", false)
+
+	if cfg.Level != "warn" {
+		t.Fatalf("Level = %q, want warn", cfg.Level)
+	}
+	if !cfg.JSON {
+		t.Fatal("JSON = false, want true for production CLI logging")
+	}
+}
+
+func TestCLIProtocolLoggerConfigUsesReferenceDevText(t *testing.T) {
+	cfg := cliProtocolLoggerConfig("DEBUG", true)
+
+	if cfg.Level != "debug" {
+		t.Fatalf("Level = %q, want debug", cfg.Level)
+	}
+	if cfg.JSON {
+		t.Fatal("JSON = true, want false for dev CLI logging")
+	}
+}
+
 func TestStartArgsForDevReloadForwardsReferenceConnectionOptions(t *testing.T) {
 	got := startArgsForDevReload(CliArgs{
 		LogLevel:  "TRACE",

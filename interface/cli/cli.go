@@ -25,6 +25,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/gordonklaus/portaudio"
 	"github.com/livekit/protocol/livekit"
+	protologger "github.com/livekit/protocol/logger"
 	lksdk "github.com/livekit/server-sdk-go/v2"
 )
 
@@ -177,6 +178,7 @@ func RunApp(server *worker.AgentServer, evalRunners ...EvalRunner) {
 			logger.Logger.Errorw("Failed to apply worker options", err)
 			os.Exit(1)
 		}
+		configureCLIProtocolLogger(server.Options.LogLevel, server.Options.DevMode)
 		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 		defer stop()
 		if handled, err := runProcessJobFromEnv(ctx, server, currentEnvMap()); handled {
@@ -198,6 +200,7 @@ func RunApp(server *worker.AgentServer, evalRunners ...EvalRunner) {
 			logger.Logger.Errorw("Failed to apply worker options", err)
 			os.Exit(1)
 		}
+		configureCLIProtocolLogger(server.Options.LogLevel, server.Options.DevMode)
 		applyDevReloadCompatibility(&args)
 		if !args.Reload {
 			runWorker(server, true)
@@ -212,6 +215,7 @@ func RunApp(server *worker.AgentServer, evalRunners ...EvalRunner) {
 	case "console":
 		runConsole(server, os.Args)
 	case "download-files":
+		configureCLIProtocolLogger("DEBUG", true)
 		if err := runDownloadFiles(); err != nil {
 			logger.Logger.Errorw("Download files failed", err)
 			os.Exit(1)
@@ -307,6 +311,26 @@ func applyWorkerArgs(server *worker.AgentServer, args CliArgs, drainTimeout *int
 		opts.DrainTimeoutSecondsSet = true
 	}
 	return server.UpdateOptions(opts)
+}
+
+func cliProtocolLoggerConfig(logLevel string, devMode bool) protologger.Config {
+	if strings.TrimSpace(logLevel) == "" {
+		if devMode {
+			logLevel = "DEBUG"
+		} else {
+			logLevel = "INFO"
+		}
+	}
+	return protologger.Config{
+		Level: strings.ToLower(logLevel),
+		JSON:  !devMode,
+	}
+}
+
+func configureCLIProtocolLogger(logLevel string, devMode bool) {
+	cfg := cliProtocolLoggerConfig(logLevel, devMode)
+	protologger.InitFromConfig(&cfg, "worker")
+	logger.SetLogger(protologger.GetLogger())
 }
 
 func applyDevModeEnv(argv []string) error {
@@ -445,6 +469,7 @@ func runConnect(server *worker.AgentServer) {
 		logger.Logger.Errorw("Failed to apply connect options", err)
 		os.Exit(1)
 	}
+	configureCLIProtocolLogger(server.Options.LogLevel, server.Options.DevMode)
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -751,6 +776,7 @@ func runConsole(server *worker.AgentServer, argv []string) {
 		printConsoleAudioDevices()
 		return
 	}
+	configureCLIProtocolLogger(args.LogLevel, true)
 	localJobOptions := consoleLocalJobOptions(args)
 
 	fmt.Println("Starting console mode 🚀")
