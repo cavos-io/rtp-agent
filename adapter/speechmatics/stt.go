@@ -39,7 +39,10 @@ type SpeechmaticsSTT struct {
 	preferCurrentSpeaker *bool
 }
 
-const speechmaticsAPIKeyEnv = "SPEECHMATICS_API_KEY"
+const (
+	speechmaticsAPIKeyEnv = "SPEECHMATICS_API_KEY"
+	speechmaticsRTURLEnv  = "SPEECHMATICS_RT_URL"
+)
 
 type SpeechmaticsSTTOption func(*SpeechmaticsSTT)
 
@@ -183,9 +186,13 @@ func NewSpeechmaticsSTT(apiKey string, opts ...SpeechmaticsSTTOption) *Speechmat
 	if apiKey == "" {
 		apiKey = os.Getenv(speechmaticsAPIKeyEnv)
 	}
+	baseURL := os.Getenv(speechmaticsRTURLEnv)
+	if baseURL == "" {
+		baseURL = "wss://eu2.rt.speechmatics.com/v2"
+	}
 	provider := &SpeechmaticsSTT{
 		apiKey:        apiKey,
-		baseURL:       "wss://eu2.rt.speechmatics.com/v2",
+		baseURL:       strings.TrimRight(baseURL, "/"),
 		language:      "en",
 		sampleRate:    16000,
 		audioEncoding: "pcm_s16le",

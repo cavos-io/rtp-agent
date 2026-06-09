@@ -129,6 +129,21 @@ func TestSpeechmaticsSTTStreamURLMatchesReference(t *testing.T) {
 	}
 }
 
+func TestSpeechmaticsSTTUsesEnvironmentRealtimeURL(t *testing.T) {
+	t.Setenv("SPEECHMATICS_RT_URL", "wss://speechmatics.env/v2/")
+
+	provider := NewSpeechmaticsSTT("test-key")
+
+	if got, want := buildSpeechmaticsSTTStreamURL(provider), "wss://speechmatics.env/v2"; got != want {
+		t.Fatalf("stream URL = %q, want environment realtime URL %q", got, want)
+	}
+
+	provider = NewSpeechmaticsSTT("test-key", WithSpeechmaticsSTTBaseURL("wss://speechmatics.explicit/v2/"))
+	if got, want := buildSpeechmaticsSTTStreamURL(provider), "wss://speechmatics.explicit/v2"; got != want {
+		t.Fatalf("stream URL = %q, want explicit realtime URL %q", got, want)
+	}
+}
+
 func TestSpeechmaticsSTTRecognizeMatchesReferenceUnsupportedOffline(t *testing.T) {
 	provider := NewSpeechmaticsSTT("test-key")
 
