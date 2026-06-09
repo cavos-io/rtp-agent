@@ -317,7 +317,7 @@ func (g *SampleRateGuard) Check(frame *model.AudioFrame) error {
 		return nil
 	}
 	if g.sampleRate != frame.SampleRate {
-		return fmt.Errorf("stt stream sample rate changed from %d to %d", g.sampleRate, frame.SampleRate)
+		return fmt.Errorf("the sample rate of the input frames must be consistent")
 	}
 	return nil
 }
