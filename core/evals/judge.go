@@ -9,6 +9,10 @@ import (
 	"github.com/cavos-io/rtp-agent/core/llm"
 )
 
+const taskCompletionCriteria = "Evaluate if the agent completed its goal based on its instructions. " +
+	"Task completed, appropriately handed off, or correctly declined = pass. " +
+	"User's need ignored, no resolution, gave up without handoff = fail."
+
 type Judge struct {
 	name         string
 	instructions string
@@ -42,6 +46,12 @@ func (j *Judge) Evaluate(ctx context.Context, chatCtx *llm.ChatContext, referenc
 		if latest := getLatestInstructions(chatCtx); latest != "" {
 			instructions = latest
 		}
+		result, err := evaluateWithLLM(ctx, effectiveLLM, taskCompletionPrompt(chatCtx, reference, instructions))
+		if err != nil {
+			return nil, err
+		}
+		result.Instructions = taskCompletionCriteria
+		return result, nil
 	}
 
 	if j.name == "handoff" {
@@ -67,6 +77,19 @@ func (j *Judge) Evaluate(ctx context.Context, chatCtx *llm.ChatContext, referenc
 	}
 	result.Instructions = instructions
 	return result, nil
+}
+
+func taskCompletionPrompt(chatCtx *llm.ChatContext, reference *llm.ChatContext, instructions string) string {
+	promptParts := []string{taskCompletionCriteria, ""}
+	if instructions != "" {
+		promptParts = append(promptParts, "Agent Instructions:\n"+instructions, "")
+	}
+	promptParts = append(promptParts, "Conversation:\n"+formatChatCtx(chatCtx))
+	if reference != nil {
+		reference = reference.Copy(llm.ChatContextCopyOptions{ExcludeInstructions: true})
+		promptParts = append(promptParts, "", "Reference:\n"+formatChatCtx(reference))
+	}
+	return strings.Join(promptParts, "\n")
 }
 
 func getLatestInstructions(chatCtx *llm.ChatContext) string {
@@ -244,7 +267,7 @@ func ptrToString(p *string) string {
 func TaskCompletionJudge(llmInstance llm.LLM) Evaluator {
 	return NewJudge(
 		"task_completion",
-		"Evaluate if the agent completed its goal based on its instructions. Consider: task completed, appropriately handed off, or correctly declined = pass. User's need ignored, no resolution, gave up without handoff = fail",
+		taskCompletionCriteria,
 		llmInstance,
 	)
 }

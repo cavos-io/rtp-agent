@@ -129,12 +129,15 @@ func TestJudgeHandoffShortCircuitCarriesInstructions(t *testing.T) {
 	}
 }
 
-func TestJudgeEvaluateCarriesResolvedInstructions(t *testing.T) {
+func TestTaskCompletionJudgeEvaluateMatchesReferencePromptShape(t *testing.T) {
 	latestInstructions := "resolve the latest customer request"
 	chatCtx := llm.NewChatContext()
 	chatCtx.Append(&llm.AgentConfigUpdate{Instructions: &latestInstructions})
 	evaluator := &recordingEvalLLM{arguments: `{"verdict":"maybe","reasoning":"needs review"}`}
 	judge := TaskCompletionJudge(nil)
+	taskCompletionCriteria := "Evaluate if the agent completed its goal based on its instructions. " +
+		"Task completed, appropriately handed off, or correctly declined = pass. " +
+		"User's need ignored, no resolution, gave up without handoff = fail."
 
 	result, err := judge.Evaluate(context.Background(), chatCtx, nil, evaluator)
 	if err != nil {
@@ -146,11 +149,21 @@ func TestJudgeEvaluateCarriesResolvedInstructions(t *testing.T) {
 	if result.Reasoning != "needs review" {
 		t.Fatalf("Reasoning = %q, want LLM reasoning", result.Reasoning)
 	}
-	if result.Instructions != latestInstructions {
-		t.Fatalf("Instructions = %q, want latest task instructions", result.Instructions)
+	if result.Instructions != taskCompletionCriteria {
+		t.Fatalf("Instructions = %q, want task completion criteria", result.Instructions)
 	}
-	if evaluator.prompt == "" || !containsAll(evaluator.prompt, []string{"Criteria: " + latestInstructions, "Evaluate if the conversation meets the criteria."}) {
-		t.Fatalf("prompt = %q, want resolved criteria and evaluation request", evaluator.prompt)
+	if !containsAll(evaluator.prompt, []string{
+		taskCompletionCriteria,
+		"Agent Instructions:\n" + latestInstructions,
+		"Conversation:\n[agent config: instructions='resolve the latest customer request']",
+	}) {
+		t.Fatalf("prompt = %q, want reference task completion criteria, agent instructions, and conversation", evaluator.prompt)
+	}
+	if contains(evaluator.prompt, "Criteria: "+latestInstructions) {
+		t.Fatalf("prompt = %q, want latest instructions under Agent Instructions, not generic Criteria", evaluator.prompt)
+	}
+	if contains(evaluator.prompt, "Evaluate if the conversation meets the criteria.") {
+		t.Fatalf("prompt = %q, want task_completion reference prompt without generic evaluation suffix", evaluator.prompt)
 	}
 }
 
