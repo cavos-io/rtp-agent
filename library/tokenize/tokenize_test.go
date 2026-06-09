@@ -87,6 +87,39 @@ func TestSplitSentencesUsesReferenceTitlePrefixes(t *testing.T) {
 	}
 }
 
+func TestSplitSentencesUsesReferenceCompanySuffixes(t *testing.T) {
+	tests := []struct {
+		name string
+		text string
+		want []string
+	}{
+		{
+			name: "llc suffix is not protected",
+			text: "Please contact Foo LLC. Next sentence follows here.",
+			want: []string{"Please contact Foo LLC.", "Next sentence follows here."},
+		},
+		{
+			name: "corp suffix is not protected",
+			text: "Please contact Foo Corp. Next sentence follows here.",
+			want: []string{"Please contact Foo Corp.", "Next sentence follows here."},
+		},
+		{
+			name: "co suffix remains protected",
+			text: "Please contact Foo Co. Next sentence follows here.",
+			want: []string{"Please contact Foo Co. Next sentence follows here."},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := NewBasicSentenceTokenizer().Tokenize(tt.text, "")
+			if !reflect.DeepEqual(got, tt.want) {
+				t.Fatalf("Tokenize() = %#v, want %#v", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestSplitSentencesKeepsClosingQuoteAfterCJKPunctuation(t *testing.T) {
 	tokens := NewBasicSentenceTokenizer().Tokenize("他说：“你好。” 下一句。", "")
 
