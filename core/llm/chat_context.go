@@ -119,7 +119,7 @@ func (c *ChatContext) Readonly() bool {
 
 func (c *ChatContext) ensureMutable() {
 	if c != nil && c.readOnly {
-		panic("trying to modify a read-only chat context, please use Copy() and Agent.UpdateChatContext() to modify the chat context")
+		panic("trying to modify a read-only chat context, please use .copy() and agent.update_chat_ctx() to modify the chat context")
 	}
 }
 

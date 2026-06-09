@@ -25,11 +25,15 @@ func boolPtr(value bool) *bool {
 	return &value
 }
 
-func assertPanics(t *testing.T, name string, fn func()) {
+func assertPanicsWithValue(t *testing.T, name string, want any, fn func()) {
 	t.Helper()
 	defer func() {
-		if recover() == nil {
+		got := recover()
+		if got == nil {
 			t.Fatalf("%s did not panic", name)
+		}
+		if got != want {
+			t.Fatalf("%s panic = %#v, want %#v", name, got, want)
 		}
 	}()
 	fn()
@@ -197,7 +201,8 @@ func TestChatContextReadOnlyViewRejectsMutatingMethods(t *testing.T) {
 		t.Fatalf("read-only items = %q, want %q", got, want)
 	}
 
-	assertPanics(t, "AddMessage on read-only context", func() {
+	const readOnlyError = "trying to modify a read-only chat context, please use .copy() and agent.update_chat_ctx() to modify the chat context"
+	assertPanicsWithValue(t, "AddMessage on read-only context", readOnlyError, func() {
 		readOnly.AddMessage(ChatMessageArgs{Role: ChatRoleUser, Text: "blocked"})
 	})
 
