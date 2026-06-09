@@ -28,6 +28,7 @@ type STT struct {
 	sampleRate     int
 	extraKwargs    map[string]any
 	fallbackModels []FallbackModel
+	connectOptions *APIConnectOptions
 	streams        map[*inferenceSTTStream]struct{}
 	apiKey         string
 	apiSecret      string
@@ -84,6 +85,12 @@ func WithSTTEncoding(encoding string) STTOption {
 func WithSTTSampleRate(sampleRate int) STTOption {
 	return func(s *STT) {
 		s.sampleRate = sampleRate
+	}
+}
+
+func WithSTTConnectOptions(options APIConnectOptions) STTOption {
+	return func(s *STT) {
+		s.connectOptions = &options
 	}
 }
 
@@ -166,7 +173,7 @@ func (s *STT) Stream(ctx context.Context, language string) (stt.RecognizeStream,
 		language = s.language
 	}
 
-	modelName, createParams := sttSessionCreateParams(s.model, language, s.encoding, s.sampleRate, s.extraKwargs, s.fallbackModels)
+	modelName, createParams := sttSessionCreateParams(s.model, language, s.encoding, s.sampleRate, s.extraKwargs, s.fallbackModels, s.connectOptions)
 
 	wsURL, err := url.Parse(s.baseURL + "/stt")
 	if err != nil {
@@ -230,7 +237,7 @@ func defaultInferenceSTTDialer(ctx context.Context, endpoint string, header http
 	return conn, nil
 }
 
-func sttSessionCreateParams(model string, language string, encoding string, sampleRate int, extra map[string]any, fallback []FallbackModel) (string, map[string]interface{}) {
+func sttSessionCreateParams(model string, language string, encoding string, sampleRate int, extra map[string]any, fallback []FallbackModel, connectOptions *APIConnectOptions) (string, map[string]interface{}) {
 	modelName, language := sttModelAndLanguage(model, language)
 	if encoding == "" {
 		encoding = "pcm_s16le"
@@ -257,6 +264,12 @@ func sttSessionCreateParams(model string, language string, encoding string, samp
 	if len(fallback) > 0 {
 		createParams["fallback"] = map[string]interface{}{
 			"models": sttFallbackModelsPayload(fallback),
+		}
+	}
+	if connectOptions != nil {
+		createParams["connection"] = map[string]interface{}{
+			"timeout": connectOptions.Timeout.Seconds(),
+			"retries": connectOptions.MaxRetry,
 		}
 	}
 	return modelName, createParams

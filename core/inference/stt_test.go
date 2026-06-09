@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/cavos-io/rtp-agent/core/audio/model"
 	"github.com/cavos-io/rtp-agent/core/stt"
@@ -113,6 +114,40 @@ func TestInferenceSTTSessionCreateUsesReferenceAudioOptions(t *testing.T) {
 	}
 	if settings["encoding"] != "mulaw" {
 		t.Fatalf("settings.encoding = %#v, want mulaw", settings["encoding"])
+	}
+}
+
+func TestInferenceSTTSessionCreateUsesReferenceConnectOptions(t *testing.T) {
+	conn := &fakeInferenceWebsocketConn{}
+	provider := NewSTT("deepgram/nova-3", "key", "secret",
+		WithSTTConnectOptions(APIConnectOptions{
+			Timeout:  1500 * time.Millisecond,
+			MaxRetry: 2,
+		}),
+	)
+	provider.baseURL = "wss://inference.test/v1"
+	provider.dialWebsocket = func(ctx context.Context, endpoint string, header http.Header) (inferenceWebsocketConn, error) {
+		return conn, nil
+	}
+
+	stream, err := provider.Stream(context.Background(), "en")
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	defer stream.Close()
+
+	if len(conn.writes) != 1 {
+		t.Fatalf("writes = %d, want session.create", len(conn.writes))
+	}
+	connection, ok := conn.writes[0]["connection"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("connection = %#v, want map", conn.writes[0]["connection"])
+	}
+	if connection["timeout"] != 1.5 {
+		t.Fatalf("connection.timeout = %#v, want 1.5", connection["timeout"])
+	}
+	if connection["retries"] != 2 {
+		t.Fatalf("connection.retries = %#v, want 2", connection["retries"])
 	}
 }
 
@@ -328,7 +363,7 @@ func TestSTTWebsocketSendsReferenceContextHeaders(t *testing.T) {
 }
 
 func TestInferenceSTTSessionCreateParamsMatchReferenceShape(t *testing.T) {
-	modelName, params := sttSessionCreateParams("auto:en", "", "", 0, nil, nil)
+	modelName, params := sttSessionCreateParams("auto:en", "", "", 0, nil, nil, nil)
 
 	if modelName != "auto" {
 		t.Fatalf("modelName = %q, want auto", modelName)
