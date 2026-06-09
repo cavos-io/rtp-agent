@@ -34,6 +34,7 @@ type OpenAILLM struct {
 	parallelToolCalls    bool
 	parallelToolCallsSet bool
 	toolChoice           llm.ToolChoice
+	defaultReasoning     bool
 }
 
 type OpenAILLMOption func(*OpenAILLM)
@@ -163,9 +164,10 @@ func newOpenAILLMWithConfigAndModel(config openai.ClientConfig, model string, op
 		model = defaultOpenAILLMModel
 	}
 	provider := &OpenAILLM{
-		client:  openai.NewClientWithConfig(config),
-		model:   model,
-		baseURL: config.BaseURL,
+		client:           openai.NewClientWithConfig(config),
+		model:            model,
+		baseURL:          config.BaseURL,
+		defaultReasoning: true,
 	}
 	for _, opt := range opts {
 		opt(provider)
@@ -199,7 +201,7 @@ func NewAzureOpenAILLM(model, azureEndpoint, azureDeployment, apiVersion, apiKey
 		azureDeployment = model
 	}
 
-	provider := &OpenAILLM{model: model}
+	provider := &OpenAILLM{model: model, defaultReasoning: true}
 	for _, opt := range opts {
 		opt(provider)
 	}
@@ -254,9 +256,10 @@ func NewOpenAILLMWithBaseURLAndHTTPClient(apiKey string, model string, baseURL s
 		config.HTTPClient = httpClient
 	}
 	provider := &OpenAILLM{
-		client:  openai.NewClientWithConfig(config),
-		model:   model,
-		baseURL: config.BaseURL,
+		client:           openai.NewClientWithConfig(config),
+		model:            model,
+		baseURL:          config.BaseURL,
+		defaultReasoning: true,
 	}
 	for _, opt := range opts {
 		opt(provider)
@@ -307,7 +310,7 @@ func (l *OpenAILLM) Chat(ctx context.Context, chatCtx *llm.ChatContext, opts ...
 		effectiveOptions = &copied
 	}
 
-	req := buildOpenAIChatCompletionRequest(l.model, chatCtx, effectiveOptions)
+	req := buildOpenAIChatCompletionRequestWithReasoningDefault(l.model, chatCtx, effectiveOptions, l.defaultReasoning)
 
 	var lastErr error
 	for attempt := 0; attempt <= connectOptions.MaxRetry; attempt++ {
@@ -400,6 +403,10 @@ func mergeOpenAIExtraParams(callParams, providerParams map[string]any) map[strin
 }
 
 func buildOpenAIChatCompletionRequest(model string, chatCtx *llm.ChatContext, options *llm.ChatOptions) openai.ChatCompletionRequest {
+	return buildOpenAIChatCompletionRequestWithReasoningDefault(model, chatCtx, options, true)
+}
+
+func buildOpenAIChatCompletionRequestWithReasoningDefault(model string, chatCtx *llm.ChatContext, options *llm.ChatOptions, defaultReasoning bool) openai.ChatCompletionRequest {
 	messages := buildOpenAIChatMessages(chatCtx)
 
 	tools := make([]openai.Tool, 0, len(options.Tools))
@@ -436,7 +443,7 @@ func buildOpenAIChatCompletionRequest(model string, chatCtx *llm.ChatContext, op
 	}
 
 	applyOpenAIExtraParams(&req, dropUnsupportedOpenAIParams(model, options.ExtraParams, len(options.Tools) > 0))
-	if req.ReasoningEffort == "" {
+	if defaultReasoning && req.ReasoningEffort == "" {
 		req.ReasoningEffort = defaultOpenAIReasoningEffort(model, len(options.Tools) > 0)
 	}
 	return req

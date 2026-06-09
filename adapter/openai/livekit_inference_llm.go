@@ -179,6 +179,7 @@ func (l *LiveKitInferenceLLM) Chat(ctx context.Context, chatCtx *llm.ChatContext
 		inferencePriority: inferencePriority,
 	}, func(inner *OpenAILLM) {
 		inner.extraParams = extraParams
+		inner.defaultReasoning = false
 	})
 	return inner.Chat(ctx, chatCtx, chatOpts...)
 }
