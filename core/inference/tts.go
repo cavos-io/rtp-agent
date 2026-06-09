@@ -207,6 +207,7 @@ func (t *TTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
 		model:       t.model,
 		voice:       t.voice,
 		language:    t.language,
+		sampleRate:  t.sampleRate,
 		extraKwargs: cloneTTSExtra(t.extraKwargs),
 		tokenizer:   tokenizer.Stream("en"),
 		eventCh:     make(chan *tts.SynthesizedAudio, 100),
@@ -396,6 +397,7 @@ type inferenceTTSStream struct {
 	model       string
 	voice       string
 	language    string
+	sampleRate  int
 	extraKwargs map[string]any
 	tokenizer   tokenize.SentenceStream
 	eventCh     chan *tts.SynthesizedAudio
@@ -561,7 +563,7 @@ func (s *inferenceTTSStream) run() {
 						s.eventCh <- &tts.SynthesizedAudio{
 							Frame: &model.AudioFrame{
 								Data:              data,
-								SampleRate:        24000,
+								SampleRate:        uint32(s.sampleRate),
 								NumChannels:       1,
 								SamplesPerChannel: uint32(len(data) / 2),
 							},
