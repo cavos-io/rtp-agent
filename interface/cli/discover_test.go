@@ -31,6 +31,34 @@ func TestGetDefaultPathFindsReferenceStyleEntrypoints(t *testing.T) {
 	}
 }
 
+func TestGetDefaultPathFindsReferenceNestedAppEntrypoints(t *testing.T) {
+	dir := t.TempDir()
+	oldWD, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Getwd() error = %v", err)
+	}
+	if err := os.Chdir(dir); err != nil {
+		t.Fatalf("Chdir(temp) error = %v", err)
+	}
+	defer os.Chdir(oldWD)
+
+	appDir := filepath.Join(dir, "app")
+	if err := os.MkdirAll(appDir, 0o755); err != nil {
+		t.Fatalf("mkdir app: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(appDir, "agent.go"), []byte("package app\n"), 0o644); err != nil {
+		t.Fatalf("write app/agent.go: %v", err)
+	}
+
+	got, err := GetDefaultPath()
+	if err != nil {
+		t.Fatalf("GetDefaultPath() error = %v", err)
+	}
+	if got != filepath.Join("app", "agent.go") {
+		t.Fatalf("GetDefaultPath() = %q, want app/agent.go", got)
+	}
+}
+
 func TestGetDefaultPathPrefersMainBeforeAppAndAgent(t *testing.T) {
 	dir := t.TempDir()
 	oldWD, err := os.Getwd()

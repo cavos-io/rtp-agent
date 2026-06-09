@@ -16,6 +16,9 @@ var defaultEntrypointPaths = []string{
 	"main.go",
 	"app.go",
 	"agent.go",
+	filepath.Join("app", "main.go"),
+	filepath.Join("app", "app.go"),
+	filepath.Join("app", "agent.go"),
 	filepath.Join("cmd", "main.go"),
 	filepath.Join("cmd", "worker", "main.go"),
 }
