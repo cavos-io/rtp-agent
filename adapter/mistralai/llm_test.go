@@ -17,3 +17,14 @@ func TestNewMistralLLMUsesCustomModel(t *testing.T) {
 		t.Fatalf("model = %q, want custom model", provider.Model())
 	}
 }
+
+func TestNewMistralLLMUsesEnvironmentAPIKey(t *testing.T) {
+	t.Setenv("MISTRAL_API_KEY", "env-key")
+
+	if got := resolveMistralLLMAPIKey(""); got != "env-key" {
+		t.Fatalf("resolved API key = %q, want env key", got)
+	}
+	if got := resolveMistralLLMAPIKey("explicit-key"); got != "explicit-key" {
+		t.Fatalf("resolved API key = %q, want explicit key", got)
+	}
+}

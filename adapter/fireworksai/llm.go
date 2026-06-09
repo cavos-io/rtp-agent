@@ -2,10 +2,13 @@ package fireworksai
 
 import (
 	"context"
+	"os"
 
 	"github.com/cavos-io/rtp-agent/adapter/openai"
 	"github.com/cavos-io/rtp-agent/core/llm"
 )
+
+const defaultFireworksLLMModel = "accounts/fireworks/models/llama-v3p3-70b-instruct"
 
 type FireworksLLM struct {
 	inner *openai.OpenAILLM
@@ -13,11 +16,18 @@ type FireworksLLM struct {
 
 func NewFireworksLLM(apiKey string, model string) *FireworksLLM {
 	if model == "" {
-		model = "accounts/fireworks/models/firefunction-v1"
+		model = defaultFireworksLLMModel
 	}
 	return &FireworksLLM{
-		inner: openai.NewOpenAILLMWithBaseURL(apiKey, model, "https://api.fireworks.ai/inference/v1"),
+		inner: openai.NewOpenAILLMWithBaseURL(resolveFireworksLLMAPIKey(apiKey), model, "https://api.fireworks.ai/inference/v1"),
 	}
+}
+
+func resolveFireworksLLMAPIKey(apiKey string) string {
+	if apiKey != "" {
+		return apiKey
+	}
+	return os.Getenv("FIREWORKS_API_KEY")
 }
 
 func (l *FireworksLLM) Model() string { return l.inner.Model() }

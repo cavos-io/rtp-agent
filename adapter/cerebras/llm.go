@@ -2,6 +2,7 @@ package cerebras
 
 import (
 	"context"
+	"os"
 
 	"github.com/cavos-io/rtp-agent/adapter/openai"
 	"github.com/cavos-io/rtp-agent/core/llm"
@@ -22,9 +23,16 @@ func NewCerebrasLLM(apiKey string, model string) *CerebrasLLM {
 		model = defaultCerebrasModel
 	}
 	return &CerebrasLLM{
-		inner:   openai.NewOpenAILLMWithBaseURL(apiKey, model, defaultCerebrasBaseURL),
+		inner:   openai.NewOpenAILLMWithBaseURL(resolveCerebrasAPIKey(apiKey), model, defaultCerebrasBaseURL),
 		baseURL: defaultCerebrasBaseURL,
 	}
+}
+
+func resolveCerebrasAPIKey(apiKey string) string {
+	if apiKey != "" {
+		return apiKey
+	}
+	return os.Getenv("CEREBRAS_API_KEY")
 }
 
 func (l *CerebrasLLM) Model() string {

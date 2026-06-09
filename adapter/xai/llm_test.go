@@ -60,6 +60,17 @@ func TestNewXaiLLMUsesCustomModel(t *testing.T) {
 	}
 }
 
+func TestNewXaiLLMUsesEnvironmentAPIKey(t *testing.T) {
+	t.Setenv("XAI_API_KEY", "env-key")
+
+	if got := resolveXaiLLMAPIKey(""); got != "env-key" {
+		t.Fatalf("resolved API key = %q, want env key", got)
+	}
+	if got := resolveXaiLLMAPIKey("explicit-key"); got != "explicit-key" {
+		t.Fatalf("resolved API key = %q, want explicit key", got)
+	}
+}
+
 func TestBuildXAIMessagesFiltersUnmatchedToolItems(t *testing.T) {
 	ctx := llm.NewChatContext()
 	ctx.Items = []llm.ChatItem{

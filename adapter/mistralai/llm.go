@@ -2,6 +2,7 @@ package mistralai
 
 import (
 	"context"
+	"os"
 
 	"github.com/cavos-io/rtp-agent/adapter/openai"
 	"github.com/cavos-io/rtp-agent/core/llm"
@@ -16,8 +17,15 @@ func NewMistralLLM(apiKey string, model string) *MistralLLM {
 		model = "ministral-8b-latest"
 	}
 	return &MistralLLM{
-		inner: openai.NewOpenAILLMWithBaseURL(apiKey, model, "https://api.mistral.ai/v1"),
+		inner: openai.NewOpenAILLMWithBaseURL(resolveMistralLLMAPIKey(apiKey), model, "https://api.mistral.ai/v1"),
 	}
+}
+
+func resolveMistralLLMAPIKey(apiKey string) string {
+	if apiKey != "" {
+		return apiKey
+	}
+	return os.Getenv("MISTRAL_API_KEY")
 }
 
 func (l *MistralLLM) Model() string {

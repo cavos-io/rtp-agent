@@ -20,3 +20,14 @@ func TestNewCerebrasLLMUsesCustomModel(t *testing.T) {
 		t.Fatalf("model = %q, want custom model", provider.Model())
 	}
 }
+
+func TestNewCerebrasLLMUsesEnvironmentAPIKey(t *testing.T) {
+	t.Setenv("CEREBRAS_API_KEY", "env-key")
+
+	if got := resolveCerebrasAPIKey(""); got != "env-key" {
+		t.Fatalf("resolved API key = %q, want env key", got)
+	}
+	if got := resolveCerebrasAPIKey("explicit-key"); got != "explicit-key" {
+		t.Fatalf("resolved API key = %q, want explicit key", got)
+	}
+}

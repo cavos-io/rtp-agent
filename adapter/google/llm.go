@@ -6,6 +6,7 @@ import (
 	"errors"
 	"io"
 	"iter"
+	"os"
 
 	"github.com/cavos-io/rtp-agent/core/llm"
 	"google.golang.org/genai"
@@ -22,7 +23,7 @@ func NewGoogleLLM(apiKey string, model string) (*GoogleLLM, error) {
 	}
 	ctx := context.Background()
 	client, err := genai.NewClient(ctx, &genai.ClientConfig{
-		APIKey:  apiKey,
+		APIKey:  resolveGoogleAPIKey(apiKey),
 		Backend: genai.BackendGeminiAPI,
 	})
 	if err != nil {
@@ -32,6 +33,13 @@ func NewGoogleLLM(apiKey string, model string) (*GoogleLLM, error) {
 		client: client,
 		model:  model,
 	}, nil
+}
+
+func resolveGoogleAPIKey(apiKey string) string {
+	if apiKey != "" {
+		return apiKey
+	}
+	return os.Getenv("GOOGLE_API_KEY")
 }
 
 func (l *GoogleLLM) Model() string { return l.model }
