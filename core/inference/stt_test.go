@@ -155,7 +155,7 @@ func TestSTTWebsocketSendsReferenceContextHeaders(t *testing.T) {
 }
 
 func TestInferenceSTTSessionCreateParamsMatchReferenceShape(t *testing.T) {
-	modelName, params := sttSessionCreateParams("auto:en", "")
+	modelName, params := sttSessionCreateParams("auto:en", "", nil)
 
 	if modelName != "auto" {
 		t.Fatalf("modelName = %q, want auto", modelName)
@@ -172,6 +172,56 @@ func TestInferenceSTTSessionCreateParamsMatchReferenceShape(t *testing.T) {
 	}
 	if extra, ok := settings["extra"].(map[string]interface{}); !ok || len(extra) != 0 {
 		t.Fatalf("settings.extra = %#v, want empty map", settings["extra"])
+	}
+}
+
+func TestInferenceSTTFallbackModelsMatchReferenceSessionCreate(t *testing.T) {
+	conn := &fakeInferenceWebsocketConn{}
+	provider := NewSTT("deepgram/nova-3", "key", "secret", WithSTTFallbackModels(
+		FallbackModel{
+			Model:       "assemblyai/universal-streaming",
+			ExtraKwargs: map[string]any{"format_turns": true},
+		},
+		FallbackModel{Model: "cartesia/ink-whisper"},
+	))
+	provider.baseURL = "wss://inference.test/v1"
+	provider.dialWebsocket = func(ctx context.Context, endpoint string, header http.Header) (inferenceWebsocketConn, error) {
+		return conn, nil
+	}
+
+	stream, err := provider.Stream(context.Background(), "en")
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	defer stream.Close()
+
+	if len(conn.writes) != 1 {
+		t.Fatalf("writes = %d, want session.create", len(conn.writes))
+	}
+	fallback, ok := conn.writes[0]["fallback"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("fallback = %#v, want map", conn.writes[0]["fallback"])
+	}
+	models, ok := fallback["models"].([]map[string]interface{})
+	if !ok {
+		t.Fatalf("fallback.models = %#v, want model maps", fallback["models"])
+	}
+	if len(models) != 2 {
+		t.Fatalf("fallback models = %#v, want 2 entries", models)
+	}
+	if models[0]["model"] != "assemblyai/universal-streaming" {
+		t.Fatalf("first fallback model = %#v, want assemblyai/universal-streaming", models[0])
+	}
+	extra, ok := models[0]["extra"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("first fallback extra = %#v, want map", models[0]["extra"])
+	}
+	if got := extra["format_turns"]; got != true {
+		t.Fatalf("first fallback extra format_turns = %#v, want true", got)
+	}
+	extra, ok = models[1]["extra"].(map[string]interface{})
+	if !ok || len(extra) != 0 {
+		t.Fatalf("second fallback extra = %#v, want empty map", models[1]["extra"])
 	}
 }
 

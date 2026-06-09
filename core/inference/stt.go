@@ -19,23 +19,32 @@ import (
 )
 
 type STT struct {
-	model         string
-	language      string
-	apiKey        string
-	apiSecret     string
-	baseURL       string
-	dialWebsocket inferenceSTTDialer
+	model          string
+	language       string
+	fallbackModels []FallbackModel
+	apiKey         string
+	apiSecret      string
+	baseURL        string
+	dialWebsocket  inferenceSTTDialer
 }
+
+type STTOption func(*STT)
 
 type inferenceSTTDialer func(ctx context.Context, endpoint string, header http.Header) (inferenceWebsocketConn, error)
 
-func NewSTT(model string, apiKey, apiSecret string) *STT {
+func WithSTTFallbackModels(models ...FallbackModel) STTOption {
+	return func(s *STT) {
+		s.fallbackModels = cloneSTTFallbackModels(models)
+	}
+}
+
+func NewSTT(model string, apiKey, apiSecret string, opts ...STTOption) *STT {
 	if model == "" {
 		model = "deepgram/nova-3"
 	}
 	model, language := sttModelAndLanguage(model, "")
 	apiKey, apiSecret = resolveInferenceCredentials(apiKey, apiSecret)
-	return &STT{
+	s := &STT{
 		model:         model,
 		language:      language,
 		apiKey:        apiKey,
@@ -43,6 +52,10 @@ func NewSTT(model string, apiKey, apiSecret string) *STT {
 		baseURL:       defaultInferenceWebsocketURL(),
 		dialWebsocket: defaultInferenceSTTDialer,
 	}
+	for _, opt := range opts {
+		opt(s)
+	}
+	return s
 }
 
 func (s *STT) Label() string {
@@ -80,7 +93,7 @@ func (s *STT) Stream(ctx context.Context, language string) (stt.RecognizeStream,
 		language = s.language
 	}
 
-	modelName, createParams := sttSessionCreateParams(s.model, language)
+	modelName, createParams := sttSessionCreateParams(s.model, language, s.fallbackModels)
 
 	wsURL, err := url.Parse(s.baseURL + "/stt")
 	if err != nil {
@@ -128,7 +141,7 @@ func defaultInferenceSTTDialer(ctx context.Context, endpoint string, header http
 	return conn, nil
 }
 
-func sttSessionCreateParams(model string, language string) (string, map[string]interface{}) {
+func sttSessionCreateParams(model string, language string, fallback []FallbackModel) (string, map[string]interface{}) {
 	modelName, language := sttModelAndLanguage(model, language)
 	settings := map[string]interface{}{
 		"sample_rate": "16000",
@@ -146,7 +159,57 @@ func sttSessionCreateParams(model string, language string) (string, map[string]i
 	if modelName != "auto" {
 		createParams["model"] = modelName
 	}
+	if len(fallback) > 0 {
+		createParams["fallback"] = map[string]interface{}{
+			"models": sttFallbackModelsPayload(fallback),
+		}
+	}
 	return modelName, createParams
+}
+
+func sttFallbackModelsPayload(models []FallbackModel) []map[string]interface{} {
+	payload := make([]map[string]interface{}, 0, len(models))
+	for _, model := range models {
+		payload = append(payload, map[string]interface{}{
+			"model": model.Model,
+			"extra": sttExtraPayload(model.ExtraKwargs),
+		})
+	}
+	return payload
+}
+
+func sttExtraPayload(extra map[string]any) map[string]interface{} {
+	if len(extra) == 0 {
+		return map[string]interface{}{}
+	}
+	payload := make(map[string]interface{}, len(extra))
+	for key, value := range extra {
+		payload[key] = value
+	}
+	return payload
+}
+
+func cloneSTTFallbackModels(models []FallbackModel) []FallbackModel {
+	if len(models) == 0 {
+		return nil
+	}
+	cloned := make([]FallbackModel, 0, len(models))
+	for _, model := range models {
+		model.ExtraKwargs = cloneSTTExtra(model.ExtraKwargs)
+		cloned = append(cloned, model)
+	}
+	return cloned
+}
+
+func cloneSTTExtra(extra map[string]any) map[string]any {
+	if len(extra) == 0 {
+		return nil
+	}
+	cloned := make(map[string]any, len(extra))
+	for key, value := range extra {
+		cloned[key] = value
+	}
+	return cloned
 }
 
 func sttModelAndLanguage(model string, language string) (string, string) {
