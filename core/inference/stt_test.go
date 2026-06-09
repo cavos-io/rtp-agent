@@ -43,6 +43,47 @@ func TestInferenceSTTCapabilitiesUseReferenceDefaultDiarization(t *testing.T) {
 	}
 }
 
+func TestInferenceSTTExtraKwargsMatchReferenceSessionCreate(t *testing.T) {
+	conn := &fakeInferenceWebsocketConn{}
+	provider := NewSTT("deepgram/nova-3", "key", "secret", WithSTTExtraKwargs(map[string]any{
+		"diarize":  true,
+		"keyterms": []string{"livekit"},
+	}))
+	provider.baseURL = "wss://inference.test/v1"
+	provider.dialWebsocket = func(ctx context.Context, endpoint string, header http.Header) (inferenceWebsocketConn, error) {
+		return conn, nil
+	}
+
+	if !provider.Capabilities().Diarization {
+		t.Fatal("Diarization = false, want true when reference diarize extra kwarg is truthy")
+	}
+
+	stream, err := provider.Stream(context.Background(), "en")
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	defer stream.Close()
+
+	if len(conn.writes) != 1 {
+		t.Fatalf("writes = %d, want session.create", len(conn.writes))
+	}
+	settings, ok := conn.writes[0]["settings"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("settings = %#v, want map", conn.writes[0]["settings"])
+	}
+	extra, ok := settings["extra"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("settings.extra = %#v, want map", settings["extra"])
+	}
+	if got := extra["diarize"]; got != true {
+		t.Fatalf("settings.extra.diarize = %#v, want true", got)
+	}
+	keyterms, ok := extra["keyterms"].([]string)
+	if !ok || len(keyterms) != 1 || keyterms[0] != "livekit" {
+		t.Fatalf("settings.extra.keyterms = %#v, want [livekit]", extra["keyterms"])
+	}
+}
+
 func TestInferenceSTTRecognizeMatchesReferenceUnsupportedBatch(t *testing.T) {
 	provider := NewSTT("deepgram/nova-3", "key", "secret")
 
@@ -155,7 +196,7 @@ func TestSTTWebsocketSendsReferenceContextHeaders(t *testing.T) {
 }
 
 func TestInferenceSTTSessionCreateParamsMatchReferenceShape(t *testing.T) {
-	modelName, params := sttSessionCreateParams("auto:en", "", nil)
+	modelName, params := sttSessionCreateParams("auto:en", "", nil, nil)
 
 	if modelName != "auto" {
 		t.Fatalf("modelName = %q, want auto", modelName)

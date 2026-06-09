@@ -21,6 +21,7 @@ import (
 type STT struct {
 	model          string
 	language       string
+	extraKwargs    map[string]any
 	fallbackModels []FallbackModel
 	apiKey         string
 	apiSecret      string
@@ -35,6 +36,12 @@ type inferenceSTTDialer func(ctx context.Context, endpoint string, header http.H
 func WithSTTFallbackModels(models ...FallbackModel) STTOption {
 	return func(s *STT) {
 		s.fallbackModels = cloneSTTFallbackModels(models)
+	}
+}
+
+func WithSTTExtraKwargs(extra map[string]any) STTOption {
+	return func(s *STT) {
+		s.extraKwargs = cloneSTTExtra(extra)
 	}
 }
 
@@ -74,7 +81,7 @@ func (s *STT) Capabilities() stt.STTCapabilities {
 	return stt.STTCapabilities{
 		Streaming:         true,
 		InterimResults:    true,
-		Diarization:       false,
+		Diarization:       sttDiarizationEnabled(s.extraKwargs),
 		AlignedTranscript: "word",
 		OfflineRecognize:  false,
 	}
@@ -93,7 +100,7 @@ func (s *STT) Stream(ctx context.Context, language string) (stt.RecognizeStream,
 		language = s.language
 	}
 
-	modelName, createParams := sttSessionCreateParams(s.model, language, s.fallbackModels)
+	modelName, createParams := sttSessionCreateParams(s.model, language, s.extraKwargs, s.fallbackModels)
 
 	wsURL, err := url.Parse(s.baseURL + "/stt")
 	if err != nil {
@@ -141,12 +148,12 @@ func defaultInferenceSTTDialer(ctx context.Context, endpoint string, header http
 	return conn, nil
 }
 
-func sttSessionCreateParams(model string, language string, fallback []FallbackModel) (string, map[string]interface{}) {
+func sttSessionCreateParams(model string, language string, extra map[string]any, fallback []FallbackModel) (string, map[string]interface{}) {
 	modelName, language := sttModelAndLanguage(model, language)
 	settings := map[string]interface{}{
 		"sample_rate": "16000",
 		"encoding":    "pcm_s16le",
-		"extra":       map[string]interface{}{},
+		"extra":       sttExtraPayload(extra),
 	}
 	if language != "" {
 		settings["language"] = language
@@ -210,6 +217,57 @@ func cloneSTTExtra(extra map[string]any) map[string]any {
 		cloned[key] = value
 	}
 	return cloned
+}
+
+func sttDiarizationEnabled(extra map[string]any) bool {
+	for _, key := range []string{"diarize", "speaker_labels", "diarization"} {
+		value, ok := extra[key]
+		if !ok || !sttExtraTruthy(value) {
+			continue
+		}
+		if text, ok := value.(string); ok && strings.EqualFold(text, "none") {
+			continue
+		}
+		return true
+	}
+	return false
+}
+
+func sttExtraTruthy(value any) bool {
+	switch typed := value.(type) {
+	case nil:
+		return false
+	case bool:
+		return typed
+	case string:
+		return typed != ""
+	case int:
+		return typed != 0
+	case int8:
+		return typed != 0
+	case int16:
+		return typed != 0
+	case int32:
+		return typed != 0
+	case int64:
+		return typed != 0
+	case uint:
+		return typed != 0
+	case uint8:
+		return typed != 0
+	case uint16:
+		return typed != 0
+	case uint32:
+		return typed != 0
+	case uint64:
+		return typed != 0
+	case float32:
+		return typed != 0
+	case float64:
+		return typed != 0
+	default:
+		return true
+	}
 }
 
 func sttModelAndLanguage(model string, language string) (string, string) {
