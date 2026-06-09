@@ -7,10 +7,13 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 
 	"github.com/cavos-io/rtp-agent/core/audio/model"
 	"github.com/cavos-io/rtp-agent/core/tts"
 )
+
+const ultravoxAPIKeyEnv = "ULTRAVOX_API_KEY"
 
 type UltravoxTTS struct {
 	apiKey string
@@ -18,6 +21,9 @@ type UltravoxTTS struct {
 }
 
 func NewUltravoxTTS(apiKey string, voice string) *UltravoxTTS {
+	if apiKey == "" {
+		apiKey = os.Getenv(ultravoxAPIKeyEnv)
+	}
 	if voice == "" {
 		voice = "default"
 	}
