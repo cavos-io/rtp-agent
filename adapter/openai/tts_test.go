@@ -49,8 +49,11 @@ func TestNewOpenAITTSRequiresAPIKey(t *testing.T) {
 	t.Setenv(openAIAPIKeyEnv, "")
 
 	_, err := NewOpenAITTS("", "", "")
-	if err == nil || !strings.Contains(err.Error(), "OPENAI_API_KEY") {
-		t.Fatalf("NewOpenAITTS error = %v, want missing API key error", err)
+	if err == nil {
+		t.Fatal("NewOpenAITTS error = nil, want missing API key error")
+	}
+	if got, want := err.Error(), openAIAPIKeyRequiredMessage; got != want {
+		t.Fatalf("NewOpenAITTS error = %q, want %q", got, want)
 	}
 }
 

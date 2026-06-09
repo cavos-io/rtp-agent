@@ -133,7 +133,7 @@ func NewOpenAISTT(apiKey string, model string, opts ...OpenAISTTOption) (*OpenAI
 		apiKey = os.Getenv(openAIAPIKeyEnv)
 	}
 	if apiKey == "" {
-		return nil, fmt.Errorf("OPENAI_API_KEY is required, either as argument or set OPENAI_API_KEY environment variable")
+		return nil, fmt.Errorf("%s", openAIAPIKeyRequiredMessage)
 	}
 	if model == "" {
 		model = "gpt-4o-mini-transcribe"
