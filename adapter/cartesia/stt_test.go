@@ -1,7 +1,9 @@
 package cartesia
 
 import (
+	"context"
 	"net/url"
+	"strings"
 	"testing"
 
 	"github.com/cavos-io/rtp-agent/core/stt"
@@ -115,6 +117,19 @@ func TestCartesiaSTTOptionsBuildReferenceURLsAndHeaders(t *testing.T) {
 	}
 	if headers.Get("User-Agent") == "" {
 		t.Fatalf("User-Agent missing")
+	}
+}
+
+func TestCartesiaSTTRequiresAPIKeyBeforeStreamRequest(t *testing.T) {
+	t.Setenv("CARTESIA_API_KEY", "")
+	provider := NewCartesiaSTT("", WithCartesiaSTTBaseURL("://bad-url"))
+
+	_, err := provider.Stream(context.Background(), "")
+	if err == nil {
+		t.Fatal("Stream returned nil error, want missing API key error")
+	}
+	if !strings.Contains(err.Error(), "CARTESIA_API_KEY") {
+		t.Fatalf("Stream error = %q, want CARTESIA_API_KEY guidance", err)
 	}
 }
 
