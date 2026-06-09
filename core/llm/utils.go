@@ -14,6 +14,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/cavos-io/rtp-agent/library/utils/images"
 )
@@ -635,6 +636,12 @@ func functionOutputStringRepr(value string) string {
 			escaped.WriteString(`\t`)
 		case r < 0x20:
 			escaped.WriteString(fmt.Sprintf(`\x%02x`, r))
+		case r < 0x100 && !unicode.IsPrint(r):
+			escaped.WriteString(fmt.Sprintf(`\x%02x`, r))
+		case r < 0x10000 && !unicode.IsPrint(r):
+			escaped.WriteString(fmt.Sprintf(`\u%04x`, r))
+		case !unicode.IsPrint(r):
+			escaped.WriteString(fmt.Sprintf(`\U%08x`, r))
 		case quote == "'" && r == '\'':
 			escaped.WriteString(`\'`)
 		case quote == `"` && r == '"':

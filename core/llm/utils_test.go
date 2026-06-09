@@ -321,6 +321,9 @@ func TestMakeFunctionCallOutputStringifiesValidOutputs(t *testing.T) {
 		{name: "list string nul", output: []any{"\x00"}, want: `['\x00']`},
 		{name: "list string backspace", output: []any{"\b"}, want: `['\x08']`},
 		{name: "list string escape", output: []any{"\x1b"}, want: `['\x1b']`},
+		{name: "list string next line", output: []any{"\u0085"}, want: `['\x85']`},
+		{name: "list string line separator", output: []any{"\u2028"}, want: `['\u2028']`},
+		{name: "list string non-ascii printable", output: []any{"é"}, want: "['é']"},
 		{name: "dict", output: map[string]any{"ok": true}, want: "{'ok': True}"},
 		{name: "dict float", output: map[string]any{"score": 1.0}, want: "{'score': 1.0}"},
 	}
