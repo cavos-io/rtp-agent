@@ -305,14 +305,29 @@ func TestMakeFunctionCallOutputStringifiesValidOutputs(t *testing.T) {
 		{name: "integer", output: 7, want: "7"},
 		{name: "positive infinity", output: math.Inf(1), want: "inf"},
 		{name: "negative infinity", output: math.Inf(-1), want: "-inf"},
+		{name: "exponent float", output: 1e20, want: "1e+20"},
 		{name: "true", output: true, want: "True"},
 		{name: "complex", output: complex(1, 2), want: "(1+2j)"},
 		{name: "complex positive infinity", output: complex(math.Inf(1), 2), want: "(inf+2j)"},
 		{name: "complex imaginary infinity", output: complex(1, math.Inf(1)), want: "(1+infj)"},
 		{name: "complex nan", output: complex(math.NaN(), 2), want: "(nan+2j)"},
+		{name: "complex negative zero imaginary", output: complex(1, math.Copysign(0, -1)), want: "(1-0j)"},
+		{name: "complex negative zero real", output: complex(math.Copysign(0, -1), 2), want: "(-0+2j)"},
 		{name: "list", output: []any{1, "x", true}, want: "[1, 'x', True]"},
+		{name: "list floats", output: []any{0.0, math.Copysign(0, -1), 1.0, 1.5}, want: "[0.0, -0.0, 1.0, 1.5]"},
+		{name: "list exponent floats", output: []any{1e20, 1e-7, 1e-5}, want: "[1e+20, 1e-07, 1e-05]"},
 		{name: "list string newline", output: []any{"line\nnext"}, want: "['line\\nnext']"},
+		{name: "list string apostrophe", output: []any{"can't"}, want: `["can't"]`},
+		{name: "list string nul", output: []any{"\x00"}, want: `['\x00']`},
+		{name: "list string backspace", output: []any{"\b"}, want: `['\x08']`},
+		{name: "list string escape", output: []any{"\x1b"}, want: `['\x1b']`},
+		{name: "list string next line", output: []any{"\u0085"}, want: `['\x85']`},
+		{name: "list string line separator", output: []any{"\u2028"}, want: `['\u2028']`},
+		{name: "list string non-ascii printable", output: []any{"é"}, want: "['é']"},
+		{name: "tuple", output: [3]any{1, "x", true}, want: "(1, 'x', True)"},
+		{name: "singleton tuple", output: [1]any{1}, want: "(1,)"},
 		{name: "dict", output: map[string]any{"ok": true}, want: "{'ok': True}"},
+		{name: "dict float", output: map[string]any{"score": 1.0}, want: "{'score': 1.0}"},
 	}
 
 	for _, tt := range tests {
@@ -444,6 +459,35 @@ func TestExecuteFunctionCallReturnsUnknownFunctionOutput(t *testing.T) {
 	if result.RawError == nil {
 		t.Fatal("RawError = nil, want unknown function error")
 	}
+	if result.RawError.Error() != "Unknown function: missing" {
+		t.Fatalf("RawError = %q, want reference unknown function error", result.RawError.Error())
+	}
+}
+
+func TestExecuteFunctionCallUnknownFunctionPreservesRawArguments(t *testing.T) {
+	toolCtx := EmptyToolContext()
+
+	result := ExecuteFunctionCall(context.Background(), &FunctionToolCall{
+		Name:      "missing",
+		CallID:    "call_missing",
+		Arguments: `{city:"Paris",limit:3,}`,
+	}, toolCtx)
+
+	if result.FncCall.Name != "missing" || result.FncCall.CallID != "call_missing" {
+		t.Fatalf("FncCall identity = %#v, want missing call", result.FncCall)
+	}
+	if result.FncCall.Arguments != `{city:"Paris",limit:3,}` {
+		t.Fatalf("FncCall.Arguments = %q, want raw unparsed arguments", result.FncCall.Arguments)
+	}
+	if result.FncCallOut == nil {
+		t.Fatal("FncCallOut = nil, want unknown function output")
+	}
+	if !result.FncCallOut.IsError || result.FncCallOut.Output != "Unknown function: missing" {
+		t.Fatalf("FncCallOut = %#v, want unknown function error", result.FncCallOut)
+	}
+	if result.RawError == nil {
+		t.Fatal("RawError = nil, want unknown function error")
+	}
 }
 
 func TestExecuteFunctionCallDefaultsEmptyArgumentsAndReturnsOutput(t *testing.T) {
@@ -487,6 +531,38 @@ func TestExecuteFunctionCallRepairsMalformedArgumentsBeforeExecutingTool(t *test
 	}
 	if result.FncCallOut == nil || result.FncCallOut.IsError || result.FncCallOut.Output != "Paris" {
 		t.Fatalf("FncCallOut = %#v, want successful Paris output", result.FncCallOut)
+	}
+}
+
+func TestExecuteFunctionCallReportsArgumentParseErrorToToolOutput(t *testing.T) {
+	tool := &recordingTool{name: "lookup", result: "Paris"}
+	toolCtx := NewToolContext([]interface{}{tool})
+
+	result := ExecuteFunctionCall(context.Background(), &FunctionToolCall{
+		Name:      "lookup",
+		CallID:    "call_lookup",
+		Arguments: `["Paris"]`,
+	}, toolCtx)
+
+	if tool.args != "" {
+		t.Fatalf("tool args = %q, want tool not called after argument parse error", tool.args)
+	}
+	if result.FncCall.Arguments != `["Paris"]` {
+		t.Fatalf("FncCall.Arguments = %q, want raw invalid arguments", result.FncCall.Arguments)
+	}
+	if result.FncCallOut == nil {
+		t.Fatal("FncCallOut = nil, want visible argument parse error")
+	}
+	want := "Error parsing arguments for `lookup`: expected dict from function arguments, got list: [\"Paris\"]"
+	if !result.FncCallOut.IsError || result.FncCallOut.Output != want {
+		t.Fatalf("FncCallOut = %#v, want visible parse error %q", result.FncCallOut, want)
+	}
+	var toolErr ToolError
+	if !errors.As(result.RawError, &toolErr) {
+		t.Fatalf("RawError = %T, want ToolError", result.RawError)
+	}
+	if toolErr.Message != want {
+		t.Fatalf("ToolError.Message = %q, want %q", toolErr.Message, want)
 	}
 }
 

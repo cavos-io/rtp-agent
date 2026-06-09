@@ -2,7 +2,6 @@ package agent
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"io"
 	"sync"
@@ -673,40 +672,20 @@ func (ma *MultimodalAgent) executeRealtimeFunctionCall(functionCall *llm.Functio
 		callCtx = context.Background()
 	}
 	callCtx = contextWithSessionMockTools(callCtx, ma.session)
-	var output string
-	if mock, ok := mockToolFunc(callCtx, ma.session.Agent, functionCall.Name); ok {
-		output, err = mock(callCtx, functionCall.Arguments)
-	} else {
-		output, err = foundTool.Execute(callCtx, functionCall.Arguments)
-	}
-	if err != nil {
-		var stopResponse llm.StopResponse
-		if errors.As(err, &stopResponse) {
-			return
-		}
-
-		var toolErr llm.ToolError
-		outputStr := "An internal error occurred"
-		if errors.As(err, &toolErr) {
-			outputStr = toolErr.Message
-		}
-		ma.appendRealtimeToolResult(functionCall, &llm.FunctionCallOutput{
-			CallID:    functionCall.CallID,
-			Name:      functionCall.Name,
-			Output:    outputStr,
-			IsError:   true,
-			CreatedAt: time.Now(),
-		})
+	toolCtx := llm.NewToolContext([]interface{}{foundTool})
+	executionToolCtx := mockToolContext(callCtx, toolCtx, ma.session, functionCall.Name)
+	result := llm.ExecuteFunctionCall(callCtx, &llm.FunctionToolCall{
+		CallID:    functionCall.CallID,
+		Name:      functionCall.Name,
+		Arguments: functionCall.Arguments,
+		Extra:     functionCall.Extra,
+	}, executionToolCtx)
+	functionCall.Arguments = result.FncCall.Arguments
+	if result.FncCallOut == nil {
 		return
 	}
 
-	ma.appendRealtimeToolResult(functionCall, &llm.FunctionCallOutput{
-		CallID:    functionCall.CallID,
-		Name:      functionCall.Name,
-		Output:    output,
-		IsError:   false,
-		CreatedAt: time.Now(),
-	})
+	ma.appendRealtimeToolResult(functionCall, result.FncCallOut)
 }
 
 func (ma *MultimodalAgent) appendRealtimeToolResult(call *llm.FunctionCall, output *llm.FunctionCallOutput) {

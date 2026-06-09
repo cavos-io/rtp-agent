@@ -274,6 +274,39 @@ func TestPerformToolExecutionsMasksInternalErrors(t *testing.T) {
 	}
 }
 
+func TestPerformToolExecutionsReportsUnknownFunctionAsToolError(t *testing.T) {
+	toolCtx := llm.NewToolContext([]interface{}{&fakeGenerationTool{name: "lookup", result: "ignored"}})
+	functionCh := make(chan *llm.FunctionToolCall, 1)
+	functionCh <- &llm.FunctionToolCall{
+		Name:      "missing",
+		CallID:    "call_missing",
+		Arguments: `{bad`,
+	}
+	close(functionCh)
+
+	outCh := PerformToolExecutions(context.Background(), functionCh, toolCtx)
+	output, ok := <-outCh
+	if !ok {
+		t.Fatal("PerformToolExecutions closed without output")
+	}
+	if output.FncCall.Name != "missing" || output.FncCall.Arguments != `{bad` {
+		t.Fatalf("FncCall = %#v, want unknown call with raw arguments", output.FncCall)
+	}
+	if output.FncCallOut == nil {
+		t.Fatal("FncCallOut = nil, want unknown function output")
+	}
+	if !output.FncCallOut.IsError || output.FncCallOut.Output != "Unknown function: missing" {
+		t.Fatalf("FncCallOut = %#v, want unknown function ToolError output", output.FncCallOut)
+	}
+	var toolErr llm.ToolError
+	if !errors.As(output.RawError, &toolErr) {
+		t.Fatalf("RawError = %T %v, want ToolError", output.RawError, output.RawError)
+	}
+	if toolErr.Message != "Unknown function: missing" {
+		t.Fatalf("ToolError.Message = %q, want unknown function message", toolErr.Message)
+	}
+}
+
 func TestPerformToolExecutionsSuppressesOutputForStopResponse(t *testing.T) {
 	output := executeOneToolCall(t, &fakeGenerationTool{
 		name: "lookup",

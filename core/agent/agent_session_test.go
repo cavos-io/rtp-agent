@@ -859,6 +859,23 @@ func TestAgentSessionStartWithOptionsCapturesOnEnterSpeechRun(t *testing.T) {
 	}
 }
 
+func TestAgentSessionStartWithOptionsCaptureRunWaitsForSpeech(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	session.Assistant = &fakeSessionAssistant{}
+
+	result, err := session.StartWithOptions(ctx, StartOptions{CaptureRun: true})
+
+	if result != nil {
+		t.Fatalf("StartWithOptions result = %#v, want nil while capture run has no speech", result)
+	}
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("StartWithOptions error = %v, want context deadline exceeded", err)
+	}
+}
+
 func TestAgentSessionIVRDetectionGeneratesReplyAfterSilence(t *testing.T) {
 	baseAgent := NewAgent("test")
 	session := NewAgentSession(baseAgent, nil, AgentSessionOptions{

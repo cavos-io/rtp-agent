@@ -14,6 +14,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/cavos-io/rtp-agent/library/utils/images"
 )
@@ -440,30 +441,6 @@ func ExecuteFunctionCall(ctx context.Context, toolCall *FunctionToolCall, toolCt
 	if args == "" {
 		args = "{}"
 	}
-	parsedArgs, err := ParseFunctionArguments(args)
-	if err != nil {
-		fncCall := FunctionCall{
-			CallID:    toolCall.CallID,
-			Name:      toolCall.Name,
-			Arguments: args,
-			Extra:     toolCall.Extra,
-			CreatedAt: time.Now(),
-		}
-		return MakeToolOutput(fncCall, nil, err)
-	}
-	encodedArgs, err := json.Marshal(parsedArgs)
-	if err != nil {
-		fncCall := FunctionCall{
-			CallID:    toolCall.CallID,
-			Name:      toolCall.Name,
-			Arguments: args,
-			Extra:     toolCall.Extra,
-			CreatedAt: time.Now(),
-		}
-		return MakeToolOutput(fncCall, nil, err)
-	}
-	args = string(encodedArgs)
-
 	fncCall := FunctionCall{
 		CallID:    toolCall.CallID,
 		Name:      toolCall.Name,
@@ -474,7 +451,8 @@ func ExecuteFunctionCall(ctx context.Context, toolCall *FunctionToolCall, toolCt
 
 	tool := toolCtx.GetFunctionTool(toolCall.Name)
 	if tool == nil {
-		err := fmt.Errorf("unknown function: %s", toolCall.Name)
+		//lint:ignore ST1005 match LiveKit Agents raw ValueError text
+		err := fmt.Errorf("Unknown function: %s", toolCall.Name)
 		return FunctionCallResult{
 			FncCall: fncCall,
 			FncCallOut: &FunctionCallOutput{
@@ -487,6 +465,17 @@ func ExecuteFunctionCall(ctx context.Context, toolCall *FunctionToolCall, toolCt
 			RawError: err,
 		}
 	}
+
+	parsedArgs, err := ParseFunctionArguments(args)
+	if err != nil {
+		return MakeToolOutput(fncCall, nil, NewToolError(fmt.Sprintf("Error parsing arguments for `%s`: %s", toolCall.Name, err.Error())))
+	}
+	encodedArgs, err := json.Marshal(parsedArgs)
+	if err != nil {
+		return MakeToolOutput(fncCall, nil, err)
+	}
+	args = string(encodedArgs)
+	fncCall.Arguments = args
 
 	output, err := tool.Execute(ctx, args)
 	result := MakeToolOutput(fncCall, output, err)
@@ -578,7 +567,16 @@ func functionOutputRepr(value any) string {
 	}
 	rv := reflect.ValueOf(value)
 	switch rv.Kind() {
-	case reflect.Array, reflect.Slice:
+	case reflect.Array:
+		parts := make([]string, 0, rv.Len())
+		for i := 0; i < rv.Len(); i++ {
+			parts = append(parts, functionOutputRepr(rv.Index(i).Interface()))
+		}
+		if rv.Len() == 1 {
+			return "(" + parts[0] + ",)"
+		}
+		return "(" + strings.Join(parts, ", ") + ")"
+	case reflect.Slice:
 		parts := make([]string, 0, rv.Len())
 		for i := 0; i < rv.Len(); i++ {
 			parts = append(parts, functionOutputRepr(rv.Index(i).Interface()))
@@ -603,34 +601,82 @@ func functionOutputFloatRepr(value float64, bitSize int) string {
 		return "-inf"
 	case math.IsNaN(value):
 		return "nan"
+	case value == 0:
+		if math.Signbit(value) {
+			return "-0.0"
+		}
+		return "0.0"
 	default:
-		return strconv.FormatFloat(value, 'g', -1, bitSize)
+		text := strconv.FormatFloat(value, 'g', -1, bitSize)
+		if math.Trunc(value) == value && !strings.ContainsAny(text, ".eE") {
+			text += ".0"
+		}
+		return text
 	}
 }
 
 func functionOutputStringRepr(value string) string {
-	escaped := strings.NewReplacer(
-		`\`, `\\`,
-		"\n", `\n`,
-		"\r", `\r`,
-		"\t", `\t`,
-		`'`, `\'`,
-	).Replace(value)
-	return "'" + escaped + "'"
+	quote := "'"
+	if strings.Contains(value, "'") && !strings.Contains(value, `"`) {
+		quote = `"`
+	}
+	var escaped strings.Builder
+	for _, r := range value {
+		switch {
+		case r == '\\':
+			escaped.WriteString(`\\`)
+		case r == '\n':
+			escaped.WriteString(`\n`)
+		case r == '\r':
+			escaped.WriteString(`\r`)
+		case r == '\t':
+			escaped.WriteString(`\t`)
+		case r < 0x20:
+			escaped.WriteString(fmt.Sprintf(`\x%02x`, r))
+		case r < 0x100 && !unicode.IsPrint(r):
+			escaped.WriteString(fmt.Sprintf(`\x%02x`, r))
+		case r < 0x10000 && !unicode.IsPrint(r):
+			escaped.WriteString(fmt.Sprintf(`\u%04x`, r))
+		case !unicode.IsPrint(r):
+			escaped.WriteString(fmt.Sprintf(`\U%08x`, r))
+		case quote == "'" && r == '\'':
+			escaped.WriteString(`\'`)
+		case quote == `"` && r == '"':
+			escaped.WriteString(`\"`)
+		default:
+			escaped.WriteRune(r)
+		}
+	}
+	return quote + escaped.String() + quote
 }
 
 func functionOutputComplexRepr(value complex128, bitSize int) string {
 	realPart := real(value)
 	imagPart := imag(value)
-	realText := functionOutputFloatRepr(realPart, bitSize)
-	imagText := functionOutputFloatRepr(imagPart, bitSize)
-	if realPart == 0 {
+	realText := functionOutputComplexFloatRepr(realPart, bitSize)
+	imagText := functionOutputComplexFloatRepr(imagPart, bitSize)
+	if realPart == 0 && !math.Signbit(realPart) {
 		return imagText + "j"
 	}
-	if imagPart < 0 {
+	if math.Signbit(imagPart) {
 		return "(" + realText + imagText + "j)"
 	}
 	return "(" + realText + "+" + imagText + "j)"
+}
+
+func functionOutputComplexFloatRepr(value float64, bitSize int) string {
+	switch {
+	case math.IsInf(value, 1):
+		return "inf"
+	case math.IsInf(value, -1):
+		return "-inf"
+	case math.IsNaN(value):
+		return "nan"
+	case value == 0 && math.Signbit(value):
+		return "-0"
+	default:
+		return strconv.FormatFloat(value, 'g', -1, bitSize)
+	}
 }
 
 func isFalsyFunctionOutput(value any) bool {

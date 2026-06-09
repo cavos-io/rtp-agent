@@ -41,12 +41,12 @@ wt-new:
 	else \
 		git worktree add -b "$$branch" "$$path" "$$base"; \
 	fi; \
-	echo "==> Symlinking shared directories"; \
+	echo "==> Preparing local temp and shared reference directories"; \
 	cd "$$path"; \
 	if [ -e .tmp ] && [ ! -L .tmp ]; then echo "Refusing to replace non-symlink .tmp"; exit 1; fi; \
 	if [ -e refs ] && [ ! -L refs ]; then echo "Refusing to replace non-symlink refs"; exit 1; fi; \
 	rm -f .tmp refs; \
-	ln -s "$$(realpath --relative-to="$$PWD" "$$(git -C ../.. rev-parse --show-toplevel)/.tmp")" .tmp; \
+	mkdir -p .tmp .tmp/gotmp .tmp/gocache; \
 	ln -s "$$(realpath --relative-to="$$PWD" "$$(git -C ../.. rev-parse --show-toplevel)/refs")" refs; \
 	exclude_file="$$(git rev-parse --git-path info/exclude)"; \
 	mkdir -p "$$(dirname "$$exclude_file")"; \

@@ -814,6 +814,43 @@ func TestMultimodalToolExecutionUsesScopedMockTool(t *testing.T) {
 	}
 }
 
+func TestMultimodalToolExecutionRepairsArgumentsBeforeToolCall(t *testing.T) {
+	chatCtx := llm.NewChatContext()
+	tool := &recordingRealtimeTool{name: "lookup", result: "agent result"}
+	agent := NewAgent("test")
+	agent.Tools = []llm.Tool{tool}
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	ma := &MultimodalAgent{
+		session:   session,
+		chatCtx:   chatCtx,
+		rtSession: &fakeRealtimeSession{},
+		ctx:       context.Background(),
+	}
+
+	ma.handleRealtimeEvent(llm.RealtimeEvent{
+		Type:     llm.RealtimeEventTypeFunctionCall,
+		Function: &llm.FunctionToolCall{Name: "lookup", CallID: "call_lookup", Arguments: `{city:"Paris",limit:3,}`},
+	})
+
+	if tool.args != `{"city":"Paris","limit":3}` {
+		t.Fatalf("tool args = %q, want repaired JSON object", tool.args)
+	}
+	if len(chatCtx.Items) < 2 {
+		t.Fatalf("chat context items = %#v, want function call and output", chatCtx.Items)
+	}
+	call, ok := chatCtx.Items[len(chatCtx.Items)-2].(*llm.FunctionCall)
+	if !ok {
+		t.Fatalf("function call item = %T, want FunctionCall", chatCtx.Items[len(chatCtx.Items)-2])
+	}
+	if call.Arguments != `{"city":"Paris","limit":3}` {
+		t.Fatalf("chat function call args = %q, want repaired JSON object", call.Arguments)
+	}
+	output := lastFunctionOutput(t, chatCtx)
+	if output.IsError || output.Output != "agent result" {
+		t.Fatalf("function output = %#v, want successful agent result", output)
+	}
+}
+
 func TestMultimodalToolExecutionReportsUnknownFunction(t *testing.T) {
 	chatCtx := llm.NewChatContext()
 	ma := &MultimodalAgent{
@@ -1536,6 +1573,26 @@ func lastFunctionOutput(t *testing.T, chatCtx *llm.ChatContext) *llm.FunctionCal
 		t.Fatalf("last item = %T, want FunctionCallOutput", chatCtx.Items[len(chatCtx.Items)-1])
 	}
 	return output
+}
+
+type recordingRealtimeTool struct {
+	name   string
+	args   string
+	result string
+	err    error
+}
+
+func (t *recordingRealtimeTool) ID() string { return t.name }
+
+func (t *recordingRealtimeTool) Name() string { return t.name }
+
+func (t *recordingRealtimeTool) Description() string { return "" }
+
+func (t *recordingRealtimeTool) Parameters() map[string]any { return nil }
+
+func (t *recordingRealtimeTool) Execute(_ context.Context, args string) (string, error) {
+	t.args = args
+	return t.result, t.err
 }
 
 func receiveRealtimeAudioFrame(t *testing.T, ch <-chan *model.AudioFrame) *model.AudioFrame {
