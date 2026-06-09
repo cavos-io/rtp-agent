@@ -1757,7 +1757,7 @@ func openAIRealtimeChatItem(item map[string]any) (llm.ChatItem, error) {
 	case "function_call_output":
 		return openAIRealtimeFunctionCallOutput(item)
 	default:
-		return nil, fmt.Errorf("unsupported realtime item type %q", itemType)
+		return nil, fmt.Errorf("unsupported item type: %s", itemType)
 	}
 }
 
@@ -1799,7 +1799,7 @@ func openAIRealtimeChatMessage(item map[string]any) (*llm.ChatMessage, error) {
 	switch role {
 	case llm.ChatRoleSystem, llm.ChatRoleDeveloper, llm.ChatRoleUser, llm.ChatRoleAssistant:
 	default:
-		return nil, fmt.Errorf("unsupported realtime message role %q", roleRaw)
+		return nil, fmt.Errorf("unsupported role: %s", roleRaw)
 	}
 	contents, _ := item["content"].([]any)
 	return &llm.ChatMessage{

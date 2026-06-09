@@ -2163,6 +2163,30 @@ func TestRealtimeEventMapsConversationItemAddedFunctionCall(t *testing.T) {
 	}
 }
 
+func TestOpenAIRealtimeChatItemRejectsUnsupportedItemTypeWithReferenceError(t *testing.T) {
+	_, err := openAIRealtimeChatItem(map[string]any{"type": "audio"})
+	if err == nil {
+		t.Fatal("openAIRealtimeChatItem() error = nil, want unsupported item type error")
+	}
+	if got, want := err.Error(), "unsupported item type: audio"; got != want {
+		t.Fatalf("openAIRealtimeChatItem() error = %q, want %q", got, want)
+	}
+}
+
+func TestOpenAIRealtimeChatItemRejectsUnsupportedRoleWithReferenceError(t *testing.T) {
+	_, err := openAIRealtimeChatItem(map[string]any{
+		"id":   "msg_123",
+		"type": "message",
+		"role": "tool",
+	})
+	if err == nil {
+		t.Fatal("openAIRealtimeChatItem() error = nil, want unsupported role error")
+	}
+	if got, want := err.Error(), "unsupported role: tool"; got != want {
+		t.Fatalf("openAIRealtimeChatItem() error = %q, want %q", got, want)
+	}
+}
+
 func TestRealtimeEventMapsOutputItemDoneFunctionCall(t *testing.T) {
 	ev, ok := openAIRealtimeEvent(map[string]any{
 		"type": "response.output_item.done",
