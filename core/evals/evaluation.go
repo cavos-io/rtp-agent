@@ -80,7 +80,13 @@ func (r *EvaluationResult) MajorityPassed() bool {
 	if len(r.Judgments) == 0 {
 		return true
 	}
-	return r.Score() > 0.5
+	passedCount := 0
+	for _, j := range r.Judgments {
+		if j.Passed() {
+			passedCount++
+		}
+	}
+	return passedCount > len(r.Judgments)/2
 }
 
 func (r *EvaluationResult) NoneFailed() bool {

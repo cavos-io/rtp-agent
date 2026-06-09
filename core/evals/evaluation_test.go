@@ -50,6 +50,17 @@ func TestEvaluationResultScoreUsesUncertainHelper(t *testing.T) {
 	}
 }
 
+func TestEvaluationResultMajorityPassedRequiresExplicitPassMajority(t *testing.T) {
+	result := &EvaluationResult{Judgments: map[string]*JudgmentResult{
+		"pass":  {Verdict: VerdictPass},
+		"maybe": {Verdict: VerdictMaybe},
+	}}
+
+	if result.MajorityPassed() {
+		t.Fatal("MajorityPassed() = true, want false when only half of judgments explicitly pass")
+	}
+}
+
 func TestJudgeHandoffShortCircuitCarriesInstructions(t *testing.T) {
 	chatCtx := llm.NewChatContext()
 	judge := NewJudge("handoff", "only evaluate actual handoffs", nil)
