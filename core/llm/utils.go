@@ -622,19 +622,28 @@ func functionOutputStringRepr(value string) string {
 	if strings.Contains(value, "'") && !strings.Contains(value, `"`) {
 		quote = `"`
 	}
-	escaped := strings.NewReplacer(
-		`\`, `\\`,
-		"\x00", `\x00`,
-		"\n", `\n`,
-		"\r", `\r`,
-		"\t", `\t`,
-	).Replace(value)
-	if quote == "'" {
-		escaped = strings.ReplaceAll(escaped, `'`, `\'`)
-	} else {
-		escaped = strings.ReplaceAll(escaped, `"`, `\"`)
+	var escaped strings.Builder
+	for _, r := range value {
+		switch {
+		case r == '\\':
+			escaped.WriteString(`\\`)
+		case r == '\n':
+			escaped.WriteString(`\n`)
+		case r == '\r':
+			escaped.WriteString(`\r`)
+		case r == '\t':
+			escaped.WriteString(`\t`)
+		case r < 0x20:
+			escaped.WriteString(fmt.Sprintf(`\x%02x`, r))
+		case quote == "'" && r == '\'':
+			escaped.WriteString(`\'`)
+		case quote == `"` && r == '"':
+			escaped.WriteString(`\"`)
+		default:
+			escaped.WriteRune(r)
+		}
 	}
-	return quote + escaped + quote
+	return quote + escaped.String() + quote
 }
 
 func functionOutputComplexRepr(value complex128, bitSize int) string {

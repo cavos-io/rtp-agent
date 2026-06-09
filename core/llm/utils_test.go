@@ -319,6 +319,8 @@ func TestMakeFunctionCallOutputStringifiesValidOutputs(t *testing.T) {
 		{name: "list string newline", output: []any{"line\nnext"}, want: "['line\\nnext']"},
 		{name: "list string apostrophe", output: []any{"can't"}, want: `["can't"]`},
 		{name: "list string nul", output: []any{"\x00"}, want: `['\x00']`},
+		{name: "list string backspace", output: []any{"\b"}, want: `['\x08']`},
+		{name: "list string escape", output: []any{"\x1b"}, want: `['\x1b']`},
 		{name: "dict", output: map[string]any{"ok": true}, want: "{'ok': True}"},
 		{name: "dict float", output: map[string]any{"score": 1.0}, want: "{'score': 1.0}"},
 	}
