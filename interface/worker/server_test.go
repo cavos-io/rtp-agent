@@ -3449,8 +3449,11 @@ func TestRunRejectsAlreadyStartedServer(t *testing.T) {
 	if err == nil {
 		t.Fatal("Run() error = nil, want already running error")
 	}
-	if !strings.Contains(err.Error(), "already running") {
-		t.Fatalf("Run() error = %q, want already running message", err.Error())
+	if got, want := err.Error(), "worker is already running"; got != want {
+		t.Fatalf("Run() error = %q, want %q", got, want)
+	}
+	if strings.Contains(err.Error(), "server is already running") {
+		t.Fatalf("Run() error = %q, want reference worker wording", err.Error())
 	}
 }
 
