@@ -73,6 +73,28 @@ func TestRtzrSTTDefaultsMatchReference(t *testing.T) {
 	}
 }
 
+func TestNewRtzrSTTUsesEnvironmentCredentials(t *testing.T) {
+	t.Setenv("RTZR_CLIENT_ID", "env-client-id")
+	t.Setenv("RTZR_CLIENT_SECRET", "env-client-secret")
+
+	provider := NewRtzrSTT("")
+
+	if provider.clientID != "env-client-id" {
+		t.Fatalf("client id = %q, want env client id", provider.clientID)
+	}
+	if provider.clientSecret != "env-client-secret" {
+		t.Fatalf("client secret = %q, want env client secret", provider.clientSecret)
+	}
+
+	explicit := NewRtzrSTT("explicit-client-id", WithRtzrClientSecret("explicit-client-secret"))
+	if explicit.clientID != "explicit-client-id" {
+		t.Fatalf("client id = %q, want explicit client id", explicit.clientID)
+	}
+	if explicit.clientSecret != "explicit-client-secret" {
+		t.Fatalf("client secret = %q, want explicit client secret", explicit.clientSecret)
+	}
+}
+
 func TestRtzrBuildAuthRequestMatchesReference(t *testing.T) {
 	provider := NewRtzrSTT("client-id", WithRtzrClientSecret("client-secret"))
 
