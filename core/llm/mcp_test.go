@@ -414,6 +414,32 @@ func TestMCPToolsetFilterUpdatesToolsetState(t *testing.T) {
 	}
 }
 
+func TestMCPToolsetCloseClosesServerAndClearsTools(t *testing.T) {
+	lookup := &testTool{id: "lookup", name: "lookup"}
+	server := &fakeMCPServer{tools: []Tool{lookup}}
+	toolset := NewMCPToolset("mcp-tools", server)
+
+	if _, err := toolset.Setup(context.Background(), false); err != nil {
+		t.Fatalf("Setup() error = %v", err)
+	}
+	if err := toolset.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+	if server.closeCalls != 1 {
+		t.Fatalf("server Close calls = %d, want 1", server.closeCalls)
+	}
+	if tools := toolset.Tools(); len(tools) != 0 {
+		t.Fatalf("Tools() after Close() = %#v, want empty", tools)
+	}
+
+	if _, err := toolset.Setup(context.Background(), false); err != nil {
+		t.Fatalf("Setup() after Close() error = %v", err)
+	}
+	if server.initializeCalls != 2 {
+		t.Fatalf("Initialize calls after close/setup = %d, want 2", server.initializeCalls)
+	}
+}
+
 func writeMCPHTTPResponse(t *testing.T, w http.ResponseWriter, id int64, result any) {
 	t.Helper()
 	w.Header().Set("Content-Type", "application/json")

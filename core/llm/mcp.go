@@ -355,6 +355,22 @@ func (t *MCPToolset) FilterTools(filter func(Tool) bool) *MCPToolset {
 	return t
 }
 
+func (t *MCPToolset) Close() error {
+	if t == nil {
+		return nil
+	}
+	t.mu.Lock()
+	server := t.mcpServer
+	t.initialized = false
+	t.tools = nil
+	t.mu.Unlock()
+
+	if server != nil {
+		return server.Close()
+	}
+	return nil
+}
+
 func NewMCPServerStdio(command string, args []string) *MCPServerStdio {
 	return &MCPServerStdio{
 		Command:    command,
