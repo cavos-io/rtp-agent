@@ -1459,6 +1459,9 @@ func TestTransferSIPParticipantIdentityRejectsNonSIPParticipant(t *testing.T) {
 	if err == nil {
 		t.Fatal("transferSIPParticipantIdentity(agent participant) error = nil, want error")
 	}
+	if got, want := err.Error(), "Participant must be a SIP participant"; got != want {
+		t.Fatalf("transferSIPParticipantIdentity(agent participant) error = %q, want %q", got, want)
+	}
 }
 
 func TestLocalJobContextSkipsDestructiveLiveKitAPIs(t *testing.T) {

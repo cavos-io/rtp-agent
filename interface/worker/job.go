@@ -1030,12 +1030,18 @@ func transferSIPParticipantIdentity(participant any) (string, error) {
 		return p, nil
 	case remoteParticipantView:
 		if p.Kind() != lksdk.ParticipantSIP {
-			return "", fmt.Errorf("participant must be a SIP participant")
+			return "", participantMustBeSIPError{}
 		}
 		return p.Identity(), nil
 	default:
 		return "", fmt.Errorf("participant must be a SIP participant or identity string")
 	}
+}
+
+type participantMustBeSIPError struct{}
+
+func (participantMustBeSIPError) Error() string {
+	return "Participant must be a SIP participant"
 }
 
 func (c *JobContext) transferSIPParticipantRequest(identity string, transferTo string, playDialtone bool) *livekit.TransferSIPParticipantRequest {
