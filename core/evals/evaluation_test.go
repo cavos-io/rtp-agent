@@ -82,6 +82,22 @@ func TestJudgeGroupFiltersNilJudgmentResults(t *testing.T) {
 	}
 }
 
+func TestFormatChatCtxAgentConfigUpdateMatchesReferenceShape(t *testing.T) {
+	instructions := "be concise"
+	chatCtx := llm.NewChatContext()
+	chatCtx.Append(&llm.AgentConfigUpdate{
+		Instructions: &instructions,
+		ToolsAdded:   []string{"lookup"},
+		ToolsRemoved: []string{"search"},
+	})
+
+	got := formatChatCtx(chatCtx)
+	want := "[agent config: instructions='be concise', tools_added=['lookup'], tools_removed=['search']]"
+	if got != want {
+		t.Fatalf("formatChatCtx() = %q, want %q", got, want)
+	}
+}
+
 func TestJudgeHandoffShortCircuitCarriesInstructions(t *testing.T) {
 	chatCtx := llm.NewChatContext()
 	judge := NewJudge("handoff", "only evaluate actual handoffs", nil)
