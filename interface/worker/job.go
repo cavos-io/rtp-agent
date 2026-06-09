@@ -764,7 +764,7 @@ func (c *JobContext) AddParticipantEntrypoint(entrypoint ParticipantEntrypoint, 
 	}
 	for _, registered := range c.participantEntrypoints {
 		if reflect.ValueOf(registered.entrypoint).Pointer() == reflect.ValueOf(entrypoint).Pointer() {
-			return fmt.Errorf("participant entrypoints cannot be added more than once")
+			return fmt.Errorf("entrypoints cannot be added more than once")
 		}
 	}
 	if len(kinds) == 0 {

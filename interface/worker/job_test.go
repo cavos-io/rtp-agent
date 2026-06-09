@@ -586,8 +586,9 @@ func TestJobContextAddParticipantEntrypointRejectsDuplicates(t *testing.T) {
 	}
 
 	err := ctx.AddParticipantEntrypoint(entrypoint)
-	if err == nil {
-		t.Fatal("AddParticipantEntrypoint() duplicate error = nil, want error")
+	const wantMessage = "entrypoints cannot be added more than once"
+	if err == nil || err.Error() != wantMessage {
+		t.Fatalf("AddParticipantEntrypoint() duplicate error = %v, want %q", err, wantMessage)
 	}
 }
 
