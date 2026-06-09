@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -240,6 +241,66 @@ func TestMCPServerHTTPInitializeIsIdempotent(t *testing.T) {
 	}
 	if initializeCalls != 1 {
 		t.Fatalf("initialize calls = %d, want 1", initializeCalls)
+	}
+}
+
+func TestMCPServerHTTPInitializeCoalescesConcurrentCalls(t *testing.T) {
+	initializeStarted := make(chan struct{})
+	releaseInitialize := make(chan struct{})
+	var initializeCalls atomic.Int32
+	httpClient := newMCPTestHTTPClient(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req jsonRPCRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+
+		switch req.Method {
+		case "initialize":
+			if initializeCalls.Add(1) == 1 {
+				close(initializeStarted)
+			}
+			<-releaseInitialize
+			writeMCPHTTPResponse(t, w, req.ID, map[string]any{"protocolVersion": "2024-11-05"})
+		case "initialized":
+			w.WriteHeader(http.StatusAccepted)
+		default:
+			t.Fatalf("unexpected MCP method %q", req.Method)
+		}
+	}))
+
+	server := NewMCPServerHTTP("https://mcp.test/rpc")
+	server.client = httpClient
+
+	errCh := make(chan error, 2)
+	go func() {
+		errCh <- server.Initialize(context.Background())
+	}()
+
+	select {
+	case <-initializeStarted:
+	case <-time.After(200 * time.Millisecond):
+		t.Fatal("first Initialize() did not reach server")
+	}
+
+	go func() {
+		errCh <- server.Initialize(context.Background())
+	}()
+
+	time.Sleep(20 * time.Millisecond)
+	close(releaseInitialize)
+
+	for i := 0; i < 2; i++ {
+		select {
+		case err := <-errCh:
+			if err != nil {
+				t.Fatalf("Initialize() error = %v", err)
+			}
+		case <-time.After(time.Second):
+			t.Fatal("Initialize() did not return")
+		}
+	}
+	if got := initializeCalls.Load(); got != 1 {
+		t.Fatalf("initialize calls = %d, want 1 concurrent reference initialization", got)
 	}
 }
 
@@ -614,6 +675,100 @@ done
 	if err := server.Initialize(ctx); err != nil {
 		t.Fatalf("Initialize() error = %v", err)
 	}
+}
+
+func TestMCPServerStdioInitializeFailureLeavesUninitialized(t *testing.T) {
+	server := NewMCPServerStdio(filepath.Join(t.TempDir(), "missing-mcp-server"), nil)
+
+	err := server.Initialize(context.Background())
+	if err == nil {
+		t.Fatal("Initialize() error = nil, want command start failure")
+	}
+	if server.Initialized() {
+		t.Fatal("Initialized() = true after failed Initialize, want false")
+	}
+	if _, err := server.ListTools(context.Background()); err == nil || !strings.Contains(err.Error(), "isn't initialized") {
+		t.Fatalf("ListTools() error = %v, want uninitialized lifecycle error", err)
+	}
+}
+
+func TestMCPServerStdioInitializeCoalescesConcurrentCalls(t *testing.T) {
+	tmpDir := t.TempDir()
+	startedPath := filepath.Join(tmpDir, "started")
+	releasePath := filepath.Join(tmpDir, "release")
+	scriptPath := filepath.Join(tmpDir, "mcp-delayed-init-test.sh")
+	script := `#!/bin/sh
+while IFS= read -r line; do
+  case "$line" in
+    *'"method":"initialize"'*)
+      : > "$MCP_STARTED_PATH"
+      while [ ! -f "$MCP_RELEASE_PATH" ]; do
+        sleep 0.01
+      done
+      printf '{"jsonrpc":"2.0","id":1,"result":{}}\n'
+      ;;
+    *'"method":"initialized"'*)
+      :
+      ;;
+  esac
+done
+`
+	if err := os.WriteFile(scriptPath, []byte(script), 0o755); err != nil {
+		t.Fatalf("write helper script: %v", err)
+	}
+
+	server := NewMCPServerStdio("sh", []string{scriptPath})
+	server.Env = map[string]string{
+		"MCP_STARTED_PATH": startedPath,
+		"MCP_RELEASE_PATH": releasePath,
+	}
+	defer server.Close()
+
+	errCh := make(chan error, 2)
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	go func() {
+		errCh <- server.Initialize(ctx)
+	}()
+
+	waitForFile(t, startedPath)
+
+	go func() {
+		errCh <- server.Initialize(ctx)
+	}()
+
+	select {
+	case err := <-errCh:
+		t.Fatalf("concurrent Initialize() returned before first initialize completed: %v", err)
+	case <-time.After(30 * time.Millisecond):
+	}
+
+	if err := os.WriteFile(releasePath, []byte("ok"), 0o644); err != nil {
+		t.Fatalf("write release file: %v", err)
+	}
+
+	for i := 0; i < 2; i++ {
+		select {
+		case err := <-errCh:
+			if err != nil {
+				t.Fatalf("Initialize() error = %v", err)
+			}
+		case <-time.After(time.Second):
+			t.Fatal("Initialize() did not return after release")
+		}
+	}
+}
+
+func waitForFile(t *testing.T, path string) {
+	t.Helper()
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		if _, err := os.Stat(path); err == nil {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("file %s was not created", path)
 }
 
 type fakeMCPWriteCloser struct {

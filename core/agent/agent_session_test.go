@@ -2449,6 +2449,35 @@ func TestAgentSessionGenerateReplyRequiresRunningActivity(t *testing.T) {
 	}
 }
 
+func TestAgentSessionSayAndGenerateReplyReportClosingState(t *testing.T) {
+	agent := NewAgent("test")
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	session.started = true
+	session.closing = true
+
+	sayHandle, sayErr := session.Say(context.Background(), "closing")
+	if sayHandle != nil {
+		t.Fatalf("Say handle = %#v, want nil while closing", sayHandle)
+	}
+	if sayErr == nil {
+		t.Fatal("Say error = nil, want reference closing error")
+	}
+	if got, want := sayErr.Error(), "AgentSession is closing, cannot use say()"; got != want {
+		t.Fatalf("Say error text = %q, want %q", got, want)
+	}
+
+	replyHandle, replyErr := session.GenerateReply(context.Background(), "closing")
+	if replyHandle != nil {
+		t.Fatalf("GenerateReply handle = %#v, want nil while closing", replyHandle)
+	}
+	if replyErr == nil {
+		t.Fatal("GenerateReply error = nil, want reference closing error")
+	}
+	if got, want := replyErr.Error(), "AgentSession is closing, cannot use generate_reply()"; got != want {
+		t.Fatalf("GenerateReply error text = %q, want %q", got, want)
+	}
+}
+
 func TestAgentSessionCurrentAgentRequiresConfiguredAgent(t *testing.T) {
 	session := &AgentSession{}
 

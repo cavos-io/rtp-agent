@@ -9,6 +9,15 @@ import (
 	"github.com/cavos-io/rtp-agent/core/llm"
 )
 
+const taskCompletionCriteria = "Evaluate if the agent completed its goal based on its instructions. " +
+	"Task completed, appropriately handed off, or correctly declined = pass. " +
+	"User's need ignored, no resolution, gave up without handoff = fail."
+
+const handoffCriteria = "Evaluate if the conversation maintained context across agent handoffs. " +
+	"Handoffs can be silent or explicit, either is acceptable. " +
+	"Remembered info (names, details, requests) = pass. " +
+	"Break in continuity, repeated questions, context lost = fail."
+
 type Judge struct {
 	name         string
 	instructions string
@@ -34,7 +43,7 @@ func (j *Judge) Evaluate(ctx context.Context, chatCtx *llm.ChatContext, referenc
 	}
 
 	if effectiveLLM == nil {
-		return nil, fmt.Errorf("no LLM provided for judge '%s'", j.name)
+		return nil, missingLLMError(j.name)
 	}
 
 	instructions := j.instructions
@@ -42,16 +51,27 @@ func (j *Judge) Evaluate(ctx context.Context, chatCtx *llm.ChatContext, referenc
 		if latest := getLatestInstructions(chatCtx); latest != "" {
 			instructions = latest
 		}
+		result, err := evaluateWithLLM(ctx, effectiveLLM, taskCompletionPrompt(chatCtx, reference, instructions))
+		if err != nil {
+			return nil, err
+		}
+		result.Instructions = taskCompletionCriteria
+		return result, nil
 	}
 
 	if j.name == "handoff" {
 		if !hasHandoffs(chatCtx) {
 			return &JudgmentResult{
-				Verdict:      VerdictPass,
-				Reasoning:    "No agent handoffs occurred in this conversation.",
-				Instructions: instructions,
+				Verdict:   VerdictPass,
+				Reasoning: "No agent handoffs occurred in this conversation.",
 			}, nil
 		}
+		result, err := evaluateWithLLM(ctx, effectiveLLM, handoffPrompt(chatCtx, reference))
+		if err != nil {
+			return nil, err
+		}
+		result.Instructions = handoffCriteria
+		return result, nil
 	}
 
 	prompt := fmt.Sprintf("Criteria: %s\n\nConversation:\n%s", instructions, formatChatCtx(chatCtx))
@@ -67,6 +87,33 @@ func (j *Judge) Evaluate(ctx context.Context, chatCtx *llm.ChatContext, referenc
 	}
 	result.Instructions = instructions
 	return result, nil
+}
+
+func missingLLMError(name string) error {
+	//lint:ignore ST1005 match LiveKit Agents ValueError message
+	return fmt.Errorf("No LLM provided for judge '%s'. Pass llm to JudgeGroup or to the judge constructor.", name)
+}
+
+func taskCompletionPrompt(chatCtx *llm.ChatContext, reference *llm.ChatContext, instructions string) string {
+	promptParts := []string{taskCompletionCriteria, ""}
+	if instructions != "" {
+		promptParts = append(promptParts, "Agent Instructions:\n"+instructions, "")
+	}
+	promptParts = append(promptParts, "Conversation:\n"+formatChatCtx(chatCtx))
+	if reference != nil {
+		reference = reference.Copy(llm.ChatContextCopyOptions{ExcludeInstructions: true})
+		promptParts = append(promptParts, "", "Reference:\n"+formatChatCtx(reference))
+	}
+	return strings.Join(promptParts, "\n")
+}
+
+func handoffPrompt(chatCtx *llm.ChatContext, reference *llm.ChatContext) string {
+	promptParts := []string{handoffCriteria, "", "Conversation:\n" + formatChatCtx(chatCtx)}
+	if reference != nil {
+		reference = reference.Copy(llm.ChatContextCopyOptions{ExcludeInstructions: true})
+		promptParts = append(promptParts, "", "Reference:\n"+formatChatCtx(reference))
+	}
+	return strings.Join(promptParts, "\n")
 }
 
 func getLatestInstructions(chatCtx *llm.ChatContext) string {
@@ -145,7 +192,20 @@ func evaluateWithLLM(ctx context.Context, evaluatorLLM llm.LLM, prompt string) (
 
 	verdictTool := &submitVerdictTool{}
 
-	stream, err := evaluatorLLM.Chat(ctx, evalCtx, llm.WithTools([]llm.Tool{verdictTool}), llm.WithToolChoice("submit_verdict"))
+	options := []llm.ChatOption{
+		llm.WithTools([]llm.Tool{verdictTool}),
+		llm.WithToolChoice(map[string]any{
+			"type": "function",
+			"function": map[string]any{
+				"name": "submit_verdict",
+			},
+		}),
+	}
+	if !strings.Contains(llm.Model(evaluatorLLM), "gpt-5") {
+		options = append(options, llm.WithExtraParams(map[string]any{"temperature": 0.0}))
+	}
+
+	stream, err := evaluatorLLM.Chat(ctx, evalCtx, options...)
 	if err != nil {
 		return nil, fmt.Errorf("evaluation failed to start: %w", err)
 	}
@@ -244,7 +304,7 @@ func ptrToString(p *string) string {
 func TaskCompletionJudge(llmInstance llm.LLM) Evaluator {
 	return NewJudge(
 		"task_completion",
-		"Evaluate if the agent completed its goal based on its instructions. Consider: task completed, appropriately handed off, or correctly declined = pass. User's need ignored, no resolution, gave up without handoff = fail",
+		taskCompletionCriteria,
 		llmInstance,
 	)
 }
@@ -292,7 +352,7 @@ func ConcisenessJudge(llmInstance llm.LLM) Evaluator {
 func HandoffJudge(llmInstance llm.LLM) Evaluator {
 	return NewJudge(
 		"handoff",
-		"Evaluate if the conversation maintained context across agent handoffs. Consider: remembered info (names, details, requests) = pass. Break in continuity, repeated questions, context lost = fail",
+		handoffCriteria,
 		llmInstance,
 	)
 }
@@ -300,7 +360,7 @@ func HandoffJudge(llmInstance llm.LLM) Evaluator {
 func ToolUseJudge(llmInstance llm.LLM) Evaluator {
 	return NewJudge(
 		"tool_use",
-		"The agent must use tools correctly when needed. Fail only if the agent should have called a tool but didn't, called a tool with incorrect or missing parameters, called an inappropriate tool for the task, misinterpreted or ignored the tool's output, or failed to handle tool errors gracefully.",
+		"The agent must use tools correctly when needed. Pass if no tools were needed for the conversation (e.g., simple greetings, user declined service, or no actionable request was made). Fail only if the agent should have called a tool but didn't, called a tool with incorrect or missing parameters, called an inappropriate tool for the task, misinterpreted or ignored the tool's output, or failed to handle tool errors gracefully (e.g., retrying, informing user, or escalating).",
 		llmInstance,
 	)
 }

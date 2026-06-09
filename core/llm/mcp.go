@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -43,7 +44,13 @@ type MCPServerHTTP struct {
 	initialized bool
 	cacheDirty  bool
 	toolsCache  []Tool
+	initState   *mcpInitializeState
 	mu          sync.Mutex
+}
+
+type mcpInitializeState struct {
+	done chan struct{}
+	err  error
 }
 
 func NewMCPServerHTTP(url string) *MCPServerHTTP {
@@ -88,9 +95,41 @@ func (s *MCPServerHTTP) httpClientSnapshot() *http.Client {
 }
 
 func (s *MCPServerHTTP) Initialize(ctx context.Context) error {
-	if s.Initialized() {
+	s.mu.Lock()
+	if s.initialized {
+		s.mu.Unlock()
 		return nil
 	}
+	if s.initState != nil {
+		state := s.initState
+		s.mu.Unlock()
+		select {
+		case <-state.done:
+			return state.err
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+	state := &mcpInitializeState{done: make(chan struct{})}
+	s.initState = state
+	s.mu.Unlock()
+
+	err := s.initialize(ctx)
+
+	s.mu.Lock()
+	state.err = err
+	if err == nil {
+		s.initialized = true
+	}
+	if s.initState == state {
+		s.initState = nil
+	}
+	close(state.done)
+	s.mu.Unlock()
+	return err
+}
+
+func (s *MCPServerHTTP) initialize(ctx context.Context) error {
 	params := map[string]interface{}{
 		"protocolVersion": "2024-11-05",
 		"clientInfo": map[string]interface{}{
@@ -105,9 +144,6 @@ func (s *MCPServerHTTP) Initialize(ctx context.Context) error {
 	if err := s.sendNotification(ctx, "initialized", map[string]interface{}{}); err != nil {
 		return fmt.Errorf("initialized notification failed: %w", err)
 	}
-	s.mu.Lock()
-	s.initialized = true
-	s.mu.Unlock()
 	return nil
 }
 
@@ -273,6 +309,7 @@ type MCPServerStdio struct {
 
 	cacheDirty bool
 	toolsCache []Tool
+	initState  *mcpInitializeState
 }
 
 type MCPToolset struct {
@@ -439,9 +476,41 @@ func serializeMCPToolContent(content []mcpToolContent) (string, error) {
 }
 
 func (s *MCPServerStdio) Initialize(ctx context.Context) error {
-	if s.Initialized() {
+	s.mu.Lock()
+	if s.initState != nil {
+		state := s.initState
+		s.mu.Unlock()
+		select {
+		case <-state.done:
+			return state.err
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+	if s.stdin != nil {
+		s.mu.Unlock()
 		return nil
 	}
+	state := &mcpInitializeState{done: make(chan struct{})}
+	s.initState = state
+	s.mu.Unlock()
+
+	err := s.initialize(ctx)
+
+	s.mu.Lock()
+	state.err = err
+	if err != nil {
+		_ = s.closeTransportLocked()
+	}
+	if s.initState == state {
+		s.initState = nil
+	}
+	close(state.done)
+	s.mu.Unlock()
+	return err
+}
+
+func (s *MCPServerStdio) initialize(ctx context.Context) error {
 	s.cmd = exec.CommandContext(context.Background(), s.Command, s.Args...)
 	s.cmd.Dir = s.Cwd
 	if len(s.Env) > 0 {
@@ -535,19 +604,42 @@ func (s *MCPServerStdio) setToolsCache(tools []Tool) {
 }
 
 func (s *MCPServerStdio) Initialized() bool {
-	return s != nil && s.stdin != nil
+	if s == nil {
+		return false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.stdin != nil && s.initState == nil
 }
 
 func (s *MCPServerStdio) Close() error {
 	s.InvalidateCache()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.closeTransportLocked()
+}
+
+func (s *MCPServerStdio) closeTransportLocked() error {
+	var firstErr error
 	if s.stdin != nil {
-		s.stdin.Close()
+		if err := s.stdin.Close(); err != nil && firstErr == nil {
+			firstErr = err
+		}
 		s.stdin = nil
 	}
-	if s.cmd != nil && s.cmd.Process != nil {
-		return s.cmd.Process.Kill()
+	if s.stdout != nil {
+		if err := s.stdout.Close(); err != nil && firstErr == nil {
+			firstErr = err
+		}
+		s.stdout = nil
 	}
-	return nil
+	if s.cmd != nil && s.cmd.Process != nil {
+		if err := s.cmd.Process.Kill(); err != nil && !errors.Is(err, os.ErrProcessDone) && firstErr == nil {
+			firstErr = err
+		}
+	}
+	s.cmd = nil
+	return firstErr
 }
 
 func (s *MCPServerStdio) sendRequest(ctx context.Context, method string, params interface{}) (*jsonRPCResponse, error) {
