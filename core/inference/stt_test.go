@@ -875,10 +875,40 @@ func TestInferenceSTTStreamEndInputFinalizesAndRejectsMoreInput(t *testing.T) {
 	}
 }
 
+func TestInferenceSTTStreamErrorMessageReturnsNextError(t *testing.T) {
+	conn := &fakeInferenceWebsocketConn{
+		readCh: make(chan []byte, 1),
+	}
+	conn.readCh <- []byte(`{"type":"error","message":"provider failed"}`)
+	close(conn.readCh)
+	provider := NewSTT("livekit/stt", "key", "secret")
+	provider.dialWebsocket = func(ctx context.Context, endpoint string, header http.Header) (inferenceWebsocketConn, error) {
+		return conn, nil
+	}
+
+	stream, err := provider.Stream(context.Background(), "en")
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	defer stream.Close()
+
+	_, err = stream.Next()
+	if err == nil {
+		t.Fatal("Next() error = nil, want gateway error")
+	}
+	if !strings.Contains(err.Error(), "LiveKit Inference STT returned error") {
+		t.Fatalf("Next() error = %v, want gateway error", err)
+	}
+	if !strings.Contains(err.Error(), "provider failed") {
+		t.Fatalf("Next() error = %v, want provider message", err)
+	}
+}
+
 type fakeInferenceWebsocketConn struct {
 	writes    []map[string]interface{}
 	closed    bool
 	readBlock chan struct{}
+	readCh    chan []byte
 }
 
 func (f *fakeInferenceWebsocketConn) WriteJSON(v interface{}) error {
@@ -888,6 +918,13 @@ func (f *fakeInferenceWebsocketConn) WriteJSON(v interface{}) error {
 }
 
 func (f *fakeInferenceWebsocketConn) ReadMessage() (int, []byte, error) {
+	if f.readCh != nil {
+		msg, ok := <-f.readCh
+		if !ok {
+			return 0, nil, io.EOF
+		}
+		return 1, msg, nil
+	}
 	if f.readBlock != nil {
 		<-f.readBlock
 	}

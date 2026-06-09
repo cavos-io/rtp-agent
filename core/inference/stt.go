@@ -426,6 +426,7 @@ type inferenceSTTStream struct {
 	audioDuration   float64
 	startTimeOffset float64
 	startTime       float64
+	streamErr       error
 }
 
 type inferenceWebsocketConn interface {
@@ -547,9 +548,26 @@ func (s *inferenceSTTStream) Close() error {
 func (s *inferenceSTTStream) Next() (*stt.SpeechEvent, error) {
 	ev, ok := <-s.eventCh
 	if !ok {
+		s.mu.Lock()
+		err := s.streamErr
+		s.mu.Unlock()
+		if err != nil {
+			return nil, err
+		}
 		return nil, context.Canceled
 	}
 	return ev, nil
+}
+
+func (s *inferenceSTTStream) setStreamError(err error) {
+	if err == nil {
+		return
+	}
+	s.mu.Lock()
+	if s.streamErr == nil {
+		s.streamErr = err
+	}
+	s.mu.Unlock()
 }
 
 func (s *inferenceSTTStream) buildSpeechData(data map[string]interface{}) stt.SpeechData {
@@ -685,7 +703,8 @@ func (s *inferenceSTTStream) run() {
 			case "preflight_transcript":
 				s.processPreflightTranscript(ev)
 			case "error":
-				logger.Logger.Errorw("LiveKit Inference STT error", nil, "msg", string(msg))
+				s.setStreamError(fmt.Errorf("LiveKit Inference STT returned error: %s", stringFromMap(ev, "message")))
+				return
 			}
 		}
 	}
