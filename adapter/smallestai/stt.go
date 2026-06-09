@@ -141,6 +141,10 @@ func (s *SmallestAISTT) Capabilities() stt.STTCapabilities {
 }
 
 func (s *SmallestAISTT) Stream(ctx context.Context, language string) (stt.RecognizeStream, error) {
+	if err := validateSmallestAISTTAPIKey(s.apiKey); err != nil {
+		return nil, err
+	}
+
 	conn, _, err := websocket.DefaultDialer.DialContext(ctx, buildSmallestAISTTStreamURL(s, language), buildSmallestAISTTHeaders(s))
 	if err != nil {
 		return nil, fmt.Errorf("failed to dial smallestai stt websocket: %w", err)
@@ -159,6 +163,10 @@ func (s *SmallestAISTT) Stream(ctx context.Context, language string) (stt.Recogn
 }
 
 func (s *SmallestAISTT) Recognize(ctx context.Context, frames []*model.AudioFrame, language string) (*stt.SpeechEvent, error) {
+	if err := validateSmallestAISTTAPIKey(s.apiKey); err != nil {
+		return nil, err
+	}
+
 	var audio bytes.Buffer
 	for _, frame := range frames {
 		audio.Write(frame.Data)
@@ -181,6 +189,13 @@ func (s *SmallestAISTT) Recognize(ctx context.Context, frames []*model.AudioFram
 		return nil, err
 	}
 	return smallestAIBatchSpeechEvent(resolveSmallestAISTTLanguage(s, language), result), nil
+}
+
+func validateSmallestAISTTAPIKey(apiKey string) error {
+	if apiKey == "" {
+		return fmt.Errorf("smallestai API key is required, either as argument or set SMALLEST_API_KEY environment variable")
+	}
+	return nil
 }
 
 func buildSmallestAISTTRecognizeRequest(ctx context.Context, s *SmallestAISTT, audio []byte, language string) (*http.Request, error) {
